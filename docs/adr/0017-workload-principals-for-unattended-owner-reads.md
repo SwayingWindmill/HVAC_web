@@ -1,18 +1,28 @@
-# ADR 0017 — Unattended workloads read owners as their own Workload Principal
+# ADR 0017：没有人在场的后台程序用自己的身份读负责方
 
-Status: accepted
+状态：已采纳（2026-10-08）
 
-Date: 2026-10-08
+## 决定
 
-An unattended workload that must read an owner's HTTP interface, such as the energy read-model projector resolving meter bindings from Registry, does so as its own Workload Principal. IAM keeps one principal per workload identity (issuer = the SPIFFE trust domain, subject = the workload's SPIFFE ID) with ordinary Tenant memberships and role bindings, evaluates it with the existing Registry authorization rules and signs a normal short-lived Registry grant whose presenter and subject are that same workload. The workload asks IAM over mutual TLS with no delegation header and refreshes the grant before it expires. A Registry grant is therefore exactly one of two shapes: delegated from a user session (session and parent token present), or a Workload Principal's own (no session, subject equals presenter). We chose this because the projector had only a static grant input that the 30-second grant lifetime always expires, so energy facts were produced in no environment, and because the energy content contract already requires a delegation grant rather than a borrowed UI session. Keeping the workload inside IAM preserves per-tenant revocation, policy-revision checks and decision audit at the Registry seam, which is how OAuth 2.0 client credentials (RFC 6749 §4.4), Keycloak service accounts and Kubernetes ServiceAccount tokens treat unattended clients.
+后台程序需要调负责方的 HTTP 接口时（例如把电表读数算成用电量的程序要向设备登记查电表绑定），用它自己的「程序身份」（Workload Principal）去读。
 
-## Considered Options
+- IAM 给每个程序身份建一个主体：签发方是 SPIFFE 信任域，主体名是这个程序的 SPIFFE ID。它和普通用户一样有租户成员关系和角色。
+- IAM 用设备登记现有的授权规则判断它，签一张普通的短期设备登记授权，出示方和主体都是这个程序自己。
+- 程序通过双向 TLS 向 IAM 申请，不带代理请求头，在授权过期前刷新。
 
-- **Trust the workload identity alone at Registry** (how the ThingsBoard rule engine and Istio `AuthorizationPolicy` work). Rejected: any compromise of the projector would read every Tenant on that route, and Registry would lose the revocation and audit it was designed around. Pipelines that receive already-resolved facts with the request (ADR 0016) keep using identity alone; this ADR applies only when a workload reads an owner itself.
-- **A standing delegation from a tenant administrator** (RFC 8693 `may_act`). Rejected: it ties unattended processing to a person's account, so disabling that administrator silently stops energy facts.
+所以一张设备登记授权只有两种：从用户登录会话代理来的（带会话和上级令牌），或者程序自己的（没有会话，主体等于出示方）。
 
-## Consequences
+## 原因
 
-- A workload co-located in another process presents that process's identity. In Phase 1 the projector runs inside the Telemetry Runtime, so the Workload Principal is `spiffe://hvac.local/telemetry-runtime-service`; when the projector runs alone it is `spiffe://hvac.local/analytics-read-model-projector`.
-- Granting or revoking a Workload Principal's Tenant role binding is the only way to change what it can read; there is no static grant file.
-- The same shape covers Energy Series reads (#572, ADR 0023): report-service asks IAM's `/internal/v1/analytics/workload-decision` for a grant bound to one query, evaluated with the Analytics authorization rules, and the Telemetry Query Service accepts it next to the Gateway's. A Site outside the Tenant is not found, Tenant-wide roles included. Unlike the Registry decision, it is logged and counted but not written to an audit record, as the Gateway's Analytics decisions are.
+之前这个程序只有一个静态授权的配置项，而授权 30 秒就过期，所以在任何环境里都算不出用电量；用电数据的约定也要求代理授权，不能借用网页的登录会话。把程序身份放在 IAM 里，设备登记那边按租户吊销、检查权限版本、记录授权判断的审计都照常有效。OAuth 2.0 的客户端凭据（RFC 6749 §4.4）、Keycloak 的服务账号和 Kubernetes 的 ServiceAccount 令牌都是这样对待后台程序的。
+
+## 考虑过的做法
+
+- **设备登记只认程序的证书身份**（ThingsBoard 规则引擎和 Istio `AuthorizationPolicy` 的做法）：没有采用。这个程序一旦被攻破，就能在这个接口上读所有租户，设备登记原本设计好的吊销和审计也没了。随请求拿到查好信息的管道（ADR 0016）照旧只认证书身份；本 ADR 只管后台程序自己去读负责方的情况。
+- **由租户管理员长期代理授权**（RFC 8693 `may_act`）：没有采用。后台处理会绑在一个人的账号上，这个管理员被停用，用电量就悄悄停算了。
+
+## 结果
+
+- 程序跑在别的进程里时，用那个进程的身份。现在算用电量的程序跑在遥测进程（`telemetry-worker`）里，程序身份是 `spiffe://hvac.local/telemetry-runtime-service`；单独运行时是 `spiffe://hvac.local/analytics-read-model-projector`。
+- 要改一个程序身份能读什么，只能增删它在租户上的角色；没有静态授权文件。
+- 读能耗序列也用同样的方式（#572，ADR 0023）：报表服务向 IAM 的 `/internal/v1/analytics/workload-decision` 申请一张只能用于这一次查询的授权，按统计数据的授权规则判断，查询服务和网关的授权一样接受它。不属于这个租户的站点一律查不到，有全租户角色也一样。和设备登记的判断不同，这个判断只记日志和计数，不写审计记录，和网关的统计数据授权判断一样。

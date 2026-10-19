@@ -1,32 +1,30 @@
-# ADR 0022 — Role assignments are the only authorization facts
+# ADR 0022：角色分配是唯一的授权依据
 
-Status: accepted
+状态：已采纳（2026-10-14）
 
-Date: 2026-10-14
+## 决定
 
-## Decision
+一个人（或程序身份）在一个租户里能做什么，只由一种记录决定：**角色分配**（`iam.role_bindings`），把一个角色（`iam.role_templates`）分配到整个租户或某一个站点。IAM 的所有判断都读它：设备登记、遥测、告警、工单、指令和统计数据。明确的「禁止」仍然是唯一能减去权限的东西。
 
-A Principal's access in a Tenant comes from exactly one kind of fact: a **Role Assignment** (`iam.role_bindings`) of a Role (`iam.role_templates`) to the whole Tenant or to one Site. Every IAM decision reads it: Registry, Telemetry, Alarm, Work Order, Command and Analytics. Explicit denies stay as the only subtraction.
+- 四个内置角色：只读（`viewer`）、运维人员（`operator`）、运维主管（`site-manager`）、管理员（`admin`）。它们是迁移里写好的全局记录（`tenant_id IS NULL`），租户不能改。租户自己的角色模板还保留，现在只有程序身份在用。
+- 分配到站点的角色，永远不会给出整个租户范围的权限。管理员角色只能分配到整个租户。
+- 遥测按站点授权，不再有按设备和按读数项的授权。
+- 指令按站点和风险等级授权：`command.submit.<风险>` 和 `command.approve.<风险>`，风险分低、中、高、严重四级。例如一个人在某站点有 `command.submit.medium`，他就能提交这个站点低风险和中风险的指令，设备也必须属于这个站点。
+- 工单可以派给在这个站点上有 `work-order:start` 权限的人；派给班组时，班组仍来自 `iam.work_order_ownership_targets`。
 
-- Four Built-in Roles (`viewer`, `operator`, `site-manager`, `admin`) are global rows (`tenant_id IS NULL`) shipped by migration. Tenants cannot edit them. Tenant-owned role templates remain, and today only Workload Principals use them.
-- A Site-scoped assignment never grants a Tenant-scoped capability. The `admin` role can only be assigned to the whole Tenant.
-- Telemetry is authorized per Site. Device and key scope bindings are gone.
-- Commands are authorized by risk ceiling per Site: `command.submit.<risk>` and `command.approve.<risk>`. The decision's maximum risk is the highest ceiling granted on that Site, and the device must belong to it.
-- A work order may be assigned to a person who holds `work-order:start` on that Site. Team targets still come from `iam.work_order_ownership_targets`.
+按业务分开的授权表都已删掉：`site_bindings`、`telemetry_scope_bindings`、`telemetry_key_bindings`、`alarm_permissions`、`work_order_permissions`、`command_permissions`。
 
-The per-domain tables are dropped: `site_bindings`, `telemetry_scope_bindings`, `telemetry_key_bindings`, `alarm_permissions`, `work_order_permissions` and `command_permissions`.
+对比调研：`docs/architecture/iam-rbac-source-review-2026-10-14.md`。规格：`docs/specs/iam-roles-and-users.md`。
 
-Reference comparison: `docs/architecture/iam-rbac-source-review-2026-10-14.md`. Spec: `docs/specs/iam-roles-and-users.md`.
+## 考虑过的做法
 
-## Considered Options
+- **保留按业务分开的表，让管理页面把它们都写一遍**：没有采用。给一个人授权还是要写六张表，加一台设备还是要给所有人授权，六个判断程序的规则也会继续各不相同。
+- **把角色分配同步到按业务分开的表里**：没有采用。还是两个依据，而且同步程序在撤销权限时可能落后。
+- **用外部的授权引擎（OpenFGA、Casbin）**：没有采用，见调研。只有「租户 → 站点」两层范围，不值得多一个服务和一种规则语言。
 
-- **Keep the per-domain tables and have the admin UI write all of them.** Rejected. One grant would still be six writes, adding a device would still need grants for everyone, and the evaluators would keep six slightly different rule sets.
-- **Project role assignments into the per-domain tables.** Rejected. It keeps two sources of truth and needs a projector that can lag behind a revocation.
-- **An external authorization engine (OpenFGA, Casbin).** Rejected. See the source review: a two-level Tenant → Site scope does not justify another service or policy language.
+## 结果
 
-## Consequences
-
-- Granting access to a new device or point needs no IAM change.
-- Per-device command restrictions and per-key telemetry restrictions are no longer expressible. If a real case needs them, add a narrower scope to the assignment rather than reintroducing per-domain tables.
-- Seed and acceptance scripts grant access only through role assignments.
-- Telemetry revocation facts now come only from membership, role assignment and grant changes.
+- 新加设备或点位不用改 IAM。
+- 不能再单独限制某台设备的指令或某个读数项的遥测。真遇到需要的情况，就给角色分配加一个更细的范围，而不是把按业务分开的表加回来。
+- 种子数据和验收脚本只通过角色分配授权。
+- 遥测的撤销依据现在只来自成员关系、角色分配和授权的变化。

@@ -1,37 +1,37 @@
-# ADR 0019 — The overview reads each owner directly; there is no Site dashboard summary
+# ADR 0019：总览直接读各数据的负责方，不做站点汇总接口
 
-Status: accepted (amends ADR 0013 §12)
+状态：已采纳（修改 ADR 0013 §12；2026-10-10）
 
-Date: 2026-10-10
+## 决定
 
-The Site overview reads every fact it shows from that fact's owner. The facts and their owners are:
+站点总览上的每个数，都直接从负责这个数的模块读：
 
-| Fact | Owner |
+| 总览上的内容 | 从哪里读 |
 | --- | --- |
-| Live plant power, cooling and device state | Telemetry Observation Snapshots and their stream |
-| Today's HVAC electricity, cooling and Plant Efficiency | `energy-series` |
-| Open alarms | Alarm |
-| Open work orders | Work Order |
-| Equipment and device names | Registry |
+| 冷站现在的功率、供冷和设备状态 | 遥测的最新读数和实时推送 |
+| 今天和昨天的用电、供冷、能效，每小时用电，电费 | 能耗序列（`energy-series`，查询服务） |
+| 未处理的告警 | 告警 |
+| 未完成的工单 | 工单 |
+| 故障诊断的结果 | 故障诊断（FDD） |
+| 最新的优化建议 | 优化 |
+| 节能成效 | 节能验证（`mv-service`） |
+| 设备名称 | 设备登记 |
 
-The live and energy cards state their data time, and a stale or degraded live reading is dimmed and marked. The Site dashboard summary route (`GET /api/v1/sites/{siteId}/dashboard-summary` and its `/events` stream), its `presentationmodel` library and the `presentation-service` route owner are deleted.
+实时读数和用电数字都写明数据时间；过时或质量有问题的实时读数会变灰并标出来。站点汇总接口（`GET /api/v1/sites/{siteId}/dashboard-summary` 和它的 `/events` 推送）、`presentationmodel` 库和 `presentation-service` 的路由归属都已删掉。
 
-We chose this because the summary carried only day electricity, the device population and an open-alarm count; cost, baseline savings, COP and current power were fixed as not integrated. Everything else on the overview would have needed copies of facts from more owners:
+## 原因
 
-- live plant power and cooling;
-- cooling energy and Plant Efficiency;
-- running equipment;
-- work orders.
+原来的汇总接口只有当天用电、设备数量和未处理告警数，电费、节能、能效和当前功率都固定显示「未接入」。总览上其余的内容如果也走汇总，就得把更多模块的数据复制进来：实时功率和供冷、供冷量和能效、正在运行的设备、工单。
 
-Live state streams from Telemetry anyway, so a summary would still have needed a second channel. The facts also age at different rates: a live reading is seconds old, while projected energy lags by minutes. One combined watermark either hides that or marks the whole page partial. Freshness stated on the facts that age tells the operator which number is behind.
+实时状态本来就要从遥测推送，汇总接口之外还是得有第二条通道。而且这些数据过时的速度不一样：实时读数只晚几秒，算好的用电量要晚几分钟。合成一个「数据截至时间」，要么把这种差别藏起来，要么整页都标成「数据不全」。在会过时的那个数上写明时间，值班人员就知道是哪个数落后了。
 
-## Considered Options
+## 考虑过的做法
 
-- **Extend the summary to carry every overview fact.** Rejected: it copies five owners (Telemetry, energy, Alarm, Work Order, Registry) into one projection and still needs Telemetry's stream for live values.
-- **ThingsBoard dashboards (adopted).** ThingsBoard binds each widget to its own datasources ([`widget.models.ts`](https://github.com/thingsboard/thingsboard/blob/6d46786579c8b29caf5102f95ddb133674bed68b/ui-ngx/src/app/shared/models/widget.models.ts#L974), `WidgetConfig.datasources`, v4.4) rather than to one dashboard projection; the source review records it under S17 revision.
+- **扩展汇总接口，把总览上的数都放进去**：没有采用。要把五六个模块的数据复制进一个汇总，实时值还是得走遥测推送。
+- **ThingsBoard 的仪表盘（采用了它的思路）**：ThingsBoard 让每个小部件绑定自己的数据源（v4.4 的 [`widget.models.ts`](https://github.com/thingsboard/thingsboard/blob/6d46786579c8b29caf5102f95ddb133674bed68b/ui-ngx/src/app/shared/models/widget.models.ts#L974)，`WidgetConfig.datasources`），而不是绑定一个仪表盘汇总。
 
-## Consequences
+## 结果
 
-- The overview makes one request per owner and shares query keys with the alarm, work and device pages, so moving between them renders from the shared cache while it refreshes.
-- ADR 0013 §12's other rules still hold: presentation owns layout and view state, never business truth.
-- A group or multi-Site overview, or a BigScreen, may need one aggregated read. If one does, it gets a projection fed by owner events at that point (ADR 0016).
+- 总览对每个负责方各发一个请求，和告警、工单、设备等页面共用查询的缓存键，所以在这些页面之间切换时先显示缓存、同时刷新。
+- ADR 0013 §12 的其他规则不变：页面只管布局和显示状态，不产生业务数据。
+- 集团或多站点的总览、大屏可能需要一个汇总读取。真需要时，再给它建一个由负责方事件同步的汇总（ADR 0016）。

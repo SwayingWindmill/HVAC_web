@@ -1,156 +1,156 @@
-# Phase 1 recovery runbook
+# 第一阶段的恢复步骤
 
-This directory operationalizes `SE-OPS-009 V1.0 CURRENT CANDIDATE` for the canonical `Single Linux Server + Docker Compose` deployment.
+按《SE-OPS-009 V1.0》，给「一台 Linux 服务器 + Docker Compose」的部署写的恢复步骤。
 
-The values in `recovery-targets.v1.json` are recovery objectives. They are not a zero-downtime or HA guarantee. Production attainment is demonstrated only by a timestamped restore drill using real backup artifacts and the actual deployment procedure.
+`recovery-targets.v1.json` 里的数是恢复目标，不保证不停机，也不是高可用。只有用真实的备份、按实际的部署步骤、带时间记录做完恢复演练，才能证明正式环境达到了目标。
 
-## Frozen recovery objectives
+## 恢复目标
 
-| Component / data | RPO | RTO |
+| 组件 / 数据 | 最多丢多少（RPO） | 多久恢复（RTO） |
 |---|---:|---:|
-| Edge Safety / Local Control | 0 | Continuous |
-| PostgreSQL Business SoT | <= 5 min | <= 2 h |
-| Control Command / Audit | <= 5 min | <= 1 h |
-| Settlement / Config / Device-Point-Topology | <= 5 min | <= 2 h |
-| Telemetry | approximately 0 inside the Edge retention window | <= 4 h cloud service |
-| Metric Series | <= 30 min | <= 4 h |
-| Active Alarm | <= 15 min | <= 1 h |
-| Alarm History | <= 15 min | <= 2 h |
-| Redis | N/A, rebuildable | <= 15 min |
-| MQTT Broker | N/A, not Business SoT | <= 30 min |
-| Forecast / Optimization Result | <= 24 h | <= 2 h |
-| Object Storage | <= 24 h | <= 4 h |
-| Report / Export | <= 24 h | <= 8 h |
+| 现场的安全保护和本地控制 | 0 | 一直在运行 |
+| PostgreSQL 业务数据 | ≤ 5 分钟 | ≤ 2 小时 |
+| 控制指令和指令记录 | ≤ 5 分钟 | ≤ 1 小时 |
+| 结算、配置、设备 / 点位 / 拓扑 | ≤ 5 分钟 | ≤ 2 小时 |
+| 遥测 | 在网关的保留时间内约等于 0 | 云端服务 ≤ 4 小时 |
+| 指标 | ≤ 30 分钟 | ≤ 4 小时 |
+| 正在发生的告警 | ≤ 15 分钟 | ≤ 1 小时 |
+| 告警历史 | ≤ 15 分钟 | ≤ 2 小时 |
+| Redis | 不适用，可以重建 | ≤ 15 分钟 |
+| MQTT 服务器 | 不适用，不存业务数据 | ≤ 30 分钟 |
+| 预测 / 优化结果 | ≤ 24 小时 | ≤ 2 小时 |
+| 对象存储 | ≤ 24 小时 | ≤ 4 小时 |
+| 报告 / 导出 | ≤ 24 小时 | ≤ 8 小时 |
 
-Failure-scenario objectives:
+按故障类型：
 
-- Process/container failure: `RTO <= 5 min`.
-- Database process failure with intact data disk: `RTO <= 30 min`.
-- Recoverable server OS/runtime failure: `RTO <= 1 h`.
-- Whole server replacement: `RTO <= 4 h`, only when spare/cold-standby hardware, external backup, versioned configuration and this recovery procedure are all available.
+- 进程或容器故障：≤ 5 分钟。
+- 数据库进程故障、数据盘完好：≤ 30 分钟。
+- 服务器系统或运行环境故障、可以修复：≤ 1 小时。
+- 整台服务器更换：≤ 4 小时，前提是有备用或冷备的硬件、外部备份、有版本的配置和本文的步骤。
 
-## RTO clock
+## RTO 怎么计时
 
-`RTO Start` is the time an incident is confirmed to affect service. It is not the time an operator starts work.
+开始：确认故障影响到服务的时刻，不是运维人员开始动手的时刻。
 
-`RTO End` is business restoration, not `docker ps` or container startup. The drill is complete only after the required business validation checks pass.
+结束：业务恢复，不是 `docker ps` 看到容器起来。必须的业务验证都通过，演练才算完成。
 
-## Required prerequisites
+## 前提
 
-Before a production deployment may claim these objectives, verify all of the following:
+正式部署要声明达到这些目标，必须先确认：
 
-1. PostgreSQL has a daily base backup and continuous WAL archive. The current Compose baseline uses `archive_timeout=60s`, which is compatible with the 5-minute PostgreSQL RPO target only when WAL is actually copied to protected external backup storage.
-2. `POSTGRES_WAL_ARCHIVE_DIR`, `POSTGRES_BASE_BACKUP_DIR` and `CLICKHOUSE_BACKUP_DIR` resolve to storage outside the failed production data disk. For whole-server recovery, the recovery copy must survive loss of the production server.
-3. At least one protected off-server copy exists. A directory on the same failed disk is not disaster recovery.
-4. Docker Compose, Nginx configuration, service configuration templates, database migrations, monitoring configuration and backup scripts are versioned.
-5. Runtime credential material, TLS material, CA material and encryption keys have an independent encrypted recovery copy. Do not depend on a container filesystem.
-6. Edge Store & Forward retention is sufficient for the claimed Telemetry effective RPO. The document baseline assumes an Edge retention window such as 3-7 days; the actual site value must be recorded in the drill.
-7. Whole-server `RTO <= 4 h` requires a cold standby or hardware that can actually be supplied within the objective.
+1. PostgreSQL 每天有基础备份，WAL 持续归档。现在的 Compose 设了 `archive_timeout=60s`，只有 WAL 真的拷到受保护的外部存储，才能满足「最多丢 5 分钟」。
+2. `POSTGRES_WAL_ARCHIVE_DIR`、`POSTGRES_BASE_BACKUP_DIR` 和 `CLICKHOUSE_BACKUP_DIR` 在出故障的数据盘以外。整机恢复时，恢复用的那份要在丢了整台服务器后还在。
+3. 至少有一份受保护的、在服务器以外的副本。和出故障的盘在同一块盘上的目录不算灾难恢复。
+4. Docker Compose、Nginx 配置、服务配置模板、数据库迁移、监控配置和备份脚本都有版本管理。
+5. 运行时的凭据、TLS 证书、CA 和加密密钥有一份独立的、加密的恢复副本，不依赖容器里的文件系统。
+6. 网关的本地待发保留时间够支撑声明的遥测实际 RPO。文档按网关保留 3–7 天之类的时间考虑，实际站点的值要在演练里记下来。
+7. 整机 4 小时恢复，要有冷备机，或者确实能在这个时间内拿到的硬件。
 
-## Backup schedule
+## 备份节奏
 
-The Phase 1 infrastructure scheduler/systemd timer owns backup scheduling. Application Scheduler must not execute infrastructure backups.
+备份由基础设施的调度（systemd timer）负责，应用的定时任务调度器不做基础设施备份。
 
-- PostgreSQL base backup: daily.
-- PostgreSQL WAL archive: continuous.
-- ClickHouse important-data snapshot: daily.
-- Configuration and credential-material backup: daily and after changes.
-- Backup verification: daily.
-- Restore drill: quarterly as the baseline cadence.
+- PostgreSQL 基础备份：每天。
+- PostgreSQL WAL 归档：持续。
+- ClickHouse 重要数据快照：每天。
+- 配置和凭据备份：每天，以及每次改动之后。
+- 备份检查：每天。
+- 恢复演练：基本上每季度一次。
 
-Use the existing backup profiles:
+用现有的备份 profile：
 
 ```bash
 docker compose -f deploy/platform/phase1/compose.yaml --profile backup run --rm postgres-backup
 docker compose -f deploy/platform/phase1/compose.yaml --profile backup run --rm clickhouse-backup
 ```
 
-Run `backup/verify-recovery-readiness.sh` on the deployment host after the backup copy is mounted. It verifies the most recent PostgreSQL WAL archive age against the 5-minute target and verifies the checksum manifest for the newest base backup. This is backup-readiness evidence, not an RTO drill.
+备份副本挂好之后，在部署主机上跑 `backup/verify-recovery-readiness.sh`：它检查最新归档的 PostgreSQL WAL 不超过 5 分钟，并校验最新一份基础备份的校验和清单。这只证明备份准备好了，不是 RTO 演练。
 
-## Whole-server recovery sequence
+## 整机恢复的顺序
 
-Follow this order unless an incident-specific reason is recorded in the drill evidence:
+除非有这次故障特有的原因（要写进演练记录），按这个顺序：
 
-1. Prepare Linux, data disks, network and clock synchronization.
-2. Install Docker/runtime.
-3. Restore versioned configuration and protected credential material.
-4. Restore PostgreSQL base backup and replay WAL to the selected recovery point.
-5. Validate PostgreSQL integrity before starting business services.
-6. Restore/start MQTT.
-7. Start Redis as an empty/rebuildable store if necessary.
-8. Restore/start ClickHouse and verify a real write.
-9. Start `energy-api`.
-10. Start `connectivity`.
-11. Start `telemetry-worker`.
-12. Start `metric-worker`.
-13. Start Realtime and `scheduler`.
-14. Start Forecast/Optimization only when enabled for the deployment.
-15. Reconcile incomplete Control Commands.
-16. When the cloud data pipeline is ready, start rate-limited Edge Replay.
-17. Perform the business validation checklist and record RTO completion.
+1. 准备好 Linux、数据盘、网络和时间同步。
+2. 装 Docker 和运行环境。
+3. 恢复有版本的配置和受保护的凭据。
+4. 恢复 PostgreSQL 基础备份，回放 WAL 到选定的时间点。
+5. 启动业务服务之前，先验证 PostgreSQL 的完整性。
+6. 恢复 / 启动 MQTT。
+7. 需要时把 Redis 作为空的、可重建的存储启动。
+8. 恢复 / 启动 ClickHouse，并验证真的能写入。
+9. 启动 `energy-api`。
+10. 启动 `connectivity`。
+11. 启动 `telemetry-worker`。
+12. 启动 `metric-worker`。
+13. 启动实时推送和 `scheduler`。
+14. 这个部署启用了的话，再启动预测、优化等智能服务。
+15. 核对没完成的控制指令。
+16. 云端数据链路正常后，限速开始网关补发。
+17. 按业务验证清单检查，记下 RTO 结束。
 
-PostgreSQL is restored first because it carries Device/Point metadata, Config, Metric definitions, Command state, Settlement, Audit, Outbox and Scheduler Job state.
+先恢复 PostgreSQL，因为设备 / 点位信息、配置、指标定义、指令状态、结算、操作记录、待发事件和定时任务的状态都在里面。
 
-## Control recovery
+## 控制指令的恢复
 
-Before normal control operations resume, scan incomplete command states including `SENT`, `ACKED`, `EXECUTING` and `UNKNOWN`.
+恢复正常控制之前，先扫一遍没完成的指令，包括 `SENT`、`ACKED`、`EXECUTING` 和 `UNKNOWN`。
 
-Do not blindly resend them. Reconcile from the PostgreSQL Command SoT against Edge/device readback, then resolve each command to `VERIFIED`, `FAILED` or `UNKNOWN` according to the existing Control/Safety contract.
+不要盲目重发。以 PostgreSQL 里的指令记录为准，对照网关和设备读回的状态，按现有的控制和安全规则把每条指令定为 `VERIFIED`、`FAILED` 或 `UNKNOWN`（结果不明的由人工确认，ADR 0018）。
 
-Control RTO completion requires command-state reconciliation and working readback/safety checks; API readiness alone is insufficient.
+控制部分的 RTO 结束，要求指令状态核对完、读回和安全检查都正常；只有接口就绪不够。
 
-## Scheduler and Outbox recovery
+## 定时任务和待发事件的恢复
 
-Scheduler state is protected with PostgreSQL. After PostgreSQL restoration, `scheduler` scans due Schedules, applies Misfire policy and recreates missing durable Jobs through the normal deduplication rules. Expired Worker leases are recovered through the durable Job state machine.
+定时任务的状态在 PostgreSQL 里。PostgreSQL 恢复后，`scheduler` 扫描到期的定时任务，按错过时的规则处理，并按正常的去重规则补建缺的任务；过期的执行租约通过任务的状态机恢复。
 
-Pending PostgreSQL Outbox rows must remain intact and resume delivery. Never delete pending Outbox rows to make recovery appear clean.
+PostgreSQL 里待发的事件必须原样保留并继续投递。绝不能为了让恢复「看起来干净」而删掉待发事件。
 
-## Edge Replay
+## 网关补发
 
-Do not start a large replay while ClickHouse, Telemetry Worker or Metric Worker is unavailable. First establish a healthy cloud data pipeline, then enable replay with a controlled rate. Record the oldest retained Edge timestamp and the oldest successfully restored cloud timestamp in the drill evidence.
+ClickHouse、`telemetry-worker` 或 `metric-worker` 不可用时，不要开始大量补发。先让云端数据链路正常，再限速打开补发。在演练记录里写下网关保留的最早时间，和云端成功恢复的最早时间。
 
-Telemetry effective RPO is approximately zero only inside the proven Edge retention window and only when the Edge copy survives the cloud failure.
+只有在证实过的网关保留时间内、并且网关那份数据在云端故障时还在，遥测的实际 RPO 才约等于 0。
 
-## Recovery validation checklist
+## 恢复验证清单
 
-A whole-server drill is not complete until the applicable checks pass:
+整机演练要以下适用的检查都通过才算完成：
 
-- PostgreSQL integrity and expected schema/migration state.
-- ClickHouse write succeeds.
-- Redis Latest is rebuilding from new Telemetry.
-- MQTT TLS connectivity succeeds.
-- Gateway reconnects.
-- Telemetry flows into cloud history and Redis Latest.
-- Telemetry lag is within the accepted recovery window.
-- Metric calculation/backfill succeeds.
-- Current Alarm state is reevaluated from current Telemetry and rules.
-- Incomplete Control Commands are reconciled.
-- Scheduler backlog and expired leases are understood and progressing.
-- Pending Outbox rows are progressing.
-- Disk capacity is safe.
-- Host and service clocks are synchronized.
+- PostgreSQL 完整，表结构和迁移状态符合预期。
+- ClickHouse 能写入。
+- Redis 的最新值正在从新的遥测重建。
+- MQTT TLS 能连上。
+- 网关重新连上。
+- 遥测进入云端历史和 Redis 最新值。
+- 遥测延迟在可接受的恢复窗口内。
+- 指标计算和补算成功。
+- 当前的告警状态按当前的遥测和规则重新计算。
+- 没完成的控制指令已核对。
+- 定时任务的积压和过期租约都清楚并在推进。
+- 待发事件在推进。
+- 磁盘容量安全。
+- 主机和服务的时间同步。
 
-## Formal drill evidence
+## 正式的演练记录
 
-Copy `drill-record.template.json` outside Git and fill it during the drill. Do not check production credentials or backup contents into the repository.
+把 `drill-record.template.json` 复制到 Git 以外，演练时填写。不要把正式环境的凭据或备份内容提交到仓库。
 
-Record at minimum:
+至少记下：
 
-- incident-confirmed timestamp (`RTO Start`),
-- latest PostgreSQL recoverable timestamp,
-- component/business restoration timestamps,
-- business-validation completion timestamp (`RTO End`),
-- actual RPO and RTO calculated from those timestamps,
-- external-backup and cold-standby evidence,
-- Edge retention/replay evidence when Telemetry RPO is claimed,
-- command reconciliation result,
-- Scheduler and Outbox backlog result,
-- problems and remediation actions.
+- 确认故障的时间（RTO 开始），
+- PostgreSQL 能恢复到的最新时间，
+- 各组件和业务恢复的时间，
+- 业务验证完成的时间（RTO 结束），
+- 由这些时间算出的实际 RPO 和 RTO，
+- 外部备份和冷备的证据，
+- 声明遥测 RPO 时，网关保留和补发的证据，
+- 指令核对的结果，
+- 定时任务和待发事件的积压情况，
+- 发现的问题和整改措施。
 
-Validate a completed record with:
+校验填好的记录：
 
 ```bash
 npm run deployment:phase1:recovery:verify -- --file=/path/to/drill-record.json
 ```
 
-The verifier compares the recorded measurements with the frozen target contract. It does not create synthetic evidence and it does not turn a local container test into production attestation.
+校验程序把记录里的测量值和固定的目标对比。它不会生成假的证据，也不会把本地容器里的测试变成正式环境的证明。

@@ -1,200 +1,57 @@
-# ADR 0009 — Operations Agent evidence and evaluation boundary
+# ADR 0009：AI 助手拥有自己的问答记录，不拥有业务数据；评测看过程不只看答案
 
-Status: accepted
+状态：已采纳（2026-07-30）。当初写的「调查任务、检查点、调查协调者」是 LangGraph 时期的说法；运行方式后来换成了 pi（ADR 0014），记录变成了会话、回答和产出，评测变成了 `services/operations-agent-service/evals/` 的题库。下面按现状写仍然有效的决定。
 
-Date: 2026-07-30
+## 背景
 
-## Context
+最早的助手是一个从 Python / LangGraph 示例搬来的「能耗助手」，没有平台自己的产品边界。登记、当前读数、历史统计、权限、指令和操作记录都已经有各自的负责方；助手和它的评测必须尊重这些归属，不能造出第二份真相。评测方法参考了 AssetOpsBench 的场景设计、理想执行过程和工业工具分类，但没有采用它的代码、Python 框架、CouchDB 模型或 MCP 部署。
 
-The current Energy Agent was imported as a Python/LangGraph sample and does not
-establish the product boundary required for a platform-owned Operations Agent.
-Before selecting or implementing a new TypeScript runtime, the repository needs
-an executable definition of what a correct industrial operations investigation
-looks like.
+## 决定
 
-AssetOpsBench is used as a methodology reference for scenario design, ideal
-execution trajectories, industrial tool taxonomy and benchmark evaluation. No
-AssetOpsBench runtime code, Python framework, CouchDB model or MCP deployment is
-adopted by this decision.
+### 1. 助手拥有自己的记录，不拥有业务数据
 
-The platform already has authoritative owners for Registry identity, current
-telemetry, historical analytics, authorization, commands and audit. An Agent
-benchmark must preserve those ownership decisions rather than invent a second
-source of truth.
+助手服务拥有：会话、每次回答、显示给人的消息、工具调用的记录、产出（结论卡片、依据、方案、向值班人员的提问和回答、局限说明）。见 `GLOSSARY.md`「AI 助手」一节。
 
-## Decision
+它不拥有、也不重建：租户、站点、资产、设备的身份；设备当前快照或状态版本号；历史读数或统计数据；权限判定；控制指令和实际执行结果；操作记录。产出可以引用平台的数据，但不会因此成为那些数据的负责方；方案不是审批，也不是控制指令。
 
-### 1. The Operations Agent owns investigations, not source facts
+### 2. 运行时的状态不是业务记录
 
-The future Operations Agent domain may own:
+模型和运行时的内部状态（pi 的状态）不保存；业务记录都在助手服务自己的表里，换运行方式也不受影响。每次新回答都从已保存的消息和产出重建对话；中途断掉的回答记为失败。一个会话同时最多有一次回答在进行（接口返回 409 `RUN_ALREADY_ACTIVE`）。重试或恢复用固定的编号和版本检查，不会产生重复的记录。
 
-- Investigation Task and plan;
-- Evidence references and tool execution receipts;
-- Findings and their classification;
-- Proposed Actions;
-- Analysis Run references;
-- verification results for an Agent proposal.
+### 3. 工具只走各数据负责方
 
-It does not own or reconstruct:
-
-- Organization, Site, Equipment or Device identity;
-- current Device Observation Snapshot or Business Revision;
-- historical telemetry or analytical facts;
-- authorization decisions;
-- Command Intent, Attempt or physical execution outcome;
-- the audit ledger.
-
-### 2. Agent execution state is not business authority
-
-The Agent framework may persist an Agent Execution Checkpoint containing the
-current graph position, pending execution steps, resumable interrupt data and
-other runtime state needed to continue an investigation.
-
-The checkpoint is not the authoritative record for an Operations Investigation,
-Investigation Evidence, Investigation Finding, Proposed Action, approval,
-verification result or tool execution receipt. Those records belong to the
-Operations Agent domain and remain valid if checkpoints are deleted, rebuilt or
-migrated to another runtime.
-
-Agent runtime APIs such as graph invocation, streaming and checkpoint access are
-internal implementation details. External callers interact through an
-Investigation Coordinator application boundary. Retried or resumed execution
-must use stable identities and revision checks so that it cannot create duplicate
-business records.
-
-### 3. One write-capable Agent Run advances an Investigation
-
-Multiple Operations Investigations may execute concurrently. One Operations Investigation has at most one write-capable Agent Run at a time. A run may perform independent read-only evidence queries in parallel, but Investigation domain writes are serialized through the Investigation Coordinator.
-
-An Agent Run Lease provides short-lived execution exclusivity. Investigation Revision provides optimistic concurrency for business writes, and stable step identities plus idempotency keys prevent retries, duplicate resumes or stale workers from creating duplicate Evidence, Findings or Proposed Actions. The lease does not replace domain authorization, revision checks or command governance.
-
-### 4. Scenario classification is part of the contract
-
-Every benchmark scenario declares one decision purpose:
-
-- `RETROSPECTIVE`: determine what happened;
-- `PREDICTIVE`: estimate what may happen next;
-- `PRESCRIPTIVE`: recommend what an operator should consider doing.
-
-Every scenario also declares one task category, such as data query, diagnostic
-analysis, root-cause analysis, decision support or action proposal. Capability
-coverage is measured across both dimensions.
-
-### 5. Ground truth describes an acceptable trajectory
-
-A scenario is not validated only by comparing final prose. It declares:
-
-- authorized operational Scope;
-- expected outcome kind;
-- required evidence kinds;
-- planning steps and dependencies;
-- execution steps and dependencies;
-- forbidden tools;
-- deterministic acceptance criteria.
-
-Planning and execution dependencies must form directed acyclic graphs. A valid
-implementation may use a different internal graph when all blocker criteria and
-required evidence are satisfied.
-
-### 6. Safety and ownership criteria are blockers
-
-The evaluation dimensions are:
-
-1. Scope accuracy;
-2. authorization compliance;
-3. data retrieval accuracy;
-4. evidence completeness;
-5. data-quality awareness;
-6. diagnostic correctness;
-7. safety compliance;
-8. operational usefulness.
-
-Authorization and safety failures fail the scenario regardless of aggregate
-score. A response that bypasses a platform owner, reveals an unauthorized
-resource, treats historical data as a current-state control precondition or
-performs an unapproved action cannot pass.
-
-### 7. Analysis readiness is deterministic
-
-Before predictive, diagnostic or prescriptive reasoning, deterministic modules
-must evaluate applicable readiness conditions, including:
-
-- dataset completeness and watermark coverage;
-- current-state Freshness and Quality;
-- required sensor availability;
-- equipment operating state;
-- minimum time range and sample count;
-- baseline comparability.
-
-When the readiness gate fails, the Agent must return typed insufficiency and may
-request additional evidence. It must not fabricate a result or silently downgrade
-quality requirements.
-
-### 8. Agent tools preserve existing module ownership
-
-The initial tool families map to existing owners:
-
-| Tool family | Authoritative module |
+| 工具 | 负责方 |
 |---|---|
-| `registry.*` | `platform-core-service` |
-| `telemetry.current.*` | `telemetry-runtime-service` |
-| `analytics.energy.*` | `telemetry-query-service` through Cube and ClickHouse |
-| `authorization.*` | `iam-service` through scoped delegation |
-| `commands.*` | `command-service` |
-| `audit.*` | `audit-ledger-service` |
+| 站点、资产、设备清单 | 登记服务 |
+| 当前读数、历史读数 | 遥测 |
+| 能耗序列、对比、按设备拆分、语义查询 | 查询服务（经 Cube） |
+| 告警、故障诊断、工单 | 各自的服务 |
 
-The following paths are forbidden:
+每次读数据前，网关按提问人的权限换一张授权（ADR 0014）。禁止的路径：
 
 ```text
-Agent -> ClickHouse SQL
-Agent -> Cube arbitrary query
-Agent -> ThingsBoard read-through
-Agent -> provider connector
-Agent -> direct physical command
-historical telemetry -> current-state control precondition
-AG-UI or model trace -> authoritative audit record
+助手 -> 直接查 ClickHouse
+助手 -> 任意的 Cube 查询
+助手 -> 去上游平台读穿
+助手 -> 下发适配 / 直接控制设备
+历史读数 -> 当作控制的前提
+模型的过程记录 -> 当作正式的操作记录
 ```
 
-### 9. The benchmark contract will be repository-owned
+### 4. 数据不够时直接说
 
-Before Agent runtime implementation begins, the repository will add a dedicated
-benchmark slice containing:
+下结论之前，先看数据够不够：数据是否完整、截至时间是否覆盖、当前读数是否新鲜可信、需要的传感器有没有、设备在不在运行、时间范围和样本数够不够。不够时，助手如实说「没法判断」（结论类型 `UNABLE_TO_CONCLUDE`），可以向值班人员要更多信息；不能编结果，也不能悄悄降低要求。
 
-- a versioned Operations Agent scenario contract;
-- representative Energy, Telemetry, Authorization and Safety scenarios;
-- deterministic validation for identifiers, dependency DAGs, forbidden tool use
-  and blocker criteria.
+### 5. 评测看过程，安全和权限一票否决
 
-The exact file locations and executable checks are implementation decisions. The
-benchmark must define product expectations independently of the eventual
-TypeScript Agent framework.
+评测题写着：值班人员的原话、预期的结论类型（有结论 / 没法判断 / 拒绝）、正确答案必须说出的数字、读数据次数和耗时的上限，能力题还写着必须调用哪个工具。只比最后的文字不够。
 
-## Consequences
+越权、透露无权的资源、绕过数据负责方、把历史读数当作控制前提、说自己操作了设备，不管其他分数多高都算失败。评测题库、评分和历次结果见 `services/operations-agent-service/evals/`。
 
-Positive:
+## 后果
 
-- Agent framework selection can be tested against stable domain expectations;
-- final-answer quality is no longer the only acceptance signal;
-- data quality, authorization and physical-action safety become executable
-  requirements;
-- the benchmark reuses existing platform contracts instead of introducing a
-  parallel industrial data model;
-- future LangGraph.js, AG-UI and CopilotKit work has a stable product seam.
+- 换运行方式或模型时，产品期望不变，可以用同一套评测比较。
+- 数据质量、权限和物理操作的安全都是可以自动检查的要求。
+- 代价：题目要随接口变化维护；理想过程列不全所有合理的推理路线；新能力要先有题目，才能说评测覆盖了它。
 
-Costs:
-
-- scenarios require domain review and maintenance as contracts evolve;
-- ideal trajectories cannot enumerate every valid reasoning path;
-- new capabilities need fixtures before they can claim benchmark coverage.
-
-## Deferred work
-
-- product HTTP and event contracts for Investigation Task, Evidence, Finding and
-  Proposed Action;
-- implementation of the TypeScript Operations Agent runtime and persistence model selected by ADR 0010;
-- a Failure Mode and diagnostic-rule bounded context;
-- work-order integration;
-- predictive model governance and Analysis Run persistence;
-- scored trajectory comparison and model regression reporting.
-
-ADR 0010 selects the runtime and modular service boundary. Making Agent state authoritative for an existing platform fact or allowing an Agent to initiate physical execution still requires a separate ADR.
+让助手的状态成为某个平台事实的依据，或者允许助手发起物理执行，都需要另写 ADR。

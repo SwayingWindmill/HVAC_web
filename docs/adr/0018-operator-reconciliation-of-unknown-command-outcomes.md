@@ -1,23 +1,33 @@
-# ADR 0018 — A person settles an unknown command outcome, and that releases the Device
+# ADR 0018：结果不明的指令由人来确认，确认后设备恢复可控
 
-Status: accepted (amends ADR 0006)
+状态：已采纳（修改 ADR 0006；2026-10-10）
 
-Date: 2026-10-10
+## 背景
 
-A command ends `OUTCOME_UNKNOWN` when the platform cannot prove what happened: the request may have reached the Device, or the reported state never confirmed it. ADR 0006 forbids retrying it blindly, and dispatch holds every later command for that Device behind it and freezes the Device's control group. Nothing could release the hold, so one stuck actuator or lost acknowledgement left the Device uncontrollable from the platform, STOP included (#444).
+平台证明不了一条指令到底执行了没有时，这条指令以「结果不明」（`OUTCOME_UNKNOWN`）结束：比如请求可能已经到了设备，或者设备上报的状态一直没确认。ADR 0006 不允许盲目重试；下发时，这台设备后面的所有指令都排在它后面，设备所在的控制组也被冻结。以前没有任何办法解除，所以一个卡住的执行器或一次丢失的确认，就能让这台设备从平台上再也控制不了，连「停止」都发不出去（#444）。
 
-A person with control authority over the Device now settles the command with **Outcome Reconciliation**: `POST /api/v1/commands/{commandId}/reconcile` with `APPLIED` or `NOT_APPLIED`. The caller needs the same `COMMAND_SUBMIT` grant for the command's Device and Capability as submitting it, at the Capability's current revision, so a revision released while the outcome was unknown cannot lock the Device. One person settles it, without step-up, whatever the command's risk. The Intent moves from `OUTCOME_UNKNOWN` to `SUCCEEDED` or `FAILED`, recorded as a PRINCIPAL transition (`OPERATOR_RECONCILED_APPLIED` / `OPERATOR_RECONCILED_NOT_APPLIED`) with an audit intent, and the Attempt keeps `OUTCOME_UNKNOWN` as evidence. The Device's control group is then unfrozen. Dispatch runs one command per Device at a time, so a Device holds at most one unknown outcome. Commands queued behind it have usually expired by then, because their submission grants last 30 seconds; the next command submitted after reconciliation dispatches. We chose this because the person at the plant can see what the drive did, while the platform cannot, and because the hold exists to stop the platform acting on a guess, not to stop people acting.
+## 决定
 
-## Considered Options
+对这台设备有控制权限的人可以「确认结果」：`POST /api/v1/commands/{commandId}/reconcile`，选「已执行」（`APPLIED`）或「没执行」（`NOT_APPLIED`）。控制页面上结果不明的指令有对应的按钮。
 
-- **No hold at all, as ThingsBoard does** ([`RpcStatus.java`](https://github.com/thingsboard/thingsboard/blob/6d46786579c8b29caf5102f95ddb133674bed68b/common/data/src/main/java/org/thingsboard/server/common/data/rpc/RpcStatus.java) at v4.4: TIMEOUT and EXPIRED are terminal and the next RPC is sent). Rejected: sending the next setpoint while the previous one's effect is unknown is what ADR 0006 prevents.
-- **Resolve automatically from a later matching reported state.** Rejected: a later match does not show that this command caused it; local control or another actor could have.
-- **Let STOP bypass the hold.** Deferred: it needs per-Capability dispatch ordering. With reconciliation the hold is one action away; this ADR does not add a bypass.
-- **A dedicated approval-style permission with a second person.** Rejected for now: settling an outcome changes no setpoint, and the control authority already granted for the Device is the right scope.
+- 确认的人需要和提交这条指令时一样的权限：对这台设备和这项控制能力的 `COMMAND_SUBMIT`，按控制能力的当前版本判断。这样即使结果不明期间控制能力发布了新版本，设备也不会被锁死。
+- 一个人确认就行，不需要二次验证，和指令的风险等级无关。
+- 指令从「结果不明」变成「成功」或「失败」，记为一次由人做的状态变化（`OPERATOR_RECONCILED_APPLIED` / `OPERATOR_RECONCILED_NOT_APPLIED`），并写审计；那次发送尝试仍保留「结果不明」，作为当时的证据。
+- 设备的控制组随即解冻。下发时每台设备同一时间只跑一条指令，所以一台设备最多只有一条结果不明的指令。排在后面的指令到这时通常已经过期（提交时的授权只有 30 秒），确认之后新提交的指令就能下发。
 
-OpenEMS and MyEMS have no unknown outcome to settle; see the [source review](../architecture/command-outcome-reconciliation-source-review-2026-10-10.md).
+## 原因
 
-## Consequences
+现场的人看得到变频器实际做了什么，平台看不到。冻结是为了不让平台凭猜测继续操作，不是为了不让人操作。
 
-- The reconciliation is the reconciler's statement, not proof; the transition and audit name who made it.
-- There is no UI yet, as for submit and approve; the action is the public API route.
+## 考虑过的做法
+
+- **完全不冻结，像 ThingsBoard 那样**（v4.4 的 [`RpcStatus.java`](https://github.com/thingsboard/thingsboard/blob/6d46786579c8b29caf5102f95ddb133674bed68b/common/data/src/main/java/org/thingsboard/server/common/data/rpc/RpcStatus.java)：超时和过期都算结束，接着发下一条）：没有采用。上一个设定值的效果还不知道就发下一个，正是 ADR 0006 要防止的。
+- **根据之后上报的状态自动判断**：没有采用。之后的状态对上了，不能说明是这条指令造成的，可能是现场本地控制或别人改的。
+- **让「停止」绕过冻结**：以后再说。这需要按控制能力分别排队下发。有了人工确认，解除冻结只差一步操作，本 ADR 不加绕过。
+- **专门的审批权限、要第二个人确认**：暂不采用。确认结果不改任何设定值，已经给这台设备的控制权限就是合适的范围。
+
+OpenEMS 和 MyEMS 没有「结果不明」需要确认，见[调研](../architecture/command-outcome-reconciliation-source-review-2026-10-10.md)。
+
+## 结果
+
+- 确认只是确认人的说法，不是证明；状态变化和审计里写着是谁确认的。

@@ -1,30 +1,30 @@
-# Outbound Delivery Service
+# 外发服务（outbound-delivery-service）
 
-S15 owns durable external delivery. Business domains submit a `DeliveryIntent`; they do not call a webhook provider directly.
+负责把内容可靠地发到外部系统（例如 Webhook）。业务模块只提交一个外发请求（`DeliveryIntent`），不直接调外部接口。第一阶段的 Compose 里不运行它。
 
-## Durable chain
+## 一条外发的经过
 
-`IntegrationDefinition revision -> DeliveryIntent -> DeliveryAttempt -> DeliveryReceipt | DeadLetter -> ReplayApproval -> new DeliveryAttempt`
+`集成定义版本 -> 外发请求 -> 一次发送尝试 -> 对方确认收到 | 放进「发不出去」的队列（死信） -> 批准重发 -> 新的发送尝试`
 
-The intent is committed before any external effect. Claiming work also commits a new attempt and lease before the adapter runs. An unfinished attempt whose lease expires is therefore treated conservatively as `MAYBE_SENT`: it becomes `OUTCOME_UNKNOWN` and requires governed replay rather than an automatic retry.
+外发请求先写进数据库，然后才有任何对外的动作。领任务时也先写好一次新的尝试和租约，再调发送程序。所以一次没完成的尝试租约到期时，按「可能已发出」（`MAYBE_SENT`）保守处理：记为结果不明（`OUTCOME_UNKNOWN`），要经过批准才能重发，不会自动重试。
 
-Only an adapter result that proves the request was `NOT_SENT` may enter the bounded automatic retry path. `ACCEPTED_NOT_CONFIRMED` and `MAYBE_SENT` never blind-retry.
+只有发送程序能证明「根本没发出去」（`NOT_SENT`）时，才进入有次数上限的自动重试。「对方收到但没确认」（`ACCEPTED_NOT_CONFIRMED`）和「可能已发出」都不会盲目重试。
 
-## REST/Webhook adapter
+## REST / Webhook 发送
 
-The first adapter is intentionally narrow:
+第一个发送程序故意做得很窄：
 
-- exact destination-host allowlist;
-- DNS resolution before connect and dialing only the already-approved resolved addresses;
-- private, loopback, link-local, multicast, unspecified, metadata-address and CGNAT destinations rejected;
-- redirects rejected;
-- no environment HTTP proxy;
-- request body <= 1 MiB, response evidence <= 256 KiB, timeout <= 30 s, concurrency <= 32, attempts <= 5;
-- `CredentialRef` is persisted; credential material is resolved and injected only at the external-I/O boundary;
-- provider response bodies are not persisted, only bounded request identifiers and SHA-256 response digests.
+- 目标主机必须在精确的允许名单里；
+- 连接前先解析 DNS，只连接已经批准的解析结果；
+- 拒绝内网、本机、链路本地、组播、未指定、云平台元数据地址和运营商 NAT 地址；
+- 不跟随跳转；
+- 不用环境变量里的 HTTP 代理；
+- 请求体不超过 1 MiB，保存的响应不超过 256 KiB，超时不超过 30 秒，并发不超过 32，尝试不超过 5 次；
+- 数据库里只存凭据的引用（`CredentialRef`），真正的凭据只在对外发送的那一刻取出并放进请求；
+- 不保存对方返回的内容，只存有限长度的请求编号和响应的 SHA-256 摘要。
 
 ## PostgreSQL
 
-`migrations/001_s15_outbound_delivery.sql` creates the `outbound_delivery` schema and FORCE RLS tenant policies. The runtime sets `app.tenant_id` inside each transaction. Immutable attempts, receipts, dead letters and replay approvals are never rewritten as history correction.
+`migrations/001_s15_outbound_delivery.sql` 建 `outbound_delivery` 表，按租户强制行级隔离；每个事务里设置 `app.tenant_id`。发送尝试、对方确认、死信和重发批准写下后不再改。
 
-The focused PostgreSQL behavior test runs when `OUTBOUND_DELIVERY_POSTGRES_DSN` is supplied. It protects idempotent intent creation, conservative unknown-outcome handling, governed replay, immutable attempt history and lease-expiry recovery.
+设置 `OUTBOUND_DELIVERY_POSTGRES_DSN` 时会跑 PostgreSQL 的行为测试，覆盖：外发请求不重复创建、结果不明的保守处理、经批准的重发、发送尝试的历史不被改写、租约到期后的恢复。

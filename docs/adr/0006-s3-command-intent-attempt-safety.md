@@ -1,128 +1,77 @@
-# ADR 0006 — S3 governed command intent, attempt and execution-fence boundary
+# ADR 0006：控制指令的请求、下发尝试和防重复执行
 
-Status: accepted
+状态：已采纳（2026-07-26）。ADR 0018 修订了「结果不明」之后怎么办。当初的下发对象是 ThingsBoard，现在经接入服务的 MQTT 下发到站点网关（`modules/command/pkg/mqttconnector`，见 `modules/connectivity/README.md`），能力也从最初的一种扩展到了多种，这两处按现状写。
 
-Date: 2026-07-26
+## 背景
 
-## Context
+这是平台第一个会改变设备物理状态的功能，不能当普通的 HTTP 修改：超时或进程故障可能发生在对方已经收到请求之后，盲目重试会让设备重复动作。设备当前的在线状态和读数由遥测负责（ADR 0003）；历史读数不能作为控制的前提。
 
-S3 introduces the first platform capability that may change physical Device state. A control request cannot be treated as an ordinary HTTP mutation: a timeout or process failure may happen after the provider accepted the request, so blind retry can duplicate a physical side effect.
+## 决定
 
-S2 remains the owner of current Device Presence and telemetry Snapshot. Historical telemetry is not a control-precondition source.
+### 谁负责什么
 
-## Decision
+- 指令服务（`command-service`）负责：指令请求、审批状态、幂等、能力版本、当前状态证据的引用、每台设备的指令序号、状态变化、操作记录意图和下发待发事件。
+- 下发程序（`command-dispatcher`）是受限的执行者：准备和结束每次下发尝试、租约和执行栅栏，但不能新建用户的请求、改权限或发明能力。
+- 下发适配（现在是 MQTT）把协议细节包起来，并给出下发结果的分类；它不能授权请求，也不能自己宣布业务上成功。
+- 浏览器和网关从不直接调设备或网关。
 
-### Service ownership
+### 请求和下发尝试是两回事
 
-`command-service` owns Command Intent, governance state, idempotency, Capability revision, current-state evidence references, device command sequence, transitions, audit intent and dispatch outbox.
-
-`command-dispatcher` is a restricted execution worker. It prepares and resolves Attempts, leases and execution fences, but cannot create user intent, change authorization or invent a Capability.
-
-`thingsboard-connector-control` adapts the provider protocol and classifies provider outcomes. It cannot authorize a request or independently declare business success.
-
-The browser and Gateway never call ThingsBoard directly.
-
-### Intent and Attempt are separate
-
-Intent states begin with:
+请求的状态：
 
 ```text
 SUBMITTED -> VALIDATING -> QUEUED -> DISPATCHING
 SUCCEEDED | FAILED | REJECTED | CANCELLED | EXPIRED | OUTCOME_UNKNOWN
 ```
 
-Attempt states begin with:
+每次下发尝试的状态：
 
 ```text
-PREPARED
-REQUEST_COMMITTED
-ACKNOWLEDGED
-VERIFIED
-NOT_SENT
-FAILED
-OUTCOME_UNKNOWN
+PREPARED、REQUEST_COMMITTED、ACKNOWLEDGED、VERIFIED、NOT_SENT、FAILED、OUTCOME_UNKNOWN
 ```
 
-Every transition records its previous state, next state, reason, actor, causation and evidence reference. Historical uncertainty is never deleted.
+每次状态变化都记下前一个状态、后一个状态、原因、操作人、起因和证据引用。历史上的不确定从不删除。
 
-### Durable acceptance and idempotency
+### 持久接收和幂等
 
-Creating a Command returns `202 Accepted` only after the Command transaction commits. It means the Intent was accepted for governance, not that the Device changed state.
+新建指令的事务提交之后才返回 `202 Accepted`，意思是「请求已接收、进入审批流程」，不是「设备已经变了」。
 
-The idempotency key is scoped to `organization_id + device_id`. The same key and canonical payload returns the original Command. The same key with a different payload is rejected.
+幂等键的范围是「租户 + 设备」：同一个键、同样的规范化内容返回原来那条指令；同一个键、内容不同则拒绝。
 
-### Canonical Capability only
+### 只用规范的能力
 
-Arbitrary provider method names and payloads are forbidden. The first tracer-bullet Capability is `SET_TEMPERATURE_SETPOINT` with:
+不允许任意的协议方法名和参数，只能用平台定义的能力，例如启动 `START`、停止 `STOP`、复位故障 `RESET_FAULT`、设定温度 `SET_TEMPERATURE_SETPOINT`、冷冻水出水温度设定 `SET_CHILLED_WATER_TEMPERATURE_SETPOINT`、频率 `SET_FREQUENCY`、风机转速 `SET_FAN_SPEED`、阀门开度 `SET_OPENING`、负荷限制 `SET_LOAD_LIMIT`。每种能力有单位、绝对范围、相对当前值的最大变化、风险等级（低 / 中 / 高 / 严重）、审批要求和重试规则。例如设定温度只能在 16–30 ℃ 之间，一次最多改 3 ℃（`libs/commandmodel/model.go` 里每种能力各有一组）。低风险不用审批，中风险要一个人审批，高风险和严重要两个人审批；谁能下发、谁能审批到哪个风险等级，由角色决定（ADR 0022）。
 
-- canonical unit Celsius;
-- absolute range 16–30 °C;
-- maximum change from current accepted temperature 3 °C;
-- risk `LOW`;
-- approval `NONE` for Synthetic-only execution;
-- retry policy `PRE_SEND_ONLY`;
-- no production provider mapping.
+### 下发前要有当前的证据
 
-### Required S2 evidence
+能力进入 `QUEUED` 之前，遥测的当前证据必须满足：能否判断为 `AVAILABLE`、在线状态为 `ONLINE`、读数就绪为 `CURRENT`、必需点位质量为 `GOOD`、状态版本号大于 0。指令记下校验时用的遥测状态版本号。历史查询、过期缓存和上次的值都不能满足这个前提。
 
-The initial Capability may reach `QUEUED` only when current S2 evidence says:
+### 顺序、租约和栅栏
+
+每条被接收的、会改变状态的请求，在这台设备上得到一个单调递增的指令序号。交给下发适配之前，下发程序先持久保存这次尝试、内容哈希、租约持有者、租约到期时间和单调递增的执行栅栏，再把请求改为 `DISPATCHING`。旧的栅栏一律拒绝；下发程序重启，不会因为它消失了就把不确定的尝试改回 `QUEUED`。
+
+### 重试和「结果不明」
+
+下发适配把执行边界分成三种：
+
+- `PRE_SEND_REJECTED`：能证明请求根本没写出去，可以带更高的栅栏回到 `QUEUED`，再试一次；
+- `REQUEST_COMMITTED`：请求写出去了、但证明不了结果，记为 `OUTCOME_UNKNOWN`，不自动重试；
+- `ACKNOWLEDGED`：设备确认了，并且这种能力的读回核对也通过，才记为 `SUCCEEDED`；否则记为 `OUTCOME_UNKNOWN`。
+
+结果不明的请求只能通过人工确认结果离开这个状态（ADR 0018）：有这台设备控制权限的人陈述生效或没生效，请求变为 `SUCCEEDED` 或 `FAILED`，设备解除锁定。这样的「成功」不是核实，记录里写明是哪个人确认的；那次尝试仍保留「结果不明」。
+
+### 数据和接口
+
+说了算的数据在 PostgreSQL 的 `command_runtime`：能力配置、请求、尝试、状态变化、幂等、设备的控制状态、下发待发事件和操作记录意图。公开接口从 `POST /api/v1/commands`、`GET /api/v1/commands/{commandId}` 开始（完整列表见接口定义）。网关负责会话、CSRF 和 IAM；租户、站点和操作人从验证过的上下文得出，不接受浏览器请求体里的。
+
+### 禁止的路径
 
 ```text
-Evaluation Availability = AVAILABLE
-Device Presence = ONLINE
-Telemetry Readiness = CURRENT
-required key Quality = GOOD
-Business Revision > 0
+浏览器 -> 设备 / 网关 / 上游平台
+浏览器 -> 任意的协议方法或参数
+网关 -> 直接下发控制
+AI 或自动化 -> 下发适配
+历史读数 -> 作为控制的前提
 ```
 
-The Command records the S2 Business Revision used for validation. Historical queries, stale caches and Last Known context cannot satisfy the precondition.
-
-### Ordering, lease and fence
-
-Every accepted state-changing Intent receives a monotonic `device_command_sequence` per Device.
-
-Before Connector execution, Dispatcher preparation persists the Attempt, payload hash, lease owner, lease expiry and monotonic execution fence, then moves the Intent to `DISPATCHING`.
-
-An old fence is always rejected. A worker restart never turns an uncertain Attempt back into `QUEUED` merely because the worker disappeared.
-
-### Retry and OUTCOME_UNKNOWN
-
-The Connector classifies the execution boundary as:
-
-```text
-PRE_SEND_REJECTED
-REQUEST_COMMITTED
-ACKNOWLEDGED
-```
-
-Only `PRE_SEND_REJECTED` proves that no request was written and may safely return the Intent to `QUEUED` with a higher fence on the next Attempt.
-
-`REQUEST_COMMITTED` without a provable result becomes `OUTCOME_UNKNOWN` and is not automatically retried.
-
-`ACKNOWLEDGED` becomes `SUCCEEDED` only when the Capability verification also passes. Otherwise it becomes `OUTCOME_UNKNOWN`.
-
-Amended by [ADR 0018](0018-operator-reconciliation-of-unknown-command-outcomes.md): an `OUTCOME_UNKNOWN` Intent leaves that state only through Outcome Reconciliation, a person's recorded statement that moves it to `SUCCEEDED` or `FAILED` and releases the Device. Such a `SUCCEEDED` is not verification; its transition names the person. The Attempt keeps `OUTCOME_UNKNOWN`.
-
-### Persistence and activation
-
-PostgreSQL Schema `command_runtime` is the planned authority. Its first tables are capability profiles, intents, attempts, transitions, idempotency, device control state, dispatch outbox and audit intents.
-
-The first planned public operations are:
-
-```text
-POST /api/v1/commands
-GET  /api/v1/commands/{commandId}
-```
-
-Gateway remains the public Session, CSRF and IAM seam. Organization, Site and Principal are derived from verified context, not accepted from the browser body.
-
-Route ownership remains `expand-baseline` with rollout disabled. Ticket 01 permits only a Synthetic Connector and never contacts a production Device or provider endpoint.
-
-### Forbidden paths
-
-```text
-browser -> ThingsBoard
-browser -> arbitrary provider method/params
-Gateway -> ThingsBoard control
-AI or Automation -> Connector
-historical telemetry -> control precondition
+AI 助手没有任何下发指令的工具。

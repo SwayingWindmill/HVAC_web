@@ -1,6 +1,6 @@
 # 泉来禾 HVAC 设计系统 1.0
 
-网页的设计系统：颜色、字号、间距、组件和每个事实放在哪个页面。视觉基准是 Claude Design 画布 https://claude.ai/artifact/LVwBRsavimfmaBHnRYJbdm 的「定稿」页，同一画布的「设计系统」页有浅色和深色两版的画板。令牌（颜色、字号等变量）已经写进 `apps/hvac-web/src/global.css`，改设计时两边一起改。
+网页的设计系统：颜色、字号、间距、组件和每个事实放在哪个页面。视觉基准是 Claude Design 画布 https://claude.ai/artifact/LVwBRsavimfmaBHnRYJbdm 的「定稿」页，同一画布的「设计系统」页有浅色和深色两版的画板。令牌（design token：用名字代替具体值的 CSS 变量，例如 `--primary` 就是主色靛蓝）已经写进 `apps/hvac-web/src/global.css`，改设计时两边一起改。
 
 ## 1. 原则
 
@@ -210,7 +210,7 @@
 | ToggleGroup | `ui/toggle-group` | 分段控件，用于面板内筛选同一份数据 |
 | 指标页签 | `components/metric-tabs-chart-card` | 标签 12 + 数值 24，选中项底边 2px 靛蓝 |
 | Badge / Status / DeltaBadge | `ui/badge`、`ui/status`、`ui/delta-badge` | soft 变体；严重度带形状；变化徽章按“好坏”着色，不按“升降”着色 |
-| Tooltip / HoverCard | `ui/tooltip`、`ui/hover-card` | 简单提示用反色样式；口径和公式说明放在 ⓘ 图标里 |
+| Tooltip / HoverCard | `ui/tooltip`、`ui/hover-card` | 简单提示用反色样式；算法和公式说明放在 ⓘ 图标里 |
 | Dialog / AlertDialog / Sheet | `ui/dialog`、`ui/alert-dialog`、`ui/sheet` | 对象详情一律用 Sheet，由 `?inspect=` 打开；危险操作需要勾选确认后才能提交 |
 | Popover / DropdownMenu | `ui/popover`、`ui/dropdown-menu` | 筛选改动先暂存，点“应用”才生效；危险菜单项放最后，红字并带省略号 |
 | Calendar（日期选择） | `ui/calendar` + `ui/popover` | 预设放在左侧；不能选未来日期；按站点时区 |

@@ -1,140 +1,97 @@
-# Phase 1 Simulator Acceptance
+# 第一阶段的模拟器验收
 
-## Purpose
+## 是什么
 
-This acceptance profile is the software-and-simulator gate used before real field meters are available. It implements the Phase 1 subset of the test and acceptance design without claiming hardware or formal endurance evidence that has not been executed.
+在还没有真实现场电表的时候，用软件和模拟器做的那部分验收。它按《智慧能源系统测试与验收体系设计》里第一阶段能做的部分来，不声称做过还没做的硬件测试或正式的长时间运行测试。
 
-The source design is `智慧能源系统测试与验收体系设计`.
+## 每条要求的结果
 
-## Status model
+每条要求最后是下面四种之一：
 
-Every mapped requirement ends in one of these states:
+- `PASS`：自动化的软件 / 模拟器检查通过，并留下了证据。
+- `FAIL`：必须通过的软件检查失败，或者缺了必需的证据。
+- `DEFERRED_HARDWARE`：要真实电表、协议文档、硬件实验室或现场对比，现在做不了。
+- `DEFERRED_FORMAL`：要正式的预发时间窗口、真实时长的负载证明、Linux 浏览器和用户验收环境，或者正式的上线验收流程。
 
-- `PASS` — an automated software/simulator gate produced passing evidence.
-- `FAIL` — a required software gate failed or its required evidence is missing.
-- `DEFERRED_HARDWARE` — requires a real meter, protocol documentation, hardware lab, or field comparison.
-- `DEFERRED_FORMAL` — requires a formal staging time window, wall-clock load attestation, Linux browser/UAT environment, or production acceptance process.
+推迟的要求永远不会被改写成 `PASS`。
 
-A deferred requirement is never rewritten as `PASS`.
+## 命令
 
-## Commands
-
-Static RTM and asset validation:
+静态检查（要求和检查的对应表、相关文件）：
 
 ```bash
 npm run acceptance:phase1:check
 ```
 
-Database backup/destroy/restore drill:
+数据库备份 → 删除 → 恢复演练：
 
 ```bash
 npm run acceptance:phase1:restore
 ```
 
-Full simulator acceptance:
+完整的模拟器验收：
 
 ```bash
 npm run acceptance:phase1
 ```
 
-A single gate can be executed while developing the suite:
+开发时只跑一项检查：
 
 ```bash
 node scripts/run-phase1-simulator-acceptance.mjs --profile=simulator --gate=GATE-MQTT-E2E
 ```
 
-A single-gate run is reported as `partial` and is not Simulator Acceptance evidence.
+只跑一项时结果标为 `partial`，不能当作模拟器验收的证据。
 
-## Evidence
+## 证据
 
-The main evidence bundle is written under:
+写在 `out/phase1-acceptance/`，主要文件：`traceability-static.json`、`restore-report.json`、`acceptance-report.json`、`acceptance-summary.md`。验收报告还引用各领域已有检查的结果：数据架构基线、MQTT 到遥测的集成、遥测的 PostgreSQL 测试、分析 / ClickHouse / Cube、指令认证。
 
-```text
-out/phase1-acceptance/
-```
+`GATE-DATA-ARCHITECTURE` 跑 `npm run data:architecture:check`，检查数据架构 V2（`SE-DATA-001`）的基线：十个领域的划分、每类数据唯一的负责方、点位是标准的测量身份、物理传感器可选、V2 的质量模型和上线检查清单。还没做到的项（`PARTIAL`/`MISSING`）留在 `contracts/data/data-architecture.v2.json` 里，看得见。
 
-Key files:
+## 硬性规则
 
-```text
-traceability-static.json
-restore-report.json
-acceptance-report.json
-acceptance-summary.md
-```
-
-The acceptance report also references evidence produced by existing domain gates, including the Phase 1 data-architecture baseline, MQTT/S2 integration, S2 PostgreSQL, Analytics/ClickHouse/Cube, Command certification, and S2 capacity preflight.
-
-`GATE-DATA-ARCHITECTURE` runs `npm run data:architecture:check`. It validates the CURRENT SE-DATA-001 V2 baseline, including the ten-domain model, frozen SoT boundaries, Point-as-canonical semantics, optional Physical Sensor rule, V2 quality model, and Production Gate inventory. The gate must not use Organization or ThingsBoard as architectural dependencies. Remaining `PARTIAL`/`MISSING` items stay visible in `contracts/data/data-architecture.v2.json` and keep V2 acceptance ineligible.
-
-## Hard rules
-
-The Simulator profile is eligible only when every `SOFTWARE_REQUIRED` requirement passes. The following remain zero-tolerance:
+所有标为「软件必须」（`SOFTWARE_REQUIRED`）的要求都通过，模拟器验收才算合格。下面这些一个都不能有：
 
 ```text
-P0 defects
-P1 defects
-critical security issues
-critical safety issues
-unauthorized control successes
-duplicate command side effects
-cross-scope telemetry successes
-restore failures
+P0、P1 缺陷
+严重的安全或人身安全问题
+越权的控制成功执行
+指令的重复副作用
+跨范围的遥测读取成功
+恢复失败
 ```
 
-This runner proves automated gate status; defect counters not represented by an automated domain gate must still be supplied by the release/PRR process before production approval.
+这个程序只证明自动化检查的状态；没有自动化检查覆盖的缺陷数，仍要在上线评审时另外提供。
 
-## Edge failure evidence
+## 网关故障的证据
 
-`GATE-MQTT-E2E` is a runtime failure-injection gate, not only a connectivity check. It proves the current central-plant Point set over a real Mosquitto broker and additionally executes:
+`GATE-MQTT-E2E` 不只是检查能连上，还要注入故障。它在真实的 Mosquitto 上验证冷站全部点位，并执行：
 
 ```text
-Broker stop
-→ Edge readiness becomes unavailable
-→ S2 stops receiving new MQTT observations
-→ persistent .packet queue grows
-→ EG8200 Publisher process is stopped
-→ Broker returns
-→ Publisher process restarts with the same queue/state directory
-→ queued observations are delivered
-→ queue returns to zero
-→ persisted per-Point sequence continues monotonically
+停掉 MQTT 服务器
+→ 网关报告「未就绪」
+→ 遥测不再收到新的 MQTT 读数
+→ 网关本地的待发队列增长
+→ 停掉 EG8200 发布程序
+→ MQTT 服务器恢复
+→ 用同一个队列和状态目录重启发布程序
+→ 积压的读数送达
+→ 队列回到 0
+→ 每个点位保存的序号继续单调递增
 ```
 
-Point count is derived from the checked-in central-plant configuration rather than hard-coded in the gate. The test still requires exactly seven expected Device identities.
+点位数从仓库里的冷站配置算出来，不在检查里写死；检查仍然要求正好七个设备身份。
 
-The sequence state is persisted before new measurements are admitted to the MQTT queue. A crash may therefore leave a sequence gap, but a restarted Publisher must not reuse an earlier Source Position offset.
+序号在新读数进入 MQTT 队列之前就先存下来。所以崩溃可能留下序号空洞，但重启后的发布程序绝不会重用更早的序号。
 
-## Capacity limitation
+## 还不能证明的
 
-`GATE-CAPACITY-PREFLIGHT` intentionally invokes the existing S2 configuration preflight. Its evidence explicitly states that it is not a measured 60-minute steady-state or 15-minute 2x peak run.
+- **容量**：这里没有做实测的 60 分钟稳态或 15 分钟 2 倍峰值运行。所以模拟器验收不能当作 24 / 72 小时长时间运行、每秒 1 万 / 2 万个值的电表接入、正式的重连风暴容量或正式硬件容量的证明，这些在有正式的真实时长证明之前都是 `DEFERRED_FORMAL`。
+- **硬件**：在有真实电表和厂家协议资料之前，这些都是 `DEFERRED_HARDWARE`：物理 Modbus 连接；寄存器地址、数据类型、字节序、倍率的认证；现场读数、单位、方向的对比；真设备的断线重连；硬件实验室和小站点试运行的验收。以后补这些时，不用改「要求 → 检查 → 证据」这套结构。
 
-Therefore Simulator Acceptance must not be presented as proof of:
+## 怎么理解结果
 
-```text
-24h / 72h endurance
-10k / 20k values/s Meter acceptance
-formal reconnect storm capacity
-production hardware capacity
-```
+`simulatorAcceptanceEligible=true` 只表示当前软件和模拟器范围内的自动化阻断检查都通过了。
 
-Those remain `DEFERRED_FORMAL` until an approved wall-clock attestation exists.
-
-## Hardware limitation
-
-Until a real meter and vendor protocol material are available, these remain `DEFERRED_HARDWARE`:
-
-```text
-physical Modbus connection
-register address/data type/endian/scale certification
-field value/unit/direction comparison
-real device disconnect/reconnect behavior
-hardware lab and small-site rollout acceptance
-```
-
-The simulator path is designed so these items can later be added without changing the Requirement -> Gate -> Evidence model.
-
-## Go / No-Go interpretation
-
-`simulatorAcceptanceEligible=true` means the current software and simulator scope has passed its automated blocking gates.
-
-It does **not** mean production go-live is approved. Production still requires hardware acceptance, formal performance/endurance, browser/UAT where applicable, defect review, and PRR approval.
+它**不**表示可以上线。正式上线还要硬件验收、正式的性能和长时间运行测试、需要时的浏览器和用户验收、缺陷评审和上线评审批准。

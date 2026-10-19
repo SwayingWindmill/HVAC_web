@@ -1,85 +1,63 @@
-# Building agents: source review (2026-10-17)
+# 怎么做好一个用工具的 AI 助手：资料调研（2026-10-17）
 
-What first-party guidance says about building, evaluating and improving tool-using agents, and
-what it means for the Operations Agent (AI 助手). Read in full on 2026-10-17:
+官方资料里关于怎么搭建、评测和改进用工具的 AI 助手的说法，以及它们对我们的 AI 助手意味着什么。2026-10-17 全文读过：
 
-- [A] Anthropic, *Building effective agents* (2024-12-19) — <https://www.anthropic.com/engineering/building-effective-agents>
-- [T] Anthropic, *Writing effective tools for agents — with agents* (2025-09-11) — <https://www.anthropic.com/engineering/writing-tools-for-agents>
-- [C] Anthropic, *Effective context engineering for AI agents* (2025-09-29) — <https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents>
-- [E] Anthropic, *Demystifying evals for AI agents* (2026-01-09) — <https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents>
+- [A] Anthropic，*Building effective agents*（2024-12-19）：<https://www.anthropic.com/engineering/building-effective-agents>
+- [T] Anthropic，*Writing effective tools for agents — with agents*（2025-09-11）：<https://www.anthropic.com/engineering/writing-tools-for-agents>
+- [C] Anthropic，*Effective context engineering for AI agents*（2025-09-29）：<https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents>
+- [E] Anthropic，*Demystifying evals for AI agents*（2026-01-09）：<https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents>
 
-OpenAI's *A practical guide to building agents* sits behind a bot check and was not read.
+OpenAI 的 *A practical guide to building agents* 要过人机验证，没有读。
 
-## What the sources say
+## 资料里说了什么
 
-### Shape of the system
+### 系统怎么搭
 
-- Start with the simplest thing that works; add agentic complexity only when it demonstrably
-  improves outcomes, measured by evaluation [A]. Agents are "LLMs autonomously using tools in a
-  loop" [C]; their implementation is usually simple, so the toolset and its documentation decide
-  the result [A].
-- Three principles: keep the design simple, show the agent's planning steps, and craft the
-  agent-computer interface (tools) as carefully as a human interface [A].
-- Frameworks hide prompts and responses; understand the code underneath [A].
+- 从最简单能用的做起；只有评测证明确实更好时，才加更复杂的助手逻辑 [A]。助手就是「模型在循环里自己调用工具」[C]，实现通常很简单，效果主要取决于工具和工具的说明 [A]。
+- 三条原则：设计保持简单；让人看到助手在做哪些步骤；像设计给人用的界面一样认真设计工具 [A]。
+- 框架会把提示词和模型的回答藏起来，要弄懂底下的代码 [A]。
 
-### Evaluation comes first
+### 先有评测
 
-- Without evals a team "flies blind": it cannot tell regressions from noise and fixes one failure
-  by creating another [E]. Tool improvements are measured against an evaluation [T].
-- Start early with 20–50 tasks drawn from real failures and from the checks already done by hand;
-  early changes have large effects, so small sets suffice [E].
-- A good task is one two domain experts would grade the same; give each a reference solution;
-  test both directions (should do / should not do) to avoid one-sided optimisation [E].
-- Graders: code-based where possible (string/number checks, tool calls, turns, tokens), model-based
-  rubrics where needed, each dimension judged in isolation, with an "Unknown" way out, calibrated
-  against human experts; grade the outcome, not the exact path, and allow partial credit [E].
-- Run several trials per task. pass@k (one success in k) fits tools; pass^k (all k succeed) fits
-  agents users expect to be reliable every time [E].
-- The eval harness must behave like production and isolate trials [E]. Track runtime, number of
-  tool calls, tokens and tool errors alongside accuracy [T][E].
-- Read the transcripts: they show whether a failure is the agent's or the grader's [T][E].
-- Capability evals start at a low pass rate and give a hill to climb; regression evals stay near
-  100 %; capability tasks graduate into the regression suite [E].
-- Evals let a team judge a new model in days instead of weeks [E]. They complement production
-  monitoring, user feedback and periodic transcript review (the "Swiss cheese" model) [E].
+- 没有评测就是「盲飞」：分不清是真的变差了还是随机波动，修一个问题又冒出另一个 [E]。改工具要用评测来衡量 [T]。
+- 早点开始，20–50 道题就够，题目来自真实出过的问题和平时手工检查的内容；早期的改动效果大，题少也看得出来 [E]。
+- 好题目是两个懂行的人会打出同样分数的题；每道题配一个参考答案；正反两面都要测（该做的、不该做的），免得只往一个方向优化 [E]。
+- 评分：能用代码判断的就用代码（字符串和数字、调了哪些工具、轮数、令牌数），需要时再用模型按评分标准判断；每一项单独判断，允许「判断不了」，并和人工评分对照校准；评结果，不评具体走了哪条路，可以给部分分 [E]。
+- 每道题跑好几次。pass@k（k 次里有一次成功）适合工具；pass^k（k 次全部成功）适合用户期待每次都靠得住的助手 [E]。
+- 评测环境要和正式环境一样，每次运行互不影响 [E]。除了对错，还要记耗时、工具调用次数、令牌数和工具报错 [T][E]。
+- 要读完整的对话记录：看得出没过是助手的问题还是评分的问题 [T][E]。
+- 能力类的题一开始通过率低，给出改进的空间；回归类的题保持接近 100%；能力题稳定之后转入回归题 [E]。
+- 有了评测，换新模型几天就能判断好坏，而不是几周 [E]。评测和线上监控、用户反馈、定期读对话记录互相补充（「瑞士奶酪」模型）[E]。
 
-### Tools
+### 工具
 
-- A few thoughtful tools for high-impact workflows beat wrappers around every endpoint; tools may
-  consolidate several calls; overlapping tools confuse agents — "if a human engineer can't
-  definitively say which tool should be used … an AI agent can't be expected to do better" [T][C].
-- Return high-signal, natural-language context; avoid low-level identifiers; resolving UUIDs to
-  meaningful names reduces hallucination [T].
-- Bound responses (filtering, ranges, truncation with guidance); make error responses specific and
-  actionable rather than opaque codes [T].
-- Write tool descriptions like onboarding a new hire: make implicit terminology explicit, name
-  parameters unambiguously; small description changes produce large gains [T].
-- Poka-yoke: change arguments so mistakes are hard (the absolute-path example) [A].
+- 少数几个针对高频场景、想清楚了的工具，比给每个接口包一层强；一个工具可以合并几次调用；工具之间重叠会让助手困惑：如果连工程师都说不清该用哪个工具，就别指望模型做得更好 [T][C]。
+- 返回信息量大、用自然语言的内容；避免底层编号；把 UUID 换成有意义的名字能减少编造 [T]。
+- 限制返回的大小（筛选、范围、截断时告诉模型怎么缩小范围）；报错要具体、告诉模型怎么改，不要只给一个代码 [T]。
+- 工具说明要像给新同事做入职介绍：把行话讲明白，参数名不能有歧义；说明的小改动会带来大的提升 [T]。
+- 防呆：改参数的设计，让错误很难发生（例子是要求写绝对路径）[A]。
 
-### Context
+### 上下文
 
-- Context is a finite attention budget; find "the smallest possible set of high-signal tokens" [C].
-- System prompts at the right altitude: neither brittle if-else procedures nor vague guidance;
-  organise into sections; start minimal and add instructions from observed failures [C].
-- Prefer a few diverse canonical examples to a laundry list of edge-case rules [C].
-- Long conversations: compaction, clearing old tool results, structured notes; sub-agents only for
-  parallel exploration [C].
+- 上下文是有限的注意力预算，要找「信息量最大的最少内容」[C]。
+- 提示词的粒度要合适：既不是写死的 if-else 步骤，也不是空泛的指导；分节组织；从最少开始，看到实际出的问题再加 [C]。
+- 给几个不同的典型例子，比列一长串边界规则好 [C]。
+- 长对话：压缩、清掉旧的工具结果、结构化笔记；只有并行探索时才用子助手 [C]。
 
-## What this means for the Operations Agent
+## 对我们的 AI 助手意味着什么
 
-| Guidance | Today (2026-10-17) | Decision |
-| --- | --- | --- |
-| Evaluation-driven development [E][T] | No eval set; quality checked by asking a few questions by hand | **ADOPT** first: a task suite from real Songyaxuan questions and observed failures, code graders first, several trials per task, latency/tokens/tool calls recorded, transcripts kept for reading |
-| Graders calibrated by people [E] | — | **ADAPT**: the user (operations lead) spot-checks model-graded dimensions; start with code graders only |
-| High-signal tool results, no internal identifiers [T] | Tools return `valid_count`, `PEAK`, `electricity`; answers then speak of 「有效计量区间」 | **ADOPT**: tool results in operators' words; counts and quality enums stay out unless they change a conclusion |
-| Few, distinct tools [T][C] | Four overlapping energy tools (series, compare, by-equipment, semantic query) | **ADOPT**, measured: consolidate only when the eval shows the model choosing wrongly or chaining needlessly |
-| Actionable errors [T] | Tool's own refusals are generic English messages | **ADOPT**: say what was wrong and what is allowed |
-| Right-altitude system prompt with examples [C] | Prompt prescribes a fixed tool sequence; no examples | **ADOPT**: sections (role, data rules, answer shape), a few canonical answers, procedure left to the model |
-| Show planning steps [A] | Reads shown collapsed in the panel | Keep |
-| Simple single agent [A][C] | One Pi loop, read-only Tools | Keep; no sub-agents |
-| Layered guardrails | Site fixed by the server, Gateway authorizes each read, no write Tools; execution-claim guard matches English only | Keep; extend the guard to Chinese |
-| Monitoring, feedback, transcript review [E] | None | **ADOPT** after the suite exists |
-| Compaction [C] | Not needed yet (short sessions) | **DEFER** until sessions grow |
+| 建议 | 当时（2026-10-17） | 决定 | 之后 |
+| --- | --- | --- | --- |
+| 用评测驱动开发 [E][T] | 没有评测题，只靠手工问几个问题 | **先做**：用松雅轩的真实问题和出过的问题出题，先用代码评分，每题跑几次，记耗时、令牌和工具调用，保留对话记录供阅读 | 已做（#589），见 `services/operations-agent-service/evals/` |
+| 评分要由人校准 [E] | — | **改造后采用**：由运维负责人（用户）抽查模型评的项目；先只用代码评分 | 目前只有代码评分 |
+| 工具结果信息量大、不带内部编号 [T] | 工具返回 `valid_count`、`PEAK`、`electricity`，回答里就出现「有效计量区间」 | **采用**：工具结果用运维人员的话说；计数和质量的内部值不改变结论就不给 | 已做（#590） |
+| 工具少而且不重叠 [T][C] | 四个重叠的能耗工具（序列、对比、按设备、语义查询） | **采用，但看评测**：评测显示模型选错或无谓地连着调时才合并 | 还没合并 |
+| 报错告诉模型怎么改 [T] | 工具自己的拒绝是笼统的英文 | **采用**：说清哪里不对、允许什么 | 已做 |
+| 提示词粒度合适、带例子 [C] | 提示词规定了固定的工具顺序，没有例子 | **采用**：分节（角色、数据规则、回答的样子），几个典型回答，步骤交给模型 | 已做（#591） |
+| 让人看到步骤 [A] | 面板里折叠显示读数据的步骤 | 保留 | — |
+| 简单的单个助手 [A][C] | 一个 pi 循环，只读工具 | 保留，不用子助手 | — |
+| 多层防护 | 站点由服务端固定，每次读取由网关授权，没有写工具；「说自己操作了设备」的检查只认英文 | 保留；检查扩展到中文 | 已做（#592） |
+| 监控、反馈、读对话记录 [E] | 没有 | 有了题库之后**采用** | 还没做 |
+| 压缩上下文 [C] | 还不需要（会话都很短） | **以后再说**，等会话变长 | — |
 
-The LangGraph-era benchmark design (a scenario contract and runner whose code no longer existed)
-was deleted; the evaluation suite in `services/operations-agent-service/evals/` replaces it.
+LangGraph 时期的评测设计（一份场景约定和运行器，代码早已不在）已删掉，由 `services/operations-agent-service/evals/` 里的题库替代。
