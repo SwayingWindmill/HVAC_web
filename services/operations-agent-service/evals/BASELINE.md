@@ -320,7 +320,8 @@ the prompt's examples show only the answer text (see HANDOFF for the rules).
   current-supply-temperature 0/3 (v3 2/3) — the chillers' supply temperatures disagree with the
   plant (A 7.5 ℃ stopped, C and D 28–30 ℃ running; #614), so UNABLE_TO_CONCLUDE is a fair answer
   graded against SUPPORTED_FINDING; least-efficient-hours 2/3 (v3 3/3) — the failing trial wrote
-  「07 点，能效 3.52」, which the grader misses because it does not read an hour with a leading zero.
+  「07 点，能效 3.52」, which the grader misses because it does not read an hour with a leading zero
+  (fixed after this run: the grader now reads 「07 点」 and 「07–08 点」).
 - One Run of 72 ended with no answer text (current-supply-temperature #2), as before #607.
 
 The full suite ran five times while #607 was built:
