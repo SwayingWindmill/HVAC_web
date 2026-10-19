@@ -127,9 +127,9 @@ const states = (numbers: ReturnType<typeof statedNumbers>, reference: number): b
 };
 const namesHour = (text: string, hour: string): boolean => {
   const clock = Number(hour.slice(0, 2));
-  // 07:00, 7:00, 7 点, or the hour as a range: 7–8 点, 7-8点.
+  // 07:00, 7:00, 7 点 or 07 点, or the hour as a range: 7–8 点, 7-8点, 07–08 点.
   return text.includes(hour) || text.includes(`${clock}:00`)
-    || new RegExp(`(?<!\\d)${clock}\\s*(?:[–-]\\s*${clock + 1}\\s*)?点`, 'u').test(text);
+    || new RegExp(`(?<!\\d)0?${clock}\\s*(?:[–-]\\s*0?${clock + 1}\\s*)?点`, 'u').test(text);
 };
 
 const chineseBigrams = (text: string): Set<string> => {
