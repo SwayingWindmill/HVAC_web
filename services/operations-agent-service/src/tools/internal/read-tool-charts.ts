@@ -45,3 +45,39 @@ export const energySeriesChart = (result: unknown): FindingChart | null => {
     series: [{ name: energy, values: read.points.map((point) => point.energyKWh) }],
   };
 };
+
+interface EnergyComparisonRead {
+  readonly baseline: { readonly query: { readonly energy: string; readonly startDate: string; readonly endDate: string }; readonly totalKWh: number | null };
+  readonly current: { readonly query: { readonly startDate: string; readonly endDate: string }; readonly totalKWh: number | null };
+}
+
+/** energy_compare_periods: the two periods' totals side by side, the earlier first. */
+export const energyComparisonChart = (result: unknown): FindingChart | null => {
+  const { baseline, current } = result as EnergyComparisonRead;
+  if (baseline.totalKWh === null || current.totalKWh === null) return null;
+  return {
+    kind: 'BAR',
+    title: `两段时间的${baseline.query.energy}`,
+    unit: 'kWh',
+    categories: [rangeWords(baseline.query.startDate, baseline.query.endDate), rangeWords(current.query.startDate, current.query.endDate)],
+    series: [{ name: baseline.query.energy, values: [baseline.totalKWh, current.totalKWh] }],
+  };
+};
+
+interface EquipmentEnergyRead {
+  readonly query: { readonly startDate: string; readonly endDate: string };
+  readonly devices: readonly { readonly name: string; readonly totalKWh: number }[];
+}
+
+/** energy_by_equipment: each sub-metered device's total, most first. */
+export const equipmentEnergyChart = (result: unknown): FindingChart | null => {
+  const read = result as EquipmentEnergyRead;
+  if (read.devices.length === 0) return null;
+  return {
+    kind: 'HORIZONTAL_BAR',
+    title: `${rangeWords(read.query.startDate, read.query.endDate)}各设备用电`,
+    unit: 'kWh',
+    categories: read.devices.map((device) => device.name.slice(0, 32)),
+    series: [{ name: '用电', values: read.devices.map((device) => device.totalKWh) }],
+  };
+};

@@ -507,6 +507,10 @@ test('energy_by_equipment splits the Site total by sub-metered device, named fro
   // Points read in the Site's own calendar (America/Phoenix is UTC−7), so hours are not mistaken for UTC.
   assert.deepEqual(result.devices[0].points[0], { siteTime: '2026-10-16 03:00', energyKWh: 300 });
   assert.equal(result.dataStatus, '完整');
+  // A card charts the machines as a ranked bar list (#640).
+  assert.deepEqual(byName(harness.tools, 'energy_by_equipment').chart(result), {
+    kind: 'HORIZONTAL_BAR', title: '10月15日各设备用电', unit: 'kWh', categories: ['C 机组电表'], series: [{ name: '用电', values: [879] }],
+  });
 });
 
 test('energy tools read cooling energy when asked and say which energy they read', async () => {
@@ -530,6 +534,10 @@ test('energy tools read cooling energy when asked and say which energy they read
   assert.equal(series.query.energy, '供冷');
   assert.equal(comparison.current.query.energy, '供冷');
   assert.equal(electricity.query.energy, '用电');
+  // A card charts the two periods side by side (#640).
+  assert.deepEqual(byName(harness.tools, 'energy_compare_periods').chart(comparison), {
+    kind: 'BAR', title: '两段时间的供冷', unit: 'kWh', categories: ['10月8日', '10月15日'], series: [{ name: '供冷', values: [7217, 7217] }],
+  });
 });
 
 test('telemetry_query_history aggregates one device readings over time in the Site calendar', async () => {
