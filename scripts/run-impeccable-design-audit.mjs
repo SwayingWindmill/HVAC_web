@@ -136,7 +136,7 @@ function hookContext(eventName, result, targets) {
   return [
     `Impeccable detected ${count} frontend design issue(s) in ${targetLabel}.`,
     ...details,
-    'Treat these as design-review evidence, not an instruction to blindly change product truth. Fix real issues using PRODUCT.md, DESIGN.md, the matching current surface specification, docs/design-system/shadcn-component-contract.md, docs/design-system/legacy-ui-quarantine.md, and the explicitly approved current reference. Historical Ant Design / ProComponents semantics, screenshots, page anatomy, and migration-only components are not visual authority. If a detector hit is intentional, keep the design and document/scope the exception instead of adding compatibility CSS.',
+    'Treat these as design-review evidence, not an instruction to blindly change product truth. Fix real issues using PRODUCT.md and DESIGN.md. If a detector hit is intentional, keep the design and note the exception instead of adding compatibility CSS.',
     'For a focused rerun: npm run web:design:device-center (Device Center) or npm run web:design:detect (full Web source).',
   ].join('\n');
 }

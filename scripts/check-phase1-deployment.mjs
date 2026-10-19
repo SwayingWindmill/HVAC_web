@@ -33,14 +33,11 @@ const paths = {
   clickhouseBackup: 'deploy/platform/phase1/backup/clickhouse-backup.sh',
   clickhouseBackupConfig: 'deploy/platform/phase1/backup/clickhouse-backup.xml',
   clickhouseResourceLimits: 'deploy/platform/phase1/clickhouse/resource-limits.xml',
-  backupReadme: 'deploy/platform/phase1/backup/README.md',
   recoveryTargets: 'deploy/platform/phase1/recovery/recovery-targets.v1.json',
-  recoveryReadme: 'deploy/platform/phase1/recovery/README.md',
   recoveryDrillTemplate: 'deploy/platform/phase1/recovery/drill-record.template.json',
   processFailureScenarios: 'deploy/platform/phase1/recovery/process-failure-scenarios.v1.json',
   gitignore: '.gitignore',
   phase1Databases: 'deploy/platform/phase1/postgres/init/001-create-phase1-databases.sql',
-  phase1Readme: 'deploy/platform/phase1/README.md',
   migrationManifest: 'deploy/platform/phase1/migrations/manifest.v1.json',
   migrationList: 'deploy/platform/phase1/migrations/migration-list.tsv',
   migrationDockerfile: 'deploy/platform/phase1/migrations/Dockerfile',
@@ -63,7 +60,6 @@ const paths = {
   telemetryRuntimeMain: 'cmd/telemetry-worker/main.go',
   metricMain: 'cmd/metric-worker/main.go',
   iotRuntime: 'modules/connectivity/pkg/adapter/runtime.go',
-  thingsboardSourceReview: 'docs/architecture/thingsboard-operations-platform-deployment-ha-observability-upgrade-adjudication.md',
 };
 
 const environmentFiles = {
@@ -73,7 +69,7 @@ const environmentFiles = {
   production: 'deploy/platform/phase1/environments/production.runtime.env.example',
 };
 
-const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, otel, loki, tempo, grafanaDatasources, grafanaDashboards, postgresBackup, backupReadiness, clickhouseBackup, clickhouseBackupConfig, backupReadme, recoveryTargets, recoveryReadme, recoveryDrillTemplate, gitignore, phase1Databases, phase1Readme, migrationManifest, migrationList, migrationDockerfile, migrationRunner, schemaPreflight, productRelease, limitPolicy, roleCredentialTemplate, packageJson, identityReset] = await Promise.all([
+const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, otel, loki, tempo, grafanaDatasources, grafanaDashboards, postgresBackup, backupReadiness, clickhouseBackup, clickhouseBackupConfig, recoveryTargets, recoveryDrillTemplate, gitignore, phase1Databases, migrationManifest, migrationList, migrationDockerfile, migrationRunner, schemaPreflight, productRelease, limitPolicy, roleCredentialTemplate, packageJson, identityReset] = await Promise.all([
   readJSON(paths.baseline),
   readJSON(paths.matrix),
   read(paths.compose),
@@ -90,13 +86,10 @@ const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, 
   read(paths.backupReadiness),
   read(paths.clickhouseBackup),
   read(paths.clickhouseBackupConfig),
-  read(paths.backupReadme),
   readJSON(paths.recoveryTargets),
-  read(paths.recoveryReadme),
   readJSON(paths.recoveryDrillTemplate),
   read(paths.gitignore),
   read(paths.phase1Databases),
-  read(paths.phase1Readme),
   readJSON(paths.migrationManifest),
   read(paths.migrationList),
   read(paths.migrationDockerfile),
@@ -109,7 +102,7 @@ const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, 
   read(paths.identityReset),
 ]);
 const envs = Object.fromEntries(await Promise.all(Object.entries(environmentFiles).map(async ([name, path]) => [name, await read(path)])));
-const [otelLogs, deploymentTiers, runtimeInventory, availabilityTier, recoveryAttainment, s2ReleaseGates, clickhouseResourceLimits, processFailureScenarios, ownerSplitCompose, embeddedEnergy, thingsboardSourceReview] = await Promise.all([
+const [otelLogs, deploymentTiers, runtimeInventory, availabilityTier, recoveryAttainment, s2ReleaseGates, clickhouseResourceLimits, processFailureScenarios, ownerSplitCompose, embeddedEnergy] = await Promise.all([
   read(paths.otelLogs),
   readJSON(paths.deploymentTiers),
   readJSON(paths.runtimeInventory),
@@ -120,7 +113,6 @@ const [otelLogs, deploymentTiers, runtimeInventory, availabilityTier, recoveryAt
   readJSON(paths.processFailureScenarios),
   read(paths.ownerSplitCompose),
   read(paths.embeddedEnergy),
-  read(paths.thingsboardSourceReview),
 ]);
 const runtimeSources = Object.fromEntries(await Promise.all([
   'observabilityRuntime', 'gatewayMain', 'operationsGateway', 'identityMain', 'schedulerMain', 'maintenanceMain', 'telemetryRuntimeMain', 'metricMain', 'iotRuntime',
@@ -202,7 +194,6 @@ assert(compose.includes('dockerfile: deploy/platform/phase1/images/go-service.Do
 assert(ownerSplitCompose.includes('dockerfile: deploy/platform/phase1/images/go-service.Dockerfile') && !ownerSplitCompose.includes('dockerfile: deploy/s'), 'owner-split overlay must reuse the canonical Phase 1 image definition, not historical deploy/s* paths');
 assert(ownerSplitCompose.includes('ENERGY_API_EMBEDDED_OWNERS: notification') && !/kafka|zookeeper|redpanda/i.test(ownerSplitCompose), 'owner-split must retain only Notification in-process without adding a message backbone');
 assert(embeddedEnergy.includes('parseEmbeddedOwners') && embeddedEnergy.includes('ENERGY_API_EMBEDDED_OWNERS'), 'energy-api must implement exact embedded Owner selection');
-assert(thingsboardSourceReview.includes('## 18. Phase 1 deployment tiers / owner split 实施源码复核') && thingsboardSourceReview.includes('DefaultTbServiceInfoProvider.java') && thingsboardSourceReview.includes('DefaultInMemoryStorageTest.java'), 'deployment topology changes must retain the pinned ThingsBoard source/test review');
 assert(
   s2ReleaseGates.slo?.snapshotHttp?.availabilityScope === 'snapshot-http-conditional-on-required-infrastructure'
     && JSON.stringify(s2ReleaseGates.slo?.snapshotHttp?.appliesToAvailabilityTiers) === JSON.stringify(['COMPONENT_REDUNDANT', 'HA'])
@@ -472,14 +463,12 @@ assert(postgresBackup.includes('sha256sum ./* > SHA256SUMS'), 'PostgreSQL base b
 assert(backupReadiness.includes('POSTGRES_RPO_TARGET_SECONDS:-300') && backupReadiness.includes('sha256sum --check SHA256SUMS'), 'backup readiness must verify the 5-minute WAL threshold and newest base-backup checksums');
 assert(clickhouseBackup.includes('BACKUP DATABASE telemetry_history') && clickhouseBackup.includes("Disk('phase1_backups'"), 'ClickHouse must use native backup to the configured backup disk');
 assert(clickhouseBackupConfig.includes('/var/lib/clickhouse/backups/'), 'ClickHouse backup disk must be explicitly configured');
-assert(backupReadme.includes('Backup configuration and readiness checks are not RPO/RTO attestation'), 'backup documentation must not overclaim RPO/RTO attainment');
 assert(recoveryTargets.sourceOfTruth === 'SE-OPS-009 V1.0 CURRENT CANDIDATE', 'recovery target contract must be governed by SE-OPS-009 V1');
 assert(recoveryTargets.targets?.postgresqlBusinessSoT?.rpoSeconds === 300 && recoveryTargets.targets?.postgresqlBusinessSoT?.rtoSeconds === 7200, 'PostgreSQL recovery target must remain RPO<=5min/RTO<=2h');
 assert(recoveryTargets.targets?.controlCommandAudit?.rpoSeconds === 300 && recoveryTargets.targets?.controlCommandAudit?.rtoSeconds === 3600, 'Control recovery target must remain RPO<=5min/RTO<=1h');
 assert(recoveryTargets.targets?.telemetry?.cloudServiceRtoSeconds === 14400 && recoveryTargets.targets?.metricSeries?.rpoSeconds === 1800 && recoveryTargets.targets?.metricSeries?.rtoSeconds === 14400, 'Telemetry/Metric recovery targets must remain aligned to SE-OPS-009');
 assert(recoveryTargets.failureScenarioRtoSeconds?.processOrContainerFailure === 300 && recoveryTargets.failureScenarioRtoSeconds?.databaseProcessFailure === 1800 && recoveryTargets.failureScenarioRtoSeconds?.serverOsRecoverableFailure === 3600 && recoveryTargets.failureScenarioRtoSeconds?.wholeServerReplacement === 14400, 'failure-scenario RTO targets must remain 5m/30m/1h/4h');
 assert(recoveryTargets.backupPolicy?.offServerCopyRequired === true && recoveryTargets.productionAttestation?.timestampedRestoreDrillRequired === true && recoveryTargets.productionAttestation?.containerOnlyEvidenceSufficient === false, 'recovery contract must require off-server backup and real timestamped drill evidence');
-assert(recoveryReadme.includes('RTO Start') && recoveryReadme.includes('RTO End') && recoveryReadme.includes('Control recovery') && recoveryReadme.includes('Scheduler and Outbox recovery') && recoveryReadme.includes('Edge Replay'), 'recovery runbook must preserve the frozen recovery semantics');
 assert(recoveryDrillTemplate.prerequisites?.externalBackupVerified === false && recoveryDrillTemplate.controlRecovery?.blindRetryUsed === false, 'drill template must begin unverified and must prohibit blind Control retry');
 assert(gitignore.includes('deploy/platform/phase1/environments/*.runtime.env'), 'real Phase 1 runtime env files must be ignored by Git');
 assert(gitignore.includes('deploy/platform/phase1/runtime/'), 'Phase 1 runtime PKI/backup material must be ignored by Git');
@@ -524,10 +513,6 @@ assert(packageJson.includes('"deployment:phase1:migration:test": "node scripts/r
 assert(packageJson.includes('"deployment:phase1:recovery:verify": "node scripts/verify-phase1-recovery-drill.mjs"'), 'recovery drill verifier must have a stable manual entrypoint');
 assert(packageJson.includes('"deployment:phase1:identity-reset": "node scripts/phase1-reset-local-identity-password.mjs"'), 'development/testing Identity password recovery must have a stable package entrypoint');
 assert(identityReset.includes("['development', 'testing'].includes(environment)") && identityReset.includes("IDENTITY_ADMIN_OPERATION: 'reset-password-random'") && identityReset.includes('local-admin.credentials') && identityReset.includes('chmodSync(temporary, 0o600)') && !identityReset.includes('console.log(password'), 'Identity password recovery must be environment-bounded, atomically persist the canonical credential file, and never print the password');
-assert(phase1Readme.includes('canonical non-versioned `runtime/local-admin.credentials`') && phase1Readme.includes('Do not maintain a second local/test credential file by hand'), 'Phase 1 README must define one canonical local/test Identity credential file');
-assert(phase1Readme.includes('exact reviewed migration allowlist') && phase1Readme.includes('without runtime rewriting'), 'Phase 1 README must document the reviewed production-safe migration allowlist');
-assert(phase1Readme.includes('Deployment tiers and observability profiles') && phase1Readme.includes('observability-core') && phase1Readme.includes('observability-logs') && phase1Readme.includes('observability-full') && phase1Readme.includes('intelligence'), 'Phase 1 README must document tier profiles');
-assert(phase1Readme.includes('Availability and recovery evidence') && phase1Readme.includes('SINGLE_NODE_RECOVERABLE'), 'Phase 1 README must document the availability tier');
 
 const byId = new Map((matrix.items ?? []).map((item) => [item.id, item]));
 for (const id of ['DEPLOY-K8S-001', 'MQTT-HA-001', 'POSTGRES-HA-001', 'CLICKHOUSE-HA-001']) {

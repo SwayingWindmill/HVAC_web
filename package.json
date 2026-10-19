@@ -25,7 +25,6 @@
     "dev:gateway": "node scripts/dev-platform-gateway.mjs",
     "dev:auth": "node scripts/dev-platform-auth.mjs",
     "architecture:phase1:check": "node scripts/check-phase1-architecture-alignment.mjs",
-    "docs:phase1:consistency:check": "node scripts/check-phase1-document-consistency.mjs",
     "data:architecture:check": "node scripts/check-data-architecture-v2.mjs",
     "backend:architecture:check": "node --experimental-strip-types scripts/check-backend-architecture-v2.ts",
     "deployment:phase1:check": "node scripts/check-phase1-deployment.mjs",

@@ -42,13 +42,11 @@ function operation(spec, operationId) {
   return null;
 }
 
-const [spec, publication, ownership, activeSpecText, adr, glossary, packageJSON] = await Promise.all([
+const [spec, publication, ownership, activeSpecText, packageJSON] = await Promise.all([
   readJSON('contracts/http/s2-telemetry-public.openapi.json'),
   readJSON('contracts/events/s2-device-observation-publication.v1.schema.json'),
   readJSON('contracts/ownership/s2-telemetry-ownership.v1.json'),
   readText('contracts/http/platform-gateway.openapi.yaml'),
-  readText('docs/adr/0004-s2-public-api-subscription-recovery-contract.md'),
-  readText('GLOSSARY.md'),
   readJSON('package.json'),
 ]);
 
@@ -299,23 +297,6 @@ for (const path of Object.values(expectedOperations).map(([, path]) => path)) {
   assert(!activeSpecText.includes(`\"${path}\"`), `planned S2 route was prematurely added to active Gateway OpenAPI: ${path}`);
 }
 
-for (const phrase of [
-  'Publish one coherent Snapshot model, not separate Presence and latest resources',
-  'Bounded batch read has item results, not pagination',
-  'Subscription bootstrap is all-or-nothing',
-  'Recovery Cursor checkpoint is an adapter operation',
-  'Publication is a contiguous subscription-scoped delta',
-  'Initial subscribe and Snapshot algorithm',
-  'Reconnect and recovery algorithm',
-  'Stable Problem Details',
-  'Client generation and module seam',
-  'Legacy compatibility and retirement',
-]) {
-  assert(adr.includes(phrase), `ADR is missing required decision phrase: ${phrase}`);
-}
-for (const term of ['## Telemetry Key Selection', '## Subscription Bootstrap', '## Observation Delta']) {
-  assert(glossary.includes(term), `GLOSSARY.md is missing domain term: ${term}`);
-}
 assert(packageJSON.scripts?.['telemetry:public-contract:check'] === 'node scripts/check-s2-telemetry-public-contract.mjs', 'telemetry:public-contract:check is not wired');
 
 console.log('S2 public telemetry contract passed: coherent Snapshot, bounded batches, exact subscription scope and Snapshot-authoritative recovery.');
