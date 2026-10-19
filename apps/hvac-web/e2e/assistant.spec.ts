@@ -32,11 +32,16 @@ test('解释 on the busiest hour opens the assistant with the question, and the 
   expect(created?.body).toEqual({ message: '2026年10月10日 11:00–12:00 的空调用电 247 kWh，用电正常吗？' });
   expect(created?.csrfToken).toBeTruthy();
 
-  // A follow-up continues the same conversation at the Session's current revision.
-  await panel.getByTestId('assistant-follow-ups').getByRole('button', { name: '2 号机组为什么开机？' }).click();
+  // A follow-up under the last answer (#638) continues the same conversation at the Session's current revision.
+  const answers = panel.locator('[data-role="assistant"]');
+  gateway.assistant.reply = { ...gateway.assistant.reply, finding: { ...gateway.assistant.reply.finding, recommendedNext: ['2 号机组明天几点开机？'] } };
+  await answers.last().getByTestId('assistant-follow-ups').getByRole('button', { name: '2 号机组为什么开机？' }).click();
   await expect(panel.getByTestId('assistant-finding')).toHaveCount(2);
   const asked = gateway.writes.find((write) => write.path.endsWith(':run'));
   expect(asked?.body).toEqual({ expectedRevision: 2, message: '2 号机组为什么开机？' });
+  // Only the last answer offers follow-ups; the first answer's are gone.
+  await expect(answers.first().getByTestId('assistant-follow-ups')).toHaveCount(0);
+  await expect(answers.last().getByTestId('assistant-follow-ups').getByRole('button')).toHaveText(['2 号机组明天几点开机？']);
 
   // With the panel already open, 解释 on a detail row hands over that hour's question.
   const details = page.getByRole('region', { name: '能耗明细' });
