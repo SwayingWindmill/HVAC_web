@@ -31,7 +31,7 @@ const HEALTH: Record<Health, { readonly chip: string; readonly dot: string }> = 
   idle: { chip: 'bg-secondary text-secondary-foreground', dot: 'bg-subtle-foreground' },
 };
 
-const PLATFORM_STATE = { checking: '检查中', available: '正常', degraded: '部分降级', unavailable: '不可用' } as const;
+const PLATFORM_STATE = { checking: '检查中', available: '正常', degraded: '部分不可用', unavailable: '不可用' } as const;
 const DIRECTORY_STATE = { checking: '读取中', available: '已同步', forbidden: '无权读取', unavailable: '暂时读不到' } as const;
 const SITE_STATUS = { ACTIVE: '已启用', INACTIVE: '已停用', RETIRED: '已退役' } as const;
 
@@ -77,7 +77,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
   const platform = snapshot.platform?.status;
   const sites = useMemo(() => snapshot.sites?.items ?? [], [snapshot.sites?.items]);
   const activeTab = search.tab ?? 'overview';
-  const platformState = platform ? (platform.status === 'ok' ? '正常' : '部分降级') : PLATFORM_STATE[snapshot.platform?.state ?? 'checking'];
+  const platformState = platform ? (platform.status === 'ok' ? '正常' : '部分不可用') : PLATFORM_STATE[snapshot.platform?.state ?? 'checking'];
   const platformHealth: Health = platform ? (platform.status === 'ok' ? 'good' : 'warn') : snapshot.platform?.state === 'unavailable' ? 'warn' : 'idle';
   const directoryState = DIRECTORY_STATE[snapshot.sites?.state ?? 'checking'];
   const realtime = realtimeStatusPresentation(snapshot.realtime ?? createIdleRealtimeStatus());

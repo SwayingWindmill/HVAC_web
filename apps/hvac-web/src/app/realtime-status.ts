@@ -69,37 +69,37 @@ export function realtimeStatusPresentation(status: RealtimeStatusSnapshot): Real
       return {
         code: 'CONNECTED',
         label: '已连接',
-        detail: status.siteId ? `当前 Site ${status.siteId} 的实时订阅已建立。` : '实时订阅已建立。',
+        detail: '实时数据已连接。',
       };
     case 'connecting':
       return {
         code: 'RECONNECTING',
         label: '正在连接',
-        detail: '正在建立同一 Site 范围内的权威实时订阅。',
+        detail: '正在连接这个站点的实时数据。',
       };
     case 'reconnecting':
       return {
         code: 'RECONNECTING',
         label: '重连中',
-        detail: '实时传输正在重连；未确认的增量不会被当作当前状态。',
+        detail: '实时数据正在重连；重连前收到的零散变化不会当作当前值。',
       };
     case 'resync-required':
       return {
         code: 'DEGRADED',
         label: '需要重新同步',
-        detail: '实时序列需要重新读取权威 Snapshot，当前值不会由缺口增量拼接。',
+        detail: '实时数据中断过，正在重新读取最新值；不会用中断前后的片段拼出当前值。',
       };
     case 'unavailable':
       return {
         code: 'DISCONNECTED',
         label: '已断开',
-        detail: '实时链路当前不可用；页面不会把传输故障当作设备离线。',
+        detail: '实时数据暂时连不上；这不代表设备离线。',
       };
     case 'idle':
       return {
         code: 'DISCONNECTED',
         label: '未订阅',
-        detail: '当前没有活动 Site 实时订阅。',
+        detail: '还没有连接实时数据。',
       };
   }
 }

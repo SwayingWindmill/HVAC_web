@@ -313,7 +313,7 @@ class BrowserShellRuntime implements ShellRuntime {
         failure: failureFrom(
           problem,
           'PRINCIPAL_BOOTSTRAP_FAILED',
-          '无法建立可信的 Principal 与 Session 快照。',
+          '无法确认登录身份和会话。',
         ),
       });
     }
@@ -455,7 +455,7 @@ class BrowserShellRuntime implements ShellRuntime {
       const failure = failureFrom(
         problem,
         'LOGOUT_FAILED',
-        '服务器尚未确认 Session 撤销，请重试。',
+        '服务器还没确认退出登录，请重试。',
       );
       this.publish({
         state: 'READY',
@@ -730,8 +730,8 @@ class BrowserShellRuntime implements ShellRuntime {
             problem,
             invalid ? 'SITE_DISCOVERY_INVALID' : 'SITE_DISCOVERY_UNAVAILABLE',
             invalid
-              ? 'Registry 返回了无效的授权 Site 集合。'
-              : '无法读取当前 Tenant 的授权 Site。',
+              ? '读到的站点列表格式不对。'
+              : '读不到你能看的站点。',
           ),
         },
         siteTransition: this.snapshot.siteTransition,

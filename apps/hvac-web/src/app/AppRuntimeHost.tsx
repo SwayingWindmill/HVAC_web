@@ -20,9 +20,9 @@ export function ConfigurationBlocked({ failures }: { failures: RuntimeConfigFail
   return (
     <main className="real-shell-state" data-build-graph={WEB_GRAPH_MARKER} data-shell-state="UNAVAILABLE">
       <section className="real-shell-card" aria-labelledby="real-config-title">
-        <p className="real-shell-eyebrow">STARTUP BLOCKED</p>
+        <p className="real-shell-eyebrow">无法启动</p>
         <FocusHeading id="real-config-title">运行配置无效</FocusHeading>
-        <p>应用已按失败关闭策略停止，未挂载业务路由或任何本地替代数据源。</p>
+        <p>配置有误，应用已停止：不打开业务页面，也不会用本地数据代替。</p>
         <ul className="real-shell-failures">
           {failures.map((failure) => (
             <li key={failure.code}>
@@ -66,9 +66,9 @@ function LoginRequiredState({ snapshot, beginLogin }: { snapshot: ShellSnapshot;
 function PrincipalUnavailableState({ config, snapshot, retry }: { config: RuntimeConfig; snapshot: ShellSnapshot; retry: () => void }) {
   return (
     <section className="real-shell-card" aria-labelledby="real-unavailable-title" data-testid="real-shell-unavailable">
-      <p className="real-shell-eyebrow">PRINCIPAL UNAVAILABLE</p>
-      <FocusHeading id="real-unavailable-title">无法建立可信 Principal</FocusHeading>
-      <p>业务路由保持未挂载。系统不会使用本地替代数据或缓存身份。</p>
+      <p className="real-shell-eyebrow">登录身份</p>
+      <FocusHeading id="real-unavailable-title">无法确认登录身份</FocusHeading>
+      <p>业务页面暂不打开；系统不会用本地数据或缓存的身份代替。</p>
       {snapshot.failure ? (
         <div className="real-shell-problem" role="alert" data-retryable={String(snapshot.failure.retryable)}>
           <strong>身份服务暂时不可用</strong>
@@ -76,7 +76,7 @@ function PrincipalUnavailableState({ config, snapshot, retry }: { config: Runtim
         </div>
       ) : null}
       <div className="real-shell-actions">
-        <button type="button" onClick={retry}>重试 Principal bootstrap</button>
+        <button type="button" onClick={retry}>重试</button>
       </div>
       <RuntimeFacts config={config} />
     </section>

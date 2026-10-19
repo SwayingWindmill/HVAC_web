@@ -150,7 +150,7 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
       period={text}
       archived
       status={`生成于 ${generated} · 第 ${stored.version} 版 · 覆盖 ${report.daysWithData} / ${report.daysInMonth} 天`}
-      footnote={<>说明：本报告的用能、能效、电度电费、节能与诊断发现取自月结后存档的快照，之后记录再变化也不会改变；需量、告警与工单{NOT_ARCHIVED}。电费按每个计量区间所在时段当时生效的分时电价计算，正式电费以结算为准。{alarms.data && !alarms.data.complete ? ' 告警超过读取上限，统计可能不全。' : ''}</>}
+      footnote={<>说明：本报告的用能、能效、电度电费、节能与诊断发现取自月结后存档的结果，之后数据再变化也不会改变；需量、告警与工单{NOT_ARCHIVED}。电费按每段用电所在时段当时生效的分时电价计算，正式电费以结算为准。{alarms.data && !alarms.data.complete ? ' 告警超过读取上限，统计可能不全。' : ''}</>}
     >
       <Section index={1} title="概要" description="与上月全月对比">
         <FigureGrid>
@@ -268,7 +268,7 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
       period={text}
       archived={false}
       status={span.complete ? (archiveUnavailable ? '报告存档暂时读不到，按当前记录现算' : '这个月还没有存档，按当前记录现算') : '本月结束后的 1 日 03:00 存档'}
-      footnote={<>说明：空调用电、供冷量取自空调总电表与冷量表的有效计量区间；电度电费按每个计量区间所在时段当时生效的分时电价估算，需量按 15 分钟平均功率计，正式电费以结算为准。{alarms.data && !alarms.data.complete ? ' 告警超过读取上限，统计可能不全。' : ''}</>}
+      footnote={<>说明：空调用电、供冷量取自空调总电表和冷量表的有效读数；电度电费按每段用电所在时段当时生效的分时电价估算，需量按 15 分钟平均功率计，正式电费以结算为准。{alarms.data && !alarms.data.complete ? ' 告警超过读取上限，统计可能不全。' : ''}</>}
     >
       <Section index={1} title="概要" description={span.complete ? '与上月全月对比' : '与上月同期对比'}>
         <FigureGrid>
@@ -279,7 +279,7 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
           <Figure label="日均用电" value={days.length ? formatDecimal((current.electricityKWh ?? 0) / days.length, 0) : null} unit="kWh" note={`${days.length} / ${span.days} 天有计量`} />
           <Figure label="用电最多的一天" value={current.peak ? formatDecimal(current.peak.electricityKWh!, 0) : null} unit="kWh" note={current.peak?.label ?? '—'} />
           <Figure label="最大需量" value={peakDemand ? formatDecimal(peakDemand.demandKW, 1) : null} unit="kW" note={peakDemand ? range.format(new Date(peakDemand.at)) : meter ? '本月还没有完整的 15 分钟' : '没有总电表'} />
-          <Figure label="数据完整性" value={String(current.excludedIntervals)} unit="段未计入" note={current.excludedIntervals > 0 ? '电表读数可疑或无效的区间不计入' : '全部有效'} />
+          <Figure label="数据完整性" value={String(current.excludedIntervals)} unit="段未计入" note={current.excludedIntervals > 0 ? '电表读数可疑或无效的时段不计入' : '全部有效'} />
         </FigureGrid>
       </Section>
 

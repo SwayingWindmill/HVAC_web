@@ -46,7 +46,7 @@ function BaselineSection({ measure, timeZone }: { readonly measure: Measure; rea
           <AlertDescription>{baseline.reason ? REASON_TEXT[baseline.reason] : '检验未通过'}。可换一段运行稳定、数据完整的时段重新计算。</AlertDescription>
         </Alert>
       )}
-      <Table aria-label="基线检验">
+      <Table aria-label="对比基线的检验">
         <TableHeader>
           <TableRow>
             <TableHead>检验项</TableHead>
@@ -112,7 +112,7 @@ function VerifiedDays({ measure }: { readonly measure: Measure }) {
           </Bar>
         </BarChart>
       </ChartContainer>
-      <Table aria-label="逐日核算">
+      <Table aria-label="每日节电">
         <TableHeader>
           <TableRow>
             <TableHead>日期</TableHead>
@@ -189,7 +189,7 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
       void queryClient.invalidateQueries({ queryKey: savingsKeys.all(site.id) });
       if (action === 'end') toast.success('措施已结束，此后不再统计');
       else if (updated.baseline?.trusted) toast.success('对比基线已算出，检验通过');
-      else toast.warning('对比基线检验未通过，暂不统计');
+      else toast.warning('对比基线不可靠，暂不统计');
       setAction(null);
     },
   });
@@ -285,7 +285,7 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
                 <BaselineSection measure={measure} timeZone={tz} />
               </section>
 
-              <section aria-label="逐日核算" className="flex flex-col gap-3 border-b border-divider px-6 py-4">
+              <section aria-label="每日节电" className="flex flex-col gap-3 border-b border-divider px-6 py-4">
                 <h3 className="flex items-center gap-2 text-sm font-semibold">每日节电<span className="text-xs font-normal text-muted-foreground">每天 02:00 统计前一天 · kWh</span></h3>
                 <VerifiedDays measure={measure} />
               </section>

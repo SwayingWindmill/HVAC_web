@@ -368,8 +368,8 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
               )}
             </Panel>
 
-            <Panel aria-label="更多对标维度">
-              <PanelHeader title={<span className="flex items-center gap-1.5">更多对标维度<InfoTip>站点档案在系统管理的注册中心里维护；外部数据接入后在此对比</InfoTip></span>} />
+            <Panel aria-label="更多对比项">
+              <PanelHeader title={<span className="flex items-center gap-1.5">更多对比项<InfoTip>站点档案在系统管理的注册中心里维护；外部数据接入后在此对比</InfoTip></span>} />
               <Dimension label="单位面积用电" detail={`${withArea} / ${result.sites.length} 个站点登记了建筑面积`} connected />
               <Dimension
                 label="气候修正"

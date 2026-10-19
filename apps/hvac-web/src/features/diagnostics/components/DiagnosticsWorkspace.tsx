@@ -197,7 +197,7 @@ function EvidenceChart({ finding, plant, meterId, rule }: {
   return (
     <section className="flex flex-col gap-2 border-b border-divider px-6 py-4">
       <h3 className="flex items-baseline gap-2 text-sm font-semibold">
-        诊断证据
+        诊断依据
         <span className="text-xs font-normal text-muted-foreground">诊断前 6 小时至后 2 小时 · 每 15 分钟</span>
       </h3>
       {!allowed || !meterId || !pointCode ? (

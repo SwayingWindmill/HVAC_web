@@ -91,8 +91,8 @@ function PlatformDegradedSurface() {
         tone="warning"
         data-testid="real-route-degraded"
         data-route-state="DEGRADED"
-        title={<Heading>服务部分降级</Heading>}
-        description="服务器报告部分功能降级；降级不会被显示成空数据。"
+        title={<Heading>部分功能暂时不可用</Heading>}
+        description="服务器报告部分功能暂时不可用；受影响的数据会标出来，不会显示成空的。"
       >
         {status ? <span className="text-xs text-muted-foreground">版本 {status.version}</span> : null}
         <Button variant="outline" size="sm" asChild><Link to="/system">查看平台服务</Link></Button>

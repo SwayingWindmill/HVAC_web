@@ -114,7 +114,7 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
                 return (
                   <div key={point.key} className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-divider bg-muted px-3 py-2">
                     <dt className="truncate text-xs text-muted-foreground">{point.label}</dt>
-                    <dd className={cn('text-base leading-[22px] font-semibold tracking-[-0.02em] tabular-nums', !current && 'text-muted-foreground')} title={current ? undefined : '数据过期或质量降级'}>
+                    <dd className={cn('text-base leading-[22px] font-semibold tracking-[-0.02em] tabular-nums', !current && 'text-muted-foreground')} title={current ? undefined : '数据过期或不可靠'}>
                       {point.state === 'PRESENT' ? point.displayValue : '—'}
                       {point.state === 'PRESENT' && point.unit ? <span className="ml-1 text-xs font-medium text-subtle-foreground">{point.unit}</span> : null}
                     </dd>

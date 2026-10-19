@@ -478,7 +478,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
         effectiveAt: new Date().toISOString(),
         meta: makeRegistryMutationMeta(0, rebindDraft.reason.trim(), newRegistryIdempotencyKey('registry-rebind')),
       });
-      setResultMessage('关系调整已完成；旧关系区间已关闭，并建立新的有效关系。');
+      setResultMessage('归属已调整：旧的归属到此结束，新的归属从现在生效。');
       setRebindOpen(false);
       setRebindDirty(false);
       setRebindDraft({ kind: 'DEVICE_ASSET', sourceId: '', targetId: '', targetType: 'ASSET', role: 'CONTROLLER', reason: '调整登记关系' });

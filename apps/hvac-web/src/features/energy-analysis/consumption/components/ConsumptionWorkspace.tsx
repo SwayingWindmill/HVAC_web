@@ -298,7 +298,7 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
               <span className="flex items-center gap-1 text-warning-text">
                 <TriangleAlert className="size-3.5" aria-hidden="true" />
                 {current.excludedIntervals} 段数据未计入
-                <InfoTip>电表读数可疑或无效的区间不计入合计</InfoTip>
+                <InfoTip>电表读数可疑或无效的时段不计入合计</InfoTip>
               </span>
             ) : null}
             {explained ? (
