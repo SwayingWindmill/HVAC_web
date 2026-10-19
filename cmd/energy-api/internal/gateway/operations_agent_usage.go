@@ -36,9 +36,16 @@ type agentUsageDay struct {
 }
 
 type agentToolUsage struct {
-	ToolName string `json:"toolName"`
-	Calls    uint32 `json:"calls"`
-	Failed   uint32 `json:"failed"`
+	ToolName       string                   `json:"toolName"`
+	Calls          uint32                   `json:"calls"`
+	Failed         uint32                   `json:"failed"`
+	FailureReasons []agentToolFailureReason `json:"failureReasons"`
+}
+
+// Why a step failed, as the code the Agent's record keeps (#624); the page puts it into words.
+type agentToolFailureReason struct {
+	Code  string `json:"code"`
+	Count uint32 `json:"count"`
 }
 
 var agentUsageDate = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
@@ -55,7 +62,17 @@ func decodeAgentUsage(raw []byte) (agentUsage, bool) {
 			return agentUsage{}, false
 		}
 		for _, tool := range day.Tools {
-			if tool.ToolName == "" || len(tool.ToolName) > 512 || tool.Failed > tool.Calls {
+			if tool.ToolName == "" || len(tool.ToolName) > 512 || tool.Failed > tool.Calls || tool.FailureReasons == nil || len(tool.FailureReasons) > 32 {
+				return agentUsage{}, false
+			}
+			var reasons uint32
+			for _, reason := range tool.FailureReasons {
+				if reason.Code == "" || len(reason.Code) > 64 || reason.Count == 0 {
+					return agentUsage{}, false
+				}
+				reasons += reason.Count
+			}
+			if reasons > tool.Failed {
 				return agentUsage{}, false
 			}
 		}

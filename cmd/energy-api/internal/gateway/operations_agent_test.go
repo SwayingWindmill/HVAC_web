@@ -38,26 +38,27 @@ func (limiter *fakeOperationsRateLimiter) Allow(context.Context, string, time.Du
 }
 
 type operationsGatewayFixture struct {
-	handler          http.Handler
-	tenantID         string
-	siteID           string
-	deviceID         string
-	sessionID        string
-	gatewaySigner    *ecdsa.PrivateKey
-	counter          *fakeOperationsRateLimiter
-	limiter          *limitpolicy.Limiter
-	iamCalls         atomic.Int32
-	operationsCalls  atomic.Int32
-	denySite         atomic.Bool
-	invalidStream    atomic.Bool
-	invalidIdentity  atomic.Bool
-	rejectUnsafe     atomic.Bool
-	auditRead        atomic.Bool
-	usageExtraField  atomic.Bool
-	lastUpstream     atomic.Pointer[http.Request]
-	lastUpstreamBody atomic.Pointer[string]
-	lastOwner        atomic.Pointer[http.Request]
-	registryActions  []registryauth.Action
+	handler              http.Handler
+	tenantID             string
+	siteID               string
+	deviceID             string
+	sessionID            string
+	gatewaySigner        *ecdsa.PrivateKey
+	counter              *fakeOperationsRateLimiter
+	limiter              *limitpolicy.Limiter
+	iamCalls             atomic.Int32
+	operationsCalls      atomic.Int32
+	denySite             atomic.Bool
+	invalidStream        atomic.Bool
+	invalidIdentity      atomic.Bool
+	rejectUnsafe         atomic.Bool
+	auditRead            atomic.Bool
+	usageExtraField      atomic.Bool
+	usageTooManyFailures atomic.Bool
+	lastUpstream         atomic.Pointer[http.Request]
+	lastUpstreamBody     atomic.Pointer[string]
+	lastOwner            atomic.Pointer[http.Request]
+	registryActions      []registryauth.Action
 }
 
 func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGatewayFixture {
@@ -318,7 +319,7 @@ func (fixture *operationsGatewayFixture) operationsClient(t *testing.T, _ time.T
 				days[index] = map[string]any{
 					"date": time.Date(2026, 10, 5+index, 0, 0, 0, 0, time.UTC).Format("2006-01-02"), "completed": index, "failed": 1, "cancelled": 0,
 					"averageDurationMs": 7000, "inputTokens": 1200, "outputTokens": 300,
-					"tools": []map[string]any{{"toolName": "alarm_list", "calls": 2, "failed": 1}},
+					"tools": []map[string]any{{"toolName": "alarm_list", "calls": 2, "failed": 1, "failureReasons": fixture.usageReasons()}},
 				}
 			}
 			if fixture.usageExtraField.Load() {
@@ -766,4 +767,14 @@ func TestOperationsToolAuthorizationGrantsAWorkOrderListOnlyForTheOperatorsSite(
 	if denied := fixture.authorizeTool(t, body("work-order-003", fixture.siteID), serviceGrant, "spiffe://hvac.local/operations-agent-service"); denied.Code != http.StatusNotFound {
 		t.Fatalf("a Site whose work orders the operator may not read must be not found, got %d", denied.Code)
 	}
+}
+
+// The usage figures' reasons for the one failed alarm read; with usageTooManyFailures they claim
+// more failures than the read had.
+func (fixture *operationsGatewayFixture) usageReasons() []map[string]any {
+	count := 1
+	if fixture.usageTooManyFailures.Load() {
+		count = 2
+	}
+	return []map[string]any{{"code": "TOOL_OWNER_UNAVAILABLE", "count": count}}
 }

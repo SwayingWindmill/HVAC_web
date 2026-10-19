@@ -1,6 +1,6 @@
 import type { Pool, QueryResultRow } from 'pg';
 
-import type { AgentToolUsage, AgentUsage, AgentUsageReader } from '../../application/index.js';
+import type { AgentToolFailureReason, AgentToolUsage, AgentUsage, AgentUsageReader } from '../../application/index.js';
 
 interface RunDayRow extends QueryResultRow {
   readonly day: string;
@@ -19,6 +19,13 @@ interface ToolDayRow extends QueryResultRow {
   readonly failed: string;
 }
 
+interface ReasonDayRow extends QueryResultRow {
+  readonly day: string;
+  readonly tool_name: string;
+  readonly failure_code: string;
+  readonly failed: string;
+}
+
 // A Run, and the Tools it called, count on the Site-local day the Run started.
 const runDay = `(to_timestamp(r.started_at_ms / 1000.0) AT TIME ZONE $3)::date`;
 const siteRunsInRange = `
@@ -29,7 +36,7 @@ const siteRunsInRange = `
 export const createPostgresAgentUsageReader = (pool: Pool): AgentUsageReader => Object.freeze({
   async daily(tenantId: string, siteId: string, timezone: string, fromDate: string, toDate: string): Promise<AgentUsage> {
     const values = [tenantId, siteId, timezone, fromDate, toDate];
-    const [days, runs, tools] = await Promise.all([
+    const [days, runs, tools, reasons] = await Promise.all([
       pool.query<{ readonly day: string }>(
         `SELECT d::date::text AS day FROM generate_series($1::date, $2::date, interval '1 day') AS d ORDER BY 1`,
         [fromDate, toDate],
@@ -58,12 +65,33 @@ export const createPostgresAgentUsageReader = (pool: Pool): AgentUsageReader => 
          ORDER BY 1, 2`,
         values,
       ),
+      // Why the failed calls failed (#624), the commonest first.
+      pool.query<ReasonDayRow>(
+        `SELECT ${runDay}::text AS day, t.tool_name, t.failure_code, count(*) AS failed
+         FROM agent_operations.agent_tool_executions t
+         JOIN agent_operations.agent_runs r ON r.session_id = t.session_id AND r.run_id = t.run_id
+         ${siteRunsInRange} AND t.status = 'FAILED' AND t.failure_code IS NOT NULL
+         GROUP BY 1, 2, 3
+         ORDER BY 1, 2, 4 DESC, 3`,
+        values,
+      ),
     ]);
+    const toolKey = (row: { day: string; tool_name: string }): string => `${row.day}|${row.tool_name}`;
+    const reasonsByTool = new Map<string, AgentToolFailureReason[]>();
+    for (const row of reasons.rows) {
+      const key = toolKey(row);
+      reasonsByTool.set(key, [...(reasonsByTool.get(key) ?? []), Object.freeze({ code: row.failure_code, count: Number(row.failed) })]);
+    }
     const runsByDay = new Map(runs.rows.map((row) => [row.day, row]));
     const toolsByDay = new Map<string, AgentToolUsage[]>();
     for (const row of tools.rows) {
       const list = toolsByDay.get(row.day) ?? [];
-      list.push(Object.freeze({ toolName: row.tool_name, calls: Number(row.calls), failed: Number(row.failed) }));
+      list.push(Object.freeze({
+        toolName: row.tool_name,
+        calls: Number(row.calls),
+        failed: Number(row.failed),
+        failureReasons: Object.freeze(reasonsByTool.get(toolKey(row)) ?? []),
+      }));
       toolsByDay.set(row.day, list);
     }
     return Object.freeze({
