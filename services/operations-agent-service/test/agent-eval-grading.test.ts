@@ -63,6 +63,13 @@ test('a figure counts only at the precision it was asked for, and the hours aske
   const ranges = withAnswer({ ...hours, artifacts: [] }, () => '能效最低的是 7–8 点（3.52）和 16-17点（3.75）。');
   const ranged = check(gradeTrial(question('least-efficient-hours'), ranges, series), 'figures');
   assert.equal(ranged.passed, true, ranged.reason ?? '');
+  // 「07 点」 and 「07–08 点」 name 07:00 too (suite after #607, least-efficient-hours #3).
+  const padded = withAnswer({ ...hours, artifacts: [] }, () => '能效最低的是 07 点，能效 3.52；其次是 16–17 点，3.75。');
+  const paddedHours = check(gradeTrial(question('least-efficient-hours'), padded, series), 'figures');
+  assert.equal(paddedHours.passed, true, paddedHours.reason ?? '');
+  const paddedRange = withAnswer({ ...hours, artifacts: [] }, () => '能效最低的是 07–08 点（3.52）和 16 点（3.75）。');
+  const paddedRanged = check(gradeTrial(question('least-efficient-hours'), paddedRange, series), 'figures');
+  assert.equal(paddedRanged.passed, true, paddedRanged.reason ?? '');
 });
 
 test('totals, the busiest hour, each machine and a month are graded as their questions ask', () => {
