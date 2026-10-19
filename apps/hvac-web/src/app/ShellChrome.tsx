@@ -128,7 +128,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
         {!transitionBlocksContent ? <div id="content" tabIndex={-1} className="min-w-0 flex-1 outline-none">{children}</div> : null}
       </SidebarInset>
       {assistantOpen && activeSite !== undefined && !transitionBlocksContent ? (
-        <AssistantPanel key={activeSite.id} siteId={activeSite.id} siteName={activeSite.displayName} csrfToken={principal.session.csrfToken} />
+        <AssistantPanel key={activeSite.id} siteId={activeSite.id} siteName={activeSite.displayName} timezone={activeSite.timezone} csrfToken={principal.session.csrfToken} />
       ) : null}
       </div>
       <Toaster theme={themeMode} position="bottom-right" richColors closeButton />

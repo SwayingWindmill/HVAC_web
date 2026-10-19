@@ -70,3 +70,39 @@ test('opening the assistant folds the navigation to icons so the page keeps its 
   await page.getByRole('complementary', { name: 'AI 助手' }).getByRole('button', { name: '收起助手' }).click();
   await expect(navigation).toHaveAttribute('data-state', 'expanded');
 });
+
+// #639: 历史 lists my conversations on the Site, newest first; an old one opens with its answers and continues.
+test('历史 lists my conversations newest first, and an older one opens with its answers and continues', async ({ page, gateway }) => {
+  await page.goto(`/energy-analysis/consumption?site=${SITE_ID}`);
+  await page.getByRole('button', { name: 'AI 助手' }).click();
+  const panel = page.getByRole('complementary', { name: 'AI 助手' });
+  const composer = panel.getByRole('textbox', { name: '向助手提问' });
+  const askNew = async (question: string) => {
+    await panel.getByRole('button', { name: '新对话' }).click();
+    await composer.fill(question);
+    await panel.getByRole('button', { name: '发送' }).click();
+    await expect(panel.getByTestId('assistant-finding')).toHaveCount(1);
+  };
+  await askNew('10月15日用了多少电？');
+  await askNew('10月16日用了多少电？');
+
+  await panel.getByRole('button', { name: '历史对话' }).click();
+  const history = panel.getByRole('list', { name: '历史对话' });
+  await expect(history.getByRole('listitem')).toHaveCount(2);
+  await expect(history.getByRole('listitem').first()).toContainText('10月16日用了多少电？');
+  await expect(history.getByRole('listitem').first()).toContainText('答完');
+  await expect(history.getByRole('listitem').last()).toContainText('10月15日用了多少电？');
+
+  await history.getByRole('button', { name: '10月15日用了多少电？' }).click();
+  await expect(history).toHaveCount(0);
+  await expect(panel.locator('[data-role="user"]')).toHaveText(['10月15日用了多少电？']);
+  await expect(panel.getByTestId('assistant-finding')).toHaveCount(1);
+
+  await composer.fill('那 C 机组呢？');
+  await panel.getByRole('button', { name: '发送' }).click();
+  await expect(panel.getByTestId('assistant-finding')).toHaveCount(2);
+  const first = gateway.assistant.sessions.find((session) => session.messages[0].content === '10月15日用了多少电？');
+  const continued = gateway.writes.filter((write) => write.path.endsWith(':run')).at(-1);
+  expect(continued?.path).toContain(`/${first!.sessionId}:run`);
+  expect(continued?.body).toEqual({ expectedRevision: 2, message: '那 C 机组呢？' });
+});
