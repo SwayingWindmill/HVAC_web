@@ -16,7 +16,6 @@ services:
       - ./postgres/init/003-iam-runtime-identity-resolution.sql:/docker-entrypoint-initdb.d/050.sql:ro
       - ./postgres/init/004-iam-reconciliation.sql:/docker-entrypoint-initdb.d/060.sql:ro
       - ./postgres/init/005-core-read-service.sql:/docker-entrypoint-initdb.d/070.sql:ro
-      - ./postgres/init/006-legacy-migration-execution.sql:/docker-entrypoint-initdb.d/080.sql:ro
       - ./postgres/init/006-s2-telemetry-authorization.sql:/docker-entrypoint-initdb.d/090.sql:ro
       - ./postgres/init/007-s4-alarm-authorization.sql:/docker-entrypoint-initdb.d/100.sql:ro
       - ./postgres/init/007-spatial-sensor-point-model.sql:/docker-entrypoint-initdb.d/110.sql:ro
@@ -58,6 +57,7 @@ services:
       - ./postgres/init/026-iam-role-assignments.sql:/docker-entrypoint-initdb.d/420.sql:ro
       - ./postgres/init/027-optimization-site-clock.sql:/docker-entrypoint-initdb.d/430.sql:ro
       - ./postgres/init/028-retire-own-tariff-pricing.sql:/docker-entrypoint-initdb.d/440.sql:ro
+      - ./postgres/init/029-drop-registry-import-tables.sql:/docker-entrypoint-initdb.d/450.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

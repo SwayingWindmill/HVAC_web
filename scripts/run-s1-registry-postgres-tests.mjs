@@ -217,24 +217,6 @@ async function runCoreGoTests() {
   if (signal || code !== 0) throw new Error(`S1 Core PostgreSQL tests failed: ${signal ?? code}`);
 }
 
-async function runLegacyMigrationGoTests() {
-  await mkdir(goCacheDir, { recursive: true });
-  const child = spawn(goBinary, ['test', '-count=1', '-v', './tools/legacy-registry-migrator/internal/migration'], {
-    cwd: root,
-    stdio: 'inherit',
-    shell: false,
-    env: {
-      ...process.env,
-      GOCACHE: goCacheDir,
-      S1_ADMIN_DATABASE_URL: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
-      S1_CORE_DATABASE_URL: `postgres://s1_core_service:${coreServicePassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
-      S1_LEGACY_MIGRATION_DSN: `postgres://s1_legacy_migration_service:s1-legacy-migration-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
-    },
-  });
-  const [code, signal] = await once(child, 'exit');
-  if (signal || code !== 0) throw new Error(`S1 Legacy migration PostgreSQL tests failed: ${signal ?? code}`);
-}
-
 // Connectivity reads the Registry read port as connectivity_runtime, under real RLS.
 async function runConnectivityGoTests() {
   await mkdir(goCacheDir, { recursive: true });
@@ -283,24 +265,21 @@ try {
   const roleState = psql(`
     SELECT string_agg(rolname || ':' || rolcanlogin::text || ':' || rolbypassrls::text, ',' ORDER BY rolname)
     FROM pg_roles
-    WHERE rolname IN ('s1_iam_runtime','s1_iam_reconciler','s1_core_runtime','s1_core_writer','s1_core_service','s1_iam_migrator','s1_core_migrator','s1_migration_operator','s1_legacy_migration_service')
+    WHERE rolname IN ('s1_iam_runtime','s1_iam_reconciler','s1_core_runtime','s1_core_writer','s1_core_service','s1_iam_migrator','s1_core_migrator')
   `);
-  for (const role of ['s1_iam_runtime', 's1_iam_reconciler', 's1_iam_migrator', 's1_core_service', 's1_legacy_migration_service']) {
+  for (const role of ['s1_iam_runtime', 's1_iam_reconciler', 's1_iam_migrator', 's1_core_service']) {
     if (!roleState.includes(`${role}:true:false`)) throw new Error(`${role} must be LOGIN and NOBYPASSRLS`);
   }
-  for (const role of ['s1_core_runtime', 's1_core_writer', 's1_core_migrator', 's1_migration_operator']) {
+  for (const role of ['s1_core_runtime', 's1_core_writer', 's1_core_migrator']) {
     if (!roleState.includes(`${role}:false:false`)) throw new Error(`${role} must remain NOLOGIN and NOBYPASSRLS`);
   }
   const coreServiceMembership = psql(`SELECT pg_has_role('s1_core_service', 's1_core_runtime', 'MEMBER')`);
   const coreWriterMembership = psql(`SELECT pg_has_role('s1_core_service', 's1_core_writer', 'MEMBER')`);
-  const migrationServiceMembership = psql(`SELECT pg_has_role('s1_legacy_migration_service', 's1_migration_operator', 'MEMBER')`);
   expectEqual(coreServiceMembership, 't', 'Core service runtime membership');
   expectEqual(coreWriterMembership, 't', 'Core service writer membership');
-  expectEqual(migrationServiceMembership, 't', 'Legacy migration operator membership');
   report.assertions.runtimeRoles = roleState;
   report.assertions.coreServiceMembership = coreServiceMembership;
   report.assertions.coreWriterMembership = coreWriterMembership;
-  report.assertions.migrationServiceMembership = migrationServiceMembership;
 
   const tenantA = scopedCounts('018f1d00-0000-7000-8000-000000000001', '{018f1e00-1000-7000-8000-000000000001,018f1e00-1000-7000-8000-000000000002}');
   const exactSite = scopedCounts('018f1d00-0000-7000-8000-000000000001', '{018f1e00-1000-7000-8000-000000000001}');
@@ -735,21 +714,14 @@ try {
   `);
   expectEqual(settlementFixture, 'ACTIVE|2|Asia/Shanghai', 'Settlement/Tariff V2 fixture');
 
-  // The Metric engine prices hourly energy at the Site's import Tariff, within its Site scope only.
-  const metricTariffScope = (siteId) => psql(`
+  // Since #575 the Telemetry Query Service prices energy; the Metric engine no longer reads Tariffs (028).
+  const metricTariffDenied = psql(`
     BEGIN;
     SET LOCAL ROLE metric_engine_runtime;
-    SET LOCAL app.tenant_id = '018f1d00-0000-7000-8000-000000000001';
-    SET LOCAL app.authorized_site_ids = '{${siteId}}';
-    SELECT
-      (SELECT count(*) FROM core_registry.settlement_boundaries WHERE id = '${settlementBoundaryId}')::text || '|'
-      || (SELECT count(*) FROM core_registry.tariff_assignments WHERE tariff_id = '${tariffId}')::text || '|'
-      || (SELECT count(*) FROM core_registry.tariff_versions WHERE tariff_id = '${tariffId}')::text || '|'
-      || (SELECT count(*) FROM core_registry.tariff_periods WHERE tariff_version_id = '${tariffVersion1}')::text;
+    SELECT count(*) FROM core_registry.tariff_versions;
     ROLLBACK;
-  `);
-  expectEqual(metricTariffScope('018f1e00-1000-7000-8000-000000000001'), '1|1|2|2', 'Metric engine reads its Site import Tariff');
-  expectEqual(metricTariffScope('018f1e00-1000-7000-8000-000000000002'), '0|0|0|0', 'Metric engine cannot read another Site Tariff');
+  `, { expectFailure: true });
+  if (!metricTariffDenied.includes('permission denied')) throw new Error('Metric engine unexpectedly read Tariff versions');
 
   const wrongTariffTimezone = psql(`
     INSERT INTO core_registry.tariff_versions (
@@ -2119,19 +2091,6 @@ try {
   `, { expectFailure: true });
   if (!duplicateExternal.includes('external_bindings_active_external_key_uidx')) throw new Error('ExternalBinding active uniqueness was not enforced');
   report.assertions.externalBindingActiveUnique = true;
-
-  const quarantine = psql("SELECT mapping_state || '|' || (target_resource_id IS NULL)::text FROM core_registry.legacy_resource_maps WHERE source_key = 'ambiguous-asset-1'");
-  expectEqual(quarantine, 'QUARANTINED|true', 'ambiguous Legacy mapping');
-  report.assertions.ambiguousMapping = quarantine;
-
-  const operatorDenied = psql(`
-    BEGIN;
-    SET LOCAL ROLE s1_core_runtime;
-    SELECT count(*) FROM core_registry.migration_quarantine;
-    ROLLBACK;
-  `, { expectFailure: true });
-  if (!operatorDenied.includes('permission denied')) throw new Error('Core runtime unexpectedly accessed Migration Quarantine');
-  report.assertions.quarantineRestricted = true;
 
   const plan = psql(`
     SET enable_seqscan = off;

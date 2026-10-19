@@ -6,7 +6,6 @@
     "fixturesAllowed": false,
     "testdataAllowed": false,
     "localPasswordStatementsAllowed": false,
-    "legacyMigrationExecutionRequired": false,
     "migrationHashRequired": true,
     "runtimeSecretPasswordsRequired": true
   },
@@ -89,7 +88,8 @@
         "infra/registry/postgres/init/025-fdd-rule-revisions.sql",
         "infra/registry/postgres/init/026-iam-role-assignments.sql",
         "infra/registry/postgres/init/027-optimization-site-clock.sql",
-        "infra/registry/postgres/init/028-retire-own-tariff-pricing.sql"
+        "infra/registry/postgres/init/028-retire-own-tariff-pricing.sql",
+        "infra/registry/postgres/init/029-drop-registry-import-tables.sql"
       ]
     },
     {
@@ -158,7 +158,6 @@
     "**/testdata/**",
     "infra/durability/postgres/init/000-bootstrap-identities.sql",
     "infra/registry/postgres/init/000-bootstrap-identities.sql",
-    "infra/registry/postgres/init/006-legacy-migration-execution.sql",
     "infra/telemetry/postgres/init/000-bootstrap-identities.sql",
     "modules/alarm/testdata/postgres/000_roles.sql",
     "modules/workorder/testdata/postgres/000_roles.sql"

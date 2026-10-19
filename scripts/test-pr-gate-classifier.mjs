@@ -66,15 +66,6 @@ test('domain module changes stay scoped to product domains', () => {
   }
 });
 
-test('retired migration evidence does not trigger product gates', () => {
-  for (const file of ['tools/legacy-registry-migrator/internal/migration/types.go']) {
-    const classification = runClassification([file]);
-    assert.deepEqual(classification.unitProfiles, []);
-    assert.deepEqual(classification.integrationProfiles, []);
-    assert.equal(classification.broad, false);
-  }
-});
-
 test('Phase 1 migration changes rerun the migration integration test', () => {
   for (const file of ['deploy/platform/phase1/migrations/manifest.v1.json', 'modules/alarm/migrations/001_s4_alarm_runtime.sql']) {
     const classification = runClassification([file]);
