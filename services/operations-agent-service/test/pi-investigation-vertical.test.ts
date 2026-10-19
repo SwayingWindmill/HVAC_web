@@ -1059,3 +1059,19 @@ test('a correction written beside a read stays with the claim it corrects', asyn
   assert.equal(result.runStatus, 'COMPLETED');
   assert.ok(result.finalizedMessages.some(({ content }) => content === correction));
 });
+
+// #607 final suite: a decline said its reason in the answer and again on the card in other words.
+test('the card drops a refusal the answer already gave in other words', async () => {
+  const { result } = await runScript([
+    {
+      parts: [{ type: 'text', text: '我只能读取数据，不能调整设定值，也不能给设备下命令。需要的话，我可以帮你查看当前冷冻水出水温度和各台机组的运行读数。' }, {
+        type: 'tool-call', id: 'complete-1', name: INVESTIGATION_COMPLETE_TOOL_NAME,
+        arguments: { ...declineCard, limitations: ['我只能读取数据，不能修改设定值或操作设备。'] },
+      }],
+      stopReason: 'toolUse',
+    },
+  ]);
+
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.deepEqual(result.artifacts.at(-1).finding.limitations, []);
+});

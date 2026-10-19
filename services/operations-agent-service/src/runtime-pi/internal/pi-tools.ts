@@ -193,19 +193,23 @@ const adaptProjectTool = (
   },
 });
 
-// A card limitation restates the answer when nearly all its neighbouring word pairs are in it; the
-// card shows only what the answer does not already say (#607). A word is one Chinese character or
-// one number, so the same words about another day are not a restatement.
+// A card limitation restates the answer when it names no number the answer does not, and most of
+// its neighbouring word pairs are in the answer; the card shows only what the answer does not
+// already say (#607). A word is one Chinese character or one number, so the same words about
+// another day are new, while a refusal said again in other words is not.
+const words = (text: string): string[] => [...text.matchAll(/\p{Script=Han}|\d+/gu)].map(([word]) => word);
 const wordPairs = (text: string): Set<string> => {
-  const words = [...text.matchAll(/\p{Script=Han}|\d+/gu)].map(([word]) => word);
+  const all = words(text);
   const pairs = new Set<string>();
-  for (let index = 0; index < words.length - 1; index += 1) pairs.add(`${words[index]} ${words[index + 1]}`);
+  for (let index = 0; index < all.length - 1; index += 1) pairs.add(`${all[index]} ${all[index + 1]}`);
   return pairs;
 };
-const RESTATED_SHARE = 0.7;
+const RESTATED_SHARE = 0.6;
 const withoutRestatedLimitations = <T extends { readonly limitations: readonly string[] }>(finding: T, answer: string): T => {
+  const answerWords = new Set(words(answer));
   const answerPairs = wordPairs(answer);
   const limitations = finding.limitations.filter((limitation) => {
+    if (words(limitation).some((word) => /\d/u.test(word) && !answerWords.has(word))) return true;
     const own = wordPairs(limitation);
     const shared = [...own].filter((pair) => answerPairs.has(pair)).length;
     return own.size === 0 || shared / own.size < RESTATED_SHARE;
