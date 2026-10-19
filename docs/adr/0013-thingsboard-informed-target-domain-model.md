@@ -265,17 +265,6 @@ The target architecture explicitly forbids:
 
 Primary decision inputs:
 
-- `docs/architecture/thingsboard-security-tenancy-adjudication.md`
-- `docs/architecture/thingsboard-entity-relation-device-asset-profile-adjudication.md`
-- `docs/architecture/thingsboard-connectivity-rpc-ota-adjudication.md`
-- `docs/architecture/thingsboard-telemetry-storage-calculated-fields-adjudication.md`
-- `docs/architecture/thingsboard-rule-engine-queue-scheduling-debug-adjudication.md`
-- `docs/architecture/thingsboard-alarm-notification-disposition-adjudication.md`
-- `docs/architecture/thingsboard-dashboard-widget-mobile-adjudication.md`
-- `docs/architecture/thingsboard-edge-sync-offline-remote-configuration-adjudication.md`
-- `docs/architecture/thingsboard-ai-analytics-integrations-adjudication.md`
-- `docs/architecture/thingsboard-operations-platform-deployment-ha-observability-upgrade-adjudication.md`
-- `docs/architecture/thingsboard-hvac-module-reverse-audit.md`
 - `GLOSSARY.md`
 - `contracts/registry/s1-registry-model.v1.json`
 - ADR 0003, 0006, 0009, 0010, 0011 and 0012.

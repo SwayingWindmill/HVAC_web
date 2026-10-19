@@ -4,9 +4,7 @@
     "documentId": "SE-ARCH-004",
     "version": "2.1.2",
     "status": "CURRENT / FROZEN CANDIDATE",
-    "sourceOfTruth": "User-provided SE-ARCH-004 V2.1.2",
-    "repositoryMirror": "docs/architecture/backend-energy-platform-architecture.md",
-    "repositoryMirrorStatus": "SUPERSEDED_BY_SOURCE_ALIGNED_TARGET"
+    "sourceOfTruth": "User-provided SE-ARCH-004 V2.1.2"
   },
   "authorityOverrides": {
     "tenantModel": "User adjudication over V2.1.2: every Organization concept in this project is Tenant; no Organization compatibility layer",

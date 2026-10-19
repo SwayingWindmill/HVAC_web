@@ -62,7 +62,6 @@ for (const path of dashboardFiles) {
   dashboardText += JSON.stringify(dashboard);
 }
 const alertText = `${await read('infra/observability/alerts/domain-phase1.yaml')}\n${await read('infra/observability/alerts/s2-telemetry.yaml')}`;
-const runbook = await read('docs/operations/observability-phase1.md');
 const allImplementationText = `${commandSource}\n${moduleSource}\n${serviceSource}\n${edgeSource}\n${observabilitySource}\n${dashboardText}\n${alertText}`;
 for (const family of catalog.families) {
   if (!allImplementationText.includes(family.name)) throw new Error(`metric catalog family is not referenced by implementation or operations assets: ${family.name}`);
@@ -86,16 +85,15 @@ for (const alert of [
 ]) {
   if (!alertText.includes(`alert: ${alert}`)) throw new Error(`required Phase 1 alert is missing: ${alert}`);
 }
-for (const section of [
-  '## Edge MQTT disconnected',
-  '## Edge Store and Forward queue high',
-  '## MQTT disconnected',
-  '## MQTT queue high',
-  '## Data quality',
-  '## Command verification failure',
-  '## Alarm API 5xx',
-]) {
-  if (!runbook.includes(section)) throw new Error(`Phase 1 runbook section missing: ${section}`);
+// Every alert's runbook link must land on a heading of the runbook it names (GitHub anchors).
+const anchorOf = (heading) => heading.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
+const alertFiles = (await readdir(resolve(root, 'infra/observability/alerts'))).filter((name) => name.endsWith('.yaml'));
+for (const name of alertFiles) {
+  const alerts = await read(`infra/observability/alerts/${name}`);
+  for (const [, document, anchor] of alerts.matchAll(/runbook:\s*(\S+\.md)#(\S+)/g)) {
+    const headings = [...(await read(document)).matchAll(/^#{1,6}\s+(.+)$/gm)].map(([, heading]) => anchorOf(heading));
+    if (!headings.includes(anchor)) throw new Error(`${name}: runbook link ${document}#${anchor} has no matching heading`);
+  }
 }
 
 console.log(`Observability Phase 1 check passed: metricFamilies=${catalog.families.length}, dashboards=${dashboardFiles.length}`);

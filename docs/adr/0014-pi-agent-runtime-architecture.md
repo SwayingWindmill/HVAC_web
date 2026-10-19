@@ -443,4 +443,4 @@ Cutover is complete when the Pi vertical slice passes the framework-independent 
 
 ## Acceptance of this ADR
 
-Implementation follows `docs/operations-agent/pi-agent-implementation-plan.md`. ADR 0010 remains historical context for the former LangGraph architecture but is no longer the runtime selection authority.
+ADR 0010 remains historical context for the former LangGraph architecture but is no longer the runtime selection authority.
