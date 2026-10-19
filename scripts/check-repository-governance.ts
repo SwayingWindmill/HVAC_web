@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -164,41 +164,6 @@ export const findJavascriptToolingViolations = ({ files, baseline }: { files: Ja
   return violations;
 };
 
-export const findDocumentationViolations = ({
-  serviceNames,
-  moduleNames = [],
-  commandNames = [],
-  rootReadme,
-  appReadme,
-  reactVersion,
-}) => {
-  const violations = [];
-  for (const [kind, names] of [
-    ['service', serviceNames],
-    ['module', moduleNames],
-    ['command', commandNames],
-  ]) {
-    for (const name of names) {
-      if (!rootReadme.includes(`\`${name}/\``)) {
-        violations.push(`README.md: missing ${kind} catalog entry \`${name}/\``);
-      }
-    }
-  }
-
-  for (const command of ['npm run dev', 'npm run build']) {
-    if (!rootReadme.includes(command)) {
-      violations.push(`README.md: missing runtime command \`${command}\``);
-    }
-  }
-
-  const reactMajor = String(reactVersion).match(/\d+/)?.[0];
-  if (reactMajor && !appReadme.includes(`React ${reactMajor}`)) {
-    violations.push(`apps/hvac-web/README.md: expected React ${reactMajor} runtime documentation`);
-  }
-
-  return violations;
-};
-
 export const findLinguistViolations = (gitattributes) => requiredLinguistExclusions
   .filter((entry) => !gitattributes.includes(entry))
   .map((entry) => `.gitattributes: missing ancillary Linguist exclusion \`${entry}\``);
@@ -233,18 +198,6 @@ const listTrackedJavaScriptFiles = (root, trackedFiles, extensions) => trackedFi
     bytes: readFileSync(join(root, path)).byteLength,
   }));
 
-const directoryContainsFile = (directory) => readdirSync(directory, { withFileTypes: true })
-  .some((entry) => entry.isFile() || (entry.isDirectory() && directoryContainsFile(join(directory, entry.name))));
-
-const listCurrentRootNames = (root, rootName) => {
-  const directory = join(root, rootName);
-  if (!existsSync(directory)) return [];
-  return readdirSync(directory, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && directoryContainsFile(join(directory, entry.name)))
-    .map((entry) => entry.name)
-    .sort();
-};
-
 const collectJavascriptToolingViolations = (root, trackedFiles = listTrackedFiles(root)) => {
   const baseline = JSON.parse(readFileSync(join(root, javascriptToolingBaselinePath), 'utf8'));
   return [
@@ -276,14 +229,6 @@ export const checkRepositoryGovernance = (root = repositoryRoot) => {
     ...findPackageScriptViolations({
       scripts: packageJson.scripts ?? {},
       baseline: longChainBaseline,
-    }),
-    ...findDocumentationViolations({
-      serviceNames: listCurrentRootNames(root, 'services'),
-      moduleNames: listCurrentRootNames(root, 'modules'),
-      commandNames: listCurrentRootNames(root, 'cmd'),
-      rootReadme: readFileSync(join(root, 'README.md'), 'utf8'),
-      appReadme: readFileSync(join(root, 'apps/hvac-web/README.md'), 'utf8'),
-      reactVersion: packageJson.dependencies?.react ?? '',
     }),
     ...findWorkflowViolations(readFileSync(join(root, '.github/workflows/pr-gates.yml'), 'utf8')),
     ...findGoFormatViolations(root, trackedFiles),

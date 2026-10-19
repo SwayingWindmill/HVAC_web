@@ -12,7 +12,7 @@ const TONE: Record<Tone, string> = {
 };
 
 /**
- * The one shape every empty, failed, forbidden or not-connected state takes (DESIGN-SYSTEM.md, 通用状态):
+ * The one shape every empty, failed, forbidden or not-connected state takes (DESIGN.md, 通用状态):
  * what is missing, what to do next, and the way to it.
  */
 export function StateCard({ icon: Icon, tone = 'neutral', title, description, children, className, ...props }: {

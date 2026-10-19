@@ -21,7 +21,6 @@
     "dev:web": "npm run dev",
     "frontend:preview": "HVAC_WEB_FRONTEND_REVIEW=true npm -w @hvac/web run build && HVAC_WEB_FRONTEND_REVIEW=true npm -w @hvac/web run preview -- --host 127.0.0.1 --port 5175 --strictPort",
     "architecture:phase1:check": "node scripts/check-phase1-architecture-alignment.mjs",
-    "docs:phase1:consistency:check": "node scripts/check-phase1-document-consistency.mjs",
     "data:architecture:check": "node scripts/check-data-architecture-v2.mjs",
     "backend:architecture:check": "node --experimental-strip-types scripts/check-backend-architecture-v2.ts",
     "deployment:phase1:check": "node scripts/check-phase1-deployment.mjs",

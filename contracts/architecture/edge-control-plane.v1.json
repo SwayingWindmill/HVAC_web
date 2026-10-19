@@ -8,7 +8,7 @@
     "referenceRelease": "2026.7.0",
     "referenceCommit": "2e2792d",
     "implementationRule": "official-source-first",
-    "sourceReviewRecord": "docs/architecture/openems-source-review.md",
+    "decisionAdr": "docs/adr/0012-openems-informed-edge-control-plane.md",
     "principle": "No architecture wins by incumbency. For each concern, adopt the design that is simpler, safer, more predictable and more maintainable for commercial HVAC. OPENEMS means adopt the stronger OpenEMS mechanism after reviewing pinned official source, tests and docs; it does not require copying Java/OSGi source code."
   },
   "sources": [

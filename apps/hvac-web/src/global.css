@@ -9,7 +9,7 @@
   --font-sans: "Geist Variable", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "Noto Sans SC", "WenQuanYi Micro Hei", system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  /* DS 1.0 type scale (DESIGN-SYSTEM.md §2.2): text-sm is body 13/20, text-xs caption 12/18. */
+  /* DS 1.0 type scale (DESIGN.md §2.2): text-sm is body 13/20, text-xs caption 12/18. */
   --text-micro: 11px;
   --text-micro--line-height: 16px;
   --text-xs: 12px;
