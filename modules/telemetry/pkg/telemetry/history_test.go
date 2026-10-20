@@ -15,13 +15,12 @@ func TestHistoryRelayPublishesClaimedObservations(t *testing.T) {
 	}}
 	sink := &historySinkStub{}
 	relay, err := NewHistoryRelay(HistoryRelayConfig{
-		Repository:  repository,
-		Sink:        sink,
-		BatchSize:   64,
-		LeaseFor:    30 * time.Second,
-		RetryAfter:  2 * time.Second,
-		MaxAttempts: 8,
-		Now:         func() time.Time { return now },
+		Repository: repository,
+		Sink:       sink,
+		BatchSize:  64,
+		LeaseFor:   30 * time.Second,
+		RetryAfter: 2 * time.Second,
+		Now:        func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -53,13 +52,12 @@ func TestHistoryRelayRetriesClaimWhenClickHouseInsertFails(t *testing.T) {
 	}}
 	sink := &historySinkStub{err: errors.New("clickhouse unavailable")}
 	relay, err := NewHistoryRelay(HistoryRelayConfig{
-		Repository:  repository,
-		Sink:        sink,
-		BatchSize:   32,
-		LeaseFor:    15 * time.Second,
-		RetryAfter:  5 * time.Second,
-		MaxAttempts: 4,
-		Now:         func() time.Time { return now },
+		Repository: repository,
+		Sink:       sink,
+		BatchSize:  32,
+		LeaseFor:   15 * time.Second,
+		RetryAfter: 5 * time.Second,
+		Now:        func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -72,8 +70,8 @@ func TestHistoryRelayRetriesClaimWhenClickHouseInsertFails(t *testing.T) {
 	if repository.failedLeaseID != repository.batch.LeaseID {
 		t.Fatalf("failed lease=%q", repository.failedLeaseID)
 	}
-	if !repository.retryAt.Equal(now.Add(5*time.Second)) || repository.errorCode != "CLICKHOUSE_INSERT_FAILED" || repository.maxAttempts != 4 {
-		t.Fatalf("retry=%s code=%s max=%d", repository.retryAt, repository.errorCode, repository.maxAttempts)
+	if !repository.retryAt.Equal(now.Add(5*time.Second)) || repository.errorCode != "CLICKHOUSE_INSERT_FAILED" {
+		t.Fatalf("retry=%s code=%s", repository.retryAt, repository.errorCode)
 	}
 	if repository.publishedLeaseID != "" {
 		t.Fatalf("unexpected published lease=%s", repository.publishedLeaseID)
@@ -88,12 +86,11 @@ type historyRepositoryStub struct {
 	failedLeaseID    string
 	retryAt          time.Time
 	errorCode        string
-	maxAttempts      int
 }
 
 func TestHistoryRelayRunDrainsWithoutPollingDelay(t *testing.T) {
 	repo := &historyRepositoryStub{batch: HistoryBatch{LeaseID: "lease", Observations: []HistoryObservation{{ObservationID: "observation"}}}}
-	relay, err := NewHistoryRelay(HistoryRelayConfig{Repository: repo, Sink: &historySinkStub{}, BatchSize: 1, LeaseFor: 30 * time.Second, RetryAfter: time.Second, MaxAttempts: 3})
+	relay, err := NewHistoryRelay(HistoryRelayConfig{Repository: repo, Sink: &historySinkStub{}, BatchSize: 1, LeaseFor: 30 * time.Second, RetryAfter: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +115,7 @@ func TestHistoryRelayRunDrainsWithoutPollingDelay(t *testing.T) {
 // arrives: every insert is a ClickHouse part, multiplied by the rollup views.
 func TestHistoryRelayRunWaitsAfterAPartialBatch(t *testing.T) {
 	repo := &historyRepositoryStub{batch: HistoryBatch{LeaseID: "lease", Observations: []HistoryObservation{{ObservationID: "observation"}}}}
-	relay, err := NewHistoryRelay(HistoryRelayConfig{Repository: repo, Sink: &historySinkStub{}, BatchSize: 4, LeaseFor: 30 * time.Second, RetryAfter: time.Second, MaxAttempts: 3})
+	relay, err := NewHistoryRelay(HistoryRelayConfig{Repository: repo, Sink: &historySinkStub{}, BatchSize: 4, LeaseFor: 30 * time.Second, RetryAfter: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +133,7 @@ func TestHistoryRelayRunWaitsAfterAPartialBatch(t *testing.T) {
 	}
 }
 
-func (repository *historyRepositoryStub) ClaimHistoryBatch(context.Context, int, time.Time, time.Duration, int) (HistoryBatch, error) {
+func (repository *historyRepositoryStub) ClaimHistoryBatch(context.Context, int, time.Time, time.Duration) (HistoryBatch, error) {
 	return repository.batch, repository.claimErr
 }
 
@@ -146,11 +143,10 @@ func (repository *historyRepositoryStub) MarkHistoryBatchPublished(_ context.Con
 	return nil
 }
 
-func (repository *historyRepositoryStub) RetryHistoryBatch(_ context.Context, leaseID string, retryAt time.Time, errorCode string, maxAttempts int) error {
+func (repository *historyRepositoryStub) RetryHistoryBatch(_ context.Context, leaseID string, retryAt time.Time, errorCode string) error {
 	repository.failedLeaseID = leaseID
 	repository.retryAt = retryAt
 	repository.errorCode = errorCode
-	repository.maxAttempts = maxAttempts
 	return nil
 }
 

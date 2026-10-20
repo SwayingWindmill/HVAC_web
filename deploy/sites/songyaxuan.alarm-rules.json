@@ -44,6 +44,12 @@
       }
     }
   ],
+  "reportsInterrupted": {
+    "title": "网关上报中断",
+    "summary": "松雅轩 {minutes} 分钟没有收到任何读数，可能是现场网关断电、断网或程序停了。重新收到读数后自动恢复。",
+    "severity": "MAJOR",
+    "ageSeconds": 900
+  },
   "readingsNotUpdated": {
     "title": "{device}读数长时间没有更新",
     "summary": "{device}有读数超过 {minutes} 分钟没有更新，或一直没有读数（这台设备的读数：{points}）。可能是测点、接线或通讯出了问题。所有读数恢复更新后自动恢复。",

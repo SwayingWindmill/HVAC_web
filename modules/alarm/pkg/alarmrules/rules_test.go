@@ -39,9 +39,9 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		}
 		byTitle[policy.Title] = policy
 	}
-	// The supply-temperature rule and one per device with an active point: 13 devices, the cooling
-	// tower has none.
-	if len(byTitle) != 13 {
+	// The supply-temperature rule, 网关上报中断 and one per device with an active point: 13
+	// devices, the cooling tower has none.
+	if len(byTitle) != 14 {
 		t.Fatalf("got %d rules: %v", len(byTitle), keys(byTitle))
 	}
 
@@ -66,6 +66,15 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	}
 	if !strings.Contains(chillerC.Summary, "超过 30 分钟没有更新") || !strings.Contains(chillerC.Summary, "冷却水出水温度") || strings.Contains(chillerC.Title+chillerC.Summary, "UID") {
 		t.Fatalf("C 机组电表 readings rule is not said plainly: %q / %q", chillerC.Title, chillerC.Summary)
+	}
+
+	// #615: the Site has stopped reporting when none of its 78 active points has a reading for 15 minutes.
+	silent, ok := byTitle["网关上报中断"]
+	if !ok || silent.Severity != "MAJOR" || len(inputs(silent.Raise)) != 78 || len(inputs(silent.Clear)) != 78 {
+		t.Fatalf("网关上报中断 rule: %#v", silent)
+	}
+	if !strings.Contains(silent.Summary, "15 分钟") {
+		t.Fatalf("网关上报中断 is not said plainly: %q", silent.Summary)
 	}
 
 	module := inputs(byTitle["温度采集模块读数长时间没有更新"].Raise)
@@ -200,6 +209,35 @@ func TestSongyaxuanRulesRaiseAndClearAsTheirWordingSays(t *testing.T) {
 	if recovered := evaluate(t, supply, "s-4", plant(start.Add(17*time.Minute), 8.5), active(high.State), start.Add(17*time.Minute)); recovered.Effect != alarmservice.EvaluationEffectClear {
 		t.Fatalf("8.5 ℃ did not clear: %#v", recovered)
 	}
+
+	// 网关上报中断 (#615): with no new reading, the same snapshot looked at again 15 minutes on
+	// raises; one reading arriving clears it.
+	silent := published(t, compiled, "网关上报中断")
+	readings := func(at time.Time) map[string]alarmservice.InputFact {
+		facts := map[string]alarmservice.InputFact{}
+		for _, key := range inputs(silent.Raise) {
+			facts[key] = alarmservice.NumberInput(key, 20, "GOOD", start.Format(time.RFC3339Nano))
+		}
+		supplyKey := "01a14000-4000-7000-8000-000000000009/supply_water_temperature"
+		facts[supplyKey] = alarmservice.NumberInput(supplyKey, 7, "GOOD", at.Format(time.RFC3339Nano))
+		return facts
+	}
+	reporting := evaluate(t, silent, "g-1", readings(start), alarmservice.AlarmEvaluationState{}, start)
+	if reporting.Effect != alarmservice.EvaluationEffectNone || reporting.State.NextEvaluationAt == nil {
+		t.Fatalf("a reporting Site raised, or set no time to look again: %#v", reporting)
+	}
+	quiet := evaluate(t, silent, "g-1", readings(start), reporting.State, start.Add(15*time.Minute))
+	if quiet.Effect != alarmservice.EvaluationEffectPublish {
+		t.Fatalf("15 minutes without a reading did not raise: %#v", quiet)
+	}
+	back := evaluate(t, silent, "g-2", readings(start.Add(20*time.Minute)), active(quiet.State), start.Add(20*time.Minute))
+	if back.Effect != alarmservice.EvaluationEffectClear {
+		t.Fatalf("a reading arriving did not clear: %#v", back)
+	}
+	// If that reading was the last before the gateway dropped again, the second silence raises too.
+	if again := evaluate(t, silent, "g-2", readings(start.Add(20*time.Minute)), recovered(back.State), start.Add(35*time.Minute)); again.Effect != alarmservice.EvaluationEffectPublish {
+		t.Fatalf("a second silence right after a clear did not raise: %#v", again)
+	}
 }
 
 func published(t *testing.T, compiled Compiled, title string) alarmservice.AlarmPolicyRevision {
@@ -236,6 +274,12 @@ func evaluate(t *testing.T, policy alarmservice.AlarmPolicyRevision, revision st
 		t.Fatal(err)
 	}
 	return decision
+}
+
+// recovered is the state after the owner recorded the clear.
+func recovered(state alarmservice.AlarmEvaluationState) alarmservice.AlarmEvaluationState {
+	state.ActiveAlarmID, state.ActiveIncidentCorrelationID = "", ""
+	return state
 }
 
 // active is the state after the owner recorded the raised alarm.

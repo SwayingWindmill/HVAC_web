@@ -285,7 +285,9 @@ func EvaluatePolicy(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, pre
 			state.QualityBlocker = ""
 			state.CandidateSince = nil
 			state.RepeatCount = 0
-			state.NextEvaluationAt = formatOptionalTime(nextScheduleBoundary)
+			// A time-based raise (no data for a while) can come true again with no new reading (#615).
+			raiseResult := evaluateCondition(policy, policy.Raise, snapshot, false, now)
+			state.NextEvaluationAt = formatOptionalTime(minTime(raiseResult.nextDue, nextScheduleBoundary))
 			finishEvaluationState(&state, snapshot, now)
 			recovery := recoveryForDecision(policy, snapshot, state.ActiveIncidentCorrelationID, fingerprint, now)
 			return EvaluationDecision{Status: state.Status, Effect: EvaluationEffectClear, Fingerprint: fingerprint, State: state, Recovery: &recovery}, nil
