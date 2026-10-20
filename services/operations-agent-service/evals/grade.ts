@@ -183,11 +183,14 @@ export const gradeTrial = (question: EvalQuestion, snapshot: AgentSessionSnapsho
     checks.push(missing.length === 0 ? pass('figures') : fail('figures', `not stated: ${missing.join(', ')}`));
   }
 
-  // The operator sees the answer first in bold: one whole sentence, not a heading or a bold figure.
-  const lead = answer.trimStart().match(/^\*\*([^*\n]+)\*\*/u)?.[1]?.trim();
-  checks.push(lead === undefined ? fail('leads-with-conclusion', 'the answer does not open in bold')
-    : !/[。！？]$/u.test(lead) ? fail('leads-with-conclusion', `the bold opening is not a sentence: ${lead}`)
-      : pass('leads-with-conclusion'));
+  // The operator reads the run's first answer first, in bold: one whole sentence on its own line,
+  // the only bold text. Closing 「**」 straight before more text does not render, it shows as stars.
+  const opening = (assistant[0]?.content ?? '').trimStart();
+  const boldOpening = opening.match(/^\*\*(.+?)\*\*(?=\n|$)/u)?.[1];
+  checks.push(boldOpening === undefined ? fail('leads-with-conclusion', 'the answer does not open with a bold line')
+    : !boldOpening.endsWith('。') ? fail('leads-with-conclusion', `the bold opening is not a sentence: ${boldOpening}`)
+      : opening.split('**').length !== 3 ? fail('leads-with-conclusion', 'more than the opening sentence is bold')
+        : pass('leads-with-conclusion'));
 
   const latin = [...new Set((shown.replace(IDENTIFIER, '').match(/[A-Za-z][A-Za-z_]+/gu) ?? []).filter((word) => !LATIN_ALLOWED.has(word)))];
   checks.push(latin.length === 0 ? pass('chinese-only') : fail('chinese-only', `Latin words: ${latin.join(', ')}`));
