@@ -2,7 +2,8 @@
   "pages": [
     "pages/overview/index",
     "pages/me/index",
-    "pages/login/index"
+    "pages/login/index",
+    "pages/sites/index"
   ],
   "window": {
     "navigationStyle": "custom",

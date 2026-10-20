@@ -2,7 +2,7 @@
 
 <view class="screen with-tab-bar">
   <view wx:if="{{siteName}}" class="site-row">
-    <view class="site-pill">{{siteName}}</view>
+    <view class="site-pill" bindtap="openSites" aria-role="button" aria-label="切换站点，现在是{{siteName}}">{{siteName}}<image class="chevron" src="/assets/chevron-down.svg" aria-hidden="true" /></view>
     <text class="caption">数据 <text class="mono">{{updatedAt}}</text></text>
   </view>
   <view wx:if="{{loading}}" class="state">正在读取…</view>
@@ -43,7 +43,7 @@
         <text class="card-title">今天用能</text>
         <text class="caption">较昨天同时段</text>
       </view>
-      <view wx:if="{{view.energy.state === 'error'}}" class="caption">今天的用能暂时读不到，下拉刷新再试。</view>
+      <view wx:if="{{view.energy.note}}" class="caption">{{view.energy.note}}</view>
       <block wx:else>
         <view class="metrics">
           <view wx:for="{{view.energy.metrics}}" wx:key="label" class="metric">

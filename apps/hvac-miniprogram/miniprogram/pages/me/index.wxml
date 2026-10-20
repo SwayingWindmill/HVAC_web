@@ -10,9 +10,9 @@
   </view>
 
   <view class="card">
-    <view class="row">
+    <view class="row" bindtap="openSites" aria-role="button" aria-label="切换站点">
       <text>当前站点</text>
-      <text class="muted">{{siteName}}</text>
+      <text class="muted">{{siteName}} ›</text>
     </view>
   </view>
 

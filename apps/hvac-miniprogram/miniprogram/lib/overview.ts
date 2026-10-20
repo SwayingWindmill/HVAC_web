@@ -20,10 +20,11 @@ export interface Recommendation {
 export interface OverviewInputs {
   readonly savings: Loaded<{ readonly card: SavingsCard }>;
   readonly recommendation: Loaded<{ readonly latest: Recommendation | null }>;
+  /** `empty`: the Site has no electricity reading today or yesterday, so there is no day to compare. */
   readonly energy: Loaded<{
     readonly today: EnergySummary;
     readonly change: { readonly electricity: number | null; readonly cooling: number | null; readonly cop: number | null; readonly cost: number | null };
-  }>;
+  }> | { readonly status: 'empty' };
   readonly alarms: Loaded<{ readonly active: number; readonly complete: boolean }>;
 }
 
@@ -80,7 +81,8 @@ function presentRecommendation(input: OverviewInputs['recommendation']) {
 }
 
 function presentEnergy(input: OverviewInputs['energy']) {
-  if (input.status === 'error') return { state: 'error' as const, metrics: [] as Metric[] };
+  if (input.status === 'error') return { state: 'error' as const, metrics: [] as Metric[], note: '今天的用能暂时读不到，下拉刷新再试。' };
+  if (input.status === 'empty') return { state: 'empty' as const, metrics: [] as Metric[], note: '这个站点今天和昨天都没有用电读数。' };
   const { today, change } = input;
   const metrics: Metric[] = [
     { label: '空调用电', value: grouped(today.electricityKWh, 1), unit: today.electricityKWh === null ? '' : 'kWh', badge: changeBadge(change.electricity, 'less-is-better') },
@@ -89,7 +91,7 @@ function presentEnergy(input: OverviewInputs['energy']) {
     { label: '供冷量', value: grouped(today.coolingKWh, 1), unit: today.coolingKWh === null ? '' : 'kWh', badge: changeBadge(change.cooling, 'neutral') },
     { label: '综合能效', value: grouped(today.cop, 2), unit: '', badge: changeBadge(change.cop, 'more-is-better') },
   ];
-  return { state: 'ok' as const, metrics };
+  return { state: 'ok' as const, metrics, note: '' };
 }
 
 export function presentOverview(inputs: OverviewInputs) {

@@ -117,9 +117,24 @@ page {
   border-top: 0;
 }
 
+/* WeChat's button keeps a 184px width, padding and a hairline ::after border unless reset. */
+button.button-primary,
+button.button-outline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100% !important;
+  margin: 0;
+  padding: 0;
+}
+
+button.button-primary::after,
+button.button-outline::after {
+  border: none;
+}
+
 .button-primary {
   height: 48px;
-  line-height: 48px;
   border-radius: 8px;
   background: var(--primary);
   color: #ffffff;
@@ -135,7 +150,7 @@ page {
 
 .button-outline {
   height: 48px;
-  line-height: 46px;
+  box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--card);

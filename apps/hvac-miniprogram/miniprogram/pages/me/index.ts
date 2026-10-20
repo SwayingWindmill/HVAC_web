@@ -25,6 +25,10 @@ Page({
     });
   },
 
+  openSites() {
+    wx.navigateTo({ url: '/pages/sites/index' });
+  },
+
   async signOut() {
     if (this.data.signingOut) return;
     this.setData({ signingOut: true });

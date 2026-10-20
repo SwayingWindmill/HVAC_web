@@ -36,13 +36,17 @@ async function loadEnergy(site: Site, start: string, now: Date): Promise<Overvie
   return { status: 'ok', today, change: compareWithYesterday(today, summarize(yesterdayElectricity, yesterdayCooling)) };
 }
 
-async function loadSavings(site: Site, start: string): Promise<OverviewInputs['savings']> {
-  const month = monthToDate(start);
-  const [summary, measures] = await Promise.all([
-    gateway.get<{ totals: SavingsTotals }>(`/api/v1/sites/${site.id}/savings/summary?from=${month.from}&to=${month.to}`),
+const NOTHING_SAVED: SavingsTotals = { days: 0, avoidedKWh: 0, avoidedCost: 0, plantKWh: 0 };
+
+/** This month's savings; without a Site day to date the month, the measures alone say why there is none. */
+async function loadSavings(site: Site, start: string | null): Promise<OverviewInputs['savings']> {
+  const month = start === null ? null : monthToDate(start);
+  const [totals, measures] = await Promise.all([
+    month === null ? NOTHING_SAVED
+      : gateway.get<{ totals: SavingsTotals }>(`/api/v1/sites/${site.id}/savings/summary?from=${month.from}&to=${month.to}`).then((summary) => summary.totals),
     gateway.get<{ items: Measure[] }>(`/api/v1/sites/${site.id}/savings/measures`),
   ]);
-  return { status: 'ok', card: savingsCard(summary.totals, measures.items) };
+  return { status: 'ok', card: savingsCard(totals, measures.items) };
 }
 
 async function loadRecommendation(site: Site): Promise<OverviewInputs['recommendation']> {
@@ -55,7 +59,7 @@ async function loadRecommendation(site: Site): Promise<OverviewInputs['recommend
   }
 }
 
-const settled = <T>(result: PromiseSettledResult<T> | null, failed: T): T => (result?.status === 'fulfilled' ? result.value : failed);
+const settled = <T>(result: PromiseSettledResult<T>, failed: T): T => (result.status === 'fulfilled' ? result.value : failed);
 
 async function load(site: Site): Promise<OverviewInputs> {
   const now = new Date();
@@ -65,8 +69,12 @@ async function load(site: Site): Promise<OverviewInputs> {
     gateway.get<{ data: unknown[]; meta: { hasMore: boolean } }>(`/api/v1/alarms?siteId=${site.id}&condition=ACTIVE&limit=100`),
   ]);
   // Where today began at the Site, as the Energy owner cut the day; it dates today and this month.
+  // No electricity reading in the last two days leaves no day to compare.
   const start = days.status === 'fulfilled' ? todayStart(days.value, now) : null;
-  const [energy, savings] = start === null ? [null, null] : await Promise.allSettled([loadEnergy(site, start, now), loadSavings(site, start)]);
+  const [energy, savings] = await Promise.allSettled([
+    start === null ? Promise.resolve<OverviewInputs['energy']>(days.status === 'fulfilled' ? { status: 'empty' } : { status: 'error' }) : loadEnergy(site, start, now),
+    loadSavings(site, start),
+  ]);
   return {
     savings: settled<OverviewInputs['savings']>(savings, { status: 'error' }),
     recommendation: settled<OverviewInputs['recommendation']>(recommendation, { status: 'error' }),
@@ -98,6 +106,10 @@ Page({
   onHide: stopRefreshing,
 
   onUnload: stopRefreshing,
+
+  openSites() {
+    wx.navigateTo({ url: '/pages/sites/index' });
+  },
 
   async onPullDownRefresh() {
     await this.refresh();

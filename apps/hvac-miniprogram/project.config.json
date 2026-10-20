@@ -6,7 +6,9 @@
   "miniprogramRoot": "miniprogram/",
   "srcMiniprogramRoot": "miniprogram/",
   "setting": {
-    "useCompilerPlugins": ["typescript"],
+    "useCompilerPlugins": [
+      "typescript"
+    ],
     "urlCheck": true,
     "es6": true,
     "enhance": true,
@@ -15,7 +17,21 @@
     "minifyWXML": true,
     "minifyWXSS": true,
     "ignoreUploadUnusedFiles": true,
-    "uploadWithSourceMap": true
+    "uploadWithSourceMap": true,
+    "compileWorklet": false,
+    "uglifyFileName": false,
+    "packNpmManually": false,
+    "packNpmRelationList": [],
+    "localPlugins": false,
+    "disableUseStrict": false,
+    "condition": false,
+    "swc": false,
+    "disableSWC": true,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
   },
   "packOptions": {
     "ignore": [],
@@ -25,5 +41,6 @@
   "editorSetting": {
     "tabIndent": "insertSpaces",
     "tabSize": 2
-  }
+  },
+  "simulatorPluginLibVersion": {}
 }

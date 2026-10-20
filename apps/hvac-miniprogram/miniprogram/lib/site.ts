@@ -11,8 +11,14 @@ export interface Site {
 
 const SITE_KEY = 'hvac.site';
 
+export const listSites = () => gateway.get<{ items: Site[] }>('/api/v1/sites?limit=50').then((page) => page.items);
+
+export const rememberedSiteId = () => (wx.getStorageSync(SITE_KEY) as string) || null;
+
+export const rememberSite = (siteId: string) => wx.setStorageSync(SITE_KEY, siteId);
+
 export async function currentSite(): Promise<Site | null> {
-  const page = await gateway.get<{ items: Site[] }>('/api/v1/sites?limit=50');
-  const remembered = wx.getStorageSync(SITE_KEY) as string;
-  return page.items.find((site) => site.id === remembered) ?? page.items[0] ?? null;
+  const sites = await listSites();
+  const remembered = rememberedSiteId();
+  return sites.find((site) => site.id === remembered) ?? sites[0] ?? null;
 }

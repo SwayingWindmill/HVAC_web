@@ -51,3 +51,13 @@ test('missing data says so: no tariff hides the cost, no measure says what to do
   assert.equal(view.alarms, '100+');
   assert.equal(presentOverview({ savings: { status: 'error' }, recommendation: { status: 'error' }, energy: { status: 'error' }, alarms: { status: 'error' } }).energy.state, 'error');
 });
+
+test('a Site with no electricity readings says so, instead of reporting a failure', () => {
+  const view = presentOverview({
+    savings: { status: 'ok', card: { saved: null, why: 'NO_MEASURE', measures: [] } },
+    recommendation: { status: 'ok', latest: null },
+    energy: { status: 'empty' },
+    alarms: { status: 'ok', active: 0, complete: true },
+  });
+  assert.deepEqual(view.energy, { state: 'empty', metrics: [], note: '这个站点今天和昨天都没有用电读数。' });
+});
