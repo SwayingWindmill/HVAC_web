@@ -155,20 +155,22 @@ func TestUplinkKeepsConsumingAfterAnAckFailsOnADroppedConnection(t *testing.T) {
 }
 
 // While the database is down a Gateway's queue fills and receiving pauses. A broker
-// restart in that state must still end in a new connection; the broker redelivers what
-// was never acknowledged.
+// restart in that state must still end in a new connection, and readiness must show the
+// connection was lost; the broker redelivers what was never acknowledged.
 func TestUplinkReconnectsWhileAGatewayQueueIsFull(t *testing.T) {
 	broker := newFakeBroker(t)
 	telemetry := &fakeTelemetry{release: make(chan struct{})}
 	runtime := startBrokerRuntime(t, broker, telemetry, 1)
 
 	first := broker.awaitConnection(t)
+	awaitReady(t, runtime, true)
 	first.deliver(t, 1, 1, false)
 	awaitQueued(t, runtime, testGatewayA, 0)
 	first.deliver(t, 2, 2, false)
 	awaitQueued(t, runtime, testGatewayA, 1)
 	first.deliver(t, 3, 3, false)
 	first.drop()
+	awaitReady(t, runtime, false)
 
 	second := broker.awaitConnection(t)
 	close(telemetry.release)
@@ -182,7 +184,8 @@ func startBrokerRuntime(t *testing.T, broker *fakeBroker, telemetry RuntimeClien
 	t.Helper()
 	runtime := newTestRuntime(t, telemetry, capacity)
 	runtime.config.MQTT = broker.mqtt
-	runtime.reconnectBackoff = func(int) time.Duration { return 10 * time.Millisecond }
+	// Long enough that a lost connection is observable before the next one is up.
+	runtime.reconnectBackoff = func(int) time.Duration { return 200 * time.Millisecond }
 	ctx, cancel := context.WithCancel(t.Context())
 	stopped := make(chan error, 1)
 	go func() { stopped <- runtime.Run(ctx) }()
@@ -195,6 +198,18 @@ func startBrokerRuntime(t *testing.T, broker *fakeBroker, telemetry RuntimeClien
 		}
 	})
 	return runtime
+}
+
+func awaitReady(t *testing.T, runtime *Runtime, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(150 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if runtime.Ready() == want {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("Ready()=%v, want %v", runtime.Ready(), want)
 }
 
 // awaitQueued waits until the Gateway's worker has taken a message and depth messages wait behind it.

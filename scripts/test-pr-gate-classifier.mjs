@@ -56,6 +56,7 @@ test('telemetry changes select telemetry unit and durable integration profiles',
 test('domain module changes stay scoped to product domains', () => {
   for (const [file, unitProfile, integrationProfile] of [
     ['modules/connectivity/internal/adapter/runtime.go', 'telemetry', 'telemetry'],
+    ['cmd/connectivity/main.go', 'telemetry', 'telemetry'],
     ['modules/alarm/pkg/alarmservice/http.go', 'alarm', 'alarm'],
     ['modules/workorder/pkg/workorderservice/http.go', 'workorder', 'workorder'],
   ]) {

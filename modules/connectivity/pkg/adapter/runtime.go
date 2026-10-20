@@ -104,10 +104,10 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		ConnectTimeout:                mqttConnectTimeout,
 		ReconnectBackoff:              runtime.reconnectBackoff,
 		AttemptConnection: func(attemptContext context.Context, _ autopaho.ClientConfig, server *url.URL) (net.Conn, error) {
-			return runtime.dial(attemptContext, tlsConfig, server, func() { runtime.connectionLost(ctx) })
+			return runtime.dial(attemptContext, tlsConfig, server)
 		},
 		OnConnectError: func(connectErr error) {
-			runtime.recordConnectionState(false, false, connectErr)
+			runtime.recordConnectionState(nil, false, false, connectErr)
 			_ = runtime.metrics.AddCounter("hvac_mqtt_connections_total", "MQTT connection attempts by outcome.", map[string]string{"outcome": "failed"}, 1)
 			runtime.logger.Warn("mqtt_uplink_connect_failed", "error", connectErr.Error())
 		},
@@ -125,9 +125,10 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		},
 	}
 	clientConfig.OnConnectionUp = func(manager *autopaho.ConnectionManager, _ *paho.Connack) {
-		runtime.recordConnectionState(true, false, nil)
+		connection := runtime.currentConnectionClosed()
+		runtime.recordConnectionState(connection, true, false, nil)
 		_ = runtime.metrics.AddCounter("hvac_mqtt_connections_total", "MQTT connection attempts by outcome.", map[string]string{"outcome": "success"}, 1)
-		go runtime.subscribe(ctx, manager)
+		go runtime.subscribe(ctx, manager, connection)
 	}
 	manager, err := autopaho.NewConnection(ctx, clientConfig)
 	if err != nil {
@@ -149,7 +150,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	return nil
 }
 
-func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.ConnectionManager) {
+func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.ConnectionManager, connection <-chan struct{}) {
 	subscribeContext, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	subscriptions := make([]paho.SubscribeOptions, 0, len(UplinkTopicFilters))
@@ -157,12 +158,12 @@ func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.Connect
 		subscriptions = append(subscriptions, paho.SubscribeOptions{Topic: topic, QoS: 1})
 	}
 	if _, err := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: subscriptions}); err != nil {
-		runtime.recordConnectionState(true, false, err)
+		runtime.recordConnectionState(connection, true, false, err)
 		_ = runtime.metrics.AddCounter("hvac_mqtt_subscriptions_total", "MQTT subscription attempts by outcome.", map[string]string{"outcome": "failed"}, 1)
 		runtime.logger.Warn("mqtt_uplink_subscribe_failed", "error", err.Error())
 		return
 	}
-	runtime.recordConnectionState(true, true, nil)
+	runtime.recordConnectionState(connection, true, true, nil)
 	_ = runtime.metrics.AddCounter("hvac_mqtt_subscriptions_total", "MQTT subscription attempts by outcome.", map[string]string{"outcome": "success"}, 1)
 	runtime.logger.Info("mqtt_uplink_subscribed", "topic_filters", UplinkTopicFilters)
 }
@@ -170,7 +171,7 @@ func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.Connect
 // dial opens the TLS connection to the broker. Closing it is the first step of paho
 // tearing a connection down, before paho waits for the publish handler to return, so
 // the close is what releases a handler waiting on a full Gateway queue.
-func (runtime *Runtime) dial(ctx context.Context, tlsConfig *tls.Config, server *url.URL, onClose func()) (net.Conn, error) {
+func (runtime *Runtime) dial(ctx context.Context, tlsConfig *tls.Config, server *url.URL) (net.Conn, error) {
 	dialContext, cancel := context.WithTimeout(ctx, mqttConnectTimeout)
 	defer cancel()
 	conn, err := (&tls.Dialer{Config: tlsConfig}).DialContext(dialContext, "tcp", server.Host)
@@ -181,7 +182,7 @@ func (runtime *Runtime) dial(ctx context.Context, tlsConfig *tls.Config, server 
 	runtime.connMu.Lock()
 	runtime.connClosed = closed
 	runtime.connMu.Unlock()
-	return packets.NewThreadSafeConn(&brokerConnection{Conn: conn, closed: closed, onClose: onClose}), nil
+	return packets.NewThreadSafeConn(&brokerConnection{Conn: conn, closed: closed, onClose: func() { runtime.connectionLost(ctx) }}), nil
 }
 
 // brokerConnection closes closed and reports the loss the first time the connection closes.
@@ -216,7 +217,7 @@ func (runtime *Runtime) connectionLost(ctx context.Context) {
 	if ctx.Err() != nil || !wasConnected {
 		return
 	}
-	runtime.recordConnectionState(false, false, errors.New("MQTT connection lost"))
+	runtime.recordConnectionState(nil, false, false, errors.New("MQTT connection lost"))
 	_ = runtime.metrics.AddCounter("hvac_mqtt_disconnections_total", "MQTT connection-down events.", map[string]string{"reason_family": "transport"}, 1)
 	runtime.logger.Warn("mqtt_uplink_connection_lost")
 }
@@ -282,9 +283,7 @@ func (runtime *Runtime) processPublish(ctx context.Context, gatewayID string, it
 		cancel()
 		switch {
 		case err == nil:
-			if !runtime.ack(gatewayID, item) {
-				return true
-			}
+			runtime.ack(gatewayID, result.MessageID, item)
 			runtime.recordProcessingSuccess()
 			runtime.recordProcessingResult(result, time.Since(started))
 			runtime.logger.Info("mqtt_uplink_message_processed", "gateway_id", gatewayID, "message_id", result.MessageID, "message_type", result.MessageType,
@@ -292,9 +291,7 @@ func (runtime *Runtime) processPublish(ctx context.Context, gatewayID string, it
 				"quarantined", result.Quarantined, "rejected", result.Rejected)
 			return true
 		case isPermanentMessageError(err):
-			if !runtime.ack(gatewayID, item) {
-				return true
-			}
+			runtime.ack(gatewayID, result.MessageID, item)
 			_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT uplink messages by processing outcome.", map[string]string{"outcome": "quarantined"}, 1)
 			runtime.logger.Warn("mqtt_uplink_message_quarantined", "gateway_id", gatewayID, "topic", item.packet.Topic, "error", err.Error())
 			return true
@@ -314,17 +311,14 @@ func (runtime *Runtime) processPublish(ctx context.Context, gatewayID string, it
 }
 
 // ack acknowledges a handled message on the connection that delivered it. When that
-// connection has already dropped the ack fails; the broker redelivers the message on the
-// next connection, so the worker moves on instead of stopping.
-func (runtime *Runtime) ack(gatewayID string, item queuedPublish) bool {
-	err := item.ack(item.packet)
-	if err == nil {
-		return true
+// connection has already dropped the ack fails and the broker redelivers the message on
+// the next connection, where it is handled again as a duplicate. That is expected after a
+// disconnect, so it is logged and counted but does not make Connectivity unready.
+func (runtime *Runtime) ack(gatewayID, messageID string, item queuedPublish) {
+	if err := item.ack(item.packet); err != nil {
+		_ = runtime.metrics.AddCounter("hvac_mqtt_ack_failures_total", "MQTT uplink acknowledgements that failed and leave the message to broker redelivery.", nil, 1)
+		runtime.logger.Warn("mqtt_uplink_ack_failed", "gateway_id", gatewayID, "message_id", messageID, "error", err.Error())
 	}
-	runtime.recordProcessingFailure(err)
-	_ = runtime.metrics.AddCounter("hvac_mqtt_ack_failures_total", "MQTT uplink acknowledgements that failed and leave the message to broker redelivery.", nil, 1)
-	runtime.logger.Warn("mqtt_uplink_ack_failed", "gateway_id", gatewayID, "topic", item.packet.Topic, "error", err.Error())
-	return false
 }
 
 func mqttRetryDelay(attempt int) time.Duration {
@@ -345,8 +339,17 @@ func (runtime *Runtime) recordQueueDepth(gatewayID string, depth int) {
 	_ = runtime.metrics.SetGauge("hvac_mqtt_gateway_queue_depth", "Messages waiting in a Gateway's uplink queue.", map[string]string{"gateway_id": gatewayID}, float64(depth))
 }
 
-func (runtime *Runtime) recordConnectionState(connected, subscribed bool, err error) {
+// recordConnectionState records the MQTT connection state. An update about a connection
+// that has already closed is ignored, so a subscription finishing late cannot mark a lost
+// connection ready again; nil applies the update unconditionally.
+func (runtime *Runtime) recordConnectionState(connection <-chan struct{}, connected, subscribed bool, err error) {
 	runtime.mu.Lock()
+	select {
+	case <-connection:
+		runtime.mu.Unlock()
+		return
+	default:
+	}
 	runtime.connected = connected
 	runtime.subscribed = subscribed
 	if err != nil {
