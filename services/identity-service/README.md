@@ -13,6 +13,7 @@
 - 密码规则（规格 `docs/specs/iam-roles-and-users.md`，按 NIST SP 800-63B-4，最短 8 位）：8 个字符到 512 字节，不要求字符组合，不强制定期更换，不能和用户名相同，也不能是 `internal/identity/common-passwords.txt` 里的常见密码（SecLists 2024.4，MIT 许可）。
 - 自己不出任何页面：`/authorize` 和每一种登录结果都跳到网页的 `/sign-in?login_challenge=…`（带 `step=totp` 或错误代码），网页的表单把密码或一次性验证码直接提交回 `/identity/login` 和 `/identity/mfa/totp`。挑战编号必须和 `__Host-hvac_idp_login` cookie 一致（`docs/specs/sign-in-page.md`）。
 - 需要更高安全等级的登录可以要求一次性验证码（TOTP）；开通验证码只能离线用 `cmd/identity-admin` 做（`totp-start`、`totp-activate`、`totp-disable`）。
+- 微信小程序登录（#664）：小程序跟不了浏览器的跳转、也存不住 cookie，由平台网关在内网替它调 `/app/login` 和 `/app/mfa/totp`。密码规则、锁定、停用和验证码都和 `/login`、`/mfa/totp` 一样；只给平台自己的客户端和回调地址、带 PKCE 的请求发授权码，所以授权码只有网关能换。nginx 不对外转发 `/identity/app/`。
 - 用户管理用 `pkg/identityadmin`：平台网关把它嵌在进程里，以 `identity_admin` 连接数据库，管理员在「系统管理 → 用户与角色」里新建账号、设密码、改姓名和邮箱、停用或启用登录；每个人都能改自己的密码。权限仍然归 IAM。没有公开的注册接口；`cmd/identity-admin` 留给第一个管理员和找回账号用。
 
 故意不做：刷新令牌、第三方登录、通行密钥（Passkey）、邮件或短信登录、自助找回密码、SAML、企业身份联合、租户和站点权限。产品真需要时再加。

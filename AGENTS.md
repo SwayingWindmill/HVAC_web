@@ -13,6 +13,7 @@
 ## 仓库结构
 
 - `apps/hvac-web/`：唯一的网页
+- `apps/hvac-miniprogram/`：值班人员用的微信小程序（原生小程序 + TypeScript，见它的 README）
 - `cmd/`：可执行进程。`energy-api` 是平台网关，`telemetry-worker` 接收读数、实时推送、写历史、把电表读数算成用电量
 - `modules/`：各业务领域的代码和数据表，每类业务数据只由一个模块（它的负责方）修改；`services/`：单独部署的服务；`libs/`：共享库
 - `contracts/`：接口定义和「哪类数据归哪个模块」的登记；`infra/`：数据库迁移；`deploy/platform/phase1/`：Compose、迁移清单、镜像
