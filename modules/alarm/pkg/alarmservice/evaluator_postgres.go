@@ -90,7 +90,7 @@ func (store *PostgresStore) EvaluateAssignedSnapshot(ctx context.Context, assign
 	if err := store.applyEvaluationEffect(ctx, tx, snapshot.TenantID, snapshot.SiteID, &decision); err != nil {
 		return EvaluationDecision{}, err
 	}
-	if err := persistEvaluation(ctx, tx, assigned, decision, snapshot, previous.Version); err != nil {
+	if err := persistEvaluation(ctx, tx, assigned, decision, snapshot, persisted); err != nil {
 		return EvaluationDecision{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -183,7 +183,7 @@ func (store *PostgresStore) EvaluateClaim(ctx context.Context, claim EvaluationC
 	if err := store.applyEvaluationEffect(ctx, tx, claim.TenantID, claim.SiteID, &decision); err != nil {
 		return EvaluationDecision{}, err
 	}
-	if err := persistEvaluation(ctx, tx, assigned, decision, persisted.Snapshot, persisted.State.Version); err != nil {
+	if err := persistEvaluation(ctx, tx, assigned, decision, persisted.Snapshot, persisted); err != nil {
 		return EvaluationDecision{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -423,7 +423,8 @@ func loadPersistedEvaluation(ctx context.Context, tx pgx.Tx, tenantID, siteID, a
 	return result, true, nil
 }
 
-func persistEvaluation(ctx context.Context, tx pgx.Tx, assigned assignedAlarmPolicy, decision EvaluationDecision, snapshot EvaluationSnapshot, previousVersion uint64) error {
+func persistEvaluation(ctx context.Context, tx pgx.Tx, assigned assignedAlarmPolicy, decision EvaluationDecision, snapshot EvaluationSnapshot, previous persistedEvaluation) error {
+	previousVersion := previous.State.Version
 	snapshotJSON, err := json.Marshal(snapshot)
 	if err != nil {
 		return fmt.Errorf("encode Alarm evaluation snapshot: %w", err)
@@ -481,6 +482,9 @@ func persistEvaluation(ctx context.Context, tx pgx.Tx, assigned assignedAlarmPol
 			return ErrEvaluationClaimLost
 		}
 	}
+	if !evaluationOutcomeChanged(previous, assigned, decision) {
+		return nil
+	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO alarm_runtime.alarm_evaluation_event (
 			tenant_id, site_id, assignment_id, state_version, assignment_revision, policy_revision_id, input_revision,
@@ -493,6 +497,17 @@ func persistEvaluation(ctx context.Context, tx pgx.Tx, assigned assignedAlarmPol
 		return fmt.Errorf("append Alarm evaluation evidence: %w", err)
 	}
 	return nil
+}
+
+// The evidence log keeps one row per outcome change, not one per reading: a Site rule sees every
+// reading of the Site, and an unchanged outcome is already held by alarm_evaluation_state (#651).
+func evaluationOutcomeChanged(previous persistedEvaluation, assigned assignedAlarmPolicy, decision EvaluationDecision) bool {
+	return previous.State.Version == 0 ||
+		decision.Effect != EvaluationEffectNone ||
+		decision.State.Status != previous.State.Status ||
+		decision.State.QualityBlocker != previous.State.QualityBlocker ||
+		decision.State.PolicyRevisionID != previous.State.PolicyRevisionID ||
+		assigned.AssignmentRevision != previous.AssignmentRevision
 }
 
 func decodeAlarmPolicy(body []byte) (AlarmPolicyRevision, error) {

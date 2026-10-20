@@ -155,6 +155,12 @@ try {
   };
   run(process.execPath, ['scripts/run-go.mjs', 'test', '-count=1', './modules/alarm/...'], { env: testEnvironment, stdio: 'inherit' });
   report.assertions.goIntegrationTests = true;
+  const freshEvidenceDeleteDenied = psql(`
+    SET ROLE s4_alarm_migrator;
+    DELETE FROM alarm_runtime.alarm_evaluation_event;
+  `, { expectFailure: true }).toLowerCase();
+  if (!freshEvidenceDeleteDenied.includes('immutable for 30 days')) throw new Error(`Alarm evaluation evidence inside 30 days was deletable: ${freshEvidenceDeleteDenied}`);
+  report.assertions.evaluationEvidenceRetention = true;
   expectEqual(psql("SELECT condition || '|' || version::text || '|' || (acknowledged_at IS NOT NULL)::text || '|' || coalesce(assignee_id, '') || '|' || coalesce(suppression::text, '') || '|' || current_severity || '|' || peak_severity FROM alarm_runtime.alarm_current WHERE alarm_id = '01910000-1000-7000-8000-000000000001'"), 'ACTIVE|5|true|principal:postgres-operator-2||MAJOR|MAJOR', 'durable orthogonal projection');
   expectEqual(psql("SELECT count(*)::text FROM alarm_runtime.alarm_timeline WHERE alarm_id = '01910000-1000-7000-8000-000000000001'"), '5', 'durable immutable timeline');
   expectEqual(psql("SELECT count(*)::text FROM alarm_runtime.alarm_idempotency WHERE tenant_id = '0190f000-0000-7000-8000-000000000001'"), '5', 'durable idempotency record');
