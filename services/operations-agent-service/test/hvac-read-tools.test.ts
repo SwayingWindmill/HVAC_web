@@ -507,6 +507,10 @@ test('energy_by_equipment splits the Site total by sub-metered device, named fro
   // Points read in the Site's own calendar (America/Phoenix is UTC−7), so hours are not mistaken for UTC.
   assert.deepEqual(result.devices[0].points[0], { siteTime: '2026-10-16 03:00', energyKWh: 300 });
   assert.equal(result.dataStatus, '完整');
+  // A card charts the machines as a ranked bar list (#640).
+  assert.deepEqual(byName(harness.tools, 'energy_by_equipment').chart(result), {
+    kind: 'HORIZONTAL_BAR', title: '10月15日各设备用电', unit: 'kWh', categories: ['C 机组电表'], series: [{ name: '用电', values: [879] }],
+  });
 });
 
 test('energy tools read cooling energy when asked and say which energy they read', async () => {
@@ -530,6 +534,10 @@ test('energy tools read cooling energy when asked and say which energy they read
   assert.equal(series.query.energy, '供冷');
   assert.equal(comparison.current.query.energy, '供冷');
   assert.equal(electricity.query.energy, '用电');
+  // A card charts the two periods side by side (#640).
+  assert.deepEqual(byName(harness.tools, 'energy_compare_periods').chart(comparison), {
+    kind: 'BAR', title: '两段时间的供冷', unit: 'kWh', categories: ['10月8日', '10月15日'], series: [{ name: '供冷', values: [7217, 7217] }],
+  });
 });
 
 test('telemetry_query_history aggregates one device readings over time in the Site calendar', async () => {
@@ -539,7 +547,7 @@ test('telemetry_query_history aggregates one device readings over time in the Si
   const to = '2026-10-17T07:00:00.000Z';
 
   const result = await execute(byName(harness.tools, 'telemetry_query_history'), {
-    deviceId: chillerDeviceId,
+    deviceId: meterDeviceId,
     pointKeys: ['chw_supply_temp', 'active_energy_total'],
     startDate: '2026-10-16',
     endDate: '2026-10-16',
@@ -548,7 +556,7 @@ test('telemetry_query_history aggregates one device readings over time in the Si
   assert.deepEqual(harness.historyInputs[0].request.input, {
     tenantId,
     siteId,
-    deviceId: chillerDeviceId,
+    deviceId: meterDeviceId,
     keys: ['chw_supply_temp', 'active_energy_total'],
     from,
     to,
@@ -558,10 +566,19 @@ test('telemetry_query_history aggregates one device readings over time in the Si
   });
   assert.deepEqual(result.series, [
     { key: 'chw_supply_temp', unit: '°C', kind: '读数', points: [{ siteTime: '2026-10-16 03:00', average: 7.2, minimum: 6.9, maximum: 7.6, coverage: 1 }] },
-    { key: 'active_energy_total', unit: 'kWh', kind: '累计量', points: [{ siteTime: '2026-10-16 03:00', increase: 88.5, coverage: 0.5 }] },
+    // Named as the device's points are; a key the asset model does not list goes without a name.
+    { key: 'active_energy_total', name: '累计电量', unit: 'kWh', kind: '累计量', points: [{ siteTime: '2026-10-16 03:00', increase: 88.5, coverage: 0.5 }] },
   ]);
   // The history owner rated it UNCERTAIN: one bucket is only half covered.
   assert.equal(result.dataStatus, '不完整');
+  // A card charts the readings that share the first one's unit as a line (#640).
+  assert.deepEqual(byName(harness.tools, 'telemetry_query_history').chart(result), {
+    kind: 'LINE', title: '10月16日每小时读数', unit: '°C', categories: ['03:00'], series: [{ name: '读数', values: [7.2] }],
+  });
+  const energy = await execute(byName(harness.tools, 'telemetry_query_history'), { deviceId: meterDeviceId, pointKeys: ['active_energy_total'], startDate: '2026-10-16', endDate: '2026-10-16' });
+  assert.deepEqual(byName(harness.tools, 'telemetry_query_history').chart(energy), {
+    kind: 'LINE', title: '10月16日每小时累计电量', unit: 'kWh', categories: ['03:00'], series: [{ name: '累计电量', values: [88.5] }],
+  });
 });
 
 test('telemetry_query_history refuses a range that would return more buckets than one result holds, before reading', async () => {
@@ -711,6 +728,10 @@ test('a semantic query names machines and grouping values the way the pages do',
     { siteTime: '2026-10-15 00:00', 设备: '未登记的设备', 能源类型: '用电', 能耗: 2 },
   ]);
   assert.equal(result.dataStatus, '完整');
+  // One period grouped by device charts the devices; a grouping with one value is not a grouping (#640).
+  assert.deepEqual(byName(harness.tools, 'energy_semantic_query').chart(result), {
+    kind: 'HORIZONTAL_BAR', title: '10月15日各设备的能耗', unit: 'kWh', categories: ['C 机组电表', '未登记的设备'], series: [{ name: '能耗', values: [879, 2] }],
+  });
 });
 
 test('Tariff periods read as the pages show them, energy no Tariff covers as unpriced', async () => {
@@ -730,6 +751,8 @@ test('Tariff periods read as the pages show them, energy no Tariff covers as unp
     measures: ['site_energy_cost.cost_valid_cny'], dimensions: ['site_energy_cost.tariff_period'], granularity: 'day', startDate: '2026-10-15', endDate: '2026-10-15',
   });
   assert.deepEqual(result.rows.map((row) => row['电价时段']), ['尖峰', '谷', '未计价']);
+  // Only energy is charted (#640).
+  assert.equal(byName(harness.tools, 'energy_semantic_query').chart(result), null);
 });
 
 test('one semantic query reads the Site\'s energy and its estimated cost together, one row per period', async () => {
@@ -762,6 +785,10 @@ test('one semantic query reads the Site\'s energy and its estimated cost togethe
   ]);
   // Both views stop early; the answer reaches only as far as the one that stops first.
   assert.equal(result.dataStatus, '不完整：数据截至 2026-10-16 02:00');
+  // Periods chart the measures that share the first one's unit (#640).
+  assert.deepEqual(byName(harness.tools, 'energy_semantic_query').chart(result), {
+    kind: 'BAR', title: '10月15日–10月17日每天用电量', unit: 'kWh', categories: ['10/15', '10/16', '10/17'], series: [{ name: '用电量', values: [1634, 1499, null] }],
+  });
 });
 
 test('a semantic query that groups or mixes other views across views is refused before reading, saying what works', async () => {
@@ -941,4 +968,47 @@ test('work_order_list reads the Site’s unfinished work orders in the 工单 pa
     () => execute(byName(none.tools, 'work_order_list'), { status: 'closed' }),
     (error) => error instanceof AgentToolError && error.code === 'TOOL_ARGUMENTS_INVALID',
   );
+});
+
+// #640: a card may show a chart of one read; the read's own Tool draws it from what the model read.
+test('energy_query_series draws hours as a line and days as bars, and nothing without points', async () => {
+  const hour = (start, end, energyKWh) => ({ periodStart: start, periodEnd: end, energyKWh });
+  const seriesHarness = (points, granularity) => createHarness({
+    energyFor: async (input) => ownerResult(input.request, 'telemetry-query-service', 'energy-chart-1', 'GOOD', 'telemetry-query-service:energy-series/v1', {
+      ...energyPayload({ from: points[0]?.periodStart ?? '2026-08-01T07:00:00.000Z', to: points.at(-1)?.periodEnd ?? '2026-08-01T08:00:00.000Z' }),
+      points,
+      metadata: { ...energyPayload({ from: '2026-08-01T07:00:00.000Z', to: '2026-08-03T07:00:00.000Z' }).metadata, requestedGranularity: granularity, actualGranularity: granularity },
+    }),
+  });
+
+  // 07:00 UTC is midnight in America/Phoenix.
+  const hourly = seriesHarness([hour('2026-08-01T07:00:00.000Z', '2026-08-01T08:00:00.000Z', 12), hour('2026-08-01T08:00:00.000Z', '2026-08-01T09:00:00.000Z', 15.5)], 'hour');
+  const hours = byName(hourly.tools, 'energy_query_series');
+  const hoursRead = await execute(hours, { startDate: '2026-08-01', endDate: '2026-08-01', granularity: 'hour', qualityPolicy: 'VALID_ONLY' });
+  assert.deepEqual(hours.chart(hoursRead), {
+    kind: 'LINE', title: '8月1日每小时用电', unit: 'kWh', categories: ['00:00', '01:00'], series: [{ name: '用电', values: [12, 15.5] }],
+  });
+
+  const daily = seriesHarness([hour('2026-08-01T07:00:00.000Z', '2026-08-02T07:00:00.000Z', 300), hour('2026-08-02T07:00:00.000Z', '2026-08-03T07:00:00.000Z', 280.25)], 'day');
+  const days = byName(daily.tools, 'energy_query_series');
+  const daysRead = await execute(days, { energyType: 'cooling', startDate: '2026-08-01', endDate: '2026-08-02', granularity: 'day', qualityPolicy: 'VALID_ONLY' });
+  assert.deepEqual(days.chart(daysRead), {
+    kind: 'BAR', title: '8月1日–8月2日每天供冷', unit: 'kWh', categories: ['8/1', '8/2'], series: [{ name: '供冷', values: [300, 280.25] }],
+  });
+
+  const empty = seriesHarness([], 'hour');
+  const nothing = byName(empty.tools, 'energy_query_series');
+  assert.equal(nothing.chart(await execute(nothing, { startDate: '2026-08-01', endDate: '2026-08-01', granularity: 'hour', qualityPolicy: 'VALID_ONLY' })), null);
+});
+
+// #640: a comparison the Tool would not make is not charted either.
+test('energy_compare_periods draws no chart when it could not compare the periods', async () => {
+  const harness = createHarness({
+    energyFor: async (input) => ownerResult(input.request, 'telemetry-query-service', 'compare-partial', 'UNCERTAIN', 'telemetry-query-service:energy-series/v1',
+      energyPayload({ from: input.request.input.from, to: input.request.input.to, partial: true })),
+  });
+  const tool = byName(harness.tools, 'energy_compare_periods');
+  const comparison = await execute(tool, { baselineStartDate: '2026-10-08', baselineEndDate: '2026-10-08', currentStartDate: '2026-10-15', currentEndDate: '2026-10-15' });
+  assert.equal(comparison.comparison.status, '数据不完整，不能比较');
+  assert.equal(tool.chart(comparison), null);
 });

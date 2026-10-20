@@ -5,6 +5,7 @@ import {
   AgentToolError,
   INVESTIGATION_COMPLETE_TOOL_NAME,
   INVESTIGATION_REQUEST_INPUT_TOOL_NAME,
+  MAX_CHART_CATEGORIES,
   needsExecutionCorrection,
   parseInvestigationComplete,
   parseInvestigationRequestInput,
@@ -13,6 +14,7 @@ import {
   type AgentRunContext,
   type AgentTool,
   type AgentToolErrorCode,
+  type FindingChart,
 } from '../../agent/index.js';
 
 interface CreatePiToolsInput {
@@ -39,11 +41,13 @@ interface CreatePiToolsInput {
 export type TerminalRefusalReason =
   | 'TERMINAL_ALREADY_ACCEPTED'
   | 'FINDING_EVIDENCE_NOT_READ'
+  | 'FINDING_CHART_NOT_READ'
+  | 'FINDING_CHART_UNAVAILABLE'
   | 'FINDING_CORRECTION_REQUIRED'
   | 'FINDING_CONTENT_INVALID'
   | 'INPUT_REQUEST_CORRECTION_REQUIRED'
   | 'INPUT_REQUEST_INVALID'
-  | `FINDING_${'KEY_FIGURES' | 'EVIDENCE_REFS' | 'LIMITATIONS' | 'FOLLOW_UPS' | 'OUTCOME'}_${'TOO_LONG' | 'TOO_MANY' | 'MISSING' | 'INVALID'}`
+  | `FINDING_${'KEY_FIGURES' | 'EVIDENCE_REFS' | 'LIMITATIONS' | 'FOLLOW_UPS' | 'OUTCOME' | 'CHART'}_${'TOO_LONG' | 'TOO_MANY' | 'MISSING' | 'INVALID'}`
   | 'FINDING_EXTRA_FIELD'
   | 'FINDING_UNREADABLE';
 
@@ -52,7 +56,7 @@ export type TerminalRefusalReason =
 const CORRECTION_REQUIRED = '回答里说了操作过设备，但助手只能读取数据。先另写一句以「更正：」开头的话，说明没有也不能操作设备，再结束这次回答。';
 
 const SCHEMA_FIELDS: Readonly<Record<string, string>> = Object.freeze({
-  keyFigures: 'KEY_FIGURES', evidenceRefs: 'EVIDENCE_REFS', limitations: 'LIMITATIONS', recommendedNext: 'FOLLOW_UPS', outcome: 'OUTCOME',
+  keyFigures: 'KEY_FIGURES', evidenceRefs: 'EVIDENCE_REFS', limitations: 'LIMITATIONS', recommendedNext: 'FOLLOW_UPS', outcome: 'OUTCOME', chartFrom: 'CHART',
 });
 
 /**
@@ -99,10 +103,16 @@ const toolFailureCodes = new Set<AgentToolErrorCode>([
   'TOOL_EXECUTION_FAILED',
 ]);
 
+/** A successful read: the provider's call id, and the read's chart as its Tool draws it (#640). */
+interface ReadEvidence {
+  readonly toolCallId: string;
+  readonly chart: () => FindingChart | null;
+}
+
 interface ProjectToolBudgetState {
   readonly budget: AgentRunBudget;
-  /** Each successful read by the short id the model cites in a card ("E1" → the provider's call id). */
-  readonly evidenceIds: Map<string, string>;
+  /** Each successful read by the short id the model cites in a card ("E1"). */
+  readonly reads: Map<string, ReadEvidence>;
   readonly onBudgetExhausted: (code: AgentToolErrorCode) => void;
   terminalToolCallId: string | null;
   calls: number;
@@ -179,6 +189,11 @@ const investigationCompleteParameters = Type.Object({
   }, { additionalProperties: false }), { maxItems: 4 })),
   limitations: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16 }),
   recommendedNext: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 16 }),
+  chartFrom: Type.Optional(Type.String({
+    minLength: 1,
+    maxLength: 16,
+    description: '想在卡片上配一张图时，填那次读数据结果里的 evidenceId（例如 E1）：按时间的用电、几段时间对比、各台机组、设备读数的变化适合画图。图里的数和样子由那次读到的数据决定。没有合适的数据就不写。',
+  })),
 }, { additionalProperties: false });
 
 const investigationRequestInputParameters = Type.Object({
@@ -233,7 +248,7 @@ const adaptProjectTool = (
         state.onBudgetExhausted('TOOL_RESULT_TOO_LARGE');
         throw new AgentToolError('TOOL_RESULT_TOO_LARGE');
       }
-      state.evidenceIds.set(evidenceId, toolCallId);
+      state.reads.set(evidenceId, { toolCallId, chart: () => tool.chart?.(result) ?? null });
       // The model cites a read in investigation_complete by this id.
       return {
         content: [{ type: 'text', text: JSON.stringify({ evidenceId, result }) }],
@@ -280,6 +295,43 @@ const withoutEmptyUnits = (parameters: InvestigationCompleteArguments): Investig
     keyFigures: parameters.keyFigures.map(({ unit, ...figure }) => (unit === '' || unit === undefined ? figure : { ...figure, unit })),
   };
 
+/** The chart of the read a card names, drawn by that read's Tool; a read it cannot chart is refused (#640). */
+const chartOf = (
+  state: ProjectToolBudgetState,
+  chartFrom: string,
+  cited: readonly string[],
+  refuse: Refuse,
+): FindingChart => {
+  const read = state.reads.get(chartFrom);
+  if (read === undefined) {
+    return refuse('FINDING_CHART_NOT_READ', cited.length === 0
+      ? '这次还没有成功读到数据，不能配图：不写 chartFrom。'
+      : `chartFrom 只能填这次读数据结果里的 evidenceId：${cited.join('、')}。`);
+  }
+  const chart = read.chart();
+  if (chart === null) {
+    return refuse('FINDING_CHART_UNAVAILABLE', `${chartFrom} 读到的数据画不了图（只画按时间、按设备或两段对比的用电、供冷和设备读数）：换一次合适的读数据，或者不写 chartFrom。`);
+  }
+  if (chart.categories.length > MAX_CHART_CATEGORIES) {
+    return refuse('FINDING_CHART_UNAVAILABLE', `${chartFrom} 有 ${chart.categories.length} 个点，图最多画 ${MAX_CHART_CATEGORIES} 个：按天读一次再画，或者不写 chartFrom。`);
+  }
+  return publicChart(chart);
+};
+
+// The contract bounds a chart's text, and a value read as empty still needs a label, so the card
+// shows the Tool's chart as the gateway will accept it.
+const clip = (text: string, length: number): string => (text.length > length ? text.slice(0, length) : text);
+const publicChart = (chart: FindingChart): FindingChart => Object.freeze({
+  kind: chart.kind,
+  title: clip(chart.title, 64),
+  unit: clip(chart.unit, 16),
+  categories: Object.freeze(chart.categories.map((category) => clip(category.trim() === '' ? '—' : category, 32))),
+  series: Object.freeze(chart.series.map((series) => Object.freeze({
+    name: clip(series.name.trim() === '' ? '—' : series.name, 32),
+    values: Object.freeze(series.values.map((value) => (value !== null && Number.isFinite(value) ? value : null))),
+  }))),
+});
+
 const createInvestigationCompleteTool = ({
   sessionId,
   runId,
@@ -295,25 +347,28 @@ const createInvestigationCompleteTool = ({
   executionMode: 'sequential',
   execute: async (toolCallId, parameters) => {
     const refuse = refuser(onRefused, toolCallId);
+    // Pi has checked the arguments against investigationCompleteParameters before this runs.
+    const { chartFrom, ...card } = parameters as InvestigationCompleteArguments;
     let parsed: ReturnType<typeof parseInvestigationComplete>;
     try {
-      // Pi has checked the arguments against investigationCompleteParameters before this runs.
-      parsed = parseInvestigationComplete(withoutEmptyUnits(parameters as InvestigationCompleteArguments));
+      parsed = parseInvestigationComplete(withoutEmptyUnits(card));
     } catch (error) {
       return refuse('FINDING_CONTENT_INVALID', error instanceof Error ? error.message : String(error));
     }
     if (needsExecutionCorrection(answers())) refuse('FINDING_CORRECTION_REQUIRED', CORRECTION_REQUIRED);
     // A ref names a read by its short id; the card keeps the read's call id.
-    if (parsed.evidenceRefs.some(({ toolExecutionId }) => !state.evidenceIds.has(toolExecutionId))) {
-      // The model reads this refusal, so it says which ids it may cite.
-      const cited = [...state.evidenceIds.keys()];
+    // The model reads these refusals, so they say which ids it may cite.
+    const cited = [...state.reads.keys()];
+    if (parsed.evidenceRefs.some(({ toolExecutionId }) => !state.reads.has(toolExecutionId))) {
       refuse('FINDING_EVIDENCE_NOT_READ', cited.length === 0
         ? '这次还没有成功读到数据，不能引用依据：outcome 用 UNABLE_TO_CONCLUDE，evidenceRefs 留空。'
         : `evidenceRefs 的 toolExecutionId 只能填这次读数据结果里的 evidenceId：${cited.join('、')}。`);
     }
+    const chart = chartFrom === undefined ? undefined : chartOf(state, chartFrom, cited, refuse);
     const finding = Object.freeze({
       ...parsed,
-      evidenceRefs: Object.freeze(parsed.evidenceRefs.map((ref) => Object.freeze({ ...ref, toolExecutionId: state.evidenceIds.get(ref.toolExecutionId)! }))),
+      evidenceRefs: Object.freeze(parsed.evidenceRefs.map((ref) => Object.freeze({ ...ref, toolExecutionId: state.reads.get(ref.toolExecutionId)!.toolCallId }))),
+      ...(chart === undefined ? {} : { chart }),
     });
     claimTerminalOperation(state, toolCallId, refuse);
     const artifact = Object.freeze({
@@ -375,7 +430,7 @@ const createInvestigationRequestInputTool = ({
 export const createPiTools = (input: CreatePiToolsInput): PiAgentTool[] => {
   const state: ProjectToolBudgetState = {
     budget: input.budget,
-    evidenceIds: new Map<string, string>(),
+    reads: new Map<string, ReadEvidence>(),
     onBudgetExhausted: input.onBudgetExhausted,
     terminalToolCallId: null,
     calls: 0,

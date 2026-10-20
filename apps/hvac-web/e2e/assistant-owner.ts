@@ -25,6 +25,8 @@ const DEFAULT_REPLY: AssistantReply = {
     evidenceRefs: [],
     limitations: ['平台没有室外温度历史，无法判断负荷增加是否来自天气。'],
     recommendedNext: ['2 号机组为什么开机？', '明天同一时段要不要少开一台？'],
+    // Drawn by the Agent from the hourly read (#640).
+    chart: { kind: 'BAR', title: '10月9日–10月10日 11:00 用电', unit: 'kWh', categories: ['10/9 11:00', '10/10 11:00'], series: [{ name: '用电', values: [229, 247] }] },
   },
 };
 

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -368,14 +369,19 @@ func validateAgentArtifactValue(value any) error {
 		}
 		finding, ok := artifact["finding"].(map[string]any)
 		findingKeys := []string{"outcome", "evidenceRefs", "limitations", "recommendedNext"}
-		if _, present := finding["keyFigures"]; present {
-			findingKeys = append(findingKeys, "keyFigures")
+		for _, optional := range []string{"keyFigures", "chart"} {
+			if _, present := finding[optional]; present {
+				findingKeys = append(findingKeys, optional)
+			}
 		}
 		if !ok || !operationsExactKeys(finding, findingKeys...) ||
 			!operationsAllowedString(finding["outcome"], "SUPPORTED_FINDING", "UNABLE_TO_CONCLUDE") {
 			return errors.New("invalid finding Artifact")
 		}
 		if err := validateAgentSessionKeyFigures(finding["keyFigures"]); err != nil {
+			return err
+		}
+		if err := validateAgentSessionFindingChart(finding["chart"]); err != nil {
 			return err
 		}
 		refs, ok := finding["evidenceRefs"].([]any)
@@ -625,6 +631,49 @@ func validateAgentSessionKeyFigures(value any) error {
 		_, valueOK := operationsBoundedString(figure["value"], 24)
 		if !operationsExactKeys(figure, keys...) || !labelOK || !valueOK {
 			return errors.New("invalid finding key figure")
+		}
+	}
+	return nil
+}
+
+// A finding's chart is optional: a kind, a title, a unit, up to 200 categories and up to 4 series
+// with one number (or null) per category (#640).
+func validateAgentSessionFindingChart(value any) error {
+	if value == nil {
+		return nil
+	}
+	chart, ok := value.(map[string]any)
+	if !ok || !operationsExactKeys(chart, "kind", "title", "unit", "categories", "series") ||
+		!operationsAllowedString(chart["kind"], "LINE", "BAR", "HORIZONTAL_BAR") {
+		return errors.New("invalid finding chart")
+	}
+	_, titleOK := operationsBoundedString(chart["title"], 64)
+	unit, unitOK := chart["unit"].(string)
+	categories, categoriesOK := chart["categories"].([]any)
+	series, seriesOK := chart["series"].([]any)
+	if !titleOK || !unitOK || utf8.RuneCountInString(unit) > 16 || !categoriesOK || len(categories) == 0 || len(categories) > 200 ||
+		!seriesOK || len(series) == 0 || len(series) > 4 {
+		return errors.New("invalid finding chart")
+	}
+	for _, category := range categories {
+		if _, ok := operationsBoundedString(category, 32); !ok {
+			return errors.New("invalid finding chart category")
+		}
+	}
+	for _, item := range series {
+		entry, ok := item.(map[string]any)
+		if !ok || !operationsExactKeys(entry, "name", "values") {
+			return errors.New("invalid finding chart series")
+		}
+		_, nameOK := operationsBoundedString(entry["name"], 32)
+		values, valuesOK := entry["values"].([]any)
+		if !nameOK || !valuesOK || len(values) != len(categories) {
+			return errors.New("invalid finding chart series")
+		}
+		for _, number := range values {
+			if _, isNumber := number.(json.Number); number != nil && !isNumber {
+				return errors.New("invalid finding chart value")
+			}
 		}
 	}
 	return nil

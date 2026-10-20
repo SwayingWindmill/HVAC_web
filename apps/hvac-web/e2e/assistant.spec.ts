@@ -19,6 +19,8 @@ test('解释 on the busiest hour opens the assistant with the question, and the 
   await expect(finding).toContainText('有数据依据');
   await expect(finding).toContainText('多用电+18kWh');
   await expect(finding).toContainText('平台没有室外温度历史');
+  // The card charts the read the Agent named (#640).
+  await expect(finding.getByRole('figure', { name: '10月9日–10月10日 11:00 用电' })).toBeVisible();
   await expect(finding.getByRole('link', { name: '能耗分析' })).toHaveAttribute('href', `/energy-analysis/consumption?site=${SITE_ID}`);
   await expect(panel).toContainText('这一小时比前一天同一时段多用电 18 kWh，主要来自 2 号机组。');
   // The conclusion is said once, in the answer; the card does not repeat it.

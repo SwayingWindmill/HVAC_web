@@ -1162,3 +1162,57 @@ test('a card cites a read by its short id and a figure with no unit may leave th
   assert.equal(finding.evidenceRefs[0].toolExecutionId, 'call_00_WWrWol5aIwvRmb1pQXdy7410');
   assert.deepEqual(finding.keyFigures, [{ label: '多用电', value: '+5', unit: 'kWh' }, { label: '能效', value: '4.42' }]);
 });
+
+// #640: the card names which read to chart; the read's Tool draws it, so no number on the chart
+// comes from the model. A read that cannot be charted, or one that did not happen, is refused.
+test('a card charts the read it names, drawn by that read\'s Tool, and refuses one it cannot chart', async () => {
+  const hourly = Object.freeze({ kind: 'LINE', title: '10月15日每小时用电', unit: 'kWh', categories: ['08:00', '09:00'], series: [{ name: '用电', values: [120, 135.5] }] });
+  const series = Object.freeze({ ...projectTool('energy_query_series', async () => ({ points: [120, 135.5] })), chart: () => hourly });
+  const alarms = projectTool('alarm_list', async () => ({ alarms: [] }));
+  const card = (chartFrom) => ({
+    outcome: 'SUPPORTED_FINDING',
+    evidenceRefs: [{ owner: 'ENERGY', resourceType: 'energy-series', resourceId: 'hourly', toolExecutionId: 'E1' }],
+    limitations: [],
+    recommendedNext: [],
+    chartFrom,
+  });
+  const { result } = await runScript([
+    {
+      parts: [
+        { type: 'tool-call', id: 'series-1', name: 'energy_query_series', arguments: {} },
+        { type: 'tool-call', id: 'alarms-1', name: 'alarm_list', arguments: {} },
+      ],
+      stopReason: 'toolUse',
+    },
+    { parts: [{ type: 'tool-call', id: 'not-read', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: card('E9') }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'no-chart', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: card('E2') }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'charted', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: card('E1') }], stopReason: 'toolUse' },
+  ], [series, alarms], { ...budget, maxModelCalls: 6 });
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.deepEqual(
+    Object.fromEntries(result.toolExecutions.filter(({ status }) => status === 'FAILED').map(({ id, failureCode }) => [id, failureCode])),
+    { 'not-read': 'FINDING_CHART_NOT_READ', 'no-chart': 'FINDING_CHART_UNAVAILABLE' },
+  );
+  assert.deepEqual(result.artifacts[0].finding.chart, hourly);
+  assert.equal('chartFrom' in result.artifacts[0].finding, false);
+});
+
+// #640: the card's chart fits the public contract whatever the read held, and a read with more
+// points than a chart holds is refused with how many and what to do.
+test('a chart is fitted to the public contract, and one with too many points is refused saying so', async () => {
+  const long = '冷'.repeat(40);
+  const fitted = Object.freeze({ ...projectTool('telemetry_query_history', async () => ({})), chart: () => ({ kind: 'LINE', title: long.repeat(2), unit: '', categories: ['', long], series: [{ name: long, values: [1, Number.NaN] }] }) });
+  const crowded = Object.freeze({ ...projectTool('energy_query_series', async () => ({})), chart: () => ({ kind: 'LINE', title: '每小时用电', unit: 'kWh', categories: Array.from({ length: 201 }, (_, index) => `${index}`), series: [{ name: '用电', values: Array(201).fill(1) }] }) });
+  const card = (chartFrom) => ({ outcome: 'UNABLE_TO_CONCLUDE', evidenceRefs: [], limitations: [], recommendedNext: [], chartFrom });
+  const { result, requests } = await runScript([
+    { parts: [{ type: 'tool-call', id: 'history-1', name: 'telemetry_query_history', arguments: {} }, { type: 'tool-call', id: 'series-1', name: 'energy_query_series', arguments: {} }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'crowded', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: card('E2') }], stopReason: 'toolUse' },
+    { parts: [{ type: 'tool-call', id: 'fitted', name: INVESTIGATION_COMPLETE_TOOL_NAME, arguments: card('E1') }], stopReason: 'toolUse' },
+  ], [fitted, crowded], { ...budget, maxModelCalls: 5 });
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.equal(result.toolExecutions.find(({ id }) => id === 'crowded').failureCode, 'FINDING_CHART_UNAVAILABLE');
+  assert.match(requests[2].filter((message) => message.role === 'toolResult').at(-1).text, /201 个点，图最多画 200 个：按天读一次再画/u);
+  assert.deepEqual(result.artifacts[0].finding.chart, {
+    kind: 'LINE', title: long.repeat(2).slice(0, 64), unit: '', categories: ['—', long.slice(0, 32)], series: [{ name: long.slice(0, 32), values: [1, null] }],
+  });
+});

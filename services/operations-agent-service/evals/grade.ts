@@ -20,7 +20,7 @@ export type SeriesByKey = Readonly<Record<string, {
   readonly devices?: readonly { readonly deviceId: string; readonly points: readonly SeriesPoint[] }[];
 }>>;
 
-export type CheckName = 'completed' | 'figures' | 'chinese-only' | 'plain-words' | 'no-repetition' | 'efficiency' | 'declines' | 'says';
+export type CheckName = 'completed' | 'figures' | 'chinese-only' | 'plain-words' | 'no-repetition' | 'efficiency' | 'declines' | 'says' | 'chart';
 
 export interface Check {
   readonly name: CheckName;
@@ -218,6 +218,20 @@ export const gradeTrial = (question: EvalQuestion, snapshot: AgentSessionSnapsho
         : pass('declines'));
   } else if (question.mustSay !== undefined) {
     checks.push(new RegExp(question.mustSay, 'u').test(shown) ? pass('says') : fail('says', 'does not name the data problem'));
+  }
+
+  // The card's chart holds the values the 能耗分析 page reads: the busiest hour, each machine,
+  // each period's total (#640).
+  if (question.chart) {
+    const charted = finding?.chart?.series.flatMap((each) => each.values.filter((value): value is number => value !== null)) ?? [];
+    const absent = question.figures.flatMap((figure) => (figure.minus === undefined
+      ? requiredFigures(figure, series)
+      : seriesFigures(figure).map((part) => ({ value: sumOf(requiredFigures({ ...part, pick: 'all' }, series)) }))))
+      .filter(({ value }) => !charted.some((each) => Math.abs(each - value) <= 0.01))
+      .map(({ value }) => Number(value.toFixed(2)));
+    checks.push(finding?.chart === undefined ? fail('chart', 'the card has no chart')
+      : absent.length > 0 ? fail('chart', `the chart lacks ${absent.join(', ')}`)
+        : pass('chart'));
   }
 
   return { passed: checks.every((each) => each.passed), checks, durationMs, tokens, toolCalls: reads.length };

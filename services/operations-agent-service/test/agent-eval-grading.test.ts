@@ -191,3 +191,21 @@ test('a capability question fails unless its own Tool was read', () => {
   } as AgentSessionSnapshot;
   assert.equal(check(gradeTrial(asked, read, series), 'completed').passed, true);
 });
+
+// #640: an answer about hours, two periods or each machine carries a chart on its card.
+test('a question that asks for a chart fails without one, or with one lacking the owner\'s values', () => {
+  const daily = question('daily-electricity-cooling-cop');
+  const electricity = { ...daily, figures: daily.figures.filter((figure) => figure.measure === 'electricity'), chart: true as const };
+  const snapshot = fixture('daily-electricity-cooling-cop');
+  assert.deepEqual(check(gradeTrial(electricity, snapshot, series), 'chart'), { name: 'chart', passed: false, reason: 'the card has no chart' });
+  const owner = series[`day|${electricity.figures[0]!.from}|${electricity.figures[0]!.to}`].electricity.map((point: { energyKWh: number }) => point.energyKWh);
+  const charting = (values: readonly number[]) => ({
+    ...snapshot,
+    artifacts: snapshot.artifacts.map((artifact: AgentSessionSnapshot['artifacts'][number]) => (artifact.kind === 'FINDING'
+      ? { ...artifact, finding: { ...artifact.finding, chart: { kind: 'BAR', title: '每天用电', unit: 'kWh', categories: values.map((_, index) => `10/${10 + index}`), series: [{ name: '用电', values }] } } }
+      : artifact)),
+  });
+  assert.equal(check(gradeTrial(electricity, charting(owner), series), 'chart').passed, true);
+  assert.equal(check(gradeTrial(electricity, charting(owner.map((value: number) => value + 5)), series), 'chart').passed, false);
+  assert.equal(gradeTrial(daily, snapshot, series).checks.some((each) => each.name === 'chart'), false);
+});

@@ -254,3 +254,47 @@ func TestValidateAgentSessionSnapshotBoundsChineseTextInCharacters(t *testing.T)
 		t.Fatal("a 33-character label was accepted")
 	}
 }
+
+// #640: a finding may carry a chart drawn from one read; the gateway passes it through only in
+// the public shape, one value per category.
+func TestValidateAgentSessionEventAcceptsAFindingChartInThePublicShape(t *testing.T) {
+	finding := func(chart map[string]any) []byte {
+		return agentSessionEventFixture("artifact.created", map[string]any{"artifact": map[string]any{
+			"id": "artifact-1", "sessionId": "session-1", "runId": "run-1", "kind": "FINDING", "createdAt": 1000,
+			"finding": map[string]any{
+				"outcome": "SUPPORTED_FINDING", "evidenceRefs": []any{}, "limitations": []any{}, "recommendedNext": []any{},
+				"chart": chart,
+			},
+		}}, "run-1")
+	}
+	chart := func(change func(map[string]any)) map[string]any {
+		value := map[string]any{
+			"kind": "LINE", "title": "10月15日每小时用电", "unit": "kWh", "categories": []any{"08:00", "09:00"},
+			"series": []any{map[string]any{"name": "用电", "values": []any{120.0, nil}}},
+		}
+		change(value)
+		return value
+	}
+	if _, err := validateAgentSessionEvent("artifact.created", finding(chart(func(map[string]any) {}))); err != nil {
+		t.Fatalf("a finding chart was rejected: %v", err)
+	}
+	for name, change := range map[string]func(map[string]any){
+		"unknown kind": func(value map[string]any) { value["kind"] = "PIE" },
+		"extra field":  func(value map[string]any) { value["pointId"] = "x" },
+		"value count": func(value map[string]any) {
+			value["series"] = []any{map[string]any{"name": "用电", "values": []any{120.0}}}
+		},
+		"text value": func(value map[string]any) {
+			value["series"] = []any{map[string]any{"name": "用电", "values": []any{"120", 1.0}}}
+		},
+		"no categories": func(value map[string]any) { value["categories"] = []any{} },
+		"five series": func(value map[string]any) {
+			one := map[string]any{"name": "用电", "values": []any{1.0, 2.0}}
+			value["series"] = []any{one, one, one, one, one}
+		},
+	} {
+		if _, err := validateAgentSessionEvent("artifact.created", finding(chart(change))); err == nil {
+			t.Fatalf("a chart with %s was accepted", name)
+		}
+	}
+}

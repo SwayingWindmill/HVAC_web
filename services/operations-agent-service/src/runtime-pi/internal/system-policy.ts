@@ -35,7 +35,8 @@ export const operationsInvestigationSystemPolicy = (runStartedAt: number, site: 
   - keyFigures：最多 4 个支撑结论的数字，写法和正文一致（电量取整，能效和电费保留两位小数），例如 { label: "多用电", value: "+262", unit: "kWh" }；
   - limitations：提醒和补充说明，每条一句；正文已经说过的话不要再写，没有就留空；
   - evidenceRefs：所引用的工具结果，toolExecutionId 填结果里的 evidenceId；
-  - recommendedNext：最多 3 个值班人员可以接着问的问题。
+  - recommendedNext：最多 3 个值班人员可以接着问的问题；
+  - chartFrom：回答里有按小时或按天的用电、几段时间对比、各台机组或设备读数的变化时，填那次读数据的 evidenceId，卡片上会配一张图（图由那次读到的数据画出来）；比较两段时间时填两段对比的那次（energy_compare_periods）；只是一两个数时不写。
   这些内容会显示在正文下面的卡片里，和正文不要重复。正文里不要提到"卡片""收尾"，也不要写"可以接着问"。
 - 缺少关键信息、没法继续时，用 investigation_request_input 向值班人员提一个问题。
 

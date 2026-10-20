@@ -1,3 +1,5 @@
+import type { FindingChart } from './artifacts.js';
+
 export interface AgentRunContext {
   readonly tenantId: string;
   readonly siteId: string;
@@ -47,4 +49,6 @@ export interface AgentToolExecutionRequest<TArguments = unknown> {
 export interface AgentTool<TArguments = unknown, TResult = unknown> {
   readonly definition: AgentToolDefinition;
   execute(request: AgentToolExecutionRequest<TArguments>): Promise<TResult>;
+  /** Draws a finding card's chart from one of this Tool's results, or null when it cannot (#640). */
+  chart?(result: TResult): FindingChart | null;
 }
