@@ -78,13 +78,13 @@ func TestPostgresOutboxProjectsClickHouseHistoryDeduplicatesRetry(t *testing.T) 
 	clock := observedAt.Add(time.Second)
 	relay, err := NewHistoryRelay(HistoryRelayConfig{
 		Repository: repository, Sink: sink, BatchSize: 16,
-		LeaseFor: 30 * time.Second, RetryAfter: time.Second, MaxAttempts: 4,
+		LeaseFor: 30 * time.Second, RetryAfter: time.Second,
 		Now: func() time.Time { return clock },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := repository.ClaimHistoryBatch(ctx, 16, clock, 30*time.Second, 4)
+	batch, err := repository.ClaimHistoryBatch(ctx, 16, clock, 30*time.Second)
 	if err != nil || len(batch.Observations) != 1 || batch.Sequence == 0 {
 		t.Fatalf("claim=%+v err=%v", batch, err)
 	}
@@ -288,7 +288,7 @@ func TestPostgresHistoricalReplayProjectsClickHouseWithoutCurrentMutation(t *tes
 	}
 	relay, err := NewHistoryRelay(HistoryRelayConfig{
 		Repository: repository, Sink: sink, BatchSize: 16,
-		LeaseFor: 30 * time.Second, RetryAfter: time.Second, MaxAttempts: 4,
+		LeaseFor: 30 * time.Second, RetryAfter: time.Second,
 		Now: func() time.Time { return receivedAt.Add(time.Second) },
 	})
 	if err != nil {

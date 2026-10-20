@@ -53,9 +53,9 @@ type HistoryBatch struct {
 }
 
 type HistoryRepository interface {
-	ClaimHistoryBatch(context.Context, int, time.Time, time.Duration, int) (HistoryBatch, error)
+	ClaimHistoryBatch(context.Context, int, time.Time, time.Duration) (HistoryBatch, error)
 	MarkHistoryBatchPublished(context.Context, string, time.Time) error
-	RetryHistoryBatch(context.Context, string, time.Time, string, int) error
+	RetryHistoryBatch(context.Context, string, time.Time, string) error
 }
 
 type HistorySink interface {
@@ -63,23 +63,25 @@ type HistorySink interface {
 }
 
 type HistoryRelayConfig struct {
-	Repository  HistoryRepository
-	Sink        HistorySink
-	BatchSize   int
-	LeaseFor    time.Duration
-	RetryAfter  time.Duration
-	MaxAttempts int
-	Now         func() time.Time
+	Repository HistoryRepository
+	Sink       HistorySink
+	BatchSize  int
+	LeaseFor   time.Duration
+	RetryAfter time.Duration
+	Now        func() time.Time
 }
 
+// HistoryRelay retries a failed batch until ClickHouse accepts it, however long that takes.
+// Batches reach ClickHouse in History Sequence order, so a batch that is given up blocks every
+// later one anyway; retrying keeps the channel recovering on its own once the cause (a full
+// disk, a restart) is gone. Inserts are deduplicated, so retries never write a row twice.
 type HistoryRelay struct {
-	repository  HistoryRepository
-	sink        HistorySink
-	batchSize   int
-	leaseFor    time.Duration
-	retryAfter  time.Duration
-	maxAttempts int
-	now         func() time.Time
+	repository HistoryRepository
+	sink       HistorySink
+	batchSize  int
+	leaseFor   time.Duration
+	retryAfter time.Duration
+	now        func() time.Time
 }
 
 func NewHistoryRelay(config HistoryRelayConfig) (*HistoryRelay, error) {
@@ -95,16 +97,12 @@ func NewHistoryRelay(config HistoryRelayConfig) (*HistoryRelay, error) {
 	if config.RetryAfter < time.Second || config.RetryAfter > time.Hour {
 		return nil, errors.New("history relay retry delay must be between 1 second and 1 hour")
 	}
-	if config.MaxAttempts < 1 || config.MaxAttempts > 100 {
-		return nil, errors.New("history relay max attempts must be between 1 and 100")
-	}
 	if config.Now == nil {
 		config.Now = time.Now
 	}
 	return &HistoryRelay{
 		repository: config.Repository, sink: config.Sink, batchSize: config.BatchSize,
-		leaseFor: config.LeaseFor, retryAfter: config.RetryAfter, maxAttempts: config.MaxAttempts,
-		now: config.Now,
+		leaseFor: config.LeaseFor, retryAfter: config.RetryAfter, now: config.Now,
 	}, nil
 }
 
@@ -113,7 +111,7 @@ func (relay *HistoryRelay) RelayOnce(ctx context.Context) (int, error) {
 		return 0, errors.New("history relay is nil")
 	}
 	now := relay.now().UTC()
-	batch, err := relay.repository.ClaimHistoryBatch(ctx, relay.batchSize, now, relay.leaseFor, relay.maxAttempts)
+	batch, err := relay.repository.ClaimHistoryBatch(ctx, relay.batchSize, now, relay.leaseFor)
 	if err != nil {
 		return 0, fmt.Errorf("claim telemetry history batch: %w", err)
 	}
@@ -125,7 +123,7 @@ func (relay *HistoryRelay) RelayOnce(ctx context.Context) (int, error) {
 	}
 	if err := relay.sink.InsertObservations(ctx, batch.Sequence, batch.Observations); err != nil {
 		retryAt := relay.now().UTC().Add(relay.retryAfter)
-		if retryErr := relay.repository.RetryHistoryBatch(ctx, batch.LeaseID, retryAt, historyInsertFailureCode, relay.maxAttempts); retryErr != nil {
+		if retryErr := relay.repository.RetryHistoryBatch(ctx, batch.LeaseID, retryAt, historyInsertFailureCode); retryErr != nil {
 			return 0, errors.Join(fmt.Errorf("insert telemetry history: %w", err), fmt.Errorf("retry telemetry history batch: %w", retryErr))
 		}
 		return 0, fmt.Errorf("insert telemetry history: %w", err)
