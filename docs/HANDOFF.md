@@ -61,9 +61,10 @@
 - 告警规则在 `deploy/sites/songyaxuan.alarm-rules.json`，用 `modules/alarm/cmd/alarm-rules` 发布（内容没变的规则不会出新版本，`-print` 只打印不写库）。在服务器上用告警模块的数据库身份跑一个一次性容器：在 `modules/alarm` 里 `CGO_ENABLED=0 go build -o out/alarm-rules/alarm-rules ./cmd/alarm-rules`，把它和两个站点文件放到一个目录，再执行 `docker run --rm --network container:hvac-platform-energy-api-1 --volumes-from hvac-platform-energy-api-1 -e ALARM_DATABASE_URL_FILE=<energy-api 的值> -v <目录>:/alarm-rules:ro --entrypoint /alarm-rules/alarm-rules <energy-api 镜像> /alarm-rules/songyaxuan.alarm-rules.json`。
   - 「读数长时间没有更新」是每台设备一条（不是每个点位一条）：它亮着时，同一台设备另一个点位也停了不会再报，所有点位都恢复才清除。
   - 从文件里改名或删掉的规则、没有启用点位的设备，旧的规则还挂在站点上，目前没有办法撤掉。
-  - 告警服务（单机部署时在 energy-api 里）每分钟把到时间的判断再算一遍（#615，`RunDueEvaluations`），用每条规则上一次看到的读数，所以网关整个断线时也会报。「网关上报中断」：松雅轩 78 个启用的点位 15 分钟都没有读数时报（重要），收到任何一个新读数就恢复；断线超过 30 分钟时，各台设备的「读数长时间没有更新」也会跟着报。
+  - 告警服务（单机部署时在 energy-api 里）每分钟把到时间的判断再算一遍（#615，`RunDueEvaluations`），用每条规则上一次看到的读数，所以网关整个断线时也会报；站点断线期间新发布的规则，也用站点最后收到的读数算一次。「网关上报中断」：松雅轩 78 个启用的点位 15 分钟都没有读数时报（重要），收到任何一个新读数就恢复；断线超过 30 分钟时，各台设备的「读数长时间没有更新」也会跟着报。
   - 「读数一动不动」要加新的条件（#616）。
 - 数据修补留下的备份表：4 号电表 2026-10-14 之前的历史按功率积分重算过，被替换的行在 ClickHouse `telemetry_history.d4fix_backup_observations` 和 `analytics.d4fix_backup_energy_facts`；冷量计的历史重放后被替换的行在 `telemetry_history.coolfix_backup_observations`。能耗页面再看几天没问题就删掉这三张表。
+- 2026-10-20 的服务器状况：松雅轩网关从 10-20 03:57（北京时间）起没有再上报，「网关上报中断」和 10 条「读数长时间没有更新」都亮着，网关恢复后会自动恢复。磁盘一度用满（59G 里 57G），清掉没在用的旧镜像后剩约 2G；最大的是 PostgreSQL 数据卷（17G），原始读数还没有保留期限，要尽快处理。
 - 松雅轩的负荷预测链路（15 分钟负荷指标、基线模型、每小时预测任务）是 2026-10-16 在服务器上按接入 SQL 补建的。
 
 ## AI 助手
