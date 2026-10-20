@@ -183,3 +183,51 @@ func alarmEvidenceHasReference(evidence []alarmmodel.EvidenceReference, referenc
 	}
 	return false
 }
+
+// #616: each reading carries since when it has held its value: the same value keeps the time, a
+// different one starts it again at its own sample time.
+func TestPostgresTelemetryInputRemembersSinceWhenAReadingHeldItsValue(t *testing.T) {
+	databaseURL := os.Getenv("S4_ALARM_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
+	}
+	const (
+		siteID = "01910000-b000-7000-8000-000000000032"
+		device = "01910000-b000-7000-8000-000000000033"
+	)
+	ctx := identitycontext.WithTenantID(context.Background(), telemetryBridgeTenantID)
+	store, err := OpenPostgresStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	first := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	since := func(revision int64, at time.Time, value string, eventID string) string {
+		t.Helper()
+		snapshot := telemetryBridgeSnapshot(device, revision, at, presentTelemetryState("ambient_temperature", "NUMBER", value, "GOOD", "FRESH", at))
+		snapshot.SiteId = siteID
+		if _, err := store.EvaluateTelemetrySnapshot(ctx, eventID, snapshot, at); err != nil {
+			t.Fatal(err)
+		}
+		records, _, err := store.loadSiteTelemetryEvaluationState(ctx, telemetryBridgeTenantID, siteID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		built, err := buildSiteEvaluationSnapshot(eventID, telemetryBridgeTenantID, siteID, records)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return built.Inputs[device+"/ambient_temperature"].UnchangedSince
+	}
+	if got := since(1, first, `21.5`, "01910000-b000-7000-8000-000000000041"); got != first.Format(time.RFC3339Nano) {
+		t.Fatalf("first reading starts at its sample time, got %q", got)
+	}
+	if got := since(2, first.Add(time.Minute), `21.5`, "01910000-b000-7000-8000-000000000042"); got != first.Format(time.RFC3339Nano) {
+		t.Fatalf("the same value kept since %q, want the first sample", got)
+	}
+	moved := first.Add(2 * time.Minute)
+	if got := since(3, moved, `21.7`, "01910000-b000-7000-8000-000000000043"); got != moved.Format(time.RFC3339Nano) {
+		t.Fatalf("a changed value starts again at its sample, got %q", got)
+	}
+}

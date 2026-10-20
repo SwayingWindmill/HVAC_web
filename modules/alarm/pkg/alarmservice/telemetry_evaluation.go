@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -39,6 +40,8 @@ type telemetryEvaluationInputRecord struct {
 	EventID          string
 	EvaluatedAt      time.Time
 	Snapshot         telemetryapi.DeviceObservationSnapshot
+	// UnchangedSince is, per reading key, when the reading took the value it still has (#616).
+	UnchangedSince map[string]string
 }
 
 func NewTelemetryEvaluationHandler(evaluator TelemetrySnapshotEvaluator) (http.Handler, error) {
@@ -140,26 +143,51 @@ func (store *PostgresStore) recordTelemetryEvaluationInput(ctx context.Context, 
 
 	var currentRevision int64
 	var currentEventID string
+	var currentSnapshot, currentSince []byte
 	err = tx.QueryRow(ctx, `
-SELECT business_revision, event_id::text
+SELECT business_revision, event_id::text, snapshot, unchanged_since
 FROM alarm_runtime.telemetry_evaluation_input
 WHERE tenant_id=$1 AND site_id=$2 AND device_id=$3
-FOR UPDATE`, tenantID, siteID, deviceID).Scan(&currentRevision, &currentEventID)
+FOR UPDATE`, tenantID, siteID, deviceID).Scan(&currentRevision, &currentEventID, &currentSnapshot, &currentSince)
 	if errors.Is(err, pgx.ErrNoRows) {
+		held, heldErr := unchangedSince(nil, nil, snapshot)
+		if heldErr != nil {
+			return heldErr
+		}
+		since, encodeErr := json.Marshal(held)
+		if encodeErr != nil {
+			return fmt.Errorf("encode Alarm telemetry unchanged-since: %w", encodeErr)
+		}
 		_, err = tx.Exec(ctx, `
 INSERT INTO alarm_runtime.telemetry_evaluation_input (
-  tenant_id, site_id, device_id, business_revision, event_id, evaluated_at, snapshot, updated_at
-) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)`, tenantID, siteID, deviceID, int64(snapshot.BusinessRevision), eventID, evaluatedAt.UTC(), encoded, now.UTC())
+  tenant_id, site_id, device_id, business_revision, event_id, evaluated_at, snapshot, unchanged_since, updated_at
+) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9)`, tenantID, siteID, deviceID, int64(snapshot.BusinessRevision), eventID, evaluatedAt.UTC(), encoded, since, now.UTC())
 		if err != nil {
 			return fmt.Errorf("insert Alarm telemetry evaluation input: %w", err)
 		}
 	} else if err != nil {
 		return fmt.Errorf("read current Alarm telemetry evaluation input: %w", err)
 	} else if int64(snapshot.BusinessRevision) > currentRevision {
+		var previous telemetryapi.DeviceObservationSnapshot
+		var previousSince map[string]string
+		if err := json.Unmarshal(currentSnapshot, &previous); err != nil {
+			return fmt.Errorf("decode current Alarm telemetry evaluation input: %w", err)
+		}
+		if err := json.Unmarshal(currentSince, &previousSince); err != nil {
+			return fmt.Errorf("decode current Alarm telemetry unchanged-since: %w", err)
+		}
+		held, err := unchangedSince(&previous, previousSince, snapshot)
+		if err != nil {
+			return err
+		}
+		since, err := json.Marshal(held)
+		if err != nil {
+			return fmt.Errorf("encode Alarm telemetry unchanged-since: %w", err)
+		}
 		_, err = tx.Exec(ctx, `
 UPDATE alarm_runtime.telemetry_evaluation_input
-SET business_revision=$4, event_id=$5, evaluated_at=$6, snapshot=$7::jsonb, updated_at=$8
-WHERE tenant_id=$1 AND site_id=$2 AND device_id=$3`, tenantID, siteID, deviceID, int64(snapshot.BusinessRevision), eventID, evaluatedAt.UTC(), encoded, now.UTC())
+SET business_revision=$4, event_id=$5, evaluated_at=$6, snapshot=$7::jsonb, unchanged_since=$8::jsonb, updated_at=$9
+WHERE tenant_id=$1 AND site_id=$2 AND device_id=$3`, tenantID, siteID, deviceID, int64(snapshot.BusinessRevision), eventID, evaluatedAt.UTC(), encoded, since, now.UTC())
 		if err != nil {
 			return fmt.Errorf("advance Alarm telemetry evaluation input: %w", err)
 		}
@@ -179,7 +207,7 @@ func (store *PostgresStore) loadSiteTelemetryEvaluationState(ctx context.Context
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	rows, err := tx.Query(ctx, `
-SELECT device_id::text, business_revision, event_id::text, evaluated_at, snapshot
+SELECT device_id::text, business_revision, event_id::text, evaluated_at, snapshot, unchanged_since
 FROM alarm_runtime.telemetry_evaluation_input
 WHERE tenant_id=$1 AND site_id=$2
 ORDER BY device_id`, tenantID, siteID)
@@ -189,14 +217,18 @@ ORDER BY device_id`, tenantID, siteID)
 	records := make([]telemetryEvaluationInputRecord, 0)
 	for rows.Next() {
 		var record telemetryEvaluationInputRecord
-		var encoded []byte
-		if err := rows.Scan(&record.DeviceID, &record.BusinessRevision, &record.EventID, &record.EvaluatedAt, &encoded); err != nil {
+		var encoded, since []byte
+		if err := rows.Scan(&record.DeviceID, &record.BusinessRevision, &record.EventID, &record.EvaluatedAt, &encoded, &since); err != nil {
 			rows.Close()
 			return nil, nil, fmt.Errorf("scan Site telemetry evaluation input: %w", err)
 		}
 		if err := json.Unmarshal(encoded, &record.Snapshot); err != nil {
 			rows.Close()
 			return nil, nil, fmt.Errorf("decode Site telemetry evaluation input: %w", err)
+		}
+		if err := json.Unmarshal(since, &record.UnchangedSince); err != nil {
+			rows.Close()
+			return nil, nil, fmt.Errorf("decode Site telemetry unchanged-since: %w", err)
 		}
 		records = append(records, record)
 	}
@@ -292,7 +324,7 @@ func inputFactFromTelemetry(record telemetryEvaluationInputRecord, state telemet
 			return "", InputFact{}, fmt.Errorf("%w: telemetry key %q value cannot be evaluated", ErrTelemetryEvaluationInvalid, key)
 		}
 		return key, InputFact{
-			Key: key, Present: true, Revision: revision, Value: value, Quality: quality, ObservedAt: observedAt,
+			Key: key, Present: true, Revision: revision, Value: value, Quality: quality, ObservedAt: observedAt, UnchangedSince: record.UnchangedSince[key],
 			Evidence: []alarmmodel.EvidenceReference{{Kind: "telemetry-device-snapshot", Reference: record.EventID + "#" + key, CapturedAt: observedAt}},
 		}, nil
 	}
@@ -305,6 +337,40 @@ func inputFactFromTelemetry(record telemetryEvaluationInputRecord, state telemet
 		}, nil
 	}
 	return "", InputFact{}, fmt.Errorf("%w: telemetry key state is ambiguous", ErrTelemetryEvaluationInvalid)
+}
+
+// unchangedSince is, for each reading present in next, when it took the value it still has: kept
+// from the previous snapshot while the value is the same, else next's own sample time (#616).
+func unchangedSince(previous *telemetryapi.DeviceObservationSnapshot, previousSince map[string]string, next telemetryapi.DeviceObservationSnapshot) (map[string]string, error) {
+	prior := map[string]any{}
+	if previous != nil {
+		for _, state := range previous.Values {
+			if state.Present != nil {
+				var value any
+				if err := json.Unmarshal(state.Present.Value, &value); err != nil {
+					return nil, fmt.Errorf("%w: stored telemetry key %q value cannot be read", ErrTelemetryEvaluationInvalid, state.Present.Key)
+				}
+				prior[string(state.Present.Key)] = value
+			}
+		}
+	}
+	held := map[string]string{}
+	for _, state := range next.Values {
+		if state.Present == nil {
+			continue
+		}
+		key := string(state.Present.Key)
+		var value any
+		if err := json.Unmarshal(state.Present.Value, &value); err != nil {
+			return nil, fmt.Errorf("%w: telemetry key %q value cannot be read", ErrTelemetryEvaluationInvalid, key)
+		}
+		if before, seen := prior[key]; seen && previousSince[key] != "" && reflect.DeepEqual(before, value) {
+			held[key] = previousSince[key]
+			continue
+		}
+		held[key] = string(state.Present.SampledAt)
+	}
+	return held, nil
 }
 
 func evaluationValueFromTelemetry(valueType string, raw json.RawMessage) (TypedValue, error) {

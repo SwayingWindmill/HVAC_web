@@ -256,3 +256,54 @@ func mustTime(t *testing.T, value string) time.Time {
 	}
 	return parsed
 }
+
+// #616: a reading that keeps the same value for the window raises, even with no new reading to
+// evaluate; a change clears it. A reading that is no longer fresh is not judged stuck.
+func TestEvaluatePolicyUnchangedReadingRaisesAfterItsWindowAndAChangeClears(t *testing.T) {
+	policy := validAlarmPolicy()
+	policy.QualityPolicy = EvaluationQualityUsable
+	policy.Raise = Condition{Kind: ConditionUnchanged, Input: "outdoorTemp", AgeSeconds: 6 * 3600}
+	policy.Clear = Condition{Kind: ConditionChanged, Input: "outdoorTemp", AgeSeconds: 6 * 3600}
+	sealAlarmPolicy(&policy)
+	since := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	reading := func(revision string, observed, unchangedSince time.Time, value float64) EvaluationSnapshot {
+		fact := NumberInput("outdoorTemp", value, "GOOD", observed.Format(time.RFC3339Nano))
+		fact.UnchangedSince = unchangedSince.Format(time.RFC3339Nano)
+		return evaluationSnapshot(revision, observed.Format(time.RFC3339Nano), fact)
+	}
+
+	almost := since.Add(6*time.Hour - time.Minute)
+	steady, err := EvaluatePolicy(policy, reading("r-1", almost, since, 21.5), AlarmEvaluationState{}, almost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steady.Effect != EvaluationEffectNone || steady.State.NextEvaluationAt == nil || *steady.State.NextEvaluationAt != since.Add(6*time.Hour).Format(time.RFC3339Nano) {
+		t.Fatalf("raised before 6 hours, or did not look again at 6 hours: %#v", steady)
+	}
+	stuck, err := EvaluatePolicy(policy, reading("r-1", almost, since, 21.5), steady.State, since.Add(6*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stuck.Effect != EvaluationEffectPublish {
+		t.Fatalf("6 hours of the same value did not raise: %#v", stuck)
+	}
+	stuck.State.ActiveAlarmID, stuck.State.ActiveIncidentCorrelationID = testAlarmID, "018f3e00-4000-7000-8000-000000000002"
+
+	moved := since.Add(7 * time.Hour)
+	changed, err := EvaluatePolicy(policy, reading("r-2", moved, moved, 21.7), stuck.State, moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Effect != EvaluationEffectClear {
+		t.Fatalf("a changed value did not clear: %#v", changed)
+	}
+
+	late := since.Add(7 * time.Hour)
+	stale, err := EvaluatePolicy(policy, reading("r-3", since.Add(time.Hour), since, 21.5), AlarmEvaluationState{}, late)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.Effect != EvaluationEffectNone || stale.Status != EvaluationIndeterminate {
+		t.Fatalf("a reading that stopped arriving was judged stuck: %#v", stale)
+	}
+}

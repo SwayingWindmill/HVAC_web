@@ -37,6 +37,7 @@ type rulesFile struct {
 	Rules              []rule        `json:"rules"`
 	ReadingsNotUpdated *readingsRule `json:"readingsNotUpdated"`
 	ReportsInterrupted *readingsRule `json:"reportsInterrupted"`
+	ReadingsFlat       *flatRule     `json:"readingsFlat"`
 }
 
 // A rule is a policy written with readings as "<device code>/<point code>".
@@ -65,6 +66,20 @@ type readingsRule struct {
 	AgeSeconds int64               `json:"ageSeconds"`
 }
 
+// flatRule raises, per reading in unit, when the reading has kept exactly the same value for
+// ageSeconds, and clears once it moves (#616). Only readings a device produces itself are watched:
+// one copied from another device's channel ("from") would raise again for the same stuck probe.
+// {device}, {point} and {hours} in the wording are the device, the reading by its full name and
+// ageSeconds in hours.
+type flatRule struct {
+	readingsRule
+	Unit string `json:"unit"`
+}
+
+// A reading older than this is not judged stuck: that it stopped updating is the
+// readingsNotUpdated rule's to say.
+const flatFreshnessSeconds = 1800
+
 type siteFile struct {
 	TenantID string `json:"tenantId"`
 	Site     struct {
@@ -82,10 +97,12 @@ type siteFile struct {
 }
 
 type sitePoint struct {
-	Code      string `json:"code"`
-	Name      string `json:"name"`
-	ValueType string `json:"valueType"`
-	Status    string `json:"status"`
+	Code      string          `json:"code"`
+	Name      string          `json:"name"`
+	Unit      string          `json:"unit"`
+	ValueType string          `json:"valueType"`
+	Status    string          `json:"status"`
+	From      json.RawMessage `json:"from"`
 }
 
 type device struct {
@@ -195,6 +212,24 @@ func Load(rulesPath string) (Compiled, error) {
 			// Raised once every reading is overdue, cleared by the first fresh one.
 			Raise: either(alarmservice.ConditionAnd, noData), Clear: either(alarmservice.ConditionOr, fresh),
 		}))
+	}
+	if flat := rules.ReadingsFlat; flat != nil {
+		for _, code := range order {
+			entry := devices[code]
+			for _, point := range entry.points {
+				if point.Unit != flat.Unit || len(point.From) > 0 {
+					continue
+				}
+				input := entry.id + "/" + point.Code
+				wording := strings.NewReplacer("{device}", entry.name, "{point}", point.Name, "{hours}", strconv.FormatInt(flat.AgeSeconds/3600, 10))
+				compiled.Policies = append(compiled.Policies, sitePolicy(site.Site.ID, site.Site.Code, "readings-flat/"+code+"/"+point.Code, alarmservice.AlarmPolicyRevision{
+					Title: wording.Replace(flat.Title), Summary: wording.Replace(flat.Summary), Severity: flat.Severity,
+					QualityPolicy: alarmservice.EvaluationQualityUsable, FreshnessSeconds: flatFreshnessSeconds, TriggerMode: alarmservice.TriggerSimple,
+					Raise: alarmservice.Condition{Kind: alarmservice.ConditionUnchanged, Input: input, AgeSeconds: flat.AgeSeconds},
+					Clear: alarmservice.Condition{Kind: alarmservice.ConditionChanged, Input: input, AgeSeconds: flat.AgeSeconds},
+				}))
+			}
+		}
 	}
 	return compiled, nil
 }
