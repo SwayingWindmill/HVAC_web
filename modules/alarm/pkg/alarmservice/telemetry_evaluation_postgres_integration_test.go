@@ -2,6 +2,7 @@ package alarmservice
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -338,9 +339,10 @@ func TestPostgresTelemetryEvaluatesOnlyTheRulesReadingTheDevice(t *testing.T) {
 	}
 }
 
-// #661: catching up on a backlog, readings 40 minutes old are judged at their own time, so
-// 「读数长时间没有更新」 neither raises nor flaps while they keep arriving; once they stop, the Site's
-// clock runs on from the last one and the scheduled pass raises it 30 minutes later.
+// #661: catching up on a backlog, readings from 31 down to 29 minutes old (the 30-minute limit of
+// 「读数长时间没有更新」, crossed on 2026-10-20 at 12:47) are judged at their own time while they keep
+// arriving, so the alarm is never raised; once none has arrived for two minutes the Site is judged
+// at now, and the scheduled pass raises it, the last reading being past 30 minutes.
 func TestPostgresBacklogReadingsAreJudgedAtTheirOwnTime(t *testing.T) {
 	databaseURL := os.Getenv("S4_ALARM_TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -379,41 +381,42 @@ func TestPostgresBacklogReadingsAreJudgedAtTheirOwnTime(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	active := func() int {
+	alarms := func() (all, active int) {
 		t.Helper()
 		listed, err := store.List(ctx, telemetryBridgeTenantID, siteID, Filter{Limit: 10})
 		if err != nil {
 			t.Fatal(err)
 		}
-		count := 0
 		for _, alarm := range listed.Items {
 			if alarm.Condition == alarmmodel.ConditionActive {
-				count++
+				active++
 			}
 		}
-		return count
+		return len(listed.Items), active
 	}
 
-	// A minute of the backlog: readings taken 40 and 39 minutes before they reach the alarm side.
-	for index, eventID := range []string{"01910000-b000-7000-8000-000000000091", "01910000-b000-7000-8000-000000000092"} {
-		takenAt := caughtUpAt.Add(-40*time.Minute + time.Duration(index)*time.Minute)
+	// The backlog's last minutes: a reading every 20 seconds, taken 31 to 29 minutes before it reaches
+	// the alarm side, which receives them 100 ms apart.
+	for index := 0; index < 7; index++ {
+		takenAt := caughtUpAt.Add(-31*time.Minute + time.Duration(index)*20*time.Second)
 		snapshot := telemetryBridgeSnapshot(device, int64(index+1), takenAt, presentTelemetryState("t1", "NUMBER", `21.5`, "GOOD", "FRESH", takenAt))
 		snapshot.SiteId = siteID
-		if _, err := store.EvaluateTelemetrySnapshot(ctx, eventID, snapshot, caughtUpAt.Add(time.Duration(index)*time.Second)); err != nil {
+		eventID := fmt.Sprintf("01910000-b000-7000-8000-0000000000%d", 91+index)
+		if _, err := store.EvaluateTelemetrySnapshot(ctx, eventID, snapshot, caughtUpAt.Add(time.Duration(index)*100*time.Millisecond)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := store.RunDueEvaluations(context.Background(), "backlog-test", caughtUpAt.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if got := active(); got != 0 {
-		t.Fatalf("backlog readings 40 minutes old raised %d alarms", got)
+	if all, _ := alarms(); all != 0 {
+		t.Fatalf("backlog readings around 30 minutes old raised %d alarms", all)
 	}
 
-	if _, err := store.RunDueEvaluations(context.Background(), "backlog-test", caughtUpAt.Add(31*time.Minute)); err != nil {
+	if _, err := store.RunDueEvaluations(context.Background(), "backlog-test", caughtUpAt.Add(3*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if got := active(); got != 1 {
-		t.Fatalf("30 minutes after the last reading arrived, %d alarms are active, want 1", got)
+	if _, active := alarms(); active != 1 {
+		t.Fatalf("no reading for 3 minutes after the backlog, the last 32 minutes old: %d alarms active, want 1", active)
 	}
 }
