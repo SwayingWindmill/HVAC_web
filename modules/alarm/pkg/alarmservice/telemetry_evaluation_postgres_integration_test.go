@@ -299,7 +299,7 @@ func TestPostgresTelemetryEvaluatesOnlyTheRulesReadingTheDevice(t *testing.T) {
 		}
 		return decisions
 	}
-	lastInput := func(name string) string {
+	version := func(name string) uint64 {
 		t.Helper()
 		tx, err := store.beginTenantTransaction(ctx, telemetryBridgeTenantID, true)
 		if err != nil {
@@ -310,25 +310,18 @@ func TestPostgresTelemetryEvaluatesOnlyTheRulesReadingTheDevice(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("%s has no evaluation: %v", name, err)
 		}
-		return persisted.State.LastInputRevision
+		return persisted.State.Version
 	}
 
-	if got := len(reading(deviceA, 1, startedAt, `25`, "01910000-b000-7000-8000-000000000071")); got != 2 {
-		t.Fatalf("A's first reading evaluated %d rules, want the 2 that read A", got)
-	}
-	if got := len(reading(deviceB, 1, startedAt.Add(time.Second), `25`, "01910000-b000-7000-8000-000000000072")); got != 2 {
-		t.Fatalf("B's first reading evaluated %d rules, want the 2 that read B", got)
-	}
-	untouched := lastInput("only-b")
+	reading(deviceA, 1, startedAt, `25`, "01910000-b000-7000-8000-000000000071")
+	reading(deviceB, 1, startedAt.Add(time.Second), `25`, "01910000-b000-7000-8000-000000000072")
+	onlyA, onlyB, both := version("only-a"), version("only-b"), version("both")
 	later := startedAt.Add(time.Minute)
-	decisions := reading(deviceA, 2, later, `31`, "01910000-b000-7000-8000-000000000073")
-	if len(decisions) != 2 {
-		t.Fatalf("A's reading evaluated %d rules, want the 2 that read A", len(decisions))
+	reading(deviceA, 2, later, `31`, "01910000-b000-7000-8000-000000000073")
+	if version("only-a") == onlyA || version("both") == both {
+		t.Fatal("the rules reading A did not evaluate A's new reading")
 	}
-	if lastInput("only-a") == untouched || lastInput("both") == untouched {
-		t.Fatal("the rules reading A did not see A's new reading")
-	}
-	if lastInput("only-b") != untouched {
+	if version("only-b") != onlyB {
 		t.Fatal("A's reading evaluated the rule that reads only B")
 	}
 

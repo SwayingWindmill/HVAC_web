@@ -108,6 +108,7 @@ COPY modules/alarm/migrations/009_s27_due_evaluation_tenants.sql /opt/hvac/repo/
 COPY modules/alarm/migrations/010_s27_unevaluated_site_assignments.sql /opt/hvac/repo/modules/alarm/migrations/010_s27_unevaluated_site_assignments.sql
 COPY modules/alarm/migrations/011_s28_evaluation_event_retention.sql /opt/hvac/repo/modules/alarm/migrations/011_s28_evaluation_event_retention.sql
 COPY modules/alarm/migrations/012_s29_reading_unchanged_since.sql /opt/hvac/repo/modules/alarm/migrations/012_s29_reading_unchanged_since.sql
+COPY modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql /opt/hvac/repo/modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql

@@ -102,21 +102,21 @@ func (store *PostgresStore) EvaluateTelemetrySnapshot(ctx context.Context, event
 	// calculated fields: docs/architecture/alarm-evaluation-relevance-source-review-2026-10-20.md). Whatever only time
 	// changes for the others (a reading going stale, no data for a while) is the scheduled pass's:
 	// each evaluation leaves when it is next due.
-	var reading []siteRule
+	var relevant []siteRule
 	for _, rule := range rules {
 		if readsDevice(rule.policy, string(snapshot.DeviceId)) {
-			reading = append(reading, rule)
+			relevant = append(relevant, rule)
 		}
 	}
-	if len(reading) == 0 {
+	if len(relevant) == 0 {
 		return []EvaluationDecision{}, nil
 	}
 	evaluationSnapshot, err := buildSiteEvaluationSnapshot(eventID, string(snapshot.TenantId), string(snapshot.SiteId), records)
 	if err != nil {
 		return nil, err
 	}
-	decisions := make([]EvaluationDecision, 0, len(reading))
-	for _, rule := range reading {
+	decisions := make([]EvaluationDecision, 0, len(relevant))
+	for _, rule := range relevant {
 		decision, err := store.EvaluateAssignedSnapshot(ctx, rule.assignmentID, evaluationSnapshot, now.UTC())
 		if err != nil {
 			return decisions, err
@@ -216,10 +216,15 @@ type siteRule struct {
 	policy       AlarmPolicyRevision
 }
 
-// readsDevice is whether the policy reads one of the device's readings; the Site snapshot keys each
-// reading "<device>/<key>".
+// siteInputKey is how the Site snapshot names a device's reading.
+func siteInputKey(deviceID, key string) string {
+	return deviceID + "/" + key
+}
+
+// readsDevice is whether the policy reads one of the device's readings.
 func readsDevice(policy AlarmPolicyRevision, deviceID string) bool {
-	return conditionReadsDevice(policy.Raise, deviceID+"/") || conditionReadsDevice(policy.Clear, deviceID+"/")
+	prefix := siteInputKey(deviceID, "")
+	return conditionReadsDevice(policy.Raise, prefix) || conditionReadsDevice(policy.Clear, prefix)
 }
 
 func conditionReadsDevice(condition Condition, prefix string) bool {
@@ -325,7 +330,7 @@ func buildSiteEvaluationSnapshot(triggerEventID, tenantID, siteID string, record
 			if err != nil {
 				return EvaluationSnapshot{}, err
 			}
-			key = record.DeviceID + "/" + key
+			key = siteInputKey(record.DeviceID, key)
 			fact.Key = key
 			if _, duplicate := inputs[key]; duplicate {
 				return EvaluationSnapshot{}, fmt.Errorf("%w: duplicate telemetry input %q", ErrTelemetryEvaluationInvalid, key)

@@ -172,3 +172,75 @@ func siteAlarms(t *testing.T, ctx context.Context, store *PostgresStore, siteID 
 	}
 	return matching
 }
+
+// #659: readings evaluate only the rules reading their device, so a new version of a rule whose
+// device is silent waits for no reading; the pass evaluates it with the Site's last readings.
+func TestPostgresScheduledPassAppliesANewRuleVersionWhileItsDeviceIsSilent(t *testing.T) {
+	databaseURL := os.Getenv("S4_ALARM_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
+	}
+	const (
+		siteID       = "01910000-c000-7000-8000-000000000032"
+		otherDevice  = "01910000-c000-7000-8000-000000000033"
+		assignmentID = "01910000-c000-7000-8000-000000000037"
+		revisionTwo  = "01910000-c000-7000-8000-000000000038"
+	)
+	ctx := identitycontext.WithTenantID(context.Background(), silenceTenantID)
+	store, err := OpenPostgresStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	lastReading := time.Date(2026, 10, 20, 6, 0, 0, 0, time.UTC)
+	release := func(revisionID string, revision uint64, at time.Time) {
+		t.Helper()
+		policy := silencePolicy()
+		policy.PolicyID = "01910000-c000-7000-8000-000000000035"
+		policy.PolicyRevisionID, policy.Revision = revisionID, revision
+		policy.SourceReference = "alarm-rules:version-site/reports-interrupted"
+		sealAlarmPolicy(&policy)
+		if err := store.ReleaseAlarmPolicyRevision(ctx, silenceTenantID, siteID, policy, at, "test:silence"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.AssignAlarmPolicyRevision(ctx, silenceTenantID, siteID, AlarmPolicyAssignmentInput{
+			AssignmentID: assignmentID, AssignmentRevision: revision, PolicyRevisionID: revisionID,
+			SubjectType: "SITE", SubjectID: siteID, AssignedAt: at.Format(time.RFC3339Nano), AssignedBy: "test:silence",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release("01910000-c000-7000-8000-000000000036", 1, lastReading.Add(-time.Minute))
+	snapshot := silenceSnapshot(1, lastReading)
+	snapshot.SiteId = siteID
+	if _, err := store.EvaluateTelemetrySnapshot(ctx, "01910000-c000-7000-8000-000000000041", snapshot, lastReading); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RunDueEvaluations(context.Background(), "silence-test", lastReading.Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	published := lastReading.Add(20 * time.Minute)
+	release(revisionTwo, 2, published)
+	other := silenceSnapshot(1, published.Add(time.Minute))
+	other.SiteId, other.DeviceId = siteID, otherDevice
+	if _, err := store.EvaluateTelemetrySnapshot(ctx, "01910000-c000-7000-8000-000000000042", other, published.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RunDueEvaluations(context.Background(), "silence-test", published.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.beginTenantTransaction(ctx, silenceTenantID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	persisted, found, err := loadPersistedEvaluation(ctx, tx, silenceTenantID, siteID, assignmentID, false)
+	if err != nil || !found {
+		t.Fatalf("the rule has no evaluation: %v", err)
+	}
+	if persisted.State.PolicyRevisionID != revisionTwo {
+		t.Fatalf("the new version was not applied while its device is silent: evaluated with %s", persisted.State.PolicyRevisionID)
+	}
+}
