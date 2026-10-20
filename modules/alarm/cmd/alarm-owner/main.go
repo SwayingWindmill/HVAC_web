@@ -94,10 +94,7 @@ func main() {
 		}
 	}()
 	scheduled, stopScheduled := context.WithCancel(context.Background())
-	if err := alarmservice.RunScheduledEvaluations(scheduled, store, logger); err != nil {
-		logger.Error("alarm_evaluation_interval_invalid", "error_code", "ALARM_EVALUATION_INTERVAL_INVALID")
-		os.Exit(1)
-	}
+	alarmservice.RunScheduledEvaluations(scheduled, store, logger)
 
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)

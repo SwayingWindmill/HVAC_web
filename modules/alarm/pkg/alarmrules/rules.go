@@ -162,12 +162,9 @@ func Load(rulesPath string) (Compiled, error) {
 			if len(entry.points) == 0 {
 				continue
 			}
-			var noData, fresh []alarmservice.Condition
+			noData, fresh := watched(entry, readings.AgeSeconds)
 			var names []string
 			for _, point := range entry.points {
-				input := entry.id + "/" + point.Code
-				noData = append(noData, alarmservice.Condition{Kind: alarmservice.ConditionNoData, Input: input, AgeSeconds: readings.AgeSeconds})
-				fresh = append(fresh, hasReading(input, point.ValueType))
 				names = append(names, plainName(point.Name))
 			}
 			wording := strings.NewReplacer("{device}", entry.name, "{points}", strings.Join(names, "、"), "{minutes}", strconv.FormatInt(readings.AgeSeconds/60, 10))
@@ -187,12 +184,7 @@ func Load(rulesPath string) (Compiled, error) {
 			if len(entry.points) == 0 {
 				continue
 			}
-			var deviceNoData, deviceFresh []alarmservice.Condition
-			for _, point := range entry.points {
-				input := entry.id + "/" + point.Code
-				deviceNoData = append(deviceNoData, alarmservice.Condition{Kind: alarmservice.ConditionNoData, Input: input, AgeSeconds: silence.AgeSeconds})
-				deviceFresh = append(deviceFresh, hasReading(input, point.ValueType))
-			}
+			deviceNoData, deviceFresh := watched(entry, silence.AgeSeconds)
 			noData = append(noData, either(alarmservice.ConditionAnd, deviceNoData))
 			fresh = append(fresh, either(alarmservice.ConditionOr, deviceFresh))
 		}
@@ -245,6 +237,16 @@ func resolve(condition alarmservice.Condition, devices map[string]device) (alarm
 		}
 	}
 	return alarmservice.Condition{}, fmt.Errorf("%s is not an active point of the site file", condition.Input)
+}
+
+// watched is, for each of a device's active points, "no reading for ageSeconds" and "has a reading".
+func watched(entry device, ageSeconds int64) (noData, fresh []alarmservice.Condition) {
+	for _, point := range entry.points {
+		input := entry.id + "/" + point.Code
+		noData = append(noData, alarmservice.Condition{Kind: alarmservice.ConditionNoData, Input: input, AgeSeconds: ageSeconds})
+		fresh = append(fresh, hasReading(input, point.ValueType))
+	}
+	return noData, fresh
 }
 
 func hasReading(input, valueType string) alarmservice.Condition {

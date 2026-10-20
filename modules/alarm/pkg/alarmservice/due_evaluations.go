@@ -11,30 +11,24 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
-// A pass claims at most this many due evaluations per Tenant, each for one lease; the next pass
-// takes the rest.
+// A pass runs every minute and claims at most this many due evaluations per Tenant, each for one
+// lease; the next pass takes the rest.
 const (
-	dueEvaluationBatch = 100
-	dueEvaluationLease = time.Minute
+	dueEvaluationInterval = time.Minute
+	dueEvaluationBatch    = 100
+	dueEvaluationLease    = time.Minute
 )
 
-// RunScheduledEvaluations runs a pass every interval (ALARM_EVALUATION_INTERVAL, a minute when
-// unset) until ctx ends, wherever the Alarm owner runs: alone or inside energy-api.
-func RunScheduledEvaluations(ctx context.Context, store *PostgresStore, logger *slog.Logger) error {
-	interval := time.Minute
-	if configured := os.Getenv("ALARM_EVALUATION_INTERVAL"); configured != "" {
-		parsed, err := time.ParseDuration(configured)
-		if err != nil || parsed <= 0 {
-			return errors.New("ALARM_EVALUATION_INTERVAL is not a positive duration")
-		}
-		interval = parsed
-	}
-	workerID, err := os.Hostname()
+// RunScheduledEvaluations runs a pass every minute until ctx ends, wherever the Alarm owner runs:
+// alone or inside energy-api.
+func RunScheduledEvaluations(ctx context.Context, store *PostgresStore, logger *slog.Logger) {
+	host, err := os.Hostname()
 	if err != nil {
-		workerID = "alarm-owner"
+		host = "alarm-owner"
 	}
+	workerID := "alarm-due-evaluations:" + host
 	go func() {
-		ticker := time.NewTicker(interval)
+		ticker := time.NewTicker(dueEvaluationInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -51,7 +45,6 @@ func RunScheduledEvaluations(ctx context.Context, store *PostgresStore, logger *
 			}
 		}
 	}()
-	return nil
 }
 
 // DueEvaluationResult counts what one scheduled pass did.
@@ -94,6 +87,7 @@ func (store *PostgresStore) RunDueEvaluations(ctx context.Context, workerID stri
 		tenantContext := identitycontext.WithTenantID(ctx, tenantID)
 		claims, err := store.ClaimDueEvaluations(tenantContext, tenantID, workerID, now, dueEvaluationLease, dueEvaluationBatch)
 		if err != nil {
+			result.Failed++
 			failures = append(failures, err)
 			continue
 		}

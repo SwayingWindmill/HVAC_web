@@ -230,8 +230,13 @@ func TestSongyaxuanRulesRaiseAndClearAsTheirWordingSays(t *testing.T) {
 	if quiet.Effect != alarmservice.EvaluationEffectPublish {
 		t.Fatalf("15 minutes without a reading did not raise: %#v", quiet)
 	}
-	if back := evaluate(t, silent, "g-2", readings(start.Add(20*time.Minute)), active(quiet.State), start.Add(20*time.Minute)); back.Effect != alarmservice.EvaluationEffectClear {
+	back := evaluate(t, silent, "g-2", readings(start.Add(20*time.Minute)), active(quiet.State), start.Add(20*time.Minute))
+	if back.Effect != alarmservice.EvaluationEffectClear {
 		t.Fatalf("a reading arriving did not clear: %#v", back)
+	}
+	// If that reading was the last before the gateway dropped again, the second silence raises too.
+	if again := evaluate(t, silent, "g-2", readings(start.Add(20*time.Minute)), recovered(back.State), start.Add(35*time.Minute)); again.Effect != alarmservice.EvaluationEffectPublish {
+		t.Fatalf("a second silence right after a clear did not raise: %#v", again)
 	}
 }
 
@@ -269,6 +274,12 @@ func evaluate(t *testing.T, policy alarmservice.AlarmPolicyRevision, revision st
 		t.Fatal(err)
 	}
 	return decision
+}
+
+// recovered is the state after the owner recorded the clear.
+func recovered(state alarmservice.AlarmEvaluationState) alarmservice.AlarmEvaluationState {
+	state.ActiveAlarmID, state.ActiveIncidentCorrelationID = "", ""
+	return state
 }
 
 // active is the state after the owner recorded the raised alarm.
