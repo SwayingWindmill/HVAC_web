@@ -633,6 +633,11 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger) (*http.Ser
 		store.Close()
 		return nil, nil, func() {}, err
 	}
+	// A Site that stops reporting sends no telemetry to evaluate; only the scheduled pass notices it (#615).
+	if err := alarmservice.RunScheduledEvaluations(ctx, store, logger); err != nil {
+		store.Close()
+		return nil, nil, func() {}, err
+	}
 	server := &http.Server{
 		Addr: envOr("ALARM_SERVICE_ADDR", ":8448"), Handler: router,
 		TLSConfig: &tls.Config{

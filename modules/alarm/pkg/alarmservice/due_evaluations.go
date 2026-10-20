@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
@@ -15,6 +17,42 @@ const (
 	dueEvaluationBatch = 100
 	dueEvaluationLease = time.Minute
 )
+
+// RunScheduledEvaluations runs a pass every interval (ALARM_EVALUATION_INTERVAL, a minute when
+// unset) until ctx ends, wherever the Alarm owner runs: alone or inside energy-api.
+func RunScheduledEvaluations(ctx context.Context, store *PostgresStore, logger *slog.Logger) error {
+	interval := time.Minute
+	if configured := os.Getenv("ALARM_EVALUATION_INTERVAL"); configured != "" {
+		parsed, err := time.ParseDuration(configured)
+		if err != nil || parsed <= 0 {
+			return errors.New("ALARM_EVALUATION_INTERVAL is not a positive duration")
+		}
+		interval = parsed
+	}
+	workerID, err := os.Hostname()
+	if err != nil {
+		workerID = "alarm-owner"
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			result, err := store.RunDueEvaluations(ctx, workerID, time.Now())
+			if err != nil {
+				logger.Error("alarm_due_evaluations_failed", "error_code", "ALARM_DUE_EVALUATIONS_FAILED", "error", err, "failed", result.Failed)
+			}
+			if result.Raised+result.Cleared > 0 {
+				logger.Info("alarm_due_evaluations", "evaluated", result.Evaluated, "raised", result.Raised, "cleared", result.Cleared)
+			}
+		}
+	}()
+	return nil
+}
 
 // DueEvaluationResult counts what one scheduled pass did.
 type DueEvaluationResult struct {
