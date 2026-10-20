@@ -1,5 +1,6 @@
-import { gateway, signOutLocally } from '../../lib/platform';
+import { gateway, requireSession, signOutLocally } from '../../lib/platform';
 import { currentSite } from '../../lib/site';
+import { selectTab } from '../../lib/tab';
 
 interface Principal {
   readonly principal: { readonly displayName: string; readonly email: string };
@@ -14,8 +15,8 @@ Page({
   },
 
   async onShow() {
-    const tabBar = typeof this.getTabBar === 'function' ? this.getTabBar() : null;
-    tabBar?.setData({ selected: 1 });
+    if (!requireSession()) return;
+    selectTab(this, 1);
     const [principal, site] = await Promise.allSettled([gateway.get<Principal>('/api/v1/principal'), currentSite()]);
     this.setData({
       name: principal.status === 'fulfilled' ? principal.value.principal.displayName : '—',

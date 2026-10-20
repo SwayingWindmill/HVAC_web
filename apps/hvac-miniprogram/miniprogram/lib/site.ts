@@ -16,5 +16,3 @@ export async function currentSite(): Promise<Site | null> {
   const remembered = wx.getStorageSync(SITE_KEY) as string;
   return page.items.find((site) => site.id === remembered) ?? page.items[0] ?? null;
 }
-
-export const rememberSite = (siteId: string) => wx.setStorageSync(SITE_KEY, siteId);

@@ -1,11 +1,13 @@
-import { gateway } from '../../lib/platform';
+import { GatewayError } from '../../lib/gateway';
+import { gateway, requireSession } from '../../lib/platform';
 import { currentSite, type Site } from '../../lib/site';
-import { againstYesterday, todayStart as startOfToday, type HourPoint } from '../../lib/today';
+import { compareWithYesterday, sameHoursWindows, summarize, todayStart, type HourPoint, type Window } from '../../lib/today';
 import { monthToDate, savingsCard, type Measure, type SavingsTotals } from '../../lib/savings';
-import { presentOverview, type OverviewInputs } from '../../lib/overview';
+import { presentOverview, type OverviewInputs, type Recommendation } from '../../lib/overview';
+import { selectTab } from '../../lib/tab';
 
 const REFRESH_MS = 60_000;
-const TWO_DAYS_MS = 2 * 86_400_000;
+const DAY_MS = 86_400_000;
 
 let timer: number | undefined;
 
@@ -15,43 +17,60 @@ const stopRefreshing = () => {
   timer = undefined;
 };
 
-const series = (site: Site, energyType: 'electricity' | 'cooling', granularity: 'hour' | 'day', now: Date) =>
+const series = (site: Site, energyType: 'electricity' | 'cooling', granularity: 'hour' | 'day', window: Window) =>
   gateway.post<{ points: HourPoint[] }>('/api/v1/analytics/energy-series', {
     tenantId: site.tenantId, siteId: site.id, energyType, granularity, timezone: site.timezone,
-    from: new Date(now.getTime() - TWO_DAYS_MS).toISOString(), to: now.toISOString(), qualityPolicy: 'VALID_ONLY',
+    from: window.from, to: window.to, qualityPolicy: 'VALID_ONLY',
   }).then((response) => response.points);
+
+/** Today against yesterday up to the same time of day, read the way the web overview reads it. */
+async function loadEnergy(site: Site, start: string, now: Date): Promise<OverviewInputs['energy']> {
+  const windows = sameHoursWindows(start, now);
+  const [todayElectricity, todayCooling, yesterdayElectricity, yesterdayCooling] = await Promise.all([
+    series(site, 'electricity', 'hour', windows.today),
+    series(site, 'cooling', 'hour', windows.today),
+    series(site, 'electricity', 'hour', windows.yesterday),
+    series(site, 'cooling', 'hour', windows.yesterday),
+  ]);
+  const today = summarize(todayElectricity, todayCooling);
+  return { status: 'ok', today, change: compareWithYesterday(today, summarize(yesterdayElectricity, yesterdayCooling)) };
+}
+
+async function loadSavings(site: Site, start: string): Promise<OverviewInputs['savings']> {
+  const month = monthToDate(start);
+  const [summary, measures] = await Promise.all([
+    gateway.get<{ totals: SavingsTotals }>(`/api/v1/sites/${site.id}/savings/summary?from=${month.from}&to=${month.to}`),
+    gateway.get<{ items: Measure[] }>(`/api/v1/sites/${site.id}/savings/measures`),
+  ]);
+  return { status: 'ok', card: savingsCard(summary.totals, measures.items) };
+}
+
+async function loadRecommendation(site: Site): Promise<OverviewInputs['recommendation']> {
+  try {
+    return { status: 'ok', latest: await gateway.get<Recommendation>(`/api/v1/sites/${site.id}/optimization/recommendations/latest`) };
+  } catch (error) {
+    // No recommendation published yet.
+    if (error instanceof GatewayError && error.status === 404) return { status: 'ok', latest: null };
+    throw error;
+  }
+}
+
+const settled = <T>(result: PromiseSettledResult<T> | null, failed: T): T => (result?.status === 'fulfilled' ? result.value : failed);
 
 async function load(site: Site): Promise<OverviewInputs> {
   const now = new Date();
-  const [days, hourlyElectricity, hourlyCooling, alarms] = await Promise.allSettled([
-    series(site, 'electricity', 'day', now),
-    series(site, 'electricity', 'hour', now),
-    series(site, 'cooling', 'hour', now),
+  const [days, recommendation, alarms] = await Promise.allSettled([
+    series(site, 'electricity', 'day', { from: new Date(now.getTime() - 2 * DAY_MS).toISOString(), to: now.toISOString() }),
+    loadRecommendation(site),
     gateway.get<{ data: unknown[]; meta: { hasMore: boolean } }>(`/api/v1/alarms?siteId=${site.id}&condition=ACTIVE&limit=100`),
   ]);
-  // Today's Site day as the owner cut it.
-  const todayStart = days.status === 'fulfilled' ? startOfToday(days.value, now) : null;
-
-  let energy: OverviewInputs['energy'] = { status: 'error' };
-  if (todayStart !== null && hourlyElectricity.status === 'fulfilled' && hourlyCooling.status === 'fulfilled') {
-    energy = { status: 'ok', ...againstYesterday(hourlyElectricity.value, hourlyCooling.value, todayStart, now) };
-  }
-
-  let savings: OverviewInputs['savings'] = { status: 'error' };
-  if (todayStart !== null) {
-    const month = monthToDate(todayStart);
-    const [summary, measures] = await Promise.allSettled([
-      gateway.get<{ totals: SavingsTotals }>(`/api/v1/sites/${site.id}/savings/summary?from=${month.from}&to=${month.to}`),
-      gateway.get<{ items: Measure[] }>(`/api/v1/sites/${site.id}/savings/measures`),
-    ]);
-    if (summary.status === 'fulfilled' && measures.status === 'fulfilled') {
-      savings = { status: 'ok', card: savingsCard(summary.value.totals, measures.value.items) };
-    }
-  }
-
+  // Where today began at the Site, as the Energy owner cut the day; it dates today and this month.
+  const start = days.status === 'fulfilled' ? todayStart(days.value, now) : null;
+  const [energy, savings] = start === null ? [null, null] : await Promise.allSettled([loadEnergy(site, start, now), loadSavings(site, start)]);
   return {
-    savings,
-    energy,
+    savings: settled<OverviewInputs['savings']>(savings, { status: 'error' }),
+    recommendation: settled<OverviewInputs['recommendation']>(recommendation, { status: 'error' }),
+    energy: settled<OverviewInputs['energy']>(energy, { status: 'error' }),
     alarms: alarms.status === 'fulfilled' ? { status: 'ok', active: alarms.value.data.length, complete: !alarms.value.meta.hasMore } : { status: 'error' },
   };
 }
@@ -69,8 +88,8 @@ Page({
   },
 
   onShow() {
-    const tabBar = typeof this.getTabBar === 'function' ? this.getTabBar() : null;
-    tabBar?.setData({ selected: 0 });
+    if (!requireSession()) return;
+    selectTab(this, 0);
     this.refresh();
     stopRefreshing();
     timer = setInterval(() => this.refresh(), REFRESH_MS);

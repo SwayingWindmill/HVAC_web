@@ -209,7 +209,7 @@ func (h *handler) workOrderMutationSession(writer http.ResponseWriter, request *
 		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("Session validation is unavailable."))
 		return bffSession{}, false
 	}
-	if !session.forgeable() {
+	if !session.needsBrowserProof() {
 		return session, true
 	}
 	csrf := request.Header.Get("X-CSRF-Token")

@@ -27,5 +27,6 @@ test('without savings yet the card says why, in the order an operator can act on
   assert.equal(savingsCard(empty, []).why, 'NO_MEASURE');
   assert.equal(savingsCard(empty, [measure('调高供水温度', 0, 0, 0, false)]).why, 'BASELINE_UNTRUSTED');
   assert.equal(savingsCard(empty, [measure('调高供水温度', 0, 0, 0)]).why, 'FIRST_DAY_PENDING');
+  assert.equal(savingsCard(empty, [{ ...measure('调高供水温度', 0, 0, 0), baseline: null }]).why, 'BASELINE_UNTRUSTED');
   assert.equal(savingsCard(empty, []).saved, null);
 });

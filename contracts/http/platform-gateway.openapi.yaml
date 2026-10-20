@@ -2406,8 +2406,8 @@
       "CsrfToken": {
         "name": "X-CSRF-Token",
         "in": "header",
-        "required": true,
-        "description": "Session-bound CSRF token returned by the current-principal resource.",
+        "required": false,
+        "description": "Session-bound CSRF token returned by the current-principal resource. Required, with the page Origin, for changes made with a browser Session (cookie); a mini program Session sent in the Authorization header needs neither (ADR 0024).",
         "schema": {
           "type": "string",
           "minLength": 16,

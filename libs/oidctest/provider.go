@@ -40,7 +40,12 @@ type Provider struct {
 	modernKey       *ecdsa.PrivateKey
 	modernKid       string
 	codes           map[string]authorizationCode
-	pendingTOTP     map[string]authorizationCode
+	pendingTOTP     map[string]pendingAppLogin
+}
+
+type pendingAppLogin struct {
+	code  authorizationCode
+	state string
 }
 
 type authorizationCode struct {
@@ -106,7 +111,7 @@ func New(config Config) (*Provider, error) {
 		modernKey:       modern,
 		modernKid:       randomToken(8),
 		codes:           map[string]authorizationCode{},
-		pendingTOTP:     map[string]authorizationCode{},
+		pendingTOTP:     map[string]pendingAppLogin{},
 	}, nil
 }
 
@@ -373,7 +378,7 @@ func (provider *Provider) appLogin(writer http.ResponseWriter, request *http.Req
 	if input.Username == "mfa-user" {
 		challenge := randomToken(24)
 		provider.mu.Lock()
-		provider.pendingTOTP[challenge] = pending
+		provider.pendingTOTP[challenge] = pendingAppLogin{code: pending, state: input.State}
 		provider.mu.Unlock()
 		writeJSON(writer, http.StatusOK, map[string]string{"step": "totp", "challenge": challenge})
 		return
@@ -401,7 +406,7 @@ func (provider *Provider) appTOTP(writer http.ResponseWriter, request *http.Requ
 		writeOAuthError(writer, http.StatusUnauthorized, "totp_invalid", "the one-time code is wrong")
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]string{"code": provider.issueCode(pending)})
+	writeJSON(writer, http.StatusOK, map[string]string{"code": provider.issueCode(pending.code), "state": pending.state})
 }
 
 func (provider *Provider) issueCode(code authorizationCode) string {

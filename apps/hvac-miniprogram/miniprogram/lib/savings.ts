@@ -57,7 +57,8 @@ export function savingsCard(totals: SavingsTotals, measures: readonly Measure[])
     };
   }
   const why: NoSavingsReason = counted.length === 0 ? 'NO_MEASURE'
-    : counted.some((measure) => measure.baseline?.trusted === false) ? 'BASELINE_UNTRUSTED'
+    // As on the web, a measure without a baseline yet counts as not trusted.
+    : counted.some((measure) => !measure.baseline?.trusted) ? 'BASELINE_UNTRUSTED'
       : 'FIRST_DAY_PENDING';
   return { saved: null, why, measures: counted };
 }

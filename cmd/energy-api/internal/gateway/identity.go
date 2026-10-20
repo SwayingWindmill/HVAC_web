@@ -574,13 +574,15 @@ func hasSessionCredential(request *http.Request) bool {
 	return presented
 }
 
-// forgeable reports whether another site could make the browser send this Session: a cookie
-// travels with any request, so changes need the page Origin and the CSRF token; the mini
-// program's header is set only by the mini program.
-func (session bffSession) forgeable() bool { return session.Client == sessionstore.ClientBrowser }
+// needsBrowserProof reports whether a change made with this Session must prove it came from the
+// platform's own page (the page Origin and the CSRF token): a browser sends its cookie with any
+// request, even one another site starts; the mini program's header is set only by the mini program.
+func (session bffSession) needsBrowserProof() bool {
+	return session.Client == sessionstore.ClientBrowser
+}
 
 func (controller *identityController) validateStateChange(request *http.Request, session bffSession, csrfToken string) *identityFailure {
-	if !session.forgeable() {
+	if !session.needsBrowserProof() {
 		return nil
 	}
 	if request.Header.Get("Origin") != controller.config.PublicOrigin {

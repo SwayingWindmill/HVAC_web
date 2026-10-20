@@ -162,7 +162,7 @@ func (h *handler) analyticsSession(writer http.ResponseWriter, request *http.Req
 		h.writeAnalyticsFailure(writer, request, analyticsUnavailable("Session validation is unavailable."))
 		return bffSession{}, false
 	}
-	if !session.forgeable() {
+	if !session.needsBrowserProof() {
 		return session, true
 	}
 	csrf := request.Header.Get("X-CSRF-Token")

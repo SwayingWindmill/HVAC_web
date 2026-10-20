@@ -29,6 +29,15 @@
       </view>
     </view>
 
+    <view class="card card-pad suggest {{view.recommendation.state === 'ready' ? 'suggest-ready' : ''}}" aria-label="还能再省">
+      <text class="suggest-label">还能再省</text>
+      <text class="suggest-title">{{view.recommendation.title}}</text>
+      <view wx:if="{{view.recommendation.detail}}" class="suggest-detail">
+        <text wx:if="{{view.recommendation.risk}}" class="badge badge-{{view.recommendation.risk.tone}}">{{view.recommendation.risk.text}}</text>
+        <text class="caption">{{view.recommendation.detail}}</text>
+      </view>
+    </view>
+
     <view class="card card-pad energy" aria-label="今天用能">
       <view class="energy-head">
         <text class="card-title">今天用能</text>
@@ -43,7 +52,6 @@
             <text wx:if="{{item.badge}}" class="badge badge-{{item.badge.tone}}">{{item.badge.text}}</text>
           </view>
         </view>
-        <view class="peak caption">{{view.energy.peak}}</view>
       </block>
     </view>
 

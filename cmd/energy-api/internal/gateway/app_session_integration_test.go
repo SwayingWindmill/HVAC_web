@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
@@ -124,6 +126,31 @@ func TestSessionsAreAcceptedOnlyTheWayTheyWereIssued(t *testing.T) {
 	}
 	defer headerAsCookie.Body.Close()
 	assertProblemCode(t, headerAsCookie, http.StatusUnauthorized, "SESSION_INVALID")
+}
+
+// An administrator ending someone's Session ends it in the mini program too.
+func TestAdministratorRevokingAMiniProgramSessionSignsThePhoneOut(t *testing.T) {
+	harness := newAuthHarness(t)
+	client := &http.Client{Transport: harness.transport}
+	session := decodeAppSession(t, postAppJSON(t, client, harness.gatewayURL+"/api/v1/auth/app/sessions", map[string]string{"username": "fixture", "password": "correct-password"}), http.StatusCreated)
+
+	adminClient := harness.browserClient(t)
+	adminPrincipal, _ := loginAndReadPrincipal(t, adminClient, harness.gatewayURL, "admin")
+	revokePath := strings.Replace(platformapi.RevokeSessionPathTemplate, "{sessionId}", url.PathEscape(session.SessionToken), 1)
+	revoke, _ := http.NewRequest(http.MethodPost, harness.gatewayURL+revokePath, nil)
+	revoke.Header.Set("Origin", harness.gatewayURL)
+	revoke.Header.Set("X-CSRF-Token", adminPrincipal.Session.CSRFToken)
+	response, err := adminClient.Do(revoke)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("revoke status = %d", response.StatusCode)
+	}
+
+	afterRevocation := bearer(t, client, http.MethodGet, harness.gatewayURL+platformapi.GetCurrentPrincipalPath, session.SessionToken)
+	assertProblemCode(t, afterRevocation, http.StatusUnauthorized, "SESSION_INVALID")
 }
 
 func TestMiniProgramAsksForTheOneTimeCodeWhenTheAccountHasOne(t *testing.T) {

@@ -39,5 +39,11 @@ export const gateway = createGateway({
   },
 });
 
-export const hasSession = () => session.get() !== null;
 export const signOutLocally = () => session.clear();
+
+/** A tab page shows nothing without a Session: it sends the person to the sign-in page instead. */
+export function requireSession(): boolean {
+  if (session.get() !== null) return true;
+  wx.reLaunch({ url: '/pages/login/index' });
+  return false;
+}

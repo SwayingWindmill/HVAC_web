@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -46,13 +47,40 @@ type appPendingResponse struct {
 	PendingLogin string `json:"pendingLogin"`
 }
 
-// identityAppResult is identity-service's answer: a code for /token, or the one-time-code step.
+// identityAppLogin is identity-service's /app/login request, field for field.
+type identityAppLogin struct {
+	ClientID      string `json:"clientId"`
+	RedirectURI   string `json:"redirectUri"`
+	State         string `json:"state"`
+	Nonce         string `json:"nonce"`
+	CodeChallenge string `json:"codeChallenge"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+}
+
+// identityAppTOTP is identity-service's /app/mfa/totp request.
+type identityAppTOTP struct {
+	Challenge string `json:"challenge"`
+	Code      string `json:"code"`
+}
+
+const appStepTOTP = "totp"
+
+// identityAppResult is identity-service's answer: a code for /token with the state it was
+// issued for, or the one-time-code step.
 type identityAppResult struct {
 	Code      string `json:"code"`
+	State     string `json:"state"`
 	Step      string `json:"step"`
 	Challenge string `json:"challenge"`
 	Error     string `json:"error"`
 }
+
+var (
+	appStateStoreFailure = identityFailure{503, "OIDC_STATE_STORE_UNAVAILABLE", "Sign-in unavailable", "The Gateway could not keep or read the pending sign-in.", true}
+	appLoginExpired      = identityFailure{400, "LOGIN_EXPIRED", "Sign-in expired", "The pending sign-in is missing, expired, or already used; start again.", false}
+	appStateMismatch     = identityFailure{401, "OIDC_STATE_INVALID", "Sign-in failed", "The identity service answered for another sign-in.", false}
+)
 
 func (h *handler) CreateAppSession(writer http.ResponseWriter, request *http.Request) {
 	if !h.appSignInAvailable(writer, request) {
@@ -65,25 +93,25 @@ func (h *handler) CreateAppSession(writer http.ResponseWriter, request *http.Req
 	state := loginState{Verifier: randomURLToken(48), Nonce: randomURLToken(24), RequiredACR: authenticationACRBasic, CreatedAt: h.identity.now()}
 	stateKey := randomURLToken(24)
 	digest := sha256.Sum256([]byte(state.Verifier))
-	result, failure := h.identity.callIdentityApp(request, "/app/login", map[string]string{
-		"clientId": h.identity.config.OIDCClientID, "redirectUri": h.identity.config.OIDCRedirectURI,
-		"state": stateKey, "nonce": state.Nonce, "codeChallenge": base64.RawURLEncoding.EncodeToString(digest[:]),
-		"username": input.Username, "password": input.Password,
+	result, failure := h.identity.callIdentityApp(request, "/app/login", identityAppLogin{
+		ClientID: h.identity.config.OIDCClientID, RedirectURI: h.identity.config.OIDCRedirectURI,
+		State: stateKey, Nonce: state.Nonce, CodeChallenge: base64.RawURLEncoding.EncodeToString(digest[:]),
+		Username: input.Username, Password: input.Password,
 	})
 	if failure != nil {
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	if result.Step == "totp" {
+	if result.Step == appStepTOTP {
 		state.Challenge = result.Challenge
 		if err := h.identity.states.Put(request.Context(), stateKey, state, h.identity.config.StateTTL); err != nil {
-			writeIdentityFailure(writer, request, identityFailure{503, "OIDC_STATE_STORE_UNAVAILABLE", "Sign-in unavailable", "The Gateway could not keep the pending sign-in.", true})
+			writeIdentityFailure(writer, request, appStateStoreFailure)
 			return
 		}
-		writeJSON(writer, http.StatusAccepted, appPendingResponse{Step: "totp", PendingLogin: stateKey})
+		writeJSON(writer, http.StatusAccepted, appPendingResponse{Step: appStepTOTP, PendingLogin: stateKey})
 		return
 	}
-	h.finishAppSession(writer, request, result.Code, state)
+	h.finishAppSession(writer, request, stateKey, result, state)
 }
 
 func (h *handler) CompleteAppSessionTOTP(writer http.ResponseWriter, request *http.Request) {
@@ -95,30 +123,38 @@ func (h *handler) CompleteAppSessionTOTP(writer http.ResponseWriter, request *ht
 		return
 	}
 	state, err := h.identity.states.Consume(request.Context(), input.PendingLogin)
-	if errors.Is(err, ErrLoginStateNotFound) || (err == nil && (state.Challenge == "" || h.identity.now().Sub(state.CreatedAt) > h.identity.config.StateTTL)) {
-		writeIdentityFailure(writer, request, identityFailure{400, "LOGIN_EXPIRED", "Sign-in expired", "The pending sign-in is missing, expired, or already used; start again.", false})
+	if errors.Is(err, ErrLoginStateNotFound) || (err == nil && (state.Challenge == "" || h.identity.now().Sub(state.CreatedAt) >= h.identity.config.StateTTL)) {
+		writeIdentityFailure(writer, request, appLoginExpired)
 		return
 	}
 	if err != nil {
-		writeIdentityFailure(writer, request, identityFailure{503, "OIDC_STATE_STORE_UNAVAILABLE", "Sign-in unavailable", "The Gateway could not read the pending sign-in.", true})
+		writeIdentityFailure(writer, request, appStateStoreFailure)
 		return
 	}
-	result, failure := h.identity.callIdentityApp(request, "/app/mfa/totp", map[string]string{"challenge": state.Challenge, "code": input.Code})
+	result, failure := h.identity.callIdentityApp(request, "/app/mfa/totp", identityAppTOTP{Challenge: state.Challenge, Code: input.Code})
 	if failure != nil {
 		if failure.code == "TOTP_INVALID" {
-			// A mistyped code may be tried again; identity-service limits the attempts.
-			if err := h.identity.states.Put(request.Context(), input.PendingLogin, state, h.identity.config.StateTTL-h.identity.now().Sub(state.CreatedAt)); err != nil {
-				failure = &identityFailure{503, "OIDC_STATE_STORE_UNAVAILABLE", "Sign-in unavailable", "The Gateway could not keep the pending sign-in.", true}
+			// A mistyped code may be tried again within the sign-in's time; identity-service limits the attempts.
+			remaining := h.identity.config.StateTTL - h.identity.now().Sub(state.CreatedAt)
+			if remaining <= 0 {
+				failure = &appLoginExpired
+			} else if err := h.identity.states.Put(request.Context(), input.PendingLogin, state, remaining); err != nil {
+				failure = &appStateStoreFailure
 			}
 		}
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	h.finishAppSession(writer, request, result.Code, state)
+	h.finishAppSession(writer, request, input.PendingLogin, result, state)
 }
 
-func (h *handler) finishAppSession(writer http.ResponseWriter, request *http.Request, code string, state loginState) {
-	stored, failure := h.identity.signIn(request, sessionstore.ClientMiniProgram, code, state)
+// finishAppSession redeems the code identity-service issued for this sign-in's state.
+func (h *handler) finishAppSession(writer http.ResponseWriter, request *http.Request, stateKey string, result identityAppResult, state loginState) {
+	if subtle.ConstantTimeCompare([]byte(result.State), []byte(stateKey)) != 1 {
+		writeIdentityFailure(writer, request, appStateMismatch)
+		return
+	}
+	stored, failure := h.identity.signIn(request, sessionstore.ClientMiniProgram, result.Code, state)
 	if failure != nil {
 		writeIdentityFailure(writer, request, *failure)
 		return
@@ -155,7 +191,7 @@ func decodeAppSignIn(writer http.ResponseWriter, request *http.Request, into any
 }
 
 // callIdentityApp posts one sign-in step to identity-service over the backchannel.
-func (controller *identityController) callIdentityApp(request *http.Request, path string, body map[string]string) (identityAppResult, *identityFailure) {
+func (controller *identityController) callIdentityApp(request *http.Request, path string, body any) (identityAppResult, *identityFailure) {
 	base := strings.TrimSpace(controller.config.OIDCBackchannelBaseURL)
 	if base == "" {
 		base = controller.config.OIDCIssuer
@@ -179,14 +215,14 @@ func (controller *identityController) callIdentityApp(request *http.Request, pat
 		return identityAppResult{}, &identityFailure{503, "OIDC_PROVIDER_UNAVAILABLE", "Sign-in unavailable", "The identity service answered with an invalid body.", true}
 	}
 	switch {
-	case response.StatusCode == http.StatusOK && (result.Code != "" || (result.Step == "totp" && result.Challenge != "")):
+	case response.StatusCode == http.StatusOK && (result.Code != "" || (result.Step == appStepTOTP && result.Challenge != "")):
 		return result, nil
 	case result.Error == "invalid_credentials":
 		return identityAppResult{}, &identityFailure{401, "INVALID_CREDENTIALS", "Sign-in failed", "The username or password is wrong, or the account cannot sign in.", false}
 	case result.Error == "totp_invalid":
 		return identityAppResult{}, &identityFailure{401, "TOTP_INVALID", "Sign-in failed", "The one-time code is wrong.", false}
 	case result.Error == "expired":
-		return identityAppResult{}, &identityFailure{400, "LOGIN_EXPIRED", "Sign-in expired", "The sign-in has expired; start again.", false}
+		return identityAppResult{}, &appLoginExpired
 	default:
 		return identityAppResult{}, &identityFailure{503, "OIDC_PROVIDER_UNAVAILABLE", "Sign-in unavailable", "The identity service could not complete the sign-in.", true}
 	}

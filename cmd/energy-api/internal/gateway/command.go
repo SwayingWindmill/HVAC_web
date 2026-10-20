@@ -526,7 +526,7 @@ func (h *handler) commandSession(writer http.ResponseWriter, request *http.Reque
 			return bffSession{}, false
 		}
 	}
-	if requireCSRF && session.forgeable() {
+	if requireCSRF && session.needsBrowserProof() {
 		if h.identity == nil {
 			writeProblem(writer, request, http.StatusServiceUnavailable, "COMMAND_UNAVAILABLE", "Command unavailable", "Session validation is unavailable.", true, nil)
 			return bffSession{}, false

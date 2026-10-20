@@ -1,38 +1,49 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { againstYesterday } from '../miniprogram/lib/today.ts';
+import { compareWithYesterday, sameHoursWindows, summarize } from '../miniprogram/lib/today.ts';
 
-// Hourly buckets at a UTC+8 Site; today began at 16:00Z and it is now 02:30Z (10:30 at the Site).
-const hour = (iso: string, energyKWh: number, periods?: Record<string, [number, number]>) => ({
-  periodStart: iso,
-  periodEnd: new Date(Date.parse(iso) + 3_600_000).toISOString().replace('.000', ''),
-  energyKWh,
-  ...(periods ? { cost: { periods: Object.entries(periods).map(([periodCode, [kWh, cny]]) => ({ periodCode, energyKWh: kWh, amountCNY: cny })) } } : {}),
-});
-const todayStart = '2026-10-19T16:00:00Z';
-const now = new Date('2026-10-20T02:30:00Z');
-const electricity = [
-  hour('2026-10-18T23:00:00Z', 100, { VALLEY: [100, 24] }), // yesterday 07:00
-  hour('2026-10-19T00:00:00Z', 120, { PEAK: [120, 124] }), // yesterday 08:00
-  hour('2026-10-19T03:00:00Z', 500, { PEAK: [500, 515] }), // yesterday 11:00, after now's time of day
-  hour('2026-10-19T23:00:00Z', 110, { VALLEY: [110, 26] }), // today 07:00
-  hour('2026-10-20T00:00:00Z', 160, { PEAK: [160, 165] }), // today 08:00
-  hour('2026-10-20T02:00:00Z', 50, { PEAK: [50, 52] }), // today 10:00, under way
-];
-const cooling = [
-  hour('2026-10-18T23:00:00Z', 400), hour('2026-10-19T00:00:00Z', 540), hour('2026-10-19T03:00:00Z', 2000),
-  hour('2026-10-19T23:00:00Z', 420), hour('2026-10-20T00:00:00Z', 700), hour('2026-10-20T02:00:00Z', 200),
-];
+// The web overview's 今日用能 (apps/hvac-web/src/features/energy-analysis/consumption/model.ts):
+// today runs from the Site's midnight to now, yesterday from the midnight before to the same
+// time of day, both cut by the Energy owner at those instants.
 
-test('today so far is compared with yesterday up to the same time of day, hour by hour', () => {
-  const result = againstYesterday(electricity, cooling, todayStart, now);
-  assert.deepEqual(result.today, { electricityKWh: 320, coolingKWh: 1320, cop: 4.13, costCNY: 243, peakShare: 0.66 });
-  // 320 / 220, 1320 / 940, (1320 / 320) / (940 / 220), 243 / 148.
-  assert.deepEqual(result.change, { electricity: 0.455, cooling: 0.404, cop: -0.035, cost: 0.642 });
-  assert.equal(result.yesterdayPeakShare, 0.55);
+test('today and yesterday up to the same time of day are two windows of equal length', () => {
+  assert.deepEqual(sameHoursWindows('2026-10-19T16:00:00Z', new Date('2026-10-20T06:05:00Z')), {
+    today: { from: '2026-10-19T16:00:00.000Z', to: '2026-10-20T06:05:00.000Z' },
+    yesterday: { from: '2026-10-18T16:00:00.000Z', to: '2026-10-19T06:05:00.000Z' },
+  });
 });
 
-test('a change needs something to compare with', () => {
-  const quiet = againstYesterday(electricity.slice(3), cooling.slice(3), todayStart, now);
-  assert.deepEqual(quiet.change, { electricity: null, cooling: null, cop: null, cost: null });
+const hour = (start: string, energyKWh: number, cost?: { amountCNY: number; unpricedKWh: number }) => ({
+  periodStart: start, periodEnd: start, energyKWh, ...(cost ? { cost: { ...cost, periods: [] } } : {}),
+});
+
+test('a summary adds the hours up, counts efficiency only where both meters read, and cost only where it was priced', () => {
+  const electricity = [
+    hour('2026-10-20T00:00:00Z', 100, { amountCNY: 103, unpricedKWh: 0 }),
+    hour('2026-10-20T01:00:00Z', 120, { amountCNY: 124, unpricedKWh: 0 }),
+    hour('2026-10-20T02:00:00Z', 80),
+  ];
+  const cooling = [hour('2026-10-20T00:00:00Z', 450), hour('2026-10-20T02:00:00Z', 360)];
+  assert.deepEqual(summarize(electricity, cooling), {
+    electricityKWh: 300,
+    coolingKWh: 810,
+    // (450 + 360) / (100 + 80): the 01:00 hour has no cooling reading.
+    cop: 4.5,
+    costCNY: 227,
+  });
+});
+
+test('no readings is no number, not zero', () => {
+  assert.deepEqual(summarize([], []), { electricityKWh: null, coolingKWh: null, cop: null, costCNY: null });
+  assert.equal(summarize([hour('2026-10-20T00:00:00Z', 100)], []).costCNY, null);
+});
+
+test('each change is against yesterday up to the same time, and needs something to compare with', () => {
+  const today = { electricityKWh: 1691, coolingKWh: 7657.3, cop: 4.53, costCNY: 1423 };
+  const yesterday = { electricityKWh: 1463, coolingKWh: 6733, cop: 4.6, costCNY: 1095 };
+  const change = compareWithYesterday(today, yesterday);
+  assert.equal(change.electricity?.toFixed(3), '0.156');
+  assert.equal(change.cost?.toFixed(3), '0.300');
+  assert.deepEqual(compareWithYesterday(today, { electricityKWh: null, coolingKWh: 0, cop: null, costCNY: null }),
+    { electricity: null, cooling: null, cop: null, cost: null });
 });

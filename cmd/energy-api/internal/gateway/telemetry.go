@@ -299,7 +299,7 @@ func (h *handler) telemetryCaller(writer http.ResponseWriter, request *http.Requ
 }
 
 func (h *handler) telemetrySessionCaller(writer http.ResponseWriter, request *http.Request, session bffSession, requireCSRF bool) (telemetryCaller, bool) {
-	if requireCSRF && session.forgeable() {
+	if requireCSRF && session.needsBrowserProof() {
 		if h.identity == nil {
 			h.writeTelemetryFailure(writer, request, telemetryUnavailable("Telemetry Session validation is unavailable."))
 			return telemetryCaller{}, false
