@@ -29,6 +29,12 @@ const withAnswer = (snapshot: AgentSessionSnapshot, edit: (content: string) => s
 };
 
 const recorded = ['daily-electricity-cooling-cop', 'tariff-period-cost', 'least-efficient-hours'] as const;
+// These recordings predate #607, which stopped saving the narration before a read; the platform
+// now saves only the answer.
+const answerOnly = (snapshot: AgentSessionSnapshot): AgentSessionSnapshot => ({
+  ...snapshot,
+  messages: snapshot.messages.filter((message, index) => message.role !== 'ASSISTANT' || index === snapshot.messages.length - 1),
+});
 
 test('the recorded answers complete as supported findings stating every figure the owner holds', () => {
   for (const id of recorded) {
@@ -208,4 +214,27 @@ test('a question that asks for a chart fails without one, or with one lacking th
   assert.equal(check(gradeTrial(electricity, charting(owner), series), 'chart').passed, true);
   assert.equal(check(gradeTrial(electricity, charting(owner.map((value: number) => value + 5)), series), 'chart').passed, false);
   assert.equal(gradeTrial(daily, snapshot, series).checks.some((each) => each.name === 'chart'), false);
+});
+
+test('an answer leads with its conclusion as one bold sentence; a bold heading, a note first or bold figures alone fail', () => {
+  for (const id of recorded) {
+    const lead = check(gradeTrial(question(id), fixture(id), series), 'leads-with-conclusion');
+    assert.equal(lead.passed, false, id);
+  }
+  const snapshot = answerOnly(fixture('least-efficient-hours'));
+  const concluded = withAnswer(snapshot, (content) => `**昨天能效最低的是 7 点和 16 点，分别是 3.52 和 3.75。**\n\n${content.replaceAll('**', '')}`);
+  assert.equal(check(gradeTrial(question('least-efficient-hours'), concluded, series), 'leads-with-conclusion').passed, true);
+});
+
+test('the bold conclusion stands on its own line and is the only bold text, because the panel shows anything else as stars', () => {
+  const snapshot = answerOnly(fixture('least-efficient-hours'));
+  const lead = (answer: string, from = snapshot) => check(gradeTrial(question('least-efficient-hours'), withAnswer(from, () => answer), series), 'leads-with-conclusion');
+  // CommonMark does not close 「**…。**」 when a character follows it directly: the operator sees the stars.
+  assert.equal(lead('**昨天能效最低的是 7 点，3.52。**16 点是 3.75。').passed, false);
+  assert.equal(lead('**昨天能效最低的是 7 点，3.52。** **16 点是 3.75。**').passed, false);
+  assert.equal(lead('**昨天能效最低的是 7 点，3.52。**\n16 点是 **3.75**。').passed, false);
+  assert.equal(lead('**昨天能效最低的是 7 点，3.52。**').passed, true);
+  // The operator reads the answer first; a correction the platform asked for comes after it.
+  const corrected = { ...snapshot, messages: [...snapshot.messages.slice(0, -1), { ...snapshot.messages.at(-1)!, content: '**昨天能效最低的是 7 点，3.52。**\n16 点是 3.75。' }, { ...snapshot.messages.at(-1)!, id: 'correction', content: '更正：我没有操作设备。' }] };
+  assert.equal(check(gradeTrial(question('least-efficient-hours'), corrected, series), 'leads-with-conclusion').passed, true);
 });
