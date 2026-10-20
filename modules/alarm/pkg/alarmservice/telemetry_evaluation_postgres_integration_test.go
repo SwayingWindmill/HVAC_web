@@ -337,3 +337,83 @@ func TestPostgresTelemetryEvaluatesOnlyTheRulesReadingTheDevice(t *testing.T) {
 		t.Fatalf("A cooling cleared %d alarms, want its own and the one reading both", cleared)
 	}
 }
+
+// #661: catching up on a backlog, readings 40 minutes old are judged at their own time, so
+// 「读数长时间没有更新」 neither raises nor flaps while they keep arriving; once they stop, the Site's
+// clock runs on from the last one and the scheduled pass raises it 30 minutes later.
+func TestPostgresBacklogReadingsAreJudgedAtTheirOwnTime(t *testing.T) {
+	databaseURL := os.Getenv("S4_ALARM_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
+	}
+	const (
+		siteID       = "01910000-b000-7000-8000-000000000082"
+		device       = "01910000-b000-7000-8000-000000000083"
+		assignmentID = "01910000-b000-7000-8000-000000000087"
+	)
+	ctx := identitycontext.WithTenantID(context.Background(), telemetryBridgeTenantID)
+	store, err := OpenPostgresStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	caughtUpAt := time.Date(2026, 10, 20, 12, 47, 0, 0, time.UTC)
+	policy := validAlarmPolicy()
+	policy.PolicyID = "01910000-b000-7000-8000-000000000085"
+	policy.PolicyRevisionID = "01910000-b000-7000-8000-000000000086"
+	policy.SourceReference = "alarm-rules:backlog-site/readings-not-updated/module"
+	policy.QualityPolicy = EvaluationQualityUsable
+	policy.FreshnessSeconds = 1800
+	policy.TriggerMode = TriggerSimple
+	low, high := -1e12, 1e12
+	policy.Raise = Condition{Kind: ConditionNoData, Input: device + "/t1", AgeSeconds: 1800}
+	policy.Clear = Condition{Kind: ConditionRange, Input: device + "/t1", Minimum: &low, Maximum: &high}
+	sealAlarmPolicy(&policy)
+	if err := store.ReleaseAlarmPolicyRevision(ctx, telemetryBridgeTenantID, siteID, policy, caughtUpAt.Add(-2*time.Hour), "test:backlog"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AssignAlarmPolicyRevision(ctx, telemetryBridgeTenantID, siteID, AlarmPolicyAssignmentInput{
+		AssignmentID: assignmentID, AssignmentRevision: 1, PolicyRevisionID: policy.PolicyRevisionID,
+		SubjectType: "SITE", SubjectID: siteID, AssignedAt: caughtUpAt.Add(-2 * time.Hour).Format(time.RFC3339Nano), AssignedBy: "test:backlog",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	active := func() int {
+		t.Helper()
+		listed, err := store.List(ctx, telemetryBridgeTenantID, siteID, Filter{Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for _, alarm := range listed.Items {
+			if alarm.Condition == alarmmodel.ConditionActive {
+				count++
+			}
+		}
+		return count
+	}
+
+	// A minute of the backlog: readings taken 40 and 39 minutes before they reach the alarm side.
+	for index, eventID := range []string{"01910000-b000-7000-8000-000000000091", "01910000-b000-7000-8000-000000000092"} {
+		takenAt := caughtUpAt.Add(-40*time.Minute + time.Duration(index)*time.Minute)
+		snapshot := telemetryBridgeSnapshot(device, int64(index+1), takenAt, presentTelemetryState("t1", "NUMBER", `21.5`, "GOOD", "FRESH", takenAt))
+		snapshot.SiteId = siteID
+		if _, err := store.EvaluateTelemetrySnapshot(ctx, eventID, snapshot, caughtUpAt.Add(time.Duration(index)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.RunDueEvaluations(context.Background(), "backlog-test", caughtUpAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if got := active(); got != 0 {
+		t.Fatalf("backlog readings 40 minutes old raised %d alarms", got)
+	}
+
+	if _, err := store.RunDueEvaluations(context.Background(), "backlog-test", caughtUpAt.Add(31*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if got := active(); got != 1 {
+		t.Fatalf("30 minutes after the last reading arrived, %d alarms are active, want 1", got)
+	}
+}

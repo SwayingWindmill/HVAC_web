@@ -77,10 +77,15 @@ func (store *PostgresStore) EvaluateAssignedSnapshot(ctx context.Context, assign
 	if found {
 		previous = persisted.State
 	}
-	decision, err := EvaluatePolicy(assigned.Policy, snapshot, previous, now)
+	judgedAt, err := siteClock(ctx, tx, snapshot.TenantID, snapshot.SiteID, now.UTC())
 	if err != nil {
 		return EvaluationDecision{}, err
 	}
+	decision, err := EvaluatePolicy(assigned.Policy, snapshot, previous, judgedAt)
+	if err != nil {
+		return EvaluationDecision{}, err
+	}
+	recordAt(&decision, now)
 	if decision.State.Version == previous.Version {
 		if err := tx.Commit(ctx); err != nil {
 			return EvaluationDecision{}, fmt.Errorf("commit duplicate Alarm evaluation: %w", err)
@@ -166,17 +171,23 @@ func (store *PostgresStore) EvaluateClaim(ctx context.Context, claim EvaluationC
 	if err != nil {
 		return EvaluationDecision{}, err
 	}
-	if !found || persisted.LeaseOwner != claim.WorkerID || persisted.LeaseUntil == nil || !now.UTC().Before(*persisted.LeaseUntil) || persisted.LeaseFence != claim.Fence || persisted.State.Version != claim.StateVersion || !evaluationIsDue(persisted.State.NextEvaluationAt, now.UTC()) {
+	judgedAt, err := siteClock(ctx, tx, claim.TenantID, claim.SiteID, now.UTC())
+	if err != nil {
+		return EvaluationDecision{}, err
+	}
+	// Claimed against now, it may not be due yet at the Site's clock while a backlog is caught up.
+	if !found || persisted.LeaseOwner != claim.WorkerID || persisted.LeaseUntil == nil || !now.UTC().Before(*persisted.LeaseUntil) || persisted.LeaseFence != claim.Fence || persisted.State.Version != claim.StateVersion || !evaluationIsDue(persisted.State.NextEvaluationAt, judgedAt) {
 		return EvaluationDecision{}, ErrEvaluationClaimLost
 	}
 	assigned, err := loadAssignedAlarmPolicy(ctx, tx, claim.TenantID, claim.SiteID, claim.AssignmentID)
 	if err != nil {
 		return EvaluationDecision{}, err
 	}
-	decision, err := EvaluatePolicy(assigned.Policy, persisted.Snapshot, persisted.State, now)
+	decision, err := EvaluatePolicy(assigned.Policy, persisted.Snapshot, persisted.State, judgedAt)
 	if err != nil {
 		return EvaluationDecision{}, err
 	}
+	recordAt(&decision, now)
 	if decision.State.Version == persisted.State.Version {
 		return EvaluationDecision{}, ErrEvaluationClaimLost
 	}
@@ -328,6 +339,45 @@ func (store *PostgresStore) clearInTransaction(ctx context.Context, tx pgx.Tx, t
 		}
 	}
 	return cleared, nil
+}
+
+// siteClock is the time a Site's readings have reached (#661): the newest reading's time, run on by
+// how long ago the alarm side received it, never past now. Caught up, that is now. Catching up on
+// a backlog, it follows the readings as they arrive, so each is judged at its own time instead of
+// looking too old. Once readings stop, it runs on from the last one. A Site without readings is
+// judged at now. ThingsBoard keeps judging "no data" at now: docs/architecture/alarm-backlog-clock-source-review-2026-10-20.md.
+func siteClock(ctx context.Context, tx pgx.Tx, tenantID, siteID string, now time.Time) (time.Time, error) {
+	var newest, received *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT max(evaluated_at), max(updated_at)
+		FROM alarm_runtime.telemetry_evaluation_input
+		WHERE tenant_id = $1 AND site_id = $2`, tenantID, siteID).Scan(&newest, &received); err != nil {
+		return time.Time{}, fmt.Errorf("read the Site's reading clock: %w", err)
+	}
+	if newest == nil || received == nil {
+		return now, nil
+	}
+	clock := newest.UTC()
+	if received.Before(now) {
+		clock = clock.Add(now.Sub(*received))
+	}
+	if clock.After(now) {
+		return now, nil
+	}
+	return clock, nil
+}
+
+// recordAt stamps what a decision does to its alarm with when it was decided. The judgment may be
+// at the Site's clock, behind now while a backlog is caught up; an alarm's record never runs
+// backwards, and people act on it at now.
+func recordAt(decision *EvaluationDecision, now time.Time) {
+	at := now.UTC().Format(time.RFC3339Nano)
+	if decision.Publication != nil {
+		decision.Publication.OccurredAt = at
+	}
+	if decision.Recovery != nil {
+		decision.Recovery.OccurredAt = at
+	}
 }
 
 func lockEvaluationAssignment(ctx context.Context, tx pgx.Tx, tenantID, assignmentID string) error {
