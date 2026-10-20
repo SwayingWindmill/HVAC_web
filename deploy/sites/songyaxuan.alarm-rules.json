@@ -51,8 +51,8 @@
     "ageSeconds": 900
   },
   "readingsFlat": {
-    "title": "{device}读数一动不动",
-    "summary": "{device}有温度读数连续 {hours} 小时完全没变（这台设备的温度读数：{points}），可能是测点卡住，或网关在重复上报旧值。这些读数都重新变化后自动恢复。",
+    "title": "{point}一动不动",
+    "summary": "{device}的{point}连续 {hours} 小时完全没变，可能是测点卡住，或网关在重复上报旧值。读数重新变化后自动恢复。",
     "severity": "INFO",
     "ageSeconds": 21600,
     "unit": "Cel"

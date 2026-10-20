@@ -40,8 +40,9 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		byTitle[policy.Title] = policy
 	}
 	// The supply-temperature rule, 网关上报中断, one 读数长时间没有更新 per device with an active
-	// point (13, the cooling tower has none) and one 读数一动不动 per device with a temperature (8).
-	if len(byTitle) != 22 {
+	// point (13, the cooling tower has none) and one 一动不动 per temperature a device reads itself
+	// (18 channels of the temperature module, the cooling meter's 2).
+	if len(byTitle) != 34 {
 		t.Fatalf("got %d rules: %v", len(byTitle), keys(byTitle))
 	}
 
@@ -77,19 +78,19 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		t.Fatalf("网关上报中断 is not said plainly: %q", silent.Summary)
 	}
 
-	// #616: 室外环境's three temperatures, 6 hours without the slightest change, a 提示.
-	flat, ok := byTitle["室外环境读数一动不动"]
-	if !ok || flat.Severity != "INFO" || !reflect.DeepEqual(inputs(flat.Raise), []string{
-		"01a14000-4000-7000-8000-00000000000c/ambient_temperature", "01a14000-4000-7000-8000-00000000000c/ambient_wet_bulb_temperature",
-		"01a14000-4000-7000-8000-00000000000c/ambient_temperature_2",
-	}) {
-		t.Fatalf("室外环境 flat-reading rule: %#v / %v", flat, inputs(flat.Raise))
+	// #616: the outdoor temperature on channel 13, 6 hours without the slightest change, a 提示. The
+	// 室外环境 device only copies that channel, so it has no rule of its own: one stuck probe, one alarm.
+	flat, ok := byTitle["室外温度（通道 13）一动不动"]
+	if !ok || flat.Severity != "INFO" || !reflect.DeepEqual(inputs(flat.Raise), []string{"01a14000-4000-7000-8000-000000000001/t13"}) {
+		t.Fatalf("channel 13 flat-reading rule: %#v / %v", flat, inputs(flat.Raise))
 	}
-	if !strings.Contains(flat.Summary, "6 小时") || !strings.Contains(flat.Summary, "室外温度") {
-		t.Fatalf("室外环境 flat-reading rule is not said plainly: %q", flat.Summary)
+	if !strings.Contains(flat.Summary, "温度采集模块的室外温度（通道 13）连续 6 小时") {
+		t.Fatalf("channel 13 flat-reading rule is not said plainly: %q", flat.Summary)
 	}
-	if _, watched := byTitle["冷冻水泵读数一动不动"]; watched {
-		t.Fatal("the pump has no temperature, so no flat-reading rule watches it")
+	for title, policy := range byTitle {
+		if strings.HasSuffix(title, "一动不动") && strings.Contains(inputs(policy.Raise)[0], "-00000000000c/") {
+			t.Fatalf("%s watches a copied reading", title)
+		}
 	}
 
 	module := inputs(byTitle["温度采集模块读数长时间没有更新"].Raise)
@@ -249,20 +250,13 @@ func TestSongyaxuanRulesRaiseAndClearAsTheirWordingSays(t *testing.T) {
 	if back.Effect != alarmservice.EvaluationEffectClear {
 		t.Fatalf("a reading arriving did not clear: %#v", back)
 	}
-	// 读数一动不动 (#616): one temperature holding 21.5 ℃ for 6 hours raises; once it moves, it clears.
-	flat := published(t, compiled, "室外环境读数一动不动")
+	// 一动不动 (#616): the outdoor temperature holding 21.5 ℃ for 6 hours raises; once it moves, it clears.
+	flat := published(t, compiled, "室外温度（通道 13）一动不动")
 	outdoor := func(at, temperatureSince time.Time, temperature float64) map[string]alarmservice.InputFact {
-		facts := map[string]alarmservice.InputFact{}
-		for point, value := range map[string]float64{"ambient_temperature": temperature, "ambient_wet_bulb_temperature": 18, "ambient_temperature_2": 22} {
-			key := "01a14000-4000-7000-8000-00000000000c/" + point
-			fact := alarmservice.NumberInput(key, value, "GOOD", at.Format(time.RFC3339Nano))
-			fact.UnchangedSince = at.Format(time.RFC3339Nano)
-			if point == "ambient_temperature" {
-				fact.UnchangedSince = temperatureSince.Format(time.RFC3339Nano)
-			}
-			facts[key] = fact
-		}
-		return facts
+		key := "01a14000-4000-7000-8000-000000000001/t13"
+		fact := alarmservice.NumberInput(key, temperature, "GOOD", at.Format(time.RFC3339Nano))
+		fact.UnchangedSince = temperatureSince.Format(time.RFC3339Nano)
+		return map[string]alarmservice.InputFact{key: fact}
 	}
 	held := start.Add(6 * time.Hour)
 	stuck := evaluate(t, flat, "f-1", outdoor(held, start, 21.5), alarmservice.AlarmEvaluationState{}, held)

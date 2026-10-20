@@ -669,7 +669,7 @@ func evaluateNoData(condition Condition, snapshot EvaluationSnapshot, now time.T
 
 func evaluateChanged(condition Condition, snapshot EvaluationSnapshot, now time.Time) predicateResult {
 	input, exists := snapshot.Inputs[condition.Input]
-	if !exists || !input.Present || strings.TrimSpace(input.UnchangedSince) == "" {
+	if !exists || !input.Present || input.UnchangedSince == "" {
 		return predicateResult{status: EvaluationMatched}
 	}
 	since, err := time.Parse(time.RFC3339Nano, input.UnchangedSince)
