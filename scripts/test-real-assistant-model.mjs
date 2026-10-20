@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { assistantThreadFrom } from '../apps/hvac-web/src/features/assistant/thread-model.ts';
+import { withBoldLeadOnItsOwnLine } from '../apps/hvac-web/src/features/assistant/answer-markdown.ts';
 
 const session = (status, activeRunId, revision) => ({
   id: 'session-1', tenantId: 'tenant-1', siteId: 'site-1', agentDefinitionId: 'operations-investigation.v1',
@@ -159,4 +160,13 @@ test('process talk streamed before a read is put away when the read starts', () 
 
   const answering = assistantThreadFrom(snapshot, [...talk, event('assistant.delta', 3, { messageId: 'm-2', delta: '昨天用电偏高。' })]);
   assert.deepEqual(answering.messages[1].content.at(-1), { type: 'text', text: '昨天用电偏高。' });
+});
+
+test('the bold conclusion an answer opens with renders bold even when text follows it on the same line', () => {
+  // CommonMark leaves 「**…。**」 open when a character follows it directly, and the operator sees the stars (#663).
+  assert.equal(withBoldLeadOnItsOwnLine('**16 点能效最低，只有 3.75。**此外，7 点也偏低。'), '**16 点能效最低，只有 3.75。**\n\n此外，7 点也偏低。');
+  assert.equal(withBoldLeadOnItsOwnLine('**16 点能效最低，只有 3.75。** 此外，7 点也偏低。'), '**16 点能效最低，只有 3.75。**\n\n此外，7 点也偏低。');
+  for (const fine of ['**16 点能效最低，只有 3.75。**\n\n此外。', '**16 点能效最低。**', '16 点能效 **3.75**，最低。', '**16 点']) {
+    assert.equal(withBoldLeadOnItsOwnLine(fine), fine);
+  }
 });
