@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
@@ -19,6 +21,9 @@ const (
 	postgresPolicyLifecycleRevision1       = "01910000-5100-7000-8000-000000000002"
 	postgresPolicyLifecycleRevision2       = "01910000-5100-7000-8000-000000000003"
 	postgresPolicyLifecycleAssignmentID    = "01910000-7100-7000-8000-000000000001"
+	postgresEvidencePolicyID               = "01910000-5300-7000-8000-000000000001"
+	postgresEvidencePolicyRevision         = "01910000-5300-7000-8000-000000000002"
+	postgresEvidenceAssignmentID           = "01910000-7300-7000-8000-000000000001"
 )
 
 func TestPostgresAlarmPolicyReleaseAssignmentSwitchAndRollbackAreAppendOnly(t *testing.T) {
@@ -253,6 +258,118 @@ func TestPostgresEvaluatorExpiredLeaseCannotExecute(t *testing.T) {
 	if decision.Effect != EvaluationEffectPublish || decision.State.ActiveAlarmID == "" {
 		t.Fatalf("reclaimed evaluator timer did not publish exactly once: %#v", decision)
 	}
+}
+
+// Every reading used to append a full snapshot row; on the 139 server that was about 1M rows (~10 GB) a day (#651).
+func TestPostgresEvaluatorRecordsEvidenceOnlyWhenTheOutcomeChanges(t *testing.T) {
+	databaseURL := os.Getenv("S4_ALARM_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
+	}
+	ctx := identitycontext.WithTenantID(context.Background(), postgresTestTenantID)
+	store, err := OpenPostgresStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	releasedAt := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	policy := validAlarmPolicy()
+	policy.PolicyID = postgresEvidencePolicyID
+	policy.PolicyRevisionID = postgresEvidencePolicyRevision
+	policy.AlarmType = "S14_EVIDENCE_VOLUME"
+	policy.SourceReference = "alarm-policy:postgres-s14-evidence-volume"
+	sealAlarmPolicy(&policy)
+	if err := store.ReleaseAlarmPolicyRevision(ctx, postgresTestTenantID, postgresTestSiteID, policy, releasedAt, "principal:policy-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AssignAlarmPolicyRevision(ctx, postgresTestTenantID, postgresTestSiteID, AlarmPolicyAssignmentInput{
+		AssignmentID: postgresEvidenceAssignmentID, AssignmentRevision: 1, PolicyRevisionID: policy.PolicyRevisionID,
+		SubjectType: "SITE", SubjectID: postgresTestSiteID, AssignedAt: releasedAt.Format(time.RFC3339Nano), AssignedBy: "principal:policy-admin",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	at := releasedAt
+	feed := func(count int, value float64, quality string) EvaluationDecision {
+		t.Helper()
+		var decision EvaluationDecision
+		for i := 0; i < count; i++ {
+			at = at.Add(time.Second)
+			decision, err = store.EvaluateAssignedSnapshot(ctx, postgresEvidenceAssignmentID, postgresEvaluatorSnapshot(at.Format(time.RFC3339Nano), at, value, quality), at)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		return decision
+	}
+	if decision := feed(50, 25, "GOOD"); decision.Status != EvaluationNotMatched {
+		t.Fatalf("normal readings were not NOT_MATCHED: %#v", decision)
+	}
+	if decision := feed(50, 25, "BAD"); decision.Status != EvaluationIndeterminate {
+		t.Fatalf("untrusted readings were not INDETERMINATE: %#v", decision)
+	}
+	if decision := feed(1, 31, "GOOD"); decision.Effect != EvaluationEffectPublish {
+		t.Fatalf("high reading did not raise: %#v", decision)
+	}
+	feed(50, 31, "GOOD")
+	if decision := feed(50, 27, "GOOD"); decision.Status != EvaluationNotMatched {
+		t.Fatalf("low readings did not clear: %#v", decision)
+	}
+
+	want := []string{"NOT_MATCHED/NONE", "INDETERMINATE/NONE", "MATCHED/PUBLISH", "NOT_MATCHED/CLEAR"}
+	if recorded := postgresEvidenceOutcomes(t, ctx, store); !slices.Equal(recorded, want) {
+		t.Fatalf("201 readings recorded %d evidence rows, want one per outcome change %v", len(recorded), want)
+	}
+}
+
+// The rows above are from August, well past 30 days; a row from today stays.
+func TestPostgresEvaluatorPrunesEvidenceOlderThan30Days(t *testing.T) {
+	databaseURL := os.Getenv("S4_ALARM_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
+	}
+	ctx := identitycontext.WithTenantID(context.Background(), postgresTestTenantID)
+	store, err := OpenPostgresStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Now().UTC()
+	fresh, err := store.EvaluateAssignedSnapshot(ctx, postgresEvidenceAssignmentID, postgresEvaluatorSnapshot("evidence-today", now, 31, "GOOD"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Effect != EvaluationEffectPublish {
+		t.Fatalf("today's high reading did not raise: %#v", fresh)
+	}
+	if _, err := store.PruneExpiredEvaluationEvidence(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if recorded := postgresEvidenceOutcomes(t, ctx, store); !slices.Equal(recorded, []string{"MATCHED/PUBLISH"}) {
+		t.Fatalf("pruning kept %v, want only today's row", recorded)
+	}
+}
+
+func postgresEvidenceOutcomes(t *testing.T, ctx context.Context, store *PostgresStore) []string {
+	t.Helper()
+	tx, err := store.beginTenantTransaction(ctx, postgresTestTenantID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	rows, err := tx.Query(ctx, `
+		SELECT status || '/' || effect FROM alarm_runtime.alarm_evaluation_event
+		WHERE tenant_id = $1 AND site_id = $2 AND assignment_id = $3 ORDER BY state_version`, postgresTestTenantID, postgresTestSiteID, postgresEvidenceAssignmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return recorded
 }
 
 func postgresLifecyclePolicy(revisionID string, revision uint64, trigger float64) AlarmPolicyRevision {
