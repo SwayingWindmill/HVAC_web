@@ -15,11 +15,13 @@ const { postgresHostPort, run, compose, psql, pause } = await createPostgresComp
   portAllocatorLabel: 'S4 PostgreSQL',
 });
 
+// The image runs the init scripts on a temporary server that listens on no address, then restarts
+// it; the fixture is ready only once the restarted server answers.
 async function waitForPostgres() {
   for (let attempt = 0; attempt < 300; attempt += 1) {
     try {
-      const state = psql("SELECT (to_regclass('alarm_runtime.alarm_current') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_timeline') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.s13_alarm_migration_report') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_evaluation_state') IS NOT NULL)::text || '|' || (SELECT count(*) FROM alarm_runtime.alarm_current)::text");
-      if (state === 'true|true|true|true|1') return;
+      const state = psql("SELECT (to_regclass('alarm_runtime.alarm_current') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_timeline') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.s13_alarm_migration_report') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_evaluation_state') IS NOT NULL)::text || '|' || (SELECT count(*) FROM alarm_runtime.alarm_current)::text || '|' || (current_setting('listen_addresses') <> '')::text");
+      if (state === 'true|true|true|true|1|true') return;
     } catch {}
     await pause(250);
   }
