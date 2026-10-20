@@ -41,6 +41,25 @@ func TestLoginOutcomesRedirectToTheSignInPage(t *testing.T) {
 	}
 }
 
+// The mini program sign-in (#664) issues a code only for the platform's own client and redirect
+// with a PKCE challenge, so only the Gateway can redeem it.
+func TestAppLoginRefusesAnotherClientBeforeCheckingThePassword(t *testing.T) {
+	server := &Server{issuer: "https://platform.example.test/identity", clientID: "hvac-web", redirectURI: "https://platform.example.test/api/v1/auth/callback"}
+	for name, body := range map[string]string{
+		"another client":   `{"clientId":"other","redirectUri":"https://platform.example.test/api/v1/auth/callback","state":"s","nonce":"n","codeChallenge":"c","username":"a","password":"b"}`,
+		"another redirect": `{"clientId":"hvac-web","redirectUri":"https://evil.example.test/cb","state":"s","nonce":"n","codeChallenge":"c","username":"a","password":"b"}`,
+		"no PKCE":          `{"clientId":"hvac-web","redirectUri":"https://platform.example.test/api/v1/auth/callback","state":"s","nonce":"n","username":"a","password":"b"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/app/login", strings.NewReader(body)))
+			if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "invalid_request") {
+				t.Fatalf("got %d %s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestSignInLocationCarriesOnlyTheChallengeStepAndCode(t *testing.T) {
 	server := &Server{signInURL: "https://platform.example.test/sign-in"}
 	location, err := url.Parse(server.signInLocation("chal", "totp", "totp_invalid"))

@@ -416,7 +416,8 @@ func newCommandGatewayFixture(t *testing.T, feedbackTypes ...string) *commandGat
 		t.Fatal(err)
 	}
 	created, err := store.CreateSession(context.Background(), sessionstore.Session{
-		ID: "command-session", Principal: identitycontext.UserPrincipal{Subject: "command-user", Issuer: "https://issuer.example.test", Roles: []string{}},
+		Client: sessionstore.ClientBrowser,
+		ID:     "command-session", Principal: identitycontext.UserPrincipal{Subject: "command-user", Issuer: "https://issuer.example.test", Roles: []string{}},
 		TenantID: fixture.tenantID, CSRFTokenCiphertext: csrfCiphertext, ExpiresAt: now.Add(time.Hour),
 	}, sessionstore.MutationContext{
 		Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "identity-policy-1", CorrelationID: "command-fixture",

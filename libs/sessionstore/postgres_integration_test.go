@@ -209,6 +209,7 @@ func (h postgresHarness) assertCounts(t *testing.T, sessions, intents, outbox in
 func fixtureSession(now time.Time) sessionstore.Session {
 	return sessionstore.Session{
 		ID:                       "session-01",
+		Client:                   sessionstore.ClientMiniProgram,
 		Principal:                identitycontext.UserPrincipal{Subject: "fixture-user", Issuer: "https://issuer.example.test", DisplayName: "Fixture User", Email: "fixture@example.test", Roles: []string{"operator", "audit-reader"}},
 		TenantID:                 "tenant-01",
 		CSRFTokenCiphertext:      []byte("encrypted-csrf"),

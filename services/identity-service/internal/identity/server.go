@@ -99,6 +99,8 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", server.login)
 	mux.HandleFunc("POST /mfa/totp", server.completeTOTP)
 	mux.HandleFunc("POST /token", server.token)
+	mux.HandleFunc("POST /app/login", server.appLogin)
+	mux.HandleFunc("POST /app/mfa/totp", server.appTOTP)
 	mux.HandleFunc("GET /session/end", server.endSession)
 	return securityHeaders(mux)
 }

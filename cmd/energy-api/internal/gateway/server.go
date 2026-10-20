@@ -376,6 +376,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		h.UserAdmin(writer, request)
 	case publicOwnPasswordPath:
 		h.OwnPassword(writer, request)
+	case publicAppSessionsPath:
+		h.CreateAppSession(writer, request)
+	case publicAppSessionTOTP:
+		h.CompleteAppSessionTOTP(writer, request)
 	case publicIAMAdminMutationPath:
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowedFor(writer, request, http.MethodPost)
@@ -507,7 +511,7 @@ func (h *handler) applyRouteOwnership(writer http.ResponseWriter, request *http.
 					return request, false
 				}
 				workloadCaller = resolved
-			} else if _, cookieErr := request.Cookie(sessionCookieName); cookieErr == nil {
+			} else if hasSessionCredential(request) {
 				resolved, failure := h.identitySession(request)
 				if failure != nil {
 					writeIdentityFailure(writer, request, *failure)

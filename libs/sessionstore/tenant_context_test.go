@@ -13,7 +13,8 @@ func TestSwitchTenantContextRotatesContextAndAuditRevision(t *testing.T) {
 	store := NewMemoryStore()
 	now := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	created, err := store.CreateSession(context.Background(), Session{
-		ID: "session-1",
+		Client: ClientBrowser,
+		ID:     "session-1",
 		Principal: identitycontext.UserPrincipal{
 			Subject: "user-1",
 			Issuer:  "https://identity.example",

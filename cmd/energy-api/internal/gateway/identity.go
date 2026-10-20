@@ -73,6 +73,8 @@ type loginState struct {
 	ReturnTo    string
 	RequiredACR string
 	CreatedAt   time.Time
+	// Challenge is identity-service's pending mini program sign-in waiting for a one-time code (#664).
+	Challenge string `json:",omitempty"`
 }
 
 // ensureJSONEOF reports an error when a JSON body carries more than one value
@@ -294,38 +296,46 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 		writeIdentityFailure(writer, request, identityFailure{503, "OIDC_STATE_STORE_UNAVAILABLE", "OIDC login unavailable", "The Gateway could not consume the shared login state.", true})
 		return
 	}
-	tokens, failure := h.identity.exchangeCode(request.Context(), params.Code, state.Verifier)
+	stored, failure := h.identity.signIn(request, sessionstore.ClientBrowser, params.Code, state)
 	if failure != nil {
 		writeIdentityFailure(writer, request, *failure)
 		return
 	}
-	claims, failure := h.identity.validateIDToken(request.Context(), tokens.IDToken, state.Nonce)
+	writer.Header().Set("X-Audit-Message-ID", stored.LastAuditMessageID)
+	http.SetCookie(writer, &http.Cookie{Name: sessionCookieName, Value: stored.ID, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: int(h.identity.config.SessionTTL.Seconds()), Expires: stored.ExpiresAt})
+	http.Redirect(writer, request, state.ReturnTo, http.StatusFound)
+}
+
+// signIn redeems a provider authorization code and commits the signed-in Session it proves:
+// the browser callback and the mini program sign-in (#664) both end here.
+func (controller *identityController) signIn(request *http.Request, client sessionstore.Client, code string, state loginState) (sessionstore.Session, *identityFailure) {
+	tokens, failure := controller.exchangeCode(request.Context(), code, state.Verifier)
 	if failure != nil {
-		writeIdentityFailure(writer, request, *failure)
-		return
+		return sessionstore.Session{}, failure
+	}
+	claims, failure := controller.validateIDToken(request.Context(), tokens.IDToken, state.Nonce)
+	if failure != nil {
+		return sessionstore.Session{}, failure
 	}
 	if tokens.TokenType != "Bearer" || (claims.TokenUse != "" && claims.TokenUse != "id") {
-		writeIdentityFailure(writer, request, identityFailure{401, "OIDC_TOKEN_TYPE_INVALID", "OIDC token type invalid", "The identity provider returned an unsupported token type.", false})
-		return
+		return sessionstore.Session{}, &identityFailure{401, "OIDC_TOKEN_TYPE_INVALID", "OIDC token type invalid", "The identity provider returned an unsupported token type.", false}
 	}
-	if !validAuthenticationAssurance(claims, state.RequiredACR, h.identity.now()) {
-		writeIdentityFailure(writer, request, identityFailure{401, "OIDC_ASSURANCE_INVALID", "Authentication assurance invalid", "The identity provider did not satisfy the requested authentication assurance.", false})
-		return
+	if !validAuthenticationAssurance(claims, state.RequiredACR, controller.now()) {
+		return sessionstore.Session{}, &identityFailure{401, "OIDC_ASSURANCE_INVALID", "Authentication assurance invalid", "The identity provider did not satisfy the requested authentication assurance.", false}
 	}
-	encryptedTokens, err := h.identity.encryptTokens(tokens)
+	encryptedTokens, err := controller.encryptTokens(tokens)
 	if err != nil {
-		writeIdentityFailure(writer, request, identityFailure{503, "SESSION_TOKEN_STORE_FAILED", "Session unavailable", "The server could not protect the identity tokens.", true})
-		return
+		return sessionstore.Session{}, &identityFailure{503, "SESSION_TOKEN_STORE_FAILED", "Session unavailable", "The server could not protect the identity tokens.", true}
 	}
 	csrfToken := randomURLToken(24)
-	encryptedCSRF, err := h.identity.encryptBytes([]byte(csrfToken))
+	encryptedCSRF, err := controller.encryptBytes([]byte(csrfToken))
 	if err != nil {
-		writeIdentityFailure(writer, request, identityFailure{503, "SESSION_TOKEN_STORE_FAILED", "Session unavailable", "The server could not protect the session secret.", true})
-		return
+		return sessionstore.Session{}, &identityFailure{503, "SESSION_TOKEN_STORE_FAILED", "Session unavailable", "The server could not protect the session secret.", true}
 	}
-	now := h.identity.now()
+	now := controller.now()
 	pending := bffSession{Session: sessionstore.Session{
 		ID:                       randomURLToken(32),
+		Client:                   client,
 		Principal:                identitycontext.UserPrincipal{Subject: claims.Subject, Issuer: claims.Issuer, DisplayName: claims.Name, Email: claims.Email, Roles: []string{}},
 		TenantID:                 claims.TenantID,
 		CSRFTokenCiphertext:      encryptedCSRF,
@@ -333,25 +343,20 @@ func (h *handler) CompleteLogin(writer http.ResponseWriter, request *http.Reques
 		AuthenticationACR:        claims.ACR,
 		AuthenticationAMR:        append([]string(nil), claims.AMR...),
 		AuthenticationTime:       time.Unix(claims.AuthTime, 0).UTC(),
-		ExpiresAt:                now.Add(h.identity.config.SessionTTL),
+		ExpiresAt:                now.Add(controller.config.SessionTTL),
 	}, CSRFToken: csrfToken}
-	validated, validationFailure := h.identity.fetchPrincipal(request.Context(), pending)
+	validated, validationFailure := controller.fetchPrincipal(request.Context(), pending)
 	if validationFailure != nil {
-		writeIdentityFailure(writer, request, *validationFailure)
-		return
+		return sessionstore.Session{}, validationFailure
 	}
 	if validated.Principal.Subject != pending.Principal.Subject || validated.Principal.Issuer != pending.Principal.Issuer || validated.Context.TenantID != pending.TenantID {
-		writeIdentityFailure(writer, request, identityFailure{503, "IAM_IDENTITY_MISMATCH", "Identity validation failed", "IAM returned a principal outside the authenticated Session boundary.", false})
-		return
+		return sessionstore.Session{}, &identityFailure{503, "IAM_IDENTITY_MISMATCH", "Identity validation failed", "IAM returned a principal outside the authenticated Session boundary.", false}
 	}
-	stored, err := h.identity.store.CreateSession(request.Context(), pending.Session, h.identity.mutationContext(request, "SESSION_CREATED"))
+	stored, err := controller.store.CreateSession(request.Context(), pending.Session, controller.mutationContext(request, "SESSION_CREATED"))
 	if err != nil {
-		writeIdentityFailure(writer, request, identityFailure{503, "SESSION_PERSISTENCE_FAILED", "Session unavailable", "The authenticated session could not be committed with its audit intent.", true})
-		return
+		return sessionstore.Session{}, &identityFailure{503, "SESSION_PERSISTENCE_FAILED", "Session unavailable", "The authenticated session could not be committed with its audit intent.", true}
 	}
-	writer.Header().Set("X-Audit-Message-ID", stored.LastAuditMessageID)
-	http.SetCookie(writer, &http.Cookie{Name: sessionCookieName, Value: stored.ID, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: int(h.identity.config.SessionTTL.Seconds()), Expires: stored.ExpiresAt})
-	http.Redirect(writer, request, state.ReturnTo, http.StatusFound)
+	return stored, nil
 }
 
 func (h *handler) GetCurrentPrincipal(writer http.ResponseWriter, request *http.Request) {
@@ -510,12 +515,15 @@ func (h *handler) identitySession(request *http.Request) (bffSession, *identityF
 		failure := identityFailure{503, "IDENTITY_NOT_CONFIGURED", "Identity unavailable", "Identity is not configured for this Gateway.", true}
 		return bffSession{}, &failure
 	}
-	cookie, err := request.Cookie(sessionCookieName)
-	if err != nil || cookie.Value == "" {
+	sessionID, client, presented := sessionCredential(request)
+	if !presented {
 		failure := identityFailure{401, "AUTHENTICATION_REQUIRED", "Authentication required", "A valid BFF Session is required.", false}
 		return bffSession{}, &failure
 	}
-	stored, err := h.identity.store.GetSession(request.Context(), cookie.Value)
+	stored, err := h.identity.store.GetSession(request.Context(), sessionID)
+	if err == nil && stored.Client != client {
+		err = sessionstore.ErrSessionNotFound
+	}
 	if errors.Is(err, sessionstore.ErrSessionNotFound) || errors.Is(err, sessionstore.ErrSessionRevoked) {
 		failure := identityFailure{401, "SESSION_INVALID", "Session invalid", "The BFF Session is expired, revoked, or unknown.", false}
 		return bffSession{}, &failure
@@ -549,7 +557,32 @@ func (h *handler) identitySession(request *http.Request) (bffSession, *identityF
 	return bffSession{Session: stored, CSRFToken: string(csrfToken)}, nil
 }
 
+// sessionCredential is the Session a request presents: the browser's cookie, or the mini program's
+// Authorization header (#664), with the client it must have been issued to.
+func sessionCredential(request *http.Request) (string, sessionstore.Client, bool) {
+	if cookie, err := request.Cookie(sessionCookieName); err == nil {
+		return cookie.Value, sessionstore.ClientBrowser, cookie.Value != ""
+	}
+	if token, found := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer "); found {
+		return token, sessionstore.ClientMiniProgram, token != ""
+	}
+	return "", "", false
+}
+
+func hasSessionCredential(request *http.Request) bool {
+	_, _, presented := sessionCredential(request)
+	return presented
+}
+
+// forgeable reports whether another site could make the browser send this Session: a cookie
+// travels with any request, so changes need the page Origin and the CSRF token; the mini
+// program's header is set only by the mini program.
+func (session bffSession) forgeable() bool { return session.Client == sessionstore.ClientBrowser }
+
 func (controller *identityController) validateStateChange(request *http.Request, session bffSession, csrfToken string) *identityFailure {
+	if !session.forgeable() {
+		return nil
+	}
 	if request.Header.Get("Origin") != controller.config.PublicOrigin {
 		failure := identityFailure{403, "ORIGIN_NOT_ALLOWED", "Origin not allowed", "The request Origin is not allowed for this session.", false}
 		return &failure

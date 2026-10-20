@@ -162,6 +162,9 @@ func (h *handler) analyticsSession(writer http.ResponseWriter, request *http.Req
 		h.writeAnalyticsFailure(writer, request, analyticsUnavailable("Session validation is unavailable."))
 		return bffSession{}, false
 	}
+	if !session.forgeable() {
+		return session, true
+	}
 	csrf := request.Header.Get("X-CSRF-Token")
 	if csrf == "" {
 		h.writeAnalyticsFailure(writer, request, analyticsFailure{http.StatusForbidden, "CSRF_REQUIRED", "CSRF token required", "A CSRF token is required for this Analytics request.", false})

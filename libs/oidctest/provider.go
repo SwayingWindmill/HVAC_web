@@ -40,6 +40,7 @@ type Provider struct {
 	modernKey       *ecdsa.PrivateKey
 	modernKid       string
 	codes           map[string]authorizationCode
+	pendingTOTP     map[string]authorizationCode
 }
 
 type authorizationCode struct {
@@ -105,6 +106,7 @@ func New(config Config) (*Provider, error) {
 		modernKey:       modern,
 		modernKid:       randomToken(8),
 		codes:           map[string]authorizationCode{},
+		pendingTOTP:     map[string]authorizationCode{},
 	}, nil
 }
 
@@ -126,6 +128,10 @@ func (provider *Provider) ServeHTTP(writer http.ResponseWriter, request *http.Re
 		provider.token(writer, request)
 	case "/session/end":
 		provider.endSession(writer, request)
+	case "/app/login":
+		provider.appLogin(writer, request)
+	case "/app/mfa/totp":
+		provider.appTOTP(writer, request)
 	default:
 		http.NotFound(writer, request)
 	}
@@ -347,6 +353,63 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 		response["refresh_token"] = randomToken(32)
 	}
 	writeJSON(writer, http.StatusOK, response)
+}
+
+// appLogin mirrors identity-service's sign-in for the mini program: the password is
+// "correct-password", and the username "mfa-user" asks for the one-time code "123456".
+func (provider *Provider) appLogin(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		ClientID, RedirectURI, State, Nonce, CodeChallenge, Username, Password string
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.ClientID != provider.clientID || input.RedirectURI != provider.redirectURI || input.State == "" || input.Nonce == "" || input.CodeChallenge == "" {
+		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "client, redirect, state, nonce, and PKCE challenge are required")
+		return
+	}
+	if input.Password != "correct-password" {
+		writeOAuthError(writer, http.StatusUnauthorized, "invalid_credentials", "the username or password is wrong")
+		return
+	}
+	pending := authorizationCode{RedirectURI: input.RedirectURI, Nonce: input.Nonce, CodeChallenge: input.CodeChallenge, CreatedAt: provider.now()}
+	if input.Username == "mfa-user" {
+		challenge := randomToken(24)
+		provider.mu.Lock()
+		provider.pendingTOTP[challenge] = pending
+		provider.mu.Unlock()
+		writeJSON(writer, http.StatusOK, map[string]string{"step": "totp", "challenge": challenge})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"code": provider.issueCode(pending), "state": input.State})
+}
+
+func (provider *Provider) appTOTP(writer http.ResponseWriter, request *http.Request) {
+	var input struct{ Challenge, Code string }
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "request body is invalid")
+		return
+	}
+	provider.mu.Lock()
+	pending, exists := provider.pendingTOTP[input.Challenge]
+	if exists && input.Code == "123456" {
+		delete(provider.pendingTOTP, input.Challenge)
+	}
+	provider.mu.Unlock()
+	if !exists {
+		writeOAuthError(writer, http.StatusBadRequest, "expired", "the sign-in has expired")
+		return
+	}
+	if input.Code != "123456" {
+		writeOAuthError(writer, http.StatusUnauthorized, "totp_invalid", "the one-time code is wrong")
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"code": provider.issueCode(pending)})
+}
+
+func (provider *Provider) issueCode(code authorizationCode) string {
+	value := randomToken(24)
+	provider.mu.Lock()
+	provider.codes[value] = code
+	provider.mu.Unlock()
+	return value
 }
 
 func (provider *Provider) endSession(writer http.ResponseWriter, request *http.Request) {

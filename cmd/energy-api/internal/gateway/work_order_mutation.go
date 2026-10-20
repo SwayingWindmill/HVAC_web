@@ -209,6 +209,9 @@ func (h *handler) workOrderMutationSession(writer http.ResponseWriter, request *
 		h.writeWorkOrderFailure(writer, request, workOrderUnavailable("Session validation is unavailable."))
 		return bffSession{}, false
 	}
+	if !session.forgeable() {
+		return session, true
+	}
 	csrf := request.Header.Get("X-CSRF-Token")
 	if csrf == "" {
 		writeProblem(writer, request, http.StatusForbidden, "CSRF_REQUIRED", "CSRF token required", "A CSRF token is required for this Work Order mutation.", false, nil)
