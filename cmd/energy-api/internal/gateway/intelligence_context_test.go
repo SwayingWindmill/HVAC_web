@@ -123,6 +123,7 @@ func TestReportReadsCarryAGatewaySignedContext(t *testing.T) {
 		{siteID: fixture.siteID, internalPath: "/monthly/2026-09"},
 		{siteID: fixture.siteID, internalPath: "/monthly"},
 	} {
+		fixture.lastOwner.Store(nil)
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+fixture.siteID+"/reports"+route.internalPath, nil)
 		ctx := context.WithValue(request.Context(), routeDecisionContextKey, ownershipregistry.Decision{SelectedOwner: ownershipregistry.OwnerReport})
 		response := httptest.NewRecorder()
@@ -131,5 +132,8 @@ func TestReportReadsCarryAGatewaySignedContext(t *testing.T) {
 			t.Fatalf("report read %s got %d: %s", route.internalPath, response.Code, response.Body.String())
 		}
 		requireOwnerContext(t, fixture, "X-Report-Context", "report-service", "report:read")
+		if path := fixture.lastOwner.Load().URL.Path; path != "/v1/sites/"+fixture.siteID+"/reports"+route.internalPath {
+			t.Fatalf("report read went to %s", path)
+		}
 	}
 }

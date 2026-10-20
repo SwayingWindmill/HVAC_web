@@ -513,17 +513,13 @@ func (h *handler) executeOwner(publicRequest *http.Request, session bffSession, 
 	if err != nil {
 		return nil, 0, err
 	}
-	return h.callIntelligence(h.intelligence.ownerHTTPClient, publicRequest, method, baseURL+path, body, map[string]string{owner.header: signed})
-}
-
-func (h *handler) callIntelligence(client *http.Client, publicRequest *http.Request, method, endpoint string, body []byte, headers map[string]string) ([]byte, int, error) {
 	ctx, cancel := contextWithTimeout(publicRequest.Context(), h.intelligence.timeout)
 	defer cancel()
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
-	upstream, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
+	upstream, err := http.NewRequestWithContext(ctx, method, baseURL+path, reader)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -533,10 +529,8 @@ func (h *handler) callIntelligence(client *http.Client, publicRequest *http.Requ
 	}
 	upstream.Header.Set("X-Request-ID", requestIDFromContext(publicRequest.Context()))
 	observability.InjectHTTP(publicRequest.Context(), upstream.Header)
-	for name, value := range headers {
-		upstream.Header.Set(name, value)
-	}
-	response, err := client.Do(upstream)
+	upstream.Header.Set(owner.header, signed)
+	response, err := h.intelligence.ownerHTTPClient.Do(upstream)
 	if err != nil {
 		return nil, 0, err
 	}

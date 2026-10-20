@@ -88,6 +88,7 @@ func TestReportsServeOnlyTheGatewayWithAContextToReadTheSite(t *testing.T) {
 	}
 
 	for _, path := range []string{month, "/v1/sites/" + testSite + "/reports/monthly?year=2026"} {
+		store.asked.readTenant = ""
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, presented(t, path, testGatewaySPIFFE, Audience, ReadAction, otherTenant, testSite))
 		if recorder.Code == http.StatusForbidden || store.asked.readTenant != otherTenant {
