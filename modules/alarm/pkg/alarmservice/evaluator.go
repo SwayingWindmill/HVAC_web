@@ -65,8 +65,13 @@ const (
 	ConditionHysteresis ConditionKind = "HYSTERESIS"
 	ConditionNoData     ConditionKind = "NO_DATA"
 	ConditionStale      ConditionKind = "STALE"
-	ConditionAnd        ConditionKind = "AND"
-	ConditionOr         ConditionKind = "OR"
+	// ConditionUnchanged holds when a fresh reading has kept the same value for ageSeconds;
+	// ConditionChanged when it took its value less than ageSeconds ago, or there is no reading to
+	// be stuck (#616).
+	ConditionUnchanged ConditionKind = "UNCHANGED"
+	ConditionChanged   ConditionKind = "CHANGED"
+	ConditionAnd       ConditionKind = "AND"
+	ConditionOr        ConditionKind = "OR"
 )
 
 type CompareOperator string
@@ -162,13 +167,15 @@ type AlarmPolicyRevision struct {
 }
 
 type InputFact struct {
-	Key        string                         `json:"key"`
-	Present    bool                           `json:"present"`
-	Revision   string                         `json:"revision,omitempty"`
-	Value      TypedValue                     `json:"value,omitempty"`
-	Quality    string                         `json:"quality"`
-	ObservedAt string                         `json:"observedAt,omitempty"`
-	Evidence   []alarmmodel.EvidenceReference `json:"evidence"`
+	Key        string     `json:"key"`
+	Present    bool       `json:"present"`
+	Revision   string     `json:"revision,omitempty"`
+	Value      TypedValue `json:"value,omitempty"`
+	Quality    string     `json:"quality"`
+	ObservedAt string     `json:"observedAt,omitempty"`
+	// UnchangedSince is when the reading took the value it still has (#616).
+	UnchangedSince string                         `json:"unchangedSince,omitempty"`
+	Evidence       []alarmmodel.EvidenceReference `json:"evidence"`
 }
 
 func NumberInput(key string, value float64, quality, observedAt string) InputFact {
@@ -464,7 +471,7 @@ func (condition Condition) Validate() error {
 		if condition.Direction != DirectionAbove && condition.Direction != DirectionBelow {
 			return errors.New("hysteresis direction is invalid")
 		}
-	case ConditionNoData, ConditionStale:
+	case ConditionNoData, ConditionStale, ConditionUnchanged, ConditionChanged:
 		if !boundedText(condition.Input, 128) || condition.AgeSeconds <= 0 {
 			return errors.New("time predicate is invalid")
 		}
@@ -565,6 +572,8 @@ func evaluateCondition(policy AlarmPolicyRevision, condition Condition, snapshot
 		return evaluateNoData(condition, snapshot, now)
 	case ConditionStale:
 		return evaluateStale(condition, snapshot, now)
+	case ConditionChanged:
+		return evaluateChanged(condition, snapshot, now)
 	}
 
 	input, exists := snapshot.Inputs[condition.Input]
@@ -595,6 +604,16 @@ func evaluateCondition(policy AlarmPolicyRevision, condition Condition, snapshot
 			return truthResult(input.Value.Number < condition.Reset, nextDue)
 		}
 		return truthResult(input.Value.Number <= condition.Trigger, nextDue)
+	case ConditionUnchanged:
+		since, err := time.Parse(time.RFC3339Nano, input.UnchangedSince)
+		if err != nil {
+			return predicateResult{status: EvaluationIndeterminate, blocker: qualityBlockerInvalidPrefix + condition.Input, nextDue: nextDue}
+		}
+		due := since.Add(time.Duration(condition.AgeSeconds) * time.Second)
+		if !now.Before(due) {
+			return truthResult(true, nextDue)
+		}
+		return predicateResult{status: EvaluationNotMatched, nextDue: minTime(&due, nextDue)}
 	default:
 		return predicateResult{status: EvaluationIndeterminate, blocker: qualityBlockerInvalidPrefix + condition.Input}
 	}
@@ -646,6 +665,18 @@ func evaluateNoData(condition Condition, snapshot EvaluationSnapshot, now time.T
 		return predicateResult{status: EvaluationMatched}
 	}
 	return predicateResult{status: EvaluationNotMatched, nextDue: &due}
+}
+
+func evaluateChanged(condition Condition, snapshot EvaluationSnapshot, now time.Time) predicateResult {
+	input, exists := snapshot.Inputs[condition.Input]
+	if !exists || !input.Present || strings.TrimSpace(input.UnchangedSince) == "" {
+		return predicateResult{status: EvaluationMatched}
+	}
+	since, err := time.Parse(time.RFC3339Nano, input.UnchangedSince)
+	if err != nil {
+		return predicateResult{status: EvaluationIndeterminate, blocker: qualityBlockerInvalidPrefix + condition.Input}
+	}
+	return truthResult(now.Before(since.Add(time.Duration(condition.AgeSeconds)*time.Second)), nil)
 }
 
 func evaluateStale(condition Condition, snapshot EvaluationSnapshot, now time.Time) predicateResult {

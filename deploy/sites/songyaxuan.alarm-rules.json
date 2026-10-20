@@ -50,6 +50,13 @@
     "severity": "MAJOR",
     "ageSeconds": 900
   },
+  "readingsFlat": {
+    "title": "{device}读数一动不动",
+    "summary": "{device}有温度读数连续 {hours} 小时完全没变（这台设备的温度读数：{points}），可能是测点卡住，或网关在重复上报旧值。这些读数都重新变化后自动恢复。",
+    "severity": "INFO",
+    "ageSeconds": 21600,
+    "unit": "Cel"
+  },
   "readingsNotUpdated": {
     "title": "{device}读数长时间没有更新",
     "summary": "{device}有读数超过 {minutes} 分钟没有更新，或一直没有读数（这台设备的读数：{points}）。可能是测点、接线或通讯出了问题。所有读数恢复更新后自动恢复。",

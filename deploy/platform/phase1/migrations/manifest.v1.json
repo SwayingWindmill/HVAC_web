@@ -134,7 +134,8 @@
         "modules/alarm/migrations/008_s26_telemetry_evaluation_input.sql",
         "modules/alarm/migrations/009_s27_due_evaluation_tenants.sql",
         "modules/alarm/migrations/010_s27_unevaluated_site_assignments.sql",
-        "modules/alarm/migrations/011_s28_evaluation_event_retention.sql"
+        "modules/alarm/migrations/011_s28_evaluation_event_retention.sql",
+        "modules/alarm/migrations/012_s29_reading_unchanged_since.sql"
       ]
     },
     {

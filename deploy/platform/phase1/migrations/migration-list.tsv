@@ -95,6 +95,7 @@ hvac_s4|modules/alarm/migrations/008_s26_telemetry_evaluation_input.sql
 hvac_s4|modules/alarm/migrations/009_s27_due_evaluation_tenants.sql
 hvac_s4|modules/alarm/migrations/010_s27_unevaluated_site_assignments.sql
 hvac_s4|modules/alarm/migrations/011_s28_evaluation_event_retention.sql
+hvac_s4|modules/alarm/migrations/012_s29_reading_unchanged_since.sql
 hvac_s5|modules/workorder/migrations/001_s5_work_order_runtime.sql
 hvac_s5|modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 hvac_s5|modules/workorder/migrations/003_s5_work_order_lifecycle.sql
