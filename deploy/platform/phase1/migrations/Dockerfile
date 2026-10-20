@@ -104,6 +104,7 @@ COPY modules/alarm/migrations/005_s13_alarm_orthogonal.sql /opt/hvac/repo/module
 COPY modules/alarm/migrations/006_s14_alarm_evaluator.sql /opt/hvac/repo/modules/alarm/migrations/006_s14_alarm_evaluator.sql
 COPY modules/alarm/migrations/007_s16_notification_outbox.sql /opt/hvac/repo/modules/alarm/migrations/007_s16_notification_outbox.sql
 COPY modules/alarm/migrations/008_s26_telemetry_evaluation_input.sql /opt/hvac/repo/modules/alarm/migrations/008_s26_telemetry_evaluation_input.sql
+COPY modules/alarm/migrations/009_s27_due_evaluation_tenants.sql /opt/hvac/repo/modules/alarm/migrations/009_s27_due_evaluation_tenants.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql

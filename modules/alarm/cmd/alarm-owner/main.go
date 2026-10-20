@@ -93,10 +93,23 @@ func main() {
 			logger.Error("alarm_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
 		}
 	}()
+	evaluationInterval, err := time.ParseDuration(envOr("ALARM_EVALUATION_INTERVAL", "1m"))
+	if err != nil || evaluationInterval <= 0 {
+		logger.Error("alarm_evaluation_interval_invalid", "error_code", "ALARM_EVALUATION_INTERVAL_INVALID")
+		os.Exit(1)
+	}
+	workerID, err := os.Hostname()
+	if err != nil {
+		workerID = "alarm-service"
+	}
+	scheduled, stopScheduled := context.WithCancel(context.Background())
+	go runDueEvaluations(scheduled, store, logger, workerID, evaluationInterval)
+
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-shutdown
+		stopScheduled()
 		telemetry.MarkNotReady()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -111,6 +124,27 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("alarm_service_stopped")
+}
+
+// runDueEvaluations looks again, every interval, at the evaluations whose time has come (#615):
+// a Site that stops reporting sends no telemetry to evaluate, so only this notices it.
+func runDueEvaluations(ctx context.Context, store *alarmservice.PostgresStore, logger *slog.Logger, workerID string, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		result, err := store.RunDueEvaluations(ctx, workerID, time.Now())
+		if err != nil {
+			logger.Error("alarm_due_evaluations_failed", "error_code", "ALARM_DUE_EVALUATIONS_FAILED", "error", err, "failed", result.Failed)
+		}
+		if result.Raised+result.Cleared > 0 {
+			logger.Info("alarm_due_evaluations", "evaluated", result.Evaluated, "raised", result.Raised, "cleared", result.Cleared)
+		}
+	}
 }
 
 func alarmObservabilityRoute(request *http.Request) string {
