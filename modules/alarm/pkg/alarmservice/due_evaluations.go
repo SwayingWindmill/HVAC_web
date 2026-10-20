@@ -192,7 +192,7 @@ WHERE assignment.tenant_id = $1 AND assignment.subject_type = 'SITE'
 
 	var decisions []EvaluationDecision
 	for _, siteID := range sites {
-		records, assignmentIDs, err := store.loadSiteTelemetryEvaluationState(ctx, tenantID, siteID)
+		records, rules, err := store.loadSiteTelemetryEvaluationState(ctx, tenantID, siteID)
 		if err != nil {
 			return decisions, err
 		}
@@ -207,8 +207,8 @@ WHERE assignment.tenant_id = $1 AND assignment.subject_type = 'SITE'
 			return decisions, err
 		}
 		// Rules already evaluated see the same snapshot again and do nothing.
-		for _, assignmentID := range assignmentIDs {
-			decision, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshot, now.UTC())
+		for _, rule := range rules {
+			decision, err := store.EvaluateAssignedSnapshot(ctx, rule.assignmentID, snapshot, now.UTC())
 			if err != nil {
 				return decisions, err
 			}

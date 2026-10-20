@@ -94,20 +94,30 @@ func (store *PostgresStore) EvaluateTelemetrySnapshot(ctx context.Context, event
 	if err := store.recordTelemetryEvaluationInput(ctx, eventID, snapshot, now); err != nil {
 		return nil, err
 	}
-	records, assignmentIDs, err := store.loadSiteTelemetryEvaluationState(ctx, string(snapshot.TenantId), string(snapshot.SiteId))
+	records, rules, err := store.loadSiteTelemetryEvaluationState(ctx, string(snapshot.TenantId), string(snapshot.SiteId))
 	if err != nil {
 		return nil, err
 	}
-	if len(assignmentIDs) == 0 {
+	// Only the rules reading this device can change with its readings (#659, as ThingsBoard matches
+	// calculated fields: docs/architecture/alarm-evaluation-relevance-source-review-2026-10-20.md). Whatever only time
+	// changes for the others (a reading going stale, no data for a while) is the scheduled pass's:
+	// each evaluation leaves when it is next due.
+	var reading []siteRule
+	for _, rule := range rules {
+		if readsDevice(rule.policy, string(snapshot.DeviceId)) {
+			reading = append(reading, rule)
+		}
+	}
+	if len(reading) == 0 {
 		return []EvaluationDecision{}, nil
 	}
 	evaluationSnapshot, err := buildSiteEvaluationSnapshot(eventID, string(snapshot.TenantId), string(snapshot.SiteId), records)
 	if err != nil {
 		return nil, err
 	}
-	decisions := make([]EvaluationDecision, 0, len(assignmentIDs))
-	for _, assignmentID := range assignmentIDs {
-		decision, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, evaluationSnapshot, now.UTC())
+	decisions := make([]EvaluationDecision, 0, len(reading))
+	for _, rule := range reading {
+		decision, err := store.EvaluateAssignedSnapshot(ctx, rule.assignmentID, evaluationSnapshot, now.UTC())
 		if err != nil {
 			return decisions, err
 		}
@@ -200,7 +210,31 @@ WHERE tenant_id=$1 AND site_id=$2 AND device_id=$3`, tenantID, siteID, deviceID,
 	return nil
 }
 
-func (store *PostgresStore) loadSiteTelemetryEvaluationState(ctx context.Context, tenantID, siteID string) ([]telemetryEvaluationInputRecord, []string, error) {
+// siteRule is a rule assigned to a Site, with the policy it evaluates.
+type siteRule struct {
+	assignmentID string
+	policy       AlarmPolicyRevision
+}
+
+// readsDevice is whether the policy reads one of the device's readings; the Site snapshot keys each
+// reading "<device>/<key>".
+func readsDevice(policy AlarmPolicyRevision, deviceID string) bool {
+	return conditionReadsDevice(policy.Raise, deviceID+"/") || conditionReadsDevice(policy.Clear, deviceID+"/")
+}
+
+func conditionReadsDevice(condition Condition, prefix string) bool {
+	if strings.HasPrefix(condition.Input, prefix) {
+		return true
+	}
+	for _, child := range condition.Children {
+		if conditionReadsDevice(child, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (store *PostgresStore) loadSiteTelemetryEvaluationState(ctx context.Context, tenantID, siteID string) ([]telemetryEvaluationInputRecord, []siteRule, error) {
 	tx, err := store.beginTenantTransaction(ctx, tenantID, true)
 	if err != nil {
 		return nil, nil, err
@@ -239,21 +273,28 @@ ORDER BY device_id`, tenantID, siteID)
 	rows.Close()
 
 	assignmentRows, err := tx.Query(ctx, `
-SELECT DISTINCT ON (assignment_id) assignment_id::text
-FROM alarm_runtime.alarm_policy_assignment
-WHERE tenant_id=$1 AND site_id=$2 AND subject_type='SITE' AND subject_id=$2
-ORDER BY assignment_id, assignment_revision DESC`, tenantID, siteID)
+SELECT DISTINCT ON (assignment.assignment_id) assignment.assignment_id::text, policy.policy
+FROM alarm_runtime.alarm_policy_assignment assignment
+JOIN alarm_runtime.alarm_policy_revision policy
+  ON policy.tenant_id = assignment.tenant_id AND policy.site_id = assignment.site_id AND policy.policy_revision_id = assignment.policy_revision_id
+WHERE assignment.tenant_id=$1 AND assignment.site_id=$2 AND assignment.subject_type='SITE' AND assignment.subject_id=$2
+ORDER BY assignment.assignment_id, assignment.assignment_revision DESC`, tenantID, siteID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve Site Alarm policy assignments: %w", err)
 	}
-	assignmentIDs := make([]string, 0)
+	rules := make([]siteRule, 0)
 	for assignmentRows.Next() {
-		var assignmentID string
-		if err := assignmentRows.Scan(&assignmentID); err != nil {
+		var rule siteRule
+		var policyJSON []byte
+		if err := assignmentRows.Scan(&rule.assignmentID, &policyJSON); err != nil {
 			assignmentRows.Close()
 			return nil, nil, fmt.Errorf("scan Site Alarm policy assignment: %w", err)
 		}
-		assignmentIDs = append(assignmentIDs, assignmentID)
+		if rule.policy, err = decodeAlarmPolicy(policyJSON); err != nil {
+			assignmentRows.Close()
+			return nil, nil, err
+		}
+		rules = append(rules, rule)
 	}
 	if err := assignmentRows.Err(); err != nil {
 		assignmentRows.Close()
@@ -263,7 +304,7 @@ ORDER BY assignment_id, assignment_revision DESC`, tenantID, siteID)
 	if err := tx.Commit(ctx); err != nil {
 		return nil, nil, fmt.Errorf("commit Site Alarm evaluation input read: %w", err)
 	}
-	return records, assignmentIDs, nil
+	return records, rules, nil
 }
 
 func buildSiteEvaluationSnapshot(triggerEventID, tenantID, siteID string, records []telemetryEvaluationInputRecord) (EvaluationSnapshot, error) {
