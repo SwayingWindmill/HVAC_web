@@ -1,7 +1,9 @@
 package telemetry
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -13,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestHistoryMicrobatchLeaseRetryAndDeadBoundary(t *testing.T) {
+func TestHistoryMicrobatchLeaseRetryKeepsBatchAndOrder(t *testing.T) {
 	runtimeURL, adminURL := postgresTestURLs(t)
 	historyURL := os.Getenv("S2_TELEMETRY_HISTORY_DATABASE_URL")
 	if historyURL == "" {
@@ -58,7 +60,7 @@ func TestHistoryMicrobatchLeaseRetryAndDeadBoundary(t *testing.T) {
 	}
 	results := make(chan result, 2)
 	for _, worker := range []*HistoryPostgresRepository{repo, peer} {
-		go func() { b, e := worker.ClaimHistoryBatch(ctx, 2, now, 30*time.Second, 3); results <- result{b, e} }()
+		go func() { b, e := worker.ClaimHistoryBatch(ctx, 2, now, 30*time.Second); results <- result{b, e} }()
 	}
 	var first HistoryBatch
 	for range 2 {
@@ -85,30 +87,29 @@ func TestHistoryMicrobatchLeaseRetryAndDeadBoundary(t *testing.T) {
 		return v
 	}
 	retryAt := now.Add(10 * time.Second)
-	if err := repo.RetryHistoryBatch(ctx, first.LeaseID, retryAt, "TEST_UNCERTAIN_WRITE", 4); err != nil {
+	if err := repo.RetryHistoryBatch(ctx, first.LeaseID, retryAt, "TEST_UNCERTAIN_WRITE"); err != nil {
 		t.Fatal(err)
 	}
-	early, err := peer.ClaimHistoryBatch(ctx, 1, now.Add(time.Second), 30*time.Second, 3)
+	early, err := peer.ClaimHistoryBatch(ctx, 1, now.Add(time.Second), 30*time.Second)
 	if err != nil || len(early.Observations) != 0 {
 		t.Fatalf("retry delay bypassed: %+v %v", early, err)
 	}
-	retry, err := peer.ClaimHistoryBatch(ctx, 1, retryAt, 30*time.Second, 3)
+	retry, err := peer.ClaimHistoryBatch(ctx, 1, retryAt, 30*time.Second)
 	if err != nil || retry.BatchID != first.BatchID || !reflect.DeepEqual(ids(retry), ids(first)) {
 		t.Fatalf("retry reshaped: %+v %v", retry, err)
 	}
-	reclaimed, err := repo.ClaimHistoryBatch(ctx, 1, retryAt.Add(31*time.Second), 30*time.Second, 3)
+	reclaimed, err := repo.ClaimHistoryBatch(ctx, 1, retryAt.Add(31*time.Second), 30*time.Second)
 	if err != nil || reclaimed.BatchID != first.BatchID || !reflect.DeepEqual(ids(reclaimed), ids(first)) {
 		t.Fatalf("expired lease reshaped: %+v %v", reclaimed, err)
 	}
 	if err := peer.MarkHistoryBatchPublished(ctx, retry.LeaseID, now); err == nil {
 		t.Fatal("stale worker acknowledged current lease")
 	}
-	// Third attempt dies without writing Retry. Lease expiry must still exhaust it.
-	if _, err := peer.ClaimHistoryBatch(ctx, 2, now.Add(time.Hour), 30*time.Second, 3); err == nil || !strings.Contains(err.Error(), "DEAD") {
-		t.Fatalf("DEAD did not block channel: %v", err)
-	}
-	if _, err := peer.ClaimHistoryBatch(ctx, 2, now.Add(2*time.Hour), 30*time.Second, 3); err == nil || !strings.Contains(err.Error(), "DEAD") {
-		t.Fatalf("persisted DEAD did not block: %v", err)
+	// A worker that dies mid-insert writes no Retry; after its lease expires the same batch is
+	// claimed again, never given up, and new data still waits behind it.
+	abandoned, err := peer.ClaimHistoryBatch(ctx, 2, now.Add(time.Hour), 30*time.Second)
+	if err != nil || abandoned.BatchID != first.BatchID || !reflect.DeepEqual(ids(abandoned), ids(first)) {
+		t.Fatalf("abandoned batch reshaped: %+v %v", abandoned, err)
 	}
 	var unassigned int
 	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.telemetry_history_outbox WHERE payload->>'source_partition'=$1 AND batch_id IS NULL`, partition).Scan(&unassigned); err != nil || unassigned != 1 {
@@ -166,4 +167,88 @@ func TestHistoryMicrobatchMixedPartitionsRecoversMaterializedView(t *testing.T) 
 	if actual := clickHouseQuery(t, baseURL, `SELECT countMerge(sample_count),avgMerge(average_value) FROM telemetry_history.microbatch_hourly FORMAT TSVRaw`); actual != "2\t20" {
 		t.Fatalf("hourly after recovery=%s", actual)
 	}
+}
+
+// Regression (2026-10-19): the server's disk filled, ClickHouse answered NOT_ENOUGH_SPACE for
+// about a minute, and the batch in flight was given up for good, so history stopped for every
+// site until someone repaired the outbox by hand. An outage of any length must end with the
+// batch, and the data behind it, in ClickHouse once ClickHouse accepts writes again.
+func TestHistoryMicrobatchOutlastsClickHouseOutage(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	historyURL := os.Getenv("S2_TELEMETRY_HISTORY_DATABASE_URL")
+	if historyURL == "" {
+		t.Skip("history database not configured")
+	}
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	repo, err := OpenHistoryPostgresRepository(ctx, historyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	now := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
+	const partition = "history-microbatch-outage"
+	defer func() {
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.source_observations WHERE source_partition=$1`, partition)
+	}()
+	accept := func(i int) {
+		candidate := ingestCandidate(fmt.Sprintf("018f2e00-9700-7000-8000-%012d", i), sourceA, partition, int64(i), SourcePathPoll, "mqtt-device-tenant-a-site-1", "zone.temperature", json.RawMessage(`25.0`), "NUMBER", "Cel", now.Add(time.Duration(i)*time.Second), now.Add(time.Duration(i)*time.Second))
+		if _, err := store.AcceptObservation(ctx, candidate); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accept(1)
+	now = now.Add(time.Minute)
+	sink := &outageSink{failures: 50}
+	relay, err := NewHistoryRelay(HistoryRelayConfig{
+		Repository: repo, Sink: sink, BatchSize: 4, LeaseFor: 30 * time.Second, RetryAfter: 5 * time.Second,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range sink.failures {
+		if _, err := relay.RelayOnce(ctx); err == nil {
+			t.Fatal("insert during the outage did not fail")
+		}
+		now = now.Add(5 * time.Second)
+	}
+	accept(2)
+	now = now.Add(time.Second)
+	published, err := relay.RelayOnce(ctx)
+	if err != nil || published != 1 {
+		t.Fatalf("batch after the outage: published=%d err=%v", published, err)
+	}
+	now = now.Add(5 * time.Second)
+	if published, err := relay.RelayOnce(ctx); err != nil || published != 1 {
+		t.Fatalf("data behind the batch: published=%d err=%v", published, err)
+	}
+	if len(sink.batches) != 2 || sink.batches[0] >= sink.batches[1] {
+		t.Fatalf("history sequences out of order: %v", sink.batches)
+	}
+}
+
+// outageSink fails its first `failures` inserts the way ClickHouse does when its disk is full.
+type outageSink struct {
+	failures int
+	calls    int
+	batches  []uint64
+}
+
+func (sink *outageSink) InsertObservations(_ context.Context, sequence uint64, _ []HistoryObservation) error {
+	sink.calls++
+	if sink.calls <= sink.failures {
+		return errors.New("ClickHouse history insert returned 500: Code: 243. DB::Exception: Cannot reserve 1.00 MiB, not enough space. (NOT_ENOUGH_SPACE)")
+	}
+	sink.batches = append(sink.batches, sequence)
+	return nil
 }

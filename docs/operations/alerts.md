@@ -163,6 +163,12 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 
 ## 依赖
 
+### 历史读数写不进 ClickHouse
+
+没有单独的告警；日志里 `telemetry-worker` 每 5 秒记一次 `telemetry_history_projection_failed`，设备历史曲线和用电量都停在最后写进去的时间。
+
+写历史的程序一直重试同一批，直到 ClickHouse 收下（批次按顺序写，后面的批次在它后面排队），原因修好之后会自己补上，不用改库。日志里的错误是脱敏的，原因去 ClickHouse 查：`SELECT event_time, exception FROM system.query_log WHERE user = 'telemetry_history_writer' AND exception != '' ORDER BY event_time DESC LIMIT 5`。排队的批次和失败次数在 `telemetry_runtime.telemetry_history_outbox`（`delivery_state`、`attempts`、`last_error_code`）。2026-10-19 的原因是主机磁盘满了（见「主机磁盘和 PostgreSQL 的 WAL」）。
+
 ### Redis 不可用
 
 告警：`S2RedisUnavailable`。依赖故障的告警按主、次负责人分别通知。Redis 只做缓存和推送，可以重建；它坏了不能触发退回旧系统或假数据。

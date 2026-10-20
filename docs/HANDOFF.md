@@ -2,7 +2,7 @@
 
 现在做到哪、下一步做什么、服务器和本地环境有哪些特殊情况。改了这里说的事，就在同一个 PR 里更新本文。怎么构建、测试和运行见 `AGENTS.md`；用户能看到的变化见 `CHANGELOG.md`；每张单的细节在 GitHub 问题单里。
 
-最后更新：2026-10-19。
+最后更新：2026-10-20。
 
 ## 产品现在有什么
 
@@ -49,7 +49,8 @@
 - Alertmanager 用的是默认接收方，告警到它那里就停了；要发邮件得先配接收方（`docs/operations/alerts.md` 的「告警怎么送到人」一节）。服务器上 Prometheus 读 `runtime/server/config/prometheus.yaml`，`alerting` 配置是手工加的。
 - 通知还没有配接收人、策略和模板，告警只出现在告警页。
 - 两个演示站点（central-plant、local-energy-site-b）的 28 个定时任务都停用了：模拟器停着，指标任务每小时都会失败。重新开模拟器时一起启用。
-- 运行时数据清理（#553）每小时删已送达的历史事件、删 7 天前的原始读数。第一次删原始读数从 2026-10-21 开始，之后跑一次 `VACUUM FULL telemetry_runtime.source_observations`，能腾出约 3.5 GB。
+- 运行时数据清理（#553）每小时删已送达的历史事件、删 7 天前的原始读数。第一次删原始读数从 2026-10-21 开始，之后跑一次 `VACUUM FULL telemetry_runtime.source_observations`，能腾出约 3.5 GB；`VACUUM FULL` 要先有和剩下的数据一样大的空闲空间，磁盘腾出来之前别跑。
+- **磁盘快满了**（2026-10-20：59 GB 用了 55 GB，剩 2.1 GB）。最大的是告警的计算记录 `hvac_s4` 的 `alarm_runtime.alarm_evaluation_event`：10-18 起一天约 100 万行、约 6 GB，两天到了 10 GB；其次是 `source_observations` 5.4 GB、同一块盘上的夜间备份 6.5 GB、ClickHouse 的 `system.query_log` 0.8 GB。2026-10-19 19:52–19:55 磁盘满过一次：Postgres 重启了 10 次，ClickHouse 拒绝写入，写历史读数的程序停了 15 个小时（#649 修了停下不恢复的问题，那批读数 10-20 已补上）。网关恢复上报后，按这个速度几个小时就会再满。
 
 ### 松雅轩（第一个真实站点）
 
