@@ -64,7 +64,7 @@ func dispatchReportRoute(h *handler, writer http.ResponseWriter, request *http.R
 	if rawQuery := request.URL.RawQuery; rawQuery != "" {
 		internalPath += "?" + rawQuery
 	}
-	raw, status, err := h.executeIntelligence(request, http.MethodGet, h.intelligence.reportBaseURL+internalPath, nil, map[string]string{"X-Tenant-ID": session.TenantID})
+	raw, status, err := h.executeOwner(request, session, reportOwner, h.intelligence.reportBaseURL, route.siteID, reportReadAction, http.MethodGet, internalPath, nil)
 	if err == nil && status == http.StatusBadRequest {
 		writeProblem(writer, request, http.StatusBadRequest, "REPORT_REQUEST_INVALID", "Report request invalid", "The report month or year is invalid.", false, nil)
 		return

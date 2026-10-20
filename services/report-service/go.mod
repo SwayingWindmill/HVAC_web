@@ -6,6 +6,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/quanlaihe/hvac-web/libs/analyticsmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/energyseries v0.0.0
+	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/schedulerjob v0.0.0
 	github.com/quanlaihe/hvac-web/libs/workloadtls v0.0.0
 )
@@ -25,3 +26,5 @@ replace github.com/quanlaihe/hvac-web/libs/analyticsmodel => ../../libs/analytic
 replace github.com/quanlaihe/hvac-web/libs/energyseries => ../../libs/energyseries
 
 replace github.com/quanlaihe/hvac-web/libs/workloadtls => ../../libs/workloadtls
+
+replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identitycontext

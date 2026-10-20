@@ -164,7 +164,7 @@ services:
       FORECAST_SERVICE_URL: https://forecast-service:19092
       FDD_SERVICE_URL: https://fdd-service:19094
       MV_SERVICE_URL: https://mv-service:19096
-      REPORT_SERVICE_URL: http://report-service:19097
+      REPORT_SERVICE_URL: https://report-service:19097
       OPTIMIZATION_SERVICE_URL: https://optimization-service:19093
       IAM_URL: https://iam-service:8444
       IAM_SERVER_NAME: iam-service
@@ -681,6 +681,7 @@ services:
     environment:
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       REPORT_HTTP_ADDR: :19097
+      REPORT_DIAGNOSTICS_ADDR: :19102
       REPORT_DATABASE_URL: ${REPORT_DATABASE_URL:-}
       # Energy comes from the Telemetry Query Service, read as report-service's own Workload Principal.
       REPORT_IAM_URL: https://iam-service:8444
@@ -688,6 +689,8 @@ services:
       REPORT_TLS_CERT: /run/hvac/pki/report/tls.crt
       REPORT_TLS_KEY: /run/hvac/pki/report/tls.key
       REPORT_TLS_CA: /run/hvac/pki/ca.crt
+      # Reports are served only to the Gateway, with a context it signs (#613).
+      REPORT_GATEWAY_DELEGATION_CERT: /run/hvac/pki/gateway/tls.crt
     volumes:
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
     depends_on:
@@ -695,7 +698,7 @@ services:
         condition: service_completed_successfully
     expose: ["19097"]
     healthcheck:
-      test: ["CMD", "/healthcheck", "http://127.0.0.1:19097/healthz"]
+      test: ["CMD", "/healthcheck", "http://127.0.0.1:19102/healthz"]
       interval: 10s
       timeout: 4s
       retries: 12

@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/energyseries"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
+	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/report-service/internal/report"
 )
 
@@ -39,7 +41,22 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	handler, err := report.NewHTTPHandler(service)
+	// Only the Gateway may call report-service, over mutual TLS with a context it signed (#613).
+	serverTLS, err := workloadtls.NewServerTLSConfig(workloadtls.ServerConfig{
+		CertificateFiles: workloadtls.CertificateFiles{CertificatePath: requiredEnv("REPORT_TLS_CERT"), PrivateKeyPath: requiredEnv("REPORT_TLS_KEY")},
+		ClientCAPath:     requiredEnv("REPORT_TLS_CA"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	gatewayKey, err := identitycontext.LoadCertificatePublicKey(requiredEnv("REPORT_GATEWAY_DELEGATION_CERT"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	handler, err := report.NewHTTPHandler(service, report.AuthConfig{
+		GatewayPublicKey: gatewayKey,
+		GatewaySPIFFE:    envOrDefault("REPORT_GATEWAY_SPIFFE", report.DefaultGatewaySPIFFEID),
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -66,13 +83,24 @@ func main() {
 	server := &http.Server{
 		Addr:              envOrDefault("REPORT_HTTP_ADDR", ":19097"),
 		Handler:           handler,
+		TLSConfig:         serverTLS,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	// The container health check has no client certificate, so it asks a plain port that answers nothing else.
+	diagnostics := &http.Server{
+		Addr: envOrDefault("REPORT_DIAGNOSTICS_ADDR", ":19102"), Handler: report.HealthHandler(),
+		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}
 	go func() {
-		if serveErr := server.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}()
+	go func() {
+		if serveErr := server.ListenAndServeTLS("", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			log.Printf("report service stopped unexpectedly: %v", serveErr)
 			stop()
 		}
@@ -81,6 +109,7 @@ func main() {
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = server.Shutdown(shutdown)
+	_ = diagnostics.Shutdown(shutdown)
 }
 
 func hostname() string {

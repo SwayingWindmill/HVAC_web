@@ -43,9 +43,9 @@ function shareWithServices(identity) {
 // Workloads that call internal owners themselves, or serve them over mutual TLS, and so need
 // their own identity.
 export const workloadIdentities = Object.freeze([
-  { name: 'report', spiffeId: 'spiffe://hvac.local/report-service' },
   // FDD serves the Gateway and the Operations Agent over mutual TLS (#595); Forecast, Optimization
-  // and M&V serve the Gateway (#612).
+  // and M&V serve the Gateway (#612), and so does Report (#613).
+  { name: 'report', spiffeId: 'spiffe://hvac.local/report-service', dns: 'report-service' },
   { name: 'fdd', spiffeId: 'spiffe://hvac.local/fdd-service', dns: 'fdd-service' },
   { name: 'forecast', spiffeId: 'spiffe://hvac.local/forecast-service', dns: 'forecast-service' },
   { name: 'optimization', spiffeId: 'spiffe://hvac.local/optimization-service', dns: 'optimization-service' },

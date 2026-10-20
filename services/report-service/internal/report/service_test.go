@@ -18,7 +18,7 @@ type fakeStore struct {
 	savings  []SavingsDay
 	findings []FindingCount
 	stored   []StoredSnapshot
-	asked    struct{ savingsFrom, savingsTo string }
+	asked    struct{ savingsFrom, savingsTo, readTenant string }
 }
 
 func (store *fakeStore) SiteLocation(context.Context, string, string) (*time.Location, error) {
@@ -45,7 +45,8 @@ func (store *fakeStore) InsertSnapshot(_ context.Context, _, _ string, stored St
 	return stored, nil
 }
 
-func (store *fakeStore) LatestSnapshot(_ context.Context, _, _, month string) (StoredSnapshot, error) {
+func (store *fakeStore) LatestSnapshot(_ context.Context, tenantID, _, month string) (StoredSnapshot, error) {
+	store.asked.readTenant = tenantID
 	for index := len(store.stored) - 1; index >= 0; index-- {
 		if store.stored[index].Month == month {
 			return store.stored[index], nil
@@ -54,7 +55,8 @@ func (store *fakeStore) LatestSnapshot(_ context.Context, _, _, month string) (S
 	return StoredSnapshot{}, ErrSnapshotNotFound
 }
 
-func (store *fakeStore) YearSnapshots(context.Context, string, string, int) ([]StoredSnapshot, error) {
+func (store *fakeStore) YearSnapshots(_ context.Context, tenantID, _ string, _ int) ([]StoredSnapshot, error) {
+	store.asked.readTenant = tenantID
 	return store.stored, nil
 }
 
@@ -138,15 +140,10 @@ func TestTheInternalAPIServesTheLatestVersionAndTheYear(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	handler, err := NewHTTPHandler(service)
-	if err != nil {
-		t.Fatal(err)
-	}
+	handler := newTestHandler(t, service)
 	get := func(path string) *httptest.ResponseRecorder {
-		request := httptest.NewRequest(http.MethodGet, path, nil)
-		request.Header.Set(headerTenant, testTenant)
 		recorder := httptest.NewRecorder()
-		handler.ServeHTTP(recorder, request)
+		handler.ServeHTTP(recorder, presented(t, path, testGatewaySPIFFE, Audience, ReadAction, testTenant, testSite))
 		return recorder
 	}
 	month := get("/v1/sites/" + testSite + "/reports/monthly/2026-09")
