@@ -209,3 +209,13 @@ test('a question that asks for a chart fails without one, or with one lacking th
   assert.equal(check(gradeTrial(electricity, charting(owner.map((value: number) => value + 5)), series), 'chart').passed, false);
   assert.equal(gradeTrial(daily, snapshot, series).checks.some((each) => each.name === 'chart'), false);
 });
+
+test('an answer leads with its conclusion as one bold sentence; a bold heading, a note first or bold figures alone fail', () => {
+  for (const id of recorded) {
+    const lead = check(gradeTrial(question(id), fixture(id), series), 'leads-with-conclusion');
+    assert.equal(lead.passed, false, id);
+  }
+  const snapshot = fixture('least-efficient-hours');
+  const concluded = withAnswer(snapshot, (content) => `**昨天能效最低的是 7 点和 16 点，分别是 3.52 和 3.75。**\n\n${content}`);
+  assert.equal(check(gradeTrial(question('least-efficient-hours'), concluded, series), 'leads-with-conclusion').passed, true);
+});
