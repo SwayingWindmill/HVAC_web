@@ -77,7 +77,7 @@ func (store *PostgresStore) EvaluateAssignedSnapshot(ctx context.Context, assign
 	if found {
 		previous = persisted.State
 	}
-	decision, err := EvaluatePolicy(assigned.Policy, snapshot, previous, now)
+	decision, err := evaluateAtSiteClock(ctx, tx, snapshot.TenantID, snapshot.SiteID, assigned.Policy, snapshot, previous, now)
 	if err != nil {
 		return EvaluationDecision{}, err
 	}
@@ -166,14 +166,14 @@ func (store *PostgresStore) EvaluateClaim(ctx context.Context, claim EvaluationC
 	if err != nil {
 		return EvaluationDecision{}, err
 	}
-	if !found || persisted.LeaseOwner != claim.WorkerID || persisted.LeaseUntil == nil || !now.UTC().Before(*persisted.LeaseUntil) || persisted.LeaseFence != claim.Fence || persisted.State.Version != claim.StateVersion || !evaluationIsDue(persisted.State.NextEvaluationAt, now.UTC()) {
+	if !found || persisted.LeaseOwner != claim.WorkerID || persisted.LeaseUntil == nil || !now.UTC().Before(*persisted.LeaseUntil) || persisted.LeaseFence != claim.Fence || persisted.State.Version != claim.StateVersion {
 		return EvaluationDecision{}, ErrEvaluationClaimLost
 	}
 	assigned, err := loadAssignedAlarmPolicy(ctx, tx, claim.TenantID, claim.SiteID, claim.AssignmentID)
 	if err != nil {
 		return EvaluationDecision{}, err
 	}
-	decision, err := EvaluatePolicy(assigned.Policy, persisted.Snapshot, persisted.State, now)
+	decision, err := evaluateAtSiteClock(ctx, tx, claim.TenantID, claim.SiteID, assigned.Policy, persisted.Snapshot, persisted.State, now)
 	if err != nil {
 		return EvaluationDecision{}, err
 	}
@@ -328,6 +328,60 @@ func (store *PostgresStore) clearInTransaction(ctx context.Context, tx pgx.Tx, t
 		}
 	}
 	return cleared, nil
+}
+
+// backlogGap is how long readings may pause and still be a backlog being caught up.
+const backlogGap = 2 * time.Minute
+
+// evaluateAtSiteClock judges the policy at the Site's clock, and stamps what the decision does to
+// its alarm with now: an alarm's record never runs backwards, and people act on it at now.
+func evaluateAtSiteClock(ctx context.Context, tx pgx.Tx, tenantID, siteID string, policy AlarmPolicyRevision, snapshot EvaluationSnapshot, previous AlarmEvaluationState, now time.Time) (EvaluationDecision, error) {
+	judgedAt, err := siteClock(ctx, tx, tenantID, siteID, now.UTC())
+	if err != nil {
+		return EvaluationDecision{}, err
+	}
+	decision, err := EvaluatePolicy(policy, snapshot, previous, judgedAt)
+	if err != nil {
+		return EvaluationDecision{}, err
+	}
+	at := now.UTC().Format(time.RFC3339Nano)
+	if decision.Publication != nil {
+		decision.Publication.OccurredAt = at
+	}
+	if decision.Recovery != nil {
+		decision.Recovery.OccurredAt = at
+	}
+	return decision, nil
+}
+
+// siteClock is the time a Site is judged at (#661). While its readings keep arriving, it is the
+// newest reading's time run on by how long ago the alarm side received it: caught up, that is now;
+// catching up on a backlog, it follows the readings, so each is judged at its own time instead of
+// looking too old. Once none has arrived for backlogGap, the backlog is done or the readings
+// stopped, and it is now. A Site without readings is judged at now. ThingsBoard keeps judging "no
+// data" at now: docs/architecture/alarm-backlog-clock-source-review-2026-10-20.md.
+//
+// The newest reading and the newest arrival may be different devices': the relay delivers a Site's
+// readings in the order telemetry took them.
+func siteClock(ctx context.Context, tx pgx.Tx, tenantID, siteID string, now time.Time) (time.Time, error) {
+	var newest, received *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT max(evaluated_at), max(updated_at)
+		FROM alarm_runtime.telemetry_evaluation_input
+		WHERE tenant_id = $1 AND site_id = $2`, tenantID, siteID).Scan(&newest, &received); err != nil {
+		return time.Time{}, fmt.Errorf("read the Site's reading clock: %w", err)
+	}
+	if newest == nil || now.Sub(*received) >= backlogGap {
+		return now, nil
+	}
+	clock := newest.UTC()
+	if received.Before(now) {
+		clock = clock.Add(now.Sub(*received))
+	}
+	if clock.After(now) {
+		return now, nil
+	}
+	return clock, nil
 }
 
 func lockEvaluationAssignment(ctx context.Context, tx pgx.Tx, tenantID, assignmentID string) error {
