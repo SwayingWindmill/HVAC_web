@@ -20,7 +20,7 @@ export type SeriesByKey = Readonly<Record<string, {
   readonly devices?: readonly { readonly deviceId: string; readonly points: readonly SeriesPoint[] }[];
 }>>;
 
-export type CheckName = 'completed' | 'figures' | 'chinese-only' | 'plain-words' | 'no-repetition' | 'efficiency' | 'declines' | 'says' | 'chart';
+export type CheckName = 'completed' | 'figures' | 'leads-with-conclusion' | 'chinese-only' | 'plain-words' | 'no-repetition' | 'efficiency' | 'declines' | 'says' | 'chart';
 
 export interface Check {
   readonly name: CheckName;
@@ -182,6 +182,15 @@ export const gradeTrial = (question: EvalQuestion, snapshot: AgentSessionSnapsho
       .map(({ value, hour }) => `${figure.measure} ${Number(value.toFixed(2))}${hour === undefined ? '' : ` at ${hour}`}`));
     checks.push(missing.length === 0 ? pass('figures') : fail('figures', `not stated: ${missing.join(', ')}`));
   }
+
+  // The operator reads the run's first answer first, in bold: one whole sentence on its own line,
+  // the only bold text. Closing 「**」 straight before more text does not render, it shows as stars.
+  const opening = (assistant[0]?.content ?? '').trimStart();
+  const boldOpening = opening.match(/^\*\*(.+?)\*\*(?=\n|$)/u)?.[1];
+  checks.push(boldOpening === undefined ? fail('leads-with-conclusion', 'the answer does not open with a bold line')
+    : !boldOpening.endsWith('。') ? fail('leads-with-conclusion', `the bold opening is not a sentence: ${boldOpening}`)
+      : opening.split('**').length !== 3 ? fail('leads-with-conclusion', 'more than the opening sentence is bold')
+        : pass('leads-with-conclusion'));
 
   const latin = [...new Set((shown.replace(IDENTIFIER, '').match(/[A-Za-z][A-Za-z_]+/gu) ?? []).filter((word) => !LATIN_ALLOWED.has(word)))];
   checks.push(latin.length === 0 ? pass('chinese-only') : fail('chinese-only', `Latin words: ${latin.join(', ')}`));
