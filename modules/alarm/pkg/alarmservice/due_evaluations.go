@@ -17,10 +17,11 @@ const (
 	dueEvaluationInterval = time.Minute
 	dueEvaluationBatch    = 100
 	dueEvaluationLease    = time.Minute
+	evidencePruneBatch    = 5000
 )
 
 // RunScheduledEvaluations runs a pass every minute until ctx ends, wherever the Alarm owner runs:
-// alone or inside energy-api.
+// alone or inside energy-api. Each pass also deletes evaluation evidence past its 30 days.
 func RunScheduledEvaluations(ctx context.Context, store *PostgresStore, logger *slog.Logger) {
 	host, err := os.Hostname()
 	if err != nil {
@@ -42,6 +43,13 @@ func RunScheduledEvaluations(ctx context.Context, store *PostgresStore, logger *
 			}
 			if result.Raised+result.Cleared > 0 {
 				logger.Info("alarm_due_evaluations", "evaluated", result.Evaluated, "raised", result.Raised, "cleared", result.Cleared)
+			}
+			pruned, err := store.PruneExpiredEvaluationEvidence(ctx)
+			if err != nil {
+				logger.Error("alarm_evaluation_evidence_prune_failed", "error_code", "ALARM_EVALUATION_EVIDENCE_PRUNE_FAILED", "error", err)
+			}
+			if pruned > 0 {
+				logger.Info("alarm_evaluation_evidence_pruned", "deleted", pruned)
 			}
 		}
 	}()
@@ -115,6 +123,25 @@ func (store *PostgresStore) RunDueEvaluations(ctx context.Context, workerID stri
 		}
 	}
 	return result, errors.Join(failures...)
+}
+
+// PruneExpiredEvaluationEvidence deletes evaluation evidence older than 30 days across Tenants, a
+// batch at a time, and returns how many rows it deleted (#651).
+func (store *PostgresStore) PruneExpiredEvaluationEvidence(ctx context.Context) (int64, error) {
+	if store == nil || store.pool == nil {
+		return 0, ErrUnavailable
+	}
+	var total int64
+	for {
+		var deleted int64
+		if err := store.pool.QueryRow(ctx, `SELECT alarm_runtime.prune_expired_alarm_evaluation_events($1)`, evidencePruneBatch).Scan(&deleted); err != nil {
+			return total, fmt.Errorf("prune expired Alarm evaluation evidence: %w", err)
+		}
+		total += deleted
+		if deleted < evidencePruneBatch {
+			return total, nil
+		}
+	}
 }
 
 func (result *DueEvaluationResult) count(decision EvaluationDecision) {
