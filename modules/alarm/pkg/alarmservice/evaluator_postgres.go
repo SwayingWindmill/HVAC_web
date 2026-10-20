@@ -501,6 +501,7 @@ func persistEvaluation(ctx context.Context, tx pgx.Tx, assigned assignedAlarmPol
 
 // The evidence log keeps one row per outcome change, not one per reading: a Site rule sees every
 // reading of the Site, and an unchanged outcome is already held by alarm_evaluation_state (#651).
+// See docs/architecture/alarm-evaluation-evidence-source-review-2026-10-20.md.
 func evaluationOutcomeChanged(previous persistedEvaluation, assigned assignedAlarmPolicy, decision EvaluationDecision) bool {
 	return previous.State.Version == 0 ||
 		decision.Effect != EvaluationEffectNone ||
