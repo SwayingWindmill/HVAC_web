@@ -1,0 +1,121 @@
+.site-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.site-pill {
+  height: 36px;
+  line-height: 34px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--card);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px;
+}
+
+.hero-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--success-text);
+}
+
+.leaf {
+  width: 24px;
+  height: 24px;
+}
+
+.hero-amount {
+  font-size: 44px;
+  line-height: 48px;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  color: var(--success-text);
+}
+
+.hero-amount-empty {
+  color: var(--subtle-foreground);
+}
+
+.hero-detail {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--secondary-foreground);
+}
+
+.measure {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--divider);
+}
+
+.measure-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.measure-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.measure-amount {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--success-text);
+}
+
+.energy {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.energy-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 12px;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metric-value {
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.peak {
+  padding-top: 12px;
+  border-top: 1px solid var(--divider);
+}
+
+.row-value {
+  font-weight: 600;
+}

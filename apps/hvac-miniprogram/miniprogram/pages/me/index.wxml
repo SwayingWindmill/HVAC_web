@@ -1,0 +1,21 @@
+<page-header title="我的" />
+
+<view class="screen with-tab-bar">
+  <view class="card card-pad person">
+    <view class="avatar" aria-hidden="true">{{name ? name[0] : ''}}</view>
+    <view class="person-text">
+      <text class="person-name">{{name}}</text>
+      <text class="caption">{{email}}</text>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="row">
+      <text>当前站点</text>
+      <text class="muted">{{siteName}}</text>
+    </view>
+  </view>
+
+  <button class="button-outline sign-out" disabled="{{signingOut}}" loading="{{signingOut}}" bindtap="signOut">退出登录</button>
+  <view class="caption hint">改密码、管理用户和站点，请到电脑上的网页。</view>
+</view>

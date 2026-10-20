@@ -1,0 +1,30 @@
+{
+  "pages": [
+    "pages/overview/index",
+    "pages/me/index",
+    "pages/login/index"
+  ],
+  "window": {
+    "navigationStyle": "custom",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f7f7f8",
+    "backgroundTextStyle": "dark"
+  },
+  "tabBar": {
+    "custom": true,
+    "color": "#71717a",
+    "selectedColor": "#3f5bd9",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "white",
+    "list": [
+      { "pagePath": "pages/overview/index", "text": "总览" },
+      { "pagePath": "pages/me/index", "text": "我的" }
+    ]
+  },
+  "usingComponents": {
+    "page-header": "/components/page-header/index"
+  },
+  "lazyCodeLoading": "requiredComponents",
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

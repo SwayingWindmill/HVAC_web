@@ -1,0 +1,15 @@
+<view class="bar">
+  <view
+    wx:for="{{tabs}}"
+    wx:key="pagePath"
+    class="tab {{selected === index ? 'tab-on' : ''}}"
+    data-index="{{index}}"
+    bindtap="switchTab"
+    aria-role="tab"
+    aria-selected="{{selected === index}}"
+    aria-label="{{item.text}}"
+  >
+    <image class="icon" src="{{selected === index ? item.activeIcon : item.icon}}" mode="aspectFit" />
+    <text class="label">{{item.text}}</text>
+  </view>
+</view>

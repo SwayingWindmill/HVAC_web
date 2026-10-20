@@ -1,0 +1,29 @@
+{
+  "description": "泉来禾智慧能源 · 冷站值班小程序",
+  "projectname": "hvac-miniprogram",
+  "appid": "wx4b7b82bf0351c6f3",
+  "compileType": "miniprogram",
+  "miniprogramRoot": "miniprogram/",
+  "srcMiniprogramRoot": "miniprogram/",
+  "setting": {
+    "useCompilerPlugins": ["typescript"],
+    "urlCheck": true,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "minifyWXML": true,
+    "minifyWXSS": true,
+    "ignoreUploadUnusedFiles": true,
+    "uploadWithSourceMap": true
+  },
+  "packOptions": {
+    "ignore": [],
+    "include": []
+  },
+  "condition": {},
+  "editorSetting": {
+    "tabIndent": "insertSpaces",
+    "tabSize": 2
+  }
+}
