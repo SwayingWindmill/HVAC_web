@@ -1,6 +1,7 @@
-FROM postgres:16.4-bookworm
+# Each reviewed file is copied on its own into a stage that is never run, then into the image as one
+# layer: one layer per file put the image over Docker's layer limit (#659).
+FROM scratch AS sources
 
-WORKDIR /opt/hvac
 COPY deploy/platform/phase1/migrations/bootstrap-roles.sql /opt/hvac/migrations/bootstrap-roles.sql
 COPY deploy/platform/phase1/migrations/migration-list.tsv /opt/hvac/migrations/migration-list.tsv
 COPY deploy/platform/phase1/migrations/run-phase1-migrations.sh /opt/hvac/migrations/run-phase1-migrations.sh
@@ -119,6 +120,10 @@ COPY modules/workorder/migrations/006_s26_equipment_source_domain.sql /opt/hvac/
 COPY services/operations-agent-service/migrations/operations/001_agent_sessions.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/001_agent_sessions.sql
 COPY services/operations-agent-service/migrations/operations/002_finding_without_summary.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/002_finding_without_summary.sql
 
+FROM postgres:16.4-bookworm
+
+WORKDIR /opt/hvac
+COPY --from=sources /opt/hvac /opt/hvac
 RUN ! grep -R -E 'local-only|fixture-only' /opt/hvac/repo \
     && chmod 0555 /opt/hvac/migrations/run-phase1-migrations.sh /opt/hvac/migrations/verify-phase1-schema.sh
 ENTRYPOINT ["/opt/hvac/migrations/run-phase1-migrations.sh"]
