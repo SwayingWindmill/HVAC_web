@@ -1,6 +1,6 @@
 # pi 源码调研
 
-2026-09-03；2026-10-16 升级到 v1.3.0 时补了最后一节。决定见 ADR 0014。
+2026-09-03；2026-10-16 升级到 v1.3.0 时补了「升级到 v1.3.0」，2026-10-19 补了「插件和官方包」。决定见 ADR 0014。
 
 ## 参照的版本
 
@@ -86,4 +86,16 @@ pi 是现在的助手执行引擎，不是 HVAC 的业务架构。它擅长的�
 - **采用**：从 v0.86.0 起，厂商从对话记录里读提示词（`TranscriptContext`）；提示词仍只通过 `initialState.systemPrompt` 设一次，作为第一条消息发给模型。
 - **采用**：工具调用的参数只能是 JSON 值（v0.86.0）；假模型测试里把它们的类型写成 `JsonObject`。
 - **改造后采用**：DeepSeek 的模型清单现在是 `deepseek-flash`（V4.1 Flash）和 `deepseek-v4-pro`；Compose 的默认值和允许名单跟着改了。
-- **暂不采用**：codemode、MCP、虚拟模型和编程助手的会话管理（v0.99–v1.x），这些是编程助手的功能，这里用不上。
+- **暂不采用**：MCP、虚拟模型和编程助手的会话管理（v0.99–v1.x），这些是编程助手的功能，这里用不上。codemode 后来单独看过，见下一节。
+
+## 插件和官方包（2026-10-19）
+
+想找能省事的 pi 插件，读了上游仓库里插件和官方包的说明：`packages/coding-agent/docs/` 下的 `extensions.md`、`packages.md`、`codemode.md`，以及 `packages/durable`、`packages/mcp`、`packages/evals`、`packages/chord` 的 README。
+
+- **插件（extensions）和插件包（packages）不能用**：它们是给编程助手 `pi-coding-agent` 用的，靠 `pi install` 装进编程助手的进程，挂在它的命令、会话和终端界面上。我们只嵌入 `pi-agent-core` 和 `pi-ai`，没有这个宿主，社区的插件也都是这一种。
+- **`@earendil-works/pi-codemode`：值得试，还没用**。模型写一小段 JavaScript，在 QuickJS 沙箱（编译成 WebAssembly，每次执行一个工作线程）里连续调用我们注入的工具，中间结果不进对话，只把脚本的输出和返回值交回模型。沙箱里没有计时器、`fetch`、`process`、`require` 和模块，只能调注入的工具；有超时（`timeoutMs`）和内存上限（`memoryLimitBytes`）。它不依赖 pi 的其他包，可以单独接在现在的工具上。可能的好处：「解释差异」「数据不全的一天」「设备解释」这类要读好几次数据的问题，少几轮模型调用、少一些令牌。要先用评测前后对比再决定（#641）：令牌、耗时、模型调用次数要降，答对率不能降；还要看我们按工具记的调用记录、权限和预算在脚本里怎么守住。
+- **`@earendil-works/pi-durable`：不用**。说明里自己写着「实验性，接口随时变」。会话已经由我们自己的服务存在 PostgreSQL 里（ADR 0014）。
+- **`@earendil-works/pi-mcp`：不用**。ADR 0014 定了数据直接从各数据负责方的接口读，不经过 MCP。
+- **pi 的 evals：不用**。那是给编程助手做的行为评测（`vitest-evals`，在容器里比较有没有文档时的表现）；我们自己的评测在 `services/operations-agent-service/evals/`。
+- **`@earendil-works/chord`：不用**。它是在几个进程之间共享对象、能热替换代码的框架，和助手的工具循环无关。
+
