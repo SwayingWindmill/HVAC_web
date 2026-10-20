@@ -112,3 +112,24 @@ func TestSavingsCallsCarryAGatewaySignedContextForTheirAction(t *testing.T) {
 		t.Fatalf("the registration context does not name the person: %+v", claims)
 	}
 }
+
+// #613: report-service no longer trusts a Tenant header; the month and year reads carry a context
+// the Gateway signs to read the Site.
+func TestReportReadsCarryAGatewaySignedContext(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	controller := fixture.handler.(*handler)
+	session := fixture.session(t)
+	for _, route := range []publicReportRoute{
+		{siteID: fixture.siteID, internalPath: "/monthly/2026-09"},
+		{siteID: fixture.siteID, internalPath: "/monthly"},
+	} {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+fixture.siteID+"/reports"+route.internalPath, nil)
+		ctx := context.WithValue(request.Context(), routeDecisionContextKey, ownershipregistry.Decision{SelectedOwner: ownershipregistry.OwnerReport})
+		response := httptest.NewRecorder()
+		dispatchReportRoute(controller, response, request.WithContext(context.WithValue(ctx, routeSessionContextKey, session)), route)
+		if response.Code != http.StatusOK {
+			t.Fatalf("report read %s got %d: %s", route.internalPath, response.Code, response.Body.String())
+		}
+		requireOwnerContext(t, fixture, "X-Report-Context", "report-service", "report:read")
+	}
+}

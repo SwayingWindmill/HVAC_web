@@ -33,9 +33,8 @@ type IntelligenceConfig struct {
 	MVBaseURL           string
 	ReportBaseURL       string
 	OptimizationBaseURL string
-	HTTPClient          *http.Client
-	// OwnerHTTPClient calls FDD, Forecast, Optimization and M&V over mutual TLS with the Gateway's
-	// workload identity (#595, #612).
+	// OwnerHTTPClient calls FDD, Forecast, Optimization, M&V and Report over mutual TLS with the
+	// Gateway's workload identity (#595, #612, #613).
 	OwnerHTTPClient *http.Client
 	Timeout         time.Duration
 }
@@ -46,13 +45,12 @@ type intelligenceController struct {
 	mvBaseURL           string
 	reportBaseURL       string
 	optimizationBaseURL string
-	httpClient          *http.Client
 	ownerHTTPClient     *http.Client
 	timeout             time.Duration
 }
 
 // intelligenceOwner is an owner that serves only contexts the Gateway signs, each for one action on
-// one Tenant and Site (#595, #612); before, they trusted whatever X-Tenant-ID a caller sent.
+// one Tenant and Site (#595, #612, #613); before, they trusted whatever X-Tenant-ID a caller sent.
 type intelligenceOwner struct{ audience, header string }
 
 var (
@@ -60,6 +58,7 @@ var (
 	forecastOwner     = intelligenceOwner{audience: "forecast-service", header: "X-Forecast-Context"}
 	optimizationOwner = intelligenceOwner{audience: "optimization-service", header: "X-Optimization-Context"}
 	mvOwner           = intelligenceOwner{audience: "mv-service", header: "X-MV-Context"}
+	reportOwner       = intelligenceOwner{audience: "report-service", header: "X-Report-Context"}
 )
 
 const (
@@ -70,6 +69,7 @@ const (
 	optimizationWriteAction = "optimization:write"
 	mvReadAction            = "mv:read"
 	mvWriteAction           = "mv:write"
+	reportReadAction        = "report:read"
 )
 
 type publicIntelligenceRoute struct {
@@ -109,15 +109,12 @@ func newIntelligenceController(config *IntelligenceConfig) *intelligenceControll
 	resolved.MVBaseURL = strings.TrimRight(strings.TrimSpace(resolved.MVBaseURL), "/")
 	resolved.ReportBaseURL = strings.TrimRight(strings.TrimSpace(resolved.ReportBaseURL), "/")
 	resolved.OptimizationBaseURL = strings.TrimRight(strings.TrimSpace(resolved.OptimizationBaseURL), "/")
-	if resolved.HTTPClient == nil {
-		resolved.HTTPClient = &http.Client{}
-	}
 	if resolved.Timeout <= 0 || resolved.Timeout > 30*time.Second {
 		resolved.Timeout = defaultIntelligenceTimeout
 	}
 	return &intelligenceController{
 		forecastBaseURL: resolved.ForecastBaseURL, fddBaseURL: resolved.FDDBaseURL, mvBaseURL: resolved.MVBaseURL, reportBaseURL: resolved.ReportBaseURL, optimizationBaseURL: resolved.OptimizationBaseURL,
-		httpClient: resolved.HTTPClient, ownerHTTPClient: resolved.OwnerHTTPClient, timeout: resolved.Timeout,
+		ownerHTTPClient: resolved.OwnerHTTPClient, timeout: resolved.Timeout,
 	}
 }
 
@@ -517,10 +514,6 @@ func (h *handler) executeOwner(publicRequest *http.Request, session bffSession, 
 		return nil, 0, err
 	}
 	return h.callIntelligence(h.intelligence.ownerHTTPClient, publicRequest, method, baseURL+path, body, map[string]string{owner.header: signed})
-}
-
-func (h *handler) executeIntelligence(publicRequest *http.Request, method, endpoint string, body []byte, headers map[string]string) ([]byte, int, error) {
-	return h.callIntelligence(h.intelligence.httpClient, publicRequest, method, endpoint, body, headers)
 }
 
 func (h *handler) callIntelligence(client *http.Client, publicRequest *http.Request, method, endpoint string, body []byte, headers map[string]string) ([]byte, int, error) {

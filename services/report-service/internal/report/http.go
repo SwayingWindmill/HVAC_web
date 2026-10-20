@@ -1,47 +1,95 @@
 package report
 
 import (
+	"context"
+	"crypto"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
+	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
-// The Gateway reaches report-service on the private network after deciding the caller may read
-// the Site (site.read); it names the Tenant.
-const headerTenant = "X-Tenant-ID"
-
-var (
-	monthPattern = regexp.MustCompile(`^[0-9]{4}-(0[1-9]|1[0-2])$`)
-	uuidPattern  = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+// report-service serves only the Gateway, with a context it signed to read the Site after deciding
+// the person may (site.read) (#613). Before, any caller on the network was trusted with whatever
+// X-Tenant-ID it sent.
+const (
+	ContextHeader          = "X-Report-Context"
+	ReadAction             = "report:read"
+	Audience               = "report-service"
+	DefaultGatewaySPIFFEID = "spiffe://hvac.local/platform-gateway"
 )
+
+var monthPattern = regexp.MustCompile(`^[0-9]{4}-(0[1-9]|1[0-2])$`)
+
+type AuthConfig struct {
+	GatewayPublicKey crypto.PublicKey
+	GatewaySPIFFE    string
+	Now              func() time.Time
+}
 
 type HTTPHandler struct{ service *Service }
 
-func NewHTTPHandler(service *Service) (http.Handler, error) {
+func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
 	if service == nil {
 		return nil, errors.New("report service is required")
 	}
+	gateway := strings.TrimSpace(auth.GatewaySPIFFE)
+	verifier := identitycontext.SiteContextVerifier{PublicKey: auth.GatewayPublicKey, Issuer: gateway, Audience: Audience, Header: ContextHeader, Now: auth.Now}
+	if err := verifier.Validate(); err != nil {
+		return nil, err
+	}
+	read := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(writer http.ResponseWriter, request *http.Request) {
+			site, err := verifier.Verify(request, ReadAction, gateway)
+			if errors.Is(err, identitycontext.ErrSiteContextWorkload) {
+				writeProblem(writer, http.StatusForbidden, "REPORT_WORKLOAD_FORBIDDEN")
+				return
+			}
+			if err != nil {
+				writeProblem(writer, http.StatusForbidden, "REPORT_CONTEXT_INVALID")
+				return
+			}
+			next(writer, request.WithContext(context.WithValue(request.Context(), siteKey{}, site)))
+		}
+	}
 	handler := &HTTPHandler{service: service}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/sites/{siteId}/reports/monthly/{month}", read(handler.month))
+	mux.HandleFunc("GET /v1/sites/{siteId}/reports/monthly", read(handler.year))
+	return mux, nil
+}
+
+// HealthHandler answers the container health check on the plain diagnostics port.
+func HealthHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"status":"ok"}`))
 	})
-	mux.HandleFunc("GET /v1/sites/{siteId}/reports/monthly/{month}", handler.month)
-	mux.HandleFunc("GET /v1/sites/{siteId}/reports/monthly", handler.year)
-	return mux, nil
+	return mux
+}
+
+type siteKey struct{}
+
+// siteOf is the Tenant and Site the Gateway's context named; handlers never read them from a header.
+func siteOf(request *http.Request) identitycontext.SiteContext {
+	site, _ := request.Context().Value(siteKey{}).(identitycontext.SiteContext)
+	return site
 }
 
 func (handler *HTTPHandler) month(writer http.ResponseWriter, request *http.Request) {
-	tenantID, siteID, month := request.Header.Get(headerTenant), request.PathValue("siteId"), request.PathValue("month")
-	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) || !monthPattern.MatchString(month) {
+	site, month := siteOf(request), request.PathValue("month")
+	if !monthPattern.MatchString(month) {
 		writeProblem(writer, http.StatusBadRequest, "REPORT_REQUEST_INVALID")
 		return
 	}
-	stored, err := handler.service.Latest(request.Context(), tenantID, siteID, month)
+	stored, err := handler.service.Latest(request.Context(), site.TenantID, site.SiteID, month)
 	if errors.Is(err, ErrSnapshotNotFound) {
 		writeProblem(writer, http.StatusNotFound, "REPORT_SNAPSHOT_NOT_FOUND")
 		return
@@ -55,13 +103,13 @@ func (handler *HTTPHandler) month(writer http.ResponseWriter, request *http.Requ
 }
 
 func (handler *HTTPHandler) year(writer http.ResponseWriter, request *http.Request) {
-	tenantID, siteID := request.Header.Get(headerTenant), request.PathValue("siteId")
+	site := siteOf(request)
 	year, err := strconv.Atoi(request.URL.Query().Get("year"))
-	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) || err != nil || year < 2000 || year > 9999 {
+	if err != nil || year < 2000 || year > 9999 {
 		writeProblem(writer, http.StatusBadRequest, "REPORT_REQUEST_INVALID")
 		return
 	}
-	snapshots, err := handler.service.Year(request.Context(), tenantID, siteID, year)
+	snapshots, err := handler.service.Year(request.Context(), site.TenantID, site.SiteID, year)
 	if err != nil {
 		log.Printf("read report snapshots: %v", err)
 		writeProblem(writer, http.StatusServiceUnavailable, "REPORT_UNAVAILABLE")

@@ -96,9 +96,8 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 		// The intelligence owners serve the Gateway, and FDD also the Agent, a Gateway-signed context.
 		Intelligence: &IntelligenceConfig{
 			FDDBaseURL: "https://fdd.example.test", ForecastBaseURL: "https://forecast.example.test",
-			OptimizationBaseURL: "https://optimization.example.test", MVBaseURL: "https://mv.example.test",
-			OwnerHTTPClient: ownerUpstream(&fixture.lastOwner),
-			HTTPClient:      &http.Client{}, Timeout: time.Second,
+			OptimizationBaseURL: "https://optimization.example.test", MVBaseURL: "https://mv.example.test", ReportBaseURL: "https://report.example.test",
+			OwnerHTTPClient: ownerUpstream(&fixture.lastOwner), Timeout: time.Second,
 		},
 		Telemetry: &TelemetryConfig{RuntimeAudience: "telemetry-runtime-service"},
 		Operations: &OperationsAgentConfig{
