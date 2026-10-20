@@ -132,7 +132,8 @@
         "modules/alarm/migrations/006_s14_alarm_evaluator.sql",
         "modules/alarm/migrations/007_s16_notification_outbox.sql",
         "modules/alarm/migrations/008_s26_telemetry_evaluation_input.sql",
-        "modules/alarm/migrations/009_s27_due_evaluation_tenants.sql"
+        "modules/alarm/migrations/009_s27_due_evaluation_tenants.sql",
+        "modules/alarm/migrations/010_s27_unevaluated_site_assignments.sql"
       ]
     },
     {

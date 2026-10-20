@@ -85,6 +85,16 @@ func (store *PostgresStore) RunDueEvaluations(ctx context.Context, workerID stri
 	var failures []error
 	for _, tenantID := range tenants {
 		tenantContext := identitycontext.WithTenantID(ctx, tenantID)
+		// A Site rule published while the Site was already silent has no evaluation, and no
+		// reading will come to make one: evaluate it with the Site's last readings.
+		firsts, err := store.evaluateUnevaluatedSiteRules(tenantContext, tenantID, now)
+		if err != nil {
+			result.Failed++
+			failures = append(failures, err)
+		}
+		for _, decision := range firsts {
+			result.count(decision)
+		}
 		claims, err := store.ClaimDueEvaluations(tenantContext, tenantID, workerID, now, dueEvaluationLease, dueEvaluationBatch)
 		if err != nil {
 			result.Failed++
@@ -101,14 +111,82 @@ func (store *PostgresStore) RunDueEvaluations(ctx context.Context, workerID stri
 				failures = append(failures, err)
 				continue
 			}
-			result.Evaluated++
-			switch decision.Effect {
-			case EvaluationEffectPublish:
-				result.Raised++
-			case EvaluationEffectClear:
-				result.Cleared++
-			}
+			result.count(decision)
 		}
 	}
 	return result, errors.Join(failures...)
+}
+
+func (result *DueEvaluationResult) count(decision EvaluationDecision) {
+	result.Evaluated++
+	switch decision.Effect {
+	case EvaluationEffectPublish:
+		result.Raised++
+	case EvaluationEffectClear:
+		result.Cleared++
+	}
+}
+
+// evaluateUnevaluatedSiteRules evaluates each Site that has a rule never evaluated, with the
+// Site's last readings, as a reading arriving would.
+func (store *PostgresStore) evaluateUnevaluatedSiteRules(ctx context.Context, tenantID string, now time.Time) ([]EvaluationDecision, error) {
+	tx, err := store.beginTenantTransaction(ctx, tenantID, true)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
+SELECT DISTINCT assignment.site_id::text
+FROM alarm_runtime.alarm_policy_assignment AS assignment
+WHERE assignment.tenant_id = $1 AND assignment.subject_type = 'SITE'
+  AND EXISTS (SELECT 1 FROM alarm_runtime.telemetry_evaluation_input AS input
+              WHERE input.tenant_id = assignment.tenant_id AND input.site_id = assignment.site_id)
+  AND NOT EXISTS (SELECT 1 FROM alarm_runtime.alarm_evaluation_state AS state
+                  WHERE state.tenant_id = assignment.tenant_id AND state.site_id = assignment.site_id
+                    AND state.assignment_id = assignment.assignment_id)`, tenantID)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, fmt.Errorf("find Sites with unevaluated Alarm rules: %w", err)
+	}
+	var sites []string
+	for rows.Next() {
+		var siteID string
+		if err := rows.Scan(&siteID); err != nil {
+			rows.Close()
+			_ = tx.Rollback(ctx)
+			return nil, fmt.Errorf("scan Site with unevaluated Alarm rules: %w", err)
+		}
+		sites = append(sites, siteID)
+	}
+	rows.Close()
+	_ = tx.Rollback(ctx)
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Sites with unevaluated Alarm rules: %w", err)
+	}
+
+	var decisions []EvaluationDecision
+	for _, siteID := range sites {
+		records, assignmentIDs, err := store.loadSiteTelemetryEvaluationState(ctx, tenantID, siteID)
+		if err != nil {
+			return decisions, err
+		}
+		newest := records[0]
+		for _, record := range records {
+			if record.EvaluatedAt.After(newest.EvaluatedAt) {
+				newest = record
+			}
+		}
+		snapshot, err := buildSiteEvaluationSnapshot(newest.EventID, tenantID, siteID, records)
+		if err != nil {
+			return decisions, err
+		}
+		// Rules already evaluated see the same snapshot again and do nothing.
+		for _, assignmentID := range assignmentIDs {
+			decision, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshot, now.UTC())
+			if err != nil {
+				return decisions, err
+			}
+			decisions = append(decisions, decision)
+		}
+	}
+	return decisions, nil
 }
