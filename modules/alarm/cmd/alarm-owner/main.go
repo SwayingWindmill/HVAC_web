@@ -93,10 +93,14 @@ func main() {
 			logger.Error("alarm_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
 		}
 	}()
+	scheduled, stopScheduled := context.WithCancel(context.Background())
+	alarmservice.RunScheduledEvaluations(scheduled, store, logger)
+
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-shutdown
+		stopScheduled()
 		telemetry.MarkNotReady()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()

@@ -36,6 +36,7 @@ type rulesFile struct {
 	SiteFile           string        `json:"siteFile"`
 	Rules              []rule        `json:"rules"`
 	ReadingsNotUpdated *readingsRule `json:"readingsNotUpdated"`
+	ReportsInterrupted *readingsRule `json:"reportsInterrupted"`
 }
 
 // A rule is a policy written with readings as "<device code>/<point code>".
@@ -53,9 +54,10 @@ type rule struct {
 	Clear            alarmservice.Condition               `json:"clear"`
 }
 
-// readingsRule raises, per device, when one of its active points has had no new reading for
-// ageSeconds; {device}, {points} and {minutes} in the wording are the device and its points by
-// name and ageSeconds in minutes.
+// readingsRule words a rule over the Site's own readings. readingsNotUpdated raises, per device,
+// when one of its active points has had no new reading for ageSeconds; reportsInterrupted raises
+// when none of the Site's active points has (#615). {device}, {points} and {minutes} in the
+// wording are the device and its points by name and ageSeconds in minutes.
 type readingsRule struct {
 	Title      string              `json:"title"`
 	Summary    string              `json:"summary"`
@@ -160,12 +162,9 @@ func Load(rulesPath string) (Compiled, error) {
 			if len(entry.points) == 0 {
 				continue
 			}
-			var noData, fresh []alarmservice.Condition
+			noData, fresh := watched(entry, readings.AgeSeconds)
 			var names []string
 			for _, point := range entry.points {
-				input := entry.id + "/" + point.Code
-				noData = append(noData, alarmservice.Condition{Kind: alarmservice.ConditionNoData, Input: input, AgeSeconds: readings.AgeSeconds})
-				fresh = append(fresh, hasReading(input, point.ValueType))
 				names = append(names, plainName(point.Name))
 			}
 			wording := strings.NewReplacer("{device}", entry.name, "{points}", strings.Join(names, "、"), "{minutes}", strconv.FormatInt(readings.AgeSeconds/60, 10))
@@ -176,6 +175,26 @@ func Load(rulesPath string) (Compiled, error) {
 				Raise: either(alarmservice.ConditionOr, noData), Clear: either(alarmservice.ConditionAnd, fresh),
 			}))
 		}
+	}
+	if silence := rules.ReportsInterrupted; silence != nil {
+		// Grouped by device, as a compound condition holds at most 32 others.
+		var noData, fresh []alarmservice.Condition
+		for _, code := range order {
+			entry := devices[code]
+			if len(entry.points) == 0 {
+				continue
+			}
+			deviceNoData, deviceFresh := watched(entry, silence.AgeSeconds)
+			noData = append(noData, either(alarmservice.ConditionAnd, deviceNoData))
+			fresh = append(fresh, either(alarmservice.ConditionOr, deviceFresh))
+		}
+		wording := strings.NewReplacer("{minutes}", strconv.FormatInt(silence.AgeSeconds/60, 10))
+		compiled.Policies = append(compiled.Policies, sitePolicy(site.Site.ID, site.Site.Code, "reports-interrupted", alarmservice.AlarmPolicyRevision{
+			Title: wording.Replace(silence.Title), Summary: wording.Replace(silence.Summary), Severity: silence.Severity,
+			QualityPolicy: alarmservice.EvaluationQualityUsable, FreshnessSeconds: silence.AgeSeconds, TriggerMode: alarmservice.TriggerSimple,
+			// Raised once every reading is overdue, cleared by the first fresh one.
+			Raise: either(alarmservice.ConditionAnd, noData), Clear: either(alarmservice.ConditionOr, fresh),
+		}))
 	}
 	return compiled, nil
 }
@@ -218,6 +237,16 @@ func resolve(condition alarmservice.Condition, devices map[string]device) (alarm
 		}
 	}
 	return alarmservice.Condition{}, fmt.Errorf("%s is not an active point of the site file", condition.Input)
+}
+
+// watched is, for each of a device's active points, "no reading for ageSeconds" and "has a reading".
+func watched(entry device, ageSeconds int64) (noData, fresh []alarmservice.Condition) {
+	for _, point := range entry.points {
+		input := entry.id + "/" + point.Code
+		noData = append(noData, alarmservice.Condition{Kind: alarmservice.ConditionNoData, Input: input, AgeSeconds: ageSeconds})
+		fresh = append(fresh, hasReading(input, point.ValueType))
+	}
+	return noData, fresh
 }
 
 func hasReading(input, valueType string) alarmservice.Condition {
