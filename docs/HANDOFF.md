@@ -49,6 +49,7 @@
 - Alertmanager 用的是默认接收方，告警到它那里就停了；要发邮件得先配接收方（`docs/operations/alerts.md` 的「告警怎么送到人」一节）。服务器上 Prometheus 读 `runtime/server/config/prometheus.yaml`，`alerting` 配置是手工加的。
 - 通知还没有配接收人、策略和模板，告警只出现在告警页。
 - 两个演示站点（central-plant、local-energy-site-b）的 28 个定时任务都停用了：模拟器停着，指标任务每小时都会失败。重新开模拟器时一起启用。
+- 服务器上的接入服务（`hvac-platform-connectivity-1`）还是 #652 修复之前的版本：MQTT 服务器反复重启后它可能不再重连，读数会一直进不来（2026-10-19 磁盘满时就是这样）。#652 合并后要重新部署它；部署之前遇到读数停了，先 `docker logs` 看它最后一次 `mqtt_uplink_subscribed` 之后有没有日志，没有就 `docker restart hvac-platform-connectivity-1`。
 - 运行时数据清理（#553）每小时删已送达的历史事件、删 7 天前的原始读数。第一次删原始读数从 2026-10-21 开始，之后跑一次 `VACUUM FULL telemetry_runtime.source_observations`，能腾出约 3.5 GB；`VACUUM FULL` 要先有和剩下的数据一样大的空闲空间，磁盘腾出来之前别跑。
 - **磁盘**（2026-10-20 11:20 UTC：59 GB 用了 46 GB，剩 12 GB）。占地方的是：`source_observations` 5.4 GB（见上一条）、同一块盘上的夜间备份 6.5 GB、ClickHouse 的 `system.query_log` 0.8 GB。2026-10-19 19:52 磁盘满过一次，Postgres 重启了 10 次，ClickHouse 拒绝写入，写历史读数的程序停了 15 个小时（#649 已修）。元凶是告警判断记录 `hvac_s4` 的 `alarm_runtime.alarm_evaluation_event`：以前每收到一批读数，站点的每条规则都写一行，每行带整个站点 81 个读数的快照（约 6 KB），结果没变也写；10-18 起一天约 100 万行，两天 10 GB，10-20 补收积压读数时又是 7 分钟 3.5 万行。10-20 经用户同意把这张表清空（`TRUNCATE`，只是判断的流水，告警、处理记录和当前判断状态都不受影响）。#651 起只在判断结果变了时写一行（状态、判断不了的原因、发报或恢复、规则版本变了），超过 30 天的每分钟删掉；那 3.5 万次判断按新规则只写 14 行，估计一天几百行、两三 MB。服务器上部署 #651 之前，网关恢复上报后这张表每天还会涨约 6 GB。
 

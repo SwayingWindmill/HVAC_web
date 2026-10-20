@@ -43,6 +43,8 @@ hvac/v1/{网关 id}/up/event
 
 每台网关有自己的队列和处理线程，第一条消息到达时创建。一条消息处理完或隔离之后才确认收到；临时失败原地重试，所以同一台网关的消息不会乱序。某台网关的队列满了，接入服务就暂停收它的消息，积压留在 MQTT 服务器上，一条都不丢。`hvac_mqtt_gateway_queue_depth{gateway_id}` 显示每台网关的积压。
 
+断线和重连：没确认的消息都由 MQTT 服务器在下次连接时重发，所以连接一断，接入服务就放弃这条连接上还没放进队列的消息，马上重连，哪怕数据库这时还写不进去。一条消息写完时它来的那条连接已经断了，确认会失败（日志 `mqtt_uplink_ack_failed`，计数 `hvac_mqtt_ack_failures_total`），处理线程接着处理下一条，重发的那份会按重复读数处理。断线时日志记 `mqtt_uplink_connection_lost`，`/health/ready` 立刻变成 503，重新订阅成功后恢复。
+
 ## MQTT 服务器
 
 `infra/telemetry/mqtt/acl` 用固定的规则把每台网关限制在 `hvac/v1/{它的 CN}/up/#` 和 `hvac/v1/{它的 CN}/down/#`，所以加网关不用改 MQTT 服务器的配置。

@@ -13,7 +13,7 @@ import (
 func TestMQTTRuntimeMetricsStayLowCardinality(t *testing.T) {
 	registry := observability.NewRegistry()
 	runtime := &Runtime{metrics: registry}
-	runtime.recordConnectionState(true, true, nil)
+	runtime.recordConnectionState(nil, true, true, nil)
 	runtime.recordProcessingResult(ProcessingResult{
 		MessageID: "018f3e00-0000-7000-8000-000000000001",
 		Replay:    true, PointCount: 5, Accepted: 2, Duplicate: 1, OutOfOrder: 1, Quarantined: 1,
