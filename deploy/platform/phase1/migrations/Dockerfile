@@ -1,6 +1,7 @@
-FROM postgres:16.4-bookworm
+# Each reviewed file is copied on its own into a stage that is never run, then into the image as one
+# layer: one layer per file put the image over Docker's layer limit (#659).
+FROM scratch AS sources
 
-WORKDIR /opt/hvac
 COPY deploy/platform/phase1/migrations/bootstrap-roles.sql /opt/hvac/migrations/bootstrap-roles.sql
 COPY deploy/platform/phase1/migrations/migration-list.tsv /opt/hvac/migrations/migration-list.tsv
 COPY deploy/platform/phase1/migrations/run-phase1-migrations.sh /opt/hvac/migrations/run-phase1-migrations.sh
@@ -108,6 +109,7 @@ COPY modules/alarm/migrations/009_s27_due_evaluation_tenants.sql /opt/hvac/repo/
 COPY modules/alarm/migrations/010_s27_unevaluated_site_assignments.sql /opt/hvac/repo/modules/alarm/migrations/010_s27_unevaluated_site_assignments.sql
 COPY modules/alarm/migrations/011_s28_evaluation_event_retention.sql /opt/hvac/repo/modules/alarm/migrations/011_s28_evaluation_event_retention.sql
 COPY modules/alarm/migrations/012_s29_reading_unchanged_since.sql /opt/hvac/repo/modules/alarm/migrations/012_s29_reading_unchanged_since.sql
+COPY modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql /opt/hvac/repo/modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql
@@ -118,6 +120,10 @@ COPY modules/workorder/migrations/006_s26_equipment_source_domain.sql /opt/hvac/
 COPY services/operations-agent-service/migrations/operations/001_agent_sessions.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/001_agent_sessions.sql
 COPY services/operations-agent-service/migrations/operations/002_finding_without_summary.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/002_finding_without_summary.sql
 
+FROM postgres:16.4-bookworm
+
+WORKDIR /opt/hvac
+COPY --from=sources /opt/hvac /opt/hvac
 RUN ! grep -R -E 'local-only|fixture-only' /opt/hvac/repo \
     && chmod 0555 /opt/hvac/migrations/run-phase1-migrations.sh /opt/hvac/migrations/verify-phase1-schema.sh
 ENTRYPOINT ["/opt/hvac/migrations/run-phase1-migrations.sh"]

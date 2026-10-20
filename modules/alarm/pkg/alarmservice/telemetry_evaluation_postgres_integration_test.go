@@ -231,3 +231,109 @@ func TestPostgresTelemetryInputRemembersSinceWhenAReadingHeldItsValue(t *testing
 		t.Fatalf("a changed value starts again at its sample, got %q", got)
 	}
 }
+
+// #659: a device's readings are evaluated only by the rules that read that device. A rule reading
+// another device keeps its evaluation untouched; what only time changes for it (a reading going
+// stale, no data for a while) is the scheduled pass's.
+func TestPostgresTelemetryEvaluatesOnlyTheRulesReadingTheDevice(t *testing.T) {
+	databaseURL := os.Getenv("S4_ALARM_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
+	}
+	const (
+		siteID  = "01910000-b000-7000-8000-000000000052"
+		deviceA = "01910000-b000-7000-8000-000000000053"
+		deviceB = "01910000-b000-7000-8000-000000000054"
+	)
+	ctx := identitycontext.WithTenantID(context.Background(), telemetryBridgeTenantID)
+	store, err := OpenPostgresStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	startedAt := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	hot := func(device string) Condition {
+		return Condition{Kind: ConditionCompare, Input: device + "/temperature", Operator: CompareGT, Value: NumberValue(30)}
+	}
+	cool := func(device string) Condition {
+		return Condition{Kind: ConditionCompare, Input: device + "/temperature", Operator: CompareLT, Value: NumberValue(28)}
+	}
+	rules := []struct {
+		name         string
+		raise, clear Condition
+		suffix       string
+	}{
+		{name: "only-a", raise: hot(deviceA), clear: cool(deviceA), suffix: "61"},
+		{name: "only-b", raise: hot(deviceB), clear: cool(deviceB), suffix: "62"},
+		{name: "both", raise: Condition{Kind: ConditionAnd, Children: []Condition{hot(deviceA), hot(deviceB)}}, clear: Condition{Kind: ConditionOr, Children: []Condition{cool(deviceA), cool(deviceB)}}, suffix: "63"},
+	}
+	assignment := map[string]string{}
+	for _, rule := range rules {
+		policy := validAlarmPolicy()
+		policy.PolicyID = "01910000-b000-7000-8000-0000000001" + rule.suffix
+		policy.PolicyRevisionID = "01910000-b000-7000-8000-0000000002" + rule.suffix
+		policy.SourceReference = "alarm-policy:relevance-" + rule.name
+		policy.FreshnessSeconds = 900
+		policy.TriggerMode = TriggerSimple
+		policy.Raise, policy.Clear = rule.raise, rule.clear
+		sealAlarmPolicy(&policy)
+		if err := store.ReleaseAlarmPolicyRevision(ctx, telemetryBridgeTenantID, siteID, policy, startedAt.Add(-time.Minute), "test:relevance"); err != nil {
+			t.Fatal(err)
+		}
+		assignment[rule.name] = "01910000-b000-7000-8000-0000000003" + rule.suffix
+		if err := store.AssignAlarmPolicyRevision(ctx, telemetryBridgeTenantID, siteID, AlarmPolicyAssignmentInput{
+			AssignmentID: assignment[rule.name], AssignmentRevision: 1, PolicyRevisionID: policy.PolicyRevisionID,
+			SubjectType: "SITE", SubjectID: siteID, AssignedAt: startedAt.Add(-30 * time.Second).Format(time.RFC3339Nano), AssignedBy: "test:relevance",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reading := func(device string, revision int64, at time.Time, value, eventID string) []EvaluationDecision {
+		t.Helper()
+		snapshot := telemetryBridgeSnapshot(device, revision, at, presentTelemetryState("temperature", "NUMBER", value, "GOOD", "FRESH", at))
+		snapshot.SiteId = siteID
+		decisions, err := store.EvaluateTelemetrySnapshot(ctx, eventID, snapshot, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decisions
+	}
+	version := func(name string) uint64 {
+		t.Helper()
+		tx, err := store.beginTenantTransaction(ctx, telemetryBridgeTenantID, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		persisted, found, err := loadPersistedEvaluation(ctx, tx, telemetryBridgeTenantID, siteID, assignment[name], false)
+		if err != nil || !found {
+			t.Fatalf("%s has no evaluation: %v", name, err)
+		}
+		return persisted.State.Version
+	}
+
+	reading(deviceA, 1, startedAt, `25`, "01910000-b000-7000-8000-000000000071")
+	reading(deviceB, 1, startedAt.Add(time.Second), `25`, "01910000-b000-7000-8000-000000000072")
+	onlyA, onlyB, both := version("only-a"), version("only-b"), version("both")
+	later := startedAt.Add(time.Minute)
+	reading(deviceA, 2, later, `31`, "01910000-b000-7000-8000-000000000073")
+	if version("only-a") == onlyA || version("both") == both {
+		t.Fatal("the rules reading A did not evaluate A's new reading")
+	}
+	if version("only-b") != onlyB {
+		t.Fatal("A's reading evaluated the rule that reads only B")
+	}
+
+	// A rule reading both, as 网关上报中断 reads every device, is cleared by either one's reading.
+	reading(deviceB, 2, later.Add(time.Second), `31`, "01910000-b000-7000-8000-000000000074")
+	cleared := 0
+	for _, decision := range reading(deviceA, 3, later.Add(2*time.Second), `25`, "01910000-b000-7000-8000-000000000075") {
+		if decision.Effect == EvaluationEffectClear {
+			cleared++
+		}
+	}
+	if cleared != 2 {
+		t.Fatalf("A cooling cleared %d alarms, want its own and the one reading both", cleared)
+	}
+}
