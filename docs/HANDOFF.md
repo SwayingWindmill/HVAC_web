@@ -49,6 +49,7 @@
 - Alertmanager 用的是默认接收方，告警到它那里就停了；要发邮件得先配接收方（`docs/operations/alerts.md` 的「告警怎么送到人」一节）。服务器上 Prometheus 读 `runtime/server/config/prometheus.yaml`，`alerting` 配置是手工加的。
 - 通知还没有配接收人、策略和模板，告警只出现在告警页。
 - 两个演示站点（central-plant、local-energy-site-b）的 28 个定时任务都停用了：模拟器停着，指标任务每小时都会失败。重新开模拟器时一起启用。
+- 服务器上的接入服务（`hvac-platform-connectivity-1`）还是 #652 修复之前的版本：MQTT 服务器反复重启后它可能不再重连，读数会一直进不来（2026-10-19 磁盘满时就是这样）。#652 合并后要重新部署它；部署之前遇到读数停了，先 `docker logs` 看它最后一次 `mqtt_uplink_subscribed` 之后有没有日志，没有就 `docker restart hvac-platform-connectivity-1`。
 - 运行时数据清理（#553）每小时删已送达的历史事件、删 7 天前的原始读数。第一次删原始读数从 2026-10-21 开始，之后跑一次 `VACUUM FULL telemetry_runtime.source_observations`，能腾出约 3.5 GB。
 
 ### 松雅轩（第一个真实站点）
