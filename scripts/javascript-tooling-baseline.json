@@ -4,7 +4,7 @@
   "trackedExtensions": [".js", ".mjs", ".cjs", ".jsx"],
   "allowedLegacyRoots": {
     "scripts/": {
-      "fileCount": 110,
+      "fileCount": 109,
       "maxBytes": 1310720
     },
     ".agents/": {
@@ -16,7 +16,7 @@
       "maxBytes": 12288
     }
   },
-  "fileCount": 112,
+  "fileCount": 111,
   "maxBytes": 1327104,
   "policyNotes": [
     "New repository tooling should use TypeScript rather than growing the reviewed legacy JavaScript caps.",

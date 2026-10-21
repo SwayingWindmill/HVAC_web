@@ -332,6 +332,9 @@ ON CONFLICT (tenant_id,source_event_id) DO NOTHING`, event.TenantID, event.SiteI
 		return intents, nil
 	}
 
+	if err := recordAlarmReminder(ctx, tx, event, recordedAt); err != nil {
+		return nil, err
+	}
 	if event.Action == AlarmAcknowledged || event.Action == AlarmCleared {
 		rows, err := tx.Query(ctx, `UPDATE notification_runtime.notification_intent
 SET status='CANCELLED',disposition='CANCELLED',lease_owner=NULL,lease_until=NULL,updated_at=$4

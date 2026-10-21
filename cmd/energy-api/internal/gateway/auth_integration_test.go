@@ -383,6 +383,18 @@ func newAuthHarness(t *testing.T) *authHarness {
 
 func newAuthHarnessWithIAMFactory(t *testing.T, factory func(clientSPIFFEID string) http.Handler, configure ...func(*gateway.IdentityConfig)) *authHarness {
 	t.Helper()
+	return buildAuthHarness(t, factory, nil, configure...)
+}
+
+// newAuthHarnessWithNotification also serves Notification Service's handler, built with the
+// Gateway's delegation key, behind the Gateway.
+func newAuthHarnessWithNotification(t *testing.T, notification func(gatewayKey crypto.PublicKey) http.Handler) *authHarness {
+	t.Helper()
+	return buildAuthHarness(t, nil, notification)
+}
+
+func buildAuthHarness(t *testing.T, factory func(clientSPIFFEID string) http.Handler, notification func(gatewayKey crypto.PublicKey) http.Handler, configure ...func(*gateway.IdentityConfig)) *authHarness {
+	t.Helper()
 	bundle, err := testpki.Generate("spiffe://hvac.local/iam-service", "spiffe://hvac.local/platform-gateway", time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -447,10 +459,17 @@ func newAuthHarnessWithIAMFactory(t *testing.T, factory func(clientSPIFFEID stri
 	for _, apply := range configure {
 		apply(identity)
 	}
+	var notificationConfig *gateway.NotificationConfig
+	if notification != nil {
+		notificationServer := httptest.NewServer(notification(signer.Public()))
+		t.Cleanup(notificationServer.Close)
+		notificationConfig = &gateway.NotificationConfig{BackendBaseURL: notificationServer.URL, BackendHTTPClient: notificationServer.Client()}
+	}
 	handler := gateway.NewHandler(gateway.Config{
-		Logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
-		Build:    platformapi.BuildInfo{Service: "platform-gateway", Version: "test", Commit: "test", BuiltAt: "test"},
-		Identity: identity,
+		Logger:       slog.New(slog.NewJSONHandler(&logs, nil)),
+		Build:        platformapi.BuildInfo{Service: "platform-gateway", Version: "test", Commit: "test", BuiltAt: "test"},
+		Identity:     identity,
+		Notification: notificationConfig,
 	})
 	gatewayServer.Config.Handler = handler
 	gatewayServer.StartTLS()

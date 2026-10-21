@@ -4,11 +4,17 @@ import { siteTodayStart } from '../../lib/energy';
 import { GatewayError, NETWORK_TEXT } from '../../lib/gateway';
 import { gateway, requireSession } from '../../lib/platform';
 import { whileShown } from '../../lib/refresh';
+import { addAlarmReminder, readAlarmReminders, type ReminderRow } from '../../lib/reminders';
 import { currentSite } from '../../lib/site';
 import { selectTab, showAttention } from '../../lib/tab';
 
 // The Alarm owner has no stream yet; like the web, the page follows it on a short interval while shown.
 const refresher = whileShown(30_000);
+
+/** WeChat's subscription dialog; it must open straight from the tap. */
+const askWeChat = (templates: string[]) => new Promise<Record<string, string>>((resolve, reject) => {
+  wx.requestSubscribeMessage({ tmplIds: templates, success: (result) => resolve(result as unknown as Record<string, string>), fail: reject });
+});
 
 let read: { active: Alarm[]; cleared: Alarm[]; complete: boolean; todayStart: string | null } | null = null;
 
@@ -22,12 +28,15 @@ Page({
     feed: null as ReturnType<typeof presentFeed> | null,
     /** There were more active alarms than were read. */
     partial: false,
+    reminder: null as ReminderRow | null,
+    addingReminder: false,
   },
 
   onShow() {
     if (!requireSession()) return;
     selectTab(this);
     this.refresh();
+    this.readReminders();
     refresher.start(() => this.refresh());
   },
 
@@ -69,6 +78,19 @@ Page({
     const feed = presentFeed(read.active, read.cleared, read.todayStart, { unacknowledgedOnly: this.data.unacknowledgedOnly });
     this.setData({ feed, partial: !read.complete });
     showAttention(this, feed.needsAttention);
+  },
+
+  async readReminders() {
+    this.setData({ reminder: await readAlarmReminders(gateway) });
+  },
+
+  async addReminder() {
+    if (this.data.addingReminder) return;
+    this.setData({ addingReminder: true });
+    const change = await addAlarmReminder(gateway, askWeChat);
+    this.setData({ addingReminder: false });
+    wx.showToast({ title: change.message, icon: change.added ? 'success' : 'none' });
+    if (change.added) this.readReminders();
   },
 
   toggleUnacknowledged(event: WechatMiniprogram.SwitchChange) {

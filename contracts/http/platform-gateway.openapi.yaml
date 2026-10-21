@@ -1081,6 +1081,83 @@
         }
       }
     },
+    "/api/v1/me/wechat/reminders": {
+      "get": {
+        "operationId": "getOwnWeChatReminders",
+        "summary": "How many WeChat reminders the signed-in person has left",
+        "description": "Only a mini program Session reaches this (WECHAT_MINI_PROGRAM_ONLY). The reminders are always the signed-in person's, in the Tenant of the Session.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many more reminders WeChat lets the platform send.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeChatReminders"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "addOwnWeChatReminder",
+        "summary": "Add one WeChat reminder the signed-in person allowed in WeChat's subscription dialog",
+        "description": "Only a mini program Session reaches this (WECHAT_MINI_PROGRAM_ONLY). The reminders are always the signed-in person's, in the Tenant of the Session.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WeChatReminderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "How many more reminders WeChat lets the platform send.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeChatReminders"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/v1/audit/session-events/{messageId}": {
       "get": {
         "operationId": "getSessionAuditEvent",
@@ -3159,6 +3236,35 @@
           "boundAt": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "WeChatReminderRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ALARM"
+            ],
+            "description": "ALARM: a new urgent or important Alarm on a Site the person can see."
+          }
+        }
+      },
+      "WeChatReminders": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "alarm"
+        ],
+        "properties": {
+          "alarm": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },

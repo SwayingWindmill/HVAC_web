@@ -11,6 +11,14 @@
       </label>
     </view>
 
+    <view wx:if="{{reminder}}" class="card card-pad reminder" aria-label="微信提醒">
+      <view class="reminder-main">
+        <text class="card-title">微信提醒</text>
+        <text class="caption">{{reminder.text}}</text>
+      </view>
+      <button wx:if="{{reminder.canAdd}}" class="reminder-add" size="mini" loading="{{addingReminder}}" disabled="{{addingReminder}}" bindtap="addReminder">多收一条</button>
+    </view>
+
     <view wx:for="{{feed.sections}}" wx:for-item="section" wx:key="title" class="section">
       <view class="section-head">
         <text class="section-title">{{section.title}}<text wx:if="{{section.count}}" class="section-count">{{section.count}}</text></text>

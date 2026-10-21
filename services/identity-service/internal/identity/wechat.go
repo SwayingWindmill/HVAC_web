@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -57,12 +58,21 @@ type WeChat struct {
 	Secret  string
 	BaseURL string
 	Client  *http.Client
+	// Which version of the mini program a message opens: developer, trial or formal.
+	State string
+
+	tokenMu        sync.Mutex
+	token          string
+	tokenExpiresAt time.Time
 }
 
 // LoadWeChat reads the AppSecret the administrator put on the server. Without the file WeChat is
 // not set up yet, and every WeChat request says so.
-func LoadWeChat(appID, secretFile string) (*WeChat, error) {
+func LoadWeChat(appID, secretFile, state string) (*WeChat, error) {
 	appID, secretFile = strings.TrimSpace(appID), strings.TrimSpace(secretFile)
+	if state != "developer" && state != "trial" && state != "formal" {
+		return nil, errors.New("the WeChat mini program state must be developer, trial or formal")
+	}
 	if appID == "" || secretFile == "" {
 		return nil, nil
 	}
@@ -76,7 +86,7 @@ func LoadWeChat(appID, secretFile string) (*WeChat, error) {
 	if strings.TrimSpace(string(secret)) == "" {
 		return nil, errors.New("the WeChat AppSecret file is empty")
 	}
-	return &WeChat{AppID: appID, Secret: strings.TrimSpace(string(secret)), BaseURL: WeChatAPIBase, Client: &http.Client{Timeout: 10 * time.Second}}, nil
+	return &WeChat{AppID: appID, Secret: strings.TrimSpace(string(secret)), BaseURL: WeChatAPIBase, Client: &http.Client{Timeout: 5 * time.Second}, State: state}, nil
 }
 
 // OpenID trades a code from wx.login for the person's OpenID (code2Session). The session key

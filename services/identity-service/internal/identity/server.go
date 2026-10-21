@@ -28,6 +28,8 @@ type Config struct {
 	// The mini program's AppID and the file the administrator puts its AppSecret in.
 	WeChatAppID      string
 	WeChatSecretFile string
+	// Which version of the mini program a WeChat message opens: developer, trial or formal.
+	WeChatState string
 	// The Gateway's delegation certificate and workload: the Gateway signs a grant for the account
 	// on every WeChat call.
 	GatewayDelegationCertFile string
@@ -103,7 +105,7 @@ func NewServer(ctx context.Context, config Config) (*Server, error) {
 		store.Close()
 		return nil, err
 	}
-	wechat, err := LoadWeChat(config.WeChatAppID, config.WeChatSecretFile)
+	wechat, err := LoadWeChat(config.WeChatAppID, config.WeChatSecretFile, config.WeChatState)
 	if err != nil {
 		store.Close()
 		return nil, err
@@ -139,6 +141,7 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /app/wechat/binding", server.bindWeChat)
 	mux.HandleFunc("DELETE /app/wechat/binding", server.unbindWeChat)
 	mux.HandleFunc("GET /app/wechat/binding", server.readWeChatBinding)
+	mux.HandleFunc("POST /app/wechat/messages", server.sendWeChatMessage)
 	mux.HandleFunc("GET /session/end", server.endSession)
 	return securityHeaders(mux)
 }

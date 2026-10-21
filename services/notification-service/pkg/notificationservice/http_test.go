@@ -53,7 +53,7 @@ func TestNotificationHTTPUsesExactAuthenticatedPrincipalScope(t *testing.T) {
 		PrincipalID: "principal:operator", AlarmID: "01910000-9300-7000-8000-000000000001", IncidentCorrelationID: "01910000-9400-7000-8000-000000000001",
 		SourceAction: AlarmCreated, Status: InboxUnread, CreatedAt: now,
 	}}}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := NewHTTPHandler(HTTPConfig{Store: store, Reminders: noReminders{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestNotificationHTTPRejectsForgedIdentityBeforeStore(t *testing.T) {
 	now := time.Date(2026, 8, 19, 20, 0, 0, 0, time.UTC)
 	signer := notificationSigner(t)
 	store := &notificationHTTPStore{}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := NewHTTPHandler(HTTPConfig{Store: store, Reminders: noReminders{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,3 +131,16 @@ func signedNotificationContextWithScope(t *testing.T, signer *ecdsa.PrivateKey, 
 	}
 	return value
 }
+
+// noReminders is a WeChat reminder store for tests that do not touch reminders.
+type noReminders struct{}
+
+func (noReminders) WeChatReminders(context.Context, WeChatPerson) (WeChatReminders, error) {
+	return WeChatReminders{}, nil
+}
+
+func (noReminders) AddWeChatReminder(context.Context, WeChatPerson, ReminderKind, time.Time) (WeChatReminders, error) {
+	return WeChatReminders{}, nil
+}
+
+func (noReminders) ClearWeChatReminders(context.Context, WeChatPerson, time.Time) error { return nil }
