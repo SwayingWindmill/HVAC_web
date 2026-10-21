@@ -45,7 +45,6 @@ func NewS1FixtureAuthorizationStore(subjectIssuer string) AuthorizationStore {
 					string(identitycontext.CapabilitySessionRevoke),
 					string(identitycontext.CapabilityAuditRead),
 					string(identitycontext.CapabilityIAMAdmin),
-					string(identitycontext.CapabilityAPICredentialManage),
 				}},
 				{TenantID: S1FixtureTenantAID, SiteID: S1FixtureOwnerASite1ID, RoleKey: "analyst", Status: FactStatusActive, Capabilities: []string{analyticsmodel.EnergySeriesAction}},
 			},

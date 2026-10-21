@@ -79,6 +79,7 @@ COPY infra/registry/postgres/init/026-iam-role-assignments.sql /opt/hvac/repo/in
 COPY infra/registry/postgres/init/027-optimization-site-clock.sql /opt/hvac/repo/infra/registry/postgres/init/027-optimization-site-clock.sql
 COPY infra/registry/postgres/init/028-retire-own-tariff-pricing.sql /opt/hvac/repo/infra/registry/postgres/init/028-retire-own-tariff-pricing.sql
 COPY infra/registry/postgres/init/029-drop-registry-import-tables.sql /opt/hvac/repo/infra/registry/postgres/init/029-drop-registry-import-tables.sql
+COPY infra/registry/postgres/init/030-drop-api-credentials.sql /opt/hvac/repo/infra/registry/postgres/init/030-drop-api-credentials.sql
 
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql

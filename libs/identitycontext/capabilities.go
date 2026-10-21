@@ -32,7 +32,6 @@ const (
 	CapabilitySessionRevoke         Capability = "session.revoke"
 	CapabilityAuditRead             Capability = "audit.read"
 	CapabilityIAMAdmin              Capability = "iam.admin"
-	CapabilityAPICredentialManage   Capability = "api-credential.manage"
 	CapabilitySiteWrite             Capability = "site.write"
 	CapabilitySpaceWrite            Capability = "space.write"
 	CapabilityAssetWrite            Capability = "asset.write"
@@ -69,7 +68,6 @@ var supportedCapabilities = [...]Capability{
 	CapabilitySessionRevoke,
 	CapabilityAuditRead,
 	CapabilityIAMAdmin,
-	CapabilityAPICredentialManage,
 	CapabilitySiteWrite,
 	CapabilitySpaceWrite,
 	CapabilityAssetWrite,
@@ -111,7 +109,6 @@ func (capability Capability) Valid() bool {
 		CapabilitySessionRevoke,
 		CapabilityAuditRead,
 		CapabilityIAMAdmin,
-		CapabilityAPICredentialManage,
 		CapabilitySiteWrite,
 		CapabilitySpaceWrite,
 		CapabilityAssetWrite,

@@ -2779,7 +2779,6 @@
           "session.revoke",
           "audit.read",
           "iam.admin",
-          "api-credential.manage",
           "rule.manage",
           "savings.manage"
         ]
@@ -2805,7 +2804,7 @@
           },
           "capabilities": {
             "type": "array",
-            "maxItems": 34,
+            "maxItems": 33,
             "uniqueItems": true,
             "items": {
               "$ref": "#/components/schemas/Capability"

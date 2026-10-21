@@ -304,7 +304,6 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'session.revoke',
   'audit.read',
   'iam.admin',
-  'api-credential.manage',
   'rule.manage',
   'savings.manage',
 ]), 'Capability vocabulary is unsupported');

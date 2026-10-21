@@ -34,7 +34,6 @@ func TestIAMCapabilityVocabularyMatchesPublicGoContract(t *testing.T) {
 		platformapi.CapabilitySessionRevoke,
 		platformapi.CapabilityAuditRead,
 		platformapi.CapabilityIAMAdmin,
-		platformapi.CapabilityAPICredentialManage,
 		platformapi.CapabilitySiteWrite,
 		platformapi.CapabilitySpaceWrite,
 		platformapi.CapabilityAssetWrite,

@@ -23,9 +23,6 @@ const (
 	CurrentPrincipalPath       = "/internal/v1/principal/current"
 	AdminMutationPath          = "/internal/v1/admin/mutations"
 	AdminMembersPath           = "/internal/v1/admin/members"
-	APICredentialCreatePath    = "/internal/v1/admin/api-credentials/create"
-	APICredentialRotatePath    = "/internal/v1/admin/api-credentials/rotate"
-	APICredentialRevokePath    = "/internal/v1/admin/api-credentials/revoke"
 	RegistryDecisionPath       = "/internal/v1/registry/decision"
 	TelemetryDecisionPath      = "/internal/v1/telemetry/decision"
 	CommandDecisionPath        = "/internal/v1/command/decision"
@@ -401,7 +398,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	switch request.URL.Path {
 	case CurrentPrincipalPath:
 		status = h.handleCurrentPrincipal(request.Context(), writer, claims, spiffeID)
-	case AdminMutationPath, AdminMembersPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath:
+	case AdminMutationPath, AdminMembersPath:
 		status = h.handleAdminRoute(writer, request, claims)
 	case RegistryDecisionPath:
 		status = h.handleRegistryDecision(writer, request, claims, spiffeID)
@@ -675,8 +672,6 @@ func expectedInboundAction(path string) (string, bool) {
 		return "principal:read", true
 	case AdminMutationPath, AdminMembersPath:
 		return "iam:admin", true
-	case APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath:
-		return "api-credential:manage", true
 	case RegistryDecisionPath:
 		return registryAuthorizeAction, true
 	case TelemetryDecisionPath:
@@ -711,7 +706,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, AdminMutationPath, AdminMembersPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath, AlarmRecipientDecisionPath:
+	case CurrentPrincipalPath, AdminMutationPath, AdminMembersPath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath, AlarmRecipientDecisionPath:
 		return path
 	default:
 		return "unmatched"

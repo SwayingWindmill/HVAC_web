@@ -47,7 +47,6 @@
     "savings.manage",
     "session.revoke",
     "audit.read",
-    "iam.admin",
-    "api-credential.manage"
+    "iam.admin"
   ]
 }

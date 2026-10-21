@@ -113,13 +113,8 @@ func main() {
 
 	adminDatabaseURL := strings.TrimSpace(os.Getenv("IAM_ADMIN_DATABASE_URL"))
 	if adminDatabaseURL != "" {
-		pepper, err := os.ReadFile(requiredEnv("IAM_API_CREDENTIAL_PEPPER_FILE"))
-		if err != nil {
-			logger.Error("iam_api_credential_pepper_load_failed", "error_code", "IAM_API_CREDENTIAL_PEPPER_LOAD_FAILED")
-			os.Exit(1)
-		}
 		openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
-		postgresAdminStore, err := iam.OpenPostgresAdminStore(openContext, adminDatabaseURL, pepper)
+		postgresAdminStore, err := iam.OpenPostgresAdminStore(openContext, adminDatabaseURL)
 		cancelOpen()
 		if err != nil {
 			logger.Error("iam_admin_store_open_failed", "error_code", "IAM_ADMIN_STORE_OPEN_FAILED")

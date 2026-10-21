@@ -45,8 +45,8 @@ func OpenPostgresAuthorizationStore(ctx context.Context, databaseURL string) (*P
 	return iam.OpenPostgresAuthorizationStore(ctx, databaseURL)
 }
 
-func OpenPostgresAdminStore(ctx context.Context, databaseURL string, pepper []byte) (*PostgresAdminStore, error) {
-	return iam.OpenPostgresAdminStore(ctx, databaseURL, pepper)
+func OpenPostgresAdminStore(ctx context.Context, databaseURL string) (*PostgresAdminStore, error) {
+	return iam.OpenPostgresAdminStore(ctx, databaseURL)
 }
 
 func OpenPostgresTelemetryGrantStore(ctx context.Context, databaseURL string) (*PostgresTelemetryGrantStore, error) {
