@@ -18,10 +18,18 @@ page {
 }
 
 .mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 48px;
   height: 48px;
   border-radius: 12px;
   background: var(--primary);
+}
+
+.mark-icon {
+  width: 26px;
+  height: 26px;
 }
 
 .name {
@@ -67,6 +75,29 @@ page {
   font-size: 12px;
   line-height: 18px;
   color: var(--destructive-text);
+}
+
+/* 「绑定过微信的」 between the two ways in, so the WeChat button reads as the other way (#677). */
+.or {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 8px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.or-line {
+  flex: 1;
+  height: 1px;
+  background: var(--divider);
+}
+
+.wechat-icon {
+  width: 22px;
+  height: 22px;
+  /* A margin, not the button's gap, so WeChat's loading spinner keeps its own spacing. */
+  margin-right: 8px;
 }
 
 .footer {
