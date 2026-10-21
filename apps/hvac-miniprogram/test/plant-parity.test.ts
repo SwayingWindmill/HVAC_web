@@ -1,16 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 // The web's own pipeline: the device rows the 实时运行 and 设备 pages build, then the plant view.
 import { buildAssetsRows } from '../../hvac-web/src/features/assets/model.ts';
 import { buildPlantView } from '../../hvac-web/src/features/operations/realtime/plant-model.ts';
 import { buildPlant } from '../miniprogram/lib/plant.ts';
+import { assetModel, recordedAt, snapshots } from './recorded.ts';
 
-// Recorded from the local platform for the web's browser tests (apps/hvac-web/e2e/fixtures).
-const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../../hvac-web/e2e/fixtures/${name}`, import.meta.url), 'utf8'));
-const assetModel = fixture('asset-model.json');
-const snapshots = fixture('snapshots.json');
-const now = new Date('2026-10-01T15:30:00Z');
+const now = recordedAt;
 
 // The same plant on a bad day: the chiller offline, a pump's readings late and partly missing, the meter unreadable.
 function badDay() {

@@ -265,6 +265,7 @@ export function buildPlant(model: AssetModel, snapshots: SnapshotsResponse, now:
     .map((category) => ({
       category,
       label: CATEGORY_LABELS[category],
+      // Sorted as the web sorts them. Only the order of names depends on the phone's collation; no number does.
       devices: all.filter((device) => device.category === category).sort((left, right) => left.name.localeCompare(right.name, 'zh-CN')),
     }))
     .filter((group) => group.devices.length > 0);

@@ -11,6 +11,8 @@ export interface Metric {
   readonly label: string;
   readonly value: string;
   readonly unit: string;
+  /** Not current (late or of doubtful quality): drawn dimmed, never as current. */
+  readonly late: boolean;
 }
 
 /** A reading with its unit, as an operator reads it aloud: 7 °C, 72%, 132 m³/h. */
@@ -51,9 +53,14 @@ function copNote(plant: Plant): string {
   return '功率或制冷量读数不是最新的，暂不算能效。';
 }
 
-const metric = (label: string, reading: PlantReading | null): Metric => ({ label, value: reading?.display ?? '—', unit: reading?.unit ?? '' });
+/** A reading as a figure; with `decimals`, written as the web's headline figures are (fixed decimals, thousands separators). */
+function metric(label: string, reading: PlantReading | null, decimals?: number): Metric {
+  if (reading === null || neverRead(reading)) return { label, value: '—', unit: reading?.unit ?? '', late: false };
+  const value = decimals !== undefined && reading.numeric !== null ? grouped(reading.numeric, decimals) : reading.display;
+  return { label, value, unit: reading.unit ?? '', late: !reading.current };
+}
 
-// The same loops the web's 水系统与室内外环境 table lists; a loop shows when its lead reading is registered.
+// The same loops the web's 水系统与室内外环境 table lists; a loop shows once its lead reading has come in.
 const LOOPS: readonly {
   readonly name: string;
   readonly lead: string;
@@ -81,11 +88,17 @@ const LOOPS: readonly {
   },
 ];
 
+/** A reading that has come in at least once. */
+const received = (plant: Plant, key: string) => {
+  const reading = plantReading(plant, key);
+  return reading === null || neverRead(reading) ? null : reading;
+};
+
 function loops(plant: Plant) {
-  return LOOPS.filter((loop) => plantReading(plant, loop.lead) !== null).map((loop) => {
-    const readings = [...loop.headline, ...loop.detail].map(([, key]) => plantReading(plant, key)).filter((reading) => reading !== null);
+  return LOOPS.filter((loop) => received(plant, loop.lead) !== null).map((loop) => {
+    const readings = [...loop.headline, ...loop.detail].map(([, key]) => received(plant, key)).filter((reading) => reading !== null);
     const line = (keys: typeof loop.headline) => keys
-      .map(([label, key]) => ({ label, reading: plantReading(plant, key) }))
+      .map(([label, key]) => ({ label, reading: received(plant, key) }))
       .filter((entry) => entry.reading !== null)
       .map((entry) => `${entry.label ? `${entry.label} ` : ''}${withUnit(entry.reading!)}`)
       .join(' · ');
@@ -97,9 +110,10 @@ export function presentRealtime(plant: Plant) {
   return {
     status: plantStatus(plant),
     metrics: [
-      metric('冷站总功率', plant.totalPower),
-      metric('制冷量', plant.coolingCapacity),
-      { label: '能效', value: grouped(plantCop(plant), 2), unit: '' },
+      // The web's 实时运行 writes power to 0.1 kW and cooling to whole kW.
+      metric('冷站总功率', plant.totalPower, 1),
+      metric('制冷量', plant.coolingCapacity, 0),
+      { label: '能效', value: grouped(plantCop(plant), 2), unit: '', late: false },
     ],
     copNote: copNote(plant),
     loops: loops(plant),
@@ -114,7 +128,7 @@ export function presentPlantNow(plant: Plant) {
     status: plantStatus(plant),
     summary: deviceSummary(plant),
     metrics: [
-      metric('功率', plant.totalPower),
+      metric('功率', plant.totalPower, 1),
       metric('供水', plantReading(plant, 'btu_meter.supply_water_temperature')),
       metric('室内', plantReading(plant, 'zone.temperature')),
     ],
@@ -236,32 +250,36 @@ const DETAIL_KEYS: Partial<Record<PlantCategory, readonly string[]>> = {
   COOLING_TOWER: ['cooling_tower.leaving_water_temperature', 'cooling_tower.fan_speed'],
 };
 
-const unread = (reading: PlantReading) => reading.sampledAt === null;
+/** A point the device has never reported (or reported only rejected values for). */
+const neverRead = (reading: PlantReading) => reading.sampledAt === null;
 
-/** The lead reading; a device with none of its role's (a gateway-wired module) leads with its own first current number. */
+/** The first of the device's role readings it has; none for a device without a role (a gateway-wired module). */
 function leadReading(device: PlantDevice): PlantReading | null {
   for (const key of LEAD_KEYS[device.category]) {
     const reading = device.reading(key);
     if (reading) return reading;
   }
-  const numbers = device.readings.filter((reading) => reading.numeric !== null);
-  return numbers.find((reading) => reading.current) ?? numbers[0] ?? null;
+  return null;
 }
 
 function deviceRow(device: PlantDevice) {
+  const hasRole = LEAD_KEYS[device.category].length > 0;
   const lead = leadReading(device);
-  const facts = (DETAIL_KEYS[device.category] ?? [])
-    .map((key) => device.reading(key))
-    .filter((reading): reading is PlantReading => reading !== null && !unread(reading))
-    .map((reading) => `${reading.label} ${withUnit(reading)}`);
-  const missing = device.readings.filter(unread).length;
+  // A module's channels have no one reading to lead with, so its row counts them instead.
+  const facts = hasRole
+    ? (DETAIL_KEYS[device.category] ?? [])
+      .map((key) => device.reading(key))
+      .filter((reading): reading is PlantReading => reading !== null && !neverRead(reading))
+      .map((reading) => `${reading.label} ${withUnit(reading)}`)
+    : [`${device.readings.length} 个读数`];
+  const missing = device.readings.filter(neverRead).length;
   const notes = device.latestSampleAt === null ? ['没有读数']
     : [...(missing > 0 ? [`${missing} 个读数没读到`] : []), ...(device.hasStaleData ? ['读数过期'] : [])];
   return {
     deviceId: device.deviceId,
     name: device.name,
     status: deviceStatus(device),
-    value: lead?.display ?? '—',
+    value: hasRole ? lead?.display ?? '—' : '',
     unit: lead?.unit ?? '',
     detail: [...facts, ...notes].join(' · '),
   };
@@ -276,8 +294,9 @@ const FILTERS: readonly { readonly key: DeviceFilter; readonly label: string; re
   { key: 'attention', label: '需关注', keeps: needsAttention },
 ];
 
+/** The device list under a filter; the page shows its own note for a Site without devices. */
 export function presentDevices(plant: Plant, filter: DeviceFilter) {
-  const keeps = FILTERS.find((each) => each.key === filter)!.keeps;
+  const { keeps, label } = FILTERS.find((each) => each.key === filter)!;
   const equipmentDevices = plant.devices.filter((device) => EQUIPMENT_CATEGORIES.has(device.category));
   const others = plant.devices.filter((device) => !EQUIPMENT_CATEGORIES.has(device.category));
   const offline = others.filter((device) => device.connection === 'OFFLINE').length;
@@ -287,11 +306,10 @@ export function presentDevices(plant: Plant, filter: DeviceFilter) {
   ]
     .map((group) => ({ ...group, devices: group.devices.filter(keeps).map(deviceRow) }))
     .filter((group) => group.devices.length > 0);
-  const label = FILTERS.find((each) => each.key === filter)!.label;
   return {
     filters: FILTERS.map((each) => ({ key: each.key, label: each.label, count: plant.devices.filter(each.keeps).length })),
     groups,
-    empty: groups.length > 0 ? '' : filter === 'all' ? '这个站点还没有登记设备。' : filter === 'attention' ? '没有需要关注的设备。' : `没有${label}的设备。`,
+    empty: groups.length > 0 ? '' : filter === 'attention' ? '没有需要关注的设备。' : `没有${label}的设备。`,
   };
 }
 
@@ -303,14 +321,14 @@ export interface DeviceToday {
   readonly device: readonly DayPoint[] | null;
 }
 
-const two = (value: number) => String(value).padStart(2, '0');
+const pad2 = (value: number) => String(value).padStart(2, '0');
 
 /** A moment as Site wall-clock time, counted from the Site's midnight rather than the phone's time zone. */
 export function siteClock(at: string, start: string): string {
   const since = Date.parse(at) - Date.parse(start);
   const days = Math.floor(since / 86_400_000);
   const seconds = Math.floor((since - days * 86_400_000) / 1000);
-  const clock = `${two(Math.floor(seconds / 3600))}:${two(Math.floor(seconds / 60) % 60)}:${two(seconds % 60)}`;
+  const clock = `${pad2(Math.floor(seconds / 3600))}:${pad2(Math.floor(seconds / 60) % 60)}:${pad2(seconds % 60)}`;
   if (days === 0) return clock;
   return days === -1 ? `昨天 ${clock}` : `${-days} 天前`;
 }
@@ -319,17 +337,25 @@ export function presentDevice(device: PlantDevice, today: DeviceToday | null) {
   const lead = leadReading(device);
   const second = [...LEAD_KEYS[device.category], ...(DETAIL_KEYS[device.category] ?? [])]
     .map((key) => device.reading(key))
-    .find((reading) => reading !== null && reading !== lead && !unread(reading));
-  const missing = device.readings.filter(unread).length;
+    .find((reading) => reading !== null && reading !== lead && !neverRead(reading));
+  const missing = device.readings.filter(neverRead).length;
   return {
     name: device.name,
     kind: CATEGORY_LABELS[device.category],
     status: deviceStatus(device),
     updatedAt: device.latestSampleAt === null || today === null ? '' : siteClock(device.latestSampleAt, today.start),
-    metrics: [lead, second].filter((reading) => reading != null).map((reading) => ({ label: reading.label, value: reading.display, unit: reading.unit ?? '' })),
+    metrics: [lead, second].filter((reading) => reading != null).map((reading) => metric(reading.label, reading)),
     readingsNote: device.readings.length === 0 ? '这台设备没有登记读数。'
       : `${device.readings.length} 个读数${missing > 0 ? `，${missing} 个没读到` : ''}。`,
-    readings: device.readings.map((reading) => ({ label: reading.label, value: unread(reading) ? '没读到' : withUnit(reading), late: !unread(reading) && !reading.current })),
+    readings: device.readings.map((reading) => ({ label: reading.label, value: neverRead(reading) ? '没读到' : withUnit(reading), late: !neverRead(reading) && !reading.current })),
     energy: today === null ? null : deviceEnergy(today),
+    energyNote: energyNote(device, today),
   };
+}
+
+/** Why a machine's electricity today is not shown; meters and sensors are not expected to have their own. */
+function energyNote(device: PlantDevice, today: DeviceToday | null): string {
+  if (!EQUIPMENT_CATEGORIES.has(device.category)) return '';
+  if (today === null) return '这个站点今天和昨天都没有用电读数。';
+  return today.device === null ? '这台设备没有单独的电表，看不到它自己的用电。' : '';
 }

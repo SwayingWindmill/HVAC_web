@@ -44,7 +44,7 @@
   letter-spacing: -0.02em;
 }
 
-.plant-value-none {
+.plant-value-dim {
   color: var(--subtle-foreground);
 }
 

@@ -1,3 +1,4 @@
+<import src="../../templates/hour-chart.wxml" />
 <page-header title="运行" />
 
 <view class="screen with-tab-bar">
@@ -26,7 +27,7 @@
       <view class="plant-metrics">
         <view wx:for="{{realtime.metrics}}" wx:key="label" class="plant-metric">
           <text class="caption">{{item.label}}</text>
-          <view class="plant-value {{item.value === '—' ? 'plant-value-none' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
+          <view class="plant-value {{item.value === '—' || item.late ? 'plant-value-dim' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
         </view>
       </view>
       <text wx:if="{{realtime.copNote || chart.peak}}" class="caption">{{realtime.copNote}}{{chart.peak}}{{chart.peak ? '。' : ''}}</text>
@@ -39,16 +40,7 @@
       </view>
       <text wx:if="{{!chart}}" class="caption">{{chartNote}}</text>
       <block wx:else>
-        <view class="chart-body">
-          <view class="chart-scale mono" aria-hidden="true">
-            <text wx:for="{{chart.scale}}" wx:key="*this">{{item}}</text>
-          </view>
-          <view class="chart-bars">
-            <view wx:for="{{chart.bars}}" wx:key="hour" class="bar bar-{{item.state}}" style="{{item.state === 'value' ? 'height: ' + item.height + '%' : ''}}" />
-          </view>
-          <view />
-          <view class="chart-hours"><text>0 点</text><text>6</text><text>12</text><text>18</text><text>23</text></view>
-        </view>
+        <template is="hour-chart" data="{{...chart}}" />
         <view class="legend">
           <view class="legend-item"><view class="swatch swatch-value" />有能效</view>
           <view class="legend-item"><view class="swatch swatch-idle" />不制冷</view>

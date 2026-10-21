@@ -16,7 +16,7 @@ Page({
 
   async onShow() {
     if (!requireSession()) return;
-    selectTab(this, 2);
+    selectTab(this);
     const [principal, site] = await Promise.allSettled([gateway.get<Principal>('/api/v1/principal'), currentSite()]);
     this.setData({
       name: principal.status === 'fulfilled' ? principal.value.principal.displayName : '—',

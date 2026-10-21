@@ -3,21 +3,14 @@ import { gateway, requireSession } from '../../lib/platform';
 import { currentSite, type Site } from '../../lib/site';
 import { energySeries, recentDays } from '../../lib/energy';
 import { loadPlant } from '../../lib/plant-load';
+import { whileShown } from '../../lib/refresh';
 import { presentPlantNow } from '../../lib/run';
 import { compareWithYesterday, sameHoursWindows, summarize, todayStart } from '../../lib/today';
 import { monthToDate, savingsCard, type Measure, type SavingsTotals } from '../../lib/savings';
 import { presentOverview, type OverviewInputs, type Recommendation } from '../../lib/overview';
 import { selectTab } from '../../lib/tab';
 
-const REFRESH_MS = 60_000;
-
-let timer: number | undefined;
-
-// The overview refreshes only while it is on screen.
-const stopRefreshing = () => {
-  if (timer !== undefined) clearInterval(timer);
-  timer = undefined;
-};
+const refresher = whileShown(60_000);
 
 /** Today against yesterday up to the same time of day, read the way the web overview reads it. */
 async function loadEnergy(site: Site, start: string, now: Date): Promise<OverviewInputs['energy']> {
@@ -97,15 +90,14 @@ Page({
 
   onShow() {
     if (!requireSession()) return;
-    selectTab(this, 0);
+    selectTab(this);
     this.refresh();
-    stopRefreshing();
-    timer = setInterval(() => this.refresh(), REFRESH_MS);
+    refresher.start(() => this.refresh());
   },
 
-  onHide: stopRefreshing,
+  onHide: refresher.stop,
 
-  onUnload: stopRefreshing,
+  onUnload: refresher.stop,
 
   openRun() {
     wx.switchTab({ url: '/pages/run/index' });

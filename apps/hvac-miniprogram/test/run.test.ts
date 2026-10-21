@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { buildPlant } from '../miniprogram/lib/plant.ts';
 import { hourlyCop, presentDevice, presentDevices, presentPlantNow, presentRealtime } from '../miniprogram/lib/run.ts';
+import { assetModel, recordedAt, snapshots } from './recorded.ts';
 
-// Recorded from the local platform for the web's browser tests: one chiller, its pumps and tower running.
-const fixture = (name: string) => JSON.parse(readFileSync(new URL(`../../hvac-web/e2e/fixtures/${name}`, import.meta.url), 'utf8'));
-const assetModel = fixture('asset-model.json');
-const snapshots = fixture('snapshots.json');
-const now = new Date('2026-10-01T15:30:00Z');
+const now = recordedAt;
 const plant = buildPlant(assetModel, snapshots, now);
+
+/** An hour of energy, counted from the Site's midnight. */
+const siteHour = (start: string, index: number, energyKWh: number) => {
+  const from = Date.parse(start) + index * 3_600_000;
+  return { periodStart: new Date(from).toISOString(), periodEnd: new Date(from + 3_600_000).toISOString(), energyKWh };
+};
 
 /** The recorded plant with some devices' snapshots changed. */
 function plantWith(change: (snapshotOf: (name: string) => { presence: { currentState: string }; values: { key: string; value: unknown; freshness: string }[] }) => void) {
@@ -25,9 +27,9 @@ test('实时运行 leads with whether the plant runs, its power, cooling and eff
   const view = presentRealtime(plant);
   assert.deepEqual(view.status, { label: '运行中', tone: 'running', detail: '主要设备 4 / 4 台运行' });
   assert.deepEqual(view.metrics, [
-    { label: '冷站总功率', value: '211.9', unit: 'kW' },
-    { label: '制冷量', value: '864', unit: 'kW' },
-    { label: '能效', value: '4.08', unit: '' },
+    { label: '冷站总功率', value: '211.9', unit: 'kW', late: false },
+    { label: '制冷量', value: '864', unit: 'kW', late: false },
+    { label: '能效', value: '4.08', unit: '', late: false },
   ]);
   assert.equal(view.copNote, '');
   assert.deepEqual(view.loops, [
@@ -47,11 +49,18 @@ test('a stopped plant says so and why there is no efficiency; a late reading is 
     }
     snapshotOf('BTU-METER-01').values.find((value) => value.key === 'instant_cooling_capacity')!.value = 0;
     snapshotOf('WEATHER-STATION-01').values.forEach((value) => { value.freshness = 'STALE'; });
+    Object.assign(snapshotOf('METER-HVAC-TOTAL').values.find((value) => value.key === 'active_power')!, { value: 1234.56, freshness: 'STALE' });
+    Object.assign(snapshotOf('BTU-METER-01').values.find((value) => value.key === 'supply_water_temperature')!, { state: 'MISSING', value: undefined });
+    Object.assign(snapshotOf('ZONE-SENSOR-01').values.find((value) => value.key === 'temperature')!, { state: 'MISSING', value: undefined });
   }));
   assert.deepEqual(stopped.status, { label: '已停机', tone: 'stopped', detail: '主要设备 0 / 4 台运行' });
-  assert.equal(stopped.metrics[2].value, '—');
+  // Headline figures are written as the web writes them (power to 0.1 kW with thousands separators), a late one dimmed.
+  assert.deepEqual(stopped.metrics.map((each) => [each.value, each.late]), [['1,234.6', true], ['0', false], ['—', false]]);
   assert.equal(stopped.copNote, '停机时不算能效。');
   assert.deepEqual(stopped.loops.find((loop) => loop.name === '室外'), { name: '室外', headline: '34 °C', detail: '湿球 27 °C · 相对湿度 65 %RH', late: true });
+  // A reading never received is left out rather than shown as a dash; a loop whose lead reading never came is left out.
+  assert.deepEqual(stopped.loops.find((loop) => loop.name === '冷冻水'), { name: '冷冻水', headline: '回 12.6 °C', detail: '温差 5.6 °C · 流量 132 m³/h', late: false });
+  assert.equal(stopped.loops.some((loop) => loop.name === '室内'), false);
 
   const offline = presentRealtime(plantWith((snapshotOf) => { snapshotOf('CHILLER-01').presence.currentState = 'OFFLINE'; }));
   assert.equal(offline.status?.detail, '主要设备 3 / 4 台运行');
@@ -61,10 +70,7 @@ test('a stopped plant says so and why there is no efficiency; a late reading is 
 test('today by the hour: efficiency where both meters read, no cooling drawn flat, hours without readings marked and named', () => {
   // The Site day starts at 16:00 UTC (Asia/Shanghai midnight); it is now 16:30 at the Site.
   const start = '2026-10-20T16:00:00.000Z';
-  const hour = (index: number, energyKWh: number) => {
-    const from = Date.parse(start) + index * 3_600_000;
-    return { periodStart: new Date(from).toISOString(), periodEnd: new Date(from + 3_600_000).toISOString(), energyKWh };
-  };
+  const hour = (index: number, energyKWh: number) => siteHour(start, index, energyKWh);
   const electricity = [0, 1, 2, 3, 4, 5, 6].map((index) => hour(index, 1))
     .concat([7, 8, 9, 10, 11].map((index) => hour(index, 100)), [hour(15, 200), hour(16, 50)]);
   const cooling = [0, 1, 2, 3, 4, 5, 6].map((index) => hour(index, 0))
@@ -117,11 +123,6 @@ test('需关注 gathers what is offline, faulty or late; a filter with nothing i
   assert.equal(presentDevices(plant, 'stopped').empty, '没有停机的设备。');
 });
 
-/** An hour of energy, counted from the Site's midnight. */
-const siteHour = (start: string, index: number, energyKWh: number) => {
-  const from = Date.parse(start) + index * 3_600_000;
-  return { periodStart: new Date(from).toISOString(), periodEnd: new Date(from + 3_600_000).toISOString(), energyKWh };
-};
 
 test('a device opens on its state, its two lead readings, every reading, and the electricity it used today by the hour', () => {
   // The recording was made at 23:30 on 1 October at the Site (UTC+8).
@@ -133,7 +134,10 @@ test('a device opens on its state, its two lead readings, every reading, and the
     device: [300, 400, 335].map((kWh, index) => siteHour(start, index, kWh)),
   });
   assert.deepEqual([view.name, view.kind, view.status, view.updatedAt], ['CHILLER-01', '冷水机组', { label: '运行', tone: 'running' }, '23:29:52']);
-  assert.deepEqual(view.metrics, [{ label: '主机功率', value: '155.7', unit: 'kW' }, { label: '冷冻水出水温度', value: '7', unit: '°C' }]);
+  assert.deepEqual(view.metrics, [
+    { label: '主机功率', value: '155.7', unit: 'kW', late: false },
+    { label: '冷冻水出水温度', value: '7', unit: '°C', late: false },
+  ]);
   assert.equal(view.readingsNote, '11 个读数。');
   assert.deepEqual(view.readings.slice(0, 2), [
     { label: '冷冻水设定温度', value: '7 °C', late: false },
@@ -143,15 +147,45 @@ test('a device opens on its state, its two lead readings, every reading, and the
   assert.deepEqual(view.energy?.bars.slice(0, 4).map((bar) => [bar.state, bar.height]), [['value', 75], ['value', 100], ['value', 84], ['missing', 0]]);
   assert.deepEqual(view.energy?.scale, ['400', '200', '0']);
 
-  // A device without its own electricity meter has no electricity of its own to show.
-  assert.equal(presentDevice(chiller, { start, now, site: [], device: null }).energy, null);
+  assert.equal(view.energyNote, '');
+
+  // A machine without its own electricity meter, or a Site without electricity readings, says so.
+  const unmetered = presentDevice(chiller, { start, now, site: [], device: null });
+  assert.deepEqual([unmetered.energy, unmetered.energyNote], [null, '这台设备没有单独的电表，看不到它自己的用电。']);
+  assert.equal(presentDevice(chiller, null).energyNote, '这个站点今天和昨天都没有用电读数。');
+  // A meter or a sensor is not expected to have one.
+  assert.equal(presentDevice(plant.devices.find((device) => device.name === 'BTU-METER-01')!, { start, now, site: [], device: null }).energyNote, '');
 });
 
 test('the overview says in one card whether the plant runs, with its power, supply water and room temperature', () => {
   assert.deepEqual(presentPlantNow(plant), {
     status: { label: '运行中', tone: 'running', detail: '主要设备 4 / 4 台运行' },
     summary: '4 / 4 台运行 · 8 / 8 在线',
-    metrics: [{ label: '功率', value: '211.9', unit: 'kW' }, { label: '供水', value: '7', unit: '°C' }, { label: '室内', value: '24.1', unit: '°C' }],
+    metrics: [
+      { label: '功率', value: '211.9', unit: 'kW', late: false },
+      { label: '供水', value: '7', unit: '°C', late: false },
+      { label: '室内', value: '24.1', unit: '°C', late: false },
+    ],
   });
   assert.equal(presentPlantNow(buildPlant({ ...assetModel, devices: [] }, snapshots, now)), null);
+});
+
+test('a module wired to the gateway, with no role of its own, shows how many readings it has and how many never came', () => {
+  const moduleId = '01910000-0000-7000-8000-0000000000ff';
+  const point = (code: string) => ({
+    reportingDeviceId: moduleId, pointCode: code, sourceKey: `module.${code}`, displayName: `通道 ${code}`,
+    pointType: 'TELEMETRY', valueType: 'NUMBER', unit: 'Cel', status: 'ACTIVE',
+  });
+  const model = {
+    ...assetModel,
+    devices: [...assetModel.devices, { id: moduleId, displayName: '温度采集模块', deviceType: 'TEMPERATURE_MODULE' }],
+    telemetryPoints: [...assetModel.telemetryPoints, point('1'), point('2'), point('3')],
+  };
+  const sampled = { state: 'PRESENT', value: 21.5, unit: 'Cel', sampledAt: '2026-10-01T15:29:00Z', freshness: 'FRESH', quality: 'GOOD' };
+  const items = [...snapshots.items, { deviceId: moduleId, status: 'OK', snapshot: {
+    evaluationAvailability: 'AVAILABLE', presence: { applicability: 'APPLICABLE', currentState: 'ONLINE' },
+    values: [{ key: '1', ...sampled }, { key: '2', ...sampled }, { key: '3', state: 'MISSING' }],
+  } }];
+  const row = presentDevices(buildPlant(model, { items }, now), 'all').groups[1].devices.find((device) => device.name === '温度采集模块');
+  assert.deepEqual([row?.value, row?.detail], ['', '3 个读数 · 1 个读数没读到']);
 });

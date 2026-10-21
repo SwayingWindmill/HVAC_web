@@ -1,3 +1,4 @@
+<import src="../../templates/hour-chart.wxml" />
 <view class="screen top">
   <view wx:if="{{loading}}" class="state">正在读取…</view>
   <view wx:elif="{{failed}}" class="state">{{failed}}</view>
@@ -11,7 +12,7 @@
     <view wx:if="{{view.metrics.length}}" class="card card-pad lead">
       <view wx:for="{{view.metrics}}" wx:key="label" class="lead-metric">
         <text class="caption">{{item.label}}</text>
-        <view class="lead-value">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
+        <view class="lead-value {{item.late ? 'muted' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
       </view>
     </view>
 
@@ -21,19 +22,10 @@
         <text class="caption">{{view.energy.share}}</text>
       </view>
       <view class="energy-total">{{view.energy.total}}<text class="unit">kWh</text></view>
-      <view class="chart-body">
-        <view class="chart-scale mono" aria-hidden="true">
-          <text wx:for="{{view.energy.scale}}" wx:key="*this">{{item}}</text>
-        </view>
-        <view class="chart-bars">
-          <view wx:for="{{view.energy.bars}}" wx:key="hour" class="bar bar-{{item.state}}" style="{{item.state === 'value' ? 'height: ' + item.height + '%' : ''}}" />
-        </view>
-        <view />
-        <view class="chart-hours"><text>0 点</text><text>6</text><text>12</text><text>18</text><text>23</text></view>
-      </view>
+      <template is="hour-chart" data="{{...view.energy}}" />
       <text wx:if="{{view.energy.gaps}}" class="caption">{{view.energy.gaps}}。</text>
     </view>
-    <view wx:elif="{{energyNote}}" class="card card-pad caption">{{energyNote}}</view>
+    <view wx:elif="{{energyNote || view.energyNote}}" class="card card-pad caption">{{energyNote || view.energyNote}}</view>
 
     <view class="card" aria-label="全部读数">
       <view class="card-pad split">

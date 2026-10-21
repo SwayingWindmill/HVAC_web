@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { snapshotBatches } from '../miniprogram/lib/plant.ts';
+import { assetModel } from './recorded.ts';
 
-const assetModel = JSON.parse(readFileSync(new URL('../../hvac-web/e2e/fixtures/asset-model.json', import.meta.url), 'utf8'));
 
 test('current values are asked for every device and its observed points, within the gateway batch limits', () => {
   const [only, ...rest] = snapshotBatches(assetModel);

@@ -2,26 +2,23 @@ import { energySeries, siteTodayStart } from '../../lib/energy';
 import type { Plant } from '../../lib/plant';
 import { loadPlant } from '../../lib/plant-load';
 import { requireSession } from '../../lib/platform';
+import { whileShown } from '../../lib/refresh';
 import { hourlyCop, presentDevices, presentRealtime, siteClock, type DeviceFilter } from '../../lib/run';
 import { currentSite, type Site } from '../../lib/site';
 import { selectTab } from '../../lib/tab';
 
 // The web polls current values every 30 seconds when its push stream is not open; so does the phone.
-const REFRESH_MS = 30_000;
+const refresher = whileShown(30_000);
 
-let timer: number | undefined;
 // The last plant read, so switching filters needs no request.
 let plant: Plant | null = null;
-
-const stopRefreshing = () => {
-  if (timer !== undefined) clearInterval(timer);
-  timer = undefined;
-};
 
 type Chart = ReturnType<typeof hourlyCop>;
 
 /** Today's hourly efficiency; the note says why there is none. */
-async function loadChart(site: Site, start: string | null, now: Date): Promise<{ chart: Chart | null; note: string }> {
+async function loadChart(site: Site, dayStart: PromiseSettledResult<string | null>, now: Date): Promise<{ chart: Chart | null; note: string }> {
+  if (dayStart.status === 'rejected') return { chart: null, note: '今天的能效暂时读不到。' };
+  const start = dayStart.value;
   if (start === null) return { chart: null, note: '这个站点今天和昨天都没有用电读数。' };
   const window = { from: start, to: now.toISOString() };
   try {
@@ -52,23 +49,22 @@ Page({
 
   onShow() {
     if (!requireSession()) return;
-    selectTab(this, 1);
+    selectTab(this);
     this.refresh();
-    stopRefreshing();
-    timer = setInterval(() => this.refresh(), REFRESH_MS);
+    refresher.start(() => this.refresh());
   },
 
-  onHide: stopRefreshing,
+  onHide: refresher.stop,
 
-  onUnload: stopRefreshing,
+  onUnload: refresher.stop,
 
   async onPullDownRefresh() {
-    // A pull also re-reads the registered equipment.
-    await this.refresh(true);
+    await this.refresh({ rereadEquipment: true });
     wx.stopPullDownRefresh();
   },
 
-  async refresh(fresh = false) {
+  /** `rereadEquipment` also re-reads the registered equipment, which only changes when an administrator edits it. */
+  async refresh({ rereadEquipment = false } = {}) {
     try {
       const site = await currentSite();
       if (site === null) {
@@ -76,19 +72,19 @@ Page({
         return;
       }
       const now = new Date();
-      const [read, start] = await Promise.allSettled([loadPlant(site, fresh), siteTodayStart(site, now)]);
-      const today = start.status === 'fulfilled' ? start.value : null;
-      if (read.status === 'rejected') {
+      const [plantRead, dayStart] = await Promise.allSettled([loadPlant(site, rereadEquipment), siteTodayStart(site, now)]);
+      if (plantRead.status === 'rejected') {
         plant = null;
         this.setData({ siteName: site.displayName, loading: false, noSite: false, failed: true });
         return;
       }
-      plant = read.value;
-      const { chart, note } = await loadChart(site, today, now);
+      plant = plantRead.value;
+      const { chart, note } = await loadChart(site, dayStart, now);
+      const start = dayStart.status === 'fulfilled' ? dayStart.value : null;
       this.setData({
         siteName: site.displayName,
-        // Site wall-clock time needs the Site's midnight; without one the time is left out rather than guessed.
-        updatedAt: plant.latestSampleAt !== null && today !== null ? siteClock(plant.latestSampleAt, today) : '',
+        // Site clock time needs the Site's midnight; without one the time is left out rather than guessed.
+        updatedAt: plant.latestSampleAt !== null && start !== null ? siteClock(plant.latestSampleAt, start) : '',
         loading: false,
         noSite: false,
         failed: false,

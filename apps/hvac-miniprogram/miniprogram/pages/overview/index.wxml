@@ -71,10 +71,12 @@
       <view class="now-metrics">
         <view wx:for="{{plant.now.metrics}}" wx:key="label" class="metric">
           <text class="caption">{{item.label}}</text>
-          <view class="now-value">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
+          <view class="now-value {{item.late ? 'muted' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
         </view>
       </view>
     </view>
+
+    <view wx:else class="card card-pad caption">这个站点还没有登记冷站设备，在网页「系统管理 → 资产与点位」登记后，这里显示冷站在不在运行。</view>
 
     <view class="card">
       <view class="row">
