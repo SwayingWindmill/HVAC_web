@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -21,8 +22,8 @@ const (
 	// One send and three retries, 1, 4 and 9 minutes apart.
 	alarmReminderAttempts = 4
 	alarmReminderLease    = 2 * time.Minute
-	// maximumReminderHolders bounds one question to IAM; a Tenant's holders are far fewer.
-	maximumReminderHolders = 200
+	// reminderHoldersPerQuestion is how many people one question to IAM names (IAM's limit).
+	reminderHoldersPerQuestion = 200
 )
 
 var (
@@ -30,6 +31,8 @@ var (
 	ErrWeChatRefused = errors.New("WeChat refuses: no reminder left")
 	// ErrWeChatNotBound is a person without a WeChat bound.
 	ErrWeChatNotBound = errors.New("the person has no WeChat bound")
+	// ErrWeChatOutcomeUnknown is a message that may have reached the person: never sent again.
+	ErrWeChatOutcomeUnknown = errors.New("WeChat may have sent the message")
 )
 
 // AlarmRecipientDecider is IAM: which of these people can read the Site's Alarms now.
@@ -56,8 +59,8 @@ type WeChatMessage struct {
 	Data       map[string]string `json:"data"`
 }
 
-// WeChatSender is identity-service sending to a person; ErrWeChatRefused and ErrWeChatNotBound
-// are its answers, any other error a failure to send.
+// WeChatSender is identity-service sending to a person; ErrWeChatRefused, ErrWeChatNotBound and
+// ErrWeChatOutcomeUnknown are its answers, any other error a message that was not sent.
 type WeChatSender interface {
 	SendWeChatMessage(ctx context.Context, person WeChatPerson, message WeChatMessage) error
 }
@@ -69,6 +72,14 @@ type WeChatAlarmReminderWorker struct {
 	Sender     WeChatSender
 	// TemplateID is 监控告警通知 in 微信公众平台 → 订阅消息 → 我的模板.
 	TemplateID string
+	Logger     *slog.Logger
+}
+
+func (worker *WeChatAlarmReminderWorker) log() *slog.Logger {
+	if worker.Logger == nil {
+		return slog.Default()
+	}
+	return worker.Logger
 }
 
 // recordAlarmReminder notes a new urgent or important Alarm to remind people of, in the
@@ -77,10 +88,9 @@ func recordAlarmReminder(ctx context.Context, tx pgx.Tx, event AlarmEvent, recor
 	if event.Action != AlarmCreated || (event.CurrentSeverity != alarmmodel.SeverityCritical && event.CurrentSeverity != alarmmodel.SeverityMajor) {
 		return nil
 	}
-	// The Alarm owner always sends the title; an event without one still reminds.
 	title := strings.TrimSpace(event.Attributes["title"])
 	if title == "" {
-		title = "新告警"
+		return errors.New("an Alarm to remind people of needs its title")
 	}
 	_, err := tx.Exec(ctx, `
 INSERT INTO notification_runtime.wechat_alarm_reminder
@@ -131,7 +141,7 @@ WHERE tenant_id = $1::uuid AND alarm_id = $2::uuid`, tenantID, alarmID, state, n
 		return true, tx.Commit(ctx)
 	}
 	rows, err := tx.Query(ctx, `SELECT subject_issuer, subject FROM notification_runtime.wechat_reminder_allowance
-WHERE tenant_id = $1::uuid AND kind = 'ALARM' AND remaining > 0 ORDER BY subject_issuer, subject LIMIT $2`, tenantID, maximumReminderHolders)
+WHERE tenant_id = $1::uuid AND kind = 'ALARM' AND remaining > 0 ORDER BY subject_issuer, subject`, tenantID)
 	if err != nil {
 		return true, err
 	}
@@ -143,18 +153,20 @@ WHERE tenant_id = $1::uuid AND kind = 'ALARM' AND remaining > 0 ORDER BY subject
 		return true, err
 	}
 	var allowed []WeChatPerson
-	if len(holders) > 0 {
-		allowed, err = worker.Recipients.AllowedRecipients(ctx, tenantID, siteID, alarmID, holders)
-		if err != nil {
-			// IAM is unavailable: ask again in a minute, while the Alarm is still news.
-			if stateErr := setState("PENDING", now.Add(time.Minute)); stateErr != nil {
-				return true, stateErr
-			}
-			if commitErr := tx.Commit(ctx); commitErr != nil {
-				return true, commitErr
-			}
-			return true, fmt.Errorf("ask IAM who may get an Alarm reminder: %w", err)
+	for start := 0; start < len(holders) && err == nil; start += reminderHoldersPerQuestion {
+		var page []WeChatPerson
+		page, err = worker.Recipients.AllowedRecipients(ctx, tenantID, siteID, alarmID, holders[start:min(start+reminderHoldersPerQuestion, len(holders))])
+		allowed = append(allowed, page...)
+	}
+	if err != nil {
+		// IAM is unavailable: ask again in a minute, while the Alarm is still news.
+		if stateErr := setState("PENDING", now.Add(time.Minute)); stateErr != nil {
+			return true, stateErr
 		}
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			return true, commitErr
+		}
+		return true, fmt.Errorf("ask IAM who may get an Alarm reminder: %w", err)
 	}
 	for _, person := range allowed {
 		if _, err := tx.Exec(ctx, `
@@ -179,6 +191,8 @@ type claimedDelivery struct {
 	severity string
 	occurred time.Time
 	attempts int
+	// leaseUntil fences the claim: a send that outlives it changes nothing.
+	leaseUntil time.Time
 }
 
 func (worker *WeChatAlarmReminderWorker) deliverOne(ctx context.Context, now time.Time) (bool, error) {
@@ -186,8 +200,10 @@ func (worker *WeChatAlarmReminderWorker) deliverOne(ctx context.Context, now tim
 	if err != nil || claim == nil {
 		return worked, err
 	}
+	stage := "site"
 	message, err := worker.message(ctx, *claim)
 	if err == nil {
+		stage = "send"
 		err = worker.Sender.SendWeChatMessage(ctx, claim.person, message)
 	}
 	switch {
@@ -197,7 +213,11 @@ func (worker *WeChatAlarmReminderWorker) deliverOne(ctx context.Context, now tim
 		return true, worker.settle(ctx, *claim, now, "REFUSED", true)
 	case errors.Is(err, ErrWeChatNotBound):
 		return true, worker.settle(ctx, *claim, now, "NOT_BOUND", true)
+	case errors.Is(err, ErrWeChatOutcomeUnknown):
+		worker.log().Warn("wechat_alarm_reminder_outcome_unknown", "error_code", "WECHAT_ALARM_REMINDER_OUTCOME_UNKNOWN", "alarm_id", claim.alarmID)
+		return true, worker.settle(ctx, *claim, now, "FAILED", false)
 	default:
+		worker.log().Warn("wechat_alarm_reminder_not_sent", "error_code", "WECHAT_ALARM_REMINDER_NOT_SENT", "alarm_id", claim.alarmID, "stage", stage, "attempt", claim.attempts)
 		return true, worker.retry(ctx, *claim, now)
 	}
 }
@@ -251,8 +271,8 @@ WHERE tenant_id = $1::uuid AND subject_issuer = $2 AND subject = $3 AND kind = '
 		return finish("NO_REMINDER_LEFT")
 	}
 	claim.attempts++
-	leaseUntil := now.Add(alarmReminderLease)
-	if err := setDeliveryState(ctx, tx, claim, "SENDING", claim.attempts, now, now, &leaseUntil); err != nil {
+	claim.leaseUntil = now.Add(alarmReminderLease).UTC()
+	if err := setDeliveryState(ctx, tx, claim, "SENDING", claim.attempts, now, now, &claim.leaseUntil); err != nil {
 		return nil, true, err
 	}
 	return &claim, true, tx.Commit(ctx)
@@ -266,7 +286,7 @@ func (worker *WeChatAlarmReminderWorker) settle(ctx context.Context, claim claim
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := setDeliveryState(ctx, tx, claim, state, claim.attempts, now, now, nil); err != nil {
+	if held, err := settleClaim(ctx, tx, claim, state, now, now); err != nil || !held {
 		return err
 	}
 	if clearAllowance {
@@ -286,19 +306,32 @@ func (worker *WeChatAlarmReminderWorker) retry(ctx context.Context, claim claime
 		return err
 	}
 	defer tx.Rollback(ctx)
+	state, next := "PENDING", now.Add(time.Duration(claim.attempts*claim.attempts)*time.Minute)
+	if claim.attempts >= alarmReminderAttempts {
+		state, next = "FAILED", now
+	}
+	if held, err := settleClaim(ctx, tx, claim, state, next, now); err != nil || !held {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE notification_runtime.wechat_reminder_allowance SET remaining = remaining + 1, updated_at = $4
 WHERE tenant_id = $1::uuid AND subject_issuer = $2 AND subject = $3 AND kind = 'ALARM'`,
 		claim.person.TenantID, claim.person.SubjectIssuer, claim.person.Subject, now.UTC()); err != nil {
 		return err
 	}
-	state, next := "PENDING", now.Add(time.Duration(claim.attempts*claim.attempts)*time.Minute)
-	if claim.attempts >= alarmReminderAttempts {
-		state, next = "FAILED", now
-	}
-	if err := setDeliveryState(ctx, tx, claim, state, claim.attempts, next, now, nil); err != nil {
-		return err
-	}
 	return tx.Commit(ctx)
+}
+
+// settleClaim ends a send this worker still holds; false when its lease ran out and another
+// worker settled the delivery meanwhile.
+func settleClaim(ctx context.Context, tx pgx.Tx, claim claimedDelivery, state string, next, now time.Time) (bool, error) {
+	tag, err := tx.Exec(ctx, `UPDATE notification_runtime.wechat_alarm_delivery
+SET state = $5, next_attempt_at = $6, lease_until = NULL, updated_at = $7
+WHERE tenant_id = $1::uuid AND alarm_id = $2::uuid AND subject_issuer = $3 AND subject = $4 AND state = 'SENDING' AND lease_until = $8`,
+		claim.person.TenantID, claim.alarmID, claim.person.SubjectIssuer, claim.person.Subject, state, next.UTC(), now.UTC(), claim.leaseUntil)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 func setDeliveryState(ctx context.Context, tx pgx.Tx, claim claimedDelivery, state string, attempts int, next, now time.Time, leaseUntil *time.Time) error {

@@ -86,7 +86,7 @@ func LoadWeChat(appID, secretFile, state string) (*WeChat, error) {
 	if strings.TrimSpace(string(secret)) == "" {
 		return nil, errors.New("the WeChat AppSecret file is empty")
 	}
-	return &WeChat{AppID: appID, Secret: strings.TrimSpace(string(secret)), BaseURL: WeChatAPIBase, Client: &http.Client{Timeout: 10 * time.Second}, State: state}, nil
+	return &WeChat{AppID: appID, Secret: strings.TrimSpace(string(secret)), BaseURL: WeChatAPIBase, Client: &http.Client{Timeout: 5 * time.Second}, State: state}, nil
 }
 
 // OpenID trades a code from wx.login for the person's OpenID (code2Session). The session key

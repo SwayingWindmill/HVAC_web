@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,7 +32,7 @@ import (
 // defaultAlarmTemplateID is 监控告警通知 in 微信公众平台 → 订阅消息 → 我的模板.
 const defaultAlarmTemplateID = "E1fGHBeTTIC0bT2xd6Tb0S61UyvL5krxDZz12wkzkdE"
 
-func newWeChatAlarmReminderWorker(scheduler *notificationservice.Scheduler) (*notificationservice.WeChatAlarmReminderWorker, error) {
+func newWeChatAlarmReminderWorker(logger *slog.Logger, scheduler *notificationservice.Scheduler) (*notificationservice.WeChatAlarmReminderWorker, error) {
 	required := map[string]string{}
 	for _, name := range []string{"IAM_URL", "IAM_SERVER_CA", "IAM_CLIENT_CERT", "IAM_CLIENT_KEY", "CORE_URL", "CORE_SERVER_CA", "OIDC_BACKCHANNEL_BASE_URL"} {
 		value := strings.TrimSpace(os.Getenv(name))
@@ -70,6 +71,7 @@ func newWeChatAlarmReminderWorker(scheduler *notificationservice.Scheduler) (*no
 			signer: signer, workload: workload, policyRevision: envOr("IDENTITY_POLICY_REVISION", "policy-v1"),
 		},
 		TemplateID: envOr("NOTIFICATION_WECHAT_ALARM_TEMPLATE_ID", defaultAlarmTemplateID),
+		Logger:     logger,
 	}, nil
 }
 
@@ -80,7 +82,7 @@ func runWeChatAlarmReminders(ctx context.Context, logger *slog.Logger, worker *n
 		}
 		worked, err := worker.RunOnce(ctx, time.Now().UTC())
 		if err != nil {
-			logger.Error("wechat_alarm_reminder_failed", "error_code", "WECHAT_ALARM_REMINDER_FAILED", "reason", err.Error())
+			logger.Error("wechat_alarm_reminder_failed", "error_code", "WECHAT_ALARM_REMINDER_FAILED", "error", err)
 		}
 		if !worked || err != nil {
 			if !notificationWait(ctx, time.Second) {
@@ -252,8 +254,13 @@ func (sender identityWeChatSender) SendWeChatMessage(ctx context.Context, person
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Delegation-Grant", grant)
 	response, err := sender.client.Do(request)
-	if err != nil {
+	var opError *net.OpError
+	if err != nil && errors.As(err, &opError) && opError.Op == "dial" {
 		return errors.New("identity-service could not be reached")
+	}
+	if err != nil {
+		// The request went out and no answer came back: the message may have been sent.
+		return notificationservice.ErrWeChatOutcomeUnknown
 	}
 	defer response.Body.Close()
 	var refusal struct {
@@ -267,6 +274,8 @@ func (sender identityWeChatSender) SendWeChatMessage(ctx context.Context, person
 		return notificationservice.ErrWeChatRefused
 	case refusal.Error == "wechat_not_bound":
 		return notificationservice.ErrWeChatNotBound
+	case refusal.Error == "wechat_outcome_unknown":
+		return notificationservice.ErrWeChatOutcomeUnknown
 	default:
 		return fmt.Errorf("identity-service answered %d %s", response.StatusCode, refusal.Error)
 	}

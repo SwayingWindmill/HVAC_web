@@ -92,7 +92,7 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger) (*h
 		store.Close()
 		return nil, nil, func() {}, err
 	}
-	reminders, err := newWeChatAlarmReminderWorker(scheduler)
+	reminders, err := newWeChatAlarmReminderWorker(logger, scheduler)
 	if err != nil {
 		if deliveryPort != nil {
 			deliveryPort.Close()

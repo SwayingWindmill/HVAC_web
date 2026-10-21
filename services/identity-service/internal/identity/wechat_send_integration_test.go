@@ -31,6 +31,8 @@ type fakeWeChatMessages struct {
 	tokens   int
 	sent     []map[string]any
 	refusing string
+	// garbling answers this OpenID's message with a server error, after WeChat may have sent it.
+	garbling string
 }
 
 func (fake *fakeWeChatMessages) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -53,6 +55,10 @@ func (fake *fakeWeChatMessages) ServeHTTP(writer http.ResponseWriter, request *h
 		}
 		var message map[string]any
 		_ = json.NewDecoder(request.Body).Decode(&message)
+		if message["touser"] == fake.garbling {
+			writer.WriteHeader(http.StatusBadGateway)
+			return
+		}
 		if message["touser"] == fake.refusing {
 			_ = json.NewEncoder(writer).Encode(map[string]any{"errcode": 43101, "errmsg": "user refuse to accept the msg"})
 			return
@@ -107,13 +113,13 @@ func TestWeChatSendsAMessageToTheBoundAccount(t *testing.T) {
 		}
 		return user.ID
 	}
-	duty, refusing, unbound := createUser("send-duty"), createUser("send-refusing"), createUser("send-unbound")
-	for user, openID := range map[string]string{duty: "openid-send-duty-" + stamp, refusing: "openid-send-refusing-" + stamp} {
+	duty, refusing, unbound, garbled := createUser("send-duty"), createUser("send-refusing"), createUser("send-unbound"), createUser("send-garbled")
+	for user, openID := range map[string]string{duty: "openid-send-duty-" + stamp, refusing: "openid-send-refusing-" + stamp, garbled: "openid-send-garbled-" + stamp} {
 		if err := runtimeStore.BindWeChat(ctx, user, wechatTestAppID, openID, time.Now().UTC()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	fake := &fakeWeChatMessages{refusing: "openid-send-refusing-" + stamp}
+	fake := &fakeWeChatMessages{refusing: "openid-send-refusing-" + stamp, garbling: "openid-send-garbled-" + stamp}
 	weChatServer := httptest.NewServer(fake)
 	t.Cleanup(weChatServer.Close)
 	gatewayKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -153,6 +159,9 @@ func TestWeChatSendsAMessageToTheBoundAccount(t *testing.T) {
 	// WeChat refusing a person with no reminder left, and an account without WeChat, say so.
 	expectWeChatAnswer(t, send(refusing), http.StatusConflict, "wechat_reminder_refused")
 	expectWeChatAnswer(t, send(unbound), http.StatusNotFound, "wechat_not_bound")
+	// Review (#664): WeChat answering a message unclearly may still have delivered it, so the
+	// caller must not send it again.
+	expectWeChatAnswer(t, send(garbled), http.StatusBadGateway, "wechat_outcome_unknown")
 
 	// Only the Gateway workload's own grant to send reaches WeChat: not a person's grant, nor one for another action.
 	expectWeChatAnswer(t, wechatRequest(t, server, http.MethodPost, "/app/wechat/messages", gatewayGrant(t, gatewayKey, duty, WeChatAudience), alarmMessage), http.StatusUnauthorized, "access_denied")

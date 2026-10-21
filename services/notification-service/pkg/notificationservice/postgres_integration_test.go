@@ -280,7 +280,7 @@ func alarmEvent(tenantID, siteID, sourceEventID, alarmID, incidentID string, act
 	return AlarmEvent{
 		TenantID: tenantID, SiteID: siteID, SourceEventID: sourceEventID, AlarmID: alarmID, IncidentCorrelationID: incidentID,
 		Action: action, CurrentSeverity: alarmmodel.SeverityCritical, PeakSeverity: alarmmodel.SeverityCritical, Condition: condition, OccurredAt: occurredAt,
-		Attributes: map[string]string{"assetName": "Central plant"},
+		Attributes: map[string]string{"assetName": "Central plant", "title": "Supply temperature high"},
 	}
 }
 

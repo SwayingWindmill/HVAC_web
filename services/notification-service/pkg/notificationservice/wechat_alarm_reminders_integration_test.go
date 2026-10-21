@@ -3,6 +3,7 @@ package notificationservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -55,6 +56,8 @@ type fakeSender struct {
 	mu       sync.Mutex
 	sent     []sentReminder
 	outcomes map[string][]error
+	// during runs while a message is on its way, as another worker would.
+	during func()
 }
 
 type sentReminder struct {
@@ -65,6 +68,10 @@ type sentReminder struct {
 var errWeChatDown = errors.New("WeChat is unreachable")
 
 func (fake *fakeSender) SendWeChatMessage(_ context.Context, person WeChatPerson, message WeChatMessage) error {
+	if during := fake.during; during != nil {
+		fake.during = nil
+		during()
+	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	if queued := fake.outcomes[person.Subject]; len(queued) > 0 {
@@ -289,5 +296,52 @@ func TestPostgresAReminderThatCannotBeSentIsRetriedAndGivenUpAfterThirtyMinutes(
 	fixture.run(fixture.base.Add(45 * time.Minute))
 	if len(fixture.sentTo(duty.Subject)) != 1 {
 		t.Fatal("a stale Alarm was reminded")
+	}
+}
+
+// Review (#664): a message identity-service could not get a clear answer for may already be on
+// the person's phone, so it is never sent again and the reminder counts as used.
+func TestPostgresAReminderWeChatMayHaveSentIsNotSentAgain(t *testing.T) {
+	fixture := newReminderFixture(t)
+	duty := fixture.person("duty", 2)
+	fixture.decider.allowed[duty.Subject] = true
+	fixture.sender.outcomes[duty.Subject] = []error{ErrWeChatOutcomeUnknown}
+	fixture.alarm(AlarmCreated, alarmmodel.SeverityMajor, "网关上报中断", fixture.base)
+	fixture.run(fixture.base.Add(time.Minute))
+	fixture.run(fixture.base.Add(20 * time.Minute))
+	if len(fixture.sentTo(duty.Subject)) != 0 || fixture.left(duty) != 1 {
+		t.Fatalf("a message WeChat may have sent was sent again or given back: sent %d, left %d", len(fixture.sentTo(duty.Subject)), fixture.left(duty))
+	}
+}
+
+// Review (#664): a send that outlives its lease has been settled by another worker; finishing it
+// late must neither reopen it nor give the reminder back.
+func TestPostgresASendThatOutlivesItsLeaseChangesNothing(t *testing.T) {
+	fixture := newReminderFixture(t)
+	duty := fixture.person("duty", 2)
+	fixture.decider.allowed[duty.Subject] = true
+	fixture.alarm(AlarmCreated, alarmmodel.SeverityMajor, "网关上报中断", fixture.base)
+	fixture.sender.outcomes[duty.Subject] = []error{errWeChatDown}
+	// While the slow send is out, its lease runs out and another worker settles the delivery.
+	fixture.sender.during = func() { fixture.run(fixture.base.Add(10 * time.Minute)) }
+	fixture.run(fixture.base.Add(time.Minute))
+	fixture.run(fixture.base.Add(20 * time.Minute))
+	if len(fixture.sentTo(duty.Subject)) != 0 || fixture.left(duty) != 1 {
+		t.Fatalf("the late send reopened the delivery: sent %d, left %d", len(fixture.sentTo(duty.Subject)), fixture.left(duty))
+	}
+}
+
+// Review (#664): everyone holding a reminder is asked about, however many there are.
+func TestPostgresEveryHolderIsConsideredBeyondOneQuestionToIAM(t *testing.T) {
+	fixture := newReminderFixture(t)
+	var last WeChatPerson
+	for index := range 205 {
+		last = fixture.person(fmt.Sprintf("holder-%03d", index), 1)
+	}
+	fixture.decider.allowed[last.Subject] = true
+	fixture.alarm(AlarmCreated, alarmmodel.SeverityMajor, "网关上报中断", fixture.base)
+	fixture.run(fixture.base.Add(time.Minute))
+	if len(fixture.sentTo(last.Subject)) != 1 {
+		t.Fatal("a holder past the first question to IAM was left out")
 	}
 }
