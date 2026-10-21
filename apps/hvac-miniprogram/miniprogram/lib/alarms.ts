@@ -92,7 +92,8 @@ export function presentAlarm(alarm: Alarm, context: { readonly deviceName: strin
 export function explainAlarmQuestion(alarm: Alarm, deviceName: string | null, todayStart: string | null): string {
   const began = todayStart === null ? '' : `${siteDateTime(alarm.firstOccurredAt, todayStart)} 开始`;
   const cleared = alarm.condition === 'CLEARED' ? (began ? '、已恢复' : '已恢复') : '';
-  return `${began}${cleared}的告警「${alarm.title}」${deviceName ? `（${deviceName}）` : ''}是怎么回事？`;
+  const lead = began || cleared ? `${began}${cleared}的告警` : '告警';
+  return `${lead}「${alarm.title}」${deviceName ? `（${deviceName}）` : ''}是怎么回事？`;
 }
 
 // The latest cleared alarms the page lists; the web's 告警 page has them all.
