@@ -242,6 +242,8 @@ services:
       # without it, binding WeChat answers that WeChat is not set up.
       IDENTITY_WECHAT_APP_ID: ${IDENTITY_WECHAT_APP_ID:-wx4b7b82bf0351c6f3}
       IDENTITY_WECHAT_APPSECRET_FILE: /run/hvac/identity/wechat-miniprogram-appsecret
+      # Which version of the mini program a WeChat message opens; developer until it is released.
+      IDENTITY_WECHAT_MINIPROGRAM_STATE: ${IDENTITY_WECHAT_MINIPROGRAM_STATE:-developer}
       # The Gateway signs a grant naming the account on every WeChat call; identity-service checks it.
       IDENTITY_GATEWAY_DELEGATION_CERT: /run/hvac/gateway/tls.crt
     depends_on:

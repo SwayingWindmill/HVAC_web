@@ -32,6 +32,7 @@ func main() {
 		SchemaVersion:             envOr("PHASE1_PRODUCT_VERSION", "0.1.0"),
 		WeChatAppID:               os.Getenv("IDENTITY_WECHAT_APP_ID"),
 		WeChatSecretFile:          os.Getenv("IDENTITY_WECHAT_APPSECRET_FILE"),
+		WeChatState:               envOr("IDENTITY_WECHAT_MINIPROGRAM_STATE", "formal"),
 		GatewayDelegationCertFile: os.Getenv("IDENTITY_GATEWAY_DELEGATION_CERT"),
 		GatewaySPIFFE:             envOr("IDENTITY_GATEWAY_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 		Logger:                    logger,
