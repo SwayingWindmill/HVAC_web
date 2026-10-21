@@ -202,7 +202,7 @@ func (server *Server) bindWeChat(writer http.ResponseWriter, request *http.Reque
 	if !decodeAppRequest(writer, request, 4<<10, &input) {
 		return
 	}
-	openID, ok := server.openID(writer, request, input.Code)
+	openID, ok := server.exchangeWeChatCode(writer, request, input.Code)
 	if !ok {
 		return
 	}
@@ -217,8 +217,8 @@ func (server *Server) bindWeChat(writer http.ResponseWriter, request *http.Reque
 	}
 }
 
-// openID trades the code from wx.login for the person's OpenID, or answers why WeChat would not.
-func (server *Server) openID(writer http.ResponseWriter, request *http.Request, code string) (string, bool) {
+// exchangeWeChatCode trades the code from wx.login for the person's OpenID, or answers why WeChat would not.
+func (server *Server) exchangeWeChatCode(writer http.ResponseWriter, request *http.Request, code string) (string, bool) {
 	if server.wechat == nil {
 		writeWeChatNotConfigured(writer)
 		return "", false

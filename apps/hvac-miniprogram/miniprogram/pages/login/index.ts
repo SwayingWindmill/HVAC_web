@@ -11,7 +11,8 @@ Page({
     error: '',
     weChatError: '',
     busy: false,
-    via: '' as '' | 'password' | 'wechat',
+    /** The button showing it is busy. */
+    busyButton: '' as '' | 'password' | 'wechat',
   },
 
   onUsername(event: WechatMiniprogram.Input) { this.setData({ username: event.detail.value, error: '', weChatError: '' }); },
@@ -25,14 +26,14 @@ Page({
       this.setData({ error: '请填写账号和密码。' });
       return;
     }
-    this.setData({ busy: true, via: 'password', error: '', weChatError: '' });
+    this.setData({ busy: true, busyButton: 'password', error: '', weChatError: '' });
     this.finish(await gateway.signIn(username.trim(), password));
   },
 
   /** 微信一键登录: the account bound to this WeChat in 我的. */
   async signInWithWeChat() {
     if (this.data.busy) return;
-    this.setData({ busy: true, via: 'wechat', error: '', weChatError: '' });
+    this.setData({ busy: true, busyButton: 'wechat', error: '', weChatError: '' });
     this.finish(await gateway.signInWithWeChat(weChatLogin));
   },
 
@@ -43,7 +44,7 @@ Page({
       this.setData({ error: '验证码是 6 位数字。' });
       return;
     }
-    this.setData({ busy: true, via: 'password', error: '' });
+    this.setData({ busy: true, busyButton: 'password', error: '' });
     this.finish(await gateway.completeTotp(pendingLogin, code));
   },
 
@@ -61,7 +62,7 @@ Page({
       this.setData({ busy: false, step: 'totp', pendingLogin: outcome.pendingLogin, password: '' });
       return;
     }
-    if (this.data.step === 'password' && this.data.via === 'wechat') {
+    if (this.data.step === 'password' && this.data.busyButton === 'wechat') {
       this.setData({ busy: false, weChatError: outcome.message });
       return;
     }

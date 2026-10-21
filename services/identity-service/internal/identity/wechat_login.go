@@ -27,7 +27,7 @@ func (server *Server) appWeChatLogin(writer http.ResponseWriter, request *http.R
 	if !decodeAppRequest(writer, request, 16<<10, &input) || !server.validAppClient(writer, input.appClient) {
 		return
 	}
-	openID, ok := server.openID(writer, request, input.Code)
+	openID, ok := server.exchangeWeChatCode(writer, request, input.Code)
 	if !ok {
 		return
 	}
@@ -56,12 +56,10 @@ func (store *Store) CompleteWeChatLogin(ctx context.Context, challengeHash []byt
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	request, attemptCount, err := readAuthorizationRequest(ctx, tx, challengeHash)
+	// The handler kept this request a moment ago; it is read for the code it will carry.
+	request, _, err := readAuthorizationRequest(ctx, tx, challengeHash)
 	if err != nil {
 		return LoginResult{}, err
-	}
-	if !request.ExpiresAt.After(now) || attemptCount >= 10 || request.UserID != "" {
-		return LoginResult{}, ErrAuthorizationRequestExpired
 	}
 	var userID, username, status string
 	var lockedUntil *time.Time

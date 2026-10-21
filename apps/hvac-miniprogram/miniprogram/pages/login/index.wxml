@@ -15,8 +15,8 @@
       <input class="input {{error ? 'input-error' : ''}}" value="{{password}}" bindinput="onPassword" password placeholder="密码" maxlength="512" confirm-type="done" bindconfirm="signIn" />
       <text wx:if="{{error}}" class="error">{{error}}</text>
     </view>
-    <button class="button-primary" disabled="{{busy}}" loading="{{busy && via === 'password'}}" bindtap="signIn">{{busy && via === 'password' ? '登录中…' : '登录'}}</button>
-    <button class="button-outline" disabled="{{busy}}" loading="{{busy && via === 'wechat'}}" bindtap="signInWithWeChat">{{busy && via === 'wechat' ? '登录中…' : '微信一键登录'}}</button>
+    <button class="button-primary" disabled="{{busy}}" loading="{{busy && busyButton === 'password'}}" bindtap="signIn">{{busy && busyButton === 'password' ? '登录中…' : '登录'}}</button>
+    <button class="button-outline" disabled="{{busy}}" loading="{{busy && busyButton === 'wechat'}}" bindtap="signInWithWeChat">{{busy && busyButton === 'wechat' ? '登录中…' : '微信一键登录'}}</button>
     <text wx:if="{{weChatError}}" class="error">{{weChatError}}</text>
     <text wx:else class="caption">微信一键登录要先在「我的」里绑定微信</text>
   </view>

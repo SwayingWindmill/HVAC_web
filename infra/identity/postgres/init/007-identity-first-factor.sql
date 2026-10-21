@@ -6,7 +6,7 @@ BEGIN;
 SET LOCAL ROLE identity_migrator;
 
 ALTER TABLE identity.authorization_requests
-  ADD COLUMN first_factor text CHECK (first_factor IN ('pwd', 'wechat'));
+  ADD COLUMN first_factor text;
 
 -- Sign-ins already waiting for their one-time code were all started with a password.
 UPDATE identity.authorization_requests SET first_factor = 'pwd' WHERE user_id IS NOT NULL;
@@ -16,7 +16,7 @@ ALTER TABLE identity.authorization_requests
 ALTER TABLE identity.authorization_requests
   ADD CONSTRAINT authorization_requests_first_factor_check
   CHECK ((user_id IS NULL AND first_factor_at IS NULL AND first_factor IS NULL)
-      OR (user_id IS NOT NULL AND first_factor_at IS NOT NULL AND first_factor IS NOT NULL));
+      OR (user_id IS NOT NULL AND first_factor_at IS NOT NULL AND first_factor IN ('pwd', 'wechat')));
 
 RESET ROLE;
 
