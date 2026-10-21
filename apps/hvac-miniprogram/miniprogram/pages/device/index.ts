@@ -56,7 +56,7 @@ Page({
 
   async refresh({ rereadEquipment = false } = {}) {
     try {
-      const site = await currentSite();
+      const site = await currentSite(rereadEquipment);
       if (site === null) {
         this.setData({ loading: false, failed: '这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。' });
         return;

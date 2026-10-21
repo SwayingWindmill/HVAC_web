@@ -28,6 +28,7 @@
 - 窗口用 `navigationStyle: custom`，大标题由 `components/page-header` 对齐微信的胶囊按钮。
 - 只通过 `lib/gateway.ts` 访问平台：带上会话、401 时回到登录页、失败给出平台的问题代码。
 - `setData` 只传页面要显示的内容；总览只在显示时每分钟刷新，切到后台就停。
+- 站点列表每次登录只读一次，切换站点页和下拉刷新时再读，页面定时刷新不重读（`lib/site.ts`）。
 - 不靠手机的时区：今天从哪一刻开始、本月是哪几天，都从平台按站点时区切好的「天」里推出来（`lib/today.ts`、`lib/savings.ts`）。数字格式也自己写（`lib/format.ts`），不用 `toLocaleString`。
 - 冷站的分类、运行状态和读数规则和网页「实时运行」一致（`lib/plant.ts` 对照 `apps/hvac-web/src/features/operations/realtime/plant-model.ts`）。点位的中文名、单位和小数位从网页的 `src/domain/centralPlantTelemetry.ts` 复制到 `miniprogram/shared/`（微信只编译 `miniprogram/` 里的文件）：改了网页那份后跑 `npm -w @hvac/miniprogram run sync`，测试会检查两份是否一致。
 - 助手的对话整理规则（`thread-model.ts`）、查询步骤的名称（`tool-labels.ts`）和加粗结论的修正（`answer-markdown.ts`）也这样从网页的 `src/features/assistant/` 复制过来；对话数据的类型由小程序自己写（`lib/agent-types.ts`），测试检查它和网页按接口生成的类型一致。

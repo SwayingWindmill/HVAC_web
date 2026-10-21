@@ -82,13 +82,14 @@ Page({
 
   async onPullDownRefresh() {
     this.setData({ error: '' });
-    await this.load();
+    await this.load(true);
     wx.stopPullDownRefresh();
   },
 
-  async load() {
+  /** `rereadSites` reads the Site list again (a pull-down refresh). */
+  async load(rereadSites = false) {
     try {
-      const visible = await currentSite();
+      const visible = await currentSite(rereadSites);
       if (visible === null) {
         this.setData({ loading: false, noSite: true });
         return;

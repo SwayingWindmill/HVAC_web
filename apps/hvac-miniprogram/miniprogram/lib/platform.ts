@@ -64,6 +64,9 @@ export const gateway = createGateway({
 
 export const signOutLocally = () => session.clear();
 
+/** The Session in use, so what was read under it is not reused under another. */
+export const sessionToken = () => session.get();
+
 /** A tab page shows nothing without a Session: it sends the person to the sign-in page instead. */
 export function requireSession(): boolean {
   if (session.get() !== null) return true;

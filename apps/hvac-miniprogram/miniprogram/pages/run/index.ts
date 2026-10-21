@@ -64,10 +64,10 @@ Page({
     wx.stopPullDownRefresh();
   },
 
-  /** `rereadEquipment` also re-reads the registered equipment, which only changes when an administrator edits it. */
+  /** `rereadEquipment` also re-reads the Sites and their registered equipment, which only change when an administrator edits them. */
   async refresh({ rereadEquipment = false } = {}) {
     try {
-      const site = await currentSite();
+      const site = await currentSite(rereadEquipment);
       if (site === null) {
         this.setData({ loading: false, noSite: true });
         return;
