@@ -102,6 +102,23 @@ page {
 }
 
 .badge-good { background: var(--success-soft); color: var(--success-text); }
+
+/* An alarm's severity: its shape (assets/severity) and name on a soft badge of its colour. */
+.severity-badge {
+  gap: 4px;
+  align-self: center;
+}
+
+.severity-badge .severity-shape {
+  width: 8px;
+  height: 8px;
+}
+
+.sev-critical { background: var(--destructive-soft); color: var(--destructive-text); }
+.sev-major { background: #ffedd5; color: #9a3412; }
+.sev-minor { background: var(--warning-soft); color: var(--warning-text); }
+.sev-warning { background: #e0f2fe; color: #075985; }
+.sev-info { background: var(--secondary); color: var(--secondary-foreground); }
 .badge-bad { background: var(--destructive-soft); color: var(--destructive-text); }
 .badge-neutral { background: var(--secondary); color: var(--secondary-foreground); }
 .badge-warning { background: var(--warning-soft); color: var(--warning-text); }

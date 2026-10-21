@@ -23,9 +23,9 @@ const bound = { 'GET /api/v1/me/wechat': { statusCode: 200, data: { bound: true 
 
 test('the reminder row says how many alarm reminders are left, or what to do first', async () => {
   assert.deepEqual(await readAlarmReminders(gatewayAnswering({ ...bound, 'GET /api/v1/me/wechat/reminders': { statusCode: 200, data: { alarm: 3, daily: 0 } } })),
-    { text: '还能收到 3 条紧急和重要告警的提醒', canAdd: true });
+    { text: '还能收 3 条（紧急和重要的新告警）', canAdd: true });
   assert.deepEqual(await readAlarmReminders(gatewayAnswering({ ...bound, 'GET /api/v1/me/wechat/reminders': { statusCode: 200, data: { alarm: 0, daily: 0 } } })),
-    { text: '还收不到告警提醒：点「多收一条」，在微信里允许', canAdd: true });
+    { text: '紧急和重要的新告警发到微信', canAdd: true });
   assert.deepEqual(await readAlarmReminders(gatewayAnswering({ 'GET /api/v1/me/wechat': { statusCode: 200, data: { bound: false } } })),
     { text: '先在「我的」里绑定微信，才能收告警提醒', canAdd: false });
   assert.deepEqual(await readAlarmReminders(gatewayAnswering({ ...bound, 'GET /api/v1/me/wechat/reminders': { statusCode: 503, data: { code: 'NOTIFICATION_UNAVAILABLE' } } })),

@@ -4,14 +4,12 @@
   <block wx:elif="{{view}}">
     <view class="card card-pad head">
       <view class="head-line">
-        <view class="severity">
-          <image class="severity-mark" src="/assets/severity/{{view.level}}.svg" aria-hidden="true" />
-          <text>{{view.severity}}</text>
-        </view>
+        <view class="badge severity-badge sev-{{view.level}}"><image class="severity-shape" src="/assets/severity/{{view.level}}.svg" aria-hidden="true" /><text>{{view.severity}}</text></view>
         <text class="caption">{{view.state}}</text>
       </view>
       <text class="title">{{view.title}}</text>
-      <text class="summary">{{view.summary}}</text>
+      <text class="summary {{summaryOpen ? '' : 'summary-clamped'}}">{{view.summary}}</text>
+      <text wx:if="{{summaryLong}}" class="summary-toggle" bindtap="toggleSummary" aria-role="button">{{summaryOpen ? '收起' : '展开'}}</text>
     </view>
 
     <view class="card">
@@ -22,7 +20,7 @@
     </view>
 
     <view wx:if="{{view.acknowledgement}}" class="card card-pad acknowledged">
-      <text class="badge badge-good">已确认</text>
+      <text class="badge badge-neutral">已确认</text>
       <text class="caption">{{view.acknowledgement.who}}{{view.acknowledgement.when ? ' · ' + view.acknowledgement.when : ''}}</text>
       <text wx:if="{{view.acknowledgement.comment}}" class="acknowledged-comment">{{view.acknowledgement.comment}}</text>
     </view>

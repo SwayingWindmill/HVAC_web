@@ -106,16 +106,31 @@ const EMPTY = {
 /** Happening with no one on them yet: what the 通知 tab's badge counts. */
 export const waitingCount = (active: readonly Alarm[]) => active.filter((alarm) => alarm.acknowledgement == null).length;
 
-/** One alarm on the 通知 page: its severity and title, when it began or cleared, and whether someone is on it. */
+interface Status {
+  readonly label: '未确认' | '已确认';
+  /** `waiting`: happening with no one on it, the orange that asks for attention; `quiet`: grey. */
+  readonly tone: 'waiting' | 'quiet';
+}
+
+/**
+ * One alarm on the 通知 page: its severity and title, when it began or cleared, and whether someone
+ * is on it. A cleared one is greyed and only says 未确认 when no one saw it (#677).
+ */
 function row(alarm: Alarm, when: string) {
   const waiting = alarm.acknowledgement == null;
+  const cleared = alarm.condition === 'CLEARED';
+  const status: Status | null = !cleared ? { label: waiting ? '未确认' : '已确认', tone: waiting ? 'waiting' : 'quiet' }
+    : waiting ? { label: '未确认', tone: 'quiet' } : null;
   return {
     alarmId: alarm.alarmId,
     title: alarm.title,
     level: level(alarm.currentSeverity),
     severity: SEVERITY_LABELS[alarm.currentSeverity],
     when,
-    status: { label: waiting ? '未确认' : '已确认', waiting },
+    status,
+    /** 共 3 条 when the same alarm cleared at the same minute more than once. */
+    count: '',
+    cleared,
   };
 }
 
@@ -135,14 +150,29 @@ export function presentFeed(active: readonly Alarm[], cleared: readonly Alarm[],
   const happening = active.filter(keeps).sort(bySeverity)
     .map((alarm) => row(alarm, todayStart === null ? '' : `${siteWhen(alarm.firstOccurredAt, todayStart)} 开始`));
 
-  const days: { day: string; rows: Row[] }[] = [];
+  // The same alarm cleared at the same minute on the same day is one row, opening the newest:
+  // a gateway coming back clears a dozen 「…读数长时间没有更新」 at once.
+  const days: { day: string; rows: Row[]; seen: Map<string, { row: Row; count: number }> }[] = [];
   const latest = [...cleared].sort((left, right) => Date.parse(clearedAt(right)) - Date.parse(clearedAt(left))).slice(0, RECENTLY_CLEARED);
   for (const alarm of latest.filter(keeps)) {
     const at = todayStart === null ? null : siteDay(clearedAt(alarm), todayStart);
     const entry = row(alarm, at === null ? '' : `${at.time} 恢复`);
-    const last = days[days.length - 1];
-    if (last !== undefined && last.day === (at?.day ?? '')) last.rows.push(entry);
-    else days.push({ day: at?.day ?? '', rows: [entry] });
+    let day = days[days.length - 1];
+    if (day === undefined || day.day !== (at?.day ?? '')) {
+      day = { day: at?.day ?? '', rows: [], seen: new Map() };
+      days.push(day);
+    }
+    const key = `${alarm.title}\n${entry.when}`;
+    const same = entry.when === '' ? undefined : day.seen.get(key);
+    if (same === undefined) {
+      day.seen.set(key, { row: entry, count: 1 });
+      day.rows.push(entry);
+      continue;
+    }
+    same.count += 1;
+    const merged = { ...same.row, count: `共 ${same.count} 条`, status: same.row.status ?? entry.status };
+    day.rows[day.rows.indexOf(same.row)] = merged;
+    same.row = merged;
   }
 
   return {
@@ -154,7 +184,7 @@ export function presentFeed(active: readonly Alarm[], cleared: readonly Alarm[],
         groups: happening.length === 0 ? [] : [{ day: '', rows: happening }],
         empty: happening.length > 0 ? '' : EMPTY.active[which],
       },
-      { title: '最近恢复', count: '', caption: '', groups: days, empty: days.length > 0 ? '' : EMPTY.cleared[which] },
+      { title: '最近恢复', count: '', caption: '', groups: days.map(({ day, rows }) => ({ day, rows })), empty: days.length > 0 ? '' : EMPTY.cleared[which] },
     ],
     needsAttention: waiting,
   };
