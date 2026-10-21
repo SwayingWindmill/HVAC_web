@@ -82,6 +82,7 @@ Page({
       plant = plantRead.value;
       const { chart, note } = await loadChart(site, dayStart, now);
       const start = dayStart.status === 'fulfilled' ? dayStart.value : null;
+      const devices = presentDevices(plant, this.data.filter);
       this.setData({
         siteName: site.displayName,
         // Site clock time needs the Site's midnight; without one the time is left out rather than guessed.
@@ -90,8 +91,9 @@ Page({
         noSite: false,
         failed: false,
         realtime: presentRealtime(plant),
-        devices: presentDevices(plant, this.data.filter),
-        deviceCount: plant.devices.length,
+        devices,
+        // The 设备 tab counts what its list shows: 全部, without the gateway's modules.
+        deviceCount: devices.filters[0].count,
         chart,
         chartNote: note,
       });

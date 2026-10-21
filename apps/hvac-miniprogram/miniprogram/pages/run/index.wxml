@@ -28,7 +28,7 @@
           <view class="plant-value {{item.value === '—' || item.late ? 'plant-value-dim' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
         </view>
       </view>
-      <text wx:if="{{realtime.copNote || chart.peak}}" class="caption">{{realtime.copNote}}{{chart.peak}}{{chart.peak ? '。' : ''}}</text>
+      <text wx:if="{{realtime.copNote || chart.peak}}" class="caption">{{realtime.copNote}}{{chart.peak}}</text>
     </view>
 
     <view class="card card-pad chart" aria-label="今天每小时能效">
@@ -57,11 +57,6 @@
           <text wx:if="{{item.late}}" class="badge badge-warning">读数不是最新的</text>
         </view>
       </view>
-    </view>
-
-    <view class="card row devices-link" data-segment="devices" bindtap="chooseSegment" aria-role="link">
-      <text class="card-title">设备</text>
-      <text class="caption">{{realtime.devices}} ›</text>
     </view>
   </block>
 

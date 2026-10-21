@@ -23,7 +23,7 @@
       </view>
       <view class="energy-total">{{view.energy.total}}<text class="unit">kWh</text></view>
       <template is="hour-chart" data="{{...view.energy}}" />
-      <text wx:if="{{view.energy.gaps}}" class="caption">{{view.energy.gaps}}。</text>
+      <text wx:if="{{view.energy.gaps}}" class="caption">{{view.energy.gaps}}</text>
     </view>
     <view wx:elif="{{energyNote || view.energyNote}}" class="card card-pad caption">{{energyNote || view.energyNote}}</view>
 
