@@ -93,13 +93,11 @@ page {
   background: var(--divider);
 }
 
-button.wechat {
-  gap: 8px;
-}
-
 .wechat-icon {
   width: 22px;
   height: 22px;
+  /* A margin, not the button's gap, so WeChat's loading spinner keeps its own spacing. */
+  margin-right: 8px;
 }
 
 .footer {
