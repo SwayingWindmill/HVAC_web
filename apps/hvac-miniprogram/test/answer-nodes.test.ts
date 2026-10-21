@@ -46,3 +46,24 @@ test('text that looks like markup stays text', () => {
     { name: 'p', attrs: { class: 'answer-p' }, children: [text('<img src=x onerror=alert(1)> 用电 18 kWh')] },
   ]);
 });
+
+// Regression (#664): the assistant wrote a table without its divider row on 2026-10-21, and the
+// renderer looped forever on its first row, freezing and then crashing the mini program.
+test('a table the assistant wrote without its divider row still reads as a table, and every line moves the reading on', { timeout: 2000 }, () => {
+  const answer = [
+    '**今天（10 月 21 日）到 10:41 为止的电费是 230.09 元，比昨天全天的 1423.48 元少，不过今天还没过完，不能直接和昨天比。**',
+    '',
+    '| 日期 | 用电量 | 估算电费 |',
+    '| 10 月 20 日（全天） | 1691 kWh | 1423.48 元 |',
+    '| 10 月 21 日（到 10:41） | 403 kWh | 230.09 元 |',
+  ].join('\n');
+  const [, table] = answerNodes(answer);
+  assert.deepEqual(table, { name: 'table', attrs: { class: 'answer-table' }, children: [
+    { name: 'tr', children: ['日期', '用电量', '估算电费'].map((cell) => ({ name: 'th', children: [text(cell)] })) },
+    { name: 'tr', children: ['10 月 20 日（全天）', '1691 kWh', '1423.48 元'].map((cell) => ({ name: 'td', children: [text(cell)] })) },
+    { name: 'tr', children: ['10 月 21 日（到 10:41）', '403 kWh', '230.09 元'].map((cell) => ({ name: 'td', children: [text(cell)] })) },
+  ] });
+  // A divider of single dashes is still a divider (GitHub tables need only one).
+  assert.equal(answerNodes('| a | b |\n|-|-|\n| 1 | 2 |')[0].children.length, 2);
+  assert.equal(answerNodes('|').length, 1);
+});

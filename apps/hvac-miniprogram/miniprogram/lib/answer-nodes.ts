@@ -30,8 +30,13 @@ const NUMBERED = /^\s*\d+[.)]\s+/;
 const HEADING = /^#{1,6}\s+/;
 const tableCells = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
 const isTableRow = (line: string) => line.trim().startsWith('|');
-const isDivider = (line: string) => /^\s*\|?(\s*:?-{3,}:?\s*\|)+\s*(:?-{3,}:?\s*)?$/.test(line);
+// A GitHub table's divider: cells of dashes, one or more, with optional colons.
+const isDivider = (line: string) => /^\s*\|?(\s*:?-+:?\s*\|)+\s*(:?-+:?\s*)?$/.test(line);
 
+/**
+ * Every branch reads at least one line, so any text finishes. A run of lines starting with `|` is a
+ * table, its first line the header, whether or not the Agent wrote the divider under it.
+ */
 export function answerNodes(answer: string): AnswerNode[] {
   const lines = withBoldLeadOnItsOwnLine(answer).split('\n');
   const blocks: AnswerNode[] = [];
@@ -40,11 +45,11 @@ export function answerNodes(answer: string): AnswerNode[] {
     const line = lines[index];
     if (line.trim() === '') {
       index += 1;
-    } else if (isTableRow(line) && index + 1 < lines.length && isDivider(lines[index + 1])) {
+    } else if (isTableRow(line)) {
       const rows = [{ cell: 'th', cells: tableCells(line) }];
-      index += 2;
+      index += 1;
       while (index < lines.length && isTableRow(lines[index])) {
-        rows.push({ cell: 'td', cells: tableCells(lines[index]) });
+        if (!isDivider(lines[index])) rows.push({ cell: 'td', cells: tableCells(lines[index]) });
         index += 1;
       }
       blocks.push({
