@@ -1,6 +1,7 @@
 // What the 总览 page shows, from what its owners returned: savings and what more could be saved
 // first (what customers care about most), then today against the same hours yesterday as the web
-// overview shows it, then what needs handling (#664).
+// overview shows it, then what needs handling (#664). Savings or a recommendation not there yet
+// take one line each in a small card below the figures instead of a large card on top (#677).
 
 import { changeBadge, grouped, type ChangeBadge } from './format';
 import type { NoSavingsReason, SavingsCard } from './savings';
@@ -25,7 +26,8 @@ export interface OverviewInputs {
     readonly today: EnergySummary;
     readonly change: { readonly electricity: number | null; readonly cooling: number | null; readonly cop: number | null; readonly cost: number | null };
   }> | { readonly status: 'empty' };
-  readonly alarms: Loaded<{ readonly active: number; readonly complete: boolean }>;
+  /** `waiting`: the alarms happening that no one has acknowledged, the red dot on 通知. */
+  readonly alarms: Loaded<{ readonly active: number; readonly complete: boolean; readonly waiting: number }>;
 }
 
 export interface Metric {
@@ -36,10 +38,27 @@ export interface Metric {
 }
 
 const NO_SAVINGS: Readonly<Record<NoSavingsReason, string>> = {
-  NO_MEASURE: '还没有在统计的节能措施。在网页「能源分析 → 节能项目」登记一项措施，实施满 24 小时后，第二天起这里显示省了多少钱、多少电。',
-  BASELINE_UNTRUSTED: '节能措施的对比基线不可靠，暂时不统计。请在网页「节能项目」里查看原因。',
-  FIRST_DAY_PENDING: '节能措施实施满 24 小时后，第二天起这里显示省了多少钱、多少电。',
+  NO_MEASURE: '还没有在统计的节能措施',
+  BASELINE_UNTRUSTED: '对比基线不可靠，暂时不统计',
+  FIRST_DAY_PENDING: '措施实施满 24 小时后，第二天开始算',
 };
+const UNREADABLE = '暂时读不到，下拉刷新再试';
+
+/** A line in the small card for what is not there yet; `onTheWeb` when the web is where to set it up. */
+interface NotYetRow {
+  readonly label: '本月节省' | '还能再省';
+  readonly text: string;
+  readonly onTheWeb: boolean;
+}
+
+/** Where on the web to set up what is missing, by which of the two is. */
+function setUpOnTheWeb(rows: readonly NotYetRow[]): string {
+  const missing = rows.filter((row) => row.onTheWeb).map((row) => row.label);
+  if (missing.length === 2) return '在电脑网页「能源分析」里登记节能措施、生成优化建议后，这里显示能省多少。';
+  if (missing[0] === '本月节省') return '在电脑网页「能源分析 → 节能项目」登记措施后，这里显示省了多少。';
+  if (missing[0] === '还能再省') return '在电脑网页「能源分析 → 优化建议」生成后，这里显示还能省多少。';
+  return '';
+}
 
 const RISK: Readonly<Record<Recommendation['risk']['level'], ChangeBadge>> = {
   LOW: { text: '低风险', tone: 'good' },
@@ -50,34 +69,46 @@ const RISK: Readonly<Record<Recommendation['risk']['level'], ChangeBadge>> = {
 const money = (value: number) => `¥${grouped(value)}`;
 
 function presentSavings(input: OverviewInputs['savings']) {
-  if (input.status === 'error') return { state: 'error' as const, amount: '—', detail: '节能统计暂时读不到，下拉刷新再试。', measures: [] };
+  if (input.status === 'error') return { notYet: { label: '本月节省', text: UNREADABLE, onTheWeb: false } };
   const { saved, why, measures } = input.card;
+  if (saved === null) return { notYet: { label: '本月节省', text: NO_SAVINGS[why ?? 'NO_MEASURE'], onTheWeb: why !== 'FIRST_DAY_PENDING' } };
   const rows = measures.filter((measure) => measure.totals.days > 0).map((measure) => ({
     id: measure.id,
     name: measure.name,
     amount: money(measure.totals.avoidedCost),
     detail: `本月统计 ${measure.totals.days} 天 · 少用电 ${grouped(measure.totals.avoidedKWh)} kWh`,
   }));
-  if (saved === null) return { state: 'none' as const, amount: '—', detail: NO_SAVINGS[why ?? 'NO_MEASURE'], measures: rows };
   const rate = saved.rate === null ? '' : ` · 比不做措施少 ${grouped(saved.rate * 100, 1)}%`;
-  return { state: 'saved' as const, amount: money(saved.cost), detail: `少用电 ${grouped(saved.kWh)} kWh${rate}`, measures: rows };
+  return { card: { amount: money(saved.cost), detail: `少用电 ${grouped(saved.kWh)} kWh${rate}`, measures: rows } };
 }
 
 function presentRecommendation(input: OverviewInputs['recommendation']) {
-  if (input.status === 'error') return { state: 'error' as const, title: '优化建议暂时读不到。', detail: '', risk: null };
+  if (input.status === 'error') return { notYet: { label: '还能再省', text: UNREADABLE, onTheWeb: false } };
   const latest = input.latest;
-  if (latest === null) return { state: 'none' as const, title: '还没有优化建议。', detail: '在网页「能源分析 → 优化建议」生成后，这里显示建议怎么调、预计每天能省多少。', risk: null };
+  if (latest === null) return { notYet: { label: '还能再省', text: '还没有优化建议', onTheWeb: true } };
   const from = grouped(latest.baseline.supplyTempC, 1);
   // The same threshold as the web: a change under 0.05 °C keeps the supply temperature.
   const action = Math.abs(latest.candidate.supplyTempC - latest.baseline.supplyTempC) >= 0.05
     ? `冷冻水供水 ${from} → ${grouped(latest.candidate.supplyTempC, 1)} °C`
     : `保持供水 ${from} °C`;
   return {
-    state: 'ready' as const,
-    title: `${action}，预计每天再省 ${money(latest.expectedImpact.costSavingPerDay)}`,
-    detail: `少用电 ${grouped(latest.expectedImpact.energySavingKWhPerDay)} kWh/天`,
-    risk: RISK[latest.risk.level],
+    card: {
+      title: `${action}，预计每天再省 ${money(latest.expectedImpact.costSavingPerDay)}`,
+      detail: `少用电 ${grouped(latest.expectedImpact.energySavingKWhPerDay)} kWh/天`,
+      risk: RISK[latest.risk.level],
+    },
   };
+}
+
+/** `happening` shows the red alarm icon; unreadable alarms do not. */
+function presentAlarms(input: OverviewInputs['alarms']) {
+  if (input.status === 'error') return { count: '—', waiting: '', happening: false };
+  const count = `${input.active}${input.complete ? '' : '+'}`;
+  const happening = input.active > 0;
+  if (!happening) return { count, waiting: '', happening };
+  // With only the first page read, the rest may be waiting: say only what is known.
+  if (input.waiting === 0) return { count, waiting: input.complete ? '都有人确认了' : '', happening };
+  return { count, waiting: `${input.complete ? '' : '至少 '}${input.waiting} 条没人确认`, happening };
 }
 
 function presentEnergy(input: OverviewInputs['energy']) {
@@ -95,10 +126,14 @@ function presentEnergy(input: OverviewInputs['energy']) {
 }
 
 export function presentOverview(inputs: OverviewInputs) {
+  const savings = presentSavings(inputs.savings);
+  const recommendation = presentRecommendation(inputs.recommendation);
+  const notYet = [savings.notYet, recommendation.notYet].filter((row): row is NotYetRow => row !== undefined);
   return {
-    savings: presentSavings(inputs.savings),
-    recommendation: presentRecommendation(inputs.recommendation),
+    savings: savings.card ?? null,
+    recommendation: recommendation.card ?? null,
+    notYet: notYet.length === 0 ? null : { rows: notYet.map(({ label, text }) => ({ label, text })), hint: setUpOnTheWeb(notYet) },
     energy: presentEnergy(inputs.energy),
-    alarms: inputs.alarms.status === 'error' ? '—' : `${inputs.alarms.active}${inputs.alarms.complete ? '' : '+'}`,
+    alarms: presentAlarms(inputs.alarms),
   };
 }
