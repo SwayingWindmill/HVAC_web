@@ -64,6 +64,7 @@ test('a table the assistant wrote without its divider row still reads as a table
     { name: 'tr', children: ['10 月 21 日（到 10:41）', '403 kWh', '230.09 元'].map((cell) => ({ name: 'td', children: [text(cell)] })) },
   ] });
   // A divider of single dashes is still a divider (GitHub tables need only one).
-  assert.equal(answerNodes('| a | b |\n|-|-|\n| 1 | 2 |')[0].children.length, 2);
+  const [divided] = answerNodes(['| a | b |', '|-|-|', '| 1 | 2 |'].join('\n'));
+  assert.equal('children' in divided ? divided.children.length : 0, 2);
   assert.equal(answerNodes('|').length, 1);
 });
