@@ -1,13 +1,15 @@
 import { GatewayError } from '../../lib/gateway';
 import { gateway, requireSession } from '../../lib/platform';
 import { currentSite, type Site } from '../../lib/site';
-import { compareWithYesterday, sameHoursWindows, summarize, todayStart, type HourPoint, type Window } from '../../lib/today';
+import { energySeries, recentDays } from '../../lib/energy';
+import { loadPlant } from '../../lib/plant-load';
+import { presentPlantNow } from '../../lib/run';
+import { compareWithYesterday, sameHoursWindows, summarize, todayStart } from '../../lib/today';
 import { monthToDate, savingsCard, type Measure, type SavingsTotals } from '../../lib/savings';
 import { presentOverview, type OverviewInputs, type Recommendation } from '../../lib/overview';
 import { selectTab } from '../../lib/tab';
 
 const REFRESH_MS = 60_000;
-const DAY_MS = 86_400_000;
 
 let timer: number | undefined;
 
@@ -17,20 +19,14 @@ const stopRefreshing = () => {
   timer = undefined;
 };
 
-const series = (site: Site, energyType: 'electricity' | 'cooling', granularity: 'hour' | 'day', window: Window) =>
-  gateway.post<{ points: HourPoint[] }>('/api/v1/analytics/energy-series', {
-    tenantId: site.tenantId, siteId: site.id, energyType, granularity, timezone: site.timezone,
-    from: window.from, to: window.to, qualityPolicy: 'VALID_ONLY',
-  }).then((response) => response.points);
-
 /** Today against yesterday up to the same time of day, read the way the web overview reads it. */
 async function loadEnergy(site: Site, start: string, now: Date): Promise<OverviewInputs['energy']> {
   const windows = sameHoursWindows(start, now);
   const [todayElectricity, todayCooling, yesterdayElectricity, yesterdayCooling] = await Promise.all([
-    series(site, 'electricity', 'hour', windows.today),
-    series(site, 'cooling', 'hour', windows.today),
-    series(site, 'electricity', 'hour', windows.yesterday),
-    series(site, 'cooling', 'hour', windows.yesterday),
+    energySeries(site, 'electricity', 'hour', windows.today),
+    energySeries(site, 'cooling', 'hour', windows.today),
+    energySeries(site, 'electricity', 'hour', windows.yesterday),
+    energySeries(site, 'cooling', 'hour', windows.yesterday),
   ]);
   const today = summarize(todayElectricity, todayCooling);
   return { status: 'ok', today, change: compareWithYesterday(today, summarize(yesterdayElectricity, yesterdayCooling)) };
@@ -61,12 +57,13 @@ async function loadRecommendation(site: Site): Promise<OverviewInputs['recommend
 
 const settled = <T>(result: PromiseSettledResult<T>, failed: T): T => (result.status === 'fulfilled' ? result.value : failed);
 
-async function load(site: Site): Promise<OverviewInputs> {
+async function load(site: Site) {
   const now = new Date();
-  const [days, recommendation, alarms] = await Promise.allSettled([
-    series(site, 'electricity', 'day', { from: new Date(now.getTime() - 2 * DAY_MS).toISOString(), to: now.toISOString() }),
+  const [days, recommendation, alarms, plant] = await Promise.allSettled([
+    recentDays(site, now),
     loadRecommendation(site),
     gateway.get<{ data: unknown[]; meta: { hasMore: boolean } }>(`/api/v1/alarms?siteId=${site.id}&condition=ACTIVE&limit=100`),
+    loadPlant(site),
   ]);
   // Where today began at the Site, as the Energy owner cut the day; it dates today and this month.
   // No electricity reading in the last two days leaves no day to compare.
@@ -75,12 +72,14 @@ async function load(site: Site): Promise<OverviewInputs> {
     start === null ? Promise.resolve<OverviewInputs['energy']>(days.status === 'fulfilled' ? { status: 'empty' } : { status: 'error' }) : loadEnergy(site, start, now),
     loadSavings(site, start),
   ]);
-  return {
+  const inputs: OverviewInputs = {
     savings: settled<OverviewInputs['savings']>(savings, { status: 'error' }),
     recommendation: settled<OverviewInputs['recommendation']>(recommendation, { status: 'error' }),
     energy: settled<OverviewInputs['energy']>(energy, { status: 'error' }),
     alarms: alarms.status === 'fulfilled' ? { status: 'ok', active: alarms.value.data.length, complete: !alarms.value.meta.hasMore } : { status: 'error' },
   };
+  // The plant card stays off a Site without registered devices, and says so when it cannot be read.
+  return { inputs, plant: plant.status === 'fulfilled' ? { failed: false, now: presentPlantNow(plant.value) } : { failed: true, now: null } };
 }
 
 const clock = (now: Date) => `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -93,6 +92,7 @@ Page({
     noSite: false,
     failed: false,
     view: null as ReturnType<typeof presentOverview> | null,
+    plant: { failed: false, now: null } as { failed: boolean; now: ReturnType<typeof presentPlantNow> },
   },
 
   onShow() {
@@ -106,6 +106,10 @@ Page({
   onHide: stopRefreshing,
 
   onUnload: stopRefreshing,
+
+  openRun() {
+    wx.switchTab({ url: '/pages/run/index' });
+  },
 
   openSites() {
     wx.navigateTo({ url: '/pages/sites/index' });
@@ -123,8 +127,8 @@ Page({
         this.setData({ loading: false, noSite: true });
         return;
       }
-      const view = presentOverview(await load(site));
-      this.setData({ siteName: site.displayName, updatedAt: clock(new Date()), loading: false, noSite: false, failed: false, view });
+      const { inputs, plant } = await load(site);
+      this.setData({ siteName: site.displayName, updatedAt: clock(new Date()), loading: false, noSite: false, failed: false, view: presentOverview(inputs), plant });
     } catch {
       // The Site list itself could not be read; signed-out failures already went to the sign-in page.
       this.setData({ loading: false, failed: true });

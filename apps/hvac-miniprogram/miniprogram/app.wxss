@@ -165,3 +165,57 @@ button.button-outline::after {
   font-size: 14px;
   color: var(--muted-foreground);
 }
+
+/* Run states, as the web's StatusBadge colours them. */
+.dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--subtle-foreground);
+}
+
+.dot-running { background: var(--success); }
+.dot-fault { background: var(--destructive); }
+.dot-offline { background: var(--severity-minor); }
+
+.badge-running { background: var(--success-soft); color: var(--success-text); }
+.badge-stopped { background: var(--secondary); color: var(--secondary-foreground); }
+.badge-fault { background: var(--destructive-soft); color: var(--destructive-text); }
+.badge-offline { background: var(--warning-soft); color: var(--warning-text); }
+
+/* A segmented control (the design system's 分段切换). */
+.segments {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  padding: 3px;
+  border-radius: 10px;
+  background: #ececef;
+}
+
+.segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 36px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--secondary-foreground);
+}
+
+.segment-on {
+  border: 1px solid var(--border);
+  background: var(--card);
+  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.06);
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.segment-count {
+  font-family: "Geist Mono", ui-monospace, Menlo, monospace;
+  font-weight: 500;
+  color: var(--subtle-foreground);
+}

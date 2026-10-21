@@ -1,9 +1,11 @@
 {
   "pages": [
     "pages/overview/index",
+    "pages/run/index",
     "pages/me/index",
     "pages/login/index",
-    "pages/sites/index"
+    "pages/sites/index",
+    "pages/device/index"
   ],
   "window": {
     "navigationStyle": "custom",
@@ -19,6 +21,7 @@
     "borderStyle": "white",
     "list": [
       { "pagePath": "pages/overview/index", "text": "总览" },
+      { "pagePath": "pages/run/index", "text": "运行" },
       { "pagePath": "pages/me/index", "text": "我的" }
     ]
   },

@@ -295,3 +295,35 @@ export function isRunning(device: PlantDevice): boolean {
 export function plantReading(plant: Plant, sourceKey: string): PlantReading | null {
   return firstReading(plant.devices, sourceKey);
 }
+
+export interface SnapshotRequest {
+  readonly requestId: string;
+  readonly deviceId: string;
+  readonly keys: readonly string[];
+}
+
+// The gateway's limits for one current-value request (the web's features/assets/data.ts).
+const MAX_BATCH_DEVICES = 100;
+const MAX_BATCH_KEYS = 2048;
+
+/** Every device's observed points, packed into as few POST /api/v1/telemetry/observation-snapshots:batchGet requests as the limits allow. */
+export function snapshotBatches(model: AssetModel): SnapshotRequest[][] {
+  const batches: SnapshotRequest[][] = [];
+  let batch: SnapshotRequest[] = [];
+  let keyCount = 0;
+  for (const device of model.devices) {
+    const keys = model.telemetryPoints
+      .filter((point) => point.reportingDeviceId === device.id && point.status === 'ACTIVE' && point.pointType !== 'COMMAND')
+      .map((point) => point.pointCode)
+      .sort();
+    if (batch.length > 0 && (batch.length >= MAX_BATCH_DEVICES || keyCount + keys.length > MAX_BATCH_KEYS)) {
+      batches.push(batch);
+      batch = [];
+      keyCount = 0;
+    }
+    batch.push({ requestId: `${batches.length}-${batch.length}`, deviceId: device.id, keys });
+    keyCount += keys.length;
+  }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
+}

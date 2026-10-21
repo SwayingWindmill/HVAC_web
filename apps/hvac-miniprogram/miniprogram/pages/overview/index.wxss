@@ -150,3 +150,39 @@
 .row-value {
   font-weight: 600;
 }
+
+.now {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.now-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.now-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.now-label {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.now-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.now-value {
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
