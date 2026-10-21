@@ -353,6 +353,8 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		h.UserAdmin(writer, request)
 	case publicOwnPasswordPath:
 		h.OwnPassword(writer, request)
+	case publicMeWeChatPath:
+		h.MeWeChat(writer, request)
 	case publicAppSessionsPath:
 		h.CreateAppSession(writer, request)
 	case publicAppSessionTOTP:

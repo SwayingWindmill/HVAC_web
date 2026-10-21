@@ -31,6 +31,7 @@ type authHarness struct {
 	gatewayServer *httptest.Server
 	iamServer     *httptest.Server
 	oidcServer    *httptest.Server
+	provider      *oidctest.Provider
 	gatewayURL    string
 	logs          *bytes.Buffer
 	transport     http.RoundTripper
@@ -433,6 +434,7 @@ func newAuthHarnessWithIAMFactory(t *testing.T, factory func(clientSPIFFEID stri
 	if !ok {
 		t.Fatal("client key is not a signer")
 	}
+	provider.TrustGatewayGrants(signer.Public(), bundle.ClientSPIFFEID)
 	var logs bytes.Buffer
 	sessionStore := sessionstore.NewMemoryStore()
 	identity := &gateway.IdentityConfig{
@@ -453,7 +455,7 @@ func newAuthHarnessWithIAMFactory(t *testing.T, factory func(clientSPIFFEID stri
 	gatewayServer.Config.Handler = handler
 	gatewayServer.StartTLS()
 	t.Cleanup(gatewayServer.Close)
-	return &authHarness{gatewayServer: gatewayServer, iamServer: iamServer, oidcServer: oidcServer, gatewayURL: gatewayURL, logs: &logs, transport: gatewayServer.Client().Transport, sessionStore: sessionStore}
+	return &authHarness{gatewayServer: gatewayServer, iamServer: iamServer, oidcServer: oidcServer, provider: provider, gatewayURL: gatewayURL, logs: &logs, transport: gatewayServer.Client().Transport, sessionStore: sessionStore}
 }
 
 func (h *authHarness) browserClient(t *testing.T) *http.Client {
