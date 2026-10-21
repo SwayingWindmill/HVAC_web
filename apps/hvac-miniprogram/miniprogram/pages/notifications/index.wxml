@@ -7,7 +7,7 @@
   <block wx:else>
     <view class="card row active" bindtap="openAlarms" aria-role="link">
       <view class="active-label">
-        <image class="active-mark" src="/assets/severity/critical.svg" aria-hidden="true" />
+        <image class="active-mark" src="/assets/alert.svg" aria-hidden="true" />
         <text>正在发生的告警</text>
       </view>
       <text class="active-count">{{active}} ›</text>
@@ -34,20 +34,24 @@
           data-unread="{{item.unread}}"
           bindtap="open"
           aria-role="link"
+          aria-label="{{item.unread ? '未读，' : ''}}{{item.tag}}，{{item.subject}}"
         >
-          <view class="notice-head">
-            <text wx:if="{{item.recovered}}" class="badge badge-good">{{item.tag}}</text>
-            <view wx:else class="notice-tag">
-              <image class="severity-mark" src="/assets/severity/{{item.level}}.svg" aria-hidden="true" />
-              <text>{{item.tag}}</text>
+          <view class="unread-slot" aria-hidden="true"><view wx:if="{{item.unread}}" class="unread-dot" /></view>
+          <view class="notice-main">
+            <view class="notice-head">
+              <text wx:if="{{item.recovered}}" class="badge badge-good">{{item.tag}}</text>
+              <view wx:else class="severity-tag severity-{{item.level}}">
+                <image class="severity-mark" src="/assets/severity/{{item.level}}.svg" aria-hidden="true" />
+                <text>{{item.tag}}</text>
+              </view>
+              <text class="notice-time mono">{{item.time}}</text>
             </view>
-            <text class="notice-time mono">{{item.time}}</text>
-            <view wx:if="{{item.unread}}" class="unread-dot" aria-label="未读" />
+            <text class="notice-subject">{{item.subject}}</text>
+            <text wx:if="{{item.body}}" class="notice-body">{{item.body}}</text>
           </view>
-          <text class="notice-subject">{{item.subject}}</text>
-          <text wx:if="{{item.body}}" class="notice-body">{{item.body}}</text>
         </view>
       </view>
     </view>
+    <text wx:if="{{partial}}" class="caption">只读到你最近的 200 条通知，更早的请在网页「通知」里看。</text>
   </block>
 </view>

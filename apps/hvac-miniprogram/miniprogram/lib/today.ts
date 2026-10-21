@@ -85,7 +85,8 @@ const HOUR_MS = 3_600_000;
 /**
  * Where a moment falls at the Site, read from the Site's midnight that the owner cut rather than the
  * phone's time zone: that midnight gives the Site's offset from UTC (UTC+8 when it falls at 16:00
- * UTC), and the offset gives the Site's calendar date and clock.
+ * UTC), and the offset gives the Site's calendar date and clock. A midnight alone cannot tell UTC−10
+ * from UTC+14 (they differ by a whole day); offsets east of +14 hours are read as west of Greenwich.
  */
 function siteTime(at: number, start: string) {
   const midnight = Date.parse(start);
@@ -94,6 +95,7 @@ function siteTime(at: number, start: string) {
   const local = new Date(at + offset);
   return {
     days: Math.floor((at - midnight) / DAY_MS),
+    year: local.getUTCFullYear(),
     month: local.getUTCMonth() + 1,
     date: local.getUTCDate(),
     hours: pad2(local.getUTCHours()),
@@ -116,6 +118,12 @@ export function siteWhen(at: string | number, start: string): string {
   const clock = `${hours}:${minutes}`;
   if (days === 0) return `今天 ${clock}`;
   return days === -1 ? `昨天 ${clock}` : `${month}/${date} ${clock}`;
+}
+
+/** A moment in full at the Site: 2026年9月29日 16:26. */
+export function siteDateTime(at: string, start: string): string {
+  const { year, month, date, hours, minutes } = siteTime(Date.parse(at), start);
+  return `${year}年${month}月${date}日 ${hours}:${minutes}`;
 }
 
 /** The Site day a moment falls on: 今天, 昨天, 9 月 29 日; and its clock time, 14:20. */

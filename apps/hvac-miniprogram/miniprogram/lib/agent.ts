@@ -3,7 +3,7 @@
 
 import { agentEventReader } from './agent-stream';
 import type { AgentSessionEvent, AgentSessionSnapshot } from './agent-types';
-import { GatewayError, type Gateway } from './gateway';
+import { GatewayError, NETWORK_TEXT, type Gateway } from './gateway';
 
 const collection = (siteId: string) => `/api/v1/sites/${encodeURIComponent(siteId)}/operations/agent-sessions`;
 const session = (siteId: string, sessionId: string) => `${collection(siteId)}/${encodeURIComponent(sessionId)}`;
@@ -68,7 +68,7 @@ export function assistantErrorText(error: unknown): string {
   if (!(error instanceof GatewayError)) return '连接助手失败，请稍后再试。';
   switch (error.code) {
     case 'NETWORK_UNAVAILABLE':
-      return '连不上平台，请检查网络后再试。';
+      return NETWORK_TEXT;
     case 'OPERATIONS_AGENT_UNAVAILABLE':
       return '这个环境还没有接入 AI 助手。';
     case 'OPERATIONS_RATE_LIMITED':

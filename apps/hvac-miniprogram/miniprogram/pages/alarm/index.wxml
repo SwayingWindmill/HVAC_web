@@ -1,4 +1,4 @@
-<view class="screen top">
+<view class="screen top with-footer">
   <view wx:if="{{loading}}" class="state">正在读取…</view>
   <view wx:elif="{{failed}}" class="state">{{failed}}</view>
   <block wx:elif="{{view}}">
@@ -38,13 +38,14 @@
         disable-default-padding
         bindinput="onComment"
       />
-      <text class="caption">确认表示有人在处理，告警不会因此消失；读数恢复后它自己恢复。</text>
+      <text class="caption">{{view.acknowledgeNote}}</text>
       <text wx:if="{{error}}" class="error" aria-role="alert">{{error}}</text>
     </view>
 
-    <view class="actions">
-      <button class="button-outline action" bindtap="askAssistant">问助手</button>
-      <button wx:if="{{view.canAcknowledge}}" class="button-primary action" disabled="{{acknowledging}}" bindtap="acknowledge">{{acknowledging ? '正在确认…' : '确认告警'}}</button>
-    </view>
   </block>
+</view>
+
+<view wx:if="{{view}}" class="footer">
+  <button class="button-outline action" bindtap="askAssistant">问助手</button>
+  <button wx:if="{{view.canAcknowledge}}" class="button-primary action" disabled="{{acknowledging}}" bindtap="acknowledge">{{acknowledging ? '正在确认…' : '确认告警'}}</button>
 </view>

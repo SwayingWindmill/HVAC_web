@@ -3,21 +3,18 @@
   <view wx:elif="{{failed}}" class="state">{{failed}}</view>
   <block wx:else>
     <view class="segments" aria-role="tablist" aria-label="告警">
-      <view class="segment {{condition === 'ACTIVE' ? 'segment-on' : ''}}" data-condition="ACTIVE" bindtap="chooseCondition" aria-role="tab" aria-selected="{{condition === 'ACTIVE'}}">正在发生<text class="segment-count">{{counts.ACTIVE}}</text></view>
+      <view class="segment {{condition === 'ACTIVE' ? 'segment-on' : ''}}" data-condition="ACTIVE" bindtap="chooseCondition" aria-role="tab" aria-selected="{{condition === 'ACTIVE'}}">正在发生<text class="segment-count">{{activeCount}}</text></view>
       <view class="segment {{condition === 'CLEARED' ? 'segment-on' : ''}}" data-condition="CLEARED" bindtap="chooseCondition" aria-role="tab" aria-selected="{{condition === 'CLEARED'}}">已恢复</view>
     </view>
 
     <view class="filter-bar">
       <text class="caption">{{siteName}} · 按严重程度排</text>
-      <label class="unacknowledged">
-        <text class="caption">只看没确认的</text>
-        <switch checked="{{unacknowledgedOnly}}" color="#3f5bd9" bindchange="toggleUnacknowledged" />
-      </label>
+      <text class="chip {{unacknowledgedOnly ? 'chip-on' : ''}}" bindtap="toggleUnacknowledged" aria-role="checkbox" aria-checked="{{unacknowledgedOnly}}">只看没确认的</text>
     </view>
 
     <view wx:if="{{!rows.length}}" class="state">{{empty}}</view>
-    <view wx:else class="card">
-      <view wx:for="{{rows}}" wx:key="alarmId" class="alarm" data-id="{{item.alarmId}}" bindtap="open" aria-role="link">
+    <view wx:else class="alarms">
+      <view wx:for="{{rows}}" wx:key="alarmId" class="card alarm" data-id="{{item.alarmId}}" bindtap="open" aria-role="link">
         <image class="severity-mark" src="/assets/severity/{{item.level}}.svg" aria-hidden="true" />
         <view class="alarm-main">
           <text class="alarm-title">{{item.title}}</text>

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { presentAlarm, presentAlarmRows, presentInbox, type Alarm, type InboxItem } from '../miniprogram/lib/alarms.ts';
+import { explainAlarmQuestion, presentAlarm, presentAlarmRows, presentInbox, type Alarm, type InboxItem } from '../miniprogram/lib/alarms.ts';
 
 // Recorded for the web's browser tests: a major alarm still active and unacknowledged (raised
 // 9/29 16:26 at the Site), and the same kind raised and cleared on 10/1 after someone acknowledged it.
@@ -35,6 +35,7 @@ test('an alarm opens on its severity and state, what happened, the facts an oper
     ],
     acknowledgement: null,
     canAcknowledge: true,
+    acknowledgeNote: '确认表示有人在处理，告警不会因此消失；读数恢复后它自己恢复。',
   });
   const done = presentAlarm(cleared, { deviceName: null, now, todayStart, me: ME });
   assert.equal(done.state, '已恢复 · 已确认');
@@ -52,8 +53,7 @@ test('an alarm opens on its severity and state, what happened, the facts an oper
 
 test('notifications list this Site\'s alarm news by day, newest first, with what happened and what is still unread', () => {
   const item = (inboxItemId: string, alarm: Alarm, sourceAction: InboxItem['sourceAction'], createdAt: string, status: InboxItem['status'], siteId = SITE): InboxItem => ({
-    inboxItemId, intentId: inboxItemId, tenantId: alarm.tenantId, siteId, principalId: ME, alarmId: alarm.alarmId,
-    incidentCorrelationId: alarm.incidentCorrelationId, sourceAction, severity: alarm.currentSeverity,
+    inboxItemId, siteId, alarmId: alarm.alarmId, sourceAction, severity: alarm.currentSeverity,
     subject: alarm.title, body: sourceAction === 'CLEARED' ? '回水温度回到正常，这条告警自动恢复了。' : alarm.summary, status, createdAt,
   });
   const inbox = [
@@ -74,4 +74,20 @@ test('notifications list this Site\'s alarm news by day, newest first, with what
   });
   assert.deepEqual(presentInbox(inbox, SITE, todayStart, 'unread').groups.flatMap((group) => group.items.map((entry) => entry.id)), ['c', 'a']);
   assert.equal(presentInbox(inbox.map((entry) => ({ ...entry, status: 'READ' as const })), SITE, todayStart, 'unread').empty, '没有未读的通知。');
+});
+
+test('without the Site\'s midnight an alarm row says whether it is happening, never a bare 开始', () => {
+  // Equally severe, the more recent first: the one cleared on 10/1, then the one active since 9/29.
+  assert.deepEqual(presentAlarmRows([active, cleared], { unacknowledgedOnly: false }, null).map((row) => row.detail), ['已恢复 · 已确认', '正在发生 · 未确认']);
+});
+
+test('问助手 asks about the alarm as the web\'s 解释 does: when it began at the Site, whether it cleared, and its device', () => {
+  assert.equal(explainAlarmQuestion(active, 'C 机组电表', todayStart), '2026年9月29日 16:26 开始的告警「冷冻水回水温度过低」（C 机组电表）是怎么回事？');
+  assert.equal(explainAlarmQuestion(cleared, null, todayStart), '2026年10月1日 17:11 开始、已恢复的告警「冷冻水回水温度过低」是怎么回事？');
+});
+
+test('acknowledging says what it means: someone is on it while the alarm is happening, someone has seen it once it cleared', () => {
+  assert.equal(presentAlarm(active, { deviceName: null, now, todayStart, me: ME }).acknowledgeNote, '确认表示有人在处理，告警不会因此消失；读数恢复后它自己恢复。');
+  const unacknowledgedClear = { ...cleared, acknowledgement: null };
+  assert.equal(presentAlarm(unacknowledgedClear, { deviceName: null, now, todayStart, me: ME }).acknowledgeNote, '这条告警已经恢复了，确认只是记下有人看过。');
 });

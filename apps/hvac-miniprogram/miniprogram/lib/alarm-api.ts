@@ -4,9 +4,13 @@
 import type { Alarm, InboxItem } from './alarms';
 import type { Gateway } from './gateway';
 
-/** The person's latest notifications, all Sites. */
+// The inbox reads at most this many of the person's latest notifications, across all their Sites.
+const INBOX_LIMIT = 200;
+
+/** The person's latest notifications on all Sites; `complete` is false when older ones were left out. */
 export const listInbox = (gateway: Gateway) =>
-  gateway.get<{ data: InboxItem[] }>('/api/v1/notifications/inbox?limit=100').then((response) => response.data);
+  gateway.get<{ data: InboxItem[] }>(`/api/v1/notifications/inbox?limit=${INBOX_LIMIT}`)
+    .then((response) => ({ items: response.data, complete: response.data.length < INBOX_LIMIT }));
 
 /** Marks one notification read; the platform takes no body for it. */
 export const markRead = (gateway: Gateway, inboxItemId: string) =>

@@ -1,7 +1,7 @@
 import { activeAlarms, listInbox, markRead } from '../../lib/alarm-api';
-import { presentInbox, type InboxItem, type InboxView } from '../../lib/alarms';
+import { countText, presentInbox, type InboxItem, type InboxView } from '../../lib/alarms';
 import { siteTodayStart } from '../../lib/energy';
-import { GatewayError } from '../../lib/gateway';
+import { GatewayError, NETWORK_TEXT } from '../../lib/gateway';
 import { gateway, requireSession } from '../../lib/platform';
 import { whileShown } from '../../lib/refresh';
 import { currentSite, type Site } from '../../lib/site';
@@ -12,11 +12,12 @@ const refresher = whileShown(30_000);
 
 let site: Site | null = null;
 let inbox: InboxItem[] = [];
+let inboxComplete = true;
 let todayStart: string | null = null;
 let chosenView: InboxView | null = null;
 
 const notificationError = (error: unknown) => (error instanceof GatewayError && error.code === 'NETWORK_UNAVAILABLE'
-  ? '连不上平台，请检查网络后再试。'
+  ? NETWORK_TEXT
   : '通知暂时读不到，下拉刷新再试。');
 
 Page({
@@ -26,9 +27,11 @@ Page({
     failed: '',
     view: 'unread' as InboxView,
     inbox: null as ReturnType<typeof presentInbox> | null,
-    /** Active alarms on the Site: a count, 100+ when not all were read, or a dash when they could not be read. */
+    /** Active alarms on the Site: a count, with + when not all were read, or a dash when they could not be read. */
     active: '',
     marking: false,
+    /** The inbox held more notifications than were read, so older ones on this Site may be missing. */
+    partial: false,
   },
 
   onShow() {
@@ -60,10 +63,11 @@ Page({
         this.setData({ loading: false, failed: notificationError(items.reason) });
         return;
       }
-      inbox = items.value;
+      inbox = items.value.items;
+      inboxComplete = items.value.complete;
       // The Site's midnight only places notifications on days and clocks; without it they list without times.
       todayStart = start.status === 'fulfilled' ? start.value : null;
-      const active = alarms.status === 'fulfilled' ? `${alarms.value.alarms.length}${alarms.value.complete ? '' : '+'}` : '—';
+      const active = alarms.status === 'fulfilled' ? countText(alarms.value) : '—';
       this.setData({ loading: false, noSite: false, failed: '', active });
       this.render();
     } catch (error) {
@@ -76,7 +80,7 @@ Page({
     const unread = presentInbox(inbox, site.id, todayStart, 'unread');
     // Opened the first time, the page shows what is unread, or everything when nothing is.
     const view = chosenView ?? (unread.unread > 0 ? 'unread' : 'all');
-    this.setData({ view, inbox: view === 'unread' ? unread : presentInbox(inbox, site.id, todayStart, 'all') });
+    this.setData({ view, inbox: view === 'unread' ? unread : presentInbox(inbox, site.id, todayStart, 'all'), partial: !inboxComplete });
     showUnread(this, unread.unread);
   },
 
@@ -85,17 +89,19 @@ Page({
     this.render();
   },
 
+  /** Marks the notification read, then opens its alarm, so coming back shows it read. */
   async open(event: WechatMiniprogram.TouchEvent<Record<string, never>, Record<string, never>, { id: string; alarm: string; unread: boolean }>) {
     const { id, alarm, unread } = event.currentTarget.dataset;
-    wx.navigateTo({ url: `/pages/alarm/index?id=${alarm}` });
-    if (!unread) return;
-    try {
-      const read = await markRead(gateway, id);
-      inbox = inbox.map((item) => (item.inboxItemId === id ? read : item));
-      this.render();
-    } catch {
-      // Still unread on the platform; it shows as unread on the next refresh.
+    if (unread) {
+      try {
+        const read = await markRead(gateway, id);
+        inbox = inbox.map((item) => (item.inboxItemId === id ? read : item));
+        this.render();
+      } catch {
+        wx.showToast({ title: '没能标为已读', icon: 'none' });
+      }
     }
+    wx.navigateTo({ url: `/pages/alarm/index?id=${alarm}` });
   },
 
   async markAllRead() {

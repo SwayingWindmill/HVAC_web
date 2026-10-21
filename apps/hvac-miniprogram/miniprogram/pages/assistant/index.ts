@@ -88,6 +88,8 @@ Page({
 
   /** `rereadSites` reads the Site list again (a pull-down refresh). */
   async load(rereadSites = false) {
+    // Taken first, so a question another page asked is asked now or not at all, never on a later visit.
+    const question = takePendingQuestion();
     try {
       const visible = await currentSite(rereadSites);
       if (visible === null) {
@@ -109,7 +111,6 @@ Page({
       }
       this.setData({ loading: false, noSite: false, siteName: visible.displayName });
       // Another page (an alarm's 问助手) asked to start a conversation with its question.
-      const question = takePendingQuestion();
       if (question !== null) {
         halt();
         chooseConversation(null);

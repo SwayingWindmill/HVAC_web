@@ -2,17 +2,15 @@
 // (active or cleared), and one alarm with what an operator needs to acknowledge it. Severity names,
 // order and durations are the web's (apps/hvac-web/src/features/alarms/alarm-presentation.tsx).
 
-import { siteDay, siteWhen } from './today';
+import { siteDateTime, siteDay, siteWhen } from './today';
 
 export type AlarmSeverity = 'CRITICAL' | 'MAJOR' | 'MINOR' | 'WARNING' | 'INFO';
 
 /** The Alarm owner's alarm, as the Gateway returns it (the fields the mini program reads). */
 export interface Alarm {
   readonly alarmId: string;
-  readonly tenantId: string;
   readonly siteId: string;
   readonly deviceId?: string;
-  readonly incidentCorrelationId: string;
   readonly title: string;
   readonly summary: string;
   readonly condition: 'ACTIVE' | 'CLEARED';
@@ -23,25 +21,19 @@ export interface Alarm {
   readonly firstOccurredAt: string;
   readonly lastOccurredAt: string;
   readonly clearedAt?: string | null;
-  readonly version: number;
 }
 
-/** One item of the person's notification inbox (the web's api/notifications.ts). */
+/** One item of the person's notification inbox (the web's api/notifications.ts; the fields the mini program reads). */
 export interface InboxItem {
   readonly inboxItemId: string;
-  readonly intentId: string;
-  readonly tenantId: string;
   readonly siteId: string;
-  readonly principalId: string;
   readonly alarmId: string;
-  readonly incidentCorrelationId: string;
   readonly sourceAction: 'CREATED' | 'SEVERITY_CHANGED' | 'ACKNOWLEDGED' | 'CLEARED';
   readonly severity: AlarmSeverity;
   readonly subject: string;
   readonly body: string;
   readonly status: 'UNREAD' | 'READ' | 'ACKED';
   readonly createdAt: string;
-  readonly readAt?: string;
 }
 
 const SEVERITY_ORDER: readonly AlarmSeverity[] = ['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INFO'];
@@ -55,13 +47,13 @@ export const SEVERITY_LABELS: Readonly<Record<AlarmSeverity, string>> = {
 };
 
 /** The shape each severity is drawn with (assets/severity/<level>.svg), so it reads without colour too. */
-const LEVEL: Readonly<Record<AlarmSeverity, string>> = {
-  CRITICAL: 'critical',
-  MAJOR: 'major',
-  MINOR: 'minor',
-  WARNING: 'warning',
-  INFO: 'info',
-};
+const level = (severity: AlarmSeverity) => severity.toLowerCase();
+
+/** A count of alarms read, with + when there were more than were read. */
+export const countText = (list: { readonly alarms: readonly unknown[]; readonly complete: boolean }) => `${list.alarms.length}${list.complete ? '' : '+'}`;
+
+/** Happening or cleared, and whether someone is on it: 正在发生 · 未确认. */
+const stateOf = (alarm: Alarm) => `${alarm.condition === 'ACTIVE' ? '正在发生' : '已恢复'} · ${alarm.acknowledgement == null ? '未确认' : '已确认'}`;
 
 /** A length of time in the units an operator reads: minutes, then hours and minutes, then days and hours. */
 function formatSpan(milliseconds: number): string {
@@ -84,14 +76,12 @@ export function presentAlarmRows(alarms: readonly Alarm[], filter: { readonly un
     .filter((alarm) => !filter.unacknowledgedOnly || alarm.acknowledgement == null)
     .sort(bySeverity)
     .map((alarm) => {
-      const moment = alarm.condition === 'ACTIVE' ? `${when(alarm.firstOccurredAt, todayStart)} 开始` : `${when(alarm.clearedAt ?? alarm.lastOccurredAt, todayStart)} 恢复`;
-      return {
-        alarmId: alarm.alarmId,
-        title: alarm.title,
-        level: LEVEL[alarm.currentSeverity],
-        severity: SEVERITY_LABELS[alarm.currentSeverity],
-        detail: `${moment.trim()} · ${alarm.acknowledgement ? '已确认' : '未确认'}`,
-      };
+      const acknowledged = alarm.acknowledgement == null ? '未确认' : '已确认';
+      // Without the Site's midnight there is no time to give, only the state.
+      const detail = todayStart === null ? stateOf(alarm)
+        : alarm.condition === 'ACTIVE' ? `${when(alarm.firstOccurredAt, todayStart)} 开始 · ${acknowledged}`
+        : `${when(alarm.clearedAt ?? alarm.lastOccurredAt, todayStart)} 恢复 · ${acknowledged}`;
+      return { alarmId: alarm.alarmId, title: alarm.title, level: level(alarm.currentSeverity), severity: SEVERITY_LABELS[alarm.currentSeverity], detail };
     });
 }
 
@@ -108,9 +98,9 @@ export function presentAlarm(alarm: Alarm, context: { readonly deviceName: strin
   ];
   const acknowledgement = alarm.acknowledgement ?? null;
   return {
-    level: LEVEL[alarm.currentSeverity],
+    level: level(alarm.currentSeverity),
     severity: SEVERITY_LABELS[alarm.currentSeverity],
-    state: `${activeNow ? '正在发生' : '已恢复'} · ${acknowledgement ? '已确认' : '未确认'}`,
+    state: stateOf(alarm),
     title: alarm.title,
     summary: alarm.summary,
     facts,
@@ -121,7 +111,18 @@ export function presentAlarm(alarm: Alarm, context: { readonly deviceName: strin
       comment: acknowledgement.comment ?? '',
     },
     canAcknowledge: acknowledgement === null,
+    acknowledgeNote: activeNow ? '确认表示有人在处理，告警不会因此消失；读数恢复后它自己恢复。' : '这条告警已经恢复了，确认只是记下有人看过。',
   };
+}
+
+/**
+ * What 问助手 asks, as the web's 解释 does: the alarm by its title, when it began in Site time, whether
+ * it has cleared, and its device, so the assistant reads the one meant among alarms of the same name.
+ */
+export function explainAlarmQuestion(alarm: Alarm, deviceName: string | null, todayStart: string | null): string {
+  const began = todayStart === null ? '' : `${siteDateTime(alarm.firstOccurredAt, todayStart)} 开始`;
+  const cleared = alarm.condition === 'CLEARED' ? (began ? '、已恢复' : '已恢复') : '';
+  return `${began}${cleared}的告警「${alarm.title}」${deviceName ? `（${deviceName}）` : ''}是怎么回事？`;
 }
 
 const ACTIONS: Readonly<Record<InboxItem['sourceAction'], string>> = {
@@ -151,7 +152,7 @@ export function presentInbox(items: readonly InboxItem[], siteId: string, todayS
       alarmId: item.alarmId,
       unread: item.status === 'UNREAD',
       recovered,
-      level: LEVEL[item.severity],
+      level: level(item.severity),
       tag: recovered ? ACTIONS.CLEARED : `${SEVERITY_LABELS[item.severity]} · ${ACTIONS[item.sourceAction]}`,
       time: todayStart === null ? '' : siteDay(item.createdAt, todayStart).time,
       subject: item.subject,

@@ -1,5 +1,5 @@
 import { activeAlarms, clearedAlarms } from '../../lib/alarm-api';
-import { presentAlarmRows, type Alarm } from '../../lib/alarms';
+import { countText, presentAlarmRows, type Alarm } from '../../lib/alarms';
 import { siteTodayStart } from '../../lib/energy';
 import { gateway } from '../../lib/platform';
 import { whileShown } from '../../lib/refresh';
@@ -24,7 +24,7 @@ Page({
     siteName: '',
     condition: 'ACTIVE' as Condition,
     unacknowledgedOnly: false,
-    counts: { ACTIVE: '', CLEARED: '' },
+    activeCount: '',
     rows: [] as ReturnType<typeof presentAlarmRows>,
     empty: '',
     /** The list could not hold every alarm. */
@@ -64,7 +64,7 @@ Page({
         loading: false,
         failed: '',
         siteName: site.displayName,
-        counts: { ACTIVE: `${active.alarms.length}${active.complete ? '' : '+'}`, CLEARED: `${cleared.alarms.length}${cleared.complete ? '' : '+'}` },
+        activeCount: countText(active),
       });
       this.render();
     } catch {
@@ -88,8 +88,8 @@ Page({
     this.render();
   },
 
-  toggleUnacknowledged(event: WechatMiniprogram.SwitchChange) {
-    this.setData({ unacknowledgedOnly: event.detail.value });
+  toggleUnacknowledged() {
+    this.setData({ unacknowledgedOnly: !this.data.unacknowledgedOnly });
     this.render();
   },
 

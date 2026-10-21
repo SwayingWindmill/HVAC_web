@@ -8,7 +8,7 @@ import { presentPlantNow } from '../../lib/run';
 import { compareWithYesterday, sameHoursWindows, summarize, todayStart } from '../../lib/today';
 import { monthToDate, savingsCard, type Measure, type SavingsTotals } from '../../lib/savings';
 import { presentOverview, type OverviewInputs, type Recommendation } from '../../lib/overview';
-import { listInbox } from '../../lib/alarm-api';
+import { activeAlarms, listInbox } from '../../lib/alarm-api';
 import { unreadOn } from '../../lib/alarms';
 import { selectTab, showUnread } from '../../lib/tab';
 
@@ -57,7 +57,8 @@ async function load(site: Site) {
   const [days, recommendation, alarms, plant] = await Promise.allSettled([
     recentDays(site, now),
     loadRecommendation(site),
-    gateway.get<{ data: unknown[]; meta: { hasMore: boolean } }>(`/api/v1/alarms?siteId=${site.id}&condition=ACTIVE&limit=100`),
+    // Read as the 通知 page reads them, so both show the same count.
+    activeAlarms(gateway, site.id),
     loadPlant(site),
   ]);
   // Where today began at the Site, as the Energy owner cut the day; it dates today and this month.
@@ -71,7 +72,7 @@ async function load(site: Site) {
     savings: settled<OverviewInputs['savings']>(savings, { status: 'error' }),
     recommendation: settled<OverviewInputs['recommendation']>(recommendation, { status: 'error' }),
     energy: settled<OverviewInputs['energy']>(energy, { status: 'error' }),
-    alarms: alarms.status === 'fulfilled' ? { status: 'ok', active: alarms.value.data.length, complete: !alarms.value.meta.hasMore } : { status: 'error' },
+    alarms: alarms.status === 'fulfilled' ? { status: 'ok', active: alarms.value.alarms.length, complete: alarms.value.complete } : { status: 'error' },
   };
   // The plant card stays off a Site without registered devices, and says so when it cannot be read.
   return { inputs, plant: plant.status === 'fulfilled' ? { failed: false, now: presentPlantNow(plant.value) } : { failed: true, now: null } };
@@ -128,7 +129,7 @@ Page({
       }
       const [{ inputs, plant }, inbox] = await Promise.all([load(site), listInbox(gateway).catch(() => null)]);
       // The 通知 tab shows how many of this Site's notifications are unread; a failed read leaves the last count.
-      if (inbox !== null) showUnread(this, unreadOn(inbox, site.id));
+      if (inbox !== null) showUnread(this, unreadOn(inbox.items, site.id));
       this.setData({ siteName: site.displayName, updatedAt: clock(new Date()), loading: false, noSite: false, failed: false, view: presentOverview(inputs), plant });
     } catch {
       // The Site list itself could not be read; signed-out failures already went to the sign-in page.
