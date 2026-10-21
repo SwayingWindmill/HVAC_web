@@ -15,16 +15,17 @@ func readAuthorizationRequest(ctx context.Context, tx pgx.Tx, challengeHash []by
 	var attemptCount int
 	var userID *string
 	var firstFactorAt *time.Time
+	var firstFactor *string
 	err := tx.QueryRow(ctx, `
 SELECT client_id, redirect_uri, state, nonce, code_challenge, scope, required_acr,
-       user_id::text, first_factor_at, expires_at, attempt_count
+       user_id::text, first_factor_at, first_factor, expires_at, attempt_count
 FROM identity.authorization_requests
 WHERE challenge_hash = $1
 FOR UPDATE
 `, challengeHash).Scan(
 		&request.ClientID, &request.RedirectURI, &request.State, &request.Nonce,
 		&request.CodeChallenge, &request.Scope, &request.RequiredACR,
-		&userID, &firstFactorAt, &request.ExpiresAt, &attemptCount,
+		&userID, &firstFactorAt, &firstFactor, &request.ExpiresAt, &attemptCount,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AuthorizationRequest{}, 0, ErrAuthorizationRequestExpired
@@ -36,7 +37,58 @@ FOR UPDATE
 		request.UserID = *userID
 	}
 	request.FirstFactorAt = firstFactorAt
+	if firstFactor != nil {
+		request.FirstFactor = *firstFactor
+	}
 	return request, attemptCount, nil
+}
+
+// finishFirstFactor carries on a sign-in whose first factor ('pwd' or 'wechat') the account just
+// passed: an account with one-time codes waits for its code, any other gets its code for /token.
+func finishFirstFactor(ctx context.Context, tx pgx.Tx, challengeHash []byte, request AuthorizationRequest, userID, username, firstFactor, reason string, now time.Time) (LoginResult, error) {
+	var mfaStatus string
+	mfaErr := tx.QueryRow(ctx, `SELECT status FROM identity.user_mfa WHERE user_id = $1::uuid`, userID).Scan(&mfaStatus)
+	if mfaErr != nil && !errors.Is(mfaErr, pgx.ErrNoRows) {
+		return LoginResult{}, fmt.Errorf("read identity MFA status: %w", mfaErr)
+	}
+	hasActiveMFA := mfaErr == nil && mfaStatus == "ACTIVE"
+	if request.RequiredACR == AssuranceMFA && !hasActiveMFA {
+		if err := insertSecurityAudit(ctx, tx, "STEP_UP_FAILED", userID, username, "FAILED", "MFA_NOT_ENROLLED", now, map[string]any{}); err != nil {
+			return LoginResult{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return LoginResult{}, fmt.Errorf("commit rejected step-up: %w", err)
+		}
+		return LoginResult{}, ErrMFAEnrollmentRequired
+	}
+	if hasActiveMFA {
+		if _, err := tx.Exec(ctx, `
+UPDATE identity.authorization_requests
+SET user_id = $2::uuid, first_factor_at = $3, first_factor = $4
+WHERE challenge_hash = $1
+`, challengeHash, userID, now, firstFactor); err != nil {
+			return LoginResult{}, fmt.Errorf("record identity first factor: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return LoginResult{}, fmt.Errorf("commit identity first factor: %w", err)
+		}
+		return LoginResult{MFARequired: true}, ErrMFARequired
+	}
+
+	grant, err := issueAuthorizationCode(ctx, tx, challengeHash, request, userID, AssuranceBasic, []string{firstFactor}, now)
+	if err != nil {
+		return LoginResult{}, err
+	}
+	if err := recordSuccessfulLogin(ctx, tx, userID, now); err != nil {
+		return LoginResult{}, err
+	}
+	if err := insertSecurityAudit(ctx, tx, "LOGIN_SUCCEEDED", userID, username, "SUCCEEDED", reason, now, map[string]any{"acr": AssuranceBasic}); err != nil {
+		return LoginResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return LoginResult{}, fmt.Errorf("commit successful login: %w", err)
+	}
+	return LoginResult{Grant: grant}, nil
 }
 
 func issueAuthorizationCode(ctx context.Context, tx pgx.Tx, challengeHash []byte, request AuthorizationRequest, userID, acr string, amr []string, authTime time.Time) (LoginGrant, error) {

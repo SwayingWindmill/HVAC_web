@@ -94,3 +94,36 @@ test('a change can carry its own headers, such as an idempotency key', async () 
   await gateway.post('/api/v1/alarms/alarm-1/ack', { comment: '已通知厂家' }, { 'Idempotency-Key': 'alarm-ack-0001' });
   assert.deepEqual([seen[0].header['Idempotency-Key'], seen[0].header['Content-Type'], seen[0].header.Authorization], ['alarm-ack-0001', 'application/json', 'Bearer session-1']);
 });
+
+test('WeChat one-tap sign-in sends the code from wx.login and explains in plain words why not', async () => {
+  const answers: Record<string, { statusCode: number; data: unknown }> = {
+    bound: { statusCode: 201, data: { sessionToken: 'wechat-session', expiresAt: '2026-10-21T08:00:00Z' } },
+    totp: { statusCode: 202, data: { step: 'totp', pendingLogin: 'pending-2' } },
+    stranger: { statusCode: 401, data: { code: 'WECHAT_NOT_BOUND' } },
+    disabled: { statusCode: 401, data: { code: 'ACCOUNT_UNAVAILABLE' } },
+    used: { statusCode: 400, data: { code: 'WECHAT_CODE_INVALID' } },
+    unlisted: { statusCode: 503, data: { code: 'WECHAT_NOT_CONFIGURED' } },
+  };
+  const expected: Record<string, unknown> = {
+    bound: { kind: 'signed-in' },
+    totp: { kind: 'totp', pendingLogin: 'pending-2' },
+    stranger: { kind: 'failed', message: '这个微信还没有绑定账号，先用账号密码登录，再到「我的」里绑定。' },
+    disabled: { kind: 'failed', message: '这个账号现在不能登录，请联系管理员。' },
+    used: { kind: 'failed', message: '微信这次没有确认成功，请再点一次。' },
+    unlisted: { kind: 'failed', message: '服务器还没有开通微信功能，请联系管理员。' },
+  };
+  for (const code of Object.keys(answers)) {
+    const session = memorySession(null);
+    const gateway = createGateway({ origin: 'https://hvac.example.test', chunked: noStreams, session, onSignedOut: () => {},
+      transport: async (request) => {
+        assert.equal(request.url, 'https://hvac.example.test/api/v1/auth/app/sessions/wechat');
+        assert.deepEqual(request.data, { code });
+        return answers[code];
+      } });
+    assert.deepEqual(await gateway.signInWithWeChat(async () => code), expected[code]);
+    assert.equal(session.get(), code === 'bound' ? 'wechat-session' : null);
+  }
+  // wx.login itself failing sends nothing.
+  const gateway = createGateway({ origin: 'https://hvac.example.test', chunked: noStreams, session: memorySession(null), onSignedOut: () => {}, transport: noRequests });
+  assert.deepEqual(await gateway.signInWithWeChat(async () => { throw new Error('login:fail'); }), { kind: 'failed', message: '微信这次没有确认成功，请再点一次。' });
+});

@@ -14,6 +14,7 @@ COPY infra/identity/postgres/init/003-identity-directory-least-privilege.sql /op
 COPY infra/identity/postgres/init/004-identity-auth-assurance.sql /opt/hvac/repo/infra/identity/postgres/init/004-identity-auth-assurance.sql
 COPY infra/identity/postgres/init/005-identity-user-administration.sql /opt/hvac/repo/infra/identity/postgres/init/005-identity-user-administration.sql
 COPY infra/identity/postgres/init/006-identity-wechat-bindings.sql /opt/hvac/repo/infra/identity/postgres/init/006-identity-wechat-bindings.sql
+COPY infra/identity/postgres/init/007-identity-first-factor.sql /opt/hvac/repo/infra/identity/postgres/init/007-identity-first-factor.sql
 COPY infra/durability/postgres/init/001-s0-durable.sql /opt/hvac/repo/infra/durability/postgres/init/001-s0-durable.sql
 COPY infra/durability/postgres/init/002-s0-session-idle.sql /opt/hvac/repo/infra/durability/postgres/init/002-s0-session-idle.sql
 COPY infra/durability/postgres/init/002-s1-registry-routing-audit.sql /opt/hvac/repo/infra/durability/postgres/init/002-s1-registry-routing-audit.sql

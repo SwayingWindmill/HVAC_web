@@ -202,14 +202,28 @@ func (server *Server) bindWeChat(writer http.ResponseWriter, request *http.Reque
 	if !decodeAppRequest(writer, request, 4<<10, &input) {
 		return
 	}
-	if server.wechat == nil {
-		writeWeChatNotConfigured(writer)
+	openID, ok := server.openID(writer, request, input.Code)
+	if !ok {
 		return
 	}
-	openID, err := server.wechat.OpenID(request.Context(), input.Code)
-	if err == nil {
-		err = server.store.BindWeChat(request.Context(), userID, server.wechat.AppID, openID, server.now())
+	err := server.store.BindWeChat(request.Context(), userID, server.wechat.AppID, openID, server.now())
+	switch {
+	case errors.Is(err, ErrWeChatAlreadyBound):
+		writeOAuthError(writer, http.StatusConflict, "wechat_already_bound", "this WeChat is bound to another account")
+	case err != nil:
+		writeOAuthError(writer, http.StatusServiceUnavailable, "temporarily_unavailable", "identity service is unavailable")
+	default:
+		writer.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// openID trades the code from wx.login for the person's OpenID, or answers why WeChat would not.
+func (server *Server) openID(writer http.ResponseWriter, request *http.Request, code string) (string, bool) {
+	if server.wechat == nil {
+		writeWeChatNotConfigured(writer)
+		return "", false
+	}
+	openID, err := server.wechat.OpenID(request.Context(), code)
 	var refusal WeChatRefusal
 	if errors.As(err, &refusal) {
 		server.log().Warn("wechat_refused", "error_code", "WECHAT_REFUSED", "wechat_errcode", refusal.Code)
@@ -219,13 +233,12 @@ func (server *Server) bindWeChat(writer http.ResponseWriter, request *http.Reque
 		writeOAuthError(writer, http.StatusBadRequest, "wechat_code_invalid", "the WeChat code is invalid or already used; ask for a new one")
 	case errors.Is(err, ErrWeChatNotSetUp):
 		writeOAuthError(writer, http.StatusServiceUnavailable, "wechat_not_configured", "WeChat refuses this server: check the AppID, the AppSecret and the IP allowlist")
-	case errors.Is(err, ErrWeChatAlreadyBound):
-		writeOAuthError(writer, http.StatusConflict, "wechat_already_bound", "this WeChat is bound to another account")
 	case err != nil:
-		writeOAuthError(writer, http.StatusServiceUnavailable, "temporarily_unavailable", "WeChat or the identity service is unavailable")
+		writeOAuthError(writer, http.StatusServiceUnavailable, "temporarily_unavailable", "WeChat is unavailable")
 	default:
-		writer.WriteHeader(http.StatusNoContent)
+		return openID, true
 	}
+	return "", false
 }
 
 func (server *Server) unbindWeChat(writer http.ResponseWriter, request *http.Request) {

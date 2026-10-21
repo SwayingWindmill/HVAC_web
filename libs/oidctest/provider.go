@@ -61,7 +61,9 @@ type authorizationCode struct {
 	CodeChallenge string
 	LoginHint     string
 	RequiredACR   string
-	CreatedAt     time.Time
+	// FirstFactor is "wechat" for a WeChat one-tap sign-in; a password otherwise.
+	FirstFactor string
+	CreatedAt   time.Time
 }
 
 type tokenClaims struct {
@@ -145,6 +147,8 @@ func (provider *Provider) ServeHTTP(writer http.ResponseWriter, request *http.Re
 		provider.appLogin(writer, request)
 	case "/app/mfa/totp":
 		provider.appTOTP(writer, request)
+	case "/app/wechat/login":
+		provider.appWeChatLogin(writer, request)
 	case "/app/wechat/binding":
 		provider.wechatBinding(writer, request)
 	default:
@@ -290,9 +294,13 @@ func (provider *Provider) token(writer http.ResponseWriter, request *http.Reques
 	if acr == "" {
 		acr = "urn:hvac:loa:1"
 	}
-	amr := []string{"pwd"}
+	firstFactor := "pwd"
+	if code.FirstFactor != "" {
+		firstFactor = code.FirstFactor
+	}
+	amr := []string{firstFactor}
 	if acr == "urn:hvac:loa:2" {
-		amr = []string{"pwd", "otp"}
+		amr = []string{firstFactor, "otp"}
 	}
 	authTime := now.Unix()
 
@@ -394,6 +402,50 @@ func (provider *Provider) appLogin(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]string{"code": provider.issueCode(pending), "state": input.State})
+}
+
+// appWeChatLogin mirrors identity-service's WeChat one-tap sign-in: the code "wechat-code-<openid>"
+// signs in the account bound to that WeChat ("wechat-code-used" is a code WeChat refuses). The
+// account "mfa-user" asks for the one-time code "123456"; "disabled-user" cannot sign in.
+func (provider *Provider) appWeChatLogin(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		ClientID, RedirectURI, State, Nonce, CodeChallenge, Code string
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.ClientID != provider.clientID || input.RedirectURI != provider.redirectURI || input.State == "" || input.Nonce == "" || input.CodeChallenge == "" {
+		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "client, redirect, state, nonce, and PKCE challenge are required")
+		return
+	}
+	openID, ok := strings.CutPrefix(input.Code, "wechat-code-")
+	if !ok || openID == "used" {
+		writeOAuthError(writer, http.StatusBadRequest, "wechat_code_invalid", "the WeChat code is invalid or already used")
+		return
+	}
+	provider.mu.Lock()
+	userID := ""
+	for user, bound := range provider.wechat {
+		if bound == openID {
+			userID = user
+		}
+	}
+	provider.mu.Unlock()
+	pending := authorizationCode{RedirectURI: input.RedirectURI, Nonce: input.Nonce, CodeChallenge: input.CodeChallenge, FirstFactor: "wechat", CreatedAt: provider.now()}
+	switch userID {
+	case "":
+		writeOAuthError(writer, http.StatusUnauthorized, "wechat_not_bound", "this WeChat is bound to no account")
+	case "disabled-user":
+		writeOAuthError(writer, http.StatusUnauthorized, "account_unavailable", "the account bound to this WeChat is disabled or locked")
+	case "mfa-user":
+		challenge := randomToken(24)
+		provider.mu.Lock()
+		provider.pendingTOTP[challenge] = pendingAppLogin{code: pending, state: input.State}
+		provider.mu.Unlock()
+		writeJSON(writer, http.StatusOK, map[string]string{"step": "totp", "challenge": challenge})
+	default:
+		if userID == "fixture-admin" {
+			pending.LoginHint = "admin"
+		}
+		writeJSON(writer, http.StatusOK, map[string]string{"code": provider.issueCode(pending), "state": input.State})
+	}
 }
 
 func (provider *Provider) appTOTP(writer http.ResponseWriter, request *http.Request) {

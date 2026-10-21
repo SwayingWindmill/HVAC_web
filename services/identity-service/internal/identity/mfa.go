@@ -334,7 +334,8 @@ WHERE user_id = $1::uuid
 `, request.UserID, counter, now); err != nil {
 		return LoginGrant{}, fmt.Errorf("record identity MFA success: %w", err)
 	}
-	grant, err := issueAuthorizationCode(ctx, tx, challengeHash, request, request.UserID, AssuranceMFA, []string{"pwd", "otp"}, now)
+	amr := []string{request.FirstFactor, "otp"}
+	grant, err := issueAuthorizationCode(ctx, tx, challengeHash, request, request.UserID, AssuranceMFA, amr, now)
 	if err != nil {
 		return LoginGrant{}, err
 	}
@@ -345,7 +346,7 @@ WHERE user_id = $1::uuid
 	if request.RequiredACR == AssuranceMFA {
 		eventType, reason = "STEP_UP_SUCCEEDED", "STEP_UP_AUTHENTICATED"
 	}
-	if err := insertSecurityAudit(ctx, tx, eventType, request.UserID, storedUsername, "SUCCEEDED", reason, now, map[string]any{"acr": AssuranceMFA, "amr": []string{"pwd", "otp"}}); err != nil {
+	if err := insertSecurityAudit(ctx, tx, eventType, request.UserID, storedUsername, "SUCCEEDED", reason, now, map[string]any{"acr": AssuranceMFA, "amr": amr}); err != nil {
 		return LoginGrant{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -17,18 +17,24 @@ import (
 
 // The WeChat mini program cannot follow the browser's sign-in redirects or keep its cookie, so it
 // signs in here (#664). The Gateway asks identity-service on the internal network to check the
-// password with the same client, redirect, state, nonce and PKCE challenge as the browser flow,
+// password, or the WeChat bound to the account (docs/specs/miniprogram-wechat.md section 四), with
+// the same client, redirect, state, nonce and PKCE challenge as the browser flow,
 // redeems the code it gets back exactly like the browser callback, and returns the Session for
 // the mini program to send in the Authorization header.
 
 const (
-	publicAppSessionsPath = "/api/v1/auth/app/sessions"
-	publicAppSessionTOTP  = "/api/v1/auth/app/sessions/totp"
+	publicAppSessionsPath  = "/api/v1/auth/app/sessions"
+	publicAppSessionTOTP   = "/api/v1/auth/app/sessions/totp"
+	publicAppSessionWeChat = "/api/v1/auth/app/sessions/wechat"
 )
 
 type appPasswordRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+type appWeChatRequest struct {
+	Code string `json:"code"`
 }
 
 type appTOTPRequest struct {
@@ -47,15 +53,26 @@ type appPendingResponse struct {
 	PendingLogin string `json:"pendingLogin"`
 }
 
-// identityAppLogin is identity-service's /app/login request, field for field.
-type identityAppLogin struct {
+// identityAppClient is what identity-service's /app/login and /app/wechat/login both carry for /token.
+type identityAppClient struct {
 	ClientID      string `json:"clientId"`
 	RedirectURI   string `json:"redirectUri"`
 	State         string `json:"state"`
 	Nonce         string `json:"nonce"`
 	CodeChallenge string `json:"codeChallenge"`
-	Username      string `json:"username"`
-	Password      string `json:"password"`
+}
+
+// identityAppLogin is identity-service's /app/login request, field for field.
+type identityAppLogin struct {
+	identityAppClient
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// identityAppWeChatLogin is identity-service's /app/wechat/login request: the code from wx.login.
+type identityAppWeChatLogin struct {
+	identityAppClient
+	Code string `json:"code"`
 }
 
 // identityAppTOTP is identity-service's /app/mfa/totp request.
@@ -90,14 +107,35 @@ func (h *handler) CreateAppSession(writer http.ResponseWriter, request *http.Req
 	if !decodeAppSignIn(writer, request, &input) {
 		return
 	}
+	h.startAppSession(writer, request, func(client identityAppClient) (string, any) {
+		return "/app/login", identityAppLogin{identityAppClient: client, Username: input.Username, Password: input.Password}
+	})
+}
+
+func (h *handler) CreateAppWeChatSession(writer http.ResponseWriter, request *http.Request) {
+	if !h.appSignInAvailable(writer, request) {
+		return
+	}
+	var input appWeChatRequest
+	if !decodeAppSignIn(writer, request, &input) {
+		return
+	}
+	h.startAppSession(writer, request, func(client identityAppClient) (string, any) {
+		return "/app/wechat/login", identityAppWeChatLogin{identityAppClient: client, Code: input.Code}
+	})
+}
+
+// startAppSession sends the first sign-in step, built for this sign-in's client, state and PKCE
+// challenge, and answers the Session or the one-time-code step.
+func (h *handler) startAppSession(writer http.ResponseWriter, request *http.Request, step func(identityAppClient) (string, any)) {
 	state := loginState{Verifier: randomURLToken(48), Nonce: randomURLToken(24), RequiredACR: authenticationACRBasic, CreatedAt: h.identity.now()}
 	stateKey := randomURLToken(24)
 	digest := sha256.Sum256([]byte(state.Verifier))
-	result, failure := h.identity.callIdentityApp(request, "/app/login", identityAppLogin{
+	path, body := step(identityAppClient{
 		ClientID: h.identity.config.OIDCClientID, RedirectURI: h.identity.config.OIDCRedirectURI,
 		State: stateKey, Nonce: state.Nonce, CodeChallenge: base64.RawURLEncoding.EncodeToString(digest[:]),
-		Username: input.Username, Password: input.Password,
 	})
+	result, failure := h.identity.callIdentityApp(request, path, body)
 	if failure != nil {
 		writeIdentityFailure(writer, request, *failure)
 		return
@@ -245,6 +283,13 @@ func (controller *identityController) callIdentityApp(request *http.Request, pat
 		return identityAppResult{}, &identityFailure{401, "TOTP_INVALID", "Sign-in failed", "The one-time code is wrong.", false}
 	case result.Error == "expired":
 		return identityAppResult{}, &appLoginExpired
+	case result.Error == "wechat_not_bound":
+		return identityAppResult{}, &identityFailure{401, "WECHAT_NOT_BOUND", "Sign-in failed", "This WeChat is bound to no account; sign in with the password and bind it in the mini program.", false}
+	case result.Error == "account_unavailable":
+		return identityAppResult{}, &identityFailure{401, "ACCOUNT_UNAVAILABLE", "Sign-in failed", "The account bound to this WeChat is disabled or locked.", false}
+	case result.Error == "wechat_code_invalid" || result.Error == "wechat_not_configured":
+		failure := weChatRefusal(reply)
+		return identityAppResult{}, &failure
 	default:
 		return identityAppResult{}, &identityFailure{503, "OIDC_PROVIDER_UNAVAILABLE", "Sign-in unavailable", "The identity service could not complete the sign-in.", true}
 	}

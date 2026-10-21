@@ -438,6 +438,65 @@
         }
       }
     },
+    "/api/v1/auth/app/sessions/wechat": {
+      "post": {
+        "operationId": "createAppWeChatSession",
+        "summary": "Sign the WeChat mini program in with the WeChat bound to the account (one-tap sign-in); the Session travels in the Authorization header",
+        "description": "Answers 401 WECHAT_NOT_BOUND for a WeChat bound to no account (there is no sign-up) and 401 ACCOUNT_UNAVAILABLE for a disabled or locked account.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WeChatCodeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Signed in. Send `Authorization: Bearer <sessionToken>` on later requests; no cookie, Origin or CSRF token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppSession"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The account has a one-time code: send it with pendingLogin to /api/v1/auth/app/sessions/totp.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppPendingSignIn"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/v1/auth/logout": {
       "post": {
         "operationId": "logout",
@@ -1033,7 +1092,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/WeChatBindRequest"
+                "$ref": "#/components/schemas/WeChatCodeRequest"
               }
             }
           }
@@ -3208,7 +3267,7 @@
           }
         }
       },
-      "WeChatBindRequest": {
+      "WeChatCodeRequest": {
         "type": "object",
         "additionalProperties": false,
         "required": [
