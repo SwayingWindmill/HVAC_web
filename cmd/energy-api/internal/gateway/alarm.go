@@ -927,3 +927,18 @@ func alarmVersionConflict() alarmFailure {
 func alarmUnavailable(detail string) alarmFailure {
 	return alarmFailure{status: http.StatusServiceUnavailable, code: "INTERNAL_ERROR", title: "Internal error", detail: detail, retryable: true}
 }
+
+func writeV212Error(writer http.ResponseWriter, request *http.Request, status int, code, message string, details any) {
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"error": map[string]any{
+			"code":    code,
+			"message": message,
+			"details": details,
+		},
+		"meta": map[string]any{
+			"requestId": requestIDFromContext(request.Context()),
+		},
+	})
+}

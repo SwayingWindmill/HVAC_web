@@ -52,7 +52,6 @@ type Config struct {
 	Now                            func() time.Time
 	AuthorizationStore             AuthorizationStore
 	PrincipalCapabilityResolver    PrincipalCapabilityResolver
-	TenantContextResolver          TenantContextResolver
 	AdminStore                     AdminStore
 	RegistryGrantSigner            crypto.Signer
 	RegistryGrantIssuer            string
@@ -101,7 +100,6 @@ type handler struct {
 	now                             func() time.Time
 	authorizationStore              AuthorizationStore
 	principalCapabilityResolver     PrincipalCapabilityResolver
-	tenantContextResolver           TenantContextResolver
 	adminStore                      AdminStore
 	registryGrantSigner             crypto.Signer
 	registryGrantIssuer             string
@@ -168,12 +166,6 @@ func NewHandler(config Config) http.Handler {
 	principalCapabilityResolver := config.PrincipalCapabilityResolver
 	if principalCapabilityResolver == nil {
 		principalCapabilityResolver = newPrincipalCapabilityResolver(store, now)
-	}
-	tenantContextResolver := config.TenantContextResolver
-	if tenantContextResolver == nil {
-		if resolver, ok := store.(TenantContextResolver); ok {
-			tenantContextResolver = resolver
-		}
 	}
 	grantIssuer := config.RegistryGrantIssuer
 	if grantIssuer == "" {
@@ -283,7 +275,6 @@ func NewHandler(config Config) http.Handler {
 		now:                             now,
 		authorizationStore:              store,
 		principalCapabilityResolver:     principalCapabilityResolver,
-		tenantContextResolver:           tenantContextResolver,
 		adminStore:                      config.AdminStore,
 		registryGrantSigner:             config.RegistryGrantSigner,
 		analyticsGrantAudience:          strings.TrimSpace(config.AnalyticsGrantAudience),
@@ -410,8 +401,6 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	switch request.URL.Path {
 	case CurrentPrincipalPath:
 		status = h.handleCurrentPrincipal(request.Context(), writer, claims, spiffeID)
-	case TenantContextsPath:
-		status = h.handleTenantContexts(request.Context(), writer, claims)
 	case AdminMutationPath, AdminMembersPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath:
 		status = h.handleAdminRoute(writer, request, claims)
 	case RegistryDecisionPath:
@@ -462,22 +451,6 @@ func (h *handler) handleRegistryGrantStatusRoute(writer http.ResponseWriter, req
 		return http.StatusServiceUnavailable
 	}
 	writeJSON(writer, http.StatusOK, status)
-	return http.StatusOK
-}
-
-func (h *handler) handleTenantContexts(ctx context.Context, writer http.ResponseWriter, claims identitycontext.DelegationClaims) int {
-	if h.tenantContextResolver == nil {
-		writeProblem(writer, http.StatusServiceUnavailable, "IAM_TENANT_CONTEXTS_UNAVAILABLE", "Tenant contexts are unavailable.")
-		return http.StatusServiceUnavailable
-	}
-	contexts, err := h.tenantContextResolver.ListTenantContexts(ctx, claims.SubjectIssuer, claims.Subject, h.now())
-	if err != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, "IAM_TENANT_CONTEXTS_UNAVAILABLE", "Tenant contexts are unavailable.")
-		return http.StatusServiceUnavailable
-	}
-	writeJSON(writer, http.StatusOK, struct {
-		Items []TenantContext `json:"items"`
-	}{Items: contexts})
 	return http.StatusOK
 }
 
@@ -700,8 +673,6 @@ func expectedInboundAction(path string) (string, bool) {
 	switch path {
 	case CurrentPrincipalPath:
 		return "principal:read", true
-	case TenantContextsPath:
-		return "tenant-context:list", true
 	case AdminMutationPath, AdminMembersPath:
 		return "iam:admin", true
 	case APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath:
@@ -740,7 +711,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, TenantContextsPath, AdminMutationPath, AdminMembersPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath, AlarmRecipientDecisionPath:
+	case CurrentPrincipalPath, AdminMutationPath, AdminMembersPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath, AlarmRecipientDecisionPath:
 		return path
 	default:
 		return "unmatched"

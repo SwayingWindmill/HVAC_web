@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
-	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
@@ -209,16 +208,6 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if contractOnlyRoute, matches := matchV212ContractOnlyRoute(request.URL.Path); matches {
-		// /api/v1/sites is shared by the active GET and shape-pending POST.
-		// Only the POST belongs to the contract-only boundary; GET must continue
-		// through the normal Registry owner path.
-		if contractOnlyRoute.template != "/api/v1/sites" || request.Method == contractOnlyRoute.method {
-			writeV212ContractOnly(writer, request, contractOnlyRoute)
-			return
-		}
-	}
-
 	if h.routeManager != nil {
 		resolved, ok := h.applyRouteOwnership(writer, request)
 		if !ok {
@@ -354,18 +343,6 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		h.GetCurrentPrincipal(writer, request)
-	case publicTenantContextsPath:
-		if request.Method != http.MethodGet {
-			writeMethodNotAllowedFor(writer, request, http.MethodGet)
-			return
-		}
-		h.ListTenantContexts(writer, request)
-	case publicTenantContextPath:
-		if request.Method != http.MethodPost {
-			writeMethodNotAllowedFor(writer, request, http.MethodPost)
-			return
-		}
-		h.SwitchTenantContext(writer, request)
 	case publicAuditSearchPath:
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowedFor(writer, request, http.MethodPost)
@@ -384,30 +361,6 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		h.CreateAppSession(writer, request)
 	case publicAppSessionTOTP:
 		h.CompleteAppSessionTOTP(writer, request)
-	case publicIAMAdminMutationPath:
-		if request.Method != http.MethodPost {
-			writeMethodNotAllowedFor(writer, request, http.MethodPost)
-			return
-		}
-		h.IAMAdmin(writer, request, iamAdminRoute{internalPath: internalIAMAdminMutationPath, action: "iam:admin", capability: identitycontext.CapabilityIAMAdmin})
-	case publicAPICredentialCreatePath:
-		if request.Method != http.MethodPost {
-			writeMethodNotAllowedFor(writer, request, http.MethodPost)
-			return
-		}
-		h.IAMAdmin(writer, request, iamAdminRoute{internalPath: internalAPICredentialCreatePath, action: "api-credential:manage", capability: identitycontext.CapabilityAPICredentialManage})
-	case publicAPICredentialRotatePath:
-		if request.Method != http.MethodPost {
-			writeMethodNotAllowedFor(writer, request, http.MethodPost)
-			return
-		}
-		h.IAMAdmin(writer, request, iamAdminRoute{internalPath: internalAPICredentialRotatePath, action: "api-credential:manage", capability: identitycontext.CapabilityAPICredentialManage})
-	case publicAPICredentialRevokePath:
-		if request.Method != http.MethodPost {
-			writeMethodNotAllowedFor(writer, request, http.MethodPost)
-			return
-		}
-		h.IAMAdmin(writer, request, iamAdminRoute{internalPath: internalAPICredentialRevokePath, action: "api-credential:manage", capability: identitycontext.CapabilityAPICredentialManage})
 	case platformapi.LogoutPath:
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowedFor(writer, request, http.MethodPost)
@@ -765,9 +718,6 @@ func safeLogPath(path string) string {
 	case platformapi.GetHealthPath, platformapi.GetVersionPath, platformapi.GetPlatformStatusPath, platformapi.BeginLoginPath, platformapi.CompleteLoginPath, platformapi.GetCurrentPrincipalPath, platformapi.LogoutPath, InternalOperationsToolAuthorizationPath:
 		return path
 	default:
-		if contractOnlyRoute, matches := matchV212ContractOnlyRoute(path); matches {
-			return contractOnlyRoute.template
-		}
 		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPatch} {
 			if registryRoute, _, matches := matchPublicRegistryRoute(method, path); matches {
 				return registryRoute.template
