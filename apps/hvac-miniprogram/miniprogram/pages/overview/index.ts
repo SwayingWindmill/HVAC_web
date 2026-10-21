@@ -73,10 +73,10 @@ async function load(site: Site) {
     savings: settled<OverviewInputs['savings']>(savings, { status: 'error' }),
     recommendation: settled<OverviewInputs['recommendation']>(recommendation, { status: 'error' }),
     energy: settled<OverviewInputs['energy']>(energy, { status: 'error' }),
-    alarms: alarms.status === 'fulfilled' ? { status: 'ok', active: alarms.value.alarms.length, complete: alarms.value.complete } : { status: 'error' },
+    alarms: alarms.status === 'fulfilled' ? { status: 'ok', active: alarms.value.alarms.length, complete: alarms.value.complete, waiting: waitingCount(alarms.value.alarms) } : { status: 'error' },
   };
   // The 通知 tab counts the alarms happening with no one on them; a failed read leaves the last count.
-  const waiting = alarms.status === 'fulfilled' ? waitingCount(alarms.value.alarms) : null;
+  const waiting = inputs.alarms.status === 'ok' ? inputs.alarms.waiting : null;
   // The plant card stays off a Site without registered devices, and says so when it cannot be read.
   return { inputs, waiting, plant: plant.status === 'fulfilled' ? { failed: false, now: presentPlantNow(plant.value) } : { failed: true, now: null } };
 }

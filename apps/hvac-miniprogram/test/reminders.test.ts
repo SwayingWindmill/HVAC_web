@@ -66,7 +66,7 @@ test('the daily summary row says how many mornings are left and for which Site',
   assert.deepEqual(await readDailyReminders(answering({ alarm: 0, daily: 2, dailySiteId: otherSite }), songyaxuan, siteName),
     { text: '现在发的是二号站点；点「多收一天」改成本站点', canAdd: true });
   assert.deepEqual(await readDailyReminders(answering({ alarm: 0, daily: 0 }), songyaxuan, siteName),
-    { text: '每天 8 点把昨天的用电、用冷和能效发到微信：点「多收一天」，在微信里允许', canAdd: true });
+    { text: '每天 8 点把昨天的用电、用冷和能效发到微信', canAdd: true });
   assert.deepEqual(await readDailyReminders(gatewayAnswering({ 'GET /api/v1/me/wechat': { statusCode: 200, data: { bound: false } } }), songyaxuan, siteName),
     { text: '先在「我的」里绑定微信，才能收每日结论', canAdd: false });
   assert.deepEqual(await readDailyReminders(gatewayAnswering({ ...bound, 'GET /api/v1/me/wechat/reminders': { statusCode: 503, data: { code: 'NOTIFICATION_UNAVAILABLE' } } }), songyaxuan, siteName),
