@@ -361,6 +361,8 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		h.CreateAppSession(writer, request)
 	case publicAppSessionTOTP:
 		h.CompleteAppSessionTOTP(writer, request)
+	case publicAppSessionWeChat:
+		h.CreateAppWeChatSession(writer, request)
 	case platformapi.LogoutPath:
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowedFor(writer, request, http.MethodPost)

@@ -138,6 +138,7 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /token", server.token)
 	mux.HandleFunc("POST /app/login", server.appLogin)
 	mux.HandleFunc("POST /app/mfa/totp", server.appTOTP)
+	mux.HandleFunc("POST /app/wechat/login", server.appWeChatLogin)
 	mux.HandleFunc("POST /app/wechat/binding", server.bindWeChat)
 	mux.HandleFunc("DELETE /app/wechat/binding", server.unbindWeChat)
 	mux.HandleFunc("GET /app/wechat/binding", server.readWeChatBinding)

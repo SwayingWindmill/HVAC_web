@@ -14,14 +14,19 @@ import (
 // lockout, disabled accounts and one-time codes are the ones /login and /mfa/totp apply.
 // nginx does not route /identity/app/, so only the Gateway reaches these.
 
-type appLoginRequest struct {
+// appClient is what every mini program sign-in carries for the browser flow's /token.
+type appClient struct {
 	ClientID      string `json:"clientId"`
 	RedirectURI   string `json:"redirectUri"`
 	State         string `json:"state"`
 	Nonce         string `json:"nonce"`
 	CodeChallenge string `json:"codeChallenge"`
-	Username      string `json:"username"`
-	Password      string `json:"password"`
+}
+
+type appLoginRequest struct {
+	appClient
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 type appTOTPRequest struct {
@@ -39,27 +44,47 @@ type appLoginResult struct {
 
 func (server *Server) appLogin(writer http.ResponseWriter, request *http.Request) {
 	var input appLoginRequest
-	if !decodeAppRequest(writer, request, 16<<10, &input) {
+	if !decodeAppRequest(writer, request, 16<<10, &input) || !server.validAppClient(writer, input.appClient) {
 		return
 	}
-	if input.ClientID != server.clientID || input.RedirectURI != server.redirectURI || input.State == "" || input.Nonce == "" || input.CodeChallenge == "" {
+	challenge, now, ok := server.startAppLogin(writer, request, input.appClient)
+	if !ok {
+		return
+	}
+	result, err := server.store.CompleteLogin(request.Context(), hashOpaque(challenge), input.Username, input.Password, now)
+	if errors.Is(err, ErrInvalidCredentials) {
+		writeOAuthError(writer, http.StatusUnauthorized, "invalid_credentials", "the username or password is wrong, or the account cannot sign in")
+		return
+	}
+	writeAppLoginResult(writer, challenge, result, err)
+}
+
+func (server *Server) validAppClient(writer http.ResponseWriter, client appClient) bool {
+	if client.ClientID != server.clientID || client.RedirectURI != server.redirectURI || client.State == "" || client.Nonce == "" || client.CodeChallenge == "" {
 		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "client, redirect, state, nonce, and PKCE challenge are required")
-		return
+		return false
 	}
+	return true
+}
+
+// startAppLogin keeps the sign-in's authorization request, as /authorize does for the browser.
+func (server *Server) startAppLogin(writer http.ResponseWriter, request *http.Request, client appClient) (string, time.Time, bool) {
 	now := server.now().UTC()
 	challenge := randomToken(32)
 	if err := server.store.CreateAuthorizationRequest(request.Context(), AuthorizationRequest{
 		ChallengeHash: hashOpaque(challenge), ClientID: server.clientID, RedirectURI: server.redirectURI,
-		State: input.State, Nonce: input.Nonce, CodeChallenge: input.CodeChallenge,
+		State: client.State, Nonce: client.Nonce, CodeChallenge: client.CodeChallenge,
 		Scope: "openid profile email", RequiredACR: AssuranceBasic, ExpiresAt: now.Add(10 * time.Minute),
 	}); err != nil {
 		writeOAuthError(writer, http.StatusServiceUnavailable, "temporarily_unavailable", "identity service is unavailable")
-		return
+		return "", time.Time{}, false
 	}
-	result, err := server.store.CompleteLogin(request.Context(), hashOpaque(challenge), input.Username, input.Password, now)
+	return challenge, now, true
+}
+
+// writeAppLoginResult answers a first factor the account passed: its code, or the one-time-code step.
+func writeAppLoginResult(writer http.ResponseWriter, challenge string, result LoginResult, err error) {
 	switch {
-	case errors.Is(err, ErrInvalidCredentials):
-		writeOAuthError(writer, http.StatusUnauthorized, "invalid_credentials", "the username or password is wrong, or the account cannot sign in")
 	case errors.Is(err, ErrMFARequired) && result.MFARequired:
 		writeJSON(writer, http.StatusOK, appLoginResult{Step: "totp", Challenge: challenge})
 	case err != nil:

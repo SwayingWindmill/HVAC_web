@@ -18,7 +18,8 @@
         "infra/identity/postgres/init/003-identity-directory-least-privilege.sql",
         "infra/identity/postgres/init/004-identity-auth-assurance.sql",
         "infra/identity/postgres/init/005-identity-user-administration.sql",
-        "infra/identity/postgres/init/006-identity-wechat-bindings.sql"
+        "infra/identity/postgres/init/006-identity-wechat-bindings.sql",
+        "infra/identity/postgres/init/007-identity-first-factor.sql"
       ]
     },
     {

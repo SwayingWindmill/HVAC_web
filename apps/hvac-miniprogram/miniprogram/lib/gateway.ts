@@ -50,10 +50,15 @@ export type SignInOutcome =
 /** What a page says when the phone cannot reach the platform. */
 export const NETWORK_TEXT = '连不上平台，请检查网络后再试。';
 
+const WECHAT_NOT_CONFIRMED = '微信这次没有确认成功，请再点一次。';
 const SIGN_IN_MESSAGES: Readonly<Record<string, string>> = {
   INVALID_CREDENTIALS: '账号或密码不对。连续输错 5 次，账号会锁 15 分钟。',
   TOTP_INVALID: '验证码不对，请看验证器里最新的 6 位数字。',
-  LOGIN_EXPIRED: '登录已过期，请重新输入账号和密码。',
+  LOGIN_EXPIRED: '登录已过期，请重新登录。',
+  WECHAT_NOT_BOUND: '这个微信还没有绑定账号，先用账号密码登录，再到「我的」里绑定。',
+  ACCOUNT_UNAVAILABLE: '这个账号现在不能登录，请联系管理员。',
+  WECHAT_CODE_INVALID: WECHAT_NOT_CONFIRMED,
+  WECHAT_NOT_CONFIGURED: '服务器还没有开通微信功能，请联系管理员。',
   NETWORK_UNAVAILABLE: NETWORK_TEXT,
 };
 const SIGN_IN_UNAVAILABLE = '暂时登录不了，请稍后再试。';
@@ -161,6 +166,16 @@ export function createGateway(options: {
     stream,
     signIn: (username: string, password: string) => signInStep('/api/v1/auth/app/sessions', { username, password }),
     completeTotp: (pendingLogin: string, code: string) => signInStep('/api/v1/auth/app/sessions/totp', { pendingLogin, code }),
+    /** WeChat one-tap sign-in for the account bound to this WeChat; `login` is wx.login, answering its one-time code. */
+    signInWithWeChat: async (login: () => Promise<string>): Promise<SignInOutcome> => {
+      let code: string;
+      try {
+        code = await login();
+      } catch {
+        return { kind: 'failed', message: WECHAT_NOT_CONFIRMED };
+      }
+      return signInStep('/api/v1/auth/app/sessions/wechat', { code });
+    },
   };
 }
 

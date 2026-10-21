@@ -841,10 +841,12 @@ func validAuthenticationAssurance(claims oidcClaims, requiredACR string, now tim
 	if authenticatedAt.After(now.Add(time.Minute)) {
 		return false
 	}
+	// The first factor is a password, or the WeChat bound to the account in the mini program (#664).
+	firstFactor := containsString(claims.AMR, "pwd") || containsString(claims.AMR, "wechat")
 	if claims.ACR == authenticationACRBasic {
-		return requiredACR != authenticationACRMFA && containsString(claims.AMR, "pwd")
+		return requiredACR != authenticationACRMFA && firstFactor
 	}
-	if claims.ACR != authenticationACRMFA || !containsString(claims.AMR, "pwd") || !containsString(claims.AMR, "otp") {
+	if claims.ACR != authenticationACRMFA || !firstFactor || !containsString(claims.AMR, "otp") {
 		return false
 	}
 	if requiredACR == authenticationACRMFA && now.Sub(authenticatedAt) > 10*time.Minute {

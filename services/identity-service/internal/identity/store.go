@@ -42,7 +42,9 @@ type AuthorizationRequest struct {
 	RequiredACR   string
 	UserID        string
 	FirstFactorAt *time.Time
-	ExpiresAt     time.Time
+	// FirstFactor is how a sign-in waiting for its one-time code was started: 'pwd' or 'wechat'.
+	FirstFactor string
+	ExpiresAt   time.Time
 }
 
 type LoginGrant struct {
@@ -296,49 +298,7 @@ WHERE id = $1::uuid
 		return LoginResult{}, ErrInvalidCredentials
 	}
 
-	var mfaStatus string
-	mfaErr := tx.QueryRow(ctx, `SELECT status FROM identity.user_mfa WHERE user_id = $1::uuid`, userID).Scan(&mfaStatus)
-	if mfaErr != nil && !errors.Is(mfaErr, pgx.ErrNoRows) {
-		return LoginResult{}, fmt.Errorf("read identity MFA status: %w", mfaErr)
-	}
-	hasActiveMFA := mfaErr == nil && mfaStatus == "ACTIVE"
-	if request.RequiredACR == AssuranceMFA && !hasActiveMFA {
-		if err := insertSecurityAudit(ctx, tx, "STEP_UP_FAILED", userID, storedUsername, "FAILED", "MFA_NOT_ENROLLED", now, map[string]any{}); err != nil {
-			return LoginResult{}, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return LoginResult{}, fmt.Errorf("commit rejected step-up: %w", err)
-		}
-		return LoginResult{}, ErrMFAEnrollmentRequired
-	}
-	if hasActiveMFA {
-		if _, err := tx.Exec(ctx, `
-UPDATE identity.authorization_requests
-SET user_id = $2::uuid, first_factor_at = $3
-WHERE challenge_hash = $1
-`, challengeHash, userID, now); err != nil {
-			return LoginResult{}, fmt.Errorf("record identity first factor: %w", err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return LoginResult{}, fmt.Errorf("commit identity first factor: %w", err)
-		}
-		return LoginResult{MFARequired: true}, ErrMFARequired
-	}
-
-	grant, err := issueAuthorizationCode(ctx, tx, challengeHash, request, userID, AssuranceBasic, []string{"pwd"}, now)
-	if err != nil {
-		return LoginResult{}, err
-	}
-	if err := recordSuccessfulLogin(ctx, tx, userID, now); err != nil {
-		return LoginResult{}, err
-	}
-	if err := insertSecurityAudit(ctx, tx, "LOGIN_SUCCEEDED", userID, storedUsername, "SUCCEEDED", "PASSWORD_AUTHENTICATED", now, map[string]any{"acr": AssuranceBasic}); err != nil {
-		return LoginResult{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return LoginResult{}, fmt.Errorf("commit successful login: %w", err)
-	}
-	return LoginResult{Grant: grant}, nil
+	return finishFirstFactor(ctx, tx, challengeHash, request, userID, storedUsername, "pwd", "PASSWORD_AUTHENTICATED", now)
 }
 
 func (store *Store) ExchangeAuthorizationCode(ctx context.Context, rawCode, verifier, clientID, redirectURI string, now time.Time) (TokenSubject, error) {

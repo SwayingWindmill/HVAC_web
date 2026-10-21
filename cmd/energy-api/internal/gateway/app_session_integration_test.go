@@ -174,3 +174,41 @@ func TestMiniProgramAsksForTheOneTimeCodeWhenTheAccountHasOne(t *testing.T) {
 	reused := postAppJSON(t, client, harness.gatewayURL+"/api/v1/auth/app/sessions/totp", map[string]string{"pendingLogin": pending.PendingLogin, "code": "123456"})
 	assertProblemCode(t, reused, http.StatusBadRequest, "LOGIN_EXPIRED")
 }
+
+// WeChat one-tap sign-in (#664, docs/specs/miniprogram-wechat.md section 四): the mini program
+// sends the code from wx.login and gets the Session of the account bound to that WeChat.
+func TestMiniProgramSignsInWithTheBoundWeChat(t *testing.T) {
+	harness := newAuthHarness(t)
+	client := &http.Client{Transport: harness.transport}
+	harness.provider.BindWeChatForTest("fixture-user", "openid-duty")
+	harness.provider.BindWeChatForTest("disabled-user", "openid-disabled")
+	harness.provider.BindWeChatForTest("mfa-user", "openid-mfa")
+	signIn := func(code string) *http.Response {
+		return postAppJSON(t, client, harness.gatewayURL+"/api/v1/auth/app/sessions/wechat", map[string]string{"code": code})
+	}
+
+	session := decodeAppSession(t, signIn("wechat-code-openid-duty"), http.StatusCreated)
+	principalResponse := bearer(t, client, http.MethodGet, harness.gatewayURL+platformapi.GetCurrentPrincipalPath, session.SessionToken)
+	if principalResponse.StatusCode != http.StatusOK {
+		t.Fatalf("principal status = %d", principalResponse.StatusCode)
+	}
+	var principal platformapi.CurrentPrincipalResponse
+	if err := json.NewDecoder(principalResponse.Body).Decode(&principal); err != nil {
+		t.Fatal(err)
+	}
+	if principal.Principal.Subject != "fixture-user" {
+		t.Fatalf("WeChat session principal = %#v", principal)
+	}
+
+	// No sign-up: a WeChat bound to no account signs nobody in.
+	assertProblemCode(t, signIn("wechat-code-openid-stranger"), http.StatusUnauthorized, "WECHAT_NOT_BOUND")
+	assertProblemCode(t, signIn("wechat-code-openid-disabled"), http.StatusUnauthorized, "ACCOUNT_UNAVAILABLE")
+	assertProblemCode(t, signIn("wechat-code-used"), http.StatusBadRequest, "WECHAT_CODE_INVALID")
+
+	// An account with one-time codes takes the same second step.
+	pending := decodeAppSession(t, signIn("wechat-code-openid-mfa"), http.StatusAccepted)
+	if pending.Step != "totp" || pending.PendingLogin == "" {
+		t.Fatalf("pending sign-in = %#v", pending)
+	}
+	decodeAppSession(t, postAppJSON(t, client, harness.gatewayURL+"/api/v1/auth/app/sessions/totp", map[string]string{"pendingLogin": pending.PendingLogin, "code": "123456"}), http.StatusCreated)
+}

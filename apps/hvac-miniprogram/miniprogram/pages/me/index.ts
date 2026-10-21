@@ -1,11 +1,7 @@
-import { gateway, requireSession, signOutLocally } from '../../lib/platform';
+import { gateway, requireSession, signOutLocally, weChatLogin } from '../../lib/platform';
 import { currentSite } from '../../lib/site';
 import { selectTab } from '../../lib/tab';
 import { bindWeChat, readWeChat, removeWeChat, type WeChatRow } from '../../lib/wechat';
-
-const weChatLogin = () => new Promise<string>((resolve, reject) => {
-  wx.login({ success: (result) => resolve(result.code), fail: reject });
-});
 
 interface Principal {
   readonly principal: { readonly displayName: string; readonly email: string };

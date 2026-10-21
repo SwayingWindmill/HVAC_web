@@ -6,6 +6,11 @@ import type { AskWeChat } from './reminders';
 
 export const GATEWAY_ORIGIN = 'https://hvac.swayingwindmill.online';
 const SESSION_KEY = 'hvac.session';
+
+/** wx.login: the one-time code the platform trades for this person's WeChat. */
+export const weChatLogin = () => new Promise<string>((resolve, reject) => {
+  wx.login({ success: (result) => resolve(result.code), fail: reject });
+});
 const REQUEST_TIMEOUT_MS = 15_000;
 
 const session: SessionStore = {

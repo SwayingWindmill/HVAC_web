@@ -25,7 +25,7 @@ import (
 const WeChatSendAction = "wechat:send"
 
 var (
-	ErrWeChatNotBound = errors.New("this account has no WeChat bound")
+	ErrWeChatNotBound = errors.New("no WeChat is bound to the account, or no account to the WeChat")
 	// ErrWeChatOutcomeUnknown is a message WeChat may have delivered without saying so clearly
 	// (no answer in time, or an answer that is not WeChat's): it must not be sent again.
 	ErrWeChatOutcomeUnknown = errors.New("WeChat may have sent the message")
