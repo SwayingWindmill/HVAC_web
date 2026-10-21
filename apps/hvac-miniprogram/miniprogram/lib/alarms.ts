@@ -1,8 +1,8 @@
-// What the 通知 tab shows: this Site's alarm news from the notification inbox, the alarms themselves
-// (active or cleared), and one alarm with what an operator needs to acknowledge it. Severity names,
+// What the 通知 tab shows: the Site's alarms themselves, what is happening and what cleared lately, and
+// one alarm with what an operator needs to acknowledge it. Severity names,
 // order and durations are the web's (apps/hvac-web/src/features/alarms/alarm-presentation.tsx).
 
-import { siteDateTime, siteDay, siteWhen } from './today';
+import { siteDateTime, siteWhen } from './today';
 
 export type AlarmSeverity = 'CRITICAL' | 'MAJOR' | 'MINOR' | 'WARNING' | 'INFO';
 
@@ -23,19 +23,6 @@ export interface Alarm {
   readonly clearedAt?: string | null;
 }
 
-/** One item of the person's notification inbox (the web's api/notifications.ts; the fields the mini program reads). */
-export interface InboxItem {
-  readonly inboxItemId: string;
-  readonly siteId: string;
-  readonly alarmId: string;
-  readonly sourceAction: 'CREATED' | 'SEVERITY_CHANGED' | 'ACKNOWLEDGED' | 'CLEARED';
-  readonly severity: AlarmSeverity;
-  readonly subject: string;
-  readonly body: string;
-  readonly status: 'UNREAD' | 'READ' | 'ACKED';
-  readonly createdAt: string;
-}
-
 const SEVERITY_ORDER: readonly AlarmSeverity[] = ['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INFO'];
 
 export const SEVERITY_LABELS: Readonly<Record<AlarmSeverity, string>> = {
@@ -48,9 +35,6 @@ export const SEVERITY_LABELS: Readonly<Record<AlarmSeverity, string>> = {
 
 /** The shape each severity is drawn with (assets/severity/<level>.svg), so it reads without colour too. */
 const level = (severity: AlarmSeverity) => severity.toLowerCase();
-
-/** A count of alarms read, with + when there were more than were read. */
-export const countText = (list: { readonly alarms: readonly unknown[]; readonly complete: boolean }) => `${list.alarms.length}${list.complete ? '' : '+'}`;
 
 /** Happening or cleared, and whether someone is on it: 正在发生 · 未确认. */
 const stateOf = (alarm: Alarm) => `${alarm.condition === 'ACTIVE' ? '正在发生' : '已恢复'} · ${alarm.acknowledgement == null ? '未确认' : '已确认'}`;
@@ -71,10 +55,10 @@ const bySeverity = (left: Alarm, right: Alarm) =>
   SEVERITY_ORDER.indexOf(left.currentSeverity) - SEVERITY_ORDER.indexOf(right.currentSeverity)
   || Date.parse(right.lastOccurredAt) - Date.parse(left.lastOccurredAt);
 
-export function presentAlarmRows(alarms: readonly Alarm[], filter: { readonly unacknowledgedOnly: boolean }, todayStart: string | null) {
-  return alarms
-    .filter((alarm) => !filter.unacknowledgedOnly || alarm.acknowledgement == null)
-    .sort(bySeverity)
+/** Rows of alarms, most severe first unless `bySeverity` is off (cleared ones keep the order given). */
+export function presentAlarmRows(alarms: readonly Alarm[], filter: { readonly unacknowledgedOnly: boolean }, todayStart: string | null, order = { bySeverity: true }) {
+  const shown = alarms.filter((alarm) => !filter.unacknowledgedOnly || alarm.acknowledgement == null);
+  return (order.bySeverity ? shown.sort(bySeverity) : shown)
     .map((alarm) => {
       const acknowledged = alarm.acknowledgement == null ? '未确认' : '已确认';
       // Without the Site's midnight there is no time to give, only the state.
@@ -125,49 +109,33 @@ export function explainAlarmQuestion(alarm: Alarm, deviceName: string | null, to
   return `${began}${cleared}的告警「${alarm.title}」${deviceName ? `（${deviceName}）` : ''}是怎么回事？`;
 }
 
-const ACTIONS: Readonly<Record<InboxItem['sourceAction'], string>> = {
-  CREATED: '新告警',
-  SEVERITY_CHANGED: '级别变了',
-  ACKNOWLEDGED: '有人确认了',
-  CLEARED: '已恢复',
-};
+// The latest cleared alarms the page lists; the web's 告警 page has them all.
+const RECENTLY_CLEARED = 20;
 
-export type InboxView = 'unread' | 'all';
+const EMPTY = {
+  active: { all: '现在没有正在发生的告警。', unacknowledged: '正在发生的告警都有人确认了。' },
+  cleared: { all: '最近没有恢复的告警。', unacknowledged: '最近恢复的告警都有人确认过。' },
+} as const;
 
-/** How many of this Site's notifications are unread (the 通知 tab's badge). */
-export const unreadOn = (items: readonly InboxItem[], siteId: string) =>
-  items.filter((item) => item.siteId === siteId && item.status === 'UNREAD').length;
+/** Happening with no one on them yet: what the 通知 tab's badge counts. */
+export const waitingCount = (active: readonly Alarm[]) => active.filter((alarm) => alarm.acknowledgement == null).length;
 
-/** This Site's notifications by Site day, newest first; times need the Site's midnight. */
-export function presentInbox(items: readonly InboxItem[], siteId: string, todayStart: string | null, view: InboxView) {
-  const here = items.filter((item) => item.siteId === siteId);
-  const shown = here
-    .filter((item) => view === 'all' || item.status === 'UNREAD')
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
-  const groups: { day: string; items: ReturnType<typeof entry>[] }[] = [];
-  function entry(item: InboxItem) {
-    const recovered = item.sourceAction === 'CLEARED';
-    return {
-      id: item.inboxItemId,
-      alarmId: item.alarmId,
-      unread: item.status === 'UNREAD',
-      recovered,
-      level: level(item.severity),
-      tag: recovered ? ACTIONS.CLEARED : `${SEVERITY_LABELS[item.severity]} · ${ACTIONS[item.sourceAction]}`,
-      time: todayStart === null ? '' : siteDay(item.createdAt, todayStart).time,
-      subject: item.subject,
-      body: item.body,
-    };
-  }
-  for (const item of shown) {
-    const day = todayStart === null ? '' : siteDay(item.createdAt, todayStart).day;
-    const last = groups[groups.length - 1];
-    if (last !== undefined && last.day === day) last.items.push(entry(item));
-    else groups.push({ day, items: [entry(item)] });
-  }
+/** The 通知 page: what is happening, most severe first, then what cleared lately, newest first. */
+export function presentFeed(active: readonly Alarm[], cleared: readonly Alarm[], todayStart: string | null, filter: { readonly unacknowledgedOnly: boolean }) {
+  const unacknowledged = waitingCount(active);
+  const which = filter.unacknowledgedOnly ? 'unacknowledged' : 'all';
+  const activeRows = presentAlarmRows(active, filter, todayStart);
+  const clearedRows = presentAlarmRows(
+    [...cleared].sort((left, right) => Date.parse(right.clearedAt ?? right.lastOccurredAt) - Date.parse(left.clearedAt ?? left.lastOccurredAt)).slice(0, RECENTLY_CLEARED),
+    filter,
+    todayStart,
+    { bySeverity: false },
+  );
   return {
-    unread: unreadOn(items, siteId),
-    groups,
-    empty: shown.length > 0 ? '' : view === 'unread' ? '没有未读的通知。' : '这个站点还没有通知。',
+    sections: [
+      { title: '正在发生', caption: active.length === 0 ? '' : `${active.length} 条 · ${unacknowledged === 0 ? '都有人确认了' : `${unacknowledged} 条没人确认`}`, rows: activeRows, empty: activeRows.length > 0 ? '' : EMPTY.active[which] },
+      { title: '最近恢复', caption: '', rows: clearedRows, empty: clearedRows.length > 0 ? '' : EMPTY.cleared[which] },
+    ],
+    needsAttention: unacknowledged,
   };
 }

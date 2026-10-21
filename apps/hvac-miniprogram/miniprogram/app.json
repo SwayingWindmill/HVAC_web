@@ -9,7 +9,6 @@
     "pages/sites/index",
     "pages/device/index",
     "pages/assistant-history/index",
-    "pages/alarms/index",
     "pages/alarm/index"
   ],
   "window": {

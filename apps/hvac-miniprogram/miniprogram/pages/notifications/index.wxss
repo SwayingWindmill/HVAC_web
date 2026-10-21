@@ -1,92 +1,56 @@
-.active {
-  border-top: 1px solid var(--border);
-}
-
-.active-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.active-mark {
-  width: 18px;
-  height: 18px;
-}
-
-.active-count {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--secondary-foreground);
-}
-
-.toolbar {
+.filter-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.toolbar .segments {
-  width: 180px;
-}
-
-.mark-all {
-  font-size: 14px;
-  color: var(--primary);
-}
-
-.mark-all-off {
-  color: var(--subtle-foreground);
-}
-
-.group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.group-day {
-  padding: 0 4px;
+.chip {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card);
   font-size: 13px;
-  font-weight: 600;
   color: var(--secondary-foreground);
 }
 
-.notice {
-  display: flex;
-  gap: 8px;
-  padding: 12px 16px 12px 8px;
-  border-top: 1px solid var(--divider);
+.chip-on {
+  border-color: var(--primary-line);
+  background: var(--primary-soft);
+  color: #2f46b3;
+  font-weight: 600;
 }
 
-.unread-slot {
-  flex-shrink: 0;
-  width: 8px;
-  padding-top: 7px;
-}
-
-.notice-main {
-  flex: 1;
-  min-width: 0;
+.section {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
 
-.notice:first-child {
-  border-top: 0;
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 4px 4px 0;
 }
 
-.notice-head {
+.section-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.alarm {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  min-height: 60px;
+  padding: 10px 12px;
 }
 
 /* Severity as a soft-tinted label led by its shape, as the web's SeverityBadge. */
 .severity-tag {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -108,32 +72,24 @@
   height: 8px;
 }
 
-.notice-time {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--muted-foreground);
+.alarm-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.unread-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 4px;
-  background: var(--primary);
-}
-
-.notice-subject {
+.alarm-title {
   font-size: 15px;
   line-height: 22px;
-  color: var(--secondary-foreground);
-}
-
-.notice-unread .notice-subject {
   font-weight: 600;
-  color: var(--foreground);
 }
 
-.notice-body {
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--muted-foreground);
+.chevron-right {
+  color: var(--subtle-foreground);
+}
+
+.legend {
+  padding: 0 4px;
 }

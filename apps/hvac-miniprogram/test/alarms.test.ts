@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { explainAlarmQuestion, presentAlarm, presentAlarmRows, presentInbox, type Alarm, type InboxItem } from '../miniprogram/lib/alarms.ts';
+import { explainAlarmQuestion, presentAlarm, presentAlarmRows, presentFeed, type Alarm } from '../miniprogram/lib/alarms.ts';
 
 // Recorded for the web's browser tests: a major alarm still active and unacknowledged (raised
 // 9/29 16:26 at the Site), and the same kind raised and cleared on 10/1 after someone acknowledged it.
 const [active, cleared] = JSON.parse(readFileSync(new URL('../../hvac-web/e2e/fixtures/alarms.json', import.meta.url), 'utf8')) as Alarm[];
-const SITE = '018f3e00-1000-7000-8000-000000000001';
 // 1 October at the Site (UTC+8) began at 16:00 UTC the day before; it is now 23:30 there.
 const todayStart = '2026-09-30T16:00:00.000Z';
 const now = new Date('2026-10-01T15:30:00Z');
@@ -51,29 +50,22 @@ test('an alarm opens on its severity and state, what happened, the facts an oper
   assert.deepEqual(presentAlarm(active, { deviceName: null, now, todayStart: null, me: ME }).facts.map((fact) => fact.label), ['已经持续', '报过']);
 });
 
-test('notifications list this Site\'s alarm news by day, newest first, with what happened and what is still unread', () => {
-  const item = (inboxItemId: string, alarm: Alarm, sourceAction: InboxItem['sourceAction'], createdAt: string, status: InboxItem['status'], siteId = SITE): InboxItem => ({
-    inboxItemId, siteId, alarmId: alarm.alarmId, sourceAction, severity: alarm.currentSeverity,
-    subject: alarm.title, body: sourceAction === 'CLEARED' ? '回水温度回到正常，这条告警自动恢复了。' : alarm.summary, status, createdAt,
-  });
-  const inbox = [
-    item('a', active, 'CREATED', active.firstOccurredAt, 'UNREAD'),
-    item('b', cleared, 'CREATED', cleared.firstOccurredAt, 'READ'),
-    item('c', cleared, 'CLEARED', cleared.clearedAt!, 'UNREAD'),
-    item('elsewhere', active, 'CREATED', active.firstOccurredAt, 'UNREAD', '018f3e00-1000-7000-8000-000000000002'),
-  ];
-  const all = presentInbox(inbox, SITE, todayStart, 'all');
-  assert.equal(all.unread, 2);
-  assert.deepEqual(all.groups.map((group) => [group.day, group.items.map((entry) => [entry.id, entry.tag, entry.time, entry.unread])]), [
-    ['今天', [['c', '已恢复', '17:23', true], ['b', '重要 · 新告警', '17:11', false]]],
-    ['9 月 29 日', [['a', '重要 · 新告警', '16:26', true]]],
+test('the 通知 page lists the alarms themselves: what is happening, most severe first, then what cleared lately', () => {
+  const minor = { ...active, alarmId: 'minor', currentSeverity: 'MINOR' as const, acknowledgement: { acknowledgedAt: '2026-10-01T10:00:00Z', acknowledgedBy: ME } };
+  const feed = presentFeed([minor, active], [cleared], todayStart, { unacknowledgedOnly: false });
+  assert.deepEqual(feed.sections.map((section) => [section.title, section.caption, section.rows.map((row) => row.alarmId), section.empty]), [
+    ['正在发生', '2 条 · 1 条没人确认', [active.alarmId, 'minor'], ''],
+    ['最近恢复', '', [cleared.alarmId], ''],
   ]);
-  assert.deepEqual(all.groups[0].items[0], {
-    id: 'c', alarmId: cleared.alarmId, unread: true, recovered: true, level: 'major', tag: '已恢复', time: '17:23',
-    subject: '冷冻水回水温度过低', body: '回水温度回到正常，这条告警自动恢复了。',
-  });
-  assert.deepEqual(presentInbox(inbox, SITE, todayStart, 'unread').groups.flatMap((group) => group.items.map((entry) => entry.id)), ['c', 'a']);
-  assert.equal(presentInbox(inbox.map((entry) => ({ ...entry, status: 'READ' as const })), SITE, todayStart, 'unread').empty, '没有未读的通知。');
+  // The tab's badge counts what needs someone: happening and not yet acknowledged.
+  assert.equal(feed.needsAttention, 1);
+
+  const unacknowledged = presentFeed([minor, active], [cleared], todayStart, { unacknowledgedOnly: true });
+  assert.deepEqual(unacknowledged.sections.map((section) => [section.rows.map((row) => row.alarmId), section.empty]), [
+    [[active.alarmId], ''],
+    [[], '最近恢复的告警都有人确认过。'],
+  ]);
+  assert.deepEqual(presentFeed([], [], todayStart, { unacknowledgedOnly: false }).sections.map((section) => section.empty), ['现在没有正在发生的告警。', '最近没有恢复的告警。']);
 });
 
 test('without the Site\'s midnight an alarm row says whether it is happening, never a bare 开始', () => {

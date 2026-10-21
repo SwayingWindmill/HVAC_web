@@ -155,8 +155,8 @@ export function createGateway(options: {
 
   return {
     get: <T>(path: string) => call<T>('GET', path),
-    /** A change; without `data` it sends no body. `headers` adds request headers such as an idempotency key. */
-    post: <T>(path: string, data?: unknown, headers?: Record<string, string>) => call<T>('POST', path, data, headers),
+    /** A change; `headers` adds request headers such as an idempotency key. */
+    post: <T>(path: string, data: unknown, headers?: Record<string, string>) => call<T>('POST', path, data, headers),
     stream,
     signIn: (username: string, password: string) => signInStep('/api/v1/auth/app/sessions', { username, password }),
     completeTotp: (pendingLogin: string, code: string) => signInStep('/api/v1/auth/app/sessions/totp', { pendingLogin, code }),

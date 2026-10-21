@@ -66,7 +66,7 @@
   position: relative;
 }
 
-/* Unread notifications on the 通知 tab. */
+/* Alarms happening with no one on them, on the 通知 tab. */
 .badge-count {
   position: absolute;
   top: 6px;

@@ -8,9 +8,9 @@ import { presentPlantNow } from '../../lib/run';
 import { compareWithYesterday, sameHoursWindows, summarize, todayStart } from '../../lib/today';
 import { monthToDate, savingsCard, type Measure, type SavingsTotals } from '../../lib/savings';
 import { presentOverview, type OverviewInputs, type Recommendation } from '../../lib/overview';
-import { activeAlarms, listInbox } from '../../lib/alarm-api';
-import { unreadOn } from '../../lib/alarms';
-import { selectTab, showUnread } from '../../lib/tab';
+import { activeAlarms } from '../../lib/alarm-api';
+import { waitingCount } from '../../lib/alarms';
+import { selectTab, showAttention } from '../../lib/tab';
 
 const refresher = whileShown(60_000);
 
@@ -74,8 +74,10 @@ async function load(site: Site) {
     energy: settled<OverviewInputs['energy']>(energy, { status: 'error' }),
     alarms: alarms.status === 'fulfilled' ? { status: 'ok', active: alarms.value.alarms.length, complete: alarms.value.complete } : { status: 'error' },
   };
+  // The 通知 tab counts the alarms happening with no one on them; a failed read leaves the last count.
+  const waiting = alarms.status === 'fulfilled' ? waitingCount(alarms.value.alarms) : null;
   // The plant card stays off a Site without registered devices, and says so when it cannot be read.
-  return { inputs, plant: plant.status === 'fulfilled' ? { failed: false, now: presentPlantNow(plant.value) } : { failed: true, now: null } };
+  return { inputs, waiting, plant: plant.status === 'fulfilled' ? { failed: false, now: presentPlantNow(plant.value) } : { failed: true, now: null } };
 }
 
 const clock = (now: Date) => `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -103,7 +105,7 @@ Page({
   onUnload: refresher.stop,
 
   openAlarms() {
-    wx.navigateTo({ url: '/pages/alarms/index' });
+    wx.switchTab({ url: '/pages/notifications/index' });
   },
 
   openRun() {
@@ -127,9 +129,8 @@ Page({
         this.setData({ loading: false, noSite: true });
         return;
       }
-      const [{ inputs, plant }, inbox] = await Promise.all([load(site), listInbox(gateway).catch(() => null)]);
-      // The 通知 tab shows how many of this Site's notifications are unread; a failed read leaves the last count.
-      if (inbox !== null) showUnread(this, unreadOn(inbox.items, site.id));
+      const { inputs, plant, waiting } = await load(site);
+      if (waiting !== null) showAttention(this, waiting);
       this.setData({ siteName: site.displayName, updatedAt: clock(new Date()), loading: false, noSite: false, failed: false, view: presentOverview(inputs), plant });
     } catch {
       // The Site list itself could not be read; signed-out failures already went to the sign-in page.

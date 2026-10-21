@@ -5,53 +5,31 @@
   <view wx:elif="{{noSite}}" class="state">这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。</view>
   <view wx:elif="{{failed}}" class="state">{{failed}}</view>
   <block wx:else>
-    <view class="card row active" bindtap="openAlarms" aria-role="link">
-      <view class="active-label">
-        <image class="active-mark" src="/assets/alert.svg" aria-hidden="true" />
-        <text>正在发生的告警</text>
-      </view>
-      <text class="active-count">{{active}} ›</text>
+    <view class="filter-bar">
+      <text class="caption">{{siteName}} · 告警</text>
+      <text class="chip {{unacknowledgedOnly ? 'chip-on' : ''}}" bindtap="toggleUnacknowledged" aria-role="checkbox" aria-checked="{{unacknowledgedOnly}}">只看没确认的</text>
     </view>
 
-    <view class="toolbar">
-      <view class="segments" aria-role="tablist" aria-label="通知">
-        <view class="segment {{view === 'unread' ? 'segment-on' : ''}}" data-view="unread" bindtap="chooseView" aria-role="tab" aria-selected="{{view === 'unread'}}">未读<text wx:if="{{inbox.unread}}" class="segment-count">{{inbox.unread}}</text></view>
-        <view class="segment {{view === 'all' ? 'segment-on' : ''}}" data-view="all" bindtap="chooseView" aria-role="tab" aria-selected="{{view === 'all'}}">全部</view>
+    <view wx:for="{{feed.sections}}" wx:for-item="section" wx:key="title" class="section">
+      <view class="section-head">
+        <text class="section-title">{{section.title}}</text>
+        <text wx:if="{{section.caption}}" class="caption">{{section.caption}}</text>
       </view>
-      <text wx:if="{{inbox.unread}}" class="mark-all {{marking ? 'mark-all-off' : ''}}" bindtap="markAllRead" aria-role="button">全部标为已读</text>
-    </view>
-
-    <view wx:if="{{inbox.empty}}" class="state">{{inbox.empty}}</view>
-    <view wx:for="{{inbox.groups}}" wx:for-item="group" wx:key="day" class="group">
-      <text wx:if="{{group.day}}" class="group-day">{{group.day}}</text>
-      <view class="card">
-        <view
-          wx:for="{{group.items}}"
-          wx:key="id"
-          class="notice {{item.unread ? 'notice-unread' : ''}}"
-          data-id="{{item.id}}"
-          data-alarm="{{item.alarmId}}"
-          data-unread="{{item.unread}}"
-          bindtap="open"
-          aria-role="link"
-          aria-label="{{item.unread ? '未读，' : ''}}{{item.tag}}，{{item.subject}}"
-        >
-          <view class="unread-slot" aria-hidden="true"><view wx:if="{{item.unread}}" class="unread-dot" /></view>
-          <view class="notice-main">
-            <view class="notice-head">
-              <text wx:if="{{item.recovered}}" class="badge badge-good">{{item.tag}}</text>
-              <view wx:else class="severity-tag severity-{{item.level}}">
-                <image class="severity-mark" src="/assets/severity/{{item.level}}.svg" aria-hidden="true" />
-                <text>{{item.tag}}</text>
-              </view>
-              <text class="notice-time mono">{{item.time}}</text>
-            </view>
-            <text class="notice-subject">{{item.subject}}</text>
-            <text wx:if="{{item.body}}" class="notice-body">{{item.body}}</text>
-          </view>
+      <view wx:if="{{section.empty}}" class="card card-pad caption">{{section.empty}}</view>
+      <view wx:for="{{section.rows}}" wx:key="alarmId" class="card alarm" data-id="{{item.alarmId}}" bindtap="open" aria-role="link" aria-label="{{item.severity}}，{{item.title}}，{{item.detail}}">
+        <view class="severity-tag severity-{{item.level}}">
+          <image class="severity-mark" src="/assets/severity/{{item.level}}.svg" aria-hidden="true" />
+          <text>{{item.severity}}</text>
         </view>
+        <view class="alarm-main">
+          <text class="alarm-title">{{item.title}}</text>
+          <text class="caption">{{item.detail}}</text>
+        </view>
+        <text class="chevron-right" aria-hidden="true">›</text>
       </view>
     </view>
-    <text wx:if="{{partial}}" class="caption">只读到你最近的 200 条通知，更早的请在网页「通知」里看。</text>
+
+    <text wx:if="{{partial}}" class="caption">正在发生的告警太多，这里只列出了前面的一部分，完整的在网页「告警」里看。</text>
+    <text class="caption legend">形状代表严重程度：◆ 紧急 ▲ 重要 ● 次要 ■ 预警 ○ 提示</text>
   </block>
 </view>

@@ -1,20 +1,8 @@
-// The notification inbox and the Alarm owner behind the Gateway, as the web calls them
-// (apps/hvac-web/src/api/notifications.ts, features/alarms/alarm-api.ts). Pages pass the platform Gateway.
+// The Alarm owner behind the Gateway, as the web calls it (apps/hvac-web/src/features/alarms/alarm-api.ts).
+// Pages pass the platform Gateway.
 
-import type { Alarm, InboxItem } from './alarms';
+import type { Alarm } from './alarms';
 import type { Gateway } from './gateway';
-
-// The inbox reads at most this many of the person's latest notifications, across all their Sites.
-const INBOX_LIMIT = 200;
-
-/** The person's latest notifications on all Sites; `complete` is false when older ones were left out. */
-export const listInbox = (gateway: Gateway) =>
-  gateway.get<{ data: InboxItem[] }>(`/api/v1/notifications/inbox?limit=${INBOX_LIMIT}`)
-    .then((response) => ({ items: response.data, complete: response.data.length < INBOX_LIMIT }));
-
-/** Marks one notification read; the platform takes no body for it. */
-export const markRead = (gateway: Gateway, inboxItemId: string) =>
-  gateway.post<{ data: InboxItem }>(`/api/v1/notifications/inbox/${encodeURIComponent(inboxItemId)}/read`).then((response) => response.data);
 
 interface AlarmPage {
   readonly data: Alarm[];
