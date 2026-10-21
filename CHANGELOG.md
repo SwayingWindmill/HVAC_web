@@ -16,7 +16,7 @@
 
 #### 变更
 
-- 平台接口说明里删掉了 9 个从来调不通的接口：切换租户（`/api/v1/auth/tenant-contexts`、`/api/v1/auth/tenant-context`）、通用的权限修改和 API 凭据（`/api/v1/iam/admin/mutations`、`/api/v1/iam/api-credentials/*`）、按点位读最新值和历史（`/api/v1/devices`、`/api/v1/telemetry/latest`、`/api/v1/telemetry/history`）。前 6 个在服务器上一直回 404，后 3 个一直回 503；网页和小程序都没用过它们，页面没有变化。以后接口说明里的每个网关接口都必须登记负责方，漏了检查会报错。
+- 平台接口说明里删掉了 9 个从来调不通的接口：切换租户（`/api/v1/auth/tenant-contexts`、`/api/v1/auth/tenant-context`）、通用的权限修改和 API 凭据（`/api/v1/iam/admin/mutations`、`/api/v1/iam/api-credentials/*`）、按点位读最新值和历史（`/api/v1/devices`、`/api/v1/telemetry/latest`、`/api/v1/telemetry/history`）。前 6 个在服务器上一直回 404，后 3 个一直回 503；网页和小程序都没用过它们，页面没有变化。以后接口说明里的每个网关接口都必须登记负责方，漏了检查会报错。（#672）
 - 小程序助手回答里的表格可以左右滑动：第一列（机组、日期这类）不再被挤成一个字一行，只有一列全是数字时才靠右，很长的说明在一定宽度内折行。（#664）
 - 小程序「运行 → 设备」里没有功率读数的水泵（比如松雅轩的冷冻水泵总管），右边显示流量，下面那行不再重复写流量。（#664）
 - 小程序五个标签页的标题改用微信自带的导航栏（和告警详情、设备页一样），不再在页面里自己画大标题；通知页「只看没确认的」换成微信的开关，助手结论卡片里各台机组的横条换成微信的进度条。（#664）
