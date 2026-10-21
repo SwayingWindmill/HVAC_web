@@ -77,3 +77,28 @@ export function compareWithYesterday(today: EnergySummary, yesterday: EnergySumm
     cost: relativeChange(today.costCNY, yesterday.costCNY),
   };
 }
+
+const pad2 = (value: number) => String(value).padStart(2, '0');
+
+/** Where a moment falls at the Site, counted from the Site's midnight rather than the phone's time zone. */
+function siteTime(at: number, start: string) {
+  const since = at - Date.parse(start);
+  const days = Math.floor(since / DAY_MS);
+  const seconds = Math.floor((since - days * DAY_MS) / 1000);
+  return { days, hours: pad2(Math.floor(seconds / 3600)), minutes: pad2(Math.floor(seconds / 60) % 60), seconds: pad2(seconds % 60) };
+}
+
+/** A reading's time as Site clock time to the second: 23:29:52, 昨天 23:29:52, 3 天前. */
+export function siteClock(at: string, start: string): string {
+  const { days, hours, minutes, seconds } = siteTime(Date.parse(at), start);
+  const clock = `${hours}:${minutes}:${seconds}`;
+  if (days === 0) return clock;
+  return days === -1 ? `昨天 ${clock}` : `${-days} 天前`;
+}
+
+/** When something happened at the Site, to the minute: 今天 14:20, 昨天 14:20, 3 天前. */
+export function siteMoment(at: number, start: string): string {
+  const { days, hours, minutes } = siteTime(at, start);
+  if (days === 0) return `今天 ${hours}:${minutes}`;
+  return days === -1 ? `昨天 ${hours}:${minutes}` : `${-days} 天前`;
+}

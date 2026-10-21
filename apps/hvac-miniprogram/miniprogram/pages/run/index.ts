@@ -3,7 +3,8 @@ import type { Plant } from '../../lib/plant';
 import { loadPlant } from '../../lib/plant-load';
 import { requireSession } from '../../lib/platform';
 import { whileShown } from '../../lib/refresh';
-import { hourlyCop, presentDevices, presentRealtime, siteClock, type DeviceFilter } from '../../lib/run';
+import { hourlyCop, presentDevices, presentRealtime, type DeviceFilter } from '../../lib/run';
+import { siteClock } from '../../lib/today';
 import { currentSite, type Site } from '../../lib/site';
 import { selectTab } from '../../lib/tab';
 
