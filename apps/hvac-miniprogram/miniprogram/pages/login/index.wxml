@@ -1,6 +1,6 @@
 <view class="login">
   <view class="brand">
-    <view class="mark" aria-hidden="true"></view>
+    <view class="mark" aria-hidden="true"><image class="mark-icon" src="/assets/brand-mark.svg" mode="aspectFit" /></view>
     <view class="name">泉来禾智慧能源</view>
     <view class="muted">冷站值班 · 用平台账号登录</view>
   </view>
@@ -16,7 +16,8 @@
       <text wx:if="{{error}}" class="error">{{error}}</text>
     </view>
     <button class="button-primary" disabled="{{busy}}" loading="{{busy && busyButton === 'password'}}" bindtap="signIn">{{busy && busyButton === 'password' ? '登录中…' : '登录'}}</button>
-    <button class="button-outline" disabled="{{busy}}" loading="{{busy && busyButton === 'wechat'}}" bindtap="signInWithWeChat">{{busy && busyButton === 'wechat' ? '登录中…' : '微信一键登录'}}</button>
+    <view class="or" aria-hidden="true"><view class="or-line" /><text>绑定过微信的</text><view class="or-line" /></view>
+    <button class="button-outline wechat" disabled="{{busy}}" loading="{{busy && busyButton === 'wechat'}}" bindtap="signInWithWeChat"><image wx:if="{{!(busy && busyButton === 'wechat')}}" class="wechat-icon" src="/assets/wechat.svg" mode="aspectFit" aria-hidden="true" />{{busy && busyButton === 'wechat' ? '登录中…' : '微信一键登录'}}</button>
     <text wx:if="{{weChatError}}" class="error">{{weChatError}}</text>
     <text wx:else class="caption">微信一键登录要先在「我的」里绑定微信</text>
   </view>
@@ -32,5 +33,5 @@
     <button class="button-outline" bindtap="startOver">换个账号</button>
   </view>
 
-  <view class="footer caption">没有账号？请管理员在网页的「系统管理 → 用户与角色」里添加。</view>
+  <view class="footer caption">没有账号？请管理员在网页「系统管理」里添加。</view>
 </view>
