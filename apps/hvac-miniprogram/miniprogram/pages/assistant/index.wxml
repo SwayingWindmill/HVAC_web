@@ -65,7 +65,21 @@
               </view>
             </block>
           </view>
-          <view wx:if="{{item.answer}}" class="answer"><rich-text nodes="{{item.answer}}" user-select /></view>
+          <view wx:if="{{item.answer}}" class="answer">
+            <block wx:for="{{item.answer}}" wx:for-item="block" wx:for-index="position" wx:key="position">
+              <rich-text wx:if="{{block.kind === 'text'}}" nodes="{{block.nodes}}" user-select />
+              <scroll-view wx:else class="table-scroll" scroll-x enhanced show-scrollbar="{{false}}">
+                <view class="table">
+                  <view class="table-row table-head">
+                    <view wx:for="{{block.head}}" wx:for-item="cell" wx:for-index="column" wx:key="column" class="table-cell cell-{{cell.align}} {{cell.wraps ? 'cell-wraps' : ''}}"><rich-text nodes="{{cell.nodes}}" /></view>
+                  </view>
+                  <view wx:for="{{block.rows}}" wx:for-item="row" wx:for-index="line" wx:key="line" class="table-row">
+                    <view wx:for="{{row}}" wx:for-item="cell" wx:for-index="column" wx:key="column" class="table-cell cell-{{cell.align}} {{cell.wraps ? 'cell-wraps' : ''}}"><rich-text nodes="{{cell.nodes}}" user-select /></view>
+                  </view>
+                </view>
+              </scroll-view>
+            </block>
+          </view>
           <finding-card wx:if="{{item.finding}}" finding="{{item.finding}}" />
           <view wx:if="{{item.question}}" class="question">
             <text class="caption">需要补充信息</text>

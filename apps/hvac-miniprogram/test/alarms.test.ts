@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { explainAlarmQuestion, presentAlarm, presentAlarmRows, presentFeed, type Alarm } from '../miniprogram/lib/alarms.ts';
+import { explainAlarmQuestion, presentAlarm, presentFeed, type Alarm } from '../miniprogram/lib/alarms.ts';
 
 // Recorded for the web's browser tests: a major alarm still active and unacknowledged (raised
 // 9/29 16:26 at the Site), and the same kind raised and cleared on 10/1 after someone acknowledged it.
@@ -11,15 +11,41 @@ const todayStart = '2026-09-30T16:00:00.000Z';
 const now = new Date('2026-10-01T15:30:00Z');
 const ME = '018f3e00-2000-7000-8000-000000000001';
 
-test('the alarm list puts the most severe first and says when each began or cleared and whether someone is on it', () => {
-  assert.deepEqual(presentAlarmRows([active], { unacknowledgedOnly: false }, todayStart), [{
-    alarmId: active.alarmId, title: '冷冻水回水温度过低', level: 'major', severity: '重要', detail: '9/29 16:26 开始 · 未确认',
-  }]);
-  assert.deepEqual(presentAlarmRows([cleared], { unacknowledgedOnly: false }, todayStart).map((row) => row.detail), ['今天 17:23 恢复 · 已确认']);
-  assert.deepEqual(presentAlarmRows([cleared, active], { unacknowledgedOnly: true }, todayStart).map((row) => row.alarmId), [active.alarmId]);
+test('通知 lists what is happening in one card, most severe first, each with when it began and a status to scan down', () => {
   const info = { ...active, alarmId: 'info', currentSeverity: 'INFO' as const, lastOccurredAt: '2026-10-01T15:00:00Z' };
-  const critical = { ...active, alarmId: 'critical', currentSeverity: 'CRITICAL' as const };
-  assert.deepEqual(presentAlarmRows([info, active, critical], { unacknowledgedOnly: false }, todayStart).map((row) => row.alarmId), ['critical', active.alarmId, 'info']);
+  const critical = { ...active, alarmId: 'critical', currentSeverity: 'CRITICAL' as const, acknowledgement: { acknowledgedAt: '2026-10-01T10:00:00Z', acknowledgedBy: ME } };
+  const [happening] = presentFeed([info, active, critical], [], todayStart, { unacknowledgedOnly: false }).sections;
+  assert.deepEqual([happening.title, happening.count, happening.caption], ['正在发生', '3', '2 条没人确认']);
+  assert.deepEqual(happening.groups.map((group) => group.day), ['']);
+  assert.deepEqual(happening.groups[0].rows.map((row) => row.alarmId), ['critical', active.alarmId, 'info']);
+  assert.deepEqual(happening.groups[0].rows[1], {
+    alarmId: active.alarmId, title: '冷冻水回水温度过低', level: 'major', severity: '重要', when: '9/29 16:26 开始',
+    status: { label: '未确认', waiting: true },
+  });
+  assert.deepEqual(happening.groups[0].rows[0].status, { label: '已确认', waiting: false });
+});
+
+test('what cleared lately is grouped by Site day, newest first, each with the time it cleared', () => {
+  const earlier = { ...cleared, alarmId: 'earlier', clearedAt: '2026-09-29T02:00:00Z', acknowledgement: null };
+  const [, recovered] = presentFeed([], [earlier, cleared], todayStart, { unacknowledgedOnly: false }).sections;
+  assert.deepEqual([recovered.title, recovered.count, recovered.caption, recovered.empty], ['最近恢复', '', '', '']);
+  assert.deepEqual(recovered.groups.map((group) => [group.day, group.rows.map((row) => [row.alarmId, row.when, row.status.label])]), [
+    ['今天', [[cleared.alarmId, '17:23 恢复', '已确认']]],
+    ['9 月 29 日', [['earlier', '10:00 恢复', '未确认']]],
+  ]);
+});
+
+test('only the unacknowledged ones on request; the badge counts what is happening with no one on it; empty sections say so', () => {
+  const feed = presentFeed([active], [cleared], todayStart, { unacknowledgedOnly: true });
+  assert.equal(feed.needsAttention, 1);
+  assert.deepEqual(feed.sections.map((section) => [section.groups.flatMap((group) => group.rows.map((row) => row.alarmId)), section.empty]), [
+    [[active.alarmId], ''],
+    [[], '最近恢复的告警都有人确认过。'],
+  ]);
+  assert.deepEqual(presentFeed([], [], todayStart, { unacknowledgedOnly: false }).sections.map((section) => [section.count, section.empty]), [['0', '现在没有正在发生的告警。'], ['', '最近没有恢复的告警。']]);
+  // Without the Site's midnight there is no time to give and no day to group by.
+  const timeless = presentFeed([active], [cleared], null, { unacknowledgedOnly: false }).sections;
+  assert.deepEqual(timeless.map((section) => section.groups.map((group) => [group.day, group.rows.map((row) => row.when)])), [[['', ['']]], [['', ['']]]]);
 });
 
 test('an alarm opens on its severity and state, what happened, the facts an operator needs, and who acknowledged it', () => {
@@ -48,29 +74,6 @@ test('an alarm opens on its severity and state, what happened, the facts an oper
   assert.equal(done.canAcknowledge, false);
   // Without the Site's midnight, times are left out rather than read in the phone's time zone.
   assert.deepEqual(presentAlarm(active, { deviceName: null, now, todayStart: null, me: ME }).facts.map((fact) => fact.label), ['已经持续', '报过']);
-});
-
-test('the 通知 page lists the alarms themselves: what is happening, most severe first, then what cleared lately', () => {
-  const minor = { ...active, alarmId: 'minor', currentSeverity: 'MINOR' as const, acknowledgement: { acknowledgedAt: '2026-10-01T10:00:00Z', acknowledgedBy: ME } };
-  const feed = presentFeed([minor, active], [cleared], todayStart, { unacknowledgedOnly: false });
-  assert.deepEqual(feed.sections.map((section) => [section.title, section.caption, section.rows.map((row) => row.alarmId), section.empty]), [
-    ['正在发生', '2 条 · 1 条没人确认', [active.alarmId, 'minor'], ''],
-    ['最近恢复', '', [cleared.alarmId], ''],
-  ]);
-  // The tab's badge counts what needs someone: happening and not yet acknowledged.
-  assert.equal(feed.needsAttention, 1);
-
-  const unacknowledged = presentFeed([minor, active], [cleared], todayStart, { unacknowledgedOnly: true });
-  assert.deepEqual(unacknowledged.sections.map((section) => [section.rows.map((row) => row.alarmId), section.empty]), [
-    [[active.alarmId], ''],
-    [[], '最近恢复的告警都有人确认过。'],
-  ]);
-  assert.deepEqual(presentFeed([], [], todayStart, { unacknowledgedOnly: false }).sections.map((section) => section.empty), ['现在没有正在发生的告警。', '最近没有恢复的告警。']);
-});
-
-test('without the Site\'s midnight an alarm row says whether it is happening, never a bare 开始', () => {
-  // Equally severe, the more recent first: the one cleared on 10/1, then the one active since 9/29.
-  assert.deepEqual(presentAlarmRows([active, cleared], { unacknowledgedOnly: false }, null).map((row) => row.detail), ['已恢复 · 已确认', '正在发生 · 未确认']);
 });
 
 test('问助手 asks about the alarm as the web\'s 解释 does: when it began at the Site, whether it cleared, and its device', () => {

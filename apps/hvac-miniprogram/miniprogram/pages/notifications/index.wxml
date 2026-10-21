@@ -12,20 +12,22 @@
 
     <view wx:for="{{feed.sections}}" wx:for-item="section" wx:key="title" class="section">
       <view class="section-head">
-        <text class="section-title">{{section.title}}</text>
+        <text class="section-title">{{section.title}}<text wx:if="{{section.count}}" class="section-count">{{section.count}}</text></text>
         <text wx:if="{{section.caption}}" class="caption">{{section.caption}}</text>
       </view>
       <view wx:if="{{section.empty}}" class="card card-pad caption">{{section.empty}}</view>
-      <view wx:for="{{section.rows}}" wx:key="alarmId" class="card alarm" data-id="{{item.alarmId}}" bindtap="open" aria-role="link" aria-label="{{item.severity}}，{{item.title}}，{{item.detail}}">
-        <view class="severity-tag severity-{{item.level}}">
-          <image class="severity-mark" src="/assets/severity/{{item.level}}.svg" aria-hidden="true" />
-          <text>{{item.severity}}</text>
-        </view>
-        <view class="alarm-main">
-          <text class="alarm-title">{{item.title}}</text>
-          <text class="caption">{{item.detail}}</text>
-        </view>
-        <text class="chevron-right" aria-hidden="true">›</text>
+      <view wx:else class="card">
+        <block wx:for="{{section.groups}}" wx:for-item="group" wx:key="day">
+          <text wx:if="{{group.day}}" class="day">{{group.day}}</text>
+          <view wx:for="{{group.rows}}" wx:key="alarmId" class="alarm" data-id="{{item.alarmId}}" bindtap="open" aria-role="link" aria-label="{{item.severity}}，{{item.title}}，{{item.when}}，{{item.status.label}}">
+            <image class="severity-mark" src="/assets/severity/{{item.level}}.svg" aria-hidden="true" />
+            <view class="alarm-main">
+              <text class="alarm-title">{{item.title}}</text>
+              <text class="caption">{{item.severity}}{{item.when ? ' · ' + item.when : ''}}</text>
+            </view>
+            <text class="status {{item.status.waiting ? 'status-waiting' : ''}}">{{item.status.label}}</text>
+          </view>
+        </block>
       </view>
     </view>
 

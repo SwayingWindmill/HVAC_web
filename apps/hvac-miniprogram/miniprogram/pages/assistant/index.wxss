@@ -221,6 +221,48 @@
   line-height: 24px;
 }
 
+/* An answer's table: its own row that scrolls sideways when it is wider than the phone. */
+.table-scroll {
+  width: 100%;
+  margin: 4px 0 12px;
+}
+
+.table {
+  display: table;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.table-row {
+  display: table-row;
+}
+
+.table-cell {
+  display: table-cell;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--divider);
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.table-head .table-cell {
+  background: var(--muted);
+  border-bottom-color: var(--border);
+  color: var(--secondary-foreground);
+  font-weight: 600;
+}
+
+.cell-left { text-align: left; }
+.cell-right { text-align: right; }
+
+/* A long description wraps within a set width instead of stretching the table. */
+.cell-wraps {
+  width: 12em;
+  white-space: normal;
+}
+
 .question {
   display: flex;
   flex-direction: column;

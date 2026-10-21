@@ -2,7 +2,7 @@
 // one alarm with what an operator needs to acknowledge it. Severity names,
 // order and durations are the web's (apps/hvac-web/src/features/alarms/alarm-presentation.tsx).
 
-import { siteDateTime, siteWhen } from './today';
+import { siteDateTime, siteDay, siteWhen } from './today';
 
 export type AlarmSeverity = 'CRITICAL' | 'MAJOR' | 'MINOR' | 'WARNING' | 'INFO';
 
@@ -55,20 +55,6 @@ const bySeverity = (left: Alarm, right: Alarm) =>
   SEVERITY_ORDER.indexOf(left.currentSeverity) - SEVERITY_ORDER.indexOf(right.currentSeverity)
   || Date.parse(right.lastOccurredAt) - Date.parse(left.lastOccurredAt);
 
-/** Rows of alarms, most severe first unless `bySeverity` is off (cleared ones keep the order given). */
-export function presentAlarmRows(alarms: readonly Alarm[], filter: { readonly unacknowledgedOnly: boolean }, todayStart: string | null, order = { bySeverity: true }) {
-  const shown = alarms.filter((alarm) => !filter.unacknowledgedOnly || alarm.acknowledgement == null);
-  return (order.bySeverity ? shown.sort(bySeverity) : shown)
-    .map((alarm) => {
-      const acknowledged = alarm.acknowledgement == null ? '未确认' : '已确认';
-      // Without the Site's midnight there is no time to give, only the state.
-      const detail = todayStart === null ? stateOf(alarm)
-        : alarm.condition === 'ACTIVE' ? `${when(alarm.firstOccurredAt, todayStart)} 开始 · ${acknowledged}`
-        : `${when(alarm.clearedAt ?? alarm.lastOccurredAt, todayStart)} 恢复 · ${acknowledged}`;
-      return { alarmId: alarm.alarmId, title: alarm.title, level: level(alarm.currentSeverity), severity: SEVERITY_LABELS[alarm.currentSeverity], detail };
-    });
-}
-
 export function presentAlarm(alarm: Alarm, context: { readonly deviceName: string | null; readonly now: Date; readonly todayStart: string | null; readonly me: string }) {
   const { deviceName, now, todayStart, me } = context;
   const activeNow = alarm.condition === 'ACTIVE';
@@ -120,22 +106,56 @@ const EMPTY = {
 /** Happening with no one on them yet: what the 通知 tab's badge counts. */
 export const waitingCount = (active: readonly Alarm[]) => active.filter((alarm) => alarm.acknowledgement == null).length;
 
-/** The 通知 page: what is happening, most severe first, then what cleared lately, newest first. */
+/** One alarm on the 通知 page: its severity and title, when it began or cleared, and whether someone is on it. */
+function row(alarm: Alarm, when: string) {
+  const waiting = alarm.acknowledgement == null;
+  return {
+    alarmId: alarm.alarmId,
+    title: alarm.title,
+    level: level(alarm.currentSeverity),
+    severity: SEVERITY_LABELS[alarm.currentSeverity],
+    when,
+    status: { label: waiting ? '未确认' : '已确认', waiting },
+  };
+}
+
+type Row = ReturnType<typeof row>;
+
+const clearedAt = (alarm: Alarm) => alarm.clearedAt ?? alarm.lastOccurredAt;
+
+/**
+ * The 通知 page: what is happening, in one list, most severe first; then what cleared lately, by Site
+ * day, newest first. Without the Site's midnight there are no times and no days to group by.
+ */
 export function presentFeed(active: readonly Alarm[], cleared: readonly Alarm[], todayStart: string | null, filter: { readonly unacknowledgedOnly: boolean }) {
-  const unacknowledged = waitingCount(active);
+  const keeps = (alarm: Alarm) => !filter.unacknowledgedOnly || alarm.acknowledgement == null;
   const which = filter.unacknowledgedOnly ? 'unacknowledged' : 'all';
-  const activeRows = presentAlarmRows(active, filter, todayStart);
-  const clearedRows = presentAlarmRows(
-    [...cleared].sort((left, right) => Date.parse(right.clearedAt ?? right.lastOccurredAt) - Date.parse(left.clearedAt ?? left.lastOccurredAt)).slice(0, RECENTLY_CLEARED),
-    filter,
-    todayStart,
-    { bySeverity: false },
-  );
+  const waiting = waitingCount(active);
+
+  const happening = active.filter(keeps).sort(bySeverity)
+    .map((alarm) => row(alarm, todayStart === null ? '' : `${siteWhen(alarm.firstOccurredAt, todayStart)} 开始`));
+
+  const days: { day: string; rows: Row[] }[] = [];
+  const latest = [...cleared].sort((left, right) => Date.parse(clearedAt(right)) - Date.parse(clearedAt(left))).slice(0, RECENTLY_CLEARED);
+  for (const alarm of latest.filter(keeps)) {
+    const at = todayStart === null ? null : siteDay(clearedAt(alarm), todayStart);
+    const entry = row(alarm, at === null ? '' : `${at.time} 恢复`);
+    const last = days[days.length - 1];
+    if (last !== undefined && last.day === (at?.day ?? '')) last.rows.push(entry);
+    else days.push({ day: at?.day ?? '', rows: [entry] });
+  }
+
   return {
     sections: [
-      { title: '正在发生', caption: active.length === 0 ? '' : `${active.length} 条 · ${unacknowledged === 0 ? '都有人确认了' : `${unacknowledged} 条没人确认`}`, rows: activeRows, empty: activeRows.length > 0 ? '' : EMPTY.active[which] },
-      { title: '最近恢复', caption: '', rows: clearedRows, empty: clearedRows.length > 0 ? '' : EMPTY.cleared[which] },
+      {
+        title: '正在发生',
+        count: String(active.length),
+        caption: active.length === 0 ? '' : waiting === 0 ? '都有人确认了' : `${waiting} 条没人确认`,
+        groups: happening.length === 0 ? [] : [{ day: '', rows: happening }],
+        empty: happening.length > 0 ? '' : EMPTY.active[which],
+      },
+      { title: '最近恢复', count: '', caption: '', groups: days, empty: days.length > 0 ? '' : EMPTY.cleared[which] },
     ],
-    needsAttention: unacknowledged,
+    needsAttention: waiting,
   };
 }

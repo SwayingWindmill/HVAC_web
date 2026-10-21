@@ -5,7 +5,7 @@
 // show the same turns, steps and answers.
 
 import type { AgentSessionSnapshot, FindingChart } from './agent-types';
-import { answerNodes, type AnswerNode } from './answer-nodes';
+import { answerBlocks, type AnswerBlock } from './answer-nodes';
 import { grouped } from './format';
 import { siteWhen } from './today';
 import type { AssistantPart, AssistantThread } from '../shared/thread-model';
@@ -24,7 +24,7 @@ export type ConversationMessage =
     /** Started, nothing read or written yet: the reply says the assistant is thinking. */
     readonly thinking: boolean;
     readonly steps: { readonly summary: string; readonly running: boolean; readonly items: readonly { readonly label: string; readonly state: StepState }[] } | null;
-    readonly answer: readonly AnswerNode[] | null;
+    readonly answer: readonly AnswerBlock[] | null;
     readonly finding: ReturnType<typeof presentFinding> | null;
     readonly question: ReturnType<typeof presentQuestion> | null;
     /** Why the answer ended early; none when it did not. */
@@ -124,7 +124,7 @@ export function presentConversation(thread: AssistantThread) {
       role: 'assistant',
       thinking: running && message.content.length === 0,
       steps: steps.length === 0 ? null : { summary: stillReading ? '正在查询数据' : `查询了 ${steps.length} 项数据`, running: stillReading, items: steps },
-      answer: text?.type === 'text' && text.text.trim() !== '' ? answerNodes(text.text) : null,
+      answer: text?.type === 'text' && text.text.trim() !== '' ? answerBlocks(text.text) : null,
       finding: finding?.type === 'data-finding' ? presentFinding(finding.data.finding) : null,
       question: request?.type === 'data-input-request' ? presentQuestion(request.data, thread.pendingInput?.request === request.data) : null,
       note: message.status.type === 'incomplete' ? NOTES[message.status.reason] : null,
