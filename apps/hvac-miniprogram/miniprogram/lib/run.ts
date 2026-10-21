@@ -49,6 +49,7 @@ function equipment(plant: Plant) {
 
 function deviceSummary(plant: Plant): string {
   const { total, running } = equipment(plant);
+  // Counted over the listed devices, not plant.onlineCount (kept for parity with the web's plant).
   const devices = listed(plant);
   return `${running} / ${total} 台运行 · ${devices.filter((device) => device.connection === 'ONLINE').length} / ${devices.length} 在线`;
 }
@@ -270,7 +271,7 @@ const DETAIL_KEYS: Partial<Record<PlantCategory, readonly string[]>> = {
 /** A point the device has never reported (or reported only rejected values for). */
 const neverRead = (reading: PlantReading) => reading.sampledAt === null;
 
-/** The first of the device's role readings it has; none for a device without a role (a gateway-wired module). */
+/** The first of the device's role readings it has; none for a device without a role (OTHER). */
 function leadReading(device: PlantDevice): PlantReading | null {
   for (const key of LEAD_KEYS[device.category]) {
     const reading = device.reading(key);
@@ -282,7 +283,7 @@ function leadReading(device: PlantDevice): PlantReading | null {
 function deviceRow(device: PlantDevice) {
   const hasRole = LEAD_KEYS[device.category].length > 0;
   const lead = leadReading(device);
-  // A module's channels have no one reading to lead with, so its row counts them instead.
+  // A device without a role has no one reading to lead with, so its row counts its readings instead.
   const facts = hasRole
     ? (DETAIL_KEYS[device.category] ?? [])
       .map((key) => device.reading(key))

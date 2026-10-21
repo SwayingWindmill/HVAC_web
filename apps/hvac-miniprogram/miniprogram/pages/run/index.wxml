@@ -58,7 +58,6 @@
         </view>
       </view>
     </view>
-
   </block>
 
   <block wx:else>

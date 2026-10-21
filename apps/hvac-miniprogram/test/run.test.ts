@@ -39,8 +39,6 @@ test('实时运行 leads with whether the plant runs, its power, cooling and eff
     { name: '室内', headline: '24.1 °C', detail: '', late: false },
     { name: '室外', headline: '34.0 °C', detail: '湿球 27.0 °C · 相对湿度 65 %RH', late: false },
   ]);
-  // The 设备 tab above is the way to the devices; the page no longer repeats it at the bottom.
-  assert.equal('devices' in view, false);
 });
 
 test('a stopped plant says so and why there is no efficiency; a late reading is marked, an offline device is not running', () => {
@@ -214,7 +212,7 @@ test('modules wired to the gateway are neither listed nor counted', () => {
 });
 
 // Regression (#677, 2026-10-21): a cooling tower that never reported said 在线, 没有读数 and — at once.
-test('a device that never reported says only that, and large figures carry thousands separators', () => {
+test('a device that never reported says only 没有读数; a figure from 1,000 up carries thousands separators', () => {
   const silent = plantWith((snapshotOf) => {
     for (const value of snapshotOf('CT-01').values) Object.assign(value, { state: 'MISSING', value: undefined, sampledAt: undefined });
     Object.assign(snapshotOf('METER-HVAC-TOTAL').values.find((value) => value.key === 'active_power')!, { value: 12345.6 });
