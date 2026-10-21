@@ -44,19 +44,22 @@
   font-weight: 600;
 }
 
-/* Stands above the bar; the orb's own position: relative must not win, hence the two classes. */
+/*
+ * Rises only 8px above the bar, so it covers almost nothing of the page; the orb's own
+ * position: relative must not win, hence the two classes.
+ */
 .raised.orb {
   position: absolute;
-  top: -22px;
-  width: 58px;
-  height: 58px;
-  border-radius: 29px;
-  box-shadow: 0 8px 22px rgba(63, 91, 217, 0.38), 0 2px 6px rgba(47, 70, 179, 0.3);
+  top: -8px;
+  width: 46px;
+  height: 46px;
+  border-radius: 23px;
+  box-shadow: 0 6px 14px rgba(63, 91, 217, 0.42), 0 2px 4px rgba(30, 44, 140, 0.35);
 }
 
 .raised-icon {
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
 }
 
 /*
@@ -91,11 +94,18 @@
   right: 0;
   bottom: 0;
   left: 0;
-  background: radial-gradient(circle at 32% 24%, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0) 58%);
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 42%),
+    radial-gradient(circle at 72% 90%, rgba(14, 22, 78, 0.5), rgba(14, 22, 78, 0) 58%);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.55), inset 0 -2px 4px rgba(10, 18, 70, 0.4);
 }
 
+
+/* Above the light, and standing off the sphere. */
 .orb-icon {
   position: relative;
+  filter: drop-shadow(0 1px 1.5px rgba(10, 18, 70, 0.5));
 }
 
 @keyframes orb-flow {
