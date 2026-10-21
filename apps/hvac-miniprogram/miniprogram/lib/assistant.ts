@@ -149,12 +149,17 @@ const STATUS_WORDS: Readonly<Record<AgentSessionSnapshot['session']['status'], s
   CANCELLED: '已停止',
 };
 
+// 问助手 asks with when the alarm began first (explainAlarmQuestion in alarms.ts). The list says when
+// the conversation began on the line below, so its title leads with the alarm instead (#677).
+const ALARM_BEGAN = /^\d{4}年\d{1,2}月\d{1,2}日 \d{1,2}:\d{2} 开始(、已恢复的|的)告警/;
+const listedQuestion = (question: string) => question.replace(ALARM_BEGAN, (_, after: string) => (after === '的' ? '告警' : '已恢复的告警'));
+
 /** My conversations on the Site, newest first as the Agent lists them; times need the Site's midnight. */
 export function presentHistory(sessions: readonly AgentSessionSnapshot[], todayStart: string | null) {
   return sessions.map(({ session, messages }) => ({
     id: session.id,
     // A conversation always starts with a question.
-    question: messages.find((message) => message.role === 'OPERATOR')?.content ?? '',
+    question: listedQuestion(messages.find((message) => message.role === 'OPERATOR')?.content ?? ''),
     detail: [todayStart === null ? '' : siteWhen(session.createdAt, todayStart), STATUS_WORDS[session.status]].filter(Boolean).join(' · '),
   }));
 }
