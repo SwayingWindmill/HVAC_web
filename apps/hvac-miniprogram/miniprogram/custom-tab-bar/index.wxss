@@ -46,20 +46,69 @@
 
 .raised {
   position: absolute;
-  top: -20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 56px;
-  height: 56px;
-  border-radius: 28px;
-  background: #3f5bd9;
-  box-shadow: 0 0 0 4px #ffffff, 0 8px 20px rgba(63, 91, 217, 0.35);
+  top: -22px;
+  width: 58px;
+  height: 58px;
+  border-radius: 29px;
+  box-shadow: 0 8px 22px rgba(63, 91, 217, 0.38), 0 2px 6px rgba(47, 70, 179, 0.3);
 }
 
 .raised-icon {
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
+}
+
+/*
+ * The assistant's orb (#677): indigo light flowing round against the windmill's turn, as wind through
+ * the blades, under a soft highlight; no white ring. The flow is the one place the design system's
+ * no-gradient rule gives way, at the user's request, and it stays within the indigo family.
+ */
+.orb {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #3f5bd9;
+  /* Keeps the rounded clip on the turning layer in iOS WebKit. */
+  transform: translateZ(0);
+}
+
+.orb-flow {
+  position: absolute;
+  top: -30%;
+  left: -30%;
+  width: 160%;
+  height: 160%;
+  background: conic-gradient(from 0deg, #2f46b3, #3f5bd9 18%, #6a7cff 36%, #8b7bff 48%, #4a63e3 64%, #2f46b3 82%, #3f5bd9);
+}
+
+.orb-sheen {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: radial-gradient(circle at 32% 24%, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0) 58%);
+}
+
+.orb-icon {
+  position: relative;
+}
+
+@keyframes orb-flow {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+
+/* Against the windmill: it turns clockwise every 12 s, the light flows back every 6 s. */
+.orb-flowing {
+  animation: orb-flow 6s linear infinite;
+}
+
+/* While the assistant reads and answers, both quicken. */
+.orb-busy {
+  animation-duration: 1.6s;
 }
 
 /* The windmill turns (app.wxss); a tab bar component does not see the page's styles. */

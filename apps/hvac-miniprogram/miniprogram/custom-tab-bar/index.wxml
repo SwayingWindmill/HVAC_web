@@ -9,7 +9,11 @@
     aria-selected="{{selected === index}}"
     aria-label="{{item.text}}{{item.showsAttention && badge ? '，' + badge + ' 条告警没人确认' : ''}}"
   >
-    <view wx:if="{{item.raised && selected !== index}}" class="raised" aria-hidden="true"><image class="raised-icon windmill" src="{{item.icon}}" mode="aspectFit" /></view>
+    <view wx:if="{{item.raised && selected !== index}}" class="raised orb" aria-hidden="true">
+      <view class="orb-flow orb-flowing" />
+      <view class="orb-sheen" />
+      <image class="raised-icon orb-icon windmill" src="{{item.icon}}" mode="aspectFit" />
+    </view>
     <image wx:else class="icon {{item.raised ? 'windmill' : ''}}" src="{{selected === index ? item.activeIcon : item.icon}}" mode="aspectFit" />
     <text class="label">{{item.text}}</text>
     <text wx:if="{{item.showsAttention && badge}}" class="badge-count" aria-hidden="true">{{badge}}</text>
