@@ -78,6 +78,15 @@ for (const [key, expectedOwner] of canonicalOwners) {
   if (!route) errors.push(`${key}: required current canonical route is missing`);
   else if (route.owner !== expectedOwner) errors.push(`${key}: owner must be ${expectedOwner}, got ${route.owner}`);
 }
+// The Gateway answers 404 for any public route without an owner here, while its handler
+// tests skip the registry, so every contracted Gateway route must be registered.
+const gatewayContract = await readJSON('contracts/http/platform-gateway.openapi.yaml');
+for (const [contractPath, operations] of Object.entries(gatewayContract.paths ?? {})) {
+  for (const method of Object.keys(operations)) {
+    const key = `${method.toUpperCase()} ${contractPath}`;
+    if (allowedMethods.has(method.toUpperCase()) && !routeKeys.has(key)) errors.push(`${key}: in platform-gateway.openapi.yaml but has no route owner`);
+  }
+}
 
 if (dataRegistry.registryVersion !== 1) errors.push('data registry version must be 1');
 if (!Number.isInteger(dataRegistry.registryRevision) || dataRegistry.registryRevision < 1) errors.push('data registry revision must be positive');

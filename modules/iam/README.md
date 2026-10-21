@@ -11,12 +11,12 @@ IAM 只接受 TLS 1.3，并且必须出示客户端证书。知道地址不够�
 | 接口 | 谁调 | 做什么 |
 | --- | --- | --- |
 | `POST /internal/v1/principal/current` | 平台网关 | 当前登录的人是谁、能看到哪些租户和站点 |
-| `POST /internal/v1/principal/tenant-contexts` | 平台网关 | 当前的人所在的租户列表 |
 | `POST /internal/v1/registry/decision`、`telemetry/decision`、`command/decision`、`analytics/decision`、`alarm/decision`、`work-order/decision` | 平台网关 | 判定这个人能不能做这件事，允许时签授权 |
 | `POST /internal/v1/registry/workload-decision`、`analytics/workload-decision` | 后台服务（报告、优化、节能验证、能耗计算等） | 判定后台服务自己能不能读（ADR 0017） |
 | `POST /internal/v1/telemetry/grants:consume`、`telemetry/revocations:poll` | 遥测 | 用掉一张遥测授权、拉取撤销 |
 | `POST /internal/v1/registry-read/grant-status` | 登记服务 | 查一张登记授权当前是否还有效 |
-| `POST /internal/v1/admin/members`、`admin/mutations`、`admin/api-credentials/*` | 平台网关 | 用户与角色管理、API 凭据 |
+| `POST /internal/v1/admin/members`、`admin/mutations` | 平台网关 | 用户与角色管理 |
+| `POST /internal/v1/admin/api-credentials/*` | 没有调用方：网关不再转发 | 发、换、收回 API 凭据 |
 
 ## 当前的人
 
