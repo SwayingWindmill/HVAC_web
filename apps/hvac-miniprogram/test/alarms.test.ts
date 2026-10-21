@@ -100,6 +100,9 @@ test('an alarm opens on its severity and state, what happened, the facts an oper
 test('问助手 asks about the alarm as the web\'s 解释 does: when it began at the Site, whether it cleared, and its device', () => {
   assert.equal(explainAlarmQuestion(active, 'C 机组电表', todayStart), '2026年9月29日 16:26 开始的告警「冷冻水回水温度过低」（C 机组电表）是怎么回事？');
   assert.equal(explainAlarmQuestion(cleared, null, todayStart), '2026年10月1日 17:11 开始、已恢复的告警「冷冻水回水温度过低」是怎么回事？');
+  // Without the Site's midnight there is no time to give (#677: it began with a stray 的).
+  assert.equal(explainAlarmQuestion(active, null, null), '告警「冷冻水回水温度过低」是怎么回事？');
+  assert.equal(explainAlarmQuestion(cleared, null, null), '已恢复的告警「冷冻水回水温度过低」是怎么回事？');
 });
 
 test('acknowledging says what it means: someone is on it while the alarm is happening, someone has seen it once it cleared', () => {
