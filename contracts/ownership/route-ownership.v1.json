@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 38,
+  "registryRevision": 39,
   "routes": [
     {"method": "GET", "path": "/api/v1/iam/members", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
     {"method": "POST", "path": "/api/v1/iam/members", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
@@ -10,6 +10,9 @@
     {"method": "POST", "path": "/api/v1/iam/members/{principalId}/assignments", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
     {"method": "POST", "path": "/api/v1/iam/members/{principalId}/assignments/{bindingId}/revoke", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
     {"method": "POST", "path": "/api/v1/me/password", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
+    {"method": "GET", "path": "/api/v1/me/wechat", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
+    {"method": "POST", "path": "/api/v1/me/wechat", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
+    {"method": "DELETE", "path": "/api/v1/me/wechat", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
     {"method": "GET", "path": "/api/v1/gateways/{gatewayId}/credential", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "POST", "path": "/api/v1/gateways/{gatewayId}/enrollment-code", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "POST", "path": "/api/v1/gateways/{gatewayId}/revoke", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
