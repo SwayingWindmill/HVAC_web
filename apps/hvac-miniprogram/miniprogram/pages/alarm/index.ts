@@ -37,6 +37,13 @@ Page({
     comment: '',
     acknowledging: false,
     error: '',
+    /** Whether the explanation runs past three lines, and whether it is shown whole. */
+    summaryLong: false,
+    summaryOpen: false,
+  },
+
+  toggleSummary() {
+    this.setData({ summaryOpen: !this.data.summaryOpen });
   },
 
   onLoad(query: Record<string, string | undefined>) {
@@ -64,7 +71,10 @@ Page({
         siteTodayStart(site, new Date()).catch(() => null),
       ]);
       shown = { alarm, deviceName: device.name, todayStart };
-      this.setData({ loading: false, failed: '', view: presentAlarm(alarm, { deviceName: device.shown, now: new Date(), todayStart, me }) });
+      const view = presentAlarm(alarm, { deviceName: device.shown, now: new Date(), todayStart, me });
+      // About 22 characters a line at 14px on a narrow phone: past three lines, or with line breaks,
+      // it folds behind 展开; shorter ones are shown whole.
+      this.setData({ loading: false, failed: '', view, summaryLong: view.summary.length > 60 || view.summary.includes('\n') });
     } catch (error) {
       this.setData({
         loading: false,
