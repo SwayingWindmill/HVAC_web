@@ -1,0 +1,13 @@
+<!-- Today's 24 hours as bars (lib/run.ts hourBars); styles in styles/hour-chart.wxss. -->
+<template name="hour-chart">
+  <view class="chart-body">
+    <view class="chart-scale mono" aria-hidden="true">
+      <text wx:for="{{scale}}" wx:key="*this">{{item}}</text>
+    </view>
+    <view class="chart-bars">
+      <view wx:for="{{bars}}" wx:key="hour" class="bar bar-{{item.state}}" style="{{item.state === 'value' ? 'height: ' + item.height + '%' : ''}}" />
+    </view>
+    <view />
+    <view class="chart-hours"><text>0 点</text><text>6</text><text>12</text><text>18</text><text>23</text></view>
+  </view>
+</template>

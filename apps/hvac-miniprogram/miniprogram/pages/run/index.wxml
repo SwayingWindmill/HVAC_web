@@ -1,0 +1,106 @@
+<import src="../../templates/hour-chart.wxml" />
+<page-header title="运行" />
+
+<view class="screen with-tab-bar">
+  <view class="segments" aria-role="tablist" aria-label="运行">
+    <view class="segment {{segment === 'realtime' ? 'segment-on' : ''}}" data-segment="realtime" bindtap="chooseSegment" aria-role="tab" aria-selected="{{segment === 'realtime'}}">实时运行</view>
+    <view class="segment {{segment === 'devices' ? 'segment-on' : ''}}" data-segment="devices" bindtap="chooseSegment" aria-role="tab" aria-selected="{{segment === 'devices'}}">设备<text wx:if="{{deviceCount}}" class="segment-count">{{deviceCount}}</text></view>
+  </view>
+
+  <view wx:if="{{loading}}" class="state">正在读取…</view>
+  <view wx:elif="{{noSite}}" class="state">这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。</view>
+  <view wx:elif="{{failed}}" class="state">冷站的读数暂时读不到，下拉刷新再试。</view>
+  <view wx:elif="{{!deviceCount}}" class="state">这个站点还没有登记设备。在网页「系统管理 → 资产与点位」登记冷站设备后，这里显示实时运行情况。</view>
+
+  <block wx:elif="{{segment === 'realtime'}}">
+    <view class="meta">
+      <text class="caption">{{siteName}}</text>
+      <text wx:if="{{updatedAt}}" class="caption">数据 <text class="mono">{{updatedAt}}</text></text>
+    </view>
+
+    <view class="card card-pad plant" aria-label="冷站现在">
+      <view wx:if="{{realtime.status}}" class="plant-status">
+        <view class="dot dot-{{realtime.status.tone}}" aria-hidden="true" />
+        <text class="plant-label">{{realtime.status.label}}</text>
+        <text class="caption">{{realtime.status.detail}}</text>
+      </view>
+      <view class="plant-metrics">
+        <view wx:for="{{realtime.metrics}}" wx:key="label" class="plant-metric">
+          <text class="caption">{{item.label}}</text>
+          <view class="plant-value {{item.value === '—' || item.late ? 'plant-value-dim' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
+        </view>
+      </view>
+      <text wx:if="{{realtime.copNote || chart.peak}}" class="caption">{{realtime.copNote}}{{chart.peak}}{{chart.peak ? '。' : ''}}</text>
+    </view>
+
+    <view class="card card-pad chart" aria-label="今天每小时能效">
+      <view class="chart-head">
+        <text class="card-title">今天每小时能效</text>
+        <text class="caption">越高越省电</text>
+      </view>
+      <text wx:if="{{!chart}}" class="caption">{{chartNote}}</text>
+      <block wx:else>
+        <template is="hour-chart" data="{{...chart}}" />
+        <view class="legend">
+          <view class="legend-item"><view class="swatch swatch-value" />有能效</view>
+          <view class="legend-item"><view class="swatch swatch-idle" />不制冷</view>
+          <view wx:if="{{chart.gaps}}" class="legend-item"><view class="swatch swatch-missing" />{{chart.gaps}}</view>
+        </view>
+      </block>
+    </view>
+
+    <view wx:if="{{realtime.loops.length}}" class="card" aria-label="水系统和环境">
+      <view class="card-pad card-title loops-title">水系统和环境</view>
+      <view wx:for="{{realtime.loops}}" wx:key="name" class="loop">
+        <text class="loop-name">{{item.name}}</text>
+        <view class="loop-values">
+          <text class="loop-headline {{item.late ? 'muted' : ''}}">{{item.headline}}</text>
+          <text wx:if="{{item.detail}}" class="caption">{{item.detail}}</text>
+          <text wx:if="{{item.late}}" class="badge badge-warning">读数不是最新的</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="card row devices-link" data-segment="devices" bindtap="chooseSegment" aria-role="link">
+      <text class="card-title">设备</text>
+      <text class="caption">{{realtime.devices}} ›</text>
+    </view>
+  </block>
+
+  <block wx:else>
+    <scroll-view class="filters" scroll-x enhanced show-scrollbar="{{false}}">
+      <view class="filter-row">
+        <view
+          wx:for="{{devices.filters}}"
+          wx:key="key"
+          class="filter {{filter === item.key ? 'filter-on' : ''}}"
+          data-filter="{{item.key}}"
+          bindtap="chooseFilter"
+          aria-role="radio"
+          aria-checked="{{filter === item.key}}"
+        >{{item.label}}<text class="filter-count">{{item.count}}</text></view>
+      </view>
+    </scroll-view>
+
+    <view wx:if="{{devices.empty}}" class="state">{{devices.empty}}</view>
+    <view wx:for="{{devices.groups}}" wx:for-item="group" wx:key="title" class="group">
+      <view class="group-head">
+        <text class="group-title">{{group.title}}</text>
+        <text class="caption">{{group.caption}}</text>
+      </view>
+      <view class="card">
+        <view wx:for="{{group.devices}}" wx:key="deviceId" class="device" data-id="{{item.deviceId}}" bindtap="openDevice" aria-role="link">
+          <view class="device-main">
+            <view class="device-line">
+              <text class="device-name">{{item.name}}</text>
+              <text wx:if="{{item.status}}" class="badge badge-{{item.status.tone}}">{{item.status.label}}</text>
+            </view>
+            <text wx:if="{{item.detail}}" class="caption">{{item.detail}}</text>
+          </view>
+          <view class="device-value">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
+          <text class="chevron-right" aria-hidden="true">›</text>
+        </view>
+      </view>
+    </view>
+  </block>
+</view>

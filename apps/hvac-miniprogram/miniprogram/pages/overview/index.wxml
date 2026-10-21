@@ -55,6 +55,29 @@
       </block>
     </view>
 
+    <view wx:if="{{plant.failed}}" class="card card-pad caption">冷站的实时读数暂时读不到，下拉刷新再试。</view>
+    <view wx:elif="{{plant.now}}" class="card card-pad now" bindtap="openRun" aria-role="link" aria-label="冷站现在，打开运行">
+      <view class="now-head">
+        <text class="card-title">冷站现在</text>
+        <text class="caption">实时运行 ›</text>
+      </view>
+      <view class="now-status">
+        <block wx:if="{{plant.now.status}}">
+          <view class="dot dot-{{plant.now.status.tone}}" aria-hidden="true" />
+          <text class="now-label">{{plant.now.status.label}}</text>
+        </block>
+        <text class="caption">{{plant.now.summary}}</text>
+      </view>
+      <view class="now-metrics">
+        <view wx:for="{{plant.now.metrics}}" wx:key="label" class="metric">
+          <text class="caption">{{item.label}}</text>
+          <view class="now-value {{item.late ? 'muted' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
+        </view>
+      </view>
+    </view>
+
+    <view wx:else class="card card-pad caption">这个站点还没有登记冷站设备，在网页「系统管理 → 资产与点位」登记后，这里显示冷站在不在运行。</view>
+
     <view class="card">
       <view class="row">
         <text>正在发生的告警</text>

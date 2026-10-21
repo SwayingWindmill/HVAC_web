@@ -1,0 +1,44 @@
+<import src="../../templates/hour-chart.wxml" />
+<view class="screen top">
+  <view wx:if="{{loading}}" class="state">正在读取…</view>
+  <view wx:elif="{{failed}}" class="state">{{failed}}</view>
+  <block wx:elif="{{view}}">
+    <view class="head">
+      <text class="badge badge-{{view.status.tone}}">{{view.status.label}}</text>
+      <text class="caption">{{view.kind}}</text>
+      <text wx:if="{{view.updatedAt}}" class="caption head-time">数据 <text class="mono">{{view.updatedAt}}</text></text>
+    </view>
+
+    <view wx:if="{{view.metrics.length}}" class="card card-pad lead">
+      <view wx:for="{{view.metrics}}" wx:key="label" class="lead-metric">
+        <text class="caption">{{item.label}}</text>
+        <view class="lead-value {{item.late ? 'muted' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
+      </view>
+    </view>
+
+    <view wx:if="{{view.energy}}" class="card card-pad energy" aria-label="今天用电">
+      <view class="split">
+        <text class="card-title">今天用电</text>
+        <text class="caption">{{view.energy.share}}</text>
+      </view>
+      <view class="energy-total">{{view.energy.total}}<text class="unit">kWh</text></view>
+      <template is="hour-chart" data="{{...view.energy}}" />
+      <text wx:if="{{view.energy.gaps}}" class="caption">{{view.energy.gaps}}。</text>
+    </view>
+    <view wx:elif="{{energyNote || view.energyNote}}" class="card card-pad caption">{{energyNote || view.energyNote}}</view>
+
+    <view class="card" aria-label="全部读数">
+      <view class="card-pad split">
+        <text class="card-title">全部读数</text>
+        <text class="caption">{{view.readingsNote}}</text>
+      </view>
+      <view wx:for="{{view.readings}}" wx:key="label" class="reading">
+        <text class="reading-label">{{item.label}}</text>
+        <view class="reading-value">
+          <text wx:if="{{item.late}}" class="badge badge-warning">读数过期</text>
+          <text class="{{item.value === '没读到' ? 'muted' : ''}}">{{item.value}}</text>
+        </view>
+      </view>
+    </view>
+  </block>
+</view>

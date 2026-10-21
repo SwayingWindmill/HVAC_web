@@ -1,20 +1,18 @@
 // The bottom tab bar (WeChat's custom tabBar), drawn by the design system's 小程序 rules. Each tab
-// page marks itself selected in onShow, as WeChat's custom tabBar guide describes.
+// page marks itself selected in onShow (lib/tab.ts selectTab).
 
-interface Tab {
-  readonly pagePath: string;
-  readonly text: string;
-  readonly icon: string;
-  readonly activeIcon: string;
-}
-
-const TABS: readonly Tab[] = [
-  { pagePath: '/pages/overview/index', text: '总览', icon: '/assets/tab/overview.svg', activeIcon: '/assets/tab/overview-active.svg' },
-  { pagePath: '/pages/me/index', text: '我的', icon: '/assets/tab/me.svg', activeIcon: '/assets/tab/me-active.svg' },
-];
+import { TABS } from '../lib/tab';
 
 Component({
   data: { tabs: TABS, selected: 0 },
+  lifetimes: {
+    // Each tab page gets its own tab bar; it starts on its own page, also when the devtools re-create it.
+    attached() {
+      const pages = getCurrentPages();
+      const route = pages[pages.length - 1]?.route;
+      this.setData({ selected: Math.max(0, TABS.findIndex((tab) => tab.pagePath === `/${route}`)) });
+    },
+  },
   methods: {
     switchTab(event: WechatMiniprogram.TouchEvent<Record<string, never>, Record<string, never>, { index: number }>) {
       const tab = TABS[event.currentTarget.dataset.index];
