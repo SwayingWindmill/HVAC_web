@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "sync": "node --experimental-strip-types scripts/sync-shared.ts",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
-    "test": "node --experimental-strip-types --import ./test/resolve-ts.ts --test test/*.test.ts"
+    "test": "node --experimental-strip-types scripts/sync-shared.ts --check && node --experimental-strip-types --import ./test/resolve-ts.ts --test test/*.test.ts"
   },
   "devDependencies": {
     "miniprogram-api-typings": "5.2.3"
