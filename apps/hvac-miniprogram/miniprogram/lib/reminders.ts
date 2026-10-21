@@ -54,7 +54,7 @@ export async function readDailyReminders(gateway: Gateway, site: { readonly id: 
   try {
     const reminders = await remindersLeft(gateway);
     if (reminders === null) return { text: '先在「我的」里绑定微信，才能收每日结论', canAdd: false };
-    if (reminders.daily === 0) return { text: '每天 8 点发昨天的用电、用冷和能效', canAdd: true };
+    if (reminders.daily === 0) return { text: '每天 8 点把昨天的用电、用冷和能效发到微信', canAdd: true };
     if (reminders.dailySiteId !== site.id) {
       const other = reminders.dailySiteId === undefined ? null : await siteName(reminders.dailySiteId);
       return { text: `现在发的是${other ?? '另一个站点'}；点「多收一天」改成本站点`, canAdd: true };

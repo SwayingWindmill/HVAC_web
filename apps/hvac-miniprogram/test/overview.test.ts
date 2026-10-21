@@ -36,7 +36,7 @@ test('the overview leads with savings and what more could be saved, then today a
   ]);
   assert.equal(view.notYet, null);
   // The same count as the red dot on 通知: the alarms happening that no one has acknowledged.
-  assert.deepEqual(view.alarms, { count: '5', waiting: '3 条没人确认' });
+  assert.deepEqual(view.alarms, { count: '5', waiting: '3 条没人确认', happening: true });
 });
 
 // Regression (#677, 2026-10-21): a Site with neither savings nor a recommendation opened on two
@@ -54,7 +54,17 @@ test('savings and a recommendation not there yet share one small card below the 
     rows: [{ label: '本月节省', text: '还没有在统计的节能措施' }, { label: '还能再省', text: '还没有优化建议' }],
     hint: '在电脑网页「能源分析」里登记节能措施、生成优化建议后，这里显示能省多少。',
   });
-  assert.deepEqual(view.alarms, { count: '0', waiting: '' });
+  // The hint names only what is missing.
+  const saving = presentOverview({
+    savings: { status: 'ok', card: { saved: { cost: 8640, kWh: 7350, rate: null }, why: null, measures: [] } },
+    recommendation: { status: 'ok', latest: null },
+    energy: { status: 'ok', today, change },
+    alarms: { status: 'ok', active: 3, complete: false, waiting: 0 },
+  });
+  assert.deepEqual(saving.notYet, { rows: [{ label: '还能再省', text: '还没有优化建议' }], hint: '在电脑网页「能源分析 → 优化建议」生成后，这里显示还能省多少。' });
+  // Only the first page of alarms was read: the rest may be waiting.
+  assert.deepEqual(saving.alarms, { count: '3+', waiting: '', happening: true });
+  assert.deepEqual(view.alarms, { count: '0', waiting: '', happening: false });
 
   const waiting = presentOverview({
     savings: { status: 'ok', card: { saved: null, why: 'FIRST_DAY_PENDING', measures: [] } },
@@ -64,14 +74,15 @@ test('savings and a recommendation not there yet share one small card below the 
   });
   assert.equal(waiting.recommendation?.title, '冷冻水供水 7.0 → 8.0 °C，预计每天再省 ¥210');
   assert.deepEqual(waiting.notYet, { rows: [{ label: '本月节省', text: '措施实施满 24 小时后，第二天开始算' }], hint: '' });
-  assert.deepEqual(waiting.alarms, { count: '2', waiting: '都有人确认了' });
+  assert.deepEqual(waiting.alarms, { count: '2', waiting: '都有人确认了', happening: true });
 
   const unreadable = presentOverview({ savings: { status: 'error' }, recommendation: { status: 'error' }, energy: { status: 'error' }, alarms: { status: 'error' } });
   assert.deepEqual(unreadable.notYet, {
     rows: [{ label: '本月节省', text: '暂时读不到，下拉刷新再试' }, { label: '还能再省', text: '暂时读不到，下拉刷新再试' }],
     hint: '',
   });
-  assert.deepEqual(unreadable.alarms, { count: '—', waiting: '' });
+  // Unreadable alarms do not show the red icon of alarms happening.
+  assert.deepEqual(unreadable.alarms, { count: '—', waiting: '', happening: false });
 });
 
 test('missing data says so: no tariff hides the cost, an unreadable section says it could not be read', () => {
@@ -83,7 +94,7 @@ test('missing data says so: no tariff hides the cost, an unreadable section says
   });
   assert.deepEqual(view.energy.metrics.map((each) => [each.label, each.value]), [['空调用电', '—'], ['供冷量', '12.0'], ['综合能效', '—']]);
   // Only the first page of alarms was read.
-  assert.deepEqual(view.alarms, { count: '100+', waiting: '至少 40 条没人确认' });
+  assert.deepEqual(view.alarms, { count: '100+', waiting: '至少 40 条没人确认', happening: true });
   assert.equal(presentOverview({ savings: { status: 'error' }, recommendation: { status: 'error' }, energy: { status: 'error' }, alarms: { status: 'error' } }).energy.state, 'error');
 });
 

@@ -118,9 +118,6 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.suggest-ready {
   background: var(--primary-soft);
   border-color: var(--primary-line);
 }
@@ -157,7 +154,7 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 10px 0;
+  padding: 8px 0;
   font-weight: 500;
 }
 
@@ -241,7 +238,6 @@
   min-width: 0;
 }
 
-/* WeChat's small button, in the platform's colour. */
 /* A setting, so an outline button: the figures stay what stands out on the page (#677). */
 button.daily-add {
   flex-shrink: 0;

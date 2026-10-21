@@ -43,13 +43,21 @@ const NO_SAVINGS: Readonly<Record<NoSavingsReason, string>> = {
   FIRST_DAY_PENDING: '措施实施满 24 小时后，第二天开始算',
 };
 const UNREADABLE = '暂时读不到，下拉刷新再试';
-const SET_UP_ON_THE_WEB = '在电脑网页「能源分析」里登记节能措施、生成优化建议后，这里显示能省多少。';
 
 /** A line in the small card for what is not there yet; `onTheWeb` when the web is where to set it up. */
 interface NotYetRow {
-  readonly label: string;
+  readonly label: '本月节省' | '还能再省';
   readonly text: string;
   readonly onTheWeb: boolean;
+}
+
+/** Where on the web to set up what is missing, by which of the two is. */
+function setUpOnTheWeb(rows: readonly NotYetRow[]): string {
+  const missing = rows.filter((row) => row.onTheWeb).map((row) => row.label);
+  if (missing.length === 2) return '在电脑网页「能源分析」里登记节能措施、生成优化建议后，这里显示能省多少。';
+  if (missing[0] === '本月节省') return '在电脑网页「能源分析 → 节能项目」登记措施后，这里显示省了多少。';
+  if (missing[0] === '还能再省') return '在电脑网页「能源分析 → 优化建议」生成后，这里显示还能省多少。';
+  return '';
 }
 
 const RISK: Readonly<Record<Recommendation['risk']['level'], ChangeBadge>> = {
@@ -92,12 +100,15 @@ function presentRecommendation(input: OverviewInputs['recommendation']) {
   };
 }
 
+/** `happening` shows the red alarm icon; unreadable alarms do not. */
 function presentAlarms(input: OverviewInputs['alarms']) {
-  if (input.status === 'error') return { count: '—', waiting: '' };
+  if (input.status === 'error') return { count: '—', waiting: '', happening: false };
   const count = `${input.active}${input.complete ? '' : '+'}`;
-  if (input.active === 0) return { count, waiting: '' };
-  if (input.waiting === 0) return { count, waiting: '都有人确认了' };
-  return { count, waiting: `${input.complete ? '' : '至少 '}${input.waiting} 条没人确认` };
+  const happening = input.active > 0;
+  if (!happening) return { count, waiting: '', happening };
+  // With only the first page read, the rest may be waiting: say only what is known.
+  if (input.waiting === 0) return { count, waiting: input.complete ? '都有人确认了' : '', happening };
+  return { count, waiting: `${input.complete ? '' : '至少 '}${input.waiting} 条没人确认`, happening };
 }
 
 function presentEnergy(input: OverviewInputs['energy']) {
@@ -121,10 +132,7 @@ export function presentOverview(inputs: OverviewInputs) {
   return {
     savings: savings.card ?? null,
     recommendation: recommendation.card ?? null,
-    notYet: notYet.length === 0 ? null : {
-      rows: notYet.map(({ label, text }) => ({ label, text })),
-      hint: notYet.some((row) => row.onTheWeb) ? SET_UP_ON_THE_WEB : '',
-    },
+    notYet: notYet.length === 0 ? null : { rows: notYet.map(({ label, text }) => ({ label, text })), hint: setUpOnTheWeb(notYet) },
     energy: presentEnergy(inputs.energy),
     alarms: presentAlarms(inputs.alarms),
   };
