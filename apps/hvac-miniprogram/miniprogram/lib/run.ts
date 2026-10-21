@@ -275,10 +275,12 @@ function deviceRow(device: PlantDevice) {
   const missing = device.readings.filter(neverRead).length;
   const notes = device.latestSampleAt === null ? ['没有读数']
     : [...(missing > 0 ? [`${missing} 个读数没读到`] : []), ...(device.hasStaleData ? ['读数过期'] : [])];
+  const status = deviceStatus(device);
   return {
     deviceId: device.deviceId,
     name: device.name,
-    status: deviceStatus(device),
+    // A meter or sensor never runs: an online one needs no label, only trouble does.
+    status: !EQUIPMENT_CATEGORIES.has(device.category) && status.label === '在线' ? null : status,
     value: hasRole ? lead?.display ?? '—' : '',
     unit: lead?.unit ?? '',
     detail: [...facts, ...notes].join(' · '),

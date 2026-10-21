@@ -93,7 +93,7 @@
           <view class="device-main">
             <view class="device-line">
               <text class="device-name">{{item.name}}</text>
-              <text class="badge badge-{{item.status.tone}}">{{item.status.label}}</text>
+              <text wx:if="{{item.status}}" class="badge badge-{{item.status.tone}}">{{item.status.label}}</text>
             </view>
             <text wx:if="{{item.detail}}" class="caption">{{item.detail}}</text>
           </view>

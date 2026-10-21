@@ -99,12 +99,15 @@ test('设备 lists the main equipment, then meters and the air, each with its st
     deviceId: '018f3e00-4000-7000-8000-000000000001', name: 'CHILLER-01', status: { label: '运行', tone: 'running' },
     value: '155.7', unit: 'kW', detail: '冷冻水出水温度 7 °C · 压缩机负载 72%',
   });
-  assert.deepEqual(view.groups[1].devices.map((device) => [device.name, device.value, device.unit, device.detail]), [
-    ['ZONE-SENSOR-01 通信端点', '24.1', '°C', ''],
-    ['BTU-METER-01', '864', 'kW', ''],
-    ['METER-HVAC-TOTAL', '211.9', 'kW', ''],
-    ['WEATHER-STATION-01', '34', '°C', ''],
+  // A meter or sensor never runs; it carries a state only when something is wrong with it.
+  assert.deepEqual(view.groups[1].devices.map((device) => [device.name, device.status, device.value, device.unit, device.detail]), [
+    ['ZONE-SENSOR-01 通信端点', null, '24.1', '°C', ''],
+    ['BTU-METER-01', null, '864', 'kW', ''],
+    ['METER-HVAC-TOTAL', null, '211.9', 'kW', ''],
+    ['WEATHER-STATION-01', null, '34', '°C', ''],
   ]);
+  const offlineMeter = presentDevices(plantWith((snapshotOf) => { snapshotOf('METER-HVAC-TOTAL').presence.currentState = 'OFFLINE'; }), 'all');
+  assert.deepEqual(offlineMeter.groups[1].devices.find((device) => device.name === 'METER-HVAC-TOTAL')?.status, { label: '离线', tone: 'offline' });
 });
 
 test('需关注 gathers what is offline, faulty or late; a filter with nothing in it says so', () => {
@@ -116,7 +119,7 @@ test('需关注 gathers what is offline, faulty or late; a filter with nothing i
   });
   const attention = presentDevices(bad, 'attention');
   assert.deepEqual(attention.filters.map((filter) => filter.count), [8, 3, 0, 2]);
-  assert.deepEqual(attention.groups.map((group) => group.devices.map((device) => [device.name, device.status.label, device.detail])), [[
+  assert.deepEqual(attention.groups.map((group) => group.devices.map((device) => [device.name, device.status?.label, device.detail])), [[
     ['CHILLER-01', '离线', '冷冻水出水温度 7 °C · 压缩机负载 72%'],
     ['CHWP-01', '运行', '冷冻水流量 132 m³/h · 1 个读数没读到 · 读数过期'],
   ]]);
