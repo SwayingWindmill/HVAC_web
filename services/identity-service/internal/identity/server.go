@@ -21,7 +21,10 @@ type Config struct {
 	SigningKeyFile        string
 	MFAEncryptionKeyFile  string
 	SchemaVersion         string
-	Now                   func() time.Time
+	// The mini program's AppID and the file the administrator puts its AppSecret in.
+	WeChatAppID      string
+	WeChatSecretFile string
+	Now              func() time.Time
 }
 
 type Server struct {
@@ -34,6 +37,8 @@ type Server struct {
 	signingKey            SigningKey
 	mfaProtector          *MFAProtector
 	signInURL             string
+	// nil until the administrator puts the mini program's AppSecret on the server.
+	wechat *WeChat
 }
 
 func NewServer(ctx context.Context, config Config) (*Server, error) {
@@ -78,12 +83,17 @@ func NewServer(ctx context.Context, config Config) (*Server, error) {
 		store.Close()
 		return nil, err
 	}
+	wechat, err := LoadWeChat(config.WeChatAppID, config.WeChatSecretFile)
+	if err != nil {
+		store.Close()
+		return nil, err
+	}
 	// The Web application's sign-in page on the same public origin is the login interface.
 	signInURL := issuerURL.Scheme + "://" + issuerURL.Host + "/sign-in"
 	return &Server{
 		issuer: issuer, clientID: clientID, redirectURI: redirectURI, postLogoutRedirectURI: postLogout,
 		store: store, now: now, signingKey: signingKey, mfaProtector: mfaProtector,
-		signInURL: signInURL,
+		signInURL: signInURL, wechat: wechat,
 	}, nil
 }
 
@@ -101,6 +111,9 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /token", server.token)
 	mux.HandleFunc("POST /app/login", server.appLogin)
 	mux.HandleFunc("POST /app/mfa/totp", server.appTOTP)
+	mux.HandleFunc("POST /app/wechat/binding", server.bindWeChat)
+	mux.HandleFunc("DELETE /app/wechat/binding", server.unbindWeChat)
+	mux.HandleFunc("GET /app/wechat/binding", server.readWeChatBinding)
 	mux.HandleFunc("GET /session/end", server.endSession)
 	return securityHeaders(mux)
 }

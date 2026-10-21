@@ -30,6 +30,8 @@ func main() {
 		SigningKeyFile:        os.Getenv("IDENTITY_SIGNING_KEY_FILE"),
 		MFAEncryptionKeyFile:  os.Getenv("IDENTITY_MFA_ENCRYPTION_KEY_FILE"),
 		SchemaVersion:         envOr("PHASE1_PRODUCT_VERSION", "0.1.0"),
+		WeChatAppID:           os.Getenv("IDENTITY_WECHAT_APP_ID"),
+		WeChatSecretFile:      os.Getenv("IDENTITY_WECHAT_APPSECRET_FILE"),
 	})
 	cancel()
 	if err != nil {

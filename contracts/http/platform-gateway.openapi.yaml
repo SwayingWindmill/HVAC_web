@@ -1153,6 +1153,103 @@
         }
       }
     },
+    "/api/v1/me/wechat": {
+      "get": {
+        "operationId": "getOwnWeChat",
+        "summary": "Whether the signed-in person has bound WeChat",
+        "description": "Only a mini program Session reaches this: there is no WeChat in a browser (WECHAT_MINI_PROGRAM_ONLY). The binding is always for the signed-in account.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The binding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeChatBinding"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "bindOwnWeChat",
+        "summary": "Bind the signed-in person's WeChat with a code from wx.login",
+        "description": "Only a mini program Session reaches this: there is no WeChat in a browser (WECHAT_MINI_PROGRAM_ONLY). The binding is always for the signed-in account. A WeChat bound to another account is refused (WECHAT_ALREADY_BOUND); a WeChat bound before to this account is replaced.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WeChatBindRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Bound."
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeOwnWeChat",
+        "summary": "Remove the signed-in person's WeChat",
+        "description": "Only a mini program Session reaches this: there is no WeChat in a browser (WECHAT_MINI_PROGRAM_ONLY). The binding is always for the signed-in account.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed, or there was none."
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/v1/audit/session-events/{messageId}": {
       "get": {
         "operationId": "getSessionAuditEvent",
@@ -3225,6 +3322,37 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 512
+          }
+        }
+      },
+      "WeChatBindRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "The one-time code from wx.login."
+          }
+        }
+      },
+      "WeChatBinding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bound"
+        ],
+        "properties": {
+          "bound": {
+            "type": "boolean"
+          },
+          "boundAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },

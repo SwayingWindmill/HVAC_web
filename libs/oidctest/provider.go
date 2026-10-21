@@ -41,6 +41,8 @@ type Provider struct {
 	modernKid       string
 	codes           map[string]authorizationCode
 	pendingTOTP     map[string]pendingAppLogin
+	// WeChat bound to each account (#664): OpenID by user.
+	wechat map[string]string
 }
 
 type pendingAppLogin struct {
@@ -112,6 +114,7 @@ func New(config Config) (*Provider, error) {
 		modernKid:       randomToken(8),
 		codes:           map[string]authorizationCode{},
 		pendingTOTP:     map[string]pendingAppLogin{},
+		wechat:          map[string]string{},
 	}, nil
 }
 
@@ -137,6 +140,8 @@ func (provider *Provider) ServeHTTP(writer http.ResponseWriter, request *http.Re
 		provider.appLogin(writer, request)
 	case "/app/mfa/totp":
 		provider.appTOTP(writer, request)
+	case "/app/wechat/binding":
+		provider.wechatBinding(writer, request)
 	default:
 		http.NotFound(writer, request)
 	}
@@ -509,4 +514,58 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 
 func writeOAuthError(writer http.ResponseWriter, status int, code, description string) {
 	writeJSON(writer, status, map[string]string{"error": code, "error_description": description})
+}
+
+// BindWeChatForTest binds a WeChat to an account as identity-service would.
+func (provider *Provider) BindWeChatForTest(userID, openID string) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	provider.wechat[userID] = openID
+}
+
+// WeChatOf is the OpenID bound to the account, or "".
+func (provider *Provider) WeChatOf(userID string) string {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	return provider.wechat[userID]
+}
+
+// wechatBinding plays identity-service's /app/wechat/binding: the code "wechat-code-<openid>" is
+// that WeChat, "wechat-code-used" is a code WeChat refuses.
+func (provider *Provider) wechatBinding(writer http.ResponseWriter, request *http.Request) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	userID := request.URL.Query().Get("userId")
+	switch request.Method {
+	case http.MethodGet:
+		if _, bound := provider.wechat[userID]; bound {
+			writeJSON(writer, http.StatusOK, map[string]any{"bound": true, "boundAt": provider.now().UTC().Format(time.RFC3339)})
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"bound": false})
+	case http.MethodDelete:
+		delete(provider.wechat, userID)
+		writer.WriteHeader(http.StatusNoContent)
+	case http.MethodPost:
+		var input struct{ UserID, Code string }
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.UserID == "" {
+			writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "userId is required")
+			return
+		}
+		openID, ok := strings.CutPrefix(input.Code, "wechat-code-")
+		if !ok || openID == "used" {
+			writeOAuthError(writer, http.StatusBadRequest, "wechat_code_invalid", "the WeChat code is invalid or already used")
+			return
+		}
+		for other, bound := range provider.wechat {
+			if bound == openID && other != input.UserID {
+				writeOAuthError(writer, http.StatusConflict, "wechat_already_bound", "this WeChat is bound to another account")
+				return
+			}
+		}
+		provider.wechat[input.UserID] = openID
+		writer.WriteHeader(http.StatusNoContent)
+	default:
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }

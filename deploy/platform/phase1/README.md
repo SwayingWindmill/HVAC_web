@@ -157,6 +157,8 @@ PHASE1_ENV_FILE=deploy/platform/phase1/environments/production.runtime.env \
 4. 用审核过的输入跑 `identity-reconciler`，把这个账号的「签发方 + 主体编号」连同租户成员关系和角色指派写进 IAM（ADR 0022）。`seed.roleBindings` 的每一项用 `roleKey` 指定角色（内置的如 `admin`，或租户自己的），可以带 `siteId`；不带就是整个租户。第一个管理员是 `{"roleKey": "admin"}`，之后的人在「系统管理 → 用户与角色」里加。改输入要提高 `sourceVersion`。
 5. 启动或重启 `identity-service`；签名密钥文件不存在或无效时它拒绝启动。
 
+6. 要用微信小程序的微信绑定（以后还有一键登录和订阅提醒）时：在微信公众平台「开发管理 → 开发设置」生成 AppSecret，管理员自己把它写进 `IDENTITY_RUNTIME_DIR` 下的 `wechat-miniprogram-appsecret`（只有这一行），然后重启 `identity-service`。没有这个文件时身份服务照常启动，小程序里绑定微信会提示「服务器还没有开通微信功能」。AppID 默认是本平台小程序的 `wx4b7b82bf0351c6f3`，不是秘密。只有 `identity-service` 加入 `wechat-egress` 网络、能访问 `api.weixin.qq.com`；别的服务要发微信消息都经过它（`docs/specs/miniprogram-wechat.md`）。
+
 `identity_runtime` 不能新增用户。单独的 `identity_admin` 角色让账号管理不扩大长期运行的身份服务的权限。签名私钥、初始化凭据和带部署授权的同步输入都不进 Git。
 
 ## 本地模拟冷站

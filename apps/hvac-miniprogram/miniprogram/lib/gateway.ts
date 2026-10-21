@@ -6,7 +6,7 @@ import { utf8Reader } from './utf8';
 
 export interface TransportRequest {
   readonly url: string;
-  readonly method: 'GET' | 'POST';
+  readonly method: 'GET' | 'POST' | 'DELETE';
   readonly header: Record<string, string>;
   readonly data?: unknown;
 }
@@ -77,7 +77,7 @@ export function createGateway(options: {
     return token === null ? header : { ...header, Authorization: `Bearer ${token}` };
   };
 
-  const exchange = async (method: 'GET' | 'POST', path: string, data: unknown, signedIn: boolean, extra: Record<string, string> = {}): Promise<TransportResponse> => {
+  const exchange = async (method: 'GET' | 'POST' | 'DELETE', path: string, data: unknown, signedIn: boolean, extra: Record<string, string> = {}): Promise<TransportResponse> => {
     const base: Record<string, string> = data === undefined ? { Accept: 'application/json', ...extra } : { Accept: 'application/json', 'Content-Type': 'application/json', ...extra };
     const header = signedIn ? signedInHeader(base) : base;
     try {
@@ -96,7 +96,7 @@ export function createGateway(options: {
     return new GatewayError(problemCode(data), statusCode);
   };
 
-  const call = async <T>(method: 'GET' | 'POST', path: string, data?: unknown, headers?: Record<string, string>): Promise<T> => {
+  const call = async <T>(method: 'GET' | 'POST' | 'DELETE', path: string, data?: unknown, headers?: Record<string, string>): Promise<T> => {
     const response = await exchange(method, path, data, true, headers);
     if (response.statusCode < 200 || response.statusCode >= 300) throw refusal(response.statusCode, response.data);
     return response.data as T;
@@ -157,6 +157,7 @@ export function createGateway(options: {
     get: <T>(path: string) => call<T>('GET', path),
     /** A change; `headers` adds request headers such as an idempotency key. */
     post: <T>(path: string, data: unknown, headers?: Record<string, string>) => call<T>('POST', path, data, headers),
+    remove: (path: string) => call<unknown>('DELETE', path),
     stream,
     signIn: (username: string, password: string) => signInStep('/api/v1/auth/app/sessions', { username, password }),
     completeTotp: (pendingLogin: string, code: string) => signInStep('/api/v1/auth/app/sessions/totp', { pendingLogin, code }),
