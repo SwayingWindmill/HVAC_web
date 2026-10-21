@@ -184,6 +184,7 @@ for (const file of files) {
   ].includes(file), () => selectBroad(file, 'PR gate or domain task matrix implementation changed'));
 
   match(file.startsWith('apps/hvac-web/') || file.startsWith('runtimes/copilot-runtime/'), () => selectWeb(file, 'HVAC Web runtime changed'));
+  match(file.startsWith('apps/hvac-miniprogram/'), () => selectWeb(file, 'WeChat mini program changed'));
   // The Agent's semantic query whitelist is generated from the Cube model (#573).
   match(file.startsWith('semantic/cube/') || file === 'libs/analyticsmodel/semantic_catalog.json' || file === 'scripts/generate-semantic-catalog.mjs', () => add(contractProfiles, ['core']));
   match(file.startsWith('contracts/'), () => {

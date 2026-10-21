@@ -18,6 +18,7 @@ var (
 	ErrSessionNotFound = errors.New("session not found")
 	ErrSessionRevoked  = errors.New("session revoked")
 	ErrSessionConflict = errors.New("session conflict")
+	ErrSessionClient   = errors.New("session client must be BROWSER or MINI_PROGRAM")
 )
 
 type FailurePoint string
@@ -32,8 +33,21 @@ type FailureInjector func(FailurePoint) error
 
 type IDGenerator func() string
 
+// Client is who a Session was issued to, and so how it may be presented (#664).
+type Client string
+
+const (
+	// ClientBrowser is the Web application: the Session travels in an HttpOnly cookie.
+	ClientBrowser Client = "BROWSER"
+	// ClientMiniProgram is the WeChat mini program: the Session travels in the Authorization header.
+	ClientMiniProgram Client = "MINI_PROGRAM"
+)
+
+func (client Client) valid() bool { return client == ClientBrowser || client == ClientMiniProgram }
+
 type Session struct {
 	ID                       string
+	Client                   Client
 	Principal                identitycontext.UserPrincipal
 	TenantID                 string
 	CSRFTokenCiphertext      []byte
@@ -95,6 +109,9 @@ func (store *MemoryStore) CreateSession(ctx context.Context, session Session, mu
 	defer store.mu.Unlock()
 	if _, exists := store.sessions[session.ID]; exists {
 		return Session{}, ErrSessionConflict
+	}
+	if !session.Client.valid() {
+		return Session{}, ErrSessionClient
 	}
 	messageID := store.ids()
 	session.AggregateVersion = 1

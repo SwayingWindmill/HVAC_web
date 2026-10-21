@@ -1,0 +1,36 @@
+.person {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 26px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 52px;
+  text-align: center;
+}
+
+.person-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.person-name {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.sign-out {
+  color: var(--destructive-text);
+}
+
+.hint {
+  text-align: center;
+}

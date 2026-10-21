@@ -1,0 +1,167 @@
+/*
+ * 泉来禾 HVAC 设计系统的浅色令牌（apps/hvac-web/src/global.css），小程序只做浅色。
+ * 尺寸用 px：设计稿按 390 宽画，和网页的规范一致。
+ */
+page {
+  --background: #f7f7f8;
+  --foreground: #18181b;
+  --card: #ffffff;
+  --primary: #3f5bd9;
+  --primary-hover: #3550c7;
+  --primary-soft: #eef1fd;
+  --primary-line: #c9d2f7;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #3f3f46;
+  --muted: #f7f7f9;
+  --muted-foreground: #71717a;
+  --subtle-foreground: #a1a1aa;
+  --border: #e7e7ea;
+  --divider: #f0f0f2;
+  --input: #dedee3;
+  --destructive: #d92d20;
+  --destructive-soft: #fdeceb;
+  --destructive-text: #b42318;
+  --success: #1f9d55;
+  --success-soft: #e8f6ee;
+  --success-text: #18794e;
+  --warning-soft: #fef3e2;
+  --warning-text: #b45309;
+  --severity-critical: #d92d20;
+  --severity-major: #ea580c;
+  --severity-minor: #d97706;
+  --severity-warning: #0284c7;
+  --severity-info: #71717a;
+
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 16px 24px;
+}
+
+/* A tab page keeps its last card clear of the custom tab bar. */
+.with-tab-bar {
+  padding-bottom: calc(80px + env(safe-area-inset-bottom));
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.card-pad {
+  padding: 14px 16px;
+}
+
+.card-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--muted-foreground);
+}
+
+.caption {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted-foreground);
+}
+
+.unit {
+  margin-left: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--subtle-foreground);
+}
+
+.mono {
+  font-family: "Geist Mono", ui-monospace, Menlo, monospace;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.badge-good { background: var(--success-soft); color: var(--success-text); }
+.badge-bad { background: var(--destructive-soft); color: var(--destructive-text); }
+.badge-neutral { background: var(--secondary); color: var(--secondary-foreground); }
+.badge-warning { background: var(--warning-soft); color: var(--warning-text); }
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 52px;
+  padding: 0 16px;
+  border-top: 1px solid var(--divider);
+}
+
+.row:first-child {
+  border-top: 0;
+}
+
+/* WeChat's button keeps a 184px width, padding and a hairline ::after border unless reset. */
+button.button-primary,
+button.button-outline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100% !important;
+  margin: 0;
+  padding: 0;
+}
+
+button.button-primary::after,
+button.button-outline::after {
+  border: none;
+}
+
+.button-primary {
+  height: 48px;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.button-primary[disabled] {
+  opacity: 0.5;
+  background: var(--primary);
+  color: #ffffff;
+}
+
+.button-outline {
+  height: 48px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.state {
+  padding: 32px 16px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--muted-foreground);
+}

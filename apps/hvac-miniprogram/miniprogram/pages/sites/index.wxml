@@ -1,0 +1,22 @@
+<view class="screen">
+  <view wx:if="{{loading}}" class="state">正在读取…</view>
+  <view wx:elif="{{failed}}" class="state">站点列表暂时读不到，返回后再试。</view>
+  <block wx:else>
+    <text class="caption count">你能看的站点 {{sites.length}} 个</text>
+    <view class="card" aria-role="radiogroup" aria-label="站点">
+      <view
+        wx:for="{{sites}}"
+        wx:key="id"
+        class="row site {{item.current ? 'site-current' : ''}}"
+        data-id="{{item.id}}"
+        bindtap="choose"
+        aria-role="radio"
+        aria-checked="{{item.current}}"
+      >
+        <text>{{item.name}}</text>
+        <text wx:if="{{item.current}}" class="check" aria-hidden="true">✓</text>
+      </view>
+    </view>
+    <text class="caption">选好后总览换成这个站点，下次打开小程序还停在这里。</text>
+  </block>
+</view>

@@ -627,7 +627,7 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := store.CreateSession(context.Background(), sessionstore.Session{ID: "session-id", Principal: identitycontext.UserPrincipal{Subject: "fixture-user", Issuer: "https://issuer.example.test", Roles: []string{"operator"}}, TenantID: telemetryTestTenant, CSRFTokenCiphertext: csrfCiphertext, ExpiresAt: now.Add(time.Hour)}, sessionstore.MutationContext{Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "identity-policy-1", CorrelationID: "fixture", TraceID: strings.Repeat("a", 32), Traceparent: "00-" + strings.Repeat("a", 32) + "-" + strings.Repeat("b", 16) + "-01", ExecutingService: "platform-gateway", ExecutingSPIFFEID: telemetryTestSPIFFE, OccurredAt: now})
+	created, err := store.CreateSession(context.Background(), sessionstore.Session{ID: "session-id", Client: sessionstore.ClientBrowser, Principal: identitycontext.UserPrincipal{Subject: "fixture-user", Issuer: "https://issuer.example.test", Roles: []string{"operator"}}, TenantID: telemetryTestTenant, CSRFTokenCiphertext: csrfCiphertext, ExpiresAt: now.Add(time.Hour)}, sessionstore.MutationContext{Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "identity-policy-1", CorrelationID: "fixture", TraceID: strings.Repeat("a", 32), Traceparent: "00-" + strings.Repeat("a", 32) + "-" + strings.Repeat("b", 16) + "-01", ExecutingService: "platform-gateway", ExecutingSPIFFEID: telemetryTestSPIFFE, OccurredAt: now})
 	if err != nil {
 		t.Fatal(err)
 	}

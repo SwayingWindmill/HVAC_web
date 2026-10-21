@@ -282,7 +282,7 @@ func (h *handler) telemetryCaller(writer http.ResponseWriter, request *http.Requ
 	if session, ok := routeSessionFromContext(request.Context()); ok {
 		return h.telemetrySessionCaller(writer, request, session, requireCSRF)
 	}
-	if _, err := request.Cookie(sessionCookieName); err == nil {
+	if hasSessionCredential(request) {
 		session, failure := h.identitySession(request)
 		if failure != nil {
 			writeIdentityFailure(writer, request, *failure)
@@ -299,7 +299,7 @@ func (h *handler) telemetryCaller(writer http.ResponseWriter, request *http.Requ
 }
 
 func (h *handler) telemetrySessionCaller(writer http.ResponseWriter, request *http.Request, session bffSession, requireCSRF bool) (telemetryCaller, bool) {
-	if requireCSRF {
+	if requireCSRF && session.needsBrowserProof() {
 		if h.identity == nil {
 			h.writeTelemetryFailure(writer, request, telemetryUnavailable("Telemetry Session validation is unavailable."))
 			return telemetryCaller{}, false
@@ -361,7 +361,7 @@ func verifiedTelemetryWorkloadIdentity(request *http.Request) (string, string, b
 }
 
 func isVerifiedTelemetryWorkloadRequest(request *http.Request) bool {
-	if _, err := request.Cookie(sessionCookieName); err == nil {
+	if hasSessionCredential(request) {
 		return false
 	}
 	if _, _, ok := matchPublicTelemetryRoute(request.URL.Path); !ok {

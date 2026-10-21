@@ -209,7 +209,7 @@ func (h *handler) intelligenceSession(writer http.ResponseWriter, request *http.
 			return bffSession{}, false
 		}
 	}
-	if !requireCSRF {
+	if !requireCSRF || !session.needsBrowserProof() {
 		return session, true
 	}
 	if h.identity == nil {

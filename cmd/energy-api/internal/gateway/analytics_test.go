@@ -301,7 +301,8 @@ func newAnalyticsGatewayFixture(t *testing.T, options analyticsFixtureOptions) *
 		t.Fatal(err)
 	}
 	created, err := store.CreateSession(context.Background(), sessionstore.Session{
-		ID: "analytics-session", Principal: identitycontext.UserPrincipal{Subject: "energy-user", Issuer: "https://issuer.example.test", Roles: []string{"energy-analyst"}},
+		Client: sessionstore.ClientBrowser,
+		ID:     "analytics-session", Principal: identitycontext.UserPrincipal{Subject: "energy-user", Issuer: "https://issuer.example.test", Roles: []string{"energy-analyst"}},
 		TenantID: analyticsGatewayTenant, CSRFTokenCiphertext: csrfCiphertext, ExpiresAt: now.Add(time.Hour),
 	}, sessionstore.MutationContext{Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "identity-policy-1", CorrelationID: "analytics-fixture", TraceID: strings.Repeat("a", 32), Traceparent: "00-" + strings.Repeat("a", 32) + "-" + strings.Repeat("b", 16) + "-01", ExecutingService: "platform-gateway", ExecutingSPIFFEID: analyticsGatewaySPIFFE, OccurredAt: now})
 	if err != nil {

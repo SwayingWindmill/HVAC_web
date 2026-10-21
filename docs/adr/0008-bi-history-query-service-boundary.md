@@ -43,7 +43,7 @@
 POST /api/v1/analytics/energy-series
 ```
 
-要求有效的登录会话、`Origin` 一致和 CSRF 令牌；请求的租户必须是会话的当前租户。网关请 IAM 对这个站点、动作 `analytics.energy-series.read` 做判定（按角色指派，范围是整个租户或这个站点，ADR 0022；明确禁止优先）。允许后，网关签一张短时授权，范围是规范化查询的 SHA-256 摘要、`principalId` 是 IAM 里不变的人员编号，再用服务身份经双向 TLS 调查询服务。浏览器的 cookie、CSRF 令牌和自己带的范围头从不转发给 IAM 或查询服务。
+要求有效的登录会话；网页的 cookie 会话还要 `Origin` 一致和 CSRF 令牌，微信小程序放在 `Authorization` 头里的会话不需要（ADR 0024）；请求的租户必须是会话的当前租户。网关请 IAM 对这个站点、动作 `analytics.energy-series.read` 做判定（按角色指派，范围是整个租户或这个站点，ADR 0022；明确禁止优先）。允许后，网关签一张短时授权，范围是规范化查询的 SHA-256 摘要、`principalId` 是 IAM 里不变的人员编号，再用服务身份经双向 TLS 调查询服务。浏览器的 cookie、CSRF 令牌和自己带的范围头从不转发给 IAM 或查询服务。
 
 设备历史的公开接口是 `POST /api/v1/telemetry/device-series:query`（原始读数）和 `device-series:aggregate`（按时间段统计）：网关先做遥测的 `telemetry.history.read` 判定，再按会话的当前租户和 IAM 给出的设备所属租户 / 站点拼出内部查询，另签一张绑定整个查询的授权，查询服务才去读历史。返回的每个历史读数带着它采样时那一刻的点位编号。
 

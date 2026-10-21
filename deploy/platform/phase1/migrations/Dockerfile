@@ -21,6 +21,7 @@ COPY infra/durability/postgres/init/004-audit-postgres-outbox.sql /opt/hvac/repo
 COPY infra/durability/postgres/init/005-s0-session-assurance.sql /opt/hvac/repo/infra/durability/postgres/init/005-s0-session-assurance.sql
 COPY infra/durability/postgres/init/006-s04-audit-search.sql /opt/hvac/repo/infra/durability/postgres/init/006-s04-audit-search.sql
 COPY infra/durability/postgres/init/007-audit-postgres-outbox-transport.sql /opt/hvac/repo/infra/durability/postgres/init/007-audit-postgres-outbox-transport.sql
+COPY infra/durability/postgres/init/008-session-client.sql /opt/hvac/repo/infra/durability/postgres/init/008-session-client.sql
 
 COPY infra/registry/postgres/init/001-s1-registry-baseline.sql /opt/hvac/repo/infra/registry/postgres/init/001-s1-registry-baseline.sql
 COPY infra/registry/postgres/init/001a-tenant-foundation.sql /opt/hvac/repo/infra/registry/postgres/init/001a-tenant-foundation.sql

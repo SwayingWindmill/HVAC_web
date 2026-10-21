@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 37,
+  "registryRevision": 38,
   "routes": [
     {"method": "GET", "path": "/api/v1/iam/members", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
     {"method": "POST", "path": "/api/v1/iam/members", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
@@ -46,6 +46,8 @@
       "compatibilityMode": "native",
       "allowedScopeDimensions": []
     },
+    {"method": "POST", "path": "/api/v1/auth/app/sessions", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": []},
+    {"method": "POST", "path": "/api/v1/auth/app/sessions/totp", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": []},
     {
       "method": "GET",
       "path": "/api/v1/auth/callback",

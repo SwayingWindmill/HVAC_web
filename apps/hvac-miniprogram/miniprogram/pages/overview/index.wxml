@@ -1,0 +1,65 @@
+<page-header title="总览" />
+
+<view class="screen with-tab-bar">
+  <view wx:if="{{siteName}}" class="site-row">
+    <view class="site-pill" bindtap="openSites" aria-role="button" aria-label="切换站点，现在是{{siteName}}">{{siteName}}<image class="chevron" src="/assets/chevron-down.svg" aria-hidden="true" /></view>
+    <text class="caption">数据 <text class="mono">{{updatedAt}}</text></text>
+  </view>
+  <view wx:if="{{loading}}" class="state">正在读取…</view>
+  <view wx:elif="{{noSite}}" class="state">这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。</view>
+  <view wx:elif="{{failed}}" class="state">站点列表暂时读不到，下拉刷新再试。</view>
+  <block wx:elif="{{view}}">
+    <view class="card hero" aria-label="本月节省">
+      <view class="hero-label">
+        <image class="leaf" src="/assets/leaf.svg" mode="aspectFit" aria-hidden="true" />
+        <text>本月节省</text>
+      </view>
+      <view class="hero-amount {{view.savings.state === 'saved' ? '' : 'hero-amount-empty'}}">{{view.savings.amount}}</view>
+      <view class="hero-detail">{{view.savings.detail}}</view>
+    </view>
+
+    <view wx:if="{{view.savings.measures.length}}" class="card">
+      <view class="card-pad card-title">在统计的节能措施</view>
+      <view wx:for="{{view.savings.measures}}" wx:key="id" class="measure">
+        <view class="measure-line">
+          <text class="measure-name">{{item.name}}</text>
+          <text class="measure-amount">{{item.amount}}</text>
+        </view>
+        <text class="caption">{{item.detail}}</text>
+      </view>
+    </view>
+
+    <view class="card card-pad suggest {{view.recommendation.state === 'ready' ? 'suggest-ready' : ''}}" aria-label="还能再省">
+      <text class="suggest-label">还能再省</text>
+      <text class="suggest-title">{{view.recommendation.title}}</text>
+      <view wx:if="{{view.recommendation.detail}}" class="suggest-detail">
+        <text wx:if="{{view.recommendation.risk}}" class="badge badge-{{view.recommendation.risk.tone}}">{{view.recommendation.risk.text}}</text>
+        <text class="caption">{{view.recommendation.detail}}</text>
+      </view>
+    </view>
+
+    <view class="card card-pad energy" aria-label="今天用能">
+      <view class="energy-head">
+        <text class="card-title">今天用能</text>
+        <text class="caption">较昨天同时段</text>
+      </view>
+      <view wx:if="{{view.energy.note}}" class="caption">{{view.energy.note}}</view>
+      <block wx:else>
+        <view class="metrics">
+          <view wx:for="{{view.energy.metrics}}" wx:key="label" class="metric">
+            <text class="caption">{{item.label}}</text>
+            <view class="metric-value">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
+            <text wx:if="{{item.badge}}" class="badge badge-{{item.badge.tone}}">{{item.badge.text}}</text>
+          </view>
+        </view>
+      </block>
+    </view>
+
+    <view class="card">
+      <view class="row">
+        <text>正在发生的告警</text>
+        <text class="row-value">{{view.alarms}}</text>
+      </view>
+    </view>
+  </block>
+</view>

@@ -114,7 +114,8 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 		t.Fatal(err)
 	}
 	created, err := store.CreateSession(context.Background(), sessionstore.Session{
-		ID: "operations-session",
+		Client: sessionstore.ClientBrowser,
+		ID:     "operations-session",
 		Principal: identitycontext.UserPrincipal{
 			Subject: "operations-user", Issuer: "https://issuer.example.test", Roles: []string{"operator"},
 		},

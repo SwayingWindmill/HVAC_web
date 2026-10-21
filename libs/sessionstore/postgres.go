@@ -64,6 +64,9 @@ func (store *PostgresStore) Ping(ctx context.Context) error {
 }
 
 func (store *PostgresStore) CreateSession(ctx context.Context, session Session, mutation MutationContext) (Session, error) {
+	if !session.Client.valid() {
+		return Session{}, ErrSessionClient
+	}
 	ctx, span := observability.Start(ctx, "postgres.session.transaction", observability.SpanKindClient, map[string]any{"db.system": "postgresql", "db.operation": "session.create"})
 	defer span.End()
 	messageID := store.ids()
@@ -98,13 +101,13 @@ func (store *PostgresStore) CreateSession(ctx context.Context, session Session, 
 			session_id, principal_subject, principal_issuer, display_name, email, roles,
 			tenant_id, csrf_token_ciphertext, provider_tokens_ciphertext,
 			authentication_acr, authentication_amr, authentication_time,
-			expires_at, last_activity_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NULL,$15,$16,$17,$17)
+			expires_at, last_activity_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at, client
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NULL,$15,$16,$17,$17,$18)
 	`, session.ID, session.Principal.Subject, session.Principal.Issuer, session.Principal.DisplayName,
 		session.Principal.Email, roles, session.TenantID, session.CSRFTokenCiphertext,
 		session.ProviderTokensCiphertext, session.AuthenticationACR, authenticationAMR, session.AuthenticationTime.UTC(),
 		session.ExpiresAt.UTC(), session.LastActivityAt.UTC(), session.AggregateVersion,
-		session.LastAuditMessageID, session.CreatedAt)
+		session.LastAuditMessageID, session.CreatedAt, string(session.Client))
 	if err != nil {
 		return Session{}, mapWriteError(err)
 	}
@@ -335,7 +338,7 @@ const sessionSelect = `
 	SELECT session_id, principal_subject, principal_issuer, display_name, email, roles,
 	       tenant_id, csrf_token_ciphertext, provider_tokens_ciphertext,
 	       authentication_acr, authentication_amr, authentication_time,
-	       expires_at, last_activity_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at
+	       expires_at, last_activity_at, revoked_at, aggregate_version, last_audit_message_id, created_at, updated_at, client
 	FROM gateway.sessions`
 
 type rowScanner interface {
@@ -353,7 +356,7 @@ func scanSession(row rowScanner) (Session, error) {
 		&session.ProviderTokensCiphertext, &session.AuthenticationACR, &authenticationAMR, &session.AuthenticationTime,
 		&session.ExpiresAt, &session.LastActivityAt, &revokedAt,
 		&session.AggregateVersion, &session.LastAuditMessageID, &session.CreatedAt,
-		&session.UpdatedAt,
+		&session.UpdatedAt, &session.Client,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, ErrSessionNotFound

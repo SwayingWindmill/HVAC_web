@@ -1,0 +1,75 @@
+page {
+  background: var(--card);
+}
+
+.login {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 120px 28px calc(24px + env(safe-area-inset-bottom));
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mark {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--primary);
+}
+
+.name {
+  font-size: 26px;
+  line-height: 32px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--secondary-foreground);
+}
+
+.input {
+  height: 48px;
+  box-sizing: border-box;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+.input-error {
+  border-color: var(--destructive);
+  box-shadow: 0 0 0 3px var(--destructive-soft);
+}
+
+.error {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--destructive-text);
+}
+
+.footer {
+  margin-top: auto;
+  text-align: center;
+}

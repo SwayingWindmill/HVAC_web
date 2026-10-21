@@ -332,6 +332,112 @@
         }
       }
     },
+    "/api/v1/auth/app/sessions": {
+      "post": {
+        "operationId": "createAppSession",
+        "summary": "Sign the WeChat mini program in with a username and password; the Session travels in the Authorization header",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppPasswordSignInRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Signed in. Send `Authorization: Bearer <sessionToken>` on later requests; no cookie, Origin or CSRF token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppSession"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The account has a one-time code: send it with pendingLogin to /api/v1/auth/app/sessions/totp.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppPendingSignIn"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/app/sessions/totp": {
+      "post": {
+        "operationId": "completeAppSessionTotp",
+        "summary": "Finish a mini program sign-in with the account's one-time code",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppTotpSignInRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Signed in.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/v1/auth/logout": {
       "post": {
         "operationId": "logout",
@@ -2300,8 +2406,8 @@
       "CsrfToken": {
         "name": "X-CSRF-Token",
         "in": "header",
-        "required": true,
-        "description": "Session-bound CSRF token returned by the current-principal resource.",
+        "required": false,
+        "description": "Session-bound CSRF token returned by the current-principal resource. Required, with the page Origin, for changes made with a browser Session (cookie); a mini program Session sent in the Authorization header needs neither (ADR 0024).",
         "schema": {
           "type": "string",
           "minLength": 16,
@@ -3022,6 +3128,83 @@
             "type": "string",
             "format": "email",
             "maxLength": 320
+          }
+        }
+      },
+      "AppPasswordSignInRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      },
+      "AppTotpSignInRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pendingLogin",
+          "code"
+        ],
+        "properties": {
+          "pendingLogin": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16
+          }
+        }
+      },
+      "AppSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sessionToken",
+          "expiresAt"
+        ],
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "The opaque Session, accepted only in the Authorization header."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AppPendingSignIn": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "pendingLogin"
+        ],
+        "properties": {
+          "step": {
+            "type": "string",
+            "enum": [
+              "totp"
+            ]
+          },
+          "pendingLogin": {
+            "type": "string"
           }
         }
       },
