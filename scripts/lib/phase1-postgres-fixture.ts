@@ -11,9 +11,9 @@ import { join, resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const postgresImage = 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412';
-const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
+const pause = (milliseconds: number) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
-function run(command, args) {
+function run(command: string, args: string[]): string {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true });
   if (result.error || result.status !== 0) {
     throw new Error(`${command} ${args[0]} failed: ${result.error?.message ?? result.stderr?.trim() ?? result.status}`);
@@ -21,26 +21,34 @@ function run(command, args) {
   return String(result.stdout ?? '').trim();
 }
 
-async function freePort() {
+async function freePort(): Promise<number> {
   const server = createServer();
   server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
   await once(server, 'listening');
-  const { port } = server.address();
-  await new Promise((resolveClose) => server.close(resolveClose));
+  const { port } = server.address() as { port: number };
+  await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
   return port;
 }
 
-/**
- * Runs `go test` on `packages` against a fresh database. `databases` are the Phase 1 databases
- * whose migrations to apply; `env(url)` names the test variables, where `url(role, database)`
- * is a connection string for a login role (`postgres` is the superuser).
- */
-export async function runGoTestsOnPhase1Postgres({ name, databases, logins, packages, env, goArgs = [] }) {
+export interface Phase1PostgresGoTests {
+  readonly name: string;
+  /** The Phase 1 databases whose migrations to apply. */
+  readonly databases: readonly string[];
+  /** Login roles that get a password. */
+  readonly logins: readonly string[];
+  readonly packages: readonly string[];
+  /** The test variables; `url(role, database)` connects as a login role (`postgres` is the superuser). */
+  readonly env: (url: (role: string, database: string) => string) => Record<string, string>;
+  readonly goArgs?: readonly string[];
+}
+
+/** Runs `go test` on `packages` against a fresh database. */
+export async function runGoTestsOnPhase1Postgres({ name, databases, logins, packages, env, goArgs = [] }: Phase1PostgresGoTests): Promise<void> {
   const container = `hvac-${name}-pg-test-${process.pid}`;
   const superuserPassword = randomBytes(18).toString('hex');
   const loginPassword = randomBytes(18).toString('hex');
-  const psql = (database, sql) => run('docker', ['exec', container, 'psql', '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', '-Atqc', sql]);
-  const psqlFile = (database, path) => {
+  const psql = (database: string, sql: string) => run('docker', ['exec', container, 'psql', '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', '-Atqc', sql]);
+  const psqlFile = (database: string, path: string) => {
     run('docker', ['cp', resolve(root, path), `${container}:/tmp/migration.sql`]);
     run('docker', ['exec', container, 'psql', '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', '-q', '-f', '/tmp/migration.sql']);
   };
@@ -61,7 +69,7 @@ export async function runGoTestsOnPhase1Postgres({ name, databases, logins, pack
     for (const [database, path] of migrations) psqlFile(database, path.trim());
     psql('postgres', logins.map((role) => `ALTER ROLE ${role} WITH PASSWORD '${loginPassword}';`).join(' '));
 
-    const url = (role, database) => `postgres://${role}:${role === 'postgres' ? superuserPassword : loginPassword}@127.0.0.1:${port}/${database}?sslmode=disable`;
+    const url = (role: string, database: string) => `postgres://${role}:${role === 'postgres' ? superuserPassword : loginPassword}@127.0.0.1:${port}/${database}?sslmode=disable`;
     const child = spawn(process.env.GO_BINARY ?? 'go', ['test', '-count=1', ...goArgs, ...packages], {
       cwd: root,
       stdio: 'inherit',

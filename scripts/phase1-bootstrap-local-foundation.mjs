@@ -15,7 +15,8 @@ const policyIDs = {
 // Tenant-wide role holding only what it reads. Phase 1 runs the energy projector inside the
 // Telemetry Runtime, so that identity resolves meter bindings and reads the import Tariffs it lays
 // out as price windows (#575); report-service, the optimization service and M&V read the Sites'
-// energy and its cost through the Telemetry Query Service (ADR 0023).
+// energy and its cost through the Telemetry Query Service (ADR 0023); the Gateway's workload reads
+// the Site a WeChat alarm reminder names.
 const workloads = [
   {
     subject: 'spiffe://hvac.local/telemetry-runtime-service', displayName: '能耗投影（遥测运行时）',
@@ -32,6 +33,12 @@ const workloads = [
   {
     subject: 'spiffe://hvac.local/mv-service', displayName: '节能核验',
     roleKey: 'mv-energy-read', roleName: '节能核验读取能耗', capabilities: ['analytics.energy-series.read'], ids: 0x900000000131,
+  },
+  // WeChat alarm reminders name the Site and its time (docs/specs/miniprogram-wechat.md); the
+  // reminder worker runs in the Gateway's workload.
+  {
+    subject: 'spiffe://hvac.local/platform-gateway', displayName: '微信告警提醒',
+    roleKey: 'wechat-reminder-site-read', roleName: '微信提醒读取站点', capabilities: ['site.read'], ids: 0x900000000141,
   },
 ].map((workload) => ({
   ...workload,

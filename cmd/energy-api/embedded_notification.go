@@ -92,6 +92,16 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger) (*h
 		store.Close()
 		return nil, nil, func() {}, err
 	}
+	reminders, err := newWeChatAlarmReminderWorker(scheduler)
+	if err != nil {
+		if deliveryPort != nil {
+			deliveryPort.Close()
+		}
+		relay.Close()
+		scheduler.Close()
+		store.Close()
+		return nil, nil, func() {}, err
+	}
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "energy-api-notification", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
@@ -112,6 +122,7 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger) (*h
 	}
 	go runAlarmNotificationRelay(ctx, logger, relay, store)
 	go runNotificationScheduler(ctx, logger, scheduler, store, deliveryPort)
+	go runWeChatAlarmReminders(ctx, logger, reminders)
 	closeAll := func() {
 		if deliveryPort != nil {
 			deliveryPort.Close()

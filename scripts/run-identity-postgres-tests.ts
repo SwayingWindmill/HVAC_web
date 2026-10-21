@@ -1,6 +1,6 @@
 // identity-service's PostgreSQL tests on a throwaway database with the production bootstrap and
 // identity migrations (services/identity-service/internal/identity).
-import { runGoTestsOnPhase1Postgres } from './lib/phase1-postgres-fixture.mjs';
+import { runGoTestsOnPhase1Postgres } from './lib/phase1-postgres-fixture.ts';
 
 await runGoTestsOnPhase1Postgres({
   name: 'identity',
@@ -8,7 +8,7 @@ await runGoTestsOnPhase1Postgres({
   logins: ['identity_runtime', 'identity_admin'],
   packages: ['./services/identity-service/internal/identity/...'],
   goArgs: process.argv.slice(2),
-  env: (url) => ({
+  env: (url: (role: string, database: string) => string) => ({
     IDENTITY_TEST_ADMIN_DATABASE_URL: url('identity_admin', 'hvac_identity'),
     IDENTITY_TEST_RUNTIME_DATABASE_URL: url('identity_runtime', 'hvac_identity'),
     // The rollback test takes a grant away from identity_admin and gives it back, as the schema owner would.
