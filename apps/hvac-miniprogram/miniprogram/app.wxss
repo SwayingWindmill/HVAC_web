@@ -116,8 +116,9 @@ page {
   align-items: center;
   justify-content: center;
   background: #3f5bd9;
-  /* Keeps the rounded clip on the turning layer in iOS WebKit. */
+  /* Keeps the rounded clip on the turning layer in iOS WebKit, which overflow alone does not. */
   transform: translateZ(0);
+  -webkit-mask-image: -webkit-radial-gradient(white, black);
 }
 
 .orb-flow {
