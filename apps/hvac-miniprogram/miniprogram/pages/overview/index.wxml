@@ -7,16 +7,16 @@
   <view wx:elif="{{noSite}}" class="state">这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。</view>
   <view wx:elif="{{failed}}" class="state">站点列表暂时读不到，下拉刷新再试。</view>
   <block wx:elif="{{view}}">
-    <view class="card hero" aria-label="本月节省">
+    <view wx:if="{{view.savings}}" class="card hero" aria-label="本月节省">
       <view class="hero-label">
         <image class="leaf" src="/assets/leaf.svg" mode="aspectFit" aria-hidden="true" />
         <text>本月节省</text>
       </view>
-      <view class="hero-amount {{view.savings.state === 'saved' ? '' : 'hero-amount-empty'}}">{{view.savings.amount}}</view>
+      <view class="hero-amount">{{view.savings.amount}}</view>
       <view class="hero-detail">{{view.savings.detail}}</view>
     </view>
 
-    <view wx:if="{{view.savings.measures.length}}" class="card">
+    <view wx:if="{{view.savings && view.savings.measures.length}}" class="card">
       <view class="card-pad card-title">在统计的节能措施</view>
       <view wx:for="{{view.savings.measures}}" wx:key="id" class="measure">
         <view class="measure-line">
@@ -27,7 +27,7 @@
       </view>
     </view>
 
-    <view class="card card-pad suggest {{view.recommendation.state === 'ready' ? 'suggest-ready' : ''}}" aria-label="还能再省">
+    <view wx:if="{{view.recommendation}}" class="card card-pad suggest" aria-label="还能再省">
       <text class="suggest-label">还能再省</text>
       <text class="suggest-title">{{view.recommendation.title}}</text>
       <view wx:if="{{view.recommendation.detail}}" class="suggest-detail">
@@ -77,10 +77,22 @@
     <view wx:else class="card card-pad caption">这个站点还没有登记冷站设备，在网页「系统管理 → 资产与点位」登记后，这里显示冷站在不在运行。</view>
 
     <view class="card">
-      <view class="row" bindtap="openAlarms" aria-role="link">
-        <text>正在发生的告警</text>
-        <text class="row-value">{{view.alarms}} ›</text>
+      <view class="row alarm-row" bindtap="openAlarms" aria-role="link">
+        <image class="alarm-icon" src="{{view.alarms.happening ? '/assets/alarm-active.svg' : '/assets/alarm-none.svg'}}" mode="aspectFit" aria-hidden="true" />
+        <view class="row-main">
+          <text>正在发生的告警</text>
+          <text wx:if="{{view.alarms.waiting}}" class="caption">{{view.alarms.waiting}}</text>
+        </view>
+        <text class="row-value">{{view.alarms.count}} ›</text>
       </view>
+    </view>
+
+    <view wx:if="{{view.notYet}}" class="card not-yet" aria-label="本月节省和还能再省">
+      <view wx:for="{{view.notYet.rows}}" wx:key="label" class="not-yet-row">
+        <text class="not-yet-label">{{item.label}}</text>
+        <text class="caption">{{item.text}}</text>
+      </view>
+      <view wx:if="{{view.notYet.hint}}" class="not-yet-hint caption">{{view.notYet.hint}}</view>
     </view>
 
     <view wx:if="{{daily}}" class="card card-pad daily" aria-label="每日运行结论">
