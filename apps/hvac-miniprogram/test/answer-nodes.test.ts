@@ -1,0 +1,77 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { ANSWER_STYLES, answerNodes, cellStyle } from '../miniprogram/lib/answer-nodes.ts';
+
+const text = (value: string) => ({ type: 'text', text: value });
+/** A table row: the first column reads left, the figures after it right. */
+const row = (cell: 'th' | 'td', cells: readonly string[]) => ({
+  name: 'tr',
+  children: cells.map((value, column) => ({ name: cell, attrs: { style: cellStyle(cell, column) }, children: [text(value)] })),
+});
+
+test('an answer reads as the assistant wrote it: the bold conclusion, paragraphs and a small table', () => {
+  const answer = [
+    '**10 月 15 日比 10 月 8 日多用电 262 kWh，主要是负荷变大了。**',
+    '',
+    '两天的能效差不多，多出来的电基本都换成了冷量。',
+    '',
+    '| 日期 | 用电（kWh） | 供冷（kWh） |',
+    '| --- | ---: | ---: |',
+    '| 10 月 8 日 | 1,372 | 6,120 |',
+    '| 10 月 15 日 | 1,634 | 7,402 |',
+  ].join('\n');
+  assert.deepEqual(answerNodes(answer), [
+    { name: 'p', attrs: { style: ANSWER_STYLES.paragraph }, children: [{ name: 'strong', children: [text('10 月 15 日比 10 月 8 日多用电 262 kWh，主要是负荷变大了。')] }] },
+    { name: 'p', attrs: { style: ANSWER_STYLES.paragraph }, children: [text('两天的能效差不多，多出来的电基本都换成了冷量。')] },
+    { name: 'table', attrs: { style: ANSWER_STYLES.table }, children: [
+      row('th', ['日期', '用电（kWh）', '供冷（kWh）']),
+      row('td', ['10 月 8 日', '1,372', '6,120']),
+      row('td', ['10 月 15 日', '1,634', '7,402']),
+    ] },
+  ]);
+});
+
+test('a bold conclusion written straight into the next sentence still shows as bold, and lists keep their items', () => {
+  assert.deepEqual(answerNodes('**多用电 18 kWh。**主要来自 2 号机组：\n- 2 号机组多开了 **3** 小时\n- 1 号机组持平\n\n1. 先看负荷\n2. 再看能效'), [
+    { name: 'p', attrs: { style: ANSWER_STYLES.paragraph }, children: [{ name: 'strong', children: [text('多用电 18 kWh。')] }] },
+    { name: 'p', attrs: { style: ANSWER_STYLES.paragraph }, children: [text('主要来自 2 号机组：')] },
+    { name: 'ul', attrs: { style: ANSWER_STYLES.list }, children: [
+      { name: 'li', children: [text('2 号机组多开了 '), { name: 'strong', children: [text('3')] }, text(' 小时')] },
+      { name: 'li', children: [text('1 号机组持平')] },
+    ] },
+    { name: 'ol', attrs: { style: ANSWER_STYLES.list }, children: [
+      { name: 'li', children: [text('先看负荷')] },
+      { name: 'li', children: [text('再看能效')] },
+    ] },
+  ]);
+});
+
+test('text that looks like markup stays text', () => {
+  assert.deepEqual(answerNodes('<img src=x onerror=alert(1)> 用电 `18` kWh'), [
+    { name: 'p', attrs: { style: ANSWER_STYLES.paragraph }, children: [text('<img src=x onerror=alert(1)> 用电 18 kWh')] },
+  ]);
+});
+
+// Regression (#664): the assistant wrote a table without its divider row on 2026-10-21, and the
+// renderer looped forever on its first row, freezing and then crashing the mini program.
+test('a table the assistant wrote without its divider row still reads as a table, and every line moves the reading on', { timeout: 2000 }, () => {
+  const answer = [
+    '**今天（10 月 21 日）到 10:41 为止的电费是 230.09 元，比昨天全天的 1423.48 元少，不过今天还没过完，不能直接和昨天比。**',
+    '',
+    '| 日期 | 用电量 | 估算电费 |',
+    '| 10 月 20 日（全天） | 1691 kWh | 1423.48 元 |',
+    '| 10 月 21 日（到 10:41） | 403 kWh | 230.09 元 |',
+  ].join('\n');
+  const [, table] = answerNodes(answer);
+  assert.deepEqual(table, { name: 'table', attrs: { style: ANSWER_STYLES.table }, children: [
+    row('th', ['日期', '用电量', '估算电费']),
+    row('td', ['10 月 20 日（全天）', '1691 kWh', '1423.48 元']),
+    row('td', ['10 月 21 日（到 10:41）', '403 kWh', '230.09 元']),
+  ] });
+  // A divider of single dashes is still a divider (GitHub tables need only one).
+  const [divided] = answerNodes(['| a | b |', '|-|-|', '| 1 | 2 |'].join('\n'));
+  assert.equal('children' in divided ? divided.children.length : 0, 2);
+  assert.equal(answerNodes('|').length, 1);
+  assert.match(cellStyle('td', 0), /text-align: left/);
+  assert.match(cellStyle('td', 2), /text-align: right/);
+});

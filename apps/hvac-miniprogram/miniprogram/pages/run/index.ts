@@ -3,7 +3,8 @@ import type { Plant } from '../../lib/plant';
 import { loadPlant } from '../../lib/plant-load';
 import { requireSession } from '../../lib/platform';
 import { whileShown } from '../../lib/refresh';
-import { hourlyCop, presentDevices, presentRealtime, siteClock, type DeviceFilter } from '../../lib/run';
+import { hourlyCop, presentDevices, presentRealtime, type DeviceFilter } from '../../lib/run';
+import { siteClock } from '../../lib/today';
 import { currentSite, type Site } from '../../lib/site';
 import { selectTab } from '../../lib/tab';
 
@@ -63,10 +64,10 @@ Page({
     wx.stopPullDownRefresh();
   },
 
-  /** `rereadEquipment` also re-reads the registered equipment, which only changes when an administrator edits it. */
+  /** `rereadEquipment` also re-reads the Sites and their registered equipment, which only change when an administrator edits them. */
   async refresh({ rereadEquipment = false } = {}) {
     try {
-      const site = await currentSite();
+      const site = await currentSite(rereadEquipment);
       if (site === null) {
         this.setData({ loading: false, noSite: true });
         return;

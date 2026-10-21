@@ -110,6 +110,17 @@ test('设备 lists the main equipment, then meters and the air, each with its st
   assert.deepEqual(offlineMeter.groups[1].devices.find((device) => device.name === 'METER-HVAC-TOTAL')?.status, { label: '离线', tone: 'offline' });
 });
 
+test('a pump without a power reading leads with its flow, and does not repeat it underneath', () => {
+  const pumpId = assetModel.devices.find((device: { displayName: string }) => device.displayName.startsWith('CHWP-01')).id;
+  const withoutPower = {
+    ...assetModel,
+    telemetryPoints: assetModel.telemetryPoints.filter((point: { reportingDeviceId: string; sourceKey: string }) =>
+      !(point.reportingDeviceId === pumpId && point.sourceKey === 'chwp.power')),
+  };
+  const pump = presentDevices(buildPlant(withoutPower, snapshots, now), 'all').groups[0].devices.find((device) => device.deviceId === pumpId);
+  assert.deepEqual([pump?.value, pump?.unit, pump?.detail], ['132', 'm³/h', '运行频率 30 Hz']);
+});
+
 test('需关注 gathers what is offline, faulty or late; a filter with nothing in it says so', () => {
   const bad = plantWith((snapshotOf) => {
     snapshotOf('CHILLER-01').presence.currentState = 'OFFLINE';

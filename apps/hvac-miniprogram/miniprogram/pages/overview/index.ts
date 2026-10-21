@@ -108,13 +108,14 @@ Page({
   },
 
   async onPullDownRefresh() {
-    await this.refresh();
+    // A pull also reads the Site list again.
+    await this.refresh(true);
     wx.stopPullDownRefresh();
   },
 
-  async refresh() {
+  async refresh(rereadSites = false) {
     try {
-      const site = await currentSite();
+      const site = await currentSite(rereadSites);
       if (site === null) {
         this.setData({ loading: false, noSite: true });
         return;

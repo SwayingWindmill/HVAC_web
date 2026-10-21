@@ -1,0 +1,17 @@
+<view class="screen top">
+  <view wx:if="{{loading}}" class="state">正在读取…</view>
+  <view wx:elif="{{failed}}" class="state">{{failed}}</view>
+  <view wx:elif="{{!conversations.length}}" class="state">在这个站点还没有问过助手。</view>
+  <block wx:else>
+    <text class="caption">你在这个站点最近问过的 {{conversations.length}} 个对话</text>
+    <view class="card">
+      <view wx:for="{{conversations}}" wx:key="id" class="row conversation" data-id="{{item.id}}" bindtap="open" aria-role="link">
+        <view class="conversation-main">
+          <text class="conversation-question">{{item.question}}</text>
+          <text class="caption">{{item.detail}}</text>
+        </view>
+        <text class="chevron-right" aria-hidden="true">›</text>
+      </view>
+    </view>
+  </block>
+</view>

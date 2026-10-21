@@ -34,3 +34,30 @@
   font-size: 11px;
   line-height: 14px;
 }
+
+/* The assistant: a round primary button standing above the bar, always in the primary colour. */
+.tab-raised {
+  position: relative;
+  justify-content: flex-end;
+  padding-bottom: 9px;
+  color: #3f5bd9;
+  font-weight: 600;
+}
+
+.raised {
+  position: absolute;
+  top: -20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 28px;
+  background: #3f5bd9;
+  box-shadow: 0 0 0 4px #ffffff, 0 8px 20px rgba(63, 91, 217, 0.35);
+}
+
+.raised-icon {
+  width: 26px;
+  height: 26px;
+}

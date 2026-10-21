@@ -1,0 +1,6 @@
+{
+  "usingComponents": {
+    "finding-card": "/components/finding-card/index"
+  },
+  "enablePullDownRefresh": true
+}

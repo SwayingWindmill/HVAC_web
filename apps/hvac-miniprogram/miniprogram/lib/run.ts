@@ -2,7 +2,7 @@
 // loops and the air, as the web's 实时运行 page reads them (apps/hvac-web/src/features/operations/realtime).
 
 import { grouped } from './format';
-import type { DayPoint } from './today';
+import { siteClock, type DayPoint } from './today';
 import { CATEGORY_LABELS, EQUIPMENT_CATEGORIES, isRunning, plantReading, type Plant, type PlantCategory, type PlantDevice, type PlantReading } from './plant';
 
 export type StatusTone = 'running' | 'stopped' | 'fault' | 'offline' | 'neutral';
@@ -229,11 +229,11 @@ export function deviceStatus(device: PlantDevice): { readonly label: string; rea
 /** Offline, faulty, or reporting late: what an operator should look at. */
 export const needsAttention = (device: PlantDevice) => device.connection === 'OFFLINE' || device.runState === 'FAULT' || device.hasStaleData;
 
-// The reading a row leads with: a machine's power, else the first of its role's key readings (the web's KEY_READINGS).
+// The reading a row leads with: a machine's power (a pump without a power reading, its flow), else the first of its role's key readings (the web's KEY_READINGS).
 const LEAD_KEYS: Readonly<Record<PlantCategory, readonly string[]>> = {
   CHILLER: ['chiller.power'],
-  CHILLED_WATER_PUMP: ['chwp.power'],
-  COOLING_WATER_PUMP: ['cwp.power'],
+  CHILLED_WATER_PUMP: ['chwp.power', 'chwp.flow_rate'],
+  COOLING_WATER_PUMP: ['cwp.power', 'cwp.flow_rate'],
   COOLING_TOWER: ['cooling_tower.power'],
   METER: ['hvac_meter.active_power', 'btu_meter.instant_cooling_capacity', 'btu_meter.flow_rate'],
   WEATHER: ['weather.ambient_dry_bulb_temperature'],
@@ -269,7 +269,7 @@ function deviceRow(device: PlantDevice) {
   const facts = hasRole
     ? (DETAIL_KEYS[device.category] ?? [])
       .map((key) => device.reading(key))
-      .filter((reading): reading is PlantReading => reading !== null && !neverRead(reading))
+      .filter((reading): reading is PlantReading => reading !== null && reading !== lead && !neverRead(reading))
       .map((reading) => `${reading.label} ${withUnit(reading)}`)
     : [`${device.readings.length} 个读数`];
   const missing = device.readings.filter(neverRead).length;
@@ -323,17 +323,6 @@ export interface DeviceToday {
   readonly device: readonly DayPoint[] | null;
 }
 
-const pad2 = (value: number) => String(value).padStart(2, '0');
-
-/** A moment as Site wall-clock time, counted from the Site's midnight rather than the phone's time zone. */
-export function siteClock(at: string, start: string): string {
-  const since = Date.parse(at) - Date.parse(start);
-  const days = Math.floor(since / 86_400_000);
-  const seconds = Math.floor((since - days * 86_400_000) / 1000);
-  const clock = `${pad2(Math.floor(seconds / 3600))}:${pad2(Math.floor(seconds / 60) % 60)}:${pad2(seconds % 60)}`;
-  if (days === 0) return clock;
-  return days === -1 ? `昨天 ${clock}` : `${-days} 天前`;
-}
 
 export function presentDevice(device: PlantDevice, today: DeviceToday | null) {
   const lead = leadReading(device);
