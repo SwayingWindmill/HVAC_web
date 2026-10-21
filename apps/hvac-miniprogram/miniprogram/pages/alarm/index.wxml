@@ -8,7 +8,7 @@
         <text class="caption">{{view.state}}</text>
       </view>
       <text class="title">{{view.title}}</text>
-      <text class="summary {{summaryOpen ? '' : 'summary-clamped'}}">{{view.summary}}</text>
+      <text class="summary {{summaryLong && !summaryOpen ? 'summary-clamped' : ''}}">{{view.summary}}</text>
       <text wx:if="{{summaryLong}}" class="summary-toggle" bindtap="toggleSummary" aria-role="button">{{summaryOpen ? '收起' : '展开'}}</text>
     </view>
 

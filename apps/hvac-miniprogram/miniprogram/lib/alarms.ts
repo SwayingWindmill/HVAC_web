@@ -128,7 +128,7 @@ function row(alarm: Alarm, when: string) {
     severity: SEVERITY_LABELS[alarm.currentSeverity],
     when,
     status,
-    /** 共 3 条 when the same alarm cleared at the same minute more than once. */
+    /** 共 3 条 when alarms of the same name cleared at the same minute. */
     count: '',
     cleared,
   };
@@ -150,8 +150,9 @@ export function presentFeed(active: readonly Alarm[], cleared: readonly Alarm[],
   const happening = active.filter(keeps).sort(bySeverity)
     .map((alarm) => row(alarm, todayStart === null ? '' : `${siteWhen(alarm.firstOccurredAt, todayStart)} 开始`));
 
-  // The same alarm cleared at the same minute on the same day is one row, opening the newest:
-  // a gateway coming back clears a dozen 「…读数长时间没有更新」 at once.
+  // Alarms of the same name cleared at the same minute on a day are one row: a gateway coming back
+  // clears a dozen 「…读数长时间没有更新」 at once. It opens the newest, or one no one saw if any,
+  // so that one stays reachable.
   const days: { day: string; rows: Row[]; seen: Map<string, { row: Row; count: number }> }[] = [];
   const latest = [...cleared].sort((left, right) => Date.parse(clearedAt(right)) - Date.parse(clearedAt(left))).slice(0, RECENTLY_CLEARED);
   for (const alarm of latest.filter(keeps)) {
@@ -170,9 +171,11 @@ export function presentFeed(active: readonly Alarm[], cleared: readonly Alarm[],
       continue;
     }
     same.count += 1;
-    const merged = { ...same.row, count: `共 ${same.count} 条`, status: same.row.status ?? entry.status };
-    day.rows[day.rows.indexOf(same.row)] = merged;
-    same.row = merged;
+    same.row.count = `共 ${same.count} 条`;
+    if (same.row.status === null && entry.status !== null) {
+      same.row.status = entry.status;
+      same.row.alarmId = entry.alarmId;
+    }
   }
 
   return {

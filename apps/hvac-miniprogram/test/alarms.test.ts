@@ -36,22 +36,22 @@ test('what cleared lately is grouped by Site day, newest first, each with the ti
   ]);
 });
 
-// Regression (#677, 2026-10-21): 最近恢复 listed the same alarm cleared at the same minute over and
-// over (a dozen 「…读数长时间没有更新」 cleared at 20:47 when the gateway came back).
-test('the same alarm cleared at the same minute on the same day is one row that says how many', () => {
+// Regression (#677, 2026-10-21): 最近恢复 listed alarms of the same name cleared at the same minute
+// over and over (a dozen 「…读数长时间没有更新」 cleared at 20:47 when the gateway came back).
+test('alarms of the same name cleared at the same minute on the same day are one row that says how many', () => {
   const at = (id: string, title: string, clearedAt: string, acknowledged: boolean) => ({
     ...cleared, alarmId: id, title, clearedAt, acknowledgement: acknowledged ? cleared.acknowledgement : null,
   });
   const [, recovered] = presentFeed([], [
-    at('gw-1', '网关上报中断', '2026-10-01T12:48:10Z', true),
+    at('gw-1', '网关上报中断', '2026-10-01T12:48:10Z', false),
     at('pump', '冷冻水泵读数长时间没有更新', '2026-10-01T12:47:20Z', true),
-    at('gw-2', '网关上报中断', '2026-10-01T12:48:40Z', false),
+    at('gw-2', '网关上报中断', '2026-10-01T12:48:40Z', true),
     at('gw-3', '网关上报中断', '2026-10-01T12:48:05Z', true),
     at('gw-other-day', '网关上报中断', '2026-09-30T12:48:00Z', true),
   ], todayStart, { unacknowledgedOnly: false }).sections;
   assert.deepEqual(recovered.groups.map((group) => [group.day, group.rows.map((row) => [row.alarmId, row.title, row.when, row.count, row.status?.label ?? ''])]), [
-    // Opens the newest; 未确认 when any of them is.
-    ['今天', [['gw-2', '网关上报中断', '20:48 恢复', '共 3 条', '未确认'], ['pump', '冷冻水泵读数长时间没有更新', '20:47 恢复', '', '']]],
+    // 未确认 when any of them is, and it opens that one, so no one is left unreachable; else the newest.
+    ['今天', [['gw-1', '网关上报中断', '20:48 恢复', '共 3 条', '未确认'], ['pump', '冷冻水泵读数长时间没有更新', '20:47 恢复', '', '']]],
     ['昨天', [['gw-other-day', '网关上报中断', '20:48 恢复', '', '']]],
   ]);
 });

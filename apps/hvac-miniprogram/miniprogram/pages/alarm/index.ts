@@ -72,8 +72,9 @@ Page({
       ]);
       shown = { alarm, deviceName: device.name, todayStart };
       const view = presentAlarm(alarm, { deviceName: device.shown, now: new Date(), todayStart, me });
-      // About 24 characters a line at 14px on a 390-wide phone: past three lines it folds.
-      this.setData({ loading: false, failed: '', view, summaryLong: view.summary.length > 72 });
+      // About 22 characters a line at 14px on a narrow phone: past three lines, or with line breaks,
+      // it folds behind 展开; shorter ones are shown whole.
+      this.setData({ loading: false, failed: '', view, summaryLong: view.summary.length > 60 || view.summary.includes('\n') });
     } catch (error) {
       this.setData({
         loading: false,

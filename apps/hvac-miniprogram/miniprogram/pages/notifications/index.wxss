@@ -104,9 +104,14 @@
   font-weight: 600;
 }
 
-/* Cleared: kept in the list, greyed as the design system's tables do. */
+/* Cleared: kept in the list, greyed as the design system's tables do; the badge keeps its shape. */
 .alarm-cleared .alarm-title {
   font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+.alarm-cleared .severity-badge {
+  background: var(--secondary);
   color: var(--muted-foreground);
 }
 
