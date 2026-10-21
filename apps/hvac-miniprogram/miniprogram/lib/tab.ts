@@ -6,12 +6,15 @@ export interface Tab {
   readonly text: string;
   readonly icon: string;
   readonly activeIcon: string;
+  /** The assistant stands out as a raised round button (the design's 助手 tab). */
+  readonly raised: boolean;
 }
 
 export const TABS: readonly Tab[] = [
-  { pagePath: '/pages/overview/index', text: '总览', icon: '/assets/tab/overview.svg', activeIcon: '/assets/tab/overview-active.svg' },
-  { pagePath: '/pages/run/index', text: '运行', icon: '/assets/tab/run.svg', activeIcon: '/assets/tab/run-active.svg' },
-  { pagePath: '/pages/me/index', text: '我的', icon: '/assets/tab/me.svg', activeIcon: '/assets/tab/me-active.svg' },
+  { pagePath: '/pages/overview/index', text: '总览', icon: '/assets/tab/overview.svg', activeIcon: '/assets/tab/overview-active.svg', raised: false },
+  { pagePath: '/pages/run/index', text: '运行', icon: '/assets/tab/run.svg', activeIcon: '/assets/tab/run-active.svg', raised: false },
+  { pagePath: '/pages/assistant/index', text: '助手', icon: '/assets/tab/assistant.svg', activeIcon: '/assets/tab/assistant.svg', raised: true },
+  { pagePath: '/pages/me/index', text: '我的', icon: '/assets/tab/me.svg', activeIcon: '/assets/tab/me-active.svg', raised: false },
 ];
 
 export function selectTab(page: WechatMiniprogram.Page.TrivialInstance) {

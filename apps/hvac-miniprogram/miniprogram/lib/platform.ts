@@ -1,7 +1,7 @@
 // The Gateway bound to WeChat: wx.request for the exchange and local storage for the Session.
 // The platform's domain must be on the mini program's request allowlist in 微信公众平台.
 
-import { createGateway, type SessionStore, type Transport } from './gateway';
+import { createGateway, type ChunkedTransport, type SessionStore, type Transport } from './gateway';
 
 export const GATEWAY_ORIGIN = 'https://hvac.swayingwindmill.online';
 const SESSION_KEY = 'hvac.session';
@@ -25,11 +25,34 @@ const transport: Transport = (request) => new Promise((resolve, reject) => {
   });
 });
 
+// An assistant answer streams for as long as its Run lasts; the Gateway lifts its own write timeout for it.
+const STREAM_TIMEOUT_MS = 600_000;
+
+const chunked: ChunkedTransport = (request) => {
+  let task: WechatMiniprogram.RequestTask | undefined;
+  const done = new Promise<void>((resolve, reject) => {
+    task = wx.request({
+      url: request.url,
+      method: 'GET',
+      header: request.header,
+      enableChunked: true,
+      responseType: 'arraybuffer',
+      timeout: STREAM_TIMEOUT_MS,
+      success: () => resolve(),
+      fail: reject,
+    });
+    task.onHeadersReceived((response) => request.onHeaders(response.statusCode));
+    task.onChunkReceived((response) => request.onChunk(response.data));
+  });
+  return { done, abort: () => task?.abort() };
+};
+
 let signingOut = false;
 
 export const gateway = createGateway({
   origin: GATEWAY_ORIGIN,
   transport,
+  chunked,
   session,
   onSignedOut: () => {
     // Several requests can fail together when a Session ends; go to the sign-in page once.

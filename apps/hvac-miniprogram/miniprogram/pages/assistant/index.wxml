@@ -1,0 +1,96 @@
+<page-header title="AI 助手" />
+
+<view class="screen with-composer">
+  <view wx:if="{{loading}}" class="state">正在载入对话…</view>
+  <view wx:elif="{{noSite}}" class="state">这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。</view>
+  <block wx:else>
+    <view class="bar">
+      <text class="caption">{{siteName}} · 只读数据，不操作设备</text>
+      <view class="bar-actions">
+        <text class="bar-action" bindtap="openHistory" aria-role="button">历史对话</text>
+        <text wx:if="{{conversation}}" class="bar-action {{conversation.running ? 'bar-action-off' : ''}}" bindtap="startNew" aria-role="button" aria-disabled="{{conversation.running}}">新对话</text>
+      </view>
+    </view>
+
+    <view wx:if="{{error}}" class="error" role="alert">{{error}}</view>
+
+    <block wx:if="{{!conversation}}">
+      <view class="welcome">
+        <view class="welcome-mark" aria-hidden="true"><image class="welcome-icon" src="/assets/tab/assistant.svg" /></view>
+        <text class="welcome-title">想问{{siteName}}什么？</text>
+        <text class="welcome-text">可以问用电为什么偏高、哪台机组用得多、某段时间的运行情况。我只读平台数据，先给结论再给数字，不会操作设备。</text>
+      </view>
+      <view class="card">
+        <view wx:for="{{starters}}" wx:key="prompt" class="row starter" data-prompt="{{item.prompt}}" bindtap="askThis" aria-role="button">
+          <text class="badge badge-neutral">{{item.topic}}</text>
+          <text class="starter-text">{{item.prompt}}</text>
+        </view>
+      </view>
+      <block wx:if="{{recent.length}}">
+        <view class="section-head">
+          <text class="section-title">最近的对话</text>
+          <text wx:if="{{hasMore}}" class="caption" bindtap="openHistory" aria-role="link">全部 ›</text>
+        </view>
+        <view class="card">
+          <view wx:for="{{recent}}" wx:key="id" class="row recent" data-id="{{item.id}}" bindtap="open" aria-role="link">
+            <view class="recent-main">
+              <text class="recent-question">{{item.question}}</text>
+              <text class="caption">{{item.detail}}</text>
+            </view>
+            <text class="chevron-right" aria-hidden="true">›</text>
+          </view>
+        </view>
+      </block>
+    </block>
+
+    <block wx:else>
+      <block wx:for="{{conversation.messages}}" wx:key="id">
+        <view wx:if="{{item.role === 'user'}}" class="ask"><text class="ask-text" user-select>{{item.text}}</text></view>
+        <view wx:else class="reply">
+          <view wx:if="{{item.steps}}" class="steps">
+            <view class="steps-line">
+              <view wx:if="{{item.steps.running}}" class="dot dot-running" aria-hidden="true" />
+              <text>{{item.steps.summary}}</text>
+            </view>
+            <view wx:for="{{item.steps.items}}" wx:for-item="step" wx:for-index="position" wx:key="position" class="step step-{{step.state}}">
+              <text class="step-mark" aria-hidden="true">{{step.state === 'done' ? '✓' : step.state === 'failed' ? '✕' : '…'}}</text>
+              <text>{{step.label}}{{step.state === 'failed' ? '，没有读到数据' : ''}}</text>
+            </view>
+          </view>
+          <view wx:if="{{item.answer}}" class="answer"><rich-text nodes="{{item.answer}}" user-select /></view>
+          <finding-card wx:if="{{item.finding}}" finding="{{item.finding}}" />
+          <view wx:if="{{item.question}}" class="question">
+            <text class="caption">需要补充信息</text>
+            <text class="question-text">{{item.question.prompt}}</text>
+            <view wx:if="{{item.question.choices.length}}" class="choices">
+              <text wx:for="{{item.question.choices}}" wx:for-item="choice" wx:key="value" class="choice" data-value="{{choice.value}}" bindtap="choose" aria-role="button">{{choice.label}}</text>
+            </view>
+            <text wx:if="{{item.question.byText}}" class="caption">在下方输入框里回答。</text>
+          </view>
+          <text wx:if="{{item.note}}" class="note {{item.note === '已停止。' ? '' : 'note-failed'}}">{{item.note}}</text>
+        </view>
+      </block>
+
+      <view wx:if="{{!conversation.running && conversation.suggestions.length}}" class="suggestions">
+        <text class="caption">接着问</text>
+        <text wx:for="{{conversation.suggestions}}" wx:key="*this" class="suggestion" data-prompt="{{item}}" bindtap="askThis" aria-role="button">{{item}}</text>
+      </view>
+    </block>
+    <view id="latest" />
+  </block>
+</view>
+
+<view wx:if="{{!loading && !noSite}}" class="composer">
+  <input
+    class="composer-input"
+    value="{{draft}}"
+    placeholder="{{conversation.answeringByText ? '回答助手的问题' : '问问题'}}"
+    confirm-type="send"
+    maxlength="4000"
+    disabled="{{sending || conversation.running}}"
+    bindinput="onDraft"
+    bindconfirm="send"
+  />
+  <button wx:if="{{conversation.running}}" class="composer-button composer-stop" bindtap="stop" aria-label="停止回答">停止</button>
+  <button wx:else class="composer-button" disabled="{{sending || !draft}}" bindtap="send" aria-label="发送">发送</button>
+</view>

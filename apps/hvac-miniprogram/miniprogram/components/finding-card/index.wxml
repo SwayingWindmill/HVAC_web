@@ -1,0 +1,52 @@
+<view class="finding" aria-label="回答依据">
+  <text class="badge {{finding.supported ? 'badge-good' : 'badge-neutral'}}">{{finding.badge}}</text>
+
+  <view wx:if="{{finding.chart}}" class="chart" aria-label="{{finding.chart.caption}}">
+    <text class="caption">{{finding.chart.caption}}</text>
+
+    <block wx:if="{{finding.chart.kind === 'HORIZONTAL_BAR'}}">
+      <view wx:for="{{finding.chart.rows}}" wx:key="label" class="rank">
+        <view class="rank-line">
+          <text class="rank-label">{{item.label}}</text>
+          <text class="rank-value">{{item.value}}</text>
+        </view>
+        <view class="rank-track"><view class="rank-bar" style="width: {{item.width}}%" /></view>
+      </view>
+    </block>
+
+    <view wx:elif="{{finding.chart.kind === 'BAR'}}" class="columns">
+      <view wx:for="{{finding.chart.groups}}" wx:key="label" class="column">
+        <view class="column-bars">
+          <view wx:for="{{item.bars}}" wx:for-item="bar" wx:for-index="series" wx:key="series" class="column-bar series-{{series}}" style="height: {{bar.height}}%">
+            <text wx:if="{{item.bars.length === 1}}" class="column-value">{{bar.value}}</text>
+          </view>
+        </view>
+        <text class="column-label">{{item.label}}</text>
+      </view>
+    </view>
+
+    <block wx:else>
+      <view class="line-plot">
+        <view class="line-scale mono"><text>{{finding.chart.scale[0]}}</text><text>{{finding.chart.scale[1]}}</text></view>
+        <line-chart lines="{{finding.chart.lines}}" />
+      </view>
+      <view class="line-ends caption"><text>{{finding.chart.from}}</text><text>{{finding.chart.to}}</text></view>
+    </block>
+
+    <view wx:if="{{finding.chart.legend.length}}" class="legend">
+      <view wx:for="{{finding.chart.legend}}" wx:key="*this" class="legend-item"><view class="swatch series-{{index}}" />{{item}}</view>
+    </view>
+  </view>
+
+  <view wx:if="{{finding.keyFigures.length}}" class="figures">
+    <view wx:for="{{finding.keyFigures}}" wx:key="label" class="figure">
+      <text class="caption">{{item.label}}</text>
+      <view class="figure-value">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
+    </view>
+  </view>
+
+  <view wx:for="{{finding.limitations}}" wx:key="*this" class="limitation">
+    <text class="limitation-mark" aria-hidden="true">ⓘ</text>
+    <text>{{item}}</text>
+  </view>
+</view>

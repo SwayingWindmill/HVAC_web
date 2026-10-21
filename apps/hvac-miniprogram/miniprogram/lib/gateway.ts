@@ -2,6 +2,8 @@
 // Session in the Authorization header, a Session the platform no longer accepts signs the mini
 // program out, and failures come back as the platform's problem code.
 
+import { utf8Reader } from './utf8';
+
 export interface TransportRequest {
   readonly url: string;
   readonly method: 'GET' | 'POST';
@@ -16,6 +18,12 @@ export interface TransportResponse {
 
 /** One HTTP exchange; `wx.request` in the mini program, a fake in tests. */
 export type Transport = (request: TransportRequest) => Promise<TransportResponse>;
+
+/** A GET whose body arrives in chunks as it is written (`wx.request` with enableChunked); `done` settles when it ends. */
+export type ChunkedTransport = (request: TransportRequest & {
+  readonly onHeaders: (statusCode: number) => void;
+  readonly onChunk: (chunk: ArrayBuffer) => void;
+}) => { readonly done: Promise<void>; readonly abort: () => void };
 
 export interface SessionStore {
   get(): string | null;
@@ -54,10 +62,11 @@ const problemCode = (data: unknown): string => (
 export function createGateway(options: {
   readonly origin: string;
   readonly transport: Transport;
+  readonly chunked?: ChunkedTransport;
   readonly session: SessionStore;
   readonly onSignedOut: () => void;
 }) {
-  const { origin, transport, session, onSignedOut } = options;
+  const { origin, transport, chunked, session, onSignedOut } = options;
 
   const exchange = async (method: 'GET' | 'POST', path: string, data: unknown, signedIn: boolean): Promise<TransportResponse> => {
     const header: Record<string, string> = { Accept: 'application/json' };
@@ -71,14 +80,57 @@ export function createGateway(options: {
     }
   };
 
-  const call = async <T>(method: 'GET' | 'POST', path: string, data?: unknown): Promise<T> => {
-    const response = await exchange(method, path, data, true);
-    if (response.statusCode === 401) {
+  /** A refusal as the caller sees it; one that ends the Session also signs the mini program out. */
+  const refusal = (statusCode: number, data: unknown): GatewayError => {
+    if (statusCode === 401) {
       session.clear();
       onSignedOut();
     }
-    if (response.statusCode < 200 || response.statusCode >= 300) throw new GatewayError(problemCode(response.data), response.statusCode);
+    return new GatewayError(problemCode(data), statusCode);
+  };
+
+  const call = async <T>(method: 'GET' | 'POST', path: string, data?: unknown): Promise<T> => {
+    const response = await exchange(method, path, data, true);
+    if (response.statusCode < 200 || response.statusCode >= 300) throw refusal(response.statusCode, response.data);
     return response.data as T;
+  };
+
+  /**
+   * A GET read as it is written, its chunks handed to `onChunk` while the status is a success.
+   * A refusal's body is read whole for its problem code instead. `abort` ends it quietly.
+   */
+  const stream = (path: string, onChunk: (chunk: ArrayBuffer) => void) => {
+    if (chunked === undefined) throw new Error('This Gateway was created without a chunked transport');
+    const token = session.get();
+    const header: Record<string, string> = { Accept: 'text/event-stream, application/problem+json' };
+    if (token !== null) header.Authorization = `Bearer ${token}`;
+    let statusCode = 0;
+    let refused = '';
+    const decode = utf8Reader();
+    let aborted = false;
+    const exchanged = chunked({
+      url: origin + path,
+      method: 'GET',
+      header,
+      onHeaders: (status) => { statusCode = status; },
+      onChunk: (chunk) => {
+        if (statusCode >= 200 && statusCode < 300) onChunk(chunk);
+        else refused += decode(chunk);
+      },
+    });
+    const done = exchanged.done.then(
+      () => {
+        if (aborted || (statusCode >= 200 && statusCode < 300)) return;
+        let problem: unknown = null;
+        try { problem = JSON.parse(refused); } catch { /* not a problem document */ }
+        throw refusal(statusCode, problem);
+      },
+      (error: unknown) => {
+        if (aborted) return;
+        throw error instanceof GatewayError ? error : new GatewayError('NETWORK_UNAVAILABLE', 0);
+      },
+    );
+    return { done, abort: () => { aborted = true; exchanged.abort(); } };
   };
 
   const signInStep = async (path: string, body: unknown): Promise<SignInOutcome> => {
@@ -100,6 +152,7 @@ export function createGateway(options: {
   return {
     get: <T>(path: string) => call<T>('GET', path),
     post: <T>(path: string, data: unknown) => call<T>('POST', path, data),
+    stream,
     signIn: (username: string, password: string) => signInStep('/api/v1/auth/app/sessions', { username, password }),
     completeTotp: (pendingLogin: string, code: string) => signInStep('/api/v1/auth/app/sessions/totp', { pendingLogin, code }),
   };

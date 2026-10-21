@@ -4,6 +4,8 @@ import test from 'node:test';
 import { AssistantOwner } from '../../hvac-web/e2e/assistant-owner.ts';
 import type { AgentSessionEvent } from '../miniprogram/lib/agent-types.ts';
 import { agentEventReader } from '../miniprogram/lib/agent-stream.ts';
+import { followSession } from '../miniprogram/lib/agent.ts';
+import { createGateway } from '../miniprogram/lib/gateway.ts';
 
 const SITE = '018f3e00-1000-7000-8000-000000000001';
 
@@ -31,4 +33,34 @@ test('the event stream reads whole, however WeChat cuts it into chunks, even thr
     const answer = events.flatMap((event) => (event.type === 'assistant.delta' ? [event.payload.delta] : [])).join('');
     assert.equal(answer, '这一小时比前一天同一时段多用电 18 kWh，主要来自 2 号机组。', `chunks of ${size} bytes`);
   }
+});
+
+test('following a conversation ends with the snapshot that settles it; a stream cut before that is reported', async () => {
+  const stream = askedAndStreamed('今天能效怎么样？');
+  const gatewayStreaming = (body: string) => createGateway({
+    origin: 'https://hvac.example.test',
+    transport: async () => { throw new Error('not used'); },
+    chunked: (request) => ({
+      done: (async () => {
+        request.onHeaders(200);
+        request.onChunk(new TextEncoder().encode(body).buffer as ArrayBuffer);
+      })(),
+      abort: () => {},
+    }),
+    session: { get: () => 'session-1', set: () => {}, clear: () => {} },
+    onSignedOut: () => {},
+  });
+
+  const types: string[] = [];
+  const ended = await new Promise<boolean>((resolve) => {
+    followSession(gatewayStreaming(stream), SITE, 'session-0001', (event) => types.push(event.type), resolve);
+  });
+  assert.equal(ended, false);
+  assert.equal(types.at(-1), 'session.snapshot');
+
+  const cut = stream.slice(0, stream.indexOf('event: artifact.created'));
+  const failed = await new Promise<boolean>((resolve) => {
+    followSession(gatewayStreaming(cut), SITE, 'session-0001', () => {}, resolve);
+  });
+  assert.equal(failed, true);
 });
