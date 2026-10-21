@@ -26,7 +26,7 @@
 照微信官方的开发和性能指引：
 
 - 页面和组件都用 TypeScript；`lazyCodeLoading: requiredComponents` 按需注入组件。
-- 图标和网页一样用 lucide（照 `lucide-react` 1.44.0 的图形，ISC 许可）。`<image>` 里的 SVG 用不了文字颜色，所以每种颜色存一份文件：`assets/tab/` 是底部导航（灰、选中靛蓝），`assets/icon/` 是卡片标题和行前的小图标（灰）。助手用网页的泉来禾风车标志（`apps/hvac-web/src/components/brand-mark.tsx` 的同一个图形，`assets/windmill/`），平时 12 秒转一圈，助手查数据、回答时 1.4 秒一圈（`app.wxss` 的 `.windmill`）。
+- 图标和网页一样用 lucide（照 `lucide-react` 1.44.0 的图形，ISC 许可）。`<image>` 里的 SVG 用不了文字颜色，所以每种颜色存一份文件：`assets/tab/` 是底部导航（灰、选中靛蓝），`assets/icon/` 是卡片标题和行前的小图标（灰，退出登录是红色）。总览的导航图标和网页一样是 `layout-dashboard`。助手用网页的泉来禾风车标志（`apps/hvac-web/src/components/brand-mark.tsx` 的同一个图形，`assets/windmill/`），平时 12 秒转一圈，助手查数据、回答时 1.4 秒一圈（`app.wxss` 的 `.windmill`）。
 - 底部导航是官方的自定义 tabBar（`custom-tab-bar/`），每个标签页在 `onShow` 里标出自己。
 - 能用微信自带的就不自己写：页面标题用微信的导航栏（只有登录页不要），筛选用 `switch`，横条用 `progress`，下拉刷新和提示用微信的。底部导航自己画，是因为中间凸起的助手按钮和 SVG 图标原生 tabBar 做不到（它只认 PNG 图标）。
 - 助手结论卡片里的折线图拼成一张 SVG 图片显示（`lib/line-image.ts`），不用 `canvas`：开发者工具里 `canvas` 会浮在页面上，回答往上滚时折线留在原处、盖住输入框和底部导航。
