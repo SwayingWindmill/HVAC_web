@@ -325,13 +325,8 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 
 	var adminStore *iamserver.PostgresAdminStore
 	if adminDatabaseURL := strings.TrimSpace(os.Getenv("IAM_ADMIN_DATABASE_URL")); adminDatabaseURL != "" {
-		pepper, readErr := os.ReadFile(energyRequiredEnv("IAM_API_CREDENTIAL_PEPPER_FILE"))
-		if readErr != nil {
-			store.Close()
-			return nil, nil, func() {}, readErr
-		}
 		openContext, cancelOpen = context.WithTimeout(ctx, 5*time.Second)
-		postgresAdminStore, openErr := iamserver.OpenPostgresAdminStore(openContext, adminDatabaseURL, pepper)
+		postgresAdminStore, openErr := iamserver.OpenPostgresAdminStore(openContext, adminDatabaseURL)
 		cancelOpen()
 		if openErr != nil {
 			store.Close()

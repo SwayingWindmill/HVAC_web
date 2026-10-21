@@ -30,11 +30,10 @@ type ExplicitDeny struct {
 
 // tenantScopedCapabilities are granted only by an assignment to the whole Tenant.
 var tenantScopedCapabilities = map[string]bool{
-	string(identitycontext.CapabilityIAMAdmin):            true,
-	string(identitycontext.CapabilityAPICredentialManage): true,
-	string(identitycontext.CapabilitySessionRevoke):       true,
-	string(identitycontext.CapabilityAuditRead):           true,
-	string(identitycontext.CapabilityRuleManage):          true,
+	string(identitycontext.CapabilityIAMAdmin):      true,
+	string(identitycontext.CapabilitySessionRevoke): true,
+	string(identitycontext.CapabilityAuditRead):     true,
+	string(identitycontext.CapabilityRuleManage):    true,
 }
 
 func capabilityTenantScoped(capability string) bool {
