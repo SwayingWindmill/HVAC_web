@@ -3,14 +3,16 @@
     "pages/overview/index",
     "pages/run/index",
     "pages/assistant/index",
+    "pages/notifications/index",
     "pages/me/index",
     "pages/login/index",
     "pages/sites/index",
     "pages/device/index",
-    "pages/assistant-history/index"
+    "pages/assistant-history/index",
+    "pages/alarm/index"
   ],
   "window": {
-    "navigationStyle": "custom",
+    "navigationBarBackgroundColor": "#ffffff",
     "navigationBarTextStyle": "black",
     "backgroundColor": "#f7f7f8",
     "backgroundTextStyle": "dark"
@@ -25,11 +27,9 @@
       { "pagePath": "pages/overview/index", "text": "总览" },
       { "pagePath": "pages/run/index", "text": "运行" },
       { "pagePath": "pages/assistant/index", "text": "助手" },
+      { "pagePath": "pages/notifications/index", "text": "通知" },
       { "pagePath": "pages/me/index", "text": "我的" }
     ]
-  },
-  "usingComponents": {
-    "page-header": "/components/page-header/index"
   },
   "lazyCodeLoading": "requiredComponents",
   "style": "v2",

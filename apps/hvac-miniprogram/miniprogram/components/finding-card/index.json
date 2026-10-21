@@ -1,6 +1,4 @@
 {
   "component": true,
-  "usingComponents": {
-    "line-chart": "/components/line-chart/index"
-  }
+  "usingComponents": {}
 }

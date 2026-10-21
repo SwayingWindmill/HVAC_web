@@ -1,7 +1,3 @@
-.top {
-  padding-top: 12px;
-}
-
 .conversation {
   gap: 12px;
   padding-top: 10px;

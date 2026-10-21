@@ -2,5 +2,6 @@
   "usingComponents": {
     "finding-card": "/components/finding-card/index"
   },
+  "navigationBarTitleText": "AI 助手",
   "enablePullDownRefresh": true
 }

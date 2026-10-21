@@ -1,7 +1,4 @@
 {
   "usingComponents": {},
-  "navigationStyle": "default",
-  "navigationBarTitleText": "历史对话",
-  "navigationBarBackgroundColor": "#ffffff",
-  "navigationBarTextStyle": "black"
+  "navigationBarTitleText": "历史对话"
 }

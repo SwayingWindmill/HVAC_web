@@ -1,0 +1,38 @@
+<view class="screen with-tab-bar">
+  <view wx:if="{{loading}}" class="state">正在读取…</view>
+  <view wx:elif="{{noSite}}" class="state">这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。</view>
+  <view wx:elif="{{failed}}" class="state">{{failed}}</view>
+  <block wx:else>
+    <view class="filter-bar">
+      <text class="caption">{{siteName}} · 告警</text>
+      <label class="filter">
+        <text>只看没确认的</text>
+        <switch checked="{{unacknowledgedOnly}}" color="#3f5bd9" bindchange="toggleUnacknowledged" />
+      </label>
+    </view>
+
+    <view wx:for="{{feed.sections}}" wx:for-item="section" wx:key="title" class="section">
+      <view class="section-head">
+        <text class="section-title">{{section.title}}<text wx:if="{{section.count}}" class="section-count">{{section.count}}</text></text>
+        <text wx:if="{{section.caption}}" class="caption">{{section.caption}}</text>
+      </view>
+      <view wx:if="{{section.empty}}" class="card card-pad caption">{{section.empty}}</view>
+      <view wx:else class="card">
+        <block wx:for="{{section.groups}}" wx:for-item="group" wx:key="day">
+          <text wx:if="{{group.day}}" class="day">{{group.day}}</text>
+          <view wx:for="{{group.rows}}" wx:key="alarmId" class="alarm" data-id="{{item.alarmId}}" bindtap="open" aria-role="link" aria-label="{{item.severity}}，{{item.title}}，{{item.when}}，{{item.status.label}}">
+            <image class="severity-mark" src="/assets/severity/{{item.level}}.svg" aria-hidden="true" />
+            <view class="alarm-main">
+              <text class="alarm-title">{{item.title}}</text>
+              <text class="caption">{{item.severity}}{{item.when ? ' · ' + item.when : ''}}</text>
+            </view>
+            <text class="status {{item.status.waiting ? 'status-waiting' : ''}}">{{item.status.label}}</text>
+          </view>
+        </block>
+      </view>
+    </view>
+
+    <text wx:if="{{partial}}" class="caption">正在发生的告警太多，这里只列出了前面的一部分，完整的在网页「告警」里看。</text>
+    <text class="caption legend">形状代表严重程度：◆ 紧急 ▲ 重要 ● 次要 ■ 预警 ○ 提示</text>
+  </block>
+</view>

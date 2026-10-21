@@ -178,6 +178,13 @@ function boundAsset(model: AssetModel, deviceId: string, now: Date) {
   return model.assets.find((asset) => asset.id === assetId) ?? null;
 }
 
+/** A device as operators name it: its bound Asset's name, else its own; null for a device not registered. */
+export function deviceName(model: AssetModel, deviceId: string, now: Date): string | null {
+  const device = model.devices.find((candidate) => candidate.id === deviceId);
+  if (device === undefined) return null;
+  return boundAsset(model, deviceId, now)?.displayName ?? device.displayName;
+}
+
 function readingOf(point: TelemetryPoint, value: ValueState | undefined, available: boolean): PlantReading {
   const definition = telemetryPointDefinition(point.sourceKey);
   const label = definition.label === point.sourceKey ? point.displayName : definition.label;
@@ -234,7 +241,7 @@ function toDevice(model: AssetModel, device: AssetModel['devices'][number], snap
 
   return {
     deviceId: device.id,
-    name: asset ? asset.displayName : device.displayName,
+    name: deviceName(model, device.id, now) ?? device.displayName,
     category,
     connection: presence === 'ONLINE' || presence === 'OFFLINE' ? presence : 'UNKNOWN',
     runState: runValue === 'RUNNING' || runValue === 'STOPPED' || runValue === 'FAULT' ? runValue : 'UNKNOWN',

@@ -5,9 +5,10 @@
 // show the same turns, steps and answers.
 
 import type { AgentSessionSnapshot, FindingChart } from './agent-types';
-import { answerNodes, type AnswerNode } from './answer-nodes';
+import { answerBlocks, type AnswerBlock } from './answer-nodes';
 import { grouped } from './format';
-import { siteMoment } from './today';
+import { lineImage } from './line-image';
+import { siteWhen } from './today';
 import type { AssistantPart, AssistantThread } from '../shared/thread-model';
 import { toolPresentation } from '../shared/tool-labels';
 
@@ -24,7 +25,7 @@ export type ConversationMessage =
     /** Started, nothing read or written yet: the reply says the assistant is thinking. */
     readonly thinking: boolean;
     readonly steps: { readonly summary: string; readonly running: boolean; readonly items: readonly { readonly label: string; readonly state: StepState }[] } | null;
-    readonly answer: readonly AnswerNode[] | null;
+    readonly answer: readonly AnswerBlock[] | null;
     readonly finding: ReturnType<typeof presentFinding> | null;
     readonly question: ReturnType<typeof presentQuestion> | null;
     /** Why the answer ended early; none when it did not. */
@@ -68,11 +69,10 @@ export function presentChart(chart: FindingChart) {
     kind: 'LINE' as const,
     caption,
     legend,
-    // Each point across (0–1) and up (0–1) the plot; a gap where the read had no value.
-    lines: chart.series.map((series) => series.values.map((value, index) => (value === null ? null : {
+    image: lineImage(chart.series.map((series) => series.values.map((value, index) => (value === null ? null : {
       x: chart.categories.length === 1 ? 0.5 : index / (chart.categories.length - 1),
       y: span === 0 ? 0.5 : (value - bottom) / span,
-    }))),
+    })))),
     scale: values.length === 0 ? [] : [chartValue(highest), chartValue(bottom)],
     from: chart.categories[0],
     to: chart.categories[chart.categories.length - 1],
@@ -124,7 +124,7 @@ export function presentConversation(thread: AssistantThread) {
       role: 'assistant',
       thinking: running && message.content.length === 0,
       steps: steps.length === 0 ? null : { summary: stillReading ? '正在查询数据' : `查询了 ${steps.length} 项数据`, running: stillReading, items: steps },
-      answer: text?.type === 'text' && text.text.trim() !== '' ? answerNodes(text.text) : null,
+      answer: text?.type === 'text' && text.text.trim() !== '' ? answerBlocks(text.text) : null,
       finding: finding?.type === 'data-finding' ? presentFinding(finding.data.finding) : null,
       question: request?.type === 'data-input-request' ? presentQuestion(request.data, thread.pendingInput?.request === request.data) : null,
       note: message.status.type === 'incomplete' ? NOTES[message.status.reason] : null,
@@ -155,6 +155,6 @@ export function presentHistory(sessions: readonly AgentSessionSnapshot[], todayS
     id: session.id,
     // A conversation always starts with a question.
     question: messages.find((message) => message.role === 'OPERATOR')?.content ?? '',
-    detail: [todayStart === null ? '' : siteMoment(session.createdAt, todayStart), STATUS_WORDS[session.status]].filter(Boolean).join(' · '),
+    detail: [todayStart === null ? '' : siteWhen(session.createdAt, todayStart), STATUS_WORDS[session.status]].filter(Boolean).join(' · '),
   }));
 }

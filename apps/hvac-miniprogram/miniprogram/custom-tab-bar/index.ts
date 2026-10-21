@@ -4,7 +4,7 @@
 import { TABS } from '../lib/tab';
 
 Component({
-  data: { tabs: TABS, selected: 0 },
+  data: { tabs: TABS, selected: 0, badge: '' },
   lifetimes: {
     // Each tab page gets its own tab bar; it starts on its own page, also when the devtools re-create it.
     attached() {

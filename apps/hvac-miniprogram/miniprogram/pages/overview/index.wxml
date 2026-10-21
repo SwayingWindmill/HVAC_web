@@ -1,5 +1,3 @@
-<page-header title="总览" />
-
 <view class="screen with-tab-bar">
   <view wx:if="{{siteName}}" class="site-row">
     <view class="site-pill" bindtap="openSites" aria-role="button" aria-label="切换站点，现在是{{siteName}}">{{siteName}}<image class="chevron" src="/assets/chevron-down.svg" aria-hidden="true" /></view>
@@ -79,9 +77,9 @@
     <view wx:else class="card card-pad caption">这个站点还没有登记冷站设备，在网页「系统管理 → 资产与点位」登记后，这里显示冷站在不在运行。</view>
 
     <view class="card">
-      <view class="row">
+      <view class="row" bindtap="openAlarms" aria-role="link">
         <text>正在发生的告警</text>
-        <text class="row-value">{{view.alarms}}</text>
+        <text class="row-value">{{view.alarms}} ›</text>
       </view>
     </view>
   </block>

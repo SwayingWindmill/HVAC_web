@@ -1,4 +1,4 @@
-<view class="screen top">
+<view class="screen">
   <view wx:if="{{loading}}" class="state">正在读取…</view>
   <view wx:elif="{{failed}}" class="state">{{failed}}</view>
   <view wx:elif="{{!conversations.length}}" class="state">在这个站点还没有问过助手。</view>

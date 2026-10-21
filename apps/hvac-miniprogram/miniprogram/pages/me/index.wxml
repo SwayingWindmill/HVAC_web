@@ -1,5 +1,3 @@
-<page-header title="我的" />
-
 <view class="screen with-tab-bar">
   <view class="card card-pad person">
     <view class="avatar" aria-hidden="true">{{name ? name[0] : ''}}</view>

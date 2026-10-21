@@ -8,7 +8,9 @@ import { presentPlantNow } from '../../lib/run';
 import { compareWithYesterday, sameHoursWindows, summarize, todayStart } from '../../lib/today';
 import { monthToDate, savingsCard, type Measure, type SavingsTotals } from '../../lib/savings';
 import { presentOverview, type OverviewInputs, type Recommendation } from '../../lib/overview';
-import { selectTab } from '../../lib/tab';
+import { activeAlarms } from '../../lib/alarm-api';
+import { waitingCount } from '../../lib/alarms';
+import { selectTab, showAttention } from '../../lib/tab';
 
 const refresher = whileShown(60_000);
 
@@ -55,7 +57,8 @@ async function load(site: Site) {
   const [days, recommendation, alarms, plant] = await Promise.allSettled([
     recentDays(site, now),
     loadRecommendation(site),
-    gateway.get<{ data: unknown[]; meta: { hasMore: boolean } }>(`/api/v1/alarms?siteId=${site.id}&condition=ACTIVE&limit=100`),
+    // Read as the 通知 page reads them, so both show the same count.
+    activeAlarms(gateway, site.id),
     loadPlant(site),
   ]);
   // Where today began at the Site, as the Energy owner cut the day; it dates today and this month.
@@ -69,10 +72,12 @@ async function load(site: Site) {
     savings: settled<OverviewInputs['savings']>(savings, { status: 'error' }),
     recommendation: settled<OverviewInputs['recommendation']>(recommendation, { status: 'error' }),
     energy: settled<OverviewInputs['energy']>(energy, { status: 'error' }),
-    alarms: alarms.status === 'fulfilled' ? { status: 'ok', active: alarms.value.data.length, complete: !alarms.value.meta.hasMore } : { status: 'error' },
+    alarms: alarms.status === 'fulfilled' ? { status: 'ok', active: alarms.value.alarms.length, complete: alarms.value.complete } : { status: 'error' },
   };
+  // The 通知 tab counts the alarms happening with no one on them; a failed read leaves the last count.
+  const waiting = alarms.status === 'fulfilled' ? waitingCount(alarms.value.alarms) : null;
   // The plant card stays off a Site without registered devices, and says so when it cannot be read.
-  return { inputs, plant: plant.status === 'fulfilled' ? { failed: false, now: presentPlantNow(plant.value) } : { failed: true, now: null } };
+  return { inputs, waiting, plant: plant.status === 'fulfilled' ? { failed: false, now: presentPlantNow(plant.value) } : { failed: true, now: null } };
 }
 
 const clock = (now: Date) => `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -99,6 +104,10 @@ Page({
 
   onUnload: refresher.stop,
 
+  openAlarms() {
+    wx.switchTab({ url: '/pages/notifications/index' });
+  },
+
   openRun() {
     wx.switchTab({ url: '/pages/run/index' });
   },
@@ -120,7 +129,8 @@ Page({
         this.setData({ loading: false, noSite: true });
         return;
       }
-      const { inputs, plant } = await load(site);
+      const { inputs, plant, waiting } = await load(site);
+      if (waiting !== null) showAttention(this, waiting);
       this.setData({ siteName: site.displayName, updatedAt: clock(new Date()), loading: false, noSite: false, failed: false, view: presentOverview(inputs), plant });
     } catch {
       // The Site list itself could not be read; signed-out failures already went to the sign-in page.

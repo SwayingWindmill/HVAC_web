@@ -47,11 +47,14 @@ export type SignInOutcome =
   | { readonly kind: 'totp'; readonly pendingLogin: string }
   | { readonly kind: 'failed'; readonly message: string };
 
+/** What a page says when the phone cannot reach the platform. */
+export const NETWORK_TEXT = '连不上平台，请检查网络后再试。';
+
 const SIGN_IN_MESSAGES: Readonly<Record<string, string>> = {
   INVALID_CREDENTIALS: '账号或密码不对。连续输错 5 次，账号会锁 15 分钟。',
   TOTP_INVALID: '验证码不对，请看验证器里最新的 6 位数字。',
   LOGIN_EXPIRED: '登录已过期，请重新输入账号和密码。',
-  NETWORK_UNAVAILABLE: '连不上平台，请检查网络后再试。',
+  NETWORK_UNAVAILABLE: NETWORK_TEXT,
 };
 const SIGN_IN_UNAVAILABLE = '暂时登录不了，请稍后再试。';
 
@@ -74,8 +77,8 @@ export function createGateway(options: {
     return token === null ? header : { ...header, Authorization: `Bearer ${token}` };
   };
 
-  const exchange = async (method: 'GET' | 'POST', path: string, data: unknown, signedIn: boolean): Promise<TransportResponse> => {
-    const base: Record<string, string> = data === undefined ? { Accept: 'application/json' } : { Accept: 'application/json', 'Content-Type': 'application/json' };
+  const exchange = async (method: 'GET' | 'POST', path: string, data: unknown, signedIn: boolean, extra: Record<string, string> = {}): Promise<TransportResponse> => {
+    const base: Record<string, string> = data === undefined ? { Accept: 'application/json', ...extra } : { Accept: 'application/json', 'Content-Type': 'application/json', ...extra };
     const header = signedIn ? signedInHeader(base) : base;
     try {
       return await transport({ url: origin + path, method, header, data });
@@ -93,8 +96,8 @@ export function createGateway(options: {
     return new GatewayError(problemCode(data), statusCode);
   };
 
-  const call = async <T>(method: 'GET' | 'POST', path: string, data?: unknown): Promise<T> => {
-    const response = await exchange(method, path, data, true);
+  const call = async <T>(method: 'GET' | 'POST', path: string, data?: unknown, headers?: Record<string, string>): Promise<T> => {
+    const response = await exchange(method, path, data, true, headers);
     if (response.statusCode < 200 || response.statusCode >= 300) throw refusal(response.statusCode, response.data);
     return response.data as T;
   };
@@ -152,7 +155,8 @@ export function createGateway(options: {
 
   return {
     get: <T>(path: string) => call<T>('GET', path),
-    post: <T>(path: string, data: unknown) => call<T>('POST', path, data),
+    /** A change; `headers` adds request headers such as an idempotency key. */
+    post: <T>(path: string, data: unknown, headers?: Record<string, string>) => call<T>('POST', path, data, headers),
     stream,
     signIn: (username: string, password: string) => signInStep('/api/v1/auth/app/sessions', { username, password }),
     completeTotp: (pendingLogin: string, code: string) => signInStep('/api/v1/auth/app/sessions/totp', { pendingLogin, code }),

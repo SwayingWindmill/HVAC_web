@@ -27,9 +27,16 @@ export const rememberedSiteId = () => (wx.getStorageSync(SITE_KEY) as string) ||
 
 export const rememberSite = (siteId: string) => wx.setStorageSync(SITE_KEY, siteId);
 
-/** `fresh` reads the Site list again (a pull-down refresh); otherwise the list read for this Session is used. */
+/** The list read for this Session; `fresh` reads it again (a pull-down refresh). */
+const visibleSites = async (fresh: boolean) => (!fresh && known !== null && known.session === sessionToken() ? known.sites : listSites());
+
 export async function currentSite(fresh = false): Promise<Site | null> {
-  const sites = !fresh && known !== null && known.session === sessionToken() ? known.sites : await listSites();
+  const sites = await visibleSites(fresh);
   const remembered = rememberedSiteId();
   return sites.find((site) => site.id === remembered) ?? sites[0] ?? null;
+}
+
+/** A Site this person can see, by id, from the list read for this Session; null when it is not among them. */
+export async function siteById(siteId: string): Promise<Site | null> {
+  return (await visibleSites(false)).find((site) => site.id === siteId) ?? null;
 }
