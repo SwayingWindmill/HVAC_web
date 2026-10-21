@@ -3,6 +3,7 @@ import test from 'node:test';
 import { AssistantOwner } from '../../hvac-web/e2e/assistant-owner.ts';
 import type { AgentSessionEvent, AgentSessionSnapshot } from '../miniprogram/lib/agent-types.ts';
 import { agentEventReader } from '../miniprogram/lib/agent-stream.ts';
+import { ANSWER_STYLES } from '../miniprogram/lib/answer-nodes.ts';
 import { presentChart, presentConversation, presentHistory } from '../miniprogram/lib/assistant.ts';
 import { assistantThreadFrom } from '../miniprogram/shared/thread-model.ts';
 
@@ -31,7 +32,7 @@ test('an answered question shows the data read, the answer, the numbers it rests
   assert.equal(answer.role, 'assistant');
   if (answer.role !== 'assistant') return;
   assert.deepEqual(answer.steps, { summary: '查询了 2 项数据', running: false, items: [{ label: '对比两个时段', state: 'done' }, { label: '读取各设备用电', state: 'done' }] });
-  assert.deepEqual(answer.answer, [{ name: 'p', attrs: { class: 'answer-p' }, children: [{ type: 'text', text: '这一小时比前一天同一时段多用电 18 kWh，主要来自 2 号机组。' }] }]);
+  assert.deepEqual(answer.answer, [{ name: 'p', attrs: { style: ANSWER_STYLES.paragraph }, children: [{ type: 'text', text: '这一小时比前一天同一时段多用电 18 kWh，主要来自 2 号机组。' }] }]);
   assert.deepEqual(answer.finding, {
     badge: '有数据依据',
     supported: true,

@@ -7,7 +7,23 @@ import { withBoldLeadOnItsOwnLine } from '../shared/answer-markdown';
 
 export type AnswerNode =
   | { readonly type: 'text'; readonly text: string }
-  | { readonly name: string; readonly attrs?: { readonly class: string }; readonly children: readonly AnswerNode[] };
+  | { readonly name: string; readonly attrs?: { readonly style: string }; readonly children: readonly AnswerNode[] };
+
+// Inline styles: page styles reach a rich-text node only through a class on that very node, and a
+// table's cells cannot carry one per selector. Colours are the design system's light tokens.
+export const ANSWER_STYLES = {
+  paragraph: 'margin: 0 0 8px;',
+  list: 'margin: 0 0 8px; padding-left: 20px;',
+  table: 'width: 100%; margin: 4px 0 12px; border-collapse: collapse; font-size: 13px; line-height: 20px;',
+} as const;
+
+const CELL = {
+  th: 'padding: 6px 8px; background: #f7f7f9; color: #3f3f46; font-weight: 600; border-bottom: 1px solid #e7e7ea; white-space: nowrap;',
+  td: 'padding: 7px 8px; border-bottom: 1px solid #f0f0f2;',
+} as const;
+
+/** A table cell's style: the first column (what is measured) reads left, the figures after it right. */
+export const cellStyle = (cell: 'th' | 'td', column: number) => `${CELL[cell]} text-align: ${column === 0 ? 'left' : 'right'};`;
 
 const text = (value: string): AnswerNode => ({ type: 'text', text: value });
 
@@ -46,7 +62,7 @@ export function answerNodes(answer: string): AnswerNode[] {
     if (line.trim() === '') {
       index += 1;
     } else if (isTableRow(line)) {
-      const rows = [{ cell: 'th', cells: tableCells(line) }];
+      const rows: { cell: 'th' | 'td'; cells: string[] }[] = [{ cell: 'th', cells: tableCells(line) }];
       index += 1;
       while (index < lines.length && isTableRow(lines[index])) {
         if (!isDivider(lines[index])) rows.push({ cell: 'td', cells: tableCells(lines[index]) });
@@ -54,8 +70,11 @@ export function answerNodes(answer: string): AnswerNode[] {
       }
       blocks.push({
         name: 'table',
-        attrs: { class: 'answer-table' },
-        children: rows.map((row) => ({ name: 'tr', children: row.cells.map((cell) => ({ name: row.cell, children: inline(cell) })) })),
+        attrs: { style: ANSWER_STYLES.table },
+        children: rows.map((row) => ({
+          name: 'tr',
+          children: row.cells.map((cell, column) => ({ name: row.cell, attrs: { style: cellStyle(row.cell, column) }, children: inline(cell) })),
+        })),
       });
     } else if (BULLET.test(line) || NUMBERED.test(line)) {
       const marker = BULLET.test(line) ? BULLET : NUMBERED;
@@ -64,7 +83,7 @@ export function answerNodes(answer: string): AnswerNode[] {
         items.push({ name: 'li', children: inline(lines[index].replace(marker, '')) });
         index += 1;
       }
-      blocks.push({ name: marker === BULLET ? 'ul' : 'ol', attrs: { class: 'answer-list' }, children: items });
+      blocks.push({ name: marker === BULLET ? 'ul' : 'ol', attrs: { style: ANSWER_STYLES.list }, children: items });
     } else {
       // A paragraph runs until a blank line, a list or a table; a heading reads as a bold paragraph.
       const paragraph: string[] = [];
@@ -75,7 +94,7 @@ export function answerNodes(answer: string): AnswerNode[] {
       const joined = paragraph.join(' ');
       blocks.push({
         name: 'p',
-        attrs: { class: 'answer-p' },
+        attrs: { style: ANSWER_STYLES.paragraph },
         children: HEADING.test(joined) ? [{ name: 'strong', children: inline(joined.replace(HEADING, '')) }] : inline(joined),
       });
     }
