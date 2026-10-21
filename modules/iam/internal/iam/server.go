@@ -61,8 +61,11 @@ type Config struct {
 	AllowedRegistryGrantPresenters []string
 	// AnalyticsGrantAudience and AllowedAnalyticsWorkloads enable Energy Series grants for
 	// Workload Principals, signed with the Registry grant key and issuer.
-	AnalyticsGrantAudience          string
-	AllowedAnalyticsWorkloads       []string
+	AnalyticsGrantAudience    string
+	AllowedAnalyticsWorkloads []string
+	// AllowedAlarmRecipientWorkloads may ask which people can read a Site's Alarms, to send them
+	// WeChat reminders (Notification Service runs in the Gateway's workload).
+	AllowedAlarmRecipientWorkloads  []string
 	NewRegistryGrantID              func() string
 	RegistryAuditSink               RegistryDecisionAuditSink
 	RegistryGrantStatus             RegistryGrantStatusStore
@@ -104,6 +107,7 @@ type handler struct {
 	registryGrantIssuer             string
 	analyticsGrantAudience          string
 	allowedAnalyticsWorkloads       []string
+	allowedAlarmRecipientWorkloads  []string
 	registryGrantAudience           string
 	registryGrantLifetime           time.Duration
 	allowedRegistryGrantPresenters  map[string]struct{}
@@ -284,6 +288,7 @@ func NewHandler(config Config) http.Handler {
 		registryGrantSigner:             config.RegistryGrantSigner,
 		analyticsGrantAudience:          strings.TrimSpace(config.AnalyticsGrantAudience),
 		allowedAnalyticsWorkloads:       append([]string(nil), config.AllowedAnalyticsWorkloads...),
+		allowedAlarmRecipientWorkloads:  append([]string(nil), config.AllowedAlarmRecipientWorkloads...),
 		registryGrantIssuer:             grantIssuer,
 		registryGrantAudience:           grantAudience,
 		registryGrantLifetime:           grantLifetime,
@@ -357,6 +362,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if request.URL.Path == AnalyticsWorkloadDecisionPath {
 		status = h.handleAnalyticsWorkloadDecision(writer, request)
+		return
+	}
+	if request.URL.Path == AlarmRecipientDecisionPath {
+		status = h.handleAlarmRecipientDecision(writer, request)
 		return
 	}
 
@@ -731,7 +740,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, TenantContextsPath, AdminMutationPath, AdminMembersPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath:
+	case CurrentPrincipalPath, TenantContextsPath, AdminMutationPath, AdminMembersPath, APICredentialCreatePath, APICredentialRotatePath, APICredentialRevokePath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath, AlarmRecipientDecisionPath:
 		return path
 	default:
 		return "unmatched"
