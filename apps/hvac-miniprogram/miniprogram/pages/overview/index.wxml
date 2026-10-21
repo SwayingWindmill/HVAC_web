@@ -82,5 +82,13 @@
         <text class="row-value">{{view.alarms}} ›</text>
       </view>
     </view>
+
+    <view wx:if="{{daily}}" class="card card-pad daily" aria-label="每日运行结论">
+      <view class="daily-main">
+        <text class="card-title">每日运行结论</text>
+        <text class="caption">{{daily.text}}</text>
+      </view>
+      <button wx:if="{{daily.canAdd}}" class="daily-add" size="mini" loading="{{addingDaily}}" disabled="{{addingDaily}}" bindtap="addDaily">多收一天</button>
+    </view>
   </block>
 </view>

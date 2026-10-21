@@ -36,7 +36,7 @@ func TestPostgresWeChatRemindersCountPerPersonAndTenant(t *testing.T) {
 		t.Fatal("a person who never allowed a reminder has some")
 	}
 	for range 2 {
-		if _, err := store.AddWeChatReminder(ctx, person, ReminderAlarm, now); err != nil {
+		if _, err := store.AddWeChatReminder(ctx, person, ReminderRequest{Kind: ReminderAlarm}, now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -54,5 +54,32 @@ func TestPostgresWeChatRemindersCountPerPersonAndTenant(t *testing.T) {
 	}
 	if count(person) != 0 {
 		t.Fatalf("after clearing: %d", count(person))
+	}
+}
+
+// The daily summary is counted apart from Alarm reminders and goes for the Site the person was on
+// when they last allowed one.
+func TestPostgresDailySummariesCountApartAndFollowTheLastSite(t *testing.T) {
+	store := openNotificationTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)
+	person := WeChatPerson{TenantID: reminderTenantID, SubjectIssuer: "https://platform.example.test/identity", Subject: "daily-" + strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")}
+	siteA, siteB := "01910000-0040-7000-8000-00000000000a", "01910000-0040-7000-8000-00000000000b"
+	for _, request := range []ReminderRequest{{Kind: ReminderDaily, SiteID: siteA}, {Kind: ReminderDaily, SiteID: siteA}, {Kind: ReminderAlarm}, {Kind: ReminderDaily, SiteID: siteB}} {
+		if _, err := store.AddWeChatReminder(ctx, person, request, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reminders, err := store.WeChatReminders(ctx, person)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reminders != (WeChatReminders{Alarm: 1, Daily: 3, DailySiteID: siteB}) {
+		t.Fatalf("reminders = %#v", reminders)
+	}
+	// A daily summary needs its Site.
+	if _, err := store.AddWeChatReminder(ctx, person, ReminderRequest{Kind: ReminderDaily}, now); err == nil {
+		t.Fatal("a daily summary without its Site was counted")
 	}
 }

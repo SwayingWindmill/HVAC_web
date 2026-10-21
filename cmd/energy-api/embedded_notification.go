@@ -92,7 +92,7 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger) (*h
 		store.Close()
 		return nil, nil, func() {}, err
 	}
-	reminders, err := newWeChatAlarmReminderWorker(logger, scheduler)
+	reminders, err := newWeChatReminderWorker(logger, scheduler)
 	if err != nil {
 		if deliveryPort != nil {
 			deliveryPort.Close()
@@ -122,7 +122,7 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger) (*h
 	}
 	go runAlarmNotificationRelay(ctx, logger, relay, store)
 	go runNotificationScheduler(ctx, logger, scheduler, store, deliveryPort)
-	go runWeChatAlarmReminders(ctx, logger, reminders)
+	go runWeChatReminders(ctx, logger, reminders)
 	closeAll := func() {
 		if deliveryPort != nil {
 			deliveryPort.Close()

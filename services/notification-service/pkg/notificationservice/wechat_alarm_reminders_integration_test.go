@@ -23,21 +23,27 @@ const (
 	alarmReminderIssuer   = "https://platform.example.test/identity"
 )
 
-// fakeRecipients allows the listed subjects and remembers whom it was asked about.
+// fakeRecipients allows the listed subjects, for Alarms and for daily summaries, and remembers
+// whom it was asked about.
 type fakeRecipients struct {
-	mu      sync.Mutex
-	allowed map[string]bool
-	asked   [][]string
+	mu           sync.Mutex
+	allowed      map[string]bool
+	allowedDaily map[string]bool
+	asked        [][]string
 }
 
-func (fake *fakeRecipients) AllowedRecipients(_ context.Context, tenantID, siteID, alarmID string, people []WeChatPerson) ([]WeChatPerson, error) {
+func (fake *fakeRecipients) AllowedRecipients(_ context.Context, kind ReminderKind, tenantID, siteID, alarmID string, people []WeChatPerson) ([]WeChatPerson, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
+	allowedSubjects := fake.allowed
+	if kind == ReminderDaily {
+		allowedSubjects = fake.allowedDaily
+	}
 	var subjects []string
 	var allowed []WeChatPerson
 	for _, person := range people {
 		subjects = append(subjects, person.Subject)
-		if fake.allowed[person.Subject] && person.TenantID == tenantID {
+		if allowedSubjects[person.Subject] && person.TenantID == tenantID {
 			allowed = append(allowed, person)
 		}
 	}
@@ -84,10 +90,23 @@ func (fake *fakeSender) SendWeChatMessage(_ context.Context, person WeChatPerson
 	return nil
 }
 
+// fakeEnergy answers each day's electricity and cooling; a day it does not know has none.
+type fakeEnergy struct {
+	days map[string][2]float64
+}
+
+func (fake fakeEnergy) DayEnergy(_ context.Context, tenantID, siteID, timezone string, day time.Time) (*float64, *float64, error) {
+	energy, ok := fake.days[day.Format("2006-01-02")+" "+timezone]
+	if !ok {
+		return nil, nil, nil
+	}
+	return &energy[0], &energy[1], nil
+}
+
 type reminderFixture struct {
 	t       *testing.T
 	store   *PostgresStore
-	worker  *WeChatAlarmReminderWorker
+	worker  *WeChatReminderWorker
 	sender  *fakeSender
 	decider *fakeRecipients
 	stamp   string
@@ -104,12 +123,14 @@ func newReminderFixture(t *testing.T) *reminderFixture {
 	}
 	t.Cleanup(scheduler.Close)
 	fixture := &reminderFixture{
-		t: t, store: store, sender: &fakeSender{outcomes: map[string][]error{}}, decider: &fakeRecipients{allowed: map[string]bool{}},
+		t: t, store: store, sender: &fakeSender{outcomes: map[string][]error{}}, decider: &fakeRecipients{allowed: map[string]bool{}, allowedDaily: map[string]bool{}},
 		stamp: strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", ""),
 		base:  time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC),
 	}
-	fixture.worker = &WeChatAlarmReminderWorker{
-		Scheduler: scheduler, Recipients: fixture.decider, Sites: fakeSites{}, Sender: fixture.sender, TemplateID: "alarm-template",
+	fixture.worker = &WeChatReminderWorker{
+		Scheduler: scheduler, Recipients: fixture.decider, Sites: fakeSites{}, Sender: fixture.sender,
+		Energy:          fakeEnergy{days: map[string][2]float64{"2026-10-21 Asia/Shanghai": {1691, 7402}}},
+		AlarmTemplateID: "alarm-template", DailyTemplateID: "daily-template",
 	}
 	return fixture
 }
@@ -119,11 +140,32 @@ func (fixture *reminderFixture) person(name string, allowed int) WeChatPerson {
 	fixture.t.Helper()
 	person := WeChatPerson{TenantID: alarmReminderTenantID, SubjectIssuer: alarmReminderIssuer, Subject: name + "-" + fixture.stamp}
 	for range allowed {
-		if _, err := fixture.store.AddWeChatReminder(context.Background(), person, ReminderAlarm, fixture.base); err != nil {
+		if _, err := fixture.store.AddWeChatReminder(context.Background(), person, ReminderRequest{Kind: ReminderAlarm}, fixture.base); err != nil {
 			fixture.t.Fatal(err)
 		}
 	}
 	return person
+}
+
+// dailyPerson is a subject unique to this run with this many daily summaries of the Site allowed.
+func (fixture *reminderFixture) dailyPerson(name string, allowed int, siteID string) WeChatPerson {
+	fixture.t.Helper()
+	person := WeChatPerson{TenantID: alarmReminderTenantID, SubjectIssuer: alarmReminderIssuer, Subject: name + "-" + fixture.stamp}
+	for range allowed {
+		if _, err := fixture.store.AddWeChatReminder(context.Background(), person, ReminderRequest{Kind: ReminderDaily, SiteID: siteID}, fixture.base); err != nil {
+			fixture.t.Fatal(err)
+		}
+	}
+	return person
+}
+
+func (fixture *reminderFixture) leftDaily(person WeChatPerson) int {
+	fixture.t.Helper()
+	reminders, err := fixture.store.WeChatReminders(context.Background(), person)
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	return reminders.Daily
 }
 
 func (fixture *reminderFixture) uuid() string {

@@ -1,6 +1,7 @@
 import { GatewayError } from '../../lib/gateway';
 import { gateway, requireSession } from '../../lib/platform';
-import { currentSite, type Site } from '../../lib/site';
+import { addDailyReminder, readDailyReminders, type ReminderRow } from '../../lib/reminders';
+import { currentSite, siteById, type Site } from '../../lib/site';
 import { energySeries, recentDays } from '../../lib/energy';
 import { loadPlant } from '../../lib/plant-load';
 import { whileShown } from '../../lib/refresh';
@@ -80,6 +81,13 @@ async function load(site: Site) {
   return { inputs, waiting, plant: plant.status === 'fulfilled' ? { failed: false, now: presentPlantNow(plant.value) } : { failed: true, now: null } };
 }
 
+/** WeChat's subscription dialog; it must open straight from the tap. */
+const askWeChat = (templates: string[]) => new Promise<Record<string, string>>((resolve, reject) => {
+  wx.requestSubscribeMessage({ tmplIds: templates, success: (result) => resolve(result as unknown as Record<string, string>), fail: reject });
+});
+
+const siteName = async (id: string) => (await siteById(id))?.displayName ?? null;
+
 const clock = (now: Date) => `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
 Page({
@@ -91,12 +99,15 @@ Page({
     failed: false,
     view: null as ReturnType<typeof presentOverview> | null,
     plant: { failed: false, now: null } as { failed: boolean; now: ReturnType<typeof presentPlantNow> },
+    daily: null as ReminderRow | null,
+    addingDaily: false,
   },
 
   onShow() {
     if (!requireSession()) return;
     selectTab(this);
     this.refresh();
+    this.readDaily();
     refresher.start(() => this.refresh());
   },
 
@@ -114,6 +125,22 @@ Page({
 
   openSites() {
     wx.navigateTo({ url: '/pages/sites/index' });
+  },
+
+  async readDaily() {
+    const site = await currentSite().catch(() => null);
+    if (site !== null) this.setData({ daily: await readDailyReminders(gateway, site, siteName) });
+  },
+
+  async addDaily() {
+    if (this.data.addingDaily) return;
+    const site = await currentSite().catch(() => null);
+    if (site === null) return;
+    this.setData({ addingDaily: true });
+    const change = await addDailyReminder(gateway, askWeChat, site.id);
+    this.setData({ addingDaily: false });
+    wx.showToast({ title: change.message, icon: change.added ? 'success' : 'none' });
+    if (change.added) this.readDaily();
   },
 
   async onPullDownRefresh() {
