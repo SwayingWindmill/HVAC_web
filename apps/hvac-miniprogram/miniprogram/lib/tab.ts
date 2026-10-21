@@ -18,7 +18,7 @@ export interface Tab {
 export const TABS: readonly Tab[] = [
   { pagePath: '/pages/overview/index', text: '总览', icon: '/assets/tab/overview.svg', activeIcon: '/assets/tab/overview-active.svg', raised: false, showsAttention: false },
   { pagePath: '/pages/run/index', text: '运行', icon: '/assets/tab/run.svg', activeIcon: '/assets/tab/run-active.svg', raised: false, showsAttention: false },
-  { pagePath: '/pages/assistant/index', text: '助手', icon: '/assets/tab/assistant.svg', activeIcon: '/assets/tab/assistant-active.svg', raised: true, showsAttention: false },
+  { pagePath: '/pages/assistant/index', text: '助手', icon: '/assets/windmill/on-primary.svg', activeIcon: '/assets/windmill/primary.svg', raised: true, showsAttention: false },
   { pagePath: '/pages/notifications/index', text: '通知', icon: '/assets/tab/notifications.svg', activeIcon: '/assets/tab/notifications-active.svg', raised: false, showsAttention: true },
   { pagePath: '/pages/me/index', text: '我的', icon: '/assets/tab/me.svg', activeIcon: '/assets/tab/me-active.svg', raised: false, showsAttention: false },
 ];

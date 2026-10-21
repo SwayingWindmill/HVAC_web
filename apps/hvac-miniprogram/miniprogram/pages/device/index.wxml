@@ -11,14 +11,14 @@
 
     <view wx:if="{{view.metrics.length}}" class="card card-pad lead">
       <view wx:for="{{view.metrics}}" wx:key="label" class="lead-metric">
-        <text class="caption">{{item.label}}</text>
+        <view class="caption titled"><image wx:if="{{item.icon}}" class="caption-icon" src="/assets/icon/{{item.icon}}.svg" aria-hidden="true" /><text>{{item.label}}</text></view>
         <view class="lead-value {{item.late ? 'muted' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
       </view>
     </view>
 
     <view wx:if="{{view.energy}}" class="card card-pad energy" aria-label="今天用电">
       <view class="split">
-        <text class="card-title">今天用电</text>
+        <view class="card-title titled"><image class="title-icon" src="/assets/icon/zap.svg" aria-hidden="true" /><text>今天用电</text></view>
         <text class="caption">{{view.energy.share}}</text>
       </view>
       <view class="energy-total">{{view.energy.total}}<text class="unit">kWh</text></view>
@@ -29,11 +29,11 @@
 
     <view class="card" aria-label="全部读数">
       <view class="card-pad split">
-        <text class="card-title">全部读数</text>
+        <view class="card-title titled"><image class="title-icon" src="/assets/icon/list.svg" aria-hidden="true" /><text>全部读数</text></view>
         <text class="caption">{{view.readingsNote}}</text>
       </view>
       <view wx:for="{{view.readings}}" wx:key="label" class="reading">
-        <text class="reading-label">{{item.label}}</text>
+        <view class="reading-label titled"><image wx:if="{{item.icon}}" class="title-icon" src="/assets/icon/{{item.icon}}.svg" aria-hidden="true" /><view wx:else class="title-icon" /><text>{{item.label}}</text></view>
         <view class="reading-value">
           <text wx:if="{{item.late}}" class="badge badge-warning">读数过期</text>
           <text class="{{item.value === '没读到' ? 'muted' : ''}}">{{item.value}}</text>

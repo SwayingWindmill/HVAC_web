@@ -26,18 +26,19 @@ function plantWith(change: (snapshotOf: (name: string) => { presence: { currentS
 test('实时运行 leads with whether the plant runs, its power, cooling and efficiency, then the water loops and the air', () => {
   const view = presentRealtime(plant);
   assert.deepEqual(view.status, { label: '运行中', tone: 'running', detail: '主要设备 4 / 4 台运行' });
+  // Each figure carries the icon of what it measures (#677): electricity, cooling, efficiency.
   assert.deepEqual(view.metrics, [
-    { label: '冷站总功率', value: '211.9', unit: 'kW', late: false },
-    { label: '制冷量', value: '864', unit: 'kW', late: false },
-    { label: '能效', value: '4.08', unit: '', late: false },
+    { label: '冷站总功率', icon: 'zap', value: '211.9', unit: 'kW', late: false },
+    { label: '制冷量', icon: 'snowflake', value: '864', unit: 'kW', late: false },
+    { label: '能效', icon: 'gauge', value: '4.08', unit: '', late: false },
   ]);
   assert.equal(view.copNote, '');
   // Every temperature to one decimal (#677), so 7.0 sits beside 12.6.
   assert.deepEqual(view.loops, [
-    { name: '冷冻水', headline: '供 7.0 °C · 回 12.6 °C', detail: '温差 5.6 °C · 流量 132 m³/h', late: false },
-    { name: '冷却水', headline: '出塔 30.7 °C · 进塔 34.1 °C', detail: '与湿球差 3.7 °C · 流量 260 m³/h', late: false },
-    { name: '室内', headline: '24.1 °C', detail: '', late: false },
-    { name: '室外', headline: '34.0 °C', detail: '湿球 27.0 °C · 相对湿度 65 %RH', late: false },
+    { name: '冷冻水', icon: 'snowflake', headline: '供 7.0 °C · 回 12.6 °C', detail: '温差 5.6 °C · 流量 132 m³/h', late: false },
+    { name: '冷却水', icon: 'droplets', headline: '出塔 30.7 °C · 进塔 34.1 °C', detail: '与湿球差 3.7 °C · 流量 260 m³/h', late: false },
+    { name: '室内', icon: 'house', headline: '24.1 °C', detail: '', late: false },
+    { name: '室外', icon: 'cloud-sun', headline: '34.0 °C', detail: '湿球 27.0 °C · 相对湿度 65 %RH', late: false },
   ]);
 });
 
@@ -57,9 +58,9 @@ test('a stopped plant says so and why there is no efficiency; a late reading is 
   // Headline figures are written as the web writes them (power to 0.1 kW with thousands separators), a late one dimmed.
   assert.deepEqual(stopped.metrics.map((each) => [each.value, each.late]), [['1,234.6', true], ['0', false], ['—', false]]);
   assert.equal(stopped.copNote, '停机时不算能效。');
-  assert.deepEqual(stopped.loops.find((loop) => loop.name === '室外'), { name: '室外', headline: '34.0 °C', detail: '湿球 27.0 °C · 相对湿度 65 %RH', late: true });
+  assert.deepEqual(stopped.loops.find((loop) => loop.name === '室外'), { name: '室外', icon: 'cloud-sun', headline: '34.0 °C', detail: '湿球 27.0 °C · 相对湿度 65 %RH', late: true });
   // A reading never received is left out rather than shown as a dash; a loop whose lead reading never came is left out.
-  assert.deepEqual(stopped.loops.find((loop) => loop.name === '冷冻水'), { name: '冷冻水', headline: '回 12.6 °C', detail: '温差 5.6 °C · 流量 132 m³/h', late: false });
+  assert.deepEqual(stopped.loops.find((loop) => loop.name === '冷冻水'), { name: '冷冻水', icon: 'snowflake', headline: '回 12.6 °C', detail: '温差 5.6 °C · 流量 132 m³/h', late: false });
   assert.equal(stopped.loops.some((loop) => loop.name === '室内'), false);
 
   const offlinePlant = plantWith((snapshotOf) => { snapshotOf('CHILLER-01').presence.currentState = 'OFFLINE'; });
@@ -149,15 +150,16 @@ test('a device opens on its state, its two lead readings, every reading, and the
   });
   assert.deepEqual([view.name, view.kind, view.status, view.updatedAt], ['CHILLER-01', '冷水机组', { label: '运行', tone: 'running' }, '23:29:52']);
   assert.deepEqual(view.metrics, [
-    { label: '主机功率', value: '155.7', unit: 'kW', late: false },
-    { label: '冷冻水出水温度', value: '7.0', unit: '°C', late: false },
+    { label: '主机功率', icon: 'zap', value: '155.7', unit: 'kW', late: false },
+    { label: '冷冻水出水温度', icon: 'thermometer', value: '7.0', unit: '°C', late: false },
   ]);
   // A count beside the readings, not a sentence: no full stop.
   assert.equal(view.readingsNote, '11 个读数');
   assert.deepEqual(view.readings.slice(0, 2), [
-    { label: '冷冻水设定温度', value: '7.0 °C', late: false },
-    { label: '压缩机负载', value: '72%', late: false },
+    { label: '冷冻水设定温度', icon: 'thermometer', value: '7.0 °C', late: false },
+    { label: '压缩机负载', icon: 'percent', value: '72%', late: false },
   ]);
+  assert.equal(view.readings.find((reading) => reading.label === '运行状态')?.icon, 'power');
   assert.deepEqual(view.energy && [view.energy.total, view.energy.share, view.energy.gaps], ['1,035', '占全站 61%', '3–22 点没有读数']);
   assert.deepEqual(view.energy?.bars.slice(0, 4).map((bar) => [bar.state, bar.height]), [['value', 75], ['value', 100], ['value', 84], ['missing', 0]]);
   assert.deepEqual(view.energy?.scale, ['400', '200', '0']);
@@ -177,9 +179,9 @@ test('the overview says in one card whether the plant runs, with its power, supp
     status: { label: '运行中', tone: 'running', detail: '主要设备 4 / 4 台运行' },
     summary: '4 / 4 台运行 · 8 / 8 在线',
     metrics: [
-      { label: '功率', value: '211.9', unit: 'kW', late: false },
-      { label: '供水', value: '7.0', unit: '°C', late: false },
-      { label: '室内', value: '24.1', unit: '°C', late: false },
+      { label: '功率', icon: 'zap', value: '211.9', unit: 'kW', late: false },
+      { label: '供水', icon: 'thermometer', value: '7.0', unit: '°C', late: false },
+      { label: '室内', icon: 'thermometer', value: '24.1', unit: '°C', late: false },
     ],
   });
   assert.equal(presentPlantNow(buildPlant({ ...assetModel, devices: [] }, snapshots, now)), null);

@@ -59,12 +59,13 @@ export function presentAlarm(alarm: Alarm, context: { readonly deviceName: strin
   const { deviceName, now, todayStart, me } = context;
   const activeNow = alarm.condition === 'ACTIVE';
   const end = activeNow ? now.getTime() : Date.parse(alarm.clearedAt ?? alarm.lastOccurredAt);
+  // Each fact with its lucide icon (assets/icon, #677).
   const facts = [
-    ...(deviceName === null ? [] : [{ label: '设备', value: deviceName }]),
-    ...(todayStart === null ? [] : [{ label: '开始', value: when(alarm.firstOccurredAt, todayStart) }]),
-    ...(todayStart === null || activeNow ? [] : [{ label: '恢复', value: when(alarm.clearedAt ?? alarm.lastOccurredAt, todayStart) }]),
-    { label: activeNow ? '已经持续' : '持续了', value: formatSpan(end - Date.parse(alarm.firstOccurredAt)) },
-    { label: '报过', value: `${alarm.occurrenceCount} 次` },
+    ...(deviceName === null ? [] : [{ label: '设备', icon: 'cpu', value: deviceName }]),
+    ...(todayStart === null ? [] : [{ label: '开始', icon: 'clock', value: when(alarm.firstOccurredAt, todayStart) }]),
+    ...(todayStart === null || activeNow ? [] : [{ label: '恢复', icon: 'circle-check', value: when(alarm.clearedAt ?? alarm.lastOccurredAt, todayStart) }]),
+    { label: activeNow ? '已经持续' : '持续了', icon: 'timer', value: formatSpan(end - Date.parse(alarm.firstOccurredAt)) },
+    { label: '报过', icon: 'repeat', value: `${alarm.occurrenceCount} 次` },
   ];
   const acknowledgement = alarm.acknowledgement ?? null;
   return {

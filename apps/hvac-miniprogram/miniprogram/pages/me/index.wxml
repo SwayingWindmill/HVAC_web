@@ -9,18 +9,18 @@
 
   <view class="card">
     <view class="row" bindtap="openSites" aria-role="button" aria-label="切换站点">
-      <text>当前站点</text>
+      <view class="titled"><image class="title-icon" src="/assets/icon/map-pin.svg" aria-hidden="true" /><text>当前站点</text></view>
       <text class="muted">{{siteName}} ›</text>
     </view>
     <view class="row" bindtap="tapWeChat" aria-role="button" aria-label="微信，{{wechat.value}}" aria-disabled="{{!wechat.action || changingWeChat}}">
       <view class="row-main">
-        <text>微信</text>
+        <view class="titled"><image class="title-icon" src="/assets/icon/message-circle.svg" aria-hidden="true" /><text>微信</text></view>
         <text wx:if="{{wechat.hint}}" class="caption">{{wechat.hint}}</text>
       </view>
       <text class="muted">{{wechat.value}}{{wechat.action ? ' ›' : ''}}</text>
     </view>
   </view>
 
-  <button class="button-outline sign-out" disabled="{{signingOut}}" loading="{{signingOut}}" bindtap="signOut">退出登录</button>
+  <button class="button-outline sign-out" disabled="{{signingOut}}" loading="{{signingOut}}" bindtap="signOut"><image wx:if="{{!signingOut}}" class="title-icon sign-out-icon" src="/assets/icon/log-out.svg" aria-hidden="true" />退出登录</button>
   <view class="caption hint">改密码、管理用户和站点，请到电脑上的网页。</view>
 </view>

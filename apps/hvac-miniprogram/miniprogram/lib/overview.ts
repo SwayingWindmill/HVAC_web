@@ -32,6 +32,8 @@ export interface OverviewInputs {
 
 export interface Metric {
   readonly label: string;
+  /** Its lucide icon in assets/icon. */
+  readonly icon: string;
   readonly value: string;
   readonly unit: string;
   readonly badge: ChangeBadge | null;
@@ -116,11 +118,11 @@ function presentEnergy(input: OverviewInputs['energy']) {
   if (input.status === 'empty') return { state: 'empty' as const, metrics: [] as Metric[], note: '这个站点今天和昨天都没有用电读数。' };
   const { today, change } = input;
   const metrics: Metric[] = [
-    { label: '空调用电', value: grouped(today.electricityKWh, 1), unit: today.electricityKWh === null ? '' : 'kWh', badge: changeBadge(change.electricity, 'less-is-better') },
+    { label: '空调用电', icon: 'zap', value: grouped(today.electricityKWh, 1), unit: today.electricityKWh === null ? '' : 'kWh', badge: changeBadge(change.electricity, 'less-is-better') },
     // A Site without a tariff has no cost to show, as on the web.
-    ...(today.costCNY === null ? [] : [{ label: '电费（估算）', value: money(today.costCNY), unit: '', badge: changeBadge(change.cost, 'less-is-better') }]),
-    { label: '供冷量', value: grouped(today.coolingKWh, 1), unit: today.coolingKWh === null ? '' : 'kWh', badge: changeBadge(change.cooling, 'neutral') },
-    { label: '综合能效', value: grouped(today.cop, 2), unit: '', badge: changeBadge(change.cop, 'more-is-better') },
+    ...(today.costCNY === null ? [] : [{ label: '电费（估算）', icon: 'receipt', value: money(today.costCNY), unit: '', badge: changeBadge(change.cost, 'less-is-better') }]),
+    { label: '供冷量', icon: 'snowflake', value: grouped(today.coolingKWh, 1), unit: today.coolingKWh === null ? '' : 'kWh', badge: changeBadge(change.cooling, 'neutral') },
+    { label: '综合能效', icon: 'gauge', value: grouped(today.cop, 2), unit: '', badge: changeBadge(change.cop, 'more-is-better') },
   ];
   return { state: 'ok' as const, metrics, note: '' };
 }

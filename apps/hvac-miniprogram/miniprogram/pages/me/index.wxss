@@ -41,3 +41,8 @@
   flex-direction: column;
   gap: 2px;
 }
+
+/* A margin, not the button's gap, so WeChat's loading spinner keeps its own spacing. */
+.sign-out-icon {
+  margin-right: 8px;
+}

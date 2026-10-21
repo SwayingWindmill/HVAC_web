@@ -74,10 +74,10 @@ test('an alarm opens on its severity and state, what happened, the facts an oper
     level: 'major', severity: '重要', state: '正在发生 · 未确认', title: '冷冻水回水温度过低',
     summary: '冷机运行且负荷不少于 360 kW 时，回水温度持续 5 分钟不高于 10.5°C。',
     facts: [
-      { label: '设备', value: 'C 机组电表' },
-      { label: '开始', value: '9/29 16:26' },
-      { label: '已经持续', value: '2 天 7 小时' },
-      { label: '报过', value: '1 次' },
+      { label: '设备', icon: 'cpu', value: 'C 机组电表' },
+      { label: '开始', icon: 'clock', value: '9/29 16:26' },
+      { label: '已经持续', icon: 'timer', value: '2 天 7 小时' },
+      { label: '报过', icon: 'repeat', value: '1 次' },
     ],
     acknowledgement: null,
     canAcknowledge: true,
@@ -86,10 +86,10 @@ test('an alarm opens on its severity and state, what happened, the facts an oper
   const done = presentAlarm(cleared, { deviceName: null, now, todayStart, me: ME });
   assert.equal(done.state, '已恢复 · 已确认');
   assert.deepEqual(done.facts, [
-    { label: '开始', value: '今天 17:11' },
-    { label: '恢复', value: '今天 17:23' },
-    { label: '持续了', value: '12 分钟' },
-    { label: '报过', value: '1 次' },
+    { label: '开始', icon: 'clock', value: '今天 17:11' },
+    { label: '恢复', icon: 'circle-check', value: '今天 17:23' },
+    { label: '持续了', icon: 'timer', value: '12 分钟' },
+    { label: '报过', icon: 'repeat', value: '1 次' },
   ]);
   assert.deepEqual(done.acknowledgement, { who: '我', when: '今天 17:11', comment: '值班人员已到冷站核查' });
   assert.equal(done.canAcknowledge, false);

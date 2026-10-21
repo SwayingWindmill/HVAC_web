@@ -38,14 +38,14 @@
 
     <view class="card card-pad energy" aria-label="今天用能">
       <view class="energy-head">
-        <text class="card-title">今天用能</text>
+        <view class="card-title titled"><image class="title-icon" src="/assets/icon/zap.svg" aria-hidden="true" /><text>今天用能</text></view>
         <text class="caption">较昨天同时段</text>
       </view>
       <view wx:if="{{view.energy.note}}" class="caption">{{view.energy.note}}</view>
       <block wx:else>
         <view class="metrics">
           <view wx:for="{{view.energy.metrics}}" wx:key="label" class="metric">
-            <text class="caption">{{item.label}}</text>
+            <view class="caption titled"><image wx:if="{{item.icon}}" class="caption-icon" src="/assets/icon/{{item.icon}}.svg" aria-hidden="true" /><text>{{item.label}}</text></view>
             <view class="metric-value">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
             <text wx:if="{{item.badge}}" class="badge badge-{{item.badge.tone}}">{{item.badge.text}}</text>
           </view>
@@ -56,7 +56,7 @@
     <view wx:if="{{plant.failed}}" class="card card-pad caption">冷站的实时读数暂时读不到，下拉刷新再试。</view>
     <view wx:elif="{{plant.now}}" class="card card-pad now" bindtap="openRun" aria-role="link" aria-label="冷站现在，打开运行">
       <view class="now-head">
-        <text class="card-title">冷站现在</text>
+        <view class="card-title titled"><image class="title-icon" src="/assets/icon/fan.svg" aria-hidden="true" /><text>冷站现在</text></view>
         <text class="caption">实时运行 ›</text>
       </view>
       <view class="now-status">
@@ -68,7 +68,7 @@
       </view>
       <view class="now-metrics">
         <view wx:for="{{plant.now.metrics}}" wx:key="label" class="metric">
-          <text class="caption">{{item.label}}</text>
+          <view class="caption titled"><image wx:if="{{item.icon}}" class="caption-icon" src="/assets/icon/{{item.icon}}.svg" aria-hidden="true" /><text>{{item.label}}</text></view>
           <view class="now-value {{item.late ? 'muted' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
         </view>
       </view>
@@ -97,7 +97,7 @@
 
     <view wx:if="{{daily}}" class="card card-pad daily" aria-label="每日运行结论">
       <view class="daily-main">
-        <text class="card-title">每日运行结论</text>
+        <view class="card-title titled"><image class="title-icon" src="/assets/icon/calendar-clock.svg" aria-hidden="true" /><text>每日运行结论</text></view>
         <text class="caption">{{daily.text}}</text>
       </view>
       <button wx:if="{{daily.canAdd}}" class="daily-add" size="mini" loading="{{addingDaily}}" disabled="{{addingDaily}}" bindtap="addDaily">多收一天</button>
