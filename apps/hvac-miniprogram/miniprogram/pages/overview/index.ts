@@ -8,7 +8,9 @@ import { presentPlantNow } from '../../lib/run';
 import { compareWithYesterday, sameHoursWindows, summarize, todayStart } from '../../lib/today';
 import { monthToDate, savingsCard, type Measure, type SavingsTotals } from '../../lib/savings';
 import { presentOverview, type OverviewInputs, type Recommendation } from '../../lib/overview';
-import { selectTab } from '../../lib/tab';
+import { listInbox } from '../../lib/alarm-api';
+import { unreadOn } from '../../lib/alarms';
+import { selectTab, showUnread } from '../../lib/tab';
 
 const refresher = whileShown(60_000);
 
@@ -99,6 +101,10 @@ Page({
 
   onUnload: refresher.stop,
 
+  openAlarms() {
+    wx.navigateTo({ url: '/pages/alarms/index' });
+  },
+
   openRun() {
     wx.switchTab({ url: '/pages/run/index' });
   },
@@ -120,7 +126,9 @@ Page({
         this.setData({ loading: false, noSite: true });
         return;
       }
-      const { inputs, plant } = await load(site);
+      const [{ inputs, plant }, inbox] = await Promise.all([load(site), listInbox(gateway).catch(() => null)]);
+      // The 通知 tab shows how many of this Site's notifications are unread; a failed read leaves the last count.
+      if (inbox !== null) showUnread(this, unreadOn(inbox, site.id));
       this.setData({ siteName: site.displayName, updatedAt: clock(new Date()), loading: false, noSite: false, failed: false, view: presentOverview(inputs), plant });
     } catch {
       // The Site list itself could not be read; signed-out failures already went to the sign-in page.

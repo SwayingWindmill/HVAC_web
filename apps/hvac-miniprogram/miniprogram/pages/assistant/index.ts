@@ -1,7 +1,7 @@
 import { answerQuestion, askInSession, assistantErrorText, followSession, listSessions, startSession, stopRun } from '../../lib/agent';
 import type { AgentSessionEvent, AgentSessionSnapshot } from '../../lib/agent-types';
 import { presentConversation, presentHistory } from '../../lib/assistant';
-import { chooseConversation, chosenConversation } from '../../lib/assistant-choice';
+import { chooseConversation, chosenConversation, takePendingQuestion } from '../../lib/assistant-choice';
 import { loadConversations } from '../../lib/conversations';
 import { gateway, requireSession } from '../../lib/platform';
 import { currentSite, type Site } from '../../lib/site';
@@ -108,6 +108,14 @@ Page({
         chooseConversation(latest !== undefined && (latest.session.status === 'ACTIVE' || latest.session.status === 'WAITING_FOR_INPUT') ? latest.session.id : null);
       }
       this.setData({ loading: false, noSite: false, siteName: visible.displayName });
+      // Another page (an alarm's 问助手) asked to start a conversation with its question.
+      const question = takePendingQuestion();
+      if (question !== null) {
+        halt();
+        chooseConversation(null);
+        await this.ask(question);
+        return;
+      }
       this.render();
       const running = selected();
       if (running?.session.status === 'ACTIVE' && live?.sessionId !== running.session.id) this.follow(running.session.id);

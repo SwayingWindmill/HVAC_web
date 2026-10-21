@@ -9,3 +9,16 @@ export const chosenConversation = () => chosen;
 export const chooseConversation = (sessionId: string | null) => {
   chosen = sessionId;
 };
+
+// A question another page asks the assistant to start with (an alarm's 问助手); the tab asks it once.
+let pending: string | null = null;
+
+export const askAssistantLater = (question: string) => {
+  pending = question;
+};
+
+export const takePendingQuestion = () => {
+  const question = pending;
+  pending = null;
+  return question;
+};

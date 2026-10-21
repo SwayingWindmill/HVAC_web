@@ -86,3 +86,14 @@ test('a stream carries the Session too and hands over its chunks as they come; a
   await assert.rejects(ended.stream('/events', () => {}).done, { code: 'SESSION_INVALID' });
   assert.equal(signedOut, 1);
 });
+
+test('a change without a body sends none, and a change can carry its own headers such as an idempotency key', async () => {
+  const seen: Parameters<Transport>[0][] = [];
+  const transport: Transport = async (request) => { seen.push(request); return { statusCode: 200, data: { data: {} } }; };
+  const gateway = createGateway({ origin: 'https://hvac.example.test', transport, chunked: noStreams, session: memorySession('session-1'), onSignedOut: () => {} });
+  await gateway.post('/api/v1/notifications/inbox/item-1/read');
+  assert.equal(seen[0].data, undefined);
+  assert.equal('Content-Type' in seen[0].header, false);
+  await gateway.post('/api/v1/alarms/alarm-1/ack', { comment: '已通知厂家' }, { 'Idempotency-Key': 'alarm-ack-0001' });
+  assert.deepEqual([seen[1].header['Idempotency-Key'], seen[1].header['Content-Type'], seen[1].header.Authorization], ['alarm-ack-0001', 'application/json', 'Bearer session-1']);
+});

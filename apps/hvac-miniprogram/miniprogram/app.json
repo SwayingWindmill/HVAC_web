@@ -3,11 +3,14 @@
     "pages/overview/index",
     "pages/run/index",
     "pages/assistant/index",
+    "pages/notifications/index",
     "pages/me/index",
     "pages/login/index",
     "pages/sites/index",
     "pages/device/index",
-    "pages/assistant-history/index"
+    "pages/assistant-history/index",
+    "pages/alarms/index",
+    "pages/alarm/index"
   ],
   "window": {
     "navigationStyle": "custom",
@@ -25,6 +28,7 @@
       { "pagePath": "pages/overview/index", "text": "总览" },
       { "pagePath": "pages/run/index", "text": "运行" },
       { "pagePath": "pages/assistant/index", "text": "助手" },
+      { "pagePath": "pages/notifications/index", "text": "通知" },
       { "pagePath": "pages/me/index", "text": "我的" }
     ]
   },

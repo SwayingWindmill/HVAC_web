@@ -1,0 +1,53 @@
+<page-header title="通知" />
+
+<view class="screen with-tab-bar">
+  <view wx:if="{{loading}}" class="state">正在读取…</view>
+  <view wx:elif="{{noSite}}" class="state">这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。</view>
+  <view wx:elif="{{failed}}" class="state">{{failed}}</view>
+  <block wx:else>
+    <view class="card row active" bindtap="openAlarms" aria-role="link">
+      <view class="active-label">
+        <image class="active-mark" src="/assets/severity/critical.svg" aria-hidden="true" />
+        <text>正在发生的告警</text>
+      </view>
+      <text class="active-count">{{active}} ›</text>
+    </view>
+
+    <view class="toolbar">
+      <view class="segments" aria-role="tablist" aria-label="通知">
+        <view class="segment {{view === 'unread' ? 'segment-on' : ''}}" data-view="unread" bindtap="chooseView" aria-role="tab" aria-selected="{{view === 'unread'}}">未读<text wx:if="{{inbox.unread}}" class="segment-count">{{inbox.unread}}</text></view>
+        <view class="segment {{view === 'all' ? 'segment-on' : ''}}" data-view="all" bindtap="chooseView" aria-role="tab" aria-selected="{{view === 'all'}}">全部</view>
+      </view>
+      <text wx:if="{{inbox.unread}}" class="mark-all {{marking ? 'mark-all-off' : ''}}" bindtap="markAllRead" aria-role="button">全部标为已读</text>
+    </view>
+
+    <view wx:if="{{inbox.empty}}" class="state">{{inbox.empty}}</view>
+    <view wx:for="{{inbox.groups}}" wx:for-item="group" wx:key="day" class="group">
+      <text wx:if="{{group.day}}" class="group-day">{{group.day}}</text>
+      <view class="card">
+        <view
+          wx:for="{{group.items}}"
+          wx:key="id"
+          class="notice {{item.unread ? 'notice-unread' : ''}}"
+          data-id="{{item.id}}"
+          data-alarm="{{item.alarmId}}"
+          data-unread="{{item.unread}}"
+          bindtap="open"
+          aria-role="link"
+        >
+          <view class="notice-head">
+            <text wx:if="{{item.recovered}}" class="badge badge-good">{{item.tag}}</text>
+            <view wx:else class="notice-tag">
+              <image class="severity-mark" src="/assets/severity/{{item.level}}.svg" aria-hidden="true" />
+              <text>{{item.tag}}</text>
+            </view>
+            <text class="notice-time mono">{{item.time}}</text>
+            <view wx:if="{{item.unread}}" class="unread-dot" aria-label="未读" />
+          </view>
+          <text class="notice-subject">{{item.subject}}</text>
+          <text wx:if="{{item.body}}" class="notice-body">{{item.body}}</text>
+        </view>
+      </view>
+    </view>
+  </block>
+</view>

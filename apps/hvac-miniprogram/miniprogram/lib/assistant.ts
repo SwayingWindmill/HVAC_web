@@ -7,7 +7,7 @@
 import type { AgentSessionSnapshot, FindingChart } from './agent-types';
 import { answerNodes, type AnswerNode } from './answer-nodes';
 import { grouped } from './format';
-import { siteMoment } from './today';
+import { siteWhen } from './today';
 import type { AssistantPart, AssistantThread } from '../shared/thread-model';
 import { toolPresentation } from '../shared/tool-labels';
 
@@ -155,6 +155,6 @@ export function presentHistory(sessions: readonly AgentSessionSnapshot[], todayS
     id: session.id,
     // A conversation always starts with a question.
     question: messages.find((message) => message.role === 'OPERATOR')?.content ?? '',
-    detail: [todayStart === null ? '' : siteMoment(session.createdAt, todayStart), STATUS_WORDS[session.status]].filter(Boolean).join(' · '),
+    detail: [todayStart === null ? '' : siteWhen(session.createdAt, todayStart), STATUS_WORDS[session.status]].filter(Boolean).join(' · '),
   }));
 }

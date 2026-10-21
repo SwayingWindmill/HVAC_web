@@ -80,12 +80,26 @@ export function compareWithYesterday(today: EnergySummary, yesterday: EnergySumm
 
 const pad2 = (value: number) => String(value).padStart(2, '0');
 
-/** Where a moment falls at the Site, counted from the Site's midnight rather than the phone's time zone. */
+const HOUR_MS = 3_600_000;
+
+/**
+ * Where a moment falls at the Site, read from the Site's midnight that the owner cut rather than the
+ * phone's time zone: that midnight gives the Site's offset from UTC (UTC+8 when it falls at 16:00
+ * UTC), and the offset gives the Site's calendar date and clock.
+ */
 function siteTime(at: number, start: string) {
-  const since = at - Date.parse(start);
-  const days = Math.floor(since / DAY_MS);
-  const seconds = Math.floor((since - days * DAY_MS) / 1000);
-  return { days, hours: pad2(Math.floor(seconds / 3600)), minutes: pad2(Math.floor(seconds / 60) % 60), seconds: pad2(seconds % 60) };
+  const midnight = Date.parse(start);
+  const east = ((-midnight % DAY_MS) + DAY_MS) % DAY_MS;
+  const offset = east > 14 * HOUR_MS ? east - DAY_MS : east;
+  const local = new Date(at + offset);
+  return {
+    days: Math.floor((at - midnight) / DAY_MS),
+    month: local.getUTCMonth() + 1,
+    date: local.getUTCDate(),
+    hours: pad2(local.getUTCHours()),
+    minutes: pad2(local.getUTCMinutes()),
+    seconds: pad2(local.getUTCSeconds()),
+  };
 }
 
 /** A reading's time as Site clock time to the second: 23:29:52, 昨天 23:29:52, 3 天前. */
@@ -96,9 +110,16 @@ export function siteClock(at: string, start: string): string {
   return days === -1 ? `昨天 ${clock}` : `${-days} 天前`;
 }
 
-/** When something happened at the Site, to the minute: 今天 14:20, 昨天 14:20, 3 天前. */
-export function siteMoment(at: number, start: string): string {
-  const { days, hours, minutes } = siteTime(at, start);
-  if (days === 0) return `今天 ${hours}:${minutes}`;
-  return days === -1 ? `昨天 ${hours}:${minutes}` : `${-days} 天前`;
+/** When something happened at the Site, to the minute: 今天 14:20, 昨天 14:20, 9/29 14:20. */
+export function siteWhen(at: string | number, start: string): string {
+  const { days, month, date, hours, minutes } = siteTime(typeof at === 'number' ? at : Date.parse(at), start);
+  const clock = `${hours}:${minutes}`;
+  if (days === 0) return `今天 ${clock}`;
+  return days === -1 ? `昨天 ${clock}` : `${month}/${date} ${clock}`;
+}
+
+/** The Site day a moment falls on: 今天, 昨天, 9 月 29 日; and its clock time, 14:20. */
+export function siteDay(at: string, start: string): { readonly day: string; readonly time: string } {
+  const { days, month, date, hours, minutes } = siteTime(Date.parse(at), start);
+  return { day: days === 0 ? '今天' : days === -1 ? '昨天' : `${month} 月 ${date} 日`, time: `${hours}:${minutes}` };
 }

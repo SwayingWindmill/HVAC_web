@@ -1,7 +1,7 @@
 // Reads the plant from its owners: the Registry asset model through the gateway, then every device's
 // current values in as few batches as the gateway allows.
 
-import { buildPlant, snapshotBatches, type AssetModel, type Plant, type SnapshotsResponse } from './plant';
+import { buildPlant, deviceName, snapshotBatches, type AssetModel, type Plant, type SnapshotsResponse } from './plant';
 import { gateway } from './platform';
 import type { Site } from './site';
 
@@ -22,4 +22,9 @@ export async function loadPlant(site: Site, fresh = false): Promise<Plant> {
   const responses = await Promise.all(snapshotBatches(model).map((requests) =>
     gateway.post<SnapshotsResponse>('/api/v1/telemetry/observation-snapshots:batchGet', { requests })));
   return buildPlant(model, { items: responses.flatMap((response) => response.items) }, new Date());
+}
+
+/** The name operators know a device by, from the Site's registered equipment. */
+export async function siteDeviceName(site: Site, deviceId: string): Promise<string | null> {
+  return deviceName(await assetModel(site, false), deviceId, new Date());
 }
