@@ -9,6 +9,8 @@ export type StatusTone = 'running' | 'stopped' | 'fault' | 'offline' | 'neutral'
 
 export interface Metric {
   readonly label: string;
+  /** Its lucide icon in assets/icon; '' when the phone cannot tell what it measures. */
+  readonly icon: string;
   readonly value: string;
   readonly unit: string;
   /** Not current (late or of doubtful quality): drawn dimmed, never as current. */
@@ -24,6 +26,24 @@ function figure(reading: PlantReading): string {
   if (reading.unit === '°C') return grouped(reading.numeric, 1);
   if (Math.abs(reading.numeric) < 1000) return reading.display;
   return grouped(reading.numeric, reading.display.split('.')[1]?.length ?? 0);
+}
+
+const ICON_BY_UNIT: Readonly<Record<string, string>> = {
+  kW: 'zap', kWh: 'zap', '°C': 'thermometer', 'm³/h': 'waves-horizontal', Hz: 'activity', '%': 'percent', '%RH': 'droplet',
+};
+
+/**
+ * The lucide icon (assets/icon) of what a reading measures, so a list of readings scans by kind
+ * (#677): cooling, electricity, temperature, flow, frequency, a share, humidity, on/off, a fault, a
+ * ratio. '' when the phone cannot tell.
+ */
+export function readingIcon(reading: PlantReading): string {
+  const key = reading.sourceKey;
+  if (key.endsWith('.run_state')) return 'power';
+  if (key.endsWith('.fault_code')) return 'triangle-alert';
+  if (key.includes('cooling_capacity') || key.includes('cooling_energy')) return 'snowflake';
+  if (reading.unit === null) return key.endsWith('.cop') || key.endsWith('.power_factor') ? 'gauge' : '';
+  return ICON_BY_UNIT[reading.unit] ?? '';
 }
 
 /** A reading with its unit, as an operator reads it aloud: 7.0 °C, 72%, 132 m³/h. */
@@ -74,9 +94,10 @@ function copNote(plant: Plant): string {
 
 /** A reading as a figure; with `decimals`, written as the web's headline figures are (fixed decimals, thousands separators). */
 function metric(label: string, reading: PlantReading | null, decimals?: number): Metric {
-  if (reading === null || neverRead(reading)) return { label, value: '—', unit: reading?.unit ?? '', late: false };
+  const icon = reading === null ? '' : readingIcon(reading);
+  if (reading === null || neverRead(reading)) return { label, icon, value: '—', unit: reading?.unit ?? '', late: false };
   const value = decimals !== undefined && reading.numeric !== null ? grouped(reading.numeric, decimals) : figure(reading);
-  return { label, value, unit: reading.unit ?? '', late: !reading.current };
+  return { label, icon, value, unit: reading.unit ?? '', late: !reading.current };
 }
 
 // The same loops the web's 水系统与室内外环境 table lists; a loop shows once its lead reading has come in.
@@ -137,7 +158,7 @@ export function presentRealtime(plant: Plant) {
       // The web's 实时运行 writes power to 0.1 kW and cooling to whole kW.
       metric('冷站总功率', plant.totalPower, 1),
       metric('制冷量', plant.coolingCapacity, 0),
-      { label: '能效', value: grouped(plantCop(plant), 2), unit: '', late: false },
+      { label: '能效', icon: 'gauge', value: grouped(plantCop(plant), 2), unit: '', late: false },
     ],
     copNote: copNote(plant),
     loops: loops(plant),
@@ -364,7 +385,7 @@ export function presentDevice(device: PlantDevice, today: DeviceToday | null) {
     metrics: [lead, second].filter((reading) => reading != null).map((reading) => metric(reading.label, reading)),
     readingsNote: device.readings.length === 0 ? '这台设备没有登记读数。'
       : `${device.readings.length} 个读数${missing > 0 ? `，${missing} 个没读到` : ''}`,
-    readings: device.readings.map((reading) => ({ label: reading.label, value: neverRead(reading) ? '没读到' : withUnit(reading), late: !neverRead(reading) && !reading.current })),
+    readings: device.readings.map((reading) => ({ label: reading.label, icon: readingIcon(reading), value: neverRead(reading) ? '没读到' : withUnit(reading), late: !neverRead(reading) && !reading.current })),
     energy: today === null ? null : deviceEnergy(today),
     energyNote: energyNote(device, today),
   };

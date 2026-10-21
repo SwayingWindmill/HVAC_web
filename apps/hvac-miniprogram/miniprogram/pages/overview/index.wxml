@@ -45,7 +45,7 @@
       <block wx:else>
         <view class="metrics">
           <view wx:for="{{view.energy.metrics}}" wx:key="label" class="metric">
-            <text class="caption">{{item.label}}</text>
+            <view class="caption titled"><image wx:if="{{item.icon}}" class="caption-icon" src="/assets/icon/{{item.icon}}.svg" aria-hidden="true" /><text>{{item.label}}</text></view>
             <view class="metric-value">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
             <text wx:if="{{item.badge}}" class="badge badge-{{item.badge.tone}}">{{item.badge.text}}</text>
           </view>
@@ -68,7 +68,7 @@
       </view>
       <view class="now-metrics">
         <view wx:for="{{plant.now.metrics}}" wx:key="label" class="metric">
-          <text class="caption">{{item.label}}</text>
+          <view class="caption titled"><image wx:if="{{item.icon}}" class="caption-icon" src="/assets/icon/{{item.icon}}.svg" aria-hidden="true" /><text>{{item.label}}</text></view>
           <view class="now-value {{item.late ? 'muted' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
         </view>
       </view>

@@ -14,7 +14,7 @@
 
     <view class="card">
       <view wx:for="{{view.facts}}" wx:key="label" class="row fact">
-        <text class="fact-label">{{item.label}}</text>
+        <view class="fact-label titled"><image class="title-icon" src="/assets/icon/{{item.icon}}.svg" aria-hidden="true" /><text>{{item.label}}</text></view>
         <text class="fact-value">{{item.value}}</text>
       </view>
     </view>

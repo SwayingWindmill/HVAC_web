@@ -11,7 +11,7 @@
 
     <view wx:if="{{view.metrics.length}}" class="card card-pad lead">
       <view wx:for="{{view.metrics}}" wx:key="label" class="lead-metric">
-        <text class="caption">{{item.label}}</text>
+        <view class="caption titled"><image wx:if="{{item.icon}}" class="caption-icon" src="/assets/icon/{{item.icon}}.svg" aria-hidden="true" /><text>{{item.label}}</text></view>
         <view class="lead-value {{item.late ? 'muted' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
       </view>
     </view>
@@ -33,7 +33,7 @@
         <text class="caption">{{view.readingsNote}}</text>
       </view>
       <view wx:for="{{view.readings}}" wx:key="label" class="reading">
-        <text class="reading-label">{{item.label}}</text>
+        <view class="reading-label titled"><image wx:if="{{item.icon}}" class="title-icon" src="/assets/icon/{{item.icon}}.svg" aria-hidden="true" /><view wx:else class="title-icon" /><text>{{item.label}}</text></view>
         <view class="reading-value">
           <text wx:if="{{item.late}}" class="badge badge-warning">读数过期</text>
           <text class="{{item.value === '没读到' ? 'muted' : ''}}">{{item.value}}</text>

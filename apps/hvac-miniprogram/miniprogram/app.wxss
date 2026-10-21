@@ -90,6 +90,14 @@ page {
   height: 16px;
 }
 
+/* Beside a figure's label (12px captions). */
+.caption-icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-right: -2px;
+}
+
 /* The 泉来禾 windmill turns: slowly at rest, quickly while the assistant reads and answers. */
 @keyframes windmill-turn {
   from { transform: rotate(0deg); }

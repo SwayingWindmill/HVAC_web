@@ -34,6 +34,7 @@ test('the overview leads with savings and what more could be saved, then today a
     ['供冷量', '7,657.3', 'kWh', '▲ 13.7%', 'neutral'],
     ['综合能效', '4.53', '', '▼ 1.6%', 'bad'],
   ]);
+  assert.deepEqual(view.energy.metrics.map((each) => each.icon), ['zap', 'receipt', 'snowflake', 'gauge']);
   assert.equal(view.notYet, null);
   // The same count as the red dot on 通知: the alarms happening that no one has acknowledged.
   assert.deepEqual(view.alarms, { count: '5', waiting: '3 条没人确认', happening: true });

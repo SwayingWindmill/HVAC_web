@@ -26,10 +26,11 @@ function plantWith(change: (snapshotOf: (name: string) => { presence: { currentS
 test('实时运行 leads with whether the plant runs, its power, cooling and efficiency, then the water loops and the air', () => {
   const view = presentRealtime(plant);
   assert.deepEqual(view.status, { label: '运行中', tone: 'running', detail: '主要设备 4 / 4 台运行' });
+  // Each figure carries the icon of what it measures (#677): electricity, cooling, efficiency.
   assert.deepEqual(view.metrics, [
-    { label: '冷站总功率', value: '211.9', unit: 'kW', late: false },
-    { label: '制冷量', value: '864', unit: 'kW', late: false },
-    { label: '能效', value: '4.08', unit: '', late: false },
+    { label: '冷站总功率', icon: 'zap', value: '211.9', unit: 'kW', late: false },
+    { label: '制冷量', icon: 'snowflake', value: '864', unit: 'kW', late: false },
+    { label: '能效', icon: 'gauge', value: '4.08', unit: '', late: false },
   ]);
   assert.equal(view.copNote, '');
   // Every temperature to one decimal (#677), so 7.0 sits beside 12.6.
@@ -149,15 +150,16 @@ test('a device opens on its state, its two lead readings, every reading, and the
   });
   assert.deepEqual([view.name, view.kind, view.status, view.updatedAt], ['CHILLER-01', '冷水机组', { label: '运行', tone: 'running' }, '23:29:52']);
   assert.deepEqual(view.metrics, [
-    { label: '主机功率', value: '155.7', unit: 'kW', late: false },
-    { label: '冷冻水出水温度', value: '7.0', unit: '°C', late: false },
+    { label: '主机功率', icon: 'zap', value: '155.7', unit: 'kW', late: false },
+    { label: '冷冻水出水温度', icon: 'thermometer', value: '7.0', unit: '°C', late: false },
   ]);
   // A count beside the readings, not a sentence: no full stop.
   assert.equal(view.readingsNote, '11 个读数');
   assert.deepEqual(view.readings.slice(0, 2), [
-    { label: '冷冻水设定温度', value: '7.0 °C', late: false },
-    { label: '压缩机负载', value: '72%', late: false },
+    { label: '冷冻水设定温度', icon: 'thermometer', value: '7.0 °C', late: false },
+    { label: '压缩机负载', icon: 'percent', value: '72%', late: false },
   ]);
+  assert.equal(view.readings.find((reading) => reading.label === '运行状态')?.icon, 'power');
   assert.deepEqual(view.energy && [view.energy.total, view.energy.share, view.energy.gaps], ['1,035', '占全站 61%', '3–22 点没有读数']);
   assert.deepEqual(view.energy?.bars.slice(0, 4).map((bar) => [bar.state, bar.height]), [['value', 75], ['value', 100], ['value', 84], ['missing', 0]]);
   assert.deepEqual(view.energy?.scale, ['400', '200', '0']);
@@ -177,9 +179,9 @@ test('the overview says in one card whether the plant runs, with its power, supp
     status: { label: '运行中', tone: 'running', detail: '主要设备 4 / 4 台运行' },
     summary: '4 / 4 台运行 · 8 / 8 在线',
     metrics: [
-      { label: '功率', value: '211.9', unit: 'kW', late: false },
-      { label: '供水', value: '7.0', unit: '°C', late: false },
-      { label: '室内', value: '24.1', unit: '°C', late: false },
+      { label: '功率', icon: 'zap', value: '211.9', unit: 'kW', late: false },
+      { label: '供水', icon: 'thermometer', value: '7.0', unit: '°C', late: false },
+      { label: '室内', icon: 'thermometer', value: '24.1', unit: '°C', late: false },
     ],
   });
   assert.equal(presentPlantNow(buildPlant({ ...assetModel, devices: [] }, snapshots, now)), null);
