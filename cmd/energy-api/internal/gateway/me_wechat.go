@@ -26,11 +26,9 @@ type weChatBindRequest struct {
 	Code string `json:"code"`
 }
 
-func (h *handler) MeWeChat(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodGet && request.Method != http.MethodPost && request.Method != http.MethodDelete {
-		writeMethodNotAllowedFor(writer, request, "GET, POST, DELETE")
-		return
-	}
+// weChatSession is the mini program Session of an account the platform manages, or false after
+// answering the refusal.
+func (h *handler) weChatSession(writer http.ResponseWriter, request *http.Request) (bffSession, bool) {
 	session, failure := h.identitySession(request)
 	if failure == nil && session.Client != sessionstore.ClientMiniProgram {
 		failure = &identityFailure{403, "WECHAT_MINI_PROGRAM_ONLY", "WeChat unavailable", "WeChat is bound and removed only in the mini program.", false}
@@ -40,6 +38,18 @@ func (h *handler) MeWeChat(writer http.ResponseWriter, request *http.Request) {
 	}
 	if failure != nil {
 		writeIdentityFailure(writer, request, *failure)
+		return bffSession{}, false
+	}
+	return session, true
+}
+
+func (h *handler) MeWeChat(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodPost && request.Method != http.MethodDelete {
+		writeMethodNotAllowedFor(writer, request, "GET, POST, DELETE")
+		return
+	}
+	session, ok := h.weChatSession(writer, request)
+	if !ok {
 		return
 	}
 	var body any
@@ -66,6 +76,13 @@ func (h *handler) MeWeChat(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
 	switch status {
 	case http.StatusNoContent:
+		// Removing WeChat also forgets the reminders it allowed (docs/specs/miniprogram-wechat.md).
+		if request.Method == http.MethodDelete {
+			if status, _, err := h.callWeChatReminders(request, session, http.MethodDelete, nil); err != nil || status != http.StatusNoContent {
+				writeProblem(writer, request, http.StatusServiceUnavailable, "NOTIFICATION_UNAVAILABLE", "Notification unavailable", "WeChat was removed, but its reminders could not be cleared; try again.", true, nil)
+				return
+			}
+		}
 		writer.WriteHeader(http.StatusNoContent)
 	case http.StatusOK:
 		writer.Header().Set("Content-Type", "application/json")

@@ -101,6 +101,7 @@
     "test:registry-routing": "node scripts/run-go.mjs test ./libs/identitycontext/... ./libs/ownershipregistry/... ./cmd/energy-api/...",
     "test:durable-postgres": "node scripts/run-durable-postgres-tests.mjs",
     "test:identity-postgres": "node scripts/run-identity-postgres-tests.mjs",
+    "test:notification-postgres": "node scripts/run-notification-postgres-tests.mjs",
     "telemetry:contracts:generate": "node scripts/generate-s2-telemetry-contracts.mjs",
     "telemetry:contracts:check": "node scripts/generate-s2-telemetry-contracts.mjs --check",
     "telemetry:public-contract:check": "node scripts/check-s2-telemetry-public-contract.mjs",

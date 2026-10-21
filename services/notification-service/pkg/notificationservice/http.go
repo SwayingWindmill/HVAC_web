@@ -16,7 +16,10 @@ import (
 )
 
 const (
-	InternalInboxPath          = "/internal/v1/notifications/inbox"
+	InternalInboxPath           = "/internal/v1/notifications/inbox"
+	InternalWeChatRemindersPath = "/internal/v1/notifications/wechat-reminders"
+	// WeChatRemindersAction lets the Gateway read, add and clear the signed-in person's reminders.
+	WeChatRemindersAction      = "notification:wechat-reminders"
 	NotificationContextHeader  = "X-Notification-Context"
 	NotificationReadAction     = "notification:read"
 	NotificationMarkReadAction = "notification:mark-read"
@@ -29,8 +32,16 @@ type InboxStore interface {
 	MarkRead(context.Context, string, string, string, time.Time) (InboxItem, error)
 }
 
+// WeChatReminderStore keeps how many WeChat reminders each person allowed (wechat_reminders.go).
+type WeChatReminderStore interface {
+	WeChatReminders(context.Context, WeChatPerson) (WeChatReminders, error)
+	AddWeChatReminder(context.Context, WeChatPerson, ReminderKind, time.Time) (WeChatReminders, error)
+	ClearWeChatReminders(context.Context, WeChatPerson, time.Time) error
+}
+
 type HTTPConfig struct {
 	Store            InboxStore
+	Reminders        WeChatReminderStore
 	GatewayPublicKey crypto.PublicKey
 	GatewaySPIFFEID  string
 	Audience         string
@@ -39,6 +50,7 @@ type HTTPConfig struct {
 
 type httpHandler struct {
 	store            InboxStore
+	reminders        WeChatReminderStore
 	gatewayPublicKey crypto.PublicKey
 	gatewaySPIFFEID  string
 	audience         string
@@ -55,8 +67,8 @@ type httpProblem struct {
 }
 
 func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
-	if config.Store == nil || config.GatewayPublicKey == nil {
-		return nil, errors.New("Notification Store and Gateway public key are required")
+	if config.Store == nil || config.Reminders == nil || config.GatewayPublicKey == nil {
+		return nil, errors.New("Notification Store, WeChat reminder store and Gateway public key are required")
 	}
 	if config.Now == nil {
 		config.Now = time.Now
@@ -67,7 +79,7 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 	if strings.TrimSpace(config.Audience) == "" {
 		config.Audience = DefaultAudience
 	}
-	return &httpHandler{store: config.Store, gatewayPublicKey: config.GatewayPublicKey, gatewaySPIFFEID: config.GatewaySPIFFEID, audience: config.Audience, now: config.Now}, nil
+	return &httpHandler{store: config.Store, reminders: config.Reminders, gatewayPublicKey: config.GatewayPublicKey, gatewaySPIFFEID: config.GatewaySPIFFEID, audience: config.Audience, now: config.Now}, nil
 }
 
 func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -77,6 +89,10 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 			handler.writeProblem(writer, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted by Notification Service.", false)
 			return
 		}
+	}
+	if request.URL.Path == InternalWeChatRemindersPath {
+		handler.serveWeChatReminders(writer, request)
+		return
 	}
 	if request.URL.Path == InternalInboxPath {
 		if request.Method != http.MethodGet {

@@ -51,6 +51,7 @@ COPY infra/registry/postgres/init/009-s04-tenant-iam-admin.sql /opt/hvac/repo/in
 COPY infra/registry/postgres/init/010-command-authorization.sql /opt/hvac/repo/infra/registry/postgres/init/010-command-authorization.sql
 COPY services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql /opt/hvac/repo/services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql
 COPY services/notification-service/migrations/001_s16_notification.sql /opt/hvac/repo/services/notification-service/migrations/001_s16_notification.sql
+COPY services/notification-service/migrations/002_wechat_reminders.sql /opt/hvac/repo/services/notification-service/migrations/002_wechat_reminders.sql
 COPY infra/registry/postgres/init/010-s05-registry-writer.sql /opt/hvac/repo/infra/registry/postgres/init/010-s05-registry-writer.sql
 COPY infra/registry/postgres/init/011-s08-metric-lifecycle.sql /opt/hvac/repo/infra/registry/postgres/init/011-s08-metric-lifecycle.sql
 COPY infra/registry/postgres/init/012-s19-settlement-projections.sql /opt/hvac/repo/infra/registry/postgres/init/012-s19-settlement-projections.sql

@@ -80,7 +80,7 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger) (*h
 
 	gatewaySPIFFE := envOr("NOTIFICATION_GATEWAY_SPIFFE", notificationservice.DefaultGatewaySPIFFEID)
 	handler, err := notificationservice.NewHTTPHandler(notificationservice.HTTPConfig{
-		Store: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
+		Store: store, Reminders: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
 		Audience: envOr("NOTIFICATION_SERVICE_AUDIENCE", notificationservice.DefaultAudience),
 	})
 	if err != nil {

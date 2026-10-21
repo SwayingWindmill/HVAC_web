@@ -45,7 +45,7 @@ func weChatBound(t *testing.T, response *http.Response) bool {
 }
 
 func TestMiniProgramBindsTheSignedInPersonsWeChat(t *testing.T) {
-	harness := newAuthHarness(t)
+	harness, _ := newWeChatHarness(t)
 	client := &http.Client{Transport: harness.transport}
 	token := decodeAppSession(t, postAppJSON(t, client, harness.gatewayURL+"/api/v1/auth/app/sessions", map[string]string{"username": "fixture", "password": "correct-password"}), http.StatusCreated).SessionToken
 	url := harness.gatewayURL + meWeChatPath
@@ -80,7 +80,7 @@ func TestMiniProgramBindsTheSignedInPersonsWeChat(t *testing.T) {
 
 // There is no WeChat in a browser: the Web Session cannot bind or remove one.
 func TestWebSessionCannotTouchWeChat(t *testing.T) {
-	harness := newAuthHarness(t)
+	harness, _ := newWeChatHarness(t)
 	browser := harness.browserClient(t)
 	principal, _ := loginAndReadPrincipal(t, browser, harness.gatewayURL, "")
 	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {

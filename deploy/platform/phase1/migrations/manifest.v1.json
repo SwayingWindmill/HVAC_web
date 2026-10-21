@@ -65,6 +65,7 @@
         "infra/registry/postgres/init/010-command-authorization.sql",
         "services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql",
         "services/notification-service/migrations/001_s16_notification.sql",
+        "services/notification-service/migrations/002_wechat_reminders.sql",
         "infra/registry/postgres/init/010-s05-registry-writer.sql",
         "infra/registry/postgres/init/011-s08-metric-lifecycle.sql",
         "infra/registry/postgres/init/012-s19-settlement-projections.sql",
