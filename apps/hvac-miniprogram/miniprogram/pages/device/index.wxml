@@ -18,7 +18,7 @@
 
     <view wx:if="{{view.energy}}" class="card card-pad energy" aria-label="今天用电">
       <view class="split">
-        <text class="card-title">今天用电</text>
+        <view class="card-title titled"><image class="title-icon" src="/assets/icon/zap.svg" aria-hidden="true" /><text>今天用电</text></view>
         <text class="caption">{{view.energy.share}}</text>
       </view>
       <view class="energy-total">{{view.energy.total}}<text class="unit">kWh</text></view>
@@ -29,7 +29,7 @@
 
     <view class="card" aria-label="全部读数">
       <view class="card-pad split">
-        <text class="card-title">全部读数</text>
+        <view class="card-title titled"><image class="title-icon" src="/assets/icon/list.svg" aria-hidden="true" /><text>全部读数</text></view>
         <text class="caption">{{view.readingsNote}}</text>
       </view>
       <view wx:for="{{view.readings}}" wx:key="label" class="reading">

@@ -38,7 +38,7 @@
 
     <view wx:if="{{reminder}}" class="card card-pad reminder" aria-label="微信提醒">
       <view class="reminder-main">
-        <text class="card-title">微信提醒</text>
+        <view class="card-title titled"><image class="title-icon" src="/assets/icon/bell-ring.svg" aria-hidden="true" /><text>微信提醒</text></view>
         <text class="caption">{{reminder.text}}</text>
       </view>
       <button wx:if="{{reminder.canAdd}}" class="reminder-add" size="mini" loading="{{addingReminder}}" disabled="{{addingReminder}}" bindtap="addReminder">多收一条</button>

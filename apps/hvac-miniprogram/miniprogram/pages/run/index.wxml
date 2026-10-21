@@ -33,7 +33,7 @@
 
     <view class="card card-pad chart" aria-label="今天每小时能效">
       <view class="chart-head">
-        <text class="card-title">今天每小时能效</text>
+        <view class="card-title titled"><image class="title-icon" src="/assets/icon/chart-column.svg" aria-hidden="true" /><text>今天每小时能效</text></view>
         <text class="caption">越高越省电</text>
       </view>
       <text wx:if="{{!chart}}" class="caption">{{chartNote}}</text>
@@ -48,9 +48,9 @@
     </view>
 
     <view wx:if="{{realtime.loops.length}}" class="card" aria-label="水系统和环境">
-      <view class="card-pad card-title loops-title">水系统和环境</view>
+      <view class="card-pad card-title titled loops-title"><image class="title-icon" src="/assets/icon/droplets.svg" aria-hidden="true" /><text>水系统和环境</text></view>
       <view wx:for="{{realtime.loops}}" wx:key="name" class="loop">
-        <text class="loop-name">{{item.name}}</text>
+        <view class="loop-name titled"><image class="title-icon" src="/assets/icon/{{item.icon}}.svg" aria-hidden="true" /><text>{{item.name}}</text></view>
         <view class="loop-values">
           <text class="loop-headline {{item.late ? 'muted' : ''}}">{{item.headline}}</text>
           <text wx:if="{{item.detail}}" class="caption">{{item.detail}}</text>

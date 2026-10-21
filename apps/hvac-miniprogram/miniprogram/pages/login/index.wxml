@@ -1,6 +1,6 @@
 <view class="login">
   <view class="brand">
-    <view class="mark" aria-hidden="true"><image class="mark-icon" src="/assets/brand-mark.svg" mode="aspectFit" /></view>
+    <view class="mark" aria-hidden="true"><image class="mark-icon" src="/assets/windmill/on-primary.svg" mode="aspectFit" /></view>
     <view class="name">泉来禾智慧能源</view>
     <view class="muted">冷站值班 · 用平台账号登录</view>
   </view>

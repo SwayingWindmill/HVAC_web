@@ -58,8 +58,18 @@
 }
 
 .raised-icon {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
+}
+
+/* The windmill turns (app.wxss); a tab bar component does not see the page's styles. */
+@keyframes windmill-turn {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.windmill {
+  animation: windmill-turn 12s linear infinite;
 }
 
 .tab {

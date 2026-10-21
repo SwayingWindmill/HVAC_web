@@ -14,7 +14,7 @@
 
     <block wx:if="{{!conversation}}">
       <view class="welcome">
-        <view class="welcome-mark" aria-hidden="true"><image class="welcome-icon" src="/assets/tab/assistant.svg" /></view>
+        <view class="welcome-mark" aria-hidden="true"><image class="welcome-icon windmill" src="/assets/windmill/on-primary.svg" /></view>
         <text class="welcome-title">想问{{siteName}}什么？</text>
         <text class="welcome-text">我能读用电、能效、电费、告警和设备读数，先给结论再给数字。我不能操作设备。</text>
       </view>
@@ -46,7 +46,7 @@
         <view wx:if="{{item.role === 'user'}}" class="ask"><text class="ask-text" user-select>{{item.text}}</text></view>
         <view wx:else class="reply">
           <view class="speaker">
-            <view class="speaker-mark" aria-hidden="true"><image class="speaker-icon" src="/assets/tab/assistant.svg" /></view>
+            <view class="speaker-mark" aria-hidden="true"><image class="speaker-icon {{conversation.running && index === conversation.messages.length - 1 ? 'windmill windmill-busy' : ''}}" src="/assets/windmill/on-primary.svg" /></view>
             <text>助手</text>
           </view>
           <text wx:if="{{item.thinking}}" class="thinking">正在思考…</text>

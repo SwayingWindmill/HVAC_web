@@ -56,8 +56,8 @@
 }
 
 .welcome-icon {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
 }
 
 .welcome-title {
@@ -164,8 +164,8 @@
 }
 
 .speaker-icon {
-  width: 13px;
-  height: 13px;
+  width: 16px;
+  height: 16px;
 }
 
 .thinking {

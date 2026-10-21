@@ -34,10 +34,10 @@ test('实时运行 leads with whether the plant runs, its power, cooling and eff
   assert.equal(view.copNote, '');
   // Every temperature to one decimal (#677), so 7.0 sits beside 12.6.
   assert.deepEqual(view.loops, [
-    { name: '冷冻水', headline: '供 7.0 °C · 回 12.6 °C', detail: '温差 5.6 °C · 流量 132 m³/h', late: false },
-    { name: '冷却水', headline: '出塔 30.7 °C · 进塔 34.1 °C', detail: '与湿球差 3.7 °C · 流量 260 m³/h', late: false },
-    { name: '室内', headline: '24.1 °C', detail: '', late: false },
-    { name: '室外', headline: '34.0 °C', detail: '湿球 27.0 °C · 相对湿度 65 %RH', late: false },
+    { name: '冷冻水', icon: 'snowflake', headline: '供 7.0 °C · 回 12.6 °C', detail: '温差 5.6 °C · 流量 132 m³/h', late: false },
+    { name: '冷却水', icon: 'droplets', headline: '出塔 30.7 °C · 进塔 34.1 °C', detail: '与湿球差 3.7 °C · 流量 260 m³/h', late: false },
+    { name: '室内', icon: 'house', headline: '24.1 °C', detail: '', late: false },
+    { name: '室外', icon: 'cloud-sun', headline: '34.0 °C', detail: '湿球 27.0 °C · 相对湿度 65 %RH', late: false },
   ]);
 });
 
@@ -57,9 +57,9 @@ test('a stopped plant says so and why there is no efficiency; a late reading is 
   // Headline figures are written as the web writes them (power to 0.1 kW with thousands separators), a late one dimmed.
   assert.deepEqual(stopped.metrics.map((each) => [each.value, each.late]), [['1,234.6', true], ['0', false], ['—', false]]);
   assert.equal(stopped.copNote, '停机时不算能效。');
-  assert.deepEqual(stopped.loops.find((loop) => loop.name === '室外'), { name: '室外', headline: '34.0 °C', detail: '湿球 27.0 °C · 相对湿度 65 %RH', late: true });
+  assert.deepEqual(stopped.loops.find((loop) => loop.name === '室外'), { name: '室外', icon: 'cloud-sun', headline: '34.0 °C', detail: '湿球 27.0 °C · 相对湿度 65 %RH', late: true });
   // A reading never received is left out rather than shown as a dash; a loop whose lead reading never came is left out.
-  assert.deepEqual(stopped.loops.find((loop) => loop.name === '冷冻水'), { name: '冷冻水', headline: '回 12.6 °C', detail: '温差 5.6 °C · 流量 132 m³/h', late: false });
+  assert.deepEqual(stopped.loops.find((loop) => loop.name === '冷冻水'), { name: '冷冻水', icon: 'snowflake', headline: '回 12.6 °C', detail: '温差 5.6 °C · 流量 132 m³/h', late: false });
   assert.equal(stopped.loops.some((loop) => loop.name === '室内'), false);
 
   const offlinePlant = plantWith((snapshotOf) => { snapshotOf('CHILLER-01').presence.currentState = 'OFFLINE'; });

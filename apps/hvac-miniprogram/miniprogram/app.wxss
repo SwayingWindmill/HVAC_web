@@ -77,6 +77,33 @@ page {
   font-weight: 600;
 }
 
+/* A lucide icon (assets/icon, from lucide-react 1.44.0) before a card title or a row's label. */
+.titled {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.title-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+}
+
+/* The 泉来禾 windmill turns: slowly at rest, quickly while the assistant reads and answers. */
+@keyframes windmill-turn {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.windmill {
+  animation: windmill-turn 12s linear infinite;
+}
+
+.windmill-busy {
+  animation-duration: 1.4s;
+}
+
 .muted {
   color: var(--muted-foreground);
 }

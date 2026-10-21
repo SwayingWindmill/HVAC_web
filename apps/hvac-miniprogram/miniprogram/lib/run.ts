@@ -82,25 +82,30 @@ function metric(label: string, reading: PlantReading | null, decimals?: number):
 // The same loops the web's 水系统与室内外环境 table lists; a loop shows once its lead reading has come in.
 const LOOPS: readonly {
   readonly name: string;
+  /** Its lucide icon in assets/icon. */
+  readonly icon: string;
   readonly lead: string;
   readonly headline: readonly (readonly [string, string])[];
   readonly detail: readonly (readonly [string, string])[];
 }[] = [
   {
     name: '冷冻水',
+    icon: 'snowflake',
     lead: 'btu_meter.temperature_difference',
     headline: [['供', 'btu_meter.supply_water_temperature'], ['回', 'btu_meter.return_water_temperature']],
     detail: [['温差', 'btu_meter.temperature_difference'], ['流量', 'btu_meter.flow_rate']],
   },
   {
     name: '冷却水',
+    icon: 'droplets',
     lead: 'cooling_tower.approach_temperature',
     headline: [['出塔', 'cooling_tower.leaving_water_temperature'], ['进塔', 'cooling_tower.entering_water_temperature']],
     detail: [['与湿球差', 'cooling_tower.approach_temperature'], ['流量', 'cwp.flow_rate']],
   },
-  { name: '室内', lead: 'zone.temperature', headline: [['', 'zone.temperature']], detail: [] },
+  { name: '室内', icon: 'house', lead: 'zone.temperature', headline: [['', 'zone.temperature']], detail: [] },
   {
     name: '室外',
+    icon: 'cloud-sun',
     lead: 'weather.ambient_dry_bulb_temperature',
     headline: [['', 'weather.ambient_dry_bulb_temperature']],
     detail: [['湿球', 'weather.ambient_wet_bulb_temperature'], ['相对湿度', 'weather.relative_humidity']],
@@ -121,7 +126,7 @@ function loops(plant: Plant) {
       .filter((entry) => entry.reading !== null)
       .map((entry) => `${entry.label ? `${entry.label} ` : ''}${withUnit(entry.reading!)}`)
       .join(' · ');
-    return { name: loop.name, headline: line(loop.headline) || '—', detail: line(loop.detail), late: readings.some((reading) => !reading.current) };
+    return { name: loop.name, icon: loop.icon, headline: line(loop.headline) || '—', detail: line(loop.detail), late: readings.some((reading) => !reading.current) };
   });
 }
 
