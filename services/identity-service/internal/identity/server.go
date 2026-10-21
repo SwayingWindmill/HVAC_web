@@ -2,12 +2,16 @@ package identity
 
 import (
 	"context"
+	"crypto"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
 const loginCookieName = "__Host-hvac_idp_login"
@@ -21,7 +25,15 @@ type Config struct {
 	SigningKeyFile        string
 	MFAEncryptionKeyFile  string
 	SchemaVersion         string
-	Now                   func() time.Time
+	// The mini program's AppID and the file the administrator puts its AppSecret in.
+	WeChatAppID      string
+	WeChatSecretFile string
+	// The Gateway's delegation certificate and workload: the Gateway signs a grant for the account
+	// on every WeChat call.
+	GatewayDelegationCertFile string
+	GatewaySPIFFE             string
+	Logger                    *slog.Logger
+	Now                       func() time.Time
 }
 
 type Server struct {
@@ -34,6 +46,19 @@ type Server struct {
 	signingKey            SigningKey
 	mfaProtector          *MFAProtector
 	signInURL             string
+	// nil until the administrator puts the mini program's AppSecret on the server.
+	wechat *WeChat
+	// The Gateway's delegation key and workload, for the grants on WeChat calls.
+	gatewayKey    crypto.PublicKey
+	gatewaySPIFFE string
+	logger        *slog.Logger
+}
+
+func (server *Server) log() *slog.Logger {
+	if server.logger == nil {
+		return slog.Default()
+	}
+	return server.logger
 }
 
 func NewServer(ctx context.Context, config Config) (*Server, error) {
@@ -78,12 +103,22 @@ func NewServer(ctx context.Context, config Config) (*Server, error) {
 		store.Close()
 		return nil, err
 	}
+	wechat, err := LoadWeChat(config.WeChatAppID, config.WeChatSecretFile)
+	if err != nil {
+		store.Close()
+		return nil, err
+	}
+	gatewayKey, err := identitycontext.LoadCertificatePublicKey(config.GatewayDelegationCertFile)
+	if err != nil || strings.TrimSpace(config.GatewaySPIFFE) == "" {
+		store.Close()
+		return nil, errors.New("identity gateway delegation certificate and workload are required")
+	}
 	// The Web application's sign-in page on the same public origin is the login interface.
 	signInURL := issuerURL.Scheme + "://" + issuerURL.Host + "/sign-in"
 	return &Server{
 		issuer: issuer, clientID: clientID, redirectURI: redirectURI, postLogoutRedirectURI: postLogout,
 		store: store, now: now, signingKey: signingKey, mfaProtector: mfaProtector,
-		signInURL: signInURL,
+		signInURL: signInURL, wechat: wechat, gatewayKey: gatewayKey, gatewaySPIFFE: strings.TrimSpace(config.GatewaySPIFFE), logger: config.Logger,
 	}, nil
 }
 
@@ -101,6 +136,9 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /token", server.token)
 	mux.HandleFunc("POST /app/login", server.appLogin)
 	mux.HandleFunc("POST /app/mfa/totp", server.appTOTP)
+	mux.HandleFunc("POST /app/wechat/binding", server.bindWeChat)
+	mux.HandleFunc("DELETE /app/wechat/binding", server.unbindWeChat)
+	mux.HandleFunc("GET /app/wechat/binding", server.readWeChatBinding)
 	mux.HandleFunc("GET /session/end", server.endSession)
 	return securityHeaders(mux)
 }

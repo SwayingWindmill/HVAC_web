@@ -238,11 +238,18 @@ services:
       IDENTITY_DIAGNOSTICS_ADDR: :19085
       IDENTITY_SIGNING_KEY_FILE: /run/hvac/identity/signing-key.pem
       IDENTITY_MFA_ENCRYPTION_KEY_FILE: /run/hvac/identity/mfa-encryption.key
+      # The WeChat mini program (#664). The administrator puts its AppSecret in this file;
+      # without it, binding WeChat answers that WeChat is not set up.
+      IDENTITY_WECHAT_APP_ID: ${IDENTITY_WECHAT_APP_ID:-wx4b7b82bf0351c6f3}
+      IDENTITY_WECHAT_APPSECRET_FILE: /run/hvac/identity/wechat-miniprogram-appsecret
+      # The Gateway signs a grant naming the account on every WeChat call; identity-service checks it.
+      IDENTITY_GATEWAY_DELEGATION_CERT: /run/hvac/gateway/tls.crt
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
     volumes:
       - ${IDENTITY_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/identity}:/run/hvac/identity:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/gateway/tls.crt:/run/hvac/gateway/tls.crt:ro
     expose: ["19095", "19085"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19085/health/ready"]
@@ -250,7 +257,7 @@ services:
       timeout: 4s
       retries: 12
       start_period: 10s
-    networks: [application, data]
+    networks: [application, data, wechat-egress]
     cpus: ${IDENTITY_SERVICE_CPUS:-0.75}
     mem_limit: ${IDENTITY_SERVICE_MEMORY_LIMIT:-512m}
     mem_reservation: ${IDENTITY_SERVICE_MEMORY_RESERVATION:-128m}
@@ -1150,6 +1157,8 @@ networks:
   model-egress: {}
   # Outbound access to the alert mail server; only Alertmanager joins it.
   alert-egress: {}
+  # Outbound access to api.weixin.qq.com; only identity-service joins it.
+  wechat-egress: {}
   application:
     internal: true
   data:

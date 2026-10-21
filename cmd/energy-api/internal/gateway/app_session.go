@@ -190,32 +190,54 @@ func decodeAppSignIn(writer http.ResponseWriter, request *http.Request, into any
 	return true
 }
 
-// callIdentityApp posts one sign-in step to identity-service over the backchannel.
-func (controller *identityController) callIdentityApp(request *http.Request, path string, body any) (identityAppResult, *identityFailure) {
+// backchannel sends one request to identity-service on the internal network and reads its answer.
+func (controller *identityController) backchannel(request *http.Request, method, path string, body any, header map[string]string) (int, []byte, error) {
 	base := strings.TrimSpace(controller.config.OIDCBackchannelBaseURL)
 	if base == "" {
 		base = controller.config.OIDCIssuer
 	}
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		return identityAppResult{}, &identityFailure{503, "OIDC_PROVIDER_UNAVAILABLE", "Sign-in unavailable", "The sign-in request could not be encoded.", true}
+	var payload io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return 0, nil, err
+		}
+		payload = bytes.NewReader(encoded)
 	}
-	outbound, err := http.NewRequestWithContext(request.Context(), http.MethodPost, strings.TrimRight(base, "/")+path, bytes.NewReader(encoded))
+	outbound, err := http.NewRequestWithContext(request.Context(), method, strings.TrimRight(base, "/")+path, payload)
 	if err != nil {
-		return identityAppResult{}, &identityFailure{503, "OIDC_PROVIDER_UNAVAILABLE", "Sign-in unavailable", "The identity service address is invalid.", true}
+		return 0, nil, err
 	}
-	outbound.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		outbound.Header.Set("Content-Type", "application/json")
+	}
+	for name, value := range header {
+		outbound.Header.Set(name, value)
+	}
 	response, err := controller.config.OIDCHTTPClient.Do(outbound)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer response.Body.Close()
+	reply, err := io.ReadAll(io.LimitReader(response.Body, 16<<10))
+	if err != nil {
+		return 0, nil, err
+	}
+	return response.StatusCode, reply, nil
+}
+
+// callIdentityApp posts one sign-in step to identity-service over the backchannel.
+func (controller *identityController) callIdentityApp(request *http.Request, path string, body any) (identityAppResult, *identityFailure) {
+	status, reply, err := controller.backchannel(request, http.MethodPost, path, body, nil)
 	if err != nil {
 		return identityAppResult{}, &identityFailure{503, "OIDC_PROVIDER_UNAVAILABLE", "Sign-in unavailable", "The identity service could not be reached.", true}
 	}
-	defer response.Body.Close()
 	var result identityAppResult
-	if err := json.NewDecoder(io.LimitReader(response.Body, 16<<10)).Decode(&result); err != nil {
+	if err := json.Unmarshal(reply, &result); err != nil {
 		return identityAppResult{}, &identityFailure{503, "OIDC_PROVIDER_UNAVAILABLE", "Sign-in unavailable", "The identity service answered with an invalid body.", true}
 	}
 	switch {
-	case response.StatusCode == http.StatusOK && (result.Code != "" || (result.Step == appStepTOTP && result.Challenge != "")):
+	case status == http.StatusOK && (result.Code != "" || (result.Step == appStepTOTP && result.Challenge != "")):
 		return result, nil
 	case result.Error == "invalid_credentials":
 		return identityAppResult{}, &identityFailure{401, "INVALID_CREDENTIALS", "Sign-in failed", "The username or password is wrong, or the account cannot sign in.", false}
