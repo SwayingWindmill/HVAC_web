@@ -5,32 +5,15 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
-type apiCredentialRotateRequest struct {
-	CredentialID     string    `json:"credentialId"`
-	ExpectedRevision int64     `json:"expectedRevision"`
-	ExpiresAt        time.Time `json:"expiresAt"`
-}
-
-type apiCredentialRevokeRequest struct {
-	CredentialID     string `json:"credentialId"`
-	ExpectedRevision int64  `json:"expectedRevision"`
-}
-
 func (h *handler) handleAdminRoute(writer http.ResponseWriter, request *http.Request, claims identitycontext.DelegationClaims) int {
 	if h.adminStore == nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "IAM_ADMIN_UNAVAILABLE", "IAM administration is unavailable.")
 		return http.StatusServiceUnavailable
-	}
-	required := identitycontext.CapabilityIAMAdmin
-	if request.URL.Path != AdminMutationPath && request.URL.Path != AdminMembersPath {
-		required = identitycontext.CapabilityAPICredentialManage
 	}
 	authorization, err := h.principalCapabilityResolver.ResolvePrincipalCapabilities(request.Context(), PrincipalCapabilityLookup{
 		SubjectIssuer: claims.SubjectIssuer,
@@ -41,7 +24,7 @@ func (h *handler) handleAdminRoute(writer http.ResponseWriter, request *http.Req
 		writeProblem(writer, http.StatusServiceUnavailable, "IAM_ADMIN_AUTHORIZATION_UNAVAILABLE", "IAM administration authorization is unavailable.")
 		return http.StatusServiceUnavailable
 	}
-	if !authorization.Has(required) {
+	if !authorization.Has(identitycontext.CapabilityIAMAdmin) {
 		writeProblem(writer, http.StatusForbidden, "IAM_ADMIN_FORBIDDEN", "The initiating Principal cannot perform this IAM administration action.")
 		return http.StatusForbidden
 	}
@@ -69,38 +52,6 @@ func (h *handler) handleAdminRoute(writer http.ResponseWriter, request *http.Req
 			return http.StatusBadRequest
 		}
 		result, err := h.adminStore.ApplyMutation(request.Context(), actor, input)
-		return writeAdminMutationResult(writer, result, err)
-	case APICredentialCreatePath:
-		var input APICredentialCreateRequest
-		if err := decodeAdminJSON(request, &input); err != nil {
-			writeProblem(writer, http.StatusBadRequest, "API_CREDENTIAL_REQUEST_INVALID", "API Credential request is invalid.")
-			return http.StatusBadRequest
-		}
-		result, err := h.adminStore.CreateAPICredential(request.Context(), actor, input)
-		if err != nil {
-			return writeAdminError(writer, err)
-		}
-		writeJSON(writer, http.StatusCreated, result)
-		return http.StatusCreated
-	case APICredentialRotatePath:
-		var input apiCredentialRotateRequest
-		if err := decodeAdminJSON(request, &input); err != nil || strings.TrimSpace(input.CredentialID) == "" {
-			writeProblem(writer, http.StatusBadRequest, "API_CREDENTIAL_REQUEST_INVALID", "API Credential rotation request is invalid.")
-			return http.StatusBadRequest
-		}
-		result, err := h.adminStore.RotateAPICredential(request.Context(), actor, input.CredentialID, input.ExpectedRevision, input.ExpiresAt)
-		if err != nil {
-			return writeAdminError(writer, err)
-		}
-		writeJSON(writer, http.StatusOK, result)
-		return http.StatusOK
-	case APICredentialRevokePath:
-		var input apiCredentialRevokeRequest
-		if err := decodeAdminJSON(request, &input); err != nil || strings.TrimSpace(input.CredentialID) == "" {
-			writeProblem(writer, http.StatusBadRequest, "API_CREDENTIAL_REQUEST_INVALID", "API Credential revocation request is invalid.")
-			return http.StatusBadRequest
-		}
-		result, err := h.adminStore.RevokeAPICredential(request.Context(), actor, input.CredentialID, input.ExpectedRevision)
 		return writeAdminMutationResult(writer, result, err)
 	default:
 		writeProblem(writer, http.StatusNotFound, "IAM_ROUTE_NOT_FOUND", "The requested IAM route does not exist.")

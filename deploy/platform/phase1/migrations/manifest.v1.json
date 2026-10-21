@@ -91,7 +91,8 @@
         "infra/registry/postgres/init/026-iam-role-assignments.sql",
         "infra/registry/postgres/init/027-optimization-site-clock.sql",
         "infra/registry/postgres/init/028-retire-own-tariff-pricing.sql",
-        "infra/registry/postgres/init/029-drop-registry-import-tables.sql"
+        "infra/registry/postgres/init/029-drop-registry-import-tables.sql",
+        "infra/registry/postgres/init/030-drop-api-credentials.sql"
       ]
     },
     {

@@ -67,6 +67,7 @@ hvac_s1|infra/registry/postgres/init/026-iam-role-assignments.sql
 hvac_s1|infra/registry/postgres/init/027-optimization-site-clock.sql
 hvac_s1|infra/registry/postgres/init/028-retire-own-tariff-pricing.sql
 hvac_s1|infra/registry/postgres/init/029-drop-registry-import-tables.sql
+hvac_s1|infra/registry/postgres/init/030-drop-api-credentials.sql
 hvac_s2|infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 hvac_s2|infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql

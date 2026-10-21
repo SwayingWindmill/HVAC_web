@@ -68,10 +68,6 @@
         "profile": "identity-bootstrap"
       },
       {
-        "service": "iam-api-credential-keygen",
-        "profile": "iam-bootstrap"
-      },
-      {
         "service": "identity-admin",
         "profile": "identity-bootstrap"
       },

@@ -170,7 +170,6 @@ services:
       IAM_SERVER_NAME: iam-service
       IAM_ADMIN_DATABASE_URL: ${IAM_ADMIN_DATABASE_URL:-}
       IDENTITY_ADMIN_DATABASE_URL: ${IDENTITY_ADMIN_DATABASE_URL:-}
-      IAM_API_CREDENTIAL_PEPPER_FILE: /run/hvac/iam/api-credential.pepper
       CORE_URL: https://platform-core-service:18445
       CORE_SERVER_NAME: platform-core-service
       CORE_IAM_ENDPOINT: https://iam-service:8444
@@ -203,7 +202,6 @@ services:
     volumes:
       - ./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro
       - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca/ca.crt:/run/hvac/gateway-ca/ca.crt:ro
-      - ${IAM_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/iam}:/run/hvac/iam:ro
     expose: ["8080", "19080", "8444", "18445", "18447", "8446", "8447", "8448", "8449", "8450", "8452"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19080/health/ready"]
@@ -291,21 +289,6 @@ services:
       IDENTITY_MFA_KEY_OUT: /run/hvac/identity/mfa-encryption.key
     volumes:
       - ${IDENTITY_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/identity}:/run/hvac/identity
-
-  iam-api-credential-keygen:
-    <<: *go-service
-    profiles: ["iam-bootstrap"]
-    restart: "no"
-    build:
-      context: ../../..
-      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
-      args: { SERVICE_PACKAGE: ./modules/iam/cmd/api-credential-keygen }
-    image: ${IAM_API_CREDENTIAL_KEYGEN_IMAGE:-hvac/iam-api-credential-keygen:0.1.0-dev}
-    environment:
-      SSL_CERT_FILE: ${SSL_CERT_FILE:-}
-      IAM_API_CREDENTIAL_PEPPER_OUT: /run/hvac/iam/api-credential.pepper
-    volumes:
-      - ${IAM_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/iam}:/run/hvac/iam
 
   identity-admin:
     <<: *go-service

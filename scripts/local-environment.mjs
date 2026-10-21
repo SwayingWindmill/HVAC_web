@@ -88,7 +88,6 @@ function up() {
   compose('--profile', 'migration', 'run', '--rm', '--build', 'phase1-migrator');
   ensureKey(['identity', 'signing-key.pem'], 'identity-keygen');
   ensureKey(['identity', 'mfa-encryption.key'], 'identity-mfa-keygen');
-  ensureKey(['iam', 'api-credential.pepper'], 'iam-api-credential-keygen');
   if (!existsSync(runtimePath('gateway-ca','connectivity.crt'))) {
     ensureServiceDataDirectory('gateway-ca');
     // The initializer needs a writable mount; the long-running service receives it read-only.

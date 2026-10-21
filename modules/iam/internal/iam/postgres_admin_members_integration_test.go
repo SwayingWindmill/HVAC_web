@@ -1,7 +1,6 @@
 package iam_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -66,7 +65,7 @@ VALUES ('018f1e00-2200-7000-8000-000000000071', $1::uuid, $2::uuid, $3::uuid, 'A
 		t.Fatal(err)
 	}
 
-	store, err := iam.OpenPostgresAdminStore(ctx, storeURL, bytes.Repeat([]byte{7}, 32))
+	store, err := iam.OpenPostgresAdminStore(ctx, storeURL)
 	if err != nil {
 		t.Fatal(err)
 	}

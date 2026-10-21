@@ -16,7 +16,6 @@ IAM 只接受 TLS 1.3，并且必须出示客户端证书。知道地址不够�
 | `POST /internal/v1/telemetry/grants:consume`、`telemetry/revocations:poll` | 遥测 | 用掉一张遥测授权、拉取撤销 |
 | `POST /internal/v1/registry-read/grant-status` | 登记服务 | 查一张登记授权当前是否还有效 |
 | `POST /internal/v1/admin/members`、`admin/mutations` | 平台网关 | 用户与角色管理 |
-| `POST /internal/v1/admin/api-credentials/*` | 没有调用方：网关不再转发 | 发、换、收回 API 凭据 |
 
 ## 当前的人
 
@@ -101,7 +100,7 @@ IAM 拒绝客户端自己带的人员、角色、租户、站点、管理员或�
 
 ## 环境变量
 
-主要的几个：`IAM_SERVICE_ADDR`、`IAM_TLS_CERT`、`IAM_TLS_KEY`、`IAM_CLIENT_CA`、`IAM_ALLOWED_WORKLOAD_SPIFFE`（网关的身份）、`IAM_CORE_WORKLOAD_SPIFFE`（登记服务的身份）、`IAM_OPERATIONS_AGENT_SPIFFE`、`IAM_REPORT_SERVICE_SPIFFE`、`IAM_OPTIMIZATION_SERVICE_SPIFFE`、`IAM_MV_SERVICE_SPIFFE`、`IAM_TELEMETRY_RUNTIME_SPIFFE`、`IAM_AUDIENCE`、`IAM_REGISTRY_GRANT_AUDIENCE`、`IAM_TELEMETRY_GRANT_AUDIENCE`、`IAM_COMMAND_GRANT_AUDIENCE`、`IAM_POLICY_REVISION`、`IAM_DATABASE_URL`、`IAM_ADMIN_DATABASE_URL`、`IAM_TELEMETRY_GRANT_DATABASE_URL`、`IAM_API_CREDENTIAL_PEPPER_FILE`。嵌在 `energy-api` 里时由 `cmd/energy-api/embedded_energy.go` 读取。
+主要的几个：`IAM_SERVICE_ADDR`、`IAM_TLS_CERT`、`IAM_TLS_KEY`、`IAM_CLIENT_CA`、`IAM_ALLOWED_WORKLOAD_SPIFFE`（网关的身份）、`IAM_CORE_WORKLOAD_SPIFFE`（登记服务的身份）、`IAM_OPERATIONS_AGENT_SPIFFE`、`IAM_REPORT_SERVICE_SPIFFE`、`IAM_OPTIMIZATION_SERVICE_SPIFFE`、`IAM_MV_SERVICE_SPIFFE`、`IAM_TELEMETRY_RUNTIME_SPIFFE`、`IAM_AUDIENCE`、`IAM_REGISTRY_GRANT_AUDIENCE`、`IAM_TELEMETRY_GRANT_AUDIENCE`、`IAM_COMMAND_GRANT_AUDIENCE`、`IAM_POLICY_REVISION`、`IAM_DATABASE_URL`、`IAM_ADMIN_DATABASE_URL`、`IAM_TELEMETRY_GRANT_DATABASE_URL`。嵌在 `energy-api` 里时由 `cmd/energy-api/embedded_energy.go` 读取。
 
 登记授权的签发方取自 IAM 自己 TLS 证书里的 SPIFFE 身份，不是可以随便改的环境变量。
 

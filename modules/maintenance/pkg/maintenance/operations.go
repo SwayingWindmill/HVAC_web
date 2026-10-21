@@ -64,17 +64,10 @@ func (s *Store) ExecuteJob(ctx context.Context, job Job, now time.Time) (map[str
 }
 
 func (s *Store) scanCredentialExpiry(ctx context.Context, now time.Time, horizon time.Duration) (int, error) {
-	rows, err := s.pool.Query(ctx, `SELECT source_type,source_id,tenant_id,expires_at,reference
-FROM (
-  SELECT 'IAM_API_CREDENTIAL'::text AS source_type,id::text AS source_id,tenant_id::text AS tenant_id,expires_at,NULL::text AS reference
-  FROM iam.api_credentials
-  WHERE status='ACTIVE' AND expires_at <= $1
-  UNION ALL
-  SELECT 'CONNECTIVITY_MTLS_CERTIFICATE'::text,id::text,tenant_id::text,valid_until,certificate_fingerprint_sha256
-  FROM connectivity.gateway_credentials
-  WHERE status='ACTIVE' AND valid_until <= $1
-) expiry
-ORDER BY expires_at ASC`, now.UTC().Add(horizon))
+	rows, err := s.pool.Query(ctx, `SELECT 'CONNECTIVITY_MTLS_CERTIFICATE',id::text,tenant_id::text,valid_until,certificate_fingerprint_sha256
+FROM connectivity.gateway_credentials
+WHERE status='ACTIVE' AND valid_until <= $1
+ORDER BY valid_until ASC`, now.UTC().Add(horizon))
 	if err != nil {
 		return 0, err
 	}
