@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
 type Config struct {
@@ -41,8 +43,11 @@ type Provider struct {
 	modernKid       string
 	codes           map[string]authorizationCode
 	pendingTOTP     map[string]pendingAppLogin
-	// WeChat bound to each account (#664): OpenID by user.
-	wechat map[string]string
+	// WeChat bound to each account (#664): OpenID by user, and the Gateway's key for the grants
+	// that name the account on each WeChat call.
+	wechat        map[string]string
+	delegationKey crypto.PublicKey
+	gatewaySPIFFE string
 }
 
 type pendingAppLogin struct {
@@ -530,12 +535,29 @@ func (provider *Provider) WeChatOf(userID string) string {
 	return provider.wechat[userID]
 }
 
-// wechatBinding plays identity-service's /app/wechat/binding: the code "wechat-code-<openid>" is
-// that WeChat, "wechat-code-used" is a code WeChat refuses.
+// TrustGatewayGrants makes the WeChat calls accept grants the Gateway signs with this key, as
+// identity-service does.
+func (provider *Provider) TrustGatewayGrants(key crypto.PublicKey, gatewaySPIFFE string) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	provider.delegationKey, provider.gatewaySPIFFE = key, gatewaySPIFFE
+}
+
+// wechatBinding plays identity-service's /app/wechat/binding: the account is the one the Gateway's
+// grant names; the code "wechat-code-<openid>" is that WeChat, "wechat-code-used" is a code WeChat
+// refuses.
 func (provider *Provider) wechatBinding(writer http.ResponseWriter, request *http.Request) {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	userID := request.URL.Query().Get("userId")
+	claims, err := identitycontext.VerifyDelegation(provider.delegationKey, request.Header.Get("X-Delegation-Grant"))
+	if err == nil {
+		err = identitycontext.ValidateDelegationFromIssuer(claims, provider.now(), provider.gatewaySPIFFE, provider.gatewaySPIFFE, "identity-service", "wechat:manage", "session:"+claims.SessionID)
+	}
+	if err != nil || claims.SubjectIssuer != provider.issuer {
+		writeOAuthError(writer, http.StatusUnauthorized, "access_denied", "a Gateway grant for the signed-in account is required")
+		return
+	}
+	userID := claims.Subject
 	switch request.Method {
 	case http.MethodGet:
 		if _, bound := provider.wechat[userID]; bound {
@@ -547,9 +569,9 @@ func (provider *Provider) wechatBinding(writer http.ResponseWriter, request *htt
 		delete(provider.wechat, userID)
 		writer.WriteHeader(http.StatusNoContent)
 	case http.MethodPost:
-		var input struct{ UserID, Code string }
-		if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.UserID == "" {
-			writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "userId is required")
+		var input struct{ Code string }
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+			writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "request body is invalid")
 			return
 		}
 		openID, ok := strings.CutPrefix(input.Code, "wechat-code-")
@@ -558,12 +580,12 @@ func (provider *Provider) wechatBinding(writer http.ResponseWriter, request *htt
 			return
 		}
 		for other, bound := range provider.wechat {
-			if bound == openID && other != input.UserID {
+			if bound == openID && other != userID {
 				writeOAuthError(writer, http.StatusConflict, "wechat_already_bound", "this WeChat is bound to another account")
 				return
 			}
 		}
-		provider.wechat[input.UserID] = openID
+		provider.wechat[userID] = openID
 		writer.WriteHeader(http.StatusNoContent)
 	default:
 		writer.WriteHeader(http.StatusMethodNotAllowed)

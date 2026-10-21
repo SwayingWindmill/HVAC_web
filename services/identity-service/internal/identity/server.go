@@ -2,12 +2,15 @@ package identity
 
 import (
 	"context"
+	"crypto"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
 const loginCookieName = "__Host-hvac_idp_login"
@@ -24,7 +27,11 @@ type Config struct {
 	// The mini program's AppID and the file the administrator puts its AppSecret in.
 	WeChatAppID      string
 	WeChatSecretFile string
-	Now              func() time.Time
+	// The Gateway's delegation certificate and workload: the Gateway signs a grant for the account
+	// on every WeChat call.
+	GatewayDelegationCertFile string
+	GatewaySPIFFE             string
+	Now                       func() time.Time
 }
 
 type Server struct {
@@ -39,6 +46,9 @@ type Server struct {
 	signInURL             string
 	// nil until the administrator puts the mini program's AppSecret on the server.
 	wechat *WeChat
+	// The Gateway's delegation key and workload, for the grants on WeChat calls.
+	gatewayKey    crypto.PublicKey
+	gatewaySPIFFE string
 }
 
 func NewServer(ctx context.Context, config Config) (*Server, error) {
@@ -88,12 +98,17 @@ func NewServer(ctx context.Context, config Config) (*Server, error) {
 		store.Close()
 		return nil, err
 	}
+	gatewayKey, err := identitycontext.LoadCertificatePublicKey(config.GatewayDelegationCertFile)
+	if err != nil || strings.TrimSpace(config.GatewaySPIFFE) == "" {
+		store.Close()
+		return nil, errors.New("identity gateway delegation certificate and workload are required")
+	}
 	// The Web application's sign-in page on the same public origin is the login interface.
 	signInURL := issuerURL.Scheme + "://" + issuerURL.Host + "/sign-in"
 	return &Server{
 		issuer: issuer, clientID: clientID, redirectURI: redirectURI, postLogoutRedirectURI: postLogout,
 		store: store, now: now, signingKey: signingKey, mfaProtector: mfaProtector,
-		signInURL: signInURL, wechat: wechat,
+		signInURL: signInURL, wechat: wechat, gatewayKey: gatewayKey, gatewaySPIFFE: strings.TrimSpace(config.GatewaySPIFFE),
 	}, nil
 }
 

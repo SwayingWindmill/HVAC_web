@@ -434,6 +434,7 @@ func newAuthHarnessWithIAMFactory(t *testing.T, factory func(clientSPIFFEID stri
 	if !ok {
 		t.Fatal("client key is not a signer")
 	}
+	provider.TrustGatewayGrants(signer.Public(), bundle.ClientSPIFFEID)
 	var logs bytes.Buffer
 	sessionStore := sessionstore.NewMemoryStore()
 	identity := &gateway.IdentityConfig{

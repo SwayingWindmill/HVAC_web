@@ -1,6 +1,6 @@
 // identity-service's PostgreSQL tests on a throwaway database: the production database and role
 // bootstrap, then every identity migration in manifest order, then the Go tests with the
-// runtime and admin logins they need (services/identity-service/internal/identity).
+// runtime, admin and schema-owner logins they need (services/identity-service/internal/identity).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
@@ -14,7 +14,7 @@ const container = `hvac-identity-pg-test-${process.pid}`;
 const postgresImage = 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412';
 const goBinary = process.env.GO_BINARY ?? 'go';
 const adminPassword = `identity-test-${randomBytes(18).toString('hex')}`;
-const runtimePassword = `identity-runtime-${randomBytes(18).toString('hex')}`;
+const rolePassword = `identity-role-${randomBytes(18).toString('hex')}`;
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
 function run(command, args) {
@@ -60,9 +60,9 @@ try {
   const migrations = (await readFile(resolve(root, 'deploy/platform/phase1/migrations/migration-list.tsv'), 'utf8'))
     .split('\n').map((line) => line.split('|')).filter(([database]) => database === 'hvac_identity');
   for (const [, path] of migrations) psqlFile('hvac_identity', path.trim());
-  psql('postgres', `ALTER ROLE identity_runtime WITH PASSWORD '${runtimePassword}'; ALTER ROLE identity_admin WITH PASSWORD '${runtimePassword}';`);
+  psql('postgres', `ALTER ROLE identity_runtime WITH PASSWORD '${rolePassword}'; ALTER ROLE identity_admin WITH PASSWORD '${rolePassword}';`);
 
-  const database = (role) => `postgres://${role}:${runtimePassword}@127.0.0.1:${port}/hvac_identity?sslmode=disable`;
+  const database = (role) => `postgres://${role}:${rolePassword}@127.0.0.1:${port}/hvac_identity?sslmode=disable`;
   const child = spawn(goBinary, ['test', '-count=1', ...process.argv.slice(2), './services/identity-service/internal/identity/...'], {
     cwd: root,
     stdio: 'inherit',
@@ -71,6 +71,8 @@ try {
       GOCACHE: process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache'),
       IDENTITY_TEST_ADMIN_DATABASE_URL: database('identity_admin'),
       IDENTITY_TEST_RUNTIME_DATABASE_URL: database('identity_runtime'),
+      // The rollback test takes a grant away from identity_admin and gives it back, as the schema owner would.
+      IDENTITY_TEST_MIGRATOR_DATABASE_URL: `postgres://postgres:${adminPassword}@127.0.0.1:${port}/hvac_identity?sslmode=disable`,
     },
   });
   const [code, signal] = await once(child, 'exit');

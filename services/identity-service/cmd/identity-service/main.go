@@ -22,16 +22,18 @@ func main() {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	server, err := identity.NewServer(ctx, identity.Config{
-		Issuer:                os.Getenv("IDENTITY_ISSUER"),
-		ClientID:              os.Getenv("IDENTITY_CLIENT_ID"),
-		RedirectURI:           os.Getenv("IDENTITY_REDIRECT_URI"),
-		PostLogoutRedirectURI: os.Getenv("IDENTITY_POST_LOGOUT_REDIRECT_URI"),
-		DatabaseURL:           os.Getenv("IDENTITY_DATABASE_URL"),
-		SigningKeyFile:        os.Getenv("IDENTITY_SIGNING_KEY_FILE"),
-		MFAEncryptionKeyFile:  os.Getenv("IDENTITY_MFA_ENCRYPTION_KEY_FILE"),
-		SchemaVersion:         envOr("PHASE1_PRODUCT_VERSION", "0.1.0"),
-		WeChatAppID:           os.Getenv("IDENTITY_WECHAT_APP_ID"),
-		WeChatSecretFile:      os.Getenv("IDENTITY_WECHAT_APPSECRET_FILE"),
+		Issuer:                    os.Getenv("IDENTITY_ISSUER"),
+		ClientID:                  os.Getenv("IDENTITY_CLIENT_ID"),
+		RedirectURI:               os.Getenv("IDENTITY_REDIRECT_URI"),
+		PostLogoutRedirectURI:     os.Getenv("IDENTITY_POST_LOGOUT_REDIRECT_URI"),
+		DatabaseURL:               os.Getenv("IDENTITY_DATABASE_URL"),
+		SigningKeyFile:            os.Getenv("IDENTITY_SIGNING_KEY_FILE"),
+		MFAEncryptionKeyFile:      os.Getenv("IDENTITY_MFA_ENCRYPTION_KEY_FILE"),
+		SchemaVersion:             envOr("PHASE1_PRODUCT_VERSION", "0.1.0"),
+		WeChatAppID:               os.Getenv("IDENTITY_WECHAT_APP_ID"),
+		WeChatSecretFile:          os.Getenv("IDENTITY_WECHAT_APPSECRET_FILE"),
+		GatewayDelegationCertFile: os.Getenv("IDENTITY_GATEWAY_DELEGATION_CERT"),
+		GatewaySPIFFE:             envOr("IDENTITY_GATEWAY_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 	})
 	cancel()
 	if err != nil {

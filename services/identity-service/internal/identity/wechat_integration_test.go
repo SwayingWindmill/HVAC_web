@@ -2,14 +2,19 @@ package identity
 
 import (
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
 // Binding WeChat in the mini program (#664, docs/specs/miniprogram-wechat.md): identity-service
@@ -44,10 +49,33 @@ func fakeWeChat(t *testing.T, openIDs map[string]string) *httptest.Server {
 	return server
 }
 
-func wechatRequest(t *testing.T, server *Server, method, path, body string) *httptest.ResponseRecorder {
+const (
+	wechatTestIssuer  = "https://platform.example.test/identity"
+	wechatTestGateway = "spiffe://hvac.local/platform-gateway"
+)
+
+// gatewayGrant is what the Gateway signs for the signed-in account on each WeChat call.
+func gatewayGrant(t *testing.T, signer crypto.Signer, userID, audience string) string {
+	t.Helper()
+	now := time.Now().UTC()
+	grant, err := identitycontext.SignDelegation(signer, identitycontext.DelegationClaims{
+		Issuer: wechatTestGateway, ExecutingService: wechatTestGateway, Audience: audience,
+		Subject: userID, SubjectIssuer: wechatTestIssuer, TenantID: "tenant-1", PolicyRevision: "policy-v1",
+		Actions: []string{WeChatAction}, Scopes: []string{"session:session-1"}, SessionID: "session-1",
+		IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: randomToken(8),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return grant
+}
+
+func wechatRequest(t *testing.T, server *Server, method, path, grant, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	recorder := httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, httptest.NewRequest(method, path, strings.NewReader(body)))
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("X-Delegation-Grant", grant)
+	server.Handler().ServeHTTP(recorder, request)
 	return recorder
 }
 
@@ -88,12 +116,20 @@ func TestWeChatBindsOneAccountToOneWeChat(t *testing.T) {
 	}
 	duty, other := createUser("duty"), createUser("other")
 	weChat := fakeWeChat(t, map[string]string{"code-duty": "openid-duty-" + stamp, "code-new": "openid-new-" + stamp})
-	server := &Server{store: runtimeStore, now: func() time.Time { return now }, wechat: &WeChat{AppID: wechatTestAppID, Secret: wechatTestSecret, BaseURL: weChat.URL, Client: weChat.Client()}}
+	gatewayKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{
+		issuer: wechatTestIssuer, store: runtimeStore, now: func() time.Time { return time.Now().UTC() }, gatewayKey: gatewayKey.Public(), gatewaySPIFFE: wechatTestGateway,
+		wechat: &WeChat{AppID: wechatTestAppID, Secret: wechatTestSecret, BaseURL: weChat.URL, Client: weChat.Client()},
+	}
+	grant := func(userID string) string { return gatewayGrant(t, gatewayKey, userID, WeChatAudience) }
 	bind := func(userID, code string) *httptest.ResponseRecorder {
-		return wechatRequest(t, server, http.MethodPost, "/app/wechat/binding", `{"userId":"`+userID+`","code":"`+code+`"}`)
+		return wechatRequest(t, server, http.MethodPost, "/app/wechat/binding", grant(userID), `{"code":"`+code+`"}`)
 	}
 	binding := func(userID string) map[string]any {
-		recorder := wechatRequest(t, server, http.MethodGet, "/app/wechat/binding?userId="+url.QueryEscape(userID), "")
+		recorder := wechatRequest(t, server, http.MethodGet, "/app/wechat/binding", grant(userID), "")
 		expectWeChatAnswer(t, recorder, http.StatusOK, "")
 		var answer map[string]any
 		if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
@@ -106,7 +142,7 @@ func TestWeChatBindsOneAccountToOneWeChat(t *testing.T) {
 		t.Fatalf("before binding: %v", answer)
 	}
 	expectWeChatAnswer(t, bind(duty, "code-duty"), http.StatusNoContent, "")
-	if answer := binding(duty); answer["bound"] != true || answer["boundAt"] != "2026-10-21T08:00:00Z" {
+	if answer := binding(duty); answer["bound"] != true || answer["boundAt"] == nil {
 		t.Fatalf("after binding: %v", answer)
 	}
 	// The session key WeChat sent along is not kept anywhere in the binding.
@@ -129,12 +165,38 @@ func TestWeChatBindsOneAccountToOneWeChat(t *testing.T) {
 	expectWeChatAnswer(t, bind(duty, "code-new"), http.StatusNoContent, "")
 	expectWeChatAnswer(t, bind(other, "code-duty"), http.StatusNoContent, "")
 
-	expectWeChatAnswer(t, wechatRequest(t, server, http.MethodDelete, "/app/wechat/binding?userId="+url.QueryEscape(duty), ""), http.StatusNoContent, "")
+	expectWeChatAnswer(t, wechatRequest(t, server, http.MethodDelete, "/app/wechat/binding", grant(duty), ""), http.StatusNoContent, "")
 	if answer := binding(duty); answer["bound"] != false {
 		t.Fatalf("after removing: %v", answer)
 	}
 
 	// Without the AppSecret on the server, WeChat is plainly not set up.
-	unconfigured := &Server{store: runtimeStore, now: server.now}
-	expectWeChatAnswer(t, wechatRequest(t, unconfigured, http.MethodPost, "/app/wechat/binding", `{"userId":"`+duty+`","code":"code-duty"}`), http.StatusServiceUnavailable, "wechat_not_configured")
+	unconfigured := &Server{issuer: wechatTestIssuer, store: runtimeStore, now: server.now, gatewayKey: gatewayKey.Public(), gatewaySPIFFE: wechatTestGateway}
+	expectWeChatAnswer(t, wechatRequest(t, unconfigured, http.MethodPost, "/app/wechat/binding", grant(duty), `{"code":"code-duty"}`), http.StatusServiceUnavailable, "wechat_not_configured")
+}
+
+// Only the Gateway's grant for the signed-in account reaches a binding: anything else on the
+// internal network that asks to bind its own WeChat to someone's account is refused.
+func TestWeChatBindingNeedsTheGatewaysGrantForTheAccount(t *testing.T) {
+	gatewayKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{issuer: wechatTestIssuer, now: func() time.Time { return time.Now().UTC() }, gatewayKey: gatewayKey.Public(), gatewaySPIFFE: wechatTestGateway}
+	victim := "0190f000-0000-7000-8000-000000000001"
+	for name, grant := range map[string]string{
+		"no grant":               "",
+		"signed by someone else": gatewayGrant(t, otherKey, victim, WeChatAudience),
+		"for another service":    gatewayGrant(t, gatewayKey, victim, "iam-service"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+				expectWeChatAnswer(t, wechatRequest(t, server, method, "/app/wechat/binding", grant, `{"code":"code-attacker"}`), http.StatusUnauthorized, "access_denied")
+			}
+		})
+	}
 }

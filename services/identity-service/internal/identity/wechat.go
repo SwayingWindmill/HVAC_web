@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
 // WeChat for the platform's own mini program (#664, docs/specs/miniprogram-wechat.md).
@@ -80,8 +81,8 @@ func (weChat *WeChat) OpenID(ctx context.Context, code string) (string, error) {
 		return "", ErrWeChatUnavailable
 	}
 	switch {
-	// 40029: invalid code; 40163: code already used; 40226: WeChat blocked this sign-in as risky.
-	case answer.ErrCode == 40029 || answer.ErrCode == 40163 || answer.ErrCode == 40226:
+	// 40029: invalid code; 40163: code already used.
+	case answer.ErrCode == 40029 || answer.ErrCode == 40163:
 		return "", ErrWeChatCodeInvalid
 	case answer.ErrCode != 0 || answer.OpenID == "":
 		return "", ErrWeChatUnavailable
@@ -131,21 +132,43 @@ func (store *Store) WeChatBinding(ctx context.Context, userID string) (WeChatBin
 	return WeChatBinding{Bound: true, BoundAt: &boundAt}, nil
 }
 
-// The Gateway calls these for the signed-in account of a mini program Session; like /app/login
-// they are reached only on the internal network.
+// The Gateway calls these for the signed-in account of a mini program Session. Each call carries a
+// grant the Gateway signed for that account (X-Delegation-Grant); the account is read from the
+// grant alone, so nothing else on the internal network can bind a WeChat to someone's account.
+
+const (
+	// WeChatAudience and WeChatAction are what a Gateway grant for these calls names.
+	WeChatAudience = "identity-service"
+	WeChatAction   = "wechat:manage"
+)
 
 type wechatBindRequest struct {
-	UserID string `json:"userId"`
-	Code   string `json:"code"`
+	Code string `json:"code"`
+}
+
+// wechatAccount is the account the Gateway's grant names, or false after answering the refusal.
+func (server *Server) wechatAccount(writer http.ResponseWriter, request *http.Request) (string, bool) {
+	claims, err := identitycontext.VerifyDelegation(server.gatewayKey, request.Header.Get("X-Delegation-Grant"))
+	if err == nil {
+		err = identitycontext.ValidateDelegationFromIssuer(claims, server.now(), server.gatewaySPIFFE, server.gatewaySPIFFE, WeChatAudience, WeChatAction, "session:"+claims.SessionID)
+	}
+	if err == nil && (claims.SubjectIssuer != server.issuer || !validUserID(claims.Subject)) {
+		err = errors.New("the grant names an account this identity service does not keep")
+	}
+	if err != nil {
+		writeOAuthError(writer, http.StatusUnauthorized, "access_denied", "a Gateway grant for the signed-in account is required")
+		return "", false
+	}
+	return claims.Subject, true
 }
 
 func (server *Server) bindWeChat(writer http.ResponseWriter, request *http.Request) {
-	var input wechatBindRequest
-	if !decodeAppRequest(writer, request, 4<<10, &input) {
+	userID, ok := server.wechatAccount(writer, request)
+	if !ok {
 		return
 	}
-	if !validUserID(input.UserID) {
-		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "userId is required")
+	var input wechatBindRequest
+	if !decodeAppRequest(writer, request, 4<<10, &input) {
 		return
 	}
 	if server.wechat == nil {
@@ -154,7 +177,7 @@ func (server *Server) bindWeChat(writer http.ResponseWriter, request *http.Reque
 	}
 	openID, err := server.wechat.OpenID(request.Context(), input.Code)
 	if err == nil {
-		err = server.store.BindWeChat(request.Context(), input.UserID, server.wechat.AppID, openID, server.now())
+		err = server.store.BindWeChat(request.Context(), userID, server.wechat.AppID, openID, server.now())
 	}
 	switch {
 	case errors.Is(err, ErrWeChatCodeInvalid):
@@ -169,9 +192,8 @@ func (server *Server) bindWeChat(writer http.ResponseWriter, request *http.Reque
 }
 
 func (server *Server) unbindWeChat(writer http.ResponseWriter, request *http.Request) {
-	userID := request.URL.Query().Get("userId")
-	if !validUserID(userID) {
-		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "userId is required")
+	userID, ok := server.wechatAccount(writer, request)
+	if !ok {
 		return
 	}
 	if err := server.store.UnbindWeChat(request.Context(), userID); err != nil {
@@ -182,9 +204,8 @@ func (server *Server) unbindWeChat(writer http.ResponseWriter, request *http.Req
 }
 
 func (server *Server) readWeChatBinding(writer http.ResponseWriter, request *http.Request) {
-	userID := request.URL.Query().Get("userId")
-	if !validUserID(userID) {
-		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "userId is required")
+	userID, ok := server.wechatAccount(writer, request)
+	if !ok {
 		return
 	}
 	binding, err := server.store.WeChatBinding(request.Context(), userID)

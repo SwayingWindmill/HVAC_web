@@ -242,11 +242,14 @@ services:
       # without it, binding WeChat answers that WeChat is not set up.
       IDENTITY_WECHAT_APP_ID: ${IDENTITY_WECHAT_APP_ID:-wx4b7b82bf0351c6f3}
       IDENTITY_WECHAT_APPSECRET_FILE: /run/hvac/identity/wechat-miniprogram-appsecret
+      # The Gateway signs a grant naming the account on every WeChat call; identity-service checks it.
+      IDENTITY_GATEWAY_DELEGATION_CERT: /run/hvac/gateway/tls.crt
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
     volumes:
       - ${IDENTITY_RUNTIME_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/identity}:/run/hvac/identity:ro
+      - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/gateway/tls.crt:/run/hvac/gateway/tls.crt:ro
     expose: ["19095", "19085"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19085/health/ready"]

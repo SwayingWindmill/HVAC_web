@@ -24,9 +24,9 @@ Page({
   async onShow() {
     if (!requireSession()) return;
     selectTab(this);
-    const [principal, site, wechat] = await Promise.allSettled([gateway.get<Principal>('/api/v1/principal'), currentSite(), readWeChat(gateway)]);
+    const [principal, site] = await Promise.allSettled([gateway.get<Principal>('/api/v1/principal'), currentSite()]);
     this.setData({
-      wechat: wechat.status === 'fulfilled' ? wechat.value : { value: '读不到', action: null, hint: '' },
+      wechat: await readWeChat(gateway),
       name: principal.status === 'fulfilled' ? principal.value.principal.displayName : '—',
       email: principal.status === 'fulfilled' ? principal.value.principal.email : '',
       siteName: site.status === 'fulfilled' && site.value !== null ? site.value.displayName : '—',
