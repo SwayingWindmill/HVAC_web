@@ -7,6 +7,9 @@ type Point = { readonly x: number; readonly y: number } | null;
 const COLORS = ['#3f5bd9', '#0e9384', '#8b5cf6', '#d6409f'];
 const GRID = '#e7e7ea';
 
+// The page redraws while an answer streams, handing over equal lines each time; only new ones are drawn.
+const drawn = new WeakMap<object, string>();
+
 Component({
   options: { virtualHost: true },
   properties: {
@@ -25,6 +28,9 @@ Component({
   methods: {
     draw() {
       const lines = this.data.lines as Point[][];
+      const key = JSON.stringify(lines);
+      if (drawn.get(this) === key) return;
+      drawn.set(this, key);
       this.createSelectorQuery().select('.canvas').fields({ node: true, size: true }).exec((result) => {
         const target = result[0] as { node?: WechatMiniprogram.Canvas; width: number; height: number } | undefined;
         if (target?.node === undefined) return;

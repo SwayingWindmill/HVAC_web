@@ -25,7 +25,8 @@ export const stopRun = (gateway: Gateway, siteId: string, sessionId: string, exp
 
 /**
  * Follows a conversation's events until the snapshot after its Run ends, then calls `onEnd(false)`;
- * a stream that ends or fails before that calls `onEnd(true)`. Returns the function that stops it.
+ * a stream that ends, fails or sends an unreadable event before that calls `onEnd(true)`. Returns
+ * the function that stops it, after which nothing more is called.
  */
 export function followSession(
   gateway: Gateway,
@@ -45,11 +46,19 @@ export function followSession(
     onEvent(event);
     if (event.type === 'session.snapshot' && event.payload.snapshot.session.status !== 'ACTIVE') end(false);
   });
-  const stream = gateway.stream(`${session(siteId, sessionId)}/events`, read);
+  const stream = gateway.stream(`${session(siteId, sessionId)}/events`, (chunk) => {
+    try {
+      read(chunk);
+    } catch {
+      // The Gateway checked every event; one that still does not parse ends the stream as a failure.
+      end(true);
+      stream.abort();
+    }
+  });
   // The Gateway closes the stream after the snapshot that ends the Run; an end before it is a failure.
   stream.done.then(() => end(true), () => end(true));
   return () => {
-    end(false);
+    ended = true;
     stream.abort();
   };
 }

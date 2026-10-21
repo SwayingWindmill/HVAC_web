@@ -64,3 +64,44 @@ test('following a conversation ends with the snapshot that settles it; a stream 
   });
   assert.equal(failed, true);
 });
+
+test('stopping a conversation on purpose ends it quietly; an event that cannot be read ends it as a failure', async () => {
+  let aborted = 0;
+  let release: () => void = () => {};
+  const held = createGateway({
+    origin: 'https://hvac.example.test',
+    transport: async () => { throw new Error('not used'); },
+    chunked: (request) => ({
+      done: new Promise<void>((resolve) => {
+        request.onHeaders(200);
+        release = resolve;
+      }),
+      abort: () => { aborted += 1; release(); },
+    }),
+    session: { get: () => 'session-1', set: () => {}, clear: () => {} },
+    onSignedOut: () => {},
+  });
+  const ends: boolean[] = [];
+  const stop = followSession(held, SITE, 'session-0001', () => {}, (failed) => ends.push(failed));
+  stop();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual([aborted, ends], [1, []]);
+
+  let feed: (text: string) => void = () => {};
+  const garbled = createGateway({
+    origin: 'https://hvac.example.test',
+    transport: async () => { throw new Error('not used'); },
+    chunked: (request) => ({
+      done: new Promise<void>(() => {
+        request.onHeaders(200);
+        feed = (text) => request.onChunk(new TextEncoder().encode(text).buffer as ArrayBuffer);
+      }),
+      abort: () => {},
+    }),
+    session: { get: () => 'session-1', set: () => {}, clear: () => {} },
+    onSignedOut: () => {},
+  });
+  const failed = new Promise<boolean>((resolve) => { followSession(garbled, SITE, 'session-0001', () => {}, resolve); });
+  feed('event: session.snapshot\ndata: {"broken\n\n');
+  assert.equal(await failed, true);
+});

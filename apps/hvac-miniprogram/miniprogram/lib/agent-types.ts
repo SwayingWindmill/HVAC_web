@@ -1,7 +1,7 @@
 // The Agent Session contract as the Gateway passes it on (contracts/http, the web's
 // api/generated/operationsAgentSessions.gen.ts). The Gateway checks every snapshot and event against
 // the contract before forwarding it, so the mini program reads them as typed here;
-// test/assistant-parity.test.ts proves these types match the web's.
+// test/agent-types.test.ts proves these types match the web's.
 
 type Id = string;
 type Timestamp = number;

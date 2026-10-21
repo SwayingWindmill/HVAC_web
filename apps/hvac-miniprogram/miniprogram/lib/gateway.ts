@@ -62,17 +62,21 @@ const problemCode = (data: unknown): string => (
 export function createGateway(options: {
   readonly origin: string;
   readonly transport: Transport;
-  readonly chunked?: ChunkedTransport;
+  readonly chunked: ChunkedTransport;
   readonly session: SessionStore;
   readonly onSignedOut: () => void;
 }) {
   const { origin, transport, chunked, session, onSignedOut } = options;
 
-  const exchange = async (method: 'GET' | 'POST', path: string, data: unknown, signedIn: boolean): Promise<TransportResponse> => {
-    const header: Record<string, string> = { Accept: 'application/json' };
-    if (data !== undefined) header['Content-Type'] = 'application/json';
+  /** The Session goes in the Authorization header of every signed-in request. */
+  const signedInHeader = (header: Record<string, string>): Record<string, string> => {
     const token = session.get();
-    if (signedIn && token !== null) header.Authorization = `Bearer ${token}`;
+    return token === null ? header : { ...header, Authorization: `Bearer ${token}` };
+  };
+
+  const exchange = async (method: 'GET' | 'POST', path: string, data: unknown, signedIn: boolean): Promise<TransportResponse> => {
+    const base: Record<string, string> = data === undefined ? { Accept: 'application/json' } : { Accept: 'application/json', 'Content-Type': 'application/json' };
+    const header = signedIn ? signedInHeader(base) : base;
     try {
       return await transport({ url: origin + path, method, header, data });
     } catch {
@@ -100,10 +104,7 @@ export function createGateway(options: {
    * A refusal's body is read whole for its problem code instead. `abort` ends it quietly.
    */
   const stream = (path: string, onChunk: (chunk: ArrayBuffer) => void) => {
-    if (chunked === undefined) throw new Error('This Gateway was created without a chunked transport');
-    const token = session.get();
-    const header: Record<string, string> = { Accept: 'text/event-stream, application/problem+json' };
-    if (token !== null) header.Authorization = `Bearer ${token}`;
+    const header = signedInHeader({ Accept: 'text/event-stream, application/problem+json' });
     let statusCode = 0;
     let refused = '';
     const decode = utf8Reader();

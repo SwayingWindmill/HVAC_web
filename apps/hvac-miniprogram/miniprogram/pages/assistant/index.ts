@@ -2,7 +2,7 @@ import { answerQuestion, askInSession, assistantErrorText, followSession, listSe
 import type { AgentSessionEvent, AgentSessionSnapshot } from '../../lib/agent-types';
 import { presentConversation, presentHistory } from '../../lib/assistant';
 import { chooseConversation, chosenConversation } from '../../lib/assistant-choice';
-import { siteTodayStart } from '../../lib/energy';
+import { loadConversations } from '../../lib/conversations';
 import { gateway, requireSession } from '../../lib/platform';
 import { currentSite, type Site } from '../../lib/site';
 import { selectTab } from '../../lib/tab';
@@ -10,7 +10,7 @@ import { assistantThreadFrom } from '../../shared/thread-model';
 
 // Questions the assistant can answer from the data it reads, to start a conversation with.
 const STARTERS = [
-  { topic: '用电', prompt: '今天比昨天多用了多少电？' },
+  { topic: '电费', prompt: '今天电费比昨天多还是少？' },
   { topic: '能效', prompt: '今天哪几个小时能效最低？' },
   { topic: '设备', prompt: '哪台机组今天用电最多？' },
   { topic: '告警', prompt: '现在有哪些告警要处理？' },
@@ -20,12 +20,16 @@ const RECENT = 3;
 // Streamed words arrive many times a second; the page redraws at most this often.
 const REDRAW_MS = 150;
 
+// The tab has one page instance; its conversation state lives here between shows.
 let site: Site | null = null;
 let todayStart: string | null = null;
 let sessions: AgentSessionSnapshot[] = [];
 let live: { sessionId: string; events: AgentSessionEvent[] } | null = null;
 let stopFollowing: (() => void) | null = null;
 let redrawTimer: number | undefined;
+// Whether new words keep the latest message in view; scrolling back up to read lets go.
+let pinned = true;
+let lastScrollTop = 0;
 
 const selected = () => sessions.find((item) => item.session.id === chosenConversation()) ?? null;
 
@@ -34,9 +38,11 @@ const thread = () => {
   return assistantThreadFrom(snapshot, live !== null && live.sessionId === snapshot?.session.id ? live.events : []);
 };
 
+/** Stops following and drops what was followed; nothing the stopped stream does afterwards reaches the page. */
 const halt = () => {
   stopFollowing?.();
   stopFollowing = null;
+  live = null;
   if (redrawTimer !== undefined) clearTimeout(redrawTimer);
   redrawTimer = undefined;
 };
@@ -51,6 +57,8 @@ Page({
     recent: [] as ReturnType<typeof presentHistory>,
     hasMore: false,
     conversation: null as ReturnType<typeof presentConversation> | null,
+    /** Answers whose data reads are unfolded. */
+    openSteps: {} as Record<string, boolean>,
     draft: '',
     sending: false,
   },
@@ -61,12 +69,19 @@ Page({
     this.load();
   },
 
-  // A conversation found running when the tab shows again is followed again; its stream opens with the full snapshot.
+  // A conversation still running when the tab shows again is followed again; its stream opens with the whole snapshot.
   onHide: halt,
 
   onUnload: halt,
 
+  onPageScroll(event: WechatMiniprogram.Page.IPageScrollOption) {
+    if (event.scrollTop < lastScrollTop - 8) pinned = false;
+    else if (event.scrollTop > lastScrollTop) pinned = true;
+    lastScrollTop = event.scrollTop;
+  },
+
   async onPullDownRefresh() {
+    this.setData({ error: '' });
     await this.load();
     wx.stopPullDownRefresh();
   },
@@ -78,32 +93,36 @@ Page({
         this.setData({ loading: false, noSite: true });
         return;
       }
-      if (site?.id !== visible.id) {
-        chooseConversation(null);
+      if (site !== null && site.id !== visible.id) {
         halt();
-        live = null;
+        chooseConversation(null);
       }
       site = visible;
-      const [list, start] = await Promise.all([listSessions(gateway, visible.id), siteTodayStart(visible, new Date()).catch(() => null)]);
-      sessions = list;
-      todayStart = start;
-      this.setData({ loading: false, noSite: false, siteName: visible.displayName, error: '' });
+      const loaded = await loadConversations(visible);
+      sessions = loaded.sessions;
+      todayStart = loaded.todayStart;
+      // Opened for the first time, the tab shows the latest conversation if it is still answering or waiting for an answer.
+      if (chosenConversation() === undefined) {
+        const latest = sessions[0];
+        chooseConversation(latest !== undefined && (latest.session.status === 'ACTIVE' || latest.session.status === 'WAITING_FOR_INPUT') ? latest.session.id : null);
+      }
+      this.setData({ loading: false, noSite: false, siteName: visible.displayName });
       this.render();
       const running = selected();
-      if (running?.session.status === 'ACTIVE') this.follow(running.session.id);
+      if (running?.session.status === 'ACTIVE' && live?.sessionId !== running.session.id) this.follow(running.session.id);
     } catch (error) {
       this.setData({ loading: false, error: assistantErrorText(error) });
     }
   },
 
+  /** Sends only what is on screen: the open conversation, or the welcome with the latest conversations. */
   render() {
-    const conversation = chosenConversation() === null ? null : presentConversation(thread());
-    this.setData({
-      recent: presentHistory(sessions.slice(0, RECENT), todayStart),
-      hasMore: sessions.length > RECENT,
-      conversation,
-    });
-    if (conversation !== null) wx.pageScrollTo({ selector: '#latest', duration: 0 });
+    if (chosenConversation() === null || chosenConversation() === undefined) {
+      this.setData({ conversation: null, recent: presentHistory(sessions.slice(0, RECENT), todayStart), hasMore: sessions.length > RECENT });
+      return;
+    }
+    this.setData({ conversation: presentConversation(thread()) });
+    if (pinned) wx.pageScrollTo({ selector: '#latest', duration: 0 });
   },
 
   /** Redraws soon, once, however many events arrive meanwhile. */
@@ -118,17 +137,19 @@ Page({
   follow(sessionId: string) {
     if (site === null) return;
     halt();
-    live = { sessionId, events: [] };
+    const following = { sessionId, events: [] as AgentSessionEvent[] };
+    live = following;
     const siteId = site.id;
     stopFollowing = followSession(gateway, siteId, sessionId, (event) => {
-      if (live?.sessionId !== sessionId) return;
-      live.events.push(event);
+      following.events.push(event);
       this.scheduleRender();
     }, (failed) => {
+      if (live !== following) return;
       stopFollowing = null;
       if (failed) this.setData({ error: '与助手的连接中断了，已重新载入对话。' });
-      // The Agent's own record is what stays: read it again once the answer ends.
+      // What the Agent keeps is what stays: read the conversations again once the answer ends.
       listSessions(gateway, siteId).then((list) => {
+        if (live !== following) return;
         sessions = list;
         live = null;
         this.render();
@@ -139,6 +160,7 @@ Page({
   /** Sends a request that returns the conversation's new snapshot, then follows it while it runs. */
   async run(request: () => Promise<AgentSessionSnapshot>) {
     this.setData({ sending: true, error: '' });
+    pinned = true;
     try {
       const next = await request();
       sessions = [next, ...sessions.filter((item) => item.session.id !== next.session.id)];
@@ -146,8 +168,10 @@ Page({
       this.render();
       if (next.session.status === 'ACTIVE') this.follow(next.session.id);
     } catch (error) {
-      this.setData({ error: assistantErrorText(error) });
+      const text = assistantErrorText(error);
+      // Reload the conversation as it now stands, and keep saying what went wrong.
       await this.load();
+      this.setData({ error: text });
     } finally {
       this.setData({ sending: false });
     }
@@ -188,9 +212,14 @@ Page({
     this.ask(event.currentTarget.dataset.prompt);
   },
 
-  choose(event: WechatMiniprogram.TouchEvent<Record<string, never>, Record<string, never>, { value: string }>) {
-    if (this.data.sending) return;
+  choose(event: WechatMiniprogram.TouchEvent<Record<string, never>, Record<string, never>, { value: string; open: boolean }>) {
+    if (this.data.sending || !event.currentTarget.dataset.open) return;
     this.answer(event.currentTarget.dataset.value);
+  },
+
+  toggleSteps(event: WechatMiniprogram.TouchEvent<Record<string, never>, Record<string, never>, { id: string }>) {
+    const id = event.currentTarget.dataset.id;
+    this.setData({ [`openSteps.${id}`]: !this.data.openSteps[id] });
   },
 
   stop() {
@@ -201,19 +230,21 @@ Page({
   },
 
   startNew() {
+    if (this.data.conversation?.running) return;
     halt();
-    live = null;
     chooseConversation(null);
-    this.setData({ error: '' });
+    this.setData({ error: '', openSteps: {} });
     this.render();
   },
 
   open(event: WechatMiniprogram.TouchEvent<Record<string, never>, Record<string, never>, { id: string }>) {
+    const id = event.currentTarget.dataset.id;
     halt();
-    live = null;
-    chooseConversation(event.currentTarget.dataset.id);
+    chooseConversation(id);
+    pinned = true;
+    this.setData({ error: '', openSteps: {} });
     this.render();
-    if (selected()?.session.status === 'ACTIVE') this.follow(event.currentTarget.dataset.id);
+    if (selected()?.session.status === 'ACTIVE') this.follow(id);
   },
 
   openHistory() {

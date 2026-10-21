@@ -21,12 +21,14 @@ export type ConversationMessage =
   | {
     readonly id: string;
     readonly role: 'assistant';
+    /** Started, nothing read or written yet: the reply says the assistant is thinking. */
+    readonly thinking: boolean;
     readonly steps: { readonly summary: string; readonly running: boolean; readonly items: readonly { readonly label: string; readonly state: StepState }[] } | null;
     readonly answer: readonly AnswerNode[] | null;
     readonly finding: ReturnType<typeof presentFinding> | null;
-    readonly question: { readonly prompt: string; readonly choices: readonly { readonly value: string; readonly label: string }[]; readonly byText: boolean } | null;
-    /** Why the answer ended early; empty when it did not. */
-    readonly note: string;
+    readonly question: ReturnType<typeof presentQuestion> | null;
+    /** Why the answer ended early; none when it did not. */
+    readonly note: { readonly text: string; readonly failed: boolean } | null;
   };
 
 /** A chart value as the web's finding chart writes it: whole numbers plain, others to one decimal. */
@@ -39,6 +41,7 @@ export function presentChart(chart: FindingChart) {
   const caption = chart.unit === '' ? chart.title : `${chart.title}（${chart.unit}）`;
   const legend = chart.series.length > 1 ? chart.series.map((series) => series.name) : [];
   const values = chart.series.flatMap((series) => series.values.filter((value): value is number => value !== null));
+  // Bars stand on zero.
   const top = Math.max(0, ...values);
   if (chart.kind === 'HORIZONTAL_BAR') {
     const rows = chart.categories.flatMap((label, index) => {
@@ -52,13 +55,15 @@ export function presentChart(chart: FindingChart) {
       label,
       bars: chart.series.map((series) => {
         const value = series.values[index];
-        return value === null ? { value: '', height: 0 } : { value: chartValue(value), height: percentOf(value, top) };
+        return value === null || value === undefined ? { value: '', height: 0 } : { value: chartValue(value), height: percentOf(value, top) };
       }),
     }));
     return { kind: 'BAR' as const, caption, legend, groups };
   }
-  const bottom = Math.min(...values);
-  const span = top - bottom;
+  // A line spans its own values; one without any draws nothing.
+  const highest = values.length === 0 ? 0 : Math.max(...values);
+  const bottom = values.length === 0 ? 0 : Math.min(...values);
+  const span = highest - bottom;
   return {
     kind: 'LINE' as const,
     caption,
@@ -68,7 +73,7 @@ export function presentChart(chart: FindingChart) {
       x: chart.categories.length === 1 ? 0.5 : index / (chart.categories.length - 1),
       y: span === 0 ? 0.5 : (value - bottom) / span,
     }))),
-    scale: [chartValue(top), chartValue(bottom)],
+    scale: values.length === 0 ? [] : [chartValue(highest), chartValue(bottom)],
     from: chart.categories[0],
     to: chart.categories[chart.categories.length - 1],
   };
@@ -85,16 +90,20 @@ function presentFinding(finding: Finding) {
   };
 }
 
+/** A question from the assistant; only the latest unanswered one takes answers, earlier ones keep what they offered. */
 function presentQuestion(request: InputRequest, open: boolean) {
   return {
     prompt: request.prompt,
-    // Only the latest unanswered question takes answers.
-    choices: request.response.kind === 'SINGLE_SELECT' && open ? [...request.response.choices] : [],
+    choices: request.response.kind === 'SINGLE_SELECT' ? [...request.response.choices] : [],
     byText: request.response.kind === 'TEXT' && open,
+    open,
   };
 }
 
-const NOTES = { cancelled: '已停止。', error: '这次没有答完，可以换个问法再问一次。' } as const;
+const NOTES = {
+  cancelled: { text: '已停止。', failed: false },
+  error: { text: '这次没有答完，可以换个问法再问一次。', failed: true },
+} as const;
 
 export function presentConversation(thread: AssistantThread) {
   const messages = thread.messages.map((message): ConversationMessage => {
@@ -113,18 +122,21 @@ export function presentConversation(thread: AssistantThread) {
     return {
       id: message.id,
       role: 'assistant',
+      thinking: running && message.content.length === 0,
       steps: steps.length === 0 ? null : { summary: stillReading ? '正在查询数据' : `查询了 ${steps.length} 项数据`, running: stillReading, items: steps },
       answer: text?.type === 'text' && text.text.trim() !== '' ? answerNodes(text.text) : null,
       finding: finding?.type === 'data-finding' ? presentFinding(finding.data.finding) : null,
       question: request?.type === 'data-input-request' ? presentQuestion(request.data, thread.pendingInput?.request === request.data) : null,
-      note: message.status.type === 'incomplete' ? NOTES[message.status.reason] : '',
+      note: message.status.type === 'incomplete' ? NOTES[message.status.reason] : null,
     };
   });
   return {
     running: thread.isRunning,
     messages,
     suggestions: thread.suggestions.map((suggestion) => suggestion.prompt),
-    /** The assistant asked a question to be answered in the input box. */
+    /** The assistant is waiting for an answer to its question. */
+    answering: thread.pendingInput !== null,
+    /** …one answered in the input box rather than by a choice. */
     answeringByText: thread.pendingInput?.request.response.kind === 'TEXT',
   };
 }

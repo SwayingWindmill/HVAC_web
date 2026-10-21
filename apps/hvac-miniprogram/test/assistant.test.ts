@@ -45,12 +45,15 @@ test('an answered question shows the data read, the answer, the numbers it rests
       ],
     },
   });
-  assert.equal(answer.note, '');
+  assert.equal(answer.note, null);
   assert.deepEqual(view.suggestions, ['2 号机组为什么开机？', '明天同一时段要不要少开一台？']);
 });
 
 test('while the assistant works it says which data it is reading; a stopped or failed answer says so', () => {
   const events = ask(new AssistantOwner(), '今天能效怎么样？');
+  // Just asked: nothing read yet, the reply says the assistant is thinking.
+  const asked = presentConversation(assistantThreadFrom(events.opening, [])).messages[1];
+  assert.deepEqual(asked.role === 'assistant' && [asked.thinking, asked.steps], [true, null]);
   // Halfway: the first read has started, nothing answered yet.
   const halfway = presentConversation(assistantThreadFrom(events.opening, [events[1]]));
   assert.equal(halfway.running, true);
@@ -58,6 +61,7 @@ test('while the assistant works it says which data it is reading; a stopped or f
   assert.ok(working.role === 'assistant');
   if (working.role !== 'assistant') return;
   assert.deepEqual(working.steps, { summary: '正在查询数据', running: true, items: [{ label: '对比两个时段', state: 'running' }] });
+  assert.equal(working.thinking, false);
   assert.equal(working.answer, null);
   assert.deepEqual(halfway.suggestions, []);
 
@@ -67,8 +71,8 @@ test('while the assistant works it says which data it is reading; a stopped or f
     const reply = presentConversation(assistantThreadFrom({ ...snapshot, runs: snapshot.runs.map((run) => ({ ...run, status })) }, [])).messages[1];
     return reply.role === 'assistant' ? reply.note : null;
   };
-  assert.equal(noteWhen('CANCELLED'), '已停止。');
-  assert.equal(noteWhen('FAILED'), '这次没有答完，可以换个问法再问一次。');
+  assert.deepEqual(noteWhen('CANCELLED'), { text: '已停止。', failed: false });
+  assert.deepEqual(noteWhen('FAILED'), { text: '这次没有答完，可以换个问法再问一次。', failed: true });
 });
 
 test('my conversations on the Site list the first question, when it began at the Site and whether it was answered', () => {
@@ -107,11 +111,30 @@ test('a question from the assistant offers its choices, or asks for the answer i
     const request = { id: 'artifact-ask', sessionId: settled.session.id, runId: run.id, createdAt: run.startedAt + 45, kind: 'INPUT_REQUEST' as const, request: { prompt: '站点里叫"2 号机组"的有两台，看哪一台？', response } };
     return presentConversation(assistantThreadFrom({ ...settled, artifacts: [...settled.artifacts, request] }, []));
   };
-  const choosing = asking({ kind: 'SINGLE_SELECT', choices: [{ value: 'b2', label: 'B 区 2 号机组' }, { value: 'c2', label: 'C 区 2 号机组' }] });
+  const choices = [{ value: 'b2', label: 'B 区 2 号机组' }, { value: 'c2', label: 'C 区 2 号机组' }];
+  const choosing = asking({ kind: 'SINGLE_SELECT', choices });
   const reply = choosing.messages[1];
-  assert.deepEqual(reply.role === 'assistant' && reply.question, {
-    prompt: '站点里叫"2 号机组"的有两台，看哪一台？', choices: [{ value: 'b2', label: 'B 区 2 号机组' }, { value: 'c2', label: 'C 区 2 号机组' }], byText: false,
-  });
-  assert.equal(choosing.answeringByText, false);
-  assert.equal(asking({ kind: 'TEXT', maxLength: 200 }).answeringByText, true);
+  assert.deepEqual(reply.role === 'assistant' && reply.question, { prompt: '站点里叫"2 号机组"的有两台，看哪一台？', choices, byText: false, open: true });
+  assert.deepEqual([choosing.answering, choosing.answeringByText], [true, false]);
+  const typing = asking({ kind: 'TEXT', maxLength: 200 });
+  assert.deepEqual([typing.answering, typing.answeringByText], [true, true]);
+});
+
+test('a question already answered keeps the choices it offered, no longer open, and shows the answer given', () => {
+  const events = ask(new AssistantOwner(), '2 号机组今天用了多少电？');
+  const settled = (events.at(-1) as Extract<AgentSessionEvent, { type: 'session.snapshot' }>).payload.snapshot;
+  const run = settled.runs[0];
+  const choices = [{ value: 'b2', label: 'B 区 2 号机组' }, { value: 'c2', label: 'C 区 2 号机组' }];
+  const request = { id: 'artifact-ask', sessionId: settled.session.id, runId: run.id, createdAt: run.startedAt + 45, kind: 'INPUT_REQUEST' as const, request: { prompt: '看哪一台？', response: { kind: 'SINGLE_SELECT' as const, choices } } };
+  const answered = { id: 'artifact-answer', sessionId: settled.session.id, runId: run.id, createdAt: run.startedAt + 46, kind: 'INPUT_RESPONSE' as const, requestArtifactId: 'artifact-ask', value: 'c2', submittedBy: 'principal-e2e' };
+  const view = presentConversation(assistantThreadFrom({ ...settled, artifacts: [...settled.artifacts, request, answered] }, []));
+  const reply = view.messages[1];
+  assert.deepEqual(reply.role === 'assistant' && reply.question, { prompt: '看哪一台？', choices, byText: false, open: false });
+  assert.deepEqual(view.messages[2], { id: 'artifact-answer', role: 'user', text: 'C 区 2 号机组' });
+  assert.equal(view.answering, false);
+});
+
+test('a line chart with no values draws nothing and shows no scale', () => {
+  const empty = presentChart({ kind: 'LINE', title: '室外温度', unit: '°C', categories: ['0:00', '1:00'], series: [{ name: '温度', values: [null, null] }] });
+  assert.deepEqual(empty.kind === 'LINE' && [empty.lines, empty.scale], [[[null, null]], []]);
 });

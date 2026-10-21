@@ -12,13 +12,13 @@
       </view>
     </view>
 
-    <view wx:if="{{error}}" class="error" role="alert">{{error}}</view>
+    <view wx:if="{{error}}" class="error" aria-role="alert">{{error}}</view>
 
     <block wx:if="{{!conversation}}">
       <view class="welcome">
         <view class="welcome-mark" aria-hidden="true"><image class="welcome-icon" src="/assets/tab/assistant.svg" /></view>
         <text class="welcome-title">想问{{siteName}}什么？</text>
-        <text class="welcome-text">可以问用电为什么偏高、哪台机组用得多、某段时间的运行情况。我只读平台数据，先给结论再给数字，不会操作设备。</text>
+        <text class="welcome-text">我能读用电、能效、电费、告警和设备读数，先给结论再给数字。我不能操作设备。</text>
       </view>
       <view class="card">
         <view wx:for="{{starters}}" wx:key="prompt" class="row starter" data-prompt="{{item.prompt}}" bindtap="askThis" aria-role="button">
@@ -47,15 +47,23 @@
       <block wx:for="{{conversation.messages}}" wx:key="id">
         <view wx:if="{{item.role === 'user'}}" class="ask"><text class="ask-text" user-select>{{item.text}}</text></view>
         <view wx:else class="reply">
-          <view wx:if="{{item.steps}}" class="steps">
+          <view class="speaker">
+            <view class="speaker-mark" aria-hidden="true"><image class="speaker-icon" src="/assets/tab/assistant.svg" /></view>
+            <text>助手</text>
+          </view>
+          <text wx:if="{{item.thinking}}" class="thinking">正在思考…</text>
+          <view wx:if="{{item.steps}}" class="steps" data-id="{{item.id}}" bindtap="toggleSteps" aria-role="button" aria-expanded="{{item.steps.running || openSteps[item.id]}}">
             <view class="steps-line">
               <view wx:if="{{item.steps.running}}" class="dot dot-running" aria-hidden="true" />
-              <text>{{item.steps.summary}}</text>
+              <text class="steps-summary">{{item.steps.summary}}</text>
+              <text class="steps-toggle" aria-hidden="true">{{item.steps.running || openSteps[item.id] ? '收起' : '展开'}}</text>
             </view>
-            <view wx:for="{{item.steps.items}}" wx:for-item="step" wx:for-index="position" wx:key="position" class="step step-{{step.state}}">
-              <text class="step-mark" aria-hidden="true">{{step.state === 'done' ? '✓' : step.state === 'failed' ? '✕' : '…'}}</text>
-              <text>{{step.label}}{{step.state === 'failed' ? '，没有读到数据' : ''}}</text>
-            </view>
+            <block wx:if="{{item.steps.running || openSteps[item.id]}}">
+              <view wx:for="{{item.steps.items}}" wx:for-item="step" wx:for-index="position" wx:key="position" class="step step-{{step.state}}">
+                <text class="step-mark" aria-hidden="true">{{step.state === 'done' ? '✓' : step.state === 'failed' ? '✕' : '…'}}</text>
+                <text>{{step.label}}{{step.state === 'failed' ? '，没有读到数据' : ''}}</text>
+              </view>
+            </block>
           </view>
           <view wx:if="{{item.answer}}" class="answer"><rich-text nodes="{{item.answer}}" user-select /></view>
           <finding-card wx:if="{{item.finding}}" finding="{{item.finding}}" />
@@ -63,11 +71,21 @@
             <text class="caption">需要补充信息</text>
             <text class="question-text">{{item.question.prompt}}</text>
             <view wx:if="{{item.question.choices.length}}" class="choices">
-              <text wx:for="{{item.question.choices}}" wx:for-item="choice" wx:key="value" class="choice" data-value="{{choice.value}}" bindtap="choose" aria-role="button">{{choice.label}}</text>
+              <text
+                wx:for="{{item.question.choices}}"
+                wx:for-item="choice"
+                wx:key="value"
+                class="choice {{item.question.open ? '' : 'choice-off'}}"
+                data-value="{{choice.value}}"
+                data-open="{{item.question.open}}"
+                bindtap="choose"
+                aria-role="button"
+                aria-disabled="{{!item.question.open}}"
+              >{{choice.label}}</text>
             </view>
             <text wx:if="{{item.question.byText}}" class="caption">在下方输入框里回答。</text>
           </view>
-          <text wx:if="{{item.note}}" class="note {{item.note === '已停止。' ? '' : 'note-failed'}}">{{item.note}}</text>
+          <text wx:if="{{item.note}}" class="note {{item.note.failed ? 'note-failed' : ''}}">{{item.note.text}}</text>
         </view>
       </block>
 
@@ -84,13 +102,15 @@
   <input
     class="composer-input"
     value="{{draft}}"
-    placeholder="{{conversation.answeringByText ? '回答助手的问题' : '问问题'}}"
+    placeholder="{{conversation.answering ? '回答助手的问题' : '问问这个站点的用电、负荷或设备'}}"
     confirm-type="send"
     maxlength="4000"
-    disabled="{{sending || conversation.running}}"
+    disabled="{{sending}}"
     bindinput="onDraft"
     bindconfirm="send"
   />
-  <button wx:if="{{conversation.running}}" class="composer-button composer-stop" bindtap="stop" aria-label="停止回答">停止</button>
-  <button wx:else class="composer-button" disabled="{{sending || !draft}}" bindtap="send" aria-label="发送">发送</button>
+  <view wx:if="{{conversation.running}}" class="composer-button composer-stop" bindtap="stop" aria-role="button" aria-label="停止回答"><view class="stop-mark" /></view>
+  <view wx:else class="composer-button {{sending || !draft ? 'composer-button-off' : ''}}" bindtap="send" aria-role="button" aria-label="发送" aria-disabled="{{sending || !draft}}">
+    <image class="send-icon" src="/assets/send.svg" aria-hidden="true" />
+  </view>
 </view>
