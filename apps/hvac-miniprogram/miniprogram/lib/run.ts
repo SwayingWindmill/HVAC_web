@@ -229,11 +229,11 @@ export function deviceStatus(device: PlantDevice): { readonly label: string; rea
 /** Offline, faulty, or reporting late: what an operator should look at. */
 export const needsAttention = (device: PlantDevice) => device.connection === 'OFFLINE' || device.runState === 'FAULT' || device.hasStaleData;
 
-// The reading a row leads with: a machine's power, else the first of its role's key readings (the web's KEY_READINGS).
+// The reading a row leads with: a machine's power (a pump without a power reading, its flow), else the first of its role's key readings (the web's KEY_READINGS).
 const LEAD_KEYS: Readonly<Record<PlantCategory, readonly string[]>> = {
   CHILLER: ['chiller.power'],
-  CHILLED_WATER_PUMP: ['chwp.power'],
-  COOLING_WATER_PUMP: ['cwp.power'],
+  CHILLED_WATER_PUMP: ['chwp.power', 'chwp.flow_rate'],
+  COOLING_WATER_PUMP: ['cwp.power', 'cwp.flow_rate'],
   COOLING_TOWER: ['cooling_tower.power'],
   METER: ['hvac_meter.active_power', 'btu_meter.instant_cooling_capacity', 'btu_meter.flow_rate'],
   WEATHER: ['weather.ambient_dry_bulb_temperature'],
@@ -269,7 +269,7 @@ function deviceRow(device: PlantDevice) {
   const facts = hasRole
     ? (DETAIL_KEYS[device.category] ?? [])
       .map((key) => device.reading(key))
-      .filter((reading): reading is PlantReading => reading !== null && !neverRead(reading))
+      .filter((reading): reading is PlantReading => reading !== null && reading !== lead && !neverRead(reading))
       .map((reading) => `${reading.label} ${withUnit(reading)}`)
     : [`${device.readings.length} 个读数`];
   const missing = device.readings.filter(neverRead).length;
