@@ -20,18 +20,39 @@ test('通知 lists what is happening in one card, most severe first, each with w
   assert.deepEqual(happening.groups[0].rows.map((row) => row.alarmId), ['critical', active.alarmId, 'info']);
   assert.deepEqual(happening.groups[0].rows[1], {
     alarmId: active.alarmId, title: '冷冻水回水温度过低', level: 'major', severity: '重要', when: '9/29 16:26 开始',
-    status: { label: '未确认', waiting: true },
+    status: { label: '未确认', tone: 'waiting' }, count: '', cleared: false,
   });
-  assert.deepEqual(happening.groups[0].rows[0].status, { label: '已确认', waiting: false });
+  assert.deepEqual(happening.groups[0].rows[0].status, { label: '已确认', tone: 'quiet' });
 });
 
 test('what cleared lately is grouped by Site day, newest first, each with the time it cleared', () => {
   const earlier = { ...cleared, alarmId: 'earlier', clearedAt: '2026-09-29T02:00:00Z', acknowledgement: null };
   const [, recovered] = presentFeed([], [earlier, cleared], todayStart, { unacknowledgedOnly: false }).sections;
   assert.deepEqual([recovered.title, recovered.count, recovered.caption, recovered.empty], ['最近恢复', '', '', '']);
-  assert.deepEqual(recovered.groups.map((group) => [group.day, group.rows.map((row) => [row.alarmId, row.when, row.status.label])]), [
-    ['今天', [[cleared.alarmId, '17:23 恢复', '已确认']]],
-    ['9 月 29 日', [['earlier', '10:00 恢复', '未确认']]],
+  // Cleared rows are greyed; only one no one saw keeps a grey 未确认, never the orange of one happening.
+  assert.deepEqual(recovered.groups.map((group) => [group.day, group.rows.map((row) => [row.alarmId, row.when, row.status, row.cleared])]), [
+    ['今天', [[cleared.alarmId, '17:23 恢复', null, true]]],
+    ['9 月 29 日', [['earlier', '10:00 恢复', { label: '未确认', tone: 'quiet' }, true]]],
+  ]);
+});
+
+// Regression (#677, 2026-10-21): 最近恢复 listed alarms of the same name cleared at the same minute
+// over and over (a dozen 「…读数长时间没有更新」 cleared at 20:47 when the gateway came back).
+test('alarms of the same name cleared at the same minute on the same day are one row that says how many', () => {
+  const at = (id: string, title: string, clearedAt: string, acknowledged: boolean) => ({
+    ...cleared, alarmId: id, title, clearedAt, acknowledgement: acknowledged ? cleared.acknowledgement : null,
+  });
+  const [, recovered] = presentFeed([], [
+    at('gw-1', '网关上报中断', '2026-10-01T12:48:10Z', false),
+    at('pump', '冷冻水泵读数长时间没有更新', '2026-10-01T12:47:20Z', true),
+    at('gw-2', '网关上报中断', '2026-10-01T12:48:40Z', true),
+    at('gw-3', '网关上报中断', '2026-10-01T12:48:05Z', true),
+    at('gw-other-day', '网关上报中断', '2026-09-30T12:48:00Z', true),
+  ], todayStart, { unacknowledgedOnly: false }).sections;
+  assert.deepEqual(recovered.groups.map((group) => [group.day, group.rows.map((row) => [row.alarmId, row.title, row.when, row.count, row.status?.label ?? ''])]), [
+    // 未确认 when any of them is, and it opens that one, so no one is left unreachable; else the newest.
+    ['今天', [['gw-1', '网关上报中断', '20:48 恢复', '共 3 条', '未确认'], ['pump', '冷冻水泵读数长时间没有更新', '20:47 恢复', '', '']]],
+    ['昨天', [['gw-other-day', '网关上报中断', '20:48 恢复', '', '']]],
   ]);
 });
 
@@ -79,6 +100,9 @@ test('an alarm opens on its severity and state, what happened, the facts an oper
 test('问助手 asks about the alarm as the web\'s 解释 does: when it began at the Site, whether it cleared, and its device', () => {
   assert.equal(explainAlarmQuestion(active, 'C 机组电表', todayStart), '2026年9月29日 16:26 开始的告警「冷冻水回水温度过低」（C 机组电表）是怎么回事？');
   assert.equal(explainAlarmQuestion(cleared, null, todayStart), '2026年10月1日 17:11 开始、已恢复的告警「冷冻水回水温度过低」是怎么回事？');
+  // Without the Site's midnight there is no time to give (#677: it began with a stray 的).
+  assert.equal(explainAlarmQuestion(active, null, null), '告警「冷冻水回水温度过低」是怎么回事？');
+  assert.equal(explainAlarmQuestion(cleared, null, null), '已恢复的告警「冷冻水回水温度过低」是怎么回事？');
 });
 
 test('acknowledging says what it means: someone is on it while the alarm is happening, someone has seen it once it cleared', () => {

@@ -15,11 +15,28 @@ export interface Metric {
   readonly late: boolean;
 }
 
-/** A reading with its unit, as an operator reads it aloud: 7 °C, 72%, 132 m³/h. */
-export function withUnit(reading: PlantReading): string {
-  if (reading.unit === null) return reading.display;
-  return reading.unit === '%' ? `${reading.display}%` : `${reading.display} ${reading.unit}`;
+/**
+ * A reading's figure, written the same way everywhere (#677): every temperature to one decimal, so
+ * 7.0 sits beside 12.6, and thousands separators from 1,000 up.
+ */
+function figure(reading: PlantReading): string {
+  if (reading.numeric === null) return reading.display;
+  if (reading.unit === '°C') return grouped(reading.numeric, 1);
+  if (Math.abs(reading.numeric) < 1000) return reading.display;
+  return grouped(reading.numeric, reading.display.split('.')[1]?.length ?? 0);
 }
+
+/** A reading with its unit, as an operator reads it aloud: 7.0 °C, 72%, 132 m³/h. */
+export function withUnit(reading: PlantReading): string {
+  if (reading.unit === null) return figure(reading);
+  return reading.unit === '%' ? `${figure(reading)}%` : `${figure(reading)} ${reading.unit}`;
+}
+
+/**
+ * The devices the mini program shows and counts: the gateway's temperature and control modules are
+ * of no use to duty staff and are left out (#677); their trouble reaches 通知 as alarms.
+ */
+const listed = (plant: Plant) => plant.devices.filter((device) => device.category !== 'ACQUISITION');
 
 function equipment(plant: Plant) {
   const devices = plant.devices.filter((device) => EQUIPMENT_CATEGORIES.has(device.category));
@@ -32,7 +49,9 @@ function equipment(plant: Plant) {
 
 function deviceSummary(plant: Plant): string {
   const { total, running } = equipment(plant);
-  return `${running} / ${total} 台运行 · ${plant.onlineCount} / ${plant.devices.length} 在线`;
+  // Counted over the listed devices, not plant.onlineCount (kept for parity with the web's plant).
+  const devices = listed(plant);
+  return `${running} / ${total} 台运行 · ${devices.filter((device) => device.connection === 'ONLINE').length} / ${devices.length} 在线`;
 }
 
 function plantStatus(plant: Plant) {
@@ -56,7 +75,7 @@ function copNote(plant: Plant): string {
 /** A reading as a figure; with `decimals`, written as the web's headline figures are (fixed decimals, thousands separators). */
 function metric(label: string, reading: PlantReading | null, decimals?: number): Metric {
   if (reading === null || neverRead(reading)) return { label, value: '—', unit: reading?.unit ?? '', late: false };
-  const value = decimals !== undefined && reading.numeric !== null ? grouped(reading.numeric, decimals) : reading.display;
+  const value = decimals !== undefined && reading.numeric !== null ? grouped(reading.numeric, decimals) : figure(reading);
   return { label, value, unit: reading.unit ?? '', late: !reading.current };
 }
 
@@ -117,7 +136,6 @@ export function presentRealtime(plant: Plant) {
     ],
     copNote: copNote(plant),
     loops: loops(plant),
-    devices: deviceSummary(plant),
   };
 }
 
@@ -253,7 +271,7 @@ const DETAIL_KEYS: Partial<Record<PlantCategory, readonly string[]>> = {
 /** A point the device has never reported (or reported only rejected values for). */
 const neverRead = (reading: PlantReading) => reading.sampledAt === null;
 
-/** The first of the device's role readings it has; none for a device without a role (a gateway-wired module). */
+/** The first of the device's role readings it has; none for a device without a role (OTHER). */
 function leadReading(device: PlantDevice): PlantReading | null {
   for (const key of LEAD_KEYS[device.category]) {
     const reading = device.reading(key);
@@ -265,7 +283,7 @@ function leadReading(device: PlantDevice): PlantReading | null {
 function deviceRow(device: PlantDevice) {
   const hasRole = LEAD_KEYS[device.category].length > 0;
   const lead = leadReading(device);
-  // A module's channels have no one reading to lead with, so its row counts them instead.
+  // A device without a role has no one reading to lead with, so its row counts its readings instead.
   const facts = hasRole
     ? (DETAIL_KEYS[device.category] ?? [])
       .map((key) => device.reading(key))
@@ -276,12 +294,14 @@ function deviceRow(device: PlantDevice) {
   const notes = device.latestSampleAt === null ? ['没有读数']
     : [...(missing > 0 ? [`${missing} 个读数没读到`] : []), ...(device.hasStaleData ? ['读数过期'] : [])];
   const status = deviceStatus(device);
+  // A meter or sensor never runs: an online one needs no label, only trouble does. One that never
+  // reported says only 没有读数, without 在线 or a dash beside it.
+  const silent = device.latestSampleAt === null;
   return {
     deviceId: device.deviceId,
     name: device.name,
-    // A meter or sensor never runs: an online one needs no label, only trouble does.
-    status: !EQUIPMENT_CATEGORIES.has(device.category) && status.label === '在线' ? null : status,
-    value: hasRole ? lead?.display ?? '—' : '',
+    status: (silent || !EQUIPMENT_CATEGORIES.has(device.category)) && status.label === '在线' ? null : status,
+    value: hasRole && !silent ? (lead === null ? '—' : figure(lead)) : '',
     unit: lead?.unit ?? '',
     detail: [...facts, ...notes].join(' · '),
   };
@@ -299,8 +319,9 @@ const FILTERS: readonly { readonly key: DeviceFilter; readonly label: string; re
 /** The device list under a filter; the page shows its own note for a Site without devices. */
 export function presentDevices(plant: Plant, filter: DeviceFilter) {
   const { keeps, label } = FILTERS.find((each) => each.key === filter)!;
-  const equipmentDevices = plant.devices.filter((device) => EQUIPMENT_CATEGORIES.has(device.category));
-  const others = plant.devices.filter((device) => !EQUIPMENT_CATEGORIES.has(device.category));
+  const devices = listed(plant);
+  const equipmentDevices = devices.filter((device) => EQUIPMENT_CATEGORIES.has(device.category));
+  const others = devices.filter((device) => !EQUIPMENT_CATEGORIES.has(device.category));
   const offline = others.filter((device) => device.connection === 'OFFLINE').length;
   const groups = [
     { title: '冷站主设备', caption: `${equipmentDevices.length} 台 · ${equipmentDevices.filter(isRunning).length} 台运行`, devices: equipmentDevices },
@@ -309,7 +330,7 @@ export function presentDevices(plant: Plant, filter: DeviceFilter) {
     .map((group) => ({ ...group, devices: group.devices.filter(keeps).map(deviceRow) }))
     .filter((group) => group.devices.length > 0);
   return {
-    filters: FILTERS.map((each) => ({ key: each.key, label: each.label, count: plant.devices.filter(each.keeps).length })),
+    filters: FILTERS.map((each) => ({ key: each.key, label: each.label, count: devices.filter(each.keeps).length })),
     groups,
     empty: groups.length > 0 ? '' : filter === 'attention' ? '没有需要关注的设备。' : `没有${label}的设备。`,
   };
@@ -337,7 +358,7 @@ export function presentDevice(device: PlantDevice, today: DeviceToday | null) {
     updatedAt: device.latestSampleAt === null || today === null ? '' : siteClock(device.latestSampleAt, today.start),
     metrics: [lead, second].filter((reading) => reading != null).map((reading) => metric(reading.label, reading)),
     readingsNote: device.readings.length === 0 ? '这台设备没有登记读数。'
-      : `${device.readings.length} 个读数${missing > 0 ? `，${missing} 个没读到` : ''}。`,
+      : `${device.readings.length} 个读数${missing > 0 ? `，${missing} 个没读到` : ''}`,
     readings: device.readings.map((reading) => ({ label: reading.label, value: neverRead(reading) ? '没读到' : withUnit(reading), late: !neverRead(reading) && !reading.current })),
     energy: today === null ? null : deviceEnergy(today),
     energyNote: energyNote(device, today),

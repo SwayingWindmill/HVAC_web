@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { AssistantOwner } from '../../hvac-web/e2e/assistant-owner.ts';
 import type { AgentSessionEvent, AgentSessionSnapshot } from '../miniprogram/lib/agent-types.ts';
 import { agentEventReader } from '../miniprogram/lib/agent-stream.ts';
 import { ANSWER_STYLES } from '../miniprogram/lib/answer-nodes.ts';
+import { explainAlarmQuestion, type Alarm } from '../miniprogram/lib/alarms.ts';
 import { presentChart, presentConversation, presentHistory } from '../miniprogram/lib/assistant.ts';
 import { assistantThreadFrom } from '../miniprogram/shared/thread-model.ts';
 
@@ -88,6 +90,21 @@ test('my conversations on the Site list the first question, when it began at the
     ['昨天哪台机组用电最多？', '今天 20:05 · 答完'],
   ]);
   assert.deepEqual(presentHistory(sessions, null).map((entry) => entry.detail), ['答完', '答完']);
+});
+
+// Regression (#677, 2026-10-21): a conversation started from an alarm's 问助手 was listed as
+// 「2026年10月18日 18:08 开始的告警「室外…」, its date pushing out what was asked.
+test('a conversation started from an alarm is listed by the alarm, the time being on the line below', () => {
+  const [active, cleared] = JSON.parse(readFileSync(new URL('../../hvac-web/e2e/fixtures/alarms.json', import.meta.url), 'utf8')) as Alarm[];
+  const todayStart = '2026-09-30T16:00:00.000Z';
+  const owner = new AssistantOwner();
+  ask(owner, explainAlarmQuestion(active, '1 号冷机', todayStart));
+  ask(owner, explainAlarmQuestion(cleared, null, todayStart));
+  const sessions = owner.respond(SITE, 'GET', BASE, null)!.body as AgentSessionSnapshot[];
+  assert.deepEqual(presentHistory(sessions, null).map((entry) => entry.question), [
+    `已恢复的告警「${cleared.title}」是怎么回事？`,
+    `告警「${active.title}」（1 号冷机）是怎么回事？`,
+  ]);
 });
 
 /** The picture a line chart draws (an SVG in a data URI, which scrolls with the page as an image). */

@@ -11,19 +11,6 @@
   gap: 12px;
 }
 
-.severity {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.severity-mark {
-  width: 10px;
-  height: 10px;
-}
-
 .title {
   font-size: 19px;
   line-height: 26px;
@@ -34,6 +21,21 @@
   font-size: 14px;
   line-height: 22px;
   color: var(--secondary-foreground);
+}
+
+/* Three lines until 展开: the alarm's own explanation can run long (#677). */
+.summary-clamped {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.summary-toggle {
+  align-self: flex-start;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--primary);
 }
 
 .fact-label {

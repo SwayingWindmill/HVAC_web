@@ -32,13 +32,13 @@ test('实时运行 leads with whether the plant runs, its power, cooling and eff
     { label: '能效', value: '4.08', unit: '', late: false },
   ]);
   assert.equal(view.copNote, '');
+  // Every temperature to one decimal (#677), so 7.0 sits beside 12.6.
   assert.deepEqual(view.loops, [
-    { name: '冷冻水', headline: '供 7 °C · 回 12.6 °C', detail: '温差 5.6 °C · 流量 132 m³/h', late: false },
+    { name: '冷冻水', headline: '供 7.0 °C · 回 12.6 °C', detail: '温差 5.6 °C · 流量 132 m³/h', late: false },
     { name: '冷却水', headline: '出塔 30.7 °C · 进塔 34.1 °C', detail: '与湿球差 3.7 °C · 流量 260 m³/h', late: false },
     { name: '室内', headline: '24.1 °C', detail: '', late: false },
-    { name: '室外', headline: '34 °C', detail: '湿球 27 °C · 相对湿度 65 %RH', late: false },
+    { name: '室外', headline: '34.0 °C', detail: '湿球 27.0 °C · 相对湿度 65 %RH', late: false },
   ]);
-  assert.equal(view.devices, '4 / 4 台运行 · 8 / 8 在线');
 });
 
 test('a stopped plant says so and why there is no efficiency; a late reading is marked, an offline device is not running', () => {
@@ -57,14 +57,14 @@ test('a stopped plant says so and why there is no efficiency; a late reading is 
   // Headline figures are written as the web writes them (power to 0.1 kW with thousands separators), a late one dimmed.
   assert.deepEqual(stopped.metrics.map((each) => [each.value, each.late]), [['1,234.6', true], ['0', false], ['—', false]]);
   assert.equal(stopped.copNote, '停机时不算能效。');
-  assert.deepEqual(stopped.loops.find((loop) => loop.name === '室外'), { name: '室外', headline: '34 °C', detail: '湿球 27 °C · 相对湿度 65 %RH', late: true });
+  assert.deepEqual(stopped.loops.find((loop) => loop.name === '室外'), { name: '室外', headline: '34.0 °C', detail: '湿球 27.0 °C · 相对湿度 65 %RH', late: true });
   // A reading never received is left out rather than shown as a dash; a loop whose lead reading never came is left out.
   assert.deepEqual(stopped.loops.find((loop) => loop.name === '冷冻水'), { name: '冷冻水', headline: '回 12.6 °C', detail: '温差 5.6 °C · 流量 132 m³/h', late: false });
   assert.equal(stopped.loops.some((loop) => loop.name === '室内'), false);
 
-  const offline = presentRealtime(plantWith((snapshotOf) => { snapshotOf('CHILLER-01').presence.currentState = 'OFFLINE'; }));
-  assert.equal(offline.status?.detail, '主要设备 3 / 4 台运行');
-  assert.equal(offline.devices, '3 / 4 台运行 · 7 / 8 在线');
+  const offlinePlant = plantWith((snapshotOf) => { snapshotOf('CHILLER-01').presence.currentState = 'OFFLINE'; });
+  assert.equal(presentRealtime(offlinePlant).status?.detail, '主要设备 3 / 4 台运行');
+  assert.equal(presentPlantNow(offlinePlant)?.summary, '3 / 4 台运行 · 7 / 8 在线');
 });
 
 test('today by the hour: efficiency where both meters read, no cooling drawn flat, hours without readings marked and named', () => {
@@ -97,14 +97,14 @@ test('设备 lists the main equipment, then meters and the air, each with its st
   assert.deepEqual(view.groups.map((group) => [group.title, group.caption]), [['冷站主设备', '4 台 · 4 台运行'], ['计量和环境', '4 台 · 全部在线']]);
   assert.deepEqual(view.groups[0].devices[0], {
     deviceId: '018f3e00-4000-7000-8000-000000000001', name: 'CHILLER-01', status: { label: '运行', tone: 'running' },
-    value: '155.7', unit: 'kW', detail: '冷冻水出水温度 7 °C · 压缩机负载 72%',
+    value: '155.7', unit: 'kW', detail: '冷冻水出水温度 7.0 °C · 压缩机负载 72%',
   });
   // A meter or sensor never runs; it carries a state only when something is wrong with it.
   assert.deepEqual(view.groups[1].devices.map((device) => [device.name, device.status, device.value, device.unit, device.detail]), [
     ['ZONE-SENSOR-01 通信端点', null, '24.1', '°C', ''],
     ['BTU-METER-01', null, '864', 'kW', ''],
     ['METER-HVAC-TOTAL', null, '211.9', 'kW', ''],
-    ['WEATHER-STATION-01', null, '34', '°C', ''],
+    ['WEATHER-STATION-01', null, '34.0', '°C', ''],
   ]);
   const offlineMeter = presentDevices(plantWith((snapshotOf) => { snapshotOf('METER-HVAC-TOTAL').presence.currentState = 'OFFLINE'; }), 'all');
   assert.deepEqual(offlineMeter.groups[1].devices.find((device) => device.name === 'METER-HVAC-TOTAL')?.status, { label: '离线', tone: 'offline' });
@@ -131,7 +131,7 @@ test('需关注 gathers what is offline, faulty or late; a filter with nothing i
   const attention = presentDevices(bad, 'attention');
   assert.deepEqual(attention.filters.map((filter) => filter.count), [8, 3, 0, 2]);
   assert.deepEqual(attention.groups.map((group) => group.devices.map((device) => [device.name, device.status?.label, device.detail])), [[
-    ['CHILLER-01', '离线', '冷冻水出水温度 7 °C · 压缩机负载 72%'],
+    ['CHILLER-01', '离线', '冷冻水出水温度 7.0 °C · 压缩机负载 72%'],
     ['CHWP-01', '运行', '冷冻水流量 132 m³/h · 1 个读数没读到 · 读数过期'],
   ]]);
   assert.equal(presentDevices(plant, 'stopped').empty, '没有停机的设备。');
@@ -150,11 +150,12 @@ test('a device opens on its state, its two lead readings, every reading, and the
   assert.deepEqual([view.name, view.kind, view.status, view.updatedAt], ['CHILLER-01', '冷水机组', { label: '运行', tone: 'running' }, '23:29:52']);
   assert.deepEqual(view.metrics, [
     { label: '主机功率', value: '155.7', unit: 'kW', late: false },
-    { label: '冷冻水出水温度', value: '7', unit: '°C', late: false },
+    { label: '冷冻水出水温度', value: '7.0', unit: '°C', late: false },
   ]);
-  assert.equal(view.readingsNote, '11 个读数。');
+  // A count beside the readings, not a sentence: no full stop.
+  assert.equal(view.readingsNote, '11 个读数');
   assert.deepEqual(view.readings.slice(0, 2), [
-    { label: '冷冻水设定温度', value: '7 °C', late: false },
+    { label: '冷冻水设定温度', value: '7.0 °C', late: false },
     { label: '压缩机负载', value: '72%', late: false },
   ]);
   assert.deepEqual(view.energy && [view.energy.total, view.energy.share, view.energy.gaps], ['1,035', '占全站 61%', '3–22 点没有读数']);
@@ -177,14 +178,16 @@ test('the overview says in one card whether the plant runs, with its power, supp
     summary: '4 / 4 台运行 · 8 / 8 在线',
     metrics: [
       { label: '功率', value: '211.9', unit: 'kW', late: false },
-      { label: '供水', value: '7', unit: '°C', late: false },
+      { label: '供水', value: '7.0', unit: '°C', late: false },
       { label: '室内', value: '24.1', unit: '°C', late: false },
     ],
   });
   assert.equal(presentPlantNow(buildPlant({ ...assetModel, devices: [] }, snapshots, now)), null);
 });
 
-test('a module wired to the gateway, with no role of its own, shows how many readings it has and how many never came', () => {
+// Regression (#677, 2026-10-21): 设备 listed the gateway's temperature and control modules, of no use
+// to duty staff, and counted them in 13 / 13 在线.
+test('modules wired to the gateway are neither listed nor counted', () => {
   const moduleId = '01910000-0000-7000-8000-0000000000ff';
   const point = (code: string) => ({
     reportingDeviceId: moduleId, pointCode: code, sourceKey: `module.${code}`, displayName: `通道 ${code}`,
@@ -197,9 +200,25 @@ test('a module wired to the gateway, with no role of its own, shows how many rea
   };
   const sampled = { state: 'PRESENT', value: 21.5, unit: 'Cel', sampledAt: '2026-10-01T15:29:00Z', freshness: 'FRESH', quality: 'GOOD' };
   const items = [...snapshots.items, { deviceId: moduleId, status: 'OK', snapshot: {
-    evaluationAvailability: 'AVAILABLE', presence: { applicability: 'APPLICABLE', currentState: 'ONLINE' },
+    evaluationAvailability: 'AVAILABLE', presence: { applicability: 'APPLICABLE', currentState: 'OFFLINE' },
     values: [{ key: '1', ...sampled }, { key: '2', ...sampled }, { key: '3', state: 'MISSING' }],
   } }];
-  const row = presentDevices(buildPlant(model, { items }, now), 'all').groups[1].devices.find((device) => device.name === '温度采集模块');
-  assert.deepEqual([row?.value, row?.detail], ['', '3 个读数 · 1 个读数没读到']);
+  const withModule = buildPlant(model, { items }, now);
+  const view = presentDevices(withModule, 'all');
+  assert.equal(view.groups.some((group) => group.devices.some((device) => device.name === '温度采集模块')), false);
+  assert.deepEqual(view.filters.map((filter) => [filter.label, filter.count]), [['全部', 8], ['运行', 4], ['停机', 0], ['需关注', 0]]);
+  assert.deepEqual(view.groups.map((group) => group.caption), ['4 台 · 4 台运行', '4 台 · 全部在线']);
+  assert.equal(presentPlantNow(withModule)?.summary, '4 / 4 台运行 · 8 / 8 在线');
+});
+
+// Regression (#677, 2026-10-21): a cooling tower that never reported said 在线, 没有读数 and — at once.
+test('a device that never reported says only 没有读数; a figure from 1,000 up carries thousands separators', () => {
+  const silent = plantWith((snapshotOf) => {
+    for (const value of snapshotOf('CT-01').values) Object.assign(value, { state: 'MISSING', value: undefined, sampledAt: undefined });
+    Object.assign(snapshotOf('METER-HVAC-TOTAL').values.find((value) => value.key === 'active_power')!, { value: 12345.6 });
+  });
+  const tower = presentDevices(silent, 'all').groups[0].devices.find((device) => device.name.startsWith('CT-01'));
+  assert.deepEqual([tower?.status, tower?.value, tower?.detail], [null, '', '没有读数']);
+  const meter = presentDevice(silent.devices.find((device) => device.name === 'METER-HVAC-TOTAL')!, null);
+  assert.equal(meter.readings.find((reading) => reading.label.includes('功率'))?.value, '12,345.6 kW');
 });

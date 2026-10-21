@@ -31,6 +31,13 @@ page {
   --severity-minor: #d97706;
   --severity-warning: #0284c7;
   --severity-info: #71717a;
+  /* Soft badges for severities without a soft token above (#677). */
+  --severity-major-soft: #ffedd5;
+  --severity-major-text: #9a3412;
+  --severity-minor-soft: #fef9c3;
+  --severity-minor-text: #854d0e;
+  --severity-warning-soft: #e0f2fe;
+  --severity-warning-text: #075985;
 
   background: var(--background);
   color: var(--foreground);
@@ -47,19 +54,22 @@ page {
   padding: 12px 16px 24px;
 }
 
-/* A tab page keeps its last card clear of the custom tab bar. */
+/* A tab page keeps its last line clear of the custom tab bar and the assistant button standing
+   24px above it (#677). */
 .with-tab-bar {
-  padding-bottom: calc(80px + env(safe-area-inset-bottom));
+  padding-bottom: calc(104px + env(safe-area-inset-bottom));
 }
 
 .card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 12px;
+  /* The design system's first layer: border + elevation-xs. */
+  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.04);
 }
 
 .card-pad {
-  padding: 14px 16px;
+  padding: 16px;
 }
 
 .card-title {
@@ -105,6 +115,23 @@ page {
 .badge-bad { background: var(--destructive-soft); color: var(--destructive-text); }
 .badge-neutral { background: var(--secondary); color: var(--secondary-foreground); }
 .badge-warning { background: var(--warning-soft); color: var(--warning-text); }
+
+/* An alarm's severity: its shape (assets/severity) and name on a soft badge of its colour. */
+.severity-badge {
+  gap: 4px;
+  align-self: center;
+}
+
+.severity-badge .severity-shape {
+  width: 10px;
+  height: 10px;
+}
+
+.sev-critical { background: var(--destructive-soft); color: var(--destructive-text); }
+.sev-major { background: var(--severity-major-soft); color: var(--severity-major-text); }
+.sev-minor { background: var(--severity-minor-soft); color: var(--severity-minor-text); }
+.sev-warning { background: var(--severity-warning-soft); color: var(--severity-warning-text); }
+.sev-info { background: var(--secondary); color: var(--secondary-foreground); }
 
 .row {
   display: flex;

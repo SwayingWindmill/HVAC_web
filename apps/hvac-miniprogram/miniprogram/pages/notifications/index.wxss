@@ -78,27 +78,41 @@
   border-top: 0;
 }
 
-.severity-mark {
-  flex-shrink: 0;
-  width: 10px;
-  height: 10px;
-}
-
 .alarm-main {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
+}
+
+.alarm-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .alarm-title {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 15px;
   line-height: 22px;
   font-weight: 600;
+}
+
+/* Cleared: kept in the list, greyed as the design system's tables do; the badge keeps its shape. */
+.alarm-cleared .alarm-title {
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+.alarm-cleared .severity-badge {
+  background: var(--secondary);
+  color: var(--muted-foreground);
 }
 
 /* Whether someone is on it, in one column down the right to scan. */
@@ -117,10 +131,6 @@
   font-weight: 600;
 }
 
-.legend {
-  padding: 0 4px;
-}
-
 .reminder {
   display: flex;
   align-items: center;
@@ -135,13 +145,14 @@
   min-width: 0;
 }
 
-/* WeChat's small button, in the platform's colour. */
+/* A setting, so an outline button below the alarms: the alarms stay what stands out (#677). */
 button.reminder-add {
   flex-shrink: 0;
   margin: 0;
-  background: var(--primary);
-  color: #ffffff;
-  font-weight: 600;
+  border: 1px solid var(--primary-line);
+  background: var(--card);
+  color: var(--primary);
+  font-weight: 500;
 }
 
 button.reminder-add::after {
@@ -150,6 +161,6 @@ button.reminder-add::after {
 
 button.reminder-add[disabled] {
   opacity: 0.5;
-  background: var(--primary);
-  color: #ffffff;
+  background: var(--card);
+  color: var(--primary);
 }

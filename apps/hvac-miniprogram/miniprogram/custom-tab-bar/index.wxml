@@ -2,14 +2,14 @@
   <view
     wx:for="{{tabs}}"
     wx:key="pagePath"
-    class="tab {{selected === index ? 'tab-on' : ''}} {{item.raised ? 'tab-raised' : ''}}"
+    class="tab {{selected === index ? 'tab-on' : ''}} {{item.raised && selected !== index ? 'tab-raised' : ''}}"
     data-index="{{index}}"
     bindtap="switchTab"
     aria-role="tab"
     aria-selected="{{selected === index}}"
     aria-label="{{item.text}}{{item.showsAttention && badge ? '，' + badge + ' 条告警没人确认' : ''}}"
   >
-    <view wx:if="{{item.raised}}" class="raised" aria-hidden="true"><image class="raised-icon" src="{{item.icon}}" mode="aspectFit" /></view>
+    <view wx:if="{{item.raised && selected !== index}}" class="raised" aria-hidden="true"><image class="raised-icon" src="{{item.icon}}" mode="aspectFit" /></view>
     <image wx:else class="icon" src="{{selected === index ? item.activeIcon : item.icon}}" mode="aspectFit" />
     <text class="label">{{item.text}}</text>
     <text wx:if="{{item.showsAttention && badge}}" class="badge-count" aria-hidden="true">{{badge}}</text>

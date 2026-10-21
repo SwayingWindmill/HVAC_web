@@ -42,8 +42,8 @@ export async function readAlarmReminders(gateway: Gateway): Promise<ReminderRow>
     const reminders = await remindersLeft(gateway);
     if (reminders === null) return { text: '先在「我的」里绑定微信，才能收告警提醒', canAdd: false };
     return reminders.alarm === 0
-      ? { text: '还收不到告警提醒：点「多收一条」，在微信里允许', canAdd: true }
-      : { text: `还能收到 ${reminders.alarm} 条紧急和重要告警的提醒`, canAdd: true };
+      ? { text: '允许后，紧急和重要的新告警发到微信', canAdd: true }
+      : { text: `还能收 ${reminders.alarm} 条（紧急和重要的新告警）`, canAdd: true };
   } catch {
     return { text: '告警提醒的次数暂时读不到', canAdd: false };
   }
@@ -54,7 +54,7 @@ export async function readDailyReminders(gateway: Gateway, site: { readonly id: 
   try {
     const reminders = await remindersLeft(gateway);
     if (reminders === null) return { text: '先在「我的」里绑定微信，才能收每日结论', canAdd: false };
-    if (reminders.daily === 0) return { text: '每天 8 点把昨天的用电、用冷和能效发到微信：点「多收一天」，在微信里允许', canAdd: true };
+    if (reminders.daily === 0) return { text: '每天 8 点把昨天的用电、用冷和能效发到微信', canAdd: true };
     if (reminders.dailySiteId !== site.id) {
       const other = reminders.dailySiteId === undefined ? null : await siteName(reminders.dailySiteId);
       return { text: `现在发的是${other ?? '另一个站点'}；点「多收一天」改成本站点`, canAdd: true };
