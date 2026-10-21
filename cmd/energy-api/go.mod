@@ -8,6 +8,7 @@ require (
 	github.com/quanlaihe/hvac-web/libs/analyticsmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/commandauth v0.0.0
 	github.com/quanlaihe/hvac-web/libs/commandmodel v0.0.0
+	github.com/quanlaihe/hvac-web/libs/energyseries v0.0.0
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/limitpolicy v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
@@ -62,6 +63,8 @@ require (
 replace github.com/quanlaihe/hvac-web/libs/alarmauth => ../../libs/alarmauth
 replace github.com/quanlaihe/hvac-web/libs/alarmmodel => ../../libs/alarmmodel
 replace github.com/quanlaihe/hvac-web/libs/analyticsmodel => ../../libs/analyticsmodel
+
+replace github.com/quanlaihe/hvac-web/libs/energyseries => ../../libs/energyseries
 replace github.com/quanlaihe/hvac-web/libs/commandauth => ../../libs/commandauth
 replace github.com/quanlaihe/hvac-web/libs/commandmodel => ../../libs/commandmodel
 replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identitycontext

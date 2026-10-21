@@ -23,6 +23,7 @@ const meWeChatRemindersPath = "/api/v1/me/wechat/reminders"
 type memoryReminders struct {
 	mu     sync.Mutex
 	counts map[notificationservice.WeChatPerson]int
+	daily  map[notificationservice.WeChatPerson]notificationservice.WeChatReminders
 }
 
 func (memory *memoryReminders) ListInbox(context.Context, string, string, int) ([]notificationservice.InboxItem, error) {
@@ -36,12 +37,21 @@ func (memory *memoryReminders) MarkRead(context.Context, string, string, string,
 func (memory *memoryReminders) WeChatReminders(_ context.Context, person notificationservice.WeChatPerson) (notificationservice.WeChatReminders, error) {
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
-	return notificationservice.WeChatReminders{Alarm: memory.counts[person]}, nil
+	reminders := memory.daily[person]
+	reminders.Alarm = memory.counts[person]
+	return reminders, nil
 }
 
-func (memory *memoryReminders) AddWeChatReminder(ctx context.Context, person notificationservice.WeChatPerson, _ notificationservice.ReminderKind, _ time.Time) (notificationservice.WeChatReminders, error) {
+func (memory *memoryReminders) AddWeChatReminder(ctx context.Context, person notificationservice.WeChatPerson, request notificationservice.ReminderRequest, _ time.Time) (notificationservice.WeChatReminders, error) {
 	memory.mu.Lock()
-	memory.counts[person]++
+	if request.Kind == notificationservice.ReminderDaily {
+		daily := memory.daily[person]
+		daily.Daily++
+		daily.DailySiteID = request.SiteID
+		memory.daily[person] = daily
+	} else {
+		memory.counts[person]++
+	}
 	memory.mu.Unlock()
 	return memory.WeChatReminders(ctx, person)
 }
@@ -50,6 +60,7 @@ func (memory *memoryReminders) ClearWeChatReminders(_ context.Context, person no
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
 	delete(memory.counts, person)
+	delete(memory.daily, person)
 	return nil
 }
 
@@ -76,7 +87,7 @@ func remindersOf(t *testing.T, response *http.Response) int {
 // newWeChatHarness serves Notification Service with its reminder count in memory behind the Gateway.
 func newWeChatHarness(t *testing.T) (*authHarness, *memoryReminders) {
 	t.Helper()
-	reminders := &memoryReminders{counts: map[notificationservice.WeChatPerson]int{}}
+	reminders := &memoryReminders{counts: map[notificationservice.WeChatPerson]int{}, daily: map[notificationservice.WeChatPerson]notificationservice.WeChatReminders{}}
 	harness := newAuthHarnessWithNotification(t, func(gatewayKey crypto.PublicKey) http.Handler {
 		handler, err := notificationservice.NewHTTPHandler(notificationservice.HTTPConfig{Store: reminders, Reminders: reminders, GatewayPublicKey: gatewayKey})
 		if err != nil {
@@ -103,6 +114,18 @@ func TestMiniProgramAddsWeChatRemindersForTheSignedInPerson(t *testing.T) {
 		t.Fatal("the reminder was not added for the signed-in person")
 	}
 
+	// A daily summary is counted apart and goes for the Site named when it was allowed.
+	response := appRequest(t, client, http.MethodPost, url, token, `{"kind":"DAILY","siteId":"01910000-0000-7000-8000-0000000000b1"}`)
+	var daily struct {
+		Alarm       int    `json:"alarm"`
+		Daily       int    `json:"daily"`
+		DailySiteID string `json:"dailySiteId"`
+	}
+	if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&daily) != nil || daily.Alarm != 1 || daily.Daily != 1 || daily.DailySiteID != "01910000-0000-7000-8000-0000000000b1" {
+		t.Fatalf("daily summary: status %d, %#v", response.StatusCode, daily)
+	}
+	assertProblemCode(t, appRequest(t, client, http.MethodPost, url, token, `{"kind":"DAILY"}`), http.StatusBadRequest, "REQUEST_INVALID")
+
 	// Removing WeChat clears them.
 	harness.provider.BindWeChatForTest("fixture-user", "openid-duty")
 	if response := appRequest(t, client, http.MethodDelete, harness.gatewayURL+meWeChatPath, token, ""); response.StatusCode != http.StatusNoContent {
@@ -122,10 +145,10 @@ func TestMiniProgramAddsWeChatRemindersForTheSignedInPerson(t *testing.T) {
 	request.Header.Set("Origin", harness.gatewayURL)
 	request.Header.Set("X-CSRF-Token", principal.Session.CSRFToken)
 	request.Header.Set("Content-Type", "application/json")
-	response, err := browser.Do(request)
+	refused, err := browser.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
-	assertProblemCode(t, response, http.StatusForbidden, "WECHAT_MINI_PROGRAM_ONLY")
+	defer refused.Body.Close()
+	assertProblemCode(t, refused, http.StatusForbidden, "WECHAT_MINI_PROGRAM_ONLY")
 }

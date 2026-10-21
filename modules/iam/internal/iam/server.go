@@ -59,76 +59,76 @@ type Config struct {
 	// Workload Principals, signed with the Registry grant key and issuer.
 	AnalyticsGrantAudience    string
 	AllowedAnalyticsWorkloads []string
-	// AllowedAlarmRecipientWorkloads may ask which people can read a Site's Alarms, to send them
-	// WeChat reminders (Notification Service runs in the Gateway's workload).
-	AllowedAlarmRecipientWorkloads  []string
-	NewRegistryGrantID              func() string
-	RegistryAuditSink               RegistryDecisionAuditSink
-	RegistryGrantStatus             RegistryGrantStatusStore
-	TelemetryAuthorizationStore     TelemetryAuthorizationStore
-	TelemetryGrantSigner            crypto.Signer
-	TelemetryGrantIssuer            string
-	TelemetryGrantAudience          string
-	TelemetryGrantLifetime          time.Duration
-	AllowedTelemetryGrantPresenters []string
-	NewTelemetryGrantID             func() string
-	TelemetryAuditSink              TelemetryDecisionAuditSink
-	TelemetryRuntimeSPIFFE          string
-	TelemetryGrantStore             TelemetryGrantStore
-	CommandAuthorizationStore       CommandAuthorizationStore
-	CommandGrantSigner              crypto.Signer
-	CommandGrantIssuer              string
-	CommandGrantAudience            string
-	CommandGrantLifetime            time.Duration
-	NewCommandGrantID               func() string
-	AlarmAuthorizationStore         AlarmAuthorizationStore
-	AlarmAuditSink                  AlarmDecisionAuditSink
-	WorkOrderAuthorizationStore     WorkOrderAuthorizationStore
-	WorkOrderAuditSink              WorkOrderDecisionAuditSink
+	// AllowedReminderRecipientWorkloads may ask which people may get a WeChat reminder of a Site
+	// (Notification Service runs in the Gateway's workload).
+	AllowedReminderRecipientWorkloads []string
+	NewRegistryGrantID                func() string
+	RegistryAuditSink                 RegistryDecisionAuditSink
+	RegistryGrantStatus               RegistryGrantStatusStore
+	TelemetryAuthorizationStore       TelemetryAuthorizationStore
+	TelemetryGrantSigner              crypto.Signer
+	TelemetryGrantIssuer              string
+	TelemetryGrantAudience            string
+	TelemetryGrantLifetime            time.Duration
+	AllowedTelemetryGrantPresenters   []string
+	NewTelemetryGrantID               func() string
+	TelemetryAuditSink                TelemetryDecisionAuditSink
+	TelemetryRuntimeSPIFFE            string
+	TelemetryGrantStore               TelemetryGrantStore
+	CommandAuthorizationStore         CommandAuthorizationStore
+	CommandGrantSigner                crypto.Signer
+	CommandGrantIssuer                string
+	CommandGrantAudience              string
+	CommandGrantLifetime              time.Duration
+	NewCommandGrantID                 func() string
+	AlarmAuthorizationStore           AlarmAuthorizationStore
+	AlarmAuditSink                    AlarmDecisionAuditSink
+	WorkOrderAuthorizationStore       WorkOrderAuthorizationStore
+	WorkOrderAuditSink                WorkOrderDecisionAuditSink
 }
 
 type handler struct {
-	allowedWorkloadSPIFFE           string
-	coreWorkloadSPIFFE              string
-	credentialWorkloadSPIFFE        string
-	audience                        string
-	logger                          *slog.Logger
-	observability                   *observability.Runtime
-	now                             func() time.Time
-	authorizationStore              AuthorizationStore
-	principalCapabilityResolver     PrincipalCapabilityResolver
-	adminStore                      AdminStore
-	registryGrantSigner             crypto.Signer
-	registryGrantIssuer             string
-	analyticsGrantAudience          string
-	allowedAnalyticsWorkloads       []string
-	allowedAlarmRecipientWorkloads  []string
-	registryGrantAudience           string
-	registryGrantLifetime           time.Duration
-	allowedRegistryGrantPresenters  map[string]struct{}
-	newRegistryGrantID              func() string
-	registryAuditSink               RegistryDecisionAuditSink
-	registryGrantStatus             RegistryGrantStatusStore
-	telemetryAuthorizationStore     TelemetryAuthorizationStore
-	telemetryGrantSigner            crypto.Signer
-	telemetryGrantIssuer            string
-	telemetryGrantAudience          string
-	telemetryGrantLifetime          time.Duration
-	allowedTelemetryGrantPresenters map[string]struct{}
-	newTelemetryGrantID             func() string
-	telemetryAuditSink              TelemetryDecisionAuditSink
-	telemetryRuntimeSPIFFE          string
-	telemetryGrantStore             TelemetryGrantStore
-	commandAuthorizationStore       CommandAuthorizationStore
-	commandGrantSigner              crypto.Signer
-	commandGrantIssuer              string
-	commandGrantAudience            string
-	commandGrantLifetime            time.Duration
-	newCommandGrantID               func() string
-	alarmAuthorizationStore         AlarmAuthorizationStore
-	alarmAuditSink                  AlarmDecisionAuditSink
-	workOrderAuthorizationStore     WorkOrderAuthorizationStore
-	workOrderAuditSink              WorkOrderDecisionAuditSink
+	allowedWorkloadSPIFFE             string
+	coreWorkloadSPIFFE                string
+	credentialWorkloadSPIFFE          string
+	audience                          string
+	logger                            *slog.Logger
+	observability                     *observability.Runtime
+	now                               func() time.Time
+	authorizationStore                AuthorizationStore
+	principalCapabilityResolver       PrincipalCapabilityResolver
+	adminStore                        AdminStore
+	registryGrantSigner               crypto.Signer
+	registryGrantIssuer               string
+	analyticsGrantAudience            string
+	allowedAnalyticsWorkloads         []string
+	allowedReminderRecipientWorkloads []string
+	registryGrantAudience             string
+	registryGrantLifetime             time.Duration
+	allowedRegistryGrantPresenters    map[string]struct{}
+	newRegistryGrantID                func() string
+	registryAuditSink                 RegistryDecisionAuditSink
+	registryGrantStatus               RegistryGrantStatusStore
+	telemetryAuthorizationStore       TelemetryAuthorizationStore
+	telemetryGrantSigner              crypto.Signer
+	telemetryGrantIssuer              string
+	telemetryGrantAudience            string
+	telemetryGrantLifetime            time.Duration
+	allowedTelemetryGrantPresenters   map[string]struct{}
+	newTelemetryGrantID               func() string
+	telemetryAuditSink                TelemetryDecisionAuditSink
+	telemetryRuntimeSPIFFE            string
+	telemetryGrantStore               TelemetryGrantStore
+	commandAuthorizationStore         CommandAuthorizationStore
+	commandGrantSigner                crypto.Signer
+	commandGrantIssuer                string
+	commandGrantAudience              string
+	commandGrantLifetime              time.Duration
+	newCommandGrantID                 func() string
+	alarmAuthorizationStore           AlarmAuthorizationStore
+	alarmAuditSink                    AlarmDecisionAuditSink
+	workOrderAuthorizationStore       WorkOrderAuthorizationStore
+	workOrderAuditSink                WorkOrderDecisionAuditSink
 }
 
 func NewHandler(config Config) http.Handler {
@@ -263,47 +263,47 @@ func NewHandler(config Config) http.Handler {
 		workOrderAuditSink = newLoggerWorkOrderDecisionAuditSink(logger)
 	}
 	return &handler{
-		allowedWorkloadSPIFFE:           config.AllowedWorkloadSPIFFE,
-		coreWorkloadSPIFFE:              config.CoreWorkloadSPIFFE,
-		credentialWorkloadSPIFFE:        config.CredentialWorkloadSPIFFE,
-		audience:                        config.Audience,
-		logger:                          logger,
-		observability:                   telemetry,
-		now:                             now,
-		authorizationStore:              store,
-		principalCapabilityResolver:     principalCapabilityResolver,
-		adminStore:                      config.AdminStore,
-		registryGrantSigner:             config.RegistryGrantSigner,
-		analyticsGrantAudience:          strings.TrimSpace(config.AnalyticsGrantAudience),
-		allowedAnalyticsWorkloads:       append([]string(nil), config.AllowedAnalyticsWorkloads...),
-		allowedAlarmRecipientWorkloads:  append([]string(nil), config.AllowedAlarmRecipientWorkloads...),
-		registryGrantIssuer:             grantIssuer,
-		registryGrantAudience:           grantAudience,
-		registryGrantLifetime:           grantLifetime,
-		allowedRegistryGrantPresenters:  allowedRegistryGrantPresenters,
-		newRegistryGrantID:              newGrantID,
-		registryAuditSink:               auditSink,
-		registryGrantStatus:             config.RegistryGrantStatus,
-		telemetryAuthorizationStore:     telemetryStore,
-		telemetryGrantSigner:            telemetrySigner,
-		telemetryGrantIssuer:            telemetryIssuer,
-		telemetryGrantAudience:          telemetryAudience,
-		telemetryGrantLifetime:          telemetryLifetime,
-		allowedTelemetryGrantPresenters: allowedTelemetryGrantPresenters,
-		newTelemetryGrantID:             newTelemetryGrantID,
-		telemetryAuditSink:              telemetryAuditSink,
-		telemetryRuntimeSPIFFE:          config.TelemetryRuntimeSPIFFE,
-		telemetryGrantStore:             config.TelemetryGrantStore,
-		commandAuthorizationStore:       commandStore,
-		commandGrantSigner:              commandSigner,
-		commandGrantIssuer:              commandIssuer,
-		commandGrantAudience:            commandAudience,
-		commandGrantLifetime:            commandLifetime,
-		newCommandGrantID:               newCommandGrantID,
-		alarmAuthorizationStore:         alarmStore,
-		alarmAuditSink:                  alarmAuditSink,
-		workOrderAuthorizationStore:     workOrderStore,
-		workOrderAuditSink:              workOrderAuditSink,
+		allowedWorkloadSPIFFE:             config.AllowedWorkloadSPIFFE,
+		coreWorkloadSPIFFE:                config.CoreWorkloadSPIFFE,
+		credentialWorkloadSPIFFE:          config.CredentialWorkloadSPIFFE,
+		audience:                          config.Audience,
+		logger:                            logger,
+		observability:                     telemetry,
+		now:                               now,
+		authorizationStore:                store,
+		principalCapabilityResolver:       principalCapabilityResolver,
+		adminStore:                        config.AdminStore,
+		registryGrantSigner:               config.RegistryGrantSigner,
+		analyticsGrantAudience:            strings.TrimSpace(config.AnalyticsGrantAudience),
+		allowedAnalyticsWorkloads:         append([]string(nil), config.AllowedAnalyticsWorkloads...),
+		allowedReminderRecipientWorkloads: append([]string(nil), config.AllowedReminderRecipientWorkloads...),
+		registryGrantIssuer:               grantIssuer,
+		registryGrantAudience:             grantAudience,
+		registryGrantLifetime:             grantLifetime,
+		allowedRegistryGrantPresenters:    allowedRegistryGrantPresenters,
+		newRegistryGrantID:                newGrantID,
+		registryAuditSink:                 auditSink,
+		registryGrantStatus:               config.RegistryGrantStatus,
+		telemetryAuthorizationStore:       telemetryStore,
+		telemetryGrantSigner:              telemetrySigner,
+		telemetryGrantIssuer:              telemetryIssuer,
+		telemetryGrantAudience:            telemetryAudience,
+		telemetryGrantLifetime:            telemetryLifetime,
+		allowedTelemetryGrantPresenters:   allowedTelemetryGrantPresenters,
+		newTelemetryGrantID:               newTelemetryGrantID,
+		telemetryAuditSink:                telemetryAuditSink,
+		telemetryRuntimeSPIFFE:            config.TelemetryRuntimeSPIFFE,
+		telemetryGrantStore:               config.TelemetryGrantStore,
+		commandAuthorizationStore:         commandStore,
+		commandGrantSigner:                commandSigner,
+		commandGrantIssuer:                commandIssuer,
+		commandGrantAudience:              commandAudience,
+		commandGrantLifetime:              commandLifetime,
+		newCommandGrantID:                 newCommandGrantID,
+		alarmAuthorizationStore:           alarmStore,
+		alarmAuditSink:                    alarmAuditSink,
+		workOrderAuthorizationStore:       workOrderStore,
+		workOrderAuditSink:                workOrderAuditSink,
 	}
 }
 
@@ -352,8 +352,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		status = h.handleAnalyticsWorkloadDecision(writer, request)
 		return
 	}
-	if request.URL.Path == AlarmRecipientDecisionPath {
-		status = h.handleAlarmRecipientDecision(writer, request)
+	if request.URL.Path == ReminderRecipientDecisionPath {
+		status = h.handleReminderRecipientDecision(writer, request)
 		return
 	}
 
@@ -706,7 +706,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, AdminMutationPath, AdminMembersPath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath, AlarmRecipientDecisionPath:
+	case CurrentPrincipalPath, AdminMutationPath, AdminMembersPath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath, ReminderRecipientDecisionPath:
 		return path
 	default:
 		return "unmatched"

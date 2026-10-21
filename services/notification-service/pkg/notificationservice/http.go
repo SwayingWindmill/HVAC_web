@@ -35,7 +35,7 @@ type InboxStore interface {
 // WeChatReminderStore keeps how many WeChat reminders each person allowed (wechat_reminders.go).
 type WeChatReminderStore interface {
 	WeChatReminders(context.Context, WeChatPerson) (WeChatReminders, error)
-	AddWeChatReminder(context.Context, WeChatPerson, ReminderKind, time.Time) (WeChatReminders, error)
+	AddWeChatReminder(context.Context, WeChatPerson, ReminderRequest, time.Time) (WeChatReminders, error)
 	ClearWeChatReminders(context.Context, WeChatPerson, time.Time) error
 }
 

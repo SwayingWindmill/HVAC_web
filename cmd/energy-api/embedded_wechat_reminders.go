@@ -20,24 +20,30 @@ import (
 	"sync"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
+	"github.com/quanlaihe/hvac-web/libs/energyseries"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/services/notification-service/pkg/notificationservice"
 )
 
-// WeChat reminders of Alarms (#664, docs/specs/miniprogram-wechat.md). Notification Service runs
-// here, in the Gateway's workload, and reaches three owners as that workload: IAM says who may
-// get a reminder, the Registry gives the Site's name and time zone, identity-service sends.
+// WeChat reminders: Alarm reminders and the daily summary (#664, docs/specs/miniprogram-wechat.md).
+// Notification Service runs here, in the Gateway's workload, and reaches four owners as that
+// workload: IAM says who may get a reminder, the Registry gives the Site's name and time zone, the
+// Telemetry Query Service yesterday's energy, and identity-service sends.
 
-// defaultAlarmTemplateID is 监控告警通知 in 微信公众平台 → 订阅消息 → 我的模板.
-const defaultAlarmTemplateID = "E1fGHBeTTIC0bT2xd6Tb0S61UyvL5krxDZz12wkzkdE"
+// The templates in 微信公众平台 → 订阅消息 → 我的模板: 监控告警通知 and 昨日能效数据查询提醒.
+const (
+	defaultAlarmTemplateID = "E1fGHBeTTIC0bT2xd6Tb0S61UyvL5krxDZz12wkzkdE"
+	defaultDailyTemplateID = "mc5IwpxxRkoDZUTyq7vWaPyVtrqlamTccAXaJ3Xkgsc"
+)
 
-func newWeChatAlarmReminderWorker(logger *slog.Logger, scheduler *notificationservice.Scheduler) (*notificationservice.WeChatAlarmReminderWorker, error) {
+func newWeChatReminderWorker(logger *slog.Logger, scheduler *notificationservice.Scheduler) (*notificationservice.WeChatReminderWorker, error) {
 	required := map[string]string{}
-	for _, name := range []string{"IAM_URL", "IAM_SERVER_CA", "IAM_CLIENT_CERT", "IAM_CLIENT_KEY", "CORE_URL", "CORE_SERVER_CA", "OIDC_BACKCHANNEL_BASE_URL"} {
+	for _, name := range []string{"IAM_URL", "IAM_SERVER_CA", "IAM_CLIENT_CERT", "IAM_CLIENT_KEY", "CORE_URL", "CORE_SERVER_CA", "TELEMETRY_QUERY_URL", "TELEMETRY_QUERY_SERVER_CA", "OIDC_BACKCHANNEL_BASE_URL"} {
 		value := strings.TrimSpace(os.Getenv(name))
 		if value == "" {
-			return nil, fmt.Errorf("%s is required for WeChat alarm reminders", name)
+			return nil, fmt.Errorf("%s is required for WeChat reminders", name)
 		}
 		required[name] = value
 	}
@@ -61,28 +67,38 @@ func newWeChatAlarmReminderWorker(logger *slog.Logger, scheduler *notificationse
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	coreClient := &http.Client{Timeout: 5 * time.Second, Transport: workloadTransport(coreRoots, &certificate, envOr("CORE_SERVER_NAME", "localhost")),
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	queryRoots, err := loadCertPool(required["TELEMETRY_QUERY_SERVER_CA"], "Telemetry Query server CA")
+	if err != nil {
+		return nil, err
+	}
+	queryClient := &http.Client{Timeout: 10 * time.Second, Transport: workloadTransport(queryRoots, &certificate, envOr("TELEMETRY_QUERY_SERVER_NAME", "localhost")),
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	workload := envOr("GATEWAY_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway")
-	return &notificationservice.WeChatAlarmReminderWorker{
+	return &notificationservice.WeChatReminderWorker{
 		Scheduler:  scheduler,
-		Recipients: iamAlarmRecipients{baseURL: strings.TrimRight(required["IAM_URL"], "/"), client: iamClient},
-		Sites:      &registrySites{iamURL: strings.TrimRight(required["IAM_URL"], "/"), iamClient: iamClient, coreURL: strings.TrimRight(required["CORE_URL"], "/"), coreClient: coreClient, grants: map[string]registryGrant{}},
+		Recipients: iamReminderRecipients{baseURL: strings.TrimRight(required["IAM_URL"], "/"), client: iamClient},
+		Energy: siteEnergy{series: energyseries.New(energyseries.Config{
+			IAMURL: required["IAM_URL"], QueryURL: required["TELEMETRY_QUERY_URL"], IAMClient: iamClient, QueryClient: queryClient,
+		})},
+		Sites: &registrySites{iamURL: strings.TrimRight(required["IAM_URL"], "/"), iamClient: iamClient, coreURL: strings.TrimRight(required["CORE_URL"], "/"), coreClient: coreClient, grants: map[string]registryGrant{}},
 		Sender: identityWeChatSender{
 			baseURL: strings.TrimRight(required["OIDC_BACKCHANNEL_BASE_URL"], "/"), client: &http.Client{Timeout: 15 * time.Second},
 			signer: signer, workload: workload, policyRevision: envOr("IDENTITY_POLICY_REVISION", "policy-v1"),
 		},
-		TemplateID: envOr("NOTIFICATION_WECHAT_ALARM_TEMPLATE_ID", defaultAlarmTemplateID),
-		Logger:     logger,
+		AlarmTemplateID: envOr("NOTIFICATION_WECHAT_ALARM_TEMPLATE_ID", defaultAlarmTemplateID),
+		DailyTemplateID: envOr("NOTIFICATION_WECHAT_DAILY_TEMPLATE_ID", defaultDailyTemplateID),
+		Logger:          logger,
 	}, nil
 }
 
-func runWeChatAlarmReminders(ctx context.Context, logger *slog.Logger, worker *notificationservice.WeChatAlarmReminderWorker) {
+func runWeChatReminders(ctx context.Context, logger *slog.Logger, worker *notificationservice.WeChatReminderWorker) {
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 		worked, err := worker.RunOnce(ctx, time.Now().UTC())
 		if err != nil {
-			logger.Error("wechat_alarm_reminder_failed", "error_code", "WECHAT_ALARM_REMINDER_FAILED", "error", err)
+			logger.Error("wechat_reminder_failed", "error_code", "WECHAT_REMINDER_FAILED", "error", err)
 		}
 		if !worked || err != nil {
 			if !notificationWait(ctx, time.Second) {
@@ -114,12 +130,12 @@ func exchangeJSON(client *http.Client, request *http.Request, into any) (int, er
 	return response.StatusCode, nil
 }
 
-type iamAlarmRecipients struct {
+type iamReminderRecipients struct {
 	baseURL string
 	client  *http.Client
 }
 
-func (iam iamAlarmRecipients) AllowedRecipients(ctx context.Context, tenantID, siteID, alarmID string, people []notificationservice.WeChatPerson) ([]notificationservice.WeChatPerson, error) {
+func (iam iamReminderRecipients) AllowedRecipients(ctx context.Context, kind notificationservice.ReminderKind, tenantID, siteID, alarmID string, people []notificationservice.WeChatPerson) ([]notificationservice.WeChatPerson, error) {
 	type recipient struct {
 		SubjectIssuer string `json:"subjectIssuer"`
 		Subject       string `json:"subject"`
@@ -128,11 +144,15 @@ func (iam iamAlarmRecipients) AllowedRecipients(ctx context.Context, tenantID, s
 	for _, person := range people {
 		asked = append(asked, recipient{SubjectIssuer: person.SubjectIssuer, Subject: person.Subject})
 	}
-	body, err := json.Marshal(map[string]any{"tenantId": tenantID, "siteId": siteID, "alarmId": alarmID, "people": asked})
+	question := map[string]any{"tenantId": tenantID, "siteId": siteID, "kind": string(kind), "people": asked}
+	if alarmID != "" {
+		question["alarmId"] = alarmID
+	}
+	body, err := json.Marshal(question)
 	if err != nil {
 		return nil, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, iam.baseURL+"/internal/v1/alarm/recipient-decision", bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, iam.baseURL+"/internal/v1/reminders/recipient-decision", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -279,4 +299,37 @@ func (sender identityWeChatSender) SendWeChatMessage(ctx context.Context, person
 	default:
 		return fmt.Errorf("identity-service answered %d %s", response.StatusCode, refusal.Error)
 	}
+}
+
+// siteEnergy reads a Site day's electricity and cooling as the Gateway's own Workload Principal
+// (ADR 0023), with the quality the overview uses.
+type siteEnergy struct {
+	series *energyseries.Client
+}
+
+func (energy siteEnergy) DayEnergy(ctx context.Context, tenantID, siteID, timezone string, day time.Time) (*float64, *float64, error) {
+	read := func(energyType analyticsmodel.EnergyType) (*float64, error) {
+		response, err := energy.series.Series(ctx, analyticsmodel.EnergySeriesQuery{
+			TenantID: tenantID, SiteID: siteID, EnergyType: energyType, Granularity: analyticsmodel.GranularityDay,
+			Timezone: timezone, From: day.UTC(), To: day.AddDate(0, 0, 1).UTC(), QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
+		})
+		// A day the owner has not finished adding up is not yesterday's total: it reads as not read.
+		if err != nil || len(response.Points) == 0 || response.Metadata.Partial {
+			return nil, err
+		}
+		total := 0.0
+		for _, point := range response.Points {
+			total += point.EnergyKWh
+		}
+		return &total, nil
+	}
+	electricity, err := read(analyticsmodel.EnergyTypeElectricity)
+	if err != nil {
+		return nil, nil, err
+	}
+	cooling, err := read(analyticsmodel.EnergyTypeCooling)
+	if err != nil {
+		return nil, nil, err
+	}
+	return electricity, cooling, nil
 }

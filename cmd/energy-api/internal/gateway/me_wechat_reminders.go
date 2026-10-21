@@ -30,13 +30,11 @@ func (h *handler) MeWeChatReminders(writer http.ResponseWriter, request *http.Re
 	}
 	var body any
 	if request.Method == http.MethodPost {
-		var input struct {
-			Kind notificationservice.ReminderKind `json:"kind"`
-		}
+		var input notificationservice.ReminderRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 1<<10))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil || input.Kind != notificationservice.ReminderAlarm {
-			writeIdentityFailure(writer, request, identityFailure{400, "REQUEST_INVALID", "Request invalid", "Send the kind of reminder the person allowed, and nothing else.", false})
+		if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || !input.Valid() {
+			writeIdentityFailure(writer, request, identityFailure{400, "REQUEST_INVALID", "Request invalid", "Send the kind of reminder the person allowed (and the Site of a daily summary), and nothing else.", false})
 			return
 		}
 		body = input

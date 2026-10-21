@@ -139,7 +139,7 @@ func (noReminders) WeChatReminders(context.Context, WeChatPerson) (WeChatReminde
 	return WeChatReminders{}, nil
 }
 
-func (noReminders) AddWeChatReminder(context.Context, WeChatPerson, ReminderKind, time.Time) (WeChatReminders, error) {
+func (noReminders) AddWeChatReminder(context.Context, WeChatPerson, ReminderRequest, time.Time) (WeChatReminders, error) {
 	return WeChatReminders{}, nil
 }
 

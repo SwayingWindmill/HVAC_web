@@ -3249,9 +3249,14 @@
           "kind": {
             "type": "string",
             "enum": [
-              "ALARM"
+              "ALARM",
+              "DAILY"
             ],
-            "description": "ALARM: a new urgent or important Alarm on a Site the person can see."
+            "description": "ALARM: a new urgent or important Alarm on a Site the person can see. DAILY: one morning's summary of yesterday's energy at siteId."
+          },
+          "siteId": {
+            "$ref": "#/components/schemas/UUIDv7",
+            "description": "The Site of a DAILY summary; the person's summaries go for the Site named last."
           }
         }
       },
@@ -3259,12 +3264,21 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "alarm"
+          "alarm",
+          "daily"
         ],
         "properties": {
           "alarm": {
             "type": "integer",
             "minimum": 0
+          },
+          "daily": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dailySiteId": {
+            "$ref": "#/components/schemas/UUIDv7",
+            "description": "The Site the daily summary is for; absent until one is allowed."
           }
         }
       },

@@ -380,21 +380,23 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 			envOr("IAM_REPORT_SERVICE_SPIFFE", "spiffe://hvac.local/report-service"),
 			envOr("IAM_OPTIMIZATION_SERVICE_SPIFFE", "spiffe://hvac.local/optimization-service"),
 			envOr("IAM_MV_SERVICE_SPIFFE", "spiffe://hvac.local/mv-service"),
+			// The daily WeChat summary reads yesterday's energy (docs/specs/miniprogram-wechat.md).
+			envOr("GATEWAY_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
 		},
-		// Notification Service runs in the Gateway's workload and asks who may get an Alarm's WeChat
-		// reminder (docs/specs/miniprogram-wechat.md).
-		AllowedAlarmRecipientWorkloads: []string{envOr("GATEWAY_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway")},
-		RegistryGrantStatus:            store,
-		TelemetryAuthorizationStore:    store,
-		AlarmAuthorizationStore:        store,
-		AlarmAuditSink:                 store,
-		WorkOrderAuthorizationStore:    store,
-		WorkOrderAuditSink:             store,
-		TelemetryGrantSigner:           signer,
-		TelemetryGrantIssuer:           iamSPIFFEID,
-		TelemetryGrantAudience:         envOr("IAM_TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),
-		TelemetryRuntimeSPIFFE:         envOr("IAM_TELEMETRY_RUNTIME_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service"),
-		TelemetryGrantStore:            telemetryGrantStore,
+		// Notification Service runs in the Gateway's workload and asks who may get a WeChat reminder
+		// (docs/specs/miniprogram-wechat.md).
+		AllowedReminderRecipientWorkloads: []string{envOr("GATEWAY_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway")},
+		RegistryGrantStatus:               store,
+		TelemetryAuthorizationStore:       store,
+		AlarmAuthorizationStore:           store,
+		AlarmAuditSink:                    store,
+		WorkOrderAuthorizationStore:       store,
+		WorkOrderAuditSink:                store,
+		TelemetryGrantSigner:              signer,
+		TelemetryGrantIssuer:              iamSPIFFEID,
+		TelemetryGrantAudience:            envOr("IAM_TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),
+		TelemetryRuntimeSPIFFE:            envOr("IAM_TELEMETRY_RUNTIME_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service"),
+		TelemetryGrantStore:               telemetryGrantStore,
 		AllowedTelemetryGrantPresenters: []string{
 			envOr("IAM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
 		},
