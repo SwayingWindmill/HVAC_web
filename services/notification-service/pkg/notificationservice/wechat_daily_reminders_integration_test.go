@@ -41,6 +41,13 @@ func TestPostgresDailySummaryGoesOnceADayAfterEightToWhoeverCanReadTheEnergy(t *
 			t.Fatalf("%s = %q, want %q", keyword, messages[0].Data[keyword], value)
 		}
 	}
+	// Review (#664): planning every minute reads the Site from the Registry at most once an hour.
+	readSoFar := fixture.sites.asked
+	fixture.run(siteEightOh1.Add(4 * time.Minute))
+	fixture.run(siteEightOh1.Add(20 * time.Minute))
+	if fixture.sites.asked != readSoFar {
+		t.Fatalf("the Registry was asked %d more times within the hour", fixture.sites.asked-readSoFar)
+	}
 	// One a day, and only to those IAM lets read the Site's energy.
 	fixture.run(siteEightOh1.Add(2 * time.Hour))
 	if len(fixture.sentTo(duty.Subject)) != 1 || fixture.leftDaily(duty) != 1 {
@@ -48,6 +55,19 @@ func TestPostgresDailySummaryGoesOnceADayAfterEightToWhoeverCanReadTheEnergy(t *
 	}
 	if len(fixture.sentTo(outsider.Subject)) != 0 || fixture.leftDaily(outsider) != 2 {
 		t.Fatal("a summary went to someone who cannot read the Site's energy")
+	}
+	// Review (#664): someone IAM refused is not asked about again the same day.
+	fixture.run(siteEightOh1.Add(3 * time.Hour))
+	asked := 0
+	for _, question := range fixture.decider.asked {
+		for _, subject := range question {
+			if subject == outsider.Subject {
+				asked++
+			}
+		}
+	}
+	if asked != 1 {
+		t.Fatalf("IAM was asked about the outsider %d times", asked)
 	}
 	// The next day brings the next summary.
 	fixture.run(siteEightOh1.Add(24 * time.Hour))

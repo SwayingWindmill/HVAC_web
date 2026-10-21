@@ -43,7 +43,7 @@ func newWeChatReminderWorker(logger *slog.Logger, scheduler *notificationservice
 	for _, name := range []string{"IAM_URL", "IAM_SERVER_CA", "IAM_CLIENT_CERT", "IAM_CLIENT_KEY", "CORE_URL", "CORE_SERVER_CA", "TELEMETRY_QUERY_URL", "TELEMETRY_QUERY_SERVER_CA", "OIDC_BACKCHANNEL_BASE_URL"} {
 		value := strings.TrimSpace(os.Getenv(name))
 		if value == "" {
-			return nil, fmt.Errorf("%s is required for WeChat alarm reminders", name)
+			return nil, fmt.Errorf("%s is required for WeChat reminders", name)
 		}
 		required[name] = value
 	}
@@ -313,7 +313,8 @@ func (energy siteEnergy) DayEnergy(ctx context.Context, tenantID, siteID, timezo
 			TenantID: tenantID, SiteID: siteID, EnergyType: energyType, Granularity: analyticsmodel.GranularityDay,
 			Timezone: timezone, From: day.UTC(), To: day.AddDate(0, 0, 1).UTC(), QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
 		})
-		if err != nil || len(response.Points) == 0 {
+		// A day the owner has not finished adding up is not yesterday's total: it reads as not read.
+		if err != nil || len(response.Points) == 0 || response.Metadata.Partial {
 			return nil, err
 		}
 		total := 0.0

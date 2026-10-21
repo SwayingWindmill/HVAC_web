@@ -1,5 +1,5 @@
 import { GatewayError } from '../../lib/gateway';
-import { gateway, requireSession } from '../../lib/platform';
+import { askWeChat, gateway, requireSession } from '../../lib/platform';
 import { addDailyReminder, readDailyReminders, type ReminderRow } from '../../lib/reminders';
 import { currentSite, siteById, type Site } from '../../lib/site';
 import { energySeries, recentDays } from '../../lib/energy';
@@ -81,11 +81,6 @@ async function load(site: Site) {
   return { inputs, waiting, plant: plant.status === 'fulfilled' ? { failed: false, now: presentPlantNow(plant.value) } : { failed: true, now: null } };
 }
 
-/** WeChat's subscription dialog; it must open straight from the tap. */
-const askWeChat = (templates: string[]) => new Promise<Record<string, string>>((resolve, reject) => {
-  wx.requestSubscribeMessage({ tmplIds: templates, success: (result) => resolve(result as unknown as Record<string, string>), fail: reject });
-});
-
 const siteName = async (id: string) => (await siteById(id))?.displayName ?? null;
 
 const clock = (now: Date) => `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -100,6 +95,8 @@ Page({
     view: null as ReturnType<typeof presentOverview> | null,
     plant: { failed: false, now: null } as { failed: boolean; now: ReturnType<typeof presentPlantNow> },
     daily: null as ReminderRow | null,
+    /** The Site 多收一天 adds a morning for: read with the row, so the tap opens WeChat's dialog at once. */
+    dailySiteId: '',
     addingDaily: false,
   },
 
@@ -129,15 +126,15 @@ Page({
 
   async readDaily() {
     const site = await currentSite().catch(() => null);
-    if (site !== null) this.setData({ daily: await readDailyReminders(gateway, site, siteName) });
+    if (site !== null) this.setData({ daily: await readDailyReminders(gateway, site, siteName), dailySiteId: site.id });
   },
 
   async addDaily() {
-    if (this.data.addingDaily) return;
-    const site = await currentSite().catch(() => null);
-    if (site === null) return;
+    if (this.data.addingDaily || !this.data.dailySiteId) return;
+    // WeChat's dialog opens first, before anything is awaited.
+    const adding = addDailyReminder(gateway, askWeChat, this.data.dailySiteId);
     this.setData({ addingDaily: true });
-    const change = await addDailyReminder(gateway, askWeChat, site.id);
+    const change = await adding;
     this.setData({ addingDaily: false });
     wx.showToast({ title: change.message, icon: change.added ? 'success' : 'none' });
     if (change.added) this.readDaily();

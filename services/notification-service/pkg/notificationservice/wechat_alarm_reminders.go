@@ -82,7 +82,7 @@ WHERE tenant_id = $1::uuid AND alarm_id = $2::uuid`, tenantID, alarmID, state, n
 		}
 		return true, err
 	}
-	if err := addDeliveries(ctx, tx, ReminderAlarm, alarmID, siteID, allowed, expiresAt, now); err != nil {
+	if err := addDeliveries(ctx, tx, ReminderAlarm, alarmID, siteID, "PENDING", allowed, expiresAt, now); err != nil {
 		return true, err
 	}
 	if err := setState("EXPANDED", now); err != nil {
@@ -107,14 +107,14 @@ WHERE tenant_id = $1::uuid AND kind = $2 AND remaining > 0 ORDER BY subject_issu
 var severityLabels = map[string]string{"CRITICAL": "紧急", "MAJOR": "重要"}
 
 // alarmMessage fills 监控告警通知: 告警标题, 告警等级, 监控设备, 告警地点 and 告警时间 in the Site's own time.
-func (worker *WeChatReminderWorker) alarmMessage(ctx context.Context, claim claimedDelivery) (WeChatMessage, error) {
+func (worker *WeChatReminderWorker) alarmMessage(ctx context.Context, claim claimedDelivery, now time.Time) (WeChatMessage, error) {
 	var title, severity string
 	var occurred time.Time
 	if err := worker.Scheduler.pool.QueryRow(ctx, `SELECT title, severity, occurred_at FROM notification_runtime.wechat_alarm_reminder
 WHERE tenant_id = $1::uuid AND alarm_id = $2::uuid`, claim.person.TenantID, claim.reference).Scan(&title, &severity, &occurred); err != nil {
 		return WeChatMessage{}, fmt.Errorf("read the Alarm to remind of: %w", err)
 	}
-	site, location, err := worker.site(ctx, claim)
+	site, location, err := worker.siteAt(ctx, claim.person.TenantID, claim.siteID, now)
 	if err != nil {
 		return WeChatMessage{}, err
 	}
@@ -130,17 +130,4 @@ WHERE tenant_id = $1::uuid AND alarm_id = $2::uuid`, claim.person.TenantID, clai
 			"time2":  occurred.In(location).Format("2006年1月2日 15:04"),
 		},
 	}, nil
-}
-
-// site is the delivery's Site with its time zone loaded.
-func (worker *WeChatReminderWorker) site(ctx context.Context, claim claimedDelivery) (SiteFacts, *time.Location, error) {
-	site, err := worker.Sites.Site(ctx, claim.person.TenantID, claim.siteID)
-	if err != nil {
-		return SiteFacts{}, nil, err
-	}
-	location, err := time.LoadLocation(site.Timezone)
-	if err != nil {
-		return SiteFacts{}, nil, fmt.Errorf("the Site's time zone %q: %w", site.Timezone, err)
-	}
-	return site, location, nil
 }

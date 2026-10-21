@@ -2,6 +2,7 @@
 // The platform's domain must be on the mini program's request allowlist in 微信公众平台.
 
 import { createGateway, type ChunkedTransport, type SessionStore, type Transport } from './gateway';
+import type { AskWeChat } from './reminders';
 
 export const GATEWAY_ORIGIN = 'https://hvac.swayingwindmill.online';
 const SESSION_KEY = 'hvac.session';
@@ -73,3 +74,8 @@ export function requireSession(): boolean {
   wx.reLaunch({ url: '/pages/login/index' });
   return false;
 }
+
+/** WeChat's subscription dialog; it opens only when called straight from a tap, with nothing awaited first. */
+export const askWeChat: AskWeChat = (templates) => new Promise((resolve, reject) => {
+  wx.requestSubscribeMessage({ tmplIds: templates, success: (result) => resolve(result as unknown as Record<string, string>), fail: reject });
+});

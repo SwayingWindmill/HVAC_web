@@ -31,7 +31,7 @@ func (handler *httpHandler) serveWeChatReminders(writer http.ResponseWriter, req
 		var input ReminderRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 1<<10))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&input); err != nil || decoder.More() || !input.valid() {
+		if err := decoder.Decode(&input); err != nil || decoder.More() || !input.Valid() {
 			handler.writeProblem(writer, http.StatusBadRequest, "INVALID_ARGUMENT", "Invalid argument", "Send the kind of reminder the person allowed, and the Site of a daily summary.", false)
 			return
 		}

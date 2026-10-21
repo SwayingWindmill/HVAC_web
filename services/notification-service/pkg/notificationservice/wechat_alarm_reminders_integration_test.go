@@ -51,9 +51,16 @@ func (fake *fakeRecipients) AllowedRecipients(_ context.Context, kind ReminderKi
 	return allowed, nil
 }
 
-type fakeSites struct{}
+// fakeSites answers every Site as 松雅轩 and counts how often it was asked.
+type fakeSites struct {
+	mu    sync.Mutex
+	asked int
+}
 
-func (fakeSites) Site(_ context.Context, tenantID, siteID string) (SiteFacts, error) {
+func (fake *fakeSites) Site(_ context.Context, tenantID, siteID string) (SiteFacts, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.asked++
 	return SiteFacts{Name: "松雅轩", Timezone: "Asia/Shanghai"}, nil
 }
 
@@ -107,6 +114,7 @@ type reminderFixture struct {
 	t       *testing.T
 	store   *PostgresStore
 	worker  *WeChatReminderWorker
+	sites   *fakeSites
 	sender  *fakeSender
 	decider *fakeRecipients
 	stamp   string
@@ -124,11 +132,11 @@ func newReminderFixture(t *testing.T) *reminderFixture {
 	t.Cleanup(scheduler.Close)
 	fixture := &reminderFixture{
 		t: t, store: store, sender: &fakeSender{outcomes: map[string][]error{}}, decider: &fakeRecipients{allowed: map[string]bool{}, allowedDaily: map[string]bool{}},
-		stamp: strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", ""),
-		base:  time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC),
+		stamp: strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", ""), sites: &fakeSites{},
+		base: time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC),
 	}
 	fixture.worker = &WeChatReminderWorker{
-		Scheduler: scheduler, Recipients: fixture.decider, Sites: fakeSites{}, Sender: fixture.sender,
+		Scheduler: scheduler, Recipients: fixture.decider, Sites: fixture.sites, Sender: fixture.sender,
 		Energy:          fakeEnergy{days: map[string][2]float64{"2026-10-21 Asia/Shanghai": {1691, 7402}}},
 		AlarmTemplateID: "alarm-template", DailyTemplateID: "daily-template",
 	}

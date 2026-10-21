@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/services/notification-service/pkg/notificationservice"
 )
 
@@ -34,16 +33,7 @@ func (h *handler) MeWeChatReminders(writer http.ResponseWriter, request *http.Re
 		var input notificationservice.ReminderRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 1<<10))
 		decoder.DisallowUnknownFields()
-		valid := decoder.Decode(&input) == nil && ensureJSONEOF(decoder) == nil
-		switch input.Kind {
-		case notificationservice.ReminderAlarm:
-			valid = valid && input.SiteID == ""
-		case notificationservice.ReminderDaily:
-			valid = valid && alarmmodel.IsUUIDv7(input.SiteID)
-		default:
-			valid = false
-		}
-		if !valid {
+		if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || !input.Valid() {
 			writeIdentityFailure(writer, request, identityFailure{400, "REQUEST_INVALID", "Request invalid", "Send the kind of reminder the person allowed (and the Site of a daily summary), and nothing else.", false})
 			return
 		}

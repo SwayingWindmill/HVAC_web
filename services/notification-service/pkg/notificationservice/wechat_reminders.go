@@ -29,7 +29,8 @@ type ReminderRequest struct {
 	SiteID string       `json:"siteId,omitempty"`
 }
 
-func (request ReminderRequest) valid() bool {
+// Valid says whether the request names a kind, and a Site exactly for a daily summary.
+func (request ReminderRequest) Valid() bool {
 	switch request.Kind {
 	case ReminderAlarm:
 		return request.SiteID == ""
@@ -83,7 +84,7 @@ WHERE subject_issuer = $1 AND subject = $2
 // AddWeChatReminder records one more reminder the person allowed; a daily summary also moves to
 // the Site it names.
 func (store *PostgresStore) AddWeChatReminder(ctx context.Context, person WeChatPerson, request ReminderRequest, now time.Time) (WeChatReminders, error) {
-	if !person.valid() || !request.valid() {
+	if !person.valid() || !request.Valid() {
 		return WeChatReminders{}, errors.New("a signed-in person and a reminder kind (with its Site for a daily summary) are required")
 	}
 	tx, err := store.beginTenant(ctx, person.TenantID)

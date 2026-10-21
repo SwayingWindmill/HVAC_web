@@ -65,11 +65,7 @@ ORDER BY s.tenant_id, s.site_id, s.subject_issuer, s.subject`)
 // planDailyAt notes today's summary at one Site for those of its holders IAM allows and who have
 // none yet.
 func (worker *WeChatReminderWorker) planDailyAt(ctx context.Context, site dailySite, people []WeChatPerson, now time.Time) (bool, error) {
-	facts, err := worker.Sites.Site(ctx, site.tenantID, site.siteID)
-	if err != nil {
-		return false, err
-	}
-	location, err := time.LoadLocation(facts.Timezone)
+	_, location, err := worker.siteAt(ctx, site.tenantID, site.siteID, now)
 	if err != nil {
 		return false, err
 	}
@@ -93,6 +89,9 @@ WHERE tenant_id = $1::uuid AND kind = 'DAILY' AND reference = $2`, site.tenantID
 		planned[[2]string{issuer, subject}] = true
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
 	var due []WeChatPerson
 	for _, person := range people {
 		if !planned[[2]string{person.SubjectIssuer, person.Subject}] {
@@ -103,8 +102,18 @@ WHERE tenant_id = $1::uuid AND kind = 'DAILY' AND reference = $2`, site.tenantID
 		return false, nil
 	}
 	allowed, err := worker.askRecipients(ctx, ReminderDaily, site.tenantID, site.siteID, "", due)
-	if err != nil || len(allowed) == 0 {
+	if err != nil {
 		return false, err
+	}
+	isAllowed := map[[2]string]bool{}
+	for _, person := range allowed {
+		isAllowed[[2]string{person.SubjectIssuer, person.Subject}] = true
+	}
+	var refused []WeChatPerson
+	for _, person := range due {
+		if !isAllowed[[2]string{person.SubjectIssuer, person.Subject}] {
+			refused = append(refused, person)
+		}
 	}
 	noon := time.Date(local.Year(), local.Month(), local.Day(), dailySummaryUntil, 0, 0, 0, location)
 	tx, err := worker.Scheduler.pool.Begin(ctx)
@@ -112,17 +121,21 @@ WHERE tenant_id = $1::uuid AND kind = 'DAILY' AND reference = $2`, site.tenantID
 		return false, err
 	}
 	defer tx.Rollback(ctx)
-	if err := addDeliveries(ctx, tx, ReminderDaily, day, site.siteID, allowed, noon, now); err != nil {
+	if err := addDeliveries(ctx, tx, ReminderDaily, day, site.siteID, "PENDING", allowed, noon, now); err != nil {
 		return false, err
 	}
-	return true, tx.Commit(ctx)
+	// Those IAM refused are not asked again today.
+	if err := addDeliveries(ctx, tx, ReminderDaily, day, site.siteID, "NOT_ALLOWED", refused, noon, now); err != nil {
+		return false, err
+	}
+	return len(allowed) > 0, tx.Commit(ctx)
 }
 
 // dailyMessage fills 昨日能效数据查询提醒: 项目名称, 用冷量, 用电量, 系统EER and 主机COP for the day
 // before the delivery's Site day. A character_string takes digits, letters and signs only, so
 // what was not read is "-"; the platform keeps no COP for single chillers.
-func (worker *WeChatReminderWorker) dailyMessage(ctx context.Context, claim claimedDelivery) (WeChatMessage, error) {
-	site, location, err := worker.site(ctx, claim)
+func (worker *WeChatReminderWorker) dailyMessage(ctx context.Context, claim claimedDelivery, now time.Time) (WeChatMessage, error) {
+	site, location, err := worker.siteAt(ctx, claim.person.TenantID, claim.siteID, now)
 	if err != nil {
 		return WeChatMessage{}, err
 	}

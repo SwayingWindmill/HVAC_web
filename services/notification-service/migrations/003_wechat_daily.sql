@@ -23,7 +23,7 @@ DROP TABLE notification_runtime.wechat_alarm_delivery;
 
 -- One person's reminder: taken from their allowance before sending (SENDING), settled as SENT,
 -- REFUSED (WeChat: none left), NOT_BOUND, NO_REMINDER_LEFT, EXPIRED or FAILED, and never sent after
--- expires_at.
+-- expires_at. NOT_ALLOWED notes a person IAM refused that day's summary, so IAM is asked once.
 CREATE TABLE notification_runtime.wechat_reminder_delivery (
   tenant_id uuid NOT NULL,
   kind text NOT NULL CHECK (kind IN ('ALARM','DAILY')),
@@ -31,7 +31,7 @@ CREATE TABLE notification_runtime.wechat_reminder_delivery (
   subject_issuer text NOT NULL,
   subject text NOT NULL,
   site_id uuid NOT NULL,
-  state text NOT NULL CHECK (state IN ('PENDING','SENDING','SENT','REFUSED','NOT_BOUND','NO_REMINDER_LEFT','EXPIRED','FAILED')),
+  state text NOT NULL CHECK (state IN ('PENDING','SENDING','SENT','REFUSED','NOT_BOUND','NO_REMINDER_LEFT','EXPIRED','FAILED','NOT_ALLOWED')),
   attempts integer NOT NULL CHECK (attempts >= 0),
   next_attempt_at timestamptz NOT NULL,
   expires_at timestamptz NOT NULL,

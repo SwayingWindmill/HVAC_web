@@ -83,6 +83,38 @@ type WeChatReminderWorker struct {
 
 	// nextDailyPlan spaces out working out the day's summaries: once a minute is enough.
 	nextDailyPlan time.Time
+	// sites keeps each Site's name and time zone for an hour, so planning reads the Registry
+	// seldom, not every minute.
+	sites map[string]cachedSite
+}
+
+type cachedSite struct {
+	facts    SiteFacts
+	location *time.Location
+	until    time.Time
+}
+
+const siteFactsKept = time.Hour
+
+// siteAt is the Site with its time zone loaded, read from the Registry at most once an hour.
+func (worker *WeChatReminderWorker) siteAt(ctx context.Context, tenantID, siteID string, now time.Time) (SiteFacts, *time.Location, error) {
+	key := tenantID + "/" + siteID
+	if cached, ok := worker.sites[key]; ok && now.Before(cached.until) {
+		return cached.facts, cached.location, nil
+	}
+	facts, err := worker.Sites.Site(ctx, tenantID, siteID)
+	if err != nil {
+		return SiteFacts{}, nil, err
+	}
+	location, err := time.LoadLocation(facts.Timezone)
+	if err != nil {
+		return SiteFacts{}, nil, fmt.Errorf("the Site's time zone %q: %w", facts.Timezone, err)
+	}
+	if worker.sites == nil {
+		worker.sites = map[string]cachedSite{}
+	}
+	worker.sites[key] = cachedSite{facts: facts, location: location, until: now.Add(siteFactsKept)}
+	return facts, location, nil
 }
 
 func (worker *WeChatReminderWorker) log() *slog.Logger {
@@ -120,14 +152,14 @@ func (worker *WeChatReminderWorker) askRecipients(ctx context.Context, kind Remi
 	return allowed, nil
 }
 
-// addDeliveries notes one delivery per person, each sent at most once.
-func addDeliveries(ctx context.Context, tx pgx.Tx, kind ReminderKind, reference, siteID string, people []WeChatPerson, expiresAt, now time.Time) error {
+// addDeliveries notes one delivery per person in this state (PENDING to send), each at most once.
+func addDeliveries(ctx context.Context, tx pgx.Tx, kind ReminderKind, reference, siteID, state string, people []WeChatPerson, expiresAt, now time.Time) error {
 	for _, person := range people {
 		if _, err := tx.Exec(ctx, `
 INSERT INTO notification_runtime.wechat_reminder_delivery
   (tenant_id, kind, reference, subject_issuer, subject, site_id, state, attempts, next_attempt_at, expires_at, created_at, updated_at)
-VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid, 'PENDING', 0, $7, $8, $7, $7)
-ON CONFLICT DO NOTHING`, person.TenantID, string(kind), reference, person.SubjectIssuer, person.Subject, siteID, now.UTC(), expiresAt.UTC()); err != nil {
+VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid, $9, 0, $7, $8, $7, $7)
+ON CONFLICT DO NOTHING`, person.TenantID, string(kind), reference, person.SubjectIssuer, person.Subject, siteID, now.UTC(), expiresAt.UTC(), state); err != nil {
 			return err
 		}
 	}
@@ -150,7 +182,7 @@ func (worker *WeChatReminderWorker) deliverOne(ctx context.Context, now time.Tim
 		return worked, err
 	}
 	stage := "message"
-	message, err := worker.message(ctx, *claim)
+	message, err := worker.message(ctx, *claim, now)
 	if err == nil {
 		stage = "send"
 		err = worker.Sender.SendWeChatMessage(ctx, claim.person, message)
@@ -171,11 +203,11 @@ func (worker *WeChatReminderWorker) deliverOne(ctx context.Context, now time.Tim
 	}
 }
 
-func (worker *WeChatReminderWorker) message(ctx context.Context, claim claimedDelivery) (WeChatMessage, error) {
+func (worker *WeChatReminderWorker) message(ctx context.Context, claim claimedDelivery, now time.Time) (WeChatMessage, error) {
 	if claim.kind == ReminderDaily {
-		return worker.dailyMessage(ctx, claim)
+		return worker.dailyMessage(ctx, claim, now)
 	}
-	return worker.alarmMessage(ctx, claim)
+	return worker.alarmMessage(ctx, claim, now)
 }
 
 // claimDelivery takes one due delivery and the person's allowance for it; no claim when the

@@ -6,9 +6,9 @@ require (
 	github.com/quanlaihe/hvac-web/libs/alarmauth v0.0.0
 	github.com/quanlaihe/hvac-web/libs/alarmmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/analyticsmodel v0.0.0
-	github.com/quanlaihe/hvac-web/libs/energyseries v0.0.0
 	github.com/quanlaihe/hvac-web/libs/commandauth v0.0.0
 	github.com/quanlaihe/hvac-web/libs/commandmodel v0.0.0
+	github.com/quanlaihe/hvac-web/libs/energyseries v0.0.0
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/limitpolicy v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
