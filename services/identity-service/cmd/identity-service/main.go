@@ -34,6 +34,7 @@ func main() {
 		WeChatSecretFile:          os.Getenv("IDENTITY_WECHAT_APPSECRET_FILE"),
 		GatewayDelegationCertFile: os.Getenv("IDENTITY_GATEWAY_DELEGATION_CERT"),
 		GatewaySPIFFE:             envOr("IDENTITY_GATEWAY_SPIFFE", "spiffe://hvac.local/platform-gateway"),
+		Logger:                    logger,
 	})
 	cancel()
 	if err != nil {

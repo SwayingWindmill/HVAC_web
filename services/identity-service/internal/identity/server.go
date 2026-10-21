@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,6 +32,7 @@ type Config struct {
 	// on every WeChat call.
 	GatewayDelegationCertFile string
 	GatewaySPIFFE             string
+	Logger                    *slog.Logger
 	Now                       func() time.Time
 }
 
@@ -49,6 +51,14 @@ type Server struct {
 	// The Gateway's delegation key and workload, for the grants on WeChat calls.
 	gatewayKey    crypto.PublicKey
 	gatewaySPIFFE string
+	logger        *slog.Logger
+}
+
+func (server *Server) log() *slog.Logger {
+	if server.logger == nil {
+		return slog.Default()
+	}
+	return server.logger
 }
 
 func NewServer(ctx context.Context, config Config) (*Server, error) {
@@ -108,7 +118,7 @@ func NewServer(ctx context.Context, config Config) (*Server, error) {
 	return &Server{
 		issuer: issuer, clientID: clientID, redirectURI: redirectURI, postLogoutRedirectURI: postLogout,
 		store: store, now: now, signingKey: signingKey, mfaProtector: mfaProtector,
-		signInURL: signInURL, wechat: wechat, gatewayKey: gatewayKey, gatewaySPIFFE: strings.TrimSpace(config.GatewaySPIFFE),
+		signInURL: signInURL, wechat: wechat, gatewayKey: gatewayKey, gatewaySPIFFE: strings.TrimSpace(config.GatewaySPIFFE), logger: config.Logger,
 	}, nil
 }
 

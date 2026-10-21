@@ -27,8 +27,30 @@ const WeChatAPIBase = "https://api.weixin.qq.com"
 var (
 	ErrWeChatCodeInvalid  = errors.New("the WeChat sign-in code is invalid or already used")
 	ErrWeChatUnavailable  = errors.New("WeChat is unavailable")
+	ErrWeChatNotSetUp     = errors.New("WeChat refuses this server's AppID, AppSecret or IP")
 	ErrWeChatAlreadyBound = errors.New("this WeChat is bound to another account")
 )
+
+// WeChatRefusal is an errcode WeChat answered with. It carries nothing else of the request, whose
+// URL holds the AppSecret, so it is safe to log.
+type WeChatRefusal struct{ Code int }
+
+func (refusal WeChatRefusal) Error() string {
+	return fmt.Sprintf("WeChat answered errcode %d", refusal.Code)
+}
+
+func (refusal WeChatRefusal) Is(target error) bool {
+	switch refusal.Code {
+	// 40029: invalid code; 40163: code already used.
+	case 40029, 40163:
+		return target == ErrWeChatCodeInvalid
+	// 40013: invalid AppID; 40125: invalid AppSecret; 40164: this server is not on the IP allowlist.
+	case 40013, 40125, 40164:
+		return target == ErrWeChatNotSetUp
+	default:
+		return target == ErrWeChatUnavailable
+	}
+}
 
 type WeChat struct {
 	AppID   string
@@ -80,11 +102,10 @@ func (weChat *WeChat) OpenID(ctx context.Context, code string) (string, error) {
 	if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&answer) != nil {
 		return "", ErrWeChatUnavailable
 	}
-	switch {
-	// 40029: invalid code; 40163: code already used.
-	case answer.ErrCode == 40029 || answer.ErrCode == 40163:
-		return "", ErrWeChatCodeInvalid
-	case answer.ErrCode != 0 || answer.OpenID == "":
+	if answer.ErrCode != 0 {
+		return "", WeChatRefusal{Code: answer.ErrCode}
+	}
+	if answer.OpenID == "" {
 		return "", ErrWeChatUnavailable
 	}
 	return answer.OpenID, nil
@@ -179,9 +200,15 @@ func (server *Server) bindWeChat(writer http.ResponseWriter, request *http.Reque
 	if err == nil {
 		err = server.store.BindWeChat(request.Context(), userID, server.wechat.AppID, openID, server.now())
 	}
+	var refusal WeChatRefusal
+	if errors.As(err, &refusal) {
+		server.log().Warn("wechat_refused", "error_code", "WECHAT_REFUSED", "wechat_errcode", refusal.Code)
+	}
 	switch {
 	case errors.Is(err, ErrWeChatCodeInvalid):
 		writeOAuthError(writer, http.StatusBadRequest, "wechat_code_invalid", "the WeChat code is invalid or already used; ask for a new one")
+	case errors.Is(err, ErrWeChatNotSetUp):
+		writeOAuthError(writer, http.StatusServiceUnavailable, "wechat_not_configured", "WeChat refuses this server: check the AppID, the AppSecret and the IP allowlist")
 	case errors.Is(err, ErrWeChatAlreadyBound):
 		writeOAuthError(writer, http.StatusConflict, "wechat_already_bound", "this WeChat is bound to another account")
 	case err != nil:

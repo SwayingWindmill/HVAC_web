@@ -27,8 +27,8 @@ const (
 	wechatTestSessionKey = "session-key-that-must-not-be-kept"
 )
 
-// fakeWeChat answers code2Session the way WeChat does: an OpenID for a known code, error 40163
-// for a code already used.
+// fakeWeChat answers code2Session the way WeChat does: an OpenID for a known code, error 40164
+// when the server is not on the mini program's IP allowlist, error 40163 for a code already used.
 func fakeWeChat(t *testing.T, openIDs map[string]string) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -36,6 +36,10 @@ func fakeWeChat(t *testing.T, openIDs map[string]string) *httptest.Server {
 		if request.URL.Path != "/sns/jscode2session" || query.Get("appid") != wechatTestAppID || query.Get("secret") != wechatTestSecret || query.Get("grant_type") != "authorization_code" {
 			t.Errorf("unexpected WeChat request %s", request.URL.Redacted())
 			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if query.Get("js_code") == "code-from-unlisted-server" {
+			_ = json.NewEncoder(writer).Encode(map[string]any{"errcode": 40164, "errmsg": "invalid ip, not in whitelist"})
 			return
 		}
 		openID, known := openIDs[query.Get("js_code")]
@@ -169,6 +173,10 @@ func TestWeChatBindsOneAccountToOneWeChat(t *testing.T) {
 	if answer := binding(duty); answer["bound"] != false {
 		t.Fatalf("after removing: %v", answer)
 	}
+
+	// Regression (#664, 2026-10-21): the site server was not on the mini program's IP allowlist and
+	// binding said only "try again later". WeChat refusing the server is WeChat not set up.
+	expectWeChatAnswer(t, bind(other, "code-from-unlisted-server"), http.StatusServiceUnavailable, "wechat_not_configured")
 
 	// Without the AppSecret on the server, WeChat is plainly not set up.
 	unconfigured := &Server{issuer: wechatTestIssuer, store: runtimeStore, now: server.now, gatewayKey: gatewayKey.Public(), gatewaySPIFFE: wechatTestGateway}
