@@ -1,7 +1,3 @@
-.screen {
-  padding-top: 16px;
-}
-
 .count {
   padding: 0 4px;
 }

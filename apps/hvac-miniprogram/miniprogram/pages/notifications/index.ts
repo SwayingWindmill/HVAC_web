@@ -71,8 +71,8 @@ Page({
     showAttention(this, feed.needsAttention);
   },
 
-  toggleUnacknowledged() {
-    this.setData({ unacknowledgedOnly: !this.data.unacknowledgedOnly });
+  toggleUnacknowledged(event: WechatMiniprogram.SwitchChange) {
+    this.setData({ unacknowledgedOnly: event.detail.value });
     this.render();
   },
 

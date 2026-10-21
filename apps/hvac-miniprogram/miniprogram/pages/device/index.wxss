@@ -1,9 +1,5 @@
 @import "../../styles/hour-chart.wxss";
 
-.top {
-  padding-top: 12px;
-}
-
 .head {
   display: flex;
   align-items: center;

@@ -1,5 +1,3 @@
-<page-header title="总览" />
-
 <view class="screen with-tab-bar">
   <view wx:if="{{siteName}}" class="site-row">
     <view class="site-pill" bindtap="openSites" aria-role="button" aria-label="切换站点，现在是{{siteName}}">{{siteName}}<image class="chevron" src="/assets/chevron-down.svg" aria-hidden="true" /></view>

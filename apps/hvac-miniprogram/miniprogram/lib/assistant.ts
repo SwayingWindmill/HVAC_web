@@ -7,6 +7,7 @@
 import type { AgentSessionSnapshot, FindingChart } from './agent-types';
 import { answerBlocks, type AnswerBlock } from './answer-nodes';
 import { grouped } from './format';
+import { lineImage } from './line-image';
 import { siteWhen } from './today';
 import type { AssistantPart, AssistantThread } from '../shared/thread-model';
 import { toolPresentation } from '../shared/tool-labels';
@@ -68,11 +69,10 @@ export function presentChart(chart: FindingChart) {
     kind: 'LINE' as const,
     caption,
     legend,
-    // Each point across (0–1) and up (0–1) the plot; a gap where the read had no value.
-    lines: chart.series.map((series) => series.values.map((value, index) => (value === null ? null : {
+    image: lineImage(chart.series.map((series) => series.values.map((value, index) => (value === null ? null : {
       x: chart.categories.length === 1 ? 0.5 : index / (chart.categories.length - 1),
       y: span === 0 ? 0.5 : (value - bottom) / span,
-    }))),
+    })))),
     scale: values.length === 0 ? [] : [chartValue(highest), chartValue(bottom)],
     from: chart.categories[0],
     to: chart.categories[chart.categories.length - 1],

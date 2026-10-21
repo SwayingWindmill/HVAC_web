@@ -90,13 +90,17 @@ test('my conversations on the Site list the first question, when it began at the
   assert.deepEqual(presentHistory(sessions, null).map((entry) => entry.detail), ['答完', '答完']);
 });
 
+/** The picture a line chart draws (an SVG in a data URI, which scrolls with the page as an image). */
+const svgOf = (image: string) => Buffer.from(image.replace(/^data:image\/svg\+xml;base64,/, ''), 'base64').toString('utf8');
+
 test('hours draw as a line with a gap where the read had none, machines as bars ranked by length', () => {
-  const line = presentChart({ kind: 'LINE', title: '今天每小时用电', unit: 'kWh', categories: ['0:00', '1:00', '2:00'], series: [{ name: '用电', values: [100, null, 150.5] }] });
-  assert.deepEqual(line, {
-    kind: 'LINE', caption: '今天每小时用电（kWh）', legend: [],
-    lines: [[{ x: 0, y: 0 }, null, { x: 1, y: 1 }]],
-    scale: ['150.5', '100'], from: '0:00', to: '2:00',
+  const line = presentChart({ kind: 'LINE', title: '今天每小时用电', unit: 'kWh', categories: ['0:00', '1:00', '2:00', '3:00'], series: [{ name: '用电', values: [100, 150, null, 200] }] });
+  assert.deepEqual(line.kind === 'LINE' && { ...line, image: undefined }, {
+    kind: 'LINE', caption: '今天每小时用电（kWh）', legend: [], image: undefined,
+    scale: ['200', '100'], from: '0:00', to: '3:00',
   });
+  // Across a 300 × 120 picture, 4 px clear top and bottom: the line breaks at 2:00, and the lone 3:00 reading shows as a dot.
+  assert.match(svgOf(line.kind === 'LINE' ? line.image : ''), /<path d="M0 116L100 60M300 4h0" stroke="#3f5bd9"/);
   const machines = presentChart({ kind: 'HORIZONTAL_BAR', title: '各台机组用电', unit: 'kWh', categories: ['C 机组', 'D 机组', 'A 机组'], series: [{ name: '用电', values: [1035, 517.5, null] }] });
   assert.deepEqual(machines, {
     kind: 'HORIZONTAL_BAR', caption: '各台机组用电（kWh）', legend: [],
@@ -137,5 +141,6 @@ test('a question already answered keeps the choices it offered, no longer open, 
 
 test('a line chart with no values draws nothing and shows no scale', () => {
   const empty = presentChart({ kind: 'LINE', title: '室外温度', unit: '°C', categories: ['0:00', '1:00'], series: [{ name: '温度', values: [null, null] }] });
-  assert.deepEqual(empty.kind === 'LINE' && [empty.lines, empty.scale], [[[null, null]], []]);
+  assert.deepEqual(empty.kind === 'LINE' && empty.scale, []);
+  assert.doesNotMatch(svgOf(empty.kind === 'LINE' ? empty.image : ''), /#3f5bd9/);
 });

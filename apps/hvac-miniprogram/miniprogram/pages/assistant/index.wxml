@@ -1,5 +1,3 @@
-<page-header title="AI 助手" />
-
 <view class="screen with-composer">
   <view wx:if="{{loading}}" class="state">正在载入对话…</view>
   <view wx:elif="{{noSite}}" class="state">这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。</view>

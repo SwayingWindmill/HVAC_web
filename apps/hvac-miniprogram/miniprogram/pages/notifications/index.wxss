@@ -5,21 +5,19 @@
   gap: 12px;
 }
 
-.chip {
+.filter {
+  display: flex;
   flex-shrink: 0;
-  padding: 5px 12px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: var(--card);
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
   color: var(--secondary-foreground);
 }
 
-.chip-on {
-  border-color: var(--primary-line);
-  background: var(--primary-soft);
-  color: #2f46b3;
-  font-weight: 600;
+/* WeChat's switch at three quarters of its size, to sit beside a caption. */
+.filter switch {
+  transform: scale(0.75);
+  transform-origin: right center;
 }
 
 .section {

@@ -1,6 +1,4 @@
 <import src="../../templates/hour-chart.wxml" />
-<page-header title="运行" />
-
 <view class="screen with-tab-bar">
   <view class="segments" aria-role="tablist" aria-label="运行">
     <view class="segment {{segment === 'realtime' ? 'segment-on' : ''}}" data-segment="realtime" bindtap="chooseSegment" aria-role="tab" aria-selected="{{segment === 'realtime'}}">实时运行</view>

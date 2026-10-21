@@ -1,8 +1,5 @@
 {
   "usingComponents": {},
-  "navigationStyle": "default",
   "navigationBarTitleText": "告警详情",
-  "navigationBarBackgroundColor": "#ffffff",
-  "navigationBarTextStyle": "black",
   "enablePullDownRefresh": true
 }

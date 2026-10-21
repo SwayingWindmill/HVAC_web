@@ -1,5 +1,3 @@
-<page-header title="通知" />
-
 <view class="screen with-tab-bar">
   <view wx:if="{{loading}}" class="state">正在读取…</view>
   <view wx:elif="{{noSite}}" class="state">这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。</view>
@@ -7,7 +5,10 @@
   <block wx:else>
     <view class="filter-bar">
       <text class="caption">{{siteName}} · 告警</text>
-      <text class="chip {{unacknowledgedOnly ? 'chip-on' : ''}}" bindtap="toggleUnacknowledged" aria-role="checkbox" aria-checked="{{unacknowledgedOnly}}">只看没确认的</text>
+      <label class="filter">
+        <text>只看没确认的</text>
+        <switch checked="{{unacknowledgedOnly}}" color="#3f5bd9" bindchange="toggleUnacknowledged" />
+      </label>
     </view>
 
     <view wx:for="{{feed.sections}}" wx:for-item="section" wx:key="title" class="section">

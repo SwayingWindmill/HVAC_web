@@ -1,3 +1,0 @@
-<view class="header" style="padding-top: {{top}}px; padding-right: {{right}}px;">
-  <view class="title" style="min-height: {{height}}px;">{{title}}</view>
-</view>
