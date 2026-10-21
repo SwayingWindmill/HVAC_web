@@ -54,7 +54,7 @@
   width: 46px;
   height: 46px;
   border-radius: 23px;
-  box-shadow: 0 6px 14px rgba(63, 91, 217, 0.42), 0 2px 4px rgba(30, 44, 140, 0.35);
+  box-shadow: 0 6px 14px rgba(63, 91, 217, 0.32), 0 2px 4px rgba(63, 91, 217, 0.24);
 }
 
 .raised-icon {
@@ -85,7 +85,7 @@
   left: -30%;
   width: 160%;
   height: 160%;
-  background: conic-gradient(from 0deg, #2f46b3, #3f5bd9 18%, #6a7cff 36%, #8b7bff 48%, #4a63e3 64%, #2f46b3 82%, #3f5bd9);
+  background: conic-gradient(from 0deg, #3f5bd9, #4f69e6 20%, #7186f5 38%, #8f9cff 50%, #6178ef 66%, #4a63e0 84%, #3f5bd9);
 }
 
 .orb-sheen {
@@ -97,15 +97,15 @@
   border-radius: inherit;
   background:
     radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 42%),
-    radial-gradient(circle at 72% 90%, rgba(14, 22, 78, 0.5), rgba(14, 22, 78, 0) 58%);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.55), inset 0 -2px 4px rgba(10, 18, 70, 0.4);
+    radial-gradient(circle at 72% 90%, rgba(30, 44, 140, 0.22), rgba(30, 44, 140, 0) 58%);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.6), inset 0 -2px 4px rgba(30, 44, 140, 0.22);
 }
 
 
 /* Above the light, and standing off the sphere. */
 .orb-icon {
   position: relative;
-  filter: drop-shadow(0 1px 1.5px rgba(10, 18, 70, 0.5));
+  filter: drop-shadow(0 1px 1.5px rgba(30, 44, 140, 0.35));
 }
 
 @keyframes orb-flow {
