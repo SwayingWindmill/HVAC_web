@@ -17,11 +17,11 @@
     "alarmDomain": "SE-DOMAIN-ALARM-001 V1.0 CURRENT CANDIDATE"
   },
   "summary": {
-    "routesReviewed": 14,
+    "routesReviewed": 11,
     "classificationAReadyToActivate": 4,
     "classificationBReusableSubordinateShapeButRuntimeBlocked": 0,
-    "classificationCSchemaOrSemanticDecisionStillRequired": 10,
-    "runtimeContractOnlyRoutes": 10
+    "classificationCSchemaOrSemanticDecisionStillRequired": 7,
+    "runtimeContractOnlyRoutes": 7
   },
   "classifications": {
     "A": "SE-API-001 V1.2 and the current machine contracts fully freeze the operation-specific request/query/success shape and current runtime has enough authoritative domain behavior to activate without inventing semantics.",
@@ -65,22 +65,6 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/devices",
-      "classification": "C",
-      "sourceCoverage": [
-        "SE-API-001 V1.2 section 48 lists page/pageSize/siteId/gatewayId/deviceType/onlineStatus filters and the generic list envelope.",
-        "The current Registry machine contract freezes Device and DeviceCollection, while the active public Registry route is Site-scoped GET /api/v1/sites/{siteId}/devices using limit/cursor."
-      ],
-      "runtimeEvidence": [
-        "platform-core-service supports Site-scoped Device list reads but not the unscoped/filter-rich GET /api/v1/devices contract."
-      ],
-      "blockingGaps": [
-        "The endpoint-specific Device summary projection is not frozen.",
-        "SE-API-001 page/pageSize conflicts with the active Registry limit/cursor contract, and gatewayId/onlineStatus filtering semantics are not frozen for Registry Device metadata."
-      ]
-    },
-    {
-      "method": "GET",
       "path": "/api/v1/devices/{deviceId}/points",
       "classification": "C",
       "sourceCoverage": [
@@ -94,41 +78,6 @@
       "blockingGaps": [
         "The endpoint-specific list envelope, Point summary/detail projection, ordering and filter behavior are not frozen.",
         "Reusing the whole SiteAssetModel or silently filtering it in Gateway would create an undocumented public contract."
-      ]
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/telemetry/latest",
-      "classification": "C",
-      "sourceCoverage": [
-        "SE-API-001 V1.2 sections 52-54 provide pointIds request shape and require value/unit/quality/event timestamp in results.",
-        "SE-DATA-001 V2.0 freezes quality values GOOD/PARTIAL/ESTIMATED/MANUAL/STALE/INVALID and the latest out-of-order NO_UPDATE rule.",
-        "S2 current subordinate contract freezes Device Observation Snapshots and explicitly retires the older POST /api/v1/telemetry/latest/batch route."
-      ],
-      "runtimeEvidence": [
-        "Current S2 Gateway/runtime reads are Device-centric Observation Snapshot operations, not Point-centric latest batch reads."
-      ],
-      "blockingGaps": [
-        "The exact value union/nullability and missing/stale/unauthorized per-point semantics are not frozen.",
-        "The <=1000 point limit is a recommendation rather than a frozen contract limit.",
-        "The Device Observation Snapshot contract cannot be silently reused as the Point-centric SE-API-001 contract."
-      ]
-    },
-    {
-      "method": "GET",
-      "path": "/api/v1/telemetry/history",
-      "classification": "C",
-      "sourceCoverage": [
-        "SE-API-001 V1.2 sections 55-58 freeze pointId/from/to/interval/aggregation and avg/min/max/last/delta.",
-        "SE-DATA-001 V2.0 freezes Point identity, event time/ingest time and telemetry quality semantics.",
-        "telemetryhistorymodel and the S2 subordinate contract freeze a different DeviceHistory query: deviceId + keys + from/to + maxPointsPerKey with a DeviceHistoryResponse series model."
-      ],
-      "runtimeEvidence": [
-        "Current telemetry-query runtime implements bounded Device history and does not implement the Point-centric interval/aggregation GET contract."
-      ],
-      "blockingGaps": [
-        "The exact Point history series/item success schema, quality/timestamp representation, empty-series semantics and concrete interval/aggregation guardrails are not frozen.",
-        "The existing DeviceHistory model cannot be exposed under this URI because its selector and result semantics materially differ."
       ]
     },
     {

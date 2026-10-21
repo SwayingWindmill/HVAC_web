@@ -69,18 +69,6 @@ for (const contracted of baseline.api.contractedPaths) {
 }
 invariant(publicOpenAPI.components?.responses?.V212Success && publicOpenAPI.components?.responses?.V212Error, 'SE-API-001 V2.1.2 response envelopes are missing');
 invariant(publicOpenAPI.components?.schemas?.V212SuccessEnvelope && publicOpenAPI.components?.schemas?.V212ErrorEnvelope, 'SE-API-001 V2.1.2 envelope schemas are missing');
-const contractOnlyGateway = await readFile(resolve(root, 'cmd/energy-api/internal/gateway/v212_contract_only.go'), 'utf8');
-const contractOnlyRoutes = [
-  ['GET', '/api/v1/devices'],
-  ['POST', '/api/v1/telemetry/latest'],
-  ['GET', '/api/v1/telemetry/history'],
-];
-for (const [method, path] of contractOnlyRoutes) {
-  const operation = publicOpenAPI.paths?.[path]?.[method.toLowerCase()];
-  invariant(contractOnlyGateway.includes(`template: "${path}"`), `contract-only runtime route is missing: ${method} ${path}`);
-  invariant(operation?.['x-architecture-status'] === 'CONTRACTED' && operation?.['x-shape-status'] === 'TO_SYNC_TO_SE_API_001', `contract-only machine route drifted: ${method} ${path}`);
-}
-invariant(contractOnlyGateway.includes('CONTRACT_NOT_ACTIVE') && contractOnlyGateway.includes('writeV212Error'), 'SE-API-001 contract-only routes must return the frozen V2.1.2 error envelope');
 
 const commandPublic = JSON.parse(await readFile(resolve(root, 'contracts/http/s3-command-public.openapi.json'), 'utf8'));
 invariant(commandPublic.paths?.['/api/v1/commands/{commandId}/approve'], 'Command approve Contract URI must use /approve');
@@ -98,7 +86,6 @@ const commandGateway = await readFile(resolve(root, 'cmd/energy-api/internal/gat
 invariant(commandGateway.includes('strings.HasSuffix(raw, "/approve")'), 'Platform Gateway must route canonical Command /approve');
 invariant(!commandGateway.includes('strings.HasSuffix(raw, ":approve")'), 'Platform Gateway production route must not parse legacy :approve');
 const gatewayServer = await readFile(resolve(root, 'cmd/energy-api/internal/gateway/server.go'), 'utf8');
-invariant(gatewayServer.includes('contractOnlyRoute.template != "/api/v1/sites" || request.Method == contractOnlyRoute.method'), 'SE-API-001 contract-only interception must preserve active GET /api/v1/sites while holding POST contract-only');
 invariant(!gatewayServer.includes('header == "X-Organization-ID" && isVerifiedTelemetryWorkloadRequest(request)'), 'verified Telemetry workloads must not receive an X-Organization-ID compatibility exception');
 invariant(gatewayServer.includes('"X-Operations-Registry-Asset-Grant"'), 'Platform Gateway must guard the canonical Operations Registry Asset grant header');
 const commandService = await readFile(resolve(root, 'modules/command/pkg/commandservice/http.go'), 'utf8');

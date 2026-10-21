@@ -429,7 +429,7 @@ func (h *handler) callIAMAdmin(writer http.ResponseWriter, request *http.Request
 	if body != nil {
 		payload, _ = json.Marshal(body)
 	}
-	status, reply, _, failure := h.identity.forwardIAMAdmin(request.Context(), session, iamAdminRoute{internalPath: internalPath, action: "iam:admin"}, payload)
+	status, reply, failure := h.identity.forwardIAMAdmin(request.Context(), session, internalPath, payload)
 	if failure != nil {
 		writeIdentityFailure(writer, request, *failure)
 		return false
