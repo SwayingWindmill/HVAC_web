@@ -30,7 +30,7 @@
       "points": [
         {
           "code": "t1",
-          "name": "冷凝进水温度（四台共用）",
+          "name": "D 机组蒸发出水温度（数据判定）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -38,7 +38,7 @@
         },
         {
           "code": "t2",
-          "name": "蒸发进水温度（四台共用）",
+          "name": "C 机组蒸发出水温度（数据判定）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -46,7 +46,7 @@
         },
         {
           "code": "t3",
-          "name": "A 机组蒸发出水温度",
+          "name": "温度通道 3（冷冻水侧，位置待现场确认）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -54,7 +54,7 @@
         },
         {
           "code": "t4",
-          "name": "A 机组冷凝出水温度",
+          "name": "温度通道 4（冷冻水侧，位置待现场确认）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -62,7 +62,7 @@
         },
         {
           "code": "t5",
-          "name": "B 机组蒸发出水温度",
+          "name": "温度通道 5（冷却水侧，位置待现场确认）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -70,7 +70,7 @@
         },
         {
           "code": "t6",
-          "name": "B 机组冷凝出水温度",
+          "name": "D 机组冷凝出水温度（数据判定）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -78,7 +78,7 @@
         },
         {
           "code": "t7",
-          "name": "C 机组蒸发出水温度",
+          "name": "C 机组冷凝出水温度（数据判定）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -86,15 +86,16 @@
         },
         {
           "code": "t8",
-          "name": "C 机组冷凝出水温度",
+          "name": "温度通道 8（没有探头）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30408"
+          "address": "UID20 输入寄存器 30408",
+          "status": "INACTIVE"
         },
         {
           "code": "t9",
-          "name": "D 机组蒸发出水温度",
+          "name": "温度通道 9（冷却水侧，位置待现场确认）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -102,7 +103,7 @@
         },
         {
           "code": "t10",
-          "name": "D 机组冷凝出水温度",
+          "name": "温度通道 10（冷冻水侧，位置待现场确认）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -243,37 +244,31 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 3",
-          "from": [
-            "temperature",
-            "t3"
-          ]
+          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
+          "status": "INACTIVE"
         },
         {
           "code": "chw_entering_temperature",
           "sourceKey": "chiller.entering_chilled_water_temperature",
-          "name": "冷冻水进水温度（蒸发进，四台共用）",
+          "name": "冷冻水进水温度（总冷冻水回水，四台共用）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 2",
+          "address": "总冷冻水回水，温度模块通道 16（四台共用）",
           "from": [
             "temperature",
-            "t2"
+            "t16"
           ]
         },
         {
           "code": "cw_entering_temperature",
           "sourceKey": "chiller.entering_cooling_water_temperature",
-          "name": "冷却水进水温度（冷凝进，四台共用）",
+          "name": "冷却水进水温度（冷凝进）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 1",
-          "from": [
-            "temperature",
-            "t1"
-          ]
+          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
+          "status": "INACTIVE"
         },
         {
           "code": "cw_leaving_temperature",
@@ -282,11 +277,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 4",
-          "from": [
-            "temperature",
-            "t4"
-          ]
+          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
+          "status": "INACTIVE"
         }
       ]
     },
@@ -315,37 +307,31 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 5",
-          "from": [
-            "temperature",
-            "t5"
-          ]
+          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
+          "status": "INACTIVE"
         },
         {
           "code": "chw_entering_temperature",
           "sourceKey": "chiller.entering_chilled_water_temperature",
-          "name": "冷冻水进水温度（蒸发进，四台共用）",
+          "name": "冷冻水进水温度（总冷冻水回水，四台共用）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 2",
+          "address": "总冷冻水回水，温度模块通道 16（四台共用）",
           "from": [
             "temperature",
-            "t2"
+            "t16"
           ]
         },
         {
           "code": "cw_entering_temperature",
           "sourceKey": "chiller.entering_cooling_water_temperature",
-          "name": "冷却水进水温度（冷凝进，四台共用）",
+          "name": "冷却水进水温度（冷凝进）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 1",
-          "from": [
-            "temperature",
-            "t1"
-          ]
+          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
+          "status": "INACTIVE"
         },
         {
           "code": "cw_leaving_temperature",
@@ -354,11 +340,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 6",
-          "from": [
-            "temperature",
-            "t6"
-          ]
+          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
+          "status": "INACTIVE"
         }
       ]
     },
@@ -387,37 +370,34 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 7",
-          "from": [
-            "temperature",
-            "t7"
-          ]
-        },
-        {
-          "code": "chw_entering_temperature",
-          "sourceKey": "chiller.entering_chilled_water_temperature",
-          "name": "冷冻水进水温度（蒸发进，四台共用）",
-          "unit": "Cel",
-          "pointType": "TELEMETRY",
-          "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 2",
+          "address": "温度模块通道 2（2026-10-21 用 7 天的 15 分钟数据判定（#614））",
           "from": [
             "temperature",
             "t2"
           ]
         },
         {
-          "code": "cw_entering_temperature",
-          "sourceKey": "chiller.entering_cooling_water_temperature",
-          "name": "冷却水进水温度（冷凝进，四台共用）",
+          "code": "chw_entering_temperature",
+          "sourceKey": "chiller.entering_chilled_water_temperature",
+          "name": "冷冻水进水温度（总冷冻水回水，四台共用）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 1",
+          "address": "总冷冻水回水，温度模块通道 16（四台共用）",
           "from": [
             "temperature",
-            "t1"
+            "t16"
           ]
+        },
+        {
+          "code": "cw_entering_temperature",
+          "sourceKey": "chiller.entering_cooling_water_temperature",
+          "name": "冷却水进水温度（冷凝进）",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
+          "status": "INACTIVE"
         },
         {
           "code": "cw_leaving_temperature",
@@ -426,10 +406,10 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 8",
+          "address": "温度模块通道 7（2026-10-21 用 7 天的 15 分钟数据判定（#614））",
           "from": [
             "temperature",
-            "t8"
+            "t7"
           ]
         }
       ]
@@ -459,37 +439,34 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 9",
+          "address": "温度模块通道 1（2026-10-21 用 7 天的 15 分钟数据判定（#614））",
           "from": [
             "temperature",
-            "t9"
+            "t1"
           ]
         },
         {
           "code": "chw_entering_temperature",
           "sourceKey": "chiller.entering_chilled_water_temperature",
-          "name": "冷冻水进水温度（蒸发进，四台共用）",
+          "name": "冷冻水进水温度（总冷冻水回水，四台共用）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 2",
+          "address": "总冷冻水回水，温度模块通道 16（四台共用）",
           "from": [
             "temperature",
-            "t2"
+            "t16"
           ]
         },
         {
           "code": "cw_entering_temperature",
           "sourceKey": "chiller.entering_cooling_water_temperature",
-          "name": "冷却水进水温度（冷凝进，四台共用）",
+          "name": "冷却水进水温度（冷凝进）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 1",
-          "from": [
-            "temperature",
-            "t1"
-          ]
+          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
+          "status": "INACTIVE"
         },
         {
           "code": "cw_leaving_temperature",
@@ -498,10 +475,10 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 10",
+          "address": "温度模块通道 6（2026-10-21 用 7 天的 15 分钟数据判定（#614））",
           "from": [
             "temperature",
-            "t10"
+            "t6"
           ]
         }
       ]

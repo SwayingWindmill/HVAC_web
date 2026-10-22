@@ -24,21 +24,20 @@ for (const meter of METERS) {
 // (76938 kWh then). The platform had counted it from 0, so it keeps counting from there: the reading
 // less what the meter showed when the address was corrected, with no jump into one interval.
 const ENERGY_BASELINE = { "ammeter-unit4": 76938 };
-// Temperature channels and the header flow copied onto the equipment they measure, per the site's
-// channel table (2026-10-15), as the points with `from` in deploy/sites/songyaxuan.site.json: the
-// evaporator inlet (t2) and condenser inlet (t1) are shared by the four machines.
+// Temperature channels and the header flow copied onto the equipment they measure, as the points with
+// `from` in deploy/sites/songyaxuan.site.json. The site's hand-drawn channel table (2026-10-15) did not
+// match the readings; on 2026-10-21 a week of 15-minute data showed (#614): t2 and t1 are C's and D's
+// evaporator outlets (each one's drop below the header return follows that machine's power), t7 and t6
+// their condenser outlets, and every evaporator takes the header's return water (t16). A and B have not
+// run, so their channels cannot be told apart yet; their water temperatures and every condenser inlet
+// are withdrawn until the site checks the pipes.
 const COPIES = {
   temperature: {
-    t2: METERS.map((meter) => [meter, "chw_entering_temperature"]),
-    t1: METERS.map((meter) => [meter, "cw_entering_temperature"]),
-    t3: [["ammeter-unit1", "chw_leaving_temperature"]],
-    t4: [["ammeter-unit1", "cw_leaving_temperature"]],
-    t5: [["ammeter-unit2", "chw_leaving_temperature"]],
-    t6: [["ammeter-unit2", "cw_leaving_temperature"]],
-    t7: [["ammeter-unit3", "chw_leaving_temperature"]],
-    t8: [["ammeter-unit3", "cw_leaving_temperature"]],
-    t9: [["ammeter-unit4", "chw_leaving_temperature"]],
-    t10: [["ammeter-unit4", "cw_leaving_temperature"]],
+    t16: METERS.map((meter) => [meter, "chw_entering_temperature"]),
+    t2: [["ammeter-unit3", "chw_leaving_temperature"]],
+    t7: [["ammeter-unit3", "cw_leaving_temperature"]],
+    t1: [["ammeter-unit4", "chw_leaving_temperature"]],
+    t6: [["ammeter-unit4", "cw_leaving_temperature"]],
     t12: [["room", "room_temperature"]],
     t13: [["outdoor", "ambient_temperature"]],
     t14: [["outdoor", "ambient_temperature_2"]],
@@ -48,7 +47,7 @@ const COPIES = {
 };
 const COPY_UNITS = { temperature: "Cel", waterflow: "m3/h" };
 // Spare inputs with no probe read 0 every minute; the platform has them INACTIVE and they are not sent.
-const SPARE = { temperature: ["t11", "t20"] };
+const SPARE = { temperature: ["t8", "t11", "t20"] };
 // A machine runs while its meter reads more than 5 kW (idle ones read under 1 kW); the chilled-water
 // pumps run while the header flow exceeds 10 m³/h.
 const runState = (running) => (running ? "RUNNING" : "STOPPED");
