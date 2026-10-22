@@ -145,7 +145,7 @@ const declaredMechanisms = new Set(targetDomainModel.ownershipRules?.allowedCros
 for (const mechanism of requiredMechanisms) {
   if (!declaredMechanisms.has(mechanism)) errors.push(`target Domain model is missing cross-domain mechanism ${mechanism}`);
 }
-const requiredContexts = ['iam', 'registry', 'telemetry-runtime', 'telemetry-query', 'metric', 'command', 'edge-control', 'rule-runtime', 'alarm', 'notification', 'outbound-delivery', 'work-order', 'intelligence', 'presentation', 'platform-operations'];
+const requiredContexts = ['iam', 'registry', 'telemetry-runtime', 'telemetry-query', 'metric', 'command', 'edge-control', 'rule-runtime', 'alarm', 'notification', 'work-order', 'intelligence', 'presentation', 'platform-operations'];
 const declaredContexts = new Set((targetDomainModel.boundedContexts ?? []).map((context) => context.id));
 for (const context of requiredContexts) {
   if (!declaredContexts.has(context)) errors.push(`target Domain model is missing bounded context ${context}`);

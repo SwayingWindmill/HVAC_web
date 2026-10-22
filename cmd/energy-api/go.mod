@@ -42,7 +42,6 @@ require (
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/quanlaihe/hvac-web/libs/operationsauditevent v0.0.0 // indirect
-	github.com/quanlaihe/hvac-web/services/outbound-delivery-service v0.0.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 )
 
@@ -80,7 +79,6 @@ replace github.com/quanlaihe/hvac-web/modules/audit => ../../modules/audit
 replace github.com/quanlaihe/hvac-web/modules/command => ../../modules/command
 replace github.com/quanlaihe/hvac-web/modules/iam => ../../modules/iam
 replace github.com/quanlaihe/hvac-web/services/notification-service => ../../services/notification-service
-replace github.com/quanlaihe/hvac-web/services/outbound-delivery-service => ../../services/outbound-delivery-service
 replace github.com/quanlaihe/hvac-web/modules/registry => ../../modules/registry
 replace github.com/quanlaihe/hvac-web/services/rule-runtime-service => ../../services/rule-runtime-service
 replace github.com/quanlaihe/hvac-web/services/identity-service => ../../services/identity-service

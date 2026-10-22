@@ -13,7 +13,7 @@ func (handler *httpHandler) serveWeChatReminders(writer http.ResponseWriter, req
 		handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "WeChat reminders support GET, POST and DELETE.", false)
 		return
 	}
-	claims, ok := handler.authorize(request, WeChatRemindersAction, "")
+	claims, ok := handler.authorize(request, WeChatRemindersAction)
 	if !ok {
 		handler.writeProblem(writer, http.StatusForbidden, "NOTIFICATION_ACCESS_DENIED", "Notification access denied", "WeChat reminders are outside the authorized principal scope.", false)
 		return

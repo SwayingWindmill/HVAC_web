@@ -68,7 +68,7 @@ docs/            交接、ADR、规格、架构记录和运维手册
 
 - 身份：`identity-service/`（账号和密码）。
 - 结算：`settlement-service/`（命令行工具，账单以它为准）。
-- 规则和通知：`rule-runtime-service/`、`notification-service/`、`outbound-delivery-service/`。
+- 规则和通知：`rule-runtime-service/`、`notification-service/`（把设备告警和每日运行结论发到值班人员的微信上）。
 - 智能服务：`forecast-service/`（负荷预测）、`optimization-service/`（优化建议）、`fdd-service/`（故障诊断）、`mv-service/`（节能验证）、`report-service/`（月度报告）。
 - AI 助手：`operations-agent-service/`，基于 pi（`@earendil-works/pi-agent-core`），只读数据、不能下发控制。它只通过平台网关对外，每次读数据前网关按提问人的权限换一张只能读这个站点的授权。
 

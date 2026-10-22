@@ -124,26 +124,6 @@ export class Gateway {
   readonly alarms = fixture<Json[]>('alarms.json');
   // The Site's rules in effect, as the Alarm owner lists them; publishing the rules file changes them, not the page.
   readonly alarmRules = fixture<Json[]>('alarm-rules.json');
-  // The Notification owner's inbox: one notice per raised alarm, the newest still unread.
-  readonly notifications: Json[] = [...this.alarms]
-    .sort((left, right) => Date.parse(right.firstOccurredAt) - Date.parse(left.firstOccurredAt))
-    .slice(0, 4)
-    .map((alarm, index) => ({
-      inboxItemId: `01910000-0000-7000-8000-9700000000${index}0`,
-      intentId: `01910000-0000-7000-8000-9700000001${index}0`,
-      tenantId: principal.tenantId ?? '01910000-0000-7000-8000-970000000200',
-      siteId: alarm.siteId ?? SITE_ID,
-      principalId: MY_ID,
-      alarmId: alarm.alarmId,
-      incidentCorrelationId: `01910000-0000-7000-8000-9700000003${index}0`,
-      sourceAction: 'CREATED',
-      severity: alarm.currentSeverity,
-      subject: alarm.title,
-      body: alarm.summary,
-      status: index === 0 ? 'UNREAD' : 'READ',
-      createdAt: alarm.firstOccurredAt,
-      ...(index === 0 ? {} : { readAt: alarm.firstOccurredAt }),
-    }));
   readonly workOrders = fixture<Json[]>('work-orders.json');
   readonly snapshots = fixture<Json>('snapshots.json');
   readonly commands: Json[] = [];
@@ -370,14 +350,6 @@ export class Gateway {
     if (userAdmin) return userAdmin;
     if (method === 'GET' && path === '/api/v1/sites') return { body: fixture('sites.json') };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}`) return { body: fixture<Json>('sites.json').items[0] };
-    if (method === 'GET' && path === '/api/v1/notifications/inbox') return { body: { data: this.notifications, meta: { requestId: 'e2e', count: this.notifications.length } } };
-    const readMatch = method === 'POST' ? path.match(/^\/api\/v1\/notifications\/inbox\/([^/]+)\/read$/) : null;
-    if (readMatch) {
-      const item = this.notifications.find((candidate) => candidate.inboxItemId === readMatch[1]);
-      if (!item) return { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND' } };
-      if (item.status === 'UNREAD') Object.assign(item, { status: 'READ', readAt: now });
-      return { body: { data: item, meta: { requestId: 'e2e' } } };
-    }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: fixture('asset-model.json') };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/tariff`) {
       return this.tariff ? { body: this.tariff } : {

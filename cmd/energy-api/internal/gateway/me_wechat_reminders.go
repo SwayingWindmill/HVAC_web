@@ -54,7 +54,7 @@ func (h *handler) callWeChatReminders(request *http.Request, session bffSession,
 	if h.notification == nil || h.notification.baseURL == "" || h.notification.httpClient == nil {
 		return 0, nil, errNotificationNotConfigured
 	}
-	token, err := h.signNotificationContext(session, notificationservice.WeChatRemindersAction, "")
+	token, err := h.signNotificationContext(session, notificationservice.WeChatRemindersAction)
 	if err != nil {
 		return 0, nil, err
 	}

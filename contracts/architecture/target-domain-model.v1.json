@@ -88,13 +88,8 @@
     },
     {
       "id": "notification",
-      "owns": ["audience-definition", "notification-template-revision", "notification-policy-revision", "escalation-stage", "inbox-item", "notification-disposition"],
-      "mustNotOwn": ["provider-credential", "provider-retry-state"]
-    },
-    {
-      "id": "outbound-delivery",
-      "owns": ["integration-definition", "delivery-intent", "delivery-attempt", "delivery-receipt", "dead-letter", "replay-approval"],
-      "mustNotOwn": ["originating-business-state"]
+      "owns": ["wechat-reminder-allowance", "wechat-reminder-delivery"],
+      "mustNotOwn": ["provider-credential"]
     },
     {
       "id": "work-order",
@@ -156,7 +151,7 @@
   },
   "alarmModel": {
     "conditionStates": ["ACTIVE", "CLEARED"],
-    "orthogonalFacts": ["acknowledgment", "suppression", "assignment", "work-order-link", "notification-disposition"],
+    "orthogonalFacts": ["acknowledgment", "suppression", "assignment", "work-order-link"],
     "oneActiveIncidentPerTenantSiteFingerprint": true,
     "recurrenceCreatesNewIncident": true,
     "ackClearsCondition": false,
@@ -180,12 +175,6 @@
     "deviceAckIsSuccess": false,
     "independentReadbackRequired": true,
     "cloudMayBypassEdgeArbiter": false
-  },
-  "outboundDelivery": {
-    "owner": "outbound-delivery",
-    "stateChain": ["DeliveryIntent", "DeliveryAttempt", "DeliveryReceipt"],
-    "sharedBy": ["notification", "external-integration", "durable-ai-provider-effect-when-applicable"],
-    "credentialMaterialInPayloadForbidden": true
   },
   "edgeAuthority": {
     "cloudRegistryIsMaster": true,

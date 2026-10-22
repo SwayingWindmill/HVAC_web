@@ -81,7 +81,7 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
       <SkipToMain />
       <NavigationProgress />
       <AppHeader
-        principalSubject={principal.principal.subject}
+        siteId={activeSite?.id}
         principalName={principal.principal.displayName}
         principalRole={principalRole}
         csrfToken={principal.session.csrfToken}

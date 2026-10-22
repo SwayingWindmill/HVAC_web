@@ -144,6 +144,19 @@ export function activeAlarmsQuery(siteId: string) {
   });
 }
 
+/** The twenty alarms cleared last, the latest first (as the mini program's 通知 lists them). */
+export function recentlyClearedAlarmsQuery(siteId: string) {
+  return queryOptions({
+    queryKey: [...alarmKeys.all(siteId), 'recently-cleared'] as const,
+    queryFn: async ({ signal }) => {
+      const result = await listAlarms(siteId, { condition: 'CLEARED' }, undefined, signal);
+      const clearedAt = (alarm: Alarm) => Date.parse(alarm.clearedAt ?? alarm.lastOccurredAt);
+      return [...result.items].sort((left, right) => clearedAt(right) - clearedAt(left)).slice(0, 20);
+    },
+    refetchInterval: 15_000,
+  });
+}
+
 export function alarmDetailQuery(siteId: string, alarmId: string) {
   return queryOptions({
     queryKey: alarmKeys.detail(siteId, alarmId),

@@ -13,91 +13,60 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
-type notificationHTTPStore struct {
-	items     []InboxItem
-	listCalls int
-	readCalls int
+const notificationTenantID = "0190f000-0010-7000-8000-000000000001"
+
+// countingReminders counts the calls that reach the WeChat reminder store.
+type countingReminders struct {
+	noReminders
+	calls int
 }
 
-func (store *notificationHTTPStore) ListInbox(_ context.Context, tenantID, principalID string, _ int) ([]InboxItem, error) {
-	store.listCalls++
-	var result []InboxItem
-	for _, item := range store.items {
-		if item.TenantID == tenantID && item.PrincipalID == principalID {
-			result = append(result, item)
-		}
-	}
-	return result, nil
-}
-
-func (store *notificationHTTPStore) MarkRead(_ context.Context, tenantID, principalID, inboxItemID string, now time.Time) (InboxItem, error) {
-	store.readCalls++
-	for index := range store.items {
-		item := &store.items[index]
-		if item.TenantID == tenantID && item.PrincipalID == principalID && item.InboxItemID == inboxItemID {
-			item.Status = InboxRead
-			readAt := now.UTC()
-			item.ReadAt = &readAt
-			return *item, nil
-		}
-	}
-	return InboxItem{}, ErrNotFound
+func (store *countingReminders) WeChatReminders(context.Context, WeChatPerson) (WeChatReminders, error) {
+	store.calls++
+	return WeChatReminders{}, nil
 }
 
 func TestNotificationHTTPUsesExactAuthenticatedPrincipalScope(t *testing.T) {
 	now := time.Date(2026, 8, 19, 20, 0, 0, 0, time.UTC)
 	signer := notificationSigner(t)
-	itemID := "01910000-9100-7000-8000-000000000001"
-	store := &notificationHTTPStore{items: []InboxItem{{
-		InboxItemID: itemID, IntentID: "01910000-9200-7000-8000-000000000001", TenantID: replayTenantID, SiteID: replaySiteID,
-		PrincipalID: "principal:operator", AlarmID: "01910000-9300-7000-8000-000000000001", IncidentCorrelationID: "01910000-9400-7000-8000-000000000001",
-		SourceAction: AlarmCreated, Status: InboxUnread, CreatedAt: now,
-	}}}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, Reminders: noReminders{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	store := &countingReminders{}
+	handler, err := NewHTTPHandler(HTTPConfig{Reminders: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	list := httptest.NewRequest(http.MethodGet, InternalInboxPath+"?limit=25", nil)
-	list.Header.Set(NotificationContextHeader, signedNotificationContext(t, signer, now, NotificationReadAction, replayTenantID, "principal:operator", ""))
-	listRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(listRecorder, list)
-	if listRecorder.Code != http.StatusOK || store.listCalls != 1 {
-		t.Fatalf("valid Notification principal scope was rejected: status=%d calls=%d body=%s", listRecorder.Code, store.listCalls, listRecorder.Body.String())
-	}
-
-	wrongPrincipal := httptest.NewRequest(http.MethodGet, InternalInboxPath, nil)
-	wrongPrincipal.Header.Set(NotificationContextHeader, signedNotificationContextWithScope(t, signer, now, NotificationReadAction, replayTenantID, "principal:operator", []string{"tenant:" + replayTenantID, "principal:someone-else"}))
-	wrongRecorder := httptest.NewRecorder()
-	handler.ServeHTTP(wrongRecorder, wrongPrincipal)
-	if wrongRecorder.Code != http.StatusForbidden || store.listCalls != 1 {
-		t.Fatalf("mismatched Notification principal scope reached Store: status=%d calls=%d", wrongRecorder.Code, store.listCalls)
-	}
-
-	read := httptest.NewRequest(http.MethodPost, InternalInboxPath+"/"+itemID+"/read", nil)
-	read.Header.Set(NotificationContextHeader, signedNotificationContext(t, signer, now, NotificationMarkReadAction, replayTenantID, "principal:operator", itemID))
+	read := httptest.NewRequest(http.MethodGet, InternalWeChatRemindersPath, nil)
+	read.Header.Set(NotificationContextHeader, signedNotificationContext(t, signer, now, WeChatRemindersAction, notificationTenantID, "principal:operator"))
 	readRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(readRecorder, read)
-	if readRecorder.Code != http.StatusOK || store.readCalls != 1 || store.items[0].Status != InboxRead {
-		t.Fatalf("exact Notification read scope failed: status=%d calls=%d body=%s", readRecorder.Code, store.readCalls, readRecorder.Body.String())
+	if readRecorder.Code != http.StatusOK || store.calls != 1 {
+		t.Fatalf("valid Notification principal scope was rejected: status=%d calls=%d body=%s", readRecorder.Code, store.calls, readRecorder.Body.String())
+	}
+
+	wrongPrincipal := httptest.NewRequest(http.MethodGet, InternalWeChatRemindersPath, nil)
+	wrongPrincipal.Header.Set(NotificationContextHeader, signedNotificationContextWithScope(t, signer, now, WeChatRemindersAction, notificationTenantID, "principal:operator", []string{"tenant:" + notificationTenantID, "principal:someone-else"}))
+	wrongRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(wrongRecorder, wrongPrincipal)
+	if wrongRecorder.Code != http.StatusForbidden || store.calls != 1 {
+		t.Fatalf("mismatched Notification principal scope reached Store: status=%d calls=%d", wrongRecorder.Code, store.calls)
 	}
 }
 
 func TestNotificationHTTPRejectsForgedIdentityBeforeStore(t *testing.T) {
 	now := time.Date(2026, 8, 19, 20, 0, 0, 0, time.UTC)
 	signer := notificationSigner(t)
-	store := &notificationHTTPStore{}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, Reminders: noReminders{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	store := &countingReminders{}
+	handler, err := NewHTTPHandler(HTTPConfig{Reminders: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, InternalInboxPath, nil)
-	request.Header.Set("X-Tenant-ID", replayTenantID)
-	request.Header.Set(NotificationContextHeader, signedNotificationContext(t, signer, now, NotificationReadAction, replayTenantID, "principal:operator", ""))
+	request := httptest.NewRequest(http.MethodGet, InternalWeChatRemindersPath, nil)
+	request.Header.Set("X-Tenant-ID", notificationTenantID)
+	request.Header.Set(NotificationContextHeader, signedNotificationContext(t, signer, now, WeChatRemindersAction, notificationTenantID, "principal:operator"))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusBadRequest || store.listCalls != 0 {
-		t.Fatalf("forged Notification identity header reached Store: status=%d calls=%d", recorder.Code, store.listCalls)
+	if recorder.Code != http.StatusBadRequest || store.calls != 0 {
+		t.Fatalf("forged Notification identity header reached Store: status=%d calls=%d", recorder.Code, store.calls)
 	}
 }
 
@@ -110,13 +79,9 @@ func notificationSigner(t *testing.T) *ecdsa.PrivateKey {
 	return key
 }
 
-func signedNotificationContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, action, tenantID, principalID, itemID string) string {
+func signedNotificationContext(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, action, tenantID, principalID string) string {
 	t.Helper()
-	scopes := []string{"tenant:" + tenantID, "principal:" + principalID}
-	if itemID != "" {
-		scopes = append(scopes, "notification:"+itemID)
-	}
-	return signedNotificationContextWithScope(t, signer, now, action, tenantID, principalID, scopes)
+	return signedNotificationContextWithScope(t, signer, now, action, tenantID, principalID, []string{"tenant:" + tenantID, "principal:" + principalID})
 }
 
 func signedNotificationContextWithScope(t *testing.T, signer *ecdsa.PrivateKey, now time.Time, action, tenantID, principalID string, scopes []string) string {

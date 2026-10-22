@@ -262,15 +262,6 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			dispatchAlarmRoute(h, writer, request, alarmRoute)
 			return
 		}
-		if notificationRoute, matches := matchPublicNotificationRoute(request.URL.Path); matches {
-			decision := routeDecisionFromContext(request.Context())
-			if decision.SelectedOwner != ownershipregistry.OwnerNotification {
-				writeProblem(writer, request, http.StatusServiceUnavailable, "NOTIFICATION_UNAVAILABLE", "Notification unavailable", "The Notification route is not active for this Session.", true, nil)
-				return
-			}
-			dispatchNotificationRoute(h, writer, request, notificationRoute)
-			return
-		}
 	}
 
 	if agentSessionRoute, matches := matchPublicAgentSessionRoute(request.URL.Path); matches {

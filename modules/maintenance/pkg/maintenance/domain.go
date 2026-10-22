@@ -2,7 +2,7 @@ package maintenance
 
 import "time"
 
-var requiredRetirementOwners = []string{"IAM", "REGISTRY", "TELEMETRY", "METRIC", "ALARM", "OUTBOUND_DELIVERY"}
+var requiredRetirementOwners = []string{"IAM", "REGISTRY", "TELEMETRY", "METRIC", "ALARM"}
 
 type OwnerStep struct {
 	OwnerCode string
