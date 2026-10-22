@@ -22,10 +22,10 @@ var (
 
 const zeroRecordHash = "0000000000000000000000000000000000000000000000000000000000000000"
 
+// MessageMetadata is where an event came from: the PostgreSQL outbox topic, or operations-http.
+// The inbox's partition_id and offset_value columns are left over from Kafka and always 0.
 type MessageMetadata struct {
 	Topic      string
-	Partition  int
-	Offset     int64
 	ReceivedAt time.Time
 }
 
@@ -131,11 +131,10 @@ func (store *Store) Consume(ctx context.Context, payload []byte, metadata Messag
 	err = tx.QueryRow(ctx, `
 		INSERT INTO audit_ledger.inbox (
 			message_id, tenant_id, topic, partition_id, offset_value, envelope_sha256, received_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7)
+		) VALUES ($1,$2,$3,0,0,$4,$5)
 		ON CONFLICT (message_id) DO NOTHING
 		RETURNING message_id
-	`, event.MessageID, event.TenantID, metadata.Topic, metadata.Partition,
-		metadata.Offset, envelopeSHA, metadata.ReceivedAt.UTC()).Scan(&insertedMessageID)
+	`, event.MessageID, event.TenantID, metadata.Topic, envelopeSHA, metadata.ReceivedAt.UTC()).Scan(&insertedMessageID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var existingSHA string
 		if err := tx.QueryRow(ctx, `SELECT envelope_sha256 FROM audit_ledger.inbox WHERE message_id = $1`, event.MessageID).Scan(&existingSHA); err != nil {
@@ -227,11 +226,10 @@ func (store *Store) ConsumeOperations(
 	err = tx.QueryRow(ctx, `
 		INSERT INTO audit_ledger.inbox (
 			message_id, tenant_id, topic, partition_id, offset_value, envelope_sha256, received_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7)
+		) VALUES ($1,$2,$3,0,0,$4,$5)
 		ON CONFLICT (message_id) DO NOTHING
 		RETURNING message_id
-	`, event.EventID, event.TenantID, metadata.Topic, metadata.Partition,
-		metadata.Offset, envelopeSHA, metadata.ReceivedAt.UTC()).Scan(&insertedMessageID)
+	`, event.EventID, event.TenantID, metadata.Topic, envelopeSHA, metadata.ReceivedAt.UTC()).Scan(&insertedMessageID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var existingSHA string
 		if err := tx.QueryRow(ctx, `SELECT envelope_sha256 FROM audit_ledger.inbox WHERE message_id = $1`, event.EventID).Scan(&existingSHA); err != nil {

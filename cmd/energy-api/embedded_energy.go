@@ -260,7 +260,7 @@ func runEmbeddedAuditOutboxRelay(ctx context.Context, outbox *sessionstore.Outbo
 			continue
 		}
 		inserted, consumeErr := store.Consume(ctx, record.Payload, auditserver.MessageMetadata{
-			Topic: record.Topic, Partition: 0, Offset: 0, ReceivedAt: time.Now().UTC(),
+			Topic: record.Topic, ReceivedAt: time.Now().UTC(),
 		})
 		if consumeErr != nil {
 			_ = outbox.MarkFailed(ctx, record.MessageID, owner, "AUDIT_LEDGER_WRITE_FAILED", now.Add(time.Second))
