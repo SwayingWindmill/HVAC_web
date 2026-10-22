@@ -38,6 +38,7 @@ var (
 type ServerConfig struct {
 	Store                          SnapshotStore
 	LatestCache                    LatestCache
+	CurrentSnapshots               CurrentSnapshotReader
 	Authorizer                     GrantAuthorizer
 	AllowedGatewaySPIFFE           string
 	AllowedSnapshotReaderSPIFFEs   []string
@@ -61,6 +62,7 @@ type ServerConfig struct {
 type handler struct {
 	store                          SnapshotStore
 	latestCache                    LatestCache
+	currentSnapshots               CurrentSnapshotReader
 	authorizer                     GrantAuthorizer
 	allowedGatewaySPIFFE           string
 	allowedSnapshotReaderSPIFFEs   map[string]struct{}
@@ -98,7 +100,7 @@ func NewHandler(config ServerConfig) http.Handler {
 		allowedSnapshotReaderSPIFFEs[reader] = struct{}{}
 	}
 	return &handler{
-		store: config.Store, latestCache: config.LatestCache, authorizer: config.Authorizer,
+		store: config.Store, latestCache: config.LatestCache, currentSnapshots: config.CurrentSnapshots, authorizer: config.Authorizer,
 		allowedGatewaySPIFFE:           strings.TrimSpace(config.AllowedGatewaySPIFFE),
 		allowedSnapshotReaderSPIFFEs:   allowedSnapshotReaderSPIFFEs,
 		runtimeAudience:                strings.TrimSpace(config.RuntimeAudience),
@@ -209,7 +211,7 @@ func (h *handler) handleSingle(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	snapshot, err := h.readLatestSnapshot(request.Context(), access, target)
-	if errors.Is(err, ErrLatestCacheMiss) {
+	if errors.Is(err, ErrSnapshotNotFound) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false)
 		return
 	}
@@ -268,7 +270,7 @@ func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request)
 	response := telemetryapi.BatchGetObservationSnapshotsResponse{SchemaVersion: 1, Items: make([]telemetryapi.BatchObservationResult, 0, len(input.Requests))}
 	for index, item := range input.Requests {
 		snapshot, err := h.readLatestSnapshot(request.Context(), access, targets[index])
-		if errors.Is(err, ErrLatestCacheMiss) {
+		if errors.Is(err, ErrSnapshotNotFound) {
 			response.Items = append(response.Items, telemetryapi.BatchObservationResult{Failure: &telemetryapi.BatchObservationFailure{
 				RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "ERROR",
 				Problem: problemDetails(request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false),
@@ -287,11 +289,17 @@ func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request)
 	writeJSON(writer, http.StatusOK, response)
 }
 
+// readLatestSnapshot answers from Redis and, when Redis misses or is down, from PostgreSQL,
+// which holds the current snapshot Redis copies (ADR 0013 section 5).
 func (h *handler) readLatestSnapshot(ctx context.Context, access AccessContext, target telemetryauth.Target) (telemetryapi.DeviceObservationSnapshot, error) {
-	if h.latestCache == nil {
-		return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheUnavailable
+	err := ErrLatestCacheUnavailable
+	var snapshot telemetryapi.DeviceObservationSnapshot
+	if h.latestCache != nil {
+		snapshot, err = h.latestCache.GetForDevice(ctx, access.TenantID, target.DeviceID)
 	}
-	snapshot, err := h.latestCache.GetForDevice(ctx, access.TenantID, target.DeviceID)
+	if (errors.Is(err, ErrLatestCacheMiss) || errors.Is(err, ErrLatestCacheUnavailable)) && h.currentSnapshots != nil {
+		snapshot, err = h.currentSnapshots.LatestSnapshot(ctx, access.TenantID, target.DeviceID)
+	}
 	if err != nil {
 		return telemetryapi.DeviceObservationSnapshot{}, err
 	}

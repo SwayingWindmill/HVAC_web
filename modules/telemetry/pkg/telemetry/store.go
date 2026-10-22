@@ -28,6 +28,14 @@ type SnapshotStore interface {
 	EvaluateAndRead(context.Context, telemetryauth.Target, time.Time) (SnapshotCommit, error)
 }
 
+// CurrentSnapshotReader reads the current snapshot of a Device from PostgreSQL.
+type CurrentSnapshotReader interface {
+	LatestSnapshot(ctx context.Context, tenantID, deviceID string) (telemetryapi.DeviceObservationSnapshot, error)
+}
+
+// ErrSnapshotNotFound means PostgreSQL holds no current snapshot of the Device for that tenant.
+var ErrSnapshotNotFound = errors.New("telemetry device snapshot not found")
+
 type EventIDGenerator func(time.Time) (string, error)
 
 type PostgresStore struct {

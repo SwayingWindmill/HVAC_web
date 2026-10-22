@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -104,6 +105,41 @@ func TestPostgresSnapshotTransactionRevisionAndRollback(t *testing.T) {
 		t.Fatalf("recovered=%#v", recovered)
 	}
 	assertCurrentTransactionState(t, admin, 4, 4, "ONLINE", "AVAILABLE")
+}
+
+func TestPostgresLatestSnapshotReadsTheCurrentSnapshotOfItsTenant(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	resetDeviceAState(t, admin)
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.LatestSnapshot(ctx, tenantA, deviceA); !errors.Is(err, ErrSnapshotNotFound) {
+		t.Fatalf("before any evaluation err=%v", err)
+	}
+	commit, err := store.EvaluateAndRead(ctx, telemetryauth.Target{DeviceID: deviceA, Keys: []string{"zone.temperature"}}, time.Date(2026, 7, 23, 0, 0, 5, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := store.LatestSnapshot(ctx, tenantA, deviceA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.BusinessRevision != commit.Snapshot.BusinessRevision || snapshot.TenantId != commit.Snapshot.TenantId || len(snapshot.Values) == 0 {
+		t.Fatalf("snapshot=%#v committed=%#v", snapshot, commit.Snapshot)
+	}
+	if _, err := store.LatestSnapshot(ctx, tenantB, deviceA); !errors.Is(err, ErrSnapshotNotFound) {
+		t.Fatalf("another tenant read Device A: err=%v", err)
+	}
 }
 
 func TestPostgresSnapshotTwoOrganizationIsolationAndRuntimeRole(t *testing.T) {
