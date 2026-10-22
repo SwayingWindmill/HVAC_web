@@ -118,6 +118,9 @@ func (store *PostgresStore) EvaluateTelemetrySnapshot(ctx context.Context, event
 	decisions := make([]EvaluationDecision, 0, len(relevant))
 	for _, rule := range relevant {
 		decision, err := store.EvaluateAssignedSnapshot(ctx, rule.assignmentID, evaluationSnapshot, now.UTC())
+		if errors.Is(err, ErrRuleRetired) {
+			continue
+		}
 		if err != nil {
 			return decisions, err
 		}

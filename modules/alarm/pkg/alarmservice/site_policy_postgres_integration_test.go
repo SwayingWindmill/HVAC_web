@@ -135,10 +135,10 @@ func TestPostgresRetiredSiteRuleStopsAndRecoversItsAlarm(t *testing.T) {
 		t.Fatalf("a retired rule is still on the Site: %#v %v", rules, err)
 	}
 	cleared := siteAlarms(t, ctx, store, retireSiteID, alarmmodel.ConditionCleared)
-	if len(cleared) != 1 || cleared[0].Timeline[len(cleared[0].Timeline)-1].Reason != "RULE_RETIRED" {
+	if len(cleared) != 1 || cleared[0].Timeline[len(cleared[0].Timeline)-1].Reason != RuleRetiredReason {
 		t.Fatalf("the retired rule's Alarm did not recover as retired: %#v", cleared)
 	}
-	if pass, err := store.RunDueEvaluations(context.Background(), "retire-test", retiredAt.Add(2*time.Hour)); err != nil || pass.Raised != 0 || pass.Failed != 0 {
+	if pass, err := store.RunDueEvaluations(context.Background(), "retire-test", retiredAt.Add(2*time.Hour)); err != nil || pass.Evaluated != 0 || pass.Raised != 0 || pass.Failed != 0 {
 		t.Fatalf("the scheduled pass still judged the retired rule: %#v %v", pass, err)
 	}
 	after := silenceSnapshot(2, retiredAt.Add(3*time.Hour))
@@ -148,5 +148,20 @@ func TestPostgresRetiredSiteRuleStopsAndRecoversItsAlarm(t *testing.T) {
 	}
 	if active := siteAlarms(t, ctx, store, retireSiteID, alarmmodel.ConditionActive); len(active) != 0 {
 		t.Fatalf("the retired rule raised again: %#v", active)
+	}
+
+	// Putting the unchanged rule back in the file brings it back, and the scheduled pass judges it
+	// with the Site's last readings without waiting for a new one.
+	unpublished := policy
+	unpublished.PolicyRevisionID, unpublished.Revision, unpublished.Digest = "", 0, ""
+	republishedAt := retiredAt.Add(4 * time.Hour)
+	if _, changed, err := store.PublishSitePolicy(ctx, silenceTenantID, retireSiteID, unpublished, retireAssignmentID, republishedAt, "alarm-rules:test"); err != nil || !changed {
+		t.Fatalf("publishing the retired rule again did not bring it back: changed=%v %v", changed, err)
+	}
+	if rules, err := store.SiteRules(ctx, silenceTenantID, retireSiteID); err != nil || len(rules) != 1 {
+		t.Fatalf("site rules after publishing again: %#v %v", rules, err)
+	}
+	if pass, err := store.RunDueEvaluations(context.Background(), "retire-test", republishedAt.Add(time.Minute)); err != nil || pass.Raised != 1 {
+		t.Fatalf("the scheduled pass did not judge the rule brought back: %#v %v", pass, err)
 	}
 }

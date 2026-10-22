@@ -8,7 +8,8 @@ ALTER TABLE alarm_runtime.alarm_policy_assignment
   ADD COLUMN retired boolean NOT NULL DEFAULT false;
 
 -- Same as 013, except a Site rule whose latest assignment revision is retired is not awaiting
--- evaluation.
+-- evaluation, and one evaluated under an older assignment revision is: publishing a retired rule
+-- again assigns it anew, so the scheduled pass judges it even before a reading arrives.
 CREATE OR REPLACE FUNCTION alarm_runtime.tenants_with_due_evaluations(due_at timestamptz)
 RETURNS SETOF uuid
 LANGUAGE sql
@@ -24,7 +25,7 @@ AS $$
   UNION
   SELECT current.tenant_id
   FROM (
-    SELECT DISTINCT ON (tenant_id, site_id, assignment_id) tenant_id, site_id, assignment_id, policy_revision_id, retired
+    SELECT DISTINCT ON (tenant_id, site_id, assignment_id) tenant_id, site_id, assignment_id, assignment_revision, policy_revision_id, retired
     FROM alarm_runtime.alarm_policy_assignment
     WHERE subject_type = 'SITE'
     ORDER BY tenant_id, site_id, assignment_id, assignment_revision DESC) AS current
@@ -36,7 +37,8 @@ AS $$
       SELECT 1 FROM alarm_runtime.alarm_evaluation_state AS state
       WHERE state.tenant_id = current.tenant_id AND state.site_id = current.site_id
         AND state.assignment_id = current.assignment_id
-        AND state.policy_revision_id = current.policy_revision_id)
+        AND state.policy_revision_id = current.policy_revision_id
+        AND state.assignment_revision = current.assignment_revision)
 $$;
 
 COMMIT;

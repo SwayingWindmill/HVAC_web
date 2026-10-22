@@ -170,6 +170,9 @@ func (store *PostgresStore) EvaluateClaim(ctx context.Context, claim EvaluationC
 		return EvaluationDecision{}, ErrEvaluationClaimLost
 	}
 	assigned, err := loadAssignedAlarmPolicy(ctx, tx, claim.TenantID, claim.SiteID, claim.AssignmentID)
+	if errors.Is(err, ErrRuleRetired) {
+		return EvaluationDecision{}, ErrEvaluationClaimLost
+	}
 	if err != nil {
 		return EvaluationDecision{}, err
 	}
@@ -408,8 +411,11 @@ func loadAssignedAlarmPolicy(ctx context.Context, tx pgx.Tx, tenantID, siteID, a
 		WHERE assignment.tenant_id = $1 AND assignment.site_id = $2 AND assignment.assignment_id = $3
 		ORDER BY assignment.assignment_revision DESC
 		LIMIT 1`, tenantID, siteID, assignmentID).Scan(&assigned.AssignmentID, &assigned.AssignmentRevision, &assigned.SubjectType, &assigned.SubjectID, &policyRevisionID, &retired, &policyID, &policyRevision, &schemaVersion, &digest, &policyJSON)
-	if errors.Is(err, pgx.ErrNoRows) || retired {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return assignedAlarmPolicy{}, ErrNotFound
+	}
+	if err == nil && retired {
+		return assignedAlarmPolicy{}, ErrRuleRetired
 	}
 	if err != nil {
 		return assignedAlarmPolicy{}, fmt.Errorf("load Alarm policy assignment: %w", err)

@@ -12,6 +12,9 @@ import (
 // RuleRetiredReason is why an Alarm recovered when its rule left the Site's rules file.
 const RuleRetiredReason = "RULE_RETIRED"
 
+// ErrRuleRetired means the rule left the Site after its evaluation was scheduled.
+var ErrRuleRetired = errors.New("alarm rule is retired")
+
 // SiteRules are the rules the Site evaluates now: each Site assignment whose latest revision is not
 // retired, with the policy revision it points at.
 func (store *PostgresStore) SiteRules(ctx context.Context, tenantID, siteID string) ([]SiteRule, error) {
@@ -67,6 +70,11 @@ func (store *PostgresStore) RetireSiteRule(ctx context.Context, tenantID, siteID
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// The same lock an evaluation of this rule takes, so a reading being judged and the retirement
+	// never interleave.
+	if err := lockEvaluationAssignment(ctx, tx, tenantID, assignmentID); err != nil {
+		return err
+	}
 	var revision uint64
 	var policyRevisionID, subjectType, subjectID string
 	var retired bool
@@ -124,7 +132,7 @@ func (store *PostgresStore) RetireSiteRule(ctx context.Context, tenantID, siteID
 			Fingerprint: alarm.fingerprint, IncidentCorrelationID: alarm.incidentCorrelationID,
 			OccurredAt: at.UTC().Format(time.RFC3339Nano), Reason: RuleRetiredReason, RuleRevision: policyRevisionID,
 			ActorType: "WORKLOAD", ActorID: by, CorrelationID: correlationID,
-		}); err != nil && !errors.Is(err, ErrNotFound) {
+		}); err != nil {
 			return fmt.Errorf("recover retired rule's Alarm: %w", err)
 		}
 	}
