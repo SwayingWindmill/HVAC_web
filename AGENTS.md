@@ -68,7 +68,7 @@ npm run deployment:phase1:check                          # 改了 Compose 或迁
 ## 网页和数据库
 
 - **改网页**前读 `apps/hvac-web/README.md`「约定」（技术栈、状态归属、组件、只显示真实数据、1440px 真实数据验收）和 `DESIGN.md`。
-- **改表结构**前读 `deploy/platform/phase1/README.md`「数据库和迁移」：新增迁移要登记到三个文件，正式上线前和上线后的规则不同。
+- **改表结构**前读 `deploy/platform/phase1/README.md`「数据库和迁移」：新增迁移要登记到三个文件；迁移已经冻结，登记过的迁移不能再改，改表结构只能新增迁移。
 
 ## 写文档
 

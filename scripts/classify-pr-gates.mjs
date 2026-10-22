@@ -39,7 +39,7 @@ async function changedFiles() {
       gitEnvironment.GIT_WORK_TREE = root;
     }
   }
-  const result = spawnSync('git', ['diff', '--name-only', '--diff-filter=ACMRTUXB', `${base}...${head}`], {
+  const result = spawnSync('git', ['diff', '--name-only', '--diff-filter=ACDMRTUXB', `${base}...${head}`], {
     cwd: root,
     encoding: 'utf8',
     windowsHide: true,
@@ -256,7 +256,8 @@ for (const file of files) {
     scriptMatch(lower.includes('s5-') || lower.includes('work-order') || lower.includes('workorder'), () => selectWorkOrder(file, 'Work Order automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') }));
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));
     scriptMatch(lower.includes('operations-agent'), () => selectOperationsAgent(file, 'Operations Agent automation changed', { integration: lower.includes('postgres') || lower.includes('migration') }));
-    scriptMatch(lower.includes('ownership') || lower.includes('contract') || lower.includes('production-rollout'), () => add(contractProfiles, ['core']));
+    // The migration freeze check runs in the contracts core; its tests run in every static gate.
+    scriptMatch(lower.includes('ownership') || lower.includes('contract') || lower.includes('production-rollout') || lower.includes('migration-freeze'), () => add(contractProfiles, ['core']));
     if (!scriptMatched) {
       unknown = true;
       selectBroad(file, 'unknown automation script selected the broad fail-closed suite');
