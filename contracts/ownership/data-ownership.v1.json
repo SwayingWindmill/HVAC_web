@@ -267,7 +267,7 @@
       "kind": "outbox",
       "name": "telemetry-publication-outbox",
       "writer": "telemetry-runtime-service",
-      "relay": "outbox-relay",
+      "relay": "telemetry-worker",
       "revision": 1
     },
     {
@@ -536,7 +536,7 @@
       "mode": "write"
     },
     {
-      "service": "outbox-relay",
+      "service": "audit-ledger-service",
       "schema": "gateway",
       "mode": "relay"
     },
@@ -571,7 +571,7 @@
       "mode": "write"
     },
     {
-      "service": "outbox-relay",
+      "service": "telemetry-worker",
       "schema": "telemetry_runtime",
       "mode": "relay",
       "restrictedTo": [

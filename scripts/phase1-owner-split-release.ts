@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 export const ownerSplitImageVariables = [
   "ENERGY_API_IMAGE",
   "IAM_SERVICE_IMAGE",
-  "AUDIT_SERVICE_IMAGE",
   "CORE_SERVICE_IMAGE",
   "TELEMETRY_QUERY_SERVICE_IMAGE",
   "COMMAND_SERVICE_IMAGE",

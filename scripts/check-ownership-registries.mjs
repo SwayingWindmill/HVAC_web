@@ -110,8 +110,8 @@ for (const access of dataRegistry.databaseAccess ?? []) {
   if (access.service === 'legacy-migration-service' || access.service === 'legacy-hvac-backend') errors.push(`${access.service}:${access.schema}: legacy compatibility access is forbidden`);
   if (access.mode === 'write' && access.service !== schema.writer) errors.push(`${access.service}:${access.schema}: forbidden cross-service writer`);
   if (access.mode === 'relay') {
-    const validGatewayRelay = access.service === 'outbox-relay' && access.schema === 'gateway';
-    const validTelemetryRelay = access.service === 'outbox-relay' && access.schema === 'telemetry_runtime'
+    const validGatewayRelay = access.service === 'audit-ledger-service' && access.schema === 'gateway';
+    const validTelemetryRelay = access.service === 'telemetry-worker' && access.schema === 'telemetry_runtime'
       && Array.isArray(access.restrictedTo) && access.restrictedTo.join('|') === 'telemetry_publication_outbox';
     const validNotificationRelay = access.service === 'notification-service' && access.schema === 'alarm_runtime'
       && Array.isArray(access.restrictedTo) && access.restrictedTo.join('|') === 'notification_outbox';

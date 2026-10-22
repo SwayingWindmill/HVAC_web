@@ -190,7 +190,7 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 
 ### 追踪收集器不可用
 
-告警：`S0TelemetryExportFailures`（只在单独运行操作记录的投递时有）。处理方法同「指标导出失败」。
+告警：`S0TelemetryExportFailures`。处理方法同「指标导出失败」。
 
 ## 能耗
 
@@ -242,31 +242,6 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 告警：`AlarmMutationRejectionRateHigh`。
 
 4xx 多，可能是用户越权，也可能是策略和客户端对不上。按操作（确认、指派、屏蔽、关闭等）看分布，再看授权和操作记录。只是 4xx 涨，不要找数据库的人。
-
-## 操作记录的投递（只在单独运行时有）
-
-这两节的指标来自 `outbox-relay` 和单独运行的 `audit-owner`，经 Kafka 投递；第一阶段的 Compose 里没有 Kafka，这些告警正常情况下不会出现。
-
-### 待发事件积压
-
-告警：`S0OutboxStuck`。
-
-1. 确认 `s0_outbox_oldest_age_seconds` 在涨，并对比 `s0_outbox_publish_total{result="error"}`。
-2. 检查 Kafka（Redpanda）是否可用、认证是否正常，不要打印它的凭据。
-3. 看 `outbox_publish_failed` 日志里的 `error_code=BROKER_PUBLISH_FAILED`，不要去搜消息内容或授权。
-4. 恢复消息服务或网络。不要删待发事件，也不要手工改聚合版本。
-5. 确认最老的积压回到告警门槛（60 秒）以内，同样的消息经收件表去重后只记一次。
-
-### 操作记录写入慢或失败
-
-告警：`S0AuditIngestionFailing`、`S0AuditIngestionLatencyHigh`。
-
-1. 按结果看 `s0_audit_ingestion_total`，看 `s0_audit_ingestion_latency_seconds` 的 P95。
-2. 确认操作记录的接收进程、PostgreSQL 的接收角色和 Kafka 消费组都正常。
-3. 用每个主题、分区的 `s0_audit_consumer_offset` 判断是不是某个分区卡住了。
-4. 看固定的错误代码 `AUDIT_TRANSACTION_FAILED`、`OFFSET_COMMIT_FAILED`；SQL、连接串、消息内容和授权都保持脱敏。
-5. 恢复出问题的依赖。不要绕过收件表的事务，不要改只追加的记录。
-6. 通过网关查原来的消息，确认操作记录里正好有一条，带着原来的关联、因果和追踪编号。
 
 ## 主机磁盘和 PostgreSQL 的 WAL
 

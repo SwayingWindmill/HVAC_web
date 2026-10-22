@@ -109,7 +109,6 @@ export const gateCommandMatrix = Object.freeze({
     ]),
   }),
   browser: Object.freeze({
-    platform: Object.freeze([npmRun('audit:security-failure')]),
     telemetry: Object.freeze([
       nodeRun('scripts/run-s2-telemetry-live-browser-audit.mjs'),
     ]),
@@ -146,7 +145,6 @@ export const gateProfileSets = Object.freeze({
       'workorder',
     ]),
     browser: Object.freeze([
-      'platform',
       'telemetry',
       'workorder',
     ]),
@@ -190,7 +188,7 @@ export const domainTaskProfiles = Object.freeze({
     contracts: Object.freeze(['core']),
     unit: Object.freeze(['platform']),
     integration: Object.freeze(['platform']),
-    browser: Object.freeze(['platform']),
+    browser: Object.freeze([]),
   }),
   registry: Object.freeze({
     contracts: Object.freeze(['core', 'registry']),

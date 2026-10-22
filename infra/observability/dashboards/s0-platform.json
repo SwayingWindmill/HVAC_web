@@ -25,30 +25,6 @@
       "targets": [{ "expr": "histogram_quantile(0.95, sum by (le, service, route) (rate(s0_http_request_duration_seconds_bucket[5m])))", "legendFormat": "{{service}} {{route}}" }]
     },
     {
-      "id": 4,
-      "title": "Outbox oldest age",
-      "type": "timeseries",
-      "targets": [{ "expr": "max by (service) (s0_outbox_oldest_age_seconds)", "legendFormat": "{{service}}" }]
-    },
-    {
-      "id": 5,
-      "title": "Audit ingestion throughput",
-      "type": "timeseries",
-      "targets": [{ "expr": "sum by (result) (rate(s0_audit_ingestion_total[5m]))", "legendFormat": "{{result}}" }]
-    },
-    {
-      "id": 6,
-      "title": "Audit ingestion p95 latency",
-      "type": "timeseries",
-      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le) (rate(s0_audit_ingestion_latency_seconds_bucket[5m])))", "legendFormat": "p95" }]
-    },
-    {
-      "id": 7,
-      "title": "Consumer committed offsets",
-      "type": "timeseries",
-      "targets": [{ "expr": "s0_audit_consumer_offset", "legendFormat": "{{topic}} p{{partition}}" }]
-    },
-    {
       "id": 8,
       "title": "Telemetry pressure",
       "type": "timeseries",
@@ -68,15 +44,6 @@
       "title": "Internal identity failures",
       "type": "timeseries",
       "targets": [{ "expr": "sum by (route) (rate(s0_http_requests_total{service=\"iam-service\",result=\"error\"}[5m]))", "legendFormat": "{{route}}" }]
-    },
-    {
-      "id": 12,
-      "title": "Async Audit lag",
-      "type": "timeseries",
-      "targets": [
-        { "expr": "max(s0_outbox_oldest_age_seconds)", "legendFormat": "oldest Outbox seconds" },
-        { "expr": "histogram_quantile(0.95, sum by (le) (rate(s0_audit_ingestion_latency_seconds_bucket[5m])))", "legendFormat": "Audit ingestion p95" }
-      ]
     }
   ]
 }
