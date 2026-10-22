@@ -49,6 +49,7 @@ import {
 } from '../alarm-presentation';
 import { useAlarmActions } from '../use-alarm-actions';
 import { AlarmDetailPane } from './AlarmDetailPane';
+import { AlarmGroupHeader, AlarmListRow } from './AlarmListRow';
 import { AlarmRulesTable } from './AlarmRulesTable';
 
 const siteRoute = getRouteApi('/_app/_site');
@@ -355,40 +356,26 @@ export function AlarmsWorkspace() {
                 <ul aria-label="告警记录">
                   {groups.map((group) => (
                     <li key={group.label}>
-                      <div className="flex h-[34px] items-center bg-muted px-4 text-xs font-medium text-muted-foreground">
-                        {group.label}
-                        <span className="ml-auto font-mono text-subtle-foreground">{group.alarms.length}</span>
-                      </div>
+                      <AlarmGroupHeader label={group.label} count={group.alarms.length} />
                       <ul>
-                        {group.alarms.map((alarm) => {
-                          const isSelected = alarm.alarmId === selectedId;
-                          return (
-                            <li key={alarm.alarmId} id={`alarm-${alarm.alarmId}`}>
-                              <button
-                                type="button"
-                                aria-current={isSelected ? 'true' : undefined}
-                                onClick={() => setSearch({ inspect: alarm.alarmId })}
-                                className={cn(
-                                  'relative grid w-full grid-cols-[12px_minmax(0,1fr)_auto] gap-x-2.5 gap-y-[3px] border-b border-divider px-4 pt-[11px] pb-3 text-left outline-none hover:bg-accent focus-visible:bg-accent',
-                                  isSelected && 'bg-primary-soft hover:bg-primary-soft before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-primary',
-                                )}
-                              >
-                                <SeverityMark level={SEVERITY_LEVEL[alarm.currentSeverity]} label={SEVERITY_LABELS[alarm.currentSeverity]} className="row-span-2 mt-[5px]" />
-                                <span className="truncate text-sm font-semibold">{alarm.title}</span>
-                                <span className="text-xs whitespace-nowrap text-subtle-foreground" title={formatTime(alarm.firstOccurredAt, site.timezone)}>
-                                  {formatRelative(alarm.firstOccurredAt, now)}
-                                </span>
-                                <span className="col-span-2 col-start-2 truncate text-xs text-muted-foreground">
-                                  {alarm.deviceId ? deviceNames.get(alarm.deviceId) ?? '—' : '站点'}
-                                  {' · '}持续 {formatDuration(alarm.firstOccurredAt, alarm.clearedAt, now)}
-                                  {alarm.occurrenceCount > 1 ? ` · 发生 ${alarm.occurrenceCount} 次` : ''}
-                                  {' · '}{alarm.assigneeId ? personLabel(alarm.assigneeId, myId) : '未分配'}
-                                  {' · '}{alarm.condition === 'CLEARED' ? '已恢复' : alarm.acknowledgement ? '已确认' : '未确认'}
-                                </span>
-                              </button>
-                            </li>
-                          );
-                        })}
+                        {group.alarms.map((alarm) => (
+                          <AlarmListRow
+                            key={alarm.alarmId}
+                            id={`alarm-${alarm.alarmId}`}
+                            alarm={alarm}
+                            selected={alarm.alarmId === selectedId}
+                            onSelect={() => setSearch({ inspect: alarm.alarmId })}
+                            when={formatRelative(alarm.firstOccurredAt, now)}
+                            whenTitle={formatTime(alarm.firstOccurredAt, site.timezone)}
+                            facts={<>
+                              {alarm.deviceId ? deviceNames.get(alarm.deviceId) ?? '—' : '站点'}
+                              {' · '}持续 {formatDuration(alarm.firstOccurredAt, alarm.clearedAt, now)}
+                              {alarm.occurrenceCount > 1 ? ` · 发生 ${alarm.occurrenceCount} 次` : ''}
+                              {' · '}{alarm.assigneeId ? personLabel(alarm.assigneeId, myId) : '未分配'}
+                              {' · '}{alarm.condition === 'CLEARED' ? '已恢复' : alarm.acknowledgement ? '已确认' : '未确认'}
+                            </>}
+                          />
+                        ))}
                       </ul>
                     </li>
                   ))}

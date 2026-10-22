@@ -17,7 +17,7 @@ const allowedOwners = new Set([
   'telemetry-query-service', 'operations-agent-service', 'alarm-service', 'notification-service', 'work-order-service',
   'forecast-service', 'fdd-service', 'mv-service', 'report-service', 'optimization-service', 'metric-engine-service', 'settlement-service', 'rule-runtime-service',
 ]);
-const allowedScopes = new Set(['tenant', 'principal', 'site', 'device', 'key', 'alarm', 'notification', 'work-order', 'asset', 'space', 'point', 'command']);
+const allowedScopes = new Set(['tenant', 'principal', 'site', 'device', 'key', 'alarm', 'work-order', 'asset', 'space', 'point', 'command']);
 const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const allowedRouteFields = new Set(['method', 'path', 'owner', 'publicIngress', 'revision', 'rollout', 'compatibilityMode', 'allowedScopeDimensions']);
 const allowedRolloutFields = new Set(['mode']);

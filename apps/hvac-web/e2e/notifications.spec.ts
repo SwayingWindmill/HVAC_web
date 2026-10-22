@@ -21,7 +21,7 @@ test('通知 lists the alarms happening now above the ones cleared lately, and t
   await page.getByRole('radio', { name: '只看未确认' }).click();
   await expect(page).toHaveURL(/unack=true/);
   await expect(rows).toHaveCount(1);
-  await expect(list.getByText(/^最近恢复/)).toHaveCount(0);
+  await expect(list).toContainText('最近恢复的都有人确认了');
 });
 
 test('acknowledging an alarm from 通知 clears it from the bell', async ({ page, gateway }) => {

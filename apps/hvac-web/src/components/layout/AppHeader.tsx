@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { Bell, Search, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { CommandSearch } from './CommandSearch';
 import { NavUser } from './NavUser';
 import { ScopeSwitcher } from './ScopeSwitcher';
-import { activeAlarmsQuery } from '@/features/alarms/alarm-api';
+import { useWaitingAlarmCount } from '@/features/alarms/use-waiting-alarm-count';
 import { BrandMark } from '@/components/brand-mark';
 
 interface AppHeaderProps {
@@ -32,8 +31,7 @@ export function AppHeader({
   assistant,
 }: AppHeaderProps) {
   const [commandOpen, setCommandOpen] = useState(false);
-  const active = useQuery({ ...activeAlarmsQuery(siteId ?? ''), enabled: siteId !== undefined });
-  const waiting = active.data?.items.filter((alarm) => !alarm.acknowledgement).length ?? 0;
+  const waiting = useWaitingAlarmCount(siteId);
 
   useEffect(() => {
     const handleShortcut = (event: globalThis.KeyboardEvent) => {

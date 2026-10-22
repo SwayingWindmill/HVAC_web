@@ -172,18 +172,17 @@ func validateEntry(entry RouteEntry) error {
 	}
 
 	allowedScopes := map[string]bool{
-		"tenant":       true,
-		"principal":    true,
-		"site":         true,
-		"space":        true,
-		"asset":        true,
-		"device":       true,
-		"point":        true,
-		"command":      true,
-		"key":          true,
-		"alarm":        true,
-		"notification": true,
-		"work-order":   true,
+		"tenant":     true,
+		"principal":  true,
+		"site":       true,
+		"space":      true,
+		"asset":      true,
+		"device":     true,
+		"point":      true,
+		"command":    true,
+		"key":        true,
+		"alarm":      true,
+		"work-order": true,
 	}
 	seenScopes := map[string]bool{}
 	for _, scope := range entry.AllowedScopeDimensions {

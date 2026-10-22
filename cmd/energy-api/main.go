@@ -778,7 +778,6 @@ func defaultLimitPolicy() *limitpolicy.Policy {
 			{Dimension: limitpolicy.DimensionRest, Window: time.Minute, Burst: 600, FailClosed: false},
 			{Dimension: limitpolicy.DimensionCommandWrite, Window: time.Minute, Burst: 60, FailClosed: true},
 			{Dimension: limitpolicy.DimensionExpensiveQuery, Window: time.Minute, Burst: 30, FailClosed: false},
-			{Dimension: limitpolicy.DimensionNotification, Window: time.Minute, Burst: 120, FailClosed: false},
 			{Dimension: limitpolicy.DimensionOperationsAgent, Window: time.Minute, Burst: 30, FailClosed: true},
 		},
 	}

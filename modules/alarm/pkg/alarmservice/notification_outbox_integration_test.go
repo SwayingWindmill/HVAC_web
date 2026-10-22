@@ -47,7 +47,7 @@ func TestPostgresAlarmNotificationOutboxEmitsOnlyBusinessStateChangesAndRelayIsF
 		t.Fatal(err)
 	}
 	ack := postgresMutation(alarmmodel.OperationAcknowledge, severityChanged.Version, "s16-notification-ack", "2026-08-23T08:03:00Z")
-	acked, err := store.Apply(ctx, postgresTestTenantID, postgresTestSiteID, created.AlarmID, ack)
+	_, err = store.Apply(ctx, postgresTestTenantID, postgresTestSiteID, created.AlarmID, ack)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestPostgresAlarmNotificationOutboxEmitsOnlyBusinessStateChangesAndRelayIsF
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleared, err := store.ClearActive(ctx, postgresTestTenantID, postgresTestSiteID, Recovery{
+	_, err = store.ClearActive(ctx, postgresTestTenantID, postgresTestSiteID, Recovery{
 		Fingerprint: fingerprint, IncidentCorrelationID: created.IncidentCorrelationID, OccurredAt: "2026-08-23T08:04:00Z",
 		Reason: "S16 recovery", RuleRevision: "alarm-policy-s16-1", ActorType: "WORKLOAD", ActorID: "alarm-evaluator", CorrelationID: "s16-clear",
 	})
@@ -86,11 +86,9 @@ func TestPostgresAlarmNotificationOutboxEmitsOnlyBusinessStateChangesAndRelayIsF
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(actions) != 4 || actions[0] != NotificationCreated || actions[1] != NotificationSeverityChanged || actions[2] != NotificationAcknowledged || actions[3] != NotificationCleared {
-		t.Fatalf("Alarm outbox emitted non-business or missing state events: actions=%#v versions=%#v", actions, versions)
-	}
-	if versions[0] != created.Version || versions[1] != severityChanged.Version || versions[2] != acked.Alarm.Version || versions[3] != cleared.Version {
-		t.Fatalf("Alarm outbox is not bound to exact aggregate versions: %#v", versions)
+	// Only the new Alarm goes out; its severity change, acknowledgement and recovery do not.
+	if len(actions) != 1 || actions[0] != NotificationCreated || versions[0] != created.Version {
+		t.Fatalf("Alarm outbox emitted other than the new Alarm: actions=%#v versions=%#v", actions, versions)
 	}
 
 	relay, err := OpenNotificationRelay(context.Background(), databaseURL)

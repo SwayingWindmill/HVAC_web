@@ -97,11 +97,7 @@ func (handler *httpHandler) authorize(request *http.Request, action string) (ide
 	return claims, true
 }
 
-func (handler *httpHandler) writeStoreFailure(writer http.ResponseWriter, err error) {
-	if errors.Is(err, ErrNotFound) {
-		handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Notification object is not visible.", false)
-		return
-	}
+func (handler *httpHandler) writeStoreFailure(writer http.ResponseWriter) {
 	handler.writeProblem(writer, http.StatusServiceUnavailable, "NOTIFICATION_UNAVAILABLE", "Notification unavailable", "Notification state is temporarily unavailable.", true)
 }
 

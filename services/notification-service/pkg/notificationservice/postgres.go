@@ -10,8 +10,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var ErrNotFound = errors.New("notification object not found")
-
 type PostgresStore struct {
 	pool *pgxpool.Pool
 }

@@ -23,7 +23,7 @@ func (handler *httpHandler) serveWeChatReminders(writer http.ResponseWriter, req
 	switch request.Method {
 	case http.MethodDelete:
 		if err := handler.reminders.ClearWeChatReminders(request.Context(), person, now); err != nil {
-			handler.writeStoreFailure(writer, err)
+			handler.writeStoreFailure(writer)
 			return
 		}
 		writer.WriteHeader(http.StatusNoContent)
@@ -37,14 +37,14 @@ func (handler *httpHandler) serveWeChatReminders(writer http.ResponseWriter, req
 		}
 		reminders, err := handler.reminders.AddWeChatReminder(request.Context(), person, input, now)
 		if err != nil {
-			handler.writeStoreFailure(writer, err)
+			handler.writeStoreFailure(writer)
 			return
 		}
 		writeNotificationJSON(writer, http.StatusOK, reminders)
 	default:
 		reminders, err := handler.reminders.WeChatReminders(request.Context(), person)
 		if err != nil {
-			handler.writeStoreFailure(writer, err)
+			handler.writeStoreFailure(writer)
 			return
 		}
 		writeNotificationJSON(writer, http.StatusOK, reminders)
