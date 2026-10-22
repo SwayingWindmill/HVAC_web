@@ -197,7 +197,7 @@ func (store *PostgresStore) PublishSitePolicy(ctx context.Context, tenantID, sit
 	if store == nil || store.pool == nil {
 		return AlarmPolicyRevision{}, false, ErrUnavailable
 	}
-	latest, assignmentRevision, assignedPolicyRevisionID, err := store.sitePolicyState(ctx, tenantID, siteID, policy.PolicyID, assignmentID)
+	latest, assignmentRevision, assignedPolicyRevisionID, retired, err := store.sitePolicyState(ctx, tenantID, siteID, policy.PolicyID, assignmentID)
 	if err != nil {
 		return AlarmPolicyRevision{}, false, err
 	}
@@ -222,7 +222,7 @@ func (store *PostgresStore) PublishSitePolicy(ctx context.Context, tenantID, sit
 			return AlarmPolicyRevision{}, false, err
 		}
 		latest = &policy
-	} else if assignedPolicyRevisionID == latest.PolicyRevisionID {
+	} else if assignedPolicyRevisionID == latest.PolicyRevisionID && !retired {
 		return *latest, false, nil
 	}
 	if err := store.AssignAlarmPolicyRevision(ctx, tenantID, siteID, AlarmPolicyAssignmentInput{
@@ -235,11 +235,12 @@ func (store *PostgresStore) PublishSitePolicy(ctx context.Context, tenantID, sit
 }
 
 // sitePolicyState is the latest revision of a policy family (nil before the first) and the latest
-// revision of its Site assignment with the policy revision it points at (0 and "" before the first).
-func (store *PostgresStore) sitePolicyState(ctx context.Context, tenantID, siteID, policyID, assignmentID string) (*AlarmPolicyRevision, uint64, string, error) {
+// revision of its Site assignment with the policy revision it points at and whether it is retired
+// (0, "" and false before the first).
+func (store *PostgresStore) sitePolicyState(ctx context.Context, tenantID, siteID, policyID, assignmentID string) (*AlarmPolicyRevision, uint64, string, bool, error) {
 	tx, err := store.beginTenantTransaction(ctx, tenantID, true)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, 0, "", false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var latest *AlarmPolicyRevision
@@ -249,25 +250,26 @@ func (store *PostgresStore) sitePolicyState(ctx context.Context, tenantID, siteI
 		WHERE tenant_id=$1 AND site_id=$2 AND policy_id=$3
 		ORDER BY revision DESC LIMIT 1`, tenantID, siteID, policyID).Scan(&policyJSON)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, 0, "", fmt.Errorf("read latest Alarm policy release: %w", err)
+		return nil, 0, "", false, fmt.Errorf("read latest Alarm policy release: %w", err)
 	}
 	if err == nil {
 		decoded, err := decodeAlarmPolicy(policyJSON)
 		if err != nil {
-			return nil, 0, "", err
+			return nil, 0, "", false, err
 		}
 		latest = &decoded
 	}
 	var assignmentRevision uint64
 	var assignedPolicyRevisionID string
+	var retired bool
 	err = tx.QueryRow(ctx, `
-		SELECT assignment_revision, policy_revision_id::text FROM alarm_runtime.alarm_policy_assignment
+		SELECT assignment_revision, policy_revision_id::text, retired FROM alarm_runtime.alarm_policy_assignment
 		WHERE tenant_id=$1 AND site_id=$2 AND assignment_id=$3
-		ORDER BY assignment_revision DESC LIMIT 1`, tenantID, siteID, assignmentID).Scan(&assignmentRevision, &assignedPolicyRevisionID)
+		ORDER BY assignment_revision DESC LIMIT 1`, tenantID, siteID, assignmentID).Scan(&assignmentRevision, &assignedPolicyRevisionID, &retired)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, 0, "", fmt.Errorf("read latest Alarm policy assignment: %w", err)
+		return nil, 0, "", false, fmt.Errorf("read latest Alarm policy assignment: %w", err)
 	}
-	return latest, assignmentRevision, assignedPolicyRevisionID, nil
+	return latest, assignmentRevision, assignedPolicyRevisionID, retired, nil
 }
 
 // samePolicyContent compares two revisions of a family by what they say, not by their identity.

@@ -164,16 +164,18 @@ func (store *PostgresStore) evaluateUnevaluatedSiteRules(ctx context.Context, te
 	}
 	rows, err := tx.Query(ctx, `
 SELECT current.site_id::text, current.assignment_id::text
-FROM (SELECT DISTINCT ON (assignment_id) tenant_id, site_id, assignment_id, policy_revision_id
+FROM (SELECT DISTINCT ON (assignment_id) tenant_id, site_id, assignment_id, assignment_revision, policy_revision_id, retired
       FROM alarm_runtime.alarm_policy_assignment
       WHERE tenant_id = $1 AND subject_type = 'SITE'
       ORDER BY assignment_id, assignment_revision DESC) AS current
-WHERE EXISTS (SELECT 1 FROM alarm_runtime.telemetry_evaluation_input AS input
+WHERE NOT current.retired
+  AND EXISTS (SELECT 1 FROM alarm_runtime.telemetry_evaluation_input AS input
               WHERE input.tenant_id = current.tenant_id AND input.site_id = current.site_id)
   AND NOT EXISTS (SELECT 1 FROM alarm_runtime.alarm_evaluation_state AS state
                   WHERE state.tenant_id = current.tenant_id AND state.site_id = current.site_id
                     AND state.assignment_id = current.assignment_id
-                    AND state.policy_revision_id = current.policy_revision_id)
+                    AND state.policy_revision_id = current.policy_revision_id
+                    AND state.assignment_revision = current.assignment_revision)
 ORDER BY current.site_id, current.assignment_id`, tenantID)
 	if err != nil {
 		_ = tx.Rollback(ctx)
@@ -217,6 +219,9 @@ ORDER BY current.site_id, current.assignment_id`, tenantID)
 		}
 		for _, assignmentID := range unevaluated[siteID] {
 			decision, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshot, now.UTC())
+			if errors.Is(err, ErrRuleRetired) {
+				continue
+			}
 			if err != nil {
 				return decisions, err
 			}
