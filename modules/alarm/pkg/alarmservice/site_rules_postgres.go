@@ -82,8 +82,7 @@ func (store *PostgresStore) RetireSiteRule(ctx context.Context, tenantID, siteID
 		SELECT assignment_revision, policy_revision_id::text, subject_type, subject_id::text, retired
 		FROM alarm_runtime.alarm_policy_assignment
 		WHERE tenant_id=$1 AND site_id=$2 AND assignment_id=$3
-		ORDER BY assignment_revision DESC LIMIT 1
-		FOR UPDATE`, tenantID, siteID, assignmentID).Scan(&revision, &policyRevisionID, &subjectType, &subjectID, &retired)
+		ORDER BY assignment_revision DESC LIMIT 1`, tenantID, siteID, assignmentID).Scan(&revision, &policyRevisionID, &subjectType, &subjectID, &retired)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
