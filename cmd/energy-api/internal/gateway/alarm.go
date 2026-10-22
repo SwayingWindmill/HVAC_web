@@ -36,6 +36,8 @@ type publicAlarmRoute struct {
 	siteID   string
 	alarmID  string
 	action   alarmauth.Action
+	// siteRules is the Site's rules in effect (#693), read with the same grant as its alarm list.
+	siteRules bool
 }
 
 type alarmScope struct {
@@ -101,6 +103,10 @@ func (a *directAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID
 }
 
 func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, _ string) ([]byte, int, *alarmFailure) {
+	if route.siteRules {
+		failure := alarmUnavailable("Site rules are only served by the Alarm Service.")
+		return nil, http.StatusServiceUnavailable, &failure
+	}
 	query := publicRequest.URL.Query()
 	tenantID := ""
 	if session, ok := routeSessionFromContext(publicRequest.Context()); ok {
@@ -352,6 +358,9 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 	path := internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarms"
+	if route.siteRules {
+		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules"
+	}
 	method := http.MethodGet
 	var requestBody io.Reader
 	if route.alarmID != "" {
@@ -478,6 +487,9 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 	if path == "/api/v1/alarms" {
 		return publicAlarmRoute{template: "/api/v1/alarms", action: alarmauth.ActionRead}, true
 	}
+	if path == "/api/v1/alarm-rules" {
+		return publicAlarmRoute{template: "/api/v1/alarm-rules", action: alarmauth.ActionRead, siteRules: true}, true
+	}
 	prefix := "/api/v1/alarms/"
 	if !strings.HasPrefix(path, prefix) {
 		return publicAlarmRoute{}, false
@@ -509,6 +521,10 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 }
 
 func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+	if route.siteRules {
+		dispatchSiteRulesRoute(h, writer, request, route)
+		return
+	}
 	expectedMethod := http.MethodGet
 	if route.action == alarmauth.ActionAssign {
 		expectedMethod = http.MethodPost
@@ -602,6 +618,70 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"data": alarm,
+		"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
+	})
+}
+
+// dispatchSiteRulesRoute lists the Site's rules in effect. It answers with Problem Details, as the
+// generated client expects, where the older Alarm routes keep their own error envelope.
+func dispatchSiteRulesRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+	fail := func(failure alarmFailure) {
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+	}
+	if request.Method != http.MethodGet {
+		writeMethodNotAllowedFor(writer, request, http.MethodGet)
+		return
+	}
+	if h.alarm == nil || h.alarm.operations == nil {
+		fail(alarmUnavailable("The Alarm service is not configured."))
+		return
+	}
+	query := request.URL.Query()
+	if len(query) != 1 || len(query["siteId"]) != 1 || !alarmmodel.IsUUIDv7(query.Get("siteId")) {
+		fail(alarmInvalid("The Site rules query takes exactly one siteId."))
+		return
+	}
+	route.siteID = query.Get("siteId")
+	session, ok := h.alarmSession(writer, request)
+	if !ok {
+		return
+	}
+	if failure := h.checkAlarmSiteVisibility(request, session, route.siteID, true); failure != nil {
+		fail(*failure)
+		return
+	}
+	decision, failure := h.authorizeAlarm(request, session, route)
+	if failure != nil {
+		fail(*failure)
+		return
+	}
+	contextToken, failure := h.signAlarmServiceContext(session, route, decision, h.identity.config.ExecutingWorkloadSPIFFE)
+	if failure != nil {
+		fail(*failure)
+		return
+	}
+	body, status, failure := h.executeAlarmOperation(request, route, contextToken)
+	if failure != nil {
+		fail(*failure)
+		return
+	}
+	switch {
+	case status == http.StatusOK:
+	case status == http.StatusForbidden:
+		fail(alarmDenied())
+		return
+	default:
+		fail(alarmUnavailable("Alarm Service could not list the Site rules."))
+		return
+	}
+	var list alarmservice.SiteRuleList
+	if decodeStrictAlarmJSON(body, &list) != nil || list.Validate() != nil {
+		fail(alarmUnavailable("Alarm Service returned an invalid Site rule list."))
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"data": list.Items,
 		"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
 	})
 }

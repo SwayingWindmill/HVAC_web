@@ -49,6 +49,7 @@ export const alarmPaths = {
   detail: '__ALARM_PATH__',
   acknowledge: '__ALARM_ACK_PATH__',
   assign: '__ALARM_ASSIGN_PATH__',
+  rules: '__ALARM_RULES_PATH__',
 } as const;
 
 export const commandPaths = {
@@ -342,6 +343,51 @@ export const siteTariffSchema = z.object({
   currency: z.string().regex(/^[A-Z]{3}$/),
   periods: z.array(tariffPeriodSchema),
 }).strict();
+
+// The alarm rules a Site evaluates now (#693). Each condition names its reading by device and point.
+export const alarmRuleReadingSchema = z.object({ deviceId: uuidV7Schema, pointCode: z.string().min(1).max(128) }).strict();
+export type AlarmRuleReading = z.infer<typeof alarmRuleReadingSchema>;
+export type AlarmRuleCondition = {
+  kind: 'COMPARE' | 'RANGE' | 'HYSTERESIS' | 'NO_DATA' | 'STALE' | 'UNCHANGED' | 'CHANGED' | 'AND' | 'OR';
+  reading?: AlarmRuleReading;
+  operator?: 'EQ' | 'NE' | 'GT' | 'GTE' | 'LT' | 'LTE';
+  value?: number | string | boolean;
+  minimum?: number;
+  maximum?: number;
+  direction?: 'ABOVE' | 'BELOW';
+  trigger?: number;
+  reset?: number;
+  ageSeconds?: number;
+  children?: AlarmRuleCondition[];
+};
+export const alarmRuleConditionSchema: z.ZodType<AlarmRuleCondition> = z.lazy(() => z.object({
+  kind: z.enum(['COMPARE', 'RANGE', 'HYSTERESIS', 'NO_DATA', 'STALE', 'UNCHANGED', 'CHANGED', 'AND', 'OR']),
+  reading: alarmRuleReadingSchema.optional(),
+  operator: z.enum(['EQ', 'NE', 'GT', 'GTE', 'LT', 'LTE']).optional(),
+  value: z.union([z.number(), z.string(), z.boolean()]).optional(),
+  minimum: z.number().optional(),
+  maximum: z.number().optional(),
+  direction: z.enum(['ABOVE', 'BELOW']).optional(),
+  trigger: z.number().optional(),
+  reset: z.number().optional(),
+  ageSeconds: z.number().int().positive().optional(),
+  children: z.array(alarmRuleConditionSchema).min(2).max(32).optional(),
+}).strict());
+export const alarmRuleSchema = z.object({
+  ruleId: uuidV7Schema,
+  title: z.string().min(1).max(256),
+  severity: z.enum(['INFO', 'WARNING', 'MINOR', 'MAJOR', 'CRITICAL']),
+  triggerMode: z.enum(['SIMPLE', 'DURATION', 'REPEATING']),
+  durationSeconds: z.number().int().positive().optional(),
+  repeatCount: z.number().int().positive().optional(),
+  raise: alarmRuleConditionSchema,
+  clear: alarmRuleConditionSchema,
+}).strict();
+export const alarmRuleListSchema = z.object({
+  data: z.array(alarmRuleSchema),
+  meta: z.object({ requestId: z.string() }).strict(),
+}).strict();
+export type AlarmRule = z.infer<typeof alarmRuleSchema>;
 
 export const mutationMetaSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
@@ -873,6 +919,9 @@ export function createPlatformGatewayClient(baseUrl = '') {
     ),
     getSiteTariff: (siteId: string, init?: RequestInit) => request(
       '__SITE_TARIFF_PATH__'.replace('{siteId}', encodeURIComponent(siteId)), siteTariffSchema, { ...init, method: 'GET' },
+    ),
+    listSiteAlarmRules: (siteId: string, init?: RequestInit) => request(
+      `__ALARM_RULES_PATH__?${new URLSearchParams({ siteId }).toString()}`, alarmRuleListSchema, { ...init, method: 'GET' },
     ),
     getDevice: (deviceId: string, init?: RequestInit) => request(
       '__DEVICE_PATH__'.replace('{deviceId}', encodeURIComponent(deviceId)), deviceSchema, { ...init, method: 'GET' },

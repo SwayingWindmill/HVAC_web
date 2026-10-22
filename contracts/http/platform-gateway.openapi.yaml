@@ -1971,6 +1971,21 @@
         }
       }
     },
+    "/api/v1/alarm-rules": {
+      "get": {
+        "operationId": "listSiteAlarmRules",
+        "summary": "The alarm rules a Site evaluates now",
+        "description": "Read-only (#693). Whoever may list the Site's alarms (alarm:read) may read the rules that raise them. Each condition names its reading by device and point code; the page puts it into words.",
+        "parameters": [
+          { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }
+        ],
+        "responses": {
+          "200": { "description": "The Site's rules in effect.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmRuleList" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/alarms/{alarmId}": {
       "get": {
         "operationId": "getAlarmV212",
@@ -3317,6 +3332,63 @@
             "$ref": "#/components/schemas/UUIDv7",
             "description": "The Site of a DAILY summary; the person's summaries go for the Site named last."
           }
+        }
+      },
+      "AlarmRuleList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmRule" } },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requestId"],
+            "properties": { "requestId": { "type": "string" } }
+          }
+        }
+      },
+      "AlarmRule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ruleId", "title", "severity", "triggerMode", "raise", "clear"],
+        "properties": {
+          "ruleId": { "$ref": "#/components/schemas/UUIDv7" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "severity": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] },
+          "triggerMode": { "type": "string", "enum": ["SIMPLE", "DURATION", "REPEATING"], "description": "SIMPLE raises at once; DURATION once the raise condition has held durationSeconds; REPEATING once it has held repeatCount readings in a row." },
+          "durationSeconds": { "type": "integer", "minimum": 1 },
+          "repeatCount": { "type": "integer", "minimum": 1 },
+          "raise": { "$ref": "#/components/schemas/AlarmRuleCondition" },
+          "clear": { "$ref": "#/components/schemas/AlarmRuleCondition" }
+        }
+      },
+      "AlarmRuleCondition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind"],
+        "description": "AND and OR hold two to 32 children; every other kind reads one reading. NO_DATA: no reading for ageSeconds. STALE: the reading is older than ageSeconds. UNCHANGED: a fresh reading has kept its value ageSeconds. CHANGED: it took its value less than ageSeconds ago.",
+        "properties": {
+          "kind": { "type": "string", "enum": ["COMPARE", "RANGE", "HYSTERESIS", "NO_DATA", "STALE", "UNCHANGED", "CHANGED", "AND", "OR"] },
+          "reading": { "$ref": "#/components/schemas/AlarmRuleReading" },
+          "operator": { "type": "string", "enum": ["EQ", "NE", "GT", "GTE", "LT", "LTE"] },
+          "value": { "type": ["number", "string", "boolean"] },
+          "minimum": { "type": "number" },
+          "maximum": { "type": "number" },
+          "direction": { "type": "string", "enum": ["ABOVE", "BELOW"] },
+          "trigger": { "type": "number" },
+          "reset": { "type": "number" },
+          "ageSeconds": { "type": "integer", "minimum": 1 },
+          "children": { "type": "array", "minItems": 2, "maxItems": 32, "items": { "$ref": "#/components/schemas/AlarmRuleCondition" } }
+        }
+      },
+      "AlarmRuleReading": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["deviceId", "pointCode"],
+        "properties": {
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "pointCode": { "type": "string", "minLength": 1, "maxLength": 128 }
         }
       },
       "WeChatReminders": {
