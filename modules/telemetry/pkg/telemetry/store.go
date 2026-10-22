@@ -26,15 +26,16 @@ type SnapshotCommit struct {
 
 type SnapshotStore interface {
 	EvaluateAndRead(context.Context, telemetryauth.Target, time.Time) (SnapshotCommit, error)
-}
-
-// CurrentSnapshotReader reads the current snapshot of a Device from PostgreSQL.
-type CurrentSnapshotReader interface {
+	// LatestSnapshot reads the current snapshot that Redis copies.
 	LatestSnapshot(ctx context.Context, tenantID, deviceID string) (telemetryapi.DeviceObservationSnapshot, error)
 }
 
-// ErrSnapshotNotFound means PostgreSQL holds no current snapshot of the Device for that tenant.
-var ErrSnapshotNotFound = errors.New("telemetry device snapshot not found")
+var (
+	// ErrSnapshotNotFound means the tenant has no current snapshot of the Device.
+	ErrSnapshotNotFound = errors.New("telemetry device snapshot not found")
+	// ErrSnapshotIncomplete means a current snapshot lacks a requested key or holds a malformed state.
+	ErrSnapshotIncomplete = errors.New("telemetry device snapshot is incomplete")
+)
 
 type EventIDGenerator func(time.Time) (string, error)
 

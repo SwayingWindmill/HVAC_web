@@ -38,7 +38,6 @@ var (
 type ServerConfig struct {
 	Store                          SnapshotStore
 	LatestCache                    LatestCache
-	CurrentSnapshots               CurrentSnapshotReader
 	Authorizer                     GrantAuthorizer
 	AllowedGatewaySPIFFE           string
 	AllowedSnapshotReaderSPIFFEs   []string
@@ -62,7 +61,6 @@ type ServerConfig struct {
 type handler struct {
 	store                          SnapshotStore
 	latestCache                    LatestCache
-	currentSnapshots               CurrentSnapshotReader
 	authorizer                     GrantAuthorizer
 	allowedGatewaySPIFFE           string
 	allowedSnapshotReaderSPIFFEs   map[string]struct{}
@@ -100,7 +98,7 @@ func NewHandler(config ServerConfig) http.Handler {
 		allowedSnapshotReaderSPIFFEs[reader] = struct{}{}
 	}
 	return &handler{
-		store: config.Store, latestCache: config.LatestCache, currentSnapshots: config.CurrentSnapshots, authorizer: config.Authorizer,
+		store: config.Store, latestCache: config.LatestCache, authorizer: config.Authorizer,
 		allowedGatewaySPIFFE:           strings.TrimSpace(config.AllowedGatewaySPIFFE),
 		allowedSnapshotReaderSPIFFEs:   allowedSnapshotReaderSPIFFEs,
 		runtimeAudience:                strings.TrimSpace(config.RuntimeAudience),
@@ -297,8 +295,8 @@ func (h *handler) readLatestSnapshot(ctx context.Context, access AccessContext, 
 	if h.latestCache != nil {
 		snapshot, err = h.latestCache.GetForDevice(ctx, access.TenantID, target.DeviceID)
 	}
-	if (errors.Is(err, ErrLatestCacheMiss) || errors.Is(err, ErrLatestCacheUnavailable)) && h.currentSnapshots != nil {
-		snapshot, err = h.currentSnapshots.LatestSnapshot(ctx, access.TenantID, target.DeviceID)
+	if errors.Is(err, ErrLatestCacheMiss) || errors.Is(err, ErrLatestCacheUnavailable) {
+		snapshot, err = h.store.LatestSnapshot(ctx, access.TenantID, target.DeviceID)
 	}
 	if err != nil {
 		return telemetryapi.DeviceObservationSnapshot{}, err
@@ -316,14 +314,14 @@ func (h *handler) readLatestSnapshot(ctx context.Context, access AccessContext, 
 		case state.Missing != nil:
 			selected[string(state.Missing.Key)] = state
 		default:
-			return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheUnavailable
+			return telemetryapi.DeviceObservationSnapshot{}, ErrSnapshotIncomplete
 		}
 	}
 	values := make([]telemetryapi.TelemetryKeyState, 0, len(target.Keys))
 	for _, key := range target.Keys {
 		state, ok := selected[key]
 		if !ok {
-			return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheUnavailable
+			return telemetryapi.DeviceObservationSnapshot{}, ErrSnapshotIncomplete
 		}
 		values = append(values, state)
 	}
