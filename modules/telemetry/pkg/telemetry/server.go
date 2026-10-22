@@ -209,7 +209,7 @@ func (h *handler) handleSingle(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	snapshot, err := h.readLatestSnapshot(request.Context(), access, target)
-	if errors.Is(err, ErrLatestCacheMiss) {
+	if errors.Is(err, ErrSnapshotNotFound) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false)
 		return
 	}
@@ -268,7 +268,7 @@ func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request)
 	response := telemetryapi.BatchGetObservationSnapshotsResponse{SchemaVersion: 1, Items: make([]telemetryapi.BatchObservationResult, 0, len(input.Requests))}
 	for index, item := range input.Requests {
 		snapshot, err := h.readLatestSnapshot(request.Context(), access, targets[index])
-		if errors.Is(err, ErrLatestCacheMiss) {
+		if errors.Is(err, ErrSnapshotNotFound) {
 			response.Items = append(response.Items, telemetryapi.BatchObservationResult{Failure: &telemetryapi.BatchObservationFailure{
 				RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "ERROR",
 				Problem: problemDetails(request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested telemetry resource was not found.", false),
@@ -287,11 +287,17 @@ func (h *handler) handleBatch(writer http.ResponseWriter, request *http.Request)
 	writeJSON(writer, http.StatusOK, response)
 }
 
+// readLatestSnapshot answers from Redis and, when Redis misses or is down, from PostgreSQL,
+// which holds the current snapshot Redis copies (ADR 0013 section 5).
 func (h *handler) readLatestSnapshot(ctx context.Context, access AccessContext, target telemetryauth.Target) (telemetryapi.DeviceObservationSnapshot, error) {
-	if h.latestCache == nil {
-		return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheUnavailable
+	err := ErrLatestCacheUnavailable
+	var snapshot telemetryapi.DeviceObservationSnapshot
+	if h.latestCache != nil {
+		snapshot, err = h.latestCache.GetForDevice(ctx, access.TenantID, target.DeviceID)
 	}
-	snapshot, err := h.latestCache.GetForDevice(ctx, access.TenantID, target.DeviceID)
+	if errors.Is(err, ErrLatestCacheMiss) || errors.Is(err, ErrLatestCacheUnavailable) {
+		snapshot, err = h.store.LatestSnapshot(ctx, access.TenantID, target.DeviceID)
+	}
 	if err != nil {
 		return telemetryapi.DeviceObservationSnapshot{}, err
 	}
@@ -308,14 +314,14 @@ func (h *handler) readLatestSnapshot(ctx context.Context, access AccessContext, 
 		case state.Missing != nil:
 			selected[string(state.Missing.Key)] = state
 		default:
-			return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheUnavailable
+			return telemetryapi.DeviceObservationSnapshot{}, ErrSnapshotIncomplete
 		}
 	}
 	values := make([]telemetryapi.TelemetryKeyState, 0, len(target.Keys))
 	for _, key := range target.Keys {
 		state, ok := selected[key]
 		if !ok {
-			return telemetryapi.DeviceObservationSnapshot{}, ErrLatestCacheUnavailable
+			return telemetryapi.DeviceObservationSnapshot{}, ErrSnapshotIncomplete
 		}
 		values = append(values, state)
 	}

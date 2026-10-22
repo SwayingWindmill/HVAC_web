@@ -54,6 +54,36 @@ LIMIT $2
 	return result, nil
 }
 
+// LatestSnapshot reads the current snapshot Redis copies, for when Redis cannot answer.
+func (store *PostgresStore) LatestSnapshot(ctx context.Context, tenantID, deviceID string) (telemetryapi.DeviceObservationSnapshot, error) {
+	if store == nil || store.pool == nil {
+		return telemetryapi.DeviceObservationSnapshot{}, errors.New("telemetry runtime store is closed")
+	}
+	var snapshotJSON []byte
+	err := store.pool.QueryRow(ctx, `
+SELECT snapshot
+FROM telemetry_runtime.device_observation_snapshots
+WHERE device_id = $1::uuid
+`, deviceID).Scan(&snapshotJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return telemetryapi.DeviceObservationSnapshot{}, ErrSnapshotNotFound
+	}
+	if err != nil {
+		return telemetryapi.DeviceObservationSnapshot{}, fmt.Errorf("read device snapshot: %w", err)
+	}
+	var snapshot telemetryapi.DeviceObservationSnapshot
+	if err := json.Unmarshal(snapshotJSON, &snapshot); err != nil {
+		return telemetryapi.DeviceObservationSnapshot{}, fmt.Errorf("decode device snapshot: %w", err)
+	}
+	if err := validateLatestCacheSnapshot(snapshot); err != nil {
+		return telemetryapi.DeviceObservationSnapshot{}, fmt.Errorf("validate device snapshot: %w", err)
+	}
+	if string(snapshot.TenantId) != tenantID {
+		return telemetryapi.DeviceObservationSnapshot{}, ErrSnapshotNotFound
+	}
+	return snapshot, nil
+}
+
 func (store *PostgresStore) PendingLatestCacheMaterializations(ctx context.Context, limit int, now time.Time) ([]LatestCacheMaterialization, error) {
 	if store == nil || store.pool == nil {
 		return nil, ErrLatestCacheUnavailable
