@@ -79,12 +79,12 @@ func unpublishedSitePolicy(trigger float64) AlarmPolicyRevision {
 }
 
 const (
-	retireSiteID           = "01910000-c000-7000-8000-000000000032"
-	retirePolicyID         = "01910000-c000-7000-8000-000000000035"
-	retirePolicyRevisionID = "01910000-c000-7000-8000-000000000036"
-	retireAssignmentID     = "01910000-c000-7000-8000-000000000037"
-	retireEventFirst       = "01910000-c000-7000-8000-000000000041"
-	retireEventAfter       = "01910000-c000-7000-8000-000000000042"
+	retireSiteID           = "01910000-c100-7000-8000-000000000002"
+	retirePolicyID         = "01910000-c100-7000-8000-000000000005"
+	retirePolicyRevisionID = "01910000-c100-7000-8000-000000000006"
+	retireAssignmentID     = "01910000-c100-7000-8000-000000000007"
+	retireEventFirst       = "01910000-c100-7000-8000-000000000011"
+	retireEventAfter       = "01910000-c100-7000-8000-000000000012"
 )
 
 // #693: a rule the Site's file no longer has is retired: it leaves the Site's rules, its active
