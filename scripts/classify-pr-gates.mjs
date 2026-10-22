@@ -257,6 +257,8 @@ for (const file of files) {
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));
     scriptMatch(lower.includes('operations-agent'), () => selectOperationsAgent(file, 'Operations Agent automation changed', { integration: lower.includes('postgres') || lower.includes('migration') }));
     scriptMatch(lower.includes('ownership') || lower.includes('contract') || lower.includes('production-rollout'), () => add(contractProfiles, ['core']));
+    // Its tests run in every static gate; the check itself runs in the contracts core.
+    scriptMatch(lower.includes('migration-freeze'), () => add(contractProfiles, ['core']));
     if (!scriptMatched) {
       unknown = true;
       selectBroad(file, 'unknown automation script selected the broad fail-closed suite');

@@ -21,6 +21,7 @@ export const gateCommandMatrix = Object.freeze({
       npmRun('ownership:check'),
       npmRun('events:check'),
       npmRun('deployment:phase1:check'),
+      npmRun('migrations:freeze:check'),
       npmRun('acceptance:phase1:check'),
       npmRun('architecture:phase1:check'),
       npmRun('backend:architecture:check'),
