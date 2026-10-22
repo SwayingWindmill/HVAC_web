@@ -55,7 +55,7 @@ func main() {
 	defer store.Close()
 	gatewaySPIFFE := envOr("ALARM_GATEWAY_SPIFFE", alarmservice.DefaultGatewaySPIFFEID)
 	handler, err := alarmservice.NewHTTPHandler(alarmservice.HTTPConfig{
-		Store: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
+		Store: store, Rules: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
 		Audience: envOr("ALARM_READ_AUDIENCE", alarmservice.DefaultAudience), MaxListLimit: 100,
 	})
 	if err != nil {

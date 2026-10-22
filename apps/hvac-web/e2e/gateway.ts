@@ -122,6 +122,8 @@ function replayForecast(forecast: Json, now: string): Json {
 
 export class Gateway {
   readonly alarms = fixture<Json[]>('alarms.json');
+  // The Site's rules in effect, as the Alarm owner lists them; publishing the rules file changes them, not the page.
+  readonly alarmRules = fixture<Json[]>('alarm-rules.json');
   // The Notification owner's inbox: one notice per raised alarm, the newest still unread.
   readonly notifications: Json[] = [...this.alarms]
     .sort((left, right) => Date.parse(right.firstOccurredAt) - Date.parse(left.firstOccurredAt))
@@ -434,6 +436,9 @@ export class Gateway {
         && (!query.has('acknowledged') || Boolean(alarm.acknowledgement) === (query.get('acknowledged') === 'true'))
         && (!query.get('severity') || alarm.currentSeverity === query.get('severity')));
       return { body: { data: items, meta: { nextCursor: null, hasMore: false, limit: 100, requestId: 'e2e' } } };
+    }
+    if (method === 'GET' && path === '/api/v1/alarm-rules') {
+      return { body: { data: query.get('siteId') === SITE_ID ? this.alarmRules : [], meta: { requestId: 'e2e' } } };
     }
     const alarmMatch = path.match(/^\/api\/v1\/alarms\/([^/]+)(?:\/(ack|assign))?$/);
     if (alarmMatch) {

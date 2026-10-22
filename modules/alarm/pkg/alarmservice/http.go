@@ -37,6 +37,7 @@ var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{7,12
 
 type HTTPConfig struct {
 	Store            Store
+	Rules            SiteRuleReader
 	GatewayPublicKey crypto.PublicKey
 	Now              func() time.Time
 	GatewaySPIFFEID  string
@@ -46,6 +47,7 @@ type HTTPConfig struct {
 
 type httpHandler struct {
 	store            Store
+	rules            SiteRuleReader
 	gatewayPublicKey crypto.PublicKey
 	now              func() time.Time
 	gatewaySPIFFEID  string
@@ -80,8 +82,8 @@ type alarmRoute struct {
 }
 
 func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
-	if config.Store == nil || config.GatewayPublicKey == nil {
-		return nil, errors.New("Alarm Store and Gateway public key are required")
+	if config.Store == nil || config.Rules == nil || config.GatewayPublicKey == nil {
+		return nil, errors.New("Alarm Store, Site rules and Gateway public key are required")
 	}
 	if config.Now == nil {
 		config.Now = time.Now
@@ -96,7 +98,7 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 		config.MaxListLimit = 200
 	}
 	return &httpHandler{
-		store: config.Store, gatewayPublicKey: config.GatewayPublicKey, now: config.Now,
+		store: config.Store, rules: config.Rules, gatewayPublicKey: config.GatewayPublicKey, now: config.Now,
 		gatewaySPIFFEID: config.GatewaySPIFFEID, audience: config.Audience, maxListLimit: config.MaxListLimit,
 	}, nil
 }
@@ -131,6 +133,26 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 			return
 		}
 		writeJSON(writer, http.StatusOK, scope)
+		return
+	}
+	if siteID, matches := matchSiteRulesPath(request.URL.Path); matches {
+		if request.Method != http.MethodGet {
+			writer.Header().Set("Allow", http.MethodGet)
+			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Site rules only support GET.", false)
+			return
+		}
+		if !alarmmodel.IsUUIDv7(siteID) {
+			handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm resource is not visible.", false)
+			return
+		}
+		// Whoever may list the Site's alarms may see the rules that raise them.
+		claims, authorized := handler.authorize(request, AlarmReadContextHeader, AlarmListAction, []string{"site:" + siteID})
+		if !authorized {
+			handler.writeProblem(writer, http.StatusForbidden, "ALARM_ACCESS_DENIED", "Alarm access denied", "The Site rules are outside the authorized read scope.", false)
+			return
+		}
+		request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
+		handler.siteRules(writer, request, claims.TenantID, siteID)
 		return
 	}
 	route, ok := matchAlarmPath(request.URL.Path)

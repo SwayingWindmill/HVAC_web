@@ -26,7 +26,7 @@ import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { formatTime, personLabel } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { alarmDetailQuery, type AlarmOperation, type AlarmSeverity } from '../alarm-api';
-import { alarmStatusLabel, formatDuration, operationLabel, SEVERITY_LABELS, SeverityBadge } from '../alarm-presentation';
+import { alarmStatusLabel, formatDuration, operationLabel, recoveryReason, SEVERITY_LABELS, SeverityBadge } from '../alarm-presentation';
 import { useAlarmActions } from '../use-alarm-actions';
 
 const siteRoute = getRouteApi('/_app/_site');
@@ -223,7 +223,8 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
                       <TimelineTime dateTime={entry.occurredAt} className="font-mono">{formatTime(entry.occurredAt, site.timezone)}</TimelineTime>
                     </TimelineHeader>
                     <p className="text-xs text-muted-foreground">
-                      {entry.actorType === 'WORKLOAD' ? '系统' : personLabel(entry.actorId, myId)} · {SEVERITY_LABELS[entry.currentSeverity]}
+                      {entry.actorType === 'WORKLOAD' ? '系统' : personLabel(entry.actorId, myId)}
+                      {recoveryReason(entry) ? ` · ${recoveryReason(entry)}` : ''} · {SEVERITY_LABELS[entry.currentSeverity]}
                     </p>
                   </TimelineContent>
                 </TimelineItem>

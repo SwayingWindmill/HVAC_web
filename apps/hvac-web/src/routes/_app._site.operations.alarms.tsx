@@ -6,6 +6,7 @@ const severity = z.enum(['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INFO']);
 
 export const Route = createFileRoute('/_app/_site/operations/alarms')({
   validateSearch: z.object({
+    tab: z.enum(['rules']).optional(),
     view: z.enum(['active', 'unack', 'cleared', 'all']).optional(),
     severity: z.array(severity).optional(),
     device: z.string().optional(),
