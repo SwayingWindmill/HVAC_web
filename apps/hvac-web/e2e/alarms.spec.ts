@@ -92,12 +92,12 @@ test('正在生效的规则 lists each rule with its devices, conditions and sev
   const rule = (title: string) => table.getByRole('row').filter({ hasText: title });
   await expect(table.getByRole('row')).toHaveCount(4);
   await expect(rule('冷冻水回水温度过低')).toContainText('CHILLER-01、BTU-METER-01');
-  await expect(rule('冷冻水回水温度过低')).toContainText('chiller run state为运行，并且');
-  await expect(rule('冷冻水回水温度过低')).toContainText('btu meter return water temperature不高于 10.5 °C，持续 5 分钟');
-  await expect(rule('冷冻水回水温度过低')).toContainText('btu meter return water temperature不低于 11.5 °C，或者CHILLER-01的chiller run state不为运行');
+  await expect(rule('冷冻水回水温度过低')).toContainText('chiller run state 为运行，并且');
+  await expect(rule('冷冻水回水温度过低')).toContainText('btu meter return water temperature 不高于 10.5 °C，持续 5 分钟');
+  await expect(rule('冷冻水回水温度过低')).toContainText('btu meter return water temperature 不低于 11.5 °C，或者 CHILLER-01 的 chiller run state 不为运行');
   await expect(rule('冷冻水回水温度过低')).toContainText('重要');
-  await expect(rule('CWP-01 读数长时间没有更新')).toContainText('CWP-01的 4 个读数中任一个超过 30 分钟没有新读数');
-  await expect(rule('CWP-01 读数长时间没有更新')).toContainText('CWP-01的 4 个读数都有新读数');
+  await expect(rule('CWP-01 读数长时间没有更新')).toContainText('CWP-01 的 4 个读数中任一个超过 30 分钟没有新读数');
+  await expect(rule('CWP-01 读数长时间没有更新')).toContainText('CWP-01 的 4 个读数都有新读数');
   await expect(rule('网关上报中断')).toContainText('3 台设备的 5 个读数都超过 15 分钟没有新读数');
   await expect(rule('网关上报中断')).toContainText('3 台设备的 5 个读数中任一个有新读数');
   // Operators see names, never the identifiers or enums behind them.

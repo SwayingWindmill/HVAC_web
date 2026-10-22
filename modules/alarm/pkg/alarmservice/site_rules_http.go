@@ -119,10 +119,6 @@ func (handler *httpHandler) siteRules(writer http.ResponseWriter, request *http.
 		}
 		list.Items = append(list.Items, view)
 	}
-	if list.Validate() != nil {
-		handler.writeProblem(writer, http.StatusBadGateway, "ALARM_RESPONSE_INVALID", "Alarm response invalid", "A Site rule cannot be listed as stored.", false)
-		return
-	}
 	writeJSON(writer, http.StatusOK, list)
 }
 
