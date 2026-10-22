@@ -7,7 +7,6 @@
   "images": {
     "ENERGY_API_IMAGE": "registry.example.com/hvac/energy-api@sha256:[SIGNED_DIGEST]",
     "IAM_SERVICE_IMAGE": "registry.example.com/hvac/iam-service@sha256:[SIGNED_DIGEST]",
-    "AUDIT_SERVICE_IMAGE": "registry.example.com/hvac/audit-ledger-service@sha256:[SIGNED_DIGEST]",
     "CORE_SERVICE_IMAGE": "registry.example.com/hvac/platform-core-service@sha256:[SIGNED_DIGEST]",
     "TELEMETRY_QUERY_SERVICE_IMAGE": "registry.example.com/hvac/telemetry-query-service@sha256:[SIGNED_DIGEST]",
     "COMMAND_SERVICE_IMAGE": "registry.example.com/hvac/command-service@sha256:[SIGNED_DIGEST]",

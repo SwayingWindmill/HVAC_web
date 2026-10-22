@@ -29,17 +29,15 @@ services:
 
   energy-api:
     environment:
-      ENERGY_API_EMBEDDED_OWNERS: notification
+      ENERGY_API_EMBEDDED_OWNERS: audit,notification
       IAM_URL: https://iam-owner:8444
       CORE_URL: https://core-owner:18445
       TELEMETRY_QUERY_URL: https://telemetry-query-owner:18447
-      AUDIT_URL: https://audit-owner:8446
       COMMAND_SERVICE_URL: https://command-owner:8447
       ALARM_SERVICE_URL: https://alarm-owner:8448
       WORK_ORDER_SERVICE_URL: https://work-order-owner:8449
     depends_on:
       iam-owner: { condition: service_healthy }
-      audit-owner: { condition: service_healthy }
       core-owner: { condition: service_healthy }
       telemetry-query-owner: { condition: service_healthy }
       command-owner: { condition: service_healthy }
@@ -64,28 +62,6 @@ services:
       retries: 12
     cpus: ${IAM_OWNER_CPUS:-0.20}
     mem_limit: ${IAM_OWNER_MEMORY_LIMIT:-384m}
-
-  audit-owner:
-    <<: *owner-service
-    build:
-      context: ../../..
-      dockerfile: deploy/platform/phase1/images/go-service.Dockerfile
-      args:
-        {
-          SERVICE_PACKAGE: ./modules/audit/cmd/audit-owner,
-        }
-    image: ${AUDIT_SERVICE_IMAGE:-hvac/audit-ledger-service:0.1.0-dev}
-    environment:
-      AUDIT_SERVICE_ADDR: :8446
-      AUDIT_DIAGNOSTICS_ADDR: :19082
-    expose: ["8446", "19082"]
-    healthcheck:
-      test: ["CMD", "/healthcheck", "http://127.0.0.1:19082/health/ready"]
-      interval: 10s
-      timeout: 4s
-      retries: 12
-    cpus: ${AUDIT_OWNER_CPUS:-0.20}
-    mem_limit: ${AUDIT_OWNER_MEMORY_LIMIT:-384m}
 
   core-owner:
     <<: *owner-service

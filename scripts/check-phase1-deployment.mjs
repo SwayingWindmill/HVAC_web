@@ -185,12 +185,12 @@ assert(compose.includes('./clickhouse/resource-limits.xml:/etc/clickhouse-server
 assert(availabilityTier.schemaVersion === 1 && availabilityTier.currentTier === 'SINGLE_NODE_RECOVERABLE', 'availability tier contract must fix the current tier');
 const ownerSplitStage = availabilityTier.monolithToMultiInstancePath?.stages?.find((stage) => stage.id === 'stage-1');
 assert(ownerSplitStage?.state === 'implemented-runtime-drill-required' && ownerSplitStage.exitEvidence?.includes('same-version-live-contract-drill'), 'Stage 1 must remain implemented but uncertified until the live same-version drill');
-for (const owner of ['iam-owner', 'audit-owner', 'core-owner', 'telemetry-query-owner', 'command-owner', 'alarm-owner', 'work-order-owner']) {
+for (const owner of ['iam-owner', 'core-owner', 'telemetry-query-owner', 'command-owner', 'alarm-owner', 'work-order-owner']) {
   assert(ownerSplitCompose.includes(`  ${owner}:`), `owner-split Compose must define ${owner}`);
 }
 assert(compose.includes('dockerfile: deploy/platform/phase1/images/go-service.Dockerfile'), 'canonical Compose must build Go workloads from the canonical Phase 1 image definition');
 assert(ownerSplitCompose.includes('dockerfile: deploy/platform/phase1/images/go-service.Dockerfile'), 'owner-split overlay must reuse the canonical Phase 1 image definition');
-assert(ownerSplitCompose.includes('ENERGY_API_EMBEDDED_OWNERS: notification') && !/kafka|zookeeper|redpanda/i.test(ownerSplitCompose), 'owner-split must retain only Notification in-process without adding a message backbone');
+assert(ownerSplitCompose.includes('ENERGY_API_EMBEDDED_OWNERS: audit,notification') && !/kafka|zookeeper|redpanda/i.test(ownerSplitCompose), 'owner-split must retain only Audit and Notification in-process without adding a message backbone');
 assert(embeddedEnergy.includes('parseEmbeddedOwners') && embeddedEnergy.includes('ENERGY_API_EMBEDDED_OWNERS'), 'energy-api must implement exact embedded Owner selection');
 assert((availabilityTier.spofInventory ?? []).length >= 6 && availabilityTier.spofInventory.every((entry) => entry.spof === true && entry.component && Array.isArray(entry.upgradePath) && entry.upgradePath.length > 0), 'availability tier must enumerate SPOF impacts and upgrade costs');
 assert(availabilityTier.monolithToMultiInstancePath?.reference?.tag === 'v4.3.1.1' && availabilityTier.monolithToMultiInstancePath?.reference?.commit === 'c2a52e46c44e308ddee430e7266b8e10eddde9c4', 'upgrade path reference must pin the reviewed ThingsBoard source');

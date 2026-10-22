@@ -4,13 +4,11 @@
 
 ## 做什么
 
-- 接收会话事件 `control.security.session.v1`，解出带版本号的 Protobuf 信封。
-- 在一个 PostgreSQL 事务里写三样东西：收件记录（用来去重）、这个租户的哈希链头、操作记录本身。事务提交之后，才确认消息已经处理。
+- 从网关的待发事件表（PostgreSQL）领会话事件 `control.security.session.v1`，解出带版本号的 Protobuf 信封。它内嵌在 `energy-api` 里运行。
+- 在一个 PostgreSQL 事务里写三样东西：收件记录（用来去重）、这个租户的哈希链头、操作记录本身。事务提交之后，才把待发事件标成已发。
 - 同一个消息编号、内容也一样的，当作重复，不再写；编号一样、内容不同的，拒绝。
 - 记录只能追加；数据库按租户做行级隔离，一个租户读不到另一个租户的记录。
 - 提供一个内部查询接口（双向 TLS）。
-
-从 Kafka 接收事件这条路，只在单独运行 `audit-owner`（`modules/audit/cmd/audit-owner`，需要配置 `CONTROL_BACKBONE_BROKERS`）时使用；第一阶段的 Compose 里没有 Kafka。
 
 ## 内部查询接口
 
@@ -33,10 +31,8 @@ GET /internal/v1/audit/session-events/{messageId}
 ## 命令
 
 ```bash
-npm run build:audit-owner
 npm run test:durable-unit
 npm run test:durable-postgres
-npm run audit:security-failure
 ```
 
 完整的事务、投递、行级隔离和哈希链设计见 `docs/security/session-and-audit.md`。

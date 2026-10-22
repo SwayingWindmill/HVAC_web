@@ -55,5 +55,4 @@ npm run test:durable-postgres
 npm run build:energy-api
 npm run lint
 npm run build
-npm run audit:security-failure
 ```

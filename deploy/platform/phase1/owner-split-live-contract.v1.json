@@ -3,7 +3,6 @@
   "kind": "PHASE1_OWNER_SPLIT_LIVE_CONTRACT",
   "owners": {
     "iam-owner": { "method": "GET", "pathPattern": "^/api/v1/principal$" },
-    "audit-owner": { "method": "POST", "pathPattern": "^/api/v1/audit/search$" },
     "core-owner": { "method": "GET", "pathPattern": "^/api/v1/sites$" },
     "telemetry-query-owner": { "method": "POST", "pathPattern": "^/api/v1/telemetry/device-series:query$" },
     "command-owner": { "method": "GET", "pathPattern": "^/api/v1/commands/[0-9a-fA-F-]+$" },
