@@ -398,16 +398,17 @@ func loadAssignedAlarmPolicy(ctx context.Context, tx pgx.Tx, tenantID, siteID, a
 	var policyRevision uint64
 	var schemaVersion int
 	var policyJSON []byte
+	var retired bool
 	err := tx.QueryRow(ctx, `
 		SELECT assignment.assignment_id::text, assignment.assignment_revision, assignment.subject_type, assignment.subject_id::text,
-		       assignment.policy_revision_id::text, policy.policy_id::text, policy.revision, policy.schema_version, policy.digest, policy.policy
+		       assignment.policy_revision_id::text, assignment.retired, policy.policy_id::text, policy.revision, policy.schema_version, policy.digest, policy.policy
 		FROM alarm_runtime.alarm_policy_assignment assignment
 		JOIN alarm_runtime.alarm_policy_revision policy
 		  ON policy.tenant_id = assignment.tenant_id AND policy.site_id = assignment.site_id AND policy.policy_revision_id = assignment.policy_revision_id
 		WHERE assignment.tenant_id = $1 AND assignment.site_id = $2 AND assignment.assignment_id = $3
 		ORDER BY assignment.assignment_revision DESC
-		LIMIT 1`, tenantID, siteID, assignmentID).Scan(&assigned.AssignmentID, &assigned.AssignmentRevision, &assigned.SubjectType, &assigned.SubjectID, &policyRevisionID, &policyID, &policyRevision, &schemaVersion, &digest, &policyJSON)
-	if errors.Is(err, pgx.ErrNoRows) {
+		LIMIT 1`, tenantID, siteID, assignmentID).Scan(&assigned.AssignmentID, &assigned.AssignmentRevision, &assigned.SubjectType, &assigned.SubjectID, &policyRevisionID, &retired, &policyID, &policyRevision, &schemaVersion, &digest, &policyJSON)
+	if errors.Is(err, pgx.ErrNoRows) || retired {
 		return assignedAlarmPolicy{}, ErrNotFound
 	}
 	if err != nil {

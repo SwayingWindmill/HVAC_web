@@ -17,12 +17,8 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
 )
 
-// SitePolicy is one rule as a policy family and the Site assignment that evaluates it. The policy
-// carries no revision identity yet: publishing gives it the next revision when its content changed.
-type SitePolicy struct {
-	AssignmentID string
-	Policy       alarmservice.AlarmPolicyRevision
-}
+// SitePolicy is one rule of the file, as the Alarm owner plans and publishes it.
+type SitePolicy = alarmservice.SiteRule
 
 type Compiled struct {
 	TenantID string
