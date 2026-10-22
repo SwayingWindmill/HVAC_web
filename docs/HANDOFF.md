@@ -44,7 +44,7 @@
 ## 服务器（139.199.58.47）
 
 - 跑的是 main。Compose 项目 `hvac-platform`，目录 `/opt/hvac-platform`，`single-lite` 档位，带智能服务（预测、优化、故障诊断 FDD、节能验证 M&V、报告）和 AI 助手；两个模拟器按用户要求停着；对外经主机的 nginx 转到 127.0.0.1:18443。
-- 部署方式：本地从 main 构建镜像，`docker save | ssh docker load` 传过去；代码用 `git archive` 解到 `/opt/hvac-platform` 并写 `REVISION`；`/opt/hvac-platform-tools/deploy.sh` 在服务器上重放 `local:up` 的步骤。只重启某个服务时，用 `node scripts/phase1-wsl-compose.mjs --integration [--intelligence] up -d --no-deps <服务>`，带上服务器的环境变量（AI 助手要 `--intelligence`）。
+- 部署方式：本地从 main 构建镜像，`docker save | ssh docker load` 传过去。本机内存紧、不开 Docker Desktop 时（2026-10-22 那次），Go 服务在 WSL 里按镜像的参数编译（`CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w"`），在服务器上以现有镜像为底只换 `/service`；迁移程序镜像只换新的迁移文件和 `migration-list.tsv`；换之前给原镜像打 `before-<时间>` 标签，出问题可以退回。代码用 `git archive` 解到 `/opt/hvac-platform` 并写 `REVISION`（从主仓库按提交号打包：`.claude/worktrees/` 下的 worktree 可能和旧的同名 worktree 撞登记名，用错 `GIT_DIR` 会打出别的提交）；`/opt/hvac-platform-tools/deploy.sh` 在服务器上重放 `local:up` 的步骤。只重启某个服务时，用 `node scripts/phase1-wsl-compose.mjs --integration [--intelligence] up -d --no-deps <服务>`，带上服务器的环境变量（AI 助手要 `--intelligence`）。
 - `DEEPSEEK_API_KEY` 在 `server.runtime.env` 里，是用户自己放的。
 - 夜间备份由 `hvac-backup.timer` 做，备份放在同一块盘的运行目录里，还没有拷到服务器以外。
 - Alertmanager 用的是默认接收方，告警到它那里就停了；要发邮件得先配接收方（`docs/operations/alerts.md` 的「告警怎么送到人」一节）。服务器上 Prometheus 读 `runtime/server/config/prometheus.yaml`，`alerting` 配置是手工加的。
@@ -62,7 +62,7 @@
 - 设备读数按现场 2026-10-15 手绘的通道表对应；有些通道的读数和它在表上的位置对不上（蒸发器进出可能接反了），机组的冷冻水出水温度和整个冷站对不上（C、D 机组运行时 28–32 ℃，总管供水 6 ℃），要现场核对（#614）。
 - 告警规则在 `deploy/sites/songyaxuan.alarm-rules.json`，用 `modules/alarm/cmd/alarm-rules` 发布。文件就是站点规则的全部：内容没变的规则不会出新版本，文件里没有的规则（删掉、改名、设备没有启用点位）会被撤销，它亮着的告警自动恢复，处理记录里写「规则已撤销」（原因 `RULE_RETIRED`，#693）。告警页的「正在生效的规则」页签列出站点现在的规则，发布后到那里核对。运行时先列出这次新增、更新、撤销哪些规则；`-print` 只列这份清单、不写库，它也要连告警库，所以和发布一样在服务器上跑。在服务器上用告警模块的数据库身份跑一个一次性容器：在 `modules/alarm` 里 `CGO_ENABLED=0 go build -o out/alarm-rules/alarm-rules ./cmd/alarm-rules`，把它和两个站点文件放到一个目录，再执行 `docker run --rm --network container:hvac-platform-energy-api-1 --volumes-from hvac-platform-energy-api-1 -e ALARM_DATABASE_URL_FILE=<energy-api 的值> -v <目录>:/alarm-rules:ro --entrypoint /alarm-rules/alarm-rules <energy-api 镜像> /alarm-rules/songyaxuan.alarm-rules.json`。
   - 「读数长时间没有更新」是每台设备一条（不是每个点位一条）：它亮着时，同一台设备另一个点位也停了不会再报，所有点位都恢复才清除。
-  - 2026-10 之前从文件里改名或删掉的规则、没有启用点位的设备的规则，还挂在松雅轩上：#693 部署（迁移 014）后先跑一次 `-print`，把要撤销的规则列给用户确认，再发布。
+  - 2026-10-22 部署迁移 014 后对松雅轩发布过一次（用户确认后）：撤销了「C 机组冷凝出水温度一动不动」（#614 改了通道）和「微信提醒测试（可忽略）」，其余 33 条没变。`ALARM_DATABASE_URL_FILE` 的值用 `docker inspect` 从 energy-api 的环境变量里读（镜像里没有 `printenv`），是 `/run/hvac/secrets/alarm.dsn`。
   - 告警服务（单机部署时在 energy-api 里）每分钟把到时间的判断再算一遍（#615，`RunDueEvaluations`），用每条规则上一次看到的读数，所以网关整个断线时也会报；站点断线期间新发布的规则，也用站点最后收到的读数算一次。「网关上报中断」：松雅轩 78 个启用的点位 15 分钟都没有读数时报（重要），收到任何一个新读数就恢复；断线超过 30 分钟时，各台设备的「读数长时间没有更新」也会跟着报。
   - 「一动不动」（#616）：设备自己读出来的每个温度读数一条（温度采集模块 18 个通道、冷量计 2 个，共 20 条），连续 6 小时完全没变就报「提示」，读数一变就恢复；机组电表上复制来的温度不另外判断。告警自己记每个读数「从什么时候起是现在这个值」（`telemetry_evaluation_input.unchanged_since`），规则条件是 `UNCHANGED` / `CHANGED`（对照 ThingsBoard 见 `docs/architecture/alarm-unchanged-reading-source-review-2026-10-20.md`）。部署后要等每台设备的下一批读数才开始记，最早 6 小时后才可能报。
   - 告警收到一台设备的一批读数时，只算用到这台设备读数的规则（#659，对照 ThingsBoard 见 `docs/architecture/alarm-evaluation-relevance-source-review-2026-10-20.md`）。松雅轩一批温度采集模块的读数算 20 条，冷量计 5 条，机组电表 3 条，其他设备 2 条；补收积压时每分钟能处理约 950 批。只跟时间有关的变化（读数过期、多久没数据）和设备不上报时新发布的规则版本，由每分钟的定时复查处理。
