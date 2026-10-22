@@ -118,6 +118,9 @@ func (store *PostgresStore) EvaluateTelemetrySnapshot(ctx context.Context, event
 	decisions := make([]EvaluationDecision, 0, len(relevant))
 	for _, rule := range relevant {
 		decision, err := store.EvaluateAssignedSnapshot(ctx, rule.assignmentID, evaluationSnapshot, now.UTC())
+		if errors.Is(err, ErrRuleRetired) {
+			continue
+		}
 		if err != nil {
 			return decisions, err
 		}
@@ -278,7 +281,7 @@ ORDER BY device_id`, tenantID, siteID)
 	rows.Close()
 
 	assignmentRows, err := tx.Query(ctx, `
-SELECT DISTINCT ON (assignment.assignment_id) assignment.assignment_id::text, policy.policy
+SELECT DISTINCT ON (assignment.assignment_id) assignment.assignment_id::text, assignment.retired, policy.policy
 FROM alarm_runtime.alarm_policy_assignment assignment
 JOIN alarm_runtime.alarm_policy_revision policy
   ON policy.tenant_id = assignment.tenant_id AND policy.site_id = assignment.site_id AND policy.policy_revision_id = assignment.policy_revision_id
@@ -290,10 +293,14 @@ ORDER BY assignment.assignment_id, assignment.assignment_revision DESC`, tenantI
 	rules := make([]siteRule, 0)
 	for assignmentRows.Next() {
 		var rule siteRule
+		var retired bool
 		var policyJSON []byte
-		if err := assignmentRows.Scan(&rule.assignmentID, &policyJSON); err != nil {
+		if err := assignmentRows.Scan(&rule.assignmentID, &retired, &policyJSON); err != nil {
 			assignmentRows.Close()
 			return nil, nil, fmt.Errorf("scan Site Alarm policy assignment: %w", err)
+		}
+		if retired {
+			continue
 		}
 		if rule.policy, err = decodeAlarmPolicy(policyJSON); err != nil {
 			assignmentRows.Close()

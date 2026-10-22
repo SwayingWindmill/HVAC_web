@@ -17,17 +17,10 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
 )
 
-// SitePolicy is one rule as a policy family and the Site assignment that evaluates it. The policy
-// carries no revision identity yet: publishing gives it the next revision when its content changed.
-type SitePolicy struct {
-	AssignmentID string
-	Policy       alarmservice.AlarmPolicyRevision
-}
-
 type Compiled struct {
 	TenantID string
 	SiteID   string
-	Policies []SitePolicy
+	Policies []alarmservice.SiteRule
 }
 
 type rulesFile struct {
@@ -309,13 +302,13 @@ func either(kind alarmservice.ConditionKind, conditions []alarmservice.Condition
 
 // sitePolicy names a rule's policy family and assignment after the Site and the rule's code, so
 // publishing the file again finds the same ones.
-func sitePolicy(siteID, siteCode, code string, policy alarmservice.AlarmPolicyRevision) SitePolicy {
+func sitePolicy(siteID, siteCode, code string, policy alarmservice.AlarmPolicyRevision) alarmservice.SiteRule {
 	policy.SchemaVersion = alarmservice.AlarmPolicySchemaVersion
 	policy.PolicyID = derivedID(siteID, policyKind, code)
 	policy.AlarmType = code
 	policy.SourceType = alarmmodel.SourceSiteRule
 	policy.SourceReference = "alarm-rules:" + siteCode + "/" + code
-	return SitePolicy{AssignmentID: derivedID(siteID, assignmentKind, code), Policy: policy}
+	return alarmservice.SiteRule{AssignmentID: derivedID(siteID, assignmentKind, code), Policy: policy}
 }
 
 func derivedID(siteID, kind, code string) string {
