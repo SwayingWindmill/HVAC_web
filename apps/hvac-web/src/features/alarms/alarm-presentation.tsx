@@ -1,6 +1,6 @@
 import { Badge } from '@/components/ui/badge';
 import { SeverityMark, type SeverityLevel } from '@/components/severity-mark';
-import type { Alarm, AlarmOperation, AlarmSeverity } from './alarm-api';
+import type { Alarm, AlarmOperation, AlarmSeverity, AlarmTimelineEntry } from './alarm-api';
 
 export const SEVERITY_ORDER: readonly AlarmSeverity[] = ['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INFO'];
 
@@ -24,6 +24,11 @@ const OPERATION_LABELS: Readonly<Record<AlarmOperation, string>> = {
 
 export function operationLabel(operation: AlarmOperation): string {
   return OPERATION_LABELS[operation];
+}
+
+/** Why the system recovered an alarm, when the reason is one the operator should read (#693). */
+export function recoveryReason(entry: AlarmTimelineEntry): string | null {
+  return entry.operation === 'CLEAR' && entry.reason === 'RULE_RETIRED' ? '规则已撤销' : null;
 }
 
 /** Condition and acknowledgement shown together, as an operator reads them. */
