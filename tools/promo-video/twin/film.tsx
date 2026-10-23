@@ -19,6 +19,9 @@ import { createFlowMaterial, PipeNetwork, type FlowMaterial } from '@/features/o
 import { buildSiteLayout, type SiteLayout } from '@/features/operations/digital-twin/scene/site-layout';
 import { filmDirection, placesOf, type Direction, type FilmState } from './direction';
 
+// The film's clock, for index.html (HVACTwin.cues): one copy, bundled with the shots it times.
+export { CUES as cues } from '../film/cues';
+
 // The digital twin as a film set. The product's scene code draws the site; this file replaces only what
 // the product drives from wall-clock time (turning parts, moving water, the camera, the shadow map) with
 // values computed from film time, and adds the sun's day. The film page calls renderAt(t) per frame.

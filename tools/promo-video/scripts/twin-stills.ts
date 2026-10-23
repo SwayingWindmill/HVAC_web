@@ -1,5 +1,5 @@
 // Draws the twin alone at chosen film times and tiles them into one sheet, to check camera and light
-// without a render. Usage (WSL): node scripts/twin-stills.mjs <out.png> 0,4,10 [width]
+// without a render. Usage (WSL): node scripts/twin-stills.ts <out.png> 0,4,10 [width]
 import { chromium } from '../../../node_modules/playwright/index.mjs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';

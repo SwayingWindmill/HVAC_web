@@ -11,9 +11,9 @@
 | 数据画面 | 负荷曲线、能流图、全年节电日历墙，都在 `film/index.html` 里用 SVG 和演示数据画出来 |
 | 小程序画面 | `film/index.html` 里按小程序的设计令牌画的手机界面 |
 | 标题、转场、片尾 | `film/index.html` 一条 GSAP 时间轴 |
-| 配乐和音效 | `music/compose.mjs` 用振荡器和噪声合成（不用采样），写成 `film/assets/audio/score.wav` |
+| 配乐和音效 | `music/compose.ts` 用振荡器和噪声合成（不用采样），写成 `film/assets/audio/score.wav` |
 
-剪辑点、点击、音效的时间只写在 `film/cues.js`：画面、三维镜头和配乐都读它，改一处三边一起动。
+剪辑点、点击、音效的时间只写在 `film/cues.ts`：三维镜头和配乐直接 import 它，页面从 twin 包里拿（`HVACTwin.cues`）。改完重跑 `npm run twin:build` 和 `node music/compose.ts`，三边一起动。
 
 `film/assets/` 下除了手写文件都是生成的，不提交。
 
@@ -25,13 +25,13 @@ WSL 里（`tools/promo-video`）：
 npm install --no-workspaces
 npm run prepare:assets
 npm run twin:build
-node music/compose.mjs
+node music/compose.ts
 ```
 
 只检查三维镜头和光线时，不用渲染整片：
 
 ```bash
-node scripts/twin-stills.mjs /tmp/stills.png 0,10,20,30,40
+node scripts/twin-stills.ts /tmp/stills.png 0,10,20,30,40
 ```
 
 ## 渲染

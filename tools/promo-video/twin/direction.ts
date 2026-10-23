@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { TwinState } from '@/features/operations/digital-twin/twin-model';
 import type { V3 } from '@/features/operations/digital-twin/scene/assets/kit';
 import type { SiteLayout } from '@/features/operations/digital-twin/scene/site-layout';
+import { CUES } from '../film/cues';
 
 // What the twin does at every moment of the film: where the camera is, what hour the sun says, which
 // machines run, and which of the product's own view switches (floor cut, facade, pipes forward,
@@ -141,15 +142,12 @@ function keyed(keys: readonly (readonly [number, number])[]): (t: number) => num
 
 const add = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 
-/** The film's clock (film/cues.js), loaded by the page before this bundle. */
-const cues = (): Record<string, number> => (globalThis as unknown as { FILM_CUES: Record<string, number> }).FILM_CUES;
-
 /**
- * 冷站的一天 (film/SPEC.md), on the times named in film/cues.js. The twin is drawn only while it is
+ * 冷站的一天 (film/SPEC.md), on the times named in film/cues.ts. The twin is drawn only while it is
  * on screen; product pages, chapter words and the end card cover the rest.
  */
 export function filmDirection(places: Places): Direction {
-  const C = cues();
+  const C = CUES;
   const az = Math.PI / 4;
   const overview = add(places.centre, [1, 3, -0.5]);
   const wide = add(places.centre, [0, 2, 0]);

@@ -1,16 +1,12 @@
 // The film's score and sound effects, synthesised from oscillators and noise: no samples, no audio
-// files. 120 BPM in D major (B minor for the night), arranged on the film's clock (film/cues.js) so
+// files. 120 BPM in D major (B minor for the night), arranged on the film's clock (film/cues.ts) so
 // every chapter, cut and click lands on the picture. Writes film/assets/audio/score.wav (48 kHz, 24-bit).
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CUES } from '../film/cues.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-// The same file the film page loads as a script.
-const cueScope = {};
-runInNewContext(readFileSync(join(here, '..', 'film', 'cues.js'), 'utf8'), cueScope);
-const CUES = cueScope.FILM_CUES;
 const SR = 48000;
 const BEAT = 60 / CUES.bpm;
 const BAR = BEAT * 4;

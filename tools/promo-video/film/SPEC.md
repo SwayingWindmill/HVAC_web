@@ -4,7 +4,7 @@ GOAL：看完觉得这套系统先进、好用，想约一次演示。四个感�
 
 OUTPUT：HyperFrames，1920 × 1080，30 fps；配乐 48 kHz。
 
-TIME：60 s，120 BPM，一拍 0.5 s，一小节 2 s，共 30 小节。所有剪辑点和音效的时间只写在 `cues.js` 里，画面（`index.html`、`../twin/direction.ts`）和配乐（`../music/compose.mjs`）都读它。
+TIME：60 s，120 BPM，一拍 0.5 s，一小节 2 s，共 30 小节。所有剪辑点和音效的时间只写在 `cues.ts` 里，画面（`index.html`、`../twin/direction.ts`）和配乐（`../music/compose.ts`）都读它。
 
 ## LOOK
 
