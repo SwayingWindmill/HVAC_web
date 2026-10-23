@@ -42,7 +42,6 @@ const (
 	CapabilityTemplateManage        Capability = "template.manage"
 	CapabilityRegistryImport        Capability = "registry.import"
 	CapabilityRegistryRetire        Capability = "registry.retire"
-	CapabilityRuleManage            Capability = "rule.manage"
 	CapabilitySavingsManage         Capability = "savings.manage"
 )
 
@@ -78,7 +77,6 @@ var supportedCapabilities = [...]Capability{
 	CapabilityTemplateManage,
 	CapabilityRegistryImport,
 	CapabilityRegistryRetire,
-	CapabilityRuleManage,
 	CapabilitySavingsManage,
 }
 
@@ -119,7 +117,6 @@ func (capability Capability) Valid() bool {
 		CapabilityTemplateManage,
 		CapabilityRegistryImport,
 		CapabilityRegistryRetire,
-		CapabilityRuleManage,
 		CapabilitySavingsManage:
 		return true
 	default:

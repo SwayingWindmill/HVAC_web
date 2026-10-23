@@ -45,7 +45,6 @@ use (
 	./services/identity-service
 	./services/optimization-service
 	./services/notification-service
-	./services/rule-runtime-service
 	./modules/connectivity
 	./modules/metric
 	./modules/maintenance

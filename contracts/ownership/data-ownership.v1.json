@@ -58,12 +58,6 @@
     },
     {
       "kind": "schema",
-      "name": "rule_runtime",
-      "writer": "rule-runtime-service",
-      "revision": 1
-    },
-    {
-      "kind": "schema",
       "name": "telemetry_history",
       "writer": "telemetry-history-projector",
       "revision": 1,
@@ -561,11 +555,6 @@
       ]
     },
     {
-      "service": "rule-runtime-service",
-      "schema": "rule_runtime",
-      "mode": "write"
-    },
-    {
       "service": "telemetry-history-projector",
       "schema": "telemetry_history",
       "mode": "write"
@@ -812,13 +801,6 @@
         "work_order_mutation_audit",
         "work_order_completion_evidence"
       ]
-    },
-    {
-      "schema": "rule_runtime",
-      "migrationRole": "rule_runtime_migrator",
-      "runtimeRole": "rule_runtime_runtime",
-      "runtimeBypassRls": false,
-      "accessMode": "write"
     }
   ]
 }

@@ -77,11 +77,6 @@
       "mustNotOwn": ["cloud-command-approval", "registry-master-data"]
     },
     {
-      "id": "rule-runtime",
-      "owns": ["node-definition", "rule-revision", "rule-binding", "rule-execution", "generic-rule-state", "continuation", "effect-intent", "trace-debug-evidence"],
-      "mustNotOwn": ["alarm-final-fact", "command-final-fact", "telemetry-final-fact", "metric-final-fact", "provider-delivery-receipt"]
-    },
-    {
       "id": "alarm",
       "owns": ["alarm-policy-revision", "alarm-evaluation-state", "alarm-incident", "acknowledgment", "suppression", "assignment", "alarm-timeline", "correlation-group"],
       "mustNotOwn": ["provider-delivery-retry", "work-order-completion"]
@@ -118,7 +113,6 @@
     "families": [
       {"owner": "registry", "types": ["TemplateRevision", "TemplateAssignment"]},
       {"owner": "connectivity", "types": ["TransportProfileRevision", "DesiredConfigurationRevision"]},
-      {"owner": "rule-runtime", "types": ["RuleRevision", "RuleBinding"]},
       {"owner": "alarm", "types": ["AlarmPolicyRevision"]},
       {"owner": "presentation", "types": ["DashboardViewDefinition"]},
       {"owner": "edge-control", "types": ["EdgeRelease"]},

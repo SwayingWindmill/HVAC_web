@@ -51,8 +51,6 @@ hvac_s1|infra/connectivity/postgres/init/001-s09-connectivity.sql
 hvac_s1|infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
 hvac_s1|infra/connectivity/postgres/init/003-gateway-uplink.sql
 hvac_s1|infra/connectivity/postgres/init/004-gateway-enrollment.sql
-hvac_s1|services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql
-hvac_s1|services/rule-runtime-service/migrations/002_s21_rule_management.sql
 hvac_s1|infra/registry/postgres/init/013-s23-maintenance-retirement.sql
 hvac_s1|infra/registry/postgres/init/014-s21-rule-management-capability.sql
 hvac_s1|infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql
@@ -72,6 +70,7 @@ hvac_s1|infra/registry/postgres/init/028-retire-own-tariff-pricing.sql
 hvac_s1|infra/registry/postgres/init/029-drop-registry-import-tables.sql
 hvac_s1|infra/registry/postgres/init/030-drop-api-credentials.sql
 hvac_s1|infra/registry/postgres/init/031-drop-outbound-delivery.sql
+hvac_s1|infra/registry/postgres/init/032-drop-generic-rules.sql
 hvac_s2|infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 hvac_s2|infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql

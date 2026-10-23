@@ -62,8 +62,6 @@ COPY infra/connectivity/postgres/init/001-s09-connectivity.sql /opt/hvac/repo/in
 COPY infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql /opt/hvac/repo/infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
 COPY infra/connectivity/postgres/init/003-gateway-uplink.sql /opt/hvac/repo/infra/connectivity/postgres/init/003-gateway-uplink.sql
 COPY infra/connectivity/postgres/init/004-gateway-enrollment.sql /opt/hvac/repo/infra/connectivity/postgres/init/004-gateway-enrollment.sql
-COPY services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql /opt/hvac/repo/services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql
-COPY services/rule-runtime-service/migrations/002_s21_rule_management.sql /opt/hvac/repo/services/rule-runtime-service/migrations/002_s21_rule_management.sql
 COPY infra/registry/postgres/init/013-s23-maintenance-retirement.sql /opt/hvac/repo/infra/registry/postgres/init/013-s23-maintenance-retirement.sql
 COPY infra/registry/postgres/init/014-s21-rule-management-capability.sql /opt/hvac/repo/infra/registry/postgres/init/014-s21-rule-management-capability.sql
 COPY infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql /opt/hvac/repo/infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql
@@ -83,6 +81,7 @@ COPY infra/registry/postgres/init/028-retire-own-tariff-pricing.sql /opt/hvac/re
 COPY infra/registry/postgres/init/029-drop-registry-import-tables.sql /opt/hvac/repo/infra/registry/postgres/init/029-drop-registry-import-tables.sql
 COPY infra/registry/postgres/init/030-drop-api-credentials.sql /opt/hvac/repo/infra/registry/postgres/init/030-drop-api-credentials.sql
 COPY infra/registry/postgres/init/031-drop-outbound-delivery.sql /opt/hvac/repo/infra/registry/postgres/init/031-drop-outbound-delivery.sql
+COPY infra/registry/postgres/init/032-drop-generic-rules.sql /opt/hvac/repo/infra/registry/postgres/init/032-drop-generic-rules.sql
 
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql

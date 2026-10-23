@@ -25,7 +25,6 @@ require (
 	github.com/quanlaihe/hvac-web/modules/iam v0.0.0
 	github.com/quanlaihe/hvac-web/services/notification-service v0.0.0
 	github.com/quanlaihe/hvac-web/modules/registry v0.0.0
-	github.com/quanlaihe/hvac-web/services/rule-runtime-service v0.0.0
 	github.com/quanlaihe/hvac-web/services/identity-service v0.0.0
 	github.com/quanlaihe/hvac-web/libs/schemagate v0.0.0
 	github.com/quanlaihe/hvac-web/modules/telemetry v0.0.0
@@ -80,7 +79,6 @@ replace github.com/quanlaihe/hvac-web/modules/command => ../../modules/command
 replace github.com/quanlaihe/hvac-web/modules/iam => ../../modules/iam
 replace github.com/quanlaihe/hvac-web/services/notification-service => ../../services/notification-service
 replace github.com/quanlaihe/hvac-web/modules/registry => ../../modules/registry
-replace github.com/quanlaihe/hvac-web/services/rule-runtime-service => ../../services/rule-runtime-service
 replace github.com/quanlaihe/hvac-web/services/identity-service => ../../services/identity-service
 replace github.com/quanlaihe/hvac-web/libs/schemagate => ../../libs/schemagate
 replace github.com/quanlaihe/hvac-web/modules/telemetry => ../../modules/telemetry

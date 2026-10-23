@@ -116,12 +116,6 @@ func main() {
 	if operationsConfig != nil {
 		operationsConfig.RateLimiter = rateLimiter
 	}
-	ruleManagement, closeRuleManagement, err := loadRuleManagement(runContext)
-	if err != nil {
-		logger.Error("gateway_rule_management_config_invalid", "error_code", "RULE_MANAGEMENT_CONFIG_INVALID")
-		os.Exit(1)
-	}
-	defer closeRuleManagement()
 	serverTLSConfig, serverTLSEnabled, err := loadGatewayServerTLSConfig()
 	if err != nil {
 		logger.Error("gateway_server_tls_config_invalid", "error_code", "GATEWAY_SERVER_TLS_CONFIG_INVALID")
@@ -146,23 +140,22 @@ func main() {
 	}
 
 	var handler http.Handler = gateway.NewHandler(gateway.Config{
-		Logger:         logger,
-		Identity:       identity,
-		RouteManager:   routing.manager,
-		RouteAudit:     routing.audit,
-		Registry:       routing.registry,
-		Connectivity:   connectivityConfig,
-		Telemetry:      telemetryConfig,
-		Command:        commandConfig,
-		Alarm:          alarmConfig,
-		Notification:   notificationConfig,
-		WorkOrder:      workOrderConfig,
-		Analytics:      analyticsConfig,
-		Intelligence:   intelligenceConfig,
-		Operations:     operationsConfig,
-		RuleManagement: ruleManagement,
-		Observability:  telemetry,
-		RateLimiter:    rateLimiter,
+		Logger:        logger,
+		Identity:      identity,
+		RouteManager:  routing.manager,
+		RouteAudit:    routing.audit,
+		Registry:      routing.registry,
+		Connectivity:  connectivityConfig,
+		Telemetry:     telemetryConfig,
+		Command:       commandConfig,
+		Alarm:         alarmConfig,
+		Notification:  notificationConfig,
+		WorkOrder:     workOrderConfig,
+		Analytics:     analyticsConfig,
+		Intelligence:  intelligenceConfig,
+		Operations:    operationsConfig,
+		Observability: telemetry,
+		RateLimiter:   rateLimiter,
 		Build: platformapi.BuildInfo{
 			Service: "platform-gateway",
 			Version: version,
