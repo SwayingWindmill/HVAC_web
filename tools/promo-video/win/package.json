@@ -1,0 +1,15 @@
+{
+  "name": "@hvac/promo-video-win",
+  "private": true,
+  "description": "Windows 侧的 HyperFrames，只用来渲染：Windows 版 Chrome 能直接用显卡跑孪生的 WebGL，WSL 里只有软件渲染",
+  "devDependencies": {
+    "ffmpeg-static": "5.3.0",
+    "ffprobe-static": "3.1.0",
+    "hyperframes": "0.8.140",
+    "yauzl": "3.2.0"
+  },
+  "allowScripts": {
+    "ffmpeg-static@5.3.0": true,
+    "esbuild@0.25.12": true
+  }
+}

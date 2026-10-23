@@ -11,6 +11,36 @@
       ".worktrees/**",
       ".tmp*/**",
       "CodeHVAC_web.tmp-*/**"
+    ],
+    "ignoreRules": [],
+    "ignoreValues": [
+      {
+        "rule": "low-contrast",
+        "value": "*",
+        "files": [
+          "tools/promo-video/film/index.html"
+        ],
+        "createdAt": "2026-10-22T07:33:50.784Z",
+        "reason": "Claude: video composition; light-ink titles sit over the night 3D canvas, not the static page background the scanner sees"
+      },
+      {
+        "rule": "clipped-overflow-container",
+        "value": "*",
+        "files": [
+          "tools/promo-video/film/index.html"
+        ],
+        "createdAt": "2026-10-22T07:33:51.009Z",
+        "reason": "Claude: video frame; the 1920x1080 stage and the phone screen clip on purpose, nothing interactive escapes"
+      },
+      {
+        "rule": "nested-cards",
+        "value": "*",
+        "files": [
+          "tools/promo-video/film/index.html"
+        ],
+        "createdAt": "2026-10-22T10:30:53.751Z",
+        "reason": "Claude: the film redraws the product's own components as they are — the AI assistant's evidence card and the mini program's cards sit inside the film's card/phone, matching the real UI"
+      }
     ]
   }
 }

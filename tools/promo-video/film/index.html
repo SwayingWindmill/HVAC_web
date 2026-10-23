@@ -1,0 +1,1007 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <!-- 冷站的一天 (SPEC.md), third cut. The twin (assets/twin, the product's own scene code) is the home
+         world; one card, drawn here in the product's design system, carries every product moment; the
+         forecast, the energy flow and the year's wall are drawn here from the film's demo data. -->
+    <link rel="stylesheet" href="assets/fonts/fonts.css" />
+    <script src="assets/vendor/gsap.min.js"></script>
+    <script src="cues.js"></script>
+    <script src="assets/twin/twin.js"></script>
+    <style>
+      :root {
+        --ink: #18181b;
+        --ink-night: #f4f4f5;
+        --muted: #71717a;
+        --subtle: #a1a1aa;
+        --primary: #3f5bd9;
+        --primary-soft: #eef1fd;
+        --primary-line: #c9d2f7;
+        --success: #1f9d55;
+        --success-soft: #e8f6ee;
+        --success-text: #18794e;
+        --major: #ea580c;
+        --major-soft: #ffedd5;
+        --major-text: #9a3412;
+        --destructive: #d92d20;
+        --background: #f7f7f8;
+        --card: #ffffff;
+        --border: #e7e7ea;
+        --divider: #f0f0f2;
+        --secondary-foreground: #3f3f46;
+        --teal: #0e9384;
+        --violet: #8b5cf6;
+        --cn: 'Noto Sans SC Variable', sans-serif;
+        --num: 'Geist Variable', 'Noto Sans SC Variable', sans-serif;
+      }
+      html, body { margin: 0; background: var(--background); }
+      #root { position: relative; width: 1920px; height: 1080px; overflow: hidden; font-family: var(--cn); color: var(--ink); }
+      .layer { position: absolute; inset: 0; }
+      .num { font-family: var(--num); font-variant-numeric: tabular-nums; }
+
+      /* The stage */
+      #twin-frame { position: absolute; inset: 0; overflow: hidden; }
+      #twin { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+      #veil { position: absolute; inset: 0; background: rgba(247,247,248,.5); opacity: 0; }
+
+      /* Titles over the twin */
+      .clock { font-family: var(--num); font-weight: 600; font-size: 176px; line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+      .title { font-family: var(--cn); font-weight: 600; font-size: 72px; line-height: 1.18; letter-spacing: -0.01em; margin: 0; }
+      .title b { font-weight: 600; color: var(--primary); }
+      .line { font-size: 34px; font-weight: 500; line-height: 1.4; margin: 0; }
+      .over .title, .over .line, .over.title, .over.line { text-shadow: 0 0 18px rgba(247,247,248,.95), 0 0 42px rgba(247,247,248,.7); }
+      .night { color: var(--ink-night); text-shadow: 0 0 22px rgba(10,14,30,.75); }
+      .word { display: inline-block; }
+      .cover-title { margin: 0; font-size: 132px; font-weight: 700; line-height: 1.12; letter-spacing: -0.01em; color: var(--ink); }
+      .cover-title b { color: var(--primary); font-weight: 700; }
+      .cover-sub { margin: 30px 0 0; font-size: 38px; color: var(--secondary-foreground); }
+      /* Words over the twin sit on a white tag, the card's own material, so they read on any scene. */
+      .tag { position: absolute; display: flex; flex-direction: column; gap: 8px; padding: 22px 34px; border-radius: 20px; background: #fff; color: var(--ink); font-size: 52px; font-weight: 600; line-height: 1.25; box-shadow: 0 24px 50px rgba(24,24,27,.16), 0 2px 6px rgba(24,24,27,.06); opacity: 0; }
+      .tag b { color: var(--primary); font-weight: 600; }
+      .tag small { font-size: 28px; font-weight: 500; color: var(--muted); }
+      .clock-tag { font-size: 120px; line-height: 1; padding: 20px 36px; letter-spacing: -0.03em; }
+
+      /* Code-drawn scenes on the product's ground */
+      .ground { position: absolute; inset: 0; background: radial-gradient(70% 60% at 18% 8%, #fbf4ec 0%, rgba(251,244,236,0) 60%), var(--background); }
+      .axis { font: 500 24px var(--num); fill: var(--subtle); }
+      .chart-label { font: 600 26px var(--cn); }
+
+      /* The card: one shape for every product moment */
+      #card-wrap { position: absolute; inset: 0; filter: drop-shadow(0 34px 60px rgba(24,24,27,.16)) drop-shadow(0 2px 6px rgba(24,24,27,.06)); transform-origin: 960px 540px; }
+      #card { position: absolute; inset: 0; background: var(--card); clip-path: inset(480px 900px 480px 900px round 60px); }
+      .st { position: absolute; opacity: 0; box-sizing: border-box; }
+      .cap { font-size: 26px; color: var(--muted); }
+      .k { font-size: 26px; color: var(--muted); }
+      .badge { display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 16px; border-radius: 10px; font-size: 24px; font-weight: 600; }
+      .badge.ok { background: var(--success-soft); color: var(--success-text); }
+      .badge.warn { background: var(--major-soft); color: var(--major-text); }
+      .badge.low { background: var(--success-soft); color: var(--success-text); }
+      .btn { position: absolute; height: 72px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 600; }
+      .btn.primary { background: var(--primary); color: #fff; }
+      .btn.outline { background: #fff; color: var(--ink); box-shadow: inset 0 0 0 2px #dedee3; }
+      .cursor { position: absolute; left: 0; top: 0; width: 52px; height: 70px; transform-origin: 6px 4px; filter: drop-shadow(0 6px 14px rgba(24,24,27,.3)); opacity: 0; }
+
+      /* The year's wall */
+      #wall-cam { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+      .tile { position: absolute; width: 22px; height: 22px; border-radius: 5px; }
+      #year { position: absolute; left: 168px; top: 150px; }
+      #year .label { font-size: 40px; font-weight: 600; }
+      #year .label b { color: var(--success); font-weight: 600; }
+      #year .figure { font-size: 280px; line-height: 0.95; margin-top: 14px; display: flex; align-items: baseline; gap: 18px; font-family: var(--num); font-weight: 600; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+      #year .unit { font-family: var(--cn); font-size: 64px; font-weight: 600; letter-spacing: 0; }
+      #year .note-line { font-size: 30px; color: var(--secondary-foreground); margin-top: 22px; }
+      .roll { display: inline-block; overflow: hidden; height: 266px; vertical-align: bottom; }
+      .roll > span { display: block; }
+
+      /* Chapter words */
+      .chapter { position: absolute; inset: 0; background: var(--primary); display: flex; align-items: center; justify-content: center; clip-path: inset(100% 0 0 0); }
+      .chapter span { font-size: 230px; font-weight: 700; color: #fff; letter-spacing: 0.08em; display: inline-block; }
+
+      /* End card */
+      #mark { position: absolute; left: 0; top: 0; width: 820px; height: 820px; }
+      #wordmark { position: absolute; left: 0; top: 0; white-space: nowrap; }
+      #wordmark .name { font-size: 96px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.1; }
+      #wordmark .sub { font-size: 36px; color: var(--secondary-foreground); margin-top: 12px; }
+      #cta { position: absolute; height: 84px; padding: 0 52px; border-radius: 16px; background: var(--primary); color: #fff; font-size: 34px; font-weight: 600; display: flex; align-items: center; }
+      #disclaimer { position: absolute; left: 0; right: 0; bottom: 64px; text-align: center; font-size: 22px; color: var(--muted); }
+
+      /* The phone: a plain device, the mini program inside at 390 × 844. */
+      #phone { position: absolute; left: 1206px; top: 70px; width: 414px; height: 868px; border-radius: 64px; background: #101114; box-shadow: 0 50px 120px rgba(5,8,20,.45), inset 0 0 0 2px #2a2c33; }
+      #screen { position: absolute; left: 12px; top: 12px; width: 390px; height: 844px; border-radius: 52px; overflow: hidden; background: var(--background); }
+      #phone .island { position: absolute; left: 50%; top: 11px; width: 118px; height: 34px; margin-left: -59px; border-radius: 20px; background: #000; z-index: 9; }
+      #phone .app { position: absolute; inset: 0; background: var(--background); font-size: 15px; line-height: 22px; color: var(--ink); }
+      #phone .status { height: 54px; display: flex; align-items: flex-end; justify-content: space-between; padding: 0 30px 6px 36px; font: 600 16px var(--num); }
+      #phone .nav { height: 44px; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 17px; position: relative; }
+      #phone .nav .back { position: absolute; left: 14px; top: 10px; width: 24px; height: 24px; }
+      #phone .pane { padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
+      #phone .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 1px 2px rgba(24,24,27,.04); }
+      #phone .pad { padding: 16px; }
+      #phone .badge { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+      #phone .badge.major { background: var(--major-soft); color: var(--major-text); }
+      #phone .badge.ok { background: var(--success-soft); color: var(--success-text); }
+      #phone .caption { font-size: 13px; color: var(--muted); }
+      #phone .row { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-top: 1px solid var(--divider); }
+      #phone .row:first-child { border-top: 0; }
+      #phone .row .k { color: var(--muted); font-size: 14px; }
+      #phone .row .v { font-weight: 600; font-family: var(--num); }
+      #phone .footer { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 12px; padding: 12px 16px 34px; border-top: 1px solid var(--border); background: var(--card); }
+      #phone .btn { flex: 1; height: 46px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 16px; }
+      #phone .btn.outline { border: 1px solid #dedee3; color: var(--ink); background: #fff; }
+      #phone .btn.primary { background: var(--primary); color: #fff; }
+      #phone .step { display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: start; padding: 9px 0; }
+      #phone .dot { width: 10px; height: 10px; border-radius: 50%; margin: 6px 4px; background: var(--success); }
+      #phone .dot.red { background: var(--destructive); }
+      #phone .step .when { font-family: var(--num); font-size: 13px; color: var(--muted); }
+
+      #phone .lock { position: absolute; inset: 0; background: radial-gradient(120% 80% at 70% 20%, #2b3a7a 0%, #141b33 55%, #0b0f1f 100%); color: #fff; }
+      #phone .lock .t { position: absolute; left: 0; right: 0; top: 96px; text-align: center; font: 600 86px/1 var(--num); letter-spacing: -0.02em; }
+      #phone .lock .d { position: absolute; left: 0; right: 0; top: 76px; text-align: center; font-size: 17px; opacity: .85; }
+      #phone .note { position: absolute; left: 12px; right: 12px; top: 250px; border-radius: 22px; background: rgba(245,246,250,.94); color: var(--ink); padding: 14px 16px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+      #phone .note .app-line { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+      #phone .note .icon { width: 22px; height: 22px; border-radius: 6px; background: var(--primary); display: flex; align-items: center; justify-content: center; }
+      #phone .note .head { font-weight: 600; font-size: 16px; margin-top: 8px; }
+      #phone .note .body { font-size: 15px; margin-top: 2px; color: var(--secondary-foreground); }
+
+      #phone .big { font-family: var(--num); font-weight: 600; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+      #phone .bars { display: flex; align-items: flex-end; gap: 4px; height: 96px; }
+      #phone .bar { flex: 1; position: relative; border-radius: 3px 3px 0 0; }
+      #phone .bar i { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 3px 3px 0 0; background: var(--primary); }
+      #phone .bar u { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 3px 3px 0 0; background: #dfe3f6; }
+
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="60" data-width="1920" data-height="1080" data-fps="30">
+      <audio id="score" class="clip" src="assets/audio/score.wav" data-start="0" data-duration="60" data-track-index="20" data-volume="1"></audio>
+
+      <!-- The stage: the twin, defocused behind the card -->
+      <div id="twin-frame" class="clip" data-start="0" data-duration="60" data-track-index="0" data-layout-allow-overflow>
+        <canvas id="twin" width="1920" height="1080"></canvas>
+      </div>
+      <div id="veil" class="clip" data-start="0" data-duration="60" data-track-index="1"></div>
+
+      <!-- Words over the twin -->
+      <div id="titles" class="clip layer" data-start="0" data-duration="44" data-track-index="2">
+        <div id="cover" style="position:absolute;left:150px;top:290px">
+          <h1 id="cover-title" class="cover-title">冷站，<br />可以<b>自己省电</b></h1>
+          <p id="cover-sub" class="cover-sub">泉来禾智慧能源平台 · 网页版与微信小程序</p>
+        </div>
+        <div id="clock" class="tag clock-tag" style="left:150px;top:120px"><span id="clock-text" class="num">12:30</span></div>
+        <div id="tag-floors" class="tag" style="left:150px;top:850px"><span>从冷站到<b>每个房间</b></span></div>
+        <div id="tag-pipes" class="tag" style="left:150px;top:850px">每一路水，都看得到</div>
+        <div id="tag-chiller" class="tag" style="left:150px;top:120px"><span class="num">7℃ → <b>8℃</b></span><small>冷冻水出水温度已下发到 1# 冷水机组</small></div>
+        <div id="tag-night" class="tag" style="left:150px;top:350px">凌晨三点，手机先知道<small>2# 冷冻泵故障停机</small></div>
+        <div id="tag-daily" class="tag" style="left:150px;top:350px">每天 8 点，昨天省了多少<small>昨日能效 · 微信提醒</small></div>
+      </div>
+
+      <!-- Today's load, drawn across the frame; what the plan saves fills under it -->
+      <div id="forecast" class="clip layer" data-start="3.4" data-duration="6.8" data-track-index="3">
+        <div class="ground"></div>
+        <p id="fc-1" class="line" style="position:absolute;left:156px;top:118px;color:var(--muted)">今天最高 <span class="num" style="font-weight:600;color:var(--ink)">35℃</span></p>
+        <h2 id="fc-2" class="title" style="position:absolute;left:150px;top:176px">下午，负荷会冲到九成</h2>
+        <h2 id="fc-3" class="title" style="position:absolute;left:150px;top:176px">泉来禾，<b>已经算好了</b></h2>
+        <svg id="fc-svg" class="layer" viewBox="0 0 1920 1080" aria-hidden="true"></svg>
+      </div>
+
+      <!-- Where today's power goes -->
+      <div id="flow" class="clip layer" data-start="15" data-duration="2" data-track-index="4">
+        <div class="ground"></div>
+        <h2 id="flow-title" class="title" style="position:absolute;left:150px;top:96px">每一度电，<b>去了哪里</b></h2>
+        <svg id="flow-svg" class="layer" viewBox="0 0 1920 1080" aria-hidden="true"></svg>
+      </div>
+
+      <!-- The card -->
+      <div id="card-layer" class="clip layer" data-start="10" data-duration="34.5" data-track-index="5">
+        <div id="card-wrap">
+          <div id="card"></div>
+
+          <div class="st" id="st-live" data-rect="live">
+            <div style="display:flex;align-items:center;gap:14px;font-size:28px;font-weight:600"><span style="width:14px;height:14px;border-radius:7px;background:var(--success)"></span>冷站实时<span class="cap num" style="margin-left:auto" id="live-time">10:30:12</span></div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);margin-top:34px">
+              <div><div class="k">冷站功率</div><div class="num" style="font-size:92px;font-weight:600;letter-spacing:-0.03em;line-height:1.1"><span id="live-p">362.0</span><span style="font-size:32px;color:var(--muted);margin-left:10px">kW</span></div></div>
+              <div><div class="k">瞬时制冷量</div><div class="num" style="font-size:92px;font-weight:600;letter-spacing:-0.03em;line-height:1.1"><span id="live-c">1,557</span><span style="font-size:32px;color:var(--muted);margin-left:10px">kW</span></div></div>
+              <div><div class="k">冷站 COP</div><div class="num" style="font-size:92px;font-weight:600;letter-spacing:-0.03em;line-height:1.1"><span id="live-cop">4.30</span></div></div>
+            </div>
+          </div>
+
+          <div class="st" id="st-ask" data-rect="ask">
+            <div style="display:flex;align-items:center;gap:14px;font-size:32px;font-weight:600"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#3f5bd9" stroke-width="2" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>AI 助手<span class="cap" style="margin-left:auto;font-size:24px;font-weight:400">根据平台数据回答，只读取，不会操作设备</span></div>
+            <div id="ask-bubble" style="position:absolute;right:56px;top:120px;max-width:820px;background:var(--primary-soft);border-radius:22px;padding:20px 28px;font-size:28px;line-height:1.5">10月10日 11:00–12:00 空调用电 <span class="num">247 kWh</span>，用电正常吗？</div>
+            <div id="ask-steps" class="cap" style="position:absolute;left:56px;top:260px;font-size:24px">✓ 查询了 2 项数据</div>
+            <div id="ask-answer" style="position:absolute;left:56px;right:56px;top:310px;font-size:32px;line-height:1.5;font-weight:500">这一小时比前一天同一时段多用电 18 kWh，主要来自 2 号机组。</div>
+            <div id="ask-evidence" style="position:absolute;left:56px;right:56px;top:400px;height:290px;border-radius:20px;box-shadow:inset 0 0 0 2px var(--border);padding:24px 28px;box-sizing:border-box">
+              <div style="display:flex;align-items:center;gap:14px"><span class="badge low" style="height:34px;font-size:20px">有数据依据</span><span class="cap" style="font-size:24px">10月9日–10月10日 11:00 用电（kWh）</span></div>
+              <div style="position:absolute;left:28px;bottom:26px;display:flex;align-items:flex-end;gap:36px;height:170px">
+                <div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div id="ask-bar-1" style="width:150px;height:140px;background:#c9d2f7;border-radius:8px 8px 0 0"></div><span class="cap num" style="font-size:20px">10/9 · 229</span></div>
+                <div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div id="ask-bar-2" style="width:150px;height:151px;background:var(--primary);border-radius:8px 8px 0 0"></div><span class="cap num" style="font-size:20px">10/10 · 247</span></div>
+              </div>
+              <div style="position:absolute;right:28px;bottom:26px;display:flex;gap:16px">
+                <div style="background:var(--background);border-radius:14px;padding:16px 22px"><div class="cap" style="font-size:20px">多用电</div><div class="num" style="font-size:40px;font-weight:600">+18<span style="font-size:20px;color:var(--muted);margin-left:6px">kWh</span></div></div>
+                <div style="background:var(--background);border-radius:14px;padding:16px 22px"><div class="cap" style="font-size:20px">综合能效</div><div class="num" style="font-size:40px;font-weight:600">3.5</div></div>
+              </div>
+            </div>
+            <div id="ask-composer" style="position:absolute;left:56px;right:56px;bottom:44px;height:100px;border-radius:20px;box-shadow:inset 0 0 0 2px var(--border);display:flex;align-items:center;padding:0 24px;box-sizing:border-box">
+              <span id="ask-draft" style="font-size:26px;color:var(--ink)">10月10日 11:00–12:00 空调用电 <span class="num">247 kWh</span>，用电正常吗？</span>
+              <span id="ask-send" style="margin-left:auto;width:60px;height:60px;border-radius:30px;background:var(--primary);display:flex;align-items:center;justify-content:center"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></span>
+            </div>
+          </div>
+
+          <div class="st" id="st-propose" data-rect="propose">
+            <div style="position:absolute;left:60px;top:48px;width:840px">
+              <div style="display:flex;align-items:center;gap:16px"><span style="font-size:34px;font-weight:600">当前建议</span><span class="badge low">低风险</span><span class="cap num">手动生成于 10:30</span></div>
+              <div class="k" style="margin-top:34px">冷冻水供水温度</div>
+              <div class="num" style="font-size:132px;font-weight:600;letter-spacing:-0.03em;line-height:1.05;display:flex;align-items:baseline;gap:26px"><span>7.0</span><span style="font-size:72px;color:var(--subtle)">→</span><span id="pr-to" style="color:var(--primary)">8.0</span><span style="font-size:40px;color:var(--muted)">℃</span></div>
+              <div style="font-size:28px;line-height:1.5;color:var(--secondary-foreground);margin-top:14px">供水温度升高后，预计室内温度 <span class="num">24.6 ℃</span>，仍在 <span class="num">22–26 ℃</span> 舒适范围内。</div>
+            </div>
+            <div id="btn-dispatch" class="btn primary" style="left:60px;bottom:48px;width:250px">按建议下发</div>
+            <div style="position:absolute;left:960px;top:48px;bottom:48px;width:2px;background:var(--divider)"></div>
+            <div style="position:absolute;left:1010px;top:48px;right:60px">
+              <div class="cap">预计效果</div>
+              <div class="k" style="margin-top:28px">预计日节电</div>
+              <div class="num" style="font-size:88px;font-weight:600;letter-spacing:-0.03em;line-height:1.1"><span id="pr-kwh">0</span><span style="font-size:30px;color:var(--muted);margin-left:10px">kWh</span></div>
+              <div class="cap" style="font-size:22px">约占最近一天冷站用电 17.4%</div>
+              <div class="k" style="margin-top:26px">预计日节省</div>
+              <div class="num" style="font-size:88px;font-weight:600;letter-spacing:-0.03em;line-height:1.1">¥<span id="pr-cny">0</span></div>
+              <div class="cap" style="font-size:22px">按最近一天电费 ¥3,739 折算</div>
+            </div>
+          </div>
+
+          <div class="st" id="st-dialog" data-rect="dialog">
+            <div style="position:absolute;left:48px;right:48px;top:44px">
+              <div style="font-size:38px;font-weight:600">向 CHILLER-01 下发指令？</div>
+              <div style="font-size:26px;line-height:1.5;color:var(--muted);margin-top:12px">指令先经过风险评估；中高风险的指令要审批后才会下发到设备。</div>
+              <div style="margin-top:26px;border-radius:18px;box-shadow:inset 0 0 0 2px var(--border);background:#fafafa;padding:22px 28px">
+                <div class="cap" style="font-size:22px">冷冻水出水设定温度</div>
+                <div class="num" style="font-size:52px;font-weight:600;margin-top:4px;display:flex;align-items:center;gap:18px">7 ℃ <span style="color:var(--subtle);font-size:36px">→</span> 8.0 ℃ <span class="badge" style="background:var(--primary-soft);color:var(--primary);font-size:22px;height:36px">+1.0 ℃</span></div>
+              </div>
+            </div>
+            <div class="btn outline" style="right:268px;bottom:40px;width:150px">取消</div>
+            <div id="btn-confirm" class="btn primary" style="right:48px;bottom:40px;width:200px">确认下发</div>
+          </div>
+
+          <div class="st" id="st-toast" data-rect="toast" style="display:flex;align-items:center;gap:22px;padding:0 44px">
+            <svg width="56" height="56" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#1f9d55"/><path d="M7 12.5l3.2 3.2L17 9" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span style="font-size:36px;font-weight:600">指令已提交，正在下发</span>
+          </div>
+
+          <div class="st" id="st-verify" data-rect="verify">
+            <div style="position:absolute;left:60px;right:60px;top:48px">
+              <div style="display:flex;align-items:center;gap:16px"><span style="font-size:34px;font-weight:600">验证与回退</span><span class="cap num">下发后观察 30 分钟 · 10:31–11:01</span></div>
+              <div id="vf-1" style="display:flex;align-items:center;gap:16px;margin-top:34px;font-size:30px"><svg width="40" height="40" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#e8f6ee"/><path d="M7 12.5l3.2 3.2L17 9" fill="none" stroke="#1f9d55" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>室内温度 <span class="num">24.6 ℃</span>，仍在 <span class="num">22–26 ℃</span> 舒适范围内</div>
+              <div id="vf-2" style="display:flex;align-items:center;gap:16px;margin-top:18px;font-size:30px"><svg width="40" height="40" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#e8f6ee"/><path d="M7 12.5l3.2 3.2L17 9" fill="none" stroke="#1f9d55" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>冷站负荷不高于调整前</div>
+            </div>
+            <div id="vf-cop" style="position:absolute;left:60px;right:60px;bottom:48px;display:flex;align-items:flex-end;justify-content:space-between;border-top:2px solid var(--divider);padding-top:30px">
+              <div><div class="k">冷站 COP</div><div class="num" style="font-size:112px;font-weight:600;letter-spacing:-0.03em;line-height:1.05;display:flex;align-items:baseline;gap:22px"><span style="color:var(--subtle)">4.30</span><span style="font-size:60px;color:var(--subtle)">→</span><span id="verify-cop" style="color:var(--primary)">4.30</span></div></div>
+              <div class="cap" style="font-size:24px;text-align:right;line-height:1.5">任一条件不满足，<br />自动把供水温度恢复为 <span class="num">7.0 ℃</span></div>
+            </div>
+          </div>
+          <div class="st" id="st-fdd" data-rect="fdd">
+            <div style="position:absolute;left:60px;right:60px;top:48px">
+              <div style="display:flex;align-items:center;gap:16px"><span class="badge warn">轻微偏离</span><span class="cap num">诊断于 10/22 16:21 · BTU-METER-01</span></div>
+              <div style="font-size:60px;font-weight:600;margin-top:18px">冷冻水低温差</div>
+              <div style="font-size:28px;color:var(--secondary-foreground);margin-top:8px">最近 15 分钟供回水温差 <span class="num">3.38 K</span>，低于阈值 <span class="num">3.5 K</span>（设计 <span class="num">5 K</span>）</div>
+            </div>
+            <div id="fdd-gauge" style="position:absolute;left:60px;right:60px;top:300px;height:120px">
+              <div style="position:absolute;left:0;right:0;top:56px;height:14px;border-radius:7px;background:#eceef5"></div>
+              <div id="fdd-low" style="position:absolute;left:0;top:56px;height:14px;border-radius:7px;background:var(--major-soft);width:58.33%"></div>
+              <div style="position:absolute;left:58.33%;top:44px;width:4px;height:38px;background:var(--major);border-radius:2px"></div>
+              <div class="cap num" style="position:absolute;left:58.33%;top:88px;transform:translateX(-50%);font-size:22px;color:var(--major-text)">阈值 3.5</div>
+              <div style="position:absolute;left:83.33%;top:44px;width:4px;height:38px;background:#c4c4cc;border-radius:2px"></div>
+              <div class="cap num" style="position:absolute;left:83.33%;top:88px;transform:translateX(-50%);font-size:22px">设计 5</div>
+              <div id="fdd-dot" style="position:absolute;left:0;top:47px;width:32px;height:32px;margin-left:-16px;border-radius:16px;background:var(--primary);box-shadow:0 0 0 6px #fff, 0 6px 16px rgba(24,24,27,.2)"></div>
+              <div id="fdd-val" class="num" style="position:absolute;left:0;top:-6px;transform:translateX(-50%);font-size:34px;font-weight:600">5.00 K</div>
+            </div>
+            <div style="position:absolute;left:60px;right:60px;top:450px">
+              <div style="font-size:30px;font-weight:600">处理建议</div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:26px;margin-top:18px;font-size:25px;line-height:1.45">
+                <div id="fdd-1"><span class="num" style="color:var(--primary);font-weight:600;margin-right:10px">1</span>降低冷冻水泵频率，使温差回到 5 K 附近</div>
+                <div id="fdd-2"><span class="num" style="color:var(--primary);font-weight:600;margin-right:10px">2</span>检查旁通阀与末端阀的开度</div>
+                <div id="fdd-3"><span class="num" style="color:var(--primary);font-weight:600;margin-right:10px">3</span>确认冷量表供回水温度传感器读数</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="st" id="st-yesterday" data-rect="yesterday">
+            <div style="position:absolute;left:52px;right:52px;top:44px">
+              <div class="cap">昨天 · 10月22日</div>
+              <div style="font-size:32px;font-weight:600;margin-top:18px">少用电</div>
+              <div style="display:flex;align-items:baseline;gap:14px"><span class="num" style="font-size:150px;font-weight:600;letter-spacing:-0.03em;line-height:1;color:var(--success)">812</span><span style="font-size:44px;font-weight:600">度</span><span class="badge ok" style="margin-left:14px">比优化前 −17.4%</span></div>
+              <div id="y-bars" style="display:flex;align-items:flex-end;gap:6px;height:96px;margin-top:30px"></div>
+            </div>
+          </div>
+        </div>
+        <svg id="cursor" class="cursor" viewBox="0 0 22 30" aria-hidden="true"><path d="M2 2 L2 24 L8 18.5 L12 28 L16 26.4 L12 17 L20 17 Z" fill="#fff" stroke="#18181b" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      </div>
+
+      <!-- The phone: the night's alarm and the morning's yesterday -->
+      <div id="phone-layer" class="clip layer" data-start="32" data-duration="11" data-track-index="6">
+        <div id="phone">
+          <div id="screen">
+            <div class="island"></div>
+
+            <!-- A: 03:12 on the lock screen -->
+            <div id="scr-lock" class="lock">
+              <div class="d">10月23日 星期四</div>
+              <div class="t" id="lock-time">03:12</div>
+              <div id="note-alarm" class="note">
+                <div class="app-line"><span class="icon"><svg width="14" height="14" viewBox="0 0 64 64"><g fill="#fff"><path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z"/><path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z" transform="rotate(90 32 32)"/><path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z" transform="rotate(180 32 32)"/><path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z" transform="rotate(270 32 32)"/></g></svg></span>泉来禾智慧能源<span style="margin-left:auto">现在</span></div>
+                <div class="head">监控告警通知</div>
+                <div class="body">2# 冷冻泵 故障停机 · 重要</div>
+                <div class="body" style="color:var(--muted);font-size:14px">冷站 · 今天 03:12</div>
+              </div>
+            </div>
+
+            <!-- B: the alarm, dispatched, cleared -->
+            <div id="scr-alarm" class="app">
+              <div class="status"><span>03:13</span><span>●●●</span></div>
+              <div class="nav"><svg class="back" viewBox="0 0 24 24" fill="none" stroke="#18181b" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg>告警详情</div>
+              <div class="pane">
+                <div class="card pad" style="display:flex;flex-direction:column;gap:8px">
+                  <div style="display:flex;align-items:center;justify-content:space-between">
+                    <span id="alarm-badge" class="badge major">▲ 重要</span>
+                    <span id="alarm-state" class="caption">正在发生 · 未处理</span>
+                  </div>
+                  <div style="font-size:20px;line-height:27px;font-weight:700">2# 冷冻泵故障停机</div>
+                  <div style="font-size:14px;line-height:22px;color:var(--secondary-foreground)">水泵报故障后停机，冷冻水流量从 362 降到 188 m³/h。3# 泵在备用，可以接上。</div>
+                  <svg viewBox="0 0 320 64" style="width:100%;height:64px;margin-top:4px">
+                    <path d="M0 14 L120 14 L150 14 L160 46 L320 46" fill="none" stroke="#c9d2f7" stroke-width="3"/>
+                    <path id="flow-path" d="M0 14 L120 14 L150 14 L160 46 L200 46 L212 16 L320 14" fill="none" stroke="#3f5bd9" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+                    <text x="0" y="62" font-size="11" fill="#a1a1aa" font-family="Geist Variable">冷冻水流量 · 近 30 分钟</text>
+                  </svg>
+                </div>
+                <div class="card">
+                  <div class="row"><span class="k">设备</span><span class="v" style="font-family:var(--cn)">CHWP-02 冷冻泵</span></div>
+                  <div class="row"><span class="k">开始</span><span class="v">今天 03:12</span></div>
+                  <div class="row"><span class="k">报过</span><span class="v">1 次</span></div>
+                </div>
+                <div id="progress" class="card pad">
+                  <div style="font-weight:600;margin-bottom:4px">处理进度</div>
+                  <div class="step"><span class="dot red"></span><span>告警发生</span><span class="when">03:12</span></div>
+                  <div class="step" id="step-2"><span class="dot"></span><span>已派给 值班电工 · 王工</span><span class="when">03:14</span></div>
+                  <div class="step" id="step-3"><span class="dot"></span><span>3# 冷冻泵 已接上</span><span class="when">03:15</span></div>
+                  <div class="step" id="step-4"><span class="dot"></span><span>流量恢复，告警解除</span><span class="when">03:41</span></div>
+                </div>
+              </div>
+              <div class="footer">
+                <div class="btn outline">问助手</div>
+                <div id="btn-dispatch-phone" class="btn primary">派单处理</div>
+              </div>
+            </div>
+
+            <!-- C: 08:00, yesterday -->
+            <div id="scr-morning" class="lock" style="background:radial-gradient(120% 80% at 30% 10%, #f3d9b8 0%, #c8d3f2 55%, #8fa2dc 100%)">
+              <div class="d" style="color:#18181b">10月23日 星期四</div>
+              <div class="t" style="color:#18181b">08:00</div>
+              <div id="note-daily" class="note">
+                <div class="app-line"><span class="icon"><svg width="14" height="14" viewBox="0 0 64 64"><g fill="#fff"><path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z"/><path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z" transform="rotate(90 32 32)"/><path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z" transform="rotate(180 32 32)"/><path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z" transform="rotate(270 32 32)"/></g></svg></span>泉来禾智慧能源<span style="margin-left:auto">现在</span></div>
+                <div class="head">昨日能效数据查询提醒</div>
+                <div class="body">中央机房 · 昨天用冷 20,860 kWh</div>
+                <div class="body">用电 3,862 kWh · 系统 EER 5.40</div>
+              </div>
+            </div>
+            <div id="scr-daily" class="app">
+              <div class="status"><span>08:01</span><span>●●●</span></div>
+              <div class="nav"><svg class="back" viewBox="0 0 24 24" fill="none" stroke="#18181b" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg>昨日能效</div>
+              <div class="pane">
+                <div class="card pad">
+                  <div class="caption">昨天少用电</div>
+                  <div style="display:flex;align-items:baseline;gap:6px;margin-top:4px"><span class="big" style="font-size:52px;line-height:1">812</span><span style="font-size:18px;font-weight:600">度</span><span class="badge ok" style="margin-left:8px">比优化前 −17.4%</span></div>
+                  <div class="bars" style="margin-top:18px" id="bars"></div>
+                  <div style="display:flex;justify-content:space-between" class="caption"><span>0 点</span><span>12 点</span><span>24 点</span></div>
+                </div>
+                <div class="card">
+                  <div class="row"><span class="k">冷站用电</span><span class="v">3,862 kWh</span></div>
+                  <div class="row"><span class="k">电费少花</span><span class="v">¥650</span></div>
+                  <div class="row"><span class="k">冷站 COP</span><span class="v">5.4</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- The year: yesterday's tile pulls back into a wall of days -->
+      <div id="wall" class="clip layer" data-start="43.4" data-duration="16.6" data-track-index="7">
+        <div class="ground"></div>
+        <div id="wall-cam"></div>
+        <div id="year">
+          <div class="label" id="year-label"><span id="year-label-text">一年下来，冷站<b>省电</b></span></div>
+          <div class="figure"><span class="roll" id="roll"><span>18.6</span><span>21.6</span><span>123</span></span><span class="unit" id="year-unit">%</span></div>
+          <div class="note-line" id="year-note">按 0.80 元一度，约 17.3 万元电费</div>
+        </div>
+      </div>
+
+      <!-- Chapter words -->
+      <div id="chapters" class="clip layer" data-start="9.8" data-duration="30.8" data-track-index="8">
+        <div class="chapter" id="ch-see"><span>看得清</span></div>
+        <div class="chapter" id="ch-think"><span>算得准</span></div>
+        <div class="chapter" id="ch-night"><span>靠得住</span></div>
+        <div class="chapter" id="ch-save"><span>省得下</span></div>
+      </div>
+
+      <!-- End card -->
+      <div id="end" class="clip layer" data-start="51.5" data-duration="8.5" data-track-index="9">
+        <svg id="mark" viewBox="0 0 64 64" aria-hidden="true">
+          <defs><mask id="gap"><rect width="64" height="64" fill="#fff"/><path d="M32 2V62M2 32H62" stroke="#000" stroke-width="3"/></mask></defs>
+          <g id="mark-blades" mask="url(#gap)" fill="#3f5bd9" style="transform-origin:32px 32px">
+            <path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z"/>
+            <path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z" transform="rotate(90 32 32)"/>
+            <path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z" transform="rotate(180 32 32)"/>
+            <path d="M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z" transform="rotate(270 32 32)"/>
+          </g>
+        </svg>
+        <div id="wordmark"><div class="name">泉来禾智慧能源</div><div class="sub">冷站节能平台 · 网页版 · 微信小程序</div></div>
+        <div id="cta">预约演示</div>
+        <div id="disclaimer">画面数据为演示数据</div>
+      </div>
+    </div>
+
+    <script>
+      const C = window.FILM_CUES;
+      const W = 1920, H = 1080;
+      const NS = 'http://www.w3.org/2000/svg';
+      const tl = gsap.timeline({ paused: true });
+      const at = (target, vars, time) => tl.to(target, vars, time);
+      const from = (target, fromVars, toVars, time) => tl.fromTo(target, fromVars, toVars, time);
+      const blurIn = (target, time, d = 0.18) => from(target, { opacity: 0, filter: 'blur(10px)' }, { opacity: 1, filter: 'blur(0px)', duration: d, ease: 'power4.out' }, time);
+      const blurOut = (target, time, d = 0.16) => at(target, { opacity: 0, filter: 'blur(8px)', duration: d, ease: 'power2.in' }, time);
+      const el = (tag, attrs, parent) => {
+        const node = document.createElementNS(NS, tag);
+        for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+        if (parent) parent.appendChild(node);
+        return node;
+      };
+      const fmt = (value, digits = 0) => value.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+      /** A number that rolls to its value; its text is set from film time. */
+      const count = (node, to, time, duration, digits = 0, fromValue = 0) => {
+        const box = { v: fromValue };
+        tl.fromTo(box, { v: fromValue }, { v: to, duration, ease: 'expo.out', onUpdate: () => { node.textContent = fmt(box.v, digits); } }, time);
+      };
+      // A title arrives character by character, 45 ms apart, and holds dead still until it leaves.
+      function words(id, time) {
+        const element = document.getElementById(id);
+        const parts = [...element.childNodes].flatMap((node) => node.nodeType === 3 ? [...node.textContent].map((ch) => { const s = document.createElement('span'); s.className = 'word'; s.textContent = ch === ' ' ? ' ' : ch; return s; }) : [node]);
+        element.replaceChildren(...parts);
+        parts.forEach((part, index) => blurIn(part, time + index * 0.045, 0.16));
+      }
+      const title = (id, inAt, outAt) => { words(id, inAt); blurOut(`#${id}`, outAt); };
+      const smooth = (points) => points.map(([x, y], i) => {
+        if (i === 0) return `M${x},${y}`;
+        const [x0, y0] = points[i - 1];
+        const [xp, yp] = points[i - 2] ?? points[i - 1];
+        const [xn, yn] = points[i + 1] ?? points[i];
+        return `C${x0 + (x - xp) / 6},${y0 + (y - yp) / 6} ${x - (xn - x0) / 6},${y - (yn - y0) / 6} ${x},${y}`;
+      }).join(' ');
+
+      // ── The twin, defocused behind the card ───────────────────────────────────────
+      gsap.set('#twin-frame', { filter: 'blur(0px)' });
+      const defocus = (time, veil = 'rgba(247,247,248,.5)', d = 0.35) => {
+        tl.set('#veil', { background: veil }, time - 0.01);
+        at('#twin-frame', { filter: 'blur(16px)', duration: d, ease: 'power2.inOut' }, time);
+        at('#veil', { opacity: 1, duration: d, ease: 'power2.inOut' }, time);
+      };
+      const refocus = (time, d = 0.3) => {
+        at('#twin-frame', { filter: 'blur(0px)', duration: d, ease: 'power2.inOut' }, time);
+        at('#veil', { opacity: 0, duration: d, ease: 'power2.inOut' }, time);
+      };
+
+      function build() {
+        // ── Cover: the promise over the plant, readable from frame 0 ────────────────
+        blurOut('#cover', C.forecast - 0.25, 0.2);
+
+        // ── Forecast: today's load, the plan under it, the band it saves ─────────────
+        const svg = document.getElementById('fc-svg');
+        const raw = [128, 122, 118, 116, 118, 126, 160, 214, 268, 318, 362, 398, 422, 438, 442, 430, 404, 366, 318, 268, 218, 182, 156, 140];
+        const scale = 4674 / raw.reduce((sum, v) => sum + v, 0);
+        const base = raw.map((v) => v * scale);
+        const low = Math.min(...base);
+        const weight = base.map((v) => (v - low) ** 1.3);
+        const totalWeight = weight.reduce((sum, v) => sum + v, 0);
+        const plan = base.map((v, h) => v - (812 * weight[h]) / totalWeight);
+        const x0 = 180, x1 = 1740, yb = 930, yt = 380, vmax = Math.max(...base) * 1.12;
+        const px = (h) => x0 + ((x1 - x0) * h) / 24;
+        const py = (v) => yb - (v / vmax) * (yb - yt);
+        const series = (values) => [...values, values[0]].map((v, h) => [px(h), py(v)]);
+        const defs = el('defs', {}, svg);
+        const grad = (id, color, top, bottom) => {
+          const g = el('linearGradient', { id, x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
+          el('stop', { offset: 0, 'stop-color': color, 'stop-opacity': top }, g);
+          el('stop', { offset: 1, 'stop-color': color, 'stop-opacity': bottom }, g);
+        };
+        grad('fc-plan', '#3f5bd9', 0.16, 0);
+        grad('fc-band', '#1f9d55', 0.34, 0.14);
+        for (const kw of [100, 200, 300]) {
+          el('line', { x1: x0, x2: x1, y1: py(kw), y2: py(kw), stroke: '#ececf0', 'stroke-width': 2 }, svg);
+          el('text', { x: x0 - 20, y: py(kw) + 8, 'text-anchor': 'end', class: 'axis' }, svg).textContent = kw;
+        }
+        el('line', { x1: x0, x2: x1, y1: yb, y2: yb, stroke: '#d4d4d8', 'stroke-width': 2 }, svg);
+        [0, 6, 12, 18, 24].forEach((h) => { el('text', { x: px(h), y: yb + 42, 'text-anchor': 'middle', class: 'axis' }, svg).textContent = `${h} 时`; });
+        el('text', { x: x0 - 20, y: yt - 26, 'text-anchor': 'end', class: 'axis' }, svg).textContent = 'kW';
+        const basePts = series(base), planPts = series(plan);
+        const area = el('path', { d: `${smooth(planPts)} L${x1},${yb} L${x0},${yb} Z`, fill: 'url(#fc-plan)' }, svg);
+        const band = el('path', { d: `${smooth(basePts)} L${planPts.at(-1)[0]},${planPts.at(-1)[1]} ${smooth([...planPts].reverse()).replace(/^M/, 'L')} Z`, fill: 'url(#fc-band)' }, svg);
+        const baseLine = el('path', { d: smooth(basePts), fill: 'none', stroke: '#b3bad0', 'stroke-width': 4, 'stroke-linecap': 'round', pathLength: 1, 'stroke-dasharray': 1, 'stroke-dashoffset': 1 }, svg);
+        const planLine = el('path', { d: smooth(planPts), fill: 'none', stroke: '#3f5bd9', 'stroke-width': 6, 'stroke-linecap': 'round', pathLength: 1, 'stroke-dasharray': 1, 'stroke-dashoffset': 1 }, svg);
+        const head = el('circle', { r: 9, fill: '#fff', stroke: '#b3bad0', 'stroke-width': 4 }, svg);
+        // The peak: a dot, a hairline to the axis and one line of text; no box.
+        const peakAt = [px(14), py(base[14])];
+        const peak = el('g', {}, svg);
+        el('line', { x1: peakAt[0], x2: peakAt[0], y1: peakAt[1], y2: yb, stroke: '#fdba74', 'stroke-width': 2, 'stroke-dasharray': '6 8' }, peak);
+        el('circle', { cx: peakAt[0], cy: peakAt[1], r: 10, fill: '#ea580c', stroke: '#fff', 'stroke-width': 4 }, peak);
+        el('text', { x: peakAt[0] + 22, y: peakAt[1] - 18, style: 'font: 600 28px var(--num)', fill: '#9a3412' }, peak).textContent = '14:00  负荷 92%';
+        const legend = el('g', {}, svg);
+        el('line', { x1: 1290, x2: 1334, y1: 300, y2: 300, stroke: '#b3bad0', 'stroke-width': 4, 'stroke-linecap': 'round' }, legend);
+        el('text', { x: 1346, y: 309, class: 'axis' }, legend).textContent = '照常运行';
+        el('line', { x1: 1500, x2: 1544, y1: 300, y2: 300, stroke: '#3f5bd9', 'stroke-width': 6, 'stroke-linecap': 'round' }, legend);
+        el('text', { x: 1556, y: 309, class: 'axis' }, legend).textContent = '泉来禾的计划';
+        // The saving, called out in the empty morning hours with a hairline into the band.
+        const into = [px(11), (py(base[11]) + py(plan[11])) / 2];
+        const callout = { x: px(1.5), y: 620 };
+        const leader = el('path', { d: `M${callout.x + 340},${callout.y - 34} L${into[0] - 110},${callout.y - 34} L${into[0]},${into[1]}`, fill: 'none', stroke: '#1f9d55', 'stroke-width': 2, pathLength: 1, 'stroke-dasharray': 1, 'stroke-dashoffset': 1 }, svg);
+        const leaderDot = el('circle', { cx: into[0], cy: into[1], r: 8, fill: '#1f9d55', stroke: '#fff', 'stroke-width': 3 }, svg);
+        const callNote = el('g', {}, svg);
+        const savedValue = el('text', { x: callout.x, y: callout.y, style: 'font: 600 104px var(--num); letter-spacing: -0.03em', fill: '#1f9d55' }, callNote);
+        savedValue.textContent = '−812';
+        el('text', { x: callout.x + 262, y: callout.y, style: 'font: 600 36px var(--num)', fill: '#1f9d55' }, callNote).textContent = 'kWh';
+        el('text', { x: callout.x + 4, y: callout.y + 54, style: 'font: 500 30px var(--cn)', fill: '#52525b' }, callNote).textContent = '今天预计少用的电';
+
+        from('#forecast', { opacity: 0 }, { opacity: 1, duration: 0.25, ease: 'power2.out' }, C.forecast - 0.15);
+        blurIn('#fc-1', C.forecast + 0.1, 0.25);
+        title('fc-2', C.forecast + 0.25, 6.4);
+        // The day draws itself, a dot at its head.
+        const drawn = { k: 0 };
+        // The head's path is measured once here, never inside the tween.
+        const length = baseLine.getTotalLength();
+        const track = Array.from({ length: 241 }, (_, i) => { const p = baseLine.getPointAtLength((length * i) / 240); return [p.x, p.y]; });
+        tl.fromTo(drawn, { k: 0 }, { k: 1, duration: 2.0, ease: 'power1.inOut', onUpdate: () => {
+          baseLine.setAttribute('stroke-dashoffset', 1 - drawn.k);
+          const [x, y] = track[Math.round(drawn.k * 240)];
+          head.setAttribute('cx', x); head.setAttribute('cy', y);
+        } }, C.forecast + 0.2);
+        from(peak, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.3, ease: 'expo.out' }, C.forecast + 1.55);
+        at(head, { opacity: 0, duration: 0.2 }, C.forecast + 2.2);
+        title('fc-3', 6.6, 9.6);
+        from(legend, { opacity: 0 }, { opacity: 1, duration: 0.3 }, 6.65);
+        from(planLine, { attr: { 'stroke-dashoffset': 1 } }, { attr: { 'stroke-dashoffset': 0 }, duration: 1.15, ease: 'power2.inOut' }, 6.7);
+        from(area, { opacity: 0 }, { opacity: 1, duration: 0.8, ease: 'power2.out' }, 7.0);
+        from(band, { opacity: 0 }, { opacity: 1, duration: 0.3, ease: 'power2.out' }, C.drop);
+        from(leaderDot, { opacity: 0, scale: 0, transformOrigin: 'center' }, { opacity: 1, scale: 1, duration: 0.3, ease: 'back.out(2)' }, C.drop + 0.15);
+        from(leader, { attr: { 'stroke-dashoffset': 1 } }, { attr: { 'stroke-dashoffset': 0 }, duration: 0.35, ease: 'power2.out' }, C.drop + 0.2);
+        from(callNote, { opacity: 0, x: 16 }, { opacity: 1, x: 0, duration: 0.35, ease: 'expo.out' }, C.drop + 0.5);
+        const savedCount = { v: 0 };
+        tl.fromTo(savedCount, { v: 0 }, { v: 812, duration: 0.7, ease: 'expo.out', onUpdate: () => { savedValue.textContent = `−${Math.round(savedCount.v)}`; } }, C.drop + 0.5);
+
+        // ── Where the power goes: a flow drawn from the meter to each machine ─────────
+        const flow = document.getElementById('flow-svg');
+        const K = 0.24, gap = 26;
+        const colors = { 主机系统: '#3f5bd9', 输配系统: '#0e9384', 散热系统: '#8b5cf6', 未单独计量: '#b4b4bd' };
+        const mids = [['主机系统', 1512], ['输配系统', 453], ['散热系统', 92], ['未单独计量', 89]];
+        const leaves = [['1# 冷水机组', 760, '主机系统'], ['2# 冷水机组', 752, '主机系统'], ['冷冻泵', 182, '输配系统'], ['冷却泵', 271, '输配系统'], ['冷却塔', 92, '散热系统']];
+        const sx = 300, mx = 800, lxF = 1300, bw = 18, top = 290;
+        const ribbon = (xa, ya, ha, xb, yb2, hb, color, group) => {
+          const c = (xa + xb) / 2;
+          const d = `M${xa},${ya} C${c},${ya} ${c},${yb2} ${xb},${yb2} L${xb},${yb2 + hb} C${c},${yb2 + hb} ${c},${ya + ha} ${xa},${ya + ha} Z`;
+          el('path', { d, fill: color, 'fill-opacity': 0.22 }, group);
+          const line = el('path', { d: `M${xa},${ya + ha / 2} C${c},${ya + ha / 2} ${c},${yb2 + hb / 2} ${xb},${yb2 + hb / 2}`, fill: 'none', stroke: color, 'stroke-opacity': 0.55, 'stroke-width': Math.max(2, Math.min(6, Math.min(ha, hb) * 0.1)), 'stroke-dasharray': '18 30', 'stroke-linecap': 'round' }, group);
+          return line;
+        };
+        const reveal = el('clipPath', { id: 'flow-reveal' }, el('defs', {}, flow));
+        const revealRect = el('rect', { x: 0, y: 0, width: 0, height: H }, reveal);
+        const links = el('g', { 'clip-path': 'url(#flow-reveal)' }, flow);
+        const streams = [];
+        const total = 2146;
+        el('rect', { x: sx - bw, y: top, width: bw, height: total * K, rx: 4, fill: '#18181b' }, flow);
+        const sourceLabel = el('g', {}, flow);
+        el('text', { x: sx - bw - 22, y: top + (total * K) / 2 - 8, 'text-anchor': 'end', style: 'font: 600 30px var(--cn)', fill: '#18181b' }, sourceLabel).textContent = '冷站用电';
+        const sourceValue = el('text', { x: sx - bw - 22, y: top + (total * K) / 2 + 34, 'text-anchor': 'end', style: 'font: 600 34px var(--num)', fill: '#18181b' }, sourceLabel);
+        let sy = top, my = top - 4;
+        const midY = {};
+        const labels = [];
+        for (const [name, v] of mids) {
+          const h = v * K;
+          streams.push(ribbon(sx, sy, h, mx, my, h, colors[name], links));
+          el('rect', { x: mx, y: my, width: bw, height: Math.max(h, 4), rx: 4, fill: colors[name] }, flow);
+          const g = el('g', {}, flow);
+          el('text', { x: mx + bw + 18, y: my + Math.max(h, 4) / 2 + 2, style: 'font: 500 26px var(--cn)', fill: '#3f3f46' }, g).textContent = name;
+          el('text', { x: mx + bw + 18 + name.length * 27 + 12, y: my + Math.max(h, 4) / 2 + 2, style: 'font: 600 26px var(--num)', fill: '#18181b' }, g).textContent = `${fmt(v)} kWh`;
+          labels.push(g);
+          midY[name] = { y: my, used: 0 };
+          sy += h; my += h + gap;
+        }
+        let ly2 = top + 8;
+        for (const [name, v, parent] of leaves) {
+          const h = v * K;
+          const from2 = midY[parent];
+          streams.push(ribbon(mx + bw, from2.y + from2.used, h, lxF, ly2, h, colors[parent], links));
+          from2.used += h;
+          el('rect', { x: lxF, y: ly2, width: bw, height: h, rx: 4, fill: colors[parent] }, flow);
+          const g = el('g', {}, flow);
+          el('text', { x: lxF + bw + 18, y: ly2 + h / 2 + 9, style: 'font: 500 26px var(--cn)', fill: '#3f3f46' }, g).textContent = name;
+          el('text', { x: lxF + bw + 18 + name.length * 27 + 18, y: ly2 + h / 2 + 9, style: 'font: 600 26px var(--num)', fill: '#18181b' }, g).textContent = `${fmt(v)} kWh`;
+          labels.push(g);
+          ly2 += h + 22;
+        }
+        from('#flow', { opacity: 0 }, { opacity: 1, duration: 0.2 }, C.flow - 0.05);
+        title('flow-title', C.flow + 0.05, C.pipes - 0.15);
+        at(revealRect, { attr: { width: W }, duration: 0.9, ease: 'power2.inOut' }, C.flow + 0.15);
+        count(sourceValue, total, C.flow + 0.1, 0.6);
+        labels.forEach((g, i) => from(g, { opacity: 0, x: -12 }, { opacity: 1, x: 0, duration: 0.25, ease: 'expo.out' }, C.flow + 0.45 + i * 0.05));
+        // Energy streams along every link while the shot holds.
+        const stream = { o: 0 };
+        tl.fromTo(stream, { o: 0 }, { o: -180, duration: 2, ease: 'none', onUpdate: () => streams.forEach((line) => line.setAttribute('stroke-dashoffset', stream.o)) }, C.flow);
+
+        // ── The card ─────────────────────────────────────────────────────────────────
+        const RECT = {
+          live: { cx: 960, cy: 540, w: 1560, h: 330, r: 30 },
+          ask: { cx: 960, cy: 540, w: 1180, h: 880, r: 30 },
+          propose: { cx: 960, cy: 540, w: 1460, h: 620, r: 30 },
+          dialog: { cx: 960, cy: 540, w: 880, h: 490, r: 26 },
+          toast: { cx: 960, cy: 540, w: 720, h: 112, r: 56 },
+          verify: { cx: 960, cy: 540, w: 1300, h: 600, r: 30 },
+          fdd: { cx: 960, cy: 540, w: 1460, h: 680, r: 30 },
+          yesterday: { cx: 960, cy: 540, w: 780, h: 500, r: 30 },
+          tile: { cx: 960, cy: 540, w: 64, h: 64, r: 14 },
+        };
+        const clip = ({ cx, cy, w, h, r }) => `inset(${cy - h / 2}px ${W - cx - w / 2}px ${H - cy - h / 2}px ${cx - w / 2}px round ${r}px)`;
+        const pill = (name) => ({ ...RECT[name], w: 120, h: 120, r: 60 });
+        // Every change of shape names both ends: read back, the browser folds equal insets into fewer
+        // numbers, and a tween from that would pair the wrong values.
+        const shape = (a, b, time, d, ease) => tl.fromTo('#card', { clipPath: clip(a) }, { clipPath: clip(b), duration: d, ease, immediateRender: false }, time);
+        document.querySelectorAll('.st').forEach((node) => {
+          const r = RECT[node.dataset.rect];
+          Object.assign(node.style, { left: `${r.cx - r.w / 2}px`, top: `${r.cy - r.h / 2}px`, width: `${r.w}px`, height: `${r.h}px` });
+          if (node.id === 'st-live') node.style.padding = '40px 56px';
+          if (node.id === 'st-ask') node.style.padding = '40px 56px';
+        });
+        gsap.set('#card-wrap', { opacity: 0 });
+        gsap.set('#card', { clipPath: clip(pill('live')) });
+        const open = (name, time, d = 0.5) => {
+          at('#card-wrap', { opacity: 1, duration: 0.12 }, time);
+          shape(pill(name), RECT[name], time, d, 'expo.out');
+          blurIn(`#st-${name}`, time + 0.14, 0.22);
+        };
+        const morph = (fromName, toName, time, d = 0.45, ease = 'power3.inOut') => {
+          blurOut(`#st-${fromName}`, time - 0.04, 0.1);
+          shape(RECT[fromName], RECT[toName], time, d, ease);
+          blurIn(`#st-${toName}`, time + d * 0.3, 0.2);
+        };
+        // The card is gone by `cut`: content out first, then the shape shrinks and fades just before.
+        const close = (name, cut) => {
+          blurOut(`#st-${name}`, cut - 0.26, 0.08);
+          shape(RECT[name], pill(name), cut - 0.22, 0.15, 'power3.in');
+          at('#card-wrap', { opacity: 0, duration: 0.06 }, cut - 0.1);
+        };
+
+        // The cursor, in frame pixels; its tip is the click.
+        const cursor = document.getElementById('cursor');
+        const centreOf = (id) => { const r = document.getElementById(id).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; };
+        const point = (id, time, d, fromPoint) => {
+          const p = centreOf(id);
+          if (fromPoint) {
+            tl.set(cursor, { x: fromPoint.x, y: fromPoint.y }, time - 0.01);
+            at(cursor, { opacity: 1, duration: 0.12 }, time);
+          }
+          at(cursor, { x: p.x - 6, y: p.y - 6, duration: d, ease: 'power3.inOut' }, time);
+        };
+        const press = (time) => {
+          at(cursor, { scale: 0.84, duration: 0.07, ease: 'power2.in' }, time - 0.07);
+          at(cursor, { scale: 1, duration: 0.12, ease: 'power2.out' }, time);
+        };
+        const pressButton = (id, time) => {
+          at(`#${id}`, { scale: 0.95, duration: 0.07, ease: 'power2.in' }, time - 0.07);
+          at(`#${id}`, { scale: 1, duration: 0.14, ease: 'power2.out' }, time);
+        };
+
+        // 看得清: the plant's live figures, ticking on the beat.
+        defocus(C.live - 0.15);
+        open('live', C.live);
+        const live = [[362.0, 1557, '10:30:12'], [361.4, 1561, '10:30:13'], [362.6, 1552, '10:30:14'], [361.9, 1559, '10:30:15']];
+        live.forEach(([p, c, clock], i) => {
+          const t = C.live + 0.6 + i * 0.5;
+          tl.set('#live-p', { textContent: fmt(p, 1) }, t);
+          tl.set('#live-c', { textContent: fmt(c) }, t);
+          tl.set('#live-cop', { textContent: fmt(c / p, 2) }, t);
+          tl.set('#live-time', { textContent: clock }, t);
+        });
+        close('live', C.floors);
+        tl.set('#twin-frame', { filter: 'blur(0px)' }, C.floors);
+        tl.set('#veil', { opacity: 0 }, C.floors);
+
+        // 算得准: ask, read the answer; the card becomes the suggestion, the confirmation, the toast.
+        gsap.set(['#ask-bubble', '#ask-steps', '#ask-evidence'], { opacity: 0 });
+        tl.set('#twin-frame', { filter: 'blur(16px)' }, C.ask - 0.2);
+        tl.set('#veil', { background: 'rgba(247,247,248,.5)', opacity: 1 }, C.ask - 0.2);
+        open('ask', C.ask);
+        point('ask-send', C.ask + 0.3, 0.55, { x: 1700, y: 1000 });
+        press(C.askSend);
+        pressButton('ask-send', C.askSend);
+        blurOut('#ask-draft', C.askSend + 0.02, 0.1);
+        from('#ask-bubble', { opacity: 0, y: 420 }, { opacity: 1, y: 0, duration: 0.45, ease: 'expo.out' }, C.askSend + 0.04);
+        at(cursor, { opacity: 0, duration: 0.15 }, C.askSend + 0.25);
+        blurIn('#ask-steps', C.askSend + 0.3, 0.2);
+        const answer = document.getElementById('ask-answer');
+        const chars = [...answer.textContent].map((ch) => { const s = document.createElement('span'); s.textContent = ch; return s; });
+        answer.replaceChildren(...chars);
+        chars.forEach((s, i) => from(s, { opacity: 0 }, { opacity: 1, duration: 0.06 }, C.askSend + 0.5 + i * 0.024));
+        from('#ask-evidence', { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.35, ease: 'expo.out' }, C.askSend + 1.25);
+        from(['#ask-bar-1', '#ask-bar-2'], { scaleY: 0, transformOrigin: '50% 100%' }, { scaleY: 1, duration: 0.5, ease: 'expo.out', stagger: 0.1 }, C.askSend + 1.35);
+
+        morph('ask', 'propose', C.propose);
+        from('#pr-to', { opacity: 0, filter: 'blur(10px)', y: 30 }, { opacity: 1, filter: 'blur(0px)', y: 0, duration: 0.3, ease: 'expo.out' }, C.propose + 0.45);
+        count(document.getElementById('pr-kwh'), 812, C.propose + 0.5, 0.7);
+        count(document.getElementById('pr-cny'), 650, C.propose + 0.65, 0.7);
+        point('btn-dispatch', C.dispatch - 0.65, 0.55, { x: 1800, y: 1060 });
+        press(C.dispatch);
+        pressButton('btn-dispatch', C.dispatch);
+        morph('propose', 'dialog', C.dispatch + 0.04);
+        point('btn-confirm', C.dispatch + 0.4, 0.45);
+        press(C.confirm);
+        pressButton('btn-confirm', C.confirm);
+        morph('dialog', 'toast', C.sent, 0.4, 'expo.out');
+        at(cursor, { opacity: 0, duration: 0.15 }, C.sent + 0.15);
+        // The toast flies into the twin: the card grows past the frame as the plant comes into focus.
+        at('#card-wrap', { scale: 7, opacity: 0, duration: C.chiller - C.flyIn, ease: 'power3.in' }, C.flyIn);
+        refocus(C.flyIn, C.chiller - C.flyIn);
+        tl.set('#card-wrap', { scale: 1 }, C.chiller + 0.05);
+        tl.set('#st-toast', { opacity: 0 }, C.chiller + 0.05);
+
+        // Noon: the live card again, smaller, over the sharp twin; COP climbs to 5.60.
+        // Half an hour later the platform checks the change held: two checks tick, COP climbs.
+        gsap.set(['#vf-1', '#vf-2', '#vf-cop'], { opacity: 0 });
+        defocus(C.verify - 0.05);
+        open('verify', C.verify + 0.1);
+        blurIn('#vf-1', C.verify + 0.5, 0.2);
+        blurIn('#vf-2', C.verify + 0.75, 0.2);
+        blurIn('#vf-cop', C.verify + 1.0, 0.2);
+        count(document.getElementById('verify-cop'), 5.6, C.verify + 1.05, C.copLands - C.verify - 1.05, 2, 4.3);
+        close('verify', C.night);
+        tl.set('#twin-frame', { filter: 'blur(0px)' }, C.night + 0.2);
+        tl.set('#veil', { opacity: 0 }, C.night + 0.2);
+
+        // 靠得住: the diagnosis it found by itself, over the night plant room.
+        gsap.set(['#fdd-1', '#fdd-2', '#fdd-3'], { opacity: 0 });
+        defocus(C.fdd - 0.2, 'rgba(16,20,38,.42)');
+        open('fdd', C.fdd);
+        const gauge = { v: 5.2 };
+        const dot = document.getElementById('fdd-dot'), val = document.getElementById('fdd-val');
+        tl.fromTo(gauge, { v: 5.2 }, { v: 3.38, duration: 0.7, ease: 'power2.inOut', onUpdate: () => {
+          const left = `${(gauge.v / 6) * 100}%`;
+          dot.style.left = left; val.style.left = left;
+          val.textContent = `${gauge.v.toFixed(2)} K`;
+          const below = gauge.v < 3.5;
+          dot.style.background = below ? '#ea580c' : '#3f5bd9';
+          val.style.color = below ? '#9a3412' : '#18181b';
+        } }, C.fdd + 0.4);
+        ['#fdd-1', '#fdd-2', '#fdd-3'].forEach((id, i) => blurIn(id, C.fdd + 1.0 + i * 0.15, 0.22));
+        close('fdd', C.save - 0.15);
+        tl.set('#twin-frame', { filter: 'blur(0px)' }, C.save);
+        tl.set('#veil', { opacity: 0 }, C.save);
+
+        // 省得下: yesterday as one card, then one tile of the year.
+        const hourly = [62, 58, 55, 54, 55, 60, 82, 118, 152, 176, 196, 214, 226, 232, 236, 230, 218, 196, 168, 140, 112, 94, 80, 70];
+        const bars = document.getElementById('y-bars');
+        bars.innerHTML = hourly.map((kwh) => `<div style="flex:1;position:relative;height:${(kwh * 1.21) / 3}px"><div style="position:absolute;inset:0;background:#e3e7f5;border-radius:4px 4px 0 0"></div><div class="yb" style="position:absolute;left:0;right:0;bottom:0;height:${100 / 1.21}%;background:#3f5bd9;border-radius:4px 4px 0 0"></div></div>`).join('');
+        defocus(C.yesterday - 0.15);
+        open('yesterday', C.yesterday);
+        from('#y-bars .yb', { scaleY: 0, transformOrigin: '50% 100%' }, { scaleY: 1, duration: 0.45, ease: 'expo.out', stagger: 0.012 }, C.yesterday + 0.3);
+        morph('yesterday', 'tile', C.wall - 0.15, 0.4);
+        at('#card', { backgroundColor: '#6cc995', duration: 0.15 }, C.wall + 0.1);
+
+        // ── The year: the tile pulls back into a wall of 365 days ────────────────────
+        const days = 365, pitch = 28, size = 22, cols = 53;
+        const end = new Date(Date.UTC(2026, 9, 22));
+        const startDay = new Date(end.getTime() - (days - 1) * 86400000);
+        const offset = startDay.getUTCDay();
+        const season = (date) => {
+          const doy = (Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) - Date.UTC(date.getUTCFullYear(), 0, 1)) / 86400000;
+          const k = (doy - 100) / (320 - 100);
+          return k <= 0 || k >= 1 ? 0 : Math.sin(Math.PI * k) ** 0.8;
+        };
+        let seed = 7;
+        const rand = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+        const raw2 = Array.from({ length: days }, (_, i) => season(new Date(startDay.getTime() + i * 86400000)) * (0.85 + 0.3 * rand()));
+        const restSum = raw2.slice(0, -1).reduce((s, v) => s + v, 0);
+        const saved = raw2.map((v, i) => (i === days - 1 ? 812 : (v * (216000 - 812)) / restSum));
+        const shades = ['#d6f1e1', '#a8e2c0', '#6cc995', '#36ad6c', '#1f8a4f'];
+        const peakSaved = Math.max(...saved);
+        const cam = document.getElementById('wall-cam');
+        const tiles = [];
+        let lastTile = null;
+        for (let i = 0; i < days; i += 1) {
+          const slot = i + offset;
+          const tile = document.createElement('div');
+          tile.className = 'tile';
+          const x = Math.floor(slot / 7) * pitch, y = (slot % 7) * pitch;
+          tile.style.left = `${x}px`; tile.style.top = `${y}px`;
+          tile.style.background = saved[i] <= 1 ? '#ececf0' : shades[Math.min(4, Math.floor((saved[i] / peakSaved) * 5))];
+          cam.appendChild(tile);
+          tiles.push({ tile, x, y, back: days - 1 - i });
+          if (i === days - 1) lastTile = { x, y };
+        }
+        // Month names over the weeks they start in.
+        for (let m = 0; m < 12; m += 1) {
+          const first = new Date(Date.UTC(startDay.getUTCFullYear(), startDay.getUTCMonth() + m + 1, 1));
+          if (first > end) break;
+          const slot = Math.round((first - startDay) / 86400000) + offset;
+          const label = document.createElement('div');
+          Object.assign(label.style, { position: 'absolute', left: `${Math.floor(slot / 7) * pitch}px`, top: '-40px', font: '500 22px var(--cn)', color: '#a1a1aa', whiteSpace: 'nowrap' });
+          label.textContent = `${first.getUTCMonth() + 1} 月`;
+          cam.appendChild(label);
+        }
+        const wallWidth = (Math.ceil((days + offset) / 7)) * pitch - (pitch - size);
+        const finalX = (W - wallWidth) / 2, finalY = 700;
+        const s0 = 64 / size;
+        const tileCentre = { x: lastTile.x + size / 2, y: lastTile.y + size / 2 };
+        gsap.set(cam, { x: W / 2 - tileCentre.x * s0, y: H / 2 - tileCentre.y * s0, scale: s0 });
+        from('#wall', { opacity: 0 }, { opacity: 1, duration: 0.15 }, C.wall + 0.05);
+        at('#card-wrap', { opacity: 0, duration: 0.1 }, C.wall + 0.3);
+        at(cam, { x: finalX, y: finalY, scale: 1, duration: 1.3, ease: 'power3.inOut' }, C.wall + 0.3);
+        tiles.forEach(({ tile, back }) => from(tile, { opacity: 0.12, scale: 0.5 }, { opacity: 1, scale: 1, duration: 0.3, ease: 'expo.out' }, C.wall + 0.3 + back * 0.0035));
+        tl.set(tiles.at(-1).tile, { opacity: 1, scale: 1 }, C.wall + 0.05);
+
+        gsap.set(['#year-label', '#year-note'], { opacity: 0 });
+        const [y1, y2, y3] = C.figures;
+        blurIn('#year-label', y1 - 0.15, 0.25);
+        from('#roll > span:first-child', { yPercent: 100 }, { yPercent: 0, duration: 0.5, ease: 'expo.out' }, y1 - 0.2);
+        from('#year-unit', { opacity: 0 }, { opacity: 1, duration: 0.2 }, y1 + 0.05);
+        const roll = document.querySelectorAll('#roll > span');
+        at(roll, { y: '-=266', duration: 0.45, ease: 'power3.inOut' }, y2 - 0.2);
+        tl.set('#year-unit', { textContent: '万度电' }, y2);
+        blurIn('#year-note', y2 + 0.1, 0.25);
+        at(roll, { y: '-=266', duration: 0.45, ease: 'power3.inOut' }, y3 - 0.2);
+        tl.set('#year-unit', { textContent: '吨' }, y3);
+        tl.set('#year-label-text', { innerHTML: '一年下来，冷站<b>少排碳</b>' }, y3 - 0.05);
+        blurOut('#year-note', y3 - 0.3);
+        tl.set('#year-note', { textContent: '按 0.5703 千克每度的电网排放因子' }, y3 - 0.05);
+        blurIn('#year-note', y3 + 0.1, 0.25);
+        tl.set('#twin-frame', { filter: 'blur(0px)' }, C.wall + 0.6);
+        tl.set('#veil', { opacity: 0 }, C.wall + 0.6);
+
+        // ── Twin titles ──────────────────────────────────────────────────────────────
+        // A tag lands from its left edge, like a card set down, and holds still until it leaves.
+        const tag = (id, inAt, outAt) => {
+          from(id, { opacity: 0, scale: 0.92, filter: 'blur(8px)', transformOrigin: '0% 50%' }, { opacity: 1, scale: 1, filter: 'blur(0px)', duration: 0.35, ease: 'expo.out' }, inAt);
+          blurOut(id, outAt, 0.16);
+        };
+        tag('#tag-floors', C.floors + 0.15, C.flow - 0.2);
+        tag('#tag-pipes', C.pipes + 0.05, C.think - 0.2);
+        tag('#tag-chiller', C.chiller + 0.15, C.verify - 0.2);
+
+        // ── Night: the clock runs to 03:12, the phone knows first ────────────────────
+        const clockText = document.getElementById('clock-text');
+        tag('#clock', C.clockRun, C.fdd - 0.25);
+        const run = { minutes: 12 * 60 + 30 };
+        tl.fromTo(run, { minutes: 12 * 60 + 30 }, { minutes: 27 * 60 + 12, duration: C.fault - C.clockRun - 0.15, ease: 'power2.inOut', onUpdate: () => {
+          const m = Math.round(run.minutes) % (24 * 60);
+          clockText.textContent = `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+        } }, C.clockRun + 0.05);
+        tag('#tag-night', C.fault + 0.4, C.fdd - 0.25);
+
+        from('#phone', { x: 760, rotation: 4 }, { x: 0, rotation: 0, duration: 0.6, ease: 'expo.out' }, C.fault);
+        from('#phone', { filter: 'blur(8px)' }, { filter: 'blur(0px)', duration: 0.3, ease: 'power2.out' }, C.fault);
+        gsap.set(['#scr-alarm', '#scr-morning', '#scr-daily'], { opacity: 0 });
+        from('#note-alarm', { y: -120, opacity: 0 }, { y: 0, opacity: 1, duration: 0.45, ease: 'expo.out' }, C.fault + 0.25);
+        at('#note-alarm', { scale: 0.97, duration: 0.08 }, C.tapAlarm - 0.08);
+        tl.set('#scr-alarm', { opacity: 1 }, C.tapAlarm + 0.02);
+        from('#scr-alarm', { x: 390 }, { x: 0, duration: 0.4, ease: 'expo.out' }, C.tapAlarm + 0.02);
+        at('#btn-dispatch-phone', { backgroundColor: '#3550c7', scale: 0.97, duration: 0.08 }, C.tapDispatch - 0.08);
+        at('#btn-dispatch-phone', { backgroundColor: '#3f5bd9', scale: 1, duration: 0.12 }, C.tapDispatch);
+        at('#phone', { scale: 1.2, x: -130, y: 70, transformOrigin: '50% 72%', duration: 0.55, ease: 'power3.inOut' }, C.tapDispatch);
+        blurIn('#step-2', C.tapDispatch + 0.15, 0.25);
+        tl.set('#alarm-state', { textContent: '正在发生 · 已派单' }, C.tapDispatch + 0.15);
+        blurIn('#step-3', C.tapDispatch + 0.55, 0.25);
+        blurIn('#step-4', C.cleared, 0.25);
+        tl.set('#alarm-badge', { className: 'badge ok', textContent: '✓ 已恢复' }, C.cleared);
+        tl.set('#alarm-state', { textContent: '已恢复 · 已处理' }, C.cleared);
+        at('#phone', { x: 900, rotation: 3, duration: 0.3, ease: 'power3.in' }, C.fdd - 0.3);
+
+        tl.set('#phone', { x: 760, y: 0, scale: 1, rotation: 4 }, C.save);
+        tl.set('#scr-morning', { opacity: 1 }, C.save);
+        at('#phone', { x: 0, rotation: 0, duration: 0.55, ease: 'expo.out' }, C.daily);
+        from('#phone', { filter: 'blur(8px)' }, { filter: 'blur(0px)', duration: 0.3, ease: 'power2.out' }, C.daily);
+        from('#note-daily', { y: -120, opacity: 0 }, { y: 0, opacity: 1, duration: 0.45, ease: 'expo.out' }, C.daily + 0.2);
+        at('#note-daily', { scale: 0.97, duration: 0.08 }, C.tapDaily - 0.08);
+        tl.set('#scr-daily', { opacity: 1 }, C.tapDaily + 0.02);
+        from('#scr-daily', { x: 390 }, { x: 0, duration: 0.4, ease: 'expo.out' }, C.tapDaily + 0.02);
+        at('#phone', { scale: 1.3, x: -140, y: 170, transformOrigin: '50% 26%', duration: 0.5, ease: 'power3.inOut' }, C.tapDaily + 0.15);
+        tag('#tag-daily', C.daily + 0.1, C.yesterday - 0.25);
+        at('#phone', { x: 900, rotation: 3, duration: 0.3, ease: 'power3.in' }, C.yesterday - 0.3);
+        const phoneBars = [62, 58, 55, 54, 55, 60, 82, 118, 152, 176, 196, 214, 226, 232, 236, 230, 218, 196, 168, 140, 112, 94, 80, 70];
+        document.getElementById('bars').innerHTML = phoneBars.map((kwh) => {
+          const before = Math.round(kwh * 1.21);
+          return `<div class="bar" style="height:${before / 2.9}px"><u style="height:100%"></u><i style="height:${(kwh / before) * 100}%"></i></div>`;
+        }).join('');
+
+        // ── Chapter words ────────────────────────────────────────────────────────────
+        [['#ch-see', C.see], ['#ch-think', C.think], ['#ch-night', C.night], ['#ch-save', C.save]].forEach(([id, time]) => {
+          from(id, { clipPath: 'inset(100% 0% 0% 0%)' }, { clipPath: 'inset(0% 0% 0% 0%)', duration: 0.2, ease: 'power3.out' }, time - 0.2);
+          from(`${id} span`, { opacity: 0, scale: 1.12, filter: 'blur(12px)' }, { opacity: 1, scale: 1, filter: 'blur(0px)', duration: 0.18, ease: 'expo.out' }, time - 0.06);
+          tl.fromTo(id, { clipPath: 'inset(0% 0% 0% 0%)' }, { clipPath: 'inset(0% 0% 100% 0%)', duration: 0.2, ease: 'power3.in', immediateRender: false }, time + 0.32);
+        });
+
+        // ── The mark: the year's 365 days fly together into the windmill ────────────
+        // Each day's tile finds a place inside the four blades, in date order round the wheel, turns
+        // brand blue on the way, and the solid mark takes over as they land.
+        const M = 420, markAt = { x: W / 2, y: 500 };
+        const blade = new Path2D('M32 32V5C43 5 50 12.5 50 21C50 27.5 43 32 32 32Z');
+        const probe = document.createElement('canvas').getContext('2d');
+        const inMark = (x, y) => {
+          if (Math.abs(x - 32) < 1.7 || Math.abs(y - 32) < 1.7) return false;
+          for (let q = 0; q < 4; q += 1) {
+            // Rotate the point back into the first blade's frame (blades turn 90° about 32,32).
+            const a = (-q * Math.PI) / 2, dx = x - 32, dy = y - 32;
+            if (probe.isPointInPath(blade, 32 + dx * Math.cos(a) - dy * Math.sin(a), 32 + dx * Math.sin(a) + dy * Math.cos(a))) return true;
+          }
+          return false;
+        };
+        let step = 2.6, spots = [];
+        while (spots.length < tiles.length && step > 0.5) {
+          spots = [];
+          for (let y = step / 2; y < 64; y += step) for (let x = step / 2; x < 64; x += step) if (inMark(x, y)) spots.push([x, y]);
+          if (spots.length < tiles.length) step *= 0.94;
+        }
+        // One spot per day, chosen evenly, then laid out left to right like the wall itself: each tile
+        // goes to the spot in the same place in the order, so the wall folds into the mark as one shape
+        // instead of streaming round it.
+        const even = Array.from({ length: tiles.length }, (_, i) => spots[Math.floor((i * spots.length) / tiles.length)]);
+        const byColumn = (ax, ay, bx, by) => (Math.abs(ax - bx) > 0.5 ? ax - bx : ay - by);
+        const targets = even.sort(([ax, ay], [bx, by]) => byColumn(ax, ay, bx, by));
+        const k = M / 64, cell = step * k;
+        const ordered = [...tiles].sort((a, b) => byColumn(a.x, a.y, b.x, b.y));
+        const centreX = wallWidth / 2;
+        const reach = Math.max(...ordered.map(({ x }) => Math.abs(x - centreX)));
+        ordered.forEach(({ tile, x, y }, i) => {
+          const [sx, sy] = targets[i];
+          const left = markAt.x - M / 2 + sx * k - finalX - cell / 2;
+          const top = markAt.y - M / 2 + sy * k - finalY - cell / 2;
+          // The far ends set off a touch earlier, so every tile arrives together.
+          const delay = 0.18 * (1 - Math.abs(x - centreX) / reach);
+          at(tile, { x: left - x, y: top - y, width: cell * 0.92, height: cell * 0.92, borderRadius: cell * 0.25, backgroundColor: '#3f5bd9', duration: 1.3, ease: 'power3.inOut' }, C.gather + delay);
+        });
+        at('#wall-cam > div:not(.tile)', { opacity: 0, duration: 0.25 }, C.gather);
+        blurOut('#year', C.gather, 0.3);
+
+        const lockup = { mark: 220, gap: 48 };
+        const markEl = document.getElementById('mark');
+        const wordWidth = 700;
+        const left = (W - (lockup.mark + lockup.gap + wordWidth)) / 2;
+        const markCentre = { x: left + lockup.mark / 2, y: 470 };
+        Object.assign(document.getElementById('wordmark').style, { left: `${left + lockup.mark + lockup.gap}px`, top: `${markCentre.y - 88}px` });
+        Object.assign(document.getElementById('cta').style, { left: `${W / 2 - 130}px`, top: '690px' });
+        gsap.set(markEl, { x: markAt.x - M / 2, y: markAt.y - M / 2, width: M, height: M });
+        // The solid mark takes over from the tiles on the hit, then turns once and settles into the lockup.
+        // The pixel windmill settles into the solid one: the tiles shrink away as the mark swells in over them.
+        from(markEl, { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.32, ease: 'expo.out' }, C.mark - 0.3);
+        at('#wall-cam .tile', { scale: 0.4, opacity: 0, duration: 0.3, ease: 'power2.in' }, C.mark - 0.3);
+        const spin = { angle: 0 };
+        tl.fromTo(spin, { angle: 0 }, { angle: -90, duration: 1.3, ease: 'power3.out', onUpdate: () => {
+          document.getElementById('mark-blades').style.transform = `rotate(${spin.angle}deg)`;
+        } }, C.mark);
+        at(markEl, { x: markCentre.x - lockup.mark / 2, y: markCentre.y - lockup.mark / 2, width: lockup.mark, height: lockup.mark, duration: 0.9, ease: 'power3.inOut' }, C.mark + 0.7);
+        from('#wordmark .name', { clipPath: 'inset(0 100% 0 0)' }, { clipPath: 'inset(0 0% 0 0)', duration: 0.55, ease: 'power3.out' }, C.mark + 1.35);
+        blurIn('#wordmark .sub', C.mark + 1.7, 0.25);
+        from('#cta', { opacity: 0, scale: 0.92 }, { opacity: 1, scale: 1, duration: 0.45, ease: 'expo.out' }, C.mark + 2.15);
+        blurIn('#disclaimer', C.mark + 2.45, 0.3);
+
+        window.__timelines = window.__timelines || {};
+        window.__timelines['main'] = tl;
+      }
+      // Layout (and so the cursor's targets) depends on the fonts: build once they are in.
+      document.fonts.ready.then(build);
+
+      // The twin draws itself from film time.
+      window.__hf = window.__hf || {};
+      window.__hf.buildReady = window.__hf.buildReady || {};
+      let film = null;
+      const ready = HVACTwin.mount(document.getElementById('twin'), { width: W, height: H }).then((mounted) => { film = mounted; });
+      window.__hf.buildReady.twin = ready;
+      window.addEventListener('hf-seek', (event) => {
+        const time = event.detail.time;
+        if (film) film.renderAt(time);
+        else event.detail.waitUntil(ready.then(() => film.renderAt(time)));
+      });
+    </script>
+  </body>
+</html>
