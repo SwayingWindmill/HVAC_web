@@ -1,0 +1,11 @@
+node_modules/
+# Built by `npm run twin:build` and `npm run prepare:assets`
+film/assets/twin/
+film/assets/vendor/
+film/assets/fonts/
+film/assets/audio/
+film/.hyperframes/
+film/renders/
+film/snapshots/
+*.mp4
+*.mov

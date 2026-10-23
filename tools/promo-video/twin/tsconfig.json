@@ -1,0 +1,11 @@
+{
+  "extends": "../../../apps/hvac-web/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": { "@/*": ["../../../apps/hvac-web/src/*"] },
+    "types": ["vite/client", "node", "react", "react-dom"],
+    "tsBuildInfoFile": null
+  },
+  "include": ["film.tsx", "direction.ts"]
+}
