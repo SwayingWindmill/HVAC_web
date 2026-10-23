@@ -38,5 +38,8 @@ SET capabilities = array_remove(capabilities, 'rule.manage'),
     updated_at = '2026-10-22T00:00:00Z'
 WHERE capabilities @> ARRAY['rule.manage']::text[];
 
+-- A deny of a capability that no longer exists denies nothing.
+DELETE FROM iam.explicit_denies WHERE action = 'rule.manage';
+
 RESET ROLE;
 COMMIT;
