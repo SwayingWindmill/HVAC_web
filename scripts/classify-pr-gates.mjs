@@ -39,7 +39,7 @@ async function changedFiles() {
       gitEnvironment.GIT_WORK_TREE = root;
     }
   }
-  const result = spawnSync('git', ['diff', '--name-only', '--diff-filter=ACMRTUXB', `${base}...${head}`], {
+  const result = spawnSync('git', ['diff', '--name-only', '--diff-filter=ACDMRTUXB', `${base}...${head}`], {
     cwd: root,
     encoding: 'utf8',
     windowsHide: true,
@@ -83,11 +83,10 @@ const selectWeb = (file, reason, { browser = true } = {}) => {
   addReason(file, reason);
 };
 
-const selectPlatform = (file, reason, { integration = false, browser = false } = {}) => {
+const selectPlatform = (file, reason, { integration = false } = {}) => {
   add(contractProfiles, ['core']);
   add(unitProfiles, ['platform']);
   if (integration) add(integrationProfiles, ['platform']);
-  if (browser) add(browserProfiles, ['platform']);
   addReason(file, reason);
 };
 
@@ -198,7 +197,7 @@ for (const file of files) {
     else selectBroad(file, 'shared contract changed');
   });
 
-  match(file.startsWith('libs/identitycontext/') || file.startsWith('libs/oidctest/') || file.startsWith('libs/sessionevent/') || file.startsWith('libs/sessionstore/') || file.startsWith('libs/observability/') || file.startsWith('modules/audit/') || file.startsWith('services/outbox-relay/') || file.startsWith('modules/registry/'), () => selectPlatform(file, 'platform identity, durability, or observability code changed', { integration: file.includes('session') || file.includes('outbox') }));
+  match(file.startsWith('libs/identitycontext/') || file.startsWith('libs/oidctest/') || file.startsWith('libs/sessionevent/') || file.startsWith('libs/sessionstore/') || file.startsWith('libs/observability/') || file.startsWith('modules/audit/') || file.startsWith('modules/registry/'), () => selectPlatform(file, 'platform identity, durability, or observability code changed', { integration: file.includes('session') || file.includes('outbox') }));
   match(file.startsWith('libs/ownershipregistry/') || file.startsWith('libs/registryauth/') || file.startsWith('infra/s1-'), () => selectRegistry(file, 'registry capability changed', { integration: true }));
   match(file.startsWith('libs/telemetryauth/') || file.startsWith('modules/connectivity/') || file.startsWith('cmd/connectivity/') || file.startsWith('modules/telemetry/pkg/telemetry/') || file.startsWith('modules/telemetry/pkg/telemetryapi/') || file.startsWith('modules/telemetry/cmd/telemetry-history-projector/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('infra/telemetry/'), () => {
     const lower = file.toLowerCase();
@@ -215,7 +214,7 @@ for (const file of files) {
   match(file.startsWith('services/operations-agent-service/') || file.startsWith('infra/operations-agent/'), () => selectOperationsAgent(file, 'Operations Agent capability changed', { integration: true }));
 
   match(file.startsWith('modules/iam/') || file.startsWith('cmd/energy-api/'), () => {
-    selectPlatform(file, 'shared IAM or Gateway boundary changed', { browser: true });
+    selectPlatform(file, 'shared IAM or Gateway boundary changed');
     selectRegistry(file, 'shared IAM or Gateway boundary changed');
     selectTelemetry(file, 'shared IAM or Gateway boundary changed', { integration: true, browser: true });
     selectCommand(file, 'shared IAM or Gateway boundary changed');
@@ -245,7 +244,7 @@ for (const file of files) {
       'scripts/update-package-script-long-chain-baseline.mjs',
     ].includes(file), () => {});
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.startsWith('scripts/test-real-'), () => selectWeb(file, 'browser, RMS or Web model test automation changed'));
-    scriptMatch(lower.includes('s0-') || lower.includes('durable'), () => selectPlatform(file, 'platform automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') || lower.includes('audit') }));
+    scriptMatch(lower.includes('s0-') || lower.includes('durable'), () => selectPlatform(file, 'platform automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('s1-') || lower.includes('registry'), () => selectRegistry(file, 'registry automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('s2-') || lower.includes('telemetry'), () => {
       const integration = lower.includes('realtime') || lower.includes('history') || lower.includes('ingest') || lower.includes('postgres');
@@ -256,7 +255,8 @@ for (const file of files) {
     scriptMatch(lower.includes('s5-') || lower.includes('work-order') || lower.includes('workorder'), () => selectWorkOrder(file, 'Work Order automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') }));
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));
     scriptMatch(lower.includes('operations-agent'), () => selectOperationsAgent(file, 'Operations Agent automation changed', { integration: lower.includes('postgres') || lower.includes('migration') }));
-    scriptMatch(lower.includes('ownership') || lower.includes('contract') || lower.includes('production-rollout'), () => add(contractProfiles, ['core']));
+    // The migration freeze check runs in the contracts core; its tests run in every static gate.
+    scriptMatch(lower.includes('ownership') || lower.includes('contract') || lower.includes('production-rollout') || lower.includes('migration-freeze'), () => add(contractProfiles, ['core']));
     if (!scriptMatched) {
       unknown = true;
       selectBroad(file, 'unknown automation script selected the broad fail-closed suite');

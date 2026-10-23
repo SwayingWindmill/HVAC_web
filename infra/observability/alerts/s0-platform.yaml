@@ -1,36 +1,6 @@
 groups:
   - name: s0-platform
     rules:
-      - alert: S0OutboxStuck
-        expr: max(s0_outbox_oldest_age_seconds) > 60
-        for: 2m
-        labels:
-          severity: page
-          primary_owner: platform-runtime
-          secondary_owner: data-platform
-        annotations:
-          summary: Outbox publishing is stuck
-          runbook: docs/operations/alerts.md#待发事件积压
-      - alert: S0AuditIngestionFailing
-        expr: increase(s0_audit_ingestion_total{result="error"}[5m]) > 0
-        for: 1m
-        labels:
-          severity: page
-          primary_owner: security-platform
-          secondary_owner: platform-runtime
-        annotations:
-          summary: Audit Ledger ingestion is failing
-          runbook: docs/operations/alerts.md#操作记录写入慢或失败
-      - alert: S0AuditIngestionLatencyHigh
-        expr: histogram_quantile(0.95, sum by (le) (rate(s0_audit_ingestion_latency_seconds_bucket[5m]))) > 5
-        for: 5m
-        labels:
-          severity: ticket
-          primary_owner: security-platform
-          secondary_owner: data-platform
-        annotations:
-          summary: Audit ingestion p95 latency exceeds five seconds
-          runbook: docs/operations/alerts.md#操作记录写入慢或失败
       - alert: S0TelemetryExportFailures
         expr: max(s0_telemetry_failed_exports) > 0
         for: 5m

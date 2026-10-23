@@ -260,7 +260,7 @@ func runEmbeddedAuditOutboxRelay(ctx context.Context, outbox *sessionstore.Outbo
 			continue
 		}
 		inserted, consumeErr := store.Consume(ctx, record.Payload, auditserver.MessageMetadata{
-			Topic: record.Topic, Partition: 0, Offset: 0, ReceivedAt: time.Now().UTC(),
+			Topic: record.Topic, ReceivedAt: time.Now().UTC(),
 		})
 		if consumeErr != nil {
 			_ = outbox.MarkFailed(ctx, record.MessageID, owner, "AUDIT_LEDGER_WRITE_FAILED", now.Add(time.Second))
@@ -608,7 +608,7 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger) (*http.Ser
 	}
 	gatewaySPIFFE := envOr("ALARM_GATEWAY_SPIFFE", alarmservice.DefaultGatewaySPIFFEID)
 	handler, err := alarmservice.NewHTTPHandler(alarmservice.HTTPConfig{
-		Store: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
+		Store: store, Rules: store, GatewayPublicKey: gatewayPublicKey, GatewaySPIFFEID: gatewaySPIFFE,
 		Audience: envOr("ALARM_READ_AUDIENCE", alarmservice.DefaultAudience), MaxListLimit: 200,
 	})
 	if err != nil {

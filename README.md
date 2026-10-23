@@ -66,7 +66,7 @@ docs/            交接、ADR、规格、架构记录和运维手册
 
 ### 单独部署的服务：`services/`
 
-- 身份与可靠投递：`identity-service/`（账号和密码）、`outbox-relay/`（把待发事件可靠地送出去）。
+- 身份：`identity-service/`（账号和密码）。
 - 结算：`settlement-service/`（命令行工具，账单以它为准）。
 - 规则和通知：`rule-runtime-service/`、`notification-service/`、`outbound-delivery-service/`。
 - 智能服务：`forecast-service/`（负荷预测）、`optimization-service/`（优化建议）、`fdd-service/`（故障诊断）、`mv-service/`（节能验证）、`report-service/`（月度报告）。

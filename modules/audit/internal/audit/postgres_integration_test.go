@@ -23,11 +23,11 @@ func TestTransactionalInboxDeduplicatesAcrossRestartAndPreservesHashChain(t *tes
 		t.Fatal(err)
 	}
 	firstPayload := marshalEvent(t, fixtureAuditEvent(now, "message-01", "session-01", "org-01", 1, "SESSION_CREATED"))
-	inserted, err := store.Consume(context.Background(), firstPayload, audit.MessageMetadata{Topic: sessionevent.ControlTopic, Partition: 0, Offset: 10, ReceivedAt: now.Add(time.Second)})
+	inserted, err := store.Consume(context.Background(), firstPayload, audit.MessageMetadata{Topic: sessionevent.ControlTopic, ReceivedAt: now.Add(time.Second)})
 	if err != nil || !inserted {
 		t.Fatalf("first consume inserted=%v err=%v", inserted, err)
 	}
-	inserted, err = store.Consume(context.Background(), firstPayload, audit.MessageMetadata{Topic: sessionevent.ControlTopic, Partition: 0, Offset: 11, ReceivedAt: now.Add(2 * time.Second)})
+	inserted, err = store.Consume(context.Background(), firstPayload, audit.MessageMetadata{Topic: sessionevent.ControlTopic, ReceivedAt: now.Add(2 * time.Second)})
 	if err != nil || inserted {
 		t.Fatalf("duplicate consume inserted=%v err=%v", inserted, err)
 	}
@@ -46,7 +46,7 @@ func TestTransactionalInboxDeduplicatesAcrossRestartAndPreservesHashChain(t *tes
 		t.Fatal(err)
 	}
 	defer store.Close()
-	inserted, err = store.Consume(context.Background(), firstPayload, audit.MessageMetadata{Topic: sessionevent.ControlTopic, Partition: 0, Offset: 12, ReceivedAt: now.Add(3 * time.Second)})
+	inserted, err = store.Consume(context.Background(), firstPayload, audit.MessageMetadata{Topic: sessionevent.ControlTopic, ReceivedAt: now.Add(3 * time.Second)})
 	if err != nil || inserted {
 		t.Fatalf("restart duplicate inserted=%v err=%v", inserted, err)
 	}
@@ -54,7 +54,7 @@ func TestTransactionalInboxDeduplicatesAcrossRestartAndPreservesHashChain(t *tes
 	secondEvent := fixtureAuditEvent(now.Add(time.Second), "message-02", "session-01", "org-01", 2, "SESSION_REVOKED")
 	secondEvent.CausationID = "message-01"
 	secondPayload := marshalEvent(t, secondEvent)
-	inserted, err = store.Consume(context.Background(), secondPayload, audit.MessageMetadata{Topic: sessionevent.ControlTopic, Partition: 0, Offset: 13, ReceivedAt: now.Add(4 * time.Second)})
+	inserted, err = store.Consume(context.Background(), secondPayload, audit.MessageMetadata{Topic: sessionevent.ControlTopic, ReceivedAt: now.Add(4 * time.Second)})
 	if err != nil || !inserted {
 		t.Fatalf("second event inserted=%v err=%v", inserted, err)
 	}
@@ -77,12 +77,12 @@ func TestDuplicateMessageWithDifferentProtobufIsRejected(t *testing.T) {
 	}
 	defer store.Close()
 	original := fixtureAuditEvent(now, "message-conflict", "session-01", "org-01", 1, "SESSION_CREATED")
-	if _, err := store.Consume(context.Background(), marshalEvent(t, original), audit.MessageMetadata{Topic: sessionevent.ControlTopic, Partition: 1, Offset: 20, ReceivedAt: now}); err != nil {
+	if _, err := store.Consume(context.Background(), marshalEvent(t, original), audit.MessageMetadata{Topic: sessionevent.ControlTopic, ReceivedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	changed := original
 	changed.Action = "SESSION_REVOKED"
-	if _, err := store.Consume(context.Background(), marshalEvent(t, changed), audit.MessageMetadata{Topic: sessionevent.ControlTopic, Partition: 1, Offset: 21, ReceivedAt: now.Add(time.Second)}); !errors.Is(err, audit.ErrEnvelopeConflict) {
+	if _, err := store.Consume(context.Background(), marshalEvent(t, changed), audit.MessageMetadata{Topic: sessionevent.ControlTopic, ReceivedAt: now.Add(time.Second)}); !errors.Is(err, audit.ErrEnvelopeConflict) {
 		t.Fatalf("different protobuf under same message ID was accepted: %v", err)
 	}
 }
@@ -103,13 +103,13 @@ func TestOperationsAuditPersistsExactlyOnceAndAdvancesTenantHashChain(t *testing
 		t.Fatal(err)
 	}
 	inserted, err := store.ConsumeOperations(context.Background(), firstPayload, audit.MessageMetadata{
-		Topic: "operations-http", Partition: 0, Offset: 0, ReceivedAt: now.Add(time.Second),
+		Topic: "operations-http", ReceivedAt: now.Add(time.Second),
 	})
 	if err != nil || !inserted {
 		t.Fatalf("first operations consume inserted=%v err=%v", inserted, err)
 	}
 	inserted, err = store.ConsumeOperations(context.Background(), firstPayload, audit.MessageMetadata{
-		Topic: "operations-http", Partition: 0, Offset: 1, ReceivedAt: now.Add(2 * time.Second),
+		Topic: "operations-http", ReceivedAt: now.Add(2 * time.Second),
 	})
 	if err != nil || inserted {
 		t.Fatalf("duplicate operations consume inserted=%v err=%v", inserted, err)
@@ -135,7 +135,7 @@ func TestOperationsAuditPersistsExactlyOnceAndAdvancesTenantHashChain(t *testing
 		t.Fatal(err)
 	}
 	if _, err := store.ConsumeOperations(context.Background(), changedPayload, audit.MessageMetadata{
-		Topic: "operations-http", Partition: 0, Offset: 2, ReceivedAt: now.Add(3 * time.Second),
+		Topic: "operations-http", ReceivedAt: now.Add(3 * time.Second),
 	}); !errors.Is(err, audit.ErrEnvelopeConflict) {
 		t.Fatalf("different Operations event under same event ID was accepted: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestOperationsAuditPersistsExactlyOnceAndAdvancesTenantHashChain(t *testing
 		t.Fatal(err)
 	}
 	inserted, err = store.ConsumeOperations(context.Background(), secondPayload, audit.MessageMetadata{
-		Topic: "operations-http", Partition: 0, Offset: 3, ReceivedAt: now.Add(4 * time.Second),
+		Topic: "operations-http", ReceivedAt: now.Add(4 * time.Second),
 	})
 	if err != nil || !inserted {
 		t.Fatalf("second same-revision Operations event inserted=%v err=%v", inserted, err)
@@ -180,7 +180,7 @@ func TestAuditQueryIsTenantScopedAndLedgerIsAppendOnly(t *testing.T) {
 	}
 	defer store.Close()
 	event := fixtureAuditEvent(now, "message-tenant-01", "session-01", "tenant-01", 1, "SESSION_CREATED")
-	if _, err := store.Consume(context.Background(), marshalEvent(t, event), audit.MessageMetadata{Topic: sessionevent.ControlTopic, Partition: 2, Offset: 30, ReceivedAt: now}); err != nil {
+	if _, err := store.Consume(context.Background(), marshalEvent(t, event), audit.MessageMetadata{Topic: sessionevent.ControlTopic, ReceivedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.GetRecord(context.Background(), "tenant-02", event.MessageID); !errors.Is(err, audit.ErrRecordNotFound) {

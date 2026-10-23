@@ -200,8 +200,8 @@
       "area": "message",
       "requirement": "Kafka 属于 Phase 3 演进能力而非 Phase 1 必需组件",
       "status": "REMOVE",
-      "current": "canonical Phase 1 Compose 已删除 Redpanda 与兼容 Outbox Relay；正式主链使用 PostgreSQL Outbox",
-      "action": "Kafka/Redpanda 不得重新进入当前 Phase 1 Compose；历史资产只作为非 canonical 参考"
+      "current": "Kafka 的代码都已删除（ADR 0026）：操作记录由 energy-api 里的操作记录服务直接从 PostgreSQL Outbox 领取",
+      "action": "Kafka/Redpanda 不得重新进入当前 Phase 1 Compose"
     },
     {
       "id": "SECRETS-001",

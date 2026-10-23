@@ -10,17 +10,6 @@
       "headers": { "Authorization": "[REDACTED_SECRET]" }
     },
     {
-      "owner": "audit-owner",
-      "method": "POST",
-      "path": "/api/v1/audit/search",
-      "expectedStatuses": [200],
-      "headers": {
-        "Authorization": "[REDACTED_SECRET]",
-        "Content-Type": "application/json"
-      },
-      "body": "{\"limit\":1}"
-    },
-    {
       "owner": "core-owner",
       "method": "GET",
       "path": "/api/v1/sites",

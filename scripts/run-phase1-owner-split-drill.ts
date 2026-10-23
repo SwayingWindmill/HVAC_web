@@ -16,7 +16,6 @@ const outputArg = process.argv.find((arg) => arg.startsWith("--output="));
 const confirmed = process.argv.includes("--confirm-staging-owner-split");
 const ownerServices = [
   "iam-owner",
-  "audit-owner",
   "core-owner",
   "telemetry-query-owner",
   "command-owner",

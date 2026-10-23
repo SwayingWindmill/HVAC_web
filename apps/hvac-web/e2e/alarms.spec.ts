@@ -81,3 +81,32 @@ test('解释 opens the assistant with a question about the alarm in view', async
   const panel = page.getByRole('complementary', { name: 'AI 助手' });
   await expect(panel.getByRole('textbox', { name: '向助手提问' })).toHaveValue('2026年9月29日 16:26 开始的告警「冷冻水回水温度过低」是怎么回事？');
 });
+
+// #693: the rules the Site evaluates now, read-only, in the operator's words.
+test('正在生效的规则 lists each rule with its devices, conditions and severity', async ({ page }) => {
+  await page.goto(`/operations/alarms?site=${SITE_ID}`);
+  await page.getByRole('tab', { name: /正在生效的规则/ }).click();
+  await expect(page).toHaveURL(/tab=rules/);
+
+  const table = page.getByRole('table', { name: '正在生效的规则' });
+  const rule = (title: string) => table.getByRole('row').filter({ hasText: title });
+  await expect(table.getByRole('row')).toHaveCount(4);
+  await expect(rule('冷冻水回水温度过低')).toContainText('CHILLER-01、BTU-METER-01');
+  await expect(rule('冷冻水回水温度过低')).toContainText('chiller run state 为运行，并且');
+  await expect(rule('冷冻水回水温度过低')).toContainText('btu meter return water temperature 不高于 10.5 °C，持续 5 分钟');
+  await expect(rule('冷冻水回水温度过低')).toContainText('btu meter return water temperature 不低于 11.5 °C，或者 CHILLER-01 的 chiller run state 不为运行');
+  await expect(rule('冷冻水回水温度过低')).toContainText('重要');
+  await expect(rule('CWP-01 读数长时间没有更新')).toContainText('CWP-01 的 4 个读数中任一个超过 30 分钟没有新读数');
+  await expect(rule('CWP-01 读数长时间没有更新')).toContainText('CWP-01 的 4 个读数都有新读数');
+  await expect(rule('网关上报中断')).toContainText('3 台设备的 5 个读数都超过 15 分钟没有新读数');
+  await expect(rule('网关上报中断')).toContainText('3 台设备的 5 个读数中任一个有新读数');
+  // Operators see names, never the identifiers or enums behind them.
+  await expect(table).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|RUNNING|NO_DATA|MAJOR/);
+});
+
+test('an alarm recovered because its rule was retired says so', async ({ page, gateway }) => {
+  const cleared = gateway.alarms.find((alarm) => alarm.condition === 'CLEARED')!;
+  cleared.timeline.at(-1).reason = 'RULE_RETIRED';
+  await page.goto(`/operations/alarms?site=${SITE_ID}&view=cleared&inspect=${cleared.alarmId}`);
+  await expect(page.getByRole('region', { name: '告警详情' })).toContainText('系统 · 规则已撤销');
+});

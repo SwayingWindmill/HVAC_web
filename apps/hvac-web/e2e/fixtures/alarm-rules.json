@@ -1,0 +1,269 @@
+[
+  {
+    "ruleId": "01910000-b100-7000-8000-00000000000a",
+    "title": "冷冻水回水温度过低",
+    "severity": "MAJOR",
+    "triggerMode": "DURATION",
+    "durationSeconds": 300,
+    "raise": {
+      "kind": "AND",
+      "children": [
+        {
+          "kind": "COMPARE",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000001",
+            "pointCode": "run_state"
+          },
+          "operator": "EQ",
+          "value": "RUNNING"
+        },
+        {
+          "kind": "COMPARE",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000001",
+            "pointCode": "cooling_capacity"
+          },
+          "operator": "GTE",
+          "value": 360
+        },
+        {
+          "kind": "COMPARE",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000006",
+            "pointCode": "return_water_temperature"
+          },
+          "operator": "LTE",
+          "value": 10.5
+        }
+      ]
+    },
+    "clear": {
+      "kind": "OR",
+      "children": [
+        {
+          "kind": "COMPARE",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000006",
+            "pointCode": "return_water_temperature"
+          },
+          "operator": "GTE",
+          "value": 11.5
+        },
+        {
+          "kind": "COMPARE",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000001",
+            "pointCode": "run_state"
+          },
+          "operator": "NE",
+          "value": "RUNNING"
+        }
+      ]
+    }
+  },
+  {
+    "ruleId": "01910000-b100-7000-8000-00000000000b",
+    "title": "CWP-01 读数长时间没有更新",
+    "severity": "WARNING",
+    "triggerMode": "SIMPLE",
+    "raise": {
+      "kind": "OR",
+      "children": [
+        {
+          "kind": "NO_DATA",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000003",
+            "pointCode": "flow_rate"
+          },
+          "ageSeconds": 1800
+        },
+        {
+          "kind": "NO_DATA",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000003",
+            "pointCode": "frequency"
+          },
+          "ageSeconds": 1800
+        },
+        {
+          "kind": "NO_DATA",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000003",
+            "pointCode": "power"
+          },
+          "ageSeconds": 1800
+        },
+        {
+          "kind": "NO_DATA",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000003",
+            "pointCode": "run_state"
+          },
+          "ageSeconds": 1800
+        }
+      ]
+    },
+    "clear": {
+      "kind": "AND",
+      "children": [
+        {
+          "kind": "RANGE",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000003",
+            "pointCode": "flow_rate"
+          },
+          "minimum": -1000000000000.0,
+          "maximum": 1000000000000.0
+        },
+        {
+          "kind": "RANGE",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000003",
+            "pointCode": "frequency"
+          },
+          "minimum": -1000000000000.0,
+          "maximum": 1000000000000.0
+        },
+        {
+          "kind": "RANGE",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000003",
+            "pointCode": "power"
+          },
+          "minimum": -1000000000000.0,
+          "maximum": 1000000000000.0
+        },
+        {
+          "kind": "COMPARE",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000003",
+            "pointCode": "run_state"
+          },
+          "operator": "NE",
+          "value": ""
+        }
+      ]
+    }
+  },
+  {
+    "ruleId": "01910000-b100-7000-8000-00000000000c",
+    "title": "网关上报中断",
+    "severity": "MAJOR",
+    "triggerMode": "SIMPLE",
+    "raise": {
+      "kind": "AND",
+      "children": [
+        {
+          "kind": "AND",
+          "children": [
+            {
+              "kind": "NO_DATA",
+              "reading": {
+                "deviceId": "018f3e00-4000-7000-8000-000000000001",
+                "pointCode": "power"
+              },
+              "ageSeconds": 900
+            },
+            {
+              "kind": "NO_DATA",
+              "reading": {
+                "deviceId": "018f3e00-4000-7000-8000-000000000001",
+                "pointCode": "run_state"
+              },
+              "ageSeconds": 900
+            }
+          ]
+        },
+        {
+          "kind": "AND",
+          "children": [
+            {
+              "kind": "NO_DATA",
+              "reading": {
+                "deviceId": "018f3e00-4000-7000-8000-000000000006",
+                "pointCode": "supply_water_temperature"
+              },
+              "ageSeconds": 900
+            },
+            {
+              "kind": "NO_DATA",
+              "reading": {
+                "deviceId": "018f3e00-4000-7000-8000-000000000006",
+                "pointCode": "return_water_temperature"
+              },
+              "ageSeconds": 900
+            }
+          ]
+        },
+        {
+          "kind": "NO_DATA",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000003",
+            "pointCode": "power"
+          },
+          "ageSeconds": 900
+        }
+      ]
+    },
+    "clear": {
+      "kind": "OR",
+      "children": [
+        {
+          "kind": "OR",
+          "children": [
+            {
+              "kind": "RANGE",
+              "reading": {
+                "deviceId": "018f3e00-4000-7000-8000-000000000001",
+                "pointCode": "power"
+              },
+              "minimum": -1000000000000.0,
+              "maximum": 1000000000000.0
+            },
+            {
+              "kind": "COMPARE",
+              "reading": {
+                "deviceId": "018f3e00-4000-7000-8000-000000000001",
+                "pointCode": "run_state"
+              },
+              "operator": "NE",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "kind": "OR",
+          "children": [
+            {
+              "kind": "RANGE",
+              "reading": {
+                "deviceId": "018f3e00-4000-7000-8000-000000000006",
+                "pointCode": "supply_water_temperature"
+              },
+              "minimum": -1000000000000.0,
+              "maximum": 1000000000000.0
+            },
+            {
+              "kind": "RANGE",
+              "reading": {
+                "deviceId": "018f3e00-4000-7000-8000-000000000006",
+                "pointCode": "return_water_temperature"
+              },
+              "minimum": -1000000000000.0,
+              "maximum": 1000000000000.0
+            }
+          ]
+        },
+        {
+          "kind": "RANGE",
+          "reading": {
+            "deviceId": "018f3e00-4000-7000-8000-000000000003",
+            "pointCode": "power"
+          },
+          "minimum": -1000000000000.0,
+          "maximum": 1000000000000.0
+        }
+      ]
+    }
+  }
+]

@@ -116,6 +116,7 @@ const expectedOperations = {
   getAlarmV212: ['get', '/api/v1/alarms/{alarmId}'],
   ackAlarmV212: ['post', '/api/v1/alarms/{alarmId}/ack'],
   assignAlarmV212: ['post', '/api/v1/alarms/{alarmId}/assign'],
+  listSiteAlarmRules: ['get', '/api/v1/alarm-rules'],
   listCommandsV212: ['get', '/api/v1/commands'],
   getCommandV212: ['get', '/api/v1/commands/{commandId}'],
   approveCommandV212: ['post', '/api/v1/commands/{commandId}/approve'],
@@ -173,6 +174,7 @@ const expectedSuccessSchemas = {
   getSiteAssetModel: 'SiteAssetModel',
   getSiteTariff: 'SiteTariff',
   getDevice: 'Device',
+  listSiteAlarmRules: 'AlarmRuleList',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
@@ -375,6 +377,7 @@ const replacements = {
   __ALARM_PATH__: operations.getAlarmV212.path,
   __ALARM_ACK_PATH__: operations.ackAlarmV212.path,
   __ALARM_ASSIGN_PATH__: operations.assignAlarmV212.path,
+  __ALARM_RULES_PATH__: operations.listSiteAlarmRules.path,
   __COMMANDS_PATH__: operations.listCommandsV212.path,
   __COMMAND_PATH__: operations.getCommandV212.path,
   __COMMAND_APPROVE_PATH__: operations.approveCommandV212.path,

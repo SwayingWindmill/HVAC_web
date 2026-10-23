@@ -95,7 +95,7 @@ func TestAlarmHTTPListsAndReadsExactScopedProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: memory, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := NewHTTPHandler(HTTPConfig{Store: memory, Rules: siteRules{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestAlarmHTTPRejectsMissingAndForgedIdentityBeforeStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &countingStore{delegate: memory}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := NewHTTPHandler(HTTPConfig{Store: store, Rules: siteRules{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestAlarmHTTPRejectsReadContextWithAdditionalAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &countingStore{delegate: memory}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := NewHTTPHandler(HTTPConfig{Store: store, Rules: siteRules{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestAlarmHTTPRejectsCrossSiteReadContextWithoutLeakage(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &countingStore{delegate: memory}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := NewHTTPHandler(HTTPConfig{Store: store, Rules: siteRules{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestAlarmHTTPRejectsCrossScopeStoreProjection(t *testing.T) {
 	signer := testSigner(t)
 	alarm := validHTTPAlarm()
 	alarm.SiteID = testOtherSiteID
-	handler, err := NewHTTPHandler(HTTPConfig{Store: invalidProjectionStore{alarm: alarm}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := NewHTTPHandler(HTTPConfig{Store: invalidProjectionStore{alarm: alarm}, Rules: siteRules{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestAlarmHTTPAppliesAndReplaysAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: memory, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := NewHTTPHandler(HTTPConfig{Store: memory, Rules: siteRules{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestAlarmHTTPAcknowledgementIsNaturallyIdempotentWithoutKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: memory, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := NewHTTPHandler(HTTPConfig{Store: memory, Rules: siteRules{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestAlarmHTTPRejectsWrongWriteActionBeforeStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &countingStore{delegate: memory}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := NewHTTPHandler(HTTPConfig{Store: store, Rules: siteRules{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestAlarmHTTPAcceptsAListGrantOnlyFromTheWorkloadItNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHTTPHandler(HTTPConfig{Store: memory, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	handler, err := NewHTTPHandler(HTTPConfig{Store: memory, Rules: siteRules{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}

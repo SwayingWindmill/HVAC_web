@@ -286,7 +286,7 @@ func (server *server) serveOperationsIngest(writer http.ResponseWriter, request 
 		return http.StatusBadRequest
 	}
 	_, err = server.operationsWriter.ConsumeOperations(request.Context(), payload, MessageMetadata{
-		Topic: "operations-http", Partition: 0, Offset: 0, ReceivedAt: server.now().UTC(),
+		Topic: "operations-http", ReceivedAt: server.now().UTC(),
 	})
 	if errors.Is(err, ErrEnvelopeConflict) {
 		writeAuditProblem(writer, http.StatusConflict, "AUDIT_EVENT_CONFLICT", "Operations Audit event identity conflicts with existing content")

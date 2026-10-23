@@ -72,13 +72,18 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The migration freeze check reads registered migrations at the PR's base commit.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "22.22.0"
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=contracts --profiles="${{ needs.classify.outputs.contract_profiles }}"
+      - env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/run-pr-gate.mjs --gate=contracts --profiles="${{ needs.classify.outputs.contract_profiles }}"
 
   contracts:
     name: pr / contracts

@@ -19,6 +19,10 @@ type commandReportedStateStore struct {
 	now   time.Time
 }
 
+func (store *commandReportedStateStore) LatestSnapshot(context.Context, string, string) (telemetryapi.DeviceObservationSnapshot, error) {
+	return telemetryapi.DeviceObservationSnapshot{}, ErrSnapshotNotFound
+}
+
 func (store *commandReportedStateStore) EvaluateAndRead(_ context.Context, target telemetryauth.Target, evaluatedAt time.Time) (SnapshotCommit, error) {
 	store.calls++
 	store.now = evaluatedAt

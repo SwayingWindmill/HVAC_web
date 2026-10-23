@@ -65,7 +65,7 @@
     { "kind": "projection", "name": "ingest-deduplication", "writer": "telemetry-runtime-service" },
     { "kind": "projection", "name": "ingest-quarantine", "writer": "telemetry-runtime-service" },
     { "kind": "outbox", "name": "telemetry-history-outbox", "writer": "telemetry-runtime-service", "relay": "telemetry-runtime-service-history-relay" },
-    { "kind": "outbox", "name": "telemetry-publication-outbox", "writer": "telemetry-runtime-service", "relay": "outbox-relay" },
+    { "kind": "outbox", "name": "telemetry-publication-outbox", "writer": "telemetry-runtime-service", "relay": "telemetry-worker" },
     { "kind": "event-family", "name": "hvac.telemetry.device-snapshot.v1", "writer": "telemetry-runtime-service" }
   ],
   "ingestSources": [

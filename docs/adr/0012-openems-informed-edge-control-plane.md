@@ -1,6 +1,6 @@
 # ADR 0012：参照 OpenEMS 的现场控制层
 
-状态：已采纳（2026-08-17）。名词按 ADR 0013（租户 / 空间 / 资产 / 可选的物理传感器）。逐项的对照结果在 `contracts/architecture/edge-control-plane.v1.json`。
+状态：已采纳（2026-08-17）。ADR 0027 修订：本 ADR 的现场控制层只用在我们自己的运行时（模拟冷站、ATV630 协议验收）上；真实站点的指令由站点自己的网关执行，检查在平台。名词按 ADR 0013（租户 / 空间 / 资产 / 可选的物理传感器）。逐项的对照结果在 `contracts/architecture/edge-control-plane.v1.json`。
 
 现在的情况：控制周期、过程映像、通道、驱动、协议桥（Modbus）、指令意图、现场时序数据这些基础在 `libs/edgecontrol` 里，模拟冷站和 ATV630 协议验收（`tools/eg8200-simulator`）用它们。松雅轩的真实网关是 Node-RED，不跑这套运行时；现场的指令下发也还没接到 Node-RED（见 `docs/specs/site-gateway-onboarding.md`）。
 

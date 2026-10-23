@@ -20,6 +20,7 @@ import {
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
 import { Kbd } from '@/components/ui/kbd';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useDeviceNames } from '@/features/assets/use-device-names';
 import { useDebouncedCallback } from '@/hooks/use-debounced-callback';
@@ -36,6 +37,7 @@ import {
   type AlarmSeverity,
 } from '../alarm-api';
 import { alarmDailyCounts, alarmsByDevice, alarmsInWindow, meanTimeToClear } from '../alarm-history';
+import { siteAlarmRulesQuery } from '../alarm-rules';
 import {
   formatDuration,
   formatSpan,
@@ -47,6 +49,7 @@ import {
 } from '../alarm-presentation';
 import { useAlarmActions } from '../use-alarm-actions';
 import { AlarmDetailPane } from './AlarmDetailPane';
+import { AlarmRulesTable } from './AlarmRulesTable';
 
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/operations/alarms');
@@ -165,6 +168,8 @@ export function AlarmsWorkspace() {
 
   const active = useQuery(activeAlarmsQuery(site.id));
   const history = useQuery(alarmHistoryQuery(site.id));
+  const rules = useQuery(siteAlarmRulesQuery(site.id));
+  const showingRules = search.tab === 'rules';
   const filter = VIEWS.find((candidate) => candidate.value === view)!.filter;
   const list = useInfiniteQuery({
     queryKey: alarmKeys.list(site.id, filter),
@@ -205,7 +210,7 @@ export function AlarmsWorkspace() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (event.metaKey || event.ctrlKey || event.altKey || target?.closest('input, textarea, [contenteditable], [role="dialog"]')) return;
+      if (showingRules || event.metaKey || event.ctrlKey || event.altKey || target?.closest('input, textarea, [contenteditable], [role="dialog"]')) return;
       const index = ordered.findIndex((alarm) => alarm.alarmId === selectedId);
       const key = event.key.toLowerCase();
       if ((key === 'j' || key === 'k') && ordered.length > 0) {
@@ -229,179 +234,193 @@ export function AlarmsWorkspace() {
   const counts: Partial<Record<AlarmView, number>> = active.data ? { active: activeItems.length, unack: unacknowledged.length } : {};
 
   return (
-    <Main fixed>
+    <Main fixed={!showingRules}>
       <PageHeader
         title="告警"
         description={site.displayName}
         actions={(
-          <Button variant="outline" onClick={() => { void active.refetch(); void list.refetch(); void history.refetch(); }}>
+          <Button variant="outline" onClick={() => { void active.refetch(); void list.refetch(); void history.refetch(); void rules.refetch(); }}>
             <RefreshCw data-icon="inline-start" />
             刷新
           </Button>
         )}
       />
 
-      <AlarmSummary
-        alarms={windowed}
-        days={days}
-        timeZone={site.timezone}
-        now={now}
-        deviceNames={deviceNames}
-        onDevice={(device) => setSearch({ device, view: 'all', inspect: undefined })}
-      />
+      <Tabs value={showingRules ? 'rules' : 'alarms'} onValueChange={(value) => setSearch({ tab: value === 'rules' ? 'rules' : undefined })}>
+        <TabsList variant="line" className="h-9 w-full justify-start gap-5 rounded-none border-b p-0">
+          <TabsTrigger value="alarms" className="h-9 flex-none gap-1.5 px-0 after:bottom-[-1px]!">告警记录</TabsTrigger>
+          <TabsTrigger value="rules" className="h-9 flex-none gap-1.5 px-0 after:bottom-[-1px]!">
+            正在生效的规则
+            {rules.data ? <span className="font-mono text-[11px] text-subtle-foreground">{rules.data.length}</span> : null}
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
 
-      <Panel aria-label="告警分诊" className="grid h-[calc(100svh-300px)] min-h-[520px] grid-cols-[420px_minmax(0,1fr)]">
-        <div className="flex min-h-0 flex-col border-r">
-          <ToggleGroup
-            type="single"
-            value={view}
-            onValueChange={(value) => { if (value) setSearch({ view: value as AlarmView, inspect: undefined }); }}
-            aria-label="告警范围"
-            className="h-11 w-full justify-start gap-5 rounded-none border-b border-divider px-4"
-          >
-            {VIEWS.map((option) => (
-              <ToggleGroupItem
-                key={option.value}
-                value={option.value}
-                className="h-full flex-none gap-1.5 rounded-none border-0 px-0 text-[13px] font-medium text-muted-foreground shadow-[inset_0_-2px_0_transparent] hover:bg-transparent hover:text-foreground data-[state=on]:bg-transparent data-[state=on]:text-foreground data-[state=on]:shadow-[inset_0_-2px_0_var(--primary)]"
-              >
-                {option.label}
-                {counts[option.value] !== undefined ? <span className="font-mono text-[11px] text-subtle-foreground">{counts[option.value]}</span> : null}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-
-          <div role="toolbar" aria-label="筛选告警" className="flex flex-wrap items-center gap-2 border-b border-divider px-4 py-2.5">
-            <InputGroup className="h-8 min-w-0 flex-1">
-              <InputGroupAddon><Search /></InputGroupAddon>
-              <InputGroupInput
-                aria-label="搜索告警"
-                placeholder="告警、说明或设备"
-                value={searchDraft}
-                onChange={(event) => {
-                  setSearchDraft(event.target.value);
-                  commitQuery(event.target.value.trim());
-                }}
-              />
-            </InputGroup>
-            <Faceted
-              multiple
-              value={severities}
-              onValueChange={(value) => setSearch({ severity: value && value.length > 0 ? value as AlarmSeverity[] : undefined })}
-            >
-              <FacetedTrigger asChild>
-                <Button variant="outline" className="border-dashed font-normal">
-                  <FacetedBadgeList options={SEVERITY_ORDER.map((severity) => ({ label: SEVERITY_LABELS[severity], value: severity }))} placeholder="严重度" />
-                </Button>
-              </FacetedTrigger>
-              <FacetedContent className="w-44">
-                <FacetedList>
-                  <FacetedEmpty>没有选项</FacetedEmpty>
-                  <FacetedGroup>
-                    {SEVERITY_ORDER.map((severity) => (
-                      <FacetedItem key={severity} value={severity}>
-                        <SeverityMark level={SEVERITY_LEVEL[severity]} label="" />
-                        <span>{SEVERITY_LABELS[severity]}</span>
-                      </FacetedItem>
-                    ))}
-                  </FacetedGroup>
-                </FacetedList>
-              </FacetedContent>
-            </Faceted>
-            {search.device ? (
-              <Button variant="outline" size="sm" aria-label={`清除设备筛选：${deviceNames.get(search.device) ?? '未登记设备'}`} onClick={() => setSearch({ device: undefined })}>
-                设备：{deviceNames.get(search.device) ?? '未登记设备'}
-                <X data-icon="inline-end" />
-              </Button>
-            ) : null}
-            {filtered ? (
-              <Button variant="ghost" size="sm" onClick={() => { setSearchDraft(''); setSearch({ severity: undefined, device: undefined, q: undefined }); }}>
-                清除筛选
-              </Button>
-            ) : null}
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {list.isError ? (
-              <p className="px-4 py-6 text-sm text-destructive-text">告警暂时读不到：{list.error.message}</p>
-            ) : list.isPending || (readingMore && alarms.length === 0) ? (
-              <div className="flex flex-col gap-2 p-4"><Skeleton className="h-14" /><Skeleton className="h-14" /><Skeleton className="h-14" /></div>
-            ) : alarms.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
-                <span className="flex size-9 items-center justify-center rounded-xl bg-success-soft text-success-text"><CircleCheck className="size-[18px]" aria-hidden="true" /></span>
-                <p className="text-sm font-semibold">{filtered ? '没有符合条件的告警' : view === 'active' ? '当前没有活动告警' : '没有告警'}</p>
-                <p className="text-xs text-muted-foreground">
-                  {filtered ? '调整筛选条件后再看' : windowed && windowed.length > 0 ? `近 ${days} 天触发 ${windowed.length} 条，已全部处理` : `近 ${days} 天没有触发告警`}
-                </p>
-              </div>
-            ) : (
-              <ul aria-label="告警记录">
-                {groups.map((group) => (
-                  <li key={group.label}>
-                    <div className="flex h-[34px] items-center bg-muted px-4 text-xs font-medium text-muted-foreground">
-                      {group.label}
-                      <span className="ml-auto font-mono text-subtle-foreground">{group.alarms.length}</span>
-                    </div>
-                    <ul>
-                      {group.alarms.map((alarm) => {
-                        const isSelected = alarm.alarmId === selectedId;
-                        return (
-                          <li key={alarm.alarmId} id={`alarm-${alarm.alarmId}`}>
-                            <button
-                              type="button"
-                              aria-current={isSelected ? 'true' : undefined}
-                              onClick={() => setSearch({ inspect: alarm.alarmId })}
-                              className={cn(
-                                'relative grid w-full grid-cols-[12px_minmax(0,1fr)_auto] gap-x-2.5 gap-y-[3px] border-b border-divider px-4 pt-[11px] pb-3 text-left outline-none hover:bg-accent focus-visible:bg-accent',
-                                isSelected && 'bg-primary-soft hover:bg-primary-soft before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-primary',
-                              )}
-                            >
-                              <SeverityMark level={SEVERITY_LEVEL[alarm.currentSeverity]} label={SEVERITY_LABELS[alarm.currentSeverity]} className="row-span-2 mt-[5px]" />
-                              <span className="truncate text-sm font-semibold">{alarm.title}</span>
-                              <span className="text-xs whitespace-nowrap text-subtle-foreground" title={formatTime(alarm.firstOccurredAt, site.timezone)}>
-                                {formatRelative(alarm.firstOccurredAt, now)}
-                              </span>
-                              <span className="col-span-2 col-start-2 truncate text-xs text-muted-foreground">
-                                {alarm.deviceId ? deviceNames.get(alarm.deviceId) ?? '—' : '站点'}
-                                {' · '}持续 {formatDuration(alarm.firstOccurredAt, alarm.clearedAt, now)}
-                                {alarm.occurrenceCount > 1 ? ` · 发生 ${alarm.occurrenceCount} 次` : ''}
-                                {' · '}{alarm.assigneeId ? personLabel(alarm.assigneeId, myId) : '未分配'}
-                                {' · '}{alarm.condition === 'CLEARED' ? '已恢复' : alarm.acknowledgement ? '已确认' : '未确认'}
-                              </span>
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {readingMore && alarms.length > 0 ? <p className="px-4 py-3 text-xs text-muted-foreground">正在读取全部记录以完成筛选…</p> : null}
-            {list.hasNextPage && !readingMore ? (
-              <div className="flex justify-center p-3">
-                <Button variant="outline" size="sm" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
-                  {list.isFetchingNextPage ? '正在读取…' : '加载更早的告警'}
-                </Button>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="flex items-center gap-1.5 border-t border-divider px-4 py-2 text-[11px] text-subtle-foreground">
-            <Kbd>J</Kbd><Kbd>K</Kbd> 上下切换
-            <Kbd className="ml-2">A</Kbd> 确认
-            <Kbd className="ml-2">C</Kbd> 创建工单
-          </div>
-        </div>
-
-        <AlarmDetailPane
-          alarmId={selected?.alarmId ?? search.inspect}
-          empty={list.isSuccess && alarms.length === 0}
+      {showingRules ? <AlarmRulesTable siteId={site.id} /> : (
+        <>
+        <AlarmSummary
+          alarms={windowed}
+          days={days}
+          timeZone={site.timezone}
+          now={now}
           deviceNames={deviceNames}
-          creatingWorkOrder={creatingWorkOrder}
-          onCreatingWorkOrderChange={setCreatingWorkOrder}
+          onDevice={(device) => setSearch({ device, view: 'all', inspect: undefined })}
         />
-      </Panel>
+
+        <Panel aria-label="告警分诊" className="grid h-[calc(100svh-354px)] min-h-[520px] grid-cols-[420px_minmax(0,1fr)]">
+          <div className="flex min-h-0 flex-col border-r">
+            <ToggleGroup
+              type="single"
+              value={view}
+              onValueChange={(value) => { if (value) setSearch({ view: value as AlarmView, inspect: undefined }); }}
+              aria-label="告警范围"
+              className="h-11 w-full justify-start gap-5 rounded-none border-b border-divider px-4"
+            >
+              {VIEWS.map((option) => (
+                <ToggleGroupItem
+                  key={option.value}
+                  value={option.value}
+                  className="h-full flex-none gap-1.5 rounded-none border-0 px-0 text-[13px] font-medium text-muted-foreground shadow-[inset_0_-2px_0_transparent] hover:bg-transparent hover:text-foreground data-[state=on]:bg-transparent data-[state=on]:text-foreground data-[state=on]:shadow-[inset_0_-2px_0_var(--primary)]"
+                >
+                  {option.label}
+                  {counts[option.value] !== undefined ? <span className="font-mono text-[11px] text-subtle-foreground">{counts[option.value]}</span> : null}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+
+            <div role="toolbar" aria-label="筛选告警" className="flex flex-wrap items-center gap-2 border-b border-divider px-4 py-2.5">
+              <InputGroup className="h-8 min-w-0 flex-1">
+                <InputGroupAddon><Search /></InputGroupAddon>
+                <InputGroupInput
+                  aria-label="搜索告警"
+                  placeholder="告警、说明或设备"
+                  value={searchDraft}
+                  onChange={(event) => {
+                    setSearchDraft(event.target.value);
+                    commitQuery(event.target.value.trim());
+                  }}
+                />
+              </InputGroup>
+              <Faceted
+                multiple
+                value={severities}
+                onValueChange={(value) => setSearch({ severity: value && value.length > 0 ? value as AlarmSeverity[] : undefined })}
+              >
+                <FacetedTrigger asChild>
+                  <Button variant="outline" className="border-dashed font-normal">
+                    <FacetedBadgeList options={SEVERITY_ORDER.map((severity) => ({ label: SEVERITY_LABELS[severity], value: severity }))} placeholder="严重度" />
+                  </Button>
+                </FacetedTrigger>
+                <FacetedContent className="w-44">
+                  <FacetedList>
+                    <FacetedEmpty>没有选项</FacetedEmpty>
+                    <FacetedGroup>
+                      {SEVERITY_ORDER.map((severity) => (
+                        <FacetedItem key={severity} value={severity}>
+                          <SeverityMark level={SEVERITY_LEVEL[severity]} label="" />
+                          <span>{SEVERITY_LABELS[severity]}</span>
+                        </FacetedItem>
+                      ))}
+                    </FacetedGroup>
+                  </FacetedList>
+                </FacetedContent>
+              </Faceted>
+              {search.device ? (
+                <Button variant="outline" size="sm" aria-label={`清除设备筛选：${deviceNames.get(search.device) ?? '未登记设备'}`} onClick={() => setSearch({ device: undefined })}>
+                  设备：{deviceNames.get(search.device) ?? '未登记设备'}
+                  <X data-icon="inline-end" />
+                </Button>
+              ) : null}
+              {filtered ? (
+                <Button variant="ghost" size="sm" onClick={() => { setSearchDraft(''); setSearch({ severity: undefined, device: undefined, q: undefined }); }}>
+                  清除筛选
+                </Button>
+              ) : null}
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {list.isError ? (
+                <p className="px-4 py-6 text-sm text-destructive-text">告警暂时读不到：{list.error.message}</p>
+              ) : list.isPending || (readingMore && alarms.length === 0) ? (
+                <div className="flex flex-col gap-2 p-4"><Skeleton className="h-14" /><Skeleton className="h-14" /><Skeleton className="h-14" /></div>
+              ) : alarms.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
+                  <span className="flex size-9 items-center justify-center rounded-xl bg-success-soft text-success-text"><CircleCheck className="size-[18px]" aria-hidden="true" /></span>
+                  <p className="text-sm font-semibold">{filtered ? '没有符合条件的告警' : view === 'active' ? '当前没有活动告警' : '没有告警'}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {filtered ? '调整筛选条件后再看' : windowed && windowed.length > 0 ? `近 ${days} 天触发 ${windowed.length} 条，已全部处理` : `近 ${days} 天没有触发告警`}
+                  </p>
+                </div>
+              ) : (
+                <ul aria-label="告警记录">
+                  {groups.map((group) => (
+                    <li key={group.label}>
+                      <div className="flex h-[34px] items-center bg-muted px-4 text-xs font-medium text-muted-foreground">
+                        {group.label}
+                        <span className="ml-auto font-mono text-subtle-foreground">{group.alarms.length}</span>
+                      </div>
+                      <ul>
+                        {group.alarms.map((alarm) => {
+                          const isSelected = alarm.alarmId === selectedId;
+                          return (
+                            <li key={alarm.alarmId} id={`alarm-${alarm.alarmId}`}>
+                              <button
+                                type="button"
+                                aria-current={isSelected ? 'true' : undefined}
+                                onClick={() => setSearch({ inspect: alarm.alarmId })}
+                                className={cn(
+                                  'relative grid w-full grid-cols-[12px_minmax(0,1fr)_auto] gap-x-2.5 gap-y-[3px] border-b border-divider px-4 pt-[11px] pb-3 text-left outline-none hover:bg-accent focus-visible:bg-accent',
+                                  isSelected && 'bg-primary-soft hover:bg-primary-soft before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-primary',
+                                )}
+                              >
+                                <SeverityMark level={SEVERITY_LEVEL[alarm.currentSeverity]} label={SEVERITY_LABELS[alarm.currentSeverity]} className="row-span-2 mt-[5px]" />
+                                <span className="truncate text-sm font-semibold">{alarm.title}</span>
+                                <span className="text-xs whitespace-nowrap text-subtle-foreground" title={formatTime(alarm.firstOccurredAt, site.timezone)}>
+                                  {formatRelative(alarm.firstOccurredAt, now)}
+                                </span>
+                                <span className="col-span-2 col-start-2 truncate text-xs text-muted-foreground">
+                                  {alarm.deviceId ? deviceNames.get(alarm.deviceId) ?? '—' : '站点'}
+                                  {' · '}持续 {formatDuration(alarm.firstOccurredAt, alarm.clearedAt, now)}
+                                  {alarm.occurrenceCount > 1 ? ` · 发生 ${alarm.occurrenceCount} 次` : ''}
+                                  {' · '}{alarm.assigneeId ? personLabel(alarm.assigneeId, myId) : '未分配'}
+                                  {' · '}{alarm.condition === 'CLEARED' ? '已恢复' : alarm.acknowledgement ? '已确认' : '未确认'}
+                                </span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {readingMore && alarms.length > 0 ? <p className="px-4 py-3 text-xs text-muted-foreground">正在读取全部记录以完成筛选…</p> : null}
+              {list.hasNextPage && !readingMore ? (
+                <div className="flex justify-center p-3">
+                  <Button variant="outline" size="sm" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
+                    {list.isFetchingNextPage ? '正在读取…' : '加载更早的告警'}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex items-center gap-1.5 border-t border-divider px-4 py-2 text-[11px] text-subtle-foreground">
+              <Kbd>J</Kbd><Kbd>K</Kbd> 上下切换
+              <Kbd className="ml-2">A</Kbd> 确认
+              <Kbd className="ml-2">C</Kbd> 创建工单
+            </div>
+          </div>
+
+          <AlarmDetailPane
+            alarmId={selected?.alarmId ?? search.inspect}
+            empty={list.isSuccess && alarms.length === 0}
+            deviceNames={deviceNames}
+            creatingWorkOrder={creatingWorkOrder}
+            onCreatingWorkOrderChange={setCreatingWorkOrder}
+          />
+        </Panel>
+        </>
+      )}
     </Main>
   );
 }
