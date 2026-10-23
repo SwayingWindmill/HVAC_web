@@ -32,11 +32,15 @@ function ensureRoleCredentials() {
   const file = runtimePath('db-role-credentials', 'roles.sql');
   const current = readFileSync(file, 'utf8');
   const roleOf = (line) => /^ALTER ROLE (\w+) WITH PASSWORD /.exec(line)?.[1];
-  const present = new Set(current.split('\n').map(roleOf).filter(Boolean));
-  const missing = template.split('\n').map(roleOf).filter((role) => role && !present.has(role));
-  if (missing.length === 0) return;
-  const additions = missing.map((role) => `ALTER ROLE ${role} WITH PASSWORD '${randomBytes(24).toString('hex')}';`).join('\n');
-  writePrivate(file, `${current.trimEnd()}\n${additions}\n`);
+  const wanted = new Set(template.split('\n').map(roleOf).filter(Boolean));
+  const lines = current.trimEnd().split('\n');
+  // A role the bootstrap no longer creates (#691) would stop the migrator on a fresh volume.
+  const kept = lines.filter((line) => !roleOf(line) || wanted.has(roleOf(line)));
+  const present = new Set(kept.map(roleOf).filter(Boolean));
+  const missing = [...wanted].filter((role) => !present.has(role));
+  if (missing.length === 0 && kept.length === lines.length) return;
+  const additions = missing.map((role) => `ALTER ROLE ${role} WITH PASSWORD '${randomBytes(24).toString('hex')}';`);
+  writePrivate(file, `${[...kept, ...additions].join('\n')}\n`);
 }
 
 // Data directories bind-mounted into services that run as 65532 must be writable by them.

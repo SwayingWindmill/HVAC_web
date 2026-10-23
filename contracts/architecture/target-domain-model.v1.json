@@ -77,24 +77,14 @@
       "mustNotOwn": ["cloud-command-approval", "registry-master-data"]
     },
     {
-      "id": "rule-runtime",
-      "owns": ["node-definition", "rule-revision", "rule-binding", "rule-execution", "generic-rule-state", "continuation", "effect-intent", "trace-debug-evidence"],
-      "mustNotOwn": ["alarm-final-fact", "command-final-fact", "telemetry-final-fact", "metric-final-fact", "provider-delivery-receipt"]
-    },
-    {
       "id": "alarm",
       "owns": ["alarm-policy-revision", "alarm-evaluation-state", "alarm-incident", "acknowledgment", "suppression", "assignment", "alarm-timeline", "correlation-group"],
       "mustNotOwn": ["provider-delivery-retry", "work-order-completion"]
     },
     {
       "id": "notification",
-      "owns": ["audience-definition", "notification-template-revision", "notification-policy-revision", "escalation-stage", "inbox-item", "notification-disposition"],
-      "mustNotOwn": ["provider-credential", "provider-retry-state"]
-    },
-    {
-      "id": "outbound-delivery",
-      "owns": ["integration-definition", "delivery-intent", "delivery-attempt", "delivery-receipt", "dead-letter", "replay-approval"],
-      "mustNotOwn": ["originating-business-state"]
+      "owns": ["wechat-reminder-allowance", "wechat-reminder-delivery"],
+      "mustNotOwn": ["provider-credential"]
     },
     {
       "id": "work-order",
@@ -123,7 +113,6 @@
     "families": [
       {"owner": "registry", "types": ["TemplateRevision", "TemplateAssignment"]},
       {"owner": "connectivity", "types": ["TransportProfileRevision", "DesiredConfigurationRevision"]},
-      {"owner": "rule-runtime", "types": ["RuleRevision", "RuleBinding"]},
       {"owner": "alarm", "types": ["AlarmPolicyRevision"]},
       {"owner": "presentation", "types": ["DashboardViewDefinition"]},
       {"owner": "edge-control", "types": ["EdgeRelease"]},
@@ -156,7 +145,7 @@
   },
   "alarmModel": {
     "conditionStates": ["ACTIVE", "CLEARED"],
-    "orthogonalFacts": ["acknowledgment", "suppression", "assignment", "work-order-link", "notification-disposition"],
+    "orthogonalFacts": ["acknowledgment", "suppression", "assignment", "work-order-link"],
     "oneActiveIncidentPerTenantSiteFingerprint": true,
     "recurrenceCreatesNewIncident": true,
     "ackClearsCondition": false,
@@ -180,12 +169,6 @@
     "deviceAckIsSuccess": false,
     "independentReadbackRequired": true,
     "cloudMayBypassEdgeArbiter": false
-  },
-  "outboundDelivery": {
-    "owner": "outbound-delivery",
-    "stateChain": ["DeliveryIntent", "DeliveryAttempt", "DeliveryReceipt"],
-    "sharedBy": ["notification", "external-integration", "durable-ai-provider-effect-when-applicable"],
-    "credentialMaterialInPayloadForbidden": true
   },
   "edgeAuthority": {
     "cloudRegistryIsMaster": true,

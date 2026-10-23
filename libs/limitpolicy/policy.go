@@ -18,7 +18,6 @@ const (
 	DimensionRealtimeSubscribe Dimension = "realtime-subscription"
 	DimensionLoginToken        Dimension = "login-token"
 	DimensionExpensiveQuery    Dimension = "expensive-query"
-	DimensionNotification      Dimension = "notification"
 	DimensionOperationsAgent   Dimension = "operations-agent"
 )
 

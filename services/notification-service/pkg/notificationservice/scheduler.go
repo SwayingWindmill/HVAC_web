@@ -2,7 +2,6 @@ package notificationservice
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -46,81 +45,4 @@ func (scheduler *Scheduler) Close() {
 	if scheduler != nil && scheduler.pool != nil {
 		scheduler.pool.Close()
 	}
-}
-
-func (scheduler *Scheduler) ClaimDue(ctx context.Context, workerID string, now time.Time, leaseDuration time.Duration) (*IntentClaim, error) {
-	if scheduler == nil || scheduler.pool == nil || strings.TrimSpace(workerID) == "" || now.IsZero() || leaseDuration <= 0 {
-		return nil, errors.New("Notification scheduler claim input is invalid")
-	}
-	tx, err := scheduler.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-	var tenantID, intentID string
-	err = tx.QueryRow(ctx, `SELECT tenant_id::text,intent_id::text FROM notification_runtime.notification_intent
-WHERE due_at <= $1 AND (status='SCHEDULED' OR (status='CLAIMED' AND lease_until <= $1))
-ORDER BY due_at,intent_id FOR UPDATE SKIP LOCKED LIMIT 1`, now.UTC()).Scan(&tenantID, &intentID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	leaseUntil := now.UTC().Add(leaseDuration)
-	_, err = tx.Exec(ctx, `UPDATE notification_runtime.notification_intent
-SET status='CLAIMED',lease_owner=$3,lease_until=$4,lease_fence=lease_fence+1,updated_at=$2
-WHERE tenant_id=$1::uuid AND intent_id=$5::uuid`, tenantID, now.UTC(), strings.TrimSpace(workerID), leaseUntil, intentID)
-	if err != nil {
-		return nil, err
-	}
-	claim, err := scanSchedulerClaim(tx.QueryRow(ctx, intentClaimSelect+` WHERE tenant_id=$1::uuid AND intent_id=$2::uuid`, tenantID, intentID))
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	return &claim, nil
-}
-
-func (scheduler *Scheduler) NextUnboundExternalHandoff(ctx context.Context) (NotificationIntent, error) {
-	if scheduler == nil || scheduler.pool == nil {
-		return NotificationIntent{}, ErrNotFound
-	}
-	return scanIntent(scheduler.pool.QueryRow(ctx, intentSelect+`
- WHERE status='EXTERNAL_SUBMITTED' AND external_delivery_intent_id IS NULL
- ORDER BY updated_at,intent_id LIMIT 1`))
-}
-
-func (scheduler *Scheduler) NextPendingExternalDisposition(ctx context.Context) (NotificationIntent, error) {
-	if scheduler == nil || scheduler.pool == nil {
-		return NotificationIntent{}, ErrNotFound
-	}
-	return scanIntent(scheduler.pool.QueryRow(ctx, intentSelect+`
- WHERE status='EXTERNAL_SUBMITTED' AND external_delivery_intent_id IS NOT NULL AND disposition='PENDING'
- ORDER BY updated_at,intent_id LIMIT 1`))
-}
-
-func scanSchedulerClaim(row interface{ Scan(...any) error }) (IntentClaim, error) {
-	var claim IntentClaim
-	var recipients []byte
-	var leaseOwner *string
-	var leaseUntil *time.Time
-	if err := row.Scan(&claim.IntentID, &claim.TenantID, &claim.SiteID, &claim.SourceEventID, &claim.AlarmID, &claim.IncidentCorrelationID,
-		&claim.SourceAction, &claim.CurrentSeverity, &claim.PolicyRevisionID, &claim.AssignmentID, &claim.AssignmentRevision, &claim.Stage, &claim.Channel, &claim.IntegrationID,
-		&claim.MandatorySafety, &recipients, &claim.TemplateRevisionID, &claim.RenderedSubject, &claim.RenderedBody, &claim.DueAt, &claim.Status,
-		&claim.Disposition, &claim.ExternalDeliveryIntentID, &leaseOwner, &leaseUntil, &claim.Fence); err != nil {
-		return IntentClaim{}, err
-	}
-	if err := json.Unmarshal(recipients, &claim.Recipients); err != nil {
-		return IntentClaim{}, err
-	}
-	if leaseOwner != nil {
-		claim.WorkerID = *leaseOwner
-	}
-	if leaseUntil != nil {
-		claim.LeaseUntil = *leaseUntil
-	}
-	return claim, nil
 }

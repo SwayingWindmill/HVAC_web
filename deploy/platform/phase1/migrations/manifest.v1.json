@@ -64,10 +64,10 @@
         "infra/registry/postgres/init/009l-scheduler-job-v1.sql",
         "infra/registry/postgres/init/009-s04-tenant-iam-admin.sql",
         "infra/registry/postgres/init/010-command-authorization.sql",
-        "services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql",
         "services/notification-service/migrations/001_s16_notification.sql",
         "services/notification-service/migrations/002_wechat_reminders.sql",
         "services/notification-service/migrations/003_wechat_daily.sql",
+        "services/notification-service/migrations/004_drop_inbox_and_policies.sql",
         "infra/registry/postgres/init/010-s05-registry-writer.sql",
         "infra/registry/postgres/init/011-s08-metric-lifecycle.sql",
         "infra/registry/postgres/init/012-s19-settlement-projections.sql",
@@ -76,8 +76,6 @@
         "infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql",
         "infra/connectivity/postgres/init/003-gateway-uplink.sql",
         "infra/connectivity/postgres/init/004-gateway-enrollment.sql",
-        "services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql",
-        "services/rule-runtime-service/migrations/002_s21_rule_management.sql",
         "infra/registry/postgres/init/013-s23-maintenance-retirement.sql",
         "infra/registry/postgres/init/014-s21-rule-management-capability.sql",
         "infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql",
@@ -95,7 +93,9 @@
         "infra/registry/postgres/init/027-optimization-site-clock.sql",
         "infra/registry/postgres/init/028-retire-own-tariff-pricing.sql",
         "infra/registry/postgres/init/029-drop-registry-import-tables.sql",
-        "infra/registry/postgres/init/030-drop-api-credentials.sql"
+        "infra/registry/postgres/init/030-drop-api-credentials.sql",
+        "infra/registry/postgres/init/031-drop-outbound-delivery.sql",
+        "infra/registry/postgres/init/032-drop-generic-rules.sql"
       ]
     },
     {
@@ -208,7 +208,6 @@
     "s4_alarm_service",
     "s5_work_order_service",
     "s5_work_order_mutation_service",
-    "outbound_delivery_runtime",
     "s16_notification_service",
     "operations_agent_operations_runtime"
   ]

@@ -38,15 +38,15 @@
 | 分派告警；分派、计划、取消、重开工单 |  |  | ✓ | ✓ |
 | 管理节能项目 |  |  | ✓ | ✓ |
 | 编辑注册中心（站点、空间、资产、设备、传感器、点位、绑定、模板、导入、退役） |  |  |  | ✓ |
-| 用户与角色、会话吊销、审计日志、规则 |  |  |  | ✓ |
+| 用户与角色、会话吊销、审计日志 |  |  |  | ✓ |
 
-精确的权限清单在迁移 `026-iam-role-assignments.sql` 里，是唯一的定义；`030-drop-api-credentials.sql` 从管理员的清单里去掉了 `api-credential.manage`。
+精确的权限清单在迁移 `026-iam-role-assignments.sql` 里，是唯一的定义；`030-drop-api-credentials.sql` 从管理员的清单里去掉了 `api-credential.manage`，`032-drop-generic-rules.sql` 去掉了 `rule.manage`。
 
 ## 怎么运作
 
 1. `iam.role_templates.tenant_id` 可为空，为空的是内置角色，按 `role_key` 唯一；租户自己的角色模板（目前只给后台服务用，例如 `energy-projection`）照旧。
 2. `iam.role_bindings` 新增 `site_id`（可为空，空表示整个租户），唯一键为（租户、人、角色、站点），空站点视为同一个值。
-3. 只认本组织的站点：指派里写了组织以外的站点，不产生任何权限。权限 *c* 在站点 *s* 生效，当且仅当：人和租户成员身份都有效；存在一条有效的指派，其角色包含 *c*，范围是整个租户或 *s*；且没有覆盖 *s* 的显式拒绝。租户级权限（`Action.TenantScoped()`、`iam.admin`、`session.revoke`、`audit.read`、`rule.manage`、`template.manage`）只由整租户的指派给出。
+3. 只认本组织的站点：指派里写了组织以外的站点，不产生任何权限。权限 *c* 在站点 *s* 生效，当且仅当：人和租户成员身份都有效；存在一条有效的指派，其角色包含 *c*，范围是整个租户或 *s*；且没有覆盖 *s* 的显式拒绝。租户级权限（`Action.TenantScoped()`、`iam.admin`、`session.revoke`、`audit.read`、`template.manage`）只由整租户的指派给出。
 4. 遥测判定要求目标设备所属站点上有对应的遥测权限；不再检查设备和点位级授权。
 5. 指令判定：权限名为 `command.submit.<风险>` 或 `command.approve.<风险>`，风险取 `low`、`medium`、`high`、`critical`。判定结果的风险上限取该站点上已授予的最高一级；设备必须属于请求中的站点。
 6. 当前用户的权限列表（`principal/current`）是各站点生效权限的并集。

@@ -13,8 +13,8 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
 import { Route as AppSiteRouteImport } from './routes/_app._site'
 import { Route as AppBenchmarkRouteImport } from './routes/_app.benchmark'
-import { Route as AppNotificationsRouteImport } from './routes/_app.notifications'
 import { Route as AppSystemRouteImport } from './routes/_app.system'
+import { Route as AppSiteNotificationsRouteImport } from './routes/_app._site.notifications'
 import { Route as AppSiteOverviewRouteImport } from './routes/_app._site.overview'
 import { Route as AppSiteReportsRouteImport } from './routes/_app._site.reports'
 import { Route as AppSettingsIntegrationsRouteImport } from './routes/_app.settings.integrations'
@@ -48,15 +48,15 @@ const AppBenchmarkRoute = AppBenchmarkRouteImport.update({
   path: '/benchmark',
   getParentRoute: () => AppRoute,
 } as any)
-const AppNotificationsRoute = AppNotificationsRouteImport.update({
-  id: '/notifications',
-  path: '/notifications',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppSystemRoute = AppSystemRouteImport.update({
   id: '/system',
   path: '/system',
   getParentRoute: () => AppRoute,
+} as any)
+const AppSiteNotificationsRoute = AppSiteNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
+  getParentRoute: () => AppSiteRoute,
 } as any)
 const AppSiteOverviewRoute = AppSiteOverviewRouteImport.update({
   id: '/overview',
@@ -142,8 +142,8 @@ const AppSiteOperationsWorkCenterRoute =
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/benchmark': typeof AppBenchmarkRoute
-  '/notifications': typeof AppNotificationsRoute
   '/system': typeof AppSystemRoute
+  '/notifications': typeof AppSiteNotificationsRoute
   '/overview': typeof AppSiteOverviewRoute
   '/reports': typeof AppSiteReportsRoute
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
@@ -162,8 +162,8 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
   '/benchmark': typeof AppBenchmarkRoute
-  '/notifications': typeof AppNotificationsRoute
   '/system': typeof AppSystemRoute
+  '/notifications': typeof AppSiteNotificationsRoute
   '/overview': typeof AppSiteOverviewRoute
   '/reports': typeof AppSiteReportsRoute
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
@@ -184,9 +184,9 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/_app/_site': typeof AppSiteRouteWithChildren
   '/_app/benchmark': typeof AppBenchmarkRoute
-  '/_app/notifications': typeof AppNotificationsRoute
   '/_app/system': typeof AppSystemRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/_site/notifications': typeof AppSiteNotificationsRoute
   '/_app/_site/overview': typeof AppSiteOverviewRoute
   '/_app/_site/reports': typeof AppSiteReportsRoute
   '/_app/settings/integrations': typeof AppSettingsIntegrationsRoute
@@ -207,8 +207,8 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/benchmark'
-    | '/notifications'
     | '/system'
+    | '/notifications'
     | '/overview'
     | '/reports'
     | '/settings/integrations'
@@ -227,8 +227,8 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/benchmark'
-    | '/notifications'
     | '/system'
+    | '/notifications'
     | '/overview'
     | '/reports'
     | '/settings/integrations'
@@ -248,9 +248,9 @@ export interface FileRouteTypes {
     | '/_app'
     | '/_app/_site'
     | '/_app/benchmark'
-    | '/_app/notifications'
     | '/_app/system'
     | '/_app/'
+    | '/_app/_site/notifications'
     | '/_app/_site/overview'
     | '/_app/_site/reports'
     | '/_app/settings/integrations'
@@ -301,19 +301,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBenchmarkRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/notifications': {
-      id: '/_app/notifications'
-      path: '/notifications'
-      fullPath: '/notifications'
-      preLoaderRoute: typeof AppNotificationsRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/system': {
       id: '/_app/system'
       path: '/system'
       fullPath: '/system'
       preLoaderRoute: typeof AppSystemRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/_app/_site/notifications': {
+      id: '/_app/_site/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof AppSiteNotificationsRouteImport
+      parentRoute: typeof AppSiteRoute
     }
     '/_app/_site/overview': {
       id: '/_app/_site/overview'
@@ -417,6 +417,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppSiteRouteChildren {
+  AppSiteNotificationsRoute: typeof AppSiteNotificationsRoute
   AppSiteOverviewRoute: typeof AppSiteOverviewRoute
   AppSiteReportsRoute: typeof AppSiteReportsRoute
   AppSiteEnergyAnalysisConsumptionRoute: typeof AppSiteEnergyAnalysisConsumptionRoute
@@ -433,6 +434,7 @@ interface AppSiteRouteChildren {
 }
 
 const AppSiteRouteChildren: AppSiteRouteChildren = {
+  AppSiteNotificationsRoute: AppSiteNotificationsRoute,
   AppSiteOverviewRoute: AppSiteOverviewRoute,
   AppSiteReportsRoute: AppSiteReportsRoute,
   AppSiteEnergyAnalysisConsumptionRoute: AppSiteEnergyAnalysisConsumptionRoute,
@@ -455,7 +457,6 @@ const AppSiteRouteWithChildren =
 interface AppRouteChildren {
   AppSiteRoute: typeof AppSiteRouteWithChildren
   AppBenchmarkRoute: typeof AppBenchmarkRoute
-  AppNotificationsRoute: typeof AppNotificationsRoute
   AppSystemRoute: typeof AppSystemRoute
   AppIndexRoute: typeof AppIndexRoute
   AppSettingsIntegrationsRoute: typeof AppSettingsIntegrationsRoute
@@ -464,7 +465,6 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppSiteRoute: AppSiteRouteWithChildren,
   AppBenchmarkRoute: AppBenchmarkRoute,
-  AppNotificationsRoute: AppNotificationsRoute,
   AppSystemRoute: AppSystemRoute,
   AppIndexRoute: AppIndexRoute,
   AppSettingsIntegrationsRoute: AppSettingsIntegrationsRoute,

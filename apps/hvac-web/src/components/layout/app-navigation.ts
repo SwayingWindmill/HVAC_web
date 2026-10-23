@@ -98,6 +98,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
     section: 'main',
     items: [
       { id: 'operations-alarms', title: '告警', path: '/operations/alarms', icon: ShieldAlert },
+      { id: 'notifications', title: '通知', path: '/notifications', icon: Bell, sidebar: false },
       { id: 'operations-diagnostics', title: '故障诊断', path: '/operations/diagnostics', icon: Stethoscope },
       { id: 'operations-work-center', title: '工单', path: '/operations/work-center', icon: CalendarCheck2 },
     ],
@@ -117,7 +118,6 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
     items: [
       { id: 'integrations', title: '集成管理', path: '/settings/integrations', icon: Plug },
       { id: 'system', title: '系统管理', path: '/system', icon: Settings },
-      { id: 'notifications', title: '通知中心', path: '/notifications', icon: Bell, sidebar: false },
     ],
   },
 ];

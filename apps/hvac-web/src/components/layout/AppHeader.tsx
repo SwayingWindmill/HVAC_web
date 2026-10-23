@@ -5,11 +5,12 @@ import { Kbd } from '@/components/ui/kbd';
 import { CommandSearch } from './CommandSearch';
 import { NavUser } from './NavUser';
 import { ScopeSwitcher } from './ScopeSwitcher';
-import { useShellNotifications } from './use-shell-notifications';
+import { useWaitingAlarmCount } from '@/features/alarms/use-waiting-alarm-count';
 import { BrandMark } from '@/components/brand-mark';
 
 interface AppHeaderProps {
-  readonly principalSubject: string;
+  /** The Site the operator works in; the bell counts its alarms happening now that nobody acknowledged. */
+  readonly siteId?: string;
   readonly principalName: string;
   readonly principalRole: string;
   readonly csrfToken: string;
@@ -21,7 +22,7 @@ interface AppHeaderProps {
 
 /** The top bar across the whole window: product mark and Site on the left, search, notifications and the user on the right. */
 export function AppHeader({
-  principalSubject,
+  siteId,
   principalName,
   principalRole,
   csrfToken,
@@ -30,7 +31,7 @@ export function AppHeader({
   assistant,
 }: AppHeaderProps) {
   const [commandOpen, setCommandOpen] = useState(false);
-  const { count: unreadNotifications } = useShellNotifications(true, principalSubject);
+  const waiting = useWaitingAlarmCount(siteId);
 
   useEffect(() => {
     const handleShortcut = (event: globalThis.KeyboardEvent) => {
@@ -85,11 +86,11 @@ export function AppHeader({
             variant="outline"
             size="icon"
             className="relative text-muted-foreground"
-            aria-label={unreadNotifications > 0 ? `通知中心，${unreadNotifications} 条未读` : '通知中心'}
+            aria-label={waiting > 0 ? `通知，${waiting} 条告警没人确认` : '通知'}
             onClick={() => onNavigate('/notifications')}
           >
             <Bell className="size-[15px]" />
-            {unreadNotifications > 0 ? (
+            {waiting > 0 ? (
               <span className="absolute top-1.5 right-[7px] size-[7px] rounded-full bg-primary ring-2 ring-card" aria-hidden="true" />
             ) : null}
           </Button>

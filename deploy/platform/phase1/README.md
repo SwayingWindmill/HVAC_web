@@ -129,7 +129,7 @@ PostgreSQL（本机或外部）上有身份库 `hvac_identity`，以及各业务
 - 在每个库里记下迁移状态和源文件哈希，发现被改过或恢复不完整就停下；
 - 新增迁移文件（在 `infra/*/postgres/init/` 或各模块的 `migrations/` 下）要同时登记到 `manifest.v1.json`、`migration-list.tsv` 和 `Dockerfile`。
 
-迁移已经冻结（2026-10-22，#688）：服务器上已有真实站点的数据，`migration-list.tsv` 里登记过的迁移都执行过，内容一个字节都不能改，改表结构只能新增迁移（已有库遇到改过的迁移，迁移器会按哈希中止）。不要的迁移可以从清单里去掉，但它建的每张表都要由清单里还在的某条迁移删掉（`DROP TABLE`，或 `DROP SCHEMA ... CASCADE` 删掉整个 schema），例如删 `services/rule-runtime-service` 时，同一个 PR 里新增一条迁移删掉它的表。`npm run migrations:freeze:check` 拿当前分支和它从 main 分出来的那个提交比，守住这两条，门禁的 contracts 一步会跑它。
+迁移已经冻结（2026-10-22，#688）：服务器上已有真实站点的数据，`migration-list.tsv` 里登记过的迁移都执行过，内容一个字节都不能改，改表结构只能新增迁移（已有库遇到改过的迁移，迁移器会按哈希中止）。不要的迁移可以从清单里去掉，但它建的每张表都要由清单里还在的某条迁移删掉（`DROP TABLE`，或 `DROP SCHEMA ... CASCADE` 删掉整个 schema），例如 `031-drop-outbound-delivery.sql`、`032-drop-generic-rules.sql` 用 `DROP SCHEMA ... CASCADE` 删掉了已去掉的模块的表。`npm run migrations:freeze:check` 拿当前分支和它从 main 分出来的那个提交比，守住这两条，门禁的 contracts 一步会跑它。
 
 服务正常启动前先跑一次性的产品 / 表结构预检，要求产品版本和迁移清单的摘要完全一致；正式环境没有跳过的开关。
 

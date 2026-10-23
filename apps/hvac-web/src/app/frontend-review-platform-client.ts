@@ -56,7 +56,6 @@ const reviewCapabilities: readonly Capability[] = [
   'session.revoke',
   'audit.read',
   'iam.admin',
-  'rule.manage',
   'savings.manage',
 ];
 

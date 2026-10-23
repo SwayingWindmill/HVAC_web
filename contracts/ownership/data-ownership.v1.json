@@ -58,18 +58,6 @@
     },
     {
       "kind": "schema",
-      "name": "rule_runtime",
-      "writer": "rule-runtime-service",
-      "revision": 1
-    },
-    {
-      "kind": "schema",
-      "name": "outbound_delivery",
-      "writer": "outbound-delivery-service",
-      "revision": 1
-    },
-    {
-      "kind": "schema",
       "name": "telemetry_history",
       "writer": "telemetry-history-projector",
       "revision": 1,
@@ -376,54 +364,6 @@
     },
     {
       "kind": "projection",
-      "name": "notification-policy-revision",
-      "writer": "notification-service",
-      "revision": 1
-    },
-    {
-      "kind": "projection",
-      "name": "notification-audience-revision",
-      "writer": "notification-service",
-      "revision": 1
-    },
-    {
-      "kind": "projection",
-      "name": "notification-template-revision",
-      "writer": "notification-service",
-      "revision": 1
-    },
-    {
-      "kind": "projection",
-      "name": "notification-source-alarm-event",
-      "writer": "notification-service",
-      "revision": 1
-    },
-    {
-      "kind": "projection",
-      "name": "notification-intent",
-      "writer": "notification-service",
-      "revision": 1
-    },
-    {
-      "kind": "projection",
-      "name": "notification-inbox",
-      "writer": "notification-service",
-      "revision": 1
-    },
-    {
-      "kind": "projection",
-      "name": "notification-intent-event",
-      "writer": "notification-service",
-      "revision": 1
-    },
-    {
-      "kind": "projection",
-      "name": "notification-user-preference",
-      "writer": "notification-service",
-      "revision": 1
-    },
-    {
-      "kind": "projection",
       "name": "work-order-current",
       "writer": "work-order-service",
       "revision": 1
@@ -613,16 +553,6 @@
         "work_order_mutation_audit",
         "work_order_completion_evidence"
       ]
-    },
-    {
-      "service": "rule-runtime-service",
-      "schema": "rule_runtime",
-      "mode": "write"
-    },
-    {
-      "service": "outbound-delivery-service",
-      "schema": "outbound_delivery",
-      "mode": "write"
     },
     {
       "service": "telemetry-history-projector",
@@ -871,20 +801,6 @@
         "work_order_mutation_audit",
         "work_order_completion_evidence"
       ]
-    },
-    {
-      "schema": "rule_runtime",
-      "migrationRole": "rule_runtime_migrator",
-      "runtimeRole": "rule_runtime_runtime",
-      "runtimeBypassRls": false,
-      "accessMode": "write"
-    },
-    {
-      "schema": "outbound_delivery",
-      "migrationRole": "outbound_delivery_migrator",
-      "runtimeRole": "outbound_delivery_runtime",
-      "runtimeBypassRls": false,
-      "accessMode": "write"
     }
   ]
 }

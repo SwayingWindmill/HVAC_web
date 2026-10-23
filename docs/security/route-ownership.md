@@ -40,7 +40,7 @@
 
 - `gateway`：平台网关；`audit_ledger`：操作记录服务；`iam`：IAM；`core_registry`：登记服务；
 - `telemetry_runtime`：遥测；`telemetry_history`：历史写入程序；`analytics`：用电量计算程序；
-- `command_runtime`、`alarm_runtime`、`work_order_runtime`、`notification_runtime`、`rule_runtime`、`outbound_delivery`：各自的服务；
+- `command_runtime`、`alarm_runtime`、`work_order_runtime`、`notification_runtime`：各自的服务；
 - 会话安全事件和路由决定事件：平台网关；设备快照、指令、告警、工单的生命周期事件：各自的服务。
 
 投递和查询的身份只拿到很窄的、不能写的权限。PostgreSQL 集成测试证明网关写不了操作记录的表、投递程序写不了会话状态。

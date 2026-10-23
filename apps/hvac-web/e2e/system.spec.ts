@@ -9,15 +9,6 @@ test('asset and point registration opens from the system overview', async ({ pag
   await expect(page.getByRole('tabpanel')).toContainText('资源与绑定');
 });
 
-test('automation rules open from the system overview', async ({ page }) => {
-  await page.goto('/system');
-  await page.getByRole('tab', { name: '自动化规则', exact: true }).click();
-
-  await expect(page).toHaveURL(/tab=rules/);
-  // The recorded operator does not maintain rules.
-  await expect(page.getByRole('tabpanel')).toContainText('当前为只读状态');
-});
-
 test('opening system management from a Site page leaves the Site scope', async ({ page }) => {
   await page.goto(`/operations/alarms?site=${SITE_ID}`);
   await expect(page.getByTestId('real-shell-site')).toHaveText('中央机房');

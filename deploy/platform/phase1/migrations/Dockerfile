@@ -50,10 +50,10 @@ COPY infra/registry/postgres/init/009i-backend-integration-v2.sql /opt/hvac/repo
 COPY infra/registry/postgres/init/009l-scheduler-job-v1.sql /opt/hvac/repo/infra/registry/postgres/init/009l-scheduler-job-v1.sql
 COPY infra/registry/postgres/init/009-s04-tenant-iam-admin.sql /opt/hvac/repo/infra/registry/postgres/init/009-s04-tenant-iam-admin.sql
 COPY infra/registry/postgres/init/010-command-authorization.sql /opt/hvac/repo/infra/registry/postgres/init/010-command-authorization.sql
-COPY services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql /opt/hvac/repo/services/outbound-delivery-service/migrations/001_s15_outbound_delivery.sql
 COPY services/notification-service/migrations/001_s16_notification.sql /opt/hvac/repo/services/notification-service/migrations/001_s16_notification.sql
 COPY services/notification-service/migrations/002_wechat_reminders.sql /opt/hvac/repo/services/notification-service/migrations/002_wechat_reminders.sql
 COPY services/notification-service/migrations/003_wechat_daily.sql /opt/hvac/repo/services/notification-service/migrations/003_wechat_daily.sql
+COPY services/notification-service/migrations/004_drop_inbox_and_policies.sql /opt/hvac/repo/services/notification-service/migrations/004_drop_inbox_and_policies.sql
 COPY infra/registry/postgres/init/010-s05-registry-writer.sql /opt/hvac/repo/infra/registry/postgres/init/010-s05-registry-writer.sql
 COPY infra/registry/postgres/init/011-s08-metric-lifecycle.sql /opt/hvac/repo/infra/registry/postgres/init/011-s08-metric-lifecycle.sql
 COPY infra/registry/postgres/init/012-s19-settlement-projections.sql /opt/hvac/repo/infra/registry/postgres/init/012-s19-settlement-projections.sql
@@ -62,8 +62,6 @@ COPY infra/connectivity/postgres/init/001-s09-connectivity.sql /opt/hvac/repo/in
 COPY infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql /opt/hvac/repo/infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
 COPY infra/connectivity/postgres/init/003-gateway-uplink.sql /opt/hvac/repo/infra/connectivity/postgres/init/003-gateway-uplink.sql
 COPY infra/connectivity/postgres/init/004-gateway-enrollment.sql /opt/hvac/repo/infra/connectivity/postgres/init/004-gateway-enrollment.sql
-COPY services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql /opt/hvac/repo/services/rule-runtime-service/migrations/001_s20_rule_runtime_core.sql
-COPY services/rule-runtime-service/migrations/002_s21_rule_management.sql /opt/hvac/repo/services/rule-runtime-service/migrations/002_s21_rule_management.sql
 COPY infra/registry/postgres/init/013-s23-maintenance-retirement.sql /opt/hvac/repo/infra/registry/postgres/init/013-s23-maintenance-retirement.sql
 COPY infra/registry/postgres/init/014-s21-rule-management-capability.sql /opt/hvac/repo/infra/registry/postgres/init/014-s21-rule-management-capability.sql
 COPY infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql /opt/hvac/repo/infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql
@@ -82,6 +80,8 @@ COPY infra/registry/postgres/init/027-optimization-site-clock.sql /opt/hvac/repo
 COPY infra/registry/postgres/init/028-retire-own-tariff-pricing.sql /opt/hvac/repo/infra/registry/postgres/init/028-retire-own-tariff-pricing.sql
 COPY infra/registry/postgres/init/029-drop-registry-import-tables.sql /opt/hvac/repo/infra/registry/postgres/init/029-drop-registry-import-tables.sql
 COPY infra/registry/postgres/init/030-drop-api-credentials.sql /opt/hvac/repo/infra/registry/postgres/init/030-drop-api-credentials.sql
+COPY infra/registry/postgres/init/031-drop-outbound-delivery.sql /opt/hvac/repo/infra/registry/postgres/init/031-drop-outbound-delivery.sql
+COPY infra/registry/postgres/init/032-drop-generic-rules.sql /opt/hvac/repo/infra/registry/postgres/init/032-drop-generic-rules.sql
 
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql

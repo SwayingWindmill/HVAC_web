@@ -44,9 +44,7 @@ use (
 	./modules/iam
 	./services/identity-service
 	./services/optimization-service
-	./services/outbound-delivery-service
 	./services/notification-service
-	./services/rule-runtime-service
 	./modules/connectivity
 	./modules/metric
 	./modules/maintenance

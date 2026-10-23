@@ -26,14 +26,6 @@ type memoryReminders struct {
 	daily  map[notificationservice.WeChatPerson]notificationservice.WeChatReminders
 }
 
-func (memory *memoryReminders) ListInbox(context.Context, string, string, int) ([]notificationservice.InboxItem, error) {
-	return nil, nil
-}
-
-func (memory *memoryReminders) MarkRead(context.Context, string, string, string, time.Time) (notificationservice.InboxItem, error) {
-	return notificationservice.InboxItem{}, notificationservice.ErrNotFound
-}
-
 func (memory *memoryReminders) WeChatReminders(_ context.Context, person notificationservice.WeChatPerson) (notificationservice.WeChatReminders, error) {
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
@@ -89,7 +81,7 @@ func newWeChatHarness(t *testing.T) (*authHarness, *memoryReminders) {
 	t.Helper()
 	reminders := &memoryReminders{counts: map[notificationservice.WeChatPerson]int{}, daily: map[notificationservice.WeChatPerson]notificationservice.WeChatReminders{}}
 	harness := newAuthHarnessWithNotification(t, func(gatewayKey crypto.PublicKey) http.Handler {
-		handler, err := notificationservice.NewHTTPHandler(notificationservice.HTTPConfig{Store: reminders, Reminders: reminders, GatewayPublicKey: gatewayKey})
+		handler, err := notificationservice.NewHTTPHandler(notificationservice.HTTPConfig{Reminders: reminders, GatewayPublicKey: gatewayKey})
 		if err != nil {
 			t.Fatal(err)
 		}

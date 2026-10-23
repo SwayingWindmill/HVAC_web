@@ -15,9 +15,9 @@ const allowedOwners = new Set([
   'connectivity',
   'platform-gateway', 'platform-core-service', 'telemetry-runtime-service', 'command-service',
   'telemetry-query-service', 'operations-agent-service', 'alarm-service', 'notification-service', 'work-order-service',
-  'forecast-service', 'fdd-service', 'mv-service', 'report-service', 'optimization-service', 'metric-engine-service', 'settlement-service', 'rule-runtime-service',
+  'forecast-service', 'fdd-service', 'mv-service', 'report-service', 'optimization-service', 'metric-engine-service', 'settlement-service',
 ]);
-const allowedScopes = new Set(['tenant', 'principal', 'site', 'device', 'key', 'alarm', 'notification', 'work-order', 'asset', 'space', 'point', 'command']);
+const allowedScopes = new Set(['tenant', 'principal', 'site', 'device', 'key', 'alarm', 'work-order', 'asset', 'space', 'point', 'command']);
 const allowedMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const allowedRouteFields = new Set(['method', 'path', 'owner', 'publicIngress', 'revision', 'rollout', 'compatibilityMode', 'allowedScopeDimensions']);
 const allowedRolloutFields = new Set(['mode']);
@@ -145,7 +145,7 @@ const declaredMechanisms = new Set(targetDomainModel.ownershipRules?.allowedCros
 for (const mechanism of requiredMechanisms) {
   if (!declaredMechanisms.has(mechanism)) errors.push(`target Domain model is missing cross-domain mechanism ${mechanism}`);
 }
-const requiredContexts = ['iam', 'registry', 'telemetry-runtime', 'telemetry-query', 'metric', 'command', 'edge-control', 'rule-runtime', 'alarm', 'notification', 'outbound-delivery', 'work-order', 'intelligence', 'presentation', 'platform-operations'];
+const requiredContexts = ['iam', 'registry', 'telemetry-runtime', 'telemetry-query', 'metric', 'command', 'edge-control', 'alarm', 'notification', 'work-order', 'intelligence', 'presentation', 'platform-operations'];
 const declaredContexts = new Set((targetDomainModel.boundedContexts ?? []).map((context) => context.id));
 for (const context of requiredContexts) {
   if (!declaredContexts.has(context)) errors.push(`target Domain model is missing bounded context ${context}`);

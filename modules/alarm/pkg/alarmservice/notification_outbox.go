@@ -15,12 +15,9 @@ import (
 
 type NotificationAction string
 
-const (
-	NotificationCreated         NotificationAction = "CREATED"
-	NotificationSeverityChanged NotificationAction = "SEVERITY_CHANGED"
-	NotificationAcknowledged    NotificationAction = "ACKNOWLEDGED"
-	NotificationCleared         NotificationAction = "CLEARED"
-)
+// NotificationCreated is the one event Notification needs: a new Alarm, which may become a WeChat
+// reminder. Severity changes, acknowledgements and recoveries are not sent (ADR 0026).
+const NotificationCreated NotificationAction = "CREATED"
 
 type NotificationOutboxEvent struct {
 	TenantID              string

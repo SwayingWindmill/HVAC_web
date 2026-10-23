@@ -243,11 +243,6 @@ func (store *PostgresStore) publishInTransaction(ctx context.Context, tx pgx.Tx,
 		if err := persistUpdatedAlarm(ctx, tx, current, updated); err != nil {
 			return alarmmodel.Alarm{}, err
 		}
-		if updated.Version != current.Version && updated.CurrentSeverity != current.CurrentSeverity {
-			if err := enqueueNotificationEvent(ctx, tx, store, updated, NotificationSeverityChanged, occurredAt); err != nil {
-				return alarmmodel.Alarm{}, err
-			}
-		}
 		return updated, nil
 	}
 	if !errors.Is(err, ErrNotFound) {
@@ -290,11 +285,6 @@ func (store *PostgresStore) publishInTransaction(ctx context.Context, tx pgx.Tx,
 	if err := persistUpdatedAlarm(ctx, tx, current, updated); err != nil {
 		return alarmmodel.Alarm{}, err
 	}
-	if updated.Version != current.Version && updated.CurrentSeverity != current.CurrentSeverity {
-		if err := enqueueNotificationEvent(ctx, tx, store, updated, NotificationSeverityChanged, occurredAt); err != nil {
-			return alarmmodel.Alarm{}, err
-		}
-	}
 	return updated, nil
 }
 
@@ -320,15 +310,6 @@ func (store *PostgresStore) clearInTransaction(ctx context.Context, tx pgx.Tx, t
 	}
 	if err := persistUpdatedAlarm(ctx, tx, current, cleared); err != nil {
 		return alarmmodel.Alarm{}, err
-	}
-	clearedAt, err := time.Parse(time.RFC3339Nano, recovery.OccurredAt)
-	if err != nil {
-		return alarmmodel.Alarm{}, alarmmodel.ErrInvalidOperation
-	}
-	if cleared.Version != current.Version {
-		if err := enqueueNotificationEvent(ctx, tx, store, cleared, NotificationCleared, clearedAt); err != nil {
-			return alarmmodel.Alarm{}, err
-		}
 	}
 	return cleared, nil
 }

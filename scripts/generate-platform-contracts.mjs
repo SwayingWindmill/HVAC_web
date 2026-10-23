@@ -136,15 +136,6 @@ const expectedOperations = {
   getSiteMonthlyReportV212: ['get', '/api/v1/sites/{siteId}/reports/monthly/{month}'],
   createOptimizationRunV212: ['post', '/api/v1/optimization/runs'],
   getLatestSiteOptimizationRecommendationV212: ['get', '/api/v1/sites/{siteId}/optimization/recommendations/latest'],
-  getRuleCatalog: ['get', '/api/v1/rules/catalog'],
-  listRuleRevisions: ['get', '/api/v1/rules/revisions'],
-  validateRuleDraft: ['post', '/api/v1/rules/validate'],
-  simulateRuleDraft: ['post', '/api/v1/rules/simulate'],
-  releaseRuleRevision: ['post', '/api/v1/rules/releases'],
-  listRuleBindings: ['get', '/api/v1/rules/bindings'],
-  assignRuleRevision: ['post', '/api/v1/rules/assignments'],
-  retireRuleBinding: ['post', '/api/v1/rules/bindings/{bindingId}/retire'],
-  listRuleExecutionEvidence: ['get', '/api/v1/rules/executions'],
 };
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {
@@ -189,33 +180,6 @@ invariant(schemaRef(operations.listAlarmsV212.operation, '200') === './s4-alarm-
 invariant(schemaRef(operations.getAlarmV212.operation, '200') === './s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope', 'Alarm detail success schema is unsupported');
 invariant(schemaRef(operations.ackAlarmV212.operation, '200') === './s4-alarm-public.openapi.json#/components/schemas/AlarmEnvelope', 'Alarm ACK success schema is unsupported');
 invariant(operations.ackAlarmV212.operation.requestBody?.content?.['application/json']?.schema?.$ref === './s4-alarm-public.openapi.json#/components/schemas/AckAlarmRequest', 'Alarm ACK request schema is unsupported');
-
-const ruleOperations = [
-  'getRuleCatalog', 'listRuleRevisions', 'validateRuleDraft', 'simulateRuleDraft', 'releaseRuleRevision',
-  'listRuleBindings', 'assignRuleRevision', 'retireRuleBinding', 'listRuleExecutionEvidence',
-];
-for (const operationId of ruleOperations) {
-  invariant(operations[operationId].operation?.['x-architecture-status'] === 'ACTIVE' && operations[operationId].operation?.['x-shape-status'] === 'READY', `${operationId} must be active with a synchronized Rule shape`);
-  invariant(operations[operationId].operation?.['x-shape-source'] === 'contracts/http/s21-rule-management-public.openapi.json', `${operationId} must use the S21 Rule subordinate contract`);
-}
-const ruleSuccessRefs = {
-  getRuleCatalog: ['200', 'RuleCatalog'],
-  listRuleRevisions: ['200', 'RuleRevisionCollection'],
-  validateRuleDraft: ['200', 'RuleValidationResult'],
-  simulateRuleDraft: ['200', 'RuleSimulationResult'],
-  releaseRuleRevision: ['201', 'RuleRevision'],
-  listRuleBindings: ['200', 'RuleBindingCollection'],
-  assignRuleRevision: ['201', 'RuleBinding'],
-  retireRuleBinding: ['200', 'RuleBinding'],
-  listRuleExecutionEvidence: ['200', 'RuleExecutionEvidenceCollection'],
-};
-for (const [operationId, [status, schemaName]] of Object.entries(ruleSuccessRefs)) {
-  invariant(schemaRef(operations[operationId].operation, status) === `./s21-rule-management-public.openapi.json#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
-}
-for (const operationId of ['listRuleBindings', 'listRuleExecutionEvidence']) {
-  const siteParameter = operations[operationId].operation.parameters?.find((parameter) => parameter.name === 'siteId' && parameter.in === 'query');
-  invariant(siteParameter?.required === true && siteParameter.schema?.$ref === '#/components/schemas/UUIDv7', `${operationId} must require a UUIDv7 siteId query`);
-}
 
 const schemas = spec.components?.schemas ?? {};
 const schemaRequirements = {
@@ -306,7 +270,6 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'session.revoke',
   'audit.read',
   'iam.admin',
-  'rule.manage',
   'savings.manage',
 ]), 'Capability vocabulary is unsupported');
 invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 13, 'EffectiveAuthorization capability set version must be 13');
@@ -396,15 +359,6 @@ const replacements = {
   __SITE_MONTHLY_REPORT_PATH__: operations.getSiteMonthlyReportV212.path,
   __OPTIMIZATION_RUNS_PATH__: operations.createOptimizationRunV212.path,
   __LATEST_OPTIMIZATION_RECOMMENDATION_PATH__: operations.getLatestSiteOptimizationRecommendationV212.path,
-  __RULE_CATALOG_PATH__: operations.getRuleCatalog.path,
-  __RULE_REVISIONS_PATH__: operations.listRuleRevisions.path,
-  __RULE_VALIDATE_PATH__: operations.validateRuleDraft.path,
-  __RULE_SIMULATE_PATH__: operations.simulateRuleDraft.path,
-  __RULE_RELEASES_PATH__: operations.releaseRuleRevision.path,
-  __RULE_BINDINGS_PATH__: operations.listRuleBindings.path,
-  __RULE_ASSIGNMENTS_PATH__: operations.assignRuleRevision.path,
-  __RULE_RETIRE_PATH__: operations.retireRuleBinding.path,
-  __RULE_EXECUTIONS_PATH__: operations.listRuleExecutionEvidence.path,
 };
 
 function render(template) {

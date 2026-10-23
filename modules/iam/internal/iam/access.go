@@ -33,7 +33,6 @@ var tenantScopedCapabilities = map[string]bool{
 	string(identitycontext.CapabilityIAMAdmin):      true,
 	string(identitycontext.CapabilitySessionRevoke): true,
 	string(identitycontext.CapabilityAuditRead):     true,
-	string(identitycontext.CapabilityRuleManage):    true,
 }
 
 func capabilityTenantScoped(capability string) bool {

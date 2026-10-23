@@ -39,7 +39,6 @@ const CATALOG: Readonly<Record<string, { readonly group: CapabilityGroup; readon
   'binding.write': { group: '管理', label: '点位绑定' },
   'registry.import': { group: '管理', label: '登记导入' },
   'registry.retire': { group: '管理', label: '停用登记资源' },
-  'rule.manage': { group: '管理', label: '自动化规则' },
   'iam.admin': { group: '管理', label: '用户与权限' },
 };
 

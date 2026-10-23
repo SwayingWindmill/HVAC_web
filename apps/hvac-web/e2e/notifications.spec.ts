@@ -1,22 +1,37 @@
+import { SITE_ID } from './gateway';
 import { expect, test } from './test';
 
-test('an unread notification opens beside the inbox with its alarm as it stands now, and reading it clears the bell', async ({ page, gateway }) => {
-  const [unread] = gateway.notifications;
-  await page.goto('/notifications');
+const ACTIVE_ALARM = '01a0ec45-7ab5-7e9c-aa96-927ee5e050f2';
 
-  const inbox = page.getByRole('list', { name: '通知列表' });
-  await expect(inbox.getByRole('button', { name: unread.subject })).toHaveAttribute('aria-current', 'true');
-  const pane = page.getByRole('region', { name: '通知内容' });
-  await expect(pane).toContainText('未读');
-  await expect(pane).toContainText('来源告警当前状态');
-  await expect(pane.getByRole('link').filter({ hasText: '持续' })).toHaveAttribute('href', new RegExp(`inspect=${unread.alarmId}`));
-  await expect(page.getByRole('button', { name: '通知中心，1 条未读' })).toBeVisible();
+test('通知 lists the alarms happening now above the ones cleared lately, and the bell counts those nobody acknowledged', async ({ page }) => {
+  await page.goto(`/notifications?site=${SITE_ID}`);
 
-  await pane.getByRole('button', { name: '标记已读', exact: true }).click();
-  await expect(page.getByText('没有未读通知')).toBeVisible();
-  expect(gateway.writes.map((write) => write.path)).toContain(`/api/v1/notifications/inbox/${unread.inboxItemId}/read`);
-  await expect(page.getByRole('button', { name: '通知中心', exact: true })).toBeVisible();
+  const list = page.getByRole('list', { name: '告警列表' });
+  await expect(list.getByText(/^正在发生/)).toBeVisible();
+  await expect(list.getByText(/^最近恢复/)).toBeVisible();
+  const rows = list.getByRole('button');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText('冷冻水回水温度过低');
+  await expect(rows.first()).toContainText('未确认');
+  await expect(rows.nth(1)).toContainText('已确认');
+  // The first alarm opens beside the list without a click.
+  await expect(page.getByRole('region', { name: '告警详情' })).toContainText('活动 · 未确认');
+  await expect(page.getByRole('button', { name: '通知，1 条告警没人确认' })).toBeVisible();
 
-  await page.getByRole('radio', { name: /^全部/ }).click();
-  await expect(page.getByRole('list', { name: '通知列表' }).getByRole('button')).toHaveCount(gateway.notifications.length);
+  await page.getByRole('radio', { name: '只看未确认' }).click();
+  await expect(page).toHaveURL(/unack=true/);
+  await expect(rows).toHaveCount(1);
+  await expect(list).toContainText('最近恢复的都有人确认了');
+});
+
+test('acknowledging an alarm from 通知 clears it from the bell', async ({ page, gateway }) => {
+  await page.goto(`/notifications?site=${SITE_ID}&inspect=${ACTIVE_ALARM}`);
+  const detail = page.getByRole('region', { name: '告警详情' });
+  await detail.getByRole('button', { name: '确认告警' }).click();
+  await page.getByRole('textbox', { name: '确认说明' }).fill('已到现场查看');
+  await page.getByRole('button', { name: '确认', exact: true }).click();
+
+  await expect(detail).toContainText('活动 · 已确认');
+  await expect(page.getByRole('button', { name: '通知', exact: true })).toBeVisible();
+  expect(gateway.writes.map((write) => write.path)).toContain(`/api/v1/alarms/${ACTIVE_ALARM}/ack`);
 });

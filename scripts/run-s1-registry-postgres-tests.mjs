@@ -82,7 +82,7 @@ async function waitForPostgres() {
     await pause(250);
   }
   let logs = '';
-  try { logs = compose(['logs', '--no-color', 'postgres']); } catch (error) { logs = String(error); }
+  try { logs = compose(['logs', '--no-color', '--tail', '120', 'postgres']); } catch (error) { logs = String(error); }
   throw new Error(`S1 PostgreSQL fixture did not reach a stable initialized postmaster\n${logs}`);
 }
 
