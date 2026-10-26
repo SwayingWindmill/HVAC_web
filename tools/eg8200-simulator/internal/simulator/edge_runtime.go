@@ -76,7 +76,7 @@ type EdgeControlRuntime struct {
 
 func NewEdgeControlRuntime(config Config, plant *Plant) (*EdgeControlRuntime, error) {
 	if plant == nil {
-		return nil, errors.New("edge control Runtime requires Plant")
+		return nil, errors.New("edge control runtime requires Plant")
 	}
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -238,14 +238,14 @@ func commandBindingKey(deviceID, capability string) string {
 
 func (runtime *EdgeControlRuntime) Manifest(revision string, at time.Time) (edgecontrol.EdgeManifest, error) {
 	if runtime == nil {
-		return edgecontrol.EdgeManifest{}, errors.New("edge control Runtime is unavailable")
+		return edgecontrol.EdgeManifest{}, errors.New("edge control runtime is unavailable")
 	}
 	return runtime.host.Manifest(runtime.config.GatewayID, revision, at)
 }
 
 func (runtime *EdgeControlRuntime) AttachTimedata(recorder edgecontrol.TimedataRecorder) error {
 	if runtime == nil {
-		return errors.New("edge control Runtime is unavailable")
+		return errors.New("edge control runtime is unavailable")
 	}
 	if recorder == nil {
 		return errors.New("edge timedata recorder is required")
@@ -255,7 +255,7 @@ func (runtime *EdgeControlRuntime) AttachTimedata(recorder edgecontrol.TimedataR
 
 func (runtime *EdgeControlRuntime) SubmitCommand(request EdgeCommandIntentRequest) (<-chan EdgeCommandOutcome, error) {
 	if runtime == nil {
-		return nil, errors.New("edge control Runtime is unavailable")
+		return nil, errors.New("edge control runtime is unavailable")
 	}
 	request.CommandID = strings.TrimSpace(request.CommandID)
 	request.DeviceID = strings.TrimSpace(request.DeviceID)

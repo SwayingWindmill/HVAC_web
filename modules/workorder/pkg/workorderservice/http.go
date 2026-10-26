@@ -111,7 +111,7 @@ type lifecycleWorkOrderRequest struct {
 
 func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 	if config.Store == nil || config.GatewayPublicKey == nil {
-		return nil, errors.New("work order Store and Gateway public key are required")
+		return nil, errors.New("work order store and Gateway public key are required")
 	}
 	if config.Now == nil {
 		config.Now = time.Now

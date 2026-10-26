@@ -611,7 +611,7 @@ func loadWorkOrderConfig(certificate *tls.Certificate) (*gateway.WorkOrderConfig
 		return nil, errors.New("WORK_ORDER_SERVICE_URL must be an HTTPS origin without user info, path, query or fragment")
 	}
 	if certificate == nil {
-		return nil, errors.New("work order Service requires the authenticated Gateway workload certificate")
+		return nil, errors.New("work order service requires the authenticated Gateway workload certificate")
 	}
 	caPath := strings.TrimSpace(os.Getenv("WORK_ORDER_SERVICE_SERVER_CA"))
 	if caPath == "" {
@@ -644,7 +644,7 @@ func loadAnalyticsConfig(certificate *tls.Certificate) (*gateway.AnalyticsConfig
 	}
 	queryURL = strings.TrimRight(parsed.String(), "/")
 	if certificate == nil {
-		return nil, errors.New("telemetry query Service requires the authenticated Gateway workload certificate")
+		return nil, errors.New("telemetry query service requires the authenticated Gateway workload certificate")
 	}
 	caPath := strings.TrimSpace(os.Getenv("TELEMETRY_QUERY_SERVER_CA"))
 	if caPath == "" {
