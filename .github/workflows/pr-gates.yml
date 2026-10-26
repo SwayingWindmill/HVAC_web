@@ -119,7 +119,10 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=unit --profiles="${{ needs.classify.outputs.unit_profiles }}"
+      # Every Go test in the unit gate runs with the race detector (needs cgo; the runner image has gcc).
+      - env:
+          GOFLAGS: -p=1 -race
+        run: node scripts/run-pr-gate.mjs --gate=unit --profiles="${{ needs.classify.outputs.unit_profiles }}"
 
   unit:
     name: pr / affected-unit

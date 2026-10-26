@@ -158,6 +158,7 @@ for (const file of files) {
     add(unitProfiles, ['platform', 'registry', 'telemetry', 'command', 'alarm', 'workorder', 'analytics']);
     addReason(file, 'Go workspace graph changed');
   });
+  match(file === '.golangci.yml', () => addReason(file, 'Go lint rules changed; the static gate lints every Go module'));
   match(file === 'AGENTS.md' || file === 'README.md' || file === 'LICENSE' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
     addReason(file, 'repository documentation or metadata only');
   });
@@ -243,6 +244,7 @@ for (const file of files) {
       'scripts/test-pr-gate-classifier.mjs',
       'scripts/update-package-script-long-chain-baseline.mjs',
     ].includes(file), () => {});
+    scriptMatch(['scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs'].includes(file), () => addReason(file, 'Go check run by the static gate changed'));
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.startsWith('scripts/test-real-'), () => selectWeb(file, 'browser, RMS or Web model test automation changed'));
     scriptMatch(lower.includes('s0-') || lower.includes('durable'), () => selectPlatform(file, 'platform automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('s1-') || lower.includes('registry'), () => selectRegistry(file, 'registry automation changed', { integration: lower.includes('postgres') }));

@@ -11,6 +11,8 @@ export const gateCommandMatrix = Object.freeze({
       npmRun('design:check'),
       npmRun('lint'),
       npmRun('build'),
+      npmRun('go:lint'),
+      npmRun('security:go-vuln'),
     ]),
   }),
   contracts: Object.freeze({

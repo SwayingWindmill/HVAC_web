@@ -43,6 +43,7 @@
     "pr:gates:test": "node --experimental-strip-types --test scripts/test-pr-gate-classifier.mjs scripts/test-domain-task-matrix.mjs scripts/test-migration-freeze.ts",
     "security:dependency-audit": "node scripts/check-npm-production-audit.mjs",
     "security:go-vuln": "node scripts/run-go-vulnerability-scan.mjs",
+    "go:lint": "node scripts/run-go-lint.mjs",
     "security:licenses": "node scripts/check-production-licenses.mjs",
     "operations-agent:contracts:generate": "node scripts/generate-operations-agent-session-contracts.mjs",
     "operations-agent:contracts:check": "node scripts/generate-operations-agent-session-contracts.mjs --check",

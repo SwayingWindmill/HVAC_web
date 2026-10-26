@@ -1,0 +1,21 @@
+# golangci-lint rules for every Go module in go.work (run by scripts/run-go-lint.mjs in the static gate).
+version: "2"
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck, unused
+  default: standard
+  settings:
+    errcheck:
+      # defer tx.Rollback(ctx) after a successful Commit always returns "tx is closed"; there is nothing to handle.
+      exclude-functions:
+        - (github.com/jackc/pgx/v5.Tx).Rollback
+        - (*database/sql.Tx).Rollback
+  exclusions:
+    # Unchecked Close, Flush, os.Remove and fmt printing: the result cannot be acted on (e.g. defer response.Body.Close()).
+    presets:
+      - std-error-handling
+
+issues:
+  # Report every finding, not the first 50 per linter / 3 per message.
+  max-issues-per-linter: 0
+  max-same-issues: 0

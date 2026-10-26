@@ -133,6 +133,22 @@ test('PR workflow exposes only the stable required checks', async () => {
   assert.ok(!workflow.includes('pr / affected-browser'));
 });
 
+test('Go lint rules and Go check scripts only need the static gate, which runs on every PR', () => {
+  for (const file of ['.golangci.yml', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs']) {
+    const classification = runClassification([file]);
+    assert.equal(classification.unknown, false, file);
+    assert.equal(classification.broad, false, file);
+    assert.deepEqual(classification.unitProfiles, [], file);
+    assert.deepEqual(classification.integrationProfiles, [], file);
+  }
+});
+
+test('PR unit gate runs every Go test with the race detector', async () => {
+  const workflow = (await readFile('.github/workflows/pr-gates.yml', 'utf8')).replace(/\r\n?/gu, '\n');
+  const unitStep = /\n {6}- env:\n {10}GOFLAGS: -p=1 -race\n {8}run: node scripts\/run-pr-gate\.mjs --gate=unit /u;
+  assert.match(workflow, unitStep);
+});
+
 test('active workflow filenames no longer encode historical implementation stages', async () => {
   const workflowNames = (await readdir('.github/workflows')).filter((name) => /\.ya?ml$/u.test(name));
   assert.deepEqual(workflowNames.filter((name) => /^(?:s\d+|rms)-/u.test(name)), []);

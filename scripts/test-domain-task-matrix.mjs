@@ -88,6 +88,8 @@ test('static gate has one canonical repository check chain', () => {
     'npm run design:check',
     'npm run lint',
     'npm run build',
+    'npm run go:lint',
+    'npm run security:go-vuln',
   ]);
 });
 
