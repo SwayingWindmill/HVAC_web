@@ -1,3 +1,3 @@
 module github.com/quanlaihe/hvac-web/libs/commandmodel
 
-go 1.25.12
+go 1.27.3

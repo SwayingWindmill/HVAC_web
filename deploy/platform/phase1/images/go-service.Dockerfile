@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-ARG GO_BUILD_IMAGE=golang:1.25.12-bookworm
+ARG GO_BUILD_IMAGE=golang:1.27.3-bookworm
 ARG GO_RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 FROM ${GO_BUILD_IMAGE} AS build
 ARG GO_PROXY=https://proxy.golang.org,direct
