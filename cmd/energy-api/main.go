@@ -139,7 +139,7 @@ func main() {
 		connectivityConfig = &gateway.ConnectivityConfig{BaseURL: envOr("CONNECTIVITY_SERVICE_URL", "https://connectivity:8448"), HTTPClient: &http.Client{Timeout: 5 * time.Second, Transport: workloadTransport(roots, workloadCertificate, "connectivity"), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	}
 
-	var handler http.Handler = gateway.NewHandler(gateway.Config{
+	var handler = gateway.NewHandler(gateway.Config{
 		Logger:        logger,
 		Identity:      identity,
 		RouteManager:  routing.manager,
@@ -250,7 +250,7 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 	}
 	signer, ok := certificate.PrivateKey.(crypto.Signer)
 	if !ok {
-		return nil, nil, func() {}, errors.New("Gateway workload private key cannot sign delegation grants")
+		return nil, nil, func() {}, errors.New("gateway workload private key cannot sign delegation grants")
 	}
 	iamRoots, err := loadCertPool(required["IAM_SERVER_CA"], "IAM server CA")
 	if err != nil {
@@ -476,7 +476,7 @@ func loadTelemetryConfig(certificate *tls.Certificate) (*gateway.TelemetryConfig
 		return nil, nil
 	}
 	if certificate == nil {
-		return nil, errors.New("Telemetry Runtime requires the authenticated Gateway workload certificate")
+		return nil, errors.New("telemetry runtime requires the authenticated Gateway workload certificate")
 	}
 	caPath := os.Getenv("TELEMETRY_RUNTIME_SERVER_CA")
 	if caPath == "" {
@@ -501,7 +501,7 @@ func loadCommandConfig(certificate *tls.Certificate) (*gateway.CommandConfig, er
 		return nil, nil
 	}
 	if certificate == nil {
-		return nil, errors.New("Command Service requires the authenticated Gateway workload certificate")
+		return nil, errors.New("command service requires the authenticated Gateway workload certificate")
 	}
 	caPath := os.Getenv("COMMAND_SERVICE_SERVER_CA")
 	if caPath == "" {
@@ -545,7 +545,7 @@ func loadAlarmConfig(certificate *tls.Certificate) (*gateway.AlarmConfig, error)
 		return nil, errors.New("ALARM_SERVICE_URL must be an HTTPS origin without user info, path, query or fragment")
 	}
 	if certificate == nil {
-		return nil, errors.New("Alarm Service requires the authenticated Gateway workload certificate")
+		return nil, errors.New("alarm service requires the authenticated Gateway workload certificate")
 	}
 	caPath := strings.TrimSpace(os.Getenv("ALARM_SERVICE_SERVER_CA"))
 	if caPath == "" {
@@ -579,7 +579,7 @@ func loadNotificationConfig(certificate *tls.Certificate) (*gateway.Notification
 		return nil, errors.New("NOTIFICATION_SERVICE_URL must be an HTTPS origin without user info, path, query or fragment")
 	}
 	if certificate == nil {
-		return nil, errors.New("Notification Service requires the authenticated Gateway workload certificate")
+		return nil, errors.New("notification service requires the authenticated Gateway workload certificate")
 	}
 	caPath := strings.TrimSpace(os.Getenv("NOTIFICATION_SERVICE_SERVER_CA"))
 	if caPath == "" {
@@ -611,7 +611,7 @@ func loadWorkOrderConfig(certificate *tls.Certificate) (*gateway.WorkOrderConfig
 		return nil, errors.New("WORK_ORDER_SERVICE_URL must be an HTTPS origin without user info, path, query or fragment")
 	}
 	if certificate == nil {
-		return nil, errors.New("Work Order Service requires the authenticated Gateway workload certificate")
+		return nil, errors.New("work order Service requires the authenticated Gateway workload certificate")
 	}
 	caPath := strings.TrimSpace(os.Getenv("WORK_ORDER_SERVICE_SERVER_CA"))
 	if caPath == "" {
@@ -644,7 +644,7 @@ func loadAnalyticsConfig(certificate *tls.Certificate) (*gateway.AnalyticsConfig
 	}
 	queryURL = strings.TrimRight(parsed.String(), "/")
 	if certificate == nil {
-		return nil, errors.New("Telemetry Query Service requires the authenticated Gateway workload certificate")
+		return nil, errors.New("telemetry query Service requires the authenticated Gateway workload certificate")
 	}
 	caPath := strings.TrimSpace(os.Getenv("TELEMETRY_QUERY_SERVER_CA"))
 	if caPath == "" {
@@ -674,7 +674,7 @@ func loadOperationsConfig(ctx context.Context, certificate *tls.Certificate) (*g
 		return nil, func() {}, errors.New("OPERATIONS_AGENT_URL must be an HTTPS origin without user info, path, query or fragment")
 	}
 	if certificate == nil {
-		return nil, func() {}, errors.New("Operations Agent requires the authenticated Gateway workload certificate")
+		return nil, func() {}, errors.New("operations agent requires the authenticated Gateway workload certificate")
 	}
 	caPath := strings.TrimSpace(os.Getenv("OPERATIONS_AGENT_SERVER_CA"))
 	if caPath == "" {

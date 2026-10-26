@@ -77,10 +77,10 @@ type loadResponse struct {
 func NewClient(config Config) (*Client, error) {
 	parsed, err := url.Parse(strings.TrimSpace(config.BaseURL))
 	if err != nil || parsed == nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") {
-		return nil, errors.New("Cube base URL must be an HTTP(S) origin without user info or path")
+		return nil, errors.New("cube base URL must be an HTTP(S) origin without user info or path")
 	}
 	if strings.TrimSpace(config.DatasetRevision) == "" || config.TokenFactory == nil {
-		return nil, errors.New("Cube dataset revision and token factory are required")
+		return nil, errors.New("cube dataset revision and token factory are required")
 	}
 	parsed.Path = strings.TrimRight(parsed.Path, "/") + loadPath
 	parsed.RawQuery = ""
@@ -96,7 +96,7 @@ func NewClient(config Config) (*Client, error) {
 
 func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.CallerContext, productQuery analyticsmodel.EnergySeriesQuery) (analyticsmodel.EnergySeriesResponse, error) {
 	if client == nil || client.endpoint == nil || client.tokenFactory == nil || client.httpClient == nil {
-		return analyticsmodel.EnergySeriesResponse{}, errors.New("Cube client is closed")
+		return analyticsmodel.EnergySeriesResponse{}, errors.New("cube client is closed")
 	}
 	if err := productQuery.Validate(); err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, err
@@ -169,21 +169,21 @@ func (client *Client) load(ctx context.Context, token string, query cubeQuery) (
 		return loadResponse{}, fmt.Errorf("read Cube response: %w", err)
 	}
 	if int64(len(payload)) > maximumCubeResponseSize {
-		return loadResponse{}, errors.New("Cube response exceeds the analytics response budget")
+		return loadResponse{}, errors.New("cube response exceeds the analytics response budget")
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		message := strings.TrimSpace(string(payload))
 		if len(message) > 512 {
 			message = message[:512]
 		}
-		return loadResponse{}, fmt.Errorf("Cube returned %d: %s", response.StatusCode, message)
+		return loadResponse{}, fmt.Errorf("cube returned %d: %s", response.StatusCode, message)
 	}
 	var decoded loadResponse
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		return loadResponse{}, fmt.Errorf("decode Cube response: %w", err)
 	}
 	if strings.TrimSpace(decoded.Error) != "" {
-		return loadResponse{}, fmt.Errorf("Cube query failed: %s", decoded.Error)
+		return loadResponse{}, fmt.Errorf("cube query failed: %s", decoded.Error)
 	}
 	return decoded, nil
 }
@@ -532,7 +532,7 @@ func mapEnergyMetadata(decoded loadResponse) (time.Time, uint64, error) {
 		return time.Time{}, 0, nil
 	}
 	if !hasWatermark || !hasRevision {
-		return time.Time{}, 0, errors.New("Cube energy metadata is incomplete")
+		return time.Time{}, 0, errors.New("cube energy metadata is incomplete")
 	}
 	watermark, err := parseCubeTime(watermarkValue, time.UTC)
 	if err != nil {
@@ -578,7 +578,7 @@ func scalarString(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	if !exists {
-		return "", errors.New("Cube scalar is missing")
+		return "", errors.New("cube scalar is missing")
 	}
 	return value, nil
 }
@@ -593,7 +593,7 @@ func optionalScalarString(raw json.RawMessage) (string, bool, error) {
 	}
 	value = strings.TrimSpace(string(raw))
 	if value == "" {
-		return "", false, errors.New("Cube scalar is empty")
+		return "", false, errors.New("cube scalar is empty")
 	}
 	return value, true, nil
 }

@@ -83,7 +83,7 @@ type alarmRoute struct {
 
 func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 	if config.Store == nil || config.Rules == nil || config.GatewayPublicKey == nil {
-		return nil, errors.New("Alarm Store, Site rules and Gateway public key are required")
+		return nil, errors.New("alarm store, Site rules and Gateway public key are required")
 	}
 	if config.Now == nil {
 		config.Now = time.Now

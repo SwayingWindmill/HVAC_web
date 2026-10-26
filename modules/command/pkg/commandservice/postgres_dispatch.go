@@ -313,9 +313,9 @@ FOR UPDATE
 		return ErrInvalidRequest
 	}
 
-	attemptFinal := commandmodel.AttemptOutcomeUnknown
-	intentFinal := commandmodel.IntentOutcomeUnknown
-	reason := "REQUEST_COMMITTED_OUTCOME_UNKNOWN"
+	var attemptFinal commandmodel.AttemptStatus
+	var intentFinal commandmodel.IntentStatus
+	var reason string
 	freeze := true
 	retry := false
 	var acknowledgedAt *time.Time

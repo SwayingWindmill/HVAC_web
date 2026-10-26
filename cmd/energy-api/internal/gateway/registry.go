@@ -34,8 +34,8 @@ const (
 )
 
 var (
-	registryCursorPattern   = regexp.MustCompile("^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$")
-	errRegistryBodyTooLarge = errors.New("Registry response body is too large")
+	registryCursorPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`)
+	errRegistryBodyTooLarge = errors.New("registry response body is too large")
 )
 
 type RegistryConfig struct {
@@ -353,13 +353,13 @@ func validateExactSiteRegistryScope(decision registryauth.Decision, action regis
 		return nil, err
 	}
 	if action.SiteScoped() && (len(allowedSites) == 0 || len(allowedSites) > 256) {
-		return nil, errors.New("Registry decision must contain an exact non-empty Site set")
+		return nil, errors.New("registry decision must contain an exact non-empty Site set")
 	}
 	if action.TenantScoped() && len(allowedSites) > 256 {
-		return nil, errors.New("Registry decision Site set exceeds the supported bound")
+		return nil, errors.New("registry decision Site set exceeds the supported bound")
 	}
 	if setsOverlap(allowedSites, deniedSites) {
-		return nil, errors.New("Registry decision allowed and denied Site scopes overlap")
+		return nil, errors.New("registry decision allowed and denied Site scopes overlap")
 	}
 	return allowedSites, nil
 }
@@ -368,10 +368,10 @@ func validatedRegistryIDs(values []string) (map[string]struct{}, error) {
 	result := make(map[string]struct{}, len(values))
 	for _, value := range values {
 		if !isLowerUUIDv7(value) {
-			return nil, errors.New("Registry decision contains an invalid resource identifier")
+			return nil, errors.New("registry decision contains an invalid resource identifier")
 		}
 		if _, duplicate := result[value]; duplicate {
-			return nil, errors.New("Registry decision contains a duplicate resource identifier")
+			return nil, errors.New("registry decision contains a duplicate resource identifier")
 		}
 		result[value] = struct{}{}
 	}
@@ -717,7 +717,7 @@ func canonicalRegistryDocument(raw []byte) ([]byte, error) {
 	decoder.UseNumber()
 	var value map[string]any
 	if err := decoder.Decode(&value); err != nil || ensureRegistryJSONEOF(decoder) != nil || value == nil {
-		return nil, errors.New("Registry response is not a canonical JSON object")
+		return nil, errors.New("registry response is not a canonical JSON object")
 	}
 	return json.Marshal(value)
 }
@@ -745,7 +745,7 @@ func canonicalRegistrySuccess(action registryauth.Action, scopeID string, raw []
 	case registryauth.ActionTariffRead:
 		return decodeCanonical[platformapi.SiteTariff](raw, func(value platformapi.SiteTariff) error {
 			if value.SiteID != scopeID {
-				return errors.New("Registry Tariff is outside the requested Site")
+				return errors.New("registry tariff is outside the requested Site")
 			}
 			return nil
 		})
@@ -817,12 +817,12 @@ func (h *handler) resolveAuthoritativeSiteForDomain(request *http.Request, sessi
 	}
 	authorization, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
 	if failure != nil {
-		return platformapi.Site{}, errors.New("Registry Site authorization failed")
+		return platformapi.Site{}, errors.New("registry site authorization failed")
 	}
 	publicPath := strings.Replace(platformapi.GetSitePathTemplate, "{siteId}", url.PathEscape(siteID), 1)
 	route, _, matches := matchPublicRegistryRoute(http.MethodGet, publicPath)
 	if !matches {
-		return platformapi.Site{}, errors.New("Registry Site route is unavailable")
+		return platformapi.Site{}, errors.New("registry site route is unavailable")
 	}
 	outer := routeDecisionFromContext(request.Context())
 	decision := ownershipregistry.Decision{
@@ -836,19 +836,19 @@ func (h *handler) resolveAuthoritativeSiteForDomain(request *http.Request, sessi
 	if h.routeManager != nil {
 		resolved, err := h.routeManager.Current().Resolve(http.MethodGet, publicPath, session.TenantID)
 		if err != nil || resolved.SelectedOwner != ownershipregistry.OwnerCore {
-			return platformapi.Site{}, errors.New("Registry Site route ownership is unavailable")
+			return platformapi.Site{}, errors.New("registry site route ownership is unavailable")
 		}
 		decision = resolved
 	}
 	result := h.executeCoreRegistry(request.Context(), route, "", authorization.coreGrant, decision)
 	if result.status != http.StatusOK {
-		return platformapi.Site{}, errors.New("Registry Site lookup failed")
+		return platformapi.Site{}, errors.New("registry site lookup failed")
 	}
 	var site platformapi.Site
 	decoder := json.NewDecoder(bytes.NewReader(result.body))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&site) != nil || ensureRegistryJSONEOF(decoder) != nil || validateSite(site) != nil || site.ID != siteID || !isLowerUUIDv7(site.TenantID) {
-		return platformapi.Site{}, errors.New("Registry returned an invalid authoritative Site")
+		return platformapi.Site{}, errors.New("registry returned an invalid authoritative Site")
 	}
 	return site, nil
 }
@@ -863,7 +863,7 @@ func validateSiteAssetModel(value platformapi.SiteAssetModel, expectedSiteID str
 			return err
 		}
 		if item.TenantID != value.TenantID {
-			return errors.New("Space escaped Site asset model Tenant scope")
+			return errors.New("space escaped Site asset model Tenant scope")
 		}
 		if _, duplicate := identities[item.ID]; duplicate {
 			return errors.New("duplicate Site asset model identity")
@@ -893,7 +893,7 @@ func validateSiteAssetModel(value platformapi.SiteAssetModel, expectedSiteID str
 			return err
 		}
 		if item.TenantID != value.TenantID {
-			return errors.New("Sensor escaped Site asset model Tenant scope")
+			return errors.New("sensor escaped Site asset model Tenant scope")
 		}
 		if _, duplicate := identities[item.ID]; duplicate {
 			return errors.New("duplicate Site asset model identity")
@@ -905,22 +905,22 @@ func validateSiteAssetModel(value platformapi.SiteAssetModel, expectedSiteID str
 			return err
 		}
 		if item.TenantID != value.TenantID {
-			return errors.New("Telemetry Point escaped Site asset model Tenant scope")
+			return errors.New("telemetry point escaped Site asset model Tenant scope")
 		}
 		if _, duplicate := identities[item.ID]; duplicate {
 			return errors.New("duplicate Site asset model identity")
 		}
 		if identities[item.ReportingDeviceID] != "DEVICE" {
-			return errors.New("Telemetry Point references a Device outside the Site asset model")
+			return errors.New("telemetry point references a Device outside the Site asset model")
 		}
 		if item.SensorID != nil && identities[*item.SensorID] != "SENSOR" {
-			return errors.New("Telemetry Point references a Sensor outside the Site asset model")
+			return errors.New("telemetry point references a Sensor outside the Site asset model")
 		}
 		identities[item.ID] = "POINT"
 	}
 	for _, area := range value.Spaces {
 		if area.ParentSpaceID != nil && identities[*area.ParentSpaceID] != "SPACE" {
-			return errors.New("Space parent escaped the Site asset model")
+			return errors.New("space parent escaped the Site asset model")
 		}
 	}
 	for _, relationship := range value.Relationships {
@@ -928,14 +928,14 @@ func validateSiteAssetModel(value platformapi.SiteAssetModel, expectedSiteID str
 			return err
 		}
 		if relationship.TenantID != value.TenantID {
-			return errors.New("Asset relationship escaped Site asset model Tenant scope")
+			return errors.New("asset relationship escaped Site asset model Tenant scope")
 		}
 		if identities[relationship.FromID] != relationship.FromType || identities[relationship.ToID] != relationship.ToType {
-			return errors.New("Asset relationship references an unknown or mismatched identity")
+			return errors.New("asset relationship references an unknown or mismatched identity")
 		}
 	}
 	if value.Counts.Spaces != len(value.Spaces) || value.Counts.Assets != len(value.Assets) || value.Counts.DeviceEndpoints != len(value.Devices) || value.Counts.PhysicalSensors != len(value.Sensors) || value.Counts.Points != len(value.TelemetryPoints) {
-		return errors.New("Site asset model counts do not match the payload")
+		return errors.New("site asset model counts do not match the payload")
 	}
 	return nil
 }
@@ -1166,10 +1166,6 @@ func encodeRegistryQuery(params platformapi.ListRegistryParams) string {
 		query.Set("cursor", params.Cursor)
 	}
 	return query.Encode()
-}
-
-func routePublicPath(route publicRegistryRoute) string {
-	return strings.Replace(route.internalPath, "/internal/v1/registry", "/api/v1", 1)
 }
 
 func structurallyValidRegistryGrant(value string) bool {

@@ -79,11 +79,11 @@ type resolveResponse struct {
 func NewResolver(config Config) (*Resolver, error) {
 	endpoint, err := parseOrigin(config.BaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("Core Registry resolver base URL: %w", err)
+		return nil, fmt.Errorf("core registry resolver base URL: %w", err)
 	}
 	iamEndpoint, err := parseOrigin(config.IAMURL)
 	if err != nil {
-		return nil, fmt.Errorf("Core Registry resolver IAM URL: %w", err)
+		return nil, fmt.Errorf("core registry resolver IAM URL: %w", err)
 	}
 	if config.HTTPClient == nil {
 		config.HTTPClient = &http.Client{
@@ -132,7 +132,7 @@ func (resolver *Resolver) Resolve(ctx context.Context, input energy.BindingResol
 		return energy.BindingResolution{}, fmt.Errorf("decode Core meter binding resolution: %w", err)
 	}
 	if decoded.BindingVersion < 0 || decoded.BindingRevision < 0 {
-		return energy.BindingResolution{}, errors.New("Core meter binding resolution version is invalid")
+		return energy.BindingResolution{}, errors.New("core meter binding resolution version is invalid")
 	}
 	return energy.BindingResolution{
 		Status: energy.BindingResolutionStatus(decoded.Status), TenantID: decoded.TenantID, SiteID: decoded.SiteID,

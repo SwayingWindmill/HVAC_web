@@ -40,7 +40,7 @@ const (
 var (
 	telemetryClientSubscriptionIDPattern = regexp.MustCompile("^[A-Za-z0-9_.:-]{1,128}$")
 	telemetryOpaqueSubscriptionIDPattern = regexp.MustCompile("^[A-Za-z0-9_-]{16,256}$")
-	telemetryRecoveryCursorPattern       = regexp.MustCompile("^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$")
+	telemetryRecoveryCursorPattern       = regexp.MustCompile(`^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`)
 	telemetryTransportEpochPattern       = regexp.MustCompile("^[A-Za-z0-9_.:-]{1,128}$")
 )
 

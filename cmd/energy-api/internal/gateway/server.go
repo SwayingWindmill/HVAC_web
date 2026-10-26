@@ -29,10 +29,7 @@ const (
 )
 
 var (
-	requestIDPattern   = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
-	traceparentPattern = regexp.MustCompile(`^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$`)
-	zeroTraceID        = strings.Repeat("0", 32)
-	zeroSpanID         = strings.Repeat("0", 16)
+	requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 )
 
 func formatRevision(value int64) string {
@@ -44,7 +41,6 @@ type contextKey string
 const (
 	traceIDContextKey       contextKey = "trace-id"
 	requestIDContextKey     contextKey = "request-id"
-	traceparentContextKey   contextKey = "traceparent"
 	routeDecisionContextKey contextKey = "route-decision"
 	routeSessionContextKey  contextKey = "route-session"
 )
@@ -153,7 +149,6 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 	ctx = context.WithValue(ctx, traceIDContextKey, traceID)
 	ctx = context.WithValue(ctx, requestIDContextKey, requestID)
-	ctx = context.WithValue(ctx, traceparentContextKey, traceparent)
 	request = request.WithContext(ctx)
 
 	recorder := &statusRecorder{ResponseWriter: writer, status: http.StatusOK}
@@ -744,20 +739,6 @@ func selectRequestID(candidate string, now time.Time) string {
 	return randomHex(16, now)
 }
 
-func selectTraceparent(candidate string, now time.Time) (string, string) {
-	traceID := randomHex(16, now)
-	flags := "01"
-	if match := traceparentPattern.FindStringSubmatch(candidate); len(match) == 4 && match[1] != zeroTraceID && match[2] != zeroSpanID {
-		traceID = match[1]
-		flags = match[3]
-	}
-	spanID := randomHex(8, now)
-	if spanID == zeroSpanID {
-		spanID = "0000000000000001"
-	}
-	return traceID, fmt.Sprintf("00-%s-%s-%s", traceID, spanID, flags)
-}
-
 func randomHex(byteCount int, now time.Time) string {
 	buffer := make([]byte, byteCount)
 	if _, err := rand.Read(buffer); err == nil {
@@ -775,11 +756,6 @@ func traceIDFromContext(ctx context.Context) string {
 func requestIDFromContext(ctx context.Context) string {
 	requestID, _ := ctx.Value(requestIDContextKey).(string)
 	return requestID
-}
-
-func traceparentFromContext(ctx context.Context) string {
-	traceparent, _ := ctx.Value(traceparentContextKey).(string)
-	return traceparent
 }
 
 type statusRecorder struct {

@@ -21,7 +21,7 @@ func OpenScheduler(ctx context.Context, databaseURL string) (*Scheduler, error) 
 		return nil, fmt.Errorf("parse Notification scheduler database URL: %w", err)
 	}
 	if config.ConnConfig.User != "s16_notification_service" {
-		return nil, errors.New("Notification scheduler database identity must be s16_notification_service")
+		return nil, errors.New("notification scheduler database identity must be s16_notification_service")
 	}
 	config.MaxConns = 4
 	config.MinConns = 1

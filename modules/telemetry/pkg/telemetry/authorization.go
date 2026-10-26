@@ -67,7 +67,7 @@ type grantAcceptance struct {
 
 func NewHTTPGrantAuthorizer(endpoint string, client *http.Client, publicKey crypto.PublicKey, issuer, audience string) (*HTTPGrantAuthorizer, error) {
 	parsed, err := url.Parse(strings.TrimSpace(endpoint))
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname()))) {
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && (parsed.Scheme != "http" || !isLoopbackHost(parsed.Hostname()))) {
 		return nil, errors.New("IAM telemetry authorization endpoint must use HTTPS or loopback HTTP")
 	}
 	if client == nil || publicKey == nil || strings.TrimSpace(issuer) == "" || strings.TrimSpace(audience) == "" {

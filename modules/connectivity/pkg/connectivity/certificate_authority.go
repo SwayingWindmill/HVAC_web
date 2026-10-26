@@ -70,7 +70,7 @@ func parseGatewayCSR(csrPEM string) (*x509.CertificateRequest, error) {
 func (authority *CertificateAuthority) issue(gatewayID string, csr *x509.CertificateRequest, now time.Time) (IssuedCredential, *x509.Certificate, error) {
 	expires := now.Add(90 * 24 * time.Hour)
 	if now.Before(authority.certificate.NotBefore) || expires.After(authority.certificate.NotAfter) {
-		return IssuedCredential{}, nil, errors.New("Gateway CA cannot cover the certificate lifetime")
+		return IssuedCredential{}, nil, errors.New("gateway CA cannot cover the certificate lifetime")
 	}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {

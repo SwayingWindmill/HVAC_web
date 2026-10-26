@@ -51,7 +51,7 @@ func MaintainGatewayCredential(ctx context.Context, config *MQTTGatewayConfig, c
 func EnsureGatewayCredential(ctx context.Context, config *MQTTGatewayConfig, code string) error {
 	origin, err := url.Parse(config.EnrollmentURL)
 	if err != nil || origin.Scheme != "https" || origin.Host == "" || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" || origin.Path != "" {
-		return errors.New("Gateway enrollment URL must be an https:// origin")
+		return errors.New("gateway enrollment URL must be an https:// origin")
 	}
 	identity, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
 	renew := err == nil
@@ -70,10 +70,10 @@ func EnsureGatewayCredential(ctx context.Context, config *MQTTGatewayConfig, cod
 			return nil
 		}
 		if !time.Now().Before(leaf.NotAfter) {
-			return errors.New("Gateway identity expired; register a replacement Gateway")
+			return errors.New("gateway identity expired; register a replacement Gateway")
 		}
 	} else if code == "" {
-		return errors.New("Gateway enrollment code is required for initial enrollment")
+		return errors.New("gateway enrollment code is required for initial enrollment")
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -96,7 +96,7 @@ func EnsureGatewayCredential(ctx context.Context, config *MQTTGatewayConfig, cod
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(ca) {
-		return errors.New("Gateway enrollment server CA is invalid")
+		return errors.New("gateway enrollment server CA is invalid")
 	}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, ServerName: config.EnrollmentServerName}
 	if renew {
@@ -116,11 +116,11 @@ func EnsureGatewayCredential(ctx context.Context, config *MQTTGatewayConfig, cod
 	request.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		return fmt.Errorf("Gateway credential request: %w", err)
+		return fmt.Errorf("gateway credential request: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("Gateway credential request rejected (HTTP %d)", response.StatusCode)
+		return fmt.Errorf("gateway credential request rejected (HTTP %d)", response.StatusCode)
 	}
 	var issued struct {
 		CertificatePEM string    `json:"certificatePem"`

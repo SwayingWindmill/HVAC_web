@@ -36,7 +36,11 @@ func TestPostgresTelemetryRevocationPoll(t *testing.T) {
 	if _, err := admin.Exec(ctx, setStatus, postgresDelegatedSiteBindingID, "SUSPENDED"); err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Exec(context.Background(), setStatus, postgresDelegatedSiteBindingID, "ACTIVE")
+	defer func() {
+		if _, err := admin.Exec(context.Background(), setStatus, postgresDelegatedSiteBindingID, "ACTIVE"); err != nil {
+			t.Error(err)
+		}
+	}()
 	facts, err := store.PollRevocations(ctx, postgresTenantAID, before, 10)
 	if err != nil || len(facts) != 1 || facts[0].SourceType != "ROLE_BINDING" || facts[0].PrincipalID != postgresDelegatedPrincipalID {
 		t.Fatalf("facts=%#v err=%v", facts, err)
@@ -67,7 +71,11 @@ func TestPostgresTelemetryGrantSingleUse(t *testing.T) {
 	}
 	identifier := "use-" + strconv.FormatInt(now.UnixNano(), 10)
 	claims := telemetryauth.GrantClaims{TokenID: identifier, TenantID: postgresTenantAID, PrincipalID: postgresDelegatedPrincipalID, ScopeDigest: digest, PolicyRevision: "telemetry-access:2/iam:1", ExpiresAt: now.Add(30 * time.Second).Unix()}
-	defer admin.Exec(context.Background(), `DELETE FROM iam.telemetry_grant_uses WHERE token_id = $1`, identifier)
+	defer func() {
+		if _, err := admin.Exec(context.Background(), `DELETE FROM iam.telemetry_grant_uses WHERE token_id = $1`, identifier); err != nil {
+			t.Error(err)
+		}
+	}()
 	first, err := store.ConsumeGrant(ctx, claims, now)
 	if err != nil || first.Replayed || first.Revoked {
 		t.Fatalf("first=%#v err=%v", first, err)

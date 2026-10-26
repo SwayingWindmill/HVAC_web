@@ -41,11 +41,11 @@ type centrifugoAPIError struct {
 
 func NewCentrifugoTransport(config CentrifugoTransportConfig) (*CentrifugoTransport, error) {
 	parsed, err := url.Parse(strings.TrimSpace(config.BaseURL))
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname()))) {
-		return nil, errors.New("Centrifugo server API must use HTTPS or loopback HTTP")
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && (parsed.Scheme != "http" || !isLoopbackHost(parsed.Hostname()))) {
+		return nil, errors.New("centrifugo server API must use HTTPS or loopback HTTP")
 	}
 	if strings.TrimSpace(config.APIKey) == "" || config.HTTPClient == nil {
-		return nil, errors.New("Centrifugo server API configuration is incomplete")
+		return nil, errors.New("centrifugo server API configuration is incomplete")
 	}
 	return &CentrifugoTransport{
 		baseURL: strings.TrimRight(parsed.String(), "/"),

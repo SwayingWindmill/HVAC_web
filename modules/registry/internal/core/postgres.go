@@ -36,7 +36,7 @@ type PostgresStore struct {
 
 func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
 	if strings.TrimSpace(databaseURL) == "" {
-		return nil, errors.New("Core database URL is required")
+		return nil, errors.New("core database URL is required")
 	}
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
@@ -54,7 +54,7 @@ func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore,
 			return fmt.Errorf("read Core database identity: %w", err)
 		}
 		if sessionUser != coreServiceDatabaseRole || !runtimeMember || !writerMember {
-			return fmt.Errorf("Core database identity %q is not allowed", sessionUser)
+			return fmt.Errorf("core database identity %q is not allowed", sessionUser)
 		}
 		return nil
 	}

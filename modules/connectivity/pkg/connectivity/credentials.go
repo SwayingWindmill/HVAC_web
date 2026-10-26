@@ -16,8 +16,8 @@ import (
 
 var (
 	ErrEnrollmentRejected  = errors.New("enrollment code or CSR rejected")
-	ErrCredentialForbidden = errors.New("Gateway credential scope forbidden")
-	ErrCredentialRevoked   = errors.New("Gateway identity has been revoked")
+	ErrCredentialForbidden = errors.New("gateway credential scope forbidden")
+	ErrCredentialRevoked   = errors.New("gateway identity has been revoked")
 )
 
 type EnrollmentCode struct {

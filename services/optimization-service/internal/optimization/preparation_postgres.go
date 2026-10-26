@@ -218,7 +218,7 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND status='BUILDI
 		return PreparedOptimization{}, fmt.Errorf("seal Optimization input snapshot: %w", err)
 	}
 	if sealTag.RowsAffected() != 1 {
-		return PreparedOptimization{}, errors.New("Optimization input snapshot sealing was rejected")
+		return PreparedOptimization{}, errors.New("optimization input snapshot sealing was rejected")
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO core_registry.optimization_runs(
  id,tenant_id,site_id,subject_type,subject_id,policy_version_id,input_snapshot_id,objective,horizon,horizon_minutes,granularity,

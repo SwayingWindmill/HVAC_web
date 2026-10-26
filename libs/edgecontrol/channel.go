@@ -318,7 +318,7 @@ func (runtime *Runtime) Register(descriptor ChannelDescriptor) error {
 		return fmt.Errorf("channel %s is already registered", address)
 	}
 	if previous, exists := runtime.pointIDs[descriptor.PointID]; exists {
-		return fmt.Errorf("Point %s is already mapped to channel %s", descriptor.PointID, previous)
+		return fmt.Errorf("point %s is already mapped to channel %s", descriptor.PointID, previous)
 	}
 	runtime.channels[address] = &channelState{descriptor: cloneChannelDescriptor(descriptor)}
 	runtime.pointIDs[descriptor.PointID] = address

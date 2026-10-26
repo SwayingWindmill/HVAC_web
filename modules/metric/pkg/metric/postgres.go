@@ -163,7 +163,7 @@ WHERE tenant_id=$1::uuid AND metric_id=$2::uuid AND status='RELEASED'
 		return Input{}, fmt.Errorf("load expected Metric dependency version: %w", err)
 	}
 	if expectedDataType != "NUMBER" {
-		return Input{}, errors.New("Metric dependency data type is not NUMBER")
+		return Input{}, errors.New("metric dependency data type is not NUMBER")
 	}
 	var resultID, actualVersionID, unit, quality string
 	var revision uint64
@@ -179,10 +179,10 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND metric_id=$3::uuid
 		return Input{}, fmt.Errorf("load current Metric dependency result: %w", err)
 	}
 	if actualVersionID != expectedVersionID {
-		return Input{}, errors.New("Metric dependency revision does not match the released Metric Version")
+		return Input{}, errors.New("metric dependency revision does not match the released Metric Version")
 	}
 	if unit != expectedUnit {
-		return Input{}, errors.New("Metric dependency unit does not match the released Metric Version")
+		return Input{}, errors.New("metric dependency unit does not match the released Metric Version")
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return Input{}, err

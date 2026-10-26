@@ -25,7 +25,7 @@ func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore,
 		return nil, fmt.Errorf("parse Alarm database URL: %w", err)
 	}
 	if config.ConnConfig.User != "s4_alarm_service" {
-		return nil, errors.New("Alarm database identity must be s4_alarm_service")
+		return nil, errors.New("alarm database identity must be s4_alarm_service")
 	}
 	config.MaxConns = 16
 	config.MinConns = 1

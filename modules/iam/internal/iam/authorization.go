@@ -2,7 +2,6 @@ package iam
 
 import (
 	"context"
-	"sort"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -210,15 +209,6 @@ func hasRegistryAction(actions []registryauth.Action, requested registryauth.Act
 		}
 	}
 	return false
-}
-
-func sortedKeys(values map[string]struct{}) []string {
-	result := make([]string, 0, len(values))
-	for value := range values {
-		result = append(result, value)
-	}
-	sort.Strings(result)
-	return result
 }
 
 func authorizationIdentityKey(subjectIssuer, subject string) string {

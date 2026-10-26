@@ -164,27 +164,6 @@ func workOrderMutationKeyScope(idempotencyKey string) string {
 	return workorderauth.MutationKeyScope(idempotencyKey)
 }
 
-func lifecycleRouteSuffix(operation workordermodel.Operation) string {
-	switch operation {
-	case workordermodel.OperationSchedule:
-		return ":plan"
-	case workordermodel.OperationStart:
-		return ":start"
-	case workordermodel.OperationBlock:
-		return ":block"
-	case workordermodel.OperationResume:
-		return ":resume"
-	case workordermodel.OperationComplete:
-		return ":complete"
-	case workordermodel.OperationCancel:
-		return ":cancel"
-	case workordermodel.OperationReopen:
-		return ":reopen"
-	default:
-		return ""
-	}
-}
-
 func decodePublicNullableInstant(raw json.RawMessage) (*string, bool) {
 	if string(raw) == "null" {
 		return nil, true

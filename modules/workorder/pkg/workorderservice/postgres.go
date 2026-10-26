@@ -55,7 +55,7 @@ func openWorkOrderPool(ctx context.Context, databaseURL, expectedUser string) (*
 		return nil, fmt.Errorf("parse Work Order database URL: %w", err)
 	}
 	if config.ConnConfig.User != expectedUser {
-		return nil, fmt.Errorf("Work Order database identity must be %s", expectedUser)
+		return nil, fmt.Errorf("work order database identity must be %s", expectedUser)
 	}
 	config.MaxConns = 16
 	config.MinConns = 1
@@ -255,7 +255,7 @@ func scanCurrentRecord(scanner rowScanner) (currentRecord, error) {
 		return currentRecord{}, err
 	}
 	if taskTotal < 0 || taskCompleted < 0 || taskBlocked < 0 || noteCount < 0 || attachmentCount < 0 {
-		return currentRecord{}, errors.New("Work Order summary counts are negative")
+		return currentRecord{}, errors.New("work order summary counts are negative")
 	}
 	record.workOrder.SchemaVersion = workordermodel.SchemaVersion
 	record.workOrder.AssigneeID = nullableStringPointer(assigneeID)

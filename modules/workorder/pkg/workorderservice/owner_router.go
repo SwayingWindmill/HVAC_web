@@ -22,7 +22,7 @@ func NewOwnerRouter(config OwnerRouterConfig) (http.Handler, error) {
 	reader := strings.TrimSpace(config.ReaderSPIFFE)
 	if !strings.HasPrefix(gateway, "spiffe://") || config.Handler == nil ||
 		(reader != "" && (!strings.HasPrefix(reader, "spiffe://") || reader == gateway)) {
-		return nil, errors.New("Work Order owner router configuration is invalid")
+		return nil, errors.New("work order owner router configuration is invalid")
 	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		peer := workloadSPIFFE(request)

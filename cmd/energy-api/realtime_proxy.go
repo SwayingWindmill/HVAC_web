@@ -25,16 +25,19 @@ func withRealtimeProxy(next http.Handler, logger *slog.Logger) (http.Handler, er
 		return nil, fmt.Errorf("invalid REALTIME_UPSTREAM_URL %q", rawUpstream)
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(upstream)
-	originalDirector := proxy.Director
-	proxy.Director = func(request *http.Request) {
-		originalDirector(request)
-		request.URL.Path = "/connection/" + strings.TrimPrefix(request.URL.Path, realtimePublicPrefix)
-		request.URL.RawPath = ""
-	}
-	proxy.ErrorHandler = func(writer http.ResponseWriter, request *http.Request, proxyErr error) {
-		logger.Warn("energy_api_realtime_upstream_unavailable", "error_code", "REALTIME_UPSTREAM_UNAVAILABLE")
-		http.Error(writer, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(proxyRequest *httputil.ProxyRequest) {
+			proxyRequest.SetURL(upstream)
+			proxyRequest.Out.URL.Path = "/connection/" + strings.TrimPrefix(proxyRequest.In.URL.Path, realtimePublicPrefix)
+			proxyRequest.Out.URL.RawPath = ""
+			// Keep the browser's Host, as the proxy did before Rewrite; SetURL would replace it with the upstream's.
+			proxyRequest.Out.Host = proxyRequest.In.Host
+			proxyRequest.SetXForwarded()
+		},
+		ErrorHandler: func(writer http.ResponseWriter, request *http.Request, proxyErr error) {
+			logger.Warn("energy_api_realtime_upstream_unavailable", "error_code", "REALTIME_UPSTREAM_UNAVAILABLE")
+			http.Error(writer, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
+		},
 	}
 
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

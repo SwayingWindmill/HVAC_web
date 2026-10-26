@@ -312,7 +312,6 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 		return nil, nil, func() {}, err
 	}
 
-	policyRevision := envOr("IAM_POLICY_REVISION", "policy-unconfigured")
 	databaseURL := energyRequiredEnv("IAM_DATABASE_URL")
 	openContext, cancelOpen := context.WithTimeout(ctx, 5*time.Second)
 	store, err := iamserver.OpenPostgresAuthorizationStore(openContext, databaseURL)
@@ -321,7 +320,7 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 		return nil, nil, func() {}, err
 	}
 	closeFuncs := []func(){store.Close}
-	policyRevision = "database-managed"
+	policyRevision := "database-managed"
 
 	var adminStore *iamserver.PostgresAdminStore
 	if adminDatabaseURL := strings.TrimSpace(os.Getenv("IAM_ADMIN_DATABASE_URL")); adminDatabaseURL != "" {
@@ -357,7 +356,7 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 		for _, closeStore := range closeFuncs {
 			closeStore()
 		}
-		return nil, nil, func() {}, errors.New("Command emergency revocation revision is invalid")
+		return nil, nil, func() {}, errors.New("command emergency revocation revision is invalid")
 	}
 	config := iamserver.Config{
 		AllowedWorkloadSPIFFE:    envOr("IAM_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
@@ -519,12 +518,12 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger) (*http.S
 	policyRevision := energyRequiredEnv("COMMAND_POLICY_REVISION")
 	if policyRevision == "" {
 		store.Close()
-		return nil, nil, func() {}, errors.New("Command policy revision is required")
+		return nil, nil, func() {}, errors.New("command policy revision is required")
 	}
 	revocationRevision, err := strconv.ParseUint(energyRequiredEnv("COMMAND_EMERGENCY_REVOCATION_REVISION"), 10, 64)
 	if err != nil {
 		store.Close()
-		return nil, nil, func() {}, errors.New("Command emergency revocation revision is invalid")
+		return nil, nil, func() {}, errors.New("command emergency revocation revision is invalid")
 	}
 	gatewaySPIFFE := envOr("COMMAND_GATEWAY_SPIFFE", "spiffe://hvac.local/platform-gateway")
 	commandHandler, err := commandservice.NewHTTPHandler(commandservice.HTTPConfig{
@@ -669,7 +668,7 @@ func newEmbeddedWorkOrderServer(ctx context.Context, logger *slog.Logger) (*http
 	}
 	cursorMaterial, err := embeddedLoadValueFile(energyRequiredEnv("WORK_ORDER_CURSOR_SECRET_FILE"), 4<<10)
 	if err != nil || len(cursorMaterial) < 32 {
-		return nil, func() {}, errors.New("Work Order cursor configuration is invalid")
+		return nil, func() {}, errors.New("work order cursor configuration is invalid")
 	}
 	openContext, cancelOpen := context.WithTimeout(ctx, 10*time.Second)
 	store, err := workorderservice.OpenPostgresStoreWithMutations(openContext, databaseURL, mutationDatabaseURL, []byte(cursorMaterial))
@@ -862,13 +861,4 @@ func embeddedCertificatePublicKey(path string) (crypto.PublicKey, error) {
 
 func energyRequiredEnv(name string) string {
 	return strings.TrimSpace(os.Getenv(name))
-}
-
-func envEnabled(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
 }

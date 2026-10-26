@@ -201,7 +201,7 @@ func (store *PostgresStore) applyEvaluationEffect(ctx context.Context, tx pgx.Tx
 		return nil
 	case EvaluationEffectPublish:
 		if decision.Publication == nil {
-			return errors.New("Alarm evaluation publish decision is incomplete")
+			return errors.New("alarm evaluation publish decision is incomplete")
 		}
 		incident, err := store.publishInTransaction(ctx, tx, tenantID, siteID, *decision.Publication)
 		if err != nil {
@@ -212,7 +212,7 @@ func (store *PostgresStore) applyEvaluationEffect(ctx context.Context, tx pgx.Tx
 		return nil
 	case EvaluationEffectClear:
 		if decision.Recovery == nil {
-			return errors.New("Alarm evaluation clear decision is incomplete")
+			return errors.New("alarm evaluation clear decision is incomplete")
 		}
 		if _, err := store.clearInTransaction(ctx, tx, tenantID, siteID, *decision.Recovery); err != nil {
 			return err
@@ -221,7 +221,7 @@ func (store *PostgresStore) applyEvaluationEffect(ctx context.Context, tx pgx.Tx
 		decision.State.ActiveIncidentCorrelationID = ""
 		return nil
 	default:
-		return errors.New("Alarm evaluation effect is invalid")
+		return errors.New("alarm evaluation effect is invalid")
 	}
 }
 
@@ -481,7 +481,7 @@ func persistEvaluation(ctx context.Context, tx pgx.Tx, assigned assignedAlarmPol
 	}
 	lastEvaluatedAt, err := time.Parse(time.RFC3339Nano, decision.State.LastEvaluatedAt)
 	if err != nil {
-		return errors.New("Alarm evaluation state time is invalid")
+		return errors.New("alarm evaluation state time is invalid")
 	}
 	var activeAlarmID, activeCorrelationID any
 	if decision.State.ActiveAlarmID != "" {
@@ -578,7 +578,7 @@ func parseOptionalInstant(value *string) (any, error) {
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, *value)
 	if err != nil {
-		return nil, errors.New("Alarm evaluation scheduled instant is invalid")
+		return nil, errors.New("alarm evaluation scheduled instant is invalid")
 	}
 	return parsed.UTC(), nil
 }

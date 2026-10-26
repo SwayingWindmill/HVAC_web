@@ -27,7 +27,7 @@ func (store *PostgresStore) ReleaseAlarmPolicyRevision(ctx context.Context, tena
 		return ErrUnavailable
 	}
 	if !alarmmodel.IsUUIDv7(tenantID) || !alarmmodel.IsUUIDv7(siteID) || !boundedText(releasedBy, 256) || releasedAt.IsZero() {
-		return errors.New("Alarm policy release metadata is invalid")
+		return errors.New("alarm policy release metadata is invalid")
 	}
 	if err := policy.Validate(); err != nil {
 		return err
@@ -56,14 +56,14 @@ func (store *PostgresStore) ReleaseAlarmPolicyRevision(ctx context.Context, tena
 		return fmt.Errorf("read latest Alarm policy release: %w", err)
 	} else {
 		if policy.Revision != latestRevision+1 {
-			return errors.New("Alarm policy release revision is not contiguous")
+			return errors.New("alarm policy release revision is not contiguous")
 		}
 		latestPolicy, err := decodeAlarmPolicy(latestPolicyJSON)
 		if err != nil {
 			return err
 		}
 		if latestPolicy.AlarmType != policy.AlarmType || latestPolicy.SourceType != policy.SourceType || latestPolicy.SourceReference != policy.SourceReference {
-			return errors.New("Alarm policy family cannot change fingerprint identity across revisions")
+			return errors.New("alarm policy family cannot change fingerprint identity across revisions")
 		}
 	}
 
@@ -91,14 +91,14 @@ func (store *PostgresStore) AssignAlarmPolicyRevision(ctx context.Context, tenan
 		return ErrUnavailable
 	}
 	if !alarmmodel.IsUUIDv7(tenantID) || !alarmmodel.IsUUIDv7(siteID) || !alarmmodel.IsUUIDv7(input.AssignmentID) || input.AssignmentRevision == 0 || !alarmmodel.IsUUIDv7(input.PolicyRevisionID) || !validEvaluationSubjectType(input.SubjectType) || !alarmmodel.IsUUIDv7(input.SubjectID) || !boundedText(input.AssignedBy, 256) {
-		return errors.New("Alarm policy assignment is invalid")
+		return errors.New("alarm policy assignment is invalid")
 	}
 	assignedAt, err := time.Parse(time.RFC3339Nano, input.AssignedAt)
 	if err != nil {
-		return errors.New("Alarm policy assignment time is invalid")
+		return errors.New("alarm policy assignment time is invalid")
 	}
 	if input.SubjectType == "SITE" && input.SubjectID != siteID {
-		return errors.New("Alarm policy Site assignment is inconsistent")
+		return errors.New("alarm policy Site assignment is inconsistent")
 	}
 	tx, err := store.beginTenantTransaction(ctx, tenantID, false)
 	if err != nil {
@@ -122,7 +122,7 @@ func (store *PostgresStore) AssignAlarmPolicyRevision(ctx context.Context, tenan
 		return fmt.Errorf("resolve Alarm policy assignment target: %w", err)
 	}
 	if assignedAt.Before(targetReleasedAt) {
-		return errors.New("Alarm policy assignment cannot precede policy release")
+		return errors.New("alarm policy assignment cannot precede policy release")
 	}
 
 	var latestRevision uint64
@@ -148,7 +148,7 @@ func (store *PostgresStore) AssignAlarmPolicyRevision(ctx context.Context, tenan
 			  AND assignment.subject_type=$4 AND assignment.subject_id=$5
 			LIMIT 1`, tenantID, siteID, targetPolicyID, input.SubjectType, input.SubjectID).Scan(&existingAssignmentID)
 		if err == nil {
-			return errors.New("Alarm policy family already has an assignment stream for this subject")
+			return errors.New("alarm policy family already has an assignment stream for this subject")
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("check duplicate Alarm policy assignment stream: %w", err)
@@ -157,13 +157,13 @@ func (store *PostgresStore) AssignAlarmPolicyRevision(ctx context.Context, tenan
 		return fmt.Errorf("read latest Alarm policy assignment: %w", err)
 	} else {
 		if input.AssignmentRevision != latestRevision+1 {
-			return errors.New("Alarm policy assignment revision is not contiguous")
+			return errors.New("alarm policy assignment revision is not contiguous")
 		}
 		if input.SubjectType != latestSubjectType || input.SubjectID != latestSubjectID {
-			return errors.New("Alarm policy assignment subject is immutable")
+			return errors.New("alarm policy assignment subject is immutable")
 		}
 		if targetPolicyID != latestPolicyID {
-			return errors.New("Alarm policy assignment cannot switch policy family")
+			return errors.New("alarm policy assignment cannot switch policy family")
 		}
 	}
 

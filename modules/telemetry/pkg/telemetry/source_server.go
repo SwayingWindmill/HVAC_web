@@ -201,11 +201,11 @@ func normalizeHistoricalReplayObservation(input historicalReplayObservationReque
 	datasetID := strings.ToLower(strings.TrimSpace(input.ReplayDatasetID))
 	deviceID := strings.ToLower(strings.TrimSpace(input.DeviceID))
 	if !uuidV7Pattern.MatchString(datasetID) || !uuidV7Pattern.MatchString(deviceID) || input.Offset < 0 || receivedAt.IsZero() {
-		return ObservationCandidate{}, errors.New("Historical Replay identity is invalid")
+		return ObservationCandidate{}, errors.New("historical replay identity is invalid")
 	}
 	sampledAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.SampledAt))
 	if err != nil {
-		return ObservationCandidate{}, errors.New("Historical Replay sampledAt is invalid")
+		return ObservationCandidate{}, errors.New("historical replay sampledAt is invalid")
 	}
 	deviceDigest := sha256.Sum256([]byte(deviceID))
 	partition := "history-replay:" + datasetID + ":" + hex.EncodeToString(deviceDigest[:16])
@@ -236,7 +236,7 @@ func normalizeHistoricalReplayObservation(input historicalReplayObservationReque
 func deterministicHistoricalReplayEventID(datasetID, partition string, offset int64) (string, error) {
 	datasetBytes, err := hex.DecodeString(strings.ReplaceAll(datasetID, "-", ""))
 	if err != nil || len(datasetBytes) != 16 {
-		return "", errors.New("Historical Replay dataset ID is invalid")
+		return "", errors.New("historical replay dataset ID is invalid")
 	}
 	digest := sha256.Sum256([]byte(datasetID + "\x00" + partition + "\x00" + strconv.FormatInt(offset, 10)))
 	identifier := make([]byte, 16)

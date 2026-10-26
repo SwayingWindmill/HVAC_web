@@ -99,7 +99,7 @@ func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, seque
 			}
 			if *observation.PointType == "COUNTER" {
 				if observation.ValueType == nil || *observation.ValueType != "NUMBER" || observation.CounterDecreaseMode == nil {
-					return errors.New("Counter history observation requires numeric value type and decrease semantics")
+					return errors.New("counter history observation requires numeric value type and decrease semantics")
 				}
 				switch *observation.CounterDecreaseMode {
 				case "RESET_TO_ZERO", "INVALID":
@@ -111,7 +111,7 @@ func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, seque
 						return errors.New("rollover Counter history observation requires a positive modulus")
 					}
 				default:
-					return errors.New("Counter history observation decrease semantics are invalid")
+					return errors.New("counter history observation decrease semantics are invalid")
 				}
 			} else if observation.CounterDecreaseMode != nil || observation.CounterRolloverModulus != nil {
 				return errors.New("non-Counter history observation cannot define Counter semantics")

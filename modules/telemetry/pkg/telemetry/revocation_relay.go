@@ -107,7 +107,7 @@ type HTTPRevocationSource struct {
 
 func NewHTTPRevocationSource(iamEndpoint string, client *http.Client) (*HTTPRevocationSource, error) {
 	parsed, err := url.Parse(strings.TrimSpace(iamEndpoint))
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname()))) {
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && (parsed.Scheme != "http" || !isLoopbackHost(parsed.Hostname()))) {
 		return nil, errors.New("IAM revocation endpoint must use HTTPS or loopback HTTP")
 	}
 	if client == nil {

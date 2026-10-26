@@ -20,7 +20,7 @@ type HMACTokenFactory struct {
 
 func NewHMACTokenFactory(secret []byte, now func() time.Time) (*HMACTokenFactory, error) {
 	if len(secret) < 32 {
-		return nil, errors.New("Cube API secret must contain at least 32 bytes")
+		return nil, errors.New("cube API secret must contain at least 32 bytes")
 	}
 	if now == nil {
 		now = time.Now
@@ -30,13 +30,13 @@ func NewHMACTokenFactory(secret []byte, now func() time.Time) (*HMACTokenFactory
 
 func (factory *HMACTokenFactory) Token(_ context.Context, caller analytics.CallerContext, tenantID, siteID string) (string, error) {
 	if factory == nil || len(factory.secret) < 32 || factory.now == nil {
-		return "", errors.New("Cube token factory is closed")
+		return "", errors.New("cube token factory is closed")
 	}
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(siteID) == "" {
-		return "", errors.New("Cube token needs a Tenant and a Site")
+		return "", errors.New("cube token needs a Tenant and a Site")
 	}
 	if strings.TrimSpace(caller.PrincipalID) == "" || strings.TrimSpace(caller.PolicyRevision) == "" {
-		return "", errors.New("Cube caller context is incomplete")
+		return "", errors.New("cube caller context is incomplete")
 	}
 	now := factory.now().UTC()
 	header, err := json.Marshal(map[string]string{"alg": "HS256", "typ": "JWT"})

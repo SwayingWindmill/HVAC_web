@@ -863,15 +863,6 @@ func containsString(values []string, expected string) bool {
 	}
 	return false
 }
-
-func containsRole(roles []string, expected string) bool {
-	for _, role := range roles {
-		if role == expected {
-			return true
-		}
-	}
-	return false
-}
 func toPublicUser(value identitycontext.UserPrincipal) platformapi.UserPrincipal {
 	return platformapi.UserPrincipal{Subject: value.Subject, Issuer: value.Issuer, DisplayName: value.DisplayName, Email: value.Email, Roles: append([]string{}, value.Roles...)}
 }

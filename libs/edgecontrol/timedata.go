@@ -105,10 +105,10 @@ func (store *FileTimedata) recoverHistory() error {
 			return fmt.Errorf("decode Edge Timedata history: %w", err)
 		}
 		if record.Sequence == 0 || record.Sequence <= previous || strings.TrimSpace(record.Address) == "" || strings.TrimSpace(record.PointID) == "" {
-			return errors.New("Edge Timedata history is not monotonic or is malformed")
+			return errors.New("edge timedata history is not monotonic or is malformed")
 		}
 		if record.Sample.ObservedAt.IsZero() {
-			return errors.New("Edge Timedata history contains sample without observed time")
+			return errors.New("edge timedata history contains sample without observed time")
 		}
 		previous = record.Sequence
 		store.nextSequence = record.Sequence
@@ -139,7 +139,7 @@ func sampleIsNewer(next, current Sample) bool {
 // Cloud publishing/resend) still follows OpenEMS.
 func (store *FileTimedata) RecordImage(image ProcessImage) (int, error) {
 	if store == nil {
-		return 0, errors.New("Edge Timedata is nil")
+		return 0, errors.New("edge timedata is nil")
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -220,7 +220,7 @@ func (store *FileTimedata) Latest(address string) (TimedataRecord, bool) {
 
 func (store *FileTimedata) History(address string, limit int) ([]TimedataRecord, error) {
 	if store == nil {
-		return nil, errors.New("Edge Timedata is nil")
+		return nil, errors.New("edge timedata is nil")
 	}
 	address = strings.TrimSpace(address)
 	if address == "" {
@@ -246,7 +246,7 @@ func (store *FileTimedata) History(address string, limit int) ([]TimedataRecord,
 // an internal transport cursor.
 func (store *FileTimedata) QueryRange(from, to time.Time, addresses []string, limit int) ([]TimedataRecord, error) {
 	if store == nil {
-		return nil, errors.New("Edge Timedata is nil")
+		return nil, errors.New("edge timedata is nil")
 	}
 	if from.IsZero() || to.IsZero() || !from.Before(to) {
 		return nil, errors.New("valid from/to range is required")

@@ -359,7 +359,7 @@ func (client *replayClient) Admit(ctx context.Context, input replayObservationRe
 		}
 		// Rate limiting and a briefly unavailable store are retryable; anything else is a bad observation.
 		if (status != http.StatusTooManyRequests && status != http.StatusServiceUnavailable) || attempt == maximumReplayAttempts {
-			return fmt.Errorf("Historical Replay admission returned %d: %s", status, response)
+			return fmt.Errorf("historical replay admission returned %d: %s", status, response)
 		}
 		select {
 		case <-ctx.Done():
@@ -386,7 +386,7 @@ func (client *replayClient) send(ctx context.Context, body []byte) (int, string,
 		return 0, "", fmt.Errorf("read Historical Replay response: %w", err)
 	}
 	if int64(len(payload)) > maximumReplayResponseBytes {
-		return 0, "", errors.New("Historical Replay response exceeds limit")
+		return 0, "", errors.New("historical replay response exceeds limit")
 	}
 	return response.StatusCode, strings.TrimSpace(string(payload)), nil
 }

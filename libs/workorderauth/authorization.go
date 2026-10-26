@@ -47,31 +47,31 @@ type DecisionRequest struct {
 
 func (request DecisionRequest) Validate() error {
 	if !workordermodel.IsUUIDv7(request.TenantID) || !workordermodel.IsUUIDv7(request.SiteID) {
-		return errors.New("Work Order authorization scope is invalid")
+		return errors.New("work order authorization scope is invalid")
 	}
 	switch request.Action {
 	case ActionList:
 		if strings.TrimSpace(request.WorkOrderID) != "" || request.AssigneeID != nil || request.TeamID != nil {
-			return errors.New("Work Order list authorization cannot include resource or ownership targets")
+			return errors.New("work order list authorization cannot include resource or ownership targets")
 		}
 	case ActionRead:
 		if !workordermodel.IsUUIDv7(request.WorkOrderID) || request.AssigneeID != nil || request.TeamID != nil {
-			return errors.New("Work Order read authorization requires only Work Order identity")
+			return errors.New("work order read authorization requires only Work Order identity")
 		}
 	case ActionCreate:
 		if strings.TrimSpace(request.WorkOrderID) != "" || !validOptionalTarget(request.AssigneeID) || !validOptionalTarget(request.TeamID) {
-			return errors.New("Work Order create authorization scope is invalid")
+			return errors.New("work order create authorization scope is invalid")
 		}
 	case ActionAssign:
 		if !workordermodel.IsUUIDv7(request.WorkOrderID) || !validOptionalTarget(request.AssigneeID) || !validOptionalTarget(request.TeamID) {
-			return errors.New("Work Order assignment authorization scope is invalid")
+			return errors.New("work order assignment authorization scope is invalid")
 		}
 	case ActionPlan, ActionStart, ActionBlock, ActionResume, ActionComplete, ActionCancel, ActionReopen:
 		if !workordermodel.IsUUIDv7(request.WorkOrderID) || request.AssigneeID != nil || request.TeamID != nil {
-			return errors.New("Work Order lifecycle authorization requires only Work Order identity")
+			return errors.New("work order lifecycle authorization requires only Work Order identity")
 		}
 	default:
-		return errors.New("Work Order authorization action is unsupported")
+		return errors.New("work order authorization action is unsupported")
 	}
 	return nil
 }
@@ -95,7 +95,7 @@ type Decision struct {
 func (decision Decision) Validate() error {
 	if strings.TrimSpace(decision.SubjectIssuer) == "" || strings.TrimSpace(decision.Subject) == "" ||
 		strings.TrimSpace(decision.PolicyRevision) == "" || decision.ReasonCode == "" {
-		return errors.New("Work Order authorization decision evidence is incomplete")
+		return errors.New("work order authorization decision evidence is incomplete")
 	}
 	if err := (DecisionRequest{
 		TenantID:    decision.TenantID,
@@ -108,7 +108,7 @@ func (decision Decision) Validate() error {
 		return err
 	}
 	if _, err := time.Parse(time.RFC3339Nano, decision.DecidedAt); err != nil {
-		return errors.New("Work Order authorization decision instant is invalid")
+		return errors.New("work order authorization decision instant is invalid")
 	}
 	if decision.Allowed {
 		if strings.TrimSpace(decision.PrincipalID) == "" || decision.ReasonCode != ReasonAllowExactScope {
