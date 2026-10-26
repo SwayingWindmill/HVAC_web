@@ -32,6 +32,8 @@ func withRealtimeProxy(next http.Handler, logger *slog.Logger) (http.Handler, er
 			proxyRequest.Out.URL.RawPath = ""
 			// Keep the browser's Host, as the proxy did before Rewrite; SetURL would replace it with the upstream's.
 			proxyRequest.Out.Host = proxyRequest.In.Host
+			// Rewrite drops the inbound X-Forwarded-For; copy it so SetXForwarded appends to nginx's chain like Director did.
+			proxyRequest.Out.Header["X-Forwarded-For"] = proxyRequest.In.Header["X-Forwarded-For"]
 			proxyRequest.SetXForwarded()
 		},
 		ErrorHandler: func(writer http.ResponseWriter, request *http.Request, proxyErr error) {
