@@ -104,7 +104,8 @@ jobs:
     needs: classify
     if: ${{ needs.classify.result == 'success' && needs.classify.outputs.units == 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The go profile lints and vulnerability-scans all Go modules on top of the domain tests.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -120,6 +121,7 @@ jobs:
           cache-dependency-path: package-lock.json
       - run: npm ci
       # Every Go test in the unit gate runs with the race detector (needs cgo; the runner image has gcc).
+      # -p=1 repeats the workflow-wide GOFLAGS, which a step-level GOFLAGS replaces rather than extends.
       - env:
           GOFLAGS: -p=1 -race
         run: node scripts/run-pr-gate.mjs --gate=unit --profiles="${{ needs.classify.outputs.unit_profiles }}"

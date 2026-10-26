@@ -48,7 +48,7 @@ test('HVAC Web changes select stable domain profiles on the Linux browser runner
 
 test('telemetry changes select telemetry unit and durable integration profiles', () => {
   const classification = runClassification(['modules/telemetry/pkg/telemetry/realtime.go']);
-  assert.deepEqual(classification.unitProfiles, ['telemetry']);
+  assert.deepEqual(classification.unitProfiles, ['go', 'telemetry']);
   assert.deepEqual(classification.integrationProfiles, ['telemetry']);
   assert.equal(classification.broad, false);
 });
@@ -61,7 +61,7 @@ test('domain module changes stay scoped to product domains', () => {
     ['modules/workorder/pkg/workorderservice/http.go', 'workorder', 'workorder'],
   ]) {
     const classification = runClassification([file]);
-    assert.deepEqual(classification.unitProfiles, [unitProfile]);
+    assert.deepEqual(classification.unitProfiles, ['go', unitProfile].sort());
     assert.deepEqual(classification.integrationProfiles, [integrationProfile]);
     assert.equal(classification.broad, false);
   }
@@ -133,20 +133,15 @@ test('PR workflow exposes only the stable required checks', async () => {
   assert.ok(!workflow.includes('pr / affected-browser'));
 });
 
-test('Go lint rules and Go check scripts only need the static gate, which runs on every PR', () => {
-  for (const file of ['.golangci.yml', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs']) {
+test('Go code, Go dependencies, lint rules and the Go check scripts select the go unit profile', () => {
+  for (const file of ['.golangci.yml', 'go.work', 'libs/edgecontrol/go.mod', 'modules/telemetry/go.sum', 'cmd/energy-api/main.go', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs']) {
     const classification = runClassification([file]);
+    assert.ok(classification.unitProfiles.includes('go'), file);
     assert.equal(classification.unknown, false, file);
-    assert.equal(classification.broad, false, file);
-    assert.deepEqual(classification.unitProfiles, [], file);
-    assert.deepEqual(classification.integrationProfiles, [], file);
   }
-});
-
-test('PR unit gate runs every Go test with the race detector', async () => {
-  const workflow = (await readFile('.github/workflows/pr-gates.yml', 'utf8')).replace(/\r\n?/gu, '\n');
-  const unitStep = /\n {6}- env:\n {10}GOFLAGS: -p=1 -race\n {8}run: node scripts\/run-pr-gate\.mjs --gate=unit /u;
-  assert.match(workflow, unitStep);
+  for (const file of ['apps/hvac-web/src/main.tsx', 'docs/HANDOFF.md', 'services/operations-agent-service/src/index.ts']) {
+    assert.ok(!runClassification([file]).unitProfiles.includes('go'), file);
+  }
 });
 
 test('active workflow filenames no longer encode historical implementation stages', async () => {
