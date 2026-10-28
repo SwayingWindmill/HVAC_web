@@ -168,7 +168,7 @@ func (s *ClickHouseStore) ReadMetricResult(ctx context.Context, result Result) (
 	}
 	parts := strings.Split(strings.TrimSpace(string(body)), "\t")
 	if len(parts) != 6 || parts[0] == "\\N" || parts[0] == "" {
-		return Result{}, errors.New("Metric Result fact is unavailable")
+		return Result{}, errors.New("metric result fact is unavailable")
 	}
 	value, err := strconv.ParseFloat(parts[0], 64)
 	if err != nil {
@@ -190,7 +190,7 @@ func (s *ClickHouseStore) ReadMetricResult(ctx context.Context, result Result) (
 		return Result{}, err
 	}
 	if result.Revision != 0 && revision != result.Revision {
-		return Result{}, errors.New("Metric Result fact revision does not match PostgreSQL publication evidence")
+		return Result{}, errors.New("metric result fact revision does not match PostgreSQL publication evidence")
 	}
 	result.Revision = revision
 	result.Value = value

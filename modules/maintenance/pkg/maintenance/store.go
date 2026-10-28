@@ -313,7 +313,7 @@ func validateJob(job Job) error {
 		return nil
 	case "TENANT_RETIREMENT":
 		if job.TenantID == "" {
-			return errors.New("Tenant retirement requires tenant identity")
+			return errors.New("tenant retirement requires tenant identity")
 		}
 		return nil
 	default:

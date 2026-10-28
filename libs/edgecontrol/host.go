@@ -71,7 +71,7 @@ func (host *Host) IntentStore() *IntentStore {
 // be registered before or after Start, but the schedule is configured only once.
 func (host *Host) Start(bindings []ControllerBinding) error {
 	if host == nil {
-		return errors.New("Edge Host is nil")
+		return errors.New("edge host is nil")
 	}
 	scheduler, err := NewScheduler(bindings)
 	if err != nil {
@@ -84,7 +84,7 @@ func (host *Host) Start(bindings []ControllerBinding) error {
 	host.mu.Lock()
 	defer host.mu.Unlock()
 	if host.cycle != nil {
-		return errors.New("Edge Host is already started")
+		return errors.New("edge host is already started")
 	}
 	host.cycle = cycle
 	return nil
@@ -92,7 +92,7 @@ func (host *Host) Start(bindings []ControllerBinding) error {
 
 func (host *Host) RegisterAdapter(adapter DeviceAdapter) error {
 	if host == nil {
-		return errors.New("Edge Host is nil")
+		return errors.New("edge host is nil")
 	}
 	return host.devices.RegisterAdapter(adapter)
 }
@@ -103,23 +103,23 @@ func (host *Host) UnregisterAdapter(id string) bool {
 
 func (host *Host) AddCycleHook(binding CycleHookBinding) error {
 	if host == nil {
-		return errors.New("Edge Host is nil")
+		return errors.New("edge host is nil")
 	}
 	host.mu.RLock()
 	cycle := host.cycle
 	host.mu.RUnlock()
 	if cycle == nil {
-		return errors.New("Edge Host is not started")
+		return errors.New("edge host is not started")
 	}
 	return cycle.AddHook(binding)
 }
 
 func (host *Host) AttachTimedata(recorder TimedataRecorder) error {
 	if host == nil {
-		return errors.New("Edge Host is nil")
+		return errors.New("edge host is nil")
 	}
 	if recorder == nil {
-		return errors.New("Edge Timedata recorder is required")
+		return errors.New("edge timedata recorder is required")
 	}
 	host.mu.Lock()
 	host.timedata = recorder
@@ -129,7 +129,7 @@ func (host *Host) AttachTimedata(recorder TimedataRecorder) error {
 
 func (host *Host) Manifest(edgeID, revision string, at time.Time) (EdgeManifest, error) {
 	if host == nil {
-		return EdgeManifest{}, errors.New("Edge Host is nil")
+		return EdgeManifest{}, errors.New("edge host is nil")
 	}
 	return host.components.Manifest(edgeID, revision, at)
 }
@@ -139,14 +139,14 @@ func (host *Host) Manifest(edgeID, revision string, at time.Time) (EdgeManifest,
 // run over that image, and accepted decisions reach adapters at execute-write.
 func (host *Host) RunCycle(ctx context.Context, at time.Time) (HostCycleResult, error) {
 	if host == nil {
-		return HostCycleResult{}, errors.New("Edge Host is nil")
+		return HostCycleResult{}, errors.New("edge host is nil")
 	}
 	host.mu.RLock()
 	cycle := host.cycle
 	timedata := host.timedata
 	host.mu.RUnlock()
 	if cycle == nil {
-		return HostCycleResult{}, errors.New("Edge Host is not started")
+		return HostCycleResult{}, errors.New("edge host is not started")
 	}
 
 	result := HostCycleResult{PollResults: host.devices.PollOnce(ctx, at)}

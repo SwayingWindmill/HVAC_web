@@ -117,7 +117,7 @@ func buildHistoryObservation(observationID string, candidate ObservationCandidat
 	if decision.SensorID != "" {
 		observation.SensorID = stringPointer(decision.SensorID)
 	}
-	if decision.Status != ObservationAccepted && !(decision.Status == ObservationOutOfOrder && decision.PointID != "") {
+	if decision.Status != ObservationAccepted && (decision.Status != ObservationOutOfOrder || decision.PointID == "") {
 		return observation, nil
 	}
 	compact := json.RawMessage(candidate.Value)

@@ -46,6 +46,7 @@
 - 跑的是 main。Compose 项目 `hvac-platform`，目录 `/opt/hvac-platform`，`single-lite` 档位，带智能服务（预测、优化、故障诊断 FDD、节能验证 M&V、报告）和 AI 助手；两个模拟器按用户要求停着；对外经主机的 nginx 转到 127.0.0.1:18443。
 - 部署方式：本地从 main 构建镜像，`docker save | ssh docker load` 传过去。本机内存紧、不开 Docker Desktop 时（2026-10-22 那次），Go 服务在 WSL 里按镜像的参数编译（`CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w"`），在服务器上以现有镜像为底只换 `/service`；迁移程序镜像只换新的迁移文件和 `migration-list.tsv`；换之前给原镜像打 `before-<时间>` 标签，出问题可以退回。代码用 `git archive` 解到 `/opt/hvac-platform` 并写 `REVISION`（从主仓库按提交号打包：`.claude/worktrees/` 下的 worktree 可能和旧的同名 worktree 撞登记名，用错 `GIT_DIR` 会打出别的提交）；`/opt/hvac-platform-tools/deploy.sh` 在服务器上重放 `local:up` 的步骤。只重启某个服务时，用 `node scripts/phase1-wsl-compose.mjs --integration [--intelligence] up -d --no-deps <服务>`，带上服务器的环境变量（AI 助手要 `--intelligence`）。
 - `DEEPSEEK_API_KEY` 在 `server.runtime.env` 里，是用户自己放的。
+- 服务器上的 Go 服务还是用 Go 1.25.12 构建的。仓库从 #707 起用 Go 1.27.3、`golang.org/x/text` v0.41.0：要从 main 重新构建、部署一次，Modbus TLS 连接上的 4 个标准库漏洞和 `x/text` 处理特殊输入会崩溃的问题才算修好。
 - 夜间备份由 `hvac-backup.timer` 做，备份放在同一块盘的运行目录里，还没有拷到服务器以外。
 - Alertmanager 用的是默认接收方，告警到它那里就停了；要发邮件得先配接收方（`docs/operations/alerts.md` 的「告警怎么送到人」一节）。服务器上 Prometheus 读 `runtime/server/config/prometheus.yaml`，`alerting` 配置是手工加的。
 - 两个演示站点（central-plant、local-energy-site-b）的 28 个定时任务都停用了：模拟器停着，指标任务每小时都会失败。重新开模拟器时一起启用。
@@ -144,6 +145,7 @@
 - **并行构建镜像会耗尽 Windows 的提交内存。** 冷启动 `local:up` 时开着别的程序，可能触发 Resource-Exhaustion 2004，WSL 重启、Docker Desktop 卡死（`docker desktop restart` 能恢复）。一次只构建一个镜像（`COMPOSE_PARALLEL_LIMIT=1`，每个服务单独 `phase1-wsl-compose.mjs ... build <服务>`），再用 `COMPOSE_BAKE=false` 跑 `local:up`。
 - **在 worktree 里跑 local:up。** Windows git 建的 worktree 在 `.git` 里存的是 Windows 路径，要设 `GIT_DIR`/`GIT_WORK_TREE`，并把 `PHASE1_RUNTIME_DIR`、`PHASE1_ENV_FILE` 指向主目录的运行时文件和环境文件。
 - **Go 代理不稳。** `goproxy.cn` 有时下载失败，用 `PHASE1_GO_PROXY="https://goproxy.cn|https://goproxy.io|https://proxy.golang.org,direct"` 跑 `local:up`，网络出错就重跑。
+- **WSL 里没有 C 编译器，跑不了 `go test -race`。** CI 的单元门禁对所有 Go 测试加了 `-race`（#707）。本地要先验证，就在 `golang:1.27.3-bookworm` 容器里跑：`docker run --rm -v /mnt/e/Code/HVAC_web:/src -w /src/<模块> -e GOPROXY=https://goproxy.cn,direct -e GOFLAGS=-race golang:1.27.3-bookworm go test ./...`。静态检查和漏洞扫描（`npm run go:lint`、`npm run security:go-vuln`）在 WSL 里直接跑，第一次会用 `go.work` 里的 Go 版本编译工具。取舍见 `docs/architecture/go-static-checks-source-review-2026-10-26.md`。
 - **本地栈开着时跑 e2e。** e2e 构建本身就可能超过 Playwright 240 秒的启动超时，并行的 worker 也会在加载不完的页面上超时。先构建一次 `dist-e2e`，自己开 `vite preview --outDir dist-e2e --port 5190`（配置会复用），再 `npm run web:e2e -- --workers=1`。
 - **几个 worktree 同时跑 e2e 会互相借服务器。** 不设 `CI` 时配置会复用 5190 端口上已经开着的服务器，哪怕它是另一个 worktree 构建的，测到的就是别人的代码。并行跑的时候先 `ss -ltnp | grep 5190` 看一眼，或者设 `CI=1` 让它自己构建（端口被占时会直接报错，而不是悄悄复用）。
 - **新的网关接口要登记负责方。** 平台网关只放行 `contracts/ownership/route-ownership.v1.json` 里登记过的接口，别的一律回 404「has no applied owner」；网关的接口测试不加载这份登记，所以测试全过、服务器上却是 404（小程序登录和 `/api/v1/me/wechat` 都这样出过事）。现在 `npm run ownership:check` 会检查 `platform-gateway.openapi.yaml` 里的每个接口都登记了；不在这份契约里的接口（例如小程序的）还要自己记得登记。

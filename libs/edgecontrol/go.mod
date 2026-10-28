@@ -1,6 +1,6 @@
 module github.com/quanlaihe/hvac-web/libs/edgecontrol
 
-go 1.25.12
+go 1.27.3
 
 require github.com/simonvetter/modbus v1.6.4
 

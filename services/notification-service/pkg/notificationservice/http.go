@@ -56,7 +56,7 @@ type httpProblem struct {
 
 func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 	if config.Reminders == nil || config.GatewayPublicKey == nil {
-		return nil, errors.New("Notification WeChat reminder store and Gateway public key are required")
+		return nil, errors.New("notification WeChat reminder store and Gateway public key are required")
 	}
 	if config.Now == nil {
 		config.Now = time.Now

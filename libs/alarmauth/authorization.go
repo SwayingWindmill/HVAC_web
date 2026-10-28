@@ -35,19 +35,19 @@ type DecisionRequest struct {
 
 func (request DecisionRequest) Validate() error {
 	if !alarmmodel.IsUUIDv7(request.TenantID) || !alarmmodel.IsUUIDv7(request.SiteID) {
-		return errors.New("Alarm authorization scope is invalid")
+		return errors.New("alarm authorization scope is invalid")
 	}
 	switch request.Action {
 	case ActionRead:
 		if strings.TrimSpace(request.AlarmID) != "" && !alarmmodel.IsUUIDv7(request.AlarmID) {
-			return errors.New("Alarm read authorization has an invalid Alarm identity")
+			return errors.New("alarm read authorization has an invalid Alarm identity")
 		}
 	case ActionAck, ActionAssign:
 		if !alarmmodel.IsUUIDv7(request.AlarmID) {
-			return errors.New("Alarm mutation authorization requires Alarm identity")
+			return errors.New("alarm mutation authorization requires Alarm identity")
 		}
 	default:
-		return errors.New("Alarm authorization action is unsupported")
+		return errors.New("alarm authorization action is unsupported")
 	}
 	return nil
 }
@@ -69,7 +69,7 @@ type Decision struct {
 func (decision Decision) Validate() error {
 	if strings.TrimSpace(decision.SubjectIssuer) == "" || strings.TrimSpace(decision.Subject) == "" ||
 		strings.TrimSpace(decision.PolicyRevision) == "" || decision.ReasonCode == "" {
-		return errors.New("Alarm authorization decision evidence is incomplete")
+		return errors.New("alarm authorization decision evidence is incomplete")
 	}
 	if err := (DecisionRequest{
 		TenantID: decision.TenantID,
@@ -80,7 +80,7 @@ func (decision Decision) Validate() error {
 		return err
 	}
 	if _, err := time.Parse(time.RFC3339Nano, decision.DecidedAt); err != nil {
-		return errors.New("Alarm authorization decision instant is invalid")
+		return errors.New("alarm authorization decision instant is invalid")
 	}
 	if decision.Allowed {
 		if strings.TrimSpace(decision.PrincipalID) == "" || decision.ReasonCode != ReasonAllowExactScope {

@@ -21,11 +21,11 @@ func NewOwnerRouter(config OwnerRouterConfig) (http.Handler, error) {
 	gatewaySPIFFE := strings.TrimSpace(config.GatewaySPIFFE)
 	telemetrySPIFFE := strings.TrimSpace(config.TelemetrySPIFFE)
 	if !strings.HasPrefix(gatewaySPIFFE, "spiffe://") || !strings.HasPrefix(telemetrySPIFFE, "spiffe://") || config.GatewayHandler == nil || config.TelemetryHandler == nil {
-		return nil, errors.New("Alarm owner router configuration is invalid")
+		return nil, errors.New("alarm owner router configuration is invalid")
 	}
 	readerSPIFFE := strings.TrimSpace(config.ReaderSPIFFE)
 	if readerSPIFFE != "" && (!strings.HasPrefix(readerSPIFFE, "spiffe://") || readerSPIFFE == gatewaySPIFFE || readerSPIFFE == telemetrySPIFFE) {
-		return nil, errors.New("Alarm owner router reader identity is invalid")
+		return nil, errors.New("alarm owner router reader identity is invalid")
 	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		peer := workloadSPIFFE(request)

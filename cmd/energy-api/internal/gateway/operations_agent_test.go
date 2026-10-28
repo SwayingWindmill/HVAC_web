@@ -49,14 +49,10 @@ type operationsGatewayFixture struct {
 	iamCalls             atomic.Int32
 	operationsCalls      atomic.Int32
 	denySite             atomic.Bool
-	invalidStream        atomic.Bool
-	invalidIdentity      atomic.Bool
-	rejectUnsafe         atomic.Bool
 	auditRead            atomic.Bool
 	usageExtraField      atomic.Bool
 	usageTooManyFailures atomic.Bool
 	lastUpstream         atomic.Pointer[http.Request]
-	lastUpstreamBody     atomic.Pointer[string]
 	lastOwner            atomic.Pointer[http.Request]
 	registryActions      []registryauth.Action
 }
@@ -369,15 +365,6 @@ func (fixture *operationsGatewayFixture) authorizeTool(
 	recorder := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(recorder, request)
 	return recorder
-}
-
-func operationsContains(values []string, expected string) bool {
-	for _, value := range values {
-		if value == expected {
-			return true
-		}
-	}
-	return false
 }
 
 func TestOperationsToolAuthorizationIssuesExactOwnerGrants(t *testing.T) {

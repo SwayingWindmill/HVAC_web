@@ -1,6 +1,6 @@
 module github.com/quanlaihe/hvac-web/libs/energyseries
 
-go 1.25.12
+go 1.27.3
 
 require (
 	github.com/quanlaihe/hvac-web/libs/analyticsmodel v0.0.0

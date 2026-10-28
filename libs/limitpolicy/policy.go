@@ -33,10 +33,6 @@ type Limit struct {
 	FailClosed bool
 }
 
-func (limit Limit) valid() bool {
-	return limit.Dimension != "" && limit.Window > 0 && limit.Burst > 0
-}
-
 // Policy is a versioned set of limits. Version changes allow callers to detect
 // that a policy was replaced and, for example, invalidate local state.
 type Policy struct {

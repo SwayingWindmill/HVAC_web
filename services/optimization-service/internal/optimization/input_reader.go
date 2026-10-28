@@ -95,7 +95,7 @@ const pricedDays = 7
 func (reader *ClickHouseInputReader) readPricedDay(ctx context.Context, query OptimizationStateQuery) (EnergyDayEvidence, error) {
 	location, err := time.LoadLocation(query.Timezone)
 	if err != nil {
-		return EnergyDayEvidence{}, fmt.Errorf("Site timezone: %w", err)
+		return EnergyDayEvidence{}, fmt.Errorf("site timezone: %w", err)
 	}
 	local := query.At.In(location)
 	to := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location)

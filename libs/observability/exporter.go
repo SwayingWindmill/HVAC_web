@@ -213,9 +213,10 @@ func buildOTLPPayload(spans []SpanData) otlpPayload {
 			attributes = append(attributes, attributeToOTLP(key, value))
 		}
 		statusCode := 0
-		if span.StatusCode == "error" {
+		switch span.StatusCode {
+		case "error":
 			statusCode = 2
-		} else if span.StatusCode == "ok" {
+		case "ok":
 			statusCode = 1
 		}
 		byService[span.Service] = append(byService[span.Service], otlpSpan{

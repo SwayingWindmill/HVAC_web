@@ -29,6 +29,7 @@ npm -w @hvac/web run build
 npm run web:shell:test && npm run web:model:test         # 网页的单元测试
 npm run web:e2e                                          # 浏览器测试：录制的网关数据，不需要后端
 (cd modules/telemetry && go vet ./... && go test ./...)   # go.work 多模块，按模块执行
+npm run go:lint && npm run security:go-vuln              # 改了 Go 代码或依赖后：静态检查、漏洞扫描
 npm run deployment:phase1:check                          # 改了 Compose 或迁移清单后
 ```
 

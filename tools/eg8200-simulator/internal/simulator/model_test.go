@@ -219,7 +219,7 @@ func TestPumpAffinityLawReducesPowerAtEightyPercentSpeed(t *testing.T) {
 	}
 	plant.Tick(2 * time.Minute)
 	reducedPower := plant.Snapshot().Devices["CHWP-01"]["powerKw"].(float64)
-	wantRatio := math.Pow(0.8, 3)
+	wantRatio := 0.8 * 0.8 * 0.8
 	if math.Abs(reducedPower/fullPower-wantRatio) > 0.002 {
 		t.Fatalf("pump affinity law mismatch: got %.4f want %.4f", reducedPower/fullPower, wantRatio)
 	}

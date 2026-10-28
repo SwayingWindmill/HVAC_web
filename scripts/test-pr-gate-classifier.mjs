@@ -48,7 +48,7 @@ test('HVAC Web changes select stable domain profiles on the Linux browser runner
 
 test('telemetry changes select telemetry unit and durable integration profiles', () => {
   const classification = runClassification(['modules/telemetry/pkg/telemetry/realtime.go']);
-  assert.deepEqual(classification.unitProfiles, ['telemetry']);
+  assert.deepEqual(classification.unitProfiles, ['go', 'telemetry']);
   assert.deepEqual(classification.integrationProfiles, ['telemetry']);
   assert.equal(classification.broad, false);
 });
@@ -61,7 +61,7 @@ test('domain module changes stay scoped to product domains', () => {
     ['modules/workorder/pkg/workorderservice/http.go', 'workorder', 'workorder'],
   ]) {
     const classification = runClassification([file]);
-    assert.deepEqual(classification.unitProfiles, [unitProfile]);
+    assert.deepEqual(classification.unitProfiles, ['go', unitProfile].sort());
     assert.deepEqual(classification.integrationProfiles, [integrationProfile]);
     assert.equal(classification.broad, false);
   }
@@ -131,6 +131,17 @@ test('PR workflow exposes only the stable required checks', async () => {
     assert.equal(workflow.split(`name: ${check}`).length - 1, 1, `required check name drifted: ${check}`);
   }
   assert.ok(!workflow.includes('pr / affected-browser'));
+});
+
+test('Go code, Go dependencies, lint rules and the Go check scripts select the go unit profile', () => {
+  for (const file of ['.golangci.yml', 'go.work', 'libs/edgecontrol/go.mod', 'modules/telemetry/go.sum', 'cmd/energy-api/main.go', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs']) {
+    const classification = runClassification([file]);
+    assert.ok(classification.unitProfiles.includes('go'), file);
+    assert.equal(classification.unknown, false, file);
+  }
+  for (const file of ['apps/hvac-web/src/main.tsx', 'docs/HANDOFF.md', 'services/operations-agent-service/src/index.ts']) {
+    assert.ok(!runClassification([file]).unitProfiles.includes('go'), file);
+  }
 });
 
 test('active workflow filenames no longer encode historical implementation stages', async () => {

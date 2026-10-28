@@ -1,0 +1,23 @@
+# golangci-lint rules for every Go module in go.work (run by scripts/run-go-lint.mjs as the go unit profile of the PR gates).
+version: "2"
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck, unused
+  default: standard
+  settings:
+    errcheck:
+      # Rollback runs either deferred after Commit (always "tx is closed") or on an error path that already returns the
+      # original error; neither result can be acted on.
+      exclude-functions:
+        - (github.com/jackc/pgx/v5.Tx).Rollback
+        - (*database/sql.Tx).Rollback
+  exclusions:
+    # golangci-lint's standard preset: unchecked Close, Flush, os.Remove(All), Setenv and fmt printing. In this code these are
+    # response bodies, files opened for reading, metrics/CLI output, and error paths where the write error is already returned.
+    presets:
+      - std-error-handling
+
+issues:
+  # Report every finding, not the first 50 per linter / 3 per message.
+  max-issues-per-linter: 0
+  max-same-issues: 0

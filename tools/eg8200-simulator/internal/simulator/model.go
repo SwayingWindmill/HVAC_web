@@ -248,7 +248,7 @@ func (plant *Plant) updatePump(state *pumpState, config PumpConfig, elapsed time
 
 	speedFraction := clamp(state.frequencyHz/pumpNominalFrequencyHz, 0, 1)
 	state.flowM3H = config.RatedFlowM3H * speedFraction
-	state.powerKW = config.RatedPowerKW * math.Pow(speedFraction, 3)
+	state.powerKW = config.RatedPowerKW * speedFraction * speedFraction * speedFraction
 }
 
 func (plant *Plant) updateCoolingTower(elapsed time.Duration) {
@@ -269,7 +269,7 @@ func (plant *Plant) updateCoolingTower(elapsed time.Duration) {
 	state.running = state.fanSpeedPct > 0.5
 
 	speedFraction := clamp(state.fanSpeedPct/100, 0, 1)
-	state.powerKW = plant.config.CoolingTower.RatedFanPowerKW * math.Pow(speedFraction, 3)
+	state.powerKW = plant.config.CoolingTower.RatedFanPowerKW * speedFraction * speedFraction * speedFraction
 	approachC := 2.5 + (1-speedFraction)*6
 	leavingTargetC := plant.inputs.AmbientWetBulbC + approachC
 	enteringTargetC := leavingTargetC

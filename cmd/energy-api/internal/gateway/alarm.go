@@ -665,9 +665,9 @@ func dispatchSiteRulesRoute(h *handler, writer http.ResponseWriter, request *htt
 		fail(*failure)
 		return
 	}
-	switch {
-	case status == http.StatusOK:
-	case status == http.StatusForbidden:
+	switch status {
+	case http.StatusOK:
+	case http.StatusForbidden:
 		fail(alarmDenied())
 		return
 	default:

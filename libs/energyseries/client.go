@@ -64,7 +64,7 @@ func (client *Client) Series(ctx context.Context, query analyticsmodel.EnergySer
 	}
 	var series analyticsmodel.EnergySeriesResponse
 	if _, err := post(ctx, client.queryClient, client.queryURL+energySeriesPath, body, grant.DelegationGrant, &series); err != nil {
-		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("Energy Series %s: %w", query.EnergyType, err)
+		return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("energy series %s: %w", query.EnergyType, err)
 	}
 	return series, nil
 }

@@ -215,7 +215,7 @@ func validateAgentSessionEvidenceRef(value any) error {
 	}
 	for key := range ref {
 		if key != "owner" && key != "resourceType" && key != "resourceId" && key != "revision" && key != "toolExecutionId" {
-			return errors.New("Agent evidence reference exposes unknown field")
+			return errors.New("agent evidence reference exposes unknown field")
 		}
 	}
 	return nil
@@ -429,7 +429,8 @@ func validateAgentArtifactValue(value any) error {
 		if !ok {
 			return errors.New("invalid Agent input response schema")
 		}
-		if response["kind"] == "TEXT" {
+		switch response["kind"] {
+		case "TEXT":
 			if !operationsExactKeys(response, "kind", "maxLength") {
 				return errors.New("invalid Agent text input schema")
 			}
@@ -437,7 +438,7 @@ func validateAgentArtifactValue(value any) error {
 			if !ok || length == 0 || length > 4000 {
 				return errors.New("invalid Agent text input length")
 			}
-		} else if response["kind"] == "SINGLE_SELECT" {
+		case "SINGLE_SELECT":
 			if !operationsExactKeys(response, "kind", "choices") {
 				return errors.New("invalid Agent select input schema")
 			}
@@ -457,7 +458,7 @@ func validateAgentArtifactValue(value any) error {
 					return errors.New("invalid Agent input choice label")
 				}
 			}
-		} else {
+		default:
 			return errors.New("unsupported Agent input schema")
 		}
 	case "INPUT_RESPONSE":
@@ -706,7 +707,7 @@ func validateAgentSessionEvent(name string, raw []byte) ([]byte, error) {
 	}
 	requireRunID := func() error {
 		if _, ok := operationsBoundedString(event["runId"], 256); !ok {
-			return errors.New("Agent Run event requires Run identity")
+			return errors.New("agent run event requires Run identity")
 		}
 		return nil
 	}
@@ -795,7 +796,7 @@ func forwardAgentSessionEventStream(writer http.ResponseWriter, body io.Reader) 
 		}
 		if !started {
 			if eventName != "session.snapshot" {
-				return errors.New("Agent event stream must start from durable Session snapshot")
+				return errors.New("agent event stream must start from durable Session snapshot")
 			}
 			writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 			writer.Header().Set("Cache-Control", "no-store, no-transform")

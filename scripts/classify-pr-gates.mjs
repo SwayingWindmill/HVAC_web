@@ -53,6 +53,10 @@ async function changedFiles() {
 }
 
 const files = [...new Set(await changedFiles())];
+const isGoCheckInput = (file) => file.endsWith('.go')
+  || /(?:^|\/)go\.(?:mod|sum)$/u.test(file)
+  || ['go.work', 'go.work.sum', '.golangci.yml', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs', 'scripts/lib/go-workspace.mjs'].includes(file);
+
 // Every Phase 1 migration is listed here; a change to one reruns the migration integration test.
 const phase1Migrations = new Set(
   (await readFile(resolve(root, 'deploy/platform/phase1/migrations/migration-list.tsv'), 'utf8'))
@@ -158,6 +162,11 @@ for (const file of files) {
     add(unitProfiles, ['platform', 'registry', 'telemetry', 'command', 'alarm', 'workorder', 'analytics']);
     addReason(file, 'Go workspace graph changed');
   });
+  if (isGoCheckInput(file)) {
+    add(unitProfiles, ['go']);
+    addReason(file, 'Go code, dependencies or Go check rules changed; lint and vulnerability-scan every Go module');
+  }
+  match(file === '.golangci.yml', () => {});
   match(file === 'AGENTS.md' || file === 'README.md' || file === 'LICENSE' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
     addReason(file, 'repository documentation or metadata only');
   });
@@ -243,6 +252,7 @@ for (const file of files) {
       'scripts/test-pr-gate-classifier.mjs',
       'scripts/update-package-script-long-chain-baseline.mjs',
     ].includes(file), () => {});
+    scriptMatch(['scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs', 'scripts/lib/go-workspace.mjs'].includes(file), () => {});
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.startsWith('scripts/test-real-'), () => selectWeb(file, 'browser, RMS or Web model test automation changed'));
     scriptMatch(lower.includes('s0-') || lower.includes('durable'), () => selectPlatform(file, 'platform automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('s1-') || lower.includes('registry'), () => selectRegistry(file, 'registry automation changed', { integration: lower.includes('postgres') }));

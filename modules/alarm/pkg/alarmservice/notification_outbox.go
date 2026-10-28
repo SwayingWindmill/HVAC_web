@@ -47,7 +47,7 @@ func OpenNotificationRelay(ctx context.Context, databaseURL string) (*Notificati
 		return nil, fmt.Errorf("parse Alarm notification relay database URL: %w", err)
 	}
 	if config.ConnConfig.User != "s4_alarm_service" {
-		return nil, errors.New("Alarm notification relay database identity must be s4_alarm_service")
+		return nil, errors.New("alarm notification relay database identity must be s4_alarm_service")
 	}
 	config.MaxConns = 4
 	config.MinConns = 1

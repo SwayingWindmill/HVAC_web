@@ -37,7 +37,7 @@ type cursorPosition struct {
 
 func newCursorCodec(secret []byte) (*cursorCodec, error) {
 	if len(secret) < 32 {
-		return nil, errors.New("Work Order cursor secret must contain at least 32 bytes")
+		return nil, errors.New("work order cursor secret must contain at least 32 bytes")
 	}
 	copySecret := append([]byte(nil), secret...)
 	return &cursorCodec{secret: copySecret}, nil

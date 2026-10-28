@@ -21,7 +21,7 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: maintenance-admin <events|ack-event|tenant-usage|owner-result> ...")
+		return errors.New("usage: maintenance-admin <events|ack-event|tenant-usage|owner-result> ")
 	}
 	openCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

@@ -99,10 +99,10 @@ func newEdgeCommandHandler(edgeRuntime *EdgeControlRuntime, config MQTTGatewayCo
 	for _, record := range results {
 		if strings.TrimSpace(record.DeviceID) == "" || record.ExecutionFence == 0 ||
 			(record.State != edgeCommandMayExecute && record.State != edgeCommandTerminal) {
-			return nil, errors.New("Edge command execution ledger contains an invalid record")
+			return nil, errors.New("edge command execution ledger contains an invalid record")
 		}
 		if record.State == edgeCommandTerminal && record.Reply == nil {
-			return nil, errors.New("Edge command execution ledger terminal record has no reply")
+			return nil, errors.New("edge command execution ledger terminal record has no reply")
 		}
 		if record.ExecutionFence > maxFenceByDevice[record.DeviceID] {
 			maxFenceByDevice[record.DeviceID] = record.ExecutionFence
@@ -132,7 +132,7 @@ func loadEdgeCommandLedger(path string) (map[string]edgeCommandRecord, error) {
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&ledger); err != nil || ledger.Records == nil {
-		return nil, errors.New("Edge command execution ledger is invalid")
+		return nil, errors.New("edge command execution ledger is invalid")
 	}
 	return ledger.Records, nil
 }
@@ -361,19 +361,4 @@ func commandScalar(value edgecontrol.Value) commandmodel.ScalarValue {
 	default:
 		return commandmodel.ScalarValue{}
 	}
-}
-
-func nativeCommandMethod(commandCode string) (string, bool) {
-	method := map[string]string{
-		"START":                                  "start",
-		"STOP":                                   "stop",
-		"RESET_FAULT":                            "resetFault",
-		"SET_TEMPERATURE_SETPOINT":               "setTemperatureSetpoint",
-		"SET_CHILLED_WATER_TEMPERATURE_SETPOINT": "setChilledWaterTemperatureSetpoint",
-		"SET_FREQUENCY":                          "setFrequency",
-		"SET_FAN_SPEED":                          "setFanSpeed",
-		"SET_LOAD_LIMIT":                         "setLoadLimit",
-		"SET_OPENING":                            "setOpening",
-	}[commandCode]
-	return method, method != ""
 }

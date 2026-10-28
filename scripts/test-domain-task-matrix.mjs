@@ -3,6 +3,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
+import yaml from 'js-yaml';
+
 import {
   domainTaskProfiles,
   gateProfileSets,
@@ -66,6 +68,7 @@ test('gate profiles use product domains rather than implementation stage numbers
     'alarm',
     'analytics',
     'command',
+    'go',
     'operations-agent',
     'platform',
     'registry',
@@ -89,6 +92,17 @@ test('static gate has one canonical repository check chain', () => {
     'npm run lint',
     'npm run build',
   ]);
+});
+
+test('Go code checks run as the go unit profile: lint and vulnerability scan of every module', () => {
+  assert.deepEqual(labels(resolveGateCommands('unit', ['go'])), ['npm run go:lint', 'npm run security:go-vuln']);
+});
+
+test('the unit gate runs every Go test with the race detector', () => {
+  const workflow = yaml.load(readFileSync('.github/workflows/pr-gates.yml', 'utf8'));
+  const unitStep = workflow.jobs.unit_run.steps.find((step) => step.run?.includes('scripts/run-pr-gate.mjs --gate=unit'));
+  assert.ok(unitStep, 'unit gate step');
+  assert.ok(String(unitStep.env?.GOFLAGS ?? '').split(/\s+/u).includes('-race'), `GOFLAGS=${unitStep.env?.GOFLAGS}`);
 });
 
 test('profile-set CLI expansion matches the matrix', () => {

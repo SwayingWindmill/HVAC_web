@@ -151,7 +151,7 @@ type measureView struct {
 }
 
 func viewOfTotals(totals Totals) totalsView {
-	return totalsView{Days: totals.Days, UnpricedHours: totals.UnpricedHours, AdjustedBaselineKWh: totals.AdjustedBaselineKWh, ActualKWh: totals.ActualKWh, AvoidedKWh: totals.AvoidedKWh, AvoidedCost: totals.AvoidedCost, PlantKWh: totals.PlantKWh}
+	return totalsView(totals)
 }
 
 func viewOf(verified VerifiedMeasure, withDays bool) measureView {

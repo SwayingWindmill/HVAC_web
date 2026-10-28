@@ -159,7 +159,7 @@ func (store *MemoryStore) List(_ context.Context, tenantID, siteID string, filte
 		if err != nil {
 			return workordermodel.ListResponse{}, ErrUnavailable
 		}
-		if position != nil && !updatedAt.Before(position.UpdatedAt) && !(updatedAt.Equal(position.UpdatedAt) && workOrder.WorkOrderID > position.WorkOrderID) {
+		if position != nil && !updatedAt.Before(position.UpdatedAt) && (!updatedAt.Equal(position.UpdatedAt) || workOrder.WorkOrderID <= position.WorkOrderID) {
 			continue
 		}
 		records = append(records, memoryRecord{workOrder: cloneStoredWorkOrder(workOrder), updatedAt: updatedAt.UTC()})
@@ -518,13 +518,4 @@ func cloneStatus(value *workordermodel.Status) *workordermodel.Status {
 	}
 	cloned := *value
 	return &cloned
-}
-
-func contains[T comparable](values []T, expected T) bool {
-	for _, value := range values {
-		if value == expected {
-			return true
-		}
-	}
-	return false
 }

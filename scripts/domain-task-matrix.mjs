@@ -39,6 +39,8 @@ export const gateCommandMatrix = Object.freeze({
     command: Object.freeze([nodeRun('scripts/check-s3-command-gateway.mjs')]),
   }),
   unit: Object.freeze({
+    // Every Go module, whatever the domain: selected by the classifier for any Go code, dependency or lint-rule change.
+    go: Object.freeze([npmRun('go:lint'), npmRun('security:go-vuln')]),
     web: Object.freeze([npmRun('web:shell:test'), npmRun('web:model:test'), npmRun('web:e2e'), npmRun('miniprogram:check')]),
     platform: Object.freeze([npmRun('test:identity'), npmRun('test:durable-unit')]),
     registry: Object.freeze([npmRun('test:registry-routing')]),
@@ -127,6 +129,7 @@ export const gateProfileSets = Object.freeze({
       'alarm',
       'analytics',
       'command',
+      'go',
       'operations-agent',
       'platform',
       'registry',

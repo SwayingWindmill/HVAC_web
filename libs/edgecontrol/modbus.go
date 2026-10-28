@@ -59,16 +59,16 @@ type ModbusTCPBridge struct {
 func NewModbusTCPBridge(config ModbusTCPBridgeConfig) (*ModbusTCPBridge, error) {
 	endpoint := strings.TrimSpace(config.Endpoint)
 	if endpoint == "" {
-		return nil, errors.New("Modbus TCP endpoint is required")
+		return nil, errors.New("modbus TCP endpoint is required")
 	}
 	if _, _, err := net.SplitHostPort(endpoint); err != nil {
 		return nil, fmt.Errorf("invalid Modbus TCP endpoint %q: %w", endpoint, err)
 	}
 	if config.Timeout <= 0 {
-		return nil, errors.New("Modbus TCP request timeout must be positive")
+		return nil, errors.New("modbus TCP request timeout must be positive")
 	}
 	if config.Retries < 0 {
-		return nil, errors.New("Modbus TCP retries cannot be negative")
+		return nil, errors.New("modbus TCP retries cannot be negative")
 	}
 	return &ModbusTCPBridge{endpoint: endpoint, timeout: config.Timeout, retries: config.Retries}, nil
 }
@@ -98,7 +98,7 @@ func (bridge *ModbusTCPBridge) Read(ctx context.Context, task ModbusReadTask) ([
 	})
 	if err != nil {
 		return nil, fmt.Errorf(
-			"Modbus TCP read endpoint=%s task=%s unit=%d function=%d address=%d quantity=%d attempts=%d: %w",
+			"modbus TCP read endpoint=%s task=%s unit=%d function=%d address=%d quantity=%d attempts=%d: %w",
 			bridge.endpoint, task.Name, task.UnitID, task.FunctionCode, task.Address, task.Quantity, bridge.retries+1, err,
 		)
 	}
@@ -123,7 +123,7 @@ func (bridge *ModbusTCPBridge) Write(ctx context.Context, task ModbusWriteTask) 
 	err := bridge.runLocked(ctx, task.UnitID, operation)
 	if err != nil {
 		return fmt.Errorf(
-			"Modbus TCP write endpoint=%s task=%s unit=%d function=%d address=%d quantity=%d attempts=%d: %w",
+			"modbus TCP write endpoint=%s task=%s unit=%d function=%d address=%d quantity=%d attempts=%d: %w",
 			bridge.endpoint, task.Name, task.UnitID, task.FunctionCode, task.Address, len(task.Values), bridge.retries+1, err,
 		)
 	}
@@ -186,34 +186,34 @@ func (bridge *ModbusTCPBridge) closeLocked() error {
 
 func validateModbusReadTask(task ModbusReadTask) error {
 	if strings.TrimSpace(task.Name) == "" {
-		return errors.New("Modbus read task name is required")
+		return errors.New("modbus read task name is required")
 	}
 	if task.Quantity == 0 {
-		return fmt.Errorf("Modbus read task %s quantity must be positive", task.Name)
+		return fmt.Errorf("modbus read task %s quantity must be positive", task.Name)
 	}
 	switch task.FunctionCode {
 	case ModbusFunctionReadHoldingRegisters, ModbusFunctionReadInputRegisters:
 		return nil
 	default:
-		return fmt.Errorf("Modbus read task %s uses unsupported function code %d", task.Name, task.FunctionCode)
+		return fmt.Errorf("modbus read task %s uses unsupported function code %d", task.Name, task.FunctionCode)
 	}
 }
 
 func validateModbusWriteTask(task ModbusWriteTask) error {
 	if strings.TrimSpace(task.Name) == "" {
-		return errors.New("Modbus write task name is required")
+		return errors.New("modbus write task name is required")
 	}
 	if len(task.Values) == 0 {
-		return fmt.Errorf("Modbus write task %s requires at least one register value", task.Name)
+		return fmt.Errorf("modbus write task %s requires at least one register value", task.Name)
 	}
 	switch task.FunctionCode {
 	case ModbusFunctionWriteSingleRegister:
 		if len(task.Values) != 1 {
-			return fmt.Errorf("Modbus write task %s function code 6 requires exactly one register value", task.Name)
+			return fmt.Errorf("modbus write task %s function code 6 requires exactly one register value", task.Name)
 		}
 	case ModbusFunctionWriteMultipleRegisters:
 	default:
-		return fmt.Errorf("Modbus write task %s uses unsupported function code %d", task.Name, task.FunctionCode)
+		return fmt.Errorf("modbus write task %s uses unsupported function code %d", task.Name, task.FunctionCode)
 	}
 	return nil
 }

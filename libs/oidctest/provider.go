@@ -180,6 +180,12 @@ func (provider *Provider) jwks(writer http.ResponseWriter) {
 	modernKey := provider.modernKey.PublicKey
 	modernKid := provider.modernKid
 	provider.mu.Unlock()
+	// Uncompressed P-384 point: 0x04, then 48 bytes of X and 48 bytes of Y.
+	modernPoint, err := modernKey.Bytes()
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"keys": []any{
 			map[string]any{
@@ -196,8 +202,8 @@ func (provider *Provider) jwks(writer http.ResponseWriter) {
 				"alg": "ES384",
 				"kid": modernKid,
 				"crv": "P-384",
-				"x":   base64.RawURLEncoding.EncodeToString(paddedBytes(modernKey.X, 48)),
-				"y":   base64.RawURLEncoding.EncodeToString(paddedBytes(modernKey.Y, 48)),
+				"x":   base64.RawURLEncoding.EncodeToString(modernPoint[1:49]),
+				"y":   base64.RawURLEncoding.EncodeToString(modernPoint[49:97]),
 			},
 		},
 	})

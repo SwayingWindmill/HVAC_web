@@ -98,7 +98,7 @@ func ruleCondition(condition Condition) (RuleCondition, error) {
 	// A Site rule reads "<device id>/<point code>" (siteInputKey).
 	deviceID, pointCode, ok := strings.Cut(condition.Input, "/")
 	if !ok || !alarmmodel.IsUUIDv7(deviceID) || pointCode == "" {
-		return RuleCondition{}, errors.New("Site rule reads an input that is not a device reading")
+		return RuleCondition{}, errors.New("site rule reads an input that is not a device reading")
 	}
 	view.Reading = &RuleReading{DeviceID: deviceID, PointCode: pointCode}
 	return view, nil
@@ -135,18 +135,18 @@ func matchSiteRulesPath(path string) (string, bool) {
 // severity and a well-formed raise and clear condition over device readings.
 func (list SiteRuleList) Validate() error {
 	if list.Items == nil {
-		return errors.New("Site rule list has no items")
+		return errors.New("site rule list has no items")
 	}
 	for _, rule := range list.Items {
 		if !alarmmodel.IsUUIDv7(rule.RuleID) || !boundedText(rule.Title, 256) || !validAlarmSeverity(rule.Severity) {
-			return errors.New("Site rule identity is invalid")
+			return errors.New("site rule identity is invalid")
 		}
 		switch {
 		case rule.TriggerMode == TriggerSimple && rule.DurationSeconds == 0 && rule.RepeatCount == 0:
 		case rule.TriggerMode == TriggerDuration && rule.DurationSeconds > 0 && rule.RepeatCount == 0:
 		case rule.TriggerMode == TriggerRepeating && rule.RepeatCount > 0 && rule.DurationSeconds == 0:
 		default:
-			return errors.New("Site rule trigger is invalid")
+			return errors.New("site rule trigger is invalid")
 		}
 		if err := rule.Raise.validate(); err != nil {
 			return err
@@ -161,7 +161,7 @@ func (list SiteRuleList) Validate() error {
 func (condition RuleCondition) validate() error {
 	if condition.Kind == ConditionAnd || condition.Kind == ConditionOr {
 		if condition.Reading != nil || len(condition.Children) < 2 || len(condition.Children) > 32 {
-			return errors.New("Site rule compound condition is invalid")
+			return errors.New("site rule compound condition is invalid")
 		}
 		for _, child := range condition.Children {
 			if err := child.validate(); err != nil {
@@ -171,7 +171,7 @@ func (condition RuleCondition) validate() error {
 		return nil
 	}
 	if condition.Reading == nil || !alarmmodel.IsUUIDv7(condition.Reading.DeviceID) || !boundedText(condition.Reading.PointCode, 128) || len(condition.Children) != 0 {
-		return errors.New("Site rule condition reading is invalid")
+		return errors.New("site rule condition reading is invalid")
 	}
 	valid := false
 	switch condition.Kind {
@@ -191,7 +191,7 @@ func (condition RuleCondition) validate() error {
 		valid = condition.AgeSeconds > 0
 	}
 	if !valid {
-		return errors.New("Site rule condition is invalid")
+		return errors.New("site rule condition is invalid")
 	}
 	return nil
 }

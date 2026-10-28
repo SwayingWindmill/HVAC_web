@@ -101,7 +101,7 @@ func NewHTTPAlarmEvaluationTransport(config HTTPAlarmEvaluationTransportConfig) 
 	endpoint := strings.TrimSpace(config.Endpoint)
 	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" || config.HTTPClient == nil {
-		return nil, errors.New("Alarm evaluation HTTP transport configuration is invalid")
+		return nil, errors.New("alarm evaluation HTTP transport configuration is invalid")
 	}
 	return &HTTPAlarmEvaluationTransport{endpoint: endpoint, client: config.HTTPClient}, nil
 }
@@ -130,7 +130,7 @@ func (transport *HTTPAlarmEvaluationTransport) EvaluateSnapshot(ctx context.Cont
 	defer response.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("Alarm evaluation endpoint returned HTTP %d", response.StatusCode)
+		return fmt.Errorf("alarm evaluation endpoint returned HTTP %d", response.StatusCode)
 	}
 	return nil
 }

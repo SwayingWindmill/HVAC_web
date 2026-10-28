@@ -732,11 +732,7 @@ func validCommandParameters(capability commandmodel.Capability, metadata map[str
 		return true
 	}
 	declaredKey, _ := metadata["parameterKey"].(string)
-	if declaredKey != profile.ParameterKey {
-		return false
-	}
-
-	return true
+	return declaredKey == profile.ParameterKey
 }
 
 func cloneCommandParameters(parameters commandmodel.CommandParameters) commandmodel.CommandParameters {

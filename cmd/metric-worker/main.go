@@ -371,9 +371,9 @@ func executeMetricBusiness(ctx context.Context, runtime *runtime, job metric.Sch
 		case "PERSISTED":
 			return map[string]any{"runId": publication.RunID, "resultId": publication.ResultID, "revision": publication.Revision, "deduplicated": true}, "", false, nil
 		case "PERSISTING":
-			return nil, "PUBLICATION_RECONCILE_PENDING", true, errors.New("Metric Result publication remains PERSISTING")
+			return nil, "PUBLICATION_RECONCILE_PENDING", true, errors.New("metric result publication remains PERSISTING")
 		case "FAILED":
-			return nil, "PUBLICATION_FAILED", false, errors.New("Metric Result publication is terminal FAILED")
+			return nil, "PUBLICATION_FAILED", false, errors.New("metric result publication is terminal FAILED")
 		}
 	}
 
@@ -387,7 +387,7 @@ func executeMetricBusiness(ctx context.Context, runtime *runtime, job metric.Sch
 	}
 
 	period := metric.Period{Start: payload.PeriodStart.UTC(), End: payload.PeriodEnd.UTC()}
-	reason := "BACKFILL"
+	var reason string
 	switch job.JobType {
 	case "METRIC_WINDOW_CALC":
 		schedule, err := runtime.store.LoadSchedule(ctx, job.TenantID, job.SiteID, payload.BindingID, job.ScheduledFor)

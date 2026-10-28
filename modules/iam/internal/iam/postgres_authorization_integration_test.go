@@ -102,7 +102,11 @@ SET tenant_id = EXCLUDED.tenant_id,
 `, identifier, postgresTenantAID); err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Exec(context.Background(), `DELETE FROM iam.registry_grant_revocations WHERE token_id = $1`, identifier)
+	defer func() {
+		if _, err := admin.Exec(context.Background(), `DELETE FROM iam.registry_grant_revocations WHERE token_id = $1`, identifier); err != nil {
+			t.Error(err)
+		}
+	}()
 
 	store := openPostgresAuthorizationStore(t, ctx)
 	status, err := store.LookupRegistryGrantStatus(ctx, postgresTenantAID, identifier)
@@ -171,7 +175,11 @@ func TestPostgresAlarmAuthorizationReadsAssignmentsAndPersistsAudit(t *testing.T
 		t.Fatal(err)
 	}
 	defer admin.Close()
-	defer admin.Exec(context.Background(), `DELETE FROM iam.alarm_authorization_decisions WHERE request_id = $1`, requestID)
+	defer func() {
+		if _, err := admin.Exec(context.Background(), `DELETE FROM iam.alarm_authorization_decisions WHERE request_id = $1`, requestID); err != nil {
+			t.Error(err)
+		}
+	}()
 	var allowed bool
 	var policyRevision, reasonCode string
 	if err := admin.QueryRow(ctx, `SELECT allowed, policy_revision, reason_code FROM iam.alarm_authorization_decisions WHERE request_id = $1`, requestID).Scan(&allowed, &policyRevision, &reasonCode); err != nil {
@@ -224,7 +232,11 @@ func TestPostgresWorkOrderAuthorizationReadsTargetsAndTheAssigneesAccess(t *test
 		t.Fatal(err)
 	}
 	defer admin.Close()
-	defer admin.Exec(context.Background(), `DELETE FROM iam.work_order_authorization_decisions WHERE request_id = $1`, requestID)
+	defer func() {
+		if _, err := admin.Exec(context.Background(), `DELETE FROM iam.work_order_authorization_decisions WHERE request_id = $1`, requestID); err != nil {
+			t.Error(err)
+		}
+	}()
 	var allowed bool
 	var policyRevision string
 	if err := admin.QueryRow(ctx, `SELECT allowed, policy_revision FROM iam.work_order_authorization_decisions WHERE request_id = $1`, requestID).Scan(&allowed, &policyRevision); err != nil {
@@ -268,7 +280,11 @@ func TestPostgresCommandAuthorizationResolvesTheDevicesSiteAndCurrentAssignments
 	if _, err := admin.Exec(ctx, setStatus, postgresOwnerASiteOperatorBindingID, "REVOKED"); err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Exec(context.Background(), setStatus, postgresOwnerASiteOperatorBindingID, "ACTIVE")
+	defer func() {
+		if _, err := admin.Exec(context.Background(), setStatus, postgresOwnerASiteOperatorBindingID, "ACTIVE"); err != nil {
+			t.Error(err)
+		}
+	}()
 	facts, err = commands.LookupCommandAuthorization(ctx, lookup)
 	if err != nil {
 		t.Fatal(err)

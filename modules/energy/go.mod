@@ -1,6 +1,6 @@
 module github.com/quanlaihe/hvac-web/modules/energy
 
-go 1.25.12
+go 1.27.3
 
 require (
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0

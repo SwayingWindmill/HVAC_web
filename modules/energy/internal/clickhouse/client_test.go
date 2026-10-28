@@ -157,11 +157,13 @@ func TestReaderBoundsEachDeltaQueryToItsArrivalsSampleSpan(t *testing.T) {
 		case strings.Contains(string(body), "energy_projection_checkpoints"):
 		case strings.Contains(string(body), "counter_arrivals"):
 			for _, arrival := range arrivals {
-				json.NewEncoder(writer).Encode(map[string]any{
+				if err := json.NewEncoder(writer).Encode(map[string]any{
 					"history_sequence": 9540, "observation_id": arrival.id, "tenant_id": "018f4d00-0000-7000-8000-000000000001",
 					"site_id": "018f4e00-1000-7000-8000-000000000001", "point_id": "018f4e00-2100-7000-8000-000000000001",
 					"sampled_at": arrival.sampledAt,
-				})
+				}); err != nil {
+					t.Error(err)
+				}
 			}
 		case strings.Contains(string(body), "counter_deltas_from"):
 			windows = append(windows, window{query.Get("param_since"), query.Get("param_until"), query.Get("param_observations")})

@@ -17,7 +17,7 @@ import (
 
 const publicMeWeChatRemindersPath = "/api/v1/me/wechat/reminders"
 
-var errNotificationNotConfigured = errors.New("Notification Service is not configured")
+var errNotificationNotConfigured = errors.New("notification service is not configured")
 
 func (h *handler) MeWeChatReminders(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet && request.Method != http.MethodPost {

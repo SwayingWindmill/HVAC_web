@@ -26,10 +26,9 @@ const (
 )
 
 type fakeStore struct {
-	item       workordermodel.WorkOrder
-	listErr    error
-	calls      atomic.Int32
-	lastFilter Filter
+	item    workordermodel.WorkOrder
+	listErr error
+	calls   atomic.Int32
 }
 
 func (store *fakeStore) List(context.Context, string, string, Filter) (workordermodel.ListResponse, error) {

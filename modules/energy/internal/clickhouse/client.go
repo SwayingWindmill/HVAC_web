@@ -545,7 +545,7 @@ func (writer *Writer) InsertFacts(ctx context.Context, facts []energy.EnergyInte
 		}
 		body.Write(encoded)
 		body.WriteByte('\n')
-		digest.Write([]byte(fmt.Sprintf("%s|%d|%s", fact.LogicalKey(), fact.FactRevision, optionalRebuildRunID(fact.RebuildRunID))))
+		fmt.Fprintf(digest, "%s|%d|%s", fact.LogicalKey(), fact.FactRevision, optionalRebuildRunID(fact.RebuildRunID))
 		digest.Write([]byte{'\n'})
 	}
 

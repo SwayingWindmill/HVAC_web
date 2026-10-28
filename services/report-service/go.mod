@@ -1,6 +1,6 @@
 module github.com/quanlaihe/hvac-web/services/report-service
 
-go 1.25.12
+go 1.27.3
 
 require (
 	github.com/jackc/pgx/v5 v5.9.2

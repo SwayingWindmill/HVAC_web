@@ -34,7 +34,7 @@ type PostgresTelemetryGrantStore struct {
 
 func OpenPostgresTelemetryGrantStore(ctx context.Context, databaseURL string) (*PostgresTelemetryGrantStore, error) {
 	if strings.TrimSpace(databaseURL) == "" {
-		return nil, errors.New("Telemetry grant database URL is required")
+		return nil, errors.New("telemetry grant database URL is required")
 	}
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
@@ -49,7 +49,7 @@ func OpenPostgresTelemetryGrantStore(ctx context.Context, databaseURL string) (*
 			return fmt.Errorf("read Telemetry grant database role: %w", err)
 		}
 		if role != telemetryGrantRuntimeDatabaseRole {
-			return fmt.Errorf("Telemetry grant database role %q is not allowed", role)
+			return fmt.Errorf("telemetry grant database role %q is not allowed", role)
 		}
 		return nil
 	}
@@ -72,7 +72,7 @@ func (store *PostgresTelemetryGrantStore) Close() {
 
 func (store *PostgresTelemetryGrantStore) ConsumeGrant(ctx context.Context, claims telemetryauth.GrantClaims, now time.Time) (telemetryauth.GrantUseStatus, error) {
 	if store == nil || store.pool == nil {
-		return telemetryauth.GrantUseStatus{}, errors.New("Telemetry grant store is closed")
+		return telemetryauth.GrantUseStatus{}, errors.New("telemetry grant store is closed")
 	}
 	transaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -119,10 +119,10 @@ ON CONFLICT (token_id) DO NOTHING
 
 func (store *PostgresTelemetryGrantStore) PollRevocations(ctx context.Context, tenantID string, afterSequence int64, limit int) ([]TelemetryRevocationFact, error) {
 	if store == nil || store.pool == nil {
-		return nil, errors.New("Telemetry grant store is closed")
+		return nil, errors.New("telemetry grant store is closed")
 	}
 	if limit <= 0 || limit > 500 {
-		return nil, errors.New("Telemetry revocation poll limit is invalid")
+		return nil, errors.New("telemetry revocation poll limit is invalid")
 	}
 	transaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {

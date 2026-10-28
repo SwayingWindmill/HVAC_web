@@ -542,7 +542,7 @@ func loadRealtimeService(store *telemetry.PostgresStore, certificate tls.Certifi
 		return nil, nil, nil, err
 	}
 	if len(strings.TrimSpace(os.Getenv("TELEMETRY_CENTRIFUGO_PROXY_SECRET"))) < 32 {
-		return nil, nil, nil, errors.New("Centrifugo subscribe proxy secret must be at least 32 bytes")
+		return nil, nil, nil, errors.New("centrifugo subscribe proxy secret must be at least 32 bytes")
 	}
 	relayContext, relayCancel := context.WithCancel(context.Background())
 	return service, relayContext, relayCancel, nil

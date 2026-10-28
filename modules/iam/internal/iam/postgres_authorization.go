@@ -76,14 +76,6 @@ SELECT set_config('app.principal_id', $1, true),
 	return nil
 }
 
-func setIAMTenantContext(ctx context.Context, transaction pgx.Tx, tenantID string) error {
-	var configuredTenant string
-	if err := transaction.QueryRow(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantID).Scan(&configuredTenant); err != nil {
-		return fmt.Errorf("set IAM tenant RLS context: %w", err)
-	}
-	return nil
-}
-
 func loadTenantSiteIDs(ctx context.Context, transaction pgx.Tx, tenantID string) ([]string, error) {
 	rows, err := transaction.Query(ctx, `
 SELECT id::text
