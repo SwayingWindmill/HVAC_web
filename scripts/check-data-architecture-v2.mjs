@@ -128,7 +128,10 @@ invariant(telemetryIngest.includes('QualityPartial') && telemetryIngest.includes
 invariant(!telemetryIngest.includes('QualitySuspect') && !telemetryIngest.includes('QualityRejected'), 'legacy principal quality values remain in runtime');
 
 const historyPostgres = await readFile(resolve(root, 'modules/telemetry/pkg/telemetry/history_postgres.go'), 'utf8');
-invariant(historyPostgres.includes('decision.Status == ObservationOutOfOrder && decision.PointID != ""'), 'mapped out-of-order facts are not preserved in history');
+// staticcheck QF1001 rewrote `!(out of order && mapped)` as this disjunction. The early return drops
+// the value; an accepted reading, and an out-of-order reading that already has a Point, fall through and keep it.
+const dropsValueUnlessAcceptedOrMappedOutOfOrder = 'decision.Status != ObservationAccepted && (decision.Status != ObservationOutOfOrder || decision.PointID == "")';
+invariant(historyPostgres.includes(dropsValueUnlessAcceptedOrMappedOutOfOrder), 'mapped out-of-order facts are not preserved in history');
 
 const telemetryOwnership = JSON.parse(await readFile(resolve(root, 'contracts/ownership/s2-telemetry-ownership.v1.json'), 'utf8'));
 invariant(telemetryOwnership.storageAuthorities?.historicalTelemetry?.engine === 'clickhouse', 'Historical Telemetry must remain ClickHouse-owned');

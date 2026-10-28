@@ -4,6 +4,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { readGoWorkspace } from './lib/go-workspace.mjs';
+
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const maximumInlineCommands = 4;
 const longChainBaselinePath = 'scripts/package-script-long-chain-baseline.json';
@@ -209,14 +211,32 @@ const collectJavascriptToolingViolations = (root, trackedFiles = listTrackedFile
   ];
 };
 
-// Go sources are formatted by gofmt, so diffs carry only real changes.
+// Go sources are formatted by the gofmt from the Go version in go.work. PATH gofmt can be an older
+// system Go than the toolchain `go` runs. Go 1.27 reformats a multi-value return of composite
+// literals, so the two disagree. `go env GOROOT` with GOTOOLCHAIN set to the go.work version is
+// the same gofmt CI's setup-go puts on PATH.
+const workspaceGofmt = (root) => {
+  const { goVersion } = readGoWorkspace(root);
+  const goroot = execFileSync('go', ['env', 'GOROOT'], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, GOTOOLCHAIN: `go${goVersion}` },
+  }).trim();
+  const binary = join(goroot, 'bin', 'gofmt');
+  if (!existsSync(binary)) {
+    throw new Error(`gofmt for go${goVersion} is not at ${binary}`);
+  }
+  return binary;
+};
+
 const findGoFormatViolations = (root, trackedFiles) => {
   const goFiles = trackedFiles.map(normalizePath).filter((path) => path.endsWith('.go') && existsSync(join(root, path)));
   if (goFiles.length === 0) return [];
-  const unformatted = execFileSync('gofmt', ['-l', ...goFiles], { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+  const gofmt = workspaceGofmt(root);
+  const unformatted = execFileSync(gofmt, ['-l', ...goFiles], { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
     .split('\n')
     .filter(Boolean);
-  return unformatted.map((path) => `${path}: not gofmt-formatted (run gofmt -w ${path})`);
+  return unformatted.map((path) => `${path}: not gofmt-formatted (run ${gofmt} -w ${path})`);
 };
 
 export const checkRepositoryGovernance = (root = repositoryRoot) => {
