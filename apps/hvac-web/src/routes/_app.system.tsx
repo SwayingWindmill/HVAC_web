@@ -1,5 +1,4 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { fallback, zodValidator } from '@tanstack/zod-adapter';
 import { z } from 'zod';
 import { SystemManagement } from '@/features/system/SystemManagement';
 import { requireCapabilities, requirePlatform } from '@/app/route-access';
@@ -7,11 +6,11 @@ import { useShellSnapshot } from '@/app/ShellRuntimeContext';
 import { useUnsavedDraftGuard } from '@/features/system/unsaved-drafts';
 
 const systemSearchSchema = z.object({
-  tab: fallback(z.enum(['overview', 'users', 'site', 'registry', 'audit', 'assistant']), 'overview').optional(),
+  tab: z.enum(['overview', 'users', 'site', 'registry', 'audit', 'assistant']).catch('overview').optional(),
 });
 
 export const Route = createFileRoute('/_app/system')({
-  validateSearch: zodValidator(systemSearchSchema),
+  validateSearch: systemSearchSchema,
   beforeLoad: ({ context }) => {
     requireCapabilities(context.runtime, ['site.list']);
     requirePlatform(context.runtime);

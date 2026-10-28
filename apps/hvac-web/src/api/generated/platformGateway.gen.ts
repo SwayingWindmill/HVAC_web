@@ -261,7 +261,7 @@ export const sensorSchema = z.object({
   model: z.string().max(256).nullable(),
   serialNumber: z.string().max(256).nullable(),
   calibrationDueAt: instantSchema.nullable(),
-  metadata: z.record(z.unknown()),
+  metadata: z.record(z.string(), z.unknown()),
   status: registryStatusSchema,
   revision: revisionSchema,
   createdAt: instantSchema,
@@ -285,7 +285,7 @@ export const telemetryPointSchema = z.object({
   staleAfterMs: z.number().int().min(100).max(604_800_000),
   counterDecreaseMode: z.enum(['RESET_TO_ZERO', 'ROLLOVER', 'INVALID']).nullable(),
   counterRolloverModulus: z.number().positive().nullable(),
-  sourceMetadata: z.record(z.unknown()),
+  sourceMetadata: z.record(z.string(), z.unknown()),
   status: registryStatusSchema,
   revision: revisionSchema,
   createdAt: instantSchema,
@@ -433,7 +433,7 @@ export const sensorMutationSchema = z.object({
   model: z.string().max(128).optional(),
   serialNumber: z.string().max(256).optional(),
   calibrationDueAt: z.string().datetime({ offset: true }).optional(),
-  metadata: z.record(z.unknown()),
+  metadata: z.record(z.string(), z.unknown()),
   status: registryStatusSchema,
   meta: mutationMetaSchema,
 }).strict();
@@ -452,7 +452,7 @@ export const pointMutationSchema = z.object({
   staleAfterMs: z.number().int().min(100).max(604_800_000),
   counterDecreaseMode: z.enum(['RESET_TO_ZERO', 'ROLLOVER', 'INVALID']).optional(),
   counterRolloverModulus: z.number().positive().optional(),
-  sourceMetadata: z.record(z.unknown()),
+  sourceMetadata: z.record(z.string(), z.unknown()),
   status: registryStatusSchema,
   meta: mutationMetaSchema,
 }).strict();
@@ -480,8 +480,8 @@ export const templateKindSchema = z.enum(['ASSET', 'DEVICE', 'POINT']);
 export const releaseTemplateRequestSchema = z.object({
   templateKey: z.string().min(1).max(128).regex(/^[a-z0-9][a-z0-9._-]{0,127}$/),
   templateKind: templateKindSchema,
-  payload: z.record(z.unknown()),
-  releaseReferences: z.record(z.string().min(1).max(256)).refine((value) => Object.keys(value).length > 0, 'at least one release reference is required'),
+  payload: z.record(z.string(), z.unknown()),
+  releaseReferences: z.record(z.string(), z.string().min(1).max(256)).refine((value) => Object.keys(value).length > 0, 'at least one release reference is required'),
   meta: mutationMetaSchema,
 }).strict();
 export const templateRevisionSchema = z.object({
@@ -492,8 +492,8 @@ export const templateRevisionSchema = z.object({
   templateKind: templateKindSchema,
   revisionNumber: revisionSchema,
   status: z.literal('RELEASED'),
-  payload: z.record(z.unknown()),
-  releaseReferences: z.record(z.string()),
+  payload: z.record(z.string(), z.unknown()),
+  releaseReferences: z.record(z.string(), z.string()),
   releasedAt: z.string().datetime({ offset: true }),
 }).strict();
 export const assignTemplateRequestSchema = z.object({
@@ -521,7 +521,7 @@ export const importRowSchema = z.object({
   externalId: z.string().min(1).max(256),
   targetId: uuidV7Schema.optional(),
   expectedRevision: z.number().int().nonnegative().optional(),
-  payload: z.record(z.unknown()),
+  payload: z.record(z.string(), z.unknown()),
 }).strict();
 export const importRowResultSchema = z.object({
   rowNumber: z.number().int().positive(),

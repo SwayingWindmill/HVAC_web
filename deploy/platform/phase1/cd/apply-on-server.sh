@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# Run on the production host. Swap new files into the local images, then restart.
+# Images are never pulled. Each previous image is kept as <name>:before-<timestamp>.
+set -euo pipefail
+
+release="${1:-}"
+if [[ -z "$release" || ! -d "$release" ]]; then
+  echo "error: usage: apply-on-server.sh <release-directory>" >&2
+  exit 1
+fi
+
+platform_dir="${HVAC_PLATFORM_DIR:-/opt/hvac-platform}"
+compose_project="${HVAC_COMPOSE_PROJECT:-hvac-platform}"
+deploy_script="${HVAC_DEPLOY_SCRIPT:-/opt/hvac-platform-tools/deploy.sh}"
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "error: docker is not installed on the production host." >&2
+  exit 1
+fi
+if [[ ! -f "$release/source.tar" || ! -f "$release/REVISION" || ! -f "$release/services.tsv" ]]; then
+  echo "error: release directory is incomplete ($release)." >&2
+  exit 1
+fi
+if [[ ! -s "$release/bins/healthcheck" ]]; then
+  echo "error: release is missing the container healthcheck binary." >&2
+  exit 1
+fi
+
+revision="$(tr -d '[:space:]' < "$release/REVISION")"
+if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "error: REVISION is not a full git commit: $revision" >&2
+  exit 1
+fi
+
+resolve_image() {
+  local service="$1"
+  local fallback="$2"
+  local cid=""
+  cid="$(docker ps -aq \
+    --filter "label=com.docker.compose.project=${compose_project}" \
+    --filter "label=com.docker.compose.service=${service}" </dev/null | head -n 1 || true)"
+  if [[ -n "$cid" ]]; then
+    docker inspect --format '{{.Config.Image}}' "$cid" </dev/null
+    return
+  fi
+  if docker image inspect "$fallback" >/dev/null 2>&1 </dev/null; then
+    printf '%s\n' "$fallback"
+    return
+  fi
+  printf '\n'
+}
+
+rollback_tag() {
+  local image="$1"
+  local name="${image%:*}"
+  if [[ "$image" != *:* || "$name" == "$image" ]]; then
+    echo "error: refusing to retag an image without a name:tag reference: $image" >&2
+    exit 1
+  fi
+  if [[ "$image" == *@* ]]; then
+    echo "error: $image is pinned by digest. This deploy only replaces local name:tag images." >&2
+    exit 1
+  fi
+  printf '%s:before-%s\n' "$name" "$stamp"
+}
+
+docker_build() {
+  local tag="$1"
+  local context="$2"
+  DOCKER_BUILDKIT=1 docker build --pull=false -t "$tag" "$context"
+}
+
+declare -a planned_services=()
+declare -a planned_images=()
+declare -a planned_kinds=()
+declare -a planned_previous=()
+
+while IFS=$'\t' read -r service image kind required package <&3; do
+  [[ -z "${service:-}" || "$service" == \#* ]] && continue
+  resolved="$(resolve_image "$service" "$image")"
+  if [[ -z "$resolved" ]]; then
+    if [[ "$required" == required ]]; then
+      echo "error: no local image for ${service}." >&2
+      echo "Looked for a ${compose_project} container and for ${image}. This deploy does not docker pull." >&2
+      exit 1
+    fi
+    echo "skip ${service}: ${image} is not on this host"
+    continue
+  fi
+  previous="$(rollback_tag "$resolved")"
+  planned_services+=("$service")
+  planned_images+=("$resolved")
+  planned_kinds+=("$kind")
+  planned_previous+=("$previous")
+done 3< "$release/services.tsv"
+
+if [[ "${#planned_services[@]}" -eq 0 ]]; then
+  echo "error: no images were selected." >&2
+  exit 1
+fi
+
+declare -a candidates=()
+cleanup_candidates() {
+  local candidate
+  for candidate in "${candidates[@]+"${candidates[@]}"}"; do
+    docker image rm "$candidate" >/dev/null 2>&1 || true
+  done
+}
+trap cleanup_candidates EXIT
+
+for index in "${!planned_services[@]}"; do
+  service="${planned_services[$index]}"
+  image="${planned_images[$index]}"
+  kind="${planned_kinds[$index]}"
+  candidate="${image%:*}:candidate-${stamp}"
+  candidates+=("$candidate")
+  context="$(mktemp -d)"
+  case "$kind" in
+    go)
+      if [[ ! -s "$release/bins/$service/service" ]]; then
+        echo "error: release is missing the $service binary." >&2
+        exit 1
+      fi
+      cp "$release/bins/$service/service" "$context/service"
+      cp "$release/bins/healthcheck" "$context/healthcheck"
+      chmod 755 "$context/service" "$context/healthcheck"
+      cat > "$context/Dockerfile" <<EOF
+FROM ${image}
+COPY --chown=65532:65532 service /service
+COPY --chown=65532:65532 healthcheck /healthcheck
+EOF
+      ;;
+    web)
+      if [[ ! -f "$release/web/dist/index.html" || ! -f "$release/web/nginx.conf" ]]; then
+        echo "error: release is missing the web dist or nginx config." >&2
+        exit 1
+      fi
+      mkdir -p "$context/dist"
+      cp -a "$release/web/dist/." "$context/dist/"
+      cp "$release/web/nginx.conf" "$context/nginx.conf"
+      cat > "$context/Dockerfile" <<EOF
+FROM ${image}
+RUN rm -rf /usr/share/nginx/html && mkdir -p /usr/share/nginx/html
+COPY dist/ /usr/share/nginx/html/
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EOF
+      ;;
+    node)
+      if [[ ! -f "$release/agent/dist/bootstrap/main.js" || ! -d "$release/agent/node_modules" ]]; then
+        echo "error: release is missing the operations-agent build." >&2
+        exit 1
+      fi
+      mkdir -p "$context/dist"
+      cp "$release/agent/package.json" "$context/package.json"
+      cp -a "$release/agent/dist/." "$context/dist/"
+      cp -a "$release/agent/node_modules" "$context/node_modules"
+      cat > "$context/Dockerfile" <<EOF
+FROM ${image}
+USER root
+RUN rm -rf /app/dist /app/node_modules
+COPY --chown=node:node package.json /app/package.json
+COPY --chown=node:node dist /app/dist
+COPY --chown=node:node node_modules /app/node_modules
+USER node
+EOF
+      ;;
+    migrator)
+      if [[ ! -f "$release/migrator/opt/hvac/migrations/migration-list.tsv" ]]; then
+        echo "error: release is missing the migrator files." >&2
+        exit 1
+      fi
+      mkdir -p "$context/opt"
+      cp -a "$release/migrator/opt/." "$context/opt/"
+      cat > "$context/Dockerfile" <<EOF
+FROM ${image}
+COPY opt/hvac /opt/hvac
+RUN chmod 0555 /opt/hvac/migrations/run-phase1-migrations.sh /opt/hvac/migrations/verify-phase1-schema.sh
+EOF
+      ;;
+    *)
+      echo "error: unknown image kind '$kind' for $service" >&2
+      exit 1
+      ;;
+  esac
+  echo "building $candidate from $image"
+  if ! docker_build "$candidate" "$context"; then
+    rm -rf "$context"
+    exit 1
+  fi
+  rm -rf "$context"
+done
+
+mkdir -p "$platform_dir"
+tar -C "$platform_dir" -xf "$release/source.tar"
+printf '%s\n' "$revision" > "$platform_dir/REVISION"
+echo "updated $platform_dir to $revision"
+
+for index in "${!planned_services[@]}"; do
+  docker tag "${planned_images[$index]}" "${planned_previous[$index]}"
+  docker tag "${candidates[$index]}" "${planned_images[$index]}"
+  echo "replaced ${planned_images[$index]} (previous ${planned_previous[$index]})"
+done
+trap - EXIT
+cleanup_candidates
+
+if [[ ! -e "$deploy_script" ]]; then
+  echo "error: $deploy_script is missing." >&2
+  echo "The production host keeps the Phase 1 restart script there. Images were updated; previous tags are before-${stamp}." >&2
+  exit 1
+fi
+# deploy.sh chmods runtime files owned by container users. The SSH user owns the tree; that chmod needs root.
+if [[ "$(id -u)" -eq 0 ]]; then
+  if [[ -x "$deploy_script" ]]; then
+    "$deploy_script"
+  else
+    bash "$deploy_script"
+  fi
+elif [[ -x "$deploy_script" ]]; then
+  sudo -n "$deploy_script"
+else
+  sudo -n bash "$deploy_script"
+fi
+
+echo "deployed $revision"
+echo "rollback tags use before-${stamp}"
