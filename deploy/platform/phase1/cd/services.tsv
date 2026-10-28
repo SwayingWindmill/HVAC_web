@@ -1,0 +1,22 @@
+# service	image	kind	required	package
+# kind is go, web, node, or migrator. required services must already exist on the server.
+# image is the Compose default; a running hvac-platform container wins when its tag differs.
+energy-api	hvac/energy-api:0.1.0-dev	go	required	./cmd/energy-api
+identity-service	hvac/identity-service:0.1.0-dev	go	required	./services/identity-service/cmd/identity-service
+identity-keygen	hvac/identity-keygen:0.1.0-dev	go	optional	./services/identity-service/cmd/signing-keygen
+identity-mfa-keygen	hvac/identity-mfa-keygen:0.1.0-dev	go	optional	./services/identity-service/cmd/mfa-keygen
+identity-admin	hvac/identity-admin:0.1.0-dev	go	optional	./services/identity-service/cmd/identity-admin
+identity-reconciler	hvac/identity-reconciler:0.1.0-dev	go	optional	./modules/iam/cmd/identity-reconciler
+scheduler	hvac/scheduler:0.1.0-dev	go	required	./cmd/scheduler
+maintenance	hvac/maintenance:0.1.0-dev	go	required	./cmd/maintenance-worker
+telemetry-worker	hvac/telemetry-worker:0.1.0-dev	go	required	./cmd/telemetry-worker
+metric-worker	hvac/metric-worker:0.1.0-dev	go	required	./cmd/metric-worker
+forecast-service	hvac/forecast-service:0.1.0-dev	go	required	./services/forecast-service/cmd/forecast-service
+optimization-service	hvac/optimization-service:0.1.0-dev	go	required	./services/optimization-service/cmd/optimization-service
+fdd-service	hvac/fdd-service:0.1.0-dev	go	required	./services/fdd-service/cmd/fdd-service
+mv-service	hvac/mv-service:0.1.0-dev	go	required	./services/mv-service/cmd/mv-service
+report-service	hvac/report-service:0.1.0-dev	go	required	./services/report-service/cmd/report-service
+connectivity	hvac/connectivity:0.1.0-dev	go	required	./cmd/connectivity
+nginx	hvac/hvac-web-real:0.1.0-dev	web	required	-
+operations-agent-service	hvac/operations-agent-service:0.1.0-dev	node	required	-
+phase1-migrator	hvac/phase1-migrator:0.1.0-dev	migrator	required	-

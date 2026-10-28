@@ -2,7 +2,7 @@
 
 现在做到哪、下一步做什么、服务器和本地环境有哪些特殊情况。改了这里说的事，就在同一个 PR 里更新本文。怎么构建、测试和运行见 `AGENTS.md`；用户能看到的变化见 `CHANGELOG.md`；每张单的细节在 GitHub 问题单里。
 
-最后更新：2026-10-20。
+最后更新：2026-10-28。
 
 ## 产品现在有什么
 
@@ -44,9 +44,9 @@
 ## 服务器（139.199.58.47）
 
 - 跑的是 main。Compose 项目 `hvac-platform`，目录 `/opt/hvac-platform`，`single-lite` 档位，带智能服务（预测、优化、故障诊断 FDD、节能验证 M&V、报告）和 AI 助手；两个模拟器按用户要求停着；对外经主机的 nginx 转到 127.0.0.1:18443。
-- 部署方式：本地从 main 构建镜像，`docker save | ssh docker load` 传过去。本机内存紧、不开 Docker Desktop 时（2026-10-22 那次），Go 服务在 WSL 里按镜像的参数编译（`CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w"`），在服务器上以现有镜像为底只换 `/service`；迁移程序镜像只换新的迁移文件和 `migration-list.tsv`；换之前给原镜像打 `before-<时间>` 标签，出问题可以退回。代码用 `git archive` 解到 `/opt/hvac-platform` 并写 `REVISION`（从主仓库按提交号打包：`.claude/worktrees/` 下的 worktree 可能和旧的同名 worktree 撞登记名，用错 `GIT_DIR` 会打出别的提交）；`/opt/hvac-platform-tools/deploy.sh` 在服务器上重放 `local:up` 的步骤。只重启某个服务时，用 `node scripts/phase1-wsl-compose.mjs --integration [--intelligence] up -d --no-deps <服务>`，带上服务器的环境变量（AI 助手要 `--intelligence`）。
+- 部署方式：推到 `main`，或在 Actions 里手动跑 `.github/workflows/deploy-production.yml`。流水线在 GitHub 的机器上按镜像参数编译 Go 服务（工具链 `1.27.3`，`CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w"`），并构建网页和 AI 助手。然后用 SSH 连上这台机器：从这次提交做 `git archive` 解到 `/opt/hvac-platform` 并写 `REVISION`（不删运行目录里没进 Git 的密钥和数据）；已有镜像先打 `before-<时间>` 标签，再只换 `/service` 和 `/healthcheck`（网页换 dist 和 nginx 配置，迁移镜像换迁移文件和 `migration-list.tsv`，AI 助手换编译结果和依赖）。服务器内存紧，镜像保持本机的，这一步不 `docker pull`。换完调用 `/opt/hvac-platform-tools/deploy.sh` 重启。流水线自己不启动模拟器。SSH 凭据放在仓库的 Actions secrets：必须有 `DEPLOY_SSH_KEY`（优先）或 `DEPLOY_SSH_PASSWORD`；`DEPLOY_SSH_USER` 不设就是 `root`，`DEPLOY_SSH_HOST` 不设就是 `139.199.58.47`，`DEPLOY_SSH_PORT` 不设就是 `22`。没配凭据时流水线直接失败，并写明要设哪几个 secret。本机内存紧、不开 Docker Desktop 时，仍可在 WSL 里按同样的参数编译，再在服务器上换 `/service`。只重启某个服务时，用 `node scripts/phase1-wsl-compose.mjs --integration [--intelligence] up -d --no-deps <服务>`，带上服务器的环境变量（AI 助手要 `--intelligence`）。
 - `DEEPSEEK_API_KEY` 在 `server.runtime.env` 里，是用户自己放的。
-- 服务器上的 Go 服务还是用 Go 1.25.12 构建的。仓库从 #707 起用 Go 1.27.3、`golang.org/x/text` v0.41.0：要从 main 重新构建、部署一次，Modbus TLS 连接上的 4 个标准库漏洞和 `x/text` 处理特殊输入会崩溃的问题才算修好。
+- 服务器上的 Go 服务还是用 Go 1.25.12 构建的。仓库从 #707 起用 Go 1.27.3、`golang.org/x/text` v0.41.0。上面的部署流水线第一次跑成功之后，服务器上的 `/service` 才换成 1.27.3，Modbus TLS 连接上的 4 个标准库漏洞和 `x/text` 处理特殊输入会崩溃的问题才算修好。
 - 夜间备份由 `hvac-backup.timer` 做，备份放在同一块盘的运行目录里，还没有拷到服务器以外。
 - Alertmanager 用的是默认接收方，告警到它那里就停了；要发邮件得先配接收方（`docs/operations/alerts.md` 的「告警怎么送到人」一节）。服务器上 Prometheus 读 `runtime/server/config/prometheus.yaml`，`alerting` 配置是手工加的。
 - 两个演示站点（central-plant、local-energy-site-b）的 28 个定时任务都停用了：模拟器停着，指标任务每小时都会失败。重新开模拟器时一起启用。
