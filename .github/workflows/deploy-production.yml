@@ -15,7 +15,7 @@ concurrency:
 env:
   NODE_OPTIONS: --max-old-space-size=4096
   DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST || '139.199.58.47' }}
-  DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER || 'root' }}
+  DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER || 'ubuntu' }}
   DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
 
 jobs:

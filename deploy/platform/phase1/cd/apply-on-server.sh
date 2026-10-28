@@ -204,14 +204,22 @@ done
 trap - EXIT
 cleanup_candidates
 
-if [[ -x "$deploy_script" ]]; then
-  "$deploy_script"
-elif [[ -f "$deploy_script" ]]; then
-  bash "$deploy_script"
-else
+if [[ ! -e "$deploy_script" ]]; then
   echo "error: $deploy_script is missing." >&2
   echo "The production host keeps the Phase 1 restart script there. Images were updated; previous tags are before-${stamp}." >&2
   exit 1
+fi
+# deploy.sh chmods runtime files owned by container users. The SSH user owns the tree; that chmod needs root.
+if [[ "$(id -u)" -eq 0 ]]; then
+  if [[ -x "$deploy_script" ]]; then
+    "$deploy_script"
+  else
+    bash "$deploy_script"
+  fi
+elif [[ -x "$deploy_script" ]]; then
+  sudo -n "$deploy_script"
+else
+  sudo -n bash "$deploy_script"
 fi
 
 echo "deployed $revision"

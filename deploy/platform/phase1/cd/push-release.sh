@@ -14,7 +14,7 @@ Set one of these GitHub Actions secrets on SwayingWindmill/HVAC_web:
   DEPLOY_SSH_PASSWORD  password for the same user, used only when DEPLOY_SSH_KEY is unset
 
 Optional, with these defaults when the secret is unset:
-  DEPLOY_SSH_USER  root
+  DEPLOY_SSH_USER  ubuntu
   DEPLOY_SSH_HOST  139.199.58.47
   DEPLOY_SSH_PORT  22
 EOF
@@ -31,16 +31,16 @@ check_credentials() {
     exit 1
   fi
   local host="${DEPLOY_SSH_HOST:-139.199.58.47}"
-  local user="${DEPLOY_SSH_USER:-root}"
+  local user="${DEPLOY_SSH_USER:-ubuntu}"
   if [[ -z "$host" || -z "$user" ]]; then
-    echo "error: DEPLOY_SSH_HOST and DEPLOY_SSH_USER must not be empty. Unset them to use 139.199.58.47 and root." >&2
+    echo "error: DEPLOY_SSH_HOST and DEPLOY_SSH_USER must not be empty. Unset them to use 139.199.58.47 and ubuntu." >&2
     exit 1
   fi
 }
 
 if [[ "${1:-}" == "--check-credentials" ]]; then
   check_credentials
-  echo "Deploy SSH credentials are present (host ${DEPLOY_SSH_HOST:-139.199.58.47}, user ${DEPLOY_SSH_USER:-root}, port ${DEPLOY_SSH_PORT:-22})."
+  echo "Deploy SSH credentials are present (host ${DEPLOY_SSH_HOST:-139.199.58.47}, user ${DEPLOY_SSH_USER:-ubuntu}, port ${DEPLOY_SSH_PORT:-22})."
   exit 0
 fi
 
@@ -51,7 +51,7 @@ if [[ ! -f "$staging/source.tar" || ! -f "$staging/apply-on-server.sh" ]]; then
 fi
 
 host="${DEPLOY_SSH_HOST:-139.199.58.47}"
-user="${DEPLOY_SSH_USER:-root}"
+user="${DEPLOY_SSH_USER:-ubuntu}"
 port="${DEPLOY_SSH_PORT:-22}"
 revision="$(tr -d '[:space:]' < "$staging/REVISION")"
 remote="/tmp/hvac-production-release-${revision}"
