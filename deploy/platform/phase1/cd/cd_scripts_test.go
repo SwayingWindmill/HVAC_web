@@ -185,3 +185,251 @@ exit 0
 		t.Fatalf("smoke: %v\n%s", err, output)
 	}
 }
+
+func stageRelease(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "agent", "node_modules", "left-pad"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("REVISION", "abc\n")
+	write("source.tar", "source")
+	write("apply-on-server.sh", "#!/bin/sh\nexit 0\n")
+	write("agent/node_modules/left-pad/index.js", "module.exports = 1\n")
+	return dir
+}
+
+func fakeCurl(t *testing.T, bin string) {
+	t.Helper()
+	writeExe(t, bin, "curl", `#!/bin/sh
+url=
+for arg in "$@"; do
+  case "$arg" in
+    http*) url=$arg ;;
+  esac
+done
+case "$url" in
+  */healthz) printf 'ok\n'; exit 0 ;;
+  */sign-in|*/login) exit 0 ;;
+  *openid-configuration) printf '%s\n' '{"issuer":"https://hvac.example"}'; exit 0 ;;
+esac
+exit 0
+`)
+}
+
+func TestUploadSendsNodeModulesInOneGzipArchiveAndThenApplies(t *testing.T) {
+	bin := t.TempDir()
+	log := filepath.Join(t.TempDir(), "ssh.log")
+	sink := filepath.Join(t.TempDir(), "payload")
+	writeExe(t, bin, "ssh", `#!/bin/sh
+last=
+for arg in "$@"; do last=$arg; done
+printf '%s\n' "$last" >> "$SSH_LOG"
+case "$last" in
+  "command -v zstd"*) exit 1 ;;
+  "cat > "*) cat > "$UPLOAD_SINK"; exit 0 ;;
+  "gzip -dc "*) exit 0 ;;
+  "test -s "*) exit 0 ;;
+  "bash "*) printf 'APPLY\n' >> "$SSH_LOG"; exit 0 ;;
+  "rm -rf "*) exit 0 ;;
+esac
+exit 0
+`)
+	fakeCurl(t, bin)
+	staging := stageRelease(t)
+	cmd := exec.Command("bash", "push-release.sh")
+	cmd.Env = commandEnv(bin,
+		"SSH_LOG="+log,
+		"UPLOAD_SINK="+sink,
+		"DEPLOY_SSH_KEY=test-key\n",
+		"DEPLOY_UPLOAD_ATTEMPTS=1",
+		"DEPLOY_UPLOAD_TIMEOUT_SECONDS=30",
+		"DEPLOY_UPLOAD_RETRY_SLEEP=0",
+		"PRODUCTION_RELEASE_DIR="+staging,
+		"SMOKE_ATTEMPTS=1",
+		"SMOKE_SLEEP=0",
+		"HVAC_PUBLIC_ORIGIN=https://hvac.example",
+		"HVAC_PUBLIC_HOST=hvac.example",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("push: %v\n%s", err, output)
+	}
+	text := string(mustRead(t, log))
+	if !strings.Contains(text, "gzip -dc ") || !strings.Contains(text, "APPLY") {
+		t.Fatalf("expected one gzip extract and then apply:\n%s", text)
+	}
+	if strings.Contains(text, "tar -cf") {
+		t.Fatalf("upload still streams an uncompressed tar:\n%s", text)
+	}
+	listing := exec.Command("bash", "-c", "gzip -dc \"$1\" | tar -t", "bash", sink)
+	listed, err := listing.CombinedOutput()
+	if err != nil {
+		t.Fatalf("archive: %v\n%s", err, listed)
+	}
+	if !strings.Contains(string(listed), "agent/node_modules/left-pad/index.js") {
+		t.Fatalf("node_modules missing from the single archive:\n%s", listed)
+	}
+	if !strings.Contains(string(output), "B/s") {
+		t.Fatalf("throughput log missing:\n%s", output)
+	}
+}
+
+func TestUploadRetriesThenCleansUpWithoutApply(t *testing.T) {
+	bin := t.TempDir()
+	log := filepath.Join(t.TempDir(), "ssh.log")
+	count := filepath.Join(t.TempDir(), "count")
+	if err := os.WriteFile(count, []byte("0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeExe(t, bin, "ssh", `#!/bin/sh
+last=
+for arg in "$@"; do last=$arg; done
+printf '%s\n' "$last" >> "$SSH_LOG"
+case "$last" in
+  "command -v zstd"*) exit 1 ;;
+  "cat > "*)
+    n=$(tr -d '[:space:]' < "$UPLOAD_COUNT")
+    echo $((n + 1)) > "$UPLOAD_COUNT"
+    if [ "$n" -lt 1 ]; then exit 1; fi
+    cat > /dev/null
+    exit 0
+    ;;
+  "gzip -dc "*) exit 0 ;;
+  "test -s "*) exit 0 ;;
+  "bash "*) printf 'APPLY\n' >> "$SSH_LOG"; exit 0 ;;
+esac
+exit 0
+`)
+	fakeCurl(t, bin)
+	cmd := exec.Command("bash", "push-release.sh")
+	cmd.Env = commandEnv(bin,
+		"SSH_LOG="+log,
+		"UPLOAD_COUNT="+count,
+		"DEPLOY_SSH_KEY=test-key\n",
+		"DEPLOY_UPLOAD_ATTEMPTS=2",
+		"DEPLOY_UPLOAD_TIMEOUT_SECONDS=30",
+		"DEPLOY_UPLOAD_RETRY_SLEEP=0",
+		"PRODUCTION_RELEASE_DIR="+stageRelease(t),
+		"SMOKE_ATTEMPTS=1",
+		"SMOKE_SLEEP=0",
+		"HVAC_PUBLIC_ORIGIN=https://hvac.example",
+		"HVAC_PUBLIC_HOST=hvac.example",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("push: %v\n%s", err, output)
+	}
+	text := string(mustRead(t, log))
+	if strings.Count(text, "cat > ") != 2 {
+		t.Fatalf("expected two upload attempts:\n%s", text)
+	}
+	if !strings.Contains(text, "rm -rf ") || !strings.Contains(text, "APPLY") {
+		t.Fatalf("retry should clean the remote dir and apply only after success:\n%s", text)
+	}
+	if strings.Count(text, "\nAPPLY\n")+strings.Count(text, "APPLY\n") > 2 && strings.Count(text, "APPLY") != 1 {
+		t.Fatalf("apply ran more than once:\n%s", text)
+	}
+}
+
+func TestUploadTimeoutRemovesRemoteDirAndDoesNotApply(t *testing.T) {
+	bin := t.TempDir()
+	log := filepath.Join(t.TempDir(), "ssh.log")
+	writeExe(t, bin, "ssh", `#!/bin/sh
+last=
+for arg in "$@"; do last=$arg; done
+printf '%s\n' "$last" >> "$SSH_LOG"
+case "$last" in
+  "command -v zstd"*) exit 1 ;;
+  "cat > "*) sleep 30; exit 0 ;;
+esac
+exit 0
+`)
+	cmd := exec.Command("bash", "push-release.sh")
+	cmd.Env = commandEnv(bin,
+		"SSH_LOG="+log,
+		"DEPLOY_SSH_KEY=test-key\n",
+		"DEPLOY_UPLOAD_ATTEMPTS=1",
+		"DEPLOY_UPLOAD_TIMEOUT_SECONDS=1",
+		"DEPLOY_UPLOAD_RETRY_SLEEP=0",
+		"PRODUCTION_RELEASE_DIR="+stageRelease(t),
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected a timed-out upload to fail:\n%s", output)
+	}
+	text := string(mustRead(t, log))
+	if !strings.Contains(text, "rm -rf ") {
+		t.Fatalf("timed-out upload did not remove the remote dir:\n%s", text)
+	}
+	if strings.Contains(text, "apply-on-server.sh") {
+		t.Fatalf("apply ran after a timed-out upload:\n%s", text)
+	}
+	if !strings.Contains(string(output), "timed out") || !strings.Contains(string(output), "was not run") {
+		t.Fatalf("timeout log missing:\n%s", output)
+	}
+}
+
+func TestUploadUsesZstdWhenBothEndsHaveIt(t *testing.T) {
+	bin := t.TempDir()
+	log := filepath.Join(t.TempDir(), "ssh.log")
+	zstdLog := filepath.Join(t.TempDir(), "zstd.log")
+	writeExe(t, bin, "zstd", `#!/bin/sh
+printf '%s\n' "$*" >> "$ZSTD_LOG"
+if [ "$1" = --version ]; then echo zstd; exit 0; fi
+gzip -c
+`)
+	writeExe(t, bin, "ssh", `#!/bin/sh
+last=
+for arg in "$@"; do last=$arg; done
+printf '%s\n' "$last" >> "$SSH_LOG"
+case "$last" in
+  "command -v zstd"*) exit 0 ;;
+  "cat > "*) cat > /dev/null; exit 0 ;;
+  "zstd -dc "*) exit 0 ;;
+  "test -s "*) exit 0 ;;
+  "bash "*) printf 'APPLY\n' >> "$SSH_LOG"; exit 0 ;;
+esac
+exit 0
+`)
+	fakeCurl(t, bin)
+	cmd := exec.Command("bash", "push-release.sh")
+	cmd.Env = commandEnv(bin,
+		"SSH_LOG="+log,
+		"ZSTD_LOG="+zstdLog,
+		"DEPLOY_SSH_KEY=test-key\n",
+		"DEPLOY_UPLOAD_ATTEMPTS=1",
+		"DEPLOY_UPLOAD_TIMEOUT_SECONDS=30",
+		"DEPLOY_UPLOAD_RETRY_SLEEP=0",
+		"PRODUCTION_RELEASE_DIR="+stageRelease(t),
+		"SMOKE_ATTEMPTS=1",
+		"SMOKE_SLEEP=0",
+		"HVAC_PUBLIC_ORIGIN=https://hvac.example",
+		"HVAC_PUBLIC_HOST=hvac.example",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("push: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(mustRead(t, zstdLog)), "-c") {
+		t.Fatalf("local zstd was not used:\n%s", mustRead(t, zstdLog))
+	}
+	if !strings.Contains(string(mustRead(t, log)), "zstd -dc ") {
+		t.Fatalf("remote extract was not zstd:\n%s", mustRead(t, log))
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}

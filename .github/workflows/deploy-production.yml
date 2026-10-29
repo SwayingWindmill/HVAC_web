@@ -59,7 +59,15 @@ jobs:
         run: bash deploy/platform/phase1/cd/build-release.sh
 
       - name: Deploy over SSH
+        # The script itself aborts one upload after 10 minutes. This step limit is the
+        # backstop if that timeout is ignored: three attempts plus smoke, not the whole job.
+        timeout-minutes: 40
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_SSH_PASSWORD: ${{ secrets.DEPLOY_SSH_PASSWORD }}
-        run: bash deploy/platform/phase1/cd/push-release.sh
+        run: |
+          if ! command -v zstd >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y zstd
+          fi
+          bash deploy/platform/phase1/cd/push-release.sh
