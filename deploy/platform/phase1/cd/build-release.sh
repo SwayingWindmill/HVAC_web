@@ -67,8 +67,10 @@ git rev-parse HEAD | tr -d '[:space:]' > "$staging/REVISION"
 echo >> "$staging/REVISION"
 git archive --format=tar -o "$staging/source.tar" HEAD
 cp "$services" "$staging/services.tsv"
-cp "$root/deploy/platform/phase1/cd/apply-on-server.sh" "$staging/apply-on-server.sh"
-chmod 755 "$staging/apply-on-server.sh"
+for script in apply-on-server.sh rollback.sh smoke-release.sh prune-rollback-images.sh; do
+  cp "$root/deploy/platform/phase1/cd/$script" "$staging/$script"
+  chmod 755 "$staging/$script"
+done
 
 echo "building container healthcheck"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
