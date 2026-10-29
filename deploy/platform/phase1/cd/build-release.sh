@@ -116,7 +116,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 
 while IFS=$'\t' read -r service image kind required package <&3; do
   [[ -z "${service:-}" || "$service" == \#* ]] && continue
-  if [[ "$kind" != go ]]; then
+  if [[ "$kind" != go && "$kind" != static ]]; then
     continue
   fi
   if [[ ! -e "$package" ]]; then

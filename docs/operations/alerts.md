@@ -245,7 +245,7 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 
 ## 主机磁盘和 PostgreSQL 的 WAL
 
-`Phase1HostDiskUsageWarning`、`Phase1HostDiskUsageCritical` 按容量问题处理，不是手工删数据库文件的理由。`Phase1HostDiskWillFillWithin24Hours` 按最近的剩余空间趋势提前报警：在到 80% 之前，先找增长最快的持久数据。
+`Phase1HostDiskUsageWarning`（超过 80%）、`Phase1HostDiskUsageHigh`（超过 85%，要有人看到）、`Phase1HostDiskUsageCritical`（超过 90%）按容量问题处理，不是手工删数据库文件的理由。`Phase1HostDiskWillFillWithin24Hours` 按最近两小时的剩余空间趋势，预计 24 小时内会写满就提前报警：在到 80% 之前，先找增长最快的持久数据。Prometheus 自己的历史最多留 15 天，并且块数据不超过 2GB（`--storage.tsdb.retention.size=2GB`），避免它自己把盘写满。
 
 1. 本机 PostgreSQL：对比数据目录和 `pg_wal` 的大小。`pg_wal` 比表数据大很多，多半是 WAL 回收被堵住了。
 2. 开着 `POSTGRES_ARCHIVE_MODE=on` 时，看 `pg_stat_archiver` 和归档目录。归档反复失败要在归档目录那边修，绝不能手工删 `pg_wal` 里的文件。
@@ -253,27 +253,121 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 
 服务器上运行时数据的清理（#553）会删已送达的历史事件和 7 天前的原始读数，见 `docs/HANDOFF.md`。
 
+### 主机指标采集中断
+
+告警：`Phase1HostMetricsUnavailable`。`node-exporter` 两分钟没有被抓到。先看这个容器在不在、`/host/textfile` 目录在不在（目录不存在时它会起不来），再看 Prometheus 能不能解析 `node-exporter:9100`。
+
+### 主机内存和交换分区
+
+告警：`Phase1HostMemoryAvailableLow`（可用内存连续 15 分钟低于 200MiB）、`Phase1HostSwapPressure`（有交换分区且已用超过一半，连续 15 分钟）。
+
+这台机器大约 3.6GiB 内存，容器限额加起来比物理内存大，所以不要把「用了 80%」当成故障。只有可用内存掉到 200MiB 以下，或交换分区用过一半，才说明已经在挤。
+
+1. `docker stats --no-stream` 看哪个容器的内存最高。
+2. 先停不在对外服务的容器（模拟器、Tempo）。Tempo 只在 `observability-full` 档，这台正式机器不要开这一档。
+3. 不要为了腾内存去删 PostgreSQL 或 ClickHouse 的数据目录。
+
+### 容器反复重启或不健康
+
+告警：`Phase1ContainerRestartLoop`（30 分钟内重启超过 3 次）、`Phase1ContainerUnhealthy`（健康检查失败满 5 分钟）、`Phase1ContainerMetricsMissing`（主机脚本读不到 Docker）。
+
+指标由主机上的 `hvac-host-metrics.timer` 写进 node-exporter 的 textfile 目录，一分钟一次。
+
+1. `docker ps -a --filter label=com.docker.compose.project=hvac-platform` 看是哪一个服务。
+2. `docker logs --tail 80 <容器>`。日志里的 `error` 字段是 `[REDACTED]`，要看原因就按 `AGENTS.md` 写一个直接调用那个函数的测试，或临时打 `[DEBUG-xxxx]`。
+3. 健康检查失败而进程还在：多半是依赖（数据库、证书）没准备好，先看同时间的数据库和证书告警。
+4. 不要为了消掉重启次数把 `restart: unless-stopped` 改掉。
+
+### 备份太旧
+
+告警：`Phase1BackupTooOld`（成功时间早于 26 小时）、`Phase1BackupMissing`（还没有一份）、`Phase1BackupMetricMissing`（三小时都没有这个指标）。
+
+夜间备份是 `hvac-backup.timer`（每天 03:30，上海时间）。成功之后 `run-scheduled-backups.sh` 把当前时间写到运行目录的 `observability/postgres-backup.success` 和 `observability/clickhouse-backup.success`。还没有这两份标记时，指标退回用备份目录里最新一份的修改时间；目录也没有就是 0。
+
+26 小时是「每天一次，再留两小时」。例如昨天 03:30 成功，今天 05:30 还没有新的成功标记，就会报。
+
+1. `systemctl status hvac-backup.timer hvac-backup.service` 看昨晚有没有跑、有没有失败。
+2. 失败日志在 `journalctl -u hvac-backup.service -n 80`。
+3. 磁盘满是常见原因，先处理「主机磁盘和 PostgreSQL 的 WAL」。
+4. 指标一直缺失：确认 `hvac-host-metrics.timer` 已安装并在跑，而且 node-exporter 挂了 `observability/textfile`。
+
+### 公网入口和证书
+
+告警：`Phase1PublicEndpointDown`（`/healthz`、`/sign-in` 或 `/identity/.well-known/openid-configuration` 两分钟没有 200）、`Phase1TlsCertificateExpiring`（证书剩余不到 14 天）、`Phase1TlsCertificateExpiresSoon`（不到 3 天）。
+
+探测从 `blackbox-exporter` 访问 `https://hvac.swayingwindmill.online`。登录页是 `/sign-in`，不是 `/login`。
+
+1. 在服务器上 `curl -fsS --resolve hvac.swayingwindmill.online:443:127.0.0.1 https://hvac.swayingwindmill.online/healthz`，期望正文是 `ok`。
+2. 证书是 Let's Encrypt。看到期日：`echo | openssl s_client -servername hvac.swayingwindmill.online -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -enddate`。
+3. 续期由主机上的证书工具完成（仓库里没有 certbot 配置）。续期后把新的 `fullchain.pem` 和私钥放到主机 nginx 正在用的目录，再重载主机 nginx。不要把私钥提交进仓库。
+4. 只换了容器里的网页、没动主机 nginx 时，公网探测失败要先看主机 nginx 到 `127.0.0.1:18443` 的转发。
+
+### PostgreSQL 进程不可用
+
+告警：`Phase1PostgresDown`。`postgres-exporter` 抓不到，或它连不上数据库（`pg_up == 0`）。这和「PostgreSQL 不可用」（业务进程报的依赖）不是同一条：那条看的是遥测进程的探测，这条看的是数据库自己。
+
+1. `docker ps --filter name=postgres` 看容器在不在、是不是在重启。
+2. 日志里出现 `No space left on device` 或 `PANIC`：先按「主机磁盘和 PostgreSQL 的 WAL」腾出空间，再启动。不要手工删 `pg_wal` 里的文件。
+3. 导出器在、数据库不在：看 `DATA_SOURCE_URI` 是不是还指向 `postgres:5432`。密码用的是 `POSTGRES_ADMIN_PASSWORD`，由导出器自己做转义，不写进仓库。
+
+### ClickHouse 不可用
+
+告警：`Phase1ClickHouseDown`。Prometheus 抓不到 ClickHouse HTTP 端口上的 `/metrics`。
+
+1. `docker ps --filter name=clickhouse`。
+2. 在 ClickHouse 容器里 `clickhouse-client --query 'SELECT 1'`。
+3. 磁盘满时 ClickHouse 会拒绝写入。腾出空间后它会自己接受新的写入；历史读数的补写由遥测重试，不用改库。
+4. 指标挂在已经给内部服务用的 8123 端口上，没有单独映射到主机。
+
+### Redis 进程不可用
+
+告警：`Phase1RedisDown`。Redis 只做缓存和实时推送，坏了可以重建，不能用旧数据或假数据顶上。设备当前读数在 Redis 没有时会改读 PostgreSQL 里的快照。
+
+1. `docker ps --filter name=redis`，`docker exec <redis> redis-cli ping` 期望 `PONG`。
+2. 这台机器上的 Redis 没有密码。导出器地址是 `redis://redis:6379`。
+
+### MQTT 服务器连不上
+
+告警：`Phase1MqttDown`。从 `blackbox-exporter` 连 `mqtt-broker:8883` 的 TCP 失败。没开 `integration` 档位的环境会一直亮着这条，正式机器开着。
+
+1. `docker ps --filter name=mqtt`。
+2. 现场网关走主机 `8884`，由主机 nginx 转到 Mosquitto。容器端口通、网关仍不上报时，再看主机 `8884` 和证书。
+3. 接入服务自己的「接入服务的 MQTT 断开」仍然有效：那条看的是接入进程，这条看的是 Mosquitto 端口。
+
+### 平台进程没有指标
+
+告警：`Phase1CoreProcessDown`（平台网关、身份、调度、维护、遥测、指标，两分钟）、`Phase1ProcessDown`（接入、预测、优化、故障诊断、节能验证、报告、AI 助手、Centrifugo，五分钟，警告）。
+
+抓的是各进程诊断端口上的 `/metrics`。预测、优化、故障诊断、节能验证、报告的诊断端口同时提供 `/healthz` 和 `/metrics`。AI 助手的诊断端口提供 `/health/ready` 和 `/metrics`。
+
+1. `docker ps` 看对应容器是不是 `unhealthy` 或 `Restarting`。
+2. 没启用 `intelligence` 或 `integration` 时，对应的警告会一直在。正式机器这两档都开着。
+3. 核心进程的告警是要有人看到的（`page`）。先恢复进程，再看它依赖的数据库告警。
+
+### 定时任务
+
+告警：`SchedulerNotRunning`、`JobQueueAgeTooHigh`、`DeadJobDetected`、`RepeatedJobFailure`、`LeaseExpirySpike`。
+
+调度器只负责到点把任务交给执行的程序。队列变老或任务进了 DEAD，先看调度器日志和它的 PostgreSQL，再看对应的执行程序（指标、预测、优化）。不要在库里把 DEAD 改回 READY 来消告警；先把失败的原因修掉。
+
+演示站点的定时任务是停用的（模拟器没开）。那不会让调度器本身的 `up == 0`。
+
 ## 告警怎么送到人
 
-Prometheus 把告警交给 Alertmanager，它是观测服务里唯一能访问外网的（`alert-egress`）。仓库里的 `deploy/platform/phase1/observability/alertmanager.yaml` 什么都不发。要发邮件：把它复制到主机的运行时目录，命名为 `alertmanager.yaml`，加一个邮件接收方并把路由指过去，在主机的运行时环境文件里把 `ALERTMANAGER_CONFIG_FILE` 设成这个文件，然后重建 `alertmanager`：
+Prometheus 把告警交给 Alertmanager。Alertmanager 和把告警转成企业微信消息的 `wecom-alert-adapter` 在 `alert-egress` 上，只有它们能访问外网。仓库里的 `deploy/platform/phase1/observability/alertmanager.yaml` 仍然是空接收方（`receiver: none`）。容器启动时用 `render-alertmanager-config.sh` 看运行目录里的文件：什么都没放，就原样用这个空接收方，告警留在 Alertmanager 里，不发出去。
 
-```yaml
-global:
-  smtp_smarthost: smtp.qq.com:465
-  smtp_from: <发件地址>
-  smtp_auth_username: <发件地址>
-  smtp_auth_password_file: /etc/alertmanager/smtp-password
-  smtp_require_tls: false
-route:
-  receiver: mail
-  group_by: [alertname]
-receivers:
-  - name: mail
-    email_configs:
-      - to: <收件地址>
-        send_resolved: true
+密钥放在 `${PHASE1_RUNTIME_DIR}/alert-receiver/`（正式机器上是 `deploy/platform/phase1/runtime/server/alert-receiver/`）。这个目录在被忽略的 `runtime/` 下面，不要提交。样例在 `deploy/platform/phase1/observability/alert-receiver.example/`。
+
+企业微信群机器人：把样例 `wecom-webhook-url.example` 复制成 `wecom-webhook-url`，里面只留一行 `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...`。适配器每次发送时读这个文件，Alertmanager 的配置里只有内网地址 `http://wecom-alert-adapter:9095/alertmanager`，不会出现 key。
+
+邮件：把 `smtp.env.example` 复制成 `smtp.env`，把 `smtp-password.example` 复制成 `smtp-password`（文件内容就是密码，不要加引号）。465 端口一连上就是 TLS，样例里 `SMTP_REQUIRE_TLS=false` 就是这种连法。密码只出现在 `smtp-password` 里，生成的配置用 `smtp_auth_password_file` 指过去。
+
+两个都配了就两条一起发。只配一个就只发那一个。改完文件后重建这两个容器：
+
+```bash
+node scripts/phase1-wsl-compose.mjs --integration --intelligence up -d --no-deps alertmanager wecom-alert-adapter
 ```
 
-465 端口一连上就是 TLS，`smtp_require_tls` 为 false 时 Alertmanager 就按这种方式连；密码文件挂在配置旁边，不进仓库。
+`page` 和 `critical` 每小时再提醒一次，其他严重程度每 4 小时一次。恢复时也会发。
 
-用 `scripts/phase1-wsl-compose.mjs` 启动的主机，Prometheus 读的是 `runtime/<环境>/config/prometheus.yaml`（`wsl.override.yaml` 指定），不是仓库里的那份；那份也要加同样的 `alerting` 配置。
+Prometheus 的抓取配置用仓库里的 `deploy/platform/phase1/observability/prometheus.yaml`。`wsl.override.yaml` 把这份和告警规则目录挂进容器，不再读运行目录里手改的那份。

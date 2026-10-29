@@ -26,6 +26,10 @@ apps/hvac-web/.cache/
 .env.*.local
 deploy/platform/phase1/environments/*.runtime.env
 deploy/platform/phase1/runtime/
+# Alert receiver secrets. The *.example files next to these names are the templates and stay committed.
+deploy/platform/phase1/observability/**/wecom-webhook-url
+deploy/platform/phase1/observability/**/smtp.env
+deploy/platform/phase1/observability/**/smtp-password
 
 # logs
 *.log

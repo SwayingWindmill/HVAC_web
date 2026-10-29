@@ -85,15 +85,46 @@ for (const alert of [
 ]) {
   if (!alertText.includes(`alert: ${alert}`)) throw new Error(`required Phase 1 alert is missing: ${alert}`);
 }
-// Every alert's runbook link must land on a heading of the runbook it names (GitHub anchors).
+// Every alert has a runbook link, and that link lands on a heading (GitHub anchors).
 const anchorOf = (heading) => heading.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
 const alertFiles = (await readdir(resolve(root, 'infra/observability/alerts'))).filter((name) => name.endsWith('.yaml'));
+const alertNames = [];
 for (const name of alertFiles) {
   const alerts = await read(`infra/observability/alerts/${name}`);
+  for (const block of alerts.split(/(?=      - alert: )/)) {
+    const alertName = block.match(/- alert: (\S+)/)?.[1];
+    if (!alertName) continue;
+    alertNames.push(alertName);
+    if (!/runbook:\s*\S+\.md#\S+/.test(block)) throw new Error(`${name}: ${alertName} is missing a runbook link`);
+  }
   for (const [, document, anchor] of alerts.matchAll(/runbook:\s*(\S+\.md)#(\S+)/g)) {
     const headings = [...(await read(document)).matchAll(/^#{1,6}\s+(.+)$/gm)].map(([, heading]) => anchorOf(heading));
     if (!headings.includes(anchor)) throw new Error(`${name}: runbook link ${document}#${anchor} has no matching heading`);
   }
+}
+for (const alert of [
+  'Phase1HostDiskUsageHigh',
+  'Phase1HostDiskWillFillWithin24Hours',
+  'Phase1HostMemoryAvailableLow',
+  'Phase1HostSwapPressure',
+  'Phase1ContainerRestartLoop',
+  'Phase1ContainerUnhealthy',
+  'Phase1BackupTooOld',
+  'Phase1TlsCertificateExpiring',
+  'Phase1PostgresDown',
+  'Phase1ClickHouseDown',
+  'Phase1RedisDown',
+  'Phase1MqttDown',
+  'Phase1PublicEndpointDown',
+  'Phase1CoreProcessDown',
+]) {
+  if (!alertNames.includes(alert)) throw new Error(`required alert is missing: ${alert}`);
+}
+const alertmanager = await read('deploy/platform/phase1/observability/alertmanager.yaml');
+if (!alertmanager.includes('receiver: none')) throw new Error('the committed Alertmanager config must keep the empty receiver');
+const renderer = await read('deploy/platform/phase1/observability/render-alertmanager-config.sh');
+if (!renderer.includes('wecom-webhook-url') || !renderer.includes('smtp-password') || !renderer.includes('cp "$template"')) {
+  throw new Error('alertmanager renderer must support WeCom, SMTP, and the unconfigured template');
 }
 
 console.log(`Observability Phase 1 check passed: metricFamilies=${catalog.families.length}, dashboards=${dashboardFiles.length}`);

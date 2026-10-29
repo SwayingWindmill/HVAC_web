@@ -900,13 +900,15 @@ services:
       - ./backup/clickhouse-backup.xml:/etc/clickhouse-server/config.d/backup.xml:ro
       - ./clickhouse/resource-limits.xml:/etc/clickhouse-server/config.d/resource-limits.xml:ro
       - ./clickhouse/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
+      - ./clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
       - ../../../infra/telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
       interval: 5s
       timeout: 3s
       retries: 30
-    networks: [data]
+    expose: ["8123", "9000"]
+    networks: [data, observability]
     cpus: ${CLICKHOUSE_CPUS:-3.00}
     mem_limit: ${CLICKHOUSE_MEMORY_LIMIT:-4096m}
     mem_reservation: ${CLICKHOUSE_MEMORY_RESERVATION:-1024m}
@@ -1035,7 +1037,11 @@ services:
     profiles: ["observability-core", "observability-logs", "observability-full"]
     image: prom/prometheus:v2.54.1
     restart: unless-stopped
-    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=2GB
+      - --storage.tsdb.wal-compression
     volumes:
       - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
       - ../../../infra/observability/alerts:/etc/prometheus/alerts:ro
@@ -1047,16 +1053,20 @@ services:
     mem_reservation: ${PROMETHEUS_MEMORY_RESERVATION:-192m}
     logging: *default-logging
 
-  # Delivers Prometheus alerts. The only observability service with outbound access, for the mail
-  # server; ALERTMANAGER_CONFIG_FILE points at the host's receiver (runtime directory) and the
-  # default sends nothing.
+  # Delivers Prometheus alerts. The only observability services with outbound access are this one
+  # and wecom-alert-adapter (alert-egress). With an empty secrets directory the renderer keeps
+  # the committed none receiver.
   alertmanager:
     profiles: ["observability-core", "observability-logs", "observability-full"]
     image: prom/alertmanager:v0.27.0
     restart: unless-stopped
-    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
+    entrypoint: ["/bin/sh", "/etc/alertmanager/render-and-run.sh"]
+    command: ["--storage.path=/alertmanager"]
     volumes:
-      - ${ALERTMANAGER_CONFIG_FILE:-./observability/alertmanager.yaml}:/etc/alertmanager/alertmanager.yml:ro
+      - ./observability/alertmanager.yaml:/etc/alertmanager/unconfigured.yml:ro
+      - ./observability/render-alertmanager-config.sh:/etc/alertmanager/render-alertmanager-config.sh:ro
+      - ./observability/render-and-run.sh:/etc/alertmanager/render-and-run.sh:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/alert-receiver:/etc/alertmanager/secrets:ro
       - alertmanager-data:/alertmanager
     expose: ["9093"]
     networks: [observability, alert-egress]
@@ -1073,10 +1083,12 @@ services:
       - --path.procfs=/host/proc
       - --path.sysfs=/host/sys
       - --path.rootfs=/host/root
+      - --collector.textfile.directory=/host/textfile
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/root:ro,rslave
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/observability/textfile:/host/textfile:ro
     expose: ["9100"]
     networks: [observability]
     cpus: ${NODE_EXPORTER_CPUS:-0.20}
@@ -1099,6 +1111,7 @@ services:
     mem_reservation: ${LOKI_MEMORY_RESERVATION:-128m}
     logging: *default-logging
 
+  # Tempo stays on observability-full only. single-lite (the production host) does not start it.
   tempo:
     profiles: ["observability-full"]
     image: ${TEMPO_IMAGE:-grafana/tempo:2.6.1}
@@ -1133,11 +1146,86 @@ services:
     mem_reservation: ${GRAFANA_MEMORY_RESERVATION:-96m}
     logging: *default-logging
 
+  # Small exporters. They are on the observability profile so a host that does not run
+  # metrics does not start them. Memory limits stay far below the application services.
+  postgres-exporter:
+    profiles: ["observability-core", "observability-logs", "observability-full"]
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    restart: unless-stopped
+    command:
+      - --no-collector.stat_user_tables
+      - --no-collector.statio_user_tables
+      - --disable-settings-metrics
+      - --log.level=warn
+    environment:
+      DATA_SOURCE_URI: ${POSTGRES_EXPORTER_URI:-postgres:5432/postgres?sslmode=disable}
+      DATA_SOURCE_USER: ${POSTGRES_ADMIN_USER:-postgres}
+      DATA_SOURCE_PASS: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
+    expose: ["9187"]
+    networks: [data, observability]
+    cpus: ${POSTGRES_EXPORTER_CPUS:-0.05}
+    mem_limit: ${POSTGRES_EXPORTER_MEMORY_LIMIT:-64m}
+    mem_reservation: ${POSTGRES_EXPORTER_MEMORY_RESERVATION:-16m}
+    logging: *default-logging
+
+  redis-exporter:
+    profiles: ["observability-core", "observability-logs", "observability-full"]
+    image: oliver006/redis_exporter:v1.67.0-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: ${REDIS_EXPORTER_ADDR:-redis://redis:6379}
+    expose: ["9121"]
+    networks: [data, observability]
+    cpus: ${REDIS_EXPORTER_CPUS:-0.05}
+    mem_limit: ${REDIS_EXPORTER_MEMORY_LIMIT:-32m}
+    mem_reservation: ${REDIS_EXPORTER_MEMORY_RESERVATION:-8m}
+    logging: *default-logging
+
+  blackbox-exporter:
+    profiles: ["observability-core", "observability-logs", "observability-full"]
+    image: prom/blackbox-exporter:v0.27.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/blackbox/blackbox.yml
+      - --log.level=warn
+    volumes:
+      - ./observability/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    expose: ["9115"]
+    networks: [observability, alert-egress, mqtt]
+    cpus: ${BLACKBOX_EXPORTER_CPUS:-0.05}
+    mem_limit: ${BLACKBOX_EXPORTER_MEMORY_LIMIT:-32m}
+    mem_reservation: ${BLACKBOX_EXPORTER_MEMORY_RESERVATION:-8m}
+    logging: *default-logging
+
+  # Built on the server from the local alertmanager image (CA certificates, no pull) by apply-on-server.sh.
+  wecom-alert-adapter:
+    profiles: ["observability-core", "observability-logs", "observability-full"]
+    image: hvac/wecom-alert-adapter:0.1.0-dev
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    environment:
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+    volumes:
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/alert-receiver:/etc/alert-receiver:ro
+    expose: ["9095"]
+    networks: [observability, alert-egress]
+    healthcheck:
+      test: ["CMD", "/wecom-alert-adapter", "-healthcheck"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    cpus: ${WECOM_ADAPTER_CPUS:-0.05}
+    mem_limit: ${WECOM_ADAPTER_MEMORY_LIMIT:-24m}
+    mem_reservation: ${WECOM_ADAPTER_MEMORY_RESERVATION:-8m}
+    logging: *default-logging
+
 networks:
   public: {}
   # Outbound access to the model provider; only the Operations Agent joins it.
   model-egress: {}
-  # Outbound access to the alert mail server; only Alertmanager joins it.
+  # Outbound access for Alertmanager (SMTP) and the WeCom adapter. Not an internal network.
   alert-egress: {}
   # Outbound access to api.weixin.qq.com; only identity-service joins it.
   wechat-egress: {}

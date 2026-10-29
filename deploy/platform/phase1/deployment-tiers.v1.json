@@ -29,7 +29,7 @@
       "purpose": "Forecast, optimization, FDD, M&V and the Operations Agent (Ask AI) are optional intelligence capabilities. The WSL launcher selects them with --intelligence and validates the resulting tier resource envelope before Compose starts them. They do not gate telemetry, control or work-order safety."
     },
     "observability-core": {
-      "services": ["prometheus", "node-exporter", "alertmanager", "grafana"],
+      "services": ["prometheus", "node-exporter", "alertmanager", "grafana", "postgres-exporter", "redis-exporter", "blackbox-exporter", "wecom-alert-adapter"],
       "signals": ["metrics", "events", "audit"],
       "purpose": "Metrics, host monitoring, dashboards and alerts. Docker JSON logs remain available on the host with bounded rotation."
     },
@@ -40,7 +40,11 @@
         "alertmanager",
         "grafana",
         "otel-collector",
-        "loki"
+        "loki",
+        "postgres-exporter",
+        "redis-exporter",
+        "blackbox-exporter",
+        "wecom-alert-adapter"
       ],
       "signals": ["metrics", "logs", "events", "audit"],
       "purpose": "Adds centralized single-instance Docker log collection. Trace export is disabled at the application layer."
@@ -53,7 +57,11 @@
         "grafana",
         "otel-collector",
         "loki",
-        "tempo"
+        "tempo",
+        "postgres-exporter",
+        "redis-exporter",
+        "blackbox-exporter",
+        "wecom-alert-adapter"
       ],
       "signals": ["metrics", "logs", "traces", "events", "audit"],
       "purpose": "Full single-instance observability stack including centralized trace query."
@@ -93,7 +101,7 @@
         "REDIS_CPUS": "0.25",
         "MQTT_CPUS": "0.25",
         "REALTIME_TRANSPORT_CPUS": "0.25",
-        "PROMETHEUS_CPUS": "0.5",
+        "PROMETHEUS_CPUS": "0.3",
         "PROMETHEUS_MEMORY_LIMIT": "320m",
         "NODE_EXPORTER_CPUS": "0.1",
         "GRAFANA_CPUS": "0.2",
@@ -131,6 +139,7 @@
         "CLICKHOUSE_CPUS": "2",
         "CLICKHOUSE_MEMORY_LIMIT": "2048m",
         "POSTGRES_MEMORY_LIMIT": "1536m",
+        "PROMETHEUS_CPUS": "0.55",
         "PROMETHEUS_MEMORY_LIMIT": "512m",
         "LOKI_MEMORY_LIMIT": "384m",
         "GRAFANA_CPUS": "0.4",
@@ -155,6 +164,7 @@
         "note": "Full single-server signals including centralized traces. Still single-node recoverable, not HA."
       },
       "resourceOverrides": {
+        "PROMETHEUS_CPUS": "0.55",
         "GRAFANA_CPUS": "0.4",
         "OPERATIONS_AGENT_CPUS": "0.5",
         "FORECAST_SERVICE_CPUS": "0.5",

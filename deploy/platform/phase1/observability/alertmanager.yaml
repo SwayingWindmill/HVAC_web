@@ -1,6 +1,6 @@
-# Default receiver: alerts are grouped and kept in Alertmanager but sent nowhere. A host that should
-# mail them sets ALERTMANAGER_CONFIG_FILE to its own copy of this file with an email receiver, kept in
-# the runtime directory beside the other host secrets (docs/operations/alerts.md#告警怎么送到人).
+# Default receiver: alerts are grouped and kept in Alertmanager but sent nowhere.
+# render-and-run.sh copies this file when the host secrets directory has neither a WeCom webhook
+# nor smtp.env. See docs/operations/alerts.md#告警怎么送到人.
 route:
   receiver: none
   group_by: [alertname]

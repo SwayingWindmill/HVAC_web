@@ -58,6 +58,10 @@ func HealthHandler() http.Handler {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"status":"ok"}`))
 	})
+	mux.HandleFunc("GET /metrics", func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		_, _ = writer.Write([]byte("# HELP hvac_service_up 1 when this diagnostics server is serving.\n# TYPE hvac_service_up gauge\nhvac_service_up{service=\"forecast-service\"} 1\n"))
+	})
 	return mux
 }
 

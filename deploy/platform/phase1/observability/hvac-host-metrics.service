@@ -1,0 +1,11 @@
+# Install to /etc/systemd/system/ with hvac-host-metrics.timer.
+# Uses the same /etc/hvac/backup.env as the nightly backup (PHASE1_RUNTIME_DIR, backup directories).
+[Unit]
+Description=HVAC host textfile metrics (backup age, container health)
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/hvac/backup.env
+ExecStart=/opt/hvac-platform/deploy/platform/phase1/observability/host-textfile.sh
+Nice=10

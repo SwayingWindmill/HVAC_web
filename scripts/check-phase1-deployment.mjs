@@ -8,6 +8,31 @@ const root = resolve(process.cwd());
 const read = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await read(path));
 
+// Host and path are compared on a parsed URL. A substring check would also match
+// https://hvac.swayingwindmill.online.evil.example/healthz or a URL that only mentions the real one.
+function hasExactHttpsTarget(text, hostname, pathname) {
+  for (const match of text.matchAll(/https:\/\/[^\s"'<>]+/g)) {
+    let url;
+    try {
+      url = new URL(match[0]);
+    } catch {
+      continue;
+    }
+    if (
+      url.protocol === 'https:'
+      && url.hostname === hostname
+      && url.pathname === pathname
+      && url.username === ''
+      && url.password === ''
+      && url.search === ''
+      && url.hash === ''
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const paths = {
   baseline: 'deploy/platform/phase1/architecture-baseline.v1.json',
   matrix: 'deploy/platform/phase1/alignment-matrix.v1.json',
@@ -161,7 +186,7 @@ for (const tierId of ['demo', 'single-lite', 'single-full']) {
     assert(false, error.message);
   }
 }
-assert(JSON.stringify(deploymentTiers.profileDefinitions?.['local-postgres']?.services) === JSON.stringify(['postgres']) && JSON.stringify(deploymentTiers.profileDefinitions?.['local-clickhouse']?.services) === JSON.stringify(['clickhouse', 'cube']) && JSON.stringify(deploymentTiers.profileDefinitions?.['local-redis']?.services) === JSON.stringify(['redis']) && deploymentTiers.profileDefinitions?.integration?.optional === true && JSON.stringify(deploymentTiers.profileDefinitions?.integration?.services) === JSON.stringify(['connectivity', 'mqtt-broker']) && deploymentTiers.profileDefinitions?.intelligence?.optional === true && deploymentTiers.profileDefinitions?.['observability-core']?.services?.length === 4 && deploymentTiers.profileDefinitions?.['observability-full']?.services?.includes('tempo'), 'tier profiles must define local PostgreSQL, local ClickHouse, local Redis, optional integration, optional intelligence and three observability shapes');
+assert(JSON.stringify(deploymentTiers.profileDefinitions?.['local-postgres']?.services) === JSON.stringify(['postgres']) && JSON.stringify(deploymentTiers.profileDefinitions?.['local-clickhouse']?.services) === JSON.stringify(['clickhouse', 'cube']) && JSON.stringify(deploymentTiers.profileDefinitions?.['local-redis']?.services) === JSON.stringify(['redis']) && deploymentTiers.profileDefinitions?.integration?.optional === true && JSON.stringify(deploymentTiers.profileDefinitions?.integration?.services) === JSON.stringify(['connectivity', 'mqtt-broker']) && deploymentTiers.profileDefinitions?.intelligence?.optional === true && deploymentTiers.profileDefinitions?.['observability-core']?.services?.length === 8 && deploymentTiers.profileDefinitions?.['observability-full']?.services?.includes('tempo') && !deploymentTiers.profileDefinitions?.['observability-logs']?.services?.includes('tempo') && !deploymentTiers.profileDefinitions?.['observability-core']?.services?.includes('tempo'), 'tier profiles must define local PostgreSQL, local ClickHouse, local Redis, optional integration, optional intelligence and three observability shapes; Tempo stays on the full profile');
 assert(runtimeInventory.schemaVersion === 1 && runtimeInventory.sourceOfTruth === 'SE-ARCH-DEPLOY-001 V1.0 CURRENT' && runtimeInventory.canonicalCompose === paths.compose, 'runtime inventory identity must be versioned and point to the canonical Compose');
 assert(JSON.stringify(runtimeInventory.classes?.defaultBusinessDeployables) === JSON.stringify(['energy-api', 'telemetry-worker', 'metric-worker']), 'runtime inventory must freeze the three default business deployables');
 assert(JSON.stringify(runtimeInventory.classes?.defaultSupportingWorkloads) === JSON.stringify(['scheduler', 'maintenance']), 'runtime inventory must freeze scheduler and maintenance as supporting workloads');
@@ -230,6 +255,10 @@ const requiredServices = [
   'loki',
   'tempo',
   'grafana',
+  'postgres-exporter',
+  'redis-exporter',
+  'blackbox-exporter',
+  'wecom-alert-adapter',
 ];
 const profileExpectations = {
   postgres: ['local-postgres'],
@@ -245,6 +274,10 @@ const profileExpectations = {
   loki: ['observability-logs', 'observability-full'],
   tempo: ['observability-full'],
   grafana: ['observability-core', 'observability-logs', 'observability-full'],
+  'postgres-exporter': ['observability-core', 'observability-logs', 'observability-full'],
+  'redis-exporter': ['observability-core', 'observability-logs', 'observability-full'],
+  'blackbox-exporter': ['observability-core', 'observability-logs', 'observability-full'],
+  'wecom-alert-adapter': ['observability-core', 'observability-logs', 'observability-full'],
 };
 for (const service of requiredServices) assert(new RegExp(`^  ${service}:`, 'm').test(compose), `compose is missing required service ${service}`);
 const serviceBlocksEarly = [...compose.matchAll(/^  ([a-z0-9-]+):\n([\s\S]*?)(?=^  [a-z0-9-]+:\n|^networks:|^volumes:)/gm)];
@@ -346,11 +379,14 @@ assert(runtimeSources.metricMain.includes('telemetry.SetDependencies(observabili
 assert(runtimeSources.iotRuntime.includes('runtime.connected && runtime.subscribed && runtime.lastError == ""'), 'connectivity readiness must track live MQTT connection/subscription state');
 assert(!runtimeSources.operationsGateway.includes('rateWindows') && !runtimeSources.operationsGateway.includes('RateLimitPerMinute') && runtimeSources.operationsGateway.includes('rateLimiter.Allow'), 'Operations Agent high-risk limit must not use an in-process authoritative map');
 
-for (const dataService of ['postgres', 'clickhouse', 'redis']) {
+for (const dataService of ['postgres', 'redis']) {
   const block = serviceBlocks.find(([, name]) => name === dataService)?.[2] ?? '';
   assert(!/^    ports:/m.test(block), `${dataService} must not publish a host port`);
   assert(block.includes('networks: [data]'), `${dataService} must remain in the Data Zone network`);
 }
+const clickhouseBlock = serviceBlocks.find(([, name]) => name === 'clickhouse')?.[2] ?? '';
+assert(!/^    ports:/m.test(clickhouseBlock), 'clickhouse must not publish a host port');
+assert(clickhouseBlock.includes('networks: [data, observability]'), 'clickhouse stays on the data network and joins observability so Prometheus can scrape its built-in metrics');
 
 for (const forbiddenService of ['redpanda-compat', 'outbox-relay-compat', 'platform-gateway', 'iam-service', 'platform-core-service', 'telemetry-query-service', 'audit-ledger-service', 'alarm-service', 'work-order-service', 'command-service', 'mqtt-telemetry-adapter', 'command-dispatcher', 'command-verifier', 'telemetry-history-projector', 'analytics-read-model-projector', 'telemetry-runtime-service']) {
   assert(!new RegExp(`^  ${forbiddenService}:`, 'm').test(compose), `canonical Compose must not deploy legacy/compat service ${forbiddenService}`);
@@ -430,9 +466,13 @@ for (const forbidden of ['localhost', '127.0.0.1', 'demo', 'fixture', 'oidc-test
 assert(envs.production.includes('PUBLIC_ORIGIN=https://app.energy.example.com'), 'production must have an explicit HTTPS public origin contract');
 assert(envs.production.includes('MQTT_TOPIC_ROOT=hvac/production'), 'production must use its own MQTT namespace');
 
-assert(prometheus.includes('energy-api:19080') && prometheus.includes('scheduler:19092') && prometheus.includes('telemetry-worker:19086') && prometheus.includes('metric-worker:19090') && prometheus.includes('connectivity:19094'), 'Prometheus must scrape the canonical Phase 1 Go processes including Scheduler coordination');
+assert(prometheus.includes('energy-api:19080') && prometheus.includes('identity-service:19085') && prometheus.includes('scheduler:19092') && prometheus.includes('maintenance:19093') && prometheus.includes('telemetry-worker:19086') && prometheus.includes('metric-worker:19090') && prometheus.includes('connectivity:19094'), 'Prometheus must scrape the canonical Phase 1 Go processes including Scheduler coordination');
+assert(prometheus.includes('forecast-service:19099') && prometheus.includes('optimization-service:19100') && prometheus.includes('fdd-service:19098') && prometheus.includes('mv-service:19101') && prometheus.includes('report-service:19102') && prometheus.includes('operations-agent-service:19095'), 'Prometheus must scrape intelligence service diagnostics');
+assert(prometheus.includes('postgres-exporter:9187') && prometheus.includes('redis-exporter:9121') && prometheus.includes('clickhouse:8123') && prometheus.includes('blackbox-exporter:9115'), 'Prometheus must scrape database exporters and the public probe');
+assert(hasExactHttpsTarget(prometheus, 'hvac.swayingwindmill.online', '/healthz'), 'Prometheus must probe the public health endpoint');
+assert(compose.includes('--storage.tsdb.retention.time=15d') && compose.includes('--storage.tsdb.retention.size=2GB'), 'Prometheus must cap both age and size of its TSDB');
 assert(prometheus.includes('node-exporter:9100'), 'Prometheus must scrape single-server host metrics');
-assert(hostAlerts.includes('Phase1HostDiskUsageWarning') && hostAlerts.includes('> 80') && hostAlerts.includes('Phase1HostDiskUsageCritical') && hostAlerts.includes('> 90'), 'host disk alerts must enforce 80% warning and 90% critical thresholds');
+assert(hostAlerts.includes('Phase1HostDiskUsageWarning') && hostAlerts.includes('> 80') && hostAlerts.includes('Phase1HostDiskUsageHigh') && hostAlerts.includes('> 85') && hostAlerts.includes('Phase1HostDiskUsageCritical') && hostAlerts.includes('> 90'), 'host disk alerts must enforce 80% warning, 85% page and 90% critical thresholds');
 assert(hostAlerts.includes('Phase1HostDiskWillFillWithin24Hours') && hostAlerts.includes('predict_linear('), 'host disk alerts must warn on projected rapid exhaustion before the static threshold is reached');
 assert(otel.includes('filelog/docker') && otel.includes('otlphttp/loki') && otel.includes('otlp/tempo'), 'observability-full OTel Collector must route logs and traces to central backends');
 assert(otelLogs.includes('filelog/docker') && otelLogs.includes('otlphttp/loki') && !otelLogs.includes('otlp/tempo'), 'observability-logs OTel Collector must collect logs without requiring Tempo');

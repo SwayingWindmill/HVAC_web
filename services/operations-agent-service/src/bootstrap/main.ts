@@ -193,7 +193,16 @@ const main = async () => {
 
   // Readiness for the orchestrator; it carries no data.
   const diagnostics = createHttpServer((request, response) => {
-    response.writeHead(request.url === '/health/ready' ? 200 : 404).end();
+    if (request.url === '/health/ready') {
+      response.writeHead(200).end();
+      return;
+    }
+    if (request.url === '/metrics') {
+      response.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
+      response.end('# HELP hvac_service_up 1 when this diagnostics server is serving.\n# TYPE hvac_service_up gauge\nhvac_service_up{service="operations-agent-service"} 1\n');
+      return;
+    }
+    response.writeHead(404).end();
   });
   diagnostics.listen(Number(process.env.AGENT_DIAGNOSTICS_PORT ?? 19095));
 

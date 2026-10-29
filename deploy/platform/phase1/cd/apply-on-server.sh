@@ -79,6 +79,9 @@ declare -a planned_previous=()
 while IFS=$'\t' read -r service image kind required package <&3; do
   [[ -z "${service:-}" || "$service" == \#* ]] && continue
   resolved="$(resolve_image "$service" "$image")"
+  if [[ -z "$resolved" && "$kind" == static ]]; then
+    resolved="$image"
+  fi
   if [[ -z "$resolved" ]]; then
     if [[ "$required" == required ]]; then
       echo "error: no local image for ${service}." >&2
@@ -88,7 +91,13 @@ while IFS=$'\t' read -r service image kind required package <&3; do
     echo "skip ${service}: ${image} is not on this host"
     continue
   fi
-  previous="$(rollback_tag "$resolved")"
+  previous=""
+  if docker image inspect "$resolved" >/dev/null 2>&1 </dev/null; then
+    previous="$(rollback_tag "$resolved")"
+  elif [[ "$kind" != static ]]; then
+    echo "error: refusing to replace ${resolved}; the image is not present." >&2
+    exit 1
+  fi
   planned_services+=("$service")
   planned_images+=("$resolved")
   planned_kinds+=("$kind")
@@ -175,6 +184,29 @@ RUN rm -rf /app/node_modules \
 USER node
 EOF
       ;;
+    static)
+      if [[ "$service" != wecom-alert-adapter ]]; then
+        echo "error: static images are only defined for wecom-alert-adapter (got $service)." >&2
+        exit 1
+      fi
+      if [[ ! -s "$release/bins/$service/service" ]]; then
+        echo "error: release is missing the $service binary." >&2
+        exit 1
+      fi
+      base="$(resolve_image alertmanager prom/alertmanager:v0.27.0)"
+      if [[ -z "$base" ]]; then
+        echo "error: $service is built FROM the local alertmanager image, which is not on this host." >&2
+        exit 1
+      fi
+      cp "$release/bins/$service/service" "$context/service"
+      chmod 755 "$context/service"
+      cat > "$context/Dockerfile" <<EOF
+FROM ${base}
+COPY --chown=65532:65532 service /wecom-alert-adapter
+USER 65532:65532
+ENTRYPOINT ["/wecom-alert-adapter"]
+EOF
+      ;;
     migrator)
       if [[ ! -f "$release/migrator/opt/hvac/migrations/migration-list.tsv" ]]; then
         echo "error: release is missing the migrator files." >&2
@@ -207,9 +239,15 @@ printf '%s\n' "$revision" > "$platform_dir/REVISION"
 echo "updated $platform_dir to $revision"
 
 for index in "${!planned_services[@]}"; do
-  docker tag "${planned_images[$index]}" "${planned_previous[$index]}"
+  if [[ -n "${planned_previous[$index]}" ]]; then
+    docker tag "${planned_images[$index]}" "${planned_previous[$index]}"
+  fi
   docker tag "${candidates[$index]}" "${planned_images[$index]}"
-  echo "replaced ${planned_images[$index]} (previous ${planned_previous[$index]})"
+  if [[ -n "${planned_previous[$index]}" ]]; then
+    echo "replaced ${planned_images[$index]} (previous ${planned_previous[$index]})"
+  else
+    echo "created ${planned_images[$index]}"
+  fi
 done
 trap - EXIT
 cleanup_candidates

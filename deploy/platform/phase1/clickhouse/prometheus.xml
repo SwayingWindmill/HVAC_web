@@ -1,0 +1,13 @@
+<clickhouse>
+    <!-- Built-in metrics so Prometheus can see ClickHouse without another process.
+         Events and asynchronous metrics are left off: they are large and the down-alert only needs the scrape. -->
+    <!-- port 0 serves /metrics on the existing HTTP port (8123). A dedicated port in this
+         image binds to localhost, which Prometheus in another container cannot reach. -->
+    <prometheus>
+        <endpoint>/metrics</endpoint>
+        <port>0</port>
+        <metrics>true</metrics>
+        <events>false</events>
+        <asynchronous_metrics>false</asynchronous_metrics>
+    </prometheus>
+</clickhouse>
