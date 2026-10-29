@@ -8,6 +8,31 @@ const root = resolve(process.cwd());
 const read = (path) => readFile(resolve(root, path), 'utf8');
 const readJSON = async (path) => JSON.parse(await read(path));
 
+// Host and path are compared on a parsed URL. A substring check would also match
+// https://hvac.swayingwindmill.online.evil.example/healthz or a URL that only mentions the real one.
+function hasExactHttpsTarget(text, hostname, pathname) {
+  for (const match of text.matchAll(/https:\/\/[^\s"'<>]+/g)) {
+    let url;
+    try {
+      url = new URL(match[0]);
+    } catch {
+      continue;
+    }
+    if (
+      url.protocol === 'https:'
+      && url.hostname === hostname
+      && url.pathname === pathname
+      && url.username === ''
+      && url.password === ''
+      && url.search === ''
+      && url.hash === ''
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const paths = {
   baseline: 'deploy/platform/phase1/architecture-baseline.v1.json',
   matrix: 'deploy/platform/phase1/alignment-matrix.v1.json',
@@ -444,7 +469,7 @@ assert(envs.production.includes('MQTT_TOPIC_ROOT=hvac/production'), 'production 
 assert(prometheus.includes('energy-api:19080') && prometheus.includes('identity-service:19085') && prometheus.includes('scheduler:19092') && prometheus.includes('maintenance:19093') && prometheus.includes('telemetry-worker:19086') && prometheus.includes('metric-worker:19090') && prometheus.includes('connectivity:19094'), 'Prometheus must scrape the canonical Phase 1 Go processes including Scheduler coordination');
 assert(prometheus.includes('forecast-service:19099') && prometheus.includes('optimization-service:19100') && prometheus.includes('fdd-service:19098') && prometheus.includes('mv-service:19101') && prometheus.includes('report-service:19102') && prometheus.includes('operations-agent-service:19095'), 'Prometheus must scrape intelligence service diagnostics');
 assert(prometheus.includes('postgres-exporter:9187') && prometheus.includes('redis-exporter:9121') && prometheus.includes('clickhouse:8123') && prometheus.includes('blackbox-exporter:9115'), 'Prometheus must scrape database exporters and the public probe');
-assert(prometheus.includes('https://hvac.swayingwindmill.online/healthz'), 'Prometheus must probe the public health endpoint');
+assert(hasExactHttpsTarget(prometheus, 'hvac.swayingwindmill.online', '/healthz'), 'Prometheus must probe the public health endpoint');
 assert(compose.includes('--storage.tsdb.retention.time=15d') && compose.includes('--storage.tsdb.retention.size=2GB'), 'Prometheus must cap both age and size of its TSDB');
 assert(prometheus.includes('node-exporter:9100'), 'Prometheus must scrape single-server host metrics');
 assert(hostAlerts.includes('Phase1HostDiskUsageWarning') && hostAlerts.includes('> 80') && hostAlerts.includes('Phase1HostDiskUsageHigh') && hostAlerts.includes('> 85') && hostAlerts.includes('Phase1HostDiskUsageCritical') && hostAlerts.includes('> 90'), 'host disk alerts must enforce 80% warning, 85% page and 90% critical thresholds');
