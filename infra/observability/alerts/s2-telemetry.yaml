@@ -36,7 +36,7 @@ groups:
     interval: 30s
     rules:
       - alert: S2SnapshotErrorBudgetBurn
-        expr: sum(rate(hvac_s2_snapshot_requests_total{outcome!="success"}[5m])) / clamp_min(sum(rate(hvac_s2_snapshot_requests_total[5m])), 1) > 0.01
+        expr: (sum(rate(hvac_s2_snapshot_requests_total{outcome!="success"}[5m])) / sum(rate(hvac_s2_snapshot_requests_total[5m]))) > 0.01 and sum(increase(hvac_s2_snapshot_requests_total[5m])) > 50
         for: 5m
         labels:
           severity: page
@@ -66,7 +66,7 @@ groups:
           summary: Source ingest lag is high
           runbook: docs/operations/alerts.md#读数接收延迟
       - alert: S2DataGoodRateLow
-        expr: sum(rate(hvac_s2_data_quality_records_total{quality="good"}[10m])) / clamp_min(sum(rate(hvac_s2_data_quality_records_total[10m])), 1) < 0.95
+        expr: (sum(rate(hvac_s2_data_quality_records_total{quality="good"}[10m])) / sum(rate(hvac_s2_data_quality_records_total[10m]))) < 0.95 and sum(increase(hvac_s2_data_quality_records_total[10m])) > 100
         for: 10m
         labels:
           severity: page
@@ -106,7 +106,7 @@ groups:
           summary: Presence evaluation is late
           runbook: docs/operations/alerts.md#在线状态判断延迟
       - alert: S2RecoveryFailureRateHigh
-        expr: sum(rate(hvac_s2_recovery_attempts_total{outcome!="success"}[5m])) / clamp_min(sum(rate(hvac_s2_recovery_attempts_total[5m])), 1) > 0.005
+        expr: (sum(rate(hvac_s2_recovery_attempts_total{outcome!="success"}[5m])) / sum(rate(hvac_s2_recovery_attempts_total[5m]))) > 0.005 and sum(increase(hvac_s2_recovery_attempts_total[5m])) > 20
         for: 5m
         labels:
           severity: page
