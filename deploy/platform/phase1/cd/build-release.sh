@@ -48,6 +48,42 @@ collect_migrator_tree() {
   echo "staged $copied migrator files"
 }
 
+# The release carries the lockfile and the built JavaScript. The server image
+# runs npm ci --omit=dev. node_modules, sourcemaps, and declarations stay here.
+stage_agent() {
+  local src="$1"
+  local dest="$2"
+  if [[ ! -f "$src/package.json" || ! -f "$src/package-lock.json" || ! -f "$src/dist/bootstrap/main.js" ]]; then
+    echo "error: operations-agent source is missing package.json, package-lock.json, or dist/bootstrap/main.js" >&2
+    exit 1
+  fi
+  mkdir -p "$dest"
+  rm -rf "$dest/dist" "$dest/node_modules" "$dest/.cache"
+  cp "$src/package.json" "$dest/package.json"
+  cp "$src/package-lock.json" "$dest/package-lock.json"
+  mkdir -p "$dest/dist"
+  cp -a "$src/dist/." "$dest/dist/"
+  find "$dest" -depth \( -type d -name node_modules -o -type d -name .cache \) -exec rm -rf {} +
+  find "$dest" -type f \( -name '*.map' -o -name '*.d.ts' -o -name '*.tsbuildinfo' \) -delete
+  if [[ -e "$dest/node_modules" || -e "$dest/dist/node_modules" ]]; then
+    echo "error: staged agent still has node_modules" >&2
+    exit 1
+  fi
+  if find "$dest" -type f \( -name '*.map' -o -name '*.d.ts' -o -name '*.tsbuildinfo' \) | grep -q .; then
+    echo "error: staged agent still has sourcemaps or declarations" >&2
+    exit 1
+  fi
+}
+
+if [[ "${1:-}" == "--stage-agent" ]]; then
+  if [[ $# -ne 3 ]]; then
+    echo "error: usage: build-release.sh --stage-agent SRC DEST" >&2
+    exit 1
+  fi
+  stage_agent "$2" "$3"
+  exit 0
+fi
+
 if [[ "${1:-}" == "--check-migrator-list" ]]; then
   tmp="$(mktemp -d)"
   collect_migrator_tree "$tmp"
@@ -105,17 +141,19 @@ npm run build
 test -f apps/hvac-web/dist/index.html
 rm -rf "$staging/web/dist"
 cp -a apps/hvac-web/dist "$staging/web/dist"
+find "$staging/web" -type f \( -name '*.map' -o -name '*.tsbuildinfo' \) -delete
+find "$staging/web" -depth \( -type d -name node_modules -o -type d -name .cache \) -exec rm -rf {} +
 cp deploy/platform/phase1/nginx/nginx.conf "$staging/web/nginx.conf"
 
 echo "building operations-agent-service"
 npm --prefix services/operations-agent-service ci
 npm --prefix services/operations-agent-service run build
-npm --prefix services/operations-agent-service prune --omit=dev --no-audit --no-fund
-test -f services/operations-agent-service/dist/bootstrap/main.js
-cp services/operations-agent-service/package.json "$staging/agent/package.json"
-rm -rf "$staging/agent/dist" "$staging/agent/node_modules"
-cp -a services/operations-agent-service/dist "$staging/agent/dist"
-cp -a services/operations-agent-service/node_modules "$staging/agent/node_modules"
+stage_agent "$root/services/operations-agent-service" "$staging/agent"
 
 collect_migrator_tree "$staging/migrator"
+echo "staged source.tar $(wc -c < "$staging/source.tar" | tr -d '[:space:]') bytes"
+echo "staged bins $(du -sb "$staging/bins" | awk '{print $1}') bytes"
+echo "staged web $(du -sb "$staging/web" | awk '{print $1}') bytes"
+echo "staged agent $(du -sb "$staging/agent" | awk '{print $1}') bytes (lockfile and dist, no node_modules)"
+echo "staged migrator $(du -sb "$staging/migrator" | awk '{print $1}') bytes"
 echo "production release staged at $staging ($(cat "$staging/REVISION"))"

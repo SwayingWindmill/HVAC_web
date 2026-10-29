@@ -1,9 +1,12 @@
 package cd
 
 import (
+	"crypto/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -189,8 +192,14 @@ exit 0
 func stageRelease(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "agent", "node_modules", "left-pad"), 0o755); err != nil {
-		t.Fatal(err)
+	for _, sub := range []string{
+		filepath.Join(dir, "agent", "node_modules", "left-pad"),
+		filepath.Join(dir, "agent", "dist", "bootstrap"),
+		filepath.Join(dir, "agent", ".cache"),
+	} {
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	write := func(name, body string) {
 		t.Helper()
@@ -200,9 +209,50 @@ func stageRelease(t *testing.T) string {
 	}
 	write("REVISION", "abc\n")
 	write("source.tar", "source")
+	write("keep.txt", "keep")
 	write("apply-on-server.sh", "#!/bin/sh\nexit 0\n")
 	write("agent/node_modules/left-pad/index.js", "module.exports = 1\n")
+	write("agent/dist/bootstrap/main.js", "console.log(1)\n")
+	write("agent/dist/bootstrap/main.js.map", "{\"version\":3}\n")
+	write("agent/dist/bootstrap/main.d.ts", "export {}\n")
+	write("agent/package-lock.json", "{\"name\":\"agent\"}\n")
+	write("agent/.cache/keep", "cache")
 	return dir
+}
+
+func rejectSshpass(t *testing.T, bin string) {
+	t.Helper()
+	writeExe(t, bin, "sshpass", "#!/bin/sh\necho \"sshpass must not run in key mode: $*\" >&2\nexit 99\n")
+}
+
+// expectedUploadTimeout matches upload_timeout_for_bytes in push-release.sh.
+func expectedUploadTimeout(bytes int) int {
+	const perMin = 512 * 1024
+	seconds := (bytes*60 + perMin - 1) / perMin
+	padded := seconds + seconds/4 + 180
+	if padded < 180 {
+		padded = 180
+	}
+	return padded
+}
+
+var uploadTimeoutLine = regexp.MustCompile(`release upload timeout: (\d+)s for (\d+) bytes`)
+
+func parseUploadTimeout(t *testing.T, output string) (timeout, bytes int) {
+	t.Helper()
+	match := uploadTimeoutLine.FindStringSubmatch(output)
+	if match == nil {
+		t.Fatalf("timeout line missing:\n%s", output)
+	}
+	timeout, err := strconv.Atoi(match[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	bytes, err = strconv.Atoi(match[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return timeout, bytes
 }
 
 func fakeCurl(t *testing.T, bin string) {
@@ -223,16 +273,18 @@ exit 0
 `)
 }
 
-func TestUploadSendsNodeModulesInOneGzipArchiveAndThenApplies(t *testing.T) {
+func TestUploadPacksOneGzipArchiveWithoutNodeModulesAndThenApplies(t *testing.T) {
 	bin := t.TempDir()
 	log := filepath.Join(t.TempDir(), "ssh.log")
 	sink := filepath.Join(t.TempDir(), "payload")
+	rejectSshpass(t, bin)
 	writeExe(t, bin, "ssh", `#!/bin/sh
 last=
 for arg in "$@"; do last=$arg; done
 printf '%s\n' "$last" >> "$SSH_LOG"
 case "$last" in
   "command -v zstd"*) exit 1 ;;
+  "test -f "*) exit 1 ;;
   "cat > "*) cat > "$UPLOAD_SINK"; exit 0 ;;
   "gzip -dc "*) exit 0 ;;
   "test -s "*) exit 0 ;;
@@ -273,11 +325,23 @@ exit 0
 	if err != nil {
 		t.Fatalf("archive: %v\n%s", err, listed)
 	}
-	if !strings.Contains(string(listed), "agent/node_modules/left-pad/index.js") {
-		t.Fatalf("node_modules missing from the single archive:\n%s", listed)
+	names := string(listed)
+	for _, want := range []string{"agent/dist/bootstrap/main.js", "agent/package-lock.json", "keep.txt", "source.tar"} {
+		if !strings.Contains(names, want) {
+			t.Fatalf("archive missing %s:\n%s", want, names)
+		}
+	}
+	for _, banned := range []string{"node_modules", ".js.map", ".d.ts", ".cache"} {
+		if strings.Contains(names, banned) {
+			t.Fatalf("archive still contains %s:\n%s", banned, names)
+		}
 	}
 	if !strings.Contains(string(output), "B/s") {
 		t.Fatalf("throughput log missing:\n%s", output)
+	}
+	gotTimeout, gotBytes := parseUploadTimeout(t, string(output))
+	if gotTimeout != 30 || gotBytes < 1 {
+		t.Fatalf("override timeout was not honored: %ds for %d bytes", gotTimeout, gotBytes)
 	}
 }
 
@@ -288,6 +352,7 @@ func TestUploadRetriesThenCleansUpWithoutApply(t *testing.T) {
 	if err := os.WriteFile(count, []byte("0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	rejectSshpass(t, bin)
 	writeExe(t, bin, "ssh", `#!/bin/sh
 last=
 for arg in "$@"; do last=$arg; done
@@ -341,6 +406,7 @@ exit 0
 func TestUploadTimeoutRemovesRemoteDirAndDoesNotApply(t *testing.T) {
 	bin := t.TempDir()
 	log := filepath.Join(t.TempDir(), "ssh.log")
+	rejectSshpass(t, bin)
 	writeExe(t, bin, "ssh", `#!/bin/sh
 last=
 for arg in "$@"; do last=$arg; done
@@ -380,9 +446,13 @@ func TestUploadUsesZstdWhenBothEndsHaveIt(t *testing.T) {
 	bin := t.TempDir()
 	log := filepath.Join(t.TempDir(), "ssh.log")
 	zstdLog := filepath.Join(t.TempDir(), "zstd.log")
+	rejectSshpass(t, bin)
 	writeExe(t, bin, "zstd", `#!/bin/sh
 printf '%s\n' "$*" >> "$ZSTD_LOG"
-if [ "$1" = --version ]; then echo zstd; exit 0; fi
+if [ "$1" = --version ] || [ "$1" = -V ]; then
+  printf '%s\n' '*** Zstandard CLI (64-bit) v1.5.5 ***'
+  exit 0
+fi
 gzip -c
 `)
 	writeExe(t, bin, "ssh", `#!/bin/sh
@@ -391,6 +461,8 @@ for arg in "$@"; do last=$arg; done
 printf '%s\n' "$last" >> "$SSH_LOG"
 case "$last" in
   "command -v zstd"*) exit 0 ;;
+  "zstd -V"*) printf '%s\n' '*** Zstandard CLI (64-bit) v1.5.5 ***'; exit 0 ;;
+  "test -f "*) exit 1 ;;
   "cat > "*) cat > /dev/null; exit 0 ;;
   "zstd -dc "*) exit 0 ;;
   "test -s "*) exit 0 ;;
@@ -417,11 +489,380 @@ exit 0
 	if err != nil {
 		t.Fatalf("push: %v\n%s", err, output)
 	}
-	if !strings.Contains(string(mustRead(t, zstdLog)), "-c") {
-		t.Fatalf("local zstd was not used:\n%s", mustRead(t, zstdLog))
+	zstdText := string(mustRead(t, zstdLog))
+	if !strings.Contains(zstdText, "-c") || !strings.Contains(zstdText, "--long=27") || !strings.Contains(zstdText, "-19") {
+		t.Fatalf("local zstd was not the long-window compress:\n%s", zstdText)
 	}
-	if !strings.Contains(string(mustRead(t, log)), "zstd -dc ") {
-		t.Fatalf("remote extract was not zstd:\n%s", mustRead(t, log))
+	if !strings.Contains(string(mustRead(t, log)), "zstd -dc --long=27") {
+		t.Fatalf("remote extract was not long-window zstd:\n%s", mustRead(t, log))
+	}
+}
+
+func TestUploadSkipsLongZstdWhenRemoteIsOld(t *testing.T) {
+	bin := t.TempDir()
+	log := filepath.Join(t.TempDir(), "ssh.log")
+	zstdLog := filepath.Join(t.TempDir(), "zstd.log")
+	rejectSshpass(t, bin)
+	writeExe(t, bin, "zstd", `#!/bin/sh
+printf '%s\n' "$*" >> "$ZSTD_LOG"
+if [ "$1" = -V ]; then
+  printf '%s\n' '*** Zstandard CLI (64-bit) v1.5.5 ***'
+  exit 0
+fi
+gzip -c
+`)
+	writeExe(t, bin, "ssh", `#!/bin/sh
+last=
+for arg in "$@"; do last=$arg; done
+printf '%s\n' "$last" >> "$SSH_LOG"
+case "$last" in
+  "command -v zstd"*) exit 0 ;;
+  "zstd -V"*) printf '%s\n' '*** Zstandard CLI (64-bit) v1.3.8 ***'; exit 0 ;;
+  "test -f "*) exit 1 ;;
+  "cat > "*) cat > /dev/null; exit 0 ;;
+  "zstd -dc "*) exit 0 ;;
+  "test -s "*) exit 0 ;;
+  "bash "*) exit 0 ;;
+esac
+exit 0
+`)
+	fakeCurl(t, bin)
+	cmd := exec.Command("bash", "push-release.sh")
+	cmd.Env = commandEnv(bin,
+		"SSH_LOG="+log,
+		"ZSTD_LOG="+zstdLog,
+		"DEPLOY_SSH_KEY=test-key\n",
+		"DEPLOY_UPLOAD_ATTEMPTS=1",
+		"DEPLOY_UPLOAD_TIMEOUT_SECONDS=30",
+		"DEPLOY_UPLOAD_RETRY_SLEEP=0",
+		"PRODUCTION_RELEASE_DIR="+stageRelease(t),
+		"SMOKE_ATTEMPTS=1",
+		"SMOKE_SLEEP=0",
+		"HVAC_PUBLIC_ORIGIN=https://hvac.example",
+		"HVAC_PUBLIC_HOST=hvac.example",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("push: %v\n%s", err, output)
+	}
+	for _, line := range strings.Split(string(mustRead(t, zstdLog)), "\n") {
+		if !strings.Contains(line, "-c") {
+			continue
+		}
+		if strings.Contains(line, "--long") || !strings.Contains(line, "-3") {
+			t.Fatalf("old remote zstd should stay on -3:\n%s", line)
+		}
+	}
+	sshText := string(mustRead(t, log))
+	if strings.Contains(sshText, "--long") {
+		t.Fatalf("decode used a long window the remote does not support:\n%s", sshText)
+	}
+	if !strings.Contains(sshText, "zstd -dc ") {
+		t.Fatalf("remote extract was not zstd:\n%s", sshText)
+	}
+}
+
+func TestPasswordModeUploadIsWrappedWithSshpass(t *testing.T) {
+	bin := t.TempDir()
+	sshLog := filepath.Join(t.TempDir(), "ssh.log")
+	passLog := filepath.Join(t.TempDir(), "sshpass.log")
+	sink := filepath.Join(t.TempDir(), "payload")
+	const password = "s3cret-deploy-password"
+	writeExe(t, bin, "sshpass", `#!/bin/sh
+printf '%s\n' "$*" >> "$SSHPASS_LOG"
+if [ "$1" != "-e" ]; then
+  echo "sshpass: first argument must be -e" >&2
+  exit 1
+fi
+if [ -z "${SSHPASS:-}" ]; then
+  echo "sshpass: SSHPASS is empty" >&2
+  exit 1
+fi
+case " $* " in
+  *" ${SSHPASS} "*) echo "sshpass: password is in argv" >&2; exit 1 ;;
+esac
+export DEPLOY_SSH_WRAPPED=1
+shift
+exec "$@"
+`)
+	writeExe(t, bin, "ssh", `#!/bin/sh
+if [ "${DEPLOY_SSH_WRAPPED:-}" != 1 ]; then
+  echo "ssh was not wrapped with sshpass" >&2
+  exit 1
+fi
+last=
+for arg in "$@"; do last=$arg; done
+printf '%s\n' "$last" >> "$SSH_LOG"
+case "$last" in
+  "command -v zstd"*) exit 1 ;;
+  "test -f "*) exit 1 ;;
+  "cat >> "*) echo "did not expect resume" >&2; exit 1 ;;
+  "cat > "*) cat > "$UPLOAD_SINK"; exit 0 ;;
+  "gzip -dc "*) exit 0 ;;
+  "test -s "*) exit 0 ;;
+  "bash "*) printf 'APPLY\n' >> "$SSH_LOG"; exit 0 ;;
+  "rm -rf "*) exit 0 ;;
+  "mkdir -p "*) exit 0 ;;
+esac
+echo "unexpected ssh: $last" >&2
+exit 1
+`)
+	fakeCurl(t, bin)
+	cmd := exec.Command("bash", "push-release.sh")
+	cmd.Env = commandEnv(bin,
+		"SSH_LOG="+sshLog,
+		"SSHPASS_LOG="+passLog,
+		"UPLOAD_SINK="+sink,
+		"DEPLOY_SSH_PASSWORD="+password,
+		"DEPLOY_UPLOAD_ATTEMPTS=1",
+		"DEPLOY_UPLOAD_TIMEOUT_SECONDS=30",
+		"DEPLOY_UPLOAD_RETRY_SLEEP=0",
+		"PRODUCTION_RELEASE_DIR="+stageRelease(t),
+		"SMOKE_ATTEMPTS=1",
+		"SMOKE_SLEEP=0",
+		"HVAC_PUBLIC_ORIGIN=https://hvac.example",
+		"HVAC_PUBLIC_HOST=hvac.example",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("push: %v\n%s", err, output)
+	}
+	text := string(output)
+	if strings.Contains(text, password) {
+		t.Fatal("password appeared in the deploy log")
+	}
+	passText := string(mustRead(t, passLog))
+	if strings.Contains(passText, password) || strings.Contains(passText, "-p "+password) {
+		t.Fatalf("password appeared in sshpass argv:\n%s", passText)
+	}
+	sawUpload := false
+	for _, line := range strings.Split(strings.TrimSpace(passText), "\n") {
+		if !strings.HasPrefix(line, "-e ") || !strings.Contains(line, "ssh") {
+			t.Fatalf("sshpass invocation is not sshpass -e ssh: %s", line)
+		}
+		if strings.Contains(line, "cat >") {
+			sawUpload = true
+		}
+	}
+	if !sawUpload {
+		t.Fatalf("upload was not wrapped with sshpass -e:\n%s", passText)
+	}
+	if !strings.Contains(string(mustRead(t, sshLog)), "APPLY") {
+		t.Fatal("apply did not run after the wrapped upload")
+	}
+}
+
+func TestUploadResumesAPartialArchive(t *testing.T) {
+	bin := t.TempDir()
+	log := filepath.Join(t.TempDir(), "ssh.log")
+	part := filepath.Join(t.TempDir(), "part")
+	full := filepath.Join(t.TempDir(), "full")
+	done := filepath.Join(t.TempDir(), "done")
+	rejectSshpass(t, bin)
+	writeExe(t, bin, "ssh", `#!/bin/sh
+last=
+for arg in "$@"; do last=$arg; done
+printf '%s\n' "$last" >> "$SSH_LOG"
+case "$last" in
+  "command -v zstd"*) exit 1 ;;
+  "rm -rf "*) rm -f "$REMOTE_PART"; exit 0 ;;
+  "mkdir -p "*) exit 0 ;;
+  "test -f "*)
+    if [ -s "$REMOTE_PART" ]; then exit 0; fi
+    exit 1
+    ;;
+  "wc -c < "*) wc -c < "$REMOTE_PART"; exit 0 ;;
+  "cat >> "*)
+    cat >> "$REMOTE_PART"
+    cp "$REMOTE_PART" "$REMOTE_DONE"
+    if cmp -s "$REMOTE_PART" "$REMOTE_FULL"; then
+      printf '%s\n' 'RESUME_OK' >> "$SSH_LOG"
+      exit 0
+    fi
+    echo "resumed archive does not match" >&2
+    exit 1
+    ;;
+  "cat > "*)
+    cat > "$REMOTE_FULL"
+    size=$(wc -c < "$REMOTE_FULL" | tr -d '[:space:]')
+    half=$((size / 2))
+    if [ "$half" -lt 1 ]; then echo "archive too small" >&2; exit 1; fi
+    head -c "$half" "$REMOTE_FULL" > "$REMOTE_PART"
+    exit 1
+    ;;
+  "gzip -dc "*) exit 0 ;;
+  "test -s "*) exit 0 ;;
+  "bash "*) printf 'APPLY\n' >> "$SSH_LOG"; exit 0 ;;
+esac
+echo "unexpected ssh: $last" >&2
+exit 1
+`)
+	fakeCurl(t, bin)
+	cmd := exec.Command("bash", "push-release.sh")
+	cmd.Env = commandEnv(bin,
+		"SSH_LOG="+log,
+		"REMOTE_PART="+part,
+		"REMOTE_FULL="+full,
+		"REMOTE_DONE="+done,
+		"DEPLOY_SSH_KEY=test-key\n",
+		"DEPLOY_UPLOAD_ATTEMPTS=2",
+		"DEPLOY_UPLOAD_TIMEOUT_SECONDS=30",
+		"DEPLOY_UPLOAD_RETRY_SLEEP=0",
+		"PRODUCTION_RELEASE_DIR="+stageRelease(t),
+		"SMOKE_ATTEMPTS=1",
+		"SMOKE_SLEEP=0",
+		"HVAC_PUBLIC_ORIGIN=https://hvac.example",
+		"HVAC_PUBLIC_HOST=hvac.example",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("push: %v\n%s", err, output)
+	}
+	text := string(mustRead(t, log))
+	if !strings.Contains(text, "RESUME_OK") || !strings.Contains(text, "cat >> ") || !strings.Contains(text, "APPLY") {
+		t.Fatalf("partial upload was not resumed before apply:\n%s", text)
+	}
+	if strings.Count(text, "cat > ") != 1 {
+		t.Fatalf("resume should not start the upload over:\n%s", text)
+	}
+}
+
+func TestUploadTimeoutScalesWithArchiveSize(t *testing.T) {
+	run := func(t *testing.T, staging string, override string) (int, int) {
+		t.Helper()
+		bin := t.TempDir()
+		rejectSshpass(t, bin)
+		writeExe(t, bin, "ssh", `#!/bin/sh
+last=
+for arg in "$@"; do last=$arg; done
+case "$last" in
+  "command -v zstd"*) exit 1 ;;
+  "test -f "*) exit 1 ;;
+  "cat > "*) cat > /dev/null; exit 0 ;;
+  "gzip -dc "*) exit 0 ;;
+  "test -s "*) exit 0 ;;
+  "bash "*) exit 0 ;;
+  "rm -rf "*) exit 0 ;;
+esac
+exit 0
+`)
+		fakeCurl(t, bin)
+		extra := []string{
+			"DEPLOY_SSH_KEY=test-key\n",
+			"DEPLOY_UPLOAD_ATTEMPTS=1",
+			"DEPLOY_UPLOAD_RETRY_SLEEP=0",
+			"PRODUCTION_RELEASE_DIR=" + staging,
+			"SMOKE_ATTEMPTS=1",
+			"SMOKE_SLEEP=0",
+			"HVAC_PUBLIC_ORIGIN=https://hvac.example",
+			"HVAC_PUBLIC_HOST=hvac.example",
+		}
+		if override != "" {
+			extra = append(extra, "DEPLOY_UPLOAD_TIMEOUT_SECONDS="+override)
+		}
+		cmd := exec.Command("bash", "push-release.sh")
+		cmd.Env = commandEnv(bin, extra...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("push: %v\n%s", err, output)
+		}
+		return parseUploadTimeout(t, string(output))
+	}
+
+	tinyTimeout, tinyBytes := run(t, stageRelease(t), "")
+	if tinyTimeout != expectedUploadTimeout(tinyBytes) {
+		t.Fatalf("tiny archive timeout %d, want %d for %d bytes", tinyTimeout, expectedUploadTimeout(tinyBytes), tinyBytes)
+	}
+	if tinyTimeout >= 600 {
+		t.Fatalf("tiny archive still uses the old 600s ceiling: %d", tinyTimeout)
+	}
+
+	large := stageRelease(t)
+	payload := make([]byte, 512*1024)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(large, "noise.bin"), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	largeTimeout, largeBytes := run(t, large, "")
+	if largeBytes <= tinyBytes {
+		t.Fatalf("larger staging did not grow the archive (%d <= %d)", largeBytes, tinyBytes)
+	}
+	if largeTimeout != expectedUploadTimeout(largeBytes) || largeTimeout <= tinyTimeout {
+		t.Fatalf("timeout did not scale: %ds for %d bytes (tiny %ds)", largeTimeout, largeBytes, tinyTimeout)
+	}
+
+	overrideTimeout, _ := run(t, large, "45")
+	if overrideTimeout != 45 {
+		t.Fatalf("DEPLOY_UPLOAD_TIMEOUT_SECONDS=45 was ignored: %d", overrideTimeout)
+	}
+}
+
+func TestStageAgentOmitsNodeModulesAndSourcemaps(t *testing.T) {
+	src := t.TempDir()
+	for _, sub := range []string{
+		filepath.Join(src, "dist", "bootstrap"),
+		filepath.Join(src, "dist", "node_modules", "nested"),
+		filepath.Join(src, "node_modules", "left-pad"),
+		filepath.Join(src, ".cache"),
+	} {
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(src, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("package.json", "{\"name\":\"agent\"}\n")
+	write("package-lock.json", "{\"name\":\"agent\"}\n")
+	write("dist/bootstrap/main.js", "console.log(1)\n")
+	write("dist/bootstrap/main.js.map", "{}\n")
+	write("dist/bootstrap/main.d.ts", "export {}\n")
+	write("dist/tsconfig.tsbuildinfo", "{}\n")
+	write("dist/node_modules/nested/index.js", "nope\n")
+	write("node_modules/left-pad/index.js", "nope\n")
+	write(".cache/keep", "cache\n")
+	dest := t.TempDir()
+	cmd := exec.Command("bash", "build-release.sh", "--stage-agent", src, dest)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("stage-agent: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "dist", "bootstrap", "main.js")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "package-lock.json")); err != nil {
+		t.Fatal(err)
+	}
+	banned := []string{
+		filepath.Join(dest, "node_modules"),
+		filepath.Join(dest, "dist", "node_modules"),
+		filepath.Join(dest, ".cache"),
+		filepath.Join(dest, "dist", "bootstrap", "main.js.map"),
+		filepath.Join(dest, "dist", "bootstrap", "main.d.ts"),
+		filepath.Join(dest, "dist", "tsconfig.tsbuildinfo"),
+	}
+	for _, path := range banned {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("staged agent still has %s", path)
+		}
+	}
+}
+
+func TestAgentImageInstallsFromTheLockfile(t *testing.T) {
+	body := string(mustRead(t, "apply-on-server.sh"))
+	if !strings.Contains(body, "npm ci --omit=dev --no-audit --no-fund") {
+		t.Fatal("agent image does not install production dependencies from the lockfile")
+	}
+	if strings.Contains(body, "node_modules /app/node_modules") || strings.Contains(body, "cp -a \"$release/agent/node_modules\"") {
+		t.Fatal("agent image still copies node_modules into the build")
+	}
+	if !strings.Contains(body, "package-lock.json") {
+		t.Fatal("agent image build does not receive the lockfile")
 	}
 }
 
