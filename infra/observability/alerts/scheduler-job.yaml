@@ -9,6 +9,7 @@ groups:
         annotations:
           summary: Application Scheduler is not running
           description: Scheduler readiness/metrics have been unavailable for more than two minutes.
+          runbook: docs/operations/alerts.md#定时任务
 
       - alert: JobQueueAgeTooHigh
         expr: job_oldest_ready_age_seconds > 300
@@ -18,6 +19,7 @@ groups:
         annotations:
           summary: Durable Job queue age is too high
           description: The oldest READY Job has waited for more than five minutes.
+          runbook: docs/operations/alerts.md#定时任务
 
       - alert: DeadJobDetected
         expr: increase(job_dead_total[15m]) > 0
@@ -26,6 +28,7 @@ groups:
         annotations:
           summary: A durable Job exhausted all attempts
           description: At least one Job entered DEAD state during the last fifteen minutes.
+          runbook: docs/operations/alerts.md#定时任务
 
       - alert: RepeatedJobFailure
         expr: increase(job_failed_total[15m]) >= 3
@@ -34,6 +37,7 @@ groups:
         annotations:
           summary: Durable Jobs are repeatedly failing
           description: Three or more non-retryable Job failures occurred during the last fifteen minutes.
+          runbook: docs/operations/alerts.md#定时任务
 
       - alert: LeaseExpirySpike
         expr: increase(job_recovered_total[10m]) >= 5
@@ -42,3 +46,4 @@ groups:
         annotations:
           summary: Job lease expiry recovery is elevated
           description: Five or more expired Job leases were recovered during the last ten minutes.
+          runbook: docs/operations/alerts.md#定时任务

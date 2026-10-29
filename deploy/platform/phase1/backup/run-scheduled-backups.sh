@@ -9,11 +9,17 @@ keep="${BACKUP_KEEP:-7}"
 cd "$(dirname "$0")/../../../.."
 
 compose() { node scripts/phase1-wsl-compose.mjs --profile backup "$@"; }
+stamp() {
+  mkdir -p "${PHASE1_RUNTIME_DIR}/observability"
+  date -u +%s > "${PHASE1_RUNTIME_DIR}/observability/$1"
+}
 # Both backups run inside their database's container: the postgres image's pg_hba.conf allows
 # replication only from the container itself (wsl.override.yaml mounts the backup directory there),
 # and ClickHouse's default user only from localhost.
 compose exec -T -e PGHOST=127.0.0.1 -e BACKUP_ROOT=/backups/base postgres bash -s < deploy/platform/phase1/backup/postgres-base-backup.sh
+stamp postgres-backup.success
 compose exec -T -e CLICKHOUSE_HOST=localhost clickhouse bash -s < deploy/platform/phase1/backup/clickhouse-backup.sh
+stamp clickhouse-backup.success
 
 prune() {
   find "$1" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | head -n -"${keep}" | while read -r name; do

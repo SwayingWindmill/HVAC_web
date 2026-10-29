@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,6 +104,11 @@ func TestTheHealthCheckIsOnTheDiagnosticsPortAlone(t *testing.T) {
 	HealthHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("health = %d", recorder.Code)
+	}
+	metrics := httptest.NewRecorder()
+	HealthHandler().ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if metrics.Code != http.StatusOK || !strings.Contains(metrics.Body.String(), "hvac_service_up") {
+		t.Fatalf("metrics = %d %s", metrics.Code, metrics.Body.String())
 	}
 	service, _, _ := testService(t, time.Date(2026, 10, 1, 3, 0, 0, 0, shanghai))
 	business := httptest.NewRecorder()

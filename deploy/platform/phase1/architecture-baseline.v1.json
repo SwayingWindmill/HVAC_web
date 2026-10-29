@@ -102,7 +102,11 @@
         "prometheus",
         "node-exporter",
         "alertmanager",
-        "grafana"
+        "grafana",
+        "postgres-exporter",
+        "redis-exporter",
+        "blackbox-exporter",
+        "wecom-alert-adapter"
       ],
       "observability-logs": [
         "prometheus",
@@ -110,7 +114,11 @@
         "alertmanager",
         "grafana",
         "otel-collector",
-        "loki"
+        "loki",
+        "postgres-exporter",
+        "redis-exporter",
+        "blackbox-exporter",
+        "wecom-alert-adapter"
       ],
       "observability-full": [
         "prometheus",
@@ -119,7 +127,11 @@
         "grafana",
         "otel-collector",
         "loki",
-        "tempo"
+        "tempo",
+        "postgres-exporter",
+        "redis-exporter",
+        "blackbox-exporter",
+        "wecom-alert-adapter"
       ]
     }
   },

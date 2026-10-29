@@ -41,7 +41,11 @@
       "alertmanager",
       "loki",
       "tempo",
-      "grafana"
+      "grafana",
+      "postgres-exporter",
+      "redis-exporter",
+      "blackbox-exporter",
+      "wecom-alert-adapter"
     ],
     "optionalIntelligence": [
       "forecast-service",

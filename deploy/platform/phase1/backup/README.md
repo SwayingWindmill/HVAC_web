@@ -46,6 +46,8 @@ sudo systemctl daemon-reload && sudo systemctl enable --now hvac-backup.timer
 
 在配置好拷到服务器以外之前，备份都和数据在同一块盘上：能防误操作和数据损坏，防不了整台服务器丢失。
 
+每次 PostgreSQL 或 ClickHouse 备份成功，脚本把当前时间写到运行目录的 `observability/postgres-backup.success` 或 `observability/clickhouse-backup.success`。主机上的 `hvac-host-metrics.timer` 读这两个文件（还没有文件时改看备份目录的修改时间），交给 Prometheus。超过 26 小时没有新的成功时间就会告警。
+
 基本的节奏：
 
 - PostgreSQL 基础备份：每天。

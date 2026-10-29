@@ -81,13 +81,19 @@ services:
 
   node-exporter:
     volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
       - /:/host/root:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/observability/textfile:/host/textfile:ro
 
   prometheus:
-    # Runtime config and the CA are group-readable by the service group 65532.
+    # The repository file is the scrape config. A hand-edited copy under runtime/config is not mounted.
+    # The CA stays available for any HTTPS scrape that needs it. group 65532 can read that CA.
     group_add: ["65532"]
     volumes:
-      - ${PHASE1_RUNTIME_DIR:-./runtime}/config/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ../../../infra/observability/alerts:/etc/prometheus/alerts:ro
+      - prometheus-data:/prometheus
       - ${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki/ca.crt:/etc/prometheus/centrifugo-ca.crt:ro
 
 volumes:

@@ -204,6 +204,21 @@ if (sourceDeploy) {
   ].flatMap(([name, value]) => value ? ['--build-arg', `${name}=${value}`] : []);
   const buildStatus = runCompose(['build', ...buildArgs, ...runtimeServices]);
   if (buildStatus !== 0) process.exit(buildStatus);
+  // The adapter is not one of the swapped service images. Build it here so local up has it;
+  // production apply-on-server.sh builds the same tag from the release binary instead.
+  const adapterArgs = [
+    ['GO_BUILD_IMAGE', process.env.PHASE1_GO_BUILD_IMAGE],
+    ['GO_RUNTIME_IMAGE', process.env.PHASE1_GO_RUNTIME_IMAGE],
+    ['GO_PROXY', process.env.PHASE1_GO_PROXY],
+  ].flatMap(([name, value]) => value ? ['--build-arg', `${name}=${value}`] : []);
+  const adapterBuild = spawnSync('docker', [
+    'build',
+    '-f', path.join(phase1Dir, 'observability', 'wecom-alert-adapter.Dockerfile'),
+    '-t', 'hvac/wecom-alert-adapter:0.1.0-dev',
+    ...adapterArgs,
+    repoRoot,
+  ], { cwd: repoRoot, env, stdio: 'inherit' });
+  if ((adapterBuild.status ?? 1) !== 0) process.exit(adapterBuild.status ?? 1);
 
   process.exit(runCompose(args));
 }

@@ -15,9 +15,17 @@ scrape_configs:
     static_configs:
       - targets: ["energy-api:19080"]
 
+  - job_name: identity-service
+    static_configs:
+      - targets: ["identity-service:19085"]
+
   - job_name: scheduler
     static_configs:
       - targets: ["scheduler:19092"]
+
+  - job_name: maintenance
+    static_configs:
+      - targets: ["maintenance:19093"]
 
   - job_name: telemetry-worker
     static_configs:
@@ -31,11 +39,85 @@ scrape_configs:
     static_configs:
       - targets: ["connectivity:19094"]
 
-  - job_name: host
+  - job_name: forecast-service
     static_configs:
-      - targets: ["node-exporter:9100"]
+      - targets: ["forecast-service:19099"]
+
+  - job_name: optimization-service
+    static_configs:
+      - targets: ["optimization-service:19100"]
+
+  - job_name: fdd-service
+    static_configs:
+      - targets: ["fdd-service:19098"]
+
+  - job_name: mv-service
+    static_configs:
+      - targets: ["mv-service:19101"]
+
+  - job_name: report-service
+    static_configs:
+      - targets: ["report-service:19102"]
+
+  - job_name: operations-agent-service
+    static_configs:
+      - targets: ["operations-agent-service:19095"]
 
   - job_name: centrifugo
     metrics_path: /metrics
     static_configs:
       - targets: ["centrifugo:8000"]
+
+  - job_name: host
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  - job_name: postgres
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: redis
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  - job_name: clickhouse
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["clickhouse:8123"]
+
+  # Public name of this deployment. Change the host when the certificate name changes.
+  - job_name: public-https
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - https://hvac.swayingwindmill.online/healthz
+          - https://hvac.swayingwindmill.online/sign-in
+          - https://hvac.swayingwindmill.online/identity/.well-known/openid-configuration
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: mqtt
+    scrape_interval: 30s
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets: ["mqtt-broker:8883"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

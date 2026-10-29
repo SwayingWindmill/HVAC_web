@@ -1,5 +1,6 @@
 # service	image	kind	required	package
-# kind is go, web, node, or migrator. required services must already exist on the server.
+# kind is go, web, node, migrator, or static. required services must already exist on the server.
+# static is built FROM the local alertmanager image (CA certificates) and may be created on first deploy.
 # image is the Compose default; a running hvac-platform container wins when its tag differs.
 energy-api	hvac/energy-api:0.1.0-dev	go	required	./cmd/energy-api
 identity-service	hvac/identity-service:0.1.0-dev	go	required	./services/identity-service/cmd/identity-service
@@ -20,3 +21,4 @@ connectivity	hvac/connectivity:0.1.0-dev	go	required	./cmd/connectivity
 nginx	hvac/hvac-web-real:0.1.0-dev	web	required	-
 operations-agent-service	hvac/operations-agent-service:0.1.0-dev	node	required	-
 phase1-migrator	hvac/phase1-migrator:0.1.0-dev	migrator	required	-
+wecom-alert-adapter	hvac/wecom-alert-adapter:0.1.0-dev	static	required	./cmd/wecom-alert-adapter

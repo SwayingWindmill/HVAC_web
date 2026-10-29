@@ -320,7 +320,7 @@
       "area": "observability",
       "requirement": "监控 Host CPU/Memory/Disk/Load/Network，并设置 Disk 80% Warning / 90% Critical",
       "status": "KEEP",
-      "current": "node-exporter 已进入单机 Compose，Prometheus 抓取 host metrics，并新增 80%/90% 磁盘告警",
+      "current": "node-exporter 已进入单机 Compose，Prometheus 抓取 host metrics，磁盘告警为 80% 警告、85% 需要有人看到、90% 严重，并按 24 小时趋势提前报警",
       "action": "保持 host metrics 默认启用；磁盘告警不得依赖数据库自身告警替代"
     },
     {
@@ -376,7 +376,7 @@
       "area": "observability",
       "requirement": "观测栈必须有精简档，不能要求所有站点运行六容器完整观测栈",
       "status": "KEEP",
-      "current": "observability-core=Prometheus+node-exporter+Grafana；observability-logs=+OTel Collector+Loki；observability-full=+Tempo",
+      "current": "observability-core=Prometheus+node-exporter+Grafana+轻量导出器+企业微信适配器；observability-logs 再加 OTel Collector 和 Loki；只有 observability-full 再加 Tempo",
       "action": "小规模生产默认使用 observability-logs；只有需要集中 trace 的站点启用 observability-full；同一时间只选一个 observability profile"
     },
     {

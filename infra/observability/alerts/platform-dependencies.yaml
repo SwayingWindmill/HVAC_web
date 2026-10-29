@@ -1,0 +1,144 @@
+groups:
+  - name: phase1-dependencies
+    rules:
+      - alert: Phase1PostgresDown
+        expr: up{job="postgres"} == 0 or pg_up == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: PostgreSQL 抓不到，或导出器连不上数据库
+          runbook: docs/operations/alerts.md#postgresql-进程不可用
+
+      - alert: Phase1ClickHouseDown
+        expr: up{job="clickhouse"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: ClickHouse 的指标端口没有响应
+          runbook: docs/operations/alerts.md#clickhouse-不可用
+
+      - alert: Phase1RedisDown
+        expr: up{job="redis"} == 0 or redis_up == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: Redis 抓不到，或导出器连不上
+          runbook: docs/operations/alerts.md#redis-进程不可用
+
+      - alert: Phase1MqttDown
+        expr: probe_success{job="mqtt"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: 连不上 Mosquitto 的 8883 端口
+          runbook: docs/operations/alerts.md#mqtt-服务器连不上
+
+      - alert: Phase1PublicEndpointDown
+        expr: probe_success{job="public-https"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: 公网探测失败（健康检查、登录页或身份发现）
+          description: "{{ $labels.instance }} 连续两分钟没有返回 200。"
+          runbook: docs/operations/alerts.md#公网入口和证书
+
+      - alert: Phase1TlsCertificateExpiring
+        expr: (probe_ssl_earliest_cert_expiry{job="public-https",instance=~".*/healthz"} - time()) < 14 * 24 * 3600 and (probe_ssl_earliest_cert_expiry{job="public-https",instance=~".*/healthz"} - time()) >= 3 * 24 * 3600
+        for: 1h
+        labels:
+          severity: page
+        annotations:
+          summary: 公网证书将在 14 天内过期
+          runbook: docs/operations/alerts.md#公网入口和证书
+
+      - alert: Phase1TlsCertificateExpiresSoon
+        expr: (probe_ssl_earliest_cert_expiry{job="public-https",instance=~".*/healthz"} - time()) < 3 * 24 * 3600
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: 公网证书将在 3 天内过期
+          runbook: docs/operations/alerts.md#公网入口和证书
+
+      - alert: Phase1CoreProcessDown
+        expr: up{job=~"energy-api|identity-service|scheduler|maintenance|telemetry-worker|metric-worker"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: 核心进程的 /metrics 抓不到
+          description: "{{ $labels.job }} 连续两分钟没有指标。"
+          runbook: docs/operations/alerts.md#平台进程没有指标
+
+      - alert: Phase1ProcessDown
+        expr: up{job=~"connectivity|forecast-service|optimization-service|fdd-service|mv-service|report-service|operations-agent-service|centrifugo"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 可选或接入进程的 /metrics 抓不到
+          description: "{{ $labels.job }} 连续五分钟没有指标。没开对应档位的环境会一直亮着这条。"
+          runbook: docs/operations/alerts.md#平台进程没有指标
+
+      - alert: Phase1BackupTooOld
+        expr: hvac_backup_last_success_timestamp_seconds > 0 and (time() - hvac_backup_last_success_timestamp_seconds) > 26 * 3600
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: 备份超过 26 小时没有成功
+          description: "{{ $labels.store }} 的最近一次成功备份早于 26 小时。夜间备份大约每天一次，晚两小时仍没完成就报。"
+          runbook: docs/operations/alerts.md#备份太旧
+
+      - alert: Phase1BackupMissing
+        expr: hvac_backup_last_success_timestamp_seconds == 0
+        for: 30m
+        labels:
+          severity: page
+        annotations:
+          summary: 还没有一份成功的备份
+          description: "{{ $labels.store }} 没有成功标记，备份目录里也没有一份。"
+          runbook: docs/operations/alerts.md#备份太旧
+
+      - alert: Phase1BackupMetricMissing
+        expr: absent(hvac_backup_last_success_timestamp_seconds)
+        for: 3h
+        labels:
+          severity: warning
+        annotations:
+          summary: 主机没有写出备份新鲜度指标
+          runbook: docs/operations/alerts.md#备份太旧
+
+      - alert: Phase1ContainerRestartLoop
+        expr: increase(hvac_container_restarts[30m]) > 3
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 容器在 30 分钟内重启超过 3 次
+          description: "{{ $labels.service }} 在反复重启。"
+          runbook: docs/operations/alerts.md#容器反复重启或不健康
+
+      - alert: Phase1ContainerUnhealthy
+        expr: hvac_container_unhealthy == 1
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: 容器健康检查失败
+          description: "{{ $labels.service }} 处于 unhealthy。"
+          runbook: docs/operations/alerts.md#容器反复重启或不健康
+
+      - alert: Phase1ContainerMetricsMissing
+        expr: hvac_container_metrics_up == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: 读不到容器重启和健康状态
+          runbook: docs/operations/alerts.md#容器反复重启或不健康
