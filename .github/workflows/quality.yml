@@ -1,0 +1,57 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  coverage:
+    name: quality / coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.3"
+          cache: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: node --experimental-strip-types --test scripts/test-coverage-regression.ts
+      - run: node --experimental-strip-types scripts/check-coverage-regression.ts
+
+  web-smoke:
+    name: quality / web smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - id: browser
+        continue-on-error: true
+        run: npx playwright install --with-deps chromium
+      - if: steps.browser.outcome == 'success'
+        run: npm run web:e2e -- e2e/sign-in.spec.ts e2e/alarms.spec.ts e2e/realtime.spec.ts
+      - if: steps.browser.outcome != 'success'
+        run: echo "::warning::Playwright Chromium could not be installed; login, alarm, and realtime smoke was skipped."

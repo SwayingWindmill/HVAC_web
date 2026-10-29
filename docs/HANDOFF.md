@@ -151,6 +151,12 @@
 - **新的网关接口要登记负责方。** 平台网关只放行 `contracts/ownership/route-ownership.v1.json` 里登记过的接口，别的一律回 404「has no applied owner」；网关的接口测试不加载这份登记，所以测试全过、服务器上却是 404（小程序登录和 `/api/v1/me/wechat` 都这样出过事）。现在 `npm run ownership:check` 会检查 `platform-gateway.openapi.yaml` 里的每个接口都登记了；不在这份契约里的接口（例如小程序的）还要自己记得登记。
 - **集成测试只在改到对应模块时才跑。** 所以一个迁移弄坏了别的模块的种子数据，要等以后改到那个模块才会发现（例如 #504 修的 Registry 种子写 FDD 结论）。
 
+## 运维手册
+
+出了事按 `docs/operations/` 里写好的步骤做：`disk-full.md`（磁盘写满）、`postgres-crash.md`（PostgreSQL 崩溃）、`restore-from-backup.md`（从夜间备份恢复）、`rollback.md`（把一次部署退回去）、`certificate-renewal.md`（Let's Encrypt 续期）、`rotate-secrets.md`（换密码和密钥）、`alert-receivers.md`（告警发到企业微信或邮箱）。告警规则里的链接仍指向 `docs/operations/alerts.md` 的对应小节。
+
+覆盖率在 `.github/workflows/quality.yml`：Go 语句覆盖率和网页 `src` 的行覆盖率低于已提交的基线（允许 0.1 个百分点的误差）就失败。同一个工作流用现有的 Playwright 录制网关跑登录、告警、实时运行；不在 CI 里把整套 Compose 拉起来，因为那需要运行时密钥和这台小机器装不下的内存。浏览器装不上时这一个任务跳过并留下警告，测试跑了但失败则算失败。
+
 ## 流程
 
 - 每项改动一个分支，PR 用 `mattpocock-skills:pr` 技能的模板。CI 绿了再合并。
