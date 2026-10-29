@@ -4,7 +4,7 @@
 
 ## 用脚本
 
-合并带 `rollback.sh` 的版本之后，每次部署会把对照写在 `/opt/hvac-platform/rollbacks/<时间>.tsv`，最近一次的时间写在同目录的 `latest`。
+每次部署都会把对照写在 `/opt/hvac-platform/rollbacks/<时间>.tsv`，最近一次的时间写在同目录的 `latest`。
 
 退回最近一次：
 
