@@ -8,7 +8,7 @@ export function readGoWorkspace(root) {
   const workspace = readFileSync(join(root, 'go.work'), 'utf8');
   const goVersion = /^go (\S+)$/m.exec(workspace)?.[1];
   if (!goVersion) throw new Error('go.work has no go directive');
-  const modules = [...workspace.matchAll(/^\s*\.\/((?:cmd|libs|modules|services|tools)\/[^\s)]+)\s*$/gm)].map((match) => match[1]);
+  const modules = [...workspace.matchAll(/^\s*\.\/((?:cmd|libs|modules|services|tools)\/[^\s)]+|deploy\/platform\/phase1\/cd)\s*$/gm)].map((match) => match[1]);
   if (modules.length === 0) throw new Error('go.work lists no modules');
   return { goVersion, modules };
 }

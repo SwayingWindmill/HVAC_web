@@ -204,23 +204,52 @@ done
 trap - EXIT
 cleanup_candidates
 
-if [[ ! -e "$deploy_script" ]]; then
-  echo "error: $deploy_script is missing." >&2
-  echo "The production host keeps the Phase 1 restart script there. Images were updated; previous tags are before-${stamp}." >&2
+script_dir="$release"
+if [[ ! -x "$script_dir/rollback.sh" || ! -x "$script_dir/smoke-release.sh" || ! -x "$script_dir/prune-rollback-images.sh" ]]; then
+  script_dir="$platform_dir/deploy/platform/phase1/cd"
+fi
+mkdir -p "$platform_dir/rollbacks"
+manifest="$platform_dir/rollbacks/${stamp}.tsv"
+: > "$manifest"
+for index in "${!planned_services[@]}"; do
+  printf '%s\t%s\n' "${planned_images[$index]}" "${planned_previous[$index]}" >> "$manifest"
+done
+printf '%s\n' "$stamp" > "$platform_dir/rollbacks/latest"
+
+run_deploy() {
+  if [[ ! -e "$deploy_script" ]]; then
+    echo "error: $deploy_script is missing." >&2
+    echo "The production host keeps the Phase 1 restart script there. Images were updated; previous tags are before-${stamp}." >&2
+    return 1
+  fi
+  # deploy.sh chmods runtime files owned by container users. The SSH user owns the tree; that chmod needs root.
+  if [[ "$(id -u)" -eq 0 ]]; then
+    if [[ -x "$deploy_script" ]]; then
+      "$deploy_script"
+    else
+      bash "$deploy_script"
+    fi
+  elif [[ -x "$deploy_script" ]]; then
+    sudo -n "$deploy_script"
+  else
+    sudo -n bash "$deploy_script"
+  fi
+}
+
+rollback_now() {
+  echo "error: $1 Rolling back to before-${stamp}." >&2
+  HVAC_PLATFORM_DIR="$platform_dir" HVAC_DEPLOY_SCRIPT="$deploy_script" bash "$script_dir/rollback.sh" "$stamp" || true
+}
+
+if ! run_deploy; then
+  rollback_now "restart failed."
   exit 1
 fi
-# deploy.sh chmods runtime files owned by container users. The SSH user owns the tree; that chmod needs root.
-if [[ "$(id -u)" -eq 0 ]]; then
-  if [[ -x "$deploy_script" ]]; then
-    "$deploy_script"
-  else
-    bash "$deploy_script"
-  fi
-elif [[ -x "$deploy_script" ]]; then
-  sudo -n "$deploy_script"
-else
-  sudo -n bash "$deploy_script"
+if ! SMOKE_RESOLVE_IP=127.0.0.1 SMOKE_CHECK_CONTAINERS=1 bash "$script_dir/smoke-release.sh"; then
+  rollback_now "smoke checks failed."
+  exit 1
 fi
+bash "$script_dir/prune-rollback-images.sh" 2
 
 echo "deployed $revision"
 echo "rollback tags use before-${stamp}"

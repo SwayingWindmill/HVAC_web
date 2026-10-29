@@ -103,5 +103,17 @@ tar -C "$staging" -cf - . | remote_ssh "$target" "tar -C '$remote' -xf -"
 
 status=0
 remote_ssh "$target" "bash '$remote/apply-on-server.sh' '$remote'" || status=$?
+if [[ "$status" -ne 0 ]]; then
+  remote_ssh "$target" "rm -rf '$remote'" || true
+  exit "$status"
+fi
+# The server already checked local nginx and container health. This call leaves the runner,
+# so it sees the public address the way an operator does.
+if ! bash "$root/deploy/platform/phase1/cd/smoke-release.sh"; then
+  echo "error: public smoke failed. Rolling the server back to the before-* images." >&2
+  remote_ssh "$target" "bash '${HVAC_PLATFORM_DIR:-/opt/hvac-platform}/deploy/platform/phase1/cd/rollback.sh'" || status=$?
+  remote_ssh "$target" "rm -rf '$remote'" || true
+  exit 1
+fi
 remote_ssh "$target" "rm -rf '$remote'" || true
-exit "$status"
+exit 0
