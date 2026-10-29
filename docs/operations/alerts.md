@@ -100,11 +100,13 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 
 `hvac_s2_data_quality_records_total` 记录有限的质量和接收结果，现在能报合格、可疑、拒收的比例。完整率和采样合规还算不出来，因为平台还不知道每个点位应有的上报频率。
 
+合格率是最近 10 分钟里 `quality="good"` 的条数除以全部条数。10 分钟里不到 100 条时不报：流量大约每秒不到 0.17 条，一个百分比还不稳定。以前分母用 `clamp_min(..., 1)`，流量不到每秒 1 条时分母被抬成 1，算出来的是「每秒合格条数」而不是比例。松雅轩大约每秒 0.97 条、真正的合格率约 0.983，那个式子却算出 0.913，从 2026-10-14 起一直误报。快照出错（`S2SnapshotErrorBudgetBurn`，5 分钟里至少 50 次）、断线补发失败（`S2RecoveryFailureRateHigh`，5 分钟里至少 20 次）、指令核对和接口 5xx、告警接口 5xx 和告警操作被拒绝，都改成同样的「先算比例，样本不够就不报」。Grafana 上的「Telemetry data good rate」（面板 10）只画真实比例，不再把分母抬到 1。
+
 合格率下降时：
 
-1. 按质量和结果拆开看，不按设备或点位拆。
+1. 按质量和结果拆开看，不按设备或点位拆：`sum by (quality, outcome) (rate(hvac_s2_data_quality_records_total[10m]))`。
 2. 看接收延迟和隔离比例。
-3. 用操作记录和受控的数据库查询找出受影响的站点、设备、点位。
+3. 用操作记录和受控的数据库查询找出受影响的站点、设备、点位。质量位非 0、原始值正好是 0 的温度通道，按「未接探头」处理（规格 `docs/specs/site-gateway-onboarding.md`）。松雅轩 t14（温度采集模块 UID 20 的通道 14，「室外温度（通道 14）」）从 2026-10-14 03:26 起每分钟都是这样，2026-10-29 起和从它复制的第二个室外温度一起停用。
 4. 先查点位对照和绑定版本，再当作传输丢失。
 
 2026-10-15 松雅轩合格率降到约 33%，原因是网关的待发队列把没确认的记录反复重发、平台把重复的算作不合格；2026-10-16 网关改成一次采样只发一个信封后已经恢复（规格 `docs/specs/site-gateway-onboarding.md`「已知问题」）。
@@ -339,6 +341,8 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 告警：`Phase1CoreProcessDown`（平台网关、身份、调度、维护、遥测、指标，两分钟）、`Phase1ProcessDown`（接入、预测、优化、故障诊断、节能验证、报告、AI 助手、Centrifugo，五分钟，警告）。
 
 抓的是各进程诊断端口上的 `/metrics`。预测、优化、故障诊断、节能验证、报告的诊断端口同时提供 `/healthz` 和 `/metrics`。AI 助手的诊断端口提供 `/health/ready` 和 `/metrics`。
+
+Centrifugo（v6.8.1）不走 8000。8000 是客户端端口，正式环境只开 TLS：浏览器的实时连接和遥测的发布接口都在这。用明文去抓它会得到 HTTP 400，Centrifugo 每 15 秒记一条 TLS 握手错误，`up{job="centrifugo"}` 一直是 0，这条警告就会误报。指标和健康检查在容器网络里的明文 9000（`/metrics`、`/health`），不映射到主机。`http_server.internal_port` 把这两个内部端点挪过去，`http_server.tls_external` 让 8000 上的 TLS 不包住 9000，`http_api.external` 让发布接口留在 8000，地址不用改。正式机器的 `runtime/config/centrifugo.json` 会盖住仓库里的那份配置，所以这三个值也写在 Compose 的环境变量里（环境变量优先）。`Phase1ProcessDown` 的表达式仍然是 `up{job=~"…|centrifugo"} == 0`，它看的是抓取成不成功，不看端口；9000 能抓到之后，8000 的握手错误不再让它亮。
 
 1. `docker ps` 看对应容器是不是 `unhealthy` 或 `Restarting`。
 2. 没启用 `intelligence` 或 `integration` 时，对应的警告会一直在。正式机器这两档都开着。

@@ -40,14 +40,14 @@ const COPIES = {
     t6: [["ammeter-unit4", "cw_leaving_temperature"]],
     t12: [["room", "room_temperature"]],
     t13: [["outdoor", "ambient_temperature"]],
-    t14: [["outdoor", "ambient_temperature_2"]],
     t15: [["outdoor", "ambient_wet_bulb_temperature"]],
   },
   waterflow: { flowMeter: [["chwp-main", "flow_rate"]] },
 };
 const COPY_UNITS = { temperature: "Cel", waterflow: "m3/h" };
 // Spare inputs with no probe read 0 every minute; the platform has them INACTIVE and they are not sent.
-const SPARE = { temperature: ["t8", "t11", "t20"] };
+// t14 (and the outdoor copy ambient_temperature_2) joined this list on 2026-10-29.
+const SPARE = { temperature: ["t8", "t11", "t14", "t20"] };
 // A machine runs while its meter reads more than 5 kW (idle ones read under 1 kW); the chilled-water
 // pumps run while the header flow exceeds 10 m³/h.
 const runState = (running) => (running ? "RUNNING" : "STOPPED");

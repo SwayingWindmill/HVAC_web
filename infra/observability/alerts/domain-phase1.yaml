@@ -43,7 +43,7 @@ groups:
           summary: MQTT telemetry adapter is disconnected from the broker
           runbook: docs/operations/alerts.md#接入服务的-mqtt-断开
       - alert: MQTTProcessingQueueHigh
-        expr: max(hvac_mqtt_processing_queue_depth) / clamp_min(max(hvac_mqtt_processing_queue_capacity), 1) > 0.8
+        expr: max(hvac_mqtt_processing_queue_depth) / max(hvac_mqtt_processing_queue_capacity) > 0.8 and max(hvac_mqtt_processing_queue_capacity) > 0
         for: 5m
         labels:
           severity: page
@@ -77,7 +77,7 @@ groups:
     interval: 30s
     rules:
       - alert: CommandVerificationFailureRateHigh
-        expr: sum(rate(hvac_command_verifications_total{outcome!="verified"}[10m])) / clamp_min(sum(rate(hvac_command_verifications_total[10m])), 1) > 0.05
+        expr: (sum(rate(hvac_command_verifications_total{outcome!="verified"}[10m])) / sum(rate(hvac_command_verifications_total[10m]))) > 0.05 and sum(increase(hvac_command_verifications_total[10m])) > 20
         for: 10m
         labels:
           severity: page
@@ -87,7 +87,7 @@ groups:
           summary: More than 5 percent of command verifications are not VERIFIED
           runbook: docs/operations/alerts.md#指令核对失败
       - alert: CommandVerificationTimeoutRateHigh
-        expr: sum(rate(hvac_command_verifications_total{outcome="timed_out"}[10m])) / clamp_min(sum(rate(hvac_command_verifications_total[10m])), 1) > 0.02
+        expr: (sum(rate(hvac_command_verifications_total{outcome="timed_out"}[10m])) / sum(rate(hvac_command_verifications_total[10m]))) > 0.02 and sum(increase(hvac_command_verifications_total[10m])) > 50
         for: 10m
         labels:
           severity: page
@@ -97,7 +97,7 @@ groups:
           summary: Command verification timeout rate is above 2 percent
           runbook: docs/operations/alerts.md#指令核对超时
       - alert: CommandAPI5xxHigh
-        expr: sum(rate(hvac_command_http_requests_total{status_class="5xx"}[5m])) / clamp_min(sum(rate(hvac_command_http_requests_total[5m])), 1) > 0.01
+        expr: (sum(rate(hvac_command_http_requests_total{status_class="5xx"}[5m])) / sum(rate(hvac_command_http_requests_total[5m]))) > 0.01 and sum(increase(hvac_command_http_requests_total[5m])) > 50
         for: 5m
         labels:
           severity: page
@@ -111,7 +111,7 @@ groups:
     interval: 30s
     rules:
       - alert: AlarmAPI5xxHigh
-        expr: sum(rate(hvac_alarm_http_requests_total{status_class="5xx"}[5m])) / clamp_min(sum(rate(hvac_alarm_http_requests_total[5m])), 1) > 0.01
+        expr: (sum(rate(hvac_alarm_http_requests_total{status_class="5xx"}[5m])) / sum(rate(hvac_alarm_http_requests_total[5m]))) > 0.01 and sum(increase(hvac_alarm_http_requests_total[5m])) > 50
         for: 5m
         labels:
           severity: page
@@ -121,7 +121,7 @@ groups:
           summary: Alarm API 5xx rate is above 1 percent
           runbook: docs/operations/alerts.md#告警接口出错
       - alert: AlarmMutationRejectionRateHigh
-        expr: sum(rate(hvac_alarm_http_requests_total{method="POST",status_class="4xx"}[10m])) / clamp_min(sum(rate(hvac_alarm_http_requests_total{method="POST"}[10m])), 1) > 0.2
+        expr: (sum(rate(hvac_alarm_http_requests_total{method="POST",status_class="4xx"}[10m])) / sum(rate(hvac_alarm_http_requests_total{method="POST"}[10m]))) > 0.2 and sum(increase(hvac_alarm_http_requests_total{method="POST"}[10m])) > 10
         for: 10m
         labels:
           severity: ticket

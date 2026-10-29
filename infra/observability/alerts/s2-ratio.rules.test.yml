@@ -1,0 +1,50 @@
+# promtool unit tests for ratio alerts. A per-second rate below 1 must stay a ratio:
+# clamping the denominator to 1 turns it into "events per second" and pages on healthy low traffic.
+rule_files:
+  - s2-telemetry.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 0.97 records/s, 98% good (57.036 + 1.164 per minute). Ten minutes is about 582 records.
+  - interval: 1m
+    input_series:
+      - series: 'hvac_s2_data_quality_records_total{quality="good",outcome="accepted"}'
+        values: 0+57.036x40
+      - series: 'hvac_s2_data_quality_records_total{quality="stale",outcome="accepted"}'
+        values: 0+1.164x40
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: S2DataGoodRateLow
+        exp_alerts: []
+
+  # Same 0.97 records/s, 90% good. The ratio is under 0.95 and the 10 minute volume is over 100.
+  - interval: 1m
+    input_series:
+      - series: 'hvac_s2_data_quality_records_total{quality="good",outcome="accepted"}'
+        values: 0+52.38x40
+      - series: 'hvac_s2_data_quality_records_total{quality="stale",outcome="accepted"}'
+        values: 0+5.82x40
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: S2DataGoodRateLow
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              primary_owner: telemetry-platform
+              secondary_owner: energy-data
+            exp_annotations:
+              summary: Telemetry data good rate is below 95 percent
+              runbook: docs/operations/alerts.md#读数合格率低
+
+  # Counters stay at 0. There is no ratio to judge, and the volume guard is not met.
+  - interval: 1m
+    input_series:
+      - series: 'hvac_s2_data_quality_records_total{quality="good",outcome="accepted"}'
+        values: 0+0x40
+      - series: 'hvac_s2_data_quality_records_total{quality="stale",outcome="accepted"}'
+        values: 0+0x40
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: S2DataGoodRateLow
+        exp_alerts: []

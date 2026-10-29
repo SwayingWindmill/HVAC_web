@@ -9,7 +9,7 @@
     {"id":3,"title":"MQTT messages/s","type":"timeseries","targets":[{"expr":"sum(rate(hvac_mqtt_messages_received_total[5m]))"}]},
     {"id":4,"title":"MQTT values/s by outcome","type":"timeseries","targets":[{"expr":"sum by (outcome) (rate(hvac_mqtt_values_total[5m]))"}]},
     {"id":5,"title":"MQTT processing p95","type":"timeseries","targets":[{"expr":"histogram_quantile(0.95, sum by (le) (rate(hvac_mqtt_message_processing_duration_seconds_bucket[5m])))"}]},
-    {"id":6,"title":"Processing queue utilization","type":"timeseries","targets":[{"expr":"max(hvac_mqtt_processing_queue_depth) / clamp_min(max(hvac_mqtt_processing_queue_capacity), 1)"}]},
+    {"id":6,"title":"Processing queue utilization","type":"timeseries","targets":[{"expr":"max(hvac_mqtt_processing_queue_depth) / max(hvac_mqtt_processing_queue_capacity)"}]},
     {"id":7,"title":"Retries","type":"timeseries","targets":[{"expr":"sum(rate(hvac_mqtt_message_retries_total[5m]))"}]},
     {"id":8,"title":"Dropped messages","type":"timeseries","targets":[{"expr":"sum(rate(hvac_mqtt_messages_processed_total{outcome=\"dropped\"}[5m]))"}]},
     {"id":9,"title":"Replay messages/s","type":"timeseries","targets":[{"expr":"sum(rate(hvac_mqtt_replay_messages_total[5m]))"}]},

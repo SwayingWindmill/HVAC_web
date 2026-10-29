@@ -1,7 +1,12 @@
 {
   "log": { "level": "info" },
-  "http_server": { "address": "0.0.0.0", "port": "8000" },
-  "http_api": { "key": "[REDACTED_SECRET]" },
+  "http_server": {
+    "address": "0.0.0.0",
+    "port": "8000",
+    "internal_port": "9000",
+    "tls_external": true
+  },
+  "http_api": { "key": "[REDACTED_SECRET]", "external": true },
   "client": {
     "allowed_origins": ["[DEPLOYMENT_HVAC_WEB_ORIGIN]"],
     "token": { "hmac_secret_key": "[REDACTED_SECRET]" },

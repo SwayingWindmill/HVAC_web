@@ -1002,6 +1002,12 @@ services:
       CENTRIFUGO_HTTP_API_KEY: ${CENTRIFUGO_HTTP_API_KEY:-}
       CENTRIFUGO_VAR_S2_PROXY_SECRET: ${CENTRIFUGO_VAR_S2_PROXY_SECRET:-}
       CENTRIFUGO_ENGINE_REDIS_ADDRESS: ${CENTRIFUGO_ENGINE_REDIS_ADDRESS:-redis://redis:6379/0}
+      # /metrics and /health on a plain port. Production TLS stays on client port 8000;
+      # tls_external keeps it off this port. The HTTP API stays on 8000. These override
+      # the runtime centrifugo.json that wsl.override.yaml mounts in place of the repo file.
+      CENTRIFUGO_HTTP_SERVER_INTERNAL_PORT: "9000"
+      CENTRIFUGO_HTTP_SERVER_TLS_EXTERNAL: "true"
+      CENTRIFUGO_HTTP_API_EXTERNAL: "true"
     volumes:
       - ./realtime/centrifugo.json:/centrifugo/centrifugo.json:ro
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}:/run/hvac/pki:ro
@@ -1011,7 +1017,7 @@ services:
         required: false
       telemetry-worker:
         condition: service_healthy
-    expose: ["8000"]
+    expose: ["8000", "9000"]
     networks: [application, data]
     cpus: ${REALTIME_TRANSPORT_CPUS:-0.75}
     mem_limit: ${REALTIME_TRANSPORT_MEMORY_LIMIT:-256m}

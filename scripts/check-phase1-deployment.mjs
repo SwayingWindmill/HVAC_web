@@ -472,6 +472,12 @@ assert(prometheus.includes('postgres-exporter:9187') && prometheus.includes('red
 assert(hasExactHttpsTarget(prometheus, 'hvac.swayingwindmill.online', '/healthz'), 'Prometheus must probe the public health endpoint');
 assert(compose.includes('--storage.tsdb.retention.time=15d') && compose.includes('--storage.tsdb.retention.size=2GB'), 'Prometheus must cap both age and size of its TSDB');
 assert(prometheus.includes('node-exporter:9100'), 'Prometheus must scrape single-server host metrics');
+assert(prometheus.includes('centrifugo:9000') && !prometheus.includes('centrifugo:8000'), 'Prometheus must scrape Centrifugo metrics on the plain internal port, not the TLS client port');
+const centrifugoBlock = serviceBlocks.find(([, name]) => name === 'centrifugo')?.[2] ?? '';
+assert(centrifugoBlock.includes('CENTRIFUGO_HTTP_SERVER_INTERNAL_PORT: "9000"') && centrifugoBlock.includes('CENTRIFUGO_HTTP_SERVER_TLS_EXTERNAL: "true"') && centrifugoBlock.includes('CENTRIFUGO_HTTP_API_EXTERNAL: "true"'), 'Centrifugo must keep a plain internal metrics port and leave the HTTP API on the client port');
+assert(centrifugoBlock.includes('expose: ["8000", "9000"]') && !/^    ports:/m.test(centrifugoBlock), 'Centrifugo metrics port must be reachable on the Docker network and not published to the host');
+const centrifugoConfig = await read('deploy/platform/phase1/realtime/centrifugo.json');
+assert(centrifugoConfig.includes('"internal_port": "9000"') && centrifugoConfig.includes('"tls_external": true') && centrifugoConfig.includes('"external": true') && centrifugoConfig.includes('"prometheus"'), 'checked-in Centrifugo config must enable Prometheus on the plain internal port');
 assert(hostAlerts.includes('Phase1HostDiskUsageWarning') && hostAlerts.includes('> 80') && hostAlerts.includes('Phase1HostDiskUsageHigh') && hostAlerts.includes('> 85') && hostAlerts.includes('Phase1HostDiskUsageCritical') && hostAlerts.includes('> 90'), 'host disk alerts must enforce 80% warning, 85% page and 90% critical thresholds');
 assert(hostAlerts.includes('Phase1HostDiskWillFillWithin24Hours') && hostAlerts.includes('predict_linear('), 'host disk alerts must warn on projected rapid exhaustion before the static threshold is reached');
 assert(otel.includes('filelog/docker') && otel.includes('otlphttp/loki') && otel.includes('otlp/tempo'), 'observability-full OTel Collector must route logs and traces to central backends');
