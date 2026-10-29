@@ -7,7 +7,9 @@ test.use({ reducedMotion: 'reduce' });
 test('the digital twin shows the plant in the corners and keeps view and selection in the URL', async ({ page }) => {
   test.slow();
   await page.goto(`/operations/digital-twin?site=${SITE_ID}`);
-  await expect(page.locator('canvas')).toBeVisible();
+  // test.slow() only lengthens the test. The canvas node appears after the WebGL context, which on a
+  // busy CI runner can take longer than the shared 15s expect timeout. The HTML corners do not wait on it.
+  await expect(page.locator('canvas')).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText('冷站功率')).toBeVisible();
   await expect(page.getByRole('heading', { name: '冷站', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '冷站', exact: true }).click();
