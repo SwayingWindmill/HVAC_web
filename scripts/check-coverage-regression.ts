@@ -10,9 +10,12 @@ const root = resolve(import.meta.dirname, '..');
 export const baselinePath = 'scripts/coverage-baseline.json';
 export const tolerancePoints = 0.1;
 
-export const roundPoints = (value) => Math.round(value * 100) / 100;
+type CoverageKey = 'goStatements' | 'tsLines';
+type CoverageSnapshot = Record<CoverageKey, number>;
 
-export function statementPercent(profile) {
+export const roundPoints = (value: number): number => Math.round(value * 100) / 100;
+
+export function statementPercent(profile: string): number {
   let covered = 0;
   let total = 0;
   for (const line of profile.split('\n')) {
@@ -29,14 +32,26 @@ export function statementPercent(profile) {
   return roundPoints((covered / total) * 100);
 }
 
-export function regressed(current, baseline) {
+export function regressed(current: number, baseline: number): boolean {
   return roundPoints(current) < roundPoints(baseline) - tolerancePoints;
 }
 
-function goPercent() {
-  const { modules } = readGoWorkspace(root);
-  let covered = 0;
-  let total = 0;
+function addProfile(profile: string, totals: { covered: number; total: number }): void {
+  for (const line of profile.split('\n')) {
+    if (!line || line.startsWith('mode:')) continue;
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 3) continue;
+    const statements = Number(parts[1]);
+    const count = Number(parts[2]);
+    if (!Number.isFinite(statements) || !Number.isFinite(count)) continue;
+    totals.total += statements;
+    if (count > 0) totals.covered += statements;
+  }
+}
+
+function goPercent(): number {
+  const { modules } = readGoWorkspace(root) as { modules: string[] };
+  const totals = { covered: 0, total: 0 };
   for (const modulePath of modules) {
     const dir = mkdtempSync(join(tmpdir(), 'hvac-cover-'));
     const profile = join(dir, 'cover.out');
@@ -58,28 +73,23 @@ function goPercent() {
       text = '';
     }
     rmSync(dir, { recursive: true, force: true });
-    for (const line of text.split('\n')) {
-      if (!line || line.startsWith('mode:')) continue;
-      const parts = line.trim().split(/\s+/);
-      if (parts.length < 3) continue;
-      const statements = Number(parts[1]);
-      const count = Number(parts[2]);
-      if (!Number.isFinite(statements) || !Number.isFinite(count)) continue;
-      total += statements;
-      if (count > 0) covered += statements;
-    }
+    addProfile(text, totals);
   }
-  if (total === 0) return 0;
-  return roundPoints((covered / total) * 100);
+  if (totals.total === 0) return 0;
+  return roundPoints((totals.covered / totals.total) * 100);
 }
 
-function nodeTestArgs(script) {
-  const command = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).scripts[script];
-  const body = command.replace(/^node\s+/, '');
-  return body.split(/\s+/).filter((part) => part !== '--test' && !part.startsWith('--test-concurrency'));
+function nodeTestArgs(script: string): string[] {
+  const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+  const command = manifest.scripts[script];
+  if (!command) throw new Error(`package.json is missing script ${script}`);
+  return command
+    .replace(/^node\s+/, '')
+    .split(/\s+/)
+    .filter((part) => part !== '--test' && !part.startsWith('--test-concurrency'));
 }
 
-function tsPercent() {
+function tsPercent(): number {
   const args = [
     '--test',
     '--test-concurrency=1',
@@ -103,18 +113,18 @@ function tsPercent() {
   return roundPoints(Number(match[1]));
 }
 
-function main() {
+function main(): void {
   const write = process.argv.includes('--write');
-  const current = { goStatements: goPercent(), tsLines: tsPercent() };
+  const current: CoverageSnapshot = { goStatements: goPercent(), tsLines: tsPercent() };
   const absolute = resolve(root, baselinePath);
   if (write) {
     writeFileSync(absolute, `${JSON.stringify(current, null, 2)}\n`);
     console.log(`wrote ${baselinePath}: ${JSON.stringify(current)}`);
     return;
   }
-  const baseline = JSON.parse(readFileSync(absolute, 'utf8'));
-  const failures = [];
-  for (const key of ['goStatements', 'tsLines']) {
+  const baseline = JSON.parse(readFileSync(absolute, 'utf8')) as CoverageSnapshot;
+  const failures: string[] = [];
+  for (const key of ['goStatements', 'tsLines'] as const) {
     if (regressed(current[key], baseline[key])) {
       failures.push(`${key} ${current[key]} is below baseline ${baseline[key]} (tolerance ${tolerancePoints})`);
     } else {

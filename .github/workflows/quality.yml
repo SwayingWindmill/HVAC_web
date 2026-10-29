@@ -33,8 +33,8 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: node --test scripts/test-coverage-regression.mjs
-      - run: node scripts/check-coverage-regression.mjs
+      - run: node --experimental-strip-types --test scripts/test-coverage-regression.ts
+      - run: node --experimental-strip-types scripts/check-coverage-regression.ts
 
   web-smoke:
     name: quality / web smoke

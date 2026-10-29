@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { regressed, statementPercent } from './check-coverage-regression.mjs';
+import { regressed, statementPercent } from './check-coverage-regression.ts';
 
 test('statement percent counts covered blocks over the profile', () => {
   const profile = [
