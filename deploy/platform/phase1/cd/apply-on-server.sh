@@ -147,21 +147,31 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 EOF
       ;;
     node)
-      if [[ ! -f "$release/agent/dist/bootstrap/main.js" || ! -d "$release/agent/node_modules" ]]; then
-        echo "error: release is missing the operations-agent build." >&2
+      # The running image is node:22-bookworm-slim, which already has npm.
+      # Install production dependencies here so the release does not upload node_modules.
+      if [[ ! -f "$release/agent/dist/bootstrap/main.js" || ! -f "$release/agent/package.json" || ! -f "$release/agent/package-lock.json" ]]; then
+        echo "error: release is missing the operations-agent build or lockfile." >&2
+        exit 1
+      fi
+      if [[ -d "$release/agent/node_modules" ]]; then
+        echo "error: release still contains agent/node_modules." >&2
         exit 1
       fi
       mkdir -p "$context/dist"
       cp "$release/agent/package.json" "$context/package.json"
+      cp "$release/agent/package-lock.json" "$context/package-lock.json"
       cp -a "$release/agent/dist/." "$context/dist/"
-      cp -a "$release/agent/node_modules" "$context/node_modules"
       cat > "$context/Dockerfile" <<EOF
 FROM ${image}
 USER root
-RUN rm -rf /app/dist /app/node_modules
-COPY --chown=node:node package.json /app/package.json
-COPY --chown=node:node dist /app/dist
-COPY --chown=node:node node_modules /app/node_modules
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY dist ./dist
+RUN rm -rf /app/node_modules \
+ && npm ci --omit=dev --no-audit --no-fund --fetch-retries=5 \
+ && npm cache clean --force \
+ && rm -rf /root/.npm \
+ && chown -R node:node /app
 USER node
 EOF
       ;;

@@ -22,7 +22,8 @@ jobs:
   deploy:
     name: deploy / production
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # GitHub-hosted jobs stop at 360 minutes. The build is a few minutes; the rest is the SSH step.
+    timeout-minutes: 360
     # The production environment is expected to require a reviewer. Repo and environment
     # copies of DEPLOY_SSH_PASSWORD both work; an environment secret wins when both exist.
     environment: production
@@ -59,9 +60,9 @@ jobs:
         run: bash deploy/platform/phase1/cd/build-release.sh
 
       - name: Deploy over SSH
-        # The script itself aborts one upload after 10 minutes. This step limit is the
-        # backstop if that timeout is ignored: three attempts plus smoke, not the whole job.
-        timeout-minutes: 40
+        # One attempt waits 0.5 MiB/min plus 25% and 3 minutes, then retries twice and resumes.
+        # 330 minutes covers three full attempts of a ~40 MiB archive, plus extract, apply, and smoke.
+        timeout-minutes: 330
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_SSH_PASSWORD: ${{ secrets.DEPLOY_SSH_PASSWORD }}
