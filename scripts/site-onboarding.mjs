@@ -1,7 +1,8 @@
 // Registers a real Site behind one Edge Gateway from its site file (deploy/sites/*.site.json):
 // the Site, its plant room, the Gateway, every Device the Gateway names by source key, their
 // Points, and the Telemetry presence and freshness policies. Same tables as the simulator seed.
-// Idempotent; names edited later in the Registry are overwritten by the file. Machines the
+// Idempotent: a rerun with the same file changes no row; names edited later in the Registry are
+// overwritten by the file. Machines the
 // site file lists become Assets, with the meter wired to each bound to it.
 //
 //   node scripts/site-onboarding.mjs deploy/sites/songyaxuan.site.json [--print]
@@ -29,10 +30,25 @@ export function pointStatus(point) {
 // A row first inserted inactive has valid_to NULL; its status alone keeps it out of current reads.
 // valid_to stays after valid_from (CHECK valid_to > valid_from).
 export const SUBJECT_BINDING_LIFECYCLE = [
-  `status=EXCLUDED.status`,
-  `valid_from=CASE WHEN EXCLUDED.status = 'ACTIVE' AND (point_subject_bindings.status <> 'ACTIVE' OR point_subject_bindings.valid_to IS NOT NULL) THEN clock_timestamp() ELSE point_subject_bindings.valid_from END`,
-  `valid_to=CASE WHEN EXCLUDED.status = 'ACTIVE' THEN NULL WHEN point_subject_bindings.status = 'ACTIVE' AND point_subject_bindings.valid_to IS NULL THEN GREATEST(clock_timestamp(), point_subject_bindings.valid_from + interval '1 millisecond') ELSE point_subject_bindings.valid_to END`,
-].join(', ');
+  ['status', `EXCLUDED.status`],
+  ['valid_from', `CASE WHEN EXCLUDED.status = 'ACTIVE' AND (point_subject_bindings.status <> 'ACTIVE' OR point_subject_bindings.valid_to IS NOT NULL) THEN clock_timestamp() ELSE point_subject_bindings.valid_from END`],
+  ['valid_to', `CASE WHEN EXCLUDED.status = 'ACTIVE' THEN NULL WHEN point_subject_bindings.status = 'ACTIVE' AND point_subject_bindings.valid_to IS NULL THEN GREATEST(clock_timestamp(), point_subject_bindings.valid_from + interval '1 millisecond') ELSE point_subject_bindings.valid_to END`],
+];
+
+// The ON CONFLICT action of a rerun: each [column, value] pair is written only when some value
+// differs from the row, so a rerun with an unchanged site file leaves the row, its updated_at and
+// its revision as they are. A Registry row that does change gets revision + 1, as every Registry
+// writer does: revision is the optimistic-lock version (UPDATE ... WHERE revision = $n) and the
+// aggregate version of the change it records. Telemetry runtime rows have no revision.
+export function updateWhenChanged(table, assignments, { revision = true } = {}) {
+  const set = [...assignments.map(([column, value]) => `${column}=${value}`), ...(revision ? [`revision=${table}.revision + 1`] : []), 'updated_at=clock_timestamp()'];
+  return `DO UPDATE SET ${set.join(', ')}
+WHERE (${assignments.map(([column]) => `${table}.${column}`).join(', ')}) IS DISTINCT FROM (${assignments.map(([, value]) => value).join(', ')})`;
+}
+
+const fromFile = (...columns) => columns.map((column) => [column, `EXCLUDED.${column}`]);
+const ACTIVE = [['status', `'ACTIVE'`]];
+const CURRENT = [...ACTIVE, ['valid_to', 'NULL']];
 
 // Row ids derive from the Site id so a second run updates the same rows.
 function rowId(siteId, kind, index) {
@@ -81,43 +97,43 @@ export function buildOnboardingSql(profile) {
   const registry = `BEGIN;
 INSERT INTO core_registry.sites (id, code, display_name, timezone, status, revision, created_at, updated_at, tenant_id, floor_area_m2, climate_zone)
 VALUES (${siteId}, ${sqlLiteral(site.code)}, ${sqlLiteral(site.name)}, ${sqlLiteral(site.timezone)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), ${tenant}, NULL, NULL)
-ON CONFLICT (id) DO UPDATE SET code=EXCLUDED.code, display_name=EXCLUDED.display_name, timezone=EXCLUDED.timezone, status='ACTIVE', updated_at=clock_timestamp();
+ON CONFLICT (id) ${updateWhenChanged('sites', [...fromFile('code', 'display_name', 'timezone'), ...ACTIVE])};
 
 INSERT INTO core_registry.spaces (id, tenant_id, site_id, parent_space_id, code, display_name, space_type, status, revision, created_at, updated_at)
 VALUES (${sqlLiteral(space.id)}, ${tenant}, ${siteId}, NULL, ${sqlLiteral(space.code)}, ${sqlLiteral(space.name)}, ${sqlLiteral(space.type)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
-ON CONFLICT (id) DO UPDATE SET code=EXCLUDED.code, display_name=EXCLUDED.display_name, space_type=EXCLUDED.space_type, status='ACTIVE', updated_at=clock_timestamp();
+ON CONFLICT (id) ${updateWhenChanged('spaces', [...fromFile('code', 'display_name', 'space_type'), ...ACTIVE])};
 
 ${assets.length ? `INSERT INTO core_registry.assets (id, site_id, code, display_name, asset_type, status, revision, created_at, updated_at, tenant_id) VALUES
 ${assetRows}
-ON CONFLICT (id) DO UPDATE SET code=EXCLUDED.code, display_name=EXCLUDED.display_name, asset_type=EXCLUDED.asset_type, status='ACTIVE', updated_at=clock_timestamp();
+ON CONFLICT (id) ${updateWhenChanged('assets', [...fromFile('code', 'display_name', 'asset_type'), ...ACTIVE])};
 
 INSERT INTO core_registry.asset_space_bindings (id, tenant_id, site_id, asset_id, space_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
 ${assetPlacementRows}
-ON CONFLICT (id) DO UPDATE SET asset_id=EXCLUDED.asset_id, space_id=EXCLUDED.space_id, status='ACTIVE', valid_to=NULL, updated_at=clock_timestamp();
+ON CONFLICT (id) ${updateWhenChanged('asset_space_bindings', [...fromFile('asset_id', 'space_id'), ...CURRENT])};
 ` : ''}
 INSERT INTO core_registry.devices (id, site_id, code, display_name, device_type, status, revision, created_at, updated_at, tenant_id, product_id, template_version_id) VALUES
 ${deviceRows}
-ON CONFLICT (id) DO UPDATE SET code=EXCLUDED.code, display_name=EXCLUDED.display_name, device_type=EXCLUDED.device_type, status='ACTIVE', updated_at=clock_timestamp();
+ON CONFLICT (id) ${updateWhenChanged('devices', [...fromFile('code', 'display_name', 'device_type'), ...ACTIVE])};
 
 INSERT INTO core_registry.gateway_device_source_keys (id, tenant_id, site_id, gateway_device_id, source_key, device_id, status, revision, created_at, updated_at) VALUES
 ${sourceKeyRows}
-ON CONFLICT (id) DO UPDATE SET source_key=EXCLUDED.source_key, device_id=EXCLUDED.device_id, status='ACTIVE', updated_at=clock_timestamp();
+ON CONFLICT (id) ${updateWhenChanged('gateway_device_source_keys', [...fromFile('source_key', 'device_id'), ...ACTIVE])};
 
 INSERT INTO core_registry.device_space_bindings (id, tenant_id, site_id, device_id, space_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
 ${placementRows}
-ON CONFLICT (id) DO UPDATE SET device_id=EXCLUDED.device_id, space_id=EXCLUDED.space_id, status='ACTIVE', valid_to=NULL, updated_at=clock_timestamp();
+ON CONFLICT (id) ${updateWhenChanged('device_space_bindings', [...fromFile('device_id', 'space_id'), ...CURRENT])};
 
 ${deviceBindingRows ? `INSERT INTO core_registry.device_bindings (id, site_id, device_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at, tenant_id) VALUES
 ${deviceBindingRows}
-ON CONFLICT (id) DO UPDATE SET device_id=EXCLUDED.device_id, asset_id=EXCLUDED.asset_id, binding_role=EXCLUDED.binding_role, status='ACTIVE', valid_to=NULL, updated_at=clock_timestamp();
+ON CONFLICT (id) ${updateWhenChanged('device_bindings', [...fromFile('device_id', 'asset_id', 'binding_role'), ...CURRENT])};
 ` : ''}
 INSERT INTO core_registry.telemetry_points (id, tenant_id, site_id, reporting_device_id, sensor_id, point_code, source_key, display_name, point_type, value_type, unit, writable, sample_interval_ms, publish_interval_ms, stale_after_ms, source_metadata, status, revision, created_at, updated_at, point_template_id, template_version_id, counter_decrease_mode, counter_rollover_modulus) VALUES
 ${pointRows}
-ON CONFLICT (id) DO UPDATE SET point_code=EXCLUDED.point_code, source_key=EXCLUDED.source_key, display_name=EXCLUDED.display_name, point_type=EXCLUDED.point_type, value_type=EXCLUDED.value_type, unit=EXCLUDED.unit, sample_interval_ms=EXCLUDED.sample_interval_ms, publish_interval_ms=EXCLUDED.publish_interval_ms, stale_after_ms=EXCLUDED.stale_after_ms, source_metadata=EXCLUDED.source_metadata, counter_decrease_mode=EXCLUDED.counter_decrease_mode, status=EXCLUDED.status, updated_at=clock_timestamp();
+ON CONFLICT (id) ${updateWhenChanged('telemetry_points', fromFile('point_code', 'source_key', 'display_name', 'point_type', 'value_type', 'unit', 'sample_interval_ms', 'publish_interval_ms', 'stale_after_ms', 'source_metadata', 'counter_decrease_mode', 'status'))};
 
 INSERT INTO core_registry.point_subject_bindings (id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
 ${subjectRows}
-ON CONFLICT (id) DO UPDATE SET point_id=EXCLUDED.point_id, subject_type=EXCLUDED.subject_type, space_id=EXCLUDED.space_id, asset_id=EXCLUDED.asset_id, ${SUBJECT_BINDING_LIFECYCLE}, updated_at=clock_timestamp();
+ON CONFLICT (id) ${updateWhenChanged('point_subject_bindings', [...fromFile('point_id', 'subject_type', 'space_id', 'asset_id'), ...SUBJECT_BINDING_LIFECYCLE])};
 COMMIT;`;
 
   // A Device is online while it reported within two of its sample periods. The Gateway's outbox
@@ -130,19 +146,19 @@ COMMIT;`;
 SET LOCAL ROLE s2_telemetry_migrator;
 INSERT INTO telemetry_runtime.devices (device_id, tenant_id, site_id, presence_applicability, updated_at) VALUES
 ${runtimeDevices}
-ON CONFLICT (device_id) DO UPDATE SET tenant_id=EXCLUDED.tenant_id, site_id=EXCLUDED.site_id, presence_applicability='APPLICABLE', updated_at=clock_timestamp();
+ON CONFLICT (device_id) ${updateWhenChanged('devices', [...fromFile('tenant_id', 'site_id'), ['presence_applicability', `'APPLICABLE'`]], { revision: false })};
 
 INSERT INTO telemetry_runtime.presence_policies (device_id, policy_revision, online_within_seconds, offline_after_seconds, coverage_required, accepted_signal_types, max_future_clock_skew_seconds, max_source_lag_seconds, updated_at) VALUES
 ${presence}
-ON CONFLICT (device_id) DO UPDATE SET online_within_seconds=EXCLUDED.online_within_seconds, offline_after_seconds=EXCLUDED.offline_after_seconds, accepted_signal_types=EXCLUDED.accepted_signal_types, max_future_clock_skew_seconds=EXCLUDED.max_future_clock_skew_seconds, max_source_lag_seconds=EXCLUDED.max_source_lag_seconds, updated_at=clock_timestamp();
+ON CONFLICT (device_id) ${updateWhenChanged('presence_policies', fromFile('online_within_seconds', 'offline_after_seconds', 'accepted_signal_types', 'max_future_clock_skew_seconds', 'max_source_lag_seconds'), { revision: false })};
 
 INSERT INTO telemetry_runtime.freshness_policies (device_id, telemetry_key, policy_revision, fresh_within_seconds, configured, expected_sample_interval_seconds, value_type, expected_unit, minimum_number, maximum_number, updated_at) VALUES
 ${freshness}
-ON CONFLICT (device_id, telemetry_key) DO UPDATE SET fresh_within_seconds=EXCLUDED.fresh_within_seconds, configured=true, expected_sample_interval_seconds=EXCLUDED.expected_sample_interval_seconds, value_type=EXCLUDED.value_type, expected_unit=EXCLUDED.expected_unit, updated_at=clock_timestamp();
+ON CONFLICT (device_id, telemetry_key) ${updateWhenChanged('freshness_policies', [...fromFile('fresh_within_seconds'), ['configured', 'true'], ...fromFile('expected_sample_interval_seconds', 'value_type', 'expected_unit')], { revision: false })};
 
 INSERT INTO telemetry_runtime.observation_coverage (device_id, available, continuous_since, reason_code, source_revision, updated_at) VALUES
 ${coverage}
-ON CONFLICT (device_id) DO UPDATE SET available=true, reason_code=NULL, updated_at=clock_timestamp();
+ON CONFLICT (device_id) ${updateWhenChanged('observation_coverage', [['available', 'true'], ['reason_code', 'NULL']], { revision: false })};
 RESET ROLE;
 COMMIT;`;
   return { registry, telemetry, energy: buildEnergySql(profile, devices, points), deviceCount: devices.length, pointCount: points.length };
@@ -256,7 +272,7 @@ UPDATE core_registry.settlement_boundaries SET status = 'ACTIVE', revision = rev
 WHERE id = ${id('7800', 1)} AND status = 'DRAFT';
 INSERT INTO core_registry.tariffs (id, tenant_id, site_id, tariff_code, display_name, energy_type_id, status, revision, created_at, updated_at)
 VALUES (${id('7800', 3)}, ${t}, ${st}, ${sqlLiteral(tariff.code)}, ${sqlLiteral(tariff.name)}, '${ELECTRICITY}', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
-ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = clock_timestamp();
+ON CONFLICT (id) ${updateWhenChanged('tariffs', fromFile('display_name'))};
 INSERT INTO core_registry.tariff_versions (id, tenant_id, site_id, tariff_id, version, effective_from, timezone, currency, billing_cycle, status, revision, created_at, updated_at)
 VALUES (${id('7800', 2)}, ${t}, ${st}, ${id('7800', 3)}, 1, '2026-01-01T00:00:00Z', ${sqlLiteral(tariff.timezone)}, 'CNY', 'CALENDAR_MONTH', 'RELEASED', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;

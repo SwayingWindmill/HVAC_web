@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, pointStatus } from './site-onboarding.mjs';
+import { SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, pointStatus, updateWhenChanged } from './site-onboarding.mjs';
 
 const songyaxuan = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.site.json', import.meta.url), 'utf8'));
 
@@ -36,11 +36,42 @@ test('each DESCRIBES binding carries its point status', () => {
 test('a rerun follows the site file instead of forcing ACTIVE', () => {
   const section = bindingSection(buildOnboardingSql(songyaxuan).registry);
   const conflict = section.slice(section.indexOf('ON CONFLICT'));
-  assert.ok(conflict.includes(SUBJECT_BINDING_LIFECYCLE));
   assert.ok(!conflict.includes("status='ACTIVE'"), 'binding upsert must not hard-code ACTIVE');
-  assert.match(SUBJECT_BINDING_LIFECYCLE, /status=EXCLUDED\.status/);
-  assert.match(SUBJECT_BINDING_LIFECYCLE, /valid_to=CASE WHEN EXCLUDED\.status = 'ACTIVE' THEN NULL/);
-  assert.match(SUBJECT_BINDING_LIFECYCLE, /valid_from=CASE WHEN EXCLUDED\.status = 'ACTIVE' AND/);
+  const lifecycle = new Map(SUBJECT_BINDING_LIFECYCLE);
+  assert.equal(lifecycle.get('status'), 'EXCLUDED.status');
+  assert.match(lifecycle.get('valid_to'), /^CASE WHEN EXCLUDED\.status = 'ACTIVE' THEN NULL/);
+  assert.match(lifecycle.get('valid_from'), /^CASE WHEN EXCLUDED\.status = 'ACTIVE' AND/);
+  for (const [column, value] of SUBJECT_BINDING_LIFECYCLE) assert.ok(conflict.includes(`${column}=${value}`), `binding upsert sets ${column}`);
+});
+
+// Every ON CONFLICT ... DO UPDATE in a generated script, with the table it belongs to.
+function upserts(sql: string) {
+  return [...sql.matchAll(/INSERT INTO (\w+)\.(\w+) \([^)]*\)[\s\S]*?ON CONFLICT \([^)]*\) (DO UPDATE[\s\S]*?|DO NOTHING);/g)]
+    .map(([, schema, table, action]) => ({ schema, table, action }))
+    .filter(({ action }) => action.startsWith('DO UPDATE'));
+}
+
+test('a rerun with an unchanged site file updates no row', () => {
+  const { registry, telemetry, energy } = buildOnboardingSql(songyaxuan);
+  const all = [...upserts(registry), ...upserts(telemetry), ...upserts(energy)];
+  assert.ok(all.length >= 15, `expected every upsert to be found, got ${all.length}`);
+  for (const { schema, table, action } of all) {
+    assert.match(action, new RegExp(`\\nWHERE \\(${table}\\.[\\s\\S]*\\) IS DISTINCT FROM \\(`), `${schema}.${table} must update only rows whose values change`);
+    const set = action.slice('DO UPDATE SET '.length, action.indexOf('\nWHERE'));
+    if (schema === 'core_registry') assert.ok(set.includes(`revision=${table}.revision + 1`), `${table} must count a real change in revision`);
+    else assert.ok(!set.includes('revision='), `${schema}.${table} has no Registry revision`);
+    assert.ok(set.endsWith('updated_at=clock_timestamp()'), `${schema}.${table} stamps updated_at only with a change`);
+  }
+  const tables = new Set(all.map(({ schema, table }) => `${schema}.${table}`));
+  for (const table of ['core_registry.telemetry_points', 'core_registry.point_subject_bindings', 'core_registry.devices', 'core_registry.tariffs', 'telemetry_runtime.freshness_policies']) assert.ok(tables.has(table), `${table} upsert is checked`);
+});
+
+test('the change guard compares exactly the columns it sets', () => {
+  const action = updateWhenChanged('devices', [['code', 'EXCLUDED.code'], ['status', "'ACTIVE'"]]);
+  assert.equal(action, `DO UPDATE SET code=EXCLUDED.code, status='ACTIVE', revision=devices.revision + 1, updated_at=clock_timestamp()
+WHERE (devices.code, devices.status) IS DISTINCT FROM (EXCLUDED.code, 'ACTIVE')`);
+  assert.equal(updateWhenChanged('observation_coverage', [['available', 'true']], { revision: false }), `DO UPDATE SET available=true, updated_at=clock_timestamp()
+WHERE (observation_coverage.available) IS DISTINCT FROM (true)`);
 });
 
 test('point status defaults to ACTIVE and rejects unknown values', () => {
