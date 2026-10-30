@@ -14,11 +14,25 @@ export interface RealtimeStatusSnapshot {
 }
 
 export interface RealtimeStatusUpdate {
+  /** Which open subscription reports this state; a page can hold several at once. */
+  source: string;
   state: RealtimeSubscriptionState;
   siteId: string;
 }
 
-export type RealtimeStatusCode = 'CONNECTED' | 'RECONNECTING' | 'DEGRADED' | 'DISCONNECTED';
+export type RealtimeStatusCode = 'CONNECTED' | 'RECONNECTING' | 'DEGRADED' | 'DISCONNECTED' | 'NOT_SUBSCRIBED';
+
+// Most severe first: one stalled subscription is what the header must show.
+const SEVERITY: readonly RealtimeSubscriptionState[] = ['unavailable', 'resync-required', 'reconnecting', 'connecting', 'live', 'idle'];
+
+/** The one state the header shows for every subscription open on the page. */
+export function combineRealtimeStates(states: Iterable<RealtimeSubscriptionState>): RealtimeSubscriptionState {
+  let combined: RealtimeSubscriptionState = 'idle';
+  for (const state of states) {
+    if (SEVERITY.indexOf(state) < SEVERITY.indexOf(combined)) combined = state;
+  }
+  return combined;
+}
 
 export interface RealtimeStatusPresentation {
   readonly code: RealtimeStatusCode;
@@ -29,7 +43,7 @@ export function createIdleRealtimeStatus(): RealtimeStatusSnapshot {
   return Object.freeze({ state: 'idle' });
 }
 
-export function createRealtimeStatus(update: RealtimeStatusUpdate): RealtimeStatusSnapshot {
+export function createRealtimeStatus(update: Omit<RealtimeStatusUpdate, 'source'>): RealtimeStatusSnapshot {
   if (!isUUIDv7(update.siteId)) {
     throw new Error('Realtime subscription status requires a validated Site identity.');
   }
@@ -77,9 +91,10 @@ export function realtimeStatusPresentation(status: RealtimeStatusSnapshot): Real
         label: '已断开',
       };
     case 'idle':
+      // Nothing on this page reads live readings, which is not a fault.
       return {
-        code: 'DISCONNECTED',
-        label: '未连接',
+        code: 'NOT_SUBSCRIBED',
+        label: '未订阅',
       };
   }
 }
