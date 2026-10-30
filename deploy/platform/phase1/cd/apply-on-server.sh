@@ -234,6 +234,8 @@ EOF
 done
 
 mkdir -p "$platform_dir"
+tar -C "$release" -xf "$release/source.tar" --strip-components=4 deploy/platform/phase1/cd/observability-config.sh
+bash "$release/observability-config.sh" check "$release/source.tar" "$platform_dir" "$compose_project"
 tar -C "$platform_dir" -xf "$release/source.tar"
 printf '%s\n' "$revision" > "$platform_dir/REVISION"
 echo "updated $platform_dir to $revision"
@@ -297,6 +299,7 @@ if ! SMOKE_RESOLVE_IP=127.0.0.1 SMOKE_CHECK_CONTAINERS=1 bash "$script_dir/smoke
   rollback_now "smoke checks failed."
   exit 1
 fi
+bash "$release/observability-config.sh" apply "$platform_dir" "$compose_project"
 bash "$script_dir/prune-rollback-images.sh" 2
 
 echo "deployed $revision"

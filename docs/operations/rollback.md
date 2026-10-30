@@ -46,6 +46,8 @@ sudo -n /opt/hvac-platform-tools/deploy.sh
 
 镜像退回之后，跑的是上一版程序。`/opt/hvac-platform` 里的 Compose 和配置已经是新提交解出来的那一版，脚本不会把目录也解回去。新配置配旧程序起不来时，要再部署一个已知能一起工作的提交，而不是只改标签。
 
+Prometheus 和 Alertmanager 的配置也一样：退回不会把它们解回旧版，也不会重启它们。要回到旧的告警规则，部署旧提交（或者一个改回去的新提交），见 `docs/operations/alerts.md#发布时配置怎么生效`。
+
 成功的部署只留最近两套 `before-*`。更老的标签会被删掉，不能再退到那一次。
 
 退回不会恢复数据库里已经写入的数据。程序退回去之后，库还是新程序写过的样子。数据要回到备份，用 `docs/operations/restore-from-backup.md`。
