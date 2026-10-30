@@ -40,7 +40,7 @@
     "deployment:phase1:process-failure:plan": "node --experimental-strip-types scripts/run-phase1-process-failure-drill.ts --plan",
     "deployment:phase1:migration:test": "node scripts/run-phase1-migration-integration.mjs",
     "pr:gates:classify": "node scripts/classify-pr-gates.mjs",
-    "pr:gates:test": "node --experimental-strip-types --test scripts/test-pr-gate-classifier.mjs scripts/test-domain-task-matrix.mjs scripts/test-migration-freeze.ts",
+    "pr:gates:test": "node --experimental-strip-types --test scripts/test-pr-gate-classifier.mjs scripts/test-domain-task-matrix.mjs scripts/test-migration-freeze.ts scripts/test-site-onboarding.ts",
     "security:dependency-audit": "node scripts/check-npm-production-audit.mjs",
     "security:go-vuln": "node scripts/run-go-vulnerability-scan.mjs",
     "go:lint": "node scripts/run-go-lint.mjs",

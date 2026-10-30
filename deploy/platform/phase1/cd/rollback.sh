@@ -4,7 +4,7 @@
 set -euo pipefail
 
 platform_dir="${HVAC_PLATFORM_DIR:-/opt/hvac-platform}"
-deploy_script="${HVAC_DEPLOY_SCRIPT:-/opt/hvac-platform-tools/deploy.sh}"
+deploy_script="${HVAC_DEPLOY_SCRIPT:-}"
 stamp="${1:-}"
 
 if [[ -z "$stamp" ]]; then
@@ -39,6 +39,20 @@ while IFS=$'\t' read -r image previous; do
   echo "restored $image from $previous"
 done < "$manifest"
 
+# The restart script: the deploy.sh in the unpacked platform tree, else the host-only copy it replaced.
+# Under sudo the tree copy is used only when sudo already allows running it without a password.
+default_deploy_script() {
+  local bundled="$platform_dir/deploy/platform/phase1/cd/deploy.sh"
+  if [[ -f "$bundled" && -x "$bundled" ]] && { [[ "$(id -u)" -eq 0 ]] || sudo -n -l "$bundled" >/dev/null 2>&1; }; then
+    printf '%s\n' "$bundled"
+  else
+    printf '%s\n' /opt/hvac-platform-tools/deploy.sh
+  fi
+}
+if [[ -z "$deploy_script" ]]; then
+  deploy_script="$(default_deploy_script)"
+fi
+echo "restart script: $deploy_script"
 if [[ ! -e "$deploy_script" ]]; then
   echo "error: $deploy_script is missing. Images were retagged; restart was not run." >&2
   exit 1

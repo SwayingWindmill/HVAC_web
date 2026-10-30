@@ -11,7 +11,7 @@ fi
 
 platform_dir="${HVAC_PLATFORM_DIR:-/opt/hvac-platform}"
 compose_project="${HVAC_COMPOSE_PROJECT:-hvac-platform}"
-deploy_script="${HVAC_DEPLOY_SCRIPT:-/opt/hvac-platform-tools/deploy.sh}"
+deploy_script="${HVAC_DEPLOY_SCRIPT:-}"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -266,23 +266,39 @@ for index in "${!planned_services[@]}"; do
 done
 printf '%s\n' "$stamp" > "$platform_dir/rollbacks/latest"
 
+# The restart script: the deploy.sh in the unpacked platform tree, else the host-only copy it replaced.
+# Under sudo the tree copy is used only when sudo already allows running it without a password.
+default_deploy_script() {
+  local bundled="$platform_dir/deploy/platform/phase1/cd/deploy.sh"
+  if [[ -f "$bundled" && -x "$bundled" ]] && { [[ "$(id -u)" -eq 0 ]] || sudo -n -l "$bundled" >/dev/null 2>&1; }; then
+    printf '%s\n' "$bundled"
+  else
+    printf '%s\n' /opt/hvac-platform-tools/deploy.sh
+  fi
+}
+# Resolved after source.tar is unpacked, so a release brings its own restart script.
+if [[ -z "$deploy_script" ]]; then
+  deploy_script="$(default_deploy_script)"
+fi
+echo "restart script: $deploy_script"
+
 run_deploy() {
   if [[ ! -e "$deploy_script" ]]; then
     echo "error: $deploy_script is missing." >&2
-    echo "The production host keeps the Phase 1 restart script there. Images were updated; previous tags are before-${stamp}." >&2
+    echo "The release tree ships deploy/platform/phase1/cd/deploy.sh; the host fallback is /opt/hvac-platform-tools/deploy.sh. Images were updated; previous tags are before-${stamp}." >&2
     return 1
   fi
   # deploy.sh chmods runtime files owned by container users. The SSH user owns the tree; that chmod needs root.
   if [[ "$(id -u)" -eq 0 ]]; then
     if [[ -x "$deploy_script" ]]; then
-      "$deploy_script"
+      "$deploy_script" "$revision"
     else
-      bash "$deploy_script"
+      bash "$deploy_script" "$revision"
     fi
   elif [[ -x "$deploy_script" ]]; then
-    sudo -n "$deploy_script"
+    sudo -n "$deploy_script" "$revision"
   else
-    sudo -n bash "$deploy_script"
+    sudo -n bash "$deploy_script" "$revision"
   fi
 }
 

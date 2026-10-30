@@ -14,6 +14,26 @@ import { localContainer } from './lib/local-environment.mjs';
 const sqlLiteral = (value) => `'${String(value).replaceAll("'", "''")}'`;
 const sqlJson = (value) => `${sqlLiteral(JSON.stringify(value))}::jsonb`;
 
+const POINT_STATUSES = new Set(['ACTIVE', 'INACTIVE', 'RETIRED']);
+
+// A point's registry status; the site file may leave it out (ACTIVE).
+export function pointStatus(point) {
+  const status = point.status ?? 'ACTIVE';
+  if (!POINT_STATUSES.has(status)) throw new Error(`point ${point.code} has status ${status}; expected ACTIVE, INACTIVE or RETIRED`);
+  return status;
+}
+
+// How a rerun moves an existing point_subject_bindings row to the point's status (EXCLUDED.status).
+// Active: valid_to is cleared, and a binding that was closed starts a new validity period now.
+// Inactive or retired: a current binding is closed now; one that was already closed keeps its end.
+// A row first inserted inactive has valid_to NULL; its status alone keeps it out of current reads.
+// valid_to stays after valid_from (CHECK valid_to > valid_from).
+export const SUBJECT_BINDING_LIFECYCLE = [
+  `status=EXCLUDED.status`,
+  `valid_from=CASE WHEN EXCLUDED.status = 'ACTIVE' AND (point_subject_bindings.status <> 'ACTIVE' OR point_subject_bindings.valid_to IS NOT NULL) THEN clock_timestamp() ELSE point_subject_bindings.valid_from END`,
+  `valid_to=CASE WHEN EXCLUDED.status = 'ACTIVE' THEN NULL WHEN point_subject_bindings.status = 'ACTIVE' AND point_subject_bindings.valid_to IS NULL THEN GREATEST(clock_timestamp(), point_subject_bindings.valid_from + interval '1 millisecond') ELSE point_subject_bindings.valid_to END`,
+].join(', ');
+
 // Row ids derive from the Site id so a second run updates the same rows.
 function rowId(siteId, kind, index) {
   return siteId.replace(/^([0-9a-f]{8})-[0-9a-f]{4}-7000-8000-[0-9a-f]{12}$/, (_, head) => `${head}-${kind}-7000-8000-${index.toString(16).padStart(12, '0')}`);
@@ -49,12 +69,13 @@ export function buildOnboardingSql(profile) {
   const deviceBindingRows = devices.filter((device) => device.asset).map((device) => `(${sqlLiteral(rowId(site.id, '6400', device.deviceIndex))}, ${siteId}, ${sqlLiteral(device.id)}, ${sqlLiteral(device.asset)}, ${device.type.endsWith('METER') ? "'METER'" : "'CONTROLLER'"}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp(), ${tenant})`).join(',\n');
   const pointRows = points.map((point) => {
     const interval = point.device.sampleSeconds * 1000;
-    return `(${sqlLiteral(point.id)}, ${tenant}, ${siteId}, ${sqlLiteral(point.device.id)}, NULL, ${sqlLiteral(point.code)}, ${sqlLiteral(point.sourceKey ?? point.code)}, ${sqlLiteral(point.name)}, ${sqlLiteral(point.pointType)}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, false, ${interval}, ${interval}, ${interval * 3}, ${sqlJson({ protocol: 'MODBUS_RTU', address: point.address, gatewaySourceKey: point.device.sourceKey })}, ${sqlLiteral(point.status ?? 'ACTIVE')}, 1, clock_timestamp(), clock_timestamp(), NULL, NULL, ${point.pointType === 'COUNTER' ? "'RESET_TO_ZERO'" : 'NULL'}, NULL)`;
+    return `(${sqlLiteral(point.id)}, ${tenant}, ${siteId}, ${sqlLiteral(point.device.id)}, NULL, ${sqlLiteral(point.code)}, ${sqlLiteral(point.sourceKey ?? point.code)}, ${sqlLiteral(point.name)}, ${sqlLiteral(point.pointType)}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, false, ${interval}, ${interval}, ${interval * 3}, ${sqlJson({ protocol: 'MODBUS_RTU', address: point.address, gatewaySourceKey: point.device.sourceKey })}, ${sqlLiteral(pointStatus(point))}, 1, clock_timestamp(), clock_timestamp(), NULL, NULL, ${point.pointType === 'COUNTER' ? "'RESET_TO_ZERO'" : 'NULL'}, NULL)`;
   }).join(',\n');
-  // A point describes the machine it measures, else the Site.
+  // A point describes the machine it measures, else the Site. The binding carries the point's
+  // status, so a point the site file marks INACTIVE (no probe wired) is not a current binding.
   const subjectRows = points.map((point, index) => {
     const asset = point.asset ?? point.device.asset;
-    return `(${sqlLiteral(rowId(site.id, '6300', index + 1))}, ${tenant}, ${siteId}, ${sqlLiteral(point.id)}, ${asset ? "'ASSET'" : "'SITE'"}, NULL, ${asset ? sqlLiteral(asset) : 'NULL'}, 'DESCRIBES', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
+    return `(${sqlLiteral(rowId(site.id, '6300', index + 1))}, ${tenant}, ${siteId}, ${sqlLiteral(point.id)}, ${asset ? "'ASSET'" : "'SITE'"}, NULL, ${asset ? sqlLiteral(asset) : 'NULL'}, 'DESCRIBES', ${sqlLiteral(pointStatus(point))}, clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
   }).join(',\n');
 
   const registry = `BEGIN;
@@ -96,7 +117,7 @@ ON CONFLICT (id) DO UPDATE SET point_code=EXCLUDED.point_code, source_key=EXCLUD
 
 INSERT INTO core_registry.point_subject_bindings (id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
 ${subjectRows}
-ON CONFLICT (id) DO UPDATE SET point_id=EXCLUDED.point_id, subject_type=EXCLUDED.subject_type, space_id=EXCLUDED.space_id, asset_id=EXCLUDED.asset_id, status='ACTIVE', valid_to=NULL, updated_at=clock_timestamp();
+ON CONFLICT (id) DO UPDATE SET point_id=EXCLUDED.point_id, subject_type=EXCLUDED.subject_type, space_id=EXCLUDED.space_id, asset_id=EXCLUDED.asset_id, ${SUBJECT_BINDING_LIFECYCLE}, updated_at=clock_timestamp();
 COMMIT;`;
 
   // A Device is online while it reported within two of its sample periods. The Gateway's outbox
