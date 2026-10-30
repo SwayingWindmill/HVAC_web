@@ -39,9 +39,12 @@ export const SUBJECT_BINDING_LIFECYCLE = [
 // differs from the row, so a rerun with an unchanged site file leaves the row, its updated_at and
 // its revision as they are. A Registry row that does change gets revision + 1, as every Registry
 // writer does: revision is the optimistic-lock version (UPDATE ... WHERE revision = $n) and the
-// aggregate version of the change it records. Telemetry runtime rows have no revision.
-export function updateWhenChanged(table, assignments, { revision = true } = {}) {
-  const set = [...assignments.map(([column, value]) => `${column}=${value}`), ...(revision ? [`revision=${table}.revision + 1`] : []), 'updated_at=clock_timestamp()'];
+// aggregate version of the change it records. A presence or freshness policy that changes gets
+// policy_revision + 1 instead: Telemetry stamps each accepted sample and evaluated presence with
+// the policy revision it used, so a new revision marks results made under the new values. The
+// other Telemetry runtime rows have no revision (revision: false).
+export function updateWhenChanged(table, assignments, { revision = 'revision' } = {}) {
+  const set = [...assignments.map(([column, value]) => `${column}=${value}`), ...(revision ? [`${revision}=${table}.${revision} + 1`] : []), 'updated_at=clock_timestamp()'];
   return `DO UPDATE SET ${set.join(', ')}
 WHERE (${assignments.map(([column]) => `${table}.${column}`).join(', ')}) IS DISTINCT FROM (${assignments.map(([, value]) => value).join(', ')})`;
 }
@@ -150,11 +153,11 @@ ON CONFLICT (device_id) ${updateWhenChanged('devices', [...fromFile('tenant_id',
 
 INSERT INTO telemetry_runtime.presence_policies (device_id, policy_revision, online_within_seconds, offline_after_seconds, coverage_required, accepted_signal_types, max_future_clock_skew_seconds, max_source_lag_seconds, updated_at) VALUES
 ${presence}
-ON CONFLICT (device_id) ${updateWhenChanged('presence_policies', fromFile('online_within_seconds', 'offline_after_seconds', 'accepted_signal_types', 'max_future_clock_skew_seconds', 'max_source_lag_seconds'), { revision: false })};
+ON CONFLICT (device_id) ${updateWhenChanged('presence_policies', fromFile('online_within_seconds', 'offline_after_seconds', 'accepted_signal_types', 'max_future_clock_skew_seconds', 'max_source_lag_seconds'), { revision: 'policy_revision' })};
 
 INSERT INTO telemetry_runtime.freshness_policies (device_id, telemetry_key, policy_revision, fresh_within_seconds, configured, expected_sample_interval_seconds, value_type, expected_unit, minimum_number, maximum_number, updated_at) VALUES
 ${freshness}
-ON CONFLICT (device_id, telemetry_key) ${updateWhenChanged('freshness_policies', [...fromFile('fresh_within_seconds'), ['configured', 'true'], ...fromFile('expected_sample_interval_seconds', 'value_type', 'expected_unit')], { revision: false })};
+ON CONFLICT (device_id, telemetry_key) ${updateWhenChanged('freshness_policies', [...fromFile('fresh_within_seconds'), ['configured', 'true'], ...fromFile('expected_sample_interval_seconds', 'value_type', 'expected_unit')], { revision: 'policy_revision' })};
 
 INSERT INTO telemetry_runtime.observation_coverage (device_id, available, continuous_since, reason_code, source_revision, updated_at) VALUES
 ${coverage}
