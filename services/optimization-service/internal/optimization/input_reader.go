@@ -72,11 +72,11 @@ func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, 
 	if err != nil {
 		return AuthoritativeState{}, err
 	}
-	supplyTemperature, err := reader.readTelemetry(ctx, query, query.SupplyTemperatureKey)
+	supplyTemperature, err := reader.readTelemetry(ctx, query, query.SupplyTemperatureKey, ReasonSupplyTempMissing)
 	if err != nil {
 		return AuthoritativeState{}, err
 	}
-	zoneTemperature, err := reader.readTelemetry(ctx, query, query.ZoneTemperatureKey)
+	zoneTemperature, err := reader.readTelemetry(ctx, query, query.ZoneTemperatureKey, ReasonZoneTempMissing)
 	if err != nil {
 		return AuthoritativeState{}, err
 	}
@@ -118,10 +118,10 @@ func (reader *ClickHouseInputReader) readPricedDay(ctx context.Context, query Op
 			DatasetRevision: series.Metadata.DatasetRevision, DataWatermark: watermark.UTC(),
 		}, nil
 	}
-	return EnergyDayEvidence{}, fmt.Errorf("the Site has no fully priced complete day in the last %d days", pricedDays)
+	return EnergyDayEvidence{}, unavailable(ReasonPricedDayMissing, "the Site has no fully priced complete day in the last %d days", pricedDays)
 }
 
-func (reader *ClickHouseInputReader) readTelemetry(ctx context.Context, query OptimizationStateQuery, telemetryKey string) (TelemetryEvidence, error) {
+func (reader *ClickHouseInputReader) readTelemetry(ctx context.Context, query OptimizationStateQuery, telemetryKey string, missing PreparationReason) (TelemetryEvidence, error) {
 	sql := fmt.Sprintf(`SELECT
  toString(observation_id) AS observation_id,
  toString(device_id) AS device_id,
@@ -187,10 +187,10 @@ FORMAT JSONEachRow`, query.TenantID, query.SiteID, clickHouseString(telemetryKey
 		rows = append(rows, value)
 	}
 	if len(rows) == 0 {
-		return TelemetryEvidence{}, errors.New("authoritative telemetry mapping has no usable observation")
+		return TelemetryEvidence{}, unavailable(missing, "authoritative telemetry %s has no usable observation", telemetryKey)
 	}
 	if len(rows) > 1 {
-		return TelemetryEvidence{}, errors.New("authoritative telemetry mapping resolves to multiple Points")
+		return TelemetryEvidence{}, unavailable(missing, "authoritative telemetry %s resolves to multiple Points", telemetryKey)
 	}
 	sampledAt, err := time.Parse(time.RFC3339Nano, rows[0].SampledAt)
 	if err != nil {

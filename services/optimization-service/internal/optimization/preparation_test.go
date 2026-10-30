@@ -166,3 +166,77 @@ func TestOptimizationPreparationChecksumSurvivesTheDatabaseRoundTrip(t *testing.
 		t.Fatalf("checksum after the round trip=%q, frozen=%q, err=%v", checksum, store.created[0].InputChecksum, err)
 	}
 }
+
+// A schedule that fails to prepare used to leave only an empty page; each failure now names the one
+// input an operator has to fix.
+func TestOptimizationPreparationNamesTheMissingInput(t *testing.T) {
+	at := time.Date(2026, 10, 30, 12, 20, 0, 0, time.UTC)
+	request := PreparationRequest{
+		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Trigger: TriggerSchedule,
+	}
+	withPolicy := func(constraints string) PreparationDefinition {
+		definition := testPreparationDefinition()
+		definition.PolicyConstraints = []byte(constraints)
+		return definition
+	}
+	withState := func(change func(*AuthoritativeState)) AuthoritativeState {
+		state := testAuthoritativeState(at)
+		change(&state)
+		return state
+	}
+	cases := map[string]struct {
+		store  *preparationStoreStub
+		inputs *authoritativeInputStub
+		want   PreparationReason
+	}{
+		"no model deployment": {
+			store:  &preparationStoreStub{err: unavailable(ReasonModelDeploymentMissing, "no ACTIVE Optimization model deployment")},
+			inputs: &authoritativeInputStub{state: testAuthoritativeState(at)},
+			want:   ReasonModelDeploymentMissing,
+		},
+		"policy names an unknown field": {
+			store:  &preparationStoreStub{definition: withPolicy(`{"unknown":1}`)},
+			inputs: &authoritativeInputStub{state: testAuthoritativeState(at)},
+			want:   ReasonPolicyUnsupported,
+		},
+		"zone temperature key has no observation": {
+			store:  &preparationStoreStub{definition: testPreparationDefinition()},
+			inputs: &authoritativeInputStub{err: unavailable(ReasonZoneTempMissing, "zone.temperature has no usable observation")},
+			want:   ReasonZoneTempMissing,
+		},
+		"input owner cannot be asked": {
+			store:  &preparationStoreStub{definition: testPreparationDefinition()},
+			inputs: &authoritativeInputStub{err: errors.New("dial tcp: connection refused")},
+			want:   ReasonInputsUnreadable,
+		},
+		"supply temperature reading is not GOOD": {
+			store:  &preparationStoreStub{definition: testPreparationDefinition()},
+			inputs: &authoritativeInputStub{state: withState(func(state *AuthoritativeState) { state.SupplyTemperature.Quality = "UNCERTAIN" })},
+			want:   ReasonSupplyTempMissing,
+		},
+		"chillers off push supply above the safety band": {
+			store:  &preparationStoreStub{definition: testPreparationDefinition()},
+			inputs: &authoritativeInputStub{state: withState(func(state *AuthoritativeState) { state.SupplyTemperature.Value = 19 })},
+			want:   ReasonBaselineOutsideLimits,
+		},
+	}
+	for name, test := range cases {
+		t.Run(name, func(t *testing.T) {
+			preparer, err := NewPreparer(test.store, test.inputs, func() time.Time { return at })
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = preparer.Prepare(t.Context(), request)
+			if !errors.Is(err, ErrPreparationUnavailable) {
+				t.Fatalf("err=%v, want the preparation to be unavailable", err)
+			}
+			if reason, ok := PreparationReasonOf(err); !ok || reason != test.want {
+				t.Fatalf("reason=%q ok=%v, want %q (err=%v)", reason, ok, test.want, err)
+			}
+			if len(test.store.created) != 0 {
+				t.Fatal("an unavailable preparation persisted a run")
+			}
+		})
+	}
+}

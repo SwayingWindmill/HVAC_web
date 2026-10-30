@@ -397,6 +397,26 @@ function seedOptimizationPreparationFixture() {
       '018f1e00-1000-7000-8000-000000000001', 'OPTIMIZATION', '01990000-2770-7000-8000-000000000001',
       'ACTIVE', 1, '2026-08-28T11:48:00Z', '2026-08-28T11:48:00Z'
     );
+
+    -- The Site's Optimization schedule fired an hour earlier and found no zone temperature.
+    INSERT INTO core_registry.schedule_definitions (
+      schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression,
+      cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, enabled, next_fire_at
+    ) VALUES (
+      '01990000-2790-7000-8000-000000000001', 'optimization-run-integration', '优化建议每小时计算',
+      '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', 'OPTIMIZATION_RUN', 'CRON',
+      '20 * * * *', '5-field-v1', 'UTC', 'FIRE_ONCE', 120, '{}'::jsonb, false, '2026-08-28T12:20:00Z'
+    );
+    INSERT INTO core_registry.job_instances (
+      job_id, schedule_id, trigger_type, job_type, tenant_id, site_id, scheduled_for, dedup_key, payload, state,
+      max_attempts, timeout_seconds, completed_at, error_code, error_message, created_at, updated_at
+    ) VALUES (
+      '01990000-2791-7000-8000-000000000001', '01990000-2790-7000-8000-000000000001', 'SCHEDULE', 'OPTIMIZATION_RUN',
+      '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '2026-08-28T11:20:00Z',
+      'optimization-integration-scheduled-firing', '{}'::jsonb, 'FAILED', 1, 120, '2026-08-28T11:20:02Z',
+      'ZONE_TEMPERATURE_MISSING', 'authoritative telemetry zone.temperature has no usable observation',
+      '2026-08-28T11:20:00Z', '2026-08-28T11:20:02Z'
+    );
   `);
 
   clickHouse(`INSERT INTO telemetry_history.observations (

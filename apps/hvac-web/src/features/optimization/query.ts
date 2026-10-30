@@ -1,13 +1,32 @@
 import { queryOptions } from '@tanstack/react-query';
 import { gatewayPath, gatewayRequest, publishedValueOf, valueOf, type GatewayProblem } from '@/api/gateway-client';
 import { intelligencePaths } from '@/api/generated/platformGateway.gen';
-import { parseRecommendation, type OptimizationRecommendation, type PublishedRecommendation } from './optimization-model';
+import { parseRecommendation, type OptimizationRecommendation, type PreparationOutcome, type PublishedRecommendation } from './optimization-model';
 
 export const optimizationKeys = {
   latest: (siteId: string) => ['optimization', siteId, 'latest'] as const,
+  preparation: (siteId: string) => ['optimization', siteId, 'preparation'] as const,
 };
 
 const UNAVAILABLE = '优化服务暂时不可用';
+
+/** How the Site's hourly schedule last fired; null when the Site has no Optimization schedule that has fired. */
+export function latestPreparationQuery(siteId: string) {
+  return queryOptions({
+    queryKey: optimizationKeys.preparation(siteId),
+    queryFn: async ({ signal }): Promise<PreparationOutcome | null> => publishedValueOf(
+      await gatewayRequest(gatewayPath(intelligencePaths.latestOptimizationPreparation, { siteId }), {
+        signal,
+        parse: (payload) => {
+          const outcome = payload as { status: PreparationOutcome['status']; reason?: PreparationOutcome['reason'] | null; firedAt: string };
+          return { status: outcome.status, reason: outcome.reason ?? null, firedAt: outcome.firedAt };
+        },
+      }),
+      { unavailable: UNAVAILABLE },
+    ),
+    retry: false,
+  });
+}
 
 /** The Site's latest published recommendation; null until the Optimization owner has published one. */
 export function latestRecommendationQuery(siteId: string, waitingForRun: string | null) {

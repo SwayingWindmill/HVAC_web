@@ -23,6 +23,8 @@ func TestPublicIntelligenceRoutesHaveSingleDomainOwners(t *testing.T) {
 		{http.MethodGet, "/api/v1/sites/" + siteID + "/fdd/findings", ownershipregistry.OwnerFDD, siteID},
 		{http.MethodGet, "/api/v1/sites/" + siteID + "/fdd/rules/low-delta-t", ownershipregistry.OwnerFDD, siteID},
 		{http.MethodPost, "/api/v1/sites/" + siteID + "/fdd/evaluate/low-delta-t", ownershipregistry.OwnerFDD, siteID},
+		{http.MethodGet, "/api/v1/sites/" + siteID + "/optimization/recommendations/latest", ownershipregistry.OwnerOptimization, siteID},
+		{http.MethodGet, "/api/v1/sites/" + siteID + "/optimization/preparations/latest", ownershipregistry.OwnerOptimization, siteID},
 		{http.MethodPost, "/api/v1/optimization/runs", ownershipregistry.OwnerOptimization, ""},
 	} {
 		route, ok := matchPublicIntelligenceRoute(test.method, test.path)
@@ -119,7 +121,12 @@ func TestIntelligenceReadWithoutConfiguredOwnerIsAMissingRoute(t *testing.T) {
 		{"forecast", h.serveForecast, publicIntelligenceRoute{siteID: siteID, target: "load"}},
 		{"fdd findings", h.serveFDDRead, publicIntelligenceRoute{siteID: siteID, target: "fdd-findings"}},
 		{"fdd link", h.serveFDDLink, publicIntelligenceRoute{siteID: siteID, findingID: siteID}},
-		{"optimization latest", h.serveLatestOptimizationRecommendation, publicIntelligenceRoute{siteID: siteID}},
+		{"optimization latest", func(w http.ResponseWriter, r *http.Request, s bffSession, route publicIntelligenceRoute) {
+			h.serveLatestOptimizationRead(w, r, s, route, "recommendations")
+		}, publicIntelligenceRoute{siteID: siteID}},
+		{"optimization preparation", func(w http.ResponseWriter, r *http.Request, s bffSession, route publicIntelligenceRoute) {
+			h.serveLatestOptimizationRead(w, r, s, route, "preparations")
+		}, publicIntelligenceRoute{siteID: siteID}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()

@@ -200,11 +200,7 @@ func prepareScheduledOptimization(ctx context.Context, queue *schedulerjob.Queue
 	prepared, err := preparer.Prepare(jobCtx, request)
 	cancel()
 	if err != nil {
-		code := "OPTIMIZATION_PREPARATION_FAILED"
-		if errors.Is(err, optimization.ErrPreparationUnavailable) {
-			code = "OPTIMIZATION_INPUT_UNAVAILABLE"
-		}
-		if failErr := queue.Fail(context.Background(), job, code, err, false, time.Now().UTC()); failErr != nil {
+		if failErr := queue.Fail(context.Background(), job, optimization.PreparationFailureCode(err), err, false, time.Now().UTC()); failErr != nil {
 			log.Printf("optimization schedule firing %s failure finalization failed: %v", job.JobID, failErr)
 		}
 		return

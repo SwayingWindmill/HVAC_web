@@ -21,8 +21,8 @@ import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-pl
 import { useNow } from '@/hooks/use-now';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { changesSupply, recommendedSetpoint, TRIGGER_LABEL, type OptimizationRecommendation, type RecommendationRisk } from '../optimization-model';
-import { latestRecommendationQuery, requestRecommendation } from '../query';
+import { changesSupply, preparationProblem, recommendedSetpoint, TRIGGER_LABEL, type OptimizationRecommendation, type RecommendationRisk } from '../optimization-model';
+import { latestPreparationQuery, latestRecommendationQuery, requestRecommendation } from '../query';
 
 const siteRoute = getRouteApi('/_app/_site');
 
@@ -36,6 +36,7 @@ const RISK: Record<RecommendationRisk, { label: string; className: string }> = {
 const RUN_PATIENCE_MS = 90_000;
 
 const celsius = (value: number) => `${formatDecimal(value, 1)} °C`;
+const signed = (value: number, digits: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${formatDecimal(Math.abs(value), digits)}`;
 
 interface Marker {
   readonly value: number;
@@ -122,6 +123,12 @@ export function OptimizationWorkspace() {
   const { plant, registry } = useRealtimePlant();
   const submit = useSubmitCommand(site.id, principal.session.csrfToken);
   const recommendation = latest.data ?? null;
+  // How the hourly schedule last fired, so a page with no new recommendation says which input was missing.
+  const preparation = useQuery(latestPreparationQuery(site.id));
+  const scheduleProblem = preparationProblem(preparation.data ?? null);
+  const firedAt = preparation.data ? formatTime(preparation.data.firedAt, site.timezone) : '';
+  const staleRecommendation = recommendation !== null && scheduleProblem !== null && preparation.data !== null && preparation.data !== undefined
+    && Date.parse(preparation.data.firedAt) > Date.parse(recommendation.createdAt);
 
   const request = useMutation({
     mutationFn: () => requestRecommendation(site.id, principal.session.csrfToken),
@@ -192,6 +199,14 @@ export function OptimizationWorkspace() {
         </Alert>
       ) : null}
 
+      {staleRecommendation ? (
+        <Alert>
+          <TriangleAlert />
+          <AlertTitle>最近一次定时计算没有生成新建议</AlertTitle>
+          <AlertDescription>{firedAt}：{scheduleProblem}。下面是上一条建议。</AlertDescription>
+        </Alert>
+      ) : null}
+
       {latest.isPending ? (
         <Skeleton className="h-64 rounded-xl" />
       ) : latest.isError ? (
@@ -206,6 +221,11 @@ export function OptimizationWorkspace() {
           <div className="flex flex-col items-center gap-2 px-6 py-14 text-center">
             <span className="flex size-9 items-center justify-center rounded-xl bg-primary-soft text-primary"><Lightbulb className="size-[18px]" aria-hidden="true" /></span>
             <p className="text-sm font-semibold">还没有优化建议</p>
+            {scheduleProblem ? (
+              <p className="max-w-lg text-sm text-secondary-foreground">最近一次定时计算（<span className="font-mono">{firedAt}</span>）没有生成建议：{scheduleProblem}。</p>
+            ) : preparation.isSuccess && preparation.data === null ? (
+              <p className="max-w-lg text-sm text-secondary-foreground">站点还没有配置定时优化，建议只能手动生成。</p>
+            ) : null}
             <p className="max-w-lg text-xs text-muted-foreground">
               建议依据最近一天的冷站用电与电费、最新负荷预测和实时供水、室内温度计算；用电与电费每天零点后结算，某天缺数据时不出电费，改用更早一天。
             </p>
@@ -355,7 +375,10 @@ function Proposal({ recommendation, timeZone, siteId, setpoint, setting, sent, o
 
       <div className="grid items-start gap-[18px] grid-cols-2">
         <Panel aria-label="计算依据">
-          <PanelHeader title="计算依据" caption="生成建议时用到的数据" />
+          <PanelHeader
+            title={<span className="flex items-center gap-1.5">计算依据<InfoTip>标「人工设定」的响应系数由人在优化策略里填写，不是从站点运行数据拟合的</InfoTip></span>}
+            caption="生成建议时用到的数据"
+          />
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 px-5 py-2">
             {([
               ['最近一天冷站用电', `${formatDecimal(baseline.dailyEnergyKWh, 0)} kWh`],
@@ -364,6 +387,8 @@ function Proposal({ recommendation, timeZone, siteId, setpoint, setting, sent, o
               ['室内温度', celsius(baseline.zoneTempC)],
               ['安全范围', `${formatDecimal(supplyRange.minC, 1)}–${celsius(supplyRange.maxC)}`],
               ['舒适范围', `${formatDecimal(comfortRange.minC, 0)}–${formatDecimal(comfortRange.maxC, 0)} °C`],
+              ['供水每升高 1 °C 日用电', `${signed(recommendation.response.energyKWhPerSupplyC, 0)} kWh · 人工设定`],
+              ['供水每升高 1 °C 室内温度', `${signed(recommendation.response.zoneCPerSupplyC, 1)} °C · 人工设定`],
             ] as const).map(([label, value]) => (
               <div key={label} className="col-span-2 grid grid-cols-subgrid border-b border-divider py-2 last:border-b-0">
                 <dt className="text-xs leading-5 text-muted-foreground">{label}</dt>

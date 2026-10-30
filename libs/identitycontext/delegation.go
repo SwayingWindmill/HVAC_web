@@ -3,16 +3,12 @@ package identitycontext
 import (
 	"context"
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"fmt"
+	"math"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/grant"
 )
 
 const DelegationVersion = 1
@@ -92,53 +88,18 @@ func (response InternalPrincipalResponse) Validate() error {
 	return response.Authorization.Validate()
 }
 
+// Delegation grants have never had a size limit; adding one is a behaviour change left out of the libs/grant extraction.
+var delegationFormat = grant.Format{Name: "delegation", MaxEncodedSize: math.MaxInt}
+
 func SignDelegation(signer crypto.Signer, claims DelegationClaims) (string, error) {
-	if signer == nil {
-		return "", errors.New("delegation signer is required")
-	}
 	claims.Version = DelegationVersion
-	payload, err := json.Marshal(claims)
-	if err != nil {
-		return "", fmt.Errorf("marshal delegation claims: %w", err)
-	}
-	digest := sha256.Sum256(payload)
-	signature, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256)
-	if err != nil {
-		return "", fmt.Errorf("sign delegation claims: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+	return grant.Sign(delegationFormat, signer, claims)
 }
 
 func VerifyDelegation(publicKey crypto.PublicKey, token string) (DelegationClaims, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 2 {
-		return DelegationClaims{}, errors.New("delegation grant format is invalid")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	claims, err := grant.Verify[DelegationClaims](delegationFormat, publicKey, token)
 	if err != nil {
-		return DelegationClaims{}, errors.New("delegation payload encoding is invalid")
-	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return DelegationClaims{}, errors.New("delegation signature encoding is invalid")
-	}
-	digest := sha256.Sum256(payload)
-	switch key := publicKey.(type) {
-	case *rsa.PublicKey:
-		err = rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], signature)
-	case *ecdsa.PublicKey:
-		if !ecdsa.VerifyASN1(key, digest[:], signature) {
-			err = errors.New("ecdsa delegation signature is invalid")
-		}
-	default:
-		err = fmt.Errorf("unsupported delegation public key %T", publicKey)
-	}
-	if err != nil {
-		return DelegationClaims{}, errors.New("delegation signature is invalid")
-	}
-	var claims DelegationClaims
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return DelegationClaims{}, errors.New("delegation payload is invalid")
+		return DelegationClaims{}, err
 	}
 	if claims.Version != DelegationVersion {
 		return DelegationClaims{}, errors.New("delegation version is unsupported")

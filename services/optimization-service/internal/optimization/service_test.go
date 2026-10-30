@@ -38,6 +38,9 @@ func (store *memoryEvaluationStore) FailRun(_ context.Context, _ Request, code s
 func (store *memoryEvaluationStore) ListStalePublications(context.Context, time.Time, int) ([]Evaluation, error) {
 	return nil, nil
 }
+func (store *memoryEvaluationStore) LatestPreparation(context.Context, string, string) (PreparationOutcome, error) {
+	return PreparationOutcome{}, ErrPreparationNotFound
+}
 func (store *memoryEvaluationStore) LatestRecommendation(context.Context, string, string) (PublishedRecommendation, error) {
 	if store.recommendation.RunID == "" {
 		return PublishedRecommendation{}, ErrOptimizationNotFound
