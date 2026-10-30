@@ -129,7 +129,7 @@ test('a measure cites the setpoint command it came from, named as the control pa
   const evidence = page.getByRole('dialog').getByRole('link', { name: /CHILLER-01 冷冻水出水设定温度 → 8\.0 °C/ });
   await expect(evidence).toBeVisible();
   await evidence.click();
-  await expect(page).toHaveURL(new RegExp(`/operations/control\?.*inspect=${gateway.commands[0].commandId}`));
+  await expect(page).toHaveURL(new RegExp(`/operations/control\\?.*inspect=${gateway.commands[0].commandId}`));
 });
 
 // Recorded on the local stack from replayed history: Site A's setpoint raised to 8 °C on 2026-09-29.
