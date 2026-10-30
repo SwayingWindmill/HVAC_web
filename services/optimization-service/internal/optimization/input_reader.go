@@ -209,6 +209,10 @@ FORMAT JSONEachRow`, query.TenantID, query.SiteID, clickHouseString(telemetryKey
 }
 
 func (reader *ClickHouseInputReader) query(ctx context.Context, sql string) ([]byte, error) {
+	return reader.queryLimited(ctx, sql, maximumOptimizationInputResponseBytes)
+}
+
+func (reader *ClickHouseInputReader) queryLimited(ctx context.Context, sql string, limit int64) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, reader.baseURL.String(), strings.NewReader(sql))
 	if err != nil {
 		return nil, err
@@ -223,12 +227,12 @@ func (reader *ClickHouseInputReader) query(ctx context.Context, sql string) ([]b
 		return nil, err
 	}
 	defer response.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumOptimizationInputResponseBytes+1))
+	payload, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(payload)) > maximumOptimizationInputResponseBytes {
-		return nil, errors.New("authoritative Optimization input response exceeds 1 MiB")
+	if int64(len(payload)) > limit {
+		return nil, fmt.Errorf("authoritative Optimization input response exceeds %d MiB", limit>>20)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("ClickHouse returned %d: %s", response.StatusCode, strings.TrimSpace(string(payload)))
