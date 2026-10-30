@@ -326,6 +326,30 @@ try {
     throw new Error(`unexpected Cube COP ${JSON.stringify(cop)}`);
   }
 
+  // The Operations Agent's semantic query (#573): several measures of one view, cut to the queried Site.
+  report.assertions.semanticQuery = run(process.execPath, [
+    'scripts/run-isolated-go.mjs',
+    '--module=modules/telemetry',
+    'test', '-count=1', '-run', 'TestCubeAnswersAMultiMeasureSemanticQueryForTheQueriedSite', '-v', './internal/cube/...',
+  ], {
+    env: { ...process.env, ANALYTICS_CUBE_TEST_URL: cubeURL, ANALYTICS_CUBE_TEST_KEY: cubeKey },
+  });
+
+  // Both views see only the caller's Tenant and Site, though neither exposes the Tenant.
+  const otherSite = { siteId: '018f4f00-1000-7000-8000-000000000099', siteIds: ['018f4f00-1000-7000-8000-000000000099'] };
+  const otherTenant = { tenantId: '018f4f00-0100-7000-8000-000000000099' };
+  const denied = await queryCube(cubeToken(otherSite));
+  for (const [view, context] of [['site_energy', otherSite], ['site_energy', otherTenant], ['equipment_energy', otherSite], ['equipment_energy', otherTenant]]) {
+    const leaked = (await queryCube(cubeToken(context), { ...energyQuery({ view }), filters: [] })).data ?? [];
+    if (leaked.length !== 0) throw new Error(`${view} leaked rows outside the caller's scope ${JSON.stringify(context)}`);
+  }
+  for (const context of [otherSite, otherTenant]) {
+    const leaked = (await queryCube(cubeToken(context), { measures: ['site_energy_cost.cost_valid_cny', 'site_energy_cost.unpriced_valid_kwh'], dimensions: ['site_energy_cost.tariff_period'], timezone: 'UTC', limit: 10 })).data ?? [];
+    if (leaked.some((row) => row['site_energy_cost.cost_valid_cny'] !== null || row['site_energy_cost.unpriced_valid_kwh'] !== null)) {
+      throw new Error(`site_energy_cost leaked rows outside the caller's scope ${JSON.stringify(context)}: ${JSON.stringify(leaked)}`);
+    }
+  }
+  if ((denied.data ?? []).length !== 0) throw new Error('Cube row-level policy leaked another Site');
   // site_energy and equipment_energy read whole hours from the hourly rollup and single facts only for
   // an hour the range cuts into (015-energy-hourly-rollup.sql); either way they must equal the facts.
   const factTotals = (from, to, scope = 'SITE') => clickHouse(`SELECT concat(toString(round(sumIf(energy_kwh, quality = 'VALID'), 6)), '/', toString(countIf(quality = 'VALID')), '/', toString(countIf(quality = 'SUSPECT'))) FROM analytics.energy_interval_facts_visible WHERE site_id = '${siteId}' AND accounting_scope = '${scope}' AND energy_type = 'electricity' AND period_end >= parseDateTime64BestEffort('${from}', 3) AND period_end <= parseDateTime64BestEffort('${to}', 3)`);
@@ -361,34 +385,11 @@ try {
   };
   await checkRollup('rollup');
   // A correction replaces its predecessor in the rollup too: the next revision of one Site fact turns it suspect.
+  // It runs last because it changes the 12:00 electricity every earlier check reads as 2 kWh valid.
   clickHouse(`INSERT INTO analytics.energy_interval_facts SELECT * REPLACE (generateUUIDv4() AS fact_id, fact_revision + 1 AS fact_revision, 'SUSPECT' AS quality, energy_kwh + 1 AS energy_kwh, now64(3) AS projected_at) FROM (SELECT * FROM analytics.energy_interval_facts WHERE site_id = '${siteId}' AND accounting_scope = 'SITE' AND energy_type = 'electricity' AND fact_revision = 0 ORDER BY period_end LIMIT 1)`);
   await checkRollup('corrected rollup');
   report.assertions.hourlyRollup = ranges.map(([from, to]) => `${from}..${to}=${factTotals(from, to)}`);
 
-  // The Operations Agent's semantic query (#573): several measures of one view, cut to the queried Site.
-  report.assertions.semanticQuery = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
-    '--module=modules/telemetry',
-    'test', '-count=1', '-run', 'TestCubeAnswersAMultiMeasureSemanticQueryForTheQueriedSite', '-v', './internal/cube/...',
-  ], {
-    env: { ...process.env, ANALYTICS_CUBE_TEST_URL: cubeURL, ANALYTICS_CUBE_TEST_KEY: cubeKey },
-  });
-
-  // Both views see only the caller's Tenant and Site, though neither exposes the Tenant.
-  const otherSite = { siteId: '018f4f00-1000-7000-8000-000000000099', siteIds: ['018f4f00-1000-7000-8000-000000000099'] };
-  const otherTenant = { tenantId: '018f4f00-0100-7000-8000-000000000099' };
-  const denied = await queryCube(cubeToken(otherSite));
-  for (const [view, context] of [['site_energy', otherSite], ['site_energy', otherTenant], ['equipment_energy', otherSite], ['equipment_energy', otherTenant]]) {
-    const leaked = (await queryCube(cubeToken(context), { ...energyQuery({ view }), filters: [] })).data ?? [];
-    if (leaked.length !== 0) throw new Error(`${view} leaked rows outside the caller's scope ${JSON.stringify(context)}`);
-  }
-  for (const context of [otherSite, otherTenant]) {
-    const leaked = (await queryCube(cubeToken(context), { measures: ['site_energy_cost.cost_valid_cny', 'site_energy_cost.unpriced_valid_kwh'], dimensions: ['site_energy_cost.tariff_period'], timezone: 'UTC', limit: 10 })).data ?? [];
-    if (leaked.some((row) => row['site_energy_cost.cost_valid_cny'] !== null || row['site_energy_cost.unpriced_valid_kwh'] !== null)) {
-      throw new Error(`site_energy_cost leaked rows outside the caller's scope ${JSON.stringify(context)}: ${JSON.stringify(leaked)}`);
-    }
-  }
-  if ((denied.data ?? []).length !== 0) throw new Error('Cube row-level policy leaked another Site');
   report.assertions.energyQuery = rows;
   report.assertions.deniedSiteRows = (denied.data ?? []).length;
   report.status = 'passed';
