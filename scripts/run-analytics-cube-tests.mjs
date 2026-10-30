@@ -336,6 +336,9 @@ try {
       timeDimensions: [{ dimension: `${view}.period_end`, dateRange: [from, to] }],
       timezone: 'UTC',
       limit: 1,
+      // Cube serves a repeated query from its result cache until the refresh key ticks; the
+      // corrected stage repeats the first stage's queries right after an insert.
+      renewQuery: true,
     })).data ?? [];
     return `${Math.round(Number(row[`${view}.energy_valid_kwh`] ?? 0) * 1e6) / 1e6}/${Number(row[`${view}.valid_count`])}/${Number(row[`${view}.suspect_count`])}`;
   };
