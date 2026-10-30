@@ -22,11 +22,14 @@ import (
 )
 
 type Config struct {
-	Issuer          string
-	ClientID        string
-	RedirectURI     string
-	DefaultTenantID string
-	Now             func() time.Time
+	Issuer      string
+	ClientID    string
+	RedirectURI string
+	// PostLogoutRedirectURI is the one address logout may return to. Empty means the
+	// callback's origin + "/?logged_out=1", which is what the Gateway sends.
+	PostLogoutRedirectURI string
+	DefaultTenantID       string
+	Now                   func() time.Time
 }
 
 type Provider struct {
@@ -34,6 +37,7 @@ type Provider struct {
 	issuer          string
 	clientID        string
 	redirectURI     string
+	postLogoutURI   string
 	defaultTenantID string
 	now             func() time.Time
 	activeKey       *rsa.PrivateKey
@@ -104,6 +108,14 @@ func New(config Config) (*Provider, error) {
 	if now == nil {
 		now = time.Now
 	}
+	postLogoutURI := strings.TrimSpace(config.PostLogoutRedirectURI)
+	if postLogoutURI == "" {
+		callback, err := url.Parse(config.RedirectURI)
+		if err != nil || callback.Scheme == "" || callback.Host == "" {
+			return nil, fmt.Errorf("OIDC fixture redirect URI must be absolute")
+		}
+		postLogoutURI = callback.Scheme + "://" + callback.Host + "/?logged_out=1"
+	}
 	defaultTenantID := strings.TrimSpace(config.DefaultTenantID)
 	if defaultTenantID == "" {
 		defaultTenantID = "018f3d00-0000-7000-8000-000000000001"
@@ -112,6 +124,7 @@ func New(config Config) (*Provider, error) {
 		issuer:          strings.TrimRight(config.Issuer, "/"),
 		clientID:        config.ClientID,
 		redirectURI:     config.RedirectURI,
+		postLogoutURI:   postLogoutURI,
 		defaultTenantID: defaultTenantID,
 		now:             now,
 		activeKey:       active,
@@ -491,18 +504,13 @@ func (provider *Provider) endSession(writer http.ResponseWriter, request *http.R
 		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "logout client is invalid")
 		return
 	}
-	redirectURI := query.Get("post_logout_redirect_uri")
-	redirect, err := url.Parse(redirectURI)
-	if err != nil || redirect.Scheme == "" || redirect.Host == "" {
-		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "post logout redirect is invalid")
-		return
-	}
-	callback, err := url.Parse(provider.redirectURI)
-	if err != nil || callback.Scheme != redirect.Scheme || callback.Host != redirect.Host {
+	// Like identity-service: logout returns only to the registered address, never to
+	// whatever the request names.
+	if query.Get("post_logout_redirect_uri") != provider.postLogoutURI {
 		writeOAuthError(writer, http.StatusBadRequest, "invalid_request", "post logout redirect is not registered")
 		return
 	}
-	http.Redirect(writer, request, redirect.String(), http.StatusFound)
+	http.Redirect(writer, request, provider.postLogoutURI, http.StatusFound)
 }
 
 func (provider *Provider) signJWT(claims tokenClaims, rogue, unknownKeyID, modern bool) (string, error) {
