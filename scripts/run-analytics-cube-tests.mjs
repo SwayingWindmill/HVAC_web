@@ -169,11 +169,11 @@ async function cubeRefusal(token, query) {
   return decoded.error ?? null;
 }
 
-async function queryCube(token, query = energyQuery()) {
+async function queryCube(token, query = energyQuery(), cache = undefined) {
   const response = await fetch(`${cubeURL}/cubejs-api/v1/load`, {
     method: 'POST',
     headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, cache }),
   });
   const text = await response.text();
   let decoded;
@@ -350,6 +350,46 @@ try {
     }
   }
   if ((denied.data ?? []).length !== 0) throw new Error('Cube row-level policy leaked another Site');
+  // site_energy and equipment_energy read whole hours from the hourly rollup and single facts only for
+  // an hour the range cuts into (015-energy-hourly-rollup.sql); either way they must equal the facts.
+  const factTotals = (from, to, scope = 'SITE') => clickHouse(`SELECT concat(toString(round(sumIf(energy_kwh, quality = 'VALID'), 6)), '/', toString(countIf(quality = 'VALID')), '/', toString(countIf(quality = 'SUSPECT'))) FROM analytics.energy_interval_facts_visible WHERE site_id = '${siteId}' AND accounting_scope = '${scope}' AND energy_type = 'electricity' AND period_end >= parseDateTime64BestEffort('${from}', 3) AND period_end <= parseDateTime64BestEffort('${to}', 3)`);
+  const cubeTotals = async (from, to, view = 'site_energy') => {
+    const [row = {}] = (await queryCube(cubeToken(), {
+      measures: [`${view}.energy_valid_kwh`, `${view}.valid_count`, `${view}.suspect_count`],
+      filters: [{ member: `${view}.site_id`, operator: 'equals', values: [siteId] }, { member: `${view}.energy_type`, operator: 'equals', values: ['electricity'] }],
+      timeDimensions: [{ dimension: `${view}.period_end`, dateRange: [from, to] }],
+      timezone: 'UTC',
+      limit: 1,
+    // Cube serves a repeated query from its result cache while the refresh key is unchanged (the
+    // default key ticks every 10 s), and renewQuery only re-reads that key. The corrected stage repeats
+    // the first stage's queries right after an insert, so it must skip the cache altogether.
+    }, 'no-cache')).data ?? [];
+    return `${Math.round(Number(row[`${view}.energy_valid_kwh`] ?? 0) * 1e6) / 1e6}/${Number(row[`${view}.valid_count`])}/${Number(row[`${view}.suspect_count`])}`;
+  };
+  const ranges = [
+    ['2026-07-29T12:00:00.000Z', '2026-07-29T13:59:59.999Z'],
+    ['2026-07-29T12:30:00.000Z', '2026-07-29T13:29:59.999Z'],
+    ['2026-07-29T12:58:00.000Z', '2026-07-29T13:05:00.000Z'],
+  ];
+  const checkRollup = async (stage) => {
+    for (const [from, to] of ranges) {
+      for (const [view, scope] of [['site_energy', 'SITE'], ['equipment_energy', 'BRANCH']]) {
+        const expected = factTotals(from, to, scope);
+        const actual = await cubeTotals(from, to, view);
+        if (actual !== expected) {
+          const hourly = clickHouse(`SELECT concat(toString(round(sumIf(energy_kwh, quality = 'VALID'), 6)), '/', toString(sumIf(interval_count, quality = 'VALID')), '/', toString(sumIf(interval_count, quality = 'SUSPECT'))) FROM analytics.energy_hourly WHERE site_id = '${siteId}' AND accounting_scope = '${scope}' AND energy_type = 'electricity' AND hour >= toStartOfHour(parseDateTime64BestEffort('${from}', 3)) AND hour <= parseDateTime64BestEffort('${to}', 3)`);
+          throw new Error(`${stage}: ${view} ${from}..${to} read ${actual}, facts hold ${expected}, the rollup's touched hours hold ${hourly}`);
+        }
+      }
+    }
+  };
+  await checkRollup('rollup');
+  // A correction replaces its predecessor in the rollup too: the next revision of one Site fact turns it suspect.
+  // It runs last because it changes the 12:00 electricity every earlier check reads as 2 kWh valid.
+  clickHouse(`INSERT INTO analytics.energy_interval_facts SELECT * REPLACE (generateUUIDv4() AS fact_id, fact_revision + 1 AS fact_revision, 'SUSPECT' AS quality, energy_kwh + 1 AS energy_kwh, now64(3) AS projected_at) FROM (SELECT * FROM analytics.energy_interval_facts WHERE site_id = '${siteId}' AND accounting_scope = 'SITE' AND energy_type = 'electricity' AND fact_revision = 0 ORDER BY period_end LIMIT 1)`);
+  await checkRollup('corrected rollup');
+  report.assertions.hourlyRollup = ranges.map(([from, to]) => `${from}..${to}=${factTotals(from, to)}`);
+
   report.assertions.energyQuery = rows;
   report.assertions.deniedSiteRows = (denied.data ?? []).length;
   report.status = 'passed';

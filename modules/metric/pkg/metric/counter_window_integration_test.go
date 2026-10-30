@@ -69,3 +69,71 @@ FROM numbers(151)`, tenant, site, device, point)
 		t.Fatalf("two half hours add to %v kWh, want the hour's 60", halves)
 	}
 }
+
+// A Point revision or a unit change means the readings before and after it count different
+// things, so the step across it is neither energy nor a counter restart. Energy's
+// counter_deltas marks it REVISION_BOUNDARY or UNIT_BOUNDARY; a Metric's counter delta has to
+// skip it the same way, or a reconfigured meter's jump lands in that hour's consumption.
+func TestCounterDeltaSkipsTheStepAcrossAPointRevisionOrUnit(t *testing.T) {
+	baseURL := os.Getenv("METRIC_CLICKHOUSE_TEST_URL")
+	if baseURL == "" {
+		t.Skip("METRIC_CLICKHOUSE_TEST_URL is not set")
+	}
+	const tenant, site, device, point = "018f5a00-0000-7000-8000-000000000002", "018f5a00-1000-7000-8000-000000000002", "018f5a00-2000-7000-8000-000000000002", "018f5a00-3000-7000-8000-000000000002"
+	// One reading a minute from 09:00, one kWh a minute. Revision 1 reads 0–30 kWh until 09:30;
+	// revision 2 restarts the register at 1000 from 09:31; at 10:01 the same revision switches to
+	// MWh and reads from 0 again.
+	insert := fmt.Sprintf(`INSERT INTO telemetry_history.observations
+ (observation_id, tenant_id, site_id, device_id, point_id, point_revision, unit, source_event_id, sampled_at, received_at, acceptance_status, quality, value_number)
+SELECT generateUUIDv4(), toUUID('%[1]s'), toUUID('%[2]s'), toUUID('%[3]s'), toUUID('%[4]s'),
+ if(number <= 30, 1, 2), if(number <= 60, 'kWh', 'MWh'), generateUUIDv4(),
+ toDateTime64('2026-09-14 09:00:00', 3, 'UTC') + number * 60, toDateTime64('2026-09-14 09:00:00', 3, 'UTC') + number * 60,
+ 'ACCEPTED', 'GOOD', multiIf(number <= 30, toFloat64(number), number <= 60, toFloat64(1000 + number - 31), toFloat64(number) - 61)
+FROM numbers(91)`, tenant, site, device, point)
+	request, err := http.NewRequest(http.MethodPost, baseURL, strings.NewReader(insert))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SetBasicAuth(os.Getenv("METRIC_CLICKHOUSE_TEST_ADMIN_USERNAME"), "")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("insert readings: %d %s", response.StatusCode, body)
+	}
+
+	store, err := NewClickHouseStore(baseURL, "metric_engine_runtime", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No decrease policy: a fall that is really a boundary must not reach counterDelta as a drop.
+	binding := Binding{TenantID: tenant, SiteID: site, Aggregation: "LAST", CalculationMethod: "DELTA", SourceDefinition: map[string]any{}}
+	delta := func(start, end time.Time) float64 {
+		t.Helper()
+		input, err := store.ReadPoint(context.Background(), binding, point, start, end)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if input.Drops != 0 {
+			t.Fatalf("%s–%s reports %d drops, want the boundaries skipped", start.Format("15:04"), end.Format("15:04"), input.Drops)
+		}
+		value, err := counterDelta(binding, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	nine := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	// 09:10–09:30 is 21 steps of revision 1, 09:32–10:00 is 29 of revision 2 in kWh and
+	// 10:02–10:30 is 29 in MWh; the steps into 09:31 and 10:01 are boundaries.
+	if whole := delta(nine.Add(10*time.Minute), nine.Add(91*time.Minute)); math.Abs(whole-79) > 1e-9 {
+		t.Fatalf("09:10–10:31 delta = %v, want 79 without the jump to 1000 or the fall to 0", whole)
+	}
+	// The anchor before the window is from revision 1, so the step into the window is a boundary.
+	if second := delta(nine.Add(31*time.Minute), nine.Add(61*time.Minute)); math.Abs(second-29) > 1e-9 {
+		t.Fatalf("09:31–10:01 delta = %v, want the 29 steps inside revision 2", second)
+	}
+}

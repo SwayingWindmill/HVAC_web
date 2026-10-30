@@ -119,9 +119,8 @@
 小的后续：
 
 - 改 FDD 低温差的门槛或时间窗口时，发布新版本（不要改旧版本）：`node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <时刻>]`。
-- 指标计算里的电量差值不会在点位改版或换单位时断开，能耗计算（`counter_deltas_from`）会断开。第一次原地改点位配置之前要补上。
-- 能耗序列算电费时，每读一条用电记录约占 0.5 KB ClickHouse 内存。实时电表每块每天约 24,000 条，一个站点一个月约 150 MiB，一年会超过 1.5 GiB 的上限。实时数据上要查长时间范围之前，天和月的粒度要改成读按小时汇总的表。
-- 每次能耗差值查询都会把相关点位的整个累计读数历史扫一遍（每个窗口约 700 万行，约 0.5 秒，随历史增长）；`has(points, point_id)` 用不上 `observations` 的排序键（它把 `point_id` 包在 `ifNull` 里）。
+- 能耗序列算电费时，每读一条用电记录约占 0.5 KB ClickHouse 内存。实时电表每块每天约 24,000 条，一个站点一个月约 150 MiB，一年会超过 1.5 GiB 的上限。用电量已经整小时读 `analytics.energy_hourly`（015），电费还读单条记录：电价时段按分钟切换，不能直接用这个汇总，要查长时间范围的电费之前得另想办法（例如按电价时段汇总）。
+- **生产要先手工应用 015 再部署能耗小时汇总的那次合并**：步骤（停 `telemetry-worker`、应用、回填、核对）见 `docs/operations/energy-hourly-rollup.md`。
 - 设备详情侧栏和工单侧栏还要按新设计打磨。
 
 ## 本地环境的偏差
@@ -129,6 +128,7 @@
 当前本地数据库和种子数据不一致的地方。`npm run local:reset` 再 `local:up` 会把它们全部清掉。
 
 - 本地库里还有 `energy_cost` 指标的绑定和定时任务（#575 已经不用这个指标了）：停用对应的 `schedule_definitions` 行，或者重置。
+- `infra/telemetry/clickhouse/init/015-energy-hourly-rollup.sql` 同样只在空数据卷上执行：已有的本地 ClickHouse 按 `docs/operations/energy-hourly-rollup.md` 应用并回填，或者重置。
 - `infra/telemetry/clickhouse/init/014-tariff-price-windows.sql` 只在空数据卷上执行：已有的 ClickHouse 要手动 `docker exec -i <clickhouse> clickhouse-client --multiquery < …`，再跑一次基础身份初始化，让 `energy-projection` 角色拿到 `tariff.read`。
 - 两个模拟站点都有重放的历史：电表（含分表）2026-08-25 到 10-06，气象站的室外温度 2026-08-25 到 10-06（站点时间）。实时历史从 2026-10-12 22:06 开始。A 站点 09-29 09:00 把供水温度设定提高到 8 ℃；B 站点冷冻水泵 09-08 09:00 起从 50 Hz 降到 45 Hz。
 - 08-25 到 09-14 这段只重算了 B 站点的 `hourly_energy`、`hourly_cooling` 和 CHWP-01 的 `device_hourly_energy`，A 站点这段的小时和日指标没有。
@@ -136,7 +136,7 @@
 - 2026 年 9 月的报告快照是手工排队生成的，只覆盖 30 天里的 16 天（来自重放的历史）。
 - 2026-10-13 删掉了两段重放交界处重复写入的 12 条电表读数（导入批次 `01a03480-0400-7000-8000-00000000000{1,2}`）；9-15 00:00（站点时间）那个小时的小时指标是在删除之前算的，还包含这两条读数。
 - 2026-10-12 修复分页问题之前算出的用电量缺了一些时段。要补：停 `telemetry-worker`，清空 `analytics.energy_projection_checkpoints`，再启动（运行中清空没用，正在跑的那批会把进度写回去）；已有事实的时段会跳过。
-- 几处是手工改的，重置后由初始化脚本恢复：`analytics.energy_interval_facts_visible`（按 `009-energy-fact-rebuild-v1.sql`）、`telemetry_history.counter_deltas_from` 和 `counter_deltas`（按 `004-counter-semantics.sql`）；ClickHouse 用户 `report_service_reader` 已经不用了。
+- 几处是手工改的，重置后由初始化脚本恢复：`analytics.energy_interval_facts_visible`（按 `009-energy-fact-rebuild-v1.sql`）、`telemetry_history.counter_deltas_from`（按 `015-energy-hourly-rollup.sql`）和 `counter_deltas`（按 `004-counter-semantics.sql`）；ClickHouse 用户 `report_service_reader` 已经不用了。
 - 没有模拟器也能造几周的历史：`node scripts/local-history-replay.mjs --from … --to … [--commands <站点代码>=<文件>] [--metrics-only | --weather-only]`，经遥测的历史导入写入电表和气象站读数，再重算小时和日指标。三周约 10 分钟一个站点；只重放实时历史开始之前的时间段（累计读数会从头开始）。
 
 ## 已知的坑
