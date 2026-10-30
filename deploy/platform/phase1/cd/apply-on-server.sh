@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run on the production host. Swap new files into the local images, then restart.
-# Images are never pulled. Each previous image is kept as <name>:before-<timestamp>.
+# Images are never pulled. Each previous image is kept as <name>:before-<timestamp>; new ones are
+# built FROM <name>:deploy-base (see stable_base), which prune-rollback-images.sh never removes.
 set -euo pipefail
 
 release="${1:-}"
@@ -71,6 +72,29 @@ docker_build() {
   DOCKER_BUILDKIT=1 docker build --pull=false -t "$tag" "$context"
 }
 
+# Candidates are built FROM a stable <name>:deploy-base, never FROM the running image, so the
+# swapped files do not pile up as new layers on every deploy. Each candidate records its base's
+# image ID in the label below. A running image without that label (built before this, or by hand)
+# or whose recorded base is gone becomes the base once. Prints "<base tag><TAB><base image id>".
+base_label=org.hvac.deploy-base
+stable_base() {
+  local image="$1"
+  local base="${image%:*}:deploy-base"
+  local recorded=""
+  recorded="$(docker image inspect --format "{{index .Config.Labels \"${base_label}\"}}" "$image" </dev/null 2>/dev/null || true)"
+  if [[ "$recorded" == "<no value>" ]]; then
+    recorded=""
+  fi
+  if [[ -n "$recorded" ]] && docker image inspect "$recorded" >/dev/null 2>&1 </dev/null; then
+    docker tag "$recorded" "$base" </dev/null
+  else
+    echo "stable base: ${base} is the running ${image} from now on" >&2
+    docker tag "$image" "$base" </dev/null
+    recorded="$(docker image inspect --format '{{.Id}}' "$base" </dev/null)"
+  fi
+  printf '%s\t%s\n' "$base" "$recorded"
+}
+
 declare -a planned_services=()
 declare -a planned_images=()
 declare -a planned_kinds=()
@@ -124,6 +148,17 @@ for index in "${!planned_services[@]}"; do
   kind="${planned_kinds[$index]}"
   candidate="${image%:*}:candidate-${stamp}"
   candidates+=("$candidate")
+  from="$image"
+  base_id=""
+  if [[ "$kind" != static ]]; then
+    stable="$(stable_base "$image")"
+    from="${stable%%$'\t'*}"
+    base_id="${stable#*$'\t'}"
+    if [[ -z "$base_id" || "$base_id" == "$stable" ]]; then
+      echo "error: could not resolve a stable base image for $service." >&2
+      exit 1
+    fi
+  fi
   context="$(mktemp -d)"
   case "$kind" in
     go)
@@ -135,7 +170,8 @@ for index in "${!planned_services[@]}"; do
       cp "$release/bins/healthcheck" "$context/healthcheck"
       chmod 755 "$context/service" "$context/healthcheck"
       cat > "$context/Dockerfile" <<EOF
-FROM ${image}
+FROM ${from}
+LABEL ${base_label}=${base_id}
 COPY --chown=65532:65532 service /service
 COPY --chown=65532:65532 healthcheck /healthcheck
 EOF
@@ -149,7 +185,8 @@ EOF
       cp -a "$release/web/dist/." "$context/dist/"
       cp "$release/web/nginx.conf" "$context/nginx.conf"
       cat > "$context/Dockerfile" <<EOF
-FROM ${image}
+FROM ${from}
+LABEL ${base_label}=${base_id}
 RUN rm -rf /usr/share/nginx/html && mkdir -p /usr/share/nginx/html
 COPY dist/ /usr/share/nginx/html/
 COPY nginx.conf /etc/nginx/conf.d/default.conf
@@ -171,7 +208,8 @@ EOF
       cp "$release/agent/package-lock.json" "$context/package-lock.json"
       cp -a "$release/agent/dist/." "$context/dist/"
       cat > "$context/Dockerfile" <<EOF
-FROM ${image}
+FROM ${from}
+LABEL ${base_label}=${base_id}
 USER root
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -193,15 +231,15 @@ EOF
         echo "error: release is missing the $service binary." >&2
         exit 1
       fi
-      base="$(resolve_image alertmanager prom/alertmanager:v0.27.0)"
-      if [[ -z "$base" ]]; then
+      from="$(resolve_image alertmanager prom/alertmanager:v0.27.0)"
+      if [[ -z "$from" ]]; then
         echo "error: $service is built FROM the local alertmanager image, which is not on this host." >&2
         exit 1
       fi
       cp "$release/bins/$service/service" "$context/service"
       chmod 755 "$context/service"
       cat > "$context/Dockerfile" <<EOF
-FROM ${base}
+FROM ${from}
 COPY --chown=65532:65532 service /wecom-alert-adapter
 USER 65532:65532
 ENTRYPOINT ["/wecom-alert-adapter"]
@@ -215,7 +253,8 @@ EOF
       mkdir -p "$context/opt"
       cp -a "$release/migrator/opt/." "$context/opt/"
       cat > "$context/Dockerfile" <<EOF
-FROM ${image}
+FROM ${from}
+LABEL ${base_label}=${base_id}
 COPY opt/hvac /opt/hvac
 RUN chmod 0555 /opt/hvac/migrations/run-phase1-migrations.sh /opt/hvac/migrations/verify-phase1-schema.sh
 EOF
@@ -225,7 +264,7 @@ EOF
       exit 1
       ;;
   esac
-  echo "building $candidate from $image"
+  echo "building $candidate from $from"
   if ! docker_build "$candidate" "$context"; then
     rm -rf "$context"
     exit 1

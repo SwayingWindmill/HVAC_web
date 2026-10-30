@@ -47,6 +47,7 @@ if [ "$1" = images ]; then
   printf '%s\t%s\n' hvac/energy-api before-20261027T000000Z
   printf '%s\t%s\n' hvac/energy-api before-20261029T000000Z
   printf '%s\t%s\n' hvac/energy-api 0.1.0-dev
+  printf '%s\t%s\n' hvac/energy-api deploy-base
   exit 0
 fi
 exit 0
@@ -72,8 +73,204 @@ exit 0
 	if strings.Contains(text, "image rm hvac/energy-api:0.1.0-dev") || strings.Contains(text, "image rm hvac/energy-api:before-20261029T000000Z") {
 		t.Fatalf("running or newest tag was removed:\n%s", text)
 	}
-	if !strings.Contains(text, "image prune -f") || !strings.Contains(text, "builder prune -f --filter until=24h") {
+	if strings.Contains(text, "image rm hvac/energy-api:deploy-base") {
+		t.Fatalf("the stable deploy base was removed:\n%s", text)
+	}
+	if !strings.Contains(text, "image prune -f") || !strings.Contains(text, "builder prune -f --filter until=2h") {
 		t.Fatalf("dangling image or build cache prune missing:\n%s", text)
+	}
+}
+
+// fakeImageStore is a docker stand-in that keeps tags, parents, labels and layer counts on disk,
+// enough for apply-on-server.sh to build candidates and retag them.
+func fakeImageStore(t *testing.T, bin string) string {
+	t.Helper()
+	store := t.TempDir()
+	writeExe(t, bin, "docker", `#!/usr/bin/env bash
+set -euo pipefail
+s="$DOCKER_STORE"
+mkdir -p "$s/tags" "$s/images"
+printf '%s\n' "$*" >> "$s/calls.log"
+key() { printf '%s' "$1" | tr '/:' '__'; }
+resolve() {
+  if [[ -d "$s/images/$1" ]]; then printf '%s\n' "$1"; return 0; fi
+  if [[ -f "$s/tags/$(key "$1")" ]]; then cat "$s/tags/$(key "$1")"; return 0; fi
+  return 1
+}
+case "$1" in
+  ps) exit 0 ;;
+  tag) id="$(resolve "$2")"; printf '%s\n' "$id" > "$s/tags/$(key "$3")" ;;
+  image)
+    case "$2" in
+      rm) rm -f "$s/tags/$(key "$3")" ;;
+      prune) exit 0 ;;
+      inspect)
+        if [[ "$3" == --format ]]; then
+          id="$(resolve "$5")" || exit 1
+          case "$4" in
+            *Labels*) cat "$s/images/$id/label" 2>/dev/null || printf '<no value>\n' ;;
+            *.Id*) printf '%s\n' "$id" ;;
+          esac
+        else
+          resolve "$3" >/dev/null || exit 1
+        fi ;;
+    esac ;;
+  build)
+    tag="$4"; ctx="$5"
+    from="$(sed -n 's/^FROM //p' "$ctx/Dockerfile")"
+    parent="$(resolve "$from")"
+    id="sha256:$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+    mkdir -p "$s/images/$id"
+    echo $(( $(cat "$s/images/$parent/layers") + 1 )) > "$s/images/$id/layers"
+    sed -n 's/^LABEL org.hvac.deploy-base=//p' "$ctx/Dockerfile" > "$s/images/$id/label"
+    [[ -s "$s/images/$id/label" ]] || rm "$s/images/$id/label"
+    printf '%s\n' "$id" > "$s/tags/$(key "$tag")"
+    printf 'build %s FROM %s\n' "$tag" "$from" >> "$s/builds.log" ;;
+esac
+`)
+	return store
+}
+
+func seedImage(t *testing.T, store, tag string, layers int, label string) string {
+	t.Helper()
+	id := "sha256:seed" + strings.NewReplacer("/", "", ":", "", ".", "").Replace(tag)
+	dir := filepath.Join(store, "images", id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "layers"), []byte(strconv.Itoa(layers)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if label != "" {
+		if err := os.WriteFile(filepath.Join(dir, "label"), []byte(label+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(store, "tags"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	key := strings.NewReplacer("/", "_", ":", "_").Replace(tag)
+	if err := os.WriteFile(filepath.Join(store, "tags", key), []byte(id+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func imageOf(t *testing.T, store, tag string) (id string, layers int, label string) {
+	t.Helper()
+	key := strings.NewReplacer("/", "_", ":", "_").Replace(tag)
+	id = strings.TrimSpace(string(mustRead(t, filepath.Join(store, "tags", key))))
+	layers, err := strconv.Atoi(strings.TrimSpace(string(mustRead(t, filepath.Join(store, "images", id, "layers")))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body, err := os.ReadFile(filepath.Join(store, "images", id, "label")); err == nil {
+		label = strings.TrimSpace(string(body))
+	}
+	return id, layers, label
+}
+
+// applyRelease stages a one-service release whose helpers are stubs and runs apply-on-server.sh.
+func applyRelease(t *testing.T, bin, store, platform string, run int) string {
+	t.Helper()
+	release := t.TempDir()
+	for _, dir := range []string{"bins/energy-api", "src/deploy/platform/phase1/cd"} {
+		if err := os.MkdirAll(filepath.Join(release, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		"REVISION":                strings.Repeat("a", 40) + "\n",
+		"services.tsv":            "energy-api\thvac/energy-api:0.1.0-dev\tgo\trequired\t./cmd/energy-api\n",
+		"bins/healthcheck":        "hc",
+		"bins/energy-api/service": "svc" + strconv.Itoa(run),
+		"src/README":              "tree",
+		// apply-on-server.sh runs the release's observability-config.sh check before unpacking and apply after smoke.
+		"src/deploy/platform/phase1/cd/observability-config.sh": "#!/bin/sh\nexit 0\n",
+		"rollback.sh":              "#!/bin/sh\nexit 0\n",
+		"smoke-release.sh":         "#!/bin/sh\nexit 0\n",
+		"prune-rollback-images.sh": "#!/bin/sh\nexit 0\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(release, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := exec.Command("tar", "-C", filepath.Join(release, "src"), "-cf", filepath.Join(release, "source.tar"), "README", "deploy").CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v\n%s", err, out)
+	}
+	cmd := exec.Command("bash", "apply-on-server.sh", release)
+	cmd.Env = commandEnv(bin, "DOCKER_STORE="+store, "HVAC_PLATFORM_DIR="+platform, "HVAC_DEPLOY_SCRIPT="+writeExe(t, bin, "restart", "#!/bin/sh\nexit 0\n"), "FAKE_STAMP=2026102"+strconv.Itoa(run)+"T000000Z")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("apply run %d: %v\n%s", run, err, output)
+	}
+	return string(output)
+}
+
+func applyFixture(t *testing.T) (bin, store, platform string) {
+	bin = t.TempDir()
+	store = fakeImageStore(t, bin)
+	writeExe(t, bin, "sudo", "#!/bin/sh\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n")
+	writeExe(t, bin, "date", "#!/bin/sh\nprintf '%s\\n' \"$FAKE_STAMP\"\n")
+	return bin, store, t.TempDir()
+}
+
+func TestApplyBuildsEveryDeployFromAStableBase(t *testing.T) {
+	bin, store, platform := applyFixture(t)
+	running := seedImage(t, store, "hvac/energy-api:0.1.0-dev", 12, "")
+
+	output := applyRelease(t, bin, store, platform, 1)
+	if !strings.Contains(output, "stable base: hvac/energy-api:deploy-base is the running hvac/energy-api:0.1.0-dev") {
+		t.Fatalf("first deploy did not adopt the running image as the base:\n%s", output)
+	}
+	baseID, baseLayers, _ := imageOf(t, store, "hvac/energy-api:deploy-base")
+	if baseID != running || baseLayers != 12 {
+		t.Fatalf("deploy-base = %s (%d layers), want the running %s", baseID, baseLayers, running)
+	}
+	for run := 2; run <= 4; run++ {
+		applyRelease(t, bin, store, platform, run)
+		_, layers, label := imageOf(t, store, "hvac/energy-api:0.1.0-dev")
+		if layers != 13 || label != running {
+			t.Fatalf("deploy %d: image has %d layers (label %q); want 13 on base %s", run, layers, label, running)
+		}
+		if id, _, _ := imageOf(t, store, "hvac/energy-api:deploy-base"); id != running {
+			t.Fatalf("deploy %d moved deploy-base to %s", run, id)
+		}
+		// The previous image stays reachable for rollback.
+		_, prevLayers, _ := imageOf(t, store, "hvac/energy-api:before-2026102"+strconv.Itoa(run)+"T000000Z")
+		if prevLayers != 13 {
+			t.Fatalf("deploy %d: before tag has %d layers, want the previous deploy's 13", run, prevLayers)
+		}
+	}
+	builds := string(mustRead(t, filepath.Join(store, "builds.log")))
+	if strings.Contains(builds, "FROM hvac/energy-api:0.1.0-dev") || strings.Count(builds, "FROM hvac/energy-api:deploy-base") != 4 {
+		t.Fatalf("candidates must be built FROM deploy-base only:\n%s", builds)
+	}
+}
+
+func TestApplyRecoversTheBaseFromTheImageLabel(t *testing.T) {
+	bin, store, platform := applyFixture(t)
+	original := seedImage(t, store, "hvac/energy-api:original", 3, "")
+	seedImage(t, store, "hvac/energy-api:0.1.0-dev", 4, original)
+
+	output := applyRelease(t, bin, store, platform, 1)
+	if strings.Contains(output, "stable base:") {
+		t.Fatalf("a labelled image must not become the base:\n%s", output)
+	}
+	if id, _, _ := imageOf(t, store, "hvac/energy-api:deploy-base"); id != original {
+		t.Fatalf("deploy-base = %s, want the labelled %s", id, original)
+	}
+	if _, layers, label := imageOf(t, store, "hvac/energy-api:0.1.0-dev"); layers != 4 || label != original {
+		t.Fatalf("image has %d layers (label %q), want 4 on %s", layers, label, original)
+	}
+
+	// A label naming an image that no longer exists falls back to the running image, once.
+	bin, store, platform = applyFixture(t)
+	running := seedImage(t, store, "hvac/energy-api:0.1.0-dev", 4, "sha256:gone")
+	output = applyRelease(t, bin, store, platform, 1)
+	if id, _, _ := imageOf(t, store, "hvac/energy-api:deploy-base"); id != running || !strings.Contains(output, "stable base:") {
+		t.Fatalf("deploy-base = %s, want the running %s\n%s", id, running, output)
 	}
 }
 

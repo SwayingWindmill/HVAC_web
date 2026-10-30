@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # After a successful deploy, keep the newest N before-<stamp> sets and drop dangling images
-# plus build cache older than a day. Never removes a tag that is still the running image name.
+# plus build cache older than two hours. Never removes a tag that is still the running image name,
+# nor a <name>:deploy-base tag (the stable base every deploy builds FROM).
+# Rollback only retags kept images; it never needs the build cache.
 set -euo pipefail
 
 keep="${1:-2}"
@@ -25,5 +27,5 @@ else
 fi
 
 docker image prune -f >/dev/null
-docker builder prune -f --filter until=24h >/dev/null || echo "build cache prune skipped"
+docker builder prune -f --filter until=2h >/dev/null || echo "build cache prune skipped"
 echo "pruned rollback images down to ${keep} set(s)"
