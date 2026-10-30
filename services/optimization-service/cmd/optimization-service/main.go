@@ -64,6 +64,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// The Chiller COP Model runs as a shadow solver: it records what it would recommend beside
+	// every published run and never publishes. OPTIMIZATION_SHADOW_SOLVER=OFF turns it off.
+	switch shadow := envOrDefault("OPTIMIZATION_SHADOW_SOLVER", optimization.ChillerCOPSolverName); shadow {
+	case optimization.ChillerCOPSolverName:
+		service.WithShadow(optimization.COPModelSolver{History: inputs}, 30*time.Second, log.Printf)
+	case "OFF":
+	default:
+		log.Fatalf("OPTIMIZATION_SHADOW_SOLVER must be %s or OFF, not %q", optimization.ChillerCOPSolverName, shadow)
+	}
 	// Only the Gateway may call Optimization, over mutual TLS with a context it signed (#612).
 	serverTLS, err := workloadtls.NewServerTLSConfig(workloadtls.ServerConfig{
 		CertificateFiles: workloadtls.CertificateFiles{CertificatePath: requiredEnv("OPTIMIZATION_TLS_CERT"), PrivateKeyPath: requiredEnv("OPTIMIZATION_TLS_KEY")},

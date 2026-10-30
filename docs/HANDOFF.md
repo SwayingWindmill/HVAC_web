@@ -117,6 +117,7 @@
 
 小的后续：
 
+- 冷机 COP 模型是影子求解器（规格 `docs/specs/chiller-cop-model.md`）：每次优化运行后写一行 `quality = 'SHADOW'` 的评估，不发布。它跟着优化运行走：松雅轩还没有优化调度和策略，两个演示站点的优化调度停着，所以服务器上现在只有手动生成建议时才会写影子记录（演示站点没有冷机历史，结果是 `NO_USABLE_MODEL`）。要不要换成发布的求解器，等松雅轩接入优化、积累一段影子记录后再定。
 - 改 FDD 低温差的门槛或时间窗口时，发布新版本（不要改旧版本）：`node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <时刻>]`。
 - 指标计算里的电量差值不会在点位改版或换单位时断开，能耗计算（`counter_deltas_from`）会断开。第一次原地改点位配置之前要补上。
 - 能耗序列算电费时，每读一条用电记录约占 0.5 KB ClickHouse 内存。实时电表每块每天约 24,000 条，一个站点一个月约 150 MiB，一年会超过 1.5 GiB 的上限。实时数据上要查长时间范围之前，天和月的粒度要改成读按小时汇总的表。

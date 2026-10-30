@@ -114,6 +114,73 @@ type Service struct {
 	publication EvaluationPublicationStore
 	evaluations EvaluationSink
 	clock       Clock
+	shadow      *shadowSolver
+}
+
+// ShadowSolver is a solver run beside the published one: it only records what it would have
+// recommended and never publishes a Recommendation.
+type ShadowSolver interface {
+	Evaluate(context.Context, Request, time.Time) ShadowEvaluation
+}
+
+type shadowSolver struct {
+	solver  ShadowSolver
+	timeout time.Duration
+	logf    func(string, ...any)
+}
+
+// WithShadow runs solver after every published Optimization run and records its evaluation as a
+// SHADOW row in the same Evaluation sink. Its failure never changes the published run.
+func (service *Service) WithShadow(solver ShadowSolver, timeout time.Duration, logf func(string, ...any)) *Service {
+	if solver == nil {
+		service.shadow = nil
+		return service
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	service.shadow = &shadowSolver{solver: solver, timeout: timeout, logf: logf}
+	return service
+}
+
+func (service *Service) recordShadow(ctx context.Context, request Request, published Recommendation, at time.Time) {
+	if service.shadow == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), service.shadow.timeout)
+	defer cancel()
+	result := service.shadow.solver.Evaluate(ctx, request, at)
+	payload, err := json.Marshal(struct {
+		ShadowEvaluation
+		PublishedRecommendationID string `json:"publishedRecommendationId"`
+	}{result, published.ID})
+	if err != nil {
+		service.shadow.logf("optimization shadow %s for run %s: encode: %v", result.Solver, request.OptimizationRunID, err)
+		return
+	}
+	evaluationID, err := optimizationUUIDv7(service.clock().UTC())
+	if err != nil {
+		service.shadow.logf("optimization shadow %s for run %s: evaluation id: %v", result.Solver, request.OptimizationRunID, err)
+		return
+	}
+	constraints := uint32(0)
+	if result.Recommendation != nil {
+		constraints = uint32(len(result.Recommendation.Constraints))
+	}
+	evaluation := Evaluation{
+		EvaluationID: evaluationID, TenantID: request.TenantID, SiteID: request.SiteID,
+		OptimizationRunID: request.OptimizationRunID, RecommendationID: published.ID, SubjectType: request.SubjectType, SubjectID: request.SubjectID,
+		Objective: request.Objective, SolverOutcome: result.Outcome, Quality: "SHADOW", ConstraintCount: constraints,
+		InputSnapshotID: request.InputSnapshotID, PolicyVersionID: request.PolicyVersionID, TopologyVersionID: request.TopologyVersionID,
+		LoadForecastSnapshotID: request.LoadForecastSnapshotID, PVForecastSnapshotID: request.PVForecastSnapshotID, TariffVersionID: request.TariffVersionID,
+		EvaluationJSON: string(payload), GeneratedAt: service.clock().UTC(),
+	}
+	if err = service.evaluations.InsertEvaluation(ctx, evaluation); err != nil {
+		service.shadow.logf("optimization shadow %s for run %s: persist: %v", result.Solver, request.OptimizationRunID, err)
+	}
 }
 
 func NewService(solver SolverAdapter, publication EvaluationPublicationStore, evaluations EvaluationSink, clock Clock) (*Service, error) {
@@ -175,6 +242,7 @@ func (service *Service) Optimize(ctx context.Context, request Request) (Recommen
 	if err = service.publication.CompletePublication(ctx, evaluation, service.clock().UTC()); err != nil {
 		return Recommendation{}, fmt.Errorf("complete optimization evaluation publication: %w", err)
 	}
+	service.recordShadow(ctx, request, recommendation, startedAt)
 	return recommendation, nil
 }
 
