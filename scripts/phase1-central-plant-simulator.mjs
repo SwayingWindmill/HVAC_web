@@ -443,9 +443,9 @@ function buildOptimizationSeed(site, points) {
   const optimizationScheduleId = siteID();
   const constraints = {
     comfort: { zoneTempMinC: 22, zoneTempMaxC: 26 },
-    safety: { supplyTempMinC: 6, supplyTempMaxC: 10, maxSupplyTempStepC: 1 },
-    // Telemetry history keys readings by point code: the BTU meter's supply, the zone sensor's temperature.
-    inputMapping: { supplyTemperatureKey: 'supply_water_temperature', zoneTemperatureKey: 'temperature' },
+    safety: { supplyTempMinC: 5, supplyTempMaxC: 8, maxSupplyTempStepC: 1 },
+    // Telemetry history keys readings by point code: the BTU meter's supply, the zone sensor's room temperature.
+    inputMapping: { supplyTemperatureKey: 'supply_water_temperature', zoneTemperatureKey: 'room_temperature' },
     maintenanceConstraints: { outOfService: [] },
     manualLocks: { resources: [] },
     // The plant's chiller gains about 0.14 COP per °C of warmer supply water, near 60 kWh a

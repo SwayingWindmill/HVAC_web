@@ -158,6 +158,22 @@ test('validate on a complete site lists only what a person still decides', () =>
   assert.deepEqual(byStatus(items, 'decide'), ['告警规则文件 songyaxuan.alarm-rules.json', '低温差诊断未启用', '响应系数是人工设定']);
 });
 
+test('the disabled low ΔT hint names the revision in force, not a number in the note', () => {
+  const state = completeState(songyaxuan);
+  state.lowDeltaTRule = { revision: 2, minimumDeltaTC: 1.5, windowMinutes: 15 };
+  const hint = (items: any[]) => items.find((item) => item.item === '低温差诊断未启用').detail;
+  assert.match(hint(planOnboarding(songyaxuan, state)), /（现在生效的是第 2 版：温差低于 1\.5 K 持续 15 分钟）$/);
+  assert.doesNotMatch(songyaxuan.intelligence.diagnosis.lowDeltaT.note, /第 \d+ 版|\d K/, 'the note leaves the threshold to the database');
+  state.lowDeltaTRule = null;
+  assert.match(hint(planOnboarding(songyaxuan, state)), /（租户还没有规则版本，apply 建第 1 版：1\.5 K、15 分钟）$/);
+});
+
+test('the manifest matches the Tenant policy now in force: supply 5–8 ℃, zone reading room_temperature', () => {
+  const { constraints } = songyaxuan.intelligence.optimization.policy;
+  assert.deepEqual(constraints.safety, { supplyTempMinC: 5, supplyTempMaxC: 8, maxSupplyTempStepC: 1 });
+  assert.equal(constraints.inputMapping.zoneTemperatureKey, 'room_temperature');
+});
+
 test('a Tenant policy that disagrees blocks the Optimization deployment and is left for a person', () => {
   const state = completeState(songyaxuan);
   state.policy.constraints.inputMapping.zoneTemperatureKey = 'temperature';

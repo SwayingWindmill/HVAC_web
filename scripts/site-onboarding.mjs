@@ -610,7 +610,13 @@ export function planOnboarding(profile, state) {
     if (!have) add('诊断', 'missing', `调度定义 ${code}`);
     else if (have.cron !== lowDeltaT.cron || have.enabled !== lowDeltaT.enabled || !sameJson(have.payload, payload)) add('诊断', 'differs', `调度定义 ${code}`, '执行时间、对象或启用状态和清单不同');
     else add('诊断', 'ok', `调度定义 ${code}`);
-    if (!lowDeltaT.enabled) add('诊断', 'decide', '低温差诊断未启用', lowDeltaT.note ?? '清单里 enabled 是 false');
+    // The threshold lives in the Tenant's rule revisions, so the hint reads it from there rather than the note.
+    if (!lowDeltaT.enabled) {
+      const threshold = rule
+        ? `现在生效的是第 ${rule.revision} 版：温差低于 ${rule.minimumDeltaTC} K 持续 ${rule.windowMinutes} 分钟`
+        : `租户还没有规则版本，apply 建第 1 版：${lowDeltaT.firstRevision.minimumDeltaTC} K、${lowDeltaT.firstRevision.windowMinutes} 分钟`;
+      add('诊断', 'decide', '低温差诊断未启用', `${lowDeltaT.note ?? '清单里 enabled 是 false'}（${threshold}）`);
+    }
   }
 
   const optimization = intelligence.optimization;
