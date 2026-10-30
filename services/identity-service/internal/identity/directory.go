@@ -108,13 +108,16 @@ func (store *Store) ChangePassword(ctx context.Context, userID, current, next st
 	var username, passwordPHC, status string
 	var failedAttempts int
 	var lockedUntil *time.Time
-	err = tx.QueryRow(ctx, `SELECT username, password_phc, status, failed_attempts, locked_until FROM identity.users WHERE id = $1::uuid FOR UPDATE`, userID).
-		Scan(&username, &passwordPHC, &status, &failedAttempts, &lockedUntil)
+	err = tx.QueryRow(ctx, `SELECT username, status, failed_attempts, locked_until FROM identity.users WHERE id = $1::uuid FOR UPDATE`, userID).
+		Scan(&username, &status, &failedAttempts, &lockedUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrUserNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("read identity user for password change: %w", err)
+	}
+	if passwordPHC, err = readPasswordHash(ctx, tx, userID); err != nil {
+		return err
 	}
 	locked := lockedUntil != nil && lockedUntil.After(now)
 	if status != "ACTIVE" || locked || !VerifyPassword(current, passwordPHC) {

@@ -239,19 +239,25 @@ func (store *Store) CompleteLogin(ctx context.Context, challengeHash []byte, use
 	var userID, storedUsername, passwordPHC, status string
 	var lockedUntil *time.Time
 	var failedAttempts int
+	// The account row is read without its password hash; the hash is read on its own below.
+	// Keeping the two apart keeps the stored hash out of every value that feeds the audit log.
 	err = tx.QueryRow(ctx, `
-SELECT id::text, username, password_phc, status, failed_attempts, locked_until
+SELECT id::text, username, status, failed_attempts, locked_until
 FROM identity.users
 WHERE username_normalized = $1
 FOR UPDATE
-`, normalizedUsername).Scan(&userID, &storedUsername, &passwordPHC, &status, &failedAttempts, &lockedUntil)
+`, normalizedUsername).Scan(&userID, &storedUsername, &status, &failedAttempts, &lockedUntil)
 	userFound := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return LoginResult{}, fmt.Errorf("read identity user: %w", err)
 	}
-	if !userFound {
+	if userFound {
+		passwordPHC, err = readPasswordHash(ctx, tx, userID)
+		if err != nil {
+			return LoginResult{}, err
+		}
+	} else {
 		passwordPHC = store.dummyHash
-		storedUsername = username
 	}
 	credentialOK := VerifyPassword(credential, passwordPHC)
 	locked := lockedUntil != nil && lockedUntil.After(now)
@@ -280,11 +286,12 @@ WHERE id = $1::uuid
 		if locked {
 			reason = "ACCOUNT_LOCKED"
 		}
-		auditUserID := ""
 		if userFound {
-			auditUserID = userID
+			err = insertSecurityAudit(ctx, tx, "LOGIN_FAILED", userID, storedUsername, "FAILED", reason, now, map[string]any{})
+		} else {
+			err = insertSecurityAuditForUnknownSubject(ctx, tx, "LOGIN_FAILED", username, "FAILED", reason, now, map[string]any{})
 		}
-		if err := insertSecurityAudit(ctx, tx, "LOGIN_FAILED", auditUserID, storedUsername, "FAILED", reason, now, map[string]any{}); err != nil {
+		if err != nil {
 			return LoginResult{}, err
 		}
 		if lockedNow {
@@ -391,4 +398,14 @@ func newUUIDv7(now time.Time) (string, error) {
 	value[8] = (value[8] & 0x3f) | 0x80
 	encoded := hex.EncodeToString(value[:])
 	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
+}
+
+// readPasswordHash reads an account's stored password hash. Call it after the account row is
+// locked in the same transaction.
+func readPasswordHash(ctx context.Context, tx pgx.Tx, userID string) (string, error) {
+	var passwordPHC string
+	if err := tx.QueryRow(ctx, `SELECT password_phc FROM identity.users WHERE id = $1::uuid`, userID).Scan(&passwordPHC); err != nil {
+		return "", fmt.Errorf("read identity password hash: %w", err)
+	}
+	return passwordPHC, nil
 }
