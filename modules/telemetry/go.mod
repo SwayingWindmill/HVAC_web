@@ -3,12 +3,12 @@ module github.com/quanlaihe/hvac-web/modules/telemetry
 go 1.27.3
 
 require (
-	github.com/jackc/pgx/v5 v5.7.6
+	github.com/jackc/pgx/v5 v5.9.2
+	github.com/quanlaihe/hvac-web/libs/analyticsmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/limitpolicy v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/telemetryauth v0.0.0
-	github.com/quanlaihe/hvac-web/libs/analyticsmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel v0.0.0
 	github.com/redis/go-redis/v9 v9.21.0
 )
@@ -19,9 +19,9 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
-	golang.org/x/crypto v0.37.0 // indirect
-	golang.org/x/sync v0.13.0 // indirect
-	golang.org/x/text v0.24.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 )
 
 replace github.com/quanlaihe/hvac-web/libs/analyticsmodel => ../../libs/analyticsmodel

@@ -11,11 +11,10 @@ require (
 
 replace github.com/quanlaihe/hvac-web/libs/edgecontrol => ../../libs/edgecontrol
 
-
 replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observability
 
 require (
 	github.com/goburrow/serial v0.1.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	golang.org/x/net v0.43.0 // indirect
+	golang.org/x/net v0.57.0 // indirect
 )
