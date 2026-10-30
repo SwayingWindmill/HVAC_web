@@ -70,6 +70,7 @@
 - 数据修补留下的备份表：4 号电表 2026-10-14 之前的历史按功率积分重算过，被替换的行在 ClickHouse `telemetry_history.d4fix_backup_observations` 和 `analytics.d4fix_backup_energy_facts`；冷量计的历史重放后被替换的行在 `telemetry_history.coolfix_backup_observations`。能耗页面再看几天没问题就删掉这三张表。
 - 2026-10-20 的服务器状况：松雅轩网关从 10-20 03:57（北京时间）起没有再上报，「网关上报中断」和 10 条「读数长时间没有更新」都亮着，网关恢复后会自动恢复。磁盘见上面「磁盘」一条。
 - 松雅轩的负荷预测链路（15 分钟负荷指标、基线模型、每小时预测任务）是 2026-10-16 在服务器上按接入 SQL 补建的。
+- 接入清单（ADR 0028）：`node scripts/site-onboarding.mjs validate deploy/sites/songyaxuan.site.json` 只读数据库，列出还缺什么、什么要人决定；部署每次跑 `apply`。2026-10-30 服务器上的结果：缺资产「冷冻水总管」和低温差诊断的调度定义（下次部署补上，诊断登记但不启用）；要决定 7 项：告警规则用 `alarm-rules -print` 对、低温差诊断门槛（租户 3.5 K，本站高负荷温差约 1.65 ℃）、租户优化策略的室温点位代码是 `temperature`（本站叫 `room_temperature`，改它会影响两个模拟站点）、四个响应系数是人工设定、因此本站优化建议的模型部署和每小时调度暂不登记。
 - 松雅轩还没有优化建议（2026-10-30 只读核对）：没有 `OPTIMIZATION_RUN` 调度定义，也没有优化模型部署绑定；租户唯一一份优化策略（站点共用）的室内温度键是 `temperature`，松雅轩没有这个键（它的是 `room_temperature`），按现在的策略会报「读不到可用的实时室内温度」。另外 7 天里供水温度只有约 27% 的时间在策略的 6–10 °C 内（白天开机时约 5–6 °C，夜里 11–13 °C），就算键对了也常会报「当前供水温度或室内温度已在策略范围之外」。站点的安全、舒适范围和响应系数要用户定；优化策略现在只按租户存，给松雅轩单独一份要先决定是改共用的那份还是让策略按站点存。
 
 ## AI 助手
@@ -118,9 +119,8 @@
 小的后续：
 
 - 改 FDD 低温差的门槛、时间窗口或工况门控时，发布新版本（不要改旧版本）：`node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <时刻>] [--operating-gates '<json>']`；不写门控就沿用上一版。低温差只在冷站运行时判断（规格 `docs/specs/fdd-rule-definition.md`「工况门控」）。松雅轩四台冷机都没登记额定功率和额定冷量，冷机开机按运行状态判断、负荷率门控用不上；冷冻水泵运行状态点位没绑定水泵资产，水泵门控也用不上。松雅轩实际运行温差中位数约 0.9 K、最高约 2.2 K，3.5 K 阈值下每个运行窗口都是低温差，阈值待用户定。
-- 指标计算里的电量差值不会在点位改版或换单位时断开，能耗计算（`counter_deltas_from`）会断开。第一次原地改点位配置之前要补上。
-- 能耗序列算电费时，每读一条用电记录约占 0.5 KB ClickHouse 内存。实时电表每块每天约 24,000 条，一个站点一个月约 150 MiB，一年会超过 1.5 GiB 的上限。实时数据上要查长时间范围之前，天和月的粒度要改成读按小时汇总的表。
-- 每次能耗差值查询都会把相关点位的整个累计读数历史扫一遍（每个窗口约 700 万行，约 0.5 秒，随历史增长）；`has(points, point_id)` 用不上 `observations` 的排序键（它把 `point_id` 包在 `ifNull` 里）。
+- 能耗序列算电费时，每读一条用电记录约占 0.5 KB ClickHouse 内存。实时电表每块每天约 24,000 条，一个站点一个月约 150 MiB，一年会超过 1.5 GiB 的上限。用电量已经整小时读 `analytics.energy_hourly`（015），电费还读单条记录：电价时段按分钟切换，不能直接用这个汇总，要查长时间范围的电费之前得另想办法（例如按电价时段汇总）。
+- **生产要先手工应用 015 再部署能耗小时汇总的那次合并**：步骤（停 `telemetry-worker`、应用、回填、核对）见 `docs/operations/energy-hourly-rollup.md`。
 - 设备详情侧栏和工单侧栏还要按新设计打磨。
 
 ## 本地环境的偏差
@@ -128,6 +128,7 @@
 当前本地数据库和种子数据不一致的地方。`npm run local:reset` 再 `local:up` 会把它们全部清掉。
 
 - 本地库里还有 `energy_cost` 指标的绑定和定时任务（#575 已经不用这个指标了）：停用对应的 `schedule_definitions` 行，或者重置。
+- `infra/telemetry/clickhouse/init/015-energy-hourly-rollup.sql` 同样只在空数据卷上执行：已有的本地 ClickHouse 按 `docs/operations/energy-hourly-rollup.md` 应用并回填，或者重置。
 - `infra/telemetry/clickhouse/init/014-tariff-price-windows.sql` 只在空数据卷上执行：已有的 ClickHouse 要手动 `docker exec -i <clickhouse> clickhouse-client --multiquery < …`，再跑一次基础身份初始化，让 `energy-projection` 角色拿到 `tariff.read`。
 - 两个模拟站点都有重放的历史：电表（含分表）2026-08-25 到 10-06，气象站的室外温度 2026-08-25 到 10-06（站点时间）。实时历史从 2026-10-12 22:06 开始。A 站点 09-29 09:00 把供水温度设定提高到 8 ℃；B 站点冷冻水泵 09-08 09:00 起从 50 Hz 降到 45 Hz。
 - 08-25 到 09-14 这段只重算了 B 站点的 `hourly_energy`、`hourly_cooling` 和 CHWP-01 的 `device_hourly_energy`，A 站点这段的小时和日指标没有。
@@ -135,7 +136,7 @@
 - 2026 年 9 月的报告快照是手工排队生成的，只覆盖 30 天里的 16 天（来自重放的历史）。
 - 2026-10-13 删掉了两段重放交界处重复写入的 12 条电表读数（导入批次 `01a03480-0400-7000-8000-00000000000{1,2}`）；9-15 00:00（站点时间）那个小时的小时指标是在删除之前算的，还包含这两条读数。
 - 2026-10-12 修复分页问题之前算出的用电量缺了一些时段。要补：停 `telemetry-worker`，清空 `analytics.energy_projection_checkpoints`，再启动（运行中清空没用，正在跑的那批会把进度写回去）；已有事实的时段会跳过。
-- 几处是手工改的，重置后由初始化脚本恢复：`analytics.energy_interval_facts_visible`（按 `009-energy-fact-rebuild-v1.sql`）、`telemetry_history.counter_deltas_from` 和 `counter_deltas`（按 `004-counter-semantics.sql`）；ClickHouse 用户 `report_service_reader` 已经不用了。
+- 几处是手工改的，重置后由初始化脚本恢复：`analytics.energy_interval_facts_visible`（按 `009-energy-fact-rebuild-v1.sql`）、`telemetry_history.counter_deltas_from`（按 `015-energy-hourly-rollup.sql`）和 `counter_deltas`（按 `004-counter-semantics.sql`）；ClickHouse 用户 `report_service_reader` 已经不用了。
 - 没有模拟器也能造几周的历史：`node scripts/local-history-replay.mjs --from … --to … [--commands <站点代码>=<文件>] [--metrics-only | --weather-only]`，经遥测的历史导入写入电表和气象站读数，再重算小时和日指标。三周约 10 分钟一个站点；只重放实时历史开始之前的时间段（累计读数会从头开始）。
 
 ## 已知的坑

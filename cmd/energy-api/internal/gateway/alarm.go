@@ -45,17 +45,9 @@ type alarmScope struct {
 	SiteID   string `json:"siteId"`
 }
 
-type alarmFailure struct {
-	status    int
-	code      string
-	title     string
-	detail    string
-	retryable bool
-}
-
 type AlarmOperations interface {
-	ResolveScope(ctx context.Context, tenantID, alarmID string, serviceContext string) (alarmScope, *alarmFailure)
-	Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, serviceContext string) ([]byte, int, *alarmFailure)
+	ResolveScope(ctx context.Context, tenantID, alarmID string, serviceContext string) (alarmScope, *ownerFailure)
+	Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, serviceContext string) ([]byte, int, *ownerFailure)
 }
 
 type AlarmConfig struct {
@@ -85,7 +77,7 @@ func newDirectAlarmAdapter(store alarmservice.Store) AlarmOperations {
 	return &directAlarmAdapter{store: store}
 }
 
-func (a *directAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID string, _ string) (alarmScope, *alarmFailure) {
+func (a *directAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID string, _ string) (alarmScope, *ownerFailure) {
 	scope, err := a.store.ResolveScope(ctx, tenantID, alarmID)
 	if err != nil {
 		if errors.Is(err, alarmservice.ErrNotFound) {
@@ -102,7 +94,7 @@ func (a *directAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID
 	return alarmScope{TenantID: scope.TenantID, SiteID: scope.SiteID}, nil
 }
 
-func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, _ string) ([]byte, int, *alarmFailure) {
+func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, _ string) ([]byte, int, *ownerFailure) {
 	if route.siteRules {
 		failure := alarmUnavailable("Site rules are only served by the Alarm Service.")
 		return nil, http.StatusServiceUnavailable, &failure
@@ -274,13 +266,13 @@ func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Re
 				failure := alarmNotFound()
 				return nil, http.StatusNotFound, &failure
 			case errors.Is(err, alarmmodel.ErrVersionConflict):
-				failure := alarmFailure{status: http.StatusConflict, code: "ALARM_VERSION_CONFLICT", title: "Alarm version conflict", detail: "The Alarm changed before assignment was committed."}
+				failure := ownerFailure{status: http.StatusConflict, code: "ALARM_VERSION_CONFLICT", title: "Alarm version conflict", detail: "The Alarm changed before assignment was committed."}
 				return nil, http.StatusConflict, &failure
 			case errors.Is(err, alarmservice.ErrIdempotencyConflict):
 				failure := alarmIdempotencyConflict()
 				return nil, http.StatusConflict, &failure
 			case errors.Is(err, alarmmodel.ErrInvalidOperation), errors.Is(err, alarmmodel.ErrInvalidTransition):
-				failure := alarmFailure{status: http.StatusUnprocessableEntity, code: "ALARM_TRANSITION_INVALID", title: "Alarm transition invalid", detail: "The Alarm cannot be assigned from its current authoritative state."}
+				failure := ownerFailure{status: http.StatusUnprocessableEntity, code: "ALARM_TRANSITION_INVALID", title: "Alarm transition invalid", detail: "The Alarm cannot be assigned from its current authoritative state."}
 				return nil, http.StatusUnprocessableEntity, &failure
 			default:
 				failure := alarmUnavailable("Alarm Service could not complete the assignment.")
@@ -315,7 +307,7 @@ func newHTTPAlarmAdapter(config AlarmConfig) AlarmOperations {
 	}
 }
 
-func (a *httpAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID string, serviceContext string) (alarmScope, *alarmFailure) {
+func (a *httpAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID string, serviceContext string) (alarmScope, *ownerFailure) {
 	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 	upstream, err := http.NewRequestWithContext(callCtx, http.MethodGet, a.baseURL+internalAlarmScopePrefix+url.PathEscape(alarmID)+"/scope", nil)
@@ -354,7 +346,7 @@ func (a *httpAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID s
 	return scope, nil
 }
 
-func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, serviceContext string) ([]byte, int, *alarmFailure) {
+func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, serviceContext string) ([]byte, int, *ownerFailure) {
 	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 	path := internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarms"
@@ -576,56 +568,39 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 		h.writeAlarmFailure(writer, request, *failure)
 		return
 	}
-	decision, failure := h.authorizeAlarm(request, session, route)
+	response, failure := CallOwner(request.Context(), h, h.alarmCaller(session), h.alarmOwner(), string(route.action), route.scope(session.TenantID), alarmCall{public: request, route: route, limit: limit})
 	if failure != nil {
 		h.writeAlarmFailure(writer, request, *failure)
 		return
 	}
-	contextToken, failure := h.signAlarmServiceContext(session, route, decision, h.identity.config.ExecutingWorkloadSPIFFE)
-	if failure != nil {
-		h.writeAlarmFailure(writer, request, *failure)
-		return
-	}
-	body, status, failure := h.executeAlarmOperation(request, route, contextToken)
-	if failure != nil {
-		h.writeAlarmFailure(writer, request, *failure)
-		return
-	}
-	if status != http.StatusOK {
-		h.forwardAlarmProblem(writer, request, status, body, route)
+	if response.status != http.StatusOK {
+		h.forwardAlarmProblem(writer, request, response.status, response.body, route)
 		return
 	}
 	writer.Header().Set("Cache-Control", "private, no-store")
-	if route.alarmID == "" {
-		var response alarmmodel.ListResponse
-		if decodeStrictAlarmJSON(body, &response) != nil || response.Validate(session.TenantID, route.siteID, limit) != nil {
-			h.writeAlarmFailure(writer, request, alarmUnavailable("Alarm Service returned an invalid list projection."))
-			return
-		}
+	switch value := response.value.(type) {
+	case alarmmodel.ListResponse:
 		writeJSON(writer, http.StatusOK, map[string]any{
-			"data": response.Items,
+			"data": value.Items,
 			"meta": map[string]any{
 				"requestId": requestIDFromContext(request.Context()), "limit": limit,
-				"nextCursor": response.NextCursor, "hasMore": response.HasMore,
+				"nextCursor": value.NextCursor, "hasMore": value.HasMore,
 			},
 		})
-		return
+	case alarmmodel.Alarm:
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"data": value,
+			"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
+		})
+	default:
+		h.writeAlarmFailure(writer, request, alarmUnavailable("Alarm Service returned an unsupported response."))
 	}
-	var alarm alarmmodel.Alarm
-	if decodeStrictAlarmJSON(body, &alarm) != nil || alarm.Validate() != nil || alarm.TenantID != session.TenantID || alarm.SiteID != route.siteID || alarm.AlarmID != route.alarmID {
-		h.writeAlarmFailure(writer, request, alarmUnavailable("Alarm Service returned an invalid Alarm projection."))
-		return
-	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"data": alarm,
-		"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
-	})
 }
 
 // dispatchSiteRulesRoute lists the Site's rules in effect. It answers with Problem Details, as the
 // generated client expects, where the older Alarm routes keep their own error envelope.
 func dispatchSiteRulesRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
-	fail := func(failure alarmFailure) {
+	fail := func(failure ownerFailure) {
 		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
 	}
 	if request.Method != http.MethodGet {
@@ -650,22 +625,12 @@ func dispatchSiteRulesRoute(h *handler, writer http.ResponseWriter, request *htt
 		fail(*failure)
 		return
 	}
-	decision, failure := h.authorizeAlarm(request, session, route)
+	response, failure := CallOwner(request.Context(), h, h.alarmCaller(session), h.alarmOwner(), string(route.action), route.scope(session.TenantID), alarmCall{public: request, route: route})
 	if failure != nil {
 		fail(*failure)
 		return
 	}
-	contextToken, failure := h.signAlarmServiceContext(session, route, decision, h.identity.config.ExecutingWorkloadSPIFFE)
-	if failure != nil {
-		fail(*failure)
-		return
-	}
-	body, status, failure := h.executeAlarmOperation(request, route, contextToken)
-	if failure != nil {
-		fail(*failure)
-		return
-	}
-	switch status {
+	switch response.status {
 	case http.StatusOK:
 	case http.StatusForbidden:
 		fail(alarmDenied())
@@ -674,8 +639,8 @@ func dispatchSiteRulesRoute(h *handler, writer http.ResponseWriter, request *htt
 		fail(alarmUnavailable("Alarm Service could not list the Site rules."))
 		return
 	}
-	var list alarmservice.SiteRuleList
-	if decodeStrictAlarmJSON(body, &list) != nil || list.Validate() != nil {
+	list, ok := response.value.(alarmservice.SiteRuleList)
+	if !ok {
 		fail(alarmUnavailable("Alarm Service returned an invalid Site rule list."))
 		return
 	}
@@ -754,7 +719,7 @@ func (h *handler) alarmSession(writer http.ResponseWriter, request *http.Request
 	return session, true
 }
 
-func (h *handler) resolveAlarmScope(request *http.Request, session bffSession, alarmID string) (alarmScope, *alarmFailure) {
+func (h *handler) resolveAlarmScope(request *http.Request, session bffSession, alarmID string) (alarmScope, *ownerFailure) {
 	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.alarm == nil || h.alarm.operations == nil || !alarmmodel.IsUUIDv7(alarmID) {
 		failure := alarmUnavailable("Alarm ownership resolution is unavailable.")
 		return alarmScope{}, &failure
@@ -780,7 +745,7 @@ func (h *handler) resolveAlarmScope(request *http.Request, session bffSession, a
 	return h.alarm.operations.ResolveScope(request.Context(), session.TenantID, alarmID, token)
 }
 
-func (h *handler) checkAlarmSiteVisibility(request *http.Request, session bffSession, siteID string, list bool) *alarmFailure {
+func (h *handler) checkAlarmSiteVisibility(request *http.Request, session bffSession, siteID string, list bool) *ownerFailure {
 	if !alarmmodel.IsUUIDv7(siteID) {
 		failure := alarmUnavailable("Authoritative Site visibility is unavailable.")
 		return &failure
@@ -800,11 +765,95 @@ func (h *handler) checkAlarmSiteVisibility(request *http.Request, session bffSes
 	return nil
 }
 
-func (h *handler) authorizeAlarm(request *http.Request, session bffSession, route publicAlarmRoute) (alarmauth.Decision, *alarmFailure) {
-	if h.identity == nil || h.identity.config.IAMURL == "" || h.identity.config.IAMHTTPClient == nil || h.identity.config.DelegationSigner == nil {
-		failure := alarmUnavailable("Alarm authorization is not configured.")
-		return alarmauth.Decision{}, &failure
+// alarmCall is one public Alarm request as the Alarm owner serves it.
+type alarmCall struct {
+	public *http.Request
+	route  publicAlarmRoute
+	// limit is the page size the list was asked for, which the list projection must honour.
+	limit int
+}
+
+// scope is what an Alarm action is decided and signed for: the Site, and the Alarm when there is one.
+func (route publicAlarmRoute) scope(tenantID string) ownerScope {
+	scope := ownerScope{tenantID: tenantID, siteID: route.siteID}
+	if route.alarmID != "" {
+		scope.resourceKind, scope.resourceID = "alarm", route.alarmID
 	}
+	return scope
+}
+
+func (h *handler) alarmCaller(session bffSession) ownerCaller {
+	presenter := ""
+	if h.identity != nil {
+		presenter = h.identity.config.ExecutingWorkloadSPIFFE
+	}
+	return ownerCaller{session: session, presenter: presenter}
+}
+
+// alarmOwner is the Alarm Service as CallOwner calls it: IAM decides, the configured adapter
+// serves, and the public Alarm contract checks the answer.
+func (h *handler) alarmOwner() domainOwner[alarmCall] {
+	audience := ""
+	if h.alarm != nil {
+		audience = h.alarm.backendAudience
+	}
+	return domainOwner[alarmCall]{
+		name:     "Alarm Service",
+		audience: audience,
+		decide:   h.decideAlarm,
+		serve: func(ctx context.Context, call alarmCall, serviceContext string) (ownerResponse, *ownerFailure) {
+			if h.alarm == nil || h.alarm.operations == nil {
+				failure := alarmUnavailable("The Alarm service is not configured.")
+				return ownerResponse{}, &failure
+			}
+			body, status, failure := h.alarm.operations.Execute(ctx, call.public, call.route, serviceContext)
+			if failure != nil {
+				return ownerResponse{}, failure
+			}
+			return ownerResponse{status: status, body: body}, nil
+		},
+		validate: validateAlarmResponse,
+	}
+}
+
+// validateAlarmResponse decodes the owner's answer as the public contract has it, bound to the
+// Tenant, Site and Alarm that were decided.
+func validateAlarmResponse(scope ownerScope, call alarmCall, response ownerResponse) (any, error) {
+	switch {
+	case call.route.siteRules:
+		var list alarmservice.SiteRuleList
+		if err := decodeStrictAlarmJSON(response.body, &list); err != nil {
+			return nil, err
+		}
+		return list, list.Validate()
+	case scope.resourceID == "":
+		var list alarmmodel.ListResponse
+		if err := decodeStrictAlarmJSON(response.body, &list); err != nil {
+			return nil, err
+		}
+		return list, list.Validate(scope.tenantID, scope.siteID, call.limit)
+	default:
+		var alarm alarmmodel.Alarm
+		if err := decodeStrictAlarmJSON(response.body, &alarm); err != nil {
+			return nil, err
+		}
+		if err := alarm.Validate(); err != nil {
+			return nil, err
+		}
+		if alarm.TenantID != scope.tenantID || alarm.SiteID != scope.siteID || alarm.AlarmID != scope.resourceID {
+			return nil, errors.New("alarm outside the decided scope")
+		}
+		return alarm, nil
+	}
+}
+
+// decideAlarm asks IAM whether the caller may take the Alarm action on the scope.
+func (h *handler) decideAlarm(ctx context.Context, caller ownerCaller, action string, scope ownerScope) (ownerDecision, *ownerFailure) {
+	if h.identity == nil || h.alarm == nil || h.identity.config.IAMURL == "" || h.identity.config.IAMHTTPClient == nil || h.identity.config.DelegationSigner == nil {
+		failure := alarmUnavailable("Alarm authorization is not configured.")
+		return ownerDecision{}, &failure
+	}
+	session := caller.session
 	now := h.identity.now().UTC()
 	expiresAt := now.Add(h.identity.config.DelegationTTL)
 	if expiresAt.After(session.ExpiresAt) {
@@ -821,102 +870,62 @@ func (h *handler) authorizeAlarm(request *http.Request, session bffSession, rout
 	delegation, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
 	if err != nil {
 		failure := alarmUnavailable("The Alarm authorization request could not be signed.")
-		return alarmauth.Decision{}, &failure
+		return ownerDecision{}, &failure
 	}
 	input := alarmauth.DecisionRequest{
-		TenantID: session.TenantID,
-		SiteID:   route.siteID,
-		AlarmID:  route.alarmID,
-		Action:   route.action,
+		TenantID: scope.tenantID,
+		SiteID:   scope.siteID,
+		AlarmID:  scope.resourceID,
+		Action:   alarmauth.Action(action),
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
 		failure := alarmUnavailable("The Alarm authorization request could not be encoded.")
-		return alarmauth.Decision{}, &failure
+		return ownerDecision{}, &failure
 	}
-	ctx, cancel := context.WithTimeout(request.Context(), h.alarm.timeout)
+	callCtx, cancel := context.WithTimeout(ctx, h.alarm.timeout)
 	defer cancel()
-	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h.identity.config.IAMURL, "/")+alarmDecisionPath, bytes.NewReader(body))
+	upstream, err := http.NewRequestWithContext(callCtx, http.MethodPost, strings.TrimRight(h.identity.config.IAMURL, "/")+alarmDecisionPath, bytes.NewReader(body))
 	if err != nil {
 		failure := alarmUnavailable("The Alarm authorization request could not be constructed.")
-		return alarmauth.Decision{}, &failure
+		return ownerDecision{}, &failure
 	}
 	upstream.Header.Set("Content-Type", "application/json")
 	upstream.Header.Set("Accept", "application/json, application/problem+json")
 	upstream.Header.Set("X-Delegation-Grant", delegation)
-	upstream.Header.Set("X-Request-ID", requestIDFromContext(request.Context()))
-	observability.InjectHTTP(request.Context(), upstream.Header)
+	upstream.Header.Set("X-Request-ID", requestIDFromContext(ctx))
+	observability.InjectHTTP(ctx, upstream.Header)
 	response, err := h.identity.config.IAMHTTPClient.Do(upstream)
 	if err != nil {
 		failure := alarmUnavailable("IAM Alarm authorization is temporarily unavailable.")
-		return alarmauth.Decision{}, &failure
+		return ownerDecision{}, &failure
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		failure := alarmUnavailable("IAM did not return a valid Alarm authorization decision.")
-		return alarmauth.Decision{}, &failure
+		return ownerDecision{}, &failure
 	}
 	raw, err := readBoundedBody(response.Body, maximumAlarmDecisionLength)
 	if err != nil {
 		failure := alarmUnavailable("IAM returned an unreadable Alarm authorization decision.")
-		return alarmauth.Decision{}, &failure
+		return ownerDecision{}, &failure
 	}
 	var output alarmauth.DecisionResponse
 	if decodeStrictAlarmJSON(raw, &output) != nil || output.Decision.Validate() != nil {
 		failure := alarmUnavailable("IAM returned an invalid Alarm authorization decision.")
-		return alarmauth.Decision{}, &failure
+		return ownerDecision{}, &failure
 	}
 	decision := output.Decision
 	if decision.Subject != session.Principal.Subject || decision.SubjectIssuer != session.Principal.Issuer ||
-		decision.TenantID != session.TenantID || decision.SiteID != route.siteID || decision.AlarmID != route.alarmID || decision.Action != route.action {
+		decision.TenantID != scope.tenantID || decision.SiteID != scope.siteID || decision.AlarmID != scope.resourceID || decision.Action != input.Action {
 		failure := alarmUnavailable("IAM returned an Alarm decision outside the authenticated boundary.")
-		return alarmauth.Decision{}, &failure
+		return ownerDecision{}, &failure
 	}
 	if !decision.Allowed {
 		failure := alarmDenied()
-		return alarmauth.Decision{}, &failure
+		return ownerDecision{}, &failure
 	}
-	return decision, nil
-}
-
-// signAlarmServiceContext signs the context the alarm owner reads, naming the workload that will
-// present it: the Gateway for the pages, the Operations Agent for its alarm list.
-func (h *handler) signAlarmServiceContext(session bffSession, route publicAlarmRoute, decision alarmauth.Decision, presenter string) (string, *alarmFailure) {
-	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.alarm == nil || !isLowerUUIDv7(session.TenantID) {
-		failure := alarmUnavailable("Alarm service context signing is unavailable.")
-		return "", &failure
-	}
-	now := h.identity.now().UTC()
-	expiresAt := now.Add(h.identity.config.DelegationTTL)
-	if expiresAt.After(session.ExpiresAt) {
-		expiresAt = session.ExpiresAt
-	}
-	scopes := []string{"tenant:" + session.TenantID, "site:" + route.siteID}
-	if route.alarmID != "" {
-		scopes = append(scopes, "alarm:"+route.alarmID)
-	}
-	claims := identitycontext.DelegationClaims{
-		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
-		PrincipalID: decision.PrincipalID, DisplayName: session.Principal.DisplayName, Email: session.Principal.Email,
-		Roles: append([]string(nil), session.Principal.Roles...), ExecutingService: presenter,
-		Audience: h.alarm.backendAudience, TenantID: session.TenantID,
-		Actions: []string{string(route.action)}, Scopes: scopes, PolicyRevision: decision.PolicyRevision, SessionID: session.ID,
-		IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
-	}
-	token, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
-	if err != nil {
-		failure := alarmUnavailable("The Alarm service context could not be signed.")
-		return "", &failure
-	}
-	return token, nil
-}
-
-func (h *handler) executeAlarmOperation(publicRequest *http.Request, route publicAlarmRoute, serviceContext string) ([]byte, int, *alarmFailure) {
-	if h.alarm == nil || h.alarm.operations == nil {
-		failure := alarmUnavailable("The Alarm service is not configured.")
-		return nil, 0, &failure
-	}
-	return h.alarm.operations.Execute(publicRequest.Context(), publicRequest, route, serviceContext)
+	return ownerDecision{principalID: decision.PrincipalID, policyRevision: decision.PolicyRevision}, nil
 }
 
 func (h *handler) forwardAlarmProblem(writer http.ResponseWriter, request *http.Request, status int, body []byte, route publicAlarmRoute) {
@@ -972,40 +981,40 @@ func decodeStrictAlarmJSON(body []byte, value any) error {
 	return nil
 }
 
-func (h *handler) writeAlarmFailure(writer http.ResponseWriter, request *http.Request, failure alarmFailure) {
+func (h *handler) writeAlarmFailure(writer http.ResponseWriter, request *http.Request, failure ownerFailure) {
 	writeV212Error(writer, request, failure.status, failure.code, failure.detail, map[string]any{"retryable": failure.retryable})
 }
 
-func alarmInvalid(detail string) alarmFailure {
-	return alarmFailure{status: http.StatusBadRequest, code: "INVALID_ARGUMENT", title: "Invalid argument", detail: detail}
+func alarmInvalid(detail string) ownerFailure {
+	return ownerFailure{status: http.StatusBadRequest, code: "INVALID_ARGUMENT", title: "Invalid argument", detail: detail}
 }
 
-func alarmInvalidCursor() alarmFailure {
-	return alarmFailure{status: http.StatusBadRequest, code: "INVALID_CURSOR", title: "Invalid cursor", detail: "The Alarm cursor is invalid for the current filters."}
+func alarmInvalidCursor() ownerFailure {
+	return ownerFailure{status: http.StatusBadRequest, code: "INVALID_CURSOR", title: "Invalid cursor", detail: "The Alarm cursor is invalid for the current filters."}
 }
 
-func alarmNotFound() alarmFailure {
-	return alarmFailure{status: http.StatusNotFound, code: "ALARM_NOT_FOUND", title: "Alarm not found", detail: "Alarm not found."}
+func alarmNotFound() ownerFailure {
+	return ownerFailure{status: http.StatusNotFound, code: "ALARM_NOT_FOUND", title: "Alarm not found", detail: "Alarm not found."}
 }
 
-func alarmSiteNotFound() alarmFailure {
-	return alarmFailure{status: http.StatusNotFound, code: "SITE_NOT_FOUND", title: "Site not found", detail: "Site not found."}
+func alarmSiteNotFound() ownerFailure {
+	return ownerFailure{status: http.StatusNotFound, code: "SITE_NOT_FOUND", title: "Site not found", detail: "Site not found."}
 }
 
-func alarmDenied() alarmFailure {
-	return alarmFailure{status: http.StatusForbidden, code: "FORBIDDEN", title: "Forbidden", detail: "The caller lacks the required Alarm permission for this visible Site."}
+func alarmDenied() ownerFailure {
+	return ownerFailure{status: http.StatusForbidden, code: "FORBIDDEN", title: "Forbidden", detail: "The caller lacks the required Alarm permission for this visible Site."}
 }
 
-func alarmIdempotencyConflict() alarmFailure {
-	return alarmFailure{status: http.StatusConflict, code: "IDEMPOTENCY_CONFLICT", title: "Idempotency conflict", detail: "The supplied Idempotency-Key is already bound to a different Alarm mutation request."}
+func alarmIdempotencyConflict() ownerFailure {
+	return ownerFailure{status: http.StatusConflict, code: "IDEMPOTENCY_CONFLICT", title: "Idempotency conflict", detail: "The supplied Idempotency-Key is already bound to a different Alarm mutation request."}
 }
 
-func alarmVersionConflict() alarmFailure {
-	return alarmFailure{status: http.StatusConflict, code: "ALARM_VERSION_CONFLICT", title: "Alarm version conflict", detail: "The Alarm changed before this mutation was committed."}
+func alarmVersionConflict() ownerFailure {
+	return ownerFailure{status: http.StatusConflict, code: "ALARM_VERSION_CONFLICT", title: "Alarm version conflict", detail: "The Alarm changed before this mutation was committed."}
 }
 
-func alarmUnavailable(detail string) alarmFailure {
-	return alarmFailure{status: http.StatusServiceUnavailable, code: "INTERNAL_ERROR", title: "Internal error", detail: detail, retryable: true}
+func alarmUnavailable(detail string) ownerFailure {
+	return ownerFailure{status: http.StatusServiceUnavailable, code: "INTERNAL_ERROR", title: "Internal error", detail: detail, retryable: true}
 }
 
 func writeV212Error(writer http.ResponseWriter, request *http.Request, status int, code, message string, details any) {

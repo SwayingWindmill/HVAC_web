@@ -2,12 +2,21 @@
 # ../views are the public surface (ADR 0023). Titles and descriptions are Chinese because the
 # views carry them to operators and to the Operations Agent.
 
+# The Site and equipment cubes read whole hours from the hourly rollup (015-energy-hourly-rollup.sql)
+# and single facts only for an hour the queried range cuts into, so a month report no longer
+# groups every fact revision of the month. Cube renders the range as period_end >= From and
+# period_end <= the second before To, so an hour is whole when its start and its last second both
+# pass the filter; the single facts take exactly the other hours. Cube renders an absent filter as
+# 1 = 1, which makes every hour whole. A rollup row stands at its hour's start, inside the bucket of
+# every fact it holds for any whole-hour timezone; a Site in a half-hour timezone would split hours
+# and needs the single facts. Every row carries interval_count, 1 for a single fact, which the
+# count measures add up. The cost cube stays on single facts because tariffs change by the minute.
 cubes:
   - name: energy_facts
     public: false
     title: 能耗区间
     description: 电表累计读数投影成的可相加能耗区间，带质量、数据截至时间和数据版本。
-    sql: SELECT * FROM analytics.energy_interval_facts_visible
+    sql: SELECT *, toInt64(1) AS interval_count FROM analytics.energy_interval_facts_visible
 
     measures:
       - name: energy_valid_kwh
@@ -29,23 +38,20 @@ cubes:
       - name: valid_count
         title: 有效区间数
         description: 质量为「有效」的计量区间个数。
-        type: count
-        filters:
-          - sql: "{CUBE}.quality = 'VALID'"
+        sql: "toInt64(sumIf({CUBE}.interval_count, {CUBE}.quality = 'VALID'))"
+        type: number
 
       - name: suspect_count
         title: 可疑区间数
         description: 质量为「可疑」的计量区间个数，例如读数跳变或计数器回绕附近。
-        type: count
-        filters:
-          - sql: "{CUBE}.quality = 'SUSPECT'"
+        sql: "toInt64(sumIf({CUBE}.interval_count, {CUBE}.quality = 'SUSPECT'))"
+        type: number
 
       - name: invalid_count
         title: 无效区间数
         description: 质量为「无效」的计量区间个数，这些区间不计入任何能耗。
-        type: count
-        filters:
-          - sql: "{CUBE}.quality = 'INVALID'"
+        sql: "toInt64(sumIf({CUBE}.interval_count, {CUBE}.quality = 'INVALID'))"
+        type: number
 
       - name: max_data_watermark
         title: 数据截至
@@ -84,12 +90,6 @@ cubes:
         sql: quality
         type: string
 
-      - name: period_start
-        title: 区间开始
-        description: 计量区间的开始时间。
-        sql: period_start
-        type: time
-
       - name: period_end
         title: 区间结束
         description: 计量区间的结束时间；按小时、日、月汇总时，整个区间算在它结束的那个时段里。
@@ -117,7 +117,21 @@ cubes:
     public: false
     title: 站点总能耗
     description: 站点总表的能耗区间，不含已经算在总表里的设备分表。
-    sql: SELECT * FROM analytics.energy_interval_facts_visible WHERE accounting_scope = 'SITE'
+    sql: >
+      SELECT tenant_id, site_id, energy_type, quality, load_device_id, hour AS period_end,
+             energy_kwh, interval_count, data_watermark, dataset_revision
+      FROM analytics.energy_hourly
+      WHERE accounting_scope = 'SITE' AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
+        AND {FILTER_PARAMS.site_energy_facts.period_end.filter('hour')}
+        AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addSeconds(hour, 3599)')}
+      UNION ALL
+      SELECT tenant_id, site_id, energy_type, quality, load_device_id, period_end,
+             energy_kwh, toInt64(1) AS interval_count, data_watermark, dataset_revision
+      FROM analytics.energy_interval_facts_visible
+      WHERE accounting_scope = 'SITE' AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
+        AND {FILTER_PARAMS.site_energy_facts.period_end.filter('period_end')}
+        AND NOT ({FILTER_PARAMS.site_energy_facts.period_end.filter('toStartOfHour(period_end)')}
+          AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addSeconds(toStartOfHour(period_end), 3599)')})
 
     measures:
       - name: electricity_valid_kwh
@@ -148,7 +162,21 @@ cubes:
     public: false
     title: 设备分项能耗
     description: 各设备分表的能耗区间；这些能耗已经包含在站点总表里，不能再与总表相加。
-    sql: SELECT * FROM analytics.energy_interval_facts_visible WHERE accounting_scope = 'BRANCH'
+    sql: >
+      SELECT tenant_id, site_id, energy_type, quality, load_device_id, hour AS period_end,
+             energy_kwh, interval_count, data_watermark, dataset_revision
+      FROM analytics.energy_hourly
+      WHERE accounting_scope = 'BRANCH' AND {FILTER_PARAMS.equipment_energy_facts.site_id.filter('site_id')}
+        AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('hour')}
+        AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('addSeconds(hour, 3599)')}
+      UNION ALL
+      SELECT tenant_id, site_id, energy_type, quality, load_device_id, period_end,
+             energy_kwh, toInt64(1) AS interval_count, data_watermark, dataset_revision
+      FROM analytics.energy_interval_facts_visible
+      WHERE accounting_scope = 'BRANCH' AND {FILTER_PARAMS.equipment_energy_facts.site_id.filter('site_id')}
+        AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('period_end')}
+        AND NOT ({FILTER_PARAMS.equipment_energy_facts.period_end.filter('toStartOfHour(period_end)')}
+          AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('addSeconds(toStartOfHour(period_end), 3599)')})
 
     dimensions:
       - name: equipment_id

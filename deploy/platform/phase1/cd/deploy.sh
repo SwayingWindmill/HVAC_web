@@ -77,7 +77,7 @@ $L --integration --intelligence up -d --no-deps forecast-service optimization-se
 
 step songyaxuan
 # Simulators stay off on this server (user, 2026-10-14); the real Site is registered from its site file.
-PHASE1_POSTGRES_CONTAINER=hvac-platform-postgres-1 node scripts/site-onboarding.mjs deploy/sites/songyaxuan.site.json
+PHASE1_POSTGRES_CONTAINER=hvac-platform-postgres-1 node scripts/site-onboarding.mjs apply deploy/sites/songyaxuan.site.json
 
 step "done"
 $L --integration ps --format '{{.Service}} {{.Status}}'

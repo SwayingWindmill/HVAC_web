@@ -1,14 +1,21 @@
-// Registers a real Site behind one Edge Gateway from its site file (deploy/sites/*.site.json):
-// the Site, its plant room, the Gateway, every Device the Gateway names by source key, their
-// Points, and the Telemetry presence and freshness policies. Same tables as the simulator seed.
-// Idempotent: a rerun with the same file changes no row; names edited later in the Registry are
-// overwritten by the file. Machines the
+// A real Site's onboarding manifest (deploy/sites/*.site.json, ADR 0028) and the two things done
+// with it. validate lists what the Site still lacks against the manifest, reading the database only
+// with one read-only SELECT; apply writes what is missing. Both cover the Site, its plant room, the
+// Gateway, every Device the Gateway names by source key, their Points, the Telemetry presence and
+// freshness policies, the energy model and load forecast, the low-delta-T diagnosis schedule and
+// the Optimization deployment and schedule. Alarm rules live in the Alarm database and keep their
+// own publisher (alarm-rules); the manifest names their file and the file check verifies every
+// device and point they read. Same tables as the simulator seed. Idempotent: a rerun with the same
+// file changes no row; names edited later in the Registry are overwritten by the file. Machines the
 // site file lists become Assets, with the meter wired to each bound to it.
 //
-//   node scripts/site-onboarding.mjs deploy/sites/songyaxuan.site.json [--print]
+//   node scripts/site-onboarding.mjs validate deploy/sites/songyaxuan.site.json [--offline]
+//   node scripts/site-onboarding.mjs apply deploy/sites/songyaxuan.site.json
+//   node scripts/site-onboarding.mjs print deploy/sites/songyaxuan.site.json
 //
 // PHASE1_POSTGRES_CONTAINER selects the database container (default: the local environment's).
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { localContainer } from './lib/local-environment.mjs';
 
@@ -63,14 +70,20 @@ export function expandPoints(device, meterPoints) {
   return [...(device.points === 'meter' ? meterPoints : device.points), ...(device.morePoints ?? [])].map((point) => ({ ...point }));
 }
 
+// The site file's devices with their points, each point with the row id it is registered under.
+function siteRows(profile) {
+  const devices = profile.devices.map((device, deviceIndex) => ({ ...device, deviceIndex: deviceIndex + 1, points: expandPoints(device, profile.meterPoints) }));
+  const points = devices.flatMap((device) => device.points.map((point, pointIndex) => ({
+    ...point, device, id: rowId(profile.site.id, '5000', device.deviceIndex * 0x10000 + pointIndex + 1),
+  })));
+  return { devices, points };
+}
+
 export function buildOnboardingSql(profile) {
   const tenant = sqlLiteral(profile.tenantId);
   const { site, space, gateway } = profile;
   const siteId = sqlLiteral(site.id);
-  const devices = profile.devices.map((device, deviceIndex) => ({ ...device, deviceIndex: deviceIndex + 1, points: expandPoints(device, profile.meterPoints) }));
-  const points = devices.flatMap((device) => device.points.map((point, pointIndex) => ({
-    ...point, device, id: rowId(site.id, '5000', device.deviceIndex * 0x10000 + pointIndex + 1),
-  })));
+  const { devices, points } = siteRows(profile);
   for (const point of points) {
     if (!/^[a-z][a-z0-9_]{0,127}$/.test(point.code)) throw new Error(`point code ${point.code} is not a Gateway wire code`);
   }
@@ -164,7 +177,7 @@ ${coverage}
 ON CONFLICT (device_id) ${updateWhenChanged('observation_coverage', [['available', 'true'], ['reason_code', 'NULL']], { revision: false })};
 RESET ROLE;
 COMMIT;`;
-  return { registry, telemetry, energy: buildEnergySql(profile, devices, points), deviceCount: devices.length, pointCount: points.length };
+  return { registry, telemetry, energy: buildEnergySql(profile, devices, points), intelligence: buildIntelligenceSql(profile), deviceCount: devices.length, pointCount: points.length };
 }
 
 const ELECTRICITY = '01990000-0000-7000-8000-000000000001';
@@ -354,19 +367,335 @@ INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, sche
 ON CONFLICT (tenant_id, schedule_code) DO NOTHING;`;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const [file, flag] = process.argv.slice(2);
-  if (!file) throw new Error('usage: node scripts/site-onboarding.mjs <site file> [--print]');
-  const profile = JSON.parse(readFileSync(file, 'utf8'));
-  const { registry, telemetry, energy, deviceCount, pointCount } = buildOnboardingSql(profile);
-  if (flag === '--print') {
-    process.stdout.write(`${registry}\n\n${telemetry}\n\n${energy}\n`);
-  } else {
-    const container = process.env.PHASE1_POSTGRES_CONTAINER || localContainer('postgres');
-    for (const [database, sql] of [['hvac_s1', registry], ['hvac_s2', telemetry], ['hvac_s1', energy]].filter(([, sql]) => sql)) {
-      const result = spawnSync('docker', ['exec', '-i', container, 'psql', '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', '-q'], { input: sql, stdio: ['pipe', 'inherit', 'inherit'] });
-      if (result.status !== 0) throw new Error(`${database} onboarding failed with ${result.status}`);
+// The Site's diagnosis and Optimization, when its manifest has them (ADR 0028). The low-delta-T
+// rule and the Optimization policy belong to the Tenant and every Site of it reads them: the first
+// Site of a Tenant creates them from its manifest, a later one only checks them. The Site's own
+// rows (the diagnosis schedule, the Optimization deployment binding and schedule) follow the file;
+// the Optimization binding and schedule are written only while the Tenant's policy in effect is the
+// one the manifest describes, since preparation reads that policy's readings and limits for every
+// Site of the Tenant.
+const LOW_DELTA_T = 'CHILLED_WATER_LOW_DELTA_T';
+
+function deviceByCode(profile, code) {
+  const device = profile.devices.find((candidate) => candidate.code === code);
+  if (!device) throw new Error(`no device ${code} in the site file`);
+  return device;
+}
+
+function assetByCode(profile, code) {
+  const asset = (profile.assets ?? []).find((candidate) => candidate.code === code);
+  if (!asset) throw new Error(`no asset ${code} in the site file`);
+  return asset;
+}
+
+// The policy in effect for the Tenant now, the one Optimization preparation reads.
+function effectivePolicySql(tenant) {
+  return `SELECT pv.constraints, pv.objective, pv.dispatch_mode, pv.horizon, pv.horizon_minutes, pv.granularity
+FROM core_registry.optimization_policy_versions pv
+JOIN core_registry.optimization_policies p ON p.tenant_id = pv.tenant_id AND p.id = pv.policy_id
+WHERE pv.tenant_id = ${tenant} AND p.status = 'ACTIVE' AND p.resource_type = 'HVAC' AND pv.status = 'RELEASED'
+  AND pv.effective_from <= clock_timestamp() AND (pv.effective_to IS NULL OR pv.effective_to > clock_timestamp())
+ORDER BY pv.effective_from DESC, pv.version DESC
+LIMIT 1`;
+}
+
+// A schedule the manifest owns: a rerun brings its name, cron, payload and enabled back to the file.
+function scheduleUpsert({ id, code, name, tenant, site, jobType, cron, timeout, payload, enabled, nextFire, guard }) {
+  return `INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, enabled, next_fire_at)
+SELECT ${id}::uuid, ${sqlLiteral(code)}, ${sqlLiteral(name)}, ${tenant}::uuid, ${site}::uuid, '${jobType}', 'CRON', ${sqlLiteral(cron)}, '5-field-v1', 'UTC', 'FIRE_ONCE', ${timeout}, ${sqlJson(payload)}, ${enabled ? 'true' : 'false'}, ${nextFire}${guard ? `\nWHERE ${guard}` : ''}
+ON CONFLICT (tenant_id, schedule_code) ${updateWhenChanged('schedule_definitions', fromFile('schedule_name', 'cron_expression', 'payload_template', 'enabled'), { revision: 'version' })};`;
+}
+
+export function buildIntelligenceSql(profile) {
+  const intelligence = profile.intelligence;
+  if (!intelligence) return '';
+  const { site } = profile;
+  const t = sqlLiteral(profile.tenantId);
+  const st = sqlLiteral(site.id);
+  const id = (kind, index) => sqlLiteral(rowId(site.id, kind, index));
+  const parts = [];
+
+  const lowDeltaT = intelligence.diagnosis?.lowDeltaT;
+  if (lowDeltaT) {
+    const device = deviceByCode(profile, lowDeltaT.device);
+    const asset = assetByCode(profile, lowDeltaT.asset);
+    const { minimumDeltaTC, windowMinutes } = lowDeltaT.firstRevision;
+    parts.push(`-- The Tenant's first low-delta-T rule revision, only when it has none; later ones come from scripts/publish-fdd-rule-revision.mjs.
+INSERT INTO core_registry.fdd_rule_revisions (id, tenant_id, rule_code, revision, minimum_delta_tc, window_minutes, effective_from, created_at)
+SELECT ${id('7c00', 1)}::uuid, ${t}::uuid, '${LOW_DELTA_T}', 1, ${Number(minimumDeltaTC)}, ${Number(windowMinutes)}, '2026-01-01T00:00:00Z'::timestamptz, clock_timestamp()
+WHERE NOT EXISTS (SELECT 1 FROM core_registry.fdd_rule_revisions WHERE tenant_id = ${t} AND rule_code = '${LOW_DELTA_T}');
+${scheduleUpsert({
+    id: id('7c00', 2), code: `chilled-water-low-delta-t-${site.code}`, name: '冷冻水低温差诊断（每 15 分钟）', tenant: t, site: st,
+    jobType: 'FDD_EVALUATION', cron: lowDeltaT.cron, timeout: 60, payload: { assetId: asset.id, deviceId: device.id }, enabled: lowDeltaT.enabled,
+    nextFire: `date_trunc('hour', clock_timestamp()) + ceil(extract(minute FROM clock_timestamp()) / 15 + 0.0001) * interval '15 minutes'`,
+  })}`);
+  }
+
+  const optimization = intelligence.optimization;
+  if (optimization) {
+    const { policy } = optimization;
+    const agrees = `EXISTS (SELECT 1 FROM (${effectivePolicySql(t)}) AS current
+  WHERE (current.constraints, current.objective, current.dispatch_mode, current.horizon, current.horizon_minutes, current.granularity)
+    = (${sqlJson(policy.constraints)}, ${sqlLiteral(policy.objective)}, ${sqlLiteral(policy.dispatchMode)}, ${sqlLiteral(policy.horizon)}, ${Number(policy.horizonMinutes)}, ${sqlLiteral(policy.granularity)}))`;
+    const binding = `EXISTS (SELECT 1 FROM core_registry.ai_deployment_bindings WHERE tenant_id = ${t} AND site_id = ${st} AND use_case = 'OPTIMIZATION' AND status = 'ACTIVE')`;
+    parts.push(`-- The Tenant's Optimization policy, only when it has none (a later Site checks it, see validate).
+INSERT INTO core_registry.optimization_policies (id, tenant_id, policy_code, subject_type, resource_type, status, revision, created_at, updated_at)
+SELECT ${id('7b00', 1)}::uuid, ${t}::uuid, ${sqlLiteral(policy.code)}, 'SITE', 'HVAC', 'ACTIVE', 1, clock_timestamp(), clock_timestamp()
+WHERE NOT EXISTS (SELECT 1 FROM core_registry.optimization_policies WHERE tenant_id = ${t} AND resource_type = 'HVAC' AND status = 'ACTIVE');
+INSERT INTO core_registry.optimization_policy_versions (id, tenant_id, policy_id, version, objective, weights, constraints, dispatch_mode, fallback_policy, risk_level, horizon, horizon_minutes, granularity, effective_from, status, revision, created_at, updated_at)
+SELECT ${id('7b00', 2)}::uuid, ${t}::uuid, ${id('7b00', 1)}::uuid, 1, ${sqlLiteral(policy.objective)}, '{"cost":1}'::jsonb, ${sqlJson(policy.constraints)}, ${sqlLiteral(policy.dispatchMode)}, 'RULE_STRATEGY', 'LOW', ${sqlLiteral(policy.horizon)}, ${Number(policy.horizonMinutes)}, ${sqlLiteral(policy.granularity)}, '2026-01-01T00:00:00Z'::timestamptz, 'RELEASED', 1::bigint, clock_timestamp(), clock_timestamp()
+WHERE EXISTS (SELECT 1 FROM core_registry.optimization_policies WHERE id = ${id('7b00', 1)})
+  AND NOT EXISTS (SELECT 1 FROM core_registry.optimization_policy_versions WHERE id = ${id('7b00', 2)});
+-- The Site runs the Tenant's enabled deployment of the manifest's model, while the policy agrees.
+INSERT INTO core_registry.ai_deployment_bindings (id, tenant_id, site_id, use_case, deployment_revision_id, status, revision, created_at, updated_at)
+SELECT ${id('7b00', 3)}::uuid, ${t}::uuid, ${st}::uuid, 'OPTIMIZATION', revision.id, 'ACTIVE', 1, clock_timestamp(), clock_timestamp()
+FROM core_registry.ai_deployment_revisions revision
+JOIN core_registry.ai_model_definitions model ON model.tenant_id = revision.tenant_id AND model.id = revision.model_definition_id
+WHERE revision.tenant_id = ${t} AND revision.use_case = 'OPTIMIZATION' AND revision.enabled AND model.status = 'ACTIVE' AND model.model_id = ${sqlLiteral(optimization.model)}
+  AND ${agrees}
+ORDER BY revision.revision DESC
+LIMIT 1
+ON CONFLICT DO NOTHING;
+${scheduleUpsert({
+    id: id('7b00', 4), code: `supply-temperature-optimization-${site.code}`, name: '冷冻水供水温度优化建议（每小时）', tenant: t, site: st,
+    jobType: 'OPTIMIZATION_RUN', cron: optimization.cron, timeout: 120, payload: {}, enabled: optimization.enabled, nextFire: 'clock_timestamp()',
+    guard: `${agrees}\n  AND ${binding}`,
+  })}`);
+  }
+  return parts.length ? `BEGIN;\n${parts.join('\n\n')}\nCOMMIT;` : '';
+}
+
+// What a site file must say consistently before anything is written: every device, asset and
+// point it refers to is in it. Returns the problems found, empty when there are none.
+export function checkSiteFile(profile, alarmRules = null) {
+  const problems = [];
+  const { devices } = siteRows(profile);
+  const activePoints = new Map(devices.map((device) => [device.code, new Set(device.points.filter((point) => pointStatus(point) === 'ACTIVE').map((point) => point.code))]));
+  const siteActive = (code) => devices.filter((device) => activePoints.get(device.code).has(code)).length;
+  const intelligence = profile.intelligence ?? {};
+  const cron = (value, where) => {
+    if (typeof value !== 'string' || value.trim().split(/\s+/).length !== 5) problems.push(`${where}: cron ${value} is not five fields`);
+  };
+
+  if (intelligence.alarmRules && !alarmRules) problems.push(`alarm rules file ${intelligence.alarmRules} was not found`);
+  if (alarmRules) {
+    const inputs = [];
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (typeof node.input === 'string') inputs.push(node.input);
+      for (const child of node.children ?? []) walk(child);
+    };
+    for (const rule of alarmRules.rules ?? []) { walk(rule.raise); walk(rule.clear); }
+    for (const input of new Set(inputs)) {
+      const [deviceCode, pointCode] = input.split('/');
+      if (!activePoints.has(deviceCode)) problems.push(`alarm rule input ${input}: no device ${deviceCode}`);
+      else if (!activePoints.get(deviceCode).has(pointCode)) problems.push(`alarm rule input ${input}: ${deviceCode} has no active point ${pointCode}`);
     }
-    console.log(`${profile.site.name}: Gateway ${profile.gateway.name}, ${deviceCount} devices, ${pointCount} points registered`);
+  }
+
+  const lowDeltaT = intelligence.diagnosis?.lowDeltaT;
+  if (lowDeltaT) {
+    cron(lowDeltaT.cron, 'diagnosis.lowDeltaT');
+    if (typeof lowDeltaT.enabled !== 'boolean') problems.push('diagnosis.lowDeltaT.enabled must be true or false');
+    if (!(profile.assets ?? []).some((asset) => asset.code === lowDeltaT.asset)) problems.push(`diagnosis.lowDeltaT: no asset ${lowDeltaT.asset}`);
+    const points = activePoints.get(lowDeltaT.device);
+    if (!points) problems.push(`diagnosis.lowDeltaT: no device ${lowDeltaT.device}`);
+    else for (const code of ['supply_water_temperature', 'return_water_temperature']) if (!points.has(code)) problems.push(`diagnosis.lowDeltaT: ${lowDeltaT.device} has no active point ${code}`);
+    const { minimumDeltaTC, windowMinutes } = lowDeltaT.firstRevision ?? {};
+    if (!(minimumDeltaTC > 0) || !Number.isInteger(windowMinutes) || windowMinutes < 1 || windowMinutes > 1440) problems.push('diagnosis.lowDeltaT.firstRevision needs minimumDeltaTC > 0 and windowMinutes 1–1440');
+  }
+
+  const optimization = intelligence.optimization;
+  if (optimization) {
+    cron(optimization.cron, 'optimization');
+    if (typeof optimization.enabled !== 'boolean') problems.push('optimization.enabled must be true or false');
+    const mapping = optimization.policy?.constraints?.inputMapping ?? {};
+    for (const key of ['supplyTemperatureKey', 'zoneTemperatureKey']) {
+      const count = siteActive(mapping[key]);
+      if (count !== 1) problems.push(`optimization.policy inputMapping.${key} ${mapping[key]} is on ${count} active points; preparation needs exactly one`);
+    }
+    if (!['人工设定', '现场数据'].includes(optimization.policy?.responseModelSource)) problems.push('optimization.policy.responseModelSource must say where the response model comes from: 人工设定 or 现场数据');
+  }
+  return problems;
+}
+
+// One SELECT that reads what validate compares against the manifest. Read-only.
+export function siteStateQuery(profile) {
+  const t = sqlLiteral(profile.tenantId);
+  const st = sqlLiteral(profile.site.id);
+  const model = sqlLiteral(profile.intelligence?.optimization?.model ?? '');
+  return `BEGIN READ ONLY;
+SELECT json_build_object(
+  'site', (SELECT status FROM core_registry.sites WHERE id = ${st}),
+  'devices', (SELECT coalesce(json_object_agg(id, status), '{}') FROM core_registry.devices WHERE site_id = ${st}),
+  'points', (SELECT coalesce(json_object_agg(id, status), '{}') FROM core_registry.telemetry_points WHERE site_id = ${st}),
+  'assets', (SELECT coalesce(json_object_agg(id, status), '{}') FROM core_registry.assets WHERE site_id = ${st}),
+  'schedules', (SELECT coalesce(json_object_agg(schedule_code, json_build_object('jobType', job_type, 'cron', cron_expression, 'enabled', enabled, 'payload', payload_template)), '{}') FROM core_registry.schedule_definitions WHERE tenant_id = ${t} AND site_id = ${st}),
+  'topology', EXISTS (SELECT 1 FROM core_registry.energy_topology_versions WHERE site_id = ${st} AND status = 'ACTIVE'),
+  'tariff', EXISTS (SELECT 1 FROM core_registry.tariff_assignments WHERE site_id = ${st} AND status = 'RELEASED'),
+  'forecast', EXISTS (SELECT 1 FROM core_registry.forecast_deployments WHERE site_id = ${st} AND status = 'ACTIVE'),
+  'policy', (SELECT json_build_object('constraints', constraints, 'objective', objective, 'dispatchMode', dispatch_mode, 'horizon', horizon, 'horizonMinutes', horizon_minutes, 'granularity', granularity) FROM (${effectivePolicySql(t)}) AS current),
+  'modelRevision', (SELECT revision.id FROM core_registry.ai_deployment_revisions revision JOIN core_registry.ai_model_definitions model ON model.tenant_id = revision.tenant_id AND model.id = revision.model_definition_id
+    WHERE revision.tenant_id = ${t} AND revision.use_case = 'OPTIMIZATION' AND revision.enabled AND model.status = 'ACTIVE' AND model.model_id = ${model} ORDER BY revision.revision DESC LIMIT 1),
+  'optimizationBinding', (SELECT json_build_object('status', binding.status, 'enabled', revision.enabled) FROM core_registry.ai_deployment_bindings binding JOIN core_registry.ai_deployment_revisions revision ON revision.tenant_id = binding.tenant_id AND revision.id = binding.deployment_revision_id
+    WHERE binding.tenant_id = ${t} AND binding.site_id = ${st} AND binding.use_case = 'OPTIMIZATION'),
+  'lowDeltaTRule', (SELECT json_build_object('revision', revision, 'minimumDeltaTC', minimum_delta_tc, 'windowMinutes', window_minutes) FROM core_registry.fdd_rule_revisions
+    WHERE tenant_id = ${t} AND rule_code = '${LOW_DELTA_T}' AND effective_from <= clock_timestamp() ORDER BY revision DESC LIMIT 1)
+);
+ROLLBACK;`;
+}
+
+// Object keys in a fixed order, so two JSON values compare by content.
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
+  return value;
+}
+const sameJson = (left, right) => JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+
+// Paths where two JSON objects differ, e.g. inputMapping.zoneTemperatureKey.
+function differences(want, have, path = '') {
+  if (want && have && typeof want === 'object' && typeof have === 'object' && !Array.isArray(want)) {
+    return [...new Set([...Object.keys(want), ...Object.keys(have)])].flatMap((key) => differences(want[key], have[key], path ? `${path}.${key}` : key));
+  }
+  return sameJson(want, have) ? [] : [`${path}: 清单 ${JSON.stringify(want)}，现在 ${JSON.stringify(have)}`];
+}
+
+// The schedule codes a generated script writes, with their job types.
+function scheduleCodes(sql) {
+  return [...sql.matchAll(/INSERT INTO core_registry\.schedule_definitions[\s\S]*?ON CONFLICT/g)]
+    .flatMap(([block]) => [...block.matchAll(/^\s*(?:SELECT |\()[^,]+, '([a-z0-9-]+)', '[^']*', [^,]+, [^,]+, '([A-Z_]+)'/gm)].map(([, code, jobType]) => ({ code, jobType })));
+}
+
+// What the database still lacks against the manifest, as items of four kinds: ok; missing and
+// differs, which apply writes; decide, which apply leaves for a person (something the Tenant
+// shares with its other Sites, or a choice the manifest leaves open).
+export function planOnboarding(profile, state) {
+  const items = [];
+  const add = (area, status, item, detail = '') => items.push({ area, status, item, detail });
+  const { devices, points } = siteRows(profile);
+  const sql = buildOnboardingSql(profile);
+
+  add('站点和设备', state.site === 'ACTIVE' ? 'ok' : state.site ? 'differs' : 'missing', `站点 ${profile.site.name}`);
+  const wanted = [{ id: profile.gateway.id, code: profile.gateway.code }, ...devices];
+  const missingDevices = wanted.filter((device) => !state.devices[device.id]);
+  const inactiveDevices = wanted.filter((device) => state.devices[device.id] && state.devices[device.id] !== 'ACTIVE');
+  add('站点和设备', missingDevices.length ? 'missing' : inactiveDevices.length ? 'differs' : 'ok', `网关和设备 ${wanted.length} 台`, [...missingDevices.map((device) => `缺 ${device.code}`), ...inactiveDevices.map((device) => `${device.code} 不是 ACTIVE`)].join('；'));
+  const missingAssets = (profile.assets ?? []).filter((asset) => !state.assets[asset.id]);
+  add('站点和设备', missingAssets.length ? 'missing' : 'ok', `资产 ${(profile.assets ?? []).length} 台`, missingAssets.map((asset) => `缺 ${asset.code}`).join('；'));
+  const missingPoints = points.filter((point) => !state.points[point.id]);
+  const statusPoints = points.filter((point) => state.points[point.id] && state.points[point.id] !== pointStatus(point));
+  add('点位', missingPoints.length ? 'missing' : statusPoints.length ? 'differs' : 'ok', `点位 ${points.length} 个`, [...missingPoints.map((point) => `缺 ${point.device.code}/${point.code}`), ...statusPoints.map((point) => `${point.device.code}/${point.code} 应为 ${pointStatus(point)}`)].join('；'));
+
+  if (profile.energy) {
+    add('能耗和负荷预测', state.topology ? 'ok' : 'missing', '能耗拓扑（已发布）');
+    add('能耗和负荷预测', state.tariff ? 'ok' : 'missing', '电价');
+    add('能耗和负荷预测', state.forecast ? 'ok' : 'missing', '负荷预测模型部署');
+  }
+
+  // Energy and forecast schedules are created once and then left to the Registry (DO NOTHING).
+  for (const { code } of scheduleCodes(sql.energy)) add('能耗和负荷预测', state.schedules[code] ? 'ok' : 'missing', `调度定义 ${code}`);
+
+  const intelligence = profile.intelligence ?? {};
+  if (intelligence.alarmRules) add('告警规则', 'decide', `告警规则文件 ${intelligence.alarmRules}`, '告警规则在告警库里，由 alarm-rules 发布，不归这里写；先用它的 -print 看要新增、修改、停用哪些规则');
+
+  const lowDeltaT = intelligence.diagnosis?.lowDeltaT;
+  if (lowDeltaT) {
+    const rule = state.lowDeltaTRule;
+    if (!rule) add('诊断', 'missing', '低温差诊断规则版本', `租户还没有，apply 建第 1 版：${lowDeltaT.firstRevision.minimumDeltaTC} K、${lowDeltaT.firstRevision.windowMinutes} 分钟`);
+    else add('诊断', 'ok', '低温差诊断规则版本', `租户共用，生效的是第 ${rule.revision} 版：${rule.minimumDeltaTC} K、${rule.windowMinutes} 分钟；改门槛用 scripts/publish-fdd-rule-revision.mjs 发新版本`);
+    const code = `chilled-water-low-delta-t-${profile.site.code}`;
+    const have = state.schedules[code];
+    const payload = { assetId: assetByCode(profile, lowDeltaT.asset).id, deviceId: deviceByCode(profile, lowDeltaT.device).id };
+    if (!have) add('诊断', 'missing', `调度定义 ${code}`);
+    else if (have.cron !== lowDeltaT.cron || have.enabled !== lowDeltaT.enabled || !sameJson(have.payload, payload)) add('诊断', 'differs', `调度定义 ${code}`, '执行时间、对象或启用状态和清单不同');
+    else add('诊断', 'ok', `调度定义 ${code}`);
+    if (!lowDeltaT.enabled) add('诊断', 'decide', '低温差诊断未启用', lowDeltaT.note ?? '清单里 enabled 是 false');
+  }
+
+  const optimization = intelligence.optimization;
+  if (optimization) {
+    const { policy } = optimization;
+    const current = state.policy;
+    const want = { constraints: policy.constraints, objective: policy.objective, dispatchMode: policy.dispatchMode, horizon: policy.horizon, horizonMinutes: policy.horizonMinutes, granularity: policy.granularity };
+    const policyDiff = current ? differences(want, current) : [];
+    if (!current) add('优化建议', 'missing', '优化策略', '租户还没有生效的策略，apply 按清单建第 1 版');
+    else if (policyDiff.length) add('优化建议', 'decide', '优化策略和清单不一致', `策略是租户共用的，apply 不改：${policyDiff.join('；')}`);
+    else add('优化建议', 'ok', '优化策略');
+    if (current) {
+      const mapping = current.constraints?.inputMapping ?? {};
+      const siteCodes = new Set(points.filter((point) => pointStatus(point) === 'ACTIVE').map((point) => point.code));
+      for (const key of ['supplyTemperatureKey', 'zoneTemperatureKey']) {
+        if (!siteCodes.has(mapping[key])) add('优化建议', 'decide', `租户策略的 ${key} 是 ${mapping[key]}`, '本站没有这个点位，按现在的策略准备会失败');
+      }
+    }
+    if (policy.responseModelSource === '人工设定') add('优化建议', 'decide', '响应系数是人工设定', '四个系数不是本站数据算出来的，页面「计算依据」标「人工设定」；按现场数据核定后改清单');
+    if (!state.modelRevision) add('优化建议', 'decide', `模型 ${optimization.model}`, '租户没有启用的这个模型的部署版本，apply 不建');
+    // Apply writes the binding and schedule only while the policy agrees and the model is deployed.
+    const blocked = policyDiff.length > 0 || !state.modelRevision;
+    const binding = state.optimizationBinding;
+    if (binding && binding.status === 'ACTIVE' && binding.enabled) add('优化建议', 'ok', '本站的模型部署');
+    else if (binding) add('优化建议', 'decide', '本站的模型部署', `已有绑定但${binding.status !== 'ACTIVE' ? '已停用' : '部署版本未启用'}，apply 不改`);
+    else add('优化建议', blocked ? 'decide' : 'missing', '本站的模型部署', blocked ? '等策略一致、租户有启用的部署版本之后 apply 才登记' : '');
+    const code = `supply-temperature-optimization-${profile.site.code}`;
+    const have = state.schedules[code];
+    if (!have) add('优化建议', blocked ? 'decide' : 'missing', `调度定义 ${code}`, blocked ? '和本站的模型部署一起登记' : '');
+    else if (have.cron !== optimization.cron || have.enabled !== optimization.enabled) add('优化建议', 'differs', `调度定义 ${code}`, '执行时间或启用状态和清单不同');
+    else add('优化建议', 'ok', `调度定义 ${code}`);
+  }
+  return items;
+}
+
+const MARK = { ok: '  有  ', missing: '  缺  ', differs: '  改  ', decide: '要决定' };
+
+export function formatPlan(items) {
+  const lines = [];
+  for (const area of [...new Set(items.map((item) => item.area))]) {
+    lines.push(area);
+    for (const item of items.filter((candidate) => candidate.area === area)) lines.push(`  [${MARK[item.status]}] ${item.item}${item.detail ? `：${item.detail}` : ''}`);
+  }
+  const count = (status) => items.filter((item) => item.status === status).length;
+  lines.push(`缺 ${count('missing')} 项、要改 ${count('differs')} 项（apply 会写），要人决定 ${count('decide')} 项（apply 不写）`);
+  return lines.join('\n');
+}
+
+function readAlarmRules(file, profile) {
+  const name = profile.intelligence?.alarmRules;
+  if (!name) return null;
+  const path = join(dirname(file), name);
+  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
+}
+
+function psql(container, database, sql, capture = false) {
+  const result = spawnSync('docker', ['exec', '-i', container, 'psql', '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', '-q', ...(capture ? ['-At'] : [])], { input: sql, encoding: 'utf8', stdio: ['pipe', capture ? 'pipe' : 'inherit', 'inherit'] });
+  if (result.status !== 0) throw new Error(`${database} psql failed with ${result.status}`);
+  return result.stdout;
+}
+
+function readState(container, profile) {
+  return JSON.parse(psql(container, 'hvac_s1', siteStateQuery(profile), true).trim());
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const [action, file, flag] = process.argv.slice(2);
+  if (!['validate', 'apply', 'print'].includes(action) || !file) throw new Error('usage: node scripts/site-onboarding.mjs validate|apply|print <site file> [--offline]');
+  const profile = JSON.parse(readFileSync(file, 'utf8'));
+  const problems = checkSiteFile(profile, readAlarmRules(file, profile));
+  if (problems.length) {
+    console.error(`${file} 有 ${problems.length} 处对不上，什么都没写：\n${problems.map((problem) => `  - ${problem}`).join('\n')}`);
+    process.exit(1);
+  }
+  const sql = buildOnboardingSql(profile);
+  const container = process.env.PHASE1_POSTGRES_CONTAINER || localContainer('postgres');
+  if (action === 'print') {
+    process.stdout.write(`${sql.registry}\n\n${sql.telemetry}\n\n${sql.energy}\n\n${sql.intelligence}\n`);
+  } else if (action === 'validate') {
+    console.log(`${file}：清单本身没有问题（${sql.deviceCount} 台设备、${sql.pointCount} 个点位）`);
+    if (flag !== '--offline') console.log(formatPlan(planOnboarding(profile, readState(container, profile))));
+  } else {
+    for (const [database, script] of [['hvac_s1', sql.registry], ['hvac_s2', sql.telemetry], ['hvac_s1', sql.energy], ['hvac_s1', sql.intelligence]].filter(([, script]) => script)) psql(container, database, script);
+    console.log(`${profile.site.name}: Gateway ${profile.gateway.name}, ${sql.deviceCount} devices, ${sql.pointCount} points registered`);
+    const open = planOnboarding(profile, readState(container, profile)).filter((item) => item.status !== 'ok');
+    if (open.length) console.log(`还没完成的：\n${formatPlan(open)}`);
   }
 }

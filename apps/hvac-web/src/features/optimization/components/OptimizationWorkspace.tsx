@@ -3,6 +3,7 @@ import { getRouteApi, Link } from '@tanstack/react-router';
 import { ArrowRight, ChevronRight, Lightbulb, Send, ShieldCheck, Sparkles, TriangleAlert, Undo2 } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
+import { GatewayRequestError } from '@/api/gateway-client';
 import { PageHeader } from '@/blocks/page-header';
 import { Panel, PanelHeader } from '@/blocks/panel';
 import { InfoTip } from '@/components/info-tip';
@@ -21,7 +22,7 @@ import { useNow } from '@/hooks/use-now';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { changesSupply, preparationProblem, recommendedSetpoint, TRIGGER_LABEL, type OptimizationRecommendation, type RecommendationRisk } from '../optimization-model';
-import { latestPreparationQuery, latestRecommendationQuery, OptimizationRequestError, requestRecommendation } from '../query';
+import { latestPreparationQuery, latestRecommendationQuery, requestRecommendation } from '../query';
 
 const siteRoute = getRouteApi('/_app/_site');
 
@@ -135,7 +136,7 @@ export function OptimizationWorkspace() {
     onSuccess: ({ runId }) => setWaiting({ runId, since: Date.now() }),
     onError: (error) => setNotice({
       title: '没有生成建议',
-      detail: error instanceof OptimizationRequestError ? error.message : '优化服务暂时不可用',
+      detail: error instanceof GatewayRequestError ? error.message : '优化服务暂时不可用',
     }),
   });
 
