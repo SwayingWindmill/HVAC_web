@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      rebuild_base:
+        description: "Rebuild every <service>:deploy-base as a verified one-layer copy of the running image before this deploy (docs/operations/disk-full.md)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -66,6 +71,8 @@ jobs:
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_SSH_PASSWORD: ${{ secrets.DEPLOY_SSH_PASSWORD }}
+          # Only a manual run can ask for it; pushes to main always deploy on the existing bases.
+          HVAC_REBUILD_DEPLOY_BASE: ${{ inputs.rebuild_base && '1' || '0' }}
         run: |
           if ! command -v zstd >/dev/null 2>&1; then
             sudo apt-get update -y

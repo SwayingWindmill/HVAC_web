@@ -81,8 +81,10 @@ exit 0
 	}
 }
 
-// fakeImageStore is a docker stand-in that keeps tags, parents, labels and layer counts on disk,
-// enough for apply-on-server.sh to build candidates and retag them.
+// fakeImageStore is a docker stand-in that keeps tags, parents, labels, layer counts, configs and
+// files on disk, enough for apply-on-server.sh to build candidates and retag them, and for
+// rebuild-deploy-base.sh to flatten an image (FROM scratch or the migrator's postgres) and export it.
+// FAKE_FLATTEN_DRIFT=files or =config makes a flattened build differ from its source.
 func fakeImageStore(t *testing.T, bin string) string {
 	t.Helper()
 	store := t.TempDir()
@@ -100,6 +102,11 @@ resolve() {
 case "$1" in
   ps) exit 0 ;;
   tag) id="$(resolve "$2")"; printf '%s\n' "$id" > "$s/tags/$(key "$3")" ;;
+  create)
+    id="$(resolve "$2")"; cid="ctr$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+    mkdir -p "$s/containers"; printf '%s\n' "$id" > "$s/containers/$cid"; printf '%s\n' "$cid" ;;
+  export) id="$(cat "$s/containers/$2")"; mkdir -p "$s/images/$id/fs"; tar -C "$s/images/$id/fs" -cf - . ;;
+  rm) [[ "$2" == -v ]] || { echo "containers must be removed with rm -v" >&2; exit 1; }; rm "$s/containers/$3" ;;
   image)
     case "$2" in
       rm) rm -f "$s/tags/$(key "$3")" ;;
@@ -108,6 +115,7 @@ case "$1" in
         if [[ "$3" == --format ]]; then
           id="$(resolve "$5")" || exit 1
           case "$4" in
+            *"json .Config"*) cat "$s/images/$id/config.json" 2>/dev/null || printf '{}\n' ;;
             *Labels*) cat "$s/images/$id/label" 2>/dev/null || printf '<no value>\n' ;;
             *.Id*) printf '%s\n' "$id" ;;
           esac
@@ -116,11 +124,36 @@ case "$1" in
         fi ;;
     esac ;;
   build)
-    tag="$4"; ctx="$5"
-    from="$(sed -n 's/^FROM //p' "$ctx/Dockerfile")"
-    parent="$(resolve "$from")"
+    args=("$@"); ctx="${args[-1]}"; tag=""
+    for ((i = 1; i < ${#args[@]}; i++)); do [[ "${args[i]}" == -t ]] && tag="${args[i+1]}"; done
+    mkdir -p "$s/dockerfiles"; cp "$ctx/Dockerfile" "$s/dockerfiles/$(key "$tag")"
+    from="$(sed -n 's/^FROM \([^ ]*\)$/\1/p' "$ctx/Dockerfile")"
     id="sha256:$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
     mkdir -p "$s/images/$id"
+    if current="$(sed -n 's/^FROM \(.*\) AS current$/\1/p' "$ctx/Dockerfile")" && [[ -n "$current" ]]; then
+      source="$(resolve "$current")"
+      grep -qx -- '--no-cache' <(printf '%s\n' "${args[@]}") || { echo "a rebuilt base must not reuse the build cache" >&2; exit 1; }
+      mkdir -p "$s/images/$id/fs"
+      cp "$s/images/$source/config.json" "$s/images/$id/config.json" 2>/dev/null || true
+      if [[ "$from" == scratch ]]; then
+        echo 1 > "$s/images/$id/layers"
+        cp -a "$s/images/$source/fs/." "$s/images/$id/fs/"
+      else
+        parent="$(resolve "$from")"
+        echo $(( $(cat "$s/images/$parent/layers") + 1 )) > "$s/images/$id/layers"
+        cp -a "$s/images/$parent/fs/." "$s/images/$id/fs/"
+        copied="$(sed -n 's/^COPY --from=current \([^ ]*\) .*/\1/p' "$ctx/Dockerfile")"
+        mkdir -p "$s/images/$id/fs$copied"; cp -a "$s/images/$source/fs$copied/." "$s/images/$id/fs$copied/"
+      fi
+      case "${FAKE_FLATTEN_DRIFT:-}" in
+        files) printf 'stray\n' > "$s/images/$id/fs/stray" ;;
+        config) printf '{"User":"root"}\n' > "$s/images/$id/config.json" ;;
+      esac
+      printf '%s\n' "$id" > "$s/tags/$(key "$tag")"
+      printf 'rebuild %s FROM %s\n' "$tag" "$from" >> "$s/builds.log"
+      exit 0
+    fi
+    parent="$(resolve "$from")"
     echo $(( $(cat "$s/images/$parent/layers") + 1 )) > "$s/images/$id/layers"
     sed -n 's/^LABEL org.hvac.deploy-base=//p' "$ctx/Dockerfile" > "$s/images/$id/label"
     [[ -s "$s/images/$id/label" ]] || rm "$s/images/$id/label"
@@ -179,6 +212,16 @@ func applyRelease(t *testing.T, bin, store, platform string, run int) string {
 // applyReleaseWith is applyRelease with extra source.tar files (path -> body), which replace the stubs.
 func applyReleaseWith(t *testing.T, bin, store, platform string, run int, source map[string]string) string {
 	t.Helper()
+	output, err := runApply(t, bin, store, platform, run, source)
+	if err != nil {
+		t.Fatalf("apply run %d: %v\n%s", run, err, output)
+	}
+	return output
+}
+
+// runApply stages the release and runs apply-on-server.sh with extra environment entries.
+func runApply(t *testing.T, bin, store, platform string, run int, source map[string]string, env ...string) (string, error) {
+	t.Helper()
 	release := t.TempDir()
 	for _, dir := range []string{"bins/energy-api", "src/deploy/platform/phase1/cd"} {
 		if err := os.MkdirAll(filepath.Join(release, dir), 0o755); err != nil {
@@ -196,6 +239,7 @@ func applyReleaseWith(t *testing.T, bin, store, platform string, run int, source
 		"rollback.sh":              "#!/bin/sh\nexit 0\n",
 		"smoke-release.sh":         "#!/bin/sh\nexit 0\n",
 		"prune-rollback-images.sh": "#!/bin/sh\nexit 0\n",
+		"rebuild-deploy-base.sh":   string(mustRead(t, "rebuild-deploy-base.sh")),
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(release, name), []byte(body), 0o755); err != nil {
@@ -207,12 +251,9 @@ func applyReleaseWith(t *testing.T, bin, store, platform string, run int, source
 		t.Fatalf("tar: %v\n%s", err, out)
 	}
 	cmd := exec.Command("bash", "apply-on-server.sh", release)
-	cmd.Env = commandEnv(bin, "DOCKER_STORE="+store, "HVAC_PLATFORM_DIR="+platform, "HVAC_DEPLOY_SCRIPT="+writeExe(t, bin, "restart", "#!/bin/sh\nexit 0\n"), "FAKE_STAMP=2026102"+strconv.Itoa(run)+"T000000Z")
+	cmd.Env = commandEnv(bin, append([]string{"DOCKER_STORE=" + store, "HVAC_PLATFORM_DIR=" + platform, "HVAC_DEPLOY_SCRIPT=" + writeExe(t, bin, "restart", "#!/bin/sh\nexit 0\n"), "FAKE_STAMP=2026102" + strconv.Itoa(run) + "T000000Z"}, env...)...)
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("apply run %d: %v\n%s", run, err, output)
-	}
-	return string(output)
+	return string(output), err
 }
 
 func applyFixture(t *testing.T) (bin, store, platform string) {
@@ -1253,6 +1294,228 @@ func TestReleaseShipsAndRunsTheRepositoryDeployScript(t *testing.T) {
 	for _, line := range strings.Split(string(mustRead(t, "deploy.sh")), "\n") {
 		if !strings.HasPrefix(strings.TrimSpace(line), "#") && strings.Contains(line, "/opt/") {
 			t.Fatalf("deploy.sh must not hard-code a host path: %s", line)
+		}
+	}
+}
+
+// seedContent gives a seeded image a filesystem and a `docker image inspect` config.
+func seedContent(t *testing.T, store, id string, files map[string]string, config string) {
+	t.Helper()
+	writeTree(t, filepath.Join(store, "images", id, "fs"), files)
+	if config != "" {
+		if err := os.WriteFile(filepath.Join(store, "images", id, "config.json"), []byte(config), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func tagExists(store, tag string) bool {
+	_, err := os.Stat(filepath.Join(store, "tags", strings.NewReplacer("/", "_", ":", "_").Replace(tag)))
+	return err == nil
+}
+
+func openContainers(t *testing.T, store string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(store, "containers"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
+}
+
+const runningConfig = `{"User":"65532:65532","Env":["PATH=/usr/bin","TZ=Asia/Shanghai"],"Entrypoint":["/service"],"Cmd":null,` +
+	`"WorkingDir":"/","ExposedPorts":{"8080/tcp":{}},"StopSignal":"SIGTERM",` +
+	`"Healthcheck":{"Test":["CMD","/healthcheck","http://127.0.0.1:8080/healthz"],"Interval":10000000000,"Timeout":3000000000,"StartPeriod":500000000,"Retries":5},` +
+	`"Labels":{"org.hvac.deploy-base":"sha256:seedhvacenergy-apiold-base","org.opencontainers.image.title":"energy-api"}}`
+
+func TestRebuildBaseFlattensTheRunningImageAndMovesTheBase(t *testing.T) {
+	bin, store, platform := applyFixture(t)
+	oldBase := seedImage(t, store, "hvac/energy-api:old-base", 30, "")
+	// deploy-base is the old base, as stable_base leaves it after every normal deploy.
+	if err := os.WriteFile(filepath.Join(store, "tags", "hvac_energy-api_deploy-base"), []byte(oldBase+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	running := seedImage(t, store, "hvac/energy-api:0.1.0-dev", 31, oldBase)
+	seedContent(t, store, running, map[string]string{"service": "svc0", "healthcheck": "hc", "etc/passwd": "root\n"}, runningConfig)
+
+	output, err := runApply(t, bin, store, platform, 1, nil, "HVAC_REBUILD_DEPLOY_BASE=1")
+	if err != nil {
+		t.Fatalf("rebuild deploy: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "verified hvac/energy-api:rebuilt-20261021T000000Z: same config and files as hvac/energy-api:0.1.0-dev") {
+		t.Fatalf("the rebuilt base was not verified:\n%s", output)
+	}
+	base, baseLayers, baseLabel := imageOf(t, store, "hvac/energy-api:deploy-base")
+	if base == oldBase || base == running || baseLayers != 1 || baseLabel != "" {
+		t.Fatalf("deploy-base = %s (%d layers, label %q); want a new one-layer image without a base label", base, baseLayers, baseLabel)
+	}
+	dockerfile := string(mustRead(t, filepath.Join(store, "dockerfiles", "hvac_energy-api_rebuilt-20261021T000000Z")))
+	for _, want := range []string{
+		"FROM hvac/energy-api:0.1.0-dev AS current\nFROM scratch\nCOPY --from=current / /\n",
+		`ENV TZ="Asia/Shanghai"`,
+		"WORKDIR /\nEXPOSE 8080/tcp\nSTOPSIGNAL SIGTERM\n",
+		`HEALTHCHECK --interval=10s --timeout=3s --start-period=500ms --retries=5 CMD ["/healthcheck", "http://127.0.0.1:8080/healthz"]`,
+		`LABEL "org.opencontainers.image.title"="energy-api"`,
+		`LABEL "org.hvac.flattened-from"="` + running + `"`,
+		"ENTRYPOINT [\"/service\"]\nUSER 65532:65532",
+	} {
+		if !strings.Contains(dockerfile, want) {
+			t.Fatalf("rebuilt Dockerfile is missing %q:\n%s", want, dockerfile)
+		}
+	}
+	if strings.Contains(dockerfile, "org.hvac.deploy-base") || strings.Contains(dockerfile, "CMD []") {
+		t.Fatalf("rebuilt Dockerfile must not carry the old base label or an empty CMD:\n%s", dockerfile)
+	}
+	if _, layers, label := imageOf(t, store, "hvac/energy-api:0.1.0-dev"); layers != 2 || label != base {
+		t.Fatalf("new image has %d layers (label %q), want 2 on the rebuilt %s", layers, label, base)
+	}
+	if id, _, _ := imageOf(t, store, "hvac/energy-api:before-20261021T000000Z"); id != running {
+		t.Fatalf("before tag = %s, want the previous running %s", id, running)
+	}
+	if tagExists(store, "hvac/energy-api:rebuilt-20261021T000000Z") || len(openContainers(t, store)) != 0 {
+		t.Fatalf("staged tag or export containers left behind: %v", openContainers(t, store))
+	}
+	if calls := string(mustRead(t, filepath.Join(store, "calls.log"))); strings.Count(calls, "rm -v ") != 2 {
+		t.Fatalf("both export containers must be removed with rm -v:\n%s", calls)
+	}
+
+	// Roll back to the image built on the old base, then deploy normally: the old base stays retired.
+	if err := os.WriteFile(filepath.Join(store, "tags", "hvac_energy-api_0.1.0-dev"), []byte(running+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	output = applyRelease(t, bin, store, platform, 2)
+	if id, _, _ := imageOf(t, store, "hvac/energy-api:deploy-base"); id != base {
+		t.Fatalf("after a rollback the next deploy moved deploy-base back to %s (old %s, rebuilt %s)\n%s", id, oldBase, base, output)
+	}
+	if _, layers, label := imageOf(t, store, "hvac/energy-api:0.1.0-dev"); layers != 2 || label != base {
+		t.Fatalf("deploy after rollback: %d layers (label %q), want 2 on %s", layers, label, base)
+	}
+	if strings.Contains(string(mustRead(t, filepath.Join(store, "builds.log"))), "FROM hvac/energy-api:old-base") {
+		t.Fatal("a candidate was built on the old base")
+	}
+}
+
+func TestNormalDeployNeverRebuildsTheBase(t *testing.T) {
+	bin, store, platform := applyFixture(t)
+	running := seedImage(t, store, "hvac/energy-api:0.1.0-dev", 12, "")
+	applyRelease(t, bin, store, platform, 1)
+	calls := string(mustRead(t, filepath.Join(store, "calls.log")))
+	for _, banned := range []string{"--no-cache", "create ", "export ", "json .Config"} {
+		if strings.Contains(calls, banned) {
+			t.Fatalf("a normal deploy ran %q:\n%s", banned, calls)
+		}
+	}
+	if id, _, _ := imageOf(t, store, "hvac/energy-api:deploy-base"); id != running {
+		t.Fatalf("deploy-base = %s, want the running %s", id, running)
+	}
+	if _, err := runApply(t, bin, store, platform, 2, nil, "HVAC_REBUILD_DEPLOY_BASE=yes"); err == nil {
+		t.Fatal("HVAC_REBUILD_DEPLOY_BASE must be 0 or 1")
+	}
+}
+
+func TestRebuildBaseThatDiffersChangesNothing(t *testing.T) {
+	for _, drift := range []string{"files", "config"} {
+		t.Run(drift, func(t *testing.T) {
+			bin, store, platform := applyFixture(t)
+			oldBase := seedImage(t, store, "hvac/energy-api:old-base", 30, "")
+			running := seedImage(t, store, "hvac/energy-api:0.1.0-dev", 31, oldBase)
+			seedContent(t, store, running, map[string]string{"service": "svc0"}, runningConfig)
+
+			output, err := runApply(t, bin, store, platform, 1, nil, "HVAC_REBUILD_DEPLOY_BASE=1", "FAKE_FLATTEN_DRIFT="+drift)
+			if err == nil || !strings.Contains(output, "could not rebuild the deploy base of energy-api; nothing was changed") {
+				t.Fatalf("a %s difference must stop the deploy: %v\n%s", drift, err, output)
+			}
+			if id, _, _ := imageOf(t, store, "hvac/energy-api:0.1.0-dev"); id != running {
+				t.Fatalf("running image moved to %s", id)
+			}
+			if tagExists(store, "hvac/energy-api:deploy-base") || tagExists(store, "hvac/energy-api:before-20261021T000000Z") ||
+				tagExists(store, "hvac/energy-api:rebuilt-20261021T000000Z") || tagExists(store, "hvac/energy-api:candidate-20261021T000000Z") {
+				t.Fatal("a failed rebuild left tags behind")
+			}
+			if open := openContainers(t, store); len(open) != 0 {
+				t.Fatalf("export containers left behind: %v", open)
+			}
+		})
+	}
+}
+
+func TestRebuildKeepsTheMigratorOnPostgres(t *testing.T) {
+	bin, store, _ := applyFixture(t)
+	postgres := seedImage(t, store, "postgres:16.4-bookworm", 9, "")
+	seedContent(t, store, postgres, map[string]string{"usr/bin/postgres": "pg"}, `{"Cmd":["postgres"]}`)
+	migrator := seedImage(t, store, "hvac/phase1-migrator:0.1.0-dev", 14, "")
+	seedContent(t, store, migrator,
+		map[string]string{"usr/bin/postgres": "pg", "opt/hvac/migrations/migration-list.tsv": "001\n"},
+		`{"Entrypoint":["/opt/hvac/migrations/run-phase1-migrations.sh"],"Cmd":null,"WorkingDir":"/opt/hvac"}`)
+
+	cmd := exec.Command("bash", "rebuild-deploy-base.sh", "hvac/phase1-migrator:0.1.0-dev", "migrator", "hvac/phase1-migrator:rebuilt")
+	cmd.Env = commandEnv(bin, "DOCKER_STORE="+store)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("rebuild migrator: %v\n%s", err, output)
+	}
+	dockerfile := string(mustRead(t, filepath.Join(store, "dockerfiles", "hvac_phase1-migrator_rebuilt")))
+	if !strings.Contains(dockerfile, "FROM postgres:16.4-bookworm\nCOPY --from=current /opt/hvac /opt/hvac\n") ||
+		!strings.Contains(dockerfile, "ENTRYPOINT [\"/opt/hvac/migrations/run-phase1-migrations.sh\"]\nCMD []") {
+		t.Fatalf("migrator must stay on postgres with only /opt/hvac copied and no inherited CMD:\n%s", dockerfile)
+	}
+	if _, layers, _ := imageOf(t, store, "hvac/phase1-migrator:rebuilt"); layers != 10 {
+		t.Fatalf("migrator base has %d layers, want postgres + 1", layers)
+	}
+	// The default base is the one the migrator image is built from.
+	froms := regexp.MustCompile(`(?m)^FROM (\S+)$`).FindAllStringSubmatch(string(mustRead(t, "../migrations/Dockerfile")), -1)
+	if len(froms) == 0 || !strings.Contains(string(mustRead(t, "rebuild-deploy-base.sh")), `HVAC_MIGRATOR_BASE_IMAGE:-`+froms[len(froms)-1][1]+`}`) {
+		t.Fatal("rebuild-deploy-base.sh must default the migrator base to the FROM in migrations/Dockerfile")
+	}
+}
+
+func TestDeployWorkflowRebuildsTheBaseOnlyWhenAsked(t *testing.T) {
+	workflow := string(mustRead(t, "../../../../.github/workflows/deploy-production.yml"))
+	if !strings.Contains(workflow, "rebuild_base:\n        description:") || !strings.Contains(workflow, "type: boolean\n        default: false") ||
+		!strings.Contains(workflow, "HVAC_REBUILD_DEPLOY_BASE: ${{ inputs.rebuild_base && '1' || '0' }}") {
+		t.Fatal("deploy-production.yml must offer rebuild_base (boolean, default false) and pass it as HVAC_REBUILD_DEPLOY_BASE")
+	}
+	if !regexp.MustCompile(`for script in [^\n]*\brebuild-deploy-base\.sh\b`).MatchString(string(mustRead(t, "build-release.sh"))) {
+		t.Fatal("build-release.sh does not ship rebuild-deploy-base.sh")
+	}
+	for _, rebuild := range []string{"0", "1", "maybe"} {
+		bin := t.TempDir()
+		log := filepath.Join(t.TempDir(), "ssh.log")
+		rejectSshpass(t, bin)
+		writeExe(t, bin, "ssh", `#!/bin/sh
+last=
+for arg in "$@"; do last=$arg; done
+printf '%s\n' "$last" >> "$SSH_LOG"
+case "$last" in
+  "command -v zstd"*|"test -f "*) exit 1 ;;
+  "cat > "*) cat > /dev/null ;;
+esac
+exit 0
+`)
+		fakeCurl(t, bin)
+		cmd := exec.Command("bash", "push-release.sh")
+		cmd.Env = commandEnv(bin, "SSH_LOG="+log, "DEPLOY_SSH_KEY=test-key\n", "DEPLOY_UPLOAD_ATTEMPTS=1",
+			"DEPLOY_UPLOAD_TIMEOUT_SECONDS=30", "DEPLOY_UPLOAD_RETRY_SLEEP=0", "PRODUCTION_RELEASE_DIR="+stageRelease(t),
+			"SMOKE_ATTEMPTS=1", "SMOKE_SLEEP=0", "HVAC_PUBLIC_ORIGIN=https://hvac.example", "HVAC_PUBLIC_HOST=hvac.example",
+			"HVAC_REBUILD_DEPLOY_BASE="+rebuild)
+		output, err := cmd.CombinedOutput()
+		sent, _ := os.ReadFile(log)
+		switch rebuild {
+		case "maybe":
+			if err == nil || len(sent) != 0 {
+				t.Fatalf("an invalid HVAC_REBUILD_DEPLOY_BASE must stop before any SSH:\n%s", output)
+			}
+		case "1":
+			if err != nil || !regexp.MustCompile(`(?m)^HVAC_REBUILD_DEPLOY_BASE=1 bash '[^']+/apply-on-server\.sh' `).Match(sent) {
+				t.Fatalf("rebuild_base was not passed to apply-on-server.sh: %v\n%s\n%s", err, sent, output)
+			}
+		default:
+			if err != nil || !regexp.MustCompile(`(?m)^bash '[^']+/apply-on-server\.sh' `).Match(sent) || strings.Contains(string(sent), "HVAC_REBUILD_DEPLOY_BASE") {
+				t.Fatalf("a normal deploy must run apply-on-server.sh unchanged: %v\n%s\n%s", err, sent, output)
+			}
 		}
 	}
 }

@@ -2,6 +2,8 @@
 # Run on the production host. Swap new files into the local images, then restart.
 # Images are never pulled. Each previous image is kept as <name>:before-<timestamp>; new ones are
 # built FROM <name>:deploy-base (see stable_base), which prune-rollback-images.sh never removes.
+# HVAC_REBUILD_DEPLOY_BASE=1 (the deploy workflow's rebuild_base input) first replaces every
+# deploy-base with a verified one-layer copy of the running image (see rebuild-deploy-base.sh).
 set -euo pipefail
 
 release="${1:-}"
@@ -14,6 +16,11 @@ platform_dir="${HVAC_PLATFORM_DIR:-/opt/hvac-platform}"
 compose_project="${HVAC_COMPOSE_PROJECT:-hvac-platform}"
 deploy_script="${HVAC_DEPLOY_SCRIPT:-}"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+rebuild_base="${HVAC_REBUILD_DEPLOY_BASE:-0}"
+if [[ "$rebuild_base" != 0 && "$rebuild_base" != 1 ]]; then
+  echo "error: HVAC_REBUILD_DEPLOY_BASE must be 0 or 1 (got '$rebuild_base')." >&2
+  exit 1
+fi
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "error: docker is not installed on the production host." >&2
@@ -74,13 +81,19 @@ docker_build() {
 
 # Candidates are built FROM a stable <name>:deploy-base, never FROM the running image, so the
 # swapped files do not pile up as new layers on every deploy. Each candidate records its base's
-# image ID in the label below. A running image without that label (built before this, or by hand)
-# or whose recorded base is gone becomes the base once. Prints "<base tag><TAB><base image id>".
+# image ID in the label below. An existing deploy-base tag wins, so a rollback to an image built on
+# an older base does not bring that base back. Without the tag the label is used, and a running image
+# without that label (built before this, or by hand) or whose recorded base is gone becomes the base
+# once. Prints "<base tag><TAB><base image id>".
 base_label=org.hvac.deploy-base
 stable_base() {
   local image="$1"
   local base="${image%:*}:deploy-base"
   local recorded=""
+  if recorded="$(docker image inspect --format '{{.Id}}' "$base" </dev/null 2>/dev/null)" && [[ -n "$recorded" ]]; then
+    printf '%s\t%s\n' "$base" "$recorded"
+    return
+  fi
   recorded="$(docker image inspect --format "{{index .Config.Labels \"${base_label}\"}}" "$image" </dev/null 2>/dev/null || true)"
   if [[ "$recorded" == "<no value>" ]]; then
     recorded=""
@@ -134,13 +147,42 @@ if [[ "${#planned_services[@]}" -eq 0 ]]; then
 fi
 
 declare -a candidates=()
+declare -a staged_bases=()
 cleanup_candidates() {
   local candidate
-  for candidate in "${candidates[@]+"${candidates[@]}"}"; do
+  for candidate in "${candidates[@]+"${candidates[@]}"}" "${staged_bases[@]+"${staged_bases[@]}"}"; do
     docker image rm "$candidate" >/dev/null 2>&1 || true
   done
 }
 trap cleanup_candidates EXIT
+
+# rebuild_base: build and verify every new base under <name>:rebuilt-<stamp> first, and move the
+# deploy-base tags only when all of them match. The old bases are then untagged (image prune removes
+# them after a healthy deploy); before-<stamp> tags and rollback are not touched.
+if [[ "$rebuild_base" == 1 ]]; then
+  rebuild_script="$release/rebuild-deploy-base.sh"
+  if [[ ! -f "$rebuild_script" ]]; then
+    echo "error: release is missing rebuild-deploy-base.sh." >&2
+    exit 1
+  fi
+  declare -a rebuilt=()
+  for index in "${!planned_services[@]}"; do
+    [[ "${planned_kinds[$index]}" == static ]] && continue
+    image="${planned_images[$index]}"
+    staged="${image%:*}:rebuilt-${stamp}"
+    staged_bases+=("$staged")
+    if ! bash "$rebuild_script" "$image" "${planned_kinds[$index]}" "$staged" </dev/null; then
+      echo "error: could not rebuild the deploy base of ${planned_services[$index]}; nothing was changed." >&2
+      exit 1
+    fi
+    rebuilt+=("$index")
+  done
+  for index in "${rebuilt[@]+"${rebuilt[@]}"}"; do
+    image="${planned_images[$index]}"
+    docker tag "${image%:*}:rebuilt-${stamp}" "${image%:*}:deploy-base"
+    echo "deploy base: ${image%:*}:deploy-base rebuilt from the running $image"
+  done
+fi
 
 for index in "${!planned_services[@]}"; do
   service="${planned_services[$index]}"
