@@ -21,17 +21,20 @@ func deterministicPointEventID(messageID string, deviceTimestamp int64, point En
 	if err != nil {
 		return "", fmt.Errorf("encode point value: %w", err)
 	}
-	seed := make([]byte, 0, len(messageID)+len(partition)+len(value)+64)
-	seed = append(seed, strings.TrimSpace(messageID)...)
-	seed = append(seed, 0)
-	seed = append(seed, partition...)
-	seed = append(seed, 0)
-	seed = append(seed, point.Code...)
-	seed = append(seed, 0)
-	seed = append(seed, point.Quality)
-	seed = append(seed, 0)
-	seed = append(seed, value...)
-	digest := sha256.Sum256(seed)
+	// Stream the fields straight into SHA-256 instead of building one buffer whose
+	// size is the sum of untrusted lengths. The bytes hashed are unchanged.
+	hasher := sha256.New()
+	for _, field := range [][]byte{
+		[]byte(strings.TrimSpace(messageID)), {0},
+		[]byte(partition), {0},
+		[]byte(point.Code), {0},
+		{point.Quality, 0},
+		value,
+	} {
+		hasher.Write(field)
+	}
+	var digest [sha256.Size]byte
+	hasher.Sum(digest[:0])
 	var raw [16]byte
 	binary.BigEndian.PutUint64(raw[:8], uint64(deviceTimestamp)<<16)
 	copy(raw[6:], digest[:10])

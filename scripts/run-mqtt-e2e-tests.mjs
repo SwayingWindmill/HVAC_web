@@ -205,9 +205,10 @@ try {
 
   // Public TLS ingress stand-in forwards only its own verified workload identity.
   // The lifecycle and issuance run in the real Connectivity process and database.
+  // First enrollment carries no client certificate and the stand-in never reads one,
+  // so it does not ask for one (and never accepts an unverified one).
   enrollmentServer = createHTTPSServer({
-    key: await readFile(join(pkiDir, 'web-key.pem')), cert: await readFile(join(pkiDir, 'web-cert.pem')),
-    ca: await readFile(join(gatewayCADir, 'ca.crt')), requestCert: true, rejectUnauthorized: false,
+    key: await readFile(join(pkiDir, 'web-key.pem')), cert: await readFile(join(pkiDir, 'web-cert.pem')), minVersion: 'TLSv1.3',
   }, (request, response) => {
     const upstream = httpsRequest({ host: '127.0.0.1', port: credentialPort, servername: 'connectivity', path: request.url, method: request.method,
       ca: readFileSync(join(gatewayCADir, 'ca.crt')), cert: readFileSync(join(pkiDir, 'gateway-cert.pem')), key: readFileSync(join(pkiDir, 'gateway-key.pem')),
