@@ -173,6 +173,12 @@ func imageOf(t *testing.T, store, tag string) (id string, layers int, label stri
 // applyRelease stages a one-service release whose helpers are stubs and runs apply-on-server.sh.
 func applyRelease(t *testing.T, bin, store, platform string, run int) string {
 	t.Helper()
+	return applyReleaseWith(t, bin, store, platform, run, nil)
+}
+
+// applyReleaseWith is applyRelease with extra source.tar files (path -> body), which replace the stubs.
+func applyReleaseWith(t *testing.T, bin, store, platform string, run int, source map[string]string) string {
+	t.Helper()
 	release := t.TempDir()
 	for _, dir := range []string{"bins/energy-api", "src/deploy/platform/phase1/cd"} {
 		if err := os.MkdirAll(filepath.Join(release, dir), 0o755); err != nil {
@@ -196,7 +202,8 @@ func applyRelease(t *testing.T, bin, store, platform string, run int) string {
 			t.Fatal(err)
 		}
 	}
-	if out, err := exec.Command("tar", "-C", filepath.Join(release, "src"), "-cf", filepath.Join(release, "source.tar"), "README", "deploy").CombinedOutput(); err != nil {
+	writeTree(t, filepath.Join(release, "src"), source)
+	if out, err := exec.Command("tar", append([]string{"-C", filepath.Join(release, "src"), "-cf", filepath.Join(release, "source.tar")}, topLevel(t, filepath.Join(release, "src"))...)...).CombinedOutput(); err != nil {
 		t.Fatalf("tar: %v\n%s", err, out)
 	}
 	cmd := exec.Command("bash", "apply-on-server.sh", release)

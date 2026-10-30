@@ -11,6 +11,10 @@
 #   observability-config.sh check <source.tar> <platform-dir> <compose-project>
 #     Before extraction. Validates the release config of every service that needs applying with the
 #     promtool / amtool shipped in the running image. Exits non-zero, touching nothing, when it is invalid.
+#   observability-config.sh sync <source.tar> <platform-dir>
+#     Right after extraction. Deletes files under the mirrored directories (see mirrored_dirs) that are
+#     not in source.tar, so a rule or dashboard deleted from the repo is deleted on the host too.
+#     Extracting a tar only adds and overwrites; without this a removed alerts/*.yaml stays loaded.
 #   observability-config.sh apply <platform-dir> <compose-project>
 #     After the deploy. Restarts the services whose config differs from the last applied one, waits for
 #     /-/ready and <prefix>_config_last_reload_successful == 1, then records what was applied.
@@ -23,9 +27,18 @@ set -euo pipefail
 ready_seconds="${HVAC_OBSERVABILITY_READY_SECONDS:-180}"
 poll_seconds="${HVAC_OBSERVABILITY_POLL_SECONDS:-2}"
 services=(prometheus alertmanager)
+# Directories the release owns completely, relative to the platform directory. Everything else in the
+# platform tree (runtime/, environments/*.env, backups, state files) is never touched by sync.
+# Alertmanager has no templates directory; its config is single files, already replaced by extraction.
+mirrored_dirs=(
+  infra/observability/alerts
+  infra/observability/dashboards
+  deploy/platform/phase1/observability/grafana/provisioning
+)
 
 usage() {
   echo "error: usage: observability-config.sh check <source.tar> <platform-dir> <compose-project>" >&2
+  echo "       observability-config.sh sync <source.tar> <platform-dir>" >&2
   echo "       observability-config.sh apply <platform-dir> <compose-project>" >&2
   exit 1
 }
@@ -159,6 +172,45 @@ run_check() {
   done
 }
 
+# Make each mirrored directory hold exactly the release's files. Only regular files and symlinks
+# inside the directory are deleted (find does not follow symlinks, so nothing outside is reached),
+# then directories left empty below it. Skipped, with a warning, when the release has no files under
+# that directory (a truncated or foreign tar must not empty it) or when the directory, or a parent of
+# it, is a symlink that leads outside the platform tree.
+run_sync() {
+  local source_tar="$1"
+  local platform_dir="${2%/}"
+  local listing
+  listing="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -f '$listing'" RETURN
+  tar -tf "$source_tar" | sed 's#^\./##' | LC_ALL=C sort -u > "$listing"
+
+  local dir target path rel removed
+  for dir in "${mirrored_dirs[@]}"; do
+    target="$platform_dir/$dir"
+    if ! awk -v p="$dir/" 'index($0, p) == 1 && length($0) > length(p) && substr($0, length($0)) != "/" { found = 1; exit } END { exit !found }' "$listing"; then
+      echo "observability: the release has no files under $dir; left as is"
+      continue
+    fi
+    if [[ -L "$target" || ! -d "$target" || "$(cd "$target" && pwd -P)" != "$(cd "$platform_dir" && pwd -P)/$dir" ]]; then
+      echo "warning: $target is not a plain directory; stale files there were not removed" >&2
+      continue
+    fi
+    removed=0
+    while IFS= read -r -d '' path; do
+      rel="${path#"$platform_dir/"}"
+      if ! grep -Fxq -- "$rel" "$listing"; then
+        rm -f -- "$path"
+        echo "observability: removed $rel (deleted from the repository)"
+        removed=$((removed + 1))
+      fi
+    done < <(find "$target" -mindepth 1 \( -type f -o -type l \) -print0)
+    find "$target" -mindepth 1 -depth -type d -empty -delete
+    echo "observability: $dir mirrors the release ($removed stale file(s) removed)"
+  done
+}
+
 metrics_port() {
   case "$1" in
     prometheus) echo 9090 ;;
@@ -233,6 +285,10 @@ case "$mode" in
   check)
     [[ $# -eq 4 && -f "$2" && -d "$3" ]] || usage
     run_check "$2" "$3" "$4"
+    ;;
+  sync)
+    [[ $# -eq 3 && -f "$2" && -d "$3" ]] || usage
+    run_sync "$2" "$3"
     ;;
   apply)
     [[ $# -eq 3 && -d "$2" ]] || usage

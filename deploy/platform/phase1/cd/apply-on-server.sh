@@ -276,6 +276,9 @@ mkdir -p "$platform_dir"
 tar -C "$release" -xf "$release/source.tar" --strip-components=4 deploy/platform/phase1/cd/observability-config.sh
 bash "$release/observability-config.sh" check "$release/source.tar" "$platform_dir" "$compose_project"
 tar -C "$platform_dir" -xf "$release/source.tar"
+# Extraction only adds and overwrites. Delete alert rules and dashboards removed from the repository,
+# so Prometheus does not keep loading them (check above validated exactly the release's set).
+bash "$release/observability-config.sh" sync "$release/source.tar" "$platform_dir"
 printf '%s\n' "$revision" > "$platform_dir/REVISION"
 echo "updated $platform_dir to $revision"
 
