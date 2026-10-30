@@ -209,6 +209,13 @@ for (const file of files) {
     else selectBroad(file, 'shared contract changed');
   });
 
+  // libs/grant signs and verifies every registry, telemetry, command and delegation grant.
+  match(file.startsWith('libs/grant/'), () => {
+    selectPlatform(file, 'shared grant signing changed');
+    selectRegistry(file, 'shared grant signing changed');
+    selectTelemetry(file, 'shared grant signing changed', { integration: true });
+    selectCommand(file, 'shared grant signing changed', { integration: true });
+  });
   match(file.startsWith('libs/identitycontext/') || file.startsWith('libs/oidctest/') || file.startsWith('libs/sessionevent/') || file.startsWith('libs/sessionstore/') || file.startsWith('libs/observability/') || file.startsWith('modules/audit/') || file.startsWith('modules/registry/'), () => selectPlatform(file, 'platform identity, durability, or observability code changed', { integration: file.includes('session') || file.includes('outbox') }));
   match(file.startsWith('libs/ownershipregistry/') || file.startsWith('libs/registryauth/') || file.startsWith('infra/s1-'), () => selectRegistry(file, 'registry capability changed', { integration: true }));
   match(file.startsWith('libs/telemetryauth/') || file.startsWith('modules/connectivity/') || file.startsWith('cmd/connectivity/') || file.startsWith('modules/telemetry/pkg/telemetry/') || file.startsWith('modules/telemetry/pkg/telemetryapi/') || file.startsWith('modules/telemetry/cmd/telemetry-history-projector/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('infra/telemetry/'), () => {

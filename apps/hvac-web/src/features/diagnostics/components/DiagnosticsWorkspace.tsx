@@ -3,6 +3,7 @@ import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import { ClipboardPlus, Link2, SearchCheck, SlidersHorizontal, Stethoscope } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
+import { GatewayRequestError } from '@/api/gateway-client';
 import { listWorkOrders } from '@/api/work-orders';
 import { PageHeader } from '@/blocks/page-header';
 import { Panel } from '@/blocks/panel';
@@ -25,7 +26,7 @@ import { formatCompactTime, formatDecimal, formatTime } from '@/lib/operator-for
 import { cn } from '@/lib/utils';
 import { LOW_DELTA_T, lowDeltaTTarget, meterOf, ruleFor, severity, type DiagnosticRule, type Finding, type RuleRevision } from '../diagnostics-model';
 import { FindingSeverityBadge, SEVERITY } from '../finding-presentation';
-import { DiagnosticsRequestError, diagnosticsKeys, evaluateRule, lowDeltaTRuleQuery, siteFindingsQuery, type EvaluationOutcome } from '../query';
+import { diagnosticsKeys, evaluateRule, lowDeltaTRuleQuery, siteFindingsQuery, type EvaluationOutcome } from '../query';
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
@@ -401,7 +402,7 @@ export function DiagnosticsWorkspace() {
       } else if (result.status === 'ONGOING') toast.warning(`问题仍在持续：${LOW_DELTA_T.title}`);
       else toast.success('诊断完成，未发现问题');
     },
-    onError: (error) => toast.error(error instanceof DiagnosticsRequestError ? error.message : '诊断服务暂时不可用'),
+    onError: (error) => toast.error(error instanceof GatewayRequestError ? error.message : '诊断服务暂时不可用'),
   });
 
   const all = findings.data ?? [];

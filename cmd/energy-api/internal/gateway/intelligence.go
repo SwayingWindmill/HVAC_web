@@ -140,6 +140,9 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/recommendations/latest", "{siteId}"); ok {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-latest", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/recommendations/latest"}, method == http.MethodGet
 	}
+	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/preparations/latest", "{siteId}"); ok {
+		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-preparation", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/preparations/latest"}, method == http.MethodGet
+	}
 	if path == publicOptimizationRunsPath {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, method: http.MethodPost, publicPath: publicOptimizationRunsPath}, method == http.MethodPost
 	}
@@ -193,7 +196,11 @@ func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *
 		return
 	}
 	if route.target == "optimization-latest" {
-		h.serveLatestOptimizationRecommendation(writer, request, session, route)
+		h.serveLatestOptimizationRead(writer, request, session, route, "recommendations")
+		return
+	}
+	if route.target == "optimization-preparation" {
+		h.serveLatestOptimizationRead(writer, request, session, route, "preparations")
 		return
 	}
 	h.createOptimizationRun(writer, request, session)
@@ -238,7 +245,11 @@ func (h *handler) authorizeIntelligenceSitesWithWriter(writer http.ResponseWrite
 }
 
 func (h *handler) serveForecast(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
-	if !isLowerUUIDv7(route.siteID) || h.intelligence.forecastBaseURL == "" {
+	if h.intelligence.forecastBaseURL == "" {
+		writeRouteWithoutOwner(writer, request)
+		return
+	}
+	if !isLowerUUIDv7(route.siteID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested forecast was not found.", false, nil)
 		return
 	}
@@ -257,7 +268,11 @@ func (h *handler) serveForecast(writer http.ResponseWriter, request *http.Reques
 
 // serveFDDRead reads a Site's FDD findings, or the low-delta-T rule in effect, on site.read.
 func (h *handler) serveFDDRead(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
-	if !isLowerUUIDv7(route.siteID) || h.intelligence.fddBaseURL == "" {
+	if h.intelligence.fddBaseURL == "" {
+		writeRouteWithoutOwner(writer, request)
+		return
+	}
+	if !isLowerUUIDv7(route.siteID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested FDD resource was not found.", false, nil)
 		return
 	}
@@ -280,7 +295,11 @@ func (h *handler) serveFDDRead(writer http.ResponseWriter, request *http.Request
 }
 
 func (h *handler) serveFDDLink(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
-	if !isLowerUUIDv7(route.siteID) || !isLowerUUIDv7(route.findingID) || h.intelligence.fddBaseURL == "" {
+	if h.intelligence.fddBaseURL == "" {
+		writeRouteWithoutOwner(writer, request)
+		return
+	}
+	if !isLowerUUIDv7(route.siteID) || !isLowerUUIDv7(route.findingID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested FDD finding was not found.", false, nil)
 		return
 	}
@@ -424,9 +443,15 @@ func (h *handler) serveFDDEvaluation(writer http.ResponseWriter, request *http.R
 	h.writeIntelligenceResult(writer, request, responseBody, status, callErr)
 }
 
-func (h *handler) serveLatestOptimizationRecommendation(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
-	if !isLowerUUIDv7(route.siteID) || h.intelligence.optimizationBaseURL == "" {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization recommendation was not found.", false, nil)
+// serveLatestOptimizationRead reads the Site's latest Optimization recommendation, or how its
+// schedule's latest firing went, from the owner.
+func (h *handler) serveLatestOptimizationRead(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute, resource string) {
+	if h.intelligence.optimizationBaseURL == "" {
+		writeRouteWithoutOwner(writer, request)
+		return
+	}
+	if !isLowerUUIDv7(route.siteID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization result was not found.", false, nil)
 		return
 	}
 	allowedSites, ok := h.authorizeIntelligenceSitesWithWriter(writer, request, session)
@@ -434,10 +459,10 @@ func (h *handler) serveLatestOptimizationRecommendation(writer http.ResponseWrit
 		return
 	}
 	if _, allowed := allowedSites[route.siteID]; !allowed {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization recommendation was not found.", false, nil)
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization result was not found.", false, nil)
 		return
 	}
-	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/optimization/recommendations/latest"
+	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/optimization/" + resource + "/latest"
 	raw, status, err := h.executeOwner(request, session, optimizationOwner, h.intelligence.optimizationBaseURL, route.siteID, optimizationReadAction, http.MethodGet, internalPath, nil)
 	h.writeIntelligenceResult(writer, request, raw, status, err)
 }
@@ -548,6 +573,12 @@ func (h *handler) writeIntelligenceResult(writer http.ResponseWriter, request *h
 		return
 	}
 	if status == http.StatusNotFound {
+		// An owner answers a missing result with a JSON error body; a 404 without one comes from its
+		// router, so the owner deployed here does not serve the route yet.
+		if len(raw) == 0 || !json.Valid(raw) {
+			writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The Intelligence owner does not serve this route.", false, nil)
+			return
+		}
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Intelligence result was not found.", false, nil)
 		return
 	}
@@ -575,4 +606,11 @@ func ensureIntelligenceJSONEOF(decoder *json.Decoder) error {
 
 func contextWithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(parent, timeout)
+}
+
+// writeRouteWithoutOwner answers a public read whose owner this Gateway has no address for. It
+// is ROUTE_NOT_FOUND, as for a route with no applied owner, so a client never reads it as "this
+// Site has no result yet" (RESOURCE_NOT_FOUND).
+func writeRouteWithoutOwner(writer http.ResponseWriter, request *http.Request) {
+	writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route has no configured owner.", false, nil)
 }

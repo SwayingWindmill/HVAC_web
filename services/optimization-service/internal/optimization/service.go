@@ -182,6 +182,11 @@ func (service *Service) LatestRecommendation(ctx context.Context, tenantID, site
 	return service.publication.LatestRecommendation(ctx, tenantID, siteID)
 }
 
+// LatestPreparation is how the Site's latest Optimization schedule firing went.
+func (service *Service) LatestPreparation(ctx context.Context, tenantID, siteID string) (PreparationOutcome, error) {
+	return service.publication.LatestPreparation(ctx, tenantID, siteID)
+}
+
 func (service *Service) Reconcile(ctx context.Context, staleBefore time.Time, limit int) (int, error) {
 	stale, err := service.publication.ListStalePublications(ctx, staleBefore.UTC(), limit)
 	if err != nil {

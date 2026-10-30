@@ -2,9 +2,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, pointStatus, updateWhenChanged } from './site-onboarding.mjs';
+import {
+  SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, checkSiteFile, planOnboarding, pointStatus, siteStateQuery, updateWhenChanged,
+} from './site-onboarding.mjs';
 
 const songyaxuan = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.site.json', import.meta.url), 'utf8'));
+const songyaxuanAlarmRules = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.alarm-rules.json', import.meta.url), 'utf8'));
+const copy = <T>(value: T): T => structuredClone(value);
 
 function bindingSection(sql) {
   const start = sql.indexOf('INSERT INTO core_registry.point_subject_bindings');
@@ -95,4 +99,112 @@ test('point status defaults to ACTIVE and rejects unknown values', () => {
   assert.equal(pointStatus({ code: 'a', status: 'INACTIVE' }), 'INACTIVE');
   assert.equal(pointStatus({ code: 'a', status: 'RETIRED' }), 'RETIRED');
   assert.throws(() => pointStatus({ code: 'a', status: 'inactive' }), /expected ACTIVE, INACTIVE or RETIRED/);
+});
+
+// A database that already holds everything the songyaxuan manifest describes.
+function completeState(profile: any) {
+  const state: any = { site: 'ACTIVE', devices: {}, points: {}, assets: {}, schedules: {}, topology: true, tariff: true, forecast: true };
+  for (const match of buildOnboardingSql(profile).registry.matchAll(/'(01a14000-4000-7000-8000-[0-9a-f]{12})'/g)) state.devices[match[1]] = 'ACTIVE';
+  for (const row of pointRows(buildOnboardingSql(profile).registry)) {
+    const [, id] = row.match(/^\('([0-9a-f-]{36})'/) ?? [];
+    state.points[id] = row.includes("'INACTIVE'") ? 'INACTIVE' : 'ACTIVE';
+  }
+  for (const asset of profile.assets) state.assets[asset.id] = 'ACTIVE';
+  for (const { item } of planOnboarding(profile, { ...state, schedules: {}, policy: null, modelRevision: null, optimizationBinding: null, lowDeltaTRule: null })) {
+    const code = item.match(/^调度定义 (.+)$/)?.[1];
+    if (code) state.schedules[code] = { jobType: '', cron: '', enabled: true, payload: {} };
+  }
+  const { lowDeltaT } = profile.intelligence.diagnosis;
+  state.schedules[`chilled-water-low-delta-t-${profile.site.code}`] = {
+    cron: lowDeltaT.cron, enabled: lowDeltaT.enabled,
+    payload: { assetId: profile.assets.find((asset: any) => asset.code === lowDeltaT.asset).id, deviceId: profile.devices.find((device: any) => device.code === lowDeltaT.device).id },
+  };
+  const { optimization } = profile.intelligence;
+  state.schedules[`supply-temperature-optimization-${profile.site.code}`] = { cron: optimization.cron, enabled: optimization.enabled, payload: {} };
+  const { policy } = optimization;
+  state.policy = { constraints: copy(policy.constraints), objective: policy.objective, dispatchMode: policy.dispatchMode, horizon: policy.horizon, horizonMinutes: policy.horizonMinutes, granularity: policy.granularity };
+  state.modelRevision = '01910000-0000-7000-8000-80000000000a';
+  state.optimizationBinding = { status: 'ACTIVE', enabled: true };
+  state.lowDeltaTRule = { revision: 1, minimumDeltaTC: 3.5, windowMinutes: 15 };
+  return state;
+}
+
+const byStatus = (items: any[], status: string) => items.filter((item) => item.status === status).map((item) => item.item);
+
+test('the songyaxuan manifest and its alarm rules pass the file check', () => {
+  assert.deepEqual(checkSiteFile(songyaxuan, songyaxuanAlarmRules), []);
+});
+
+test('the file check names alarm inputs, keys and fields that do not match the site', () => {
+  const profile = copy(songyaxuan);
+  profile.intelligence.optimization.policy.constraints.inputMapping.zoneTemperatureKey = 'temperature';
+  delete profile.intelligence.optimization.policy.responseModelSource;
+  profile.intelligence.diagnosis.lowDeltaT.asset = 'no-such-asset';
+  const rules = copy(songyaxuanAlarmRules);
+  rules.rules[0].raise = { op: 'AND', children: [{ op: 'COMPARE', input: 'meter-uid5/no_such_point' }, { op: 'COMPARE', input: 'no-such-device/run_state' }] };
+  const problems = checkSiteFile(profile, rules).join('\n');
+  assert.match(problems, /meter-uid5\/no_such_point: meter-uid5 has no active point no_such_point/);
+  assert.match(problems, /no-such-device\/run_state: no device no-such-device/);
+  assert.match(problems, /zoneTemperatureKey temperature is on 0 active points/);
+  assert.match(problems, /responseModelSource/);
+  assert.match(problems, /diagnosis.lowDeltaT: no asset no-such-asset/);
+  assert.match(checkSiteFile(songyaxuan, null).join('\n'), /alarm rules file songyaxuan.alarm-rules.json was not found/);
+});
+
+test('validate on a complete site lists only what a person still decides', () => {
+  const items = planOnboarding(songyaxuan, completeState(songyaxuan));
+  assert.deepEqual(byStatus(items, 'missing'), []);
+  assert.deepEqual(byStatus(items, 'differs'), []);
+  assert.deepEqual(byStatus(items, 'decide'), ['告警规则文件 songyaxuan.alarm-rules.json', '低温差诊断未启用', '响应系数是人工设定']);
+});
+
+test('a Tenant policy that disagrees blocks the Optimization deployment and is left for a person', () => {
+  const state = completeState(songyaxuan);
+  state.policy.constraints.inputMapping.zoneTemperatureKey = 'temperature';
+  state.optimizationBinding = null;
+  delete state.schedules['supply-temperature-optimization-songyaxuan'];
+  delete state.assets[songyaxuan.assets.at(-1).id];
+  const items = planOnboarding(songyaxuan, state);
+  assert.deepEqual(byStatus(items, 'missing'), ['资产 17 台']);
+  const decide = items.filter((item) => item.status === 'decide');
+  assert.match(decide.find((item) => item.item === '优化策略和清单不一致').detail, /zoneTemperatureKey: 清单 "room_temperature"，现在 "temperature"/);
+  assert.ok(decide.some((item) => item.item === '租户策略的 zoneTemperatureKey 是 temperature'));
+  assert.ok(decide.some((item) => item.item === '本站的模型部署'));
+  assert.ok(decide.some((item) => item.item === '调度定义 supply-temperature-optimization-songyaxuan'));
+});
+
+test('a Tenant without a policy or rule gets them from the manifest', () => {
+  const state = completeState(songyaxuan);
+  state.policy = null;
+  state.lowDeltaTRule = null;
+  state.optimizationBinding = null;
+  delete state.schedules['supply-temperature-optimization-songyaxuan'];
+  const missing = byStatus(planOnboarding(songyaxuan, state), 'missing');
+  assert.deepEqual(missing, ['低温差诊断规则版本', '优化策略', '本站的模型部署', '调度定义 supply-temperature-optimization-songyaxuan']);
+});
+
+test('apply never rewrites what the Tenant shares and registers Optimization only under an agreeing policy', () => {
+  const { intelligence } = buildOnboardingSql(songyaxuan);
+  assert.ok(!/UPDATE\s+core_registry\.(optimization_polic|fdd_rule_revisions)|ON CONFLICT[^;]*DO UPDATE SET[^;]*constraints/.test(intelligence), 'shared policy and rule are never updated');
+  assert.match(intelligence, /INSERT INTO core_registry\.fdd_rule_revisions[\s\S]*?WHERE NOT EXISTS \(SELECT 1 FROM core_registry\.fdd_rule_revisions WHERE tenant_id = '[^']+' AND rule_code = 'CHILLED_WATER_LOW_DELTA_T'\);/);
+  assert.match(intelligence, /INSERT INTO core_registry\.optimization_policies[\s\S]*?WHERE NOT EXISTS \(SELECT 1 FROM core_registry\.optimization_policies WHERE tenant_id = '[^']+' AND resource_type = 'HVAC' AND status = 'ACTIVE'\);/);
+  for (const table of ['ai_deployment_bindings', 'schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, enabled, next_fire_at)\nSELECT \'01a14000-7b00']) {
+    const start = intelligence.indexOf(`INSERT INTO core_registry.${table}`);
+    assert.notEqual(start, -1, table);
+    const statement = intelligence.slice(start, intelligence.indexOf(';\n', start));
+    assert.match(statement, /(?:WHERE|AND) EXISTS \(SELECT 1 FROM \(SELECT pv\.constraints/, `${table} waits for the policy to agree`);
+    assert.ok(statement.includes('"zoneTemperatureKey":"room_temperature"'), `${table} compares against the manifest's constraints`);
+  }
+  assert.match(intelligence, /'chilled-water-low-delta-t-songyaxuan'[^\n]*'FDD_EVALUATION'[^\n]*, false, /, 'the diagnosis schedule follows enabled: false');
+  for (const statement of intelligence.split(/;\n/).filter((sql) => sql.includes('DO UPDATE SET'))) {
+    assert.match(statement, /version=schedule_definitions\.version \+ 1/);
+    assert.match(statement, /\nWHERE \(schedule_definitions\.schedule_name, schedule_definitions\.cron_expression, schedule_definitions\.payload_template, schedule_definitions\.enabled\) IS DISTINCT FROM/);
+  }
+});
+
+test('validate reads the database with one read-only SELECT', () => {
+  const query = siteStateQuery(songyaxuan);
+  assert.ok(query.startsWith('BEGIN READ ONLY;\nSELECT json_build_object('));
+  assert.ok(query.endsWith('ROLLBACK;'));
+  assert.ok(!/\b(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP)\b/i.test(query));
 });

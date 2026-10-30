@@ -2253,6 +2253,15 @@
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/sites/{siteId}/optimization/preparations/latest": {
+      "get": {
+        "operationId": "getLatestSiteOptimizationPreparationV212",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
     "/api/v1/optimization/runs": {
       "post": {
         "operationId": "createOptimizationRunV212",

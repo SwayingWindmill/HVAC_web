@@ -1259,7 +1259,7 @@ func TestDeployScriptDerivesTheBuildIDFromTheRelease(t *testing.T) {
 				"node scripts/issue-workload-identities.mjs",
 				"node scripts/phase1-wsl-compose.mjs --profile migration run --rm phase1-migrator",
 				"node scripts/local-environment.mjs administrator --no-build",
-				"node scripts/site-onboarding.mjs deploy/sites/songyaxuan.site.json",
+				"node scripts/site-onboarding.mjs apply deploy/sites/songyaxuan.site.json",
 			} {
 				if !strings.Contains(calls, want) {
 					t.Fatalf("missing %q in:\n%s", want, calls)
