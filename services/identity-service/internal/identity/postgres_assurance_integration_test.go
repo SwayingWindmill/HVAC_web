@@ -60,6 +60,33 @@ func TestLoginDoesNotRevealWhetherUsernameExists(t *testing.T) {
 	if !errors.Is(unknownErr, ErrInvalidCredentials) || !errors.Is(wrongPasswordErr, ErrInvalidCredentials) {
 		t.Fatalf("login enumeration boundary diverged: unknown=%v wrong-password=%v", unknownErr, wrongPasswordErr)
 	}
+
+	// A wrong password on a real account is audited under the account's stable reference.
+	var knownRefs int
+	if err := adminStore.pool.QueryRow(ctx, `
+SELECT count(*) FROM identity.security_audit_intents
+WHERE event_type = 'LOGIN_FAILED' AND subject_ref = $1 AND user_id IS NOT NULL
+`, securitySubjectRef(username)).Scan(&knownRefs); err != nil {
+		t.Fatalf("read known-account login audit: %v", err)
+	}
+	if knownRefs != 1 {
+		t.Fatalf("known-account LOGIN_FAILED audits = %d, want 1", knownRefs)
+	}
+	// A name that matches no account is audited under a keyed reference, never the bare
+	// SHA-256 of what was typed.
+	var unknownRefs, bareRefs int
+	if err := adminStore.pool.QueryRow(ctx, `
+SELECT
+  count(*) FILTER (WHERE subject_ref = $1 AND user_id IS NULL),
+  count(*) FILTER (WHERE subject_ref = $2)
+FROM identity.security_audit_intents
+WHERE event_type = 'LOGIN_FAILED'
+`, unknownSubjectRef(username+"-missing"), securitySubjectRef(username+"-missing")).Scan(&unknownRefs, &bareRefs); err != nil {
+		t.Fatalf("read unknown-name login audit: %v", err)
+	}
+	if unknownRefs != 1 || bareRefs != 0 {
+		t.Fatalf("unknown-name LOGIN_FAILED audits: keyed=%d bare=%d, want 1 and 0", unknownRefs, bareRefs)
+	}
 }
 
 func TestStartTOTPEnrollmentCannotDowngradeActiveMFA(t *testing.T) {

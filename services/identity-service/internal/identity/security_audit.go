@@ -2,6 +2,8 @@ package identity
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,12 +13,24 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// insertSecurityAudit records an event about an existing account. username must be the
+// account's stored username, never unverified sign-in input: for a name that matches no
+// account use insertSecurityAuditForUnknownSubject instead.
 func insertSecurityAudit(ctx context.Context, tx pgx.Tx, eventType, userID, username, outcome, reasonCode string, now time.Time, details map[string]any) error {
+	return insertSecurityAuditWithRef(ctx, tx, eventType, userID, securitySubjectRef(username), outcome, reasonCode, now, details)
+}
+
+// insertSecurityAuditForUnknownSubject records an event for sign-in input that matched no
+// account. The typed name is only ever stored as a keyed digest (see unknownSubjectRef).
+func insertSecurityAuditForUnknownSubject(ctx context.Context, tx pgx.Tx, eventType, typedUsername, outcome, reasonCode string, now time.Time, details map[string]any) error {
+	return insertSecurityAuditWithRef(ctx, tx, eventType, "", unknownSubjectRef(typedUsername), outcome, reasonCode, now, details)
+}
+
+func insertSecurityAuditWithRef(ctx context.Context, tx pgx.Tx, eventType, userID, subjectRef, outcome, reasonCode string, now time.Time, details map[string]any) error {
 	eventID, err := newUUIDv7(now)
 	if err != nil {
 		return err
 	}
-	subjectRef := securitySubjectRef(username)
 	payload := map[string]any{
 		"schemaVersion": 1,
 		"eventId":       eventID,
@@ -61,9 +75,37 @@ VALUES
 	return nil
 }
 
+// securitySubjectRef is the stable audit reference for an existing account: the SHA-256 of
+// its normalized stored username. Usernames are not secret and existing audit rows keep
+// matching, so this stays an unkeyed digest.
 func securitySubjectRef(username string) string {
 	digest := sha256.Sum256([]byte(normalizeUsername(username)))
 	return hex.EncodeToString(digest[:])
+}
+
+// unknownSubjectKey keys unknownSubjectRef. It is random per process and never stored, so
+// an audit row for an unknown name cannot be reversed by guessing offline. People
+// sometimes type a password into the username box; an unkeyed SHA-256 of that input
+// would let anyone holding the audit table try candidate passwords against it.
+var unknownSubjectKey = mustRandomKey()
+
+func mustRandomKey() []byte {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		panic(fmt.Sprintf("identity: generate audit subject key: %v", err))
+	}
+	return key
+}
+
+// unknownSubjectRef is the audit reference for sign-in input that matched no account: an
+// HMAC-SHA256 of the normalized input under unknownSubjectKey. Repeated attempts with the
+// same name share a reference while this process runs; after a restart the reference for
+// the same name changes. It has the same 64-hex shape as securitySubjectRef, and these rows
+// have no user_id.
+func unknownSubjectRef(typedUsername string) string {
+	mac := hmac.New(sha256.New, unknownSubjectKey)
+	mac.Write([]byte(normalizeUsername(typedUsername)))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func resolveIdentityTime(now time.Time) time.Time {
