@@ -59,19 +59,25 @@ func TestForecastReadsCarryAGatewaySignedContext(t *testing.T) {
 	requireOwnerContext(t, fixture, "X-Forecast-Context", "forecast-service", "forecast:read")
 }
 
-// #612: Optimization's latest recommendation is a read, a new run a write, each on the Site's context.
+// #612: Optimization's latest recommendation, and how the schedule's latest firing went, are reads, a new run a write, each on the Site's context.
 func TestOptimizationCallsCarryAGatewaySignedContextForTheirAction(t *testing.T) {
 	fixture := newOperationsGatewayFixture(t, 30)
 	controller := fixture.handler.(*handler)
-	response := httptest.NewRecorder()
-	controller.serveLatestOptimizationRecommendation(response, httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+fixture.siteID+"/optimization/recommendations/latest", nil),
-		fixture.session(t), publicIntelligenceRoute{siteID: fixture.siteID})
-	if response.Code != http.StatusOK {
-		t.Fatalf("recommendation read got %d: %s", response.Code, response.Body.String())
+	for _, resource := range []string{"recommendations", "preparations"} {
+		fixture.lastOwner.Store(nil)
+		response := httptest.NewRecorder()
+		controller.serveLatestOptimizationRead(response, httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+fixture.siteID+"/optimization/"+resource+"/latest", nil),
+			fixture.session(t), publicIntelligenceRoute{siteID: fixture.siteID}, resource)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s read got %d: %s", resource, response.Code, response.Body.String())
+		}
+		requireOwnerContext(t, fixture, "X-Optimization-Context", "optimization-service", "optimization:read")
+		if path := fixture.lastOwner.Load().URL.Path; path != "/v1/sites/"+fixture.siteID+"/optimization/"+resource+"/latest" {
+			t.Fatalf("%s read went to %s", resource, path)
+		}
 	}
-	requireOwnerContext(t, fixture, "X-Optimization-Context", "optimization-service", "optimization:read")
 
-	response = httptest.NewRecorder()
+	response := httptest.NewRecorder()
 	controller.createOptimizationRun(response, httptest.NewRequest(http.MethodPost, "/api/v1/optimization/runs", strings.NewReader(`{"siteId":"`+fixture.siteID+`"}`)), fixture.session(t))
 	if response.Code != http.StatusOK {
 		t.Fatalf("run request got %d: %s", response.Code, response.Body.String())

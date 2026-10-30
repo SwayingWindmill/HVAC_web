@@ -102,6 +102,19 @@ func TestAuthoritativeOwnersPrepareSealedOptimizationAndPublishRecommendation(t 
 	if published.RunID != prepared.OptimizationRunID || published.Trigger != TriggerManual || published.Recommendation.InputSnapshotID != prepared.InputSnapshotID || published.Recommendation.CommandIntentID != "" {
 		t.Fatalf("published=%#v", published)
 	}
+	if published.ResponseModel.DailyEnergyDeltaPerSupplyTempC == 0 || published.ResponseModel.EnergyUncertaintyP90KWh == 0 {
+		t.Fatalf("the published recommendation does not carry the policy's response coefficients: %#v", published.ResponseModel)
+	}
+	// The schedule's firing an hour earlier failed for want of the zone temperature; an operator's
+	// run is not a firing and does not hide it.
+	preparation, err := service.LatestPreparation(t.Context(), request.TenantID, request.SiteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preparation.Status != "FAILED" || preparation.Reason == nil || *preparation.Reason != string(ReasonZoneTempMissing) ||
+		!preparation.FiredAt.Equal(time.Date(2026, 8, 28, 11, 20, 0, 0, time.UTC)) {
+		t.Fatalf("preparation=%#v", preparation)
+	}
 }
 
 // pricedDayStub stands in for the query service, which these environments do not run: the latest

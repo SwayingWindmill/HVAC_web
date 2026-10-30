@@ -140,6 +140,9 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/recommendations/latest", "{siteId}"); ok {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-latest", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/recommendations/latest"}, method == http.MethodGet
 	}
+	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/preparations/latest", "{siteId}"); ok {
+		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-preparation", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/preparations/latest"}, method == http.MethodGet
+	}
 	if path == publicOptimizationRunsPath {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, method: http.MethodPost, publicPath: publicOptimizationRunsPath}, method == http.MethodPost
 	}
@@ -193,7 +196,11 @@ func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *
 		return
 	}
 	if route.target == "optimization-latest" {
-		h.serveLatestOptimizationRecommendation(writer, request, session, route)
+		h.serveLatestOptimizationRead(writer, request, session, route, "recommendations")
+		return
+	}
+	if route.target == "optimization-preparation" {
+		h.serveLatestOptimizationRead(writer, request, session, route, "preparations")
 		return
 	}
 	h.createOptimizationRun(writer, request, session)
@@ -424,9 +431,11 @@ func (h *handler) serveFDDEvaluation(writer http.ResponseWriter, request *http.R
 	h.writeIntelligenceResult(writer, request, responseBody, status, callErr)
 }
 
-func (h *handler) serveLatestOptimizationRecommendation(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
+// serveLatestOptimizationRead reads the Site's latest Optimization recommendation, or how its
+// schedule's latest firing went, from the owner.
+func (h *handler) serveLatestOptimizationRead(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute, resource string) {
 	if !isLowerUUIDv7(route.siteID) || h.intelligence.optimizationBaseURL == "" {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization recommendation was not found.", false, nil)
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization result was not found.", false, nil)
 		return
 	}
 	allowedSites, ok := h.authorizeIntelligenceSitesWithWriter(writer, request, session)
@@ -434,10 +443,10 @@ func (h *handler) serveLatestOptimizationRecommendation(writer http.ResponseWrit
 		return
 	}
 	if _, allowed := allowedSites[route.siteID]; !allowed {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization recommendation was not found.", false, nil)
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization result was not found.", false, nil)
 		return
 	}
-	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/optimization/recommendations/latest"
+	internalPath := "/v1/sites/" + url.PathEscape(route.siteID) + "/optimization/" + resource + "/latest"
 	raw, status, err := h.executeOwner(request, session, optimizationOwner, h.intelligence.optimizationBaseURL, route.siteID, optimizationReadAction, http.MethodGet, internalPath, nil)
 	h.writeIntelligenceResult(writer, request, raw, status, err)
 }

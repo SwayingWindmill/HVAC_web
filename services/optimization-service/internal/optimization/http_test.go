@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -34,6 +35,17 @@ func (store *oneTenantRecommendations) LatestRecommendation(_ context.Context, t
 		return PublishedRecommendation{}, ErrOptimizationNotFound
 	}
 	return PublishedRecommendation{RunID: "01990000-1950-7000-8000-000000000101"}, nil
+}
+
+// testSite's schedule last fired at 12:20 and found no zone temperature.
+func (store *oneTenantRecommendations) LatestPreparation(_ context.Context, tenantID, siteID string) (PreparationOutcome, error) {
+	if tenantID != testTenant || siteID != testSite {
+		return PreparationOutcome{}, ErrPreparationNotFound
+	}
+	reason := string(ReasonZoneTempMissing)
+	fired := time.Date(2026, 10, 30, 12, 20, 0, 0, time.UTC)
+	completed := fired.Add(2 * time.Second)
+	return PreparationOutcome{Trigger: TriggerSchedule, Status: "FAILED", Reason: &reason, FiredAt: fired, CompletedAt: &completed}, nil
 }
 
 // optimizationFixture serves Optimization behind the Gateway's contexts and signs them as the
@@ -180,5 +192,58 @@ func TestOptimizationHTTPRejectsCallerAuthoredInputs(t *testing.T) {
 	response := fixture.call(t, http.MethodPost, "/v1/optimize", body, testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, testSite)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+// The Site's latest schedule firing reads back with the input it was missing, on a read context
+// for the Site only.
+func TestOptimizationServesTheLatestPreparationWithItsReason(t *testing.T) {
+	fixture := newOptimizationFixture(t)
+	latest := "/v1/sites/" + testSite + "/optimization/preparations/latest"
+	response := fixture.call(t, http.MethodGet, latest, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testSite)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	want := `{"trigger":"SCHEDULE","status":"FAILED","reason":"ZONE_TEMPERATURE_MISSING","firedAt":"2026-10-30T12:20:00Z","completedAt":"2026-10-30T12:20:02Z"}`
+	if got := strings.TrimSpace(response.Body.String()); got != want {
+		t.Fatalf("body=%s\nwant=%s", got, want)
+	}
+	if status := fixture.call(t, http.MethodGet, latest, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testOtherTenant, testSite).Code; status != http.StatusNotFound {
+		t.Fatalf("another Tenant read this Site's preparation: %d", status)
+	}
+	if status := fixture.call(t, http.MethodGet, latest, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testOtherSite).Code; status != http.StatusForbidden {
+		t.Fatalf("a context for another Site read this Site's preparation: %d", status)
+	}
+	if status := fixture.call(t, http.MethodGet, latest, "", testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, testSite).Code; status != http.StatusForbidden {
+		t.Fatalf("a run context read the preparation: %d", status)
+	}
+}
+
+// A firing records its reason as the job's error code; codes recorded before reasons existed, or
+// that are not reasons, read back as a plain failure.
+func TestOptimizationPreparationOutcomeFromTheFiringJob(t *testing.T) {
+	fired := time.Date(2026, 10, 30, 12, 20, 0, 0, time.UTC)
+	code := func(value string) *string { return &value }
+	cases := []struct {
+		state      string
+		code       *string
+		wantStatus string
+		wantReason string
+	}{
+		{"SUCCEEDED", nil, "PREPARED", ""},
+		{"RUNNING", nil, "PENDING", ""},
+		{"FAILED", code(PreparationFailureCode(unavailable(ReasonModelDeploymentMissing, "none"))), "FAILED", "MODEL_DEPLOYMENT_MISSING"},
+		{"FAILED", code("OPTIMIZATION_INPUT_UNAVAILABLE"), "FAILED", PreparationFailedCode},
+		{"FAILED", code(PreparationFailureCode(errors.New("persist failed"))), "FAILED", PreparationFailedCode},
+	}
+	for _, test := range cases {
+		outcome := preparationOutcome(test.state, test.code, PreparationOutcome{FiredAt: fired})
+		reason := ""
+		if outcome.Reason != nil {
+			reason = *outcome.Reason
+		}
+		if outcome.Trigger != TriggerSchedule || outcome.Status != test.wantStatus || reason != test.wantReason {
+			t.Fatalf("%s/%v: outcome=%#v reason=%q", test.state, test.code, outcome, reason)
+		}
 	}
 }

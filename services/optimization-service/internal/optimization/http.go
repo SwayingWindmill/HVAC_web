@@ -47,6 +47,7 @@ func NewHTTPHandler(service *Service, preparer *Preparer, auth AuthConfig) (http
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/optimize", handler.guard(WriteAction, handler.handleOptimize))
 	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/recommendations/latest", handler.guard(ReadAction, handler.handleLatestRecommendation))
+	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/preparations/latest", handler.guard(ReadAction, handler.handleLatestPreparation))
 	return mux, nil
 }
 
@@ -83,6 +84,22 @@ func (handler *HTTPHandler) handleLatestRecommendation(writer http.ResponseWrite
 	result, err := handler.service.LatestRecommendation(request.Context(), site.TenantID, site.SiteID)
 	if errors.Is(err, ErrOptimizationNotFound) {
 		writeJSONError(writer, http.StatusNotFound, "optimization_not_found")
+		return
+	}
+	if err != nil {
+		writeJSONError(writer, http.StatusBadGateway, "optimization_unavailable")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(result)
+}
+
+// handleLatestPreparation says how the Site's latest schedule firing went, and which input was
+// missing when it could not prepare a run.
+func (handler *HTTPHandler) handleLatestPreparation(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext) {
+	result, err := handler.service.LatestPreparation(request.Context(), site.TenantID, site.SiteID)
+	if errors.Is(err, ErrPreparationNotFound) {
+		writeJSONError(writer, http.StatusNotFound, "optimization_preparation_not_found")
 		return
 	}
 	if err != nil {

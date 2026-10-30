@@ -21,9 +21,27 @@ type PublishedRecommendation struct {
 	RunStatus      string         `json:"runStatus"`
 	Quality        string         `json:"quality"`
 	Recommendation Recommendation `json:"recommendation"`
+	// ResponseModel is the policy's response coefficients the run weighed the candidate with, as
+	// frozen in its input snapshot. They are set by hand in the policy, not fitted from the Site.
+	ResponseModel HVACResponseModel `json:"responseModel"`
 }
 
 var ErrOptimizationNotFound = errors.New("optimization recommendation not found")
+
+// PreparationOutcome is how the Site's latest schedule firing went: whether it prepared a run and,
+// when it did not, which input was missing.
+type PreparationOutcome struct {
+	Trigger string `json:"trigger"`
+	// Status is PREPARED, FAILED or PENDING while the firing is still queued or running.
+	Status string `json:"status"`
+	// Reason is one of the PreparationReason codes, or PREPARATION_FAILED; null unless FAILED.
+	Reason      *string    `json:"reason"`
+	FiredAt     time.Time  `json:"firedAt"`
+	CompletedAt *time.Time `json:"completedAt"`
+}
+
+// ErrPreparationNotFound is a Site whose schedule has never fired an Optimization run.
+var ErrPreparationNotFound = errors.New("optimization preparation not found")
 
 type EvaluationPublicationStore interface {
 	StartRun(context.Context, Request, time.Time) error
@@ -32,6 +50,7 @@ type EvaluationPublicationStore interface {
 	FailRun(context.Context, Request, string, time.Time) error
 	ListStalePublications(context.Context, time.Time, int) ([]Evaluation, error)
 	LatestRecommendation(context.Context, string, string) (PublishedRecommendation, error)
+	LatestPreparation(context.Context, string, string) (PreparationOutcome, error)
 }
 
 type PostgresStore struct{ pool *pgxpool.Pool }
@@ -272,21 +291,23 @@ func (store *PostgresStore) GetRecommendation(ctx context.Context, tenantID, sit
 	}
 	var result PublishedRecommendation
 	var baseline, objective, constraints, candidate, expectedImpact, uncertainty, risk, rollbackPlan, verificationPlan []byte
-	var currentStateRevalidation []byte
+	var currentStateRevalidation, responseModel []byte
 	var commandIntentID *string
 	err = tx.QueryRow(ctx, `SELECT r.id::text,r.optimization_run_id::text,r.input_snapshot_id::text,r.deployment_revision_id::text,
 r.baseline,r.objective,r.constraints,r.candidate,r.expected_impact,r.uncertainty,r.risk,r.rollback_plan,r.verification_plan,
 r.approval_state,r.current_state_revalidation,CASE WHEN r.command_intent_id IS NULL THEN NULL ELSE r.command_intent_id::text END,r.created_at,
-run.status,run.quality,job.trigger_type
+run.status,run.quality,job.trigger_type,snapshot.safety_constraints->'responseModel'
 FROM core_registry.optimization_recommendations r
 JOIN core_registry.optimization_runs run ON run.tenant_id=r.tenant_id AND run.site_id=r.site_id AND run.id=r.optimization_run_id
+JOIN core_registry.optimization_input_snapshots snapshot
+  ON snapshot.tenant_id=r.tenant_id AND snapshot.site_id=r.site_id AND snapshot.id=r.input_snapshot_id
 -- A prepared run is queued as the job with the run's own id.
 JOIN core_registry.job_instances job ON job.job_id=run.id
 WHERE r.tenant_id=$1::uuid AND r.site_id=$2::uuid AND r.optimization_run_id=$3::uuid AND run.status='PUBLISHED'`, tenantID, siteID, runID).Scan(
 		&result.Recommendation.ID, &result.RunID, &result.Recommendation.InputSnapshotID, &result.Recommendation.DeploymentRevision,
 		&baseline, &objective, &constraints, &candidate, &expectedImpact, &uncertainty, &risk, &rollbackPlan, &verificationPlan,
 		&result.Recommendation.Approval, &currentStateRevalidation, &commandIntentID, &result.Recommendation.CreatedAt,
-		&result.RunStatus, &result.Quality, &result.Trigger,
+		&result.RunStatus, &result.Quality, &result.Trigger, &responseModel,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PublishedRecommendation{}, ErrOptimizationNotFound
@@ -309,6 +330,7 @@ WHERE r.tenant_id=$1::uuid AND r.site_id=$2::uuid AND r.optimization_run_id=$3::
 		{risk, &result.Recommendation.Risk},
 		{rollbackPlan, &result.Recommendation.RollbackPlan},
 		{verificationPlan, &result.Recommendation.VerificationPlan},
+		{responseModel, &result.ResponseModel},
 	} {
 		if err = json.Unmarshal(field.payload, field.target); err != nil {
 			return PublishedRecommendation{}, fmt.Errorf("decode published optimization recommendation: %w", err)
@@ -346,4 +368,62 @@ func optimizationUUIDv7(at time.Time) (string, error) {
 	bytes[8] = (bytes[8] & 0x3f) | 0x80
 	h := hex.EncodeToString(bytes)
 	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:], nil
+}
+
+// LatestPreparation reads the Site's latest Optimization schedule firing. A firing is the
+// OPTIMIZATION_RUN job a schedule queued; the run it prepares is queued again without the schedule.
+func (store *PostgresStore) LatestPreparation(ctx context.Context, tenantID, siteID string) (PreparationOutcome, error) {
+	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) {
+		return PreparationOutcome{}, errors.New("optimization preparation scope is invalid")
+	}
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return PreparationOutcome{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = optimizationScope(ctx, tx, tenantID, siteID); err != nil {
+		return PreparationOutcome{}, err
+	}
+	var state string
+	var errorCode *string
+	var outcome PreparationOutcome
+	err = tx.QueryRow(ctx, `SELECT state,error_code,scheduled_for,completed_at
+FROM core_registry.job_instances
+WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND job_type='OPTIMIZATION_RUN' AND schedule_id IS NOT NULL
+ORDER BY scheduled_for DESC,created_at DESC,job_id DESC
+LIMIT 1`, tenantID, siteID).Scan(&state, &errorCode, &outcome.FiredAt, &outcome.CompletedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PreparationOutcome{}, ErrPreparationNotFound
+	}
+	if err != nil {
+		return PreparationOutcome{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return PreparationOutcome{}, err
+	}
+	return preparationOutcome(state, errorCode, outcome), nil
+}
+
+func preparationOutcome(state string, errorCode *string, outcome PreparationOutcome) PreparationOutcome {
+	outcome.Trigger = TriggerSchedule
+	outcome.FiredAt = outcome.FiredAt.UTC()
+	if outcome.CompletedAt != nil {
+		completed := outcome.CompletedAt.UTC()
+		outcome.CompletedAt = &completed
+	}
+	switch state {
+	case "SUCCEEDED":
+		outcome.Status = "PREPARED"
+	case "FAILED", "DEAD", "CANCELLED", "SKIPPED":
+		outcome.Status = "FAILED"
+		// Firings that failed before reasons were recorded say only that they failed.
+		reason := PreparationFailedCode
+		if errorCode != nil && KnownPreparationReason(*errorCode) {
+			reason = *errorCode
+		}
+		outcome.Reason = &reason
+	default:
+		outcome.Status = "PENDING"
+	}
+	return outcome
 }
