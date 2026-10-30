@@ -18,13 +18,15 @@ const LowDeltaTRuleCode = "CHILLED_WATER_LOW_DELTA_T"
 var ErrRuleNotFound = errors.New("no FDD rule revision is in effect")
 
 // RuleRevision is one immutable revision of a Tenant's rule: the delta-T below which the loop is
-// diagnosed, over the window of minutes before the evaluation.
+// diagnosed, over the window of minutes before the evaluation, and the operating gates that say
+// which of those minutes count.
 type RuleRevision struct {
-	ID             string    `json:"revisionId"`
-	Revision       int       `json:"revision"`
-	MinimumDeltaTC float64   `json:"minimumDeltaTC"`
-	WindowMinutes  int       `json:"windowMinutes"`
-	EffectiveFrom  time.Time `json:"effectiveFrom"`
+	ID             string         `json:"revisionId"`
+	Revision       int            `json:"revision"`
+	MinimumDeltaTC float64        `json:"minimumDeltaTC"`
+	WindowMinutes  int            `json:"windowMinutes"`
+	OperatingGates OperatingGates `json:"operatingGates"`
+	EffectiveFrom  time.Time      `json:"effectiveFrom"`
 }
 
 // EvaluationRequest names what to diagnose and when; the rule in effect then says how.
@@ -36,10 +38,13 @@ type EvaluationRequest struct {
 	At       time.Time
 }
 
+// EvaluationResult is CLEAR, NOT_OPERATING (too few operating minutes to judge), FINDING or
+// ONGOING; DeltaTC is the mean over the operating minutes.
 type EvaluationResult struct {
 	Status  string                        `json:"status"`
 	DeltaTC float64                       `json:"deltaTC"`
 	Rule    RuleRevision                  `json:"rule"`
+	Window  WindowAssessment              `json:"window"`
 	Finding *intelligencemodel.FDDFinding `json:"finding,omitempty"`
 }
 

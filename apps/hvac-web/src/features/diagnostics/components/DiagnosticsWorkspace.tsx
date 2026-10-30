@@ -23,7 +23,7 @@ import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
 import { formatCompactTime, formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { LOW_DELTA_T, lowDeltaTTarget, meterOf, ruleFor, severity, type DiagnosticRule, type Finding, type RuleRevision } from '../diagnostics-model';
+import { LOW_DELTA_T, lowDeltaTTarget, meterOf, operatingCondition, ruleFor, severity, type DiagnosticRule, type Finding, type RuleRevision } from '../diagnostics-model';
 import { FindingSeverityBadge, SEVERITY } from '../finding-presentation';
 import { DiagnosticsRequestError, diagnosticsKeys, evaluateRule, lowDeltaTRuleQuery, siteFindingsQuery, type EvaluationOutcome } from '../query';
 
@@ -37,9 +37,10 @@ const pageRoute = getRouteApi('/_app/_site/operations/diagnostics');
 
 type Range = '7d' | 'all';
 
-const OUTCOME_LABEL = { FINDING: '发现问题', ONGOING: '仍在持续', CLEAR: '正常' } as const;
+const OUTCOME_LABEL = { FINDING: '发现问题', ONGOING: '仍在持续', CLEAR: '正常', NOT_OPERATING: '未运行' } as const;
 
 const kelvin = (value: number, digits = 1) => `${formatDecimal(value, digits)} K`;
+const percent = (share: number) => `${Math.round(share * 100)}%`;
 
 function clock(value: string, timeZone: string) {
   return new Intl.DateTimeFormat('zh-CN', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value));
@@ -118,7 +119,7 @@ function RuleBar({ rule, current, target, reading, outcome, latest, timeZone, ru
             {rule.title}
             {revision ? <Badge variant="secondary">第 {revision.revision} 版</Badge> : null}
             {revision ? (
-              <InfoTip>{`系统定时自动诊断：最近 ${revision.windowMinutes} 分钟温差低于 ${revision.minimumDeltaTC} K（设计 ${rule.designValue} K）时记为问题，同一问题 24 小时内只记一次。按第 ${revision.revision} 版规则。`}</InfoTip>
+              <InfoTip>{`系统定时自动诊断：最近 ${revision.windowMinutes} 分钟温差低于 ${revision.minimumDeltaTC} K（设计 ${rule.designValue} K）时记为问题，同一问题 24 小时内只记一次。只看冷站运行（${operatingCondition(revision.operatingGates)}）的时间，运行不足窗口的 ${percent(revision.operatingGates.minimumOperatingShare)} 时不判断。按第 ${revision.revision} 版规则。`}</InfoTip>
             ) : null}
           </span>
           <span className="truncate text-xs text-muted-foreground">
@@ -140,7 +141,7 @@ function RuleBar({ rule, current, target, reading, outcome, latest, timeZone, ru
           <span className="text-xs text-muted-foreground">{outcome ? '本次诊断' : '最近发现'}</span>
           {outcome ? (
             <span className="flex items-center gap-2 text-sm font-medium">
-              <span className={cn('rounded-md px-1.5 text-xs leading-5', outcome.status === 'CLEAR' ? 'bg-success-soft text-success-text' : 'bg-warning-soft text-warning-text')}>
+              <span className={cn('rounded-md px-1.5 text-xs leading-5', outcome.status === 'CLEAR' ? 'bg-success-soft text-success-text' : outcome.status === 'NOT_OPERATING' ? 'bg-muted text-muted-foreground' : 'bg-warning-soft text-warning-text')}>
                 {OUTCOME_LABEL[outcome.status]}
               </span>
               <span className="font-mono text-xs text-muted-foreground">{clock(new Date(outcome.at).toISOString(), timeZone)}</span>
@@ -156,7 +157,9 @@ function RuleBar({ rule, current, target, reading, outcome, latest, timeZone, ru
       </div>
       {outcome ? (
         <p className="border-t border-divider px-5 py-2.5 text-sm text-secondary-foreground">
-          {`本次诊断：最近 ${outcome.rule.windowMinutes} 分钟温差 ${kelvin(outcome.observedValue)}，${outcome.status === 'FINDING' ? `低于阈值 ${outcome.rule.minimumDeltaTC} K，已记为诊断发现。` : outcome.status === 'ONGOING' ? `仍低于阈值 ${outcome.rule.minimumDeltaTC} K，问题仍在持续，24 小时内不重复记录。` : `不低于阈值 ${outcome.rule.minimumDeltaTC} K。`}`}
+          {outcome.status === 'NOT_OPERATING'
+            ? `本次诊断：最近 ${outcome.rule.windowMinutes} 分钟里冷站运行 ${outcome.window.operatingMinutes} 分钟，不足 ${percent(outcome.rule.operatingGates.minimumOperatingShare)}，不判断温差。`
+            : `本次诊断：最近 ${outcome.rule.windowMinutes} 分钟里冷站运行 ${outcome.window.operatingMinutes} 分钟，温差 ${kelvin(outcome.observedValue)}，${outcome.status === 'FINDING' ? `低于阈值 ${outcome.rule.minimumDeltaTC} K，已记为诊断发现。` : outcome.status === 'ONGOING' ? `仍低于阈值 ${outcome.rule.minimumDeltaTC} K，问题仍在持续，24 小时内不重复记录。` : `不低于阈值 ${outcome.rule.minimumDeltaTC} K。`}`}
         </p>
       ) : null}
     </Panel>
@@ -399,6 +402,7 @@ export function DiagnosticsWorkspace() {
         toast.warning(`发现问题：${LOW_DELTA_T.title}`);
         void queryClient.invalidateQueries({ queryKey: diagnosticsKeys.findings(site.id) });
       } else if (result.status === 'ONGOING') toast.warning(`问题仍在持续：${LOW_DELTA_T.title}`);
+      else if (result.status === 'NOT_OPERATING') toast.info('冷站运行时间不足，本次不判断温差');
       else toast.success('诊断完成，未发现问题');
     },
     onError: (error) => toast.error(error instanceof DiagnosticsRequestError ? error.message : '诊断服务暂时不可用'),

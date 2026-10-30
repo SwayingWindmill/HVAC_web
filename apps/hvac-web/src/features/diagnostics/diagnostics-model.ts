@@ -44,13 +44,39 @@ export const LOW_DELTA_T: DiagnosticRule = {
 
 export const RULES: readonly DiagnosticRule[] = [LOW_DELTA_T];
 
-/** The revision of a rule FDD evaluates now: below minimumDeltaTC over the last windowMinutes. */
+/**
+ * When the plant counts as operating for the rule (spec docs/specs/fdd-rule-definition.md): FDD
+ * judges a window only when operating minutes reach minimumOperatingShare of it, and finds it low
+ * when low minutes reach minimumLowShare of those. A gate FDD cannot read at the Site is skipped.
+ */
+export interface OperatingGates {
+  readonly minimumOperatingShare: number;
+  readonly minimumLowShare: number;
+  readonly temperatureHoldMinutes: number;
+  readonly gateHoldMinutes: number;
+  readonly chillerRunning?: { readonly minimumRatedPowerFraction: number };
+  readonly loadRatio?: { readonly minimum: number };
+  readonly chilledWaterPumpRunning?: Record<string, never>;
+}
+
+/** The revision of a rule FDD evaluates now: below minimumDeltaTC over the last windowMinutes while operating. */
 export interface RuleRevision {
   readonly revisionId: string;
   readonly revision: number;
   readonly minimumDeltaTC: number;
   readonly windowMinutes: number;
+  readonly operatingGates: OperatingGates;
   readonly effectiveFrom: string;
+}
+
+/** The operating condition in the operator's words, e.g. "冷机开机且负荷率不低于 15%". */
+export function operatingCondition(gates: OperatingGates): string {
+  const parts = [
+    gates.chillerRunning ? '冷机开机' : null,
+    gates.loadRatio ? `负荷率不低于 ${Math.round(gates.loadRatio.minimum * 100)}%` : null,
+    gates.chilledWaterPumpRunning ? '冷冻水泵运行' : null,
+  ].filter((part) => part !== null);
+  return parts.length > 0 ? parts.join('、') : '有供回水温度';
 }
 
 export const ruleFor = (findingType: string): DiagnosticRule | undefined => RULES.find((rule) => rule.findingType === findingType);

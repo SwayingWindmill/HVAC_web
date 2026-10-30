@@ -22,7 +22,7 @@ const (
 	EvaluationJobType = "FDD_EVALUATION"
 )
 
-// ErrNoLoopEvidence means the window holds no supply or no return reading to compare.
+// ErrNoLoopEvidence means no minute of the window holds both a supply and a return reading.
 var ErrNoLoopEvidence = errors.New("low-delta-T evaluation requires the loop's supply and return readings in the window")
 
 type FindingFilter struct {
@@ -34,6 +34,8 @@ type FindingFilter struct {
 type Store interface {
 	// CurrentRule is the Tenant's latest low-delta-T rule revision in effect at a time.
 	CurrentRule(ctx context.Context, tenantID, siteID string, at time.Time) (RuleRevision, error)
+	// OperatingTopology is the Site's active chillers and chilled-water pumps and their bound devices at a time.
+	OperatingTopology(ctx context.Context, tenantID, siteID string, at time.Time) (Topology, error)
 	InsertFinding(context.Context, intelligencemodel.FDDFinding) error
 	// RecentFinding is the latest finding of a type for an asset and rule whose window ended at or after since.
 	RecentFinding(ctx context.Context, tenantID, siteID, assetID, findingType, ruleRevisionID string, since time.Time) (intelligencemodel.FDDFinding, bool, error)
@@ -41,33 +43,20 @@ type Store interface {
 	LinkFinding(context.Context, string, string, string, string, string, time.Time) (intelligencemodel.FDDFinding, error)
 }
 
-type LoopQuery struct {
-	TenantID string
-	SiteID   string
-	DeviceID string
-	From     time.Time
-	To       time.Time
+// WindowQuery asks for the per-minute samples of the loop's meter (supply, return, cooling load)
+// and of the gate devices (power, run state) from From up to, not including, To.
+type WindowQuery struct {
+	TenantID      string
+	SiteID        string
+	LoopDeviceID  string
+	GateDeviceIDs []string
+	From          time.Time
+	To            time.Time
 }
 
-// Reading is one authoritative observation as Telemetry history recorded it.
-type Reading struct {
-	ObservationID string
-	PointType     string
-	ValueType     string
-	Unit          string
-	Quality       string
-	Value         float64
-	SampledAt     time.Time
-}
-
-type LoopReadings struct {
-	Supply Reading
-	Return Reading
-}
-
-// EvidenceSource reads the latest supply and return readings of a loop's meter in a window.
+// EvidenceSource reads a window's per-minute samples from Telemetry history.
 type EvidenceSource interface {
-	LatestLoopReadings(context.Context, LoopQuery) (LoopReadings, error)
+	WindowSamples(context.Context, WindowQuery) ([]Sample, error)
 }
 
 type Service struct {
@@ -101,65 +90,57 @@ func (service *Service) EvaluateLowDeltaT(ctx context.Context, request Evaluatio
 	if err := request.Validate(); err != nil {
 		return EvaluationResult{}, err
 	}
-	to := request.At.UTC()
-	rule, err := service.store.CurrentRule(ctx, request.TenantID, request.SiteID, to)
+	at := request.At.UTC()
+	rule, err := service.store.CurrentRule(ctx, request.TenantID, request.SiteID, at)
 	if err != nil {
 		return EvaluationResult{}, fmt.Errorf("read the low-delta-T rule: %w", err)
 	}
-	from := to.Add(-time.Duration(rule.WindowMinutes) * time.Minute)
-	readings, err := service.evidence.LatestLoopReadings(ctx, LoopQuery{
-		TenantID: request.TenantID, SiteID: request.SiteID, DeviceID: request.DeviceID, From: from, To: to,
+	topology, err := service.store.OperatingTopology(ctx, request.TenantID, request.SiteID, at)
+	if err != nil {
+		return EvaluationResult{}, fmt.Errorf("read the Site's operating topology: %w", err)
+	}
+	from, to := WindowMinutes(rule, at)
+	hold := max(rule.OperatingGates.TemperatureHoldMinutes, rule.OperatingGates.GateHoldMinutes)
+	samples, err := service.evidence.WindowSamples(ctx, WindowQuery{
+		TenantID: request.TenantID, SiteID: request.SiteID, LoopDeviceID: request.DeviceID, GateDeviceIDs: topology.DeviceIDs(),
+		From: from.Add(-time.Duration(hold) * time.Minute), To: to,
 	})
 	if err != nil {
 		return EvaluationResult{}, fmt.Errorf("read loop evidence: %w", err)
 	}
-	if err = temperatureEvidence(readings.Supply); err != nil {
-		return EvaluationResult{}, fmt.Errorf("supply temperature evidence: %w", err)
+	window, err := AssessWindow(rule, topology, request.DeviceID, samples, at)
+	if err != nil {
+		return EvaluationResult{}, err
 	}
-	if err = temperatureEvidence(readings.Return); err != nil {
-		return EvaluationResult{}, fmt.Errorf("return temperature evidence: %w", err)
-	}
-	deltaT := readings.Return.Value - readings.Supply.Value
-	if deltaT >= rule.MinimumDeltaTC {
-		return EvaluationResult{Status: "CLEAR", DeltaTC: deltaT, Rule: rule}, nil
+	result := EvaluationResult{Status: window.Status, DeltaTC: window.MeanDeltaTC, Rule: rule, Window: window}
+	if window.Status != statusLow {
+		return result, nil
 	}
 	open, found, err := service.store.RecentFinding(ctx, request.TenantID, request.SiteID, request.AssetID, lowDeltaTFindingType, rule.ID, to.Add(-findingRecurrence))
 	if err != nil {
 		return EvaluationResult{}, fmt.Errorf("read recent FDD finding: %w", err)
 	}
 	if found {
-		return EvaluationResult{Status: "ONGOING", DeltaTC: deltaT, Rule: rule, Finding: &open}, nil
+		result.Status, result.Finding = "ONGOING", &open
+		return result, nil
 	}
 	findingID, err := schedulerjob.UUIDv7(service.now().UTC())
 	if err != nil {
 		return EvaluationResult{}, err
 	}
-	deficitRatio := math.Max(0, (rule.MinimumDeltaTC-deltaT)/rule.MinimumDeltaTC)
-	confidence := math.Min(0.99, 0.5+0.5*deficitRatio)
+	deficitRatio := math.Max(0, (rule.MinimumDeltaTC-window.MeanDeltaTC)/rule.MinimumDeltaTC)
 	finding := intelligencemodel.FDDFinding{
 		ID: findingID, TenantID: request.TenantID, SiteID: request.SiteID, AssetID: request.AssetID,
 		FindingType: lowDeltaTFindingType, EvaluationFrom: from, EvaluationTo: to,
-		EvidenceIDs:    []string{readings.Supply.ObservationID, readings.Return.ObservationID},
-		RuleRevisionID: rule.ID, Confidence: confidence, CreatedAt: service.now().UTC(),
-		ObservedValue: deltaT, ThresholdValue: rule.MinimumDeltaTC, ValueUnit: "K",
+		EvidenceIDs:    window.LowEvidenceIDs,
+		RuleRevisionID: rule.ID, Confidence: math.Min(0.99, 0.5+0.5*deficitRatio), CreatedAt: service.now().UTC(),
+		ObservedValue: window.MeanDeltaTC, ThresholdValue: rule.MinimumDeltaTC, ValueUnit: "K",
 	}
 	if err = service.store.InsertFinding(ctx, finding); err != nil {
 		return EvaluationResult{}, fmt.Errorf("persist FDD finding: %w", err)
 	}
-	return EvaluationResult{Status: "FINDING", DeltaTC: deltaT, Rule: rule, Finding: &finding}, nil
-}
-
-func temperatureEvidence(reading Reading) error {
-	if reading.PointType != "TELEMETRY" || reading.Quality != "GOOD" {
-		return errors.New("latest authoritative observation is not good telemetry")
-	}
-	if reading.Unit != "Cel" || reading.ValueType != "NUMBER" {
-		return errors.New("latest authoritative observation is not a Celsius number")
-	}
-	if math.IsNaN(reading.Value) || math.IsInf(reading.Value, 0) {
-		return errors.New("latest authoritative observation has an invalid numeric value")
-	}
-	return nil
+	result.Status, result.Finding = "FINDING", &finding
+	return result, nil
 }
 
 // ScheduledEvaluation is what an FDD_EVALUATION schedule carries: the loop to diagnose. The rule

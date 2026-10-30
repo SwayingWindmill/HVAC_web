@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -30,7 +31,7 @@ func newTestHandler(t *testing.T, store Store, evidence EvidenceSource, now time
 func TestEvaluateHTTPDiagnosesTheLoopNowUnderTheRuleInEffect(t *testing.T) {
 	store := newStore()
 	input := validEvaluation()
-	evidence := &loopEvidence{readings: validReadings(input)}
+	evidence := &loopEvidence{samples: validSamples(input)}
 	handler, send := newTestHandler(t, store, evidence, input.At)
 	body, err := json.Marshal(map[string]string{"tenantId": input.TenantID, "siteId": input.SiteID, "assetId": input.AssetID, "deviceId": input.DeviceID})
 	if err != nil {
@@ -43,10 +44,10 @@ func TestEvaluateHTTPDiagnosesTheLoopNowUnderTheRuleInEffect(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	var result EvaluationResult
-	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Rule != testRule {
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || !reflect.DeepEqual(result.Rule, testRule) {
 		t.Fatalf("result=%s err=%v", response.Body.String(), err)
 	}
-	if evidence.query.DeviceID != input.DeviceID || !evidence.query.To.Equal(input.At) || len(store.findings) != 1 {
+	if evidence.query.LoopDeviceID != input.DeviceID || !evidence.query.To.Equal(input.At) || len(store.findings) != 1 {
 		t.Fatalf("evidence query=%#v findings=%#v", evidence.query, store.findings)
 	}
 }
@@ -55,7 +56,7 @@ func TestEvaluateHTTPDiagnosesTheLoopNowUnderTheRuleInEffect(t *testing.T) {
 func TestEvaluateHTTPRejectsACallerThreshold(t *testing.T) {
 	store := newStore()
 	input := validEvaluation()
-	evidence := &loopEvidence{readings: validReadings(input)}
+	evidence := &loopEvidence{samples: validSamples(input)}
 	handler, send := newTestHandler(t, store, evidence, input.At)
 	body := []byte(`{
 		"tenantId":"01990000-3000-7000-8000-000000000001",
@@ -70,7 +71,7 @@ func TestEvaluateHTTPRejectsACallerThreshold(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	if evidence.query.DeviceID != "" || len(store.findings) != 0 {
+	if evidence.query.LoopDeviceID != "" || len(store.findings) != 0 {
 		t.Fatalf("a caller threshold reached evaluation: query=%#v findings=%#v", evidence.query, store.findings)
 	}
 }
@@ -85,7 +86,7 @@ func TestTheRuleInEffectIsReadable(t *testing.T) {
 	}
 	response := read(newStore())
 	var rule RuleRevision
-	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &rule) != nil || rule != testRule {
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &rule) != nil || !reflect.DeepEqual(rule, testRule) {
 		t.Fatalf("rule=%d %s", response.Code, response.Body.String())
 	}
 	if missing := read(&memoryStore{}); missing.Code != http.StatusNotFound {

@@ -49,7 +49,7 @@ func RunScheduledEvaluations(ctx context.Context, queue *schedulerjob.Queue, ser
 		case evaluationErr != nil:
 			finish(queue.Fail(context.Background(), job, "FDD_EVALUATION_FAILED", evaluationErr, true, time.Now().UTC()), job)
 		default:
-			output := map[string]any{"status": result.Status, "deltaTC": result.DeltaTC}
+			output := map[string]any{"status": result.Status, "deltaTC": result.DeltaTC, "operatingShare": result.Window.OperatingShare, "lowShare": result.Window.LowShare}
 			if result.Finding != nil {
 				output["findingId"] = result.Finding.ID
 			}

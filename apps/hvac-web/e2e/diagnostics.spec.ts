@@ -31,10 +31,24 @@ test('running the diagnosis names the loop, and FDD reports a condition already 
   await page.getByRole('button', { name: '立即诊断' }).click();
 
   await expect(rule).toContainText('仍在持续');
+  await expect(rule).toContainText('最近 15 分钟里冷站运行 15 分钟');
   await expect(rule).toContainText('问题仍在持续，24 小时内不重复记录');
   const [run] = gateway.writes.filter((write) => write.path === `/api/v1/sites/${SITE_ID}/fdd/evaluate/low-delta-t`);
   // The page names the loop only; the threshold and window are FDD's rule.
   expect(run.body).toEqual({ deviceId: BTU_METER_DEVICE, assetId: BTU_METER_ASSET });
+});
+
+test('a plant that ran too little of the window is not judged, and nothing is recorded', async ({ page, gateway }) => {
+  gateway.fddOperatingMinutes = 9;
+  await page.goto(`/operations/diagnostics?site=${SITE_ID}`);
+  const rule = page.getByRole('region', { name: '冷冻水低温差' });
+  await expect(rule.getByRole('button', { name: /只看冷站运行（冷机开机、负荷率不低于 15%、冷冻水泵运行）的时间，运行不足窗口的 70% 时不判断/ })).toBeVisible();
+  const findings = gateway.findings.length;
+  await page.getByRole('button', { name: '立即诊断' }).click();
+
+  await expect(rule).toContainText('未运行');
+  await expect(rule).toContainText('最近 15 分钟里冷站运行 9 分钟，不足 70%，不判断温差。');
+  expect(gateway.findings).toHaveLength(findings);
 });
 
 test('a revised rule is what the page shows, and an unreadable rule says so', async ({ page, gateway }) => {

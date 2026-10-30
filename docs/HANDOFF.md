@@ -2,7 +2,7 @@
 
 现在做到哪、下一步做什么、服务器和本地环境有哪些特殊情况。改了这里说的事，就在同一个 PR 里更新本文。怎么构建、测试和运行见 `AGENTS.md`；用户能看到的变化见 `CHANGELOG.md`；每张单的细节在 GitHub 问题单里。
 
-最后更新：2026-10-29。
+最后更新：2026-10-30。
 
 ## 产品现在有什么
 
@@ -116,7 +116,7 @@
 
 小的后续：
 
-- 改 FDD 低温差的门槛或时间窗口时，发布新版本（不要改旧版本）：`node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <时刻>]`。
+- 改 FDD 低温差的门槛、时间窗口或工况门控时，发布新版本（不要改旧版本）：`node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <时刻>] [--operating-gates '<json>']`；不写门控就沿用上一版。低温差只在冷站运行时判断（规格 `docs/specs/fdd-rule-definition.md`「工况门控」）。松雅轩四台冷机都没登记额定功率和额定冷量，冷机开机按运行状态判断、负荷率门控用不上；冷冻水泵运行状态点位没绑定水泵资产，水泵门控也用不上。松雅轩实际运行温差中位数约 0.9 K、最高约 2.2 K，3.5 K 阈值下每个运行窗口都是低温差，阈值待用户定。
 - 指标计算里的电量差值不会在点位改版或换单位时断开，能耗计算（`counter_deltas_from`）会断开。第一次原地改点位配置之前要补上。
 - 能耗序列算电费时，每读一条用电记录约占 0.5 KB ClickHouse 内存。实时电表每块每天约 24,000 条，一个站点一个月约 150 MiB，一年会超过 1.5 GiB 的上限。实时数据上要查长时间范围之前，天和月的粒度要改成读按小时汇总的表。
 - 每次能耗差值查询都会把相关点位的整个累计读数历史扫一遍（每个窗口约 700 万行，约 0.5 秒，随历史增长）；`has(points, point_id)` 用不上 `observations` 的排序键（它把 `point_id` 包在 `ifNull` 里）。
