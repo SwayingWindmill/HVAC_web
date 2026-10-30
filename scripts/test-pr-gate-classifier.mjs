@@ -67,6 +67,12 @@ test('domain module changes stay scoped to product domains', () => {
   }
 });
 
+test('shared grant signing changes select every domain that signs or verifies grants', () => {
+  const classification = runClassification(['libs/grant/grant.go']);
+  assert.deepEqual(classification.unitProfiles, ['command', 'go', 'platform', 'registry', 'telemetry']);
+  assert.equal(classification.broad, false);
+});
+
 test('Phase 1 migration changes rerun the migration integration test and the freeze check', () => {
   for (const file of ['deploy/platform/phase1/migrations/manifest.v1.json', 'modules/alarm/migrations/001_s4_alarm_runtime.sql', 'services/notification-service/migrations/002_wechat_reminders.sql']) {
     const classification = runClassification([file]);

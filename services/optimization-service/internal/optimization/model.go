@@ -115,6 +115,10 @@ func (request Request) Validate() error {
 	return validateHVACExecutionInputs(request.Baseline, request.Constraints, request.ResponseModel)
 }
 
+// errBaselineOutsideConstraints is a Site already running outside its policy's comfort or safety
+// band, e.g. supply water warming up while the chillers are off.
+var errBaselineOutsideConstraints = errors.New("HVAC baseline is already outside the frozen constraints")
+
 func validateHVACExecutionInputs(baseline HVACBaseline, constraints HVACConstraints, model HVACResponseModel) error {
 	if !finitePositive(baseline.DailyEnergyKWh) || !finiteNonNegative(baseline.DailyCost) || !finite(baseline.SupplyTempC) || !finite(baseline.ZoneTempC) {
 		return errors.New("HVAC baseline values are invalid")
@@ -125,7 +129,7 @@ func validateHVACExecutionInputs(baseline HVACBaseline, constraints HVACConstrai
 	}
 	if baseline.SupplyTempC < constraints.SupplyTempMinC || baseline.SupplyTempC > constraints.SupplyTempMaxC ||
 		baseline.ZoneTempC < constraints.ZoneTempMinC || baseline.ZoneTempC > constraints.ZoneTempMaxC {
-		return errors.New("HVAC baseline is already outside the frozen constraints")
+		return errBaselineOutsideConstraints
 	}
 	if !finite(model.DailyEnergyDeltaPerSupplyTempC) || !finite(model.ZoneTempDeltaPerSupplyTempC) || !finiteNonNegative(model.EnergyUncertaintyP90KWh) || !finiteNonNegative(model.ZoneTempUncertaintyP90C) {
 		return errors.New("HVAC response model coefficients or uncertainty are invalid")

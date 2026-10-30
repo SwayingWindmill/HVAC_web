@@ -132,6 +132,8 @@ export class Gateway {
   readonly findings = replayFindings(fixture<Json>('fdd-findings.json').items, new Date().toISOString());
   /** The Site's latest published recommendation; null until a run publishes one. */
   optimization: Json | null = null;
+  /** How the Site's Optimization schedule last fired; null while the Site has no schedule that fired. */
+  optimizationPreparation: Json | null = null;
   /** IAM refuses Energy Analytics for the Site, as it does for a Site outside the principal's analytics grant. */
   analyticsDenied = false;
   /** Daily energy series repeat the recorded day's total each day, so days line up with other daily series. */
@@ -390,6 +392,9 @@ export class Gateway {
     if (method === 'POST' && path === `/api/v1/sites/${SITE_ID}/fdd/evaluate/low-delta-t`) return { status: 201, body: this.evaluateLowDeltaT(body!, now) };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/recommendations/latest`) {
       return this.optimization ? { body: this.optimization } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+    }
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/preparations/latest`) {
+      return this.optimizationPreparation ? { body: this.optimizationPreparation } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
     }
     if (method === 'POST' && path === '/api/v1/optimization/runs') {
       if (!this.nextRecommendation) return { status: 502, body: fixture('optimization-run-declined.json') };

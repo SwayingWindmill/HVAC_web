@@ -23,7 +23,7 @@ func (store *PostgresStore) ResolveOptimizationPreparation(ctx context.Context, 
 	var definition PreparationDefinition
 	err = tx.QueryRow(ctx, `SELECT timezone FROM core_registry.sites WHERE tenant_id=$1::uuid AND id=$2::uuid`, request.TenantID, request.SiteID).Scan(&definition.SiteTimezone)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return PreparationDefinition{}, fmt.Errorf("%w: the Site is not visible", ErrPreparationUnavailable)
+		return PreparationDefinition{}, unavailable(ReasonSiteNotVisible, "the Site is not visible")
 	}
 	if err != nil {
 		return PreparationDefinition{}, err
@@ -45,13 +45,13 @@ LIMIT 1`, request.TenantID, at.UTC()).Scan(
 		&definition.Granularity, &definition.PolicyConstraints, &policyCount,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return PreparationDefinition{}, fmt.Errorf("%w: no effective RELEASED Optimization policy", ErrPreparationUnavailable)
+		return PreparationDefinition{}, unavailable(ReasonPolicyMissing, "no effective RELEASED Optimization policy")
 	}
 	if err != nil {
 		return PreparationDefinition{}, err
 	}
 	if policyCount != 1 {
-		return PreparationDefinition{}, fmt.Errorf("%w: effective Optimization policy mapping is ambiguous", ErrPreparationUnavailable)
+		return PreparationDefinition{}, unavailable(ReasonPolicyMissing, "effective Optimization policy mapping is ambiguous")
 	}
 
 	var topologyCount int
@@ -62,13 +62,13 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status='ACTIVE'
 ORDER BY version DESC
 LIMIT 1`, request.TenantID, request.SiteID, at.UTC()).Scan(&definition.TopologyVersionID, &topologyCount)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return PreparationDefinition{}, fmt.Errorf("%w: no ACTIVE Topology Version for Site", ErrPreparationUnavailable)
+		return PreparationDefinition{}, unavailable(ReasonTopologyMissing, "no ACTIVE Topology Version for Site")
 	}
 	if err != nil {
 		return PreparationDefinition{}, err
 	}
 	if topologyCount != 1 {
-		return PreparationDefinition{}, fmt.Errorf("%w: ACTIVE Topology Version mapping is ambiguous", ErrPreparationUnavailable)
+		return PreparationDefinition{}, unavailable(ReasonTopologyMissing, "ACTIVE Topology Version mapping is ambiguous")
 	}
 
 	forecastWindowStart := at.UTC().Add(15 * time.Minute)
@@ -89,7 +89,7 @@ WHERE snapshot.tenant_id=$1::uuid AND snapshot.site_id=$2::uuid
 ORDER BY snapshot.forecast_origin DESC,snapshot.created_at DESC,snapshot.id DESC
 LIMIT 1`, request.TenantID, request.SiteID, request.SubjectType, request.SubjectID, at.UTC(), forecastWindowStart, forecastWindowEnd, definition.TopologyVersionID).Scan(&definition.LoadForecastSnapshotID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return PreparationDefinition{}, fmt.Errorf("%w: no PERSISTED SITE_LOAD Forecast Snapshot covers the Optimization horizon", ErrPreparationUnavailable)
+		return PreparationDefinition{}, unavailable(ReasonLoadForecastMissing, "no PERSISTED SITE_LOAD Forecast Snapshot covers the Optimization horizon")
 	}
 	if err != nil {
 		return PreparationDefinition{}, err
@@ -133,13 +133,13 @@ WHERE ta.tenant_id=$1::uuid AND ta.site_id=$2::uuid
 ORDER BY CASE boundary.boundary_type WHEN 'GRID_CONNECTION' THEN 0 ELSE 1 END,ta.effective_from DESC,tv.version DESC
 LIMIT 1`, request.TenantID, request.SiteID, at.UTC(), forecastWindowEnd, definition.TopologyVersionID).Scan(&definition.TariffVersionID, &tariffCount)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return PreparationDefinition{}, fmt.Errorf("%w: no effective RELEASED Site import Tariff Version", ErrPreparationUnavailable)
+		return PreparationDefinition{}, unavailable(ReasonTariffMissing, "no effective RELEASED Site import Tariff Version")
 	}
 	if err != nil {
 		return PreparationDefinition{}, err
 	}
 	if tariffCount != 1 {
-		return PreparationDefinition{}, fmt.Errorf("%w: effective Site import Tariff mapping is ambiguous", ErrPreparationUnavailable)
+		return PreparationDefinition{}, unavailable(ReasonTariffMissing, "effective Site import Tariff mapping is ambiguous")
 	}
 
 	err = tx.QueryRow(ctx, `SELECT binding.deployment_revision_id::text
@@ -150,7 +150,7 @@ WHERE binding.tenant_id=$1::uuid AND binding.site_id=$2::uuid
   AND binding.use_case='OPTIMIZATION' AND binding.status='ACTIVE'
   AND revision.use_case='OPTIMIZATION' AND revision.enabled=true`, request.TenantID, request.SiteID).Scan(&definition.DeploymentRevisionID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return PreparationDefinition{}, fmt.Errorf("%w: no ACTIVE Optimization model deployment", ErrPreparationUnavailable)
+		return PreparationDefinition{}, unavailable(ReasonModelDeploymentMissing, "no ACTIVE Optimization model deployment")
 	}
 	if err != nil {
 		return PreparationDefinition{}, err

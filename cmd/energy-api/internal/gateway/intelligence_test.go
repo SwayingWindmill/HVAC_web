@@ -21,6 +21,8 @@ func TestPublicIntelligenceRoutesHaveSingleDomainOwners(t *testing.T) {
 		{http.MethodGet, "/api/v1/sites/" + siteID + "/fdd/findings", ownershipregistry.OwnerFDD, siteID},
 		{http.MethodGet, "/api/v1/sites/" + siteID + "/fdd/rules/low-delta-t", ownershipregistry.OwnerFDD, siteID},
 		{http.MethodPost, "/api/v1/sites/" + siteID + "/fdd/evaluate/low-delta-t", ownershipregistry.OwnerFDD, siteID},
+		{http.MethodGet, "/api/v1/sites/" + siteID + "/optimization/recommendations/latest", ownershipregistry.OwnerOptimization, siteID},
+		{http.MethodGet, "/api/v1/sites/" + siteID + "/optimization/preparations/latest", ownershipregistry.OwnerOptimization, siteID},
 		{http.MethodPost, "/api/v1/optimization/runs", ownershipregistry.OwnerOptimization, ""},
 	} {
 		route, ok := matchPublicIntelligenceRoute(test.method, test.path)
