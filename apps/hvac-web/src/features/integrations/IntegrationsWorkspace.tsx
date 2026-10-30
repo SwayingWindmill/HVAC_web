@@ -144,7 +144,7 @@ export function IntegrationsWorkspace() {
             />,
             <Segment key="platform" icon={Server} title="平台服务" value={platformState} detail={platform?.version ? `版本 ${platform.version}` : '等待状态响应'} health={platform?.status === 'ok' ? 'good' : platform ? 'warn' : 'idle'} />,
             <Segment key="directory" icon={Globe} title="站点目录" value={DIRECTORY_STATE[snapshot.sites?.state ?? 'checking']} detail={`${snapshot.sites?.items?.length ?? 0} 个授权站点`} health={snapshot.sites?.state === 'available' ? 'good' : 'warn'} />,
-            <Segment key="realtime" icon={Radio} title="实时推送" value={realtime.label} detail="打开站点页面后建立连接" health={realtime.code === 'CONNECTED' ? 'good' : realtime.code === 'RECONNECTING' || realtime.code === 'DEGRADED' ? 'warn' : 'idle'} />,
+            <Segment key="realtime" icon={Radio} title="实时推送" value={realtime.label} detail="打开站点页面后建立连接" health={realtime.code === 'CONNECTED' ? 'good' : realtime.code === 'NOT_SUBSCRIBED' ? 'idle' : 'warn'} />,
           ].flatMap((segment, index) => (index === 0 ? [segment] : [
             <span key={`link-${index}`} className="mt-5 h-px min-w-6 flex-[0.4] border-t-2 border-dashed border-border" aria-hidden="true" />,
             segment,

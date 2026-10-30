@@ -43,7 +43,7 @@ const realtime = evaluate(
 const siteId = '01900000-0001-7000-8000-000000000001';
 
 const expected = [
-  ['idle', '未连接'],
+  ['idle', '未订阅'],
   ['connecting', '正在连接'],
   ['live', '已连接'],
   ['reconnecting', '重连中'],
@@ -62,11 +62,22 @@ test('describes every subscription-scoped realtime state without global health c
   }
 });
 
-test('idle without an active subscription remains explicitly unscoped', () => {
+test('idle without an active subscription remains explicitly unscoped and is not a fault', () => {
   const status = realtime.createIdleRealtimeStatus();
   assert.equal(status.state, 'idle');
   assert.equal(status.siteId, undefined);
-  assert.equal(realtime.realtimeStatusPresentation(status).label, '未连接');
+  const presentation = realtime.realtimeStatusPresentation(status);
+  assert.equal(presentation.code, 'NOT_SUBSCRIBED');
+  assert.equal(presentation.label, '未订阅');
+});
+
+test('several open subscriptions show the most severe state, and none shows idle', () => {
+  assert.equal(realtime.combineRealtimeStates([]), 'idle');
+  assert.equal(realtime.combineRealtimeStates(['live', 'live']), 'live');
+  assert.equal(realtime.combineRealtimeStates(['live', 'connecting']), 'connecting');
+  assert.equal(realtime.combineRealtimeStates(['connecting', 'reconnecting', 'live']), 'reconnecting');
+  assert.equal(realtime.combineRealtimeStates(['reconnecting', 'resync-required']), 'resync-required');
+  assert.equal(realtime.combineRealtimeStates(['live', 'unavailable', 'resync-required']), 'unavailable');
 });
 
 test('maps transport states to the four user-visible operational states', () => {
@@ -74,6 +85,7 @@ test('maps transport states to the four user-visible operational states', () => 
   assert.equal(realtime.realtimeStatusPresentation(realtime.createRealtimeStatus({ state: 'connecting', siteId })).code, 'RECONNECTING');
   assert.equal(realtime.realtimeStatusPresentation(realtime.createRealtimeStatus({ state: 'resync-required', siteId })).code, 'DEGRADED');
   assert.equal(realtime.realtimeStatusPresentation(realtime.createRealtimeStatus({ state: 'unavailable', siteId })).code, 'DISCONNECTED');
+  assert.equal(realtime.realtimeStatusPresentation(realtime.createRealtimeStatus({ state: 'idle', siteId })).code, 'NOT_SUBSCRIBED');
 });
 
 test('rejects malformed and cross-Site realtime updates', () => {

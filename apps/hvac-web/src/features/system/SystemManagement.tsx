@@ -130,7 +130,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
               <TableRow className="hover:bg-transparent">
                 <TableCell className="pl-5 font-medium">实时推送</TableCell>
                 <TableCell className="text-muted-foreground">站点设备读数的推送通道</TableCell>
-                <TableCell><StateChip health={realtime.code === 'CONNECTED' ? 'good' : realtime.code === 'DISCONNECTED' ? 'idle' : 'warn'}>{realtime.label}</StateChip></TableCell>
+                <TableCell><StateChip health={realtime.code === 'CONNECTED' ? 'good' : realtime.code === 'NOT_SUBSCRIBED' ? 'idle' : 'warn'}>{realtime.label}</StateChip></TableCell>
                 <TableCell className="pr-5 text-muted-foreground">—</TableCell>
               </TableRow>
             </TableBody>

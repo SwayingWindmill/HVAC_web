@@ -1,6 +1,7 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useId, useMemo } from 'react';
 import { getRouteApi } from '@tanstack/react-router';
 import { projectAssetsRealtimeRow } from '@/features/assets/realtime';
+import { siteDevicesRealtimeShellState } from '@/features/assets/realtime-shell-status';
 import { useSiteAssetsData } from '@/features/assets/use-site-assets-data';
 import { useSiteDevicesRealtime } from '@/features/assets/useSiteDevicesRealtime';
 import { buildPlantView } from './plant-model';
@@ -14,7 +15,7 @@ const SNAPSHOT_POLL_MS = 30_000;
 export type PlantLiveMode = 'live' | 'polling' | 'connecting';
 
 export function useRealtimePlant() {
-  const { site, principal, runtime } = workspaceSiteRoute.useRouteContext();
+  const { site, principal, runtime, publishRealtimeStatus } = workspaceSiteRoute.useRouteContext();
   const capabilities = principal.authorization.capabilities;
   const canSubscribe = capabilities.includes('telemetry.subscribe');
   const protectedRequestToken = useCallback(() => runtime.protectedRequestToken(), [runtime]);
@@ -38,6 +39,21 @@ export function useRealtimePlant() {
     protectedRequestToken,
     registerProtectedResource,
   });
+
+  // The header's realtime status follows this page's session; several plant views can be open at once.
+  const statusSource = useId();
+  const shellState = siteDevicesRealtimeShellState(realtime.phase, realtime.states);
+  useEffect(() => {
+    if (shellState === 'idle') {
+      runtime.releaseRealtimeStatus(statusSource);
+      return;
+    }
+    // A Site switch purges this session before the next Site activates; never report across Sites.
+    const shell = runtime.current();
+    if (shell.state !== 'READY' || shell.protectedScope?.siteId !== site.id) return;
+    publishRealtimeStatus({ source: statusSource, state: shellState, siteId: site.id });
+  }, [publishRealtimeStatus, runtime, shellState, site.id, statusSource]);
+  useEffect(() => () => runtime.releaseRealtimeStatus(statusSource), [runtime, statusSource]);
 
   const rows = useMemo(
     () => assets.rows.map((row) => projectAssetsRealtimeRow(row, realtime.states.get(row.device.id) ?? null).row),

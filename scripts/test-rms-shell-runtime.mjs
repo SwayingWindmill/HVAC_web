@@ -705,12 +705,12 @@ test('realtime status is scoped to the active Site and clears before Site naviga
   assert.equal(runtime.current().realtime.state, 'idle');
   assert.equal(runtime.current().realtime.siteId, siteA.id);
   for (const state of ['connecting', 'live', 'reconnecting', 'resync-required', 'unavailable']) {
-    runtime.publishRealtimeStatus({ state, siteId: siteA.id });
+    runtime.publishRealtimeStatus({ source: 'plant', state, siteId: siteA.id });
     assert.equal(runtime.current().realtime.state, state);
     assert.equal(runtime.current().realtime.siteId, siteA.id);
   }
   assert.throws(
-    () => runtime.publishRealtimeStatus({ state: 'live', siteId: siteB.id }),
+    () => runtime.publishRealtimeStatus({ source: 'plant', state: 'live', siteId: siteB.id }),
     /active Site/i,
   );
 
@@ -724,4 +724,31 @@ test('realtime status is scoped to the active Site and clears before Site naviga
   assert.equal(runtime.current().realtime.siteId, undefined);
   pendingPurge.resolve();
   assert.equal(await navigation, 'navigated');
+});
+
+test('the header shows the most severe open subscription and returns to idle once all are released', async () => {
+  const site = registrySite();
+  const runtime = runtimeModule.createShellRuntime(client({
+    listSites: async () => ({ data: siteCollection([site]) }),
+  }), environment().value);
+  await runtime.bootstrap(`/operations/realtime?site=${site.id}`);
+  runtime.activateSiteScope(site.id);
+
+  runtime.publishRealtimeStatus({ source: 'overview', state: 'live', siteId: site.id });
+  runtime.publishRealtimeStatus({ source: 'breakdown', state: 'reconnecting', siteId: site.id });
+  assert.equal(runtime.current().realtime.state, 'reconnecting');
+
+  runtime.publishRealtimeStatus({ source: 'breakdown', state: 'live', siteId: site.id });
+  assert.equal(runtime.current().realtime.state, 'live');
+
+  // Leaving one view keeps the other's state; leaving the last one is not a fault.
+  runtime.releaseRealtimeStatus('breakdown');
+  assert.equal(runtime.current().realtime.state, 'live');
+  runtime.releaseRealtimeStatus('overview');
+  assert.equal(runtime.current().realtime.state, 'idle');
+  assert.equal(runtime.current().realtime.siteId, site.id);
+
+  // A release after the source is gone (unmount after purge) changes nothing.
+  runtime.releaseRealtimeStatus('overview');
+  assert.equal(runtime.current().realtime.state, 'idle');
 });

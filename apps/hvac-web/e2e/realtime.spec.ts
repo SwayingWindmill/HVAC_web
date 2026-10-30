@@ -11,6 +11,10 @@ test('the plant view shows current plant figures from the Snapshot', async ({ pa
   await expect(loops.getByRole('row', { name: /室内/ })).toContainText(/24\.1\s*°C/);
   // Without a realtime grant the page says it is polling rather than pretending to stream.
   await expect(page.getByText('每 30 秒刷新')).toBeVisible();
+  // …and the header says nothing is subscribed instead of reporting a lost connection.
+  const status = page.getByTestId('real-realtime-status');
+  await expect(status).toHaveAttribute('data-realtime-state', 'idle');
+  await expect(status).toHaveText('未订阅');
 });
 
 test('choosing a metric keeps it in the URL', async ({ page }) => {

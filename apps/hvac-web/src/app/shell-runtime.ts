@@ -19,8 +19,10 @@ import {
 } from './protected-scope';
 import {
   assertRealtimeStatusForSite,
+  combineRealtimeStates,
   createIdleRealtimeStatus,
   createRealtimeStatus,
+  type RealtimeSubscriptionState,
   type RealtimeStatusSnapshot,
   type RealtimeStatusUpdate,
 } from './realtime-status';
@@ -91,7 +93,10 @@ export interface ShellRuntime {
   activateSiteScope(siteId: string): void;
   registerProtectedResource(resource: ProtectedScopeResource): () => void;
   protectedRequestToken(): ProtectedScopeRequestToken;
+  /** Records one open subscription's state; the header shows the most severe one. */
   publishRealtimeStatus(update: RealtimeStatusUpdate): void;
+  /** Forgets a subscription that closed; with none left the header shows idle. */
+  releaseRealtimeStatus(source: string): void;
   requestSiteNavigation(target: string): Promise<SiteNavigationOutcome>;
   handlePolicyRevision(policyRevision: string): Promise<'unchanged' | 'reloaded' | 'failed'>;
   logout(): Promise<LogoutOutcome>;
@@ -231,6 +236,7 @@ class BrowserShellRuntime implements ShellRuntime {
     realtime: createIdleRealtimeStatus(),
   };
   private readonly listeners = new Set<(snapshot: ShellSnapshot) => void>();
+  private readonly realtimeSources = new Map<string, RealtimeSubscriptionState>();
   private protectedPrincipal?: CurrentPrincipalResponse;
   private currentUrl = '/';
   private returnTo = '/';
@@ -331,6 +337,7 @@ class BrowserShellRuntime implements ShellRuntime {
   activateSiteScope(siteId: string): void {
     if (this.snapshot.state !== 'READY' || !this.protectedPrincipal) return;
     this.protectedScope.activate(siteId);
+    this.realtimeSources.clear();
     this.publish({
       ...this.snapshot,
       realtime: createRealtimeStatus({ state: 'idle', siteId }),
@@ -356,8 +363,23 @@ class BrowserShellRuntime implements ShellRuntime {
     }
     const activeSiteId = this.protectedScope.current().siteId;
     if (!activeSiteId) throw new Error('Realtime status requires an active Site.');
-    const realtime = assertRealtimeStatusForSite(createRealtimeStatus(update), activeSiteId);
-    this.publish({ ...this.snapshot, realtime });
+    assertRealtimeStatusForSite(createRealtimeStatus(update), activeSiteId);
+    this.realtimeSources.set(update.source, update.state);
+    this.publishCombinedRealtime(activeSiteId);
+  }
+
+  releaseRealtimeStatus(source: string): void {
+    if (!this.realtimeSources.delete(source)) return;
+    if (this.snapshot.state !== 'READY') return;
+    const activeSiteId = this.protectedScope.current().siteId;
+    if (!activeSiteId) return;
+    this.publishCombinedRealtime(activeSiteId);
+  }
+
+  private publishCombinedRealtime(siteId: string): void {
+    const state = combineRealtimeStates(this.realtimeSources.values());
+    if (this.snapshot.realtime?.state === state && this.snapshot.realtime.siteId === siteId) return;
+    this.publish({ ...this.snapshot, realtime: createRealtimeStatus({ state, siteId }) });
   }
 
   async requestSiteNavigation(target: string): Promise<SiteNavigationOutcome> {
@@ -503,6 +525,7 @@ class BrowserShellRuntime implements ShellRuntime {
     const principal = this.protectedPrincipal;
     if (!principal || this.snapshot.state !== 'READY') return;
     const clearsSubscription = siteTransition?.status === 'purging' || siteTransition?.status === 'failed';
+    if (clearsSubscription) this.realtimeSources.clear();
     this.publish({
       state: 'READY',
       principal,

@@ -10,6 +10,7 @@ import {
   projectAssetsRealtimeRow,
   validateAssetsRealtimeState,
 } from '../apps/hvac-web/src/features/assets/realtime.ts';
+import { siteDevicesRealtimeShellState } from '../apps/hvac-web/src/features/assets/realtime-shell-status.ts';
 import { selectAssetsRepresentativePoints } from '../apps/hvac-web/src/features/assets/model.ts';
 import { projectAssetsDeviceOperationalState } from '../apps/hvac-web/src/features/assets/operational-projection.ts';
 
@@ -216,4 +217,29 @@ test('bounded publisher renders at most once per frame while publishing the late
   publisher.cancel();
   assert.equal(callbacks.size, 0);
   assert.deepEqual(published, [3]);
+});
+
+test('the header state follows the page session and shows its most severe Device', () => {
+  const none = new Map();
+  for (const phase of ['closed', 'not-authorized', 'scope-too-large', 'purged']) {
+    assert.equal(siteDevicesRealtimeShellState(phase, none), 'idle', phase);
+  }
+  assert.equal(siteDevicesRealtimeShellState('opening', none), 'connecting');
+  assert.equal(siteDevicesRealtimeShellState('error', none), 'unavailable');
+  assert.equal(siteDevicesRealtimeShellState('active', none), 'connecting');
+
+  const states = (...list) => new Map(list.map((state, index) => [`device-${index}`, state]));
+  assert.equal(siteDevicesRealtimeShellState('active', states(liveState('live'), liveState('live'))), 'live');
+  assert.equal(siteDevicesRealtimeShellState('active', states(liveState('live'), liveState('initializing'))), 'connecting');
+  assert.equal(siteDevicesRealtimeShellState('active', states(liveState('snapshot', 3, { reason: 'authoritative-snapshot' }))), 'connecting');
+  assert.equal(siteDevicesRealtimeShellState('active', states(liveState('live'), liveState('snapshot'))), 'reconnecting');
+  assert.equal(siteDevicesRealtimeShellState('active', states(liveState('live'), liveState('snapshot', 3, { reason: 'recovering' }))), 'resync-required');
+  assert.equal(
+    siteDevicesRealtimeShellState('active', states(liveState('live'), liveState('unavailable', 3, { reason: 'recovery-required' }))),
+    'resync-required',
+  );
+  assert.equal(siteDevicesRealtimeShellState('active', states(liveState('snapshot'), liveState('unavailable'))), 'unavailable');
+  // A revoked Device is being purged and no longer counts; only revoked Devices means no subscription.
+  assert.equal(siteDevicesRealtimeShellState('active', states(liveState('live'), liveState('revoked'))), 'live');
+  assert.equal(siteDevicesRealtimeShellState('active', states(liveState('revoked'))), 'idle');
 });
