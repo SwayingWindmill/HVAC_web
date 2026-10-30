@@ -136,6 +136,7 @@ const expectedOperations = {
   getSiteMonthlyReportV212: ['get', '/api/v1/sites/{siteId}/reports/monthly/{month}'],
   createOptimizationRunV212: ['post', '/api/v1/optimization/runs'],
   getLatestSiteOptimizationRecommendationV212: ['get', '/api/v1/sites/{siteId}/optimization/recommendations/latest'],
+  getLatestSiteOptimizationPreparationV212: ['get', '/api/v1/sites/{siteId}/optimization/preparations/latest'],
 };
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {
@@ -359,6 +360,7 @@ const replacements = {
   __SITE_MONTHLY_REPORT_PATH__: operations.getSiteMonthlyReportV212.path,
   __OPTIMIZATION_RUNS_PATH__: operations.createOptimizationRunV212.path,
   __LATEST_OPTIMIZATION_RECOMMENDATION_PATH__: operations.getLatestSiteOptimizationRecommendationV212.path,
+  __LATEST_OPTIMIZATION_PREPARATION_PATH__: operations.getLatestSiteOptimizationPreparationV212.path,
 };
 
 function render(template) {

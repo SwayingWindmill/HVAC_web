@@ -94,7 +94,7 @@ func TestOptimizationTelemetryReaderDoesNotFallbackToOlderGoodQuality(t *testing
 		SubjectType: "SITE",
 		SubjectID:   "018f1e00-1000-7000-8000-000000000001",
 		At:          at,
-	}, "btu_meter.supply_water_temperature")
+	}, "btu_meter.supply_water_temperature", ReasonSupplyTempMissing)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,5 +103,37 @@ func TestOptimizationTelemetryReaderDoesNotFallbackToOlderGoodQuality(t *testing
 	}
 	if err := validateTelemetryEvidence(observation, "btu_meter.supply_water_temperature", at); err == nil {
 		t.Fatal("latest non-GOOD authoritative observation must block Optimization preparation")
+	}
+}
+
+// 松雅轩's policy once mapped the zone to "temperature", a key the Site does not report: the reader
+// says the zone temperature is what is missing, not that some input is.
+func TestOptimizationInputReaderNamesTheTelemetryKeyWithNoObservation(t *testing.T) {
+	shanghai, _ := time.LoadLocation("Asia/Shanghai")
+	at := time.Date(2026, 10, 30, 20, 20, 0, 0, shanghai)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		query, _ := io.ReadAll(request.Body)
+		writer.Header().Set("Content-Type", "application/x-ndjson")
+		if strings.Contains(string(query), "telemetry_key='supply_water_temperature'") {
+			_, _ = writer.Write([]byte(`{"observation_id":"01990000-2940-7000-8000-000000000001","device_id":"01990000-2900-7000-8000-000000000001","point_id":"01990000-2910-7000-8000-000000000001","telemetry_key":"supply_water_temperature","point_revision":1,"sampled_at":"2026-10-30T12:19:00.000Z","received_at":"2026-10-30T12:19:01.000Z","value":6.1,"unit":"Cel","quality":"GOOD","source_event_id":"01990000-2930-7000-8000-000000000001","source_partition":"telemetry-0","source_offset":2}` + "\n"))
+		}
+	}))
+	defer server.Close()
+	day := time.Date(2026, 10, 29, 0, 0, 0, 0, shanghai)
+	watermark := at.Add(-time.Hour).UTC()
+	energy := &energySeriesStub{response: analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: []analyticsmodel.EnergySeriesPoint{{
+		PeriodStart: day.UTC(), PeriodEnd: day.AddDate(0, 0, 1).UTC(), EnergyKWh: 1118, Cost: &analyticsmodel.EnergyCost{AmountCNY: 690, Periods: []analyticsmodel.PeriodCost{}},
+	}}, Metadata: analyticsmodel.EnergySeriesMetadata{DatasetRevision: "songyaxuan:1", DataWatermark: &watermark}}}
+	reader, err := NewClickHouseInputReader(InputReaderConfig{BaseURL: server.URL, Energy: energy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = reader.ReadOptimizationState(t.Context(), OptimizationStateQuery{
+		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Timezone: "Asia/Shanghai", At: at.UTC(),
+		SupplyTemperatureKey: "supply_water_temperature", ZoneTemperatureKey: "temperature",
+	})
+	if reason, ok := PreparationReasonOf(err); !ok || reason != ReasonZoneTempMissing {
+		t.Fatalf("reason=%q ok=%v err=%v", reason, ok, err)
 	}
 }
