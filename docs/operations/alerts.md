@@ -247,7 +247,12 @@ Prometheus 的告警规则在 `infra/observability/alerts/`，每条规则的 `r
 
 ## 主机磁盘和 PostgreSQL 的 WAL
 
-`Phase1HostDiskUsageWarning`（超过 80%）、`Phase1HostDiskUsageHigh`（超过 85%，要有人看到）、`Phase1HostDiskUsageCritical`（超过 90%）按容量问题处理，不是手工删数据库文件的理由。`Phase1HostDiskWillFillWithin24Hours` 按最近两小时的剩余空间趋势，预计 24 小时内会写满就提前报警：在到 80% 之前，先找增长最快的持久数据。Prometheus 自己的历史最多留 15 天，并且块数据不超过 2GB（`--storage.tsdb.retention.size=2GB`），避免它自己把盘写满。
+`Phase1HostDiskUsageWarning`（超过 80%）、`Phase1HostDiskUsageHigh`（超过 85%，要有人看到）、`Phase1HostDiskUsageCritical`（超过 90%）按容量问题处理，不是手工删数据库文件的理由。按趋势报警的有两条，都只看剩余空间的变化速度：
+
+- `Phase1HostDiskWillFillWithin24Hours`（警告）：剩余不到 25%，并且按最近 12 小时的增长，24 小时内会写满，连续 1 小时成立才报。一次部署大约 20 分钟写进 1 到 2 GiB（镜像、构建缓存、部署包），然后就停了；12 小时的窗口把它当成一个台阶，不当成趋势。例如 59G 的盘用了 70%，部署写进 2 GiB，这条不会报；以前按 2 小时窗口、剩余不到 50% 就算，正好在部署时误报（2026-10-28、10-29 两次）。平时的净增长大约每天 0.15 GiB。
+- `Phase1HostDiskFillingFast`（要有人看到）：剩余不到 40%，并且按最近 6 小时的增长，4 小时内会写满，连续 30 分钟成立才报。这是有东西在失控写盘（日志、卡住的 WAL、备份循环），马上用 `sudo du -xh --max-depth=2 / | sort -h | tail` 和 `docker system df` 找出是谁。
+
+两条都报时，先找增长最快的持久数据，再看要不要清理镜像和构建缓存。Prometheus 自己的历史最多留 15 天，并且块数据不超过 2GB（`--storage.tsdb.retention.size=2GB`），避免它自己把盘写满。
 
 1. 本机 PostgreSQL：对比数据目录和 `pg_wal` 的大小。`pg_wal` 比表数据大很多，多半是 WAL 回收被堵住了。
 2. 开着 `POSTGRES_ARCHIVE_MODE=on` 时，看 `pg_stat_archiver` 和归档目录。归档反复失败要在归档目录那边修，绝不能手工删 `pg_wal` 里的文件。

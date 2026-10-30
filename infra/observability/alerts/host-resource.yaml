@@ -41,14 +41,29 @@ groups:
           description: "Filesystem {{ $labels.mountpoint }} has exceeded the deployment critical threshold."
           runbook: docs/operations/alerts.md#主机磁盘和-postgresql-的-wal
 
+      # A deploy writes 1-2 GiB in about 20 minutes (images, build cache, release bundle). A 12 hour
+      # window treats that as a step, not a trend, and the 25 percent guard keeps the warning for a
+      # disk that is actually getting tight. Steady growth on phase 1 is about 0.15 GiB per day.
       - alert: Phase1HostDiskWillFillWithin24Hours
-        expr: predict_linear(node_filesystem_avail_bytes{job="host",fstype!~"tmpfs|devtmpfs|overlay|squashfs"}[2h], 24 * 60 * 60) < 0 and node_filesystem_avail_bytes{job="host",fstype!~"tmpfs|devtmpfs|overlay|squashfs"} / node_filesystem_size_bytes{job="host",fstype!~"tmpfs|devtmpfs|overlay|squashfs"} < 0.5
-        for: 15m
+        expr: predict_linear(node_filesystem_avail_bytes{job="host",fstype!~"tmpfs|devtmpfs|overlay|squashfs"}[12h], 24 * 60 * 60) < 0 and node_filesystem_avail_bytes{job="host",fstype!~"tmpfs|devtmpfs|overlay|squashfs"} / node_filesystem_size_bytes{job="host",fstype!~"tmpfs|devtmpfs|overlay|squashfs"} < 0.25
+        for: 1h
         labels:
           severity: warning
         annotations:
           summary: Phase 1 host disk is projected to fill within 24 hours
-          description: "Filesystem {{ $labels.mountpoint }} is consuming free space fast enough to exhaust the disk within 24 hours if the recent trend continues."
+          description: "Filesystem {{ $labels.mountpoint }} has less than 25 percent free and the last 12 hours of growth would exhaust it within 24 hours."
+          runbook: docs/operations/alerts.md#主机磁盘和-postgresql-的-wal
+
+      # Something is writing fast enough to fill the disk within hours (runaway log, stuck WAL,
+      # backup loop). Six hours of samples still smooth out a single deploy.
+      - alert: Phase1HostDiskFillingFast
+        expr: predict_linear(node_filesystem_avail_bytes{job="host",fstype!~"tmpfs|devtmpfs|overlay|squashfs"}[6h], 4 * 60 * 60) < 0 and node_filesystem_avail_bytes{job="host",fstype!~"tmpfs|devtmpfs|overlay|squashfs"} / node_filesystem_size_bytes{job="host",fstype!~"tmpfs|devtmpfs|overlay|squashfs"} < 0.4
+        for: 30m
+        labels:
+          severity: page
+        annotations:
+          summary: 主机磁盘预计 4 小时内写满
+          description: "文件系统 {{ $labels.mountpoint }} 最近 6 小时的增长速度会在 4 小时内写满剩余空间。马上找出正在写盘的进程或容器。"
           runbook: docs/operations/alerts.md#主机磁盘和-postgresql-的-wal
 
       - alert: Phase1HostMemoryAvailableLow
