@@ -137,6 +137,21 @@ export async function validateDesignSystem(root = defaultRoot) {
     if (!componentsJson.includes(expected)) errors.push(`apps/hvac-web/components.json must contain ${expected}`);
   }
 
+  // shadcn's base styles are a copy of the pinned CLI version's dist/tailwind.css, not an
+  // npm dependency; the copy and the CLI pin must move together.
+  const cliSource = await readFile(resolve(root, 'scripts/shadcn-cli.mjs'), 'utf8');
+  const cliVersion = /SHADCN_CLI_VERSION = '([^']+)'/.exec(cliSource)?.[1];
+  const shadcnStyles = await readFile(resolve(root, 'apps/hvac-web/src/styles/shadcn-tailwind.css'), 'utf8');
+  if (!cliVersion) {
+    errors.push('scripts/shadcn-cli.mjs must pin SHADCN_CLI_VERSION');
+  } else if (!shadcnStyles.includes(`shadcn@${cliVersion} dist/tailwind.css`)) {
+    errors.push(`apps/hvac-web/src/styles/shadcn-tailwind.css must be the dist/tailwind.css of shadcn@${cliVersion}, the version scripts/shadcn-cli.mjs runs`);
+  }
+  const globalCss = await readFile(resolve(root, 'apps/hvac-web/src/global.css'), 'utf8');
+  if (globalCss.includes('"shadcn/tailwind.css"')) {
+    errors.push('apps/hvac-web/src/global.css must import ./styles/shadcn-tailwind.css; the shadcn package is not installed');
+  }
+
   return { errors };
 }
 
