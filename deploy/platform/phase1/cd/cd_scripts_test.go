@@ -174,17 +174,19 @@ func imageOf(t *testing.T, store, tag string) (id string, layers int, label stri
 func applyRelease(t *testing.T, bin, store, platform string, run int) string {
 	t.Helper()
 	release := t.TempDir()
-	for _, dir := range []string{"bins/energy-api", "src"} {
+	for _, dir := range []string{"bins/energy-api", "src/deploy/platform/phase1/cd"} {
 		if err := os.MkdirAll(filepath.Join(release, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	files := map[string]string{
-		"REVISION":                 strings.Repeat("a", 40) + "\n",
-		"services.tsv":             "energy-api\thvac/energy-api:0.1.0-dev\tgo\trequired\t./cmd/energy-api\n",
-		"bins/healthcheck":         "hc",
-		"bins/energy-api/service":  "svc" + strconv.Itoa(run),
-		"src/README":               "tree",
+		"REVISION":                strings.Repeat("a", 40) + "\n",
+		"services.tsv":            "energy-api\thvac/energy-api:0.1.0-dev\tgo\trequired\t./cmd/energy-api\n",
+		"bins/healthcheck":        "hc",
+		"bins/energy-api/service": "svc" + strconv.Itoa(run),
+		"src/README":              "tree",
+		// apply-on-server.sh runs the release's observability-config.sh check before unpacking and apply after smoke.
+		"src/deploy/platform/phase1/cd/observability-config.sh": "#!/bin/sh\nexit 0\n",
 		"rollback.sh":              "#!/bin/sh\nexit 0\n",
 		"smoke-release.sh":         "#!/bin/sh\nexit 0\n",
 		"prune-rollback-images.sh": "#!/bin/sh\nexit 0\n",
@@ -194,7 +196,7 @@ func applyRelease(t *testing.T, bin, store, platform string, run int) string {
 			t.Fatal(err)
 		}
 	}
-	if out, err := exec.Command("tar", "-C", filepath.Join(release, "src"), "-cf", filepath.Join(release, "source.tar"), ".").CombinedOutput(); err != nil {
+	if out, err := exec.Command("tar", "-C", filepath.Join(release, "src"), "-cf", filepath.Join(release, "source.tar"), "README", "deploy").CombinedOutput(); err != nil {
 		t.Fatalf("tar: %v\n%s", err, out)
 	}
 	cmd := exec.Command("bash", "apply-on-server.sh", release)
