@@ -84,6 +84,12 @@ if [[ "${1:-}" == "--check-credentials" ]]; then
 fi
 
 check_credentials
+# rebuild_base on the deploy workflow: apply-on-server.sh rebuilds every deploy-base first.
+rebuild_base="${HVAC_REBUILD_DEPLOY_BASE:-0}"
+if [[ "$rebuild_base" != 0 && "$rebuild_base" != 1 ]]; then
+  echo "error: HVAC_REBUILD_DEPLOY_BASE must be 0 or 1 (got '$rebuild_base')." >&2
+  exit 1
+fi
 if [[ ! -f "$staging/source.tar" || ! -f "$staging/apply-on-server.sh" ]]; then
   echo "error: $staging is not a staged release. Run deploy/platform/phase1/cd/build-release.sh first." >&2
   exit 1
@@ -338,8 +344,12 @@ if [[ "$ready" -ne 1 ]]; then
   exit 1
 fi
 
+apply_command="bash '$remote/apply-on-server.sh' '$remote'"
+if [[ "$rebuild_base" == 1 ]]; then
+  apply_command="HVAC_REBUILD_DEPLOY_BASE=1 $apply_command"
+fi
 status=0
-remote_ssh "$target" "bash '$remote/apply-on-server.sh' '$remote'" || status=$?
+remote_ssh "$target" "$apply_command" || status=$?
 if [[ "$status" -ne 0 ]]; then
   remote_ssh "$target" "rm -rf '$remote'" || true
   exit "$status"

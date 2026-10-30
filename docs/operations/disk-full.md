@@ -13,15 +13,34 @@ docker system df
 
 `docker system df` 里 Build Cache 和 Images 很大时，优先清构建缓存和不再使用的旧镜像，不动正在跑的 `0.1.0-dev`。
 
-部署成功之后，流水线只留最近两套 `before-*` 回滚镜像，并清掉悬空镜像和超过 24 小时的构建缓存。磁盘已经满、部署跑不下去时，可以在服务器上先手动做同样的事：
+部署成功之后，流水线只留最近两套 `before-*` 回滚镜像，并清掉悬空镜像和超过 2 小时的构建缓存。磁盘已经满、部署跑不下去时，可以在服务器上先手动做同样的事：
 
 ```bash
 docker images --format '{{.Repository}}:{{.Tag}}' | grep ':before-'
 docker image prune -f
-docker builder prune -f --filter until=24h
+docker builder prune -f --filter until=2h
 ```
 
 第三套以及更老的 `before-*` 可以删。只留最近一套时，这次部署如果失败就没有退路，所以能留两套就留两套。
+
+## 重建部署基础镜像
+
+每次部署从 `<名字>:deploy-base` 构建新镜像（见 `docs/operations/rollback.md`）。这个基础是当初第一次部署时正在跑的镜像，里面可能叠着很多层旧文件，一直跟着每个新镜像。2026-10-30 曾在服务器上手工把 18 个基础压成一层（`/opt/hvac-platform-tools/flatten-20261030`），这个开关把同样的做法放进部署脚本。
+
+要再压一次时，不要在服务器上手工打标签，在 GitHub Actions 里手动跑 `Deploy production`，勾上 `rebuild_base`。推到 `main` 触发的部署不会重建，和以前一样。
+
+勾上之后，换镜像之前先对每个服务（企业微信告警转发除外，它没有基础）做这几步：
+
+1. 按正在跑的镜像的配置写一个 Dockerfile：`FROM scratch`，把整个文件系统 `COPY --from` 过来，成为一层；环境变量、工作目录、端口、停止信号、卷、健康检查、标签、入口和命令、用户原样写回。迁移镜像例外：仍从 `postgres:16.4-bookworm` 开始，只复制 `/opt/hvac`，和 `deploy/platform/phase1/migrations/Dockerfile` 一样；服务器上要有这个本地镜像。
+2. 不用构建缓存（`--no-cache`），先打成 `<名字>:rebuilt-<时间>`。
+3. 比配置：上面那些字段逐项相同（`org.hvac.deploy-base` 和新加的 `org.hvac.flattened-from` 两个标签不算）。
+4. 比文件：两个镜像各 `docker create` 一个容器，`docker export` 出来，逐个文件比路径、类型、权限、属主、大小、链接目标和 SHA-256（不比修改时间）。比完用 `docker rm -v` 删掉容器和它带出的匿名卷。
+
+任何一个服务配置或文件对不上，部署就停在这里：正在跑的镜像、`deploy-base` 和 `before-*` 都不动，日志里写着差在哪。全部对上之后才把 `deploy-base` 改指新镜像，然后照常构建、换镜像、重启、检查。新镜像上的 `org.hvac.deploy-base` 标签记的是新基础。
+
+旧基础不再有标签，部署成功后的 `docker image prune` 会把它清掉（它同时也是某个 `before-*` 时，等那套 `before-*` 被清掉才会释放）。`before-*` 不受影响，照样能退回；退回之后再部署，仍从新的 `deploy-base` 构建，不会回到旧基础。
+
+需要的东西：服务器上有 `python3`（生成 Dockerfile 和比文件用），盘上有一份正在跑的镜像大小的空位（新基础）加上导出比对的临时空间。盘已经满到部署都跑不了时，先按上一节腾空间。
 
 ## 再看是哪一类在涨
 

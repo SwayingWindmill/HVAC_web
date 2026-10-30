@@ -103,7 +103,7 @@ git rev-parse HEAD | tr -d '[:space:]' > "$staging/REVISION"
 echo >> "$staging/REVISION"
 git archive --format=tar -o "$staging/source.tar" HEAD
 cp "$services" "$staging/services.tsv"
-for script in apply-on-server.sh rollback.sh smoke-release.sh prune-rollback-images.sh deploy.sh; do
+for script in apply-on-server.sh rebuild-deploy-base.sh rollback.sh smoke-release.sh prune-rollback-images.sh deploy.sh; do
   cp "$root/deploy/platform/phase1/cd/$script" "$staging/$script"
   chmod 755 "$staging/$script"
 done
