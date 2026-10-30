@@ -385,10 +385,16 @@ Prometheus 的抓取配置用仓库里的 `deploy/platform/phase1/observability/
 
 `prometheus.yaml`、`alertmanager.yaml` 和两个渲染脚本是按单个文件挂进容器的。发布解压 `source.tar` 时这些文件被换成新文件，正在跑的容器还读着旧的那一份；Compose 定义没变，部署脚本里的 `up -d` 也不会重建它们。所以以前改了告警规则或接收方，合并、发布之后并不生效，要等容器哪天重启。
 
-现在 `deploy/platform/phase1/cd/observability-config.sh` 在发布里做两步，`apply-on-server.sh` 各调一次：
+现在 `deploy/platform/phase1/cd/observability-config.sh` 在发布里做三步，`apply-on-server.sh` 各调一次：
 
 1. **解压之前（`check`）**：把这次发布里 Prometheus 和 Alertmanager 的配置文件算 sha256，和服务器上 `/opt/hvac-platform/observability-applied.tsv` 记的上次生效的那份比。变了的，用正在跑的那个镜像里的 `promtool check config`（连同 `alerts/*.yaml` 规则）和 `amtool check-config`（先按 `render-and-run.sh` 的方式带着 `alert-receiver/` 渲染一遍）检查。不合法就停下：文件没解压、镜像没换、什么都没重启，GitHub 上的部署失败，日志里有 promtool 或 amtool 的报错。
-2. **部署和冒烟检查都通过之后（`apply`）**：重启配置变了的容器（重启会按路径重新挂载，读到新文件），等 `/-/ready`，再看 `prometheus_config_last_reload_successful` 或 `alertmanager_config_last_reload_successful` 是 1，然后把这次的 sha256 记进 `observability-applied.tsv`。默认等 180 秒（`HVAC_OBSERVABILITY_READY_SECONDS`）。
+2. **解压之后（`sync`）**：解压 tar 只会新增和覆盖文件，不会删。以前从仓库删掉的规则文件会一直留在服务器的 `infra/observability/alerts/` 里，Prometheus 按 `alerts/*.yaml` 继续加载它。现在解压后把下面三个目录对齐成发布里的样子：发布里没有的文件删掉（日志里每个一行 `observability: removed …`），删空的子目录也删掉。
+   - `infra/observability/alerts/`（Prometheus 规则）
+   - `infra/observability/dashboards/`（Grafana 看板 JSON，Grafana 每 30 秒自己重读；provider 设了 `disableDeletion: true`，删了文件的看板会留在 Grafana 里变成普通看板，要的话在界面上手删）
+   - `deploy/platform/phase1/observability/grafana/provisioning/`（Grafana 数据源和看板 provider，Grafana 重启时才读）
+
+   只动这三个目录里的普通文件和符号链接（不跟进符号链接，指向的文件不动）；`runtime/`、`environments/*.env`、备份、`observability-applied.tsv` 等其他文件一概不碰。发布里这个目录一个文件都没有（tar 不完整）时不删，写一行 `left as is`；目录本身是符号链接或经符号链接指到平台目录外面时也不删，只打警告，不让部署失败。Alertmanager 没有模板目录，配置都是单个文件，解压时已经整份覆盖。第 1 步 `check` 校验的正是发布里的这一套规则，所以删完之后加载的规则和校验过的一致；删掉规则文件会让 Prometheus 的指纹变化，第 3 步会重启它。回滚（`rollback.sh`）只换镜像，不重新解压，也不恢复删掉的规则。
+3. **部署和冒烟检查都通过之后（`apply`）**：重启配置变了的容器（重启会按路径重新挂载，读到新文件），等 `/-/ready`，再看 `prometheus_config_last_reload_successful` 或 `alertmanager_config_last_reload_successful` 是 1，然后把这次的 sha256 记进 `observability-applied.tsv`。默认等 180 秒（`HVAC_OBSERVABILITY_READY_SECONDS`）。
 
 没有记录的时候（第一次带上这个脚本的发布）两个都会检查并重启一次。没有在跑的容器（比如没开 observability 档）会跳过。
 
