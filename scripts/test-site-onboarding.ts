@@ -51,6 +51,8 @@ function upserts(sql: string) {
     .filter(({ action }) => action.startsWith('DO UPDATE'));
 }
 
+const POLICY_TABLES = new Set(['presence_policies', 'freshness_policies']);
+
 test('a rerun with an unchanged site file updates no row', () => {
   const { registry, telemetry, energy } = buildOnboardingSql(songyaxuan);
   const all = [...upserts(registry), ...upserts(telemetry), ...upserts(energy)];
@@ -59,7 +61,8 @@ test('a rerun with an unchanged site file updates no row', () => {
     assert.match(action, new RegExp(`\\nWHERE \\(${table}\\.[\\s\\S]*\\) IS DISTINCT FROM \\(`), `${schema}.${table} must update only rows whose values change`);
     const set = action.slice('DO UPDATE SET '.length, action.indexOf('\nWHERE'));
     if (schema === 'core_registry') assert.ok(set.includes(`revision=${table}.revision + 1`), `${table} must count a real change in revision`);
-    else assert.ok(!set.includes('revision='), `${schema}.${table} has no Registry revision`);
+    else if (POLICY_TABLES.has(table)) assert.ok(set.includes(`policy_revision=${table}.policy_revision + 1`), `${table} must count a real change in policy_revision`);
+    else assert.ok(!/(^|[ ,_])revision=/.test(set), `${schema}.${table} has no revision`);
     assert.ok(set.endsWith('updated_at=clock_timestamp()'), `${schema}.${table} stamps updated_at only with a change`);
   }
   const tables = new Set(all.map(({ schema, table }) => `${schema}.${table}`));
@@ -72,6 +75,19 @@ test('the change guard compares exactly the columns it sets', () => {
 WHERE (devices.code, devices.status) IS DISTINCT FROM (EXCLUDED.code, 'ACTIVE')`);
   assert.equal(updateWhenChanged('observation_coverage', [['available', 'true']], { revision: false }), `DO UPDATE SET available=true, updated_at=clock_timestamp()
 WHERE (observation_coverage.available) IS DISTINCT FROM (true)`);
+  assert.equal(updateWhenChanged('presence_policies', [['online_within_seconds', 'EXCLUDED.online_within_seconds']], { revision: 'policy_revision' }), `DO UPDATE SET online_within_seconds=EXCLUDED.online_within_seconds, policy_revision=presence_policies.policy_revision + 1, updated_at=clock_timestamp()
+WHERE (presence_policies.online_within_seconds) IS DISTINCT FROM (EXCLUDED.online_within_seconds)`);
+});
+
+test('a policy that changes gets a new policy_revision; the inserted revision stays 1', () => {
+  const { telemetry } = buildOnboardingSql(songyaxuan);
+  const policies = upserts(telemetry).filter(({ table }) => POLICY_TABLES.has(table));
+  assert.deepEqual(policies.map(({ table }) => table).sort(), ['freshness_policies', 'presence_policies']);
+  for (const { table, action } of policies) {
+    const guarded = action.slice(action.indexOf('\nWHERE'));
+    assert.ok(!guarded.includes('policy_revision'), `${table} compares policy values, not its revision`);
+  }
+  assert.match(telemetry, /INSERT INTO telemetry_runtime\.presence_policies [^\n]*\n\('[^']+', 1, /, 'a new presence policy starts at revision 1');
 });
 
 test('point status defaults to ACTIVE and rejects unknown values', () => {
