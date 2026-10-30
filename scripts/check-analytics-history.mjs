@@ -96,7 +96,7 @@ for (const marker of [
 }
 // The ClickHouse entrypoint runs every init script, so an operations script there would run on a fresh volume.
 assert(!(await readdir(resolve(root, 'infra/telemetry/clickhouse/init'))).some((name) => !name.endsWith('.sql')), 'only SQL belongs in the ClickHouse init directory');
-for (const marker of ['--resume', '--verify', 'insert_deduplication_token', 'energy_interval_facts_visible', 'telemetry-worker']) {
+for (const marker of ['--resume', '--verify', 'insert_deduplication_token', 'energy_interval_facts_visible', 'telemetry-worker', '--query "$1" < /dev/null']) {
   assert(hourlyBackfill.includes(marker), `missing hourly rollup backfill marker ${marker}`);
 }
 assert(cubeModel.includes('FROM analytics.energy_hourly') && cubeModel.includes('interval_count'), 'Site and equipment energy must read whole hours from the hourly rollup');

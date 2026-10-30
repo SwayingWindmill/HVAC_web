@@ -22,7 +22,9 @@ case "$mode" in
   *) echo "usage: $0 [--resume | --verify]" >&2; exit 2 ;;
 esac
 
-query() { "${client[@]}" --query "$1"; }
+# The client never reads this script's stdin: `docker exec -i` forwards it, and inside the batch
+# loop below that would swallow the remaining batch lines, so only the first month was filled.
+query() { "${client[@]}" --query "$1" < /dev/null; }
 
 zero="toUUID('00000000-0000-0000-0000-000000000000')"
 # One line per (Tenant, Site, month) that has visible facts, oldest month first.
