@@ -1047,8 +1047,8 @@
         "granularity": "15MIN",
         "constraints": {
           "safety": {
-            "supplyTempMinC": 6,
-            "supplyTempMaxC": 10,
+            "supplyTempMinC": 5,
+            "supplyTempMaxC": 8,
             "maxSupplyTempStepC": 1
           },
           "comfort": {
@@ -1073,7 +1073,7 @@
           }
         },
         "responseModelSource": "人工设定",
-        "note": "优化策略是租户共用的（同一租户只有一份生效策略）。本站需要的室内温度读数是 room_temperature，租户现在的策略写的是模拟冷站的 temperature；接入不改租户共用的策略，validate 把不一致列为「需要人决定」，策略一致之前不登记本站的模型部署和定时优化。"
+        "note": "优化策略是租户共用的（同一租户只有一份生效策略）。本站和模拟冷站的室内温度读数都是 room_temperature；接入不改租户共用的策略，validate 把不一致列为「需要人决定」，策略一致之前不登记本站的模型部署和定时优化。"
       }
     },
     "diagnosis": {
@@ -1083,10 +1083,10 @@
         "cron": "*/15 * * * *",
         "enabled": false,
         "firstRevision": {
-          "minimumDeltaTC": 3.5,
+          "minimumDeltaTC": 1.5,
           "windowMinutes": 15
         },
-        "note": "诊断规则是租户共用的（现在第 1 版：温差低于 3.5 K 持续 15 分钟）。松雅轩高负荷时总管温差约 1.65 ℃，按这条规则会一直报，所以先登记但不启用，等决定本站的门槛后把 enabled 改成 true。"
+        "note": "诊断规则是租户共用的，门槛按版本发布（scripts/publish-fdd-rule-revision.mjs），validate 显示现在生效的版本。松雅轩高负荷时总管温差约 1.65 ℃；先登记但不启用，现场确认门槛和运行门控后把 enabled 改成 true。"
       }
     }
   }

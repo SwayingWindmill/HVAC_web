@@ -80,7 +80,12 @@ const camelToSnake = (value) => value
   .replace(/^_+|_+$/g, '')
   .toLowerCase();
 
+// The zone sensor's reading is the room temperature: its code matches what onboarded Sites use
+// (songyaxuan's room_temperature), so one Tenant Optimization policy reads the same key everywhere.
+const pointCodeOverrides = new Map([['zone.temperature', 'room_temperature']]);
+
 const telemetryPointCode = (telemetryKey, sourceKey) => {
+  if (pointCodeOverrides.has(telemetryKey)) return pointCodeOverrides.get(telemetryKey);
   const segment = telemetryKey.split('.').at(-1) ?? sourceKey;
   return camelToSnake(segment);
 };

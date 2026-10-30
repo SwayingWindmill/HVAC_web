@@ -1233,7 +1233,7 @@
       "subjectId": "office-zone",
       "sourceKey": "zoneTemperatureC",
       "telemetryKey": "zone.temperature",
-      "pointCode": "temperature",
+      "pointCode": "room_temperature",
       "name": "zone temperature",
       "pointType": "TELEMETRY",
       "valueType": "NUMBER",
