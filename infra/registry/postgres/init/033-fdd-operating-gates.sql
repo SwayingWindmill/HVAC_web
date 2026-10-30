@@ -1,4 +1,4 @@
--- FDD judges the chilled-water low-delta-T rule only while the plant operates (#NNN): a rule
+-- FDD judges the chilled-water low-delta-T rule only while the plant operates (#743): a rule
 -- revision carries its operating gates, and FDD reads the Site's chillers and chilled-water pumps
 -- with their rated power and capacity and the devices bound to them to evaluate those gates.
 -- Existing revisions take the default gates: a chiller above 10% of its rated power, a load ratio
