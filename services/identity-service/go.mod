@@ -16,6 +16,7 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/pquerna/otp v1.4.0 // indirect
+	github.com/quanlaihe/hvac-web/libs/grant v0.0.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
@@ -26,3 +27,5 @@ replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identit
 replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observability
 
 replace github.com/quanlaihe/hvac-web/libs/schemagate => ../../libs/schemagate
+
+replace github.com/quanlaihe/hvac-web/libs/grant => ../../libs/grant

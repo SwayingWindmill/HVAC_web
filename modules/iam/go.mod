@@ -12,14 +12,15 @@ require (
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/registryauth v0.0.0
 	github.com/quanlaihe/hvac-web/libs/telemetryauth v0.0.0
-	github.com/quanlaihe/hvac-web/libs/workorderauth v0.0.0
 	github.com/quanlaihe/hvac-web/libs/testpki v0.0.0
+	github.com/quanlaihe/hvac-web/libs/workorderauth v0.0.0
 )
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/quanlaihe/hvac-web/libs/grant v0.0.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 )
@@ -43,3 +44,5 @@ replace github.com/quanlaihe/hvac-web/libs/telemetryauth => ../../libs/telemetry
 replace github.com/quanlaihe/hvac-web/libs/workorderauth => ../../libs/workorderauth
 
 replace github.com/quanlaihe/hvac-web/libs/testpki => ../../libs/testpki
+
+replace github.com/quanlaihe/hvac-web/libs/grant => ../../libs/grant

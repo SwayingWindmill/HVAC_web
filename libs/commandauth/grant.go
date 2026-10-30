@@ -2,18 +2,11 @@ package commandauth
 
 import (
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 )
 
 const (
@@ -67,56 +60,17 @@ type Validation struct {
 	UseChecker         func(GrantClaims) (UseStatus, error)
 }
 
+var grantFormat = grant.Format{Name: "command grant", MaxEncodedSize: MaximumEncodedGrantSize}
+
 func SignGrant(signer crypto.Signer, claims GrantClaims) (string, error) {
-	if signer == nil {
-		return "", errors.New("command grant signer is required")
-	}
 	claims.Version = GrantVersion
-	payload, err := json.Marshal(claims)
-	if err != nil {
-		return "", fmt.Errorf("marshal command grant: %w", err)
-	}
-	digest := sha256.Sum256(payload)
-	signature, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256)
-	if err != nil {
-		return "", fmt.Errorf("sign command grant: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+	return grant.Sign(grantFormat, signer, claims)
 }
 
 func VerifyGrant(publicKey crypto.PublicKey, token string) (GrantClaims, error) {
-	if len(token) == 0 || len(token) > MaximumEncodedGrantSize {
-		return GrantClaims{}, errors.New("command grant size is invalid")
-	}
-	parts := strings.Split(token, ".")
-	if len(parts) != 2 {
-		return GrantClaims{}, errors.New("command grant format is invalid")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	claims, err := grant.Verify[GrantClaims](grantFormat, publicKey, token)
 	if err != nil {
-		return GrantClaims{}, errors.New("command grant payload encoding is invalid")
-	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return GrantClaims{}, errors.New("command grant signature encoding is invalid")
-	}
-	digest := sha256.Sum256(payload)
-	switch key := publicKey.(type) {
-	case *rsa.PublicKey:
-		err = rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], signature)
-	case *ecdsa.PublicKey:
-		if !ecdsa.VerifyASN1(key, digest[:], signature) {
-			err = errors.New("ecdsa command grant signature is invalid")
-		}
-	default:
-		err = fmt.Errorf("unsupported command grant public key %T", publicKey)
-	}
-	if err != nil {
-		return GrantClaims{}, errors.New("command grant signature is invalid")
-	}
-	var claims GrantClaims
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return GrantClaims{}, errors.New("command grant payload is invalid")
+		return GrantClaims{}, err
 	}
 	if claims.Version != GrantVersion {
 		return GrantClaims{}, errors.New("command grant version is unsupported")
