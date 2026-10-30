@@ -1,0 +1,11 @@
+<clickhouse>
+    <!-- Every query used to write two query_log rows: QueryStart and QueryFinish (or an exception).
+         The finish row has everything the start row has plus duration, rows and errors, so start rows
+         are dropped. Exceptions, including ones raised before a query starts, are still logged.
+         SQL-created users have no settings profile of their own and take these from default. -->
+    <profiles>
+        <default>
+            <log_queries_min_type>QUERY_FINISH</log_queries_min_type>
+        </default>
+    </profiles>
+</clickhouse>
