@@ -964,6 +964,12 @@
       "code": "cwp-4",
       "name": "4 号冷却泵",
       "type": "COOLING_WATER_PUMP"
+    },
+    {
+      "id": "01a14000-3000-7000-8000-000000000011",
+      "code": "chilled-water-loop",
+      "name": "冷冻水总管",
+      "type": "CHILLED_WATER_LOOP"
     }
   ],
   "energy": {
@@ -1024,5 +1030,64 @@
       ]
     },
     "coolingMeter": "btu-calc"
+  },
+  "intelligence": {
+    "note": "站点接入清单的智能部分（ADR 0028）。告警规则在自己的文件里，由 alarm-rules 发布；这里只写它的文件名。人工设定：optimization.policy.constraints.responseModel 的四个系数是模拟冷站的估计值，不是松雅轩数据算出来的，待按现场数据核定（TODO）。",
+    "alarmRules": "songyaxuan.alarm-rules.json",
+    "optimization": {
+      "cron": "20 * * * *",
+      "enabled": true,
+      "model": "hvac-recommendation-v1",
+      "policy": {
+        "code": "chilled_water_supply_cost",
+        "objective": "COST",
+        "dispatchMode": "SHADOW",
+        "horizon": "DAY_AHEAD",
+        "horizonMinutes": 1440,
+        "granularity": "15MIN",
+        "constraints": {
+          "safety": {
+            "supplyTempMinC": 6,
+            "supplyTempMaxC": 10,
+            "maxSupplyTempStepC": 1
+          },
+          "comfort": {
+            "zoneTempMinC": 22,
+            "zoneTempMaxC": 26
+          },
+          "manualLocks": {
+            "resources": []
+          },
+          "inputMapping": {
+            "supplyTemperatureKey": "supply_water_temperature",
+            "zoneTemperatureKey": "room_temperature"
+          },
+          "responseModel": {
+            "dailyEnergyDeltaKWhPerSupplyTempC": -60,
+            "zoneTempDeltaCPerSupplyTempC": 0.3,
+            "energyUncertaintyP90KWh": 20,
+            "zoneTempUncertaintyP90C": 0.2
+          },
+          "maintenanceConstraints": {
+            "outOfService": []
+          }
+        },
+        "responseModelSource": "人工设定",
+        "note": "优化策略是租户共用的（同一租户只有一份生效策略）。本站需要的室内温度读数是 room_temperature，租户现在的策略写的是模拟冷站的 temperature；接入不改租户共用的策略，validate 把不一致列为「需要人决定」，策略一致之前不登记本站的模型部署和定时优化。"
+      }
+    },
+    "diagnosis": {
+      "lowDeltaT": {
+        "asset": "chilled-water-loop",
+        "device": "btu-calc",
+        "cron": "*/15 * * * *",
+        "enabled": false,
+        "firstRevision": {
+          "minimumDeltaTC": 3.5,
+          "windowMinutes": 15
+        },
+        "note": "诊断规则是租户共用的（现在第 1 版：温差低于 3.5 K 持续 15 分钟）。松雅轩高负荷时总管温差约 1.65 ℃，按这条规则会一直报，所以先登记但不启用，等决定本站的门槛后把 enabled 改成 true。"
+      }
+    }
   }
 }
