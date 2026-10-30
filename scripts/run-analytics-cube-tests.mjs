@@ -169,11 +169,11 @@ async function cubeRefusal(token, query) {
   return decoded.error ?? null;
 }
 
-async function queryCube(token, query = energyQuery()) {
+async function queryCube(token, query = energyQuery(), cache = undefined) {
   const response = await fetch(`${cubeURL}/cubejs-api/v1/load`, {
     method: 'POST',
     headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, cache }),
   });
   const text = await response.text();
   let decoded;
@@ -336,10 +336,10 @@ try {
       timeDimensions: [{ dimension: `${view}.period_end`, dateRange: [from, to] }],
       timezone: 'UTC',
       limit: 1,
-      // Cube serves a repeated query from its result cache until the refresh key ticks; the
-      // corrected stage repeats the first stage's queries right after an insert.
-      renewQuery: true,
-    })).data ?? [];
+    // Cube serves a repeated query from its result cache while the refresh key is unchanged (the
+    // default key ticks every 10 s), and renewQuery only re-reads that key. The corrected stage repeats
+    // the first stage's queries right after an insert, so it must skip the cache altogether.
+    }, 'no-cache')).data ?? [];
     return `${Math.round(Number(row[`${view}.energy_valid_kwh`] ?? 0) * 1e6) / 1e6}/${Number(row[`${view}.valid_count`])}/${Number(row[`${view}.suspect_count`])}`;
   };
   const ranges = [
@@ -352,7 +352,10 @@ try {
       for (const [view, scope] of [['site_energy', 'SITE'], ['equipment_energy', 'BRANCH']]) {
         const expected = factTotals(from, to, scope);
         const actual = await cubeTotals(from, to, view);
-        if (actual !== expected) throw new Error(`${stage}: ${view} ${from}..${to} read ${actual}, facts hold ${expected}`);
+        if (actual !== expected) {
+          const hourly = clickHouse(`SELECT concat(toString(round(sumIf(energy_kwh, quality = 'VALID'), 6)), '/', toString(sumIf(interval_count, quality = 'VALID')), '/', toString(sumIf(interval_count, quality = 'SUSPECT'))) FROM analytics.energy_hourly WHERE site_id = '${siteId}' AND accounting_scope = '${scope}' AND energy_type = 'electricity' AND hour >= toStartOfHour(parseDateTime64BestEffort('${from}', 3)) AND hour <= parseDateTime64BestEffort('${to}', 3)`);
+          throw new Error(`${stage}: ${view} ${from}..${to} read ${actual}, facts hold ${expected}, the rollup's touched hours hold ${hourly}`);
+        }
       }
     }
   };
