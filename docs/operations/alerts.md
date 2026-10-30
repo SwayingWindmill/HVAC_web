@@ -366,12 +366,38 @@ Prometheus 把告警交给 Alertmanager。Alertmanager 和把告警转成企业�
 
 邮件：把 `smtp.env.example` 复制成 `smtp.env`，把 `smtp-password.example` 复制成 `smtp-password`（文件内容就是密码，不要加引号）。465 端口一连上就是 TLS，样例里 `SMTP_REQUIRE_TLS=false` 就是这种连法。密码只出现在 `smtp-password` 里，生成的配置用 `smtp_auth_password_file` 指过去。
 
-两个都配了就两条一起发。只配一个就只发那一个。改完文件后重建这两个容器：
+两个都配了就两条一起发。只配一个就只发那一个。改完文件后重建这两个容器（要加 `--force-recreate`：Compose 定义没变时，光 `up -d` 不会重建，Alertmanager 仍用旧配置）：
 
 ```bash
-node scripts/phase1-wsl-compose.mjs --integration --intelligence up -d --no-deps alertmanager wecom-alert-adapter
+node scripts/phase1-wsl-compose.mjs --integration --intelligence up -d --no-deps --force-recreate alertmanager wecom-alert-adapter
 ```
 
 `page` 和 `critical` 每小时再提醒一次，其他严重程度每 4 小时一次。恢复时也会发。
 
 Prometheus 的抓取配置用仓库里的 `deploy/platform/phase1/observability/prometheus.yaml`。`wsl.override.yaml` 把这份和告警规则目录挂进容器，不再读运行目录里手改的那份。
+
+## 发布时配置怎么生效
+
+`prometheus.yaml`、`alertmanager.yaml` 和两个渲染脚本是按单个文件挂进容器的。发布解压 `source.tar` 时这些文件被换成新文件，正在跑的容器还读着旧的那一份；Compose 定义没变，部署脚本里的 `up -d` 也不会重建它们。所以以前改了告警规则或接收方，合并、发布之后并不生效，要等容器哪天重启。
+
+现在 `deploy/platform/phase1/cd/observability-config.sh` 在发布里做两步，`apply-on-server.sh` 各调一次：
+
+1. **解压之前（`check`）**：把这次发布里 Prometheus 和 Alertmanager 的配置文件算 sha256，和服务器上 `/opt/hvac-platform/observability-applied.tsv` 记的上次生效的那份比。变了的，用正在跑的那个镜像里的 `promtool check config`（连同 `alerts/*.yaml` 规则）和 `amtool check-config`（先按 `render-and-run.sh` 的方式带着 `alert-receiver/` 渲染一遍）检查。不合法就停下：文件没解压、镜像没换、什么都没重启，GitHub 上的部署失败，日志里有 promtool 或 amtool 的报错。
+2. **部署和冒烟检查都通过之后（`apply`）**：重启配置变了的容器（重启会按路径重新挂载，读到新文件），等 `/-/ready`，再看 `prometheus_config_last_reload_successful` 或 `alertmanager_config_last_reload_successful` 是 1，然后把这次的 sha256 记进 `observability-applied.tsv`。默认等 180 秒（`HVAC_OBSERVABILITY_READY_SECONDS`）。
+
+没有记录的时候（第一次带上这个脚本的发布）两个都会检查并重启一次。没有在跑的容器（比如没开 observability 档）会跳过。
+
+`apply` 失败时，业务服务已经是新版本，不会因此退回镜像；部署标成失败，记录不更新，下一次发布会再试。先看：
+
+```bash
+docker logs hvac-platform-prometheus-1 --since 10m
+docker logs hvac-platform-alertmanager-1 --since 10m
+```
+
+改好配置再发一次；要马上生效，也可以在服务器上手工重建：
+
+```bash
+node scripts/phase1-wsl-compose.mjs --integration --intelligence up -d --no-deps --force-recreate prometheus alertmanager
+```
+
+只改了 `alert-receiver/` 里的密钥文件不会触发这一步（它们不在发布里），按上面「告警怎么送到人」手工重建。
