@@ -82,6 +82,7 @@ COPY infra/registry/postgres/init/029-drop-registry-import-tables.sql /opt/hvac/
 COPY infra/registry/postgres/init/030-drop-api-credentials.sql /opt/hvac/repo/infra/registry/postgres/init/030-drop-api-credentials.sql
 COPY infra/registry/postgres/init/031-drop-outbound-delivery.sql /opt/hvac/repo/infra/registry/postgres/init/031-drop-outbound-delivery.sql
 COPY infra/registry/postgres/init/032-drop-generic-rules.sql /opt/hvac/repo/infra/registry/postgres/init/032-drop-generic-rules.sql
+COPY infra/registry/postgres/init/033-fdd-operating-gates.sql /opt/hvac/repo/infra/registry/postgres/init/033-fdd-operating-gates.sql
 
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql

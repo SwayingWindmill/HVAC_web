@@ -62,6 +62,7 @@ services:
       - ./postgres/init/030-drop-api-credentials.sql:/docker-entrypoint-initdb.d/460.sql:ro
       - ./postgres/init/031-drop-outbound-delivery.sql:/docker-entrypoint-initdb.d/470.sql:ro
       - ./postgres/init/032-drop-generic-rules.sql:/docker-entrypoint-initdb.d/480.sql:ro
+      - ./postgres/init/033-fdd-operating-gates.sql:/docker-entrypoint-initdb.d/490.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

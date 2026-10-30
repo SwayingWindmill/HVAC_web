@@ -118,7 +118,7 @@
 
 小的后续：
 
-- 改 FDD 低温差的门槛或时间窗口时，发布新版本（不要改旧版本）：`node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <时刻>]`。
+- 改 FDD 低温差的门槛、时间窗口或工况门控时，发布新版本（不要改旧版本）：`node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <时刻>] [--operating-gates '<json>']`；不写门控就沿用上一版。低温差只在冷站运行时判断（规格 `docs/specs/fdd-rule-definition.md`「工况门控」）。松雅轩四台冷机都没登记额定功率和额定冷量，冷机开机按运行状态判断、负荷率门控用不上；冷冻水泵运行状态点位没绑定水泵资产，水泵门控也用不上。松雅轩实际运行温差中位数约 0.9 K、最高约 2.2 K，3.5 K 阈值下每个运行窗口都是低温差，阈值待用户定。
 - 能耗序列算电费时，每读一条用电记录约占 0.5 KB ClickHouse 内存。实时电表每块每天约 24,000 条，一个站点一个月约 150 MiB，一年会超过 1.5 GiB 的上限。用电量已经整小时读 `analytics.energy_hourly`（015），电费还读单条记录：电价时段按分钟切换，不能直接用这个汇总，要查长时间范围的电费之前得另想办法（例如按电价时段汇总）。
 - **生产要先手工应用 015 再部署能耗小时汇总的那次合并**：步骤（停 `telemetry-worker`、应用、回填、核对）见 `docs/operations/energy-hourly-rollup.md`。
 - 设备详情侧栏和工单侧栏还要按新设计打磨。

@@ -36,15 +36,26 @@ export function lowDeltaTRuleQuery(siteId: string) {
   });
 }
 
-type Outcome<Status extends string> = { readonly status: Status; readonly observedValue: number; readonly rule: RuleRevision };
+/** How much of the window the plant operated and how much of that was low. */
+export interface EvaluationWindow {
+  readonly minutes: number;
+  readonly operatingMinutes: number;
+  readonly lowMinutes: number;
+  readonly operatingShare: number;
+  readonly lowShare: number;
+}
+
+type Outcome<Status extends string> = { readonly status: Status; readonly observedValue: number; readonly rule: RuleRevision; readonly window: EvaluationWindow };
 
 export type EvaluationOutcome =
   | Outcome<'CLEAR'>
+  // The plant did not operate for enough of the window; FDD does not judge its delta-T.
+  | Outcome<'NOT_OPERATING'>
   // The condition already has a finding from the last day; it is still there, not new.
   | (Outcome<'ONGOING'> & { readonly finding: Finding })
   | (Outcome<'FINDING'> & { readonly finding: Finding });
 
-type EvaluationPayload = { status: EvaluationOutcome['status']; deltaTC: number; rule: RuleRevision; finding?: Finding };
+type EvaluationPayload = { status: EvaluationOutcome['status']; deltaTC: number; rule: RuleRevision; window: EvaluationWindow; finding?: Finding };
 
 /** Diagnoses the loop now; FDD reads its last window under the rule revision in effect. */
 export async function evaluateRule(
@@ -64,7 +75,7 @@ export async function evaluateRule(
         : problem.detail ?? UNAVAILABLE,
     },
   );
-  return payload.status === 'CLEAR'
-    ? { status: 'CLEAR', observedValue: payload.deltaTC, rule: payload.rule }
-    : { status: payload.status, observedValue: payload.deltaTC, rule: payload.rule, finding: payload.finding as Finding };
+  return payload.status === 'CLEAR' || payload.status === 'NOT_OPERATING'
+    ? { status: payload.status, observedValue: payload.deltaTC, rule: payload.rule, window: payload.window }
+    : { status: payload.status, observedValue: payload.deltaTC, rule: payload.rule, window: payload.window, finding: payload.finding as Finding };
 }

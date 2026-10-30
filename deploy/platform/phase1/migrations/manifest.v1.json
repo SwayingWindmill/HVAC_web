@@ -95,7 +95,8 @@
         "infra/registry/postgres/init/029-drop-registry-import-tables.sql",
         "infra/registry/postgres/init/030-drop-api-credentials.sql",
         "infra/registry/postgres/init/031-drop-outbound-delivery.sql",
-        "infra/registry/postgres/init/032-drop-generic-rules.sql"
+        "infra/registry/postgres/init/032-drop-generic-rules.sql",
+        "infra/registry/postgres/init/033-fdd-operating-gates.sql"
       ]
     },
     {

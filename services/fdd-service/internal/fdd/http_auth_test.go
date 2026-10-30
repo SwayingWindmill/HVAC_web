@@ -117,7 +117,7 @@ func TestFDDLetsTheReaderWorkloadOnlyListFindings(t *testing.T) {
 	input := validEvaluation()
 	fixture := newAuthFixture(t, input.At)
 	store := newStore()
-	handler, err := NewHTTPHandler(newTestService(t, store, &loopEvidence{readings: validReadings(input)}, func() time.Time { return input.At }), fixture.config())
+	handler, err := NewHTTPHandler(newTestService(t, store, &loopEvidence{samples: validSamples(input)}, func() time.Time { return input.At }), fixture.config())
 	if err != nil {
 		t.Fatal(err)
 	}
