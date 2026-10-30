@@ -18,7 +18,15 @@ bash /opt/hvac-platform/deploy/platform/phase1/cd/rollback.sh
 bash /opt/hvac-platform/deploy/platform/phase1/cd/rollback.sh 20261029T120000Z
 ```
 
-脚本把清单里的 `before-<时间>` 标回现在的镜像名（一般是 `0.1.0-dev`），再执行 `/opt/hvac-platform-tools/deploy.sh`。登录用户不是 root 时，它和部署一样用 `sudo -n`。
+脚本把清单里的 `before-<时间>` 标回现在的镜像名（一般是 `0.1.0-dev`），再执行重启脚本。登录用户不是 root 时，它和部署一样用 `sudo -n`。
+
+## 重启脚本
+
+重启脚本在仓库里：`deploy/platform/phase1/cd/deploy.sh`；它用 `node scripts/local-environment.mjs administrator --no-build` 建第一个管理员（以前是服务器上单独的 `administrator.mjs`）。每次部署随源码解到 `/opt/hvac-platform/deploy/platform/phase1/cd/`，部署和 `rollback.sh` 默认都跑这一份，并把这次发布的提交号传给它（网页的 `HVAC_WEB_BUILD_ID` 取前 12 位；不传时读 `/opt/hvac-platform/REVISION`）。
+
+以前它只放在服务器的 `/opt/hvac-platform-tools/deploy.sh`，仓库里没有。那份现在是后备：仓库里这份不存在，或者登录用户不是 root 而 `sudo -n -l` 不允许免密跑它时，就退回去用老的那份，输出里会有一行 `restart script: <路径>` 写明用了哪一份。要强制用某一份，设 `HVAC_DEPLOY_SCRIPT=<路径>`。
+
+如果 `sudoers` 只给 `/opt/hvac-platform-tools/deploy.sh` 开了免密，部署会一直走后备。要换成仓库里这份，得在 `sudoers` 里给 `/opt/hvac-platform/deploy/platform/phase1/cd/deploy.sh` 也开免密。注意这个文件归 `ubuntu` 所有，`ubuntu` 能改它，等于让 `ubuntu` 能以 root 跑任意命令；`ubuntu` 本来就有免密 `sudo ALL` 时没有区别。改仓库里的 `deploy.sh` 时，老的那份不会跟着变。
 
 流水线自己也会这么做：服务器上的健康检查或 GitHub 机器上的公网检查失败，都会退回这一次的 `before-*` 再重启。
 
@@ -39,8 +47,10 @@ docker tag hvac/energy-api:before-20261029T120000Z hvac/energy-api:0.1.0-dev
 网页镜像是 `hvac/hvac-web-real`，AI 助手是 `hvac/operations-agent-service`，迁移镜像是 `hvac/phase1-migrator`。同一分钟的标签一起标回去，不要只退其中一个服务却留着别的服务的新镜像。标完再：
 
 ```bash
-sudo -n /opt/hvac-platform-tools/deploy.sh
+sudo -n /opt/hvac-platform/deploy/platform/phase1/cd/deploy.sh
 ```
+
+`sudo` 不允许时用后备 `sudo -n /opt/hvac-platform-tools/deploy.sh`（见上面「重启脚本」）。
 
 ## 退回做不到的事
 

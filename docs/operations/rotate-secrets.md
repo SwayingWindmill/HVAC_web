@@ -25,7 +25,7 @@ AI 助手的 `DEEPSEEK_API_KEY` 在 `server.runtime.env`。没配时助手显示
 
 `DEPLOY_SSH_KEY` 或 `DEPLOY_SSH_PASSWORD` 在 GitHub 仓库密钥和 `production` 环境密钥里。环境里有同名密钥时，部署用环境里的那一份。
 
-1. 在服务器上给 `ubuntu` 换密钥或密码（`sudo` 仍须对 `/opt/hvac-platform-tools/deploy.sh` 免密）。
+1. 在服务器上给 `ubuntu` 换密钥或密码（`sudo` 仍须对重启脚本免密：`/opt/hvac-platform/deploy/platform/phase1/cd/deploy.sh`，或后备 `/opt/hvac-platform-tools/deploy.sh`，见 `docs/operations/rollback.md`）。
 2. 更新 GitHub 上的密钥。
 3. 用 Actions 里的「Deploy production」跑一次空部署之前，先确认新密钥能 `ssh ubuntu@139.199.58.47`。不要把私钥内容贴进日志。
 

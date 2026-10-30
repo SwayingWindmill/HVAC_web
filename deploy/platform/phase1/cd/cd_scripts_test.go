@@ -874,3 +874,181 @@ func mustRead(t *testing.T, path string) []byte {
 	}
 	return body
 }
+
+// fakeSudo allows `sudo -n -l <cmd>` when SUDO_LIST_OK=1 and runs `sudo -n <cmd...>` directly.
+const fakeSudo = `#!/bin/sh
+[ "$1" = -n ] && shift
+if [ "$1" = -l ]; then
+  [ "$SUDO_LIST_OK" = 1 ] && exit 0
+  exit 1
+fi
+exec "$@"
+`
+
+func rollbackFixture(t *testing.T, withTreeScript bool) (platform, bin, ran string) {
+	t.Helper()
+	platform = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(platform, "rollbacks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stamp := "20261029T120000Z"
+	manifest := "hvac/energy-api:0.1.0-dev\thvac/energy-api:before-" + stamp + "\n"
+	if err := os.WriteFile(filepath.Join(platform, "rollbacks", stamp+".tsv"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(platform, "rollbacks", "latest"), []byte(stamp+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ran = filepath.Join(t.TempDir(), "restarted")
+	if withTreeScript {
+		cd := filepath.Join(platform, "deploy", "platform", "phase1", "cd")
+		if err := os.MkdirAll(cd, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeExe(t, cd, "deploy.sh", "#!/bin/sh\nprintf '%s\\n' \"$0\" > \"$RESTARTED\"\n")
+	}
+	bin = t.TempDir()
+	writeExe(t, bin, "docker", "#!/bin/sh\nexit 0\n")
+	writeExe(t, bin, "sudo", fakeSudo)
+	return platform, bin, ran
+}
+
+func TestRollbackDefaultsToTheDeployScriptInThePlatformTree(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("exercises the sudo path")
+	}
+	platform, bin, ran := rollbackFixture(t, true)
+	cmd := exec.Command("bash", "rollback.sh")
+	cmd.Env = commandEnv(bin, "HVAC_PLATFORM_DIR="+platform, "HVAC_DEPLOY_SCRIPT=", "RESTARTED="+ran, "SUDO_LIST_OK=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("rollback: %v\n%s", err, output)
+	}
+	got, err := os.ReadFile(ran)
+	if err != nil {
+		t.Fatalf("tree deploy.sh was not run:\n%s", output)
+	}
+	want := filepath.Join(platform, "deploy", "platform", "phase1", "cd", "deploy.sh")
+	if strings.TrimSpace(string(got)) != want {
+		t.Fatalf("ran %q, want %q", got, want)
+	}
+}
+
+func TestRollbackFallsBackToTheHostDeployScript(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("exercises the sudo path")
+	}
+	for name, tc := range map[string]struct {
+		tree   bool
+		listOK string
+	}{
+		"tree copy absent":           {tree: false, listOK: "1"},
+		"sudo refuses the tree copy": {tree: true, listOK: "0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			platform, bin, ran := rollbackFixture(t, tc.tree)
+			cmd := exec.Command("bash", "rollback.sh")
+			cmd.Env = commandEnv(bin, "HVAC_PLATFORM_DIR="+platform, "HVAC_DEPLOY_SCRIPT=", "RESTARTED="+ran, "SUDO_LIST_OK="+tc.listOK)
+			output, _ := cmd.CombinedOutput()
+			if !strings.Contains(string(output), "restart script: /opt/hvac-platform-tools/deploy.sh") {
+				t.Fatalf("host fallback was not chosen:\n%s", output)
+			}
+			if _, err := os.Stat(ran); err == nil {
+				t.Fatal("tree deploy.sh ran although the fallback was chosen")
+			}
+		})
+	}
+}
+
+func deployFixture(t *testing.T, revisionFile string) (platform, bin, log string) {
+	t.Helper()
+	platform = t.TempDir()
+	runtime := filepath.Join(platform, "deploy", "platform", "phase1", "runtime", "server")
+	if err := os.MkdirAll(runtime, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runtime, "identity-reconcile.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if revisionFile != "" {
+		if err := os.WriteFile(filepath.Join(platform, "REVISION"), []byte(revisionFile+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin = t.TempDir()
+	log = filepath.Join(t.TempDir(), "calls.log")
+	writeExe(t, bin, "node", `#!/bin/sh
+printf 'node %s | pwd=%s build=%s runtime=%s env=%s\n' "$*" "$(pwd)" "$HVAC_WEB_BUILD_ID" "$PHASE1_RUNTIME_DIR" "$PHASE1_ENV_FILE" >> "$CALLS_LOG"
+`)
+	writeExe(t, bin, "docker", "#!/bin/sh\nprintf 'docker %s\\n' \"$*\" >> \"$CALLS_LOG\"\n")
+	return platform, bin, log
+}
+
+func TestDeployScriptDerivesTheBuildIDFromTheRelease(t *testing.T) {
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	for name, tc := range map[string]struct {
+		file string
+		args []string
+		want string
+	}{
+		"argument wins":          {file: strings.Repeat("f", 40), args: []string{revision}, want: "0123456789ab"},
+		"REVISION file fallback": {file: revision, want: "0123456789ab"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			platform, bin, log := deployFixture(t, tc.file)
+			cmd := exec.Command("bash", append([]string{"deploy.sh"}, tc.args...)...)
+			cmd.Env = commandEnv(bin, "HVAC_PLATFORM_DIR="+platform, "CALLS_LOG="+log)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("deploy.sh: %v\n%s", err, output)
+			}
+			calls := string(mustRead(t, log))
+			if !strings.Contains(calls, "build="+tc.want+" ") || strings.Contains(calls, "fcc56818acd6") {
+				t.Fatalf("HVAC_WEB_BUILD_ID is not %s:\n%s", tc.want, calls)
+			}
+			runtime := filepath.Join(platform, "deploy", "platform", "phase1", "runtime", "server")
+			for _, want := range []string{
+				"pwd=" + platform + " ",
+				"runtime=" + runtime + " ",
+				"env=" + filepath.Join(platform, "deploy", "platform", "phase1", "environments", "server.runtime.env"),
+				"node scripts/issue-workload-identities.mjs",
+				"node scripts/phase1-wsl-compose.mjs --profile migration run --rm phase1-migrator",
+				"node scripts/local-environment.mjs administrator --no-build",
+				"node scripts/site-onboarding.mjs deploy/sites/songyaxuan.site.json",
+			} {
+				if !strings.Contains(calls, want) {
+					t.Fatalf("missing %q in:\n%s", want, calls)
+				}
+			}
+		})
+	}
+}
+
+func TestDeployScriptRefusesToRunWithoutARevision(t *testing.T) {
+	platform, bin, log := deployFixture(t, "")
+	cmd := exec.Command("bash", "deploy.sh")
+	cmd.Env = commandEnv(bin, "HVAC_PLATFORM_DIR="+platform, "CALLS_LOG="+log)
+	output, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "no release revision") {
+		t.Fatalf("deploy.sh ran without a revision: %v\n%s", err, output)
+	}
+}
+
+func TestReleaseShipsAndRunsTheRepositoryDeployScript(t *testing.T) {
+	build := string(mustRead(t, "build-release.sh"))
+	if !regexp.MustCompile(`for script in [^\n]*\bdeploy\.sh; do`).MatchString(build) {
+		t.Fatal("build-release.sh does not copy deploy.sh into the release")
+	}
+	apply := string(mustRead(t, "apply-on-server.sh"))
+	if strings.Contains(apply, "HVAC_DEPLOY_SCRIPT:-/opt") || !strings.Contains(apply, `sudo -n "$deploy_script" "$revision"`) {
+		t.Fatal("apply-on-server.sh must default to the tree deploy.sh and pass the release revision")
+	}
+	if strings.Contains(string(mustRead(t, "rollback.sh")), "HVAC_DEPLOY_SCRIPT:-/opt") {
+		t.Fatal("rollback.sh must default to the tree deploy.sh")
+	}
+	for _, line := range strings.Split(string(mustRead(t, "deploy.sh")), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") && strings.Contains(line, "/opt/") {
+			t.Fatalf("deploy.sh must not hard-code a host path: %s", line)
+		}
+	}
+}

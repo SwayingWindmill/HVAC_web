@@ -1,4 +1,6 @@
 // One command for the local environment: `node scripts/local-environment.mjs up | down | reset | ps`.
+// `administrator [--no-build]` only creates the first administrator; the production deploy.sh runs it with
+// --no-build because that host uses the identity-admin image it already has.
 // `reset` deletes this environment's containers, data volumes and the simulators' Edge state.
 // `up` is idempotent: it migrates, bootstraps identity, seeds the central-plant simulator and
 // starts every service from the current checkout.
@@ -61,12 +63,12 @@ function ensureKey(file, service) {
 }
 
 // The administrator is created once per database; its password is written only to the runtime directory.
-function ensureAdministrator() {
+function ensureAdministrator({ build = true } = {}) {
   const bootstrap = JSON.parse(readFileSync(runtimePath('identity-user-bootstrap.json'), 'utf8'));
   const username = String(bootstrap.username).replaceAll("'", "''");
-  if (psqlScalar('hvac_identity', `SELECT count(*) FROM identity.users WHERE username = '${username}'`) !== '0') return;
+  if (psqlScalar('hvac_identity', `SELECT count(*) FROM identity.users WHERE username = '${username}'`) !== '0') return false;
   const password = randomBytes(24).toString('base64url');
-  const created = run([launcher, 'run', '--rm', '--build', '-T', 'identity-admin'], {
+  const created = run([launcher, 'run', '--rm', ...(build ? ['--build'] : []), '-T', 'identity-admin'], {
     input: '',
     env: {
       ...process.env,
@@ -81,6 +83,7 @@ function ensureAdministrator() {
   writePrivate(runtimePath('local-admin.credentials'), `username=${bootstrap.username}\npassword=${password}\n`);
   const reconcile = JSON.parse(readFileSync(runtimePath('identity-reconcile.json'), 'utf8'));
   writePrivate(runtimePath('identity-reconcile.json'), `${JSON.stringify({ ...reconcile, userId: user.id }, null, 2)}\n`);
+  return true;
 }
 
 function up() {
@@ -112,12 +115,17 @@ function up() {
 }
 
 const [command, ...rest] = process.argv.slice(2);
-ensureRoleCredentials();
-if (command === 'up') up();
+// administrator leaves the role credential file alone: the server's deploy.sh only needs the user.
+if (command !== 'administrator') ensureRoleCredentials();
+if (command === 'administrator') {
+  const created = ensureAdministrator({ build: !rest.includes('--no-build') });
+  console.log(created ? 'administrator created' : 'administrator already exists');
+}
+else if (command === 'up') up();
 else if (command === 'down') compose('--simulator-acceptance', '--intelligence', 'stop');
 else if (command === 'reset') {
   compose('--simulator-acceptance', '--intelligence', 'down', '--volumes', '--remove-orphans');
   clearSimulatorState();
 }
 else if (command === 'ps') compose('--simulator-acceptance', '--intelligence', 'ps', ...rest);
-else throw new Error('usage: node scripts/local-environment.mjs up | down | reset | ps');
+else throw new Error('usage: node scripts/local-environment.mjs up | down | reset | ps | administrator [--no-build]');
