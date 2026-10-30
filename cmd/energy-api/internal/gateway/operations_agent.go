@@ -352,14 +352,11 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 			return
 		}
 		route := publicAlarmRoute{template: "/api/v1/alarms", action: alarmauth.ActionRead, siteID: siteID}
-		decision, failure := h.authorizeAlarm(request, session, route)
+		caller := ownerCaller{session: session, presenter: h.operations.workloadSPIFFEID}
+		grant, decision, failure := grantOwner(request.Context(), h, caller, h.alarmOwner(), string(route.action), route.scope(session.TenantID))
 		if failure == nil {
-			var grant string
-			grant, failure = h.signAlarmServiceContext(session, route, decision, h.operations.workloadSPIFFEID)
-			if failure == nil {
-				writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: decision.PolicyRevision})
-				return
-			}
+			writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: decision.policyRevision})
+			return
 		}
 		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
 			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)

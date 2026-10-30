@@ -23,16 +23,16 @@ const (
 
 type workOrderAlarmOperationsStub struct {
 	scope   alarmScope
-	failure *alarmFailure
+	failure *ownerFailure
 	calls   int
 }
 
-func (stub *workOrderAlarmOperationsStub) ResolveScope(context.Context, string, string, string) (alarmScope, *alarmFailure) {
+func (stub *workOrderAlarmOperationsStub) ResolveScope(context.Context, string, string, string) (alarmScope, *ownerFailure) {
 	stub.calls++
 	return stub.scope, stub.failure
 }
 
-func (*workOrderAlarmOperationsStub) Execute(context.Context, *http.Request, publicAlarmRoute, string) ([]byte, int, *alarmFailure) {
+func (*workOrderAlarmOperationsStub) Execute(context.Context, *http.Request, publicAlarmRoute, string) ([]byte, int, *ownerFailure) {
 	panic("unexpected Alarm execute call")
 }
 
@@ -90,7 +90,7 @@ func TestGatewayWorkOrderCreateValidatesAlarmProvenance(t *testing.T) {
 	}
 
 	stub.scope = alarmScope{}
-	stub.failure = &alarmFailure{status: http.StatusNotFound, code: "RESOURCE_NOT_FOUND"}
+	stub.failure = &ownerFailure{status: http.StatusNotFound, code: "RESOURCE_NOT_FOUND"}
 	if failure := h.validateWorkOrderCreateProvenance(request, session, route, mutation); failure == nil || failure.status != http.StatusForbidden {
 		t.Fatalf("unknown Alarm provenance was not rejected: %#v", failure)
 	}
