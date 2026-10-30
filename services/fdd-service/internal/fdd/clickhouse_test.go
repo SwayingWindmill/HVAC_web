@@ -1,20 +1,22 @@
 package fdd
 
 import (
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestClickHouseEvidenceReadsTheLatestSupplyAndReturnOfTheDevice(t *testing.T) {
-	request := validEvaluation()
-	rows := `{"telemetry_key":"return_water_temperature","observation_id":"01990000-6200-7000-8000-000000000001","point_type":"TELEMETRY","value_type":"NUMBER","unit":"Cel","quality":"GOOD","value":10.4,"sampled_at":"2026-08-19T10:14:58.000Z"}
-{"telemetry_key":"supply_water_temperature","observation_id":"01990000-6200-7000-8000-000000000002","point_type":"TELEMETRY","value_type":"NUMBER","unit":"Cel","quality":"GOOD","value":7.1,"sampled_at":"2026-08-19T10:14:59.000Z"}
-`
+// FDD reads a window as each device's last observation of each key per minute, scoped by Tenant,
+// Site and the devices the loop and its gates name; replay fixtures are such responses.
+func TestClickHouseEvidenceReadsTheWindowPerMinuteForTheLoopAndItsGates(t *testing.T) {
+	rows, err := os.ReadFile("testdata/songyaxuan-low-delta-t-2026-10-16T0030Z.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var sql string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
@@ -22,30 +24,44 @@ func TestClickHouseEvidenceReadsTheLatestSupplyAndReturnOfTheDevice(t *testing.T
 		if user, _, ok := request.BasicAuth(); !ok || user != "fdd_service_reader" {
 			t.Errorf("reader account=%q", user)
 		}
-		_, _ = writer.Write([]byte(rows))
+		_, _ = writer.Write(rows)
 	}))
 	defer server.Close()
 	evidence, err := NewClickHouseEvidence(server.URL, "fdd_service_reader", "", server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
-	query := LoopQuery{TenantID: request.TenantID, SiteID: request.SiteID, DeviceID: request.DeviceID, From: request.At.Add(-15 * time.Minute), To: request.At}
-	readings, err := evidence.LatestLoopReadings(t.Context(), query)
+	to := time.Date(2026, 10, 16, 0, 30, 0, 0, time.UTC)
+	query := WindowQuery{TenantID: songyaxuanTenant, SiteID: songyaxuanSite, LoopDeviceID: songyaxuanLoop, GateDeviceIDs: songyaxuanTopology().DeviceIDs(), From: to.Add(-25 * time.Minute), To: to}
+	samples, err := evidence.WindowSamples(t.Context(), query)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if readings.Supply.Value != 7.1 || readings.Return.Value != 10.4 || readings.Supply.ObservationID != "01990000-6200-7000-8000-000000000002" ||
-		!readings.Return.SampledAt.Equal(time.Date(2026, 8, 19, 10, 14, 58, 0, time.UTC)) {
-		t.Fatalf("readings=%#v", readings)
+	if len(samples) != 115 || samples[0].Minute.Before(query.From) || !samples[len(samples)-1].Minute.Before(to) {
+		t.Fatalf("samples=%d first=%v last=%v", len(samples), samples[0].Minute, samples[len(samples)-1].Minute)
 	}
-	for _, scope := range []string{"tenant_id=toUUID('" + request.TenantID + "')", "site_id=toUUID('" + request.SiteID + "')", "device_id=toUUID('" + request.DeviceID + "')"} {
+	var runState Sample
+	for _, sample := range samples {
+		if sample.Key == runStateKey && sample.DeviceID == "01a14000-4000-7000-8000-000000000005" {
+			runState = sample
+		}
+	}
+	if runState.Text != "RUNNING" || runState.HasNumber || runState.ValueType != "STRING" {
+		t.Fatalf("a run state keeps its text and has no number: %#v", runState)
+	}
+	for _, scope := range []string{
+		"tenant_id=toUUID('" + songyaxuanTenant + "')", "site_id=toUUID('" + songyaxuanSite + "')",
+		"device_id=toUUID('" + songyaxuanLoop + "')", "toUUID('01a14000-4000-7000-8000-000000000006')",
+		"sampled_at >= parseDateTime64BestEffort('2026-10-16T00:05:00Z'", "sampled_at < parseDateTime64BestEffort('2026-10-16T00:30:00Z'",
+		"received_at <= parseDateTime64BestEffort('2026-10-16T00:30:00Z'",
+	} {
 		if !strings.Contains(sql, scope) {
 			t.Fatalf("evidence query is not scoped by %s:\n%s", scope, sql)
 		}
 	}
 
-	rows = rows[:strings.Index(rows, "\n")+1]
-	if _, err = evidence.LatestLoopReadings(t.Context(), query); !errors.Is(err, ErrNoLoopEvidence) {
-		t.Fatalf("a window without a supply reading err=%v", err)
+	query.GateDeviceIDs = []string{"not-a-uuid"}
+	if _, err = evidence.WindowSamples(t.Context(), query); err == nil {
+		t.Fatal("a gate device that is not a UUID reached the query")
 	}
 }

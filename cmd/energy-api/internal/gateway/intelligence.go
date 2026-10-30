@@ -245,7 +245,11 @@ func (h *handler) authorizeIntelligenceSitesWithWriter(writer http.ResponseWrite
 }
 
 func (h *handler) serveForecast(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
-	if !isLowerUUIDv7(route.siteID) || h.intelligence.forecastBaseURL == "" {
+	if h.intelligence.forecastBaseURL == "" {
+		writeRouteWithoutOwner(writer, request)
+		return
+	}
+	if !isLowerUUIDv7(route.siteID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested forecast was not found.", false, nil)
 		return
 	}
@@ -264,7 +268,11 @@ func (h *handler) serveForecast(writer http.ResponseWriter, request *http.Reques
 
 // serveFDDRead reads a Site's FDD findings, or the low-delta-T rule in effect, on site.read.
 func (h *handler) serveFDDRead(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
-	if !isLowerUUIDv7(route.siteID) || h.intelligence.fddBaseURL == "" {
+	if h.intelligence.fddBaseURL == "" {
+		writeRouteWithoutOwner(writer, request)
+		return
+	}
+	if !isLowerUUIDv7(route.siteID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested FDD resource was not found.", false, nil)
 		return
 	}
@@ -287,7 +295,11 @@ func (h *handler) serveFDDRead(writer http.ResponseWriter, request *http.Request
 }
 
 func (h *handler) serveFDDLink(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
-	if !isLowerUUIDv7(route.siteID) || !isLowerUUIDv7(route.findingID) || h.intelligence.fddBaseURL == "" {
+	if h.intelligence.fddBaseURL == "" {
+		writeRouteWithoutOwner(writer, request)
+		return
+	}
+	if !isLowerUUIDv7(route.siteID) || !isLowerUUIDv7(route.findingID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested FDD finding was not found.", false, nil)
 		return
 	}
@@ -434,7 +446,11 @@ func (h *handler) serveFDDEvaluation(writer http.ResponseWriter, request *http.R
 // serveLatestOptimizationRead reads the Site's latest Optimization recommendation, or how its
 // schedule's latest firing went, from the owner.
 func (h *handler) serveLatestOptimizationRead(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute, resource string) {
-	if !isLowerUUIDv7(route.siteID) || h.intelligence.optimizationBaseURL == "" {
+	if h.intelligence.optimizationBaseURL == "" {
+		writeRouteWithoutOwner(writer, request)
+		return
+	}
+	if !isLowerUUIDv7(route.siteID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Optimization result was not found.", false, nil)
 		return
 	}
@@ -557,6 +573,12 @@ func (h *handler) writeIntelligenceResult(writer http.ResponseWriter, request *h
 		return
 	}
 	if status == http.StatusNotFound {
+		// An owner answers a missing result with a JSON error body; a 404 without one comes from its
+		// router, so the owner deployed here does not serve the route yet.
+		if len(raw) == 0 || !json.Valid(raw) {
+			writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The Intelligence owner does not serve this route.", false, nil)
+			return
+		}
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Intelligence result was not found.", false, nil)
 		return
 	}
@@ -584,4 +606,11 @@ func ensureIntelligenceJSONEOF(decoder *json.Decoder) error {
 
 func contextWithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(parent, timeout)
+}
+
+// writeRouteWithoutOwner answers a public read whose owner this Gateway has no address for. It
+// is ROUTE_NOT_FOUND, as for a route with no applied owner, so a client never reads it as "this
+// Site has no result yet" (RESOURCE_NOT_FOUND).
+func writeRouteWithoutOwner(writer http.ResponseWriter, request *http.Request) {
+	writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route has no configured owner.", false, nil)
 }

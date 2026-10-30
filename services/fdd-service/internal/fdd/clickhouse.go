@@ -14,9 +14,10 @@ import (
 	"time"
 )
 
-const maximumEvidenceResponseBytes = int64(1 << 16)
+// A day's window of a loop and a dozen gate devices is about 17k rows of ~300 bytes.
+const maximumEvidenceResponseBytes = int64(8 << 20)
 
-// ClickHouseEvidence reads a loop's readings from the Telemetry history owner tables with FDD's
+// ClickHouseEvidence reads a loop's window from the Telemetry history owner tables with FDD's
 // own read-only account (ADR 0020); the query, not the account, scopes it to a Tenant and Site.
 type ClickHouseEvidence struct {
 	baseURL  *url.URL
@@ -39,74 +40,85 @@ func NewClickHouseEvidence(baseURL, username, password string, client *http.Clie
 	return &ClickHouseEvidence{baseURL: parsed, username: strings.TrimSpace(username), password: password, client: client}, nil
 }
 
-func (evidence *ClickHouseEvidence) LatestLoopReadings(ctx context.Context, query LoopQuery) (LoopReadings, error) {
-	for _, value := range []string{query.TenantID, query.SiteID, query.DeviceID} {
+// WindowSamples reads each device's last authoritative observation of each key per minute: the
+// loop's supply, return and cooling load and the gate devices' power and run state.
+func (evidence *ClickHouseEvidence) WindowSamples(ctx context.Context, query WindowQuery) ([]Sample, error) {
+	for _, value := range append([]string{query.TenantID, query.SiteID, query.LoopDeviceID}, query.GateDeviceIDs...) {
 		if !uuidPattern.MatchString(value) {
-			return LoopReadings{}, errors.New("FDD evidence scope must be UUIDs")
+			return nil, errors.New("FDD evidence scope must be UUIDs")
 		}
 	}
 	if !query.To.After(query.From) {
-		return LoopReadings{}, errors.New("FDD evidence window is invalid")
+		return nil, errors.New("FDD evidence window is invalid")
 	}
-	sql := fmt.Sprintf(`SELECT telemetry_key,toString(observation_id) AS observation_id,assumeNotNull(point_type) AS point_type,
- assumeNotNull(value_type) AS value_type,assumeNotNull(unit) AS unit,quality,assumeNotNull(value_number) AS value,
- formatDateTime(sampled_at,'%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ','UTC') AS sampled_at
-FROM (
- SELECT *,row_number() OVER (PARTITION BY telemetry_key ORDER BY sampled_at DESC,received_at DESC,source_offset DESC,toString(observation_id) ASC) AS rank
- FROM telemetry_history.observations
- WHERE tenant_id=toUUID('%s') AND site_id=toUUID('%s') AND device_id=toUUID('%s')
-   AND telemetry_key IN ('%s','%s')
-   AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC') AND sampled_at <= parseDateTime64BestEffort('%s',3,'UTC')
-   AND received_at <= parseDateTime64BestEffort('%s',3,'UTC')
-   AND acceptance_status IN ('ACCEPTED','OUT_OF_ORDER')
-   AND value_number IS NOT NULL AND point_type IS NOT NULL AND value_type IS NOT NULL AND unit IS NOT NULL
-)
-WHERE rank=1
-FORMAT JSONEachRow`, query.TenantID, query.SiteID, query.DeviceID, supplyTemperatureKey, returnTemperatureKey,
-		query.From.UTC().Format(time.RFC3339Nano), query.To.UTC().Format(time.RFC3339Nano), query.To.UTC().Format(time.RFC3339Nano))
+	scope := fmt.Sprintf("(device_id=toUUID('%s') AND telemetry_key IN ('%s','%s','%s'))", query.LoopDeviceID, supplyTemperatureKey, returnTemperatureKey, coolingLoadKey)
+	if len(query.GateDeviceIDs) > 0 {
+		devices := make([]string, 0, len(query.GateDeviceIDs))
+		for _, device := range query.GateDeviceIDs {
+			devices = append(devices, "toUUID('"+device+"')")
+		}
+		scope += fmt.Sprintf(" OR (device_id IN (%s) AND telemetry_key IN ('%s','%s'))", strings.Join(devices, ","), powerTotalKey, runStateKey)
+	}
+	// Aliases differ from column names so WHERE reads the columns, not the aggregates.
+	latest := "(sampled_at,received_at,source_offset)"
+	sql := fmt.Sprintf(`SELECT toString(device_id) AS device,telemetry_key AS key,
+ formatDateTime(toStartOfMinute(sampled_at),'%%Y-%%m-%%dT%%H:%%i:%%SZ','UTC') AS minute,
+ argMax(toString(observation_id),%[1]s) AS observation,argMax(assumeNotNull(point_type),%[1]s) AS kind,
+ argMax(assumeNotNull(value_type),%[1]s) AS type,argMax(ifNull(unit,''),%[1]s) AS unit_code,argMax(quality,%[1]s) AS sample_quality,
+ argMax(value_number,%[1]s) AS number,argMax(value_string,%[1]s) AS text
+FROM telemetry_history.observations
+WHERE tenant_id=toUUID('%[2]s') AND site_id=toUUID('%[3]s') AND (%[4]s)
+  AND sampled_at >= parseDateTime64BestEffort('%[5]s',3,'UTC') AND sampled_at < parseDateTime64BestEffort('%[6]s',3,'UTC')
+  AND received_at <= parseDateTime64BestEffort('%[6]s',3,'UTC')
+  AND acceptance_status IN ('ACCEPTED','OUT_OF_ORDER') AND point_type IS NOT NULL AND value_type IS NOT NULL
+GROUP BY device_id,telemetry_key,toStartOfMinute(sampled_at)
+ORDER BY minute,device,key
+FORMAT JSONEachRow`, latest, query.TenantID, query.SiteID, scope,
+		query.From.UTC().Format(time.RFC3339Nano), query.To.UTC().Format(time.RFC3339Nano))
 	body, err := evidence.query(ctx, sql)
 	if err != nil {
-		return LoopReadings{}, err
+		return nil, err
 	}
-	var readings LoopReadings
-	var hasSupply, hasReturn bool
+	return decodeSamples(body)
+}
+
+// decodeSamples reads WindowSamples' JSONEachRow rows; replay fixtures are the same rows.
+func decodeSamples(body []byte) ([]Sample, error) {
+	var samples []Sample
 	scanner := bufio.NewScanner(bytes.NewReader(body))
 	for scanner.Scan() {
 		if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
 			continue
 		}
 		var row struct {
-			TelemetryKey  string  `json:"telemetry_key"`
-			ObservationID string  `json:"observation_id"`
-			PointType     string  `json:"point_type"`
-			ValueType     string  `json:"value_type"`
-			Unit          string  `json:"unit"`
-			Quality       string  `json:"quality"`
-			Value         float64 `json:"value"`
-			SampledAt     string  `json:"sampled_at"`
+			Device      string   `json:"device"`
+			Key         string   `json:"key"`
+			Minute      string   `json:"minute"`
+			Observation string   `json:"observation"`
+			Kind        string   `json:"kind"`
+			Type        string   `json:"type"`
+			Unit        string   `json:"unit_code"`
+			Quality     string   `json:"sample_quality"`
+			Number      *float64 `json:"number"`
+			Text        *string  `json:"text"`
 		}
-		if err = json.Unmarshal(scanner.Bytes(), &row); err != nil {
-			return LoopReadings{}, fmt.Errorf("decode FDD evidence: %w", err)
+		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
+			return nil, fmt.Errorf("decode FDD evidence: %w", err)
 		}
-		sampledAt, parseErr := time.Parse(time.RFC3339Nano, row.SampledAt)
+		minute, parseErr := time.Parse(time.RFC3339, row.Minute)
 		if parseErr != nil {
-			return LoopReadings{}, fmt.Errorf("decode FDD evidence time: %w", parseErr)
+			return nil, fmt.Errorf("decode FDD evidence time: %w", parseErr)
 		}
-		reading := Reading{ObservationID: row.ObservationID, PointType: row.PointType, ValueType: row.ValueType, Unit: row.Unit, Quality: row.Quality, Value: row.Value, SampledAt: sampledAt}
-		switch row.TelemetryKey {
-		case supplyTemperatureKey:
-			readings.Supply, hasSupply = reading, true
-		case returnTemperatureKey:
-			readings.Return, hasReturn = reading, true
+		sample := Sample{DeviceID: row.Device, Key: row.Key, Minute: minute, ObservationID: row.Observation, PointType: row.Kind, ValueType: row.Type, Unit: row.Unit, Quality: row.Quality}
+		if row.Number != nil {
+			sample.Number, sample.HasNumber = *row.Number, true
 		}
+		if row.Text != nil {
+			sample.Text = *row.Text
+		}
+		samples = append(samples, sample)
 	}
-	if err = scanner.Err(); err != nil {
-		return LoopReadings{}, err
-	}
-	if !hasSupply || !hasReturn {
-		return LoopReadings{}, ErrNoLoopEvidence
-	}
-	return readings, nil
+	return samples, scanner.Err()
 }
 
 func (evidence *ClickHouseEvidence) query(ctx context.Context, sql string) ([]byte, error) {

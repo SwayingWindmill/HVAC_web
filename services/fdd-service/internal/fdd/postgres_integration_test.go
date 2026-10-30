@@ -2,6 +2,7 @@ package fdd
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -23,14 +24,14 @@ func TestPostgresServicePersistsAuthoritativeHistoryFinding(t *testing.T) {
 	request.TenantID = tenantID
 	request.SiteID = siteID
 	request.AssetID = assetID
-	request.At = time.Now().UTC()
+	request.At = time.Now().UTC().Truncate(time.Minute)
 
 	store, err := OpenPostgres(t.Context(), dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
-	service := newTestService(t, store, &loopEvidence{readings: validReadings(request)}, func() time.Time {
+	service := newTestService(t, store, &loopEvidence{steady: true}, func() time.Time {
 		return request.At.Add(time.Minute)
 	})
 
@@ -38,10 +39,20 @@ func TestPostgresServicePersistsAuthoritativeHistoryFinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The runner seeded the Tenant's rule revision; the finding cites it and its threshold.
+	// The runner seeded the Tenant's rule revision, which takes the migration's default gates; the
+	// finding cites the revision and its threshold.
 	if result.Status != "FINDING" || result.Finding == nil || result.Rule.ID != ruleID || result.Finding.RuleRevisionID != ruleID || result.Finding.ThresholdValue != result.Rule.MinimumDeltaTC {
 		t.Fatalf("result=%#v", result)
 	}
+	if !reflect.DeepEqual(result.Rule.OperatingGates, testGates()) || result.Window.OperatingMinutes != 15 {
+		t.Fatalf("gates=%#v window=%#v", result.Rule.OperatingGates, result.Window)
+	}
+	// FDD reads the Site's chillers and pumps through its own row scope (migration 033).
+	topology, err := store.OperatingTopology(t.Context(), tenantID, siteID, request.At)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("topology: %d chillers, %d pumps", len(topology.Chillers), len(topology.Pumps))
 	findingID := result.Finding.ID
 	// The FDD runtime cannot delete findings, so the gate runs this against a disposable database.
 	findings, err := service.ListFindings(t.Context(), tenantID, siteID, FindingFilter{Limit: 200})
@@ -53,7 +64,7 @@ func TestPostgresServicePersistsAuthoritativeHistoryFinding(t *testing.T) {
 		if finding.ID != findingID {
 			continue
 		}
-		if len(finding.EvidenceIDs) != 2 || finding.EvidenceIDs[0] != result.Finding.EvidenceIDs[0] || finding.EvidenceIDs[1] != result.Finding.EvidenceIDs[1] {
+		if !reflect.DeepEqual(finding.EvidenceIDs, result.Finding.EvidenceIDs) {
 			t.Fatalf("persisted evidence IDs=%#v", finding.EvidenceIDs)
 		}
 		if finding.ObservedValue != result.Finding.ObservedValue || finding.ThresholdValue != result.Finding.ThresholdValue || finding.ValueUnit != "K" {

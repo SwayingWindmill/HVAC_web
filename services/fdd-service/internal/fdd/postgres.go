@@ -58,17 +58,72 @@ func (store *PostgresStore) CurrentRule(ctx context.Context, tenantID, siteID st
 		return RuleRevision{}, err
 	}
 	var rule RuleRevision
-	err = tx.QueryRow(ctx, `SELECT id::text, revision, minimum_delta_tc, window_minutes, effective_from
+	var gates []byte
+	err = tx.QueryRow(ctx, `SELECT id::text, revision, minimum_delta_tc, window_minutes, operating_gates::text, effective_from
 FROM core_registry.fdd_rule_revisions
 WHERE tenant_id = $1::uuid AND rule_code = $2 AND effective_from <= $3
-ORDER BY revision DESC LIMIT 1`, tenantID, LowDeltaTRuleCode, at.UTC()).Scan(&rule.ID, &rule.Revision, &rule.MinimumDeltaTC, &rule.WindowMinutes, &rule.EffectiveFrom)
+ORDER BY revision DESC LIMIT 1`, tenantID, LowDeltaTRuleCode, at.UTC()).Scan(&rule.ID, &rule.Revision, &rule.MinimumDeltaTC, &rule.WindowMinutes, &gates, &rule.EffectiveFrom)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RuleRevision{}, ErrRuleNotFound
 	}
 	if err != nil {
 		return RuleRevision{}, fmt.Errorf("read FDD rule revision: %w", err)
 	}
+	if rule.OperatingGates, err = ParseOperatingGates(gates); err != nil {
+		return RuleRevision{}, fmt.Errorf("FDD rule revision %s: %w", rule.ID, err)
+	}
 	return rule, tx.Commit(ctx)
+}
+
+// maximumGateBindings bounds what a Site's chillers and pumps can bind; a plant has a handful.
+const maximumGateBindings = 200
+
+func (store *PostgresStore) OperatingTopology(ctx context.Context, tenantID, siteID string, at time.Time) (Topology, error) {
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return Topology{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = fddScope(ctx, tx, tenantID, siteID); err != nil {
+		return Topology{}, err
+	}
+	rows, err := tx.Query(ctx, `SELECT a.id::text, a.asset_type, COALESCE(a.rated_power, 0), COALESCE(a.rated_capacity, 0), b.device_id::text
+FROM core_registry.assets a
+JOIN core_registry.device_bindings b ON b.tenant_id = a.tenant_id AND b.site_id = a.site_id AND b.asset_id = a.id
+WHERE a.tenant_id = $1::uuid AND a.site_id = $2::uuid AND a.status = 'ACTIVE'
+  AND a.asset_type IN ('CHILLER', 'CHILLED_WATER_PUMP')
+  AND b.status = 'ACTIVE' AND b.valid_from <= $3 AND (b.valid_to IS NULL OR b.valid_to > $3)
+ORDER BY a.asset_type, a.id, b.device_id
+LIMIT $4`, tenantID, siteID, at.UTC(), maximumGateBindings+1)
+	if err != nil {
+		return Topology{}, fmt.Errorf("read FDD operating topology: %w", err)
+	}
+	defer rows.Close()
+	var topology Topology
+	count := 0
+	for rows.Next() {
+		var assetID, assetType, deviceID string
+		var ratedPower, ratedCapacity float64
+		if err = rows.Scan(&assetID, &assetType, &ratedPower, &ratedCapacity, &deviceID); err != nil {
+			return Topology{}, err
+		}
+		if count++; count > maximumGateBindings {
+			return Topology{}, errors.New("FDD operating topology has too many bindings")
+		}
+		assets := &topology.Chillers
+		if assetType == "CHILLED_WATER_PUMP" {
+			assets = &topology.Pumps
+		}
+		if last := len(*assets) - 1; last >= 0 && (*assets)[last].AssetID == assetID {
+			(*assets)[last].DeviceIDs = append((*assets)[last].DeviceIDs, deviceID)
+			continue
+		}
+		*assets = append(*assets, GateAsset{AssetID: assetID, DeviceIDs: []string{deviceID}, RatedPowerKW: ratedPower, RatedCapacityKW: ratedCapacity})
+	}
+	if err = rows.Err(); err != nil {
+		return Topology{}, err
+	}
+	return topology, tx.Commit(ctx)
 }
 
 func (store *PostgresStore) InsertFinding(ctx context.Context, finding intelligencemodel.FDDFinding) error {

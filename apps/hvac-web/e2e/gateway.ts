@@ -149,9 +149,16 @@ export class Gateway {
   /** What the next requested run publishes; null while the owner declines it for missing inputs. */
   nextRecommendation: Json | null = null;
   /** The low-delta-T rule revision FDD holds for the Tenant, as the seed publishes it; null while it cannot be read. */
-  fddRule: { revisionId: string; revision: number; minimumDeltaTC: number; windowMinutes: number; effectiveFrom: string } | null = {
-    revisionId: '01910000-0000-7000-8000-860000000001', revision: 1, minimumDeltaTC: 3.5, windowMinutes: 15, effectiveFrom: '2026-01-01T00:00:00Z',
+  fddRule: { revisionId: string; revision: number; minimumDeltaTC: number; windowMinutes: number; operatingGates: Json; effectiveFrom: string } | null = {
+    revisionId: '01910000-0000-7000-8000-860000000001', revision: 1, minimumDeltaTC: 3.5, windowMinutes: 15,
+    operatingGates: {
+      minimumOperatingShare: 0.7, minimumLowShare: 0.7, temperatureHoldMinutes: 2, gateHoldMinutes: 10,
+      chillerRunning: { minimumRatedPowerFraction: 0.1 }, loadRatio: { minimum: 0.15 }, chilledWaterPumpRunning: {},
+    },
+    effectiveFrom: '2026-01-01T00:00:00Z',
   };
+  /** Minutes of the rule's window the plant operated; under the rule's share FDD does not judge it. */
+  fddOperatingMinutes: number | null = null;
   /** The Site's energy conservation measures as the M&V owner keeps them, newest first. */
   readonly measures: Json[] = [];
   /** Members of the Tenant as IAM and the identity directory keep them (系统管理 → 用户与角色). */
@@ -210,22 +217,31 @@ export class Gateway {
   }
 
   // The recorded loop still runs below the rule's threshold. As the FDD owner does, the evaluation
-  // reads the window of the rule revision in effect now, and a finding for the same asset and
-  // revision from the last 24 hours makes the condition ongoing rather than new.
+  // reads the window of the rule revision in effect now, judges it only when the plant operated for
+  // the rule's share of it, and a finding for the same asset and revision from the last 24 hours
+  // makes the condition ongoing rather than new.
   private evaluateLowDeltaT(input: Json, now: string): Json {
     const rule = this.fddRule!;
     const recorded = fixture<Json>('fdd-findings.json').items[0];
+    const operatingMinutes = this.fddOperatingMinutes ?? rule.windowMinutes;
+    const operatingShare = operatingMinutes / rule.windowMinutes;
+    if (operatingShare < rule.operatingGates.minimumOperatingShare) {
+      const window = { minutes: rule.windowMinutes, operatingMinutes, lowMinutes: 0, operatingShare, lowShare: 0 };
+      return { status: 'NOT_OPERATING', deltaTC: recorded.observedValue, rule, window };
+    }
+    const low = recorded.observedValue < rule.minimumDeltaTC;
+    const window = { minutes: rule.windowMinutes, operatingMinutes, lowMinutes: low ? operatingMinutes : 0, operatingShare, lowShare: low ? 1 : 0 };
     const evaluationFrom = new Date(Date.parse(now) - rule.windowMinutes * 60_000).toISOString();
     const finding = {
       ...recorded, id: `finding-${this.findings.length + 1}`, assetId: input.assetId, evaluationFrom, evaluationTo: now,
       ruleRevisionId: rule.revisionId, thresholdValue: rule.minimumDeltaTC, createdAt: now,
     };
-    if (finding.observedValue >= rule.minimumDeltaTC) return { status: 'CLEAR', deltaTC: finding.observedValue, rule };
+    if (!low) return { status: 'CLEAR', deltaTC: finding.observedValue, rule, window };
     const open = this.findings.find((candidate) => candidate.assetId === input.assetId && candidate.ruleRevisionId === rule.revisionId
       && Date.parse(candidate.evaluationTo) >= Date.parse(now) - 86_400_000);
-    if (open) return { status: 'ONGOING', deltaTC: finding.observedValue, rule, finding: open };
+    if (open) return { status: 'ONGOING', deltaTC: finding.observedValue, rule, window, finding: open };
     this.findings.unshift(finding);
-    return { status: 'FINDING', deltaTC: finding.observedValue, rule, finding };
+    return { status: 'FINDING', deltaTC: finding.observedValue, rule, window, finding };
   }
 
   // The M&V owner's ledger: implementing fits the recorded baseline over the fourteen days before the

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -13,16 +15,41 @@ import (
 
 type memoryStore struct {
 	rules    []RuleRevision
+	topology Topology
 	findings []intelligencemodel.FDDFinding
 }
 
-// testRule is the Tenant's first low-delta-T revision: 5 K over 15 minutes.
-var testRule = RuleRevision{
-	ID: "01990000-9500-7000-8000-000000000001", Revision: 1, MinimumDeltaTC: 5, WindowMinutes: 15,
-	EffectiveFrom: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+// testGates are the approved default gates (migration 033): a chiller above 10% of its rated
+// power, a load ratio of at least 15%, and 70% of the window for both operating and low minutes.
+func testGates() OperatingGates {
+	return OperatingGates{
+		MinimumOperatingShare: 0.7, MinimumLowShare: 0.7, TemperatureHoldMinutes: 2, GateHoldMinutes: 10,
+		ChillerRunning:          &ChillerRunningCondition{MinimumRatedPowerFraction: 0.1},
+		LoadRatio:               &LoadRatioCondition{Minimum: 0.15},
+		ChilledWaterPumpRunning: &PumpRunningCondition{},
+	}
 }
 
-func newStore() *memoryStore { return &memoryStore{rules: []RuleRevision{testRule}} }
+// testRule is the Tenant's first low-delta-T revision: 5 K over 15 minutes under the default gates.
+var testRule = RuleRevision{
+	ID: "01990000-9500-7000-8000-000000000001", Revision: 1, MinimumDeltaTC: 5, WindowMinutes: 15,
+	OperatingGates: testGates(), EffectiveFrom: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+}
+
+const testChillerMeter = "01990000-6100-7000-8000-000000000002"
+
+// testTopology is one chiller whose meter reports run state; its rated values are unknown.
+func testTopology() Topology {
+	return Topology{Chillers: []GateAsset{{AssetID: "01990000-6000-7000-8000-000000000002", DeviceIDs: []string{testChillerMeter}}}}
+}
+
+func newStore() *memoryStore {
+	return &memoryStore{rules: []RuleRevision{testRule}, topology: testTopology()}
+}
+
+func (store *memoryStore) OperatingTopology(context.Context, string, string, time.Time) (Topology, error) {
+	return store.topology, nil
+}
 
 func (store *memoryStore) CurrentRule(_ context.Context, _, _ string, at time.Time) (RuleRevision, error) {
 	var current *RuleRevision
@@ -38,14 +65,30 @@ func (store *memoryStore) CurrentRule(_ context.Context, _, _ string, at time.Ti
 }
 
 type loopEvidence struct {
-	readings LoopReadings
-	err      error
-	query    LoopQuery
+	samples []Sample
+	// steady answers any window with the steady loop, for evaluations at several times.
+	steady bool
+	err    error
+	query  WindowQuery
 }
 
-func (source *loopEvidence) LatestLoopReadings(_ context.Context, query LoopQuery) (LoopReadings, error) {
+func (source *loopEvidence) WindowSamples(_ context.Context, query WindowQuery) ([]Sample, error) {
 	source.query = query
-	return source.readings, source.err
+	if source.steady {
+		minutes := make([]loopMinute, int(query.To.Sub(query.From)/time.Minute))
+		for index := range minutes {
+			minutes[index] = loopMinute{supply: 7, ret: 10, running: true}
+		}
+		samples := loopSamples(EvaluationRequest{DeviceID: query.LoopDeviceID, At: query.To}, minutes)
+		// Every chiller and pump the Site binds runs, whichever the topology names.
+		for _, device := range query.GateDeviceIDs {
+			for minute := query.From; minute.Before(query.To); minute = minute.Add(time.Minute) {
+				samples = append(samples, Sample{DeviceID: device, Key: runStateKey, Minute: minute, PointType: "TELEMETRY", ValueType: "STRING", Quality: "GOOD", Text: "RUNNING"})
+			}
+		}
+		return samples, nil
+	}
+	return source.samples, source.err
 }
 
 func (store *memoryStore) InsertFinding(_ context.Context, finding intelligencemodel.FDDFinding) error {
@@ -99,12 +142,44 @@ func validEvaluation() EvaluationRequest {
 	}
 }
 
-func validReadings(request EvaluationRequest) LoopReadings {
-	reading := func(id string, value float64) Reading {
-		return Reading{ObservationID: id, PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", Quality: "GOOD", Value: value, SampledAt: request.At.Add(-5 * time.Minute)}
-	}
-	return LoopReadings{Supply: reading("01990000-6200-7000-8000-000000000002", 7), Return: reading("01990000-6200-7000-8000-000000000001", 10)}
+// loopMinute is one minute of a loop: its supply and return and whether the chiller runs.
+type loopMinute struct {
+	supply, ret float64
+	running     bool
 }
+
+// steadyLoop is a whole window of the chiller running with supply 7 and return 10 (3 K).
+func steadyLoop() []loopMinute {
+	minutes := make([]loopMinute, 15)
+	for index := range minutes {
+		minutes[index] = loopMinute{supply: 7, ret: 10, running: true}
+	}
+	return minutes
+}
+
+// loopSamples lays minutes out over the window ending at the request, with observation IDs that
+// name the minute and key so evidence can be traced.
+func loopSamples(request EvaluationRequest, minutes []loopMinute) []Sample {
+	from := request.At.Truncate(time.Minute).Add(-time.Duration(len(minutes)) * time.Minute)
+	var samples []Sample
+	for index, minute := range minutes {
+		at := from.Add(time.Duration(index) * time.Minute)
+		temperature := func(key string, kind int, value float64) Sample {
+			return Sample{DeviceID: request.DeviceID, Key: key, Minute: at, ObservationID: fmt.Sprintf("01990000-62%02d-7000-8000-%012d", kind, index),
+				PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", Quality: "GOOD", Number: value, HasNumber: true}
+		}
+		state := "STOPPED"
+		if minute.running {
+			state = "RUNNING"
+		}
+		samples = append(samples,
+			temperature(supplyTemperatureKey, 1, minute.supply), temperature(returnTemperatureKey, 2, minute.ret),
+			Sample{DeviceID: testChillerMeter, Key: runStateKey, Minute: at, ObservationID: fmt.Sprintf("01990000-6203-7000-8000-%012d", index), PointType: "TELEMETRY", ValueType: "STRING", Quality: "GOOD", Text: state})
+	}
+	return samples
+}
+
+func validSamples(request EvaluationRequest) []Sample { return loopSamples(request, steadyLoop()) }
 
 func newTestService(t *testing.T, store Store, evidence EvidenceSource, now func() time.Time) *Service {
 	t.Helper()
@@ -115,10 +190,10 @@ func newTestService(t *testing.T, store Store, evidence EvidenceSource, now func
 	return service
 }
 
-func TestLowDeltaTRecordsAFindingFromTheLoopsLatestReadings(t *testing.T) {
+func TestLowDeltaTRecordsAFindingFromTheWindowsOperatingMinutes(t *testing.T) {
 	store := newStore()
 	request := validEvaluation()
-	evidence := &loopEvidence{readings: validReadings(request)}
+	evidence := &loopEvidence{samples: validSamples(request)}
 	now := time.Date(2026, 8, 19, 10, 16, 0, 0, time.UTC)
 	service := newTestService(t, store, evidence, func() time.Time { return now })
 
@@ -130,18 +205,25 @@ func TestLowDeltaTRecordsAFindingFromTheLoopsLatestReadings(t *testing.T) {
 		t.Fatalf("result=%#v persisted=%#v", result, store.findings)
 	}
 	finding := *result.Finding
-	if finding.FindingType != "CHILLED_WATER_LOW_DELTA_T" || finding.RuleRevisionID != testRule.ID || result.Rule != testRule || finding.Confidence <= 0.5 {
+	if finding.FindingType != "CHILLED_WATER_LOW_DELTA_T" || finding.RuleRevisionID != testRule.ID || !reflect.DeepEqual(result.Rule, testRule) || finding.Confidence <= 0.5 {
 		t.Fatalf("finding=%#v", finding)
 	}
 	// A finding states what was measured against what threshold, so it reads without its evidence.
 	if finding.ObservedValue != 3 || finding.ThresholdValue != 5 || finding.ValueUnit != "K" {
 		t.Fatalf("finding measurement=%v/%v %q", finding.ObservedValue, finding.ThresholdValue, finding.ValueUnit)
 	}
-	if len(finding.EvidenceIDs) != 2 || finding.EvidenceIDs[0] != "01990000-6200-7000-8000-000000000002" || finding.EvidenceIDs[1] != "01990000-6200-7000-8000-000000000001" {
+	// The evidence is every low minute's supply and return observation.
+	if len(finding.EvidenceIDs) != 30 || finding.EvidenceIDs[0] != "01990000-6201-7000-8000-000000000000" || finding.EvidenceIDs[1] != "01990000-6202-7000-8000-000000000000" {
 		t.Fatalf("evidence IDs must be authoritative observation IDs: %#v", finding.EvidenceIDs)
 	}
-	// The rule's window, not the caller, decides how far back the evidence is read.
-	if evidence.query != (LoopQuery{TenantID: request.TenantID, SiteID: request.SiteID, DeviceID: request.DeviceID, From: request.At.Add(-15 * time.Minute), To: request.At}) {
+	if result.Window.OperatingMinutes != 15 || result.Window.LowShare != 1 || result.Window.OperatingShare != 1 {
+		t.Fatalf("window=%#v", result.Window)
+	}
+	// The rule's window, not the caller, decides how far back the evidence is read; the gate hold
+	// reaches further back so a five-minute power sample can stand for the window's first minutes.
+	want := WindowQuery{TenantID: request.TenantID, SiteID: request.SiteID, LoopDeviceID: request.DeviceID, GateDeviceIDs: []string{testChillerMeter},
+		From: request.At.Add(-25 * time.Minute), To: request.At}
+	if !reflect.DeepEqual(evidence.query, want) {
 		t.Fatalf("evidence query=%#v", evidence.query)
 	}
 	if !finding.EvaluationFrom.Equal(request.At.Add(-15*time.Minute)) || !finding.EvaluationTo.Equal(request.At) {
@@ -154,26 +236,26 @@ func TestLowDeltaTRecordsAFindingFromTheLoopsLatestReadings(t *testing.T) {
 func TestANewRuleRevisionAppliesFromItsEffectiveTime(t *testing.T) {
 	store := newStore()
 	request := validEvaluation()
-	service := newTestService(t, store, &loopEvidence{readings: validReadings(request)}, func() time.Time { return request.At })
+	service := newTestService(t, store, &loopEvidence{samples: validSamples(request)}, func() time.Time { return request.At })
 	first, err := service.EvaluateLowDeltaT(t.Context(), request)
 	if err != nil || first.Finding.ThresholdValue != 5 {
 		t.Fatalf("first=%#v err=%v", first, err)
 	}
-	revised := RuleRevision{ID: "01990000-9500-7000-8000-000000000002", Revision: 2, MinimumDeltaTC: 4, WindowMinutes: 30, EffectiveFrom: request.At.Add(time.Minute)}
+	revised := RuleRevision{ID: "01990000-9500-7000-8000-000000000002", Revision: 2, MinimumDeltaTC: 4, WindowMinutes: 30, OperatingGates: testGates(), EffectiveFrom: request.At.Add(time.Minute)}
 	store.rules = append(store.rules, revised)
 	later := request
 	later.At = request.At.Add(15 * time.Minute)
-	evidence := &loopEvidence{readings: validReadings(later)}
+	evidence := &loopEvidence{samples: loopSamples(later, append(steadyLoop(), steadyLoop()...))}
 	service = newTestService(t, store, evidence, func() time.Time { return later.At })
 	second, err := service.EvaluateLowDeltaT(t.Context(), later)
-	if err != nil || second.Status != "FINDING" || second.Rule != revised || second.Finding.RuleRevisionID != revised.ID || second.Finding.ThresholdValue != 4 {
+	if err != nil || second.Status != "FINDING" || !reflect.DeepEqual(second.Rule, revised) || second.Finding.RuleRevisionID != revised.ID || second.Finding.ThresholdValue != 4 {
 		t.Fatalf("second=%#v err=%v", second, err)
 	}
-	if !evidence.query.From.Equal(later.At.Add(-30 * time.Minute)) {
+	if !evidence.query.From.Equal(later.At.Add(-40 * time.Minute)) {
 		t.Fatalf("revised window from=%s", evidence.query.From)
 	}
 	// At its own time the first evaluation's revision still decides.
-	if rule, err := service.store.CurrentRule(t.Context(), request.TenantID, request.SiteID, request.At); err != nil || rule != testRule {
+	if rule, err := service.store.CurrentRule(t.Context(), request.TenantID, request.SiteID, request.At); err != nil || !reflect.DeepEqual(rule, testRule) {
 		t.Fatalf("rule at the first evaluation=%#v err=%v", rule, err)
 	}
 }
@@ -181,7 +263,7 @@ func TestANewRuleRevisionAppliesFromItsEffectiveTime(t *testing.T) {
 func TestATenantWithoutTheRuleIsNotEvaluated(t *testing.T) {
 	store := &memoryStore{}
 	request := validEvaluation()
-	service := newTestService(t, store, &loopEvidence{readings: validReadings(request)}, time.Now)
+	service := newTestService(t, store, &loopEvidence{samples: validSamples(request)}, time.Now)
 	if _, err := service.EvaluateLowDeltaT(t.Context(), request); !errors.Is(err, ErrRuleNotFound) {
 		t.Fatalf("evaluation without a rule err=%v", err)
 	}
@@ -193,9 +275,11 @@ func TestATenantWithoutTheRuleIsNotEvaluated(t *testing.T) {
 func TestHealthyDeltaTClearsWithoutFinding(t *testing.T) {
 	store := newStore()
 	request := validEvaluation()
-	readings := validReadings(request)
-	readings.Return.Value = 13
-	service := newTestService(t, store, &loopEvidence{readings: readings}, time.Now)
+	minutes := steadyLoop()
+	for index := range minutes {
+		minutes[index].ret = 13
+	}
+	service := newTestService(t, store, &loopEvidence{samples: loopSamples(request, minutes)}, time.Now)
 
 	result, err := service.EvaluateLowDeltaT(t.Context(), request)
 	if err != nil {
@@ -212,7 +296,7 @@ func TestAPersistingConditionIsReportedOngoingWithinADay(t *testing.T) {
 	store := newStore()
 	request := validEvaluation()
 	now := request.At.Add(time.Minute)
-	service := newTestService(t, store, &loopEvidence{readings: validReadings(request)}, func() time.Time { return now })
+	service := newTestService(t, store, &loopEvidence{steady: true}, func() time.Time { return now })
 	first, err := service.EvaluateLowDeltaT(t.Context(), request)
 	if err != nil || first.Status != "FINDING" {
 		t.Fatalf("first=%#v err=%v", first, err)
@@ -240,23 +324,24 @@ func TestFDDRejectsMissingOrInvalidEvidence(t *testing.T) {
 	request := validEvaluation()
 	store := newStore()
 
-	service := newTestService(t, store, &loopEvidence{err: ErrNoLoopEvidence}, time.Now)
+	service := newTestService(t, store, &loopEvidence{}, time.Now)
 	if _, err := service.EvaluateLowDeltaT(t.Context(), request); !errors.Is(err, ErrNoLoopEvidence) {
 		t.Fatalf("missing evidence err=%v", err)
 	}
-
-	readings := validReadings(request)
-	readings.Return.Quality = "BAD"
-	service = newTestService(t, store, &loopEvidence{readings: readings}, time.Now)
-	if _, err := service.EvaluateLowDeltaT(t.Context(), request); err == nil {
-		t.Fatal("expected non-GOOD evidence to fail")
-	}
-
-	readings = validReadings(request)
-	readings.Supply.Unit = "K"
-	service = newTestService(t, store, &loopEvidence{readings: readings}, time.Now)
-	if _, err := service.EvaluateLowDeltaT(t.Context(), request); err == nil {
-		t.Fatal("expected non-Celsius evidence to fail")
+	for name, spoil := range map[string]func(*Sample){
+		"non-GOOD":    func(sample *Sample) { sample.Quality = "BAD" },
+		"non-Celsius": func(sample *Sample) { sample.Unit = "K" },
+	} {
+		samples := validSamples(request)
+		for index := range samples {
+			if samples[index].Key == returnTemperatureKey {
+				spoil(&samples[index])
+			}
+		}
+		service = newTestService(t, store, &loopEvidence{samples: samples}, time.Now)
+		if _, err := service.EvaluateLowDeltaT(t.Context(), request); !errors.Is(err, ErrNoLoopEvidence) {
+			t.Fatalf("%s evidence err=%v", name, err)
+		}
 	}
 	if len(store.findings) != 0 {
 		t.Fatal("missing or invalid evidence must not create a finding")
@@ -292,7 +377,7 @@ func TestAScheduledEvaluationDiagnosesTheLoopAtItsFireTime(t *testing.T) {
 func TestFDDLinkingIsExplicitAndSeparateFromDetection(t *testing.T) {
 	store := newStore()
 	request := validEvaluation()
-	service := newTestService(t, store, &loopEvidence{readings: validReadings(request)}, time.Now)
+	service := newTestService(t, store, &loopEvidence{samples: validSamples(request)}, time.Now)
 	result, err := service.EvaluateLowDeltaT(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -313,5 +398,23 @@ func TestFDDLinkingIsExplicitAndSeparateFromDetection(t *testing.T) {
 	byWorkOrder, err := service.ListFindings(t.Context(), request.TenantID, request.SiteID, FindingFilter{WorkOrderID: workOrderID, Limit: 20})
 	if err != nil || len(byWorkOrder) != 1 || byWorkOrder[0].ID != linked.ID {
 		t.Fatalf("Work Order reverse association=%#v err=%v", byWorkOrder, err)
+	}
+}
+
+// A plant that runs under 70% of the window is not operating: no finding, whatever its delta-T.
+func TestALoopThatIsNotOperatingIsNotDiagnosed(t *testing.T) {
+	store := newStore()
+	request := validEvaluation()
+	minutes := steadyLoop()
+	for index := 9; index < 15; index++ {
+		minutes[index].running = false
+	}
+	service := newTestService(t, store, &loopEvidence{samples: loopSamples(request, minutes)}, time.Now)
+	result, err := service.EvaluateLowDeltaT(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusNotOperating || result.Finding != nil || len(store.findings) != 0 || result.Window.OperatingMinutes != 9 || result.DeltaTC != 3 {
+		t.Fatalf("result=%+v findings=%d", result, len(store.findings))
 	}
 }
