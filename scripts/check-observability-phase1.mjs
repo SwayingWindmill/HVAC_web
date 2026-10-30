@@ -107,6 +107,7 @@ for (const name of alertFiles) {
 for (const alert of [
   'Phase1HostDiskUsageHigh',
   'Phase1HostDiskWillFillWithin24Hours',
+  'Phase1HostDiskFillingFast',
   'Phase1HostMemoryAvailableLow',
   'Phase1HostSwapPressure',
   'Phase1ContainerRestartLoop',
@@ -152,7 +153,9 @@ if (observabilityTree.includes('clamp_min')) {
 
 const promtoolVersion = '2.54.1';
 const promtool = ensurePromtool();
-const rulesTest = spawnSync(promtool, ['test', 'rules', resolve(root, 'infra/observability/alerts/s2-ratio.rules.test.yml')], {
+const ruleTests = (await readdir(resolve(root, 'infra/observability/alerts'))).filter((name) => name.endsWith('.rules.test.yml'));
+if (!ruleTests.includes('host-resource.rules.test.yml')) throw new Error('host disk alerts must keep their promtool unit tests');
+const rulesTest = spawnSync(promtool, ['test', 'rules', ...ruleTests.map((name) => resolve(root, 'infra/observability/alerts', name))], {
   encoding: 'utf8',
 });
 if (rulesTest.status !== 0) {

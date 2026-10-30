@@ -1,0 +1,179 @@
+# promtool unit tests for the host disk alerts. A deploy writes 1-2 GiB in about 20 minutes and
+# then stops; that step must not read as a 24 hour trend. Steady growth that really fills the
+# disk must still warn. Samples every 5 minutes; the filesystem is 59 GiB like the phase 1 host.
+rule_files:
+  - host-resource.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 70% used, one 2 GiB deploy burst. The old 2h rule fired here.
+  - interval: 5m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{job="host",fstype="ext4",mountpoint="/",device="/dev/vda2"}'
+        values: '19005230284x143 18468359372-536870912x3 16857746636x96'
+      - series: 'node_filesystem_size_bytes{job="host",fstype="ext4",mountpoint="/",device="/dev/vda2"}'
+        values: '63350767616x300'
+    alert_rule_test:
+      - eval_time: 12h20m
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 12h20m
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 13h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 13h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 13h30m
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 13h30m
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 14h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 14h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 15h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 15h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 16h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 16h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 18h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 18h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 20h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 20h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+  # 80% used (inside the 25% guard), the same 2 GiB burst. The trend is still flat.
+  - interval: 5m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{job="host",fstype="ext4",mountpoint="/",device="/dev/vda2"}'
+        values: '12670153523x143 12133282611-536870912x3 10522669875x96'
+      - series: 'node_filesystem_size_bytes{job="host",fstype="ext4",mountpoint="/",device="/dev/vda2"}'
+        values: '63350767616x300'
+    alert_rule_test:
+      - eval_time: 12h20m
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 12h20m
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 13h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 13h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 13h30m
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 13h30m
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 14h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 14h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 15h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 15h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 16h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 16h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 18h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 18h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+      - eval_time: 20h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts: []
+      - eval_time: 20h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+  # ~77% used and losing 0.6 GiB an hour for 14 hours: will fill within a day, not within 4 hours.
+  - interval: 5m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{job="host",fstype="ext4",mountpoint="/",device="/dev/vda2"}'
+        values: '15204184227-53687091x168'
+      - series: 'node_filesystem_size_bytes{job="host",fstype="ext4",mountpoint="/",device="/dev/vda2"}'
+        values: '63350767616x300'
+    alert_rule_test:
+      - eval_time: 14h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: host
+              fstype: ext4
+              mountpoint: /
+              device: /dev/vda2
+            exp_annotations:
+              summary: Phase 1 host disk is projected to fill within 24 hours
+              description: Filesystem / has less than 25 percent free and the last 12 hours of growth would exhaust it within 24 hours.
+              runbook: docs/operations/alerts.md#主机磁盘和-postgresql-的-wal
+      - eval_time: 14h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts: []
+  # 70% used and losing 2.5 GiB an hour: both alerts fire.
+  - interval: 5m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{job="host",fstype="ext4",mountpoint="/",device="/dev/vda2"}'
+        values: '19005230284-223696213x60'
+      - series: 'node_filesystem_size_bytes{job="host",fstype="ext4",mountpoint="/",device="/dev/vda2"}'
+        values: '63350767616x300'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: Phase1HostDiskFillingFast
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              job: host
+              fstype: ext4
+              mountpoint: /
+              device: /dev/vda2
+            exp_annotations:
+              summary: 主机磁盘预计 4 小时内写满
+              description: 文件系统 / 最近 6 小时的增长速度会在 4 小时内写满剩余空间。马上找出正在写盘的进程或容器。
+              runbook: docs/operations/alerts.md#主机磁盘和-postgresql-的-wal
+      - eval_time: 5h
+        alertname: Phase1HostDiskWillFillWithin24Hours
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: host
+              fstype: ext4
+              mountpoint: /
+              device: /dev/vda2
+            exp_annotations:
+              summary: Phase 1 host disk is projected to fill within 24 hours
+              description: Filesystem / has less than 25 percent free and the last 12 hours of growth would exhaust it within 24 hours.
+              runbook: docs/operations/alerts.md#主机磁盘和-postgresql-的-wal
