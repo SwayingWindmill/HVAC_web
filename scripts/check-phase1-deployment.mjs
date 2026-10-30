@@ -57,6 +57,8 @@ const paths = {
   clickhouseBackup: 'deploy/platform/phase1/backup/clickhouse-backup.sh',
   clickhouseBackupConfig: 'deploy/platform/phase1/backup/clickhouse-backup.xml',
   clickhouseResourceLimits: 'deploy/platform/phase1/clickhouse/resource-limits.xml',
+  clickhouseSystemLogs: 'deploy/platform/phase1/clickhouse/system-logs.xml',
+  clickhouseQueryLogProfile: 'deploy/platform/phase1/clickhouse/query-log-profile.xml',
   recoveryTargets: 'deploy/platform/phase1/recovery/recovery-targets.v1.json',
   recoveryDrillTemplate: 'deploy/platform/phase1/recovery/drill-record.template.json',
   processFailureScenarios: 'deploy/platform/phase1/recovery/process-failure-scenarios.v1.json',
@@ -126,13 +128,15 @@ const [baseline, matrix, compose, nginx, webDockerfile, prometheus, hostAlerts, 
   read(paths.identityReset),
 ]);
 const envs = Object.fromEntries(await Promise.all(Object.entries(environmentFiles).map(async ([name, path]) => [name, await read(path)])));
-const [otelLogs, deploymentTiers, runtimeInventory, availabilityTier, recoveryAttainment, clickhouseResourceLimits, processFailureScenarios, ownerSplitCompose, embeddedEnergy] = await Promise.all([
+const [otelLogs, deploymentTiers, runtimeInventory, availabilityTier, recoveryAttainment, clickhouseResourceLimits, clickhouseSystemLogs, clickhouseQueryLogProfile, processFailureScenarios, ownerSplitCompose, embeddedEnergy] = await Promise.all([
   read(paths.otelLogs),
   readJSON(paths.deploymentTiers),
   readJSON(paths.runtimeInventory),
   readJSON(paths.availabilityTier),
   readJSON(paths.recoveryAttainment),
   read(paths.clickhouseResourceLimits),
+  read(paths.clickhouseSystemLogs),
+  read(paths.clickhouseQueryLogProfile),
   readJSON(paths.processFailureScenarios),
   read(paths.ownerSplitCompose),
   read(paths.embeddedEnergy),
@@ -207,6 +211,7 @@ assert(JSON.stringify(runtimeInventory.sourceEntrypoints) === JSON.stringify(can
 assert(goServiceDockerfile.includes('COPY cmd ./cmd'), 'canonical Go image build must copy root cmd/ entrypoints');
 assert(clickhouseResourceLimits.includes('max_server_memory_usage') && clickhouseResourceLimits.includes('from_env="CLICKHOUSE_SERVER_MEMORY_USAGE"'), 'ClickHouse internal memory must be bound by the selected deployment tier');
 assert(compose.includes('./clickhouse/resource-limits.xml:/etc/clickhouse-server/config.d/resource-limits.xml:ro'), 'Compose must mount the ClickHouse internal resource limit');
+assert(clickhouseSystemLogs.includes('<ttl>event_date + INTERVAL 3 DAY DELETE</ttl>') && clickhouseQueryLogProfile.includes('<log_queries_min_type>QUERY_FINISH</log_queries_min_type>') && compose.includes('./clickhouse/query-log-profile.xml:/etc/clickhouse-server/users.d/query-log-profile.xml:ro'), 'ClickHouse query_log must keep three days and only finished or failed queries');
 assert(availabilityTier.schemaVersion === 1 && availabilityTier.currentTier === 'SINGLE_NODE_RECOVERABLE', 'availability tier contract must fix the current tier');
 const ownerSplitStage = availabilityTier.monolithToMultiInstancePath?.stages?.find((stage) => stage.id === 'stage-1');
 assert(ownerSplitStage?.state === 'implemented-runtime-drill-required' && ownerSplitStage.exitEvidence?.includes('same-version-live-contract-drill'), 'Stage 1 must remain implemented but uncertified until the live same-version drill');

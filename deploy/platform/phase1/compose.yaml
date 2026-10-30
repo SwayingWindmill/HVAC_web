@@ -901,6 +901,7 @@ services:
       - ./clickhouse/resource-limits.xml:/etc/clickhouse-server/config.d/resource-limits.xml:ro
       - ./clickhouse/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
       - ./clickhouse/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
+      - ./clickhouse/query-log-profile.xml:/etc/clickhouse-server/users.d/query-log-profile.xml:ro
       - ../../../infra/telemetry/clickhouse/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
