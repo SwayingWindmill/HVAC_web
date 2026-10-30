@@ -77,5 +77,11 @@
     },
     "approval": "DRAFT",
     "createdAt": "2026-10-11T16:47:21.47588Z"
+  },
+  "responseModel": {
+    "dailyEnergyDeltaKWhPerSupplyTempC": -60,
+    "zoneTempDeltaCPerSupplyTempC": 0.3,
+    "energyUncertaintyP90KWh": 20,
+    "zoneTempUncertaintyP90C": 0.2
   }
 }

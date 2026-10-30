@@ -218,14 +218,14 @@ func (preparer *Preparer) Prepare(ctx context.Context, request PreparationReques
 		return PreparedOptimization{}, fmt.Errorf("resolve Optimization preparation lineage: %w", err)
 	}
 	if definition.Objective != "COST" || definition.Horizon != "DAY_AHEAD" || definition.HorizonMinutes != 1440 || definition.Granularity != "15MIN" {
-		return PreparedOptimization{}, fmt.Errorf("%w: current HVAC solver requires COST DAY_AHEAD 1440-minute optimization at 15MIN granularity", ErrPreparationUnavailable)
+		return PreparedOptimization{}, unavailable(ReasonPolicyUnsupported, "current HVAC solver requires COST DAY_AHEAD 1440-minute optimization at 15MIN granularity")
 	}
 	policy, err := decodePolicyContract(definition.PolicyConstraints)
 	if err != nil {
-		return PreparedOptimization{}, fmt.Errorf("%w: Optimization policy mapping is unsupported: %v", ErrPreparationUnavailable, err)
+		return PreparedOptimization{}, unavailable(ReasonPolicyUnsupported, "Optimization policy mapping is unsupported: %v", err)
 	}
 	if len(policy.MaintenanceConstraints.OutOfService) != 0 || len(policy.ManualLocks.Resources) != 0 {
-		return PreparedOptimization{}, fmt.Errorf("%w: current HVAC solver cannot safely optimize while maintenance constraints or manual locks are active", ErrPreparationUnavailable)
+		return PreparedOptimization{}, unavailable(ReasonMaintenanceActive, "current HVAC solver cannot safely optimize while maintenance constraints or manual locks are active")
 	}
 	state, err := preparer.inputs.ReadOptimizationState(ctx, OptimizationStateQuery{
 		TenantID: request.TenantID, SiteID: request.SiteID, SubjectType: request.SubjectType, SubjectID: request.SubjectID,
@@ -233,18 +233,24 @@ func (preparer *Preparer) Prepare(ctx context.Context, request PreparationReques
 		Timezone: definition.SiteTimezone, At: capturedAt,
 	})
 	if err != nil {
-		return PreparedOptimization{}, fmt.Errorf("%w: read authoritative Optimization state: %v", ErrPreparationUnavailable, err)
+		if _, named := PreparationReasonOf(err); named {
+			return PreparedOptimization{}, err
+		}
+		return PreparedOptimization{}, unavailable(ReasonInputsUnreadable, "read authoritative Optimization state: %v", err)
 	}
 	currentState, err := freezeAuthoritativeState(state, policy.InputMapping, capturedAt)
 	if err != nil {
-		return PreparedOptimization{}, fmt.Errorf("%w: %v", ErrPreparationUnavailable, err)
+		return PreparedOptimization{}, err
 	}
 	constraints := HVACConstraints{
 		SupplyTempMinC: policy.Safety.SupplyTempMinC, SupplyTempMaxC: policy.Safety.SupplyTempMaxC,
 		ZoneTempMinC: policy.Comfort.ZoneTempMinC, ZoneTempMaxC: policy.Comfort.ZoneTempMaxC, MaxSupplyTempStep: policy.Safety.MaxSupplyTempStep,
 	}
 	if err := validateHVACExecutionInputs(currentState.Baseline, constraints, policy.ResponseModel); err != nil {
-		return PreparedOptimization{}, fmt.Errorf("%w: frozen Optimization inputs are invalid: %v", ErrPreparationUnavailable, err)
+		if errors.Is(err, errBaselineOutsideConstraints) {
+			return PreparedOptimization{}, unavailable(ReasonBaselineOutsideLimits, "%v", err)
+		}
+		return PreparedOptimization{}, unavailable(ReasonInputsInvalid, "frozen Optimization inputs are invalid: %v", err)
 	}
 	prepared := PreparedInput{
 		Trigger:  request.Trigger,
@@ -292,15 +298,17 @@ func decodePolicyContract(raw json.RawMessage) (policyContract, error) {
 
 func freezeAuthoritativeState(state AuthoritativeState, mapping InputMapping, at time.Time) (FrozenCurrentState, error) {
 	if err := validateEnergyEvidence(state.PricedDay, at); err != nil {
-		return FrozenCurrentState{}, err
+		return FrozenCurrentState{}, unavailable(ReasonPricedDayMissing, "%v", err)
 	}
-	for expectedKey, evidence := range map[string]TelemetryEvidence{mapping.SupplyTemperatureKey: state.SupplyTemperature, mapping.ZoneTemperatureKey: state.ZoneTemperature} {
-		if err := validateTelemetryEvidence(evidence, expectedKey, at); err != nil {
-			return FrozenCurrentState{}, err
-		}
+	// A reading that is not GOOD or not fresh is as unusable as no reading.
+	if err := validateTelemetryEvidence(state.SupplyTemperature, mapping.SupplyTemperatureKey, at); err != nil {
+		return FrozenCurrentState{}, unavailable(ReasonSupplyTempMissing, "%v", err)
+	}
+	if err := validateTelemetryEvidence(state.ZoneTemperature, mapping.ZoneTemperatureKey, at); err != nil {
+		return FrozenCurrentState{}, unavailable(ReasonZoneTempMissing, "%v", err)
 	}
 	if state.SupplyTemperature.Unit != "Cel" || state.ZoneTemperature.Unit != "Cel" {
-		return FrozenCurrentState{}, errors.New("authoritative Optimization inputs use unsupported units")
+		return FrozenCurrentState{}, unavailable(ReasonInputsInvalid, "authoritative Optimization inputs use unsupported units")
 	}
 	return FrozenCurrentState{
 		SchemaVersion: 1,

@@ -1,5 +1,6 @@
 import { queryOptions, useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
+import { gatewayPath, gatewayRequest, publishedValueOf, valueOf } from '@/api/gateway-client';
 import { intelligencePaths } from '@/api/generated/platformGateway.gen';
 import { createS2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
 import { listAlarms, type Alarm } from '@/features/alarms/alarm-api';
@@ -32,19 +33,16 @@ async function alarmsSince(siteId: string, from: Date, signal: AbortSignal): Pro
   return { alarms, complete: false };
 }
 
-const accept = { Accept: 'application/json, application/problem+json' };
-const sitePath = (template: string, siteId: string) => template.replace('{siteId}', siteId);
+const ARCHIVE_UNAVAILABLE = { unavailable: '报告存档暂不可用' };
 
 /** A month's latest snapshot, or null when the month has none. */
 export function monthlySnapshotQuery(siteId: string, month: string) {
   return queryOptions({
     queryKey: ['report-snapshot', siteId, month],
-    queryFn: async ({ signal }): Promise<StoredReport | null> => {
-      const response = await fetch(sitePath(intelligencePaths.siteMonthlyReport, siteId).replace('{month}', month), { credentials: 'same-origin', signal, headers: accept });
-      if (response.status === 404) return null;
-      if (!response.ok) throw new Error('报告存档暂不可用');
-      return (await response.json()) as StoredReport;
-    },
+    queryFn: async ({ signal }): Promise<StoredReport | null> => publishedValueOf(
+      await gatewayRequest<StoredReport>(gatewayPath(intelligencePaths.siteMonthlyReport, { siteId, month }), { signal }),
+      ARCHIVE_UNAVAILABLE,
+    ),
     retry: false,
   });
 }
@@ -53,11 +51,12 @@ export function monthlySnapshotQuery(siteId: string, month: string) {
 export function yearSnapshotsQuery(siteId: string, year: number) {
   return queryOptions({
     queryKey: ['report-snapshots', siteId, year],
-    queryFn: async ({ signal }): Promise<StoredReport[]> => {
-      const response = await fetch(`${sitePath(intelligencePaths.siteMonthlyReports, siteId)}?year=${year}`, { credentials: 'same-origin', signal, headers: accept });
-      if (!response.ok) throw new Error('报告存档暂不可用');
-      return ((await response.json()) as { items: StoredReport[] }).items;
-    },
+    queryFn: async ({ signal }): Promise<StoredReport[]> => valueOf(
+      await gatewayRequest(`${gatewayPath(intelligencePaths.siteMonthlyReports, { siteId })}?year=${year}`, {
+        signal, parse: (payload) => (payload as { items: StoredReport[] }).items,
+      }),
+      ARCHIVE_UNAVAILABLE,
+    ),
     retry: false,
   });
 }
