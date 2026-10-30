@@ -448,7 +448,7 @@ try {
   report.assertions.metricCounterWindow = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/metric',
-    'test', '-count=1', '-run', 'TestCounterDeltaTakesTheStepIntoTheWindow', '-v', './pkg/metric/...',
+    'test', '-count=1', '-run', 'TestCounterDeltaTakesTheStepIntoTheWindow|TestCounterDeltaSkipsTheStepAcrossAPointRevisionOrUnit', '-v', './pkg/metric/...',
   ], {
     env: {
       ...process.env,
@@ -574,6 +574,11 @@ try {
       report.assertions.boundedCounterDeltas[`${pointId}@${since}..${until}`] = bounded;
     }
   }
+  // The point filter must reach the observations key (015-energy-hourly-rollup.sql): filtered on
+  // the projected non-NULL point_id it could only prune by sampled_at and read every point's rows.
+  report.assertions.boundedCounterDeltasIndex = clickHouse(`EXPLAIN indexes = 1 SELECT count() FROM telemetry_history.counter_deltas_from(points = [toUUID('${resetCounterPointId}')], since = '2026-08-11 11:01:00.000', until = '2026-08-11 11:02:00.000')`);
+  const deltaKeys = report.assertions.boundedCounterDeltasIndex.split('PrimaryKey').slice(1).map((block) => /Keys:([\s\S]*?)Condition:/.exec(block)?.[1]?.trim() ?? '');
+  if (deltaKeys.length === 0 || deltaKeys.some((keys) => !keys.includes('point_id'))) throw new Error(`bounded Counter deltas do not filter points on the key: ${JSON.stringify(deltaKeys)}`);
 
   const metricId = '01990000-1500-7000-8000-000000000001';
   const metricVersionId = '01990000-1510-7000-8000-000000000001';
@@ -759,6 +764,20 @@ try {
   const primaryKeyCondition = /PrimaryKey\n[\s\S]*?Condition: (.*)/.exec(report.assertions.visibleIndexCondition)?.[1] ?? '';
   if (!primaryKeyCondition.includes('site_id') || !primaryKeyCondition.includes('period_end')) throw new Error(`visible facts read the whole table: PrimaryKey condition ${primaryKeyCondition || 'missing'}`);
 
+  // The hourly rollup holds the visible facts per hour (015-energy-hourly-rollup.sql): the correction
+  // above took its predecessor out of the Site total, and every fact projected so far is in its hour.
+  report.assertions.hourlyRollupCorrection = clickHouse(`SELECT toString(count()) || '|' || toString(sumIf(energy_kwh, accounting_scope = 'SITE')) || '|' || toString(sumIf(energy_kwh, accounting_scope = 'BRANCH')) || '|' || toString(sum(interval_count)) FROM analytics.energy_hourly WHERE tenant_id = toUUID('01990000-2a00-7000-8000-000000000001') AND site_id = toUUID('01990000-2a10-7000-8000-000000000001') FORMAT TSVRaw`);
+  if (report.assertions.hourlyRollupCorrection !== '1|0|6|1') throw new Error(`hourly rollup kept a corrected fact: ${report.assertions.hourlyRollupCorrection}`);
+  const hourlyKey = "tenant_id, site_id, point_id, hour, accounting_scope, energy_type, quality, ifNull(toString(load_device_id), '') AS load_device";
+  report.assertions.hourlyRollupDrift = clickHouse(`SELECT count() FROM (
+      SELECT ${hourlyKey}, sum(energy_kwh) AS energy, count() AS intervals FROM (SELECT *, toStartOfHour(period_end) AS hour FROM analytics.energy_interval_facts_visible) GROUP BY ALL
+    ) AS facts FULL OUTER JOIN (
+      SELECT ${hourlyKey}, energy_kwh AS energy, interval_count AS intervals FROM analytics.energy_hourly
+    ) AS rollup USING (tenant_id, site_id, point_id, hour, accounting_scope, energy_type, quality, load_device)
+    WHERE abs(facts.energy - rollup.energy) > 1e-6 OR facts.intervals != rollup.intervals FORMAT TSVRaw`);
+  if (report.assertions.hourlyRollupDrift !== '0') throw new Error(`hourly rollup differs from the visible facts in ${report.assertions.hourlyRollupDrift} hours`);
+  report.assertions.hourlyRollupFacts = clickHouse('SELECT toString(count()) FROM analytics.energy_interval_facts_visible FORMAT TSVRaw');
+
   const forecastJobId = '01990000-1700-7000-8000-000000000001';
   report.assertions.forecastSeriesTraceability = clickHouse(`SELECT
     toString(count()) || '|' || toString(min(horizon_minutes)) || '|' || toString(max(horizon_minutes)) || '|'
@@ -773,6 +792,7 @@ try {
   report.assertions.readerCannotSelectRaw = clickHouseMustFail('SELECT count() FROM telemetry_history.observations', 'analytics_projector_reader');
   report.assertions.historyQueryCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'telemetry_query_history_reader', '--query', 'SELECT count() FROM telemetry_history.observations']);
   report.assertions.cubeCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.energy_interval_facts']);
+  report.assertions.cubeCanSelectHourly = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.energy_hourly']);
   report.assertions.metricReaderCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'metric_engine_reader', '--query', 'SELECT count() FROM analytics.metric_result_facts']);
   report.assertions.cubeCanSelectMetric = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'cube_analytics_reader', '--query', 'SELECT count() FROM analytics.metric_result_facts']);
   report.assertions.forecastReaderCanSelect = run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'forecast_service_reader', '--query', 'SELECT count() FROM analytics.forecast_series']);

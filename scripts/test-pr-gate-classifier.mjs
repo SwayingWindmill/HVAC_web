@@ -53,6 +53,14 @@ test('telemetry changes select telemetry unit and durable integration profiles',
   assert.equal(classification.broad, false);
 });
 
+test('ClickHouse schema and Cube model changes run the analytics integration profile', () => {
+  for (const file of ['infra/telemetry/clickhouse/init/015-energy-hourly-rollup.sql', 'infra/telemetry/clickhouse/ops/backfill-energy-hourly-rollup.sh', 'semantic/cube/model/cubes/energy_facts.yml']) {
+    const classification = runClassification([file]);
+    assert.ok(classification.unitProfiles.includes('analytics'), `${file} skipped analytics units`);
+    assert.ok(classification.integrationProfiles.includes('analytics'), `${file} skipped analytics integration`);
+  }
+});
+
 test('domain module changes stay scoped to product domains', () => {
   for (const [file, unitProfile, integrationProfile] of [
     ['modules/connectivity/internal/adapter/runtime.go', 'telemetry', 'telemetry'],

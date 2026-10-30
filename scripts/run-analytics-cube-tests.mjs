@@ -326,6 +326,39 @@ try {
     throw new Error(`unexpected Cube COP ${JSON.stringify(cop)}`);
   }
 
+  // site_energy and equipment_energy read whole hours from the hourly rollup and single facts only for
+  // an hour the range cuts into (015-energy-hourly-rollup.sql); either way they must equal the facts.
+  const factTotals = (from, to, scope = 'SITE') => clickHouse(`SELECT concat(toString(round(sumIf(energy_kwh, quality = 'VALID'), 6)), '/', toString(countIf(quality = 'VALID')), '/', toString(countIf(quality = 'SUSPECT'))) FROM analytics.energy_interval_facts_visible WHERE site_id = '${siteId}' AND accounting_scope = '${scope}' AND energy_type = 'electricity' AND period_end >= parseDateTime64BestEffort('${from}', 3) AND period_end <= parseDateTime64BestEffort('${to}', 3)`);
+  const cubeTotals = async (from, to, view = 'site_energy') => {
+    const [row = {}] = (await queryCube(cubeToken(), {
+      measures: [`${view}.energy_valid_kwh`, `${view}.valid_count`, `${view}.suspect_count`],
+      filters: [{ member: `${view}.site_id`, operator: 'equals', values: [siteId] }, { member: `${view}.energy_type`, operator: 'equals', values: ['electricity'] }],
+      timeDimensions: [{ dimension: `${view}.period_end`, dateRange: [from, to] }],
+      timezone: 'UTC',
+      limit: 1,
+    })).data ?? [];
+    return `${Math.round(Number(row[`${view}.energy_valid_kwh`] ?? 0) * 1e6) / 1e6}/${Number(row[`${view}.valid_count`])}/${Number(row[`${view}.suspect_count`])}`;
+  };
+  const ranges = [
+    ['2026-07-29T12:00:00.000Z', '2026-07-29T13:59:59.999Z'],
+    ['2026-07-29T12:30:00.000Z', '2026-07-29T13:29:59.999Z'],
+    ['2026-07-29T12:58:00.000Z', '2026-07-29T13:05:00.000Z'],
+  ];
+  const checkRollup = async (stage) => {
+    for (const [from, to] of ranges) {
+      for (const [view, scope] of [['site_energy', 'SITE'], ['equipment_energy', 'BRANCH']]) {
+        const expected = factTotals(from, to, scope);
+        const actual = await cubeTotals(from, to, view);
+        if (actual !== expected) throw new Error(`${stage}: ${view} ${from}..${to} read ${actual}, facts hold ${expected}`);
+      }
+    }
+  };
+  await checkRollup('rollup');
+  // A correction replaces its predecessor in the rollup too: the next revision of one Site fact turns it suspect.
+  clickHouse(`INSERT INTO analytics.energy_interval_facts SELECT * REPLACE (generateUUIDv4() AS fact_id, fact_revision + 1 AS fact_revision, 'SUSPECT' AS quality, energy_kwh + 1 AS energy_kwh, now64(3) AS projected_at) FROM (SELECT * FROM analytics.energy_interval_facts WHERE site_id = '${siteId}' AND accounting_scope = 'SITE' AND energy_type = 'electricity' AND fact_revision = 0 ORDER BY period_end LIMIT 1)`);
+  await checkRollup('corrected rollup');
+  report.assertions.hourlyRollup = ranges.map(([from, to]) => `${from}..${to}=${factTotals(from, to)}`);
+
   // The Operations Agent's semantic query (#573): several measures of one view, cut to the queried Site.
   report.assertions.semanticQuery = run(process.execPath, [
     'scripts/run-isolated-go.mjs',

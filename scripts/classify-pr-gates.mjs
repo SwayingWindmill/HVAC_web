@@ -195,6 +195,9 @@ for (const file of files) {
   match(file.startsWith('apps/hvac-miniprogram/'), () => selectWeb(file, 'WeChat mini program changed'));
   // The Agent's semantic query whitelist is generated from the Cube model (#573).
   match(file.startsWith('semantic/cube/') || file === 'libs/analyticsmodel/semantic_catalog.json' || file === 'scripts/generate-semantic-catalog.mjs', () => add(contractProfiles, ['core']));
+  // The Cube model and the ClickHouse schema only run against each other in the analytics
+  // integration profile (run-analytics-history-tests.mjs, run-analytics-cube-tests.mjs).
+  match(file.startsWith('semantic/cube/') || file.startsWith('infra/telemetry/clickhouse/'), () => selectAnalytics(file, 'analytics ClickHouse schema or Cube model changed', { integration: true }));
   match(file.startsWith('contracts/'), () => {
     add(contractProfiles, ['core']);
     if (file.includes('operations-agent') || file.includes('operations-investigation')) {

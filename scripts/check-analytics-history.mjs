@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
@@ -21,6 +21,8 @@ const [
   integration,
   cubeIntegration,
   ownership,
+  hourlyDDL,
+  hourlyBackfill,
 ] = await Promise.all([
   read('infra/telemetry/clickhouse/init/002-analytics-energy-interval.sql'),
   read('infra/telemetry/clickhouse/init/001-telemetry-history.sql'),
@@ -38,6 +40,8 @@ const [
   read('scripts/run-analytics-history-tests.mjs'),
   read('scripts/run-analytics-cube-tests.mjs'),
   read('contracts/ownership/data-ownership.v1.json'),
+  read('infra/telemetry/clickhouse/init/015-energy-hourly-rollup.sql'),
+  read('infra/telemetry/clickhouse/ops/backfill-energy-hourly-rollup.sh'),
 ]);
 
 for (const marker of [
@@ -76,6 +80,27 @@ assert(ddl.includes('GRANT INSERT ON analytics.energy_interval_facts TO analytic
 assert(ddl.includes('GRANT SELECT ON analytics.energy_interval_facts TO cube_analytics_reader'), 'Cube must use a read-only analytics identity');
 assert(ddl.includes('GRANT SELECT ON telemetry_history.observations TO telemetry_query_history_reader'), 'Telemetry Query Service must use a raw-history read-only identity');
 
+// 015: the hourly rollup follows every fact revision through two materialized views, and the
+// bounded counter deltas filter points on the observations key.
+for (const marker of [
+  'raw.point_id IN {points:Array(UUID)}',
+  'analytics.energy_hourly_states',
+  'ENGINE = AggregatingMergeTree',
+  'analytics.energy_facts_to_hourly',
+  'analytics.energy_fact_corrections_to_hourly',
+  'prior.fact_revision + 1 = correction.fact_revision',
+  'HAVING interval_count != 0',
+  'GRANT SELECT ON analytics.energy_hourly TO cube_analytics_reader',
+]) {
+  assert(hourlyDDL.includes(marker), `missing hourly rollup DDL marker ${marker}`);
+}
+// The ClickHouse entrypoint runs every init script, so an operations script there would run on a fresh volume.
+assert(!(await readdir(resolve(root, 'infra/telemetry/clickhouse/init'))).some((name) => !name.endsWith('.sql')), 'only SQL belongs in the ClickHouse init directory');
+for (const marker of ['--resume', '--verify', 'insert_deduplication_token', 'energy_interval_facts_visible', 'telemetry-worker']) {
+  assert(hourlyBackfill.includes(marker), `missing hourly rollup backfill marker ${marker}`);
+}
+assert(cubeModel.includes('FROM analytics.energy_hourly') && cubeModel.includes('interval_count'), 'Site and equipment energy must read whole hours from the hourly rollup');
+
 for (const marker of [
   'counter_deltas',
   'BindingResolver',
@@ -113,11 +138,12 @@ for (const marker of ['buildMetadataQuery', 'maximumCubeQueryDuration', 'Add(-ti
 for (const marker of ['analytics-read-model-projector:', 'analytics_projector_reader', 'analytics_projector_writer', ':19089']) {
   assert(compose.includes(marker), `missing analytics compose marker ${marker}`);
 }
-for (const marker of ['TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently', 'TestLateCounterObservationCorrectsSuccessorFactFromCheckpoint', 'TestClickHouseHistoryClientQueriesBoundedRealProjection', 'deviceHistoryQuery', "factCount !== '3'", 'readerCanSelectCanonical', 'readerCannotSelectRaw', 'historyQueryCanSelect', 'historyQueryCannotInsert', 'historyQueryCannotSelectAnalytics', 'readerCannotInsert', 'writerCannotSelect', 'cubeCannotInsert']) {
+for (const marker of ['TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently', 'TestLateCounterObservationCorrectsSuccessorFactFromCheckpoint', 'TestClickHouseHistoryClientQueriesBoundedRealProjection', 'deviceHistoryQuery', "factCount !== '3'", 'readerCanSelectCanonical', 'readerCannotSelectRaw', 'historyQueryCanSelect', 'historyQueryCannotInsert', 'historyQueryCannotSelectAnalytics', 'readerCannotInsert', 'writerCannotSelect', 'cubeCannotInsert', 'boundedCounterDeltasIndex', 'hourlyRollupCorrection', 'hourlyRollupDrift', 'cubeCanSelectHourly']) {
   assert(integration.includes(marker), `missing analytics integration marker ${marker}`);
 }
 for (const marker of [
   'deniedSiteRows',
+  'corrected rollup',
   'randomBytes(32)',
   "CUBEJS_DB_HOST: 'clickhouse'",
   "CUBEJS_DB_PORT: '8123'",
