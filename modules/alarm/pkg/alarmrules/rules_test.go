@@ -2,6 +2,7 @@ package alarmrules
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -39,10 +40,11 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		}
 		byTitle[policy.Title] = policy
 	}
-	// The supply-temperature rule, 网关上报中断, one 读数长时间没有更新 per device with an active
+	// The supply-temperature rule, the five plant rules added 2026-10-31 (供水偏高、供水过低、房间过热、
+	// 冷却水出水过高、机组运行无流量), 网关上报中断, one 读数长时间没有更新 per device with an active
 	// point (13, the cooling tower has none) and one 一动不动 per temperature a device reads itself
 	// (16 channels of the temperature module: t8 has no probe since #614, t14 since 2026-10-29; the cooling meter's 2).
-	if len(byTitle) != 32 {
+	if len(byTitle) != 37 {
 		t.Fatalf("got %d rules: %v", len(byTitle), keys(byTitle))
 	}
 
@@ -273,6 +275,111 @@ func TestSongyaxuanRulesRaiseAndClearAsTheirWordingSays(t *testing.T) {
 	if again := evaluate(t, silent, "g-2", readings(start.Add(20*time.Minute)), recovered(back.State), start.Add(35*time.Minute)); again.Effect != alarmservice.EvaluationEffectPublish {
 		t.Fatalf("a second silence right after a clear did not raise: %#v", again)
 	}
+}
+
+// The plant rules added 2026-10-31 against policy v3 (supply 5–8 ℃, comfort 22–26 ℃): each raises
+// only after its duration with a chiller running, ignores implausible readings, and clears as worded.
+func TestSongyaxuanPlantRulesRaiseAndClearAsTheirWordingSays(t *testing.T) {
+	compiled, err := Load(songyaxuanRules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 10, 31, 4, 0, 0, 0, time.UTC)
+	const (
+		btu  = "01a14000-4000-7000-8000-000000000009/"
+		room = "01a14000-4000-7000-8000-00000000000d/room_temperature"
+		flow = "01a14000-4000-7000-8000-000000000002/flow_meter"
+		c    = "01a14000-4000-7000-8000-000000000005/"
+		d    = "01a14000-4000-7000-8000-000000000006/"
+	)
+	// plant is the readings at one moment: chiller C running unless stopped, the rest stopped.
+	plant := func(at time.Time, running bool, values map[string]float64) map[string]alarmservice.InputFact {
+		observed := at.Format(time.RFC3339Nano)
+		facts := map[string]alarmservice.InputFact{}
+		for key, value := range values {
+			facts[key] = alarmservice.NumberInput(key, value, "GOOD", observed)
+		}
+		for _, device := range []string{"03", "04", "05", "06"} {
+			key := "01a14000-4000-7000-8000-0000000000" + device + "/run_state"
+			state := "STOPPED"
+			if running && device == "05" {
+				state = "RUNNING"
+			}
+			facts[key] = alarmservice.StringInput(key, state, "GOOD", observed)
+		}
+		return facts
+	}
+	type step struct {
+		after   time.Duration
+		running bool
+		values  map[string]float64
+		effect  alarmservice.EvaluationEffect
+	}
+	run := func(title string, steps []step) {
+		t.Helper()
+		policy := published(t, compiled, title)
+		state := alarmservice.AlarmEvaluationState{}
+		for index, current := range steps {
+			at := start.Add(current.after)
+			decision := evaluate(t, policy, fmt.Sprintf("%s-%d", title, index), plant(at, current.running, current.values), state, at)
+			if decision.Effect != current.effect {
+				t.Fatalf("%s step %d (%v): got %s, want %s", title, index, current.after, decision.Effect, current.effect)
+			}
+			state = decision.State
+			if decision.Effect == alarmservice.EvaluationEffectPublish {
+				state = active(state)
+			}
+		}
+	}
+	none, raise, clear := alarmservice.EvaluationEffectNone, alarmservice.EvaluationEffectPublish, alarmservice.EvaluationEffectClear
+
+	// 房间温度过高: 28.6 ℃ (the reading on 2026-10-31) for an hour with a chiller running raises; a
+	// 176.8 ℃ spike is not a reading; 27.5 ℃ is not yet recovered, 26.8 ℃ is.
+	run("房间温度过高", []step{
+		{0, true, map[string]float64{room: 176.8}, none},
+		{time.Minute, true, map[string]float64{room: 28.6}, none},
+		{61 * time.Minute, true, map[string]float64{room: 28.6}, raise},
+		{62 * time.Minute, true, map[string]float64{room: 27.5}, none},
+		{63 * time.Minute, true, map[string]float64{room: 26.8}, clear},
+	})
+	// …and a warm room with every chiller stopped is not raised.
+	run("房间温度过高", []step{
+		{0, false, map[string]float64{room: 30}, none},
+		{2 * time.Hour, false, map[string]float64{room: 30}, none},
+	})
+	// 冷冻水供水温度高于设定范围: 45 minutes above 8.5 ℃; a start-up pull-down shorter than that is not.
+	supply := btu + "supply_water_temperature"
+	run("冷冻水供水温度高于设定范围", []step{
+		{0, true, map[string]float64{supply: 9.2}, none},
+		{30 * time.Minute, true, map[string]float64{supply: 6}, none},
+		{31 * time.Minute, true, map[string]float64{supply: 9}, none},
+		{76 * time.Minute, true, map[string]float64{supply: 9}, raise},
+		{77 * time.Minute, true, map[string]float64{supply: 7.9}, clear},
+	})
+	// 冷冻水供水温度过低: 15 minutes below 4 ℃; clears above 4.5 ℃ or when every chiller stops.
+	run("冷冻水供水温度过低", []step{
+		{0, true, map[string]float64{supply: 3.8}, none},
+		{15 * time.Minute, true, map[string]float64{supply: 3.8}, raise},
+		{16 * time.Minute, true, map[string]float64{supply: 4.3}, none},
+		{17 * time.Minute, false, map[string]float64{supply: 4.3}, clear},
+	})
+	// 冷却水出水温度过高: only the running chiller's condenser counts.
+	run("冷却水出水温度过高", []step{
+		{0, true, map[string]float64{c + "cw_leaving_temperature": 37.5, d + "cw_leaving_temperature": 25}, none},
+		{15 * time.Minute, true, map[string]float64{c + "cw_leaving_temperature": 37.5, d + "cw_leaving_temperature": 25}, raise},
+		{16 * time.Minute, true, map[string]float64{c + "cw_leaving_temperature": 34.5, d + "cw_leaving_temperature": 25}, clear},
+	})
+	run("冷却水出水温度过高", []step{
+		{0, true, map[string]float64{c + "cw_leaving_temperature": 30, d + "cw_leaving_temperature": 40}, none},
+		{30 * time.Minute, true, map[string]float64{c + "cw_leaving_temperature": 30, d + "cw_leaving_temperature": 40}, none},
+	})
+	// 机组运行但冷冻水没有流量: 5 minutes under 100 m³/h with a chiller running.
+	run("机组运行但冷冻水没有流量", []step{
+		{0, true, map[string]float64{flow: 0}, none},
+		{5 * time.Minute, true, map[string]float64{flow: 0}, raise},
+		{6 * time.Minute, true, map[string]float64{flow: 150}, none},
+		{7 * time.Minute, true, map[string]float64{flow: 489}, clear},
+	})
 }
 
 func published(t *testing.T, compiled Compiled, title string) alarmservice.AlarmPolicyRevision {
