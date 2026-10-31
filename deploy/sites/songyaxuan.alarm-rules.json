@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩的告警规则（#609）。读数写成「设备代码/点位代码」，代码见 songyaxuan.site.json。发布：modules/alarm/cmd/alarm-rules。机组电表上的「冷冻水出水温度」和总管供水对不上（C、D 机组运行时显示 28–32 ℃，总管供水 6 ℃），所以供水温度看冷量计的总管供水，不看各台机组。",
+  "note": "松雅轩的告警规则（#609）。读数写成「设备代码/点位代码」，代码见 songyaxuan.site.json。发布：modules/alarm/cmd/alarm-rules。机组电表上的「冷冻水出水温度」和总管供水对不上（C、D 机组运行时显示 28–32 ℃，总管供水 6 ℃），所以供水温度看冷量计的总管供水，不看各台机组。2026-10-31 按运行策略 v3（供水 5–8 ℃、室温 22–26 ℃）和 7 天数据补了供水偏高、供水过低、房间过热、冷却水出水过高、机组运行无流量五条；门槛是按数据估的，待现场确认。",
   "siteFile": "songyaxuan.site.json",
   "rules": [
     {
@@ -31,6 +31,214 @@
         "kind": "OR",
         "children": [
           { "kind": "COMPARE", "input": "btu-calc/supply_water_temperature", "operator": "LT", "value": { "type": "NUMBER", "number": 9 } },
+          {
+            "kind": "AND",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "code": "chilled-water-supply-above-policy",
+      "title": "冷冻水供水温度高于设定范围",
+      "summary": "有机组在运行，冷冻水总管供水温度高于 8.5 ℃ 已持续 45 分钟（运行策略的供水范围是 5–8 ℃），可能是负荷大、机组出力不够或设定被改动。降到 8 ℃ 以下或机组全部停机后自动恢复。高于 10 ℃ 另有「冷冻水供水温度过高」。",
+      "severity": "WARNING",
+      "qualityPolicy": "VALID_ONLY",
+      "freshnessSeconds": 900,
+      "triggerMode": "DURATION",
+      "durationSeconds": 2700,
+      "raise": {
+        "kind": "AND",
+        "children": [
+          {
+            "kind": "OR",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } }
+            ]
+          },
+          { "kind": "COMPARE", "input": "btu-calc/supply_water_temperature", "operator": "GT", "value": { "type": "NUMBER", "number": 8.5 } }
+        ]
+      },
+      "clear": {
+        "kind": "OR",
+        "children": [
+          { "kind": "COMPARE", "input": "btu-calc/supply_water_temperature", "operator": "LT", "value": { "type": "NUMBER", "number": 8 } },
+          {
+            "kind": "AND",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "code": "chilled-water-supply-low",
+      "title": "冷冻水供水温度过低",
+      "summary": "有机组在运行，冷冻水总管供水温度低于 4 ℃ 已持续 15 分钟（运行策略的下限是 5 ℃），蒸发器有结冰保护停机的风险，请检查机组出水设定。升到 4.5 ℃ 以上或机组全部停机后自动恢复。",
+      "severity": "WARNING",
+      "qualityPolicy": "VALID_ONLY",
+      "freshnessSeconds": 900,
+      "triggerMode": "DURATION",
+      "durationSeconds": 900,
+      "raise": {
+        "kind": "AND",
+        "children": [
+          {
+            "kind": "OR",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } }
+            ]
+          },
+          { "kind": "COMPARE", "input": "btu-calc/supply_water_temperature", "operator": "LT", "value": { "type": "NUMBER", "number": 4 } }
+        ]
+      },
+      "clear": {
+        "kind": "OR",
+        "children": [
+          { "kind": "COMPARE", "input": "btu-calc/supply_water_temperature", "operator": "GT", "value": { "type": "NUMBER", "number": 4.5 } },
+          {
+            "kind": "AND",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "code": "room-temperature-high",
+      "title": "房间温度过高",
+      "summary": "有机组在运行，房间温度高于 28 ℃ 已持续 1 小时（舒适范围 22–26 ℃），供冷可能不够。降到 27 ℃ 以下或机组全部停机后自动恢复。高于 60 ℃ 的读数当作测点异常，不算。",
+      "severity": "WARNING",
+      "qualityPolicy": "VALID_ONLY",
+      "freshnessSeconds": 900,
+      "triggerMode": "DURATION",
+      "durationSeconds": 3600,
+      "raise": {
+        "kind": "AND",
+        "children": [
+          {
+            "kind": "OR",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } }
+            ]
+          },
+          { "kind": "RANGE", "input": "room/room_temperature", "minimum": 28, "maximum": 60 }
+        ]
+      },
+      "clear": {
+        "kind": "OR",
+        "children": [
+          { "kind": "RANGE", "input": "room/room_temperature", "minimum": -50, "maximum": 27 },
+          {
+            "kind": "AND",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "code": "condenser-leaving-high",
+      "title": "冷却水出水温度过高",
+      "summary": "C 或 D 机组运行时，它的冷却水出水温度（冷凝出）高于 37 ℃ 已持续 15 分钟，冷凝压力偏高，机组可能高压保护停机，请检查冷却塔和冷却水泵。运行中的机组都降到 35 ℃ 以下或停机后自动恢复。通道按数据判定，待现场核对（#614）。",
+      "severity": "MAJOR",
+      "qualityPolicy": "VALID_ONLY",
+      "freshnessSeconds": 900,
+      "triggerMode": "DURATION",
+      "durationSeconds": 900,
+      "raise": {
+        "kind": "OR",
+        "children": [
+          {
+            "kind": "AND",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid3/cw_leaving_temperature", "operator": "GT", "value": { "type": "NUMBER", "number": 37 } }
+            ]
+          },
+          {
+            "kind": "AND",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid4/cw_leaving_temperature", "operator": "GT", "value": { "type": "NUMBER", "number": 37 } }
+            ]
+          }
+        ]
+      },
+      "clear": {
+        "kind": "AND",
+        "children": [
+          {
+            "kind": "OR",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid3/cw_leaving_temperature", "operator": "LT", "value": { "type": "NUMBER", "number": 35 } }
+            ]
+          },
+          {
+            "kind": "OR",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid4/cw_leaving_temperature", "operator": "LT", "value": { "type": "NUMBER", "number": 35 } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "code": "chilled-water-no-flow",
+      "title": "机组运行但冷冻水没有流量",
+      "summary": "有机组在运行，总冷冻水流量低于 100 m³/h 已持续 5 分钟（正常约 490 m³/h），可能是冷冻水泵停了或阀门关着，蒸发器有结冰风险，请马上到机房查看。流量回到 200 m³/h 以上或机组全部停机后自动恢复。",
+      "severity": "MAJOR",
+      "qualityPolicy": "VALID_ONLY",
+      "freshnessSeconds": 900,
+      "triggerMode": "DURATION",
+      "durationSeconds": 300,
+      "raise": {
+        "kind": "AND",
+        "children": [
+          {
+            "kind": "OR",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } }
+            ]
+          },
+          { "kind": "COMPARE", "input": "flow-uid10/flow_meter", "operator": "LT", "value": { "type": "NUMBER", "number": 100 } }
+        ]
+      },
+      "clear": {
+        "kind": "OR",
+        "children": [
+          { "kind": "COMPARE", "input": "flow-uid10/flow_meter", "operator": "GT", "value": { "type": "NUMBER", "number": 200 } },
           {
             "kind": "AND",
             "children": [
