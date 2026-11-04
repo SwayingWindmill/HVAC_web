@@ -6,6 +6,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/quanlaihe/hvac-web/libs/alarmmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
+	github.com/quanlaihe/hvac-web/libs/nameplate v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/workloadtls v0.0.0
 	github.com/quanlaihe/hvac-web/modules/telemetry v0.0.0
@@ -16,11 +17,13 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/quanlaihe/hvac-web/libs/grant v0.0.0 // indirect
-	golang.org/x/sync v0.17.0 // indirect
-	golang.org/x/text v0.29.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 )
 
 replace github.com/quanlaihe/hvac-web/libs/alarmmodel => ../../libs/alarmmodel
+
+replace github.com/quanlaihe/hvac-web/libs/nameplate => ../../libs/nameplate
 
 replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identitycontext
 

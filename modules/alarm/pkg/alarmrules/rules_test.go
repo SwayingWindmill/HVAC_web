@@ -41,9 +41,10 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		byTitle[policy.Title] = policy
 	}
 	// The supply-temperature rule, the five plant rules added 2026-10-31, 网关上报中断, one
-	// 读数长时间没有更新 per device with an active point (13), and the data-quality rules
-	// from each point's quality profile (a copied point is not alarmed again).
-	if len(byTitle) != 71 {
+	// 读数长时间没有更新 per device with an active point (13), the data-quality rules
+	// from each point's quality profile (a copied point is not alarmed again), and the
+	// physics checks in the site file that carry an alarm (12).
+	if len(byTitle) != 83 {
 		t.Fatalf("got %d rules: %v", len(byTitle), keys(byTitle))
 	}
 
@@ -88,6 +89,18 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	}
 	if !strings.Contains(flat.Summary, "温度采集模块的室外温度（通道 13）连续 180 分钟") {
 		t.Fatalf("channel 13 flat-reading rule is not said plainly: %q", flat.Summary)
+	}
+	power, ok := byTitle["C 机组功率超过铭牌"]
+	if !ok || power.Severity != "MAJOR" || !reflect.DeepEqual(power.Raise.Reasons, []string{"PHYSICS_POWER"}) {
+		t.Fatalf("chiller C nameplate power rule: %#v", power)
+	}
+	wetBulb, ok := byTitle["室外湿球温度不像湿球"]
+	if !ok || wetBulb.Severity != "MAJOR" || !reflect.DeepEqual(wetBulb.Raise.Reasons, []string{"PHYSICS_WET_BULB_CONDENSER"}) {
+		t.Fatalf("wet-bulb rule: %#v", wetBulb)
+	}
+	pumps, ok := byTitle["冷冻水泵在跑但没有机组运行"]
+	if !ok || pumps.Severity != "WARNING" || pumps.TriggerMode != "DURATION" || pumps.DurationSeconds != 600 {
+		t.Fatalf("pump-without-chiller rule: %#v", pumps)
 	}
 	supplyHealth, ok := byTitle["总冷冻水供水温度数据不可信"]
 	if !ok || supplyHealth.Severity != "MAJOR" || supplyHealth.Raise.Kind != "REASONS" {

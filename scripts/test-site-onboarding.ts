@@ -106,6 +106,55 @@ test('songyaxuan outdoor temperature carries its quality profile into the freshn
   assert.doesNotMatch(inactive, /38\.4/);
 });
 
+test('a confirmed chiller nameplate is written and an unconfirmed pump power is not', () => {
+  const profile = copy(songyaxuan);
+  for (const asset of profile.assets) delete asset.nameplate;
+  profile.physicsChecks = [];
+  profile.nameplateCatalog = {
+    hitachi: { manufacturer: '日立', model: 'RCU180SC2', year: 2007, refrigerant: 'R22', ratedCapacityKw: 572, ratedPowerKw: 127.5, ratedCurrentA: 225 },
+    pump: { manufacturer: '凯泉', speed: 'FIXED', role: 'UNKNOWN', unconfirmed: ['role', 'ratedPowerKw'], candidates: [{ model: 'YE3-180L-4', ratedPowerKw: 22, efficiency: 0.93 }] },
+  };
+  profile.assets.find((asset) => asset.code === 'chiller-c').nameplate = 'hitachi';
+  profile.assets.find((asset) => asset.code === 'chwp-1').nameplate = 'pump';
+  profile.physicsChecks = [{
+    code: 'chiller-c-power', kind: 'POWER_NAMEPLATE', asset: 'chiller-c', aboveRatedFraction: 0.15,
+    subject: { device: 'meter-uid3', point: 'power_total' },
+    alarm: { title: 'C 机组功率超过铭牌', summary: 'C 机组电表功率超过铭牌输入功率 127.5 kW 的 15%。', severity: 'MAJOR' },
+  }];
+  assert.deepEqual(checkSiteFile(profile, songyaxuanAlarmRules), []);
+  const { registry, telemetry } = buildOnboardingSql(profile);
+  const chiller = registry.split('\n').find((line) => line.includes("'chiller-c'"));
+  const pump = registry.split('\n').find((line) => line.includes("'chwp-1'"));
+  assert.match(chiller ?? '', /, 572, 127\.5, '日立', 'RCU180SC2', /);
+  assert.match(pump ?? '', /clock_timestamp\(\), clock_timestamp\(\), '[^']+', NULL, NULL, '凯泉', NULL, /);
+  assert.match(pump ?? '', /"unconfirmed":\["role","ratedPowerKw"\]/);
+  const power = telemetry.split('\n').find((line) => line.startsWith("('01a14000-4000-7000-8000-000000000005', 'power_total'"));
+  assert.match(power ?? '', /"kind":"POWER_NAMEPLATE"/);
+  assert.match(power ?? '', /"ratedPowerKw":127\.5/);
+  assert.match(power ?? '', /"aboveRatedFraction":0\.15/);
+});
+
+test('songyaxuan nameplates are the photographed plates and the pump motors stay unassigned', () => {
+  const { registry, telemetry } = buildOnboardingSql(songyaxuan);
+  for (const code of ['chiller-a', 'chiller-b', 'chiller-c', 'chiller-d']) {
+    const line = registry.split('\n').find((row) => row.includes(`'${code}'`));
+    assert.match(line ?? '', /, 572, 127\.5, '日立', 'RCU180SC2',/);
+  }
+  for (const code of ['chwp-1', 'chwp-2', 'chwp-3', 'chwp-4', 'cwp-1', 'cwp-2', 'cwp-3', 'cwp-4']) {
+    const line = registry.split('\n').find((row) => row.includes(`'${code}'`));
+    assert.match(line ?? '', /NULL, NULL, '凯泉', NULL/);
+    assert.match(line ?? '', /"role":"UNKNOWN"/);
+  }
+  const wet = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000001', 't15'"));
+  assert.match(wet ?? '', /WET_BULB_DRY_BULB/);
+  assert.match(wet ?? '', /WET_BULB_CONDENSER/);
+  const copied = telemetry.split('\n').find((row) => row.includes("'ambient_wet_bulb_temperature'"));
+  assert.match(copied ?? '', /WET_BULB_DRY_BULB/);
+  const cooling = telemetry.split('\n').find((row) => row.includes("'instant_cooling_capacity'"));
+  assert.match(cooling ?? '', /COP_CARNOT/);
+  assert.doesNotMatch(cooling ?? '', /HEAT_BALANCE/);
+});
+
 test('point status defaults to ACTIVE and rejects unknown values', () => {
   assert.equal(pointStatus({ code: 'a' }), 'ACTIVE');
   assert.equal(pointStatus({ code: 'a', status: 'INACTIVE' }), 'INACTIVE');
