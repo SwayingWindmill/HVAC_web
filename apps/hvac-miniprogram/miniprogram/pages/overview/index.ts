@@ -5,7 +5,7 @@ import { currentSite, siteById, type Site } from '../../lib/site';
 import { energySeries, recentDays } from '../../lib/energy';
 import { loadPlant } from '../../lib/plant-load';
 import { whileShown } from '../../lib/refresh';
-import { presentPlantNow } from '../../lib/run';
+import { hourlyCop, hourlyElectricity, presentPlantNow } from '../../lib/run';
 import { compareWithYesterday, sameHoursWindows, summarize, todayStart } from '../../lib/today';
 import { monthToDate, savingsCard, type Measure, type SavingsTotals } from '../../lib/savings';
 import { presentOverview, type OverviewInputs, type Recommendation } from '../../lib/overview';
@@ -15,8 +15,19 @@ import { selectTab, showAttention } from '../../lib/tab';
 
 const refresher = whileShown(60_000);
 
-/** Today against yesterday up to the same time of day, read the way the web overview reads it. */
-async function loadEnergy(site: Site, start: string, now: Date): Promise<OverviewInputs['energy']> {
+/** Today's electricity by the hour against yesterday's, and today's efficiency by the hour. */
+interface Charts {
+  readonly electricity: ReturnType<typeof hourlyElectricity>;
+  readonly cop: ReturnType<typeof hourlyCop>;
+}
+
+type Energy = { readonly energy: OverviewInputs['energy']; readonly charts: Charts | null };
+
+/**
+ * Today against yesterday up to the same time of day, read the way the web overview reads it; the
+ * same hourly readings draw the charts, so they need no request of their own.
+ */
+async function loadEnergy(site: Site, start: string, now: Date): Promise<Energy> {
   const windows = sameHoursWindows(start, now);
   const [todayElectricity, todayCooling, yesterdayElectricity, yesterdayCooling] = await Promise.all([
     energySeries(site, 'electricity', 'hour', windows.today),
@@ -25,7 +36,10 @@ async function loadEnergy(site: Site, start: string, now: Date): Promise<Overvie
     energySeries(site, 'cooling', 'hour', windows.yesterday),
   ]);
   const today = summarize(todayElectricity, todayCooling);
-  return { status: 'ok', today, change: compareWithYesterday(today, summarize(yesterdayElectricity, yesterdayCooling)) };
+  return {
+    energy: { status: 'ok', today, change: compareWithYesterday(today, summarize(yesterdayElectricity, yesterdayCooling)) },
+    charts: { electricity: hourlyElectricity(todayElectricity, yesterdayElectricity, start, now), cop: hourlyCop(todayElectricity, todayCooling, start, now) },
+  };
 }
 
 const NOTHING_SAVED: SavingsTotals = { days: 0, avoidedKWh: 0, avoidedCost: 0, plantKWh: 0 };
@@ -66,19 +80,20 @@ async function load(site: Site) {
   // No electricity reading in the last two days leaves no day to compare.
   const start = days.status === 'fulfilled' ? todayStart(days.value, now) : null;
   const [energy, savings] = await Promise.allSettled([
-    start === null ? Promise.resolve<OverviewInputs['energy']>(days.status === 'fulfilled' ? { status: 'empty' } : { status: 'error' }) : loadEnergy(site, start, now),
+    start === null ? Promise.resolve<Energy>({ energy: days.status === 'fulfilled' ? { status: 'empty' } : { status: 'error' }, charts: null }) : loadEnergy(site, start, now),
     loadSavings(site, start),
   ]);
   const inputs: OverviewInputs = {
     savings: settled<OverviewInputs['savings']>(savings, { status: 'error' }),
     recommendation: settled<OverviewInputs['recommendation']>(recommendation, { status: 'error' }),
-    energy: settled<OverviewInputs['energy']>(energy, { status: 'error' }),
+    energy: energy.status === 'fulfilled' ? energy.value.energy : { status: 'error' },
     alarms: alarms.status === 'fulfilled' ? { status: 'ok', active: alarms.value.alarms.length, complete: alarms.value.complete, waiting: waitingCount(alarms.value.alarms) } : { status: 'error' },
   };
   // The 通知 tab counts the alarms happening with no one on them; a failed read leaves the last count.
   const waiting = inputs.alarms.status === 'ok' ? inputs.alarms.waiting : null;
   // The plant card stays off a Site without registered devices, and says so when it cannot be read.
-  return { inputs, waiting, plant: plant.status === 'fulfilled' ? { failed: false, now: presentPlantNow(plant.value) } : { failed: true, now: null } };
+  const charts = energy.status === 'fulfilled' ? energy.value.charts : null;
+  return { inputs, waiting, charts, plant: plant.status === 'fulfilled' ? { failed: false, now: presentPlantNow(plant.value) } : { failed: true, now: null } };
 }
 
 const siteName = async (id: string) => (await siteById(id))?.displayName ?? null;
@@ -94,6 +109,7 @@ Page({
     failed: false,
     view: null as ReturnType<typeof presentOverview> | null,
     plant: { failed: false, now: null } as { failed: boolean; now: ReturnType<typeof presentPlantNow> },
+    charts: null as Charts | null,
     daily: null as ReminderRow | null,
     /** The Site 多收一天 adds a morning for: read with the row, so the tap opens WeChat's dialog at once. */
     dailySiteId: '',
@@ -153,9 +169,9 @@ Page({
         this.setData({ loading: false, noSite: true });
         return;
       }
-      const { inputs, plant, waiting } = await load(site);
+      const { inputs, plant, waiting, charts } = await load(site);
       if (waiting !== null) showAttention(this, waiting);
-      this.setData({ siteName: site.displayName, updatedAt: clock(new Date()), loading: false, noSite: false, failed: false, view: presentOverview(inputs), plant });
+      this.setData({ siteName: site.displayName, updatedAt: clock(new Date()), loading: false, noSite: false, failed: false, view: presentOverview(inputs), plant, charts });
     } catch {
       // The Site list itself could not be read; signed-out failures already went to the sign-in page.
       this.setData({ loading: false, failed: true });

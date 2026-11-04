@@ -197,8 +197,9 @@ function scaleTop(max: number): number {
 /**
  * Today's 24 hours as bars: an hour with a value is drawn to scale, an hour with nothing to draw is
  * flat, an hour that ended without a reading is marked and named, and hours still to come stay empty.
+ * `alsoFit` raises the scale for what is drawn beside the bars.
  */
-function hourBars(start: string, now: Date, valueAt: (hour: number) => number | 'idle' | undefined, top: (max: number) => number) {
+function hourBars(start: string, now: Date, valueAt: (hour: number) => number | 'idle' | undefined, top: (max: number) => number, alsoFit = 0) {
   const from = Date.parse(start);
   const hours = Array.from({ length: 24 }, (_, hour) => {
     const value = valueAt(hour);
@@ -207,9 +208,10 @@ function hourBars(start: string, now: Date, valueAt: (hour: number) => number | 
     return { hour, state: (from + (hour + 1) * HOUR_MS <= now.getTime() ? 'missing' : 'later') as BarState, value: null };
   });
   const best = hours.reduce<(typeof hours)[number] | null>((most, entry) => (entry.value !== null && (most === null || entry.value > most.value!) ? entry : most), null);
-  const scale = top(best?.value ?? 0);
+  const scale = top(Math.max(best?.value ?? 0, alsoFit));
   return {
     best,
+    top: scale,
     bars: hours.map((entry) => ({ hour: entry.hour, state: entry.state, height: entry.value === null ? 0 : Math.round((entry.value / scale) * 100) })),
     scale: [grouped(scale), grouped(scale / 2, scale % 2 === 0 ? 0 : 1), '0'],
     gaps: missingRanges(hours.filter((entry) => entry.state === 'missing').map((entry) => entry.hour)),
@@ -230,6 +232,26 @@ export function hourlyCop(electricity: readonly DayPoint[], cooling: readonly Da
     return used > 0 && cooled > 0 ? cooled / used : 'idle';
   }, (max) => Math.max(1, Math.ceil(max)));
   return { bars, scale, gaps, peak: best === null ? '' : `今天最高 ${grouped(best.value, 2)}（${best.hour} 点）` };
+}
+
+/**
+ * Today's electricity hour by hour, with yesterday's same hour marked on each bar, over the same
+ * hourly readings the overview's 今天用能 sums. One scale fits both days; an hour yesterday without
+ * a reading, or one later than now, has no mark (-1).
+ */
+export function hourlyElectricity(today: readonly DayPoint[], yesterday: readonly DayPoint[], start: string, now: Date) {
+  const todayAt = byHour(today, Date.parse(start));
+  const yesterdayAt = byHour(yesterday, Date.parse(start) - 24 * HOUR_MS);
+  const { bars, top, scale, gaps } = hourBars(start, now, (hour) => todayAt.get(hour), scaleTop, Math.max(0, ...yesterdayAt.values()));
+  return {
+    bars: bars.map((bar) => {
+      const before = yesterdayAt.get(bar.hour);
+      return { ...bar, mark: before === undefined ? -1 : Math.round((before / top) * 100) };
+    }),
+    scale,
+    gaps,
+    compared: yesterdayAt.size > 0,
+  };
 }
 
 /** The electricity a device's own meter recorded today, by the hour, and its share of the Site's. */

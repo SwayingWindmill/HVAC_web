@@ -1,7 +1,7 @@
 // What the 总览 page shows, from what its owners returned: savings and what more could be saved
 // first (what customers care about most), then today against the same hours yesterday as the web
-// overview shows it, then what needs handling (#664). Savings or a recommendation not there yet
-// take one line each in a small card below the figures instead of a large card on top (#677).
+// overview shows it, then what needs handling (#664). Savings stay on top even before there are
+// any: the card says why there are none yet, and the recommendation below it the same.
 
 import { changeBadge, grouped, type ChangeBadge } from './format';
 import type { NoSavingsReason, SavingsCard } from './savings';
@@ -46,22 +46,6 @@ const NO_SAVINGS: Readonly<Record<NoSavingsReason, string>> = {
 };
 const UNREADABLE = '暂时读不到，下拉刷新再试';
 
-/** A line in the small card for what is not there yet; `onTheWeb` when the web is where to set it up. */
-interface NotYetRow {
-  readonly label: '本月节省' | '还能再省';
-  readonly text: string;
-  readonly onTheWeb: boolean;
-}
-
-/** Where on the web to set up what is missing, by which of the two is. */
-function setUpOnTheWeb(rows: readonly NotYetRow[]): string {
-  const missing = rows.filter((row) => row.onTheWeb).map((row) => row.label);
-  if (missing.length === 2) return '在电脑网页「能源分析」里登记节能措施、生成优化建议后，这里显示能省多少。';
-  if (missing[0] === '本月节省') return '在电脑网页「能源分析 → 节能项目」登记措施后，这里显示省了多少。';
-  if (missing[0] === '还能再省') return '在电脑网页「能源分析 → 优化建议」生成后，这里显示还能省多少。';
-  return '';
-}
-
 const RISK: Readonly<Record<Recommendation['risk']['level'], ChangeBadge>> = {
   LOW: { text: '低风险', tone: 'good' },
   MEDIUM: { text: '中风险', tone: 'neutral' },
@@ -70,10 +54,16 @@ const RISK: Readonly<Record<Recommendation['risk']['level'], ChangeBadge>> = {
 
 const money = (value: number) => `¥${grouped(value)}`;
 
+const SET_UP_SAVINGS = '在电脑网页「能源分析 → 节能项目」登记措施后，这里显示省了多少。';
+const SET_UP_RECOMMENDATION = '在电脑网页「能源分析 → 优化建议」生成后，这里显示还能省多少。';
+
+/** No amount yet: a dash, why, and where on the web to set it up when that is what is missing. */
+const noSavings = (detail: string, hint: string) => ({ amount: '—', detail, measures: [], hint });
+
 function presentSavings(input: OverviewInputs['savings']) {
-  if (input.status === 'error') return { notYet: { label: '本月节省', text: UNREADABLE, onTheWeb: false } };
+  if (input.status === 'error') return noSavings(UNREADABLE, '');
   const { saved, why, measures } = input.card;
-  if (saved === null) return { notYet: { label: '本月节省', text: NO_SAVINGS[why ?? 'NO_MEASURE'], onTheWeb: why !== 'FIRST_DAY_PENDING' } };
+  if (saved === null) return noSavings(NO_SAVINGS[why ?? 'NO_MEASURE'], why === 'FIRST_DAY_PENDING' ? '' : SET_UP_SAVINGS);
   const rows = measures.filter((measure) => measure.totals.days > 0).map((measure) => ({
     id: measure.id,
     name: measure.name,
@@ -81,24 +71,22 @@ function presentSavings(input: OverviewInputs['savings']) {
     detail: `本月统计 ${measure.totals.days} 天 · 少用电 ${grouped(measure.totals.avoidedKWh)} kWh`,
   }));
   const rate = saved.rate === null ? '' : ` · 比不做措施少 ${grouped(saved.rate * 100, 1)}%`;
-  return { card: { amount: money(saved.cost), detail: `少用电 ${grouped(saved.kWh)} kWh${rate}`, measures: rows } };
+  return { amount: money(saved.cost), detail: `少用电 ${grouped(saved.kWh)} kWh${rate}`, measures: rows, hint: '' };
 }
 
 function presentRecommendation(input: OverviewInputs['recommendation']) {
-  if (input.status === 'error') return { notYet: { label: '还能再省', text: UNREADABLE, onTheWeb: false } };
+  if (input.status === 'error') return { title: UNREADABLE, detail: '', risk: null };
   const latest = input.latest;
-  if (latest === null) return { notYet: { label: '还能再省', text: '还没有优化建议', onTheWeb: true } };
+  if (latest === null) return { title: '还没有优化建议', detail: SET_UP_RECOMMENDATION, risk: null };
   const from = grouped(latest.baseline.supplyTempC, 1);
   // The same threshold as the web: a change under 0.05 °C keeps the supply temperature.
   const action = Math.abs(latest.candidate.supplyTempC - latest.baseline.supplyTempC) >= 0.05
     ? `冷冻水供水 ${from} → ${grouped(latest.candidate.supplyTempC, 1)} °C`
     : `保持供水 ${from} °C`;
   return {
-    card: {
-      title: `${action}，预计每天再省 ${money(latest.expectedImpact.costSavingPerDay)}`,
-      detail: `少用电 ${grouped(latest.expectedImpact.energySavingKWhPerDay)} kWh/天`,
-      risk: RISK[latest.risk.level],
-    },
+    title: `${action}，预计每天再省 ${money(latest.expectedImpact.costSavingPerDay)}`,
+    detail: `少用电 ${grouped(latest.expectedImpact.energySavingKWhPerDay)} kWh/天`,
+    risk: RISK[latest.risk.level] as ChangeBadge | null,
   };
 }
 
@@ -128,13 +116,9 @@ function presentEnergy(input: OverviewInputs['energy']) {
 }
 
 export function presentOverview(inputs: OverviewInputs) {
-  const savings = presentSavings(inputs.savings);
-  const recommendation = presentRecommendation(inputs.recommendation);
-  const notYet = [savings.notYet, recommendation.notYet].filter((row): row is NotYetRow => row !== undefined);
   return {
-    savings: savings.card ?? null,
-    recommendation: recommendation.card ?? null,
-    notYet: notYet.length === 0 ? null : { rows: notYet.map(({ label, text }) => ({ label, text })), hint: setUpOnTheWeb(notYet) },
+    savings: presentSavings(inputs.savings),
+    recommendation: presentRecommendation(inputs.recommendation),
     energy: presentEnergy(inputs.energy),
     alarms: presentAlarms(inputs.alarms),
   };
