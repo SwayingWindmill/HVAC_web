@@ -1,4 +1,4 @@
-<view class="screen with-footer">
+<view class="screen {{view && view.canAcknowledge ? 'with-footer' : ''}}">
   <view wx:if="{{loading}}" class="state">正在读取…</view>
   <view wx:elif="{{failed}}" class="state">{{failed}}</view>
   <block wx:elif="{{view}}">
@@ -43,7 +43,6 @@
   </block>
 </view>
 
-<view wx:if="{{view}}" class="footer">
-  <button class="button-outline action" bindtap="askAssistant">问助手</button>
-  <button wx:if="{{view.canAcknowledge}}" class="button-primary action" disabled="{{acknowledging}}" bindtap="acknowledge">{{acknowledging ? '正在确认…' : '确认告警'}}</button>
+<view wx:if="{{view && view.canAcknowledge}}" class="footer">
+  <button class="button-primary action" disabled="{{acknowledging}}" bindtap="acknowledge">{{acknowledging ? '正在确认…' : '确认告警'}}</button>
 </view>

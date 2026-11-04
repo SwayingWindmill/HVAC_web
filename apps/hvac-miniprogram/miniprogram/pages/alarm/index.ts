@@ -1,6 +1,5 @@
 import { acknowledgeAlarm, getAlarm } from '../../lib/alarm-api';
-import { explainAlarmQuestion, presentAlarm, type Alarm } from '../../lib/alarms';
-import { askAssistantLater } from '../../lib/assistant-choice';
+import { presentAlarm, type Alarm } from '../../lib/alarms';
 import { siteTodayStart } from '../../lib/energy';
 import { GatewayError, NETWORK_TEXT } from '../../lib/gateway';
 import { siteDeviceName } from '../../lib/plant-load';
@@ -9,7 +8,6 @@ import { siteById } from '../../lib/site';
 
 // The alarm this page shows, from the page query; not displayed, so kept out of setData.
 let alarmId = '';
-let shown: { alarm: Alarm; deviceName: string | null; todayStart: string | null } | null = null;
 // The same key for retries of the same acknowledgement; a new one once the note changes or the platform answers.
 let acknowledgementKey = '';
 
@@ -70,7 +68,6 @@ Page({
         // The Site's midnight only dates the alarm; without it its times are left out.
         siteTodayStart(site, new Date()).catch(() => null),
       ]);
-      shown = { alarm, deviceName: device.name, todayStart };
       const view = presentAlarm(alarm, { deviceName: device.shown, now: new Date(), todayStart, me });
       // About 22 characters a line at 14px on a narrow phone: past three lines, or with line breaks,
       // it folds behind 展开; shorter ones are shown whole.
@@ -114,11 +111,5 @@ Page({
         error: code === 'NETWORK_UNAVAILABLE' ? NETWORK_TEXT : code === 'FORBIDDEN' ? '这个账号不能确认告警，请找管理员开通。' : '这次没能确认，请稍后再试。',
       });
     }
-  },
-
-  askAssistant() {
-    if (shown === null) return;
-    askAssistantLater(explainAlarmQuestion(shown.alarm, shown.deviceName, shown.todayStart));
-    wx.switchTab({ url: '/pages/assistant/index' });
   },
 });
