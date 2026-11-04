@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩的告警规则（#609）。读数写成「设备代码/点位代码」，代码见 songyaxuan.site.json。发布：modules/alarm/cmd/alarm-rules。供水温度看冷量计的总管供水，不看各台机组。2026-11-10 按现场手绘点位表接回四台机组的冷凝出水温度，冷却水出水过高改为看四台；房间没有温度探头（通道 15 测的是室外），去掉了房间温度过高。2026-10-31 按运行策略 v3（供水 5–8 ℃、室温 22–26 ℃）和 7 天数据补了供水偏高、供水过低、房间过热、冷却水出水过高、机组运行无流量五条；门槛是按数据估的，待现场确认。",
+  "note": "松雅轩的告警规则（#609）。读数写成「设备代码/点位代码」，代码见 songyaxuan.site.json。发布：modules/alarm/cmd/alarm-rules。供水温度看冷量计的总管供水，不看各台机组。2026-11-10 按现场手绘点位表接回四台机组的冷凝出水温度，冷却水出水过高改为看四台；房间没有温度探头（通道 15 测的是室外），去掉了房间温度过高。2026-10-31 按运行策略 v3（供水 5–8 ℃、室温 22–26 ℃）和 7 天数据补了供水偏高、供水过低、房间过热、冷却水出水过高、机组运行无流量五条；门槛是按数据估的，待现场确认。数据质量告警代替原来每条温度 6 小时「提示」的一动不动：超量程、跳变、38.4 和供冷量输入不可信为「警告」（供回水和供冷量为「严重」）；卡住在机组运行时用更短的时限，冷站停着时用更长的时限，严重程度都是「警告」。",
   "siteFile": "songyaxuan.site.json",
   "rules": [
     {
@@ -240,18 +240,33 @@
       }
     }
   ],
+  "dataQuality": {
+    "suspect": {
+      "title": "{point}数据不可信",
+      "summary": "{device}的{point}最近一条读数不可信：超出量程、单次跳变、模块通讯异常值 38.4，或供冷量用的温度不可信。读数恢复可信后自动恢复。页面仍显示上一条可信读数时，这条告警表示新来的读数被丢掉了。",
+      "severity": "WARNING",
+      "majorSeverity": "MAJOR",
+      "majorPoints": [
+        "temperature-uid20/t16",
+        "temperature-uid20/t18",
+        "btu-calc/supply_water_temperature",
+        "btu-calc/return_water_temperature",
+        "btu-calc/instant_cooling_capacity",
+        "btu-calc/accumulated_cooling_energy"
+      ],
+      "reasons": ["OUT_OF_RANGE", "SPIKE", "SENTINEL", "DERIVED_INPUT"]
+    },
+    "flatline": {
+      "title": "{point}{when}卡住",
+      "summary": "{device}的{point}{when}连续 {minutes} 分钟完全没变，可能是测点卡住，或网关在重复上报旧值。读数重新变化后自动恢复。机组运行时的这条，在机组全部停机后也会恢复。",
+      "severity": "WARNING"
+    }
+  },
   "reportsInterrupted": {
     "title": "网关上报中断",
     "summary": "松雅轩 {minutes} 分钟没有收到任何读数，可能是现场网关断电、断网或程序停了。重新收到读数后自动恢复。",
     "severity": "MAJOR",
     "ageSeconds": 900
-  },
-  "readingsFlat": {
-    "title": "{point}一动不动",
-    "summary": "{device}的{point}连续 {hours} 小时完全没变，可能是测点卡住，或网关在重复上报旧值。读数重新变化后自动恢复。",
-    "severity": "INFO",
-    "ageSeconds": 21600,
-    "unit": "Cel"
   },
   "readingsNotUpdated": {
     "title": "{device}读数长时间没有更新",
