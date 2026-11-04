@@ -1,3 +1,5 @@
+@import "../../styles/hour-chart.wxss";
+
 .site-row {
   display: flex;
   align-items: center;
@@ -50,6 +52,16 @@
   font-weight: 700;
   letter-spacing: -0.035em;
   color: var(--success-text);
+}
+
+.hero-empty {
+  color: var(--muted-foreground);
+}
+
+.hero-hint {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted-foreground);
 }
 
 .hero-detail {
@@ -163,31 +175,6 @@
 }
 
 /* Savings or a recommendation not there yet: one line each, below the figures. */
-.not-yet {
-  padding: 4px 16px 12px;
-}
-
-.not-yet-row {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  padding: 8px 0;
-}
-
-.not-yet-row + .not-yet-row {
-  border-top: 1px solid var(--divider);
-}
-
-.not-yet-label {
-  flex-shrink: 0;
-  font-size: 14px;
-  color: var(--secondary-foreground);
-}
-
-.not-yet-hint {
-  padding-top: 8px;
-}
-
 .now {
   display: flex;
   flex-direction: column;
@@ -256,4 +243,10 @@ button.daily-add[disabled] {
   opacity: 0.5;
   background: var(--card);
   color: var(--primary);
+}
+
+.chart {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }

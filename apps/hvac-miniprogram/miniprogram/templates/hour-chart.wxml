@@ -11,3 +11,20 @@
     <view class="chart-hours"><text>0 点</text><text>6</text><text>12</text><text>18</text><text>23</text></view>
   </view>
 </template>
+
+<!-- The same bars, each with a line at yesterday's same hour (lib/run.ts hourlyElectricity). -->
+<template name="hour-compare-chart">
+  <view class="chart-body">
+    <view class="chart-scale mono" aria-hidden="true">
+      <text wx:for="{{scale}}" wx:key="*this">{{item}}</text>
+    </view>
+    <view class="chart-bars">
+      <view wx:for="{{bars}}" wx:key="hour" class="bar-slot">
+        <view class="bar bar-{{item.state}}" style="{{item.state === 'value' ? 'height: ' + item.height + '%' : ''}}" />
+        <view wx:if="{{item.mark >= 0}}" class="bar-mark" style="bottom: {{item.mark}}%" />
+      </view>
+    </view>
+    <view />
+    <view class="chart-hours"><text>0 点</text><text>6</text><text>12</text><text>18</text><text>23</text></view>
+  </view>
+</template>

@@ -1,3 +1,4 @@
+<import src="../../templates/hour-chart.wxml" />
 <view class="screen with-tab-bar">
   <view wx:if="{{siteName}}" class="site-row">
     <view class="site-pill" bindtap="openSites" aria-role="button" aria-label="切换站点，现在是{{siteName}}">{{siteName}}<image class="chevron" src="/assets/chevron-down.svg" aria-hidden="true" /></view>
@@ -7,16 +8,17 @@
   <view wx:elif="{{noSite}}" class="state">这个账号还看不到任何站点，请管理员在网页「系统管理」里分配站点。</view>
   <view wx:elif="{{failed}}" class="state">站点列表暂时读不到，下拉刷新再试。</view>
   <block wx:elif="{{view}}">
-    <view wx:if="{{view.savings}}" class="card hero" aria-label="本月节省">
+    <view class="card hero" aria-label="本月节省">
       <view class="hero-label">
         <image class="leaf" src="/assets/leaf.svg" mode="aspectFit" aria-hidden="true" />
         <text>本月节省</text>
       </view>
-      <view class="hero-amount">{{view.savings.amount}}</view>
+      <view class="hero-amount {{view.savings.amount === '—' ? 'hero-empty' : ''}}">{{view.savings.amount}}</view>
       <view class="hero-detail">{{view.savings.detail}}</view>
+      <view wx:if="{{view.savings.hint}}" class="hero-hint">{{view.savings.hint}}</view>
     </view>
 
-    <view wx:if="{{view.savings && view.savings.measures.length}}" class="card">
+    <view wx:if="{{view.savings.measures.length}}" class="card">
       <view class="card-pad card-title">在统计的节能措施</view>
       <view wx:for="{{view.savings.measures}}" wx:key="id" class="measure">
         <view class="measure-line">
@@ -27,7 +29,7 @@
       </view>
     </view>
 
-    <view wx:if="{{view.recommendation}}" class="card card-pad suggest" aria-label="还能再省">
+    <view class="card card-pad suggest" aria-label="还能再省">
       <text class="suggest-label">还能再省</text>
       <text class="suggest-title">{{view.recommendation.title}}</text>
       <view wx:if="{{view.recommendation.detail}}" class="suggest-detail">
@@ -48,6 +50,14 @@
             <view class="caption titled"><image wx:if="{{item.icon}}" class="caption-icon" src="/assets/icon/{{item.icon}}.svg" aria-hidden="true" /><text>{{item.label}}</text></view>
             <view class="metric-value">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
             <text wx:if="{{item.badge}}" class="badge badge-{{item.badge.tone}}">{{item.badge.text}}</text>
+          </view>
+        </view>
+        <view wx:if="{{charts}}" class="chart" aria-label="今天每小时用电">
+          <template is="hour-compare-chart" data="{{...charts.electricity}}" />
+          <view class="legend">
+            <view class="legend-item"><view class="swatch swatch-value" />今天每小时用电（kWh）</view>
+            <view wx:if="{{charts.electricity.compared}}" class="legend-item"><view class="swatch swatch-mark" />昨天同一小时</view>
+            <view wx:if="{{charts.electricity.gaps}}" class="legend-item"><view class="swatch swatch-missing" />{{charts.electricity.gaps}}</view>
           </view>
         </view>
       </block>
@@ -76,6 +86,20 @@
 
     <view wx:else class="card card-pad caption">这个站点还没有登记冷站设备，在网页「系统管理 → 资产与点位」登记后，这里显示冷站在不在运行。</view>
 
+    <view wx:if="{{charts}}" class="card card-pad chart" aria-label="今天每小时能效">
+      <view class="energy-head">
+        <view class="card-title titled"><image class="title-icon" src="/assets/icon/chart-column.svg" aria-hidden="true" /><text>今天每小时能效</text></view>
+        <text class="caption">越高越省电</text>
+      </view>
+      <template is="hour-chart" data="{{...charts.cop}}" />
+      <view class="legend">
+        <view class="legend-item"><view class="swatch swatch-value" />有能效</view>
+        <view class="legend-item"><view class="swatch swatch-idle" />不制冷</view>
+        <view wx:if="{{charts.cop.gaps}}" class="legend-item"><view class="swatch swatch-missing" />{{charts.cop.gaps}}</view>
+      </view>
+      <text wx:if="{{charts.cop.peak}}" class="caption">{{charts.cop.peak}}</text>
+    </view>
+
     <view class="card">
       <view class="row alarm-row" bindtap="openAlarms" aria-role="link">
         <image class="alarm-icon" src="{{view.alarms.happening ? '/assets/alarm-active.svg' : '/assets/alarm-none.svg'}}" mode="aspectFit" aria-hidden="true" />
@@ -85,14 +109,6 @@
         </view>
         <text class="row-value">{{view.alarms.count}} ›</text>
       </view>
-    </view>
-
-    <view wx:if="{{view.notYet}}" class="card not-yet" aria-label="本月节省和还能再省">
-      <view wx:for="{{view.notYet.rows}}" wx:key="label" class="not-yet-row">
-        <text class="not-yet-label">{{item.label}}</text>
-        <text class="caption">{{item.text}}</text>
-      </view>
-      <view wx:if="{{view.notYet.hint}}" class="not-yet-hint caption">{{view.notYet.hint}}</view>
     </view>
 
     <view wx:if="{{daily}}" class="card card-pad daily" aria-label="每日运行结论">
