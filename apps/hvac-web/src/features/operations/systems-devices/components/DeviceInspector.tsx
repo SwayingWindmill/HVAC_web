@@ -17,6 +17,7 @@ import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
+import { pointIsTrusted } from '@/features/assets/operational-projection';
 import { deviceStatus, KEY_READINGS, POWER_KEY } from '../../realtime/device-presentation';
 import type { PlantDevice } from '../../realtime/plant-model';
 import { deviceDayHistoryQuery, MAX_HISTORY_KEYS } from '../device-history';
@@ -110,10 +111,16 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
           ) : (
             <dl className="grid grid-cols-2 gap-2">
               {points.map((point) => {
-                const current = point.state === 'PRESENT' && point.freshness === 'FRESH' && point.quality === 'GOOD';
+                const current = pointIsTrusted(point);
+                const health = point.health && point.health.status !== 'HEALTHY'
+                  ? { SUSPECT: ['可疑', 'warning'], BAD: ['无效', 'destructive'], STALE: ['过期', 'neutral'] }[point.health.status]
+                  : null;
                 return (
                   <div key={point.key} className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-divider bg-muted px-3 py-2">
-                    <dt className="truncate text-xs text-muted-foreground">{point.label}</dt>
+                    <dt className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+                      <span className="truncate">{point.label}</span>
+                      {health ? <StatusBadge tone={health[1] as 'warning' | 'destructive' | 'neutral'} label={health[0]} /> : null}
+                    </dt>
                     <dd className={cn('text-base leading-[22px] font-semibold tracking-[-0.02em] tabular-nums', !current && 'text-muted-foreground')} title={current ? undefined : '数据过期或不可靠'}>
                       {point.state === 'PRESENT' ? point.displayValue : '—'}
                       {point.state === 'PRESENT' && point.unit ? <span className="ml-1 text-xs font-medium text-subtle-foreground">{point.unit}</span> : null}

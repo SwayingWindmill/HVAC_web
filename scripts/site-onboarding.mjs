@@ -21,6 +21,33 @@ import { localContainer } from './lib/local-environment.mjs';
 
 const sqlLiteral = (value) => `'${String(value).replaceAll("'", "''")}'`;
 const sqlJson = (value) => `${sqlLiteral(JSON.stringify(value))}::jsonb`;
+const sqlNumber = (value) => (value === null || value === undefined || Number.isNaN(value) ? 'NULL' : String(value));
+
+// A point's quality profile, resolved to device ids. No profile: the existing
+// freshness window and no numeric limits. checks is SQL or null.
+export function pointQuality(point, profile, devicesByCode) {
+  if (!point.qualityProfile) return { staleAfterSeconds: null, range: null, checks: null };
+  const named = profile.qualityProfiles?.[point.qualityProfile];
+  if (!named) throw new Error(`point ${point.device?.code ?? '?'}/${point.code} names unknown quality profile ${point.qualityProfile}`);
+  const checks = {};
+  if (named.maxStep != null) checks.maxStep = named.maxStep;
+  if (named.maxStepWindowSeconds != null) checks.maxStepWindowSeconds = named.maxStepWindowSeconds;
+  if (named.sentinels?.length) checks.sentinels = named.sentinels;
+  if (named.flatlineSeconds != null) checks.flatlineSeconds = named.flatlineSeconds;
+  if (named.flatlineRunningSeconds != null) checks.flatlineRunningSeconds = named.flatlineRunningSeconds;
+  const ref = (item) => {
+    const device = devicesByCode.get(item.device);
+    if (!device) throw new Error(`quality profile ${point.qualityProfile} names unknown device ${item.device}`);
+    return { deviceId: device.id, key: item.point, ...(item.equals != null ? { equals: item.equals } : {}) };
+  };
+  if (named.running?.length) checks.running = named.running.map(ref);
+  if (named.inputs?.length) checks.inputs = named.inputs.map(ref);
+  return {
+    staleAfterSeconds: named.staleAfterSeconds ?? null,
+    range: named.range ?? null,
+    checks: Object.keys(checks).length ? sqlJson(checks) : null,
+  };
+}
 
 const POINT_STATUSES = new Set(['ACTIVE', 'INACTIVE', 'RETIRED']);
 
@@ -156,7 +183,14 @@ COMMIT;`;
   // replays after an outage, so samples up to a day late are still accepted.
   const runtimeDevices = devices.map((device) => `(${sqlLiteral(device.id)}, ${tenant}, ${siteId}, 'APPLICABLE', clock_timestamp())`).join(',\n');
   const presence = devices.map((device) => `(${sqlLiteral(device.id)}, 1, ${device.sampleSeconds * 2 + 30}, ${device.sampleSeconds * 5}, true, ARRAY['SOURCE_ACTIVITY']::text[], 60, 86400, clock_timestamp())`).join(',\n');
-  const freshness = points.map((point) => `(${sqlLiteral(point.device.id)}, ${sqlLiteral(point.code)}, 1, ${point.device.sampleSeconds * 3}, true, ${point.device.sampleSeconds}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, NULL, NULL, clock_timestamp())`).join(',\n');
+  const devicesByCode = new Map(devices.map((device) => [device.code, device]));
+  const freshness = points.map((point) => {
+    const quality = pointQuality(point, profile, devicesByCode);
+    const fresh = quality.staleAfterSeconds ?? point.device.sampleSeconds * 3;
+    const minimum = quality.range ? quality.range.min : null;
+    const maximum = quality.range ? quality.range.max : null;
+    return `(${sqlLiteral(point.device.id)}, ${sqlLiteral(point.code)}, 1, ${fresh}, true, ${point.device.sampleSeconds}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, ${sqlNumber(minimum)}, ${sqlNumber(maximum)}, ${quality.checks ?? 'NULL'}, clock_timestamp())`;
+  }).join(',\n');
   const coverage = devices.map((device) => `(${sqlLiteral(device.id)}, true, clock_timestamp(), NULL, 1, clock_timestamp())`).join(',\n');
   const telemetry = `BEGIN;
 SET LOCAL ROLE s2_telemetry_migrator;
@@ -168,9 +202,9 @@ INSERT INTO telemetry_runtime.presence_policies (device_id, policy_revision, onl
 ${presence}
 ON CONFLICT (device_id) ${updateWhenChanged('presence_policies', fromFile('online_within_seconds', 'offline_after_seconds', 'accepted_signal_types', 'max_future_clock_skew_seconds', 'max_source_lag_seconds'), { revision: 'policy_revision' })};
 
-INSERT INTO telemetry_runtime.freshness_policies (device_id, telemetry_key, policy_revision, fresh_within_seconds, configured, expected_sample_interval_seconds, value_type, expected_unit, minimum_number, maximum_number, updated_at) VALUES
+INSERT INTO telemetry_runtime.freshness_policies (device_id, telemetry_key, policy_revision, fresh_within_seconds, configured, expected_sample_interval_seconds, value_type, expected_unit, minimum_number, maximum_number, quality_checks, updated_at) VALUES
 ${freshness}
-ON CONFLICT (device_id, telemetry_key) ${updateWhenChanged('freshness_policies', [...fromFile('fresh_within_seconds'), ['configured', 'true'], ...fromFile('expected_sample_interval_seconds', 'value_type', 'expected_unit')], { revision: 'policy_revision' })};
+ON CONFLICT (device_id, telemetry_key) ${updateWhenChanged('freshness_policies', [...fromFile('fresh_within_seconds'), ['configured', 'true'], ...fromFile('expected_sample_interval_seconds', 'value_type', 'expected_unit', 'minimum_number', 'maximum_number', 'quality_checks')], { revision: 'policy_revision' })};
 
 INSERT INTO telemetry_runtime.observation_coverage (device_id, available, continuous_since, reason_code, source_revision, updated_at) VALUES
 ${coverage}
@@ -476,6 +510,26 @@ export function checkSiteFile(profile, alarmRules = null) {
   const cron = (value, where) => {
     if (typeof value !== 'string' || value.trim().split(/\s+/).length !== 5) problems.push(`${where}: cron ${value} is not five fields`);
   };
+
+  for (const [name, quality] of Object.entries(profile.qualityProfiles ?? {})) {
+    if (quality.range && !(quality.range.min <= quality.range.max)) problems.push(`quality profile ${name}: range min is above max`);
+    for (const seconds of ['staleAfterSeconds', 'flatlineSeconds', 'flatlineRunningSeconds', 'maxStepWindowSeconds']) {
+      if (quality[seconds] != null && (!Number.isInteger(quality[seconds]) || quality[seconds] <= 0)) problems.push(`quality profile ${name}: ${seconds} must be a positive integer`);
+    }
+    for (const item of [...(quality.running ?? []), ...(quality.inputs ?? [])]) {
+      const points = activePoints.get(item.device);
+      if (!points) problems.push(`quality profile ${name}: no device ${item.device}`);
+      else if (!points.has(item.point)) problems.push(`quality profile ${name}: ${item.device} has no active point ${item.point}`);
+    }
+  }
+  for (const device of devices) {
+    for (const point of device.points) {
+      if (!point.qualityProfile || pointStatus(point) !== 'ACTIVE') continue;
+      if (!profile.qualityProfiles?.[point.qualityProfile]) problems.push(`${device.code}/${point.code} names unknown quality profile ${point.qualityProfile}`);
+      const named = profile.qualityProfiles?.[point.qualityProfile];
+      if (named?.staleAfterSeconds != null && named.staleAfterSeconds < device.sampleSeconds) problems.push(`${device.code}/${point.code}: staleAfterSeconds is shorter than the sample interval`);
+    }
+  }
 
   if (intelligence.alarmRules && !alarmRules) problems.push(`alarm rules file ${intelligence.alarmRules} was not found`);
   if (alarmRules) {

@@ -30,6 +30,11 @@ export interface DeviceTelemetryPresentStateDto {
   readonly quality: 'GOOD' | 'PARTIAL' | 'ESTIMATED' | 'MANUAL' | 'STALE' | 'INVALID';
   readonly qualityReasons: readonly string[];
   readonly policyRevision: number;
+  readonly health?: {
+    readonly status: 'HEALTHY' | 'SUSPECT' | 'BAD' | 'STALE';
+    readonly score: number;
+    readonly reasons: readonly string[];
+  };
 }
 
 export interface DeviceTelemetryMissingStateDto {
@@ -94,14 +99,26 @@ const displayStates = new Set(['ONLINE', 'OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAIL
 const valueTypes = new Set(['NUMBER', 'STRING', 'BOOLEAN', 'JSON']);
 const missingReasons = new Set(['NEVER_OBSERVED', 'ONLY_REJECTED_CANDIDATES', 'POLICY_NOT_CONFIGURED']);
 
+const healthStatuses = new Set(['HEALTHY', 'SUSPECT', 'BAD', 'STALE']);
+
 const isRevision = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
+
+const validPointHealth = (value: unknown): boolean => {
+  if (value === undefined) return true;
+  if (!isRecord(value) || !hasExactKeys(value, ['status', 'score', 'reasons'])) return false;
+  return healthStatuses.has(String(value.status))
+    && Number.isSafeInteger(value.score) && Number(value.score) >= 0 && Number(value.score) <= 100
+    && Array.isArray(value.reasons) && value.reasons.every((reason) => isNonEmptyString(reason));
+};
 
 const decodeKeyState = (value: unknown): DeviceTelemetryKeyStateDto => {
   if (!isRecord(value) || !isNonEmptyString(value.key) || !telemetryKey.test(value.key)) {
     throw new OwnerReadError('OWNER_RESPONSE_INVALID', 'Telemetry Runtime returned an invalid key state.');
   }
   if (value.state === 'PRESENT') {
-    if (!hasExactKeys(value, presentKeys)
+    const keys = Object.keys(value);
+    const allowed = new Set<string>([...presentKeys, 'health']);
+    if (!presentKeys.every((key) => keys.includes(key)) || keys.some((key) => !allowed.has(key))
       || !valueTypes.has(String(value.valueType))
       || (value.unit !== null && typeof value.unit !== 'string')
       || !isInstant(value.sampledAt)
@@ -110,7 +127,8 @@ const decodeKeyState = (value: unknown): DeviceTelemetryKeyStateDto => {
       || !presentQualities.has(String(value.quality))
       || !Array.isArray(value.qualityReasons)
       || value.qualityReasons.some((reason) => !isNonEmptyString(reason))
-      || !isRevision(value.policyRevision)) {
+      || !isRevision(value.policyRevision)
+      || !validPointHealth(value.health)) {
       throw new OwnerReadError('OWNER_RESPONSE_INVALID', 'Telemetry Runtime returned an invalid present key state.');
     }
     return value as unknown as DeviceTelemetryPresentStateDto;

@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { pointIsTrusted } from '@/features/assets/operational-projection';
 import { openWorkOrdersQuery } from '@/features/work-orders/work-order-queries';
 import { cn } from '@/lib/utils';
 import {
@@ -242,7 +243,7 @@ export function SystemsDevicesWorkspace() {
                       const status = deviceStatus(device);
                       const powerKey = POWER_KEY[device.category];
                       const points = device.row.operational.points;
-                      const healthy = points.filter((point) => point.freshness === 'FRESH' && point.quality === 'GOOD').length;
+                      const healthy = points.filter((point) => pointIsTrusted(point)).length;
                       const Icon = CATEGORY_ICONS[device.category];
                       return (
                         <TableRow

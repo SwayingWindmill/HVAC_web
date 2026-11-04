@@ -54,6 +54,10 @@ const (
 	QualityReasonDuplicate         QualityReason = "DUPLICATE"
 	QualityReasonOutOfOrder        QualityReason = "OUT_OF_ORDER"
 	QualityReasonReplayed          QualityReason = "REPLAYED"
+	QualityReasonSpike             QualityReason = "SPIKE"
+	QualityReasonSentinel          QualityReason = "SENTINEL"
+	QualityReasonFlatline          QualityReason = "FLATLINE"
+	QualityReasonDerivedInput      QualityReason = "DERIVED_INPUT"
 )
 
 type QuarantineReason string
@@ -122,6 +126,7 @@ type ObservationPolicy struct {
 	MaximumNumber          *float64
 	MaxFutureClockSkew     time.Duration
 	MaxSourceLag           time.Duration
+	QualityChecks          *QualityChecks
 }
 
 type ObservationFacts struct {
@@ -132,6 +137,9 @@ type ObservationFacts struct {
 	CurrentPosition  *SourcePositionHead
 	EventAlreadySeen bool
 	LatestSampledAt  *time.Time
+	Previous         *PriorNumeric
+	Running          bool
+	InputsUntrusted  bool
 }
 
 type ObservationDecision struct {
@@ -154,6 +162,11 @@ type ObservationDecision struct {
 	ReplaceLatest          bool
 	EmitPresenceSignal     bool
 	ReevaluateSnapshot     bool
+	UnchangedSince         time.Time
+	HealthStatus           string
+	HealthScore            int
+	HealthReasons          []QualityReason
+	RecordHealth           bool
 }
 
 func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts, evaluatedAt time.Time) ObservationDecision {
@@ -181,25 +194,35 @@ func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts,
 	decision.PresencePolicyRevision = facts.Policy.PresencePolicyRevision
 
 	reasons, rejected := validateObservation(candidate, *facts.Policy, evaluatedAt)
+	reasons = append(reasons, assessCandidateQuality(candidate, facts, true)...)
+	reasons = canonicalIngestReasons(reasons)
 	decision.QualityReasons = reasons
 	decision.QuarantineReason = ""
 	if rejected {
 		decision.Status = ObservationRejected
 		decision.Quality = QualityInvalid
 		decision.ReevaluateSnapshot = true
+		if slices.Contains(reasons, QualityReasonOutOfRange) && (facts.LatestSampledAt == nil || candidate.SampledAt.After(facts.LatestSampledAt.UTC())) {
+			recordPointHealth(&decision, QualityInvalid, reasons)
+		}
 		return decision
 	}
 
 	decision.Quality = QualityGood
-	if slices.Contains(reasons, QualityReasonSourceUntrusted) {
+	if suspectQuality(reasons) || slices.Contains(reasons, QualityReasonSourceUntrusted) {
 		decision.Quality = QualityPartial
 	}
-	if slices.Contains(reasons, QualityReasonSourceLagExceeded) || slices.Contains(reasons, QualityReasonClockBehind) {
+	if !suspectQuality(reasons) && (slices.Contains(reasons, QualityReasonSourceLagExceeded) || slices.Contains(reasons, QualityReasonClockBehind)) {
 		decision.Quality = QualityStale
+	}
+	recordPointHealth(&decision, decision.Quality, reasons)
+	if number, ok := numericSample(candidate); ok {
+		decision.UnchangedSince = UnchangedSinceOf(number, candidate.SampledAt, facts.Previous)
 	}
 	if facts.LatestSampledAt != nil && !candidate.SampledAt.After(facts.LatestSampledAt.UTC()) {
 		decision.Status = ObservationOutOfOrder
 		decision.QualityReasons = append(decision.QualityReasons, QualityReasonOutOfOrder)
+		decision.RecordHealth = false
 		return decision
 	}
 
@@ -235,7 +258,9 @@ func EvaluateHistoricalObservation(candidate ObservationCandidate, facts Observa
 	decision.PresencePolicyRevision = facts.Policy.PresencePolicyRevision
 
 	reasons, rejected := validateObservation(candidate, *facts.Policy, evaluatedAt)
+	reasons = append(reasons, assessCandidateQuality(candidate, facts, false)...)
 	reasons = slices.DeleteFunc(reasons, func(reason QualityReason) bool { return reason == QualityReasonSourceLagExceeded })
+	reasons = canonicalIngestReasons(reasons)
 	decision.QualityReasons = reasons
 	decision.QuarantineReason = ""
 	if rejected {
@@ -246,10 +271,41 @@ func EvaluateHistoricalObservation(candidate ObservationCandidate, facts Observa
 
 	decision.Status = ObservationAccepted
 	decision.Quality = QualityGood
-	if slices.Contains(reasons, QualityReasonSourceUntrusted) {
+	if suspectQuality(reasons) || slices.Contains(reasons, QualityReasonSourceUntrusted) {
 		decision.Quality = QualityPartial
 	}
 	return decision
+}
+
+func assessCandidateQuality(candidate ObservationCandidate, facts ObservationFacts, live bool) []QualityReason {
+	number, ok := numericSample(candidate)
+	if !ok || facts.Policy == nil {
+		return nil
+	}
+	pointType := ""
+	if facts.Point != nil {
+		pointType = facts.Point.PointType
+	}
+	return AssessPointQuality(number, candidate.SampledAt, facts.Policy.QualityChecks, PointQualityInput{
+		PointType: pointType, Live: live, Previous: facts.Previous, Running: facts.Running, InputsUntrusted: facts.InputsUntrusted,
+	})
+}
+
+func numericSample(candidate ObservationCandidate) (float64, bool) {
+	kind, number, ok := observationValueType(candidate.Value)
+	return number, ok && kind == "NUMBER"
+}
+
+func suspectQuality(reasons []QualityReason) bool {
+	return slices.Contains(reasons, QualityReasonSpike) || slices.Contains(reasons, QualityReasonSentinel) || slices.Contains(reasons, QualityReasonFlatline) || slices.Contains(reasons, QualityReasonDerivedInput)
+}
+
+func recordPointHealth(decision *ObservationDecision, quality ObservationQuality, reasons []QualityReason) {
+	health := HealthFor(quality, reasons)
+	decision.RecordHealth = true
+	decision.HealthStatus = health.Status
+	decision.HealthScore = health.Score
+	decision.HealthReasons = health.Reasons
 }
 
 func terminalObservation(status ObservationStatus, quality ObservationQuality, reason QualityReason, advance bool) ObservationDecision {
@@ -358,6 +414,7 @@ func canonicalIngestReasons(values []QualityReason) []QualityReason {
 		QualityReasonSourceUntrusted: 1, QualityReasonTypeMismatch: 2, QualityReasonUnitMismatch: 3,
 		QualityReasonOutOfRange: 4, QualityReasonClockAhead: 5, QualityReasonClockBehind: 6,
 		QualityReasonSourceLagExceeded: 7, QualityReasonDuplicate: 8, QualityReasonOutOfOrder: 9, QualityReasonReplayed: 10,
+		QualityReasonSpike: 11, QualityReasonSentinel: 12, QualityReasonFlatline: 13, QualityReasonDerivedInput: 14,
 	}
 	seen := make(map[QualityReason]struct{}, len(values))
 	result := make([]QualityReason, 0, len(values))
