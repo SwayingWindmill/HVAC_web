@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -70,8 +71,18 @@ const (
 	// be stuck (#616).
 	ConditionUnchanged ConditionKind = "UNCHANGED"
 	ConditionChanged   ConditionKind = "CHANGED"
-	ConditionAnd       ConditionKind = "AND"
-	ConditionOr        ConditionKind = "OR"
+	// ConditionReasons matches the point's health reasons: ANY when one of the
+	// listed codes is present, NONE when none of them are. It does not require the
+	// displayed value to be trusted, so a range rejection (the last good number
+	// stays on screen, health is BAD) can still raise.
+	ConditionReasons ConditionKind = "REASONS"
+	ConditionAnd     ConditionKind = "AND"
+	ConditionOr      ConditionKind = "OR"
+)
+
+const (
+	ReasonMatchAny  = "ANY"
+	ReasonMatchNone = "NONE"
 )
 
 type CompareOperator string
@@ -131,6 +142,8 @@ type Condition struct {
 	Reset      float64             `json:"reset,omitempty"`
 	AgeSeconds int64               `json:"ageSeconds,omitempty"`
 	Children   []Condition         `json:"children,omitempty"`
+	Reasons    []string            `json:"reasons,omitempty"`
+	Match      string              `json:"match,omitempty"`
 }
 
 type ScheduleWindow struct {
@@ -174,7 +187,12 @@ type InputFact struct {
 	Quality    string     `json:"quality"`
 	ObservedAt string     `json:"observedAt,omitempty"`
 	// UnchangedSince is when the reading took the value it still has (#616).
-	UnchangedSince string                         `json:"unchangedSince,omitempty"`
+	UnchangedSince string `json:"unchangedSince,omitempty"`
+	// QualityReasons are the displayed sample's reasons. HealthReasons are the
+	// point's latest check, which can name a range rejection the displayed value
+	// itself does not carry.
+	QualityReasons []string                       `json:"qualityReasons,omitempty"`
+	HealthReasons  []string                       `json:"healthReasons,omitempty"`
 	Evidence       []alarmmodel.EvidenceReference `json:"evidence"`
 }
 
@@ -475,6 +493,17 @@ func (condition Condition) Validate() error {
 		if !boundedText(condition.Input, 128) || condition.AgeSeconds <= 0 {
 			return errors.New("time predicate is invalid")
 		}
+	case ConditionReasons:
+		if !boundedText(condition.Input, 128) || (condition.Match != ReasonMatchAny && condition.Match != ReasonMatchNone) || len(condition.Reasons) < 1 || len(condition.Reasons) > 8 {
+			return errors.New("quality-reason predicate is invalid")
+		}
+		for _, reason := range condition.Reasons {
+			switch reason {
+			case "OUT_OF_RANGE", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT":
+			default:
+				return errors.New("quality-reason predicate names an unknown reason")
+			}
+		}
 	case ConditionAnd, ConditionOr:
 		if len(condition.Children) < 2 || len(condition.Children) > 32 {
 			return errors.New("compound predicate child count is invalid")
@@ -574,6 +603,8 @@ func evaluateCondition(policy AlarmPolicyRevision, condition Condition, snapshot
 		return evaluateStale(condition, snapshot, now)
 	case ConditionChanged:
 		return evaluateChanged(condition, snapshot, now)
+	case ConditionReasons:
+		return evaluateReasons(condition, snapshot)
 	}
 
 	input, exists := snapshot.Inputs[condition.Input]
@@ -677,6 +708,28 @@ func evaluateChanged(condition Condition, snapshot EvaluationSnapshot, now time.
 		return predicateResult{status: EvaluationIndeterminate, blocker: qualityBlockerInvalidPrefix + condition.Input}
 	}
 	return truthResult(now.Before(since.Add(time.Duration(condition.AgeSeconds)*time.Second)), nil)
+}
+
+func evaluateReasons(condition Condition, snapshot EvaluationSnapshot) predicateResult {
+	input, exists := snapshot.Inputs[condition.Input]
+	reasons := input.HealthReasons
+	if len(reasons) == 0 {
+		reasons = input.QualityReasons
+	}
+	hit := false
+	for _, reason := range reasons {
+		if slices.Contains(condition.Reasons, reason) {
+			hit = true
+			break
+		}
+	}
+	if !exists || !input.Present {
+		return truthResult(condition.Match == ReasonMatchNone, nil)
+	}
+	if condition.Match == ReasonMatchNone {
+		return truthResult(!hit, nil)
+	}
+	return truthResult(hit, nil)
 }
 
 func evaluateStale(condition Condition, snapshot EvaluationSnapshot, now time.Time) predicateResult {

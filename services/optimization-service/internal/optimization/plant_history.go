@@ -42,6 +42,7 @@ WHERE tenant_id=toUUID('%s')
   AND sampled_at < parseDateTime64BestEffort('%s',3,'UTC')
   AND received_at <= parseDateTime64BestEffort('%s',3,'UTC')
   AND acceptance_status IN ('ACCEPTED','OUT_OF_ORDER')
+  AND quality = 'GOOD'
   AND value_number IS NOT NULL
   AND isFinite(value_number)
   AND device_id IS NOT NULL

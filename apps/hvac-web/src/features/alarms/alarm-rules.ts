@@ -70,6 +70,13 @@ function predicate(condition: AlarmRuleCondition, unit: string | null | undefine
       return `连续 ${formatSeconds(condition.ageSeconds!)}完全没变`;
     case 'CHANGED':
       return `在 ${formatSeconds(condition.ageSeconds!)}内有变化`;
+    case 'REASONS': {
+      const names: Record<string, string> = {
+        OUT_OF_RANGE: '超出量程', SPIKE: '跳变', SENTINEL: '通讯异常值', FLATLINE: '卡住', DERIVED_INPUT: '计算输入不可信',
+      };
+      const list = (condition.reasons ?? []).map((code) => names[code] ?? code).join('、');
+      return condition.match === 'NONE' ? `没有这些数据质量问题（${list}）` : `数据质量问题：${list}`;
+    }
     default:
       return '';
   }

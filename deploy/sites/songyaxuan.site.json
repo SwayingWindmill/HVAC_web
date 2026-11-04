@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：网关把四块机组电表相加作为「空调总电表（四台机组合计）」，并按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场对照表（2026-10-15）：t1 冷凝进、t2 蒸发进（四台共用），A–D 蒸发出 t3/t5/t7/t9、冷凝出 t4/t6/t8/t10，t12 房间，t13 室外，t14 从 2026-10-29 起没有探头已停用，t15 室外湿球；t16、t18 仍作冷量计算的总回水、总供水，t17、t19 用途待确认，冷却塔没有探头。点位带 from（来源通道），网关函数的 COPIES 照它复制。",
+  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：网关把四块机组电表相加作为「空调总电表（四台机组合计）」，并按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场对照表（2026-10-15）：t1 冷凝进、t2 蒸发进（四台共用），A–D 蒸发出 t3/t5/t7/t9、冷凝出 t4/t6/t8/t10，t12 房间，t13 室外，t14 从 2026-10-29 起没有探头已停用，t15 室外湿球；t16、t18 仍作冷量计算的总回水、总供水，t17、t19 用途待确认，冷却塔没有探头。点位带 from（来源通道），网关函数的 COPIES 照它复制。 点位质量见 qualityProfiles：冷冻水 3–20 ℃、冷却水 15–45 ℃、房间 10–40 ℃、室外 −10–45 ℃；38.4 是模块通讯异常值。",
   "tenantId": "018f3d00-0000-7000-8000-000000000001",
   "site": {
     "id": "01a14000-1000-7000-8000-000000000001",
@@ -34,7 +34,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30401"
+          "address": "UID20 输入寄存器 30401",
+          "qualityProfile": "chilled-water"
         },
         {
           "code": "t2",
@@ -42,7 +43,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30402"
+          "address": "UID20 输入寄存器 30402",
+          "qualityProfile": "chilled-water"
         },
         {
           "code": "t3",
@@ -50,7 +52,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30403"
+          "address": "UID20 输入寄存器 30403",
+          "qualityProfile": "chilled-water"
         },
         {
           "code": "t4",
@@ -58,7 +61,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30404"
+          "address": "UID20 输入寄存器 30404",
+          "qualityProfile": "chilled-water"
         },
         {
           "code": "t5",
@@ -66,7 +70,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30405"
+          "address": "UID20 输入寄存器 30405",
+          "qualityProfile": "condenser-water"
         },
         {
           "code": "t6",
@@ -74,7 +79,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30406"
+          "address": "UID20 输入寄存器 30406",
+          "qualityProfile": "condenser-water"
         },
         {
           "code": "t7",
@@ -82,7 +88,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30407"
+          "address": "UID20 输入寄存器 30407",
+          "qualityProfile": "condenser-water"
         },
         {
           "code": "t8",
@@ -99,7 +106,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30409"
+          "address": "UID20 输入寄存器 30409",
+          "qualityProfile": "condenser-water"
         },
         {
           "code": "t10",
@@ -107,7 +115,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30410"
+          "address": "UID20 输入寄存器 30410",
+          "qualityProfile": "chilled-water"
         },
         {
           "code": "t11",
@@ -124,7 +133,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30412"
+          "address": "UID20 输入寄存器 30412",
+          "qualityProfile": "room"
         },
         {
           "code": "t13",
@@ -132,7 +142,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30413"
+          "address": "UID20 输入寄存器 30413",
+          "qualityProfile": "outdoor"
         },
         {
           "code": "t14",
@@ -149,7 +160,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30415"
+          "address": "UID20 输入寄存器 30415",
+          "qualityProfile": "wet-bulb"
         },
         {
           "code": "t16",
@@ -157,7 +169,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30416"
+          "address": "UID20 输入寄存器 30416",
+          "qualityProfile": "chilled-water"
         },
         {
           "code": "t17",
@@ -165,7 +178,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30417"
+          "address": "UID20 输入寄存器 30417",
+          "qualityProfile": "unconfirmed-temperature"
         },
         {
           "code": "t18",
@@ -173,7 +187,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30418"
+          "address": "UID20 输入寄存器 30418",
+          "qualityProfile": "chilled-water"
         },
         {
           "code": "t19",
@@ -181,7 +196,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID20 输入寄存器 30419"
+          "address": "UID20 输入寄存器 30419",
+          "qualityProfile": "unconfirmed-temperature"
         },
         {
           "code": "t20",
@@ -675,7 +691,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "网关计算：温度通道 18"
+          "address": "网关计算：温度通道 18",
+          "qualityProfile": "chilled-water"
         },
         {
           "code": "return_water_temperature",
@@ -684,7 +701,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "网关计算：温度通道 16"
+          "address": "网关计算：温度通道 16",
+          "qualityProfile": "chilled-water"
         },
         {
           "code": "temperature_difference",
@@ -693,7 +711,8 @@
           "unit": "K",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "网关计算：回水 − 供水"
+          "address": "网关计算：回水 − 供水",
+          "qualityProfile": "chilled-delta"
         },
         {
           "code": "flow_rate",
@@ -711,7 +730,8 @@
           "unit": "kW",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "网关计算：机组总功率 > 20 kW 时为 1.163 × 流量 × 温差，否则为 0"
+          "address": "网关计算：机组总功率 > 20 kW 时为 1.163 × 流量 × 温差，否则为 0",
+          "qualityProfile": "cooling-load"
         },
         {
           "code": "accumulated_cooling_energy",
@@ -720,7 +740,8 @@
           "unit": "kWh",
           "pointType": "COUNTER",
           "valueType": "NUMBER",
-          "address": "网关计算：瞬时制冷量对时间累加"
+          "address": "网关计算：瞬时制冷量对时间累加",
+          "qualityProfile": "cooling-counter"
         }
       ]
     },
@@ -794,7 +815,8 @@
           "from": [
             "temperature",
             "t13"
-          ]
+          ],
+          "qualityProfile": "outdoor"
         },
         {
           "code": "ambient_wet_bulb_temperature",
@@ -807,7 +829,8 @@
           "from": [
             "temperature",
             "t15"
-          ]
+          ],
+          "qualityProfile": "wet-bulb"
         },
         {
           "code": "ambient_temperature_2",
@@ -844,7 +867,8 @@
           "from": [
             "temperature",
             "t12"
-          ]
+          ],
+          "qualityProfile": "room"
         }
       ]
     }
@@ -1088,6 +1112,182 @@
         },
         "note": "诊断规则是租户共用的，门槛按版本发布（scripts/publish-fdd-rule-revision.mjs），validate 显示现在生效的版本。松雅轩高负荷时总管温差约 1.65 ℃；先登记但不启用，现场确认门槛和运行门控后把 enabled 改成 true。"
       }
+    }
+  },
+  "qualityProfiles": {
+    "chilled-water": {
+      "range": {
+        "min": 3,
+        "max": 20
+      },
+      "maxStep": 2.5,
+      "maxStepWindowSeconds": 600,
+      "sentinels": [
+        38.4
+      ],
+      "staleAfterSeconds": 180,
+      "flatlineSeconds": 86400,
+      "flatlineRunningSeconds": 1800,
+      "running": [
+        {
+          "device": "meter-uid5",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid2",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid3",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid4",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ]
+    },
+    "condenser-water": {
+      "range": {
+        "min": 15,
+        "max": 45
+      },
+      "maxStep": 4,
+      "maxStepWindowSeconds": 600,
+      "sentinels": [
+        38.4
+      ],
+      "staleAfterSeconds": 180,
+      "flatlineSeconds": 86400,
+      "flatlineRunningSeconds": 2700,
+      "running": [
+        {
+          "device": "meter-uid5",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid2",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid3",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid4",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ]
+    },
+    "room": {
+      "range": {
+        "min": 10,
+        "max": 40
+      },
+      "maxStep": 1.5,
+      "maxStepWindowSeconds": 600,
+      "sentinels": [
+        38.4
+      ],
+      "staleAfterSeconds": 180,
+      "flatlineSeconds": 21600
+    },
+    "outdoor": {
+      "range": {
+        "min": -10,
+        "max": 45
+      },
+      "maxStep": 3,
+      "maxStepWindowSeconds": 600,
+      "sentinels": [
+        38.4
+      ],
+      "staleAfterSeconds": 180,
+      "flatlineSeconds": 10800
+    },
+    "wet-bulb": {
+      "range": {
+        "min": -10,
+        "max": 40
+      },
+      "maxStep": 3,
+      "maxStepWindowSeconds": 600,
+      "sentinels": [
+        38.4
+      ],
+      "staleAfterSeconds": 180,
+      "flatlineSeconds": 10800
+    },
+    "unconfirmed-temperature": {
+      "range": {
+        "min": -10,
+        "max": 60
+      },
+      "maxStep": 5,
+      "maxStepWindowSeconds": 600,
+      "sentinels": [
+        38.4
+      ],
+      "staleAfterSeconds": 180,
+      "flatlineSeconds": 21600
+    },
+    "cooling-load": {
+      "range": {
+        "min": 0,
+        "max": 3000
+      },
+      "maxStep": 500,
+      "maxStepWindowSeconds": 600,
+      "staleAfterSeconds": 180,
+      "inputs": [
+        {
+          "device": "temperature-uid20",
+          "point": "t16"
+        },
+        {
+          "device": "temperature-uid20",
+          "point": "t18"
+        }
+      ]
+    },
+    "chilled-delta": {
+      "range": {
+        "min": -2,
+        "max": 15
+      },
+      "maxStep": 3,
+      "maxStepWindowSeconds": 600,
+      "staleAfterSeconds": 180,
+      "inputs": [
+        {
+          "device": "temperature-uid20",
+          "point": "t16"
+        },
+        {
+          "device": "temperature-uid20",
+          "point": "t18"
+        }
+      ]
+    },
+    "cooling-counter": {
+      "inputs": [
+        {
+          "device": "temperature-uid20",
+          "point": "t16"
+        },
+        {
+          "device": "temperature-uid20",
+          "point": "t18"
+        }
+      ]
     }
   }
 }

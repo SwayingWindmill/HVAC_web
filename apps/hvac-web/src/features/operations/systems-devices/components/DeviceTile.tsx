@@ -5,6 +5,7 @@ import { Sparkline } from '@/components/ui/sparkline';
 import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
+import { pointIsTrusted } from '@/features/assets/operational-projection';
 import { CATEGORY_ICONS, deviceStatus, formatClock, KEY_READINGS, POWER_KEY, ReadingValue } from '../../realtime/device-presentation';
 import { PLANT_CATEGORY_LABELS, tileReadings, type PlantDevice } from '../../realtime/plant-model';
 import { deviceDayHistoryQuery } from '../device-history';
@@ -37,7 +38,7 @@ export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
   const values = series.map((point) => point.average);
   const unit = lead?.reading.unit ?? formatTelemetryUnit(undefined);
   const points = device.row.operational.points;
-  const healthy = points.filter((point) => point.freshness === 'FRESH' && point.quality === 'GOOD').length;
+  const healthy = points.filter((point) => pointIsTrusted(point)).length;
   const Icon = CATEGORY_ICONS[device.category];
   const stale = device.hasStaleData || device.connection === 'OFFLINE';
 

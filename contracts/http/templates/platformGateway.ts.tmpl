@@ -349,7 +349,7 @@ export const siteTariffSchema = z.object({
 export const alarmRuleReadingSchema = z.object({ deviceId: uuidV7Schema, pointCode: z.string().min(1).max(128) }).strict();
 export type AlarmRuleReading = z.infer<typeof alarmRuleReadingSchema>;
 export type AlarmRuleCondition = {
-  kind: 'COMPARE' | 'RANGE' | 'HYSTERESIS' | 'NO_DATA' | 'STALE' | 'UNCHANGED' | 'CHANGED' | 'AND' | 'OR';
+  kind: 'COMPARE' | 'RANGE' | 'HYSTERESIS' | 'NO_DATA' | 'STALE' | 'UNCHANGED' | 'CHANGED' | 'REASONS' | 'AND' | 'OR';
   reading?: AlarmRuleReading;
   operator?: 'EQ' | 'NE' | 'GT' | 'GTE' | 'LT' | 'LTE';
   value?: number | string | boolean;
@@ -359,10 +359,12 @@ export type AlarmRuleCondition = {
   trigger?: number;
   reset?: number;
   ageSeconds?: number;
+  reasons?: Array<'OUT_OF_RANGE' | 'SPIKE' | 'SENTINEL' | 'FLATLINE' | 'DERIVED_INPUT'>;
+  match?: 'ANY' | 'NONE';
   children?: AlarmRuleCondition[];
 };
 export const alarmRuleConditionSchema: z.ZodType<AlarmRuleCondition> = z.lazy(() => z.object({
-  kind: z.enum(['COMPARE', 'RANGE', 'HYSTERESIS', 'NO_DATA', 'STALE', 'UNCHANGED', 'CHANGED', 'AND', 'OR']),
+  kind: z.enum(['COMPARE', 'RANGE', 'HYSTERESIS', 'NO_DATA', 'STALE', 'UNCHANGED', 'CHANGED', 'REASONS', 'AND', 'OR']),
   reading: alarmRuleReadingSchema.optional(),
   operator: z.enum(['EQ', 'NE', 'GT', 'GTE', 'LT', 'LTE']).optional(),
   value: z.union([z.number(), z.string(), z.boolean()]).optional(),
@@ -372,6 +374,8 @@ export const alarmRuleConditionSchema: z.ZodType<AlarmRuleCondition> = z.lazy(()
   trigger: z.number().optional(),
   reset: z.number().optional(),
   ageSeconds: z.number().int().positive().optional(),
+  reasons: z.array(z.enum(['OUT_OF_RANGE', 'SPIKE', 'SENTINEL', 'FLATLINE', 'DERIVED_INPUT'])).min(1).max(8).optional(),
+  match: z.enum(['ANY', 'NONE']).optional(),
   children: z.array(alarmRuleConditionSchema).min(2).max(32).optional(),
 }).strict());
 export const alarmRuleSchema = z.object({

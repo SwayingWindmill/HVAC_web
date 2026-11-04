@@ -2,6 +2,7 @@ import type {
   DeviceObservationPublication,
   DeviceObservationSnapshot,
   PresenceSnapshot,
+  QualityReasonCode,
   TelemetryKey,
   TelemetryKeyState,
 } from '@/api/generated/s2Telemetry.gen';
@@ -34,7 +35,12 @@ const qualityReasons = new Set([
   'DUPLICATE',
   'OUT_OF_ORDER',
   'REPLAYED',
+  'SPIKE',
+  'SENTINEL',
+  'FLATLINE',
+  'DERIVED_INPUT',
 ]);
+const healthStatuses = new Set(['HEALTHY', 'SUSPECT', 'BAD', 'STALE']);
 const missingReasons = new Set(['NEVER_OBSERVED', 'ONLY_REJECTED_CANDIDATES', 'POLICY_NOT_CONFIGURED']);
 
 export class TelemetryContractError extends Error {
@@ -60,10 +66,10 @@ function record(value: unknown, label: string): Record<string, unknown> {
   return value;
 }
 
-function exactKeys(value: Record<string, unknown>, keys: ReadonlyArray<string>, label: string): void {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+function exactKeys(value: Record<string, unknown>, keys: ReadonlyArray<string>, label: string, optional: ReadonlyArray<string> = []): void {
+  const actual = Object.keys(value);
+  const allowed = new Set([...keys, ...optional]);
+  if (keys.some((key) => !actual.includes(key)) || actual.some((key) => !allowed.has(key))) {
     fail('schema', `${label} fields do not match schema version 1`);
   }
 }
@@ -152,11 +158,26 @@ function parsePresence(value: unknown, label: string): PresenceSnapshot {
   };
 }
 
+function parsePointHealth(value: unknown, label: string) {
+  if (value === undefined) return undefined;
+  const input = record(value, label);
+  exactKeys(input, ['status', 'score', 'reasons'], label);
+  const status = enumeration(input.status, healthStatuses, `${label}.status`);
+  const score = integer(input.score, `${label}.score`, 0);
+  if (score > 100) fail('shape', `${label}.score is above 100`);
+  return {
+    status: status as 'HEALTHY' | 'SUSPECT' | 'BAD' | 'STALE',
+    score,
+    reasons: stringArray(input.reasons, qualityReasons, `${label}.reasons`) as QualityReasonCode[],
+  };
+}
+
 function parseTelemetryKeyState(value: unknown, label: string): TelemetryKeyState {
   const input = record(value, label);
   const state = string(input.state, `${label}.state`);
   if (state === 'PRESENT') {
-    exactKeys(input, ['key', 'state', 'value', 'valueType', 'unit', 'sampledAt', 'receivedAt', 'freshness', 'quality', 'qualityReasons', 'policyRevision'], label);
+    exactKeys(input, ['key', 'state', 'value', 'valueType', 'unit', 'sampledAt', 'receivedAt', 'freshness', 'quality', 'qualityReasons', 'policyRevision'], label, ['health']);
+    const health = parsePointHealth(input.health, `${label}.health`);
     const key = string(input.key, `${label}.key`);
     if (!telemetryKeyPattern.test(key)) fail('shape', `${label}.key is invalid`);
     const valueType = enumeration(input.valueType, new Set(['NUMBER', 'STRING', 'BOOLEAN', 'JSON']), `${label}.valueType`);
@@ -185,6 +206,7 @@ function parseTelemetryKeyState(value: unknown, label: string): TelemetryKeyStat
         ? T extends { state: 'PRESENT'; qualityReasons: infer Q } ? Q : never
         : never,
       policyRevision: integer(input.policyRevision, `${label}.policyRevision`, 0),
+      ...(health ? { health } : {}),
     };
   }
   if (state === 'MISSING') {

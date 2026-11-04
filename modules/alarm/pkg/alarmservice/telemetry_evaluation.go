@@ -376,10 +376,15 @@ func inputFactFromTelemetry(record telemetryEvaluationInputRecord, state telemet
 		if err != nil {
 			return "", InputFact{}, fmt.Errorf("%w: telemetry key %q value cannot be evaluated", ErrTelemetryEvaluationInvalid, key)
 		}
-		return key, InputFact{
+		fact := InputFact{
 			Key: key, Present: true, Revision: revision, Value: value, Quality: quality, ObservedAt: observedAt, UnchangedSince: record.UnchangedSince[key],
-			Evidence: []alarmmodel.EvidenceReference{{Kind: "telemetry-device-snapshot", Reference: record.EventID + "#" + key, CapturedAt: observedAt}},
-		}, nil
+			QualityReasons: reasonStrings(present.QualityReasons),
+			Evidence:       []alarmmodel.EvidenceReference{{Kind: "telemetry-device-snapshot", Reference: record.EventID + "#" + key, CapturedAt: observedAt}},
+		}
+		if present.Health != nil {
+			fact.HealthReasons = reasonStrings(present.Health.Reasons)
+		}
+		return key, fact, nil
 	}
 	if state.Missing != nil && state.Present == nil {
 		key := string(state.Missing.Key)
@@ -424,6 +429,17 @@ func unchangedSince(previous *telemetryapi.DeviceObservationSnapshot, previousSi
 		held[key] = string(state.Present.SampledAt)
 	}
 	return held, nil
+}
+
+func reasonStrings(values []telemetryapi.QualityReasonCode) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	reasons := make([]string, len(values))
+	for index, value := range values {
+		reasons[index] = string(value)
+	}
+	return reasons
 }
 
 func evaluationValueFromTelemetry(valueType string, raw json.RawMessage) (TypedValue, error) {

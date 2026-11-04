@@ -309,7 +309,8 @@ ORDER BY telemetry_key
 	rows.Close()
 
 	rows, err = tx.Query(ctx, `
-SELECT telemetry_key, value, value_type, unit, sampled_at, received_at, quality, quality_reasons
+SELECT telemetry_key, value, value_type, unit, sampled_at, received_at, quality, quality_reasons,
+       health_status, health_score, health_reasons
 FROM telemetry_runtime.latest_accepted_telemetry
 WHERE device_id = $1::uuid
 ORDER BY telemetry_key
@@ -323,7 +324,10 @@ ORDER BY telemetry_key
 		var observation LatestObservation
 		var quality string
 		var reasons []string
-		if err := rows.Scan(&key, &value, &observation.ValueType, &observation.Unit, &observation.SampledAt, &observation.ReceivedAt, &quality, &reasons); err != nil {
+		var healthStatus *string
+		var healthScore *int16
+		var healthReasons []string
+		if err := rows.Scan(&key, &value, &observation.ValueType, &observation.Unit, &observation.SampledAt, &observation.ReceivedAt, &quality, &reasons, &healthStatus, &healthScore, &healthReasons); err != nil {
 			rows.Close()
 			return DeviceFacts{}, fmt.Errorf("scan latest accepted telemetry: %w", err)
 		}
@@ -331,6 +335,16 @@ ORDER BY telemetry_key
 		observation.Quality = telemetryapi.TelemetryQuality(quality)
 		for _, reason := range reasons {
 			observation.QualityReasons = append(observation.QualityReasons, telemetryapi.QualityReasonCode(reason))
+		}
+		if healthStatus != nil && *healthStatus != "" {
+			health := PointHealth{Status: *healthStatus, Reasons: make([]QualityReason, len(healthReasons))}
+			if healthScore != nil {
+				health.Score = int(*healthScore)
+			}
+			for index, reason := range healthReasons {
+				health.Reasons[index] = QualityReason(reason)
+			}
+			observation.Health = &health
 		}
 		facts.Latest[key] = observation
 	}
