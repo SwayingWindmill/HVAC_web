@@ -43,8 +43,9 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	// The supply-temperature rule, the five plant rules added 2026-10-31, 网关上报中断, one
 	// 读数长时间没有更新 per device with an active point (13), the data-quality rules
 	// from each point's quality profile (a copied point is not alarmed again), and the
-	// physics checks in the site file that carry an alarm (12).
-	if len(byTitle) != 83 {
+	// physics checks in the site file that carry an alarm (12), and three probe-offset
+	// suggestions (header, chiller C, chiller D).
+	if len(byTitle) != 86 {
 		t.Fatalf("got %d rules: %v", len(byTitle), keys(byTitle))
 	}
 

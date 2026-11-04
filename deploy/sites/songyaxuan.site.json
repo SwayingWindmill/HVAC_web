@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：网关把四块机组电表相加作为「空调总电表（四台机组合计）」，并按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场对照表（2026-10-15）：t1 冷凝进、t2 蒸发进（四台共用），A–D 蒸发出 t3/t5/t7/t9、冷凝出 t4/t6/t8/t10，t12 房间，t13 室外，t14 从 2026-10-29 起没有探头已停用，t15 室外湿球；t16、t18 仍作冷量计算的总回水、总供水，t17、t19 用途待确认，冷却塔没有探头。点位带 from（来源通道），网关函数的 COPIES 照它复制。 点位质量见 qualityProfiles：冷冻水 3–20 ℃、冷却水 15–45 ℃、房间 10–40 ℃、室外 −10–45 ℃；38.4 是模块通讯异常值。 铭牌见 nameplateCatalog：四台冷机是 2007 年日立 RCU180SC2（572 kW / 127.5 kW）；八台凯泉泵的 22 kW 和 15 kW 还没分到冷冻还是冷却；冷却塔风机铭牌未到。物理检查见 physicsChecks。",
+  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：网关把四块机组电表相加作为「空调总电表（四台机组合计）」，并按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场对照表（2026-10-15）：t1 冷凝进、t2 蒸发进（四台共用），A–D 蒸发出 t3/t5/t7/t9、冷凝出 t4/t6/t8/t10，t12 房间，t13 室外，t14 从 2026-10-29 起没有探头已停用，t15 室外湿球；t16、t18 仍作冷量计算的总回水、总供水，t17、t19 用途待确认，冷却塔没有探头。点位带 from（来源通道），网关函数的 COPIES 照它复制。 点位质量见 qualityProfiles：冷冻水 3–20 ℃、冷却水 15–45 ℃、房间 10–40 ℃、室外 −10–45 ℃；38.4 是模块通讯异常值。 铭牌见 nameplateCatalog：四台冷机是 2007 年日立 RCU180SC2（572 kW / 127.5 kW）；八台凯泉泵的 22 kW 和 15 kW 还没分到冷冻还是冷却；冷却塔风机铭牌未到。物理检查见 physicsChecks。测量不确定度见 measurement：温度 ±0.1 K，流量 ±2%，总功率 ±1%；温差相对误差超过 10% 时冷量标成部分。探头零点见 probePairs，只建议不改数。",
   "tenantId": "018f3d00-0000-7000-8000-000000000001",
   "site": {
     "id": "01a14000-1000-7000-8000-000000000001",
@@ -224,7 +224,8 @@
           "unit": "m3/h",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "UID10 保持寄存器 1"
+          "address": "UID10 保持寄存器 1",
+          "qualityProfile": "flow-meter"
         },
         {
           "code": "flow_velocity",
@@ -637,7 +638,8 @@
           "unit": "kW",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "网关计算：1–4 号电表有功功率之和"
+          "address": "网关计算：1–4 号电表有功功率之和",
+          "qualityProfile": "power-meter"
         },
         {
           "code": "active_energy_total",
@@ -1132,6 +1134,7 @@
   },
   "qualityProfiles": {
     "chilled-water": {
+      "accuracyK": 0.1,
       "range": {
         "min": 3,
         "max": 20
@@ -1168,6 +1171,7 @@
       ]
     },
     "condenser-water": {
+      "accuracyK": 0.1,
       "range": {
         "min": 15,
         "max": 45
@@ -1204,6 +1208,7 @@
       ]
     },
     "room": {
+      "accuracyK": 0.1,
       "range": {
         "min": 10,
         "max": 40
@@ -1217,6 +1222,7 @@
       "flatlineSeconds": 21600
     },
     "outdoor": {
+      "accuracyK": 0.1,
       "range": {
         "min": -10,
         "max": 45
@@ -1230,6 +1236,7 @@
       "flatlineSeconds": 10800
     },
     "wet-bulb": {
+      "accuracyK": 0.1,
       "range": {
         "min": -10,
         "max": 40
@@ -1243,6 +1250,7 @@
       "flatlineSeconds": 10800
     },
     "unconfirmed-temperature": {
+      "accuracyK": 0.1,
       "range": {
         "min": -10,
         "max": 60
@@ -1292,6 +1300,12 @@
           "point": "t18"
         }
       ]
+    },
+    "flow-meter": {
+      "accuracyFraction": 0.02
+    },
+    "power-meter": {
+      "accuracyFraction": 0.01
     },
     "cooling-counter": {
       "inputs": [
@@ -1716,6 +1730,107 @@
         "summary": "总管流量大于 10 m³/h 已持续 10 分钟，四台机组都没有运行。可能是水泵空转，或流量判断和机组状态对不上。流量降下来或任一台机组运行后自动恢复。",
         "severity": "WARNING",
         "durationSeconds": 600
+      }
+    }
+  ],
+  "measurement": {
+    "temperatureAccuracyK": 0.1,
+    "flowAccuracyFraction": 0.02,
+    "powerAccuracyFraction": 0.01,
+    "propertyFraction": 0.005,
+    "lowConfidenceRelative": 0.1,
+    "cooling": [
+      {
+        "kind": "cooling",
+        "subject": { "device": "btu-calc", "point": "instant_cooling_capacity" },
+        "supply": { "device": "temperature-uid20", "point": "t18" },
+        "return": { "device": "temperature-uid20", "point": "t16" },
+        "flow": { "device": "flow-uid10", "point": "flow_meter" },
+        "power": { "device": "meter-total", "point": "power_total" }
+      },
+      {
+        "kind": "delta",
+        "subject": { "device": "btu-calc", "point": "temperature_difference" },
+        "supply": { "device": "temperature-uid20", "point": "t18" },
+        "return": { "device": "temperature-uid20", "point": "t16" }
+      },
+      {
+        "kind": "coolingCounter",
+        "subject": { "device": "btu-calc", "point": "accumulated_cooling_energy" },
+        "supply": { "device": "temperature-uid20", "point": "t18" },
+        "return": { "device": "temperature-uid20", "point": "t16" },
+        "flow": { "device": "flow-uid10", "point": "flow_meter" }
+      }
+    ]
+  },
+  "probePairs": [
+    {
+      "code": "header-chw",
+      "supply": { "device": "temperature-uid20", "point": "t18" },
+      "return": { "device": "temperature-uid20", "point": "t16" },
+      "pumps": [{ "device": "chwp-main", "point": "run_state", "equals": "RUNNING" }],
+      "chillers": [
+        { "device": "meter-uid5", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid2", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid3", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid4", "point": "run_state", "equals": "RUNNING" }
+      ],
+      "stableBandK": 0.1,
+      "minimumMinutes": 10,
+      "minimumSamples": 5,
+      "maxGapMinutes": 15,
+      "offsetAlarmK": 0.2,
+      "driftAlarmK": 0.1,
+      "alarm": {
+        "title": "总管供回水温差零点偏了",
+        "summary": "冷冻水泵在跑、四台机组都停的时候，总回水（通道 16）和总供水（通道 18）应该读成同一个温度。这段时间里的平均差超过 0.2 K，或比上一次估计又漂了 0.1 K。这是建议修正，不会自动改读数。差回到线内后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-c-chw",
+      "supply": { "device": "temperature-uid20", "point": "t2" },
+      "return": { "device": "temperature-uid20", "point": "t16" },
+      "pumps": [{ "device": "chwp-main", "point": "run_state", "equals": "RUNNING" }],
+      "chillers": [
+        { "device": "meter-uid5", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid2", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid3", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid4", "point": "run_state", "equals": "RUNNING" }
+      ],
+      "stableBandK": 0.1,
+      "minimumMinutes": 10,
+      "minimumSamples": 5,
+      "maxGapMinutes": 15,
+      "offsetAlarmK": 0.2,
+      "driftAlarmK": 0.1,
+      "alarm": {
+        "title": "C 机组冷冻水供回水零点偏了",
+        "summary": "冷冻水泵在跑、四台机组都停的时候，C 机组冷冻水供水（通道 2）和总回水（通道 16）应该读成同一个温度。平均差超过 0.2 K，或比上一次估计又漂了 0.1 K。这是建议修正，不会自动改读数。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-d-chw",
+      "supply": { "device": "temperature-uid20", "point": "t1" },
+      "return": { "device": "temperature-uid20", "point": "t16" },
+      "pumps": [{ "device": "chwp-main", "point": "run_state", "equals": "RUNNING" }],
+      "chillers": [
+        { "device": "meter-uid5", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid2", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid3", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid4", "point": "run_state", "equals": "RUNNING" }
+      ],
+      "stableBandK": 0.1,
+      "minimumMinutes": 10,
+      "minimumSamples": 5,
+      "maxGapMinutes": 15,
+      "offsetAlarmK": 0.2,
+      "driftAlarmK": 0.1,
+      "alarm": {
+        "title": "D 机组冷冻水供回水零点偏了",
+        "summary": "冷冻水泵在跑、四台机组都停的时候，D 机组冷冻水供水（通道 1）和总回水（通道 16）应该读成同一个温度。平均差超过 0.2 K，或比上一次估计又漂了 0.1 K。这是建议修正，不会自动改读数。",
+        "severity": "WARNING"
       }
     }
   ]
