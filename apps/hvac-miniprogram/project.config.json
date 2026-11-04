@@ -34,7 +34,23 @@
     }
   },
   "packOptions": {
-    "ignore": [],
+    "ignore": [
+      { "type": "folder", "value": "pages/assistant" },
+      { "type": "folder", "value": "pages/assistant-history" },
+      { "type": "folder", "value": "components/finding-card" },
+      { "type": "file", "value": "lib/agent.ts" },
+      { "type": "file", "value": "lib/agent-stream.ts" },
+      { "type": "file", "value": "lib/agent-types.ts" },
+      { "type": "file", "value": "lib/answer-nodes.ts" },
+      { "type": "file", "value": "lib/assistant.ts" },
+      { "type": "file", "value": "lib/assistant-choice.ts" },
+      { "type": "file", "value": "lib/conversations.ts" },
+      { "type": "file", "value": "lib/line-image.ts" },
+      { "type": "file", "value": "shared/answer-markdown.ts" },
+      { "type": "file", "value": "shared/thread-model.ts" },
+      { "type": "file", "value": "shared/tool-labels.ts" },
+      { "type": "file", "value": "assets/send.svg" }
+    ],
     "include": []
   },
   "condition": {},
