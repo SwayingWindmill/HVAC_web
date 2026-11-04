@@ -313,6 +313,30 @@ func TestShadowSolverFailureNeverChangesThePublishedRun(t *testing.T) {
 	}
 }
 
+func TestNameplateDropsPowerFarAboveThePlate(t *testing.T) {
+	at := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
+	rated := 127.5
+	buckets := []PlantBucket{}
+	for hour := 0; hour < 3; hour++ {
+		when := at.Add(time.Duration(hour) * 15 * time.Minute)
+		power := 100.0
+		if hour == 2 {
+			power = 191.8
+		}
+		buckets = append(buckets,
+			PlantBucket{Bucket: when, DeviceID: "chiller-c", PowerKW: ptr(power), ChwLeavingC: ptr(7), ChwEnteringC: ptr(8), CwLeavingC: ptr(30), RatedPowerKW: &rated},
+			PlantBucket{Bucket: when, DeviceID: "btu", CoolingKW: ptr(5.02 * 127.5)},
+		)
+	}
+	fit := FitPlant(buckets, at, at.Add(time.Hour))
+	if fit.History.SetAside["aboveNameplate"] != 1 {
+		t.Fatalf("set aside=%v", fit.History.SetAside)
+	}
+	if len(fit.Chillers) != 1 || fit.Chillers[0].Samples != 1 {
+		t.Fatalf("the part-load bucket should remain: %+v", fit.Chillers)
+	}
+}
+
 type shadowFailingSink struct{ captureEvaluationSink }
 
 func (sink *shadowFailingSink) InsertEvaluation(ctx context.Context, evaluation Evaluation) error {

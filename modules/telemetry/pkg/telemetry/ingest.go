@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"slices"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/nameplate"
 )
 
 type SourcePath string
@@ -44,20 +46,27 @@ const (
 type QualityReason string
 
 const (
-	QualityReasonSourceUntrusted   QualityReason = "SOURCE_UNTRUSTED"
-	QualityReasonTypeMismatch      QualityReason = "TYPE_MISMATCH"
-	QualityReasonUnitMismatch      QualityReason = "UNIT_MISMATCH"
-	QualityReasonOutOfRange        QualityReason = "OUT_OF_RANGE"
-	QualityReasonClockAhead        QualityReason = "CLOCK_AHEAD"
-	QualityReasonClockBehind       QualityReason = "CLOCK_BEHIND"
-	QualityReasonSourceLagExceeded QualityReason = "SOURCE_LAG_EXCEEDED"
-	QualityReasonDuplicate         QualityReason = "DUPLICATE"
-	QualityReasonOutOfOrder        QualityReason = "OUT_OF_ORDER"
-	QualityReasonReplayed          QualityReason = "REPLAYED"
-	QualityReasonSpike             QualityReason = "SPIKE"
-	QualityReasonSentinel          QualityReason = "SENTINEL"
-	QualityReasonFlatline          QualityReason = "FLATLINE"
-	QualityReasonDerivedInput      QualityReason = "DERIVED_INPUT"
+	QualityReasonSourceUntrusted         QualityReason = "SOURCE_UNTRUSTED"
+	QualityReasonTypeMismatch            QualityReason = "TYPE_MISMATCH"
+	QualityReasonUnitMismatch            QualityReason = "UNIT_MISMATCH"
+	QualityReasonOutOfRange              QualityReason = "OUT_OF_RANGE"
+	QualityReasonClockAhead              QualityReason = "CLOCK_AHEAD"
+	QualityReasonClockBehind             QualityReason = "CLOCK_BEHIND"
+	QualityReasonSourceLagExceeded       QualityReason = "SOURCE_LAG_EXCEEDED"
+	QualityReasonDuplicate               QualityReason = "DUPLICATE"
+	QualityReasonOutOfOrder              QualityReason = "OUT_OF_ORDER"
+	QualityReasonReplayed                QualityReason = "REPLAYED"
+	QualityReasonSpike                   QualityReason = "SPIKE"
+	QualityReasonSentinel                QualityReason = "SENTINEL"
+	QualityReasonFlatline                QualityReason = "FLATLINE"
+	QualityReasonDerivedInput            QualityReason = "DERIVED_INPUT"
+	QualityReasonPhysicsWetBulbDry       QualityReason = nameplate.ReasonWetBulbDry
+	QualityReasonPhysicsWetBulbCondenser QualityReason = nameplate.ReasonWetBulbCondenser
+	QualityReasonPhysicsPower            QualityReason = nameplate.ReasonPower
+	QualityReasonPhysicsCOP              QualityReason = nameplate.ReasonCOP
+	QualityReasonPhysicsChwDirection     QualityReason = nameplate.ReasonChilledDirection
+	QualityReasonPhysicsCwDirection      QualityReason = nameplate.ReasonCondenserDirection
+	QualityReasonPhysicsHeatBalance      QualityReason = nameplate.ReasonHeatBalance
 )
 
 type QuarantineReason string
@@ -140,6 +149,7 @@ type ObservationFacts struct {
 	Previous         *PriorNumeric
 	Running          bool
 	InputsUntrusted  bool
+	Peers            map[string]PeerSample
 }
 
 type ObservationDecision struct {
@@ -288,6 +298,7 @@ func assessCandidateQuality(candidate ObservationCandidate, facts ObservationFac
 	}
 	return AssessPointQuality(number, candidate.SampledAt, facts.Policy.QualityChecks, PointQualityInput{
 		PointType: pointType, Live: live, Previous: facts.Previous, Running: facts.Running, InputsUntrusted: facts.InputsUntrusted,
+		Peers: facts.Peers,
 	})
 }
 
@@ -297,7 +308,7 @@ func numericSample(candidate ObservationCandidate) (float64, bool) {
 }
 
 func suspectQuality(reasons []QualityReason) bool {
-	return slices.Contains(reasons, QualityReasonSpike) || slices.Contains(reasons, QualityReasonSentinel) || slices.Contains(reasons, QualityReasonFlatline) || slices.Contains(reasons, QualityReasonDerivedInput)
+	return slices.Contains(reasons, QualityReasonSpike) || slices.Contains(reasons, QualityReasonSentinel) || slices.Contains(reasons, QualityReasonFlatline) || slices.Contains(reasons, QualityReasonDerivedInput) || containsPhysics(reasons)
 }
 
 func recordPointHealth(decision *ObservationDecision, quality ObservationQuality, reasons []QualityReason) {
@@ -415,6 +426,9 @@ func canonicalIngestReasons(values []QualityReason) []QualityReason {
 		QualityReasonOutOfRange: 4, QualityReasonClockAhead: 5, QualityReasonClockBehind: 6,
 		QualityReasonSourceLagExceeded: 7, QualityReasonDuplicate: 8, QualityReasonOutOfOrder: 9, QualityReasonReplayed: 10,
 		QualityReasonSpike: 11, QualityReasonSentinel: 12, QualityReasonFlatline: 13, QualityReasonDerivedInput: 14,
+		QualityReasonPhysicsWetBulbDry: 15, QualityReasonPhysicsWetBulbCondenser: 16, QualityReasonPhysicsPower: 17,
+		QualityReasonPhysicsCOP: 18, QualityReasonPhysicsChwDirection: 19, QualityReasonPhysicsCwDirection: 20,
+		QualityReasonPhysicsHeatBalance: 21,
 	}
 	seen := make(map[QualityReason]struct{}, len(values))
 	result := make([]QualityReason, 0, len(values))

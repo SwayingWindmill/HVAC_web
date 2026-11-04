@@ -106,6 +106,34 @@ test('songyaxuan outdoor temperature carries its quality profile into the freshn
   assert.doesNotMatch(inactive, /38\.4/);
 });
 
+test('a confirmed chiller nameplate is written and an unconfirmed pump power is not', () => {
+  const profile = copy(songyaxuan);
+  for (const asset of profile.assets) delete asset.nameplate;
+  profile.physicsChecks = [];
+  profile.nameplateCatalog = {
+    hitachi: { manufacturer: '日立', model: 'RCU180SC2', year: 2007, refrigerant: 'R22', ratedCapacityKw: 572, ratedPowerKw: 127.5, ratedCurrentA: 225 },
+    pump: { manufacturer: '凯泉', speed: 'FIXED', role: 'UNKNOWN', unconfirmed: ['role', 'ratedPowerKw'], candidates: [{ model: 'YE3-180L-4', ratedPowerKw: 22, efficiency: 0.93 }] },
+  };
+  profile.assets.find((asset) => asset.code === 'chiller-c').nameplate = 'hitachi';
+  profile.assets.find((asset) => asset.code === 'chwp-1').nameplate = 'pump';
+  profile.physicsChecks = [{
+    code: 'chiller-c-power', kind: 'POWER_NAMEPLATE', asset: 'chiller-c', aboveRatedFraction: 0.15,
+    subject: { device: 'meter-uid3', point: 'power_total' },
+    alarm: { title: 'C 机组功率超过铭牌', summary: 'C 机组电表功率超过铭牌输入功率 127.5 kW 的 15%。', severity: 'MAJOR' },
+  }];
+  assert.deepEqual(checkSiteFile(profile, songyaxuanAlarmRules), []);
+  const { registry, telemetry } = buildOnboardingSql(profile);
+  const chiller = registry.split('\n').find((line) => line.includes("'chiller-c'"));
+  const pump = registry.split('\n').find((line) => line.includes("'chwp-1'"));
+  assert.match(chiller ?? '', /, 572, 127\.5, '日立', 'RCU180SC2', /);
+  assert.match(pump ?? '', /clock_timestamp\(\), clock_timestamp\(\), '[^']+', NULL, NULL, '凯泉', NULL, /);
+  assert.match(pump ?? '', /"unconfirmed":\["role","ratedPowerKw"\]/);
+  const power = telemetry.split('\n').find((line) => line.startsWith("('01a14000-4000-7000-8000-000000000005', 'power_total'"));
+  assert.match(power ?? '', /"kind":"POWER_NAMEPLATE"/);
+  assert.match(power ?? '', /"ratedPowerKw":127\.5/);
+  assert.match(power ?? '', /"aboveRatedFraction":0\.15/);
+});
+
 test('point status defaults to ACTIVE and rejects unknown values', () => {
   assert.equal(pointStatus({ code: 'a' }), 'ACTIVE');
   assert.equal(pointStatus({ code: 'a', status: 'INACTIVE' }), 'INACTIVE');

@@ -289,7 +289,14 @@ func canonicalQualityReasons(values []telemetryapi.QualityReasonCode) ([]telemet
 			telemetryapi.QualityReasonCodeSpike,
 			telemetryapi.QualityReasonCodeSentinel,
 			telemetryapi.QualityReasonCodeFlatline,
-			telemetryapi.QualityReasonCodeDerivedInput:
+			telemetryapi.QualityReasonCodeDerivedInput,
+			telemetryapi.QualityReasonCodePhysicsWetBulbDry,
+			telemetryapi.QualityReasonCodePhysicsWetBulbCondenser,
+			telemetryapi.QualityReasonCodePhysicsPower,
+			telemetryapi.QualityReasonCodePhysicsCop,
+			telemetryapi.QualityReasonCodePhysicsChwDirection,
+			telemetryapi.QualityReasonCodePhysicsCwDirection,
+			telemetryapi.QualityReasonCodePhysicsHeatBalance:
 		default:
 			return nil, errors.New("telemetry quality reason is invalid")
 		}
