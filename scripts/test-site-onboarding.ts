@@ -134,6 +134,27 @@ test('a confirmed chiller nameplate is written and an unconfirmed pump power is 
   assert.match(power ?? '', /"aboveRatedFraction":0\.15/);
 });
 
+test('songyaxuan nameplates are the photographed plates and the pump motors stay unassigned', () => {
+  const { registry, telemetry } = buildOnboardingSql(songyaxuan);
+  for (const code of ['chiller-a', 'chiller-b', 'chiller-c', 'chiller-d']) {
+    const line = registry.split('\n').find((row) => row.includes(`'${code}'`));
+    assert.match(line ?? '', /, 572, 127\.5, '日立', 'RCU180SC2',/);
+  }
+  for (const code of ['chwp-1', 'chwp-2', 'chwp-3', 'chwp-4', 'cwp-1', 'cwp-2', 'cwp-3', 'cwp-4']) {
+    const line = registry.split('\n').find((row) => row.includes(`'${code}'`));
+    assert.match(line ?? '', /NULL, NULL, '凯泉', NULL/);
+    assert.match(line ?? '', /"role":"UNKNOWN"/);
+  }
+  const wet = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000001', 't15'"));
+  assert.match(wet ?? '', /WET_BULB_DRY_BULB/);
+  assert.match(wet ?? '', /WET_BULB_CONDENSER/);
+  const copied = telemetry.split('\n').find((row) => row.includes("'ambient_wet_bulb_temperature'"));
+  assert.match(copied ?? '', /WET_BULB_DRY_BULB/);
+  const cooling = telemetry.split('\n').find((row) => row.includes("'instant_cooling_capacity'"));
+  assert.match(cooling ?? '', /COP_CARNOT/);
+  assert.doesNotMatch(cooling ?? '', /HEAT_BALANCE/);
+});
+
 test('point status defaults to ACTIVE and rejects unknown values', () => {
   assert.equal(pointStatus({ code: 'a' }), 'ACTIVE');
   assert.equal(pointStatus({ code: 'a', status: 'INACTIVE' }), 'INACTIVE');
