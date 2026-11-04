@@ -242,7 +242,7 @@ func evaluateKey(key string, policy FreshnessPolicy, latest LatestObservation, r
 }
 
 func pointHealthForSnapshot(latest LatestObservation, fresh bool) (*telemetryapi.TelemetryPointHealth, error) {
-	health := PointHealth{Status: HealthHealthy, Score: 100, Reasons: []QualityReason{}}
+	var health PointHealth
 	if latest.Health != nil && latest.Health.Status != "" {
 		health = *latest.Health
 	} else {

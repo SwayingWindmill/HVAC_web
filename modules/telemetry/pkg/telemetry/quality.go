@@ -239,13 +239,13 @@ func parseQualityChecks(raw []byte) (*QualityChecks, error) {
 		if item.DeviceID == "" || item.Key == "" || item.Equals == "" {
 			continue
 		}
-		checks.Running = append(checks.Running, OperatingExpect{DeviceID: item.DeviceID, Key: item.Key, Equals: item.Equals})
+		checks.Running = append(checks.Running, OperatingExpect(item))
 	}
 	for _, item := range document.Inputs {
 		if item.DeviceID == "" || item.Key == "" {
 			continue
 		}
-		checks.Inputs = append(checks.Inputs, PointRef{DeviceID: item.DeviceID, Key: item.Key})
+		checks.Inputs = append(checks.Inputs, PointRef(item))
 	}
 	if checks.MaxStep == nil && len(checks.Sentinels) == 0 && checks.Flatline == 0 && checks.FlatlineRunning == 0 && len(checks.Running) == 0 && len(checks.Inputs) == 0 {
 		return nil, nil

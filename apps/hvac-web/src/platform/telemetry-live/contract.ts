@@ -2,6 +2,7 @@ import type {
   DeviceObservationPublication,
   DeviceObservationSnapshot,
   PresenceSnapshot,
+  QualityReasonCode,
   TelemetryKey,
   TelemetryKeyState,
 } from '@/api/generated/s2Telemetry.gen';
@@ -167,7 +168,7 @@ function parsePointHealth(value: unknown, label: string) {
   return {
     status: status as 'HEALTHY' | 'SUSPECT' | 'BAD' | 'STALE',
     score,
-    reasons: stringArray(input.reasons, qualityReasons, `${label}.reasons`),
+    reasons: stringArray(input.reasons, qualityReasons, `${label}.reasons`) as QualityReasonCode[],
   };
 }
 
