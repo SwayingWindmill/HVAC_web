@@ -4,6 +4,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/nameplate"
 )
 
 // Patterns replayed from the Songyaxuan site, 25 Oct–1 Nov (Beijing): outdoor
@@ -180,6 +182,58 @@ func TestParseQualityChecks(t *testing.T) {
 	}
 	if _, err := parseQualityChecks([]byte(`[`)); err == nil {
 		t.Fatal("invalid JSON was accepted")
+	}
+}
+
+func TestChillerPowerAboveTheNameplateIsSuspectAndAReplayIsNot(t *testing.T) {
+	fraction := nameplate.DefaultPowerAboveRatedFraction
+	checks := &QualityChecks{Physics: []PhysicsRule{{Kind: nameplate.KindPowerNameplate, Fraction: &fraction, Rated: 127.5}}}
+	at := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
+	reasons := AssessPointQuality(191.8, at, checks, PointQualityInput{PointType: "TELEMETRY", Live: true})
+	if !sameReasons(reasons, QualityReasonPhysicsPower) {
+		t.Fatalf("live=%v", reasons)
+	}
+	health := HealthFor(QualityPartial, reasons)
+	if health.Status != HealthSuspect || health.Score != 40 || !sameReasons(health.Reasons, QualityReasonPhysicsPower) {
+		t.Fatalf("health=%+v", health)
+	}
+	if replay := AssessPointQuality(191.8, at, checks, PointQualityInput{PointType: "TELEMETRY", Live: false}); len(replay) != 0 {
+		t.Fatalf("replay=%v", replay)
+	}
+	if inside := AssessPointQuality(140, at, checks, PointQualityInput{PointType: "TELEMETRY", Live: true}); len(inside) != 0 {
+		t.Fatalf("inside the margin=%v", inside)
+	}
+}
+
+func TestWetBulbAboveCondenserWaterNeedsThePeersAndTheTower(t *testing.T) {
+	margin := nameplate.DefaultWetBulbCondenserMarginK
+	checks := &QualityChecks{Physics: []PhysicsRule{{
+		Kind: nameplate.KindWetBulbCondenser, MarginK: &margin,
+		Peers: []PhysicsPeer{
+			{Role: "condenserEntering", DeviceID: "temp", Key: "t5"},
+			{Role: "condenserEntering", DeviceID: "temp", Key: "t9"},
+		},
+		Running: []OperatingExpect{{DeviceID: "meter", Key: "run_state", Equals: "RUNNING"}},
+	}}}
+	number := func(value float64) *float64 { return &value }
+	at := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
+	peers := map[string]PeerSample{
+		"temp/t5":         {Number: number(26), Good: true},
+		"temp/t9":         {Number: number(27), Good: true},
+		"meter/run_state": {Text: "RUNNING", Good: true},
+	}
+	reasons := AssessPointQuality(32, at, checks, PointQualityInput{PointType: "TELEMETRY", Live: true, Peers: peers})
+	if !sameReasons(reasons, QualityReasonPhysicsWetBulbCondenser) {
+		t.Fatalf("t15 above both condenser entering readings: %v", reasons)
+	}
+	peers["meter/run_state"] = PeerSample{Text: "STOPPED", Good: true}
+	if stopped := AssessPointQuality(32, at, checks, PointQualityInput{PointType: "TELEMETRY", Live: true, Peers: peers}); len(stopped) != 0 {
+		t.Fatalf("plant off: %v", stopped)
+	}
+	peers["meter/run_state"] = PeerSample{Text: "RUNNING", Good: true}
+	peers["temp/t9"] = PeerSample{Number: number(27), Good: false}
+	if partial := AssessPointQuality(32, at, checks, PointQualityInput{PointType: "TELEMETRY", Live: true, Peers: peers}); len(partial) != 0 {
+		t.Fatalf("a suspect condenser reading must not be used: %v", partial)
 	}
 }
 

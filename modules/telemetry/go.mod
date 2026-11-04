@@ -7,6 +7,7 @@ require (
 	github.com/quanlaihe/hvac-web/libs/analyticsmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/limitpolicy v0.0.0
+	github.com/quanlaihe/hvac-web/libs/nameplate v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/telemetryauth v0.0.0
 	github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel v0.0.0
@@ -22,7 +23,7 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 )
 
 replace github.com/quanlaihe/hvac-web/libs/analyticsmodel => ../../libs/analyticsmodel
@@ -30,6 +31,8 @@ replace github.com/quanlaihe/hvac-web/libs/analyticsmodel => ../../libs/analytic
 replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identitycontext
 
 replace github.com/quanlaihe/hvac-web/libs/limitpolicy => ../../libs/limitpolicy
+
+replace github.com/quanlaihe/hvac-web/libs/nameplate => ../../libs/nameplate
 
 replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observability
 

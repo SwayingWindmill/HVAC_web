@@ -1,8 +1,8 @@
 go 1.27.4
 
 use (
-	./cmd/energy-api
 	./cmd/connectivity
+	./cmd/energy-api
 	./cmd/maintenance-worker
 	./cmd/metric-worker
 	./cmd/scheduler
@@ -10,53 +10,54 @@ use (
 	./cmd/wecom-alert-adapter
 	./deploy/platform/phase1/cd
 	./libs/alarmauth
-	./libs/workorderauth
-	./libs/analyticsmodel
-	./libs/energyseries
-	./libs/grant
 	./libs/alarmmodel
-	./libs/workordermodel
+	./libs/analyticsmodel
 	./libs/commandauth
 	./libs/commandmodel
 	./libs/edgecontrol
+	./libs/energyseries
+	./libs/grant
 	./libs/identitycontext
 	./libs/intelligencemodel
 	./libs/limitpolicy
+	./libs/nameplate
 	./libs/observability
-	./libs/operationsauditevent
 	./libs/oidctest
+	./libs/operationsauditevent
 	./libs/ownershipregistry
 	./libs/registryauth
 	./libs/schedulerjob
+	./libs/schemagate
 	./libs/sessionevent
 	./libs/sessionstore
-	./libs/schemagate
 	./libs/tariffmodel
 	./libs/telemetryauth
 	./libs/telemetryhistorymodel
 	./libs/testpki
 	./libs/workloadtls
-	./modules/energy
+	./libs/workorderauth
+	./libs/workordermodel
 	./modules/alarm
 	./modules/audit
 	./modules/command
-	./services/forecast-service
-	./services/fdd-service
-	./services/mv-service
-	./services/report-service
-	./modules/iam
-	./services/identity-service
-	./services/optimization-service
-	./services/notification-service
 	./modules/connectivity
-	./modules/metric
+	./modules/energy
+	./modules/iam
 	./modules/maintenance
-	./modules/scheduler
-	./services/settlement-service
-	./tools/oidc-test-provider
+	./modules/metric
 	./modules/registry
+	./modules/scheduler
 	./modules/telemetry
 	./modules/workorder
+	./services/fdd-service
+	./services/forecast-service
+	./services/identity-service
+	./services/mv-service
+	./services/notification-service
+	./services/optimization-service
+	./services/report-service
+	./services/settlement-service
 	./tools/eg8200-simulator
+	./tools/oidc-test-provider
 	./tools/s0-auth-fixture
 )
