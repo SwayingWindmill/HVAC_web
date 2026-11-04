@@ -20,6 +20,7 @@ use (
 	./libs/identitycontext
 	./libs/intelligencemodel
 	./libs/limitpolicy
+	./libs/measurement
 	./libs/nameplate
 	./libs/observability
 	./libs/oidctest

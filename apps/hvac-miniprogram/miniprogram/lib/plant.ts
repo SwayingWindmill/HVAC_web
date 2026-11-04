@@ -42,6 +42,14 @@ interface ValueState {
   readonly sampledAt?: string;
   readonly freshness?: 'FRESH' | 'STALE';
   readonly quality?: string;
+  readonly measurement?: {
+    readonly relative: number;
+    readonly low: number;
+    readonly high: number;
+    readonly lowConfidence: boolean;
+    readonly copRelative?: number;
+  };
+  readonly probeOffsets?: readonly { readonly pairCode: string; readonly offsetK: number; readonly suggested: boolean; readonly applied: boolean; readonly alarm?: string }[];
 }
 
 interface Snapshot {
@@ -127,6 +135,8 @@ export interface PlantReading {
   readonly current: boolean;
   readonly stale: boolean;
   readonly sampledAt: string | null;
+  readonly measurement?: ValueState['measurement'];
+  readonly probeOffsets?: NonNullable<ValueState['probeOffsets']>;
 }
 
 export interface PlantDevice {
@@ -200,6 +210,8 @@ function readingOf(point: TelemetryPoint, value: ValueState | undefined, availab
     current: value.freshness === 'FRESH' && value.quality === 'GOOD',
     stale: value.freshness === 'STALE',
     sampledAt: value.sampledAt ?? null,
+    measurement: value.measurement,
+    probeOffsets: value.probeOffsets,
   };
 }
 

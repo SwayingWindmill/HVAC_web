@@ -499,7 +499,7 @@ func (condition Condition) Validate() error {
 		}
 		for _, reason := range condition.Reasons {
 			switch reason {
-			case "OUT_OF_RANGE", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT", "PHYSICS_WET_BULB_DRY", "PHYSICS_WET_BULB_CONDENSER", "PHYSICS_POWER", "PHYSICS_COP", "PHYSICS_CHW_DIRECTION", "PHYSICS_CW_DIRECTION", "PHYSICS_HEAT_BALANCE":
+			case "OUT_OF_RANGE", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT", "LOW_CONFIDENCE", "PHYSICS_WET_BULB_DRY", "PHYSICS_WET_BULB_CONDENSER", "PHYSICS_POWER", "PHYSICS_COP", "PHYSICS_CHW_DIRECTION", "PHYSICS_CW_DIRECTION", "PHYSICS_HEAT_BALANCE", "PROBE_OFFSET":
 			default:
 				return errors.New("quality-reason predicate names an unknown reason")
 			}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildPlantView, equipmentStatus, isRunning, soleReading, tileReadings } from '../apps/hvac-web/src/features/operations/realtime/plant-model.ts';
+import { buildPlantView, coolingUncertaintyText, copUncertaintyText, equipmentStatus, isRunning, probeOffsetText, soleReading, tileReadings } from '../apps/hvac-web/src/features/operations/realtime/plant-model.ts';
 
 const device = (category, overrides = {}) => ({
   deviceId: `${category}-${Math.random()}`,
@@ -14,6 +14,31 @@ const device = (category, overrides = {}) => ({
   ...overrides,
 });
 const plant = (devices) => ({ devices, groups: [], onlineCount: 0, latestSampleAt: null, totalPower: null, coolingCapacity: null, plantCop: null });
+
+test('a 0.9 K header shows about ±16% and says the offset was not applied', () => {
+  const cooling = {
+    current: false,
+    numeric: 512,
+    measurement: { relative: 0.158, low: 431, high: 593, lowConfidence: true, copRelative: 0.159, deltaTK: 0.9 },
+    probeOffsets: [],
+  };
+  const plant = {
+    devices: [{
+      row: {
+        operational: {
+          points: [{
+            probeOffsets: [{ pairCode: 'header-chw', offsetK: 0.22, stddevK: 0.01, sampleCount: 13, suggested: true, applied: false, alarm: 'OFFSET' }],
+          }],
+        },
+      },
+    }],
+    coolingCapacity: cooling,
+    plantCop: null,
+  };
+  assert.equal(coolingUncertaintyText(cooling), '不确定度 ±16%，温差相对探头误差偏小');
+  assert.equal(copUncertaintyText(plant), '温差不确定度 ±16%，暂不把能效当准数');
+  assert.equal(probeOffsetText(plant), '探头零点建议把温差减去 0.22 K（未采用，偏差已超过提醒线）');
+});
 
 test('an offline device is offline whatever run state it last reported', () => {
   assert.equal(isRunning(device('CHILLER')), true);

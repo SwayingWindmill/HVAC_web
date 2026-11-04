@@ -3440,7 +3440,7 @@
           "trigger": { "type": "number" },
           "reset": { "type": "number" },
           "ageSeconds": { "type": "integer", "minimum": 1 },
-          "reasons": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "enum": ["OUT_OF_RANGE", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT", "PHYSICS_WET_BULB_DRY", "PHYSICS_WET_BULB_CONDENSER", "PHYSICS_POWER", "PHYSICS_COP", "PHYSICS_CHW_DIRECTION", "PHYSICS_CW_DIRECTION", "PHYSICS_HEAT_BALANCE"] } },
+          "reasons": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "enum": ["OUT_OF_RANGE", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT", "LOW_CONFIDENCE", "PHYSICS_WET_BULB_DRY", "PHYSICS_WET_BULB_CONDENSER", "PHYSICS_POWER", "PHYSICS_COP", "PHYSICS_CHW_DIRECTION", "PHYSICS_CW_DIRECTION", "PHYSICS_HEAT_BALANCE", "PROBE_OFFSET"] } },
           "match": { "type": "string", "enum": ["ANY", "NONE"] },
           "children": { "type": "array", "minItems": 2, "maxItems": 32, "items": { "$ref": "#/components/schemas/AlarmRuleCondition" } }
         }

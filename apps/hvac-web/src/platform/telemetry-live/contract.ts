@@ -39,6 +39,7 @@ const qualityReasons = new Set([
   'SENTINEL',
   'FLATLINE',
   'DERIVED_INPUT',
+  'LOW_CONFIDENCE',
   'PHYSICS_WET_BULB_DRY',
   'PHYSICS_WET_BULB_CONDENSER',
   'PHYSICS_POWER',
@@ -46,6 +47,7 @@ const qualityReasons = new Set([
   'PHYSICS_CHW_DIRECTION',
   'PHYSICS_CW_DIRECTION',
   'PHYSICS_HEAT_BALANCE',
+  'PROBE_OFFSET',
 ]);
 const healthStatuses = new Set(['HEALTHY', 'SUSPECT', 'BAD', 'STALE']);
 const missingReasons = new Set(['NEVER_OBSERVED', 'ONLY_REJECTED_CANDIDATES', 'POLICY_NOT_CONFIGURED']);
@@ -179,12 +181,60 @@ function parsePointHealth(value: unknown, label: string) {
   };
 }
 
+function finiteNumber(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) fail('shape', `${label} must be a finite number`);
+  return value;
+}
+
+function parseMeasurement(value: unknown, label: string) {
+  if (value === undefined) return undefined;
+  const input = record(value, label);
+  exactKeys(input, ['relative', 'low', 'high', 'lowConfidence'], label, ['deltaTK', 'deltaTAccuracyK', 'copRelative']);
+  if (typeof input.lowConfidence !== 'boolean') fail('shape', `${label}.lowConfidence must be a boolean`);
+  const optional = (field: 'deltaTK' | 'deltaTAccuracyK' | 'copRelative') => (
+    input[field] === undefined ? undefined : finiteNumber(input[field], `${label}.${field}`)
+  );
+  return {
+    relative: finiteNumber(input.relative, `${label}.relative`),
+    low: finiteNumber(input.low, `${label}.low`),
+    high: finiteNumber(input.high, `${label}.high`),
+    lowConfidence: input.lowConfidence,
+    ...(input.deltaTK === undefined ? {} : { deltaTK: optional('deltaTK') }),
+    ...(input.deltaTAccuracyK === undefined ? {} : { deltaTAccuracyK: optional('deltaTAccuracyK') }),
+    ...(input.copRelative === undefined ? {} : { copRelative: optional('copRelative') }),
+  };
+}
+
+function parseProbeOffsets(value: unknown, label: string) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 8) fail('shape', `${label} must be an array of at most 8`);
+  return value.map((item, index) => {
+    const input = record(item, `${label}[${index}]`);
+    exactKeys(input, ['pairCode', 'offsetK', 'stddevK', 'sampleCount', 'windowStartedAt', 'windowEndedAt', 'suggested', 'applied'], `${label}[${index}]`, ['alarm']);
+    if (typeof input.suggested !== 'boolean' || typeof input.applied !== 'boolean') fail('shape', `${label}[${index}] flags must be boolean`);
+    const alarm = input.alarm === undefined ? undefined : enumeration(input.alarm, new Set(['OFFSET', 'DRIFT', 'OFFSET_AND_DRIFT']), `${label}[${index}].alarm`);
+    return {
+      pairCode: string(input.pairCode, `${label}[${index}].pairCode`),
+      offsetK: finiteNumber(input.offsetK, `${label}[${index}].offsetK`),
+      stddevK: finiteNumber(input.stddevK, `${label}[${index}].stddevK`),
+      sampleCount: integer(input.sampleCount, `${label}[${index}].sampleCount`, 1),
+      windowStartedAt: instant(input.windowStartedAt, `${label}[${index}].windowStartedAt`),
+      windowEndedAt: instant(input.windowEndedAt, `${label}[${index}].windowEndedAt`),
+      suggested: input.suggested,
+      applied: input.applied,
+      ...(alarm ? { alarm: alarm as 'OFFSET' | 'DRIFT' | 'OFFSET_AND_DRIFT' } : {}),
+    };
+  });
+}
+
 function parseTelemetryKeyState(value: unknown, label: string): TelemetryKeyState {
   const input = record(value, label);
   const state = string(input.state, `${label}.state`);
   if (state === 'PRESENT') {
-    exactKeys(input, ['key', 'state', 'value', 'valueType', 'unit', 'sampledAt', 'receivedAt', 'freshness', 'quality', 'qualityReasons', 'policyRevision'], label, ['health']);
+    exactKeys(input, ['key', 'state', 'value', 'valueType', 'unit', 'sampledAt', 'receivedAt', 'freshness', 'quality', 'qualityReasons', 'policyRevision'], label, ['health', 'measurement', 'probeOffsets']);
     const health = parsePointHealth(input.health, `${label}.health`);
+    const measurement = parseMeasurement(input.measurement, `${label}.measurement`);
+    const probeOffsets = parseProbeOffsets(input.probeOffsets, `${label}.probeOffsets`);
     const key = string(input.key, `${label}.key`);
     if (!telemetryKeyPattern.test(key)) fail('shape', `${label}.key is invalid`);
     const valueType = enumeration(input.valueType, new Set(['NUMBER', 'STRING', 'BOOLEAN', 'JSON']), `${label}.valueType`);
@@ -214,6 +264,8 @@ function parseTelemetryKeyState(value: unknown, label: string): TelemetryKeyStat
         : never,
       policyRevision: integer(input.policyRevision, `${label}.policyRevision`, 0),
       ...(health ? { health } : {}),
+      ...(measurement ? { measurement } : {}),
+      ...(probeOffsets ? { probeOffsets } : {}),
     };
   }
   if (state === 'MISSING') {

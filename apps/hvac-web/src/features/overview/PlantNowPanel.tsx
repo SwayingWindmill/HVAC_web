@@ -8,7 +8,10 @@ import {
   isRunning,
   PLANT_CATEGORY_LABELS,
   PLANT_CATEGORY_ORDER,
+  coolingUncertaintyText,
+  copUncertaintyText,
   plantReading,
+  probeOffsetText,
   type PlantDevice,
   type PlantReading,
   type PlantView,
@@ -92,18 +95,21 @@ export function PlantNowPanel({ plant, registryState, siteId, timeZone }: {
         <div className="flex flex-col gap-1 border-r border-divider pr-6">
           <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             实时 COP
-            <InfoTip>冷站瞬时制冷量 ÷ 冷站总功率；任一读数过期时不计算</InfoTip>
+            <InfoTip>冷站瞬时制冷量 ÷ 冷站总功率。温差相对探头误差过小时，制冷量标成部分，能效不计算。</InfoTip>
           </span>
           <span className="text-[28px] leading-8 font-semibold tracking-[-0.03em] tabular-nums">
             {plant.plantCop === null ? <span className="text-muted-foreground">—</span> : formatDecimal(plant.plantCop, 2)}
           </span>
           <span className="text-xs text-muted-foreground">
-            {plant.plantCop === null ? '读数不全，暂不计算' : `1 kW 电 → ${formatDecimal(plant.plantCop, 2)} kW 冷`}
+            {copUncertaintyText(plant) ?? (plant.plantCop === null ? '读数不全，暂不计算' : `1 kW 电 → ${formatDecimal(plant.plantCop, 2)} kW 冷`)}
           </span>
         </div>
         <div className="flex min-w-0 flex-col gap-3">
           <ScaleBar label="冷站功率" reading={power} max={max} tone="power" />
           <ScaleBar label="瞬时制冷量" reading={cooling} max={max} tone="cooling" />
+          {coolingUncertaintyText(cooling) || probeOffsetText(plant) ? (
+            <p className="text-xs text-muted-foreground">{[coolingUncertaintyText(cooling), probeOffsetText(plant)].filter(Boolean).join(' · ')}</p>
+          ) : null}
           <div className="flex gap-4 pl-[96px] text-xs text-muted-foreground">
             <span>冷冻水供水 <ReadingValue reading={plantReading(plant, 'btu_meter.supply_water_temperature')} className="font-medium text-foreground" /></span>
             <span className="text-border">|</span>

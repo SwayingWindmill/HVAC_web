@@ -250,7 +250,7 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
       delta: relativeChange(current.coolingKWh, previous.coolingKWh), caption: previousEnergy(previous.coolingKWh),
     },
     {
-      key: "cop", label: "综合能效", compareKey: "previousCop", partialKey: "copPartial", info: "供冷量 ÷ 空调用电",
+      key: "cop", label: "综合能效", compareKey: "previousCop", partialKey: "copPartial", info: "供冷量 ÷ 空调用电。温差相对探头误差过小的时段，供冷量标成部分，不参加计算。",
       value: current.cop === null ? null : formatDecimal(current.cop, 2), unit: "COP", fractionDigits: 2,
       delta: relativeChange(current.cop, previous.cop), caption: before(previous.cop, 2),
     },

@@ -126,6 +126,16 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
                       {point.state === 'PRESENT' ? point.displayValue : '—'}
                       {point.state === 'PRESENT' && point.unit ? <span className="ml-1 text-xs font-medium text-subtle-foreground">{point.unit}</span> : null}
                     </dd>
+                    {point.measurement ? (
+                      <p className="text-xs text-muted-foreground">
+                        {point.measurement.lowConfidence ? '低置信 · ' : ''}不确定度 ±{(point.measurement.relative * 100).toFixed(point.measurement.relative >= 0.1 ? 0 : 1)}%
+                      </p>
+                    ) : null}
+                    {point.probeOffsets.filter((suggestion) => suggestion.suggested && !suggestion.applied).map((suggestion) => (
+                      <p key={suggestion.pairCode} className="text-xs text-muted-foreground">
+                        零点建议{suggestion.offsetK >= 0 ? '减去' : '加上'} {Math.abs(suggestion.offsetK).toFixed(2)} K，未采用
+                      </p>
+                    ))}
                   </div>
                 );
               })}

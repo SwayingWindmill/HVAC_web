@@ -82,7 +82,7 @@
     "QualityReasonCode": {
       "type": "string",
       "pattern": "^[A-Z][A-Z0-9_]+$",
-      "x-known-codes": ["SOURCE_UNTRUSTED", "TYPE_MISMATCH", "UNIT_MISMATCH", "OUT_OF_RANGE", "CLOCK_AHEAD", "CLOCK_BEHIND", "SOURCE_LAG_EXCEEDED", "DUPLICATE", "OUT_OF_ORDER", "REPLAYED", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT", "PHYSICS_WET_BULB_DRY", "PHYSICS_WET_BULB_CONDENSER", "PHYSICS_POWER", "PHYSICS_COP", "PHYSICS_CHW_DIRECTION", "PHYSICS_CW_DIRECTION", "PHYSICS_HEAT_BALANCE"]
+      "x-known-codes": ["SOURCE_UNTRUSTED", "TYPE_MISMATCH", "UNIT_MISMATCH", "OUT_OF_RANGE", "CLOCK_AHEAD", "CLOCK_BEHIND", "SOURCE_LAG_EXCEEDED", "DUPLICATE", "OUT_OF_ORDER", "REPLAYED", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT", "LOW_CONFIDENCE", "PHYSICS_WET_BULB_DRY", "PHYSICS_WET_BULB_CONDENSER", "PHYSICS_POWER", "PHYSICS_COP", "PHYSICS_CHW_DIRECTION", "PHYSICS_CW_DIRECTION", "PHYSICS_HEAT_BALANCE", "PROBE_OFFSET"]
     },
     "AvailabilityReasonCode": {
       "type": "string",
@@ -137,7 +137,39 @@
         "quality": { "$ref": "#/$defs/TelemetryQuality" },
         "qualityReasons": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/QualityReasonCode" } },
         "policyRevision": { "$ref": "#/$defs/PolicyRevision" },
-        "health": { "$ref": "#/$defs/TelemetryPointHealth" }
+        "health": { "$ref": "#/$defs/TelemetryPointHealth" },
+        "measurement": { "$ref": "#/$defs/MeasurementInterval" },
+        "probeOffsets": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/ProbeOffsetSuggestion" } }
+      }
+    },
+    "MeasurementInterval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative", "low", "high", "lowConfidence"],
+      "properties": {
+        "relative": { "type": "number" },
+        "low": { "type": "number" },
+        "high": { "type": "number" },
+        "lowConfidence": { "type": "boolean" },
+        "deltaTK": { "type": "number" },
+        "deltaTAccuracyK": { "type": "number" },
+        "copRelative": { "type": "number" }
+      }
+    },
+    "ProbeOffsetSuggestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pairCode", "offsetK", "stddevK", "sampleCount", "windowStartedAt", "windowEndedAt", "suggested", "applied"],
+      "properties": {
+        "pairCode": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "offsetK": { "type": "number" },
+        "stddevK": { "type": "number" },
+        "sampleCount": { "type": "integer", "minimum": 1 },
+        "windowStartedAt": { "$ref": "#/$defs/Instant" },
+        "windowEndedAt": { "$ref": "#/$defs/Instant" },
+        "suggested": { "type": "boolean" },
+        "applied": { "type": "boolean" },
+        "alarm": { "type": "string", "enum": ["OFFSET", "DRIFT", "OFFSET_AND_DRIFT"] }
       }
     },
     "TelemetryPointHealth": {
