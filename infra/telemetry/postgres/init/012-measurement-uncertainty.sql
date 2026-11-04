@@ -63,5 +63,21 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON telemetry_runtime.probe_pairs TO s2_tele
 GRANT SELECT, INSERT, UPDATE, DELETE ON telemetry_runtime.probe_pair_windows TO s2_telemetry_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON telemetry_runtime.probe_offset_estimates TO s2_telemetry_runtime;
 
+-- Every telemetry_runtime table forces row security. The policies are the same open
+-- grant the other runtime tables use: the migrator writes the site file, the runtime
+-- reads and folds windows.
+ALTER TABLE telemetry_runtime.probe_pairs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry_runtime.probe_pairs FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry_runtime.probe_pair_windows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry_runtime.probe_pair_windows FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry_runtime.probe_offset_estimates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry_runtime.probe_offset_estimates FORCE ROW LEVEL SECURITY;
+CREATE POLICY probe_pairs_migrator_all ON telemetry_runtime.probe_pairs FOR ALL TO s2_telemetry_migrator USING (true) WITH CHECK (true);
+CREATE POLICY probe_pairs_runtime_all ON telemetry_runtime.probe_pairs FOR ALL TO s2_telemetry_runtime USING (true) WITH CHECK (true);
+CREATE POLICY probe_pair_windows_migrator_all ON telemetry_runtime.probe_pair_windows FOR ALL TO s2_telemetry_migrator USING (true) WITH CHECK (true);
+CREATE POLICY probe_pair_windows_runtime_all ON telemetry_runtime.probe_pair_windows FOR ALL TO s2_telemetry_runtime USING (true) WITH CHECK (true);
+CREATE POLICY probe_offset_estimates_migrator_all ON telemetry_runtime.probe_offset_estimates FOR ALL TO s2_telemetry_migrator USING (true) WITH CHECK (true);
+CREATE POLICY probe_offset_estimates_runtime_all ON telemetry_runtime.probe_offset_estimates FOR ALL TO s2_telemetry_runtime USING (true) WITH CHECK (true);
+
 RESET ROLE;
 COMMIT;
