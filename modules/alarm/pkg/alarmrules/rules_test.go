@@ -42,9 +42,10 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	}
 	// The supply-temperature rule, the four plant rules kept after 2026-11-10 (供水偏高、供水过低、
 	// 冷却水出水过高、机组运行无流量), 网关上报中断, one 读数长时间没有更新 per device with an active
-	// point (12, the room has no probe), and the data-quality rules from each point's quality profile
-	// (a copied point is not alarmed again).
-	if len(byTitle) != 80 {
+	// point (12, the room has no probe), the data-quality rules from each point's quality profile
+	// (a copied point is not alarmed again), and the physics checks in the site file that carry an
+	// alarm over active points (16: 4 power, 1 COP, 6 CHW direction, 4 CW direction, 1 pump without chiller).
+	if len(byTitle) != 96 {
 		t.Fatalf("got %d rules: %v", len(byTitle), keys(byTitle))
 	}
 
@@ -90,6 +91,18 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	}
 	if !strings.Contains(flat.Summary, "温度采集模块的室外温度连续 180 分钟") {
 		t.Fatalf("channel 15 flat-reading rule is not said plainly: %q", flat.Summary)
+	}
+	power, ok := byTitle["C 机组功率超过铭牌"]
+	if !ok || power.Severity != "MAJOR" || !reflect.DeepEqual(power.Raise.Reasons, []string{"PHYSICS_POWER"}) {
+		t.Fatalf("chiller C nameplate power rule: %#v", power)
+	}
+	cwDirection, ok := byTitle["C 机组冷却水出水不高于进水"]
+	if !ok || cwDirection.Severity != "WARNING" || !reflect.DeepEqual(cwDirection.Raise.Reasons, []string{"PHYSICS_CW_DIRECTION"}) {
+		t.Fatalf("chiller C condenser direction rule: %#v", cwDirection)
+	}
+	pumps, ok := byTitle["冷冻水泵在跑但没有机组运行"]
+	if !ok || pumps.Severity != "WARNING" || pumps.TriggerMode != "DURATION" || pumps.DurationSeconds != 600 {
+		t.Fatalf("pump-without-chiller rule: %#v", pumps)
 	}
 	supplyHealth, ok := byTitle["冷冻水总供水温度 1数据不可信"]
 	if !ok || supplyHealth.Severity != "MAJOR" || supplyHealth.Raise.Kind != "REASONS" {
