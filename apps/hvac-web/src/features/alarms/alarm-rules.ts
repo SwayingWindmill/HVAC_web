@@ -75,7 +75,7 @@ function predicate(condition: AlarmRuleCondition, unit: string | null | undefine
         OUT_OF_RANGE: '超出量程', SPIKE: '跳变', SENTINEL: '通讯异常值', FLATLINE: '卡住', DERIVED_INPUT: '计算输入不可信',
         PHYSICS_WET_BULB_DRY: '湿球高于干球', PHYSICS_WET_BULB_CONDENSER: '湿球不像湿球', PHYSICS_POWER: '功率超过铭牌',
         PHYSICS_COP: '能效超过卡诺上限', PHYSICS_CHW_DIRECTION: '冷冻水供回水接反', PHYSICS_CW_DIRECTION: '冷却水进出水接反',
-        PHYSICS_HEAT_BALANCE: '热平衡对不上',
+        PHYSICS_HEAT_BALANCE: '热平衡对不上', LOW_CONFIDENCE: '温差不确定度过大', PROBE_OFFSET: '供回水零点偏差',
       };
       const list = (condition.reasons ?? []).map((code) => names[code] ?? code).join('、');
       return condition.match === 'NONE' ? `没有这些数据质量问题（${list}）` : `数据质量问题：${list}`;

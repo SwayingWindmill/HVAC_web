@@ -15,6 +15,7 @@ export interface Metric {
   readonly unit: string;
   /** Not current (late or of doubtful quality): drawn dimmed, never as current. */
   readonly late: boolean;
+  readonly note?: string;
 }
 
 /**
@@ -85,8 +86,23 @@ function plantStatus(plant: Plant) {
 /** Standby power over no cooling is not an efficiency: a stopped plant has none. */
 const plantCop = (plant: Plant) => (equipment(plant).running === 0 ? null : plant.plantCop);
 
+function percentText(relative: number): string {
+  const percent = relative * 100;
+  return `±${percent >= 10 ? Math.round(percent) : percent.toFixed(1)}%`;
+}
+
+function uncertaintyNote(relative: number | undefined, lowConfidence: boolean): string {
+  if (relative == null || !Number.isFinite(relative)) return '';
+  const text = percentText(relative);
+  return lowConfidence ? `不确定度 ${text}，温差相对探头误差偏小` : `不确定度 ${text}`;
+}
+
 function copNote(plant: Plant): string {
   if (equipment(plant).running === 0) return '停机时不算能效。';
+  const band = plant.coolingCapacity?.measurement;
+  if (band?.lowConfidence && plant.plantCop === null) {
+    return `温差不确定度 ${percentText(band.copRelative ?? band.relative)}，暂不把能效当准数。`;
+  }
   if (plant.plantCop !== null) return '';
   if (plant.totalPower === null || plant.coolingCapacity === null) return '没有空调总电表或冷量计，算不出能效。';
   return '功率或制冷量读数不是最新的，暂不算能效。';
@@ -97,7 +113,8 @@ function metric(label: string, reading: PlantReading | null, decimals?: number):
   const icon = reading === null ? '' : readingIcon(reading);
   if (reading === null || neverRead(reading)) return { label, icon, value: '—', unit: reading?.unit ?? '', late: false };
   const value = decimals !== undefined && reading.numeric !== null ? grouped(reading.numeric, decimals) : figure(reading);
-  return { label, icon, value, unit: reading.unit ?? '', late: !reading.current };
+  const note = reading.measurement ? uncertaintyNote(reading.measurement.relative, reading.measurement.lowConfidence) : '';
+  return { label, icon, value, unit: reading.unit ?? '', late: !reading.current, ...(note ? { note } : {}) };
 }
 
 // The same loops the web's 水系统与室内外环境 table lists; a loop shows once its lead reading has come in.
@@ -158,7 +175,12 @@ export function presentRealtime(plant: Plant) {
       // The web's 实时运行 writes power to 0.1 kW and cooling to whole kW.
       metric('冷站总功率', plant.totalPower, 1),
       metric('制冷量', plant.coolingCapacity, 0),
-      { label: '能效', icon: 'gauge', value: grouped(plantCop(plant), 2), unit: '', late: false },
+      {
+        label: '能效', icon: 'gauge', value: grouped(plantCop(plant), 2), unit: '', late: false,
+        ...(plant.plantCop !== null && plant.coolingCapacity?.measurement
+          ? { note: uncertaintyNote(plant.coolingCapacity.measurement.copRelative ?? plant.coolingCapacity.measurement.relative, false) }
+          : {}),
+      },
     ],
     copNote: copNote(plant),
     loops: loops(plant),

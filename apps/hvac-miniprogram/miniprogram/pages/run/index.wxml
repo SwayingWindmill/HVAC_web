@@ -26,6 +26,7 @@
         <view wx:for="{{realtime.metrics}}" wx:key="label" class="plant-metric">
           <view class="caption titled"><image wx:if="{{item.icon}}" class="caption-icon" src="/assets/icon/{{item.icon}}.svg" aria-hidden="true" /><text>{{item.label}}</text></view>
           <view class="plant-value {{item.value === '—' || item.late ? 'plant-value-dim' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
+          <text wx:if="{{item.note}}" class="caption">{{item.note}}</text>
         </view>
       </view>
       <text wx:if="{{realtime.copNote || chart.peak}}" class="caption">{{realtime.copNote}}{{chart.peak}}</text>

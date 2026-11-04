@@ -67,6 +67,8 @@ export function pointQuality(point, profile, devicesByCode) {
   }
   const physics = physicsForPoint(point, profile, devicesByCode);
   if (physics.length) checks.physics = physics;
+  const uncertainty = uncertaintyForPoint(point, profile, devicesByCode);
+  if (uncertainty) checks.uncertainty = uncertainty;
   const encoded = Object.keys(checks).length ? JSON.stringify(checks) : null;
   if (encoded && Buffer.byteLength(encoded) > 4096) throw new Error(`point ${point.device?.code ?? '?'}/${point.code} quality checks exceed 4096 bytes`);
   return {
@@ -169,6 +171,119 @@ function compilePhysics(check, profile, devicesByCode) {
   }
   if (peers.length) rule.peers = peers;
   return rule;
+}
+
+const UNCERTAINTY_KINDS = new Set(['cooling', 'delta', 'coolingCounter']);
+const DEFAULT_TEMPERATURE_ACCURACY_K = 0.1;
+const DEFAULT_FLOW_ACCURACY_FRACTION = 0.02;
+const DEFAULT_POWER_ACCURACY_FRACTION = 0.01;
+const DEFAULT_PROPERTY_FRACTION = 0.005;
+const DEFAULT_LOW_CONFIDENCE_RELATIVE = 0.1;
+
+function uncertaintyForPoint(point, profile, devicesByCode) {
+  if (pointStatus(point) !== 'ACTIVE' || !profile.measurement) return null;
+  const matches = (profile.measurement.cooling ?? []).filter((item) => uncertaintyApplies(point, item, devicesByCode));
+  if (matches.length > 1) throw new Error(`point ${point.device?.code ?? '?'}/${point.code} matches more than one cooling uncertainty`);
+  if (matches.length === 0) return null;
+  return compileUncertainty(matches[0], profile, devicesByCode);
+}
+
+function uncertaintyApplies(point, item, devicesByCode) {
+  if (!item.subject?.device || !item.subject?.point) return false;
+  const subject = devicesByCode.get(item.subject.device);
+  if (!subject) return false;
+  if (point.device?.code === subject.code && point.code === item.subject.point) return true;
+  return Array.isArray(point.from) && point.from[0] === subject.sourceKey && point.from[1] === item.subject.point;
+}
+
+function accuracyKelvin(ref, profile, devicesByCode, label) {
+  const named = profileOf(ref, profile, devicesByCode, label);
+  const value = named?.accuracyK ?? profile.measurement?.temperatureAccuracyK ?? DEFAULT_TEMPERATURE_ACCURACY_K;
+  if (!(value > 0)) throw new Error(`${label} temperature accuracy must be positive`);
+  return value;
+}
+
+function accuracyFraction(ref, profile, devicesByCode, label, fallback) {
+  const named = profileOf(ref, profile, devicesByCode, label);
+  const value = named?.accuracyFraction ?? fallback;
+  if (!(value > 0 && value < 1)) throw new Error(`${label} accuracy fraction must be between 0 and 1`);
+  return value;
+}
+
+function profileOf(ref, profile, devicesByCode, label) {
+  const device = devicesByCode.get(ref?.device);
+  if (!device) throw new Error(`${label} names unknown device ${ref?.device}`);
+  const point = device.points.find((item) => item.code === ref.point);
+  if (!point || pointStatus(point) !== 'ACTIVE') throw new Error(`${label} names ${ref.device}/${ref.point}, which is not an active point`);
+  if (!point.qualityProfile) return null;
+  const named = profile.qualityProfiles?.[point.qualityProfile];
+  if (!named) throw new Error(`${label} point ${ref.device}/${ref.point} names unknown quality profile ${point.qualityProfile}`);
+  return named;
+}
+
+function compileUncertainty(item, profile, devicesByCode) {
+  const label = `uncertainty ${item.subject?.device ?? '?'}/${item.subject?.point ?? '?'}`;
+  if (!UNCERTAINTY_KINDS.has(item.kind)) throw new Error(`${label} has unknown kind ${item.kind}`);
+  if (!item.supply?.device || !item.return?.device) throw new Error(`${label} needs a supply and a return`);
+  const compiled = {
+    kind: item.kind,
+    supplyAccuracyK: accuracyKelvin(item.supply, profile, devicesByCode, label),
+    returnAccuracyK: accuracyKelvin(item.return, profile, devicesByCode, label),
+    propertyFraction: profile.measurement?.propertyFraction ?? DEFAULT_PROPERTY_FRACTION,
+    lowConfidenceRelative: profile.measurement?.lowConfidenceRelative ?? DEFAULT_LOW_CONFIDENCE_RELATIVE,
+    supply: deviceRef(item.supply, devicesByCode, label),
+    return: deviceRef(item.return, devicesByCode, label),
+  };
+  if (item.kind === 'cooling' || item.kind === 'coolingCounter') {
+    if (!item.flow?.device) throw new Error(`${label} needs a flow`);
+    compiled.flowAccuracyFraction = accuracyFraction(item.flow, profile, devicesByCode, label, profile.measurement?.flowAccuracyFraction ?? DEFAULT_FLOW_ACCURACY_FRACTION);
+    compiled.flow = deviceRef(item.flow, devicesByCode, label);
+  }
+  if (item.power?.device) {
+    compiled.powerAccuracyFraction = accuracyFraction(item.power, profile, devicesByCode, label, profile.measurement?.powerAccuracyFraction ?? DEFAULT_POWER_ACCURACY_FRACTION);
+    compiled.power = deviceRef(item.power, devicesByCode, label);
+  }
+  return compiled;
+}
+
+function compileProbePair(pair, devicesByCode) {
+  const label = `probe pair ${pair.code ?? '?'}`;
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(pair.code ?? '')) throw new Error(`${label} code must be a short lowercase name`);
+  if (!pair.supply?.device || !pair.return?.device) throw new Error(`${label} needs a supply and a return`);
+  if (!pair.pumps?.length || !pair.chillers?.length) throw new Error(`${label} needs the pumps and the chillers`);
+  const ref = (item) => {
+    const device = devicesByCode.get(item?.device);
+    if (!device) throw new Error(`${label} names unknown device ${item?.device}`);
+    const point = device.points.find((candidate) => candidate.code === item.point && pointStatus(candidate) === 'ACTIVE');
+    if (!point) throw new Error(`${label} names ${item.device}/${item.point}, which is not an active point`);
+    return { deviceId: device.id, key: item.point, ...(item.equals != null ? { equals: item.equals } : {}) };
+  };
+  return {
+    supply: ref(pair.supply),
+    return: ref(pair.return),
+    pumps: pair.pumps.map(ref),
+    chillers: pair.chillers.map(ref),
+    stableBandK: pair.stableBandK ?? 0.1,
+    minimumMinutes: pair.minimumMinutes ?? 10,
+    minimumSamples: pair.minimumSamples ?? 5,
+    maxGapMinutes: pair.maxGapMinutes ?? 15,
+    offsetAlarmK: pair.offsetAlarmK ?? 0.2,
+    driftAlarmK: pair.driftAlarmK ?? 0.1,
+  };
+}
+
+function buildProbePairSql(profile, devicesByCode) {
+  if (!Object.hasOwn(profile, 'probePairs')) return '';
+  const siteId = sqlLiteral(profile.site.id);
+  const pairs = profile.probePairs ?? [];
+  if (pairs.length === 0) return `DELETE FROM telemetry_runtime.probe_pairs WHERE site_id = ${siteId};\n`;
+  const rows = pairs.map((pair) => `(${siteId}, ${sqlLiteral(pair.code)}, ${sqlJson(compileProbePair(pair, devicesByCode))}::jsonb, clock_timestamp())`).join(',\n');
+  const codes = pairs.map((pair) => sqlLiteral(pair.code)).join(', ');
+  return `DELETE FROM telemetry_runtime.probe_pairs WHERE site_id = ${siteId} AND pair_code NOT IN (${codes});
+INSERT INTO telemetry_runtime.probe_pairs (site_id, pair_code, config, updated_at) VALUES
+${rows}
+ON CONFLICT (site_id, pair_code) ${updateWhenChanged('probe_pairs', fromFile('config'), { revision: false })};
+`;
 }
 
 function ratedFor(check, profile) {
@@ -331,6 +446,7 @@ COMMIT;`;
     return `(${sqlLiteral(point.device.id)}, ${sqlLiteral(point.code)}, 1, ${fresh}, true, ${point.device.sampleSeconds}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, ${sqlNumber(minimum)}, ${sqlNumber(maximum)}, ${quality.checks ?? 'NULL'}, clock_timestamp())`;
   }).join(',\n');
   const coverage = devices.map((device) => `(${sqlLiteral(device.id)}, true, clock_timestamp(), NULL, 1, clock_timestamp())`).join(',\n');
+  const probePairs = buildProbePairSql(profile, devicesByCode);
   const telemetry = `BEGIN;
 SET LOCAL ROLE s2_telemetry_migrator;
 INSERT INTO telemetry_runtime.devices (device_id, tenant_id, site_id, presence_applicability, updated_at) VALUES
@@ -348,7 +464,7 @@ ON CONFLICT (device_id, telemetry_key) ${updateWhenChanged('freshness_policies',
 INSERT INTO telemetry_runtime.observation_coverage (device_id, available, continuous_since, reason_code, source_revision, updated_at) VALUES
 ${coverage}
 ON CONFLICT (device_id) ${updateWhenChanged('observation_coverage', [['available', 'true'], ['reason_code', 'NULL']], { revision: false })};
-RESET ROLE;
+${probePairs}RESET ROLE;
 COMMIT;`;
   return { registry, telemetry, energy: buildEnergySql(profile, devices, points), intelligence: buildIntelligenceSql(profile), deviceCount: devices.length, pointCount: points.length };
 }
@@ -697,6 +813,12 @@ export function checkSiteFile(profile, alarmRules = null) {
     } catch (error) {
       problems.push(error.message);
     }
+  }
+  try {
+    for (const item of profile.measurement?.cooling ?? []) compileUncertainty(item, profile, devicesByCode);
+    for (const pair of profile.probePairs ?? []) compileProbePair(pair, devicesByCode);
+  } catch (error) {
+    problems.push(error.message);
   }
 
   if (intelligence.alarmRules && !alarmRules) problems.push(`alarm rules file ${intelligence.alarmRules} was not found`);

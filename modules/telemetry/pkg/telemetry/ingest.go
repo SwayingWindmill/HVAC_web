@@ -60,6 +60,8 @@ const (
 	QualityReasonSentinel                QualityReason = "SENTINEL"
 	QualityReasonFlatline                QualityReason = "FLATLINE"
 	QualityReasonDerivedInput            QualityReason = "DERIVED_INPUT"
+	QualityReasonLowConfidence           QualityReason = "LOW_CONFIDENCE"
+	QualityReasonProbeOffset             QualityReason = "PROBE_OFFSET"
 	QualityReasonPhysicsWetBulbDry       QualityReason = nameplate.ReasonWetBulbDry
 	QualityReasonPhysicsWetBulbCondenser QualityReason = nameplate.ReasonWetBulbCondenser
 	QualityReasonPhysicsPower            QualityReason = nameplate.ReasonPower
@@ -177,6 +179,7 @@ type ObservationDecision struct {
 	HealthScore            int
 	HealthReasons          []QualityReason
 	RecordHealth           bool
+	Measurement            []byte
 }
 
 func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts, evaluatedAt time.Time) ObservationDecision {
@@ -207,6 +210,7 @@ func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts,
 	reasons = append(reasons, assessCandidateQuality(candidate, facts, true)...)
 	reasons = canonicalIngestReasons(reasons)
 	decision.QualityReasons = reasons
+	decision.Measurement = measurementJSON(candidate, facts, true)
 	decision.QuarantineReason = ""
 	if rejected {
 		decision.Status = ObservationRejected
@@ -292,14 +296,45 @@ func assessCandidateQuality(candidate ObservationCandidate, facts ObservationFac
 	if !ok || facts.Policy == nil {
 		return nil
 	}
+	return AssessPointQuality(number, candidate.SampledAt, facts.Policy.QualityChecks, qualityInput(candidate, facts, live))
+}
+
+func measurementJSON(candidate ObservationCandidate, facts ObservationFacts, live bool) []byte {
+	number, ok := numericSample(candidate)
+	if !ok || facts.Policy == nil {
+		return nil
+	}
+	measured, ok := AssessMeasurement(number, facts.Policy.QualityChecks, qualityInput(candidate, facts, live))
+	if !ok || !measured.HasNumbers {
+		return nil
+	}
+	raw, err := json.Marshal(struct {
+		Relative        float64  `json:"relative"`
+		Low             float64  `json:"low"`
+		High            float64  `json:"high"`
+		LowConfidence   bool     `json:"lowConfidence"`
+		DeltaTK         float64  `json:"deltaTK,omitempty"`
+		DeltaTAccuracyK float64  `json:"deltaTAccuracyK,omitempty"`
+		CopRelative     *float64 `json:"copRelative,omitempty"`
+	}{
+		Relative: measured.Relative, Low: measured.Low, High: measured.High, LowConfidence: measured.LowConfidence,
+		DeltaTK: measured.DeltaTK, DeltaTAccuracyK: measured.DeltaTAccuracy, CopRelative: measured.COPRelative,
+	})
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+func qualityInput(candidate ObservationCandidate, facts ObservationFacts, live bool) PointQualityInput {
 	pointType := ""
 	if facts.Point != nil {
 		pointType = facts.Point.PointType
 	}
-	return AssessPointQuality(number, candidate.SampledAt, facts.Policy.QualityChecks, PointQualityInput{
+	return PointQualityInput{
 		PointType: pointType, Live: live, Previous: facts.Previous, Running: facts.Running, InputsUntrusted: facts.InputsUntrusted,
 		Peers: facts.Peers,
-	})
+	}
 }
 
 func numericSample(candidate ObservationCandidate) (float64, bool) {
@@ -308,7 +343,7 @@ func numericSample(candidate ObservationCandidate) (float64, bool) {
 }
 
 func suspectQuality(reasons []QualityReason) bool {
-	return slices.Contains(reasons, QualityReasonSpike) || slices.Contains(reasons, QualityReasonSentinel) || slices.Contains(reasons, QualityReasonFlatline) || slices.Contains(reasons, QualityReasonDerivedInput) || containsPhysics(reasons)
+	return slices.Contains(reasons, QualityReasonSpike) || slices.Contains(reasons, QualityReasonSentinel) || slices.Contains(reasons, QualityReasonFlatline) || slices.Contains(reasons, QualityReasonDerivedInput) || slices.Contains(reasons, QualityReasonLowConfidence) || containsPhysics(reasons)
 }
 
 func recordPointHealth(decision *ObservationDecision, quality ObservationQuality, reasons []QualityReason) {
@@ -426,9 +461,10 @@ func canonicalIngestReasons(values []QualityReason) []QualityReason {
 		QualityReasonOutOfRange: 4, QualityReasonClockAhead: 5, QualityReasonClockBehind: 6,
 		QualityReasonSourceLagExceeded: 7, QualityReasonDuplicate: 8, QualityReasonOutOfOrder: 9, QualityReasonReplayed: 10,
 		QualityReasonSpike: 11, QualityReasonSentinel: 12, QualityReasonFlatline: 13, QualityReasonDerivedInput: 14,
-		QualityReasonPhysicsWetBulbDry: 15, QualityReasonPhysicsWetBulbCondenser: 16, QualityReasonPhysicsPower: 17,
-		QualityReasonPhysicsCOP: 18, QualityReasonPhysicsChwDirection: 19, QualityReasonPhysicsCwDirection: 20,
-		QualityReasonPhysicsHeatBalance: 21,
+		QualityReasonLowConfidence:     15,
+		QualityReasonPhysicsWetBulbDry: 16, QualityReasonPhysicsWetBulbCondenser: 17, QualityReasonPhysicsPower: 18,
+		QualityReasonPhysicsCOP: 19, QualityReasonPhysicsChwDirection: 20, QualityReasonPhysicsCwDirection: 21,
+		QualityReasonPhysicsHeatBalance: 22, QualityReasonProbeOffset: 23,
 	}
 	seen := make(map[QualityReason]struct{}, len(values))
 	result := make([]QualityReason, 0, len(values))

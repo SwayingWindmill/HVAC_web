@@ -1,5 +1,9 @@
 import type { AssetsDeviceRow, AssetsPointView } from '@/features/assets/model';
 
+function formatFixed(value: number, digits: number): string {
+  return value.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
 // Central-plant view of the Site's Registry devices and their current observations.
 // Every value shown here comes from a Registry point and the device Snapshot/Stream;
 // nothing is estimated in the browser except the plant COP, which is the ratio of two
@@ -86,6 +90,8 @@ export interface PlantReading {
   readonly numeric: number | null;
   /** Present, fresh and of good quality: safe to use for derived figures. */
   readonly current: boolean;
+  readonly measurement: AssetsPointView['measurement'];
+  readonly probeOffsets: AssetsPointView['probeOffsets'];
   readonly state: AssetsPointView['state'];
   readonly freshness: AssetsPointView['freshness'];
   readonly sampledAt: string | null;
@@ -156,6 +162,8 @@ function readingFor(row: AssetsDeviceRow, sourceKey: string): PlantReading | nul
     unit: view.unit,
     numeric,
     current: view.state === 'PRESENT' && view.freshness === 'FRESH' && view.quality === 'GOOD' && (view.health == null || view.health.status === 'HEALTHY'),
+    measurement: view.measurement,
+    probeOffsets: view.probeOffsets,
     state: view.state,
     freshness: view.freshness,
     sampledAt: view.sampledAt,
@@ -248,6 +256,48 @@ export function buildPlantView(rows: readonly AssetsDeviceRow[]): PlantView {
 
 export function plantReading(view: PlantView, sourceKey: string): PlantReading | null {
   return firstReading(view.devices, sourceKey);
+}
+
+/** ±16% for 0.158, ±5.1% for a difference that is still large next to the probes. */
+export function formatRelativeUncertainty(relative: number): string {
+  const percent = relative * 100;
+  return `±${formatFixed(percent, percent >= 10 ? 0 : 1)}%`;
+}
+
+export function coolingUncertaintyText(reading: PlantReading | null): string | null {
+  const band = reading?.measurement;
+  if (!band || !Number.isFinite(band.relative)) return null;
+  const percent = formatRelativeUncertainty(band.relative);
+  return band.lowConfidence ? `不确定度 ${percent}，温差相对探头误差偏小` : `不确定度 ${percent}`;
+}
+
+export function copUncertaintyText(plant: PlantView): string | null {
+  const cooling = plant.coolingCapacity?.measurement;
+  if (!cooling || !Number.isFinite(cooling.relative)) return null;
+  const relative = cooling.copRelative ?? cooling.relative;
+  const percent = formatRelativeUncertainty(relative);
+  if (plant.plantCop === null && cooling.lowConfidence) return `温差不确定度 ${percent}，暂不把能效当准数`;
+  if (plant.plantCop === null) return null;
+  return `不确定度 ${percent}`;
+}
+
+/** Suggested supply-minus-return corrections. applied stays false; the text says the suggestion was not used. */
+export function probeOffsetText(plant: PlantView): string | null {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const device of plant.devices) {
+    for (const point of device.row.operational.points) {
+      for (const suggestion of point.probeOffsets) {
+        if (!suggestion.suggested || suggestion.applied || seen.has(suggestion.pairCode)) continue;
+        seen.add(suggestion.pairCode);
+        const magnitude = formatFixed(Math.abs(suggestion.offsetK), 2);
+        const verb = suggestion.offsetK >= 0 ? '减去' : '加上';
+        const alarm = suggestion.alarm ? '，偏差已超过提醒线' : '';
+        lines.push(`探头零点建议把温差${verb} ${magnitude} K（未采用${alarm}）`);
+      }
+    }
+  }
+  return lines.length > 0 ? lines.join('；') : null;
 }
 
 /** The plant's moving equipment; meters and the weather station never run. */

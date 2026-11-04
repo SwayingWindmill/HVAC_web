@@ -7,6 +7,7 @@ require (
 	github.com/quanlaihe/hvac-web/libs/analyticsmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/limitpolicy v0.0.0
+	github.com/quanlaihe/hvac-web/libs/measurement v0.0.0
 	github.com/quanlaihe/hvac-web/libs/nameplate v0.0.0
 	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/telemetryauth v0.0.0
@@ -31,6 +32,8 @@ replace github.com/quanlaihe/hvac-web/libs/analyticsmodel => ../../libs/analytic
 replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identitycontext
 
 replace github.com/quanlaihe/hvac-web/libs/limitpolicy => ../../libs/limitpolicy
+
+replace github.com/quanlaihe/hvac-web/libs/measurement => ../../libs/measurement
 
 replace github.com/quanlaihe/hvac-web/libs/nameplate => ../../libs/nameplate
 

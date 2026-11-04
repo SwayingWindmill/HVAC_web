@@ -237,6 +237,56 @@ func TestWetBulbAboveCondenserWaterNeedsThePeersAndTheTower(t *testing.T) {
 	}
 }
 
+func TestHeaderCoolingAtPointNineKelvinIsLowConfidence(t *testing.T) {
+	// Replay of the Songyaxuan header: 489 m³/h, return 7.9 °C, supply 7.0 °C, ΔT 0.9 K.
+	supply, ret, flow, power := 7.0, 7.9, 489.0, 120.0
+	checks := &QualityChecks{Uncertainty: headerUncertainty()}
+	peers := map[string]PeerSample{
+		"temp/t18":    {Number: &supply, Good: true},
+		"temp/t16":    {Number: &ret, Good: true},
+		"flow/flow":   {Number: &flow, Good: true},
+		"meter/power": {Number: &power, Good: true},
+	}
+	value := 1.163 * flow * 0.9
+	at := time.Date(2026, 10, 27, 6, 0, 0, 0, time.UTC)
+	reasons := AssessPointQuality(value, at, checks, PointQualityInput{PointType: "TELEMETRY", Live: true, Peers: peers})
+	if !sameReasons(reasons, QualityReasonLowConfidence) {
+		t.Fatalf("0.9 K header = %v", reasons)
+	}
+	measured, ok := AssessMeasurement(value, checks, PointQualityInput{PointType: "TELEMETRY", Live: true, Peers: peers})
+	if !ok || !measured.LowConfidence || !measured.HasNumbers || measured.Relative < 0.155 || measured.Relative > 0.165 || measured.COPRelative == nil {
+		t.Fatalf("%+v ok=%v", measured, ok)
+	}
+	health := HealthFor(QualityPartial, reasons)
+	if health.Status != HealthSuspect || health.Score != 40 {
+		t.Fatalf("health %+v", health)
+	}
+	// A chiller at 2.8 K, and a replay that is not live, stay usable.
+	supplyWide, returnWide := 7.0, 9.8
+	wide := AssessPointQuality(1.163*flow*2.8, at, checks, PointQualityInput{PointType: "TELEMETRY", Live: true, Peers: map[string]PeerSample{
+		"temp/t18": {Number: &supplyWide, Good: true}, "temp/t16": {Number: &returnWide, Good: true},
+		"flow/flow": {Number: &flow, Good: true}, "meter/power": {Number: &power, Good: true},
+	}})
+	if len(wide) != 0 {
+		t.Fatalf("2.8 K = %v", wide)
+	}
+	if replay := AssessPointQuality(value, at, checks, PointQualityInput{PointType: "TELEMETRY", Live: false, Peers: peers}); len(replay) != 0 {
+		t.Fatalf("history replay = %v", replay)
+	}
+	if stopped := AssessPointQuality(0, at, checks, PointQualityInput{PointType: "TELEMETRY", Live: true, Peers: peers}); len(stopped) != 0 {
+		t.Fatalf("chillers off = %v", stopped)
+	}
+}
+
+func headerUncertainty() *UncertaintyCheck {
+	return &UncertaintyCheck{
+		Kind: "cooling", SupplyAccuracyK: 0.1, ReturnAccuracyK: 0.1,
+		FlowAccuracyFraction: 0.02, PowerAccuracyFraction: 0.01, PropertyFraction: 0.005, LowConfidenceRelative: 0.10,
+		Supply: PointRef{DeviceID: "temp", Key: "t18"}, Return: PointRef{DeviceID: "temp", Key: "t16"},
+		Flow: &PointRef{DeviceID: "flow", Key: "flow"}, Power: &PointRef{DeviceID: "meter", Key: "power"},
+	}
+}
+
 func sameReasons(got []QualityReason, want ...QualityReason) bool {
 	if len(got) != len(want) {
 		return false
