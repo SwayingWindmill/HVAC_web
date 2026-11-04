@@ -307,3 +307,27 @@ func TestEvaluatePolicyUnchangedReadingRaisesAfterItsWindowAndAChangeClears(t *t
 		t.Fatalf("a reading that stopped arriving was judged stuck: %#v", stale)
 	}
 }
+
+// A range rejection keeps the last good number on screen and records the failure
+// on the point's health. The data-quality rule sees that, and clears once it is gone.
+func TestEvaluatePolicyQualityReasonsUseHealthNotTheDisplayedValue(t *testing.T) {
+	policy := validAlarmPolicy()
+	policy.AlarmType = "data-quality/suspect/t18"
+	policy.QualityPolicy = EvaluationQualityUsable
+	policy.Raise = Condition{Kind: ConditionReasons, Input: "supply", Match: ReasonMatchAny, Reasons: []string{"OUT_OF_RANGE", "SPIKE", "SENTINEL"}}
+	policy.Clear = Condition{Kind: ConditionReasons, Input: "supply", Match: ReasonMatchNone, Reasons: []string{"OUT_OF_RANGE", "SPIKE", "SENTINEL"}}
+	sealAlarmPolicy(&policy)
+	at := time.Date(2026, 10, 28, 2, 0, 0, 0, time.UTC)
+	bad := NumberInput("supply", 7.1, "GOOD", at.Format(time.RFC3339Nano))
+	bad.HealthReasons = []string{"OUT_OF_RANGE"}
+	raised, err := EvaluatePolicy(policy, evaluationSnapshot("r-1", at.Format(time.RFC3339Nano), bad), AlarmEvaluationState{}, at)
+	if err != nil || raised.Effect != EvaluationEffectPublish {
+		t.Fatalf("range rejection did not raise: %#v %v", raised, err)
+	}
+	raised.State.ActiveAlarmID, raised.State.ActiveIncidentCorrelationID = testAlarmID, "018f3e00-4000-7000-8000-000000000002"
+	good := NumberInput("supply", 6.8, "GOOD", at.Add(time.Minute).Format(time.RFC3339Nano))
+	cleared, err := EvaluatePolicy(policy, evaluationSnapshot("r-2", at.Add(time.Minute).Format(time.RFC3339Nano), good), raised.State, at.Add(time.Minute))
+	if err != nil || cleared.Effect != EvaluationEffectClear {
+		t.Fatalf("a healthy sample did not clear: %#v %v", cleared, err)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -146,6 +147,10 @@ func (store *PostgresStore) acceptObservationOnce(ctx context.Context, candidate
 		if err := upsertLatestObservation(ctx, tx, candidate, decision); err != nil {
 			return ObservationReceipt{}, err
 		}
+	} else if decision.RecordHealth {
+		if err := updatePointHealth(ctx, tx, candidate, decision); err != nil {
+			return ObservationReceipt{}, err
+		}
 	}
 	if decision.EmitPresenceSignal {
 		if err := store.insertSourcePresenceSignal(ctx, tx, candidate, decision); err != nil {
@@ -248,37 +253,127 @@ FOR UPDATE
 	}
 	var policy ObservationPolicy
 	var futureSeconds, lagSeconds int
+	var checks []byte
 	err = tx.QueryRow(ctx, `
 SELECT f.policy_revision, p.policy_revision, f.value_type, f.expected_unit,
-       f.minimum_number, f.maximum_number,
+       f.minimum_number, f.maximum_number, f.quality_checks,
        p.max_future_clock_skew_seconds, p.max_source_lag_seconds
 FROM telemetry_runtime.freshness_policies f
 JOIN telemetry_runtime.presence_policies p USING (device_id)
 WHERE f.device_id = $1::uuid AND f.telemetry_key = $2 AND f.configured
 `, deviceID, candidate.TelemetryKey).Scan(
 		&policy.Revision, &policy.PresencePolicyRevision, &policy.ValueType, &policy.Unit,
-		&policy.MinimumNumber, &policy.MaximumNumber, &futureSeconds, &lagSeconds,
+		&policy.MinimumNumber, &policy.MaximumNumber, &checks, &futureSeconds, &lagSeconds,
 	)
 	if err == nil {
 		policy.MaxFutureClockSkew = time.Duration(futureSeconds) * time.Second
 		policy.MaxSourceLag = time.Duration(lagSeconds) * time.Second
+		parsed, err := parseQualityChecks(checks)
+		if err != nil {
+			return ObservationFacts{}, "", fmt.Errorf("parse telemetry point quality checks: %w", err)
+		}
+		policy.QualityChecks = parsed
 		facts.Policy = &policy
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return ObservationFacts{}, "", fmt.Errorf("query telemetry observation policy: %w", err)
 	}
 	var latest time.Time
+	var latestValue []byte
+	var unchangedSince *time.Time
 	err = tx.QueryRow(ctx, `
-SELECT sampled_at
+SELECT value, sampled_at, unchanged_since
 FROM telemetry_runtime.latest_accepted_telemetry
 WHERE device_id = $1::uuid AND telemetry_key = $2
-`, deviceID, candidate.TelemetryKey).Scan(&latest)
+`, deviceID, candidate.TelemetryKey).Scan(&latestValue, &latest, &unchangedSince)
 	if err == nil {
 		latest = latest.UTC()
 		facts.LatestSampledAt = &latest
+		if number, ok := numericJSON(latestValue); ok {
+			prior := PriorNumeric{Value: number, SampledAt: latest}
+			if unchangedSince != nil {
+				prior.UnchangedSince = unchangedSince.UTC()
+			}
+			facts.Previous = &prior
+		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return ObservationFacts{}, "", fmt.Errorf("query latest telemetry ordering fact: %w", err)
 	}
+	if facts.Policy != nil && facts.Policy.QualityChecks != nil {
+		running, untrusted, err := loadQualityContext(ctx, tx, facts.Policy.QualityChecks)
+		if err != nil {
+			return ObservationFacts{}, "", err
+		}
+		facts.Running = running
+		facts.InputsUntrusted = untrusted
+	}
 	return facts, existingID, nil
+}
+
+func numericJSON(raw []byte) (float64, bool) {
+	kind, number, ok := observationValueType(raw)
+	return number, ok && kind == "NUMBER"
+}
+
+// loadQualityContext reads the other points a check names. It does not lock them:
+// a running flag or an input's quality is the last committed sample.
+func loadQualityContext(ctx context.Context, tx pgx.Tx, checks *QualityChecks) (running bool, inputsUntrusted bool, err error) {
+	for _, expect := range checks.Running {
+		var encoded []byte
+		err := tx.QueryRow(ctx, `
+SELECT value FROM telemetry_runtime.latest_accepted_telemetry
+WHERE device_id = $1::uuid AND telemetry_key = $2
+`, expect.DeviceID, expect.Key).Scan(&encoded)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return false, false, fmt.Errorf("query operating point %s/%s: %w", expect.DeviceID, expect.Key, err)
+		}
+		if jsonEquals(encoded, expect.Equals) {
+			running = true
+			break
+		}
+	}
+	for _, input := range checks.Inputs {
+		var quality string
+		var health *string
+		err := tx.QueryRow(ctx, `
+SELECT quality, health_status FROM telemetry_runtime.latest_accepted_telemetry
+WHERE device_id = $1::uuid AND telemetry_key = $2
+`, input.DeviceID, input.Key).Scan(&quality, &health)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return false, false, fmt.Errorf("query quality input %s/%s: %w", input.DeviceID, input.Key, err)
+		}
+		if quality != string(QualityGood) || (health != nil && (*health == HealthBad || *health == HealthSuspect)) {
+			inputsUntrusted = true
+			break
+		}
+	}
+	return running, inputsUntrusted, nil
+}
+
+func jsonEquals(raw []byte, want string) bool {
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return false
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed == want
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64) == want
+	case bool:
+		if want == "true" {
+			return typed
+		}
+		if want == "false" {
+			return !typed
+		}
+	}
+	return false
 }
 
 // loadObservationIdentity takes a live source's resolved Device and Point as given, unless
@@ -497,11 +592,16 @@ INSERT INTO telemetry_runtime.ingest_quarantine (
 }
 
 func upsertLatestObservation(ctx context.Context, tx pgx.Tx, candidate ObservationCandidate, decision ObservationDecision) error {
+	var unchanged any
+	if !decision.UnchangedSince.IsZero() {
+		unchanged = decision.UnchangedSince.UTC()
+	}
 	_, err := tx.Exec(ctx, `
 INSERT INTO telemetry_runtime.latest_accepted_telemetry (
   device_id, telemetry_key, business_revision, value, value_type, unit, sampled_at,
-  received_at, freshness, quality, quality_reasons, policy_revision, updated_at
-) VALUES ($1::uuid, $2, 1, $3::jsonb, $4, $5, $6, $7, 'FRESH', $8, $9, $10, $7)
+  received_at, freshness, quality, quality_reasons, policy_revision, updated_at,
+  unchanged_since, health_status, health_score, health_reasons, health_at
+) VALUES ($1::uuid, $2, 1, $3::jsonb, $4, $5, $6, $7, 'FRESH', $8, $9, $10, $7, $11, $12, $13, $14, $7)
 ON CONFLICT (device_id, telemetry_key) DO UPDATE SET
   value = EXCLUDED.value,
   value_type = EXCLUDED.value_type,
@@ -511,12 +611,33 @@ ON CONFLICT (device_id, telemetry_key) DO UPDATE SET
   quality = EXCLUDED.quality,
   quality_reasons = EXCLUDED.quality_reasons,
   policy_revision = EXCLUDED.policy_revision,
-  updated_at = EXCLUDED.updated_at
+  updated_at = EXCLUDED.updated_at,
+  unchanged_since = EXCLUDED.unchanged_since,
+  health_status = EXCLUDED.health_status,
+  health_score = EXCLUDED.health_score,
+  health_reasons = EXCLUDED.health_reasons,
+  health_at = EXCLUDED.health_at
 WHERE telemetry_runtime.latest_accepted_telemetry.sampled_at <= EXCLUDED.sampled_at
 `, decision.DeviceID, candidate.TelemetryKey, []byte(candidate.Value), candidate.ValueType, candidate.Unit,
-		candidate.SampledAt, candidate.ReceivedAt, string(decision.Quality), qualityReasonStrings(decision.QualityReasons), decision.PolicyRevision)
+		candidate.SampledAt, candidate.ReceivedAt, string(decision.Quality), qualityReasonStrings(decision.QualityReasons), decision.PolicyRevision,
+		unchanged, decision.HealthStatus, decision.HealthScore, qualityReasonStrings(decision.HealthReasons))
 	if err != nil {
 		return fmt.Errorf("replace latest accepted telemetry: %w", err)
+	}
+	return nil
+}
+
+// updatePointHealth records a range rejection against the point without replacing
+// the last trusted value. The displayed number stays; its health becomes BAD.
+func updatePointHealth(ctx context.Context, tx pgx.Tx, candidate ObservationCandidate, decision ObservationDecision) error {
+	_, err := tx.Exec(ctx, `
+UPDATE telemetry_runtime.latest_accepted_telemetry
+SET health_status = $3, health_score = $4, health_reasons = $5, health_at = $6
+WHERE device_id = $1::uuid AND telemetry_key = $2
+  AND (health_at IS NULL OR health_at <= $6)
+`, decision.DeviceID, candidate.TelemetryKey, decision.HealthStatus, decision.HealthScore, qualityReasonStrings(decision.HealthReasons), candidate.SampledAt.UTC())
+	if err != nil {
+		return fmt.Errorf("record telemetry point health: %w", err)
 	}
 	return nil
 }

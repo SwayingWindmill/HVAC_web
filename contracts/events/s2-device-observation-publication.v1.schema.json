@@ -82,7 +82,7 @@
     "QualityReasonCode": {
       "type": "string",
       "pattern": "^[A-Z][A-Z0-9_]+$",
-      "x-known-codes": ["SOURCE_UNTRUSTED", "TYPE_MISMATCH", "UNIT_MISMATCH", "OUT_OF_RANGE", "CLOCK_AHEAD", "CLOCK_BEHIND", "SOURCE_LAG_EXCEEDED", "DUPLICATE", "OUT_OF_ORDER", "REPLAYED"]
+      "x-known-codes": ["SOURCE_UNTRUSTED", "TYPE_MISMATCH", "UNIT_MISMATCH", "OUT_OF_RANGE", "CLOCK_AHEAD", "CLOCK_BEHIND", "SOURCE_LAG_EXCEEDED", "DUPLICATE", "OUT_OF_ORDER", "REPLAYED", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT"]
     },
     "AvailabilityReasonCode": {
       "type": "string",
@@ -136,7 +136,18 @@
         "freshness": { "type": "string", "enum": ["FRESH", "STALE"] },
         "quality": { "$ref": "#/$defs/TelemetryQuality" },
         "qualityReasons": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/QualityReasonCode" } },
-        "policyRevision": { "$ref": "#/$defs/PolicyRevision" }
+        "policyRevision": { "$ref": "#/$defs/PolicyRevision" },
+        "health": { "$ref": "#/$defs/TelemetryPointHealth" }
+      }
+    },
+    "TelemetryPointHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "score", "reasons"],
+      "properties": {
+        "status": { "type": "string", "enum": ["HEALTHY", "SUSPECT", "BAD", "STALE"] },
+        "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "reasons": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/QualityReasonCode" } }
       }
     },
     "TelemetryMissingState": {

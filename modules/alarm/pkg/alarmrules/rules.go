@@ -24,13 +24,28 @@ type Compiled struct {
 }
 
 type rulesFile struct {
-	SchemaVersion      int           `json:"schemaVersion"`
-	Note               string        `json:"note"`
-	SiteFile           string        `json:"siteFile"`
-	Rules              []rule        `json:"rules"`
-	ReadingsNotUpdated *readingsRule `json:"readingsNotUpdated"`
-	ReportsInterrupted *readingsRule `json:"reportsInterrupted"`
-	ReadingsFlat       *flatRule     `json:"readingsFlat"`
+	SchemaVersion      int              `json:"schemaVersion"`
+	Note               string           `json:"note"`
+	SiteFile           string           `json:"siteFile"`
+	Rules              []rule           `json:"rules"`
+	ReadingsNotUpdated *readingsRule    `json:"readingsNotUpdated"`
+	ReportsInterrupted *readingsRule    `json:"reportsInterrupted"`
+	ReadingsFlat       *flatRule        `json:"readingsFlat"`
+	DataQuality        *dataQualityFile `json:"dataQuality"`
+}
+
+// dataQualityFile raises one alarm per point from that point's quality profile,
+// instead of one INFO alarm for every temperature that sits still for six hours.
+type dataQualityFile struct {
+	Suspect  *suspectRule `json:"suspect"`
+	Flatline *flatRule    `json:"flatline"`
+}
+
+type suspectRule struct {
+	readingsRule
+	Reasons       []string            `json:"reasons"`
+	MajorSeverity alarmmodel.Severity `json:"majorSeverity"`
+	MajorPoints   []string            `json:"majorPoints"`
 }
 
 // A rule is a policy written with readings as "<device code>/<point code>".
@@ -86,16 +101,38 @@ type siteFile struct {
 		Points     json.RawMessage `json:"points"`
 		MorePoints []sitePoint     `json:"morePoints"`
 	} `json:"devices"`
-	MeterPoints []sitePoint `json:"meterPoints"`
+	MeterPoints     []sitePoint             `json:"meterPoints"`
+	QualityProfiles map[string]pointQuality `json:"qualityProfiles"`
 }
 
 type sitePoint struct {
-	Code      string          `json:"code"`
-	Name      string          `json:"name"`
-	Unit      string          `json:"unit"`
-	ValueType string          `json:"valueType"`
-	Status    string          `json:"status"`
-	From      json.RawMessage `json:"from"`
+	Code           string          `json:"code"`
+	Name           string          `json:"name"`
+	Unit           string          `json:"unit"`
+	ValueType      string          `json:"valueType"`
+	Status         string          `json:"status"`
+	From           json.RawMessage `json:"from"`
+	QualityProfile string          `json:"qualityProfile"`
+}
+
+type pointQuality struct {
+	Range *struct {
+		Min float64 `json:"min"`
+		Max float64 `json:"max"`
+	} `json:"range"`
+	MaxStep                *float64  `json:"maxStep"`
+	Sentinels              []float64 `json:"sentinels"`
+	FlatlineSeconds        *int64    `json:"flatlineSeconds"`
+	FlatlineRunningSeconds *int64    `json:"flatlineRunningSeconds"`
+	Running                []struct {
+		Device string `json:"device"`
+		Point  string `json:"point"`
+		Equals string `json:"equals"`
+	} `json:"running"`
+	Inputs []struct {
+		Device string `json:"device"`
+		Point  string `json:"point"`
+	} `json:"inputs"`
 }
 
 type device struct {
@@ -206,11 +243,17 @@ func Load(rulesPath string) (Compiled, error) {
 			Raise: either(alarmservice.ConditionAnd, noData), Clear: either(alarmservice.ConditionOr, fresh),
 		}))
 	}
+	if err := appendDataQuality(&compiled, rules.DataQuality, site, devices, order); err != nil {
+		return Compiled{}, err
+	}
 	if flat := rules.ReadingsFlat; flat != nil {
 		for _, code := range order {
 			entry := devices[code]
 			for _, point := range entry.points {
 				if point.Unit != flat.Unit || len(point.From) > 0 {
+					continue
+				}
+				if profile := site.QualityProfiles[point.QualityProfile]; point.QualityProfile != "" && (profile.FlatlineSeconds != nil || profile.FlatlineRunningSeconds != nil) {
 					continue
 				}
 				input := entry.id + "/" + point.Code
@@ -298,6 +341,104 @@ func either(kind alarmservice.ConditionKind, conditions []alarmservice.Condition
 		return conditions[0]
 	}
 	return alarmservice.Condition{Kind: kind, Children: conditions}
+}
+
+func appendDataQuality(compiled *Compiled, section *dataQualityFile, site siteFile, devices map[string]device, order []string) error {
+	if section == nil {
+		return nil
+	}
+	for _, code := range order {
+		entry := devices[code]
+		for _, point := range entry.points {
+			if point.QualityProfile == "" || len(point.From) > 0 {
+				continue
+			}
+			profile, ok := site.QualityProfiles[point.QualityProfile]
+			if !ok {
+				return fmt.Errorf("point %s/%s names unknown quality profile %s", code, point.Code, point.QualityProfile)
+			}
+			input := entry.id + "/" + point.Code
+			if section.Suspect != nil && profileSuspect(profile) {
+				reasons := section.Suspect.Reasons
+				if len(reasons) == 0 {
+					reasons = []string{"OUT_OF_RANGE", "SPIKE", "SENTINEL", "DERIVED_INPUT"}
+				}
+				reasons = append([]string(nil), reasons...)
+				severity := section.Suspect.Severity
+				for _, major := range section.Suspect.MajorPoints {
+					if major == code+"/"+point.Code {
+						severity = section.Suspect.MajorSeverity
+					}
+				}
+				wording := strings.NewReplacer("{device}", entry.name, "{point}", point.Name)
+				compiled.Policies = append(compiled.Policies, sitePolicy(site.Site.ID, site.Site.Code, "data-quality/suspect/"+code+"/"+point.Code, alarmservice.AlarmPolicyRevision{
+					Title: wording.Replace(section.Suspect.Title), Summary: wording.Replace(section.Suspect.Summary), Severity: severity,
+					QualityPolicy: alarmservice.EvaluationQualityUsable, FreshnessSeconds: flatFreshnessSeconds, TriggerMode: alarmservice.TriggerSimple,
+					Raise: alarmservice.Condition{Kind: alarmservice.ConditionReasons, Input: input, Match: alarmservice.ReasonMatchAny, Reasons: reasons},
+					Clear: alarmservice.Condition{Kind: alarmservice.ConditionReasons, Input: input, Match: alarmservice.ReasonMatchNone, Reasons: reasons},
+				}))
+			}
+			if section.Flatline == nil {
+				continue
+			}
+			if profile.FlatlineRunningSeconds != nil && *profile.FlatlineRunningSeconds > 0 && len(profile.Running) > 0 {
+				running, stopped, err := runningConditions(profile, devices)
+				if err != nil {
+					return err
+				}
+				minutes := strconv.FormatInt(*profile.FlatlineRunningSeconds/60, 10)
+				text := strings.NewReplacer("{device}", entry.name, "{point}", point.Name, "{minutes}", minutes, "{hours}", strconv.FormatInt(*profile.FlatlineRunningSeconds/3600, 10), "{when}", "在有机组运行时")
+				compiled.Policies = append(compiled.Policies, sitePolicy(site.Site.ID, site.Site.Code, "data-quality/flat-running/"+code+"/"+point.Code, alarmservice.AlarmPolicyRevision{
+					Title: text.Replace(section.Flatline.Title), Summary: text.Replace(section.Flatline.Summary), Severity: section.Flatline.Severity,
+					QualityPolicy: alarmservice.EvaluationQualityUsable, FreshnessSeconds: flatFreshnessSeconds, TriggerMode: alarmservice.TriggerSimple,
+					Raise: alarmservice.Condition{Kind: alarmservice.ConditionAnd, Children: []alarmservice.Condition{
+						{Kind: alarmservice.ConditionUnchanged, Input: input, AgeSeconds: *profile.FlatlineRunningSeconds},
+						either(alarmservice.ConditionOr, running),
+					}},
+					Clear: alarmservice.Condition{Kind: alarmservice.ConditionOr, Children: []alarmservice.Condition{
+						{Kind: alarmservice.ConditionChanged, Input: input, AgeSeconds: *profile.FlatlineRunningSeconds},
+						either(alarmservice.ConditionAnd, stopped),
+					}},
+				}))
+			}
+			if profile.FlatlineSeconds != nil && *profile.FlatlineSeconds > 0 {
+				text := strings.NewReplacer("{device}", entry.name, "{point}", point.Name, "{minutes}", strconv.FormatInt(*profile.FlatlineSeconds/60, 10), "{hours}", strconv.FormatInt(*profile.FlatlineSeconds/3600, 10), "{when}", "")
+				compiled.Policies = append(compiled.Policies, sitePolicy(site.Site.ID, site.Site.Code, "data-quality/flat/"+code+"/"+point.Code, alarmservice.AlarmPolicyRevision{
+					Title: text.Replace(section.Flatline.Title), Summary: text.Replace(section.Flatline.Summary), Severity: section.Flatline.Severity,
+					QualityPolicy: alarmservice.EvaluationQualityUsable, FreshnessSeconds: flatFreshnessSeconds, TriggerMode: alarmservice.TriggerSimple,
+					Raise: alarmservice.Condition{Kind: alarmservice.ConditionUnchanged, Input: input, AgeSeconds: *profile.FlatlineSeconds},
+					Clear: alarmservice.Condition{Kind: alarmservice.ConditionChanged, Input: input, AgeSeconds: *profile.FlatlineSeconds},
+				}))
+			}
+		}
+	}
+	return nil
+}
+
+func profileSuspect(profile pointQuality) bool {
+	return profile.Range != nil || profile.MaxStep != nil || len(profile.Sentinels) > 0 || len(profile.Inputs) > 0
+}
+
+func runningConditions(profile pointQuality, devices map[string]device) (running, stopped []alarmservice.Condition, err error) {
+	for _, item := range profile.Running {
+		entry, ok := devices[item.Device]
+		if !ok {
+			return nil, nil, fmt.Errorf("quality profile running device %s is not in the site file", item.Device)
+		}
+		found := false
+		for _, point := range entry.points {
+			if point.Code == item.Point {
+				found = true
+			}
+		}
+		if !found {
+			return nil, nil, fmt.Errorf("quality profile running point %s/%s is not active", item.Device, item.Point)
+		}
+		input := entry.id + "/" + item.Point
+		running = append(running, alarmservice.Condition{Kind: alarmservice.ConditionCompare, Input: input, Operator: alarmservice.CompareEQ, Value: alarmservice.StringValue(item.Equals)})
+		stopped = append(stopped, alarmservice.Condition{Kind: alarmservice.ConditionCompare, Input: input, Operator: alarmservice.CompareNE, Value: alarmservice.StringValue(item.Equals)})
+	}
+	return running, stopped, nil
 }
 
 // sitePolicy names a rule's policy family and assignment after the Site and the rule's code, so

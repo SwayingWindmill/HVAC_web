@@ -46,6 +46,8 @@ type RuleCondition struct {
 	Reset      *float64            `json:"reset,omitempty"`
 	AgeSeconds int64               `json:"ageSeconds,omitempty"`
 	Children   []RuleCondition     `json:"children,omitempty"`
+	Reasons    []string            `json:"reasons,omitempty"`
+	Match      string              `json:"match,omitempty"`
 }
 
 type RuleReading struct {
@@ -70,7 +72,7 @@ func siteRuleView(rule SiteRule) (SiteRuleView, error) {
 }
 
 func ruleCondition(condition Condition) (RuleCondition, error) {
-	view := RuleCondition{Kind: condition.Kind, Minimum: condition.Minimum, Maximum: condition.Maximum, AgeSeconds: condition.AgeSeconds}
+	view := RuleCondition{Kind: condition.Kind, Minimum: condition.Minimum, Maximum: condition.Maximum, AgeSeconds: condition.AgeSeconds, Reasons: condition.Reasons, Match: condition.Match}
 	switch condition.Kind {
 	case ConditionAnd, ConditionOr:
 		for _, child := range condition.Children {
