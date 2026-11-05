@@ -2,7 +2,7 @@
 
 现在做到哪、下一步做什么、服务器和本地环境有哪些特殊情况。改了这里说的事，就在同一个 PR 里更新本文。怎么构建、测试和运行见 `AGENTS.md`；用户能看到的变化见 `CHANGELOG.md`；每张单的细节在 GitHub 问题单里。
 
-最后更新：2026-11-04。
+最后更新：2026-11-05。
 
 ## 产品现在有什么
 
@@ -48,7 +48,7 @@
 - `DEEPSEEK_API_KEY` 在 `server.runtime.env` 里，是用户自己放的。
 - 服务器上的 Go 服务还是用 Go 1.25.12 构建的。仓库从 #707 起用 Go 1.27.3、`golang.org/x/text` v0.41.0。上面的部署流水线第一次跑成功之后，服务器上的 `/service` 才换成 1.27.3，Modbus TLS 连接上的 4 个标准库漏洞和 `x/text` 处理特殊输入会崩溃的问题才算修好。
 - 夜间备份由 `hvac-backup.timer` 做，备份放在同一块盘的运行目录里，还没有拷到服务器以外。
-- 告警要发出去，在运行目录的 `alert-receiver/` 放企业微信机器人地址和/或 SMTP（样例在 `observability/alert-receiver.example/`，真文件不进 Git）。什么都不放，Alertmanager 仍是空接收方。Prometheus 用仓库里的 `observability/prometheus.yaml`（15 天且不超过 2GB），不再读运行目录里手改的那份。Centrifugo 的指标从容器网络里的明文 9000 抓，不再去碰只开 TLS 的 8000，所以 `Phase1ProcessDown` 不会再因为这次抓取失败而误报。主机备份新鲜度和容器重启由 `hvac-host-metrics.timer` 写给 node-exporter。Tempo 仍只在 `observability-full`，这台机器的 `single-lite` 不开它。步骤见 `docs/operations/alerts.md`。
+- 告警要发出去，在运行目录的 `alert-receiver/` 放企业微信机器人地址和/或 SMTP（样例在 `observability/alert-receiver.example/`，真文件不进 Git）。什么都不放，Alertmanager 仍是空接收方。设备告警（网关断线、越限等）不走 Alertmanager：合并 #753 之后由 energy-api 按 `deploy/sites/*.alarm-routing.json` 交给 `wecom-alert-adapter` 发，默认关着（`ALARM_DELIVERY_MODE=off`），收件人和令牌放运行目录的 `alarm-delivery/`，企业微信应用的密钥放 `alert-receiver/`，步骤见 `docs/operations/alarm-delivery.md`。Prometheus 用仓库里的 `observability/prometheus.yaml`（15 天且不超过 2GB），不再读运行目录里手改的那份。Centrifugo 的指标从容器网络里的明文 9000 抓，不再去碰只开 TLS 的 8000，所以 `Phase1ProcessDown` 不会再因为这次抓取失败而误报。主机备份新鲜度和容器重启由 `hvac-host-metrics.timer` 写给 node-exporter。Tempo 仍只在 `observability-full`，这台机器的 `single-lite` 不开它。步骤见 `docs/operations/alerts.md`。
 - 两个演示站点（central-plant、local-energy-site-b）的 28 个定时任务都停用了：模拟器停着，指标任务每小时都会失败。重新开模拟器时一起启用。
 - 运行时数据清理（#553）每小时删已送达的历史事件、删 7 天前的原始读数。第一次删原始读数从 2026-10-21 开始，之后跑一次 `VACUUM FULL telemetry_runtime.source_observations`，能腾出约 3.5 GB；`VACUUM FULL` 要先有和剩下的数据一样大的空闲空间，磁盘腾出来之前别跑。
 - **磁盘**（2026-10-20 11:20 UTC：59 GB 用了 46 GB，剩 12 GB）。占地方的是：`source_observations` 5.4 GB（见上一条）、同一块盘上的夜间备份 6.5 GB、ClickHouse 的 `system.query_log` 0.8 GB。2026-10-19 19:52 磁盘满过一次，Postgres 重启了 10 次，ClickHouse 拒绝写入，写历史读数的程序停了 15 个小时（#649 已修）。元凶是告警判断记录 `hvac_s4` 的 `alarm_runtime.alarm_evaluation_event`：以前每收到一批读数，站点的每条规则都写一行，每行带整个站点 81 个读数的快照（约 6 KB），结果没变也写；10-18 起一天约 100 万行，两天 10 GB，10-20 补收积压读数时又是 7 分钟 3.5 万行。10-20 经用户同意把这张表清空（`TRUNCATE`，只是判断的流水，告警、处理记录和当前判断状态都不受影响）。#651 起只在判断结果变了时写一行（状态、判断不了的原因、发报或恢复、规则版本变了），超过 30 天的每分钟删掉；那 3.5 万次判断按新规则只写 14 行，估计一天几百行、两三 MB。#651 已在 2026-10-20 11:30 UTC 部署到服务器（main `e64062fd`，迁移 011 已执行）：之后 11 分钟判断了约 9.7 万次，一行都没写。部署前旧代码在网关恢复上报后又写了 12 万行（715 MB，最后一行 11:29:58 UTC），2026-11-19 起会被自动删掉。
@@ -99,6 +99,8 @@
 
 ## 下一步
 
+设备告警发给值班人员（#753，规格 `docs/specs/alarm-delivery.md`，ADR 0031）还在评审，叠在 #752 上面：合并部署后先保持 `off`，放好收件人和密钥、企业微信应用加可信 IP，再 `dry-run` 演练至少一天，最后 `live`。松雅轩的收件人是占位，要张浩定。
+
 测量不确定度和探头零点还在评审，没有部署：冷量在温差相对探头误差过大时标成部分，实时冷量和能效照常显示并标「低可信」和区间，COP 均值、诊断和节能验证不用这一段；供回水零点只建议、不改读数。规格 `docs/specs/measurement-uncertainty.md`。它叠在铭牌和物理检查、再往下是点位数据质量，两张都还没合并。不要单独部署。
 
 按顺序：
@@ -109,7 +111,7 @@
    - **其他约定**：身份服务和通知模块的 Postgres 测试由 `npm run test:identity-postgres`、`npm run test:notification-postgres` 在临时库上运行。小程序读冷站用的点位名称表和助手的对话整理规则从网页复制（`npm -w @hvac/miniprogram run sync`，测试会检查两份是否一致）。通知页直接读告警（网页的通知页也是）。订阅消息是一次性的：用户每点一次「允许」，服务器才能发一条。设计稿是画布「值班小程序界面」，规范是设计系统「泉来禾 HVAC 设计系统」的「小程序」一节（链接在问题单里）。
 2. **#614**（要现场人员）：核对松雅轩的通道表和机组温度。2026-10-21 用三天的逐小时数据对过（结果在 #614 的评论里）：t1、t2、t3、t4、t10 在冷冻水一侧，t5、t6、t7、t9 在冷却水一侧，t8 没有探头，t14 从 2026-10-29 起也没有探头（原始值一直是 0），和站点文件的「蒸发出 t3/t5/t7/t9、冷凝出 t4/t6/t8/t10」对不上。所以小程序和助手把 C 机组冷冻水出水报成 29–31 ℃（其实是冷却水 t7）。用 15 分钟数据进一步判定出 C、D 的四路，按数据改了（#685）；A、B 的出水温度和四台的冷却水进水先停用，等现场核对 t3、t4、t5、t9、t10。
 3. **#641**：用评测前后对比决定 AI 助手要不要用 pi 的 codemode（模型写一小段脚本连续读数据）。
-4. **对标复查后补的差距**：2026-10 把 2026-08 的 ThingsBoard / OpenEMS / MyEMS 对标结论按现在的代码重新对了一遍（`docs/research/thingsboard-gap-review-2026-10.md`，91 项：已做 46、不做 29、还差 16）。决定不做和推迟的在 ADR 0026，保留自建身份服务在 ADR 0025，真实站点的指令由网关执行、平台检查在 ADR 0027。迁移已经冻结（#688，规则见 `deploy/platform/phase1/README.md`「数据库和迁移」）。备份传到 COS 并演练恢复（#689）用户说先不做。设备当前值在 Redis 里没有或 Redis 挂了时，改读 PostgreSQL 里的设备当前快照（#692）。其余的按问题单的先后做：Alertmanager 发邮件 → 删掉通用规则、Kafka、统一外发投递和通知收件箱（#691：Kafka 已删，操作记录只走 PostgreSQL 待发事件；统一外发投递、通知收件箱、通知规则和模板已删，网页通知页改读告警，通知模块只发微信提醒，告警也只把新告警交给通知模块；通用规则（「自动化规则」页、网关的规则接口、`rule-runtime-service`、`rule.manage`）已删；服务器上旧的 `outbound_delivery_*`、`rule_runtime_*` 角色由迁移 031、032 停用但没删，因为服务器的 role-credentials 文件还在给它们设密码，把那两行去掉后可以删；在新的空库上（新服务器、恢复备份）用这份旧文件跑迁移会因为角色不存在而中止，也要先去掉那两行，本机的 `npm run local:up` 会自己去掉）→ 设备告警改发企业微信 → 机组和水泵启停指令（#542，等现场确认 ET1010 每一路通道对应哪台设备、每台泵服务哪台机组）。
+4. **对标复查后补的差距**：2026-10 把 2026-08 的 ThingsBoard / OpenEMS / MyEMS 对标结论按现在的代码重新对了一遍（`docs/research/thingsboard-gap-review-2026-10.md`，91 项：已做 46、不做 29、还差 16）。决定不做和推迟的在 ADR 0026，保留自建身份服务在 ADR 0025，真实站点的指令由网关执行、平台检查在 ADR 0027。迁移已经冻结（#688，规则见 `deploy/platform/phase1/README.md`「数据库和迁移」）。备份传到 COS 并演练恢复（#689）用户说先不做。设备当前值在 Redis 里没有或 Redis 挂了时，改读 PostgreSQL 里的设备当前快照（#692）。其余的按问题单的先后做：Alertmanager 发邮件 → 删掉通用规则、Kafka、统一外发投递和通知收件箱（#691：Kafka 已删，操作记录只走 PostgreSQL 待发事件；统一外发投递、通知收件箱、通知规则和模板已删，网页通知页改读告警，通知模块只发微信提醒，告警也只把新告警交给通知模块；通用规则（「自动化规则」页、网关的规则接口、`rule-runtime-service`、`rule.manage`）已删；服务器上旧的 `outbound_delivery_*`、`rule_runtime_*` 角色由迁移 031、032 停用但没删，因为服务器的 role-credentials 文件还在给它们设密码，把那两行去掉后可以删；在新的空库上（新服务器、恢复备份）用这份旧文件跑迁移会因为角色不存在而中止，也要先去掉那两行，本机的 `npm run local:up` 会自己去掉）→ 设备告警改发企业微信（#753 在评审：邮件、企业微信应用和群，按站点路由、升级、确认和恢复通知；接通跑稳一周后删小程序订阅提醒）→ 机组和水泵启停指令（#542，等现场确认 ET1010 每一路通道对应哪台设备、每台泵服务哪台机组）。
    - **换云和换域名还只是调研**（`docs/research/cloud-migration-options-2026-10.md`）：现在的 139 是腾讯云轻量应用服务器，迁移后不再用轻量服务器。建议用两台正式的云服务器（腾讯云 CVM 或阿里云 ECS）跑 Docker Compose（应用一台、数据一台，数据盘单独挂载），不用容器服务。不换域名、一个月内要迁，就留在腾讯云广州（约 766 元/月），因为换一家要重新接入备案；迁移时一起换新域名的话，备案在哪家都要重做，阿里云同样配置约 624 元/月。`swayingwindmill.online` 是个人备案，以后会换成带 quanlaihe 的企业域名；换域名时，网关改成按域名连（Mosquitto 证书要加上新域名），微信的 IP 白名单和小程序的合法域名也要一起改。
 5. **宣传片**（`tools/promo-video`，2026-10-22 起）：60 秒「冷站的一天」，三维是产品孪生的场景代码按片子时间逐帧渲染，产品界面只取单个组件、按设计系统用代码重画，负荷曲线、能流图和全年节电日历墙也是代码画的，小程序画面在片子里先画出来，配乐和音效用代码合成（`music/compose.ts`）。用法和渲染（WSL 只有软件 WebGL，渲染在 Windows 侧用显卡）见它的 README。片子里先于产品出现的小程序功能记在 `tools/promo-video/film/FEATURE-GAPS.md`，用户要求片子做完后把小程序补齐。
 
@@ -158,7 +160,7 @@
 
 ## 运维手册
 
-出了事按 `docs/operations/` 里写好的步骤做：`disk-full.md`（磁盘写满）、`postgres-crash.md`（PostgreSQL 崩溃）、`restore-from-backup.md`（从夜间备份恢复）、`rollback.md`（把一次部署退回去）、`certificate-renewal.md`（Let's Encrypt 续期）、`rotate-secrets.md`（换密码和密钥）、`alert-receivers.md`（告警发到企业微信或邮箱）。告警规则里的链接仍指向 `docs/operations/alerts.md` 的对应小节。
+出了事按 `docs/operations/` 里写好的步骤做：`disk-full.md`（磁盘写满）、`postgres-crash.md`（PostgreSQL 崩溃）、`restore-from-backup.md`（从夜间备份恢复）、`rollback.md`（把一次部署退回去）、`certificate-renewal.md`（Let's Encrypt 续期）、`rotate-secrets.md`（换密码和密钥）、`alert-receivers.md`（平台告警发到企业微信或邮箱）、`alarm-delivery.md`（设备告警按站点发给值班人员、升级、演练和退回）。告警规则里的链接仍指向 `docs/operations/alerts.md` 的对应小节。
 
 覆盖率在 `.github/workflows/quality.yml`：Go 语句覆盖率和网页 `src` 的行覆盖率低于已提交的基线（允许 0.1 个百分点的误差）就失败。同一个工作流用现有的 Playwright 录制网关跑登录、告警、实时运行；不在 CI 里把整套 Compose 拉起来，因为那需要运行时密钥和这台小机器装不下的内存。浏览器装不上时这一个任务跳过并留下警告，测试跑了但失败则算失败。
 

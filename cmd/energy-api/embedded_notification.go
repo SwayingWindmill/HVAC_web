@@ -76,6 +76,13 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger) (*h
 		store.Close()
 		return nil, nil, func() {}, err
 	}
+	delivery, err := newAlarmDeliveryDispatcher(logger, scheduler)
+	if err != nil {
+		relay.Close()
+		scheduler.Close()
+		store.Close()
+		return nil, nil, func() {}, err
+	}
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "energy-api-notification", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
@@ -96,6 +103,7 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger) (*h
 	}
 	go runAlarmNotificationRelay(ctx, logger, relay, store)
 	go runWeChatReminders(ctx, logger, reminders)
+	go runAlarmDelivery(ctx, logger, delivery)
 	closeAll := func() {
 		relay.Close()
 		scheduler.Close()
@@ -127,7 +135,7 @@ func runAlarmNotificationRelay(ctx context.Context, logger *slog.Logger, relay *
 			continue
 		}
 		err = store.RecordAlarmEvent(ctx, notificationservice.AlarmEvent{
-			TenantID: event.TenantID, SiteID: event.SiteID, SourceEventID: event.SourceEventID, AlarmID: event.AlarmID,
+			TenantID: event.TenantID, SiteID: event.SiteID, SourceEventID: event.SourceEventID, AlarmID: event.AlarmID, AlarmVersion: int64(event.AlarmVersion),
 			IncidentCorrelationID: event.IncidentCorrelationID, Action: notificationservice.AlarmAction(event.Action),
 			CurrentSeverity: event.CurrentSeverity, PeakSeverity: event.PeakSeverity, Condition: event.Condition,
 			OccurredAt: event.OccurredAt, Attributes: event.Attributes,

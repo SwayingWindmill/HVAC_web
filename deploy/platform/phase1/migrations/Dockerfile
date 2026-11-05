@@ -54,6 +54,7 @@ COPY services/notification-service/migrations/001_s16_notification.sql /opt/hvac
 COPY services/notification-service/migrations/002_wechat_reminders.sql /opt/hvac/repo/services/notification-service/migrations/002_wechat_reminders.sql
 COPY services/notification-service/migrations/003_wechat_daily.sql /opt/hvac/repo/services/notification-service/migrations/003_wechat_daily.sql
 COPY services/notification-service/migrations/004_drop_inbox_and_policies.sql /opt/hvac/repo/services/notification-service/migrations/004_drop_inbox_and_policies.sql
+COPY services/notification-service/migrations/005_alarm_delivery.sql /opt/hvac/repo/services/notification-service/migrations/005_alarm_delivery.sql
 COPY infra/registry/postgres/init/010-s05-registry-writer.sql /opt/hvac/repo/infra/registry/postgres/init/010-s05-registry-writer.sql
 COPY infra/registry/postgres/init/011-s08-metric-lifecycle.sql /opt/hvac/repo/infra/registry/postgres/init/011-s08-metric-lifecycle.sql
 COPY infra/registry/postgres/init/012-s19-settlement-projections.sql /opt/hvac/repo/infra/registry/postgres/init/012-s19-settlement-projections.sql

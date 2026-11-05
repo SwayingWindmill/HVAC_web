@@ -68,6 +68,7 @@
         "services/notification-service/migrations/002_wechat_reminders.sql",
         "services/notification-service/migrations/003_wechat_daily.sql",
         "services/notification-service/migrations/004_drop_inbox_and_policies.sql",
+        "services/notification-service/migrations/005_alarm_delivery.sql",
         "infra/registry/postgres/init/010-s05-registry-writer.sql",
         "infra/registry/postgres/init/011-s08-metric-lifecycle.sql",
         "infra/registry/postgres/init/012-s19-settlement-projections.sql",

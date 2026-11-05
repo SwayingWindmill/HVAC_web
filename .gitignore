@@ -30,6 +30,10 @@ deploy/platform/phase1/runtime/
 deploy/platform/phase1/observability/**/wecom-webhook-url
 deploy/platform/phase1/observability/**/smtp.env
 deploy/platform/phase1/observability/**/smtp-password
+deploy/platform/phase1/observability/**/wecom-app.env
+deploy/platform/phase1/observability/**/wecom-app-secret
+deploy/platform/phase1/alarm-delivery.example/recipients.json
+deploy/platform/phase1/alarm-delivery.example/alarm-send-token
 
 # logs
 *.log
