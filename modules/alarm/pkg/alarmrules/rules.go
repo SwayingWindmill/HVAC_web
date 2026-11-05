@@ -105,6 +105,22 @@ type siteFile struct {
 	MeterPoints     []sitePoint             `json:"meterPoints"`
 	QualityProfiles map[string]pointQuality `json:"qualityProfiles"`
 	PhysicsChecks   []physicsCheck          `json:"physicsChecks"`
+	ProbePairs      []probePair             `json:"probePairs"`
+}
+
+// probePair is one supply/return pair. The offset itself is estimated by telemetry;
+// the alarm fires when that estimate's health reason is PROBE_OFFSET.
+type probePair struct {
+	Code   string `json:"code"`
+	Supply *struct {
+		Device string `json:"device"`
+		Point  string `json:"point"`
+	} `json:"supply"`
+	Alarm *struct {
+		Title    string              `json:"title"`
+		Summary  string              `json:"summary"`
+		Severity alarmmodel.Severity `json:"severity"`
+	} `json:"alarm"`
 }
 
 // physicsCheck is one site-file physics check. Optional checks without a subject
@@ -277,6 +293,9 @@ func Load(rulesPath string) (Compiled, error) {
 		return Compiled{}, err
 	}
 	if err := appendPhysics(&compiled, site, devices); err != nil {
+		return Compiled{}, err
+	}
+	if err := appendProbeOffsets(&compiled, site, devices); err != nil {
 		return Compiled{}, err
 	}
 	if flat := rules.ReadingsFlat; flat != nil {
@@ -540,6 +559,40 @@ func appendPumpWithoutChiller(compiled *Compiled, site siteFile, devices map[str
 		Raise: alarmservice.Condition{Kind: alarmservice.ConditionAnd, Children: stopped},
 		Clear: alarmservice.Condition{Kind: alarmservice.ConditionOr, Children: started},
 	}))
+	return nil
+}
+
+func appendProbeOffsets(compiled *Compiled, site siteFile, devices map[string]device) error {
+	for _, pair := range site.ProbePairs {
+		if pair.Alarm == nil || pair.Alarm.Title == "" || pair.Supply == nil {
+			continue
+		}
+		entry, ok := devices[pair.Supply.Device]
+		if !ok {
+			return fmt.Errorf("probe pair %s names unknown device %s", pair.Code, pair.Supply.Device)
+		}
+		found := false
+		for _, point := range entry.points {
+			if point.Code == pair.Supply.Point && len(point.From) == 0 {
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("probe pair %s names %s/%s, which is not an active reading of that device", pair.Code, pair.Supply.Device, pair.Supply.Point)
+		}
+		input := entry.id + "/" + pair.Supply.Point
+		severity := pair.Alarm.Severity
+		if severity == "" {
+			severity = alarmmodel.SeverityWarning
+		}
+		compiled.Policies = append(compiled.Policies, sitePolicy(site.Site.ID, site.Site.Code, "probe-offset/"+pair.Code, alarmservice.AlarmPolicyRevision{
+			Title: pair.Alarm.Title, Summary: pair.Alarm.Summary, Severity: severity,
+			QualityPolicy: alarmservice.EvaluationQualityUsable, FreshnessSeconds: physicsFreshnessSeconds,
+			TriggerMode: alarmservice.TriggerSimple,
+			Raise:       alarmservice.Condition{Kind: alarmservice.ConditionReasons, Input: input, Match: alarmservice.ReasonMatchAny, Reasons: []string{"PROBE_OFFSET"}},
+			Clear:       alarmservice.Condition{Kind: alarmservice.ConditionReasons, Input: input, Match: alarmservice.ReasonMatchNone, Reasons: []string{"PROBE_OFFSET"}},
+		}))
+	}
 	return nil
 }
 

@@ -4,7 +4,7 @@ import type { StatusTone } from '@/components/common/StatusBadge';
 import { MetricValue } from '@/blocks/metric-card';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import type { PlantCategory, PlantDevice, PlantReading } from './plant-model';
+import { LOW_CONFIDENCE_LABEL, type PlantCategory, type PlantDevice, type PlantReading } from './plant-model';
 import type { PlantLiveMode } from './use-realtime-plant';
 
 // How plant equipment is presented wherever operators look at it: the realtime plant
@@ -80,12 +80,26 @@ export function LiveIndicator({ mode }: { readonly mode: PlantLiveMode }) {
   return <PageMeta dot={presentation[mode].dot}>{presentation[mode].label}</PageMeta>;
 }
 
+/** Marks a measured value whose uncertainty is wide: shown as a number, left out of automated figures. */
+export function LowConfidenceBadge({ className }: { readonly className?: string }) {
+  return (
+    <span
+      className={cn('ml-1 inline-flex items-center rounded-sm bg-warning-soft px-1 text-[10px] leading-4 font-medium text-warning-text', className)}
+      title="温差相对探头误差偏小，读数照常显示，但不计入能效均值、故障诊断和节能验证"
+    >
+      {LOW_CONFIDENCE_LABEL}
+    </span>
+  );
+}
+
 export function ReadingValue({ reading, className }: { readonly reading: PlantReading | null; readonly className?: string }) {
   if (!reading || reading.state !== 'PRESENT') return <span className={cn('text-muted-foreground', className)}>—</span>;
+  const dimmed = !reading.current && !reading.lowConfidence;
   return (
-    <span className={cn('tabular-nums', !reading.current && 'text-muted-foreground', className)} title={reading.current ? undefined : '数据过期或不可靠'}>
+    <span className={cn('tabular-nums', dimmed && 'text-muted-foreground', className)} title={dimmed ? '数据过期或不可靠' : undefined}>
       {reading.display}
       {reading.unit ? <span className="ml-0.5 text-xs font-normal text-muted-foreground">{reading.unit}</span> : null}
+      {reading.lowConfidence ? <LowConfidenceBadge /> : null}
     </span>
   );
 }
@@ -110,5 +124,10 @@ export function KeyReadings({ device }: { readonly device: PlantDevice }) {
 /** A plant reading as a headline figure; a stale or degraded value is dimmed, never shown as current. */
 export function ReadingMetric({ reading, digits, unit }: { readonly reading: PlantReading | null; readonly digits: number; readonly unit: string }) {
   const present = reading && reading.state === 'PRESENT' && reading.numeric !== null ? reading : null;
-  return <MetricValue value={present ? formatDecimal(present.numeric!, digits) : null} unit={unit} stale={present ? !present.current : false} />;
+  return (
+    <>
+      <MetricValue value={present ? formatDecimal(present.numeric!, digits) : null} unit={unit} stale={present ? !present.current && !present.lowConfidence : false} />
+      {present?.lowConfidence ? <LowConfidenceBadge /> : null}
+    </>
+  );
 }

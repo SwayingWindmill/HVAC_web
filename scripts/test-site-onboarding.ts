@@ -106,6 +106,23 @@ test('songyaxuan outdoor temperature carries its quality profile into the freshn
   assert.doesNotMatch(inactive, /38\.4/);
 });
 
+test('songyaxuan cooling load carries probe accuracy and the header offset pair is stored', () => {
+  const { telemetry } = buildOnboardingSql(songyaxuan);
+  const cooling = telemetry.split('\n').find((line) => line.includes("'instant_cooling_capacity'"));
+  if (!cooling) throw new Error('cooling freshness row missing');
+  assert.match(cooling, /"kind":"cooling"/);
+  assert.match(cooling, /"supplyAccuracyK":0\.1/);
+  assert.match(cooling, /"returnAccuracyK":0\.1/);
+  assert.match(cooling, /"flowAccuracyFraction":0\.02/);
+  assert.match(cooling, /"powerAccuracyFraction":0\.01/);
+  assert.match(cooling, /"lowConfidenceRelative":0\.1/);
+  assert.match(telemetry, /probe_pairs/);
+  assert.match(telemetry, /'header-chw'/);
+  assert.match(telemetry, /'chiller-c-chw'/);
+  assert.match(telemetry, /'chiller-d-chw'/);
+  assert.equal(checkSiteFile(songyaxuan, songyaxuanAlarmRules).length, 0);
+});
+
 test('a confirmed chiller nameplate is written and an unconfirmed pump power is not', () => {
   const profile = copy(songyaxuan);
   for (const asset of profile.assets) delete asset.nameplate;

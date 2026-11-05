@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/measurement"
 	"github.com/quanlaihe/hvac-web/libs/nameplate"
 )
 
@@ -36,6 +37,38 @@ type QualityChecks struct {
 	Running         []OperatingExpect
 	Inputs          []PointRef
 	Physics         []PhysicsRule
+	Uncertainty     *UncertaintyCheck
+}
+
+// UncertaintyCheck is the cooling-load or temperature-difference propagation compiled
+// onto this point. Accuracies are copied from the peer points at onboarding, so ingest
+// does not look up their policies. A probe offset is not applied.
+type UncertaintyCheck struct {
+	Kind                  string
+	SupplyAccuracyK       float64
+	ReturnAccuracyK       float64
+	FlowAccuracyFraction  float64
+	PowerAccuracyFraction float64
+	PropertyFraction      float64
+	LowConfidenceRelative float64
+	Supply                PointRef
+	Return                PointRef
+	Flow                  *PointRef
+	Power                 *PointRef
+}
+
+// Measurement is the interval stored on the latest sample and returned by the snapshot.
+// A cooling counter sets LowConfidence without numbers: the doubt is the latest increment,
+// not a ± band on the whole total.
+type Measurement struct {
+	Relative       float64
+	Low            float64
+	High           float64
+	LowConfidence  bool
+	DeltaTK        float64
+	DeltaTAccuracy float64
+	COPRelative    *float64
+	HasNumbers     bool
 }
 
 // PhysicsRule is one cross-point check compiled from the site file onto this point.
@@ -127,7 +160,87 @@ func AssessPointQuality(value float64, at time.Time, checks *QualityChecks, inpu
 	if input.Live {
 		reasons = append(reasons, physicsReasons(value, checks, input)...)
 	}
+	if measured, ok := AssessMeasurement(value, checks, input); ok && measured.LowConfidence {
+		reasons = append(reasons, QualityReasonLowConfidence)
+	}
 	return reasons
+}
+
+// AssessMeasurement propagates the configured probe accuracies. History replay does not:
+// the peers would be today's values. A missing or untrusted peer skips the check.
+func AssessMeasurement(value float64, checks *QualityChecks, input PointQualityInput) (Measurement, bool) {
+	if checks == nil || checks.Uncertainty == nil || !input.Live || math.IsNaN(value) || math.IsInf(value, 0) {
+		return Measurement{}, false
+	}
+	item := checks.Uncertainty
+	supply, ok := peerNumber(input, item.Supply)
+	if !ok {
+		return Measurement{}, false
+	}
+	ret, ok := peerNumber(input, item.Return)
+	if !ok {
+		return Measurement{}, false
+	}
+	cooling := measurement.CoolingInput{
+		SupplyC: supply, ReturnC: ret,
+		SupplyAccuracyK: item.SupplyAccuracyK, ReturnAccuracyK: item.ReturnAccuracyK,
+		FlowAccuracyFraction: item.FlowAccuracyFraction, PowerAccuracyFraction: item.PowerAccuracyFraction,
+		PropertyAccuracyFraction: item.PropertyFraction, LowConfidenceRelative: item.LowConfidenceRelative,
+	}
+	if item.Flow != nil {
+		flow, ready := peerNumber(input, *item.Flow)
+		if !ready {
+			return Measurement{}, false
+		}
+		cooling.FlowM3H = flow
+	}
+	if item.Power != nil {
+		if power, ready := peerNumber(input, *item.Power); ready {
+			cooling.PowerKW = &power
+		}
+	}
+	switch item.Kind {
+	case "cooling":
+		cooling.ReportedKW = value
+		got, ready := measurement.PropagateCooling(cooling)
+		if !ready {
+			return Measurement{}, false
+		}
+		return measurementFromCooling(got), true
+	case "delta":
+		got, ready := measurement.PropagateDelta(value, item.SupplyAccuracyK, item.ReturnAccuracyK, item.LowConfidenceRelative)
+		if !ready {
+			return Measurement{}, false
+		}
+		return measurementFromCooling(got), true
+	case "coolingCounter":
+		if !measurement.CounterUncertain(cooling) {
+			return Measurement{}, false
+		}
+		return Measurement{LowConfidence: true}, true
+	default:
+		return Measurement{}, false
+	}
+}
+
+func measurementFromCooling(got measurement.CoolingUncertainty) Measurement {
+	out := Measurement{
+		Relative: got.Relative, Low: got.Low, High: got.High, LowConfidence: got.LowConfidence,
+		DeltaTK: got.DeltaTK, DeltaTAccuracy: got.DeltaTAccuracyK, HasNumbers: true,
+	}
+	if got.HasCOP {
+		relative := got.COPRelative
+		out.COPRelative = &relative
+	}
+	return out
+}
+
+func peerNumber(input PointQualityInput, ref PointRef) (float64, bool) {
+	sample, ok := input.Peers[ref.DeviceID+"/"+ref.Key]
+	if !ok || !sample.Good || sample.Number == nil || math.IsNaN(*sample.Number) || math.IsInf(*sample.Number, 0) {
+		return 0, false
+	}
+	return *sample.Number, true
 }
 
 func physicsReasons(value float64, checks *QualityChecks, input PointQualityInput) []QualityReason {
@@ -272,7 +385,7 @@ func HealthFor(quality ObservationQuality, reasons []QualityReason) PointHealth 
 	switch {
 	case quality == QualityInvalid || containsReason(reasons, QualityReasonOutOfRange):
 		return PointHealth{Status: HealthBad, Score: 0, Reasons: copyReasons(reasons)}
-	case quality == QualityPartial || containsReason(reasons, QualityReasonSpike) || containsReason(reasons, QualityReasonSentinel) || containsReason(reasons, QualityReasonFlatline) || containsReason(reasons, QualityReasonDerivedInput) || containsPhysics(reasons):
+	case quality == QualityPartial || containsReason(reasons, QualityReasonSpike) || containsReason(reasons, QualityReasonSentinel) || containsReason(reasons, QualityReasonFlatline) || containsReason(reasons, QualityReasonDerivedInput) || containsReason(reasons, QualityReasonLowConfidence) || containsPhysics(reasons):
 		return PointHealth{Status: HealthSuspect, Score: 40, Reasons: copyReasons(reasons)}
 	case quality == QualityStale:
 		return PointHealth{Status: HealthStale, Score: 20, Reasons: copyReasons(reasons)}
@@ -331,14 +444,29 @@ func UnchangedSinceOf(value float64, at time.Time, previous *PriorNumeric) time.
 }
 
 type qualityChecksDocument struct {
-	MaxStep                *float64        `json:"maxStep"`
-	MaxStepWindowSeconds   *int            `json:"maxStepWindowSeconds"`
-	Sentinels              []float64       `json:"sentinels"`
-	FlatlineSeconds        *int            `json:"flatlineSeconds"`
-	FlatlineRunningSeconds *int            `json:"flatlineRunningSeconds"`
-	Running                []operatingJSON `json:"running"`
-	Inputs                 []pointRefJSON  `json:"inputs"`
-	Physics                []physicsJSON   `json:"physics"`
+	MaxStep                *float64         `json:"maxStep"`
+	MaxStepWindowSeconds   *int             `json:"maxStepWindowSeconds"`
+	Sentinels              []float64        `json:"sentinels"`
+	FlatlineSeconds        *int             `json:"flatlineSeconds"`
+	FlatlineRunningSeconds *int             `json:"flatlineRunningSeconds"`
+	Running                []operatingJSON  `json:"running"`
+	Inputs                 []pointRefJSON   `json:"inputs"`
+	Physics                []physicsJSON    `json:"physics"`
+	Uncertainty            *uncertaintyJSON `json:"uncertainty"`
+}
+
+type uncertaintyJSON struct {
+	Kind                  string        `json:"kind"`
+	SupplyAccuracyK       float64       `json:"supplyAccuracyK"`
+	ReturnAccuracyK       float64       `json:"returnAccuracyK"`
+	FlowAccuracyFraction  float64       `json:"flowAccuracyFraction"`
+	PowerAccuracyFraction float64       `json:"powerAccuracyFraction"`
+	PropertyFraction      float64       `json:"propertyFraction"`
+	LowConfidenceRelative float64       `json:"lowConfidenceRelative"`
+	Supply                pointRefJSON  `json:"supply"`
+	Return                pointRefJSON  `json:"return"`
+	Flow                  *pointRefJSON `json:"flow"`
+	Power                 *pointRefJSON `json:"power"`
 }
 
 type physicsJSON struct {
@@ -409,10 +537,46 @@ func parseQualityChecks(raw []byte) (*QualityChecks, error) {
 		}
 		checks.Physics = append(checks.Physics, rule)
 	}
-	if checks.MaxStep == nil && len(checks.Sentinels) == 0 && checks.Flatline == 0 && checks.FlatlineRunning == 0 && len(checks.Running) == 0 && len(checks.Inputs) == 0 && len(checks.Physics) == 0 {
+	if document.Uncertainty != nil {
+		parsed, err := uncertaintyCheck(*document.Uncertainty)
+		if err != nil {
+			return nil, err
+		}
+		checks.Uncertainty = parsed
+	}
+	if checks.MaxStep == nil && len(checks.Sentinels) == 0 && checks.Flatline == 0 && checks.FlatlineRunning == 0 && len(checks.Running) == 0 && len(checks.Inputs) == 0 && len(checks.Physics) == 0 && checks.Uncertainty == nil {
 		return nil, nil
 	}
 	return checks, nil
+}
+
+func uncertaintyCheck(item uncertaintyJSON) (*UncertaintyCheck, error) {
+	switch item.Kind {
+	case "cooling", "delta", "coolingCounter":
+	default:
+		return nil, physicsKindError("unknown uncertainty kind " + item.Kind)
+	}
+	if item.Supply.DeviceID == "" || item.Supply.Key == "" || item.Return.DeviceID == "" || item.Return.Key == "" {
+		return nil, physicsKindError("uncertainty check " + item.Kind + " needs a supply and a return")
+	}
+	if (item.Kind == "cooling" || item.Kind == "coolingCounter") && (item.Flow == nil || item.Flow.DeviceID == "" || item.Flow.Key == "") {
+		return nil, physicsKindError("uncertainty check " + item.Kind + " needs a flow")
+	}
+	check := &UncertaintyCheck{
+		Kind: item.Kind, SupplyAccuracyK: item.SupplyAccuracyK, ReturnAccuracyK: item.ReturnAccuracyK,
+		FlowAccuracyFraction: item.FlowAccuracyFraction, PowerAccuracyFraction: item.PowerAccuracyFraction,
+		PropertyFraction: item.PropertyFraction, LowConfidenceRelative: item.LowConfidenceRelative,
+		Supply: PointRef(item.Supply), Return: PointRef(item.Return),
+	}
+	if item.Flow != nil && item.Flow.DeviceID != "" && item.Flow.Key != "" {
+		ref := PointRef(*item.Flow)
+		check.Flow = &ref
+	}
+	if item.Power != nil && item.Power.DeviceID != "" && item.Power.Key != "" {
+		ref := PointRef(*item.Power)
+		check.Power = &ref
+	}
+	return check, nil
 }
 
 func physicsRule(item physicsJSON) (PhysicsRule, error) {

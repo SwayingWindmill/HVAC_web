@@ -20,11 +20,11 @@ import { CommandMark } from '@/features/control/components/CommandMark';
 import { commandLabels, controlTargets } from '@/features/control/control-model';
 import { formatCompactTime, formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { equipmentStatus, plantReading, type PlantReading, type PlantView } from '../plant-model';
+import { coolingUncertaintyText, copUncertaintyText, equipmentStatus, plantReading, probeOffsetText, type PlantReading, type PlantView } from '../plant-model';
 import { useRealtimePlant } from '../use-realtime-plant';
 import { usePlantHistory } from '../use-plant-history';
 import { copSeries, COOLING_KEY, hourAgo, POWER_KEY } from '../plant-trend';
-import { formatClock, LiveIndicator, ReadingMetric, ReadingValue } from '../device-presentation';
+import { formatClock, LiveIndicator, LowConfidenceBadge, ReadingMetric, ReadingValue } from '../device-presentation';
 
 const pageRoute = getRouteApi('/_app/_site/operations/realtime');
 
@@ -113,18 +113,19 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
           onSelect={() => onMetric('cooling')}
           value={<ReadingMetric reading={plant.coolingCapacity} digits={0} unit="kW" />}
           values={series.cooling.map((point) => point.value)}
-          caption={coolingAgo === null ? '冷量表' : `1 小时前 ${formatDecimal(coolingAgo, 0)} kW`}
+          caption={[coolingAgo === null ? '冷量表' : `1 小时前 ${formatDecimal(coolingAgo, 0)} kW`, coolingUncertaintyText(plant.coolingCapacity)].filter(Boolean).join(' · ')}
         />
         <MetricTab
           label="冷站 COP"
           selected={metric === 'cop'}
           onSelect={() => onMetric('cop')}
-          value={plant.plantCop === null ? <span className="text-muted-foreground">—</span> : formatDecimal(plant.plantCop, 2)}
+          value={plant.plantCop === null ? <span className="text-muted-foreground">—</span> : <>{formatDecimal(plant.plantCop, 2)}{plant.plantCopLowConfidence ? <LowConfidenceBadge /> : null}</>}
           values={series.cop.map((point) => point.value)}
-          caption={copPeak === null ? '制冷量 ÷ 总功率' : `近 ${window === '24h' ? 24 : 6} 小时最高 ${formatDecimal(copPeak, 2)}`}
-          info="冷站瞬时制冷量 ÷ 冷站总功率；任一读数过期时不计算"
+          caption={[copPeak === null ? '制冷量 ÷ 总功率' : `近 ${window === '24h' ? 24 : 6} 小时最高 ${formatDecimal(copPeak, 2)}`, copUncertaintyText(plant)].filter(Boolean).join(' · ')}
+          info="冷站瞬时制冷量 ÷ 冷站总功率。温差相对探头误差过小时照常计算，标「低可信」并给出区间，这段不计入能效均值、故障诊断和节能验证。任一读数过期或不可信时不计算。"
         />
       </div>
+      {probeOffsetText(plant) ? <p className="border-b border-divider px-5 py-2 text-xs text-muted-foreground">{probeOffsetText(plant)}</p> : null}
       <div className="flex flex-col gap-2 px-5 pt-3.5 pb-3">
         <div className="flex items-center gap-2.5">
           <span className="text-sm font-semibold">{titles[metric]}</span>

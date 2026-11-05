@@ -10,7 +10,7 @@ import { openWorkOrdersQuery } from '@/features/work-orders/work-order-queries';
 import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { copSeries, COOLING_KEY, hourAgo, POWER_KEY } from '../../realtime/plant-trend';
-import { plantReading, type PlantReading } from '../../realtime/plant-model';
+import { coolingUncertaintyText, copUncertaintyText, plantReading, type PlantReading } from '../../realtime/plant-model';
 import { usePlantHistory } from '../../realtime/use-plant-history';
 import { useRealtimePlant } from '../../realtime/use-realtime-plant';
 import { BUILDING_PLANS, buildingTerminals } from '../twin-building';
@@ -62,14 +62,14 @@ export function DigitalTwinWorkspace() {
   const copChange = plant.plantCop !== null && copAgo !== null ? plant.plantCop - copAgo : null;
   const figures: KpiFigure[] = [
     { icon: Zap, label: '冷站功率', value: fixed(plant.totalPower, 1), unit: 'kW', caption: powerAgo === null ? '空调总电表' : `1 小时前 ${formatDecimal(powerAgo, 1)}` },
-    { icon: Snowflake, label: '瞬时制冷量', value: fixed(plant.coolingCapacity, 0), unit: 'kW', caption: coolingAgo === null ? '冷量计' : `1 小时前 ${formatDecimal(coolingAgo, 0)}` },
+    { icon: Snowflake, label: '瞬时制冷量', value: fixed(plant.coolingCapacity, 0), unit: 'kW', caption: [coolingAgo === null ? '冷量计' : `1 小时前 ${formatDecimal(coolingAgo, 0)}`, coolingUncertaintyText(plant.coolingCapacity)].filter(Boolean).join(' · ') },
     {
       icon: Gauge,
       label: '冷站 COP',
       value: plant.plantCop === null ? null : formatDecimal(plant.plantCop, 2),
-      caption: copChange === null ? '制冷量 ÷ 功率' : (
+      caption: copUncertaintyText(plant) ?? (copChange === null ? '制冷量 ÷ 功率' : (
         <><span className={cn(copChange >= 0 ? 'text-success-text' : 'text-destructive-text')}>{copChange >= 0 ? '↑' : '↓'} {formatDecimal(Math.abs(copChange), 2)}</span> 较 1 小时前</>
-      ),
+      )),
     },
   ];
 
