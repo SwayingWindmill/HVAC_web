@@ -43,6 +43,7 @@ hvac_s1|services/notification-service/migrations/001_s16_notification.sql
 hvac_s1|services/notification-service/migrations/002_wechat_reminders.sql
 hvac_s1|services/notification-service/migrations/003_wechat_daily.sql
 hvac_s1|services/notification-service/migrations/004_drop_inbox_and_policies.sql
+hvac_s1|services/notification-service/migrations/005_alarm_delivery.sql
 hvac_s1|infra/registry/postgres/init/010-s05-registry-writer.sql
 hvac_s1|infra/registry/postgres/init/011-s08-metric-lifecycle.sql
 hvac_s1|infra/registry/postgres/init/012-s19-settlement-projections.sql
@@ -108,6 +109,7 @@ hvac_s4|modules/alarm/migrations/011_s28_evaluation_event_retention.sql
 hvac_s4|modules/alarm/migrations/012_s29_reading_unchanged_since.sql
 hvac_s4|modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql
 hvac_s4|modules/alarm/migrations/014_s31_retired_site_rules.sql
+hvac_s4|modules/alarm/migrations/015_s32_rules_unevaluable.sql
 hvac_s5|modules/workorder/migrations/001_s5_work_order_runtime.sql
 hvac_s5|modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 hvac_s5|modules/workorder/migrations/003_s5_work_order_lifecycle.sql

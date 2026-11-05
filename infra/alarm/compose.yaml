@@ -22,6 +22,7 @@ services:
       - ../../modules/alarm/migrations/012_s29_reading_unchanged_since.sql:/docker-entrypoint-initdb.d/012_s29_reading_unchanged_since.sql:ro
       - ../../modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql:/docker-entrypoint-initdb.d/013_s30_rules_awaiting_their_version.sql:ro
       - ../../modules/alarm/migrations/014_s31_retired_site_rules.sql:/docker-entrypoint-initdb.d/014_s31_retired_site_rules.sql:ro
+      - ../../modules/alarm/migrations/015_s32_rules_unevaluable.sql:/docker-entrypoint-initdb.d/015_s32_rules_unevaluable.sql:ro
       - ../../modules/alarm/testdata/postgres/010_seed.sql:/docker-entrypoint-initdb.d/010_seed.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d hvac_s4"]

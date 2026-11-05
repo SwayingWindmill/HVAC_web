@@ -18,10 +18,12 @@ const (
 
 // AlarmEvent is one change of an Alarm, as the Alarm owner's outbox hands it over.
 type AlarmEvent struct {
-	TenantID              string               `json:"tenantId"`
-	SiteID                string               `json:"siteId"`
-	SourceEventID         string               `json:"sourceEventId"`
-	AlarmID               string               `json:"alarmId"`
+	TenantID      string `json:"tenantId"`
+	SiteID        string `json:"siteId"`
+	SourceEventID string `json:"sourceEventId"`
+	AlarmID       string `json:"alarmId"`
+	// AlarmVersion orders the events of one Alarm: the outbox may hand them over out of order.
+	AlarmVersion          int64                `json:"alarmVersion,omitempty"`
 	IncidentCorrelationID string               `json:"incidentCorrelationId"`
 	Action                AlarmAction          `json:"action"`
 	CurrentSeverity       alarmmodel.Severity  `json:"currentSeverity"`

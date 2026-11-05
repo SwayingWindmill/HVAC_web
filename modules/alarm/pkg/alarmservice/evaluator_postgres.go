@@ -311,6 +311,9 @@ func (store *PostgresStore) clearInTransaction(ctx context.Context, tx pgx.Tx, t
 	if err := persistUpdatedAlarm(ctx, tx, current, cleared); err != nil {
 		return alarmmodel.Alarm{}, err
 	}
+	if err := enqueueTransitionNotifications(ctx, tx, store, current, cleared); err != nil {
+		return alarmmodel.Alarm{}, err
+	}
 	return cleared, nil
 }
 
