@@ -15,12 +15,13 @@ import (
 
 type NotificationAction string
 
-// Notification outbox actions carried to Notification: a new Alarm (which may become an immediate
-// WeChat reminder), a 24-hour unacknowledged reading-gap escalation, and a reading-gap recovery
-// that closes the daily summary entry (#800).
+// Notification hears of a new Alarm (a WeChat reminder, and the first message to the people on
+// duty), of a 24-hour reading-gap escalation (#800), of its first acknowledgement (which stops
+// escalating it), and of its recovery (a recovery message), docs/specs/alarm-delivery.md.
 const (
 	NotificationCreated         NotificationAction = "CREATED"
 	NotificationSeverityChanged NotificationAction = "SEVERITY_CHANGED"
+	NotificationAcknowledged    NotificationAction = "ACKNOWLEDGED"
 	NotificationCleared         NotificationAction = "CLEARED"
 )
 
@@ -137,6 +138,37 @@ func (relay *NotificationRelay) Complete(ctx context.Context, sourceEventID, wor
 	return nil
 }
 
+// enqueueTransitionNotifications tells Notification that an Alarm was acknowledged or recovered,
+// in the transaction that changed it. Assigning, suppressing or a repeated acknowledgement is not
+// news to the people on duty.
+func enqueueTransitionNotifications(ctx context.Context, tx pgx.Tx, store *PostgresStore, before, after alarmmodel.Alarm) error {
+	if after.Version == before.Version {
+		return nil
+	}
+	if before.Acknowledgement == nil && after.Acknowledgement != nil {
+		at, err := time.Parse(time.RFC3339Nano, after.Acknowledgement.AcknowledgedAt)
+		if err != nil {
+			return fmt.Errorf("read Alarm acknowledgement time: %w", err)
+		}
+		if err := enqueueNotificationEvent(ctx, tx, store, after, NotificationAcknowledged, at); err != nil {
+			return err
+		}
+	}
+	if before.Condition == alarmmodel.ConditionActive && after.Condition == alarmmodel.ConditionCleared {
+		if after.ClearedAt == nil {
+			return errors.New("a cleared Alarm has no clear time")
+		}
+		at, err := time.Parse(time.RFC3339Nano, *after.ClearedAt)
+		if err != nil {
+			return fmt.Errorf("read Alarm clear time: %w", err)
+		}
+		if err := enqueueNotificationEvent(ctx, tx, store, after, NotificationCleared, at); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func enqueueNotificationEvent(ctx context.Context, tx pgx.Tx, store *PostgresStore, alarm alarmmodel.Alarm, action NotificationAction, occurredAt time.Time) error {
 	if store == nil || store.newID == nil || occurredAt.IsZero() {
 		return ErrUnavailable
@@ -145,7 +177,7 @@ func enqueueNotificationEvent(ctx context.Context, tx pgx.Tx, store *PostgresSto
 	if err != nil {
 		return fmt.Errorf("generate Alarm notification source event ID: %w", err)
 	}
-	attributesJSON, err := json.Marshal(map[string]string{
+	attributes := map[string]string{
 		"alarmType":       alarm.AlarmType,
 		"title":           alarm.Title,
 		"summary":         alarm.Summary,
@@ -153,7 +185,11 @@ func enqueueNotificationEvent(ctx context.Context, tx pgx.Tx, store *PostgresSto
 		"sourceReference": alarm.SourceReference,
 		"ruleRevision":    alarm.RuleRevision,
 		"firstOccurredAt": alarm.FirstOccurredAt,
-	})
+	}
+	if action == NotificationAcknowledged && alarm.Acknowledgement != nil {
+		attributes["acknowledgedBy"] = alarm.Acknowledgement.AcknowledgedBy
+	}
+	attributesJSON, err := json.Marshal(attributes)
 	if err != nil {
 		return fmt.Errorf("encode Alarm notification attributes: %w", err)
 	}

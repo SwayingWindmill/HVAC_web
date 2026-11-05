@@ -311,14 +311,8 @@ func (store *PostgresStore) clearInTransaction(ctx context.Context, tx pgx.Tx, t
 	if err := persistUpdatedAlarm(ctx, tx, current, cleared); err != nil {
 		return alarmmodel.Alarm{}, err
 	}
-	if alarmmodel.IsReadingGapType(cleared.AlarmType) {
-		clearedAt, err := time.Parse(time.RFC3339Nano, cleared.UpdatedAt)
-		if err != nil {
-			return alarmmodel.Alarm{}, fmt.Errorf("parse cleared Alarm timestamp: %w", err)
-		}
-		if err := enqueueNotificationEvent(ctx, tx, store, cleared, NotificationCleared, clearedAt); err != nil {
-			return alarmmodel.Alarm{}, err
-		}
+	if err := enqueueTransitionNotifications(ctx, tx, store, current, cleared); err != nil {
+		return alarmmodel.Alarm{}, err
 	}
 	return cleared, nil
 }

@@ -86,9 +86,30 @@ func TestPostgresAlarmNotificationOutboxEmitsOnlyBusinessStateChangesAndRelayIsF
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Only the new Alarm goes out; its severity change, acknowledgement and recovery do not.
-	if len(actions) != 1 || actions[0] != NotificationCreated || versions[0] != created.Version {
-		t.Fatalf("Alarm outbox emitted other than the new Alarm: actions=%#v versions=%#v", actions, versions)
+	// The new Alarm, its acknowledgement and its recovery go out; its severity change does not.
+	want := []NotificationAction{NotificationCreated, NotificationAcknowledged, NotificationCleared}
+	if len(actions) != len(want) || versions[0] != created.Version || versions[1] <= severityChanged.Version || versions[2] <= versions[1] {
+		t.Fatalf("Alarm outbox emitted the wrong events: actions=%#v versions=%#v", actions, versions)
+	}
+	for index, action := range want {
+		if actions[index] != action {
+			t.Fatalf("Alarm outbox emitted the wrong events: actions=%#v versions=%#v", actions, versions)
+		}
+	}
+	// Acknowledging again changes nothing and tells nobody.
+	if _, err := store.Apply(ctx, postgresTestTenantID, postgresTestSiteID, created.AlarmID, ack); err == nil {
+		tx, err := store.beginTenantTransaction(ctx, postgresTestTenantID, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var acknowledgements int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM alarm_runtime.notification_outbox WHERE tenant_id=$1 AND alarm_id=$2 AND action='ACKNOWLEDGED'`, postgresTestTenantID, created.AlarmID).Scan(&acknowledgements); err != nil {
+			t.Fatal(err)
+		}
+		_ = tx.Commit(ctx)
+		if acknowledgements != 1 {
+			t.Fatalf("a repeated acknowledgement was sent again: %d", acknowledgements)
+		}
 	}
 
 	relay, err := OpenNotificationRelay(context.Background(), databaseURL)

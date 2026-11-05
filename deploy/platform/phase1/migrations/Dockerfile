@@ -130,6 +130,7 @@ COPY modules/alarm/migrations/012_s29_reading_unchanged_since.sql /opt/hvac/repo
 COPY modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql /opt/hvac/repo/modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql
 COPY modules/alarm/migrations/014_s31_retired_site_rules.sql /opt/hvac/repo/modules/alarm/migrations/014_s31_retired_site_rules.sql
 COPY modules/alarm/migrations/015_s32_reading_gap_escalation.sql /opt/hvac/repo/modules/alarm/migrations/015_s32_reading_gap_escalation.sql
+COPY modules/alarm/migrations/016_s32_rules_unevaluable.sql /opt/hvac/repo/modules/alarm/migrations/016_s32_rules_unevaluable.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql
