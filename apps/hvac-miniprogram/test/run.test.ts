@@ -224,3 +224,29 @@ test('a device that never reported says only 没有读数; a figure from 1,000 u
   const meter = presentDevice(silent.devices.find((device) => device.name === 'METER-HVAC-TOTAL')!, null);
   assert.equal(meter.readings.find((reading) => reading.label.includes('功率'))?.value, '12,345.6 kW');
 });
+
+test('a LOW_CONFIDENCE cooling load and its COP are shown as numbers, labelled 低可信 with their intervals', () => {
+  const view = presentRealtime(plantWith((snapshotOf) => {
+    Object.assign(snapshotOf('BTU-METER-01').values.find((value) => value.key === 'instant_cooling_capacity')!, {
+      quality: 'PARTIAL',
+      qualityReasons: ['LOW_CONFIDENCE'],
+      measurement: { relative: 0.158, low: 727, high: 1001, lowConfidence: true, copRelative: 0.159 },
+    });
+  }));
+  const [, cooling, cop] = view.metrics;
+  assert.deepEqual([cooling.value, cooling.late, cooling.lowConfidence], ['864', false, true]);
+  assert.equal(cooling.note, '低可信 · 727–1001 kW（±16%），温差相对探头误差偏小');
+  assert.deepEqual([cop.value, cop.late, cop.lowConfidence], ['4.08', false, true]);
+  assert.equal(cop.note, '低可信 · 3.43–4.73（±16%）');
+  assert.equal(view.copNote, '低可信的能效照常显示，不计入能效均值和诊断。');
+});
+
+test('any other doubt on the cooling load still withholds the efficiency', () => {
+  const view = presentRealtime(plantWith((snapshotOf) => {
+    Object.assign(snapshotOf('BTU-METER-01').values.find((value) => value.key === 'instant_cooling_capacity')!, {
+      quality: 'PARTIAL',
+      qualityReasons: ['LOW_CONFIDENCE', 'SPIKE'],
+    });
+  }));
+  assert.deepEqual(view.metrics.map((each) => [each.value, each.late, each.lowConfidence]), [['211.9', false, undefined], ['864', true, undefined], ['—', false, undefined]]);
+});

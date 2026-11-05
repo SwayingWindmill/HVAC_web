@@ -69,7 +69,7 @@
       <view class="now-metrics">
         <view wx:for="{{plant.now.metrics}}" wx:key="label" class="metric">
           <view class="caption titled"><image wx:if="{{item.icon}}" class="caption-icon" src="/assets/icon/{{item.icon}}.svg" aria-hidden="true" /><text>{{item.label}}</text></view>
-          <view class="now-value {{item.late ? 'muted' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text></view>
+          <view class="now-value {{item.late ? 'muted' : ''}}">{{item.value}}<text wx:if="{{item.unit}}" class="unit">{{item.unit}}</text><text wx:if="{{item.lowConfidence}}" class="badge badge-warning low-confidence">低可信</text></view>
         </view>
       </view>
     </view>

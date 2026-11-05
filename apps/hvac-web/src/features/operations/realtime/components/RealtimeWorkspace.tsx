@@ -24,7 +24,7 @@ import { coolingUncertaintyText, copUncertaintyText, equipmentStatus, plantReadi
 import { useRealtimePlant } from '../use-realtime-plant';
 import { usePlantHistory } from '../use-plant-history';
 import { copSeries, COOLING_KEY, hourAgo, POWER_KEY } from '../plant-trend';
-import { formatClock, LiveIndicator, ReadingMetric, ReadingValue } from '../device-presentation';
+import { formatClock, LiveIndicator, LowConfidenceBadge, ReadingMetric, ReadingValue } from '../device-presentation';
 
 const pageRoute = getRouteApi('/_app/_site/operations/realtime');
 
@@ -119,10 +119,10 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
           label="冷站 COP"
           selected={metric === 'cop'}
           onSelect={() => onMetric('cop')}
-          value={plant.plantCop === null ? <span className="text-muted-foreground">—</span> : formatDecimal(plant.plantCop, 2)}
+          value={plant.plantCop === null ? <span className="text-muted-foreground">—</span> : <>{formatDecimal(plant.plantCop, 2)}{plant.plantCopLowConfidence ? <LowConfidenceBadge /> : null}</>}
           values={series.cop.map((point) => point.value)}
           caption={[copPeak === null ? '制冷量 ÷ 总功率' : `近 ${window === '24h' ? 24 : 6} 小时最高 ${formatDecimal(copPeak, 2)}`, copUncertaintyText(plant)].filter(Boolean).join(' · ')}
-          info="冷站瞬时制冷量 ÷ 冷站总功率。温差相对探头误差过小时，制冷量标成部分，能效不计算。任一读数过期时也不计算。"
+          info="冷站瞬时制冷量 ÷ 冷站总功率。温差相对探头误差过小时照常计算，标「低可信」并给出区间，这段不计入能效均值、故障诊断和节能验证。任一读数过期或不可信时不计算。"
         />
       </div>
       {probeOffsetText(plant) ? <p className="border-b border-divider px-5 py-2 text-xs text-muted-foreground">{probeOffsetText(plant)}</p> : null}
