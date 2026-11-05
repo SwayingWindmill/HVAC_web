@@ -35,7 +35,7 @@ func newSendFixture(t *testing.T) *sendFixture {
 		t.Fatal("a mail server was dialled")
 		return nil, nil
 	}
-	return &sendFixture{dir: dir, send: send, handler: newHandlerWithSend(filepath.Join(dir, "wecom-webhook-url"), send.client, send)}
+	return &sendFixture{dir: dir, send: send, handler: newHandler(filepath.Join(dir, "wecom-webhook-url"), send.client, send)}
 }
 
 func write(t *testing.T, dir, name, body string) {

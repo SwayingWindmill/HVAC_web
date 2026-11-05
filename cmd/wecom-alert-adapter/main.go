@@ -29,7 +29,7 @@ func main() {
 	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: refuseRedirect}
 	server := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandlerWithSend(*urlFile, client, newSender(*sendTokenFile, *receiverDir, *urlFile, client)),
+		Handler:           newHandler(*urlFile, client, newSender(*sendTokenFile, *receiverDir, *urlFile, client)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -70,11 +70,7 @@ func healthcheck(addr string) int {
 	return 0
 }
 
-func newHandler(urlFile string, client *http.Client) http.Handler {
-	return newHandlerWithSend(urlFile, client, nil)
-}
-
-func newHandlerWithSend(urlFile string, client *http.Client, send *sender) http.Handler {
+func newHandler(urlFile string, client *http.Client, send *sender) http.Handler {
 	mux := http.NewServeMux()
 	if send != nil {
 		mux.HandleFunc("POST /send", send.serve)
