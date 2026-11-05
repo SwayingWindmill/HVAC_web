@@ -48,8 +48,11 @@ func TestAlarmDeliveryRefusesToStartWithBrokenFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repository routing with the example recipients: %v", err)
 	}
-	if dispatcher.Mode != notificationservice.DeliveryDryRun {
-		t.Fatalf("dispatcher mode %s", dispatcher.Mode)
+	if dispatcher.Mode != notificationservice.DeliveryDryRun || dispatcher.Routing.Len() == 0 {
+		t.Fatalf("dispatcher: mode %s sites %d", dispatcher.Mode, dispatcher.Routing.Len())
+	}
+	if _, ok := dispatcher.Routing.Site("01A14000-1000-7000-8000-000000000001"); !ok {
+		t.Fatal("松雅轩 is not routed")
 	}
 	t.Setenv("ALARM_SEND_URL", "")
 	if _, err := newAlarmDeliveryDispatcher(logger, nil); err == nil {
@@ -61,5 +64,14 @@ func TestAlarmDeliveryRefusesToStartWithBrokenFiles(t *testing.T) {
 	}
 	if _, err := newAlarmDeliveryDispatcher(logger, nil); err == nil {
 		t.Fatal("started with an empty send token")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "alarm-send-token"), []byte("local-only-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "recipients.json"), []byte(`{"recipients":{"songyaxuan-duty":{"name":"x","email":"a@example.com"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newAlarmDeliveryDispatcher(logger, nil); err == nil {
+		t.Fatal("started with a routing file naming a missing recipient")
 	}
 }
