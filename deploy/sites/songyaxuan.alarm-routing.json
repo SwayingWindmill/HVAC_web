@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "siteId": "01a14000-1000-7000-8000-000000000001",
+  "siteName": "松雅轩",
+  "timezone": "Asia/Shanghai",
+  "holdMinutes": 3,
+  "maxAgeHours": 12,
+  "rateLimitPerHour": 6,
+  "quietHours": { "start": "22:00", "end": "07:00", "bypassSeverity": "MAJOR" },
+  "rootCauseAlarmType": "reports-interrupted",
+  "suppressWhenRootCause": ["readings-not-updated/", "readings-flat/", "data-quality/", "rules-unevaluable"],
+  "routes": [
+    {
+      "name": "major",
+      "minSeverity": "MAJOR",
+      "notifyAck": true,
+      "notifyRecovery": true,
+      "steps": [
+        { "afterMinutes": 0, "recipients": ["songyaxuan-duty"], "channels": ["wecom_app", "smtp"] },
+        { "afterMinutes": 15, "recipients": ["songyaxuan-lead"], "channels": ["wecom_app", "smtp", "wecom_bot"] }
+      ]
+    },
+    {
+      "name": "warning",
+      "minSeverity": "WARNING",
+      "notifyAck": false,
+      "notifyRecovery": false,
+      "steps": [
+        { "afterMinutes": 0, "recipients": ["songyaxuan-duty"], "channels": ["smtp"] }
+      ]
+    }
+  ]
+}
