@@ -15,6 +15,8 @@ export interface Metric {
   readonly unit: string;
   /** Not current (late or of doubtful quality): drawn dimmed, never as current. */
   readonly late: boolean;
+  /** Measured but with a wide uncertainty: drawn normally with a 低可信 badge, left out of averages. */
+  readonly lowConfidence?: boolean;
   readonly note?: string;
 }
 
@@ -91,18 +93,29 @@ function percentText(relative: number): string {
   return `±${percent >= 10 ? Math.round(percent) : percent.toFixed(1)}%`;
 }
 
-function uncertaintyNote(relative: number | undefined, lowConfidence: boolean): string {
+/** 低可信 · 431–593 kW（±16%），温差相对探头误差偏小; 不确定度 ±5.1% for a confident figure. */
+function uncertaintyNote(relative: number | undefined, lowConfidence: boolean, range?: { readonly low: number; readonly high: number; readonly digits: number; readonly unit: string }): string {
   if (relative == null || !Number.isFinite(relative)) return '';
   const text = percentText(relative);
-  return lowConfidence ? `不确定度 ${text}，温差相对探头误差偏小` : `不确定度 ${text}`;
+  if (!lowConfidence) return `不确定度 ${text}`;
+  const interval = range && Number.isFinite(range.low) && Number.isFinite(range.high) && range.high > 0
+    ? `${range.low.toFixed(range.digits)}–${range.high.toFixed(range.digits)}${range.unit}（${text}）`
+    : `不确定度 ${text}`;
+  return `低可信 · ${interval}，温差相对探头误差偏小`;
+}
+
+function copUncertaintyNote(plant: Plant): string {
+  const band = plant.coolingCapacity?.measurement;
+  if (plant.plantCop === null || !band) return '';
+  const relative = band.copRelative ?? band.relative;
+  if (!plant.plantCopLowConfidence) return uncertaintyNote(relative, false);
+  return uncertaintyNote(relative, true, { low: Math.max(0, plant.plantCop * (1 - relative)), high: plant.plantCop * (1 + relative), digits: 2, unit: '' })
+    .replace('，温差相对探头误差偏小', '');
 }
 
 function copNote(plant: Plant): string {
   if (equipment(plant).running === 0) return '停机时不算能效。';
-  const band = plant.coolingCapacity?.measurement;
-  if (band?.lowConfidence && plant.plantCop === null) {
-    return `温差不确定度 ${percentText(band.copRelative ?? band.relative)}，暂不把能效当准数。`;
-  }
+  if (plant.plantCop !== null && plant.plantCopLowConfidence) return '低可信的能效照常显示，不计入能效均值和诊断。';
   if (plant.plantCop !== null) return '';
   if (plant.totalPower === null || plant.coolingCapacity === null) return '没有空调总电表或冷量计，算不出能效。';
   return '功率或制冷量读数不是最新的，暂不算能效。';
@@ -113,8 +126,13 @@ function metric(label: string, reading: PlantReading | null, decimals?: number):
   const icon = reading === null ? '' : readingIcon(reading);
   if (reading === null || neverRead(reading)) return { label, icon, value: '—', unit: reading?.unit ?? '', late: false };
   const value = decimals !== undefined && reading.numeric !== null ? grouped(reading.numeric, decimals) : figure(reading);
-  const note = reading.measurement ? uncertaintyNote(reading.measurement.relative, reading.measurement.lowConfidence) : '';
-  return { label, icon, value, unit: reading.unit ?? '', late: !reading.current, ...(note ? { note } : {}) };
+  const band = reading.measurement;
+  const note = band ? uncertaintyNote(band.relative, band.lowConfidence, { low: band.low, high: band.high, digits: 0, unit: ` ${reading.unit ?? ''}`.trimEnd() }) : '';
+  return {
+    label, icon, value, unit: reading.unit ?? '', late: !reading.current && !reading.lowConfidence,
+    ...(reading.lowConfidence ? { lowConfidence: true } : {}),
+    ...(note ? { note } : {}),
+  };
 }
 
 // The same loops the web's 水系统与室内外环境 table lists; a loop shows once its lead reading has come in.
@@ -177,9 +195,8 @@ export function presentRealtime(plant: Plant) {
       metric('制冷量', plant.coolingCapacity, 0),
       {
         label: '能效', icon: 'gauge', value: grouped(plantCop(plant), 2), unit: '', late: false,
-        ...(plant.plantCop !== null && plant.coolingCapacity?.measurement
-          ? { note: uncertaintyNote(plant.coolingCapacity.measurement.copRelative ?? plant.coolingCapacity.measurement.relative, false) }
-          : {}),
+        ...(plantCop(plant) !== null && plant.plantCopLowConfidence ? { lowConfidence: true } : {}),
+        ...(plant.plantCop !== null && plant.coolingCapacity?.measurement ? { note: copUncertaintyNote(plant) } : {}),
       },
     ],
     copNote: copNote(plant),

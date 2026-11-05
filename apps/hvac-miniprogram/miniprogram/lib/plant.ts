@@ -42,6 +42,7 @@ interface ValueState {
   readonly sampledAt?: string;
   readonly freshness?: 'FRESH' | 'STALE';
   readonly quality?: string;
+  readonly qualityReasons?: readonly string[];
   readonly measurement?: {
     readonly relative: number;
     readonly low: number;
@@ -133,6 +134,8 @@ export interface PlantReading {
   readonly numeric: number | null;
   /** Present, fresh and of good quality: safe to use for derived figures. */
   readonly current: boolean;
+  /** Fresh and present, and the only doubt is LOW_CONFIDENCE: shown as a number labelled 低可信. */
+  readonly lowConfidence: boolean;
   readonly stale: boolean;
   readonly sampledAt: string | null;
   readonly measurement?: ValueState['measurement'];
@@ -168,6 +171,8 @@ export interface Plant {
   readonly totalPower: PlantReading | null;
   readonly coolingCapacity: PlantReading | null;
   readonly plantCop: number | null;
+  /** The COP comes from a 低可信 cooling load: shown with its interval, never averaged. */
+  readonly plantCopLowConfidence: boolean;
 }
 
 function isCurrentRelationship(relationship: Relationship, now: Date): boolean {
@@ -199,7 +204,7 @@ function readingOf(point: TelemetryPoint, value: ValueState | undefined, availab
   const definition = telemetryPointDefinition(point.sourceKey);
   const label = definition.label === point.sourceKey ? point.displayName : definition.label;
   if (!available || !value || value.state !== 'PRESENT') {
-    return { sourceKey: point.sourceKey, label, display: '—', unit: null, numeric: null, current: false, stale: false, sampledAt: null };
+    return { sourceKey: point.sourceKey, label, display: '—', unit: null, numeric: null, current: false, lowConfidence: false, stale: false, sampledAt: null };
   }
   return {
     sourceKey: point.sourceKey,
@@ -208,6 +213,8 @@ function readingOf(point: TelemetryPoint, value: ValueState | undefined, availab
     unit: formatTelemetryUnit(value.unit ?? point.unit ?? definition.defaultUnit),
     numeric: typeof value.value === 'number' && Number.isFinite(value.value) ? value.value : null,
     current: value.freshness === 'FRESH' && value.quality === 'GOOD',
+    lowConfidence: value.freshness === 'FRESH' && value.quality === 'PARTIAL'
+      && (value.qualityReasons?.length ?? 0) > 0 && value.qualityReasons!.every((reason) => reason === 'LOW_CONFIDENCE'),
     stale: value.freshness === 'STALE',
     sampledAt: value.sampledAt ?? null,
     measurement: value.measurement,
@@ -291,7 +298,7 @@ export function buildPlant(model: AssetModel, snapshots: SnapshotsResponse, now:
   const devices = groups.flatMap((group) => group.devices);
   const totalPower = firstReading(devices, 'hvac_meter.active_power');
   const coolingCapacity = firstReading(devices, 'btu_meter.instant_cooling_capacity');
-  const plantCop = totalPower?.current && coolingCapacity?.current
+  const plantCop = totalPower?.current && (coolingCapacity?.current || coolingCapacity?.lowConfidence)
     && totalPower.numeric !== null && coolingCapacity.numeric !== null && totalPower.numeric > 0
     ? coolingCapacity.numeric / totalPower.numeric
     : null;
@@ -303,6 +310,7 @@ export function buildPlant(model: AssetModel, snapshots: SnapshotsResponse, now:
     totalPower,
     coolingCapacity,
     plantCop,
+    plantCopLowConfidence: plantCop !== null && !coolingCapacity!.current,
   };
 }
 

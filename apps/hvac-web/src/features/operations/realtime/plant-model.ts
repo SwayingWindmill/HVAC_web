@@ -7,7 +7,10 @@ function formatFixed(value: number, digits: number): string {
 // Central-plant view of the Site's Registry devices and their current observations.
 // Every value shown here comes from a Registry point and the device Snapshot/Stream;
 // nothing is estimated in the browser except the plant COP, which is the ratio of two
-// current measurements and is withheld unless both are fresh, of good quality, and healthy.
+// current measurements and is withheld unless both are fresh, of good quality, and healthy. A cooling
+// load whose only doubt is a temperature difference small next to the probes (LOW_CONFIDENCE) is
+// still shown, with its interval and a 低可信 label, and so is the COP it gives; the automated
+// figures (COP averages, diagnostics, M&V) keep leaving those samples out on the server.
 
 export type PlantCategory =
   | 'CHILLER'
@@ -90,6 +93,8 @@ export interface PlantReading {
   readonly numeric: number | null;
   /** Present, fresh and of good quality: safe to use for derived figures. */
   readonly current: boolean;
+  /** Fresh and present, and the only doubt is LOW_CONFIDENCE: shown as a number with a 低可信 label. */
+  readonly lowConfidence: boolean;
   readonly measurement: AssetsPointView['measurement'];
   readonly probeOffsets: AssetsPointView['probeOffsets'];
   readonly state: AssetsPointView['state'];
@@ -124,6 +129,10 @@ export interface PlantView {
   readonly totalPower: PlantReading | null;
   readonly coolingCapacity: PlantReading | null;
   readonly plantCop: number | null;
+  /** The COP is computed from a 低可信 cooling load. */
+  readonly plantCopLowConfidence?: boolean;
+  /** The COP's interval from the cooling load's uncertainty, when the meter gives one. */
+  readonly plantCopRange?: { readonly low: number; readonly high: number } | null;
 }
 
 function categoryOf(row: AssetsDeviceRow): PlantCategory {
@@ -149,6 +158,16 @@ function snapshotValue(row: AssetsDeviceRow, pointCode: string): unknown {
   return state && state.state === 'PRESENT' ? state.value : undefined;
 }
 
+/**
+ * A reading whose only doubt is LOW_CONFIDENCE: present, fresh, partial for that reason alone, and
+ * not judged bad. The value is measured; only its uncertainty is wide.
+ */
+export function isLowConfidenceOnly(view: Pick<AssetsPointView, 'state' | 'freshness' | 'quality' | 'qualityReasons' | 'health'>): boolean {
+  return view.state === 'PRESENT' && view.freshness === 'FRESH' && view.quality === 'PARTIAL'
+    && view.qualityReasons.length > 0 && view.qualityReasons.every((reason) => reason === 'LOW_CONFIDENCE')
+    && (view.health == null || view.health.status === 'HEALTHY' || view.health.status === 'SUSPECT');
+}
+
 function readingFor(row: AssetsDeviceRow, sourceKey: string): PlantReading | null {
   const point = row.telemetryPoints.find((candidate) => candidate.sourceKey === sourceKey && candidate.status === 'ACTIVE');
   if (!point) return null;
@@ -162,6 +181,7 @@ function readingFor(row: AssetsDeviceRow, sourceKey: string): PlantReading | nul
     unit: view.unit,
     numeric,
     current: view.state === 'PRESENT' && view.freshness === 'FRESH' && view.quality === 'GOOD' && (view.health == null || view.health.status === 'HEALTHY'),
+    lowConfidence: isLowConfidenceOnly(view),
     measurement: view.measurement,
     probeOffsets: view.probeOffsets,
     state: view.state,
@@ -239,7 +259,7 @@ export function buildPlantView(rows: readonly AssetsDeviceRow[]): PlantView {
     .filter((group) => group.devices.length > 0);
   const totalPower = firstReading(devices, 'hvac_meter.active_power');
   const coolingCapacity = firstReading(devices, 'btu_meter.instant_cooling_capacity');
-  const plantCop = totalPower?.current && coolingCapacity?.current
+  const plantCop = totalPower?.current && (coolingCapacity?.current || coolingCapacity?.lowConfidence)
     && totalPower.numeric !== null && coolingCapacity.numeric !== null && totalPower.numeric > 0
     ? coolingCapacity.numeric / totalPower.numeric
     : null;
@@ -251,6 +271,8 @@ export function buildPlantView(rows: readonly AssetsDeviceRow[]): PlantView {
     totalPower,
     coolingCapacity,
     plantCop,
+    plantCopLowConfidence: plantCop !== null && !coolingCapacity!.current,
+    plantCopRange: copRange(plantCop, coolingCapacity),
   };
 }
 
@@ -264,21 +286,38 @@ export function formatRelativeUncertainty(relative: number): string {
   return `±${formatFixed(percent, percent >= 10 ? 0 : 1)}%`;
 }
 
+export const LOW_CONFIDENCE_LABEL = '低可信';
+
+function copRange(cop: number | null, cooling: PlantReading | null | undefined): { low: number; high: number } | null {
+  const band = cooling?.measurement;
+  if (cop === null || !band) return null;
+  const relative = band.copRelative ?? band.relative;
+  if (!Number.isFinite(relative) || relative < 0) return null;
+  return { low: Math.max(0, cop * (1 - relative)), high: cop * (1 + relative) };
+}
+
+/** 低可信 · 431–593 kW（±16%），温差相对探头误差偏小; 不确定度 ±5.1% for a confident load. */
 export function coolingUncertaintyText(reading: PlantReading | null): string | null {
   const band = reading?.measurement;
   if (!band || !Number.isFinite(band.relative)) return null;
   const percent = formatRelativeUncertainty(band.relative);
-  return band.lowConfidence ? `不确定度 ${percent}，温差相对探头误差偏小` : `不确定度 ${percent}`;
+  if (!band.lowConfidence) return `不确定度 ${percent}`;
+  const range = Number.isFinite(band.low) && Number.isFinite(band.high) && band.high > 0
+    ? `${formatFixed(band.low, 0)}–${formatFixed(band.high, 0)} kW（${percent}）`
+    : `不确定度 ${percent}`;
+  return `${LOW_CONFIDENCE_LABEL} · ${range}，温差相对探头误差偏小`;
 }
 
+/** The live COP's uncertainty; a 低可信 COP is shown, with its interval, and kept out of averages. */
 export function copUncertaintyText(plant: PlantView): string | null {
   const cooling = plant.coolingCapacity?.measurement;
-  if (!cooling || !Number.isFinite(cooling.relative)) return null;
-  const relative = cooling.copRelative ?? cooling.relative;
-  const percent = formatRelativeUncertainty(relative);
-  if (plant.plantCop === null && cooling.lowConfidence) return `温差不确定度 ${percent}，暂不把能效当准数`;
-  if (plant.plantCop === null) return null;
-  return `不确定度 ${percent}`;
+  if (plant.plantCop === null || !cooling || !Number.isFinite(cooling.relative)) return null;
+  const percent = formatRelativeUncertainty(cooling.copRelative ?? cooling.relative);
+  const lowConfidence = plant.plantCopLowConfidence ?? cooling.lowConfidence;
+  if (!lowConfidence) return `不确定度 ${percent}`;
+  const range = plant.plantCopRange ?? copRange(plant.plantCop, plant.coolingCapacity);
+  const interval = range ? `${formatFixed(range.low, 2)}–${formatFixed(range.high, 2)}（${percent}）` : `不确定度 ${percent}`;
+  return `${LOW_CONFIDENCE_LABEL} · ${interval}，不计入能效均值和诊断`;
 }
 
 /** Suggested supply-minus-return corrections. applied stays false; the text says the suggestion was not used. */

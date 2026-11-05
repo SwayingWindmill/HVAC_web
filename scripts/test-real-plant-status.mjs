@@ -33,11 +33,63 @@ test('a 0.9 K header shows about ±16% and says the offset was not applied', () 
       },
     }],
     coolingCapacity: cooling,
-    plantCop: null,
+    plantCop: 4.1,
+    plantCopLowConfidence: true,
   };
-  assert.equal(coolingUncertaintyText(cooling), '不确定度 ±16%，温差相对探头误差偏小');
-  assert.equal(copUncertaintyText(plant), '温差不确定度 ±16%，暂不把能效当准数');
+  assert.equal(coolingUncertaintyText(cooling), '低可信 · 431–593 kW（±16%），温差相对探头误差偏小');
+  assert.equal(copUncertaintyText(plant), '低可信 · 3.45–4.75（±16%），不计入能效均值和诊断');
+  assert.equal(copUncertaintyText({ ...plant, plantCop: null }), null);
   assert.equal(probeOffsetText(plant), '探头零点建议把温差减去 0.22 K（未采用，偏差已超过提醒线）');
+});
+
+const meterRow = (points) => ({
+  device: { id: 'meter-1', displayName: '冷站电表', deviceType: 'METER' },
+  binding: { state: 'unbound' },
+  telemetryPoints: points.map((point) => ({ sourceKey: point.sourceKey, pointCode: point.key, status: 'ACTIVE' })),
+  snapshotResult: { status: 'ok', snapshot: { values: points.map((point) => ({ key: point.key, state: 'PRESENT', value: point.value })) } },
+  operational: {
+    connection: { state: 'ONLINE' },
+    points: points.map((point) => ({
+      key: point.key, label: point.key, state: 'PRESENT', displayValue: String(point.value), unit: 'kW', freshness: 'FRESH',
+      quality: point.quality ?? 'GOOD', qualityReasons: point.reasons ?? [], health: point.health ?? null,
+      measurement: point.measurement ?? null, probeOffsets: [], sampledAt: '2026-11-05T00:00:00Z',
+    })),
+  },
+});
+
+test('a LOW_CONFIDENCE cooling load still gives a live COP, labelled 低可信 with its interval', () => {
+  const measurement = { relative: 0.158, low: 431, high: 593, lowConfidence: true, copRelative: 0.159, deltaTK: 0.9 };
+  const view = buildPlantView([meterRow([
+    { key: 'P', sourceKey: 'hvac_meter.active_power', value: 125 },
+    { key: 'Q', sourceKey: 'btu_meter.instant_cooling_capacity', value: 512, quality: 'PARTIAL', reasons: ['LOW_CONFIDENCE'], health: { status: 'SUSPECT', score: 60 }, measurement },
+  ])]);
+  assert.equal(view.coolingCapacity.current, false);
+  assert.equal(view.coolingCapacity.lowConfidence, true);
+  assert.equal(view.plantCop, 512 / 125);
+  assert.equal(view.plantCopLowConfidence, true);
+  assert.ok(Math.abs(view.plantCopRange.low - 4.096 * 0.841) < 1e-9);
+  assert.match(copUncertaintyText(view), /^低可信 · 3\.44–4\.75（±16%）/);
+});
+
+test('any other doubt still withholds the live COP', () => {
+  for (const reasons of [['LOW_CONFIDENCE', 'SPIKE'], ['DERIVED_INPUT']]) {
+    const view = buildPlantView([meterRow([
+      { key: 'P', sourceKey: 'hvac_meter.active_power', value: 125 },
+      { key: 'Q', sourceKey: 'btu_meter.instant_cooling_capacity', value: 512, quality: 'PARTIAL', reasons },
+    ])]);
+    assert.equal(view.coolingCapacity.lowConfidence, false);
+    assert.equal(view.plantCop, null);
+  }
+  const bad = buildPlantView([meterRow([
+    { key: 'P', sourceKey: 'hvac_meter.active_power', value: 125 },
+    { key: 'Q', sourceKey: 'btu_meter.instant_cooling_capacity', value: 512, quality: 'PARTIAL', reasons: ['LOW_CONFIDENCE'], health: { status: 'BAD', score: 10 } },
+  ])]);
+  assert.equal(bad.plantCop, null);
+  const confident = buildPlantView([meterRow([
+    { key: 'P', sourceKey: 'hvac_meter.active_power', value: 125 },
+    { key: 'Q', sourceKey: 'btu_meter.instant_cooling_capacity', value: 512 },
+  ])]);
+  assert.equal(confident.plantCopLowConfidence, false);
 });
 
 test('an offline device is offline whatever run state it last reported', () => {
