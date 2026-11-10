@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩的告警规则（#609）。读数写成「设备代码/点位代码」，代码见 songyaxuan.site.json。发布：modules/alarm/cmd/alarm-rules。机组电表上的「冷冻水出水温度」和总管供水对不上（C、D 机组运行时显示 28–32 ℃，总管供水 6 ℃），所以供水温度看冷量计的总管供水，不看各台机组。2026-10-31 按运行策略 v3（供水 5–8 ℃、室温 22–26 ℃）和 7 天数据补了供水偏高、供水过低、房间过热、冷却水出水过高、机组运行无流量五条；门槛是按数据估的，待现场确认。",
+  "note": "松雅轩的告警规则（#609）。读数写成「设备代码/点位代码」，代码见 songyaxuan.site.json。发布：modules/alarm/cmd/alarm-rules。供水温度看冷量计的总管供水，不看各台机组。2026-11-10 按现场手绘点位表接回四台机组的冷凝出水温度，冷却水出水过高改为看四台。2026-10-31 按运行策略 v3（供水 5–8 ℃、室温 22–26 ℃）和 7 天数据补了供水偏高、供水过低、房间过热、冷却水出水过高、机组运行无流量五条；门槛是按数据估的，待现场确认。",
   "siteFile": "songyaxuan.site.json",
   "rules": [
     {
@@ -166,7 +166,7 @@
     {
       "code": "condenser-leaving-high",
       "title": "冷却水出水温度过高",
-      "summary": "C 或 D 机组运行时，它的冷却水出水温度（冷凝出）高于 37 ℃ 已持续 15 分钟，冷凝压力偏高，机组可能高压保护停机，请检查冷却塔和冷却水泵。运行中的机组都降到 35 ℃ 以下或停机后自动恢复。通道按数据判定，待现场核对（#614）。",
+      "summary": "有机组运行时，它的冷却水出水温度（冷凝出）高于 37 ℃ 已持续 15 分钟，冷凝压力偏高，机组可能高压保护停机，请检查冷却塔和冷却水泵。运行中的机组都降到 35 ℃ 以下或停机后自动恢复。",
       "severity": "MAJOR",
       "qualityPolicy": "VALID_ONLY",
       "freshnessSeconds": 900,
@@ -175,6 +175,20 @@
       "raise": {
         "kind": "OR",
         "children": [
+          {
+            "kind": "AND",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid5/cw_leaving_temperature", "operator": "GT", "value": { "type": "NUMBER", "number": 37 } }
+            ]
+          },
+          {
+            "kind": "AND",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid2/cw_leaving_temperature", "operator": "GT", "value": { "type": "NUMBER", "number": 37 } }
+            ]
+          },
           {
             "kind": "AND",
             "children": [
@@ -194,6 +208,20 @@
       "clear": {
         "kind": "AND",
         "children": [
+          {
+            "kind": "OR",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid5/cw_leaving_temperature", "operator": "LT", "value": { "type": "NUMBER", "number": 35 } }
+            ]
+          },
+          {
+            "kind": "OR",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "meter-uid2/cw_leaving_temperature", "operator": "LT", "value": { "type": "NUMBER", "number": 35 } }
+            ]
+          },
           {
             "kind": "OR",
             "children": [
