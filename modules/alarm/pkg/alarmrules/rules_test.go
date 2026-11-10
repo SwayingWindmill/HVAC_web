@@ -42,9 +42,9 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	}
 	// The supply-temperature rule, the five plant rules added 2026-10-31 (供水偏高、供水过低、
 	// 冷却水出水过高、机组运行无流量), 网关上报中断, one 读数长时间没有更新 per device with an active
-	// point (13, the room has no probe) and one 一动不动 per temperature a device reads itself (16 channels of the temperature
-	// module: the gateway does not send t8 and t11 themselves, t14 and t20 have no probe; the cooling meter's 2).
-	if len(byTitle) != 36 {
+	// point (13, the room has no probe) and one 一动不动 per temperature a device reads itself (18 channels of the temperature
+	// module: t14 and t20 have no probe and are not sent; the cooling meter's 2).
+	if len(byTitle) != 38 {
 		t.Fatalf("got %d rules: %v", len(byTitle), keys(byTitle))
 	}
 
@@ -71,11 +71,11 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		t.Fatalf("C 机组电表 readings rule is not said plainly: %q / %q", chillerC.Title, chillerC.Summary)
 	}
 
-	// #615: the Site has stopped reporting when none of its 76 active points has a reading for 15 minutes
+	// #615: the Site has stopped reporting when none of its 78 active points has a reading for 15 minutes
 	// (67 until 2026-11-10 wired every chiller's water temperatures and the cooling tower back in and withdrew
 	// the room temperature, which has no probe).
 	silent, ok := byTitle["网关上报中断"]
-	if !ok || silent.Severity != "MAJOR" || len(inputs(silent.Raise)) != 76 || len(inputs(silent.Clear)) != 76 {
+	if !ok || silent.Severity != "MAJOR" || len(inputs(silent.Raise)) != 78 || len(inputs(silent.Clear)) != 78 {
 		t.Fatalf("网关上报中断 rule: %#v", silent)
 	}
 	if !strings.Contains(silent.Summary, "15 分钟") {
@@ -98,7 +98,7 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	}
 
 	module := inputs(byTitle["温度采集模块读数长时间没有更新"].Raise)
-	if len(module) != 16 || contains(module, "01a14000-4000-7000-8000-000000000001/t8") || contains(module, "01a14000-4000-7000-8000-000000000001/t11") || contains(module, "01a14000-4000-7000-8000-000000000001/t14") || contains(module, "01a14000-4000-7000-8000-000000000001/t20") {
+	if len(module) != 18 || contains(module, "01a14000-4000-7000-8000-000000000001/t14") || contains(module, "01a14000-4000-7000-8000-000000000001/t20") {
 		t.Fatalf("temperature module readings rule watches inactive channels: %v", module)
 	}
 	for _, policy := range byTitle {
