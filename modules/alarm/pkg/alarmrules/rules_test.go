@@ -40,11 +40,11 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		}
 		byTitle[policy.Title] = policy
 	}
-	// The supply-temperature rule, the five plant rules added 2026-10-31 (供水偏高、供水过低、房间过热、
+	// The supply-temperature rule, the five plant rules added 2026-10-31 (供水偏高、供水过低、
 	// 冷却水出水过高、机组运行无流量), 网关上报中断, one 读数长时间没有更新 per device with an active
-	// point (14) and one 一动不动 per temperature a device reads itself (16 channels of the temperature
+	// point (13, the room has no probe) and one 一动不动 per temperature a device reads itself (16 channels of the temperature
 	// module: the gateway does not send t8 and t11 themselves, t14 and t20 have no probe; the cooling meter's 2).
-	if len(byTitle) != 38 {
+	if len(byTitle) != 36 {
 		t.Fatalf("got %d rules: %v", len(byTitle), keys(byTitle))
 	}
 
@@ -71,23 +71,24 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		t.Fatalf("C 机组电表 readings rule is not said plainly: %q / %q", chillerC.Title, chillerC.Summary)
 	}
 
-	// #615: the Site has stopped reporting when none of its 77 active points has a reading for 15 minutes
-	// (67 until 2026-11-10 wired every chiller's water temperatures and the cooling tower back in).
+	// #615: the Site has stopped reporting when none of its 76 active points has a reading for 15 minutes
+	// (67 until 2026-11-10 wired every chiller's water temperatures and the cooling tower back in and withdrew
+	// the room temperature, which has no probe).
 	silent, ok := byTitle["网关上报中断"]
-	if !ok || silent.Severity != "MAJOR" || len(inputs(silent.Raise)) != 77 || len(inputs(silent.Clear)) != 77 {
+	if !ok || silent.Severity != "MAJOR" || len(inputs(silent.Raise)) != 76 || len(inputs(silent.Clear)) != 76 {
 		t.Fatalf("网关上报中断 rule: %#v", silent)
 	}
 	if !strings.Contains(silent.Summary, "15 分钟") {
 		t.Fatalf("网关上报中断 is not said plainly: %q", silent.Summary)
 	}
 
-	// #616: the ambient temperature on channel 15, 6 hours without the slightest change, a 提示. The
-	// 室外环境 and 房间 devices only copy that channel, so they have no rule of their own: one stuck probe, one alarm.
-	flat, ok := byTitle["环境温度一动不动"]
+	// #616: the outdoor temperature on channel 15, 6 hours without the slightest change, a 提示. The
+	// 室外环境 device only copies that channel, so it has no rule of its own: one stuck probe, one alarm.
+	flat, ok := byTitle["室外温度一动不动"]
 	if !ok || flat.Severity != "INFO" || !reflect.DeepEqual(inputs(flat.Raise), []string{"01a14000-4000-7000-8000-000000000001/t15"}) {
 		t.Fatalf("channel 15 flat-reading rule: %#v / %v", flat, inputs(flat.Raise))
 	}
-	if !strings.Contains(flat.Summary, "温度采集模块的环境温度连续 6 小时") {
+	if !strings.Contains(flat.Summary, "温度采集模块的室外温度连续 6 小时") {
 		t.Fatalf("channel 15 flat-reading rule is not said plainly: %q", flat.Summary)
 	}
 	for title, policy := range byTitle {
@@ -253,8 +254,8 @@ func TestSongyaxuanRulesRaiseAndClearAsTheirWordingSays(t *testing.T) {
 	if back.Effect != alarmservice.EvaluationEffectClear {
 		t.Fatalf("a reading arriving did not clear: %#v", back)
 	}
-	// 一动不动 (#616): the ambient temperature holding 21.5 ℃ for 6 hours raises; once it moves, it clears.
-	flat := published(t, compiled, "环境温度一动不动")
+	// 一动不动 (#616): the outdoor temperature holding 21.5 ℃ for 6 hours raises; once it moves, it clears.
+	flat := published(t, compiled, "室外温度一动不动")
 	outdoor := func(at, temperatureSince time.Time, temperature float64) map[string]alarmservice.InputFact {
 		key := "01a14000-4000-7000-8000-000000000001/t15"
 		fact := alarmservice.NumberInput(key, temperature, "GOOD", at.Format(time.RFC3339Nano))
@@ -287,7 +288,6 @@ func TestSongyaxuanPlantRulesRaiseAndClearAsTheirWordingSays(t *testing.T) {
 	start := time.Date(2026, 10, 31, 4, 0, 0, 0, time.UTC)
 	const (
 		btu  = "01a14000-4000-7000-8000-000000000009/"
-		room = "01a14000-4000-7000-8000-00000000000d/room_temperature"
 		flow = "01a14000-4000-7000-8000-000000000002/flow_meter"
 		c    = "01a14000-4000-7000-8000-000000000005/"
 		d    = "01a14000-4000-7000-8000-000000000006/"
@@ -333,20 +333,6 @@ func TestSongyaxuanPlantRulesRaiseAndClearAsTheirWordingSays(t *testing.T) {
 	}
 	none, raise, clear := alarmservice.EvaluationEffectNone, alarmservice.EvaluationEffectPublish, alarmservice.EvaluationEffectClear
 
-	// 房间温度过高: 28.6 ℃ (the reading on 2026-10-31) for an hour with a chiller running raises; a
-	// 176.8 ℃ spike is not a reading; 27.5 ℃ is not yet recovered, 26.8 ℃ is.
-	run("房间温度过高", []step{
-		{0, true, map[string]float64{room: 176.8}, none},
-		{time.Minute, true, map[string]float64{room: 28.6}, none},
-		{61 * time.Minute, true, map[string]float64{room: 28.6}, raise},
-		{62 * time.Minute, true, map[string]float64{room: 27.5}, none},
-		{63 * time.Minute, true, map[string]float64{room: 26.8}, clear},
-	})
-	// …and a warm room with every chiller stopped is not raised.
-	run("房间温度过高", []step{
-		{0, false, map[string]float64{room: 30}, none},
-		{2 * time.Hour, false, map[string]float64{room: 30}, none},
-	})
 	// 冷冻水供水温度高于设定范围: 45 minutes above 8.5 ℃; a start-up pull-down shorter than that is not.
 	supply := btu + "supply_water_temperature"
 	run("冷冻水供水温度高于设定范围", []step{

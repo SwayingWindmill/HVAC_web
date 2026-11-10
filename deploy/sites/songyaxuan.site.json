@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：网关把四块机组电表相加作为「空调总电表（四台机组合计）」，并按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场手绘点位表（2026-11-08 网关按它改过）：A–D 蒸发出 t1–t4，冷却水总管进水 t5（四台共用），A–D 冷凝出 t6–t9，A 机组冷冻水支管进水 t10，冷却塔内侧总管 t11、外侧总管 t12（当作出塔），冷却塔进水 t13、t14，环境 t15（室外温度和房间温度都用它），冷冻水总回水 t16、t17，总供水 t18、t19；t14、t20 没有探头。网关不上报 t8、t11 本身（SPARE），但 t8 仍复制到 C 机组冷凝出。点位带 from（来源通道），网关函数的 COPIES 照它复制。",
+  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：网关把四块机组电表相加作为「空调总电表（四台机组合计）」，并按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场手绘点位表（2026-11-08 网关按它改过）：A–D 蒸发出 t1–t4，冷却水总管进水 t5（四台共用），A–D 冷凝出 t6–t9，A 机组冷冻水支管进水 t10，冷却塔内侧总管 t11、外侧总管 t12（当作出塔），冷却塔进水 t13、t14，室外温度 t15（房间没有温度探头），冷冻水总回水 t16、t17，总供水 t18、t19；t14、t20 没有探头。网关不上报 t8、t11 本身（SPARE），但 t8 仍复制到 C 机组冷凝出。点位带 from（来源通道），网关函数的 COPIES 照它复制。",
   "tenantId": "018f3d00-0000-7000-8000-000000000001",
   "site": {
     "id": "01a14000-1000-7000-8000-000000000001",
@@ -145,7 +145,7 @@
         },
         {
           "code": "t15",
-          "name": "环境温度",
+          "name": "室外温度",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -842,7 +842,7 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "环境温度，温度模块通道 15",
+          "address": "室外温度，温度模块通道 15",
           "from": [
             "temperature",
             "t15"
@@ -889,11 +889,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "环境温度，温度模块通道 15（和室外温度同一个探头）",
-          "from": [
-            "temperature",
-            "t15"
-          ]
+          "address": "房间没有温度探头（通道 15 测的是室外温度）",
+          "status": "INACTIVE"
         }
       ]
     }
@@ -1081,50 +1078,8 @@
     "coolingMeter": "btu-calc"
   },
   "intelligence": {
-    "note": "站点接入清单的智能部分（ADR 0028）。告警规则在自己的文件里，由 alarm-rules 发布；这里只写它的文件名。人工设定：optimization.policy.constraints.responseModel 的四个系数是模拟冷站的估计值，不是松雅轩数据算出来的，待按现场数据核定（TODO）。",
+    "note": "站点接入清单的智能部分（ADR 0028）。告警规则在自己的文件里，由 alarm-rules 发布；这里只写它的文件名。房间还没有温度探头，优化建议要读房间温度，先不登记；装上探头后再把 optimization 一段加回来。",
     "alarmRules": "songyaxuan.alarm-rules.json",
-    "optimization": {
-      "cron": "20 * * * *",
-      "enabled": true,
-      "model": "hvac-recommendation-v1",
-      "policy": {
-        "code": "chilled_water_supply_cost",
-        "objective": "COST",
-        "dispatchMode": "SHADOW",
-        "horizon": "DAY_AHEAD",
-        "horizonMinutes": 1440,
-        "granularity": "15MIN",
-        "constraints": {
-          "safety": {
-            "supplyTempMinC": 5,
-            "supplyTempMaxC": 8,
-            "maxSupplyTempStepC": 1
-          },
-          "comfort": {
-            "zoneTempMinC": 22,
-            "zoneTempMaxC": 26
-          },
-          "manualLocks": {
-            "resources": []
-          },
-          "inputMapping": {
-            "supplyTemperatureKey": "supply_water_temperature",
-            "zoneTemperatureKey": "room_temperature"
-          },
-          "responseModel": {
-            "dailyEnergyDeltaKWhPerSupplyTempC": -60,
-            "zoneTempDeltaCPerSupplyTempC": 0.3,
-            "energyUncertaintyP90KWh": 20,
-            "zoneTempUncertaintyP90C": 0.2
-          },
-          "maintenanceConstraints": {
-            "outOfService": []
-          }
-        },
-        "responseModelSource": "人工设定",
-        "note": "优化策略是租户共用的（同一租户只有一份生效策略）。本站和模拟冷站的室内温度读数都是 room_temperature；接入不改租户共用的策略，validate 把不一致列为「需要人决定」，策略一致之前不登记本站的模型部署和定时优化。"
-      }
-    },
     "diagnosis": {
       "lowDeltaT": {
         "asset": "chilled-water-loop",
