@@ -153,7 +153,12 @@ function SettingRow({ setting, reading, open, labels, onInspect, onSubmit }: {
             placeholder={reading?.numeric != null ? formatDecimal(reading.numeric, setting.step < 1 ? 1 : 0) : '目标值'}
             value={draft}
             onChange={(event) => setDraft(event.target.value.trim())}
-            onKeyDown={(event) => { if (event.key === 'Enter') submit(); }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+              submit();
+            }}
             className="text-center tabular-nums"
           />
           <InputGroupAddon align="inline-end">

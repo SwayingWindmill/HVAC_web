@@ -24,12 +24,15 @@ const runPlan = (gate, profiles) => {
 };
 
 test('documentation-only changes keep expensive affected gates idle', () => {
-  const classification = runClassification(['docs/architecture/overview.md']);
-  assert.equal(classification.contracts, false);
-  assert.equal(classification.units, false);
-  assert.equal(classification.integrations, false);
-  assert.equal(classification.browsers, false);
-  assert.equal(classification.broad, false);
+  for (const file of ['docs/architecture/overview.md', '.mwgrc']) {
+    const classification = runClassification([file]);
+    assert.equal(classification.contracts, false);
+    assert.equal(classification.units, false);
+    assert.equal(classification.integrations, false);
+    assert.equal(classification.browsers, false);
+    assert.equal(classification.broad, false);
+    assert.equal(classification.unknown, false);
+  }
 });
 
 test('package-lock changes compile and unit test without database or browser fan-out', () => {
@@ -40,10 +43,13 @@ test('package-lock changes compile and unit test without database or browser fan
 });
 
 test('HVAC Web changes select stable domain profiles on the Linux browser runner', () => {
-  const classification = runClassification(['apps/hvac-web/src/app/router.ts']);
-  assert.deepEqual(classification.unitProfiles, ['web']);
-  assert.deepEqual(classification.browserProfiles, ['telemetry']);
-  assert.equal(classification.integrations, false);
+  for (const file of ['apps/hvac-web/src/app/router.ts', 'scripts/check-design-system.mjs']) {
+    const classification = runClassification([file]);
+    assert.deepEqual(classification.unitProfiles, ['web']);
+    assert.deepEqual(classification.browserProfiles, ['telemetry']);
+    assert.equal(classification.integrations, false);
+    assert.equal(classification.unknown, false);
+  }
 });
 
 test('telemetry changes select telemetry unit and durable integration profiles', () => {
@@ -63,6 +69,7 @@ test('ClickHouse schema and Cube model changes run the analytics integration pro
 
 test('domain module changes stay scoped to product domains', () => {
   for (const [file, unitProfile, integrationProfile] of [
+    ['libs/telemetryhistorymodel/aggregation.go', 'telemetry', 'telemetry'],
     ['modules/connectivity/internal/adapter/runtime.go', 'telemetry', 'telemetry'],
     ['cmd/connectivity/main.go', 'telemetry', 'telemetry'],
     ['modules/alarm/pkg/alarmservice/http.go', 'alarm', 'alarm'],

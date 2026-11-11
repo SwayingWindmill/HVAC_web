@@ -94,6 +94,119 @@ function replayMachineHours(recorded: Json, query: Json): Json {
   return { ...response, buckets: response.buckets.map((bucket: Json) => ({ ...bucket, periodStart: moved(bucket.periodStart), periodEnd: moved(bucket.periodEnd) })) };
 }
 
+// Recorded device history moved onto the requested window so recent-24h charts match any test clock.
+function replayDeviceHistory(recorded: Json, query: Json): Json {
+  const shift = Date.parse(query.from) - Date.parse(recorded.metadata.requestedFrom);
+  const moved = (instant: string) => new Date(Date.parse(instant) + shift).toISOString();
+  const buckets = recorded.buckets
+    .map((bucket: Json) => ({ ...bucket, periodStart: moved(bucket.periodStart), periodEnd: moved(bucket.periodEnd) }))
+    .filter((bucket: Json) => Date.parse(bucket.periodStart) >= Date.parse(query.from) && Date.parse(bucket.periodStart) < Date.parse(query.to));
+  return {
+    ...recorded,
+    deviceId: query.deviceId,
+    buckets,
+    metadata: { ...recorded.metadata, requestedFrom: query.from, requestedTo: query.to, returnedBuckets: buckets.length },
+  };
+}
+
+const TREND_GRANULARITY_MS: Readonly<Record<string, number>> = {
+  MINUTE: 60_000,
+  FIVE_MINUTE: 5 * 60_000,
+  QUARTER_HOUR: 15 * 60_000,
+  HOUR: 3_600_000,
+  DAY: 86_400_000,
+};
+
+// Synthesizes contract-valid aggregate buckets from asset-model + snapshots for multi-point trend queries.
+function synthesizeTrendAggregate(assetModel: Json, snapshots: Json, query: Json): Json {
+  const stepMs = TREND_GRANULARITY_MS[query.granularity] ?? 300_000;
+  const fromMs = Date.parse(query.from);
+  const toMs = Date.parse(query.to);
+  const startFloor = Math.floor(fromMs / stepMs) * stepMs;
+  const deviceSnapshot = snapshots.items.find((item: Json) => item.deviceId === query.deviceId)?.snapshot;
+  const buckets: Json[] = [];
+
+  for (const key of query.keys as string[]) {
+    const point = assetModel.telemetryPoints.find(
+      (candidate: Json) => candidate.reportingDeviceId === query.deviceId && candidate.pointCode === key,
+    );
+    if (!point) continue;
+    const snapState = deviceSnapshot?.values?.find((val: Json) => val.key === key);
+    const baseNumeric = typeof snapState?.value === 'number' ? snapState.value : point.unit === 'kW' ? 210 : point.unit === 'm3/h' ? 85 : 7.2;
+    const baseString = typeof snapState?.value === 'string' ? snapState.value : 'RUNNING';
+
+    let index = 0;
+    for (let cursor = startFloor; cursor < toMs; cursor += stepMs) {
+      const end = cursor + stepMs;
+      if (end <= fromMs) continue;
+      const periodStart = new Date(cursor).toISOString();
+      const periodEnd = new Date(end).toISOString();
+      const isGauge = (point.pointType === 'TELEMETRY' || point.pointType === 'SETTING') && point.valueType === 'NUMBER';
+      const isState =
+        point.pointType === 'STATE' ||
+        ((point.pointType === 'TELEMETRY' || point.pointType === 'SETTING') &&
+          (point.valueType === 'STRING' || point.valueType === 'BOOLEAN'));
+
+      if (isGauge) {
+        const wave = point.pointType === 'SETTING' ? 0 : Math.sin(index / 4) * (baseNumeric * 0.04 + 0.2);
+        const avg = Number((baseNumeric + wave).toFixed(2));
+        const min = point.pointType === 'SETTING' ? avg : Number((avg - Math.abs(baseNumeric * 0.02 + 0.1)).toFixed(2));
+        const max = point.pointType === 'SETTING' ? avg : Number((avg + Math.abs(baseNumeric * 0.02 + 0.1)).toFixed(2));
+        buckets.push({
+          telemetryKey: key,
+          pointId: point.id,
+          pointRevision: point.revision ?? 1,
+          pointType: point.pointType,
+          unit: point.unit,
+          periodStart,
+          periodEnd,
+          quality: { good: 2, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
+          completeness: 1,
+          gauge: { average: avg, minimum: min, maximum: max, first: avg, last: avg, sampleCount: 2 },
+        });
+      } else if (isState) {
+        const stateVal = index >= 18 && index < 26 ? 'STOPPED' : baseString;
+        buckets.push({
+          telemetryKey: key,
+          pointId: point.id,
+          pointRevision: point.revision ?? 1,
+          pointType: point.pointType === 'STATE' ? 'STATE' : point.pointType,
+          unit: point.unit,
+          periodStart,
+          periodEnd,
+          quality: { good: 2, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
+          completeness: 1,
+          state: {
+            valueType: point.valueType,
+            lastValue: stateVal,
+            sampleCount: 2,
+            changeCount: stateVal === baseString ? 0 : 1,
+            stateCounts: [{ value: stateVal, count: 2 }],
+          },
+        });
+      }
+      index += 1;
+    }
+  }
+
+  return {
+    schemaVersion: 1,
+    tenantId: assetModel.tenantId,
+    siteId: SITE_ID,
+    deviceId: query.deviceId,
+    buckets,
+    metadata: {
+      requestedFrom: query.from,
+      requestedTo: query.to,
+      granularity: query.granularity,
+      timezone: query.timezone,
+      qualityPolicy: query.qualityPolicy,
+      projectionWatermark: query.to,
+      returnedBuckets: buckets.length,
+    },
+  };
+}
+
 // Recorded findings are replayed as if the last diagnosis had just run.
 function replayFindings(findings: Json[], now: string): Json[] {
   const shift = Date.parse(now) - Math.max(...findings.map((finding) => Date.parse(finding.evaluationTo)));
@@ -121,6 +234,8 @@ function replayForecast(forecast: Json, now: string): Json {
 }
 
 export class Gateway {
+  principalOverride: Json | null = null;
+  assetModel: Json = fixture<Json>('asset-model.json');
   readonly alarms = fixture<Json[]>('alarms.json');
   // The Site's rules in effect, as the Alarm owner lists them; publishing the rules file changes them, not the page.
   readonly alarmRules = fixture<Json[]>('alarm-rules.json');
@@ -129,13 +244,24 @@ export class Gateway {
   readonly commands: Json[] = [];
   /** When the forecast is replayed as published; tests that pin the page clock set it to that instant. */
   forecastOrigin: string | null = null;
+  /** Optional custom handler for `device-series:aggregate` so tests can simulate outages or specific series. */
+  aggregateHandler: ((query: Json) => { status?: number; body: unknown } | undefined) | null = null;
+  /** Optional custom handler for `analytics/energy-series` so tests can simulate fully priced daily series. */
+  energySeriesHandler: ((query: Json) => { status?: number; body: unknown } | undefined) | null = null;
   readonly findings = replayFindings(fixture<Json>('fdd-findings.json').items, new Date().toISOString());
   /** The Site's latest published recommendation; null until a run publishes one. */
   optimization: Json | null = null;
   /** How the Site's Optimization schedule last fired; null while the Site has no schedule that fired. */
   optimizationPreparation: Json | null = null;
+  /** The Chiller COP Model's latest read-only shadow evaluation; null when no SHADOW row exists. */
+  optimizationShadow: Json | null = null;
+  shadowReads = 0;
   /** IAM refuses Energy Analytics for the Site, as it does for a Site outside the principal's analytics grant. */
   analyticsDenied = false;
+  /** IAM refuses Alarm listing for the Site. */
+  alarmsDenied = false;
+  /** IAM refuses Command listing for the Site. */
+  commandsDenied = false;
   /** Daily energy series repeat the recorded day's total each day, so days line up with other daily series. */
   energyByDay = false;
   /** Telemetry fails the weather station's daily temperature. */
@@ -161,6 +287,24 @@ export class Gateway {
   fddOperatingMinutes: number | null = null;
   /** The Site's energy conservation measures as the M&V owner keeps them, newest first. */
   readonly measures: Json[] = [];
+  /** The Site's weekly Operating Schedule and Operating Exceptions as the Registry owner keeps them. */
+  operatingSchedule: Json = {
+    id: null,
+    tenantId: principal.context.tenantId,
+    siteId: SITE_ID,
+    timezone: 'Asia/Shanghai',
+    name: '标准供冷周计划',
+    preCoolLeadMinutes: 45,
+    coastDownLagMinutes: 30,
+    revision: 0,
+    updatedBy: null,
+    updatedAt: null,
+    slots: [],
+  };
+  readonly operatingExceptions: Json[] = [];
+  /** The Site's Monthly Electricity Budgets and Utility Bills as the Registry owner keeps them. */
+  readonly electricityBudgets: Json[] = [];
+  readonly utilityBills: Json[] = [];
   /** Members of the Tenant as IAM and the identity directory keep them (系统管理 → 用户与角色). */
   readonly members: Json[] = [
     {
@@ -242,6 +386,368 @@ export class Gateway {
     if (open) return { status: 'ONGOING', deltaTC: finding.observedValue, rule, window, finding: open };
     this.findings.unshift(finding);
     return { status: 'FINDING', deltaTC: finding.observedValue, rule, window, finding };
+  }
+
+  // The Registry owner's weekly Operating Schedule and full-day Operating Exceptions.
+  private schedules(method: string, path: string, query: URLSearchParams, body: Json | null, now: string): { status?: number; body: unknown } | undefined {
+    const schedulePath = `/api/v1/sites/${SITE_ID}/operating-schedule`;
+    const exceptionsPath = `/api/v1/sites/${SITE_ID}/operating-exceptions`;
+    if (path !== schedulePath && !path.startsWith(exceptionsPath)) return undefined;
+
+    const refuse = (status: number, code: string, detail: string) => ({
+      status,
+      body: { type: 'about:blank', title: 'Operating schedule refused', status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
+    });
+    const activePrincipal = this.principalOverride ?? principal;
+    const actor: string = activePrincipal.principalId;
+    const actorDisplay: string = activePrincipal.principal.displayName;
+    const capabilities: string[] = activePrincipal.authorization.capabilities ?? [];
+
+    if (method === 'GET' && path === schedulePath) {
+      return { body: this.operatingSchedule };
+    }
+
+    if (method === 'PUT' && path === schedulePath) {
+      if (!capabilities.includes('schedule.manage')) {
+        return refuse(403, 'CAPABILITY_DENIED', 'schedule.manage is required.');
+      }
+      if (body?.meta?.expectedRevision !== this.operatingSchedule.revision) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'operating schedule revision conflict');
+      }
+      const rawSlots: Json[] = body?.slots ?? [];
+      for (let day = 1; day <= 7; day += 1) {
+        const daySlots = rawSlots.filter((s) => s.dayOfWeek === day).sort((a, b) => a.startMinute - b.startMinute);
+        for (let i = 1; i < daySlots.length; i += 1) {
+          if (daySlots[i].startMinute < daySlots[i - 1].endMinute) {
+            return refuse(409, 'REGISTRY_BINDING_CONFLICT', 'overlapping slots within same dayOfWeek');
+          }
+        }
+      }
+      const nextRev = (this.operatingSchedule.revision as number) + 1;
+      this.operatingSchedule = {
+        ...this.operatingSchedule,
+        id: this.operatingSchedule.id ?? '01950000-0000-7000-8000-000000000001',
+        name: body?.name,
+        preCoolLeadMinutes: body?.preCoolLeadMinutes,
+        coastDownLagMinutes: body?.coastDownLagMinutes,
+        revision: nextRev,
+        updatedBy: actor,
+        updatedAt: now,
+        slots: rawSlots.map((slot, index) => ({
+          id: `01950000-0001-7000-8000-${String(nextRev * 100 + index + 1).padStart(12, '0')}`,
+          dayOfWeek: slot.dayOfWeek,
+          startMinute: slot.startMinute,
+          endMinute: slot.endMinute,
+          ...(slot.targetSupplyTempC !== undefined ? { targetSupplyTempC: slot.targetSupplyTempC } : {}),
+          ...(slot.spanGroupId ? { spanGroupId: slot.spanGroupId } : {}),
+        })),
+      };
+      return { body: this.operatingSchedule };
+    }
+
+    if (method === 'GET' && path === exceptionsPath) {
+      const from = query.get('from');
+      const to = query.get('to');
+      const status = query.get('status');
+      const items = this.operatingExceptions.filter((item) =>
+        (!status || item.status === status) &&
+        (!from || item.endDate >= from) &&
+        (!to || item.startDate <= to));
+      return { body: { items } };
+    }
+
+    if (method === 'POST' && path === exceptionsPath) {
+      const autoApprove = Boolean(body?.autoApprove);
+      if (autoApprove && !capabilities.includes('schedule.manage')) {
+        return refuse(403, 'OPERATING_EXCEPTION_FORBIDDEN', 'autoApprove requires schedule.manage.');
+      }
+      if (!capabilities.includes('schedule.request') && !capabilities.includes('schedule.manage')) {
+        return refuse(403, 'CAPABILITY_DENIED', 'schedule.request is required.');
+      }
+      if (autoApprove) {
+        const overlaps = this.operatingExceptions.some(
+          (other) => other.status === 'APPROVED' && other.startDate <= body!.endDate && other.endDate >= body!.startDate,
+        );
+        if (overlaps) {
+          return refuse(409, 'REGISTRY_BINDING_CONFLICT', 'date range overlaps an existing approved operating exception');
+        }
+      }
+      const created: Json = {
+        id: `01950000-0002-7000-8000-${String(this.operatingExceptions.length + 1).padStart(12, '0')}`,
+        tenantId: principal.context.tenantId,
+        siteId: SITE_ID,
+        title: body?.title,
+        kind: body?.kind,
+        startDate: body?.startDate,
+        endDate: body?.endDate,
+        replacementSlots: body?.replacementSlots ?? [],
+        reason: body?.meta?.reason ?? '',
+        status: autoApprove ? 'APPROVED' : 'PENDING_APPROVAL',
+        requestedBy: actor,
+        requestedByDisplay: actorDisplay,
+        decidedBy: autoApprove ? actor : null,
+        decidedByDisplay: autoApprove ? actorDisplay : null,
+        decidedAt: autoApprove ? now : null,
+        decisionNote: '',
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.operatingExceptions.unshift(created);
+      return { status: 201, body: created };
+    }
+
+    const decideMatch = path.match(new RegExp(`^${exceptionsPath}/([^/]+)/decide$`));
+    if (method === 'POST' && decideMatch) {
+      const target = this.operatingExceptions.find((item) => item.id === decideMatch[1]);
+      if (!target) return refuse(404, 'RESOURCE_NOT_FOUND', 'operating exception not found');
+      if (body?.meta?.expectedRevision !== target.revision) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'operating exception revision conflict');
+      }
+      const decision: string = body?.decision;
+      if (decision === 'APPROVE' || decision === 'REJECT') {
+        if (!capabilities.includes('schedule.manage')) {
+          return refuse(403, 'OPERATING_EXCEPTION_FORBIDDEN', 'schedule.manage is required to approve or reject');
+        }
+        if (target.status !== 'PENDING_APPROVAL') {
+          return refuse(409, 'OPERATING_EXCEPTION_STATE_CONFLICT', 'only PENDING_APPROVAL exceptions can be approved or rejected');
+        }
+        if (decision === 'APPROVE') {
+          const overlaps = this.operatingExceptions.some(
+            (other) => other.id !== target.id && other.status === 'APPROVED'
+              && other.startDate <= target.endDate && other.endDate >= target.startDate,
+          );
+          if (overlaps) {
+            return refuse(409, 'REGISTRY_BINDING_CONFLICT', 'date range overlaps an existing approved operating exception');
+          }
+          target.status = 'APPROVED';
+        } else {
+          target.status = 'REJECTED';
+        }
+      } else if (decision === 'CANCEL') {
+        if (target.status === 'PENDING_APPROVAL') {
+          if (!capabilities.includes('schedule.manage') && target.requestedBy !== actor) {
+            return refuse(403, 'OPERATING_EXCEPTION_FORBIDDEN', 'only requester or manager can cancel pending exception');
+          }
+        } else if (target.status === 'APPROVED') {
+          if (!capabilities.includes('schedule.manage')) {
+            return refuse(403, 'OPERATING_EXCEPTION_FORBIDDEN', 'schedule.manage is required to cancel approved exception');
+          }
+        } else {
+          return refuse(409, 'OPERATING_EXCEPTION_STATE_CONFLICT', 'exception cannot be cancelled in current state');
+        }
+        target.status = 'CANCELLED';
+      }
+      target.decidedBy = actor;
+      target.decidedByDisplay = actorDisplay;
+      target.decidedAt = now;
+      target.decisionNote = body?.decisionNote ?? '';
+      target.revision += 1;
+      target.updatedAt = now;
+      return { body: target };
+    }
+
+    return undefined;
+  }
+
+  // The Registry owner's Monthly Electricity Budgets and Utility Bills.
+  private electricityBilling(method: string, path: string, query: URLSearchParams, body: Json | null, now: string): { status?: number; body: unknown } | undefined {
+    const budgetsPath = `/api/v1/sites/${SITE_ID}/electricity-budgets`;
+    const billsPath = `/api/v1/sites/${SITE_ID}/utility-bills`;
+    if (path !== budgetsPath && !path.startsWith(billsPath)) return undefined;
+
+    const refuse = (status: number, code: string, detail: string) => ({
+      status,
+      body: { type: 'about:blank', title: 'Electricity billing refused', status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
+    });
+    const activePrincipal = this.principalOverride ?? principal;
+    const actor: string = activePrincipal.principalId;
+    const actorDisplay: string = activePrincipal.principal.displayName;
+    const capabilities: string[] = activePrincipal.authorization.capabilities ?? [];
+
+    if (method === 'GET' && path === budgetsPath) {
+      const billingMonth = query.get('billingMonth');
+      const fromMonth = query.get('fromMonth');
+      const toMonth = query.get('toMonth');
+      const items = this.electricityBudgets
+        .filter((item) =>
+          (!billingMonth || item.billingMonth === billingMonth) &&
+          (!fromMonth || item.billingMonth >= fromMonth) &&
+          (!toMonth || item.billingMonth <= toMonth))
+        .sort((a, b) => b.billingMonth.localeCompare(a.billingMonth));
+      return { body: { items } };
+    }
+
+    if (method === 'PUT' && path === budgetsPath) {
+      if (!capabilities.includes('billing.manage')) {
+        return refuse(403, 'BILLING_MANAGE_FORBIDDEN', 'billing.manage is required.');
+      }
+      const existing = this.electricityBudgets.find((item) => item.billingMonth === body?.billingMonth);
+      const currentRevision = existing ? (existing.revision as number) : 0;
+      if (body?.meta?.expectedRevision !== currentRevision) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'monthly electricity budget revision conflict');
+      }
+      if (existing) {
+        existing.budgetAmountCny = body?.budgetAmountCny;
+        existing.note = body?.note ?? '';
+        existing.revision = currentRevision + 1;
+        existing.updatedBy = actor;
+        existing.updatedByDisplay = actorDisplay;
+        existing.updatedAt = now;
+        return { body: existing };
+      }
+      const created: Json = {
+        id: `01990000-8000-7000-8000-${String(this.electricityBudgets.length + 1).padStart(12, '0')}`,
+        tenantId: principal.context.tenantId,
+        siteId: SITE_ID,
+        billingMonth: body?.billingMonth,
+        budgetAmountCny: body?.budgetAmountCny,
+        note: body?.note ?? '',
+        revision: 1,
+        updatedBy: actor,
+        updatedByDisplay: actorDisplay,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.electricityBudgets.unshift(created);
+      return { body: created };
+    }
+
+    if (method === 'GET' && path === billsPath) {
+      const billingMonth = query.get('billingMonth');
+      const meterScope = query.get('meterScope');
+      const status = query.get('status');
+      const items = this.utilityBills
+        .filter((item) =>
+          (!billingMonth || item.billingMonth === billingMonth) &&
+          (!meterScope || item.meterScope === meterScope) &&
+          (!status || item.status === status))
+        .sort((a, b) => b.billingMonth.localeCompare(a.billingMonth) || b.updatedAt.localeCompare(a.updatedAt));
+      return { body: { items } };
+    }
+
+    if (method === 'POST' && path === billsPath) {
+      if (!capabilities.includes('billing.manage')) {
+        return refuse(403, 'BILLING_MANAGE_FORBIDDEN', 'billing.manage is required.');
+      }
+      if (body?.meta?.expectedRevision !== 0) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'expectedRevision must be 0 when creating utility bill');
+      }
+      const created: Json = {
+        id: `01990000-9000-7000-8000-${String(this.utilityBills.length + 1).padStart(12, '0')}`,
+        tenantId: principal.context.tenantId,
+        siteId: SITE_ID,
+        billingMonth: body?.billingMonth,
+        readingStartDate: body?.readingStartDate,
+        readingEndDate: body?.readingEndDate,
+        meterScope: body?.meterScope,
+        billedEnergyKwh: body?.billedEnergyKwh,
+        ...(body?.touBreakdown ? { touBreakdown: body.touBreakdown } : {}),
+        energyChargeCny: body?.energyChargeCny,
+        basicChargeMode: body?.basicChargeMode,
+        basicChargeQuantity: body?.basicChargeMode === 'NONE' ? null : (body?.basicChargeQuantity ?? null),
+        basicChargeCny: body?.basicChargeMode === 'NONE' ? 0 : body?.basicChargeCny,
+        standardPowerFactor: body?.standardPowerFactor ?? null,
+        actualPowerFactor: body?.actualPowerFactor ?? null,
+        powerFactorAdjustmentCny: body?.powerFactorAdjustmentCny,
+        otherChargesCny: body?.otherChargesCny,
+        totalPayableCny: body?.totalPayableCny,
+        chillerShareOverrideRatio: body?.meterScope === 'WHOLE_BUILDING' ? (body?.chillerShareOverrideRatio ?? null) : null,
+        utilityAccountNo: body?.utilityAccountNo ?? '',
+        invoiceNo: body?.invoiceNo ?? '',
+        note: body?.note ?? '',
+        status: 'DRAFT',
+        confirmedBy: null,
+        confirmedByDisplay: null,
+        confirmedAt: null,
+        updatedBy: actor,
+        updatedByDisplay: actorDisplay,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.utilityBills.unshift(created);
+      return { status: 201, body: created };
+    }
+
+    const updateMatch = path.match(new RegExp(`^${billsPath}/([^/]+)$`));
+    if (method === 'PUT' && updateMatch) {
+      if (!capabilities.includes('billing.manage')) {
+        return refuse(403, 'BILLING_MANAGE_FORBIDDEN', 'billing.manage is required.');
+      }
+      const target = this.utilityBills.find((item) => item.id === updateMatch[1]);
+      if (!target) return refuse(404, 'RESOURCE_NOT_FOUND', 'utility bill not found');
+      if (target.status !== 'DRAFT') {
+        return refuse(409, 'UTILITY_BILL_STATE_CONFLICT', 'confirmed utility bill cannot be modified');
+      }
+      if (body?.meta?.expectedRevision !== target.revision) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'utility bill revision conflict');
+      }
+      delete target.touBreakdown;
+      Object.assign(target, {
+        billingMonth: body?.billingMonth,
+        readingStartDate: body?.readingStartDate,
+        readingEndDate: body?.readingEndDate,
+        meterScope: body?.meterScope,
+        billedEnergyKwh: body?.billedEnergyKwh,
+        ...(body?.touBreakdown ? { touBreakdown: body.touBreakdown } : {}),
+        energyChargeCny: body?.energyChargeCny,
+        basicChargeMode: body?.basicChargeMode,
+        basicChargeQuantity: body?.basicChargeMode === 'NONE' ? null : (body?.basicChargeQuantity ?? null),
+        basicChargeCny: body?.basicChargeMode === 'NONE' ? 0 : body?.basicChargeCny,
+        standardPowerFactor: body?.standardPowerFactor ?? null,
+        actualPowerFactor: body?.actualPowerFactor ?? null,
+        powerFactorAdjustmentCny: body?.powerFactorAdjustmentCny,
+        otherChargesCny: body?.otherChargesCny,
+        totalPayableCny: body?.totalPayableCny,
+        chillerShareOverrideRatio: body?.meterScope === 'WHOLE_BUILDING' ? (body?.chillerShareOverrideRatio ?? null) : null,
+        utilityAccountNo: body?.utilityAccountNo ?? '',
+        invoiceNo: body?.invoiceNo ?? '',
+        note: body?.note ?? '',
+        updatedBy: actor,
+        updatedByDisplay: actorDisplay,
+        revision: (target.revision as number) + 1,
+        updatedAt: now,
+      });
+      return { body: target };
+    }
+
+    const confirmMatch = path.match(new RegExp(`^${billsPath}/([^/]+)/confirm$`));
+    if (method === 'POST' && confirmMatch) {
+      if (!capabilities.includes('billing.manage')) {
+        return refuse(403, 'BILLING_MANAGE_FORBIDDEN', 'billing.manage is required.');
+      }
+      const target = this.utilityBills.find((item) => item.id === confirmMatch[1]);
+      if (!target) return refuse(404, 'RESOURCE_NOT_FOUND', 'utility bill not found');
+      if (target.status !== 'DRAFT') {
+        return refuse(409, 'UTILITY_BILL_STATE_CONFLICT', 'utility bill is already confirmed');
+      }
+      if (body?.meta?.expectedRevision !== target.revision) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'utility bill revision conflict');
+      }
+      const duplicateConfirmed = this.utilityBills.some(
+        (other) =>
+          other.id !== target.id &&
+          other.status === 'CONFIRMED' &&
+          other.billingMonth === target.billingMonth &&
+          other.meterScope === target.meterScope,
+      );
+      if (duplicateConfirmed) {
+        return refuse(409, 'REGISTRY_BINDING_CONFLICT', 'duplicate confirmed utility bill for same month and meter scope');
+      }
+      target.status = 'CONFIRMED';
+      target.confirmedBy = actor;
+      target.confirmedByDisplay = actorDisplay;
+      target.confirmedAt = now;
+      if (body?.note) target.note = body.note;
+      target.updatedBy = actor;
+      target.updatedByDisplay = actorDisplay;
+      target.revision = (target.revision as number) + 1;
+      target.updatedAt = now;
+      return { body: target };
+    }
+
+    return undefined;
   }
 
   // The M&V owner's ledger: implementing fits the recorded baseline over the fourteen days before the
@@ -362,13 +868,13 @@ export class Gateway {
 
   private respond(method: string, path: string, query: URLSearchParams, body: Json | null): { status?: number; body: unknown } | undefined {
     const now = new Date().toISOString();
-    if (method === 'GET' && path === '/api/v1/principal') return { body: principal };
+    if (method === 'GET' && path === '/api/v1/principal') return { body: this.principalOverride ?? principal };
     if (method === 'GET' && path === '/api/v1/platform/status') return { body: fixture('platform-status.json') };
     const userAdmin = this.userAdmin(method, path, body);
     if (userAdmin) return userAdmin;
     if (method === 'GET' && path === '/api/v1/sites') return { body: fixture('sites.json') };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}`) return { body: fixture<Json>('sites.json').items[0] };
-    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: fixture('asset-model.json') };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: this.assetModel };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/tariff`) {
       return this.tariff ? { body: this.tariff } : {
         status: 404,
@@ -377,13 +883,34 @@ export class Gateway {
     }
     if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: this.snapshotBatch(body!) };
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') {
-      if (body?.granularity === 'QUARTER_HOUR') return { body: replayDemand(fixture<Json>('demand-quarter-hours.json'), body) };
+      const custom = this.aggregateHandler?.(body!);
+      if (custom) return custom;
+      if (body?.granularity === 'MINUTE' || body?.granularity === 'FIVE_MINUTE') {
+        return { body: synthesizeTrendAggregate(fixture<Json>('asset-model.json'), this.snapshots, body) };
+      }
+      if (body?.granularity === 'QUARTER_HOUR' && body.keys.length === 1 && body.keys[0] === 'active_power') {
+        return { body: replayDemand(fixture<Json>('demand-quarter-hours.json'), body) };
+      }
+      if (body?.granularity === 'QUARTER_HOUR') {
+        const demand = replayDemand(fixture<Json>('demand-quarter-hours.json'), body);
+        return demand.buckets.length > 0
+          ? { body: demand }
+          : { body: synthesizeTrendAggregate(fixture<Json>('asset-model.json'), this.snapshots, body) };
+      }
       if (body?.granularity === 'DAY' && body.keys[0] === 'ambient_dry_bulb_temperature') {
         if (this.outdoorFailing) return { status: 503, body: { type: 'about:blank', title: 'Telemetry history unavailable', status: 503, detail: 'Telemetry Query Service is unavailable.', instance: path, code: 'TELEMETRY_HISTORY_UNAVAILABLE', traceId: '0'.repeat(32), retryable: true } };
         return { body: replayOutdoorDays(fixture<Json>('outdoor-days.json'), body) };
       }
       if (body?.granularity === 'HOUR' && body.keys.length === 1 && body.keys[0] === 'power') return { body: replayMachineHours(fixture<Json>('device-hours.json'), body) };
-      return { body: fixture('history.json') };
+      if (body?.granularity === 'HOUR') {
+        const history = replayDeviceHistory(fixture<Json>('history.json'), body);
+        const requestedKeys = new Set<string>(body?.keys ?? []);
+        const historyCoversAllKeys =
+          requestedKeys.size > 0 &&
+          Array.from(requestedKeys).every((key) => history.buckets.some((b: Json) => b.telemetryKey === key));
+        if (historyCoversAllKeys) return { body: history };
+      }
+      return { body: synthesizeTrendAggregate(fixture<Json>('asset-model.json'), this.snapshots, body!) };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/findings`) return { body: { items: this.findings } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/rules/low-delta-t`) {
@@ -396,12 +923,20 @@ export class Gateway {
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/preparations/latest`) {
       return this.optimizationPreparation ? { body: this.optimizationPreparation } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
     }
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/shadow-evaluations/latest`) {
+      this.shadowReads += 1;
+      return this.optimizationShadow ? { body: this.optimizationShadow } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+    }
     if (method === 'POST' && path === '/api/v1/optimization/runs') {
       if (!this.nextRecommendation) return { status: 502, body: fixture('optimization-run-declined.json') };
       this.optimization = this.nextRecommendation;
       return { status: 202, body: { optimizationRunId: this.optimization.runId, inputSnapshotId: this.optimization.recommendation.inputSnapshotId, status: 'READY' } };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), this.forecastOrigin ?? now) };
+    const scheduleReply = this.schedules(method, path, query, body, now);
+    if (scheduleReply) return scheduleReply;
+    const billingReply = this.electricityBilling(method, path, query, body, now);
+    if (billingReply) return billingReply;
     if (path.startsWith(`/api/v1/sites/${SITE_ID}/savings/`)) return this.savings(method, path, query, body, now);
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/reports/monthly`) {
       return { body: { items: this.reportSnapshots.filter((stored) => stored.month.startsWith(`${query.get('year')}-`)) } };
@@ -419,15 +954,30 @@ export class Gateway {
       return { body: replayEnergy({ ...recorded.response, devices }, body, Date.parse(recorded.recordedDay)) };
     }
     if (method === 'POST' && path === '/api/v1/analytics/energy-series') {
+      const custom = this.energySeriesHandler?.(body!);
+      if (custom) return custom;
       const recorded = fixture<Json>('energy-series.json')[body?.energyType];
       return { body: this.energyByDay && body?.granularity === 'day' ? replayEnergyDays(recorded, body) : replayEnergy(recorded, body!) };
     }
 
     if (method === 'GET' && path === '/api/v1/alarms') {
+      if (this.alarmsDenied) {
+        return {
+          status: 403,
+          body: {
+            error: { code: 'FORBIDDEN', message: 'Alarm list access is forbidden.', details: {} },
+            meta: { requestId: 'e2e' },
+          },
+        };
+      }
+      const activeFrom = query.get('activeFrom');
+      const activeTo = query.get('activeTo');
       const items = this.alarms.filter((alarm) =>
         (!query.get('condition') || alarm.condition === query.get('condition'))
         && (!query.has('acknowledged') || Boolean(alarm.acknowledgement) === (query.get('acknowledged') === 'true'))
-        && (!query.get('severity') || alarm.currentSeverity === query.get('severity')));
+        && (!query.get('severity') || alarm.currentSeverity === query.get('severity'))
+        && (!activeTo || Date.parse(alarm.firstOccurredAt) <= Date.parse(activeTo))
+        && (!activeFrom || alarm.condition === 'ACTIVE' || !alarm.clearedAt || Date.parse(alarm.clearedAt) >= Date.parse(activeFrom)));
       return { body: { data: items, meta: { nextCursor: null, hasMore: false, limit: 100, requestId: 'e2e' } } };
     }
     if (method === 'GET' && path === '/api/v1/alarm-rules') {
@@ -449,7 +999,15 @@ export class Gateway {
       return { body: { data: alarm } };
     }
 
-    if (method === 'GET' && path === '/api/v1/commands') return { body: { data: this.commands } };
+    if (method === 'GET' && path === '/api/v1/commands') {
+      if (this.commandsDenied) {
+        return {
+          status: 403,
+          body: { type: 'about:blank', title: 'Forbidden', status: 403, detail: 'Command access is forbidden.', code: 'FORBIDDEN' },
+        };
+      }
+      return { body: { data: this.commands } };
+    }
     if (method === 'POST' && path === '/api/v1/commands') return { status: 202, body: this.submitCommand(body!, now) };
     const approval = path.match(/^\/api\/v1\/commands\/([^/]+)\/approve$/);
     if (method === 'POST' && approval) {

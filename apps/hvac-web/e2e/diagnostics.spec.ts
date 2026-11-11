@@ -63,3 +63,17 @@ test('a revised rule is what the page shows, and an unreadable rule says so', as
   await page.reload();
   await expect(rule).toContainText('诊断规则暂不可用');
 });
+
+test('查看当时趋势 opens 历史趋势 from a diagnostic finding with loop delta-T points and overlays', async ({ page }) => {
+  await page.goto(`/operations/diagnostics?site=${SITE_ID}&range=all`);
+  await page.getByRole('list', { name: '诊断发现列表' }).getByRole('button', { name: /冷冻水低温差/ }).click();
+
+  const detail = page.getByRole('region', { name: '诊断发现详情' });
+  await detail.getByRole('link', { name: '查看当时趋势' }).click();
+
+  await expect(page).toHaveURL(/\/operations\/trends/);
+  await expect(page).toHaveURL(/source=diagnostic/);
+  await expect(page).toHaveURL(/temperature_difference/);
+  await expect(page.getByRole('region', { name: '历史趋势工作台' }).getByRole('status')).toContainText('来自诊断：冷冻水低温差');
+  await expect(page.getByRole('link', { name: /返回诊断/ })).toBeVisible();
+});

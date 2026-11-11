@@ -81,8 +81,10 @@ func (store *PostgresStore) List(ctx context.Context, tenantID, siteID string, f
 		  AND ($5::boolean IS NULL OR (acknowledged_at IS NOT NULL) = $5)
 		  AND ($6::boolean IS NULL OR (suppression IS NOT NULL) = $6)
 		  AND ($7::timestamptz IS NULL OR first_occurred_at < $7 OR (first_occurred_at = $7 AND alarm_id < $8::uuid))
+		  AND ($10::timestamptz IS NULL OR first_occurred_at <= $10)
+		  AND ($11::timestamptz IS NULL OR cleared_at IS NULL OR cleared_at >= $11)
 		ORDER BY first_occurred_at DESC, alarm_id DESC
-		LIMIT $9`, tenantID, siteID, string(filter.Condition), string(filter.Severity), filter.Acknowledged, filter.Suppressed, cursorTriggeredAt, cursorAlarmID, limit+1)
+		LIMIT $9`, tenantID, siteID, string(filter.Condition), string(filter.Severity), filter.Acknowledged, filter.Suppressed, cursorTriggeredAt, cursorAlarmID, limit+1, filter.ActiveTo, filter.ActiveFrom)
 	if err != nil {
 		return alarmmodel.ListResponse{}, fmt.Errorf("list Alarms: %w", err)
 	}

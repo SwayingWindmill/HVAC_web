@@ -79,3 +79,118 @@ func TestQuarterHourPeriodsFollowTheSiteClock(t *testing.T) {
 		t.Fatalf("bucket=%s next=%s", bucket, next)
 	}
 }
+
+func TestMinuteAndFiveMinutePeriodsAlignToSiteClockAndSettingGaugeSQL(t *testing.T) {
+	minuteQuery := telemetryhistorymodel.DeviceHistoryAggregateQuery{
+		TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
+		Keys:        []string{"chiller.leaving_chilled_water_temperature_setpoint"},
+		Granularity: telemetryhistorymodel.AggregateGranularityMinute,
+		Timezone:    "Asia/Kolkata", QualityPolicy: telemetryhistorymodel.AggregateQualityUsable,
+		From: time.Date(2026, 10, 11, 0, 7, 20, 0, time.UTC),
+		To:   time.Date(2026, 10, 11, 0, 10, 0, 0, time.UTC),
+	}
+	periods, err := buildCalendarPeriods(minuteQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(periods) != 3 || !periods[0].Start.Equal(minuteQuery.From) || !periods[0].End.Equal(time.Date(2026, 10, 11, 0, 8, 0, 0, time.UTC)) || !periods[2].End.Equal(minuteQuery.To) {
+		t.Fatalf("minute periods=%#v", periods)
+	}
+	minuteBucket, minuteNext := aggregateBucketExpressions(minuteQuery)
+	if minuteBucket != "toStartOfInterval(sampled_at, INTERVAL 1 MINUTE, 'Asia/Kolkata')" || minuteNext != "addMinutes(bucket, 1)" {
+		t.Fatalf("minute bucket=%s next=%s", minuteBucket, minuteNext)
+	}
+
+	fiveMinuteQuery := minuteQuery
+	fiveMinuteQuery.Granularity = telemetryhistorymodel.AggregateGranularityFiveMinute
+	fiveMinuteQuery.From = time.Date(2026, 10, 11, 0, 7, 0, 0, time.UTC)
+	fiveMinuteQuery.To = time.Date(2026, 10, 11, 0, 20, 0, 0, time.UTC)
+	fivePeriods, err := buildCalendarPeriods(fiveMinuteQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fivePeriods) != 3 || !fivePeriods[0].Start.Equal(fiveMinuteQuery.From) || !fivePeriods[0].End.Equal(time.Date(2026, 10, 11, 0, 10, 0, 0, time.UTC)) || !fivePeriods[1].End.Equal(time.Date(2026, 10, 11, 0, 15, 0, 0, time.UTC)) {
+		t.Fatalf("five-minute periods=%#v", fivePeriods)
+	}
+	fiveBucket, fiveNext := aggregateBucketExpressions(fiveMinuteQuery)
+	if fiveBucket != "toStartOfInterval(sampled_at, INTERVAL 5 MINUTE, 'Asia/Kolkata')" || fiveNext != "addMinutes(bucket, 5)" {
+		t.Fatalf("five-minute bucket=%s next=%s", fiveBucket, fiveNext)
+	}
+
+	client := &Client{database: "telemetry_history", table: "observations"}
+	gaugeSQL := client.gaugeAggregateQuery(minuteQuery, minuteQuery.To)
+	if !strings.Contains(gaugeSQL, "point_type IN ('TELEMETRY', 'SETTING')") {
+		t.Fatalf("gauge SQL should include numeric SETTING points:\n%s", gaugeSQL)
+	}
+	snapshotSQL := client.aggregateSnapshotQuery(minuteQuery)
+	if !strings.Contains(snapshotSQL, "'SETTING'") {
+		t.Fatalf("snapshot SQL should include SETTING points:\n%s", snapshotSQL)
+	}
+
+	val := 7.0
+	unit := "Cel"
+	decoded, err := decodeAggregateRow(aggregateRow{
+		TelemetryKey:  "chiller.leaving_chilled_water_temperature_setpoint",
+		PointID:       "018f2e00-4000-7000-8000-000000000001",
+		PointRevision: 1,
+		PointType:     "SETTING",
+		Unit:          &unit,
+		PeriodStart:   "2026-10-11T00:08:00.000Z",
+		PeriodEnd:     "2026-10-11T00:09:00.000Z",
+		Good:          1,
+		TotalCount:    1,
+		IncludedCount: 1,
+		Average:       &val,
+		Minimum:       &val,
+		Maximum:       &val,
+		First:         &val,
+		Last:          &val,
+	})
+	if err != nil || decoded.PointType != telemetryhistorymodel.PointTypeSetting || decoded.Gauge == nil || decoded.Gauge.Last != 7.0 {
+		t.Fatalf("decoded setting bucket=%#v err=%v", decoded, err)
+	}
+}
+
+func TestStateAggregateQueryIncludesTelemetryAndSettingDiscreteValuesAndDecodesStateBucket(t *testing.T) {
+	query := telemetryhistorymodel.DeviceHistoryAggregateQuery{
+		TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
+		Keys:        []string{"chiller.run_state"},
+		Granularity: telemetryhistorymodel.AggregateGranularityMinute,
+		Timezone:    "Asia/Shanghai", QualityPolicy: telemetryhistorymodel.AggregateQualityUsable,
+		From: time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 10, 11, 0, 5, 0, 0, time.UTC),
+	}
+	client := &Client{database: "telemetry_history", table: "observations"}
+	sql := client.stateAggregateQuery(query, query.To)
+	if !strings.Contains(sql, "point_type IN ('TELEMETRY', 'SETTING') AND value_type IN ('STRING', 'BOOLEAN', 'JSON')") {
+		t.Fatalf("state SQL must include non-numeric TELEMETRY/SETTING points without duplicating numeric gauges:\n%s", sql)
+	}
+	if !strings.Contains(sql, "assumeNotNull(point_type) AS point_type") {
+		t.Fatalf("state SQL must preserve original point_type:\n%s", sql)
+	}
+
+	valueType := "STRING"
+	lastValue := `"STOPPED"`
+	decoded, err := decodeAggregateRow(aggregateRow{
+		TelemetryKey:   "chiller.run_state",
+		PointID:        "018f2e00-4000-7000-8000-000000000002",
+		PointRevision:  1,
+		PointType:      "TELEMETRY",
+		PeriodStart:    "2026-10-11T00:00:00.000Z",
+		PeriodEnd:      "2026-10-11T00:05:00.000Z",
+		Good:           5,
+		TotalCount:     5,
+		IncludedCount:  5,
+		StateValueType: &valueType,
+		StateLastValue: &lastValue,
+		StateSamples:   5,
+		StateChanges:   1,
+		StateValues:    []string{`"RUNNING"`, `"RUNNING"`, `"RUNNING"`, `"RUNNING"`, `"STOPPED"`},
+	})
+	if err != nil || decoded.PointType != telemetryhistorymodel.PointTypeTelemetry || decoded.State == nil || string(decoded.State.LastValue) != `"STOPPED"` {
+		t.Fatalf("decoded TELEMETRY state bucket=%#v err=%v", decoded, err)
+	}
+	if len(decoded.State.StateCounts) != 2 || string(decoded.State.StateCounts[0].Value) != `"RUNNING"` || decoded.State.StateCounts[0].Count != 4 || string(decoded.State.StateCounts[1].Value) != `"STOPPED"` || decoded.State.StateCounts[1].Count != 1 {
+		t.Fatalf("expected dominant RUNNING (4) and STOPPED (1) in StateCounts, got %#v", decoded.State.StateCounts)
+	}
+}

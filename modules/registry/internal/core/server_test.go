@@ -121,6 +121,26 @@ func (store *fakeRegistryStore) ListImportTariffs(_ context.Context, claims regi
 	return ImportTariffs{}, store.err
 }
 
+func (store *fakeRegistryStore) GetOperatingSchedule(_ context.Context, claims registryauth.GrantClaims, id string) (OperatingSchedule, error) {
+	store.lastClaims, store.lastID = claims, id
+	return OperatingSchedule{}, store.err
+}
+
+func (store *fakeRegistryStore) ListOperatingExceptions(_ context.Context, claims registryauth.GrantClaims, id string, _ OperatingExceptionFilter) (OperatingExceptionList, error) {
+	store.lastClaims, store.lastID = claims, id
+	return OperatingExceptionList{}, store.err
+}
+
+func (store *fakeRegistryStore) ListMonthlyElectricityBudgets(_ context.Context, claims registryauth.GrantClaims, id string, _ MonthlyElectricityBudgetFilter) (MonthlyElectricityBudgetList, error) {
+	store.lastClaims, store.lastID = claims, id
+	return MonthlyElectricityBudgetList{}, store.err
+}
+
+func (store *fakeRegistryStore) ListUtilityBills(_ context.Context, claims registryauth.GrantClaims, id string, _ UtilityBillFilter) (UtilityBillList, error) {
+	store.lastClaims, store.lastID = claims, id
+	return UtilityBillList{}, store.err
+}
+
 func TestServerReadsTheSitesTariffInEffect(t *testing.T) {
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	store := &fakeRegistryStore{tariff: SiteTariff{

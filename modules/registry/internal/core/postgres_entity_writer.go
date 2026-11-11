@@ -113,7 +113,7 @@ func (store *PostgresStore) SaveAsset(ctx context.Context, claims registryauth.G
 			row := tx.QueryRow(ctx, `
 INSERT INTO core_registry.assets (id, tenant_id, site_id, code, display_name, asset_type, status, revision, created_at, updated_at)
 VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, 1, $8, $8)
-RETURNING id::text, tenant_id::text, site_id::text, code, display_name, asset_type, status, revision, created_at, updated_at
+RETURNING `+assetColumns+`
 `, id, claims.TenantID, input.SiteID, input.Code, input.DisplayName, input.AssetType, input.Status, now)
 			created, err := scanAsset(row)
 			if err != nil {
@@ -125,7 +125,7 @@ RETURNING id::text, tenant_id::text, site_id::text, code, display_name, asset_ty
 UPDATE core_registry.assets
 SET code = $5, display_name = $6, asset_type = $7, status = $8, revision = revision + 1, updated_at = $9
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid AND revision = $4
-RETURNING id::text, tenant_id::text, site_id::text, code, display_name, asset_type, status, revision, created_at, updated_at
+RETURNING `+assetColumns+`
 `, claims.TenantID, input.SiteID, input.ID, input.Meta.ExpectedRevision, input.Code, input.DisplayName, input.AssetType, input.Status, now)
 		updated, err := scanAsset(row)
 		if errors.Is(err, pgx.ErrNoRows) {

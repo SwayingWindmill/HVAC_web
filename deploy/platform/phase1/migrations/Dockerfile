@@ -84,7 +84,9 @@ COPY infra/registry/postgres/init/030-drop-api-credentials.sql /opt/hvac/repo/in
 COPY infra/registry/postgres/init/031-drop-outbound-delivery.sql /opt/hvac/repo/infra/registry/postgres/init/031-drop-outbound-delivery.sql
 COPY infra/registry/postgres/init/032-drop-generic-rules.sql /opt/hvac/repo/infra/registry/postgres/init/032-drop-generic-rules.sql
 COPY infra/registry/postgres/init/033-fdd-operating-gates.sql /opt/hvac/repo/infra/registry/postgres/init/033-fdd-operating-gates.sql
-COPY infra/registry/postgres/init/034-asset-nameplate.sql /opt/hvac/repo/infra/registry/postgres/init/034-asset-nameplate.sql
+COPY infra/registry/postgres/init/034-operating-schedules.sql /opt/hvac/repo/infra/registry/postgres/init/034-operating-schedules.sql
+COPY infra/registry/postgres/init/035-electricity-budgets-and-utility-bills.sql /opt/hvac/repo/infra/registry/postgres/init/035-electricity-budgets-and-utility-bills.sql
+COPY infra/registry/postgres/init/036-asset-nameplate.sql /opt/hvac/repo/infra/registry/postgres/init/036-asset-nameplate.sql
 
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql

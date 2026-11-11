@@ -10,6 +10,17 @@ const songyaxuan = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.s
 const songyaxuanAlarmRules = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.alarm-rules.json', import.meta.url), 'utf8'));
 const copy = <T>(value: T): T => structuredClone(value);
 
+// 松雅轩 has no room probe yet, so its manifest registers no Optimization. The Optimization checks run on a
+// copy with an active room reading and the section the manifest had before the probe was found missing.
+const optimized = (() => {
+  const profile = copy(songyaxuan);
+  const room = profile.devices.find((device: any) => device.sourceKey === 'room').points[0];
+  delete room.status;
+  room.from = ['temperature', 't12'];
+  profile.intelligence.optimization = {"cron": "20 * * * *", "enabled": true, "model": "hvac-recommendation-v1", "policy": {"code": "chilled_water_supply_cost", "objective": "COST", "dispatchMode": "SHADOW", "horizon": "DAY_AHEAD", "horizonMinutes": 1440, "granularity": "15MIN", "constraints": {"safety": {"supplyTempMinC": 5, "supplyTempMaxC": 8, "maxSupplyTempStepC": 1}, "comfort": {"zoneTempMinC": 22, "zoneTempMaxC": 26}, "manualLocks": {"resources": []}, "inputMapping": {"supplyTemperatureKey": "supply_water_temperature", "zoneTemperatureKey": "room_temperature"}, "responseModel": {"dailyEnergyDeltaKWhPerSupplyTempC": -60, "zoneTempDeltaCPerSupplyTempC": 0.3, "energyUncertaintyP90KWh": 20, "zoneTempUncertaintyP90C": 0.2}, "maintenanceConstraints": {"outOfService": []}}, "responseModelSource": "人工设定", "note": "优化策略是租户共用的（同一租户只有一份生效策略）。本站和模拟冷站的室内温度读数都是 room_temperature；接入不改租户共用的策略，validate 把不一致列为「需要人决定」，策略一致之前不登记本站的模型部署和定时优化。"}};
+  return profile;
+})();
+
 function bindingSection(sql) {
   const start = sql.indexOf('INSERT INTO core_registry.point_subject_bindings');
   assert.notEqual(start, -1, 'point_subject_bindings insert is missing');
@@ -96,8 +107,8 @@ test('a policy that changes gets a new policy_revision; the inserted revision st
 
 test('songyaxuan outdoor temperature carries its quality profile into the freshness policy', () => {
   const { telemetry } = buildOnboardingSql(songyaxuan);
-  const row = telemetry.split('\n').find((line) => line.includes("'t13'"));
-  if (!row) throw new Error('t13 freshness row missing');
+  const row = telemetry.split('\n').find((line) => line.includes("'t15'"));
+  if (!row) throw new Error('t15 freshness row missing');
   assert.match(row, /, -10, 45, '/);
   assert.match(row, /38\.4/);
   assert.match(row, /"flatlineSeconds":10800/);
@@ -118,6 +129,8 @@ test('songyaxuan cooling load carries probe accuracy and the header offset pair 
   assert.match(cooling, /"lowConfidenceRelative":0\.1/);
   assert.match(telemetry, /probe_pairs/);
   assert.match(telemetry, /'header-chw'/);
+  assert.match(telemetry, /'chiller-a-chw'/);
+  assert.match(telemetry, /'chiller-b-chw'/);
   assert.match(telemetry, /'chiller-c-chw'/);
   assert.match(telemetry, /'chiller-d-chw'/);
   assert.equal(checkSiteFile(songyaxuan, songyaxuanAlarmRules).length, 0);
@@ -162,11 +175,14 @@ test('songyaxuan nameplates are the photographed plates and the pump motors stay
     assert.match(line ?? '', /NULL, NULL, '凯泉', NULL/);
     assert.match(line ?? '', /"role":"UNKNOWN"/);
   }
-  const wet = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000001', 't15'"));
-  assert.match(wet ?? '', /WET_BULB_DRY_BULB/);
-  assert.match(wet ?? '', /WET_BULB_CONDENSER/);
-  const copied = telemetry.split('\n').find((row) => row.includes("'ambient_wet_bulb_temperature'"));
-  assert.match(copied ?? '', /WET_BULB_DRY_BULB/);
+  const chillerALeaving = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000001', 't1'"));
+  assert.match(chillerALeaving ?? '', /CHW_DIRECTION/);
+  const copied = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000003', 'chw_leaving_temperature'"));
+  assert.match(copied ?? '', /CHW_DIRECTION/);
+  const chillerACondenser = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000001', 't6'"));
+  assert.match(chillerACondenser ?? '', /CW_DIRECTION/);
+  const inactiveWetBulb = telemetry.split('\n').find((row) => row.includes("'ambient_wet_bulb_temperature'"));
+  assert.doesNotMatch(inactiveWetBulb ?? '', /WET_BULB/);
   const cooling = telemetry.split('\n').find((row) => row.includes("'instant_cooling_capacity'"));
   assert.match(cooling ?? '', /COP_CARNOT/);
   assert.doesNotMatch(cooling ?? '', /HEAT_BALANCE/);
@@ -198,11 +214,13 @@ function completeState(profile: any) {
     payload: { assetId: profile.assets.find((asset: any) => asset.code === lowDeltaT.asset).id, deviceId: profile.devices.find((device: any) => device.code === lowDeltaT.device).id },
   };
   const { optimization } = profile.intelligence;
-  state.schedules[`supply-temperature-optimization-${profile.site.code}`] = { cron: optimization.cron, enabled: optimization.enabled, payload: {} };
-  const { policy } = optimization;
-  state.policy = { constraints: copy(policy.constraints), objective: policy.objective, dispatchMode: policy.dispatchMode, horizon: policy.horizon, horizonMinutes: policy.horizonMinutes, granularity: policy.granularity };
-  state.modelRevision = '01910000-0000-7000-8000-80000000000a';
-  state.optimizationBinding = { status: 'ACTIVE', enabled: true };
+  if (optimization) {
+    state.schedules[`supply-temperature-optimization-${profile.site.code}`] = { cron: optimization.cron, enabled: optimization.enabled, payload: {} };
+    const { policy } = optimization;
+    state.policy = { constraints: copy(policy.constraints), objective: policy.objective, dispatchMode: policy.dispatchMode, horizon: policy.horizon, horizonMinutes: policy.horizonMinutes, granularity: policy.granularity };
+    state.modelRevision = '01910000-0000-7000-8000-80000000000a';
+    state.optimizationBinding = { status: 'ACTIVE', enabled: true };
+  }
   state.lowDeltaTRule = { revision: 1, minimumDeltaTC: 3.5, windowMinutes: 15 };
   return state;
 }
@@ -211,10 +229,11 @@ const byStatus = (items: any[], status: string) => items.filter((item) => item.s
 
 test('the songyaxuan manifest and its alarm rules pass the file check', () => {
   assert.deepEqual(checkSiteFile(songyaxuan, songyaxuanAlarmRules), []);
+  assert.deepEqual(checkSiteFile(optimized, songyaxuanAlarmRules), []);
 });
 
 test('the file check names alarm inputs, keys and fields that do not match the site', () => {
-  const profile = copy(songyaxuan);
+  const profile = copy(optimized);
   profile.intelligence.optimization.policy.constraints.inputMapping.zoneTemperatureKey = 'temperature';
   delete profile.intelligence.optimization.policy.responseModelSource;
   profile.intelligence.diagnosis.lowDeltaT.asset = 'no-such-asset';
@@ -233,7 +252,8 @@ test('validate on a complete site lists only what a person still decides', () =>
   const items = planOnboarding(songyaxuan, completeState(songyaxuan));
   assert.deepEqual(byStatus(items, 'missing'), []);
   assert.deepEqual(byStatus(items, 'differs'), []);
-  assert.deepEqual(byStatus(items, 'decide'), ['告警规则文件 songyaxuan.alarm-rules.json', '低温差诊断未启用', '响应系数是人工设定']);
+  assert.deepEqual(byStatus(items, 'decide'), ['告警规则文件 songyaxuan.alarm-rules.json', '低温差诊断未启用']);
+  assert.deepEqual(byStatus(planOnboarding(optimized, completeState(optimized)), 'decide'), ['告警规则文件 songyaxuan.alarm-rules.json', '低温差诊断未启用', '响应系数是人工设定']);
 });
 
 test('the disabled low ΔT hint names the revision in force, not a number in the note', () => {
@@ -246,19 +266,13 @@ test('the disabled low ΔT hint names the revision in force, not a number in the
   assert.match(hint(planOnboarding(songyaxuan, state)), /（租户还没有规则版本，apply 建第 1 版：1\.5 K、15 分钟）$/);
 });
 
-test('the manifest matches the Tenant policy now in force: supply 5–8 ℃, zone reading room_temperature', () => {
-  const { constraints } = songyaxuan.intelligence.optimization.policy;
-  assert.deepEqual(constraints.safety, { supplyTempMinC: 5, supplyTempMaxC: 8, maxSupplyTempStepC: 1 });
-  assert.equal(constraints.inputMapping.zoneTemperatureKey, 'room_temperature');
-});
-
 test('a Tenant policy that disagrees blocks the Optimization deployment and is left for a person', () => {
-  const state = completeState(songyaxuan);
+  const state = completeState(optimized);
   state.policy.constraints.inputMapping.zoneTemperatureKey = 'temperature';
   state.optimizationBinding = null;
   delete state.schedules['supply-temperature-optimization-songyaxuan'];
-  delete state.assets[songyaxuan.assets.at(-1).id];
-  const items = planOnboarding(songyaxuan, state);
+  delete state.assets[optimized.assets.at(-1).id];
+  const items = planOnboarding(optimized, state);
   assert.deepEqual(byStatus(items, 'missing'), ['资产 17 台']);
   const decide = items.filter((item) => item.status === 'decide');
   assert.match(decide.find((item) => item.item === '优化策略和清单不一致').detail, /zoneTemperatureKey: 清单 "room_temperature"，现在 "temperature"/);
@@ -268,17 +282,17 @@ test('a Tenant policy that disagrees blocks the Optimization deployment and is l
 });
 
 test('a Tenant without a policy or rule gets them from the manifest', () => {
-  const state = completeState(songyaxuan);
+  const state = completeState(optimized);
   state.policy = null;
   state.lowDeltaTRule = null;
   state.optimizationBinding = null;
   delete state.schedules['supply-temperature-optimization-songyaxuan'];
-  const missing = byStatus(planOnboarding(songyaxuan, state), 'missing');
+  const missing = byStatus(planOnboarding(optimized, state), 'missing');
   assert.deepEqual(missing, ['低温差诊断规则版本', '优化策略', '本站的模型部署', '调度定义 supply-temperature-optimization-songyaxuan']);
 });
 
 test('apply never rewrites what the Tenant shares and registers Optimization only under an agreeing policy', () => {
-  const { intelligence } = buildOnboardingSql(songyaxuan);
+  const { intelligence } = buildOnboardingSql(optimized);
   assert.ok(!/UPDATE\s+core_registry\.(optimization_polic|fdd_rule_revisions)|ON CONFLICT[^;]*DO UPDATE SET[^;]*constraints/.test(intelligence), 'shared policy and rule are never updated');
   assert.match(intelligence, /INSERT INTO core_registry\.fdd_rule_revisions[\s\S]*?WHERE NOT EXISTS \(SELECT 1 FROM core_registry\.fdd_rule_revisions WHERE tenant_id = '[^']+' AND rule_code = 'CHILLED_WATER_LOW_DELTA_T'\);/);
   assert.match(intelligence, /INSERT INTO core_registry\.optimization_policies[\s\S]*?WHERE NOT EXISTS \(SELECT 1 FROM core_registry\.optimization_policies WHERE tenant_id = '[^']+' AND resource_type = 'HVAC' AND status = 'ACTIVE'\);/);

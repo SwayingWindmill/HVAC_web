@@ -25,19 +25,21 @@ import { useRealtimePlant } from '../use-realtime-plant';
 import { usePlantHistory } from '../use-plant-history';
 import { copSeries, COOLING_KEY, hourAgo, POWER_KEY } from '../plant-trend';
 import { formatClock, LiveIndicator, LowConfidenceBadge, ReadingMetric, ReadingValue } from '../device-presentation';
+import { buildTimeSlots, fillGaugeSlots, fillScalarSlots } from '../../trends/timeline';
 
 const pageRoute = getRouteApi('/_app/_site/operations/realtime');
 
 type Metric = 'power' | 'cooling' | 'cop';
 type Window = '6h' | '24h';
 
-function MetricTab({ label, selected, onSelect, value, unit, values, caption, info }: {
+function MetricTab({ label, selected, onSelect, value, unit, values, hasTrend, caption, info }: {
   readonly label: string;
   readonly selected: boolean;
   readonly onSelect: () => void;
   readonly value: React.ReactNode;
   readonly unit?: string;
-  readonly values: readonly number[];
+  readonly values: readonly (number | null)[];
+  readonly hasTrend: boolean;
   readonly caption: string;
   readonly info?: string;
 }) {
@@ -61,7 +63,7 @@ function MetricTab({ label, selected, onSelect, value, unit, values, caption, in
           {value}
           {unit ? <span className="ml-1 text-xs font-medium text-subtle-foreground">{unit}</span> : null}
         </span>
-        {values.length > 1 ? (
+        {hasTrend ? (
           <Sparkline data={values} variant="line" animate={false} color={selected ? 'var(--chart-1)' : 'var(--muted-foreground)'} className="ml-auto h-[26px] w-[84px]" />
         ) : null}
       </span>
@@ -88,8 +90,21 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
       cop: copSeries(power, cooling),
     };
   }, [history.series]);
+  const slots = useMemo(
+    () => buildTimeSlots({ fromMs: history.fromMs, toMs: history.toMs, granularity: 'QUARTER_HOUR', timeZone }),
+    [history.fromMs, history.toMs, timeZone],
+  );
+  const filled = useMemo(
+    () => ({
+      power: fillScalarSlots(slots, series.power),
+      cooling: fillScalarSlots(slots, series.cooling),
+      cop: fillScalarSlots(slots, series.cop),
+    }),
+    [slots, series],
+  );
   const clock = new Intl.DateTimeFormat('zh-CN', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false });
   const selected = series[metric];
+  const selectedSlots = filled[metric];
   const powerAgo = hourAgo(series.power);
   const coolingAgo = hourAgo(series.cooling);
   const copPeak = series.cop.length > 0 ? Math.max(...series.cop.map((point) => point.value)) : null;
@@ -104,7 +119,8 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
           selected={metric === 'power'}
           onSelect={() => onMetric('power')}
           value={<ReadingMetric reading={plant.totalPower} digits={1} unit="kW" />}
-          values={series.power.map((point) => point.value)}
+          values={filled.power.map((point) => point.value)}
+          hasTrend={series.power.length > 1}
           caption={powerAgo === null ? '空调总电表' : `1 小时前 ${formatDecimal(powerAgo, 1)} kW`}
         />
         <MetricTab
@@ -112,7 +128,8 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
           selected={metric === 'cooling'}
           onSelect={() => onMetric('cooling')}
           value={<ReadingMetric reading={plant.coolingCapacity} digits={0} unit="kW" />}
-          values={series.cooling.map((point) => point.value)}
+          values={filled.cooling.map((point) => point.value)}
+          hasTrend={series.cooling.length > 1}
           caption={[coolingAgo === null ? '冷量表' : `1 小时前 ${formatDecimal(coolingAgo, 0)} kW`, coolingUncertaintyText(plant.coolingCapacity)].filter(Boolean).join(' · ')}
         />
         <MetricTab
@@ -120,7 +137,8 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
           selected={metric === 'cop'}
           onSelect={() => onMetric('cop')}
           value={plant.plantCop === null ? <span className="text-muted-foreground">—</span> : <>{formatDecimal(plant.plantCop, 2)}{plant.plantCopLowConfidence ? <LowConfidenceBadge /> : null}</>}
-          values={series.cop.map((point) => point.value)}
+          values={filled.cop.map((point) => point.value)}
+          hasTrend={series.cop.length > 1}
           caption={[copPeak === null ? '制冷量 ÷ 总功率' : `近 ${window === '24h' ? 24 : 6} 小时最高 ${formatDecimal(copPeak, 2)}`, copUncertaintyText(plant)].filter(Boolean).join(' · ')}
           info="冷站瞬时制冷量 ÷ 冷站总功率。温差相对探头误差过小时照常计算，标「低可信」并给出区间，这段不计入能效均值、故障诊断和节能验证。任一读数过期或不可信时不计算。"
         />
@@ -149,8 +167,14 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
           <p className="flex h-[230px] items-center justify-center text-sm text-muted-foreground">这段时间没有记录</p>
         ) : (
           <ComposedChart
-            data={selected.map((point) => ({ time: clock.format(new Date(point.periodStart)), value: Number(point.value.toFixed(metric === 'cop' ? 2 : 1)) }))}
-            xKey="time"
+            data={selectedSlots.map((slot) => ({
+              at: slot.startMs,
+              value: slot.value === null ? null : Number(slot.value.toFixed(metric === 'cop' ? 2 : 1)),
+            }))}
+            xKey="at"
+            xType="number"
+            xDomain={[history.fromMs, history.toMs]}
+            xFormatter={(value) => clock.format(new Date(Number(value)))}
             series={[{ key: 'value', label: titles[metric], type: 'area', color: 'var(--chart-1)' }]}
             showGrid
             showYAxis
@@ -275,6 +299,10 @@ const LOOPS: readonly {
 /** The two water loops and the air they serve, each led by the reading an operator checks first. */
 function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly timeZone: string }) {
   const history = usePlantHistory(plant, LOOPS.map((loop) => loop.main[1]), 6);
+  const slots = useMemo(
+    () => buildTimeSlots({ fromMs: history.fromMs, toMs: history.toMs, granularity: 'QUARTER_HOUR', timeZone }),
+    [history.fromMs, history.toMs, timeZone],
+  );
   const rows = LOOPS.map((loop) => ({ loop, reading: plantReading(plant, loop.main[1]) })).filter((row) => row.reading !== null);
   if (rows.length === 0) return null;
   return (
@@ -288,7 +316,8 @@ function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly t
         </div>
         {rows.map(({ loop, reading }) => {
           const stale = reading ? !reading.current : false;
-          const values = (history.series.get(loop.main[1]) ?? []).map((point) => point.average);
+          const recorded = history.series.get(loop.main[1]) ?? [];
+          const values = fillGaugeSlots(slots, recorded).map((slot) => slot.average);
           return (
             <div role="row" key={loop.name} className="contents text-sm">
               <span role="cell" className="flex h-[42px] items-center gap-2 border-b border-divider px-4 font-semibold">
@@ -305,7 +334,7 @@ function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly t
                 ))}
               </span>
               <span role="cell" className="flex h-[42px] items-center border-b border-divider px-4">
-                {values.length > 1 ? <Sparkline data={values} variant="line" animate={false} color={stale ? 'var(--muted-foreground)' : 'var(--chart-1)'} className="h-6 w-full" /> : <span className="text-xs text-subtle-foreground">—</span>}
+                {recorded.length > 1 ? <Sparkline data={values} variant="line" animate={false} color={stale ? 'var(--muted-foreground)' : 'var(--chart-1)'} className="h-6 w-full" /> : <span className="text-xs text-subtle-foreground">—</span>}
               </span>
               <span role="cell" className={cn('flex h-[42px] items-center justify-end gap-1.5 border-b border-divider px-4 font-mono text-xs', stale ? 'text-warning-text' : 'text-secondary-foreground')}>
                 {stale ? <span className="rounded-md bg-warning-soft px-1.5 font-sans text-[11px] leading-[18px] font-medium">读数过期</span> : null}

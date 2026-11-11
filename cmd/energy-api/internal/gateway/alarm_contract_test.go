@@ -74,6 +74,8 @@ func TestAlarmAnswersConformToThePublicContract(t *testing.T) {
 		code        string
 	}{
 		{name: "list", method: http.MethodGet, path: "/api/v1/alarms?siteId=" + fixture.siteID + "&limit=10", template: "/api/v1/alarms", status: http.StatusOK},
+		{name: "list with overlap window", method: http.MethodGet, path: "/api/v1/alarms?siteId=" + fixture.siteID + "&activeFrom=2026-07-31T00:00:00Z&activeTo=2026-08-01T00:00:00Z&limit=10", template: "/api/v1/alarms", status: http.StatusOK},
+		{name: "invalid overlap window", method: http.MethodGet, path: "/api/v1/alarms?siteId=" + fixture.siteID + "&activeFrom=2026-08-02T00:00:00Z&activeTo=2026-08-01T00:00:00Z", template: "/api/v1/alarms", status: http.StatusBadRequest, code: "INVALID_ARGUMENT"},
 		{name: "detail", method: http.MethodGet, path: detail, template: "/api/v1/alarms/{alarmId}", status: http.StatusOK},
 		{name: "acknowledge", method: http.MethodPost, path: detail + "/ack", template: "/api/v1/alarms/{alarmId}/ack", idempotency: "contract-ack-0001", status: http.StatusOK},
 		{name: "assign", method: http.MethodPost, path: detail + "/assign", template: "/api/v1/alarms/{alarmId}/assign", body: `{"expectedVersion":2,"reason":"Contract check","assigneeId":"technician-1"}`, idempotency: "contract-assign-0001", status: http.StatusOK},

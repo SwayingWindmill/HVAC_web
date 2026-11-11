@@ -12,14 +12,18 @@ import (
 )
 
 const (
-	DeviceHistoryAggregateAction = "telemetry.history.aggregate"
-	MaximumAggregateRange        = 366 * 24 * time.Hour
-	MaximumAggregateBuckets      = 1000
+	DeviceHistoryAggregateAction      = "telemetry.history.aggregate"
+	MaximumAggregateRange             = 366 * 24 * time.Hour
+	MaximumFineAggregateBucketsPerKey = 720
+	MaximumAggregateBucketsPerKey     = 1000
+	MaximumAggregateBuckets           = 5760
 )
 
 type AggregateGranularity string
 
 const (
+	AggregateGranularityMinute      AggregateGranularity = "MINUTE"
+	AggregateGranularityFiveMinute  AggregateGranularity = "FIVE_MINUTE"
 	AggregateGranularityQuarterHour AggregateGranularity = "QUARTER_HOUR"
 	AggregateGranularityHour        AggregateGranularity = "HOUR"
 	AggregateGranularityDay         AggregateGranularity = "DAY"
@@ -29,10 +33,19 @@ const (
 
 func (value AggregateGranularity) Valid() bool {
 	switch value {
-	case AggregateGranularityQuarterHour, AggregateGranularityHour, AggregateGranularityDay, AggregateGranularityWeek, AggregateGranularityMonth:
+	case AggregateGranularityMinute, AggregateGranularityFiveMinute, AggregateGranularityQuarterHour, AggregateGranularityHour, AggregateGranularityDay, AggregateGranularityWeek, AggregateGranularityMonth:
 		return true
 	default:
 		return false
+	}
+}
+
+func (value AggregateGranularity) MaxBucketsPerKey() int {
+	switch value {
+	case AggregateGranularityMinute, AggregateGranularityFiveMinute:
+		return MaximumFineAggregateBucketsPerKey
+	default:
+		return MaximumAggregateBucketsPerKey
 	}
 }
 
@@ -121,10 +134,79 @@ func validateAggregateSelection(deviceID string, keys []string, from, to time.Ti
 	if timezone == "" || timezone == "Local" {
 		return errors.New("history aggregate timezone is invalid")
 	}
-	if _, err := time.LoadLocation(timezone); err != nil {
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
 		return errors.New("history aggregate timezone is invalid")
 	}
+	if exceedsAggregateBucketLimit(from.UTC(), to.UTC(), granularity, len(keys), location) {
+		return errors.New("history aggregate query exceeds bucket limit")
+	}
 	return nil
+}
+
+func exceedsAggregateBucketLimit(from, to time.Time, granularity AggregateGranularity, keyCount int, location *time.Location) bool {
+	limit := granularity.MaxBucketsPerKey()
+	cursor, ok := AlignCalendarCursor(from.In(location), granularity, location)
+	if !ok {
+		return true
+	}
+	toLocal := to.In(location)
+	count := 0
+	for cursor.Before(toLocal) {
+		next := StepCalendarCursor(cursor, granularity)
+		if next.UTC().After(from) && cursor.UTC().Before(to) {
+			count++
+			if count > limit || count*keyCount > MaximumAggregateBuckets {
+				return true
+			}
+		}
+		cursor = next
+	}
+	return false
+}
+
+func AlignCalendarCursor(startLocal time.Time, granularity AggregateGranularity, location *time.Location) (time.Time, bool) {
+	switch granularity {
+	case AggregateGranularityMinute:
+		return time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), startLocal.Minute(), 0, 0, location), true
+	case AggregateGranularityFiveMinute:
+		return time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), startLocal.Minute()-startLocal.Minute()%5, 0, 0, location), true
+	case AggregateGranularityQuarterHour:
+		return time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), startLocal.Minute()-startLocal.Minute()%15, 0, 0, location), true
+	case AggregateGranularityHour:
+		return time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), 0, 0, 0, location), true
+	case AggregateGranularityDay:
+		return time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), 0, 0, 0, 0, location), true
+	case AggregateGranularityWeek:
+		dayStart := time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), 0, 0, 0, 0, location)
+		daysSinceMonday := (int(dayStart.Weekday()) + 6) % 7
+		return dayStart.AddDate(0, 0, -daysSinceMonday), true
+	case AggregateGranularityMonth:
+		return time.Date(startLocal.Year(), startLocal.Month(), 1, 0, 0, 0, 0, location), true
+	default:
+		return time.Time{}, false
+	}
+}
+
+func StepCalendarCursor(value time.Time, granularity AggregateGranularity) time.Time {
+	switch granularity {
+	case AggregateGranularityMinute:
+		return value.Add(time.Minute)
+	case AggregateGranularityFiveMinute:
+		return value.Add(5 * time.Minute)
+	case AggregateGranularityQuarterHour:
+		return value.Add(15 * time.Minute)
+	case AggregateGranularityHour:
+		return value.Add(time.Hour)
+	case AggregateGranularityDay:
+		return value.AddDate(0, 0, 1)
+	case AggregateGranularityWeek:
+		return value.AddDate(0, 0, 7)
+	case AggregateGranularityMonth:
+		return value.AddDate(0, 1, 0)
+	default:
+		return value
+	}
 }
 
 func (query DeviceHistoryAggregateQuery) Canonical() (DeviceHistoryAggregateQuery, error) {
@@ -179,11 +261,26 @@ type CounterAggregate struct {
 	ExcludedTransitionCount int64   `json:"excludedTransitionCount"`
 }
 
+type StateCount struct {
+	Value json.RawMessage `json:"value"`
+	Count int64           `json:"count"`
+}
+
 type StateAggregate struct {
 	ValueType   ValueType       `json:"valueType"`
 	LastValue   json.RawMessage `json:"lastValue"`
 	SampleCount int64           `json:"sampleCount"`
 	ChangeCount int64           `json:"changeCount"`
+	StateCounts []StateCount    `json:"stateCounts,omitempty"`
+}
+
+func (state StateAggregate) validCounts() bool {
+	for _, item := range state.StateCounts {
+		if item.Count < 1 || len(item.Value) == 0 || !json.Valid(item.Value) {
+			return false
+		}
+	}
+	return true
 }
 
 type DeviceHistoryAggregateBucket struct {
@@ -262,16 +359,20 @@ func (response DeviceHistoryAggregateResponse) ValidateFor(query DeviceHistoryAg
 			return errors.New("history aggregate bucket must contain exactly one point-type result")
 		}
 		switch bucket.PointType {
-		case PointTypeTelemetry:
-			if bucket.Gauge == nil {
-				return errors.New("telemetry aggregate requires gauge result")
+		case PointTypeTelemetry, PointTypeSetting:
+			if bucket.Gauge != nil {
+				break
 			}
+			if bucket.State != nil && (bucket.State.ValueType == ValueTypeString || bucket.State.ValueType == ValueTypeBoolean || bucket.State.ValueType == ValueTypeJSON) && validateTypedValue(bucket.State.ValueType, bucket.State.LastValue) == nil && bucket.State.validCounts() {
+				break
+			}
+			return errors.New("telemetry/setting aggregate requires gauge or discrete state result")
 		case PointTypeCounter:
 			if bucket.Counter == nil {
 				return errors.New("counter aggregate requires counter result")
 			}
 		case PointTypeState:
-			if bucket.State == nil || !bucket.State.ValueType.Valid() || validateTypedValue(bucket.State.ValueType, bucket.State.LastValue) != nil {
+			if bucket.State == nil || !bucket.State.ValueType.Valid() || validateTypedValue(bucket.State.ValueType, bucket.State.LastValue) != nil || !bucket.State.validCounts() {
 				return errors.New("state aggregate requires typed state result")
 			}
 		default:

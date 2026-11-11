@@ -64,6 +64,12 @@ const (
 	ActionRegistryRetire      Action = "registry.retire"
 	// ActionSavingsManage registers and lifecycles a Site's energy conservation measures (ADR 0021).
 	ActionSavingsManage Action = "savings.manage"
+	// ActionScheduleRequest submits and cancels own pending Site Operating Exceptions (#780).
+	ActionScheduleRequest Action = "schedule.request"
+	// ActionScheduleManage edits Site Operating Schedules and approves/rejects/cancels Operating Exceptions (#780).
+	ActionScheduleManage Action = "schedule.manage"
+	// ActionBillingManage saves Site monthly electricity budgets and creates/edits/confirms utility bills (#785).
+	ActionBillingManage Action = "billing.manage"
 )
 
 func (action Action) Valid() bool {
@@ -89,7 +95,10 @@ func (action Action) Valid() bool {
 		ActionTemplateManage,
 		ActionRegistryImport,
 		ActionRegistryRetire,
-		ActionSavingsManage:
+		ActionSavingsManage,
+		ActionScheduleRequest,
+		ActionScheduleManage,
+		ActionBillingManage:
 		return true
 	default:
 		return false
@@ -100,7 +109,8 @@ func (action Action) SiteScoped() bool {
 	switch action {
 	case ActionSiteList, ActionSiteRead, ActionAssetList, ActionAssetRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionMeterBindingResolve, ActionAssetModelRead, ActionTariffRead,
 		ActionSpaceWrite, ActionAssetWrite, ActionDeviceWrite, ActionSensorWrite, ActionPointWrite,
-		ActionBindingWrite, ActionRegistryImport, ActionRegistryRetire, ActionSavingsManage:
+		ActionBindingWrite, ActionRegistryImport, ActionRegistryRetire, ActionSavingsManage,
+		ActionScheduleRequest, ActionScheduleManage, ActionBillingManage:
 		return true
 	default:
 		return false
@@ -115,6 +125,9 @@ func ActionAllows(granted, requested Action) bool {
 	if granted == ActionRegistryRead {
 		return requested == ActionSiteList || requested == ActionSiteRead || requested == ActionAssetList || requested == ActionAssetRead ||
 			requested == ActionDeviceList || requested == ActionDeviceRead || requested == ActionDeviceBindingList || requested == ActionAssetModelRead || requested == ActionTariffRead
+	}
+	if granted == ActionScheduleManage && requested == ActionScheduleRequest {
+		return true
 	}
 	return granted == requested
 }
@@ -284,7 +297,7 @@ func ValidateGrant(claims GrantClaims, validation GrantValidation) error {
 	if validation.CurrentPolicyRevision == "" || claims.PolicyRevision != validation.CurrentPolicyRevision {
 		return errors.New("registry grant policy revision is stale")
 	}
-	if !validation.Action.Valid() || validation.Action == ActionRegistryRead || len(claims.Actions) != 1 || claims.Actions[0] != validation.Action {
+	if !validation.Action.Valid() || validation.Action == ActionRegistryRead || len(claims.Actions) != 1 || claims.Actions[0] == ActionRegistryRead || !ActionAllows(claims.Actions[0], validation.Action) {
 		return errors.New("registry grant action is invalid")
 	}
 	if !IsAllowReason(claims.DecisionReason) {

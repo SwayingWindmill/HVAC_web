@@ -49,6 +49,7 @@ export const gateCommandMatrix = Object.freeze({
         'scripts/run-go.mjs',
         'test',
         './libs/telemetryauth/...',
+        './libs/telemetryhistorymodel/...',
         './libs/measurement/...',
         './libs/nameplate/...',
         './modules/telemetry/...',

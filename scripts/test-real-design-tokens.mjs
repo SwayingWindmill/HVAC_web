@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { contrastGrade, contrastRatio, surfaceOf, tinted, TOKEN_GROUPS } from '../apps/hvac-web/src/features/system/design-system/design-tokens.ts';
+import { validateDesignSystem } from './check-design-system.mjs';
 
 test('contrast follows WCAG: black on white is 21:1, a colour on itself 1:1', () => {
   assert.equal(contrastRatio('#000000', '#ffffff'), 21);
@@ -35,5 +39,32 @@ test('every light-theme pairing the design system lists meets its level', () => 
       const ratio = contrastRatio(value(token.name), surfaceOf(token, value(token.name), value(token.against)));
       assert.notEqual(contrastGrade(ratio, token.use), '不足', `${token.name} on ${token.against} is ${ratio.toFixed(2)}:1`);
     }
+  }
+});
+
+test('design system check passes on the repository and rejects unguarded Enter submit or missing color-scheme', async () => {
+  const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+  assert.deepEqual((await validateDesignSystem(repoRoot)).errors, []);
+
+  const sandbox = mkdtempSync(join(tmpdir(), 'hvac-ds-check-'));
+  try {
+    for (const rel of ['apps/hvac-web/components.json', 'apps/hvac-web/src/styles/shadcn-tailwind.css', 'scripts/shadcn-cli.mjs']) {
+      cpSync(join(repoRoot, rel), join(sandbox, rel));
+    }
+    writeFileSync(join(sandbox, 'apps/hvac-web/index.html'), '<!doctype html><html lang="zh-CN"><head></head><body></body></html>\n');
+    writeFileSync(join(sandbox, 'apps/hvac-web/src/global.css'), '@import "./styles/shadcn-tailwind.css";\n:root { --background: #fff; }\n.dark { --background: #000; }\n');
+    mkdirSync(join(sandbox, 'apps/hvac-web/src/features/demo'), { recursive: true });
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/BadInput.tsx'),
+      `export const BadInput = ({ submit }: { submit: () => void }) => (\n  <Input onKeyDown={(event) => { if (event.key === 'Enter') submit(); }} />\n);\n`,
+    );
+    const { errors } = await validateDesignSystem(sandbox);
+    assert.ok(errors.some((entry) => entry.includes('BadInput.tsx:2 text input Enter onKeyDown must guard IME composition')));
+    assert.ok(errors.some((entry) => entry.includes('apps/hvac-web/index.html must declare <meta name="color-scheme"')));
+    assert.ok(errors.some((entry) => entry.includes(':root must declare color-scheme: light dark;')));
+    assert.ok(errors.some((entry) => entry.includes(':root[data-theme="light"] must declare color-scheme: light;')));
+    assert.ok(errors.some((entry) => entry.includes('.dark must declare color-scheme: dark;')));
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
   }
 });

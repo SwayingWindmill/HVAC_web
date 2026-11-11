@@ -54,7 +54,8 @@
     "maxHistoryPageSize": 500,
     "maxHistoryRangeHours": 24,
     "maxHistoryAggregateRangeDays": 366,
-    "maxHistoryAggregateBuckets": 1000
+    "maxHistoryFineAggregateBucketsPerKey": 720,
+    "maxHistoryAggregateBuckets": 5760
   },
   "x-legacy-retirement": {
     "retire": [
@@ -713,7 +714,7 @@
           "metadata": { "$ref": "#/components/schemas/DeviceHistoryMetadata" }
         }
       },
-      "DeviceHistoryAggregateGranularity": { "type": "string", "enum": ["QUARTER_HOUR", "HOUR", "DAY", "WEEK", "MONTH"] },
+      "DeviceHistoryAggregateGranularity": { "type": "string", "enum": ["MINUTE", "FIVE_MINUTE", "QUARTER_HOUR", "HOUR", "DAY", "WEEK", "MONTH"] },
       "DeviceHistoryAggregateQualityPolicy": { "type": "string", "enum": ["VALID_ONLY", "USABLE"] },
       "DeviceHistoryAggregateRequest": {
         "type": "object",
@@ -761,6 +762,14 @@
           "excludedTransitionCount": { "type": "integer", "format": "int64", "minimum": 0 }
         }
       },
+      "DeviceHistoryStateCount": {
+        "type": "object", "additionalProperties": false,
+        "required": ["value", "count"],
+        "properties": {
+          "value": { "$ref": "#/components/schemas/TelemetryValue" },
+          "count": { "type": "integer", "format": "int64", "minimum": 1 }
+        }
+      },
       "DeviceHistoryStateAggregate": {
         "type": "object", "additionalProperties": false,
         "required": ["valueType", "lastValue", "sampleCount", "changeCount"],
@@ -768,7 +777,8 @@
           "valueType": { "$ref": "#/components/schemas/DeviceHistoryValueType" },
           "lastValue": { "$ref": "#/components/schemas/TelemetryValue" },
           "sampleCount": { "type": "integer", "format": "int64", "minimum": 1 },
-          "changeCount": { "type": "integer", "format": "int64", "minimum": 0 }
+          "changeCount": { "type": "integer", "format": "int64", "minimum": 0 },
+          "stateCounts": { "type": "array", "items": { "$ref": "#/components/schemas/DeviceHistoryStateCount" } }
         }
       },
       "DeviceHistoryAggregateBucket": {
@@ -778,7 +788,7 @@
           "telemetryKey": { "$ref": "#/components/schemas/TelemetryKey" },
           "pointId": { "$ref": "#/components/schemas/UUIDv7" },
           "pointRevision": { "type": "integer", "format": "int64", "minimum": 1 },
-          "pointType": { "type": "string", "enum": ["TELEMETRY", "COUNTER", "STATE"] },
+          "pointType": { "type": "string", "enum": ["TELEMETRY", "COUNTER", "STATE", "SETTING"] },
           "unit": { "type": ["string", "null"], "maxLength": 64 },
           "periodStart": { "$ref": "#/components/schemas/HistoryInstant" },
           "periodEnd": { "$ref": "#/components/schemas/HistoryInstant" },
@@ -799,7 +809,7 @@
           "timezone": { "type": "string", "minLength": 1, "maxLength": 128 },
           "qualityPolicy": { "$ref": "#/components/schemas/DeviceHistoryAggregateQualityPolicy" },
           "projectionWatermark": { "oneOf": [{ "$ref": "#/components/schemas/HistoryInstant" }, { "type": "null" }] },
-          "returnedBuckets": { "type": "integer", "minimum": 0, "maximum": 1000 }
+          "returnedBuckets": { "type": "integer", "minimum": 0, "maximum": 5760 }
         }
       },
       "DeviceHistoryAggregateResponse": {
@@ -810,7 +820,7 @@
           "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
           "siteId": { "$ref": "#/components/schemas/UUIDv7" },
           "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
-          "buckets": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/components/schemas/DeviceHistoryAggregateBucket" } },
+          "buckets": { "type": "array", "maxItems": 5760, "items": { "$ref": "#/components/schemas/DeviceHistoryAggregateBucket" } },
           "metadata": { "$ref": "#/components/schemas/DeviceHistoryAggregateMetadata" }
         }
       },

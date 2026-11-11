@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { statusDotClass } from '@/components/common/StatusBadge';
@@ -8,7 +9,8 @@ import { cn } from '@/lib/utils';
 import { pointIsTrusted } from '@/features/assets/operational-projection';
 import { CATEGORY_ICONS, deviceStatus, formatClock, KEY_READINGS, POWER_KEY, ReadingValue } from '../../realtime/device-presentation';
 import { PLANT_CATEGORY_LABELS, tileReadings, type PlantDevice } from '../../realtime/plant-model';
-import { deviceDayHistoryQuery } from '../device-history';
+import { dayHistoryWindow, deviceDayHistoryQuery } from '../device-history';
+import { buildTimeSlots, fillGaugeSlots } from '../../trends/timeline';
 
 const siteRoute = getRouteApi('/_app/_site');
 
@@ -30,12 +32,14 @@ export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
     KEY_READINGS[device.category],
   );
   const pointCode = lead ? device.row.telemetryPoints.find((point) => point.sourceKey === lead.sourceKey)?.pointCode : undefined;
+  const window = useMemo(() => dayHistoryWindow(), [device.deviceId]);
   const history = useQuery({
-    ...deviceDayHistoryQuery({ siteId: site.id, deviceId: device.deviceId, keys: pointCode ? [pointCode] : [], timezone: site.timezone, csrfToken: principal.session.csrfToken }),
+    ...deviceDayHistoryQuery({ siteId: site.id, deviceId: device.deviceId, keys: pointCode ? [pointCode] : [], timezone: site.timezone, csrfToken: principal.session.csrfToken, window }),
     enabled: Boolean(pointCode) && principal.authorization.capabilities.includes('telemetry.history.read'),
   });
   const series = pointCode ? history.data?.get(pointCode) ?? [] : [];
-  const values = series.map((point) => point.average);
+  const slots = buildTimeSlots({ fromMs: window.fromMs, toMs: window.toMs, granularity: 'HOUR', timeZone: site.timezone });
+  const values = fillGaugeSlots(slots, series).map((point) => point.average);
   const unit = lead?.reading.unit ?? formatTelemetryUnit(undefined);
   const points = device.row.operational.points;
   const healthy = points.filter((point) => pointIsTrusted(point)).length;
@@ -78,12 +82,12 @@ export function DeviceTile({ device, openWorkOrders, selected, onOpen }: {
         </span>
       ) : null}
       <span className="flex flex-col gap-0.5 px-4 pt-3 pb-3">
-        {values.length > 1 ? (
+        {series.length > 1 ? (
           <Sparkline data={values} color={stale ? 'var(--muted-foreground)' : 'var(--chart-1)'} animate={false} className="h-9" />
         ) : (
           <span className="flex h-9 items-center text-xs text-subtle-foreground">{history.isPending && pointCode ? '' : '近 24 小时没有记录'}</span>
         )}
-        {values.length > 1 ? (
+        {series.length > 1 ? (
           <span className="flex justify-between text-[11px] text-subtle-foreground">
             <span>24 小时</span>
             <span className="tabular-nums">

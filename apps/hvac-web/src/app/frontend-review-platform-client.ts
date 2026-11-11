@@ -57,6 +57,9 @@ const reviewCapabilities: readonly Capability[] = [
   'audit.read',
   'iam.admin',
   'savings.manage',
+  'schedule.request',
+  'schedule.manage',
+  'billing.manage',
 ];
 
 function reviewResponse<T>(data: T): PlatformResponse<T> {
@@ -99,7 +102,7 @@ function reviewPrincipal(): CurrentPrincipalResponse {
       delegationExpiresAt: expiresAt,
     },
     authorization: {
-      capabilitySetVersion: 13,
+      capabilitySetVersion: 14,
       policyRevision: 'frontend-review-policy',
       capabilities: [...reviewCapabilities],
     },

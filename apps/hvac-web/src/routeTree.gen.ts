@@ -18,6 +18,7 @@ import { Route as AppSiteNotificationsRouteImport } from './routes/_app._site.no
 import { Route as AppSiteOverviewRouteImport } from './routes/_app._site.overview'
 import { Route as AppSiteReportsRouteImport } from './routes/_app._site.reports'
 import { Route as AppSettingsIntegrationsRouteImport } from './routes/_app.settings.integrations'
+import { Route as AppSiteEnergyAnalysisBillingRouteImport } from './routes/_app._site.energy-analysis.billing'
 import { Route as AppSiteEnergyAnalysisConsumptionRouteImport } from './routes/_app._site.energy-analysis.consumption'
 import { Route as AppSiteEnergyAnalysisLoadRouteImport } from './routes/_app._site.energy-analysis.load'
 import { Route as AppSiteEnergyAnalysisOptimizationRouteImport } from './routes/_app._site.energy-analysis.optimization'
@@ -27,7 +28,9 @@ import { Route as AppSiteOperationsControlRouteImport } from './routes/_app._sit
 import { Route as AppSiteOperationsDiagnosticsRouteImport } from './routes/_app._site.operations.diagnostics'
 import { Route as AppSiteOperationsDigitalTwinRouteImport } from './routes/_app._site.operations.digital-twin'
 import { Route as AppSiteOperationsRealtimeRouteImport } from './routes/_app._site.operations.realtime'
+import { Route as AppSiteOperationsSchedulesRouteImport } from './routes/_app._site.operations.schedules'
 import { Route as AppSiteOperationsSystemsDevicesRouteImport } from './routes/_app._site.operations.systems-devices'
+import { Route as AppSiteOperationsTrendsRouteImport } from './routes/_app._site.operations.trends'
 import { Route as AppSiteOperationsWorkCenterRouteImport } from './routes/_app._site.operations.work-center'
 
 const AppRoute = AppRouteImport.update({
@@ -73,6 +76,12 @@ const AppSettingsIntegrationsRoute = AppSettingsIntegrationsRouteImport.update({
   path: '/settings/integrations',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSiteEnergyAnalysisBillingRoute =
+  AppSiteEnergyAnalysisBillingRouteImport.update({
+    id: '/energy-analysis/billing',
+    path: '/energy-analysis/billing',
+    getParentRoute: () => AppSiteRoute,
+  } as any)
 const AppSiteEnergyAnalysisConsumptionRoute =
   AppSiteEnergyAnalysisConsumptionRouteImport.update({
     id: '/energy-analysis/consumption',
@@ -126,12 +135,23 @@ const AppSiteOperationsRealtimeRoute =
     path: '/operations/realtime',
     getParentRoute: () => AppSiteRoute,
   } as any)
+const AppSiteOperationsSchedulesRoute =
+  AppSiteOperationsSchedulesRouteImport.update({
+    id: '/operations/schedules',
+    path: '/operations/schedules',
+    getParentRoute: () => AppSiteRoute,
+  } as any)
 const AppSiteOperationsSystemsDevicesRoute =
   AppSiteOperationsSystemsDevicesRouteImport.update({
     id: '/operations/systems-devices',
     path: '/operations/systems-devices',
     getParentRoute: () => AppSiteRoute,
   } as any)
+const AppSiteOperationsTrendsRoute = AppSiteOperationsTrendsRouteImport.update({
+  id: '/operations/trends',
+  path: '/operations/trends',
+  getParentRoute: () => AppSiteRoute,
+} as any)
 const AppSiteOperationsWorkCenterRoute =
   AppSiteOperationsWorkCenterRouteImport.update({
     id: '/operations/work-center',
@@ -147,6 +167,7 @@ export interface FileRoutesByFullPath {
   '/overview': typeof AppSiteOverviewRoute
   '/reports': typeof AppSiteReportsRoute
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
+  '/energy-analysis/billing': typeof AppSiteEnergyAnalysisBillingRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
   '/energy-analysis/load': typeof AppSiteEnergyAnalysisLoadRoute
   '/energy-analysis/optimization': typeof AppSiteEnergyAnalysisOptimizationRoute
@@ -156,7 +177,9 @@ export interface FileRoutesByFullPath {
   '/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
   '/operations/digital-twin': typeof AppSiteOperationsDigitalTwinRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
+  '/operations/schedules': typeof AppSiteOperationsSchedulesRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
+  '/operations/trends': typeof AppSiteOperationsTrendsRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
 }
 export interface FileRoutesByTo {
@@ -167,6 +190,7 @@ export interface FileRoutesByTo {
   '/overview': typeof AppSiteOverviewRoute
   '/reports': typeof AppSiteReportsRoute
   '/settings/integrations': typeof AppSettingsIntegrationsRoute
+  '/energy-analysis/billing': typeof AppSiteEnergyAnalysisBillingRoute
   '/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
   '/energy-analysis/load': typeof AppSiteEnergyAnalysisLoadRoute
   '/energy-analysis/optimization': typeof AppSiteEnergyAnalysisOptimizationRoute
@@ -176,7 +200,9 @@ export interface FileRoutesByTo {
   '/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
   '/operations/digital-twin': typeof AppSiteOperationsDigitalTwinRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
+  '/operations/schedules': typeof AppSiteOperationsSchedulesRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
+  '/operations/trends': typeof AppSiteOperationsTrendsRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
 }
 export interface FileRoutesById {
@@ -190,6 +216,7 @@ export interface FileRoutesById {
   '/_app/_site/overview': typeof AppSiteOverviewRoute
   '/_app/_site/reports': typeof AppSiteReportsRoute
   '/_app/settings/integrations': typeof AppSettingsIntegrationsRoute
+  '/_app/_site/energy-analysis/billing': typeof AppSiteEnergyAnalysisBillingRoute
   '/_app/_site/energy-analysis/consumption': typeof AppSiteEnergyAnalysisConsumptionRoute
   '/_app/_site/energy-analysis/load': typeof AppSiteEnergyAnalysisLoadRoute
   '/_app/_site/energy-analysis/optimization': typeof AppSiteEnergyAnalysisOptimizationRoute
@@ -199,7 +226,9 @@ export interface FileRoutesById {
   '/_app/_site/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
   '/_app/_site/operations/digital-twin': typeof AppSiteOperationsDigitalTwinRoute
   '/_app/_site/operations/realtime': typeof AppSiteOperationsRealtimeRoute
+  '/_app/_site/operations/schedules': typeof AppSiteOperationsSchedulesRoute
   '/_app/_site/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
+  '/_app/_site/operations/trends': typeof AppSiteOperationsTrendsRoute
   '/_app/_site/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
 }
 export interface FileRouteTypes {
@@ -212,6 +241,7 @@ export interface FileRouteTypes {
     | '/overview'
     | '/reports'
     | '/settings/integrations'
+    | '/energy-analysis/billing'
     | '/energy-analysis/consumption'
     | '/energy-analysis/load'
     | '/energy-analysis/optimization'
@@ -221,7 +251,9 @@ export interface FileRouteTypes {
     | '/operations/diagnostics'
     | '/operations/digital-twin'
     | '/operations/realtime'
+    | '/operations/schedules'
     | '/operations/systems-devices'
+    | '/operations/trends'
     | '/operations/work-center'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -232,6 +264,7 @@ export interface FileRouteTypes {
     | '/overview'
     | '/reports'
     | '/settings/integrations'
+    | '/energy-analysis/billing'
     | '/energy-analysis/consumption'
     | '/energy-analysis/load'
     | '/energy-analysis/optimization'
@@ -241,7 +274,9 @@ export interface FileRouteTypes {
     | '/operations/diagnostics'
     | '/operations/digital-twin'
     | '/operations/realtime'
+    | '/operations/schedules'
     | '/operations/systems-devices'
+    | '/operations/trends'
     | '/operations/work-center'
   id:
     | '__root__'
@@ -254,6 +289,7 @@ export interface FileRouteTypes {
     | '/_app/_site/overview'
     | '/_app/_site/reports'
     | '/_app/settings/integrations'
+    | '/_app/_site/energy-analysis/billing'
     | '/_app/_site/energy-analysis/consumption'
     | '/_app/_site/energy-analysis/load'
     | '/_app/_site/energy-analysis/optimization'
@@ -263,7 +299,9 @@ export interface FileRouteTypes {
     | '/_app/_site/operations/diagnostics'
     | '/_app/_site/operations/digital-twin'
     | '/_app/_site/operations/realtime'
+    | '/_app/_site/operations/schedules'
     | '/_app/_site/operations/systems-devices'
+    | '/_app/_site/operations/trends'
     | '/_app/_site/operations/work-center'
   fileRoutesById: FileRoutesById
 }
@@ -336,6 +374,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsIntegrationsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/_site/energy-analysis/billing': {
+      id: '/_app/_site/energy-analysis/billing'
+      path: '/energy-analysis/billing'
+      fullPath: '/energy-analysis/billing'
+      preLoaderRoute: typeof AppSiteEnergyAnalysisBillingRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
     '/_app/_site/energy-analysis/consumption': {
       id: '/_app/_site/energy-analysis/consumption'
       path: '/energy-analysis/consumption'
@@ -399,11 +444,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteOperationsRealtimeRouteImport
       parentRoute: typeof AppSiteRoute
     }
+    '/_app/_site/operations/schedules': {
+      id: '/_app/_site/operations/schedules'
+      path: '/operations/schedules'
+      fullPath: '/operations/schedules'
+      preLoaderRoute: typeof AppSiteOperationsSchedulesRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
     '/_app/_site/operations/systems-devices': {
       id: '/_app/_site/operations/systems-devices'
       path: '/operations/systems-devices'
       fullPath: '/operations/systems-devices'
       preLoaderRoute: typeof AppSiteOperationsSystemsDevicesRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
+    '/_app/_site/operations/trends': {
+      id: '/_app/_site/operations/trends'
+      path: '/operations/trends'
+      fullPath: '/operations/trends'
+      preLoaderRoute: typeof AppSiteOperationsTrendsRouteImport
       parentRoute: typeof AppSiteRoute
     }
     '/_app/_site/operations/work-center': {
@@ -420,6 +479,7 @@ interface AppSiteRouteChildren {
   AppSiteNotificationsRoute: typeof AppSiteNotificationsRoute
   AppSiteOverviewRoute: typeof AppSiteOverviewRoute
   AppSiteReportsRoute: typeof AppSiteReportsRoute
+  AppSiteEnergyAnalysisBillingRoute: typeof AppSiteEnergyAnalysisBillingRoute
   AppSiteEnergyAnalysisConsumptionRoute: typeof AppSiteEnergyAnalysisConsumptionRoute
   AppSiteEnergyAnalysisLoadRoute: typeof AppSiteEnergyAnalysisLoadRoute
   AppSiteEnergyAnalysisOptimizationRoute: typeof AppSiteEnergyAnalysisOptimizationRoute
@@ -429,7 +489,9 @@ interface AppSiteRouteChildren {
   AppSiteOperationsDiagnosticsRoute: typeof AppSiteOperationsDiagnosticsRoute
   AppSiteOperationsDigitalTwinRoute: typeof AppSiteOperationsDigitalTwinRoute
   AppSiteOperationsRealtimeRoute: typeof AppSiteOperationsRealtimeRoute
+  AppSiteOperationsSchedulesRoute: typeof AppSiteOperationsSchedulesRoute
   AppSiteOperationsSystemsDevicesRoute: typeof AppSiteOperationsSystemsDevicesRoute
+  AppSiteOperationsTrendsRoute: typeof AppSiteOperationsTrendsRoute
   AppSiteOperationsWorkCenterRoute: typeof AppSiteOperationsWorkCenterRoute
 }
 
@@ -437,6 +499,7 @@ const AppSiteRouteChildren: AppSiteRouteChildren = {
   AppSiteNotificationsRoute: AppSiteNotificationsRoute,
   AppSiteOverviewRoute: AppSiteOverviewRoute,
   AppSiteReportsRoute: AppSiteReportsRoute,
+  AppSiteEnergyAnalysisBillingRoute: AppSiteEnergyAnalysisBillingRoute,
   AppSiteEnergyAnalysisConsumptionRoute: AppSiteEnergyAnalysisConsumptionRoute,
   AppSiteEnergyAnalysisLoadRoute: AppSiteEnergyAnalysisLoadRoute,
   AppSiteEnergyAnalysisOptimizationRoute:
@@ -447,7 +510,9 @@ const AppSiteRouteChildren: AppSiteRouteChildren = {
   AppSiteOperationsDiagnosticsRoute: AppSiteOperationsDiagnosticsRoute,
   AppSiteOperationsDigitalTwinRoute: AppSiteOperationsDigitalTwinRoute,
   AppSiteOperationsRealtimeRoute: AppSiteOperationsRealtimeRoute,
+  AppSiteOperationsSchedulesRoute: AppSiteOperationsSchedulesRoute,
   AppSiteOperationsSystemsDevicesRoute: AppSiteOperationsSystemsDevicesRoute,
+  AppSiteOperationsTrendsRoute: AppSiteOperationsTrendsRoute,
   AppSiteOperationsWorkCenterRoute: AppSiteOperationsWorkCenterRoute,
 }
 

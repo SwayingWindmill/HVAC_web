@@ -133,6 +133,12 @@ func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Re
 				filter.Suppressed = &val
 			}
 		}
+		if activeFrom, ok := parseOptionalRFC3339UTC(query, "activeFrom"); ok {
+			filter.ActiveFrom = activeFrom
+		}
+		if activeTo, ok := parseOptionalRFC3339UTC(query, "activeTo"); ok {
+			filter.ActiveTo = activeTo
+		}
 		resp, err := a.store.List(ctx, tenantID, route.siteID, filter)
 		if err != nil {
 			if errors.Is(err, alarmservice.ErrInvalidCursor) {
@@ -654,7 +660,7 @@ func dispatchSiteRulesRoute(h *handler, writer http.ResponseWriter, request *htt
 func validatePublicAlarmQuery(query url.Values) (string, int, bool) {
 	for key := range query {
 		switch key {
-		case "siteId", "condition", "severity", "acknowledged", "suppressed", "cursor", "limit":
+		case "siteId", "condition", "severity", "acknowledged", "suppressed", "activeFrom", "activeTo", "cursor", "limit":
 		default:
 			return "", 0, false
 		}
@@ -691,6 +697,11 @@ func validatePublicAlarmQuery(query url.Values) (string, int, bool) {
 			}
 		}
 	}
+	activeFrom, validFrom := parseOptionalRFC3339UTC(query, "activeFrom")
+	activeTo, validTo := parseOptionalRFC3339UTC(query, "activeTo")
+	if !validFrom || !validTo || (activeFrom != nil && activeTo != nil && activeFrom.After(*activeTo)) {
+		return "", 0, false
+	}
 	if severity := alarmmodel.Severity(query.Get("severity")); severity != "" {
 		switch severity {
 		case alarmmodel.SeverityInfo, alarmmodel.SeverityWarning, alarmmodel.SeverityMinor, alarmmodel.SeverityMajor, alarmmodel.SeverityCritical:
@@ -699,6 +710,19 @@ func validatePublicAlarmQuery(query url.Values) (string, int, bool) {
 		}
 	}
 	return siteID, limit, true
+}
+
+func parseOptionalRFC3339UTC(query url.Values, key string) (*time.Time, bool) {
+	raw := query.Get(key)
+	if raw == "" {
+		return nil, true
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return nil, false
+	}
+	utc := parsed.UTC()
+	return &utc, true
 }
 
 func (h *handler) alarmSession(writer http.ResponseWriter, request *http.Request) (bffSession, bool) {

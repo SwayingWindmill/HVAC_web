@@ -2,7 +2,7 @@
 
 现在做到哪、下一步做什么、服务器和本地环境有哪些特殊情况。改了这里说的事，就在同一个 PR 里更新本文。怎么构建、测试和运行见 `AGENTS.md`；用户能看到的变化见 `CHANGELOG.md`；每张单的细节在 GitHub 问题单里。
 
-最后更新：2026-11-05。
+最后更新：2026-11-12。
 
 ## 产品现在有什么
 
@@ -11,19 +11,18 @@
 | 分组 | 页面 | 数据从哪来 |
 | --- | --- | --- |
 | 总览 | `/overview` | 能耗、冷站实时运行、告警、故障诊断、工单、优化建议、电价 |
-| 监测 | 实时运行、设备 | 遥测的快照和推送、设备登记、设备历史 |
-| 运行 | 数字孪生（`/operations/digital-twin`） | 登记里的冷站设备 + 实时运行；末端楼宇按站点写在 `twin-building.ts`（目前只有松雅轩），房间和末端设备登记之前都显示「未接入」（规格 `docs/specs/digital-twin.md`） |
-| 能源 | 能耗分析（含「用电去向」：总表和各机组分表）、用电负荷（含负荷预测） | 能耗序列（Cube）、设备按小时/15 分钟的统计、站点电价、负荷预测 |
-| 能源 | 优化建议 | 预测服务每小时 :07 跑，优化服务每小时 :20 跑，也可以手动触发（规格 `docs/specs/scheduled-optimization.md`） |
+| 运行 | 实时运行、历史趋势（`/operations/trends`）、运行计划（`/operations/schedules`）、设备、数字孪生（`/operations/digital-twin`） | 遥测的快照和推送、设备登记、设备历史（支持 1 分钟 / 5 分钟 / 15 分钟 / 1 小时 / 按日汇总及离散状态聚合）、告警重叠窗口查询、控制指令；运行计划（规格 `docs/specs/operating-schedule.md`）由登记模块保存每周供冷窗口与全天运行例外（节假日停机、维保停机、加班供冷），按 15 分钟历史遥测核查停机窗口内的计划外开机并可创建现场核查工单（目标供水温度仅作交接参考，不自动下发指令）；数字孪生末端楼宇按站点写在 `twin-building.ts`（目前只有松雅轩），房间和末端设备登记之前都显示「未接入」（规格 `docs/specs/digital-twin.md`） |
+| 能源 | 能耗分析（含「用电去向」：总表和各机组分表）、用电负荷（含负荷预测）、电费账单（`/energy-analysis/billing`） | 能耗序列（Cube）、设备按小时/15 分钟的统计、站点电价、负荷预测；电费账单（规格 `docs/specs/electricity-billing.md`）由登记模块保存站点月度电费预算与供电局两部制结算电费单（区分冷站专变与整栋总表，支持跨月抄表周期对齐核对偏差或冷站电量占比分摊，确认归档后在月度能源报告旁路展示） |
+| 能源 | 优化建议（`/energy-analysis/optimization`） | 预测服务每小时 :07 跑，优化服务每小时 :20 跑，也可手动触发；首屏「当前建议」按站点有无可写供水温度设定点走控制指令审批或创建人工调温工单，「模型与负荷分析」按需只读查询冷机 COP 模型影子评估与未来 24 小时负荷预测（规格 `docs/specs/scheduled-optimization.md`、`docs/specs/optimization-workspace.md`、`docs/specs/chiller-cop-model.md`） |
 | 能源 | 节能项目（`/energy-analysis/savings`） | mv-service：节能措施、固定的基线、已验证日（ADR 0021） |
 | 能源 | 能源报告（`/reports`） | 已结束的月份读 report-service 的快照（每月 1 日 03:00 生成），本月和没存快照的月份现算；有年度视图，可打印 A4 |
 | 能源 | 站点对标（`/benchmark`） | 每个有权限的站点的能耗序列；没有能耗权限的站点列出来但不参加比较 |
 | 运维 | 告警、故障诊断、工单、控制指令 | 告警、故障诊断服务 FDD（每 15 分钟跑一次）、工单、控制指令审批 |
 | 平台 | 通知（站点的告警本身：正在发生的和最近恢复的，和小程序一样）、集成管理、系统管理（含用户与角色、修改密码、AI 助手用量） | 告警、网关证书、权限服务 IAM 的角色指派（ADR 0022）、登记、操作记录 |
-| 手机 | 微信小程序（`apps/hvac-miniprogram`，#664 的功能都已上线，0.2.0 在微信审核中）：账号密码登录和微信一键登录、总览（本月节省、今天用能和昨天同时段比、冷站现在、正在发生的告警、每日运行结论）、运行（实时运行和设备）、通知（正在发生和最近恢复的告警、告警详情、确认告警、告警微信提醒）、我的（切换站点、绑定或解除微信、退出）。助手（问答、查询步骤、结论卡片、历史对话）为了过微信审核先藏起来了，代码在，恢复方法见小程序 README | 和网页同一个网关；登录走 `/api/v1/auth/app/sessions`（微信一键登录是 `/sessions/wechat`），会话放在 `Authorization` 头里；微信绑定由身份服务换取和保存微信编号，只有它能访问微信 |
+| 手机 | 微信小程序（`apps/hvac-miniprogram`，#664 的功能都已上线，0.2.0 在微信审核中）：账号密码登录和微信一键登录、总览（本月节省始终在最上面、今天用能和昨天同时段比、今天每小时用电和能效的图、冷站现在、正在发生的告警、每日运行结论）、运行（实时运行和设备）、通知（正在发生和最近恢复的告警、告警详情、确认告警、告警微信提醒）、我的（切换站点、绑定或解除微信、退出）。助手（问答、查询步骤、结论卡片、历史对话）为了过微信审核先藏起来了，代码在，恢复方法见小程序 README | 和网页同一个网关；登录走 `/api/v1/auth/app/sessions`（微信一键登录是 `/sessions/wechat`），会话放在 `Authorization` 头里；微信绑定由身份服务换取和保存微信编号，只有它能访问微信 |
 | 全站 | AI 助手（页头按钮，右侧 420px 面板；能耗分析、告警、设备详情上的「解释」） | Operations Agent 的会话，经平台网关；服务没配 `DEEPSEEK_API_KEY` 时面板显示「未接入」 |
 
-电费都是按站点分时电价算的估算值，页面上标明「估算」；账单以结算（`services/settlement-service`，命令行工具，没有网页接口）为准。
+日常用电曲线上的电费都是按站点分时电价算的估算值，页面上标明「估算」；正式电费以「电费账单」页登记归档的供电局结算电费单（或命令行工具 `services/settlement-service`）为准。
 
 ## 设计
 
@@ -38,15 +37,15 @@
   - `Status` / `StatusBadge`：带静止圆点的浅色标签。
 - `FactTile` 的 `className` 作用在数值上，不在格子上；要跨列，外面包一层 `<div className="col-span-…">`。
 - 没保存的表单归它所在的页面管：系统管理用 `features/system/unsaved-drafts.tsx`（路由拦截）。站点页面以后有非弹窗的表单，也自己加拦截。
-- 系统管理的「用户与角色」改 IAM 目录时，`lib/capability-labels.ts` 和 `lib/role-labels.ts` 要一起改。`scripts/test-real-design-tokens.mjs` 检查 `features/system/design-system/design-tokens.ts` 里的每对颜色达到 WCAG 要求。
+- 系统管理的「用户与角色」改 IAM 目录时，`lib/capability-labels.ts` 和 `lib/role-labels.ts` 要一起改。`scripts/test-real-design-tokens.mjs` 检查 `features/system/design-system/design-tokens.ts` 里的每对颜色达到 WCAG 要求；`npm run design:check` 同时检查输入框自定义 `Enter` 提交的输入法防误触与深浅色 `color-scheme` 同步（`docs/architecture/modern-web-guidance-source-review-2026-11-11.md`）。
 - 看效果：开一个 Vite 开发服务器在 5190 端口（`npm -w @hvac/web run dev -- --host localhost --port 5190`），e2e 配置会复用它，`npm run web:e2e -- e2e/<spec>` 几秒就能跑完，也可以写个临时用例截图。界面改动最后要在 1440px 下用真实数据看过。
 
 ## 服务器（139.199.58.47）
 
 - 跑的是 main。Compose 项目 `hvac-platform`，目录 `/opt/hvac-platform`，`single-lite` 档位，带智能服务（预测、优化、故障诊断 FDD、节能验证 M&V、报告）和 AI 助手；两个模拟器按用户要求停着；对外经主机的 nginx 转到 127.0.0.1:18443。
-- 部署方式：推到 `main`，或在 Actions 里手动跑 `.github/workflows/deploy-production.yml`（手动跑时可勾 `rebuild_base`，先把各服务的 `deploy-base` 重建成验证过的一层，见 `docs/operations/disk-full.md#重建部署基础镜像`）。流水线在 GitHub 的机器上按镜像参数编译 Go 服务（工具链 `1.27.3`，`CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w"`），并构建网页和 AI 助手。然后用 SSH 连上这台机器：从这次提交做 `git archive` 解到 `/opt/hvac-platform` 并写 `REVISION`（不删运行目录里没进 Git 的密钥和数据）；已有镜像先打 `before-<时间>` 标签，再只换 `/service` 和 `/healthcheck`（网页换 dist 和 nginx 配置，迁移镜像换迁移文件和 `migration-list.tsv`，AI 助手换编译结果，依赖在服务器上按 lockfile 执行 `npm ci --omit=dev` 装进镜像）。服务器内存紧，镜像保持本机的，这一步不 `docker pull`。解包和写 `REVISION` 用 SSH 登录的用户，目录仍归 `ubuntu`。换完重启走仓库里的 `deploy/platform/phase1/cd/deploy.sh`（随源码解到 `/opt/hvac-platform`，传入这次的提交号；不存在或 `sudo` 不允许免密跑它时退回服务器上老的 `/opt/hvac-platform-tools/deploy.sh`，见 `docs/operations/rollback.md`）：这个脚本要改运行目录里容器用户（`65532`、Postgres、ClickHouse）拥有的文件权限，所以登录用户不是 root 时用免密 `sudo` 跑它。流水线自己不启动模拟器。传到服务器的是一份压缩包，里面没有 AI 助手的 node_modules，也没有 sourcemap 和 `.d.ts`。两端 zstd 都至少 1.4 时用 `zstd -19 --long=27`（17 个 Go 程序里重复的运行时压在一起），否则退回 `zstd -3`，再不行就 gzip。2026-10-29 失败的那份是 83,063,775 字节（zstd -3，含 node_modules）。本地用同一套 Go 二进制和源码包重打：含 node_modules、zstd -3 是 81,831,100 字节（少掉的约 1.2 MB 是网页 dist 和迁移文件副本）；去掉 node_modules 和 sourcemap、改用长窗口之后是 23,865,253 字节。算上网页，压缩包大约 25 MB。上传时限按每分钟 0.5 MiB，再加 25% 和 3 分钟，这个大小一次大约 60 分钟；这条链路测过大约 1 MB/分钟，大约 25 分钟传完。构建 AI 助手镜像时，服务器要能访问 npm registry，装不上依赖就不会换上这版镜像。没传完就留下已传到的字节，下次从断点接着传，不从头再来。三次都失败才删掉 `/tmp` 里的发布目录，并且不执行 apply。部署任务限时 360 分钟（GitHub 托管运行器的上限），SSH 这一步限时 330 分钟。部署任务挂在 GitHub Environment `production` 上（需要审核人点头）。重启之后先在服务器上查本机 `/healthz`、`/sign-in`、`/login`、身份发现和容器健康，再从 GitHub 的机器访问公网做同样的检查；哪一步失败都把镜像标回这次的 `before-<时间>` 再重启。成功后只留最近两套 `before-*` 镜像，并清掉悬空镜像和超过一天的构建缓存。需要手工退回时，在服务器上跑 `deploy/platform/phase1/cd/rollback.sh`（不带参数就是最近一次）。这台机器上 root 不能密码登录，操作者是 `ubuntu`。SSH 凭据放在仓库的 Actions secrets：必须有 `DEPLOY_SSH_KEY`（优先）或 `DEPLOY_SSH_PASSWORD`；`DEPLOY_SSH_USER` 不设就是 `ubuntu`，`DEPLOY_SSH_HOST` 不设就是 `139.199.58.47`，`DEPLOY_SSH_PORT` 不设就是 `22`。没配凭据时流水线直接失败，并写明要设哪几个 secret。本机内存紧、不开 Docker Desktop 时，仍可在 WSL 里按同样的参数编译，再在服务器上换 `/service`。只重启某个服务时，用 `node scripts/phase1-wsl-compose.mjs --integration [--intelligence] up -d --no-deps <服务>`，带上服务器的环境变量（AI 助手要 `--intelligence`）。
+- 部署方式：推到 `main`，或在 Actions 里手动跑 `.github/workflows/deploy-production.yml`（手动跑时可勾 `rebuild_base`，先把各服务的 `deploy-base` 重建成验证过的一层，见 `docs/operations/disk-full.md#重建部署基础镜像`）。流水线在 GitHub 的机器上按镜像参数编译 Go 服务（工具链 `1.27.4`，`CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w"`），并构建网页和 AI 助手。然后用 SSH 连上这台机器：从这次提交做 `git archive` 解到 `/opt/hvac-platform` 并写 `REVISION`（不删运行目录里没进 Git 的密钥和数据）；已有镜像先打 `before-<时间>` 标签，再只换 `/service` 和 `/healthcheck`（网页换 dist 和 nginx 配置，迁移镜像换迁移文件和 `migration-list.tsv`，AI 助手换编译结果，依赖在服务器上按 lockfile 执行 `npm ci --omit=dev` 装进镜像）。服务器内存紧，镜像保持本机的，这一步不 `docker pull`。解包和写 `REVISION` 用 SSH 登录的用户，目录仍归 `ubuntu`。换完重启走仓库里的 `deploy/platform/phase1/cd/deploy.sh`（随源码解到 `/opt/hvac-platform`，传入这次的提交号；不存在或 `sudo` 不允许免密跑它时退回服务器上老的 `/opt/hvac-platform-tools/deploy.sh`，见 `docs/operations/rollback.md`）：这个脚本要改运行目录里容器用户（`65532`、Postgres、ClickHouse）拥有的文件权限，所以登录用户不是 root 时用免密 `sudo` 跑它。流水线自己不启动模拟器。传到服务器的是一份压缩包，里面没有 AI 助手的 node_modules，也没有 sourcemap 和 `.d.ts`。两端 zstd 都至少 1.4 时用 `zstd -19 --long=27`（17 个 Go 程序里重复的运行时压在一起），否则退回 `zstd -3`，再不行就 gzip。2026-10-29 失败的那份是 83,063,775 字节（zstd -3，含 node_modules）。本地用同一套 Go 二进制和源码包重打：含 node_modules、zstd -3 是 81,831,100 字节（少掉的约 1.2 MB 是网页 dist 和迁移文件副本）；去掉 node_modules 和 sourcemap、改用长窗口之后是 23,865,253 字节。算上网页，压缩包大约 25 MB。上传时限按每分钟 0.5 MiB，再加 25% 和 3 分钟，这个大小一次大约 60 分钟；这条链路测过大约 1 MB/分钟，大约 25 分钟传完。构建 AI 助手镜像时，服务器要能访问 npm registry，装不上依赖就不会换上这版镜像。没传完就留下已传到的字节，下次从断点接着传，不从头再来。三次都失败才删掉 `/tmp` 里的发布目录，并且不执行 apply。部署任务限时 360 分钟（GitHub 托管运行器的上限），SSH 这一步限时 330 分钟。部署任务挂在 GitHub Environment `production` 上（需要审核人点头）。重启之后先在服务器上查本机 `/healthz`、`/sign-in`、`/login`、身份发现和容器健康，再从 GitHub 的机器访问公网做同样的检查；哪一步失败都把镜像标回这次的 `before-<时间>` 再重启。成功后只留最近两套 `before-*` 镜像，并清掉悬空镜像和超过一天的构建缓存。需要手工退回时，在服务器上跑 `deploy/platform/phase1/cd/rollback.sh`（不带参数就是最近一次）。这台机器上 root 不能密码登录，操作者是 `ubuntu`。SSH 凭据放在仓库的 Actions secrets：必须有 `DEPLOY_SSH_KEY`（优先）或 `DEPLOY_SSH_PASSWORD`；`DEPLOY_SSH_USER` 不设就是 `ubuntu`，`DEPLOY_SSH_HOST` 不设就是 `139.199.58.47`，`DEPLOY_SSH_PORT` 不设就是 `22`。没配凭据时流水线直接失败，并写明要设哪几个 secret。本机内存紧、不开 Docker Desktop 时，仍可在 WSL 里按同样的参数编译，再在服务器上换 `/service`。只重启某个服务时，用 `node scripts/phase1-wsl-compose.mjs --integration [--intelligence] up -d --no-deps <服务>`，带上服务器的环境变量（AI 助手要 `--intelligence`）。
 - `DEEPSEEK_API_KEY` 在 `server.runtime.env` 里，是用户自己放的。
-- 服务器上的 Go 服务还是用 Go 1.25.12 构建的。仓库从 #707 起用 Go 1.27.3、`golang.org/x/text` v0.41.0。上面的部署流水线第一次跑成功之后，服务器上的 `/service` 才换成 1.27.3，Modbus TLS 连接上的 4 个标准库漏洞和 `x/text` 处理特殊输入会崩溃的问题才算修好。
+- 服务器上的 Go 服务还是用 Go 1.25.12 构建的。仓库从 #707 起用 Go 1.27.4、`golang.org/x/text` v0.41.0。上面的部署流水线第一次跑成功之后，服务器上的 `/service` 才换成 1.27.4，Modbus TLS 连接上的 4 个标准库漏洞和 `x/text` 处理特殊输入会崩溃的问题才算修好。
 - 夜间备份由 `hvac-backup.timer` 做，备份放在同一块盘的运行目录里，还没有拷到服务器以外。
 - 告警要发出去，在运行目录的 `alert-receiver/` 放企业微信机器人地址和/或 SMTP（样例在 `observability/alert-receiver.example/`，真文件不进 Git）。什么都不放，Alertmanager 仍是空接收方。设备告警（网关断线、越限等）不走 Alertmanager：合并 #753 之后由 energy-api 按 `deploy/sites/*.alarm-routing.json` 交给 `wecom-alert-adapter` 发，默认关着（`ALARM_DELIVERY_MODE=off`），收件人和令牌放运行目录的 `alarm-delivery/`，企业微信应用的密钥放 `alert-receiver/`，步骤见 `docs/operations/alarm-delivery.md`。Prometheus 用仓库里的 `observability/prometheus.yaml`（15 天且不超过 2GB），不再读运行目录里手改的那份。Centrifugo 的指标从容器网络里的明文 9000 抓，不再去碰只开 TLS 的 8000，所以 `Phase1ProcessDown` 不会再因为这次抓取失败而误报。主机备份新鲜度和容器重启由 `hvac-host-metrics.timer` 写给 node-exporter。Tempo 仍只在 `observability-full`，这台机器的 `single-lite` 不开它。步骤见 `docs/operations/alerts.md`。
 - 两个演示站点（central-plant、local-energy-site-b）的 28 个定时任务都停用了：模拟器停着，指标任务每小时都会失败。重新开模拟器时一起启用。
@@ -59,11 +58,11 @@
 - ThingsBoard 的历史（导入批次 `01a14000-7000-7000-8000-000000000001`，截至 2026-10-14T10:26:30Z）由容器 `tb-history-import` 从导出的 CSV 导入；导完后按设备核对条数，记录里还没有核对结果。
 - 网关的耐久发件箱 2026-10-14 起发往平台：断线时读数存在网关上，恢复后补发（10-20 断线后补收过积压）；平台的 MQTT 接收程序是保留 24 小时的会话，Mosquitto 落盘，所以平台重启、部署时读数也不会丢。网关上还要做：ET1010 是用来控制的，需要平台的指令能下发到 Node-RED（#696）。改一个 Modbus 读取节点会卡住共用串口上的另外六个，改完要重启所有流程（规格「已知问题」）。
 - 能耗：网关把四块电表加成「空调总电表（四台机组合计）」，能耗拓扑把它当总表；电价是临时的深圳分时电价；4 号电表的电量 = 寄存器 60 减去基数 76938 kWh。
-- 设备读数按现场 2026-10-15 手绘的通道表对应；有些通道的读数和它在表上的位置对不上（蒸发器进出可能接反了），机组的冷冻水出水温度和整个冷站对不上（C、D 机组运行时 28–32 ℃，总管供水 6 ℃），要现场核对（#614）。
+- 温度通道按现场 2026-11-08 的手绘点位表对应，网关同一天按它改了复制关系（`COPIES`）：A–D 蒸发出 t1–t4、冷凝出 t6–t9，冷却水总管进水 t5，A 机组冷冻水支管进水 t10，冷却塔出塔 t12、进塔 t13，室外温度 t15，冷冻水总回水 t16、t17，总供水 t18、t19；t14、t20 没有探头。房间还没有温度探头（以后会装），房间温度点位停用，「房间温度过高」告警和优化建议先去掉。站点文件 2026-11-10 跟上（之前网关每分钟有 30 个读数平台对不上点位、被隔离）。网关 2026-11-10 也改了：t8、t11 不再在 `SPARE` 里，不再往平台没有的设备（`chiller-a`–`chiller-d`、`chw-main`、`cw-main`、`room`）复制。
 - 告警规则在 `deploy/sites/songyaxuan.alarm-rules.json`，用 `modules/alarm/cmd/alarm-rules` 发布。文件就是站点规则的全部：内容没变的规则不会出新版本，文件里没有的规则（删掉、改名、设备没有启用点位）会被撤销，它亮着的告警自动恢复，处理记录里写「规则已撤销」（原因 `RULE_RETIRED`，#693）。告警页的「正在生效的规则」页签列出站点现在的规则，发布后到那里核对。运行时先列出这次新增、更新、撤销哪些规则；`-print` 只列这份清单、不写库，它也要连告警库，所以和发布一样在服务器上跑。在服务器上用告警模块的数据库身份跑一个一次性容器：在 `modules/alarm` 里 `CGO_ENABLED=0 go build -o out/alarm-rules/alarm-rules ./cmd/alarm-rules`，把它和两个站点文件放到一个目录，再执行 `docker run --rm --network container:hvac-platform-energy-api-1 --volumes-from hvac-platform-energy-api-1 -e ALARM_DATABASE_URL_FILE=<energy-api 的值> -v <目录>:/alarm-rules:ro --entrypoint /alarm-rules/alarm-rules <energy-api 镜像> /alarm-rules/songyaxuan.alarm-rules.json`。
   - 「读数长时间没有更新」是每台设备一条（不是每个点位一条）：它亮着时，同一台设备另一个点位也停了不会再报，所有点位都恢复才清除。
-  - 2026-10-22 部署迁移 014 后对松雅轩发布过一次（用户确认后）：撤销了「C 机组冷凝出水温度一动不动」（#614 改了通道）和「微信提醒测试（可忽略）」，其余 33 条没变。`ALARM_DATABASE_URL_FILE` 的值用 `docker inspect` 从 energy-api 的环境变量里读（镜像里没有 `printenv`），是 `/run/hvac/secrets/alarm.dsn`。
-  - 告警服务（单机部署时在 energy-api 里）每分钟把到时间的判断再算一遍（#615，`RunDueEvaluations`），用每条规则上一次看到的读数，所以网关整个断线时也会报；站点断线期间新发布的规则，也用站点最后收到的读数算一次。「网关上报中断」：松雅轩 67 个启用的点位 15 分钟都没有读数时报（重要），收到任何一个新读数就恢复；断线超过 30 分钟时，各台设备的「读数长时间没有更新」也会跟着报。
+  - 2026-10-22 部署迁移 014 后对松雅轩发布过一次（用户确认后）：撤销了「C 机组冷凝出水温度一动不动」（#614 改了通道）和「微信提醒测试（可忽略）」，其余 33 条没变。2026-11-10 #754 部署后又发布过一次（用户确认后）：新增 3 条（冷却塔读数长时间没有更新、t8 和 t11 的一动不动），更新 24 条（冷却水出水温度过高改看四台，各条「读数长时间没有更新」「一动不动」跟着新点位和通道名改），撤销「房间温度过高」和「房间读数长时间没有更新」，现在生效 38 条。`ALARM_DATABASE_URL_FILE` 的值用 `docker inspect` 从 energy-api 的环境变量里读（镜像里没有 `printenv`），是 `/run/hvac/secrets/alarm.dsn`。
+  - 告警服务（单机部署时在 energy-api 里）每分钟把到时间的判断再算一遍（#615，`RunDueEvaluations`），用每条规则上一次看到的读数，所以网关整个断线时也会报；站点断线期间新发布的规则，也用站点最后收到的读数算一次。「网关上报中断」：松雅轩 78 个启用的点位 15 分钟都没有读数时报（重要），收到任何一个新读数就恢复；断线超过 30 分钟时，各台设备的「读数长时间没有更新」也会跟着报。
   - 「一动不动」（#616）：设备自己读出来的每个温度读数一条，连续 6 小时完全没变就报「提示」，读数一变就恢复；从别的点复制来的温度不另外判断。告警自己记每个读数「从什么时候起是现在这个值」（`telemetry_evaluation_input.unchanged_since`）。仓库里的松雅轩规则文件已经改成数据质量告警（规格 `docs/specs/telemetry-data-quality.md`）：超量程、跳变、38.4、供冷量输入不可信，以及按机组是否在运行的卡住。服务器上还是旧的 6 小时「提示」，要等迁移 `011-point-quality.sql`、这次程序、站点文件 `apply`、告警规则发布都做完才换。发布时文件里没有的旧「一动不动」会被撤销，正在响的那条按「规则已撤销」恢复。
   - 告警收到一台设备的一批读数时，只算用到这台设备读数的规则（#659，对照 ThingsBoard 见 `docs/architecture/alarm-evaluation-relevance-source-review-2026-10-20.md`）。松雅轩一批温度采集模块的读数算 20 条，冷量计 5 条，机组电表 3 条，其他设备 2 条；补收积压时每分钟能处理约 950 批。只跟时间有关的变化（读数过期、多久没数据）和设备不上报时新发布的规则版本，由每分钟的定时复查处理。
   - 告警判断时用的「现在」是站点时钟（#661，对照 ThingsBoard 见 `docs/architecture/alarm-backlog-clock-source-review-2026-10-20.md`）：读数还在不断送到时，是站点最新一批读数的时间加上告警收到它以来过了多久；2 分钟没有新读数送到，就是当前时间。补收积压时旧读数按它自己的时间判断，不会报了又马上恢复；补收时，每分钟的定时复查会领到还没到期的判断再放回去，到期了才算。告警上记的发生和恢复时间仍是平台做出决定的时间。
@@ -71,7 +70,7 @@
 - 2026-10-20 的服务器状况：松雅轩网关从 10-20 03:57（北京时间）起没有再上报，「网关上报中断」和 10 条「读数长时间没有更新」都亮着，网关恢复后会自动恢复。磁盘见上面「磁盘」一条。
 - 松雅轩的负荷预测链路（15 分钟负荷指标、基线模型、每小时预测任务）是 2026-10-16 在服务器上按接入 SQL 补建的。
 - 接入清单（ADR 0028）：`node scripts/site-onboarding.mjs validate deploy/sites/songyaxuan.site.json` 只读数据库，列出还缺什么、什么要人决定；部署每次跑 `apply`。2026-10-30 服务器上的结果：缺资产「冷冻水总管」和低温差诊断的调度定义（下次部署补上，诊断登记但不启用）；要决定 7 项：告警规则用 `alarm-rules -print` 对、低温差诊断门槛（租户 3.5 K，本站高负荷温差约 1.65 ℃）、租户优化策略的室温点位代码是 `temperature`（本站叫 `room_temperature`，改它会影响两个模拟站点）、四个响应系数是人工设定、因此本站优化建议的模型部署和每小时调度暂不登记。
-- 松雅轩还没有优化建议（2026-10-30 只读核对）：没有 `OPTIMIZATION_RUN` 调度定义，也没有优化模型部署绑定；租户唯一一份优化策略（站点共用）的室内温度键是 `temperature`，松雅轩没有这个键（它的是 `room_temperature`），按现在的策略会报「读不到可用的实时室内温度」。另外 7 天里供水温度只有约 27% 的时间在策略的 6–10 °C 内（白天开机时约 5–6 °C，夜里 11–13 °C），就算键对了也常会报「当前供水温度或室内温度已在策略范围之外」。站点的安全、舒适范围和响应系数要用户定；优化策略现在只按租户存，给松雅轩单独一份要先决定是改共用的那份还是让策略按站点存。
+- 松雅轩没有优化建议：房间没有温度探头，站点文件 2026-11-10 起不登记优化建议。装上探头后要做：接上房间温度点位，站点文件加回 `optimization` 一段（安全、舒适范围和响应系数要用户定；响应系数原来沿用模拟站点的值），并确认租户共用的策略和它一致。另外过去供水温度常在策略范围外（白天开机时约 5–6 °C，夜里 11–13 °C），按现在的策略会常报「当前供水温度或室内温度已在策略范围之外」。
 
 ## AI 助手
 
@@ -109,7 +108,7 @@
    - **发布**：2026-10-21 用开发者工具命令行上传了 0.2.0（main `089c84f0`），用户已提交审核。审核通过、点了「发布」后，把服务器 `IDENTITY_WECHAT_MINIPROGRAM_STATE` 改成 `formal` 并重启 identity-service，消息点开才进正式版。上传命令：`cli.bat upload --project <apps/hvac-miniprogram 的完整路径> -v <版本> -d <说明>`（开发者工具要登录、开服务端口）。
    - **以后的界面改动不靠截图**：用户 2026-10-21 说直接改、不用模拟器截图（开发者工具的自动化截图很慢、常超时），整理逻辑由小程序测试守住，样式由用户在手机上看。
    - **其他约定**：身份服务和通知模块的 Postgres 测试由 `npm run test:identity-postgres`、`npm run test:notification-postgres` 在临时库上运行。小程序读冷站用的点位名称表和助手的对话整理规则从网页复制（`npm -w @hvac/miniprogram run sync`，测试会检查两份是否一致）。通知页直接读告警（网页的通知页也是）。订阅消息是一次性的：用户每点一次「允许」，服务器才能发一条。设计稿是画布「值班小程序界面」，规范是设计系统「泉来禾 HVAC 设计系统」的「小程序」一节（链接在问题单里）。
-2. **#614**（要现场人员）：核对松雅轩的通道表和机组温度。2026-10-21 用三天的逐小时数据对过（结果在 #614 的评论里）：t1、t2、t3、t4、t10 在冷冻水一侧，t5、t6、t7、t9 在冷却水一侧，t8 没有探头，t14 从 2026-10-29 起也没有探头（原始值一直是 0），和站点文件的「蒸发出 t3/t5/t7/t9、冷凝出 t4/t6/t8/t10」对不上。所以小程序和助手把 C 机组冷冻水出水报成 29–31 ℃（其实是冷却水 t7）。用 15 分钟数据进一步判定出 C、D 的四路，按数据改了（#685）；A、B 的出水温度和四台的冷却水进水先停用，等现场核对 t3、t4、t5、t9、t10。
+2. **#614**（要现场人员）：现场 2026-11-08 给了新的手绘点位表，网关和站点文件都按它改了，四台机组的进出水温度、冷却水总管和冷却塔都接上了（见上面「温度通道」一条）。2026-11-10 已部署（#754），告警规则也已发布，之后平台没有再隔离网关的读数。剩下等现场装房间温度探头。
 3. **#641**：用评测前后对比决定 AI 助手要不要用 pi 的 codemode（模型写一小段脚本连续读数据）。
 4. **对标复查后补的差距**：2026-10 把 2026-08 的 ThingsBoard / OpenEMS / MyEMS 对标结论按现在的代码重新对了一遍（`docs/research/thingsboard-gap-review-2026-10.md`，91 项：已做 46、不做 29、还差 16）。决定不做和推迟的在 ADR 0026，保留自建身份服务在 ADR 0025，真实站点的指令由网关执行、平台检查在 ADR 0027。迁移已经冻结（#688，规则见 `deploy/platform/phase1/README.md`「数据库和迁移」）。备份传到 COS 并演练恢复（#689）用户说先不做。设备当前值在 Redis 里没有或 Redis 挂了时，改读 PostgreSQL 里的设备当前快照（#692）。其余的按问题单的先后做：Alertmanager 发邮件 → 删掉通用规则、Kafka、统一外发投递和通知收件箱（#691：Kafka 已删，操作记录只走 PostgreSQL 待发事件；统一外发投递、通知收件箱、通知规则和模板已删，网页通知页改读告警，通知模块只发微信提醒，告警也只把新告警交给通知模块；通用规则（「自动化规则」页、网关的规则接口、`rule-runtime-service`、`rule.manage`）已删；服务器上旧的 `outbound_delivery_*`、`rule_runtime_*` 角色由迁移 031、032 停用但没删，因为服务器的 role-credentials 文件还在给它们设密码，把那两行去掉后可以删；在新的空库上（新服务器、恢复备份）用这份旧文件跑迁移会因为角色不存在而中止，也要先去掉那两行，本机的 `npm run local:up` 会自己去掉）→ 设备告警改发企业微信（#753 在评审：邮件、企业微信应用和群，按站点路由、升级、确认和恢复通知；接通跑稳一周后删小程序订阅提醒）→ 机组和水泵启停指令（#542，等现场确认 ET1010 每一路通道对应哪台设备、每台泵服务哪台机组）。
    - **换云和换域名还只是调研**（`docs/research/cloud-migration-options-2026-10.md`）：现在的 139 是腾讯云轻量应用服务器，迁移后不再用轻量服务器。建议用两台正式的云服务器（腾讯云 CVM 或阿里云 ECS）跑 Docker Compose（应用一台、数据一台，数据盘单独挂载），不用容器服务。不换域名、一个月内要迁，就留在腾讯云广州（约 766 元/月），因为换一家要重新接入备案；迁移时一起换新域名的话，备案在哪家都要重做，阿里云同样配置约 624 元/月。`swayingwindmill.online` 是个人备案，以后会换成带 quanlaihe 的企业域名；换域名时，网关改成按域名连（Mosquitto 证书要加上新域名），微信的 IP 白名单和小程序的合法域名也要一起改。
@@ -122,7 +121,7 @@
 
 小的后续：
 
-- 冷机 COP 模型是影子求解器（规格 `docs/specs/chiller-cop-model.md`）：每次优化运行后写一行 `quality = 'SHADOW'` 的评估，不发布。它跟着优化运行走：松雅轩还没有优化调度和策略，两个演示站点的优化调度停着，所以服务器上现在只有手动生成建议时才会写影子记录（演示站点没有冷机历史，结果是 `NO_USABLE_MODEL`）。要不要换成发布的求解器，等松雅轩接入优化、积累一段影子记录后再定。
+- 冷机 COP 模型是影子求解器（规格 `docs/specs/chiller-cop-model.md`、`docs/specs/optimization-workspace.md`）：每次优化运行后写一行 `quality = 'SHADOW'` 的评估，不发布，只由只读接口供优化建议页「模型与负荷分析」页签对照查看。它跟着优化运行走：松雅轩还没有优化调度和策略，两个演示站点的优化调度停着，所以服务器上现在只有手动生成建议时才会写影子记录（演示站点没有冷机历史，结果是 `NO_USABLE_MODEL`）。要不要换成发布的求解器，等松雅轩接入优化、积累一段影子记录后再定。
 - 改 FDD 低温差的门槛、时间窗口或工况门控时，发布新版本（不要改旧版本）：`node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <时刻>] [--operating-gates '<json>']`；不写门控就沿用上一版。低温差只在冷站运行时判断（规格 `docs/specs/fdd-rule-definition.md`「工况门控」）。松雅轩站点文件里四台冷机的铭牌是 127.5 kW、572 kW（规格 `docs/specs/equipment-nameplate.md`），下次接入 `apply` 之后开机按功率高于 12.75 kW 判断、负荷率门控才用得上；库里这两列在套用之前仍是空的。八台凯泉泵是 22 kW 还是 15 kW、冷冻还是冷却还没确认，额定功率不写。冷冻水泵运行状态点位没绑定水泵资产，水泵门控也用不上。松雅轩实际运行温差中位数约 0.9 K、最高约 2.2 K，3.5 K 阈值下每个运行窗口都是低温差，阈值待用户定。
 - 能耗序列算电费时，每读一条用电记录约占 0.5 KB ClickHouse 内存。实时电表每块每天约 24,000 条，一个站点一个月约 150 MiB，一年会超过 1.5 GiB 的上限。用电量已经整小时读 `analytics.energy_hourly`（015），电费还读单条记录：电价时段按分钟切换，不能直接用这个汇总，要查长时间范围的电费之前得另想办法（例如按电价时段汇总）。
 - **生产要先手工应用 015 再部署能耗小时汇总的那次合并**：步骤（停 `telemetry-worker`、应用、回填、核对）见 `docs/operations/energy-hourly-rollup.md`。
@@ -152,9 +151,9 @@
 - **并行构建镜像会耗尽 Windows 的提交内存。** 冷启动 `local:up` 时开着别的程序，可能触发 Resource-Exhaustion 2004，WSL 重启、Docker Desktop 卡死（`docker desktop restart` 能恢复）。一次只构建一个镜像（`COMPOSE_PARALLEL_LIMIT=1`，每个服务单独 `phase1-wsl-compose.mjs ... build <服务>`），再用 `COMPOSE_BAKE=false` 跑 `local:up`。
 - **在 worktree 里跑 local:up。** Windows git 建的 worktree 在 `.git` 里存的是 Windows 路径，要设 `GIT_DIR`/`GIT_WORK_TREE`，并把 `PHASE1_RUNTIME_DIR`、`PHASE1_ENV_FILE` 指向主目录的运行时文件和环境文件。
 - **Go 代理不稳。** `goproxy.cn` 有时下载失败，用 `PHASE1_GO_PROXY="https://goproxy.cn|https://goproxy.io|https://proxy.golang.org,direct"` 跑 `local:up`，网络出错就重跑。
-- **WSL 里没有 C 编译器，跑不了 `go test -race`。** CI 的单元门禁对所有 Go 测试加了 `-race`（#707）。本地要先验证，就在 `golang:1.27.3-bookworm` 容器里跑：`docker run --rm -v /mnt/e/Code/HVAC_web:/src -w /src/<模块> -e GOPROXY=https://goproxy.cn,direct -e GOFLAGS=-race golang:1.27.3-bookworm go test ./...`。静态检查和漏洞扫描（`npm run go:lint`、`npm run security:go-vuln`）在 WSL 里直接跑，第一次会用 `go.work` 里的 Go 版本编译工具。取舍见 `docs/architecture/go-static-checks-source-review-2026-10-26.md`。
+- **WSL 里没有 C 编译器，跑不了 `go test -race`。** CI 的单元门禁对所有 Go 测试加了 `-race`（#707）。本地要先验证，就在 `golang:1.27.4-bookworm` 容器里跑：`docker run --rm -v /mnt/e/Code/HVAC_web:/src -w /src/<模块> -e GOPROXY=https://goproxy.cn,direct -e GOFLAGS=-race golang:1.27.4-bookworm go test ./...`。静态检查和漏洞扫描（`npm run go:lint`、`npm run security:go-vuln`）在 WSL 里直接跑，第一次会用 `go.work` 里的 Go 版本编译工具。取舍见 `docs/architecture/go-static-checks-source-review-2026-10-26.md`。
 - **本地栈开着时跑 e2e。** e2e 构建本身就可能超过 Playwright 240 秒的启动超时，并行的 worker 也会在加载不完的页面上超时。先构建一次 `dist-e2e`，自己开 `vite preview --outDir dist-e2e --port 5190`（配置会复用），再 `npm run web:e2e -- --workers=1`。
-- **几个 worktree 同时跑 e2e 会互相借服务器。** 不设 `CI` 时配置会复用 5190 端口上已经开着的服务器，哪怕它是另一个 worktree 构建的，测到的就是别人的代码。并行跑的时候先 `ss -ltnp | grep 5190` 看一眼，或者设 `CI=1` 让它自己构建（端口被占时会直接报错，而不是悄悄复用）。
+- **几个 worktree 同时跑 e2e 会互相借服务器。** 不设 `CI` 时配置会复用 5190 端口上已经开着的服务器，哪怕它是另一个 worktree 构建的，测到的就是别人的代码。并行跑的时候先 `ss -ltnp | grep 5190` 看一眼，或者设 `CI=1` 让它自己构建（5190 已被别的 worktree 占用时再加 `PLAYWRIGHT_PORT=5194` 换端口）。
 - **新的网关接口要登记负责方。** 平台网关只放行 `contracts/ownership/route-ownership.v1.json` 里登记过的接口，别的一律回 404「has no applied owner」；网关的接口测试不加载这份登记，所以测试全过、服务器上却是 404（小程序登录和 `/api/v1/me/wechat` 都这样出过事）。现在 `npm run ownership:check` 会检查 `platform-gateway.openapi.yaml` 里的每个接口都登记了；不在这份契约里的接口（例如小程序的）还要自己记得登记。
 - **集成测试只在改到对应模块时才跑。** 所以一个迁移弄坏了别的模块的种子数据，要等以后改到那个模块才会发现（例如 #504 修的 Registry 种子写 FDD 结论）。
 
@@ -166,6 +165,6 @@
 
 ## 流程
 
-- 每项改动一个分支，PR 用 `mattpocock-skills:pr` 技能的模板。CI 绿了再合并。
+- 每项阶段性改动一个分支，PR 用 `pr` 技能的模板；本地检查通过后直接开 PR，盯完 CI：全绿即自动 squash 合并，失败则修到全绿再合并。
 - 界面要在真实数据上看过（本地 8443 或服务器）；截图脚本用 `scripts/lib/local-administrator-browser.mjs`。
 - 用户能注意到的变化写进 `CHANGELOG.md`；下一步或环境偏差变了就更新本文。

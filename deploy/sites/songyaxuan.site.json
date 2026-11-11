@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：网关把四块机组电表相加作为「空调总电表（四台机组合计）」，并按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场对照表（2026-10-15）：t1 冷凝进、t2 蒸发进（四台共用），A–D 蒸发出 t3/t5/t7/t9、冷凝出 t4/t6/t8/t10，t12 房间，t13 室外，t14 从 2026-10-29 起没有探头已停用，t15 室外湿球；t16、t18 仍作冷量计算的总回水、总供水，t17、t19 用途待确认，冷却塔没有探头。点位带 from（来源通道），网关函数的 COPIES 照它复制。 点位质量见 qualityProfiles：冷冻水 3–20 ℃、冷却水 15–45 ℃、房间 10–40 ℃、室外 −10–45 ℃；38.4 是模块通讯异常值。 铭牌见 nameplateCatalog：四台冷机是 2007 年日立 RCU180SC2（572 kW / 127.5 kW）；八台凯泉泵的 22 kW 和 15 kW 还没分到冷冻还是冷却；冷却塔风机铭牌未到。物理检查见 physicsChecks。测量不确定度见 measurement：温度 ±0.1 K，流量 ±2%，总功率 ±1%；温差相对误差超过 10% 时冷量标成部分。探头零点见 probePairs，只建议不改数。",
+  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：网关把四块机组电表相加作为「空调总电表（四台机组合计）」，并按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场手绘点位表（2026-11-08 网关按它改过）：A–D 蒸发出 t1–t4，冷却水总管进水 t5（四台共用），A–D 冷凝出 t6–t9，A 机组冷冻水支管进水 t10，冷却塔内侧总管 t11、外侧总管 t12（当作出塔），冷却塔进水 t13、t14，室外温度 t15（房间没有温度探头），冷冻水总回水 t16、t17，总供水 t18、t19；t14、t20 没有探头。t14、t20 网关不上报（函数里的 SPARE）。点位带 from（来源通道），网关函数的 COPIES 照它复制。 点位质量见 qualityProfiles：冷冻水 3–20 ℃、冷却水 15–45 ℃、房间 10–40 ℃、室外 −10–45 ℃；38.4 是模块通讯异常值。 铭牌见 nameplateCatalog：四台冷机是 2007 年日立 RCU180SC2（572 kW / 127.5 kW）；八台凯泉泵的 22 kW 和 15 kW 还没分到冷冻还是冷却；冷却塔风机铭牌未到。物理检查见 physicsChecks。测量不确定度见 measurement：温度 ±0.1 K，流量 ±2%，总功率 ±1%；温差相对误差超过 10% 时冷量标成部分。探头零点见 probePairs，只建议不改数。",
   "tenantId": "018f3d00-0000-7000-8000-000000000001",
   "site": {
     "id": "01a14000-1000-7000-8000-000000000001",
@@ -30,7 +30,7 @@
       "points": [
         {
           "code": "t1",
-          "name": "D 机组蒸发出水温度（数据判定）",
+          "name": "A 机组冷冻水出水温度（蒸发出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -39,7 +39,7 @@
         },
         {
           "code": "t2",
-          "name": "C 机组蒸发出水温度（数据判定）",
+          "name": "B 机组冷冻水出水温度（蒸发出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -48,7 +48,7 @@
         },
         {
           "code": "t3",
-          "name": "温度通道 3（冷冻水侧，位置待现场确认）",
+          "name": "C 机组冷冻水出水温度（蒸发出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -57,7 +57,7 @@
         },
         {
           "code": "t4",
-          "name": "温度通道 4（冷冻水侧，位置待现场确认）",
+          "name": "D 机组冷冻水出水温度（蒸发出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -66,7 +66,7 @@
         },
         {
           "code": "t5",
-          "name": "温度通道 5（冷却水侧，位置待现场确认）",
+          "name": "冷却水总管进水温度",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -75,7 +75,7 @@
         },
         {
           "code": "t6",
-          "name": "D 机组冷凝出水温度（数据判定）",
+          "name": "A 机组冷却水出水温度（冷凝出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -84,7 +84,7 @@
         },
         {
           "code": "t7",
-          "name": "C 机组冷凝出水温度（数据判定）",
+          "name": "B 机组冷却水出水温度（冷凝出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -93,16 +93,16 @@
         },
         {
           "code": "t8",
-          "name": "温度通道 8（没有探头）",
+          "name": "C 机组冷却水出水温度（冷凝出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30408",
-          "status": "INACTIVE"
+          "qualityProfile": "condenser-water"
         },
         {
           "code": "t9",
-          "name": "温度通道 9（冷却水侧，位置待现场确认）",
+          "name": "D 机组冷却水出水温度（冷凝出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -111,7 +111,7 @@
         },
         {
           "code": "t10",
-          "name": "温度通道 10（冷冻水侧，位置待现场确认）",
+          "name": "A 机组冷冻水进水温度（支管）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -120,34 +120,34 @@
         },
         {
           "code": "t11",
-          "name": "备用通道 11（未接探头）",
+          "name": "冷却塔内侧总管温度",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30411",
-          "status": "INACTIVE"
+          "qualityProfile": "condenser-water"
         },
         {
           "code": "t12",
-          "name": "房间温度",
+          "name": "冷却塔外侧总管温度",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30412",
-          "qualityProfile": "room"
+          "qualityProfile": "condenser-water"
         },
         {
           "code": "t13",
-          "name": "室外温度（通道 13）",
+          "name": "冷却塔进水温度 1",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30413",
-          "qualityProfile": "outdoor"
+          "qualityProfile": "condenser-water"
         },
         {
           "code": "t14",
-          "name": "温度通道 14（没有探头）",
+          "name": "冷却塔进水温度 2（没有探头）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -156,16 +156,16 @@
         },
         {
           "code": "t15",
-          "name": "室外湿球温度",
+          "name": "室外温度",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30415",
-          "qualityProfile": "wet-bulb"
+          "qualityProfile": "outdoor"
         },
         {
           "code": "t16",
-          "name": "总冷冻水回水温度",
+          "name": "冷冻水总回水温度 1",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -174,16 +174,16 @@
         },
         {
           "code": "t17",
-          "name": "温度通道 17（用途待确认）",
+          "name": "冷冻水总回水温度 2",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30417",
-          "qualityProfile": "unconfirmed-temperature"
+          "qualityProfile": "chilled-water"
         },
         {
           "code": "t18",
-          "name": "总冷冻水供水温度",
+          "name": "冷冻水总供水温度 1",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
@@ -192,12 +192,12 @@
         },
         {
           "code": "t19",
-          "name": "温度通道 19（用途待确认）",
+          "name": "冷冻水总供水温度 2",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30419",
-          "qualityProfile": "unconfirmed-temperature"
+          "qualityProfile": "chilled-water"
         },
         {
           "code": "t20",
@@ -262,8 +262,11 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
-          "status": "INACTIVE"
+          "address": "A 机组蒸发出，温度模块通道 1",
+          "from": [
+            "temperature",
+            "t1"
+          ]
         },
         {
           "code": "chw_entering_temperature",
@@ -272,7 +275,7 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "总冷冻水回水，温度模块通道 16（四台共用）",
+          "address": "冷冻水总回水，温度模块通道 16（四台共用）",
           "from": [
             "temperature",
             "t16"
@@ -285,8 +288,11 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
-          "status": "INACTIVE"
+          "address": "冷却水总管进水，温度模块通道 5（四台共用）",
+          "from": [
+            "temperature",
+            "t5"
+          ]
         },
         {
           "code": "cw_leaving_temperature",
@@ -295,8 +301,23 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
-          "status": "INACTIVE"
+          "address": "A 机组冷凝出，温度模块通道 6",
+          "from": [
+            "temperature",
+            "t6"
+          ]
+        },
+        {
+          "code": "chw_entering_temperature_branch",
+          "name": "冷冻水进水温度（A 机组支管）",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "A 机组蒸发进，温度模块通道 10",
+          "from": [
+            "temperature",
+            "t10"
+          ]
         }
       ]
     },
@@ -325,8 +346,11 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
-          "status": "INACTIVE"
+          "address": "B 机组蒸发出，温度模块通道 2",
+          "from": [
+            "temperature",
+            "t2"
+          ]
         },
         {
           "code": "chw_entering_temperature",
@@ -335,7 +359,7 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "总冷冻水回水，温度模块通道 16（四台共用）",
+          "address": "冷冻水总回水，温度模块通道 16（四台共用）",
           "from": [
             "temperature",
             "t16"
@@ -348,8 +372,11 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
-          "status": "INACTIVE"
+          "address": "冷却水总管进水，温度模块通道 5（四台共用）",
+          "from": [
+            "temperature",
+            "t5"
+          ]
         },
         {
           "code": "cw_leaving_temperature",
@@ -358,8 +385,11 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
-          "status": "INACTIVE"
+          "address": "B 机组冷凝出，温度模块通道 7",
+          "from": [
+            "temperature",
+            "t7"
+          ]
         }
       ]
     },
@@ -388,10 +418,10 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "温度模块通道 2（2026-10-21 用 7 天的 15 分钟数据判定（#614））",
+          "address": "C 机组蒸发出，温度模块通道 3",
           "from": [
             "temperature",
-            "t2"
+            "t3"
           ]
         },
         {
@@ -401,7 +431,7 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "总冷冻水回水，温度模块通道 16（四台共用）",
+          "address": "冷冻水总回水，温度模块通道 16（四台共用）",
           "from": [
             "temperature",
             "t16"
@@ -414,8 +444,11 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
-          "status": "INACTIVE"
+          "address": "冷却水总管进水，温度模块通道 5（四台共用）",
+          "from": [
+            "temperature",
+            "t5"
+          ]
         },
         {
           "code": "cw_leaving_temperature",
@@ -424,10 +457,10 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "温度模块通道 7（2026-10-21 用 7 天的 15 分钟数据判定（#614））",
+          "address": "C 机组冷凝出，温度模块通道 8",
           "from": [
             "temperature",
-            "t7"
+            "t8"
           ]
         }
       ]
@@ -457,10 +490,10 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "温度模块通道 1（2026-10-21 用 7 天的 15 分钟数据判定（#614））",
+          "address": "D 机组蒸发出，温度模块通道 4",
           "from": [
             "temperature",
-            "t1"
+            "t4"
           ]
         },
         {
@@ -470,7 +503,7 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "总冷冻水回水，温度模块通道 16（四台共用）",
+          "address": "冷冻水总回水，温度模块通道 16（四台共用）",
           "from": [
             "temperature",
             "t16"
@@ -483,8 +516,11 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "停用：现场对照表的通道对不上，待现场核对（#614）",
-          "status": "INACTIVE"
+          "address": "冷却水总管进水，温度模块通道 5（四台共用）",
+          "from": [
+            "temperature",
+            "t5"
+          ]
         },
         {
           "code": "cw_leaving_temperature",
@@ -493,10 +529,10 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "温度模块通道 6（2026-10-21 用 7 天的 15 分钟数据判定（#614））",
+          "address": "D 机组冷凝出，温度模块通道 9",
           "from": [
             "temperature",
-            "t6"
+            "t9"
           ]
         }
       ]
@@ -756,14 +792,30 @@
       "sampleSeconds": 60,
       "points": [
         {
-          "code": "leaving_water_temperature",
+          "code": "cooling_tower_leaving_temperature",
           "sourceKey": "cooling_tower.leaving_water_temperature",
           "name": "冷却塔出水温度",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：冷却塔没有温度探头",
-          "status": "INACTIVE"
+          "address": "冷却塔外侧总管，温度模块通道 12",
+          "from": [
+            "temperature",
+            "t12"
+          ]
+        },
+        {
+          "code": "cooling_tower_entering_temperature",
+          "sourceKey": "cooling_tower.entering_water_temperature",
+          "name": "冷却塔进水温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "冷却塔进水 1，温度模块通道 13",
+          "from": [
+            "temperature",
+            "t13"
+          ]
         }
       ]
     },
@@ -813,10 +865,10 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 13",
+          "address": "室外温度，温度模块通道 15",
           "from": [
             "temperature",
-            "t13"
+            "t15"
           ],
           "qualityProfile": "outdoor"
         },
@@ -827,12 +879,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 15",
-          "from": [
-            "temperature",
-            "t15"
-          ],
-          "qualityProfile": "wet-bulb"
+          "address": "2026-11-08 起没有对应的探头（通道 15 改作环境温度）",
+          "status": "INACTIVE"
         },
         {
           "code": "ambient_temperature_2",
@@ -841,7 +889,7 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "温度模块通道 14，2026-10-29 起没有探头",
+          "address": "温度模块通道 14，没有探头",
           "status": "INACTIVE",
           "from": [
             "temperature",
@@ -865,12 +913,8 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "现场对照表（2026-10-15）：温度模块通道 12",
-          "from": [
-            "temperature",
-            "t12"
-          ],
-          "qualityProfile": "room"
+          "address": "房间没有温度探头（通道 15 测的是室外温度）",
+          "status": "INACTIVE"
         }
       ]
     }
@@ -1074,50 +1118,8 @@
     "coolingMeter": "btu-calc"
   },
   "intelligence": {
-    "note": "站点接入清单的智能部分（ADR 0028）。告警规则在自己的文件里，由 alarm-rules 发布；这里只写它的文件名。人工设定：optimization.policy.constraints.responseModel 的四个系数是模拟冷站的估计值，不是松雅轩数据算出来的，待按现场数据核定（TODO）。",
+    "note": "站点接入清单的智能部分（ADR 0028）。告警规则在自己的文件里，由 alarm-rules 发布；这里只写它的文件名。房间还没有温度探头，优化建议要读房间温度，先不登记；装上探头后再把 optimization 一段加回来。",
     "alarmRules": "songyaxuan.alarm-rules.json",
-    "optimization": {
-      "cron": "20 * * * *",
-      "enabled": true,
-      "model": "hvac-recommendation-v1",
-      "policy": {
-        "code": "chilled_water_supply_cost",
-        "objective": "COST",
-        "dispatchMode": "SHADOW",
-        "horizon": "DAY_AHEAD",
-        "horizonMinutes": 1440,
-        "granularity": "15MIN",
-        "constraints": {
-          "safety": {
-            "supplyTempMinC": 5,
-            "supplyTempMaxC": 8,
-            "maxSupplyTempStepC": 1
-          },
-          "comfort": {
-            "zoneTempMinC": 22,
-            "zoneTempMaxC": 26
-          },
-          "manualLocks": {
-            "resources": []
-          },
-          "inputMapping": {
-            "supplyTemperatureKey": "supply_water_temperature",
-            "zoneTemperatureKey": "room_temperature"
-          },
-          "responseModel": {
-            "dailyEnergyDeltaKWhPerSupplyTempC": -60,
-            "zoneTempDeltaCPerSupplyTempC": 0.3,
-            "energyUncertaintyP90KWh": 20,
-            "zoneTempUncertaintyP90C": 0.2
-          },
-          "maintenanceConstraints": {
-            "outOfService": []
-          }
-        },
-        "responseModelSource": "人工设定",
-        "note": "优化策略是租户共用的（同一租户只有一份生效策略）。本站和模拟冷站的室内温度读数都是 room_temperature；接入不改租户共用的策略，validate 把不一致列为「需要人决定」，策略一致之前不登记本站的模型部署和定时优化。"
-      }
-    },
     "diagnosis": {
       "lowDeltaT": {
         "asset": "chilled-water-loop",
@@ -1379,37 +1381,36 @@
     {
       "code": "wet-bulb-dry-bulb",
       "kind": "WET_BULB_DRY_BULB",
+      "optional": true,
       "marginK": 0,
       "subject": {
-        "device": "temperature-uid20",
-        "point": "t15"
+        "device": "outdoor",
+        "point": "ambient_wet_bulb_temperature"
       },
       "dryBulb": {
         "device": "temperature-uid20",
-        "point": "t13"
+        "point": "t15"
       },
+      "note": "现场没有室外湿球温度探头（通道 15 是室外干球温度，outdoor/ambient_wet_bulb_temperature 未启用），装上探头后启用。",
       "alarm": {
         "title": "室外湿球温度高于干球",
-        "summary": "通道 15 标成室外湿球，却不低于通道 13 的室外干球。饱和空气里湿球最多等于干球，更高就不是湿球。降到不高于干球后自动恢复。",
+        "summary": "室外湿球温度不低于通道 15 的室外干球温度。饱和空气里湿球最多等于干球，更高说明探头或干湿球配置有误。降到不高于干球后自动恢复。",
         "severity": "MAJOR"
       }
     },
     {
       "code": "wet-bulb-condenser",
       "kind": "WET_BULB_CONDENSER",
+      "optional": true,
       "marginK": 1,
       "subject": {
-        "device": "temperature-uid20",
-        "point": "t15"
+        "device": "outdoor",
+        "point": "ambient_wet_bulb_temperature"
       },
       "condenserEntering": [
         {
           "device": "temperature-uid20",
           "point": "t5"
-        },
-        {
-          "device": "temperature-uid20",
-          "point": "t9"
         }
       ],
       "running": [
@@ -1434,10 +1435,10 @@
           "equals": "RUNNING"
         }
       ],
-      "note": "冷却塔没有风机状态。有机组在运行时当作塔在运行。湿球必须低于各路冷却水进水里最高的一路再减去 1 K；只比其中一路高时不报。",
+      "note": "现场没有室外湿球温度探头（outdoor/ambient_wet_bulb_temperature 未启用）；装上探头后按冷却水总管进水（通道 5）检查。",
       "alarm": {
         "title": "室外湿球温度不像湿球",
-        "summary": "有机组在运行，通道 15 的湿球不低于冷却水进水（通道 5、通道 9 里较高的一路）减 1 K。冷却塔出水不可能比湿球还低这么多，这个通道更像干球。机组全部停机，或湿球降到进水以下并留出 1 K 后自动恢复。",
+        "summary": "有机组在运行，室外湿球温度不低于冷却水总管进水（通道 5）减 1 K。冷却塔出水不可能比湿球还低这么多。机组全部停机，或湿球降到进水以下并留出 1 K 后自动恢复。",
         "severity": "MAJOR"
       }
     },
@@ -1535,13 +1536,9 @@
         {
           "device": "temperature-uid20",
           "point": "t5"
-        },
-        {
-          "device": "temperature-uid20",
-          "point": "t9"
         }
       ],
-      "note": "用总供冷量除以四台机组功率，蒸发温度用总管供水，冷凝温度用通道 5 和通道 9 的平均。冷凝出水还没逐台配对，用水温算的卡诺本来就偏高，0.70 这一档不会把高于铭牌 4.49 的部分负荷能效报掉。",
+      "note": "用总供冷量除以四台机组功率，蒸发温度用总管供水，冷凝温度用冷却水总管进水（通道 5）。用水温算的卡诺本来就偏高，0.70 这一档不会把高于铭牌 4.49 的部分负荷能效报掉。",
       "alarm": {
         "title": "冷站能效超过水温允许的上限",
         "summary": "总供冷量除以四台机组功率，超过了由总管供水温度和冷却水进水温度算出的卡诺能效的 70%。铭牌能效约 4.49 不是上限，部分负荷、冷却水偏凉时可以更高；接近卡诺才说明冷量或功率不可信。回到上限以内后自动恢复。",
@@ -1630,33 +1627,7 @@
       }
     },
     {
-      "code": "chiller-c-chw-direction",
-      "kind": "CHW_DIRECTION",
-      "epsilonK": 0.05,
-      "subject": {
-        "device": "temperature-uid20",
-        "point": "t2"
-      },
-      "return": {
-        "device": "temperature-uid20",
-        "point": "t16"
-      },
-      "running": [
-        {
-          "device": "meter-uid3",
-          "point": "run_state",
-          "equals": "RUNNING"
-        }
-      ],
-      "note": "通道 2 已按数据判定为 C 机组蒸发出水。A、B 的出水通道还没确认，先不挂。",
-      "alarm": {
-        "title": "C 机组冷冻水出水不低于回水",
-        "summary": "C 机组在运行，通道 2 的出水却不低于总管回水（通道 16）。C 机组停机，或出水低于回水后自动恢复。",
-        "severity": "WARNING"
-      }
-    },
-    {
-      "code": "chiller-d-chw-direction",
+      "code": "chiller-a-chw-direction",
       "kind": "CHW_DIRECTION",
       "epsilonK": 0.05,
       "subject": {
@@ -1669,23 +1640,199 @@
       },
       "running": [
         {
+          "device": "meter-uid5",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 1 为 A 机组蒸发出水。",
+      "alarm": {
+        "title": "A 机组冷冻水出水不低于回水",
+        "summary": "A 机组在运行，通道 1 的冷冻水出水却不低于总管回水（通道 16）。A 机组停机，或出水低于回水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-b-chw-direction",
+      "kind": "CHW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t2"
+      },
+      "return": {
+        "device": "temperature-uid20",
+        "point": "t16"
+      },
+      "running": [
+        {
+          "device": "meter-uid2",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 2 为 B 机组蒸发出水。",
+      "alarm": {
+        "title": "B 机组冷冻水出水不低于回水",
+        "summary": "B 机组在运行，通道 2 的冷冻水出水却不低于总管回水（通道 16）。B 机组停机，或出水低于回水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-c-chw-direction",
+      "kind": "CHW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t3"
+      },
+      "return": {
+        "device": "temperature-uid20",
+        "point": "t16"
+      },
+      "running": [
+        {
+          "device": "meter-uid3",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 3 为 C 机组蒸发出水。",
+      "alarm": {
+        "title": "C 机组冷冻水出水不低于回水",
+        "summary": "C 机组在运行，通道 3 的冷冻水出水却不低于总管回水（通道 16）。C 机组停机，或出水低于回水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-d-chw-direction",
+      "kind": "CHW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t4"
+      },
+      "return": {
+        "device": "temperature-uid20",
+        "point": "t16"
+      },
+      "running": [
+        {
           "device": "meter-uid4",
           "point": "run_state",
           "equals": "RUNNING"
         }
       ],
-      "note": "通道 1 已按数据判定为 D 机组蒸发出水。",
+      "note": "2026-11-08 手绘点位表：通道 4 为 D 机组蒸发出水。",
       "alarm": {
         "title": "D 机组冷冻水出水不低于回水",
-        "summary": "D 机组在运行，通道 1 的出水却不低于总管回水（通道 16）。D 机组停机，或出水低于回水后自动恢复。",
+        "summary": "D 机组在运行，通道 4 的冷冻水出水却不低于总管回水（通道 16）。D 机组停机，或出水低于回水后自动恢复。",
         "severity": "WARNING"
       }
     },
     {
-      "code": "cw-direction-pending",
+      "code": "chiller-a-cw-direction",
       "kind": "CW_DIRECTION",
-      "optional": true,
-      "note": "C、D 的冷凝出水已判定（通道 7、通道 6），冷凝进水在通道 5 和通道 9，但还没分到哪一台。配错会误报，所以先不挂点位。"
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t6"
+      },
+      "entering": {
+        "device": "temperature-uid20",
+        "point": "t5"
+      },
+      "running": [
+        {
+          "device": "meter-uid5",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 6 为 A 机组冷凝出水，通道 5 为冷却水总管进水。",
+      "alarm": {
+        "title": "A 机组冷却水出水不高于进水",
+        "summary": "A 机组在运行，通道 6 的冷却水出水却不高于冷却水总管进水（通道 5）。A 机组停机，或出水高于进水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-b-cw-direction",
+      "kind": "CW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t7"
+      },
+      "entering": {
+        "device": "temperature-uid20",
+        "point": "t5"
+      },
+      "running": [
+        {
+          "device": "meter-uid2",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 7 为 B 机组冷凝出水，通道 5 为冷却水总管进水。",
+      "alarm": {
+        "title": "B 机组冷却水出水不高于进水",
+        "summary": "B 机组在运行，通道 7 的冷却水出水却不高于冷却水总管进水（通道 5）。B 机组停机，或出水高于进水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-c-cw-direction",
+      "kind": "CW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t8"
+      },
+      "entering": {
+        "device": "temperature-uid20",
+        "point": "t5"
+      },
+      "running": [
+        {
+          "device": "meter-uid3",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 8 为 C 机组冷凝出水，通道 5 为冷却水总管进水。",
+      "alarm": {
+        "title": "C 机组冷却水出水不高于进水",
+        "summary": "C 机组在运行，通道 8 的冷却水出水却不高于冷却水总管进水（通道 5）。C 机组停机，或出水高于进水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-d-cw-direction",
+      "kind": "CW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t9"
+      },
+      "entering": {
+        "device": "temperature-uid20",
+        "point": "t5"
+      },
+      "running": [
+        {
+          "device": "meter-uid4",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 9 为 D 机组冷凝出水，通道 5 为冷却水总管进水。",
+      "alarm": {
+        "title": "D 机组冷却水出水不高于进水",
+        "summary": "D 机组在运行，通道 9 的冷却水出水却不高于冷却水总管进水（通道 5）。D 机组停机，或出水高于进水后自动恢复。",
+        "severity": "WARNING"
+      }
     },
     {
       "code": "plant-heat-balance",
@@ -1788,30 +1935,7 @@
       }
     },
     {
-      "code": "chiller-c-chw",
-      "supply": { "device": "temperature-uid20", "point": "t2" },
-      "return": { "device": "temperature-uid20", "point": "t16" },
-      "pumps": [{ "device": "chwp-main", "point": "run_state", "equals": "RUNNING" }],
-      "chillers": [
-        { "device": "meter-uid5", "point": "run_state", "equals": "RUNNING" },
-        { "device": "meter-uid2", "point": "run_state", "equals": "RUNNING" },
-        { "device": "meter-uid3", "point": "run_state", "equals": "RUNNING" },
-        { "device": "meter-uid4", "point": "run_state", "equals": "RUNNING" }
-      ],
-      "stableBandK": 0.1,
-      "minimumMinutes": 10,
-      "minimumSamples": 5,
-      "maxGapMinutes": 15,
-      "offsetAlarmK": 0.2,
-      "driftAlarmK": 0.1,
-      "alarm": {
-        "title": "C 机组冷冻水供回水零点偏了",
-        "summary": "冷冻水泵在跑、四台机组都停的时候，C 机组冷冻水供水（通道 2）和总回水（通道 16）应该读成同一个温度。平均差超过 0.2 K，或比上一次估计又漂了 0.1 K。这是建议修正，不会自动改读数。",
-        "severity": "WARNING"
-      }
-    },
-    {
-      "code": "chiller-d-chw",
+      "code": "chiller-a-chw",
       "supply": { "device": "temperature-uid20", "point": "t1" },
       "return": { "device": "temperature-uid20", "point": "t16" },
       "pumps": [{ "device": "chwp-main", "point": "run_state", "equals": "RUNNING" }],
@@ -1828,8 +1952,77 @@
       "offsetAlarmK": 0.2,
       "driftAlarmK": 0.1,
       "alarm": {
+        "title": "A 机组冷冻水供回水零点偏了",
+        "summary": "冷冻水泵在跑、四台机组都停的时候，A 机组冷冻水供水（通道 1）和总回水（通道 16）应该读成同一个温度。平均差超过 0.2 K，或比上一次估计又漂了 0.1 K。这是建议修正，不会自动改读数。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-b-chw",
+      "supply": { "device": "temperature-uid20", "point": "t2" },
+      "return": { "device": "temperature-uid20", "point": "t16" },
+      "pumps": [{ "device": "chwp-main", "point": "run_state", "equals": "RUNNING" }],
+      "chillers": [
+        { "device": "meter-uid5", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid2", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid3", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid4", "point": "run_state", "equals": "RUNNING" }
+      ],
+      "stableBandK": 0.1,
+      "minimumMinutes": 10,
+      "minimumSamples": 5,
+      "maxGapMinutes": 15,
+      "offsetAlarmK": 0.2,
+      "driftAlarmK": 0.1,
+      "alarm": {
+        "title": "B 机组冷冻水供回水零点偏了",
+        "summary": "冷冻水泵在跑、四台机组都停的时候，B 机组冷冻水供水（通道 2）和总回水（通道 16）应该读成同一个温度。平均差超过 0.2 K，或比上一次估计又漂了 0.1 K。这是建议修正，不会自动改读数。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-c-chw",
+      "supply": { "device": "temperature-uid20", "point": "t3" },
+      "return": { "device": "temperature-uid20", "point": "t16" },
+      "pumps": [{ "device": "chwp-main", "point": "run_state", "equals": "RUNNING" }],
+      "chillers": [
+        { "device": "meter-uid5", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid2", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid3", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid4", "point": "run_state", "equals": "RUNNING" }
+      ],
+      "stableBandK": 0.1,
+      "minimumMinutes": 10,
+      "minimumSamples": 5,
+      "maxGapMinutes": 15,
+      "offsetAlarmK": 0.2,
+      "driftAlarmK": 0.1,
+      "alarm": {
+        "title": "C 机组冷冻水供回水零点偏了",
+        "summary": "冷冻水泵在跑、四台机组都停的时候，C 机组冷冻水供水（通道 3）和总回水（通道 16）应该读成同一个温度。平均差超过 0.2 K，或比上一次估计又漂了 0.1 K。这是建议修正，不会自动改读数。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-d-chw",
+      "supply": { "device": "temperature-uid20", "point": "t4" },
+      "return": { "device": "temperature-uid20", "point": "t16" },
+      "pumps": [{ "device": "chwp-main", "point": "run_state", "equals": "RUNNING" }],
+      "chillers": [
+        { "device": "meter-uid5", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid2", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid3", "point": "run_state", "equals": "RUNNING" },
+        { "device": "meter-uid4", "point": "run_state", "equals": "RUNNING" }
+      ],
+      "stableBandK": 0.1,
+      "minimumMinutes": 10,
+      "minimumSamples": 5,
+      "maxGapMinutes": 15,
+      "offsetAlarmK": 0.2,
+      "driftAlarmK": 0.1,
+      "alarm": {
         "title": "D 机组冷冻水供回水零点偏了",
-        "summary": "冷冻水泵在跑、四台机组都停的时候，D 机组冷冻水供水（通道 1）和总回水（通道 16）应该读成同一个温度。平均差超过 0.2 K，或比上一次估计又漂了 0.1 K。这是建议修正，不会自动改读数。",
+        "summary": "冷冻水泵在跑、四台机组都停的时候，D 机组冷冻水供水（通道 4）和总回水（通道 16）应该读成同一个温度。平均差超过 0.2 K，或比上一次估计又漂了 0.1 K。这是建议修正，不会自动改读数。",
         "severity": "WARNING"
       }
     }

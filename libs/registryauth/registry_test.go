@@ -170,6 +170,24 @@ func TestDecisionRequestRequiresConcreteActionAndTenant(t *testing.T) {
 	if !registryauth.ActionDeviceBindingList.SiteScoped() {
 		t.Fatal("DeviceBinding list action must remain Site scoped")
 	}
+	if !registryauth.ActionScheduleRequest.Valid() || !registryauth.ActionScheduleRequest.SiteScoped() {
+		t.Fatal("schedule.request action must be valid and Site scoped")
+	}
+	if !registryauth.ActionScheduleManage.Valid() || !registryauth.ActionScheduleManage.SiteScoped() {
+		t.Fatal("schedule.manage action must be valid and Site scoped")
+	}
+	if !registryauth.ActionAllows(registryauth.ActionScheduleManage, registryauth.ActionScheduleRequest) {
+		t.Fatal("schedule.manage must imply schedule.request")
+	}
+	if registryauth.ActionAllows(registryauth.ActionScheduleRequest, registryauth.ActionScheduleManage) {
+		t.Fatal("schedule.request must not imply schedule.manage")
+	}
+	if !registryauth.ActionBillingManage.Valid() || !registryauth.ActionBillingManage.SiteScoped() {
+		t.Fatal("billing.manage action must be valid and Site scoped")
+	}
+	if registryauth.ActionBillingManage.TenantScoped() {
+		t.Fatal("billing.manage must not be Tenant scoped")
+	}
 }
 
 type errRevocationUnavailable struct{}

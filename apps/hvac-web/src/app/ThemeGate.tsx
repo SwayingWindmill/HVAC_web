@@ -52,7 +52,11 @@ export function ThemeGate({
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedMode;
     document.documentElement.classList.toggle('dark', resolvedMode === 'dark');
-  }, [resolvedMode]);
+    document.querySelector('meta[name="color-scheme"]')?.setAttribute(
+      'content',
+      mode === 'system' ? 'light dark' : mode,
+    );
+  }, [mode, resolvedMode]);
 
   return (
     <QueryClientProvider client={queryClient}>

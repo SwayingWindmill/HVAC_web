@@ -53,3 +53,4 @@ shadcn CLI 不装进依赖，`scripts/shadcn-cli.mjs` 用 `npx` 运行固定版�
 - 页面只显示真实来源的数据；还没接上的，明确显示「未接入」。示例数据只出现在 `HVAC_WEB_FRONTEND_REVIEW=true` 的评审构建里。
 - 面向值班人员的界面只显示业务事实：状态、影响、时间、原因、谁负责、能做什么；用 `GLOSSARY.md` 里的词。内部值（UUID、trace ID、枚举、版本号、合同或 schema 名）翻成日常说法，或者不显示；业务编号用真的业务编号，不拿 UUID 截一段代替。
 - 只做桌面端。界面改动要在 1440px 宽度下用真实数据实际看过（本地 8443 或服务器），构建通过不算看过；发现的问题一次改完，再看一遍确认。
+- 浏览器能力以现代桌面浏览器的稳定标准（Baseline Widely Available）为准，根目录 `.mwgrc` 关闭实验性特性；查 `modern-web-guidance` 时，凡和 `DESIGN.md` 或已安装的 shadcn/ui（`radix-nova`）组件冲突的，以 `DESIGN.md` 和现有组件为准，不重写组件底座（取舍见 `docs/architecture/modern-web-guidance-source-review-2026-11-11.md`）。

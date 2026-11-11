@@ -83,6 +83,7 @@ func TestAuthoritativeOwnersPrepareSealedOptimizationAndPublishRecommendation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	service.WithShadow(COPModelSolver{History: inputs}, 10*time.Second, nil).WithShadowReader(inputs)
 	recommendation, err := service.Optimize(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -114,6 +115,13 @@ func TestAuthoritativeOwnersPrepareSealedOptimizationAndPublishRecommendation(t 
 	if preparation.Status != "FAILED" || preparation.Reason == nil || *preparation.Reason != string(ReasonZoneTempMissing) ||
 		!preparation.FiredAt.Equal(time.Date(2026, 8, 28, 11, 20, 0, 0, time.UTC)) {
 		t.Fatalf("preparation=%#v", preparation)
+	}
+	shadow, err := service.LatestShadowEvaluation(t.Context(), request.TenantID, request.SiteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shadow.RunID != prepared.OptimizationRunID || shadow.PublishedRecommendationID != recommendation.ID || shadow.Solver != ChillerCOPSolverName || shadow.Mode != "SHADOW" {
+		t.Fatalf("shadow=%#v", shadow)
 	}
 }
 

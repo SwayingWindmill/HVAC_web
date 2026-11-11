@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
-import { ClipboardPlus, Link2, SearchCheck, SlidersHorizontal, Stethoscope } from 'lucide-react';
+import { ClipboardPlus, LineChart, Link2, SearchCheck, SlidersHorizontal, Stethoscope } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import { GatewayRequestError } from '@/api/gateway-client';
@@ -19,6 +19,9 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { plantReading, type PlantReading, type PlantView } from '@/features/operations/realtime/plant-model';
 import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
 import { deviceSpanHistoryQuery } from '@/features/operations/systems-devices/device-history';
+import { siteAssetModelQuery } from '@/features/operations/trends/query';
+import { buildTrendCatalog } from '@/features/operations/trends/trends-model';
+import { buildFindingTrendSearch } from '@/features/operations/trends/trends-overlays';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
@@ -263,6 +266,12 @@ function FindingDetail({ finding, assetName, plant, meterId, onCreate }: {
   const shortfall = Math.round((Math.abs(finding.thresholdValue - finding.observedValue) / finding.thresholdValue) * 100);
   const windowMinutes = Math.round((Date.parse(finding.evaluationTo) - Date.parse(finding.evaluationFrom)) / 60_000);
   const canListWorkOrders = principal.authorization.capabilities.includes('work-order.list');
+  const canReadTrends = principal.authorization.capabilities.includes('telemetry.history.read');
+  const assetModel = useQuery({ ...siteAssetModelQuery(site.id), enabled: canReadTrends });
+  const trendCatalog = useMemo(
+    () => (assetModel.data ? buildTrendCatalog(assetModel.data) : null),
+    [assetModel.data],
+  );
   const workOrders = useQuery({
     queryKey: workOrderKeys.source(site.id, 'ASSET', finding.assetId),
     queryFn: ({ signal }) => listWorkOrders({ sourceDomain: 'ASSET', sourceRef: finding.assetId, limit: 20 }, { siteId: site.id, signal }),
@@ -295,6 +304,22 @@ function FindingDetail({ finding, assetName, plant, meterId, onCreate }: {
               <ClipboardPlus data-icon="inline-start" />
               创建工单
             </Button>
+            {canReadTrends ? (
+              <Button size="sm" variant="outline" asChild>
+                <Link
+                  to="/operations/trends"
+                  search={buildFindingTrendSearch({
+                    siteId: site.id,
+                    finding,
+                    title: rule?.title ?? '诊断发现',
+                    catalog: trendCatalog,
+                  })}
+                >
+                  <LineChart data-icon="inline-start" />
+                  查看当时趋势
+                </Link>
+              </Button>
+            ) : null}
             {rule === LOW_DELTA_T ? (
               <Button size="sm" variant="outline" asChild>
                 <Link to="/operations/control" search={{ site: site.id }}>

@@ -117,3 +117,123 @@ func testObservation(id, key string, sampledAt time.Time, acceptance Acceptance,
 		SourcePosition: SourcePosition{Partition: "mqtt:gateway:device:" + key, Offset: 42, EventID: id},
 	}
 }
+
+func TestAggregateGranularityMinuteAndFiveMinuteEnforce720PerKeyAnd5760TotalLimit(t *testing.T) {
+	from := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	validMinute := DeviceHistoryAggregateQuery{
+		TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
+		Keys: []string{"chiller.leaving_chilled_water_temperature"},
+		From: from, To: from.Add(12 * time.Hour),
+		Granularity: AggregateGranularityMinute, Timezone: "Asia/Shanghai", QualityPolicy: AggregateQualityUsable,
+	}
+	if err := validMinute.Validate(); err != nil {
+		t.Fatalf("12h MINUTE (720 buckets) should be valid: %v", err)
+	}
+	tooManyMinutes := validMinute
+	tooManyMinutes.To = from.Add(12*time.Hour + time.Minute)
+	if err := tooManyMinutes.Validate(); err == nil {
+		t.Fatal("12h01m MINUTE (721 buckets) should be rejected")
+	}
+
+	validFiveMinute := validMinute
+	validFiveMinute.Granularity = AggregateGranularityFiveMinute
+	validFiveMinute.To = from.Add(60 * time.Hour)
+	if err := validFiveMinute.Validate(); err != nil {
+		t.Fatalf("60h FIVE_MINUTE (720 buckets) should be valid: %v", err)
+	}
+	tooManyFiveMinutes := validFiveMinute
+	tooManyFiveMinutes.To = from.Add(60*time.Hour + 5*time.Minute)
+	if err := tooManyFiveMinutes.Validate(); err == nil {
+		t.Fatal("60h05m FIVE_MINUTE (721 buckets) should be rejected")
+	}
+
+	tenDaysQuarterHour := validMinute
+	tenDaysQuarterHour.Granularity = AggregateGranularityQuarterHour
+	tenDaysQuarterHour.To = from.Add(10 * 24 * time.Hour)
+	if err := tenDaysQuarterHour.Validate(); err != nil {
+		t.Fatalf("10d QUARTER_HOUR (960 buckets) must remain valid for demand chunks: %v", err)
+	}
+
+	keys := []string{"k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8"}
+	tooManyTotalQuarterHours := tenDaysQuarterHour
+	tooManyTotalQuarterHours.Keys = keys
+	if err := tooManyTotalQuarterHours.Validate(); err == nil {
+		t.Fatal("8 keys x 960 QUARTER_HOUR buckets (7680 > 5760) must fail input validation")
+	}
+	multiKeyQuery := DeviceHistoryAggregateQuery{
+		TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
+		Keys: keys, From: from, To: from.Add(6 * time.Hour),
+		Granularity: AggregateGranularityMinute, Timezone: "Asia/Shanghai", QualityPolicy: AggregateQualityUsable,
+	}
+	buckets := make([]DeviceHistoryAggregateBucket, 0, 8*360)
+	for keyIndex, key := range keys {
+		pointType := PointTypeTelemetry
+		if keyIndex == 7 {
+			pointType = PointTypeSetting
+		}
+		for minute := 0; minute < 360; minute++ {
+			periodStart := from.Add(time.Duration(minute) * time.Minute)
+			buckets = append(buckets, DeviceHistoryAggregateBucket{
+				TelemetryKey: key, PointID: testPointID, PointRevision: 1, PointType: pointType,
+				PeriodStart: periodStart, PeriodEnd: periodStart.Add(time.Minute),
+				Quality: AggregateQualitySummary{Good: 1}, Completeness: 1,
+				Gauge: &GaugeAggregate{Average: 7, Minimum: 7, Maximum: 7, First: 7, Last: 7, SampleCount: 1},
+			})
+		}
+	}
+	response := DeviceHistoryAggregateResponse{
+		SchemaVersion: 1, TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
+		Buckets: buckets,
+		Metadata: DeviceHistoryAggregateMetadata{
+			RequestedFrom: from, RequestedTo: from.Add(6 * time.Hour),
+			Granularity: AggregateGranularityMinute, Timezone: "Asia/Shanghai", QualityPolicy: AggregateQualityUsable,
+			ReturnedBuckets: len(buckets),
+		},
+	}
+	if err := response.ValidateFor(multiKeyQuery); err != nil {
+		t.Fatalf("8 keys x 360 buckets (2880 <= 5760) including SETTING gauge should be valid: %v", err)
+	}
+}
+
+func TestTelemetryAndSettingDiscreteStateBucketsAreAccepted(t *testing.T) {
+	from := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	query := DeviceHistoryAggregateQuery{
+		TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
+		Keys: []string{"chiller.run_state", "chiller.mode_setting"},
+		From: from, To: from.Add(5 * time.Minute),
+		Granularity: AggregateGranularityFiveMinute, Timezone: "Asia/Shanghai", QualityPolicy: AggregateQualityUsable,
+	}
+	response := DeviceHistoryAggregateResponse{
+		SchemaVersion: 1, TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
+		Buckets: []DeviceHistoryAggregateBucket{
+			{
+				TelemetryKey: "chiller.run_state", PointID: testPointID, PointRevision: 1, PointType: PointTypeTelemetry,
+				PeriodStart: from, PeriodEnd: from.Add(5 * time.Minute),
+				Quality: AggregateQualitySummary{Good: 5}, Completeness: 1,
+				State: &StateAggregate{
+					ValueType: ValueTypeString, LastValue: []byte(`"RUNNING"`), SampleCount: 5, ChangeCount: 1,
+					StateCounts: []StateCount{
+						{Value: []byte(`"RUNNING"`), Count: 4},
+						{Value: []byte(`"STOPPED"`), Count: 1},
+					},
+				},
+			},
+			{
+				TelemetryKey: "chiller.mode_setting", PointID: testPointID, PointRevision: 1, PointType: PointTypeSetting,
+				PeriodStart: from, PeriodEnd: from.Add(5 * time.Minute),
+				Quality: AggregateQualitySummary{Good: 1}, Completeness: 1,
+				State: &StateAggregate{
+					ValueType: ValueTypeBoolean, LastValue: []byte(`true`), SampleCount: 1, ChangeCount: 0,
+				},
+			},
+		},
+		Metadata: DeviceHistoryAggregateMetadata{
+			RequestedFrom: from, RequestedTo: from.Add(5 * time.Minute),
+			Granularity: AggregateGranularityFiveMinute, Timezone: "Asia/Shanghai", QualityPolicy: AggregateQualityUsable,
+			ReturnedBuckets: 2,
+		},
+	}
+	if err := response.ValidateFor(query); err != nil {
+		t.Fatalf("TELEMETRY/SETTING with STRING/BOOLEAN state result should be valid: %v", err)
+	}
+}

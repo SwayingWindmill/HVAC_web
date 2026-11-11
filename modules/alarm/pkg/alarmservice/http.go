@@ -384,10 +384,13 @@ func mutationAction(operation alarmmodel.Operation) (string, bool) {
 
 func (handler *httpHandler) parseFilter(request *http.Request) (Filter, bool) {
 	query := request.URL.Query()
-	for key := range query {
+	for key, values := range query {
 		switch key {
-		case "condition", "severity", "acknowledged", "suppressed", "cursor", "limit":
+		case "condition", "severity", "acknowledged", "suppressed", "activeFrom", "activeTo", "cursor", "limit":
 		default:
+			return Filter{}, false
+		}
+		if len(values) != 1 {
 			return Filter{}, false
 		}
 	}
@@ -405,6 +408,25 @@ func (handler *httpHandler) parseFilter(request *http.Request) (Filter, bool) {
 			return Filter{}, false
 		}
 		filter.Suppressed = &value
+	}
+	if raw := query.Get("activeFrom"); raw != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return Filter{}, false
+		}
+		utc := parsed.UTC()
+		filter.ActiveFrom = &utc
+	}
+	if raw := query.Get("activeTo"); raw != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return Filter{}, false
+		}
+		utc := parsed.UTC()
+		filter.ActiveTo = &utc
+	}
+	if filter.ActiveFrom != nil && filter.ActiveTo != nil && filter.ActiveFrom.After(*filter.ActiveTo) {
+		return Filter{}, false
 	}
 	if raw := query.Get("limit"); raw != "" {
 		value, err := strconv.Atoi(raw)

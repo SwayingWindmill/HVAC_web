@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	CapabilitySetVersion                 = 13
+	CapabilitySetVersion                 = 14
 	GetHealthPath                         = "__HEALTH_PATH__"
 	GetVersionPath                        = "__VERSION_PATH__"
 	GetPlatformStatusPath                 = "__PLATFORM_STATUS_PATH__"
@@ -122,6 +122,9 @@ const (
 	CapabilityRegistryImport        Capability = "registry.import"
 	CapabilityRegistryRetire        Capability = "registry.retire"
 	CapabilitySavingsManage         Capability = "savings.manage"
+	CapabilityScheduleRequest       Capability = "schedule.request"
+	CapabilityScheduleManage        Capability = "schedule.manage"
+	CapabilityBillingManage         Capability = "billing.manage"
 )
 
 type EffectiveAuthorization struct {
@@ -195,16 +198,18 @@ type Site struct {
 }
 
 type Asset struct {
-	ID            string `json:"id"`
-	TenantID      string `json:"tenantId"`
-	SiteID        string `json:"siteId"`
-	Code          string `json:"code"`
-	DisplayName   string `json:"displayName"`
-	AssetType string `json:"assetType"`
-	Status        string `json:"status"`
-	Revision      int64  `json:"revision"`
-	CreatedAt     string `json:"createdAt"`
-	UpdatedAt     string `json:"updatedAt"`
+	ID            string   `json:"id"`
+	TenantID      string   `json:"tenantId"`
+	SiteID        string   `json:"siteId"`
+	Code          string   `json:"code"`
+	DisplayName   string   `json:"displayName"`
+	AssetType     string   `json:"assetType"`
+	Status        string   `json:"status"`
+	Revision      int64    `json:"revision"`
+	CreatedAt     string   `json:"createdAt"`
+	UpdatedAt     string   `json:"updatedAt"`
+	RatedPower    *float64 `json:"ratedPower,omitempty"`
+	RatedCapacity *float64 `json:"ratedCapacity,omitempty"`
 }
 
 type Device struct {

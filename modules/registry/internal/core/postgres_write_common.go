@@ -29,7 +29,7 @@ type mutationRecord[T any] struct {
 }
 
 func (store *PostgresStore) withWriteTransaction(ctx context.Context, claims registryauth.GrantClaims, action registryauth.Action, fn func(pgx.Tx) error) error {
-	if store == nil || store.pool == nil || !validUUIDv7(claims.PrincipalID) || !validUUIDv7(claims.TenantID) || len(claims.Actions) != 1 || claims.Actions[0] != action {
+	if store == nil || store.pool == nil || !validUUIDv7(claims.PrincipalID) || !validUUIDv7(claims.TenantID) || len(claims.Actions) != 1 || !registryauth.ActionAllows(claims.Actions[0], action) {
 		return ErrInvalidMutation
 	}
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite})
@@ -215,7 +215,8 @@ func mapRegistryWriteError(err error) error {
 		return nil
 	}
 	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrRevisionConflict) || errors.Is(err, ErrIdempotencyConflict) || errors.Is(err, ErrBindingConflict) ||
-		errors.Is(err, ErrTemplateImmutable) || errors.Is(err, ErrImportPlanInvalid) || errors.Is(err, ErrResourceDependencies) || errors.Is(err, ErrInvalidMutation) {
+		errors.Is(err, ErrTemplateImmutable) || errors.Is(err, ErrImportPlanInvalid) || errors.Is(err, ErrResourceDependencies) || errors.Is(err, ErrInvalidMutation) ||
+		errors.Is(err, ErrMutationForbidden) || errors.Is(err, ErrExceptionStateConflict) || errors.Is(err, ErrUtilityBillStateConflict) {
 		return err
 	}
 	var pgErr *pgconn.PgError

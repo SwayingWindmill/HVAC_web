@@ -191,7 +191,7 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 	_, _, verifiedTelemetryWorkload := verifiedTelemetryWorkloadIdentity(request)
 	_, _, telemetryRoute := matchPublicTelemetryRoute(request.URL.Path)
 	allowTelemetryWorkloadTenant := verifiedTelemetryWorkload && telemetryRoute
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Notification-Context", "X-Work-Order-Read-Context", "X-Work-Order-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Asset-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant"} {
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Notification-Context", "X-Work-Order-Read-Context", "X-Work-Order-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Asset-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant", "X-Actor-Display-Name"} {
 		if request.Header.Get(header) == "" || (header == "X-Tenant-ID" && allowTelemetryWorkloadTenant) {
 			continue
 		}
@@ -213,6 +213,14 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		}
 		if registryRoute, id, matches := matchPublicRegistryRoute(request.Method, request.URL.Path); matches {
 			dispatchRegistryRoute(h, writer, request, registryRoute, id)
+			return
+		}
+		if scheduleRoute, matches := matchPublicOperatingScheduleRoute(request.Method, request.URL.Path); matches {
+			dispatchOperatingScheduleRoute(h, writer, request, scheduleRoute)
+			return
+		}
+		if billingRoute, matches := matchPublicElectricityBillingRoute(request.Method, request.URL.Path); matches {
+			dispatchElectricityBillingRoute(h, writer, request, billingRoute)
 			return
 		}
 		if agentSessionRoute, matches := matchPublicAgentSessionRoute(request.URL.Path); matches {
@@ -694,6 +702,11 @@ func safeLogPath(path string) string {
 		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPatch} {
 			if registryRoute, _, matches := matchPublicRegistryRoute(method, path); matches {
 				return registryRoute.template
+			}
+		}
+		for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodPost} {
+			if scheduleRoute, matches := matchPublicOperatingScheduleRoute(method, path); matches {
+				return scheduleRoute.template
 			}
 		}
 		if agentSessionRoute, matches := matchPublicAgentSessionRoute(path); matches {

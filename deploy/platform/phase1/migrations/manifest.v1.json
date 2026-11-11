@@ -98,7 +98,9 @@
         "infra/registry/postgres/init/031-drop-outbound-delivery.sql",
         "infra/registry/postgres/init/032-drop-generic-rules.sql",
         "infra/registry/postgres/init/033-fdd-operating-gates.sql",
-        "infra/registry/postgres/init/034-asset-nameplate.sql"
+        "infra/registry/postgres/init/034-operating-schedules.sql",
+        "infra/registry/postgres/init/035-electricity-budgets-and-utility-bills.sql",
+        "infra/registry/postgres/init/036-asset-nameplate.sql"
       ]
     },
     {

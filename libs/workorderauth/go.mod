@@ -1,6 +1,6 @@
 module github.com/quanlaihe/hvac-web/libs/workorderauth
 
-go 1.27.3
+go 1.27.4
 
 require github.com/quanlaihe/hvac-web/libs/workordermodel v0.0.0
 

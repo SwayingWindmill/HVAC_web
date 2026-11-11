@@ -5,8 +5,17 @@ test('an operator sets the chilled water setpoint and approves stopping a pump, 
   await page.goto(`/operations/control?site=${SITE_ID}`);
 
   const chiller = page.getByRole('rowgroup', { name: 'CHILLER-01' });
-  await chiller.getByRole('textbox', { name: '冷冻水出水设定温度目标值' }).fill('7.5');
-  await chiller.getByRole('button', { name: '下发' }).first().click();
+  const setpointInput = chiller.getByRole('textbox', { name: '冷冻水出水设定温度目标值' });
+  await setpointInput.fill('7.5');
+
+  // Confirming an IME candidate with Enter (including Safari's post-compositionend keyCode 229) must not submit.
+  await setpointInput.evaluate((element) => {
+    element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
+    element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 229, isComposing: false, bubbles: true, cancelable: true }));
+  });
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+
+  await setpointInput.press('Enter');
   const confirm = page.getByRole('alertdialog');
   await expect(confirm).toContainText('向 CHILLER-01 下发指令？');
   await expect(confirm).toContainText('7.5 °C');
@@ -35,4 +44,22 @@ test('an operator sets the chilled water setpoint and approves stopping a pump, 
   const sheet = page.getByRole('dialog');
   await expect(sheet).toContainText('需一人审批 · 1/1');
   await expect(sheet.getByRole('listitem')).toHaveText([/已提交/, /待审批/, /已批准/, /已执行/]);
+});
+
+test('the appearance switch keeps document color-scheme and meta[name="color-scheme"] in sync across system, light and dark', async ({ page }) => {
+  await page.goto(`/operations/control?site=${SITE_ID}`);
+
+  const appearance = page.getByRole('radiogroup', { name: '外观' });
+  await expect(page.locator('meta[name="color-scheme"]')).toHaveAttribute('content', 'light dark');
+
+  await appearance.getByRole('radio', { name: '深色' }).click();
+  await expect(page.locator('meta[name="color-scheme"]')).toHaveAttribute('content', 'dark');
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('dark');
+
+  await appearance.getByRole('radio', { name: '浅色' }).click();
+  await expect(page.locator('meta[name="color-scheme"]')).toHaveAttribute('content', 'light');
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('light');
+
+  await appearance.getByRole('radio', { name: '系统' }).click();
+  await expect(page.locator('meta[name="color-scheme"]')).toHaveAttribute('content', 'light dark');
 });

@@ -2,6 +2,7 @@ package optimization
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -135,5 +136,42 @@ func TestOptimizationInputReaderNamesTheTelemetryKeyWithNoObservation(t *testing
 	})
 	if reason, ok := PreparationReasonOf(err); !ok || reason != ReasonZoneTempMissing {
 		t.Fatalf("reason=%q ok=%v err=%v", reason, ok, err)
+	}
+}
+
+func TestClickHouseInputReaderReadsShadowEvaluationForPublishedRun(t *testing.T) {
+	var seenQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		seenQuery = string(body)
+		writer.Header().Set("Content-Type", "application/x-ndjson")
+		if strings.Contains(seenQuery, "01990000-1950-7000-8000-000000000101") {
+			_, _ = writer.Write([]byte(`{"evaluationId":"01990000-1980-7000-8000-000000000101","optimizationRunId":"01990000-1950-7000-8000-000000000101","recommendationId":"01990000-1990-7000-8000-000000000101","generatedAt":"2026-08-28T15:00:00.000Z","evaluationJSON":"{\"solver\":\"CHILLER_COP_MODEL\",\"mode\":\"SHADOW\",\"outcome\":\"NO_USABLE_MODEL\"}"}` + "\n"))
+		}
+	}))
+	defer server.Close()
+
+	reader, err := NewClickHouseInputReader(InputReaderConfig{BaseURL: server.URL, Energy: &energySeriesStub{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := reader.ReadShadowEvaluation(t.Context(), ShadowEvaluationQuery{
+		TenantID:          "01990000-3000-7000-8000-000000000001",
+		SiteID:            "01990000-5000-7000-8000-000000000001",
+		OptimizationRunID: "01990000-1950-7000-8000-000000000101",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(seenQuery, "quality = 'SHADOW'") || record.EvaluationID != "01990000-1980-7000-8000-000000000101" {
+		t.Fatalf("seenQuery=%s record=%#v", seenQuery, record)
+	}
+	_, err = reader.ReadShadowEvaluation(t.Context(), ShadowEvaluationQuery{
+		TenantID:          "01990000-3000-7000-8000-000000000001",
+		SiteID:            "01990000-5000-7000-8000-000000000001",
+		OptimizationRunID: "01990000-1950-7000-8000-000000000999",
+	})
+	if !errors.Is(err, ErrShadowEvaluationNotFound) {
+		t.Fatalf("missing shadow err=%v, want ErrShadowEvaluationNotFound", err)
 	}
 }

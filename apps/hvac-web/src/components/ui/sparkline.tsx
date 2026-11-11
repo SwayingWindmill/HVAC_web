@@ -9,8 +9,8 @@ import {
 import { cn } from '@/lib/utils';
 
 export interface SparklineProps extends React.ComponentProps<'div'> {
-  /** Series to plot, oldest first. */
-  data: readonly number[];
+  /** Series to plot, oldest first. Null entries leave an honest gap across missing buckets. */
+  data: readonly (number | null)[];
   variant?: 'area' | 'line';
   /** Any CSS color or CSS variable. Defaults to var(--primary). */
   color?: string;
@@ -51,6 +51,7 @@ export function Sparkline({
               stroke={color}
               strokeWidth={strokeWidth}
               dot={false}
+              connectNulls={false}
               isAnimationActive={animate}
               animationDuration={animationDuration}
               animationEasing="ease-out"
@@ -71,6 +72,7 @@ export function Sparkline({
               strokeWidth={strokeWidth}
               fill={`url(#${id})`}
               dot={false}
+              connectNulls={false}
               isAnimationActive={animate}
               animationDuration={animationDuration}
               animationEasing="ease-out"

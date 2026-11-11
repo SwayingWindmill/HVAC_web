@@ -64,8 +64,7 @@ ORDER BY display_name COLLATE "C", id
 		}
 
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, tenant_id::text, site_id::text, code, display_name,
-       asset_type, status, revision, created_at, updated_at
+SELECT `+assetColumns+`
 FROM core_registry.assets
 WHERE site_id = $1::uuid
 ORDER BY display_name COLLATE "C", id

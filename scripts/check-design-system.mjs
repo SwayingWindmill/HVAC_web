@@ -2,8 +2,9 @@ import { readFile, readdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Checks the Web code against the design system's composition rules (DESIGN.md): tables, page
-// landmarks and the shadcn setup. Documents are not checked here.
+// Checks the Web code against the design system's composition rules (DESIGN.md) and pinned
+// web-platform guardrails (docs/architecture/modern-web-guidance-source-review-2026-11-11.md).
+// Documents are not checked here.
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultRoot = resolve(dirname(scriptPath), '..');
 
@@ -121,6 +122,71 @@ async function validateDataTableSurfaceGrammar(root, errors) {
   }
 }
 
+function balancedBraces(source, openBraceIndex) {
+  let depth = 0;
+  for (let index = openBraceIndex; index < source.length; index += 1) {
+    const ch = source[index];
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(openBraceIndex, index + 1);
+    }
+  }
+  return source.slice(openBraceIndex);
+}
+
+async function validateImeSafeEnterHandlers(root, errors) {
+  const srcRoot = resolve(root, 'apps/hvac-web/src');
+  const tagPattern = /<(?:input|textarea|Input|Textarea|InputGroupInput|CommandInput)\b/g;
+  for (const path of await collectFeatureSources(srcRoot)) {
+    const source = await readFile(path, 'utf8');
+    const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
+    for (const match of source.matchAll(tagPattern)) {
+      const rest = source.slice(match.index);
+      const keyDownMatch = /\bonKeyDown\s*=\s*\{/.exec(rest);
+      if (!keyDownMatch) continue;
+      // Ensure this onKeyDown belongs to the matched opening tag rather than a later sibling tag.
+      const beforeAttr = rest.slice(match[0].length, keyDownMatch.index);
+      if (/(?:^|[^=])>/.test(beforeAttr.replace(/\{[^{}]*\}/g, ''))) continue;
+
+      const braceStart = match.index + keyDownMatch.index + keyDownMatch[0].length - 1;
+      let handlerSource = balancedBraces(source, braceStart);
+      const identifier = /^\{\s*([A-Za-z_$][\w$]*)\s*\}$/.exec(handlerSource)?.[1];
+      if (identifier) {
+        const decl = new RegExp(`(?:function\\s+${identifier}\\b[^\\{]*|const\\s+${identifier}\\s*=[^\\{]*)\\{`).exec(source);
+        if (decl) handlerSource = balancedBraces(source, decl.index + decl[0].length - 1);
+      }
+
+      if (!/\.(?:key|code)\s*(?:===|!==)\s*['"]Enter['"]/.test(handlerSource)) continue;
+      if (/\.(?:ctrlKey|metaKey)\b/.test(handlerSource)) continue;
+      const hasComposing = /\bisComposing\b/.test(handlerSource);
+      const hasKeyCode229 = /\.keyCode\s*===\s*229\b/.test(handlerSource);
+      if (!hasComposing || !hasKeyCode229) {
+        const line = source.slice(0, braceStart).split('\n').length;
+        errors.push(`${relativePath}:${line} text input Enter onKeyDown must guard IME composition with both isComposing and keyCode === 229`);
+      }
+    }
+  }
+}
+
+function validateColorSchemeSetup(indexHtml, globalCss, errors) {
+  if (!/<meta\s+name=["']color-scheme["']\s+content=["']light dark["']\s*\/?>/.test(indexHtml)) {
+    errors.push('apps/hvac-web/index.html must declare <meta name="color-scheme" content="light dark" />');
+  }
+  const rootBlock = /:root\s*\{([^}]*)\}/.exec(globalCss)?.[1] ?? '';
+  if (!/\bcolor-scheme\s*:\s*light\s+dark\s*;/.test(rootBlock)) {
+    errors.push('apps/hvac-web/src/global.css :root must declare color-scheme: light dark;');
+  }
+  const lightThemeBlock = /:root\[data-theme=["']light["']\]\s*\{([^}]*)\}/.exec(globalCss)?.[1] ?? '';
+  if (!/\bcolor-scheme\s*:\s*light\s*;/.test(lightThemeBlock)) {
+    errors.push('apps/hvac-web/src/global.css :root[data-theme="light"] must declare color-scheme: light;');
+  }
+  const darkBlock = /(?:^|\n)\.dark\s*\{([^}]*)\}/.exec(globalCss)?.[1] ?? '';
+  if (!/\bcolor-scheme\s*:\s*dark\s*;/.test(darkBlock)) {
+    errors.push('apps/hvac-web/src/global.css .dark must declare color-scheme: dark;');
+  }
+}
+
 function parseArgs(argv) {
   const rootArg = argv.find((argument) => argument.startsWith('--root='));
   return { root: rootArg ? resolve(rootArg.slice('--root='.length)) : defaultRoot };
@@ -131,6 +197,7 @@ export async function validateDesignSystem(root = defaultRoot) {
   await validateTableComponentUsage(root, errors);
   await validateContentGrammar(root, errors);
   await validateDataTableSurfaceGrammar(root, errors);
+  await validateImeSafeEnterHandlers(root, errors);
 
   const componentsJson = await readFile(resolve(root, 'apps/hvac-web/components.json'), 'utf8');
   for (const expected of ['"style": "radix-nova"', '"iconLibrary": "lucide"']) {
@@ -147,10 +214,12 @@ export async function validateDesignSystem(root = defaultRoot) {
   } else if (!shadcnStyles.includes(`shadcn@${cliVersion} dist/tailwind.css`)) {
     errors.push(`apps/hvac-web/src/styles/shadcn-tailwind.css must be the dist/tailwind.css of shadcn@${cliVersion}, the version scripts/shadcn-cli.mjs runs`);
   }
+  const indexHtml = await readFile(resolve(root, 'apps/hvac-web/index.html'), 'utf8');
   const globalCss = await readFile(resolve(root, 'apps/hvac-web/src/global.css'), 'utf8');
   if (globalCss.includes('"shadcn/tailwind.css"')) {
     errors.push('apps/hvac-web/src/global.css must import ./styles/shadcn-tailwind.css; the shadcn package is not installed');
   }
+  validateColorSchemeSetup(indexHtml, globalCss, errors);
 
   return { errors };
 }

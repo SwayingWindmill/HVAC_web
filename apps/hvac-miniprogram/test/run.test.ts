@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildPlant } from '../miniprogram/lib/plant.ts';
-import { hourlyCop, presentDevice, presentDevices, presentPlantNow, presentRealtime } from '../miniprogram/lib/run.ts';
+import { hourlyCop, hourlyElectricity, presentDevice, presentDevices, presentPlantNow, presentRealtime } from '../miniprogram/lib/run.ts';
 import { assetModel, recordedAt, snapshots } from './recorded.ts';
 
 const now = recordedAt;
@@ -90,6 +90,27 @@ test('today by the hour: efficiency where both meters read, no cooling drawn fla
   const empty = hourlyCop([], [], start, new Date(Date.parse(start) + 3_600_000));
   assert.equal(empty.peak, '');
   assert.equal(empty.gaps, '0 点没有读数');
+});
+
+test('the electricity of each hour today, marked with the same hour yesterday on one scale for both days', () => {
+  const start = '2026-10-20T16:00:00.000Z';
+  const yesterdayStart = '2026-10-19T16:00:00.000Z';
+  const today = [siteHour(start, 0, 100), siteHour(start, 1, 200), siteHour(start, 3, 50)];
+  const yesterday = [siteHour(yesterdayStart, 0, 400), siteHour(yesterdayStart, 1, 150), siteHour(yesterdayStart, 3, 120)];
+  const chart = hourlyElectricity(today, yesterday, start, new Date(Date.parse(start) + 3.5 * 3_600_000));
+
+  // Yesterday's 400 kWh sets the scale, though today has not reached it.
+  assert.deepEqual(chart.scale, ['400', '200', '0']);
+  assert.deepEqual(chart.bars.slice(0, 5).map((bar) => [bar.state, bar.height, bar.mark]), [
+    ['value', 25, 100], ['value', 50, 38], ['missing', 0, -1], ['value', 13, 30], ['later', 0, -1],
+  ]);
+  assert.equal(chart.gaps, '2 点没有读数');
+  assert.equal(chart.compared, true);
+
+  const alone = hourlyElectricity(today, [], start, new Date(Date.parse(start) + 3.5 * 3_600_000));
+  assert.equal(alone.compared, false);
+  assert.deepEqual(alone.scale, ['200', '100', '0']);
+  assert.ok(alone.bars.every((bar) => bar.mark === -1));
 });
 
 test('设备 lists the main equipment, then meters and the air, each with its state, its lead reading and what is wrong', () => {
