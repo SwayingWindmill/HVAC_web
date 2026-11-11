@@ -48,6 +48,7 @@ func NewHTTPHandler(service *Service, preparer *Preparer, auth AuthConfig) (http
 	mux.HandleFunc("POST /v1/optimize", handler.guard(WriteAction, handler.handleOptimize))
 	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/recommendations/latest", handler.guard(ReadAction, handler.handleLatestRecommendation))
 	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/preparations/latest", handler.guard(ReadAction, handler.handleLatestPreparation))
+	mux.HandleFunc("GET /v1/sites/{siteId}/optimization/shadow-evaluations/latest", handler.guard(ReadAction, handler.handleLatestShadowEvaluation))
 	return mux, nil
 }
 
@@ -100,6 +101,20 @@ func (handler *HTTPHandler) handleLatestPreparation(writer http.ResponseWriter, 
 	result, err := handler.service.LatestPreparation(request.Context(), site.TenantID, site.SiteID)
 	if errors.Is(err, ErrPreparationNotFound) {
 		writeJSONError(writer, http.StatusNotFound, "optimization_preparation_not_found")
+		return
+	}
+	if err != nil {
+		writeJSONError(writer, http.StatusBadGateway, "optimization_unavailable")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(result)
+}
+
+func (handler *HTTPHandler) handleLatestShadowEvaluation(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext) {
+	result, err := handler.service.LatestShadowEvaluation(request.Context(), site.TenantID, site.SiteID)
+	if errors.Is(err, ErrShadowEvaluationNotFound) {
+		writeJSONError(writer, http.StatusNotFound, "optimization_shadow_not_found")
 		return
 	}
 	if err != nil {

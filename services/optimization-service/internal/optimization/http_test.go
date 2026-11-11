@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -52,6 +53,7 @@ func (store *oneTenantRecommendations) LatestPreparation(_ context.Context, tena
 // Gateway does.
 type optimizationFixture struct {
 	handler  http.Handler
+	service  *Service
 	prepared *preparationStoreStub
 	signer   *ecdsa.PrivateKey
 	now      time.Time
@@ -86,7 +88,7 @@ func newOptimizationFixture(t *testing.T) optimizationFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return optimizationFixture{handler: handler, prepared: store, signer: signer, now: at, audience: Audience}
+	return optimizationFixture{handler: handler, service: service, prepared: store, signer: signer, now: at, audience: Audience}
 }
 
 // call presents a context signed for presenter, action, Tenant and Site from the peer workload, or
@@ -245,5 +247,110 @@ func TestOptimizationPreparationOutcomeFromTheFiringJob(t *testing.T) {
 		if outcome.Trigger != TriggerSchedule || outcome.Status != test.wantStatus || reason != test.wantReason {
 			t.Fatalf("%s/%v: outcome=%#v reason=%q", test.state, test.code, outcome, reason)
 		}
+	}
+}
+
+type shadowReaderStub struct {
+	row ShadowEvaluationRecord
+	err error
+}
+
+func (stub *shadowReaderStub) ReadShadowEvaluation(_ context.Context, query ShadowEvaluationQuery) (ShadowEvaluationRecord, error) {
+	if stub.err != nil {
+		return ShadowEvaluationRecord{}, stub.err
+	}
+	if stub.row.OptimizationRunID != query.OptimizationRunID || query.TenantID != testTenant || query.SiteID != testSite {
+		return ShadowEvaluationRecord{}, ErrShadowEvaluationNotFound
+	}
+	return stub.row, nil
+}
+
+// #776: The Site's latest shadow evaluation is served read-only for the latest published run, omits
+// any executable Recommendation payload, and never blocks or degrades recommendations/latest.
+func TestOptimizationServesLatestShadowEvaluationWithoutExecutableRecommendation(t *testing.T) {
+	fixture := newOptimizationFixture(t)
+	latestShadow := "/v1/sites/" + testSite + "/optimization/shadow-evaluations/latest"
+	latestPublished := "/v1/sites/" + testSite + "/optimization/recommendations/latest"
+
+	// Without a configured shadow reader (e.g. OPTIMIZATION_SHADOW_SOLVER=OFF), 404 is returned cleanly.
+	missing := fixture.call(t, http.MethodGet, latestShadow, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testSite)
+	if missing.Code != http.StatusNotFound || strings.TrimSpace(missing.Body.String()) != `{"error":"optimization_shadow_not_found"}` {
+		t.Fatalf("missing shadow status=%d body=%s", missing.Code, missing.Body.String())
+	}
+
+	request := validRequest()
+	request.OptimizationRunID = "01990000-1950-7000-8000-000000000101"
+	publishedRec, err := (HVACRecommendationSolver{}).Recommend(t.Context(), request, fixture.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cv := 0.0412
+	shadowEval := ShadowEvaluation{
+		Solver:         ChillerCOPSolverName,
+		Mode:           "SHADOW",
+		Outcome:        ShadowFeasible,
+		CVRMSE:         &cv,
+		CondenserReset: map[string]any{"status": "NOT_AVAILABLE", "reason": "NO_CONDENSER_SETPOINT"},
+		EnergyResponse: map[string]any{"source": "FITTED_FROM_HISTORY", "dailyEnergyDeltaKWhPerSupplyTempC": -165.4, "replacesPolicyValue": -180.0},
+		Candidates: []map[string]any{
+			{"supplyTempC": 8.0, "projectedZoneTempC": 23.4, "chillerEnergyDeltaKWh": -165.4, "dailyEnergyKWh": 2234.6, "dailyCost": 335.19, "extrapolated": false, "feasible": true},
+		},
+		Recommendation: &publishedRec,
+	}
+	rawShadow, err := json.Marshal(struct {
+		ShadowEvaluation
+		PublishedRecommendationID string `json:"publishedRecommendationId"`
+	}{shadowEval, "01990000-1990-7000-8000-000000000101"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &shadowReaderStub{
+		row: ShadowEvaluationRecord{
+			EvaluationID:      "01990000-1980-7000-8000-000000000101",
+			OptimizationRunID: "01990000-1950-7000-8000-000000000101",
+			RecommendationID:  "01990000-1990-7000-8000-000000000101",
+			GeneratedAt:       fixture.now,
+			EvaluationJSON:    string(rawShadow),
+		},
+	}
+	fixture.service.WithShadowReader(reader)
+
+	okResp := fixture.call(t, http.MethodGet, latestShadow, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testSite)
+	if okResp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", okResp.Code, okResp.Body.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(okResp.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, hasRecommendation := decoded["recommendation"]; hasRecommendation {
+		t.Fatalf("shadow endpoint leaked executable recommendation field: %s", okResp.Body.String())
+	}
+	if decoded["solver"] != ChillerCOPSolverName || decoded["mode"] != "SHADOW" || decoded["outcome"] != ShadowFeasible || decoded["runId"] != "01990000-1950-7000-8000-000000000101" {
+		t.Fatalf("unexpected shadow envelope: %#v", decoded)
+	}
+	summary, ok := decoded["summary"].(map[string]any)
+	if !ok || summary["supplyTempC"] != 8.0 {
+		t.Fatalf("missing non-executable shadow summary: %#v", decoded["summary"])
+	}
+
+	// Scope & delegation enforcement matches recommendations/latest.
+	if status := fixture.call(t, http.MethodGet, latestShadow, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testOtherTenant, testSite).Code; status != http.StatusNotFound {
+		t.Fatalf("another Tenant read this Site's shadow evaluation: %d", status)
+	}
+	if status := fixture.call(t, http.MethodGet, latestShadow, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testOtherSite).Code; status != http.StatusForbidden {
+		t.Fatalf("a context for another Site read this Site's shadow evaluation: %d", status)
+	}
+	if status := fixture.call(t, http.MethodGet, latestShadow, "", testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, testSite).Code; status != http.StatusForbidden {
+		t.Fatalf("a run context read the shadow evaluation: %d", status)
+	}
+
+	// Fault isolation: ClickHouse shadow read failure returns 502 on shadow-evaluations/latest while recommendations/latest stays 200.
+	reader.err = errors.New("clickhouse read timeout")
+	if status := fixture.call(t, http.MethodGet, latestShadow, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testSite).Code; status != http.StatusBadGateway {
+		t.Fatalf("shadow failure status=%d, want 502", status)
+	}
+	if status := fixture.call(t, http.MethodGet, latestPublished, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testSite).Code; status != http.StatusOK {
+		t.Fatalf("shadow failure broke recommendations/latest: %d", status)
 	}
 }

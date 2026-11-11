@@ -137,6 +137,7 @@ const expectedOperations = {
   createOptimizationRunV212: ['post', '/api/v1/optimization/runs'],
   getLatestSiteOptimizationRecommendationV212: ['get', '/api/v1/sites/{siteId}/optimization/recommendations/latest'],
   getLatestSiteOptimizationPreparationV212: ['get', '/api/v1/sites/{siteId}/optimization/preparations/latest'],
+  getLatestSiteOptimizationShadowEvaluationV212: ['get', '/api/v1/sites/{siteId}/optimization/shadow-evaluations/latest'],
 };
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {
@@ -361,6 +362,7 @@ const replacements = {
   __OPTIMIZATION_RUNS_PATH__: operations.createOptimizationRunV212.path,
   __LATEST_OPTIMIZATION_RECOMMENDATION_PATH__: operations.getLatestSiteOptimizationRecommendationV212.path,
   __LATEST_OPTIMIZATION_PREPARATION_PATH__: operations.getLatestSiteOptimizationPreparationV212.path,
+  __LATEST_OPTIMIZATION_SHADOW_EVALUATION_PATH__: operations.getLatestSiteOptimizationShadowEvaluationV212.path,
 };
 
 function render(template) {

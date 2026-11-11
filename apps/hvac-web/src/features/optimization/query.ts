@@ -1,11 +1,21 @@
 import { queryOptions } from '@tanstack/react-query';
 import { gatewayPath, gatewayRequest, publishedValueOf, valueOf, type GatewayProblem } from '@/api/gateway-client';
 import { intelligencePaths } from '@/api/generated/platformGateway.gen';
-import { parseRecommendation, type OptimizationRecommendation, type PreparationOutcome, type PublishedRecommendation } from './optimization-model';
+import { listWorkOrders, type WorkOrderList } from '@/api/work-orders';
+import { workOrderKeys } from '@/features/work-orders/work-order-queries';
+import {
+  optimizationRecommendationSourceRef,
+  parseRecommendation,
+  type OptimizationRecommendation,
+  type PreparationOutcome,
+  type PublishedRecommendation,
+  type PublishedShadowEvaluation,
+} from './optimization-model';
 
 export const optimizationKeys = {
   latest: (siteId: string) => ['optimization', siteId, 'latest'] as const,
   preparation: (siteId: string) => ['optimization', siteId, 'preparation'] as const,
+  shadow: (siteId: string, runId: string | null) => ['optimization', siteId, 'shadow', runId] as const,
 };
 
 const UNAVAILABLE = '优化服务暂时不可用';
@@ -40,6 +50,33 @@ export function latestRecommendationQuery(siteId: string, waitingForRun: string 
     ),
     // A requested run publishes within seconds; until it does the page asks again.
     refetchInterval: waitingForRun ? 3_000 : false,
+    retry: false,
+  });
+}
+
+/** Work orders originating from a specific optimization recommendation, used for manual dispatch deduplication. */
+export function recommendationWorkOrdersQuery(siteId: string, recommendationId: string | null, enabled: boolean) {
+  const sourceRef = recommendationId ? optimizationRecommendationSourceRef(recommendationId) : '';
+  return queryOptions({
+    queryKey: workOrderKeys.source(siteId, 'EXTERNAL', sourceRef),
+    queryFn: ({ signal }): Promise<WorkOrderList> =>
+      listWorkOrders({ sourceDomain: 'EXTERNAL', sourceRef, limit: 20 }, { siteId, signal }),
+    enabled: enabled && Boolean(recommendationId),
+  });
+}
+
+/** The Site's latest read-only shadow evaluation from the Chiller COP Model; fetched lazily on the analysis tab. */
+export function latestShadowEvaluationQuery(siteId: string, runId: string | null, enabled: boolean) {
+  return queryOptions({
+    queryKey: optimizationKeys.shadow(siteId, runId),
+    queryFn: async ({ signal }): Promise<PublishedShadowEvaluation | null> => publishedValueOf(
+      await gatewayRequest(gatewayPath(intelligencePaths.latestOptimizationShadowEvaluation, { siteId }), {
+        signal,
+        parse: (payload) => payload as PublishedShadowEvaluation,
+      }),
+      { unavailable: UNAVAILABLE },
+    ),
+    enabled,
     retry: false,
   });
 }

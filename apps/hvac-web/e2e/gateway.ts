@@ -234,6 +234,8 @@ function replayForecast(forecast: Json, now: string): Json {
 }
 
 export class Gateway {
+  principalOverride: Json | null = null;
+  assetModel: Json = fixture<Json>('asset-model.json');
   readonly alarms = fixture<Json[]>('alarms.json');
   // The Site's rules in effect, as the Alarm owner lists them; publishing the rules file changes them, not the page.
   readonly alarmRules = fixture<Json[]>('alarm-rules.json');
@@ -249,6 +251,9 @@ export class Gateway {
   optimization: Json | null = null;
   /** How the Site's Optimization schedule last fired; null while the Site has no schedule that fired. */
   optimizationPreparation: Json | null = null;
+  /** The Chiller COP Model's latest read-only shadow evaluation; null when no SHADOW row exists. */
+  optimizationShadow: Json | null = null;
+  shadowReads = 0;
   /** IAM refuses Energy Analytics for the Site, as it does for a Site outside the principal's analytics grant. */
   analyticsDenied = false;
   /** IAM refuses Alarm listing for the Site. */
@@ -481,13 +486,13 @@ export class Gateway {
 
   private respond(method: string, path: string, query: URLSearchParams, body: Json | null): { status?: number; body: unknown } | undefined {
     const now = new Date().toISOString();
-    if (method === 'GET' && path === '/api/v1/principal') return { body: principal };
+    if (method === 'GET' && path === '/api/v1/principal') return { body: this.principalOverride ?? principal };
     if (method === 'GET' && path === '/api/v1/platform/status') return { body: fixture('platform-status.json') };
     const userAdmin = this.userAdmin(method, path, body);
     if (userAdmin) return userAdmin;
     if (method === 'GET' && path === '/api/v1/sites') return { body: fixture('sites.json') };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}`) return { body: fixture<Json>('sites.json').items[0] };
-    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: fixture('asset-model.json') };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: this.assetModel };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/tariff`) {
       return this.tariff ? { body: this.tariff } : {
         status: 404,
@@ -535,6 +540,10 @@ export class Gateway {
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/preparations/latest`) {
       return this.optimizationPreparation ? { body: this.optimizationPreparation } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+    }
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/shadow-evaluations/latest`) {
+      this.shadowReads += 1;
+      return this.optimizationShadow ? { body: this.optimizationShadow } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
     }
     if (method === 'POST' && path === '/api/v1/optimization/runs') {
       if (!this.nextRecommendation) return { status: 502, body: fixture('optimization-run-declined.json') };

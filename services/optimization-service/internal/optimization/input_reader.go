@@ -208,6 +208,63 @@ FORMAT JSONEachRow`, query.TenantID, query.SiteID, clickHouseString(telemetryKey
 	}, nil
 }
 
+// ReadShadowEvaluation reads the SHADOW evaluation recorded beside a specific published run.
+func (reader *ClickHouseInputReader) ReadShadowEvaluation(ctx context.Context, query ShadowEvaluationQuery) (ShadowEvaluationRecord, error) {
+	if reader == nil || reader.baseURL == nil || reader.client == nil {
+		return ShadowEvaluationRecord{}, errors.New("optimization shadow evaluation reader is unavailable")
+	}
+	for field, value := range map[string]string{
+		"tenantId": query.TenantID, "siteId": query.SiteID, "optimizationRunId": query.OptimizationRunID,
+	} {
+		if !uuidPattern.MatchString(value) {
+			return ShadowEvaluationRecord{}, fmt.Errorf("%s must be a UUID", field)
+		}
+	}
+	sql := fmt.Sprintf(`SELECT
+ toString(evaluation_id) AS evaluationId,
+ toString(optimization_run_id) AS optimizationRunId,
+ toString(recommendation_id) AS recommendationId,
+ formatDateTime(generated_at,'%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ','UTC') AS generatedAt,
+ evaluation_json AS evaluationJSON
+FROM analytics.optimization_evaluations
+WHERE tenant_id = toUUID('%s')
+  AND site_id = toUUID('%s')
+  AND optimization_run_id = toUUID('%s')
+  AND quality = 'SHADOW'
+ORDER BY generated_at DESC, evaluation_id DESC
+LIMIT 1
+FORMAT JSONEachRow`,
+		clickHouseString(query.TenantID), clickHouseString(query.SiteID), clickHouseString(query.OptimizationRunID))
+	payload, err := reader.query(ctx, sql)
+	if err != nil {
+		return ShadowEvaluationRecord{}, fmt.Errorf("query shadow evaluation: %w", err)
+	}
+	if len(bytes.TrimSpace(payload)) == 0 {
+		return ShadowEvaluationRecord{}, ErrShadowEvaluationNotFound
+	}
+	var row struct {
+		EvaluationID      string `json:"evaluationId"`
+		OptimizationRunID string `json:"optimizationRunId"`
+		RecommendationID  string `json:"recommendationId"`
+		GeneratedAt       string `json:"generatedAt"`
+		EvaluationJSON    string `json:"evaluationJSON"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(payload)).Decode(&row); err != nil {
+		return ShadowEvaluationRecord{}, fmt.Errorf("decode shadow evaluation row: %w", err)
+	}
+	generatedAt, err := time.Parse(time.RFC3339Nano, row.GeneratedAt)
+	if err != nil {
+		return ShadowEvaluationRecord{}, fmt.Errorf("parse shadow evaluation timestamp: %w", err)
+	}
+	return ShadowEvaluationRecord{
+		EvaluationID:      row.EvaluationID,
+		OptimizationRunID: row.OptimizationRunID,
+		RecommendationID:  row.RecommendationID,
+		GeneratedAt:       generatedAt.UTC(),
+		EvaluationJSON:    row.EvaluationJSON,
+	}, nil
+}
+
 func (reader *ClickHouseInputReader) query(ctx context.Context, sql string) ([]byte, error) {
 	return reader.queryLimited(ctx, sql, maximumOptimizationInputResponseBytes)
 }
