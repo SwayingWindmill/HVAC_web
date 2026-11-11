@@ -14,6 +14,21 @@ export interface HourlyPoint {
   readonly maximum: number;
 }
 
+export interface HistoryWindow {
+  readonly fromMs: number;
+  readonly toMs: number;
+}
+
+export function dayHistoryWindow(nowMs = Date.now()): HistoryWindow {
+  const toMs = Math.floor(nowMs / HOUR_MS) * HOUR_MS + HOUR_MS;
+  return { fromMs: toMs - 24 * HOUR_MS, toMs };
+}
+
+export function recentHistoryWindow(hours: number, nowMs = Date.now()): HistoryWindow {
+  const toMs = Math.floor(nowMs / QUARTER_MS) * QUARTER_MS + QUARTER_MS;
+  return { fromMs: toMs - hours * HOUR_MS, toMs };
+}
+
 /**
  * Hourly gauge aggregates over the last 24 hours, including the current partial hour.
  * Like a ThingsBoard time-series widget on "last 24 hours, 1 hour AVG", buckets with no
@@ -25,16 +40,17 @@ export function deviceDayHistoryQuery(input: {
   readonly keys: readonly string[];
   readonly timezone: string;
   readonly csrfToken: string;
+  readonly window?: HistoryWindow;
 }) {
-  const nextHour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS + HOUR_MS;
+  const { fromMs, toMs } = input.window ?? dayHistoryWindow();
   return queryOptions({
-    queryKey: ['device-history', input.siteId, input.deviceId, input.keys, nextHour],
+    queryKey: ['device-history', input.siteId, input.deviceId, input.keys, toMs],
     queryFn: async ({ signal }) => {
       const response = await client.queryDeviceHistoryAggregate({
         deviceId: input.deviceId,
         keys: [...input.keys],
-        from: new Date(nextHour - 24 * HOUR_MS).toISOString(),
-        to: new Date(nextHour).toISOString(),
+        from: new Date(fromMs).toISOString(),
+        to: new Date(toMs).toISOString(),
         granularity: 'HOUR',
         timezone: input.timezone,
         qualityPolicy: 'USABLE',
@@ -58,16 +74,17 @@ export function deviceRecentHistoryQuery(input: {
   readonly hours: number;
   readonly timezone: string;
   readonly csrfToken: string;
+  readonly window?: HistoryWindow;
 }) {
-  const nextQuarter = Math.floor(Date.now() / QUARTER_MS) * QUARTER_MS + QUARTER_MS;
+  const { fromMs, toMs } = input.window ?? recentHistoryWindow(input.hours);
   return queryOptions({
-    queryKey: ['device-history', 'recent', input.siteId, input.deviceId, input.keys, input.hours, nextQuarter],
+    queryKey: ['device-history', 'recent', input.siteId, input.deviceId, input.keys, input.hours, toMs],
     queryFn: async ({ signal }) => {
       const response = await client.queryDeviceHistoryAggregate({
         deviceId: input.deviceId,
         keys: [...input.keys],
-        from: new Date(nextQuarter - input.hours * HOUR_MS).toISOString(),
-        to: new Date(nextQuarter).toISOString(),
+        from: new Date(fromMs).toISOString(),
+        to: new Date(toMs).toISOString(),
         granularity: 'QUARTER_HOUR',
         timezone: input.timezone,
         qualityPolicy: 'USABLE',

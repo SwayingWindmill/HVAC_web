@@ -164,6 +164,38 @@ func TestTelemetryGatewayDeviceHistoryAggregateBindsCalendarPolicy(t *testing.T)
 	}
 }
 
+func TestTelemetryGatewayDeviceHistoryAggregateMinuteBucketLimitAndAuthGuard(t *testing.T) {
+	fixture := newTelemetryGatewayFixture(t, "")
+	exceeded := s2telemetryapi.DeviceHistoryAggregateRequest{
+		DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{"temperature"},
+		From: s2telemetryapi.HistoryInstant("2026-07-24T00:00:00Z"), To: s2telemetryapi.HistoryInstant("2026-07-24T12:01:00Z"),
+		Granularity: s2telemetryapi.DeviceHistoryAggregateGranularityMinute, Timezone: "Asia/Shanghai", QualityPolicy: s2telemetryapi.DeviceHistoryAggregateQualityPolicyUsable,
+	}
+	body, _ := json.Marshal(exceeded)
+	request := httptest.NewRequest(http.MethodPost, s2telemetryapi.QueryDeviceHistoryAggregatePath, bytes.NewReader(body))
+	fixture.authenticate(request)
+	request.Header.Set("Origin", "https://web.example.test")
+	request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
+	request = request.WithContext(context.WithValue(request.Context(), routeDecisionContextKey, ownershipregistry.Decision{RegistryRevision: 12, SelectedOwner: ownershipregistry.OwnerAnalyticsQuery}))
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnprocessableEntity || fixture.iamCalls.Load() != 0 || fixture.queryCalls.Load() != 0 {
+		t.Fatalf("expected 422 before IAM/ClickHouse, got status=%d IAM=%d query=%d body=%s", recorder.Code, fixture.iamCalls.Load(), fixture.queryCalls.Load(), recorder.Body.String())
+	}
+
+	valid := exceeded
+	valid.To = s2telemetryapi.HistoryInstant("2026-07-24T01:00:00Z")
+	validBody, _ := json.Marshal(valid)
+	unauth := httptest.NewRequest(http.MethodPost, s2telemetryapi.QueryDeviceHistoryAggregatePath, bytes.NewReader(validBody))
+	unauth.Header.Set("Origin", "https://web.example.test")
+	unauth = unauth.WithContext(context.WithValue(unauth.Context(), routeDecisionContextKey, ownershipregistry.Decision{RegistryRevision: 12, SelectedOwner: ownershipregistry.OwnerAnalyticsQuery}))
+	unauthRecorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(unauthRecorder, unauth)
+	if unauthRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated aggregate call, got %d body=%s", unauthRecorder.Code, unauthRecorder.Body.String())
+	}
+}
+
 func TestTelemetryGatewayDeviceHistoryRejectsRuntimeRouteOwner(t *testing.T) {
 	fixture := newTelemetryGatewayFixture(t, "")
 	input := s2telemetryapi.DeviceHistoryRequest{

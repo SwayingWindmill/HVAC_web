@@ -1,3 +1,3 @@
 module github.com/quanlaihe/hvac-web/libs/operationsauditevent
 
-go 1.27.3
+go 1.27.4

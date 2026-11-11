@@ -16,6 +16,7 @@ import {
   ShieldAlert,
   SlidersHorizontal,
   Stethoscope,
+  TrendingUp,
   Trophy,
   Wrench,
   Zap,
@@ -59,6 +60,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
     section: 'main',
     items: [
       { id: 'operations-realtime', title: '实时运行', path: '/operations/realtime', icon: Activity },
+      { id: 'operations-trends', title: '历史趋势', path: '/operations/trends', icon: TrendingUp },
       { id: 'operations-systems-devices', title: '设备', path: '/operations/systems-devices', icon: ServerCog },
       { id: 'operations-digital-twin', title: '数字孪生', path: '/operations/digital-twin', icon: Box },
     ],

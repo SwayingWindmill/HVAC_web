@@ -28,6 +28,7 @@ import { Route as AppSiteOperationsDiagnosticsRouteImport } from './routes/_app.
 import { Route as AppSiteOperationsDigitalTwinRouteImport } from './routes/_app._site.operations.digital-twin'
 import { Route as AppSiteOperationsRealtimeRouteImport } from './routes/_app._site.operations.realtime'
 import { Route as AppSiteOperationsSystemsDevicesRouteImport } from './routes/_app._site.operations.systems-devices'
+import { Route as AppSiteOperationsTrendsRouteImport } from './routes/_app._site.operations.trends'
 import { Route as AppSiteOperationsWorkCenterRouteImport } from './routes/_app._site.operations.work-center'
 
 const AppRoute = AppRouteImport.update({
@@ -132,6 +133,11 @@ const AppSiteOperationsSystemsDevicesRoute =
     path: '/operations/systems-devices',
     getParentRoute: () => AppSiteRoute,
   } as any)
+const AppSiteOperationsTrendsRoute = AppSiteOperationsTrendsRouteImport.update({
+  id: '/operations/trends',
+  path: '/operations/trends',
+  getParentRoute: () => AppSiteRoute,
+} as any)
 const AppSiteOperationsWorkCenterRoute =
   AppSiteOperationsWorkCenterRouteImport.update({
     id: '/operations/work-center',
@@ -157,6 +163,7 @@ export interface FileRoutesByFullPath {
   '/operations/digital-twin': typeof AppSiteOperationsDigitalTwinRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
+  '/operations/trends': typeof AppSiteOperationsTrendsRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
 }
 export interface FileRoutesByTo {
@@ -177,6 +184,7 @@ export interface FileRoutesByTo {
   '/operations/digital-twin': typeof AppSiteOperationsDigitalTwinRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
+  '/operations/trends': typeof AppSiteOperationsTrendsRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
 }
 export interface FileRoutesById {
@@ -200,6 +208,7 @@ export interface FileRoutesById {
   '/_app/_site/operations/digital-twin': typeof AppSiteOperationsDigitalTwinRoute
   '/_app/_site/operations/realtime': typeof AppSiteOperationsRealtimeRoute
   '/_app/_site/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
+  '/_app/_site/operations/trends': typeof AppSiteOperationsTrendsRoute
   '/_app/_site/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
 }
 export interface FileRouteTypes {
@@ -222,6 +231,7 @@ export interface FileRouteTypes {
     | '/operations/digital-twin'
     | '/operations/realtime'
     | '/operations/systems-devices'
+    | '/operations/trends'
     | '/operations/work-center'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -242,6 +252,7 @@ export interface FileRouteTypes {
     | '/operations/digital-twin'
     | '/operations/realtime'
     | '/operations/systems-devices'
+    | '/operations/trends'
     | '/operations/work-center'
   id:
     | '__root__'
@@ -264,6 +275,7 @@ export interface FileRouteTypes {
     | '/_app/_site/operations/digital-twin'
     | '/_app/_site/operations/realtime'
     | '/_app/_site/operations/systems-devices'
+    | '/_app/_site/operations/trends'
     | '/_app/_site/operations/work-center'
   fileRoutesById: FileRoutesById
 }
@@ -406,6 +418,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteOperationsSystemsDevicesRouteImport
       parentRoute: typeof AppSiteRoute
     }
+    '/_app/_site/operations/trends': {
+      id: '/_app/_site/operations/trends'
+      path: '/operations/trends'
+      fullPath: '/operations/trends'
+      preLoaderRoute: typeof AppSiteOperationsTrendsRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
     '/_app/_site/operations/work-center': {
       id: '/_app/_site/operations/work-center'
       path: '/operations/work-center'
@@ -430,6 +449,7 @@ interface AppSiteRouteChildren {
   AppSiteOperationsDigitalTwinRoute: typeof AppSiteOperationsDigitalTwinRoute
   AppSiteOperationsRealtimeRoute: typeof AppSiteOperationsRealtimeRoute
   AppSiteOperationsSystemsDevicesRoute: typeof AppSiteOperationsSystemsDevicesRoute
+  AppSiteOperationsTrendsRoute: typeof AppSiteOperationsTrendsRoute
   AppSiteOperationsWorkCenterRoute: typeof AppSiteOperationsWorkCenterRoute
 }
 
@@ -448,6 +468,7 @@ const AppSiteRouteChildren: AppSiteRouteChildren = {
   AppSiteOperationsDigitalTwinRoute: AppSiteOperationsDigitalTwinRoute,
   AppSiteOperationsRealtimeRoute: AppSiteOperationsRealtimeRoute,
   AppSiteOperationsSystemsDevicesRoute: AppSiteOperationsSystemsDevicesRoute,
+  AppSiteOperationsTrendsRoute: AppSiteOperationsTrendsRoute,
   AppSiteOperationsWorkCenterRoute: AppSiteOperationsWorkCenterRoute,
 }
 

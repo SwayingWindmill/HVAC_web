@@ -1,6 +1,6 @@
 module github.com/quanlaihe/hvac-web/cmd/maintenance-worker
 
-go 1.27.3
+go 1.27.4
 
 require github.com/quanlaihe/hvac-web/modules/maintenance v0.0.0
 

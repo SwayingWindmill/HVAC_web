@@ -1,11 +1,13 @@
 import { useQueries } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
-import { deviceRecentHistoryQuery, type HourlyPoint } from '../systems-devices/device-history';
+import { deviceRecentHistoryQuery, recentHistoryWindow, type HourlyPoint } from '../systems-devices/device-history';
 import type { PlantView } from './plant-model';
 
 const siteRoute = getRouteApi('/_app/_site');
 
 export interface PlantHistory {
+  readonly fromMs: number;
+  readonly toMs: number;
   /** Quarter-hour points per source key, oldest first; absent when nothing was recorded. */
   readonly series: ReadonlyMap<string, readonly HourlyPoint[]>;
   readonly isPending: boolean;
@@ -19,6 +21,7 @@ export interface PlantHistory {
 export function usePlantHistory(plant: PlantView, sourceKeys: readonly string[], hours: number): PlantHistory {
   const { site, principal } = siteRoute.useRouteContext();
   const allowed = principal.authorization.capabilities.includes('telemetry.history.read');
+  const window = recentHistoryWindow(hours);
 
   // Which device reports each key, and the point code its history is stored under.
   const byDevice = new Map<string, { readonly deviceId: string; readonly points: Map<string, string> }>();
@@ -43,6 +46,7 @@ export function usePlantHistory(plant: PlantView, sourceKeys: readonly string[],
         hours,
         timezone: site.timezone,
         csrfToken: principal.session.csrfToken,
+        window,
       }),
       enabled: allowed,
     })),
@@ -56,6 +60,8 @@ export function usePlantHistory(plant: PlantView, sourceKeys: readonly string[],
     }
   });
   return {
+    fromMs: window.fromMs,
+    toMs: window.toMs,
     series,
     isPending: allowed && results.some((result) => result.isPending),
     isError: results.some((result) => result.isError),

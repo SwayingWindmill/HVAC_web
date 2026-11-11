@@ -26,6 +26,8 @@ type Filter struct {
 	Severity     alarmmodel.Severity
 	Acknowledged *bool
 	Suppressed   *bool
+	ActiveFrom   *time.Time
+	ActiveTo     *time.Time
 	Cursor       string
 	Limit        int
 }
@@ -316,6 +318,18 @@ func matchesFilter(alarm alarmmodel.Alarm, filter Filter) bool {
 	if filter.Suppressed != nil && (alarm.Suppression != nil) != *filter.Suppressed {
 		return false
 	}
+	if filter.ActiveTo != nil {
+		firstAt, err := time.Parse(time.RFC3339Nano, alarm.FirstOccurredAt)
+		if err != nil || firstAt.After(*filter.ActiveTo) {
+			return false
+		}
+	}
+	if filter.ActiveFrom != nil && alarm.ClearedAt != nil {
+		clearedAt, err := time.Parse(time.RFC3339Nano, *alarm.ClearedAt)
+		if err != nil || clearedAt.Before(*filter.ActiveFrom) {
+			return false
+		}
+	}
 	return true
 }
 
@@ -364,14 +378,20 @@ type alarmCursor struct {
 }
 
 func alarmFilterFingerprint(tenantID, siteID string, filter Filter) string {
-	acknowledged, suppressed := "", ""
+	acknowledged, suppressed, activeFrom, activeTo := "", "", "", ""
 	if filter.Acknowledged != nil {
 		acknowledged = boolString(*filter.Acknowledged)
 	}
 	if filter.Suppressed != nil {
 		suppressed = boolString(*filter.Suppressed)
 	}
-	payload := strings.Join([]string{tenantID, siteID, string(filter.Condition), string(filter.Severity), acknowledged, suppressed}, "\x00")
+	if filter.ActiveFrom != nil {
+		activeFrom = filter.ActiveFrom.UTC().Format(time.RFC3339Nano)
+	}
+	if filter.ActiveTo != nil {
+		activeTo = filter.ActiveTo.UTC().Format(time.RFC3339Nano)
+	}
+	payload := strings.Join([]string{tenantID, siteID, string(filter.Condition), string(filter.Severity), acknowledged, suppressed, activeFrom, activeTo}, "\x00")
 	digest := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(digest[:])
 }

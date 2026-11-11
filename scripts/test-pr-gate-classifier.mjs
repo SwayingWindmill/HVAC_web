@@ -63,6 +63,7 @@ test('ClickHouse schema and Cube model changes run the analytics integration pro
 
 test('domain module changes stay scoped to product domains', () => {
   for (const [file, unitProfile, integrationProfile] of [
+    ['libs/telemetryhistorymodel/aggregation.go', 'telemetry', 'telemetry'],
     ['modules/connectivity/internal/adapter/runtime.go', 'telemetry', 'telemetry'],
     ['cmd/connectivity/main.go', 'telemetry', 'telemetry'],
     ['modules/alarm/pkg/alarmservice/http.go', 'alarm', 'alarm'],

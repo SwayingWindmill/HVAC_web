@@ -110,3 +110,15 @@ test('an alarm recovered because its rule was retired says so', async ({ page, g
   await page.goto(`/operations/alarms?site=${SITE_ID}&view=cleared&inspect=${cleared.alarmId}`);
   await expect(page.getByRole('region', { name: '告警详情' })).toContainText('系统 · 规则已撤销');
 });
+
+test('查看当时趋势 opens 历史趋势 with the alarm fault window, overlays enabled, and source context banner', async ({ page }) => {
+  await page.goto(`/operations/alarms?site=${SITE_ID}&inspect=${ACTIVE_ALARM}`);
+  const detail = page.getByRole('region', { name: '告警详情' });
+  await detail.getByRole('link', { name: '查看当时趋势' }).click();
+
+  await expect(page).toHaveURL(/\/operations\/trends/);
+  await expect(page).toHaveURL(/source=alarm/);
+  await expect(page).toHaveURL(/overlays=alarms%2Ccommands|overlays=alarms,commands/);
+  await expect(page.getByRole('region', { name: '历史趋势工作台' }).getByRole('status')).toContainText('来自告警：冷冻水回水温度过低');
+  await expect(page.getByRole('link', { name: /返回告警/ })).toBeVisible();
+});
