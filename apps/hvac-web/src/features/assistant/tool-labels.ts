@@ -7,7 +7,7 @@ interface ToolPresentation {
 }
 
 const ENERGY_PAGE = { label: '能耗分析', to: '/energy-analysis/consumption' } as const;
-const DEVICES_PAGE = { label: '系统与设备', to: '/operations/systems-devices' } as const;
+const DEVICES_PAGE = { label: '设备', to: '/operations/systems-devices' } as const;
 const ALARMS_PAGE = { label: '告警', to: '/operations/alarms' } as const;
 const DIAGNOSTICS_PAGE = { label: '故障诊断', to: '/operations/diagnostics' } as const;
 const WORK_ORDERS_PAGE = { label: '工单', to: '/operations/work-center' } as const;

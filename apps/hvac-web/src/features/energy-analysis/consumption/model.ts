@@ -5,7 +5,6 @@ export type EnergyPeriod = keyof typeof ENERGY_PERIODS;
 export type Granularity = EnergySeriesQuery['granularity'];
 /** A bucket's electricity as the Energy analytics owner priced it at the Site's Tariff (#575). */
 export type EnergyCost = NonNullable<EnergySeriesResponse['points'][number]['cost']>;
-export const BUCKET_NOUN: Record<Granularity, string> = { hour: '时段', day: '日', month: '月' };
 
 interface WallTime { year: number; month: number; day: number; hour: number; minute: number }
 

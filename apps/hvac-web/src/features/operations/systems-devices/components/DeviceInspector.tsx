@@ -83,7 +83,7 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
         <div className="flex items-start justify-between gap-3">
           <SheetTitle className="text-lg leading-[26px] font-semibold tracking-[-0.01em]">{device.name}</SheetTitle>
           <Button size="sm" variant="outline" className="shrink-0" onClick={() => explain(explainDeviceQuestion(device.name))}>
-            <Sparkles data-icon="inline-start" className="text-primary" />解释
+            <Sparkles data-icon="inline-start" className="text-primary" />分析原因
           </Button>
         </div>
         <SheetDescription className="sr-only">{categoryLabel}，{deviceLocation(device)}</SheetDescription>

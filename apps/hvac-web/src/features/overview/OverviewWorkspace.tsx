@@ -32,16 +32,12 @@ const HOURS = Array.from({ length: 24 }, (_, hour) => `${hour}时`);
 
 type OverviewMetric = "electricityKWh" | "coolingKWh" | "cop" | "cost";
 
-const METRIC_TITLE: Readonly<Record<OverviewMetric, string>> = {
-  electricityKWh: "空调用电",
-  coolingKWh: "供冷量",
-  cop: "综合能效",
-  cost: "电费",
+const HOURLY_METRIC_TITLE: Readonly<Record<OverviewMetric, string>> = {
+  electricityKWh: "今日每小时用电",
+  coolingKWh: "今日每小时供冷量",
+  cop: "今日综合能效走势",
+  cost: "今日每小时电费",
 };
-
-function metricTitle(metric: OverviewMetric): string {
-  return METRIC_TITLE[metric];
-}
 
 function todayLabel(timeZone: string): string {
   return new Intl.DateTimeFormat("zh-CN", { timeZone, month: "long", day: "numeric", weekday: "short" }).format(new Date()).replace("日", " 日 ").replace("月", " 月 ").replace(/\s+/g, " ").trim();
@@ -59,7 +55,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
   if (comparison.isPending || comparison.isError) {
     return (
       <Panel role="region" aria-label="今日用能">
-        <PanelHeader title="今日用能" action={<PanelLink to="/energy-analysis/consumption" search={{ site: site.id }}>能源分析</PanelLink>} />
+        <PanelHeader title="今日用能" action={<PanelLink to="/energy-analysis/consumption" search={{ site: site.id }}>能耗分析</PanelLink>} />
         {comparison.isPending ? <Skeleton className="m-4 h-[300px]" /> : (
           <div className="flex h-[300px] flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
             今日能耗暂时读不到
@@ -82,8 +78,8 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       aria-label="今日用能"
       title="今日用能"
       caption={`累计 · 00:00 至 ${new Intl.DateTimeFormat("zh-CN", { timeZone: site.timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date())}`}
-      action={<PanelLink to="/energy-analysis/consumption" search={{ site: site.id }}>能源分析</PanelLink>}
-      chartTitle={<><span className="font-semibold">逐时{metricTitle(metric)}</span><span className="text-xs text-muted-foreground">按站点当地时间，与昨日同时段对比</span></>}
+      action={<PanelLink to="/energy-analysis/consumption" search={{ site: site.id }}>能耗分析</PanelLink>}
+      chartTitle={<><span className="font-semibold">{HOURLY_METRIC_TITLE[metric]}</span><span className="text-xs text-muted-foreground">按站点当地时间，与昨日同时段对比</span></>}
       data={completeOnly(hours).map((hour) => ({
         ...hour,
         cost: hour.electricityKWh === null ? null : priced?.today.get(hour.label) ?? null,

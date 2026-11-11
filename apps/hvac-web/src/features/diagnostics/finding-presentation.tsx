@@ -1,4 +1,5 @@
-import { SeverityMark, type SeverityLevel } from '@/components/severity-mark';
+import { SeverityMark } from '@/components/severity-mark';
+import type { SeverityLevel } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { severity, type Finding } from './diagnostics-model';
 

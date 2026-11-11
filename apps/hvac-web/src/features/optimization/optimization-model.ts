@@ -111,8 +111,8 @@ export interface PreparationOutcome {
 
 const PREPARATION_REASON: Record<string, string> = {
   SITE_NOT_VISIBLE: '优化服务读不到这个站点',
-  POLICY_MISSING: '站点没有唯一一份可用的优化策略',
-  POLICY_UNSUPPORTED: '站点的优化策略内容不受支持，需要修改策略',
+  POLICY_MISSING: '站点尚未启用优化策略（或存在多份冲突策略）',
+  POLICY_UNSUPPORTED: '当前优化策略配置格式不受支持',
   MAINTENANCE_ACTIVE: '有设备在检修或被手动锁定',
   TOPOLOGY_MISSING: '站点没有已发布的系统拓扑',
   LOAD_FORECAST_MISSING: '还没有最新的负荷预测',

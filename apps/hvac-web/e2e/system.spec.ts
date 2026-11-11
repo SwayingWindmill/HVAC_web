@@ -3,7 +3,7 @@ import { expect, test } from './test';
 
 test('asset and point registration opens from the system overview', async ({ page }) => {
   await page.goto('/system');
-  await page.getByRole('tab', { name: '资产与点位', exact: true }).click();
+  await page.getByRole('tab', { name: '设备与点位登记', exact: true }).click();
 
   await expect(page).toHaveURL(/tab=registry/);
   await expect(page.getByRole('tabpanel')).toContainText('资源与绑定');
@@ -64,11 +64,11 @@ test('the AI 助手 tab shows each day of answers and that day\'s failed steps i
 
   const days = usage.getByRole('table', { name: '每天的回答' });
   await expect(days.getByRole('row', { name: /10月18日/ })).toContainText('出错 1');
-  await expect(days.getByRole('row', { name: /10月17日/ })).toContainText('被停下 1');
-  const steps = usage.getByRole('table', { name: '各个步骤' });
+  await expect(days.getByRole('row', { name: /10月17日/ })).toContainText('手动停止 1');
+  const steps = usage.getByRole('table', { name: '查询调用明细' });
   await expect(steps).toContainText('写结论');
   await days.getByRole('button', { name: '10月16日' }).click();
-  await expect(usage).toContainText('10月16日的步骤');
+  await expect(usage).toContainText('10月16日的查询调用');
   await expect(steps.getByRole('row', { name: /读取当前读数/ })).toHaveText(/读取当前读数\s*16\s*2/);
   await expect(steps.getByRole('row', { name: /读取告警/ })).toHaveText(/读取告警\s*8\s*0/);
   await days.getByRole('button', { name: '10月18日' }).click();

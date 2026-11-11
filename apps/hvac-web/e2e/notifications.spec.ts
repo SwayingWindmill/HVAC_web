@@ -16,12 +16,12 @@ test('通知 lists the alarms happening now above the ones cleared lately, and t
   await expect(rows.nth(1)).toContainText('已确认');
   // The first alarm opens beside the list without a click.
   await expect(page.getByRole('region', { name: '告警详情' })).toContainText('活动 · 未确认');
-  await expect(page.getByRole('button', { name: '通知，1 条告警没人确认' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '通知，1 条告警待确认' })).toBeVisible();
 
   await page.getByRole('radio', { name: '只看未确认' }).click();
   await expect(page).toHaveURL(/unack=true/);
   await expect(rows).toHaveCount(1);
-  await expect(list).toContainText('最近恢复的都有人确认了');
+  await expect(list).toContainText('最近恢复的均已确认');
 });
 
 test('acknowledging an alarm from 通知 clears it from the bell', async ({ page, gateway }) => {

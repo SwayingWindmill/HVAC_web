@@ -86,31 +86,31 @@ export function presentRegistryError(error: unknown): RegistryErrorPresentation 
       case 'RESOURCE_NOT_FOUND':
         return { kind: 'not-found', title: '资源不可见或不存在', description: detail, retryable, traceId };
       case 'CURSOR_INVALID':
-        return { kind: 'invalid-cursor', title: '分页游标已失效', description: detail, retryable, traceId };
+        return { kind: 'invalid-cursor', title: '列表已更新，请刷新重试', description: detail, retryable, traceId };
       case 'REGISTRY_UNAVAILABLE':
-        return { kind: 'unavailable', title: 'Registry 暂不可用', description: detail, retryable, traceId };
+        return { kind: 'unavailable', title: '设备登记服务暂不可用', description: detail, retryable, traceId };
       case 'REGISTRY_TIMEOUT':
-        return { kind: 'timeout', title: 'Registry 请求超时', description: detail, retryable, traceId };
+        return { kind: 'timeout', title: '读取设备登记超时', description: detail, retryable, traceId };
       case 'MAPPING_INVALID':
       case 'MAPPING_QUARANTINED':
-        return { kind: 'mapping', title: 'Registry 映射尚未就绪', description: detail, retryable, traceId };
+        return { kind: 'mapping', title: '点位映射尚未就绪', description: detail, retryable, traceId };
       case 'REGISTRY_REVISION_CONFLICT':
         return { kind: 'revision-conflict', title: '资源已被其他操作更新', description: '你改的是旧版本。请刷新后再决定要不要重新修改。', retryable: false, traceId };
       case 'REGISTRY_BINDING_CONFLICT':
         return { kind: 'binding-conflict', title: '绑定变更冲突', description: detail, retryable: false, traceId };
       case 'REGISTRY_IMPORT_PLAN_INVALID':
-        return { kind: 'import-conflict', title: '导入计划已失效', description: '必须重新执行 dry-run；旧计划不会被强制提交。', retryable: false, traceId };
+        return { kind: 'import-conflict', title: '导入计划已失效', description: '请重新校验导入内容后再提交。', retryable: false, traceId };
       case 'REGISTRY_IDEMPOTENCY_CONFLICT':
       case 'TEMPLATE_REVISION_IMMUTABLE':
-        return { kind: 'mutation-conflict', title: 'Registry 写入冲突', description: detail, retryable: false, traceId };
+        return { kind: 'mutation-conflict', title: '登记保存冲突', description: detail, retryable: false, traceId };
       default:
-        return { kind: 'unknown', title: 'Registry 请求失败', description: detail, retryable, traceId };
+        return { kind: 'unknown', title: '设备登记操作失败', description: detail, retryable, traceId };
     }
   }
   return {
     kind: 'unavailable',
-    title: 'Registry 连接失败',
-    description: '暂时读不到设备登记的数据，请稍后重试；页面不会用示例数据代替。',
+    title: '无法连接设备登记服务',
+    description: '暂时读不到设备登记数据，请稍后重试。',
     retryable: true,
   };
 }
@@ -233,7 +233,7 @@ async function collectCollection<T>(
     if (!result.data.hasMore || !result.data.nextCursor) return items;
     cursor = result.data.nextCursor;
   }
-  throw new Error('Registry navigation exceeded its bounded page budget');
+  throw new Error('读取登记列表超过最大分页上限');
 }
 
 export function useAuthorizedRegistrySites(enabled = true) {

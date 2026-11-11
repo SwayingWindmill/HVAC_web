@@ -110,7 +110,7 @@ export async function assignAlarm(alarm: Alarm, assigneeId: string, csrfToken: s
   const body = await send<{ data: Alarm }>(alarmPaths.assign.replace('{alarmId}', alarm.alarmId), {
     method: 'POST',
     headers: mutationHeaders(csrfToken),
-    body: JSON.stringify({ expectedVersion: alarm.version, assigneeId, reason: '认领处理' }),
+    body: JSON.stringify({ expectedVersion: alarm.version, assigneeId, reason: '分配处理' }),
   });
   return body.data;
 }

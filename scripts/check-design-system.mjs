@@ -2,18 +2,18 @@ import { readFile, readdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Checks the Web code against the design system's composition rules (DESIGN.md): tables, page
-// landmarks and the shadcn setup. Documents are not checked here.
+// Checks the Web code against the design system's composition and copy rules (DESIGN.md): tables,
+// page landmarks, plain operator Chinese, and the shadcn setup. Documents are not checked here.
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultRoot = resolve(dirname(scriptPath), '..');
 
-async function collectFeatureSources(directory) {
+async function collectTsSources(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
     const path = resolve(directory, entry.name);
     if (entry.isDirectory()) {
-      files.push(...await collectFeatureSources(path));
+      files.push(...await collectTsSources(path));
     } else if (entry.isFile() && /\.(?:ts|tsx)$/.test(entry.name)) {
       files.push(path);
     }
@@ -23,7 +23,7 @@ async function collectFeatureSources(directory) {
 
 async function validateTableComponentUsage(root, errors) {
   const featureRoot = resolve(root, 'apps/hvac-web/src/features');
-  for (const path of await collectFeatureSources(featureRoot)) {
+  for (const path of await collectTsSources(featureRoot)) {
     const source = await readFile(path, 'utf8');
     const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
 
@@ -54,7 +54,7 @@ function cardRanges(source) {
 
 async function validateContentGrammar(root, errors) {
   const featureRoot = resolve(root, 'apps/hvac-web/src/features');
-  for (const path of await collectFeatureSources(featureRoot)) {
+  for (const path of await collectTsSources(featureRoot)) {
     const source = await readFile(path, 'utf8');
     const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
 
@@ -74,7 +74,7 @@ async function validateContentGrammar(root, errors) {
 
 async function validateDataTableSurfaceGrammar(root, errors) {
   const featureRoot = resolve(root, 'apps/hvac-web/src/features');
-  for (const path of await collectFeatureSources(featureRoot)) {
+  for (const path of await collectTsSources(featureRoot)) {
     const source = await readFile(path, 'utf8');
     const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
     const surfaceCardTableException = /@surface-card-table-exception\s+07\b/.test(source);
@@ -121,6 +121,76 @@ async function validateDataTableSurfaceGrammar(root, errors) {
   }
 }
 
+const BANNED_UI_COPY = [
+  '时均',
+  '每时用电',
+  '平均每时段',
+  '分日明细',
+  '退役空间',
+  '退役点位',
+  '空间登记资源',
+  '设备资产',
+  '泳道',
+  '燃尽',
+  '包络曲面',
+  '没有草稿的工单',
+  '本期间',
+  '通信端点',
+  '告警分诊',
+  '诊断发现',
+  '没人确认',
+  '90% 把握',
+  '未找到该 Alarm',
+  'Work Order 服务',
+  'Registry ',
+  '不会用示例数据代替',
+  '也不会用本地数据代替',
+  '没有浏览器侧虚构模板目录',
+  '浏览器不会生成本地模拟站点',
+  '页面不显示推测的数值',
+  '没有显示任何替代记录',
+];
+
+const BANNED_TEMPLATE_CONCAT_PATTERN = /\$\{[^}\n]+\}均|每\$\{[^}\n]+\}用电|分\$\{[^}\n]+\}明细|没有\$\{[^}\n]+\}的工单/g;
+
+function stripCommentsPreservingLines(source) {
+  return source.replace(
+    /\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`/g,
+    (match) => (match.startsWith('//') || match.startsWith('/*') ? match.replace(/[^\n]/g, ' ') : match),
+  );
+}
+
+async function validatePlainChineseCopy(root, errors) {
+  const srcRoot = resolve(root, 'apps/hvac-web/src');
+  for (const path of await collectTsSources(srcRoot)) {
+    const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
+    if (/\.(?:test|spec)\.(?:ts|tsx)$/.test(relativePath)) continue;
+    if (relativePath.startsWith('apps/hvac-web/src/api/generated/')) continue;
+
+    const source = await readFile(path, 'utf8');
+    const stripped = stripCommentsPreservingLines(source);
+
+    for (const phrase of BANNED_UI_COPY) {
+      const startsWithWordChar = /^[A-Za-z0-9_]/.test(phrase);
+      let fromIndex = 0;
+      while (true) {
+        const index = stripped.indexOf(phrase, fromIndex);
+        if (index === -1) break;
+        if (!startsWithWordChar || index === 0 || !/[A-Za-z0-9_]/.test(stripped[index - 1])) {
+          const line = stripped.slice(0, index).split('\n').length;
+          errors.push(`${relativePath}:${line} must use plain operator Chinese instead of banned phrase ${JSON.stringify(phrase)} (DESIGN.md §1)`);
+        }
+        fromIndex = index + phrase.length;
+      }
+    }
+
+    for (const match of stripped.matchAll(BANNED_TEMPLATE_CONCAT_PATTERN)) {
+      const line = stripped.slice(0, match.index).split('\n').length;
+      errors.push(`${relativePath}:${line} must declare an explicit Chinese copy dictionary instead of template concatenation ${JSON.stringify(match[0])} (DESIGN.md §1)`);
+    }
+  }
+}
+
 function parseArgs(argv) {
   const rootArg = argv.find((argument) => argument.startsWith('--root='));
   return { root: rootArg ? resolve(rootArg.slice('--root='.length)) : defaultRoot };
@@ -131,6 +201,7 @@ export async function validateDesignSystem(root = defaultRoot) {
   await validateTableComponentUsage(root, errors);
   await validateContentGrammar(root, errors);
   await validateDataTableSurfaceGrammar(root, errors);
+  await validatePlainChineseCopy(root, errors);
 
   const componentsJson = await readFile(resolve(root, 'apps/hvac-web/components.json'), 'utf8');
   for (const expected of ['"style": "radix-nova"', '"iconLibrary": "lucide"']) {
@@ -164,7 +235,7 @@ async function main() {
     return;
   }
 
-  console.log('Design system check passed: tables, page landmarks and the shadcn setup follow DESIGN.md.');
+  console.log('Design system check passed: tables, page landmarks, plain operator copy and the shadcn setup follow DESIGN.md.');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {

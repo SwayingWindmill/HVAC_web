@@ -86,7 +86,7 @@ export function AppHeader({
             variant="outline"
             size="icon"
             className="relative text-muted-foreground"
-            aria-label={waiting > 0 ? `通知，${waiting} 条告警没人确认` : '通知'}
+            aria-label={waiting > 0 ? `通知，${waiting} 条告警待确认` : '通知'}
             onClick={() => onNavigate('/notifications')}
           >
             <Bell className="size-[15px]" />

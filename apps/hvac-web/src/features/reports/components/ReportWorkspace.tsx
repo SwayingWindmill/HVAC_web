@@ -150,7 +150,7 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
       period={text}
       archived
       status={`生成于 ${generated} · 第 ${stored.version} 版 · 覆盖 ${report.daysWithData} / ${report.daysInMonth} 天`}
-      footnote={<>说明：本报告的用能、能效、电度电费、节能与诊断发现取自月结后存档的结果，之后数据再变化也不会改变；需量、告警与工单{NOT_ARCHIVED}。电费按每段用电所在时段当时生效的分时电价计算，正式电费以结算为准。{alarms.data && !alarms.data.complete ? ' 告警超过读取上限，统计可能不全。' : ''}</>}
+      footnote={<>说明：本报告的用能、能效、电度电费、节能与诊断结论取自月结后存档的结果，之后数据再变化也不会改变；需量、告警与工单{NOT_ARCHIVED}。电费按每段用电所在时段当时生效的分时电价计算，正式电费以结算为准。{alarms.data && !alarms.data.complete ? ' 告警超过读取上限，统计可能不全。' : ''}</>}
     >
       <Section index={1} title="概要" description="与上月全月对比">
         <FigureGrid>
@@ -165,7 +165,7 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
         </FigureGrid>
       </Section>
 
-      <Section index={2} title="用能与能效" description="最多的一天已标出">
+      <Section index={2} title="用能与能效">
         <EnergyTrend rows={snapshotDays(report)} />
       </Section>
 
@@ -181,7 +181,7 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
         <SavingsGrid totals={report.savings} daysNote={`本月 ${report.daysInMonth} 天`} />
       </Section>
 
-      <Section index={5} title="运行与维护" description="本月发生的告警、工单与诊断发现">
+      <Section index={5} title="运行与维护" description="本月发生的告警、工单与诊断结论">
         <OperationsGrid
           alarms={alarms.data ? alarmSummary(alarms.data.alarms, span.from, span.to) : null}
           orders={workOrders.data ? workOrderSummary(workOrders.data, span.from, span.to) : null}
@@ -278,12 +278,12 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
           <Figure label="估算电费" value={totalCost === null ? null : `¥${formatDecimal(totalCost, 0)}`} note={totalCost === null ? `${costMissing}，未计` : '按分时电价估算，以结算为准'} />
           <Figure label="日均用电" value={days.length ? formatDecimal((current.electricityKWh ?? 0) / days.length, 0) : null} unit="kWh" note={`${days.length} / ${span.days} 天有计量`} />
           <Figure label="用电最多的一天" value={current.peak ? formatDecimal(current.peak.electricityKWh!, 0) : null} unit="kWh" note={current.peak?.label ?? '—'} />
-          <Figure label="最大需量" value={peakDemand ? formatDecimal(peakDemand.demandKW, 1) : null} unit="kW" note={peakDemand ? range.format(new Date(peakDemand.at)) : meter ? '本月还没有完整的 15 分钟' : '没有总电表'} />
-          <Figure label="数据完整性" value={String(current.excludedIntervals)} unit="段未计入" note={current.excludedIntervals > 0 ? '电表读数可疑或无效的时段不计入' : '全部有效'} />
+          <Figure label="最大需量" value={peakDemand ? formatDecimal(peakDemand.demandKW, 1) : null} unit="kW" note={peakDemand ? range.format(new Date(peakDemand.at)) : meter ? '本月统计未满 15 分钟' : '没有总电表'} />
+          <Figure label="数据完整性" value={current.excludedIntervals > 0 ? `缺 ${current.excludedIntervals} 段数据` : '完整'} note={current.excludedIntervals > 0 ? '电表读数可疑或无效的时段不计入' : '全部时段有效'} />
         </FigureGrid>
       </Section>
 
-      <Section index={2} title="用能与能效" description="最多的一天已标出">
+      <Section index={2} title="用能与能效">
         <EnergyTrend rows={rows} />
       </Section>
 
@@ -301,7 +301,7 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
         <LiveSavings siteId={site.id} month={month} span={span} timeZone={timeZone} />
       </Section>
 
-      <Section index={5} title="运行与维护" description="本月发生的告警、工单与诊断发现">
+      <Section index={5} title="运行与维护" description="本月发生的告警、工单与诊断结论">
         <OperationsGrid
           alarms={alarms.data ? alarmSummary(alarms.data.alarms, span.from, span.to) : null}
           orders={workOrders.data ? workOrderSummary(workOrders.data, span.from, span.to) : null}

@@ -160,7 +160,7 @@ function RuleBar({ rule, current, target, reading, outcome, latest, timeZone, ru
         <p className="border-t border-divider px-5 py-2.5 text-sm text-secondary-foreground">
           {outcome.status === 'NOT_OPERATING'
             ? `本次诊断：最近 ${outcome.rule.windowMinutes} 分钟里冷站运行 ${outcome.window.operatingMinutes} 分钟，不足 ${percent(outcome.rule.operatingGates.minimumOperatingShare)}，不判断温差。`
-            : `本次诊断：最近 ${outcome.rule.windowMinutes} 分钟里冷站运行 ${outcome.window.operatingMinutes} 分钟，温差 ${kelvin(outcome.observedValue)}，${outcome.status === 'FINDING' ? `低于阈值 ${outcome.rule.minimumDeltaTC} K，已记为诊断发现。` : outcome.status === 'ONGOING' ? `仍低于阈值 ${outcome.rule.minimumDeltaTC} K，问题仍在持续，24 小时内不重复记录。` : `不低于阈值 ${outcome.rule.minimumDeltaTC} K。`}`}
+            : `本次诊断：最近 ${outcome.rule.windowMinutes} 分钟里冷站运行 ${outcome.window.operatingMinutes} 分钟，温差 ${kelvin(outcome.observedValue)}，${outcome.status === 'FINDING' ? `低于阈值 ${outcome.rule.minimumDeltaTC} K，已记为诊断结论。` : outcome.status === 'ONGOING' ? `仍低于阈值 ${outcome.rule.minimumDeltaTC} K，问题仍在持续，24 小时内不重复记录。` : `不低于阈值 ${outcome.rule.minimumDeltaTC} K。`}`}
         </p>
       ) : null}
     </Panel>
@@ -272,7 +272,7 @@ function FindingDetail({ finding, assetName, plant, meterId, onCreate }: {
     void navigator.clipboard.writeText(window.location.href).then(() => toast.success('链接已复制'), () => toast.error('无法复制链接'));
   };
   return (
-    <section role="region" aria-label="诊断发现详情" className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_240px]">
+    <section role="region" aria-label="诊断结论详情" className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_240px]">
       <div className="flex min-h-0 min-w-0 flex-col overflow-y-auto">
         <header className="flex flex-col gap-2 border-b border-divider px-6 pt-[18px] pb-4">
           <div className="flex items-center gap-2.5 text-xs">
@@ -283,7 +283,7 @@ function FindingDetail({ finding, assetName, plant, meterId, onCreate }: {
             </Button>
           </div>
           <h2 className="flex items-center gap-2 text-xl leading-7 font-semibold tracking-[-0.015em]">
-            {rule?.title ?? '诊断发现'}
+            {rule?.title ?? '诊断结论'}
             <InfoTip>诊断结论是根据运行数据推断的，处理前请到现场核实</InfoTip>
           </h2>
           <p className="text-sm leading-[22px] text-secondary-foreground">
@@ -335,7 +335,7 @@ function FindingDetail({ finding, assetName, plant, meterId, onCreate }: {
       <aside aria-label="属性" className="flex min-h-0 flex-col overflow-y-auto border-l border-divider bg-muted/40 px-4 py-4">
         <h3 className="mb-3 text-xs font-semibold text-muted-foreground">属性</h3>
         <dl className="flex flex-col">
-          <Property label="规则">{rule?.title ?? '诊断发现'}</Property>
+          <Property label="规则">{rule?.title ?? '诊断结论'}</Property>
           <Property label="设备">
             {meterId ? (
               <Link to="/operations/systems-devices" search={{ site: site.id, inspect: meterId }} className="text-primary hover:underline">{assetName} ›</Link>
@@ -437,13 +437,13 @@ export function DiagnosticsWorkspace() {
         />
       )}
 
-      <Panel aria-label="诊断发现" className="grid h-[calc(100svh-262px)] min-h-[540px] grid-cols-[380px_minmax(0,1fr)]">
+      <Panel aria-label="诊断结论" className="grid h-[calc(100svh-262px)] min-h-[540px] grid-cols-[380px_minmax(0,1fr)]">
         <div className="flex min-h-0 flex-col border-r">
           <ToggleGroup
             type="single"
             value={range}
             onValueChange={(value) => { if (value) setSearch({ range: value as Range, inspect: undefined }); }}
-            aria-label="诊断发现范围"
+            aria-label="诊断结论范围"
             className="h-11 w-full shrink-0 justify-start gap-5 rounded-none border-b border-divider px-4"
           >
             {([['7d', '近 7 天', recent.length], ['all', '全部', all.length]] as const).map(([value, label, count]) => (
@@ -463,19 +463,19 @@ export function DiagnosticsWorkspace() {
               <div className="flex flex-col gap-2 p-4"><Skeleton className="h-14" /><Skeleton className="h-14" /><Skeleton className="h-14" /></div>
             ) : findings.isError ? (
               <div className="flex flex-col items-start gap-2 px-4 py-6">
-                <p className="text-sm text-destructive-text">诊断发现暂时读不到：{findings.error.message}</p>
+                <p className="text-sm text-destructive-text">诊断结论暂时读不到：{findings.error.message}</p>
                 <Button variant="outline" size="sm" onClick={() => void findings.refetch()}>重试</Button>
               </div>
             ) : shown.length === 0 ? (
               <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
                 <span className="flex size-9 items-center justify-center rounded-xl bg-success-soft text-success-text"><Stethoscope className="size-[18px]" aria-hidden="true" /></span>
-                <p className="text-sm font-semibold">{range === '7d' ? '近 7 天没有诊断发现' : '还没有诊断发现'}</p>
+                <p className="text-sm font-semibold">{range === '7d' ? '近 7 天没有诊断结论' : '还没有诊断结论'}</p>
                 <p className="text-xs text-muted-foreground">
-                  {range === '7d' && all.length > 0 ? `更早的 ${all.length} 条在「全部」里` : '诊断发现问题时会记在这里'}
+                  {range === '7d' && all.length > 0 ? `更早的 ${all.length} 条在「全部」里` : '诊断检出问题时会记在这里'}
                 </p>
               </div>
             ) : (
-              <ul aria-label="诊断发现列表">
+              <ul aria-label="诊断结论列表">
                 {groups.map((group) => (
                   <li key={group.key}>
                     <div className="flex h-[34px] items-center bg-muted px-4 text-xs font-medium text-muted-foreground">
@@ -498,7 +498,7 @@ export function DiagnosticsWorkspace() {
                               )}
                             >
                               <span className="row-span-2 mt-[5px]"><SeverityMark level={level.level} label={level.label} /></span>
-                              <span className="truncate text-sm font-semibold">{ruleFor(finding.findingType)?.title ?? '诊断发现'}</span>
+                              <span className="truncate text-sm font-semibold">{ruleFor(finding.findingType)?.title ?? '诊断结论'}</span>
                               <span className="font-mono text-xs whitespace-nowrap text-subtle-foreground">{clock(finding.evaluationTo, site.timezone)}</span>
                               <span className="col-span-2 col-start-2 truncate text-xs text-muted-foreground">
                                 {assetName(finding.assetId)}
@@ -528,7 +528,7 @@ export function DiagnosticsWorkspace() {
           />
         ) : (
           <div className="flex items-center justify-center p-10 text-sm text-muted-foreground">
-            {findings.isPending ? null : all.length === 0 ? '没有可查看的诊断发现' : '从左侧选择一条诊断发现'}
+            {findings.isPending ? null : all.length === 0 ? '没有可查看的诊断结论' : '从左侧选择一条诊断结论'}
           </div>
         )}
       </Panel>
@@ -537,11 +537,11 @@ export function DiagnosticsWorkspace() {
         <CreateWorkOrderDialog
           open={creating}
           onOpenChange={setCreating}
-          title={`为「${selectedRule?.title ?? '诊断发现'}」创建工单`}
+          title={`为「${selectedRule?.title ?? '诊断结论'}」创建工单`}
           initial={{
-            title: `${selectedName}：${selectedRule?.title ?? '诊断发现'}`,
+            title: `${selectedName}：${selectedRule?.title ?? '诊断结论'}`,
             priority: SEVERITY[severity(selected)].priority,
-            description: `${formatTime(selected.evaluationTo, site.timezone)} 诊断发现：测量值 ${formatDecimal(selected.observedValue, 2)} ${selected.valueUnit}，低于阈值 ${formatDecimal(selected.thresholdValue, 1)} ${selected.valueUnit}。${selectedRule ? `\n处理建议：${selectedRule.actions.join('；')}。` : ''}`,
+            description: `${formatTime(selected.evaluationTo, site.timezone)} 诊断结论：测量值 ${formatDecimal(selected.observedValue, 2)} ${selected.valueUnit}，低于阈值 ${formatDecimal(selected.thresholdValue, 1)} ${selected.valueUnit}。${selectedRule ? `\n处理建议：${selectedRule.actions.join('；')}。` : ''}`,
           }}
           sourceReferences={[{ domain: 'ASSET', resourceId: selected.assetId, relationship: 'ORIGIN' }]}
           onCreated={() => {

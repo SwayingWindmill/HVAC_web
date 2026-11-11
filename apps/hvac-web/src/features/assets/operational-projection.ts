@@ -113,7 +113,7 @@ function pointView(definition: PointDisplayDefinition, state: TelemetryKeyState 
       key: definition.point.pointCode,
       label: definition.label,
       state: 'MISSING',
-      displayValue: state?.missingReason === 'ONLY_REJECTED_CANDIDATES' ? '当前值不可用' : '未观测',
+      displayValue: state?.missingReason === 'ONLY_REJECTED_CANDIDATES' ? '当前值不可用' : '暂无读数',
       unit: null,
       freshness: 'MISSING',
       quality: null,

@@ -134,7 +134,7 @@ export function SystemsDevicesWorkspace() {
       {!loading && registry.isSuccess && plant.devices.length === 0 ? (
         <Panel className="items-center gap-2 px-6 py-12 text-center">
           <p className="text-sm font-semibold">该站点还没有登记设备</p>
-          <p className="text-xs text-muted-foreground">在 系统管理 → 资产与点位 登记设备和点位后，这里会列出它们的运行状态</p>
+          <p className="text-xs text-muted-foreground">在 系统管理 → 设备与点位登记 登记设备和点位后，这里会列出它们的运行状态</p>
         </Panel>
       ) : null}
 

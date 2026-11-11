@@ -42,6 +42,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
 import { CLIMATE_ZONE_LABEL, type ClimateZone } from '@/lib/climate-zone';
 import { confirmDiscardRegistryDraft } from './confirmDiscard';
 import {
@@ -119,12 +120,98 @@ const WRITE_CAPABILITY: Record<RegistryAdminResourceType, Capability> = {
   POINT: 'point.write',
 };
 
-const RESOURCE_LABEL: Record<RegistryAdminResourceType, string> = {
-  SITE: '站点',
-  SPACE: '空间',
-  ASSET: '资产',
-  DEVICE: '设备',
-  POINT: '点位',
+type ResourceCopy = {
+  readonly tabLabel: string;
+  readonly tableTitle: string;
+  readonly emptyLabel: string;
+  readonly createLabel: string;
+  readonly editTitle: string;
+  readonly createReason: string;
+  readonly updateReason: string;
+  readonly createdMessage: string;
+  readonly updatedMessage: string;
+  readonly retireAction: string;
+  readonly retireTitle: string;
+  readonly retireConfirm: string;
+  readonly retiredMessage: string;
+};
+
+const RESOURCE_COPY: Readonly<Record<RegistryAdminResourceType, ResourceCopy>> = {
+  SITE: {
+    tabLabel: '站点',
+    tableTitle: '站点',
+    emptyLabel: '当前没有已登记的站点',
+    createLabel: '创建站点',
+    editTitle: '编辑站点',
+    createReason: '创建站点',
+    updateReason: '更新站点',
+    createdMessage: '站点创建成功。',
+    updatedMessage: '站点更新成功。',
+    retireAction: '标记为退役',
+    retireTitle: '退役此站点',
+    retireConfirm: '确认退役',
+    retiredMessage: '该站点已标记为退役。',
+  },
+  SPACE: {
+    tabLabel: '空间',
+    tableTitle: '空间',
+    emptyLabel: '当前没有已登记的空间',
+    createLabel: '创建空间',
+    editTitle: '编辑空间',
+    createReason: '创建空间',
+    updateReason: '更新空间',
+    createdMessage: '空间创建成功。',
+    updatedMessage: '空间更新成功。',
+    retireAction: '标记为退役',
+    retireTitle: '退役此空间',
+    retireConfirm: '确认退役',
+    retiredMessage: '该空间已标记为退役。',
+  },
+  ASSET: {
+    tabLabel: '资产',
+    tableTitle: '资产',
+    emptyLabel: '当前没有已登记的资产',
+    createLabel: '创建资产',
+    editTitle: '编辑资产',
+    createReason: '创建资产',
+    updateReason: '更新资产',
+    createdMessage: '资产创建成功。',
+    updatedMessage: '资产更新成功。',
+    retireAction: '标记为退役',
+    retireTitle: '退役此资产',
+    retireConfirm: '确认退役',
+    retiredMessage: '该资产已标记为退役。',
+  },
+  DEVICE: {
+    tabLabel: '设备',
+    tableTitle: '设备',
+    emptyLabel: '当前没有已登记的设备',
+    createLabel: '创建设备',
+    editTitle: '编辑设备',
+    createReason: '创建设备',
+    updateReason: '更新设备',
+    createdMessage: '设备创建成功。',
+    updatedMessage: '设备更新成功。',
+    retireAction: '标记为退役',
+    retireTitle: '退役此设备',
+    retireConfirm: '确认退役',
+    retiredMessage: '该设备已标记为退役。',
+  },
+  POINT: {
+    tabLabel: '点位',
+    tableTitle: '点位',
+    emptyLabel: '当前没有已登记的点位',
+    createLabel: '创建点位',
+    editTitle: '编辑点位',
+    createReason: '创建点位',
+    updateReason: '更新点位',
+    createdMessage: '点位创建成功。',
+    updatedMessage: '点位更新成功。',
+    retireAction: '标记为退役',
+    retireTitle: '退役此点位',
+    retireConfirm: '确认退役',
+    retiredMessage: '该点位已标记为退役。',
+  },
 };
 
 const SPACE_TYPES = ['CAMPUS', 'BUILDING', 'FLOOR', 'ZONE', 'ROOM', 'PLANT_ROOM', 'ROOFTOP', 'OUTDOOR', 'TENANT_SPACE', 'OTHER'];
@@ -147,11 +234,38 @@ function statusTone(status: string): 'success' | 'destructive' | 'neutral' | 'wa
 
 function pointTypeLabel(value: string): string {
   const labels: Record<string, string> = {
-    TELEMETRY: '遥测',
+    TELEMETRY: '读数',
     COUNTER: '累计量',
     STATE: '状态',
     SETTING: '设定值',
-    COMMAND: '控制点',
+    COMMAND: '控制指令',
+  };
+  return labels[value] ?? value;
+}
+
+function valueTypeLabel(value: string): string {
+  const labels: Record<string, string> = {
+    NUMBER: '数值',
+    BOOLEAN: '开关量',
+    STRING: '文本',
+    JSON: '结构化数据',
+  };
+  return labels[value] ?? value;
+}
+
+function rebindRoleLabel(value: string): string {
+  const labels: Record<string, string> = {
+    CONTROLLER: '控制器',
+    METER: '电表',
+    SENSOR: '传感器',
+    GATEWAY: '站点网关',
+    SUPERVISORY_CONTROLLER: '群控器',
+    INSTALLED_IN: '安装于',
+    SERVES: '服务于',
+    GATEWAY_FOR: '网关转发',
+    SUPERVISES: '群控管理',
+    DESCRIBES: '描述测量对象',
+    CONTROLS: '控制测量对象',
   };
   return labels[value] ?? value;
 }
@@ -162,6 +276,11 @@ function spaceTypeLabel(value: string): string {
     PLANT_ROOM: '机房', ROOFTOP: '屋面', OUTDOOR: '室外', TENANT_SPACE: '租户空间', OTHER: '其他',
   };
   return labels[value] ?? value;
+}
+
+function pointSubtypeLabel(point: TelemetryPoint): string {
+  const unit = formatTelemetryUnit(point.unit);
+  return `${pointTypeLabel(point.pointType)} · ${valueTypeLabel(point.valueType)}${unit ? `（${unit}）` : ''}`;
 }
 
 function entityRows(site: Site, model: SiteAssetModel, type: RegistryAdminResourceType): ResourceRow[] {
@@ -175,16 +294,17 @@ function entityRows(site: Site, model: SiteAssetModel, type: RegistryAdminResour
     case 'DEVICE':
       return model.devices.map((value) => ({ key: value.id, id: value.id, type, code: value.code, displayName: value.displayName, subtype: value.deviceType, status: value.status, revision: value.revision, entity: value }));
     case 'POINT':
-      return model.telemetryPoints.map((value) => ({ key: value.id, id: value.id, type, code: value.pointCode, displayName: value.displayName, subtype: `${pointTypeLabel(value.pointType)} · ${value.valueType}`, status: value.status, revision: value.revision, entity: value }));
+      return model.telemetryPoints.map((value) => ({ key: value.id, id: value.id, type, code: value.pointCode, displayName: value.displayName, subtype: pointSubtypeLabel(value), status: value.status, revision: value.revision, entity: value }));
   }
 }
 
 function defaultEditDraft(type: RegistryAdminResourceType, entity?: ResourceEntity): EditDraft {
+  const copy = RESOURCE_COPY[type];
   const base: EditDraft = {
     code: '', displayName: '', timezone: 'Asia/Shanghai', floorAreaM2: '', climateZone: '', status: 'ACTIVE', parentSpaceId: '', spaceType: 'OTHER',
     assetType: '', deviceType: '', reportingDeviceId: '', sensorId: '', pointCode: '', sourceKey: '', pointType: 'TELEMETRY',
     valueType: 'NUMBER', unit: '', writable: false, sampleIntervalMs: 1000, publishIntervalMs: 5000, staleAfterMs: 15000,
-    counterDecreaseMode: 'RESET_TO_ZERO', counterRolloverModulus: null, reason: entity ? `更新${RESOURCE_LABEL[type]}` : `创建${RESOURCE_LABEL[type]}`,
+    counterDecreaseMode: 'RESET_TO_ZERO', counterRolloverModulus: null, reason: entity ? copy.updateReason : copy.createReason,
   };
   if (!entity) return base;
   if (type === 'SITE') {
@@ -265,11 +385,11 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
   const rows = useMemo(() => entityRows(site, model, resourceType), [site, model, resourceType]);
 
   const resourceTypeOptions = useMemo(() => [
-    { key: 'SPACE' as const, label: RESOURCE_LABEL.SPACE, count: model.spaces.length },
-    { key: 'ASSET' as const, label: RESOURCE_LABEL.ASSET, count: model.assets.length },
-    { key: 'DEVICE' as const, label: RESOURCE_LABEL.DEVICE, count: model.devices.length },
-    { key: 'POINT' as const, label: RESOURCE_LABEL.POINT, count: model.telemetryPoints.length },
-    { key: 'SITE' as const, label: RESOURCE_LABEL.SITE, count: 1 },
+    { key: 'SPACE' as const, label: RESOURCE_COPY.SPACE.tabLabel, count: model.spaces.length },
+    { key: 'ASSET' as const, label: RESOURCE_COPY.ASSET.tabLabel, count: model.assets.length },
+    { key: 'DEVICE' as const, label: RESOURCE_COPY.DEVICE.tabLabel, count: model.devices.length },
+    { key: 'POINT' as const, label: RESOURCE_COPY.POINT.tabLabel, count: model.telemetryPoints.length },
+    { key: 'SITE' as const, label: RESOURCE_COPY.SITE.tabLabel, count: 1 },
   ], [model]);
 
   const writeAllowed = capabilities.has(WRITE_CAPABILITY[resourceType]);
@@ -404,7 +524,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
         if (entity) await registryAdminApi.updatePoint(site.id, entity.id, body);
         else await registryAdminApi.createPoint(site.id, body);
       }
-      setResultMessage(`${RESOURCE_LABEL[type]}${entity ? '更新' : '创建'}成功。`);
+      setResultMessage(entity ? RESOURCE_COPY[type].updatedMessage : RESOURCE_COPY[type].createdMessage);
       setEditTarget(null);
       setEditDirty(false);
       await onRefresh();
@@ -427,8 +547,8 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
         meta: makeRegistryMutationMeta(retireTarget.revision, retireReason.trim(), newRegistryIdempotencyKey('registry-retire')),
       });
       setResultMessage(result.status === 'COMPLETED'
-        ? `${RESOURCE_LABEL[retireTarget.type]}已完成退役。`
-        : `退役被 ${result.dependencyCount} 个活动依赖阻止，原有登记信息保持不变。`);
+        ? RESOURCE_COPY[retireTarget.type].retiredMessage
+        : `被 ${result.dependencyCount} 个活动关联项占用，暂时无法${RESOURCE_COPY[retireTarget.type].retireAction}，原有登记保持不变。`);
       setRetireTarget(null);
       setRetireReason('');
       setRetireDirty(false);
@@ -527,11 +647,11 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
             disabled={!retireAllowed || row.original.status === 'RETIRED'}
             onClick={() => {
               setRetireTarget(row.original);
-              setRetireReason(`退役${RESOURCE_LABEL[row.original.type]} ${row.original.displayName}`);
+              setRetireReason(`${RESOURCE_COPY[row.original.type].retireTitle} ${row.original.displayName}`);
               setRetireDirty(false);
             }}
           >
-            <Trash2 />退役
+            <Trash2 />{RESOURCE_COPY[row.original.type].retireAction}
           </Button>
           {row.original.type === 'DEVICE' ? (
             <Button variant="ghost" size="sm" onClick={() => setSelectedDeviceId(row.original.id)}>
@@ -565,7 +685,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
       ),
     },
     { id: 'sourceKey', header: '来源键', cell: ({ row }) => <span className="font-mono text-xs">{row.original.sourceKey}</span> },
-    { id: 'type', header: '类型', cell: ({ row }) => <>{pointTypeLabel(row.original.pointType)} · {row.original.valueType}</> },
+    { id: 'type', header: '类型', cell: ({ row }) => <>{pointSubtypeLabel(row.original)}</> },
     { id: 'writable', header: '可写', cell: ({ row }) => row.original.writable ? '是' : '否' },
   ], []);
 
@@ -606,8 +726,8 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
 
         <DataTableBlock
           className="min-w-0"
-          title="登记资源"
-          description="退役资源会保留历史记录"
+          title={RESOURCE_COPY[resourceType].tableTitle}
+          description="停用或退役的记录会保留历史关联"
           controls={(
             <div className="flex flex-wrap items-center justify-between gap-2">
               <Tabs
@@ -626,7 +746,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
                 </TabsList>
               </Tabs>
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" disabled={!writeAllowed} onClick={() => openEditor(resourceType)}><Plus />创建{RESOURCE_LABEL[resourceType]}</Button>
+                <Button size="sm" disabled={!writeAllowed} onClick={() => openEditor(resourceType)}><Plus />{RESOURCE_COPY[resourceType].createLabel}</Button>
                 <Button size="sm" variant="outline" disabled={!bindingAllowed} onClick={() => { setRebindOpen(true); setRebindDirty(false); }}><Link2 />调整关系</Button>
               </div>
             </div>
@@ -634,8 +754,8 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
         >
           <DataTable
             table={resourceTable}
-            tableAriaLabel={`${RESOURCE_LABEL[resourceType]}登记资源`}
-            empty={`当前没有${RESOURCE_LABEL[resourceType]}登记`}
+            tableAriaLabel={RESOURCE_COPY[resourceType].tableTitle}
+            empty={RESOURCE_COPY[resourceType].emptyLabel}
             getHeaderCellProps={(header) => ({
               className: header.id === 'actions' ? 'w-64' : undefined,
             })}
@@ -664,7 +784,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
 
       <Dialog open={Boolean(editTarget)} onOpenChange={(open) => { if (!open) closeEdit(); }}>
         <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
-          <DialogHeader><DialogTitle>{editTarget?.entity ? '编辑' : '创建'}{editTarget ? RESOURCE_LABEL[editTarget.type] : ''}</DialogTitle><DialogDescription>保存时服务端会再次检查权限、对象状态和并发版本。</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>{editTarget ? (editTarget.entity ? RESOURCE_COPY[editTarget.type].editTitle : RESOURCE_COPY[editTarget.type].createLabel) : ''}</DialogTitle><DialogDescription>保存时服务端会再次检查权限、对象状态和并发版本。</DialogDescription></DialogHeader>
           {editTarget ? (
             <div className="grid gap-4">
               {editTarget.type !== 'POINT' ? <>
@@ -703,7 +823,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
                 <label className="grid gap-1.5 text-sm"><span>物理传感器（可选）</span><Select value={editDraft.sensorId || '__none__'} onValueChange={(value) => updateEdit('sensorId', value === '__none__' ? '' : value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="__none__">未绑定传感器</SelectItem>{model.sensors.map((sensor) => <SelectItem key={sensor.id} value={sensor.id}>{sensor.displayName} · {sensor.code}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
                 <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>点位编码</span><Input value={editDraft.pointCode} onChange={(event) => updateEdit('pointCode', event.target.value)} /></label><label className="grid gap-1.5 text-sm"><span>来源键</span><Input value={editDraft.sourceKey} onChange={(event) => updateEdit('sourceKey', event.target.value)} /></label></div>
                 <label className="grid gap-1.5 text-sm"><span>名称</span><Input value={editDraft.displayName} onChange={(event) => updateEdit('displayName', event.target.value)} /></label>
-                <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>点位类型</span><Select value={editDraft.pointType} onValueChange={(value) => updateEdit('pointType', value as TelemetryPoint['pointType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{POINT_TYPES.map((value) => <SelectItem key={value} value={value}>{pointTypeLabel(value)}</SelectItem>)}</SelectGroup></SelectContent></Select></label><label className="grid gap-1.5 text-sm"><span>值类型</span><Select disabled={editDraft.pointType === 'COUNTER'} value={editDraft.valueType} onValueChange={(value) => updateEdit('valueType', value as TelemetryPoint['valueType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{VALUE_TYPES.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectGroup></SelectContent></Select></label></div>
+                <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>点位类型</span><Select value={editDraft.pointType} onValueChange={(value) => updateEdit('pointType', value as TelemetryPoint['pointType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{POINT_TYPES.map((value) => <SelectItem key={value} value={value}>{pointTypeLabel(value)}</SelectItem>)}</SelectGroup></SelectContent></Select></label><label className="grid gap-1.5 text-sm"><span>值类型</span><Select disabled={editDraft.pointType === 'COUNTER'} value={editDraft.valueType} onValueChange={(value) => updateEdit('valueType', value as TelemetryPoint['valueType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{VALUE_TYPES.map((value) => <SelectItem key={value} value={value}>{valueTypeLabel(value)}</SelectItem>)}</SelectGroup></SelectContent></Select></label></div>
                 {editDraft.pointType === 'COUNTER' ? <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>累计量下降处理</span><Select value={editDraft.counterDecreaseMode} onValueChange={(value) => updateEdit('counterDecreaseMode', value as NonNullable<TelemetryPoint['counterDecreaseMode']>)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="RESET_TO_ZERO">复位归零</SelectItem><SelectItem value="ROLLOVER">量程回绕</SelectItem><SelectItem value="INVALID">视为无效</SelectItem></SelectGroup></SelectContent></Select></label><label className="grid gap-1.5 text-sm"><span>回绕模数</span><Input type="number" disabled={editDraft.counterDecreaseMode !== 'ROLLOVER'} min={0} value={editDraft.counterRolloverModulus ?? ''} onChange={(event) => updateEdit('counterRolloverModulus', event.target.value === '' ? null : Number(event.target.value))} /></label></div> : null}
                 <label className="grid gap-1.5 text-sm"><span>单位（可选）</span><Input value={editDraft.unit} onChange={(event) => updateEdit('unit', event.target.value)} /></label>
                 <div className="grid gap-4 sm:grid-cols-3"><label className="grid gap-1.5 text-sm"><span>采样间隔 ms</span><Input type="number" min={100} value={editDraft.sampleIntervalMs} onChange={(event) => updateEdit('sampleIntervalMs', Number(event.target.value))} /></label><label className="grid gap-1.5 text-sm"><span>发布间隔 ms</span><Input type="number" min={100} value={editDraft.publishIntervalMs} onChange={(event) => updateEdit('publishIntervalMs', Number(event.target.value))} /></label><label className="grid gap-1.5 text-sm"><span>陈旧阈值 ms</span><Input type="number" min={100} value={editDraft.staleAfterMs} onChange={(event) => updateEdit('staleAfterMs', Number(event.target.value))} /></label></div>
@@ -720,10 +840,10 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
 
       <Dialog open={Boolean(retireTarget)} onOpenChange={(open) => { if (!open) closeRetire(); }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>退役{retireTarget ? RESOURCE_LABEL[retireTarget.type] : ''}</DialogTitle><DialogDescription>退役会检查活动依赖；存在依赖时不会删除登记信息。</DialogDescription></DialogHeader>
-          <Alert><AlertTitle>不会执行硬删除</AlertTitle><AlertDescription>服务端会先检查依赖关系，只有满足退役条件时才会完成状态变更。</AlertDescription></Alert>
-          <label className="grid gap-1.5 text-sm"><span>退役原因</span><Textarea rows={3} value={retireReason} onChange={(event) => { setRetireReason(event.target.value); setRetireDirty(true); }} /></label>
-          <DialogFooter><Button variant="outline" onClick={closeRetire}>取消</Button><Button variant="destructive" disabled={!retireReason.trim() || working} onClick={() => void runRetire()}>{working ? '正在处理…' : '确认退役'}</Button></DialogFooter>
+          <DialogHeader><DialogTitle>{retireTarget ? RESOURCE_COPY[retireTarget.type].retireTitle : ''}</DialogTitle><DialogDescription>执行前会先检查活动关联；存在活动关联时不会变更原有登记。</DialogDescription></DialogHeader>
+          <Alert><AlertTitle>保留历史记录</AlertTitle><AlertDescription>服务端不会物理删除历史记录，仅在无活动关联时变更对象状态。</AlertDescription></Alert>
+          <label className="grid gap-1.5 text-sm"><span>变更原因</span><Textarea rows={3} value={retireReason} onChange={(event) => { setRetireReason(event.target.value); setRetireDirty(true); }} /></label>
+          <DialogFooter><Button variant="outline" onClick={closeRetire}>取消</Button><Button variant="destructive" disabled={!retireReason.trim() || working} onClick={() => void runRetire()}>{working ? '正在处理…' : (retireTarget ? RESOURCE_COPY[retireTarget.type].retireConfirm : '确认')}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -735,7 +855,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
             {rebindDraft.kind === 'POINT_SUBJECT' ? <label className="grid gap-1.5 text-sm"><span>目标对象类型</span><Select value={rebindDraft.targetType} onValueChange={(value) => updateRebind('targetType', value as RebindDraft['targetType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="SITE">站点</SelectItem><SelectItem value="SPACE">空间</SelectItem><SelectItem value="ASSET">资产</SelectItem></SelectGroup></SelectContent></Select></label> : null}
             <label className="grid gap-1.5 text-sm"><span>来源对象</span><Select value={rebindDraft.sourceId || undefined} onValueChange={(value) => updateRebind('sourceId', value)}><SelectTrigger><SelectValue placeholder="选择来源对象" /></SelectTrigger><SelectContent><SelectGroup>{bindingOptions.sources.map((option) => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
             <label className="grid gap-1.5 text-sm"><span>目标对象</span><Select value={rebindDraft.targetId || undefined} onValueChange={(value) => updateRebind('targetId', value)}><SelectTrigger><SelectValue placeholder="选择目标对象" /></SelectTrigger><SelectContent><SelectGroup>{bindingOptions.targets.map((option) => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
-            <label className="grid gap-1.5 text-sm"><span>关系角色</span><Select value={rebindDraft.role} onValueChange={(value) => updateRebind('role', value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{rebindRoles.map((role) => <SelectItem key={role} value={role}>{role}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
+            <label className="grid gap-1.5 text-sm"><span>关系角色</span><Select value={rebindDraft.role} onValueChange={(value) => updateRebind('role', value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{rebindRoles.map((role) => <SelectItem key={role} value={role}>{rebindRoleLabel(role)}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
             <label className="grid gap-1.5 text-sm"><span>变更原因</span><Textarea rows={2} value={rebindDraft.reason} onChange={(event) => updateRebind('reason', event.target.value)} /></label>
           </div>
           <DialogFooter><Button variant="outline" onClick={closeRebind}>取消</Button><Button disabled={working || !rebindDraft.sourceId || !rebindDraft.targetId || !rebindDraft.role || !rebindDraft.reason.trim()} onClick={() => void runRebind()}>{working ? '正在保存…' : '保存关系'}</Button></DialogFooter>

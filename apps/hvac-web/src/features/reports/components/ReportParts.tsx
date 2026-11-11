@@ -287,15 +287,15 @@ export function OperationsGrid({ alarms, orders, findings, findingsUnavailable, 
           </>
         ) : <Skeleton className="col-span-3 h-12" />}
       </OperationsGroup>
-      <OperationsGroup title="诊断发现">
+      <OperationsGroup title="诊断结论">
         {findings ? (
           <>
-            <Count label="发现问题" value={String(findings.count)} unit="条" />
+            <Count label="检出问题" value={String(findings.count)} unit="条" />
             {findings.byType.slice(0, 2).map((group) => (
-              <Count key={group.findingType} label={ruleFor(group.findingType)?.title ?? '其他发现'} value={String(group.count)} unit="条" />
+              <Count key={group.findingType} label={ruleFor(group.findingType)?.title ?? '其他结论'} value={String(group.count)} unit="条" />
             ))}
           </>
-        ) : findingsUnavailable ? <p className="col-span-3 text-sm text-muted-foreground">诊断发现暂时读不到</p> : <Skeleton className="col-span-3 h-12" />}
+        ) : findingsUnavailable ? <p className="col-span-3 text-sm text-muted-foreground">诊断结论暂时读不到</p> : <Skeleton className="col-span-3 h-12" />}
       </OperationsGroup>
     </div>
   );

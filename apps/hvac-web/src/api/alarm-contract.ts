@@ -189,7 +189,7 @@ export function validateAlarmScope(alarm: Alarm, scope: { readonly trustedTenant
   const tenantId = alarmUUIDv7Schema.parse(scope.trustedTenantId);
   const siteId = alarmUUIDv7Schema.parse(scope.trustedSiteId);
   if (alarm.tenantId !== tenantId || alarm.siteId !== siteId) {
-    throw new AlarmApiError(404, 'RESOURCE_NOT_FOUND', '未找到该 Alarm。');
+    throw new AlarmApiError(404, 'RESOURCE_NOT_FOUND', '未找到该告警。');
   }
   return alarm;
 }
