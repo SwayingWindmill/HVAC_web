@@ -23,7 +23,6 @@ import { PERIOD_LABEL, sumCosts, type PeriodCode, type TouCost } from "@/feature
 import { formatDecimal, formatTime } from "@/lib/operator-format";
 import { cn } from "@/lib/utils";
 import {
-  BUCKET_NOUN,
   ENERGY_PERIODS,
   explainQuestion,
   periodWindow,
@@ -41,12 +40,42 @@ const PERIOD_OPTIONS = (Object.keys(ENERGY_PERIODS) as EnergyPeriod[]).map((valu
 
 /** What the period is compared with: the same span of the period before. */
 const PREVIOUS_LABEL: Record<EnergyPeriod, string> = { today: "昨日同时段", "7d": "前 7 天", month: "上月同期", year: "去年同期" };
-const CHART_PREFIX: Record<Granularity, string> = { hour: "逐时", day: "每日", month: "每月" };
 const BUCKET_HEADER: Record<Granularity, string> = { hour: "时段", day: "日期", month: "月份" };
 const PERIOD_ORDER: readonly PeriodCode[] = ["SUPER_PEAK", "PEAK", "FLAT", "VALLEY"];
 
 type ConsumptionMetric = "electricityKWh" | "coolingKWh" | "cop" | "cost";
 type ConsumptionView = "trend" | "tou" | "detail";
+
+const GRANULARITY_COPY: Readonly<Record<Granularity, {
+  readonly detailTitle: string;
+  readonly peakLabel: string;
+  readonly averageLabel: string;
+}>> = {
+  hour: { detailTitle: "逐时明细", peakLabel: "用电最高时段", averageLabel: "每小时平均" },
+  day: { detailTitle: "每日明细", peakLabel: "最高用电日", averageLabel: "日均用电" },
+  month: { detailTitle: "每月明细", peakLabel: "最高用电月", averageLabel: "月均用电" },
+};
+
+const CHART_TITLE: Readonly<Record<Granularity, Readonly<Record<ConsumptionMetric, string>>>> = {
+  hour: {
+    electricityKWh: "每小时空调用电",
+    coolingKWh: "每小时供冷量",
+    cop: "逐时综合能效走势",
+    cost: "每小时估算电费",
+  },
+  day: {
+    electricityKWh: "每日空调用电",
+    coolingKWh: "每日供冷量",
+    cop: "每日综合能效走势",
+    cost: "每日估算电费",
+  },
+  month: {
+    electricityKWh: "每月空调用电",
+    coolingKWh: "每月供冷量",
+    cop: "每月综合能效走势",
+    cost: "每月估算电费",
+  },
+};
 
 /** Energy in kWh, or in MWh once `scale` (the largest figure shown beside it) reaches 10,000 kWh. */
 function energy(value: number | null, scale = value ?? 0): { value: string | null; unit: string } {
@@ -132,7 +161,7 @@ export function ConsumptionWorkspace() {
               {rangeLabel(period, site.timezone)} · 对比{previousLabel}
               {comparison ? (
                 <span data-testid="energy-freshness">
-                  {comparison.current.dataWatermark ? ` · 数据截至 ${formatTime(comparison.current.dataWatermark, site.timezone)}` : " · 本期间还没有计量数据"}
+                  {comparison.current.dataWatermark ? ` · 数据截至 ${formatTime(comparison.current.dataWatermark, site.timezone)}` : " · 所选时段暂无计量数据"}
                 </span>
               ) : null}
             </span>
@@ -153,7 +182,7 @@ export function ConsumptionWorkspace() {
         <Panel aria-label="期间用能">
           <div className="flex flex-col items-start gap-2 px-5 py-8">
             <p className="text-sm font-semibold">能耗数据暂时读不到</p>
-            <p className="text-xs text-muted-foreground">能耗分析服务没有返回本期间的数据。</p>
+            <p className="text-xs text-muted-foreground">暂时未能获取所选时段的能耗数据。</p>
             <Button variant="outline" size="sm" onClick={() => void query.refetch()}>重试</Button>
           </div>
         </Panel>
@@ -167,10 +196,10 @@ export function ConsumptionWorkspace() {
                 <TabsList variant="line" className="h-12 gap-5 p-0">
                   <TabsTrigger value="trend" className="h-12 flex-none px-0 after:bottom-0!">分项趋势</TabsTrigger>
                   <TabsTrigger value="tou" className="h-12 flex-none px-0 after:bottom-0!">分时电费</TabsTrigger>
-                  <TabsTrigger value="detail" className="h-12 flex-none px-0 after:bottom-0!">{`分${BUCKET_NOUN[comparison.current.granularity]}明细`}</TabsTrigger>
+                  <TabsTrigger value="detail" className="h-12 flex-none px-0 after:bottom-0!">{GRANULARITY_COPY[comparison.current.granularity].detailTitle}</TabsTrigger>
                 </TabsList>
                 <span className="ml-auto flex min-w-0 items-center gap-1 truncate text-xs text-muted-foreground">
-                  {view === "trend" ? "各类设备按自身刻度 · 浅色为进行中"
+                  {view === "trend" ? "未走完的时段以浅色显示"
                     : view === "tou" ? (tariff.data ? <>{tariff.data.displayName}<InfoTip>按站点电价估算，正式电费以结算为准</InfoTip></> : null)
                       : "kWh · 最新在前"}
                 </span>
@@ -260,13 +289,14 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
       delta: relativeChange(pricing.current.total, pricing.previous.total),
       caption: pricing.current.energyKWh - pricing.current.unpricedKWh > 0
         ? `均价 ${formatDecimal(pricing.current.total / (pricing.current.energyKWh - pricing.current.unpricedKWh), 3)} 元/kWh · 用电 ${formatDecimal(pricing.current.energyKWh, 0)} kWh`
-        : "本期间还没有计量数据",
+        : "所选时段暂无计量数据",
     } satisfies MetricTab] : []),
   ];
   const active = metrics.find((candidate) => candidate.key === metric) ?? metrics[0];
-  const unit = active.key === "cop" ? "COP" : active.key === "cost" ? "元" : "kWh";
+  const activeKey = active.key as ConsumptionMetric;
+  const unit = activeKey === "cop" ? "COP" : activeKey === "cost" ? "元" : "kWh";
   const metered = current.rows.filter((row) => row.electricityKWh !== null);
-  const noun = BUCKET_NOUN[granularity];
+  const granularityCopy = GRANULARITY_COPY[granularity];
 
   return (
     <MetricTabsChartCard
@@ -285,26 +315,26 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
       showLegend
       yDomain="zero"
       chartClassName="h-[280px]"
-      empty="本期间还没有计量数据"
+      empty="所选时段暂无计量数据"
       metrics={metrics}
       chartTitle={(
         <>
-          <span className="font-semibold">{CHART_PREFIX[granularity]}{active.label}</span>
+          <span className="font-semibold">{CHART_TITLE[granularity][activeKey]}</span>
           <span className="text-xs text-muted-foreground">{unit}</span>
           <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
-            {current.peak ? <span>用电最高{noun} <span className="font-medium text-foreground">{current.peak.label}</span> {formatDecimal(current.peak.electricityKWh!, 1)} kWh</span> : null}
-            {metered.length > 0 ? <span>平均每{noun} {formatDecimal(current.electricityKWh! / metered.length, 1)} kWh</span> : null}
+            {current.peak ? <span>{granularityCopy.peakLabel} <span className="font-medium text-foreground">{current.peak.label}</span> {formatDecimal(current.peak.electricityKWh!, 1)} kWh</span> : null}
+            {metered.length > 0 ? <span>{granularityCopy.averageLabel} {formatDecimal(current.electricityKWh! / metered.length, 1)} kWh</span> : null}
             {current.excludedIntervals > 0 ? (
               <span className="flex items-center gap-1 text-warning-text">
                 <TriangleAlert className="size-3.5" aria-hidden="true" />
-                {current.excludedIntervals} 段数据未计入
+                缺 {current.excludedIntervals} 段数据
                 <InfoTip>电表读数可疑或无效的时段不计入合计</InfoTip>
               </span>
             ) : null}
             {explained ? (
               <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => explain(explainQuestion(explained, granularity, timeZone))}>
                 <Sparkles className="size-3.5 text-primary" aria-hidden="true" />
-                解释 {explained.label}
+                分析 {explained.label}
               </Button>
             ) : null}
           </span>
@@ -344,7 +374,7 @@ function DetailTable({ comparison, pricing, previousLabel, timeZone }: {
 }) {
   const granularity = comparison.current.granularity;
   const explain = useAssistantPanel((state) => state.explain);
-  const title = `分${BUCKET_NOUN[granularity]}明细`;
+  const title = GRANULARITY_COPY[granularity].detailTitle;
   const codes = pricing?.codes ?? [];
   // Newest first: the bucket still running leads.
   const rows = [...comparison.buckets].filter((bucket) => bucket.electricityKWh !== null || bucket.coolingKWh !== null || bucket.complete).reverse();
@@ -363,7 +393,7 @@ function DetailTable({ comparison, pricing, previousLabel, timeZone }: {
         </TableHeader>
         <TableBody>
           {rows.length === 0 ? (
-            <TableRow className="hover:bg-transparent"><TableCell colSpan={6 + codes.length} className="py-8 text-center text-muted-foreground">本期间还没有计量数据</TableCell></TableRow>
+            <TableRow className="hover:bg-transparent"><TableCell colSpan={6 + codes.length} className="py-8 text-center text-muted-foreground">所选时段暂无计量数据</TableCell></TableRow>
           ) : rows.map((row) => {
             const change = relativeChange(row.electricityKWh, row.previousElectricityKWh);
             const cost = pricing?.byLabel.get(row.label);
@@ -378,11 +408,11 @@ function DetailTable({ comparison, pricing, previousLabel, timeZone }: {
                         variant="ghost"
                         size="sm"
                         className="h-6 gap-1 px-1.5 text-xs text-primary opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                        aria-label={`解释 ${row.label}`}
+                        aria-label={`分析 ${row.label}`}
                         onClick={() => explain(explainQuestion(row, granularity, timeZone))}
                       >
                         <Sparkles className="size-3" aria-hidden="true" />
-                        解释
+                        分析原因
                       </Button>
                     ) : null}
                   </span>

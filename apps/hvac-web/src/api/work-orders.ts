@@ -198,5 +198,5 @@ export function transitionWorkOrder(
 }
 
 export function workOrderErrorMessage(error: unknown): string {
-  return error instanceof WorkOrderApiError ? `${error.code} · ${error.message}` : 'Work Order 服务暂时不可用。';
+  return error instanceof WorkOrderApiError ? error.message : '工单服务暂时不可用。';
 }

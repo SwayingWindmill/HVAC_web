@@ -661,7 +661,7 @@ class BrowserShellRuntime implements ShellRuntime {
           failure: failureFrom(
             problem,
             'PLATFORM_STATUS_UNAVAILABLE',
-            'Platform Gateway 状态暂时不可用。',
+            '平台网关状态暂时不可用。',
           ),
         },
         sites: this.snapshot.sites,
@@ -698,7 +698,7 @@ class BrowserShellRuntime implements ShellRuntime {
             || site.tenantId !== principal.context.tenantId
             || seenSiteIDs.has(site.id)
           ) {
-            throw new SiteDiscoveryValidationError('Registry returned an invalid authorized Site collection.');
+            throw new SiteDiscoveryValidationError('返回的授权站点列表格式无效。');
           }
           seenSiteIDs.add(site.id);
           sites.push(Object.freeze({ ...site }));
@@ -706,7 +706,7 @@ class BrowserShellRuntime implements ShellRuntime {
 
         if (!response.data.hasMore) {
           if (response.data.nextCursor !== null) {
-            throw new SiteDiscoveryValidationError('Registry returned a cursor after the final Site page.');
+            throw new SiteDiscoveryValidationError('站点列表最后一页仍带有下一页标记。');
           }
           completed = true;
           break;
@@ -714,14 +714,14 @@ class BrowserShellRuntime implements ShellRuntime {
 
         const nextCursor = response.data.nextCursor;
         if (!nextCursor || seenCursors.has(nextCursor)) {
-          throw new SiteDiscoveryValidationError('Registry returned an invalid Site pagination cursor.');
+          throw new SiteDiscoveryValidationError('返回的站点分页标记无效。');
         }
         seenCursors.add(nextCursor);
         cursor = nextCursor;
       }
 
       if (!completed) {
-        throw new SiteDiscoveryValidationError('Registry Site pagination exceeded the bounded page count.');
+        throw new SiteDiscoveryValidationError('站点列表分页超过最大页数上限。');
       }
 
       this.publish({

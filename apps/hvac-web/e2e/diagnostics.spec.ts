@@ -6,7 +6,7 @@ const BTU_METER_ASSET = '01910000-0000-7000-8000-00000000000a';
 
 test('a finding states its measurement against the threshold and opens its causes and actions', async ({ page }) => {
   await page.goto(`/operations/diagnostics?site=${SITE_ID}&range=all`);
-  const findings = page.getByRole('list', { name: '诊断发现列表' });
+  const findings = page.getByRole('list', { name: '诊断结论列表' });
   const item = findings.getByRole('button', { name: /冷冻水低温差/ });
   await expect(item).toHaveCount(1);
   await expect(item).toContainText('BTU-METER-01');
@@ -16,7 +16,7 @@ test('a finding states its measurement against the threshold and opens its cause
   await item.click();
   await expect(page).toHaveURL(/inspect=/);
   await expect(item).toHaveAttribute('aria-current', 'true');
-  const detail = page.getByRole('region', { name: '诊断发现详情' });
+  const detail = page.getByRole('region', { name: '诊断结论详情' });
   await expect(detail).toContainText('测量值3.38 K');
   await expect(detail).toContainText('阈值3.5 K');
   await expect(detail).toContainText('降低冷冻水泵频率');

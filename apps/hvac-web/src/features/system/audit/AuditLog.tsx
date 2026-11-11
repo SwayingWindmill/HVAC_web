@@ -46,7 +46,7 @@ export function AuditLog({ viewer, canRead, active }: AuditLogProps) {
       {forbidden ? <Notice>当前账号没有查看操作记录的权限</Notice>
         : __HVAC_WEB_FRONTEND_REVIEW__ ? <Notice>评审构建不连接操作记录服务</Notice>
         : query.isPending ? <div className="flex flex-col gap-2 p-4"><Skeleton className="h-9" /><Skeleton className="h-9" /><Skeleton className="h-9" /></div>
-        : query.isError ? <Notice>操作记录暂时读不到，没有显示任何替代记录</Notice>
+        : query.isError ? <Notice>操作记录暂时读不到，请稍后重试</Notice>
         : rows.length === 0 ? <Notice>{search ? '没有匹配的操作记录' : '本组织还没有操作记录'}</Notice>
         : (
           <Table aria-label="操作记录">

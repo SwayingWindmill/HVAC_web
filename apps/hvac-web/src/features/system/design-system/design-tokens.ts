@@ -1,6 +1,8 @@
 // The product's colour tokens as the design system names them, each with the token it is read
 // against, so the page can measure the contrast the theme actually ships (WCAG 2.2, 1.4.3/1.4.11).
 
+import { SEVERITY_LEVEL_LABELS } from '../../../lib/operator-format.ts';
+
 /**
  * What WCAG asks of a colour: text 4.5:1 (7:1 for AAA, 1.4.3/1.4.6); a mark that conveys meaning
  * 3:1 against what is next to it (1.4.11, one level only); a divider nothing (1.4.11 exempts it).
@@ -63,11 +65,11 @@ export const TOKEN_GROUPS: readonly TokenGroup[] = [
     title: '告警级别',
     description: '告警等级的标记色，和形状一起使用（◆▲●■○），按图形标准 3:1 衡量',
     tokens: [
-      { name: 'severity-critical', role: '紧急', against: 'card', use: 'graphic' },
-      { name: 'severity-major', role: '重要', against: 'card', use: 'graphic' },
-      { name: 'severity-minor', role: '次要', against: 'card', use: 'graphic' },
-      { name: 'severity-warning', role: '提示', against: 'card', use: 'graphic' },
-      { name: 'severity-info', role: '信息', against: 'card', use: 'graphic' },
+      { name: 'severity-critical', role: SEVERITY_LEVEL_LABELS.critical, against: 'card', use: 'graphic' },
+      { name: 'severity-major', role: SEVERITY_LEVEL_LABELS.major, against: 'card', use: 'graphic' },
+      { name: 'severity-minor', role: SEVERITY_LEVEL_LABELS.minor, against: 'card', use: 'graphic' },
+      { name: 'severity-warning', role: SEVERITY_LEVEL_LABELS.warning, against: 'card', use: 'graphic' },
+      { name: 'severity-info', role: SEVERITY_LEVEL_LABELS.info, against: 'card', use: 'graphic' },
     ],
   },
   {

@@ -33,6 +33,15 @@ const COLUMNS: Readonly<Record<WorkCenterView, readonly WorkOrderStatus[]>> = {
   all: [...OPEN_STATUSES, 'COMPLETED', 'CANCELLED'],
 };
 
+const EMPTY_STATUS_LABELS: Readonly<Record<WorkOrderStatus, string>> = {
+  DRAFT: '暂无工单草稿',
+  OPEN: '暂无待处理工单',
+  IN_PROGRESS: '暂无处理中的工单',
+  BLOCKED: '暂无受阻工单',
+  COMPLETED: '暂无已完成工单',
+  CANCELLED: '暂无已取消工单',
+};
+
 const REFRESH_MS = 15_000;
 
 const siteRoute = getRouteApi('/_app/_site');
@@ -200,7 +209,7 @@ export function WorkCenterWorkspace() {
               </div>
               <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
                 {list.isPending ? <><Skeleton className="h-28" /><Skeleton className="h-28" /></> : items.length === 0 ? (
-                  <p className="px-2 py-6 text-center text-xs text-muted-foreground">没有{STATUS_LABELS[status]}的工单</p>
+                  <p className="px-2 py-6 text-center text-xs text-muted-foreground">{EMPTY_STATUS_LABELS[status]}</p>
                 ) : items.map((workOrder) => (
                   <div role="listitem" key={workOrder.workOrderId}>
                     <WorkOrderCard

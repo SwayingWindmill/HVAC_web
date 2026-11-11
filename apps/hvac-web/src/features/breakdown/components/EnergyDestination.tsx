@@ -114,11 +114,11 @@ function EnergyFlow({ breakdown }: { readonly breakdown: Breakdown }) {
 }
 
 /** One category's energy per bucket on its own scale, the running bucket drawn lighter. */
-function CategoryBars({ category, rows, labelOf, noun }: {
+function CategoryBars({ category, rows, labelOf, granularityCopy }: {
   readonly category: EquipmentCategory;
   readonly rows: Breakdown['rows'];
   readonly labelOf: (key: string) => string;
-  readonly noun: string;
+  readonly granularityCopy: { readonly averageLabel: string; readonly seriesLabel: string };
 }) {
   const values = rows.map((row) => row[category]);
   const top = Math.max(...values, 0);
@@ -130,11 +130,11 @@ function CategoryBars({ category, rows, labelOf, noun }: {
       <span className="flex items-center gap-2 text-sm">
         <span className="size-2 shrink-0 rounded-[2px]" style={{ background: CATEGORY_COLOR[category] }} aria-hidden="true" />
         <span className="font-medium">{CATEGORY_LABEL[category]}</span>
-        <span className="ml-auto text-xs text-muted-foreground tabular-nums">{average === null ? '—' : `${noun}均 ${formatDecimal(average, 0)} kWh`}</span>
+        <span className="ml-auto text-xs text-muted-foreground tabular-nums">{average === null ? '—' : `${granularityCopy.averageLabel} ${formatDecimal(average, 0)} kWh`}</span>
       </span>
       <div
         role="img"
-        aria-label={`${CATEGORY_LABEL[category]}每${noun}用电，最高 ${rows.length > 0 ? labelOf(rows[peakIndex].key) : '—'} ${formatDecimal(top, 0)} kWh`}
+        aria-label={`${CATEGORY_LABEL[category]}${granularityCopy.seriesLabel}，最高 ${rows.length > 0 ? labelOf(rows[peakIndex].key) : '—'} ${formatDecimal(top, 0)} kWh`}
         className="flex h-16 items-end gap-[3px]"
       >
         {rows.map((row, index) => (
@@ -157,7 +157,11 @@ function CategoryBars({ category, rows, labelOf, noun }: {
 
 type BreakdownResult = ReturnType<typeof useEnergyBreakdown>;
 
-const NOUN: Record<Granularity, string> = { hour: '时', day: '日', month: '月' };
+const TREND_GRANULARITY_COPY: Readonly<Record<Granularity, { readonly averageLabel: string; readonly seriesLabel: string }>> = {
+  hour: { averageLabel: '每小时平均', seriesLabel: '每小时用电' },
+  day: { averageLabel: '日均', seriesLabel: '每日用电' },
+  month: { averageLabel: '月均', seriesLabel: '每月用电' },
+};
 
 function bucketName(key: string, granularity: Granularity, timeZone: string): string {
   if (granularity === 'hour') return bucketLabel(key, 'hour', timeZone);
@@ -197,7 +201,7 @@ export function EnergyDestination({ result, previousLabel }: { readonly result: 
         <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
           <span className="flex size-9 items-center justify-center rounded-xl bg-muted text-muted-foreground"><Workflow className="size-[18px]" aria-hidden="true" /></span>
           <p className="text-sm font-semibold">冷站没有登记用电设备</p>
-          <p className="text-xs text-muted-foreground">冷机、水泵与冷却塔登记并接入分表后，这里按设备拆分用电</p>
+          <p className="text-xs text-muted-foreground">冷机、水泵与冷却塔登记并接入设备电表后，这里按设备统计用电</p>
         </div>
       </Panel>
     );
@@ -218,7 +222,7 @@ export function EnergyDestination({ result, previousLabel }: { readonly result: 
   return (
     <Panel aria-label="用电去向">
       <PanelHeader
-        title={<span className="flex items-center gap-1.5">用电去向<InfoTip>空调总电表的用电流向各系统与设备；各设备电表没覆盖的部分记为未单独计量</InfoTip></span>}
+        title={<span className="flex items-center gap-1.5">用电去向<InfoTip>空调总电表的用电流向各设备；各设备电表没覆盖的部分记为未单独计量</InfoTip></span>}
         caption={breakdown.unallocatedKWh !== null && breakdown.unallocatedKWh < 0
           ? `各设备电表合计比总电表多 ${kWh(-breakdown.unallocatedKWh)}`
           : `空调总用电 ${breakdown.totalKWh === null ? '—' : kWh(breakdown.totalKWh)} · 设备电表合计 ${kWh(breakdown.subMeteredKWh)}`}
@@ -277,12 +281,12 @@ export function EnergyDestination({ result, previousLabel }: { readonly result: 
 /** Each category's energy bucket by bucket, on its own scale. */
 export function CategoryTrend({ result, granularity, timeZone }: { readonly result: BreakdownResult; readonly granularity: Granularity; readonly timeZone: string }) {
   const breakdown = result.query.data;
-  if (!breakdown || breakdown.rows.length === 0) return <p className="px-5 py-10 text-center text-sm text-muted-foreground">本期间还没有分表读数</p>;
+  if (!breakdown || breakdown.rows.length === 0) return <p className="px-5 py-10 text-center text-sm text-muted-foreground">所选时段暂无设备电表读数</p>;
   const categories = EQUIPMENT_ORDER.filter((category) => breakdown.items.some((item) => item.category === category));
   return (
     <div role="region" aria-label="分项趋势" className="grid grid-cols-4 gap-3 p-4">
       {categories.map((category) => (
-        <CategoryBars key={category} category={category} rows={breakdown.rows} labelOf={(key) => bucketName(key, granularity, timeZone)} noun={NOUN[granularity]} />
+        <CategoryBars key={category} category={category} rows={breakdown.rows} labelOf={(key) => bucketName(key, granularity, timeZone)} granularityCopy={TREND_GRANULARITY_COPY[granularity]} />
       ))}
     </div>
   );

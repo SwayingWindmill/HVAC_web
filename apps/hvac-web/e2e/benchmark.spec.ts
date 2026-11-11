@@ -46,8 +46,8 @@ test('sites also compare on electricity per square metre per cooling degree day'
   await page.goto('/benchmark');
   const ranking = page.getByRole('region', { name: '站点排名' });
   const row = ranking.getByRole('row', { name: /中央机房/ });
-  await expect(ranking.getByRole('columnheader', { name: '单位度日用电（kWh/m²·℃·d）' })).toBeVisible();
-  await expect(row.getByRole('cell').nth(6)).toHaveText(/^\d+\.\d{4}度日数 \d+\.\d ℃·d$/);
+  await expect(ranking.getByRole('columnheader', { name: '单位度日用电（kWh/m²·°C·d）' })).toBeVisible();
+  await expect(row.getByRole('cell').nth(6)).toHaveText(/^\d+\.\d{4}度日数 \d+\.\d °C·d$/);
   await expect(page.getByRole('region', { name: '更多对比项' })).toContainText('1 / 1 个站点有气象站');
 
   await ranking.getByRole('tab', { name: '按度日修正用电' }).click();

@@ -66,7 +66,7 @@ export function AssistantThread(surface: ThreadSurface) {
 const ThreadWelcome: FC = () => (
   <div className="flex flex-1 flex-col justify-center gap-1.5 pb-10">
     <p className="m-0 text-base font-medium">想了解这个站点的什么？</p>
-    <p className="m-0 text-sm leading-relaxed text-muted-foreground">可以问用电为什么偏高、哪台机组用得多、某段时间的运行情况。在能耗分析的图上点「解释」也会带着日期来问。</p>
+    <p className="m-0 text-sm leading-relaxed text-muted-foreground">可以问用电为什么偏高、哪台机组用得多、某段时间的运行情况。在能耗分析的图上点「分析原因」也会带着日期来问。</p>
   </div>
 );
 

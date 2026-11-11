@@ -165,7 +165,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
     return (
       <>
         {reason ? <span className="text-muted-foreground">{reason}</span> : formatDecimal(site.climateIntensity!, 4)}
-        {site.degreeDays !== null ? <span className="block text-xs text-muted-foreground">度日数 {formatDecimal(site.degreeDays, 1)} ℃·d</span> : null}
+        {site.degreeDays !== null ? <span className="block text-xs text-muted-foreground">度日数 {formatDecimal(site.degreeDays, 1)} °C·d</span> : null}
       </>
     );
   };
@@ -183,7 +183,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
   const exportCsv = () => {
     if (!result) return;
     const lines = [
-      ['站点', '气候区', '综合能效 COP', '与整体相比 %', '空调用电 kWh', '供冷量 kWh', '建筑面积 m²', '单位面积用电 kWh/m²', '度日数 ℃·d', '单位度日用电 kWh/m²·℃·d', '日均用电 kWh'],
+      ['站点', '气候区', '综合能效 COP', '与整体相比 %', '空调用电 kWh', '供冷量 kWh', '建筑面积 m²', '单位面积用电 kWh/m²', '度日数 °C·d', '单位度日用电 kWh/m²·°C·d', '日均用电 kWh'],
       ...listed.map((site) => [
         site.name, site.climateZone ? CLIMATE_ZONE_LABEL[site.climateZone] : '', site.cop?.toFixed(2) ?? '', site.copVsFleet === null ? '' : (site.copVsFleet * 100).toFixed(1),
         site.electricityKWh?.toFixed(1) ?? '', site.coolingKWh?.toFixed(1) ?? '', site.floorAreaM2 ?? '', site.intensityKWhPerM2?.toFixed(3) ?? '',
@@ -299,7 +299,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
                   <TableHead>与整体相比</TableHead>
                   <TableHead className="text-right">空调用电</TableHead>
                   <TableHead className="text-right">单位面积用电</TableHead>
-                  <TableHead className="text-right">单位度日用电（kWh/m²·℃·d）</TableHead>
+                  <TableHead className="text-right">单位度日用电（kWh/m²·°C·d）</TableHead>
                   <TableHead className="text-right">日均用电</TableHead>
                   <TableHead className="pr-5 text-right">供冷量</TableHead>
                 </TableRow>
@@ -334,7 +334,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
             <Panel aria-label="每日综合能效">
               <PanelHeader title="每日综合能效" caption="各站点每天的供冷量 ÷ 空调用电 · 虚线为整体" />
               {ranked.length === 0 ? (
-                <p className="px-5 py-10 text-center text-sm text-muted-foreground">本期间还没有站点有完整的电量与冷量</p>
+                <p className="px-5 py-10 text-center text-sm text-muted-foreground">所选时段暂无电量与冷量完整的站点</p>
               ) : (
                 <div className="grid grid-cols-2 gap-3 p-4">
                   {ranked.map((site) => {

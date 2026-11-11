@@ -38,7 +38,7 @@ const REASONS: Readonly<Record<string, string>> = Object.freeze({
   TOOL_OWNER_RESOURCE_NOT_FOUND: '数据不存在',
   TOOL_OWNER_REQUEST_REJECTED: '请求被拒绝',
   TOOL_OWNER_RESPONSE_INVALID: '返回的数据有误',
-  TOOL_CANCELLED: '被停下',
+  TOOL_CANCELLED: '手动停止',
 });
 
 /** A failure code in words: 「关键数字太长」「数据暂时读不到」; a code the page does not know reads as 「其他」. */

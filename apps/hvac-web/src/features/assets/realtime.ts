@@ -98,7 +98,7 @@ export function createAssetsRealtimeScope(
   protectedGeneration: number,
 ): AssetsRealtimeScope {
   const keys = listAssetsRealtimeKeys(row);
-  if (keys.length === 0) throw new Error('Realtime subscription requires at least one active non-command Registry Point');
+  if (keys.length === 0) throw new Error('实时订阅至少需要一个已启用的非指令点位');
   if (keys.length > REAL_ASSETS_REALTIME_KEY_LIMIT) throw new Error(`Realtime subscription exceeds the ${REAL_ASSETS_REALTIME_KEY_LIMIT}-key public limit`);
   return Object.freeze({
     protectedGeneration,

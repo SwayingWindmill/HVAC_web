@@ -41,7 +41,7 @@ type AssignmentDraft = {
 
 function parseObject(source: string, label: string): Record<string, unknown> {
   const parsed: unknown = JSON.parse(source);
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error(`${label} 必须是 JSON object。`);
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error(`${label}格式有误，请填写键值对形式的 JSON（以 { 开头）。`);
   return parsed as Record<string, unknown>;
 }
 
@@ -166,7 +166,7 @@ export function RegistryTemplateWorkbench({ site, model, capabilities, onDirtyCh
             <Button disabled={!allowed || working || !assignmentDraft.targetId || !assignmentDraft.templateRevisionId || !assignmentDraft.reason.trim()} onClick={() => void assignTemplate()}>{working ? '正在处理…' : '从现在起应用'}</Button>
 
             <div className="border-t pt-4">
-              <p className="mb-2 text-xs text-muted-foreground">当前只展示本次会话由服务端返回的模板版本；没有浏览器侧虚构模板目录。</p>
+              <p className="mb-2 text-xs text-muted-foreground">下方列出本次会话已发布的模板版本，可直接选择应用。</p>
               <div className="space-y-2">
                 {releases.length === 0 ? <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">本次会话尚未发布模板版本</div> : releases.map((release) => (
                   <div key={release.id} className="flex items-center justify-between gap-3 rounded-md border p-3">

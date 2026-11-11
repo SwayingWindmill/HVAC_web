@@ -1,22 +1,31 @@
 import { Badge } from '@/components/ui/badge';
-import { SeverityMark, type SeverityLevel } from '@/components/severity-mark';
+import { SeverityMark } from '@/components/severity-mark';
+import { SEVERITY_LEVEL_LABELS, type SeverityLevel } from '@/lib/operator-format';
 import type { Alarm, AlarmOperation, AlarmSeverity, AlarmTimelineEntry } from './alarm-api';
 
 export const SEVERITY_ORDER: readonly AlarmSeverity[] = ['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INFO'];
 
+export const SEVERITY_LEVEL: Readonly<Record<AlarmSeverity, SeverityLevel>> = {
+  CRITICAL: 'critical',
+  MAJOR: 'major',
+  MINOR: 'minor',
+  WARNING: 'warning',
+  INFO: 'info',
+};
+
 export const SEVERITY_LABELS: Readonly<Record<AlarmSeverity, string>> = {
-  CRITICAL: '紧急',
-  MAJOR: '重要',
-  MINOR: '次要',
-  WARNING: '预警',
-  INFO: '提示',
+  CRITICAL: SEVERITY_LEVEL_LABELS[SEVERITY_LEVEL.CRITICAL],
+  MAJOR: SEVERITY_LEVEL_LABELS[SEVERITY_LEVEL.MAJOR],
+  MINOR: SEVERITY_LEVEL_LABELS[SEVERITY_LEVEL.MINOR],
+  WARNING: SEVERITY_LEVEL_LABELS[SEVERITY_LEVEL.WARNING],
+  INFO: SEVERITY_LEVEL_LABELS[SEVERITY_LEVEL.INFO],
 };
 
 const OPERATION_LABELS: Readonly<Record<AlarmOperation, string>> = {
   PUBLISH: '触发',
   ACKNOWLEDGE: '确认',
-  ASSIGN: '认领',
-  UNASSIGN: '取消认领',
+  ASSIGN: '分配',
+  UNASSIGN: '取消分配',
   SUPPRESS: '抑制',
   UNSUPPRESS: '解除抑制',
   CLEAR: '恢复',
@@ -60,14 +69,6 @@ export const SEVERITY_COLORS: Readonly<Record<AlarmSeverity, string>> = {
   MINOR: 'var(--severity-minor)',
   WARNING: 'var(--severity-warning)',
   INFO: 'var(--severity-info)',
-};
-
-export const SEVERITY_LEVEL: Readonly<Record<AlarmSeverity, SeverityLevel>> = {
-  CRITICAL: 'critical',
-  MAJOR: 'major',
-  MINOR: 'minor',
-  WARNING: 'warning',
-  INFO: 'info',
 };
 
 /** Severity as a soft-tinted label led by its shape, so it reads without colour. */

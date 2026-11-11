@@ -59,7 +59,7 @@ export function YearlyReport({ year, now }: { readonly year: number; readonly no
         </FigureGrid>
       </Section>
 
-      <Section index={2} title="逐月用能与能效" description="用电最多的月份已标出">
+      <Section index={2} title="逐月用能与能效">
         <EnergyTrend unitLabel="空调用电 · kWh（每月）" rows={rows.map((row) => ({ label: `${Number(row.month.slice(5, 7))}月`, electricityKWh: row.electricityKWh === null ? null : Math.round(row.electricityKWh), cop: row.cop === null ? null : Number(row.cop.toFixed(2)) }))} />
         <table className="w-full text-sm" aria-label="逐月明细">
           <thead>
@@ -94,7 +94,7 @@ export function YearlyReport({ year, now }: { readonly year: number; readonly no
           <Figure label="节电量" value={savings.days > 0 ? formatDecimal(savings.avoidedKWh, 0) : null} unit="kWh" note={`${archived.length} 个存档月份合计`} />
           <Figure label="节省电费" value={savings.days > 0 ? `¥${formatDecimal(savings.avoidedCost, 0)}` : null} note="按逐时分时电度电价，不含需量电费" />
           <Figure label="统计天数" value={String(savings.days)} unit="天" note="每天 02:00 统计前一天" />
-          <Figure label="诊断发现" value={String(findings)} unit="条" note="诊断窗口结束于存档月份内" />
+          <Figure label="诊断结论" value={String(findings)} unit="条" note="诊断窗口结束于存档月份内" />
         </FigureGrid>
       </Section>
     </ReportSheet>

@@ -149,7 +149,7 @@ export function OptimizationWorkspace() {
     }
     const timer = window.setTimeout(() => {
       setWaiting(null);
-      setNotice({ title: '本次计算没有产出建议', detail: '在安全与舒适约束内没有找到可行的供水温度，或计算未能完成。稍后可以再试一次。' });
+      setNotice({ title: '暂无需调整的建议', detail: '在安全与舒适约束内没有找到更优的供水温度，或计算未能完成。稍后可以再试一次。' });
     }, Math.max(0, waiting.since + RUN_PATIENCE_MS - Date.now()));
     return () => window.clearTimeout(timer);
   }, [waiting, recommendation?.runId]);
@@ -332,8 +332,8 @@ function Proposal({ recommendation, timeZone, siteId, setpoint, setting, sent, o
         </div>
         <section role="region" aria-label="预计效果" className="flex flex-col gap-5 px-6 py-5">
           <span className="text-xs font-medium text-muted-foreground">预计效果</span>
-          <Effect label="预计日节电" value={formatDecimal(recommendation.saving.energyKWhPerDay, 0)} unit="kWh">
-            90% 把握在 ±{formatDecimal(recommendation.uncertainty.energyP90KWh, 0)} kWh 内{share !== null ? ` · 约占最近一天冷站用电 ${formatDecimal(share * 100, 1)}%` : ''}
+          <Effect label="预计日节电" info="波动范围按 90% 置信区间估算" value={formatDecimal(recommendation.saving.energyKWhPerDay, 0)} unit="kWh">
+            预计波动 ±{formatDecimal(recommendation.uncertainty.energyP90KWh, 0)} kWh{share !== null ? ` · 约占最近一天冷站用电 ${formatDecimal(share * 100, 1)}%` : ''}
           </Effect>
           <Effect label="预计日节省" info="按当天峰谷均价折算，不含需量电费" value={`¥${formatDecimal(recommendation.saving.costPerDay, 0)}`}>
             按最近一天电费 ¥{formatDecimal(baseline.dailyCost, 0)} 折算

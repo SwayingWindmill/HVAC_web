@@ -20,7 +20,7 @@ function Notice({ children }: { readonly children: string }) {
 const asked = (day: AgentUsageDay) => day.completed + day.failed + day.cancelled;
 const seconds = (milliseconds: number | null) => (milliseconds === null ? '—' : `${(milliseconds / 1000).toFixed(1)} 秒`);
 const tokens = (count: number) => (count >= 10_000 ? `${(count / 10_000).toFixed(1)} 万` : String(count));
-const unfinished = (day: AgentUsageDay) => [day.failed ? `出错 ${day.failed}` : '', day.cancelled ? `被停下 ${day.cancelled}` : ''].filter(Boolean).join('、') || '—';
+const unfinished = (day: AgentUsageDay) => [day.failed ? `出错 ${day.failed}` : '', day.cancelled ? `手动停止 ${day.cancelled}` : ''].filter(Boolean).join('、') || '—';
 const dayLabel = (date: string) => `${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日`;
 
 /**
@@ -100,7 +100,7 @@ export function AssistantUsage({ sites, canRead, active }: {
                   <TableHead className="text-right">答完</TableHead>
                   <TableHead>没答完</TableHead>
                   <TableHead className="text-right">
-                    <span className="inline-flex items-center gap-1">平均用时<InfoTip>按这天所有结束的回答算，包括出错和被停下的</InfoTip></span>
+                    <span className="inline-flex items-center gap-1">平均用时<InfoTip>按这天所有结束的回答算，包括出错和手动停止的</InfoTip></span>
                   </TableHead>
                   <TableHead className="pr-5 text-right">
                     <span className="inline-flex items-center gap-1">模型用量<InfoTip>模型读入和写出的文字量，大约一个汉字算一个</InfoTip></span>
@@ -131,13 +131,13 @@ export function AssistantUsage({ sites, canRead, active }: {
             </Table>
             <div className="flex flex-col">
               <div className="flex h-10 items-center justify-between border-b border-divider px-5 text-sm">
-                <span className="font-medium">{selectedDay ? `${dayLabel(selectedDay.date)}的步骤` : '最近 14 天的步骤'}</span>
+                <span className="font-medium">{selectedDay ? `${dayLabel(selectedDay.date)}的查询调用` : '最近 14 天的查询调用'}</span>
                 {selectedDay ? <Button size="sm" variant="ghost" onClick={() => setSelectedDate(null)}>看 14 天合计</Button> : <span className="text-xs text-muted-foreground">点日期看那一天</span>}
               </div>
-              <Table aria-label="各个步骤">
+              <Table aria-label="查询调用明细">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="pl-5">步骤</TableHead>
+                    <TableHead className="pl-5">查询操作</TableHead>
                     <TableHead className="text-right">次数</TableHead>
                     <TableHead className="text-right">失败</TableHead>
                     <TableHead className="pr-5">没成功的原因</TableHead>

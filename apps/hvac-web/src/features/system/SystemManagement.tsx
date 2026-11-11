@@ -221,7 +221,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
         <Figure label="站点目录" value={<StateChip health={snapshot.sites?.state === 'available' ? 'good' : 'warn'}>{directoryState}</StateChip>}>授权站点由身份服务确定</Figure>
       </Panel>
       <Panel aria-label="站点">
-        <PanelHeader title="站点" caption="名称、时区、建筑面积和气候区在「资产与点位」里维护" />
+        <PanelHeader title="站点" caption="名称、时区、建筑面积和气候区在「设备与点位登记」里维护" />
         {sites.length === 0 ? <p className="px-5 py-10 text-center text-sm text-muted-foreground">当前组织没有授权站点</p> : (
           <Table aria-label="授权站点">
             <TableHeader>
@@ -254,7 +254,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
                   <TableCell><StateChip health={site.status === 'ACTIVE' ? 'good' : 'idle'}>{SITE_STATUS[site.status]}</StateChip></TableCell>
                   <TableCell className="pr-5 text-right">
                     <button type="button" className="inline-flex items-center text-xs font-medium text-primary hover:underline" onClick={() => setTab('registry')}>
-                      资产与点位<ChevronRight className="size-3.5" aria-hidden="true" />
+                      设备与点位登记<ChevronRight className="size-3.5" aria-hidden="true" />
                     </button>
                   </TableCell>
                 </TableRow>
@@ -271,7 +271,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
     { key: 'overview', label: '系统概览', children: overview },
     { key: 'users', label: '用户与角色', children: users },
     { key: 'site', label: '站点与组织', children: siteTab },
-    { key: 'registry', label: '资产与点位', children: <RegistryAdministration capabilities={capabilities} registerUnsavedDraft={registerUnsavedDraft} /> },
+    { key: 'registry', label: '设备与点位登记', children: <RegistryAdministration capabilities={capabilities} registerUnsavedDraft={registerUnsavedDraft} /> },
     { key: 'audit', label: '操作记录', children: <AuditLog viewer={auditViewer} canRead={capabilities.includes('audit.read')} active={activeTab === 'audit'} /> },
     { key: 'assistant', label: 'AI 助手', children: <AssistantUsage sites={sites} canRead={capabilities.includes('audit.read')} active={activeTab === 'assistant'} /> },
   ] as const;

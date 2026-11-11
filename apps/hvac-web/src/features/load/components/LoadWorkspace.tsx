@@ -221,13 +221,15 @@ export function LoadWorkspace() {
               <Figure label="当前负荷" live={Boolean(summary.current && !summary.current.complete)} value={summary.current ? formatDecimal(summary.current.demandKW, 1) : null} unit="kW">
                 {summary.current && !summary.current.complete ? <QuarterProgress start={summary.current.start} now={now} /> : null}
                 <span className="mt-1 block">
-                  {summary.current ? `${clock(summary.current.start)} 起的 15 分钟${summary.current.complete ? '' : '，进行中'}` : '还没有功率数据'}
+                  {summary.current
+                    ? `${clock(summary.current.start)}–${clock(new Date(Date.parse(summary.current.start) + 15 * 60_000).toISOString())}${summary.current.complete ? '' : '（统计中）'}`
+                    : '还没有功率数据'}
                 </span>
               </Figure>
               <Figure label="今日最高" info="负荷率 = 今日平均负荷 ÷ 今日最高，越高说明用电越平稳" value={summary.today ? formatDecimal(summary.today.demandKW, 1) : null} unit="kW">
                 {summary.today
                   ? `出现在 ${clock(summary.today.at)}${summary.todayLoadFactor !== null ? ` · 负荷率 ${formatDecimal(summary.todayLoadFactor * 100, 0)}%` : ''}`
-                  : '今天还没有完整的 15 分钟'}
+                  : '今日统计未满 15 分钟'}
               </Figure>
               <Figure
                 label="本月最高"
@@ -235,7 +237,7 @@ export function LoadWorkspace() {
                 value={monthPeak ? formatDecimal(monthPeak.demandKW, 1) : null}
                 unit="kW"
               >
-                {monthPeak ? `出现在 ${formatTime(monthPeak.at, timeZone)}` : '本月还没有完整的 15 分钟'}
+                {monthPeak ? `出现在 ${formatTime(monthPeak.at, timeZone)}` : '本月统计未满 15 分钟'}
               </Figure>
               <Figure label="明天最高（预测）" value={tomorrowPeak ? formatDecimal(tomorrowPeak.loadKW, 1) : null} unit="kW">
                 {tomorrowPeak ? (

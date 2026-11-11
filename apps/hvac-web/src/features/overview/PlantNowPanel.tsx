@@ -24,7 +24,7 @@ function deviceState(device: PlantDevice): DeviceState {
   return isRunning(device) ? 'running' : 'stopped';
 }
 
-const STATE_LABEL: Readonly<Record<DeviceState, string>> = { running: '运行', stopped: '停止', fault: '故障', offline: '离线' };
+const STATE_LABEL: Readonly<Record<DeviceState, string>> = { running: '运行', stopped: '停机', fault: '故障', offline: '离线' };
 
 /** One device as a shape: ● running, ○ stopped, ▲ fault, a dashed ring offline. */
 function DeviceDot({ device }: { readonly device: PlantDevice }) {

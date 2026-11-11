@@ -174,7 +174,7 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
             <Button variant="outline" onClick={() => onCreatingWorkOrderChange(true)}><Plus data-icon="inline-start" />创建工单</Button>
           ) : null}
           <Button variant="outline" onClick={() => explain(explainAlarmQuestion(alarm.title, alarm.firstOccurredAt, alarm.condition === 'CLEARED', deviceName, site.timezone))}>
-            <Sparkles data-icon="inline-start" className="text-primary" />解释
+            <Sparkles data-icon="inline-start" className="text-primary" />分析原因
           </Button>
         </div>
         {actionError ? <p className="text-sm text-destructive-text">{actionError.message}</p> : null}

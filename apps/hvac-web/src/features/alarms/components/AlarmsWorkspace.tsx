@@ -268,7 +268,7 @@ export function AlarmsWorkspace() {
           onDevice={(device) => setSearch({ device, view: 'all', inspect: undefined })}
         />
 
-        <Panel aria-label="告警分诊" className="grid h-[calc(100svh-354px)] min-h-[520px] grid-cols-[420px_minmax(0,1fr)]">
+        <Panel aria-label="告警处理" className="grid h-[calc(100svh-354px)] min-h-[520px] grid-cols-[420px_minmax(0,1fr)]">
           <div className="flex min-h-0 flex-col border-r">
             <ToggleGroup
               type="single"
