@@ -54,12 +54,12 @@ const scheduleEditorSchema = z.object({
     .min(1, '请填写 1–100 字以内的周运行计划名称')
     .max(100, '计划名称不能超过 100 字'),
   preCoolLeadMinutes: z.coerce
-    .number({ invalid_type_error: '预冷提前时间须为 0–120 之间的整数分钟' })
+    .number({ message: '预冷提前时间须为 0–120 之间的整数分钟' })
     .int('预冷提前时间须为整数分钟')
     .min(0, '预冷提前时间不能小于 0 分钟')
     .max(120, '预冷提前时间不能超过 120 分钟'),
   coastDownLagMinutes: z.coerce
-    .number({ invalid_type_error: '停机滞后时间须为 0–60 之间的整数分钟' })
+    .number({ message: '停机滞后时间须为 0–60 之间的整数分钟' })
     .int('停机滞后时间须为整数分钟')
     .min(0, '停机滞后时间不能小于 0 分钟')
     .max(60, '停机滞后时间不能超过 60 分钟'),
