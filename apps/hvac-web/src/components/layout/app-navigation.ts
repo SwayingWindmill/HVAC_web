@@ -4,6 +4,7 @@ import {
   Bell,
   Box,
   CalendarCheck2,
+  CalendarClock,
   FileText,
   Gauge,
   LayoutDashboard,
@@ -61,6 +62,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
     items: [
       { id: 'operations-realtime', title: '实时运行', path: '/operations/realtime', icon: Activity },
       { id: 'operations-trends', title: '历史趋势', path: '/operations/trends', icon: TrendingUp },
+      { id: 'operations-schedules', title: '运行计划', path: '/operations/schedules', icon: CalendarClock },
       { id: 'operations-systems-devices', title: '设备', path: '/operations/systems-devices', icon: ServerCog },
       { id: 'operations-digital-twin', title: '数字孪生', path: '/operations/digital-twin', icon: Box },
     ],

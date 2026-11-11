@@ -28,6 +28,8 @@ type RegistryStore interface {
 	GetSiteAssetModel(context.Context, registryauth.GrantClaims, string) (SiteAssetModel, error)
 	GetSiteTariff(context.Context, registryauth.GrantClaims, string) (SiteTariff, error)
 	ListImportTariffs(context.Context, registryauth.GrantClaims, string, time.Time) (ImportTariffs, error)
+	GetOperatingSchedule(context.Context, registryauth.GrantClaims, string) (OperatingSchedule, error)
+	ListOperatingExceptions(context.Context, registryauth.GrantClaims, string, OperatingExceptionFilter) (OperatingExceptionList, error)
 }
 
 type PostgresStore struct {

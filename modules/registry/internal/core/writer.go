@@ -613,4 +613,7 @@ type RegistryWriter interface {
 	PlanImport(context.Context, registryauth.GrantClaims, ImportPlanRequest) (ImportPlan, error)
 	CommitImport(context.Context, registryauth.GrantClaims, ImportCommitRequest) (ImportCommitResult, error)
 	Retire(context.Context, registryauth.GrantClaims, RetireRequest) (RetirementResult, error)
+	SaveOperatingSchedule(context.Context, registryauth.GrantClaims, OperatingScheduleMutation) (OperatingSchedule, bool, error)
+	CreateOperatingException(context.Context, registryauth.GrantClaims, CreateOperatingExceptionRequest) (OperatingException, bool, error)
+	DecideOperatingException(context.Context, registryauth.GrantClaims, DecideOperatingExceptionRequest) (OperatingException, bool, error)
 }

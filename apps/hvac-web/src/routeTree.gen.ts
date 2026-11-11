@@ -27,6 +27,7 @@ import { Route as AppSiteOperationsControlRouteImport } from './routes/_app._sit
 import { Route as AppSiteOperationsDiagnosticsRouteImport } from './routes/_app._site.operations.diagnostics'
 import { Route as AppSiteOperationsDigitalTwinRouteImport } from './routes/_app._site.operations.digital-twin'
 import { Route as AppSiteOperationsRealtimeRouteImport } from './routes/_app._site.operations.realtime'
+import { Route as AppSiteOperationsSchedulesRouteImport } from './routes/_app._site.operations.schedules'
 import { Route as AppSiteOperationsSystemsDevicesRouteImport } from './routes/_app._site.operations.systems-devices'
 import { Route as AppSiteOperationsTrendsRouteImport } from './routes/_app._site.operations.trends'
 import { Route as AppSiteOperationsWorkCenterRouteImport } from './routes/_app._site.operations.work-center'
@@ -127,6 +128,12 @@ const AppSiteOperationsRealtimeRoute =
     path: '/operations/realtime',
     getParentRoute: () => AppSiteRoute,
   } as any)
+const AppSiteOperationsSchedulesRoute =
+  AppSiteOperationsSchedulesRouteImport.update({
+    id: '/operations/schedules',
+    path: '/operations/schedules',
+    getParentRoute: () => AppSiteRoute,
+  } as any)
 const AppSiteOperationsSystemsDevicesRoute =
   AppSiteOperationsSystemsDevicesRouteImport.update({
     id: '/operations/systems-devices',
@@ -162,6 +169,7 @@ export interface FileRoutesByFullPath {
   '/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
   '/operations/digital-twin': typeof AppSiteOperationsDigitalTwinRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
+  '/operations/schedules': typeof AppSiteOperationsSchedulesRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/operations/trends': typeof AppSiteOperationsTrendsRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
@@ -183,6 +191,7 @@ export interface FileRoutesByTo {
   '/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
   '/operations/digital-twin': typeof AppSiteOperationsDigitalTwinRoute
   '/operations/realtime': typeof AppSiteOperationsRealtimeRoute
+  '/operations/schedules': typeof AppSiteOperationsSchedulesRoute
   '/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/operations/trends': typeof AppSiteOperationsTrendsRoute
   '/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
@@ -207,6 +216,7 @@ export interface FileRoutesById {
   '/_app/_site/operations/diagnostics': typeof AppSiteOperationsDiagnosticsRoute
   '/_app/_site/operations/digital-twin': typeof AppSiteOperationsDigitalTwinRoute
   '/_app/_site/operations/realtime': typeof AppSiteOperationsRealtimeRoute
+  '/_app/_site/operations/schedules': typeof AppSiteOperationsSchedulesRoute
   '/_app/_site/operations/systems-devices': typeof AppSiteOperationsSystemsDevicesRoute
   '/_app/_site/operations/trends': typeof AppSiteOperationsTrendsRoute
   '/_app/_site/operations/work-center': typeof AppSiteOperationsWorkCenterRoute
@@ -230,6 +240,7 @@ export interface FileRouteTypes {
     | '/operations/diagnostics'
     | '/operations/digital-twin'
     | '/operations/realtime'
+    | '/operations/schedules'
     | '/operations/systems-devices'
     | '/operations/trends'
     | '/operations/work-center'
@@ -251,6 +262,7 @@ export interface FileRouteTypes {
     | '/operations/diagnostics'
     | '/operations/digital-twin'
     | '/operations/realtime'
+    | '/operations/schedules'
     | '/operations/systems-devices'
     | '/operations/trends'
     | '/operations/work-center'
@@ -274,6 +286,7 @@ export interface FileRouteTypes {
     | '/_app/_site/operations/diagnostics'
     | '/_app/_site/operations/digital-twin'
     | '/_app/_site/operations/realtime'
+    | '/_app/_site/operations/schedules'
     | '/_app/_site/operations/systems-devices'
     | '/_app/_site/operations/trends'
     | '/_app/_site/operations/work-center'
@@ -411,6 +424,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteOperationsRealtimeRouteImport
       parentRoute: typeof AppSiteRoute
     }
+    '/_app/_site/operations/schedules': {
+      id: '/_app/_site/operations/schedules'
+      path: '/operations/schedules'
+      fullPath: '/operations/schedules'
+      preLoaderRoute: typeof AppSiteOperationsSchedulesRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
     '/_app/_site/operations/systems-devices': {
       id: '/_app/_site/operations/systems-devices'
       path: '/operations/systems-devices'
@@ -448,6 +468,7 @@ interface AppSiteRouteChildren {
   AppSiteOperationsDiagnosticsRoute: typeof AppSiteOperationsDiagnosticsRoute
   AppSiteOperationsDigitalTwinRoute: typeof AppSiteOperationsDigitalTwinRoute
   AppSiteOperationsRealtimeRoute: typeof AppSiteOperationsRealtimeRoute
+  AppSiteOperationsSchedulesRoute: typeof AppSiteOperationsSchedulesRoute
   AppSiteOperationsSystemsDevicesRoute: typeof AppSiteOperationsSystemsDevicesRoute
   AppSiteOperationsTrendsRoute: typeof AppSiteOperationsTrendsRoute
   AppSiteOperationsWorkCenterRoute: typeof AppSiteOperationsWorkCenterRoute
@@ -467,6 +488,7 @@ const AppSiteRouteChildren: AppSiteRouteChildren = {
   AppSiteOperationsDiagnosticsRoute: AppSiteOperationsDiagnosticsRoute,
   AppSiteOperationsDigitalTwinRoute: AppSiteOperationsDigitalTwinRoute,
   AppSiteOperationsRealtimeRoute: AppSiteOperationsRealtimeRoute,
+  AppSiteOperationsSchedulesRoute: AppSiteOperationsSchedulesRoute,
   AppSiteOperationsSystemsDevicesRoute: AppSiteOperationsSystemsDevicesRoute,
   AppSiteOperationsTrendsRoute: AppSiteOperationsTrendsRoute,
   AppSiteOperationsWorkCenterRoute: AppSiteOperationsWorkCenterRoute,

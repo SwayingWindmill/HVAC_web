@@ -43,6 +43,8 @@ const (
 	CapabilityRegistryImport        Capability = "registry.import"
 	CapabilityRegistryRetire        Capability = "registry.retire"
 	CapabilitySavingsManage         Capability = "savings.manage"
+	CapabilityScheduleRequest       Capability = "schedule.request"
+	CapabilityScheduleManage        Capability = "schedule.manage"
 )
 
 var supportedCapabilities = [...]Capability{
@@ -78,6 +80,8 @@ var supportedCapabilities = [...]Capability{
 	CapabilityRegistryImport,
 	CapabilityRegistryRetire,
 	CapabilitySavingsManage,
+	CapabilityScheduleRequest,
+	CapabilityScheduleManage,
 }
 
 func SupportedCapabilities() []Capability {
@@ -117,7 +121,9 @@ func (capability Capability) Valid() bool {
 		CapabilityTemplateManage,
 		CapabilityRegistryImport,
 		CapabilityRegistryRetire,
-		CapabilitySavingsManage:
+		CapabilitySavingsManage,
+		CapabilityScheduleRequest,
+		CapabilityScheduleManage:
 		return true
 	default:
 		return false

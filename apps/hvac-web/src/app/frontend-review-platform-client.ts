@@ -57,6 +57,8 @@ const reviewCapabilities: readonly Capability[] = [
   'audit.read',
   'iam.admin',
   'savings.manage',
+  'schedule.request',
+  'schedule.manage',
 ];
 
 function reviewResponse<T>(data: T): PlatformResponse<T> {
