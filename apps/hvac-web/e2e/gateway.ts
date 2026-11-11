@@ -245,6 +245,10 @@ export class Gateway {
   optimizationPreparation: Json | null = null;
   /** IAM refuses Energy Analytics for the Site, as it does for a Site outside the principal's analytics grant. */
   analyticsDenied = false;
+  /** IAM refuses Alarm listing for the Site. */
+  alarmsDenied = false;
+  /** IAM refuses Command listing for the Site. */
+  commandsDenied = false;
   /** Daily energy series repeat the recorded day's total each day, so days line up with other daily series. */
   energyByDay = false;
   /** Telemetry fails the weather station's daily temperature. */
@@ -554,10 +558,23 @@ export class Gateway {
     }
 
     if (method === 'GET' && path === '/api/v1/alarms') {
+      if (this.alarmsDenied) {
+        return {
+          status: 403,
+          body: {
+            error: { code: 'FORBIDDEN', message: 'Alarm list access is forbidden.', details: {} },
+            meta: { requestId: 'e2e' },
+          },
+        };
+      }
+      const activeFrom = query.get('activeFrom');
+      const activeTo = query.get('activeTo');
       const items = this.alarms.filter((alarm) =>
         (!query.get('condition') || alarm.condition === query.get('condition'))
         && (!query.has('acknowledged') || Boolean(alarm.acknowledgement) === (query.get('acknowledged') === 'true'))
-        && (!query.get('severity') || alarm.currentSeverity === query.get('severity')));
+        && (!query.get('severity') || alarm.currentSeverity === query.get('severity'))
+        && (!activeTo || Date.parse(alarm.firstOccurredAt) <= Date.parse(activeTo))
+        && (!activeFrom || alarm.condition === 'ACTIVE' || !alarm.clearedAt || Date.parse(alarm.clearedAt) >= Date.parse(activeFrom)));
       return { body: { data: items, meta: { nextCursor: null, hasMore: false, limit: 100, requestId: 'e2e' } } };
     }
     if (method === 'GET' && path === '/api/v1/alarm-rules') {
@@ -579,7 +596,15 @@ export class Gateway {
       return { body: { data: alarm } };
     }
 
-    if (method === 'GET' && path === '/api/v1/commands') return { body: { data: this.commands } };
+    if (method === 'GET' && path === '/api/v1/commands') {
+      if (this.commandsDenied) {
+        return {
+          status: 403,
+          body: { type: 'about:blank', title: 'Forbidden', status: 403, detail: 'Command access is forbidden.', code: 'FORBIDDEN' },
+        };
+      }
+      return { body: { data: this.commands } };
+    }
     if (method === 'POST' && path === '/api/v1/commands') return { status: 202, body: this.submitCommand(body!, now) };
     const approval = path.match(/^\/api\/v1\/commands\/([^/]+)\/approve$/);
     if (method === 'POST' && approval) {

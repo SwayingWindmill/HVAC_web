@@ -17,7 +17,7 @@ export interface TrendOverlaySpan {
   readonly id: string;
   readonly fromMs: number;
   readonly toMs: number;
-  readonly severity: 'CRITICAL' | 'MAJOR' | 'MINOR' | 'WARNING';
+  readonly severity: 'CRITICAL' | 'MAJOR' | 'MINOR' | 'WARNING' | 'INFO';
   readonly label: string;
 }
 
@@ -32,6 +32,7 @@ const SEVERITY_FILL: Readonly<Record<TrendOverlaySpan['severity'], string>> = {
   MAJOR: 'var(--severity-major)',
   MINOR: 'var(--severity-minor)',
   WARNING: 'var(--severity-warning)',
+  INFO: 'var(--severity-info)',
 };
 
 function formatAxisTick(atMs: number, granularity: TrendGranularity, timezone: string): string {

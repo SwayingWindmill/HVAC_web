@@ -5,6 +5,8 @@ import {
   createS2TelemetryClient,
   type DeviceHistoryAggregateBucket,
 } from '@/api/generated/s2Telemetry.gen';
+import { AlarmRequestError, listAlarms, type Alarm } from '@/features/alarms/alarm-api';
+import { CommandRequestError, listCommands, type Command } from '@/features/control/command-api';
 import type { TrendGranularity } from './timeline';
 import { groupTrendDeviceRequests, type TrendPointItem } from './trends-model';
 
@@ -14,10 +16,8 @@ const telemetryClient = createS2TelemetryClient();
 export function siteAssetModelQuery(siteId: string) {
   return queryOptions({
     queryKey: ['site-asset-model', siteId],
-    queryFn: async ({ signal }) => {
-      const response = await gatewayClient.getSiteAssetModel(siteId, { signal });
-      return response.data;
-    },
+    queryFn: ({ signal }) => gatewayClient.getSiteAssetModel(siteId, { signal }),
+    select: (response) => response.data,
     staleTime: 5 * 60_000,
   });
 }
@@ -92,6 +92,58 @@ export function trendAggregateWindowQuery(input: {
     placeholderData: (previous) => previous,
     retry: (failureCount, error) => {
       if (error instanceof TrendHistoryPermissionError) return false;
+      return failureCount < 1;
+    },
+  });
+}
+
+const MAX_ALARM_OVERLAY_PAGES = 5;
+
+export function trendOverlappingAlarmsQuery(input: {
+  readonly siteId: string;
+  readonly fromMs: number;
+  readonly toMs: number;
+  readonly enabled: boolean;
+}) {
+  const activeFrom = new Date(input.fromMs).toISOString();
+  const activeTo = new Date(input.toMs).toISOString();
+  return queryOptions({
+    queryKey: ['trends-alarms-overlay', input.siteId, activeFrom, activeTo] as const,
+    enabled: input.enabled && input.toMs > input.fromMs,
+    queryFn: async ({ signal }): Promise<readonly Alarm[]> => {
+      const items: Alarm[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < MAX_ALARM_OVERLAY_PAGES; page += 1) {
+        const result = await listAlarms(input.siteId, { activeFrom, activeTo }, cursor, signal);
+        items.push(...result.items);
+        if (!result.hasMore || !result.nextCursor) break;
+        cursor = result.nextCursor;
+      }
+      return items;
+    },
+    staleTime: 30_000,
+    retry: (failureCount, error) => {
+      if (error instanceof AlarmRequestError && (error.status === 401 || error.status === 403)) {
+        return false;
+      }
+      return failureCount < 1;
+    },
+  });
+}
+
+export function trendCommandsQuery(input: {
+  readonly siteId: string;
+  readonly enabled: boolean;
+}) {
+  return queryOptions({
+    queryKey: ['trends-commands-overlay', input.siteId] as const,
+    enabled: input.enabled,
+    queryFn: ({ signal }): Promise<readonly Command[]> => listCommands(input.siteId, signal),
+    staleTime: 30_000,
+    retry: (failureCount, error) => {
+      if (error instanceof CommandRequestError && (error.status === 401 || error.status === 403)) {
+        return false;
+      }
       return failureCount < 1;
     },
   });

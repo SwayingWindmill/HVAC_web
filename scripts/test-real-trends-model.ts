@@ -10,10 +10,15 @@ import {
 } from '../apps/hvac-web/src/features/operations/trends/timeline.ts';
 import {
   MAX_TREND_POINTS,
+  buildAlarmTrendSearch,
+  buildFindingTrendSearch,
   buildTrendCatalog,
+  buildTrendOverlays,
   buildTrendViewModel,
   deriveBuiltInPresets,
+  formatTrendOverlays,
   groupTrendDeviceRequests,
+  parseTrendOverlays,
   resolveTrackStateAt,
   resolveTrendWindow,
 } from '../apps/hvac-web/src/features/operations/trends/trends-model.ts';
@@ -367,4 +372,184 @@ test('buildTrendViewModel normalizes discrete state buckets, merges contiguous s
     kind: 'FAULT',
     label: '故障',
   });
+});
+
+test('buildTrendOverlays projects overlapping alarms and commands, filters unselected devices, and collapses dense rail events', () => {
+  assert.deepEqual(parseTrendOverlays('alarms,commands'), { alarms: true, commands: true });
+  assert.deepEqual(parseTrendOverlays('alarms'), { alarms: true, commands: false });
+  assert.equal(formatTrendOverlays({ alarms: false, commands: false }), undefined);
+  assert.equal(formatTrendOverlays({ alarms: true, commands: true }), 'alarms,commands');
+
+  const catalog = buildTrendCatalog(centralPlantModel);
+  const chillerPower = catalog.points.find((p) => p.sourceKey === 'chiller.power')!;
+  const setpointPoint = catalog.points.find((p) => p.sourceKey === 'chiller.chilled_water_temperature_setpoint')!;
+
+  const windowState = resolveTrendWindow({
+    window: 'custom',
+    from: '2026-10-12T00:00:00.000Z',
+    to: '2026-10-12T01:00:00.000Z',
+    granularity: 'MINUTE',
+    now: new Date('2026-10-12T02:00:00.000Z'),
+    timezone: 'Asia/Shanghai',
+  });
+
+  const overlays = buildTrendOverlays({
+    window: windowState,
+    selectedPoints: [chillerPower, setpointPoint],
+    catalog,
+    showAlarms: true,
+    showCommands: true,
+    alarms: [
+      // Site-wide alarm triggered BEFORE window and still ACTIVE -> clamped [00:00, 01:00]
+      {
+        alarmId: 'alm-site-active',
+        siteId: 'site-1',
+        alarmType: 'CHILLED_WATER_RETURN_TOO_COLD',
+        title: '冷冻水回水温度过低',
+        summary: '回水偏低',
+        condition: 'ACTIVE',
+        currentSeverity: 'MAJOR',
+        peakSeverity: 'MAJOR',
+        occurrenceCount: 1,
+        firstOccurredAt: '2026-10-11T23:45:00.000Z',
+        lastOccurredAt: '2026-10-11T23:45:00.000Z',
+        timeline: [],
+        version: 1,
+      },
+      // Selected chiller alarm inside window (00:10:00 -> 00:25:00)
+      {
+        alarmId: 'alm-chiller-1',
+        siteId: 'site-1',
+        deviceId: chillerPower.deviceId,
+        alarmType: 'HIGH_DISCHARGE_PRESSURE',
+        title: '排气压力偏高',
+        summary: '排气压力超阈值',
+        condition: 'CLEARED',
+        currentSeverity: 'WARNING',
+        peakSeverity: 'WARNING',
+        occurrenceCount: 1,
+        firstOccurredAt: '2026-10-12T00:10:00.000Z',
+        lastOccurredAt: '2026-10-12T00:10:00.000Z',
+        clearedAt: '2026-10-12T00:25:00.000Z',
+        timeline: [],
+        version: 2,
+      },
+      // Unselected device alarm -> excluded
+      {
+        alarmId: 'alm-other-device',
+        siteId: 'site-1',
+        deviceId: '018f3e00-4000-7000-8000-000000000004',
+        alarmType: 'TOWER_VIBRATION',
+        title: '冷却塔振动',
+        summary: '无关设备',
+        condition: 'ACTIVE',
+        currentSeverity: 'MINOR',
+        peakSeverity: 'MINOR',
+        occurrenceCount: 1,
+        firstOccurredAt: '2026-10-12T00:15:00.000Z',
+        lastOccurredAt: '2026-10-12T00:15:00.000Z',
+        timeline: [],
+        version: 1,
+      },
+    ],
+    commands: [
+      // Dense with alm-chiller-1 at 00:10:30 (within 2.5% of 60m = 90s!) -> should collapse into one cluster!
+      {
+        commandId: 'cmd-1',
+        siteId: 'site-1',
+        deviceId: setpointPoint.deviceId,
+        pointId: setpointPoint.pointId,
+        capability: 'SETPOINT',
+        status: 'SUCCEEDED',
+        risk: 'LOW',
+        approvalPolicy: 'NONE',
+        approvalCount: 0,
+        requiredApprovalCount: 0,
+        parameters: { value: 7.5 },
+        transitions: [],
+        createdAt: '2026-10-12T00:10:30.000Z',
+        updatedAt: '2026-10-12T00:10:35.000Z',
+      },
+      // Distant command at 00:45:00 -> standalone rail item
+      {
+        commandId: 'cmd-2',
+        siteId: 'site-1',
+        deviceId: setpointPoint.deviceId,
+        pointId: setpointPoint.pointId,
+        capability: 'SETPOINT',
+        status: 'AWAITING_APPROVAL',
+        risk: 'MEDIUM',
+        approvalPolicy: 'SINGLE_APPROVER',
+        approvalCount: 0,
+        requiredApprovalCount: 1,
+        parameters: { value: 8.0 },
+        transitions: [],
+        createdAt: '2026-10-12T00:45:00.000Z',
+        updatedAt: '2026-10-12T00:45:00.000Z',
+      },
+    ],
+  });
+
+  assert.equal(overlays.alarmSpans.length, 2);
+  assert.equal(overlays.alarmSpans[0]?.alarm.alarmId, 'alm-site-active');
+  assert.equal(overlays.alarmSpans[0]?.startSlotAt, Date.parse('2026-10-12T00:00:00.000Z'));
+  assert.equal(overlays.alarmSpans[0]?.endSlotAt, Date.parse('2026-10-12T00:59:00.000Z'));
+  assert.equal(overlays.commandMarks.length, 2);
+  assert.match(overlays.commandMarks[0]!.summaryLabel, /7\.5/);
+
+  // 3 rail items: [00:00 site alarm], [00:10 cluster of alm-chiller-1 + cmd-1], [00:45 cmd-2]
+  assert.equal(overlays.railItems.length, 3);
+  const cluster = overlays.railItems.find((item) => item.events.length > 1);
+  assert.ok(cluster, 'expected dense events around 00:10 to collapse into a cluster');
+  assert.equal(cluster.events.length, 2);
+});
+
+test('buildAlarmTrendSearch and buildFindingTrendSearch construct fault windows, context points, and overlays', () => {
+  const catalog = buildTrendCatalog(centralPlantModel);
+  const nowMs = Date.parse('2026-10-12T10:00:00.000Z');
+
+  const alarmSearch = buildAlarmTrendSearch({
+    siteId: '018f3e00-1000-7000-8000-000000000001',
+    alarm: {
+      alarmId: '01a0f6bb-6743-7a45-8552-e42c9b3a647d',
+      title: '冷冻水回水温度过低',
+      condition: 'CLEARED',
+      firstOccurredAt: '2026-10-12T08:10:00.000Z',
+      clearedAt: '2026-10-12T08:25:00.000Z',
+    },
+    catalog,
+    nowMs,
+  });
+
+  assert.equal(alarmSearch.window, 'custom');
+  assert.equal(alarmSearch.from, '2026-10-12T07:40:00.000Z');
+  assert.equal(alarmSearch.to, '2026-10-12T08:55:00.000Z');
+  assert.equal(alarmSearch.overlays, 'alarms,commands');
+  assert.equal(alarmSearch.source, 'alarm');
+  assert.equal(alarmSearch.sourceId, '01a0f6bb-6743-7a45-8552-e42c9b3a647d');
+  assert.equal(alarmSearch.sourceTitle, '冷冻水回水温度过低');
+  assert.ok(alarmSearch.points && alarmSearch.points.split(',').length <= MAX_TREND_POINTS);
+
+  const findingSearch = buildFindingTrendSearch({
+    siteId: '018f3e00-1000-7000-8000-000000000001',
+    finding: {
+      id: 'finding-low-dt-1',
+      assetId: '01910000-0000-7000-8000-00000000000a',
+      findingType: 'CHILLED_WATER_LOW_DELTA_T',
+      evaluationFrom: '2026-10-12T09:30:00.000Z',
+      evaluationTo: '2026-10-12T09:45:00.000Z',
+    },
+    title: '冷冻水低温差',
+    catalog,
+    nowMs,
+  });
+
+  assert.equal(findingSearch.window, 'custom');
+  assert.equal(findingSearch.from, '2026-10-12T09:00:00.000Z');
+  // Clamped to nowMs (10:00) since evaluationTo + 30m would be 10:15 > nowMs!
+  assert.equal(findingSearch.to, '2026-10-12T10:00:00.000Z');
+  assert.equal(findingSearch.overlays, 'alarms,commands');
+  assert.equal(findingSearch.source, 'diagnostic');
+  assert.equal(findingSearch.sourceTitle, '冷冻水低温差');
+  assert.ok(findingSearch.points?.includes('temperature_difference'));
 });

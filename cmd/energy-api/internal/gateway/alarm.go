@@ -133,6 +133,18 @@ func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Re
 				filter.Suppressed = &val
 			}
 		}
+		if raw := query.Get("activeFrom"); raw != "" {
+			if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+				utc := parsed.UTC()
+				filter.ActiveFrom = &utc
+			}
+		}
+		if raw := query.Get("activeTo"); raw != "" {
+			if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+				utc := parsed.UTC()
+				filter.ActiveTo = &utc
+			}
+		}
 		resp, err := a.store.List(ctx, tenantID, route.siteID, filter)
 		if err != nil {
 			if errors.Is(err, alarmservice.ErrInvalidCursor) {
@@ -654,7 +666,7 @@ func dispatchSiteRulesRoute(h *handler, writer http.ResponseWriter, request *htt
 func validatePublicAlarmQuery(query url.Values) (string, int, bool) {
 	for key := range query {
 		switch key {
-		case "siteId", "condition", "severity", "acknowledged", "suppressed", "cursor", "limit":
+		case "siteId", "condition", "severity", "acknowledged", "suppressed", "activeFrom", "activeTo", "cursor", "limit":
 		default:
 			return "", 0, false
 		}
@@ -690,6 +702,26 @@ func validatePublicAlarmQuery(query url.Values) (string, int, bool) {
 				return "", 0, false
 			}
 		}
+	}
+	var activeFrom, activeTo *time.Time
+	if raw := query.Get("activeFrom"); raw != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return "", 0, false
+		}
+		utc := parsed.UTC()
+		activeFrom = &utc
+	}
+	if raw := query.Get("activeTo"); raw != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return "", 0, false
+		}
+		utc := parsed.UTC()
+		activeTo = &utc
+	}
+	if activeFrom != nil && activeTo != nil && activeFrom.After(*activeTo) {
+		return "", 0, false
 	}
 	if severity := alarmmodel.Severity(query.Get("severity")); severity != "" {
 		switch severity {

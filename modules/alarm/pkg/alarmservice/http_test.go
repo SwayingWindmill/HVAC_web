@@ -409,3 +409,82 @@ func TestAlarmHTTPAcceptsAListGrantOnlyFromTheWorkloadItNames(t *testing.T) {
 		t.Fatalf("the Agent presented the Gateway's own grant: %d", status)
 	}
 }
+
+func TestAlarmHTTPOverlapWindowFilterIncludesPreExistingActiveAndInWindowClearedIncidents(t *testing.T) {
+	now := time.Date(2026, 7, 31, 13, 0, 0, 0, time.UTC)
+	signer := testSigner(t)
+	memory, err := NewMemoryStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publishDistinct := func(sourceRef, occurredAt string) alarmmodel.Alarm {
+		pub := validPublication(occurredAt)
+		pub.SourceReference = sourceRef
+		pub.CorrelationID = "corr-" + sourceRef
+		alarm, pubErr := memory.Publish(context.Background(), testTenantID, testSiteID, pub)
+		if pubErr != nil {
+			t.Fatal(pubErr)
+		}
+		return alarm
+	}
+
+	// 1. Cleared before window [11:00, 12:00] -> excluded
+	clearedBefore := publishDistinct("rule:cleared-before", "2026-07-31T10:00:00Z")
+	if _, err := memory.ClearActive(context.Background(), testTenantID, testSiteID, Recovery{
+		Fingerprint: clearedBefore.Fingerprint, IncidentCorrelationID: clearedBefore.IncidentCorrelationID,
+		OccurredAt: "2026-07-31T10:30:00Z", Reason: "recovered early",
+		RuleRevision: "alarm-policy-10", ActorType: "WORKLOAD", ActorID: "alarm-evaluator", CorrelationID: "rec-early",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Triggered before window, cleared inside [11:00, 12:00] -> included
+	clearedInside := publishDistinct("rule:cleared-inside", "2026-07-31T10:15:00Z")
+	if _, err := memory.ClearActive(context.Background(), testTenantID, testSiteID, Recovery{
+		Fingerprint: clearedInside.Fingerprint, IncidentCorrelationID: clearedInside.IncidentCorrelationID,
+		OccurredAt: "2026-07-31T11:20:00Z", Reason: "recovered in window",
+		RuleRevision: "alarm-policy-10", ActorType: "WORKLOAD", ActorID: "alarm-evaluator", CorrelationID: "rec-in-window",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Triggered before window, still ACTIVE -> included
+	stillActive := publishDistinct("rule:still-active", "2026-07-31T09:30:00Z")
+
+	// 4. Triggered after window [11:00, 12:00] -> excluded
+	_ = publishDistinct("rule:triggered-after", "2026-07-31T12:05:00Z")
+
+	handler, err := NewHTTPHandler(HTTPConfig{Store: memory, Rules: siteRules{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarms?activeFrom=2026-07-31T11:00:00Z&activeTo=2026-07-31T12:00:00Z&limit=50", nil)
+	listReq.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmListAction, testTenantID, testSiteID, ""))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, listReq)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("overlap list failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var listed alarmmodel.ListResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Items) != 2 {
+		t.Fatalf("expected exactly 2 overlapping alarms, got %d: %#v", len(listed.Items), listed.Items)
+	}
+	gotIDs := map[string]bool{listed.Items[0].AlarmID: true, listed.Items[1].AlarmID: true}
+	if !gotIDs[clearedInside.AlarmID] || !gotIDs[stillActive.AlarmID] {
+		t.Fatalf("unexpected overlapping alarm IDs: %#v", gotIDs)
+	}
+
+	// Reject inverted window activeFrom > activeTo
+	badReq := httptest.NewRequest(http.MethodGet, InternalSiteAlarmsPrefix+testSiteID+"/alarms?activeFrom=2026-07-31T12:30:00Z&activeTo=2026-07-31T12:00:00Z", nil)
+	badReq.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmListAction, testTenantID, testSiteID, ""))
+	badRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(badRecorder, badReq)
+	if badRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on inverted activeFrom > activeTo, got %d", badRecorder.Code)
+	}
+}

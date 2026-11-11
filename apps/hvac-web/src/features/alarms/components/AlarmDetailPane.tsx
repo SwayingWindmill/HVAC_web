@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { BellRing, CheckCheck, CircleCheck, EyeOff, Link2, Plus, Sparkles, UserCheck, UserMinus, type LucideIcon } from 'lucide-react';
+import { BellRing, CheckCheck, CircleCheck, EyeOff, LineChart, Link2, Plus, Sparkles, UserCheck, UserMinus, type LucideIcon } from 'lucide-react';
 import { InfoTip } from '@/components/info-tip';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -20,6 +20,8 @@ import {
 } from '@/components/ui/timeline';
 import { listWorkOrders, type WorkOrderPriority } from '@/api/work-orders';
 import { useAssistantPanel } from '@/features/assistant/assistant-panel-store';
+import { siteAssetModelQuery } from '@/features/operations/trends/query';
+import { buildAlarmTrendSearch, buildTrendCatalog } from '@/features/operations/trends/trends-model';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
@@ -87,6 +89,12 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
   const capabilities = principal.authorization.capabilities;
 
   const detail = useQuery({ ...alarmDetailQuery(site.id, alarmId ?? ''), enabled: Boolean(alarmId) });
+  const canReadTrends = capabilities.includes('telemetry.history.read');
+  const assetModel = useQuery({ ...siteAssetModelQuery(site.id), enabled: canReadTrends });
+  const trendCatalog = useMemo(
+    () => (assetModel.data ? buildTrendCatalog(assetModel.data) : null),
+    [assetModel.data],
+  );
   const workOrders = useQuery({
     queryKey: workOrderKeys.source(site.id, 'ALARM', alarmId ?? ''),
     queryFn: ({ signal }) => listWorkOrders({ sourceDomain: 'ALARM', sourceRef: alarmId, limit: 20 }, { siteId: site.id, signal }),
@@ -172,6 +180,21 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
           ) : null}
           {canCreateWorkOrder ? (
             <Button variant="outline" onClick={() => onCreatingWorkOrderChange(true)}><Plus data-icon="inline-start" />创建工单</Button>
+          ) : null}
+          {canReadTrends ? (
+            <Button variant="outline" asChild>
+              <Link
+                to="/operations/trends"
+                search={buildAlarmTrendSearch({
+                  siteId: site.id,
+                  alarm,
+                  catalog: trendCatalog,
+                })}
+              >
+                <LineChart data-icon="inline-start" />
+                查看当时趋势
+              </Link>
+            </Button>
           ) : null}
           <Button variant="outline" onClick={() => explain(explainAlarmQuestion(alarm.title, alarm.firstOccurredAt, alarm.condition === 'CLEARED', deviceName, site.timezone))}>
             <Sparkles data-icon="inline-start" className="text-primary" />解释

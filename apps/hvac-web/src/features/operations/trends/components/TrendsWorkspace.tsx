@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getRouteApi, useNavigate } from '@tanstack/react-router';
+import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import { LineChart, RefreshCw, ShieldAlert, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { PageHeader, PageMeta } from '@/blocks/page-header';
 import { Panel } from '@/blocks/panel';
 import { Main } from '@/components/layout/Main';
@@ -9,26 +10,38 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { AlarmRequestError } from '@/features/alarms/alarm-api';
+import { PRIORITY_BY_SEVERITY } from '@/features/alarms/components/AlarmDetailPane';
+import { CommandRequestError } from '@/features/control/command-api';
+import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
+import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { useNow } from '@/hooks/use-now';
 import { formatCompactTime } from '@/lib/operator-format';
 import {
   TrendHistoryPermissionError,
   siteAssetModelQuery,
   trendAggregateWindowQuery,
+  trendCommandsQuery,
+  trendOverlappingAlarmsQuery,
 } from '../query';
 import type { TrendGranularity } from '../timeline';
 import {
   MAX_TREND_POINTS,
   buildTrendCatalog,
+  buildTrendOverlays,
   buildTrendViewModel,
   deriveBuiltInPresets,
+  formatTrendOverlays,
+  parseTrendOverlays,
   resolveTrendWindow,
+  type TrendOverlayAlarmInput,
   type TrendPointItem,
   type TrendPresetId,
   type TrendWindowPreset,
 } from '../trends-model';
 import { PointPickerPopover } from './PointPickerPopover';
 import { TrendsChartStack } from './TrendsChartStack';
+import { TrendsEventRail } from './TrendsEventRail';
 import { TrendsStateLane } from './TrendsStateLane';
 import { TrendsSummaryTable } from './TrendsSummaryTable';
 
@@ -65,6 +78,11 @@ export function TrendsWorkspace() {
   const queryClient = useQueryClient();
   const nowMs = useNow(60_000);
   const [hoverAt, setHoverAt] = useState<number | null>(null);
+  const [workOrderAlarm, setWorkOrderAlarm] = useState<TrendOverlayAlarmInput | null>(null);
+  const capabilities = principal.authorization.capabilities;
+  const canListAlarms = capabilities.includes('alarm.list');
+  const canReadDevices = capabilities.includes('device.read');
+  const canCreateWorkOrder = capabilities.includes('work-order.create');
 
   const assetModel = useQuery(siteAssetModelQuery(site.id));
   const catalog = useMemo(
@@ -119,6 +137,58 @@ export function TrendsWorkspace() {
 
   const showCompare = search.compare === 'prev';
   const viewMode = search.view === 'table' ? 'table' : 'chart';
+  const overlayFlags = useMemo(() => parseTrendOverlays(search.overlays), [search.overlays]);
+
+  const alarmsOverlayQuery = useQuery(
+    trendOverlappingAlarmsQuery({
+      siteId: site.id,
+      fromMs: windowState.fromMs,
+      toMs: windowState.toMs,
+      enabled: overlayFlags.alarms && canListAlarms,
+    }),
+  );
+
+  const commandsOverlayQuery = useQuery(
+    trendCommandsQuery({
+      siteId: site.id,
+      enabled: overlayFlags.commands && canReadDevices,
+    }),
+  );
+
+  const alarmsForbidden =
+    !canListAlarms ||
+    (alarmsOverlayQuery.error instanceof AlarmRequestError &&
+      (alarmsOverlayQuery.error.status === 401 || alarmsOverlayQuery.error.status === 403));
+
+  const commandsForbidden =
+    !canReadDevices ||
+    (commandsOverlayQuery.error instanceof CommandRequestError &&
+      (commandsOverlayQuery.error.status === 401 || commandsOverlayQuery.error.status === 403));
+
+  const showAlarmsActive = overlayFlags.alarms && !alarmsForbidden;
+  const showCommandsActive = overlayFlags.commands && !commandsForbidden;
+
+  const overlaysModel = useMemo(
+    () =>
+      buildTrendOverlays({
+        window: windowState,
+        selectedPoints,
+        catalog,
+        showAlarms: showAlarmsActive,
+        showCommands: showCommandsActive,
+        alarms: alarmsOverlayQuery.data,
+        commands: commandsOverlayQuery.data,
+      }),
+    [
+      alarmsOverlayQuery.data,
+      catalog,
+      commandsOverlayQuery.data,
+      selectedPoints,
+      showAlarmsActive,
+      showCommandsActive,
+      windowState,
+    ],
+  );
 
   const currentQuery = useQuery(
     trendAggregateWindowQuery({
@@ -357,8 +427,105 @@ export function TrendsWorkspace() {
                 />
                 <span>{windowState.compareLabel}</span>
               </label>
+
+              <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground select-none">
+                <Switch
+                  size="sm"
+                  aria-label="叠加告警"
+                  disabled={alarmsForbidden}
+                  checked={showAlarmsActive}
+                  onCheckedChange={(checked) => {
+                    void navigate({
+                      search: (prev) => ({
+                        ...prev,
+                        overlays: formatTrendOverlays({
+                          alarms: checked,
+                          commands: overlayFlags.commands,
+                        }),
+                      }),
+                    });
+                  }}
+                />
+                <span>叠加告警</span>
+                {alarmsForbidden ? (
+                  <span className="text-[11px] text-subtle-foreground">无告警查看权限</span>
+                ) : null}
+              </label>
+
+              <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground select-none">
+                <Switch
+                  size="sm"
+                  aria-label="叠加控制指令"
+                  disabled={commandsForbidden}
+                  checked={showCommandsActive}
+                  onCheckedChange={(checked) => {
+                    void navigate({
+                      search: (prev) => ({
+                        ...prev,
+                        overlays: formatTrendOverlays({
+                          alarms: overlayFlags.alarms,
+                          commands: checked,
+                        }),
+                      }),
+                    });
+                  }}
+                />
+                <span>叠加控制指令</span>
+                {commandsForbidden ? (
+                  <span className="text-[11px] text-subtle-foreground">无指令查看权限</span>
+                ) : null}
+              </label>
             </div>
           </div>
+
+          {search.source && search.sourceTitle ? (
+            <div
+              role="status"
+              className="flex flex-wrap items-center justify-between gap-2 border-b border-divider bg-primary-soft/55 px-5 py-2 text-xs"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-foreground">
+                  {search.source === 'alarm'
+                    ? `来自告警：${search.sourceTitle}`
+                    : `来自诊断：${search.sourceTitle}`}
+                </span>
+                {search.source === 'alarm' ? (
+                  <Link
+                    to="/operations/alarms"
+                    search={{ site: site.id, inspect: search.sourceId, view: 'all' }}
+                    className="font-medium text-primary hover:underline"
+                  >
+                    返回告警 ›
+                  </Link>
+                ) : (
+                  <Link
+                    to="/operations/diagnostics"
+                    search={{ site: site.id, inspect: search.sourceId, range: 'all' }}
+                    className="font-medium text-primary hover:underline"
+                  >
+                    返回诊断 ›
+                  </Link>
+                )}
+              </div>
+              <button
+                type="button"
+                aria-label="关闭来源提示"
+                onClick={() => {
+                  void navigate({
+                    search: (prev) => ({
+                      ...prev,
+                      source: undefined,
+                      sourceId: undefined,
+                      sourceTitle: undefined,
+                    }),
+                  });
+                }}
+                className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <X className="size-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
 
           {/* Selected Point Chips + Unconnected Preset Notice */}
           <div className="flex flex-wrap items-center gap-1.5 border-b border-divider bg-muted/20 px-5 py-2">
@@ -422,6 +589,15 @@ export function TrendsWorkspace() {
             <TrendsSummaryTable rows={viewModel.summaryRows} timezone={site.timezone} />
           ) : (
             <>
+              {showAlarmsActive || showCommandsActive ? (
+                <TrendsEventRail
+                  siteId={site.id}
+                  timezone={site.timezone}
+                  overlays={overlaysModel}
+                  canCreateWorkOrder={canCreateWorkOrder}
+                  onCreateWorkOrderForAlarm={(alarm) => setWorkOrderAlarm(alarm)}
+                />
+              ) : null}
               <TrendsChartStack
                 lanes={viewModel.gaugeLanes}
                 fromMs={windowState.fromMs}
@@ -430,6 +606,18 @@ export function TrendsWorkspace() {
                 timezone={site.timezone}
                 showCompare={showCompare}
                 compareLabel={windowState.compareLabel}
+                alarmSpans={overlaysModel.alarmSpans.map((span) => ({
+                  id: span.id,
+                  fromMs: span.startSlotAt,
+                  toMs: Math.max(span.endSlotAt, span.startSlotAt + 60_000),
+                  severity: span.alarm.currentSeverity,
+                  label: span.alarm.title,
+                }))}
+                commandMarks={overlaysModel.commandMarks.map((mark) => ({
+                  id: mark.id,
+                  atMs: mark.slotAt,
+                  label: mark.summaryLabel,
+                }))}
                 onHoverAt={setHoverAt}
               />
               <TrendsStateLane
@@ -444,6 +632,32 @@ export function TrendsWorkspace() {
           )}
         </Panel>
       )}
+
+      {workOrderAlarm ? (
+        <CreateWorkOrderDialog
+          open={Boolean(workOrderAlarm)}
+          onOpenChange={(open) => {
+            if (!open) setWorkOrderAlarm(null);
+          }}
+          title="由告警创建工单"
+          initial={{
+            title: workOrderAlarm.title,
+            priority: PRIORITY_BY_SEVERITY[workOrderAlarm.currentSeverity],
+            description: workOrderAlarm.summary,
+          }}
+          sourceReferences={[
+            {
+              domain: 'ALARM',
+              resourceId: workOrderAlarm.alarmId,
+              relationship: 'ORIGIN',
+            },
+          ]}
+          onCreated={() => {
+            void queryClient.invalidateQueries({ queryKey: workOrderKeys.all(site.id) });
+            toast.success('工单已创建');
+          }}
+        />
+      ) : null}
     </Main>
   );
 }

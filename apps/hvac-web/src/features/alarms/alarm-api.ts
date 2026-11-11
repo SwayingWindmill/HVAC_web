@@ -50,6 +50,8 @@ export interface AlarmPage {
 export interface AlarmListFilter {
   condition?: AlarmCondition;
   acknowledged?: boolean;
+  activeFrom?: string;
+  activeTo?: string;
 }
 
 export class AlarmRequestError extends Error {
@@ -84,6 +86,8 @@ export async function listAlarms(siteId: string, filter: AlarmListFilter, cursor
   const query = new URLSearchParams({ siteId, limit: '100' });
   if (filter.condition) query.set('condition', filter.condition);
   if (filter.acknowledged !== undefined) query.set('acknowledged', String(filter.acknowledged));
+  if (filter.activeFrom) query.set('activeFrom', filter.activeFrom);
+  if (filter.activeTo) query.set('activeTo', filter.activeTo);
   if (cursor) query.set('cursor', cursor);
   const body = await send<{ data: Alarm[]; meta: { nextCursor: string | null; hasMore: boolean } }>(
     `${alarmPaths.list}?${query.toString()}`,

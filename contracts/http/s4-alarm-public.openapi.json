@@ -21,7 +21,9 @@
           { "$ref": "#/components/parameters/AlarmSeverity" },
           { "$ref": "#/components/parameters/AlarmCondition" },
           { "$ref": "#/components/parameters/Acknowledged" },
-          { "$ref": "#/components/parameters/Suppressed" }
+          { "$ref": "#/components/parameters/Suppressed" },
+          { "$ref": "#/components/parameters/ActiveFrom" },
+          { "$ref": "#/components/parameters/ActiveTo" }
         ],
         "responses": {
           "200": {
@@ -166,6 +168,20 @@
         "in": "query",
         "required": false,
         "schema": { "type": "boolean" }
+      },
+      "ActiveFrom": {
+        "name": "activeFrom",
+        "in": "query",
+        "required": false,
+        "description": "Optional inclusive UTC lower bound for Incident active-span overlap (clearedAt IS NULL OR clearedAt >= activeFrom).",
+        "schema": { "type": "string", "format": "date-time" }
+      },
+      "ActiveTo": {
+        "name": "activeTo",
+        "in": "query",
+        "required": false,
+        "description": "Optional inclusive UTC upper bound for Incident active-span overlap (firstOccurredAt <= activeTo).",
+        "schema": { "type": "string", "format": "date-time" }
       },
       "OptionalIdempotencyKey": {
         "name": "Idempotency-Key",
