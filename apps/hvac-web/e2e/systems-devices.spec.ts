@@ -57,3 +57,50 @@ test('解释 opens the assistant with a question about the device in view', asyn
   const panel = page.getByRole('complementary', { name: 'AI 助手' });
   await expect(panel.getByRole('textbox', { name: '向助手提问' })).toHaveValue('「CHILLER-01」最近 24 小时运行得怎么样？现在的读数有没有异常？');
 });
+
+test('missing hourly buckets break the device inspector 24h curve instead of bridging across an outage', async ({ page, gateway }) => {
+  gateway.aggregateHandler = (query) => {
+    if (query.granularity !== 'HOUR' || query.deviceId !== '018f3e00-4000-7000-8000-000000000001') return undefined;
+    const fromMs = Date.parse(query.from);
+    const hourMs = 3_600_000;
+    const key = query.keys[0];
+    const indices = [0, 1, 2, 3, 8, 9, 10, 11];
+    const buckets = indices.map((index) => ({
+      telemetryKey: key,
+      pointId: '01910000-0000-7000-8000-00000000001b',
+      pointRevision: 1,
+      pointType: 'TELEMETRY',
+      unit: '°C',
+      periodStart: new Date(fromMs + index * hourMs).toISOString(),
+      periodEnd: new Date(fromMs + (index + 1) * hourMs).toISOString(),
+      quality: { good: 60, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
+      completeness: 1,
+      gauge: { average: 7.0 + index * 0.1, minimum: 6.8, maximum: 7.6, first: 7.0, last: 7.1, sampleCount: 60 },
+    }));
+    return {
+      body: {
+        schemaVersion: 1,
+        tenantId: '018f3d00-0000-7000-8000-000000000001',
+        siteId: SITE_ID,
+        deviceId: query.deviceId,
+        buckets,
+        metadata: {
+          requestedFrom: query.from,
+          requestedTo: query.to,
+          granularity: 'HOUR',
+          timezone: query.timezone,
+          qualityPolicy: query.qualityPolicy,
+          projectionWatermark: query.to,
+          returnedBuckets: buckets.length,
+        },
+      },
+    };
+  };
+
+  await page.goto(`/operations/systems-devices?site=${SITE_ID}&inspect=018f3e00-4000-7000-8000-000000000001`);
+  const inspector = page.getByRole('dialog');
+  const curve = inspector.locator('path.recharts-line-curve').first();
+  await expect(curve).toBeVisible();
+  const pathD = (await curve.getAttribute('d')) ?? '';
+  expect(pathD.match(/M/g)?.length).toBe(2);
+});

@@ -62,6 +62,9 @@ export interface ComposedChartProps
   data: Record<string, unknown>[]
   /** Key of the x-axis value in each row. */
   xKey: string
+  /** Numeric time axis keeps bucket spacing proportional and preserves gaps. */
+  xType?: "category" | "number"
+  xDomain?: readonly [number, number]
   series: ComposedSeries[]
   referenceLines?: ReferenceLineSpec[]
   showGrid?: boolean
@@ -112,6 +115,8 @@ function defaultXFormatter(value: unknown) {
 function ComposedChart({
   data,
   xKey,
+  xType = "category",
+  xDomain,
   series,
   referenceLines = [],
   showGrid = true,
@@ -196,6 +201,9 @@ function ComposedChart({
         {showGrid ? <CartesianGrid vertical={false} /> : null}
         <XAxis
           dataKey={xKey}
+          type={xType}
+          scale={xType === "number" ? "time" : undefined}
+          domain={xDomain ? [xDomain[0], xDomain[1]] : undefined}
           tickLine={false}
           axisLine={false}
           tickMargin={8}
@@ -227,31 +235,47 @@ function ComposedChart({
         ) : null}
         {showTooltip ? (
           <ChartTooltip
-            cursor={false}
-            content={
-              <ChartTooltipContent
-                indicator="dot"
-                labelFormatter={(value) => xFormatter(value)}
-                formatter={(value, name, item) => {
-                  const s = series.find((entry) => entry.key === name)
-                  const fmt = s?.axis === "right" ? (rightYFormatter ?? yFormatter) : yFormatter
-                  return (
-                    <div className="flex w-full items-center gap-2">
-                      <span
-                        className="size-2 shrink-0 rounded-[2px]"
-                        style={{ backgroundColor: item.color }}
-                      />
-                      <span className="text-muted-foreground flex-1">
-                        {config[name as string]?.label ?? name}
-                      </span>
-                      <span className="font-mono font-medium tabular-nums">
-                        {fmt ? fmt(Number(value)) : String(value)}
-                      </span>
-                    </div>
-                  )
-                }}
-              />
-            }
+            cursor={xType === "number" ? { strokeDasharray: "3 3" } : false}
+            content={(tooltipProps) => {
+              const hasValue = tooltipProps.payload?.some(
+                (entry) => entry.value !== null && entry.value !== undefined && Number.isFinite(Number(entry.value))
+              )
+              if (tooltipProps.active && !hasValue && tooltipProps.label !== undefined) {
+                return (
+                  <div className="grid min-w-36 gap-1 rounded-lg border bg-background px-2.5 py-1.5 text-xs shadow-md">
+                    <div className="font-medium">{xFormatter(tooltipProps.label)}</div>
+                    <div className="text-muted-foreground">该时段无读数</div>
+                  </div>
+                )
+              }
+              return (
+                <ChartTooltipContent
+                  active={tooltipProps.active}
+                  payload={tooltipProps.payload}
+                  label={tooltipProps.label}
+                  indicator="dot"
+                  labelFormatter={(value) => xFormatter(value)}
+                  formatter={(value, name, item) => {
+                    const s = series.find((entry) => entry.key === name)
+                    const fmt = s?.axis === "right" ? (rightYFormatter ?? yFormatter) : yFormatter
+                    return (
+                      <div className="flex w-full items-center gap-2">
+                        <span
+                          className="size-2 shrink-0 rounded-[2px]"
+                          style={{ backgroundColor: item.color }}
+                        />
+                        <span className="text-muted-foreground flex-1">
+                          {config[name as string]?.label ?? name}
+                        </span>
+                        <span className="font-mono font-medium tabular-nums">
+                          {fmt ? fmt(Number(value)) : String(value)}
+                        </span>
+                      </div>
+                    )
+                  }}
+                />
+              )
+            }}
           />
         ) : null}
         {showLegend ? <ChartLegend content={<ChartLegendContent />} /> : null}
@@ -288,6 +312,7 @@ function ComposedChart({
                 strokeDasharray={s.dashed ? "4 4" : undefined}
                 dot={s.dots ? { r: 3, fill: color, strokeWidth: 0 } : false}
                 activeDot={{ r: 4 }}
+                connectNulls={false}
               />
             )
           }
@@ -302,6 +327,7 @@ function ComposedChart({
               fill={`url(#${id}-fill-${s.key})`}
               dot={s.dots ? { r: 2.5, fill: color, strokeWidth: 0 } : false}
               activeDot={{ r: 4 }}
+              connectNulls={false}
             />
           )
         })}

@@ -31,3 +31,49 @@ test('the plant machines open from the running count in the equipment ledger', a
   await expect(page).toHaveURL(/\/operations\/systems-devices\?/);
   await expect(page.getByRole('button', { name: /CHWP-01/ })).toBeVisible();
 });
+
+test('missing quarter-hour buckets break the realtime trend curve instead of bridging across an outage', async ({ page, gateway }) => {
+  gateway.aggregateHandler = (query) => {
+    if (query.granularity !== 'QUARTER_HOUR' || !query.keys.includes('active_power')) return undefined;
+    const fromMs = Date.parse(query.from);
+    const quarterMs = 15 * 60_000;
+    const indices = [0, 1, 2, 3, 8, 9, 10, 11];
+    const buckets = indices.map((index) => ({
+      telemetryKey: 'active_power',
+      pointId: '01910000-0000-7000-8000-000000000035',
+      pointRevision: 1,
+      pointType: 'TELEMETRY',
+      unit: 'kW',
+      periodStart: new Date(fromMs + index * quarterMs).toISOString(),
+      periodEnd: new Date(fromMs + (index + 1) * quarterMs).toISOString(),
+      quality: { good: 60, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
+      completeness: 1,
+      gauge: { average: 210 + index, minimum: 200, maximum: 225, first: 210, last: 215, sampleCount: 60 },
+    }));
+    return {
+      body: {
+        schemaVersion: 1,
+        tenantId: '018f3d00-0000-7000-8000-000000000001',
+        siteId: SITE_ID,
+        deviceId: query.deviceId,
+        buckets,
+        metadata: {
+          requestedFrom: query.from,
+          requestedTo: query.to,
+          granularity: 'QUARTER_HOUR',
+          timezone: query.timezone,
+          qualityPolicy: query.qualityPolicy,
+          projectionWatermark: query.to,
+          returnedBuckets: buckets.length,
+        },
+      },
+    };
+  };
+
+  await page.goto(`/operations/realtime?site=${SITE_ID}&metric=power`);
+  const plant = page.getByRole('region', { name: '冷站运行' });
+  const curve = plant.locator('path.recharts-area-curve').first();
+  await expect(curve).toBeVisible();
+  const pathD = (await curve.getAttribute('d')) ?? '';
+  expect(pathD.match(/M/g)?.length).toBe(2);
+});

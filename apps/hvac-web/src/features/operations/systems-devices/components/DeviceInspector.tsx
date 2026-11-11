@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Plus, Sparkles } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
@@ -19,8 +19,9 @@ import { formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { deviceStatus, KEY_READINGS, POWER_KEY } from '../../realtime/device-presentation';
 import type { PlantDevice } from '../../realtime/plant-model';
-import { deviceDayHistoryQuery, MAX_HISTORY_KEYS } from '../device-history';
+import { dayHistoryWindow, deviceDayHistoryQuery, MAX_HISTORY_KEYS } from '../device-history';
 import { boundAssetId, deviceLocation } from '../device-ledger';
+import { buildTimeSlots, fillGaugeSlots } from '../../trends/timeline';
 
 const siteRoute = getRouteApi('/_app/_site');
 
@@ -172,6 +173,7 @@ function DayTrend({ device }: { readonly device: PlantDevice }) {
   const { site, principal } = siteRoute.useRouteContext();
   const keys = trendKeys(device);
   const [selected, setSelected] = useState(keys[0]);
+  const window = useMemo(() => dayHistoryWindow(), [device.deviceId]);
   const history = useQuery({
     ...deviceDayHistoryQuery({
       siteId: site.id,
@@ -179,6 +181,7 @@ function DayTrend({ device }: { readonly device: PlantDevice }) {
       keys,
       timezone: site.timezone,
       csrfToken: principal.session.csrfToken,
+      window,
     }),
     enabled: keys.length > 0 && principal.authorization.capabilities.includes('telemetry.history.read'),
   });
@@ -188,10 +191,19 @@ function DayTrend({ device }: { readonly device: PlantDevice }) {
   const point = device.row.telemetryPoints.find((candidate) => candidate.pointCode === selected);
   const unit = formatTelemetryUnit(point?.unit);
   const hour = new Intl.DateTimeFormat('zh-CN', { timeZone: site.timezone, hour: '2-digit', minute: '2-digit', hour12: false });
-  const data = (history.data?.get(selected) ?? []).map((bucket) => ({
-    hour: hour.format(new Date(bucket.periodStart)),
-    average: Number(bucket.average.toFixed(2)),
-    range: [Number(bucket.minimum.toFixed(2)), Number(bucket.maximum.toFixed(2))],
+  const recorded = history.data?.get(selected) ?? [];
+  const slots = buildTimeSlots({
+    fromMs: window.fromMs,
+    toMs: window.toMs,
+    granularity: 'HOUR',
+    timeZone: site.timezone,
+  });
+  const data = fillGaugeSlots(slots, recorded).map((bucket) => ({
+    at: bucket.startMs,
+    average: bucket.average === null ? null : Number(bucket.average.toFixed(2)),
+    range: bucket.minimum !== null && bucket.maximum !== null
+      ? [Number(bucket.minimum.toFixed(2)), Number(bucket.maximum.toFixed(2))]
+      : null,
   }));
 
   return (
@@ -209,7 +221,7 @@ function DayTrend({ device }: { readonly device: PlantDevice }) {
         <Skeleton className="h-52" />
       ) : history.isError ? (
         <p className="text-sm text-destructive">历史数据暂不可读：{history.error.message}</p>
-      ) : data.length === 0 ? (
+      ) : recorded.length === 0 ? (
         <p className="py-10 text-center text-sm text-muted-foreground">最近 24 小时没有记录</p>
       ) : (
         <ChartContainer
@@ -221,11 +233,43 @@ function DayTrend({ device }: { readonly device: PlantDevice }) {
         >
           <ComposedChart accessibilityLayer data={data} margin={{ left: 4, right: 8 }}>
             <CartesianGrid vertical={false} />
-            <XAxis dataKey="hour" axisLine={false} tickLine={false} minTickGap={24} />
+            <XAxis
+              dataKey="at"
+              type="number"
+              scale="time"
+              domain={[window.fromMs, window.toMs]}
+              tickFormatter={(at: number) => hour.format(new Date(at))}
+              axisLine={false}
+              tickLine={false}
+              minTickGap={24}
+            />
             <YAxis axisLine={false} tickLine={false} width={44} domain={['auto', 'auto']} />
-            <ChartTooltip content={<ChartTooltipContent />} />
-            <Area isAnimationActive={false} dataKey="range" stroke="none" fill="var(--color-range)" fillOpacity={0.15} />
-            <Line isAnimationActive={false} dataKey="average" stroke="var(--color-average)" strokeWidth={2} dot={false} />
+            <ChartTooltip
+              cursor={{ strokeDasharray: '3 3' }}
+              content={(tooltipProps) => {
+                const hasValue = tooltipProps.payload?.some(
+                  (entry) => entry.value !== null && entry.value !== undefined,
+                );
+                if (tooltipProps.active && !hasValue && tooltipProps.label !== undefined) {
+                  return (
+                    <div className="grid min-w-36 gap-1 rounded-lg border bg-background px-2.5 py-1.5 text-xs shadow-md">
+                      <div className="font-medium">{hour.format(new Date(Number(tooltipProps.label)))}</div>
+                      <div className="text-muted-foreground">该时段无读数</div>
+                    </div>
+                  );
+                }
+                return (
+                  <ChartTooltipContent
+                    active={tooltipProps.active}
+                    payload={tooltipProps.payload}
+                    label={tooltipProps.label}
+                    labelFormatter={(value) => hour.format(new Date(Number(value)))}
+                  />
+                );
+              }}
+            />
+            <Area isAnimationActive={false} connectNulls={false} dataKey="range" stroke="none" fill="var(--color-range)" fillOpacity={0.15} />
+            <Line isAnimationActive={false} connectNulls={false} dataKey="average" stroke="var(--color-average)" strokeWidth={2} dot={false} />
           </ComposedChart>
         </ChartContainer>
       )}

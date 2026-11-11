@@ -94,6 +94,21 @@ function replayMachineHours(recorded: Json, query: Json): Json {
   return { ...response, buckets: response.buckets.map((bucket: Json) => ({ ...bucket, periodStart: moved(bucket.periodStart), periodEnd: moved(bucket.periodEnd) })) };
 }
 
+// Recorded device history moved onto the requested window so recent-24h charts match any test clock.
+function replayDeviceHistory(recorded: Json, query: Json): Json {
+  const shift = Date.parse(query.from) - Date.parse(recorded.metadata.requestedFrom);
+  const moved = (instant: string) => new Date(Date.parse(instant) + shift).toISOString();
+  const buckets = recorded.buckets
+    .map((bucket: Json) => ({ ...bucket, periodStart: moved(bucket.periodStart), periodEnd: moved(bucket.periodEnd) }))
+    .filter((bucket: Json) => Date.parse(bucket.periodStart) >= Date.parse(query.from) && Date.parse(bucket.periodStart) < Date.parse(query.to));
+  return {
+    ...recorded,
+    deviceId: query.deviceId,
+    buckets,
+    metadata: { ...recorded.metadata, requestedFrom: query.from, requestedTo: query.to, returnedBuckets: buckets.length },
+  };
+}
+
 // Recorded findings are replayed as if the last diagnosis had just run.
 function replayFindings(findings: Json[], now: string): Json[] {
   const shift = Date.parse(now) - Math.max(...findings.map((finding) => Date.parse(finding.evaluationTo)));
@@ -129,6 +144,8 @@ export class Gateway {
   readonly commands: Json[] = [];
   /** When the forecast is replayed as published; tests that pin the page clock set it to that instant. */
   forecastOrigin: string | null = null;
+  /** Optional custom handler for `device-series:aggregate` so tests can simulate outages or specific series. */
+  aggregateHandler: ((query: Json) => { status?: number; body: unknown } | undefined) | null = null;
   readonly findings = replayFindings(fixture<Json>('fdd-findings.json').items, new Date().toISOString());
   /** The Site's latest published recommendation; null until a run publishes one. */
   optimization: Json | null = null;
@@ -377,13 +394,15 @@ export class Gateway {
     }
     if (method === 'POST' && path === '/api/v1/telemetry/observation-snapshots:batchGet') return { body: this.snapshotBatch(body!) };
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') {
+      const custom = this.aggregateHandler?.(body!);
+      if (custom) return custom;
       if (body?.granularity === 'QUARTER_HOUR') return { body: replayDemand(fixture<Json>('demand-quarter-hours.json'), body) };
       if (body?.granularity === 'DAY' && body.keys[0] === 'ambient_dry_bulb_temperature') {
         if (this.outdoorFailing) return { status: 503, body: { type: 'about:blank', title: 'Telemetry history unavailable', status: 503, detail: 'Telemetry Query Service is unavailable.', instance: path, code: 'TELEMETRY_HISTORY_UNAVAILABLE', traceId: '0'.repeat(32), retryable: true } };
         return { body: replayOutdoorDays(fixture<Json>('outdoor-days.json'), body) };
       }
       if (body?.granularity === 'HOUR' && body.keys.length === 1 && body.keys[0] === 'power') return { body: replayMachineHours(fixture<Json>('device-hours.json'), body) };
-      return { body: fixture('history.json') };
+      return { body: replayDeviceHistory(fixture<Json>('history.json'), body!) };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/findings`) return { body: { items: this.findings } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/rules/low-delta-t`) {
