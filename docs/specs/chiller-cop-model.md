@@ -35,7 +35,7 @@ F2。2026-10-30 用户确认按建议做：第二个求解器，从历史拟合�
 
 ## 不做
 
-- 不下发指令，不改页面，不发布影子建议。
+- 不下发控制指令，不发布影子建议；评估摘要由只读接口 `GET /api/v1/sites/{siteId}/optimization/shadow-evaluations/latest` 供优化建议页「模型与负荷分析」页签对照查看（见 `docs/specs/optimization-workspace.md`）。
 - 不算冷却塔风机和水泵的电，所以冷却水温度重设即使有设定点，也要先补上这部分才有意义。
 - 不新建 ClickHouse 表（ClickHouse 的初始化脚本只在空库上执行，服务器上要手工建）。
 

@@ -14,7 +14,7 @@
 | 监测 | 实时运行、设备、历史趋势（`/operations/trends`） | 遥测的快照和推送、设备登记、设备历史（支持 1 分钟 / 5 分钟 / 15 分钟 / 1 小时 / 按日汇总及离散状态聚合）、告警重叠窗口查询、控制指令 |
 | 运行 | 数字孪生（`/operations/digital-twin`） | 登记里的冷站设备 + 实时运行；末端楼宇按站点写在 `twin-building.ts`（目前只有松雅轩），房间和末端设备登记之前都显示「未接入」（规格 `docs/specs/digital-twin.md`） |
 | 能源 | 能耗分析（含「用电去向」：总表和各机组分表）、用电负荷（含负荷预测） | 能耗序列（Cube）、设备按小时/15 分钟的统计、站点电价、负荷预测 |
-| 能源 | 优化建议 | 预测服务每小时 :07 跑，优化服务每小时 :20 跑，也可以手动触发（规格 `docs/specs/scheduled-optimization.md`） |
+| 能源 | 优化建议（`/energy-analysis/optimization`） | 预测服务每小时 :07 跑，优化服务每小时 :20 跑，也可手动触发；首屏「当前建议」按站点有无可写供水温度设定点走控制指令审批或创建人工调温工单，「模型与负荷分析」按需只读查询冷机 COP 模型影子评估与未来 24 小时负荷预测（规格 `docs/specs/scheduled-optimization.md`、`docs/specs/optimization-workspace.md`、`docs/specs/chiller-cop-model.md`） |
 | 能源 | 节能项目（`/energy-analysis/savings`） | mv-service：节能措施、固定的基线、已验证日（ADR 0021） |
 | 能源 | 能源报告（`/reports`） | 已结束的月份读 report-service 的快照（每月 1 日 03:00 生成），本月和没存快照的月份现算；有年度视图，可打印 A4 |
 | 能源 | 站点对标（`/benchmark`） | 每个有权限的站点的能耗序列；没有能耗权限的站点列出来但不参加比较 |
@@ -118,7 +118,7 @@
 
 小的后续：
 
-- 冷机 COP 模型是影子求解器（规格 `docs/specs/chiller-cop-model.md`）：每次优化运行后写一行 `quality = 'SHADOW'` 的评估，不发布。它跟着优化运行走：松雅轩还没有优化调度和策略，两个演示站点的优化调度停着，所以服务器上现在只有手动生成建议时才会写影子记录（演示站点没有冷机历史，结果是 `NO_USABLE_MODEL`）。要不要换成发布的求解器，等松雅轩接入优化、积累一段影子记录后再定。
+- 冷机 COP 模型是影子求解器（规格 `docs/specs/chiller-cop-model.md`、`docs/specs/optimization-workspace.md`）：每次优化运行后写一行 `quality = 'SHADOW'` 的评估，不发布，只由只读接口供优化建议页「模型与负荷分析」页签对照查看。它跟着优化运行走：松雅轩还没有优化调度和策略，两个演示站点的优化调度停着，所以服务器上现在只有手动生成建议时才会写影子记录（演示站点没有冷机历史，结果是 `NO_USABLE_MODEL`）。要不要换成发布的求解器，等松雅轩接入优化、积累一段影子记录后再定。
 - 改 FDD 低温差的门槛、时间窗口或工况门控时，发布新版本（不要改旧版本）：`node scripts/publish-fdd-rule-revision.mjs --tenant <uuid> --minimum-delta-tc <K> --window-minutes <n> [--effective-from <时刻>] [--operating-gates '<json>']`；不写门控就沿用上一版。低温差只在冷站运行时判断（规格 `docs/specs/fdd-rule-definition.md`「工况门控」）。松雅轩四台冷机都没登记额定功率和额定冷量，冷机开机按运行状态判断、负荷率门控用不上；冷冻水泵运行状态点位没绑定水泵资产，水泵门控也用不上。松雅轩实际运行温差中位数约 0.9 K、最高约 2.2 K，3.5 K 阈值下每个运行窗口都是低温差，阈值待用户定。
 - 能耗序列算电费时，每读一条用电记录约占 0.5 KB ClickHouse 内存。实时电表每块每天约 24,000 条，一个站点一个月约 150 MiB，一年会超过 1.5 GiB 的上限。用电量已经整小时读 `analytics.energy_hourly`（015），电费还读单条记录：电价时段按分钟切换，不能直接用这个汇总，要查长时间范围的电费之前得另想办法（例如按电价时段汇总）。
 - **生产要先手工应用 015 再部署能耗小时汇总的那次合并**：步骤（停 `telemetry-worker`、应用、回填、核对）见 `docs/operations/energy-hourly-rollup.md`。
