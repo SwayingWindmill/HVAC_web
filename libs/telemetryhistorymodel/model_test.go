@@ -189,3 +189,42 @@ func TestAggregateGranularityMinuteAndFiveMinuteEnforce720PerKeyAnd5760TotalLimi
 		t.Fatalf("8 keys x 360 buckets (2880 <= 5760) including SETTING gauge should be valid: %v", err)
 	}
 }
+
+func TestTelemetryAndSettingDiscreteStateBucketsAreAccepted(t *testing.T) {
+	from := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	query := DeviceHistoryAggregateQuery{
+		TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
+		Keys: []string{"chiller.run_state", "chiller.mode_setting"},
+		From: from, To: from.Add(5 * time.Minute),
+		Granularity: AggregateGranularityFiveMinute, Timezone: "Asia/Shanghai", QualityPolicy: AggregateQualityUsable,
+	}
+	response := DeviceHistoryAggregateResponse{
+		SchemaVersion: 1, TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
+		Buckets: []DeviceHistoryAggregateBucket{
+			{
+				TelemetryKey: "chiller.run_state", PointID: testPointID, PointRevision: 1, PointType: PointTypeTelemetry,
+				PeriodStart: from, PeriodEnd: from.Add(5 * time.Minute),
+				Quality: AggregateQualitySummary{Good: 5}, Completeness: 1,
+				State: &StateAggregate{
+					ValueType: ValueTypeString, LastValue: []byte(`"RUNNING"`), SampleCount: 5, ChangeCount: 1,
+				},
+			},
+			{
+				TelemetryKey: "chiller.mode_setting", PointID: testPointID, PointRevision: 1, PointType: PointTypeSetting,
+				PeriodStart: from, PeriodEnd: from.Add(5 * time.Minute),
+				Quality: AggregateQualitySummary{Good: 1}, Completeness: 1,
+				State: &StateAggregate{
+					ValueType: ValueTypeBoolean, LastValue: []byte(`true`), SampleCount: 1, ChangeCount: 0,
+				},
+			},
+		},
+		Metadata: DeviceHistoryAggregateMetadata{
+			RequestedFrom: from, RequestedTo: from.Add(5 * time.Minute),
+			Granularity: AggregateGranularityFiveMinute, Timezone: "Asia/Shanghai", QualityPolicy: AggregateQualityUsable,
+			ReturnedBuckets: 2,
+		},
+	}
+	if err := response.ValidateFor(query); err != nil {
+		t.Fatalf("TELEMETRY/SETTING with STRING/BOOLEAN state result should be valid: %v", err)
+	}
+}

@@ -29,6 +29,7 @@ import {
 } from '../trends-model';
 import { PointPickerPopover } from './PointPickerPopover';
 import { TrendsChartStack } from './TrendsChartStack';
+import { TrendsStateLane } from './TrendsStateLane';
 import { TrendsSummaryTable } from './TrendsSummaryTable';
 
 const siteRoute = getRouteApi('/_app/_site');
@@ -63,7 +64,7 @@ export function TrendsWorkspace() {
   const navigate = useNavigate({ from: '/operations/trends' });
   const queryClient = useQueryClient();
   const nowMs = useNow(60_000);
-  const [, setHoverAt] = useState<number | null>(null);
+  const [hoverAt, setHoverAt] = useState<number | null>(null);
 
   const assetModel = useQuery(siteAssetModelQuery(site.id));
   const catalog = useMemo(
@@ -420,16 +421,26 @@ export function TrendsWorkspace() {
           ) : viewMode === 'table' ? (
             <TrendsSummaryTable rows={viewModel.summaryRows} timezone={site.timezone} />
           ) : (
-            <TrendsChartStack
-              lanes={viewModel.gaugeLanes}
-              fromMs={windowState.fromMs}
-              toMs={windowState.toMs}
-              granularity={windowState.granularity}
-              timezone={site.timezone}
-              showCompare={showCompare}
-              compareLabel={windowState.compareLabel}
-              onHoverAt={setHoverAt}
-            />
+            <>
+              <TrendsChartStack
+                lanes={viewModel.gaugeLanes}
+                fromMs={windowState.fromMs}
+                toMs={windowState.toMs}
+                granularity={windowState.granularity}
+                timezone={site.timezone}
+                showCompare={showCompare}
+                compareLabel={windowState.compareLabel}
+                onHoverAt={setHoverAt}
+              />
+              <TrendsStateLane
+                tracks={viewModel.stateTracks}
+                fromMs={windowState.fromMs}
+                toMs={windowState.toMs}
+                timezone={site.timezone}
+                hoverAt={hoverAt}
+                onHoverAt={setHoverAt}
+              />
+            </>
           )}
         </Panel>
       )}

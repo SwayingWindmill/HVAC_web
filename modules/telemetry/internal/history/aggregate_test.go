@@ -150,3 +150,43 @@ func TestMinuteAndFiveMinutePeriodsAlignToSiteClockAndSettingGaugeSQL(t *testing
 		t.Fatalf("decoded setting bucket=%#v err=%v", decoded, err)
 	}
 }
+
+func TestStateAggregateQueryIncludesTelemetryAndSettingDiscreteValuesAndDecodesStateBucket(t *testing.T) {
+	query := telemetryhistorymodel.DeviceHistoryAggregateQuery{
+		TenantID: historyTenantID, SiteID: historySiteID, DeviceID: historyDeviceID,
+		Keys: []string{"chiller.run_state"},
+		Granularity: telemetryhistorymodel.AggregateGranularityMinute,
+		Timezone: "Asia/Shanghai", QualityPolicy: telemetryhistorymodel.AggregateQualityUsable,
+		From: time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 10, 11, 0, 5, 0, 0, time.UTC),
+	}
+	client := &Client{database: "telemetry_history", table: "observations"}
+	sql := client.stateAggregateQuery(query, query.To)
+	if !strings.Contains(sql, "point_type IN ('TELEMETRY', 'SETTING') AND value_type IN ('STRING', 'BOOLEAN', 'JSON')") {
+		t.Fatalf("state SQL must include non-numeric TELEMETRY/SETTING points without duplicating numeric gauges:\n%s", sql)
+	}
+	if !strings.Contains(sql, "assumeNotNull(point_type) AS point_type") {
+		t.Fatalf("state SQL must preserve original point_type:\n%s", sql)
+	}
+
+	valueType := "STRING"
+	lastValue := `"RUNNING"`
+	decoded, err := decodeAggregateRow(aggregateRow{
+		TelemetryKey:   "chiller.run_state",
+		PointID:        "018f2e00-4000-7000-8000-000000000002",
+		PointRevision:  1,
+		PointType:      "TELEMETRY",
+		PeriodStart:    "2026-10-11T00:00:00.000Z",
+		PeriodEnd:      "2026-10-11T00:01:00.000Z",
+		Good:           2,
+		TotalCount:     2,
+		IncludedCount:  2,
+		StateValueType: &valueType,
+		StateLastValue: &lastValue,
+		StateSamples:   2,
+		StateChanges:   1,
+	})
+	if err != nil || decoded.PointType != telemetryhistorymodel.PointTypeTelemetry || decoded.State == nil || string(decoded.State.LastValue) != `"RUNNING"` {
+		t.Fatalf("decoded TELEMETRY state bucket=%#v err=%v", decoded, err)
+	}
+}

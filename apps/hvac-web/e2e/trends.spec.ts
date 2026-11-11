@@ -70,3 +70,18 @@ test('point picker enforces the 8-point cap and disables unchecked points at cap
   const remainingUnchecked = dialog.locator('[role="checkbox"][aria-checked="false"]');
   await expect(remainingUnchecked.first()).toBeDisabled();
 });
+
+test('bottom 设备启停状态 lane renders run/stop segments and updates readout on hover', async ({ page }) => {
+  await page.goto(`/operations/trends?site=${SITE_ID}&window=1h`);
+
+  const stateRegion = page.getByRole('region', { name: '设备启停状态' });
+  await expect(stateRegion).toBeVisible();
+  await expect(stateRegion).toContainText('CHILLER-01');
+  await expect(stateRegion.locator('[data-state-kind="RUNNING"]').first()).toBeVisible();
+  await expect(stateRegion.locator('[data-state-kind="STOPPED"]').first()).toBeVisible();
+
+  // Hover over the STOPPED segment and verify synchronized cursor readout
+  await stateRegion.locator('[data-state-kind="STOPPED"]').first().hover();
+  await expect(stateRegion).toContainText(/游标 \d{2}:\d{2}/);
+  await expect(stateRegion.getByTestId('state-readout-CHILLER-01')).toHaveText('停止');
+});

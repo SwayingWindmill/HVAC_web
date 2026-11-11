@@ -114,10 +114,44 @@ export interface TrendSummaryRow {
   readonly coverageRatio: number;
 }
 
+export type TrendStateKind = 'RUNNING' | 'STOPPED' | 'FAULT' | 'OTHER';
+
+export interface TrendNormalizedState {
+  readonly kind: TrendStateKind;
+  readonly label: string;
+}
+
+export interface TrendStateSlot {
+  readonly startMs: number;
+  readonly endMs: number;
+  readonly state: TrendNormalizedState | null;
+}
+
+export interface TrendStateSegment {
+  readonly startMs: number;
+  readonly endMs: number;
+  readonly kind: TrendStateKind;
+  readonly label: string;
+  readonly startPercent: number;
+  readonly widthPercent: number;
+}
+
+export interface TrendStateTrack {
+  readonly ref: string;
+  readonly label: string;
+  readonly deviceName: string;
+  readonly pointLabel: string;
+  readonly slots: readonly TrendStateSlot[];
+  readonly segments: readonly TrendStateSegment[];
+  readonly latestState: TrendNormalizedState | null;
+  readonly runningRatio: number;
+}
+
 export interface TrendViewModel {
   readonly gaugeLanes: readonly TrendGaugeLane[];
   readonly summaryRows: readonly TrendSummaryRow[];
   readonly statePoints: readonly TrendPointItem[];
+  readonly stateTracks: readonly TrendStateTrack[];
 }
 
 const CHART_COLOR_VARS = [
@@ -126,8 +160,8 @@ const CHART_COLOR_VARS = [
   'var(--chart-3)',
   'var(--chart-4)',
   'var(--chart-5)',
-  'var(--status-running)',
-  'var(--status-warning)',
+  'var(--success)',
+  'var(--warning)',
   'var(--primary)',
 ] as const;
 
@@ -187,6 +221,42 @@ function resolvePointLabel(point: TelemetryPoint): { label: string; defaultUnit?
     defaultUnit: point.unit ?? undefined,
     precision: point.unit === 'm3/h' || point.unit === '%RH' ? 0 : 1,
   };
+}
+
+function normalizeDiscreteState(raw: unknown): TrendNormalizedState | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'boolean') {
+    return raw ? { kind: 'RUNNING', label: '运行' } : { kind: 'STOPPED', label: '停止' };
+  }
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) return null;
+    return raw > 0 ? { kind: 'RUNNING', label: '运行' } : { kind: 'STOPPED', label: '停止' };
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const upper = trimmed.toUpperCase();
+    if (upper === 'RUNNING' || upper === 'RUN' || upper === 'ON' || upper === 'TRUE' || upper === '1' || upper === 'ACTIVE' || upper === 'OPEN' || upper === 'ENABLED') {
+      return { kind: 'RUNNING', label: '运行' };
+    }
+    if (upper === 'STANDBY') {
+      return { kind: 'STOPPED', label: '待机' };
+    }
+    if (upper === 'STOPPED' || upper === 'STOP' || upper === 'OFF' || upper === 'FALSE' || upper === '0' || upper === 'IDLE' || upper === 'CLOSED' || upper === 'DISABLED') {
+      return { kind: 'STOPPED', label: '停止' };
+    }
+    if (upper === 'FAULT' || upper === 'ERROR' || upper === 'ALARM' || upper === 'TRIP') {
+      return { kind: 'FAULT', label: '故障' };
+    }
+    return { kind: 'OTHER', label: trimmed };
+  }
+  return { kind: 'OTHER', label: JSON.stringify(raw) };
+}
+
+export function resolveTrackStateAt(track: TrendStateTrack, hoverAtMs: number | null): TrendNormalizedState | null {
+  if (hoverAtMs === null) return track.latestState;
+  const hit = track.slots.find((slot) => hoverAtMs >= slot.startMs && hoverAtMs < slot.endMs);
+  return hit ? hit.state : null;
 }
 
 function cleanDeviceDisplayName(name: string): string {
@@ -748,9 +818,66 @@ export function buildTrendViewModel(input: {
     };
   });
 
+  const spanMs = Math.max(1, input.window.toMs - input.window.fromMs);
+  const stateTracks: TrendStateTrack[] = statePoints.map((point) => {
+    let latestState: TrendNormalizedState | null = null;
+    let runningSlots = 0;
+    let presentSlots = 0;
+
+    const slots: TrendStateSlot[] = input.window.slots.map((slot) => {
+      const bucket = currentMap.get(point.ref)?.get(slot.startMs);
+      const normalized = bucket?.state ? normalizeDiscreteState(bucket.state.lastValue) : null;
+      if (normalized) {
+        latestState = normalized;
+        presentSlots += 1;
+        if (normalized.kind === 'RUNNING') runningSlots += 1;
+      }
+      return {
+        startMs: slot.startMs,
+        endMs: slot.endMs,
+        state: normalized,
+      };
+    });
+
+    const segments: TrendStateSegment[] = [];
+    for (const slot of slots) {
+      if (!slot.state) continue;
+      const prev = segments[segments.length - 1];
+      if (prev && prev.endMs === slot.startMs && prev.kind === slot.state.kind && prev.label === slot.state.label) {
+        const nextEndMs = slot.endMs;
+        segments[segments.length - 1] = {
+          ...prev,
+          endMs: nextEndMs,
+          widthPercent: ((nextEndMs - prev.startMs) / spanMs) * 100,
+        };
+      } else {
+        segments.push({
+          startMs: slot.startMs,
+          endMs: slot.endMs,
+          kind: slot.state.kind,
+          label: slot.state.label,
+          startPercent: ((slot.startMs - input.window.fromMs) / spanMs) * 100,
+          widthPercent: ((slot.endMs - slot.startMs) / spanMs) * 100,
+        });
+      }
+    }
+
+    return {
+      ref: point.ref,
+      label: point.seriesLabel,
+      deviceName: point.deviceName,
+      pointLabel: point.pointLabel,
+      slots,
+      segments,
+      latestState,
+      runningRatio: presentSlots > 0 ? runningSlots / presentSlots : 0,
+    };
+  });
+
   return {
     gaugeLanes,
     summaryRows,
     statePoints,
+    stateTracks,
   };
 }

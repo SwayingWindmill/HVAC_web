@@ -206,6 +206,15 @@ func decodeAggregateRow(row aggregateRow) (telemetryhistorymodel.DeviceHistoryAg
 	}
 	switch bucket.PointType {
 	case telemetryhistorymodel.PointTypeTelemetry, telemetryhistorymodel.PointTypeSetting:
+		if row.StateValueType != nil && row.StateLastValue != nil {
+			bucket.State = &telemetryhistorymodel.StateAggregate{
+				ValueType:   telemetryhistorymodel.ValueType(*row.StateValueType),
+				LastValue:   json.RawMessage(*row.StateLastValue),
+				SampleCount: row.StateSamples,
+				ChangeCount: row.StateChanges,
+			}
+			break
+		}
 		if row.Average == nil || row.Minimum == nil || row.Maximum == nil || row.First == nil || row.Last == nil || !finite(*row.Average, *row.Minimum, *row.Maximum, *row.First, *row.Last) {
 			return telemetryhistorymodel.DeviceHistoryAggregateBucket{}, errors.New("ClickHouse gauge aggregate is invalid")
 		}
@@ -477,8 +486,9 @@ func (client *Client) stateAggregateQuery(query telemetryhistorymodel.DeviceHist
     AND telemetry_key IN (%s)
     AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
     AND projected_at < parseDateTime64BestEffort('%s', 3, 'UTC')
-    AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER') AND point_type = 'STATE'
-    AND point_id IS NOT NULL AND point_revision IS NOT NULL AND value_type IN ('STRING', 'BOOLEAN', 'JSON', 'NUMBER') AND value_json IS NOT NULL
+    AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
+    AND ((point_type = 'STATE' AND value_type IN ('STRING', 'BOOLEAN', 'JSON', 'NUMBER')) OR (point_type IN ('TELEMETRY', 'SETTING') AND value_type IN ('STRING', 'BOOLEAN', 'JSON')))
+    AND point_id IS NOT NULL AND point_revision IS NOT NULL AND value_json IS NOT NULL
   WINDOW point_window AS (PARTITION BY tenant_id, site_id, point_id, point_revision ORDER BY sampled_at, observation_id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
 ), scoped AS (
   SELECT *, %s AS bucket
@@ -489,7 +499,7 @@ SELECT
   telemetry_key,
   toString(assumeNotNull(point_id)) AS point_id,
   assumeNotNull(point_revision) AS point_revision,
-  'STATE' AS point_type,
+  assumeNotNull(point_type) AS point_type,
   any(unit) AS unit,
   formatDateTime(bucket, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS period_start,
   formatDateTime(%s, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS period_end,
@@ -516,7 +526,7 @@ SELECT
   countIf(%s) AS state_sample_count,
   countIf(%s AND previous_value_json IS NOT NULL AND value_json != previous_value_json) AS state_change_count
 FROM scoped
-GROUP BY telemetry_key, point_id, point_revision, bucket
+GROUP BY telemetry_key, point_id, point_revision, point_type, bucket
 HAVING included_count > 0
 FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.To), formatClickHouseTime(snapshotAt), bucket, formatClickHouseTime(query.From), end, included, included, included, included, included)
 }

@@ -165,7 +165,7 @@ function synthesizeTrendAggregate(assetModel: Json, snapshots: Json, query: Json
           gauge: { average: avg, minimum: min, maximum: max, first: avg, last: avg, sampleCount: 2 },
         });
       } else if (isState) {
-        const stateVal = index > 0 && index % 17 === 0 ? 'STOPPED' : baseString;
+        const stateVal = index >= 18 && index < 26 ? 'STOPPED' : baseString;
         buckets.push({
           telemetryKey: key,
           pointId: point.id,
@@ -505,10 +505,14 @@ export class Gateway {
         return { body: replayOutdoorDays(fixture<Json>('outdoor-days.json'), body) };
       }
       if (body?.granularity === 'HOUR' && body.keys.length === 1 && body.keys[0] === 'power') return { body: replayMachineHours(fixture<Json>('device-hours.json'), body) };
-      const history = replayDeviceHistory(fixture<Json>('history.json'), body!);
-      const requestedKeys = new Set<string>(body?.keys ?? []);
-      const historyCoversKeys = Array.from(requestedKeys).some((key) => history.buckets.some((b: Json) => b.telemetryKey === key));
-      if (historyCoversKeys) return { body: history };
+      if (body?.granularity === 'HOUR') {
+        const history = replayDeviceHistory(fixture<Json>('history.json'), body);
+        const requestedKeys = new Set<string>(body?.keys ?? []);
+        const historyCoversAllKeys =
+          requestedKeys.size > 0 &&
+          Array.from(requestedKeys).every((key) => history.buckets.some((b: Json) => b.telemetryKey === key));
+        if (historyCoversAllKeys) return { body: history };
+      }
       return { body: synthesizeTrendAggregate(fixture<Json>('asset-model.json'), this.snapshots, body!) };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/findings`) return { body: { items: this.findings } };

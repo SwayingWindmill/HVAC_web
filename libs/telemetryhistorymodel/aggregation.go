@@ -345,9 +345,13 @@ func (response DeviceHistoryAggregateResponse) ValidateFor(query DeviceHistoryAg
 		}
 		switch bucket.PointType {
 		case PointTypeTelemetry, PointTypeSetting:
-			if bucket.Gauge == nil {
-				return errors.New("telemetry/setting aggregate requires gauge result")
+			if bucket.Gauge != nil {
+				break
 			}
+			if bucket.State != nil && (bucket.State.ValueType == ValueTypeString || bucket.State.ValueType == ValueTypeBoolean || bucket.State.ValueType == ValueTypeJSON) && validateTypedValue(bucket.State.ValueType, bucket.State.LastValue) == nil {
+				break
+			}
+			return errors.New("telemetry/setting aggregate requires gauge or discrete state result")
 		case PointTypeCounter:
 			if bucket.Counter == nil {
 				return errors.New("counter aggregate requires counter result")

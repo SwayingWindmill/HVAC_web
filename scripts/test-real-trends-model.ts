@@ -14,6 +14,7 @@ import {
   buildTrendViewModel,
   deriveBuiltInPresets,
   groupTrendDeviceRequests,
+  resolveTrackStateAt,
   resolveTrendWindow,
 } from '../apps/hvac-web/src/features/operations/trends/trends-model.ts';
 
@@ -291,4 +292,79 @@ test('buildTrendViewModel splits units into lanes, aligns compare series, preser
   assert.equal(powerSummary.maximum?.value, 230);
   assert.equal(powerSummary.maximum?.at, '2026-10-12T00:02:00.000Z');
   assert.ok(Math.abs(powerSummary.coverageRatio - 2 / 3) < 1e-6);
+});
+
+test('buildTrendViewModel normalizes discrete state buckets, merges contiguous segments, preserves outage gaps, and resolves cursor state', () => {
+  const catalog = buildTrendCatalog(centralPlantModel);
+  const runStatePoint = catalog.points.find((point) => point.sourceKey === 'chiller.run_state')!;
+
+  const windowState = resolveTrendWindow({
+    window: 'custom',
+    from: '2026-10-12T00:00:00.000Z',
+    to: '2026-10-12T00:05:00.000Z',
+    granularity: 'MINUTE',
+    now: new Date('2026-10-12T01:00:00.000Z'),
+    timezone: 'Asia/Shanghai',
+  });
+
+  const makeStateBucket = (
+    periodStart: string,
+    periodEnd: string,
+    valueType: 'STRING' | 'BOOLEAN' | 'NUMBER',
+    lastValue: string | boolean | number,
+  ): DeviceHistoryAggregateBucket => ({
+    telemetryKey: runStatePoint.pointCode,
+    pointId: runStatePoint.pointId,
+    pointRevision: 1,
+    pointType: 'TELEMETRY',
+    unit: null,
+    periodStart,
+    periodEnd,
+    quality: { good: 1, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
+    completeness: 1,
+    state: { valueType, lastValue, sampleCount: 1, changeCount: 0 },
+  });
+
+  // 00:00 RUNNING, 00:01 true (RUNNING -> merged!), 00:02 missing (gap!), 00:03 STOPPED, 00:04 FAULT
+  const currentBuckets = new Map<string, readonly DeviceHistoryAggregateBucket[]>([
+    [
+      runStatePoint.deviceId,
+      [
+        makeStateBucket('2026-10-12T00:00:00.000Z', '2026-10-12T00:01:00.000Z', 'STRING', 'RUNNING'),
+        makeStateBucket('2026-10-12T00:01:00.000Z', '2026-10-12T00:02:00.000Z', 'BOOLEAN', true),
+        makeStateBucket('2026-10-12T00:03:00.000Z', '2026-10-12T00:04:00.000Z', 'STRING', 'STOPPED'),
+        makeStateBucket('2026-10-12T00:04:00.000Z', '2026-10-12T00:05:00.000Z', 'STRING', 'FAULT'),
+      ],
+    ],
+  ]);
+
+  const viewModel = buildTrendViewModel({
+    selectedPoints: [runStatePoint],
+    window: windowState,
+    currentBucketsByDevice: currentBuckets,
+  });
+
+  assert.equal(viewModel.stateTracks.length, 1);
+  const track = viewModel.stateTracks[0]!;
+  assert.equal(track.segments.length, 3);
+  assert.equal(track.segments[0]?.kind, 'RUNNING');
+  assert.equal(track.segments[0]?.startPercent, 0);
+  assert.equal(track.segments[0]?.widthPercent, 40);
+  assert.equal(track.segments[1]?.kind, 'STOPPED');
+  assert.equal(track.segments[1]?.startPercent, 60);
+  assert.equal(track.segments[1]?.widthPercent, 20);
+  assert.equal(track.segments[2]?.kind, 'FAULT');
+  assert.equal(track.segments[2]?.startPercent, 80);
+  assert.equal(track.segments[2]?.widthPercent, 20);
+
+  // Hovering the outage minute (00:02) returns null instead of stretching RUNNING
+  assert.equal(resolveTrackStateAt(track, Date.parse('2026-10-12T00:02:00.000Z')), null);
+  assert.deepEqual(resolveTrackStateAt(track, Date.parse('2026-10-12T00:01:00.000Z')), {
+    kind: 'RUNNING',
+    label: '运行',
+  });
+  assert.deepEqual(resolveTrackStateAt(track, null), {
+    kind: 'FAULT',
+    label: '故障',
+  });
 });
