@@ -1,10 +1,25 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import type { SiteAssetModel } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
+import type { DeviceHistoryAggregateBucket } from '../apps/hvac-web/src/api/generated/s2Telemetry.gen.ts';
 import {
   buildTimeSlots,
   fillGaugeSlots,
   fillScalarSlots,
 } from '../apps/hvac-web/src/features/operations/trends/timeline.ts';
+import {
+  MAX_TREND_POINTS,
+  buildTrendCatalog,
+  buildTrendViewModel,
+  deriveBuiltInPresets,
+  groupTrendDeviceRequests,
+  resolveTrendWindow,
+} from '../apps/hvac-web/src/features/operations/trends/trends-model.ts';
+
+const centralPlantModel = JSON.parse(
+  readFileSync(new URL('../apps/hvac-web/e2e/fixtures/asset-model.json', import.meta.url), 'utf8'),
+) as SiteAssetModel;
 
 test('buildTimeSlots generates contiguous slots for MINUTE, FIVE_MINUTE, QUARTER_HOUR, HOUR and site-local DAY', () => {
   const minuteSlots = buildTimeSlots({
@@ -95,4 +110,185 @@ test('fillGaugeSlots and fillScalarSlots leave null in missing outage buckets in
     { periodStart: '2026-10-11T13:00:00Z', value: 5.12 },
   ]);
   assert.deepEqual(scalar.map((row) => row.value), [4.85, null, null, 5.12]);
+});
+
+test('deriveBuiltInPresets adapts to Central Plant and Songyaxuan active points and flags unconnected references', () => {
+  const centralCatalog = buildTrendCatalog(centralPlantModel);
+  const centralPresets = deriveBuiltInPresets(centralCatalog);
+  assert.equal(centralPresets.length, 4);
+  assert.equal(centralPresets[0]?.id, 'plant-overview');
+  assert.equal(centralPresets[0]?.title, '冷站功率与供回水');
+  for (const preset of centralPresets) {
+    assert.ok(preset.pointRefs.length > 0 && preset.pointRefs.length <= MAX_TREND_POINTS);
+  }
+  const allLabels = centralCatalog.points.map((item) => item.pointLabel);
+  assert.ok(!allLabels.includes('chiller leaving chilled water temperature'));
+  assert.ok(allLabels.includes('冷冻水出水温度'));
+
+  const songyaxuanModel: SiteAssetModel = {
+    ...centralPlantModel,
+    telemetryPoints: centralPlantModel.telemetryPoints
+      .filter((point) => point.sourceKey !== 'chwp.frequency' && point.sourceKey !== 'cwp.frequency')
+      .map((point) => {
+        if (point.sourceKey === 'weather.ambient_wet_bulb_temperature') {
+          return { ...point, status: 'INACTIVE' as const };
+        }
+        if (point.sourceKey === 'chiller.run_state' || point.sourceKey === 'chwp.run_state') {
+          return { ...point, pointType: 'TELEMETRY' as const, valueType: 'STRING' as const };
+        }
+        return point;
+      }),
+  };
+  const songyaxuanCatalog = buildTrendCatalog(songyaxuanModel);
+  const songyaxuanPresets = deriveBuiltInPresets(songyaxuanCatalog);
+  const outdoorPreset = songyaxuanPresets.find((preset) => preset.id === 'outdoor-load');
+  assert.ok(outdoorPreset);
+  assert.ok(outdoorPreset.unconnectedLabels.includes('室外湿球温度'));
+  const pumpPreset = songyaxuanPresets.find((preset) => preset.id === 'pump-hydraulics');
+  assert.ok(pumpPreset);
+  assert.ok(pumpPreset.unconnectedLabels.includes('水泵频率'));
+
+  const weatherOnlyModel: SiteAssetModel = {
+    ...centralPlantModel,
+    telemetryPoints: centralPlantModel.telemetryPoints.filter(
+      (point) => point.sourceKey === 'weather.ambient_dry_bulb_temperature',
+    ),
+  };
+  const weatherPresets = deriveBuiltInPresets(buildTrendCatalog(weatherOnlyModel));
+  assert.deepEqual(weatherPresets.map((preset) => preset.id), ['outdoor-load']);
+});
+
+test('resolveTrendWindow selects auto granularities and clamps illegal >720-bucket manual overrides', () => {
+  const timezone = 'Asia/Shanghai';
+  const earlyMorning = new Date('2026-10-11T17:30:00.000Z');
+  const oneHour = resolveTrendWindow({ window: '1h', now: earlyMorning, timezone });
+  assert.equal(oneHour.granularity, 'MINUTE');
+  assert.equal(oneHour.slots.length, 60);
+  assert.equal(oneHour.compareLabel, '对比昨日同时段');
+
+  const sixHour = resolveTrendWindow({ window: '6h', now: earlyMorning, timezone });
+  assert.equal(sixHour.granularity, 'FIVE_MINUTE');
+  assert.equal(sixHour.slots.length, 72);
+
+  const todayEarly = resolveTrendWindow({ window: 'today', now: earlyMorning, timezone });
+  assert.equal(todayEarly.granularity, 'MINUTE');
+  assert.equal(todayEarly.slots.length, 90);
+
+  const midMorning = new Date('2026-10-11T22:00:00.000Z');
+  assert.equal(resolveTrendWindow({ window: 'today', now: midMorning, timezone }).granularity, 'FIVE_MINUTE');
+
+  const afternoon = new Date('2026-10-12T06:00:00.000Z');
+  assert.equal(resolveTrendWindow({ window: 'today', now: afternoon, timezone }).granularity, 'QUARTER_HOUR');
+
+  const sevenDays = resolveTrendWindow({ window: '7d', granularity: 'MINUTE', now: afternoon, timezone });
+  assert.ok(sevenDays.slots.length <= 720);
+  assert.ok(!sevenDays.allowedGranularities.includes('MINUTE'));
+  assert.ok(!sevenDays.allowedGranularities.includes('FIVE_MINUTE'));
+  assert.equal(sevenDays.compareLabel, '对比上周同时段');
+  assert.equal(sevenDays.fromMs - sevenDays.compareFromMs, 7 * 86_400_000);
+});
+
+test('buildTrendViewModel splits units into lanes, aligns compare series, preserves outage nulls, and computes stats', () => {
+  const catalog = buildTrendCatalog(centralPlantModel);
+  const powerPoint = catalog.points.find((point) => point.sourceKey === 'hvac_meter.active_power')!;
+  const supplyTempPoint = catalog.points.find((point) => point.sourceKey === 'btu_meter.supply_water_temperature')!;
+  const setpointPoint = catalog.points.find((point) => point.sourceKey === 'chiller.chilled_water_temperature_setpoint')!;
+  const selected = [powerPoint, supplyTempPoint, setpointPoint];
+
+  const grouped = groupTrendDeviceRequests(selected);
+  assert.equal(grouped.length, 3);
+
+  const windowState = resolveTrendWindow({
+    window: 'custom',
+    from: '2026-10-12T00:00:00.000Z',
+    to: '2026-10-12T00:03:00.000Z',
+    granularity: 'MINUTE',
+    now: new Date('2026-10-12T01:00:00.000Z'),
+    timezone: 'Asia/Shanghai',
+  });
+
+  const makeGaugeBucket = (
+    key: string,
+    pointType: 'TELEMETRY' | 'SETTING',
+    unit: string,
+    periodStart: string,
+    periodEnd: string,
+    avg: number,
+    min: number,
+    max: number,
+  ): DeviceHistoryAggregateBucket => ({
+    telemetryKey: key,
+    pointId: '01910000-0000-7000-8000-000000000015',
+    pointRevision: 1,
+    pointType,
+    unit,
+    periodStart,
+    periodEnd,
+    quality: { good: 2, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
+    completeness: 1,
+    gauge: { average: avg, minimum: min, maximum: max, first: avg, last: avg, sampleCount: 2 },
+  });
+
+  const currentBuckets = new Map<string, readonly DeviceHistoryAggregateBucket[]>([
+    [
+      powerPoint.deviceId,
+      [
+        makeGaugeBucket(powerPoint.pointCode, 'TELEMETRY', 'kW', '2026-10-12T00:00:00.000Z', '2026-10-12T00:01:00.000Z', 180, 175, 185),
+        makeGaugeBucket(powerPoint.pointCode, 'TELEMETRY', 'kW', '2026-10-12T00:02:00.000Z', '2026-10-12T00:03:00.000Z', 220, 210, 230),
+      ],
+    ],
+    [
+      supplyTempPoint.deviceId,
+      [
+        makeGaugeBucket(supplyTempPoint.pointCode, 'TELEMETRY', 'Cel', '2026-10-12T00:00:00.000Z', '2026-10-12T00:01:00.000Z', 7.2, 7.0, 7.4),
+        makeGaugeBucket(supplyTempPoint.pointCode, 'TELEMETRY', 'Cel', '2026-10-12T00:01:00.000Z', '2026-10-12T00:02:00.000Z', 7.0, 6.9, 7.1),
+        makeGaugeBucket(supplyTempPoint.pointCode, 'TELEMETRY', 'Cel', '2026-10-12T00:02:00.000Z', '2026-10-12T00:03:00.000Z', 6.8, 6.7, 7.0),
+      ],
+    ],
+    [
+      setpointPoint.deviceId,
+      [
+        makeGaugeBucket(setpointPoint.pointCode, 'SETTING', 'Cel', '2026-10-12T00:00:00.000Z', '2026-10-12T00:01:00.000Z', 7.0, 7.0, 7.0),
+        makeGaugeBucket(setpointPoint.pointCode, 'SETTING', 'Cel', '2026-10-12T00:01:00.000Z', '2026-10-12T00:02:00.000Z', 7.0, 7.0, 7.0),
+        makeGaugeBucket(setpointPoint.pointCode, 'SETTING', 'Cel', '2026-10-12T00:02:00.000Z', '2026-10-12T00:03:00.000Z', 6.5, 6.5, 6.5),
+      ],
+    ],
+  ]);
+
+  const compareBuckets = new Map<string, readonly DeviceHistoryAggregateBucket[]>([
+    [
+      powerPoint.deviceId,
+      [
+        makeGaugeBucket(powerPoint.pointCode, 'TELEMETRY', 'kW', '2026-10-11T00:00:00.000Z', '2026-10-11T00:01:00.000Z', 160, 158, 162),
+        makeGaugeBucket(powerPoint.pointCode, 'TELEMETRY', 'kW', '2026-10-11T00:01:00.000Z', '2026-10-11T00:02:00.000Z', 165, 160, 170),
+        makeGaugeBucket(powerPoint.pointCode, 'TELEMETRY', 'kW', '2026-10-11T00:02:00.000Z', '2026-10-11T00:03:00.000Z', 170, 168, 172),
+      ],
+    ],
+  ]);
+
+  const viewModel = buildTrendViewModel({
+    selectedPoints: selected,
+    window: windowState,
+    currentBucketsByDevice: currentBuckets,
+    compareBucketsByDevice: compareBuckets,
+  });
+
+  assert.deepEqual(viewModel.gaugeLanes.map((lane) => lane.unit), ['kW', '°C']);
+  assert.equal(viewModel.gaugeLanes[1]?.series.length, 2);
+  assert.equal(viewModel.gaugeLanes[1]?.series.find((s) => s.ref === setpointPoint.ref)?.isSetpoint, true);
+
+  const powerRows = viewModel.gaugeLanes[0]!.rows;
+  assert.equal(powerRows[0]?.values[powerPoint.ref]?.value, 180);
+  assert.equal(powerRows[1]?.values[powerPoint.ref]?.value, null);
+  assert.equal(powerRows[2]?.values[powerPoint.ref]?.value, 220);
+  assert.equal(powerRows[1]?.values[powerPoint.ref]?.compareValue, 165);
+
+  const powerSummary = viewModel.summaryRows.find((row) => row.ref === powerPoint.ref)!;
+  assert.equal(powerSummary.latest, 220);
+  assert.equal(powerSummary.average, 200);
+  assert.equal(powerSummary.minimum?.value, 175);
+  assert.equal(powerSummary.minimum?.at, '2026-10-12T00:00:00.000Z');
+  assert.equal(powerSummary.maximum?.value, 230);
+  assert.equal(powerSummary.maximum?.at, '2026-10-12T00:02:00.000Z');
+  assert.ok(Math.abs(powerSummary.coverageRatio - 2 / 3) < 1e-6);
 });

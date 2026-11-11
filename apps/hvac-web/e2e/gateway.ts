@@ -109,6 +109,98 @@ function replayDeviceHistory(recorded: Json, query: Json): Json {
   };
 }
 
+const TREND_GRANULARITY_MS: Readonly<Record<string, number>> = {
+  MINUTE: 60_000,
+  FIVE_MINUTE: 5 * 60_000,
+  QUARTER_HOUR: 15 * 60_000,
+  HOUR: 3_600_000,
+  DAY: 86_400_000,
+};
+
+// Synthesizes contract-valid aggregate buckets from asset-model + snapshots for multi-point trend queries.
+function synthesizeTrendAggregate(assetModel: Json, snapshots: Json, query: Json): Json {
+  const stepMs = TREND_GRANULARITY_MS[query.granularity] ?? 300_000;
+  const fromMs = Date.parse(query.from);
+  const toMs = Date.parse(query.to);
+  const startFloor = Math.floor(fromMs / stepMs) * stepMs;
+  const deviceSnapshot = snapshots.items.find((item: Json) => item.deviceId === query.deviceId)?.snapshot;
+  const buckets: Json[] = [];
+
+  for (const key of query.keys as string[]) {
+    const point = assetModel.telemetryPoints.find(
+      (candidate: Json) => candidate.reportingDeviceId === query.deviceId && candidate.pointCode === key,
+    );
+    if (!point) continue;
+    const snapState = deviceSnapshot?.values?.find((val: Json) => val.key === key);
+    const baseNumeric = typeof snapState?.value === 'number' ? snapState.value : point.unit === 'kW' ? 210 : point.unit === 'm3/h' ? 85 : 7.2;
+    const baseString = typeof snapState?.value === 'string' ? snapState.value : 'RUNNING';
+
+    let index = 0;
+    for (let cursor = startFloor; cursor < toMs; cursor += stepMs) {
+      const end = cursor + stepMs;
+      if (end <= fromMs) continue;
+      const periodStart = new Date(cursor).toISOString();
+      const periodEnd = new Date(end).toISOString();
+      const isGauge = (point.pointType === 'TELEMETRY' || point.pointType === 'SETTING') && point.valueType === 'NUMBER';
+      const isState =
+        point.pointType === 'STATE' ||
+        ((point.pointType === 'TELEMETRY' || point.pointType === 'SETTING') &&
+          (point.valueType === 'STRING' || point.valueType === 'BOOLEAN'));
+
+      if (isGauge) {
+        const wave = point.pointType === 'SETTING' ? 0 : Math.sin(index / 4) * (baseNumeric * 0.04 + 0.2);
+        const avg = Number((baseNumeric + wave).toFixed(2));
+        const min = point.pointType === 'SETTING' ? avg : Number((avg - Math.abs(baseNumeric * 0.02 + 0.1)).toFixed(2));
+        const max = point.pointType === 'SETTING' ? avg : Number((avg + Math.abs(baseNumeric * 0.02 + 0.1)).toFixed(2));
+        buckets.push({
+          telemetryKey: key,
+          pointId: point.id,
+          pointRevision: point.revision ?? 1,
+          pointType: point.pointType,
+          unit: point.unit,
+          periodStart,
+          periodEnd,
+          quality: { good: 2, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
+          completeness: 1,
+          gauge: { average: avg, minimum: min, maximum: max, first: avg, last: avg, sampleCount: 2 },
+        });
+      } else if (isState) {
+        const stateVal = index > 0 && index % 17 === 0 ? 'STOPPED' : baseString;
+        buckets.push({
+          telemetryKey: key,
+          pointId: point.id,
+          pointRevision: point.revision ?? 1,
+          pointType: point.pointType === 'STATE' ? 'STATE' : point.pointType,
+          unit: point.unit,
+          periodStart,
+          periodEnd,
+          quality: { good: 2, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
+          completeness: 1,
+          state: { valueType: point.valueType, lastValue: stateVal, sampleCount: 2, changeCount: stateVal === baseString ? 0 : 1 },
+        });
+      }
+      index += 1;
+    }
+  }
+
+  return {
+    schemaVersion: 1,
+    tenantId: assetModel.tenantId,
+    siteId: SITE_ID,
+    deviceId: query.deviceId,
+    buckets,
+    metadata: {
+      requestedFrom: query.from,
+      requestedTo: query.to,
+      granularity: query.granularity,
+      timezone: query.timezone,
+      qualityPolicy: query.qualityPolicy,
+      projectionWatermark: query.to,
+      returnedBuckets: buckets.length,
+    },
+  };
+}
+
 // Recorded findings are replayed as if the last diagnosis had just run.
 function replayFindings(findings: Json[], now: string): Json[] {
   const shift = Date.parse(now) - Math.max(...findings.map((finding) => Date.parse(finding.evaluationTo)));
@@ -396,13 +488,28 @@ export class Gateway {
     if (method === 'POST' && path === '/api/v1/telemetry/device-series:aggregate') {
       const custom = this.aggregateHandler?.(body!);
       if (custom) return custom;
-      if (body?.granularity === 'QUARTER_HOUR') return { body: replayDemand(fixture<Json>('demand-quarter-hours.json'), body) };
+      if (body?.granularity === 'MINUTE' || body?.granularity === 'FIVE_MINUTE') {
+        return { body: synthesizeTrendAggregate(fixture<Json>('asset-model.json'), this.snapshots, body) };
+      }
+      if (body?.granularity === 'QUARTER_HOUR' && body.keys.length === 1 && body.keys[0] === 'active_power') {
+        return { body: replayDemand(fixture<Json>('demand-quarter-hours.json'), body) };
+      }
+      if (body?.granularity === 'QUARTER_HOUR') {
+        const demand = replayDemand(fixture<Json>('demand-quarter-hours.json'), body);
+        return demand.buckets.length > 0
+          ? { body: demand }
+          : { body: synthesizeTrendAggregate(fixture<Json>('asset-model.json'), this.snapshots, body) };
+      }
       if (body?.granularity === 'DAY' && body.keys[0] === 'ambient_dry_bulb_temperature') {
         if (this.outdoorFailing) return { status: 503, body: { type: 'about:blank', title: 'Telemetry history unavailable', status: 503, detail: 'Telemetry Query Service is unavailable.', instance: path, code: 'TELEMETRY_HISTORY_UNAVAILABLE', traceId: '0'.repeat(32), retryable: true } };
         return { body: replayOutdoorDays(fixture<Json>('outdoor-days.json'), body) };
       }
       if (body?.granularity === 'HOUR' && body.keys.length === 1 && body.keys[0] === 'power') return { body: replayMachineHours(fixture<Json>('device-hours.json'), body) };
-      return { body: replayDeviceHistory(fixture<Json>('history.json'), body!) };
+      const history = replayDeviceHistory(fixture<Json>('history.json'), body!);
+      const requestedKeys = new Set<string>(body?.keys ?? []);
+      const historyCoversKeys = Array.from(requestedKeys).some((key) => history.buckets.some((b: Json) => b.telemetryKey === key));
+      if (historyCoversKeys) return { body: history };
+      return { body: synthesizeTrendAggregate(fixture<Json>('asset-model.json'), this.snapshots, body!) };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/findings`) return { body: { items: this.findings } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/rules/low-delta-t`) {

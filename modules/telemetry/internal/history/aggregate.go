@@ -69,7 +69,7 @@ func (client *Client) QueryDeviceHistoryAggregate(ctx context.Context, query tel
 	if err != nil {
 		return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, err
 	}
-	if len(periods) > telemetryhistorymodel.MaximumAggregateBuckets {
+	if len(periods) > canonical.Granularity.MaxBucketsPerKey() {
 		return telemetryhistorymodel.DeviceHistoryAggregateResponse{}, errors.New("history aggregate query exceeds bucket limit")
 	}
 	snapshotAt, watermark, err := client.aggregateSnapshot(ctx, canonical)
@@ -205,7 +205,7 @@ func decodeAggregateRow(row aggregateRow) (telemetryhistorymodel.DeviceHistoryAg
 		Completeness: float64(row.IncludedCount) / float64(row.TotalCount),
 	}
 	switch bucket.PointType {
-	case telemetryhistorymodel.PointTypeTelemetry:
+	case telemetryhistorymodel.PointTypeTelemetry, telemetryhistorymodel.PointTypeSetting:
 		if row.Average == nil || row.Minimum == nil || row.Maximum == nil || row.First == nil || row.Last == nil || !finite(*row.Average, *row.Minimum, *row.Maximum, *row.First, *row.Last) {
 			return telemetryhistorymodel.DeviceHistoryAggregateBucket{}, errors.New("ClickHouse gauge aggregate is invalid")
 		}
@@ -252,6 +252,10 @@ func buildCalendarPeriods(query telemetryhistorymodel.DeviceHistoryAggregateQuer
 	startLocal := query.From.In(location)
 	var cursor time.Time
 	switch query.Granularity {
+	case telemetryhistorymodel.AggregateGranularityMinute:
+		cursor = time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), startLocal.Minute(), 0, 0, location)
+	case telemetryhistorymodel.AggregateGranularityFiveMinute:
+		cursor = time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), startLocal.Minute()-startLocal.Minute()%5, 0, 0, location)
 	case telemetryhistorymodel.AggregateGranularityQuarterHour:
 		cursor = time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), startLocal.Minute()-startLocal.Minute()%15, 0, 0, location)
 	case telemetryhistorymodel.AggregateGranularityHour:
@@ -268,6 +272,7 @@ func buildCalendarPeriods(query telemetryhistorymodel.DeviceHistoryAggregateQuer
 		return nil, errors.New("history aggregate granularity is invalid")
 	}
 	periods := make([]calendarPeriod, 0)
+	maxPeriods := query.Granularity.MaxBucketsPerKey()
 	for cursor.Before(query.To.In(location)) {
 		next := nextCalendarBoundary(cursor, query.Granularity)
 		start, end := cursor.UTC(), next.UTC()
@@ -279,7 +284,7 @@ func buildCalendarPeriods(query telemetryhistorymodel.DeviceHistoryAggregateQuer
 				end = query.To
 			}
 			periods = append(periods, calendarPeriod{Start: start, End: end})
-			if len(periods) > telemetryhistorymodel.MaximumAggregateBuckets {
+			if len(periods) > maxPeriods {
 				return periods, nil
 			}
 		}
@@ -290,6 +295,10 @@ func buildCalendarPeriods(query telemetryhistorymodel.DeviceHistoryAggregateQuer
 
 func nextCalendarBoundary(value time.Time, granularity telemetryhistorymodel.AggregateGranularity) time.Time {
 	switch granularity {
+	case telemetryhistorymodel.AggregateGranularityMinute:
+		return value.Add(time.Minute)
+	case telemetryhistorymodel.AggregateGranularityFiveMinute:
+		return value.Add(5 * time.Minute)
 	case telemetryhistorymodel.AggregateGranularityQuarterHour:
 		return value.Add(15 * time.Minute)
 	case telemetryhistorymodel.AggregateGranularityHour:
@@ -320,7 +329,7 @@ WHERE tenant_id = toUUID('%s')
   AND projected_at < snapshot_cutoff
   AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER')
   AND point_id IS NOT NULL AND point_revision IS NOT NULL
-  AND point_type IN ('TELEMETRY', 'COUNTER', 'STATE')
+  AND point_type IN ('TELEMETRY', 'COUNTER', 'STATE', 'SETTING')
 FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.From), formatClickHouseTime(query.To))
 }
 
@@ -332,7 +341,7 @@ SELECT
   telemetry_key,
   toString(assumeNotNull(point_id)) AS point_id,
   assumeNotNull(point_revision) AS point_revision,
-  'TELEMETRY' AS point_type,
+  assumeNotNull(point_type) AS point_type,
   any(unit) AS unit,
   formatDateTime(bucket, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS period_start,
   formatDateTime(%s, '%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ', 'UTC') AS period_end,
@@ -363,9 +372,9 @@ WHERE tenant_id = toUUID('%s') AND site_id = toUUID('%s') AND device_id = toUUID
   AND telemetry_key IN (%s)
   AND sampled_at >= parseDateTime64BestEffort('%s', 3, 'UTC') AND sampled_at < parseDateTime64BestEffort('%s', 3, 'UTC')
   AND projected_at < parseDateTime64BestEffort('%s', 3, 'UTC')
-  AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER') AND point_type = 'TELEMETRY'
+  AND acceptance_status IN ('ACCEPTED', 'OUT_OF_ORDER') AND point_type IN ('TELEMETRY', 'SETTING')
   AND point_id IS NOT NULL AND point_revision IS NOT NULL AND value_type = 'NUMBER' AND value_number IS NOT NULL AND isFinite(value_number)
-GROUP BY telemetry_key, point_id, point_revision, bucket
+GROUP BY telemetry_key, point_id, point_revision, point_type, bucket
 HAVING included_count > 0
 FORMAT JSONEachRow`, bucket, end, included, included, included, included, included, included,
 		client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.From), formatClickHouseTime(query.To), formatClickHouseTime(snapshotAt))
@@ -514,6 +523,10 @@ FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID
 
 func aggregateBucketExpressions(query telemetryhistorymodel.DeviceHistoryAggregateQuery) (string, string) {
 	switch query.Granularity {
+	case telemetryhistorymodel.AggregateGranularityMinute:
+		return fmt.Sprintf("toStartOfInterval(sampled_at, INTERVAL 1 MINUTE, '%s')", query.Timezone), "addMinutes(bucket, 1)"
+	case telemetryhistorymodel.AggregateGranularityFiveMinute:
+		return fmt.Sprintf("toStartOfInterval(sampled_at, INTERVAL 5 MINUTE, '%s')", query.Timezone), "addMinutes(bucket, 5)"
 	case telemetryhistorymodel.AggregateGranularityQuarterHour:
 		return fmt.Sprintf("toStartOfInterval(sampled_at, INTERVAL 15 MINUTE, '%s')", query.Timezone), "addMinutes(bucket, 15)"
 	case telemetryhistorymodel.AggregateGranularityHour:
