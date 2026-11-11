@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { getRouteApi, useNavigate, useSearch } from '@tanstack/react-router';
+import { getRouteApi, Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { ChevronLeft, ChevronRight, Printer } from 'lucide-react';
 import { useMemo } from 'react';
 import { PageHeader, PageMeta } from '@/blocks/page-header';
@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button';
 import { PeriodTabs } from '@/components/ui/period-tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { METER_SCOPE_LABEL } from '@/features/billing/billing-model';
+import { siteUtilityBillsQuery } from '@/features/billing/query';
 import { siteFindingsQuery } from '@/features/diagnostics/query';
 import { relativeChange, wallTime } from '@/features/energy-analysis/consumption/model';
 import { measuresQuery, summaryQuery } from '@/features/savings/query';
@@ -95,6 +97,51 @@ export function ReportWorkspace() {
 
 const sheetFrame = 'mx-auto w-full max-w-[1040px]';
 
+function ConfirmedUtilityBillsSidecar({ siteId, month }: { readonly siteId: string; readonly month: string }) {
+  const confirmedBills = useQuery(siteUtilityBillsQuery(siteId, { billingMonth: month, status: 'CONFIRMED' }));
+  if (!confirmedBills.data || confirmedBills.data.length === 0) return null;
+
+  return (
+    <div className="space-y-2 rounded-lg border border-border bg-muted/25 px-4 py-3 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-semibold text-foreground">
+          供电局结算电费单（○ 已确认归档 · {NOT_ARCHIVED}）
+        </span>
+      </div>
+      <div className="space-y-2">
+        {confirmedBills.data.map((bill) => (
+          <div
+            key={bill.id}
+            className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-divider pt-2 first:border-t-0 first:pt-0 tabular-nums"
+          >
+            <div className="space-y-0.5">
+              <div className="font-medium text-foreground">
+                {METER_SCOPE_LABEL[bill.meterScope]} · 供电局抄表周期：{bill.readingStartDate} 至 {bill.readingEndDate}
+                {bill.invoiceNo ? `（单据号 ${bill.invoiceNo}）` : ''}
+              </div>
+              <div className="text-muted-foreground">
+                抄表电量 {formatDecimal(bill.billedEnergyKwh, 2)} kWh · 电度 ¥{formatDecimal(bill.energyChargeCny, 2)} · 基本 ¥{formatDecimal(bill.basicChargeCny, 2)} · 力调 {bill.powerFactorAdjustmentCny < 0 ? `-¥${formatDecimal(Math.abs(bill.powerFactorAdjustmentCny), 2)}` : `¥${formatDecimal(bill.powerFactorAdjustmentCny, 2)}`}
+              </div>
+            </div>
+            <div className="flex items-baseline gap-3">
+              <span className="text-sm font-semibold text-foreground">
+                应收总电费 ¥{formatDecimal(bill.totalPayableCny, 2)}
+              </span>
+              <Link
+                to="/energy-analysis/billing"
+                search={{ site: siteId, view: 'bills', month, inspect: bill.id }}
+                className="font-medium text-primary hover:underline print:hidden"
+              >
+                核对详情
+              </Link>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** A closed month reads from its snapshot when it has one; otherwise it is built from the records. */
 function MonthlyReport({ month, span }: { readonly month: string; readonly span: ReportWindow }) {
   const { site } = siteRoute.useRouteContext();
@@ -175,6 +222,7 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
         ) : (
           <p className="text-sm text-muted-foreground">{costMissing}，存档未计电费{demandCost ? `；需量电费现算 ${formatDecimal(demandCost, 0)} 元` : ''}。</p>
         )}
+        <ConfirmedUtilityBillsSidecar siteId={site.id} month={report.month} />
       </Section>
 
       <Section index={4} title="节能成效" description="对比没做措施时的预计用电（按实际供冷量调整），IPMVP 选项 C">
@@ -295,6 +343,7 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
         ) : (
           <p className="text-sm text-muted-foreground">{costMissing}：有 {formatDecimal(cost?.unpricedKWh ?? 0, 0)} kWh 没有电价，电度电费未计。</p>
         )}
+        <ConfirmedUtilityBillsSidecar siteId={site.id} month={month} />
       </Section>
 
       <Section index={4} title="节能成效" description="对比没做措施时的预计用电（按实际供冷量调整），IPMVP 选项 C">

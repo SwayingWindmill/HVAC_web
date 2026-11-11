@@ -111,10 +111,10 @@ export const capabilitySchema = z.enum([
   'telemetry.snapshot.read', 'telemetry.batch.read', 'telemetry.subscribe', 'telemetry.history.read',
   'alarm.list', 'alarm.read', 'alarm.assign', 'work-order.list', 'work-order.read', 'work-order.create', 'work-order.assign', 'work-order.lifecycle',
   'session.revoke', 'audit.read', 'iam.admin', 'savings.manage',
-  'schedule.request', 'schedule.manage',
+  'schedule.request', 'schedule.manage', 'billing.manage',
 ]);
 export const effectiveAuthorizationSchema = z.object({
-  capabilitySetVersion: z.literal(13),
+  capabilitySetVersion: z.literal(14),
   policyRevision: z.string().min(1).max(128),
   capabilities: z.array(capabilitySchema).max(capabilitySchema.options.length).refine((values) => new Set(values).size === values.length, {
     message: 'effective capabilities must be unique',
@@ -695,6 +695,110 @@ export const decideOperatingExceptionRequestSchema = z.object({
   meta: mutationMetaSchema,
 }).strict();
 
+const billingMonthStringSchema = z.string().regex(/^[0-9]{4}-(0[1-9]|1[0-2])$/);
+
+export const monthlyElectricityBudgetSchema = z.object({
+  id: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  billingMonth: billingMonthStringSchema,
+  budgetAmountCny: z.number().nonnegative(),
+  note: z.string().max(1000),
+  revision: revisionSchema,
+  updatedBy: z.string().min(1),
+  updatedByDisplay: z.string(),
+  createdAt: instantSchema,
+  updatedAt: instantSchema,
+}).strict();
+
+export const monthlyElectricityBudgetListSchema = z.object({
+  items: z.array(monthlyElectricityBudgetSchema),
+}).strict();
+
+export const monthlyElectricityBudgetMutationSchema = z.object({
+  billingMonth: billingMonthStringSchema,
+  budgetAmountCny: z.number().nonnegative(),
+  note: z.string().max(1000),
+  meta: mutationMetaSchema,
+}).strict();
+
+export const utilityBillMeterScopeSchema = z.enum(['CHILLER_PLANT', 'WHOLE_BUILDING']);
+export const utilityBillBasicChargeModeSchema = z.enum(['NONE', 'TRANSFORMER_CAPACITY_KVA', 'MAX_DEMAND_KW']);
+export const utilityBillStatusSchema = z.enum(['DRAFT', 'CONFIRMED']);
+
+export const utilityBillTouBreakdownSchema = z.object({
+  sharpKwh: z.number().nonnegative().optional(),
+  peakKwh: z.number().nonnegative().optional(),
+  flatKwh: z.number().nonnegative().optional(),
+  valleyKwh: z.number().nonnegative().optional(),
+}).strict();
+
+export const utilityBillSchema = z.object({
+  id: uuidV7Schema,
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  billingMonth: billingMonthStringSchema,
+  readingStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  readingEndDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  meterScope: utilityBillMeterScopeSchema,
+  billedEnergyKwh: z.number().nonnegative(),
+  touBreakdown: utilityBillTouBreakdownSchema.optional(),
+  energyChargeCny: z.number().nonnegative(),
+  basicChargeMode: utilityBillBasicChargeModeSchema,
+  basicChargeQuantity: z.number().nonnegative().nullable(),
+  basicChargeCny: z.number().nonnegative(),
+  standardPowerFactor: z.number().min(0.7).max(0.99).nullable(),
+  actualPowerFactor: z.number().min(0).max(1).nullable(),
+  powerFactorAdjustmentCny: z.number(),
+  otherChargesCny: z.number(),
+  totalPayableCny: z.number().nonnegative(),
+  chillerShareOverrideRatio: z.number().gt(0).max(1).nullable(),
+  utilityAccountNo: z.string().max(100),
+  invoiceNo: z.string().max(100),
+  note: z.string().max(1000),
+  status: utilityBillStatusSchema,
+  confirmedBy: z.string().min(1).nullable(),
+  confirmedByDisplay: z.string().nullable(),
+  confirmedAt: instantSchema.nullable(),
+  updatedBy: z.string().min(1),
+  updatedByDisplay: z.string(),
+  revision: revisionSchema,
+  createdAt: instantSchema,
+  updatedAt: instantSchema,
+}).strict();
+
+export const utilityBillListSchema = z.object({
+  items: z.array(utilityBillSchema),
+}).strict();
+
+export const utilityBillMutationSchema = z.object({
+  billingMonth: billingMonthStringSchema,
+  readingStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  readingEndDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  meterScope: utilityBillMeterScopeSchema,
+  billedEnergyKwh: z.number().nonnegative(),
+  touBreakdown: utilityBillTouBreakdownSchema.optional(),
+  energyChargeCny: z.number().nonnegative(),
+  basicChargeMode: utilityBillBasicChargeModeSchema,
+  basicChargeQuantity: z.number().positive().optional(),
+  basicChargeCny: z.number().nonnegative(),
+  standardPowerFactor: z.number().min(0.7).max(0.99).optional(),
+  actualPowerFactor: z.number().min(0).max(1).optional(),
+  powerFactorAdjustmentCny: z.number(),
+  otherChargesCny: z.number(),
+  totalPayableCny: z.number().nonnegative(),
+  chillerShareOverrideRatio: z.number().gt(0).max(1).optional(),
+  utilityAccountNo: z.string().max(100).optional(),
+  invoiceNo: z.string().max(100).optional(),
+  note: z.string().max(1000).optional(),
+  meta: mutationMetaSchema,
+}).strict();
+
+export const confirmUtilityBillRequestSchema = z.object({
+  note: z.string().max(1000).optional(),
+  meta: mutationMetaSchema,
+}).strict();
+
 export const fieldErrorSchema = z.object({ field: z.string(), message: z.string() }).strict();
 export const registryProblemCodes = [
   'RESOURCE_NOT_FOUND', 'CURSOR_INVALID', 'REGISTRY_UNAVAILABLE', 'REGISTRY_TIMEOUT', 'MAPPING_INVALID', 'MAPPING_QUARANTINED',
@@ -773,6 +877,19 @@ export type OperatingExceptionList = z.infer<typeof operatingExceptionListSchema
 export type CreateOperatingExceptionRequest = z.infer<typeof createOperatingExceptionRequestSchema>;
 export type DecideOperatingExceptionRequest = z.infer<typeof decideOperatingExceptionRequestSchema>;
 export type OperatingExceptionsParams = { from?: string; to?: string; status?: OperatingExceptionStatus };
+export type MonthlyElectricityBudget = z.infer<typeof monthlyElectricityBudgetSchema>;
+export type MonthlyElectricityBudgetList = z.infer<typeof monthlyElectricityBudgetListSchema>;
+export type MonthlyElectricityBudgetMutation = z.infer<typeof monthlyElectricityBudgetMutationSchema>;
+export type MonthlyElectricityBudgetsParams = { billingMonth?: string; fromMonth?: string; toMonth?: string };
+export type UtilityBillMeterScope = z.infer<typeof utilityBillMeterScopeSchema>;
+export type UtilityBillBasicChargeMode = z.infer<typeof utilityBillBasicChargeModeSchema>;
+export type UtilityBillStatus = z.infer<typeof utilityBillStatusSchema>;
+export type UtilityBillTouBreakdown = z.infer<typeof utilityBillTouBreakdownSchema>;
+export type UtilityBill = z.infer<typeof utilityBillSchema>;
+export type UtilityBillList = z.infer<typeof utilityBillListSchema>;
+export type UtilityBillMutation = z.infer<typeof utilityBillMutationSchema>;
+export type ConfirmUtilityBillRequest = z.infer<typeof confirmUtilityBillRequestSchema>;
+export type UtilityBillsParams = { billingMonth?: string; meterScope?: UtilityBillMeterScope; status?: UtilityBillStatus };
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
 export type RegistryListParams = { limit?: number; cursor?: string };
 
@@ -1017,6 +1134,54 @@ export function createPlatformGatewayClient(baseUrl = '') {
       body,
       decideOperatingExceptionRequestSchema,
       operatingExceptionSchema,
+      { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
+    ),
+    listSiteMonthlyElectricityBudgets: (siteId: string, params: MonthlyElectricityBudgetsParams = {}, init?: RequestInit) => {
+      const basePath = '__SITE_ELECTRICITY_BUDGETS_PATH__'.replace('{siteId}', encodeURIComponent(siteId));
+      const query = new URLSearchParams();
+      if (params.billingMonth) query.set('billingMonth', params.billingMonth);
+      if (params.fromMonth) query.set('fromMonth', params.fromMonth);
+      if (params.toMonth) query.set('toMonth', params.toMonth);
+      return request(`${basePath}${query.size ? `?${query.toString()}` : ''}`, monthlyElectricityBudgetListSchema, { ...init, method: 'GET' });
+    },
+    saveSiteMonthlyElectricityBudget: (siteId: string, body: MonthlyElectricityBudgetMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_ELECTRICITY_BUDGETS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)),
+      'PUT',
+      body,
+      monthlyElectricityBudgetMutationSchema,
+      monthlyElectricityBudgetSchema,
+      { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
+    ),
+    listSiteUtilityBills: (siteId: string, params: UtilityBillsParams = {}, init?: RequestInit) => {
+      const basePath = '__SITE_UTILITY_BILLS_PATH__'.replace('{siteId}', encodeURIComponent(siteId));
+      const query = new URLSearchParams();
+      if (params.billingMonth) query.set('billingMonth', params.billingMonth);
+      if (params.meterScope) query.set('meterScope', params.meterScope);
+      if (params.status) query.set('status', params.status);
+      return request(`${basePath}${query.size ? `?${query.toString()}` : ''}`, utilityBillListSchema, { ...init, method: 'GET' });
+    },
+    createSiteUtilityBill: (siteId: string, body: UtilityBillMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_UTILITY_BILLS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)),
+      'POST',
+      body,
+      utilityBillMutationSchema,
+      utilityBillSchema,
+      { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
+    ),
+    updateSiteUtilityBill: (siteId: string, billId: string, body: UtilityBillMutation, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_UTILITY_BILL_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{billId}', encodeURIComponent(billId)),
+      'PUT',
+      body,
+      utilityBillMutationSchema,
+      utilityBillSchema,
+      { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
+    ),
+    confirmSiteUtilityBill: (siteId: string, billId: string, body: ConfirmUtilityBillRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_UTILITY_BILL_CONFIRM_PATH__'.replace('{siteId}', encodeURIComponent(siteId)).replace('{billId}', encodeURIComponent(billId)),
+      'POST',
+      body,
+      confirmUtilityBillRequestSchema,
+      utilityBillSchema,
       { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
     ),
   };

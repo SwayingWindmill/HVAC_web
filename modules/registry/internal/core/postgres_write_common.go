@@ -216,7 +216,7 @@ func mapRegistryWriteError(err error) error {
 	}
 	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrRevisionConflict) || errors.Is(err, ErrIdempotencyConflict) || errors.Is(err, ErrBindingConflict) ||
 		errors.Is(err, ErrTemplateImmutable) || errors.Is(err, ErrImportPlanInvalid) || errors.Is(err, ErrResourceDependencies) || errors.Is(err, ErrInvalidMutation) ||
-		errors.Is(err, ErrMutationForbidden) || errors.Is(err, ErrExceptionStateConflict) {
+		errors.Is(err, ErrMutationForbidden) || errors.Is(err, ErrExceptionStateConflict) || errors.Is(err, ErrUtilityBillStateConflict) {
 		return err
 	}
 	var pgErr *pgconn.PgError

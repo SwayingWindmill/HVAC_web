@@ -113,11 +113,13 @@ func TestIAMPublishesScheduleRequestAndManageCapabilities(t *testing.T) {
 	managerResponse := currentPrincipal(t, principalFacts([]iam.RoleAssignment{
 		{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, RoleKey: "site-manager", Status: iam.FactStatusActive, Capabilities: []string{
 			string(registryauth.ActionScheduleManage),
+			string(registryauth.ActionBillingManage),
 		}},
 	}, nil))
 	assertCapabilitiesEqual(t, managerResponse.Authorization.Capabilities, []identitycontext.Capability{
 		identitycontext.CapabilityScheduleRequest,
 		identitycontext.CapabilityScheduleManage,
+		identitycontext.CapabilityBillingManage,
 	})
 }
 

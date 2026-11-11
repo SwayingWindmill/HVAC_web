@@ -12,6 +12,7 @@ import {
   Lightbulb,
   LineChart,
   Plug,
+  Receipt,
   ServerCog,
   Settings,
   ShieldAlert,
@@ -75,6 +76,7 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
     items: [
       { id: 'analytics-consumption', title: '能耗分析', path: '/energy-analysis/consumption', icon: LineChart },
       { id: 'analytics-load', title: '用电负荷', path: '/energy-analysis/load', icon: Gauge },
+      { id: 'analytics-billing', title: '电费账单', path: '/energy-analysis/billing', icon: Receipt },
       { id: 'benchmark', title: '站点对标', path: '/benchmark', icon: Trophy },
     ],
   },
