@@ -3,7 +3,7 @@ import type { AssetsDeviceRow, AssetsPointView } from '@/features/assets/model';
 // Central-plant view of the Site's Registry devices and their current observations.
 // Every value shown here comes from a Registry point and the device Snapshot/Stream;
 // nothing is estimated in the browser except the plant COP, which is the ratio of two
-// current measurements and is withheld unless both are fresh and of good quality.
+// current measurements and is withheld unless both are fresh, of good quality, and healthy.
 
 export type PlantCategory =
   | 'CHILLER'
@@ -155,7 +155,7 @@ function readingFor(row: AssetsDeviceRow, sourceKey: string): PlantReading | nul
     display: view.state === 'PRESENT' ? view.displayValue : '—',
     unit: view.unit,
     numeric,
-    current: view.state === 'PRESENT' && view.freshness === 'FRESH' && view.quality === 'GOOD',
+    current: view.state === 'PRESENT' && view.freshness === 'FRESH' && view.quality === 'GOOD' && (view.health == null || view.health.status === 'HEALTHY'),
     state: view.state,
     freshness: view.freshness,
     sampledAt: view.sampledAt,

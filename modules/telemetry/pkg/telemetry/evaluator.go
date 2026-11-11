@@ -44,6 +44,7 @@ type LatestObservation struct {
 	ReceivedAt     time.Time
 	Quality        telemetryapi.TelemetryQuality
 	QualityReasons []telemetryapi.QualityReasonCode
+	Health         *PointHealth
 }
 
 type DeviceFacts struct {
@@ -228,11 +229,43 @@ func evaluateKey(key string, policy FreshnessPolicy, latest LatestObservation, r
 	if err != nil {
 		return telemetryapi.TelemetryKeyState{}, err
 	}
+	health, err := pointHealthForSnapshot(latest, freshness == telemetryapi.TelemetryFreshnessFresh)
+	if err != nil {
+		return telemetryapi.TelemetryKeyState{}, err
+	}
 	return telemetryapi.TelemetryKeyState{Present: &telemetryapi.TelemetryPresentState{
 		Key: telemetryapi.TelemetryKey(key), State: "PRESENT", Value: value, ValueType: latest.ValueType,
 		Unit: cloneString(latest.Unit), SampledAt: instant(latest.SampledAt), ReceivedAt: instant(latest.ReceivedAt),
 		Freshness: string(freshness), Quality: quality, QualityReasons: qualityReasons, PolicyRevision: policyRevision,
+		Health: health,
 	}}, nil
+}
+
+func pointHealthForSnapshot(latest LatestObservation, fresh bool) (*telemetryapi.TelemetryPointHealth, error) {
+	var health PointHealth
+	if latest.Health != nil && latest.Health.Status != "" {
+		health = *latest.Health
+	} else {
+		reasons := make([]QualityReason, len(latest.QualityReasons))
+		for index, reason := range latest.QualityReasons {
+			reasons[index] = QualityReason(reason)
+		}
+		health = HealthFor(ObservationQuality(latest.Quality), reasons)
+	}
+	health = ApplyFreshness(health, fresh)
+	reasons, err := canonicalQualityReasons(healthReasonCodes(health.Reasons))
+	if err != nil {
+		return nil, err
+	}
+	return &telemetryapi.TelemetryPointHealth{Status: health.Status, Score: health.Score, Reasons: reasons}, nil
+}
+
+func healthReasonCodes(reasons []QualityReason) []telemetryapi.QualityReasonCode {
+	codes := make([]telemetryapi.QualityReasonCode, len(reasons))
+	for index, reason := range reasons {
+		codes[index] = telemetryapi.QualityReasonCode(reason)
+	}
+	return codes
 }
 
 func canonicalQualityReasons(values []telemetryapi.QualityReasonCode) ([]telemetryapi.QualityReasonCode, error) {
@@ -252,7 +285,11 @@ func canonicalQualityReasons(values []telemetryapi.QualityReasonCode) ([]telemet
 			telemetryapi.QualityReasonCodeSourceLagExceeded,
 			telemetryapi.QualityReasonCodeDuplicate,
 			telemetryapi.QualityReasonCodeOutOfOrder,
-			telemetryapi.QualityReasonCodeReplayed:
+			telemetryapi.QualityReasonCodeReplayed,
+			telemetryapi.QualityReasonCodeSpike,
+			telemetryapi.QualityReasonCodeSentinel,
+			telemetryapi.QualityReasonCodeFlatline,
+			telemetryapi.QualityReasonCodeDerivedInput:
 		default:
 			return nil, errors.New("telemetry quality reason is invalid")
 		}

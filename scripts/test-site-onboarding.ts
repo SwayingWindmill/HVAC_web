@@ -105,6 +105,18 @@ test('a policy that changes gets a new policy_revision; the inserted revision st
   assert.match(telemetry, /INSERT INTO telemetry_runtime\.presence_policies [^\n]*\n\('[^']+', 1, /, 'a new presence policy starts at revision 1');
 });
 
+test('songyaxuan outdoor temperature carries its quality profile into the freshness policy', () => {
+  const { telemetry } = buildOnboardingSql(songyaxuan);
+  const row = telemetry.split('\n').find((line) => line.includes("'t15'"));
+  if (!row) throw new Error('t15 freshness row missing');
+  assert.match(row, /, -10, 45, '/);
+  assert.match(row, /38\.4/);
+  assert.match(row, /"flatlineSeconds":10800/);
+  const inactive = telemetry.split('\n').find((line) => line.includes("'t14'"));
+  assert.ok(inactive);
+  assert.doesNotMatch(inactive, /38\.4/);
+});
+
 test('point status defaults to ACTIVE and rejects unknown values', () => {
   assert.equal(pointStatus({ code: 'a' }), 'ACTIVE');
   assert.equal(pointStatus({ code: 'a', status: 'INACTIVE' }), 'INACTIVE');

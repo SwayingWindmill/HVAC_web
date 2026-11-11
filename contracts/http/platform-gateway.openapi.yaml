@@ -3428,9 +3428,9 @@
         "type": "object",
         "additionalProperties": false,
         "required": ["kind"],
-        "description": "AND and OR hold two to 32 children; every other kind reads one reading. NO_DATA: no reading for ageSeconds. STALE: the reading is older than ageSeconds. UNCHANGED: a fresh reading has kept its value ageSeconds. CHANGED: it took its value less than ageSeconds ago.",
+        "description": "AND and OR hold two to 32 children; every other kind reads one reading. NO_DATA: no reading for ageSeconds. STALE: the reading is older than ageSeconds. UNCHANGED: a fresh reading has kept its value ageSeconds. CHANGED: it took its value less than ageSeconds ago. REASONS: the point's health reasons. match ANY means one of reasons is present; NONE means none of them are. REASONS does not require the displayed value to be trusted.",
         "properties": {
-          "kind": { "type": "string", "enum": ["COMPARE", "RANGE", "HYSTERESIS", "NO_DATA", "STALE", "UNCHANGED", "CHANGED", "AND", "OR"] },
+          "kind": { "type": "string", "enum": ["COMPARE", "RANGE", "HYSTERESIS", "NO_DATA", "STALE", "UNCHANGED", "CHANGED", "REASONS", "AND", "OR"] },
           "reading": { "$ref": "#/components/schemas/AlarmRuleReading" },
           "operator": { "type": "string", "enum": ["EQ", "NE", "GT", "GTE", "LT", "LTE"] },
           "value": { "type": ["number", "string", "boolean"] },
@@ -3440,6 +3440,8 @@
           "trigger": { "type": "number" },
           "reset": { "type": "number" },
           "ageSeconds": { "type": "integer", "minimum": 1 },
+          "reasons": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "enum": ["OUT_OF_RANGE", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT"] } },
+          "match": { "type": "string", "enum": ["ANY", "NONE"] },
           "children": { "type": "array", "minItems": 2, "maxItems": 32, "items": { "$ref": "#/components/schemas/AlarmRuleCondition" } }
         }
       },

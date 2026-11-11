@@ -242,7 +242,7 @@ func TestPlantHistoryQueryIsScopedAndReadsOnlyWhatHadArrived(t *testing.T) {
 	if len(buckets) != 1 || buckets[0].CwLeavingC != nil || *buckets[0].PowerKW != 90.5 {
 		t.Fatalf("buckets=%+v", buckets)
 	}
-	for _, want := range []string{`tenant_id=toUUID('t\'1')`, `site_id=toUUID('s1')`, `received_at <= parseDateTime64BestEffort('2026-10-30T00:00:00.000Z'`, `sampled_at >= parseDateTime64BestEffort('2026-10-16T00:00:00.000Z'`, `'cw_leaving_temperature'`} {
+	for _, want := range []string{`tenant_id=toUUID('t\'1')`, `site_id=toUUID('s1')`, `received_at <= parseDateTime64BestEffort('2026-10-30T00:00:00.000Z'`, `sampled_at >= parseDateTime64BestEffort('2026-10-16T00:00:00.000Z'`, `'cw_leaving_temperature'`, `quality = 'GOOD'`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("query lacks %q:\n%s", want, body)
 		}

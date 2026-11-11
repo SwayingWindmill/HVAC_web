@@ -47,6 +47,7 @@ export interface AssetsPointView {
   readonly freshness: 'FRESH' | 'STALE' | 'MISSING' | 'UNAVAILABLE';
   readonly quality: TelemetryQuality | null;
   readonly qualityReasons: readonly string[];
+  readonly health: { readonly status: 'HEALTHY' | 'SUSPECT' | 'BAD' | 'STALE'; readonly score: number } | null;
   readonly sampledAt: string | null;
   readonly receivedAt: string | null;
   readonly policyRevision: number | null;
@@ -118,6 +119,7 @@ function pointView(definition: PointDisplayDefinition, state: TelemetryKeyState 
       freshness: 'MISSING',
       quality: null,
       qualityReasons: [],
+      health: null,
       sampledAt: null,
       receivedAt: null,
       policyRevision: state?.policyRevision ?? null,
@@ -135,6 +137,7 @@ function pointView(definition: PointDisplayDefinition, state: TelemetryKeyState 
     freshness: state.freshness,
     quality: state.quality,
     qualityReasons: [...state.qualityReasons],
+    health: state.health ? { status: state.health.status, score: state.health.score } : null,
     sampledAt: state.sampledAt,
     receivedAt: state.receivedAt,
     policyRevision: state.policyRevision,
@@ -153,10 +156,16 @@ function unavailablePointView(definition: PointDisplayDefinition): AssetsPointVi
     freshness: 'UNAVAILABLE',
     quality: null,
     qualityReasons: [],
+    health: null,
     sampledAt: null,
     receivedAt: null,
     policyRevision: null,
   };
+}
+
+/** A displayed sample is safe to use when it is present, fresh, GOOD, and not marked suspect or bad. */
+export function pointIsTrusted(point: Pick<AssetsPointView, 'state' | 'freshness' | 'quality' | 'health'>): boolean {
+  return point.state === 'PRESENT' && point.freshness === 'FRESH' && point.quality === 'GOOD' && (point.health == null || point.health.status === 'HEALTHY');
 }
 
 function connectionFromSnapshot(snapshot: DeviceObservationSnapshot): AssetsConnectionProjection {

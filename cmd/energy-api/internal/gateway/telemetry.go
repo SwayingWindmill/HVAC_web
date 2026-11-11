@@ -811,7 +811,19 @@ func validPresentState(value s2telemetryapi.TelemetryPresentState) bool {
 	if _, err := time.Parse(time.RFC3339Nano, string(value.ReceivedAt)); err != nil {
 		return false
 	}
+	if value.Health != nil && !validPointHealth(*value.Health) {
+		return false
+	}
 	return true
+}
+
+func validPointHealth(health s2telemetryapi.TelemetryPointHealth) bool {
+	switch health.Status {
+	case "HEALTHY", "SUSPECT", "BAD", "STALE":
+	default:
+		return false
+	}
+	return health.Score >= 0 && health.Score <= 100 && len(health.Reasons) <= 16 && uniqueQualityReasons(health.Reasons)
 }
 
 func validMissingState(value s2telemetryapi.TelemetryMissingState) bool {
@@ -846,7 +858,7 @@ func uniqueQualityReasons(values []s2telemetryapi.QualityReasonCode) bool {
 	seen := make(map[s2telemetryapi.QualityReasonCode]struct{}, len(values))
 	for _, value := range values {
 		switch value {
-		case s2telemetryapi.QualityReasonCodeSourceUntrusted, s2telemetryapi.QualityReasonCodeTypeMismatch, s2telemetryapi.QualityReasonCodeUnitMismatch, s2telemetryapi.QualityReasonCodeOutOfRange, s2telemetryapi.QualityReasonCodeClockAhead, s2telemetryapi.QualityReasonCodeClockBehind, s2telemetryapi.QualityReasonCodeSourceLagExceeded, s2telemetryapi.QualityReasonCodeDuplicate, s2telemetryapi.QualityReasonCodeOutOfOrder, s2telemetryapi.QualityReasonCodeReplayed:
+		case s2telemetryapi.QualityReasonCodeSourceUntrusted, s2telemetryapi.QualityReasonCodeTypeMismatch, s2telemetryapi.QualityReasonCodeUnitMismatch, s2telemetryapi.QualityReasonCodeOutOfRange, s2telemetryapi.QualityReasonCodeClockAhead, s2telemetryapi.QualityReasonCodeClockBehind, s2telemetryapi.QualityReasonCodeSourceLagExceeded, s2telemetryapi.QualityReasonCodeDuplicate, s2telemetryapi.QualityReasonCodeOutOfOrder, s2telemetryapi.QualityReasonCodeReplayed, s2telemetryapi.QualityReasonCodeSpike, s2telemetryapi.QualityReasonCodeSentinel, s2telemetryapi.QualityReasonCodeFlatline, s2telemetryapi.QualityReasonCodeDerivedInput:
 		default:
 			return false
 		}
