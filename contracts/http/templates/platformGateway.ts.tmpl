@@ -363,7 +363,7 @@ export type AlarmRuleCondition = {
   trigger?: number;
   reset?: number;
   ageSeconds?: number;
-  reasons?: Array<'OUT_OF_RANGE' | 'SPIKE' | 'SENTINEL' | 'FLATLINE' | 'DERIVED_INPUT'>;
+  reasons?: Array<'OUT_OF_RANGE' | 'SPIKE' | 'SENTINEL' | 'FLATLINE' | 'DERIVED_INPUT' | 'PHYSICS_WET_BULB_DRY' | 'PHYSICS_WET_BULB_CONDENSER' | 'PHYSICS_POWER' | 'PHYSICS_COP' | 'PHYSICS_CHW_DIRECTION' | 'PHYSICS_CW_DIRECTION' | 'PHYSICS_HEAT_BALANCE'>;
   match?: 'ANY' | 'NONE';
   children?: AlarmRuleCondition[];
 };
@@ -378,7 +378,7 @@ export const alarmRuleConditionSchema: z.ZodType<AlarmRuleCondition> = z.lazy(()
   trigger: z.number().optional(),
   reset: z.number().optional(),
   ageSeconds: z.number().int().positive().optional(),
-  reasons: z.array(z.enum(['OUT_OF_RANGE', 'SPIKE', 'SENTINEL', 'FLATLINE', 'DERIVED_INPUT'])).min(1).max(8).optional(),
+  reasons: z.array(z.enum(['OUT_OF_RANGE', 'SPIKE', 'SENTINEL', 'FLATLINE', 'DERIVED_INPUT', 'PHYSICS_WET_BULB_DRY', 'PHYSICS_WET_BULB_CONDENSER', 'PHYSICS_POWER', 'PHYSICS_COP', 'PHYSICS_CHW_DIRECTION', 'PHYSICS_CW_DIRECTION', 'PHYSICS_HEAT_BALANCE'])).min(1).max(8).optional(),
   match: z.enum(['ANY', 'NONE']).optional(),
   children: z.array(alarmRuleConditionSchema).min(2).max(32).optional(),
 }).strict());

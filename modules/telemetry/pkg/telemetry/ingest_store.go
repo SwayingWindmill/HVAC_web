@@ -305,6 +305,13 @@ WHERE device_id = $1::uuid AND telemetry_key = $2
 		}
 		facts.Running = running
 		facts.InputsUntrusted = untrusted
+		if len(facts.Policy.QualityChecks.Physics) > 0 {
+			peers, err := loadPhysicsPeers(ctx, tx, facts.Policy.QualityChecks)
+			if err != nil {
+				return ObservationFacts{}, "", err
+			}
+			facts.Peers = peers
+		}
 	}
 	return facts, existingID, nil
 }
@@ -353,6 +360,63 @@ WHERE device_id = $1::uuid AND telemetry_key = $2
 		}
 	}
 	return running, inputsUntrusted, nil
+}
+
+// loadPhysicsPeers reads the other points a physics check names. A missing point
+// is left out; the check then skips instead of calling the reading a violation.
+func loadPhysicsPeers(ctx context.Context, tx pgx.Tx, checks *QualityChecks) (map[string]PeerSample, error) {
+	type ref struct{ device, key string }
+	seen := map[string]struct{}{}
+	var refs []ref
+	add := func(device, key string) {
+		if device == "" || key == "" {
+			return
+		}
+		id := device + "/" + key
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		refs = append(refs, ref{device, key})
+	}
+	for _, rule := range checks.Physics {
+		for _, peer := range rule.Peers {
+			add(peer.DeviceID, peer.Key)
+		}
+		for _, expect := range rule.Running {
+			add(expect.DeviceID, expect.Key)
+		}
+	}
+	peers := make(map[string]PeerSample, len(refs))
+	for _, item := range refs {
+		var raw []byte
+		var quality string
+		err := tx.QueryRow(ctx, `
+SELECT value, quality FROM telemetry_runtime.latest_accepted_telemetry
+WHERE device_id = $1::uuid AND telemetry_key = $2
+`, item.device, item.key).Scan(&raw, &quality)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("query physics peer %s/%s: %w", item.device, item.key, err)
+		}
+		sample := PeerSample{Text: jsonText(raw), Good: quality == string(QualityGood)}
+		if number, ok := numericJSON(raw); ok {
+			sample.Number = &number
+		}
+		peers[item.device+"/"+item.key] = sample
+	}
+	return peers, nil
+}
+
+func jsonText(raw []byte) string {
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	text, _ := value.(string)
+	return text
 }
 
 func jsonEquals(raw []byte, want string) bool {

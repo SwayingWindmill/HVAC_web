@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：网关把四块机组电表相加作为「空调总电表（四台机组合计）」，并按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场手绘点位表（2026-11-08 网关按它改过）：A–D 蒸发出 t1–t4，冷却水总管进水 t5（四台共用），A–D 冷凝出 t6–t9，A 机组冷冻水支管进水 t10，冷却塔内侧总管 t11、外侧总管 t12（当作出塔），冷却塔进水 t13、t14，室外温度 t15（房间没有温度探头），冷冻水总回水 t16、t17，总供水 t18、t19；t14、t20 没有探头。t14、t20 网关不上报（函数里的 SPARE）。点位带 from（来源通道），网关函数的 COPIES 照它复制。 点位质量见 qualityProfiles：冷冻水 3–20 ℃、冷却水 15–45 ℃、房间 10–40 ℃、室外 −10–45 ℃；38.4 是模块通讯异常值。",
+  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：网关把四块机组电表相加作为「空调总电表（四台机组合计）」，并按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场手绘点位表（2026-11-08 网关按它改过）：A–D 蒸发出 t1–t4，冷却水总管进水 t5（四台共用），A–D 冷凝出 t6–t9，A 机组冷冻水支管进水 t10，冷却塔内侧总管 t11、外侧总管 t12（当作出塔），冷却塔进水 t13、t14，室外温度 t15（房间没有温度探头），冷冻水总回水 t16、t17，总供水 t18、t19；t14、t20 没有探头。t14、t20 网关不上报（函数里的 SPARE）。点位带 from（来源通道），网关函数的 COPIES 照它复制。 点位质量见 qualityProfiles：冷冻水 3–20 ℃、冷却水 15–45 ℃、房间 10–40 ℃、室外 −10–45 ℃；38.4 是模块通讯异常值。 铭牌见 nameplateCatalog：四台冷机是 2007 年日立 RCU180SC2（572 kW / 127.5 kW）；八台凯泉泵的 22 kW 和 15 kW 还没分到冷冻还是冷却；冷却塔风机铭牌未到。物理检查见 physicsChecks。",
   "tenantId": "018f3d00-0000-7000-8000-000000000001",
   "site": {
     "id": "01a14000-1000-7000-8000-000000000001",
@@ -941,97 +941,113 @@
       "id": "01a14000-3000-7000-8000-000000000001",
       "code": "chiller-a",
       "name": "A 机组",
-      "type": "CHILLER"
+      "type": "CHILLER",
+      "nameplate": "hitachi-rcu180sc2-2007"
     },
     {
       "id": "01a14000-3000-7000-8000-000000000002",
       "code": "chiller-b",
       "name": "B 机组",
-      "type": "CHILLER"
+      "type": "CHILLER",
+      "nameplate": "hitachi-rcu180sc2-2007"
     },
     {
       "id": "01a14000-3000-7000-8000-000000000003",
       "code": "chiller-c",
       "name": "C 机组",
-      "type": "CHILLER"
+      "type": "CHILLER",
+      "nameplate": "hitachi-rcu180sc2-2007"
     },
     {
       "id": "01a14000-3000-7000-8000-000000000004",
       "code": "chiller-d",
       "name": "D 机组",
-      "type": "CHILLER"
+      "type": "CHILLER",
+      "nameplate": "hitachi-rcu180sc2-2007"
     },
     {
       "id": "01a14000-3000-7000-8000-000000000005",
       "code": "cooling-tower-1",
       "name": "1 号冷却塔",
-      "type": "COOLING_TOWER"
+      "type": "COOLING_TOWER",
+      "nameplate": "tower-fan-pending"
     },
     {
       "id": "01a14000-3000-7000-8000-000000000006",
       "code": "cooling-tower-2",
       "name": "2 号冷却塔",
-      "type": "COOLING_TOWER"
+      "type": "COOLING_TOWER",
+      "nameplate": "tower-fan-pending"
     },
     {
       "id": "01a14000-3000-7000-8000-000000000007",
       "code": "cooling-tower-3",
       "name": "3 号冷却塔",
-      "type": "COOLING_TOWER"
+      "type": "COOLING_TOWER",
+      "nameplate": "tower-fan-pending"
     },
     {
       "id": "01a14000-3000-7000-8000-000000000008",
       "code": "cooling-tower-4",
       "name": "4 号冷却塔",
-      "type": "COOLING_TOWER"
+      "type": "COOLING_TOWER",
+      "nameplate": "tower-fan-pending"
     },
     {
       "id": "01a14000-3000-7000-8000-000000000009",
       "code": "chwp-1",
       "name": "1 号冷冻泵",
-      "type": "CHILLED_WATER_PUMP"
+      "type": "CHILLED_WATER_PUMP",
+      "nameplate": "kaiquan-fixed-unassigned"
     },
     {
       "id": "01a14000-3000-7000-8000-00000000000a",
       "code": "chwp-2",
       "name": "2 号冷冻泵",
-      "type": "CHILLED_WATER_PUMP"
+      "type": "CHILLED_WATER_PUMP",
+      "nameplate": "kaiquan-fixed-unassigned"
     },
     {
       "id": "01a14000-3000-7000-8000-00000000000b",
       "code": "chwp-3",
       "name": "3 号冷冻泵",
-      "type": "CHILLED_WATER_PUMP"
+      "type": "CHILLED_WATER_PUMP",
+      "nameplate": "kaiquan-fixed-unassigned"
     },
     {
       "id": "01a14000-3000-7000-8000-00000000000c",
       "code": "chwp-4",
       "name": "4 号冷冻泵",
-      "type": "CHILLED_WATER_PUMP"
+      "type": "CHILLED_WATER_PUMP",
+      "nameplate": "kaiquan-fixed-unassigned"
     },
     {
       "id": "01a14000-3000-7000-8000-00000000000d",
       "code": "cwp-1",
       "name": "1 号冷却泵",
-      "type": "COOLING_WATER_PUMP"
+      "type": "COOLING_WATER_PUMP",
+      "nameplate": "kaiquan-fixed-unassigned"
     },
     {
       "id": "01a14000-3000-7000-8000-00000000000e",
       "code": "cwp-2",
       "name": "2 号冷却泵",
-      "type": "COOLING_WATER_PUMP"
+      "type": "COOLING_WATER_PUMP",
+      "nameplate": "kaiquan-fixed-unassigned"
     },
     {
       "id": "01a14000-3000-7000-8000-00000000000f",
       "code": "cwp-3",
       "name": "3 号冷却泵",
-      "type": "COOLING_WATER_PUMP"
+      "type": "COOLING_WATER_PUMP",
+      "nameplate": "kaiquan-fixed-unassigned"
     },
     {
       "id": "01a14000-3000-7000-8000-000000000010",
       "code": "cwp-4",
       "name": "4 号冷却泵",
-      "type": "COOLING_WATER_PUMP"
+      "type": "COOLING_WATER_PUMP",
+      "nameplate": "kaiquan-fixed-unassigned"
     },
     {
       "id": "01a14000-3000-7000-8000-000000000011",
@@ -1291,5 +1307,563 @@
         }
       ]
     }
-  }
+  },
+  "nameplateCatalog": {
+    "hitachi-rcu180sc2-2007": {
+      "manufacturer": "日立",
+      "model": "RCU180SC2",
+      "year": 2007,
+      "refrigerant": "R22",
+      "ratedCapacityKw": 572,
+      "ratedPowerKw": 127.5,
+      "ratedCurrentA": 225,
+      "startingCurrentA": 222,
+      "supply": "380V/3PH/50Hz",
+      "highSidePressureMpa": 2.2,
+      "lowSidePressureMpa": 1.3,
+      "condenserAreaM2": 60.6,
+      "note": "2007 年铭牌，四台相同。冷凝器传热面积 60.60 m²。冷却塔风机铭牌还没拍到。"
+    },
+    "kaiquan-fixed-unassigned": {
+      "manufacturer": "凯泉",
+      "speed": "FIXED",
+      "role": "UNKNOWN",
+      "unconfirmed": [
+        "role",
+        "model",
+        "ratedPowerKw",
+        "ratedCurrentA",
+        "efficiency",
+        "ratedSpeedRpm"
+      ],
+      "candidates": [
+        {
+          "model": "YE3-180L-4",
+          "ratedPowerKw": 22,
+          "ratedCurrentA": 41.8,
+          "efficiency": 0.93,
+          "ratedSpeedRpm": 1477,
+          "speed": "FIXED"
+        },
+        {
+          "model": "YE3-160L-4",
+          "ratedPowerKw": 15,
+          "ratedCurrentA": 28.8,
+          "efficiency": 0.921,
+          "ratedSpeedRpm": 1460,
+          "speed": "FIXED"
+        }
+      ],
+      "note": "八台泵都是凯泉定频。22 kW 和 15 kW 哪一款是冷冻泵、哪一款是冷却泵还没确认，所以不写额定功率。确认后把 role 改成 CHILLED_WATER 或 CONDENSER_WATER，并选中一款作为本台的 model 和 ratedPowerKw，再从未确认名单里去掉。"
+    },
+    "tower-fan-pending": {
+      "pending": [
+        "fan"
+      ],
+      "note": "冷却塔风机铭牌还没拍到。"
+    }
+  },
+  "physicsChecks": [
+    {
+      "code": "wet-bulb-dry-bulb",
+      "kind": "WET_BULB_DRY_BULB",
+      "optional": true,
+      "marginK": 0,
+      "subject": {
+        "device": "outdoor",
+        "point": "ambient_wet_bulb_temperature"
+      },
+      "dryBulb": {
+        "device": "temperature-uid20",
+        "point": "t15"
+      },
+      "note": "现场没有室外湿球温度探头（通道 15 是室外干球温度，outdoor/ambient_wet_bulb_temperature 未启用），装上探头后启用。",
+      "alarm": {
+        "title": "室外湿球温度高于干球",
+        "summary": "室外湿球温度不低于通道 15 的室外干球温度。饱和空气里湿球最多等于干球，更高说明探头或干湿球配置有误。降到不高于干球后自动恢复。",
+        "severity": "MAJOR"
+      }
+    },
+    {
+      "code": "wet-bulb-condenser",
+      "kind": "WET_BULB_CONDENSER",
+      "optional": true,
+      "marginK": 1,
+      "subject": {
+        "device": "outdoor",
+        "point": "ambient_wet_bulb_temperature"
+      },
+      "condenserEntering": [
+        {
+          "device": "temperature-uid20",
+          "point": "t5"
+        }
+      ],
+      "running": [
+        {
+          "device": "meter-uid5",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid2",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid3",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid4",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "现场没有室外湿球温度探头（outdoor/ambient_wet_bulb_temperature 未启用）；装上探头后按冷却水总管进水（通道 5）检查。",
+      "alarm": {
+        "title": "室外湿球温度不像湿球",
+        "summary": "有机组在运行，室外湿球温度不低于冷却水总管进水（通道 5）减 1 K。冷却塔出水不可能比湿球还低这么多。机组全部停机，或湿球降到进水以下并留出 1 K 后自动恢复。",
+        "severity": "MAJOR"
+      }
+    },
+    {
+      "code": "chiller-a-power",
+      "kind": "POWER_NAMEPLATE",
+      "asset": "chiller-a",
+      "aboveRatedFraction": 0.15,
+      "subject": {
+        "device": "meter-uid5",
+        "point": "power_total"
+      },
+      "alarm": {
+        "title": "A 机组功率超过铭牌",
+        "summary": "A 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A。松雅轩 C 机组曾到 191.8 kW，原因可能是电流变比或这只表上还有别的负荷。回到 146.6 kW 以内后自动恢复。",
+        "severity": "MAJOR"
+      }
+    },
+    {
+      "code": "chiller-b-power",
+      "kind": "POWER_NAMEPLATE",
+      "asset": "chiller-b",
+      "aboveRatedFraction": 0.15,
+      "subject": {
+        "device": "meter-uid2",
+        "point": "power_total"
+      },
+      "alarm": {
+        "title": "B 机组功率超过铭牌",
+        "summary": "B 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A。松雅轩 C 机组曾到 191.8 kW，原因可能是电流变比或这只表上还有别的负荷。回到 146.6 kW 以内后自动恢复。",
+        "severity": "MAJOR"
+      }
+    },
+    {
+      "code": "chiller-c-power",
+      "kind": "POWER_NAMEPLATE",
+      "asset": "chiller-c",
+      "aboveRatedFraction": 0.15,
+      "subject": {
+        "device": "meter-uid3",
+        "point": "power_total"
+      },
+      "alarm": {
+        "title": "C 机组功率超过铭牌",
+        "summary": "C 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A。松雅轩 C 机组曾到 191.8 kW，原因可能是电流变比或这只表上还有别的负荷。回到 146.6 kW 以内后自动恢复。",
+        "severity": "MAJOR"
+      }
+    },
+    {
+      "code": "chiller-d-power",
+      "kind": "POWER_NAMEPLATE",
+      "asset": "chiller-d",
+      "aboveRatedFraction": 0.15,
+      "subject": {
+        "device": "meter-uid4",
+        "point": "power_total"
+      },
+      "alarm": {
+        "title": "D 机组功率超过铭牌",
+        "summary": "D 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A。松雅轩 C 机组曾到 191.8 kW，原因可能是电流变比或这只表上还有别的负荷。回到 146.6 kW 以内后自动恢复。",
+        "severity": "MAJOR"
+      }
+    },
+    {
+      "code": "plant-cop-carnot",
+      "kind": "COP_CARNOT",
+      "carnotFraction": 0.7,
+      "subject": {
+        "device": "btu-calc",
+        "point": "instant_cooling_capacity"
+      },
+      "powers": [
+        {
+          "device": "meter-uid5",
+          "point": "power_total"
+        },
+        {
+          "device": "meter-uid2",
+          "point": "power_total"
+        },
+        {
+          "device": "meter-uid3",
+          "point": "power_total"
+        },
+        {
+          "device": "meter-uid4",
+          "point": "power_total"
+        }
+      ],
+      "evaporator": {
+        "device": "btu-calc",
+        "point": "supply_water_temperature"
+      },
+      "condenser": [
+        {
+          "device": "temperature-uid20",
+          "point": "t5"
+        }
+      ],
+      "note": "用总供冷量除以四台机组功率，蒸发温度用总管供水，冷凝温度用冷却水总管进水（通道 5）。用水温算的卡诺本来就偏高，0.70 这一档不会把高于铭牌 4.49 的部分负荷能效报掉。",
+      "alarm": {
+        "title": "冷站能效超过水温允许的上限",
+        "summary": "总供冷量除以四台机组功率，超过了由总管供水温度和冷却水进水温度算出的卡诺能效的 70%。铭牌能效约 4.49 不是上限，部分负荷、冷却水偏凉时可以更高；接近卡诺才说明冷量或功率不可信。回到上限以内后自动恢复。",
+        "severity": "MAJOR"
+      }
+    },
+    {
+      "code": "header-chw-direction",
+      "kind": "CHW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t18"
+      },
+      "return": {
+        "device": "temperature-uid20",
+        "point": "t16"
+      },
+      "running": [
+        {
+          "device": "meter-uid5",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid2",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid3",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid4",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "总管温差约 0.9 K，小于运行机组的 1.3–2.8 K，是停着的机组在旁通，供水仍然低于回水。这条只报接反或几乎没有温差。",
+      "alarm": {
+        "title": "总管冷冻水供水不低于回水",
+        "summary": "有机组在运行，总管供水（通道 18）却不低于回水（通道 16）。温差只有 0.9 K 左右仍算正常，那是停机机组在过水。供水明显低于回水，或机组全部停机后自动恢复。",
+        "severity": "MAJOR"
+      }
+    },
+    {
+      "code": "btu-chw-direction",
+      "kind": "CHW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "btu-calc",
+        "point": "supply_water_temperature"
+      },
+      "return": {
+        "device": "btu-calc",
+        "point": "return_water_temperature"
+      },
+      "running": [
+        {
+          "device": "meter-uid5",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid2",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid3",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid4",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "alarm": {
+        "title": "冷量计冷冻水供水不低于回水",
+        "summary": "有机组在运行，冷量计上的供水不低于回水。供冷量是用这对温度算的，接反时冷量不可信。供水低于回水，或机组全部停机后自动恢复。",
+        "severity": "MAJOR"
+      }
+    },
+    {
+      "code": "chiller-a-chw-direction",
+      "kind": "CHW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t1"
+      },
+      "return": {
+        "device": "temperature-uid20",
+        "point": "t16"
+      },
+      "running": [
+        {
+          "device": "meter-uid5",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 1 为 A 机组蒸发出水。",
+      "alarm": {
+        "title": "A 机组冷冻水出水不低于回水",
+        "summary": "A 机组在运行，通道 1 的冷冻水出水却不低于总管回水（通道 16）。A 机组停机，或出水低于回水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-b-chw-direction",
+      "kind": "CHW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t2"
+      },
+      "return": {
+        "device": "temperature-uid20",
+        "point": "t16"
+      },
+      "running": [
+        {
+          "device": "meter-uid2",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 2 为 B 机组蒸发出水。",
+      "alarm": {
+        "title": "B 机组冷冻水出水不低于回水",
+        "summary": "B 机组在运行，通道 2 的冷冻水出水却不低于总管回水（通道 16）。B 机组停机，或出水低于回水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-c-chw-direction",
+      "kind": "CHW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t3"
+      },
+      "return": {
+        "device": "temperature-uid20",
+        "point": "t16"
+      },
+      "running": [
+        {
+          "device": "meter-uid3",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 3 为 C 机组蒸发出水。",
+      "alarm": {
+        "title": "C 机组冷冻水出水不低于回水",
+        "summary": "C 机组在运行，通道 3 的冷冻水出水却不低于总管回水（通道 16）。C 机组停机，或出水低于回水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-d-chw-direction",
+      "kind": "CHW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t4"
+      },
+      "return": {
+        "device": "temperature-uid20",
+        "point": "t16"
+      },
+      "running": [
+        {
+          "device": "meter-uid4",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 4 为 D 机组蒸发出水。",
+      "alarm": {
+        "title": "D 机组冷冻水出水不低于回水",
+        "summary": "D 机组在运行，通道 4 的冷冻水出水却不低于总管回水（通道 16）。D 机组停机，或出水低于回水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-a-cw-direction",
+      "kind": "CW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t6"
+      },
+      "entering": {
+        "device": "temperature-uid20",
+        "point": "t5"
+      },
+      "running": [
+        {
+          "device": "meter-uid5",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 6 为 A 机组冷凝出水，通道 5 为冷却水总管进水。",
+      "alarm": {
+        "title": "A 机组冷却水出水不高于进水",
+        "summary": "A 机组在运行，通道 6 的冷却水出水却不高于冷却水总管进水（通道 5）。A 机组停机，或出水高于进水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-b-cw-direction",
+      "kind": "CW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t7"
+      },
+      "entering": {
+        "device": "temperature-uid20",
+        "point": "t5"
+      },
+      "running": [
+        {
+          "device": "meter-uid2",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 7 为 B 机组冷凝出水，通道 5 为冷却水总管进水。",
+      "alarm": {
+        "title": "B 机组冷却水出水不高于进水",
+        "summary": "B 机组在运行，通道 7 的冷却水出水却不高于冷却水总管进水（通道 5）。B 机组停机，或出水高于进水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-c-cw-direction",
+      "kind": "CW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t8"
+      },
+      "entering": {
+        "device": "temperature-uid20",
+        "point": "t5"
+      },
+      "running": [
+        {
+          "device": "meter-uid3",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 8 为 C 机组冷凝出水，通道 5 为冷却水总管进水。",
+      "alarm": {
+        "title": "C 机组冷却水出水不高于进水",
+        "summary": "C 机组在运行，通道 8 的冷却水出水却不高于冷却水总管进水（通道 5）。C 机组停机，或出水高于进水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "chiller-d-cw-direction",
+      "kind": "CW_DIRECTION",
+      "epsilonK": 0.05,
+      "subject": {
+        "device": "temperature-uid20",
+        "point": "t9"
+      },
+      "entering": {
+        "device": "temperature-uid20",
+        "point": "t5"
+      },
+      "running": [
+        {
+          "device": "meter-uid4",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "2026-11-08 手绘点位表：通道 9 为 D 机组冷凝出水，通道 5 为冷却水总管进水。",
+      "alarm": {
+        "title": "D 机组冷却水出水不高于进水",
+        "summary": "D 机组在运行，通道 9 的冷却水出水却不高于冷却水总管进水（通道 5）。D 机组停机，或出水高于进水后自动恢复。",
+        "severity": "WARNING"
+      }
+    },
+    {
+      "code": "plant-heat-balance",
+      "kind": "HEAT_BALANCE",
+      "optional": true,
+      "heatBalanceFraction": 0.25,
+      "note": "热平衡要冷却水流量。现场只有冷冻水流量，这条先不算。补上流量点后写上 flow、heatEntering、heatLeaving，并写上 subject。"
+    },
+    {
+      "code": "pump-without-chiller",
+      "kind": "PUMP_WITHOUT_CHILLER",
+      "pump": {
+        "device": "chwp-main",
+        "point": "run_state",
+        "equals": "RUNNING"
+      },
+      "chillers": [
+        {
+          "device": "meter-uid5",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid2",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid3",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid4",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
+      "note": "冷冻泵运行状态是总管流量大于 10 m³/h，不是每台泵的触点。持续 10 分钟才报，躲开开机先后。",
+      "alarm": {
+        "title": "冷冻水泵在跑但没有机组运行",
+        "summary": "总管流量大于 10 m³/h 已持续 10 分钟，四台机组都没有运行。可能是水泵空转，或流量判断和机组状态对不上。流量降下来或任一台机组运行后自动恢复。",
+        "severity": "WARNING",
+        "durationSeconds": 600
+      }
+    }
+  ]
 }

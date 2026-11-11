@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
+	"github.com/quanlaihe/hvac-web/libs/nameplate"
 )
 
 // ChillerCOPSolverName names the Chiller COP Model solver in its evaluation records.
@@ -34,13 +35,16 @@ const (
 // PlantBucket is one device's 15-minute means. A field is nil when the device reported no
 // usable reading of it in the bucket.
 type PlantBucket struct {
-	Bucket       time.Time `json:"bucket"`
-	DeviceID     string    `json:"deviceId"`
-	PowerKW      *float64  `json:"powerKW"`
-	ChwLeavingC  *float64  `json:"chwLeavingC"`
-	ChwEnteringC *float64  `json:"chwEnteringC"`
-	CwLeavingC   *float64  `json:"cwLeavingC"`
-	CoolingKW    *float64  `json:"coolingKW"`
+	Bucket           time.Time `json:"bucket"`
+	DeviceID         string    `json:"deviceId"`
+	PowerKW          *float64  `json:"powerKW"`
+	ChwLeavingC      *float64  `json:"chwLeavingC"`
+	ChwEnteringC     *float64  `json:"chwEnteringC"`
+	CwLeavingC       *float64  `json:"cwLeavingC"`
+	CoolingKW        *float64  `json:"coolingKW"`
+	RatedPowerKW     *float64  `json:"ratedPowerKW,omitempty"`
+	RatedCurrentA    *float64  `json:"ratedCurrentA,omitempty"`
+	MeasuredCurrentA *float64  `json:"measuredCurrentA,omitempty"`
 }
 
 type PlantHistoryQuery struct {
@@ -57,14 +61,16 @@ type PlantHistory interface {
 
 // COPSample is one steady 15-minute operating point of one Chiller.
 type COPSample struct {
-	Bucket      time.Time
-	LoadKW      float64
-	PowerKW     float64
-	ChwSupplyC  float64
-	CwReturnC   *float64
-	Allocation  string
-	LoadRatio   float64
-	observedCOP float64
+	Bucket              time.Time
+	LoadKW              float64
+	PowerKW             float64
+	ChwSupplyC          float64
+	CwReturnC           *float64
+	Allocation          string
+	LoadRatio           float64
+	ElectricalLoadRatio *float64 `json:"electricalLoadRatio,omitempty"`
+	LoadRatioBasis      string   `json:"loadRatioBasis,omitempty"`
+	observedCOP         float64
 }
 
 // ChillerFit is one Chiller's fitted COP model:
@@ -163,7 +169,7 @@ func FitPlant(buckets []PlantBucket, from, to time.Time) PlantFit {
 
 	evidence := HistoryEvidence{
 		From: from.UTC(), To: to.UTC(), BucketMinutes: copBucketMinutes, Chillers: len(chillers),
-		SetAside:       map[string]int{"noCoolingLoad": 0, "implausibleReading": 0, "startingUp": 0, "implausibleCOP": 0},
+		SetAside:       map[string]int{"noCoolingLoad": 0, "implausibleReading": 0, "startingUp": 0, "implausibleCOP": 0, "aboveNameplate": 0},
 		LoadAllocation: map[string]int{"single": 0, "evaporatorDeltaT": 0, "power": 0},
 	}
 	running := func(group map[string]PlantBucket, id string) bool {
@@ -209,9 +215,23 @@ func FitPlant(buckets []PlantBucket, from, to time.Time) PlantFit {
 			bucket := group[id]
 			sample := COPSample{Bucket: at, LoadKW: load * shares[index], PowerKW: *bucket.PowerKW, ChwSupplyC: *bucket.ChwLeavingC, CwReturnC: bucket.CwLeavingC, Allocation: method}
 			sample.observedCOP = sample.LoadKW / sample.PowerKW
-			if sample.observedCOP < 1 || sample.observedCOP > 12 {
+			if !nameplate.COPPlausible(sample.observedCOP, sample.ChwSupplyC, sample.CwReturnC) {
 				evidence.SetAside["implausibleCOP"]++
 				continue
+			}
+			if ratio, basis, ok := nameplate.LoadRatio(bucket.PowerKW, bucket.MeasuredCurrentA, nameplateFrom(bucket)); ok {
+				sample.ElectricalLoadRatio = &ratio
+				sample.LoadRatioBasis = basis
+				measured, rated := sample.PowerKW, 0.0
+				if basis == nameplate.BasisCurrent && bucket.MeasuredCurrentA != nil && bucket.RatedCurrentA != nil {
+					measured, rated = *bucket.MeasuredCurrentA, *bucket.RatedCurrentA
+				} else if bucket.RatedPowerKW != nil {
+					rated = *bucket.RatedPowerKW
+				}
+				if nameplate.ExceedsRated(measured, rated, nameplate.DefaultPowerAboveRatedFraction) {
+					evidence.SetAside["aboveNameplate"]++
+					continue
+				}
 			}
 			samples[id] = append(samples[id], sample)
 		}
@@ -238,6 +258,17 @@ func FitPlant(buckets []PlantBucket, from, to time.Time) PlantFit {
 
 // plausible rejects buckets whose temperatures cannot be a running Chiller's: supply outside
 // 2–12 ℃ or warmer than the return, condenser outside 15–45 ℃ or colder than the supply.
+func nameplateFrom(bucket PlantBucket) nameplate.Plate {
+	plate := nameplate.Plate{}
+	if bucket.RatedPowerKW != nil {
+		plate.RatedPowerKW = *bucket.RatedPowerKW
+	}
+	if bucket.RatedCurrentA != nil {
+		plate.RatedCurrentA = *bucket.RatedCurrentA
+	}
+	return plate
+}
+
 func plausible(group map[string]PlantBucket, runningIDs []string) bool {
 	for _, id := range runningIDs {
 		bucket := group[id]

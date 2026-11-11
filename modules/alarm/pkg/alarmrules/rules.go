@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
+	"github.com/quanlaihe/hvac-web/libs/nameplate"
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
 )
 
@@ -103,6 +104,35 @@ type siteFile struct {
 	} `json:"devices"`
 	MeterPoints     []sitePoint             `json:"meterPoints"`
 	QualityProfiles map[string]pointQuality `json:"qualityProfiles"`
+	PhysicsChecks   []physicsCheck          `json:"physicsChecks"`
+}
+
+// physicsCheck is one site-file physics check. Optional checks without a subject
+// stay in the file until the points exist; they do not become an alarm.
+type physicsCheck struct {
+	Code     string `json:"code"`
+	Kind     string `json:"kind"`
+	Optional bool   `json:"optional"`
+	Subject  *struct {
+		Device string `json:"device"`
+		Point  string `json:"point"`
+	} `json:"subject"`
+	Alarm *struct {
+		Title           string              `json:"title"`
+		Summary         string              `json:"summary"`
+		Severity        alarmmodel.Severity `json:"severity"`
+		DurationSeconds int64               `json:"durationSeconds"`
+	} `json:"alarm"`
+	Pump *struct {
+		Device string `json:"device"`
+		Point  string `json:"point"`
+		Equals string `json:"equals"`
+	} `json:"pump"`
+	Chillers []struct {
+		Device string `json:"device"`
+		Point  string `json:"point"`
+		Equals string `json:"equals"`
+	} `json:"chillers"`
 }
 
 type sitePoint struct {
@@ -244,6 +274,9 @@ func Load(rulesPath string) (Compiled, error) {
 		}))
 	}
 	if err := appendDataQuality(&compiled, rules.DataQuality, site, devices, order); err != nil {
+		return Compiled{}, err
+	}
+	if err := appendPhysics(&compiled, site, devices); err != nil {
 		return Compiled{}, err
 	}
 	if flat := rules.ReadingsFlat; flat != nil {
@@ -413,6 +446,118 @@ func appendDataQuality(compiled *Compiled, section *dataQualityFile, site siteFi
 		}
 	}
 	return nil
+}
+
+const physicsFreshnessSeconds = 900
+
+func appendPhysics(compiled *Compiled, site siteFile, devices map[string]device) error {
+	for _, check := range site.PhysicsChecks {
+		if check.Alarm == nil || check.Alarm.Title == "" {
+			continue
+		}
+		if check.Kind == nameplate.KindPumpWithoutChiller {
+			if err := appendPumpWithoutChiller(compiled, site, devices, check); err != nil {
+				return err
+			}
+			continue
+		}
+		reason, ok := nameplate.QualityReason(check.Kind)
+		if !ok || check.Subject == nil {
+			if check.Optional {
+				continue
+			}
+			return fmt.Errorf("physics check %s is not a point-quality check", check.Code)
+		}
+		entry, ok := devices[check.Subject.Device]
+		if !ok {
+			return fmt.Errorf("physics check %s names unknown device %s", check.Code, check.Subject.Device)
+		}
+		found := false
+		for _, point := range entry.points {
+			if point.Code == check.Subject.Point && len(point.From) == 0 {
+				found = true
+			}
+		}
+		if !found {
+			if check.Optional {
+				continue
+			}
+			return fmt.Errorf("physics check %s names %s/%s, which is not an active reading of that device", check.Code, check.Subject.Device, check.Subject.Point)
+		}
+		input := entry.id + "/" + check.Subject.Point
+		mode := alarmservice.TriggerSimple
+		if check.Alarm.DurationSeconds > 0 {
+			mode = alarmservice.TriggerDuration
+		}
+		severity := check.Alarm.Severity
+		if severity == "" {
+			severity = alarmmodel.SeverityWarning
+		}
+		compiled.Policies = append(compiled.Policies, sitePolicy(site.Site.ID, site.Site.Code, "physics/"+check.Code, alarmservice.AlarmPolicyRevision{
+			Title: check.Alarm.Title, Summary: check.Alarm.Summary, Severity: severity,
+			QualityPolicy: alarmservice.EvaluationQualityUsable, FreshnessSeconds: physicsFreshnessSeconds,
+			TriggerMode: mode, DurationSeconds: check.Alarm.DurationSeconds,
+			Raise: alarmservice.Condition{Kind: alarmservice.ConditionReasons, Input: input, Match: alarmservice.ReasonMatchAny, Reasons: []string{reason}},
+			Clear: alarmservice.Condition{Kind: alarmservice.ConditionReasons, Input: input, Match: alarmservice.ReasonMatchNone, Reasons: []string{reason}},
+		}))
+	}
+	return nil
+}
+
+func appendPumpWithoutChiller(compiled *Compiled, site siteFile, devices map[string]device, check physicsCheck) error {
+	if check.Pump == nil || len(check.Chillers) == 0 {
+		if check.Optional {
+			return nil
+		}
+		return fmt.Errorf("physics check %s needs a pump and the chillers", check.Code)
+	}
+	pump, err := runningInput(devices, check.Pump.Device, check.Pump.Point, check.Pump.Equals, true)
+	if err != nil {
+		return fmt.Errorf("physics check %s: %w", check.Code, err)
+	}
+	stopped := []alarmservice.Condition{pump}
+	started := []alarmservice.Condition{{Kind: alarmservice.ConditionCompare, Input: pump.Input, Operator: alarmservice.CompareNE, Value: pump.Value}}
+	for _, chiller := range check.Chillers {
+		running, err := runningInput(devices, chiller.Device, chiller.Point, chiller.Equals, true)
+		if err != nil {
+			return fmt.Errorf("physics check %s: %w", check.Code, err)
+		}
+		stopped = append(stopped, alarmservice.Condition{Kind: alarmservice.ConditionCompare, Input: running.Input, Operator: alarmservice.CompareNE, Value: running.Value})
+		started = append(started, running)
+	}
+	mode := alarmservice.TriggerSimple
+	if check.Alarm.DurationSeconds > 0 {
+		mode = alarmservice.TriggerDuration
+	}
+	severity := check.Alarm.Severity
+	if severity == "" {
+		severity = alarmmodel.SeverityWarning
+	}
+	compiled.Policies = append(compiled.Policies, sitePolicy(site.Site.ID, site.Site.Code, "physics/"+check.Code, alarmservice.AlarmPolicyRevision{
+		Title: check.Alarm.Title, Summary: check.Alarm.Summary, Severity: severity,
+		QualityPolicy: alarmservice.EvaluationQualityUsable, FreshnessSeconds: physicsFreshnessSeconds,
+		TriggerMode: mode, DurationSeconds: check.Alarm.DurationSeconds,
+		Raise: alarmservice.Condition{Kind: alarmservice.ConditionAnd, Children: stopped},
+		Clear: alarmservice.Condition{Kind: alarmservice.ConditionOr, Children: started},
+	}))
+	return nil
+}
+
+func runningInput(devices map[string]device, code, point, equals string, require bool) (alarmservice.Condition, error) {
+	entry, ok := devices[code]
+	if !ok {
+		return alarmservice.Condition{}, fmt.Errorf("unknown device %s", code)
+	}
+	found := false
+	for _, candidate := range entry.points {
+		if candidate.Code == point {
+			found = true
+		}
+	}
+	if !found && require {
+		return alarmservice.Condition{}, fmt.Errorf("%s has no active point %s", code, point)
+	}
+	return alarmservice.Condition{Kind: alarmservice.ConditionCompare, Input: entry.id + "/" + point, Operator: alarmservice.CompareEQ, Value: alarmservice.StringValue(equals)}, nil
 }
 
 func profileSuspect(profile pointQuality) bool {

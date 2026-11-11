@@ -23,30 +23,163 @@ const sqlLiteral = (value) => `'${String(value).replaceAll("'", "''")}'`;
 const sqlJson = (value) => `${sqlLiteral(JSON.stringify(value))}::jsonb`;
 const sqlNumber = (value) => (value === null || value === undefined || Number.isNaN(value) ? 'NULL' : String(value));
 
-// A point's quality profile, resolved to device ids. No profile: the existing
-// freshness window and no numeric limits. checks is SQL or null.
+// Thresholds from docs/specs/equipment-nameplate.md. The site file can override each one.
+const POWER_ABOVE_RATED = 0.15;
+const CARNOT_FRACTION = 0.7;
+const WET_BULB_CONDENSER_MARGIN_K = 1;
+const DIRECTION_EPSILON_K = 0.05;
+const HEAT_BALANCE_FRACTION = 0.25;
+const PHYSICS_KINDS = new Set(['WET_BULB_DRY_BULB', 'WET_BULB_CONDENSER', 'POWER_NAMEPLATE', 'COP_CARNOT', 'CHW_DIRECTION', 'CW_DIRECTION', 'HEAT_BALANCE', 'PUMP_WITHOUT_CHILLER']);
+const NAMEPLATE_FIELDS = new Set(['manufacturer', 'model', 'year', 'refrigerant', 'ratedCapacityKw', 'ratedPowerKw', 'ratedCurrentA', 'startingCurrentA', 'supply', 'highSidePressureMpa', 'lowSidePressureMpa', 'condenserAreaM2', 'efficiency', 'ratedSpeedRpm', 'speed', 'role']);
+
+// A nameplate is an object on the asset, or the name of an entry in nameplateCatalog.
+export function resolveNameplate(asset, profile) {
+  const raw = asset?.nameplate;
+  if (raw == null) return null;
+  if (typeof raw === 'string') {
+    const named = profile.nameplateCatalog?.[raw];
+    if (!named) throw new Error(`asset ${asset.code} names unknown nameplate ${raw}`);
+    return { ...structuredClone(named), catalog: raw };
+  }
+  return structuredClone(raw);
+}
+
+// A point's quality profile, resolved to device ids, plus any physics check whose
+// subject is this point or whose subject this point copies. No profile and no
+// physics check: the existing freshness window and no numeric limits.
 export function pointQuality(point, profile, devicesByCode) {
-  if (!point.qualityProfile) return { staleAfterSeconds: null, range: null, checks: null };
-  const named = profile.qualityProfiles?.[point.qualityProfile];
-  if (!named) throw new Error(`point ${point.device?.code ?? '?'}/${point.code} names unknown quality profile ${point.qualityProfile}`);
+  const named = point.qualityProfile ? profile.qualityProfiles?.[point.qualityProfile] : null;
+  if (point.qualityProfile && !named) throw new Error(`point ${point.device?.code ?? '?'}/${point.code} names unknown quality profile ${point.qualityProfile}`);
   const checks = {};
-  if (named.maxStep != null) checks.maxStep = named.maxStep;
-  if (named.maxStepWindowSeconds != null) checks.maxStepWindowSeconds = named.maxStepWindowSeconds;
-  if (named.sentinels?.length) checks.sentinels = named.sentinels;
-  if (named.flatlineSeconds != null) checks.flatlineSeconds = named.flatlineSeconds;
-  if (named.flatlineRunningSeconds != null) checks.flatlineRunningSeconds = named.flatlineRunningSeconds;
-  const ref = (item) => {
-    const device = devicesByCode.get(item.device);
-    if (!device) throw new Error(`quality profile ${point.qualityProfile} names unknown device ${item.device}`);
-    return { deviceId: device.id, key: item.point, ...(item.equals != null ? { equals: item.equals } : {}) };
-  };
-  if (named.running?.length) checks.running = named.running.map(ref);
-  if (named.inputs?.length) checks.inputs = named.inputs.map(ref);
+  if (named) {
+    if (named.maxStep != null) checks.maxStep = named.maxStep;
+    if (named.maxStepWindowSeconds != null) checks.maxStepWindowSeconds = named.maxStepWindowSeconds;
+    if (named.sentinels?.length) checks.sentinels = named.sentinels;
+    if (named.flatlineSeconds != null) checks.flatlineSeconds = named.flatlineSeconds;
+    if (named.flatlineRunningSeconds != null) checks.flatlineRunningSeconds = named.flatlineRunningSeconds;
+    const ref = (item) => {
+      const device = devicesByCode.get(item.device);
+      if (!device) throw new Error(`quality profile ${point.qualityProfile} names unknown device ${item.device}`);
+      return { deviceId: device.id, key: item.point, ...(item.equals != null ? { equals: item.equals } : {}) };
+    };
+    if (named.running?.length) checks.running = named.running.map(ref);
+    if (named.inputs?.length) checks.inputs = named.inputs.map(ref);
+  }
+  const physics = physicsForPoint(point, profile, devicesByCode);
+  if (physics.length) checks.physics = physics;
+  const encoded = Object.keys(checks).length ? JSON.stringify(checks) : null;
+  if (encoded && Buffer.byteLength(encoded) > 4096) throw new Error(`point ${point.device?.code ?? '?'}/${point.code} quality checks exceed 4096 bytes`);
   return {
-    staleAfterSeconds: named.staleAfterSeconds ?? null,
-    range: named.range ?? null,
-    checks: Object.keys(checks).length ? sqlJson(checks) : null,
+    staleAfterSeconds: named?.staleAfterSeconds ?? null,
+    range: named?.range ?? null,
+    checks: encoded ? sqlJson(JSON.parse(encoded)) : null,
   };
+}
+
+function deviceRef(item, devicesByCode, label) {
+  const device = devicesByCode.get(item?.device);
+  if (!device) throw new Error(`${label} names unknown device ${item?.device}`);
+  return { deviceId: device.id, key: item.point };
+}
+
+function physicsForPoint(point, profile, devicesByCode) {
+  if (pointStatus(point) !== 'ACTIVE') return [];
+  const rules = [];
+  for (const check of profile.physicsChecks ?? []) {
+    if (!physicsApplies(point, check, devicesByCode)) continue;
+    const compiled = compilePhysics(check, profile, devicesByCode);
+    if (compiled) rules.push(compiled);
+  }
+  return rules;
+}
+
+function physicsApplies(point, check, devicesByCode) {
+  if (!check.subject?.device || !check.subject?.point) return false;
+  const subject = devicesByCode.get(check.subject.device);
+  if (!subject) return false;
+  if (point.device?.code === subject.code && point.code === check.subject.point) return true;
+  return Array.isArray(point.from) && point.from[0] === subject.sourceKey && point.from[1] === check.subject.point;
+}
+
+// compilePhysics returns null when an optional check does not yet have its points.
+function compilePhysics(check, profile, devicesByCode) {
+  if (check.kind === 'PUMP_WITHOUT_CHILLER') return null;
+  if (!PHYSICS_KINDS.has(check.kind)) throw new Error(`physics check ${check.code} has unknown kind ${check.kind}`);
+  const label = `physics check ${check.code}`;
+  if (!check.subject?.device || !check.subject?.point) {
+    if (check.optional) return null;
+    throw new Error(`${label} has no subject`);
+  }
+  const peers = [];
+  const add = (role, item) => {
+    if (!item?.device || !item?.point) return false;
+    peers.push({ role, ...deviceRef(item, devicesByCode, label) });
+    return true;
+  };
+  const addList = (role, items) => (items ?? []).filter((item) => add(role, item)).length;
+  const missing = () => {
+    if (check.optional) return null;
+    throw new Error(`${label} is missing a point it needs`);
+  };
+  const rule = { kind: check.kind };
+  if (check.running?.length) rule.running = check.running.map((item) => ({ ...deviceRef(item, devicesByCode, label), equals: item.equals }));
+  switch (check.kind) {
+    case 'WET_BULB_DRY_BULB':
+      if (!add('dryBulb', check.dryBulb)) return missing();
+      rule.marginK = check.marginK ?? 0;
+      break;
+    case 'WET_BULB_CONDENSER':
+      if (!addList('condenserEntering', check.condenserEntering)) return missing();
+      rule.marginK = check.marginK ?? WET_BULB_CONDENSER_MARGIN_K;
+      break;
+    case 'POWER_NAMEPLATE': {
+      const rated = ratedFor(check, profile);
+      if (rated == null) return missing();
+      rule.aboveRatedFraction = check.aboveRatedFraction ?? POWER_ABOVE_RATED;
+      if ((check.basis ?? 'POWER') === 'CURRENT') {
+        rule.basis = 'CURRENT';
+        rule.ratedCurrentA = rated;
+      } else rule.ratedPowerKw = rated;
+      break;
+    }
+    case 'COP_CARNOT':
+      if (!addList('power', check.powers) || !add('evaporator', check.evaporator) || !addList('condenser', check.condenser)) return missing();
+      rule.carnotFraction = check.carnotFraction ?? CARNOT_FRACTION;
+      break;
+    case 'CHW_DIRECTION':
+      if (!add('return', check.return)) return missing();
+      rule.epsilonK = check.epsilonK ?? DIRECTION_EPSILON_K;
+      break;
+    case 'CW_DIRECTION':
+      if (!add('entering', check.entering)) return missing();
+      rule.epsilonK = check.epsilonK ?? DIRECTION_EPSILON_K;
+      break;
+    case 'HEAT_BALANCE':
+      if (!addList('power', check.powers)) return missing();
+      if (check.condenserHeat) add('condenserHeat', check.condenserHeat);
+      else if (check.flow && check.heatEntering && check.heatLeaving) {
+        add('flow', check.flow);
+        add('heatEntering', check.heatEntering);
+        add('heatLeaving', check.heatLeaving);
+      } else return missing();
+      rule.heatBalanceFraction = check.heatBalanceFraction ?? HEAT_BALANCE_FRACTION;
+      break;
+    default:
+      return missing();
+  }
+  if (peers.length) rule.peers = peers;
+  return rule;
+}
+
+function ratedFor(check, profile) {
+  const basis = check.basis ?? 'POWER';
+  const field = basis === 'CURRENT' ? 'ratedCurrentA' : 'ratedPowerKw';
+  if (check[field] != null) return check[field];
+  const asset = (profile.assets ?? []).find((item) => item.code === check.asset);
+  if (!asset) return null;
+  const plate = resolveNameplate(asset, profile);
+  if (!plate || (plate.unconfirmed ?? []).includes(field) || !(plate[field] > 0)) return null;
+  return plate[field];
 }
 
 const POINT_STATUSES = new Set(['ACTIVE', 'INACTIVE', 'RETIRED']);
@@ -122,7 +255,13 @@ export function buildOnboardingSql(profile) {
   const sourceKeyRows = devices.map((device) => `(${sqlLiteral(rowId(site.id, '6100', device.deviceIndex))}, ${tenant}, ${siteId}, ${sqlLiteral(gateway.id)}, ${sqlLiteral(device.sourceKey)}, ${sqlLiteral(device.id)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n');
   const placementRows = devices.map((device) => `(${sqlLiteral(rowId(site.id, '6200', device.deviceIndex))}, ${tenant}, ${siteId}, ${sqlLiteral(device.id)}, ${sqlLiteral(space.id)}, 'INSTALLED_IN', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`).join(',\n');
   const assets = profile.assets ?? [];
-  const assetRows = assets.map((asset) => `(${sqlLiteral(asset.id)}, ${siteId}, ${sqlLiteral(asset.code)}, ${sqlLiteral(asset.name)}, ${sqlLiteral(asset.type)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), ${tenant})`).join(',\n');
+  const assetRows = assets.map((asset) => {
+    const plate = resolveNameplate(asset, profile);
+    const unconfirmed = new Set(plate?.unconfirmed ?? []);
+    const num = (field) => (plate && plate[field] > 0 && !unconfirmed.has(field) ? sqlNumber(plate[field]) : 'NULL');
+    const text = (field) => (plate && plate[field] && !unconfirmed.has(field) ? sqlLiteral(plate[field]) : 'NULL');
+    return `(${sqlLiteral(asset.id)}, ${siteId}, ${sqlLiteral(asset.code)}, ${sqlLiteral(asset.name)}, ${sqlLiteral(asset.type)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), ${tenant}, ${num('ratedCapacityKw')}, ${num('ratedPowerKw')}, ${text('manufacturer')}, ${text('model')}, ${plate ? sqlJson(plate) : 'NULL'})`;
+  }).join(',\n');
   const assetPlacementRows = assets.map((asset, index) => `(${sqlLiteral(rowId(site.id, '6500', index + 1))}, ${tenant}, ${siteId}, ${sqlLiteral(asset.id)}, ${sqlLiteral(space.id)}, 'INSTALLED_IN', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`).join(',\n');
   // A meter wired to one machine is that machine's meter.
   const deviceBindingRows = devices.filter((device) => device.asset).map((device) => `(${sqlLiteral(rowId(site.id, '6400', device.deviceIndex))}, ${siteId}, ${sqlLiteral(device.id)}, ${sqlLiteral(device.asset)}, ${device.type.endsWith('METER') ? "'METER'" : "'CONTROLLER'"}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp(), ${tenant})`).join(',\n');
@@ -146,9 +285,9 @@ INSERT INTO core_registry.spaces (id, tenant_id, site_id, parent_space_id, code,
 VALUES (${sqlLiteral(space.id)}, ${tenant}, ${siteId}, NULL, ${sqlLiteral(space.code)}, ${sqlLiteral(space.name)}, ${sqlLiteral(space.type)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) ${updateWhenChanged('spaces', [...fromFile('code', 'display_name', 'space_type'), ...ACTIVE])};
 
-${assets.length ? `INSERT INTO core_registry.assets (id, site_id, code, display_name, asset_type, status, revision, created_at, updated_at, tenant_id) VALUES
+${assets.length ? `INSERT INTO core_registry.assets (id, site_id, code, display_name, asset_type, status, revision, created_at, updated_at, tenant_id, rated_capacity, rated_power, manufacturer, model, nameplate) VALUES
 ${assetRows}
-ON CONFLICT (id) ${updateWhenChanged('assets', [...fromFile('code', 'display_name', 'asset_type'), ...ACTIVE])};
+ON CONFLICT (id) ${updateWhenChanged('assets', [...fromFile('code', 'display_name', 'asset_type'), ...ACTIVE, ...fromFile('rated_capacity', 'rated_power', 'manufacturer', 'model', 'nameplate')])};
 
 INSERT INTO core_registry.asset_space_bindings (id, tenant_id, site_id, asset_id, space_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
 ${assetPlacementRows}
@@ -528,6 +667,35 @@ export function checkSiteFile(profile, alarmRules = null) {
       if (!profile.qualityProfiles?.[point.qualityProfile]) problems.push(`${device.code}/${point.code} names unknown quality profile ${point.qualityProfile}`);
       const named = profile.qualityProfiles?.[point.qualityProfile];
       if (named?.staleAfterSeconds != null && named.staleAfterSeconds < device.sampleSeconds) problems.push(`${device.code}/${point.code}: staleAfterSeconds is shorter than the sample interval`);
+    }
+  }
+  const devicesByCode = new Map(devices.map((device) => [device.code, device]));
+  for (const asset of profile.assets ?? []) {
+    if (asset.nameplate == null) continue;
+    try {
+      const plate = resolveNameplate(asset, profile);
+      for (const field of plate?.unconfirmed ?? []) {
+        if (!NAMEPLATE_FIELDS.has(field)) problems.push(`asset ${asset.code}: unknown unconfirmed nameplate field ${field}`);
+      }
+    } catch (error) {
+      problems.push(error.message);
+    }
+  }
+  for (const check of profile.physicsChecks ?? []) {
+    if (!PHYSICS_KINDS.has(check.kind)) {
+      problems.push(`physics check ${check.code ?? '?'}: unknown kind ${check.kind}`);
+      continue;
+    }
+    try {
+      if (check.kind === 'PUMP_WITHOUT_CHILLER') {
+        for (const item of [check.pump, ...(check.chillers ?? [])]) {
+          const points = activePoints.get(item?.device);
+          if (!points) problems.push(`physics check ${check.code}: no device ${item?.device}`);
+          else if (!points.has(item.point)) problems.push(`physics check ${check.code}: ${item.device} has no active point ${item.point}`);
+        }
+      } else compilePhysics(check, profile, devicesByCode);
+    } catch (error) {
+      problems.push(error.message);
     }
   }
 
