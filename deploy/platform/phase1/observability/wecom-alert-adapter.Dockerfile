@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # Local and source-deploy builds. Production apply-on-server.sh does not use this file:
 # it copies the already-built binary onto the local alertmanager image so the server does not pull a Go toolchain.
-ARG GO_BUILD_IMAGE=golang:1.27.3-bookworm
+ARG GO_BUILD_IMAGE=golang:1.27.4-bookworm
 ARG GO_RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 FROM ${GO_BUILD_IMAGE} AS build
 ARG GO_PROXY=https://proxy.golang.org,direct

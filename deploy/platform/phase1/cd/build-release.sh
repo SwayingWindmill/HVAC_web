@@ -92,7 +92,7 @@ if [[ "${1:-}" == "--check-migrator-list" ]]; then
 fi
 
 if ! command -v go >/dev/null 2>&1; then
-  echo "error: go is not on PATH. The production build uses the go.work toolchain (1.27.3)." >&2
+  echo "error: go is not on PATH. The production build uses the go.work toolchain (1.27.4)." >&2
   exit 1
 fi
 
