@@ -1,6 +1,6 @@
 # 历史趋势：多点位同步曲线与排障跳转
 
-问题单 #766（路线图 #757，决策单 #758、#759）。2026-11-11 和用户逐项确认：已定稿，待实现。
+问题单 #766（路线图 #757，决策单 #758、#759）。2026-11-11 已实现（PR #772）。
 
 参照项目一手源码比对（ThingsBoard `v4.4`、OpenEMS `2026.9.0`、Grafana `v13.3.1`、MyEMS `v6.9.0`）见 `docs/architecture/telemetry-trends-source-review-2026-11-11.md`。页面视觉与三级信息分层基线见 Figma v3 精简分层版 `01 · 历史趋势`（`https://www.figma.com/design/6niU3GeCn8iim5sAwF2XRR?node-id=1-18`）。
 
