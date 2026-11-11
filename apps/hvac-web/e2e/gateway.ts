@@ -246,6 +246,8 @@ export class Gateway {
   forecastOrigin: string | null = null;
   /** Optional custom handler for `device-series:aggregate` so tests can simulate outages or specific series. */
   aggregateHandler: ((query: Json) => { status?: number; body: unknown } | undefined) | null = null;
+  /** Optional custom handler for `analytics/energy-series` so tests can simulate fully priced daily series. */
+  energySeriesHandler: ((query: Json) => { status?: number; body: unknown } | undefined) | null = null;
   readonly findings = replayFindings(fixture<Json>('fdd-findings.json').items, new Date().toISOString());
   /** The Site's latest published recommendation; null until a run publishes one. */
   optimization: Json | null = null;
@@ -300,6 +302,9 @@ export class Gateway {
     slots: [],
   };
   readonly operatingExceptions: Json[] = [];
+  /** The Site's Monthly Electricity Budgets and Utility Bills as the Registry owner keeps them. */
+  readonly electricityBudgets: Json[] = [];
+  readonly utilityBills: Json[] = [];
   /** Members of the Tenant as IAM and the identity directory keep them (系统管理 → 用户与角色). */
   readonly members: Json[] = [
     {
@@ -545,6 +550,206 @@ export class Gateway {
     return undefined;
   }
 
+  // The Registry owner's Monthly Electricity Budgets and Utility Bills.
+  private electricityBilling(method: string, path: string, query: URLSearchParams, body: Json | null, now: string): { status?: number; body: unknown } | undefined {
+    const budgetsPath = `/api/v1/sites/${SITE_ID}/electricity-budgets`;
+    const billsPath = `/api/v1/sites/${SITE_ID}/utility-bills`;
+    if (path !== budgetsPath && !path.startsWith(billsPath)) return undefined;
+
+    const refuse = (status: number, code: string, detail: string) => ({
+      status,
+      body: { type: 'about:blank', title: 'Electricity billing refused', status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
+    });
+    const activePrincipal = this.principalOverride ?? principal;
+    const actor: string = activePrincipal.principalId;
+    const actorDisplay: string = activePrincipal.principal.displayName;
+    const capabilities: string[] = activePrincipal.authorization.capabilities ?? [];
+
+    if (method === 'GET' && path === budgetsPath) {
+      const billingMonth = query.get('billingMonth');
+      const fromMonth = query.get('fromMonth');
+      const toMonth = query.get('toMonth');
+      const items = this.electricityBudgets
+        .filter((item) =>
+          (!billingMonth || item.billingMonth === billingMonth) &&
+          (!fromMonth || item.billingMonth >= fromMonth) &&
+          (!toMonth || item.billingMonth <= toMonth))
+        .sort((a, b) => b.billingMonth.localeCompare(a.billingMonth));
+      return { body: { items } };
+    }
+
+    if (method === 'PUT' && path === budgetsPath) {
+      if (!capabilities.includes('billing.manage')) {
+        return refuse(403, 'BILLING_MANAGE_FORBIDDEN', 'billing.manage is required.');
+      }
+      const existing = this.electricityBudgets.find((item) => item.billingMonth === body?.billingMonth);
+      const currentRevision = existing ? (existing.revision as number) : 0;
+      if (body?.meta?.expectedRevision !== currentRevision) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'monthly electricity budget revision conflict');
+      }
+      if (existing) {
+        existing.budgetAmountCny = body?.budgetAmountCny;
+        existing.note = body?.note ?? '';
+        existing.revision = currentRevision + 1;
+        existing.updatedBy = actor;
+        existing.updatedByDisplay = actorDisplay;
+        existing.updatedAt = now;
+        return { body: existing };
+      }
+      const created: Json = {
+        id: `01990000-8000-7000-8000-${String(this.electricityBudgets.length + 1).padStart(12, '0')}`,
+        tenantId: principal.context.tenantId,
+        siteId: SITE_ID,
+        billingMonth: body?.billingMonth,
+        budgetAmountCny: body?.budgetAmountCny,
+        note: body?.note ?? '',
+        revision: 1,
+        updatedBy: actor,
+        updatedByDisplay: actorDisplay,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.electricityBudgets.unshift(created);
+      return { body: created };
+    }
+
+    if (method === 'GET' && path === billsPath) {
+      const billingMonth = query.get('billingMonth');
+      const meterScope = query.get('meterScope');
+      const status = query.get('status');
+      const items = this.utilityBills
+        .filter((item) =>
+          (!billingMonth || item.billingMonth === billingMonth) &&
+          (!meterScope || item.meterScope === meterScope) &&
+          (!status || item.status === status))
+        .sort((a, b) => b.billingMonth.localeCompare(a.billingMonth) || b.updatedAt.localeCompare(a.updatedAt));
+      return { body: { items } };
+    }
+
+    if (method === 'POST' && path === billsPath) {
+      if (!capabilities.includes('billing.manage')) {
+        return refuse(403, 'BILLING_MANAGE_FORBIDDEN', 'billing.manage is required.');
+      }
+      if (body?.meta?.expectedRevision !== 0) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'expectedRevision must be 0 when creating utility bill');
+      }
+      const created: Json = {
+        id: `01990000-9000-7000-8000-${String(this.utilityBills.length + 1).padStart(12, '0')}`,
+        tenantId: principal.context.tenantId,
+        siteId: SITE_ID,
+        billingMonth: body?.billingMonth,
+        readingStartDate: body?.readingStartDate,
+        readingEndDate: body?.readingEndDate,
+        meterScope: body?.meterScope,
+        billedEnergyKwh: body?.billedEnergyKwh,
+        ...(body?.touBreakdown ? { touBreakdown: body.touBreakdown } : {}),
+        energyChargeCny: body?.energyChargeCny,
+        basicChargeMode: body?.basicChargeMode,
+        basicChargeQuantity: body?.basicChargeMode === 'NONE' ? null : (body?.basicChargeQuantity ?? null),
+        basicChargeCny: body?.basicChargeMode === 'NONE' ? 0 : body?.basicChargeCny,
+        standardPowerFactor: body?.standardPowerFactor ?? null,
+        actualPowerFactor: body?.actualPowerFactor ?? null,
+        powerFactorAdjustmentCny: body?.powerFactorAdjustmentCny,
+        otherChargesCny: body?.otherChargesCny,
+        totalPayableCny: body?.totalPayableCny,
+        chillerShareOverrideRatio: body?.meterScope === 'WHOLE_BUILDING' ? (body?.chillerShareOverrideRatio ?? null) : null,
+        utilityAccountNo: body?.utilityAccountNo ?? '',
+        invoiceNo: body?.invoiceNo ?? '',
+        note: body?.note ?? '',
+        status: 'DRAFT',
+        confirmedBy: null,
+        confirmedByDisplay: null,
+        confirmedAt: null,
+        updatedBy: actor,
+        updatedByDisplay: actorDisplay,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.utilityBills.unshift(created);
+      return { status: 201, body: created };
+    }
+
+    const updateMatch = path.match(new RegExp(`^${billsPath}/([^/]+)$`));
+    if (method === 'PUT' && updateMatch) {
+      if (!capabilities.includes('billing.manage')) {
+        return refuse(403, 'BILLING_MANAGE_FORBIDDEN', 'billing.manage is required.');
+      }
+      const target = this.utilityBills.find((item) => item.id === updateMatch[1]);
+      if (!target) return refuse(404, 'RESOURCE_NOT_FOUND', 'utility bill not found');
+      if (target.status !== 'DRAFT') {
+        return refuse(409, 'UTILITY_BILL_STATE_CONFLICT', 'confirmed utility bill cannot be modified');
+      }
+      if (body?.meta?.expectedRevision !== target.revision) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'utility bill revision conflict');
+      }
+      delete target.touBreakdown;
+      Object.assign(target, {
+        billingMonth: body?.billingMonth,
+        readingStartDate: body?.readingStartDate,
+        readingEndDate: body?.readingEndDate,
+        meterScope: body?.meterScope,
+        billedEnergyKwh: body?.billedEnergyKwh,
+        ...(body?.touBreakdown ? { touBreakdown: body.touBreakdown } : {}),
+        energyChargeCny: body?.energyChargeCny,
+        basicChargeMode: body?.basicChargeMode,
+        basicChargeQuantity: body?.basicChargeMode === 'NONE' ? null : (body?.basicChargeQuantity ?? null),
+        basicChargeCny: body?.basicChargeMode === 'NONE' ? 0 : body?.basicChargeCny,
+        standardPowerFactor: body?.standardPowerFactor ?? null,
+        actualPowerFactor: body?.actualPowerFactor ?? null,
+        powerFactorAdjustmentCny: body?.powerFactorAdjustmentCny,
+        otherChargesCny: body?.otherChargesCny,
+        totalPayableCny: body?.totalPayableCny,
+        chillerShareOverrideRatio: body?.meterScope === 'WHOLE_BUILDING' ? (body?.chillerShareOverrideRatio ?? null) : null,
+        utilityAccountNo: body?.utilityAccountNo ?? '',
+        invoiceNo: body?.invoiceNo ?? '',
+        note: body?.note ?? '',
+        updatedBy: actor,
+        updatedByDisplay: actorDisplay,
+        revision: (target.revision as number) + 1,
+        updatedAt: now,
+      });
+      return { body: target };
+    }
+
+    const confirmMatch = path.match(new RegExp(`^${billsPath}/([^/]+)/confirm$`));
+    if (method === 'POST' && confirmMatch) {
+      if (!capabilities.includes('billing.manage')) {
+        return refuse(403, 'BILLING_MANAGE_FORBIDDEN', 'billing.manage is required.');
+      }
+      const target = this.utilityBills.find((item) => item.id === confirmMatch[1]);
+      if (!target) return refuse(404, 'RESOURCE_NOT_FOUND', 'utility bill not found');
+      if (target.status !== 'DRAFT') {
+        return refuse(409, 'UTILITY_BILL_STATE_CONFLICT', 'utility bill is already confirmed');
+      }
+      if (body?.meta?.expectedRevision !== target.revision) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'utility bill revision conflict');
+      }
+      const duplicateConfirmed = this.utilityBills.some(
+        (other) =>
+          other.id !== target.id &&
+          other.status === 'CONFIRMED' &&
+          other.billingMonth === target.billingMonth &&
+          other.meterScope === target.meterScope,
+      );
+      if (duplicateConfirmed) {
+        return refuse(409, 'REGISTRY_BINDING_CONFLICT', 'duplicate confirmed utility bill for same month and meter scope');
+      }
+      target.status = 'CONFIRMED';
+      target.confirmedBy = actor;
+      target.confirmedByDisplay = actorDisplay;
+      target.confirmedAt = now;
+      if (body?.note) target.note = body.note;
+      target.updatedBy = actor;
+      target.updatedByDisplay = actorDisplay;
+      target.revision = (target.revision as number) + 1;
+      target.updatedAt = now;
+      return { body: target };
+    }
+
+    return undefined;
+  }
+
   // The M&V owner's ledger: implementing fits the recorded baseline over the fourteen days before the
   // implementation time; measures report at once only on different machines' sub-meters.
   private savings(method: string, path: string, query: URLSearchParams, body: Json | null, now: string): { status?: number; body: unknown } | undefined {
@@ -730,6 +935,8 @@ export class Gateway {
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), this.forecastOrigin ?? now) };
     const scheduleReply = this.schedules(method, path, query, body, now);
     if (scheduleReply) return scheduleReply;
+    const billingReply = this.electricityBilling(method, path, query, body, now);
+    if (billingReply) return billingReply;
     if (path.startsWith(`/api/v1/sites/${SITE_ID}/savings/`)) return this.savings(method, path, query, body, now);
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/reports/monthly`) {
       return { body: { items: this.reportSnapshots.filter((stored) => stored.month.startsWith(`${query.get('year')}-`)) } };
@@ -747,6 +954,8 @@ export class Gateway {
       return { body: replayEnergy({ ...recorded.response, devices }, body, Date.parse(recorded.recordedDay)) };
     }
     if (method === 'POST' && path === '/api/v1/analytics/energy-series') {
+      const custom = this.energySeriesHandler?.(body!);
+      if (custom) return custom;
       const recorded = fixture<Json>('energy-series.json')[body?.energyType];
       return { body: this.energyByDay && body?.granularity === 'day' ? replayEnergyDays(recorded, body) : replayEnergy(recorded, body!) };
     }

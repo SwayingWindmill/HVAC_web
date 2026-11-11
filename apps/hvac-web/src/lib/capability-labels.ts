@@ -32,6 +32,7 @@ const CATALOG: Readonly<Record<string, { readonly group: CapabilityGroup; readon
   'savings.manage': { group: '运维', label: '节能措施' },
   'schedule.request': { group: '运维', label: '申请运行例外' },
   'schedule.manage': { group: '运维', label: '管理运行计划' },
+  'billing.manage': { group: '管理', label: '电费预算与结算账单' },
   'site.write': { group: '管理', label: '站点' },
   'space.write': { group: '管理', label: '空间结构' },
   'asset.write': { group: '管理', label: '资产' },

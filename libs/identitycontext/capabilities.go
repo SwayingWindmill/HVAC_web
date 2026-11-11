@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const CapabilitySetVersion = 13
+const CapabilitySetVersion = 14
 
 type Capability string
 
@@ -45,6 +45,7 @@ const (
 	CapabilitySavingsManage         Capability = "savings.manage"
 	CapabilityScheduleRequest       Capability = "schedule.request"
 	CapabilityScheduleManage        Capability = "schedule.manage"
+	CapabilityBillingManage         Capability = "billing.manage"
 )
 
 var supportedCapabilities = [...]Capability{
@@ -82,6 +83,7 @@ var supportedCapabilities = [...]Capability{
 	CapabilitySavingsManage,
 	CapabilityScheduleRequest,
 	CapabilityScheduleManage,
+	CapabilityBillingManage,
 }
 
 func SupportedCapabilities() []Capability {
@@ -123,7 +125,8 @@ func (capability Capability) Valid() bool {
 		CapabilityRegistryRetire,
 		CapabilitySavingsManage,
 		CapabilityScheduleRequest,
-		CapabilityScheduleManage:
+		CapabilityScheduleManage,
+		CapabilityBillingManage:
 		return true
 	default:
 		return false

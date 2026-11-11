@@ -144,6 +144,33 @@ func (server *server) handleAuthorizedWrite(writer http.ResponseWriter, request 
 		input.ActorDisplayName = request.Header.Get("X-Actor-Display-Name")
 		value, replayed, err := server.writer.DecideOperatingException(request.Context(), claims, input)
 		return server.writeMutationResult(writer, request, value, replayed, false, err)
+	case "electricity-budget-write":
+		var input MonthlyElectricityBudgetMutation
+		if !decodeRegistryMutation(writer, request, &input) {
+			return http.StatusBadRequest
+		}
+		input.SiteID = route.parentID
+		input.ActorDisplayName = request.Header.Get("X-Actor-Display-Name")
+		value, replayed, err := server.writer.SaveMonthlyElectricityBudget(request.Context(), claims, input)
+		return server.writeMutationResult(writer, request, value, replayed, false, err)
+	case "utility-bill-write":
+		var input UtilityBillMutation
+		if !decodeRegistryMutation(writer, request, &input) {
+			return http.StatusBadRequest
+		}
+		input.SiteID, input.ID = route.parentID, route.id
+		input.ActorDisplayName = request.Header.Get("X-Actor-Display-Name")
+		value, replayed, err := server.writer.SaveUtilityBill(request.Context(), claims, input)
+		return server.writeMutationResult(writer, request, value, replayed, route.id == "", err)
+	case "utility-bill-confirm":
+		var input ConfirmUtilityBillRequest
+		if !decodeRegistryMutation(writer, request, &input) {
+			return http.StatusBadRequest
+		}
+		input.SiteID, input.BillID = route.parentID, route.id
+		input.ActorDisplayName = request.Header.Get("X-Actor-Display-Name")
+		value, replayed, err := server.writer.ConfirmUtilityBill(request.Context(), claims, input)
+		return server.writeMutationResult(writer, request, value, replayed, false, err)
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "CORE_ROUTE_NOT_FOUND", "The requested Core Registry route does not exist.", false)
 		return http.StatusNotFound
@@ -198,6 +225,9 @@ func (server *server) writeMutationError(writer http.ResponseWriter, request *ht
 		return http.StatusConflict
 	case errors.Is(err, ErrExceptionStateConflict):
 		writeProblem(writer, request, http.StatusConflict, "OPERATING_EXCEPTION_STATE_CONFLICT", "The Operating Exception is not in a state that allows this decision.", false)
+		return http.StatusConflict
+	case errors.Is(err, ErrUtilityBillStateConflict):
+		writeProblem(writer, request, http.StatusConflict, "UTILITY_BILL_STATE_CONFLICT", "Confirmed utility bills are locked and cannot be edited or confirmed again.", false)
 		return http.StatusConflict
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeProblem(writer, request, http.StatusConflict, "REGISTRY_IDEMPOTENCY_CONFLICT", "The idempotency key was already used for a different Registry mutation.", false)

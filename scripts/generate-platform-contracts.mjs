@@ -143,6 +143,12 @@ const expectedOperations = {
   listSiteOperatingExceptions: ['get', '/api/v1/sites/{siteId}/operating-exceptions'],
   createSiteOperatingException: ['post', '/api/v1/sites/{siteId}/operating-exceptions'],
   decideSiteOperatingException: ['post', '/api/v1/sites/{siteId}/operating-exceptions/{exceptionId}/decide'],
+  listSiteMonthlyElectricityBudgets: ['get', '/api/v1/sites/{siteId}/electricity-budgets'],
+  saveSiteMonthlyElectricityBudget: ['put', '/api/v1/sites/{siteId}/electricity-budgets'],
+  listSiteUtilityBills: ['get', '/api/v1/sites/{siteId}/utility-bills'],
+  createSiteUtilityBill: ['post', '/api/v1/sites/{siteId}/utility-bills'],
+  updateSiteUtilityBill: ['put', '/api/v1/sites/{siteId}/utility-bills/{billId}'],
+  confirmSiteUtilityBill: ['post', '/api/v1/sites/{siteId}/utility-bills/{billId}/confirm'],
 };
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {
@@ -177,6 +183,11 @@ const expectedSuccessSchemas = {
   saveSiteOperatingSchedule: 'OperatingSchedule',
   listSiteOperatingExceptions: 'OperatingExceptionList',
   decideSiteOperatingException: 'OperatingException',
+  listSiteMonthlyElectricityBudgets: 'MonthlyElectricityBudgetList',
+  saveSiteMonthlyElectricityBudget: 'MonthlyElectricityBudget',
+  listSiteUtilityBills: 'UtilityBillList',
+  updateSiteUtilityBill: 'UtilityBill',
+  confirmSiteUtilityBill: 'UtilityBill',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
@@ -284,8 +295,9 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'savings.manage',
   'schedule.request',
   'schedule.manage',
+  'billing.manage',
 ]), 'Capability vocabulary is unsupported');
-invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 13, 'EffectiveAuthorization capability set version must be 13');
+invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 14, 'EffectiveAuthorization capability set version must be 14');
 invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.uniqueItems === true && schemas.EffectiveAuthorization.properties.capabilities.maxItems === schemas.Capability.enum.length, 'EffectiveAuthorization capabilities must be unique and bounded');
 invariant(schemas.EffectiveAuthorization.properties.capabilities.items?.$ref === '#/components/schemas/Capability', 'EffectiveAuthorization capabilities must use the public Capability vocabulary');
@@ -377,6 +389,10 @@ const replacements = {
   __SITE_OPERATING_SCHEDULE_PATH__: operations.getSiteOperatingSchedule.path,
   __SITE_OPERATING_EXCEPTIONS_PATH__: operations.listSiteOperatingExceptions.path,
   __SITE_OPERATING_EXCEPTION_DECIDE_PATH__: operations.decideSiteOperatingException.path,
+  __SITE_ELECTRICITY_BUDGETS_PATH__: operations.listSiteMonthlyElectricityBudgets.path,
+  __SITE_UTILITY_BILLS_PATH__: operations.listSiteUtilityBills.path,
+  __SITE_UTILITY_BILL_PATH__: operations.updateSiteUtilityBill.path,
+  __SITE_UTILITY_BILL_CONFIRM_PATH__: operations.confirmSiteUtilityBill.path,
 };
 
 function render(template) {

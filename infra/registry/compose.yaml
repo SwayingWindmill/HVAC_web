@@ -64,6 +64,7 @@ services:
       - ./postgres/init/032-drop-generic-rules.sql:/docker-entrypoint-initdb.d/480.sql:ro
       - ./postgres/init/033-fdd-operating-gates.sql:/docker-entrypoint-initdb.d/490.sql:ro
       - ./postgres/init/034-operating-schedules.sql:/docker-entrypoint-initdb.d/500.sql:ro
+      - ./postgres/init/035-electricity-budgets-and-utility-bills.sql:/docker-entrypoint-initdb.d/510.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

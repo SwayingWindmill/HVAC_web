@@ -264,6 +264,54 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		writeJSON(writer, http.StatusOK, list)
 		return http.StatusOK
 	}
+	if route.resource == "electricity-budgets" {
+		query := request.URL.Query()
+		for name, values := range query {
+			if (name != "billingMonth" && name != "fromMonth" && name != "toMonth") || len(values) != 1 {
+				writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The monthly electricity budgets query is invalid.", false)
+				return http.StatusBadRequest
+			}
+		}
+		filter := MonthlyElectricityBudgetFilter{
+			BillingMonth: query.Get("billingMonth"),
+			FromMonth:    query.Get("fromMonth"),
+			ToMonth:      query.Get("toMonth"),
+		}
+		if err := filter.Validate(); err != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The monthly electricity budgets query is invalid.", false)
+			return http.StatusBadRequest
+		}
+		list, err := server.store.ListMonthlyElectricityBudgets(request.Context(), claims, route.parentID, filter)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, list)
+		return http.StatusOK
+	}
+	if route.resource == "utility-bills" {
+		query := request.URL.Query()
+		for name, values := range query {
+			if (name != "billingMonth" && name != "meterScope" && name != "status") || len(values) != 1 {
+				writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The utility bills query is invalid.", false)
+				return http.StatusBadRequest
+			}
+		}
+		filter := UtilityBillFilter{
+			BillingMonth: query.Get("billingMonth"),
+			MeterScope:   query.Get("meterScope"),
+			Status:       query.Get("status"),
+		}
+		if err := filter.Validate(); err != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The utility bills query is invalid.", false)
+			return http.StatusBadRequest
+		}
+		list, err := server.store.ListUtilityBills(request.Context(), claims, route.parentID, filter)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, list)
+		return http.StatusOK
+	}
 	if route.write {
 		return server.handleAuthorizedWrite(writer, request, route, claims)
 	}
@@ -615,6 +663,18 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/operating-exceptions", resource: "operating-exception-create", parentID: segments[1], action: registryauth.ActionScheduleRequest, write: true}, true
 	case method == http.MethodPost && len(segments) == 5 && segments[0] == "sites" && segments[2] == "operating-exceptions" && segments[4] == "decide":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/operating-exceptions/{exceptionId}/decide", resource: "operating-exception-decide", parentID: segments[1], id: segments[3], action: registryauth.ActionScheduleRequest, write: true}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "electricity-budgets":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/electricity-budgets", resource: "electricity-budgets", parentID: segments[1], action: registryauth.ActionSiteRead}, true
+	case method == http.MethodPut && len(segments) == 3 && segments[0] == "sites" && segments[2] == "electricity-budgets":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/electricity-budgets", resource: "electricity-budget-write", parentID: segments[1], action: registryauth.ActionBillingManage, write: true}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "utility-bills":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/utility-bills", resource: "utility-bills", parentID: segments[1], action: registryauth.ActionSiteRead}, true
+	case method == http.MethodPost && len(segments) == 3 && segments[0] == "sites" && segments[2] == "utility-bills":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/utility-bills", resource: "utility-bill-write", parentID: segments[1], action: registryauth.ActionBillingManage, write: true}, true
+	case method == http.MethodPut && len(segments) == 4 && segments[0] == "sites" && segments[2] == "utility-bills":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/utility-bills/{billId}", resource: "utility-bill-write", parentID: segments[1], id: segments[3], action: registryauth.ActionBillingManage, write: true}, true
+	case method == http.MethodPost && len(segments) == 5 && segments[0] == "sites" && segments[2] == "utility-bills" && segments[4] == "confirm":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/utility-bills/{billId}/confirm", resource: "utility-bill-confirm", parentID: segments[1], id: segments[3], action: registryauth.ActionBillingManage, write: true}, true
 	default:
 		return registryRoute{}, false
 	}

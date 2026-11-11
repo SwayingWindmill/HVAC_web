@@ -68,6 +68,8 @@ const (
 	ActionScheduleRequest Action = "schedule.request"
 	// ActionScheduleManage edits Site Operating Schedules and approves/rejects/cancels Operating Exceptions (#780).
 	ActionScheduleManage Action = "schedule.manage"
+	// ActionBillingManage saves Site monthly electricity budgets and creates/edits/confirms utility bills (#785).
+	ActionBillingManage Action = "billing.manage"
 )
 
 func (action Action) Valid() bool {
@@ -95,7 +97,8 @@ func (action Action) Valid() bool {
 		ActionRegistryRetire,
 		ActionSavingsManage,
 		ActionScheduleRequest,
-		ActionScheduleManage:
+		ActionScheduleManage,
+		ActionBillingManage:
 		return true
 	default:
 		return false
@@ -107,7 +110,7 @@ func (action Action) SiteScoped() bool {
 	case ActionSiteList, ActionSiteRead, ActionAssetList, ActionAssetRead, ActionDeviceList, ActionDeviceRead, ActionDeviceBindingList, ActionMeterBindingResolve, ActionAssetModelRead, ActionTariffRead,
 		ActionSpaceWrite, ActionAssetWrite, ActionDeviceWrite, ActionSensorWrite, ActionPointWrite,
 		ActionBindingWrite, ActionRegistryImport, ActionRegistryRetire, ActionSavingsManage,
-		ActionScheduleRequest, ActionScheduleManage:
+		ActionScheduleRequest, ActionScheduleManage, ActionBillingManage:
 		return true
 	default:
 		return false

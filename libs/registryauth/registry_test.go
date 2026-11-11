@@ -182,6 +182,12 @@ func TestDecisionRequestRequiresConcreteActionAndTenant(t *testing.T) {
 	if registryauth.ActionAllows(registryauth.ActionScheduleRequest, registryauth.ActionScheduleManage) {
 		t.Fatal("schedule.request must not imply schedule.manage")
 	}
+	if !registryauth.ActionBillingManage.Valid() || !registryauth.ActionBillingManage.SiteScoped() {
+		t.Fatal("billing.manage action must be valid and Site scoped")
+	}
+	if registryauth.ActionBillingManage.TenantScoped() {
+		t.Fatal("billing.manage must not be Tenant scoped")
+	}
 }
 
 type errRevocationUnavailable struct{}

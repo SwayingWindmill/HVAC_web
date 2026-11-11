@@ -312,6 +312,15 @@ func (*memoryScheduleBackend) CommitImport(context.Context, registryauth.GrantCl
 func (*memoryScheduleBackend) Retire(context.Context, registryauth.GrantClaims, RetireRequest) (RetirementResult, error) {
 	return RetirementResult{}, ErrInvalidMutation
 }
+func (*memoryScheduleBackend) SaveMonthlyElectricityBudget(context.Context, registryauth.GrantClaims, MonthlyElectricityBudgetMutation) (MonthlyElectricityBudget, bool, error) {
+	return MonthlyElectricityBudget{}, false, ErrInvalidMutation
+}
+func (*memoryScheduleBackend) SaveUtilityBill(context.Context, registryauth.GrantClaims, UtilityBillMutation) (UtilityBill, bool, error) {
+	return UtilityBill{}, false, ErrInvalidMutation
+}
+func (*memoryScheduleBackend) ConfirmUtilityBill(context.Context, registryauth.GrantClaims, ConfirmUtilityBillRequest) (UtilityBill, bool, error) {
+	return UtilityBill{}, false, ErrInvalidMutation
+}
 
 type scheduleHTTPClient struct {
 	handler http.Handler
@@ -320,6 +329,11 @@ type scheduleHTTPClient struct {
 }
 
 func newScheduleHTTPClient(t *testing.T, backend *memoryScheduleBackend) scheduleHTTPClient {
+	t.Helper()
+	return newScheduleHTTPClientWithInterfaces(t, backend, backend)
+}
+
+func newScheduleHTTPClientWithInterfaces(t *testing.T, store RegistryStore, writer RegistryWriter) scheduleHTTPClient {
 	t.Helper()
 	now := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
 	signer, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -331,8 +345,8 @@ func newScheduleHTTPClient(t *testing.T, backend *memoryScheduleBackend) schedul
 		t.Fatal(err)
 	}
 	handler := NewHandler(ServerConfig{
-		Store:                  backend,
-		Writer:                 backend,
+		Store:                  store,
+		Writer:                 writer,
 		CursorCodec:            codec,
 		GrantPublicKey:         &signer.PublicKey,
 		GrantIssuer:            testGrantIssuer,

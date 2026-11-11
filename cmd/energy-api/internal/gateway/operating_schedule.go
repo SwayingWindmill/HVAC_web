@@ -220,50 +220,28 @@ func dispatchOperatingScheduleRoute(h *handler, writer http.ResponseWriter, requ
 		}
 	}
 
-	targetURL := h.registry.coreBaseURL + route.internalPath
-	if !route.write && request.URL.RawQuery != "" {
-		targetURL += "?" + request.URL.RawQuery
-	}
-	reqCtx, cancel := context.WithTimeout(request.Context(), h.registry.coreTimeout)
-	defer cancel()
-	var bodyReader io.Reader
-	if route.write {
-		bodyReader = bytes.NewReader(body)
-	}
-	upstreamReq, err := http.NewRequestWithContext(reqCtx, request.Method, targetURL, bodyReader)
-	if err != nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Core Registry request could not be constructed.", true, nil)
-		return
-	}
-	upstreamReq.Header.Set("Accept", "application/json, application/problem+json")
-	if route.write {
-		upstreamReq.Header.Set("Content-Type", "application/json")
-		displayName := strings.TrimSpace(session.Principal.DisplayName)
-		if displayName == "" {
-			displayName = strings.TrimSpace(session.Principal.Subject)
-		}
-		if displayName != "" {
-			upstreamReq.Header.Set("X-Actor-Display-Name", displayName)
-		}
-	}
-	upstreamReq.Header.Set("X-Delegation-Grant", grant)
-	upstreamReq.Header.Set("X-Route-Policy-Revision", formatRevision(decision.RegistryRevision))
-	upstreamReq.Header.Set("X-Request-ID", requestIDFromContext(request.Context()))
-	observability.InjectHTTP(request.Context(), upstreamReq.Header)
-
-	response, err := h.registry.coreHTTPClient.Do(upstreamReq)
-	if err != nil {
-		if errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
-			writeProblem(writer, request, http.StatusGatewayTimeout, "REGISTRY_TIMEOUT", "Registry timeout", "The Operating Schedule request did not complete before the Gateway deadline.", true, nil)
-			return
-		}
-		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Core Registry is temporarily unavailable.", true, nil)
-		return
-	}
-	defer response.Body.Close()
-
-	writer.Header().Set("X-Route-Policy-Revision", formatRevision(decision.RegistryRevision))
-	writeOperatingScheduleBackendResponse(writer, request, response, h.registry.maxResponseBytes)
+	h.forwardSiteRegistryBackendRequest(
+		writer,
+		request,
+		session,
+		decision.RegistryRevision,
+		route.internalPath,
+		route.write,
+		grant,
+		body,
+		siteRegistryBackendMessages{
+			badRequestTitle:         "Operating Schedule request invalid",
+			defaultBadRequestDetail: "The Operating Schedule request is invalid.",
+			forbiddenTitle:          "Operating Schedule action forbidden",
+			defaultForbiddenCode:    "OPERATING_EXCEPTION_FORBIDDEN",
+			defaultForbiddenDetail:  "The authenticated Principal is not allowed to perform this Operating Exception action.",
+			notFoundDetail:          "The requested Site or Operating Exception was not found.",
+			conflictTitle:           "Operating Schedule conflict",
+			defaultConflictDetail:   "The Operating Schedule mutation conflicts with the current authoritative state.",
+			gatewayTimeoutDetail:    "The Operating Schedule request did not complete before the Gateway deadline.",
+			upstreamTimeoutDetail:   "The Operating Schedule request timed out.",
+		},
+	)
 }
 
 func (h *handler) authorizeSiteScheduleAction(
@@ -275,19 +253,131 @@ func (h *handler) authorizeSiteScheduleAction(
 	forbiddenCode string,
 	forbiddenDetail string,
 ) (string, bool) {
+	return h.authorizeSiteRegistryWriteAction(
+		writer,
+		request,
+		session,
+		siteID,
+		action,
+		forbiddenCode,
+		"Operating Schedule action forbidden",
+		forbiddenDetail,
+	)
+}
+
+func (h *handler) authorizeSiteRegistryWriteAction(
+	writer http.ResponseWriter,
+	request *http.Request,
+	session bffSession,
+	siteID string,
+	action registryauth.Action,
+	forbiddenCode string,
+	forbiddenTitle string,
+	forbiddenDetail string,
+) (string, bool) {
 	authorization, failure := h.authorizeRegistry(request.Context(), session, action)
 	if failure != nil && failure.status != http.StatusForbidden && failure.status != http.StatusNotFound {
 		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
 		return "", false
 	}
 	if _, allowed := authorization.allowedSiteIDs[siteID]; failure != nil || !allowed {
-		writeProblem(writer, request, http.StatusForbidden, forbiddenCode, "Operating Schedule action forbidden", forbiddenDetail, false, nil)
+		writeProblem(writer, request, http.StatusForbidden, forbiddenCode, forbiddenTitle, forbiddenDetail, false, nil)
 		return "", false
 	}
 	return authorization.coreGrant, true
 }
 
+type siteRegistryBackendMessages struct {
+	badRequestTitle         string
+	defaultBadRequestDetail string
+	forbiddenTitle          string
+	defaultForbiddenCode    string
+	defaultForbiddenDetail  string
+	notFoundDetail          string
+	conflictTitle           string
+	defaultConflictDetail   string
+	gatewayTimeoutDetail    string
+	upstreamTimeoutDetail   string
+}
+
+func (h *handler) forwardSiteRegistryBackendRequest(
+	writer http.ResponseWriter,
+	request *http.Request,
+	session bffSession,
+	registryRevision int64,
+	internalPath string,
+	write bool,
+	grant string,
+	body []byte,
+	messages siteRegistryBackendMessages,
+) {
+	targetURL := h.registry.coreBaseURL + internalPath
+	if !write && request.URL.RawQuery != "" {
+		targetURL += "?" + request.URL.RawQuery
+	}
+	reqCtx, cancel := context.WithTimeout(request.Context(), h.registry.coreTimeout)
+	defer cancel()
+	var bodyReader io.Reader
+	if write {
+		bodyReader = bytes.NewReader(body)
+	}
+	upstreamReq, err := http.NewRequestWithContext(reqCtx, request.Method, targetURL, bodyReader)
+	if err != nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Core Registry request could not be constructed.", true, nil)
+		return
+	}
+	upstreamReq.Header.Set("Accept", "application/json, application/problem+json")
+	if write {
+		upstreamReq.Header.Set("Content-Type", "application/json")
+		displayName := strings.TrimSpace(session.Principal.DisplayName)
+		if displayName == "" {
+			displayName = strings.TrimSpace(session.Principal.Subject)
+		}
+		if displayName != "" {
+			upstreamReq.Header.Set("X-Actor-Display-Name", displayName)
+		}
+	}
+	upstreamReq.Header.Set("X-Delegation-Grant", grant)
+	upstreamReq.Header.Set("X-Route-Policy-Revision", formatRevision(registryRevision))
+	upstreamReq.Header.Set("X-Request-ID", requestIDFromContext(request.Context()))
+	observability.InjectHTTP(request.Context(), upstreamReq.Header)
+
+	response, err := h.registry.coreHTTPClient.Do(upstreamReq)
+	if err != nil {
+		if errors.Is(reqCtx.Err(), context.DeadlineExceeded) {
+			writeProblem(writer, request, http.StatusGatewayTimeout, "REGISTRY_TIMEOUT", "Registry timeout", messages.gatewayTimeoutDetail, true, nil)
+			return
+		}
+		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Core Registry is temporarily unavailable.", true, nil)
+		return
+	}
+	defer response.Body.Close()
+
+	writer.Header().Set("X-Route-Policy-Revision", formatRevision(registryRevision))
+	writeSiteRegistryBackendResponse(writer, request, response, h.registry.maxResponseBytes, messages)
+}
+
 func writeOperatingScheduleBackendResponse(writer http.ResponseWriter, request *http.Request, response *http.Response, maxBytes int64) {
+	writeSiteRegistryBackendResponse(writer, request, response, maxBytes, siteRegistryBackendMessages{
+		badRequestTitle:         "Operating Schedule request invalid",
+		defaultBadRequestDetail: "The Operating Schedule request is invalid.",
+		forbiddenTitle:          "Operating Schedule action forbidden",
+		defaultForbiddenCode:    "OPERATING_EXCEPTION_FORBIDDEN",
+		defaultForbiddenDetail:  "The authenticated Principal is not allowed to perform this Operating Exception action.",
+		notFoundDetail:          "The requested Site or Operating Exception was not found.",
+		conflictTitle:           "Operating Schedule conflict",
+		defaultConflictDetail:   "The Operating Schedule mutation conflicts with the current authoritative state.",
+		upstreamTimeoutDetail:   "The Operating Schedule request timed out.",
+	})
+}
+
+func writeSiteRegistryBackendResponse(
+	writer http.ResponseWriter,
+	request *http.Request,
+	response *http.Response,
+	maxBytes int64,
+	messages siteRegistryBackendMessages,
+) {
 	raw, err := readBoundedBody(response.Body, maxBytes)
 	if err != nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Core Registry response exceeded the supported size.", false, nil)
@@ -322,21 +412,21 @@ func writeOperatingScheduleBackendResponse(writer http.ResponseWriter, request *
 		}
 		detail := problem.Detail
 		if detail == "" {
-			detail = "The Operating Schedule request is invalid."
+			detail = messages.defaultBadRequestDetail
 		}
-		writeProblem(writer, request, http.StatusBadRequest, code, "Operating Schedule request invalid", detail, false, nil)
+		writeProblem(writer, request, http.StatusBadRequest, code, messages.badRequestTitle, detail, false, nil)
 	case http.StatusForbidden:
 		code := problem.Code
 		if code == "" {
-			code = "OPERATING_EXCEPTION_FORBIDDEN"
+			code = messages.defaultForbiddenCode
 		}
 		detail := problem.Detail
 		if detail == "" {
-			detail = "The authenticated Principal is not allowed to perform this Operating Exception action."
+			detail = messages.defaultForbiddenDetail
 		}
-		writeProblem(writer, request, http.StatusForbidden, code, "Operating Schedule action forbidden", detail, false, nil)
+		writeProblem(writer, request, http.StatusForbidden, code, messages.forbiddenTitle, detail, false, nil)
 	case http.StatusNotFound:
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site or Operating Exception was not found.", false, nil)
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", messages.notFoundDetail, false, nil)
 	case http.StatusConflict:
 		code := problem.Code
 		if code == "" {
@@ -344,11 +434,11 @@ func writeOperatingScheduleBackendResponse(writer http.ResponseWriter, request *
 		}
 		detail := problem.Detail
 		if detail == "" {
-			detail = "The Operating Schedule mutation conflicts with the current authoritative state."
+			detail = messages.defaultConflictDetail
 		}
-		writeProblem(writer, request, http.StatusConflict, code, "Operating Schedule conflict", detail, false, nil)
+		writeProblem(writer, request, http.StatusConflict, code, messages.conflictTitle, detail, false, nil)
 	case http.StatusGatewayTimeout:
-		writeProblem(writer, request, http.StatusGatewayTimeout, "REGISTRY_TIMEOUT", "Registry timeout", "The Operating Schedule request timed out.", true, nil)
+		writeProblem(writer, request, http.StatusGatewayTimeout, "REGISTRY_TIMEOUT", "Registry timeout", messages.upstreamTimeoutDetail, true, nil)
 	default:
 		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Core Registry is temporarily unavailable.", true, nil)
 	}

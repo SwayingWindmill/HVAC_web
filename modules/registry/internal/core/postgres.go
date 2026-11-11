@@ -30,6 +30,8 @@ type RegistryStore interface {
 	ListImportTariffs(context.Context, registryauth.GrantClaims, string, time.Time) (ImportTariffs, error)
 	GetOperatingSchedule(context.Context, registryauth.GrantClaims, string) (OperatingSchedule, error)
 	ListOperatingExceptions(context.Context, registryauth.GrantClaims, string, OperatingExceptionFilter) (OperatingExceptionList, error)
+	ListMonthlyElectricityBudgets(context.Context, registryauth.GrantClaims, string, MonthlyElectricityBudgetFilter) (MonthlyElectricityBudgetList, error)
+	ListUtilityBills(context.Context, registryauth.GrantClaims, string, UtilityBillFilter) (UtilityBillList, error)
 }
 
 type PostgresStore struct {
