@@ -197,16 +197,18 @@ type Site struct {
 }
 
 type Asset struct {
-	ID            string `json:"id"`
-	TenantID      string `json:"tenantId"`
-	SiteID        string `json:"siteId"`
-	Code          string `json:"code"`
-	DisplayName   string `json:"displayName"`
-	AssetType string `json:"assetType"`
-	Status        string `json:"status"`
-	Revision      int64  `json:"revision"`
-	CreatedAt     string `json:"createdAt"`
-	UpdatedAt     string `json:"updatedAt"`
+	ID            string   `json:"id"`
+	TenantID      string   `json:"tenantId"`
+	SiteID        string   `json:"siteId"`
+	Code          string   `json:"code"`
+	DisplayName   string   `json:"displayName"`
+	AssetType     string   `json:"assetType"`
+	Status        string   `json:"status"`
+	Revision      int64    `json:"revision"`
+	CreatedAt     string   `json:"createdAt"`
+	UpdatedAt     string   `json:"updatedAt"`
+	RatedPower    *float64 `json:"ratedPower,omitempty"`
+	RatedCapacity *float64 `json:"ratedCapacity,omitempty"`
 }
 
 type Device struct {

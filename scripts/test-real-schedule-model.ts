@@ -12,9 +12,11 @@ import {
   detectUnscheduledRunningDeviations,
   extractSchedulePlantMonitorTargets,
   findActiveDeviationWorkOrder,
+  findOverlappingMinuteSlot,
   mergeWeeklyScheduleSpans,
   resolveEffectiveWeek,
   splitScheduleSlotDraft,
+  validateCoolingSlotRowInput,
 } from '../apps/hvac-web/src/features/schedules/schedule-model.ts';
 
 const SITE_ID = '018f3e00-1000-7000-8000-000000000001';
@@ -524,4 +526,133 @@ test('detectUnscheduledRunningDeviations respects pre-cool/coast-down grace wind
     nowMs,
   });
   assert.equal(clearedDeviations.length, 0);
+});
+
+test('extractSchedulePlantMonitorTargets reads Asset.ratedPower, matches Songyaxuan power_total + PROVISIONAL_READINGS chwp-main, and validates slot rows', () => {
+  const baseModel = buildMinimalAssetModel();
+  const songyaxuanStyleModel: SiteAssetModel = {
+    ...baseModel,
+    assets: [
+      {
+        ...baseModel.assets[0],
+        code: 'chiller-a',
+        displayName: 'A 机组',
+        ratedPower: 300, // 10% threshold = 30 kW on Asset directly!
+      },
+    ],
+    devices: [
+      {
+        ...baseModel.devices[0],
+        code: 'meter-uid1',
+        displayName: 'A 机组电表（1 号，UID 1）',
+        deviceType: 'HVAC_POWER_METER',
+      },
+      {
+        ...baseModel.devices[1],
+        code: 'chwp-main',
+        displayName: '冷冻水泵（总管）',
+        deviceType: 'PROVISIONAL_READINGS',
+      },
+    ],
+    telemetryPoints: [
+      {
+        ...baseModel.telemetryPoints[0],
+        pointCode: 'power_total',
+        sourceKey: 'chiller.power',
+        sourceMetadata: {}, // Empty metadata: must pick up Asset.ratedPower = 300
+      },
+      baseModel.telemetryPoints[1],
+      baseModel.telemetryPoints[2],
+    ],
+    relationships: [baseModel.relationships[0]], // Chiller meter has MONITORS -> CHILLER; chwp-main has no Asset relationship!
+  };
+
+  const targets = extractSchedulePlantMonitorTargets(songyaxuanStyleModel);
+  assert.equal(targets.length, 2);
+  const chillerTarget = targets.find((item) => item.role === 'CHILLER');
+  const pumpTarget = targets.find((item) => item.role === 'CHILLED_WATER_PUMP');
+  assert.ok(chillerTarget);
+  assert.ok(pumpTarget);
+  assert.equal(chillerTarget.powerKey, 'power_total');
+  assert.equal(chillerTarget.ratedPowerKw, 300);
+
+  const mondayMidnightUtc = Date.parse('2026-10-11T16:00:00.000Z');
+  const schedule: OperatingSchedule = {
+    id: '01990000-6000-7000-8000-000000000002',
+    tenantId: TENANT_ID,
+    siteId: SITE_ID,
+    timezone: TIMEZONE,
+    name: '松雅轩运行计划',
+    preCoolLeadMinutes: 0,
+    coastDownLagMinutes: 0,
+    revision: 1,
+    updatedBy: '018f3e00-2000-7000-8000-000000000001',
+    updatedAt: '2026-10-12T00:00:00.000Z',
+    slots: [{ dayOfWeek: 1, startMinute: 480, endMinute: 1080 }],
+  };
+  const week = resolveEffectiveWeek({
+    schedule,
+    exceptions: [],
+    anchorDate: '2026-10-12',
+    timezone: TIMEZONE,
+  });
+
+  const makeBucket = (minuteStart: number, kw: number): DeviceHistoryAggregateBucket => ({
+    telemetryKey: 'power_total',
+    pointId: '01910000-0000-7000-8000-00000000001c',
+    pointRevision: 1,
+    pointType: 'TELEMETRY',
+    unit: 'kW',
+    periodStart: new Date(mondayMidnightUtc + minuteStart * 60_000).toISOString(),
+    periodEnd: new Date(mondayMidnightUtc + (minuteStart + 15) * 60_000).toISOString(),
+    quality: { good: 30, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
+    completeness: 1,
+    gauge: { average: kw, minimum: kw, maximum: kw, first: kw, last: kw, sampleCount: 30 },
+  });
+
+  const deviations = detectUnscheduledRunningDeviations({
+    siteId: SITE_ID,
+    week,
+    targets,
+    bucketsByDevice: new Map([
+      [
+        CHILLER_DEVICE_ID,
+        [
+          makeBucket(2 * 60, 25), // 25 kW < 30 kW (10% of 300 kW) -> ignored standby
+          makeBucket(3 * 60, 35), // 35 kW >= 30 kW -> flagged!
+        ],
+      ],
+    ]),
+    nowMs: mondayMidnightUtc + 6 * 60 * 60_000,
+  });
+  assert.equal(deviations.length, 1);
+  assert.equal(deviations[0].startMinute, 180);
+  assert.equal(deviations[0].averagePowerKw, 35);
+
+  const invalidCross = validateCoolingSlotRowInput({
+    rowLabel: '第 1 行',
+    startTime: '22:00',
+    endTime: '02:00',
+    crossesMidnight: false,
+    allowCrossMidnight: true,
+    targetSupplyTempInput: '7',
+  });
+  assert.equal(invalidCross.ok, false);
+
+  const validCross = validateCoolingSlotRowInput({
+    rowLabel: '第 1 行',
+    startTime: '22:00',
+    endTime: '02:00',
+    crossesMidnight: true,
+    allowCrossMidnight: true,
+    targetSupplyTempInput: '7.5',
+  });
+  assert.equal(validCross.ok, true);
+
+  assert.ok(
+    findOverlappingMinuteSlot([
+      { startMinute: 480, endMinute: 720 },
+      { startMinute: 700, endMinute: 900 },
+    ]),
+  );
 });

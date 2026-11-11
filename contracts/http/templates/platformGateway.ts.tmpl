@@ -213,6 +213,8 @@ export const assetSchema = z.object({
   revision: revisionSchema,
   createdAt: instantSchema,
   updatedAt: instantSchema,
+  ratedPower: z.number().min(0).optional(),
+  ratedCapacity: z.number().min(0).optional(),
 }).strict();
 export const deviceSchema = z.object({
   id: uuidV7Schema,

@@ -25,7 +25,7 @@ const TARIFF_BAND_STYLE: Readonly<Record<TariffPeriod['periodCode'], string>> = 
 const EXCEPTION_BADGE_STYLE = {
   HOLIDAY_SHUTDOWN: 'bg-muted text-muted-foreground border-border',
   MAINTENANCE_WINDOW: 'bg-warning-soft text-warning-text border-warning/30',
-  OVERTIME_COOLING: 'bg-info-soft text-info-text border-info/30',
+  OVERTIME_COOLING: 'bg-primary-soft text-primary border-primary-line',
 } as const;
 
 function pct(minute: number): string {
@@ -47,9 +47,11 @@ export interface WeeklyScheduleGridProps {
   readonly todayDate: string;
   readonly currentMinuteOfDay: number | null;
   readonly hasEvaluatedHistory: boolean;
+  readonly historyError: boolean;
   readonly canManageSchedule: boolean;
   readonly onInspect: (id: string) => void;
   readonly onOpenEditor: () => void;
+  readonly onRetryHistory: () => void;
 }
 
 export function WeeklyScheduleGrid({
@@ -61,9 +63,11 @@ export function WeeklyScheduleGrid({
   todayDate,
   currentMinuteOfDay,
   hasEvaluatedHistory,
+  historyError,
   canManageSchedule,
   onInspect,
   onOpenEditor,
+  onRetryHistory,
 }: WeeklyScheduleGridProps) {
   const isUnconfigured =
     schedule.revision === 0 &&
@@ -102,7 +106,7 @@ export function WeeklyScheduleGrid({
             </Button>
           ) : (
             <p className="text-xs text-subtle-foreground">
-              当前账号为只读权限，请联系站点管理员配置周运行计划。
+              当前账号为只读权限，请联系运维主管或管理员配置周运行计划。
             </p>
           )}
         </div>
@@ -120,9 +124,21 @@ export function WeeklyScheduleGrid({
               本周计划供冷 <strong className="font-semibold text-foreground">{totalScheduledHours}</strong> 小时
             </span>
             {overriddenDaysCount > 0 ? (
-              <span className="text-info-text">含 {overriddenDaysCount} 天例外覆盖</span>
+              <span className="font-medium text-primary">含 {overriddenDaysCount} 天例外覆盖</span>
             ) : null}
-            {deviations.length > 0 ? (
+            {historyError ? (
+              <span className="inline-flex items-center gap-1.5 rounded-sm bg-destructive-soft px-2 py-0.5 text-xs font-medium text-destructive-text">
+                <span aria-hidden="true">◆</span>
+                无法读取 15 分钟历史读数，暂未完成计划外开机核查
+                <button
+                  type="button"
+                  onClick={onRetryHistory}
+                  className="underline underline-offset-2 hover:opacity-80"
+                >
+                  重试
+                </button>
+              </span>
+            ) : deviations.length > 0 ? (
               <span className="inline-flex items-center gap-1 rounded-sm bg-warning-soft px-2 py-0.5 text-xs font-medium text-warning-text">
                 <span aria-hidden="true">▲</span>
                 发现 {deviations.length} 段计划外开机，点击色块核查
@@ -139,7 +155,7 @@ export function WeeklyScheduleGrid({
               常规供冷
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <span className="size-2.5 rounded-[2px] border border-info/50 bg-info-soft" aria-hidden="true" />
+              <span className="size-2.5 rounded-[2px] border border-dashed border-primary bg-primary-soft" aria-hidden="true" />
               例外供冷
             </span>
             <span className="inline-flex items-center gap-1.5">
@@ -433,11 +449,11 @@ function CoolingSlotButton({
         'absolute top-2 bottom-2 z-10 flex items-center justify-between gap-1.5 overflow-hidden rounded-md border px-2 text-left text-xs transition-all focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
         slot.source === 'EXCEPTION'
           ? selected
-            ? 'border-info bg-info/20 text-foreground ring-2 ring-info/60'
-            : 'border-info/55 bg-info-soft text-foreground hover:border-info'
+            ? 'border-dashed border-primary bg-primary/20 text-foreground ring-2 ring-ring-soft'
+            : 'border-dashed border-primary bg-primary-soft text-foreground hover:bg-primary/15'
           : selected
-            ? 'border-primary bg-primary/20 text-foreground ring-2 ring-primary/60'
-            : 'border-primary/45 bg-primary-soft text-foreground hover:border-primary',
+            ? 'border-primary bg-primary/20 text-foreground ring-2 ring-ring-soft'
+            : 'border-primary-line bg-primary-soft text-foreground hover:border-primary',
       )}
     >
       {durationMinutes >= 90 ? (

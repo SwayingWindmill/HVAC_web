@@ -192,44 +192,54 @@ export async function decideOperatingException(
   return response.data;
 }
 
+export type ScheduleErrorContext = 'schedule' | 'exception';
+
 export function isRevisionConflictError(error: unknown): boolean {
   return (
     error instanceof PlatformApiError &&
     error.problem.status === 409 &&
-    (error.problem.code.includes('REVISION') || error.problem.detail.toLowerCase().includes('revision'))
+    error.problem.code === 'REGISTRY_REVISION_CONFLICT'
   );
 }
 
-export function scheduleErrorMessage(error: unknown, fallback: string): string {
+export function scheduleErrorMessage(
+  error: unknown,
+  fallback: string,
+  context: ScheduleErrorContext = 'schedule',
+): string {
   if (error instanceof PlatformApiError) {
-    const { status, code, detail } = error.problem;
-    if (status === 403) {
-      return '当前账号没有执行该运行计划操作的权限';
+    const { status, code } = error.problem;
+    if (status === 403 || code === 'OPERATING_EXCEPTION_FORBIDDEN') {
+      return '当前账号没有执行该运行计划操作的权限，请联系运维主管或管理员';
+    }
+    if (status === 404 || code === 'RESOURCE_NOT_FOUND') {
+      return '未找到对应的站点或运行例外记录，请刷新页面后重试';
     }
     if (status === 409) {
-      if (code.includes('REVISION') || detail.toLowerCase().includes('revision')) {
-        return '周运行计划已被其他成员更新，请刷新最新版本后重新保存';
+      if (code === 'REGISTRY_REVISION_CONFLICT') {
+        return context === 'exception'
+          ? '该运行例外已被其他成员更新，请刷新页面后重试'
+          : '周运行计划已被其他成员更新，请点击「刷新最新计划」核对后重新保存';
       }
-      if (detail.includes('overlap') || code.includes('OVERLAP') || code.includes('CONFLICT')) {
-        if (detail.includes('approved operating exception') || detail.includes('date range')) {
-          return '该日期范围与已生效的运行例外重叠，请调整起止日期或先撤回已有例外';
-        }
-        if (detail.includes('slot')) {
-          return '同一天的供冷时段存在重叠，请调整起止时间';
-        }
+      if (code === 'OPERATING_EXCEPTION_STATE_CONFLICT') {
+        return '该运行例外当前状态不支持此操作，请刷新页面查看最新状态';
       }
-      if (detail.includes('only requester')) {
-        return '仅申请人本人或站点管理员可以撤回该待审批例外';
+      if (code === 'REGISTRY_BINDING_CONFLICT') {
+        return context === 'exception'
+          ? '该日期范围与已生效的运行例外重叠，请调整起止日期或先撤回已有例外'
+          : '同一天的供冷时段存在重叠，请调整起止时间后再保存';
       }
-      return detail || '当前状态不允许此操作，请刷新后重试';
+      if (code === 'REGISTRY_IDEMPOTENCY_CONFLICT') {
+        return '请勿重复提交不同的变更内容，刷新页面后重试';
+      }
+      return '当前状态不允许此操作，请刷新页面后重试';
     }
-    if (status === 400) {
-      return detail || '填写的运行计划参数不符合校验规则，请检查起止时间与温度范围';
+    if (status === 400 || code === 'REGISTRY_MUTATION_INVALID') {
+      return context === 'exception'
+        ? '填写的例外日期、时段或原因不符合规则，请检查后重试'
+        : '填写的周运行计划时段或宽限参数不符合规则，请检查后重试';
     }
-    return detail || fallback;
-  }
-  if (error instanceof Error && error.message) {
-    return error.message;
+    return fallback;
   }
   return fallback;
 }

@@ -194,7 +194,7 @@ function SlotInspectorBody({
         <SheetHeader className="border-b border-divider pb-4">
           <div className="flex items-center gap-2">
             <span className="rounded-sm bg-primary-soft px-2 py-0.5 text-xs font-medium text-primary">
-              {slot.source === 'EXCEPTION' ? '例外日程覆盖' : '常规周计划'}
+              {slot.source === 'EXCEPTION' ? '运行例外覆盖' : '常规周计划'}
             </span>
             {slot.spanGroupId ? (
               <span className="rounded-sm bg-muted px-2 py-0.5 text-xs text-muted-foreground">
@@ -276,7 +276,7 @@ function SlotInspectorBody({
       <SheetFooter className="border-t border-divider p-4 sm:flex-row sm:justify-end">
         <Button variant="outline" size="sm" onClick={onOpenExceptionsTab}>
           <CalendarClock data-icon="inline-start" />
-          管理例外日程
+          查看运行例外
         </Button>
         {slot.source === 'WEEKLY' && canManageSchedule ? (
           <Button size="sm" onClick={onOpenEditor}>
@@ -345,7 +345,7 @@ function ShutdownInspectorBody({
 
       <SheetFooter className="border-t border-divider p-4 sm:flex-row sm:justify-end">
         <Button size="sm" onClick={onOpenExceptionsTab}>
-          在例外日程中查看
+          在运行例外中查看
         </Button>
       </SheetFooter>
     </>

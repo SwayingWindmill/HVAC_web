@@ -3742,6 +3742,14 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Instant"
+          },
+          "ratedPower": {
+            "type": "number",
+            "minimum": 0
+          },
+          "ratedCapacity": {
+            "type": "number",
+            "minimum": 0
           }
         }
       },

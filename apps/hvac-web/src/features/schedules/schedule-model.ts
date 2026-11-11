@@ -151,6 +151,82 @@ export function parseTimeInputToMinute(value: string, allow24 = false): number |
   return h * 60 + m;
 }
 
+export type ValidatedSlotRowResult =
+  | {
+      readonly ok: true;
+      readonly startMinute: number;
+      readonly endMinute: number;
+      readonly targetSupplyTempC: number | undefined;
+    }
+  | {
+      readonly ok: false;
+      readonly message: string;
+    };
+
+export function validateCoolingSlotRowInput(input: {
+  readonly rowLabel: string;
+  readonly startTime: string;
+  readonly endTime: string;
+  readonly crossesMidnight: boolean;
+  readonly allowCrossMidnight: boolean;
+  readonly targetSupplyTempInput: string;
+}): ValidatedSlotRowResult {
+  const startMinute = parseTimeInputToMinute(input.startTime, false);
+  const endMinute = parseTimeInputToMinute(input.endTime, !input.crossesMidnight);
+  if (startMinute === null || endMinute === null) {
+    return {
+      ok: false,
+      message: `${input.rowLabel} 的起止时间格式无效，请使用 HH:MM（结束时间可填 24:00）`,
+    };
+  }
+  if (!input.crossesMidnight && startMinute >= endMinute) {
+    return {
+      ok: false,
+      message: input.allowCrossMidnight
+        ? `${input.rowLabel} 的结束时间须晚于开始时间；若需跨午夜运行至次日凌晨，请勾选「跨日」`
+        : `${input.rowLabel} 的结束时间须晚于开始时间（可填 24:00）`,
+    };
+  }
+  if (input.crossesMidnight && (endMinute <= 0 || endMinute >= 1440)) {
+    return {
+      ok: false,
+      message: `${input.rowLabel} 勾选跨日后，次日结束时间须在 00:01 至 23:59 之间`,
+    };
+  }
+
+  let targetSupplyTempC: number | undefined;
+  const trimmedTemp = input.targetSupplyTempInput.trim();
+  if (trimmedTemp !== '') {
+    const parsedTemp = Number(trimmedTemp);
+    if (!Number.isFinite(parsedTemp) || parsedTemp < 4 || parsedTemp > 20) {
+      return {
+        ok: false,
+        message: `${input.rowLabel} 的交接参考供水温度须在 4.0–20.0 °C 之间`,
+      };
+    }
+    targetSupplyTempC = Number(parsedTemp.toFixed(1));
+  }
+
+  return {
+    ok: true,
+    startMinute,
+    endMinute,
+    targetSupplyTempC,
+  };
+}
+
+export function findOverlappingMinuteSlot<T extends { readonly startMinute: number; readonly endMinute: number }>(
+  slots: readonly T[],
+): readonly [T, T] | null {
+  const sorted = [...slots].sort((a, b) => a.startMinute - b.startMinute);
+  for (let i = 1; i < sorted.length; i += 1) {
+    if (sorted[i].startMinute < sorted[i - 1].endMinute) {
+      return [sorted[i - 1], sorted[i]];
+    }
+  }
+  return null;
+}
+
 /** Generates an RFC 9562 UUIDv7 using Web Crypto for cross-midnight spanGroupId grouping. */
 export function createClientUuidV7(nowMs = Date.now()): string {
   const bytes = new Uint8Array(16);
@@ -418,7 +494,9 @@ function readNumericMetadata(meta: Record<string, unknown> | undefined, keys: re
 }
 
 export function extractSchedulePlantMonitorTargets(assetModel: SiteAssetModel): SchedulePlantMonitorTarget[] {
-  const assetById = new Map(assetModel.assets.filter((a) => a.status === 'ACTIVE').map((a) => [a.id, a]));
+  const activeAssets = assetModel.assets.filter((a) => a.status === 'ACTIVE');
+  const assetById = new Map(activeAssets.map((a) => [a.id, a]));
+  const assetByCode = new Map(activeAssets.map((a) => [a.code.toLowerCase(), a]));
   const assetByDeviceId = new Map<string, (typeof assetModel.assets)[number]>();
 
   for (const rel of assetModel.relationships) {
@@ -443,18 +521,24 @@ export function extractSchedulePlantMonitorTargets(assetModel: SiteAssetModel): 
   const targets: SchedulePlantMonitorTarget[] = [];
   for (const device of assetModel.devices) {
     if (device.status !== 'ACTIVE') continue;
-    const asset = assetByDeviceId.get(device.id);
+    const asset = assetByDeviceId.get(device.id) ?? assetByCode.get(device.code.toLowerCase());
     const assetType = asset?.assetType ?? '';
     const isChiller = assetType === 'CHILLER' || device.deviceType === 'CHILLER_CONTROLLER';
     const isChilledWaterPump =
       assetType === 'CHILLED_WATER_PUMP' ||
-      (device.deviceType === 'PUMP_CONTROLLER' && device.code.toLowerCase().startsWith('chwp'));
+      ((device.deviceType === 'PUMP_CONTROLLER' || device.deviceType === 'PROVISIONAL_READINGS') &&
+        device.code.toLowerCase().startsWith('chwp'));
 
     if (!isChiller && !isChilledWaterPump) continue;
 
     const points = pointsByDevice.get(device.id) ?? [];
     const powerPoint =
-      points.find((p) => p.pointCode === 'power' || p.pointCode === 'active_power') ?? null;
+      points.find(
+        (p) =>
+          p.pointCode === 'power_total' ||
+          p.pointCode === 'power' ||
+          p.pointCode === 'active_power',
+      ) ?? null;
     const runStatePoint = points.find((p) => p.pointCode === 'run_state') ?? null;
 
     const keys: string[] = [];
@@ -462,8 +546,13 @@ export function extractSchedulePlantMonitorTargets(assetModel: SiteAssetModel): 
     if (runStatePoint && !keys.includes(runStatePoint.pointCode)) keys.push(runStatePoint.pointCode);
     if (keys.length === 0) continue;
 
+    const assetRatedPower =
+      typeof asset?.ratedPower === 'number' && Number.isFinite(asset.ratedPower) && asset.ratedPower > 0
+        ? asset.ratedPower
+        : null;
     const ratedPowerKw = isChiller
-      ? readNumericMetadata(powerPoint?.sourceMetadata, ['ratedPowerKw', 'ratedPower', 'nominalPowerKw'])
+      ? (assetRatedPower ??
+        readNumericMetadata(powerPoint?.sourceMetadata, ['ratedPowerKw', 'ratedPower', 'nominalPowerKw']))
       : null;
 
     targets.push({

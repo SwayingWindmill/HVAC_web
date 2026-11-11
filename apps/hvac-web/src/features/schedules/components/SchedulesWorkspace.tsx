@@ -8,6 +8,7 @@ import { PageHeader, PageMeta } from '@/blocks/page-header';
 import { StateCard } from '@/blocks/state/state-card';
 import { InfoTip } from '@/components/info-tip';
 import { Main } from '@/components/layout/Main';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -16,6 +17,7 @@ import { siteAssetModelQuery } from '@/features/operations/trends/query';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { useNow } from '@/hooks/use-now';
+import { cn } from '@/lib/utils';
 import {
   deviationWorkOrdersQuery,
   scheduleErrorMessage,
@@ -65,7 +67,7 @@ export function SchedulesWorkspace() {
   const canListWorkOrders = capabilities.includes('work-order.list');
   const canCreateWorkOrder = capabilities.includes('work-order.create');
 
-  const activeView = search.view ?? 'schedule';
+  const activeView = search.view === 'exceptions' ? 'exceptions' : 'week';
   const todayDate = useMemo(
     () => siteLocalDateString(new Date(nowMs), site.timezone),
     [nowMs, site.timezone],
@@ -139,12 +141,21 @@ export function SchedulesWorkspace() {
         canReadTelemetryHistory &&
         effectiveWeek !== null &&
         hasScheduleConfigured &&
+        !weekExceptionsQuery.isError &&
         historyToMs > historyFromMs,
     }),
   );
 
   const deviations = useMemo(() => {
-    if (!effectiveWeek || !plantAggregateQuery.data || !hasScheduleConfigured) return [];
+    if (
+      !effectiveWeek ||
+      !plantAggregateQuery.data ||
+      plantAggregateQuery.isError ||
+      weekExceptionsQuery.isError ||
+      !hasScheduleConfigured
+    ) {
+      return [];
+    }
     return detectUnscheduledRunningDeviations({
       siteId: site.id,
       week: effectiveWeek,
@@ -152,7 +163,16 @@ export function SchedulesWorkspace() {
       bucketsByDevice: plantAggregateQuery.data,
       nowMs,
     });
-  }, [effectiveWeek, plantAggregateQuery.data, hasScheduleConfigured, site.id, monitorTargets, nowMs]);
+  }, [
+    effectiveWeek,
+    plantAggregateQuery.data,
+    plantAggregateQuery.isError,
+    weekExceptionsQuery.isError,
+    hasScheduleConfigured,
+    site.id,
+    monitorTargets,
+    nowMs,
+  ]);
 
   const inspectionTarget = useMemo(
     () =>
@@ -193,7 +213,7 @@ export function SchedulesWorkspace() {
         <StateCard
           tone="danger"
           title={<h2 className="text-base font-semibold">无法读取站点运行计划</h2>}
-          description={scheduleErrorMessage(scheduleQuery.error, '请检查网络连接或稍后重试')}
+          description={scheduleErrorMessage(scheduleQuery.error, '请检查网络连接或稍后重试', 'schedule')}
         >
           <Button variant="outline" size="sm" onClick={() => void scheduleQuery.refetch()}>
             重试
@@ -231,7 +251,7 @@ export function SchedulesWorkspace() {
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            {activeView === 'schedule' ? (
+            {activeView === 'week' ? (
               <div className="inline-flex items-center rounded-md border border-border bg-card p-0.5">
                 <Button
                   type="button"
@@ -244,10 +264,13 @@ export function SchedulesWorkspace() {
                 </Button>
                 <Button
                   type="button"
-                  variant={selectedMondayDate === currentMondayDate ? 'secondary' : 'ghost'}
+                  variant="ghost"
                   size="sm"
                   onClick={() => setWeekAnchor(currentMondayDate)}
-                  className="px-2.5 text-xs tabular-nums"
+                  className={cn(
+                    'px-2.5 text-xs tabular-nums',
+                    selectedMondayDate === currentMondayDate && 'bg-muted font-medium text-foreground',
+                  )}
                 >
                   {selectedMondayDate === currentMondayDate
                     ? `本周 · ${selectedMondayDate.slice(5)}–${selectedSundayDate.slice(5)}`
@@ -281,7 +304,7 @@ export function SchedulesWorkspace() {
 
             {canManageSchedule && schedule && (hasScheduleConfigured || activeView === 'exceptions') ? (
               <Button
-                variant={activeView === 'schedule' ? 'default' : 'outline'}
+                variant={activeView === 'week' ? 'default' : 'outline'}
                 size="sm"
                 onClick={() => setEditorOpen(true)}
               >
@@ -307,9 +330,9 @@ export function SchedulesWorkspace() {
       >
         <div className="border-b border-divider">
           <TabsList variant="line">
-            <TabsTrigger value="schedule">周运行计划</TabsTrigger>
+            <TabsTrigger value="week">周运行计划</TabsTrigger>
             <TabsTrigger value="exceptions">
-              例外日程
+              运行例外
               {pendingCount > 0 ? (
                 <span className="ml-1 inline-flex min-w-4 items-center justify-center rounded-full bg-warning-soft px-1.5 py-0.2 text-[11px] font-semibold text-warning-text tabular-nums">
                   {pendingCount}
@@ -319,7 +342,30 @@ export function SchedulesWorkspace() {
           </TabsList>
         </div>
 
-        <TabsContent value="schedule" className="mt-3">
+        <TabsContent value="week" className="mt-3 space-y-3">
+          {weekExceptionsQuery.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>无法读取本周运行例外覆盖记录</AlertTitle>
+              <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  {scheduleErrorMessage(
+                    weekExceptionsQuery.error,
+                    '由于运行例外状态未知，已暂停本周计划外开机核查以避免误报。',
+                    'exception',
+                  )}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void weekExceptionsQuery.refetch()}
+                >
+                  重试
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
           {!schedule || !effectiveWeek ? (
             <Skeleton className="h-[460px] w-full rounded-xl" />
           ) : (
@@ -331,7 +377,13 @@ export function SchedulesWorkspace() {
               inspectedId={search.inspect}
               todayDate={todayDate}
               currentMinuteOfDay={currentMinuteOfDay}
-              hasEvaluatedHistory={Boolean(plantAggregateQuery.data && historyToMs > historyFromMs)}
+              hasEvaluatedHistory={Boolean(
+                plantAggregateQuery.data &&
+                  !plantAggregateQuery.isError &&
+                  !weekExceptionsQuery.isError &&
+                  historyToMs > historyFromMs,
+              )}
+              historyError={plantAggregateQuery.isError || assetModelQuery.isError}
               canManageSchedule={canManageSchedule}
               onInspect={(id) => {
                 void navigate({
@@ -342,6 +394,10 @@ export function SchedulesWorkspace() {
                 });
               }}
               onOpenEditor={() => setEditorOpen(true)}
+              onRetryHistory={() => {
+                if (assetModelQuery.isError) void assetModelQuery.refetch();
+                if (plantAggregateQuery.isError) void plantAggregateQuery.refetch();
+              }}
             />
           )}
         </TabsContent>
@@ -351,16 +407,30 @@ export function SchedulesWorkspace() {
             siteId={site.id}
             timezone={site.timezone}
             csrfToken={principal.session.csrfToken}
-            currentSubject={principal.principal.subject}
+            currentPrincipalId={principal.principalId}
             items={tabExceptionsQuery.data ?? []}
             isLoading={tabExceptionsQuery.isLoading}
+            isError={tabExceptionsQuery.isError}
+            error={tabExceptionsQuery.error}
             statusFilter={search.status}
+            page={search.page ?? 1}
+            pageSize={search.pageSize ?? 20}
             canManageSchedule={canManageSchedule}
+            onRetry={() => void tabExceptionsQuery.refetch()}
             onStatusFilterChange={(next: OperatingExceptionStatus | undefined) => {
               void navigate({
                 search: (prev) => ({
                   ...prev,
                   status: next,
+                  page: undefined,
+                }),
+              });
+            }}
+            onPageChange={(nextPage) => {
+              void navigate({
+                search: (prev) => ({
+                  ...prev,
+                  page: nextPage <= 1 ? undefined : nextPage,
                 }),
               });
             }}
@@ -439,7 +509,7 @@ export function SchedulesWorkspace() {
           onOpenChange={(open) => {
             if (!open) setWorkOrderDeviation(null);
           }}
-          title="创建计划外开机核查工单"
+          title="要为此段计划外开机创建核查工单吗？"
           initial={workOrderDraft.initial}
           sourceReferences={workOrderDraft.sourceReferences}
           onCreated={() => {

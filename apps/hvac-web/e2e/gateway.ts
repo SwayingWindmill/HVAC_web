@@ -394,8 +394,8 @@ export class Gateway {
       body: { type: 'about:blank', title: 'Operating schedule refused', status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
     });
     const activePrincipal = this.principalOverride ?? principal;
-    const actor = `${activePrincipal.principal.issuer}|${activePrincipal.principal.subject}`;
-    const actorDisplay = activePrincipal.principal.displayName;
+    const actor: string = activePrincipal.principalId;
+    const actorDisplay: string = activePrincipal.principal.displayName;
     const capabilities: string[] = activePrincipal.authorization.capabilities ?? [];
 
     if (method === 'GET' && path === schedulePath) {
@@ -407,14 +407,14 @@ export class Gateway {
         return refuse(403, 'CAPABILITY_DENIED', 'schedule.manage is required.');
       }
       if (body?.meta?.expectedRevision !== this.operatingSchedule.revision) {
-        return refuse(409, 'CORE_REGISTRY_REVISION_CONFLICT', 'operating schedule revision conflict');
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'operating schedule revision conflict');
       }
       const rawSlots: Json[] = body?.slots ?? [];
       for (let day = 1; day <= 7; day += 1) {
         const daySlots = rawSlots.filter((s) => s.dayOfWeek === day).sort((a, b) => a.startMinute - b.startMinute);
         for (let i = 1; i < daySlots.length; i += 1) {
           if (daySlots[i].startMinute < daySlots[i - 1].endMinute) {
-            return refuse(409, 'CORE_REGISTRY_CONFLICT', 'overlapping slots within same dayOfWeek');
+            return refuse(409, 'REGISTRY_BINDING_CONFLICT', 'overlapping slots within same dayOfWeek');
           }
         }
       }
@@ -454,7 +454,7 @@ export class Gateway {
     if (method === 'POST' && path === exceptionsPath) {
       const autoApprove = Boolean(body?.autoApprove);
       if (autoApprove && !capabilities.includes('schedule.manage')) {
-        return refuse(403, 'CAPABILITY_DENIED', 'autoApprove requires schedule.manage.');
+        return refuse(403, 'OPERATING_EXCEPTION_FORBIDDEN', 'autoApprove requires schedule.manage.');
       }
       if (!capabilities.includes('schedule.request') && !capabilities.includes('schedule.manage')) {
         return refuse(403, 'CAPABILITY_DENIED', 'schedule.request is required.');
@@ -464,7 +464,7 @@ export class Gateway {
           (other) => other.status === 'APPROVED' && other.startDate <= body!.endDate && other.endDate >= body!.startDate,
         );
         if (overlaps) {
-          return refuse(409, 'CORE_REGISTRY_CONFLICT', 'date range overlaps an existing approved operating exception');
+          return refuse(409, 'REGISTRY_BINDING_CONFLICT', 'date range overlaps an existing approved operating exception');
         }
       }
       const created: Json = {
@@ -497,15 +497,15 @@ export class Gateway {
       const target = this.operatingExceptions.find((item) => item.id === decideMatch[1]);
       if (!target) return refuse(404, 'RESOURCE_NOT_FOUND', 'operating exception not found');
       if (body?.meta?.expectedRevision !== target.revision) {
-        return refuse(409, 'CORE_REGISTRY_REVISION_CONFLICT', 'operating exception revision conflict');
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'operating exception revision conflict');
       }
       const decision: string = body?.decision;
       if (decision === 'APPROVE' || decision === 'REJECT') {
         if (!capabilities.includes('schedule.manage')) {
-          return refuse(403, 'CAPABILITY_DENIED', 'schedule.manage is required to approve or reject');
+          return refuse(403, 'OPERATING_EXCEPTION_FORBIDDEN', 'schedule.manage is required to approve or reject');
         }
         if (target.status !== 'PENDING_APPROVAL') {
-          return refuse(409, 'CORE_REGISTRY_CONFLICT', 'only PENDING_APPROVAL exceptions can be approved or rejected');
+          return refuse(409, 'OPERATING_EXCEPTION_STATE_CONFLICT', 'only PENDING_APPROVAL exceptions can be approved or rejected');
         }
         if (decision === 'APPROVE') {
           const overlaps = this.operatingExceptions.some(
@@ -513,7 +513,7 @@ export class Gateway {
               && other.startDate <= target.endDate && other.endDate >= target.startDate,
           );
           if (overlaps) {
-            return refuse(409, 'CORE_REGISTRY_CONFLICT', 'date range overlaps an existing approved operating exception');
+            return refuse(409, 'REGISTRY_BINDING_CONFLICT', 'date range overlaps an existing approved operating exception');
           }
           target.status = 'APPROVED';
         } else {
@@ -522,14 +522,14 @@ export class Gateway {
       } else if (decision === 'CANCEL') {
         if (target.status === 'PENDING_APPROVAL') {
           if (!capabilities.includes('schedule.manage') && target.requestedBy !== actor) {
-            return refuse(403, 'CAPABILITY_DENIED', 'only requester or manager can cancel pending exception');
+            return refuse(403, 'OPERATING_EXCEPTION_FORBIDDEN', 'only requester or manager can cancel pending exception');
           }
         } else if (target.status === 'APPROVED') {
           if (!capabilities.includes('schedule.manage')) {
-            return refuse(403, 'CAPABILITY_DENIED', 'schedule.manage is required to cancel approved exception');
+            return refuse(403, 'OPERATING_EXCEPTION_FORBIDDEN', 'schedule.manage is required to cancel approved exception');
           }
         } else {
-          return refuse(409, 'CORE_REGISTRY_CONFLICT', 'exception cannot be cancelled in current state');
+          return refuse(409, 'OPERATING_EXCEPTION_STATE_CONFLICT', 'exception cannot be cancelled in current state');
         }
         target.status = 'CANCELLED';
       }
