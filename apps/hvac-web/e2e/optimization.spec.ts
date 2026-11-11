@@ -28,11 +28,22 @@ test('a requested run publishes a recommendation that is dispatched as a confirm
   const impact = page.getByRole('region', { name: '预计效果' });
   await expect(impact).toContainText('预计日节电60kWh');
   await expect(impact).toContainText('预计日节省¥51');
-  const basis = page.getByRole('region', { name: '计算依据' });
-  await expect(basis).toContainText('最近一天冷站用电675 kWh');
-  // The policy's response coefficients are set by hand, and the page says so.
-  await expect(basis).toContainText('供水每升高 1 °C 日用电−60 kWh · 人工设定');
-  await expect(basis).toContainText('供水每升高 1 °C 室内温度+0.3 °C · 人工设定');
+
+  // L1 keeps engineering details collapsed behind the single-line readiness summary until expanded.
+  const readinessToggle = page.getByRole('button', { name: /前置与安全条件：6\/6 就绪 · 可远程下发设定点/ });
+  await expect(readinessToggle).toBeVisible();
+  await expect(page.getByText('供水每升高 1 °C 日用电')).toBeHidden();
+
+  await readinessToggle.click();
+  const readinessPanel = page.getByRole('region', { name: '前置与安全条件' });
+  await expect(readinessPanel).toContainText('检修与手动锁定');
+  await expect(readinessPanel).toContainText('实时读数核验');
+  await expect(readinessPanel).toContainText('负荷预测与分时电价');
+  await expect(readinessPanel).toContainText('执行通道状态');
+  // The policy's response coefficients are set by hand, and the expanded details say so alongside rollback rules.
+  await expect(readinessPanel).toContainText('供水每升高 1 °C 日用电−60 kWh · 人工设定');
+  await expect(readinessPanel).toContainText('供水每升高 1 °C 室内温度+0.3 °C · 人工设定');
+  await expect(readinessPanel).toContainText('下发后观察 30 分钟');
 
   await proposal.getByRole('button', { name: '按建议下发' }).click();
   const confirm = page.getByRole('alertdialog');
@@ -73,4 +84,14 @@ test('a scheduled run that failed after the recommendation says the recommendati
   await expect(alert).toContainText('最近一次定时计算没有生成新建议');
   await expect(alert).toContainText('当前供水温度或室内温度已在策略的安全或舒适范围之外。下面是上一条建议。');
   await expect(page.getByRole('region', { name: '当前建议' })).toContainText('定时生成于');
+});
+
+test('view tabs persist in the URL and normalize unknown view values back to proposal', async ({ page, gateway }) => {
+  gateway.optimization = fixture('optimization-latest.json');
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}&view=bogus`);
+  await expect(page.getByRole('tab', { name: '当前建议', selected: true })).toBeVisible();
+
+  await page.getByRole('tab', { name: '模型与负荷分析' }).click();
+  await expect(page).toHaveURL(new RegExp(`view=analysis`));
+  await expect(page.getByRole('tab', { name: '模型与负荷分析', selected: true })).toBeVisible();
 });
