@@ -69,6 +69,7 @@ test('a requested run publishes a recommendation that is dispatched as a confirm
   const confirm = page.getByRole('alertdialog');
   await expect(confirm).toContainText('向 CHILLER-01 下发指令？');
   await expect(confirm).toContainText('8.0 °C');
+  await expect(confirm).toContainText('下发后观察 30 分钟');
   await confirm.getByRole('button', { name: '确认下发' }).click();
   await expect(page.getByText('指令已提交，正在下发')).toBeVisible();
   // The proposal now follows the command it was sent as.
@@ -227,7 +228,9 @@ test('shadow evaluation is lazy-loaded only on the analysis tab and renders non-
 
   const forecastRegion = analysisPanel.getByRole('region', { name: '未来 24 小时负荷预测' });
   await expect(forecastRegion).toBeVisible();
-  await expect(forecastRegion.getByRole('link', { name: '查看负荷管理详情' })).toHaveAttribute('href', new RegExp('/energy-analysis/load'));
+  await expect(forecastRegion.getByRole('link', { name: '查看用电负荷' })).toHaveAttribute('href', new RegExp('/energy-analysis/load'));
+  await forecastRegion.getByRole('tab', { name: '表格' }).click();
+  await expect(forecastRegion.getByRole('table', { name: '未来 24 小时负荷预测表' })).toBeVisible();
 });
 
 test('analysis tab distinguishes missing shadow records from NO_USABLE_MODEL per-chiller rejection diagnostics', async ({ page, gateway }) => {

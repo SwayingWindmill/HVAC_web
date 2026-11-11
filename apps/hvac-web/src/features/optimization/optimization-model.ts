@@ -2,6 +2,12 @@
 // temperature weighed against yesterday's plant energy and cost and the zone's comfort band,
 // with the frozen constraints, the expected impact and how to verify and roll it back.
 
+import { formatDecimal } from '../../lib/operator-format.ts';
+
+export const formatCelsius = (value: number): string => `${formatDecimal(value, 1)} °C`;
+export const formatSigned = (value: number, digits: number): string =>
+  `${value > 0 ? '+' : value < 0 ? '−' : ''}${formatDecimal(Math.abs(value), digits)}`;
+
 export type RecommendationRisk = 'LOW' | 'MEDIUM' | 'HIGH';
 
 /** Why a run was made: an operator asked, or the Site's hourly schedule did. */
@@ -72,7 +78,7 @@ export function parseRecommendation(published: PublishedRecommendation): Optimiz
     candidate: recommendation.candidate,
     saving: { energyKWhPerDay: recommendation.expectedImpact.energySavingKWhPerDay, costPerDay: recommendation.expectedImpact.costSavingPerDay },
     supplyRange: { minC: supply.minC!, maxC: supply.maxC!, maxStepC: supply.maxStepC! },
-    comfortRange: { minC: comfort.minC!, maxC: comfort.minC !== undefined ? comfort.maxC! : 0 },
+    comfortRange: { minC: comfort.minC!, maxC: comfort.maxC! },
     uncertainty: recommendation.uncertainty,
     risk: recommendation.risk.level,
     comfortMarginC: recommendation.risk.comfortMarginC,
@@ -194,7 +200,7 @@ export function buildReadinessSummary({
 }: {
   readonly recommendation: OptimizationRecommendation | null;
   readonly preparation: PreparationOutcome | null;
-  readonly hasWritableSetpoint: boolean;
+  readonly hasWritableSetpoint: boolean | null;
 }): ReadinessSummary {
   const activeFailure = preparation?.status === 'FAILED'
     && (recommendation === null || Date.parse(preparation.firedAt) > Date.parse(recommendation.createdAt))
@@ -244,10 +250,16 @@ export function buildReadinessSummary({
       ? { key: 'forecast_and_tariff', label: '负荷预测与分时电价', status: 'ready', detail: '未来整日负荷预测、生效电价与最近已结算日数据齐全' }
       : { key: 'forecast_and_tariff', label: '负荷预测与分时电价', status: 'unknown', detail: '待核验负荷预测、分时电价与已结算日用电' };
 
-  const channelLabel = hasWritableSetpoint ? '可远程下发设定点' : '仅人工调温工单';
-  const channelItem: ReadinessItem = hasWritableSetpoint
-    ? { key: 'execution_channel', label: '执行通道状态', status: 'ready', detail: '已登记启用可写冷冻水供水温度设定点，可远程下发控制指令' }
-    : { key: 'execution_channel', label: '执行通道状态', status: 'manual', detail: '未登记可写冷冻水供水温度设定点，走人工调温工单' };
+  const channelLabel = hasWritableSetpoint === null
+    ? '执行通道待核验'
+    : hasWritableSetpoint
+      ? '可远程下发设定点'
+      : '仅人工调温工单';
+  const channelItem: ReadinessItem = hasWritableSetpoint === null
+    ? { key: 'execution_channel', label: '执行通道状态', status: 'unknown', detail: '待读取站点资产列表确认可执行通道' }
+    : hasWritableSetpoint
+      ? { key: 'execution_channel', label: '执行通道状态', status: 'ready', detail: '已登记启用可写冷冻水供水温度设定点，可远程下发控制指令' }
+      : { key: 'execution_channel', label: '执行通道状态', status: 'manual', detail: '未登记可写冷冻水供水温度设定点，走人工调温工单' };
 
   const items: readonly ReadinessItem[] = [
     supplyItem,
@@ -273,6 +285,10 @@ const UNCLOSED_WORK_ORDER_STATUSES = new Set(['DRAFT', 'OPEN', 'IN_PROGRESS', 'B
 
 export function optimizationRecommendationSourceRef(recommendationId: string): string {
   return `${OPTIMIZATION_RECOMMENDATION_SOURCE_PREFIX}${recommendationId}`;
+}
+
+export function isOptimizationRecommendationSource(source: { readonly domain: string; readonly resourceId: string }): boolean {
+  return source.domain === 'EXTERNAL' && source.resourceId.startsWith(OPTIMIZATION_RECOMMENDATION_SOURCE_PREFIX);
 }
 
 export interface OptimizationWorkOrderDraft {
@@ -516,8 +532,8 @@ function translateChillerReason(status: PublishedShadowChillerFit['status'], rea
   if (status === 'FITTED') return null;
   if (!reason) return status === 'INSUFFICIENT_DATA' ? '近 14 天稳态 15 分钟样本少于 96 个' : '回归模型未通过物理与误差校验';
   if (reason.includes('fewer than')) return '近 14 天稳态 15 分钟样本少于 96 个（约 24 小时运行数据）';
-  if (reason.includes('do not vary enough')) return '运行工况变化不足，无法拟合回归系数';
-  if (reason.includes('at or below 0.5')) return '观测工况下预测 COP 低于 0.5，不满足物理范围';
+  if (reason.includes('do not vary enough')) return '历史读数变化太小，无法拟合回归系数';
+  if (reason.includes('at or below 0.5')) return '历史读数下算出的 COP 低于 0.5，不满足物理范围';
   if (reason.includes('warmer chilled-water supply lowers COP')) return '拟合结果违背物理规律（冷冻水供水升温反而降低 COP）';
   if (reason.includes('warmer condenser return raises COP')) return '拟合结果违背物理规律（冷却水回水升温反而升高 COP）';
   if (reason.includes('exceeds')) return '功率拟合误差 CV(RMSE) 超过 30% 上限';
@@ -570,7 +586,7 @@ export function parseShadowEvaluation(
         const setAsideTotal = setAsideEntries.reduce((sum, entry) => sum + entry.count, 0);
         const chillers: ShadowChillerDiagnostic[] = published.fit.chillers.map((chiller) => ({
           deviceId: chiller.deviceId,
-          displayName: nameByDevice.get(chiller.deviceId) ?? chiller.deviceId,
+          displayName: nameByDevice.get(chiller.deviceId) ?? '未命名冷机',
           status: chiller.status,
           statusLabel: CHILLER_STATUS_LABEL[chiller.status],
           reasonLabel: translateChillerReason(chiller.status, chiller.reason),

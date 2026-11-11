@@ -12,6 +12,7 @@ import { useSiteEquipment } from '@/features/assets/use-device-names';
 import { formatCompactTime, personLabel } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { CreateWorkOrderDialog } from '../CreateWorkOrderDialog';
+import { isOptimizationRecommendationSource } from '@/features/optimization/optimization-model';
 import { OPEN_STATUSES, PriorityBadge, sortWorkOrdersForOperators, STATUS_LABELS } from '../work-order-presentation';
 import { listView, openWorkOrdersQuery, workOrderKeys } from '../work-order-queries';
 import { StatusShape } from './StatusShape';
@@ -133,9 +134,7 @@ export function WorkCenterWorkspace() {
     if (alarm) return { icon: Bell, text: '来自告警' };
     const asset = workOrder.sourceReferences.find((source) => source.domain === 'ASSET');
     if (asset) return { icon: Server, text: `来自设备 · ${equipment.deviceByAsset.get(asset.resourceId)?.name ?? '—'}` };
-    const optimization = workOrder.sourceReferences.find(
-      (source) => source.domain === 'EXTERNAL' && source.resourceId.startsWith('optimization-recommendation:'),
-    );
+    const optimization = workOrder.sourceReferences.find(isOptimizationRecommendationSource);
     if (optimization) return { icon: Sparkles, text: '来自优化建议' };
     return { icon: User, text: '人工创建' };
   };

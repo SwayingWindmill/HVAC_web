@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
-import { ArrowUpRight, FlaskConical, Gauge, ShieldAlert } from 'lucide-react';
-import { useMemo } from 'react';
+import { FlaskConical, Gauge, ShieldAlert } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { Area, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts';
-import { Panel, PanelHeader } from '@/blocks/panel';
+import { Panel, PanelHeader, PanelLink } from '@/blocks/panel';
 import { InfoTip } from '@/components/info-tip';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { ChartContainer, ChartTooltip, type ChartConfig } from '@/components/ui/chart';
+import { PeriodTabs } from '@/components/ui/period-tabs';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Table,
@@ -23,6 +23,8 @@ import { siteLoadForecastQuery } from '@/features/load/query';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import {
+  formatCelsius as celsius,
+  formatSigned as signed,
   parseShadowEvaluation,
   type OptimizationRecommendation,
   type OptimizationShadowEvaluation,
@@ -30,8 +32,10 @@ import {
 } from '../optimization-model';
 import { latestShadowEvaluationQuery } from '../query';
 
-const celsius = (value: number) => `${formatDecimal(value, 1)} °C`;
-const signed = (value: number, digits: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${formatDecimal(Math.abs(value), digits)}`;
+const FORECAST_VIEW_OPTIONS = [
+  { value: 'chart', label: '曲线' },
+  { value: 'table', label: '表格' },
+];
 
 const FORECAST_CHART_CONFIG = {
   loadKW: { label: '预测负荷', color: 'var(--chart-1)' },
@@ -56,7 +60,9 @@ export function OptimizationAnalysisTab({
   readonly active: boolean;
 }) {
   const nameByDevice = useDeviceNames(siteId);
-  const shadowQuery = useQuery(latestShadowEvaluationQuery(siteId, recommendation?.runId ?? null, active));
+  const shadowQuery = useQuery(
+    latestShadowEvaluationQuery(siteId, recommendation?.runId ?? null, active && recommendation !== null),
+  );
   const forecastQuery = useQuery({
     ...siteLoadForecastQuery(siteId),
     enabled: active,
@@ -68,7 +74,7 @@ export function OptimizationAnalysisTab({
   );
 
   return (
-    <div className="flex flex-col gap-[18px]">
+    <div className="flex flex-col gap-4">
       <Alert className="border-primary/25 bg-primary-soft/35">
         <ShieldAlert className="text-primary" />
         <AlertTitle>影子对照 · 只记录不发布，不作为控制指令下发</AlertTitle>
@@ -77,7 +83,19 @@ export function OptimizationAnalysisTab({
         </AlertDescription>
       </Alert>
 
-      {shadowQuery.isPending ? (
+      {recommendation === null ? (
+        <Panel aria-label="求解器对照与候选步长">
+          <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
+            <span className="flex size-9 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+              <FlaskConical className="size-[18px]" aria-hidden="true" />
+            </span>
+            <p className="text-sm font-semibold">尚无影子评估记录</p>
+            <p className="max-w-lg text-xs text-muted-foreground">
+              当前站点尚未生成优化建议；生成优化建议时后台会同步记录冷机 COP 模型的影子评估结果。
+            </p>
+          </div>
+        </Panel>
+      ) : shadowQuery.isPending ? (
         <Skeleton className="h-60 rounded-xl" />
       ) : shadowQuery.isError ? (
         <Panel aria-label="求解器对照与候选步长">
@@ -96,7 +114,7 @@ export function OptimizationAnalysisTab({
             </span>
             <p className="text-sm font-semibold">当前建议尚无影子评估记录</p>
             <p className="max-w-lg text-xs text-muted-foreground">
-              生成优化建议时，后台会同步记录冷机 COP 模型的影子评估结果；当前站点还没有对应的影子记录。
+              可能影子求解器已关闭，或本次优化运行未写出影子评估记录。
             </p>
           </div>
         </Panel>
@@ -107,7 +125,7 @@ export function OptimizationAnalysisTab({
             shadow={shadow}
             timeZone={timeZone}
           />
-          {shadow.fit ? <ChillerFitDiagnosticsPanel fit={shadow.fit} /> : null}
+          {shadow.fit ? <ChillerFitDiagnosticsPanel fit={shadow.fit} timeZone={timeZone} /> : null}
         </>
       )}
 
@@ -136,7 +154,7 @@ function ShadowComparisonPanel({
     <Panel aria-label="求解器对照与候选步长">
       <PanelHeader
         title="求解器对照与候选步长"
-        caption={`评估于 ${formatTime(shadow.generatedAt, timeZone)} · 对应运行 ${shadow.runId.slice(0, 8)}`}
+        caption={`评估于 ${formatTime(shadow.generatedAt, timeZone)}`}
       />
 
       <div className="grid grid-cols-2 divide-x divide-divider border-b border-divider">
@@ -150,6 +168,7 @@ function ShadowComparisonPanel({
                 </span>
                 <span className="text-xs text-secondary-foreground tabular-nums">
                   预计日节电 {formatDecimal(recommendation.saving.energyKWhPerDay, 0)} kWh · ¥{formatDecimal(recommendation.saving.costPerDay, 0)}
+                  {' '}（P90 ±{formatDecimal(recommendation.uncertainty.energyP90KWh, 0)} kWh）
                 </span>
               </div>
               <span className="text-xs text-muted-foreground tabular-nums">
@@ -175,32 +194,30 @@ function ShadowComparisonPanel({
           </span>
 
           {shadow.outcome === 'FEASIBLE' && shadow.summary ? (
-            <>
-              <div className="flex flex-wrap items-baseline gap-2.5">
-                <span className="text-2xl font-semibold tracking-[-0.03em] tabular-nums">
-                  {celsius(shadow.summary.supplyTempC)}
-                </span>
-                <span className="text-xs text-secondary-foreground tabular-nums">
-                  预计日节电 {formatDecimal(shadow.summary.energySavingKWhPerDay, 0)} kWh · ¥{formatDecimal(shadow.summary.costSavingPerDay, 0)}
-                  {' '}（P90 ±{formatDecimal(shadow.summary.energyP90KWh, 0)} kWh）
-                </span>
-                {shadow.summary.savingWithinEnergyUncertainty ? (
-                  <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] leading-4 text-muted-foreground">
-                    节电量在拟合误差内
-                  </span>
-                ) : null}
-              </div>
-              {shadow.energyResponse ? (
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  供水每升 1 °C 日用电：{signed(shadow.energyResponse.fittedKWhPerSupplyC, 1)} kWh · 站点历史拟合（替代策略值 {signed(shadow.energyResponse.policyKWhPerSupplyC, 0)} kWh）
+            <div className="flex flex-wrap items-baseline gap-2.5">
+              <span className="text-2xl font-semibold tracking-[-0.03em] tabular-nums">
+                {celsius(shadow.summary.supplyTempC)}
+              </span>
+              <span className="text-xs text-secondary-foreground tabular-nums">
+                预计日节电 {formatDecimal(shadow.summary.energySavingKWhPerDay, 0)} kWh · ¥{formatDecimal(shadow.summary.costSavingPerDay, 0)}
+                {' '}（P90 ±{formatDecimal(shadow.summary.energyP90KWh, 0)} kWh）
+              </span>
+              {shadow.summary.savingWithinEnergyUncertainty ? (
+                <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] leading-4 text-muted-foreground">
+                  节电量在拟合误差内
                 </span>
               ) : null}
-            </>
+            </div>
           ) : (
             <p className="text-xs text-secondary-foreground">
               {shadow.outcomeDetail}
             </p>
           )}
+          {shadow.energyResponse ? (
+            <span className="text-xs text-muted-foreground tabular-nums">
+              供水每升 1 °C 日用电：{signed(shadow.energyResponse.fittedKWhPerSupplyC, 1)} kWh · 站点历史拟合（替代策略值 {signed(shadow.energyResponse.policyKWhPerSupplyC, 0)} kWh）
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -245,7 +262,7 @@ function ShadowComparisonPanel({
                     )}
                     {row.extrapolated ? (
                       <span className="rounded bg-warning-soft px-1.5 py-0.5 text-[11px] leading-4 font-medium text-warning-text">
-                        外推工况
+                        超出历史范围
                       </span>
                     ) : null}
                   </span>
@@ -286,8 +303,10 @@ function formatChillerCoefficients(
 
 function ChillerFitDiagnosticsPanel({
   fit,
+  timeZone,
 }: {
   readonly fit: NonNullable<OptimizationShadowEvaluation['fit']>;
+  readonly timeZone: string;
 }) {
   const nonZeroSetAside = fit.setAsideBreakdown.filter((entry) => entry.count > 0);
   const nonZeroAllocation = fit.loadAllocationBreakdown.filter((entry) => entry.count > 0);
@@ -296,7 +315,7 @@ function ChillerFitDiagnosticsPanel({
     <Panel aria-label="冷机 COP 拟合诊断">
       <PanelHeader
         title="冷机 COP 拟合诊断"
-        caption={`近 14 天 ${fit.bucketMinutes} 分钟运行桶：共 ${fit.runningBuckets} 个开机桶，筛除 ${fit.setAsideTotal} 个非稳态或异常桶`}
+        caption={`近 14 天（${formatTime(fit.from, timeZone)} 至 ${formatTime(fit.to, timeZone)}）· ${fit.bucketMinutes} 分钟运行桶：共 ${fit.runningBuckets} 个开机桶，筛除 ${fit.setAsideTotal} 个非稳态或异常桶`}
         action={
           fit.cvRmsePower !== null ? (
             <span className="text-xs text-muted-foreground tabular-nums">
@@ -416,6 +435,7 @@ function ForecastSummaryPanel({
   readonly forecast: Awaited<ReturnType<NonNullable<ReturnType<typeof siteLoadForecastQuery>['queryFn']>>> | null;
   readonly onRetry: () => void;
 }) {
+  const [viewMode, setViewMode] = useState<'chart' | 'table'>('chart');
   const next24hPoints = useMemo(
     () => (forecast ? forecast.points.slice(0, 96) : []),
     [forecast],
@@ -439,14 +459,19 @@ function ForecastSummaryPanel({
             : '冷站电负荷逐时预测曲线（kW）'
         }
         action={
-          <Link
-            to="/energy-analysis/load"
-            search={{ site: siteId }}
-            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-          >
-            <span>查看负荷管理详情</span>
-            <ArrowUpRight className="size-3.5" aria-hidden="true" />
-          </Link>
+          <>
+            {hours.length > 0 ? (
+              <PeriodTabs
+                aria-label="预测视图"
+                options={FORECAST_VIEW_OPTIONS}
+                value={viewMode}
+                onValueChange={(value) => setViewMode(value as 'chart' | 'table')}
+              />
+            ) : null}
+            <PanelLink to="/energy-analysis/load" search={{ site: siteId }}>
+              查看用电负荷
+            </PanelLink>
+          </>
         }
       />
 
@@ -468,6 +493,29 @@ function ForecastSummaryPanel({
           </span>
           <p className="text-sm font-semibold">还没有已发布的站点负荷预测</p>
           <p className="text-xs text-muted-foreground">负荷预测服务按小时滚动发布未来 24 小时冷站电负荷。</p>
+        </div>
+      ) : viewMode === 'table' ? (
+        <div className="max-h-[268px] overflow-y-auto">
+          <Table aria-label="未来 24 小时负荷预测表">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="pl-5">时段</TableHead>
+                <TableHead className="text-right">预测负荷</TableHead>
+                <TableHead className="pr-5 text-right">预测范围</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {hours.map((row) => (
+                <TableRow key={row.start}>
+                  <TableCell className="pl-5 font-medium tabular-nums">{row.label}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatDecimal(row.loadKW, 1)} kW</TableCell>
+                  <TableCell className="pr-5 text-right text-muted-foreground tabular-nums">
+                    {row.band ? `${formatDecimal(row.band[0], 0)}–${formatDecimal(row.band[1], 0)} kW` : '—'}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </div>
       ) : (
         <div className="px-5 pt-4 pb-3">

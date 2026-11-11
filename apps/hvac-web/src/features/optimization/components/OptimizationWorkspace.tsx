@@ -45,6 +45,8 @@ import {
   buildReadinessSummary,
   changesSupply,
   findActiveRecommendationWorkOrder,
+  formatCelsius as celsius,
+  formatSigned as signed,
   preparationProblem,
   recommendedSetpoint,
   TRIGGER_LABEL,
@@ -73,9 +75,6 @@ const RISK: Record<RecommendationRisk, { label: string; className: string }> = {
 
 // A requested run publishes within seconds; past this the page stops waiting and says so.
 const RUN_PATIENCE_MS = 90_000;
-
-const celsius = (value: number) => `${formatDecimal(value, 1)} °C`;
-const signed = (value: number, digits: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''}${formatDecimal(Math.abs(value), digits)}`;
 
 interface Marker {
   readonly value: number;
@@ -139,14 +138,14 @@ function supplySetpoint(targets: readonly ControlTarget[]): { target: ControlTar
   return null;
 }
 
-function Effect({ label, value, unit, info, children }: { readonly label: string; readonly value: string; readonly unit?: string; readonly info?: string; readonly children: ReactNode }) {
+function Effect({ label, value, unit, info, children }: { readonly label: string; readonly value: string; readonly unit?: string; readonly info?: string; readonly children?: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
       <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground">{label}{info ? <InfoTip>{info}</InfoTip> : null}</span>
       <span className="text-2xl leading-[29px] font-semibold tracking-[-0.03em] tabular-nums">
         {value}{unit ? <span className="ml-1 text-xs font-medium tracking-normal text-subtle-foreground">{unit}</span> : null}
       </span>
-      <span className="text-xs text-muted-foreground">{children}</span>
+      {children ? <span className="text-xs text-muted-foreground">{children}</span> : null}
     </div>
   );
 }
@@ -227,9 +226,9 @@ export function OptimizationWorkspace() {
     () => buildReadinessSummary({
       recommendation,
       preparation: preparation.data ?? null,
-      hasWritableSetpoint: supply !== null,
+      hasWritableSetpoint: registry.isSuccess ? supply !== null : null,
     }),
-    [recommendation, preparation.data, supply],
+    [recommendation, preparation.data, registry.isSuccess, supply],
   );
   const setpoint = recommendation && supply ? recommendedSetpoint(recommendation, supply.setting) : null;
   const supplyReading = supply?.setting.feedbackSourceKey
@@ -240,11 +239,17 @@ export function OptimizationWorkspace() {
     ? commands.data?.find((command) => command.pointId === supply.setting.pointId && Date.parse(command.createdAt) >= Date.parse(recommendation.createdAt))
     : undefined;
   const dispatch = () => {
-    if (!supply || setpoint === null) return;
+    if (!recommendation || !supply || setpoint === null) return;
     setPending({
       target: supply.target, label: supply.setting.label, pointId: supply.setting.pointId,
       parameters: { [supply.setting.parameterKey]: setpoint },
       change: { from: supplyReading, to: setpoint, unit: supply.setting.unit },
+      facts: [
+        {
+          label: '观察与回退',
+          value: `下发后观察 ${recommendation.verificationMinutes} 分钟；任一条件不满足时恢复至 ${celsius(recommendation.restoreSupplyTempC)}`,
+        },
+      ],
     });
   };
 
@@ -274,7 +279,7 @@ export function OptimizationWorkspace() {
             }),
           });
         }}
-        className="gap-[18px]"
+        className="gap-4"
       >
         <div className="border-b border-divider pb-1">
           <TabsList variant="line">
@@ -283,7 +288,7 @@ export function OptimizationWorkspace() {
           </TabsList>
         </div>
 
-        <TabsContent value="proposal" className="flex flex-col gap-[18px]">
+        <TabsContent value="proposal" className="flex flex-col gap-4">
           {notice ? (
             <Alert>
               <TriangleAlert />
@@ -337,16 +342,26 @@ export function OptimizationWorkspace() {
               setpoint={setpoint}
               setting={supply?.setting ?? null}
               registryState={registry.isPending ? 'pending' : registry.isError ? 'error' : 'ready'}
+              workOrdersState={
+                !manualWorkOrderMode || !canListWorkOrders
+                  ? 'ready'
+                  : recommendationWorkOrders.isPending
+                    ? 'pending'
+                    : recommendationWorkOrders.isError
+                      ? 'error'
+                      : 'ready'
+              }
               sent={sent}
               activeWorkOrder={activeWorkOrder}
               canCreateWorkOrder={canCreateWorkOrder}
               onDispatch={dispatch}
               onCreateWorkOrder={() => setCreatingWorkOrder(true)}
+              onRetryWorkOrders={() => void recommendationWorkOrders.refetch()}
             />
           )}
         </TabsContent>
 
-        <TabsContent value="analysis" className="flex flex-col gap-[18px]">
+        <TabsContent value="analysis" className="flex flex-col gap-4">
           <OptimizationAnalysisTab
             siteId={site.id}
             timeZone={site.timezone}
@@ -510,11 +525,13 @@ function Proposal({
   setpoint,
   setting,
   registryState,
+  workOrdersState,
   sent,
   activeWorkOrder,
   canCreateWorkOrder,
   onDispatch,
   onCreateWorkOrder,
+  onRetryWorkOrders,
 }: {
   readonly recommendation: OptimizationRecommendation;
   readonly readiness: ReadinessSummary;
@@ -523,11 +540,13 @@ function Proposal({
   readonly setpoint: number | null;
   readonly setting: ControlSetting | null;
   readonly registryState: 'pending' | 'error' | 'ready';
+  readonly workOrdersState: 'pending' | 'error' | 'ready';
   readonly sent: Command | undefined;
   readonly activeWorkOrder: WorkOrder | null;
   readonly canCreateWorkOrder: boolean;
   readonly onDispatch: () => void;
   readonly onCreateWorkOrder: () => void;
+  readonly onRetryWorkOrders: () => void;
 }) {
   const { baseline, candidate, comfortRange, supplyRange } = recommendation;
   const change = changesSupply(recommendation);
@@ -570,7 +589,7 @@ function Proposal({
             registryState === 'pending' ? (
               <Skeleton className="h-9 w-40 rounded-md" />
             ) : registryState === 'error' ? (
-              <p className="text-xs text-muted-foreground">站点资产台账暂时读不到，无法核验可执行通道。</p>
+              <p className="text-xs text-muted-foreground">站点资产列表暂时读不到，无法核验可执行通道。</p>
             ) : setting !== null ? (
               sent ? (
                 <Link
@@ -597,6 +616,13 @@ function Proposal({
                   <span className="text-xs text-muted-foreground">{stepNote}</span>
                 </div>
               )
+            ) : workOrdersState === 'pending' ? (
+              <Skeleton className="h-9 w-40 rounded-md" />
+            ) : workOrdersState === 'error' ? (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span>关联工单状态暂时读不到，为避免重复建单请先重试。</span>
+                <Button variant="outline" size="sm" onClick={onRetryWorkOrders}>重试</Button>
+              </div>
             ) : activeWorkOrder ? (
               <Link
                 to="/operations/work-center"
@@ -629,11 +655,16 @@ function Proposal({
         </div>
         <section role="region" aria-label="预计效果" className="flex flex-col gap-5 px-6 py-5">
           <span className="text-xs font-medium text-muted-foreground">预计效果</span>
-          <Effect label="预计日节电" value={formatDecimal(recommendation.saving.energyKWhPerDay, 0)} unit="kWh">
-            90% 把握在 ±{formatDecimal(recommendation.uncertainty.energyP90KWh, 0)} kWh 内{share !== null ? ` · 约占最近一天冷站用电 ${formatDecimal(share * 100, 1)}%` : ''}
+          <Effect
+            label="预计日节电"
+            info={`90% 把握在 ±${formatDecimal(recommendation.uncertainty.energyP90KWh, 0)} kWh 内`}
+            value={formatDecimal(recommendation.saving.energyKWhPerDay, 0)}
+            unit="kWh"
+          >
+            {share !== null ? `约占最近一天冷站用电 ${formatDecimal(share * 100, 1)}%` : undefined}
           </Effect>
           <Effect label="预计日节省" info="按当天峰谷均价折算，不含需量电费" value={`¥${formatDecimal(recommendation.saving.costPerDay, 0)}`}>
-            按最近一天电费 ¥{formatDecimal(baseline.dailyCost, 0)} 折算
+            按最近一天估算电费 ¥{formatDecimal(baseline.dailyCost, 0)} 折算
           </Effect>
         </section>
       </Panel>

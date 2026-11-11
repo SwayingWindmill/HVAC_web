@@ -61,6 +61,15 @@ test('buildReadinessSummary reports 5/6 ready with manual work-order channel whe
   const channel = summary.items.find((item) => item.key === 'execution_channel');
   assert.equal(channel?.status, 'manual');
   assert.match(channel?.detail ?? '', /人工调温工单/);
+
+  const pendingChannel = buildReadinessSummary({
+    recommendation,
+    preparation: null,
+    hasWritableSetpoint: null,
+  });
+  assert.equal(pendingChannel.readyCount, 5);
+  assert.equal(pendingChannel.headline, '前置与安全条件：5/6 就绪 · 执行通道待核验');
+  assert.equal(pendingChannel.items.find((item) => item.key === 'execution_channel')?.status, 'unknown');
 });
 
 test('buildReadinessSummary surfaces exact missing preparation input without fabricating green checks', () => {
@@ -181,6 +190,6 @@ test('parseShadowEvaluation preserves NO_USABLE_MODEL per-chiller rejection reas
   assert.equal(shadow.fit?.chillers[0]?.displayName, 'CHILLER-01');
   assert.equal(shadow.fit?.chillers[0]?.statusLabel, '稳态样本不足');
   assert.match(shadow.fit?.chillers[0]?.reasonLabel ?? '', /96/);
-  assert.equal(shadow.fit?.chillers[1]?.displayName, '018f3e00-4000-7000-8000-000000000099');
+  assert.equal(shadow.fit?.chillers[1]?.displayName, '未命名冷机');
   assert.match(shadow.fit?.chillers[1]?.reasonLabel ?? '', /物理规律/);
 });

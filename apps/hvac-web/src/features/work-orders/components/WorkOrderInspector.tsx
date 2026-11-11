@@ -14,6 +14,7 @@ import {
   type WorkOrder,
 } from '@/api/work-orders';
 import { useSiteEquipment } from '@/features/assets/use-device-names';
+import { isOptimizationRecommendationSource } from '@/features/optimization/optimization-model';
 import { formatTime, personLabel } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { PriorityBadge, STATUS_LABELS } from '../work-order-presentation';
@@ -116,9 +117,7 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
   const pendingAction = actions.find((action) => action.transition === pending);
   const alarmSource = workOrder?.sourceReferences.find((source) => source.domain === 'ALARM');
   const assetSource = workOrder?.sourceReferences.find((source) => source.domain === 'ASSET');
-  const optimizationSource = workOrder?.sourceReferences.find(
-    (source) => source.domain === 'EXTERNAL' && source.resourceId.startsWith('optimization-recommendation:'),
-  );
+  const optimizationSource = workOrder?.sourceReferences.find(isOptimizationRecommendationSource);
   const sourceDevice = assetSource ? equipment.deviceByAsset.get(assetSource.resourceId) : undefined;
   const error = claim.error ?? transition.error;
   const tasksIncomplete = workOrder ? workOrder.tasks.completed < workOrder.tasks.total : false;
