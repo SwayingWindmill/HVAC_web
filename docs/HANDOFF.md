@@ -162,6 +162,6 @@
 
 ## 流程
 
-- 每项改动一个分支，PR 用 `mattpocock-skills:pr` 技能的模板。CI 绿了再合并。
+- 每项阶段性改动一个分支，PR 用 `pr` 技能的模板；本地检查通过后直接开 PR，盯完 CI：全绿即自动 squash 合并，失败则修到全绿再合并。
 - 界面要在真实数据上看过（本地 8443 或服务器）；截图脚本用 `scripts/lib/local-administrator-browser.mjs`。
 - 用户能注意到的变化写进 `CHANGELOG.md`；下一步或环境偏差变了就更新本文。

@@ -83,6 +83,6 @@ npm run deployment:phase1:check                          # 改了 Compose 或迁
 ## 交付和 Git
 
 - 每张问题单按 `docs/agents/issue-delivery.md` 交付。
-- `main` 只通过 PR 合并。每项改动一个分支，用 Conventional Commits，提交说明写清楚原因。
+- `main` 只通过 PR 合并。每项阶段性工作一个分支，用 Conventional Commits 写清楚原因；本地检查与审查完成后直接推分支、开 PR、盯完 GitHub Actions：CI 全绿即自动 squash 合并进 `main` 并清理分支，CI 失败则直接修复重跑直到全绿合并。
 - 文本文件统一 LF（见 `.gitattributes`）；构建产物和二进制留在仓库外。
 - `git push` 用 Windows 侧的 git（WSL 访问 GitHub 有 TLS 问题）；`gh` 用 WSL 里已登录的那份。
