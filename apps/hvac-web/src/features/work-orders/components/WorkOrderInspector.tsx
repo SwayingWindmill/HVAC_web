@@ -116,6 +116,9 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
   const pendingAction = actions.find((action) => action.transition === pending);
   const alarmSource = workOrder?.sourceReferences.find((source) => source.domain === 'ALARM');
   const assetSource = workOrder?.sourceReferences.find((source) => source.domain === 'ASSET');
+  const optimizationSource = workOrder?.sourceReferences.find(
+    (source) => source.domain === 'EXTERNAL' && source.resourceId.startsWith('optimization-recommendation:'),
+  );
   const sourceDevice = assetSource ? equipment.deviceByAsset.get(assetSource.resourceId) : undefined;
   const error = claim.error ?? transition.error;
   const tasksIncomplete = workOrder ? workOrder.tasks.completed < workOrder.tasks.total : false;
@@ -205,6 +208,10 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
                   ) : sourceDevice ? (
                     <Link to="/operations/systems-devices" search={{ site: site.id, inspect: sourceDevice.deviceId }} className="text-primary hover:underline">
                       {sourceDevice.name}
+                    </Link>
+                  ) : optimizationSource ? (
+                    <Link to="/energy-analysis/optimization" search={{ site: site.id }} className="text-primary hover:underline">
+                      查看优化建议
                     </Link>
                   ) : '人工创建'}
                 </InspectorFact>

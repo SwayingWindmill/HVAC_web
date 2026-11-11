@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import {
   ArrowRight,
@@ -17,6 +17,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import { GatewayRequestError } from '@/api/gateway-client';
+import type { WorkOrder } from '@/api/work-orders';
 import { PageHeader } from '@/blocks/page-header';
 import { Panel, PanelHeader } from '@/blocks/panel';
 import { InfoTip } from '@/components/info-tip';
@@ -32,12 +33,18 @@ import { CommandMark } from '@/features/control/components/CommandMark';
 import { ConfirmCommand, useSubmitCommand, type PendingCommand } from '@/features/control/components/CommandConfirmation';
 import { controlTargets, type ControlSetting, type ControlTarget } from '@/features/control/control-model';
 import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
+import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
+import { StatusShape } from '@/features/work-orders/components/StatusShape';
+import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
+import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { useNow } from '@/hooks/use-now';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import {
+  buildOptimizationWorkOrderDraft,
   buildReadinessSummary,
   changesSupply,
+  findActiveRecommendationWorkOrder,
   preparationProblem,
   recommendedSetpoint,
   TRIGGER_LABEL,
@@ -47,7 +54,12 @@ import {
   type ReadinessSummary,
   type RecommendationRisk,
 } from '../optimization-model';
-import { latestPreparationQuery, latestRecommendationQuery, requestRecommendation } from '../query';
+import {
+  latestPreparationQuery,
+  latestRecommendationQuery,
+  recommendationWorkOrdersQuery,
+  requestRecommendation,
+} from '../query';
 
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/energy-analysis/optimization');
@@ -142,13 +154,21 @@ export function OptimizationWorkspace() {
   const { site, principal } = siteRoute.useRouteContext();
   const search = pageRoute.useSearch();
   const navigate = useNavigate({ from: '/energy-analysis/optimization' });
+  const queryClient = useQueryClient();
   const activeView = search.view ?? 'proposal';
+  const capabilities = principal.authorization.capabilities;
+  const canListWorkOrders = capabilities.includes('work-order.list');
+  const canCreateWorkOrder = capabilities.includes('work-order.create');
   const now = useNow(30_000);
   const [waiting, setWaiting] = useState<{ readonly runId: string; readonly since: number } | null>(null);
   const [notice, setNotice] = useState<{ readonly title: string; readonly detail: string } | null>(null);
   const [pending, setPending] = useState<PendingCommand | null>(null);
+  const [creatingWorkOrder, setCreatingWorkOrder] = useState(false);
   const latest = useQuery(latestRecommendationQuery(site.id, waiting?.runId ?? null));
-  const commands = useQuery(siteCommandsQuery(site.id));
+  const commands = useQuery({
+    ...siteCommandsQuery(site.id),
+    enabled: capabilities.includes('site.read'),
+  });
   const { plant, registry } = useRealtimePlant();
   const submit = useSubmitCommand(site.id, principal.session.csrfToken);
   const recommendation = latest.data ?? null;
@@ -186,6 +206,21 @@ export function OptimizationWorkspace() {
   const supply = useMemo(
     () => (registry.data ? supplySetpoint(controlTargets(registry.data.assetModel, new Date(now))) : null),
     [registry.data, now],
+  );
+  const manualWorkOrderMode = registry.isSuccess && supply === null && recommendation !== null && changesSupply(recommendation);
+  const recommendationWorkOrders = useQuery(
+    recommendationWorkOrdersQuery(site.id, recommendation?.id ?? null, manualWorkOrderMode && canListWorkOrders),
+  );
+  const activeWorkOrder = useMemo(
+    () =>
+      recommendation && recommendationWorkOrders.data
+        ? findActiveRecommendationWorkOrder(recommendationWorkOrders.data.items, recommendation.id)
+        : null,
+    [recommendation, recommendationWorkOrders.data],
+  );
+  const workOrderDraft = useMemo(
+    () => (recommendation ? buildOptimizationWorkOrderDraft(recommendation) : null),
+    [recommendation],
   );
   const readiness = useMemo(
     () => buildReadinessSummary({
@@ -300,8 +335,12 @@ export function OptimizationWorkspace() {
               siteId={site.id}
               setpoint={setpoint}
               setting={supply?.setting ?? null}
+              registryState={registry.isPending ? 'pending' : registry.isError ? 'error' : 'ready'}
               sent={sent}
+              activeWorkOrder={activeWorkOrder}
+              canCreateWorkOrder={canCreateWorkOrder}
               onDispatch={dispatch}
+              onCreateWorkOrder={() => setCreatingWorkOrder(true)}
             />
           )}
         </TabsContent>
@@ -317,6 +356,27 @@ export function OptimizationWorkspace() {
           </Panel>
         </TabsContent>
       </Tabs>
+
+      {workOrderDraft && recommendation ? (
+        <CreateWorkOrderDialog
+          open={creatingWorkOrder}
+          onOpenChange={setCreatingWorkOrder}
+          title="创建人工调温工单"
+          initial={workOrderDraft.initial}
+          sourceReferences={workOrderDraft.sourceReferences}
+          onCreated={(created) => {
+            toast.success('已创建人工调温工单');
+            const sourceKey = workOrderKeys.source(site.id, 'EXTERNAL', workOrderDraft.sourceReferences[0].resourceId);
+            queryClient.setQueryData(sourceKey, {
+              schemaVersion: 1,
+              items: [created, ...(recommendationWorkOrders.data?.items ?? [])],
+              nextCursor: null,
+              hasMore: false,
+            });
+            void queryClient.invalidateQueries({ queryKey: workOrderKeys.all(site.id) });
+          }}
+        />
+      ) : null}
 
       <ConfirmCommand
         pending={pending}
@@ -443,25 +503,40 @@ function ReadinessDisclosure({
   );
 }
 
-function Proposal({ recommendation, readiness, timeZone, siteId, setpoint, setting, sent, onDispatch }: {
+function Proposal({
+  recommendation,
+  readiness,
+  timeZone,
+  siteId,
+  setpoint,
+  setting,
+  registryState,
+  sent,
+  activeWorkOrder,
+  canCreateWorkOrder,
+  onDispatch,
+  onCreateWorkOrder,
+}: {
   readonly recommendation: OptimizationRecommendation;
   readonly readiness: ReadinessSummary;
   readonly timeZone: string;
   readonly siteId: string;
   readonly setpoint: number | null;
   readonly setting: ControlSetting | null;
+  readonly registryState: 'pending' | 'error' | 'ready';
   readonly sent: Command | undefined;
+  readonly activeWorkOrder: WorkOrder | null;
+  readonly canCreateWorkOrder: boolean;
   readonly onDispatch: () => void;
+  readonly onCreateWorkOrder: () => void;
 }) {
   const { baseline, candidate, comfortRange, supplyRange } = recommendation;
   const change = changesSupply(recommendation);
   const risk = RISK[recommendation.risk];
   const share = baseline.dailyEnergyKWh > 0 ? recommendation.saving.energyKWhPerDay / baseline.dailyEnergyKWh : null;
-  const stepNote = setting === null
-    ? '这台冷机没有登记供水温度设定点，无法从这里下发'
-    : setpoint !== null && Math.abs(setpoint - candidate.supplyTempC) >= 0.05
-      ? `冷机只能按 ${formatDecimal(setting.step, 1)} °C 调整，实际下发 ${celsius(setpoint)}；建议不会自动执行`
-      : `下发为 ${celsius(setpoint ?? candidate.supplyTempC)}；建议不会自动执行`;
+  const stepNote = setting && setpoint !== null && Math.abs(setpoint - candidate.supplyTempC) >= 0.05
+    ? `冷机只能按 ${formatDecimal(setting.step, 1)} °C 调整，实际下发 ${celsius(setpoint)}；建议不会自动执行`
+    : `下发为 ${celsius(setpoint ?? candidate.supplyTempC)}；建议不会自动执行`;
 
   return (
     <>
@@ -493,30 +568,63 @@ function Proposal({ recommendation, readiness, timeZone, siteId, setpoint, setti
               : '在安全与舒适约束内，当前供水温度已是最省电的选择。'}
           </p>
           {change ? (
-            sent ? (
+            registryState === 'pending' ? (
+              <Skeleton className="h-9 w-40 rounded-md" />
+            ) : registryState === 'error' ? (
+              <p className="text-xs text-muted-foreground">站点资产台账暂时读不到，无法核验可执行通道。</p>
+            ) : setting !== null ? (
+              sent ? (
+                <Link
+                  to="/operations/control"
+                  search={{ site: siteId, inspect: sent.commandId }}
+                  className="flex items-center gap-3 rounded-lg border bg-muted/40 px-4 py-3 outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring-soft"
+                >
+                  <CommandMark status={sent.status} />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="text-sm font-semibold">已提交为控制指令 · {STATUS_PRESENTATION[sent.status].label}</span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {setting.label} → {setpoint === null ? '—' : celsius(setpoint)} · <span className="font-mono">{formatTime(sent.createdAt, timeZone).slice(-5)}</span>
+                      {' · '}{APPROVAL_LABEL[sent.approvalPolicy]}{sent.requiredApprovalCount > 0 ? ` ${sent.approvalCount} / ${sent.requiredApprovalCount}` : ''}
+                    </span>
+                  </span>
+                  <span className="flex items-center text-xs font-medium text-primary">查看指令<ChevronRight className="size-3.5" aria-hidden="true" /></span>
+                </Link>
+              ) : (
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button disabled={setpoint === null} onClick={onDispatch}>
+                    <Send data-icon="inline-start" />
+                    按建议下发
+                  </Button>
+                  <span className="text-xs text-muted-foreground">{stepNote}</span>
+                </div>
+              )
+            ) : activeWorkOrder ? (
               <Link
-                to="/operations/control"
-                search={{ site: siteId, inspect: sent.commandId }}
+                to="/operations/work-center"
+                search={{ site: siteId, inspect: activeWorkOrder.workOrderId }}
                 className="flex items-center gap-3 rounded-lg border bg-muted/40 px-4 py-3 outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring-soft"
               >
-                <CommandMark status={sent.status} />
+                <StatusShape status={activeWorkOrder.status} className="size-3" />
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="text-sm font-semibold">已提交为控制指令 · {STATUS_PRESENTATION[sent.status].label}</span>
+                  <span className="text-sm font-semibold">已转为人工调温工单 · {STATUS_LABELS[activeWorkOrder.status]}</span>
                   <span className="truncate text-xs text-muted-foreground">
-                    {setting?.label} → {setpoint === null ? '—' : celsius(setpoint)} · <span className="font-mono">{formatTime(sent.createdAt, timeZone).slice(-5)}</span>
-                    {' · '}{APPROVAL_LABEL[sent.approvalPolicy]}{sent.requiredApprovalCount > 0 ? ` ${sent.approvalCount} / ${sent.requiredApprovalCount}` : ''}
+                    {activeWorkOrder.title} · <span className="font-mono">{formatTime(activeWorkOrder.createdAt, timeZone).slice(-5)}</span>
                   </span>
                 </span>
-                <span className="flex items-center text-xs font-medium text-primary">查看指令<ChevronRight className="size-3.5" aria-hidden="true" /></span>
+                <span className="flex items-center text-xs font-medium text-primary">查看工单<ChevronRight className="size-3.5" aria-hidden="true" /></span>
               </Link>
-            ) : (
+            ) : canCreateWorkOrder ? (
               <div className="flex flex-wrap items-center gap-3">
-                <Button disabled={setting === null || setpoint === null} onClick={onDispatch}>
-                  <Send data-icon="inline-start" />
-                  按建议下发
+                <Button onClick={onCreateWorkOrder}>
+                  <ClipboardList data-icon="inline-start" />
+                  创建人工调温工单
                 </Button>
-                <span className="text-xs text-muted-foreground">{stepNote}</span>
+                <span className="text-xs text-muted-foreground">当前站点未登记可写冷冻水供水温度设定点，转为人工调温工单现场执行</span>
               </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                当前站点未登记可写冷冻水供水温度设定点；当前账号无创建工单权限，需由运维人员现场调温。
+              </p>
             )
           ) : null}
         </div>

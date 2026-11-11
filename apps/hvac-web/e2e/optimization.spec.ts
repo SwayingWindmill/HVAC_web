@@ -1,8 +1,28 @@
 import { readFileSync } from 'node:fs';
-import { SITE_ID } from './gateway';
+import { principal, SITE_ID } from './gateway';
 import { expect, test } from './test';
 
 const fixture = (name: string) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
+
+function withoutSupplySetpoint(model: Record<string, any>) {
+  const removedIds = new Set(
+    model.telemetryPoints
+      .filter((point: { sourceMetadata?: { capability?: string } }) => point.sourceMetadata?.capability === 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT')
+      .map((point: { id: string }) => point.id),
+  );
+  const telemetryPoints = model.telemetryPoints.filter((point: { id: string }) => !removedIds.has(point.id));
+  const relationships = model.relationships.filter(
+    (rel: { fromType: string; fromId: string; toType: string; toId: string }) =>
+      !(rel.fromType === 'POINT' && removedIds.has(rel.fromId))
+      && !(rel.toType === 'POINT' && removedIds.has(rel.toId)),
+  );
+  return {
+    ...model,
+    telemetryPoints,
+    relationships,
+    counts: { ...model.counts, points: telemetryPoints.length },
+  };
+}
 
 test('without a recommendation the page offers a run and says when its inputs are not ready', async ({ page, gateway }) => {
   await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
@@ -94,4 +114,77 @@ test('view tabs persist in the URL and normalize unknown view values back to pro
   await page.getByRole('tab', { name: '模型与负荷分析' }).click();
   await expect(page).toHaveURL(new RegExp(`view=analysis`));
   await expect(page.getByRole('tab', { name: '模型与负荷分析', selected: true })).toBeVisible();
+});
+
+test('a site without a writable supply setpoint offers a prefilled manual work order and deduplicates open ones', async ({ page, gateway }) => {
+  gateway.optimization = fixture('optimization-latest.json');
+  gateway.assetModel = withoutSupplySetpoint(gateway.assetModel);
+
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+  const proposal = page.getByRole('region', { name: '当前建议' });
+  await expect(proposal.getByText('按建议下发')).toBeHidden();
+  await expect(page.getByRole('button', { name: /前置与安全条件：5\/6 就绪 · 仅人工调温工单/ })).toBeVisible();
+
+  await proposal.getByRole('button', { name: '创建人工调温工单' }).click();
+  const dialog = page.getByRole('dialog', { name: '创建人工调温工单' });
+  await expect(dialog.getByLabel('标题')).toHaveValue('人工调整冷冻水供水温度至 8.1 °C');
+  await expect(dialog.getByLabel('说明')).toHaveValue(/估算电费 ¥51/);
+  await dialog.getByRole('button', { name: '创建工单' }).click();
+
+  const createdWrite = gateway.writes.find((write) => write.path === `/api/v1/sites/${SITE_ID}/work-orders`);
+  expect(createdWrite?.body).toMatchObject({
+    title: '人工调整冷冻水供水温度至 8.1 °C',
+    priority: 'MEDIUM',
+    sourceReferences: [
+      {
+        domain: 'EXTERNAL',
+        resourceId: 'optimization-recommendation:01a12bdc-97d7-7e50-bc97-f14cb86800ba',
+        relationship: 'ORIGIN',
+      },
+    ],
+  });
+
+  const orderLink = proposal.getByRole('link', { name: /已转为人工调温工单 · 待处理/ });
+  await expect(orderLink).toBeVisible();
+  await expect(proposal.getByRole('button', { name: '创建人工调温工单' })).toBeHidden();
+
+  // Reloading keeps the unclosed work order linked instead of offering duplicate creation.
+  await page.reload();
+  await expect(page.getByRole('region', { name: '当前建议' }).getByRole('link', { name: /已转为人工调温工单 · 待处理/ })).toBeVisible();
+  await page.getByRole('region', { name: '当前建议' }).getByRole('link', { name: /已转为人工调温工单 · 待处理/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/operations/work-center.*inspect=`));
+  await expect(page.getByText('来自优化建议')).toBeVisible();
+  await expect(page.getByRole('link', { name: '查看优化建议' })).toBeVisible();
+});
+
+test('a viewer without work-order.create sees a read-only explanation instead of a work-order trigger', async ({ page, gateway }) => {
+  gateway.optimization = fixture('optimization-latest.json');
+  gateway.assetModel = withoutSupplySetpoint(gateway.assetModel);
+  gateway.principalOverride = {
+    ...principal,
+    authorization: {
+      ...principal.authorization,
+      capabilities: principal.authorization.capabilities.filter(
+        (capability: string) => capability !== 'work-order.create',
+      ),
+    },
+  };
+
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+  const proposal = page.getByRole('region', { name: '当前建议' });
+  await expect(proposal.getByText('按建议下发')).toBeHidden();
+  await expect(proposal.getByRole('button', { name: '创建人工调温工单' })).toBeHidden();
+  await expect(proposal).toContainText('当前账号无创建工单权限');
+});
+
+test('a recommendation that keeps the current supply temperature offers neither remote dispatch nor a manual work order', async ({ page, gateway }) => {
+  const unchanged = fixture('optimization-latest.json');
+  unchanged.recommendation.candidate.supplyTempC = unchanged.recommendation.baseline.supplyTempC;
+  gateway.optimization = unchanged;
+
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+  const proposal = page.getByRole('region', { name: '当前建议' });
+  await expect(proposal).toContainText('保持 7.1°C');
+  await expect(proposal.getByRole('button', { name: '按建议下发' })).toBeHidden();
+  await expect(proposal.getByRole('button', { name: '创建人工调温工单' })).toBeHidden();
 });

@@ -234,6 +234,8 @@ function replayForecast(forecast: Json, now: string): Json {
 }
 
 export class Gateway {
+  principalOverride: Json | null = null;
+  assetModel: Json = fixture<Json>('asset-model.json');
   readonly alarms = fixture<Json[]>('alarms.json');
   // The Site's rules in effect, as the Alarm owner lists them; publishing the rules file changes them, not the page.
   readonly alarmRules = fixture<Json[]>('alarm-rules.json');
@@ -481,13 +483,13 @@ export class Gateway {
 
   private respond(method: string, path: string, query: URLSearchParams, body: Json | null): { status?: number; body: unknown } | undefined {
     const now = new Date().toISOString();
-    if (method === 'GET' && path === '/api/v1/principal') return { body: principal };
+    if (method === 'GET' && path === '/api/v1/principal') return { body: this.principalOverride ?? principal };
     if (method === 'GET' && path === '/api/v1/platform/status') return { body: fixture('platform-status.json') };
     const userAdmin = this.userAdmin(method, path, body);
     if (userAdmin) return userAdmin;
     if (method === 'GET' && path === '/api/v1/sites') return { body: fixture('sites.json') };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}`) return { body: fixture<Json>('sites.json').items[0] };
-    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: fixture('asset-model.json') };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: this.assetModel };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/tariff`) {
       return this.tariff ? { body: this.tariff } : {
         status: 404,

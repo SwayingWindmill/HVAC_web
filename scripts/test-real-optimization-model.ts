@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
+  buildOptimizationWorkOrderDraft,
   buildReadinessSummary,
+  findActiveRecommendationWorkOrder,
   parseRecommendation,
   type PublishedRecommendation,
 } from '../apps/hvac-web/src/features/optimization/optimization-model.ts';
@@ -70,4 +72,40 @@ test('buildReadinessSummary surfaces exact missing preparation input without fab
   assert.equal(live?.status, 'blocked');
   const maintenance = summary.items.find((item) => item.key === 'maintenance_locks');
   assert.equal(maintenance?.status, 'unknown');
+});
+
+test('buildOptimizationWorkOrderDraft builds EXTERNAL origin work-order prefill and deduplicates unclosed work orders', () => {
+  const recommendation = parseRecommendation(publishedFixture);
+  const draft = buildOptimizationWorkOrderDraft(recommendation);
+
+  assert.equal(draft.initial.title, '人工调整冷冻水供水温度至 8.1 °C');
+  assert.equal(draft.initial.priority, 'MEDIUM');
+  assert.match(draft.initial.description, /7\.1 °C.*8\.1 °C/);
+  assert.match(draft.initial.description, /60 kWh/);
+  assert.match(draft.initial.description, /估算电费 ¥51/);
+  assert.match(draft.initial.description, /24\.4 °C/);
+  assert.match(draft.initial.description, /观察 30 分钟.*恢复至 7\.1 °C/);
+  assert.deepEqual(draft.sourceReferences, [
+    {
+      domain: 'EXTERNAL',
+      resourceId: 'optimization-recommendation:01a12bdc-97d7-7e50-bc97-f14cb86800ba',
+      relationship: 'ORIGIN',
+    },
+  ]);
+
+  const cancelledOrder = {
+    workOrderId: 'wo-cancelled',
+    status: 'CANCELLED',
+    createdAt: '2026-10-11T17:00:00Z',
+    sourceReferences: draft.sourceReferences,
+  };
+  const openOrder = {
+    workOrderId: 'wo-open',
+    status: 'OPEN',
+    createdAt: '2026-10-11T17:05:00Z',
+    sourceReferences: draft.sourceReferences,
+  };
+
+  assert.equal(findActiveRecommendationWorkOrder([cancelledOrder], recommendation.id), null);
+  assert.equal(findActiveRecommendationWorkOrder([cancelledOrder, openOrder], recommendation.id)?.workOrderId, 'wo-open');
 });

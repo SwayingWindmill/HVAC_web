@@ -1,7 +1,15 @@
 import { queryOptions } from '@tanstack/react-query';
 import { gatewayPath, gatewayRequest, publishedValueOf, valueOf, type GatewayProblem } from '@/api/gateway-client';
 import { intelligencePaths } from '@/api/generated/platformGateway.gen';
-import { parseRecommendation, type OptimizationRecommendation, type PreparationOutcome, type PublishedRecommendation } from './optimization-model';
+import { listWorkOrders, type WorkOrderList } from '@/api/work-orders';
+import { workOrderKeys } from '@/features/work-orders/work-order-queries';
+import {
+  optimizationRecommendationSourceRef,
+  parseRecommendation,
+  type OptimizationRecommendation,
+  type PreparationOutcome,
+  type PublishedRecommendation,
+} from './optimization-model';
 
 export const optimizationKeys = {
   latest: (siteId: string) => ['optimization', siteId, 'latest'] as const,
@@ -41,6 +49,17 @@ export function latestRecommendationQuery(siteId: string, waitingForRun: string 
     // A requested run publishes within seconds; until it does the page asks again.
     refetchInterval: waitingForRun ? 3_000 : false,
     retry: false,
+  });
+}
+
+/** Work orders originating from a specific optimization recommendation, used for manual dispatch deduplication. */
+export function recommendationWorkOrdersQuery(siteId: string, recommendationId: string | null, enabled: boolean) {
+  const sourceRef = recommendationId ? optimizationRecommendationSourceRef(recommendationId) : '';
+  return queryOptions({
+    queryKey: workOrderKeys.source(siteId, 'EXTERNAL', sourceRef),
+    queryFn: ({ signal }): Promise<WorkOrderList> =>
+      listWorkOrders({ sourceDomain: 'EXTERNAL', sourceRef, limit: 20 }, { siteId, signal }),
+    enabled: enabled && Boolean(recommendationId),
   });
 }
 

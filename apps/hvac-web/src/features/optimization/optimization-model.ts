@@ -266,3 +266,67 @@ export function buildReadinessSummary({
 
   return { readyCount, totalCount: 6, headline, items };
 }
+
+export const OPTIMIZATION_RECOMMENDATION_SOURCE_PREFIX = 'optimization-recommendation:';
+
+const UNCLOSED_WORK_ORDER_STATUSES = new Set(['DRAFT', 'OPEN', 'IN_PROGRESS', 'BLOCKED']);
+
+export function optimizationRecommendationSourceRef(recommendationId: string): string {
+  return `${OPTIMIZATION_RECOMMENDATION_SOURCE_PREFIX}${recommendationId}`;
+}
+
+export interface OptimizationWorkOrderDraft {
+  readonly initial: {
+    readonly title: string;
+    readonly priority: 'MEDIUM';
+    readonly description: string;
+  };
+  readonly sourceReferences: {
+    readonly domain: 'EXTERNAL';
+    readonly resourceId: string;
+    readonly relationship: 'ORIGIN';
+  }[];
+}
+
+export function buildOptimizationWorkOrderDraft(recommendation: OptimizationRecommendation): OptimizationWorkOrderDraft {
+  const { baseline, candidate, saving, comfortRange } = recommendation;
+  const title = `人工调整冷冻水供水温度至 ${fixed1(candidate.supplyTempC)} °C`;
+  const description = [
+    `建议将冷冻水供水温度从 ${fixed1(baseline.supplyTempC)} °C 调整至 ${fixed1(candidate.supplyTempC)} °C。`,
+    `预计日节电 ${Math.round(saving.energyKWhPerDay)} kWh，预计日节省估算电费 ¥${Math.round(saving.costPerDay)}（按当天峰谷均价折算）。`,
+    `预计室内温度 ${fixed1(candidate.projectedZoneTempC)} °C，保持在 ${comfortRange.minC.toFixed(0)}–${comfortRange.maxC.toFixed(0)} °C 舒适范围内（舒适余量 ${fixed1(recommendation.comfortMarginC)} °C）。`,
+    `现场调整后观察 ${recommendation.verificationMinutes} 分钟；任一安全或舒适条件不满足时，恢复至 ${fixed1(recommendation.restoreSupplyTempC)} °C。`,
+  ].join('\n');
+
+  return {
+    initial: { title, priority: 'MEDIUM', description },
+    sourceReferences: [
+      {
+        domain: 'EXTERNAL',
+        resourceId: optimizationRecommendationSourceRef(recommendation.id),
+        relationship: 'ORIGIN',
+      },
+    ],
+  };
+}
+
+export function findActiveRecommendationWorkOrder<
+  T extends {
+    readonly status: string;
+    readonly createdAt: string;
+    readonly sourceReferences: readonly { readonly domain: string; readonly resourceId: string }[];
+  },
+>(workOrders: readonly T[], recommendationId: string): T | null {
+  const expectedRef = optimizationRecommendationSourceRef(recommendationId);
+  const matching = workOrders
+    .filter(
+      (order) =>
+        UNCLOSED_WORK_ORDER_STATUSES.has(order.status)
+        && order.sourceReferences.some(
+          (source) => source.domain === 'EXTERNAL' && source.resourceId === expectedRef,
+        ),
+    )
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+
+  return matching[0] ?? null;
+}
