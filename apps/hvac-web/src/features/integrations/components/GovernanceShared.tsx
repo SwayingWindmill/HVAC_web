@@ -122,7 +122,7 @@ export function DrawerHourlyHistorySection({
   }, [rows, timezone, windowFromMs, windowToMs]);
 
   const hasAnyValue = slots.some((slot) => slot.value !== null);
-  const metricLabel = isCounter ? '小时增量' : '小时均值';
+  const metricLabel = isCounter ? '小时增量' : '每小时平均';
 
   return (
     <section className="flex flex-col gap-2.5 border-b border-divider px-6 py-4">
@@ -130,7 +130,7 @@ export function DrawerHourlyHistorySection({
         <div>
           <h3 className="text-sm font-semibold">{title}</h3>
           <p className="text-xs text-muted-foreground">
-            近 24 小时逐时{isCounter ? '增量' : '均值'}
+            近 24 小时{isCounter ? '逐时增量' : '每小时平均'}
             {unit ? `（${unit}）` : ''}
           </p>
         </div>

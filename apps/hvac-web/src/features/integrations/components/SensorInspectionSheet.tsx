@@ -283,7 +283,7 @@ function SensorInspectionDetail({
 
       {canReadHistory ? (
         <DrawerHourlyHistorySection
-          title={`${row.pointLabel}小时均值趋势`}
+          title={`${row.pointLabel}每小时平均趋势`}
           unit={row.unit}
           isCounter={false}
           rows={historyQuery.data}

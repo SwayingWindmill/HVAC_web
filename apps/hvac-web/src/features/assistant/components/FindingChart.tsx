@@ -1,6 +1,7 @@
 import type { FindingChart as FindingChartData } from '@/api/generated/operationsAgentSessions.gen';
 import { BarList } from '@/components/ui/bar-list';
 import { ComposedChart } from '@/components/ui/composed-chart';
+import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
 import { formatDecimal } from '@/lib/operator-format';
 
 const formatValue = (value: number): string => formatDecimal(value, Number.isInteger(value) ? 0 : 1);
@@ -10,7 +11,8 @@ const formatValue = (value: number): string => formatDecimal(value, Number.isInt
  * on: hours as a line, days and periods as bars, machines as a ranked bar list.
  */
 export function FindingChart({ chart }: { readonly chart: FindingChartData }) {
-  const caption = chart.unit === '' ? chart.title : `${chart.title}（${chart.unit}）`;
+  const unit = formatTelemetryUnit(chart.unit) ?? chart.unit;
+  const caption = unit === '' ? chart.title : `${chart.title}（${unit}）`;
   return (
     <figure aria-label={chart.title} className="m-0 flex flex-col gap-2" data-testid="assistant-chart">
       <figcaption className="text-xs text-muted-foreground">{caption}</figcaption>

@@ -11,7 +11,7 @@ test('load is the plant meter\'s quarter-hour average power: now, today\'s and t
 
   const facts = page.getByRole('region', { name: '负荷概况' });
   // The quarter-hour still running is current load, not a peak.
-  await expect(facts).toContainText('当前负荷247.2kW22:30 起的 15 分钟，进行中');
+  await expect(facts).toContainText('当前负荷247.2kW22:30–22:45（统计中）');
   await expect(facts).toContainText('今日最高247.2kW出现在 21:45 · 负荷率 97%');
   await expect(facts).toContainText('本月最高247.2kW出现在 10/11 21:45');
   await expect(facts).toContainText('明天最高（预测）');
@@ -37,7 +37,7 @@ test('load is the plant meter\'s quarter-hour average power: now, today\'s and t
   // The recording has no peak-period quarter-hour, the only period that carries a demand rate.
   await details.getByRole('tab', { name: '需量电费' }).click();
   await expect(details).toContainText('暂无数据');
-  await expect(details).toContainText('峰时段本月还没有完整的 15 分钟');
+  await expect(details).toContainText('峰时段本月统计未满 15 分钟');
 
   const reads = gateway.writes.filter((write) => write.path === '/api/v1/telemetry/device-series:aggregate');
   expect(reads.map((read) => [read.body!.from, read.body!.granularity])).toEqual([

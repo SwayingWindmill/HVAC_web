@@ -2,14 +2,14 @@ import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { CircleCheck } from 'lucide-react';
 import { Panel, PanelCount, PanelHeader, PanelLink } from '@/blocks/panel';
-import { SeverityMark, type SeverityLevel } from '@/components/severity-mark';
+import { SeverityMark } from '@/components/severity-mark';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { WorkOrder, WorkOrderPriority } from '@/api/work-orders';
 import type { Alarm, AlarmSeverity } from '@/features/alarms/alarm-api';
 import { ruleFor, severity, type Finding } from '@/features/diagnostics/diagnostics-model';
 import { SEVERITY as FINDING_SEVERITY } from '@/features/diagnostics/finding-presentation';
 import { PRIORITY_LABELS, STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
-import { formatCompactTime, formatDecimal, personLabel } from '@/lib/operator-format';
+import { formatCompactTime, formatDecimal, personLabel, type SeverityLevel } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 
 type Kind = 'alarm' | 'finding' | 'work';
@@ -69,7 +69,7 @@ export function AttentionPanel({ siteId, timeZone, principalId, alarms, findings
       key: `finding-${finding.id}`,
       kind: 'finding',
       level: FINDING_LEVEL[severity(finding)],
-      title: ruleFor(finding.findingType)?.title ?? '诊断发现',
+      title: ruleFor(finding.findingType)?.title ?? '诊断结论',
       at: finding.evaluationTo,
       meta: `${assetName(finding.assetId)} · ${FINDING_SEVERITY[severity(finding)].label}`,
       value: `${formatDecimal(finding.observedValue, 1)} ${finding.valueUnit}`,
@@ -96,13 +96,13 @@ export function AttentionPanel({ siteId, timeZone, principalId, alarms, findings
   };
   const shown = tab === 'all' ? items : items.filter((item) => item.kind === tab);
   const pending = alarms.isPending || findings.isPending || workOrders.isPending;
-  const failed = [alarms.isError && '告警', findings.isError && '诊断发现', workOrders.isError && '工单'].filter(Boolean);
+  const failed = [alarms.isError && '告警', findings.isError && '诊断结论', workOrders.isError && '工单'].filter(Boolean);
   const urgent = items.some((item) => item.level === 'critical');
   // What is clear, said plainly, so a short list does not read as missing data.
   const quiet = [
     alarms.data && counts.alarm === 0 ? '无活动告警' : null,
     workOrders.data && counts.work === 0 ? '无未完成工单' : null,
-    findings.data && counts.finding === 0 ? '近 7 天无诊断发现' : null,
+    findings.data && counts.finding === 0 ? '近 7 天无诊断结论' : null,
   ].filter((text): text is string => text !== null);
   const onward = tab === 'finding' ? '/operations/diagnostics' : tab === 'work' ? '/operations/work-center' : '/operations/alarms';
 
@@ -139,7 +139,7 @@ export function AttentionPanel({ siteId, timeZone, principalId, alarms, findings
         <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
           <span className="flex size-9 items-center justify-center rounded-xl bg-success-soft text-success-text"><CircleCheck className="size-[18px]" aria-hidden="true" /></span>
           <p className="text-sm font-semibold">{tab === 'all' ? '没有需要处理的事项' : `没有需要处理的${KIND_LABEL[tab]}`}</p>
-          <p className="text-xs text-muted-foreground">无活动告警 · 无未完成工单 · 近 7 天无诊断发现</p>
+          <p className="text-xs text-muted-foreground">无活动告警 · 无未完成工单 · 近 7 天无诊断结论</p>
         </div>
       ) : (
         <ul className="flex flex-col" aria-label="需要处理的事项">

@@ -114,6 +114,7 @@ test('design system check passes on the repository and rejects violations across
         '      <Button variant="secondary">认领</Button>',
         '      <span>分表计收</span>',
         '      <span>平台账号 整栋总表 返回执行结果</span>',
+        '      <span>{`${raw}均`} {`没有${raw}的工单`} 本期间 Registry 服务</span>',
         '      <Button variant={raw === "secondary" ? "outline" : "ghost"}>切换</Button>',
         '      {String(x) + String(ws)}',
         '    </div>',
@@ -152,8 +153,12 @@ test('design system check passes on the repository and rejects violations across
     assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:12 UI copy uses deprecated term "认领"')));
     assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:13 UI copy uses deprecated term "分表"')));
     assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:13 UI copy uses deprecated term "计收"')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:15 UI copy uses template concatenation "${...}均"')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:15 UI copy uses template concatenation "没有${...}的工单"')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:15 UI copy uses deprecated term "本期间"')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:15 UI copy uses deprecated term "Registry "')));
     assert.equal(errors.some((entry: string) => entry.includes('BadPatterns.tsx:14')), false);
-    assert.equal(errors.some((entry: string) => entry.includes('BadPatterns.tsx:15')), false);
+    assert.equal(errors.some((entry: string) => entry.includes('BadPatterns.tsx:16')), false);
     assert.ok(errors.some((entry: string) => entry.includes('apps/hvac-web/src non-const `as` casts grew from 0 to 2')));
     assert.ok(errors.some((entry: string) => entry.includes('apps/hvac-web/src/routeTree.gen.ts is stale')));
   } finally {

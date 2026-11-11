@@ -260,6 +260,46 @@ const FORBIDDEN_COPY_RULES: ReadonlyArray<{ label: string; pattern: RegExp; repl
   { label: '计收', pattern: /计收/u, replacement: '计费' },
   { label: '认领', pattern: /认领/u, replacement: '分配 / 由我负责' },
   { label: '区间未计入', pattern: /区间未计入/u, replacement: '当前区间不算在内' },
+  { label: '时均', pattern: /时均/u, replacement: '每小时平均 / 平均' },
+  { label: '每时用电', pattern: /每时用电/u, replacement: '每小时用电' },
+  { label: '平均每时段', pattern: /平均每时段/u, replacement: '每小时平均' },
+  { label: '分日明细', pattern: /分日明细/u, replacement: '每日明细' },
+  { label: '退役空间', pattern: /退役空间/u, replacement: '停用空间 / 退役此空间' },
+  { label: '退役点位', pattern: /退役点位/u, replacement: '停用点位 / 退役此点位' },
+  { label: '空间登记资源', pattern: /空间登记资源/u, replacement: '空间' },
+  { label: '设备资产', pattern: /设备资产/u, replacement: '设备' },
+  { label: '泳道', pattern: /泳道/u, replacement: '设备启停状态' },
+  { label: '燃尽', pattern: /燃尽/u, replacement: '累计进度' },
+  { label: '包络曲面', pattern: /包络曲面/u, replacement: '不同负荷下的能效' },
+  { label: '没有草稿的工单', pattern: /没有草稿的工单/u, replacement: '还没有草稿工单' },
+  { label: '本期间', pattern: /本期间/u, replacement: '所选时段 / 这段时间' },
+  { label: '通信端点', pattern: /通信端点/u, replacement: '具体电表或传感器名称' },
+  { label: '告警分诊', pattern: /告警分诊/u, replacement: '告警处理' },
+  { label: '诊断发现', pattern: /诊断发现/u, replacement: '诊断结论' },
+  { label: '没人确认', pattern: /没人确认/u, replacement: '无人确认' },
+  { label: '90% 把握', pattern: /90% 把握/u, replacement: '按 90% 置信区间估算' },
+  { label: '未找到该 Alarm', pattern: /未找到该 Alarm/u, replacement: '找不到这条告警' },
+  { label: 'Work Order 服务', pattern: /Work Order 服务/u, replacement: '工单服务' },
+  { label: 'Registry ', pattern: /\bRegistry\s/u, replacement: '资产登记 / 登记信息' },
+  { label: '不会用示例数据代替', pattern: /不会用示例数据代替/u, replacement: '空状态只说明现状，不写自证声明' },
+  { label: '也不会用本地数据代替', pattern: /也不会用本地数据代替/u, replacement: '空状态只说明现状，不写自证声明' },
+  { label: '没有浏览器侧虚构模板目录', pattern: /没有浏览器侧虚构模板目录/u, replacement: '空状态只说明现状，不写自证声明' },
+  { label: '浏览器不会生成本地模拟站点', pattern: /浏览器不会生成本地模拟站点/u, replacement: '空状态只说明现状，不写自证声明' },
+  { label: '页面不显示推测的数值', pattern: /页面不显示推测的数值/u, replacement: '空状态只说明现状，不写自证声明' },
+  { label: '没有显示任何替代记录', pattern: /没有显示任何替代记录/u, replacement: '空状态只说明现状，不写自证声明' },
+];
+
+const FORBIDDEN_TEMPLATE_CONCAT_RULES: ReadonlyArray<{
+  label: string;
+  before?: string;
+  after: string;
+  suggestion: string;
+}> = [
+  { label: '${...}均', after: '均', suggestion: '按粒度字典声明完整标签（如每小时平均、日均用电）' },
+  { label: '每${...}用电', before: '每', after: '用电', suggestion: '按粒度字典声明完整标签（如每小时用电、每日用电）' },
+  { label: '分${...}明细', before: '分', after: '明细', suggestion: '按粒度字典声明完整标签（如逐时明细、每日明细）' },
+  { label: '单${...}明细', before: '单', after: '明细', suggestion: '按粒度字典声明完整提示文案（如不摊入逐时明细）' },
+  { label: '没有${...}的工单', before: '没有', after: '的工单', suggestion: '按状态字典声明完整空状态文案' },
 ];
 
 function lineOfNode(sourceFile: ts.SourceFile, node: ts.Node): number {
@@ -441,6 +481,18 @@ async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): 
         && node.tagName.text === 'Button'
         && hasSecondaryButtonVariant(node.attributes)) {
         errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} avoid <Button variant="secondary">; DESIGN.md uses default/outline/ghost/destructive variants`);
+      }
+
+      if (ts.isTemplateExpression(node)) {
+        for (let i = 0; i < node.templateSpans.length; i += 1) {
+          const prevText = i === 0 ? node.head.text : node.templateSpans[i - 1].literal.text;
+          const nextText = node.templateSpans[i].literal.text;
+          for (const rule of FORBIDDEN_TEMPLATE_CONCAT_RULES) {
+            if ((!rule.before || prevText.endsWith(rule.before)) && nextText.startsWith(rule.after)) {
+              errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} UI copy uses template concatenation "${rule.label}"; ${rule.suggestion} (DESIGN.md §1)`);
+            }
+          }
+        }
       }
 
       if (isCopyLiteralNode(node)) {

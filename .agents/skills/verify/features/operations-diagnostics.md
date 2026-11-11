@@ -1,10 +1,10 @@
 # Operations diagnostics
 
-The `/operations/diagnostics` route lists Fault Detection & Diagnostics findings (`诊断发现列表`), renders measurement vs threshold details and recommended actions (`诊断发现详情`), and lets operators trigger manual rule evaluations (`立即诊断`).
+The `/operations/diagnostics` route lists Fault Detection & Diagnostics findings (`诊断结论列表`), renders measurement vs threshold details and recommended actions (`诊断结论详情`), and lets operators trigger manual rule evaluations (`立即诊断`).
 
 ## Sub-features
 
-- `diagnostics-findings-and-detail` lists `冷冻水低温差` (`BTU-METER-01`, `3.4 / 3.5 K`, `轻微偏离`) and opens `诊断发现详情` (`?inspect=`) with action links (`去调整水泵`).
+- `diagnostics-findings-and-detail` lists `冷冻水低温差` (`BTU-METER-01`, `3.4 / 3.5 K`, `轻微偏离`) and opens `诊断结论详情` (`?inspect=`) with action links (`去调整水泵`).
 - `diagnostics-on-demand-rule` displays the active FDD rule revision (`第 1 版`, `3.5 K`, `15 分钟`), gate tooltips (`70%` runtime share), and triggers `POST /api/v1/sites/{siteId}/fdd/evaluate/low-delta-t` on `立即诊断`.
 - `diagnostics-not-operating-guard` withholds judgement (`未运行`, no finding inserted) when plant runtime share is below `70%`, and reports unreadable rules cleanly.
 

@@ -1,5 +1,19 @@
 // Formatting shared by operator workspaces.
 
+/**
+ * Unified 5-level alarm severity keys and plain-Chinese operator labels:
+ * ◆ 紧急, ▲ 重要, ● 次要, ■ 预警, ○ 提示.
+ */
+export type SeverityLevel = 'critical' | 'major' | 'minor' | 'warning' | 'info';
+
+export const SEVERITY_LEVEL_LABELS: Readonly<Record<SeverityLevel, string>> = {
+  critical: '紧急',
+  major: '重要',
+  minor: '次要',
+  warning: '预警',
+  info: '提示',
+};
+
 /** A measured value with a fixed number of decimals, grouped the Chinese way. */
 export function formatDecimal(value: number, digits: number): string {
   return value.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits });

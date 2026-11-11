@@ -42,11 +42,11 @@ test('energy consumption compares the period with the same span before it, per S
   await expect(cost).toContainText('有 100 kWh 落在电价未覆盖的时段，未计入电费');
 
   // Newest first; each hour's energy also lands in its tariff period's column.
-  await details.getByRole('tab', { name: '分时段明细' }).click();
-  const rows = details.getByRole('table', { name: '分时段明细' }).getByRole('row');
+  await details.getByRole('tab', { name: '逐时明细' }).click();
+  const rows = details.getByRole('table', { name: '逐时明细' }).getByRole('row');
   await expect(rows).toHaveCount(5);
-  // The first cell carries the row's 解释 action.
-  await expect(rows.last().getByRole('cell')).toHaveText(['10:00解释', '177.5', '177.5', '0.0%', '178', '—', '—', '607.1', '3.42']);
+  // The first cell carries the row's 分析原因 action.
+  await expect(rows.last().getByRole('cell')).toHaveText(['10:00分析原因', '177.5', '177.5', '0.0%', '178', '—', '—', '607.1', '3.42']);
 
   // Today and the same hours yesterday, each as electricity (already priced) and cooling
   // (the machines' split is read on its own, see below).
@@ -78,7 +78,7 @@ test('the same page splits the plant\'s electricity by machine from each one\'s 
   await expect(machines.nth(1)).toContainText('50.7%');
   await expect(machines.last()).toContainText('未单独计量总电表减各设备电表48');
 
-  await expect(page.getByRole('region', { name: '分项趋势' }).getByRole('img', { name: /^冷水机组每时用电/ })).toBeVisible();
+  await expect(page.getByRole('region', { name: '分项趋势' }).getByRole('img', { name: /^冷水机组每小时用电/ })).toBeVisible();
 
   // An hourly read of the total meter with each machine's sub-meter from the Site's midnight, and the same for yesterday; no power estimate.
   const reads = gateway.writes.filter((write) => write.path === '/api/v1/analytics/energy-series' && write.body?.breakdown === 'device');

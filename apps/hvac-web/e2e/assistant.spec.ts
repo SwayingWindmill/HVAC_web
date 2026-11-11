@@ -8,7 +8,7 @@ test('解释 on the busiest hour opens the assistant with the question, and the 
   await page.clock.setFixedTime(new Date(recordedAt));
   await page.goto(`/energy-analysis/consumption?site=${SITE_ID}`);
 
-  await page.getByRole('region', { name: '期间用能' }).getByRole('button', { name: '解释 11:00' }).click();
+  await page.getByRole('region', { name: '期间用能' }).getByRole('button', { name: '分析 11:00' }).click();
   const panel = page.getByRole('complementary', { name: 'AI 助手' });
   const composer = panel.getByRole('textbox', { name: '向助手提问' });
   // The recording replays one day, so the hour matches yesterday's and the question asks whether it is normal.
@@ -45,10 +45,10 @@ test('解释 on the busiest hour opens the assistant with the question, and the 
   await expect(answers.first().getByTestId('assistant-follow-ups')).toHaveCount(0);
   await expect(answers.last().getByTestId('assistant-follow-ups').getByRole('button')).toHaveText(['2 号机组明天几点开机？']);
 
-  // With the panel already open, 解释 on a detail row hands over that hour's question.
+  // With the panel already open, 分析原因 on a detail row hands over that hour's question.
   const details = page.getByRole('region', { name: '能耗明细' });
-  await details.getByRole('tab', { name: '分时段明细' }).click();
-  await details.getByRole('button', { name: '解释 10:00' }).click();
+  await details.getByRole('tab', { name: '逐时明细' }).click();
+  await details.getByRole('button', { name: '分析 10:00' }).click();
   await expect(composer).toHaveValue('2026年10月10日 10:00–11:00 的空调用电 178 kWh，用电正常吗？');
 });
 
