@@ -48,7 +48,9 @@
       "work-order.create",
       "work-order.assign",
       "work-order.lifecycle",
-      "savings.manage"
+      "savings.manage",
+      "schedule.request",
+      "schedule.manage"
     ]
   },
   "session": {

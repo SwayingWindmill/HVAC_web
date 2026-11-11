@@ -28,6 +28,8 @@ type RegistryStore interface {
 	GetSiteAssetModel(context.Context, registryauth.GrantClaims, string) (SiteAssetModel, error)
 	GetSiteTariff(context.Context, registryauth.GrantClaims, string) (SiteTariff, error)
 	ListImportTariffs(context.Context, registryauth.GrantClaims, string, time.Time) (ImportTariffs, error)
+	GetOperatingSchedule(context.Context, registryauth.GrantClaims, string) (OperatingSchedule, error)
+	ListOperatingExceptions(context.Context, registryauth.GrantClaims, string, OperatingExceptionFilter) (OperatingExceptionList, error)
 }
 
 type PostgresStore struct {
@@ -182,7 +184,7 @@ func (store *PostgresStore) ListAssets(ctx context.Context, claims registryauth.
 	result := PageResult[Asset]{Items: []Asset{}}
 	err = store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
 		rows, err := transaction.Query(ctx, `
-SELECT id::text, tenant_id::text, site_id::text, code, display_name, asset_type, status, revision, created_at, updated_at
+SELECT `+assetColumns+`
 FROM core_registry.assets
 WHERE site_id = $1::uuid
   AND NOT (site_id = ANY($2::uuid[]))
@@ -220,7 +222,7 @@ func (store *PostgresStore) GetAsset(ctx context.Context, claims registryauth.Gr
 	var result Asset
 	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
 		item, err := scanAsset(transaction.QueryRow(ctx, `
-SELECT id::text, tenant_id::text, site_id::text, code, display_name, asset_type, status, revision, created_at, updated_at
+SELECT `+assetColumns+`
 FROM core_registry.assets
 WHERE id = $1::uuid
   AND NOT (site_id = ANY($2::uuid[]))
@@ -466,11 +468,14 @@ func scanSite(row rowScanner) (Site, error) {
 	return item, nil
 }
 
+// assetColumns are what scanAsset reads, in its order.
+const assetColumns = `id::text, tenant_id::text, site_id::text, code, display_name, asset_type, status, revision, created_at, updated_at, rated_power, rated_capacity`
+
 func scanAsset(row rowScanner) (Asset, error) {
 	var item Asset
 	var createdAt time.Time
 	var updatedAt time.Time
-	if err := row.Scan(&item.ID, &item.TenantID, &item.SiteID, &item.Code, &item.DisplayName, &item.AssetType, &item.Status, &item.Revision, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&item.ID, &item.TenantID, &item.SiteID, &item.Code, &item.DisplayName, &item.AssetType, &item.Status, &item.Revision, &createdAt, &updatedAt, &item.RatedPower, &item.RatedCapacity); err != nil {
 		return Asset{}, err
 	}
 	item.CreatedAt = formatInstant(createdAt)

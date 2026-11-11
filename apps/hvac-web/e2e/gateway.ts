@@ -285,6 +285,21 @@ export class Gateway {
   fddOperatingMinutes: number | null = null;
   /** The Site's energy conservation measures as the M&V owner keeps them, newest first. */
   readonly measures: Json[] = [];
+  /** The Site's weekly Operating Schedule and Operating Exceptions as the Registry owner keeps them. */
+  operatingSchedule: Json = {
+    id: null,
+    tenantId: principal.context.tenantId,
+    siteId: SITE_ID,
+    timezone: 'Asia/Shanghai',
+    name: '标准供冷周计划',
+    preCoolLeadMinutes: 45,
+    coastDownLagMinutes: 30,
+    revision: 0,
+    updatedBy: null,
+    updatedAt: null,
+    slots: [],
+  };
+  readonly operatingExceptions: Json[] = [];
   /** Members of the Tenant as IAM and the identity directory keep them (系统管理 → 用户与角色). */
   readonly members: Json[] = [
     {
@@ -366,6 +381,168 @@ export class Gateway {
     if (open) return { status: 'ONGOING', deltaTC: finding.observedValue, rule, window, finding: open };
     this.findings.unshift(finding);
     return { status: 'FINDING', deltaTC: finding.observedValue, rule, window, finding };
+  }
+
+  // The Registry owner's weekly Operating Schedule and full-day Operating Exceptions.
+  private schedules(method: string, path: string, query: URLSearchParams, body: Json | null, now: string): { status?: number; body: unknown } | undefined {
+    const schedulePath = `/api/v1/sites/${SITE_ID}/operating-schedule`;
+    const exceptionsPath = `/api/v1/sites/${SITE_ID}/operating-exceptions`;
+    if (path !== schedulePath && !path.startsWith(exceptionsPath)) return undefined;
+
+    const refuse = (status: number, code: string, detail: string) => ({
+      status,
+      body: { type: 'about:blank', title: 'Operating schedule refused', status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
+    });
+    const activePrincipal = this.principalOverride ?? principal;
+    const actor: string = activePrincipal.principalId;
+    const actorDisplay: string = activePrincipal.principal.displayName;
+    const capabilities: string[] = activePrincipal.authorization.capabilities ?? [];
+
+    if (method === 'GET' && path === schedulePath) {
+      return { body: this.operatingSchedule };
+    }
+
+    if (method === 'PUT' && path === schedulePath) {
+      if (!capabilities.includes('schedule.manage')) {
+        return refuse(403, 'CAPABILITY_DENIED', 'schedule.manage is required.');
+      }
+      if (body?.meta?.expectedRevision !== this.operatingSchedule.revision) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'operating schedule revision conflict');
+      }
+      const rawSlots: Json[] = body?.slots ?? [];
+      for (let day = 1; day <= 7; day += 1) {
+        const daySlots = rawSlots.filter((s) => s.dayOfWeek === day).sort((a, b) => a.startMinute - b.startMinute);
+        for (let i = 1; i < daySlots.length; i += 1) {
+          if (daySlots[i].startMinute < daySlots[i - 1].endMinute) {
+            return refuse(409, 'REGISTRY_BINDING_CONFLICT', 'overlapping slots within same dayOfWeek');
+          }
+        }
+      }
+      const nextRev = (this.operatingSchedule.revision as number) + 1;
+      this.operatingSchedule = {
+        ...this.operatingSchedule,
+        id: this.operatingSchedule.id ?? '01950000-0000-7000-8000-000000000001',
+        name: body?.name,
+        preCoolLeadMinutes: body?.preCoolLeadMinutes,
+        coastDownLagMinutes: body?.coastDownLagMinutes,
+        revision: nextRev,
+        updatedBy: actor,
+        updatedAt: now,
+        slots: rawSlots.map((slot, index) => ({
+          id: `01950000-0001-7000-8000-${String(nextRev * 100 + index + 1).padStart(12, '0')}`,
+          dayOfWeek: slot.dayOfWeek,
+          startMinute: slot.startMinute,
+          endMinute: slot.endMinute,
+          ...(slot.targetSupplyTempC !== undefined ? { targetSupplyTempC: slot.targetSupplyTempC } : {}),
+          ...(slot.spanGroupId ? { spanGroupId: slot.spanGroupId } : {}),
+        })),
+      };
+      return { body: this.operatingSchedule };
+    }
+
+    if (method === 'GET' && path === exceptionsPath) {
+      const from = query.get('from');
+      const to = query.get('to');
+      const status = query.get('status');
+      const items = this.operatingExceptions.filter((item) =>
+        (!status || item.status === status) &&
+        (!from || item.endDate >= from) &&
+        (!to || item.startDate <= to));
+      return { body: { items } };
+    }
+
+    if (method === 'POST' && path === exceptionsPath) {
+      const autoApprove = Boolean(body?.autoApprove);
+      if (autoApprove && !capabilities.includes('schedule.manage')) {
+        return refuse(403, 'OPERATING_EXCEPTION_FORBIDDEN', 'autoApprove requires schedule.manage.');
+      }
+      if (!capabilities.includes('schedule.request') && !capabilities.includes('schedule.manage')) {
+        return refuse(403, 'CAPABILITY_DENIED', 'schedule.request is required.');
+      }
+      if (autoApprove) {
+        const overlaps = this.operatingExceptions.some(
+          (other) => other.status === 'APPROVED' && other.startDate <= body!.endDate && other.endDate >= body!.startDate,
+        );
+        if (overlaps) {
+          return refuse(409, 'REGISTRY_BINDING_CONFLICT', 'date range overlaps an existing approved operating exception');
+        }
+      }
+      const created: Json = {
+        id: `01950000-0002-7000-8000-${String(this.operatingExceptions.length + 1).padStart(12, '0')}`,
+        tenantId: principal.context.tenantId,
+        siteId: SITE_ID,
+        title: body?.title,
+        kind: body?.kind,
+        startDate: body?.startDate,
+        endDate: body?.endDate,
+        replacementSlots: body?.replacementSlots ?? [],
+        reason: body?.meta?.reason ?? '',
+        status: autoApprove ? 'APPROVED' : 'PENDING_APPROVAL',
+        requestedBy: actor,
+        requestedByDisplay: actorDisplay,
+        decidedBy: autoApprove ? actor : null,
+        decidedByDisplay: autoApprove ? actorDisplay : null,
+        decidedAt: autoApprove ? now : null,
+        decisionNote: '',
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.operatingExceptions.unshift(created);
+      return { status: 201, body: created };
+    }
+
+    const decideMatch = path.match(new RegExp(`^${exceptionsPath}/([^/]+)/decide$`));
+    if (method === 'POST' && decideMatch) {
+      const target = this.operatingExceptions.find((item) => item.id === decideMatch[1]);
+      if (!target) return refuse(404, 'RESOURCE_NOT_FOUND', 'operating exception not found');
+      if (body?.meta?.expectedRevision !== target.revision) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'operating exception revision conflict');
+      }
+      const decision: string = body?.decision;
+      if (decision === 'APPROVE' || decision === 'REJECT') {
+        if (!capabilities.includes('schedule.manage')) {
+          return refuse(403, 'OPERATING_EXCEPTION_FORBIDDEN', 'schedule.manage is required to approve or reject');
+        }
+        if (target.status !== 'PENDING_APPROVAL') {
+          return refuse(409, 'OPERATING_EXCEPTION_STATE_CONFLICT', 'only PENDING_APPROVAL exceptions can be approved or rejected');
+        }
+        if (decision === 'APPROVE') {
+          const overlaps = this.operatingExceptions.some(
+            (other) => other.id !== target.id && other.status === 'APPROVED'
+              && other.startDate <= target.endDate && other.endDate >= target.startDate,
+          );
+          if (overlaps) {
+            return refuse(409, 'REGISTRY_BINDING_CONFLICT', 'date range overlaps an existing approved operating exception');
+          }
+          target.status = 'APPROVED';
+        } else {
+          target.status = 'REJECTED';
+        }
+      } else if (decision === 'CANCEL') {
+        if (target.status === 'PENDING_APPROVAL') {
+          if (!capabilities.includes('schedule.manage') && target.requestedBy !== actor) {
+            return refuse(403, 'OPERATING_EXCEPTION_FORBIDDEN', 'only requester or manager can cancel pending exception');
+          }
+        } else if (target.status === 'APPROVED') {
+          if (!capabilities.includes('schedule.manage')) {
+            return refuse(403, 'OPERATING_EXCEPTION_FORBIDDEN', 'schedule.manage is required to cancel approved exception');
+          }
+        } else {
+          return refuse(409, 'OPERATING_EXCEPTION_STATE_CONFLICT', 'exception cannot be cancelled in current state');
+        }
+        target.status = 'CANCELLED';
+      }
+      target.decidedBy = actor;
+      target.decidedByDisplay = actorDisplay;
+      target.decidedAt = now;
+      target.decisionNote = body?.decisionNote ?? '';
+      target.revision += 1;
+      target.updatedAt = now;
+      return { body: target };
+    }
+
+    return undefined;
   }
 
   // The M&V owner's ledger: implementing fits the recorded baseline over the fourteen days before the
@@ -551,6 +728,8 @@ export class Gateway {
       return { status: 202, body: { optimizationRunId: this.optimization.runId, inputSnapshotId: this.optimization.recommendation.inputSnapshotId, status: 'READY' } };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), this.forecastOrigin ?? now) };
+    const scheduleReply = this.schedules(method, path, query, body, now);
+    if (scheduleReply) return scheduleReply;
     if (path.startsWith(`/api/v1/sites/${SITE_ID}/savings/`)) return this.savings(method, path, query, body, now);
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/reports/monthly`) {
       return { body: { items: this.reportSnapshots.filter((stored) => stored.month.startsWith(`${query.get('year')}-`)) } };

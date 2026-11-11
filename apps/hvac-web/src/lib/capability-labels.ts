@@ -30,6 +30,8 @@ const CATALOG: Readonly<Record<string, { readonly group: CapabilityGroup; readon
   'work-order.assign': { group: '运维', label: '分配工单' },
   'work-order.lifecycle': { group: '运维', label: '处理工单' },
   'savings.manage': { group: '运维', label: '节能措施' },
+  'schedule.request': { group: '运维', label: '申请运行例外' },
+  'schedule.manage': { group: '运维', label: '管理运行计划' },
   'site.write': { group: '管理', label: '站点' },
   'space.write': { group: '管理', label: '空间结构' },
   'asset.write': { group: '管理', label: '资产' },

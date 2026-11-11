@@ -2278,6 +2278,99 @@
         "x-owner": "optimization-service",
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
+    },
+    "/api/v1/sites/{siteId}/operating-schedule": {
+      "get": {
+        "operationId": "getSiteOperatingSchedule",
+        "summary": "Read the weekly Operating Schedule for a Site",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": {
+          "200": { "description": "Site Operating Schedule (default empty schedule when not yet configured).", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OperatingSchedule" } } } },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "put": {
+        "operationId": "saveSiteOperatingSchedule",
+        "summary": "Save the weekly Operating Schedule for a Site",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OperatingScheduleMutation" } } } },
+        "responses": {
+          "200": { "description": "Saved Site Operating Schedule.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OperatingSchedule" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/operating-exceptions": {
+      "get": {
+        "operationId": "listSiteOperatingExceptions",
+        "summary": "List full-day Operating Exceptions for a Site",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "from", "in": "query", "required": false, "schema": { "type": "string", "format": "date" } },
+          { "name": "to", "in": "query", "required": false, "schema": { "type": "string", "format": "date" } },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string", "enum": ["PENDING_APPROVAL", "APPROVED", "REJECTED", "CANCELLED"] } }
+        ],
+        "responses": {
+          "200": { "description": "Site Operating Exceptions.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OperatingExceptionList" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "post": {
+        "operationId": "createSiteOperatingException",
+        "summary": "Submit or directly approve a Site Operating Exception",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateOperatingExceptionRequest" } } } },
+        "responses": {
+          "201": { "description": "Created Operating Exception.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OperatingException" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/operating-exceptions/{exceptionId}/decide": {
+      "post": {
+        "operationId": "decideSiteOperatingException",
+        "summary": "Approve, reject, or cancel a Site Operating Exception",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "name": "exceptionId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DecideOperatingExceptionRequest" } } } },
+        "responses": {
+          "200": { "description": "Updated Operating Exception.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OperatingException" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
     }
   },
   "components": {
@@ -2697,7 +2790,9 @@
           "session.revoke",
           "audit.read",
           "iam.admin",
-          "savings.manage"
+          "savings.manage",
+          "schedule.request",
+          "schedule.manage"
         ]
       },
       "EffectiveAuthorization": {
@@ -2721,7 +2816,7 @@
           },
           "capabilities": {
             "type": "array",
-            "maxItems": 32,
+            "maxItems": 34,
             "uniqueItems": true,
             "items": {
               "$ref": "#/components/schemas/Capability"
@@ -3647,6 +3742,14 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Instant"
+          },
+          "ratedPower": {
+            "type": "number",
+            "minimum": 0
+          },
+          "ratedCapacity": {
+            "type": "number",
+            "minimum": 0
           }
         }
       },
@@ -4119,6 +4222,139 @@
           "endMinute": { "type": "integer", "minimum": 1, "maximum": 1440 },
           "energyRatePerKWh": { "type": "number", "minimum": 0 },
           "demandRatePerKW": { "type": "number", "minimum": 0 }
+        }
+      },
+      "RegistryMutationMeta": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedRevision", "idempotencyKey", "reason"],
+        "properties": {
+          "expectedRevision": { "type": "integer", "minimum": 0 },
+          "idempotencyKey": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      },
+      "OperatingScheduleSlot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dayOfWeek", "startMinute", "endMinute"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "dayOfWeek": { "type": "integer", "minimum": 1, "maximum": 7 },
+          "startMinute": { "type": "integer", "minimum": 0, "maximum": 1439 },
+          "endMinute": { "type": "integer", "minimum": 1, "maximum": 1440 },
+          "targetSupplyTempC": { "type": "number", "minimum": 4, "maximum": 20 },
+          "spanGroupId": { "$ref": "#/components/schemas/UUIDv7" }
+        }
+      },
+      "OperatingScheduleSlotInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dayOfWeek", "startMinute", "endMinute"],
+        "properties": {
+          "dayOfWeek": { "type": "integer", "minimum": 1, "maximum": 7 },
+          "startMinute": { "type": "integer", "minimum": 0, "maximum": 1439 },
+          "endMinute": { "type": "integer", "minimum": 1, "maximum": 1440 },
+          "targetSupplyTempC": { "type": "number", "minimum": 4, "maximum": 20 },
+          "spanGroupId": { "$ref": "#/components/schemas/UUIDv7" }
+        }
+      },
+      "OperatingSchedule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "tenantId", "siteId", "timezone", "name", "preCoolLeadMinutes", "coastDownLagMinutes", "revision", "updatedBy", "updatedAt", "slots"],
+        "properties": {
+          "id": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "timezone": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "preCoolLeadMinutes": { "type": "integer", "minimum": 0, "maximum": 120 },
+          "coastDownLagMinutes": { "type": "integer", "minimum": 0, "maximum": 60 },
+          "revision": { "type": "integer", "minimum": 0 },
+          "updatedBy": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+          "updatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "slots": { "type": "array", "maxItems": 168, "items": { "$ref": "#/components/schemas/OperatingScheduleSlot" } }
+        }
+      },
+      "OperatingScheduleMutation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "preCoolLeadMinutes", "coastDownLagMinutes", "slots", "meta"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "preCoolLeadMinutes": { "type": "integer", "minimum": 0, "maximum": 120 },
+          "coastDownLagMinutes": { "type": "integer", "minimum": 0, "maximum": 60 },
+          "slots": { "type": "array", "maxItems": 168, "items": { "$ref": "#/components/schemas/OperatingScheduleSlotInput" } },
+          "meta": { "$ref": "#/components/schemas/RegistryMutationMeta" }
+        }
+      },
+      "OperatingExceptionSlot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["startMinute", "endMinute"],
+        "properties": {
+          "startMinute": { "type": "integer", "minimum": 0, "maximum": 1439 },
+          "endMinute": { "type": "integer", "minimum": 1, "maximum": 1440 },
+          "targetSupplyTempC": { "type": "number", "minimum": 4, "maximum": 20 }
+        }
+      },
+      "OperatingException": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "tenantId", "siteId", "title", "kind", "startDate", "endDate", "replacementSlots", "reason", "status", "requestedBy", "requestedByDisplay", "decidedBy", "decidedByDisplay", "decidedAt", "decisionNote", "revision", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "kind": { "type": "string", "enum": ["HOLIDAY_SHUTDOWN", "OVERTIME_COOLING", "MAINTENANCE_WINDOW"] },
+          "startDate": { "type": "string", "format": "date" },
+          "endDate": { "type": "string", "format": "date" },
+          "replacementSlots": { "type": "array", "maxItems": 24, "items": { "$ref": "#/components/schemas/OperatingExceptionSlot" } },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "status": { "type": "string", "enum": ["PENDING_APPROVAL", "APPROVED", "REJECTED", "CANCELLED"] },
+          "requestedBy": { "type": "string", "minLength": 1 },
+          "requestedByDisplay": { "type": "string" },
+          "decidedBy": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+          "decidedByDisplay": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+          "decidedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "decisionNote": { "type": "string", "maxLength": 1000 },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "createdAt": { "$ref": "#/components/schemas/Instant" },
+          "updatedAt": { "$ref": "#/components/schemas/Instant" }
+        }
+      },
+      "OperatingExceptionList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/OperatingException" } }
+        }
+      },
+      "CreateOperatingExceptionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "kind", "startDate", "endDate", "replacementSlots", "meta"],
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "kind": { "type": "string", "enum": ["HOLIDAY_SHUTDOWN", "OVERTIME_COOLING", "MAINTENANCE_WINDOW"] },
+          "startDate": { "type": "string", "format": "date" },
+          "endDate": { "type": "string", "format": "date" },
+          "replacementSlots": { "type": "array", "maxItems": 24, "items": { "$ref": "#/components/schemas/OperatingExceptionSlot" } },
+          "autoApprove": { "type": "boolean" },
+          "meta": { "$ref": "#/components/schemas/RegistryMutationMeta" }
+        }
+      },
+      "DecideOperatingExceptionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision", "meta"],
+        "properties": {
+          "decision": { "type": "string", "enum": ["APPROVE", "REJECT", "CANCEL"] },
+          "decisionNote": { "type": "string", "maxLength": 1000 },
+          "meta": { "$ref": "#/components/schemas/RegistryMutationMeta" }
         }
       },
       "FieldError": {

@@ -100,6 +100,27 @@ func TestIAMCapabilityProjectionPreservesExplicitDenyPrecedence(t *testing.T) {
 	assertCapabilitiesEqual(t, response.Authorization.Capabilities, []identitycontext.Capability{identitycontext.CapabilityTelemetrySubscribe})
 }
 
+func TestIAMPublishesScheduleRequestAndManageCapabilities(t *testing.T) {
+	operatorResponse := currentPrincipal(t, principalFacts([]iam.RoleAssignment{
+		{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, RoleKey: "operator", Status: iam.FactStatusActive, Capabilities: []string{
+			string(registryauth.ActionScheduleRequest),
+		}},
+	}, nil))
+	assertCapabilitiesEqual(t, operatorResponse.Authorization.Capabilities, []identitycontext.Capability{
+		identitycontext.CapabilityScheduleRequest,
+	})
+
+	managerResponse := currentPrincipal(t, principalFacts([]iam.RoleAssignment{
+		{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, RoleKey: "site-manager", Status: iam.FactStatusActive, Capabilities: []string{
+			string(registryauth.ActionScheduleManage),
+		}},
+	}, nil))
+	assertCapabilitiesEqual(t, managerResponse.Authorization.Capabilities, []identitycontext.Capability{
+		identitycontext.CapabilityScheduleRequest,
+		identitycontext.CapabilityScheduleManage,
+	})
+}
+
 func TestIAMPublishesExplicitEmptyCapabilities(t *testing.T) {
 	harness := newIAMHarness(t)
 	claims := validIAMClaims(harness.now, "fixture-no-access-user", "principal:read")

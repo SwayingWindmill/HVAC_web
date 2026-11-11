@@ -138,6 +138,11 @@ const expectedOperations = {
   getLatestSiteOptimizationRecommendationV212: ['get', '/api/v1/sites/{siteId}/optimization/recommendations/latest'],
   getLatestSiteOptimizationPreparationV212: ['get', '/api/v1/sites/{siteId}/optimization/preparations/latest'],
   getLatestSiteOptimizationShadowEvaluationV212: ['get', '/api/v1/sites/{siteId}/optimization/shadow-evaluations/latest'],
+  getSiteOperatingSchedule: ['get', '/api/v1/sites/{siteId}/operating-schedule'],
+  saveSiteOperatingSchedule: ['put', '/api/v1/sites/{siteId}/operating-schedule'],
+  listSiteOperatingExceptions: ['get', '/api/v1/sites/{siteId}/operating-exceptions'],
+  createSiteOperatingException: ['post', '/api/v1/sites/{siteId}/operating-exceptions'],
+  decideSiteOperatingException: ['post', '/api/v1/sites/{siteId}/operating-exceptions/{exceptionId}/decide'],
 };
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {
@@ -168,6 +173,10 @@ const expectedSuccessSchemas = {
   getSiteTariff: 'SiteTariff',
   getDevice: 'Device',
   listSiteAlarmRules: 'AlarmRuleList',
+  getSiteOperatingSchedule: 'OperatingSchedule',
+  saveSiteOperatingSchedule: 'OperatingSchedule',
+  listSiteOperatingExceptions: 'OperatingExceptionList',
+  decideSiteOperatingException: 'OperatingException',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
@@ -207,7 +216,7 @@ const schemaRequirements = {
     'recordHash', 'recordedAt',
   ]],
   Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone'], ['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone']],
-  Asset: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Asset: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt', 'ratedPower', 'ratedCapacity']],
   Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt']],
   DeviceBinding: [['id', 'tenantId', 'siteId', 'deviceId', 'assetId', 'bindingRole', 'status', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'deviceId', 'assetId', 'bindingRole', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
   ExternalBinding: [['id', 'tenantId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
@@ -273,6 +282,8 @@ invariant(schemas.Capability?.type === 'string' && exactMembers(schemas.Capabili
   'audit.read',
   'iam.admin',
   'savings.manage',
+  'schedule.request',
+  'schedule.manage',
 ]), 'Capability vocabulary is unsupported');
 invariant(schemas.EffectiveAuthorization.properties.capabilitySetVersion.const === 13, 'EffectiveAuthorization capability set version must be 13');
 invariant(schemas.EffectiveAuthorization.properties.policyRevision.minLength === 1 && schemas.EffectiveAuthorization.properties.policyRevision.maxLength === 128, 'EffectiveAuthorization policy revision bounds are unsupported');
@@ -363,6 +374,9 @@ const replacements = {
   __LATEST_OPTIMIZATION_RECOMMENDATION_PATH__: operations.getLatestSiteOptimizationRecommendationV212.path,
   __LATEST_OPTIMIZATION_PREPARATION_PATH__: operations.getLatestSiteOptimizationPreparationV212.path,
   __LATEST_OPTIMIZATION_SHADOW_EVALUATION_PATH__: operations.getLatestSiteOptimizationShadowEvaluationV212.path,
+  __SITE_OPERATING_SCHEDULE_PATH__: operations.getSiteOperatingSchedule.path,
+  __SITE_OPERATING_EXCEPTIONS_PATH__: operations.listSiteOperatingExceptions.path,
+  __SITE_OPERATING_EXCEPTION_DECIDE_PATH__: operations.decideSiteOperatingException.path,
 };
 
 function render(template) {

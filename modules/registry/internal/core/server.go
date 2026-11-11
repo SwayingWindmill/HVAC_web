@@ -240,6 +240,30 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		writeJSON(writer, http.StatusOK, timeline)
 		return http.StatusOK
 	}
+	if route.resource == "operating-exceptions" {
+		query := request.URL.Query()
+		for name, values := range query {
+			if (name != "from" && name != "to" && name != "status") || len(values) != 1 {
+				writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The Operating Exceptions query is invalid.", false)
+				return http.StatusBadRequest
+			}
+		}
+		filter := OperatingExceptionFilter{
+			From:   query.Get("from"),
+			To:     query.Get("to"),
+			Status: query.Get("status"),
+		}
+		if err := filter.Validate(); err != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The Operating Exceptions query is invalid.", false)
+			return http.StatusBadRequest
+		}
+		list, err := server.store.ListOperatingExceptions(request.Context(), claims, route.parentID, filter)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, list)
+		return http.StatusOK
+	}
 	if route.write {
 		return server.handleAuthorizedWrite(writer, request, route, claims)
 	}
@@ -331,6 +355,13 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 			return server.writeStoreError(writer, request, err)
 		}
 		writeJSON(writer, http.StatusOK, tariff)
+		return http.StatusOK
+	case "operating-schedule":
+		schedule, err := server.store.GetOperatingSchedule(request.Context(), claims, route.parentID)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, schedule)
 		return http.StatusOK
 	case "space-children":
 		parentSpaceID := request.URL.Query().Get("parentSpaceId")
@@ -574,6 +605,16 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/imports/commit", resource: "import-commit", parentID: segments[1], action: registryauth.ActionRegistryImport, write: true}, true
 	case method == http.MethodPost && len(segments) == 3 && segments[0] == "sites" && segments[2] == "retire":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/retire", resource: "retire", parentID: segments[1], action: registryauth.ActionRegistryRetire, write: true}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "operating-schedule":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/operating-schedule", resource: "operating-schedule", parentID: segments[1], action: registryauth.ActionSiteRead}, true
+	case method == http.MethodPut && len(segments) == 3 && segments[0] == "sites" && segments[2] == "operating-schedule":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/operating-schedule", resource: "operating-schedule-write", parentID: segments[1], action: registryauth.ActionScheduleManage, write: true}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "operating-exceptions":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/operating-exceptions", resource: "operating-exceptions", parentID: segments[1], action: registryauth.ActionSiteRead}, true
+	case method == http.MethodPost && len(segments) == 3 && segments[0] == "sites" && segments[2] == "operating-exceptions":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/operating-exceptions", resource: "operating-exception-create", parentID: segments[1], action: registryauth.ActionScheduleRequest, write: true}, true
+	case method == http.MethodPost && len(segments) == 5 && segments[0] == "sites" && segments[2] == "operating-exceptions" && segments[4] == "decide":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/operating-exceptions/{exceptionId}/decide", resource: "operating-exception-decide", parentID: segments[1], id: segments[3], action: registryauth.ActionScheduleRequest, write: true}, true
 	default:
 		return registryRoute{}, false
 	}

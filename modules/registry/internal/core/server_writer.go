@@ -118,6 +118,32 @@ func (server *server) handleAuthorizedWrite(writer http.ResponseWriter, request 
 		input.SiteID = route.parentID
 		value, err := server.writer.Retire(request.Context(), claims, input)
 		return server.writeMutationResult(writer, request, value, value.Replayed, true, err)
+	case "operating-schedule-write":
+		var input OperatingScheduleMutation
+		if !decodeRegistryMutation(writer, request, &input) {
+			return http.StatusBadRequest
+		}
+		input.SiteID = route.parentID
+		value, replayed, err := server.writer.SaveOperatingSchedule(request.Context(), claims, input)
+		return server.writeMutationResult(writer, request, value, replayed, false, err)
+	case "operating-exception-create":
+		var input CreateOperatingExceptionRequest
+		if !decodeRegistryMutation(writer, request, &input) {
+			return http.StatusBadRequest
+		}
+		input.SiteID = route.parentID
+		input.ActorDisplayName = request.Header.Get("X-Actor-Display-Name")
+		value, replayed, err := server.writer.CreateOperatingException(request.Context(), claims, input)
+		return server.writeMutationResult(writer, request, value, replayed, true, err)
+	case "operating-exception-decide":
+		var input DecideOperatingExceptionRequest
+		if !decodeRegistryMutation(writer, request, &input) {
+			return http.StatusBadRequest
+		}
+		input.SiteID, input.ExceptionID = route.parentID, route.id
+		input.ActorDisplayName = request.Header.Get("X-Actor-Display-Name")
+		value, replayed, err := server.writer.DecideOperatingException(request.Context(), claims, input)
+		return server.writeMutationResult(writer, request, value, replayed, false, err)
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "CORE_ROUTE_NOT_FOUND", "The requested Core Registry route does not exist.", false)
 		return http.StatusNotFound
@@ -161,11 +187,17 @@ func (server *server) writeMutationError(writer http.ResponseWriter, request *ht
 	case errors.Is(err, ErrInvalidMutation):
 		writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_MUTATION_INVALID", "The Registry mutation does not satisfy the canonical contract.", false)
 		return http.StatusBadRequest
+	case errors.Is(err, ErrMutationForbidden):
+		writeProblem(writer, request, http.StatusForbidden, "OPERATING_EXCEPTION_FORBIDDEN", "The authenticated Principal is not allowed to perform this Operating Exception action.", false)
+		return http.StatusForbidden
 	case errors.Is(err, ErrNotFound):
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "The requested Registry resource was not found in the authorized scope.", false)
 		return http.StatusNotFound
 	case errors.Is(err, ErrRevisionConflict):
 		writeProblem(writer, request, http.StatusConflict, "REGISTRY_REVISION_CONFLICT", "The expected Registry revision is stale.", false)
+		return http.StatusConflict
+	case errors.Is(err, ErrExceptionStateConflict):
+		writeProblem(writer, request, http.StatusConflict, "OPERATING_EXCEPTION_STATE_CONFLICT", "The Operating Exception is not in a state that allows this decision.", false)
 		return http.StatusConflict
 	case errors.Is(err, ErrIdempotencyConflict):
 		writeProblem(writer, request, http.StatusConflict, "REGISTRY_IDEMPOTENCY_CONFLICT", "The idempotency key was already used for a different Registry mutation.", false)

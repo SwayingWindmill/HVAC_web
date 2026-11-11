@@ -1,0 +1,28 @@
+# 运行计划：7×24h 周计划、计划外开机核查与运行例外审批
+
+问题单 #780（子单 #781、#782、#783；路线图 #757，调研 #762，决策单 #764）。2026-11-12 已实现。
+
+参照项目一手源码比对（OpenEMS `2026.9.0`、MyEMS `v6.9.0`）见 `docs/architecture/schedule-and-billing-source-review-2026-11-11.md` 第一部分。
+
+商业楼宇冷站有固定的每周供冷作息（例如工作日 08:00–21:00），遇到法定节假日停机、年度设备维保或租户临时加班供冷时需要按日调整；以前平台没有记录站点的预期供冷窗口，夜间或周末冷机没关也没法在运行视图里自动核查并交办现场工单。
+
+## 定下来的做法
+
+| 问题 | 做法 |
+| --- | --- |
+| 数据归谁管 | 归登记模块（`core_registry` schema，迁移 `034-operating-schedules.sql`）：每个站点一份当前生效的「运行计划」（`operating_schedules` + `operating_schedule_slots`），以及按日期范围登记的「运行例外」（`operating_exceptions`）。每次新增、保存、审批、驳回或撤回都写进 `core_registry.registry_audit_facts` |
+| 谁能看、谁能改 | `site.read` 可只读查看周运行计划与运行例外；新增能力 `schedule.request`（授予 `operator`）可提交待审批运行例外并撤回本人尚未审批的申请；新增能力 `schedule.manage`（授予 `site-manager` 与 `admin`，并在网关委托鉴权中自动蕴含 `schedule.request`）可编辑周运行计划、直接登记已生效例外、审批或驳回待审批申请、以及撤回已生效例外。申请人与审批人标识存 `principalId`（UUIDv7），姓名由网关从当前会话注入只读展示字段；客户端若伪造内部身份头（如 `X-Actor-Display-Name`）由网关直接回 `400 FORGED_IDENTITY_HEADER` 拒绝 |
+| 跨午夜时段怎么存 | 单条 `operating_schedule_slots` 限制在同一星期内（`day_of_week` 1=周一..7=周日，`0 <= start_minute < end_minute <= 1440`），由站点级事务咨询锁 `pg_advisory_xact_lock` 与 `BEFORE INSERT OR UPDATE` 触发器保证同日供冷时段互不重叠（冲突回 `409 REGISTRY_BINDING_CONFLICT`）。前端勾选「跨日」（如周六 22:00 至次日 02:00）时自动拆成周六 `22:00–24:00` 与周日 `00:00–02:00` 两段并共用同一个 UUIDv7 `span_group_id`，重新打开编辑弹窗时自动合并还原 |
+| 运行例外怎么覆盖周计划 | 已生效（`APPROVED`）的运行例外按站点本地日历日全天（`00:00–24:00`，`start_date` 到 `end_date` 首尾都算）覆盖常规周运行计划——包括前一日跨午夜延续到当日凌晨 `00:00–02:00` 的时段也会一并屏蔽，不留截断残段。站点级咨询锁与 `BEFORE INSERT OR UPDATE` 触发器保证同一站点已生效例外的日期区间（`[start_date, end_date]`）绝不重叠；`HOLIDAY_SHUTDOWN` 与 `MAINTENANCE_WINDOW` 全天停机，`OVERTIME_COOLING` 必填至少一段当日供冷时段 |
+| 页面怎么分层 | `/operations/schedules`（侧栏「运行」分组「历史趋势」下方）按 URL `?view=week\|exceptions` 分为两层页签，详情收进右侧 `?inspect=` 抽屉：① 首屏「周运行计划」展示 `7×24h` 矩阵（叠加站点分时电价底色、预冷提前与停机滞后虚线缓冲窗、运行例外覆盖标记与计划外开机色块），不堆顶部四联数字卡，也不在矩阵下方重复摆时段表格；② 右侧抽屉按点击对象展示供冷时段详情（含分时电价重叠段与交接参考温度说明）或计划外开机核查详情；③「运行例外」页签用 `DataTableBlock` 支持状态筛选、URL 分页、提交例外申请、内联审批通过 / 驳回 / 撤回 |
+| 计划外开机怎么判定与闭环 | 纯展示核查（不自动下发停机指令）：取站点已启用的冷机与冷冻水泵（含松雅轩 `PROVISIONAL_READINGS` 水泵端点与 `power_total` / `power` 有功功率点）15 分钟历史遥测聚合桶（`QUARTER_HOUR`，`qualityPolicy: 'USABLE'`），排除所有允许供冷时段及其前后缓冲窗（默认预冷提前 45 分钟、停机余冷滞后 30 分钟）；停机窗口内冷机 15 分钟平均有功功率不低于 `core_registry.assets.rated_power` 的 10%（未登记额定功率时按 10 kW 兜底）或冷机/冷冻水泵主导运行状态为运行时，合并相邻 15 分钟桶标出 `▲ 计划外开机`；若历史聚合查询失败则在页眉显式提示并提供重试按钮。抽屉内一键跳 `/operations/trends` 查看前后 30 分钟曲线，或用 `<CreateWorkOrderDialog>` 创建 `EXTERNAL` 来源（`operating-schedule-deviation:<siteId>:<startIso>`）的现场核查工单并自动去重；若补登并审批通过覆盖该日的「加班供冷」例外，偏差标记自动解除 |
+| 不做 | **不做定时自动启停或自动调温**：`targetSupplyTempC`（4.0–20.0 °C）在界面与抽屉中明确标明「仅作冷站值班交接参考，平台不会据此自动下发设备启停或设定值指令」；不引入 RRULE 复杂日历引擎；不在页面展示任何内部 UUID |
+
+## 验收与测试接缝
+
+1. **数据库约束、登记模块与网关契约接缝（Go 测试 + 契约检查）**：
+   - 验证未配置站点返回默认空计划（`revision = 0`）、`PUT /api/v1/sites/{siteId}/operating-schedule` 乐观锁冲突回 `409 REGISTRY_REVISION_CONFLICT`、同日重叠时段拒绝回 `409 REGISTRY_BINDING_CONFLICT`、待审批例外与审批通过 / 驳回 / 撤回流转、已生效例外日期区间重叠回 `409 REGISTRY_BINDING_CONFLICT`、伪造身份请求头回 `400 FORGED_IDENTITY_HEADER`，以及 `Asset.ratedPower` 透传契约。
+2. **前端运行计划模型纯函数接缝（`npm run web:model:test`）**：
+   - 验证跨午夜时段拆分与合并还原、已生效例外全天 `00:00–24:00` 覆盖（不留跨午夜残段）、预冷与停机滞后缓冲窗排除、`Asset.ratedPower` 10% 阈值与松雅轩 `power_total` / `PROVISIONAL_READINGS` 识别、15 分钟计划外开机检测与合并、审批加班供冷后偏差自动清除、趋势跳转参数与去重工单草稿生成。
+3. **浏览器 1440px 端到端验收（`npm run web:e2e`）**：
+   - 验证空状态配置周计划（含跨午夜时段）、1440px 零横向溢出、点击计划外开机色块打开抽屉创建去重工单、切换到「运行例外」提交并审批通过加班供冷后偏差自动消除、重叠已生效例外 `409` 提示、`operator` 账号提交与撤回本人待审批申请、以及只读账号隐藏全部写操作入口并提示联系运维主管或管理员。
