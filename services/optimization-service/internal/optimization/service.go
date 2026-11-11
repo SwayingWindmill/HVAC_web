@@ -110,11 +110,75 @@ func (HVACRecommendationSolver) Recommend(_ context.Context, request Request, at
 type Clock func() time.Time
 
 type Service struct {
-	solver      SolverAdapter
-	publication EvaluationPublicationStore
-	evaluations EvaluationSink
-	clock       Clock
-	shadow      *shadowSolver
+	solver       SolverAdapter
+	publication  EvaluationPublicationStore
+	evaluations  EvaluationSink
+	clock        Clock
+	shadow       *shadowSolver
+	shadowReader ShadowEvaluationReader
+}
+
+var ErrShadowEvaluationNotFound = errors.New("optimization shadow evaluation not found")
+
+type ShadowEvaluationQuery struct {
+	TenantID          string
+	SiteID            string
+	OptimizationRunID string
+}
+
+type ShadowEvaluationRecord struct {
+	EvaluationID      string
+	OptimizationRunID string
+	RecommendationID  string
+	GeneratedAt       time.Time
+	EvaluationJSON    string
+}
+
+// ShadowEvaluationReader reads SHADOW rows recorded beside published runs in ClickHouse.
+type ShadowEvaluationReader interface {
+	ReadShadowEvaluation(context.Context, ShadowEvaluationQuery) (ShadowEvaluationRecord, error)
+}
+
+// ShadowSummary projects only read-only diagnostic figures of what the shadow solver would have
+// chosen, omitting Recommendation identity, approval state, and rollback/command fields.
+type ShadowSummary struct {
+	SupplyTempC                   float64 `json:"supplyTempC"`
+	ProjectedZoneTempC            float64 `json:"projectedZoneTempC"`
+	DailyEnergyKWh                float64 `json:"dailyEnergyKWh"`
+	DailyCost                     float64 `json:"dailyCost"`
+	EnergySavingKWhPerDay         float64 `json:"energySavingKWhPerDay"`
+	CostSavingPerDay              float64 `json:"costSavingPerDay"`
+	EnergyP90KWh                  float64 `json:"energyP90KWh"`
+	ZoneTempP90C                  float64 `json:"zoneTempP90C"`
+	ComfortMarginC                float64 `json:"comfortMarginC"`
+	RiskLevel                     string  `json:"riskLevel"`
+	Extrapolated                  bool    `json:"extrapolated"`
+	SavingWithinEnergyUncertainty bool    `json:"savingWithinEnergyUncertainty"`
+}
+
+// PublishedShadowEvaluation is the read-only shadow diagnostics envelope for a Site's latest
+// published Optimization run. It never carries an executable Recommendation.
+type PublishedShadowEvaluation struct {
+	EvaluationID              string           `json:"evaluationId"`
+	RunID                     string           `json:"runId"`
+	PublishedRecommendationID string           `json:"publishedRecommendationId"`
+	GeneratedAt               time.Time        `json:"generatedAt"`
+	Solver                    string           `json:"solver"`
+	Mode                      string           `json:"mode"`
+	Outcome                   string           `json:"outcome"`
+	Reason                    string           `json:"reason,omitempty"`
+	Fit                       *PlantFit        `json:"fit,omitempty"`
+	CVRMSE                    *float64         `json:"cvRmse"`
+	CondenserReset            map[string]any   `json:"condenserReset"`
+	EnergyResponse            map[string]any   `json:"energyResponse,omitempty"`
+	ZoneResponse              map[string]any   `json:"zoneResponse,omitempty"`
+	Candidates                []map[string]any `json:"candidates,omitempty"`
+	Summary                   *ShadowSummary   `json:"summary,omitempty"`
+}
+
+func (service *Service) WithShadowReader(reader ShadowEvaluationReader) *Service {
+	service.shadowReader = reader
+	return service
 }
 
 // ShadowSolver is a solver run beside the published one: it only records what it would have
@@ -253,6 +317,86 @@ func (service *Service) LatestRecommendation(ctx context.Context, tenantID, site
 // LatestPreparation is how the Site's latest Optimization schedule firing went.
 func (service *Service) LatestPreparation(ctx context.Context, tenantID, siteID string) (PreparationOutcome, error) {
 	return service.publication.LatestPreparation(ctx, tenantID, siteID)
+}
+
+// LatestShadowEvaluation reads the SHADOW evaluation recorded beside the Site's latest published
+// Optimization run, stripping any executable Recommendation payload.
+func (service *Service) LatestShadowEvaluation(ctx context.Context, tenantID, siteID string) (PublishedShadowEvaluation, error) {
+	published, err := service.publication.LatestRecommendation(ctx, tenantID, siteID)
+	if errors.Is(err, ErrOptimizationNotFound) {
+		return PublishedShadowEvaluation{}, ErrShadowEvaluationNotFound
+	}
+	if err != nil {
+		return PublishedShadowEvaluation{}, err
+	}
+	if service.shadowReader == nil {
+		return PublishedShadowEvaluation{}, ErrShadowEvaluationNotFound
+	}
+	record, err := service.shadowReader.ReadShadowEvaluation(ctx, ShadowEvaluationQuery{
+		TenantID:          tenantID,
+		SiteID:            siteID,
+		OptimizationRunID: published.RunID,
+	})
+	if err != nil {
+		return PublishedShadowEvaluation{}, err
+	}
+	var stored struct {
+		ShadowEvaluation
+		PublishedRecommendationID string `json:"publishedRecommendationId"`
+	}
+	if err := json.Unmarshal([]byte(record.EvaluationJSON), &stored); err != nil {
+		return PublishedShadowEvaluation{}, fmt.Errorf("decode shadow evaluation payload: %w", err)
+	}
+	publishedRecID := stored.PublishedRecommendationID
+	if publishedRecID == "" {
+		publishedRecID = record.RecommendationID
+	}
+	return PublishedShadowEvaluation{
+		EvaluationID:              record.EvaluationID,
+		RunID:                     published.RunID,
+		PublishedRecommendationID: publishedRecID,
+		GeneratedAt:               record.GeneratedAt.UTC(),
+		Solver:                    stored.Solver,
+		Mode:                      stored.Mode,
+		Outcome:                   stored.Outcome,
+		Reason:                    stored.Reason,
+		Fit:                       stored.Fit,
+		CVRMSE:                    stored.CVRMSE,
+		CondenserReset:            stored.CondenserReset,
+		EnergyResponse:            stored.EnergyResponse,
+		ZoneResponse:              stored.ZoneResponse,
+		Candidates:                stored.Candidates,
+		Summary:                   summarizeShadowRecommendation(stored.Recommendation),
+	}, nil
+}
+
+func summarizeShadowRecommendation(rec *Recommendation) *ShadowSummary {
+	if rec == nil {
+		return nil
+	}
+	number := func(m map[string]any, key string) float64 {
+		value, _ := m[key].(float64)
+		return value
+	}
+	flag := func(m map[string]any, key string) bool {
+		value, _ := m[key].(bool)
+		return value
+	}
+	level, _ := rec.Risk["level"].(string)
+	return &ShadowSummary{
+		SupplyTempC:                   number(rec.Candidate, "supplyTempC"),
+		ProjectedZoneTempC:            number(rec.Candidate, "projectedZoneTempC"),
+		DailyEnergyKWh:                number(rec.Candidate, "dailyEnergyKWh"),
+		DailyCost:                     number(rec.Candidate, "dailyCost"),
+		EnergySavingKWhPerDay:         number(rec.ExpectedImpact, "energySavingKWhPerDay"),
+		CostSavingPerDay:              number(rec.ExpectedImpact, "costSavingPerDay"),
+		EnergyP90KWh:                  number(rec.Uncertainty, "energyP90KWh"),
+		ZoneTempP90C:                  number(rec.Uncertainty, "zoneTempP90C"),
+		ComfortMarginC:                number(rec.Risk, "comfortMarginC"),
+		RiskLevel:                     level,
+		Extrapolated:                  flag(rec.Risk, "extrapolated"),
+		SavingWithinEnergyUncertainty: flag(rec.Risk, "savingWithinEnergyUncertainty"),
+	}
 }
 
 func (service *Service) Reconcile(ctx context.Context, staleBefore time.Time, limit int) (int, error) {

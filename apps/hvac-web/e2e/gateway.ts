@@ -251,6 +251,9 @@ export class Gateway {
   optimization: Json | null = null;
   /** How the Site's Optimization schedule last fired; null while the Site has no schedule that fired. */
   optimizationPreparation: Json | null = null;
+  /** The Chiller COP Model's latest read-only shadow evaluation; null when no SHADOW row exists. */
+  optimizationShadow: Json | null = null;
+  shadowReads = 0;
   /** IAM refuses Energy Analytics for the Site, as it does for a Site outside the principal's analytics grant. */
   analyticsDenied = false;
   /** IAM refuses Alarm listing for the Site. */
@@ -537,6 +540,10 @@ export class Gateway {
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/preparations/latest`) {
       return this.optimizationPreparation ? { body: this.optimizationPreparation } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+    }
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/shadow-evaluations/latest`) {
+      this.shadowReads += 1;
+      return this.optimizationShadow ? { body: this.optimizationShadow } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
     }
     if (method === 'POST' && path === '/api/v1/optimization/runs') {
       if (!this.nextRecommendation) return { status: 502, body: fixture('optimization-run-declined.json') };

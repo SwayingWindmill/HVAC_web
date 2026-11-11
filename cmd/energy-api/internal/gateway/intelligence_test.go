@@ -25,6 +25,7 @@ func TestPublicIntelligenceRoutesHaveSingleDomainOwners(t *testing.T) {
 		{http.MethodPost, "/api/v1/sites/" + siteID + "/fdd/evaluate/low-delta-t", ownershipregistry.OwnerFDD, siteID},
 		{http.MethodGet, "/api/v1/sites/" + siteID + "/optimization/recommendations/latest", ownershipregistry.OwnerOptimization, siteID},
 		{http.MethodGet, "/api/v1/sites/" + siteID + "/optimization/preparations/latest", ownershipregistry.OwnerOptimization, siteID},
+		{http.MethodGet, "/api/v1/sites/" + siteID + "/optimization/shadow-evaluations/latest", ownershipregistry.OwnerOptimization, siteID},
 		{http.MethodPost, "/api/v1/optimization/runs", ownershipregistry.OwnerOptimization, ""},
 	} {
 		route, ok := matchPublicIntelligenceRoute(test.method, test.path)
@@ -75,6 +76,7 @@ func TestIntelligenceRoutesRejectWrongMethods(t *testing.T) {
 		"/api/v1/sites/" + siteID + "/forecast/load",
 		"/api/v1/sites/" + siteID + "/forecast/pv",
 		"/api/v1/sites/" + siteID + "/fdd/findings",
+		"/api/v1/sites/" + siteID + "/optimization/shadow-evaluations/latest",
 	} {
 		if _, ok := matchPublicIntelligenceRoute(http.MethodPost, path); ok {
 			t.Fatalf("POST unexpectedly matched read-only Intelligence route %s", path)
@@ -126,6 +128,9 @@ func TestIntelligenceReadWithoutConfiguredOwnerIsAMissingRoute(t *testing.T) {
 		}, publicIntelligenceRoute{siteID: siteID}},
 		{"optimization preparation", func(w http.ResponseWriter, r *http.Request, s bffSession, route publicIntelligenceRoute) {
 			h.serveLatestOptimizationRead(w, r, s, route, "preparations")
+		}, publicIntelligenceRoute{siteID: siteID}},
+		{"optimization shadow", func(w http.ResponseWriter, r *http.Request, s bffSession, route publicIntelligenceRoute) {
+			h.serveLatestOptimizationRead(w, r, s, route, "shadow-evaluations")
 		}, publicIntelligenceRoute{siteID: siteID}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

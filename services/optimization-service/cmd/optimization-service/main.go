@@ -64,6 +64,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	service.WithShadowReader(inputs)
 	// The Chiller COP Model runs as a shadow solver: it records what it would recommend beside
 	// every published run and never publishes. OPTIMIZATION_SHADOW_SOLVER=OFF turns it off.
 	switch shadow := envOrDefault("OPTIMIZATION_SHADOW_SOLVER", optimization.ChillerCOPSolverName); shadow {

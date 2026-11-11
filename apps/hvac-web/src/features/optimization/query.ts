@@ -9,11 +9,13 @@ import {
   type OptimizationRecommendation,
   type PreparationOutcome,
   type PublishedRecommendation,
+  type PublishedShadowEvaluation,
 } from './optimization-model';
 
 export const optimizationKeys = {
   latest: (siteId: string) => ['optimization', siteId, 'latest'] as const,
   preparation: (siteId: string) => ['optimization', siteId, 'preparation'] as const,
+  shadow: (siteId: string, runId: string | null) => ['optimization', siteId, 'shadow', runId] as const,
 };
 
 const UNAVAILABLE = '优化服务暂时不可用';
@@ -60,6 +62,22 @@ export function recommendationWorkOrdersQuery(siteId: string, recommendationId: 
     queryFn: ({ signal }): Promise<WorkOrderList> =>
       listWorkOrders({ sourceDomain: 'EXTERNAL', sourceRef, limit: 20 }, { siteId, signal }),
     enabled: enabled && Boolean(recommendationId),
+  });
+}
+
+/** The Site's latest read-only shadow evaluation from the Chiller COP Model; fetched lazily on the analysis tab. */
+export function latestShadowEvaluationQuery(siteId: string, runId: string | null, enabled: boolean) {
+  return queryOptions({
+    queryKey: optimizationKeys.shadow(siteId, runId),
+    queryFn: async ({ signal }): Promise<PublishedShadowEvaluation | null> => publishedValueOf(
+      await gatewayRequest(gatewayPath(intelligencePaths.latestOptimizationShadowEvaluation, { siteId }), {
+        signal,
+        parse: (payload) => payload as PublishedShadowEvaluation,
+      }),
+      { unavailable: UNAVAILABLE },
+    ),
+    enabled,
+    retry: false,
   });
 }
 

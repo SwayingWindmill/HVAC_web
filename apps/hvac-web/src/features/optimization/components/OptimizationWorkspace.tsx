@@ -60,6 +60,7 @@ import {
   recommendationWorkOrdersQuery,
   requestRecommendation,
 } from '../query';
+import { OptimizationAnalysisTab } from './OptimizationAnalysisTab';
 
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/energy-analysis/optimization');
@@ -346,14 +347,12 @@ export function OptimizationWorkspace() {
         </TabsContent>
 
         <TabsContent value="analysis" className="flex flex-col gap-[18px]">
-          <Panel aria-label="模型与负荷分析">
-            <div className="flex flex-col gap-1 px-6 py-8">
-              <p className="text-sm font-semibold">模型与负荷分析</p>
-              <p className="text-xs text-muted-foreground">
-                按需查看冷机 COP 模型影子对照结果、近 14 天运行数据拟合状态与未来 24 小时冷站负荷预测。
-              </p>
-            </div>
-          </Panel>
+          <OptimizationAnalysisTab
+            siteId={site.id}
+            timeZone={site.timezone}
+            recommendation={recommendation}
+            active={activeView === 'analysis'}
+          />
         </TabsContent>
       </Tabs>
 

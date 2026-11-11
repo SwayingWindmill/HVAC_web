@@ -143,6 +143,9 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/preparations/latest", "{siteId}"); ok {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-preparation", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/preparations/latest"}, method == http.MethodGet
 	}
+	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/shadow-evaluations/latest", "{siteId}"); ok {
+		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-shadow", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/shadow-evaluations/latest"}, method == http.MethodGet
+	}
 	if path == publicOptimizationRunsPath {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, method: http.MethodPost, publicPath: publicOptimizationRunsPath}, method == http.MethodPost
 	}
@@ -201,6 +204,10 @@ func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *
 	}
 	if route.target == "optimization-preparation" {
 		h.serveLatestOptimizationRead(writer, request, session, route, "preparations")
+		return
+	}
+	if route.target == "optimization-shadow" {
+		h.serveLatestOptimizationRead(writer, request, session, route, "shadow-evaluations")
 		return
 	}
 	h.createOptimizationRun(writer, request, session)

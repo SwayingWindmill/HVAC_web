@@ -6,12 +6,18 @@ import {
   buildReadinessSummary,
   findActiveRecommendationWorkOrder,
   parseRecommendation,
+  parseShadowEvaluation,
   type PublishedRecommendation,
+  type PublishedShadowEvaluation,
 } from '../apps/hvac-web/src/features/optimization/optimization-model.ts';
 
 const publishedFixture = JSON.parse(
   readFileSync(new URL('../apps/hvac-web/e2e/fixtures/optimization-latest.json', import.meta.url), 'utf8'),
 ) as PublishedRecommendation;
+
+const shadowFixture = JSON.parse(
+  readFileSync(new URL('../apps/hvac-web/e2e/fixtures/optimization-shadow-latest.json', import.meta.url), 'utf8'),
+) as PublishedShadowEvaluation;
 
 test('buildReadinessSummary reports 6/6 ready with remote setpoint dispatch when writable setpoint is active', () => {
   const recommendation = parseRecommendation(publishedFixture);
@@ -108,4 +114,73 @@ test('buildOptimizationWorkOrderDraft builds EXTERNAL origin work-order prefill 
 
   assert.equal(findActiveRecommendationWorkOrder([cancelledOrder], recommendation.id), null);
   assert.equal(findActiveRecommendationWorkOrder([cancelledOrder, openOrder], recommendation.id)?.workOrderId, 'wo-open');
+});
+
+test('parseShadowEvaluation resolves chiller asset names, marks selected step, and formats COP diagnostics', () => {
+  const names = new Map([['018f3e00-4000-7000-8000-000000000001', 'CHILLER-01']]);
+  const shadow = parseShadowEvaluation(shadowFixture, names);
+
+  assert.equal(shadow.outcome, 'FEASIBLE');
+  assert.equal(shadow.runId, '01a12bdc-97d7-7a23-a6df-9fb2cfcb06b8');
+  assert.equal(shadow.condenserResetNote, '站点未登记冷却水设定点，暂未开放冷却水温度重置');
+  assert.equal(shadow.energyResponse?.fittedKWhPerSupplyC, -52.4);
+  assert.equal(shadow.energyResponse?.policyKWhPerSupplyC, -60);
+  assert.equal(shadow.candidates.length, 3);
+  assert.deepEqual(
+    shadow.candidates.map((row) => [row.supplyTempC, row.selected, row.feasible]),
+    [
+      [6.06, false, true],
+      [7.06, false, true],
+      [8.06, true, true],
+    ],
+  );
+  assert.equal(shadow.fit?.chillers.length, 1);
+  assert.equal(shadow.fit?.chillers[0]?.displayName, 'CHILLER-01');
+  assert.equal(shadow.fit?.chillers[0]?.statusLabel, '已拟合');
+  assert.equal(shadow.fit?.chillers[0]?.samples, 874);
+  assert.equal(shadow.fit?.chillers[0]?.capacityKW, 345.6);
+  assert.equal(shadow.fit?.chillers[0]?.coefficients?.intercept, 2.84);
+  assert.equal(shadow.fit?.setAsideTotal, 38);
+  assert.deepEqual(
+    shadow.fit?.loadAllocationBreakdown.filter((item) => item.count > 0),
+    [{ key: 'single', label: '单机运行', count: 874 }],
+  );
+});
+
+test('parseShadowEvaluation preserves NO_USABLE_MODEL per-chiller rejection reasons in plain Chinese', () => {
+  const degraded: PublishedShadowEvaluation = {
+    ...shadowFixture,
+    outcome: 'NO_USABLE_MODEL',
+    reason: 'no Chiller has a usable COP fit',
+    cvRmse: null,
+    energyResponse: undefined,
+    candidates: undefined,
+    summary: undefined,
+    fit: {
+      history: shadowFixture.fit!.history,
+      cvRmsePower: null,
+      chillers: [
+        {
+          deviceId: '018f3e00-4000-7000-8000-000000000001',
+          status: 'INSUFFICIENT_DATA',
+          reason: 'fewer than 96 steady 15-minute samples',
+          samples: 42,
+        },
+        {
+          deviceId: '018f3e00-4000-7000-8000-000000000099',
+          status: 'REJECTED',
+          reason: 'the fit says a warmer chilled-water supply lowers COP',
+          samples: 120,
+        },
+      ],
+    },
+  };
+  const shadow = parseShadowEvaluation(degraded, new Map([['018f3e00-4000-7000-8000-000000000001', 'CHILLER-01']]));
+  assert.equal(shadow.outcome, 'NO_USABLE_MODEL');
+  assert.equal(shadow.summary, null);
+  assert.equal(shadow.fit?.chillers[0]?.displayName, 'CHILLER-01');
+  assert.equal(shadow.fit?.chillers[0]?.statusLabel, '稳态样本不足');
+  assert.match(shadow.fit?.chillers[0]?.reasonLabel ?? '', /96/);
+  assert.equal(shadow.fit?.chillers[1]?.displayName, '018f3e00-4000-7000-8000-000000000099');
+  assert.match(shadow.fit?.chillers[1]?.reasonLabel ?? '', /物理规律/);
 });

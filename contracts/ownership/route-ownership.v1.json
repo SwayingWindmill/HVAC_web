@@ -1363,6 +1363,22 @@
       ]
     },
     {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/optimization/shadow-evaluations/latest",
+      "owner": "optimization-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/api/v1/optimization/runs",
       "owner": "optimization-service",

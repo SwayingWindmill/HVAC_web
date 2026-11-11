@@ -188,3 +188,82 @@ test('a recommendation that keeps the current supply temperature offers neither 
   await expect(proposal.getByRole('button', { name: '按建议下发' })).toBeHidden();
   await expect(proposal.getByRole('button', { name: '创建人工调温工单' })).toBeHidden();
 });
+
+test('shadow evaluation is lazy-loaded only on the analysis tab and renders non-executable COP diagnostics and 24h load forecast', async ({ page, gateway }) => {
+  gateway.optimization = fixture('optimization-latest.json');
+  gateway.optimizationShadow = fixture('optimization-shadow-latest.json');
+
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+  await expect(page.getByRole('region', { name: '当前建议' })).toBeVisible();
+  expect(gateway.shadowReads).toBe(0);
+
+  await page.getByRole('tab', { name: '模型与负荷分析' }).click();
+  await expect.poll(() => gateway.shadowReads).toBe(1);
+
+  const analysisPanel = page.getByRole('tabpanel', { name: '模型与负荷分析' });
+  await expect(analysisPanel.getByText('影子对照 · 只记录不发布，不作为控制指令下发')).toBeVisible();
+  await expect(analysisPanel.getByRole('button', { name: '按建议下发' })).toBeHidden();
+  await expect(analysisPanel.getByRole('button', { name: '创建人工调温工单' })).toBeHidden();
+
+  await expect(analysisPanel).toContainText('−52.4 kWh');
+  await expect(analysisPanel).toContainText('−60 kWh');
+  await expect(analysisPanel).toContainText('站点未登记冷却水设定点，暂未开放冷却水温度重置');
+
+  const candidateTable = analysisPanel.getByRole('table', { name: '影子候选供水温度步长' });
+  await expect(candidateTable).toContainText('6.1 °C');
+  await expect(candidateTable).toContainText('7.1 °C');
+  await expect(candidateTable).toContainText('8.1 °C');
+  await expect(candidateTable).toContainText('影子最优');
+
+  const fitRegion = analysisPanel.getByRole('region', { name: '冷机 COP 拟合诊断' });
+  await expect(fitRegion).toContainText('CHILLER-01');
+  await expect(fitRegion).toContainText('已拟合');
+  await expect(fitRegion).toContainText('874');
+  await expect(fitRegion).toContainText('346 kW');
+  await expect(fitRegion).toContainText('4.3%');
+  await expect(fitRegion).toContainText('4.92');
+  await expect(fitRegion).toContainText('单机运行 874');
+  await expect(fitRegion.getByRole('button', { name: /回归系数（COP 公式）：常数 2\.84/ })).toBeVisible();
+
+  const forecastRegion = analysisPanel.getByRole('region', { name: '未来 24 小时负荷预测' });
+  await expect(forecastRegion).toBeVisible();
+  await expect(forecastRegion.getByRole('link', { name: '查看负荷管理详情' })).toHaveAttribute('href', new RegExp('/energy-analysis/load'));
+});
+
+test('analysis tab distinguishes missing shadow records from NO_USABLE_MODEL per-chiller rejection diagnostics', async ({ page, gateway }) => {
+  gateway.optimization = fixture('optimization-latest.json');
+  gateway.optimizationShadow = null;
+
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}&view=analysis`);
+  await expect(page.getByText('当前建议尚无影子评估记录')).toBeVisible();
+
+  const shadow = fixture('optimization-shadow-latest.json');
+  gateway.optimizationShadow = {
+    ...shadow,
+    outcome: 'NO_USABLE_MODEL',
+    reason: 'no Chiller has a usable COP fit',
+    cvRmse: null,
+    energyResponse: undefined,
+    candidates: undefined,
+    summary: undefined,
+    fit: {
+      ...shadow.fit,
+      cvRmsePower: null,
+      chillers: [
+        {
+          deviceId: '018f3e00-4000-7000-8000-000000000001',
+          status: 'INSUFFICIENT_DATA',
+          reason: 'fewer than 96 steady 15-minute samples',
+          samples: 42,
+        },
+      ],
+    },
+  };
+
+  await page.reload();
+  const analysisPanel = page.getByRole('tabpanel', { name: '模型与负荷分析' });
+  await expect(analysisPanel.getByText('暂无可用冷机拟合模型')).toBeVisible();
+  await expect(analysisPanel).toContainText('CHILLER-01');
+  await expect(analysisPanel).toContainText('稳态样本不足');
+  await expect(analysisPanel).toContainText('少于 96 个');
+});

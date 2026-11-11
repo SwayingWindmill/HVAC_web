@@ -1,0 +1,114 @@
+{
+  "evaluationId": "01a12bdc-9810-7c41-9f31-42b02f1b0111",
+  "runId": "01a12bdc-97d7-7a23-a6df-9fb2cfcb06b8",
+  "publishedRecommendationId": "01a12bdc-97d7-7e50-bc97-f14cb86800ba",
+  "generatedAt": "2026-10-11T16:47:21.912Z",
+  "solver": "CHILLER_COP_MODEL",
+  "mode": "SHADOW",
+  "outcome": "FEASIBLE",
+  "cvRmse": 0.0432,
+  "condenserReset": {
+    "status": "NOT_AVAILABLE",
+    "reason": "NO_CONDENSER_SETPOINT"
+  },
+  "energyResponse": {
+    "source": "FITTED_FROM_HISTORY",
+    "dailyEnergyDeltaKWhPerSupplyTempC": -52.4,
+    "referenceChillerEnergyKWh": 486.2,
+    "referenceSamples": 94,
+    "referenceHours": 24,
+    "replacesPolicyValue": -60
+  },
+  "zoneResponse": {
+    "source": "POLICY",
+    "zoneTempDeltaCPerSupplyTempC": 0.3,
+    "zoneTempUncertaintyP90C": 0.2
+  },
+  "fit": {
+    "history": {
+      "from": "2026-09-27T16:45:00Z",
+      "to": "2026-10-11T16:45:00Z",
+      "bucketMinutes": 15,
+      "chillers": 1,
+      "runningBuckets": 912,
+      "setAside": {
+        "noCoolingLoad": 14,
+        "implausibleReading": 2,
+        "startingUp": 18,
+        "implausibleCOP": 4
+      },
+      "loadAllocation": {
+        "single": 874,
+        "evaporatorDeltaT": 0,
+        "power": 0
+      }
+    },
+    "chillers": [
+      {
+        "deviceId": "018f3e00-4000-7000-8000-000000000001",
+        "status": "FITTED",
+        "samples": 874,
+        "capacityReference": {
+          "kW": 345.6,
+          "source": "OBSERVED_P99_LOAD"
+        },
+        "coefficients": {
+          "intercept": 2.84,
+          "loadRatio": 3.12,
+          "loadRatioSquared": -1.85,
+          "chilledWaterSupplyTempC": 0.145,
+          "condenserReturnTempC": -0.068
+        },
+        "coefficientSource": "FITTED_FROM_HISTORY",
+        "cvRmsePower": 0.0432,
+        "cvRmseCOP": 0.0398,
+        "meanCOP": 4.92,
+        "chilledWaterSupplyRangeC": [6.4, 8.2]
+      }
+    ],
+    "cvRmsePower": 0.0432
+  },
+  "candidates": [
+    {
+      "supplyTempC": 6.06,
+      "projectedZoneTempC": 23.772,
+      "chillerEnergyDeltaKWh": 54.8,
+      "dailyEnergyKWh": 729.576621,
+      "dailyCost": 620.14012785,
+      "extrapolated": false,
+      "feasible": true
+    },
+    {
+      "supplyTempC": 7.06,
+      "projectedZoneTempC": 24.072,
+      "chillerEnergyDeltaKWh": 0,
+      "dailyEnergyKWh": 674.776621,
+      "dailyCost": 573.56012785,
+      "extrapolated": false,
+      "feasible": true
+    },
+    {
+      "supplyTempC": 8.06,
+      "projectedZoneTempC": 24.372,
+      "chillerEnergyDeltaKWh": -50,
+      "dailyEnergyKWh": 624.776621,
+      "dailyCost": 531.06012785,
+      "extrapolated": false,
+      "feasible": true
+    }
+  ],
+  "summary": {
+    "supplyTempC": 8.06,
+    "projectedZoneTempC": 24.372,
+    "dailyEnergyKWh": 624.776621,
+    "dailyCost": 531.06012785,
+    "energySavingKWhPerDay": 50,
+    "costSavingPerDay": 42.5,
+    "energyP90KWh": 26.9,
+    "zoneTempP90C": 0.2,
+    "comfortMarginC": 1.428,
+    "riskLevel": "LOW",
+    "extrapolated": false,
+    "savingWithinEnergyUncertainty": false
+  }
+}
