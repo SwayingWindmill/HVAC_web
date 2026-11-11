@@ -38,7 +38,7 @@
   - `Status` / `StatusBadge`：带静止圆点的浅色标签。
 - `FactTile` 的 `className` 作用在数值上，不在格子上；要跨列，外面包一层 `<div className="col-span-…">`。
 - 没保存的表单归它所在的页面管：系统管理用 `features/system/unsaved-drafts.tsx`（路由拦截）。站点页面以后有非弹窗的表单，也自己加拦截。
-- 系统管理的「用户与角色」改 IAM 目录时，`lib/capability-labels.ts` 和 `lib/role-labels.ts` 要一起改。`scripts/test-real-design-tokens.mjs` 检查 `features/system/design-system/design-tokens.ts` 里的每对颜色达到 WCAG 要求。
+- 系统管理的「用户与角色」改 IAM 目录时，`lib/capability-labels.ts` 和 `lib/role-labels.ts` 要一起改。`scripts/test-real-design-tokens.mjs` 检查 `features/system/design-system/design-tokens.ts` 里的每对颜色达到 WCAG 要求；`npm run design:check` 同时检查输入框自定义 `Enter` 提交的输入法防误触与深浅色 `color-scheme` 同步（`docs/architecture/modern-web-guidance-source-review-2026-11-11.md`）。
 - 看效果：开一个 Vite 开发服务器在 5190 端口（`npm -w @hvac/web run dev -- --host localhost --port 5190`），e2e 配置会复用它，`npm run web:e2e -- e2e/<spec>` 几秒就能跑完，也可以写个临时用例截图。界面改动最后要在 1440px 下用真实数据看过。
 
 ## 服务器（139.199.58.47）
@@ -150,7 +150,7 @@
 - **Go 代理不稳。** `goproxy.cn` 有时下载失败，用 `PHASE1_GO_PROXY="https://goproxy.cn|https://goproxy.io|https://proxy.golang.org,direct"` 跑 `local:up`，网络出错就重跑。
 - **WSL 里没有 C 编译器，跑不了 `go test -race`。** CI 的单元门禁对所有 Go 测试加了 `-race`（#707）。本地要先验证，就在 `golang:1.27.4-bookworm` 容器里跑：`docker run --rm -v /mnt/e/Code/HVAC_web:/src -w /src/<模块> -e GOPROXY=https://goproxy.cn,direct -e GOFLAGS=-race golang:1.27.4-bookworm go test ./...`。静态检查和漏洞扫描（`npm run go:lint`、`npm run security:go-vuln`）在 WSL 里直接跑，第一次会用 `go.work` 里的 Go 版本编译工具。取舍见 `docs/architecture/go-static-checks-source-review-2026-10-26.md`。
 - **本地栈开着时跑 e2e。** e2e 构建本身就可能超过 Playwright 240 秒的启动超时，并行的 worker 也会在加载不完的页面上超时。先构建一次 `dist-e2e`，自己开 `vite preview --outDir dist-e2e --port 5190`（配置会复用），再 `npm run web:e2e -- --workers=1`。
-- **几个 worktree 同时跑 e2e 会互相借服务器。** 不设 `CI` 时配置会复用 5190 端口上已经开着的服务器，哪怕它是另一个 worktree 构建的，测到的就是别人的代码。并行跑的时候先 `ss -ltnp | grep 5190` 看一眼，或者设 `CI=1` 让它自己构建（端口被占时会直接报错，而不是悄悄复用）。
+- **几个 worktree 同时跑 e2e 会互相借服务器。** 不设 `CI` 时配置会复用 5190 端口上已经开着的服务器，哪怕它是另一个 worktree 构建的，测到的就是别人的代码。并行跑的时候先 `ss -ltnp | grep 5190` 看一眼，或者设 `CI=1` 让它自己构建（5190 已被别的 worktree 占用时再加 `PLAYWRIGHT_PORT=5194` 换端口）。
 - **新的网关接口要登记负责方。** 平台网关只放行 `contracts/ownership/route-ownership.v1.json` 里登记过的接口，别的一律回 404「has no applied owner」；网关的接口测试不加载这份登记，所以测试全过、服务器上却是 404（小程序登录和 `/api/v1/me/wechat` 都这样出过事）。现在 `npm run ownership:check` 会检查 `platform-gateway.openapi.yaml` 里的每个接口都登记了；不在这份契约里的接口（例如小程序的）还要自己记得登记。
 - **集成测试只在改到对应模块时才跑。** 所以一个迁移弄坏了别的模块的种子数据，要等以后改到那个模块才会发现（例如 #504 修的 Registry 种子写 FDD 结论）。
 

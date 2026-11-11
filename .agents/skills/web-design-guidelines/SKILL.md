@@ -60,7 +60,8 @@ For filters, settings, and remote-control flows:
 - confirmation copy states what will happen, not generic "Are you sure?" wording;
 - submit buttons reflect the actual action (for example, "下发启动指令" rather than "确定") when safety or clarity benefits;
 - required reasons/justifications are visibly required before submission;
-- loading/submitting state prevents accidental duplicate submission without inventing retries.
+- loading/submitting state prevents accidental duplicate submission without inventing retries;
+- custom `Enter` `keydown` handlers on inputs or textareas guard CJK IME composition with both `isComposing` and `keyCode === 229`.
 
 ## Typography and content
 
@@ -141,7 +142,8 @@ Use the project frontend sequence:
 
 1. `impeccable` for module/content hierarchy and product-UI critique.
 2. `frontend-design` for visual direction, typography, spacing, density, and composition.
-3. `web-design-guidelines` for final web UX/accessibility/interaction audit.
+3. `modern-web-guidance` (when installed, gated by `.mwgrc`) for Baseline web-platform CSS/DOM/input mechanics that fit inside `DESIGN.md` and shadcn/Radix primitives without replacing them.
+4. `web-design-guidelines` for final web UX/accessibility/interaction audit.
 
 shadcn/ui primitives, TanStack Router/Query/Table, React Hook Form, Zod, and Apache ECharts are the implementation vocabulary and should be checked against their official behavior when relevant. Legacy Ant/Pro usage is migration code, not a design authority.
 
