@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { chromium, defineConfig } from '@playwright/test';
 
-const port = 5190;
+const port = Number(process.env.PLAYWRIGHT_PORT || 5190);
 
 // Playwright's Chromium when installed, otherwise the system Chrome the CI runners ship.
 const executablePath = [process.env.BROWSER_BINARY, chromium.executablePath(), '/usr/bin/google-chrome-stable', '/usr/bin/chromium']

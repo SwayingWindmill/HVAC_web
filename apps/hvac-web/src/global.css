@@ -112,6 +112,7 @@
 }
 
 :root {
+  color-scheme: light dark;
   /* The top bar's height: the shell lays out under it and side sheets open below it. */
   --header-height: 52px;
   --background:#f7f7f8;
@@ -186,7 +187,12 @@
   --sidebar-ring:var(--ring);
 }
 
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
 .dark {
+  color-scheme: dark;
   --background:#0b0b0d;
   --foreground:#f4f4f5;
   --card:#141417;
@@ -313,6 +319,11 @@
   @page {
     size: A4;
     margin: 12mm;
+  }
+
+  :root,
+  .dark {
+    color-scheme: light;
   }
 
   html,
