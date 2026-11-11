@@ -138,25 +138,25 @@ func validateAggregateSelection(deviceID string, keys []string, from, to time.Ti
 	if err != nil {
 		return errors.New("history aggregate timezone is invalid")
 	}
-	if exceedsAggregateBucketLimit(from.UTC(), to.UTC(), granularity, location) {
+	if exceedsAggregateBucketLimit(from.UTC(), to.UTC(), granularity, len(keys), location) {
 		return errors.New("history aggregate query exceeds bucket limit")
 	}
 	return nil
 }
 
-func exceedsAggregateBucketLimit(from, to time.Time, granularity AggregateGranularity, location *time.Location) bool {
+func exceedsAggregateBucketLimit(from, to time.Time, granularity AggregateGranularity, keyCount int, location *time.Location) bool {
 	limit := granularity.MaxBucketsPerKey()
-	cursor, ok := alignCalendarCursor(from.In(location), granularity, location)
+	cursor, ok := AlignCalendarCursor(from.In(location), granularity, location)
 	if !ok {
 		return true
 	}
 	toLocal := to.In(location)
 	count := 0
 	for cursor.Before(toLocal) {
-		next := stepCalendarCursor(cursor, granularity)
+		next := StepCalendarCursor(cursor, granularity)
 		if next.UTC().After(from) && cursor.UTC().Before(to) {
 			count++
-			if count > limit {
+			if count > limit || count*keyCount > MaximumAggregateBuckets {
 				return true
 			}
 		}
@@ -165,7 +165,7 @@ func exceedsAggregateBucketLimit(from, to time.Time, granularity AggregateGranul
 	return false
 }
 
-func alignCalendarCursor(startLocal time.Time, granularity AggregateGranularity, location *time.Location) (time.Time, bool) {
+func AlignCalendarCursor(startLocal time.Time, granularity AggregateGranularity, location *time.Location) (time.Time, bool) {
 	switch granularity {
 	case AggregateGranularityMinute:
 		return time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), startLocal.Minute(), 0, 0, location), true
@@ -188,7 +188,7 @@ func alignCalendarCursor(startLocal time.Time, granularity AggregateGranularity,
 	}
 }
 
-func stepCalendarCursor(value time.Time, granularity AggregateGranularity) time.Time {
+func StepCalendarCursor(value time.Time, granularity AggregateGranularity) time.Time {
 	switch granularity {
 	case AggregateGranularityMinute:
 		return value.Add(time.Minute)
@@ -261,11 +261,26 @@ type CounterAggregate struct {
 	ExcludedTransitionCount int64   `json:"excludedTransitionCount"`
 }
 
+type StateCount struct {
+	Value json.RawMessage `json:"value"`
+	Count int64           `json:"count"`
+}
+
 type StateAggregate struct {
 	ValueType   ValueType       `json:"valueType"`
 	LastValue   json.RawMessage `json:"lastValue"`
 	SampleCount int64           `json:"sampleCount"`
 	ChangeCount int64           `json:"changeCount"`
+	StateCounts []StateCount    `json:"stateCounts,omitempty"`
+}
+
+func (state StateAggregate) validCounts() bool {
+	for _, item := range state.StateCounts {
+		if item.Count < 1 || len(item.Value) == 0 || !json.Valid(item.Value) {
+			return false
+		}
+	}
+	return true
 }
 
 type DeviceHistoryAggregateBucket struct {
@@ -348,7 +363,7 @@ func (response DeviceHistoryAggregateResponse) ValidateFor(query DeviceHistoryAg
 			if bucket.Gauge != nil {
 				break
 			}
-			if bucket.State != nil && (bucket.State.ValueType == ValueTypeString || bucket.State.ValueType == ValueTypeBoolean || bucket.State.ValueType == ValueTypeJSON) && validateTypedValue(bucket.State.ValueType, bucket.State.LastValue) == nil {
+			if bucket.State != nil && (bucket.State.ValueType == ValueTypeString || bucket.State.ValueType == ValueTypeBoolean || bucket.State.ValueType == ValueTypeJSON) && validateTypedValue(bucket.State.ValueType, bucket.State.LastValue) == nil && bucket.State.validCounts() {
 				break
 			}
 			return errors.New("telemetry/setting aggregate requires gauge or discrete state result")
@@ -357,7 +372,7 @@ func (response DeviceHistoryAggregateResponse) ValidateFor(query DeviceHistoryAg
 				return errors.New("counter aggregate requires counter result")
 			}
 		case PointTypeState:
-			if bucket.State == nil || !bucket.State.ValueType.Valid() || validateTypedValue(bucket.State.ValueType, bucket.State.LastValue) != nil {
+			if bucket.State == nil || !bucket.State.ValueType.Valid() || validateTypedValue(bucket.State.ValueType, bucket.State.LastValue) != nil || !bucket.State.validCounts() {
 				return errors.New("state aggregate requires typed state result")
 			}
 		default:

@@ -53,6 +53,7 @@ export function TrendsChartStack({
   compareLabel,
   alarmSpans = [],
   commandMarks = [],
+  hoverAt = null,
   onHoverAt,
 }: {
   readonly lanes: readonly TrendGaugeLane[];
@@ -64,6 +65,7 @@ export function TrendsChartStack({
   readonly compareLabel: string;
   readonly alarmSpans?: readonly TrendOverlaySpan[];
   readonly commandMarks?: readonly TrendOverlayMark[];
+  readonly hoverAt?: number | null;
   readonly onHoverAt?: (atMs: number | null) => void;
 }) {
   return (
@@ -72,6 +74,10 @@ export function TrendsChartStack({
         const config: ChartConfig = Object.fromEntries(
           lane.series.map((s) => [s.ref, { label: s.label, color: s.colorVar }]),
         );
+        const hoveredRow =
+          hoverAt !== null
+            ? lane.rows.find((row) => hoverAt >= row.at && hoverAt < row.endMs)
+            : undefined;
 
         return (
           <section
@@ -83,31 +89,42 @@ export function TrendsChartStack({
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
               <span className="font-semibold text-foreground">{lane.title}</span>
               <div className="ml-auto flex flex-wrap items-center gap-x-3.5 gap-y-1 text-muted-foreground">
-                {lane.series.map((s) => (
-                  <span key={s.ref} className="inline-flex items-center gap-1.5">
-                    <span
-                      className={
-                        s.isSetpoint
-                          ? 'h-0.5 w-3 border-t-2 border-dashed'
-                          : 'h-2 w-2.5 rounded-[2px]'
-                      }
-                      style={
-                        s.isSetpoint
-                          ? { borderColor: s.colorVar }
-                          : { backgroundColor: s.colorVar }
-                      }
-                      aria-hidden="true"
-                    />
-                    <span className="text-foreground/90">{s.label}</span>
-                    {s.isSetpoint ? (
-                      <span className="text-[11px] text-muted-foreground">(设定)</span>
-                    ) : null}
-                  </span>
-                ))}
+                {lane.series.map((s) => {
+                  const hoveredCell = hoveredRow?.values[s.ref];
+                  return (
+                    <span key={s.ref} className="inline-flex items-center gap-1.5">
+                      <span
+                        className={
+                          s.isSetpoint
+                            ? 'h-0.5 w-3 border-t-2 border-dashed'
+                            : 'h-2 w-2.5 rounded-[2px]'
+                        }
+                        style={
+                          s.isSetpoint
+                            ? { borderColor: s.colorVar }
+                            : { backgroundColor: s.colorVar }
+                        }
+                        aria-hidden="true"
+                      />
+                      <span className="text-foreground/90">{s.label}</span>
+                      {s.isSetpoint ? (
+                        <span className="text-[11px] text-muted-foreground">(设定)</span>
+                      ) : null}
+                      {hoveredRow ? (
+                        <span className="font-mono font-medium text-foreground tabular-nums">
+                          {hoveredCell?.value !== null && hoveredCell?.value !== undefined
+                            ? `${formatDecimal(hoveredCell.value, s.precision)}${s.unit ? ` ${s.unit}` : ''}`
+                            : '—'}
+                        </span>
+                      ) : null}
+                    </span>
+                  );
+                })}
                 {showCompare ? (
                   <span className="inline-flex items-center gap-1.5">
                     <span
-                      className="h-0.5 w-3 border-t border-dashed border-muted-foreground"
+                      className="h-0.5 w-3 border-t border-dashed"
+                      style={{ borderColor: 'var(--chart-5)' }}
                       aria-hidden="true"
                     />
                     <span>{compareLabel}</span>
@@ -121,7 +138,7 @@ export function TrendsChartStack({
                 data={lane.rows as TrendGaugeRow[]}
                 syncId="hvac-trends-sync"
                 syncMethod="value"
-                margin={{ top: 8, right: 12, left: 2, bottom: 0 }}
+                margin={{ top: 8, right: 12, left: 0, bottom: 0 }}
                 onMouseMove={(state) => {
                   const activeLabel = state?.activeLabel;
                   if (typeof activeLabel === 'number' && Number.isFinite(activeLabel)) {
@@ -144,7 +161,7 @@ export function TrendsChartStack({
                 <YAxis
                   tickLine={false}
                   axisLine={false}
-                  width={46}
+                  width={48}
                   domain={['auto', 'auto']}
                   tickFormatter={(val: number) => formatDecimal(val, lane.unit === 'm³/h' ? 0 : 1)}
                 />
@@ -172,6 +189,16 @@ export function TrendsChartStack({
                   />
                 ))}
 
+                {hoverAt !== null && hoverAt >= fromMs && hoverAt <= toMs ? (
+                  <ReferenceLine
+                    x={hoverAt}
+                    stroke="var(--chart-now)"
+                    strokeDasharray="3 3"
+                    strokeOpacity={0.7}
+                    ifOverflow="hidden"
+                  />
+                ) : null}
+
                 <ChartTooltip
                   cursor={{ strokeDasharray: '3 3' }}
                   content={({ active, payload }) => {
@@ -181,7 +208,7 @@ export function TrendsChartStack({
                     const endClock = formatTime(new Date(row.endMs).toISOString(), timezone).slice(-5);
 
                     return (
-                      <div className="grid min-w-52 gap-1.5 rounded-lg border bg-background px-2.5 py-2 text-xs shadow-xl">
+                      <div className="grid min-w-52 gap-1.5 rounded-lg border bg-popover px-2.5 py-2 text-xs text-popover-foreground shadow-md">
                         <p className="font-medium tabular-nums">
                           {startText}–{endClock}
                         </p>
@@ -246,8 +273,8 @@ export function TrendsChartStack({
                         key={`${s.ref}-compare`}
                         type={s.isSetpoint ? 'stepAfter' : 'monotone'}
                         dataKey={(row: TrendGaugeRow) => row.values[s.ref]?.compareValue ?? null}
-                        stroke={s.colorVar}
-                        strokeOpacity={0.45}
+                        stroke={lane.series.length === 1 ? 'var(--chart-5)' : s.colorVar}
+                        strokeOpacity={lane.series.length === 1 ? 0.9 : 0.45}
                         strokeWidth={1.25}
                         strokeDasharray="3 3"
                         dot={false}

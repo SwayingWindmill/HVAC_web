@@ -14,6 +14,7 @@ import {
 import { cn } from "@/lib/utils"
 import {
   ChartContainer,
+  ChartEmptySlotTooltip,
   ChartLegend,
   ChartLegendContent,
   ChartTooltip,
@@ -241,12 +242,7 @@ function ComposedChart({
                 (entry) => entry.value !== null && entry.value !== undefined && Number.isFinite(Number(entry.value))
               )
               if (tooltipProps.active && !hasValue && tooltipProps.label !== undefined) {
-                return (
-                  <div className="grid min-w-36 gap-1 rounded-lg border bg-background px-2.5 py-1.5 text-xs shadow-md">
-                    <div className="font-medium">{xFormatter(tooltipProps.label)}</div>
-                    <div className="text-muted-foreground">该时段无读数</div>
-                  </div>
-                )
+                return <ChartEmptySlotTooltip label={xFormatter(tooltipProps.label)} />
               }
               return (
                 <ChartTooltipContent

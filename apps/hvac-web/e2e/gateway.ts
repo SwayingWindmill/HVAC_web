@@ -176,7 +176,13 @@ function synthesizeTrendAggregate(assetModel: Json, snapshots: Json, query: Json
           periodEnd,
           quality: { good: 2, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
           completeness: 1,
-          state: { valueType: point.valueType, lastValue: stateVal, sampleCount: 2, changeCount: stateVal === baseString ? 0 : 1 },
+          state: {
+            valueType: point.valueType,
+            lastValue: stateVal,
+            sampleCount: 2,
+            changeCount: stateVal === baseString ? 0 : 1,
+            stateCounts: [{ value: stateVal, count: 2 }],
+          },
         });
       }
       index += 1;

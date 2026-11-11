@@ -20,7 +20,8 @@ import { plantReading, type PlantReading, type PlantView } from '@/features/oper
 import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
 import { deviceSpanHistoryQuery } from '@/features/operations/systems-devices/device-history';
 import { siteAssetModelQuery } from '@/features/operations/trends/query';
-import { buildFindingTrendSearch, buildTrendCatalog } from '@/features/operations/trends/trends-model';
+import { buildTrendCatalog } from '@/features/operations/trends/trends-model';
+import { buildFindingTrendSearch } from '@/features/operations/trends/trends-overlays';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';

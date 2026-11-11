@@ -51,7 +51,7 @@ test('switching to 统计表 displays latest, average, extremes with timestamps,
   await expect(table.getByRole('row', { name: /中央空调总功率/ })).toContainText(/100%/);
 });
 
-test('point picker enforces the 8-point cap and disables unchecked points at capacity', async ({ page }) => {
+test('point picker stages selections up to the 8-point cap and applies to URL on 应用', async ({ page }) => {
   await page.goto(`/operations/trends?site=${SITE_ID}`);
 
   await page.getByRole('button', { name: /点位 \(\d+\/8\)/ }).click();
@@ -69,29 +69,36 @@ test('point picker enforces the 8-point cap and disables unchecked points at cap
   await expect(dialog.getByText('已选 8 / 8')).toBeVisible();
   const remainingUnchecked = dialog.locator('[role="checkbox"][aria-checked="false"]');
   await expect(remainingUnchecked.first()).toBeDisabled();
+
+  // URL only updates after clicking 应用
+  await expect(page).not.toHaveURL(/points=/);
+  await dialog.getByRole('button', { name: '应用' }).click();
+  await expect(page).toHaveURL(/points=/);
+  await expect(page.getByRole('button', { name: '点位 (8/8)' })).toBeVisible();
 });
 
-test('bottom 设备启停状态 lane renders run/stop segments and updates readout on hover', async ({ page }) => {
+test('bottom 设备启停状态 lane renders run/stop segments and updates two-way synchronized cursor on hover', async ({ page }) => {
   await page.goto(`/operations/trends?site=${SITE_ID}&window=1h`);
 
   const stateRegion = page.getByRole('region', { name: '设备启停状态' });
+  const powerRegion = page.getByRole('region', { name: /功率 \/ 负荷 \(kW\)/ });
   await expect(stateRegion).toBeVisible();
   await expect(stateRegion).toContainText('CHILLER-01');
   await expect(stateRegion.locator('[data-state-kind="RUNNING"]').first()).toBeVisible();
   await expect(stateRegion.locator('[data-state-kind="STOPPED"]').first()).toBeVisible();
 
-  // Hover over the STOPPED segment and verify synchronized cursor readout
+  // Hover over the STOPPED segment and verify two-way synchronized cursor readout on both state lane and gauge chart
   await stateRegion.locator('[data-state-kind="STOPPED"]').first().hover();
   await expect(stateRegion).toContainText(/游标 \d{2}:\d{2}/);
   await expect(stateRegion.getByTestId('state-readout-CHILLER-01')).toHaveText('停止');
+  await expect(powerRegion).toContainText(/\d+\.\d+ kW/);
 });
 
-test('toggling 叠加告警 and 叠加控制指令 renders event rail, collapses dense events, and creates a work order from an alarm event', async ({ page, gateway }) => {
+test('toggling 叠加告警 and 叠加控制指令 renders event rail, collapses dense events, and creates a work order with trend context', async ({ page, gateway }) => {
   const nowMs = Date.now();
   const twentyMinAgo = new Date(nowMs - 20 * 60_000).toISOString();
   const nineteenMinAgo = new Date(nowMs - 19 * 60_000 - 30_000).toISOString();
 
-  // Seed a command on CHILLER-01 setpoint 19.5 minutes ago (dense with an alarm 20 minutes ago!)
   gateway.alarms[0].firstOccurredAt = twentyMinAgo;
   gateway.alarms[0].lastOccurredAt = twentyMinAgo;
   gateway.commands.push({
@@ -120,7 +127,6 @@ test('toggling 叠加告警 and 叠加控制指令 renders event rail, collapses
 
   const rail = page.getByRole('region', { name: '事件时间轴' });
   await expect(rail).toBeVisible();
-  // Dense alarm + command within 30s collapse into a 2-event cluster pill
   const clusterBtn = rail.getByRole('button', { name: /2 条事件/ });
   await expect(clusterBtn).toBeVisible();
   await clusterBtn.click();
@@ -129,16 +135,17 @@ test('toggling 叠加告警 and 叠加控制指令 renders event rail, collapses
   await expect(popover).toContainText('冷冻水回水温度过低');
   await expect(popover).toContainText('7.5');
 
-  // Create a work order directly from the alarm event card
+  // Create a work order directly from the alarm event card; verify trend context is pre-populated
   await popover.getByRole('button', { name: '创建工单' }).click();
   const woDialog = page.getByRole('dialog', { name: '由告警创建工单' });
   await expect(woDialog).toBeVisible();
-  await woDialog.getByLabel('说明').fill('趋势曲线确认回水温度持续偏低，排查旁通阀');
+  await expect(woDialog.getByLabel('说明')).toHaveValue(/趋势时段：[\s\S]*排查点位：/);
   await woDialog.getByRole('button', { name: '创建工单' }).click();
 
   const createWrite = gateway.writes.find((w) => w.method === 'POST' && w.path.endsWith('/work-orders'));
   expect(createWrite?.body).toMatchObject({
     sourceReferences: [{ domain: 'ALARM', resourceId: gateway.alarms[0].alarmId, relationship: 'ORIGIN' }],
+    description: expect.stringMatching(/趋势时段：[\s\S]*排查点位：/),
   });
 });
 

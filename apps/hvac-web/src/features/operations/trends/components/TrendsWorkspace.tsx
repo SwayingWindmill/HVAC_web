@@ -1,18 +1,22 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
-import { LineChart, RefreshCw, ShieldAlert, X } from 'lucide-react';
+import { AlertCircle, CalendarClock, LineChart, RefreshCw, ShieldAlert, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader, PageMeta } from '@/blocks/page-header';
 import { Panel } from '@/blocks/panel';
+import { StateCard } from '@/blocks/state/state-card';
 import { Main } from '@/components/layout/Main';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { AlarmRequestError } from '@/features/alarms/alarm-api';
 import { PRIORITY_BY_SEVERITY } from '@/features/alarms/components/AlarmDetailPane';
 import { CommandRequestError } from '@/features/control/command-api';
+import { siteMidnight, wallTime } from '@/features/energy-analysis/consumption/model';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { useNow } from '@/hooks/use-now';
@@ -28,17 +32,19 @@ import type { TrendGranularity } from '../timeline';
 import {
   MAX_TREND_POINTS,
   buildTrendCatalog,
-  buildTrendOverlays,
   buildTrendViewModel,
   deriveBuiltInPresets,
-  formatTrendOverlays,
-  parseTrendOverlays,
   resolveTrendWindow,
-  type TrendOverlayAlarmInput,
   type TrendPointItem,
   type TrendPresetId,
   type TrendWindowPreset,
 } from '../trends-model';
+import {
+  buildTrendOverlays,
+  formatTrendOverlays,
+  parseTrendOverlays,
+  type TrendOverlayAlarmInput,
+} from '../trends-overlays';
 import { PointPickerPopover } from './PointPickerPopover';
 import { TrendsChartStack } from './TrendsChartStack';
 import { TrendsEventRail } from './TrendsEventRail';
@@ -71,6 +77,27 @@ const GRANULARITY_LABELS: Readonly<Record<TrendGranularity, string>> = {
   DAY: '按日',
 };
 
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+function formatSiteLocalInput(ms: number, timezone: string): string {
+  const w = wallTime(new Date(ms), timezone);
+  return `${w.year}-${pad2(w.month)}-${pad2(w.day)}T${pad2(w.hour)}:${pad2(w.minute)}`;
+}
+
+function parseSiteLocalInput(raw: string, timezone: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(raw.trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const baseMs = siteMidnight(year, month, day, timezone).getTime() + (hour * 60 + minute) * 60_000;
+  return Number.isFinite(baseMs) ? baseMs : null;
+}
+
 export function TrendsWorkspace() {
   const { site, principal } = siteRoute.useRouteContext();
   const search = pageRoute.useSearch();
@@ -79,9 +106,13 @@ export function TrendsWorkspace() {
   const nowMs = useNow(60_000);
   const [hoverAt, setHoverAt] = useState<number | null>(null);
   const [workOrderAlarm, setWorkOrderAlarm] = useState<TrendOverlayAlarmInput | null>(null);
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customFromDraft, setCustomFromDraft] = useState('');
+  const [customToDraft, setCustomToDraft] = useState('');
+
   const capabilities = principal.authorization.capabilities;
   const canListAlarms = capabilities.includes('alarm.list');
-  const canReadDevices = capabilities.includes('device.read');
+  const canReadCommands = capabilities.includes('site.read');
   const canCreateWorkOrder = capabilities.includes('work-order.create');
 
   const assetModel = useQuery(siteAssetModelQuery(site.id));
@@ -151,7 +182,7 @@ export function TrendsWorkspace() {
   const commandsOverlayQuery = useQuery(
     trendCommandsQuery({
       siteId: site.id,
-      enabled: overlayFlags.commands && canReadDevices,
+      enabled: overlayFlags.commands && canReadCommands,
     }),
   );
 
@@ -161,7 +192,7 @@ export function TrendsWorkspace() {
       (alarmsOverlayQuery.error.status === 401 || alarmsOverlayQuery.error.status === 403));
 
   const commandsForbidden =
-    !canReadDevices ||
+    !canReadCommands ||
     (commandsOverlayQuery.error instanceof CommandRequestError &&
       (commandsOverlayQuery.error.status === 401 || commandsOverlayQuery.error.status === 403));
 
@@ -225,23 +256,26 @@ export function TrendsWorkspace() {
     });
   }, [compareQuery.data, currentQuery.data, selectedPoints, showCompare, windowState]);
 
-  const handleToggleRef = (ref: string) => {
-    const exists = selectedRefs.includes(ref);
-    const next = exists
-      ? selectedRefs.filter((item) => item !== ref)
-      : selectedRefs.length < MAX_TREND_POINTS
-        ? [...selectedRefs, ref]
-        : selectedRefs;
+  const handleApplyRefs = (nextRefs: readonly string[]) => {
+    const capped = nextRefs.slice(0, MAX_TREND_POINTS);
     void navigate({
       search: (prev) => ({
         ...prev,
         preset: undefined,
-        points: next.length > 0 ? next.join(',') : undefined,
+        points: capped.length > 0 ? capped.join(',') : undefined,
       }),
     });
   };
 
   const rangeText = `${formatCompactTime(new Date(windowState.fromMs).toISOString(), site.timezone)} – ${formatCompactTime(new Date(windowState.toMs).toISOString(), site.timezone)}`;
+
+  const parsedCustomFromMs = parseSiteLocalInput(customFromDraft, site.timezone);
+  const parsedCustomToMs = parseSiteLocalInput(customToDraft, site.timezone);
+  const customRangeValid =
+    parsedCustomFromMs !== null &&
+    parsedCustomToMs !== null &&
+    parsedCustomToMs > parsedCustomFromMs &&
+    parsedCustomToMs - parsedCustomFromMs <= 366 * 86_400_000;
 
   return (
     <Main>
@@ -296,25 +330,28 @@ export function TrendsWorkspace() {
         <Skeleton className="h-[520px] rounded-xl" />
       ) : assetModel.isError || !catalog ? (
         <Panel aria-label="趋势异常">
-          <div className="flex flex-col items-start gap-2 px-5 py-10">
-            <p className="text-sm font-semibold">站点设备点位目录暂时无法读取</p>
+          <StateCard
+            icon={AlertCircle}
+            tone="danger"
+            title={<h2 className="text-sm font-semibold">站点设备点位目录暂时无法读取</h2>}
+            description="请检查网络或稍后重新加载站点设备目录。"
+          >
             <Button variant="outline" size="sm" onClick={() => void assetModel.refetch()}>
               重试
             </Button>
-          </div>
+          </StateCard>
         </Panel>
       ) : catalog.points.length === 0 ? (
         <Panel aria-label="暂无点位">
-          <div className="flex flex-col items-center gap-2 px-6 py-14 text-center">
-            <span className="flex size-9 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-              <LineChart className="size-4" aria-hidden="true" />
-            </span>
-            <p className="text-sm font-semibold">当前站点尚未接入可趋势化的遥测点位</p>
-          </div>
+          <StateCard
+            icon={LineChart}
+            title={<h2 className="text-sm font-semibold">当前站点尚未接入可趋势化的遥测点位</h2>}
+            description="完成网关与设备点位启用后即可在此对比多点位历史曲线。"
+          />
         </Panel>
       ) : (
         <Panel aria-label="历史趋势工作台">
-          {/* L1 Control Strip: Presets + Point Picker on left, Window + Granularity + Compare on right */}
+          {/* L1 Control Strip: Presets + Point Picker on left, Window + Granularity + Overlays on right */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-divider px-5 py-3">
             <div className="flex flex-wrap items-center gap-2">
               {presets.length > 0 ? (
@@ -346,37 +383,116 @@ export function TrendsWorkspace() {
               <PointPickerPopover
                 catalog={catalog}
                 selectedRefs={selectedRefs}
-                onToggleRef={handleToggleRef}
+                onApplyRefs={handleApplyRefs}
               />
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
-              <ToggleGroup
-                type="single"
-                variant="outline"
-                size="sm"
-                spacing={0}
-                value={windowState.preset === 'custom' ? '' : windowState.preset}
-                onValueChange={(val) => {
-                  if (!val) return;
-                  void navigate({
-                    search: (prev) => ({
-                      ...prev,
-                      window: val as Exclude<TrendWindowPreset, 'custom'>,
-                      from: undefined,
-                      to: undefined,
-                      granularity: undefined,
-                    }),
-                  });
-                }}
-                aria-label="时间范围"
-              >
-                {WINDOW_ITEMS.map((item) => (
-                  <ToggleGroupItem key={item.value} value={item.value} className="h-7 px-2.5 text-xs">
-                    {item.label}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
+              <div className="flex items-center gap-1.5">
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  size="sm"
+                  spacing={0}
+                  value={windowState.preset === 'custom' ? '' : windowState.preset}
+                  onValueChange={(val) => {
+                    if (!val) return;
+                    void navigate({
+                      search: (prev) => ({
+                        ...prev,
+                        window: val as Exclude<TrendWindowPreset, 'custom'>,
+                        from: undefined,
+                        to: undefined,
+                        granularity: undefined,
+                      }),
+                    });
+                  }}
+                  aria-label="时间范围"
+                >
+                  {WINDOW_ITEMS.map((item) => (
+                    <ToggleGroupItem key={item.value} value={item.value} className="h-7 px-2.5 text-xs">
+                      {item.label}
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+
+                <Popover
+                  open={customOpen}
+                  onOpenChange={(nextOpen) => {
+                    if (nextOpen) {
+                      setCustomFromDraft(formatSiteLocalInput(windowState.fromMs, site.timezone));
+                      setCustomToDraft(formatSiteLocalInput(windowState.toMs, site.timezone));
+                    }
+                    setCustomOpen(nextOpen);
+                  }}
+                >
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant={windowState.preset === 'custom' ? 'secondary' : 'outline'}
+                      size="sm"
+                      className="h-7 gap-1 px-2.5 text-xs"
+                    >
+                      <CalendarClock className="size-3.5" aria-hidden="true" />
+                      自定义
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="flex w-72 flex-col gap-3 p-3">
+                    <p className="text-xs font-medium">自定义时段（站点时间）</p>
+                    <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                      <span>开始时间</span>
+                      <Input
+                        type="datetime-local"
+                        aria-label="开始时间"
+                        value={customFromDraft}
+                        onChange={(ev) => setCustomFromDraft(ev.target.value)}
+                        className="h-8 font-mono text-xs tabular-nums"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                      <span>结束时间</span>
+                      <Input
+                        type="datetime-local"
+                        aria-label="结束时间"
+                        value={customToDraft}
+                        onChange={(ev) => setCustomToDraft(ev.target.value)}
+                        className="h-8 font-mono text-xs tabular-nums"
+                      />
+                    </label>
+                    <div className="flex items-center justify-end gap-2 pt-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2.5 text-xs"
+                        onClick={() => setCustomOpen(false)}
+                      >
+                        取消
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-7 px-3 text-xs"
+                        disabled={!customRangeValid}
+                        onClick={() => {
+                          if (!customRangeValid) return;
+                          void navigate({
+                            search: (prev) => ({
+                              ...prev,
+                              window: 'custom',
+                              from: new Date(parsedCustomFromMs).toISOString(),
+                              to: new Date(parsedCustomToMs).toISOString(),
+                              granularity: undefined,
+                            }),
+                          });
+                          setCustomOpen(false);
+                        }}
+                      >
+                        应用
+                      </Button>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
 
               <ToggleGroup
                 type="single"
@@ -544,7 +660,7 @@ export function TrendsWorkspace() {
                   <button
                     type="button"
                     aria-label={`移除 ${point.seriesLabel}`}
-                    onClick={() => handleToggleRef(point.ref)}
+                    onClick={() => handleApplyRefs(selectedRefs.filter((item) => item !== point.ref))}
                     className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
                   >
                     <X className="size-3" aria-hidden="true" />
@@ -566,25 +682,29 @@ export function TrendsWorkspace() {
               <Skeleton className="h-[380px] rounded-lg" />
             </div>
           ) : currentQuery.error instanceof TrendHistoryPermissionError ? (
-            <div className="flex flex-col items-center gap-2 px-6 py-14 text-center">
-              <span className="flex size-9 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-                <ShieldAlert className="size-4" aria-hidden="true" />
-              </span>
-              <p className="text-sm font-semibold">当前账号没有该设备的历史读数查看权限</p>
-              <p className="text-xs text-muted-foreground">如需查看历史趋势，请联系管理员开通遥测历史读取权限</p>
-            </div>
+            <StateCard
+              icon={ShieldAlert}
+              tone="warning"
+              title={<h2 className="text-sm font-semibold">当前账号没有该设备的历史读数查看权限</h2>}
+              description="如需查看历史趋势，请联系管理员开通遥测历史读取权限。"
+            />
           ) : currentQuery.isError || !viewModel ? (
-            <div className="flex flex-col items-start gap-2 px-5 py-10">
-              <p className="text-sm font-semibold">历史趋势数据暂时无法读取</p>
+            <StateCard
+              icon={AlertCircle}
+              tone="danger"
+              title={<h2 className="text-sm font-semibold">历史趋势数据暂时无法读取</h2>}
+              description="请稍后重试，或切换较短的时间范围重新查询。"
+            >
               <Button variant="outline" size="sm" onClick={() => void currentQuery.refetch()}>
                 重试
               </Button>
-            </div>
+            </StateCard>
           ) : viewModel.summaryRows.every((row) => row.validBuckets === 0) && viewModel.statePoints.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 px-6 py-14 text-center">
-              <p className="text-sm font-semibold">所选时段内暂无有效历史读数</p>
-              <p className="text-xs text-muted-foreground">可切换至更宽的时间范围（如 7 天）或检查网关采集状态</p>
-            </div>
+            <StateCard
+              icon={LineChart}
+              title={<h2 className="text-sm font-semibold">所选时段内暂无有效历史读数</h2>}
+              description="可切换至更宽的时间范围（如 7 天）或检查网关采集状态。"
+            />
           ) : viewMode === 'table' ? (
             <TrendsSummaryTable rows={viewModel.summaryRows} timezone={site.timezone} />
           ) : (
@@ -608,16 +728,24 @@ export function TrendsWorkspace() {
                 compareLabel={windowState.compareLabel}
                 alarmSpans={overlaysModel.alarmSpans.map((span) => ({
                   id: span.id,
-                  fromMs: span.startSlotAt,
-                  toMs: Math.max(span.endSlotAt, span.startSlotAt + 60_000),
+                  fromMs: span.clampedStartMs,
+                  toMs: Math.max(
+                    span.clampedEndMs,
+                    Math.min(
+                      windowState.toMs,
+                      span.clampedStartMs +
+                        Math.max(15_000, Math.round((windowState.toMs - windowState.fromMs) * 0.004)),
+                    ),
+                  ),
                   severity: span.alarm.currentSeverity,
                   label: span.alarm.title,
                 }))}
                 commandMarks={overlaysModel.commandMarks.map((mark) => ({
                   id: mark.id,
-                  atMs: mark.slotAt,
+                  atMs: mark.atMs,
                   label: mark.summaryLabel,
                 }))}
+                hoverAt={hoverAt}
                 onHoverAt={setHoverAt}
               />
               <TrendsStateLane
@@ -643,7 +771,15 @@ export function TrendsWorkspace() {
           initial={{
             title: workOrderAlarm.title,
             priority: PRIORITY_BY_SEVERITY[workOrderAlarm.currentSeverity],
-            description: workOrderAlarm.summary,
+            description: [
+              workOrderAlarm.summary,
+              `趋势时段：${rangeText}`,
+              selectedPoints.length > 0
+                ? `排查点位：${selectedPoints.map((p) => p.seriesLabel).join('、')}`
+                : '',
+            ]
+              .filter(Boolean)
+              .join('\n'),
           }}
           sourceReferences={[
             {

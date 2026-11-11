@@ -45,6 +45,7 @@ type aggregateRow struct {
 	StateLastValue *string  `json:"state_last_value"`
 	StateSamples   int64    `json:"state_sample_count"`
 	StateChanges   int64    `json:"state_change_count"`
+	StateValues    []string `json:"state_values"`
 }
 
 type aggregateSnapshotRow struct {
@@ -207,12 +208,11 @@ func decodeAggregateRow(row aggregateRow) (telemetryhistorymodel.DeviceHistoryAg
 	switch bucket.PointType {
 	case telemetryhistorymodel.PointTypeTelemetry, telemetryhistorymodel.PointTypeSetting:
 		if row.StateValueType != nil && row.StateLastValue != nil {
-			bucket.State = &telemetryhistorymodel.StateAggregate{
-				ValueType:   telemetryhistorymodel.ValueType(*row.StateValueType),
-				LastValue:   json.RawMessage(*row.StateLastValue),
-				SampleCount: row.StateSamples,
-				ChangeCount: row.StateChanges,
+			state, err := buildStateAggregate(row)
+			if err != nil {
+				return telemetryhistorymodel.DeviceHistoryAggregateBucket{}, err
 			}
+			bucket.State = state
 			break
 		}
 		if row.Average == nil || row.Minimum == nil || row.Maximum == nil || row.First == nil || row.Last == nil || !finite(*row.Average, *row.Minimum, *row.Maximum, *row.First, *row.Last) {
@@ -231,17 +231,51 @@ func decodeAggregateRow(row aggregateRow) (telemetryhistorymodel.DeviceHistoryAg
 			RolloverCount: row.RolloverCount, ExcludedTransitionCount: row.ExcludedCount,
 		}
 	case telemetryhistorymodel.PointTypeState:
-		if row.StateValueType == nil || row.StateLastValue == nil {
-			return telemetryhistorymodel.DeviceHistoryAggregateBucket{}, errors.New("ClickHouse state aggregate is invalid")
+		state, err := buildStateAggregate(row)
+		if err != nil {
+			return telemetryhistorymodel.DeviceHistoryAggregateBucket{}, err
 		}
-		bucket.State = &telemetryhistorymodel.StateAggregate{
-			ValueType: telemetryhistorymodel.ValueType(*row.StateValueType),
-			LastValue: json.RawMessage(*row.StateLastValue), SampleCount: row.StateSamples, ChangeCount: row.StateChanges,
-		}
+		bucket.State = state
 	default:
 		return telemetryhistorymodel.DeviceHistoryAggregateBucket{}, errors.New("ClickHouse returned a non-aggregatable Point type")
 	}
 	return bucket, nil
+}
+
+func buildStateAggregate(row aggregateRow) (*telemetryhistorymodel.StateAggregate, error) {
+	if row.StateValueType == nil || row.StateLastValue == nil {
+		return nil, errors.New("ClickHouse state aggregate is invalid")
+	}
+	countsByRaw := make(map[string]int64)
+	for _, raw := range row.StateValues {
+		if !json.Valid([]byte(raw)) {
+			return nil, errors.New("ClickHouse state aggregate value_json is invalid")
+		}
+		countsByRaw[raw]++
+	}
+	if len(countsByRaw) == 0 && row.StateSamples > 0 {
+		countsByRaw[*row.StateLastValue] = row.StateSamples
+	}
+	counts := make([]telemetryhistorymodel.StateCount, 0, len(countsByRaw))
+	for raw, count := range countsByRaw {
+		counts = append(counts, telemetryhistorymodel.StateCount{
+			Value: json.RawMessage(raw),
+			Count: count,
+		})
+	}
+	sort.Slice(counts, func(i, j int) bool {
+		if counts[i].Count != counts[j].Count {
+			return counts[i].Count > counts[j].Count
+		}
+		return string(counts[i].Value) < string(counts[j].Value)
+	})
+	return &telemetryhistorymodel.StateAggregate{
+		ValueType:   telemetryhistorymodel.ValueType(*row.StateValueType),
+		LastValue:   json.RawMessage(*row.StateLastValue),
+		SampleCount: row.StateSamples,
+		ChangeCount: row.StateChanges,
+		StateCounts: counts,
+	}, nil
 }
 
 func finite(values ...float64) bool {
@@ -258,32 +292,14 @@ func buildCalendarPeriods(query telemetryhistorymodel.DeviceHistoryAggregateQuer
 	if err != nil {
 		return nil, errors.New("history aggregate timezone is invalid")
 	}
-	startLocal := query.From.In(location)
-	var cursor time.Time
-	switch query.Granularity {
-	case telemetryhistorymodel.AggregateGranularityMinute:
-		cursor = time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), startLocal.Minute(), 0, 0, location)
-	case telemetryhistorymodel.AggregateGranularityFiveMinute:
-		cursor = time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), startLocal.Minute()-startLocal.Minute()%5, 0, 0, location)
-	case telemetryhistorymodel.AggregateGranularityQuarterHour:
-		cursor = time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), startLocal.Minute()-startLocal.Minute()%15, 0, 0, location)
-	case telemetryhistorymodel.AggregateGranularityHour:
-		cursor = time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), startLocal.Hour(), 0, 0, 0, location)
-	case telemetryhistorymodel.AggregateGranularityDay:
-		cursor = time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), 0, 0, 0, 0, location)
-	case telemetryhistorymodel.AggregateGranularityWeek:
-		dayStart := time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), 0, 0, 0, 0, location)
-		daysSinceMonday := (int(dayStart.Weekday()) + 6) % 7
-		cursor = dayStart.AddDate(0, 0, -daysSinceMonday)
-	case telemetryhistorymodel.AggregateGranularityMonth:
-		cursor = time.Date(startLocal.Year(), startLocal.Month(), 1, 0, 0, 0, 0, location)
-	default:
+	cursor, ok := telemetryhistorymodel.AlignCalendarCursor(query.From.In(location), query.Granularity, location)
+	if !ok {
 		return nil, errors.New("history aggregate granularity is invalid")
 	}
 	periods := make([]calendarPeriod, 0)
 	maxPeriods := query.Granularity.MaxBucketsPerKey()
 	for cursor.Before(query.To.In(location)) {
-		next := nextCalendarBoundary(cursor, query.Granularity)
+		next := telemetryhistorymodel.StepCalendarCursor(cursor, query.Granularity)
 		start, end := cursor.UTC(), next.UTC()
 		if end.After(query.From) && start.Before(query.To) {
 			if start.Before(query.From) {
@@ -300,27 +316,6 @@ func buildCalendarPeriods(query telemetryhistorymodel.DeviceHistoryAggregateQuer
 		cursor = next
 	}
 	return periods, nil
-}
-
-func nextCalendarBoundary(value time.Time, granularity telemetryhistorymodel.AggregateGranularity) time.Time {
-	switch granularity {
-	case telemetryhistorymodel.AggregateGranularityMinute:
-		return value.Add(time.Minute)
-	case telemetryhistorymodel.AggregateGranularityFiveMinute:
-		return value.Add(5 * time.Minute)
-	case telemetryhistorymodel.AggregateGranularityQuarterHour:
-		return value.Add(15 * time.Minute)
-	case telemetryhistorymodel.AggregateGranularityHour:
-		return value.Add(time.Hour)
-	case telemetryhistorymodel.AggregateGranularityDay:
-		return value.AddDate(0, 0, 1)
-	case telemetryhistorymodel.AggregateGranularityWeek:
-		return value.AddDate(0, 0, 7)
-	case telemetryhistorymodel.AggregateGranularityMonth:
-		return value.AddDate(0, 1, 0)
-	default:
-		return value
-	}
 }
 
 func (client *Client) aggregateSnapshotQuery(query telemetryhistorymodel.DeviceHistoryAggregateQuery) string {
@@ -375,7 +370,8 @@ SELECT
   CAST(NULL, 'Nullable(String)') AS state_value_type,
   CAST(NULL, 'Nullable(String)') AS state_last_value,
   toInt64(0) AS state_sample_count,
-  toInt64(0) AS state_change_count
+  toInt64(0) AS state_change_count,
+  CAST([], 'Array(String)') AS state_values
 FROM %s.%s
 WHERE tenant_id = toUUID('%s') AND site_id = toUUID('%s') AND device_id = toUUID('%s')
   AND telemetry_key IN (%s)
@@ -468,7 +464,8 @@ SELECT
   CAST(NULL, 'Nullable(String)') AS state_value_type,
   CAST(NULL, 'Nullable(String)') AS state_last_value,
   toInt64(0) AS state_sample_count,
-  toInt64(0) AS state_change_count
+  toInt64(0) AS state_change_count,
+  CAST([], 'Array(String)') AS state_values
 FROM scoped
 GROUP BY telemetry_key, point_id, point_revision, bucket
 HAVING included_count > 0
@@ -524,11 +521,12 @@ SELECT
   toNullable(argMaxIf(assumeNotNull(value_type), tuple(sampled_at, toString(observation_id)), %s)) AS state_value_type,
   toNullable(argMaxIf(assumeNotNull(value_json), tuple(sampled_at, toString(observation_id)), %s)) AS state_last_value,
   countIf(%s) AS state_sample_count,
-  countIf(%s AND previous_value_json IS NOT NULL AND value_json != previous_value_json) AS state_change_count
+  countIf(%s AND previous_value_json IS NOT NULL AND value_json != previous_value_json) AS state_change_count,
+  groupArrayIf(assumeNotNull(value_json), %s) AS state_values
 FROM scoped
 GROUP BY telemetry_key, point_id, point_revision, point_type, bucket
 HAVING included_count > 0
-FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.To), formatClickHouseTime(snapshotAt), bucket, formatClickHouseTime(query.From), end, included, included, included, included, included)
+FORMAT JSONEachRow`, client.database, client.table, query.TenantID, query.SiteID, query.DeviceID, quotedKeys(query.Keys), formatClickHouseTime(query.To), formatClickHouseTime(snapshotAt), bucket, formatClickHouseTime(query.From), end, included, included, included, included, included, included)
 }
 
 func aggregateBucketExpressions(query telemetryhistorymodel.DeviceHistoryAggregateQuery) (string, string) {

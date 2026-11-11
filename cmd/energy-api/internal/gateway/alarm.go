@@ -133,17 +133,11 @@ func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Re
 				filter.Suppressed = &val
 			}
 		}
-		if raw := query.Get("activeFrom"); raw != "" {
-			if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-				utc := parsed.UTC()
-				filter.ActiveFrom = &utc
-			}
+		if activeFrom, ok := parseOptionalRFC3339UTC(query, "activeFrom"); ok {
+			filter.ActiveFrom = activeFrom
 		}
-		if raw := query.Get("activeTo"); raw != "" {
-			if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-				utc := parsed.UTC()
-				filter.ActiveTo = &utc
-			}
+		if activeTo, ok := parseOptionalRFC3339UTC(query, "activeTo"); ok {
+			filter.ActiveTo = activeTo
 		}
 		resp, err := a.store.List(ctx, tenantID, route.siteID, filter)
 		if err != nil {
@@ -703,24 +697,9 @@ func validatePublicAlarmQuery(query url.Values) (string, int, bool) {
 			}
 		}
 	}
-	var activeFrom, activeTo *time.Time
-	if raw := query.Get("activeFrom"); raw != "" {
-		parsed, err := time.Parse(time.RFC3339Nano, raw)
-		if err != nil {
-			return "", 0, false
-		}
-		utc := parsed.UTC()
-		activeFrom = &utc
-	}
-	if raw := query.Get("activeTo"); raw != "" {
-		parsed, err := time.Parse(time.RFC3339Nano, raw)
-		if err != nil {
-			return "", 0, false
-		}
-		utc := parsed.UTC()
-		activeTo = &utc
-	}
-	if activeFrom != nil && activeTo != nil && activeFrom.After(*activeTo) {
+	activeFrom, validFrom := parseOptionalRFC3339UTC(query, "activeFrom")
+	activeTo, validTo := parseOptionalRFC3339UTC(query, "activeTo")
+	if !validFrom || !validTo || (activeFrom != nil && activeTo != nil && activeFrom.After(*activeTo)) {
 		return "", 0, false
 	}
 	if severity := alarmmodel.Severity(query.Get("severity")); severity != "" {
@@ -731,6 +710,19 @@ func validatePublicAlarmQuery(query url.Values) (string, int, bool) {
 		}
 	}
 	return siteID, limit, true
+}
+
+func parseOptionalRFC3339UTC(query url.Values, key string) (*time.Time, bool) {
+	raw := query.Get(key)
+	if raw == "" {
+		return nil, true
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return nil, false
+	}
+	utc := parsed.UTC()
+	return &utc, true
 }
 
 func (h *handler) alarmSession(writer http.ResponseWriter, request *http.Request) (bffSession, bool) {

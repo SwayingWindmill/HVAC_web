@@ -10,18 +10,20 @@ import {
 } from '../apps/hvac-web/src/features/operations/trends/timeline.ts';
 import {
   MAX_TREND_POINTS,
-  buildAlarmTrendSearch,
-  buildFindingTrendSearch,
   buildTrendCatalog,
-  buildTrendOverlays,
   buildTrendViewModel,
   deriveBuiltInPresets,
-  formatTrendOverlays,
   groupTrendDeviceRequests,
-  parseTrendOverlays,
   resolveTrackStateAt,
   resolveTrendWindow,
 } from '../apps/hvac-web/src/features/operations/trends/trends-model.ts';
+import {
+  buildAlarmTrendSearch,
+  buildFindingTrendSearch,
+  buildTrendOverlays,
+  formatTrendOverlays,
+  parseTrendOverlays,
+} from '../apps/hvac-web/src/features/operations/trends/trends-overlays.ts';
 
 const centralPlantModel = JSON.parse(
   readFileSync(new URL('../apps/hvac-web/e2e/fixtures/asset-model.json', import.meta.url), 'utf8'),
@@ -372,6 +374,53 @@ test('buildTrendViewModel normalizes discrete state buckets, merges contiguous s
     kind: 'FAULT',
     label: '故障',
   });
+
+  // Multi-state bucket with stateCounts (4 RUNNING + 1 STOPPED, lastValue STOPPED) colors by dominant count, not lastValue
+  const fiveMinWindow = resolveTrendWindow({
+    window: 'custom',
+    from: '2026-10-12T00:00:00.000Z',
+    to: '2026-10-12T00:05:00.000Z',
+    granularity: 'FIVE_MINUTE',
+    now: new Date('2026-10-12T01:00:00.000Z'),
+    timezone: 'Asia/Shanghai',
+  });
+  const multiStateBuckets = new Map<string, readonly DeviceHistoryAggregateBucket[]>([
+    [
+      runStatePoint.deviceId,
+      [
+        {
+          telemetryKey: runStatePoint.pointCode,
+          pointId: runStatePoint.pointId,
+          pointRevision: 1,
+          pointType: 'TELEMETRY',
+          unit: null,
+          periodStart: '2026-10-12T00:00:00.000Z',
+          periodEnd: '2026-10-12T00:05:00.000Z',
+          quality: { good: 5, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
+          completeness: 1,
+          state: {
+            valueType: 'STRING',
+            lastValue: 'STOPPED',
+            sampleCount: 5,
+            changeCount: 1,
+            stateCounts: [
+              { value: 'RUNNING', count: 4 },
+              { value: 'STOPPED', count: 1 },
+            ],
+          },
+        },
+      ],
+    ],
+  ]);
+  const multiViewModel = buildTrendViewModel({
+    selectedPoints: [runStatePoint],
+    window: fiveMinWindow,
+    currentBucketsByDevice: multiStateBuckets,
+  });
+  const multiTrack = multiViewModel.stateTracks[0]!;
+  assert.equal(multiTrack.segments[0]?.kind, 'RUNNING');
+  assert.ok(Math.abs(multiTrack.runningRatio - 0.8) < 1e-6);
+  assert.equal(multiTrack.slots[0]?.breakdown, '运行 4 · 停止 1');
 });
 
 test('buildTrendOverlays projects overlapping alarms and commands, filters unselected devices, and collapses dense rail events', () => {
@@ -492,9 +541,10 @@ test('buildTrendOverlays projects overlapping alarms and commands, filters unsel
 
   assert.equal(overlays.alarmSpans.length, 2);
   assert.equal(overlays.alarmSpans[0]?.alarm.alarmId, 'alm-site-active');
-  assert.equal(overlays.alarmSpans[0]?.startSlotAt, Date.parse('2026-10-12T00:00:00.000Z'));
-  assert.equal(overlays.alarmSpans[0]?.endSlotAt, Date.parse('2026-10-12T00:59:00.000Z'));
+  assert.equal(overlays.alarmSpans[0]?.clampedStartMs, Date.parse('2026-10-12T00:00:00.000Z'));
+  assert.equal(overlays.alarmSpans[0]?.clampedEndMs, Date.parse('2026-10-12T01:00:00.000Z'));
   assert.equal(overlays.commandMarks.length, 2);
+  assert.equal(overlays.commandMarks[0]?.atMs, Date.parse('2026-10-12T00:10:30.000Z'));
   assert.match(overlays.commandMarks[0]!.summaryLabel, /7\.5/);
 
   // 3 rail items: [00:00 site alarm], [00:10 cluster of alm-chiller-1 + cmd-1], [00:45 cmd-2]

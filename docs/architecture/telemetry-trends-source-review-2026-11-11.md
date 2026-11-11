@@ -1,6 +1,6 @@
 # 多点位历史趋势的降采样、开关量分栏与事件叠加参照核对（2026-11-11）
 
-运维人员排查冷站异常（例如冷冻水出水温度偏高、主机频繁加减载或水泵变频振荡）时，需要把同一时间段内的主机功率、进出水温度、水泵频率、温度设定值和启停运行状态拉到同一条时间轴上比对，并看到这段时间里触发过哪些告警事件、下发过哪些控制指令。本文核对四个外部开源实现的一手源码与本仓库现有代码，供历史趋势视图（`/operations/trends`，对应 `#757`、`#758`、`#759`）定稿接口契约和页面规则时直接取用。
+运维人员排查冷站异常（例如冷冻水出水温度偏高、主机频繁加减载或水泵变频振荡）时，需要把同一时间段内的主机功率、进出水温度、水泵频率、温度设定值和启停运行状态拉到同一条时间轴上比对，并看到这段时间里触发过哪些告警事件、下发过哪些控制指令。本文核对四个外部开源实现的一手源码与本仓库实现（对应 `#766`、PR `#772`，见 `docs/specs/telemetry-trends.md`），记录各项规则的采纳、改造与拒绝决定。
 
 | 项目 | 核对版本 | 固定提交 / 位置 | 许可证与借鉴边界 |
 | --- | --- | --- | --- |
@@ -49,82 +49,50 @@
 
 ---
 
-## 本仓库现状
+## 本仓库现状（已实现）
 
 ### 1. ClickHouse 历史表与读数聚合实现
 
-- **原始表与物化汇总表都已就位**：`infra/telemetry/clickhouse/init/001-telemetry-history.sql:3-53` 的 `telemetry_history.observations` 按 `(tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key, sampled_at, observation_id)` 排序，记录 `point_type`、`value_type`（`NUMBER | STRING | BOOLEAN | JSON`）、`value_number`、`value_string`、`value_boolean`、毫秒级 UTC `sampled_at`、读数质量 `quality` 与落库时间 `projected_at`。同目录下的 `001-telemetry-history.sql:55-135`、`003-telemetry-rollups.sql:4-129` 和 `004-counter-semantics.sql:277-329` 还建有 `numeric_1min`、`numeric_15min`、`numeric_hourly` 和 `counter_1min`、`counter_15min`、`counter_hourly` 物化表。
-- **查询服务当前直接扫 `observations` 做快照一致性聚合**：`modules/telemetry/internal/history/aggregate.go:308-513` 带 `projected_at < snapshot_cutoff` 和读数质量过滤（`VALID_ONLY` 只取 `GOOD`；`USABLE` 取 `GOOD | PARTIAL | ESTIMATED | MANUAL`）直接按主键前缀聚合 `observations`。对冷站单设备 ≤8 个点位、7 天窗口的数据规模，ClickHouse 主键前缀扫描本身就是毫秒级。
+- **原始表与物化汇总表已就位**：`infra/telemetry/clickhouse/init/001-telemetry-history.sql:3-53` 的 `telemetry_history.observations` 按 `(tenant_id, site_id, point_id, sensor_id, device_id, telemetry_key, sampled_at, observation_id)` 排序，记录 `point_type`、`value_type`（`NUMBER | STRING | BOOLEAN | JSON`）、`value_number`、`value_string`、`value_boolean`、毫秒级 UTC `sampled_at`、读数质量 `quality` 与落库时间 `projected_at`。同目录下还建有 `numeric_1min`、`numeric_15min`、`numeric_hourly` 和 `counter_1min`、`counter_15min`、`counter_hourly` 物化表。
+- **查询服务直接扫 `observations` 做快照一致性聚合**：`modules/telemetry/internal/history/aggregate.go` 带 `projected_at < snapshot_cutoff` 和读数质量过滤（`VALID_ONLY` 只取 `GOOD`；`USABLE` 取 `GOOD | PARTIAL | ESTIMATED | MANUAL`）按主键前缀聚合 `observations`：
+  - `AggregateGranularity`（`libs/telemetryhistorymodel/aggregation.go`、`contracts/http/s2-telemetry-public.openapi.json`）支持 `MINUTE | FIVE_MINUTE | QUARTER_HOUR | HOUR | DAY | WEEK | MONTH` 共 7 档。
+  - `MINUTE` 与 `FIVE_MINUTE` 单点位最多允许 `720` 个时间槽，`QUARTER_HOUR` 及以上单点位最多允许 `1000` 个时间槽（兼容用电负荷与月报 10 天 `960` 个 15 分钟桶的分块拉取），且单次请求总桶数受 `时间槽数 × keys 数量 <= 5760` 参数校验与响应上限双层约束。
+  - 数值型 `TELEMETRY` 与 `SETTING` 点位统一输出 `gauge` 数值桶（`average / minimum / maximum / first / last / sampleCount`）；`STATE` 点位以及登记为字符串或布尔型的 `TELEMETRY` / `SETTING` 点位（含松雅轩与模拟冷站的 `*.run_state`）统一输出离散 `state` 桶，并返回按频次降序、字典序升序确定性排列的 `stateCounts`。
 
-### 2. 现有网关与遥测历史接口的权限链路及 4 个具体缺口
+### 2. 公开接口与权限链路
 
-- **已跑通的公开接口与权限链路**：`contracts/http/s2-telemetry-public.openapi.json:176-233,572-789` 暴露了两个按单台设备查询的 POST 接口，由 `cmd/energy-api/internal/gateway/device_history.go:20-114` 转发到 `modules/telemetry/internal/query/server.go:24-25,273-367`：
-  - `POST /api/v1/telemetry/device-series:query`（原始读数序列，单设备 `1..8` 个 `keys`，`pageSize <= 500`）
-  - `POST /api/v1/telemetry/device-series:aggregate`（分桶聚合，单设备 `1..8` 个 `keys`，返回数值桶 `average/minimum/maximum`、电表累计量差值桶 `delta`、状态计数桶 `stateCounts`）
-  - 两个接口都在网关侧按 `(deviceId, keys)` 校验 `telemetry.history.read` 权限（`device_history.go:38,82`、`contracts/iam/capability-catalog.v1.json:28`），再签发绑定了请求范围 SHA-256 摘要 `ScopeDigest` 的短期委托令牌交由 `telemetry-query-service` 复核（`server.go:296-304,344-352`）。
-- **对照 `/operations/trends` 排障需求，现有历史接口存在 4 个具体缺口**：
-  1. **缺少 15 分钟以下的聚合粒度**：`AggregateGranularity`（`libs/telemetryhistorymodel/aggregation.go:20-28`、`contracts/http/s2-telemetry-public.openapi.json:673`）目前只支持 `QUARTER_HOUR | HOUR | DAY | WEEK | MONTH`。看 `1h` 窗口时 `QUARTER_HOUR` 只有 4 个点，看 `6h` 只有 24 个点，无法看清主机加减载与水温波动过程。
-  2. **`MaximumAggregateBuckets = 1000` 卡的是「单设备所有请求点位合计桶数」**：`modules/telemetry/internal/history/aggregate.go:72` 检查时间槽数 `len(periods) <= 1000`，但 `aggregate.go:117`、`libs/telemetryhistorymodel/aggregation.go:232` 和 `s2-telemetry-public.openapi.json:770` 同时限制返回数组总长度 `len(buckets) <= 1000`。一旦引入 `1m` 粒度，单台冷机选 4 个点位看 `6h` 就会产生 `4 × 360 = 1440` 个桶，直接触发 `bucket count exceeds maximum` 失败。
-  3. **多点位原始查询 `device-series:query` 存在分页饿死与限流扣减问题**：`modules/telemetry/internal/history/client.go:329-330` 写的是 `ORDER BY telemetry_key, history_source.sampled_at LIMIT PageSize+1`（`MaximumHistoryPageSize = 500`，`libs/telemetryhistorymodel/model.go:19`）——同一台设备一次查 4 个点位时，若排在字母序前面的第 1 个点位在窗口内有 500 条采样，第 1 页返回的全是第 1 个点位，后 3 个点位完全拿不到数据。此外 `QueryDeviceHistory`（`device_history.go:30`）每次调用都会扣减 `limitpolicy.DimensionExpensiveQuery` 配额，而聚合接口 `QueryDeviceHistoryAggregate`（`device_history.go:72`）不扣减该配额。
-  4. **设定值点位与字符串型运行状态点位在 `aggregate.go` 中被漏掉**：
-     - `libs/telemetryhistorymodel/aggregation.go:278` 与 `aggregate.go:323` 只允许 `point_type IN ('TELEMETRY', 'COUNTER', 'STATE')`，所有 `point_type = 'SETTING'` 的设定值点位（如冷冻水出水温度设定、频率设定）调聚合接口一律返回空。
-     - 真实站点配置 `deploy/sites/songyaxuan.site.json:232-237` 与模拟冷站契约 `contracts/registry/central-plant-device-points.v2.json:9,26,38,50` 中，`chiller.run_state`、`chwp.run_state`、`cwp.run_state`、`cooling_tower.run_state` 均登记为 `"pointType": "TELEMETRY", "valueType": "STRING"`；但 `aggregate.go:366-367` 的 `gaugeAggregateQuery` 只查 `point_type = 'TELEMETRY' AND value_type = 'NUMBER'`，而 `stateAggregateQuery`（`aggregate.go:471`）只查 `point_type = 'STATE'`。两边条件都不命中，导致冷站运行状态点位调 `device-series:aggregate` 时静默返回 0 个桶。
+- **遥测聚合接口**：`POST /api/v1/telemetry/device-series:aggregate` 由 `cmd/energy-api/internal/gateway/device_history.go` 校验 `(deviceId, keys)` 的 `telemetry.history.read` 权限后，签发绑定了请求范围摘要 `ScopeDigest` 的委托令牌交由 `telemetry-query-service` 复核。
+- **告警区间交集查询**：`GET /api/v1/alarms`（`cmd/energy-api/internal/gateway/alarm.go`、`modules/alarm/pkg/alarmservice/postgres.go`）要求 `alarm.list`（网关侧映射 `alarm:read`），支持可选参数 `activeFrom` / `activeTo`，按 `first_occurred_at <= activeTo AND (cleared_at IS NULL OR cleared_at >= activeFrom)` 一次覆盖窗口前触发且持续到窗口内的长告警与窗口内新触发告警。
+- **控制指令查询**：`GET /api/v1/commands?siteId=...`（`cmd/energy-api/internal/gateway/command.go`）校验 `site.read` 站点可见性后返回最近 100 条控制指令及状态流转时间。
 
-### 3. 告警事件与控制指令只读接口现状
+### 3. 网页端分栏曲线、缺数留白与排障联动
 
-- **告警事件（`modules/alarm`）**：公开接口 `GET /api/v1/alarms?siteId=...&limit=1..200&cursor=...&condition=...`（`cmd/energy-api/internal/gateway/alarm.go:478-481,654-702`、`modules/alarm/pkg/alarmservice/postgres.go:54-120`）要求 `alarm:read` 权限，按 `first_occurred_at DESC, alarm_id DESC` 游标分页。返回结构（`apps/hvac-web/src/features/alarms/alarm-api.ts:24-42`）已包含 `deviceId`、`firstOccurredAt`、`clearedAt`、`condition`（`ACTIVE | CLEARED`）、`currentSeverity`、`peakSeverity` 和 `title`。需要注意：前端现有的 `alarmHistoryQuery`（`alarm-api.ts:170-187`）在翻页遇到 `firstOccurredAt < since` 时立即停止；如果一条告警在趋势窗口开始前就已经触发、直到窗口内才恢复或至今仍处于 `ACTIVE`，仅靠 `firstOccurredAt` 截断会漏掉它。
-- **控制指令（`modules/command`）**：公开接口 `GET /api/v1/commands?siteId=...&limit=1..100`（`cmd/energy-api/internal/gateway/command.go:350-388`、`modules/command/pkg/commandservice/postgres.go:357-395`）校验站点可见性后按 `created_at DESC, command_id DESC` 返回最近 100 条指令，含 `commandId`、`deviceId`、`pointId`、`capability`、`parameters`、`status`、`createdAt` 及状态流转明细 `transitions`（`apps/hvac-web/src/features/control/command-api.ts:23-38`）。当前人工下发指令在 7 天窗口内远少于 100 条，可直接复用。
-
-### 4. 网页端图表封装与现有缺数连线缺陷
-
-- **已有基础能力**：`apps/hvac-web/src/features/operations/realtime/use-plant-history.ts:24-49` 已跑通用 TanStack Query `useQueries` 按设备分组并发调用 `POST /api/v1/telemetry/device-series:aggregate`；`apps/hvac-web/src/features/operations/systems-devices/components/DeviceInspector.tsx:191-230` 已用 Recharts `<ComposedChart>` 画出 `[minimum, maximum]` 区间包络带加 `average` 均值线。`recharts@3.8.0` 原生支持多图游标联动 `syncId` + `syncMethod="value"`（`node_modules/recharts/types/synchronisation/types.d.ts:37`）、数值时间轴 `<XAxis type="number" scale="time" domain={[fromMs, toMs]} />`（`cartesian/XAxis.d.ts:19,56-81`）、`connectNulls={false}`（`cartesian/Line.d.ts:62-66`）、`type="stepAfter"`（`shape/Curve.d.ts:11`）以及 `<ReferenceArea>` / `<ReferenceLine>`（`cartesian/ReferenceArea.d.ts:21-57`、`cartesian/ReferenceLine.d.ts:45-53`）。
-- **现存缺数失真问题**：`apps/hvac-web/src/features/operations/realtime/components/RealtimeWorkspace.tsx:150-160` 和 `DeviceInspector.tsx:191-195,224` 把后端返回的非空 `buckets` 直接塞进默认分类横轴（`type="category"`），既没有补齐空桶，也没有插入 `null`。由于 `aggregate.go:369` 只返回 `included_count > 0` 的非空桶，如果网关在 10:00 到 12:00 断联两小时，图上会把 09:45 和 12:00 的两个点紧挨着连成一条斜线，既看不出两小时缺数，也把横轴时间比例尺挤歪了。
+- **统一毫秒时间槽补空**：`apps/hvac-web/src/features/operations/trends/timeline.ts` 按起止时间、站点时区和聚合粒度生成连续时间槽，缺读数的槽位显式填 `null`（绝不填 `0`）。历史趋势（`TrendsChartStack.tsx`）、实时运行（`RealtimeWorkspace.tsx`）和设备详情抽屉（`DeviceInspector.tsx`）均使用 `<XAxis type="number" scale="time" domain={[fromMs, toMs]} />` 搭配 `connectNulls={false}`，断联时段直接留白断线。
+- **上下分栏像素级对齐与双向游标同步**：`apps/hvac-web/src/features/operations/trends/components/` 将事件时间轴窄轨（`TrendsEventRail.tsx`）、按物理单位拆分的模拟量曲线栈（`TrendsChartStack.tsx`）和底部设备启停状态条（`TrendsStateLane.tsx`）统一收敛在同一水平绘图区内边距（左 `48px` 纵轴区、右 `12px` 留白）中，悬停任一曲线或状态条都会双向联动十字游标与时刻读数。
 
 ---
 
-## 建议采纳与取舍
+## 采纳、改造与拒绝决定
 
-### 1. 时间窗口与聚合桶宽规则（改造后采用 ThingsBoard + OpenEMS + Grafana，不采用 MyEMS 全量裸查）
+### 1. 时间窗口、聚合档位与原始值取舍
 
-- **不采用** MyEMS 不设上限拉全量原始点的做法；默认一律走服务端分桶聚合，单条序列单次查询最多返回 **720 个桶**（与 ThingsBoard `ts_max_intervals = 700` 同量级）。
-- **最多同屏对比 8 个点位**：足够同时放下「主机功率 + 冷冻水供回水温度 + 出水温度设定 + 冷却水进出水温度 + 水泵频率 + 主机运行状态」完整排障组合；同一台设备最多 8 个点位也恰好对齐现有 `keys` 长度上限，跨 2–4 台设备时前端按 `deviceId` 分组并发 2–4 个聚合请求。
-- **四个标准窗口的默认桶宽与可选档位**：
-  - `1h`（过去 60 分钟）：默认 `1m`（`MINUTE`，60 桶，含均值与最大/最小包络带）；仅在 `1h` 窗口允许手动切到「原始值」看逐次采样点，`6h / 今日 / 7d` 禁用「原始值」。
-  - `6h`（过去 6 小时）：默认 `5m`（`FIVE_MINUTE`，72 桶），允许手动切 `1m`（360 桶）或 `15m`（24 桶）。
-  - `今日`（按站点时区从当日 `00:00` 到当前时刻，例如今日 14:30 打开即查 `00:00–14:30`）：已过时长 `<= 2h` 自动用 `1m`，`2h–8h` 用 `5m`，`> 8h` 用 `15m`（`QUARTER_HOUR`，全天最多 96 桶，夏令时切换日最多 100 桶）。
-  - `7d`（按站点时区最近 7 天，首尾共 168 小时）：默认 `1h`（`HOUR`，168 桶，与 OpenEMS `days <= 12 -> 1h` 一致），允许手动切细到 `15m`（672 桶）。
-- **支持昨日同时段虚线对比（改造后采用 ThingsBoard `timeForComparison`）**：在 `1h / 6h / 今日` 窗口提供「对比昨日同时段」开关（`7d` 对应「对比上周同时段」），开启后用相同聚合粒度多查一组按站点本地时刻平移 `-1d`（或 `-7d`）的序列，以同色半透明虚线叠在对应分栏内。
+- **已拒绝（MyEMS 全量裸查原始表）**：历史趋势不拉取无上限原始行，一律走服务端分桶聚合。
+- **已拒绝（`1 小时` 窗口开放 `device-series:query` 秒级原始值模式）**：`1 小时` 窗口直接以 `MINUTE`（`1 分钟`，60 桶，含均值实线与最小/最大包络带）作为最细档位，既能看清主机加减载与水温短时波动，又不触发 `device-series:query` 的 `DimensionExpensiveQuery` 限流扣减与多点位分页截断。
+- **已改造采纳（ThingsBoard + OpenEMS + Grafana 分桶规则）**：
+  - 同屏最多对比 `8` 个点位，前端按 `deviceId` 分组并发调用 `device-series:aggregate`。
+  - 标准窗口默认档位：`1 小时 → 1 分钟`（60 桶）、`6 小时 → 5 分钟`（72 桶）、`今日`（站点本地零点至今，`<= 2h` 取 `1 分钟`、`2h–8h` 取 `5 分钟`、`> 8h` 取 `15 分钟`）、`7 天 → 1 小时`（168 桶，可切 `15 分钟` 672 桶），同时支持 `自定义` 起止时段选择。
+  - 支持勾选「对比昨日同时段」（跨度超过 1 天时自动切换为「对比上周同时段」），按站点本地时刻平移拉取对照序列并以半透明虚线叠画。
 
-### 2. 连续模拟量、设定值与离散状态的分栏布局（采纳 Grafana 分栏联动，不采用单图多于双 Y 轴混画）
+### 2. 连续模拟量分栏、设定值阶梯线与离散状态条
 
-- **按量纲与值形态拆成共享数值时间轴、同步十字准星的上下分栏（`<ComposedChart syncId="ops-trends" syncMethod="value">`）**：
-  - **连续模拟量分栏**（如温度栏 `°C`、功率栏 `kW`、频率与开度栏 `Hz / %`）：同量纲点位自动归入同一分栏共用同一把 Y 轴比例尺（例如冷冻水供水温度、回水温度和出水温度设定值都在 `°C` 栏，一眼就能看出供回水温差和实际出水偏离设定值多少）；单张分栏最多允许左右 2 个 Y 轴，超出自动另起一栏。聚合模式下模拟量画均值实线 + `12%` 透明度 `[minimum, maximum]` 包络带；**设定值点位统一用 `type="stepAfter"` 阶梯虚线**，不用斜线插值伪造渐变过程。
-  - **底部离散状态泳道栏**（运行状态、启停布尔量、故障码状态）：单独放在底部的紧凑窄栏（每条点位高 `28–36px`），与上方模拟量图完全对齐同一 `<XAxis type="number" domain={[fromMs, toMs]} />` 和十字准星，绝不与 `kW`、`°C` 共用数值 Y 轴。聚合桶内取 `stateCounts` 中占比最高的状态着色（桶内发生过状态切换或出现过异常状态时用斜纹/边框标出，悬停提示框列出该桶完整计数，如 `运行 4 次 / 停机 1 次`）；原始值模式下直接用 `stepAfter` 阶梯线渲染。
+- **已采纳（Grafana 模拟量分栏 + 独立状态条）**：
+  - 连续模拟量按物理单位（`kW`、`°C`、`m³/h`、`Hz` 等）拆成共享时间轴的上下独立分栏，每栏单一纵轴，分类色严格按每个分栏内 `chart-1..chart-4` 顺序分配，不混用状态语义色。
+  - 模拟量画均值实线 + `12%` 透明度 `[minimum, maximum]` 包络带；设定值（`SETTING`）画 `type="stepAfter"` 阶梯虚线。
+  - 离散运行状态收进底部紧凑的「设备启停状态」条，优先按桶内 `stateCounts` 样本数最多的状态着色（样本数相同时按 `故障 > 运行 > 停止` 优先），并按 `RUNNING` 样本占比计算运行比例。
 
-### 3. 缺数断线与离线边界规则（采纳 Grafana 显式补空断线规则）
+### 3. 告警区间、控制指令竖线与密集事件折叠
 
-- **横轴一律使用真实毫秒时间戳数值轴（`<XAxis type="number" domain={[fromMs, toMs]} />`）**，不再使用会把空档挤没的字符串分类轴。
-- **分桶聚合模式**：前端按窗口起止时间和桶宽生成完整时间槽，后端未返回读数的空槽一律填 `null`（绝不填 `0`），所有 `<Line>` 与 `<Area>` 保持 `connectNulls={false}`，缺 1 个桶即断开连线。
-- **原始值模式（仅 `1h`）**：扫描相邻采样点间隔与窗口首尾边界，设断线阈值 `gapThreshold = max(3 * 相邻采样间隔中位数, 5 分钟)`；一旦相邻两点间隔超过 `gapThreshold`，或末条读数距窗口右边界超过 `gapThreshold`（网关已离线），就在前一点采样时间 `+ 1ms` 处插入一个 `null` 点——这样模拟量不会跨停机断联期拉出假斜线，开关量 `stepAfter` 也不会把断联前的「运行」状态一直画到当前时刻。
-
-### 4. 告警区间与控制指令叠加（采纳 Grafana 低透明度区间 + 细虚线 + 事件角标窄轨）
-
-- **独立显隐开关与权限降级**：工具栏提供「告警事件」「控制指令」两个开关；默认只展示与当前已选点位所属 `deviceId` 相关的事件（可切「全站事件」），从源头过滤掉无关设备干扰。会话缺少 `alarm:read` 权限时自动禁用告警开关，不阻塞趋势曲线加载。
-- **告警画底色区间，指令画瞬时虚线，文字收进轨道角标**：
-  - **告警事件**：按 `[max(firstOccurredAt, fromMs), min(clearedAt ?? nowMs, toMs)]` 在各分栏底层画 `<ReferenceArea>`，填充不透明度控制在 `0.08–0.10`，不在绘图区内部叠文字。
-  - **控制指令**：按 `createdAt` 画贯穿分栏的细虚线 `<ReferenceLine strokeDasharray="4 4" />`。
-  - **密集折叠**：在共享时间轴紧上方设一条 `24px` 高的事件角标窄轨；像素间距小于 `16px` 的多条告警或指令自动聚合成单个 `+N` 角标，悬停或点击后再展开事件清单（告警标题、峰值级别、起止与恢复时间；指令动作、目标参数、最终执行状态）。
-
-### 5. 最小接口与实现收口建议（供 `#759` 规格定稿直接拍板）
-
-- **不新建跨模块聚合网关接口**：点位历史读数归 `modules/telemetry`，告警列表归 `modules/alarm`（`GET /api/v1/alarms`），控制指令归 `modules/command`（`GET /api/v1/commands`），前端按各自权限独立读取并在同一时间轴对齐，守住模块数据归属边界。
-- **对 `POST /api/v1/telemetry/device-series:aggregate` 做 3 处向后兼容的最小扩展**：
-  1. `AggregateGranularity` 新增 `MINUTE`（`1m`）和 `FIVE_MINUTE`（`5m`）两档（涉及 `libs/telemetryhistorymodel/aggregation.go`、`modules/telemetry/internal/history/aggregate.go`、`contracts/http/s2-telemetry-public.openapi.json`）。
-  2. 把桶数校验拆成「单点位时间槽数 `len(periods) <= 720`」与「单设备单次响应总桶数 `len(buckets) <= 5760`（`8 个点位 × 720 桶`）」，消除单设备多点位查 `6h` 分钟桶时的 `1000` 桶误伤。
-  3. 修正 `aggregate.go` 的点位分流条件：
-     - `point_type = 'COUNTER'` 继续走累计读数差值桶（`delta`）；
-     - `point_type IN ('TELEMETRY', 'SETTING') AND value_type = 'NUMBER'` 走数值聚合桶（`average / minimum / maximum`），让温度与频率设定值可查；
-     - `point_type = 'STATE' OR (point_type IN ('TELEMETRY', 'SETTING') AND value_type IN ('STRING', 'BOOLEAN'))` 走状态计数桶（`stateCounts`，布尔值统一记为 `'true' / 'false'`），修复 `songyaxuan.site.json` 与模拟器里 `*.run_state`（`TELEMETRY + STRING`）聚合为空的问题。
-- **留给 `#759` 拍板的两个具体边界项**：
-  1. **`1h` 窗口是否保留「原始值」档位**：若 `1h` 直接以 `1m` 聚合（含 `min/max/avg`）作为最细档，前端完全不碰 `device-series:query` 的 `DimensionExpensiveQuery` 限流与多点位分页截断问题；若确需保留 `1h` 原始值档，则需在 `modules/telemetry/internal/history/client.go:329-330` 用窗口函数 `ROW_NUMBER() OVER (PARTITION BY telemetry_key ORDER BY sampled_at)` 按每个点位均衡限制返回条数（如每点位 ≤360 条），避免排在前面的 `telemetry_key` 把 `PageSize = 500` 占满。
-  2. **跨窗口长告警补齐方式**：默认可由前端同时请求 `condition=ACTIVE` 与按 `firstOccurredAt` 倒序的最近分页并在本地按区间相交合并；若需严格覆盖「窗口开始前很久触发、且已在窗口内恢复」的历史长告警，可在 `GET /api/v1/alarms` 上新增可选的区间交集查询参数 `activeFrom` / `activeTo`（SQL 条件 `first_occurred_at <= $to AND (cleared_at IS NULL OR cleared_at >= $from)`）。
+- **已改造采纳（Grafana 低透明度区间 + 瞬时竖线 + 独立窄轨折叠）**：
+  - 工具栏提供「叠加告警」（需 `alarm.list` 权限）与「叠加控制指令」（需 `site.read` 权限）两个独立开关，缺少对应权限时仅禁用该开关，不阻塞趋势图渲染。
+  - 告警按真实起止时刻夹紧到 `[fromMs, toMs]` 画低透明度 `<ReferenceArea>`；控制指令按真实执行/创建时间画细虚线 `<ReferenceLine>`。
+  - 上方事件时间轴窄轨按 `2.5%` 宽度阈值把密集邻近事件自动聚合成 `+N 条事件` 胶囊（告警胶囊带级别几何符号与软底色），点开后可跳去告警详情、运行调节，或在有 `work-order.create` 权限时直接带入趋势时段与排查点位创建工单。

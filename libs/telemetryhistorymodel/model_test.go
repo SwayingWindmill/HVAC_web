@@ -155,6 +155,11 @@ func TestAggregateGranularityMinuteAndFiveMinuteEnforce720PerKeyAnd5760TotalLimi
 	}
 
 	keys := []string{"k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8"}
+	tooManyTotalQuarterHours := tenDaysQuarterHour
+	tooManyTotalQuarterHours.Keys = keys
+	if err := tooManyTotalQuarterHours.Validate(); err == nil {
+		t.Fatal("8 keys x 960 QUARTER_HOUR buckets (7680 > 5760) must fail input validation")
+	}
 	multiKeyQuery := DeviceHistoryAggregateQuery{
 		TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID,
 		Keys: keys, From: from, To: from.Add(6 * time.Hour),
@@ -207,6 +212,10 @@ func TestTelemetryAndSettingDiscreteStateBucketsAreAccepted(t *testing.T) {
 				Quality: AggregateQualitySummary{Good: 5}, Completeness: 1,
 				State: &StateAggregate{
 					ValueType: ValueTypeString, LastValue: []byte(`"RUNNING"`), SampleCount: 5, ChangeCount: 1,
+					StateCounts: []StateCount{
+						{Value: []byte(`"RUNNING"`), Count: 4},
+						{Value: []byte(`"STOPPED"`), Count: 1},
+					},
 				},
 			},
 			{

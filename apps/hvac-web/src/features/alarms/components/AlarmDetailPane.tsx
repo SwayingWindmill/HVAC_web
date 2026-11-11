@@ -21,7 +21,8 @@ import {
 import { listWorkOrders, type WorkOrderPriority } from '@/api/work-orders';
 import { useAssistantPanel } from '@/features/assistant/assistant-panel-store';
 import { siteAssetModelQuery } from '@/features/operations/trends/query';
-import { buildAlarmTrendSearch, buildTrendCatalog } from '@/features/operations/trends/trends-model';
+import { buildTrendCatalog } from '@/features/operations/trends/trends-model';
+import { buildAlarmTrendSearch } from '@/features/operations/trends/trends-overlays';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';

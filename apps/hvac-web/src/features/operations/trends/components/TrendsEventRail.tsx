@@ -1,16 +1,35 @@
 import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { BellRing, ChevronDown, ChevronRight, Plus, SlidersHorizontal } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, SlidersHorizontal } from 'lucide-react';
+import { SeverityMark } from '@/components/severity-mark';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { SeverityBadge } from '@/features/alarms/alarm-presentation';
+import type { AlarmSeverity } from '@/features/alarms/alarm-api';
+import {
+  SEVERITY_COLORS,
+  SEVERITY_LEVEL,
+  SeverityBadge,
+  severityRank,
+} from '@/features/alarms/alarm-presentation';
 import { formatCompactTime, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import type {
   TrendOverlayAlarmInput,
   TrendOverlaysModel,
   TrendRailCluster,
-} from '../trends-model';
+} from '../trends-overlays';
+
+function topClusterSeverity(cluster: TrendRailCluster): AlarmSeverity | null {
+  let best: AlarmSeverity | null = null;
+  for (const ev of cluster.events) {
+    if (ev.kind !== 'alarm') continue;
+    const sev = ev.span.alarm.currentSeverity;
+    if (!best || severityRank(sev) < severityRank(best)) {
+      best = sev;
+    }
+  }
+  return best;
+}
 
 export function TrendsEventRail({
   siteId,
@@ -60,11 +79,11 @@ export function TrendsEventRail({
       </div>
 
       {!collapsed && overlays.railItems.length > 0 ? (
-        <div className="relative h-8 w-full rounded-md border border-divider bg-background px-2">
-          <div className="absolute inset-x-3 top-1/2 h-px -translate-y-1/2 bg-divider" aria-hidden="true" />
+        <div className="relative mr-3 ml-12 h-8 rounded-md border border-divider bg-background">
+          <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-divider" aria-hidden="true" />
 
           {overlays.railItems.map((cluster: TrendRailCluster) => {
-            const clampedLeft = Math.min(94, Math.max(6, cluster.anchorPercent));
+            const clampedLeft = Math.min(98, Math.max(2, cluster.anchorPercent));
             const isCluster = cluster.events.length > 1;
             const firstEvent = cluster.events[0]!;
             const isOpen = openClusterId === cluster.id;
@@ -75,7 +94,8 @@ export function TrendsEventRail({
                 ? firstEvent.span.alarm.title
                 : firstEvent.mark.summaryLabel;
 
-            const hasAlarm = cluster.events.some((ev) => ev.kind === 'alarm');
+            const alarmSeverity = topClusterSeverity(cluster);
+            const severityColor = alarmSeverity ? SEVERITY_COLORS[alarmSeverity] : null;
 
             return (
               <Popover
@@ -87,16 +107,27 @@ export function TrendsEventRail({
                   <button
                     type="button"
                     aria-label={buttonLabel}
-                    style={{ left: `${clampedLeft}%` }}
+                    style={{
+                      left: `${clampedLeft}%`,
+                      ...(severityColor
+                        ? {
+                            color: severityColor,
+                            borderColor: `color-mix(in oklab, ${severityColor} 35%, transparent)`,
+                            backgroundColor: `color-mix(in oklab, ${severityColor} 12%, var(--popover))`,
+                          }
+                        : {}),
+                    }}
                     className={cn(
-                      'absolute top-1/2 inline-flex max-w-44 -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium shadow-2xs transition-colors',
-                      hasAlarm
-                        ? 'border-destructive/35 bg-destructive-soft text-destructive-text hover:bg-destructive-soft/80'
-                        : 'border-primary/35 bg-primary-soft text-primary hover:bg-primary-soft/80',
+                      'absolute top-1/2 inline-flex max-w-44 -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium shadow-2xs transition-opacity hover:opacity-90',
+                      !severityColor && 'border-primary/35 bg-primary-soft text-primary',
                     )}
                   >
-                    {hasAlarm ? (
-                      <BellRing className="size-3 shrink-0" aria-hidden="true" />
+                    {alarmSeverity ? (
+                      <SeverityMark
+                        level={SEVERITY_LEVEL[alarmSeverity]}
+                        label=""
+                        className="size-2 shrink-0"
+                      />
                     ) : (
                       <SlidersHorizontal className="size-3 shrink-0" aria-hidden="true" />
                     )}

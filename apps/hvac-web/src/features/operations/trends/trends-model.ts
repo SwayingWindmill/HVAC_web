@@ -1,11 +1,15 @@
 import type { Asset, Device, SiteAssetModel, TelemetryPoint } from '../../../api/generated/platformGateway.gen.ts';
-import type { DeviceHistoryAggregateBucket } from '../../../api/generated/s2Telemetry.gen.ts';
+import type {
+  DeviceHistoryAggregateBucket,
+  DeviceHistoryStateAggregate,
+} from '../../../api/generated/s2Telemetry.gen.ts';
 import { formatTelemetryUnit, telemetryPointDefinition } from '../../../domain/centralPlantTelemetry.ts';
 import { siteMidnight, wallTime } from '../../energy-analysis/consumption/model.ts';
 import { buildTimeSlots, type TimeSlot, type TrendGranularity } from './timeline.ts';
 
 export const MAX_TREND_POINTS = 8;
 export const MAX_TREND_BUCKETS_PER_POINT = 720;
+const MAX_SERIES_PER_LANE = 4;
 
 export type TrendWindowPreset = '1h' | '6h' | 'today' | '7d' | 'custom';
 
@@ -125,6 +129,7 @@ export interface TrendStateSlot {
   readonly startMs: number;
   readonly endMs: number;
   readonly state: TrendNormalizedState | null;
+  readonly breakdown?: string;
 }
 
 export interface TrendStateSegment {
@@ -159,11 +164,14 @@ const CHART_COLOR_VARS = [
   'var(--chart-2)',
   'var(--chart-3)',
   'var(--chart-4)',
-  'var(--chart-5)',
-  'var(--success)',
-  'var(--warning)',
-  'var(--primary)',
 ] as const;
+
+const STATE_KIND_PRIORITY: Readonly<Record<TrendStateKind, number>> = {
+  FAULT: 3,
+  RUNNING: 2,
+  OTHER: 1,
+  STOPPED: 0,
+};
 
 const UNIT_ORDER: Readonly<Record<string, number>> = {
   kW: 10,
@@ -253,6 +261,70 @@ function normalizeDiscreteState(raw: unknown): TrendNormalizedState | null {
   return { kind: 'OTHER', label: JSON.stringify(raw) };
 }
 
+function projectStateBucket(state: DeviceHistoryStateAggregate): {
+  readonly dominant: TrendNormalizedState | null;
+  readonly latest: TrendNormalizedState | null;
+  readonly runningSamples: number;
+  readonly totalSamples: number;
+  readonly breakdown?: string;
+} {
+  const latest = normalizeDiscreteState(state.lastValue);
+  if (state.stateCounts && state.stateCounts.length > 0) {
+    const merged = new Map<string, { state: TrendNormalizedState; count: number }>();
+    let runningSamples = 0;
+    let totalSamples = 0;
+
+    for (const entry of state.stateCounts) {
+      if (entry.count <= 0) continue;
+      const norm = normalizeDiscreteState(entry.value);
+      if (!norm) continue;
+      totalSamples += entry.count;
+      if (norm.kind === 'RUNNING') {
+        runningSamples += entry.count;
+      }
+      const key = `${norm.kind}:${norm.label}`;
+      const existing = merged.get(key);
+      if (existing) {
+        merged.set(key, { state: norm, count: existing.count + entry.count });
+      } else {
+        merged.set(key, { state: norm, count: entry.count });
+      }
+    }
+
+    if (merged.size > 0) {
+      const sorted = [...merged.values()].sort((left, right) => {
+        if (left.count !== right.count) return right.count - left.count;
+        const priDiff = STATE_KIND_PRIORITY[right.state.kind] - STATE_KIND_PRIORITY[left.state.kind];
+        if (priDiff !== 0) return priDiff;
+        return left.state.label.localeCompare(right.state.label, 'zh-CN');
+      });
+      const dominant = sorted[0]!.state;
+      const breakdown =
+        sorted.length > 1
+          ? sorted.map((item) => `${item.state.label} ${item.count}`).join(' · ')
+          : undefined;
+      return {
+        dominant,
+        latest: latest ?? dominant,
+        runningSamples,
+        totalSamples,
+        breakdown,
+      };
+    }
+  }
+
+  if (!latest) {
+    return { dominant: null, latest: null, runningSamples: 0, totalSamples: 0 };
+  }
+  const weight = Math.max(1, state.sampleCount);
+  return {
+    dominant: latest,
+    latest,
+    runningSamples: latest.kind === 'RUNNING' ? weight : 0,
+    totalSamples: weight,
+  };
+}
+
 export function resolveTrackStateAt(track: TrendStateTrack, hoverAtMs: number | null): TrendNormalizedState | null {
   if (hoverAtMs === null) return track.latestState;
   const hit = track.slots.find((slot) => hoverAtMs >= slot.startMs && hoverAtMs < slot.endMs);
@@ -299,7 +371,6 @@ export function buildTrendCatalog(model: Pick<SiteAssetModel, 'assets' | 'device
         (point.valueType === 'STRING' || point.valueType === 'BOOLEAN'));
 
     if (!isGauge && !isState) continue;
-    // Fault string codes belong in alarm context, not run/stop state lanes
     if (isState && point.sourceKey.endsWith('.fault_code')) continue;
 
     const boundAsset = boundAssetByDevice.get(device.id) ?? null;
@@ -347,11 +418,11 @@ export function buildTrendCatalog(model: Pick<SiteAssetModel, 'assets' | 'device
   return { points: items, byRef, byDeviceId };
 }
 
-function findFirstBySourceKey(items: readonly TrendPointItem[], sourceKey: string): TrendPointItem | undefined {
+export function findFirstBySourceKey(items: readonly TrendPointItem[], sourceKey: string): TrendPointItem | undefined {
   return items.find((item) => item.sourceKey === sourceKey);
 }
 
-function findAllBySourceKey(items: readonly TrendPointItem[], sourceKey: string): readonly TrendPointItem[] {
+export function findAllBySourceKey(items: readonly TrendPointItem[], sourceKey: string): readonly TrendPointItem[] {
   return items.filter((item) => item.sourceKey === sourceKey);
 }
 
@@ -500,7 +571,6 @@ export function deriveBuiltInPresets(catalog: TrendCatalog): readonly TrendPrese
 
     if (activePower && refs.length < MAX_TREND_POINTS) refs.push(activePower.ref);
 
-    // Require at least outdoor weather or cooling capacity to exist so a weather-less site skips this preset
     if (dryBulb || wetBulb) {
       presets.push({
         id: 'outdoor-load',
@@ -670,11 +740,6 @@ export function buildTrendViewModel(input: {
   const gaugePoints = capped.filter((point) => point.kind === 'gauge');
   const statePoints = capped.filter((point) => point.kind === 'state');
 
-  const colorByRef = new Map<string, string>();
-  gaugePoints.forEach((point, index) => {
-    colorByRef.set(point.ref, CHART_COLOR_VARS[index % CHART_COLOR_VARS.length]!);
-  });
-
   const currentMap = new Map<string, Map<number, DeviceHistoryAggregateBucket>>();
   for (const [deviceId, buckets] of input.currentBucketsByDevice.entries()) {
     for (const bucket of buckets) {
@@ -702,7 +767,8 @@ export function buildTrendViewModel(input: {
     }
   }
 
-  // Group gauge points by normalized physical unit
+  // Group gauge points by normalized physical unit, splitting into 4-series lanes if >4 points share one unit
+  // so categorical palette chart-1..chart-4 is assigned in fixed order without looping (DESIGN.md §2.1.1).
   const groupsByUnit = new Map<string, TrendPointItem[]>();
   for (const point of gaugePoints) {
     const list = groupsByUnit.get(point.unit) ?? [];
@@ -717,61 +783,72 @@ export function buildTrendViewModel(input: {
     return left.localeCompare(right, 'zh-CN');
   });
 
-  const gaugeLanes: TrendGaugeLane[] = orderedUnits.map((unit) => {
-    const unitPoints = groupsByUnit.get(unit)!;
-    const series: TrendSeriesMeta[] = unitPoints.map((point) => ({
-      ref: point.ref,
-      label: point.seriesLabel,
-      deviceName: point.deviceName,
-      pointLabel: point.pointLabel,
-      unit: point.unit,
-      precision: point.precision,
-      colorVar: colorByRef.get(point.ref) ?? 'var(--chart-1)',
-      isSetpoint: point.isSetpoint,
-    }));
-
-    const rows: TrendGaugeRow[] = input.window.slots.map((slot) => {
-      const values: Record<string, TrendGaugeCell> = {};
-      for (const point of unitPoints) {
-        const bucket = currentMap.get(point.ref)?.get(slot.startMs);
-        const compareBucket = compareMap.get(point.ref)?.get(slot.startMs);
-        const primaryValue = bucket?.gauge
-          ? point.isSetpoint
-            ? bucket.gauge.last
-            : bucket.gauge.average
-          : null;
-        const minimum = bucket?.gauge ? bucket.gauge.minimum : null;
-        const maximum = bucket?.gauge ? bucket.gauge.maximum : null;
-        const compareValue = compareBucket?.gauge
-          ? point.isSetpoint
-            ? compareBucket.gauge.last
-            : compareBucket.gauge.average
-          : null;
-        values[point.ref] = {
-          value: primaryValue,
-          minimum,
-          maximum,
-          band: minimum !== null && maximum !== null && !point.isSetpoint ? [minimum, maximum] : null,
-          compareValue,
-        };
-      }
-      return {
-        at: slot.startMs,
-        endMs: slot.endMs,
-        values,
-      };
-    });
-
+  const gaugeLanes: TrendGaugeLane[] = [];
+  for (const unit of orderedUnits) {
+    const allUnitPoints = groupsByUnit.get(unit)!;
+    const chunkCount = Math.ceil(allUnitPoints.length / MAX_SERIES_PER_LANE);
     const baseTitle = UNIT_LANE_TITLES[unit] ?? (unit ? `读数 (${unit})` : '指标');
-    const title = unit ? `${baseTitle} (${unit})` : baseTitle;
-    return {
-      id: unit || 'dimensionless',
-      unit,
-      title,
-      series,
-      rows,
-    };
-  });
+
+    for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+      const unitPoints = allUnitPoints.slice(
+        chunkIndex * MAX_SERIES_PER_LANE,
+        (chunkIndex + 1) * MAX_SERIES_PER_LANE,
+      );
+      const series: TrendSeriesMeta[] = unitPoints.map((point, index) => ({
+        ref: point.ref,
+        label: point.seriesLabel,
+        deviceName: point.deviceName,
+        pointLabel: point.pointLabel,
+        unit: point.unit,
+        precision: point.precision,
+        colorVar: CHART_COLOR_VARS[index] ?? CHART_COLOR_VARS[0],
+        isSetpoint: point.isSetpoint,
+      }));
+
+      const rows: TrendGaugeRow[] = input.window.slots.map((slot) => {
+        const values: Record<string, TrendGaugeCell> = {};
+        for (const point of unitPoints) {
+          const bucket = currentMap.get(point.ref)?.get(slot.startMs);
+          const compareBucket = compareMap.get(point.ref)?.get(slot.startMs);
+          const primaryValue = bucket?.gauge
+            ? point.isSetpoint
+              ? bucket.gauge.last
+              : bucket.gauge.average
+            : null;
+          const minimum = bucket?.gauge ? bucket.gauge.minimum : null;
+          const maximum = bucket?.gauge ? bucket.gauge.maximum : null;
+          const compareValue = compareBucket?.gauge
+            ? point.isSetpoint
+              ? compareBucket.gauge.last
+              : compareBucket.gauge.average
+            : null;
+          values[point.ref] = {
+            value: primaryValue,
+            minimum,
+            maximum,
+            band: minimum !== null && maximum !== null && !point.isSetpoint ? [minimum, maximum] : null,
+            compareValue,
+          };
+        }
+        return {
+          at: slot.startMs,
+          endMs: slot.endMs,
+          values,
+        };
+      });
+
+      const chunkSuffix = chunkCount > 1 ? ` · ${chunkIndex + 1}` : '';
+      const title = unit ? `${baseTitle}${chunkSuffix} (${unit})` : `${baseTitle}${chunkSuffix}`;
+      const baseId = unit || 'dimensionless';
+      gaugeLanes.push({
+        id: chunkCount > 1 ? `${baseId}-${chunkIndex + 1}` : baseId,
+        unit,
+        title,
+        series,
+        rows,
+      });
+    }
+  }
 
   const totalBuckets = input.window.slots.length;
   const summaryRows: TrendSummaryRow[] = gaugePoints.map((point) => {
@@ -821,21 +898,29 @@ export function buildTrendViewModel(input: {
   const spanMs = Math.max(1, input.window.toMs - input.window.fromMs);
   const stateTracks: TrendStateTrack[] = statePoints.map((point) => {
     let latestState: TrendNormalizedState | null = null;
-    let runningSlots = 0;
-    let presentSlots = 0;
+    let runningSamples = 0;
+    let totalSamples = 0;
 
     const slots: TrendStateSlot[] = input.window.slots.map((slot) => {
       const bucket = currentMap.get(point.ref)?.get(slot.startMs);
-      const normalized = bucket?.state ? normalizeDiscreteState(bucket.state.lastValue) : null;
-      if (normalized) {
-        latestState = normalized;
-        presentSlots += 1;
-        if (normalized.kind === 'RUNNING') runningSlots += 1;
+      if (!bucket?.state) {
+        return {
+          startMs: slot.startMs,
+          endMs: slot.endMs,
+          state: null,
+        };
       }
+      const projected = projectStateBucket(bucket.state);
+      if (projected.latest) {
+        latestState = projected.latest;
+      }
+      runningSamples += projected.runningSamples;
+      totalSamples += projected.totalSamples;
       return {
         startMs: slot.startMs,
         endMs: slot.endMs,
-        state: normalized,
+        state: projected.dominant,
+        ...(projected.breakdown ? { breakdown: projected.breakdown } : {}),
       };
     });
 
@@ -870,7 +955,7 @@ export function buildTrendViewModel(input: {
       slots,
       segments,
       latestState,
-      runningRatio: presentSlots > 0 ? runningSlots / presentSlots : 0,
+      runningRatio: totalSamples > 0 ? runningSamples / totalSamples : 0,
     };
   });
 
@@ -879,437 +964,5 @@ export function buildTrendViewModel(input: {
     summaryRows,
     statePoints,
     stateTracks,
-  };
-}
-
-export interface TrendOverlayFlags {
-  readonly alarms: boolean;
-  readonly commands: boolean;
-}
-
-export interface TrendOverlayAlarmInput {
-  readonly alarmId: string;
-  readonly siteId: string;
-  readonly deviceId?: string;
-  readonly alarmType: string;
-  readonly title: string;
-  readonly summary: string;
-  readonly condition: 'ACTIVE' | 'CLEARED';
-  readonly currentSeverity: 'CRITICAL' | 'MAJOR' | 'MINOR' | 'WARNING' | 'INFO';
-  readonly peakSeverity: 'CRITICAL' | 'MAJOR' | 'MINOR' | 'WARNING' | 'INFO';
-  readonly occurrenceCount: number;
-  readonly firstOccurredAt: string;
-  readonly lastOccurredAt: string;
-  readonly clearedAt?: string;
-  readonly timeline: readonly unknown[];
-  readonly version: number;
-}
-
-export interface TrendOverlayCommandInput {
-  readonly commandId: string;
-  readonly siteId: string;
-  readonly deviceId: string;
-  readonly pointId: string;
-  readonly capability: string;
-  readonly status: string;
-  readonly risk: string;
-  readonly approvalPolicy: string;
-  readonly approvalCount: number;
-  readonly requiredApprovalCount: number;
-  readonly parameters: Readonly<Record<string, number>>;
-  readonly transitions: readonly {
-    readonly toStatus: string;
-    readonly occurredAt: string;
-  }[];
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-export interface TrendAlarmSpan {
-  readonly id: string;
-  readonly alarm: TrendOverlayAlarmInput;
-  readonly deviceName: string;
-  readonly rawStartMs: number;
-  readonly rawEndMs: number;
-  readonly clampedStartMs: number;
-  readonly clampedEndMs: number;
-  readonly startSlotAt: number;
-  readonly endSlotAt: number;
-  readonly anchorPercent: number;
-  readonly spanPercent: number;
-}
-
-export interface TrendCommandMark {
-  readonly id: string;
-  readonly command: TrendOverlayCommandInput;
-  readonly deviceName: string;
-  readonly atMs: number;
-  readonly slotAt: number;
-  readonly anchorPercent: number;
-  readonly summaryLabel: string;
-  readonly statusLabel: string;
-}
-
-export type TrendRailEvent =
-  | { readonly kind: 'alarm'; readonly atMs: number; readonly anchorPercent: number; readonly span: TrendAlarmSpan }
-  | { readonly kind: 'command'; readonly atMs: number; readonly anchorPercent: number; readonly mark: TrendCommandMark };
-
-export interface TrendRailCluster {
-  readonly id: string;
-  readonly anchorPercent: number;
-  readonly atMs: number;
-  readonly events: readonly TrendRailEvent[];
-}
-
-export interface TrendOverlaysModel {
-  readonly alarmSpans: readonly TrendAlarmSpan[];
-  readonly commandMarks: readonly TrendCommandMark[];
-  readonly railItems: readonly TrendRailCluster[];
-}
-
-const COMMAND_STATUS_LABELS: Readonly<Record<string, string>> = {
-  SUBMITTED: '已提交',
-  VALIDATING: '校验中',
-  AWAITING_APPROVAL: '待审批',
-  APPROVED: '已批准',
-  QUEUED: '排队中',
-  DISPATCHING: '下发中',
-  SUCCEEDED: '已执行',
-  FAILED: '执行失败',
-  REJECTED: '已驳回',
-  CANCELLED: '已取消',
-  EXPIRED: '已过期',
-  OUTCOME_UNKNOWN: '待核实',
-};
-
-const COMMAND_CAPABILITY_LABELS: Readonly<Record<string, string>> = {
-  SETPOINT: '设定值调整',
-  START: '开机指令',
-  STOP: '停机指令',
-  MODE: '模式切换',
-  RESET: '复位指令',
-};
-
-export function parseTrendOverlays(raw: string | undefined): TrendOverlayFlags {
-  if (!raw) return { alarms: false, commands: false };
-  const tokens = new Set(
-    raw
-      .split(',')
-      .map((item) => item.trim().toLowerCase())
-      .filter(Boolean),
-  );
-  return {
-    alarms: tokens.has('alarms'),
-    commands: tokens.has('commands'),
-  };
-}
-
-export function formatTrendOverlays(flags: TrendOverlayFlags): string | undefined {
-  const parts: string[] = [];
-  if (flags.alarms) parts.push('alarms');
-  if (flags.commands) parts.push('commands');
-  return parts.length > 0 ? parts.join(',') : undefined;
-}
-
-function snapToNearestSlotStart(slots: readonly TimeSlot[], targetMs: number): number {
-  if (slots.length === 0) return targetMs;
-  let best = slots[0]!;
-  for (const slot of slots) {
-    if (targetMs >= slot.startMs && targetMs < slot.endMs) {
-      return slot.startMs;
-    }
-    if (Math.abs(slot.startMs - targetMs) < Math.abs(best.startMs - targetMs)) {
-      best = slot;
-    }
-  }
-  if (targetMs >= slots[slots.length - 1]!.endMs) {
-    return slots[slots.length - 1]!.startMs;
-  }
-  return best.startMs;
-}
-
-function resolveCommandTimestampMs(command: TrendOverlayCommandInput): number {
-  for (let idx = command.transitions.length - 1; idx >= 0; idx -= 1) {
-    const tr = command.transitions[idx]!;
-    if (tr.toStatus === 'SUCCEEDED' || tr.toStatus === 'DISPATCHING' || tr.toStatus === 'FAILED') {
-      const parsed = Date.parse(tr.occurredAt);
-      if (Number.isFinite(parsed)) return parsed;
-    }
-  }
-  return Date.parse(command.createdAt);
-}
-
-export function buildTrendOverlays(input: {
-  readonly window: ResolvedTrendWindow;
-  readonly selectedPoints: readonly TrendPointItem[];
-  readonly catalog: TrendCatalog | null;
-  readonly showAlarms: boolean;
-  readonly showCommands: boolean;
-  readonly alarms?: readonly TrendOverlayAlarmInput[];
-  readonly commands?: readonly TrendOverlayCommandInput[];
-}): TrendOverlaysModel {
-  const { window, selectedPoints, catalog } = input;
-  const spanMs = Math.max(1, window.toMs - window.fromMs);
-  const selectedDeviceIds = new Set(selectedPoints.map((point) => point.deviceId));
-  const deviceNameById = new Map<string, string>();
-  const pointById = new Map<string, TrendPointItem>();
-  if (catalog) {
-    for (const point of catalog.points) {
-      if (!deviceNameById.has(point.deviceId)) {
-        deviceNameById.set(point.deviceId, point.deviceName);
-      }
-      pointById.set(point.pointId, point);
-    }
-  }
-  for (const point of selectedPoints) {
-    deviceNameById.set(point.deviceId, point.deviceName);
-    pointById.set(point.pointId, point);
-  }
-
-  const alarmSpans: TrendAlarmSpan[] = [];
-  if (input.showAlarms && input.alarms) {
-    for (const alarm of input.alarms) {
-      if (alarm.deviceId && selectedDeviceIds.size > 0 && !selectedDeviceIds.has(alarm.deviceId)) {
-        continue;
-      }
-      const rawStartMs = Date.parse(alarm.firstOccurredAt);
-      const rawEndMs =
-        alarm.condition === 'CLEARED' && alarm.clearedAt
-          ? Date.parse(alarm.clearedAt)
-          : window.toMs;
-      if (!Number.isFinite(rawStartMs) || !Number.isFinite(rawEndMs)) continue;
-      if (rawStartMs > window.toMs || rawEndMs < window.fromMs) continue;
-
-      const clampedStartMs = Math.max(window.fromMs, Math.min(window.toMs, rawStartMs));
-      const clampedEndMs = Math.max(clampedStartMs, Math.min(window.toMs, rawEndMs));
-      const startSlotAt = snapToNearestSlotStart(window.slots, clampedStartMs);
-      const endSlotAt = snapToNearestSlotStart(window.slots, Math.max(clampedStartMs, clampedEndMs - 1));
-      const anchorPercent = ((clampedStartMs - window.fromMs) / spanMs) * 100;
-      const spanPercent = Math.max(0.8, ((clampedEndMs - clampedStartMs) / spanMs) * 100);
-      const deviceName = alarm.deviceId
-        ? deviceNameById.get(alarm.deviceId) ?? '关联设备'
-        : '冷站全局';
-
-      alarmSpans.push({
-        id: `alarm-${alarm.alarmId}`,
-        alarm,
-        deviceName,
-        rawStartMs,
-        rawEndMs,
-        clampedStartMs,
-        clampedEndMs,
-        startSlotAt,
-        endSlotAt,
-        anchorPercent,
-        spanPercent,
-      });
-    }
-    alarmSpans.sort((left, right) => left.clampedStartMs - right.clampedStartMs);
-  }
-
-  const commandMarks: TrendCommandMark[] = [];
-  if (input.showCommands && input.commands) {
-    for (const command of input.commands) {
-      if (selectedDeviceIds.size > 0 && !selectedDeviceIds.has(command.deviceId)) {
-        continue;
-      }
-      const atMs = resolveCommandTimestampMs(command);
-      if (!Number.isFinite(atMs) || atMs < window.fromMs || atMs > window.toMs) {
-        continue;
-      }
-      const point = pointById.get(command.pointId);
-      const deviceName = point?.deviceName ?? deviceNameById.get(command.deviceId) ?? '控制设备';
-      const actionLabel = point?.pointLabel ?? COMMAND_CAPABILITY_LABELS[command.capability] ?? command.capability;
-      const paramEntries = Object.entries(command.parameters ?? {});
-      const paramText =
-        paramEntries.length > 0
-          ? ` → ${paramEntries.map(([, val]) => `${val}${point?.unit ? ` ${point.unit}` : ''}`).join(', ')}`
-          : '';
-      const statusLabel = COMMAND_STATUS_LABELS[command.status] ?? command.status;
-      const anchorPercent = ((atMs - window.fromMs) / spanMs) * 100;
-
-      commandMarks.push({
-        id: `cmd-${command.commandId}`,
-        command,
-        deviceName,
-        atMs,
-        slotAt: snapToNearestSlotStart(window.slots, atMs),
-        anchorPercent,
-        summaryLabel: `${deviceName} · ${actionLabel}${paramText}`,
-        statusLabel,
-      });
-    }
-    commandMarks.sort((left, right) => left.atMs - right.atMs);
-  }
-
-  const allEvents: TrendRailEvent[] = [
-    ...alarmSpans.map(
-      (span): TrendRailEvent => ({
-        kind: 'alarm',
-        atMs: span.clampedStartMs,
-        anchorPercent: span.anchorPercent,
-        span,
-      }),
-    ),
-    ...commandMarks.map(
-      (mark): TrendRailEvent => ({
-        kind: 'command',
-        atMs: mark.atMs,
-        anchorPercent: mark.anchorPercent,
-        mark,
-      }),
-    ),
-  ].sort((left, right) => left.atMs - right.atMs);
-
-  const DENSE_THRESHOLD_PERCENT = 2.5;
-  const railItems: TrendRailCluster[] = [];
-  for (const event of allEvents) {
-    const prev = railItems[railItems.length - 1];
-    const lastEvent = prev?.events[prev.events.length - 1];
-    if (prev && lastEvent && Math.abs(event.anchorPercent - lastEvent.anchorPercent) <= DENSE_THRESHOLD_PERCENT) {
-      const mergedEvents = [...prev.events, event];
-      railItems[railItems.length - 1] = {
-        ...prev,
-        events: mergedEvents,
-      };
-    } else {
-      railItems.push({
-        id: event.kind === 'alarm' ? event.span.id : event.mark.id,
-        anchorPercent: event.anchorPercent,
-        atMs: event.atMs,
-        events: [event],
-      });
-    }
-  }
-
-  return { alarmSpans, commandMarks, railItems };
-}
-
-export interface TrendDeepLinkSearch {
-  readonly site: string;
-  readonly window: 'custom';
-  readonly from: string;
-  readonly to: string;
-  readonly points?: string;
-  readonly preset?: TrendPresetId;
-  readonly overlays: string;
-  readonly source: 'alarm' | 'diagnostic';
-  readonly sourceId: string;
-  readonly sourceTitle: string;
-}
-
-const CONTEXT_PAD_MS = 30 * 60_000;
-const MIN_WINDOW_SPAN_MS = 15 * 60_000;
-
-function appendUniqueRefs(target: string[], candidates: readonly (TrendPointItem | undefined)[]): void {
-  for (const item of candidates) {
-    if (!item || target.length >= MAX_TREND_POINTS) continue;
-    if (!target.includes(item.ref)) target.push(item.ref);
-  }
-}
-
-export function buildAlarmTrendSearch(input: {
-  readonly siteId: string;
-  readonly alarm: {
-    readonly alarmId: string;
-    readonly title: string;
-    readonly deviceId?: string;
-    readonly condition: 'ACTIVE' | 'CLEARED';
-    readonly firstOccurredAt: string;
-    readonly clearedAt?: string;
-  };
-  readonly catalog?: TrendCatalog | null;
-  readonly nowMs?: number;
-}): TrendDeepLinkSearch {
-  const nowMs = input.nowMs ?? Date.now();
-  const startMs = Date.parse(input.alarm.firstOccurredAt);
-  const rawEndMs =
-    input.alarm.condition === 'CLEARED' && input.alarm.clearedAt
-      ? Date.parse(input.alarm.clearedAt)
-      : nowMs;
-  const safeEndMs = Number.isFinite(rawEndMs) ? Math.min(nowMs, rawEndMs + CONTEXT_PAD_MS) : nowMs;
-  const safeStartMs = Number.isFinite(startMs)
-    ? Math.min(safeEndMs - MIN_WINDOW_SPAN_MS, startMs - CONTEXT_PAD_MS)
-    : safeEndMs - 2 * CONTEXT_PAD_MS;
-
-  const refs: string[] = [];
-  if (input.catalog) {
-    const { points, byDeviceId } = input.catalog;
-    if (input.alarm.deviceId) {
-      const devicePoints = byDeviceId.get(input.alarm.deviceId) ?? [];
-      appendUniqueRefs(refs, devicePoints.filter((p) => p.kind === 'gauge').slice(0, 4));
-      appendUniqueRefs(refs, devicePoints.filter((p) => p.kind === 'state').slice(0, 1));
-    }
-    appendUniqueRefs(refs, [
-      findFirstBySourceKey(points, 'hvac_meter.active_power'),
-      findFirstBySourceKey(points, 'btu_meter.supply_water_temperature') ??
-        findFirstBySourceKey(points, 'chiller.leaving_chilled_water_temperature'),
-      findFirstBySourceKey(points, 'btu_meter.return_water_temperature') ??
-        findFirstBySourceKey(points, 'chiller.entering_chilled_water_temperature'),
-      findFirstBySourceKey(points, 'chiller.chilled_water_temperature_setpoint'),
-      ...findAllBySourceKey(points, 'chiller.run_state').slice(0, 2),
-    ]);
-  }
-
-  return {
-    site: input.siteId,
-    window: 'custom',
-    from: new Date(safeStartMs).toISOString(),
-    to: new Date(safeEndMs).toISOString(),
-    ...(refs.length > 0 ? { points: refs.join(',') } : { preset: 'plant-overview' }),
-    overlays: 'alarms,commands',
-    source: 'alarm',
-    sourceId: input.alarm.alarmId,
-    sourceTitle: input.alarm.title,
-  };
-}
-
-export function buildFindingTrendSearch(input: {
-  readonly siteId: string;
-  readonly finding: {
-    readonly id: string;
-    readonly assetId: string;
-    readonly findingType: string;
-    readonly evaluationFrom: string;
-    readonly evaluationTo: string;
-  };
-  readonly title: string;
-  readonly catalog?: TrendCatalog | null;
-  readonly nowMs?: number;
-}): TrendDeepLinkSearch {
-  const nowMs = input.nowMs ?? Date.now();
-  const evalFromMs = Date.parse(input.finding.evaluationFrom);
-  const evalToMs = Date.parse(input.finding.evaluationTo);
-  const safeEndMs = Number.isFinite(evalToMs) ? Math.min(nowMs, evalToMs + CONTEXT_PAD_MS) : nowMs;
-  const safeStartMs = Number.isFinite(evalFromMs)
-    ? Math.min(safeEndMs - MIN_WINDOW_SPAN_MS, evalFromMs - CONTEXT_PAD_MS)
-    : safeEndMs - 2 * CONTEXT_PAD_MS;
-
-  const refs: string[] = [];
-  if (input.catalog) {
-    const { points } = input.catalog;
-    appendUniqueRefs(refs, [
-      findFirstBySourceKey(points, 'btu_meter.temperature_difference'),
-      findFirstBySourceKey(points, 'btu_meter.supply_water_temperature'),
-      findFirstBySourceKey(points, 'btu_meter.return_water_temperature'),
-      findFirstBySourceKey(points, 'btu_meter.flow_rate'),
-      ...findAllBySourceKey(points, 'chwp.frequency').slice(0, 2),
-      findFirstBySourceKey(points, 'chiller.leaving_chilled_water_temperature'),
-      ...findAllBySourceKey(points, 'chiller.run_state').slice(0, 1),
-    ]);
-    const assetPoints = points.filter((p) => p.assetId === input.finding.assetId);
-    appendUniqueRefs(refs, assetPoints.slice(0, 3));
-  }
-
-  return {
-    site: input.siteId,
-    window: 'custom',
-    from: new Date(safeStartMs).toISOString(),
-    to: new Date(safeEndMs).toISOString(),
-    ...(refs.length > 0 ? { points: refs.join(',') } : { preset: 'pump-hydraulics' }),
-    overlays: 'alarms,commands',
-    source: 'diagnostic',
-    sourceId: input.finding.id,
-    sourceTitle: input.title,
   };
 }

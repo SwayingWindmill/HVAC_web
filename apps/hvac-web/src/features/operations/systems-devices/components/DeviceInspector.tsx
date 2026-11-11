@@ -6,7 +6,7 @@ import { Area, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts
 import { listWorkOrders } from '@/api/work-orders';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { Button } from '@/components/ui/button';
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
+import { ChartContainer, ChartEmptySlotTooltip, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -250,14 +250,9 @@ function DayTrend({ device }: { readonly device: PlantDevice }) {
                 const hasValue = tooltipProps.payload?.some(
                   (entry) => entry.value !== null && entry.value !== undefined,
                 );
-                if (tooltipProps.active && !hasValue && tooltipProps.label !== undefined) {
-                  return (
-                    <div className="grid min-w-36 gap-1 rounded-lg border bg-background px-2.5 py-1.5 text-xs shadow-md">
-                      <div className="font-medium">{hour.format(new Date(Number(tooltipProps.label)))}</div>
-                      <div className="text-muted-foreground">该时段无读数</div>
-                    </div>
-                  );
-                }
+              if (tooltipProps.active && !hasValue && tooltipProps.label !== undefined) {
+                return <ChartEmptySlotTooltip label={hour.format(new Date(Number(tooltipProps.label)))} />;
+              }
                 return (
                   <ChartTooltipContent
                     active={tooltipProps.active}

@@ -719,6 +719,14 @@
           "excludedTransitionCount": { "type": "integer", "format": "int64", "minimum": 0 }
         }
       },
+      "DeviceHistoryStateCount": {
+        "type": "object", "additionalProperties": false,
+        "required": ["value", "count"],
+        "properties": {
+          "value": { "$ref": "#/components/schemas/TelemetryValue" },
+          "count": { "type": "integer", "format": "int64", "minimum": 1 }
+        }
+      },
       "DeviceHistoryStateAggregate": {
         "type": "object", "additionalProperties": false,
         "required": ["valueType", "lastValue", "sampleCount", "changeCount"],
@@ -726,7 +734,8 @@
           "valueType": { "$ref": "#/components/schemas/DeviceHistoryValueType" },
           "lastValue": { "$ref": "#/components/schemas/TelemetryValue" },
           "sampleCount": { "type": "integer", "format": "int64", "minimum": 1 },
-          "changeCount": { "type": "integer", "format": "int64", "minimum": 0 }
+          "changeCount": { "type": "integer", "format": "int64", "minimum": 0 },
+          "stateCounts": { "type": "array", "items": { "$ref": "#/components/schemas/DeviceHistoryStateCount" } }
         }
       },
       "DeviceHistoryAggregateBucket": {
