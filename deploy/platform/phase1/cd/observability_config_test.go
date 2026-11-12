@@ -247,6 +247,7 @@ var mirroredRelease = map[string]string{
 	"infra/observability/alerts/host-resource.yaml":                                          "groups: []\n",
 	"infra/observability/alerts/host-resource.rules.test.yml":                                "tests: []\n",
 	"infra/observability/dashboards/s0-platform.json":                                        "{}\n",
+	"semantic/cube/model/cubes/energy_facts.yml":                                             "cubes: []\n",
 }
 
 func TestObservabilitySyncRemovesFilesDeletedFromTheRelease(t *testing.T) {
@@ -262,6 +263,7 @@ func TestObservabilitySyncRemovesFilesDeletedFromTheRelease(t *testing.T) {
 		"infra/observability/alerts/nested/old.yaml",
 		"infra/observability/dashboards/retired.json",
 		"deploy/platform/phase1/observability/grafana/provisioning/datasources/retired.yaml",
+		"semantic/cube/model/cubes/retired.yml",
 	}
 	// Outside the mirrored directories: deleted from the repo too, but sync must not touch them.
 	untouched := []string{

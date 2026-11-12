@@ -480,6 +480,9 @@ assert(prometheus.includes('node-exporter:9100'), 'Prometheus must scrape single
 assert(prometheus.includes('centrifugo:9000') && !prometheus.includes('centrifugo:8000'), 'Prometheus must scrape Centrifugo metrics on the plain internal port, not the TLS client port');
 const centrifugoBlock = serviceBlocks.find(([, name]) => name === 'centrifugo')?.[2] ?? '';
 assert(centrifugoBlock.includes('CENTRIFUGO_HTTP_SERVER_INTERNAL_PORT: "9000"') && centrifugoBlock.includes('CENTRIFUGO_HTTP_SERVER_TLS_EXTERNAL: "true"') && centrifugoBlock.includes('CENTRIFUGO_HTTP_API_EXTERNAL: "true"'), 'Centrifugo must keep a plain internal metrics port and leave the HTTP API on the client port');
+const cubeBlock = serviceBlocks.find(([, name]) => name === 'cube')?.[2] ?? '';
+const wslCompose = await read('scripts/phase1-wsl-compose.mjs');
+assert(cubeBlock.includes('CUBEJS_DEV_MODE: "false"') && cubeBlock.includes('CUBE_MODEL_DIGEST: "${CUBE_MODEL_DIGEST:-}"') && wslCompose.includes('CUBE_MODEL_DIGEST: cubeModelDigest('), 'Cube runs with CUBEJS_DEV_MODE=false over bind-mounted semantic/cube and must recreate when CUBE_MODEL_DIGEST changes');
 assert(centrifugoBlock.includes('expose: ["8000", "9000"]') && !/^    ports:/m.test(centrifugoBlock), 'Centrifugo metrics port must be reachable on the Docker network and not published to the host');
 const centrifugoConfig = await read('deploy/platform/phase1/realtime/centrifugo.json');
 assert(centrifugoConfig.includes('"internal_port": "9000"') && centrifugoConfig.includes('"tls_external": true') && centrifugoConfig.includes('"external": true') && centrifugoConfig.includes('"prometheus"'), 'checked-in Centrifugo config must enable Prometheus on the plain internal port');

@@ -59,7 +59,7 @@ WHERE vm.site_id = $1::uuid
   AND vm.virtual_meter_code = 'site_total_electricity'
   AND vm.calculation_type = 'SUM'
   AND vm.direction = 'IMPORT'
-  AND et.code = 'electricity'
+  AND et.energy_code = 'electricity'
   AND vm.status IN ('RELEASED', 'ACTIVE')
   AND vm.effective_from <= now()
   AND (vm.effective_to IS NULL OR now() < vm.effective_to)

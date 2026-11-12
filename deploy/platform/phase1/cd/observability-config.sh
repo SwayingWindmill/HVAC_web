@@ -34,6 +34,7 @@ mirrored_dirs=(
   infra/observability/alerts
   infra/observability/dashboards
   deploy/platform/phase1/observability/grafana/provisioning
+  semantic/cube
 )
 
 usage() {
