@@ -184,6 +184,26 @@ function synthesizeTrendAggregate(assetModel: Json, snapshots: Json, query: Json
             stateCounts: [{ value: stateVal, count: 2 }],
           },
         });
+      } else if (point.pointType === 'COUNTER') {
+        const delta = Number((180 + Math.sin(index / 3) * 24).toFixed(2));
+        buckets.push({
+          telemetryKey: key,
+          pointId: point.id,
+          pointRevision: point.revision ?? 1,
+          pointType: 'COUNTER',
+          unit: point.unit,
+          periodStart,
+          periodEnd,
+          quality: { good: 12, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
+          completeness: 1,
+          counter: {
+            deltaSum: delta,
+            deltaCount: 12,
+            resetCount: 0,
+            rolloverCount: 0,
+            excludedTransitionCount: 0,
+          },
+        });
       }
       index += 1;
     }
@@ -874,6 +894,13 @@ export class Gateway {
     if (userAdmin) return userAdmin;
     if (method === 'GET' && path === '/api/v1/sites') return { body: fixture('sites.json') };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}`) return { body: fixture<Json>('sites.json').items[0] };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/devices`) {
+      return { body: { items: this.assetModel.devices, hasMore: false, nextCursor: null } };
+    }
+    const gatewayCredMatch = path.match(/^\/api\/v1\/gateways\/([^/]+)\/credential$/);
+    if (method === 'GET' && gatewayCredMatch) {
+      return { body: { status: 'ACTIVE', expiresAt: new Date(Date.now() + 90 * 86_400_000).toISOString() } };
+    }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: this.assetModel };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/tariff`) {
       return this.tariff ? { body: this.tariff } : {
@@ -948,14 +975,14 @@ export class Gateway {
     if (method === 'POST' && path === '/api/v1/analytics/energy-series' && this.analyticsDenied) {
       return { status: 403, body: { type: 'about:blank', title: 'Analytics access denied', status: 403, detail: 'The requested Site is not authorized for Energy Analytics.', instance: path, code: 'ANALYTICS_ACCESS_DENIED', traceId: '0'.repeat(32), retryable: false } };
     }
-    if (method === 'POST' && path === '/api/v1/analytics/energy-series' && body?.breakdown === 'device') {
-      const recorded = fixture<Json>('energy-breakdown.json');
-      const devices = recorded.response.devices.filter((device: Json) => !this.unmeteredDeviceIds.includes(device.deviceId));
-      return { body: replayEnergy({ ...recorded.response, devices }, body, Date.parse(recorded.recordedDay)) };
-    }
     if (method === 'POST' && path === '/api/v1/analytics/energy-series') {
       const custom = this.energySeriesHandler?.(body!);
       if (custom) return custom;
+      if (body?.breakdown === 'device') {
+        const recorded = fixture<Json>('energy-breakdown.json');
+        const devices = recorded.response.devices.filter((device: Json) => !this.unmeteredDeviceIds.includes(device.deviceId));
+        return { body: replayEnergy({ ...recorded.response, devices }, body, Date.parse(recorded.recordedDay)) };
+      }
       const recorded = fixture<Json>('energy-series.json')[body?.energyType];
       return { body: this.energyByDay && body?.granularity === 'day' ? replayEnergyDays(recorded, body) : replayEnergy(recorded, body!) };
     }

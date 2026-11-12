@@ -24,7 +24,7 @@ interface WorkOrderForm {
   description: string;
 }
 
-export function CreateWorkOrderDialog({ open, onOpenChange, title, initial, sourceReferences, onCreated }: {
+export interface CreateWorkOrderDialogProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly title: string;
@@ -32,8 +32,48 @@ export function CreateWorkOrderDialog({ open, onOpenChange, title, initial, sour
   /** Where the work comes from; every work order has exactly one origin. */
   readonly sourceReferences: WorkOrderSourceReference[];
   readonly onCreated: (workOrder: WorkOrder) => void;
-}) {
+  /** Explicit site/CSRF context for platform-scoped routes outside `/_app/_site`. */
+  readonly siteId?: string;
+  readonly csrfToken?: string;
+}
+
+export function CreateWorkOrderDialog(props: CreateWorkOrderDialogProps) {
+  if (props.siteId && props.csrfToken !== undefined) {
+    return (
+      <CreateWorkOrderDialogContent
+        {...props}
+        siteId={props.siteId}
+        csrfToken={props.csrfToken}
+      />
+    );
+  }
+  return <SiteScopedCreateWorkOrderDialog {...props} />;
+}
+
+function SiteScopedCreateWorkOrderDialog(props: CreateWorkOrderDialogProps) {
   const { site, principal } = siteRoute.useRouteContext();
+  return (
+    <CreateWorkOrderDialogContent
+      {...props}
+      siteId={site.id}
+      csrfToken={principal.session.csrfToken}
+    />
+  );
+}
+
+function CreateWorkOrderDialogContent({
+  open,
+  onOpenChange,
+  title,
+  initial,
+  sourceReferences,
+  onCreated,
+  siteId,
+  csrfToken,
+}: CreateWorkOrderDialogProps & {
+  readonly siteId: string;
+  readonly csrfToken: string;
+}) {
   const form = useForm<WorkOrderForm>({ values: initial });
   const create = useMutation({
     mutationFn: (input: WorkOrderForm) => createWorkOrder({
@@ -45,7 +85,7 @@ export function CreateWorkOrderDialog({ open, onOpenChange, title, initial, sour
       teamId: null,
       scheduledStart: null,
       dueAt: null,
-    }, { siteId: site.id, csrfToken: principal.session.csrfToken }),
+    }, { siteId, csrfToken }),
     onSuccess: (workOrder) => {
       onCreated(workOrder);
       onOpenChange(false);
