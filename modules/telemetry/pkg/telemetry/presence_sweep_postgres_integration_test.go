@@ -55,6 +55,7 @@ func TestPostgresPresenceSweepAndCopiedReadings(t *testing.T) {
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.observation_coverage WHERE device_id::text LIKE '018f2e00-9700-%'`)
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.freshness_policies WHERE device_id::text LIKE '018f2e00-9700-%'`)
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.presence_policies WHERE device_id::text LIKE '018f2e00-9700-%'`)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.points WHERE point_id::text LIKE '018f2e00-9710-%'`)
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.devices WHERE device_id::text LIKE '018f2e00-9700-%'`)
 	}
 	cleanup()
@@ -106,13 +107,18 @@ INSERT INTO telemetry_runtime.freshness_policies (
 	send := func(deviceID, pointID, key, rawValue, unit, pointType string, at time.Time) ObservationReceipt {
 		t.Helper()
 		nextOffset++
+		var counterDecreaseMode *string
+		if pointType == "COUNTER" {
+			mode := "INVALID"
+			counterDecreaseMode = &mode
+		}
 		receipt, err := store.AcceptObservation(ctx, ObservationCandidate{
 			SourceID:           sourceID,
 			SourcePath:         SourcePathPush,
 			ExternalEntityType: "DEVICE",
 			ExternalID:         deviceID,
 			Device:             &ResolvedDevice{TenantID: tenantA, SiteID: siteA, DeviceID: deviceID},
-			Point:              &ResolvedPoint{PointID: pointID, PointType: pointType, ValueType: "NUMBER", Unit: &unit, PointRevision: 1},
+			Point:              &ResolvedPoint{PointID: pointID, PointType: pointType, ValueType: "NUMBER", Unit: &unit, CounterDecreaseMode: counterDecreaseMode, PointRevision: 1},
 			TelemetryKey:       key,
 			Value:              json.RawMessage(rawValue),
 			ValueType:          "NUMBER",
