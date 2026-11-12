@@ -47,7 +47,11 @@ export interface AssetsPointView {
   readonly freshness: 'FRESH' | 'STALE' | 'MISSING' | 'UNAVAILABLE';
   readonly quality: TelemetryQuality | null;
   readonly qualityReasons: readonly string[];
-  readonly health: { readonly status: 'HEALTHY' | 'SUSPECT' | 'BAD' | 'STALE'; readonly score: number } | null;
+  readonly health: {
+    readonly status: 'HEALTHY' | 'SUSPECT' | 'BAD' | 'STALE';
+    readonly score: number;
+    readonly reasons?: readonly string[];
+  } | null;
   readonly measurement: {
     readonly relative: number;
     readonly low: number;
@@ -62,6 +66,8 @@ export interface AssetsPointView {
     readonly offsetK: number;
     readonly stddevK: number;
     readonly sampleCount: number;
+    readonly windowStartedAt: string;
+    readonly windowEndedAt: string;
     readonly suggested: boolean;
     readonly applied: boolean;
     readonly alarm?: string;
@@ -157,13 +163,17 @@ function pointView(definition: PointDisplayDefinition, state: TelemetryKeyState 
     freshness: state.freshness,
     quality: state.quality,
     qualityReasons: [...state.qualityReasons],
-    health: state.health ? { status: state.health.status, score: state.health.score } : null,
+    health: state.health
+      ? { status: state.health.status, score: state.health.score, reasons: [...state.health.reasons] }
+      : null,
     measurement: state.measurement ?? null,
     probeOffsets: (state.probeOffsets ?? []).map((suggestion) => ({
       pairCode: suggestion.pairCode,
       offsetK: suggestion.offsetK,
       stddevK: suggestion.stddevK,
       sampleCount: suggestion.sampleCount,
+      windowStartedAt: suggestion.windowStartedAt,
+      windowEndedAt: suggestion.windowEndedAt,
       suggested: suggestion.suggested,
       applied: suggestion.applied,
       alarm: suggestion.alarm,
