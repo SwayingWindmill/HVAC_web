@@ -1,14 +1,17 @@
 import { Panel, PanelHeader, PanelLink } from '@/blocks/panel';
 import { InfoTip } from '@/components/info-tip';
 import { Skeleton } from '@/components/ui/skeleton';
-import { formatClock, ReadingValue } from '@/features/operations/realtime/device-presentation';
+import { formatClock, LowConfidenceBadge, ReadingValue } from '@/features/operations/realtime/device-presentation';
 import {
   EQUIPMENT_CATEGORIES,
   equipmentStatus,
   isRunning,
   PLANT_CATEGORY_LABELS,
   PLANT_CATEGORY_ORDER,
+  coolingUncertaintyText,
+  copUncertaintyText,
   plantReading,
+  probeOffsetText,
   type PlantDevice,
   type PlantReading,
   type PlantView,
@@ -53,7 +56,7 @@ function ScaleBar({ label, reading, max, tone }: { readonly label: string; reado
       <span className="h-2.5 overflow-hidden rounded-full bg-muted">
         {value !== null && max > 0 ? (
           <span
-            className={cn('block h-full rounded-full', tone === 'power' ? 'bg-chart-5' : 'bg-chart-1', reading && !reading.current && 'opacity-50')}
+            className={cn('block h-full rounded-full', tone === 'power' ? 'bg-chart-5' : 'bg-chart-1', reading && !reading.current && !reading.lowConfidence && 'opacity-50')}
             style={{ width: `${Math.max(2, (value / max) * 100)}%` }}
           />
         ) : null}
@@ -92,18 +95,21 @@ export function PlantNowPanel({ plant, registryState, siteId, timeZone }: {
         <div className="flex flex-col gap-1 border-r border-divider pr-6">
           <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             实时 COP
-            <InfoTip>冷站瞬时制冷量 ÷ 冷站总功率；任一读数过期时不计算</InfoTip>
+            <InfoTip>冷站瞬时制冷量 ÷ 冷站总功率。温差相对探头误差过小时照常计算，标「低可信」并给出区间，这段不计入能效均值、故障诊断和节能验证。</InfoTip>
           </span>
           <span className="text-[28px] leading-8 font-semibold tracking-[-0.03em] tabular-nums">
-            {plant.plantCop === null ? <span className="text-muted-foreground">—</span> : formatDecimal(plant.plantCop, 2)}
+            {plant.plantCop === null ? <span className="text-muted-foreground">—</span> : <>{formatDecimal(plant.plantCop, 2)}{plant.plantCopLowConfidence ? <LowConfidenceBadge className="align-middle" /> : null}</>}
           </span>
           <span className="text-xs text-muted-foreground">
-            {plant.plantCop === null ? '读数不全，暂不计算' : `1 kW 电 → ${formatDecimal(plant.plantCop, 2)} kW 冷`}
+            {copUncertaintyText(plant) ?? (plant.plantCop === null ? '读数不全，暂不计算' : `1 kW 电 → ${formatDecimal(plant.plantCop, 2)} kW 冷`)}
           </span>
         </div>
         <div className="flex min-w-0 flex-col gap-3">
           <ScaleBar label="冷站功率" reading={power} max={max} tone="power" />
           <ScaleBar label="瞬时制冷量" reading={cooling} max={max} tone="cooling" />
+          {coolingUncertaintyText(cooling) || probeOffsetText(plant) ? (
+            <p className="text-xs text-muted-foreground">{[coolingUncertaintyText(cooling), probeOffsetText(plant)].filter(Boolean).join(' · ')}</p>
+          ) : null}
           <div className="flex gap-4 pl-[96px] text-xs text-muted-foreground">
             <span>冷冻水供水 <ReadingValue reading={plantReading(plant, 'btu_meter.supply_water_temperature')} className="font-medium text-foreground" /></span>
             <span className="text-border">|</span>

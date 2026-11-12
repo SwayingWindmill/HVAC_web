@@ -43,9 +43,9 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	// The supply-temperature rule, the four plant rules kept after 2026-11-10 (供水偏高、供水过低、
 	// 冷却水出水过高、机组运行无流量), 网关上报中断, one 读数长时间没有更新 per device with an active
 	// point (12, the room has no probe), the data-quality rules from each point's quality profile
-	// (a copied point is not alarmed again), and the physics checks in the site file that carry an
-	// alarm over active points (16: 4 power, 1 COP, 6 CHW direction, 4 CW direction, 1 pump without chiller).
-	if len(byTitle) != 96 {
+	// (a copied point is not alarmed again), the physics checks in the site file that carry an
+	// alarm over active points (16), and five probe-offset suggestions (header + chillers A–D).
+	if len(byTitle) != 101 {
 		t.Fatalf("got %d rules: %v", len(byTitle), keys(byTitle))
 	}
 

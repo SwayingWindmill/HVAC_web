@@ -147,6 +147,11 @@ func (store *PostgresStore) acceptObservationOnce(ctx context.Context, candidate
 		if err := upsertLatestObservation(ctx, tx, candidate, decision); err != nil {
 			return ObservationReceipt{}, err
 		}
+		if candidate.SourcePath != SourcePathHistoryReplay && decision.Status == ObservationAccepted {
+			if err := foldProbeOffsets(ctx, tx, decision.SiteID, decision.DeviceID, candidate.TelemetryKey); err != nil {
+				return ObservationReceipt{}, err
+			}
+		}
 	} else if decision.RecordHealth {
 		if err := updatePointHealth(ctx, tx, candidate, decision); err != nil {
 			return ObservationReceipt{}, err
@@ -305,7 +310,7 @@ WHERE device_id = $1::uuid AND telemetry_key = $2
 		}
 		facts.Running = running
 		facts.InputsUntrusted = untrusted
-		if len(facts.Policy.QualityChecks.Physics) > 0 {
+		if len(facts.Policy.QualityChecks.Physics) > 0 || facts.Policy.QualityChecks.Uncertainty != nil {
 			peers, err := loadPhysicsPeers(ctx, tx, facts.Policy.QualityChecks)
 			if err != nil {
 				return ObservationFacts{}, "", err
@@ -387,6 +392,16 @@ func loadPhysicsPeers(ctx context.Context, tx pgx.Tx, checks *QualityChecks) (ma
 			add(expect.DeviceID, expect.Key)
 		}
 	}
+	if checks.Uncertainty != nil {
+		add(checks.Uncertainty.Supply.DeviceID, checks.Uncertainty.Supply.Key)
+		add(checks.Uncertainty.Return.DeviceID, checks.Uncertainty.Return.Key)
+		if checks.Uncertainty.Flow != nil {
+			add(checks.Uncertainty.Flow.DeviceID, checks.Uncertainty.Flow.Key)
+		}
+		if checks.Uncertainty.Power != nil {
+			add(checks.Uncertainty.Power.DeviceID, checks.Uncertainty.Power.Key)
+		}
+	}
 	peers := make(map[string]PeerSample, len(refs))
 	for _, item := range refs {
 		var raw []byte
@@ -408,6 +423,13 @@ WHERE device_id = $1::uuid AND telemetry_key = $2
 		peers[item.device+"/"+item.key] = sample
 	}
 	return peers, nil
+}
+
+func measurementArg(raw []byte) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return raw
 }
 
 func jsonText(raw []byte) string {
@@ -664,8 +686,8 @@ func upsertLatestObservation(ctx context.Context, tx pgx.Tx, candidate Observati
 INSERT INTO telemetry_runtime.latest_accepted_telemetry (
   device_id, telemetry_key, business_revision, value, value_type, unit, sampled_at,
   received_at, freshness, quality, quality_reasons, policy_revision, updated_at,
-  unchanged_since, health_status, health_score, health_reasons, health_at
-) VALUES ($1::uuid, $2, 1, $3::jsonb, $4, $5, $6, $7, 'FRESH', $8, $9, $10, $7, $11, $12, $13, $14, $7)
+  unchanged_since, health_status, health_score, health_reasons, health_at, measurement
+) VALUES ($1::uuid, $2, 1, $3::jsonb, $4, $5, $6, $7, 'FRESH', $8, $9, $10, $7, $11, $12, $13, $14, $7, $15::jsonb)
 ON CONFLICT (device_id, telemetry_key) DO UPDATE SET
   value = EXCLUDED.value,
   value_type = EXCLUDED.value_type,
@@ -680,11 +702,12 @@ ON CONFLICT (device_id, telemetry_key) DO UPDATE SET
   health_status = EXCLUDED.health_status,
   health_score = EXCLUDED.health_score,
   health_reasons = EXCLUDED.health_reasons,
-  health_at = EXCLUDED.health_at
+  health_at = EXCLUDED.health_at,
+  measurement = EXCLUDED.measurement
 WHERE telemetry_runtime.latest_accepted_telemetry.sampled_at <= EXCLUDED.sampled_at
 `, decision.DeviceID, candidate.TelemetryKey, []byte(candidate.Value), candidate.ValueType, candidate.Unit,
 		candidate.SampledAt, candidate.ReceivedAt, string(decision.Quality), qualityReasonStrings(decision.QualityReasons), decision.PolicyRevision,
-		unchanged, decision.HealthStatus, decision.HealthScore, qualityReasonStrings(decision.HealthReasons))
+		unchanged, decision.HealthStatus, decision.HealthScore, qualityReasonStrings(decision.HealthReasons), measurementArg(decision.Measurement))
 	if err != nil {
 		return fmt.Errorf("replace latest accepted telemetry: %w", err)
 	}
