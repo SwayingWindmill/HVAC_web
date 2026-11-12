@@ -21,14 +21,18 @@ type pricedSiteRow struct {
 }
 
 func (reader *Reader) PricedSites(ctx context.Context, since time.Time) ([]energy.PricedSite, error) {
-	payload, err := reader.query(ctx, "priced Site query", fmt.Sprintf(`SELECT toString(tenant_id) AS tenant_id, toString(site_id) AS site_id
+	return reader.electricitySites(ctx, "priced Site", "tariff_price_window_syncs", since)
+}
+
+func (reader *Reader) electricitySites(ctx context.Context, label string, syncTable string, since time.Time) ([]energy.PricedSite, error) {
+	payload, err := reader.query(ctx, label+" query", fmt.Sprintf(`SELECT toString(tenant_id) AS tenant_id, toString(site_id) AS site_id
 FROM %[1]s.%[2]s
-WHERE period_end >= {since:DateTime64(3, 'UTC')} AND energy_type = 'electricity' AND accounting_scope = 'SITE'
+WHERE period_end >= {since:DateTime64(3, 'UTC')} AND energy_type = 'electricity' AND accounting_scope IN ('SITE', 'BRANCH')
 UNION DISTINCT
 SELECT toString(tenant_id) AS tenant_id, toString(site_id) AS site_id
-FROM %[1]s.tariff_price_window_syncs
+FROM %[1]s.%[3]s
 ORDER BY tenant_id, site_id
-FORMAT JSONEachRow`, reader.analyticsDatabase, reader.analyticsTable), url.Values{"param_since": {clickHouseTime(since)}})
+FORMAT JSONEachRow`, reader.analyticsDatabase, reader.analyticsTable, syncTable), url.Values{"param_since": {clickHouseTime(since)}})
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +43,7 @@ FORMAT JSONEachRow`, reader.analyticsDatabase, reader.analyticsTable), url.Value
 		if err := decoder.Decode(&row); errors.Is(err, io.EOF) {
 			return sites, nil
 		} else if err != nil {
-			return nil, fmt.Errorf("decode priced Site: %w", err)
+			return nil, fmt.Errorf("decode %s: %w", label, err)
 		}
 		sites = append(sites, energy.PricedSite{TenantID: row.TenantID, SiteID: row.SiteID})
 	}

@@ -43,8 +43,8 @@ func TestClientReadsTheSiteTotalFromTheSiteEnergyView(t *testing.T) {
 		if answeredCostQuery(writer, decoded) {
 			return
 		}
-		if len(decoded.Query.Measures) == 2 && decoded.Query.Measures[0] == "site_energy.max_data_watermark" {
-			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-08-01T00:00:00.000Z","site_energy.max_dataset_revision":"1722470400000"}]}`))
+		if decoded.Query.Measures[0] == "site_energy.max_data_watermark" {
+			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-08-01T00:00:00.000Z","site_energy.max_dataset_revision":"1722470400000","site_energy.synthesized_total":"0"}]}`))
 			return
 		}
 		_, _ = writer.Write([]byte(`{
@@ -76,7 +76,7 @@ func TestClientReadsTheSiteTotalFromTheSiteEnergyView(t *testing.T) {
 	}
 	seriesQuery := captured[0].Query
 	metadataQuery := captured[1].Query
-	if len(seriesQuery.Measures) != 4 || seriesQuery.Measures[0] != "site_energy.energy_valid_kwh" {
+	if len(seriesQuery.Measures) != 5 || seriesQuery.Measures[0] != "site_energy.energy_valid_kwh" || seriesQuery.Measures[1] != "site_energy.cross_gap_valid_kwh" {
 		t.Fatalf("series measures = %#v", seriesQuery.Measures)
 	}
 	if len(seriesQuery.TimeDimensions) != 1 || seriesQuery.TimeDimensions[0].Granularity != "day" || seriesQuery.TimeDimensions[0].Dimension != "site_energy.period_end" {
@@ -99,7 +99,7 @@ func TestClientReadsTheSiteTotalFromTheSiteEnergyView(t *testing.T) {
 	if response.Devices != nil {
 		t.Fatalf("devices = %#v, want none unless a breakdown is asked for", response.Devices)
 	}
-	if len(metadataQuery.Measures) != 2 || len(metadataQuery.TimeDimensions) != 0 || metadataQuery.Measures[0] != "site_energy.max_data_watermark" {
+	if len(metadataQuery.Measures) != 3 || len(metadataQuery.TimeDimensions) != 0 || metadataQuery.Measures[0] != "site_energy.max_data_watermark" || metadataQuery.Measures[2] != "site_energy.synthesized_total" {
 		t.Fatalf("metadata query = %#v", metadataQuery)
 	}
 	// The watermark only needs facts from the window's start on; an unbounded query reads the Site's whole history.
@@ -145,9 +145,9 @@ func TestClientBreaksTheSiteDownByMeteredDevice(t *testing.T) {
 		case len(decoded.Query.Dimensions) == 1:
 			breakdownQuery = &decoded.Query
 			_, _ = writer.Write([]byte(`{"data":[
-				{"equipment_energy.equipment_id":"` + pump + `","equipment_energy.period_end.day":"2026-07-01T00:00:00.000","equipment_energy.energy_valid_kwh":"20"},
-				{"equipment_energy.equipment_id":"` + chiller + `","equipment_energy.period_end.day":"2026-07-02T00:00:00.000","equipment_energy.energy_valid_kwh":"70"},
-				{"equipment_energy.equipment_id":"` + chiller + `","equipment_energy.period_end.day":"2026-07-01T00:00:00.000","equipment_energy.energy_valid_kwh":"80"}
+				{"equipment_energy.equipment_id":"` + pump + `","equipment_energy.period_end.day":"2026-07-01T00:00:00.000","equipment_energy.energy_valid_kwh":"20","equipment_energy.cross_gap_valid_kwh":"5"},
+				{"equipment_energy.equipment_id":"` + chiller + `","equipment_energy.period_end.day":"2026-07-02T00:00:00.000","equipment_energy.energy_valid_kwh":"70","equipment_energy.cross_gap_valid_kwh":null},
+				{"equipment_energy.equipment_id":"` + chiller + `","equipment_energy.period_end.day":"2026-07-01T00:00:00.000","equipment_energy.energy_valid_kwh":"80","equipment_energy.cross_gap_valid_kwh":null}
 			]}`))
 		default:
 			_, _ = writer.Write([]byte(`{"data":[
@@ -175,7 +175,7 @@ func TestClientBreaksTheSiteDownByMeteredDevice(t *testing.T) {
 	if len(response.Points) != 2 || response.Points[0].EnergyKWh != 123.5 {
 		t.Fatalf("site points = %#v", response.Points)
 	}
-	if len(response.Devices) != 2 || response.Devices[0].DeviceID != chiller || response.Devices[1].DeviceID != pump {
+	if len(response.Devices) != 2 || response.Devices[0].DeviceID != chiller || response.Devices[1].DeviceID != pump || response.Devices[1].CrossGapKWh != 5 {
 		t.Fatalf("devices = %#v", response.Devices)
 	}
 	chillerPoints := response.Devices[0].Points
@@ -397,4 +397,115 @@ func answeredCostQuery(writer http.ResponseWriter, decoded loadRequest) bool {
 	}
 	_, _ = writer.Write([]byte(`{"data":[]}`))
 	return true
+}
+
+func TestClientMapsIncompleteSynthesizedHoursAndCrossGapEnergy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var decoded loadRequest
+		if err := json.NewDecoder(request.Body).Decode(&decoded); err != nil {
+			t.Fatal(err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(decoded.Query.Measures[0], costView+"."):
+			_, _ = writer.Write([]byte(`{"data":[
+				{"site_energy_cost.period_end.hour":"2026-11-12T10:00:00.000","site_energy_cost.tariff_period":"PEAK","site_energy_cost.cost_valid_cny":"30","site_energy_cost.priced_valid_kwh":"30","site_energy_cost.unpriced_valid_kwh":"0","site_energy_cost.cross_gap_cost_valid_cny":"0","site_energy_cost.cross_gap_priced_valid_kwh":"0","site_energy_cost.cross_gap_unpriced_valid_kwh":"0"},
+				{"site_energy_cost.period_end.hour":"2026-11-12T11:00:00.000","site_energy_cost.tariff_period":"PEAK","site_energy_cost.cost_valid_cny":"20","site_energy_cost.priced_valid_kwh":"20","site_energy_cost.unpriced_valid_kwh":"0","site_energy_cost.cross_gap_cost_valid_cny":"120","site_energy_cost.cross_gap_priced_valid_kwh":"100","site_energy_cost.cross_gap_unpriced_valid_kwh":"0"}
+			]}`))
+		case decoded.Query.Measures[0] == "site_energy.max_data_watermark":
+			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-11-12T04:00:00.000Z","site_energy.max_dataset_revision":"9","site_energy.synthesized_total":"1"}]}`))
+		case decoded.Query.Measures[0] == "site_energy.missing_count":
+			_, _ = writer.Write([]byte(`{"data":[
+				{"site_energy.period_end.hour":"2026-11-12T11:00:00.000","site_energy.missing_meter":"2号电表（D机组）","site_energy.missing_count":"1"}
+			]}`))
+		default:
+			_, _ = writer.Write([]byte(`{"data":[
+				{"site_energy.period_end.hour":"2026-11-12T10:00:00.000","site_energy.energy_valid_kwh":"30","site_energy.cross_gap_valid_kwh":null,"site_energy.valid_count":"4","site_energy.suspect_count":"0","site_energy.invalid_count":"0"},
+				{"site_energy.period_end.hour":"2026-11-12T11:00:00.000","site_energy.energy_valid_kwh":"20","site_energy.cross_gap_valid_kwh":"100","site_energy.valid_count":"3","site_energy.suspect_count":"0","site_energy.invalid_count":"0"}
+			]}`))
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(Config{BaseURL: server.URL, DatasetRevision: "energy:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, _ := time.LoadLocation("Asia/Shanghai")
+	query := analyticsmodel.EnergySeriesQuery{
+		TenantID:      testCubeTenantID,
+		SiteID:        testCubeSiteID,
+		EnergyType:    analyticsmodel.EnergyTypeElectricity,
+		Granularity:   analyticsmodel.GranularityHour,
+		Timezone:      "Asia/Shanghai",
+		From:          time.Date(2026, 11, 12, 10, 0, 0, 0, location).UTC(),
+		To:            time.Date(2026, 11, 12, 12, 0, 0, 0, location).UTC(),
+		QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
+	}
+	response, err := client.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Points) != 2 {
+		t.Fatalf("points = %#v", response.Points)
+	}
+	if response.Points[0].Incomplete || len(response.Points[0].MissingMeters) != 0 || response.Points[0].EnergyKWh != 30 {
+		t.Fatalf("first hour = %#v", response.Points[0])
+	}
+	if !response.Points[1].Incomplete || len(response.Points[1].MissingMeters) != 1 || response.Points[1].MissingMeters[0] != "2号电表（D机组）" || response.Points[1].EnergyKWh != 20 {
+		t.Fatalf("second hour = %#v", response.Points[1])
+	}
+	if response.CrossGap == nil || response.CrossGap.EnergyKWh != 100 || response.CrossGap.Cost == nil || response.CrossGap.Cost.AmountCNY != 120 {
+		t.Fatalf("crossGap = %#v", response.CrossGap)
+	}
+	if !response.Metadata.Partial || !response.Metadata.Synthesized {
+		t.Fatalf("expected incomplete synthesized hour to mark Metadata.Partial = true and Synthesized = true, got %#v", response.Metadata)
+	}
+}
+
+func TestClientIncludesCrossGapInMonthlyBuckets(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var decoded loadRequest
+		if err := json.NewDecoder(request.Body).Decode(&decoded); err != nil {
+			t.Fatal(err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(decoded.Query.Measures[0], costView+"."):
+			_, _ = writer.Write([]byte(`{"data":[
+				{"site_energy_cost.period_end.month":"2026-11-01T00:00:00.000","site_energy_cost.tariff_period":"PEAK","site_energy_cost.cost_valid_cny":"200","site_energy_cost.priced_valid_kwh":"200","site_energy_cost.unpriced_valid_kwh":"0","site_energy_cost.cross_gap_cost_valid_cny":"120","site_energy_cost.cross_gap_priced_valid_kwh":"100","site_energy_cost.cross_gap_unpriced_valid_kwh":"0"}
+			]}`))
+		case decoded.Query.Measures[0] == "site_energy.max_data_watermark":
+			_, _ = writer.Write([]byte(`{"data":[{"site_energy.max_data_watermark":"2026-11-12T04:00:00.000Z","site_energy.max_dataset_revision":"9","site_energy.synthesized_total":"1"}]}`))
+		default:
+			_, _ = writer.Write([]byte(`{"data":[
+				{"site_energy.period_end.month":"2026-11-01T00:00:00.000","site_energy.energy_valid_kwh":"200","site_energy.cross_gap_valid_kwh":"100","site_energy.valid_count":"48","site_energy.suspect_count":"0","site_energy.invalid_count":"0"}
+			]}`))
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(Config{BaseURL: server.URL, DatasetRevision: "energy:v1", TokenFactory: fixedTokenFactory{}, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	location, _ := time.LoadLocation("Asia/Shanghai")
+	query := analyticsmodel.EnergySeriesQuery{
+		TenantID:      testCubeTenantID,
+		SiteID:        testCubeSiteID,
+		EnergyType:    analyticsmodel.EnergyTypeElectricity,
+		Granularity:   analyticsmodel.GranularityMonth,
+		Timezone:      "Asia/Shanghai",
+		From:          time.Date(2026, 11, 1, 0, 0, 0, 0, location).UTC(),
+		To:            time.Date(2026, 11, 13, 0, 0, 0, 0, location).UTC(),
+		QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
+	}
+	response, err := client.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Points) != 1 || response.Points[0].EnergyKWh != 300 || response.Points[0].CrossGapKWh != 100 || response.Points[0].Cost == nil || response.Points[0].Cost.AmountCNY != 320 {
+		t.Fatalf("monthly point = %#v", response.Points)
+	}
+	if response.CrossGap == nil || response.CrossGap.EnergyKWh != 100 {
+		t.Fatalf("crossGap = %#v", response.CrossGap)
+	}
 }

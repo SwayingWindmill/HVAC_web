@@ -177,26 +177,38 @@ export interface MonthlyBudgetProgressSummary {
   readonly touPeriods: readonly TouCostShareRow[];
 }
 
+function hasSeriesElectricity(electricity: EnergySeriesResponse | null): boolean {
+  return Boolean(
+    electricity &&
+      (electricity.points.length > 0 ||
+        (electricity.crossGap !== undefined && electricity.crossGap.energyKWh > 0)),
+  );
+}
+
 function classifyPricingState(
   electricity: EnergySeriesResponse | null,
   energyKWh: number,
   unpricedKWh: number,
 ): BillingPricingState {
-  if (!electricity || electricity.points.length === 0) return 'NO_DATA';
+  if (!hasSeriesElectricity(electricity)) return 'NO_DATA';
   if (unpricedKWh <= 0) return 'PRICED';
   if (energyKWh > 0 && unpricedKWh >= energyKWh) return 'UNPRICED';
   return 'PARTIAL_UNPRICED';
 }
 
 function summarizeElectricitySeries(electricity: EnergySeriesResponse | null) {
-  const buckets = (electricity?.points ?? []).map((point) => ({
-    electricityKWh: point.energyKWh,
-    cost: point.cost ?? null,
-  }));
+  const buckets = [
+    ...(electricity?.points ?? []).map((point) => ({
+      electricityKWh: point.energyKWh,
+      cost: point.cost ?? null,
+    })),
+    ...(electricity?.crossGap && electricity.crossGap.energyKWh > 0
+      ? [{ electricityKWh: electricity.crossGap.energyKWh, cost: electricity.crossGap.cost ?? null }]
+      : []),
+  ];
   const tou = sumCosts(buckets);
   const pricingState = classifyPricingState(electricity, tou.energyKWh, tou.unpricedKWh);
-  const totalEnergyKWh =
-    electricity && electricity.points.length > 0 ? round2(tou.energyKWh) : null;
+  const totalEnergyKWh = hasSeriesElectricity(electricity) ? round2(tou.energyKWh) : null;
   const unpricedKWh = round2(tou.unpricedKWh);
   const pricedPortionCny = round2(tou.total);
   const estimatedCostCny = pricingState === 'PRICED' ? pricedPortionCny : null;

@@ -30,7 +30,14 @@ export function useEnergyBreakdown(period: EnergyPeriod) {
       const bucketKey = granularity === 'hour'
         ? (periodStart: string) => new Date(periodStart).toISOString()
         : (periodStart: string) => siteDayKey(new Date(periodStart), site.timezone);
-      return energyBreakdown(machines!, data.points, data.devices ?? [], bucketKey);
+      const isMonth = granularity === 'month';
+      const devices = (data.devices ?? []).map((device) => ({
+        deviceId: device.deviceId,
+        points: device.points,
+        crossGapKWh: isMonth ? 0 : (device.crossGapKWh ?? 0),
+      }));
+      const siteCrossGapKWh = isMonth ? 0 : (data.crossGap?.energyKWh ?? 0);
+      return energyBreakdown(machines!, data.points, devices, bucketKey, siteCrossGapKWh);
     };
   const query = useQuery({
     queryKey: ['energy-breakdown', site.id, period, machineKey],

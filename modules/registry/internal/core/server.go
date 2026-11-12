@@ -226,6 +226,18 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		writeJSON(writer, http.StatusOK, result)
 		return http.StatusOK
 	}
+	if route.resource == "total-electricity-sources" {
+		if len(request.URL.Query()) != 0 {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The Site total electricity sources query does not accept parameters.", false)
+			return http.StatusBadRequest
+		}
+		sources, err := server.store.GetSiteTotalElectricitySources(request.Context(), claims, route.parentID)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, sources)
+		return http.StatusOK
+	}
 	if route.resource == "import-tariffs" {
 		query := request.URL.Query()
 		before, err := time.Parse(time.RFC3339Nano, query.Get("before"))
@@ -631,6 +643,8 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/device-bindings", resource: "device-bindings", parentID: segments[1], action: registryauth.ActionDeviceBindingList, list: true}, true
 	case method == http.MethodGet && len(segments) == 4 && segments[0] == "sites" && segments[2] == "meter-bindings" && segments[3] == "resolve":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/meter-bindings/resolve", resource: "meter-binding-resolve", parentID: segments[1], action: registryauth.ActionMeterBindingResolve}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "total-electricity-sources":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/total-electricity-sources", resource: "total-electricity-sources", parentID: segments[1], action: registryauth.ActionMeterBindingResolve}, true
 	case method == http.MethodPost && len(segments) == 4 && segments[0] == "sites" && segments[2] == "bindings" && segments[3] == "rebind":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/bindings/rebind", resource: "binding-write", parentID: segments[1], action: registryauth.ActionBindingWrite, write: true}, true
 	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "asset-model":

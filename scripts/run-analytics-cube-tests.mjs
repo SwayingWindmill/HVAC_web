@@ -284,11 +284,12 @@ try {
     if (!refusal?.includes(`You requested hidden member: '${internal}'`)) throw new Error(`Cube did not refuse ${internal} as hidden: ${refusal}`);
   }
 
-  // The Query Service prices the Site's electricity through site_energy_cost (#575).
+  // The Query Service prices the Site's electricity through site_energy_cost (#575) and synthesizes
+  // sub-meter totals / missing-meter markers / cross-gap totals (#798).
   report.assertions.energyCost = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/telemetry',
-    'test', '-count=1', '-run', 'TestCubePricesTheSiteElectricityAtItsPriceWindows', '-v', './internal/cube/...',
+    'test', '-count=1', '-run', 'TestCubePricesTheSiteElectricityAtItsPriceWindows|TestCubeSynthesizesSiteTotalMarksMissingSubmetersAndSeparatesCrossGap', '-v', './internal/cube/...',
   ], {
     env: {
       ...process.env,

@@ -19,7 +19,7 @@ func NewQueryHours(series *energyseries.Client) *QueryHours {
 	return &QueryHours{series: series}
 }
 
-func (reader *QueryHours) Hours(ctx context.Context, tenantID, siteID string, location *time.Location, from, to time.Time) ([]Hour, error) {
+func (reader *QueryHours) Hours(ctx context.Context, tenantID, siteID string, location *time.Location, from, to time.Time) (MonthEnergy, error) {
 	byStart := map[int64]*Hour{}
 	at := func(start time.Time) *Hour {
 		hour, ok := byStart[start.Unix()]
@@ -29,6 +29,8 @@ func (reader *QueryHours) Hours(ctx context.Context, tenantID, siteID string, lo
 		}
 		return hour
 	}
+	var electricityCrossGap *analyticsmodel.EnergyCrossGap
+	var coolingCrossGapKWh float64
 	for _, energyType := range []analyticsmodel.EnergyType{analyticsmodel.EnergyTypeElectricity, analyticsmodel.EnergyTypeCooling} {
 		query := analyticsmodel.EnergySeriesQuery{
 			TenantID: tenantID, SiteID: siteID, EnergyType: energyType, Granularity: analyticsmodel.GranularityHour,
@@ -36,7 +38,12 @@ func (reader *QueryHours) Hours(ctx context.Context, tenantID, siteID string, lo
 		}
 		series, err := reader.series.Series(ctx, query)
 		if err != nil {
-			return nil, err
+			return MonthEnergy{}, err
+		}
+		if energyType == analyticsmodel.EnergyTypeElectricity {
+			electricityCrossGap = series.CrossGap
+		} else if series.CrossGap != nil {
+			coolingCrossGapKWh = series.CrossGap.EnergyKWh
 		}
 		for _, point := range series.Points {
 			hour := at(point.PeriodStart)
@@ -52,5 +59,9 @@ func (reader *QueryHours) Hours(ctx context.Context, tenantID, siteID string, lo
 		hours = append(hours, *hour)
 	}
 	sort.Slice(hours, func(left, right int) bool { return hours[left].Start.Before(hours[right].Start) })
-	return hours, nil
+	return MonthEnergy{
+		Hours:               hours,
+		ElectricityCrossGap: electricityCrossGap,
+		CoolingCrossGapKWh:  coolingCrossGapKWh,
+	}, nil
 }

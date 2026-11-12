@@ -132,7 +132,7 @@ func (client *Client) semanticMetadata(ctx context.Context, token string, query 
 	if err != nil {
 		return analyticsmodel.SemanticMetadata{}, fmt.Errorf("query Cube semantic metadata: %w", err)
 	}
-	watermark, revision, err := mapEnergyMetadata(decoded)
+	watermark, revision, _, err := mapEnergyMetadata(decoded)
 	if err != nil {
 		return analyticsmodel.SemanticMetadata{}, err
 	}

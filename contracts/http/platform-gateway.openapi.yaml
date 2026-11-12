@@ -3526,6 +3526,18 @@
           "periodStart": { "type": "string", "format": "date-time" },
           "periodEnd": { "type": "string", "format": "date-time" },
           "energyKWh": { "type": "number", "minimum": 0 },
+          "crossGapKWh": { "type": "number", "minimum": 0 },
+          "cost": { "$ref": "#/components/schemas/EnergyCost" },
+          "incomplete": { "type": "boolean" },
+          "missingMeters": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "EnergyCrossGap": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["energyKWh"],
+        "properties": {
+          "energyKWh": { "type": "number", "minimum": 0 },
           "cost": { "$ref": "#/components/schemas/EnergyCost" }
         }
       },
@@ -3557,6 +3569,7 @@
         "properties": {
           "schemaVersion": { "type": "integer", "const": 1 },
           "points": { "type": "array", "items": { "$ref": "#/components/schemas/EnergySeriesPoint" } },
+          "crossGap": { "$ref": "#/components/schemas/EnergyCrossGap" },
           "devices": {
             "type": "array",
             "description": "Present only for breakdown=device. Devices without a sub-meter are absent.",
@@ -3566,7 +3579,8 @@
               "required": ["deviceId", "points"],
               "properties": {
                 "deviceId": { "type": "string", "format": "uuid" },
-                "points": { "type": "array", "items": { "$ref": "#/components/schemas/EnergySeriesPoint" } }
+                "points": { "type": "array", "items": { "$ref": "#/components/schemas/EnergySeriesPoint" } },
+                "crossGapKWh": { "type": "number", "minimum": 0 }
               }
             }
           },
@@ -3581,6 +3595,7 @@
               "aggregateWatermark": { "type": "string", "format": "date-time" },
               "datasetRevision": { "type": "string" },
               "partial": { "type": "boolean" },
+              "synthesized": { "type": "boolean" },
               "qualitySummary": {
                 "type": "object",
                 "additionalProperties": false,

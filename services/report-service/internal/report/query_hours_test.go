@@ -49,10 +49,13 @@ func queryHoursFixture(t *testing.T, siteBound bool) (*QueryHours, *[]analyticsm
 		}
 		points := []analyticsmodel.EnergySeriesPoint{hour("2026-09-01T02:00:00Z", 40), hour("2026-09-01T03:00:00Z", 55.5)}
 		points[0].Cost = &fortyKWhCost
-		if body.EnergyType == analyticsmodel.EnergyTypeCooling {
+		var crossGap *analyticsmodel.EnergyCrossGap
+		if body.EnergyType == analyticsmodel.EnergyTypeElectricity {
+			crossGap = &analyticsmodel.EnergyCrossGap{EnergyKWh: 80, Cost: &fortyKWhCost}
+		} else {
 			points = []analyticsmodel.EnergySeriesPoint{hour("2026-09-01T02:00:00Z", 180), hour("2026-09-01T04:00:00Z", 12)}
 		}
-		_ = json.NewEncoder(writer).Encode(analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: points})
+		_ = json.NewEncoder(writer).Encode(analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: points, CrossGap: crossGap})
 	}))
 	t.Cleanup(query.Close)
 	return NewQueryHours(energyseries.New(energyseries.Config{IAMURL: iam.URL, QueryURL: query.URL, IAMClient: iam.Client(), QueryClient: query.Client()})), &asked
@@ -67,9 +70,13 @@ func TestQueryHoursReadsElectricityAndCoolingAsTheReportsOwnWorkload(t *testing.
 	from := time.Date(2026, 9, 1, 0, 0, 0, 0, location)
 	to := time.Date(2026, 10, 1, 0, 0, 0, 0, location)
 
-	hours, err := reader.Hours(context.Background(), testTenant, testSite, location, from, to)
+	monthEnergy, err := reader.Hours(context.Background(), testTenant, testSite, location, from, to)
 	if err != nil {
 		t.Fatal(err)
+	}
+	hours := monthEnergy.Hours
+	if monthEnergy.ElectricityCrossGap == nil || monthEnergy.ElectricityCrossGap.EnergyKWh != 80 {
+		t.Fatalf("crossGap = %#v", monthEnergy.ElectricityCrossGap)
 	}
 	// The same bucketing the report used: valid energy by Site-local hour.
 	for _, query := range *asked {

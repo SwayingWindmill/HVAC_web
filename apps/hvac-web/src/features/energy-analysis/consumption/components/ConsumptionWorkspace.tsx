@@ -8,6 +8,7 @@ import { Panel } from "@/blocks/panel";
 import { InfoTip } from "@/components/info-tip";
 import { MetricTabsChartCard, type MetricTab } from "@/components/metric-tabs-chart-card";
 import { Main } from "@/components/layout/Main";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DeltaBadge } from "@/components/ui/delta-badge";
 import { PeriodTabs } from "@/components/ui/period-tabs";
@@ -28,6 +29,7 @@ import {
   explainQuestion,
   periodWindow,
   relativeChange,
+  summaryCostBuckets,
   wallTime,
   type BucketComparison,
   type EnergyPeriod,
@@ -86,8 +88,8 @@ export function ConsumptionWorkspace() {
     const byLabel = (pick: (bucket: BucketComparison) => { electricityKWh: number | null; cost: BucketComparison["cost"] }) =>
       new Map(comparison.buckets.filter((bucket) => pick(bucket).electricityKWh !== null).map((bucket) => [bucket.label, sumCosts([pick(bucket)])]));
     return {
-      current: sumCosts(comparison.current.rows),
-      previous: sumCosts(comparison.previous.rows),
+      current: sumCosts(summaryCostBuckets(comparison.current)),
+      previous: sumCosts(summaryCostBuckets(comparison.previous)),
       byLabel: byLabel((bucket) => ({ electricityKWh: bucket.electricityKWh, cost: bucket.cost })),
       previousByLabel: byLabel((bucket) => ({ electricityKWh: bucket.previousElectricityKWh, cost: bucket.previousCost })),
       codes: tariffCodes(tariff.data),
@@ -242,7 +244,10 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
     {
       key: "electricityKWh", label: "空调用电", compareKey: "previousElectricityKWh", partialKey: "electricityKWhPartial",
       value: electricity.value, unit: electricity.unit, fractionDigits: 1, invertDelta: true,
-      delta: relativeChange(current.electricityKWh, previous.electricityKWh), caption: previousEnergy(previous.electricityKWh),
+      delta: relativeChange(current.electricityKWh, previous.electricityKWh),
+      caption: current.missingMeters.length > 0
+        ? `不完整，缺 ${current.missingMeters.join("、")}`
+        : previousEnergy(previous.electricityKWh),
     },
     {
       key: "coolingKWh", label: "供冷量", compareKey: "previousCoolingKWh", partialKey: "coolingKWhPartial",
@@ -266,6 +271,7 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
   const active = metrics.find((candidate) => candidate.key === metric) ?? metrics[0];
   const unit = active.key === "cop" ? "COP" : active.key === "cost" ? "元" : "kWh";
   const metered = current.rows.filter((row) => row.electricityKWh !== null);
+  const meteredElectricityKWh = metered.reduce((sum, row) => sum + row.electricityKWh!, 0);
   const noun = BUCKET_NOUN[granularity];
 
   return (
@@ -293,7 +299,13 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
           <span className="text-xs text-muted-foreground">{unit}</span>
           <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
             {current.peak ? <span>用电最高{noun} <span className="font-medium text-foreground">{current.peak.label}</span> {formatDecimal(current.peak.electricityKWh!, 1)} kWh</span> : null}
-            {metered.length > 0 ? <span>平均每{noun} {formatDecimal(current.electricityKWh! / metered.length, 1)} kWh</span> : null}
+            {metered.length > 0 ? <span>平均每{noun} {formatDecimal(meteredElectricityKWh / metered.length, 1)} kWh</span> : null}
+            {current.crossGapElectricityKWh > 0 ? (
+              <span className="flex items-center gap-1 text-foreground">
+                跨缺口电量 <span className="font-medium tabular-nums">{formatDecimal(current.crossGapElectricityKWh, 1)} kWh</span>
+                <InfoTip>累计读数间隔超过 1 小时的恢复电量：计入期间总量与电费，不摊入逐时或每日曲线</InfoTip>
+              </span>
+            ) : null}
             {current.excludedIntervals > 0 ? (
               <span className="flex items-center gap-1 text-warning-text">
                 <TriangleAlert className="size-3.5" aria-hidden="true" />
@@ -362,7 +374,14 @@ function DetailTable({ comparison, pricing, previousLabel, timeZone }: {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.length === 0 ? (
+          {granularity !== "month" && comparison.current.crossGapElectricityKWh > 0 ? (
+            <TableRow className="bg-muted/25 hover:bg-muted/25">
+              <TableCell colSpan={6 + codes.length} className="pl-5 pr-5 py-2 text-xs text-muted-foreground">
+                期间内另有跨缺口恢复电量已计入上方总量与分时电费，不摊入单{BUCKET_NOUN[granularity]}明细
+              </TableCell>
+            </TableRow>
+          ) : null}
+          {rows.length === 0 && comparison.current.crossGapElectricityKWh <= 0 ? (
             <TableRow className="hover:bg-transparent"><TableCell colSpan={6 + codes.length} className="py-8 text-center text-muted-foreground">本期间还没有计量数据</TableCell></TableRow>
           ) : rows.map((row) => {
             const change = relativeChange(row.electricityKWh, row.previousElectricityKWh);
@@ -372,7 +391,10 @@ function DetailTable({ comparison, pricing, previousLabel, timeZone }: {
                 <TableCell className="pl-5">
                   <span className="flex items-center gap-2">
                     <span className="font-medium">{row.label}</span>
-                    {!row.complete ? <span className="rounded-md bg-primary-soft px-1.5 text-[11px] leading-[18px] font-medium text-primary">进行中</span> : null}
+                    {!row.complete ? <Badge>进行中</Badge> : null}
+                    {row.missingMeters.length > 0 ? (
+                      <Badge variant="warning">▲ 不完整，缺 {row.missingMeters.join("、")}</Badge>
+                    ) : null}
                     {row.complete && row.electricityKWh !== null ? (
                       <Button
                         variant="ghost"

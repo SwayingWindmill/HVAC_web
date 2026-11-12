@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { useMemo } from 'react';
+import { InfoTip } from '@/components/info-tip';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatDecimal } from '@/lib/operator-format';
 import { useYearLive, yearSnapshotsQuery } from '../query';
@@ -60,6 +61,12 @@ export function YearlyReport({ year, now }: { readonly year: number; readonly no
       </Section>
 
       <Section index={2} title="逐月用能与能效" description="用电最多的月份已标出">
+        {totals.crossGapElectricityKWh > 0 ? (
+          <p className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
+            跨缺口电量 {formatDecimal(totals.crossGapElectricityKWh, 1)} kWh
+            <InfoTip>累计读数间隔超过 1 小时的恢复电量：已计入对应月份与全年空调用电及电度电费</InfoTip>
+          </p>
+        ) : null}
         <EnergyTrend unitLabel="空调用电 · kWh（每月）" rows={rows.map((row) => ({ label: `${Number(row.month.slice(5, 7))}月`, electricityKWh: row.electricityKWh === null ? null : Math.round(row.electricityKWh), cop: row.cop === null ? null : Number(row.cop.toFixed(2)) }))} />
         <table className="w-full text-sm" aria-label="逐月明细">
           <thead>

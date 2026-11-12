@@ -100,6 +100,7 @@ export interface ReportSnapshot {
   readonly daysInMonth: number;
   readonly daysWithData: number;
   readonly electricityKWh: number;
+  readonly crossGapElectricityKWh?: number;
   readonly coolingKWh: number;
   readonly cop: number | null;
   /** Time-of-use energy cost; null without an import Tariff or with an hour no period priced. */
@@ -156,6 +157,7 @@ export function yearMonths(year: number, now: Date, timeZone: string): string[] 
 
 export interface LiveMonth {
   readonly electricityKWh: number | null;
+  readonly crossGapElectricityKWh?: number;
   readonly coolingKWh: number | null;
   readonly energyCost: number | null;
 }
@@ -166,6 +168,7 @@ export interface YearRow {
   readonly source: 'snapshot' | 'live' | 'none';
   readonly version: number | null;
   readonly electricityKWh: number | null;
+  readonly crossGapElectricityKWh: number;
   readonly coolingKWh: number | null;
   readonly cop: number | null;
   readonly energyCost: number | null;
@@ -184,30 +187,69 @@ export function yearRows(months: readonly string[], snapshots: readonly StoredRe
     if (stored) {
       const report = stored.report;
       return {
-        month, source: 'snapshot', version: stored.version, electricityKWh: report.electricityKWh, coolingKWh: report.coolingKWh,
-        cop: report.cop, energyCost: report.energyCostCNY, daysWithData: report.daysWithData, daysInMonth: report.daysInMonth,
+        month,
+        source: 'snapshot',
+        version: stored.version,
+        electricityKWh: report.electricityKWh,
+        crossGapElectricityKWh: report.crossGapElectricityKWh ?? 0,
+        coolingKWh: report.coolingKWh,
+        cop: report.cop,
+        energyCost: report.energyCostCNY,
+        daysWithData: report.daysWithData,
+        daysInMonth: report.daysInMonth,
       };
     }
     const figures = live.get(month);
     if (!figures || (figures.electricityKWh === null && figures.coolingKWh === null)) {
-      return { month, source: 'none', version: null, electricityKWh: null, coolingKWh: null, cop: null, energyCost: null, daysWithData: null, daysInMonth: daysIn(month) };
+      return {
+        month,
+        source: 'none',
+        version: null,
+        electricityKWh: null,
+        crossGapElectricityKWh: 0,
+        coolingKWh: null,
+        cop: null,
+        energyCost: null,
+        daysWithData: null,
+        daysInMonth: daysIn(month),
+      };
     }
     return {
-      month, source: 'live', version: null, electricityKWh: figures.electricityKWh, coolingKWh: figures.coolingKWh,
-      cop: ratioOf(figures.coolingKWh, figures.electricityKWh), energyCost: figures.energyCost, daysWithData: null, daysInMonth: daysIn(month),
+      month,
+      source: 'live',
+      version: null,
+      electricityKWh: figures.electricityKWh,
+      crossGapElectricityKWh: figures.crossGapElectricityKWh ?? 0,
+      coolingKWh: figures.coolingKWh,
+      cop: ratioOf(figures.coolingKWh, figures.electricityKWh),
+      energyCost: figures.energyCost,
+      daysWithData: null,
+      daysInMonth: daysIn(month),
     };
   });
 }
 
 /** The year's totals; its cost only when every month with energy has one. */
-export function yearTotals(rows: readonly YearRow[]): { electricityKWh: number | null; coolingKWh: number | null; cop: number | null; energyCost: number | null } {
+export function yearTotals(rows: readonly YearRow[]): {
+  electricityKWh: number | null;
+  crossGapElectricityKWh: number;
+  coolingKWh: number | null;
+  cop: number | null;
+  energyCost: number | null;
+} {
   const withData = rows.filter((row) => row.source !== 'none');
-  if (withData.length === 0) return { electricityKWh: null, coolingKWh: null, cop: null, energyCost: null };
+  if (withData.length === 0) {
+    return { electricityKWh: null, crossGapElectricityKWh: 0, coolingKWh: null, cop: null, energyCost: null };
+  }
   const electricityKWh = withData.reduce((sum, row) => sum + (row.electricityKWh ?? 0), 0);
+  const crossGapElectricityKWh = withData.reduce((sum, row) => sum + row.crossGapElectricityKWh, 0);
   const coolingKWh = withData.reduce((sum, row) => sum + (row.coolingKWh ?? 0), 0);
   const priced = withData.every((row) => row.energyCost !== null || !row.electricityKWh);
   return {
-    electricityKWh, coolingKWh, cop: ratioOf(coolingKWh, electricityKWh),
+    electricityKWh,
+    crossGapElectricityKWh,
+    coolingKWh,
+    cop: ratioOf(coolingKWh, electricityKWh),
     energyCost: priced ? withData.reduce((sum, row) => sum + (row.energyCost ?? 0), 0) : null,
   };
 }

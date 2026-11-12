@@ -11,12 +11,22 @@ export const semanticCatalog = {
         {
           "name": "energy_valid_kwh",
           "title": "能耗（有效数据）",
-          "description": "只算质量判定为「有效」的读数，单位 kWh。必须同时按能源类型筛选，否则会把用电量和供冷量加在一起。"
+          "description": "只算质量判定为「有效」且非跨缺口的读数，单位 kWh。必须同时按能源类型筛选，否则会把用电量和供冷量加在一起。"
         },
         {
           "name": "energy_valid_and_suspect_kwh",
           "title": "能耗（含可疑数据）",
-          "description": "包括质量为「有效」和「可疑」的读数，单位 kWh；可疑读数较多时用来估算上限。同样必须按能源类型筛选。"
+          "description": "包括质量为「有效」和「可疑」且非跨缺口的读数，单位 kWh；可疑读数较多时用来估算上限。同样必须按能源类型筛选。"
+        },
+        {
+          "name": "cross_gap_valid_kwh",
+          "title": "跨缺口能耗（有效数据）",
+          "description": "累计读数前后相隔超过 1 小时的有效能耗之和，单位 kWh；计入月度总量，不摊入逐时或逐日曲线。必须按能源类型筛选。"
+        },
+        {
+          "name": "cross_gap_valid_and_suspect_kwh",
+          "title": "跨缺口能耗（含可疑数据）",
+          "description": "累计读数前后相隔超过 1 小时的有效与可疑能耗之和，单位 kWh。必须按能源类型筛选。"
         }
       ],
       "dimensions": [
@@ -45,27 +55,42 @@ export const semanticCatalog = {
         {
           "name": "energy_valid_kwh",
           "title": "能耗（有效数据）",
-          "description": "只算质量判定为「有效」的读数，单位 kWh。必须同时按能源类型筛选，否则会把用电量和供冷量加在一起。"
+          "description": "只算质量判定为「有效」且非跨缺口的读数，单位 kWh。必须同时按能源类型筛选，否则会把用电量和供冷量加在一起。"
         },
         {
           "name": "energy_valid_and_suspect_kwh",
           "title": "能耗（含可疑数据）",
-          "description": "包括质量为「有效」和「可疑」的读数，单位 kWh；可疑读数较多时用来估算上限。同样必须按能源类型筛选。"
+          "description": "包括质量为「有效」和「可疑」且非跨缺口的读数，单位 kWh；可疑读数较多时用来估算上限。同样必须按能源类型筛选。"
         },
         {
           "name": "electricity_valid_kwh",
           "title": "用电量",
-          "description": "站点总表的用电量（有效数据），单位 kWh。"
+          "description": "站点总表的用电量（有效数据，不含跨缺口电量），单位 kWh。"
         },
         {
           "name": "cooling_valid_kwh",
           "title": "供冷量",
-          "description": "站点的供冷量（有效数据），单位 kWh。"
+          "description": "站点的供冷量（有效数据，不含跨缺口冷量），单位 kWh。"
         },
         {
           "name": "cop",
           "title": "综合能效",
           "description": "同一时段的供冷量 ÷ 用电量（COP），两者都只算有效数据；没有用电量的时段为空。不要再按能源类型筛选，否则分子或分母为空。"
+        },
+        {
+          "name": "cross_gap_valid_kwh",
+          "title": "跨缺口能耗（有效数据）",
+          "description": "累计读数前后相隔超过 1 小时的有效能耗之和，单位 kWh；计入月度总量，不摊入逐时或逐日曲线。必须按能源类型筛选。"
+        },
+        {
+          "name": "cross_gap_valid_and_suspect_kwh",
+          "title": "跨缺口能耗（含可疑数据）",
+          "description": "累计读数前后相隔超过 1 小时的有效与可疑能耗之和，单位 kWh。必须按能源类型筛选。"
+        },
+        {
+          "name": "synthesized_total",
+          "title": "合成总表标记",
+          "description": "站点总表由各分表合成时为 1，物理总表为 0。"
         }
       ],
       "dimensions": [
@@ -78,6 +103,11 @@ export const semanticCatalog = {
           "name": "quality",
           "title": "数据质量",
           "description": "有效、可疑或无效。"
+        },
+        {
+          "name": "missing_meter",
+          "title": "缺失分表",
+          "description": "合成总表站点在该小时缺少有效读数的分表名称；完整小时为空字符串。"
         }
       ]
     },
@@ -89,32 +119,62 @@ export const semanticCatalog = {
         {
           "name": "cost_valid_cny",
           "title": "电度电费（有效数据）",
-          "description": "有效用电量按电价时段计价的估算电度电费，单位元；不含需量电费，实际账单以结算为准。没有电价的电量不计入，见「未计价电量」。"
+          "description": "有效用电量按电价时段计价的估算电度电费（不含跨缺口电量），单位元；不含需量电费，实际账单以结算为准。没有电价的电量不计入，见「未计价电量」。"
         },
         {
           "name": "cost_valid_and_suspect_cny",
           "title": "电度电费（含可疑数据）",
-          "description": "有效和可疑用电量的估算电度电费，单位元；可疑数据较多时用来估算上限。"
+          "description": "有效和可疑用电量的估算电度电费（不含跨缺口电量），单位元；可疑数据较多时用来估算上限。"
         },
         {
           "name": "priced_valid_kwh",
           "title": "已计价电量（有效数据）",
-          "description": "有电价覆盖的有效用电量，单位 kWh；按电价时段拆分时就是各时段的用电量。"
+          "description": "有电价覆盖的有效用电量（不含跨缺口电量），单位 kWh；按电价时段拆分时就是各时段的用电量。"
         },
         {
           "name": "priced_valid_and_suspect_kwh",
           "title": "已计价电量（含可疑数据）",
-          "description": "有电价覆盖的有效和可疑用电量，单位 kWh。"
+          "description": "有电价覆盖的有效和可疑用电量（不含跨缺口电量），单位 kWh。"
         },
         {
           "name": "unpriced_valid_kwh",
           "title": "未计价电量（有效数据）",
-          "description": "没有任何电价时段覆盖的有效用电量，单位 kWh，例如站点还没有分配购电电价；这部分电费是未知，不是零。"
+          "description": "没有任何电价时段覆盖的有效用电量（不含跨缺口电量），单位 kWh，例如站点还没有分配购电电价；这部分电费是未知，不是零。"
         },
         {
           "name": "unpriced_valid_and_suspect_kwh",
           "title": "未计价电量（含可疑数据）",
-          "description": "没有电价覆盖的有效和可疑用电量，单位 kWh。"
+          "description": "没有电价覆盖的有效和可疑用电量（不含跨缺口电量），单位 kWh。"
+        },
+        {
+          "name": "cross_gap_cost_valid_cny",
+          "title": "跨缺口电度电费（有效数据）",
+          "description": "跨缺口有效用电量按恢复读数时刻电价时段计价的估算电度电费，单位元。"
+        },
+        {
+          "name": "cross_gap_cost_valid_and_suspect_cny",
+          "title": "跨缺口电度电费（含可疑数据）",
+          "description": "跨缺口有效与可疑用电量的估算电度电费，单位元。"
+        },
+        {
+          "name": "cross_gap_priced_valid_kwh",
+          "title": "跨缺口已计价电量（有效数据）",
+          "description": "有电价覆盖的跨缺口有效用电量，单位 kWh。"
+        },
+        {
+          "name": "cross_gap_priced_valid_and_suspect_kwh",
+          "title": "跨缺口已计价电量（含可疑数据）",
+          "description": "有电价覆盖的跨缺口有效与可疑用电量，单位 kWh。"
+        },
+        {
+          "name": "cross_gap_unpriced_valid_kwh",
+          "title": "跨缺口未计价电量（有效数据）",
+          "description": "没有电价时段覆盖的跨缺口有效用电量，单位 kWh。"
+        },
+        {
+          "name": "cross_gap_unpriced_valid_and_suspect_kwh",
+          "title": "跨缺口未计价电量（含可疑数据）",
+          "description": "没有电价覆盖的跨缺口有效与可疑用电量，单位 kWh。"
         }
       ],
       "dimensions": [

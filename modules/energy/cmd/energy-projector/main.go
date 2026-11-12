@@ -68,11 +68,24 @@ func main() {
 		logger.Error("analytics_internal_client_invalid", "error_code", "ANALYTICS_INTERNAL_CLIENT_INVALID")
 		os.Exit(1)
 	}
-	bindingResolver, err := analyticsprojector.NewBindingResolver(analyticsprojector.RegistryClientConfig{
+	registryConfig := analyticsprojector.RegistryClientConfig{
 		BaseURL: requiredEnv("ANALYTICS_CORE_REGISTRY_URL"), IAMURL: requiredEnv("ANALYTICS_IAM_URL"), HTTPClient: internalClient,
-	})
+	}
+	bindingResolver, err := analyticsprojector.NewBindingResolver(registryConfig)
 	if err != nil {
 		logger.Error("analytics_core_binding_resolver_invalid", "error_code", "ANALYTICS_CORE_BINDING_RESOLVER_INVALID")
+		os.Exit(1)
+	}
+	submeterSources, err := analyticsprojector.NewTotalSubmeterSource(registryConfig)
+	if err != nil {
+		logger.Error("analytics_core_submeter_source_invalid", "error_code", "ANALYTICS_CORE_SUBMETER_SOURCE_INVALID")
+		os.Exit(1)
+	}
+	totalSubmeters, err := analyticsprojector.NewTotalSubmeterProjector(analyticsprojector.TotalSubmeterProjectorConfig{
+		Reader: reader, Writer: writer, Sources: submeterSources,
+	})
+	if err != nil {
+		logger.Error("analytics_submeter_projector_invalid", "error_code", "ANALYTICS_SUBMETER_PROJECTOR_INVALID")
 		os.Exit(1)
 	}
 	projector, err := energy.NewProjector(energy.ProjectorConfig{
@@ -99,6 +112,23 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	logger.Info("analytics_read_model_projector_started", "poll_interval", pollInterval.String())
+	go func() {
+		submeterTicker := time.NewTicker(durationEnv("ANALYTICS_TOTAL_SUBMETER_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour))
+		defer submeterTicker.Stop()
+		for {
+			syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
+			if syncErr := totalSubmeters.SyncOnce(syncCtx); syncErr != nil {
+				_ = telemetry.Metrics.AddCounter("hvac_analytics_projection_failures_total", "Failed analytics read-model projection batches.", map[string]string{"model": "site_total_submeters"}, 1)
+				logger.Warn("analytics_total_submeter_projection_failed", "error_code", "ANALYTICS_TOTAL_SUBMETER_PROJECTION_FAILED")
+			}
+			syncCancel()
+			select {
+			case <-ctx.Done():
+				return
+			case <-submeterTicker.C:
+			}
+		}
+	}()
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()

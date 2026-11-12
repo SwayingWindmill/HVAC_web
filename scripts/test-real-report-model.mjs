@@ -95,8 +95,12 @@ test("a year's cost is only shown when every month with energy has one", () => {
   const priced = yearTotals(yearRows(['2026-09'], [snapshot('2026-09', 100, 400, 80)], new Map()));
   assert.equal(priced.energyCost, 80);
   assert.equal(priced.cop, 4);
-  const partial = yearTotals(yearRows(['2026-08', '2026-09'], [snapshot('2026-09', 100, 400, 80)], new Map([['2026-08', { electricityKWh: 90, coolingKWh: 360, energyCost: null }]])));
+  const partial = yearTotals(yearRows(['2026-08', '2026-09'], [{
+    ...snapshot('2026-09', 100, 400, 80),
+    report: { ...snapshot('2026-09', 100, 400, 80).report, crossGapElectricityKWh: 18 },
+  }], new Map([['2026-08', { electricityKWh: 90, crossGapElectricityKWh: 12, coolingKWh: 360, energyCost: null }]])));
   assert.equal(partial.electricityKWh, 190);
+  assert.equal(partial.crossGapElectricityKWh, 30);
   assert.equal(partial.energyCost, null);
 });
 

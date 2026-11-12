@@ -65,9 +65,9 @@ type fakeHours struct {
 	from, to time.Time
 }
 
-func (source *fakeHours) Hours(_ context.Context, _, _ string, _ *time.Location, from, to time.Time) ([]Hour, error) {
+func (source *fakeHours) Hours(_ context.Context, _, _ string, _ *time.Location, from, to time.Time) (MonthEnergy, error) {
 	source.from, source.to = from, to
-	return source.hours, nil
+	return MonthEnergy{Hours: source.hours}, nil
 }
 
 const (

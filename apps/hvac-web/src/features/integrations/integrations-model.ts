@@ -105,6 +105,11 @@ export interface MeterReconciliationModel {
   readonly rows: readonly MeterReconciliationRow[];
 }
 
+export interface CheckMeterHourlySeries {
+  readonly validPoints: EnergySeriesResponse['points'];
+  readonly allPoints: EnergySeriesResponse['points'];
+}
+
 export interface BuildMeterReconciliationInput {
   readonly siteId: string;
   readonly timezone: string;
@@ -114,6 +119,8 @@ export interface BuildMeterReconciliationInput {
   readonly electricityWithSuspect: EnergySeriesResponse | null;
   readonly coolingValid: EnergySeriesResponse | null;
   readonly coolingWithSuspect: EnergySeriesResponse | null;
+  /** Own counter history for physical check meters on synthesized-total sites (#798). */
+  readonly checkMeterHourlyByDeviceId?: ReadonlyMap<string, CheckMeterHourlySeries>;
   readonly workOrders?: readonly WorkOrder[];
   readonly window: { readonly fromMs: number; readonly toMs: number };
   readonly now?: Date;
@@ -458,6 +465,25 @@ function resolveMeterStatus(input: {
   return { level: 'NORMAL', shape: '○', tone: 'success', label: '计量正常' };
 }
 
+export function findMainElectricityCounterDevices(
+  assetModel: SiteAssetModel,
+): readonly { readonly deviceId: string; readonly pointCode: string }[] {
+  const deviceRows = buildAssetsRows({ assetModel });
+  const result: { deviceId: string; pointCode: string }[] = [];
+  for (const deviceRow of deviceRows) {
+    const boundAsset = primaryBoundAsset(deviceRow.binding);
+    const role = classifyMeterRole(deviceRow.device, boundAsset, deviceRow.telemetryPoints);
+    if (role !== 'MAIN_ELECTRICITY') continue;
+    const primaryCounter = deviceRow.telemetryPoints.find(
+      (pt) => pt.status === 'ACTIVE' && pt.pointType === 'COUNTER',
+    );
+    if (primaryCounter) {
+      result.push({ deviceId: deviceRow.device.id, pointCode: primaryCounter.pointCode });
+    }
+  }
+  return result;
+}
+
 export function buildMeterReconciliationModel(
   input: BuildMeterReconciliationInput,
 ): MeterReconciliationModel {
@@ -475,6 +501,10 @@ export function buildMeterReconciliationModel(
     input.window,
     nowMs,
     input.timezone,
+  );
+  const isSynthesized = Boolean(
+    input.electricityValid?.metadata.synthesized ||
+      input.electricityWithSuspect?.metadata.synthesized,
   );
 
   const meterRows: MeterReconciliationRow[] = [];
@@ -506,9 +536,16 @@ export function buildMeterReconciliationModel(
     if (role === 'MAIN_ELECTRICITY' && (input.electricityValid || input.electricityWithSuspect)) {
       const devValid = input.electricityValid?.devices?.find((d) => d.deviceId === deviceRow.device.id);
       const devAll = input.electricityWithSuspect?.devices?.find((d) => d.deviceId === deviceRow.device.id);
-      validSeriesPoints = devValid?.points ?? input.electricityValid?.points;
-      allSeriesPoints = devAll?.points ?? input.electricityWithSuspect?.points;
-      hasHourlySeries = true;
+      if (isSynthesized) {
+        const checkMeter = input.checkMeterHourlyByDeviceId?.get(deviceRow.device.id);
+        validSeriesPoints = devValid?.points ?? checkMeter?.validPoints;
+        allSeriesPoints = devAll?.points ?? checkMeter?.allPoints;
+        hasHourlySeries = Boolean(devValid || devAll || checkMeter || primaryCounterPoint);
+      } else {
+        validSeriesPoints = devValid?.points ?? input.electricityValid?.points;
+        allSeriesPoints = devAll?.points ?? input.electricityWithSuspect?.points;
+        hasHourlySeries = true;
+      }
     } else if (role === 'SUB_ELECTRICITY' && (input.electricityValid || input.electricityWithSuspect)) {
       const devValid = input.electricityValid?.devices?.find((d) => d.deviceId === deviceRow.device.id);
       const devAll = input.electricityWithSuspect?.devices?.find((d) => d.deviceId === deviceRow.device.id);

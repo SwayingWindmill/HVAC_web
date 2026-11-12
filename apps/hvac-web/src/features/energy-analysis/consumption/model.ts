@@ -43,11 +43,15 @@ export interface EnergyRow {
   readonly periodStart: string;
   readonly label: string;
   readonly electricityKWh: number | null;
+  readonly crossGapElectricityKWh: number;
   readonly coolingKWh: number | null;
   /** Cooling delivered per unit of HVAC electricity in the bucket; null without both energies. */
   readonly cop: number | null;
   /** The electricity's estimated energy charge; null without electricity. */
   readonly cost: EnergyCost | null;
+  /** Synthesized-total hour missing one or more sub-meters (#798). */
+  readonly incomplete: boolean;
+  readonly missingMeters: readonly string[];
 }
 
 export interface EnergySummary {
@@ -61,6 +65,11 @@ export interface EnergySummary {
   readonly dataWatermark: string | null;
   /** Suspect or invalid meter intervals left out of every total. */
   readonly excludedIntervals: number;
+  /** Counter intervals > 1h recovered in the window: counted in totals, excluded from hourly/daily curves (#798). */
+  readonly crossGapElectricityKWh: number;
+  readonly crossGapCost: EnergyCost | null;
+  /** Distinct sub-meters missing across any incomplete hour in this window. */
+  readonly missingMeters: readonly string[];
 }
 
 const HOUR_MS = 3_600_000;
@@ -78,11 +87,22 @@ export function bucketLabel(periodStart: string, granularity: Granularity, timeZ
 const ratio = (cooling: number | null, electricity: number | null) =>
   cooling === null || electricity === null || electricity <= 0 ? null : cooling / electricity;
 
-const total = (series: EnergySeriesResponse) =>
-  series.points.length === 0 ? null : series.points.reduce((sum, point) => sum + point.energyKWh, 0);
+const total = (series: EnergySeriesResponse, granularity: Granularity) => {
+  const crossGap = granularity === 'month' ? 0 : (series.crossGap?.energyKWh ?? 0);
+  if (series.points.length === 0 && crossGap <= 0) return null;
+  return series.points.reduce((sum, point) => sum + point.energyKWh, 0) + crossGap;
+};
 
 const earlier = (left?: string, right?: string) =>
   !left || !right ? null : new Date(left) <= new Date(right) ? left : right;
+
+/** Buckets passed to sumCosts: includes non-monthly cross-gap electricity so period cost totals match period kWh. */
+export function summaryCostBuckets(
+  summary: EnergySummary,
+): readonly { readonly electricityKWh: number | null; readonly cost: EnergyCost | null }[] {
+  if (summary.granularity === 'month' || summary.crossGapElectricityKWh <= 0) return summary.rows;
+  return [...summary.rows, { electricityKWh: summary.crossGapElectricityKWh, cost: summary.crossGapCost }];
+}
 
 export function summarizeEnergy(
   electricity: EnergySeriesResponse,
@@ -90,17 +110,27 @@ export function summarizeEnergy(
   granularity: Granularity,
   timeZone: string,
 ): EnergySummary {
-  const byStart = new Map<string, { electricity: number | null; cooling: number | null; cost: EnergyCost | null }>();
+  const byStart = new Map<string, {
+    electricity: number | null;
+    crossGapElectricity: number;
+    cooling: number | null;
+    cost: EnergyCost | null;
+    incomplete: boolean;
+    missingMeters: readonly string[];
+  }>();
   const at = (periodStart: string) => {
     const key = new Date(periodStart).toISOString();
-    const entry = byStart.get(key) ?? { electricity: null, cooling: null, cost: null };
+    const entry = byStart.get(key) ?? { electricity: null, crossGapElectricity: 0, cooling: null, cost: null, incomplete: false, missingMeters: [] };
     byStart.set(key, entry);
     return entry;
   };
   for (const point of electricity.points) {
     const entry = at(point.periodStart);
     entry.electricity = point.energyKWh;
+    entry.crossGapElectricity = point.crossGapKWh ?? 0;
     entry.cost = point.cost ?? null;
+    entry.incomplete = point.incomplete ?? false;
+    entry.missingMeters = point.missingMeters ?? [];
   }
   for (const point of cooling.points) at(point.periodStart).cooling = point.energyKWh;
   const rows = [...byStart.entries()]
@@ -109,25 +139,34 @@ export function summarizeEnergy(
       periodStart,
       label: bucketLabel(periodStart, granularity, timeZone),
       electricityKWh: energy.electricity,
+      crossGapElectricityKWh: energy.crossGapElectricity,
       coolingKWh: energy.cooling,
       cop: ratio(energy.cooling, energy.electricity),
       cost: energy.cost,
+      incomplete: energy.incomplete,
+      missingMeters: energy.missingMeters,
     }));
   const complete = rows.filter((row) => row.cop !== null);
   const sum = (values: readonly (number | null)[]) => values.reduce<number>((acc, value) => acc + (value ?? 0), 0);
   let peak: EnergyRow | null = null;
   for (const row of rows) if (row.electricityKWh !== null && (peak === null || row.electricityKWh > peak.electricityKWh!)) peak = row;
   const excluded = (series: EnergySeriesResponse) => series.metadata.qualitySummary.suspect + series.metadata.qualitySummary.invalid;
+  const missingSet = new Set<string>();
+  for (const row of rows) for (const meter of row.missingMeters) missingSet.add(meter);
+  const missingMeters = [...missingSet].sort((left, right) => left.localeCompare(right, 'zh-CN'));
   return {
     granularity,
     rows,
-    electricityKWh: total(electricity),
-    coolingKWh: total(cooling),
+    electricityKWh: total(electricity, granularity),
+    coolingKWh: total(cooling, granularity),
     // Only buckets with both energies count, so a cooling meter gap does not understate efficiency.
     cop: complete.length === 0 ? null : ratio(sum(complete.map((row) => row.coolingKWh)), sum(complete.map((row) => row.electricityKWh))),
     peak,
     dataWatermark: earlier(electricity.metadata.dataWatermark, cooling.metadata.dataWatermark),
     excludedIntervals: excluded(electricity) + excluded(cooling),
+    crossGapElectricityKWh: electricity.crossGap?.energyKWh ?? 0,
+    crossGapCost: electricity.crossGap?.cost ?? null,
+    missingMeters,
   };
 }
 
@@ -178,6 +217,7 @@ export interface BucketComparison {
   readonly previousCost: EnergyCost | null;
   /** The current bucket has ended; the one still running holds partial energy. */
   readonly complete: boolean;
+  readonly missingMeters: readonly string[];
 }
 
 /**
@@ -211,6 +251,7 @@ export function comparePeriods(
       cost: row?.cost ?? null,
       previousCost: before?.cost ?? null,
       complete: bucketAt(from, granularity, ordinal + 1, timeZone) <= now,
+      missingMeters: row?.missingMeters ?? [],
     };
   });
 }

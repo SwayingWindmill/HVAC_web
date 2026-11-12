@@ -137,14 +137,14 @@ func (e *Engine) Execute(ctx context.Context, request RunRequest) (Result, error
 		var input Input
 		switch dep.Type {
 		case "POINT":
-			pointID, ok := stringMap(binding.SourceDefinition, "points", dep.Code)
+			pointIDs, ok := stringSliceMap(binding.SourceDefinition, "points", dep.Code)
 			if !ok {
 				if dep.Required {
 					return Result{}, fmt.Errorf("metric point dependency %s is not bound", dep.Code)
 				}
 				continue
 			}
-			input, err = e.series.ReadPoint(ctx, binding, pointID, request.PeriodStart, request.PeriodEnd)
+			input, err = e.readBoundPoints(ctx, binding, pointIDs, request.PeriodStart, request.PeriodEnd)
 		case "METRIC":
 			input, err = e.registry.LoadCurrentMetricInput(ctx, binding, dep, request.PeriodStart, request.PeriodEnd)
 		case "EXTERNAL":
@@ -498,6 +498,106 @@ func stringMap(root map[string]any, section, key string) (string, bool) {
 	}
 	v, ok := m[key].(string)
 	return strings.TrimSpace(v), ok && strings.TrimSpace(v) != ""
+}
+
+func stringSliceMap(root map[string]any, section, key string) ([]string, bool) {
+	if single, ok := stringMap(root, section, key); ok {
+		return []string{single}, true
+	}
+	m, ok := root[section].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	switch raw := m[key].(type) {
+	case []string:
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			trimmed := strings.TrimSpace(item)
+			if trimmed == "" {
+				return nil, false
+			}
+			out = append(out, trimmed)
+		}
+		return out, len(out) > 0
+	case []any:
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			str, ok := item.(string)
+			trimmed := strings.TrimSpace(str)
+			if !ok || trimmed == "" {
+				return nil, false
+			}
+			out = append(out, trimmed)
+		}
+		return out, len(out) > 0
+	default:
+		return nil, false
+	}
+}
+
+// readBoundPoints resolves either a single bound Point or a synthesized sum across multiple
+// sub-meter Points. When one or more sub-meters are silent in the window, the reported sub-meters
+// are summed and the combined input is marked PARTIAL with completeness scaled by sub-meter count.
+func (e *Engine) readBoundPoints(ctx context.Context, binding Binding, pointIDs []string, start, end time.Time) (Input, error) {
+	if len(pointIDs) == 1 {
+		return e.series.ReadPoint(ctx, binding, pointIDs[0], start, end)
+	}
+	isDelta := strings.EqualFold(strings.TrimSpace(binding.CalculationMethod), "DELTA")
+	var (
+		combined        Input
+		reported        int
+		allGood         = true
+		completenessSum float64
+		lastErr         error
+	)
+	combined.Reference = "points:" + strings.Join(pointIDs, ",")
+	for _, pointID := range pointIDs {
+		sub, err := e.series.ReadPoint(ctx, binding, pointID, start, end)
+		if err != nil {
+			lastErr = err
+			allGood = false
+			continue
+		}
+		reported++
+		completenessSum += sub.Completeness
+		if sub.Quality != "GOOD" {
+			allGood = false
+		}
+		combined.Value += sub.Value
+		combined.FirstValue += sub.FirstValue
+		combined.LastValue += sub.LastValue
+		combined.Count += sub.Count
+		if sub.DurationSeconds > combined.DurationSeconds {
+			combined.DurationSeconds = sub.DurationSeconds
+		}
+		combined.Integral += sub.Integral
+		if isDelta {
+			subDelta, deltaErr := counterDelta(binding, sub)
+			if deltaErr != nil {
+				return Input{}, deltaErr
+			}
+			combined.Rise += subDelta
+		} else {
+			combined.Rise += sub.Rise
+			combined.Drops += sub.Drops
+			combined.DropSum += sub.DropSum
+			combined.ValueAfterDrops += sub.ValueAfterDrops
+		}
+	}
+	if reported == 0 {
+		if lastErr != nil {
+			return Input{}, lastErr
+		}
+		return Input{}, errors.New("metric point dependency has no numeric observations")
+	}
+	if reported == len(pointIDs) && allGood {
+		combined.Quality = "GOOD"
+		combined.Completeness = 1
+	} else {
+		combined.Quality = "PARTIAL"
+		combined.Completeness = completenessSum / float64(len(pointIDs))
+	}
+	return combined, nil
 }
 func numberMap(root map[string]any, section, key string) (float64, bool) {
 	m, ok := root[section].(map[string]any)

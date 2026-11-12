@@ -44,3 +44,15 @@ func NewPriceWindowProjector(config PriceWindowProjectorConfig) (*PriceWindowPro
 func NewTariffSource(config RegistryClientConfig) (TariffSource, error) {
 	return coreclient.NewResolver(config)
 }
+
+type TotalSubmeterProjectorConfig = energy.TotalSubmeterProjectorConfig
+type TotalSubmeterProjector = energy.TotalSubmeterProjector
+type TotalSubmeterSource = energy.TotalSubmeterSource
+
+func NewTotalSubmeterProjector(config TotalSubmeterProjectorConfig) (*TotalSubmeterProjector, error) {
+	return energy.NewTotalSubmeterProjector(config)
+}
+
+func NewTotalSubmeterSource(config RegistryClientConfig) (TotalSubmeterSource, error) {
+	return coreclient.NewResolver(config)
+}

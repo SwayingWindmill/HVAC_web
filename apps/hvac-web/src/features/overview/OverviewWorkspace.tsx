@@ -12,7 +12,7 @@ import { useDeviceNames } from "@/features/assets/use-device-names";
 import { siteFindingsQuery } from "@/features/diagnostics/query";
 import { activeAlarmsQuery } from "@/features/alarms/alarm-api";
 import { sortAlarmsForOperators } from "@/features/alarms/alarm-presentation";
-import { completeOnly, relativeChange } from "@/features/energy-analysis/consumption/model";
+import { completeOnly, relativeChange, summaryCostBuckets } from "@/features/energy-analysis/consumption/model";
 import { useHourlyHeatmap, useTodayAgainstYesterday } from "@/features/energy-analysis/consumption/query";
 import { formatClock, LiveIndicator } from "@/features/operations/realtime/device-presentation";
 import { costsByLabel, sumCosts } from "@/features/tariff/tariff-model";
@@ -71,11 +71,12 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
   }
   const { today, yesterday, wholeYesterday, hours } = comparison.data;
   // A day none of whose electricity was priced (no Tariff) has no cost tab; a partly priced one says so.
-  const todayCost = sumCosts(today.rows);
+  const todayCost = sumCosts(summaryCostBuckets(today));
+  const yesterdayCost = sumCosts(summaryCostBuckets(yesterday));
   const priced = todayCost.energyKWh > todayCost.unpricedKWh
-    ? { today: costsByLabel(today.rows), yesterday: costsByLabel(wholeYesterday.rows), sameHours: costsByLabel(yesterday.rows) }
+    ? { today: costsByLabel(today.rows), yesterday: costsByLabel(wholeYesterday.rows) }
     : null;
-  const sum = (costs: Map<string, number>) => (costs.size === 0 ? null : [...costs.values()].reduce((total, cost) => total + cost, 0));
+  const incompleteCaption = today.missingMeters.length > 0 ? `不完整，缺 ${today.missingMeters.join("、")}` : undefined;
   return (
     <MetricTabsChartCard
       role="region"
@@ -111,6 +112,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
           unit: "kWh",
           fractionDigits: 1,
           invertDelta: true,
+          ...(incompleteCaption ? { caption: incompleteCaption } : {}),
         },
         {
           key: "coolingKWh",
@@ -135,8 +137,11 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
           key: "cost",
           label: "今日电费（估算）",
           compareKey: "previousCost",
-          value: known(sum(priced.today), 0),
-          delta: relativeChange(sum(priced.today), sum(priced.sameHours)),
+          value: todayCost.energyKWh > 0 ? formatDecimal(todayCost.total, 0) : null,
+          delta: relativeChange(
+            todayCost.energyKWh > 0 ? todayCost.total : null,
+            yesterdayCost.energyKWh > 0 ? yesterdayCost.total : null,
+          ),
           unit: "元",
           fractionDigits: 0,
           invertDelta: true,

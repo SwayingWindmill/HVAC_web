@@ -13,6 +13,7 @@ import {
   buildSensorCalibrationModel,
   describeIntegrationsError,
   explainQualityReason,
+  findMainElectricityCounterDevices,
   formatProbePairLabel,
   formatSourceChannel,
 } from '../apps/hvac-web/src/features/integrations/integrations-model.ts';
@@ -1065,4 +1066,86 @@ test('all 14 quality reason codes, protocol/pair formatters, and Chinese gateway
   assert.equal(describeIntegrationsError(makeProblem(404)), '未找到所选站点的资产或接入登记数据');
   assert.equal(describeIntegrationsError(makeProblem(503)), '平台服务暂时无法返回接入核对数据，请稍后重试');
   assert.equal(describeIntegrationsError(new Error('network fail'), '自定义兜底'), '自定义兜底');
+});
+
+test('synthesized site total does not copy sub-meter sum onto physical check meter row (#798)', () => {
+  const assetModel = createSampleAssetModel();
+  const targets = findMainElectricityCounterDevices(assetModel);
+  assert.deepEqual(targets, [{ deviceId: MAIN_METER_DEVICE_ID, pointCode: 'active_energy_total' }]);
+
+  const now = new Date('2026-11-12T04:15:00.000Z');
+  const window = {
+    fromMs: Date.parse('2026-11-11T05:00:00.000Z'),
+    toMs: Date.parse('2026-11-12T05:00:00.000Z'),
+  };
+  const synthesizedSeries: EnergySeriesResponse = {
+    schemaVersion: 1,
+    points: [
+      { periodStart: '2026-11-12T01:00:00.000Z', periodEnd: '2026-11-12T02:00:00.000Z', energyKWh: 185 },
+      { periodStart: '2026-11-12T02:00:00.000Z', periodEnd: '2026-11-12T03:00:00.000Z', energyKWh: 190 },
+    ],
+    devices: [
+      {
+        deviceId: SUB_METER_DEVICE_ID,
+        points: [
+          { periodStart: '2026-11-12T01:00:00.000Z', periodEnd: '2026-11-12T02:00:00.000Z', energyKWh: 185 },
+          { periodStart: '2026-11-12T02:00:00.000Z', periodEnd: '2026-11-12T03:00:00.000Z', energyKWh: 190 },
+        ],
+      },
+    ],
+    metadata: {
+      requestedGranularity: 'hour',
+      actualGranularity: 'hour',
+      datasetRevision: 'rev-1',
+      partial: false,
+      synthesized: true,
+      qualitySummary: { valid: 2, suspect: 0, invalid: 0 },
+    },
+  };
+
+  // Case A: check meter stopped reporting active_energy_total (empty own history).
+  const missingCheckModel = buildMeterReconciliationModel({
+    siteId: SITE_ID,
+    timezone: 'Asia/Shanghai',
+    assetModel,
+    electricityValid: synthesizedSeries,
+    electricityWithSuspect: synthesizedSeries,
+    coolingValid: null,
+    coolingWithSuspect: null,
+    checkMeterHourlyByDeviceId: new Map([[MAIN_METER_DEVICE_ID, { validPoints: [], allPoints: [] }]]),
+    window,
+    now,
+  });
+  // Site summary strip still reflects the synthesized total (2 valid hours, 375 kWh).
+  assert.equal(missingCheckModel.summary.totalValidElectricityKwh, 375);
+  const checkRowMissing = missingCheckModel.rows.find((r) => r.deviceId === MAIN_METER_DEVICE_ID);
+  assert.ok(checkRowMissing);
+  assert.equal(checkRowMissing.hasHourlySeries, true);
+  assert.equal(checkRowMissing.validEnergyKwh, 0);
+  assert.equal(checkRowMissing.missingCompletedHours, 23);
+  assert.equal(checkRowMissing.status.level, 'WARNING');
+  assert.ok(checkRowMissing.diagnosticNotes.includes('近 24 小时缺 23 段小时计量数据'));
+
+  // Case B: check meter has its own hourly counter history (independent of synthesized total).
+  const ownCheckPoints = [
+    { periodStart: '2026-11-12T01:00:00.000Z', periodEnd: '2026-11-12T02:00:00.000Z', energyKWh: 240 },
+  ];
+  const ownCheckModel = buildMeterReconciliationModel({
+    siteId: SITE_ID,
+    timezone: 'Asia/Shanghai',
+    assetModel,
+    electricityValid: synthesizedSeries,
+    electricityWithSuspect: synthesizedSeries,
+    coolingValid: null,
+    coolingWithSuspect: null,
+    checkMeterHourlyByDeviceId: new Map([
+      [MAIN_METER_DEVICE_ID, { validPoints: ownCheckPoints, allPoints: ownCheckPoints }],
+    ]),
+    window,
+    now,
+  });
+  const checkRowOwn = ownCheckModel.rows.find((r) => r.deviceId === MAIN_METER_DEVICE_ID);
+  assert.ok(checkRowOwn);
+  assert.equal(checkRowOwn.validEnergyKwh, 240);
+  assert.equal(checkRowOwn.missingCompletedHours, 22);
 });

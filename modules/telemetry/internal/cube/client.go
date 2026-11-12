@@ -128,8 +128,17 @@ func (client *Client) QueryEnergySeries(ctx context.Context, caller analytics.Ca
 		if err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube energy cost: %w", err)
 		}
-		if err := attachCosts(response.Points, costs, productQuery, location); err != nil {
+		if err := attachCosts(&response, costs, productQuery, location); err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, err
+		}
+		if productQuery.Granularity == analyticsmodel.GranularityHour && len(response.Points) > 0 {
+			missing, err := client.load(queryContext, token, buildMissingMetersQuery(productQuery, location))
+			if err != nil {
+				return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("query Cube missing submeters: %w", err)
+			}
+			if err := attachMissingMeters(&response, missing, location); err != nil {
+				return analyticsmodel.EnergySeriesResponse{}, err
+			}
 		}
 	}
 	if productQuery.Breakdown != analyticsmodel.EnergyBreakdownDevice {
@@ -210,6 +219,7 @@ func buildSeriesQuery(productQuery analyticsmodel.EnergySeriesQuery, location *t
 	return cubeQuery{
 		Measures: []string{
 			energyMeasure(siteView, productQuery.QualityPolicy),
+			crossGapMeasure(siteView, productQuery.QualityPolicy),
 			member(siteView, "valid_count"),
 			member(siteView, "suspect_count"),
 			member(siteView, "invalid_count"),
@@ -231,12 +241,28 @@ func buildCostQuery(productQuery analyticsmodel.EnergySeriesQuery, location *tim
 			member(costView, "cost_"+suffix+"_cny"),
 			member(costView, "priced_"+suffix+"_kwh"),
 			member(costView, "unpriced_"+suffix+"_kwh"),
+			member(costView, "cross_gap_cost_"+suffix+"_cny"),
+			member(costView, "cross_gap_priced_"+suffix+"_kwh"),
+			member(costView, "cross_gap_unpriced_"+suffix+"_kwh"),
 		},
 		Filters:        []cubeFilter{{Member: member(costView, "site_id"), Operator: "equals", Values: []string{productQuery.SiteID}}},
 		Dimensions:     []string{member(costView, "tariff_period")},
 		TimeDimensions: periodDimension(costView, productQuery, location),
 		Timezone:       productQuery.Timezone,
 		Limit:          50000,
+	}
+}
+
+func buildMissingMetersQuery(productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) cubeQuery {
+	return cubeQuery{
+		Measures: []string{member(siteView, "missing_count")},
+		Filters: append(energyFilters(siteView, productQuery), cubeFilter{
+			Member: member(siteView, "quality"), Operator: "equals", Values: []string{"MISSING"},
+		}),
+		Dimensions:     []string{member(siteView, "missing_meter")},
+		TimeDimensions: periodDimension(siteView, productQuery, location),
+		Timezone:       productQuery.Timezone,
+		Limit:          10000,
 	}
 }
 
@@ -249,9 +275,11 @@ func qualitySuffix(policy analyticsmodel.QualityPolicy) string {
 
 var tariffPeriodOrder = map[string]int{"SUPER_PEAK": 0, "PEAK": 1, "FLAT": 2, "VALLEY": 3}
 
-// attachCosts gives every electricity point its cost, peak periods first. A point no cost row
-// reaches had no energy under the quality policy to price.
-func attachCosts(points []analyticsmodel.EnergySeriesPoint, decoded loadResponse, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) error {
+// attachCosts gives every electricity point its cost, peak periods first, and prices any cross-gap
+// electricity across the window. A point no cost row reaches had no energy under the quality policy
+// to price.
+func attachCosts(response *analyticsmodel.EnergySeriesResponse, decoded loadResponse, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) error {
+	points := response.Points
 	suffix := qualitySuffix(productQuery.QualityPolicy)
 	period := periodMember(costView, productQuery.Granularity)
 	byStart := make(map[int64]*analyticsmodel.EnergyCost, len(points))
@@ -259,6 +287,8 @@ func attachCosts(points []analyticsmodel.EnergySeriesPoint, decoded loadResponse
 		points[index].Cost = &analyticsmodel.EnergyCost{Periods: []analyticsmodel.PeriodCost{}}
 		byStart[points[index].PeriodStart.UnixNano()] = points[index].Cost
 	}
+	var crossGapAmount, crossGapUnpriced float64
+	crossGapPeriods := map[string]*analyticsmodel.PeriodCost{}
 	for _, row := range decoded.Data {
 		periodValue, err := scalarString(row[period])
 		if err != nil {
@@ -268,13 +298,37 @@ func attachCosts(points []analyticsmodel.EnergySeriesPoint, decoded loadResponse
 		if err != nil {
 			return fmt.Errorf("decode Cube cost period: %w", err)
 		}
-		cost, ok := byStart[periodStart.UTC().UnixNano()]
-		if !ok {
-			continue
-		}
 		code, err := scalarString(row[member(costView, "tariff_period")])
 		if err != nil {
 			return fmt.Errorf("decode Cube Tariff period: %w", err)
+		}
+		cgAmount, err := optionalFloat(row[member(costView, "cross_gap_cost_"+suffix+"_cny")])
+		if err != nil {
+			return fmt.Errorf("decode Cube cross-gap energy cost: %w", err)
+		}
+		cgPriced, err := optionalFloat(row[member(costView, "cross_gap_priced_"+suffix+"_kwh")])
+		if err != nil {
+			return fmt.Errorf("decode Cube cross-gap priced energy: %w", err)
+		}
+		cgUnpriced, err := optionalFloat(row[member(costView, "cross_gap_unpriced_"+suffix+"_kwh")])
+		if err != nil {
+			return fmt.Errorf("decode Cube cross-gap unpriced energy: %w", err)
+		}
+		crossGapAmount += cgAmount
+		crossGapUnpriced += cgUnpriced
+		if code != "" && cgPriced > 0 {
+			entry := crossGapPeriods[code]
+			if entry == nil {
+				entry = &analyticsmodel.PeriodCost{PeriodCode: code}
+				crossGapPeriods[code] = entry
+			}
+			entry.EnergyKWh += cgPriced
+			entry.AmountCNY += cgAmount
+		}
+
+		cost, ok := byStart[periodStart.UTC().UnixNano()]
+		if !ok {
+			continue
 		}
 		amount, err := optionalFloat(row[member(costView, "cost_"+suffix+"_cny")])
 		if err != nil {
@@ -288,6 +342,11 @@ func attachCosts(points []analyticsmodel.EnergySeriesPoint, decoded loadResponse
 		if err != nil {
 			return fmt.Errorf("decode Cube unpriced energy: %w", err)
 		}
+		if productQuery.Granularity == analyticsmodel.GranularityMonth {
+			amount += cgAmount
+			priced += cgPriced
+			unpriced += cgUnpriced
+		}
 		cost.AmountCNY += amount
 		cost.UnpricedKWh += unpriced
 		if code != "" && priced > 0 {
@@ -298,6 +357,78 @@ func attachCosts(points []analyticsmodel.EnergySeriesPoint, decoded loadResponse
 		sort.Slice(cost.Periods, func(left, right int) bool {
 			return tariffPeriodOrder[cost.Periods[left].PeriodCode] < tariffPeriodOrder[cost.Periods[right].PeriodCode]
 		})
+	}
+	if response.CrossGap != nil {
+		periods := make([]analyticsmodel.PeriodCost, 0, len(crossGapPeriods))
+		for _, item := range crossGapPeriods {
+			periods = append(periods, *item)
+		}
+		sort.Slice(periods, func(left, right int) bool {
+			return tariffPeriodOrder[periods[left].PeriodCode] < tariffPeriodOrder[periods[right].PeriodCode]
+		})
+		response.CrossGap.Cost = &analyticsmodel.EnergyCost{
+			AmountCNY:   crossGapAmount,
+			UnpricedKWh: crossGapUnpriced,
+			Periods:     periods,
+		}
+	}
+	return nil
+}
+
+func attachMissingMeters(response *analyticsmodel.EnergySeriesResponse, decoded loadResponse, location *time.Location) error {
+	if len(decoded.Data) == 0 {
+		return nil
+	}
+	period := periodMember(siteView, analyticsmodel.GranularityHour)
+	byStart := make(map[int64]int, len(response.Points))
+	for index := range response.Points {
+		byStart[response.Points[index].PeriodStart.UTC().UnixNano()] = index
+	}
+	seenByIndex := make(map[int]map[string]struct{})
+	for _, row := range decoded.Data {
+		count, err := optionalFloat(row[member(siteView, "missing_count")])
+		if err != nil {
+			return fmt.Errorf("decode Cube missing submeter count: %w", err)
+		}
+		if count <= 0 {
+			continue
+		}
+		periodValue, err := scalarString(row[period])
+		if err != nil {
+			return fmt.Errorf("decode Cube missing submeter period: %w", err)
+		}
+		periodStart, err := parseCubeTime(periodValue, location)
+		if err != nil {
+			return fmt.Errorf("decode Cube missing submeter period: %w", err)
+		}
+		pointIndex, ok := byStart[periodStart.UTC().UnixNano()]
+		if !ok {
+			continue
+		}
+		meterName, err := scalarString(row[member(siteView, "missing_meter")])
+		if err != nil {
+			return fmt.Errorf("decode Cube missing submeter name: %w", err)
+		}
+		meterName = strings.TrimSpace(meterName)
+		if meterName == "" {
+			continue
+		}
+		seen := seenByIndex[pointIndex]
+		if seen == nil {
+			seen = map[string]struct{}{}
+			seenByIndex[pointIndex] = seen
+		}
+		seen[meterName] = struct{}{}
+	}
+	for pointIndex, seen := range seenByIndex {
+		names := make([]string, 0, len(seen))
+		for name := range seen {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		response.Points[pointIndex].Incomplete = true
+		response.Points[pointIndex].MissingMeters = names
+		response.Metadata.Partial = true
 	}
 	return nil
 }
@@ -313,7 +444,10 @@ func optionalFloat(raw json.RawMessage) (float64, error) {
 
 func buildDeviceBreakdownQuery(productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) cubeQuery {
 	return cubeQuery{
-		Measures:       []string{energyMeasure(equipmentView, productQuery.QualityPolicy)},
+		Measures: []string{
+			energyMeasure(equipmentView, productQuery.QualityPolicy),
+			crossGapMeasure(equipmentView, productQuery.QualityPolicy),
+		},
 		Filters:        energyFilters(equipmentView, productQuery),
 		Dimensions:     []string{member(equipmentView, "equipment_id")},
 		TimeDimensions: periodDimension(equipmentView, productQuery, location),
@@ -338,6 +472,7 @@ func buildMetadataQuery(productQuery analyticsmodel.EnergySeriesQuery, location 
 		Measures: []string{
 			member(siteView, "max_data_watermark"),
 			member(siteView, "max_dataset_revision"),
+			member(siteView, "synthesized_total"),
 		},
 		Filters: append(energyFilters(siteView, productQuery), cubeFilter{
 			Member: member(siteView, "period_end"), Operator: "afterOrOnDate", Values: []string{productQuery.From.In(location).Format(cubeWallTime)},
@@ -358,6 +493,8 @@ func energyFilters(view string, productQuery analyticsmodel.EnergySeriesQuery) [
 func mapDeviceBreakdown(decoded loadResponse, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) ([]analyticsmodel.EnergyDeviceSeries, error) {
 	period := periodMember(equipmentView, productQuery.Granularity)
 	byDevice := map[string][]analyticsmodel.EnergySeriesPoint{}
+	crossGapByDevice := map[string]float64{}
+	seenDevices := map[string]struct{}{}
 	for _, row := range decoded.Data {
 		deviceID, err := scalarString(row[member(equipmentView, "equipment_id")])
 		if err != nil {
@@ -371,27 +508,54 @@ func mapDeviceBreakdown(decoded loadResponse, productQuery analyticsmodel.Energy
 		if err != nil {
 			return nil, fmt.Errorf("decode Cube breakdown period: %w", err)
 		}
+		rowCrossGap, err := optionalFloat(row[crossGapMeasure(equipmentView, productQuery.QualityPolicy)])
+		if err != nil {
+			return nil, fmt.Errorf("decode Cube breakdown cross-gap energy: %w", err)
+		}
 		energyValue, hasEnergy, err := optionalScalarString(row[energyMeasure(equipmentView, productQuery.QualityPolicy)])
 		if err != nil {
 			return nil, fmt.Errorf("decode Cube breakdown energy: %w", err)
 		}
-		if !hasEnergy {
+		var energy float64
+		if hasEnergy {
+			energy, err = strconv.ParseFloat(energyValue, 64)
+			if err != nil {
+				return nil, fmt.Errorf("decode Cube breakdown energy: %w", err)
+			}
+		}
+		if rowCrossGap > 0 {
+			crossGapByDevice[deviceID] += rowCrossGap
+			seenDevices[deviceID] = struct{}{}
+		}
+		includeCrossGapInPoint := productQuery.Granularity == analyticsmodel.GranularityMonth && rowCrossGap > 0
+		if !hasEnergy && !includeCrossGapInPoint {
 			continue
 		}
-		energy, err := strconv.ParseFloat(energyValue, 64)
-		if err != nil {
-			return nil, fmt.Errorf("decode Cube breakdown energy: %w", err)
+		var pointCrossGap float64
+		if includeCrossGapInPoint {
+			energy += rowCrossGap
+			pointCrossGap = rowCrossGap
 		}
+		seenDevices[deviceID] = struct{}{}
 		byDevice[deviceID] = append(byDevice[deviceID], analyticsmodel.EnergySeriesPoint{
 			PeriodStart: periodStart.UTC(),
 			PeriodEnd:   periodEnd(periodStart.In(location), productQuery.Granularity).UTC(),
 			EnergyKWh:   energy,
+			CrossGapKWh: pointCrossGap,
 		})
 	}
-	devices := make([]analyticsmodel.EnergyDeviceSeries, 0, len(byDevice))
-	for deviceID, points := range byDevice {
+	devices := make([]analyticsmodel.EnergyDeviceSeries, 0, len(seenDevices))
+	for deviceID := range seenDevices {
+		points := byDevice[deviceID]
+		if points == nil {
+			points = []analyticsmodel.EnergySeriesPoint{}
+		}
 		sort.Slice(points, func(left, right int) bool { return points[left].PeriodStart.Before(points[right].PeriodStart) })
-		devices = append(devices, analyticsmodel.EnergyDeviceSeries{DeviceID: deviceID, Points: points})
+		devices = append(devices, analyticsmodel.EnergyDeviceSeries{
+			DeviceID:    deviceID,
+			Points:      points,
+			CrossGapKWh: crossGapByDevice[deviceID],
+		})
 	}
 	sort.Slice(devices, func(left, right int) bool { return devices[left].DeviceID < devices[right].DeviceID })
 	return devices, nil
@@ -404,10 +568,18 @@ func energyMeasure(view string, policy analyticsmodel.QualityPolicy) string {
 	return member(view, "energy_valid_kwh")
 }
 
+func crossGapMeasure(view string, policy analyticsmodel.QualityPolicy) string {
+	if policy == analyticsmodel.QualityPolicyValidAndSuspect {
+		return member(view, "cross_gap_valid_and_suspect_kwh")
+	}
+	return member(view, "cross_gap_valid_kwh")
+}
+
 func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location, datasetRevision string) (analyticsmodel.EnergySeriesResponse, error) {
 	period := periodMember(siteView, productQuery.Granularity)
 	points := make([]analyticsmodel.EnergySeriesPoint, 0, len(series.Data))
 	quality := analyticsmodel.QualitySummary{}
+	var crossGapKWh float64
 	for _, row := range series.Data {
 		periodValue, err := scalarString(row[period])
 		if err != nil {
@@ -432,27 +604,47 @@ func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.
 		quality.Valid += valid
 		quality.Suspect += suspect
 		quality.Invalid += invalid
+		rowCrossGap, err := optionalFloat(row[crossGapMeasure(siteView, productQuery.QualityPolicy)])
+		if err != nil {
+			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube cross-gap energy: %w", err)
+		}
+		crossGapKWh += rowCrossGap
 		// Cube answers null when the policy excludes every interval in the bucket: it has no
 		// energy, so it is left out and its intervals still count in the quality summary.
+		// Monthly buckets include that month's cross-gap energy so yearly rollups match monthly totals.
 		energyValue, hasEnergy, err := optionalScalarString(row[energyMeasure(siteView, productQuery.QualityPolicy)])
 		if err != nil {
 			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube energy: %w", err)
 		}
-		if !hasEnergy {
+		var energy float64
+		if hasEnergy {
+			energy, err = strconv.ParseFloat(energyValue, 64)
+			if err != nil {
+				return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube energy: %w", err)
+			}
+		}
+		includeCrossGapInPoint := productQuery.Granularity == analyticsmodel.GranularityMonth && rowCrossGap > 0
+		if !hasEnergy && !includeCrossGapInPoint {
 			continue
 		}
-		energy, err := strconv.ParseFloat(energyValue, 64)
-		if err != nil {
-			return analyticsmodel.EnergySeriesResponse{}, fmt.Errorf("decode Cube energy: %w", err)
+		var pointCrossGap float64
+		if includeCrossGapInPoint {
+			energy += rowCrossGap
+			pointCrossGap = rowCrossGap
 		}
 		points = append(points, analyticsmodel.EnergySeriesPoint{
 			PeriodStart: periodStart.UTC(),
 			PeriodEnd:   periodEnd(periodStart.In(location), productQuery.Granularity).UTC(),
 			EnergyKWh:   energy,
+			CrossGapKWh: pointCrossGap,
 		})
 	}
 	sort.Slice(points, func(left, right int) bool { return points[left].PeriodStart.Before(points[right].PeriodStart) })
-	maximumWatermark, maximumDatasetRevision, err := mapEnergyMetadata(metadata)
+	var crossGap *analyticsmodel.EnergyCrossGap
+	if crossGapKWh > 0 {
+		crossGap = &analyticsmodel.EnergyCrossGap{EnergyKWh: crossGapKWh}
+	}
+	maximumWatermark, maximumDatasetRevision, synthesized, err := mapEnergyMetadata(metadata)
 	if err != nil {
 		return analyticsmodel.EnergySeriesResponse{}, err
 	}
@@ -476,9 +668,10 @@ func mapEnergySeries(series, metadata loadResponse, productQuery analyticsmodel.
 		AggregateWatermark:   aggregateWatermark,
 		DatasetRevision:      resolvedDatasetRevision,
 		Partial:              partial,
+		Synthesized:          synthesized,
 		QualitySummary:       quality,
 	}
-	return analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: points, Metadata: responseMetadata}, nil
+	return analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: points, CrossGap: crossGap, Metadata: responseMetadata}, nil
 }
 
 func coversRequestedBuckets(points []analyticsmodel.EnergySeriesPoint, productQuery analyticsmodel.EnergySeriesQuery, location *time.Location) bool {
@@ -515,34 +708,39 @@ func bucketStart(value time.Time, granularity analyticsmodel.Granularity) time.T
 	}
 }
 
-func mapEnergyMetadata(decoded loadResponse) (time.Time, uint64, error) {
+func mapEnergyMetadata(decoded loadResponse) (time.Time, uint64, bool, error) {
 	if len(decoded.Data) == 0 {
-		return time.Time{}, 0, nil
+		return time.Time{}, 0, false, nil
 	}
 	row := decoded.Data[0]
+	synthesizedVal, err := optionalFloat(row[member(siteView, "synthesized_total")])
+	if err != nil {
+		return time.Time{}, 0, false, fmt.Errorf("decode Cube synthesized flag: %w", err)
+	}
+	synthesized := synthesizedVal > 0
 	watermarkValue, hasWatermark, err := optionalScalarString(row[member(siteView, "max_data_watermark")])
 	if err != nil {
-		return time.Time{}, 0, fmt.Errorf("decode Cube data watermark: %w", err)
+		return time.Time{}, 0, false, fmt.Errorf("decode Cube data watermark: %w", err)
 	}
 	revisionValue, hasRevision, err := optionalScalarString(row[member(siteView, "max_dataset_revision")])
 	if err != nil {
-		return time.Time{}, 0, fmt.Errorf("decode Cube dataset revision: %w", err)
+		return time.Time{}, 0, false, fmt.Errorf("decode Cube dataset revision: %w", err)
 	}
 	if !hasWatermark && !hasRevision {
-		return time.Time{}, 0, nil
+		return time.Time{}, 0, synthesized, nil
 	}
 	if !hasWatermark || !hasRevision {
-		return time.Time{}, 0, errors.New("cube energy metadata is incomplete")
+		return time.Time{}, 0, false, errors.New("cube energy metadata is incomplete")
 	}
 	watermark, err := parseCubeTime(watermarkValue, time.UTC)
 	if err != nil {
-		return time.Time{}, 0, fmt.Errorf("decode Cube data watermark: %w", err)
+		return time.Time{}, 0, false, fmt.Errorf("decode Cube data watermark: %w", err)
 	}
 	revision, err := strconv.ParseUint(revisionValue, 10, 64)
 	if err != nil {
-		return time.Time{}, 0, fmt.Errorf("decode Cube dataset revision: %w", err)
+		return time.Time{}, 0, false, fmt.Errorf("decode Cube dataset revision: %w", err)
 	}
-	return watermark.UTC(), revision, nil
+	return watermark.UTC(), revision, synthesized, nil
 }
 
 // An offset-less Cube time is wall time in location: the query timezone for time
