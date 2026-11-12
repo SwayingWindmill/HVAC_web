@@ -68,6 +68,7 @@
         "services/notification-service/migrations/002_wechat_reminders.sql",
         "services/notification-service/migrations/003_wechat_daily.sql",
         "services/notification-service/migrations/004_drop_inbox_and_policies.sql",
+        "services/notification-service/migrations/005_alarm_delivery.sql",
         "infra/registry/postgres/init/010-s05-registry-writer.sql",
         "infra/registry/postgres/init/011-s08-metric-lifecycle.sql",
         "infra/registry/postgres/init/012-s19-settlement-projections.sql",
@@ -119,7 +120,8 @@
         "infra/telemetry/postgres/init/008-subscription-client-handle.sql",
         "infra/telemetry/postgres/init/009-realtime-revocation-relay.sql",
         "infra/telemetry/postgres/init/010-runtime-retention.sql",
-        "infra/telemetry/postgres/init/011-point-quality.sql"
+        "infra/telemetry/postgres/init/011-point-quality.sql",
+        "infra/telemetry/postgres/init/012-measurement-uncertainty.sql"
       ]
     },
     {
@@ -148,7 +150,8 @@
         "modules/alarm/migrations/011_s28_evaluation_event_retention.sql",
         "modules/alarm/migrations/012_s29_reading_unchanged_since.sql",
         "modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql",
-        "modules/alarm/migrations/014_s31_retired_site_rules.sql"
+        "modules/alarm/migrations/014_s31_retired_site_rules.sql",
+        "modules/alarm/migrations/015_s32_rules_unevaluable.sql"
       ]
     },
     {

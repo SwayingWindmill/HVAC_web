@@ -50,6 +50,7 @@ export const gateCommandMatrix = Object.freeze({
         'test',
         './libs/telemetryauth/...',
         './libs/telemetryhistorymodel/...',
+        './libs/measurement/...',
         './libs/nameplate/...',
         './modules/telemetry/...',
         './modules/connectivity/...',

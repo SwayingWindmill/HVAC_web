@@ -54,6 +54,7 @@ COPY services/notification-service/migrations/001_s16_notification.sql /opt/hvac
 COPY services/notification-service/migrations/002_wechat_reminders.sql /opt/hvac/repo/services/notification-service/migrations/002_wechat_reminders.sql
 COPY services/notification-service/migrations/003_wechat_daily.sql /opt/hvac/repo/services/notification-service/migrations/003_wechat_daily.sql
 COPY services/notification-service/migrations/004_drop_inbox_and_policies.sql /opt/hvac/repo/services/notification-service/migrations/004_drop_inbox_and_policies.sql
+COPY services/notification-service/migrations/005_alarm_delivery.sql /opt/hvac/repo/services/notification-service/migrations/005_alarm_delivery.sql
 COPY infra/registry/postgres/init/010-s05-registry-writer.sql /opt/hvac/repo/infra/registry/postgres/init/010-s05-registry-writer.sql
 COPY infra/registry/postgres/init/011-s08-metric-lifecycle.sql /opt/hvac/repo/infra/registry/postgres/init/011-s08-metric-lifecycle.sql
 COPY infra/registry/postgres/init/012-s19-settlement-projections.sql /opt/hvac/repo/infra/registry/postgres/init/012-s19-settlement-projections.sql
@@ -102,6 +103,7 @@ COPY infra/telemetry/postgres/init/008-subscription-client-handle.sql /opt/hvac/
 COPY infra/telemetry/postgres/init/009-realtime-revocation-relay.sql /opt/hvac/repo/infra/telemetry/postgres/init/009-realtime-revocation-relay.sql
 COPY infra/telemetry/postgres/init/010-runtime-retention.sql /opt/hvac/repo/infra/telemetry/postgres/init/010-runtime-retention.sql
 COPY infra/telemetry/postgres/init/011-point-quality.sql /opt/hvac/repo/infra/telemetry/postgres/init/011-point-quality.sql
+COPY infra/telemetry/postgres/init/012-measurement-uncertainty.sql /opt/hvac/repo/infra/telemetry/postgres/init/012-measurement-uncertainty.sql
 
 COPY modules/command/migrations/001_s3_command_runtime.sql /opt/hvac/repo/modules/command/migrations/001_s3_command_runtime.sql
 COPY modules/command/migrations/002_s3_target_runtime.sql /opt/hvac/repo/modules/command/migrations/002_s3_target_runtime.sql
@@ -122,6 +124,7 @@ COPY modules/alarm/migrations/011_s28_evaluation_event_retention.sql /opt/hvac/r
 COPY modules/alarm/migrations/012_s29_reading_unchanged_since.sql /opt/hvac/repo/modules/alarm/migrations/012_s29_reading_unchanged_since.sql
 COPY modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql /opt/hvac/repo/modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql
 COPY modules/alarm/migrations/014_s31_retired_site_rules.sql /opt/hvac/repo/modules/alarm/migrations/014_s31_retired_site_rules.sql
+COPY modules/alarm/migrations/015_s32_rules_unevaluable.sql /opt/hvac/repo/modules/alarm/migrations/015_s32_rules_unevaluable.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql

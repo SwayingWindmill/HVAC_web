@@ -1,5 +1,7 @@
 # 告警发给谁
 
+这一页是平台自己的告警（服务挂了、磁盘满、备份过期，Prometheus → Alertmanager）。设备告警（网关上报中断、温度越限等）按站点发给值班人员，另走一条路，见 `alarm-delivery.md`；它和这里共用同一份 SMTP 账号和群机器人，另外多一个企业微信自建应用（`wecom-app.env`、`wecom-app-secret`）。
+
 Prometheus 把告警交给 Alertmanager。没有配置接收方时，告警分组之后留在 Alertmanager 里，不发出去。这是默认行为：运行目录里没有下面的文件，启动脚本就用仓库里的空接收方。
 
 密钥放在 `${PHASE1_RUNTIME_DIR}/alert-receiver/`。正式机器上是：
@@ -18,7 +20,7 @@ Prometheus 把告警交给 Alertmanager。没有配置接收方时，告警分�
 
 ## 邮件
 
-`smtp.env` 里写主机、发件人、账号、收件人。`smtp-password` 里只有密码。465 端口一连接就是 TLS，样例里 `SMTP_REQUIRE_TLS=false` 就是这种连法。密码不会写进生成的配置，配置只用 `smtp_auth_password_file` 指向这个文件。
+`smtp.env` 里写主机、发件人、账号、收件人。QQ 邮箱是 `smtp.qq.com:465`，`smtp-password` 写授权码（QQ 邮箱「设置 → 账号 → 开启 SMTP 服务」生成），不是 QQ 密码。`SMTP_TO` 只给 Alertmanager 用；设备告警的收件人在 `alarm-delivery/recipients.json`。`smtp-password` 里只有密码。465 端口一连接就是 TLS，样例里 `SMTP_REQUIRE_TLS=false` 就是这种连法。密码不会写进生成的配置，配置只用 `smtp_auth_password_file` 指向这个文件。
 
 两个都放了，同一条告警会发到群里和邮箱。只放一个就只走那一个。
 

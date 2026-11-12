@@ -45,6 +45,7 @@ type LatestObservation struct {
 	Quality        telemetryapi.TelemetryQuality
 	QualityReasons []telemetryapi.QualityReasonCode
 	Health         *PointHealth
+	Measurement    json.RawMessage
 }
 
 type DeviceFacts struct {
@@ -59,6 +60,7 @@ type DeviceFacts struct {
 	FreshnessPolicies map[string]FreshnessPolicy
 	Latest            map[string]LatestObservation
 	RejectedKeys      map[string]bool
+	ProbeOffsets      map[string][]telemetryapi.ProbeOffsetSuggestion
 }
 
 type CanonicalEvaluation struct {
@@ -84,7 +86,7 @@ func EvaluateCanonical(facts DeviceFacts, revision int64, evaluatedAt time.Time)
 	slices.Sort(keys)
 	values := make([]telemetryapi.TelemetryKeyState, 0, len(keys))
 	for _, key := range keys {
-		state, err := evaluateKey(key, facts.FreshnessPolicies[key], facts.Latest[key], facts.RejectedKeys[key], evaluatedAt)
+		state, err := evaluateKey(key, facts.FreshnessPolicies[key], facts.Latest[key], facts.RejectedKeys[key], facts.ProbeOffsets[key], evaluatedAt)
 		if err != nil {
 			return CanonicalEvaluation{}, err
 		}
@@ -195,7 +197,7 @@ func evaluatePresence(facts DeviceFacts, evaluatedAt time.Time) (telemetryapi.Pr
 	return presence, telemetryapi.EvaluationAvailabilityAvailable, []telemetryapi.AvailabilityReasonCode{}
 }
 
-func evaluateKey(key string, policy FreshnessPolicy, latest LatestObservation, rejectedOnly bool, evaluatedAt time.Time) (telemetryapi.TelemetryKeyState, error) {
+func evaluateKey(key string, policy FreshnessPolicy, latest LatestObservation, rejectedOnly bool, probeOffsets []telemetryapi.ProbeOffsetSuggestion, evaluatedAt time.Time) (telemetryapi.TelemetryKeyState, error) {
 	policyRevision := telemetryapi.PolicyRevision(policy.Revision)
 	if len(latest.Value) == 0 || latest.SampledAt.IsZero() || latest.ReceivedAt.IsZero() {
 		reason := "NEVER_OBSERVED"
@@ -233,12 +235,27 @@ func evaluateKey(key string, policy FreshnessPolicy, latest LatestObservation, r
 	if err != nil {
 		return telemetryapi.TelemetryKeyState{}, err
 	}
+	measurement, err := measurementInterval(latest.Measurement)
+	if err != nil {
+		return telemetryapi.TelemetryKeyState{}, err
+	}
 	return telemetryapi.TelemetryKeyState{Present: &telemetryapi.TelemetryPresentState{
 		Key: telemetryapi.TelemetryKey(key), State: "PRESENT", Value: value, ValueType: latest.ValueType,
 		Unit: cloneString(latest.Unit), SampledAt: instant(latest.SampledAt), ReceivedAt: instant(latest.ReceivedAt),
 		Freshness: string(freshness), Quality: quality, QualityReasons: qualityReasons, PolicyRevision: policyRevision,
-		Health: health,
+		Health: health, Measurement: measurement, ProbeOffsets: probeOffsets,
 	}}, nil
+}
+
+func measurementInterval(raw json.RawMessage) (*telemetryapi.MeasurementInterval, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var interval telemetryapi.MeasurementInterval
+	if err := json.Unmarshal(raw, &interval); err != nil {
+		return nil, errors.New("telemetry measurement is invalid")
+	}
+	return &interval, nil
 }
 
 func pointHealthForSnapshot(latest LatestObservation, fresh bool) (*telemetryapi.TelemetryPointHealth, error) {
@@ -296,7 +313,9 @@ func canonicalQualityReasons(values []telemetryapi.QualityReasonCode) ([]telemet
 			telemetryapi.QualityReasonCodePhysicsCop,
 			telemetryapi.QualityReasonCodePhysicsChwDirection,
 			telemetryapi.QualityReasonCodePhysicsCwDirection,
-			telemetryapi.QualityReasonCodePhysicsHeatBalance:
+			telemetryapi.QualityReasonCodePhysicsHeatBalance,
+			telemetryapi.QualityReasonCodeLowConfidence,
+			telemetryapi.QualityReasonCodeProbeOffset:
 		default:
 			return nil, errors.New("telemetry quality reason is invalid")
 		}

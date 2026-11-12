@@ -43,9 +43,9 @@ func (store *PostgresStore) Ping(ctx context.Context) error {
 	return store.pool.Ping(ctx)
 }
 
-// RecordAlarmEvent takes one Alarm event from the Alarm owner's outbox. Only a new urgent or
-// important Alarm leads anywhere: a WeChat reminder (wechat_alarm_reminders.go). Seeing the same
-// Alarm again changes nothing.
+// RecordAlarmEvent takes one Alarm event from the Alarm owner's outbox. A new urgent or important
+// Alarm also gets a WeChat reminder (wechat_alarm_reminders.go); every event updates what Alarm
+// delivery knows of the Alarm (alarm_delivery.go). Seeing the same event again changes nothing.
 func (store *PostgresStore) RecordAlarmEvent(ctx context.Context, event AlarmEvent, recordedAt time.Time) error {
 	if err := event.Validate(); err != nil {
 		return err
@@ -59,6 +59,9 @@ func (store *PostgresStore) RecordAlarmEvent(ctx context.Context, event AlarmEve
 	}
 	defer tx.Rollback(ctx)
 	if err := recordAlarmReminder(ctx, tx, event, recordedAt); err != nil {
+		return err
+	}
+	if err := recordAlarmDelivery(ctx, tx, event, recordedAt); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

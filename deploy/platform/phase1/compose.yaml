@@ -187,6 +187,15 @@ services:
       OPERATIONS_AGENT_URL: https://operations-agent-service:8451
       OPERATIONS_AGENT_SERVER_CA: /run/hvac/pki/ca.crt
       OPERATIONS_AGENT_SERVER_NAME: operations-agent-service
+      # Alarm delivery to people (P0-4, docs/operations/alarm-delivery.md): off until the operator
+      # sets dry-run, then live. Routing is in Git (deploy/sites/*.alarm-routing.json); contacts and
+      # the adapter token are on the server under runtime/alarm-delivery.
+      ALARM_DELIVERY_MODE: ${ALARM_DELIVERY_MODE:-off}
+      ALARM_ROUTING_DIR: /run/hvac/alarm-routing
+      ALARM_DELIVERY_RECIPIENTS_FILE: /run/hvac/alarm-delivery/recipients.json
+      ALARM_SEND_URL: http://wecom-alert-adapter:9095/send
+      ALARM_SEND_TOKEN_FILE: /run/hvac/alarm-delivery/alarm-send-token
+      ALARM_DELIVERY_CONSOLE_URL: ${ALARM_DELIVERY_CONSOLE_URL:-${PLATFORM_PUBLIC_ORIGIN:-}}
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -199,6 +208,8 @@ services:
     volumes:
       - ./limit-policy.v1.json:/run/hvac/config/limit-policy.v1.json:ro
       - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca/ca.crt:/run/hvac/gateway-ca/ca.crt:ro
+      - ../../sites:/run/hvac/alarm-routing:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/alarm-delivery:/run/hvac/alarm-delivery:ro
     expose: ["8080", "19080", "8444", "18445", "18447", "8446", "8447", "8448", "8449", "8450", "8452"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19080/health/ready"]
@@ -1215,8 +1226,11 @@ services:
       SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
     volumes:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/alert-receiver:/etc/alert-receiver:ro
+      # Only alarm-send-token is read from here: the bearer token energy-api presents to POST /send.
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/alarm-delivery:/etc/alarm-delivery:ro
     expose: ["9095"]
-    networks: [observability, alert-egress]
+    # application: energy-api posts Alarm messages to /send (P0-4). alert-egress: SMTP and WeCom.
+    networks: [observability, application, alert-egress]
     healthcheck:
       test: ["CMD", "/wecom-alert-adapter", "-healthcheck"]
       interval: 30s

@@ -48,6 +48,24 @@ export interface AssetsPointView {
   readonly quality: TelemetryQuality | null;
   readonly qualityReasons: readonly string[];
   readonly health: { readonly status: 'HEALTHY' | 'SUSPECT' | 'BAD' | 'STALE'; readonly score: number } | null;
+  readonly measurement: {
+    readonly relative: number;
+    readonly low: number;
+    readonly high: number;
+    readonly lowConfidence: boolean;
+    readonly deltaTK?: number;
+    readonly deltaTAccuracyK?: number;
+    readonly copRelative?: number;
+  } | null;
+  readonly probeOffsets: readonly {
+    readonly pairCode: string;
+    readonly offsetK: number;
+    readonly stddevK: number;
+    readonly sampleCount: number;
+    readonly suggested: boolean;
+    readonly applied: boolean;
+    readonly alarm?: string;
+  }[];
   readonly sampledAt: string | null;
   readonly receivedAt: string | null;
   readonly policyRevision: number | null;
@@ -120,6 +138,8 @@ function pointView(definition: PointDisplayDefinition, state: TelemetryKeyState 
       quality: null,
       qualityReasons: [],
       health: null,
+      measurement: null,
+      probeOffsets: [],
       sampledAt: null,
       receivedAt: null,
       policyRevision: state?.policyRevision ?? null,
@@ -138,6 +158,16 @@ function pointView(definition: PointDisplayDefinition, state: TelemetryKeyState 
     quality: state.quality,
     qualityReasons: [...state.qualityReasons],
     health: state.health ? { status: state.health.status, score: state.health.score } : null,
+    measurement: state.measurement ?? null,
+    probeOffsets: (state.probeOffsets ?? []).map((suggestion) => ({
+      pairCode: suggestion.pairCode,
+      offsetK: suggestion.offsetK,
+      stddevK: suggestion.stddevK,
+      sampleCount: suggestion.sampleCount,
+      suggested: suggestion.suggested,
+      applied: suggestion.applied,
+      alarm: suggestion.alarm,
+    })),
     sampledAt: state.sampledAt,
     receivedAt: state.receivedAt,
     policyRevision: state.policyRevision,
@@ -157,6 +187,8 @@ function unavailablePointView(definition: PointDisplayDefinition): AssetsPointVi
     quality: null,
     qualityReasons: [],
     health: null,
+    measurement: null,
+    probeOffsets: [],
     sampledAt: null,
     receivedAt: null,
     policyRevision: null,

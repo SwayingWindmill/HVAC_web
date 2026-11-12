@@ -250,6 +250,9 @@ func (store *PostgresStore) Apply(ctx context.Context, tenantID, siteID, alarmID
 	if err := persistUpdatedAlarm(ctx, tx, current, updated); err != nil {
 		return MutationResult{}, err
 	}
+	if err := enqueueTransitionNotifications(ctx, tx, store, current, updated); err != nil {
+		return MutationResult{}, err
+	}
 	responseJSON, err = json.Marshal(updated)
 	if err != nil {
 		return MutationResult{}, fmt.Errorf("encode Alarm mutation response: %w", err)

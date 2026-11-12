@@ -21,7 +21,8 @@ const (
 )
 
 // RunScheduledEvaluations runs a pass every minute until ctx ends, wherever the Alarm owner runs:
-// alone or inside energy-api. Each pass also deletes evaluation evidence past its 30 days.
+// alone or inside energy-api. Each pass also raises or recovers the "rules-unevaluable" Alarm
+// (#749) and deletes evaluation evidence past its 30 days.
 func RunScheduledEvaluations(ctx context.Context, store *PostgresStore, logger *slog.Logger) {
 	host, err := os.Hostname()
 	if err != nil {
@@ -43,6 +44,13 @@ func RunScheduledEvaluations(ctx context.Context, store *PostgresStore, logger *
 			}
 			if result.Raised+result.Cleared > 0 {
 				logger.Info("alarm_due_evaluations", "evaluated", result.Evaluated, "raised", result.Raised, "cleared", result.Cleared)
+			}
+			raised, cleared, err := store.WatchUnevaluableRules(ctx, time.Now())
+			if err != nil {
+				logger.Error("alarm_rules_unevaluable_watch_failed", "error_code", "ALARM_RULES_UNEVALUABLE_WATCH_FAILED", "error", err)
+			}
+			if raised+cleared > 0 {
+				logger.Info("alarm_rules_unevaluable_watch", "raised", raised, "cleared", cleared)
 			}
 			pruned, err := store.PruneExpiredEvaluationEvidence(ctx)
 			if err != nil {
