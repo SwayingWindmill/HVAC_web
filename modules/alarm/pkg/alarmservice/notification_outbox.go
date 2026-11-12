@@ -15,9 +15,14 @@ import (
 
 type NotificationAction string
 
-// NotificationCreated is the one event Notification needs: a new Alarm, which may become a WeChat
-// reminder. Severity changes, acknowledgements and recoveries are not sent (ADR 0026).
-const NotificationCreated NotificationAction = "CREATED"
+// Notification outbox actions carried to Notification: a new Alarm (which may become an immediate
+// WeChat reminder), a 24-hour unacknowledged reading-gap escalation, and a reading-gap recovery
+// that closes the daily summary entry (#800).
+const (
+	NotificationCreated         NotificationAction = "CREATED"
+	NotificationSeverityChanged NotificationAction = "SEVERITY_CHANGED"
+	NotificationCleared         NotificationAction = "CLEARED"
+)
 
 type NotificationOutboxEvent struct {
 	TenantID              string
@@ -147,6 +152,7 @@ func enqueueNotificationEvent(ctx context.Context, tx pgx.Tx, store *PostgresSto
 		"sourceType":      string(alarm.SourceType),
 		"sourceReference": alarm.SourceReference,
 		"ruleRevision":    alarm.RuleRevision,
+		"firstOccurredAt": alarm.FirstOccurredAt,
 	})
 	if err != nil {
 		return fmt.Errorf("encode Alarm notification attributes: %w", err)

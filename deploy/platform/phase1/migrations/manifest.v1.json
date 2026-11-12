@@ -99,7 +99,8 @@
         "infra/registry/postgres/init/033-fdd-operating-gates.sql",
         "infra/registry/postgres/init/034-operating-schedules.sql",
         "infra/registry/postgres/init/035-electricity-budgets-and-utility-bills.sql",
-        "infra/registry/postgres/init/036-asset-nameplate.sql"
+        "infra/registry/postgres/init/036-asset-nameplate.sql",
+        "services/notification-service/migrations/005_reading_gap_reminders.sql"
       ]
     },
     {
@@ -149,7 +150,8 @@
         "modules/alarm/migrations/011_s28_evaluation_event_retention.sql",
         "modules/alarm/migrations/012_s29_reading_unchanged_since.sql",
         "modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql",
-        "modules/alarm/migrations/014_s31_retired_site_rules.sql"
+        "modules/alarm/migrations/014_s31_retired_site_rules.sql",
+        "modules/alarm/migrations/015_s32_reading_gap_escalation.sql"
       ]
     },
     {

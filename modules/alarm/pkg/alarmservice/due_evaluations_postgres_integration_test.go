@@ -244,3 +244,189 @@ func TestPostgresScheduledPassAppliesANewRuleVersionWhileItsDeviceIsSilent(t *te
 		t.Fatalf("the new version was not applied while its device is silent: evaluated with %s", persisted.State.PolicyRevisionID)
 	}
 }
+
+// #800: an unacknowledged reading-gap Alarm older than 24 hours escalates once by one severity step
+// (WARNING -> MAJOR, MAJOR -> CRITICAL) and emits SEVERITY_CHANGED on the outbox; acknowledging
+// blocks escalation, and recovery emits CLEARED for Notification's daily summary.
+func TestPostgresReadingGapEscalatesOnceAfter24HoursUnacknowledgedAndEmitsOutboxEvents(t *testing.T) {
+	databaseURL := os.Getenv("S4_ALARM_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
+	}
+	const (
+		siteID               = "01910000-c000-7000-8000-000000000052"
+		warnDeviceID         = "01910000-c000-7000-8000-000000000053"
+		majorDeviceID        = "01910000-c000-7000-8000-000000000054"
+		ackedDeviceID        = "01910000-c000-7000-8000-000000000055"
+		warnPolicyID         = "01910000-c000-7000-8000-000000000061"
+		warnPolicyRevisionID = "01910000-c000-7000-8000-000000000062"
+		warnAssignmentID     = "01910000-c000-7000-8000-000000000063"
+		majPolicyID          = "01910000-c000-7000-8000-000000000064"
+		majPolicyRevisionID  = "01910000-c000-7000-8000-000000000065"
+		majAssignmentID      = "01910000-c000-7000-8000-000000000066"
+		ackPolicyID          = "01910000-c000-7000-8000-000000000067"
+		ackPolicyRevisionID  = "01910000-c000-7000-8000-000000000068"
+		ackAssignmentID      = "01910000-c000-7000-8000-000000000069"
+	)
+	ctx := identitycontext.WithTenantID(context.Background(), silenceTenantID)
+	store, err := OpenPostgresStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	relay, err := OpenNotificationRelay(context.Background(), databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer relay.Close()
+
+	base := time.Date(2026, 11, 8, 8, 0, 0, 0, time.UTC)
+	registerGapRule := func(policyID, revisionID, assignmentID, deviceID, alarmType, title string, severity alarmmodel.Severity) {
+		t.Helper()
+		policy := silencePolicy()
+		policy.PolicyID = policyID
+		policy.PolicyRevisionID = revisionID
+		policy.AlarmType = alarmType
+		policy.SourceReference = "alarm-rules:gap-site/" + alarmType
+		policy.Title = title
+		policy.Summary = title + "。"
+		policy.Severity = severity
+		low, high := -1e12, 1e12
+		policy.Raise = Condition{Kind: ConditionNoData, Input: deviceID + "/supply_temp", AgeSeconds: 900}
+		policy.Clear = Condition{Kind: ConditionRange, Input: deviceID + "/supply_temp", Minimum: &low, Maximum: &high}
+		sealAlarmPolicy(&policy)
+		if err := store.ReleaseAlarmPolicyRevision(ctx, silenceTenantID, siteID, policy, base.Add(-time.Minute), "test:gap"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.AssignAlarmPolicyRevision(ctx, silenceTenantID, siteID, AlarmPolicyAssignmentInput{
+			AssignmentID: assignmentID, AssignmentRevision: 1, PolicyRevisionID: revisionID,
+			SubjectType: "SITE", SubjectID: siteID, AssignedAt: base.Add(-30 * time.Second).Format(time.RFC3339Nano), AssignedBy: "test:gap",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		snapshot := silenceSnapshot(1, base)
+		snapshot.SiteId = siteID
+		snapshot.DeviceId = telemetryapi.UUIDv7(deviceID)
+		eventID, err := store.newID(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.EvaluateTelemetrySnapshot(ctx, eventID, snapshot, base); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	registerGapRule(warnPolicyID, warnPolicyRevisionID, warnAssignmentID, warnDeviceID, "reading-gap/chiller-a/supply-temp", "A 机组：读数长时间没有更新", alarmmodel.SeverityWarning)
+	registerGapRule(majPolicyID, majPolicyRevisionID, majAssignmentID, majorDeviceID, "reading-gap/meter-uid2/active-energy", "D 机组电表：读数长时间没有更新", alarmmodel.SeverityMajor)
+	registerGapRule(ackPolicyID, ackPolicyRevisionID, ackAssignmentID, ackedDeviceID, "reading-gap/chiller-b/supply-temp", "B 机组：读数长时间没有更新", alarmmodel.SeverityWarning)
+
+	raisedAt := base.Add(15 * time.Minute)
+	raisedPass, err := store.RunDueEvaluations(context.Background(), "gap-test", raisedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raisedPass.Raised != 3 {
+		t.Fatalf("expected 3 raised reading-gap alarms, got %#v", raisedPass)
+	}
+
+	active := siteAlarms(t, ctx, store, siteID, alarmmodel.ConditionActive)
+	if len(active) != 3 {
+		t.Fatalf("expected 3 active alarms, got %d", len(active))
+	}
+	byType := map[string]alarmmodel.Alarm{}
+	for _, alarm := range active {
+		byType[alarm.AlarmType] = alarm
+	}
+	ackTarget := byType["reading-gap/chiller-b/supply-temp"]
+	if _, err := store.Apply(ctx, silenceTenantID, siteID, ackTarget.AlarmID, Mutation{
+		Operation: alarmmodel.OperationAcknowledge, ExpectedVersion: ackTarget.Version,
+		Reason: "现场排查中", ActorType: "USER", ActorID: "operator-1",
+		PolicyRevision: ackTarget.RuleRevision, CorrelationID: "ack-gap-b",
+		OccurredAt: raisedAt.Add(time.Hour).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Just before 24h from first_occurred_at: nothing escalates.
+	before24h, err := store.RunDueEvaluations(context.Background(), "gap-test", raisedAt.Add(24*time.Hour-time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before24h.Escalated != 0 {
+		t.Fatalf("escalated before 24h elapsed: %#v", before24h)
+	}
+
+	// At 24h: the two unacknowledged reading-gap alarms escalate (WARNING -> MAJOR, MAJOR -> CRITICAL);
+	// the acknowledged one stays WARNING.
+	at24h := raisedAt.Add(24 * time.Hour)
+	escalatedPass, err := store.RunDueEvaluations(context.Background(), "gap-test", at24h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if escalatedPass.Escalated != 2 || escalatedPass.Failed != 0 {
+		t.Fatalf("expected 2 escalations at 24h, got %#v", escalatedPass)
+	}
+
+	// Running again later must NOT escalate WARNING -> MAJOR a second time into CRITICAL.
+	repeatPass, err := store.RunDueEvaluations(context.Background(), "gap-test", at24h.Add(25*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeatPass.Escalated != 0 {
+		t.Fatalf("escalated a second time: %#v", repeatPass)
+	}
+
+	after := siteAlarms(t, ctx, store, siteID, alarmmodel.ConditionActive)
+	afterByType := map[string]alarmmodel.Alarm{}
+	for _, alarm := range after {
+		afterByType[alarm.AlarmType] = alarm
+	}
+	if got := afterByType["reading-gap/chiller-a/supply-temp"].CurrentSeverity; got != alarmmodel.SeverityMajor {
+		t.Fatalf("unacknowledged WARNING alarm severity = %s, want MAJOR", got)
+	}
+	if got := afterByType["reading-gap/meter-uid2/active-energy"].CurrentSeverity; got != alarmmodel.SeverityCritical {
+		t.Fatalf("unacknowledged MAJOR alarm severity = %s, want CRITICAL", got)
+	}
+	if got := afterByType["reading-gap/chiller-b/supply-temp"].CurrentSeverity; got != alarmmodel.SeverityWarning {
+		t.Fatalf("acknowledged WARNING alarm severity = %s, want WARNING", got)
+	}
+
+	// Recovering the meter reading-gap alarm emits CLEARED to the notification outbox.
+	recoveredAt := at24h.Add(2 * time.Hour)
+	recoverSnapshot := silenceSnapshot(2, recoveredAt)
+	recoverSnapshot.SiteId = siteID
+	recoverSnapshot.DeviceId = telemetryapi.UUIDv7(majorDeviceID)
+	recoverEventID, err := store.newID(recoveredAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EvaluateTelemetrySnapshot(ctx, recoverEventID, recoverSnapshot, recoveredAt); err != nil {
+		t.Fatal(err)
+	}
+
+	outboxActions := map[string][]NotificationAction{}
+	for range 20 {
+		claimed, err := relay.Claim(context.Background(), "gap-relay-test", recoveredAt.Add(time.Minute), 30*time.Second)
+		if err == ErrNotFound {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if claimed.SiteID == siteID {
+			outboxActions[claimed.Attributes["alarmType"]] = append(outboxActions[claimed.Attributes["alarmType"]], claimed.Action)
+		}
+		if err := relay.Complete(context.Background(), claimed.SourceEventID, claimed.LeaseOwner, claimed.LeaseFence, recoveredAt.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantMeterActions := []NotificationAction{NotificationCreated, NotificationSeverityChanged, NotificationCleared}
+	if got := outboxActions["reading-gap/meter-uid2/active-energy"]; len(got) != len(wantMeterActions) || got[0] != wantMeterActions[0] || got[1] != wantMeterActions[1] || got[2] != wantMeterActions[2] {
+		t.Fatalf("meter outbox actions = %#v, want %#v", got, wantMeterActions)
+	}
+	wantWarnActions := []NotificationAction{NotificationCreated, NotificationSeverityChanged}
+	if got := outboxActions["reading-gap/chiller-a/supply-temp"]; len(got) != len(wantWarnActions) || got[0] != wantWarnActions[0] || got[1] != wantWarnActions[1] {
+		t.Fatalf("warning gap outbox actions = %#v, want %#v", got, wantWarnActions)
+	}
+}

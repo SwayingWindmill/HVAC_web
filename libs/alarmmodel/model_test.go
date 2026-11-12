@@ -75,6 +75,74 @@ func TestOccurrenceCanLowerCurrentSeverityWithoutLosingPeak(t *testing.T) {
 	}
 }
 
+func TestEscalateSeverityRaisesUnacknowledgedActiveAlarmAndRejectsInvalidTransitions(t *testing.T) {
+	if !IsReadingGapType("reading-gap/meter-uid2/active-energy") || !IsReadingGapType("readings-not-updated/meter-uid2") || IsReadingGapType("reports-interrupted") {
+		t.Fatal("unexpected reading-gap Alarm type classification")
+	}
+
+	alarm := validAlarm(t)
+	alarm.CurrentSeverity = SeverityWarning
+	alarm.PeakSeverity = SeverityWarning
+	alarm.Timeline[0].CurrentSeverity = SeverityWarning
+
+	major, err := EscalateSeverity(alarm, EscalateSeverityInput{
+		Severity: SeverityMajor, Reason: "READING_GAP_UNACKNOWLEDGED_24H",
+		ActorType: "WORKLOAD", ActorID: "alarm-due-evaluations", CorrelationID: "escalation-24h", OccurredAt: "2026-08-01T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if major.CurrentSeverity != SeverityMajor || major.PeakSeverity != SeverityMajor || major.OccurrenceCount != 1 || major.Version != 2 {
+		t.Fatalf("unexpected escalated alarm: %#v", major)
+	}
+	if last := major.Timeline[len(major.Timeline)-1]; last.Reason != "READING_GAP_UNACKNOWLEDGED_24H" || last.CurrentSeverity != SeverityMajor {
+		t.Fatalf("unexpected escalation timeline entry: %#v", last)
+	}
+
+	critical, err := EscalateSeverity(major, EscalateSeverityInput{
+		Severity: SeverityCritical, Reason: "READING_GAP_UNACKNOWLEDGED_24H",
+		ActorType: "WORKLOAD", ActorID: "alarm-due-evaluations", CorrelationID: "escalation-48h", OccurredAt: "2026-08-02T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if critical.CurrentSeverity != SeverityCritical || critical.PeakSeverity != SeverityCritical || critical.Version != 3 {
+		t.Fatalf("unexpected critical escalation: %#v", critical)
+	}
+
+	if _, err := EscalateSeverity(major, EscalateSeverityInput{
+		Severity: SeverityMajor, Reason: "READING_GAP_UNACKNOWLEDGED_24H",
+		ActorType: "WORKLOAD", ActorID: "alarm-due-evaluations", CorrelationID: "same-severity", OccurredAt: "2026-08-01T10:01:00Z",
+	}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("expected non-increasing severity rejection, got %v", err)
+	}
+
+	acknowledged, err := ApplyOperation(alarm, operationInput(OperationAcknowledge, 1, "2026-07-31T10:00:00Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EscalateSeverity(acknowledged, EscalateSeverityInput{
+		Severity: SeverityMajor, Reason: "READING_GAP_UNACKNOWLEDGED_24H",
+		ActorType: "WORKLOAD", ActorID: "alarm-due-evaluations", CorrelationID: "ack-reject", OccurredAt: "2026-08-01T10:00:00Z",
+	}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("expected acknowledged alarm escalation rejection, got %v", err)
+	}
+
+	cleared, err := ClearIncident(alarm, ClearInput{
+		OccurredAt: "2026-07-31T10:00:00Z", Reason: "recovered", RuleRevision: "alarm-policy-10",
+		ActorType: "WORKLOAD", ActorID: "alarm-evaluator", CorrelationID: "clear-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EscalateSeverity(cleared, EscalateSeverityInput{
+		Severity: SeverityMajor, Reason: "READING_GAP_UNACKNOWLEDGED_24H",
+		ActorType: "WORKLOAD", ActorID: "alarm-due-evaluations", CorrelationID: "cleared-reject", OccurredAt: "2026-08-01T10:00:00Z",
+	}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("expected cleared alarm escalation rejection, got %v", err)
+	}
+}
+
 func TestOccurrenceKeepsBoundedEvidenceProjection(t *testing.T) {
 	alarm := validAlarm(t)
 	initialOccurrences := alarm.OccurrenceCount
