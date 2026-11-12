@@ -298,6 +298,7 @@ function ratedFor(check, profile) {
 }
 
 const POINT_STATUSES = new Set(['ACTIVE', 'INACTIVE', 'RETIRED']);
+const ALARM_SEVERITIES = new Set(['INFO', 'WARNING', 'MINOR', 'MAJOR', 'CRITICAL']);
 
 // A point's registry status; the site file may leave it out (ACTIVE).
 export function pointStatus(point) {
@@ -779,6 +780,12 @@ export function checkSiteFile(profile, alarmRules = null) {
   }
   for (const device of devices) {
     for (const point of device.points) {
+      if (point.critical != null && typeof point.critical !== 'boolean') {
+        problems.push(`${device.code}/${point.code}: critical must be true or false`);
+      } else if (point.critical) {
+        if (pointStatus(point) !== 'ACTIVE') problems.push(`${device.code}/${point.code}: critical point must be ACTIVE`);
+        if (point.from) problems.push(`${device.code}/${point.code}: critical point cannot copy from another device`);
+      }
       if (!point.qualityProfile || pointStatus(point) !== 'ACTIVE') continue;
       if (!profile.qualityProfiles?.[point.qualityProfile]) problems.push(`${device.code}/${point.code} names unknown quality profile ${point.qualityProfile}`);
       const named = profile.qualityProfiles?.[point.qualityProfile];
@@ -823,6 +830,21 @@ export function checkSiteFile(profile, alarmRules = null) {
 
   if (intelligence.alarmRules && !alarmRules) problems.push(`alarm rules file ${intelligence.alarmRules} was not found`);
   if (alarmRules) {
+    const hasCritical = devices.some((device) => device.points.some((point) => point.critical === true && pointStatus(point) === 'ACTIVE' && !point.from));
+    if (hasCritical && alarmRules.readingGaps == null) {
+      problems.push('alarm rules readingGaps is required when site file marks critical points');
+    }
+    if (alarmRules.readingGaps != null) {
+      if (!alarmRules.readingGaps || typeof alarmRules.readingGaps !== 'object' || Array.isArray(alarmRules.readingGaps)) {
+        problems.push('alarm rules readingGaps must be an object');
+      } else {
+        const { title, summary, ageSeconds, severity } = alarmRules.readingGaps;
+        if (typeof title !== 'string' || !title.trim()) problems.push('alarm rules readingGaps.title is required');
+        if (typeof summary !== 'string' || !summary.trim()) problems.push('alarm rules readingGaps.summary is required');
+        if (!Number.isInteger(ageSeconds) || ageSeconds <= 0) problems.push('alarm rules readingGaps.ageSeconds must be a positive integer');
+        if (!ALARM_SEVERITIES.has(severity)) problems.push(`alarm rules readingGaps.severity ${severity} must be INFO, WARNING, MINOR, MAJOR or CRITICAL`);
+      }
+    }
     const inputs = [];
     const walk = (node) => {
       if (!node || typeof node !== 'object') return;
