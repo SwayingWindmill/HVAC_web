@@ -167,16 +167,23 @@ const energyCostSchema = z.object({
 }).strict();
 const energySeriesPointSchema = z.object({
   periodStart: z.string().datetime({ offset: true }), periodEnd: z.string().datetime({ offset: true }), energyKWh: z.number().min(0),
+  crossGapKWh: z.number().min(0).optional(),
+  cost: energyCostSchema.optional(),
+  incomplete: z.boolean().optional(), missingMeters: z.array(z.string()).optional(),
+}).strict();
+const energyCrossGapSchema = z.object({
+  energyKWh: z.number().min(0),
   cost: energyCostSchema.optional(),
 }).strict();
 export const energySeriesResponseSchema = z.object({
   schemaVersion: z.literal(1),
   points: z.array(energySeriesPointSchema),
-  devices: z.array(z.object({ deviceId: z.string().uuid(), points: z.array(energySeriesPointSchema) }).strict()).optional(),
+  crossGap: energyCrossGapSchema.optional(),
+  devices: z.array(z.object({ deviceId: z.string().uuid(), crossGapKWh: z.number().min(0).optional(), points: z.array(energySeriesPointSchema) }).strict()).optional(),
   metadata: z.object({
     requestedGranularity: energyGranularitySchema, actualGranularity: energyGranularitySchema,
     dataWatermark: z.string().datetime({ offset: true }).optional(), aggregateWatermark: z.string().datetime({ offset: true }).optional(),
-    datasetRevision: z.string(), partial: z.boolean(),
+    datasetRevision: z.string(), partial: z.boolean(), synthesized: z.boolean().optional(),
     qualitySummary: z.object({ valid: z.number().int().min(0), suspect: z.number().int().min(0), invalid: z.number().int().min(0) }).strict(),
   }).strict(),
 }).strict();

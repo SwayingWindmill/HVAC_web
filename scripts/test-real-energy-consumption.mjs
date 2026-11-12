@@ -132,3 +132,87 @@ test('hourly energy becomes a Site-local day by hour grid with unread hours left
   assert.equal(grid[1].values[14], null);
   assert.equal(grid[0].values.every((value) => value === null), true);
 });
+
+test('synthesized incomplete hours preserve partial sum and missing meters, while cross-gap adds to period totals without entering hourly or daily rows (#798)', async () => {
+  const { comparePeriods, summaryCostBuckets } = await import('../apps/hvac-web/src/features/energy-analysis/consumption/model.ts');
+  const { sumCosts } = await import('../apps/hvac-web/src/features/tariff/tariff-model.ts');
+
+  const elecHour = {
+    schemaVersion: 1,
+    points: [
+      {
+        periodStart: '2026-11-12T01:00:00Z',
+        periodEnd: '2026-11-12T02:00:00Z',
+        energyKWh: 185,
+        incomplete: true,
+        missingMeters: ['2号电表（D机组）'],
+        cost: { amountCNY: 185, unpricedKWh: 0, periods: [{ periodCode: 'PEAK', energyKWh: 185, amountCNY: 185 }] },
+      },
+    ],
+    crossGap: {
+      energyKWh: 640,
+      cost: { amountCNY: 512, unpricedKWh: 0, periods: [{ periodCode: 'FLAT', energyKWh: 640, amountCNY: 512 }] },
+    },
+    metadata: {
+      requestedGranularity: 'hour',
+      actualGranularity: 'hour',
+      datasetRevision: 'r',
+      partial: true,
+      qualitySummary: { valid: 3, suspect: 0, invalid: 0 },
+    },
+  };
+  const coolHour = series([['2026-11-12T01:00:00Z', 740]], { requestedGranularity: 'hour', actualGranularity: 'hour' });
+
+  const hourly = summarizeEnergy(elecHour, coolHour, 'hour', 'Asia/Shanghai');
+  assert.equal(hourly.electricityKWh, 825); // 185 hourly + 640 cross-gap
+  assert.equal(hourly.crossGapElectricityKWh, 640);
+  assert.deepEqual(hourly.missingMeters, ['2号电表（D机组）']);
+  assert.equal(hourly.rows.length, 1);
+  assert.equal(hourly.rows[0].electricityKWh, 185); // cross-gap stays out of hourly rows & COP
+  assert.equal(hourly.rows[0].cop, 4);
+  assert.equal(hourly.cop, 4);
+  assert.equal(hourly.rows[0].incomplete, true);
+  assert.deepEqual(hourly.rows[0].missingMeters, ['2号电表（D机组）']);
+
+  const costTotal = sumCosts(summaryCostBuckets(hourly));
+  assert.equal(costTotal.energyKWh, 825);
+  assert.equal(costTotal.unpricedKWh, 0);
+  assert.equal(costTotal.total, 697); // 185 + 512
+
+  const compared = comparePeriods(hourly, summarizeEnergy(series([]), series([]), 'hour', 'Asia/Shanghai'), {
+    from: new Date('2026-11-11T16:00:00Z'),
+    previousFrom: new Date('2026-11-10T16:00:00Z'),
+    now: new Date('2026-11-12T04:00:00Z'),
+    timeZone: 'Asia/Shanghai',
+  });
+  assert.deepEqual(compared[0].missingMeters, ['2号电表（D机组）']);
+
+  // Monthly granularity already includes each month's cross-gap inside points: must not double-count.
+  const elecMonth = {
+    schemaVersion: 1,
+    points: [
+      {
+        periodStart: '2026-10-31T16:00:00Z',
+        periodEnd: '2026-11-30T16:00:00Z',
+        energyKWh: 12_640,
+        crossGapKWh: 640,
+        cost: { amountCNY: 10_112, unpricedKWh: 0, periods: [{ periodCode: 'FLAT', energyKWh: 12_640, amountCNY: 10_112 }] },
+      },
+    ],
+    crossGap: {
+      energyKWh: 640,
+      cost: { amountCNY: 512, unpricedKWh: 0, periods: [{ periodCode: 'FLAT', energyKWh: 640, amountCNY: 512 }] },
+    },
+    metadata: {
+      requestedGranularity: 'month',
+      actualGranularity: 'month',
+      datasetRevision: 'r',
+      partial: true,
+      qualitySummary: { valid: 30, suspect: 0, invalid: 0 },
+    },
+  };
+  const monthly = summarizeEnergy(elecMonth, series([]), 'month', 'Asia/Shanghai');
+  assert.equal(monthly.electricityKWh, 12_640);
+  assert.equal(monthly.rows[0].crossGapElectricityKWh, 640);
+  assert.equal(summaryCostBuckets(monthly).length, 1);
+});

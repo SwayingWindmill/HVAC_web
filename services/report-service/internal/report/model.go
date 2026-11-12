@@ -24,6 +24,13 @@ type Hour struct {
 	Cost           *analyticsmodel.EnergyCost
 }
 
+// MonthEnergy holds a month's hourly energy alongside any > 1h cross-gap energy recovered in it (#798).
+type MonthEnergy struct {
+	Hours               []Hour
+	ElectricityCrossGap *analyticsmodel.EnergyCrossGap
+	CoolingCrossGapKWh  float64
+}
+
 // Why a snapshot has or lacks an energy cost: every kWh priced, none of it priced (no Tariff in
 // effect), or some of it outside every Tariff period.
 const (
@@ -81,13 +88,14 @@ type Savings struct {
 // Snapshot is a Site's month as its report shows it. Demand, alarms and work orders are not in it:
 // demand needs quarter-hours, and alarms and work orders are other owners' records.
 type Snapshot struct {
-	SchemaVersion  int     `json:"schemaVersion"`
-	Month          string  `json:"month"`
-	Timezone       string  `json:"timezone"`
-	DaysInMonth    int     `json:"daysInMonth"`
-	DaysWithData   int     `json:"daysWithData"`
-	ElectricityKWh float64 `json:"electricityKWh"`
-	CoolingKWh     float64 `json:"coolingKWh"`
+	SchemaVersion          int     `json:"schemaVersion"`
+	Month                  string  `json:"month"`
+	Timezone               string  `json:"timezone"`
+	DaysInMonth            int     `json:"daysInMonth"`
+	DaysWithData           int     `json:"daysWithData"`
+	ElectricityKWh         float64 `json:"electricityKWh"`
+	CrossGapElectricityKWh float64 `json:"crossGapElectricityKWh,omitempty"`
+	CoolingKWh             float64 `json:"coolingKWh"`
 	// COP is cooling over electricity; nil without electricity.
 	COP *float64 `json:"cop"`
 	// EnergyCostCNY is the month's electricity as the query service priced it at the time-of-use
@@ -112,8 +120,8 @@ func MonthBounds(month string, location *time.Location) (time.Time, time.Time, i
 }
 
 // Build totals a month's hours and their costs by day and by Tariff period, with its verified
-// savings and findings.
-func Build(month string, location *time.Location, hours []Hour, savings []SavingsDay, findings []FindingCount) (Snapshot, error) {
+// savings, findings, and any cross-gap energy (#798).
+func Build(month string, location *time.Location, energy MonthEnergy, savings []SavingsDay, findings []FindingCount) (Snapshot, error) {
 	from, to, daysInMonth, err := MonthBounds(month, location)
 	if err != nil {
 		return Snapshot{}, err
@@ -126,7 +134,7 @@ func Build(month string, location *time.Location, hours []Hour, savings []Saving
 	dayCost := map[string]float64{}
 	periods := map[string]*PeriodTotal{}
 	var cost, pricedKWh, unpricedKWh float64
-	for _, hour := range hours {
+	for _, hour := range energy.Hours {
 		if hour.Start.Before(from) || !hour.Start.Before(to) {
 			return Snapshot{}, fmt.Errorf("hour %s is outside %s", hour.Start.Format(time.RFC3339), month)
 		}
@@ -165,6 +173,28 @@ func Build(month string, location *time.Location, hours []Hour, savings []Saving
 			pricedKWh += period.EnergyKWh
 		}
 	}
+	snapshot.CoolingKWh += energy.CoolingCrossGapKWh
+	if energy.ElectricityCrossGap != nil && energy.ElectricityCrossGap.EnergyKWh > 0 {
+		cgKWh := energy.ElectricityCrossGap.EnergyKWh
+		snapshot.ElectricityKWh += cgKWh
+		snapshot.CrossGapElectricityKWh = cgKWh
+		if energy.ElectricityCrossGap.Cost == nil {
+			unpricedKWh += cgKWh
+		} else {
+			cost += energy.ElectricityCrossGap.Cost.AmountCNY
+			unpricedKWh += energy.ElectricityCrossGap.Cost.UnpricedKWh
+			for _, period := range energy.ElectricityCrossGap.Cost.Periods {
+				total := periods[period.PeriodCode]
+				if total == nil {
+					total = &PeriodTotal{Code: period.PeriodCode}
+					periods[period.PeriodCode] = total
+				}
+				total.ElectricityKWh += period.EnergyKWh
+				total.CostCNY += period.AmountCNY
+				pricedKWh += period.EnergyKWh
+			}
+		}
+	}
 	priced := unpricedKWh == 0
 	switch {
 	case priced:
@@ -191,7 +221,7 @@ func Build(month string, location *time.Location, hours []Hour, savings []Saving
 	}
 	snapshot.DaysWithData = len(dates)
 	snapshot.COP = ratio(snapshot.CoolingKWh, snapshot.ElectricityKWh)
-	if priced && len(hours) > 0 {
+	if priced && (len(energy.Hours) > 0 || snapshot.CrossGapElectricityKWh > 0) {
 		snapshot.EnergyCostCNY = &cost
 		for _, total := range periods {
 			snapshot.TariffPeriods = append(snapshot.TariffPeriods, *total)

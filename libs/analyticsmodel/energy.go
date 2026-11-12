@@ -144,8 +144,21 @@ type EnergySeriesPoint struct {
 	PeriodStart time.Time `json:"periodStart"`
 	PeriodEnd   time.Time `json:"periodEnd"`
 	EnergyKWh   float64   `json:"energyKWh"`
+	// CrossGapKWh is the portion of a monthly bucket's EnergyKWh that came from > 1h counter steps.
+	CrossGapKWh float64 `json:"crossGapKWh,omitempty"`
 	// Cost is the electricity's estimated energy charge; cooling has none.
 	Cost *EnergyCost `json:"cost,omitempty"`
+	// Incomplete marks a synthesized-total hour where one or more sub-meters had no valid reading.
+	Incomplete bool `json:"incomplete,omitempty"`
+	// MissingMeters lists the display names of sub-meters missing in an incomplete hour.
+	MissingMeters []string `json:"missingMeters,omitempty"`
+}
+
+// EnergyCrossGap holds energy from counter steps exceeding 1 hour within the queried window:
+// counted in monthly/report/billing totals, never spread into hourly or daily curve buckets.
+type EnergyCrossGap struct {
+	EnergyKWh float64     `json:"energyKWh"`
+	Cost      *EnergyCost `json:"cost,omitempty"`
 }
 
 // EnergyCost is a bucket's electricity priced at the Site's import Tariff (#575): an estimate of
@@ -177,19 +190,22 @@ type EnergySeriesMetadata struct {
 	AggregateWatermark   *time.Time     `json:"aggregateWatermark,omitempty"`
 	DatasetRevision      string         `json:"datasetRevision"`
 	Partial              bool           `json:"partial"`
+	Synthesized          bool           `json:"synthesized,omitempty"`
 	QualitySummary       QualitySummary `json:"qualitySummary"`
 }
 
 // EnergyDeviceSeries is one piece of equipment's sub-metered energy, already part of the Site's
 // total. Equipment without a sub-meter has no series.
 type EnergyDeviceSeries struct {
-	DeviceID string              `json:"deviceId"`
-	Points   []EnergySeriesPoint `json:"points"`
+	DeviceID    string              `json:"deviceId"`
+	Points      []EnergySeriesPoint `json:"points"`
+	CrossGapKWh float64             `json:"crossGapKWh,omitempty"`
 }
 
 type EnergySeriesResponse struct {
 	SchemaVersion int                  `json:"schemaVersion"`
 	Points        []EnergySeriesPoint  `json:"points"`
+	CrossGap      *EnergyCrossGap      `json:"crossGap,omitempty"`
 	Devices       []EnergyDeviceSeries `json:"devices,omitempty"`
 	Metadata      EnergySeriesMetadata `json:"metadata"`
 }

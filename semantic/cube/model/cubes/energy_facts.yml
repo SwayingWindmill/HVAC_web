@@ -10,47 +10,65 @@
 # 1 = 1, which makes every hour whole. A rollup row stands at its hour's start, inside the bucket of
 # every fact it holds for any whole-hour timezone; a Site in a half-hour timezone would split hours
 # and needs the single facts. Every row carries interval_count, 1 for a single fact, which the
-# count measures add up. The cost cube stays on single facts because tariffs change by the minute.
+# count measures add up. Cross-gap intervals (> 1 hour) stay out of hourly/daily curves and expose
+# separate cross-gap measures (#798). The cost cube stays on single facts because tariffs change by
+# the minute.
 cubes:
   - name: energy_facts
     public: false
     title: 能耗区间
     description: 电表累计读数投影成的可相加能耗区间，带质量、数据截至时间和数据版本。
-    sql: SELECT *, toInt64(1) AS interval_count FROM analytics.energy_interval_facts_visible
+    sql: SELECT *, toInt64(1) AS interval_count, toUInt8(0) AS is_cross_gap FROM analytics.energy_interval_facts_visible
 
     measures:
       - name: energy_valid_kwh
         title: 能耗（有效数据）
-        description: 只算质量判定为「有效」的读数，单位 kWh。必须同时按能源类型筛选，否则会把用电量和供冷量加在一起。
+        description: 只算质量判定为「有效」且非跨缺口的读数，单位 kWh。必须同时按能源类型筛选，否则会把用电量和供冷量加在一起。
         sql: energy_kwh
         type: sum
         filters:
-          - sql: "{CUBE}.quality = 'VALID'"
+          - sql: "{CUBE}.is_cross_gap = 0 AND {CUBE}.quality = 'VALID'"
 
       - name: energy_valid_and_suspect_kwh
         title: 能耗（含可疑数据）
-        description: 包括质量为「有效」和「可疑」的读数，单位 kWh；可疑读数较多时用来估算上限。同样必须按能源类型筛选。
+        description: 包括质量为「有效」和「可疑」且非跨缺口的读数，单位 kWh；可疑读数较多时用来估算上限。同样必须按能源类型筛选。
         sql: energy_kwh
         type: sum
         filters:
-          - sql: "{CUBE}.quality IN ('VALID', 'SUSPECT')"
+          - sql: "{CUBE}.is_cross_gap = 0 AND {CUBE}.quality IN ('VALID', 'SUSPECT')"
+
+      - name: cross_gap_valid_kwh
+        title: 跨缺口能耗（有效数据）
+        description: 累计读数前后相隔超过 1 小时的有效能耗之和，单位 kWh；计入月度总量，不摊入逐时或逐日曲线。必须按能源类型筛选。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.is_cross_gap = 1 AND {CUBE}.quality = 'VALID'"
+
+      - name: cross_gap_valid_and_suspect_kwh
+        title: 跨缺口能耗（含可疑数据）
+        description: 累计读数前后相隔超过 1 小时的有效与可疑能耗之和，单位 kWh。必须按能源类型筛选。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.is_cross_gap = 1 AND {CUBE}.quality IN ('VALID', 'SUSPECT')"
 
       - name: valid_count
         title: 有效区间数
         description: 质量为「有效」的计量区间个数。
-        sql: "toInt64(sumIf({CUBE}.interval_count, {CUBE}.quality = 'VALID'))"
+        sql: "toInt64(sumIf({CUBE}.interval_count, {CUBE}.is_cross_gap = 0 AND {CUBE}.quality = 'VALID'))"
         type: number
 
       - name: suspect_count
         title: 可疑区间数
         description: 质量为「可疑」的计量区间个数，例如读数跳变或计数器回绕附近。
-        sql: "toInt64(sumIf({CUBE}.interval_count, {CUBE}.quality = 'SUSPECT'))"
+        sql: "toInt64(sumIf({CUBE}.interval_count, {CUBE}.is_cross_gap = 0 AND {CUBE}.quality = 'SUSPECT'))"
         type: number
 
       - name: invalid_count
         title: 无效区间数
         description: 质量为「无效」的计量区间个数，这些区间不计入任何能耗。
-        sql: "toInt64(sumIf({CUBE}.interval_count, {CUBE}.quality = 'INVALID'))"
+        sql: "toInt64(sumIf({CUBE}.interval_count, {CUBE}.is_cross_gap = 0 AND {CUBE}.quality = 'INVALID'))"
         type: number
 
       - name: max_data_watermark
@@ -58,12 +76,16 @@ cubes:
         description: 参与计算的读数里最新的采样时间（UTC），之后的能耗还没有到。
         sql: data_watermark
         type: max
+        filters:
+          - sql: "{CUBE}.quality != 'MISSING'"
 
       - name: max_dataset_revision
         title: 数据版本
         description: 参与计算的区间里最大的数据版本号，数据重算后会变大。
         sql: dataset_revision
         type: max
+        filters:
+          - sql: "{CUBE}.quality != 'MISSING'"
 
     dimensions:
       - name: tenant_id
@@ -111,50 +133,165 @@ cubes:
               operator: equals
               values: ["{ securityContext.siteId }"]
 
-  # The Site's total: SITE facts only.
+  # The Site's total: physical SITE facts by default, or synthesized BRANCH sub-meters when
+  # analytics.site_total_submeters_visible lists sub-meters for the Site (#798).
   - name: site_energy_facts
     extends: energy_facts
     public: false
     title: 站点总能耗
-    description: 站点总表的能耗区间，不含已经算在总表里的设备分表。
+    description: 站点总表的能耗区间（或合成总表的各分表之和），以及跨缺口电量与缺失分表标记。
     sql: >
       SELECT tenant_id, site_id, energy_type, quality, load_device_id, hour AS period_end,
-             energy_kwh, interval_count, data_watermark, dataset_revision
+             energy_kwh, interval_count, data_watermark, dataset_revision,
+             toUInt8(0) AS is_cross_gap, '' AS missing_meter,
+             toUInt8(energy_type = 'electricity' AND accounting_scope = 'BRANCH') AS is_synthesized
       FROM analytics.energy_hourly
-      WHERE accounting_scope = 'SITE' AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
+      WHERE {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
         AND {FILTER_PARAMS.site_energy_facts.period_end.filter('hour')}
         AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addSeconds(hour, 3599)')}
+        AND (
+          (energy_type != 'electricity' AND accounting_scope = 'SITE')
+          OR (energy_type = 'electricity' AND accounting_scope = 'SITE'
+            AND (tenant_id, site_id) NOT IN (SELECT tenant_id, site_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
+          OR (energy_type = 'electricity' AND accounting_scope = 'BRANCH'
+            AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
+        )
       UNION ALL
       SELECT tenant_id, site_id, energy_type, quality, load_device_id, period_end,
-             energy_kwh, toInt64(1) AS interval_count, data_watermark, dataset_revision
+             energy_kwh, toInt64(1) AS interval_count, data_watermark, dataset_revision,
+             toUInt8(0) AS is_cross_gap, '' AS missing_meter,
+             toUInt8(energy_type = 'electricity' AND accounting_scope = 'BRANCH') AS is_synthesized
       FROM analytics.energy_interval_facts_visible
-      WHERE accounting_scope = 'SITE' AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
+      WHERE dateDiff('millisecond', period_start, period_end) <= 3600000
+        AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
         AND {FILTER_PARAMS.site_energy_facts.period_end.filter('period_end')}
         AND NOT ({FILTER_PARAMS.site_energy_facts.period_end.filter('toStartOfHour(period_end)')}
           AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addSeconds(toStartOfHour(period_end), 3599)')})
+        AND (
+          (energy_type != 'electricity' AND accounting_scope = 'SITE')
+          OR (energy_type = 'electricity' AND accounting_scope = 'SITE'
+            AND (tenant_id, site_id) NOT IN (SELECT tenant_id, site_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
+          OR (energy_type = 'electricity' AND accounting_scope = 'BRANCH'
+            AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
+        )
+      UNION ALL
+      SELECT tenant_id, site_id, energy_type, quality, load_device_id, period_end,
+             energy_kwh, toInt64(0) AS interval_count, data_watermark, dataset_revision,
+             toUInt8(1) AS is_cross_gap, '' AS missing_meter,
+             toUInt8(energy_type = 'electricity' AND accounting_scope = 'BRANCH') AS is_synthesized
+      FROM analytics.energy_interval_facts_visible
+      WHERE dateDiff('millisecond', period_start, period_end) > 3600000
+        AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
+        AND {FILTER_PARAMS.site_energy_facts.period_end.filter('period_end')}
+        AND (
+          (energy_type != 'electricity' AND accounting_scope = 'SITE')
+          OR (energy_type = 'electricity' AND accounting_scope = 'SITE'
+            AND (tenant_id, site_id) NOT IN (SELECT tenant_id, site_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
+          OR (energy_type = 'electricity' AND accounting_scope = 'BRANCH'
+            AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}))
+        )
+      UNION ALL
+      SELECT active_hours.tenant_id AS tenant_id, active_hours.site_id AS site_id,
+             CAST('electricity', 'LowCardinality(String)') AS energy_type,
+             CAST('MISSING', 'LowCardinality(String)') AS quality,
+             CAST(NULL, 'Nullable(UUID)') AS load_device_id,
+             active_hours.hour AS period_end,
+             toFloat64(0) AS energy_kwh, toInt64(0) AS interval_count,
+             toDateTime64(0, 3, 'UTC') AS data_watermark, toUInt64(0) AS dataset_revision,
+             toUInt8(0) AS is_cross_gap, sub.meter_name AS missing_meter,
+             toUInt8(1) AS is_synthesized
+      FROM (
+        SELECT tenant_id, site_id, hour, groupUniqArrayIf(point_id, quality = 'VALID') AS valid_points
+        FROM analytics.energy_hourly
+        WHERE accounting_scope = 'BRANCH' AND energy_type = 'electricity'
+          AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
+          AND {FILTER_PARAMS.site_energy_facts.period_end.filter('hour')}
+          AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addSeconds(hour, 3599)')}
+          AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')})
+        GROUP BY tenant_id, site_id, hour
+        HAVING notEmpty(valid_points)
+      ) AS active_hours
+      INNER JOIN (
+        SELECT tenant_id, site_id, point_id, meter_name
+        FROM analytics.site_total_submeters_visible
+        WHERE {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
+      ) AS sub
+        ON active_hours.tenant_id = sub.tenant_id AND active_hours.site_id = sub.site_id
+      WHERE NOT has(active_hours.valid_points, sub.point_id)
+      UNION ALL
+      SELECT cut_hours.tenant_id AS tenant_id, cut_hours.site_id AS site_id,
+             CAST('electricity', 'LowCardinality(String)') AS energy_type,
+             CAST('MISSING', 'LowCardinality(String)') AS quality,
+             CAST(NULL, 'Nullable(UUID)') AS load_device_id,
+             cut_hours.sample_period_end AS period_end,
+             toFloat64(0) AS energy_kwh, toInt64(0) AS interval_count,
+             toDateTime64(0, 3, 'UTC') AS data_watermark, toUInt64(0) AS dataset_revision,
+             toUInt8(0) AS is_cross_gap, sub.meter_name AS missing_meter,
+             toUInt8(1) AS is_synthesized
+      FROM (
+        SELECT tenant_id, site_id, toStartOfHour(period_end) AS hour,
+               max(period_end) AS sample_period_end,
+               groupUniqArrayIf(point_id, quality = 'VALID') AS valid_points
+        FROM analytics.energy_interval_facts_visible
+        WHERE accounting_scope = 'BRANCH' AND energy_type = 'electricity'
+          AND dateDiff('millisecond', period_start, period_end) <= 3600000
+          AND {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
+          AND {FILTER_PARAMS.site_energy_facts.period_end.filter('period_end')}
+          AND NOT ({FILTER_PARAMS.site_energy_facts.period_end.filter('toStartOfHour(period_end)')}
+            AND {FILTER_PARAMS.site_energy_facts.period_end.filter('addSeconds(toStartOfHour(period_end), 3599)')})
+          AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')})
+        GROUP BY tenant_id, site_id, hour
+        HAVING notEmpty(valid_points)
+      ) AS cut_hours
+      INNER JOIN (
+        SELECT tenant_id, site_id, point_id, meter_name
+        FROM analytics.site_total_submeters_visible
+        WHERE {FILTER_PARAMS.site_energy_facts.site_id.filter('site_id')}
+      ) AS sub
+        ON cut_hours.tenant_id = sub.tenant_id AND cut_hours.site_id = sub.site_id
+      WHERE NOT has(cut_hours.valid_points, sub.point_id)
 
     measures:
       - name: electricity_valid_kwh
         title: 用电量
-        description: 站点总表的用电量（有效数据），单位 kWh。
+        description: 站点总表的用电量（有效数据，不含跨缺口电量），单位 kWh。
         sql: energy_kwh
         type: sum
         filters:
-          - sql: "{CUBE}.quality = 'VALID' AND {CUBE}.energy_type = 'electricity'"
+          - sql: "{CUBE}.is_cross_gap = 0 AND {CUBE}.quality = 'VALID' AND {CUBE}.energy_type = 'electricity'"
 
       - name: cooling_valid_kwh
         title: 供冷量
-        description: 站点的供冷量（有效数据），单位 kWh。
+        description: 站点的供冷量（有效数据，不含跨缺口冷量），单位 kWh。
         sql: energy_kwh
         type: sum
         filters:
-          - sql: "{CUBE}.quality = 'VALID' AND {CUBE}.energy_type = 'cooling'"
+          - sql: "{CUBE}.is_cross_gap = 0 AND {CUBE}.quality = 'VALID' AND {CUBE}.energy_type = 'cooling'"
 
       - name: cop
         title: 综合能效
         description: 同一时段的供冷量 ÷ 用电量（COP），两者都只算有效数据；没有用电量的时段为空。不要再按能源类型筛选，否则分子或分母为空。
         sql: "{cooling_valid_kwh} / NULLIF({electricity_valid_kwh}, 0)"
         type: number
+
+      - name: missing_count
+        title: 缺失分表数
+        description: 合成总表站点在时段内缺少有效读数的分表记录条数。
+        sql: "toInt64(countIf({CUBE}.quality = 'MISSING'))"
+        type: number
+
+      - name: synthesized_total
+        title: 合成总表标记
+        description: 站点总表由各分表合成时为 1，物理总表为 0。
+        sql: is_synthesized
+        type: max
+
+    dimensions:
+      - name: missing_meter
+        title: 缺失分表
+        description: 合成总表站点在该小时缺少有效读数的分表名称；完整小时为空字符串。
+        sql: missing_meter
+        type: string
 
   # Equipment sub-meters: BRANCH facts, already inside the Site's total.
   - name: equipment_energy_facts
@@ -164,19 +301,29 @@ cubes:
     description: 各设备分表的能耗区间；这些能耗已经包含在站点总表里，不能再与总表相加。
     sql: >
       SELECT tenant_id, site_id, energy_type, quality, load_device_id, hour AS period_end,
-             energy_kwh, interval_count, data_watermark, dataset_revision
+             energy_kwh, interval_count, data_watermark, dataset_revision, toUInt8(0) AS is_cross_gap
       FROM analytics.energy_hourly
       WHERE accounting_scope = 'BRANCH' AND {FILTER_PARAMS.equipment_energy_facts.site_id.filter('site_id')}
         AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('hour')}
         AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('addSeconds(hour, 3599)')}
       UNION ALL
       SELECT tenant_id, site_id, energy_type, quality, load_device_id, period_end,
-             energy_kwh, toInt64(1) AS interval_count, data_watermark, dataset_revision
+             energy_kwh, toInt64(1) AS interval_count, data_watermark, dataset_revision, toUInt8(0) AS is_cross_gap
       FROM analytics.energy_interval_facts_visible
-      WHERE accounting_scope = 'BRANCH' AND {FILTER_PARAMS.equipment_energy_facts.site_id.filter('site_id')}
+      WHERE accounting_scope = 'BRANCH'
+        AND dateDiff('millisecond', period_start, period_end) <= 3600000
+        AND {FILTER_PARAMS.equipment_energy_facts.site_id.filter('site_id')}
         AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('period_end')}
         AND NOT ({FILTER_PARAMS.equipment_energy_facts.period_end.filter('toStartOfHour(period_end)')}
           AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('addSeconds(toStartOfHour(period_end), 3599)')})
+      UNION ALL
+      SELECT tenant_id, site_id, energy_type, quality, load_device_id, period_end,
+             energy_kwh, toInt64(0) AS interval_count, data_watermark, dataset_revision, toUInt8(1) AS is_cross_gap
+      FROM analytics.energy_interval_facts_visible
+      WHERE accounting_scope = 'BRANCH'
+        AND dateDiff('millisecond', period_start, period_end) > 3600000
+        AND {FILTER_PARAMS.equipment_energy_facts.site_id.filter('site_id')}
+        AND {FILTER_PARAMS.equipment_energy_facts.period_end.filter('period_end')}
 
     dimensions:
       - name: equipment_id
@@ -187,23 +334,30 @@ cubes:
 
   # The Site's electricity priced at its import Tariff (#575). Each fact takes the rate of the
   # price window its period ends in, the instant that also decides its bucket; a fact outside
-  # every window has no rate and counts as unpriced. Both sides are cut to the queried Site first,
-  # and the facts to the queried time; the windows are not, since a fact needs the one before it.
+  # every window has no rate and counts as unpriced. Synthesized Sites read their sub-meters from
+  # analytics.site_total_submeters_visible without double-counting historical SITE rows (#798).
   - name: site_energy_cost_facts
     public: false
     title: 站点电费估算
     description: 站点总表的用电区间，按区间结束时刻所在的电价时段计价。
     sql: >
       SELECT fact.tenant_id AS tenant_id, fact.site_id AS site_id, fact.period_end AS period_end,
-             fact.quality AS quality, fact.energy_kwh AS energy_kwh,
+             fact.quality AS quality, fact.energy_kwh AS energy_kwh, fact.is_cross_gap AS is_cross_gap,
              if(fact.period_end < price.window_end, price.period_code, '') AS tariff_period,
              if(fact.period_end < price.window_end, price.energy_rate_per_kwh, NULL) AS energy_rate_per_kwh
       FROM (
-        SELECT tenant_id, site_id, period_end, quality, energy_kwh
+        SELECT tenant_id, site_id, period_end, quality, energy_kwh,
+               toUInt8(dateDiff('millisecond', period_start, period_end) > 3600000) AS is_cross_gap
         FROM analytics.energy_interval_facts_visible
-        WHERE accounting_scope = 'SITE' AND energy_type = 'electricity'
+        WHERE energy_type = 'electricity'
           AND {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}
           AND {FILTER_PARAMS.site_energy_cost_facts.period_end.filter('period_end')}
+          AND (
+            (accounting_scope = 'SITE'
+              AND (tenant_id, site_id) NOT IN (SELECT tenant_id, site_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}))
+            OR (accounting_scope = 'BRANCH'
+              AND (tenant_id, site_id, point_id) IN (SELECT tenant_id, site_id, point_id FROM analytics.site_total_submeters_visible WHERE {FILTER_PARAMS.site_energy_cost_facts.site_id.filter('site_id')}))
+          )
       ) AS fact
       ASOF LEFT JOIN (
         SELECT tenant_id, site_id, window_start, window_end, period_code, energy_rate_per_kwh
@@ -215,51 +369,99 @@ cubes:
     measures:
       - name: cost_valid_cny
         title: 电度电费（有效数据）
-        description: 有效用电量按电价时段计价的估算电度电费，单位元；不含需量电费，实际账单以结算为准。没有电价的电量不计入，见「未计价电量」。
+        description: 有效用电量按电价时段计价的估算电度电费（不含跨缺口电量），单位元；不含需量电费，实际账单以结算为准。没有电价的电量不计入，见「未计价电量」。
         sql: "{CUBE}.energy_kwh * {CUBE}.energy_rate_per_kwh"
         type: sum
         filters:
-          - sql: "{CUBE}.quality = 'VALID'"
+          - sql: "{CUBE}.is_cross_gap = 0 AND {CUBE}.quality = 'VALID'"
 
       - name: cost_valid_and_suspect_cny
         title: 电度电费（含可疑数据）
-        description: 有效和可疑用电量的估算电度电费，单位元；可疑数据较多时用来估算上限。
+        description: 有效和可疑用电量的估算电度电费（不含跨缺口电量），单位元；可疑数据较多时用来估算上限。
         sql: "{CUBE}.energy_kwh * {CUBE}.energy_rate_per_kwh"
         type: sum
         filters:
-          - sql: "{CUBE}.quality IN ('VALID', 'SUSPECT')"
+          - sql: "{CUBE}.is_cross_gap = 0 AND {CUBE}.quality IN ('VALID', 'SUSPECT')"
 
       - name: priced_valid_kwh
         title: 已计价电量（有效数据）
-        description: 有电价覆盖的有效用电量，单位 kWh；按电价时段拆分时就是各时段的用电量。
+        description: 有电价覆盖的有效用电量（不含跨缺口电量），单位 kWh；按电价时段拆分时就是各时段的用电量。
         sql: energy_kwh
         type: sum
         filters:
-          - sql: "{CUBE}.quality = 'VALID' AND {CUBE}.energy_rate_per_kwh IS NOT NULL"
+          - sql: "{CUBE}.is_cross_gap = 0 AND {CUBE}.quality = 'VALID' AND {CUBE}.energy_rate_per_kwh IS NOT NULL"
 
       - name: priced_valid_and_suspect_kwh
         title: 已计价电量（含可疑数据）
-        description: 有电价覆盖的有效和可疑用电量，单位 kWh。
+        description: 有电价覆盖的有效和可疑用电量（不含跨缺口电量），单位 kWh。
         sql: energy_kwh
         type: sum
         filters:
-          - sql: "{CUBE}.quality IN ('VALID', 'SUSPECT') AND {CUBE}.energy_rate_per_kwh IS NOT NULL"
+          - sql: "{CUBE}.is_cross_gap = 0 AND {CUBE}.quality IN ('VALID', 'SUSPECT') AND {CUBE}.energy_rate_per_kwh IS NOT NULL"
 
       - name: unpriced_valid_kwh
         title: 未计价电量（有效数据）
-        description: 没有任何电价时段覆盖的有效用电量，单位 kWh，例如站点还没有分配购电电价；这部分电费是未知，不是零。
+        description: 没有任何电价时段覆盖的有效用电量（不含跨缺口电量），单位 kWh，例如站点还没有分配购电电价；这部分电费是未知，不是零。
         sql: energy_kwh
         type: sum
         filters:
-          - sql: "{CUBE}.quality = 'VALID' AND {CUBE}.energy_rate_per_kwh IS NULL"
+          - sql: "{CUBE}.is_cross_gap = 0 AND {CUBE}.quality = 'VALID' AND {CUBE}.energy_rate_per_kwh IS NULL"
 
       - name: unpriced_valid_and_suspect_kwh
         title: 未计价电量（含可疑数据）
-        description: 没有电价覆盖的有效和可疑用电量，单位 kWh。
+        description: 没有电价覆盖的有效和可疑用电量（不含跨缺口电量），单位 kWh。
         sql: energy_kwh
         type: sum
         filters:
-          - sql: "{CUBE}.quality IN ('VALID', 'SUSPECT') AND {CUBE}.energy_rate_per_kwh IS NULL"
+          - sql: "{CUBE}.is_cross_gap = 0 AND {CUBE}.quality IN ('VALID', 'SUSPECT') AND {CUBE}.energy_rate_per_kwh IS NULL"
+
+      - name: cross_gap_cost_valid_cny
+        title: 跨缺口电度电费（有效数据）
+        description: 跨缺口有效用电量按恢复读数时刻电价时段计价的估算电度电费，单位元。
+        sql: "{CUBE}.energy_kwh * {CUBE}.energy_rate_per_kwh"
+        type: sum
+        filters:
+          - sql: "{CUBE}.is_cross_gap = 1 AND {CUBE}.quality = 'VALID'"
+
+      - name: cross_gap_cost_valid_and_suspect_cny
+        title: 跨缺口电度电费（含可疑数据）
+        description: 跨缺口有效与可疑用电量的估算电度电费，单位元。
+        sql: "{CUBE}.energy_kwh * {CUBE}.energy_rate_per_kwh"
+        type: sum
+        filters:
+          - sql: "{CUBE}.is_cross_gap = 1 AND {CUBE}.quality IN ('VALID', 'SUSPECT')"
+
+      - name: cross_gap_priced_valid_kwh
+        title: 跨缺口已计价电量（有效数据）
+        description: 有电价覆盖的跨缺口有效用电量，单位 kWh。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.is_cross_gap = 1 AND {CUBE}.quality = 'VALID' AND {CUBE}.energy_rate_per_kwh IS NOT NULL"
+
+      - name: cross_gap_priced_valid_and_suspect_kwh
+        title: 跨缺口已计价电量（含可疑数据）
+        description: 有电价覆盖的跨缺口有效与可疑用电量，单位 kWh。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.is_cross_gap = 1 AND {CUBE}.quality IN ('VALID', 'SUSPECT') AND {CUBE}.energy_rate_per_kwh IS NOT NULL"
+
+      - name: cross_gap_unpriced_valid_kwh
+        title: 跨缺口未计价电量（有效数据）
+        description: 没有电价时段覆盖的跨缺口有效用电量，单位 kWh。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.is_cross_gap = 1 AND {CUBE}.quality = 'VALID' AND {CUBE}.energy_rate_per_kwh IS NULL"
+
+      - name: cross_gap_unpriced_valid_and_suspect_kwh
+        title: 跨缺口未计价电量（含可疑数据）
+        description: 没有电价覆盖的跨缺口有效与可疑用电量，单位 kWh。
+        sql: energy_kwh
+        type: sum
+        filters:
+          - sql: "{CUBE}.is_cross_gap = 1 AND {CUBE}.quality IN ('VALID', 'SUSPECT') AND {CUBE}.energy_rate_per_kwh IS NULL"
 
     dimensions:
       - name: tenant_id

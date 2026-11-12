@@ -137,3 +137,66 @@ FROM numbers(91)`, tenant, site, device, point)
 		t.Fatalf("09:31–10:01 delta = %v, want the 29 steps inside revision 2", second)
 	}
 }
+
+// A reading that arrives after a 3-day silence carries 3 days of counter advance in one step.
+// Hourly and daily Metrics must skip that >1h cross-gap step so the recovery hour/day only counts
+// normal post-recovery steps, while a monthly Metric keeps the full meter advance.
+func TestCounterDeltaSkipsCrossGapStepsForHourlyAndDailyMetrics(t *testing.T) {
+	baseURL := os.Getenv("METRIC_CLICKHOUSE_TEST_URL")
+	if baseURL == "" {
+		t.Skip("METRIC_CLICKHOUSE_TEST_URL is not set")
+	}
+	const tenant, site, device, point = "018f5a00-0000-7000-8000-000000000003", "018f5a00-1000-7000-8000-000000000003", "018f5a00-2000-7000-8000-000000000003", "018f5a00-3000-7000-8000-000000000003"
+	insert := fmt.Sprintf(`INSERT INTO telemetry_history.observations
+ (observation_id, tenant_id, site_id, device_id, point_id, point_revision, unit, source_event_id, sampled_at, received_at, acceptance_status, quality, value_number)
+VALUES
+ (generateUUIDv4(), toUUID('%[1]s'), toUUID('%[2]s'), toUUID('%[3]s'), toUUID('%[4]s'), 1, 'kWh', generateUUIDv4(), toDateTime64('2026-11-08 08:10:00', 3, 'UTC'), toDateTime64('2026-11-08 08:10:00', 3, 'UTC'), 'ACCEPTED', 'GOOD', 1000),
+ (generateUUIDv4(), toUUID('%[1]s'), toUUID('%[2]s'), toUUID('%[3]s'), toUUID('%[4]s'), 1, 'kWh', generateUUIDv4(), toDateTime64('2026-11-11 10:05:00', 3, 'UTC'), toDateTime64('2026-11-11 10:05:00', 3, 'UTC'), 'ACCEPTED', 'GOOD', 4600),
+ (generateUUIDv4(), toUUID('%[1]s'), toUUID('%[2]s'), toUUID('%[3]s'), toUUID('%[4]s'), 1, 'kWh', generateUUIDv4(), toDateTime64('2026-11-11 10:10:00', 3, 'UTC'), toDateTime64('2026-11-11 10:10:00', 3, 'UTC'), 'ACCEPTED', 'GOOD', 4612)`, tenant, site, device, point)
+	request, err := http.NewRequest(http.MethodPost, baseURL, strings.NewReader(insert))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SetBasicAuth(os.Getenv("METRIC_CLICKHOUSE_TEST_ADMIN_USERNAME"), "")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("insert readings: %d %s", response.StatusCode, body)
+	}
+
+	store, err := NewClickHouseStore(baseURL, "metric_engine_runtime", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryHourStart := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	hourBinding := Binding{TenantID: tenant, SiteID: site, Granularity: "HOUR", Aggregation: "LAST", CalculationMethod: "DELTA", SourceDefinition: map[string]any{}}
+	hourInput, err := store.ReadPoint(context.Background(), hourBinding, point, recoveryHourStart, recoveryHourStart.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hourDelta, err := counterDelta(hourBinding, hourInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(hourDelta-12) > 1e-9 {
+		t.Fatalf("recovery hour delta = %v kWh, want only the 12 kWh post-recovery step (not the 3600 kWh 3-day cross-gap jump)", hourDelta)
+	}
+
+	monthStart := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	monthBinding := Binding{TenantID: tenant, SiteID: site, Granularity: "MONTH", Aggregation: "LAST", CalculationMethod: "DELTA", SourceDefinition: map[string]any{}}
+	monthInput, err := store.ReadPoint(context.Background(), monthBinding, point, monthStart, monthStart.AddDate(0, 1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	monthDelta, err := counterDelta(monthBinding, monthInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(monthDelta-3612) > 1e-9 {
+		t.Fatalf("month delta = %v kWh, want 3612 kWh including cross-gap energy", monthDelta)
+	}
+}

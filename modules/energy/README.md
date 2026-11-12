@@ -21,9 +21,9 @@ telemetry_history.counter_arrivals        （检查点之后、按历史批次�
 
 计量绑定的查询是登记服务的内部接口（双向 TLS），要一张带 `meter-binding.resolve` 权限的短时授权。这个程序以自己的后台服务身份（ADR 0017）向 IAM 每个租户申请一张，快到期前续签。
 
-## 同步电价窗口
+## 同步电价窗口与合成总表分表
 
-把每个站点的进线电价展开成按 UTC 的价格窗口，写进 `analytics.tariff_price_windows`，Cube 用它给每段用电计价（`internal/energy/price_window_projector.go`，规则见 `docs/specs/estimated-energy-cost.md`）。
+把每个站点的进线电价展开成按 UTC 的价格窗口，写进 `analytics.tariff_price_windows`，Cube 用它给每段用电计价（`internal/energy/price_window_projector.go`，规则见 `docs/specs/estimated-energy-cost.md`）。当站点总电表配置为分表合成（`site_total_electricity`）时，同步参与合成的分表列表到 `analytics.site_total_submeters`（`internal/energy/total_submeter_projector.go`），Cube 用它求和分表用电并标出缺分表的小时。
 
 ## 谁能读写哪些数据
 
@@ -33,7 +33,8 @@ telemetry_history.counter_arrivals        （检查点之后、按历史批次�
 | `analytics.energy_interval_facts` | 写入，以及去重时读 |
 | `analytics.energy_projection_checkpoints` | 读和前移 |
 | `analytics.tariff_price_windows` | 写入 |
-| 登记服务的 `meter_bindings` | 由登记服务的接口读 |
+| `analytics.site_total_submeters` | 写入 |
+| 登记服务的 `meter_bindings`、`virtual_meters` | 由登记服务的接口读 |
 
 ## 环境变量
 
@@ -60,6 +61,7 @@ telemetry_history.counter_arrivals        （检查点之后、按历史批次�
 | `ANALYTICS_CLICKHOUSE_CA` | 系统信任的证书 |
 | `ANALYTICS_PROJECTOR_BATCH_SIZE` | `256` |
 | `ANALYTICS_PROJECTOR_POLL_INTERVAL` | `500ms` |
+| `ANALYTICS_TOTAL_SUBMETER_INTERVAL` | `5m` |
 | `ANALYTICS_PROJECTOR_DIAGNOSTICS_ADDR` | `127.0.0.1:19089` |
 
 ## 测试

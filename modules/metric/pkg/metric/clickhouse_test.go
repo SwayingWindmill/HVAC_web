@@ -76,3 +76,30 @@ func TestCounterDeltaAddsEveryRiseAcrossARestartInTheWindow(t *testing.T) {
 		t.Fatal("a counter that drops without a declared decrease mode must be rejected")
 	}
 }
+
+func TestReadPointGuardsHourlyAndDailyStepsAgainstCrossGapJumps(t *testing.T) {
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		queries = append(queries, request.URL.Query().Get("query"))
+		_, _ = writer.Write([]byte("10\t2\t2\t5\t10\t300\t0\t5\t0\t0\t0\n"))
+	}))
+	defer server.Close()
+	store, err := NewClickHouseStore(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 11, 12, 6, 0, 0, 0, time.UTC)
+	for _, granularity := range []string{"HOUR", "DAY", "MONTH"} {
+		if _, err := store.ReadPoint(context.Background(), Binding{
+			TenantID: "t", SiteID: "s", Granularity: granularity, Aggregation: "LAST", CalculationMethod: "DELTA",
+		}, "p", start, start.Add(time.Hour)); err != nil {
+			t.Fatalf("%s read failed: %v", granularity, err)
+		}
+	}
+	if !strings.Contains(queries[0], "gap_ms <= 3600000") || !strings.Contains(queries[1], "gap_ms <= 3600000") {
+		t.Fatalf("HOUR/DAY counter queries must exclude >1h cross-gap steps:\nHOUR=%s\nDAY=%s", queries[0], queries[1])
+	}
+	if strings.Contains(queries[2], "gap_ms <= 3600000") {
+		t.Fatalf("MONTH counter query must keep cross-gap steps inside monthly total:\n%s", queries[2])
+	}
+}

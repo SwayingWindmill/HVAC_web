@@ -177,7 +177,7 @@ test('songyaxuan nameplates are the photographed plates and the pump motors stay
   }
   const chillerALeaving = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000001', 't1'"));
   assert.match(chillerALeaving ?? '', /CHW_DIRECTION/);
-  const copied = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000003', 'chw_leaving_temperature'"));
+  const copied = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000005', 'chw_leaving_temperature'"));
   assert.match(copied ?? '', /CHW_DIRECTION/);
   const chillerACondenser = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000001', 't6'"));
   assert.match(chillerACondenser ?? '', /CW_DIRECTION/);
@@ -197,7 +197,8 @@ test('point status defaults to ACTIVE and rejects unknown values', () => {
 
 // A database that already holds everything the songyaxuan manifest describes.
 function completeState(profile: any) {
-  const state: any = { site: 'ACTIVE', devices: {}, points: {}, assets: {}, schedules: {}, topology: true, tariff: true, forecast: true };
+  const synthesizedTotal = Boolean(profile.energy?.totalMeter && typeof profile.energy.totalMeter === 'object' && profile.energy.totalMeter.kind === 'sum-of-sub-meters');
+  const state: any = { site: 'ACTIVE', devices: {}, points: {}, assets: {}, schedules: {}, topology: true, synthesizedTotal, tariff: true, forecast: true };
   for (const match of buildOnboardingSql(profile).registry.matchAll(/'(01a14000-4000-7000-8000-[0-9a-f]{12})'/g)) state.devices[match[1]] = 'ACTIVE';
   for (const row of pointRows(buildOnboardingSql(profile).registry)) {
     const [, id] = row.match(/^\('([0-9a-f-]{36})'/) ?? [];
@@ -374,4 +375,50 @@ test('validate reads the database with one read-only SELECT', () => {
   assert.ok(query.startsWith('BEGIN READ ONLY;\nSELECT json_build_object('));
   assert.ok(query.endsWith('ROLLBACK;'));
   assert.ok(!/\b(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP)\b/i.test(query));
+});
+
+test('songyaxuan synthesizes total electricity from the four chiller sub-meters and maps meters to A/B/C/D chillers', () => {
+  assert.deepEqual(songyaxuan.energy.totalMeter, { kind: 'sum-of-sub-meters' });
+  assert.deepEqual(songyaxuan.energy.checkMeters, ['ammeter-total']);
+  const meterTotal = songyaxuan.devices.find((device: any) => device.code === 'meter-total');
+  for (const point of meterTotal.points) assert.equal(point.critical, undefined, `meter-total/${point.code} must not be critical`);
+
+  const expectedAssetByMeter: Record<string, string> = {
+    'meter-uid3': '01a14000-3000-7000-8000-000000000001',
+    'meter-uid4': '01a14000-3000-7000-8000-000000000002',
+    'meter-uid5': '01a14000-3000-7000-8000-000000000003',
+    'meter-uid2': '01a14000-3000-7000-8000-000000000004',
+  };
+  for (const [code, assetId] of Object.entries(expectedAssetByMeter)) {
+    assert.equal(songyaxuan.devices.find((device: any) => device.code === code)?.asset, assetId, `${code} asset binding`);
+  }
+
+  const { registry, energy } = buildOnboardingSql(songyaxuan);
+  assert.match(energy, /INSERT INTO core_registry\.virtual_meters[\s\S]*?'site_total_electricity', '合成总电表'/);
+  assert.match(energy, /INSERT INTO core_registry\.virtual_meter_sources/);
+  assert.match(energy, /'01a14000-4000-7000-8000-000000000008'::uuid, '01a14000-5000-7000-8000-000000080002'::uuid, 'COUNTER', 'CHECK', 'IMPORT'/);
+  assert.match(energy, /SET meter_role = 'CHECK'/);
+  assert.match(energy, /"site_energy":\["01a14000-5000-7000-8000-000000030002","01a14000-5000-7000-8000-000000040002","01a14000-5000-7000-8000-000000050002","01a14000-5000-7000-8000-000000060002"\]/);
+  assert.match(energy, /"site_load":"01a14000-5000-7000-8000-000000080001"/);
+  assert.match(energy, /'15MIN', 'AVG', 'IDENTITY', NULL, 'STRICT'/);
+
+  // Adding a point to meter-uid3 must not shift later devices' fallback point_subject_binding ids.
+  const btuPoints = pointRows(registry).filter((row) => row.includes("'01a14000-4000-7000-8000-000000000009'"));
+  assert.ok(btuPoints.length >= 1);
+  assert.match(bindingSection(registry), /'01a14000-6300-7000-8000-000000090001'/);
+
+  // A synthesized site without checkMeters sums sub-meter power with TOLERANT quality policy.
+  const noCheck = copy(songyaxuan);
+  delete noCheck.energy.checkMeters;
+  const noCheckEnergy = buildOnboardingSql(noCheck).energy;
+  assert.match(noCheckEnergy, /"site_load":\["01a14000-5000-7000-8000-000000030001","01a14000-5000-7000-8000-000000040001","01a14000-5000-7000-8000-000000050001","01a14000-5000-7000-8000-000000060001"\]/);
+  assert.match(noCheckEnergy, /'15MIN', 'AVG', 'IDENTITY', NULL, 'TOLERANT'/);
+
+  // A site with a physical total meter binds single-point site_energy and supersedes any prior virtual meter.
+  const physical = copy(songyaxuan);
+  physical.energy.totalMeter = 'ammeter-total';
+  delete physical.energy.checkMeters;
+  const physicalEnergy = buildOnboardingSql(physical).energy;
+  assert.match(physicalEnergy, /"site_energy":"01a14000-5000-7000-8000-000000080002"/);
+  assert.match(physicalEnergy, /UPDATE core_registry\.virtual_meters[\s\S]*?SET status = 'SUPERSEDED'/);
 });

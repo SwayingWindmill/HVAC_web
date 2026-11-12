@@ -25,10 +25,12 @@ import { SensorInspectionSheet } from './components/SensorInspectionSheet';
 import {
   buildMeterReconciliationModel,
   buildSensorCalibrationModel,
+  findMainElectricityCounterDevices,
   type IntegrationsTabView,
   type SensorCalibrationFilter,
 } from './integrations-model';
 import {
+  checkMetersHourlyQuery,
   siteHourlyEnergyPairQuery,
   siteIntegrationsAssetModelQuery,
   siteIntegrationsSnapshotsQuery,
@@ -121,6 +123,30 @@ export function IntegrationsWorkspace() {
     }),
   );
 
+  const isSynthesizedElectricity = Boolean(
+    electricityHourlyQuery.data?.validOnly.metadata.synthesized ||
+      electricityHourlyQuery.data?.validAndSuspect.metadata.synthesized,
+  );
+  const checkMeterTargets = useMemo(
+    () => (assetModelQuery.data ? findMainElectricityCounterDevices(assetModelQuery.data) : []),
+    [assetModelQuery.data],
+  );
+  const checkMetersHistoryQuery = useQuery(
+    checkMetersHourlyQuery({
+      siteId,
+      targets: checkMeterTargets,
+      timezone: siteTimezone,
+      fromMs: windowFromMs,
+      toMs: windowToMs,
+      csrfToken,
+      enabled:
+        activeView === 'meters' &&
+        canReadHistory &&
+        isSynthesizedElectricity &&
+        checkMeterTargets.length > 0,
+    }),
+  );
+
   const meterModel = useMemo(() => {
     if (activeView !== 'meters' || !siteId || !assetModelQuery.data) return null;
     return buildMeterReconciliationModel({
@@ -132,6 +158,7 @@ export function IntegrationsWorkspace() {
       electricityWithSuspect: electricityHourlyQuery.data?.validAndSuspect ?? null,
       coolingValid: coolingHourlyQuery.data?.validOnly ?? null,
       coolingWithSuspect: coolingHourlyQuery.data?.validAndSuspect ?? null,
+      checkMeterHourlyByDeviceId: checkMetersHistoryQuery.data,
       window: { fromMs: windowFromMs, toMs: windowToMs },
       now,
     });
@@ -143,6 +170,7 @@ export function IntegrationsWorkspace() {
     snapshotsQuery.data,
     electricityHourlyQuery.data,
     coolingHourlyQuery.data,
+    checkMetersHistoryQuery.data,
     windowFromMs,
     windowToMs,
     now,

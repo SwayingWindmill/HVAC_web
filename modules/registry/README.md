@@ -6,7 +6,7 @@
 
 都在 `/internal/v1/registry` 下：
 
-- 读：`GET /sites`、`/sites/{siteId}`、`/sites/{siteId}/assets`、`/assets/{assetId}`、`/sites/{siteId}/devices`、`/devices/{deviceId}`、`/sites/{siteId}/spaces/...`、`/sites/{siteId}/asset-model`（资产模型：设备、机组和在用点位）、`/sites/{siteId}/tariff`（当前电价）、`/sites/{siteId}/import-tariffs`（一段时间内的进线电价版本，给电价窗口同步用）、`/sites/{siteId}/meter-bindings/resolve?deviceId=...&pointId=...&sampledAt=...`（查一个点位在某个时刻的计量绑定）。
+- 读：`GET /sites`、`/sites/{siteId}`、`/sites/{siteId}/assets`、`/assets/{assetId}`、`/sites/{siteId}/devices`、`/devices/{deviceId}`、`/sites/{siteId}/spaces/...`、`/sites/{siteId}/asset-model`（资产模型：设备、机组和在用点位）、`/sites/{siteId}/tariff`（当前电价）、`/sites/{siteId}/import-tariffs`（一段时间内的进线电价版本，给电价窗口同步用）、`/sites/{siteId}/meter-bindings/resolve?deviceId=...&pointId=...&sampledAt=...`（查一个点位在某个时刻的计量绑定）、`/sites/{siteId}/total-electricity-sources`（查站点总电表是否由分表合成，以及参与合成的分表列表）。
 - 写（系统管理 → 注册中心用）：新建和修改站点、空间、资产、设备、传感器、点位，以及绑定。
 
 调用方必须出示验证过的客户端证书，证书里唯一的 SPIFFE 身份要在配置的允许名单里（平台网关、AI 助手、能耗计算等）。每个请求还要带 `X-Delegation-Grant`：由 IAM 直接签给这个出示者、只针对一个具体动作、对象是 `platform-core-service` 的授权。授权不能转授，签给网关的授权不能被 AI 助手拿去用。

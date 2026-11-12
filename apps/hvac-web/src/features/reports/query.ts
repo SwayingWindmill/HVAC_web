@@ -143,6 +143,7 @@ export function useYearLive(year: number, now: Date) {
         const cost = sumCosts([row]);
         live.set(month, {
           electricityKWh: row.electricityKWh,
+          crossGapElectricityKWh: row.crossGapElectricityKWh,
           coolingKWh: row.coolingKWh,
           energyCost: row.electricityKWh === null || cost.unpricedKWh > 0 ? null : cost.total,
         });

@@ -394,3 +394,50 @@ test('describeBillingApiError maps gateway problem codes to plain Chinese withou
   });
   assert.ok(describeBillingApiError(duplicate, '保存失败').includes('已存在已确认归档'));
 });
+
+test('cross-gap electricity counts in monthly budget totals, TOU breakdown, and bill reconciliation without spiking daily cumulative curves (#798)', () => {
+  const now = new Date('2026-10-15T16:00:00.000Z');
+  const baseSeries = makeDailyElectricitySeries([
+    {
+      dateUtcStart: '2026-09-30T16:00:00.000Z',
+      energyKWh: 10_000,
+      peakCost: 5_000,
+      flatCost: 3_000,
+    },
+  ]);
+  const withCrossGap: EnergySeriesResponse = {
+    ...baseSeries,
+    crossGap: {
+      energyKWh: 2_000,
+      cost: {
+        amountCNY: 1_600,
+        unpricedKWh: 0,
+        periods: [{ periodCode: 'FLAT', energyKWh: 2_000, amountCNY: 1_600 }],
+      },
+    },
+  };
+
+  const progress = summarizeMonthlyBudgetProgress({
+    electricity: withCrossGap,
+    billingMonth: '2026-10',
+    budget: makeBudget(100_000, '2026-10'),
+    now,
+    timeZone: TIMEZONE,
+  });
+  assert.equal(progress.pricingState, 'PRICED');
+  assert.equal(progress.cumulativeEstimatedCny, 9_600); // 8,000 daily + 1,600 cross-gap
+  assert.equal(progress.dailySeries[0]?.dailyCostCny, 8_000); // daily curve stays un-spiked
+  assert.equal(progress.dailySeries[0]?.cumulativeCostCny, 8_000);
+  const flatPeriod = progress.touPeriods.find((item) => item.code === 'FLAT');
+  assert.equal(flatPeriod?.costCny, 4_600);
+
+  const bill = makeBill({
+    meterScope: 'CHILLER_PLANT',
+    billedEnergyKwh: 12_500,
+    energyChargeCny: 10_000,
+  });
+  const reconciliation = reconcileUtilityBill(bill, withCrossGap);
+  assert.equal(reconciliation.plantEnergyKwh, 12_000); // 10,000 + 2,000 cross-gap
+  assert.equal(reconciliation.plantEstimatedEnergyCostCny, 9_600);
+  assert.equal(reconciliation.energyVarianceKwh, 500);
+});

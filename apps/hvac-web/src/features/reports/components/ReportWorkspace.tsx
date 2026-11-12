@@ -3,6 +3,7 @@ import { getRouteApi, Link, useNavigate, useSearch } from '@tanstack/react-route
 import { ChevronLeft, ChevronRight, Printer } from 'lucide-react';
 import { useMemo } from 'react';
 import { PageHeader, PageMeta } from '@/blocks/page-header';
+import { InfoTip } from '@/components/info-tip';
 import { Main } from '@/components/layout/Main';
 import { Button } from '@/components/ui/button';
 import { PeriodTabs } from '@/components/ui/period-tabs';
@@ -11,7 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { METER_SCOPE_LABEL } from '@/features/billing/billing-model';
 import { siteUtilityBillsQuery } from '@/features/billing/query';
 import { siteFindingsQuery } from '@/features/diagnostics/query';
-import { relativeChange, wallTime } from '@/features/energy-analysis/consumption/model';
+import { relativeChange, summaryCostBuckets, wallTime } from '@/features/energy-analysis/consumption/model';
 import { measuresQuery, summaryQuery } from '@/features/savings/query';
 import { monthToDate, STATUS_LABEL } from '@/features/savings/savings-model';
 import { demandCharges, sumCosts } from '@/features/tariff/tariff-model';
@@ -213,6 +214,12 @@ function ArchivedMonthlyReport({ stored, span }: { readonly stored: StoredReport
       </Section>
 
       <Section index={2} title="用能与能效" description="最多的一天已标出">
+        {(report.crossGapElectricityKWh ?? 0) > 0 ? (
+          <p className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
+            跨缺口电量 {formatDecimal(report.crossGapElectricityKWh!, 1)} kWh
+            <InfoTip>累计读数间隔超过 1 小时的恢复电量：计入本月空调用电总量与电度电费，不摊入每日曲线</InfoTip>
+          </p>
+        ) : null}
         <EnergyTrend rows={snapshotDays(report)} />
       </Section>
 
@@ -272,7 +279,7 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
   const findings = useQuery(siteFindingsQuery(site.id));
   const tariff = useSiteTariff();
 
-  const cost = useMemo(() => (energy.data ? sumCosts(energy.data.current.rows) : null), [energy.data]);
+  const cost = useMemo(() => (energy.data ? sumCosts(summaryCostBuckets(energy.data.current)) : null), [energy.data]);
   const charges = useMemo(
     () => (tariff.data && demand.data ? demandCharges(demand.data, tariff.data, timeZone, span.from) : null),
     [tariff.data, demand.data, timeZone, span.from],
@@ -289,6 +296,12 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
   }
 
   const { current, previous } = energy.data;
+  const monthCop = current.electricityKWh && current.electricityKWh > 0 && current.coolingKWh !== null
+    ? current.coolingKWh / current.electricityKWh
+    : null;
+  const prevMonthCop = previous.electricityKWh && previous.electricityKWh > 0 && previous.coolingKWh !== null
+    ? previous.coolingKWh / previous.electricityKWh
+    : null;
   const demandCost = charges?.reduce((sum, charge) => sum + (charge.charge ?? 0), 0) ?? 0;
   // As the archive does: a month with electricity no Tariff period covers has no energy cost.
   const priced = cost !== null && cost.unpricedKWh === 0;
@@ -322,7 +335,7 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
         <FigureGrid>
           <Figure label="空调用电" value={current.electricityKWh === null ? null : formatDecimal(current.electricityKWh, 0)} unit="kWh" delta={relativeChange(current.electricityKWh, previous.electricityKWh)} invert note={`上月 ${energyText(previous.electricityKWh)}`} />
           <Figure label="供冷量" value={current.coolingKWh === null ? null : formatDecimal(current.coolingKWh, 0)} unit="kWh" delta={relativeChange(current.coolingKWh, previous.coolingKWh)} note={`上月 ${energyText(previous.coolingKWh)}`} />
-          <Figure label="综合能效" value={current.cop === null ? null : formatDecimal(current.cop, 2)} unit="COP" delta={relativeChange(current.cop, previous.cop)} note={previous.cop === null ? '上月没有数据' : `上月 ${formatDecimal(previous.cop, 2)}`} />
+          <Figure label="综合能效" value={monthCop === null ? null : formatDecimal(monthCop, 2)} unit="COP" delta={relativeChange(monthCop, prevMonthCop)} note={prevMonthCop === null ? '上月没有数据' : `上月 ${formatDecimal(prevMonthCop, 2)}`} />
           <Figure label="估算电费" value={totalCost === null ? null : `¥${formatDecimal(totalCost, 0)}`} note={totalCost === null ? `${costMissing}，未计` : '按分时电价估算，以结算为准'} />
           <Figure label="日均用电" value={days.length ? formatDecimal((current.electricityKWh ?? 0) / days.length, 0) : null} unit="kWh" note={`${days.length} / ${span.days} 天有计量`} />
           <Figure label="用电最多的一天" value={current.peak ? formatDecimal(current.peak.electricityKWh!, 0) : null} unit="kWh" note={current.peak?.label ?? '—'} />
@@ -332,6 +345,12 @@ function LiveMonthlyReport({ month, span, archiveUnavailable }: { readonly month
       </Section>
 
       <Section index={2} title="用能与能效" description="最多的一天已标出">
+        {current.crossGapElectricityKWh > 0 ? (
+          <p className="flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
+            跨缺口电量 {formatDecimal(current.crossGapElectricityKWh, 1)} kWh
+            <InfoTip>累计读数间隔超过 1 小时的恢复电量：计入本月空调用电总量与电度电费，不摊入每日曲线</InfoTip>
+          </p>
+        ) : null}
         <EnergyTrend rows={rows} />
       </Section>
 

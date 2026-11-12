@@ -56,6 +56,7 @@ type fakeRegistryStore struct {
 	device          Device
 	bindings        PageResult[DeviceBinding]
 	meterResolution MeterBindingResolution
+	totalSources    SiteTotalElectricitySources
 	spaceChildren   PageResult[Space]
 	devicePoints    PageResult[TelemetryPoint]
 	assetModel      SiteAssetModel
@@ -98,6 +99,10 @@ func (store *fakeRegistryStore) ResolveMeterBinding(_ context.Context, claims re
 	store.lastClaims, store.lastID = claims, siteID+"|"+input.DeviceID+"|"+input.PointID
 	return store.meterResolution, store.err
 }
+func (store *fakeRegistryStore) GetSiteTotalElectricitySources(_ context.Context, claims registryauth.GrantClaims, siteID string) (SiteTotalElectricitySources, error) {
+	store.lastClaims, store.lastID = claims, siteID
+	return store.totalSources, store.err
+}
 func (store *fakeRegistryStore) ListSpaceChildren(_ context.Context, claims registryauth.GrantClaims, siteID, parentSpaceID string, page PageRequest) (PageResult[Space], error) {
 	store.lastClaims, store.lastID, store.lastPage = claims, siteID+"|"+parentSpaceID, page
 	return store.spaceChildren, store.err
@@ -139,6 +144,29 @@ func (store *fakeRegistryStore) ListMonthlyElectricityBudgets(_ context.Context,
 func (store *fakeRegistryStore) ListUtilityBills(_ context.Context, claims registryauth.GrantClaims, id string, _ UtilityBillFilter) (UtilityBillList, error) {
 	store.lastClaims, store.lastID = claims, id
 	return UtilityBillList{}, store.err
+}
+
+func TestServerReadsSiteTotalElectricitySources(t *testing.T) {
+	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	store := &fakeRegistryStore{totalSources: SiteTotalElectricitySources{
+		SiteID:      testSiteA1,
+		Synthesized: true,
+		SubMeters: []SiteTotalSubMeter{
+			{PointID: "018f1e00-6000-7000-8000-000000000001", DeviceID: testDeviceA1, MeterName: "3号电表（A机组）", Ordinal: 0},
+		},
+	}}
+	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	response := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites/"+testSiteA1+"/total-electricity-sources", testGrantClaims(registryauth.ActionMeterBindingResolve), nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	}
+	var sources SiteTotalElectricitySources
+	if err := json.NewDecoder(response.Body).Decode(&sources); err != nil {
+		t.Fatal(err)
+	}
+	if store.lastID != testSiteA1 || !sources.Synthesized || len(sources.SubMeters) != 1 || sources.SubMeters[0].MeterName != "3号电表（A机组）" {
+		t.Fatalf("sources=%#v lastID=%q", sources, store.lastID)
+	}
 }
 
 func TestServerReadsTheSitesTariffInEffect(t *testing.T) {

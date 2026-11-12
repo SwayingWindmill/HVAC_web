@@ -20,6 +20,8 @@ export interface EnergyPoint {
 export interface DeviceEnergy {
   readonly deviceId: string;
   readonly points: readonly EnergyPoint[];
+  /** Non-monthly cross-gap energy recovered for this machine (#798): counted in totals, excluded from chart buckets. */
+  readonly crossGapKWh?: number;
 }
 
 export interface BreakdownItem extends Machine {
@@ -59,11 +61,17 @@ export function energyBreakdown(
   total: readonly EnergyPoint[],
   devices: readonly DeviceEnergy[],
   bucketKey: (periodStart: string) => string = (periodStart) => periodStart,
+  siteCrossGapKWh = 0,
 ): Breakdown {
-  const pointsByDevice = new Map(devices.map((device) => [device.deviceId, device.points]));
-  const metered = machines.filter((machine) => pointsByDevice.has(machine.deviceId));
-  const totalKWh = total.length === 0 ? null : sum(total);
-  const energies = new Map(metered.map((machine) => [machine.deviceId, sum(pointsByDevice.get(machine.deviceId)!)]));
+  const deviceById = new Map(devices.map((device) => [device.deviceId, device]));
+  const metered = machines.filter((machine) => deviceById.has(machine.deviceId));
+  const totalKWh = total.length === 0 && siteCrossGapKWh <= 0 ? null : sum(total) + siteCrossGapKWh;
+  const energies = new Map(
+    metered.map((machine) => {
+      const device = deviceById.get(machine.deviceId)!;
+      return [machine.deviceId, sum(device.points) + (device.crossGapKWh ?? 0)];
+    }),
+  );
   const subMeteredKWh = [...energies.values()].reduce((left, right) => left + right, 0);
   const whole = totalKWh ?? subMeteredKWh;
   const share = (energy: number) => (whole > 0 ? energy / whole : 0);
@@ -81,13 +89,13 @@ export function energyBreakdown(
         energyKWh,
         share: share(energyKWh),
         metered: metered.filter((machine) => machine.category === category).length,
-        unmetered: machines.filter((machine) => machine.category === category && !pointsByDevice.has(machine.deviceId)).length,
+        unmetered: machines.filter((machine) => machine.category === category && !deviceById.has(machine.deviceId)).length,
       };
     });
 
   const rows = new Map<string, Record<EquipmentCategory, number>>();
   for (const machine of metered) {
-    for (const point of pointsByDevice.get(machine.deviceId)!) {
+    for (const point of deviceById.get(machine.deviceId)!.points) {
       const key = bucketKey(point.periodStart);
       const row = rows.get(key) ?? { CHILLER: 0, CHILLED_WATER_PUMP: 0, COOLING_WATER_PUMP: 0, COOLING_TOWER: 0 };
       row[machine.category] += point.energyKWh;
@@ -100,7 +108,7 @@ export function energyBreakdown(
     subMeteredKWh,
     unallocatedKWh: totalKWh === null ? null : totalKWh - subMeteredKWh,
     items,
-    unmetered: machines.filter((machine) => !pointsByDevice.has(machine.deviceId)),
+    unmetered: machines.filter((machine) => !deviceById.has(machine.deviceId)),
     categories,
     rows: [...rows.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, row]) => ({ key, ...row })),
   };

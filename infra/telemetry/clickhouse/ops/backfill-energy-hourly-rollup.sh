@@ -42,6 +42,7 @@ if [[ "$mode" == "--verify" ]]; then
         SELECT tenant_id, site_id, toStartOfMonth(period_end) AS month,
           sum(energy_kwh) AS energy_kwh, toInt64(count()) AS intervals
         FROM analytics.energy_interval_facts_visible
+        WHERE dateDiff('millisecond', period_start, period_end) <= 3600000
         GROUP BY tenant_id, site_id, month
       ),
       rollup AS (
@@ -91,6 +92,7 @@ while IFS=$'\t' read -r tenant site month; do
     WHERE $scope
       AND period_end >= toDateTime64('$month 00:00:00', 3, 'UTC')
       AND period_end < toDateTime64('$month 00:00:00', 3, 'UTC') + INTERVAL 1 MONTH
+      AND dateDiff('millisecond', period_start, period_end) <= 3600000
     GROUP BY tenant_id, site_id, point_id, hour, accounting_scope, energy_type, quality, load_device_id"
   echo "filled $tenant $site $month"
 done <<< "$batches"

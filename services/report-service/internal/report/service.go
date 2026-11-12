@@ -35,9 +35,9 @@ type Store interface {
 	YearSnapshots(ctx context.Context, tenantID, siteID string, year int) ([]StoredSnapshot, error)
 }
 
-// HourSource is a Site's valid energy by hour.
+// HourSource is a Site's valid energy by hour plus any cross-gap recovery in the window.
 type HourSource interface {
-	Hours(ctx context.Context, tenantID, siteID string, location *time.Location, from, to time.Time) ([]Hour, error)
+	Hours(ctx context.Context, tenantID, siteID string, location *time.Location, from, to time.Time) (MonthEnergy, error)
 }
 
 type Service struct {

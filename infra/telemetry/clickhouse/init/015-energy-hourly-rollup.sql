@@ -265,7 +265,8 @@ PARTITION BY toYYYYMM(hour)
 ORDER BY (tenant_id, site_id, point_id, hour, accounting_scope, energy_type, quality, load_device_id)
 SETTINGS non_replicated_deduplication_window = 10000;
 
--- Every inserted fact revision adds its energy to its hour.
+-- Every inserted fact revision up to one hour long adds its energy to its hour; cross-gap
+-- intervals (> 1 hour) stay out of hourly/daily curves and are accounted as cross-gap energy.
 CREATE MATERIALIZED VIEW IF NOT EXISTS analytics.energy_facts_to_hourly
 TO analytics.energy_hourly_states
 DEFINER = CURRENT_USER
@@ -283,7 +284,8 @@ SELECT
   toInt64(1) AS interval_count,
   data_watermark,
   dataset_revision
-FROM analytics.energy_interval_facts;
+FROM analytics.energy_interval_facts
+WHERE dateDiff('millisecond', period_start, period_end) <= 3600000;
 
 -- A materialized view reads the inserted block wherever its query names the source table, so a
 -- correction cannot join its predecessor through analytics.energy_interval_facts itself. This
@@ -292,15 +294,16 @@ CREATE OR REPLACE VIEW analytics.energy_interval_fact_revisions
 DEFINER = CURRENT_USER
 SQL SECURITY DEFINER AS
 SELECT
-  tenant_id, site_id, meter_id, meter_binding_id, period_end, source_current_observation_id, fact_revision,
+  tenant_id, site_id, meter_id, meter_binding_id, period_start, period_end, source_current_observation_id, fact_revision,
   point_id, accounting_scope, energy_type, quality, load_device_id, energy_kwh
 FROM analytics.energy_interval_facts;
 
 -- A correction (fact_revision r > 0) supersedes revision r - 1 of the same logical fact (009's
 -- grouping key), so its predecessor's energy and interval leave the predecessor's own hour and
--- quality. The IN holds the join to the corrected meter bindings, a prefix of the facts sort
--- key, and their months; an insert without corrections reads no stored part. The predecessor's watermark and dataset revision stay in
--- their max: a correction only ever raises both.
+-- quality when that predecessor had entered the hourly rollup (<= 1 hour). The IN holds the join
+-- to the corrected meter bindings, a prefix of the facts sort key, and their months; an insert
+-- without corrections reads no stored part. The predecessor's watermark and dataset revision stay
+-- in their max: a correction only ever raises both.
 CREATE MATERIALIZED VIEW IF NOT EXISTS analytics.energy_fact_corrections_to_hourly
 TO analytics.energy_hourly_states
 DEFINER = CURRENT_USER
@@ -334,7 +337,8 @@ INNER JOIN (
   AND prior.period_end = correction.period_end
   AND prior.source_current_observation_id = correction.source_current_observation_id
   AND prior.fact_revision + 1 = correction.fact_revision
-WHERE correction.fact_revision > 0;
+WHERE correction.fact_revision > 0
+  AND dateDiff('millisecond', prior.period_start, prior.period_end) <= 3600000;
 
 -- The rollup as Cube reads it: states merged per hour, hours whose every interval was corrected
 -- away dropped, and a Site meter's load Device NULL again as in the facts.

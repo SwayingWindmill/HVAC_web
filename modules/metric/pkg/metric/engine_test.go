@@ -65,10 +65,18 @@ func (f *fakeRegistry) ListStalePublications(context.Context, time.Time, int) ([
 type fakeSeries struct {
 	inserted []Result
 	existing map[string]bool
+	byPoint  map[string]Input
+	errPoint map[string]error
 }
 
-func (f *fakeSeries) ReadPoint(context.Context, Binding, string, time.Time, time.Time) (Input, error) {
-	return Input{Reference: "point:p", Value: 20, FirstValue: 20, LastValue: 20, Count: 1, Quality: "GOOD", Completeness: 1}, nil
+func (f *fakeSeries) ReadPoint(_ context.Context, _ Binding, pointID string, _, _ time.Time) (Input, error) {
+	if err, ok := f.errPoint[pointID]; ok {
+		return Input{}, err
+	}
+	if in, ok := f.byPoint[pointID]; ok {
+		return in, nil
+	}
+	return Input{Reference: "point:" + pointID, Value: 20, FirstValue: 20, LastValue: 20, Count: 1, Quality: "GOOD", Completeness: 1}, nil
 }
 
 func (f *fakeSeries) ReadMetricResult(_ context.Context, result Result) (Result, error) {
@@ -217,5 +225,69 @@ func TestReconcileReplaysMissingFactWithSameResultIdentity(t *testing.T) {
 	}
 	if series.inserted[0].ResultID != result.ResultID || series.inserted[0].Revision != result.Revision || registry.completed[0].ResultID != result.ResultID {
 		t.Fatalf("reconcile replay changed Result identity: inserted=%#v completed=%#v", series.inserted[0], registry.completed[0])
+	}
+}
+
+func TestSynthesizedMultiPointBindingSumsSubMetersAndMarksMissingSubMeterPartial(t *testing.T) {
+	baseBinding := func(policy string) Binding {
+		return Binding{
+			TenantID: "tenant", SiteID: "site", BindingID: "binding", MetricVersionID: "version", MetricID: "metric",
+			MetricCode: "hourly_energy", MetricVersion: 1, BindingVersion: 2, SubjectType: "SITE", SubjectID: "site",
+			Granularity: "HOUR", DataType: "NUMBER", Aggregation: "LAST", CalculationMethod: "DELTA", QualityPolicy: policy,
+			SourceDefinition: map[string]any{
+				"points":  map[string]any{"site_energy": []any{"p1", "p2", "p3", "p4"}},
+				"counter": map[string]any{"decreaseMode": "RESET"},
+			},
+			Dependencies: []Dependency{{Type: "POINT", Code: "site_energy", Required: true}},
+		}
+	}
+
+	start := time.Date(2026, 11, 12, 1, 0, 0, 0, time.UTC)
+	req := RunRequest{TenantID: "tenant", SiteID: "site", BindingID: "binding", PeriodStart: start, PeriodEnd: start.Add(time.Hour)}
+
+	// All four sub-meters present (including one counter reset): GOOD and exact sum.
+	allFour := &fakeSeries{
+		byPoint: map[string]Input{
+			"p1": {Reference: "point:p1", Rise: 40, Count: 12, Quality: "GOOD", Completeness: 1},
+			"p2": {Reference: "point:p2", Rise: 35, Count: 12, Quality: "GOOD", Completeness: 1},
+			"p3": {Reference: "point:p3", Rise: 50, Drops: 1, ValueAfterDrops: 5, Count: 12, Quality: "GOOD", Completeness: 1},
+			"p4": {Reference: "point:p4", Rise: 30, Count: 12, Quality: "GOOD", Completeness: 1},
+		},
+	}
+	engine, err := New(&fakeRegistry{binding: baseBinding("STRICT")}, allFour, &fakeLatest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := engine.Execute(context.Background(), req)
+	if err != nil {
+		t.Fatalf("all 4 sub-meters failed under STRICT: %v", err)
+	}
+	if full.Value != 160 || full.Quality != "GOOD" || full.Completeness != 1 {
+		t.Fatalf("full result = (%v, %s, %v); want (160, GOOD, 1)", full.Value, full.Quality, full.Completeness)
+	}
+
+	// One sub-meter silent: STRICT rejects (preventing fake M&V savings), ESTIMATION_ALLOWED records the 3-meter sum with 0.75 completeness.
+	threeOfFour := &fakeSeries{
+		byPoint: map[string]Input{
+			"p1": {Reference: "point:p1", Rise: 40, Count: 12, Quality: "GOOD", Completeness: 1},
+			"p3": {Reference: "point:p3", Rise: 55, Count: 12, Quality: "GOOD", Completeness: 1},
+			"p4": {Reference: "point:p4", Rise: 30, Count: 12, Quality: "GOOD", Completeness: 1},
+		},
+		errPoint: map[string]error{
+			"p2": errors.New("metric point dependency has no numeric observations"),
+		},
+	}
+	strictEngine, _ := New(&fakeRegistry{binding: baseBinding("STRICT")}, threeOfFour, &fakeLatest{})
+	if _, err := strictEngine.Execute(context.Background(), req); err == nil {
+		t.Fatal("STRICT policy must reject a synthesized hour missing a sub-meter")
+	}
+
+	estimatedEngine, _ := New(&fakeRegistry{binding: baseBinding("ESTIMATION_ALLOWED")}, threeOfFour, &fakeLatest{})
+	partial, err := estimatedEngine.Execute(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ESTIMATION_ALLOWED failed with 3 of 4 sub-meters: %v", err)
+	}
+	if partial.Value != 125 || partial.Quality != "ESTIMATED" || partial.Completeness != 0.75 {
+		t.Fatalf("partial result = (%v, %s, %v); want (125, ESTIMATED, 0.75)", partial.Value, partial.Quality, partial.Completeness)
 	}
 }

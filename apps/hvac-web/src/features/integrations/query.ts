@@ -12,6 +12,7 @@ import {
 } from '@/api/generated/s2Telemetry.gen';
 import { listWorkOrders } from '@/api/work-orders';
 import { loadAssetsCurrentState } from '@/features/assets/data';
+import type { CheckMeterHourlySeries } from './integrations-model';
 
 const gatewayClient = createPlatformGatewayClient();
 const telemetryClient = createS2TelemetryClient();
@@ -39,6 +40,8 @@ export const integrationsKeys = {
     ['integrations', 'external-work-orders', siteId, sourceRef] as const,
   pointHistory: (siteId: string, deviceId: string, pointCode: string, toMs: number) =>
     ['integrations', 'point-history', siteId, deviceId, pointCode, toMs] as const,
+  checkMetersHourly: (siteId: string, targetsKey: string, fromIso: string, toIso: string) =>
+    ['integrations', 'check-meters-hourly', siteId, targetsKey, fromIso, toIso] as const,
 };
 
 export function siteIntegrationsAssetModelQuery(siteId: string | null, enabled: boolean) {
@@ -235,6 +238,81 @@ export function devicePointHourlyHistoryQuery(input: {
       return mapAggregateBucketsToHourlyRows(response.buckets, input.pointCode!);
     },
     enabled: Boolean(input.pointCode && input.csrfToken) && input.enabled,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+function mapCounterBucketsToSeriesPoints(
+  buckets: readonly DeviceHistoryAggregateBucket[],
+  pointCode: string,
+): EnergySeriesResponse['points'] {
+  return buckets.flatMap((bucket) =>
+    bucket.telemetryKey === pointCode && bucket.counter
+      ? [
+          {
+            periodStart: bucket.periodStart,
+            periodEnd: bucket.periodEnd,
+            energyKWh: bucket.counter.deltaSum,
+          },
+        ]
+      : [],
+  );
+}
+
+export function checkMetersHourlyQuery(input: {
+  readonly siteId: string | null;
+  readonly targets: readonly { readonly deviceId: string; readonly pointCode: string }[];
+  readonly timezone: string;
+  readonly fromMs: number;
+  readonly toMs: number;
+  readonly csrfToken: string;
+  readonly enabled: boolean;
+}) {
+  const fromIso = new Date(input.fromMs).toISOString();
+  const toIso = new Date(input.toMs).toISOString();
+  const targetsKey = input.targets.map((t) => `${t.deviceId}:${t.pointCode}`).join(',');
+  return queryOptions({
+    queryKey: integrationsKeys.checkMetersHourly(
+      input.siteId ?? 'NONE',
+      targetsKey,
+      fromIso,
+      toIso,
+    ),
+    queryFn: async ({ signal }): Promise<ReadonlyMap<string, CheckMeterHourlySeries>> => {
+      const entries = await Promise.all(
+        input.targets.map(async (target) => {
+          const common = {
+            deviceId: target.deviceId,
+            keys: [target.pointCode],
+            from: fromIso,
+            to: toIso,
+            granularity: 'HOUR' as const,
+            timezone: input.timezone,
+          };
+          const [validRes, usableRes] = await Promise.all([
+            telemetryClient.queryDeviceHistoryAggregate(
+              { ...common, qualityPolicy: 'VALID_ONLY' },
+              { csrfToken: input.csrfToken, signal },
+            ),
+            telemetryClient.queryDeviceHistoryAggregate(
+              { ...common, qualityPolicy: 'USABLE' },
+              { csrfToken: input.csrfToken, signal },
+            ),
+          ]);
+          return [
+            target.deviceId,
+            {
+              validPoints: mapCounterBucketsToSeriesPoints(validRes.buckets, target.pointCode),
+              allPoints: mapCounterBucketsToSeriesPoints(usableRes.buckets, target.pointCode),
+            },
+          ] as const;
+        }),
+      );
+      return new Map(entries);
+    },
+    enabled:
+      Boolean(input.siteId && input.csrfToken && input.targets.length > 0) && input.enabled,
     staleTime: 60_000,
     retry: false,
   });

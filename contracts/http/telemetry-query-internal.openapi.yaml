@@ -162,6 +162,18 @@ components:
         periodStart: { type: string, format: date-time }
         periodEnd: { type: string, format: date-time }
         energyKWh: { type: number, format: double }
+        crossGapKWh: { type: number, format: double, minimum: 0 }
+        cost: { $ref: '#/components/schemas/EnergyCost' }
+        incomplete: { type: boolean }
+        missingMeters:
+          type: array
+          items: { type: string }
+    EnergyCrossGap:
+      type: object
+      additionalProperties: false
+      required: [energyKWh]
+      properties:
+        energyKWh: { type: number, format: double, minimum: 0 }
         cost: { $ref: '#/components/schemas/EnergyCost' }
     EnergyCost:
       type: object
@@ -201,6 +213,7 @@ components:
         aggregateWatermark: { type: string, format: date-time }
         datasetRevision: { type: string, minLength: 1 }
         partial: { type: boolean }
+        synthesized: { type: boolean }
         qualitySummary: { $ref: '#/components/schemas/QualitySummary' }
     EnergySeriesResponse:
       type: object
@@ -212,6 +225,7 @@ components:
           type: array
           maxItems: 10000
           items: { $ref: '#/components/schemas/EnergySeriesPoint' }
+        crossGap: { $ref: '#/components/schemas/EnergyCrossGap' }
         devices:
           type: array
           items: { $ref: '#/components/schemas/EnergyDeviceSeries' }
@@ -273,6 +287,7 @@ components:
           type: array
           maxItems: 10000
           items: { $ref: '#/components/schemas/EnergySeriesPoint' }
+        crossGapKWh: { type: number, format: double, minimum: 0 }
     DeviceHistoryQuery:
       type: object
       additionalProperties: false

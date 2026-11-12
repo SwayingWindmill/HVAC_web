@@ -13,11 +13,11 @@ import (
 // The Site's hours as the Telemetry Query Service answers them for the integration month.
 type integrationHours struct{}
 
-func (integrationHours) Hours(context.Context, string, string, *time.Location, time.Time, time.Time) ([]Hour, error) {
-	return []Hour{
+func (integrationHours) Hours(context.Context, string, string, *time.Location, time.Time, time.Time) (MonthEnergy, error) {
+	return MonthEnergy{Hours: []Hour{
 		{Start: time.Date(2026, 7, 10, 2, 0, 0, 0, time.UTC), ElectricityKWh: 12, CoolingKWh: 40, HasElectricity: true},
 		{Start: time.Date(2026, 7, 10, 3, 0, 0, 0, time.UTC), ElectricityKWh: 30, HasElectricity: true},
-	}, nil
+	}}, nil
 }
 
 // report-service works a REPORT_GENERATE job as report_runtime and keeps the snapshot as the

@@ -356,9 +356,13 @@ export function presenceApplicability(points) {
 function siteRows(profile) {
   const devices = profile.devices.map((device, deviceIndex) => ({ ...device, deviceIndex: deviceIndex + 1, points: expandPoints(device, profile.meterPoints) }));
   const points = devices.flatMap((device) => device.points.map((point, pointIndex) => ({
-    ...point, device, id: rowId(profile.site.id, '5000', device.deviceIndex * 0x10000 + pointIndex + 1),
+    ...point, device, pointIndex, id: rowId(profile.site.id, '5000', device.deviceIndex * 0x10000 + pointIndex + 1),
   })));
   return { devices, points };
+}
+
+function isSynthesizedTotalMeter(totalMeter) {
+  return Boolean(totalMeter && typeof totalMeter === 'object' && !Array.isArray(totalMeter) && totalMeter.kind === 'sum-of-sub-meters');
 }
 
 export function buildOnboardingSql(profile) {
@@ -393,9 +397,12 @@ export function buildOnboardingSql(profile) {
   }).join(',\n');
   // A point describes the machine it measures, else the Site. The binding carries the point's
   // status, so a point the site file marks INACTIVE (no probe wired) is not a current binding.
-  const subjectRows = points.map((point, index) => {
+  // Existing rows keep their id; new points get a device-scoped fallback id so adding a point to
+  // an earlier device never shifts later devices' binding ids.
+  const subjectRows = points.map((point) => {
     const asset = point.asset ?? point.device.asset;
-    return `(${sqlLiteral(rowId(site.id, '6300', index + 1))}, ${tenant}, ${siteId}, ${sqlLiteral(point.id)}, ${asset ? "'ASSET'" : "'SITE'"}, NULL, ${asset ? sqlLiteral(asset) : 'NULL'}, 'DESCRIBES', ${sqlLiteral(pointStatus(point))}, clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
+    const fallbackId = rowId(site.id, '6300', point.device.deviceIndex * 0x10000 + point.pointIndex + 1);
+    return `  (${sqlLiteral(fallbackId)}, ${tenant}, ${siteId}, ${sqlLiteral(point.id)}, ${asset ? "'ASSET'" : "'SITE'"}, NULL, ${asset ? sqlLiteral(asset) : 'NULL'}, 'DESCRIBES', ${sqlLiteral(pointStatus(point))}, clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
   }).join(',\n');
 
   const registry = `BEGIN;
@@ -435,8 +442,12 @@ INSERT INTO core_registry.telemetry_points (id, tenant_id, site_id, reporting_de
 ${pointRows}
 ON CONFLICT (id) ${updateWhenChanged('telemetry_points', fromFile('point_code', 'source_key', 'display_name', 'point_type', 'value_type', 'unit', 'sample_interval_ms', 'publish_interval_ms', 'stale_after_ms', 'source_metadata', 'counter_decrease_mode', 'status'))};
 
-INSERT INTO core_registry.point_subject_bindings (id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
+INSERT INTO core_registry.point_subject_bindings (id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at)
+SELECT COALESCE((SELECT existing.id FROM core_registry.point_subject_bindings existing WHERE existing.tenant_id = v.tenant_id::uuid AND existing.site_id = v.site_id::uuid AND existing.point_id = v.point_id::uuid AND existing.binding_role = v.binding_role ORDER BY existing.created_at LIMIT 1), v.id::uuid),
+  v.tenant_id::uuid, v.site_id::uuid, v.point_id::uuid, v.subject_type, v.space_id::uuid, v.asset_id::uuid, v.binding_role, v.status, v.valid_from, v.valid_to::timestamptz, v.revision::bigint, v.created_at, v.updated_at
+FROM (VALUES
 ${subjectRows}
+) AS v(id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at)
 ON CONFLICT (id) ${updateWhenChanged('point_subject_bindings', [...fromFile('point_id', 'subject_type', 'space_id', 'asset_id'), ...SUBJECT_BINDING_LIFECYCLE])};
 COMMIT;`;
 
@@ -494,14 +505,28 @@ function buildEnergySql(profile, devices, points) {
   const id = (kind, index) => sqlLiteral(rowId(site.id, kind, index));
   const deviceByKey = new Map(devices.map((device) => [device.sourceKey, device]));
   const counter = (device) => {
-    const point = points.find((candidate) => candidate.device === device && candidate.pointType === 'COUNTER');
+    const point = points.find((candidate) => candidate.device === device && candidate.pointType === 'COUNTER' && pointStatus(candidate) === 'ACTIVE');
     if (!point) throw new Error(`${device.sourceKey} has no energy counter`);
     return point.id;
   };
   const assetName = new Map((profile.assets ?? []).map((asset) => [asset.id, asset.name]));
-  const total = deviceByKey.get(energy.totalMeter);
-  const branches = energy.branchMeters.map((key) => deviceByKey.get(key));
+  const synthesizedTotal = isSynthesizedTotalMeter(energy.totalMeter);
+  const total = synthesizedTotal ? null : deviceByKey.get(energy.totalMeter);
+  if (!synthesizedTotal && !total) throw new Error(`energy.totalMeter ${energy.totalMeter} is not in the site file`);
+  const checkMeters = (energy.checkMeters ?? []).map((key) => {
+    const device = deviceByKey.get(key);
+    if (!device) throw new Error(`energy.checkMeters ${key} is not in the site file`);
+    if (total && device === total) throw new Error(`energy.checkMeters ${key} duplicates energy.totalMeter`);
+    return device;
+  });
+  const branches = (energy.branchMeters ?? []).map((key) => {
+    const device = deviceByKey.get(key);
+    if (!device) throw new Error(`energy.branchMeters ${key} is not in the site file`);
+    return device;
+  });
+  if (synthesizedTotal && branches.length === 0) throw new Error('energy.totalMeter sum-of-sub-meters requires branchMeters');
   const cooling = energy.coolingMeter ? deviceByKey.get(energy.coolingMeter) : null;
+  if (energy.coolingMeter && !cooling) throw new Error(`energy.coolingMeter ${energy.coolingMeter} is not in the site file`);
   const version = id('7000', 1);
   const nodes = [
     { key: 'grid', type: 'GRID', name: '电网' },
@@ -511,19 +536,63 @@ function buildEnergySql(profile, devices, points) {
   ].map((node, index) => ({ ...node, id: id('7100', index + 1) }));
   const nodeId = new Map(nodes.map((node) => [node.key, node.id]));
   const meters = [
-    { device: total, from: 'grid', to: 'plant', direction: 'IMPORT', energyType: ELECTRICITY },
-    ...branches.map((device) => ({ device, from: 'plant', to: device.sourceKey, direction: 'CONSUME', energyType: ELECTRICITY })),
-    ...(cooling ? [{ device: cooling, from: 'plant', to: 'building', direction: 'CONSUME', energyType: COOLING }] : []),
+    ...(total ? [{ device: total, from: 'grid', to: 'plant', direction: 'IMPORT', energyType: ELECTRICITY, role: 'PRIMARY' }] : []),
+    ...checkMeters.map((device) => ({ device, from: 'grid', to: 'plant', direction: 'IMPORT', energyType: ELECTRICITY, role: 'CHECK' })),
+    ...branches.map((device) => ({ device, from: 'plant', to: device.sourceKey, direction: 'CONSUME', energyType: ELECTRICITY, role: 'PRIMARY' })),
+    ...(cooling ? [{ device: cooling, from: 'plant', to: 'building', direction: 'CONSUME', energyType: COOLING, role: 'PRIMARY' }] : []),
   ].map((meter, index) => ({ ...meter, edge: id('7200', index + 1), meter: id('7300', index + 1), binding: id('7400', index + 1), point: sqlLiteral(counter(meter.device)) }));
   const draft = `WHERE EXISTS (SELECT 1 FROM core_registry.energy_topology_versions WHERE id = ${version} AND status = 'DRAFT')`;
 
+  const scheduleCodeFor = (binding) => `${binding.code.replaceAll('_', '-')}-${site.code}${binding.subject === 'DEVICE' ? `-${binding.index}` : ''}`;
   // Metric definitions are the Tenant's; the Site binds their released version by Metric code.
-  const metricBinding = (binding) => `INSERT INTO core_registry.metric_bindings (id, tenant_id, site_id, metric_version_id, metric_id, metric_version, binding_version, subject_type, subject_id, time_granularity, source_definition, effective_from, status, revision, created_at, updated_at)
-SELECT ${id('7500', binding.index)}, ${t}, ${st}, v.id, v.metric_id, v.version, 1, '${binding.subject}', ${sqlLiteral(binding.subjectId)}, '${binding.granularity}', ${sqlJson(binding.source)}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp()
-FROM core_registry.metric_versions v JOIN core_registry.metrics m ON m.id = v.metric_id
+  // Released Metric Bindings are immutable except for SUPERSEDED status, so changing source_definition
+  // supersedes the prior RELEASED binding, inserts the next binding_version, and points the schedule at it.
+  const metricBinding = (binding) => {
+    const baseId = id('7500', binding.index);
+    const sourceSql = sqlJson(binding.source);
+    const subjId = sqlLiteral(binding.subjectId);
+    const schedCode = sqlLiteral(scheduleCodeFor(binding));
+    return `UPDATE core_registry.metric_bindings mb
+SET status = 'SUPERSEDED', revision = mb.revision + 1, updated_at = clock_timestamp()
+FROM core_registry.metrics m
+WHERE mb.tenant_id = ${t} AND mb.site_id = ${st} AND m.tenant_id = mb.tenant_id AND m.id = mb.metric_id AND m.metric_code = '${binding.code}'
+  AND mb.subject_type = '${binding.subject}' AND mb.subject_id = ${subjId} AND mb.time_granularity = '${binding.granularity}'
+  AND mb.status = 'RELEASED' AND mb.source_definition IS DISTINCT FROM ${sourceSql};
+INSERT INTO core_registry.metric_bindings (id, tenant_id, site_id, metric_version_id, metric_id, metric_version, binding_version, subject_type, subject_id, time_granularity, source_definition, effective_from, status, revision, created_at, updated_at)
+SELECT overlay(${baseId}::text placing lpad(to_hex(next_ver.version - 1), 4, '0') from 25 for 4)::uuid, ${t}, ${st}, v.id, v.metric_id, v.version, next_ver.version, '${binding.subject}', ${subjId}, '${binding.granularity}', ${sourceSql}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp()
+FROM core_registry.metric_versions v
+JOIN core_registry.metrics m ON m.id = v.metric_id
+CROSS JOIN LATERAL (
+  SELECT COALESCE(MAX(existing.binding_version), 0) + 1 AS version
+  FROM core_registry.metric_bindings existing
+  WHERE existing.tenant_id = ${t} AND existing.site_id = ${st} AND existing.metric_version_id = v.id
+    AND existing.subject_type = '${binding.subject}' AND existing.subject_id = ${subjId} AND existing.time_granularity = '${binding.granularity}'
+) AS next_ver
 WHERE m.tenant_id = ${t} AND m.metric_code = '${binding.code}' AND v.status = 'RELEASED'
-  AND NOT EXISTS (SELECT 1 FROM core_registry.metric_bindings WHERE id = ${id('7500', binding.index)});`;
-  const totalEnergy = { points: { site_energy: counter(total) }, counter: { decreaseMode: 'RESET' } };
+  AND NOT EXISTS (
+    SELECT 1 FROM core_registry.metric_bindings active
+    WHERE active.tenant_id = ${t} AND active.site_id = ${st} AND active.metric_id = v.metric_id
+      AND active.subject_type = '${binding.subject}' AND active.subject_id = ${subjId} AND active.time_granularity = '${binding.granularity}'
+      AND active.status = 'RELEASED'
+  );`;
+  };
+  const syncMetricSchedule = (binding) => {
+    const subjId = sqlLiteral(binding.subjectId);
+    const schedCode = sqlLiteral(scheduleCodeFor(binding));
+    return `UPDATE core_registry.schedule_definitions sd
+SET payload_template = jsonb_build_object('bindingId', mb.id), version = sd.version + 1, updated_at = clock_timestamp()
+FROM core_registry.metric_bindings mb
+JOIN core_registry.metrics m ON m.tenant_id = mb.tenant_id AND m.id = mb.metric_id
+WHERE sd.tenant_id = ${t} AND sd.site_id = ${st} AND sd.schedule_code = ${schedCode}
+  AND mb.tenant_id = ${t} AND mb.site_id = ${st} AND m.metric_code = '${binding.code}'
+  AND mb.subject_type = '${binding.subject}' AND mb.subject_id = ${subjId} AND mb.time_granularity = '${binding.granularity}'
+  AND mb.status = 'RELEASED'
+  AND sd.payload_template IS DISTINCT FROM jsonb_build_object('bindingId', mb.id);`;
+  };
+  const totalEnergy = {
+    points: { site_energy: synthesizedTotal ? branches.map(counter) : counter(total) },
+    counter: { decreaseMode: 'RESET' },
+  };
   const bindings = [
     { code: 'hourly_energy', subject: 'SITE', subjectId: site.id, granularity: 'HOUR', source: totalEnergy, cron: '5 * * * *', name: '空调逐时用电量（每小时）' },
     { code: 'daily_energy', subject: 'SITE', subjectId: site.id, granularity: 'DAY', source: totalEnergy, cron: '10 0 * * *', name: '空调日用电量（每日零点后）' },
@@ -541,10 +610,36 @@ WHERE m.tenant_id = ${t} AND m.metric_code = '${binding.code}' AND v.status = 'R
   ].map((binding, index) => ({ ...binding, index: index < 2 ? index + 1 : index + 2 }));
   const nextFire = (cron) => cron.startsWith('5 ') ? 'clock_timestamp()'
     : `(date_trunc('day', clock_timestamp() AT TIME ZONE '${site.timezone}') + interval '1 day' + interval '${Number(cron.split(' ')[0])} minutes') AT TIME ZONE '${site.timezone}'`;
-  const schedules = bindings.map((binding) => `  (${id('7600', binding.index)}, ${sqlLiteral(`${binding.code.replaceAll('_', '-')}-${site.code}${binding.subject === 'DEVICE' ? `-${binding.index}` : ''}`)}, ${sqlLiteral(binding.name)}, ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', ${sqlLiteral(binding.cron)}, '5-field-v1', ${sqlLiteral(site.timezone)}, 'FIRE_ONCE', 60, ${sqlJson({ bindingId: rowId(site.id, '7500', binding.index) })}, ${nextFire(binding.cron)})`);
+  const schedules = bindings.map((binding) => `  (${id('7600', binding.index)}, ${sqlLiteral(scheduleCodeFor(binding))}, ${sqlLiteral(binding.name)}, ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', ${sqlLiteral(binding.cron)}, '5-field-v1', ${sqlLiteral(site.timezone)}, 'FIRE_ONCE', 60, ${sqlJson({ bindingId: rowId(site.id, '7500', binding.index) })}, ${nextFire(binding.cron)})`);
   const tariff = energy.tariff;
   const periods = ['WEEKDAY', 'WEEKEND'].flatMap((dayType) => tariff.slices.map(([code, start, end], ordinal) => ({ dayType, code, start, end, ordinal })))
     .map((period, index) => `  (${id('7900', index + 1)}, ${t}, ${st}, ${id('7800', 2)}, ${sqlLiteral(period.code)}, '${period.dayType}', ${period.start}, ${period.end}, ${sqlJson(tariff.rates[period.code])}, ${period.ordinal}, 1, clock_timestamp(), clock_timestamp())`);
+  const virtualMeterId = id('7d00', 1);
+  const virtualMeterSql = synthesizedTotal
+    ? `UPDATE core_registry.meter_bindings mb
+SET meter_role = 'CHECK', revision = mb.revision + 1, updated_at = clock_timestamp()
+FROM core_registry.energy_edges edge
+WHERE mb.tenant_id = ${t} AND mb.site_id = ${st} AND mb.topology_version_id = ${version}
+  AND edge.tenant_id = mb.tenant_id AND edge.site_id = mb.site_id AND edge.topology_version_id = mb.topology_version_id AND edge.id = mb.energy_edge_id
+  AND edge.from_node_id = ${nodeId.get('grid')} AND edge.to_node_id = ${nodeId.get('plant')}
+  AND mb.meter_role = 'PRIMARY';
+INSERT INTO core_registry.virtual_meters (id, tenant_id, site_id, topology_version_id, virtual_meter_code, display_name, energy_type_id, direction, calculation_type, expression_text, version, effective_from, status, revision, created_at, updated_at)
+VALUES (${virtualMeterId}, ${t}, ${st}, ${version}, 'site_total_electricity', '合成总电表', '${ELECTRICITY}', 'IMPORT', 'SUM', NULL, 1, '2026-01-01T00:00:00Z', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
+ON CONFLICT (id) ${updateWhenChanged('virtual_meters', [...fromFile('display_name', 'calculation_type', 'expression_text'), ...ACTIVE])};
+DELETE FROM core_registry.virtual_meter_sources
+WHERE tenant_id = ${t} AND site_id = ${st} AND virtual_meter_id = ${virtualMeterId} AND ordinal >= ${branches.length};
+INSERT INTO core_registry.virtual_meter_sources (id, tenant_id, site_id, topology_version_id, energy_type_id, virtual_meter_id, source_type, source_meter_binding_id, source_virtual_meter_id, coefficient, ordinal, revision, created_at, updated_at)
+SELECT v.id::uuid, ${t}::uuid, ${st}::uuid, ${version}::uuid, '${ELECTRICITY}'::uuid, ${virtualMeterId}::uuid, 'METER_BINDING', mb.id, NULL::uuid, 1::numeric, v.ordinal, 1::bigint, clock_timestamp(), clock_timestamp()
+FROM (VALUES
+${branches.map((device, index) => `  (${id('7e00', index + 1)}, ${sqlLiteral(device.id)}, ${index})`).join(',\n')}
+) AS v(id, device_id, ordinal)
+JOIN core_registry.meter_bindings mb
+  ON mb.tenant_id = ${t}::uuid AND mb.site_id = ${st}::uuid AND mb.topology_version_id = ${version}::uuid
+ AND mb.device_id = v.device_id::uuid AND mb.energy_type_id = '${ELECTRICITY}'::uuid AND mb.meter_role = 'PRIMARY' AND mb.status IN ('RELEASED', 'ACTIVE')
+ON CONFLICT (id) ${updateWhenChanged('virtual_meter_sources', fromFile('source_type', 'source_meter_binding_id', 'source_virtual_meter_id', 'coefficient', 'ordinal'))};`
+    : `UPDATE core_registry.virtual_meters
+SET status = 'SUPERSEDED', revision = revision + 1, updated_at = clock_timestamp()
+WHERE tenant_id = ${t} AND site_id = ${st} AND id = ${virtualMeterId} AND status IN ('RELEASED', 'ACTIVE');`;
 
   return `BEGIN;
 INSERT INTO core_registry.energy_topology_versions (id, tenant_id, site_id, version, status, revision, created_at, updated_at)
@@ -560,15 +655,26 @@ SELECT edge.* FROM (VALUES
 ${meters.map((meter) => `  (${meter.edge}::uuid, ${t}::uuid, ${st}::uuid, ${version}::uuid, ${nodeId.get(meter.from)}::uuid, ${nodeId.get(meter.to)}::uuid, '${meter.energyType}'::uuid, '${meter.direction}', true, 1::bigint, clock_timestamp(), clock_timestamp())`).join(',\n')}
 ) AS edge ${draft}
 ON CONFLICT (id) DO NOTHING;
-INSERT INTO core_registry.energy_meters (id, tenant_id, site_id, meter_code, display_name, device_id, energy_type_id, status, revision, created_at, updated_at) VALUES
-${meters.map((meter) => `  (${meter.meter}, ${t}, ${st}, ${sqlLiteral(meter.device.code.replaceAll('-', '_'))}, ${sqlLiteral(meter.device.name)}, ${sqlLiteral(meter.device.id)}, '${meter.energyType}', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+INSERT INTO core_registry.energy_meters (id, tenant_id, site_id, meter_code, display_name, device_id, energy_type_id, status, revision, created_at, updated_at)
+SELECT meter.* FROM (VALUES
+${meters.map((meter) => `  (${meter.meter}::uuid, ${t}::uuid, ${st}::uuid, ${sqlLiteral(meter.device.code.replaceAll('-', '_'))}, ${sqlLiteral(meter.device.name)}, ${sqlLiteral(meter.device.id)}::uuid, '${meter.energyType}'::uuid, 'ACTIVE', 1::bigint, clock_timestamp(), clock_timestamp())`).join(',\n')}
+) AS meter ${draft}
 ON CONFLICT (id) DO NOTHING;
-INSERT INTO core_registry.meter_bindings (id, tenant_id, site_id, topology_version_id, energy_edge_id, energy_type_id, meter_id, device_id, point_id, point_type, meter_role, direction, priority, effective_from, version, status, revision, created_at, updated_at) VALUES
-${meters.map((meter) => `  (${meter.binding}, ${t}, ${st}, ${version}, ${meter.edge}, '${meter.energyType}', ${meter.meter}, ${sqlLiteral(meter.device.id)}, ${meter.point}, 'COUNTER', 'PRIMARY', '${meter.direction}', 0, '2026-01-01T00:00:00Z', 1, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n')}
+UPDATE core_registry.energy_meters em
+SET display_name = d.display_name, revision = em.revision + 1, updated_at = clock_timestamp()
+FROM core_registry.devices d
+WHERE em.tenant_id = d.tenant_id AND em.site_id = d.site_id AND em.device_id = d.id
+  AND em.tenant_id = ${t} AND em.site_id = ${st}
+  AND em.display_name IS DISTINCT FROM d.display_name;
+INSERT INTO core_registry.meter_bindings (id, tenant_id, site_id, topology_version_id, energy_edge_id, energy_type_id, meter_id, device_id, point_id, point_type, meter_role, direction, priority, effective_from, version, status, revision, created_at, updated_at)
+SELECT binding.* FROM (VALUES
+${meters.map((meter) => `  (${meter.binding}::uuid, ${t}::uuid, ${st}::uuid, ${version}::uuid, ${meter.edge}::uuid, '${meter.energyType}'::uuid, ${meter.meter}::uuid, ${sqlLiteral(meter.device.id)}::uuid, ${meter.point}::uuid, 'COUNTER', '${meter.role}', '${meter.direction}', 0, '2026-01-01T00:00:00Z'::timestamptz, 1::bigint, 'ACTIVE', 1::bigint, clock_timestamp(), clock_timestamp())`).join(',\n')}
+) AS binding ${draft}
 ON CONFLICT (id) DO NOTHING;
 UPDATE core_registry.energy_topology_versions
 SET status = 'ACTIVE', effective_from = '2026-01-01T00:00:00Z', released_at = clock_timestamp(), revision = revision + 1, updated_at = clock_timestamp()
 WHERE id = ${version} AND status = 'DRAFT';
+${virtualMeterSql}
 
 ${bindings.map(metricBinding).join('\n')}
 INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at) VALUES
@@ -576,6 +682,7 @@ ${schedules.join(',\n')},
   (${id('7600', 90)}, ${sqlLiteral(`monthly-report-${site.code}`)}, '月度报告快照（每月 1 日 03:00）', ${t}, ${st}, 'REPORT_GENERATE', 'CRON', '0 3 1 * *', '5-field-v1', ${sqlLiteral(site.timezone)}, 'FIRE_ONCE', 120, '{}',
     (date_trunc('month', clock_timestamp() AT TIME ZONE '${site.timezone}') + interval '1 month' + interval '3 hours') AT TIME ZONE '${site.timezone}')
 ON CONFLICT (tenant_id, schedule_code) DO NOTHING;
+${bindings.map(syncMetricSchedule).join('\n')}
 
 INSERT INTO core_registry.settlement_boundaries (id, tenant_id, site_id, topology_version_id, boundary_code, display_name, boundary_type, energy_type_id, direction, definition_mode, node_id, effective_from, status, revision, created_at, updated_at)
 VALUES (${id('7800', 1)}, ${t}, ${st}, ${version}, 'grid_import', '电网进线', 'GRID_CONNECTION', '${ELECTRICITY}', 'IMPORT', 'NODE', ${nodeId.get('grid')}, '2026-01-01T00:00:00Z', 'DRAFT', 1, clock_timestamp(), clock_timestamp())
@@ -594,30 +701,36 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.tariff_assignments (id, tenant_id, site_id, boundary_id, tariff_id, effective_from, status, revision, created_at, updated_at)
 VALUES (${id('7800', 4)}, ${t}, ${st}, ${id('7800', 1)}, ${id('7800', 3)}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
-${buildLoadForecastSql(profile, total, points, version)}
+${buildLoadForecastSql(profile, total ?? checkMeters[0] ?? null, branches, points, version)}
 COMMIT;`;
 }
 
-// The Site load forecast, the same chain the simulator seed gives the demo Sites: the total meter's
-// active power averaged per quarter-hour as a Site Metric of its own, and a day-ahead baseline model
-// (each time of day averaged over the past week) deployed on it and run every hour. The Forecast
-// owner needs at least four quarter-hours of that Metric, so after onboarding a Site with history,
-// backfill a week of it with scripts/site-metric-recalc.mjs.
-function buildLoadForecastSql(profile, total, points, topologyVersion) {
+// The Site load forecast, the same chain the simulator seed gives the demo Sites: the total/check meter's
+// active power (or the sum of the sub-meters' active power when synthesized without a check meter) averaged
+// per quarter-hour as a Site Metric of its own, and a day-ahead baseline model (each time of day averaged
+// over the past week) deployed on it and run every hour. The Forecast owner needs at least four quarter-hours
+// of that Metric, so after onboarding a Site with history, backfill a week of it with scripts/site-metric-recalc.mjs.
+function buildLoadForecastSql(profile, loadDevice, branches, points, topologyVersion) {
   const { site } = profile;
   const t = sqlLiteral(profile.tenantId);
   const st = sqlLiteral(site.id);
   const rawId = (index) => rowId(site.id, '7a00', index);
-  const power = points.filter((point) => point.device === total && point.pointType === 'TELEMETRY' && point.unit === 'kW');
-  if (power.length !== 1) throw new Error(`${total.sourceKey} needs exactly one kW telemetry point for the load forecast`);
+  const powerPoint = (device) => {
+    const matches = points.filter((point) => point.device === device && point.pointType === 'TELEMETRY' && point.unit === 'kW' && pointStatus(point) === 'ACTIVE');
+    if (matches.length !== 1) throw new Error(`${device.sourceKey} needs exactly one kW telemetry point for the load forecast`);
+    return matches[0].id;
+  };
+  const loadSource = sqlJson({ points: { site_load: loadDevice ? powerPoint(loadDevice) : branches.map(powerPoint) } });
+  const qualityPolicy = loadDevice ? 'STRICT' : 'TOLERANT';
   const code = site.code.replaceAll('-', '_');
   const [metric, metricVersion, dependency, binding, loadSchedule, featureSet, featureSetVersion, dataset, model, trainingRun, modelVersion, deployment, forecastSchedule] =
     Array.from({ length: 13 }, (_, index) => sqlLiteral(rawId(index + 1)));
+  const loadScheduleCode = sqlLiteral(`site-load-15min-${site.code}`);
   return `INSERT INTO core_registry.metrics (id, tenant_id, metric_code, metric_name, category, status, revision, created_at, updated_at)
 VALUES (${metric}, ${t}, ${sqlLiteral(`site_load_15min_${code}`)}, ${sqlLiteral(`${site.name}空调用电负荷（15 分钟）`)}, 'LOAD', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.metric_versions (id, tenant_id, metric_id, version, unit_code, data_type, subject_type, time_granularity, aggregation, calculation_method, formula, quality_policy, effective_from, status, metadata, revision, created_at, updated_at)
-VALUES (${metricVersion}, ${t}, ${metric}, 1, 'kW', 'NUMBER', 'SITE', '15MIN', 'AVG', 'IDENTITY', NULL, 'STRICT', '2026-01-01T00:00:00Z', 'DRAFT', '{}', 1, clock_timestamp(), clock_timestamp())
+VALUES (${metricVersion}, ${t}, ${metric}, 1, 'kW', 'NUMBER', 'SITE', '15MIN', 'AVG', 'IDENTITY', NULL, '${qualityPolicy}', '2026-01-01T00:00:00Z', 'DRAFT', '{}', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.metric_dependencies (id, tenant_id, metric_version_id, dependency_type, dependency_code, dependency_metric_id, sort_order, required, metadata, revision, created_at, updated_at)
 SELECT ${dependency}::uuid, ${t}::uuid, ${metricVersion}::uuid, 'POINT', 'site_load', NULL::uuid, 0, true, '{}'::jsonb, 1::bigint, clock_timestamp(), clock_timestamp()
@@ -625,9 +738,25 @@ WHERE EXISTS (SELECT 1 FROM core_registry.metric_versions WHERE id = ${metricVer
 ON CONFLICT (id) DO NOTHING;
 UPDATE core_registry.metric_versions SET status = 'RELEASED', revision = revision + 1, updated_at = clock_timestamp()
 WHERE id = ${metricVersion} AND status = 'DRAFT';
+UPDATE core_registry.metric_bindings
+SET status = 'SUPERSEDED', revision = revision + 1, updated_at = clock_timestamp()
+WHERE tenant_id = ${t} AND site_id = ${st} AND metric_id = ${metric}
+  AND subject_type = 'SITE' AND subject_id = ${st} AND time_granularity = '15MIN'
+  AND status = 'RELEASED' AND source_definition IS DISTINCT FROM ${loadSource};
 INSERT INTO core_registry.metric_bindings (id, tenant_id, site_id, metric_version_id, metric_id, metric_version, binding_version, subject_type, subject_id, time_granularity, source_definition, effective_from, status, revision, created_at, updated_at)
-VALUES (${binding}, ${t}, ${st}, ${metricVersion}, ${metric}, 1, 1, 'SITE', ${st}, '15MIN', ${sqlJson({ points: { site_load: power[0].id } })}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp())
-ON CONFLICT (id) DO NOTHING;
+SELECT overlay(${binding}::text placing lpad(to_hex(next_ver.version - 1), 4, '0') from 25 for 4)::uuid, ${t}, ${st}, ${metricVersion}, ${metric}, 1, next_ver.version, 'SITE', ${st}, '15MIN', ${loadSource}, '2026-01-01T00:00:00Z', 'RELEASED', 1, clock_timestamp(), clock_timestamp()
+FROM (
+  SELECT COALESCE(MAX(existing.binding_version), 0) + 1 AS version
+  FROM core_registry.metric_bindings existing
+  WHERE existing.tenant_id = ${t} AND existing.site_id = ${st} AND existing.metric_version_id = ${metricVersion}
+    AND existing.subject_type = 'SITE' AND existing.subject_id = ${st} AND existing.time_granularity = '15MIN'
+) AS next_ver
+WHERE NOT EXISTS (
+  SELECT 1 FROM core_registry.metric_bindings active
+  WHERE active.tenant_id = ${t} AND active.site_id = ${st} AND active.metric_id = ${metric}
+    AND active.subject_type = 'SITE' AND active.subject_id = ${st} AND active.time_granularity = '15MIN'
+    AND active.status = 'RELEASED'
+);
 INSERT INTO core_registry.forecast_feature_sets (id, tenant_id, feature_set_code, target, status, revision, created_at, updated_at)
 VALUES (${featureSet}, ${t}, ${sqlLiteral(`site_load_${code}`)}, 'SITE_LOAD', 'ACTIVE', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
@@ -656,11 +785,19 @@ INSERT INTO core_registry.forecast_deployments (id, tenant_id, site_id, target, 
 VALUES (${deployment}, ${t}, ${st}, 'SITE_LOAD', 'SITE', ${st}, ${modelVersion}, ${model}, ${featureSetVersion}, ${topologyVersion}, 'ACTIVE', '2026-01-01T00:00:00Z', 1, clock_timestamp(), clock_timestamp())
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO core_registry.schedule_definitions (schedule_id, schedule_code, schedule_name, tenant_id, site_id, job_type, schedule_type, cron_expression, cron_format_version, timezone, misfire_policy, timeout_seconds, payload_template, next_fire_at) VALUES
-  (${loadSchedule}, ${sqlLiteral(`site-load-15min-${site.code}`)}, '空调用电负荷（每 15 分钟）', ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', '*/15 * * * *', '5-field-v1', ${sqlLiteral(site.timezone)}, 'FIRE_ONCE', 60, ${sqlJson({ bindingId: rawId(4) })},
+  (${loadSchedule}, ${loadScheduleCode}, '空调用电负荷（每 15 分钟）', ${t}, ${st}, 'METRIC_WINDOW_CALC', 'CRON', '*/15 * * * *', '5-field-v1', ${sqlLiteral(site.timezone)}, 'FIRE_ONCE', 60, ${sqlJson({ bindingId: rawId(4) })},
     date_trunc('hour', clock_timestamp()) + ceil(extract(minute FROM clock_timestamp()) / 15 + 0.0001) * interval '15 minutes'),
   (${forecastSchedule}, ${sqlLiteral(`site-load-forecast-${site.code}`)}, '空调用电负荷日前预测（每小时）', ${t}, ${st}, 'FORECAST_RUN', 'CRON', '7 * * * *', '5-field-v1', ${sqlLiteral(site.timezone)}, 'FIRE_ONCE', 120,
     ${sqlJson({ target: 'SITE_LOAD', subjectType: 'SITE', subjectId: site.id })}, clock_timestamp())
-ON CONFLICT (tenant_id, schedule_code) DO NOTHING;`;
+ON CONFLICT (tenant_id, schedule_code) DO NOTHING;
+UPDATE core_registry.schedule_definitions sd
+SET payload_template = jsonb_build_object('bindingId', mb.id), version = sd.version + 1, updated_at = clock_timestamp()
+FROM core_registry.metric_bindings mb
+WHERE sd.tenant_id = ${t} AND sd.site_id = ${st} AND sd.schedule_code = ${loadScheduleCode}
+  AND mb.tenant_id = ${t} AND mb.site_id = ${st} AND mb.metric_id = ${metric}
+  AND mb.subject_type = 'SITE' AND mb.subject_id = ${st} AND mb.time_granularity = '15MIN'
+  AND mb.status = 'RELEASED'
+  AND sd.payload_template IS DISTINCT FROM jsonb_build_object('bindingId', mb.id);`;
 }
 
 // The Site's diagnosis and Optimization, when its manifest has them (ADR 0028). The low-delta-T
@@ -833,6 +970,14 @@ export function checkSiteFile(profile, alarmRules = null) {
   } catch (error) {
     problems.push(error.message);
   }
+  if (profile.energy) {
+    try {
+      const { devices: energyDevices, points: energyPoints } = siteRows(profile);
+      buildEnergySql(profile, energyDevices, energyPoints);
+    } catch (error) {
+      problems.push(error.message);
+    }
+  }
 
   if (intelligence.alarmRules && !alarmRules) problems.push(`alarm rules file ${intelligence.alarmRules} was not found`);
   if (alarmRules) {
@@ -904,6 +1049,7 @@ SELECT json_build_object(
   'assets', (SELECT coalesce(json_object_agg(id, status), '{}') FROM core_registry.assets WHERE site_id = ${st}),
   'schedules', (SELECT coalesce(json_object_agg(schedule_code, json_build_object('jobType', job_type, 'cron', cron_expression, 'enabled', enabled, 'payload', payload_template)), '{}') FROM core_registry.schedule_definitions WHERE tenant_id = ${t} AND site_id = ${st}),
   'topology', EXISTS (SELECT 1 FROM core_registry.energy_topology_versions WHERE site_id = ${st} AND status = 'ACTIVE'),
+  'synthesizedTotal', EXISTS (SELECT 1 FROM core_registry.virtual_meters WHERE site_id = ${st} AND virtual_meter_code = 'site_total_electricity' AND status IN ('RELEASED', 'ACTIVE')),
   'tariff', EXISTS (SELECT 1 FROM core_registry.tariff_assignments WHERE site_id = ${st} AND status = 'RELEASED'),
   'forecast', EXISTS (SELECT 1 FROM core_registry.forecast_deployments WHERE site_id = ${st} AND status = 'ACTIVE'),
   'policy', (SELECT json_build_object('constraints', constraints, 'objective', objective, 'dispatchMode', dispatch_mode, 'horizon', horizon, 'horizonMinutes', horizon_minutes, 'granularity', granularity) FROM (${effectivePolicySql(t)}) AS current),
@@ -961,6 +1107,9 @@ export function planOnboarding(profile, state) {
 
   if (profile.energy) {
     add('能耗和负荷预测', state.topology ? 'ok' : 'missing', '能耗拓扑（已发布）');
+    if (isSynthesizedTotalMeter(profile.energy.totalMeter)) {
+      add('能耗和负荷预测', state.synthesizedTotal ? 'ok' : 'missing', '合成总电表');
+    }
     add('能耗和负荷预测', state.tariff ? 'ok' : 'missing', '电价');
     add('能耗和负荷预测', state.forecast ? 'ok' : 'missing', '负荷预测模型部署');
   }

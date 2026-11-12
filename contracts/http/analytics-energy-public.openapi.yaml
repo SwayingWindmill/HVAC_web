@@ -113,6 +113,29 @@ components:
           type: number
           format: double
           minimum: 0
+        crossGapKWh:
+          type: number
+          format: double
+          minimum: 0
+        cost:
+          $ref: '#/components/schemas/EnergyCost'
+        incomplete:
+          type: boolean
+          description: True when a synthesized-total hour is missing one or more sub-meters.
+        missingMeters:
+          type: array
+          items:
+            type: string
+          description: Display names of sub-meters missing in an incomplete hour.
+    EnergyCrossGap:
+      type: object
+      additionalProperties: false
+      required: [energyKWh]
+      properties:
+        energyKWh:
+          type: number
+          format: double
+          minimum: 0
         cost:
           $ref: '#/components/schemas/EnergyCost'
     EnergyCost:
@@ -172,6 +195,8 @@ components:
           type: string
         partial:
           type: boolean
+        synthesized:
+          type: boolean
         qualitySummary:
           $ref: '#/components/schemas/QualitySummary'
     EnergySeriesResponse:
@@ -187,6 +212,8 @@ components:
           maxItems: 10000
           items:
             $ref: '#/components/schemas/EnergySeriesPoint'
+        crossGap:
+          $ref: '#/components/schemas/EnergyCrossGap'
         devices:
           type: array
           description: Present only for breakdown=device. Devices without a sub-meter are absent.
@@ -207,6 +234,10 @@ components:
           maxItems: 10000
           items:
             $ref: '#/components/schemas/EnergySeriesPoint'
+        crossGapKWh:
+          type: number
+          format: double
+          minimum: 0
     ProblemDetails:
       type: object
       additionalProperties: true

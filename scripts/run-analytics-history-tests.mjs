@@ -468,7 +468,7 @@ try {
   report.assertions.metricCounterWindow = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/metric',
-    'test', '-count=1', '-run', 'TestCounterDeltaTakesTheStepIntoTheWindow|TestCounterDeltaSkipsTheStepAcrossAPointRevisionOrUnit', '-v', './pkg/metric/...',
+    'test', '-count=1', '-run', 'TestCounterDeltaTakesTheStepIntoTheWindow|TestCounterDeltaSkipsTheStepAcrossAPointRevisionOrUnit|TestCounterDeltaSkipsCrossGapStepsForHourlyAndDailyMetrics', '-v', './pkg/metric/...',
   ], {
     env: {
       ...process.env,
@@ -784,18 +784,21 @@ try {
   const primaryKeyCondition = /PrimaryKey\n[\s\S]*?Condition: (.*)/.exec(report.assertions.visibleIndexCondition)?.[1] ?? '';
   if (!primaryKeyCondition.includes('site_id') || !primaryKeyCondition.includes('period_end')) throw new Error(`visible facts read the whole table: PrimaryKey condition ${primaryKeyCondition || 'missing'}`);
 
-  // The hourly rollup holds the visible facts per hour (015-energy-hourly-rollup.sql): the correction
-  // above took its predecessor out of the Site total, and every fact projected so far is in its hour.
+  // The hourly rollup holds the visible facts per hour up to 1 hour long (015/016); cross-gap
+  // intervals (> 1 hour) stay in energy_interval_facts_visible for monthly cross-gap totals without
+  // distorting hourly/daily curves.
+  clickHouse(`INSERT INTO analytics.energy_interval_facts (fact_id, tenant_id, site_id, meter_binding_id, energy_type, accounting_scope, quality, period_start, period_end, energy_kwh, source_current_observation_id, fact_revision, projected_at) VALUES
+    (generateUUIDv4(), toUUID('01990000-2a00-7000-8000-000000000001'), toUUID('01990000-2a10-7000-8000-000000000001'), toUUID('01990000-2a20-7000-8000-000000000001'), 'electricity', 'SITE', 'VALID', toDateTime64('2026-06-10 02:00:00', 3, 'UTC'), toDateTime64('2026-06-10 04:30:00', 3, 'UTC'), 42, toUUID('01990000-2a30-7000-8000-000000000099'), 0, toDateTime64('2026-06-10 04:31:00', 3, 'UTC'))`);
   report.assertions.hourlyRollupCorrection = clickHouse(`SELECT toString(count()) || '|' || toString(sumIf(energy_kwh, accounting_scope = 'SITE')) || '|' || toString(sumIf(energy_kwh, accounting_scope = 'BRANCH')) || '|' || toString(sum(interval_count)) FROM analytics.energy_hourly WHERE tenant_id = toUUID('01990000-2a00-7000-8000-000000000001') AND site_id = toUUID('01990000-2a10-7000-8000-000000000001') FORMAT TSVRaw`);
-  if (report.assertions.hourlyRollupCorrection !== '1|0|6|1') throw new Error(`hourly rollup kept a corrected fact: ${report.assertions.hourlyRollupCorrection}`);
+  if (report.assertions.hourlyRollupCorrection !== '1|0|6|1') throw new Error(`hourly rollup kept a corrected or cross-gap fact: ${report.assertions.hourlyRollupCorrection}`);
   const hourlyKey = "tenant_id, site_id, point_id, hour, accounting_scope, energy_type, quality, ifNull(toString(load_device_id), '') AS load_device";
   report.assertions.hourlyRollupDrift = clickHouse(`SELECT count() FROM (
-      SELECT ${hourlyKey}, sum(energy_kwh) AS energy, count() AS intervals FROM (SELECT *, toStartOfHour(period_end) AS hour FROM analytics.energy_interval_facts_visible) GROUP BY ALL
+      SELECT ${hourlyKey}, sum(energy_kwh) AS energy, count() AS intervals FROM (SELECT *, toStartOfHour(period_end) AS hour FROM analytics.energy_interval_facts_visible WHERE dateDiff('millisecond', period_start, period_end) <= 3600000) GROUP BY ALL
     ) AS facts FULL OUTER JOIN (
       SELECT ${hourlyKey}, energy_kwh AS energy, interval_count AS intervals FROM analytics.energy_hourly
     ) AS rollup USING (tenant_id, site_id, point_id, hour, accounting_scope, energy_type, quality, load_device)
     WHERE abs(facts.energy - rollup.energy) > 1e-6 OR facts.intervals != rollup.intervals FORMAT TSVRaw`);
-  if (report.assertions.hourlyRollupDrift !== '0') throw new Error(`hourly rollup differs from the visible facts in ${report.assertions.hourlyRollupDrift} hours`);
+  if (report.assertions.hourlyRollupDrift !== '0') throw new Error(`hourly rollup differs from the visible <=1h facts in ${report.assertions.hourlyRollupDrift} hours`);
   report.assertions.hourlyRollupFacts = clickHouse('SELECT toString(count()) FROM analytics.energy_interval_facts_visible FORMAT TSVRaw');
 
   const forecastJobId = '01990000-1700-7000-8000-000000000001';

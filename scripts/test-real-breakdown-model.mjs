@@ -66,3 +66,24 @@ test('energy per bucket lines up machines by the key a chart groups them on', ()
     { key: '01:00', CHILLER: 160, CHILLED_WATER_PUMP: 0, COOLING_WATER_PUMP: 30, COOLING_TOWER: 0 },
   ]);
 });
+
+test('cross-gap energy counts in site and sub-meter totals while staying out of chart rows (#798)', () => {
+  const breakdown = energyBreakdown(
+    plant,
+    points([185]),
+    [
+      { deviceId: 'CHILLER-01', points: points([110]), crossGapKWh: 640 },
+      { deviceId: 'CHWP-01', points: points([75]), crossGapKWh: 0 },
+    ],
+    (periodStart) => periodStart,
+    640,
+  );
+  assert.equal(breakdown.totalKWh, 825);
+  assert.equal(breakdown.subMeteredKWh, 825);
+  assert.equal(breakdown.unallocatedKWh, 0);
+  assert.equal(breakdown.items[0].energyKWh, 750);
+  // Chart rows keep strictly per-bucket values (no cross-gap spike).
+  assert.equal(breakdown.rows.length, 1);
+  assert.equal(breakdown.rows[0].CHILLER, 110);
+  assert.equal(breakdown.rows[0].CHILLED_WATER_PUMP, 75);
+});

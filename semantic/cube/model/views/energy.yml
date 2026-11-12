@@ -14,14 +14,19 @@ views:
           - electricity_valid_kwh
           - cooling_valid_kwh
           - cop
+          - cross_gap_valid_kwh
+          - cross_gap_valid_and_suspect_kwh
           - valid_count
           - suspect_count
           - invalid_count
+          - missing_count
+          - synthesized_total
           - max_data_watermark
           - max_dataset_revision
           - site_id
           - energy_type
           - quality
+          - missing_meter
           - period_end
     access_policy:
       - group: analytics_reader
@@ -36,6 +41,8 @@ views:
         includes:
           - energy_valid_kwh
           - energy_valid_and_suspect_kwh
+          - cross_gap_valid_kwh
+          - cross_gap_valid_and_suspect_kwh
           - valid_count
           - suspect_count
           - invalid_count
@@ -63,6 +70,12 @@ views:
           - priced_valid_and_suspect_kwh
           - unpriced_valid_kwh
           - unpriced_valid_and_suspect_kwh
+          - cross_gap_cost_valid_cny
+          - cross_gap_cost_valid_and_suspect_cny
+          - cross_gap_priced_valid_kwh
+          - cross_gap_priced_valid_and_suspect_kwh
+          - cross_gap_unpriced_valid_kwh
+          - cross_gap_unpriced_valid_and_suspect_kwh
           - site_id
           - tariff_period
           - period_end

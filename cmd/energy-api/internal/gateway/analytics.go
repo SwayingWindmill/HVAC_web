@@ -396,12 +396,20 @@ func validateEnergySeriesResponse(response analyticsmodel.EnergySeriesResponse, 
 	if err := validateEnergySeriesPoints(response.Points, query); err != nil {
 		return err
 	}
+	if response.CrossGap != nil {
+		if response.CrossGap.EnergyKWh < 0 || math.IsNaN(response.CrossGap.EnergyKWh) || math.IsInf(response.CrossGap.EnergyKWh, 0) {
+			return errors.New("cross-gap energy is not a finite nonnegative value")
+		}
+	}
 	if query.Breakdown == "" && response.Devices != nil {
 		return errors.New("devices returned without a breakdown")
 	}
 	for _, device := range response.Devices {
 		if strings.TrimSpace(device.DeviceID) == "" || device.Points == nil {
 			return fmt.Errorf("device series %q is invalid", device.DeviceID)
+		}
+		if device.CrossGapKWh < 0 || math.IsNaN(device.CrossGapKWh) || math.IsInf(device.CrossGapKWh, 0) {
+			return fmt.Errorf("device %s: cross-gap energy is not a finite nonnegative value", device.DeviceID)
 		}
 		if err := validateEnergySeriesPoints(device.Points, query); err != nil {
 			return fmt.Errorf("device %s: %w", device.DeviceID, err)
@@ -424,6 +432,9 @@ func validateEnergySeriesPoints(points []analyticsmodel.EnergySeriesPoint, query
 		}
 		if point.EnergyKWh < 0 || math.IsNaN(point.EnergyKWh) || math.IsInf(point.EnergyKWh, 0) {
 			return fmt.Errorf("point %d energy is not a finite nonnegative value", index)
+		}
+		if point.CrossGapKWh < 0 || math.IsNaN(point.CrossGapKWh) || math.IsInf(point.CrossGapKWh, 0) {
+			return fmt.Errorf("point %d cross-gap energy is not a finite nonnegative value", index)
 		}
 		if !previousEnd.IsZero() && point.PeriodStart.Before(previousEnd) {
 			return fmt.Errorf("point %d overlaps the previous point", index)

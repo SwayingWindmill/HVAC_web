@@ -45,7 +45,7 @@ func near(left, right float64) bool { return math.Abs(left-right) < 1e-9 }
 func TestAMonthIsTotalledByDayAndTariffPeriod(t *testing.T) {
 	first := time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai)
 	hours := append(day(first, 10, 40, always), day(first.AddDate(0, 0, 1), 5, 20, always)...)
-	snapshot, err := Build("2026-09", shanghai, hours, nil, nil)
+	snapshot, err := Build("2026-09", shanghai, MonthEnergy{Hours: hours}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,10 +69,37 @@ func TestAMonthIsTotalledByDayAndTariffPeriod(t *testing.T) {
 	}
 }
 
+func TestCrossGapEnergyCountsInMonthTotalsWithoutEnteringDailyCurve(t *testing.T) {
+	first := time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai)
+	snapshot, err := Build("2026-09", shanghai, MonthEnergy{
+		Hours: day(first, 10, 40, always),
+		ElectricityCrossGap: &analyticsmodel.EnergyCrossGap{
+			EnergyKWh: 100,
+			Cost: &analyticsmodel.EnergyCost{
+				AmountCNY: 120,
+				Periods:   []analyticsmodel.PeriodCost{{PeriodCode: "PEAK", EnergyKWh: 100, AmountCNY: 120}},
+			},
+		},
+		CoolingCrossGapKWh: 400,
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !near(snapshot.ElectricityKWh, 340) || !near(snapshot.CrossGapElectricityKWh, 100) || !near(snapshot.CoolingKWh, 1360) {
+		t.Fatalf("snapshot totals = %#v", snapshot)
+	}
+	if len(snapshot.Days) != 1 || !near(snapshot.Days[0].ElectricityKWh, 240) {
+		t.Fatalf("days = %#v", snapshot.Days)
+	}
+	if snapshot.EnergyCostCNY == nil || !near(*snapshot.EnergyCostCNY, 25.6+192+120) {
+		t.Fatalf("cost = %v", snapshot.EnergyCostCNY)
+	}
+}
+
 // No Tariff priced any of the month's electricity.
 func TestAMonthWithoutATariffHasNoCost(t *testing.T) {
 	first := time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai)
-	snapshot, err := Build("2026-09", shanghai, day(first, 10, 40, never), nil, nil)
+	snapshot, err := Build("2026-09", shanghai, MonthEnergy{Hours: day(first, 10, 40, never)}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +111,7 @@ func TestAMonthWithoutATariffHasNoCost(t *testing.T) {
 func TestADayWithCoolingReadingsOnlyHasNoMetering(t *testing.T) {
 	first := time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai)
 	coolingOnly := Hour{Start: first.AddDate(0, 0, 1), CoolingKWh: 40}
-	snapshot, err := Build("2026-09", shanghai, append(day(first, 10, 40, always), coolingOnly), nil, nil)
+	snapshot, err := Build("2026-09", shanghai, MonthEnergy{Hours: append(day(first, 10, 40, always), coolingOnly)}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +123,7 @@ func TestADayWithCoolingReadingsOnlyHasNoMetering(t *testing.T) {
 func TestAMonthWithAnUnpricedHourHasNoCost(t *testing.T) {
 	first := time.Date(2026, 9, 14, 0, 0, 0, 0, shanghai)
 	// The Tariff takes effect at noon on the first day, so the morning is not priced.
-	snapshot, err := Build("2026-09", shanghai, day(first, 10, 40, first.Add(12*time.Hour)), nil, nil)
+	snapshot, err := Build("2026-09", shanghai, MonthEnergy{Hours: day(first, 10, 40, first.Add(12*time.Hour))}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +133,7 @@ func TestAMonthWithAnUnpricedHourHasNoCost(t *testing.T) {
 }
 
 func TestAMonthCarriesItsVerifiedSavingsAndFindings(t *testing.T) {
-	snapshot, err := Build("2026-09", shanghai, nil,
+	snapshot, err := Build("2026-09", shanghai, MonthEnergy{},
 		// Two measures on different devices verified the 14th; the plant's electricity counts once.
 		[]SavingsDay{
 			{Day: "2026-09-14", AdjustedBaselineKWh: 500, AvoidedKWh: 60, AvoidedCost: 50, PlantKWh: 3000},
@@ -130,7 +157,7 @@ func TestAMonthCarriesItsVerifiedSavingsAndFindings(t *testing.T) {
 }
 
 func TestAnHourOutsideTheMonthIsRefused(t *testing.T) {
-	if _, err := Build("2026-09", shanghai, day(time.Date(2026, 10, 1, 0, 0, 0, 0, shanghai), 10, 40, always), nil, nil); err == nil {
+	if _, err := Build("2026-09", shanghai, MonthEnergy{Hours: day(time.Date(2026, 10, 1, 0, 0, 0, 0, shanghai), 10, 40, always)}, nil, nil); err == nil {
 		t.Fatal("an October hour was put in the September report")
 	}
 }

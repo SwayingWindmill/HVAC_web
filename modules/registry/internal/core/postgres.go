@@ -23,6 +23,7 @@ type RegistryStore interface {
 	GetDevice(context.Context, registryauth.GrantClaims, string) (Device, error)
 	ListDeviceBindings(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[DeviceBinding], error)
 	ResolveMeterBinding(context.Context, registryauth.GrantClaims, string, MeterBindingResolveRequest) (MeterBindingResolution, error)
+	GetSiteTotalElectricitySources(context.Context, registryauth.GrantClaims, string) (SiteTotalElectricitySources, error)
 	ListSpaceChildren(context.Context, registryauth.GrantClaims, string, string, PageRequest) (PageResult[Space], error)
 	ListDevicePoints(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[TelemetryPoint], error)
 	GetSiteAssetModel(context.Context, registryauth.GrantClaims, string) (SiteAssetModel, error)
