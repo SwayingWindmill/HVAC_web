@@ -429,7 +429,7 @@ func (h *handler) decodeRegistryBackendResponse(owner string, response *http.Res
 	if response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated {
 		var canonical []byte
 		var err error
-		if route.write || route.resource == "space-children" || route.resource == "device-points" {
+		if route.write || route.resource == "space-children" || route.resource == "device-points" || route.resource == "total-electricity-sources" {
 			canonical, err = canonicalRegistryDocument(raw)
 		} else {
 			canonical, err = canonicalRegistrySuccess(route.action, route.scopeID, raw)

@@ -238,6 +238,27 @@ func TestServerResolvesMeterBindingWithinPrivateCoreRoute(t *testing.T) {
 	}
 }
 
+func TestServerAllowsAssetModelReadGrantOnTotalElectricitySources(t *testing.T) {
+	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	store := &fakeRegistryStore{totalSources: SiteTotalElectricitySources{
+		SiteID:      testSiteA1,
+		Synthesized: true,
+		SubMeters:   []SiteTotalSubMeter{{PointID: testBindingA1, DeviceID: testDeviceA1, MeterName: "D 机组电表", Ordinal: 0}},
+	}}
+	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	path := RegistryPathPrefix + "sites/" + testSiteA1 + "/total-electricity-sources"
+	for _, action := range []registryauth.Action{registryauth.ActionMeterBindingResolve, registryauth.ActionAssetModelRead} {
+		response := harness.serve(t, http.MethodGet, path, testGrantClaims(action), nil)
+		if response.Code != http.StatusOK {
+			t.Fatalf("action %s: status = %d; body=%s", action, response.Code, response.Body.String())
+		}
+	}
+	rejected := harness.serve(t, http.MethodGet, path, testGrantClaims(registryauth.ActionDeviceRead), nil)
+	if rejected.Code != http.StatusForbidden {
+		t.Fatalf("unexpected status for wrong action = %d; body=%s", rejected.Code, rejected.Body.String())
+	}
+}
+
 func TestServerAcceptsIAMGrantBoundToOperationsAgentPresenter(t *testing.T) {
 	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	store := &fakeRegistryStore{site: Site{ID: testSiteA1, TenantID: testTenantA}}

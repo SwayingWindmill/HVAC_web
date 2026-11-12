@@ -9,6 +9,8 @@ import { Main } from "@/components/layout/Main";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDeviceNames } from "@/features/assets/use-device-names";
+import { DataGapBanner } from "@/features/data-gaps/DataGapBanner";
+import { dataGapsKeys } from "@/features/data-gaps/query";
 import { siteFindingsQuery } from "@/features/diagnostics/query";
 import { activeAlarmsQuery } from "@/features/alarms/alarm-api";
 import { sortAlarmsForOperators } from "@/features/alarms/alarm-presentation";
@@ -216,6 +218,7 @@ export function OverviewWorkspace() {
               onClick={() => {
                 refresh();
                 void queryClient.invalidateQueries({ queryKey: ["energy-series", site.id] });
+                void queryClient.invalidateQueries({ queryKey: dataGapsKeys.site(site.id) });
                 void alarms.refetch();
                 void workOrders.refetch();
                 void findings.refetch();
@@ -227,6 +230,7 @@ export function OverviewWorkspace() {
           </>
         }
       />
+      <DataGapBanner siteId={site.id} timeZone={site.timezone} context="overview" />
 
       <div className="grid items-stretch gap-4 @5xl/main:grid-cols-[minmax(0,1fr)_352px]">
         <div className="flex min-w-0 flex-col gap-4">

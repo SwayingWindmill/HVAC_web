@@ -288,6 +288,8 @@ export class Gateway {
   outdoorFailing = false;
   /** Machines whose sub-meter the recorded device breakdown leaves out. */
   unmeteredDeviceIds: readonly string[] = [];
+  /** Critical reading-gap items returned by `GET /api/v1/sites/{siteId}/data-gaps` (#799). */
+  dataGaps: Json[] = [];
   /** report-service's kept snapshots of closed months; a month without one answers 404. */
   reportSnapshots: Json[] = [];
   /** The Site's import Tariff in effect; null when none is assigned. */
@@ -902,6 +904,7 @@ export class Gateway {
       return { body: { status: 'ACTIVE', expiresAt: new Date(Date.now() + 90 * 86_400_000).toISOString() } };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: this.assetModel };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/data-gaps`) return { body: { items: this.dataGaps } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/tariff`) {
       return this.tariff ? { body: this.tariff } : {
         status: 404,

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import { ChevronRight, CircleCheck, RefreshCw } from 'lucide-react';
 import { PageHeader } from '@/blocks/page-header';
@@ -18,6 +18,8 @@ import { siteCommandsQuery } from '@/features/control/command-api';
 import { commandSummary, STATUS_PRESENTATION } from '@/features/control/command-presentation';
 import { CommandMark } from '@/features/control/components/CommandMark';
 import { commandLabels, controlTargets } from '@/features/control/control-model';
+import { DataGapBanner } from '@/features/data-gaps/DataGapBanner';
+import { dataGapsKeys } from '@/features/data-gaps/query';
 import { formatCompactTime, formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { coolingUncertaintyText, copUncertaintyText, equipmentStatus, plantReading, probeOffsetText, type PlantReading, type PlantView } from '../plant-model';
@@ -350,6 +352,7 @@ function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly t
 
 export function RealtimeWorkspace() {
   const { site, plant, mode, registry, current, currentUnavailable, refresh } = useRealtimePlant();
+  const queryClient = useQueryClient();
   const search = pageRoute.useSearch();
   const navigate = useNavigate({ from: '/operations/realtime' });
   const loading = registry.isPending || (current.isPending && current.fetchStatus !== 'idle');
@@ -374,12 +377,13 @@ export function RealtimeWorkspace() {
                 </Link>
               </Button>
             ) : null}
-            <Button variant="outline" onClick={refresh}>
+            <Button variant="outline" onClick={() => { refresh(); void queryClient.invalidateQueries({ queryKey: dataGapsKeys.site(site.id) }); }}>
               <RefreshCw aria-hidden="true" data-icon="inline-start" />刷新
             </Button>
           </>
         )}
       />
+      <DataGapBanner siteId={site.id} timeZone={site.timezone} />
 
       {registry.isError ? (
         <p className="rounded-lg border border-destructive-soft bg-destructive-soft/40 px-4 py-3 text-sm text-destructive-text">设备清单暂时读不到：{registry.error.message}</p>

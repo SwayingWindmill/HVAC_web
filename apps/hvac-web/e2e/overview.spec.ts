@@ -49,7 +49,75 @@ test('the overview compares today with yesterday, shows the live plant and open 
   await expect(saving).toContainText('预计节电 60 kWh/天');
   await expect(saving).toContainText('冷冻水供水 7.1 → 8.1 °C');
 
+  await expect(page.getByTestId('data-gap-banner')).toHaveCount(0);
+
   await alarm.click();
   await expect(page).toHaveURL(/\/operations\/alarms\?.*inspect=/);
   await expect(page.getByRole('region', { name: '告警详情' })).toContainText('冷冻水回水温度过低');
+});
+
+test('the overview shows synthesized sub-meter electricity and a data-gap banner linking to meter verification when a sub-meter stops reporting', async ({ page, gateway }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const recordedEnergy = JSON.parse(readFileSync(new URL('./fixtures/energy-series.json', import.meta.url), 'utf8'));
+  gateway.dataGaps = [
+    {
+      alarmId: '01a15000-0000-7000-8000-000000000001',
+      deviceId: '01a14000-4000-7000-8000-000000000004',
+      deviceName: 'D 机组电表',
+      pointId: '01a14000-5000-7000-8000-000000000011',
+      pointCode: 'active_energy_total',
+      pointName: '有功总电能',
+      since: '2026-11-08T08:13:00Z',
+      affectedFigures: ['空调用电', '综合能效', '估算电费'],
+      excludesDeviceFromTotal: true,
+    },
+  ];
+  gateway.energySeriesHandler = (query) => {
+    if (query.energyType !== 'electricity' || query.granularity !== 'hour' || query.breakdown === 'device') {
+      return undefined;
+    }
+    const DAY_MS = 86_400_000;
+    const recordedDay = Date.parse('2026-10-09T16:00:00Z');
+    const from = Date.parse(query.from);
+    const to = Date.parse(query.to);
+    const points = [];
+    for (let day = from; day < to; day += DAY_MS) {
+      const shift = day - recordedDay;
+      for (const point of recordedEnergy.electricity.points) {
+        points.push({
+          ...point,
+          periodStart: new Date(Date.parse(point.periodStart) + shift).toISOString(),
+          periodEnd: new Date(Date.parse(point.periodEnd) + shift).toISOString(),
+          incomplete: true,
+          missingMeters: ['D 机组电表'],
+        });
+      }
+    }
+    return {
+      body: {
+        ...recordedEnergy.electricity,
+        points,
+        metadata: {
+          ...recordedEnergy.electricity.metadata,
+          synthesized: true,
+        },
+      },
+    };
+  };
+
+  await page.goto(`/overview?site=${SITE_ID}`);
+
+  const banner = page.getByTestId('data-gap-banner');
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText('D 机组电表 11/8 16:13 起没有读数，今日空调用电不含这台');
+
+  const energy = page.getByRole('region', { name: '今日用能' });
+  await expect(energy.getByRole('tab', { name: /今日空调用电/ })).toContainText('918.9kWh');
+  await expect(energy.getByRole('tab', { name: /今日空调用电/ })).toContainText('不完整，缺 D 机组电表');
+
+  await banner.getByRole('link', { name: '电表数据核对' }).click();
+  await expect(page).toHaveURL(new RegExp(`/settings/integrations\\?.*site=${SITE_ID}.*view=meters|/settings/integrations\\?.*view=meters.*site=${SITE_ID}`));
+  await expect(page.getByRole('heading', { name: '集成管理' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: '电表数据核对' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('row').filter({ hasText: 'METER-HVAC-TOTAL' })).toBeVisible();
 });

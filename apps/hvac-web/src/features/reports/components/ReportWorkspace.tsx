@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton';
 import { METER_SCOPE_LABEL } from '@/features/billing/billing-model';
 import { siteUtilityBillsQuery } from '@/features/billing/query';
+import { DataGapBanner } from '@/features/data-gaps/DataGapBanner';
 import { siteFindingsQuery } from '@/features/diagnostics/query';
 import { relativeChange, summaryCostBuckets, wallTime } from '@/features/energy-analysis/consumption/model';
 import { measuresQuery, summaryQuery } from '@/features/savings/query';
@@ -29,6 +30,7 @@ const siteRoute = getRouteApi('/_app/_site');
 
 type ReportView = 'month' | 'year';
 const VIEWS = [{ value: 'month', label: '月报' }, { value: 'year', label: '年报' }];
+const sheetFrame = 'mx-auto w-full max-w-[1040px]';
 
 export function ReportWorkspace() {
   const { site } = siteRoute.useRouteContext();
@@ -91,12 +93,11 @@ export function ReportWorkspace() {
           </div>
         )}
       />
+      <DataGapBanner siteId={site.id} timeZone={site.timezone} className={sheetFrame} />
       {view === 'year' ? <YearlyReport key={year} year={year} now={now} /> : <MonthlyReport key={month} month={month} span={span} />}
     </Main>
   );
 }
-
-const sheetFrame = 'mx-auto w-full max-w-[1040px]';
 
 function ConfirmedUtilityBillsSidecar({ siteId, month }: { readonly siteId: string; readonly month: string }) {
   const confirmedBills = useQuery(siteUtilityBillsQuery(siteId, { billingMonth: month, status: 'CONFIRMED' }));
