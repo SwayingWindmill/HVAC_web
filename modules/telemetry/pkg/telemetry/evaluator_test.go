@@ -281,6 +281,60 @@ func TestEvaluatePresencePreservesLastKnownAndRequiresNamedDisconnect(t *testing
 	}
 }
 
+func TestCopiedReadingsDoNotKeepDeviceOnlineAndSweepStabilizesAtOffline(t *testing.T) {
+	base := time.Date(2026, 11, 8, 8, 13, 0, 0, time.UTC)
+	policy := &PresencePolicy{
+		Revision: 1, OnlineWithin: 150 * time.Second, OfflineAfter: 300 * time.Second,
+		AcceptedSignalTypes: []string{"SOURCE_ACTIVITY"},
+	}
+	facts := DeviceFacts{
+		DeviceID: deviceA, TenantID: tenantA, SiteID: siteA,
+		Applicability:  telemetryapi.PresenceApplicabilityApplicable,
+		PresencePolicy: policy,
+		Coverage:       Coverage{Available: true, ContinuousSince: ptrTime(base.Add(-time.Hour))},
+		PresenceSignals: []PresenceSignal{
+			{Type: "SOURCE_ACTIVITY", ObservedAt: base},
+		},
+		FreshnessPolicies: map[string]FreshnessPolicy{
+			"active_energy_total":     {Revision: 1, FreshFor: 10 * time.Minute, Configured: true},
+			"chw_leaving_temperature": {Revision: 1, FreshFor: 10 * time.Minute, Configured: true},
+		},
+		Latest: map[string]LatestObservation{
+			"active_energy_total": {
+				Value: json.RawMessage(`100`), ValueType: "NUMBER", Unit: ptrString("kWh"),
+				SampledAt: base, ReceivedAt: base, Quality: telemetryapi.TelemetryQualityGood,
+			},
+		},
+	}
+
+	online, err := EvaluateCanonical(facts, 1, base.Add(time.Minute))
+	if err != nil || !equalPresence(online.Snapshot.Presence.CurrentState, ptrPresence(telemetryapi.DevicePresenceStateOnline)) {
+		t.Fatalf("expected ONLINE at +1m, got %v err=%v", online.Snapshot.Presence.CurrentState, err)
+	}
+	facts.LastKnownPresence = online.Snapshot.Presence.LastKnown
+
+	// Copied readings keep updating Latest without emitting a new PresenceSignal.
+	atSixMinutes := base.Add(6 * time.Minute)
+	facts.Latest["chw_leaving_temperature"] = LatestObservation{
+		Value: json.RawMessage(`7.2`), ValueType: "NUMBER", Unit: ptrString("Cel"),
+		SampledAt: atSixMinutes, ReceivedAt: atSixMinutes, Quality: telemetryapi.TelemetryQualityGood,
+	}
+	offline, err := EvaluateCanonical(facts, 2, atSixMinutes)
+	if err != nil || !equalPresence(offline.Snapshot.Presence.CurrentState, ptrPresence(telemetryapi.DevicePresenceStateOffline)) {
+		t.Fatalf("expected OFFLINE after offline_after with only copied readings, got %v err=%v", offline.Snapshot.Presence.CurrentState, err)
+	}
+	facts.LastKnownPresence = offline.Snapshot.Presence.LastKnown
+
+	// Re-evaluating one minute later while still OFFLINE keeps the exact same StateDigest.
+	nextSweep, err := EvaluateCanonical(facts, 2, base.Add(7*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nextSweep.StateDigest != offline.StateDigest {
+		t.Fatalf("subsequent sweep while OFFLINE changed StateDigest: %s != %s", nextSweep.StateDigest, offline.StateDigest)
+	}
+}
+
 func cloneFacts(value DeviceFacts) DeviceFacts {
 	copyValue := value
 	copyValue.PresenceSignals = append([]PresenceSignal(nil), value.PresenceSignals...)

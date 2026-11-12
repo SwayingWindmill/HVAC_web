@@ -55,6 +55,7 @@ export const gateCommandMatrix = Object.freeze({
         './modules/telemetry/...',
         './modules/connectivity/...',
         './cmd/connectivity/...',
+        './cmd/telemetry-worker/...',
         './cmd/energy-api/...',
       ),
     ]),

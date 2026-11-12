@@ -51,6 +51,7 @@ export function pointQuality(point, profile, devicesByCode) {
   const named = point.qualityProfile ? profile.qualityProfiles?.[point.qualityProfile] : null;
   if (point.qualityProfile && !named) throw new Error(`point ${point.device?.code ?? '?'}/${point.code} names unknown quality profile ${point.qualityProfile}`);
   const checks = {};
+  if (point.from) checks.copied = true;
   if (named) {
     if (named.maxStep != null) checks.maxStep = named.maxStep;
     if (named.maxStepWindowSeconds != null) checks.maxStepWindowSeconds = named.maxStepWindowSeconds;
@@ -346,6 +347,11 @@ export function expandPoints(device, meterPoints) {
   return [...(device.points === 'meter' ? meterPoints : device.points), ...(device.morePoints ?? [])].map((point) => ({ ...point }));
 }
 
+// A device has presence only when at least one active point comes from the device itself.
+export function presenceApplicability(points) {
+  return points.some((point) => pointStatus(point) === 'ACTIVE' && !point.from) ? 'APPLICABLE' : 'NOT_APPLICABLE';
+}
+
 // The site file's devices with their points, each point with the row id it is registered under.
 function siteRows(profile) {
   const devices = profile.devices.map((device, deviceIndex) => ({ ...device, deviceIndex: deviceIndex + 1, points: expandPoints(device, profile.meterPoints) }));
@@ -436,7 +442,7 @@ COMMIT;`;
 
   // A Device is online while it reported within two of its sample periods. The Gateway's outbox
   // replays after an outage, so samples up to a day late are still accepted.
-  const runtimeDevices = devices.map((device) => `(${sqlLiteral(device.id)}, ${tenant}, ${siteId}, 'APPLICABLE', clock_timestamp())`).join(',\n');
+  const runtimeDevices = devices.map((device) => `(${sqlLiteral(device.id)}, ${tenant}, ${siteId}, ${sqlLiteral(presenceApplicability(device.points))}, clock_timestamp())`).join(',\n');
   const presence = devices.map((device) => `(${sqlLiteral(device.id)}, 1, ${device.sampleSeconds * 2 + 30}, ${device.sampleSeconds * 5}, true, ARRAY['SOURCE_ACTIVITY']::text[], 60, 86400, clock_timestamp())`).join(',\n');
   const devicesByCode = new Map(devices.map((device) => [device.code, device]));
   const freshness = points.map((point) => {
@@ -452,7 +458,7 @@ COMMIT;`;
 SET LOCAL ROLE s2_telemetry_migrator;
 INSERT INTO telemetry_runtime.devices (device_id, tenant_id, site_id, presence_applicability, updated_at) VALUES
 ${runtimeDevices}
-ON CONFLICT (device_id) ${updateWhenChanged('devices', [...fromFile('tenant_id', 'site_id'), ['presence_applicability', `'APPLICABLE'`]], { revision: false })};
+ON CONFLICT (device_id) ${updateWhenChanged('devices', fromFile('tenant_id', 'site_id', 'presence_applicability'), { revision: false })};
 
 INSERT INTO telemetry_runtime.presence_policies (device_id, policy_revision, online_within_seconds, offline_after_seconds, coverage_required, accepted_signal_types, max_future_clock_skew_seconds, max_source_lag_seconds, updated_at) VALUES
 ${presence}
