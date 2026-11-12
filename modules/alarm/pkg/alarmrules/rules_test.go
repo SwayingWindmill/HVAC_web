@@ -27,6 +27,7 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	}
 
 	byTitle := map[string]alarmservice.AlarmPolicyRevision{}
+	byAlarmType := map[string]alarmservice.AlarmPolicyRevision{}
 	for _, sitePolicy := range compiled.Policies {
 		policy := sitePolicy.Policy
 		policy.PolicyRevisionID = "01a14000-7a00-7000-8000-000000000001"
@@ -38,15 +39,60 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		if err := policy.Validate(); err != nil {
 			t.Fatalf("%s: %v", policy.Title, err)
 		}
+		if _, duplicate := byTitle[policy.Title]; duplicate {
+			t.Fatalf("duplicate policy title %q", policy.Title)
+		}
+		if _, duplicate := byAlarmType[policy.AlarmType]; duplicate {
+			t.Fatalf("duplicate policy alarmType %q", policy.AlarmType)
+		}
 		byTitle[policy.Title] = policy
+		byAlarmType[policy.AlarmType] = policy
 	}
 	// The supply-temperature rule, the four plant rules kept after 2026-11-10 (供水偏高、供水过低、
-	// 冷却水出水过高、机组运行无流量), 网关上报中断, one 读数长时间没有更新 per device with an active
-	// point (12, the room has no probe), the data-quality rules from each point's quality profile
-	// (a copied point is not alarmed again), the physics checks in the site file that carry an
-	// alarm over active points (16), and five probe-offset suggestions (header + chillers A–D).
-	if len(byTitle) != 101 {
+	// 冷却水出水过高、机组运行无流量), 网关上报中断, 15 critical-point reading-gap rules (#796: 5 meters ×
+	// 2, cooling meter × 2, header supply/return t16 & t18, main chilled-water flow), one
+	// 读数长时间没有更新 per device that still has non-critical own active points (9; meter-total has
+	// only critical points, cooling-tower and outdoor have only copied points, room has no probe),
+	// the data-quality rules from each point's quality profile, the physics checks over active
+	// points (16), and five probe-offset suggestions (header + chillers A–D).
+	if len(byTitle) != 113 {
 		t.Fatalf("got %d rules: %v", len(byTitle), keys(byTitle))
+	}
+
+	wantGaps := map[string]string{
+		"reading-gap/temperature-uid20/t16":               "温度采集模块：冷冻水总回水温度 1读数中断",
+		"reading-gap/temperature-uid20/t18":               "温度采集模块：冷冻水总供水温度 1读数中断",
+		"reading-gap/flow-uid10/flow_meter":               "总冷冻水流量计：总冷冻水流量读数中断",
+		"reading-gap/meter-uid5/power_total":              "A 机组电表：有功功率读数中断",
+		"reading-gap/meter-uid5/active_energy_total":      "A 机组电表：累计电量读数中断",
+		"reading-gap/meter-uid2/power_total":              "B 机组电表：有功功率读数中断",
+		"reading-gap/meter-uid2/active_energy_total":      "B 机组电表：累计电量读数中断",
+		"reading-gap/meter-uid3/power_total":              "C 机组电表：有功功率读数中断",
+		"reading-gap/meter-uid3/active_energy_total":      "C 机组电表：累计电量读数中断",
+		"reading-gap/meter-uid4/power_total":              "D 机组电表：有功功率读数中断",
+		"reading-gap/meter-uid4/active_energy_total":      "D 机组电表：累计电量读数中断",
+		"reading-gap/meter-total/power_total":             "空调总电表：空调总有功功率读数中断",
+		"reading-gap/meter-total/active_energy_total":     "空调总电表：空调总累计电量读数中断",
+		"reading-gap/btu-calc/instant_cooling_capacity":   "冷量计：瞬时制冷量读数中断",
+		"reading-gap/btu-calc/accumulated_cooling_energy": "冷量计：累计供冷量读数中断",
+	}
+	for code, wantTitle := range wantGaps {
+		gap, ok := byAlarmType[code]
+		if !ok {
+			t.Fatalf("missing critical-point reading-gap rule %s", code)
+		}
+		if gap.Title != wantTitle || gap.Severity != "MAJOR" || gap.FreshnessSeconds != 900 || gap.SourceReference != "alarm-rules:songyaxuan/"+code {
+			t.Fatalf("reading-gap rule %s mismatch: %#v", code, gap)
+		}
+		if gap.Raise.Kind != alarmservice.ConditionNoData || gap.Raise.AgeSeconds != 900 || len(gap.Raise.Children) != 0 {
+			t.Fatalf("reading-gap %s raise must be a single NO_DATA leaf: %#v", code, gap.Raise)
+		}
+		if gap.Clear.Kind != alarmservice.ConditionRange || gap.Clear.Input != gap.Raise.Input || len(gap.Clear.Children) != 0 {
+			t.Fatalf("reading-gap %s clear must be a single hasReading leaf on the same point: %#v", code, gap.Clear)
+		}
+		if strings.Contains(gap.Title+gap.Summary, "UID") {
+			t.Fatalf("reading-gap %s leaks raw UID wording: %q / %q", code, gap.Title, gap.Summary)
+		}
 	}
 
 	supply, ok := byTitle["冷冻水供水温度过高"]
@@ -61,15 +107,39 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		t.Fatalf("supply-temperature rule reads %v", got)
 	}
 
+	// #796: 读数长时间没有更新 watches only the device's own non-critical active points (neither copied
+	// temperatures nor critical meter readings); a single remaining point stands as a leaf predicate.
 	chillerC, ok := byTitle["C 机组电表读数长时间没有更新"]
 	if !ok || chillerC.Severity != "WARNING" {
 		t.Fatalf("no readings rule for C 机组电表: %v", keys(byTitle))
 	}
-	if got := inputs(chillerC.Raise); len(got) != 7 || !contains(got, "01a14000-4000-7000-8000-000000000005/cw_leaving_temperature") {
-		t.Fatalf("C 机组电表 readings rule reads %v", got)
+	if chillerC.Raise.Kind != alarmservice.ConditionNoData || chillerC.Clear.Kind != alarmservice.ConditionCompare {
+		t.Fatalf("single-point readings rule wrapped in compound condition: raise=%#v clear=%#v", chillerC.Raise, chillerC.Clear)
 	}
-	if !strings.Contains(chillerC.Summary, "超过 30 分钟没有更新") || !strings.Contains(chillerC.Summary, "冷却水出水温度") || strings.Contains(chillerC.Title+chillerC.Summary, "UID") {
-		t.Fatalf("C 机组电表 readings rule is not said plainly: %q / %q", chillerC.Title, chillerC.Summary)
+	if got := inputs(chillerC.Raise); !reflect.DeepEqual(got, []string{"01a14000-4000-7000-8000-000000000005/run_state"}) {
+		t.Fatalf("C 机组电表 readings rule should watch only run_state, got %v", got)
+	}
+	if !strings.Contains(chillerC.Summary, "超过 30 分钟没有更新") || !strings.Contains(chillerC.Summary, "运行状态") || strings.Contains(chillerC.Summary, "冷却水出水温度") || strings.Contains(chillerC.Summary, "累计电量") || strings.Contains(chillerC.Title+chillerC.Summary, "UID") {
+		t.Fatalf("C 机组电表 readings rule is not said plainly over own non-critical points: %q / %q", chillerC.Title, chillerC.Summary)
+	}
+	flowRest, ok := byTitle["总冷冻水流量计读数长时间没有更新"]
+	if !ok || flowRest.Raise.Kind != alarmservice.ConditionNoData || !reflect.DeepEqual(inputs(flowRest.Raise), []string{"01a14000-4000-7000-8000-000000000002/flow_velocity"}) {
+		t.Fatalf("flow meter readings rule should watch only flow_velocity as leaf: %#v", flowRest)
+	}
+	for _, omitted := range []string{"空调总电表读数长时间没有更新", "冷却塔读数长时间没有更新", "室外环境读数长时间没有更新", "房间读数长时间没有更新"} {
+		if _, exists := byTitle[omitted]; exists {
+			t.Fatalf("%s should not be emitted when device has 0 own non-critical active points", omitted)
+		}
+	}
+
+	// Publishing retires an old readings-not-updated rule whose device now has 0 own non-critical points.
+	legacyTotal := sitePolicy(compiled.SiteID, "songyaxuan", "readings-not-updated/meter-total", alarmservice.AlarmPolicyRevision{Title: "空调总电表读数长时间没有更新"})
+	plan, err := alarmservice.PlanSiteRules(compiled.Policies, append([]alarmservice.SiteRule{legacyTotal}, compiled.Policies...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Retired) != 1 || plan.Retired[0].AssignmentID != legacyTotal.AssignmentID {
+		t.Fatalf("expected legacy meter-total readings-not-updated rule to be retired, got %#v", plan.Retired)
 	}
 
 	// #615: the Site has stopped reporting when none of its 78 active points has a reading for 15 minutes
@@ -115,13 +185,31 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	}
 
 	module := inputs(byTitle["温度采集模块读数长时间没有更新"].Raise)
-	if len(module) != 18 || contains(module, "01a14000-4000-7000-8000-000000000001/t14") || contains(module, "01a14000-4000-7000-8000-000000000001/t20") {
-		t.Fatalf("temperature module readings rule watches inactive channels: %v", module)
+	if len(module) != 16 || contains(module, "01a14000-4000-7000-8000-000000000001/t14") || contains(module, "01a14000-4000-7000-8000-000000000001/t20") || contains(module, "01a14000-4000-7000-8000-000000000001/t16") || contains(module, "01a14000-4000-7000-8000-000000000001/t18") {
+		t.Fatalf("temperature module readings rule watches inactive or critical channels: %v", module)
 	}
 	for _, policy := range byTitle {
 		if raised := strings.Join(inputs(policy.Raise), " "); strings.Contains(raised, "/ambient_wet_bulb_temperature") || strings.Contains(raised, "/ambient_temperature_2") {
 			t.Fatalf("%s watches an outdoor reading no probe sends", policy.Title)
 		}
+	}
+
+	// All 78 active Site inputs fit within EvaluationSnapshot's 128-input cap, and every compiled
+	// Songyaxuan policy evaluates cleanly against a full Site snapshot.
+	now := time.Date(2026, 11, 8, 8, 0, 0, 0, time.UTC)
+	fullInputs := map[string]alarmservice.InputFact{}
+	for _, key := range inputs(silent.Raise) {
+		if strings.HasSuffix(key, "/run_state") {
+			fullInputs[key] = alarmservice.StringInput(key, "STOPPED", "GOOD", now.Format(time.RFC3339Nano))
+		} else {
+			fullInputs[key] = alarmservice.NumberInput(key, 20, "GOOD", now.Format(time.RFC3339Nano))
+		}
+	}
+	if len(fullInputs) != 78 {
+		t.Fatalf("expected 78 distinct Site inputs, got %d", len(fullInputs))
+	}
+	for _, policy := range byTitle {
+		_ = evaluate(t, policy, "full-site-1", fullInputs, alarmservice.AlarmEvaluationState{}, now)
 	}
 
 	again, err := Load(songyaxuanRules)
@@ -130,6 +218,191 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	}
 	if !reflect.DeepEqual(compiled, again) {
 		t.Fatal("compiling the same file twice gave different policies or ids")
+	}
+}
+
+// #796, the 2026-11-08 outage: B 机组电表 (UID 2) and 空调总电表 stopped sending their own energy
+// while copied temperatures kept arriving on UID 2 every minute. Even with UID 2's 运行状态 and
+// 有功功率 already in gaps open since 11-01, 累计电量 raises its own MAJOR reading-gap alarm after
+// 15 minutes, stays open while stale readings sit alongside fresh copied temperatures, and clears
+// cleanly once a fresh 累计电量 reading arrives.
+func TestCriticalPointReadingGapReproduces20261108OutageAndClears(t *testing.T) {
+	compiled, err := Load(songyaxuanRules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		uid2  = "01a14000-4000-7000-8000-000000000004"
+		total = "01a14000-4000-7000-8000-000000000008"
+	)
+	energy := published(t, compiled, "B 机组电表：累计电量读数中断")
+	power := published(t, compiled, "B 机组电表：有功功率读数中断")
+	deviceRest := published(t, compiled, "B 机组电表读数长时间没有更新")
+	totalEnergy := published(t, compiled, "空调总电表：空调总累计电量读数中断")
+
+	longGone := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	stopped := time.Date(2026, 11, 8, 8, 13, 0, 0, time.UTC) // 16:13 Beijing time
+
+	snapshotAt := func(at time.Time, energySampledAt time.Time, energyValue float64) map[string]alarmservice.InputFact {
+		facts := map[string]alarmservice.InputFact{}
+		// Copied temperatures keep arriving fresh every minute on UID 2.
+		for _, point := range []string{"chw_leaving_temperature", "chw_entering_temperature", "cw_entering_temperature", "cw_leaving_temperature"} {
+			facts[uid2+"/"+point] = alarmservice.NumberInput(uid2+"/"+point, 12.4, "GOOD", at.Format(time.RFC3339Nano))
+		}
+		// Power and run_state have had no new reading since 2026-11-01.
+		facts[uid2+"/power_total"] = alarmservice.NumberInput(uid2+"/power_total", 0, "STALE", longGone.Format(time.RFC3339Nano))
+		facts[uid2+"/run_state"] = alarmservice.StringInput(uid2+"/run_state", "STOPPED", "STALE", longGone.Format(time.RFC3339Nano))
+
+		energyQuality := "GOOD"
+		if !at.Before(energySampledAt.Add(15 * time.Minute)) {
+			energyQuality = "STALE"
+		}
+		facts[uid2+"/active_energy_total"] = alarmservice.NumberInput(uid2+"/active_energy_total", energyValue, energyQuality, energySampledAt.Format(time.RFC3339Nano))
+		facts[total+"/active_energy_total"] = alarmservice.NumberInput(total+"/active_energy_total", 210000+energyValue, energyQuality, energySampledAt.Format(time.RFC3339Nano))
+		return facts
+	}
+
+	// Both power reading-gap and run_state readings-not-updated are already open before 16:13,
+	// and fresh copied temperatures on UID 2 do not clear them.
+	powerOpen := evaluate(t, power, "rev-0", snapshotAt(stopped, stopped, 51234), alarmservice.AlarmEvaluationState{}, stopped)
+	if powerOpen.Effect != alarmservice.EvaluationEffectPublish || powerOpen.Publication.Severity != "MAJOR" {
+		t.Fatalf("power absent since 11-01 should have raised MAJOR: %#v", powerOpen)
+	}
+	restOpen := evaluate(t, deviceRest, "rev-0", snapshotAt(stopped, stopped, 51234), alarmservice.AlarmEvaluationState{}, stopped)
+	if restOpen.Effect != alarmservice.EvaluationEffectPublish || restOpen.Publication.Severity != "WARNING" {
+		t.Fatalf("run_state absent since 11-01 should have raised WARNING: %#v", restOpen)
+	}
+
+	// At 16:13 and 16:27 (+14m), neither UID 2 energy nor total-meter energy is overdue;
+	// total-meter arms NextEvaluationAt at 16:13 and receives no new snapshot revision after stopping.
+	initial := evaluate(t, energy, "rev-1", snapshotAt(stopped, stopped, 51234), alarmservice.AlarmEvaluationState{}, stopped)
+	if initial.Effect != alarmservice.EvaluationEffectNone || initial.State.NextEvaluationAt == nil {
+		t.Fatalf("fresh energy reading raised or scheduled no follow-up: %#v", initial)
+	}
+	totalInitial := evaluate(t, totalEnergy, "total-rev-1", snapshotAt(stopped, stopped, 51234), alarmservice.AlarmEvaluationState{}, stopped)
+	if totalInitial.Effect != alarmservice.EvaluationEffectNone || totalInitial.State.NextEvaluationAt == nil {
+		t.Fatalf("fresh total-meter energy raised or scheduled no follow-up: %#v", totalInitial)
+	}
+	beforeDue := stopped.Add(14 * time.Minute)
+	stillFresh := evaluate(t, energy, "rev-2", snapshotAt(beforeDue, stopped, 51234), initial.State, beforeDue)
+	if stillFresh.Effect != alarmservice.EvaluationEffectNone {
+		t.Fatalf("energy raised before 15 minutes: %#v", stillFresh)
+	}
+
+	// At 16:28 (+15m), UID 2 energy raises MAJOR reading-gap despite fresh copied temperatures and
+	// two already-open rules on UID 2, and silent total-meter raises MAJOR via due-evaluation with unchanged revision.
+	gapAt := stopped.Add(15 * time.Minute)
+	raised := evaluate(t, energy, "rev-3", snapshotAt(gapAt, stopped, 51234), stillFresh.State, gapAt)
+	if raised.Effect != alarmservice.EvaluationEffectPublish || raised.Publication == nil || raised.Publication.Severity != "MAJOR" || raised.Publication.AlarmType != "reading-gap/meter-uid2/active_energy_total" {
+		t.Fatalf("15 minutes without own energy reading did not raise MAJOR reading-gap: %#v", raised)
+	}
+	totalRaised := evaluate(t, totalEnergy, "total-rev-1", snapshotAt(gapAt, stopped, 51234), totalInitial.State, gapAt)
+	if totalRaised.Effect != alarmservice.EvaluationEffectPublish || totalRaised.Publication == nil || totalRaised.Publication.Severity != "MAJOR" {
+		t.Fatalf("silent total meter energy did not raise MAJOR reading-gap on due evaluation: %#v", totalRaised)
+	}
+
+	// At 16:35 (+22m), copied temperatures arrive again while energy remains stale: stays ACTIVE.
+	later := stopped.Add(22 * time.Minute)
+	stillInGap := evaluate(t, energy, "rev-4", snapshotAt(later, stopped, 51234), active(raised.State), later)
+	if stillInGap.Effect != alarmservice.EvaluationEffectNone {
+		t.Fatalf("stale energy reading with fresh copied temperatures cleared prematurely: %#v", stillInGap)
+	}
+
+	// At 16:40 (+27m), a fresh energy reading arrives: clears energy reading-gap while power and run_state stay open.
+	resumedAt := stopped.Add(27 * time.Minute)
+	cleared := evaluate(t, energy, "rev-5", snapshotAt(resumedAt, resumedAt, 51240), active(stillInGap.State), resumedAt)
+	if cleared.Effect != alarmservice.EvaluationEffectClear {
+		t.Fatalf("fresh energy reading did not clear reading-gap: %#v", cleared)
+	}
+	if powerStill := evaluate(t, power, "rev-5", snapshotAt(resumedAt, resumedAt, 51240), active(powerOpen.State), resumedAt); powerStill.Effect != alarmservice.EvaluationEffectNone {
+		t.Fatalf("energy recovery should not clear still-missing power reading-gap: %#v", powerStill)
+	}
+	if restStill := evaluate(t, deviceRest, "rev-5", snapshotAt(resumedAt, resumedAt, 51240), active(restOpen.State), resumedAt); restStill.Effect != alarmservice.EvaluationEffectNone {
+		t.Fatalf("energy recovery and copied temperatures should not clear still-missing run_state: %#v", restStill)
+	}
+}
+
+func TestReadingGapsMinimalConfigMorePointsAndEdgeCases(t *testing.T) {
+	directory := t.TempDir()
+	site := map[string]any{
+		"tenantId": "018f3d00-0000-7000-8000-000000000001",
+		"site":     map[string]any{"id": "01a14000-1000-7000-8000-000000000001", "code": "demo"},
+		"meterPoints": []any{
+			map[string]any{"code": "active_energy_total", "name": "累计电量", "valueType": "NUMBER", "critical": true},
+		},
+		"devices": []any{
+			// Device 1: meterPoints critical + critical morePoint + copied critical (ignored) + inactive critical (ignored) -> 0 non-critical own points.
+			map[string]any{
+				"id": "01a14000-4000-7000-8000-000000000001", "code": "meter-1", "name": "1 号电表（UID 1）", "points": "meter",
+				"morePoints": []any{
+					map[string]any{"code": "demand_kw", "name": "需量功率", "valueType": "NUMBER", "critical": true},
+					map[string]any{"code": "copied_temp", "name": "复制温度", "valueType": "NUMBER", "from": []any{"temp", "t1"}, "critical": true},
+					map[string]any{"code": "retired_energy", "name": "停用电量", "valueType": "NUMBER", "status": "INACTIVE", "critical": true},
+				},
+			},
+			// Device 2: 1 boolean critical point + 1 boolean non-critical own point -> leaf Clear/Raise valid.
+			map[string]any{
+				"id": "01a14000-4000-7000-8000-000000000002", "code": "valve-1", "name": "总管蝶阀",
+				"points": []any{
+					map[string]any{"code": "open_feedback", "name": "开到位状态", "valueType": "BOOLEAN", "critical": true},
+					map[string]any{"code": "fault_state", "name": "故障状态", "valueType": "BOOLEAN"},
+				},
+			},
+		},
+	}
+	siteBytes, _ := json.Marshal(site)
+	if err := os.WriteFile(filepath.Join(directory, "site.json"), siteBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Explicit readingGaps config exercising morePoints, boolean Clear/Raise, and ignoring copied/inactive critical points.
+	rulesBytes, _ := json.Marshal(map[string]any{
+		"schemaVersion":      1,
+		"siteFile":           "site.json",
+		"readingGaps":        map[string]any{"title": "{device}：{point}读数中断", "summary": "{device}：{point}（{minutes} 分钟）", "severity": "MAJOR", "ageSeconds": 900},
+		"readingsNotUpdated": map[string]any{"title": "{device}读数长时间没有更新", "summary": "{device}：{points}（{minutes} 分钟）", "severity": "WARNING", "ageSeconds": 1800},
+	})
+	rulesPath := filepath.Join(directory, "rules.json")
+	if err := os.WriteFile(rulesPath, rulesBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	compiled, err := Load(rulesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotTitles := map[string]alarmservice.AlarmPolicyRevision{}
+	for _, entry := range compiled.Policies {
+		policy := entry.Policy
+		policy.PolicyRevisionID, policy.Revision = "01a14000-7a00-7000-8000-000000000001", 1
+		policy.Digest, _ = alarmservice.AlarmPolicyDigest(policy)
+		if err := policy.Validate(); err != nil {
+			t.Fatalf("%s failed validation: %v", policy.Title, err)
+		}
+		gotTitles[policy.Title] = policy
+	}
+	wantTitles := []string{
+		"1 号电表：累计电量读数中断",
+		"1 号电表：需量功率读数中断",
+		"总管蝶阀：开到位状态读数中断",
+		"总管蝶阀读数长时间没有更新",
+	}
+	if len(gotTitles) != len(wantTitles) {
+		t.Fatalf("got policies %v, want %v", keys(gotTitles), wantTitles)
+	}
+	for _, title := range wantTitles {
+		if _, ok := gotTitles[title]; !ok {
+			t.Fatalf("missing expected policy %q in %v", title, keys(gotTitles))
+		}
+	}
+
+	// Omitting readingGaps when the site file marks active own points critical is refused rather than silently dropping them.
+	missingGapsPath := filepath.Join(directory, "rules-without-gaps.json")
+	missingGapsBytes, _ := json.Marshal(map[string]any{"schemaVersion": 1, "siteFile": "site.json"})
+	if err := os.WriteFile(missingGapsPath, missingGapsBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(missingGapsPath); err == nil || !strings.Contains(err.Error(), "readingGaps") {
+		t.Fatalf("expected error requiring readingGaps when critical points exist, got %v", err)
 	}
 }
 
@@ -198,25 +471,30 @@ func TestSongyaxuanRulesRaiseAndClearAsTheirWordingSays(t *testing.T) {
 	}
 	start := time.Date(2026, 10, 18, 10, 0, 0, 0, time.UTC)
 
-	// 读数长时间没有更新: raised while 冷却水出水温度 has no reading, cleared once every reading is fresh.
+	// 读数长时间没有更新: watches only own non-critical active points (run_state on C 机组电表);
+	// missing copied temperatures do not raise it, missing run_state raises and fresh run_state clears.
 	chillerC := published(t, compiled, "C 机组电表读数长时间没有更新")
-	meter := func(withLeavingWater bool) map[string]alarmservice.InputFact {
-		inputs := map[string]alarmservice.InputFact{}
-		for _, point := range []string{"power_total", "active_energy_total", "chw_leaving_temperature", "chw_entering_temperature", "cw_entering_temperature", "cw_leaving_temperature"} {
-			inputs[point] = alarmservice.NumberInput(point, 20, "GOOD", start.Format(time.RFC3339Nano))
+	meter := func(withRunState bool) map[string]alarmservice.InputFact {
+		inputs := map[string]alarmservice.InputFact{
+			"cw_leaving_temperature": {Key: "cw_leaving_temperature", Present: false},
+			"active_energy_total":    {Key: "active_energy_total", Present: false},
 		}
-		inputs["run_state"] = alarmservice.StringInput("run_state", "RUNNING", "GOOD", start.Format(time.RFC3339Nano))
-		if !withLeavingWater {
-			inputs["cw_leaving_temperature"] = alarmservice.InputFact{Key: "cw_leaving_temperature", Present: false}
+		if withRunState {
+			inputs["run_state"] = alarmservice.StringInput("run_state", "RUNNING", "GOOD", start.Format(time.RFC3339Nano))
+		} else {
+			inputs["run_state"] = alarmservice.InputFact{Key: "run_state", Present: false}
 		}
 		return prefixed("01a14000-4000-7000-8000-000000000005", inputs)
 	}
+	if unraised := evaluate(t, chillerC, "c-0", meter(true), alarmservice.AlarmEvaluationState{}, start); unraised.Effect != alarmservice.EvaluationEffectNone {
+		t.Fatalf("missing copied or critical points raised device readings-not-updated: %#v", unraised)
+	}
 	raised := evaluate(t, chillerC, "c-1", meter(false), alarmservice.AlarmEvaluationState{}, start)
 	if raised.Effect != alarmservice.EvaluationEffectPublish {
-		t.Fatalf("a point with no reading did not raise: %#v", raised)
+		t.Fatalf("own non-critical point with no reading did not raise: %#v", raised)
 	}
 	if cleared := evaluate(t, chillerC, "c-2", meter(true), active(raised.State), start.Add(time.Minute)); cleared.Effect != alarmservice.EvaluationEffectClear {
-		t.Fatalf("fresh readings did not clear: %#v", cleared)
+		t.Fatalf("fresh own non-critical reading did not clear: %#v", cleared)
 	}
 
 	// 冷冻水供水温度过高: 15 minutes above 10 ℃ with a chiller running; 9.5 ℃ is not yet recovered, 8.5 ℃ is.

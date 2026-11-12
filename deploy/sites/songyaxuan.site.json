@@ -170,7 +170,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30416",
-          "qualityProfile": "chilled-water"
+          "qualityProfile": "chilled-water",
+          "critical": true
         },
         {
           "code": "t17",
@@ -188,7 +189,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30418",
-          "qualityProfile": "chilled-water"
+          "qualityProfile": "chilled-water",
+          "critical": true
         },
         {
           "code": "t19",
@@ -225,7 +227,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID10 保持寄存器 1",
-          "qualityProfile": "flow-meter"
+          "qualityProfile": "flow-meter",
+          "critical": true
         },
         {
           "code": "flow_velocity",
@@ -675,7 +678,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "网关计算：1–4 号电表有功功率之和",
-          "qualityProfile": "power-meter"
+          "qualityProfile": "power-meter",
+          "critical": true
         },
         {
           "code": "active_energy_total",
@@ -684,7 +688,8 @@
           "unit": "kWh",
           "pointType": "COUNTER",
           "valueType": "NUMBER",
-          "address": "网关计算：1–4 号电表累计电量之和"
+          "address": "网关计算：1–4 号电表累计电量之和",
+          "critical": true
         }
       ],
       "derive": {
@@ -769,7 +774,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "网关计算：机组总功率 > 20 kW 时为 1.163 × 流量 × 温差，否则为 0",
-          "qualityProfile": "cooling-load"
+          "qualityProfile": "cooling-load",
+          "critical": true
         },
         {
           "code": "accumulated_cooling_energy",
@@ -779,7 +785,8 @@
           "pointType": "COUNTER",
           "valueType": "NUMBER",
           "address": "网关计算：瞬时制冷量对时间累加",
-          "qualityProfile": "cooling-counter"
+          "qualityProfile": "cooling-counter",
+          "critical": true
         }
       ]
     },
@@ -927,7 +934,8 @@
       "pointType": "TELEMETRY",
       "valueType": "NUMBER",
       "address": "保持寄存器 36",
-      "sourceKey": "chiller.power"
+      "sourceKey": "chiller.power",
+      "critical": true
     },
     {
       "code": "active_energy_total",
@@ -935,7 +943,8 @@
       "unit": "kWh",
       "pointType": "COUNTER",
       "valueType": "NUMBER",
-      "address": "保持寄存器 60"
+      "address": "保持寄存器 60",
+      "critical": true
     }
   ],
   "assets": [

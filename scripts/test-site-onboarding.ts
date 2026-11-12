@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
-  SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, checkSiteFile, planOnboarding, pointStatus, siteStateQuery, updateWhenChanged,
+  SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, checkSiteFile, expandPoints, planOnboarding, pointStatus, siteStateQuery, updateWhenChanged,
 } from './site-onboarding.mjs';
 
 const songyaxuan = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.site.json', import.meta.url), 'utf8'));
@@ -230,6 +230,33 @@ const byStatus = (items: any[], status: string) => items.filter((item) => item.s
 test('the songyaxuan manifest and its alarm rules pass the file check', () => {
   assert.deepEqual(checkSiteFile(songyaxuan, songyaxuanAlarmRules), []);
   assert.deepEqual(checkSiteFile(optimized, songyaxuanAlarmRules), []);
+  const meterPoints = expandPoints(songyaxuan.devices.find((device: any) => device.code === 'meter-uid2'), songyaxuan.meterPoints);
+  assert.equal(meterPoints.find((point: any) => point.code === 'active_energy_total')?.critical, true);
+  assert.equal(meterPoints.find((point: any) => point.code === 'power_total')?.critical, true);
+  assert.equal(meterPoints.find((point: any) => point.code === 'run_state')?.critical, undefined);
+});
+
+test('critical points must be active own readings and readingGaps must have positive ageSeconds', () => {
+  const profile = copy(songyaxuan);
+  const meter = profile.devices.find((device: any) => device.code === 'meter-uid2');
+  meter.morePoints.find((point: any) => point.code === 'chw_leaving_temperature').critical = true;
+  const temp = profile.devices.find((device: any) => device.code === 'temperature-uid20');
+  temp.points.find((point: any) => point.code === 't14').critical = true;
+  temp.points.find((point: any) => point.code === 't1').critical = 'yes';
+  const rules = copy(songyaxuanAlarmRules);
+  rules.readingGaps = { title: '', summary: '', severity: 'UNKNOWN', ageSeconds: 0 };
+  const problems = checkSiteFile(profile, rules).join('\n');
+  assert.match(problems, /meter-uid2\/chw_leaving_temperature: critical point/);
+  assert.match(problems, /temperature-uid20\/t14: critical point/);
+  assert.match(problems, /temperature-uid20\/t1: critical must be true or false/);
+  assert.match(problems, /readingGaps\.title/);
+  assert.match(problems, /readingGaps\.summary/);
+  assert.match(problems, /readingGaps\.ageSeconds/);
+  assert.match(problems, /readingGaps\.severity/);
+
+  const missingGaps = copy(songyaxuanAlarmRules);
+  delete missingGaps.readingGaps;
+  assert.match(checkSiteFile(songyaxuan, missingGaps).join('\n'), /readingGaps is required/);
 });
 
 test('the file check names alarm inputs, keys and fields that do not match the site', () => {

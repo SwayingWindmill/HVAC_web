@@ -29,6 +29,7 @@ type rulesFile struct {
 	Note               string           `json:"note"`
 	SiteFile           string           `json:"siteFile"`
 	Rules              []rule           `json:"rules"`
+	ReadingGaps        *readingsRule    `json:"readingGaps"`
 	ReadingsNotUpdated *readingsRule    `json:"readingsNotUpdated"`
 	ReportsInterrupted *readingsRule    `json:"reportsInterrupted"`
 	ReadingsFlat       *flatRule        `json:"readingsFlat"`
@@ -64,10 +65,12 @@ type rule struct {
 	Clear            alarmservice.Condition               `json:"clear"`
 }
 
-// readingsRule words a rule over the Site's own readings. readingsNotUpdated raises, per device,
-// when one of its active points has had no new reading for ageSeconds; reportsInterrupted raises
-// when none of the Site's active points has (#615). {device}, {points} and {minutes} in the
-// wording are the device and its points by name and ageSeconds in minutes.
+// readingsRule words a rule over the Site's own readings. readingGaps raises, per critical own
+// active point, when that point has had no new reading for ageSeconds (#796); readingsNotUpdated
+// raises, per device, when one of its remaining own active points has had no new reading for
+// ageSeconds; reportsInterrupted raises when none of the Site's active points has (#615). {device},
+// {point}, {points} and {minutes} in the wording are the device, the point or points by plain name
+// and ageSeconds in minutes.
 type readingsRule struct {
 	Title      string              `json:"title"`
 	Summary    string              `json:"summary"`
@@ -157,6 +160,7 @@ type sitePoint struct {
 	Unit           string          `json:"unit"`
 	ValueType      string          `json:"valueType"`
 	Status         string          `json:"status"`
+	Critical       bool            `json:"critical"`
 	From           json.RawMessage `json:"from"`
 	QualityProfile string          `json:"qualityProfile"`
 }
@@ -249,15 +253,47 @@ func Load(rulesPath string) (Compiled, error) {
 			RepeatCount: entry.RepeatCount, Raise: raise, Clear: clear,
 		}))
 	}
+	if gaps := rules.ReadingGaps; gaps != nil {
+		minutes := strconv.FormatInt(gaps.AgeSeconds/60, 10)
+		for _, code := range order {
+			entry := devices[code]
+			for _, point := range entry.points {
+				if !point.Critical || point.isCopied() {
+					continue
+				}
+				noData, fresh := watched(entry.id, []sitePoint{point}, gaps.AgeSeconds)
+				wording := strings.NewReplacer("{device}", entry.name, "{point}", plainName(point.Name), "{minutes}", minutes)
+				compiled.Policies = append(compiled.Policies, sitePolicy(site.Site.ID, site.Site.Code, "reading-gap/"+code+"/"+point.Code, alarmservice.AlarmPolicyRevision{
+					Title: wording.Replace(gaps.Title), Summary: wording.Replace(gaps.Summary), Severity: gaps.Severity,
+					QualityPolicy: alarmservice.EvaluationQualityUsable, FreshnessSeconds: gaps.AgeSeconds, TriggerMode: alarmservice.TriggerSimple,
+					Raise: noData[0], Clear: fresh[0],
+				}))
+			}
+		}
+	} else {
+		for _, code := range order {
+			for _, point := range devices[code].points {
+				if point.Critical && !point.isCopied() {
+					return Compiled{}, fmt.Errorf("%s: critical point %s/%s requires readingGaps", rulesPath, code, point.Code)
+				}
+			}
+		}
+	}
 	if readings := rules.ReadingsNotUpdated; readings != nil {
 		for _, code := range order {
 			entry := devices[code]
-			if len(entry.points) == 0 {
+			var nonCriticalOwn []sitePoint
+			for _, point := range entry.points {
+				if !point.isCopied() && !point.Critical {
+					nonCriticalOwn = append(nonCriticalOwn, point)
+				}
+			}
+			if len(nonCriticalOwn) == 0 {
 				continue
 			}
-			noData, fresh := watched(entry, readings.AgeSeconds)
+			noData, fresh := watched(entry.id, nonCriticalOwn, readings.AgeSeconds)
 			var names []string
-			for _, point := range entry.points {
+			for _, point := range nonCriticalOwn {
 				names = append(names, plainName(point.Name))
 			}
 			wording := strings.NewReplacer("{device}", entry.name, "{points}", strings.Join(names, "、"), "{minutes}", strconv.FormatInt(readings.AgeSeconds/60, 10))
@@ -277,7 +313,7 @@ func Load(rulesPath string) (Compiled, error) {
 			if len(entry.points) == 0 {
 				continue
 			}
-			deviceNoData, deviceFresh := watched(entry, silence.AgeSeconds)
+			deviceNoData, deviceFresh := watched(entry.id, entry.points, silence.AgeSeconds)
 			noData = append(noData, either(alarmservice.ConditionAnd, deviceNoData))
 			fresh = append(fresh, either(alarmservice.ConditionOr, deviceFresh))
 		}
@@ -302,7 +338,7 @@ func Load(rulesPath string) (Compiled, error) {
 		for _, code := range order {
 			entry := devices[code]
 			for _, point := range entry.points {
-				if point.Unit != flat.Unit || len(point.From) > 0 {
+				if point.Unit != flat.Unit || point.isCopied() {
 					continue
 				}
 				if profile := site.QualityProfiles[point.QualityProfile]; point.QualityProfile != "" && (profile.FlatlineSeconds != nil || profile.FlatlineRunningSeconds != nil) {
@@ -362,10 +398,17 @@ func resolve(condition alarmservice.Condition, devices map[string]device) (alarm
 	return alarmservice.Condition{}, fmt.Errorf("%s is not an active point of the site file", condition.Input)
 }
 
-// watched is, for each of a device's active points, "no reading for ageSeconds" and "has a reading".
-func watched(entry device, ageSeconds int64) (noData, fresh []alarmservice.Condition) {
-	for _, point := range entry.points {
-		input := entry.id + "/" + point.Code
+// isCopied reports whether a point is copied from another device's channel ("from") rather than
+// read by this device itself.
+func (point sitePoint) isCopied() bool {
+	trimmed := bytes.TrimSpace(point.From)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+}
+
+// watched is, for each of the given points on deviceID, "no reading for ageSeconds" and "has a reading".
+func watched(deviceID string, points []sitePoint, ageSeconds int64) (noData, fresh []alarmservice.Condition) {
+	for _, point := range points {
+		input := deviceID + "/" + point.Code
 		noData = append(noData, alarmservice.Condition{Kind: alarmservice.ConditionNoData, Input: input, AgeSeconds: ageSeconds})
 		fresh = append(fresh, hasReading(input, point.ValueType))
 	}
@@ -402,7 +445,7 @@ func appendDataQuality(compiled *Compiled, section *dataQualityFile, site siteFi
 	for _, code := range order {
 		entry := devices[code]
 		for _, point := range entry.points {
-			if point.QualityProfile == "" || len(point.From) > 0 {
+			if point.QualityProfile == "" || point.isCopied() {
 				continue
 			}
 			profile, ok := site.QualityProfiles[point.QualityProfile]
