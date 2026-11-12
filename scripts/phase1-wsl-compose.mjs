@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -106,6 +107,27 @@ function databaseUrl(role, database) {
   return url.toString();
 }
 
+function cubeModelDigest(modelRoot) {
+  const hash = createHash('sha256');
+  function visit(currentDir, relativePrefix) {
+    const entries = readdirSync(currentDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const relativePath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        visit(fullPath, relativePath);
+      } else if (entry.isFile()) {
+        hash.update(relativePath);
+        hash.update('\0');
+        hash.update(readFileSync(fullPath));
+        hash.update('\0');
+      }
+    }
+  }
+  visit(modelRoot, '');
+  return hash.digest('hex');
+}
+
 const env = {
   ...process.env,
   COMPOSE_PROFILES: '',
@@ -114,6 +136,7 @@ const env = {
   PHASE1_OBSERVABILITY_CONFIG: deploymentTier.profiles[0].replace(/^observability-/, ''),
   PHASE1_ENV_FILE: runtimeEnv,
   PHASE1_RUNTIME_DIR: runtimeDir,
+  CUBE_MODEL_DIGEST: cubeModelDigest(path.join(repoRoot, 'semantic', 'cube')),
   ...(sourceDeploy ? { HVAC_WEB_BUILD_ID: sourceRevision } : {}),
   IDENTITY_DATABASE_URL: databaseUrl('identity_runtime', 'hvac_identity'),
   IDENTITY_ADMIN_DATABASE_URL: databaseUrl('identity_admin', 'hvac_identity'),

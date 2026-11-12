@@ -213,6 +213,56 @@ func TestPostgresStoreResolvesEffectivePrimaryElectricityCounterBinding(t *testi
 	}
 }
 
+func TestPostgresStoreGetSiteTotalElectricitySourcesResolvesOrderedSubMetersAndEnforcesRLS(t *testing.T) {
+	ctx, store := openRegistryWriterIntegrationStore(t)
+
+	claims := integrationClaims(registryauth.ActionSiteRead)
+	claims.AllowedSiteIDs = []string{testSiteA1, testSiteA2}
+
+	synthesized, err := store.GetSiteTotalElectricitySources(ctx, claims, testSiteA1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !synthesized.Synthesized || synthesized.SiteID != testSiteA1 || len(synthesized.SubMeters) != 2 {
+		t.Fatalf("synthesized total electricity sources = %#v", synthesized)
+	}
+	if synthesized.SubMeters[0] != (SiteTotalSubMeter{
+		PointID:   "01990000-1340-7000-8000-000000000020",
+		DeviceID:  testDeviceA1,
+		MeterName: "Controller 1",
+		Ordinal:   0,
+	}) || synthesized.SubMeters[1] != (SiteTotalSubMeter{
+		PointID:   "01990000-1340-7000-8000-000000000001",
+		DeviceID:  testDeviceA1,
+		MeterName: "Controller 1",
+		Ordinal:   1,
+	}) {
+		t.Fatalf("ordered sub-meters = %#v", synthesized.SubMeters)
+	}
+
+	httpClaims := integrationClaims(registryauth.ActionMeterBindingResolve)
+	httpClaims.AllowedSiteIDs = []string{testSiteA1}
+	harness := newCoreHarness(t, time.Now().UTC(), store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	httpResp := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites/"+testSiteA1+"/total-electricity-sources", httpClaims, nil)
+	if httpResp.Code != http.StatusOK {
+		t.Fatalf("HTTP status = %d; body=%s", httpResp.Code, httpResp.Body.String())
+	}
+
+	plainSite, err := store.GetSiteTotalElectricitySources(ctx, claims, testSiteA2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plainSite.Synthesized || plainSite.SiteID != testSiteA2 || plainSite.SubMeters == nil || len(plainSite.SubMeters) != 0 {
+		t.Fatalf("non-synthesized Site sources = %#v", plainSite)
+	}
+
+	deniedClaims := claims
+	deniedClaims.DeniedSiteIDs = []string{testSiteA1}
+	if _, err := store.GetSiteTotalElectricitySources(ctx, deniedClaims, testSiteA1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("denied Site error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestPostgresBackedServerRejectsWrongActionStaleAndRevokedGrants(t *testing.T) {
 	databaseURL := os.Getenv("S1_CORE_DATABASE_URL")
 	if databaseURL == "" {

@@ -937,6 +937,7 @@ services:
       CUBEJS_API_SECRET: ${QUERY_CUBE_API_SECRET:?QUERY_CUBE_API_SECRET is required}
       CUBEJS_DEV_MODE: "false"
       CUBEJS_TELEMETRY: "false"
+      CUBE_MODEL_DIGEST: "${CUBE_MODEL_DIGEST:-}"
     volumes:
       - ../../../semantic/cube:/cube/conf:ro
     expose: ["4000"]

@@ -639,6 +639,23 @@ try {
     runtimeRls: topologyRls,
   };
 
+  psql(`
+    INSERT INTO core_registry.virtual_meters (
+      id, tenant_id, site_id, topology_version_id, virtual_meter_code, display_name,
+      energy_type_id, direction, calculation_type, version, effective_from, status, revision, created_at, updated_at
+    ) VALUES (
+      '01990000-1370-7000-8000-000000000003', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001',
+      '${topologyVersionId}', 'site_total_electricity', 'Site Total Electricity', '${electricityEnergyTypeId}',
+      'IMPORT', 'SUM', 1, '2026-08-01T00:00:00Z', 'ACTIVE', 1, now(), now()
+    );
+    INSERT INTO core_registry.virtual_meter_sources (
+      id, tenant_id, site_id, topology_version_id, energy_type_id, virtual_meter_id,
+      source_type, source_meter_binding_id, coefficient, ordinal, revision, created_at, updated_at
+    ) VALUES
+      ('01990000-1380-7000-8000-000000000010', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', '${electricityEnergyTypeId}', '01990000-1370-7000-8000-000000000003', 'METER_BINDING', '01990000-1360-7000-8000-000000000020', 1, 0, 1, now(), now()),
+      ('01990000-1380-7000-8000-000000000011', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', '${topologyVersionId}', '${electricityEnergyTypeId}', '01990000-1370-7000-8000-000000000003', 'METER_BINDING', '${meterBindingId}', 1, 1, 1, now(), now());
+  `);
+
   const settlementBoundaryId = '01990000-1400-7000-8000-000000000001';
   const tariffId = '01990000-1410-7000-8000-000000000001';
   const tariffVersion1 = '01990000-1420-7000-8000-000000000001';
