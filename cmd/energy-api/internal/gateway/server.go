@@ -235,6 +235,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 			dispatchReportRoute(h, writer, request, reportRoute)
 			return
 		}
+		if siteID, matches := matchPublicDataGapsRoute(request.URL.Path); matches {
+			dispatchDataGapsRoute(h, writer, request, siteID)
+			return
+		}
 		if intelligenceRoute, matches := matchPublicIntelligenceRoute(request.Method, request.URL.Path); matches {
 			dispatchIntelligenceRoute(h, writer, request, intelligenceRoute)
 			return

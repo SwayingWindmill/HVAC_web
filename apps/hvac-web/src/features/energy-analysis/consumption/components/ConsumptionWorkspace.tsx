@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getRouteApi, useNavigate, useSearch } from "@tanstack/react-router";
 import { Download, ReceiptText, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -18,6 +18,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CategoryTrend, destinationCsv, EnergyDestination } from "@/features/breakdown/components/EnergyDestination";
 import { useAssistantPanel } from "@/features/assistant/assistant-panel-store";
 import { useEnergyBreakdown } from "@/features/breakdown/query";
+import { DataGapBanner } from "@/features/data-gaps/DataGapBanner";
+import { dataGapsKeys } from "@/features/data-gaps/query";
 import { TouCostDetail } from "@/features/tariff/components/TouCostDetail";
 import { siteTariffQuery } from "@/features/tariff/query";
 import { PERIOD_LABEL, sumCosts, type PeriodCode, type TouCost } from "@/features/tariff/tariff-model";
@@ -71,6 +73,7 @@ const tariffCodes = (tariff: SiteTariff) => PERIOD_ORDER.filter((code) => tariff
 
 export function ConsumptionWorkspace() {
   const { site } = siteRoute.useRouteContext();
+  const queryClient = useQueryClient();
   const search = useSearch({ from: "/_app/_site/energy-analysis/consumption" });
   const navigate = useNavigate({ from: "/energy-analysis/consumption" });
   const period: EnergyPeriod = search.period ?? "today";
@@ -139,7 +142,7 @@ export function ConsumptionWorkspace() {
               ) : null}
             </span>
             <PeriodTabs aria-label="统计期间" options={PERIOD_OPTIONS} value={period} onValueChange={(value) => setSearch({ period: value as EnergyPeriod })} />
-            <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => { void query.refetch(); void destination.query.refetch(); void destination.previous.refetch(); }}>
+            <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => { void query.refetch(); void destination.query.refetch(); void destination.previous.refetch(); void queryClient.invalidateQueries({ queryKey: dataGapsKeys.site(site.id) }); }}>
               <RefreshCw />
             </Button>
             <Button variant="outline" disabled={!comparison?.buckets.length} onClick={exportCsv}>
@@ -149,6 +152,7 @@ export function ConsumptionWorkspace() {
           </>
         }
       />
+      <DataGapBanner siteId={site.id} timeZone={site.timezone} />
       {query.isPending ? (
         <Skeleton className="h-[440px] rounded-xl" />
       ) : query.isError || !comparison ? (

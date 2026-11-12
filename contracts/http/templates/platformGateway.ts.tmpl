@@ -810,6 +810,22 @@ export const confirmUtilityBillRequestSchema = z.object({
   meta: mutationMetaSchema,
 }).strict();
 
+export const siteDataGapSchema = z.object({
+  alarmId: userAdminUUIDv7,
+  deviceId: userAdminUUIDv7,
+  deviceName: z.string().min(1).max(256),
+  pointId: userAdminUUIDv7,
+  pointCode: z.string().min(1).max(128),
+  pointName: z.string().min(1).max(256),
+  since: z.string().datetime(),
+  affectedFigures: z.array(z.string().min(1).max(64)),
+  excludesDeviceFromTotal: z.boolean(),
+}).strict();
+
+export const siteDataGapListSchema = z.object({
+  items: z.array(siteDataGapSchema),
+}).strict();
+
 export const fieldErrorSchema = z.object({ field: z.string(), message: z.string() }).strict();
 export const registryProblemCodes = [
   'RESOURCE_NOT_FOUND', 'CURSOR_INVALID', 'REGISTRY_UNAVAILABLE', 'REGISTRY_TIMEOUT', 'MAPPING_INVALID', 'MAPPING_QUARANTINED',
@@ -901,6 +917,8 @@ export type UtilityBillList = z.infer<typeof utilityBillListSchema>;
 export type UtilityBillMutation = z.infer<typeof utilityBillMutationSchema>;
 export type ConfirmUtilityBillRequest = z.infer<typeof confirmUtilityBillRequestSchema>;
 export type UtilityBillsParams = { billingMonth?: string; meterScope?: UtilityBillMeterScope; status?: UtilityBillStatus };
+export type SiteDataGap = z.infer<typeof siteDataGapSchema>;
+export type SiteDataGapList = z.infer<typeof siteDataGapListSchema>;
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
 export type RegistryListParams = { limit?: number; cursor?: string };
 
@@ -1194,6 +1212,11 @@ export function createPlatformGatewayClient(baseUrl = '') {
       confirmUtilityBillRequestSchema,
       utilityBillSchema,
       { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
+    ),
+    listSiteDataGaps: (siteId: string, init?: RequestInit) => request(
+      '__SITE_DATA_GAPS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)),
+      siteDataGapListSchema,
+      { ...init, method: 'GET' },
     ),
   };
 }

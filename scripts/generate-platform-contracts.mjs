@@ -149,6 +149,7 @@ const expectedOperations = {
   createSiteUtilityBill: ['post', '/api/v1/sites/{siteId}/utility-bills'],
   updateSiteUtilityBill: ['put', '/api/v1/sites/{siteId}/utility-bills/{billId}'],
   confirmSiteUtilityBill: ['post', '/api/v1/sites/{siteId}/utility-bills/{billId}/confirm'],
+  listSiteDataGaps: ['get', '/api/v1/sites/{siteId}/data-gaps'],
 };
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {
@@ -188,6 +189,7 @@ const expectedSuccessSchemas = {
   listSiteUtilityBills: 'UtilityBillList',
   updateSiteUtilityBill: 'UtilityBill',
   confirmSiteUtilityBill: 'UtilityBill',
+  listSiteDataGaps: 'SiteDataGapList',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
@@ -243,6 +245,11 @@ const schemaRequirements = {
   SiteAssetModel: [['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts'], ['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts']],
   SiteTariff: [['siteId', 'displayName', 'version', 'effectiveFrom', 'timezone', 'currency', 'periods'], ['siteId', 'displayName', 'version', 'effectiveFrom', 'timezone', 'currency', 'periods']],
   TariffPeriod: [['periodCode', 'dayType', 'startMinute', 'endMinute', 'energyRatePerKWh', 'demandRatePerKW'], ['periodCode', 'dayType', 'startMinute', 'endMinute', 'energyRatePerKWh', 'demandRatePerKW']],
+  SiteDataGap: [
+    ['alarmId', 'deviceId', 'deviceName', 'pointId', 'pointCode', 'pointName', 'since', 'affectedFigures', 'excludesDeviceFromTotal'],
+    ['alarmId', 'deviceId', 'deviceName', 'pointId', 'pointCode', 'pointName', 'since', 'affectedFigures', 'excludesDeviceFromTotal'],
+  ],
+  SiteDataGapList: [['items'], ['items']],
   FieldError: [['field', 'message'], ['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
 };
@@ -393,6 +400,7 @@ const replacements = {
   __SITE_UTILITY_BILLS_PATH__: operations.listSiteUtilityBills.path,
   __SITE_UTILITY_BILL_PATH__: operations.updateSiteUtilityBill.path,
   __SITE_UTILITY_BILL_CONFIRM_PATH__: operations.confirmSiteUtilityBill.path,
+  __SITE_DATA_GAPS_PATH__: operations.listSiteDataGaps.path,
 };
 
 function render(template) {

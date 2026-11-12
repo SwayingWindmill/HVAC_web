@@ -162,12 +162,16 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		writeProblem(writer, request, statusCode, "CORE_REGISTRY_GRANT_REJECTED", "The Registry delegation grant is not authorized for this query.", false)
 		return
 	}
+	requiredAction := route.action
+	if route.resource == "total-electricity-sources" && len(claims.Actions) == 1 && claims.Actions[0] == registryauth.ActionAssetModelRead {
+		requiredAction = registryauth.ActionAssetModelRead
+	}
 	if err := registryauth.ValidateGrant(claims, registryauth.GrantValidation{
 		Now:                   server.now(),
 		Issuer:                server.grantIssuer,
 		Presenter:             peerSPIFFE,
 		Audience:              server.audience,
-		Action:                route.action,
+		Action:                requiredAction,
 		CurrentPolicyRevision: claims.PolicyRevision,
 		IsRevoked:             func(string) (bool, error) { return false, nil },
 	}); err != nil {
@@ -186,7 +190,7 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		Issuer:                server.grantIssuer,
 		Presenter:             peerSPIFFE,
 		Audience:              server.audience,
-		Action:                route.action,
+		Action:                requiredAction,
 		CurrentPolicyRevision: grantStatus.CurrentPolicyRevision,
 		IsRevoked: func(string) (bool, error) {
 			return grantStatus.Revoked, nil

@@ -2493,6 +2493,26 @@
           "default": { "$ref": "#/components/responses/Problem" }
         }
       }
+    },
+    "/api/v1/sites/{siteId}/data-gaps": {
+      "get": {
+        "operationId": "listSiteDataGaps",
+        "summary": "List active critical-point reading gaps for a Site and the Site-level figures they affect",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-gateway",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "responses": {
+          "200": { "description": "Active critical-point reading gaps for the Site.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteDataGapList" } } } },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
     }
   },
   "components": {
@@ -4635,6 +4655,39 @@
         "properties": {
           "note": { "type": "string", "maxLength": 1000 },
           "meta": { "$ref": "#/components/schemas/RegistryMutationMeta" }
+        }
+      },
+      "SiteDataGap": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "alarmId", "deviceId", "deviceName", "pointId", "pointCode",
+          "pointName", "since", "affectedFigures", "excludesDeviceFromTotal"
+        ],
+        "properties": {
+          "alarmId": { "$ref": "#/components/schemas/UUIDv7" },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "deviceName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "pointId": { "$ref": "#/components/schemas/UUIDv7" },
+          "pointCode": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "pointName": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "since": { "type": "string", "format": "date-time" },
+          "affectedFigures": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+          },
+          "excludesDeviceFromTotal": { "type": "boolean" }
+        }
+      },
+      "SiteDataGapList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/SiteDataGap" }
+          }
         }
       },
       "FieldError": {

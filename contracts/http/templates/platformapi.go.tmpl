@@ -38,6 +38,7 @@ const (
 	GetAlarmPathTemplate                  = "__ALARM_PATH__"
 	AckAlarmPathTemplate                  = "__ALARM_ACK_PATH__"
 	AssignAlarmPathTemplate               = "__ALARM_ASSIGN_PATH__"
+	ListSiteDataGapsPathTemplate          = "__SITE_DATA_GAPS_PATH__"
 )
 
 type BuildInfo struct {
@@ -394,6 +395,22 @@ type TariffPeriod struct {
 	DemandRatePerKW  float64 `json:"demandRatePerKW"`
 }
 
+type SiteDataGap struct {
+	AlarmID                 string   `json:"alarmId"`
+	DeviceID                string   `json:"deviceId"`
+	DeviceName              string   `json:"deviceName"`
+	PointID                 string   `json:"pointId"`
+	PointCode               string   `json:"pointCode"`
+	PointName               string   `json:"pointName"`
+	Since                   string   `json:"since"`
+	AffectedFigures         []string `json:"affectedFigures"`
+	ExcludesDeviceFromTotal bool     `json:"excludesDeviceFromTotal"`
+}
+
+type SiteDataGapList struct {
+	Items []SiteDataGap `json:"items"`
+}
+
 type FieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
@@ -562,6 +579,11 @@ func (c *Client) ListSiteDeviceBindings(ctx context.Context, siteID string, para
 func (c *Client) GetSiteAssetModel(ctx context.Context, siteID string) (*Response[SiteAssetModel], error) {
 	path := strings.Replace(GetSiteAssetModelPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
 	return doJSON[SiteAssetModel](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
+}
+
+func (c *Client) ListSiteDataGaps(ctx context.Context, siteID string) (*Response[SiteDataGapList], error) {
+	path := strings.Replace(ListSiteDataGapsPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	return doJSON[SiteDataGapList](ctx, c.httpClient, http.MethodGet, c.baseURL+path, "", nil)
 }
 
 func (c *Client) GetDevice(ctx context.Context, deviceID string) (*Response[Device], error) {
