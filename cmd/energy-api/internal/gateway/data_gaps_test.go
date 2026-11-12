@@ -373,10 +373,10 @@ func newDataGapsTestHandler(
 				Audience: "telemetry-runtime-service", PrincipalID: "01a14000-9000-7000-8000-000000000001",
 				SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, TenantID: tenantID,
 				ActorChain: []telemetryauth.Actor{{Service: "platform-gateway", SPIFFEID: "spiffe://hvac.local/platform-gateway"}},
-				Action: input.Action, ScopeDigest: scopeDigest, TargetCount: len(canonical), KeyCount: keyCount,
+				Action:     input.Action, ScopeDigest: scopeDigest, TargetCount: len(canonical), KeyCount: keyCount,
 				PolicyRevision: "telemetry:1", SessionID: parent.SessionID, ParentTokenID: parent.TokenID,
 				RequestID: request.Header.Get("X-Request-ID"), TraceID: traceIDFromTraceparent(request.Header.Get("Traceparent")),
-				Route: telemetryPublicRoute(input.Action),
+				Route:    telemetryPublicRoute(input.Action),
 				IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: randomURLToken(16),
 			}
 			return telemetryJSONResponse(http.StatusOK, telemetryauth.DecisionResponse{
@@ -476,7 +476,7 @@ func newDataGapsTestHandler(
 		Identity: &IdentityConfig{
 			OIDCIssuer: "https://issuer.example.test", OIDCClientID: "client",
 			OIDCRedirectURI: "https://web.example.test/api/v1/auth/callback",
-			PublicOrigin: "https://web.example.test", IAMURL: "https://iam.example.test", IAMAudience: "iam-service",
+			PublicOrigin:    "https://web.example.test", IAMURL: "https://iam.example.test", IAMAudience: "iam-service",
 			ExecutingWorkloadSPIFFE: "spiffe://hvac.local/platform-gateway", PolicyRevision: "identity-policy-1",
 			DelegationSigner: signer, TokenEncryptionKey: make([]byte, 32), SessionStore: sessions,
 			SessionTTL: time.Hour, DelegationTTL: 30 * time.Second, IAMHTTPClient: iamClient,
@@ -510,4 +510,3 @@ func newDataGapsTestHandler(
 func dataGapsStringPtr(value string) *string {
 	return &value
 }
-
