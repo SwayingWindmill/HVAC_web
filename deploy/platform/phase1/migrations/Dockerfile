@@ -86,6 +86,7 @@ COPY infra/registry/postgres/init/033-fdd-operating-gates.sql /opt/hvac/repo/inf
 COPY infra/registry/postgres/init/034-operating-schedules.sql /opt/hvac/repo/infra/registry/postgres/init/034-operating-schedules.sql
 COPY infra/registry/postgres/init/035-electricity-budgets-and-utility-bills.sql /opt/hvac/repo/infra/registry/postgres/init/035-electricity-budgets-and-utility-bills.sql
 COPY infra/registry/postgres/init/036-asset-nameplate.sql /opt/hvac/repo/infra/registry/postgres/init/036-asset-nameplate.sql
+COPY services/notification-service/migrations/005_reading_gap_reminders.sql /opt/hvac/repo/services/notification-service/migrations/005_reading_gap_reminders.sql
 
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
@@ -123,6 +124,7 @@ COPY modules/alarm/migrations/011_s28_evaluation_event_retention.sql /opt/hvac/r
 COPY modules/alarm/migrations/012_s29_reading_unchanged_since.sql /opt/hvac/repo/modules/alarm/migrations/012_s29_reading_unchanged_since.sql
 COPY modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql /opt/hvac/repo/modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql
 COPY modules/alarm/migrations/014_s31_retired_site_rules.sql /opt/hvac/repo/modules/alarm/migrations/014_s31_retired_site_rules.sql
+COPY modules/alarm/migrations/015_s32_reading_gap_escalation.sql /opt/hvac/repo/modules/alarm/migrations/015_s32_reading_gap_escalation.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql

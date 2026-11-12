@@ -3,6 +3,7 @@ package notificationservice
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -157,15 +158,165 @@ func (worker *WeChatReminderWorker) dailyMessage(ctx context.Context, claim clai
 	if electricity != nil && cooling != nil && *electricity > 0 {
 		efficiency = fmt.Sprintf("%.2f", *cooling / *electricity)
 	}
+	projectLabel := clip(site.Name, 20)
+	gapCode := "-"
+	openGaps, err := worker.openReadingGapsAt(ctx, claim.person.TenantID, claim.siteID, now)
+	if err != nil {
+		return WeChatMessage{}, err
+	}
+	if len(openGaps) > 0 {
+		projectLabel = formatDailyGapThing1(site.Name, openGaps, now)
+		gapCode = formatDailyGapCode(openGaps, location, now)
+	}
 	return WeChatMessage{
 		TemplateID: worker.DailyTemplateID,
 		Page:       "pages/overview/index",
 		Data: map[string]string{
-			"thing1":            clip(site.Name, 20),
+			"thing1":            projectLabel,
 			"character_string2": kWh(cooling),
 			"character_string3": kWh(electricity),
 			"character_string4": efficiency,
-			"character_string5": "-",
+			"character_string5": gapCode,
 		},
 	}, nil
+}
+
+type openReadingGap struct {
+	subject         string
+	criticalPoint   bool
+	firstOccurredAt time.Time
+}
+
+func (worker *WeChatReminderWorker) openReadingGapsAt(ctx context.Context, tenantID, siteID string, now time.Time) ([]openReadingGap, error) {
+	rows, err := worker.Scheduler.pool.Query(ctx, `
+SELECT alarm_type, title, first_occurred_at
+FROM notification_runtime.open_reading_gap_alarm
+WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND condition = 'ACTIVE' AND first_occurred_at <= $3
+ORDER BY first_occurred_at ASC, alarm_id ASC`, tenantID, siteID, now.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("read open reading-gap Alarms: %w", err)
+	}
+	defer rows.Close()
+	indexBySubject := map[string]int{}
+	var gaps []openReadingGap
+	for rows.Next() {
+		var alarmType, title string
+		var firstOccurredAt time.Time
+		if err := rows.Scan(&alarmType, &title, &firstOccurredAt); err != nil {
+			return nil, err
+		}
+		subject := readingGapSubject(title)
+		critical := strings.HasPrefix(strings.TrimSpace(alarmType), "reading-gap/")
+		if idx, exists := indexBySubject[subject]; exists {
+			// A critical-point reading gap represents the meter's own active measurement gap; do not
+			// let an older non-critical point mask its start time on the same meter.
+			if critical && !gaps[idx].criticalPoint {
+				gaps[idx].criticalPoint = true
+				gaps[idx].firstOccurredAt = firstOccurredAt.UTC()
+			}
+			continue
+		}
+		indexBySubject[subject] = len(gaps)
+		gaps = append(gaps, openReadingGap{subject: subject, criticalPoint: critical, firstOccurredAt: firstOccurredAt.UTC()})
+	}
+	return gaps, rows.Err()
+}
+
+func readingGapDurationLabels(elapsed time.Duration) (zhLabel, asciiCode string) {
+	if elapsed < time.Hour {
+		minutes := max(1, int(elapsed.Round(time.Minute)/time.Minute))
+		return fmt.Sprintf("断%d分", minutes), fmt.Sprintf("%dm", minutes)
+	}
+	if elapsed < 24*time.Hour {
+		hours := max(1, int(elapsed.Round(time.Hour)/time.Hour))
+		return fmt.Sprintf("断%d小时", hours), fmt.Sprintf("%dh", hours)
+	}
+	days := max(1, int((elapsed+12*time.Hour)/(24*time.Hour)))
+	return fmt.Sprintf("断%d天", days), fmt.Sprintf("%dd", days)
+}
+
+// formatDailyGapThing1 fits Site name, open meter names, and open duration inside WeChat thing1's
+// 20-character cap by clipping the Site/meter prefix first so the duration suffix is never chopped.
+func formatDailyGapThing1(siteName string, openGaps []openReadingGap, now time.Time) string {
+	zhDuration, _ := readingGapDurationLabels(now.Sub(openGaps[0].firstOccurredAt))
+	if len(openGaps) > 1 {
+		subjects := make([]string, 0, len(openGaps))
+		for _, gap := range openGaps {
+			subjects = append(subjects, gap.subject)
+		}
+		joinedFull := fmt.Sprintf("%s·%s%s", siteName, strings.Join(subjects, "、"), zhDuration)
+		if len([]rune(joinedFull)) <= 20 {
+			return joinedFull
+		}
+	}
+	tail := zhDuration
+	if len(openGaps) > 1 {
+		tail = fmt.Sprintf("等%d台%s", len(openGaps), zhDuration)
+	}
+	full := fmt.Sprintf("%s·%s%s", siteName, openGaps[0].subject, tail)
+	if len([]rune(full)) <= 20 {
+		return full
+	}
+	tailRunes := len([]rune(tail))
+	// Reserve 1 rune for "·" plus tailRunes; split remaining budget between Site and meter subject.
+	budget := 20 - 1 - tailRunes
+	if budget <= 2 {
+		return clip(openGaps[0].subject+tail, 20)
+	}
+	subjectBudget := min(len([]rune(openGaps[0].subject)), max(4, (budget*2)/3))
+	siteBudget := max(2, budget-subjectBudget)
+	subjectPart := clip(openGaps[0].subject, min(len([]rune(openGaps[0].subject)), 20-1-tailRunes-min(len([]rune(siteName)), siteBudget)))
+	sitePart := clip(siteName, 20-1-tailRunes-len([]rune(subjectPart)))
+	return fmt.Sprintf("%s·%s%s", sitePart, subjectPart, tail)
+}
+
+// formatDailyGapCode formats start times and open durations into WeChat character_string5 (max 32
+// ASCII characters: digits, letters, and punctuation).
+func formatDailyGapCode(openGaps []openReadingGap, location *time.Location, now time.Time) string {
+	if len(openGaps) == 1 {
+		_, asciiDur := readingGapDurationLabels(now.Sub(openGaps[0].firstOccurredAt))
+		return fmt.Sprintf("GAP-%s-%s", openGaps[0].firstOccurredAt.In(location).Format("01/02-15:04"), asciiDur)
+	}
+	parts := make([]string, 0, len(openGaps))
+	for _, gap := range openGaps {
+		_, asciiDur := readingGapDurationLabels(now.Sub(gap.firstOccurredAt))
+		parts = append(parts, fmt.Sprintf("%s-%s", gap.firstOccurredAt.In(location).Format("01/02-15:04"), asciiDur))
+	}
+	joined := strings.Join(parts, ",")
+	if len(joined) <= 32 {
+		return joined
+	}
+	// Fit as many individual meter start/duration entries as possible within 32 ASCII chars.
+	kept := parts[0]
+	for i := 1; i < len(parts); i++ {
+		restSuffix := fmt.Sprintf("+%d", len(parts)-i)
+		candidate := kept + "," + parts[i]
+		if i+1 < len(parts) && len(candidate)+len(fmt.Sprintf("+%d", len(parts)-i-1)) <= 32 {
+			kept = candidate
+			continue
+		}
+		if i+1 == len(parts) && len(candidate) <= 32 {
+			return candidate
+		}
+		if len(kept)+len(restSuffix) <= 32 {
+			return kept + restSuffix
+		}
+		break
+	}
+	return kept + fmt.Sprintf("+%d", len(parts)-1)
+}
+
+func readingGapSubject(title string) string {
+	trimmed := strings.TrimSpace(title)
+	if before, _, ok := strings.Cut(trimmed, "："); ok && strings.TrimSpace(before) != "" {
+		trimmed = strings.TrimSpace(before)
+	} else {
+		for _, suffix := range []string{"读数长时间没有更新", "读数中断"} {
+			if candidate := strings.TrimSpace(strings.TrimSuffix(trimmed, suffix)); candidate != "" {
+				trimmed = candidate
+				break
+			}
+		}
+	}
+	return strings.Join(strings.Fields(trimmed), "")
 }

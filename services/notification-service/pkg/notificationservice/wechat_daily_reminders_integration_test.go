@@ -1,8 +1,11 @@
 package notificationservice
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 )
 
 // The daily WeChat summary (#664, docs/specs/miniprogram-wechat.md): after 8 in the morning, Site
@@ -95,5 +98,106 @@ func TestPostgresNoDailySummaryAfterNoon(t *testing.T) {
 	fixture.run(siteNoonThirty)
 	if len(fixture.sentTo(duty.Subject)) != 0 || fixture.leftDaily(duty) != 1 {
 		t.Fatal("a summary went out after noon at the Site")
+	}
+}
+
+// #800: an open reading-gap Alarm appears in the 08:00 Site-local daily summary with its meter,
+// local start time, and open day count, and disappears once recovered.
+func TestPostgresDailySummaryIncludesOpenReadingGapsWithDaysAndClearsWhenRecovered(t *testing.T) {
+	fixture := newReminderFixture(t)
+	gapSiteID := fixture.uuid()
+	duty := fixture.dailyPerson("duty", 2, gapSiteID)
+	fixture.decider.allowedDaily[duty.Subject] = true
+	fixture.worker.Energy = fakeEnergy{
+		days: map[string][2]float64{
+			"2026-10-21 Asia/Shanghai": {1691, 7402},
+			"2026-10-22 Asia/Shanghai": {1720, 7510},
+		},
+	}
+
+	gapAlarmID := fixture.uuid()
+	secondGapID := fixture.uuid()
+	startedAt := siteEightOh1.Add(-48*time.Hour + 10*time.Minute) // 2026-10-20 08:11 Asia/Shanghai -> rounds to 2 days at 10-22 08:01
+	secondStartedAt := siteEightOh1.Add(-24 * time.Hour)          // 2026-10-21 08:01 Asia/Shanghai -> 1 day
+	if err := fixture.store.RecordAlarmEvent(context.Background(), AlarmEvent{
+		TenantID: alarmReminderTenantID, SiteID: gapSiteID, SourceEventID: fixture.uuid(),
+		AlarmID: gapAlarmID, IncidentCorrelationID: gapAlarmID, Action: AlarmCreated,
+		CurrentSeverity: alarmmodel.SeverityMajor, PeakSeverity: alarmmodel.SeverityMajor,
+		Condition: alarmmodel.ConditionActive, OccurredAt: startedAt,
+		Attributes: map[string]string{
+			"alarmType":       "reading-gap/meter-uid2/active-energy",
+			"title":           "D 机组电表：读数长时间没有更新",
+			"firstOccurredAt": startedAt.UTC().Format(time.RFC3339Nano),
+		},
+	}, startedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.RecordAlarmEvent(context.Background(), AlarmEvent{
+		TenantID: alarmReminderTenantID, SiteID: gapSiteID, SourceEventID: fixture.uuid(),
+		AlarmID: secondGapID, IncidentCorrelationID: secondGapID, Action: AlarmCreated,
+		CurrentSeverity: alarmmodel.SeverityMajor, PeakSeverity: alarmmodel.SeverityMajor,
+		Condition: alarmmodel.ConditionActive, OccurredAt: secondStartedAt,
+		Attributes: map[string]string{
+			"alarmType":       "reading-gap/meter-uid3/active-energy",
+			"title":           "A 机组电表：读数长时间没有更新",
+			"firstOccurredAt": secondStartedAt.UTC().Format(time.RFC3339Nano),
+		},
+	}, secondStartedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture.run(siteEightOh1)
+	messages := fixture.sentTo(duty.Subject)
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 daily summary with open reading gaps, got %d", len(messages))
+	}
+	if got, want := messages[0].Data["thing1"], "松雅轩·D机组电表、A机组电表断2天"; got != want {
+		t.Fatalf("thing1 = %q, want %q", got, want)
+	}
+	if got, want := messages[0].Data["character_string5"], "10/20-08:11-2d,10/21-08:01-1d"; got != want {
+		t.Fatalf("character_string5 = %q, want %q", got, want)
+	}
+
+	recoveredAt := siteEightOh1.Add(2 * time.Hour)
+	for _, clearedID := range []string{gapAlarmID, secondGapID} {
+		if err := fixture.store.RecordAlarmEvent(context.Background(), AlarmEvent{
+			TenantID: alarmReminderTenantID, SiteID: gapSiteID, SourceEventID: fixture.uuid(),
+			AlarmID: clearedID, IncidentCorrelationID: clearedID, Action: AlarmCleared,
+			CurrentSeverity: alarmmodel.SeverityMajor, PeakSeverity: alarmmodel.SeverityMajor,
+			Condition: alarmmodel.ConditionCleared, OccurredAt: recoveredAt,
+			Attributes: map[string]string{
+				"alarmType":       "reading-gap/meter-uid2/active-energy",
+				"title":           "D 机组电表：读数长时间没有更新",
+				"firstOccurredAt": startedAt.UTC().Format(time.RFC3339Nano),
+			},
+		}, recoveredAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An out-of-order CREATED replay from before recovery must not resurrect a cleared gap.
+	if err := fixture.store.RecordAlarmEvent(context.Background(), AlarmEvent{
+		TenantID: alarmReminderTenantID, SiteID: gapSiteID, SourceEventID: fixture.uuid(),
+		AlarmID: gapAlarmID, IncidentCorrelationID: gapAlarmID, Action: AlarmCreated,
+		CurrentSeverity: alarmmodel.SeverityMajor, PeakSeverity: alarmmodel.SeverityMajor,
+		Condition: alarmmodel.ConditionActive, OccurredAt: startedAt,
+		Attributes: map[string]string{
+			"alarmType":       "reading-gap/meter-uid2/active-energy",
+			"title":           "D 机组电表：读数长时间没有更新",
+			"firstOccurredAt": startedAt.UTC().Format(time.RFC3339Nano),
+		},
+	}, recoveredAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture.run(siteEightOh1.Add(24 * time.Hour))
+	messages = fixture.sentTo(duty.Subject)
+	if len(messages) != 2 {
+		t.Fatalf("expected second day's summary after recovery, got %d", len(messages))
+	}
+	if got, want := messages[1].Data["thing1"], "松雅轩"; got != want {
+		t.Fatalf("recovered thing1 = %q, want %q", got, want)
+	}
+	if got, want := messages[1].Data["character_string5"], "-"; got != want {
+		t.Fatalf("recovered character_string5 = %q, want %q", got, want)
 	}
 }

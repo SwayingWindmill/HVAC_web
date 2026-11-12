@@ -305,6 +305,54 @@ func RecordOccurrence(alarm Alarm, input OccurrenceInput) (Alarm, error) {
 	return result, result.Validate()
 }
 
+// IsReadingGapType reports whether alarmType is a point-level or device-level reading-gap Alarm
+// ("reading-gap/<device>/<point>" or "readings-not-updated/<device>", docs/specs/data-gap-alerting.md).
+func IsReadingGapType(alarmType string) bool {
+	trimmed := strings.TrimSpace(alarmType)
+	return strings.HasPrefix(trimmed, "reading-gap/") || strings.HasPrefix(trimmed, "readings-not-updated/")
+}
+
+type EscalateSeverityInput struct {
+	Severity      Severity
+	Reason        string
+	ActorType     string
+	ActorID       string
+	CorrelationID string
+	OccurredAt    string
+}
+
+// EscalateSeverity raises an active, unacknowledged Alarm to a higher severity and records the
+// escalation on its timeline without advancing occurrence counters.
+func EscalateSeverity(alarm Alarm, input EscalateSeverityInput) (Alarm, error) {
+	if err := alarm.Validate(); err != nil {
+		return Alarm{}, err
+	}
+	if alarm.Condition != ConditionActive || alarm.Acknowledgement != nil || !validSeverity(input.Severity) || severityRank(input.Severity) <= severityRank(alarm.CurrentSeverity) {
+		return Alarm{}, ErrInvalidTransition
+	}
+	if !validBoundedText(input.Reason, 256) || !validAuditInput(input.ActorType, input.ActorID, alarm.RuleRevision, input.CorrelationID) {
+		return Alarm{}, ErrInvalidOperation
+	}
+	canonicalOccurredAt, err := canonicalInstant(input.OccurredAt)
+	if err != nil {
+		return Alarm{}, ErrInvalidOperation
+	}
+	updated, _ := time.Parse(time.RFC3339Nano, alarm.UpdatedAt)
+	parsed, _ := time.Parse(time.RFC3339Nano, canonicalOccurredAt)
+	if parsed.Before(updated) {
+		return Alarm{}, ErrInvalidOperation
+	}
+	result := cloneAlarm(alarm)
+	result.CurrentSeverity = input.Severity
+	if severityRank(input.Severity) > severityRank(result.PeakSeverity) {
+		result.PeakSeverity = input.Severity
+	}
+	result.UpdatedAt = canonicalOccurredAt
+	result.Version++
+	appendTimeline(&result, OperationPublish, strings.TrimSpace(input.Reason), input.ActorType, input.ActorID, result.RuleRevision, input.CorrelationID, canonicalOccurredAt, nil, nil)
+	return result, result.Validate()
+}
+
 func ClearIncident(alarm Alarm, input ClearInput) (Alarm, error) {
 	if err := alarm.Validate(); err != nil {
 		return Alarm{}, err

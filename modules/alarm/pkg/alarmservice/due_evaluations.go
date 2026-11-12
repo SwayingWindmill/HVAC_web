@@ -41,8 +41,8 @@ func RunScheduledEvaluations(ctx context.Context, store *PostgresStore, logger *
 			if err != nil {
 				logger.Error("alarm_due_evaluations_failed", "error_code", "ALARM_DUE_EVALUATIONS_FAILED", "error", err, "failed", result.Failed)
 			}
-			if result.Raised+result.Cleared > 0 {
-				logger.Info("alarm_due_evaluations", "evaluated", result.Evaluated, "raised", result.Raised, "cleared", result.Cleared)
+			if result.Raised+result.Cleared+result.Escalated > 0 {
+				logger.Info("alarm_due_evaluations", "evaluated", result.Evaluated, "raised", result.Raised, "cleared", result.Cleared, "escalated", result.Escalated)
 			}
 			pruned, err := store.PruneExpiredEvaluationEvidence(ctx)
 			if err != nil {
@@ -60,6 +60,7 @@ type DueEvaluationResult struct {
 	Evaluated int
 	Raised    int
 	Cleared   int
+	Escalated int
 	Failed    int
 }
 
@@ -108,19 +109,25 @@ func (store *PostgresStore) RunDueEvaluations(ctx context.Context, workerID stri
 		if err != nil {
 			result.Failed++
 			failures = append(failures, err)
-			continue
+		} else {
+			for _, claim := range claims {
+				decision, err := store.EvaluateClaim(tenantContext, claim, now)
+				if errors.Is(err, ErrEvaluationClaimLost) {
+					continue
+				}
+				if err != nil {
+					result.Failed++
+					failures = append(failures, err)
+					continue
+				}
+				result.count(decision)
+			}
 		}
-		for _, claim := range claims {
-			decision, err := store.EvaluateClaim(tenantContext, claim, now)
-			if errors.Is(err, ErrEvaluationClaimLost) {
-				continue
-			}
-			if err != nil {
-				result.Failed++
-				failures = append(failures, err)
-				continue
-			}
-			result.count(decision)
+		escalated, err := store.escalateUnacknowledgedReadingGaps(tenantContext, tenantID, now)
+		result.Escalated += escalated
+		if err != nil {
+			result.Failed++
+			failures = append(failures, err)
 		}
 	}
 	return result, errors.Join(failures...)

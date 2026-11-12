@@ -306,6 +306,70 @@ func TestPostgresOnlyNewUrgentAndImportantAlarmsAreReminded(t *testing.T) {
 	}
 }
 
+// #800: a reading-gap Alarm that starts as WARNING sends nothing initially, then sends once as
+// 重要 when escalated after 24h unacknowledged; one that starts as MAJOR sends once as 重要 and
+// sends once more as 紧急 when escalated after 24h unacknowledged.
+func TestPostgresReadingGap24HourEscalationPushesOnceAtTheEscalatedSeverity(t *testing.T) {
+	fixture := newReminderFixture(t)
+	duty := fixture.person("duty", 5)
+	fixture.decider.allowed[duty.Subject] = true
+
+	warningGapID := fixture.uuid()
+	majorGapID := fixture.uuid()
+	gapSiteID := fixture.uuid()
+	startedAt := fixture.base
+
+	recordGap := func(alarmID string, action AlarmAction, severity alarmmodel.Severity, alarmType, title string, occurredAt time.Time) {
+		t.Helper()
+		event := AlarmEvent{
+			TenantID: alarmReminderTenantID, SiteID: gapSiteID, SourceEventID: fixture.uuid(),
+			AlarmID: alarmID, IncidentCorrelationID: alarmID, Action: action,
+			CurrentSeverity: severity, PeakSeverity: severity, Condition: alarmmodel.ConditionActive,
+			OccurredAt: occurredAt,
+			Attributes: map[string]string{
+				"alarmType":       alarmType,
+				"title":           title,
+				"firstOccurredAt": startedAt.UTC().Format(time.RFC3339Nano),
+			},
+		}
+		if err := fixture.store.RecordAlarmEvent(context.Background(), event, occurredAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	recordGap(warningGapID, AlarmCreated, alarmmodel.SeverityWarning, "reading-gap/chiller-a/supply-temp", "A 机组：读数长时间没有更新", startedAt)
+	recordGap(majorGapID, AlarmCreated, alarmmodel.SeverityMajor, "reading-gap/meter-uid2/active-energy", "D 机组电表：读数长时间没有更新", startedAt)
+	fixture.run(startedAt.Add(time.Minute))
+
+	initial := fixture.sentTo(duty.Subject)
+	if len(initial) != 1 || initial[0].Page != "pages/alarm/index?id="+majorGapID || initial[0].Data["short_thing15"] != "重要" {
+		t.Fatalf("expected only initial MAJOR reading-gap reminder, got %#v", initial)
+	}
+
+	escalatedAt := startedAt.Add(24 * time.Hour)
+	recordGap(warningGapID, AlarmSeverityChanged, alarmmodel.SeverityMajor, "reading-gap/chiller-a/supply-temp", "A 机组：读数长时间没有更新", escalatedAt)
+	recordGap(majorGapID, AlarmSeverityChanged, alarmmodel.SeverityCritical, "reading-gap/meter-uid2/active-energy", "D 机组电表：读数长时间没有更新", escalatedAt)
+	// Replaying the same escalated severity must not push twice.
+	recordGap(warningGapID, AlarmSeverityChanged, alarmmodel.SeverityMajor, "reading-gap/chiller-a/supply-temp", "A 机组：读数长时间没有更新", escalatedAt)
+	recordGap(majorGapID, AlarmSeverityChanged, alarmmodel.SeverityCritical, "reading-gap/meter-uid2/active-energy", "D 机组电表：读数长时间没有更新", escalatedAt)
+	fixture.run(escalatedAt.Add(time.Minute))
+
+	messages := fixture.sentTo(duty.Subject)
+	if len(messages) != 3 {
+		t.Fatalf("expected 3 total reminders (1 initial + 2 escalations), got %d: %#v", len(messages), messages)
+	}
+	escalatedByPage := map[string]WeChatMessage{}
+	for _, msg := range messages[1:] {
+		escalatedByPage[msg.Page] = msg
+	}
+	if msg, ok := escalatedByPage["pages/alarm/index?id="+warningGapID]; !ok || msg.Data["short_thing15"] != "重要" || msg.Data["time2"] != "2026年10月21日 16:00" {
+		t.Fatalf("WARNING -> MAJOR reading-gap escalation was not pushed with start time2 and 重要: %#v", escalatedByPage)
+	}
+	if msg, ok := escalatedByPage["pages/alarm/index?id="+majorGapID]; !ok || msg.Data["short_thing15"] != "紧急" || msg.Data["time2"] != "2026年10月21日 16:00" {
+		t.Fatalf("MAJOR -> CRITICAL reading-gap escalation was not pushed with start time2 and 紧急: %#v", escalatedByPage)
+	}
+}
+
 func TestPostgresWeChatRefusingOrNoWeChatClearsTheReminders(t *testing.T) {
 	fixture := newReminderFixture(t)
 	refusing, unbound := fixture.person("refusing", 3), fixture.person("unbound", 2)
