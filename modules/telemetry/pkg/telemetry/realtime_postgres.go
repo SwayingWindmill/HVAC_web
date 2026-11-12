@@ -319,10 +319,12 @@ LIMIT $3
 		if payload.ChangedKeys == nil {
 			payload.ChangedKeys = snapshotTelemetryKeys(payload.Snapshot)
 		}
+		copiedKeys := make([]string, len(payload.ChangedKeys))
+		copy(copiedKeys, payload.ChangedKeys)
 		result = append(result, PendingPublication{
 			EventID: eventID, DeviceID: deviceID, PreviousRevision: payload.PreviousRevision,
 			Revision: payload.Revision, EvaluatedAt: evaluatedAt.UTC(), Snapshot: payload.Snapshot,
-			ChangedKeys: append([]string(nil), payload.ChangedKeys...),
+			ChangedKeys: copiedKeys,
 		})
 		eventIDs = append(eventIDs, eventID)
 	}

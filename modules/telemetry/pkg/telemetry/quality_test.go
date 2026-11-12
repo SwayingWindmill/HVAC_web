@@ -180,6 +180,14 @@ func TestParseQualityChecks(t *testing.T) {
 	if err != nil || empty != nil {
 		t.Fatalf("empty=%+v err=%v", empty, err)
 	}
+	copiedOnly, err := parseQualityChecks([]byte(`{"copied":true}`))
+	if err != nil || copiedOnly == nil || !copiedOnly.Copied {
+		t.Fatalf("copiedOnly=%+v err=%v", copiedOnly, err)
+	}
+	notCopied, err := parseQualityChecks([]byte(`{"copied":false}`))
+	if err != nil || notCopied != nil {
+		t.Fatalf("notCopied=%+v err=%v", notCopied, err)
+	}
 	if _, err := parseQualityChecks([]byte(`[`)); err == nil {
 		t.Fatal("invalid JSON was accepted")
 	}

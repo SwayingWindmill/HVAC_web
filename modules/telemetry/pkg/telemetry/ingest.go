@@ -243,7 +243,7 @@ func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts,
 	decision.Status = ObservationAccepted
 	decision.ReevaluateSnapshot = true
 	decision.ReplaceLatest = true
-	decision.EmitPresenceSignal = true
+	decision.EmitPresenceSignal = facts.Policy.QualityChecks == nil || !facts.Policy.QualityChecks.Copied
 	return decision
 }
 

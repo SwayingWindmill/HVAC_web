@@ -29,6 +29,7 @@ const valueEquality = 0.0001
 
 // QualityChecks is the optional per-point configuration stored on the freshness policy.
 type QualityChecks struct {
+	Copied          bool
 	MaxStep         *float64
 	MaxStepWindow   time.Duration
 	Sentinels       []float64
@@ -444,6 +445,7 @@ func UnchangedSinceOf(value float64, at time.Time, previous *PriorNumeric) time.
 }
 
 type qualityChecksDocument struct {
+	Copied                 bool             `json:"copied,omitempty"`
 	MaxStep                *float64         `json:"maxStep"`
 	MaxStepWindowSeconds   *int             `json:"maxStepWindowSeconds"`
 	Sentinels              []float64        `json:"sentinels"`
@@ -508,7 +510,7 @@ func parseQualityChecks(raw []byte) (*QualityChecks, error) {
 	if err := json.Unmarshal(raw, &document); err != nil {
 		return nil, err
 	}
-	checks := &QualityChecks{MaxStep: document.MaxStep, Sentinels: document.Sentinels}
+	checks := &QualityChecks{Copied: document.Copied, MaxStep: document.MaxStep, Sentinels: document.Sentinels}
 	if document.MaxStepWindowSeconds != nil && *document.MaxStepWindowSeconds > 0 {
 		checks.MaxStepWindow = time.Duration(*document.MaxStepWindowSeconds) * time.Second
 	}
@@ -544,7 +546,7 @@ func parseQualityChecks(raw []byte) (*QualityChecks, error) {
 		}
 		checks.Uncertainty = parsed
 	}
-	if checks.MaxStep == nil && len(checks.Sentinels) == 0 && checks.Flatline == 0 && checks.FlatlineRunning == 0 && len(checks.Running) == 0 && len(checks.Inputs) == 0 && len(checks.Physics) == 0 && checks.Uncertainty == nil {
+	if !checks.Copied && checks.MaxStep == nil && len(checks.Sentinels) == 0 && checks.Flatline == 0 && checks.FlatlineRunning == 0 && len(checks.Running) == 0 && len(checks.Inputs) == 0 && len(checks.Physics) == 0 && checks.Uncertainty == nil {
 		return nil, nil
 	}
 	return checks, nil

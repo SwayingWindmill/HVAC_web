@@ -140,9 +140,24 @@ func lockDevice(ctx context.Context, tx pgx.Tx, deviceID string) error {
 }
 
 func (store *PostgresStore) evaluateAndPersistDevice(ctx context.Context, tx pgx.Tx, deviceID string, requestedKeys []string, evaluatedAt time.Time) (SnapshotCommit, error) {
+	return store.evaluateAndPersistDeviceWithOptions(ctx, tx, deviceID, requestedKeys, evaluatedAt, false)
+}
+
+func (store *PostgresStore) evaluateAndPersistDeviceWithOptions(ctx context.Context, tx pgx.Tx, deviceID string, requestedKeys []string, evaluatedAt time.Time, onlyWhenChanged bool) (SnapshotCommit, error) {
 	previousRevision, previousDigest, previousSnapshot, err := lockCurrentSnapshot(ctx, tx, deviceID)
 	if err != nil {
 		return SnapshotCommit{}, err
+	}
+	if onlyWhenChanged && previousRevision == 0 {
+		return SnapshotCommit{}, nil
+	}
+	if previousSnapshot != nil {
+		if previousEvaluatedAt, parseErr := time.Parse(time.RFC3339Nano, string(previousSnapshot.EvaluatedAt)); parseErr == nil && evaluatedAt.Before(previousEvaluatedAt) {
+			if onlyWhenChanged {
+				return SnapshotCommit{Snapshot: ProjectSnapshot(*previousSnapshot, requestedKeys), PreviousRevision: previousRevision}, nil
+			}
+			evaluatedAt = previousEvaluatedAt
+		}
 	}
 	facts, err := loadDeviceFacts(ctx, tx, deviceID)
 	if err != nil {
@@ -157,6 +172,9 @@ func (store *PostgresStore) evaluateAndPersistDevice(ctx context.Context, tx pgx
 		return SnapshotCommit{}, fmt.Errorf("evaluate telemetry snapshot: %w", err)
 	}
 	stateChanged := previousRevision == 0 || evaluation.StateDigest != previousDigest
+	if onlyWhenChanged && !stateChanged {
+		return SnapshotCommit{Snapshot: ProjectSnapshot(evaluation.Snapshot, requestedKeys), PreviousRevision: previousRevision}, nil
+	}
 	if stateChanged && previousRevision > 0 {
 		candidateRevision = previousRevision + 1
 		evaluation, err = EvaluateCanonical(facts, candidateRevision, evaluatedAt)
@@ -462,6 +480,8 @@ func (store *PostgresStore) insertOutboxIntent(ctx context.Context, tx pgx.Tx, s
 	if err != nil {
 		return fmt.Errorf("generate telemetry outbox event ID: %w", err)
 	}
+	copiedChangedKeys := make([]string, len(changedKeys))
+	copy(copiedChangedKeys, changedKeys)
 	payload := map[string]any{
 		"schemaVersion":    1,
 		"kind":             "DEVICE_OBSERVATION_SNAPSHOT_COMMITTED",
@@ -470,7 +490,7 @@ func (store *PostgresStore) insertOutboxIntent(ctx context.Context, tx pgx.Tx, s
 		"previousRevision": previousRevision,
 		"revision":         snapshot.BusinessRevision,
 		"evaluatedAt":      snapshot.EvaluatedAt,
-		"changedKeys":      append([]string(nil), changedKeys...),
+		"changedKeys":      copiedChangedKeys,
 		"snapshot":         snapshot,
 	}
 	encoded, err := json.Marshal(payload)

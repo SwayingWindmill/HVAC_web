@@ -72,6 +72,7 @@ test('domain module changes stay scoped to product domains', () => {
     ['libs/telemetryhistorymodel/aggregation.go', 'telemetry', 'telemetry'],
     ['modules/connectivity/internal/adapter/runtime.go', 'telemetry', 'telemetry'],
     ['cmd/connectivity/main.go', 'telemetry', 'telemetry'],
+    ['cmd/telemetry-worker/main.go', 'telemetry', 'telemetry'],
     ['modules/alarm/pkg/alarmservice/http.go', 'alarm', 'alarm'],
     ['modules/workorder/pkg/workorderservice/http.go', 'workorder', 'workorder'],
   ]) {

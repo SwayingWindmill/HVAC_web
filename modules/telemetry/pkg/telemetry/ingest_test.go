@@ -147,6 +147,31 @@ func TestEvaluateObservationAcceptsGoodCandidate(t *testing.T) {
 	}
 }
 
+func TestEvaluateObservationSuppressesPresenceSignalForCopiedReadings(t *testing.T) {
+	now := time.Date(2026, 7, 24, 2, 0, 0, 0, time.UTC)
+	facts := validObservationFacts()
+	policy := *facts.Policy
+	policy.QualityChecks = &QualityChecks{Copied: true}
+	facts.Policy = &policy
+
+	copied := EvaluateObservation(validObservationCandidate(now), facts, now)
+	assertObservationDecision(t, copied, ObservationAccepted, QualityGood, nil, true, true)
+	if copied.EmitPresenceSignal {
+		t.Fatalf("copied observation emitted presence signal: %#v", copied)
+	}
+	if !copied.ReevaluateSnapshot {
+		t.Fatalf("copied observation must still reevaluate snapshot: %#v", copied)
+	}
+
+	ownPolicy := *facts.Policy
+	ownPolicy.QualityChecks = &QualityChecks{Copied: false}
+	facts.Policy = &ownPolicy
+	own := EvaluateObservation(validObservationCandidate(now), facts, now)
+	if !own.EmitPresenceSignal {
+		t.Fatalf("own observation must emit presence signal: %#v", own)
+	}
+}
+
 func assertObservationDecision(t *testing.T, decision ObservationDecision, status ObservationStatus, quality ObservationQuality, reasons []QualityReason, advance, replace bool) {
 	t.Helper()
 	if decision.Status != status || decision.Quality != quality || decision.AdvancePosition != advance || decision.ReplaceLatest != replace {

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
-  SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, checkSiteFile, expandPoints, planOnboarding, pointStatus, siteStateQuery, updateWhenChanged,
+  SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, checkSiteFile, expandPoints, planOnboarding, pointQuality, pointStatus, presenceApplicability, siteStateQuery, updateWhenChanged,
 } from './site-onboarding.mjs';
 
 const songyaxuan = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.site.json', import.meta.url), 'utf8'));
@@ -335,6 +335,38 @@ test('apply never rewrites what the Tenant shares and registers Optimization onl
     assert.match(statement, /version=schedule_definitions\.version \+ 1/);
     assert.match(statement, /\nWHERE \(schedule_definitions\.schedule_name, schedule_definitions\.cron_expression, schedule_definitions\.payload_template, schedule_definitions\.enabled\) IS DISTINCT FROM/);
   }
+});
+
+test('copied points mark quality_checks.copied and copy-only or inactive devices set presence_applicability NOT_APPLICABLE', () => {
+  const devicesByCode = new Map(songyaxuan.devices.map((device: any) => [device.code, { ...device, points: expandPoints(device, songyaxuan.meterPoints) }]));
+  const meterUid2: any = devicesByCode.get('meter-uid2');
+  const ownEnergy = meterUid2.points.find((point: any) => point.code === 'active_energy_total');
+  const copiedChw = { ...meterUid2.points.find((point: any) => point.code === 'chw_leaving_temperature'), device: meterUid2 };
+  assert.equal(pointQuality({ ...ownEnergy, device: meterUid2 }, songyaxuan, devicesByCode).checks, null);
+  assert.match(pointQuality(copiedChw, songyaxuan, devicesByCode).checks ?? '', /"copied":true/);
+
+  const chwpMain: any = devicesByCode.get('chwp-main');
+  const copiedFlow = { ...chwpMain.points.find((point: any) => point.code === 'flow_rate'), device: chwpMain };
+  assert.equal(pointQuality(copiedFlow, songyaxuan, devicesByCode).checks, '\'{"copied":true}\'::jsonb');
+
+  for (const device of songyaxuan.devices) {
+    const expected = ['cooling-tower', 'outdoor', 'room'].includes(device.code) ? 'NOT_APPLICABLE' : 'APPLICABLE';
+    assert.equal(presenceApplicability(expandPoints(device, songyaxuan.meterPoints)), expected, `${device.code} applicability`);
+  }
+  const optimizedRoom = optimized.devices.find((device: any) => device.code === 'room');
+  assert.equal(presenceApplicability(expandPoints(optimizedRoom, optimized.meterPoints)), 'NOT_APPLICABLE');
+
+  const { telemetry } = buildOnboardingSql(songyaxuan);
+  const devicesSection = telemetry.slice(
+    telemetry.indexOf('INSERT INTO telemetry_runtime.devices'),
+    telemetry.indexOf('INSERT INTO telemetry_runtime.presence_policies'),
+  );
+  for (const device of songyaxuan.devices) {
+    const expected = ['cooling-tower', 'outdoor', 'room'].includes(device.code) ? 'NOT_APPLICABLE' : 'APPLICABLE';
+    assert.match(devicesSection, new RegExp(`\\('${device.id}', '[^']+', '[^']+', '${expected}', clock_timestamp\\(\\)\\)`), `${device.code} SQL row`);
+  }
+  assert.match(devicesSection, /presence_applicability=EXCLUDED\.presence_applicability/);
+  assert.ok(!devicesSection.includes("presence_applicability='APPLICABLE'"), 'devices upsert must follow EXCLUDED.presence_applicability');
 });
 
 test('validate reads the database with one read-only SELECT', () => {

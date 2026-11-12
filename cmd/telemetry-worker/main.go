@@ -65,6 +65,7 @@ func main() {
 	retentionContext, retentionCancel := context.WithCancel(context.Background())
 	defer retentionCancel()
 	go runRuntimeRetention(retentionContext, store, logger)
+	go runPresenceSweep(retentionContext, store, time.Minute, logger)
 
 	latestCache, latestRelay, latestContext, latestCancel, err := loadLatestCache(store)
 	if err != nil {
@@ -588,6 +589,39 @@ func runRuntimeRetention(ctx context.Context, store *telemetry.PostgresStore, lo
 		case pruned != (telemetry.PrunedRuntimeHistory{}):
 			logger.Info("telemetry_runtime_history_pruned", "presence_signals", pruned.PresenceSignals, "publications", pruned.Publications,
 				"history_events", pruned.HistoryEvents, "source_observations", pruned.SourceObservations)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+type presenceSweeper interface {
+	SweepDuePresence(ctx context.Context, evaluatedAt time.Time, limit int) (int, error)
+}
+
+// runPresenceSweep re-evaluates devices whose presence window elapsed without new own signals,
+// so silent or copy-only devices transition to OFFLINE and publish snapshot deltas.
+func runPresenceSweep(ctx context.Context, sweeper presenceSweeper, interval time.Duration, logger *slog.Logger) {
+	if sweeper == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		sweepCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		swept, err := sweeper.SweepDuePresence(sweepCtx, time.Now(), 256)
+		cancel()
+		switch {
+		case err != nil && ctx.Err() == nil:
+			logger.Warn("telemetry_presence_sweep_failed", "error_code", "TELEMETRY_PRESENCE_SWEEP_FAILED")
+		case swept > 0:
+			logger.Info("telemetry_presence_swept", "device_count", swept)
 		}
 		select {
 		case <-ctx.Done():
