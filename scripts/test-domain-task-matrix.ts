@@ -165,6 +165,11 @@ test('command browser layer is explicitly empty', () => {
   assert.deepEqual(plan.commands, []);
 });
 
+test('command unit layer includes formal command-safety verification', () => {
+  const plan = resolveDomainCommands('command', ['unit']);
+  assert.ok(labels(plan.commands).includes('npm run command:formal'));
+});
+
 test('root npm task surface rejects historical stage-number commands', () => {
   const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
   const historical = Object.keys(packageJson.scripts).filter((name) => /^s\d+:/u.test(name));

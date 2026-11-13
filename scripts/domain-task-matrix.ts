@@ -89,6 +89,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
         './libs/edgecontrol/...',
         './tools/eg8200-simulator/...',
       ),
+      npmRun('command:formal'),
     ]),
     alarm: Object.freeze([
       nodeRun('scripts/run-go.mjs', 'test', './libs/alarmauth/...', './libs/alarmmodel/...', './modules/alarm/...'),

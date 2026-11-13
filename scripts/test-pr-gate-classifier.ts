@@ -285,10 +285,13 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
       'scripts/coverage-baseline.json',
       'scripts/check-coverage-regression.ts',
       'scripts/verify-live-web.ts',
+      '.agents/skills/command-safety/SKILL.md',
+      '.claude/skills/command-safety/SKILL.md',
+      'scripts/run-command-formal-check.ts',
     ]).length,
     0,
   );
-  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 7);
+  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 10);
 
   const verifyMapSandbox = mkdtempSync(join(tmpdir(), 'hvac-verify-map-'));
   try {
@@ -372,4 +375,14 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
   const tsconfigClassification = runClassification(['tsconfig.scripts.json']);
   assert.equal(tsconfigClassification.unknown, false, 'tsconfig.scripts.json');
   assert.equal(tsconfigClassification.broad, true, 'tsconfig.scripts.json');
+
+  const connectivityStore = runClassification(['modules/connectivity/pkg/connectivity/store.go']);
+  assert.deepEqual(connectivityStore.unitProfiles, ['command', 'go', 'telemetry']);
+  assert.deepEqual(connectivityStore.integrationProfiles, ['telemetry']);
+  assert.equal(connectivityStore.broad, false);
+
+  const formalRunner = runClassification(['scripts/run-command-formal-check.ts']);
+  assert.deepEqual(formalRunner.unitProfiles, ['command']);
+  assert.equal(formalRunner.unknown, false);
+  assert.equal(formalRunner.broad, false);
 });
