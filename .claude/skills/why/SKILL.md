@@ -46,7 +46,7 @@ Source control is always available through git and `gh`. For the other six, clas
 Spawn one investigator per category that has a matching MCP, all in a single message so they run concurrently, each owning exactly one tool or MCP. Don't ask one agent to cover multiple MCPs.
 
 Each investigator's prompt is `references/investigator-prompt.md` filled in, plus:
-- the category playbook `references/sources/<source>.md` for the selected MCP, adapted from the examples in `references/source-playbook.md`
+- `references/sources/code-archaeology.md` (for git, `gh` PRs/Issues, and repo docs) or adapted directly to the selected MCP's tool schemas per `references/source-playbook.md`
 - `references/sources/incident-postmortem.md` **if the target code looks defensive** (null checks, retry logic, timeout handling, rate limiting, feature flags, egress guards, OOM handlers)
 - the code anchor and the user's original question
 

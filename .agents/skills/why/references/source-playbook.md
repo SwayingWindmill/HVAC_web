@@ -1,16 +1,11 @@
 # Source playbooks
 
-The why skill spawns one investigator per available evidence category, each reading a single source-specific playbook below. The playbooks are concrete examples for common MCPs. Adapt them for a different MCP in the same category.
+The `why` skill spawns one investigator per available evidence category. Always run the local source-control investigator; for other categories, run an investigator only when a matching MCP is actually connected in the current runtime.
 
-| Category | Playbook | Example MCP it documents |
+| Category | Playbook / Sources | How to adapt |
 |---|---|---|
-| Source control history | [`code-archaeology.md`](./sources/code-archaeology.md) | git, `gh` |
-| Issue / ticket tracker | [`linear.md`](./sources/linear.md) | Linear (adapt for Jira, GitHub Issues, Plane, Shortcut) |
-| Long-form documents | [`notion.md`](./sources/notion.md) | Notion (adapt for Confluence, Google Docs, Coda) |
-| Real-time team chat | [`slack.md`](./sources/slack.md) | Slack (adapt for Discord, Microsoft Teams, Mattermost) |
-| Infrastructure observability | [`datadog.md`](./sources/datadog.md) | Datadog (adapt for New Relic, Honeycomb, Grafana, Splunk) |
-| Error / exception tracking | [`sentry.md`](./sources/sentry.md) | Sentry (adapt for Rollbar, Bugsnag, Airbrake) |
-| Product analytics warehouse | [`databricks.md`](./sources/databricks.md) | Databricks SQL (adapt for Snowflake, BigQuery, ClickHouse, dbt) |
+| Source control history | [`code-archaeology.md`](./sources/code-archaeology.md) | `git`, `gh pr`, `gh issue`, `docs/adr/`, `docs/specs/`, `docs/architecture/`, `docs/operations/`, `CHANGELOG.md` |
+| External categories (issue tracker, long-form docs, chat, observability, error tracking, analytics warehouse) | Adapt [`code-archaeology.md`](./sources/code-archaeology.md) + category schemas | Inspect the connected MCP's tool schemas first; run broad keyword + ID queries, read full threads/issues, and follow intra-source links without inventing unavailable MCP tools. |
 
 Cross-cutting:
 

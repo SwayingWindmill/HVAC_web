@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --experimental-strip-types scripts/hooks/pre-tool-guard.ts --runtime=claude",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -69,7 +69,8 @@ npm run deployment:phase1:check                          # 改了 Compose 或迁
 
 | 规则 | 由什么自动守住 |
 | --- | --- |
-| 仓库治理、遗留 JS 文件数上限（`111`）、禁止跟踪 `.audit/` 等临时目录、`docs/HANDOFF.md` 单次读取上限（`<= 28 KiB`） | `npm run repo:check`（`scripts/check-repository-governance.ts`） |
+| 仓库治理、遗留 JS 文件数上限（`110`，禁止 `.agents/` 新增 JS）、`.agents/skills` 与 `.claude/skills` 逐字节镜像一致、禁止跟踪 `.audit/` 等临时目录、`docs/HANDOFF.md` 单次读取上限（`<= 28 KiB`） | `npm run repo:check`（`scripts/check-repository-governance.ts`） |
+| 破坏性 Git 命令、打印运行密钥与未授权生产发布/重置本地库拦截 | `.agents/hooks.json` + `.claude/settings.json`（`scripts/hooks/pre-tool-guard.ts`，由 `npm run pr:gates:test` 测试） |
 | 页面组合语法（`DataTableBlock`、禁止 `<main>`、`FactTile` 禁用 `className`）、`Enter` 输入法防误触、`color-scheme` 与 WCAG 对比度 | `npm run design:check`（`scripts/check-design-system.mjs`）与 `scripts/test-real-design-tokens.mjs` |
 | 权限目录与内置角色展示同 IAM 契约严格一致 | `npm -w @hvac/web run typecheck` 与 `npm run web:principal:contract`（`scripts/test-rms-principal-capability-contract.mjs`） |
 | 网关路由负责方、数据表负责方与冻结迁移不可修改 | `npm run ownership:check`、`npm run migrations:freeze:check` |

@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import {
   findHandoffBudgetViolations,
+  findRequiredGuardrailFileViolations,
+  findSkillMirrorViolations,
   findTrackedArtifactViolations,
   maximumHandoffBytes,
 } from './check-repository-governance.ts';
@@ -189,4 +194,64 @@ test('repository governance blocks tracked .audit scratch files and oversized do
   const overflow = findHandoffBudgetViolations({ bytes: maximumHandoffBytes + 1 });
   assert.equal(overflow.length, 1);
   assert.ok(overflow[0].includes('exceeds 28672-byte single-read budget'));
+});
+
+test('repository governance enforces 1:1 skill parity, required hook files, and clean hook gate classification', () => {
+  const scratchRoot = mkdtempSync(join(tmpdir(), 'hvac-skill-parity-'));
+  try {
+    mkdirSync(join(scratchRoot, '.agents/skills/sample'), { recursive: true });
+    mkdirSync(join(scratchRoot, '.claude/skills/sample'), { recursive: true });
+    writeFileSync(join(scratchRoot, '.agents/skills/sample/SKILL.md'), 'same\n');
+    writeFileSync(join(scratchRoot, '.claude/skills/sample/SKILL.md'), 'same\n');
+
+    assert.deepEqual(
+      findSkillMirrorViolations({
+        root: scratchRoot,
+        trackedFiles: [
+          '.agents/skills/MATTPOCOCK-LICENSE.txt',
+          '.agents/skills/PSTACK-LICENSE.txt',
+          '.claude/skills/README.md',
+          '.agents/skills/sample/SKILL.md',
+          '.claude/skills/sample/SKILL.md',
+        ],
+      }),
+      [],
+    );
+
+    assert.equal(
+      findSkillMirrorViolations({
+        root: scratchRoot,
+        trackedFiles: ['.agents/skills/stray.md', '.agents/skills/foo/SKILL.md', '.claude/skills/bar/SKILL.md'],
+      }).length,
+      3,
+    );
+
+    writeFileSync(join(scratchRoot, '.claude/skills/sample/SKILL.md'), 'drifted\n');
+    const driftViolations = findSkillMirrorViolations({
+      root: scratchRoot,
+      trackedFiles: ['.agents/skills/sample/SKILL.md', '.claude/skills/sample/SKILL.md'],
+    });
+    assert.equal(driftViolations.length, 1);
+    assert.match(driftViolations[0], /byte content drifted/);
+  } finally {
+    rmSync(scratchRoot, { recursive: true, force: true });
+  }
+
+  assert.equal(
+    findRequiredGuardrailFileViolations(['.agents/hooks.json', '.claude/settings.json', 'scripts/hooks/pre-tool-guard.ts']).length,
+    0,
+  );
+  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 2);
+
+  for (const file of [
+    '.agents/hooks.json',
+    '.claude/settings.json',
+    'scripts/hooks/pre-tool-guard.ts',
+    'scripts/test-pre-tool-guard.ts',
+    'scripts/javascript-tooling-baseline.json',
+  ]) {
+    const classification = runClassification([file]);
+    assert.equal(classification.unknown, false, file);
+    assert.equal(classification.broad, false, file);
+  }
 });
