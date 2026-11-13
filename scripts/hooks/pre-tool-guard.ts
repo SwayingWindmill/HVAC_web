@@ -10,22 +10,20 @@ export type GuardVerdict =
 
 export type GuardRuntime = 'agy' | 'claude';
 
+export type BranchContext = {
+  workingDir?: string;
+  gitDir?: string;
+};
+
 export type GuardOptions = {
-  resolveCurrentBranch?: () => string;
+  resolveCurrentBranch?: (context?: BranchContext) => string;
   depth?: number;
 };
 
 const MAX_UNWRAP_DEPTH = 4;
 
-const SUBSHELL_RUNNERS = new Set([
-  'wsl',
-  'bash',
-  'sh',
-  'zsh',
-  'cmd',
-  'powershell',
-  'pwsh',
-]);
+const POSIX_SHELL_RUNNERS = new Set(['bash', 'sh', 'zsh']);
+const WINDOWS_SHELL_RUNNERS = new Set(['cmd', 'powershell', 'pwsh']);
 
 const FILE_READ_COMMANDS = new Set([
   'cat',
@@ -61,7 +59,10 @@ const normalizeCommandName = (token: string): string => {
 };
 
 export const isProtectedSecretPath = (rawPath: string): boolean => {
-  const cleaned = normalizeSlashes(rawPath).replace(/^['"]|['"]$/gu, '').replace(/^\.\//u, '');
+  const cleaned = normalizeSlashes(rawPath)
+    .replace(/^[<>]+/u, '')
+    .replace(/^['"]|['"]$/gu, '')
+    .replace(/^\.\//u, '');
   if (!cleaned) return false;
   return PROTECTED_SECRET_PATTERNS.some((pattern) => pattern.test(cleaned));
 };
@@ -173,11 +174,34 @@ const isEnvAssignment = (token: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*=.*/
 const isShortFlagCluster = (token: string, letter: string): boolean =>
   /^-[a-zA-Z]+$/u.test(token) && token.includes(letter);
 
-const extractGitSubcommand = (tokens: string[]): { subcommand: string; args: string[] } | null => {
+const splitFlagsAndPositionals = (args: string[], flagsWithValue: Set<string> = new Set()) => {
+  const flags: string[] = [];
+  const positionals: string[] = [];
+  let afterDoubleDash = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!afterDoubleDash && arg === '--') {
+      afterDoubleDash = true;
+      continue;
+    }
+    if (!afterDoubleDash && arg.startsWith('-')) {
+      flags.push(arg);
+      if (flagsWithValue.has(arg)) {
+        i += 1;
+      }
+      continue;
+    }
+    positionals.push(arg);
+  }
+  return { flags, positionals };
+};
+
+const extractGitSubcommand = (tokens: string[]): { subcommand: string; args: string[]; branchContext: BranchContext } | null => {
   if (tokens.length === 0 || normalizeCommandName(tokens[0]) !== 'git') {
     return null;
   }
 
+  const branchContext: BranchContext = {};
   let index = 1;
   while (index < tokens.length) {
     const token = tokens[index];
@@ -185,15 +209,31 @@ const extractGitSubcommand = (tokens: string[]): { subcommand: string; args: str
       index += 1;
       break;
     }
+    if (token === '-C' && index + 1 < tokens.length) {
+      branchContext.workingDir = tokens[index + 1];
+      index += 2;
+      continue;
+    }
+    if (/^-C.+$/u.test(token)) {
+      branchContext.workingDir = token.slice(2);
+      index += 1;
+      continue;
+    }
+    if (token === '--git-dir' && index + 1 < tokens.length) {
+      branchContext.gitDir = tokens[index + 1];
+      index += 2;
+      continue;
+    }
+    if (token.startsWith('--git-dir=')) {
+      branchContext.gitDir = token.slice('--git-dir='.length);
+      index += 1;
+      continue;
+    }
     if (GIT_FLAGS_WITH_VALUE.has(token)) {
       index += 2;
       continue;
     }
-    if (token.startsWith('--git-dir=') || token.startsWith('--work-tree=') || token.startsWith('--namespace=') || token.startsWith('--super-prefix=')) {
-      index += 1;
-      continue;
-    }
-    if (/^-[Cc].+$/u.test(token)) {
+    if (token.startsWith('--work-tree=') || token.startsWith('--namespace=') || token.startsWith('--super-prefix=') || /^-c.+$/u.test(token)) {
       index += 1;
       continue;
     }
@@ -205,51 +245,43 @@ const extractGitSubcommand = (tokens: string[]): { subcommand: string; args: str
   }
 
   if (index >= tokens.length) return null;
-  return { subcommand: tokens[index], args: tokens.slice(index + 1) };
+  return { subcommand: tokens[index], args: tokens.slice(index + 1), branchContext };
 };
 
-const refspecTargetsMain = (refspec: string): boolean => {
+const refspecTargetsMain = (refspec: string, resolveBranch: () => string): boolean => {
   const cleaned = refspec.replace(/^\+/u, '');
   const colonIdx = cleaned.indexOf(':');
   const dest = colonIdx >= 0 ? cleaned.slice(colonIdx + 1) : cleaned;
-  return dest === 'main' || dest === 'master' || dest === 'refs/heads/main' || dest === 'refs/heads/master';
+  if (dest === 'main' || dest === 'master' || dest === 'refs/heads/main' || dest === 'refs/heads/master') {
+    return true;
+  }
+  if (dest === 'HEAD' || dest === '@') {
+    const branch = resolveBranch().trim();
+    return branch === 'main' || branch === 'master';
+  }
+  return false;
 };
 
-const evaluateGitCommand = (tokens: string[], resolveCurrentBranch: () => string): GuardVerdict => {
+const evaluateGitCommand = (tokens: string[], resolveCurrentBranch: (context?: BranchContext) => string): GuardVerdict => {
   const parsed = extractGitSubcommand(tokens);
   if (!parsed) return { action: 'allow' };
 
-  const { subcommand, args } = parsed;
+  const { subcommand, args, branchContext } = parsed;
+  const resolveBranch = () => resolveCurrentBranch(branchContext);
 
   if (subcommand === 'push') {
-    const positional: string[] = [];
-    let afterDoubleDash = false;
-    for (let i = 0; i < args.length; i += 1) {
-      const arg = args[i];
-      if (!afterDoubleDash && arg === '--') {
-        afterDoubleDash = true;
-        continue;
-      }
-      if (!afterDoubleDash) {
-        if (arg === '--force' || arg.startsWith('--force=') || isShortFlagCluster(arg, 'f')) {
-          return { action: 'deny', reason: 'git push --force / -f is blocked by repository safety guard.' };
-        }
-        if (GIT_PUSH_FLAGS_WITH_VALUE.has(arg)) {
-          i += 1;
-          continue;
-        }
-        if (arg.startsWith('-')) {
-          continue;
-        }
-      }
-      positional.push(arg);
+    const { flags, positionals } = splitFlagsAndPositionals(args, GIT_PUSH_FLAGS_WITH_VALUE);
+    if (flags.some((flag) => flag === '--force' || flag.startsWith('--force=') || isShortFlagCluster(flag, 'f'))) {
+      return { action: 'deny', reason: 'git push --force / -f is blocked by repository safety guard.' };
     }
 
-    if (positional.slice(1).some(refspecTargetsMain)) {
+    const hasExplicitRepo = flags.some((flag) => flag === '--repo' || flag.startsWith('--repo='));
+    const refspecs = hasExplicitRepo ? positionals : positionals.slice(1);
+    if (refspecs.some((spec) => refspecTargetsMain(spec, resolveBranch))) {
       return { action: 'deny', reason: 'Direct push to main/master is blocked; open a PR instead.' };
     }
-    if (positional.length < 2) {
-      const branch = resolveCurrentBranch().trim();
+    if (refspecs.length === 0) {
+      const branch = resolveBranch().trim();
       if (branch === 'main' || branch === 'master') {
         return { action: 'deny', reason: `Direct push while on ${branch} is blocked; push a feature branch and open a PR.` };
       }
@@ -262,74 +294,34 @@ const evaluateGitCommand = (tokens: string[], resolveCurrentBranch: () => string
   }
 
   if (subcommand === 'clean') {
-    for (const arg of args) {
-      if (arg === '--') break;
-      if (arg === '--force' || isShortFlagCluster(arg, 'f')) {
-        return { action: 'deny', reason: 'git clean -f is blocked to protect untracked local directories.' };
-      }
+    const { flags } = splitFlagsAndPositionals(args);
+    if (flags.some((flag) => flag === '--force' || isShortFlagCluster(flag, 'f'))) {
+      return { action: 'deny', reason: 'git clean -f is blocked to protect untracked local directories.' };
     }
   }
 
   if (subcommand === 'checkout') {
-    let seenDash = false;
-    for (const arg of args) {
-      if (arg === '--') {
-        seenDash = true;
-        continue;
-      }
-      if ((seenDash || !arg.startsWith('-')) && arg === '.') {
-        return { action: 'deny', reason: 'git checkout . discards working tree changes and is blocked.' };
-      }
+    const { positionals } = splitFlagsAndPositionals(args);
+    if (positionals.includes('.')) {
+      return { action: 'deny', reason: 'git checkout . discards working tree changes and is blocked.' };
     }
   }
 
   if (subcommand === 'restore') {
-    let seenDash = false;
-    let hasStaged = false;
-    let hasWorktree = false;
-    let restoresDot = false;
-    for (const arg of args) {
-      if (!seenDash && arg === '--') {
-        seenDash = true;
-        continue;
-      }
-      if (!seenDash && (arg === '--staged' || isShortFlagCluster(arg, 'S'))) {
-        hasStaged = true;
-        continue;
-      }
-      if (!seenDash && (arg === '--worktree' || isShortFlagCluster(arg, 'W'))) {
-        hasWorktree = true;
-        continue;
-      }
-      if ((seenDash || !arg.startsWith('-')) && arg === '.') {
-        restoresDot = true;
-      }
-    }
-    if (restoresDot && (hasWorktree || !hasStaged)) {
+    const { flags, positionals } = splitFlagsAndPositionals(args);
+    const hasStaged = flags.some((flag) => flag === '--staged' || isShortFlagCluster(flag, 'S'));
+    const hasWorktree = flags.some((flag) => flag === '--worktree' || isShortFlagCluster(flag, 'W'));
+    if (positionals.includes('.') && (hasWorktree || !hasStaged)) {
       return { action: 'deny', reason: 'git restore . discards working tree changes and is blocked.' };
     }
   }
 
   if (subcommand === 'branch') {
-    let forceDelete = false;
-    let hasDelete = false;
-    let hasForce = false;
-    const targets: string[] = [];
-    let seenDash = false;
-    for (const arg of args) {
-      if (!seenDash && arg === '--') {
-        seenDash = true;
-        continue;
-      }
-      if (!seenDash && arg.startsWith('-')) {
-        if (isShortFlagCluster(arg, 'D')) forceDelete = true;
-        if (arg === '--delete' || isShortFlagCluster(arg, 'd')) hasDelete = true;
-        if (arg === '--force' || isShortFlagCluster(arg, 'f')) hasForce = true;
-        continue;
-      }
-      targets.push(arg);
-    }
-    if ((forceDelete || (hasDelete && hasForce)) && targets.some((t) => t === 'main' || t === 'master')) {
+    const { flags, positionals } = splitFlagsAndPositionals(args);
+    const forceDelete = flags.some((flag) => isShortFlagCluster(flag, 'D'));
+    const hasDelete = flags.some((flag) => flag === '--delete' || isShortFlagCluster(flag, 'd'));
+    const hasForce = flags.some((flag) => flag === '--force' || isShortFlagCluster(flag, 'f'));
+    if ((forceDelete || (hasDelete && hasForce)) && positionals.some((t) => t === 'main' || t === 'master')) {
       return { action: 'deny', reason: 'Deleting main/master branch with git branch -D is blocked.' };
     }
   }
@@ -337,7 +329,11 @@ const evaluateGitCommand = (tokens: string[], resolveCurrentBranch: () => string
   return { action: 'allow' };
 };
 
-const evaluateSegmentTokens = (rawTokens: string[], resolveCurrentBranch: () => string, depth: number): GuardVerdict => {
+const evaluateSegmentTokens = (
+  rawTokens: string[],
+  resolveCurrentBranch: (context?: BranchContext) => string,
+  depth: number,
+): GuardVerdict => {
   let start = 0;
   while (start < rawTokens.length && isEnvAssignment(rawTokens[start])) {
     start += 1;
@@ -370,14 +366,24 @@ const evaluateSegmentTokens = (rawTokens: string[], resolveCurrentBranch: () => 
     }
   }
 
-  if (SUBSHELL_RUNNERS.has(cmd) && depth < MAX_UNWRAP_DEPTH) {
+  if (POSIX_SHELL_RUNNERS.has(cmd) && depth < MAX_UNWRAP_DEPTH) {
     for (let i = 1; i < tokens.length - 1; i += 1) {
-      const flag = tokens[i];
-      if (flag === '-c' || flag === '-lc' || flag === '/c' || flag === '/C' || flag === '-Command' || flag === '-command') {
-        const inner = flag.toLowerCase() === '/c' || flag.toLowerCase() === '-command'
-          ? tokens.slice(i + 1).join(' ')
-          : tokens[i + 1];
-        const verdict = evaluateCommandGuard(inner, { resolveCurrentBranch, depth: depth + 1 });
+      if (/^-[a-zA-Z]*c$/u.test(tokens[i])) {
+        const verdict = evaluateCommandGuard(tokens[i + 1], { resolveCurrentBranch, depth: depth + 1 });
+        if (verdict.action !== 'allow') return verdict;
+        break;
+      }
+    }
+  }
+
+  if (WINDOWS_SHELL_RUNNERS.has(cmd) && depth < MAX_UNWRAP_DEPTH) {
+    for (let i = 1; i < tokens.length - 1; i += 1) {
+      const lowerFlag = tokens[i].toLowerCase();
+      if (lowerFlag === '/c' || lowerFlag === '-command') {
+        const rest = tokens.slice(i + 1);
+        const verdict = rest.length === 1
+          ? evaluateCommandGuard(rest[0], { resolveCurrentBranch, depth: depth + 1 })
+          : evaluateSegmentTokens(rest, resolveCurrentBranch, depth + 1);
         if (verdict.action !== 'allow') return verdict;
         break;
       }
@@ -400,8 +406,10 @@ const evaluateSegmentTokens = (rawTokens: string[], resolveCurrentBranch: () => 
     }
   }
 
-  if (cmd === 'gh' && tokens[1] === 'workflow' && tokens[2] === 'run') {
-    if (tokens.slice(3).some((arg) => arg.toLowerCase().includes('deploy-production'))) {
+  if (cmd === 'gh') {
+    const { positionals } = splitFlagsAndPositionals(tokens.slice(1), new Set(['-R', '--repo']));
+    if (positionals[0] === 'workflow' && positionals[1] === 'run'
+      && tokens.slice(1).some((arg) => arg.toLowerCase().includes('deploy-production'))) {
       return {
         action: 'ask',
         reason: 'Triggering production deployment workflow requires explicit user approval.',
@@ -426,7 +434,7 @@ const evaluateSegmentTokens = (rawTokens: string[], resolveCurrentBranch: () => 
     }
   }
 
-  const isDockerCompose = (cmd === 'docker' && tokens[1] === 'compose') || cmd === 'docker-compose';
+  const isDockerCompose = (cmd === 'docker' && tokens.includes('compose')) || cmd === 'docker-compose';
   if (isDockerCompose && tokens.includes('down')) {
     const hasVolumeFlag = tokens.some((t) => t === '--volumes' || isShortFlagCluster(t, 'v'));
     if (hasVolumeFlag) {
@@ -440,6 +448,53 @@ const evaluateSegmentTokens = (rawTokens: string[], resolveCurrentBranch: () => 
   return { action: 'allow' };
 };
 
+const extractSubshellExpressions = (commandLine: string): string[] => {
+  const expressions: string[] = [];
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < commandLine.length; i += 1) {
+    const ch = commandLine[i];
+    const next = commandLine[i + 1] ?? '';
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '\\' && (next === '"' || next === '\\' || next === '$' || next === '`')) {
+        i += 1;
+        continue;
+      }
+      if (ch === '"') {
+        quote = null;
+        continue;
+      }
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+
+    if (ch === '$' && next === '(') {
+      let nested = 1;
+      let j = i + 2;
+      while (j < commandLine.length && nested > 0) {
+        if (commandLine[j] === '(') nested += 1;
+        else if (commandLine[j] === ')') nested -= 1;
+        j += 1;
+      }
+      if (nested === 0) {
+        expressions.push(commandLine.slice(i + 2, j - 1));
+      }
+      i = j - 1;
+    } else if (ch === '`') {
+      const end = commandLine.indexOf('`', i + 1);
+      if (end > i + 1) {
+        expressions.push(commandLine.slice(i + 1, end));
+        i = end;
+      }
+    }
+  }
+  return expressions;
+};
+
 export const evaluateCommandGuard = (commandLine: string, options: GuardOptions = {}): GuardVerdict => {
   const depth = options.depth ?? 0;
   if (depth > MAX_UNWRAP_DEPTH || !commandLine.trim()) {
@@ -447,11 +502,16 @@ export const evaluateCommandGuard = (commandLine: string, options: GuardOptions 
   }
 
   const resolveCurrentBranch = options.resolveCurrentBranch ?? (() => '');
-  const segments = tokenizeShellSegments(commandLine);
   let pendingAsk: GuardVerdict | null = null;
 
-  for (const segment of segments) {
+  for (const segment of tokenizeShellSegments(commandLine)) {
     const verdict = evaluateSegmentTokens(segment, resolveCurrentBranch, depth);
+    if (verdict.action === 'deny') return verdict;
+    if (verdict.action === 'ask' && !pendingAsk) pendingAsk = verdict;
+  }
+
+  for (const nested of extractSubshellExpressions(commandLine)) {
+    const verdict = evaluateCommandGuard(nested, { resolveCurrentBranch, depth: depth + 1 });
     if (verdict.action === 'deny') return verdict;
     if (verdict.action === 'ask' && !pendingAsk) pendingAsk = verdict;
   }
@@ -459,18 +519,27 @@ export const evaluateCommandGuard = (commandLine: string, options: GuardOptions 
   return pendingAsk ?? { action: 'allow' };
 };
 
-const asRecord = (value: unknown): Record<string, unknown> | null =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const stringProp = (record: Record<string, unknown> | null, keys: string[]): string => {
-  if (!record) return '';
+const readStringProperty = (obj: unknown, keys: string[]): string => {
+  if (!isPlainObject(obj)) return '';
   for (const key of keys) {
-    const value = record[key];
+    const value = obj[key];
     if (typeof value === 'string') return value;
   }
   return '';
+};
+
+const checkSecretReadTarget = (argsObj: unknown, keys: string[]): GuardVerdict => {
+  const targetPath = readStringProperty(argsObj, keys);
+  if (isProtectedSecretPath(targetPath)) {
+    return {
+      action: 'deny',
+      reason: `Reading protected secret path "${targetPath}" is blocked (reference by path only).`,
+    };
+  }
+  return { action: 'allow' };
 };
 
 export const evaluatePreToolPayload = (
@@ -478,58 +547,43 @@ export const evaluatePreToolPayload = (
   runtime: GuardRuntime,
   options: GuardOptions = {},
 ): GuardVerdict => {
-  const root = asRecord(payload);
-  if (!root) return { action: 'allow' };
+  if (!isPlainObject(payload)) return { action: 'allow' };
 
   if (runtime === 'agy') {
-    const toolCall = asRecord(root.toolCall);
-    const toolName = stringProp(toolCall, ['name']).toLowerCase();
-    const args = asRecord(toolCall?.args);
+    const toolCall = payload.toolCall;
+    if (!isPlainObject(toolCall)) return { action: 'allow' };
+    const toolName = readStringProperty(toolCall, ['name']).toLowerCase();
+    const args = toolCall.args;
 
     if (toolName === 'read_file' || toolName === 'view_file') {
-      const targetPath = stringProp(args, ['Path', 'AbsolutePath', 'path']);
-      if (isProtectedSecretPath(targetPath)) {
-        return {
-          action: 'deny',
-          reason: `Reading protected secret path "${targetPath}" is blocked (reference by path only).`,
-        };
-      }
-      return { action: 'allow' };
+      return checkSecretReadTarget(args, ['Path', 'AbsolutePath', 'path']);
     }
-
     if (toolName === 'run_command') {
-      const cmd = stringProp(args, ['CommandLine', 'command']);
-      return evaluateCommandGuard(cmd, options);
+      return evaluateCommandGuard(readStringProperty(args, ['CommandLine', 'command']), options);
     }
-
     return { action: 'allow' };
   }
 
-  const toolName = stringProp(root, ['tool_name']).toLowerCase();
-  const toolInput = asRecord(root.tool_input);
+  const toolName = readStringProperty(payload, ['tool_name']).toLowerCase();
+  const toolInput = payload.tool_input;
 
   if (toolName === 'read') {
-    const targetPath = stringProp(toolInput, ['file_path', 'path']);
-    if (isProtectedSecretPath(targetPath)) {
-      return {
-        action: 'deny',
-        reason: `Reading protected secret path "${targetPath}" is blocked (reference by path only).`,
-      };
-    }
-    return { action: 'allow' };
+    return checkSecretReadTarget(toolInput, ['file_path', 'path']);
   }
-
   if (toolName === 'bash' || toolName === 'powershell') {
-    const cmd = stringProp(toolInput, ['command']);
-    return evaluateCommandGuard(cmd, options);
+    return evaluateCommandGuard(readStringProperty(toolInput, ['command']), options);
   }
 
   return { action: 'allow' };
 };
 
-const defaultResolveCurrentBranch = (): string => {
+const defaultResolveCurrentBranch = (context?: BranchContext): string => {
   try {
-    return execFileSync('git', ['branch', '--show-current'], {
+    const gitArgs: string[] = [];
+    if (context?.workingDir) gitArgs.push('-C', context.workingDir);
+    if (context?.gitDir) gitArgs.push(`--git-dir=${context.gitDir}`);
+    gitArgs.push('branch', '--show-current');
+    return execFileSync('git', gitArgs, {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true,
@@ -541,8 +595,7 @@ const defaultResolveCurrentBranch = (): string => {
 
 const parseRuntimeArg = (argv: string[]): GuardRuntime => {
   const arg = argv.find((item) => item.startsWith('--runtime='));
-  const value = arg?.slice('--runtime='.length);
-  return value === 'claude' ? 'claude' : 'agy';
+  return arg?.slice('--runtime='.length) === 'claude' ? 'claude' : 'agy';
 };
 
 const runCli = () => {

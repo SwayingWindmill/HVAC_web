@@ -195,6 +195,33 @@ export const findRequiredGuardrailFileViolations = (trackedFiles: string[]) => {
     .map((path) => `${path}: required repository safety hook file is missing from git tracking`);
 };
 
+const collectSkillMirrorEntries = ({
+  trackedFiles,
+  prefix,
+  allowedRootFiles,
+  violations,
+}: {
+  trackedFiles: string[];
+  prefix: string;
+  allowedRootFiles: Set<string>;
+  violations: string[];
+}) => {
+  const entries = new Map<string, string>();
+  for (const rawPath of trackedFiles) {
+    const path = normalizePath(rawPath);
+    if (!path.startsWith(prefix)) continue;
+    const rel = path.slice(prefix.length);
+    if (!rel.includes('/')) {
+      if (!allowedRootFiles.has(rel)) {
+        violations.push(`${path}: unexpected root file under ${prefix}`);
+      }
+      continue;
+    }
+    entries.set(rel, path);
+  }
+  return entries;
+};
+
 export const findSkillMirrorViolations = ({
   root,
   trackedFiles,
@@ -205,31 +232,18 @@ export const findSkillMirrorViolations = ({
   const violations: string[] = [];
   const agentsSkillsPrefix = '.agents/skills/';
   const claudeSkillsPrefix = '.claude/skills/';
-  const agentsSkillFiles = new Map<string, string>();
-  const claudeSkillFiles = new Map<string, string>();
-
-  for (const rawPath of trackedFiles) {
-    const path = normalizePath(rawPath);
-    if (path.startsWith(agentsSkillsPrefix)) {
-      const rel = path.slice(agentsSkillsPrefix.length);
-      if (!rel.includes('/')) {
-        if (!allowedAgentsSkillRootFiles.has(rel)) {
-          violations.push(`${path}: unexpected root file under ${agentsSkillsPrefix}`);
-        }
-        continue;
-      }
-      agentsSkillFiles.set(rel, path);
-    } else if (path.startsWith(claudeSkillsPrefix)) {
-      const rel = path.slice(claudeSkillsPrefix.length);
-      if (!rel.includes('/')) {
-        if (!allowedClaudeSkillRootFiles.has(rel)) {
-          violations.push(`${path}: unexpected root file under ${claudeSkillsPrefix}`);
-        }
-        continue;
-      }
-      claudeSkillFiles.set(rel, path);
-    }
-  }
+  const agentsSkillFiles = collectSkillMirrorEntries({
+    trackedFiles,
+    prefix: agentsSkillsPrefix,
+    allowedRootFiles: allowedAgentsSkillRootFiles,
+    violations,
+  });
+  const claudeSkillFiles = collectSkillMirrorEntries({
+    trackedFiles,
+    prefix: claudeSkillsPrefix,
+    allowedRootFiles: allowedClaudeSkillRootFiles,
+    violations,
+  });
 
   for (const [rel, agentsPath] of [...agentsSkillFiles.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     if (!claudeSkillFiles.has(rel)) {
@@ -248,7 +262,14 @@ export const findSkillMirrorViolations = ({
     if (!claudePath) continue;
     const agentsAbs = join(root, agentsPath);
     const claudeAbs = join(root, claudePath);
-    if (!existsSync(agentsAbs) || !existsSync(claudeAbs)) continue;
+    if (!existsSync(agentsAbs)) {
+      violations.push(`${agentsPath}: tracked skill file is missing on disk`);
+      continue;
+    }
+    if (!existsSync(claudeAbs)) {
+      violations.push(`${claudePath}: tracked skill file is missing on disk`);
+      continue;
+    }
     if (Buffer.compare(readFileSync(agentsAbs), readFileSync(claudeAbs)) !== 0) {
       violations.push(`${agentsPath}: byte content drifted from ${claudePath}; sync both skill files verbatim`);
     }

@@ -233,6 +233,14 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
     });
     assert.equal(driftViolations.length, 1);
     assert.match(driftViolations[0], /byte content drifted/);
+
+    rmSync(join(scratchRoot, '.claude/skills/sample/SKILL.md'));
+    const missingDiskViolations = findSkillMirrorViolations({
+      root: scratchRoot,
+      trackedFiles: ['.agents/skills/sample/SKILL.md', '.claude/skills/sample/SKILL.md'],
+    });
+    assert.equal(missingDiskViolations.length, 1);
+    assert.match(missingDiskViolations[0], /missing on disk/);
   } finally {
     rmSync(scratchRoot, { recursive: true, force: true });
   }

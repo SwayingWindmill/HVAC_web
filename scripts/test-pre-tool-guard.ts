@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -40,6 +42,8 @@ test('destructive git commands and direct pushes to main/master are denied', () 
     'git push --force origin feat/x',
     'git push -uf origin feat/x',
     'git push origin main',
+    'git push --repo=origin main',
+    'git push --repo origin main',
     'git push origin HEAD:main',
     'git push origin +HEAD:refs/heads/master',
     'git reset --hard',
@@ -51,6 +55,7 @@ test('destructive git commands and direct pushes to main/master are denied', () 
     'git restore --worktree .',
     'git branch -D main',
     'wsl -e bash -lc "cd /mnt/e/Code/HVAC_web && git reset --hard"',
+    'bash -ec "git reset --hard"',
     'cmd /c "git clean -fx"',
   ]) {
     const verdict = evaluateCommandGuard(cmd, { resolveCurrentBranch: branchFeat });
@@ -59,6 +64,8 @@ test('destructive git commands and direct pushes to main/master are denied', () 
 
   assert.equal(evaluateCommandGuard('git push', { resolveCurrentBranch: branchMain }).action, 'deny');
   assert.equal(evaluateCommandGuard('git push origin', { resolveCurrentBranch: branchMain }).action, 'deny');
+  assert.equal(evaluateCommandGuard('git push origin HEAD', { resolveCurrentBranch: branchMain }).action, 'deny');
+  assert.equal(evaluateCommandGuard('git push origin HEAD', { resolveCurrentBranch: branchFeat }).action, 'allow');
 });
 
 test('safe git commands, feature branch deletions, and quoted strings in commits/PR bodies are allowed', () => {
@@ -69,6 +76,7 @@ test('safe git commands, feature branch deletions, and quoted strings in commits
     'git branch -D feat/pstack-phase1-skills-and-hooks',
     'git restore --staged .',
     'git commit -m "document git reset --hard and deploy/platform/phase1/runtime/"',
+    'cmd /c git commit -m "document && git clean -fd"',
     'gh pr create --body "git clean -fd"',
   ]) {
     const verdict = evaluateCommandGuard(cmd, { resolveCurrentBranch: branchFeat });
@@ -86,6 +94,8 @@ test('protected runtime secret paths are denied while .example templates remain 
   ]) {
     assert.equal(isProtectedSecretPath(secretPath), true, secretPath);
     assert.equal(evaluateCommandGuard(`cat ${secretPath}`).action, 'deny', secretPath);
+    assert.equal(evaluateCommandGuard(`cat <${secretPath}`).action, 'deny', secretPath);
+    assert.equal(evaluateCommandGuard(`echo $(cat ${secretPath})`).action, 'deny', secretPath);
     assert.equal(
       evaluatePreToolPayload({ toolCall: { name: 'read_file', args: { Path: secretPath } } }, 'agy').action,
       'deny',
@@ -110,12 +120,28 @@ test('protected runtime secret paths are denied while .example templates remain 
 test('production deploys and local database resets require interactive approval', () => {
   for (const cmd of [
     'gh workflow run deploy-production.yml',
+    'gh -R SwayingWindmill/HVAC_web workflow run deploy-production.yml',
     'npm run local:reset',
     'node scripts/local-environment.mjs reset',
     'docker compose -f deploy/platform/phase1/compose.yaml down -v',
+    'docker --context default compose down -v',
   ]) {
     assert.equal(evaluateCommandGuard(cmd).action, 'ask', cmd);
   }
+});
+
+test('hook config files resolve pre-tool-guard script relative to each runtime cwd', () => {
+  const agyHooks = JSON.parse(readFileSync('.agents/hooks.json', 'utf8'));
+  const agyCommand = agyHooks['repository-safety-guard'].PreToolUse[0].hooks[0].command;
+  const agyScriptToken = agyCommand.split(' ').find((part: string) => part.endsWith('.ts'));
+  assert.ok(agyScriptToken);
+  assert.equal(existsSync(resolve('.agents', agyScriptToken)), true);
+
+  const claudeSettings = JSON.parse(readFileSync('.claude/settings.json', 'utf8'));
+  const claudeCommand = claudeSettings.hooks.PreToolUse[0].hooks[0].command;
+  const claudeScriptToken = claudeCommand.split(' ').find((part: string) => part.endsWith('.ts'));
+  assert.ok(claudeScriptToken);
+  assert.equal(existsSync(resolve(claudeScriptToken)), true);
 });
 
 test('CLI translates verdicts cleanly for both agy and claude runtimes', () => {
