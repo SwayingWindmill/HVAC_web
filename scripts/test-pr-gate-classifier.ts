@@ -57,6 +57,8 @@ test('documentation-only changes keep expensive affected gates idle', () => {
   for (const file of [
     'docs/architecture/overview.md',
     '.mwgrc',
+    '.mcp.json',
+    'CHANGELOG.md',
     'CLAUDE.md',
     '.agents/skills/correct/SKILL.md',
     '.claude/skills/correct/SKILL.md',
@@ -79,7 +81,12 @@ test('package-lock changes compile and unit test without database or browser fan
 });
 
 test('HVAC Web changes select stable domain profiles on the Linux browser runner', () => {
-  for (const file of ['apps/hvac-web/src/app/router.ts', 'scripts/check-design-system.ts']) {
+  for (const file of [
+    'apps/hvac-web/src/app/router.ts',
+    'scripts/check-design-system.ts',
+    'scripts/check-verify-runtime.ts',
+    'scripts/test-verify-runtime.ts',
+  ]) {
     const classification = runClassification([file]);
     assert.deepEqual(classification.unitProfiles, ['web']);
     assert.deepEqual(classification.browserProfiles, ['telemetry']);

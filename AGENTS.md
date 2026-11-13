@@ -21,9 +21,12 @@
 
 ## 命令
 
-所有项目命令都在 WSL 里、在 `/mnt/e/Code/HVAC_web`（Windows 侧是 `E:\Code\HVAC_web`）执行：Node/npm、Go、Docker、浏览器测试、代码生成。代码和 CI 只面向 Linux，Windows 侧只用来编辑文件和 `git push`。
+代码构建、测试、Go、Docker 和浏览器验收在 WSL 的 `/mnt/e/Code/HVAC_web`（Windows 侧是 `E:\Code\HVAC_web`）运行；代码定位、文件读取和 `git` 查询直接留在 Windows 侧完成，减少跨子系统启动和命令审核停顿。
 
 ```bash
+npm run check                                            # 仓库静态门禁与构建检查
+npm run domain:run -- --domain=<域>                      # 按改动域跑门禁（见 scripts/domain-task-matrix.ts）
+npm run verify:doctor                                    # 检查 WSL Node、Linux Chromium 与验证端口（5190/5194/8443）
 npm -w @hvac/web run typecheck
 npm -w @hvac/web run build
 npm run web:shell:test && npm run web:model:test         # 网页的单元测试
@@ -33,10 +36,12 @@ npm run go:lint && npm run security:go-vuln              # 改了 Go 代码或�
 npm run deployment:phase1:check                          # 改了 Compose 或迁移清单后
 ```
 
-- 交 PR 前，把 `scripts/domain-task-matrix.ts` 里和改动相关的命令在本地跑一遍。
+- **搜索与上下文**：先用 `codegraph_explore` / `codegraph_context`（见 `docs/agents/codegraph.md`）；查文本、列文件或看历史时直接跑单条 Git 命令（`git grep -n`、`git ls-files`、`git diff`、`git log`、`git show`），留在原平台执行，不拼管道（`|`）、`&&` 或 `||`。
+- **读文件与汇报**：用 `read_file` 并行读取相关的 `150–250` 行（`300` 行以内整文件一次读完）；回复只列结论、路径和实际跑过的验证结果。
+- 交 PR 前，把 `scripts/domain-task-matrix.ts` 里和改动相关的命令在本地跑一遍；Windows 上 `git push`、`gh` 在 WSL 里运行。
 - 浏览器测试的接口数据在 `apps/hvac-web/e2e/fixtures/`（从本地环境录制、已脱敏），写操作由 `e2e/gateway.ts` 按负责那类数据的模块的规则模拟。页面改了接口调用，同步改测试桩。
 - 日志里的 `error` 字段一律显示为 `[REDACTED]`；调试临时加的 `[DEBUG-*]` 字段须在提交前清理（`npm run repo:check` 拦截）。
-- 从 Windows 调 WSL 时，多行或带嵌套引号的命令先写成脚本文件，再 `wsl -e bash -lc "bash <脚本路径>"`；偶发 `WSAETIMEDOUT` 时重试。
+- 从 Windows 调 WSL 且需要多条 shell 语句时，先写成脚本文件再跑单条 `wsl -e bash -lc "bash <脚本路径>"`；偶发 `WSAETIMEDOUT` 时重试。
 - `deploy/platform/phase1/runtime/**` 里是密钥和凭据：只按路径引用，不打印、不提交、不改权限。
 
 ## 写代码

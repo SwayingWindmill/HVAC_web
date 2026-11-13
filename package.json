@@ -42,7 +42,7 @@
     "deployment:phase1:process-failure:plan": "node --experimental-strip-types scripts/run-phase1-process-failure-drill.ts --plan",
     "deployment:phase1:migration:test": "node scripts/run-phase1-migration-integration.mjs",
     "pr:gates:classify": "node --experimental-strip-types scripts/classify-pr-gates.ts",
-    "pr:gates:test": "node --experimental-strip-types --test scripts/test-pr-gate-classifier.ts scripts/test-domain-task-matrix.ts scripts/test-migration-freeze.ts scripts/test-site-onboarding.ts scripts/test-pre-tool-guard.ts scripts/test-coverage-regression.ts",
+    "pr:gates:test": "node --experimental-strip-types --test scripts/test-pr-gate-classifier.ts scripts/test-domain-task-matrix.ts scripts/test-migration-freeze.ts scripts/test-site-onboarding.ts scripts/test-pre-tool-guard.ts scripts/test-coverage-regression.ts scripts/test-verify-runtime.ts",
     "security:dependency-audit": "node scripts/check-npm-production-audit.mjs",
     "security:go-vuln": "node scripts/run-go-vulnerability-scan.mjs",
     "go:lint": "node scripts/run-go-lint.mjs",
@@ -124,9 +124,10 @@
     "acceptance:phase1:rig:seed": "node scripts/phase1-central-plant-simulator.mjs --rig deploy/acceptance/phase1-simulator-rig.v1.json",
     "acceptance:phase1:rig:check": "node scripts/check-phase1-acceptance-rig.mjs",
     "test:dependency-audit-retry": "node scripts/test-npm-production-audit-retry.mjs",
-    "codegraph:init": "codegraph init .",
-    "codegraph:sync": "codegraph sync .",
-    "codegraph:status": "codegraph status ."
+    "verify:doctor": "node --experimental-strip-types scripts/check-verify-runtime.ts",
+    "codegraph:init": "node ./node_modules/@colbymchenry/codegraph/npm-shim.js init .",
+    "codegraph:sync": "node ./node_modules/@colbymchenry/codegraph/npm-shim.js sync .",
+    "codegraph:status": "node ./node_modules/@colbymchenry/codegraph/npm-shim.js status ."
   },
   "engines": {
     "node": ">=22.22.0"
