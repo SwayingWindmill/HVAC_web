@@ -39,7 +39,7 @@ npm run go:lint && npm run security:go-vuln              # 改了 Go 代码或�
 npm run deployment:phase1:check                          # 改了 Compose 或迁移清单后
 ```
 
-- **搜索与上下文**：先用 `codegraph_explore` / `codegraph_context`（见 `docs/agents/codegraph.md`）；查文本、列文件或看历史时直接跑单条 Git 命令（`git grep -n`、`git ls-files`、`git diff`、`git log`、`git show`），留在原平台执行，不拼管道（`|`）、`&&` 或 `||`。
+- **搜索与上下文**：先用 `codegraph_explore`（见 `docs/agents/codegraph.md`）；查文本、列文件或看历史时直接跑单条 Git 命令（`git grep -n`、`git ls-files`、`git diff`、`git log`、`git show`），留在原平台执行，不拼管道（`|`）、`&&` 或 `||`。
 - **读文件与汇报**：用 `read_file` 并行读取相关的 `150–250` 行（`300` 行以内整文件一次读完）；回复只列结论、路径和实际跑过的验证结果。
 - 交 PR 前，把 `scripts/domain-task-matrix.ts` 里和改动相关的命令在本地跑一遍；Windows 上 `git push`、`gh` 在 WSL 里运行。
 - 浏览器测试的接口数据在 `apps/hvac-web/e2e/fixtures/`（从本地环境录制、已脱敏），写操作由 `e2e/gateway.ts` 按负责那类数据的模块的规则模拟。页面改了接口调用，同步改测试桩。

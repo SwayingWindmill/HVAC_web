@@ -15,7 +15,7 @@ npm run codegraph:init
 
 ## 命令
 
-支持 MCP 的 agent 优先直接调用 `codegraph_explore`、`codegraph_context`、`codegraph_search` 和 `codegraph_impact`；CLI 命令如下：
+支持 MCP 的 agent 直接调用 `codegraph_explore`（`1.6.2` 默认仅暴露该工具，单次返回带行号源码、调用路径与影响范围；桌面端从仓库外目录启动时传 `projectPath`；若需额外启用 `node`、`search`、`impact` 等分项 MCP 工具可配置 `CODEGRAPH_MCP_TOOLS`）。CLI 命令如下：
 
 ```bash
 npm run codegraph:status
