@@ -43,7 +43,7 @@ Default: proceed directly to implementation with the synthesized design. No huma
 
 Opt in to a checkpoint when the invoker explicitly asks: "/architect with checkpoint," "stop and show me before implementing," or similar. Then surface the synthesized design and pause for sign-off.
 
-The synthesis can ship as its own commit either way (scaffolding interfaces and types first). Planned and scoped breakage during fill-in is fine while replacing stubs. For adversarial pressure on the design before implementing, run `grilling` or `blast-radius` on the synthesized sketch.
+The synthesis can ship as its own commit either way (scaffolding interfaces and types first). Planned and scoped breakage during fill-in is fine while replacing stubs. For adversarial pressure on the design before implementing, run `interrogate` or `blast-radius` on the synthesized sketch.
 
 If the human pushes back on the shape (in a checkpoint or after the fact), treat that as Phase A evidence. Re-ground and re-run Phase B before writing more code.
 

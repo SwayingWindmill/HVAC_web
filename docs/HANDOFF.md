@@ -2,7 +2,7 @@
 
 现在做到哪、下一步做什么、服务器和本地环境有哪些特殊情况。改了这里说的事，就在同一个 PR 里更新本文（单次读取预算 `<= 28 KiB`，`npm run repo:check` 会检查；详细运维步骤放 `docs/operations/`）。怎么构建、测试和运行见 `AGENTS.md`；用户能看到的变化见 `CHANGELOG.md`；每张单的细节在 GitHub 问题单里。
 
-最后更新：2026-11-13。
+最后更新：2026-11-14。
 
 ## 产品现在有什么
 
@@ -95,3 +95,4 @@
 
 - 故障与变更手册见 `docs/operations/`：`disk-full.md`、`postgres-crash.md`、`restore-from-backup.md`、`rollback.md`、`certificate-renewal.md`、`rotate-secrets.md`、`alert-receivers.md`、`alerts.md`、`energy-hourly-rollup.md`。
 - `.github/workflows/quality.yml` 检查 Go 语句与网页 `src` 行覆盖率不低于基线（允许 0.1 个百分点误差），并用录制网关跑登录、告警与实时运行 e2e；控制指令与 MQTT 关联不变量另由 `npm run command:formal`（`command-safety`）在静态/单测门禁中穷举校验。
+- Agent 技能树已完成纯 `pstack` 切换（共 `31` 个技能：精简版 `poteto-mode` + 25 个 `pstack` 技能 + `verify` + `command-safety` + 3 个 UI 技能），由 `npm run repo:check` 自动校对 `.agents/skills/` 与 `.claude/skills/` 逐字节 1:1 镜像。
