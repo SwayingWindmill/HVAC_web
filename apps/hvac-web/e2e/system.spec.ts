@@ -82,3 +82,78 @@ test('the AI 助手 tab says so when the account cannot read records', async ({ 
   await page.goto('/system?tab=assistant');
   await expect(page.getByRole('tabpanel')).toContainText('当前账号没有查看操作记录的权限');
 });
+
+test('站点与组织 shows authorized site summaries, registered device counts, zero overflow at 1440px, and links to 资产与点位', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/system?tab=site');
+
+  const summary = page.getByRole('region', { name: '站点概况' });
+  await expect(summary).toContainText('1个');
+  await expect(summary).toContainText('1 个已启用');
+  await expect(summary).toContainText('现场网关1个');
+  await expect(summary).toContainText('8台');
+  await expect(summary).toContainText('已登记的现场设备');
+  await expect(summary).toContainText('已同步');
+
+  const table = page.getByRole('table', { name: '授权站点' });
+  const row = table.getByRole('row', { name: /中央机房/ });
+  await expect(row).toContainText('central-plant');
+  await expect(row).toContainText('UTC+8');
+  await expect(row).toContainText('32,000 m²');
+  await expect(row).toContainText('夏热冬冷地区');
+  await expect(row).toContainText('8 台');
+  await expect(row).toContainText('已启用');
+
+  const hasOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(hasOverflow).toBe(false);
+
+  await row.getByRole('button', { name: '资产与点位' }).click();
+  await expect(page).toHaveURL(/tab=registry/);
+  await expect(page.getByRole('tabpanel')).toContainText('资源与绑定');
+});
+
+test('操作记录 refuses to query or search when the account lacks audit.read', async ({ page, gateway }) => {
+  await page.goto('/system?tab=audit');
+  const panel = page.getByRole('tabpanel');
+  await expect(panel).toContainText('当前账号没有查看操作记录的权限');
+  await expect(panel.getByRole('textbox', { name: '搜索操作记录', exact: true })).toBeDisabled();
+  expect(gateway.writes.filter((write) => write.path === '/api/v1/audit/search')).toHaveLength(0);
+});
+
+test('操作记录 renders translated audit facts with zero raw codes, zero overflow at 1440px, and supports search', async ({ page, gateway }) => {
+  gateway.principalOverride = {
+    ...principal,
+    authorization: { ...principal.authorization, capabilities: [...principal.authorization.capabilities, 'audit.read'] },
+  };
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/system?tab=audit');
+
+  const panel = page.getByRole('tabpanel');
+  const table = panel.getByRole('table', { name: '操作记录' });
+  await expect(table).toBeVisible();
+
+  const auditQueries = gateway.writes.filter((write) => write.path === '/api/v1/audit/search');
+  expect(auditQueries.map((write) => write.body)).toEqual([{ limit: 100 }]);
+
+  const bodyRows = table.locator('tbody tr');
+  await expect(bodyRows).toHaveCount(3);
+  await expect(bodyRows.nth(0)).toContainText(/值班工程师.*撤销会话.*登录会话.*成功/);
+  await expect(bodyRows.nth(1)).toContainText(/其他账号.*未识别的操作.*其他对象.*拒绝/);
+  await expect(bodyRows.nth(2)).toContainText(/值班工程师.*登录.*登录会话.*成功/);
+  await expect(panel).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|SESSION_|bff-session|SUCCEEDED|DENIED|SOMETHING_NEW|mystery/);
+
+  const hasOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(hasOverflow).toBe(false);
+
+  const search = panel.getByRole('textbox', { name: '搜索操作记录', exact: true });
+  await search.fill('撤销会话');
+  await expect(bodyRows).toHaveCount(1);
+  await expect(bodyRows.first()).toContainText('撤销会话');
+
+  await search.fill('不存在的词');
+  await expect(panel).toContainText('没有匹配的操作记录');
+});

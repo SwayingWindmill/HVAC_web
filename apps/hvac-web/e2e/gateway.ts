@@ -282,6 +282,9 @@ export class Gateway {
   alarmsDenied = false;
   /** IAM refuses Command listing for the Site. */
   commandsDenied = false;
+  /** Recorded Tenant audit records and an IAM refusal override for `/api/v1/audit/search`. */
+  readonly auditRecords = fixture<Json[]>('audit-records.json');
+  auditDenied = false;
   /** Daily energy series repeat the recorded day's total each day, so days line up with other daily series. */
   energyByDay = false;
   /** Telemetry fails the weather station's daily temperature. */
@@ -892,6 +895,31 @@ export class Gateway {
     const now = new Date().toISOString();
     if (method === 'GET' && path === '/api/v1/principal') return { body: this.principalOverride ?? principal };
     if (method === 'GET' && path === '/api/v1/platform/status') return { body: fixture('platform-status.json') };
+    if (method === 'POST' && path === '/api/v1/audit/search') {
+      const activePrincipal = this.principalOverride ?? principal;
+      const canReadAudit = Boolean(activePrincipal.authorization?.capabilities?.includes('audit.read'));
+      if (this.auditDenied || !canReadAudit) {
+        return {
+          status: 403,
+          body: { type: 'about:blank', title: 'Forbidden', status: 403, detail: 'Audit search access is forbidden.', instance: path, code: 'FORBIDDEN', traceId: '0'.repeat(32), retryable: false },
+        };
+      }
+      const limit = typeof body?.limit === 'number' && Number.isFinite(body.limit)
+        ? Math.max(1, Math.min(100, body.limit))
+        : 100;
+      const items = this.auditRecords
+        .filter((record) =>
+          (!body?.actor || record.actor === body.actor)
+          && (!body?.action || record.action === body.action)
+          && (!body?.resourceType || record.resourceType === body.resourceType)
+          && (!body?.resourceId || record.resourceId === body.resourceId)
+          && (!body?.outcome || record.outcome === body.outcome)
+          && (!body?.from || Date.parse(record.occurredAt) >= Date.parse(body.from))
+          && (!body?.to || Date.parse(record.occurredAt) <= Date.parse(body.to)))
+        .sort((left, right) => right.ledgerSequence - left.ledgerSequence)
+        .slice(0, limit);
+      return { body: { items } };
+    }
     const userAdmin = this.userAdmin(method, path, body);
     if (userAdmin) return userAdmin;
     if (method === 'GET' && path === '/api/v1/sites') return { body: fixture('sites.json') };

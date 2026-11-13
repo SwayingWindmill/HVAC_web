@@ -20,6 +20,20 @@
 
 ## 怎么跑
 
+### 方式一：命令行（推荐，`evals/cli.ts`）
+
+通过环境变量提供账号或令牌（命令参数传密钥会被直接拒绝），调用网关 `/api/v1/auth/app/sessions`（支持 `OPERATIONS_AGENT_EVAL_TOTP_CODE`）拿短期 Bearer 会话执行并打分，结束后自动调 `/api/v1/auth/logout` 注销自己创建的会话；凭据缺失或网关不可达时返回退出码 `2`（`PRECONDITION_UNMET`）：
+
+```bash
+OPERATIONS_AGENT_EVAL_USERNAME=<值班账号> \
+OPERATIONS_AGENT_EVAL_PASSWORD=<密码> \
+npm run operations-agent:eval -- --only=daily-electricity-cooling-cop --trials=1 --output=.scratch/verify/agent-eval.json
+```
+
+也支持直接传已登录会话令牌 `OPERATIONS_AGENT_EVAL_SESSION_TOKEN`（不会在结束时替你注销），以及 `--origin`、`--site`、`--timeout-ms`、`--poll-ms`、`--rate-window-ms`。
+
+### 方式二：已登录浏览器控制台（`evals/run.ts`）
+
 ```bash
 npm --prefix services/operations-agent-service run eval:build
 ```

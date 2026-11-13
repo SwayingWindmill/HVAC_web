@@ -36,11 +36,32 @@ export interface SuiteReport {
   readonly results: readonly TrialResult[];
 }
 
+export type EvalTransport = (path: string, init?: RequestInit) => Promise<unknown>;
+
 export interface RunOptions {
-  readonly trials?: number;
+  readonly trials?: number | undefined;
   /** Question ids to run again; all when omitted. */
-  readonly only?: readonly string[];
-  readonly onProgress?: (line: string) => void;
+  readonly only?: readonly string[] | undefined;
+  readonly onProgress?: ((line: string) => void) | undefined;
+  readonly siteId?: string | undefined;
+  readonly transport?: EvalTransport | undefined;
+  readonly pollMs?: number | undefined;
+  readonly rateWindowMs?: number | undefined;
+  readonly runTimeoutMs?: number | undefined;
+  readonly sleep?: ((ms: number) => Promise<void>) | undefined;
+}
+
+export interface SuiteSummary {
+  readonly siteId: string;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  readonly totalQuestions: number;
+  readonly passedAllQuestions: number;
+  readonly totalTrials: number;
+  readonly passedTrials: number;
+  readonly regressionPassed: boolean;
+  readonly passed: boolean;
+  readonly questions: readonly QuestionReport[];
 }
 
 // The Gateway allows 30 Agent Session requests a minute per signed-in session, polls included.
@@ -49,13 +70,20 @@ const RATE_WINDOW_MS = 60_000;
 const RATE_LIMITED_RETRIES = 3;
 const RUN_TIMEOUT_MS = 180_000;
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const request = async (path: string, init: RequestInit = {}): Promise<unknown> => {
+const createBrowserTransport = (
+  rateWindowMs: number,
+  sleepFn: (ms: number) => Promise<void>,
+): EvalTransport => async (path, init = {}) => {
   for (let attempt = 0; ; attempt += 1) {
-    const response = await fetch(path, { credentials: 'include', ...init, headers: { Accept: 'application/json', ...init.headers } });
+    const response = await fetch(path, {
+      credentials: 'include',
+      ...init,
+      headers: { Accept: 'application/json', ...init.headers },
+    });
     if (response.status === 429 && attempt < RATE_LIMITED_RETRIES) {
-      await sleep(RATE_WINDOW_MS);
+      await sleepFn(rateWindowMs);
       continue;
     }
     if (!response.ok) throw new Error(`${init.method ?? 'GET'} ${path} answered ${response.status}`);
@@ -64,18 +92,43 @@ const request = async (path: string, init: RequestInit = {}): Promise<unknown> =
 };
 const mean = (values: readonly number[]) => (values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length);
 
+export const summarizeSuiteReport = (report: SuiteReport): SuiteSummary => {
+  const regression = report.questions.filter((question) => question.kind === 'regression');
+  return {
+    siteId: report.siteId,
+    startedAt: report.startedAt,
+    finishedAt: report.finishedAt,
+    totalQuestions: report.questions.length,
+    passedAllQuestions: report.questions.filter((question) => question.passedEveryTrial).length,
+    totalTrials: report.results.length,
+    passedTrials: report.results.filter((result) => result.passed).length,
+    regressionPassed: regression.every((question) => question.passedEveryTrial),
+    passed: report.questions.length > 0 && report.questions.every((question) => question.passedEveryTrial),
+    questions: report.questions,
+  };
+};
+
 export const runSuite = async (options: RunOptions = {}): Promise<SuiteReport> => {
-  const siteId = SONGYAXUAN_SITE_ID;
+  const siteId = options.siteId ?? SONGYAXUAN_SITE_ID;
   const trials = options.trials ?? 3;
+  const pollMs = options.pollMs ?? POLL_MS;
+  const rateWindowMs = options.rateWindowMs ?? RATE_WINDOW_MS;
+  const runTimeoutMs = options.runTimeoutMs ?? RUN_TIMEOUT_MS;
+  const sleepFn = options.sleep ?? sleep;
+  const request = options.transport ?? createBrowserTransport(rateWindowMs, sleepFn);
   const chosen = suite.filter((question) => options.only === undefined || options.only.includes(question.id));
   const progress = options.onProgress ?? (() => undefined);
   const startedAt = new Date().toISOString();
 
-  const principal = await request('/api/v1/principal') as { session: { csrfToken: string } };
+  const principal = await request('/api/v1/principal') as { session?: { csrfToken?: string | undefined } | undefined };
   const site = await request(`/api/v1/sites/${siteId}`) as { tenantId: string; timezone: string };
+  const csrfToken = principal.session?.csrfToken;
   const post = (path: string, body: unknown) => request(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': principal.session.csrfToken },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+    },
     body: JSON.stringify(body),
   });
 
@@ -98,9 +151,9 @@ export const runSuite = async (options: RunOptions = {}): Promise<SuiteReport> =
   const sessions = `/api/v1/sites/${siteId}/operations/agent-sessions`;
   const ask = async (question: EvalQuestion): Promise<AgentSessionSnapshot> => {
     let snapshot = await post(sessions, { message: question.text }) as AgentSessionSnapshot;
-    const deadline = Date.now() + RUN_TIMEOUT_MS;
+    const deadline = Date.now() + runTimeoutMs;
     while (snapshot.session.status === 'ACTIVE' && Date.now() < deadline) {
-      await sleep(POLL_MS);
+      await sleepFn(pollMs);
       snapshot = await request(`${sessions}/${snapshot.session.id}`) as AgentSessionSnapshot;
     }
     if (snapshot.session.status === 'ACTIVE') {

@@ -8,5 +8,5 @@
     "declarationMap": false,
     "sourceMap": false
   },
-  "include": ["./**/*.ts", "../test/agent-eval-grading.test.ts"]
+  "include": ["./**/*.ts", "../test/agent-eval-grading.test.ts", "../test/agent-eval-cli.test.ts"]
 }
