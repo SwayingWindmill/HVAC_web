@@ -127,16 +127,24 @@ const MAX_SITE_PAGES = 100;
 
 class SiteDiscoveryValidationError extends Error {}
 
-function problemFrom(error: unknown): ProblemDetails | undefined {
+type ShellProblem = Pick<ProblemDetails, 'status' | 'code'> & Partial<Pick<ProblemDetails, 'detail' | 'traceId' | 'retryable'>>;
+
+function problemFrom(error: unknown): ShellProblem | undefined {
   if (!error || typeof error !== 'object' || !('problem' in error)) return undefined;
-  const problem = (error as { problem?: unknown }).problem;
-  if (!problem || typeof problem !== 'object') return undefined;
-  if (typeof (problem as { status?: unknown }).status !== 'number') return undefined;
-  if (typeof (problem as { code?: unknown }).code !== 'string') return undefined;
-  return problem as ProblemDetails;
+  const candidate = error.problem;
+  if (!candidate || typeof candidate !== 'object') return undefined;
+  if (!('status' in candidate) || typeof candidate.status !== 'number') return undefined;
+  if (!('code' in candidate) || typeof candidate.code !== 'string') return undefined;
+  return {
+    status: candidate.status,
+    code: candidate.code,
+    detail: 'detail' in candidate && typeof candidate.detail === 'string' ? candidate.detail : undefined,
+    traceId: 'traceId' in candidate && typeof candidate.traceId === 'string' ? candidate.traceId : undefined,
+    retryable: 'retryable' in candidate && typeof candidate.retryable === 'boolean' ? candidate.retryable : undefined,
+  };
 }
 
-function failureFrom(problem: ProblemDetails | undefined, fallbackCode: string, fallbackDetail: string): ShellFailureView {
+function failureFrom(problem: ShellProblem | undefined, fallbackCode: string, fallbackDetail: string): ShellFailureView {
   return {
     code: problem?.code ?? fallbackCode,
     detail: problem?.detail ?? fallbackDetail,
@@ -183,7 +191,9 @@ export function createBrowserShellEnvironment(
       form.submit();
     },
     setTimer: (handler, delayMs) => window.setTimeout(handler, delayMs),
-    clearTimer: (handle) => window.clearTimeout(handle as number),
+    clearTimer: (handle) => {
+      if (typeof handle === 'number') window.clearTimeout(handle);
+    },
     listenForUserActivity: (handler) => {
       let lastSignalAt = 0;
       const listener = () => {

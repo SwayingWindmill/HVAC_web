@@ -25,7 +25,7 @@ const dayLabel = (date: string) => `${Number(date.slice(5, 7))}月${Number(date.
 
 /**
  * Each step's calls and failures over the given days, steps the panel names alike counted together,
- * with why they failed in words (#624), the commonest first.
+ * with why they failed in words, the commonest first.
  */
 function stepTotals(days: readonly AgentUsageDay[]) {
   const totals = new Map<string, { calls: number; failed: number; reasons: Map<string, number> }>();
@@ -49,7 +49,7 @@ function stepTotals(days: readonly AgentUsageDay[]) {
 }
 
 /**
- * How the AI assistant ran on a Site over the last 14 days (#597): per day how many answers
+ * How the AI assistant ran on a Site over the last 14 days: per day how many answers
  * finished or did not, how long they took and the model usage, and each day's steps and which of
  * them failed. Figures and step names only, never a question or an answer.
  */

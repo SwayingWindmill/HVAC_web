@@ -43,6 +43,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CLIMATE_ZONE_LABEL, type ClimateZone } from '@/lib/climate-zone';
+import { isOneOf } from '@/lib/typed';
 import { confirmDiscardRegistryDraft } from './confirmDiscard';
 import {
   makeRegistryMutationMeta,
@@ -59,19 +60,43 @@ interface Props {
   onSiteCreated: (siteId: string) => void;
 }
 
-type ResourceEntity = Site | RegistrySpace | Asset | Device | TelemetryPoint;
-
-type ResourceRow = {
+type ResourceRowBase = {
   key: string;
   id: string;
-  type: RegistryAdminResourceType;
   code: string;
   displayName: string;
   subtype: string;
   status: string;
   revision: number;
-  entity: ResourceEntity;
 };
+
+type ResourceRow =
+  | (ResourceRowBase & { type: 'SITE'; entity: Site })
+  | (ResourceRowBase & { type: 'SPACE'; entity: RegistrySpace })
+  | (ResourceRowBase & { type: 'ASSET'; entity: Asset })
+  | (ResourceRowBase & { type: 'DEVICE'; entity: Device })
+  | (ResourceRowBase & { type: 'POINT'; entity: TelemetryPoint });
+
+type EditTarget =
+  | { type: 'SITE'; entity?: Site }
+  | { type: 'SPACE'; entity?: RegistrySpace }
+  | { type: 'ASSET'; entity?: Asset }
+  | { type: 'DEVICE'; entity?: Device }
+  | { type: 'POINT'; entity?: TelemetryPoint };
+
+function newEditTarget(type: RegistryAdminResourceType): EditTarget {
+  return { type };
+}
+
+function editTargetFromRow(row: ResourceRow): EditTarget {
+  switch (row.type) {
+    case 'SITE': return { type: 'SITE', entity: row.entity };
+    case 'SPACE': return { type: 'SPACE', entity: row.entity };
+    case 'ASSET': return { type: 'ASSET', entity: row.entity };
+    case 'DEVICE': return { type: 'DEVICE', entity: row.entity };
+    case 'POINT': return { type: 'POINT', entity: row.entity };
+  }
+}
 
 type EditDraft = {
   code: string;
@@ -127,9 +152,15 @@ const RESOURCE_LABEL: Record<RegistryAdminResourceType, string> = {
   POINT: '点位',
 };
 
-const SPACE_TYPES = ['CAMPUS', 'BUILDING', 'FLOOR', 'ZONE', 'ROOM', 'PLANT_ROOM', 'ROOFTOP', 'OUTDOOR', 'TENANT_SPACE', 'OTHER'];
-const POINT_TYPES = ['TELEMETRY', 'COUNTER', 'STATE', 'SETTING', 'COMMAND'];
-const VALUE_TYPES = ['BOOLEAN', 'NUMBER', 'STRING', 'JSON'];
+const RESOURCE_TYPES = ['SITE', 'SPACE', 'ASSET', 'DEVICE', 'POINT'] as const satisfies readonly RegistryAdminResourceType[];
+const CLIMATE_ZONES = ['SEVERE_COLD', 'COLD', 'HOT_SUMMER_COLD_WINTER', 'HOT_SUMMER_WARM_WINTER', 'MILD'] as const satisfies readonly ClimateZone[];
+const SPACE_TYPES = ['CAMPUS', 'BUILDING', 'FLOOR', 'ZONE', 'ROOM', 'PLANT_ROOM', 'ROOFTOP', 'OUTDOOR', 'TENANT_SPACE', 'OTHER'] as const satisfies readonly RegistrySpace['spaceType'][];
+const POINT_TYPES = ['TELEMETRY', 'COUNTER', 'STATE', 'SETTING', 'COMMAND'] as const satisfies readonly TelemetryPoint['pointType'][];
+const VALUE_TYPES = ['BOOLEAN', 'NUMBER', 'STRING', 'JSON'] as const satisfies readonly TelemetryPoint['valueType'][];
+const COUNTER_DECREASE_MODES = ['RESET_TO_ZERO', 'ROLLOVER', 'INVALID'] as const satisfies readonly NonNullable<TelemetryPoint['counterDecreaseMode']>[];
+const ENTITY_STATUSES = ['ACTIVE', 'INACTIVE'] as const satisfies readonly Site['status'][];
+const REBIND_KINDS = ['DEVICE_ASSET', 'ASSET_SPACE', 'DEVICE_SPACE', 'POINT_SUBJECT'] as const satisfies readonly RebindKind[];
+const POINT_SUBJECT_TYPES = ['SITE', 'SPACE', 'ASSET'] as const satisfies readonly RebindDraft['targetType'][];
 
 function statusLabel(status: string): string {
   if (status === 'ACTIVE') return '启用';
@@ -179,52 +210,56 @@ function entityRows(site: Site, model: SiteAssetModel, type: RegistryAdminResour
   }
 }
 
-function defaultEditDraft(type: RegistryAdminResourceType, entity?: ResourceEntity): EditDraft {
+function defaultEditDraft(target: EditTarget): EditDraft {
   const base: EditDraft = {
     code: '', displayName: '', timezone: 'Asia/Shanghai', floorAreaM2: '', climateZone: '', status: 'ACTIVE', parentSpaceId: '', spaceType: 'OTHER',
     assetType: '', deviceType: '', reportingDeviceId: '', sensorId: '', pointCode: '', sourceKey: '', pointType: 'TELEMETRY',
     valueType: 'NUMBER', unit: '', writable: false, sampleIntervalMs: 1000, publishIntervalMs: 5000, staleAfterMs: 15000,
-    counterDecreaseMode: 'RESET_TO_ZERO', counterRolloverModulus: null, reason: entity ? `更新${RESOURCE_LABEL[type]}` : `创建${RESOURCE_LABEL[type]}`,
+    counterDecreaseMode: 'RESET_TO_ZERO', counterRolloverModulus: null, reason: target.entity ? `更新${RESOURCE_LABEL[target.type]}` : `创建${RESOURCE_LABEL[target.type]}`,
   };
-  if (!entity) return base;
-  if (type === 'SITE') {
-    const value = entity as Site;
-    return {
-      ...base, code: value.code, displayName: value.displayName, timezone: value.timezone, status: value.status,
-      floorAreaM2: value.floorAreaM2 === null ? '' : String(value.floorAreaM2), climateZone: value.climateZone ?? '',
-    };
+  if (!target.entity) return base;
+  switch (target.type) {
+    case 'SITE': {
+      const value = target.entity;
+      return {
+        ...base, code: value.code, displayName: value.displayName, timezone: value.timezone, status: value.status,
+        floorAreaM2: value.floorAreaM2 === null ? '' : String(value.floorAreaM2), climateZone: value.climateZone ?? '',
+      };
+    }
+    case 'SPACE': {
+      const value = target.entity;
+      return { ...base, code: value.code, displayName: value.displayName, parentSpaceId: value.parentSpaceId ?? '', spaceType: value.spaceType, status: value.status };
+    }
+    case 'ASSET': {
+      const value = target.entity;
+      return { ...base, code: value.code, displayName: value.displayName, assetType: value.assetType, status: value.status };
+    }
+    case 'DEVICE': {
+      const value = target.entity;
+      return { ...base, code: value.code, displayName: value.displayName, deviceType: value.deviceType, status: value.status };
+    }
+    case 'POINT': {
+      const value = target.entity;
+      return {
+        ...base,
+        reportingDeviceId: value.reportingDeviceId,
+        sensorId: value.sensorId ?? '',
+        pointCode: value.pointCode,
+        sourceKey: value.sourceKey,
+        displayName: value.displayName,
+        pointType: value.pointType,
+        valueType: value.valueType,
+        unit: value.unit ?? '',
+        writable: value.writable,
+        sampleIntervalMs: value.sampleIntervalMs,
+        publishIntervalMs: value.publishIntervalMs,
+        staleAfterMs: value.staleAfterMs,
+        counterDecreaseMode: value.counterDecreaseMode ?? 'RESET_TO_ZERO',
+        counterRolloverModulus: value.counterRolloverModulus ?? null,
+        status: value.status,
+      };
+    }
   }
-  if (type === 'SPACE') {
-    const value = entity as RegistrySpace;
-    return { ...base, code: value.code, displayName: value.displayName, parentSpaceId: value.parentSpaceId ?? '', spaceType: value.spaceType, status: value.status };
-  }
-  if (type === 'ASSET') {
-    const value = entity as Asset;
-    return { ...base, code: value.code, displayName: value.displayName, assetType: value.assetType, status: value.status };
-  }
-  if (type === 'DEVICE') {
-    const value = entity as Device;
-    return { ...base, code: value.code, displayName: value.displayName, deviceType: value.deviceType, status: value.status };
-  }
-  const value = entity as TelemetryPoint;
-  return {
-    ...base,
-    reportingDeviceId: value.reportingDeviceId,
-    sensorId: value.sensorId ?? '',
-    pointCode: value.pointCode,
-    sourceKey: value.sourceKey,
-    displayName: value.displayName,
-    pointType: value.pointType,
-    valueType: value.valueType,
-    unit: value.unit ?? '',
-    writable: value.writable,
-    sampleIntervalMs: value.sampleIntervalMs,
-    publishIntervalMs: value.publishIntervalMs,
-    staleAfterMs: value.staleAfterMs,
-    counterDecreaseMode: value.counterDecreaseMode ?? 'RESET_TO_ZERO',
-    counterRolloverModulus: value.counterRolloverModulus ?? null,
-    status: value.status,
-  };
 }
 
 function selectOptionsForBinding(kind: RebindKind, model: SiteAssetModel, site: Site, targetType: RebindDraft['targetType']) {
@@ -243,8 +278,8 @@ function selectOptionsForBinding(kind: RebindKind, model: SiteAssetModel, site: 
 
 export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyChange, onRefresh, onSiteCreated }: Props) {
   const [resourceType, setResourceType] = useState<RegistryAdminResourceType>('SPACE');
-  const [editTarget, setEditTarget] = useState<{ type: RegistryAdminResourceType; entity?: ResourceEntity } | null>(null);
-  const [editDraft, setEditDraft] = useState<EditDraft>(() => defaultEditDraft('SPACE'));
+  const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
+  const [editDraft, setEditDraft] = useState<EditDraft>(() => defaultEditDraft({ type: 'SPACE' }));
   const [retireTarget, setRetireTarget] = useState<ResourceRow | null>(null);
   const [retireReason, setRetireReason] = useState('');
   const [rebindOpen, setRebindOpen] = useState(false);
@@ -303,10 +338,10 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
     setRebindDirty(false);
   };
 
-  const openEditor = useCallback((type: RegistryAdminResourceType, entity?: ResourceEntity) => {
+  const openEditor = useCallback((target: EditTarget) => {
     setError(null);
-    setEditTarget({ type, entity });
-    setEditDraft(defaultEditDraft(type, entity));
+    setEditTarget(target);
+    setEditDraft(defaultEditDraft(target));
     setEditDirty(false);
   }, []);
 
@@ -354,32 +389,31 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
 
   const runEdit = async () => {
     if (!editTarget || !editValid) return;
-    const { type, entity } = editTarget;
-    const expectedRevision = entity?.revision ?? 0;
-    const meta = makeRegistryMutationMeta(expectedRevision, editDraft.reason.trim(), newRegistryIdempotencyKey(`${type.toLowerCase()}-${entity ? 'update' : 'create'}`));
+    const expectedRevision = editTarget.entity?.revision ?? 0;
+    const meta = makeRegistryMutationMeta(expectedRevision, editDraft.reason.trim(), newRegistryIdempotencyKey(`${editTarget.type.toLowerCase()}-${editTarget.entity ? 'update' : 'create'}`));
     setWorking(true);
     setError(null);
     try {
       let createdSiteId: string | null = null;
-      if (type === 'SITE') {
+      if (editTarget.type === 'SITE') {
         const area = editDraft.floorAreaM2.trim();
         const body = {
           code: editDraft.code.trim(), displayName: editDraft.displayName.trim(), timezone: editDraft.timezone.trim(), status: editDraft.status,
           floorAreaM2: area === '' ? undefined : Number(area), climateZone: editDraft.climateZone || undefined, meta,
         };
-        const saved = entity ? await registryAdminApi.updateSite(entity.id, body) : await registryAdminApi.createSite(body);
-        createdSiteId = entity ? null : saved.id;
-      } else if (type === 'SPACE') {
+        const saved = editTarget.entity ? await registryAdminApi.updateSite(editTarget.entity.id, body) : await registryAdminApi.createSite(body);
+        createdSiteId = editTarget.entity ? null : saved.id;
+      } else if (editTarget.type === 'SPACE') {
         const body = { parentSpaceId: editDraft.parentSpaceId || undefined, code: editDraft.code.trim(), displayName: editDraft.displayName.trim(), spaceType: editDraft.spaceType, status: editDraft.status, meta };
-        if (entity) await registryAdminApi.updateSpace(site.id, entity.id, body);
+        if (editTarget.entity) await registryAdminApi.updateSpace(site.id, editTarget.entity.id, body);
         else await registryAdminApi.createSpace(site.id, body);
-      } else if (type === 'ASSET') {
+      } else if (editTarget.type === 'ASSET') {
         const body = { code: editDraft.code.trim(), displayName: editDraft.displayName.trim(), assetType: editDraft.assetType.trim(), status: editDraft.status, meta };
-        if (entity) await registryAdminApi.updateAsset(site.id, entity.id, body);
+        if (editTarget.entity) await registryAdminApi.updateAsset(site.id, editTarget.entity.id, body);
         else await registryAdminApi.createAsset(site.id, body);
-      } else if (type === 'DEVICE') {
+      } else if (editTarget.type === 'DEVICE') {
         const body = { code: editDraft.code.trim(), displayName: editDraft.displayName.trim(), deviceType: editDraft.deviceType.trim(), status: editDraft.status, meta };
-        if (entity) await registryAdminApi.updateDevice(site.id, entity.id, body);
+        if (editTarget.entity) await registryAdminApi.updateDevice(site.id, editTarget.entity.id, body);
         else await registryAdminApi.createDevice(site.id, body);
       } else {
         const body = {
@@ -397,14 +431,14 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
           staleAfterMs: editDraft.staleAfterMs,
           counterDecreaseMode: editDraft.pointType === 'COUNTER' ? editDraft.counterDecreaseMode || undefined : undefined,
           counterRolloverModulus: editDraft.pointType === 'COUNTER' && editDraft.counterDecreaseMode === 'ROLLOVER' ? editDraft.counterRolloverModulus ?? undefined : undefined,
-          sourceMetadata: entity ? (entity as TelemetryPoint).sourceMetadata : {},
+          sourceMetadata: editTarget.entity ? editTarget.entity.sourceMetadata : {},
           status: editDraft.status,
           meta,
         };
-        if (entity) await registryAdminApi.updatePoint(site.id, entity.id, body);
+        if (editTarget.entity) await registryAdminApi.updatePoint(site.id, editTarget.entity.id, body);
         else await registryAdminApi.createPoint(site.id, body);
       }
-      setResultMessage(`${RESOURCE_LABEL[type]}${entity ? '更新' : '创建'}成功。`);
+      setResultMessage(`${RESOURCE_LABEL[editTarget.type]}${editTarget.entity ? '更新' : '创建'}成功。`);
       setEditTarget(null);
       setEditDirty(false);
       await onRefresh();
@@ -516,7 +550,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
             variant="ghost"
             size="sm"
             disabled={!capabilities.has(WRITE_CAPABILITY[row.original.type]) || row.original.status === 'RETIRED'}
-            onClick={() => openEditor(row.original.type, row.original.entity)}
+            onClick={() => openEditor(editTargetFromRow(row.original))}
           >
             <Pencil />编辑
           </Button>
@@ -613,7 +647,8 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
               <Tabs
                 value={resourceType}
                 onValueChange={(val) => {
-                  setResourceType(val as RegistryAdminResourceType);
+                  if (!isOneOf(RESOURCE_TYPES, val)) return;
+                  setResourceType(val);
                   resourceTable.setPageIndex(0);
                 }}
               >
@@ -626,7 +661,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
                 </TabsList>
               </Tabs>
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" disabled={!writeAllowed} onClick={() => openEditor(resourceType)}><Plus />创建{RESOURCE_LABEL[resourceType]}</Button>
+                <Button size="sm" disabled={!writeAllowed} onClick={() => openEditor(newEditTarget(resourceType))}><Plus />创建{RESOURCE_LABEL[resourceType]}</Button>
                 <Button size="sm" variant="outline" disabled={!bindingAllowed} onClick={() => { setRebindOpen(true); setRebindDirty(false); }}><Link2 />调整关系</Button>
               </div>
             </div>
@@ -681,11 +716,11 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
                   </label>
                   <label className="grid gap-1.5 text-sm">
                     <span>气候区（可选）</span>
-                    <Select value={editDraft.climateZone || '__none__'} onValueChange={(value) => updateEdit('climateZone', value === '__none__' ? '' : value as ClimateZone)}>
+                    <Select value={editDraft.climateZone || '__none__'} onValueChange={(value) => { if (value === '__none__') updateEdit('climateZone', ''); else if (isOneOf(CLIMATE_ZONES, value)) updateEdit('climateZone', value); }}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent><SelectGroup>
                         <SelectItem value="__none__">未登记</SelectItem>
-                        {(Object.keys(CLIMATE_ZONE_LABEL) as ClimateZone[]).map((zone) => <SelectItem key={zone} value={zone}>{CLIMATE_ZONE_LABEL[zone]}</SelectItem>)}
+                        {CLIMATE_ZONES.map((zone) => <SelectItem key={zone} value={zone}>{CLIMATE_ZONE_LABEL[zone]}</SelectItem>)}
                       </SelectGroup></SelectContent>
                     </Select>
                     <span className="text-xs text-muted-foreground">按 GB 50176 热工分区</span>
@@ -693,7 +728,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
                 </div>
               </> : null}
               {editTarget.type === 'SPACE' ? <>
-                <label className="grid gap-1.5 text-sm"><span>空间类型</span><Select value={editDraft.spaceType} onValueChange={(value) => updateEdit('spaceType', value as RegistrySpace['spaceType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{SPACE_TYPES.map((value) => <SelectItem key={value} value={value}>{spaceTypeLabel(value)}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
+                <label className="grid gap-1.5 text-sm"><span>空间类型</span><Select value={editDraft.spaceType} onValueChange={(value) => { if (isOneOf(SPACE_TYPES, value)) updateEdit('spaceType', value); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{SPACE_TYPES.map((value) => <SelectItem key={value} value={value}>{spaceTypeLabel(value)}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
                 <label className="grid gap-1.5 text-sm"><span>上级空间</span><Select value={editDraft.parentSpaceId || '__none__'} onValueChange={(value) => updateEdit('parentSpaceId', value === '__none__' ? '' : value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="__none__">无上级空间</SelectItem>{model.spaces.filter((space) => space.id !== editTarget.entity?.id).map((space) => <SelectItem key={space.id} value={space.id}>{space.displayName} · {space.code}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
               </> : null}
               {editTarget.type === 'ASSET' ? <label className="grid gap-1.5 text-sm"><span>资产类型</span><Input value={editDraft.assetType} onChange={(event) => updateEdit('assetType', event.target.value)} /></label> : null}
@@ -703,13 +738,13 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
                 <label className="grid gap-1.5 text-sm"><span>物理传感器（可选）</span><Select value={editDraft.sensorId || '__none__'} onValueChange={(value) => updateEdit('sensorId', value === '__none__' ? '' : value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="__none__">未绑定传感器</SelectItem>{model.sensors.map((sensor) => <SelectItem key={sensor.id} value={sensor.id}>{sensor.displayName} · {sensor.code}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
                 <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>点位编码</span><Input value={editDraft.pointCode} onChange={(event) => updateEdit('pointCode', event.target.value)} /></label><label className="grid gap-1.5 text-sm"><span>来源键</span><Input value={editDraft.sourceKey} onChange={(event) => updateEdit('sourceKey', event.target.value)} /></label></div>
                 <label className="grid gap-1.5 text-sm"><span>名称</span><Input value={editDraft.displayName} onChange={(event) => updateEdit('displayName', event.target.value)} /></label>
-                <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>点位类型</span><Select value={editDraft.pointType} onValueChange={(value) => updateEdit('pointType', value as TelemetryPoint['pointType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{POINT_TYPES.map((value) => <SelectItem key={value} value={value}>{pointTypeLabel(value)}</SelectItem>)}</SelectGroup></SelectContent></Select></label><label className="grid gap-1.5 text-sm"><span>值类型</span><Select disabled={editDraft.pointType === 'COUNTER'} value={editDraft.valueType} onValueChange={(value) => updateEdit('valueType', value as TelemetryPoint['valueType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{VALUE_TYPES.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectGroup></SelectContent></Select></label></div>
-                {editDraft.pointType === 'COUNTER' ? <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>累计量下降处理</span><Select value={editDraft.counterDecreaseMode} onValueChange={(value) => updateEdit('counterDecreaseMode', value as NonNullable<TelemetryPoint['counterDecreaseMode']>)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="RESET_TO_ZERO">复位归零</SelectItem><SelectItem value="ROLLOVER">量程回绕</SelectItem><SelectItem value="INVALID">视为无效</SelectItem></SelectGroup></SelectContent></Select></label><label className="grid gap-1.5 text-sm"><span>回绕模数</span><Input type="number" disabled={editDraft.counterDecreaseMode !== 'ROLLOVER'} min={0} value={editDraft.counterRolloverModulus ?? ''} onChange={(event) => updateEdit('counterRolloverModulus', event.target.value === '' ? null : Number(event.target.value))} /></label></div> : null}
+                <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>点位类型</span><Select value={editDraft.pointType} onValueChange={(value) => { if (isOneOf(POINT_TYPES, value)) updateEdit('pointType', value); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{POINT_TYPES.map((value) => <SelectItem key={value} value={value}>{pointTypeLabel(value)}</SelectItem>)}</SelectGroup></SelectContent></Select></label><label className="grid gap-1.5 text-sm"><span>值类型</span><Select disabled={editDraft.pointType === 'COUNTER'} value={editDraft.valueType} onValueChange={(value) => { if (isOneOf(VALUE_TYPES, value)) updateEdit('valueType', value); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{VALUE_TYPES.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectGroup></SelectContent></Select></label></div>
+                {editDraft.pointType === 'COUNTER' ? <div className="grid gap-4 sm:grid-cols-2"><label className="grid gap-1.5 text-sm"><span>累计量下降处理</span><Select value={editDraft.counterDecreaseMode} onValueChange={(value) => { if (isOneOf(COUNTER_DECREASE_MODES, value)) updateEdit('counterDecreaseMode', value); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="RESET_TO_ZERO">复位归零</SelectItem><SelectItem value="ROLLOVER">量程回绕</SelectItem><SelectItem value="INVALID">视为无效</SelectItem></SelectGroup></SelectContent></Select></label><label className="grid gap-1.5 text-sm"><span>回绕模数</span><Input type="number" disabled={editDraft.counterDecreaseMode !== 'ROLLOVER'} min={0} value={editDraft.counterRolloverModulus ?? ''} onChange={(event) => updateEdit('counterRolloverModulus', event.target.value === '' ? null : Number(event.target.value))} /></label></div> : null}
                 <label className="grid gap-1.5 text-sm"><span>单位（可选）</span><Input value={editDraft.unit} onChange={(event) => updateEdit('unit', event.target.value)} /></label>
                 <div className="grid gap-4 sm:grid-cols-3"><label className="grid gap-1.5 text-sm"><span>采样间隔 ms</span><Input type="number" min={100} value={editDraft.sampleIntervalMs} onChange={(event) => updateEdit('sampleIntervalMs', Number(event.target.value))} /></label><label className="grid gap-1.5 text-sm"><span>发布间隔 ms</span><Input type="number" min={100} value={editDraft.publishIntervalMs} onChange={(event) => updateEdit('publishIntervalMs', Number(event.target.value))} /></label><label className="grid gap-1.5 text-sm"><span>陈旧阈值 ms</span><Input type="number" min={100} value={editDraft.staleAfterMs} onChange={(event) => updateEdit('staleAfterMs', Number(event.target.value))} /></label></div>
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editDraft.writable} disabled={editDraft.pointType !== 'SETTING'} onChange={(event) => updateEdit('writable', event.target.checked)} /><span>允许作为设定值写入</span></label>
               </> : null}
-              <label className="grid gap-1.5 text-sm"><span>状态</span><Select value={editDraft.status} onValueChange={(value) => updateEdit('status', value as Site['status'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="ACTIVE">启用</SelectItem><SelectItem value="INACTIVE">停用</SelectItem></SelectGroup></SelectContent></Select></label>
+              <label className="grid gap-1.5 text-sm"><span>状态</span><Select value={editDraft.status} onValueChange={(value) => { if (isOneOf(ENTITY_STATUSES, value)) updateEdit('status', value); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="ACTIVE">启用</SelectItem><SelectItem value="INACTIVE">停用</SelectItem></SelectGroup></SelectContent></Select></label>
               <label className="grid gap-1.5 text-sm"><span>变更原因</span><Textarea rows={2} value={editDraft.reason} onChange={(event) => updateEdit('reason', event.target.value)} /></label>
               {editTarget.entity ? <Alert><AlertTitle>并发保护已启用</AlertTitle><AlertDescription>若此对象已被其他人更新，本次保存会被服务端拒绝，不会覆盖更新后的数据。</AlertDescription></Alert> : null}
             </div>
@@ -731,8 +766,8 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
         <DialogContent className="sm:max-w-xl">
           <DialogHeader><DialogTitle>调整登记关系</DialogTitle><DialogDescription>选择已有登记对象建立新的有效关系，不需要手工填写内部标识。</DialogDescription></DialogHeader>
           <div className="grid gap-4">
-            <label className="grid gap-1.5 text-sm"><span>关系类型</span><Select value={rebindDraft.kind} onValueChange={(value) => updateRebind('kind', value as RebindKind)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="DEVICE_ASSET">设备 → 资产</SelectItem><SelectItem value="ASSET_SPACE">资产 → 空间</SelectItem><SelectItem value="DEVICE_SPACE">设备 → 空间</SelectItem><SelectItem value="POINT_SUBJECT">点位 → 测量对象</SelectItem></SelectGroup></SelectContent></Select></label>
-            {rebindDraft.kind === 'POINT_SUBJECT' ? <label className="grid gap-1.5 text-sm"><span>目标对象类型</span><Select value={rebindDraft.targetType} onValueChange={(value) => updateRebind('targetType', value as RebindDraft['targetType'])}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="SITE">站点</SelectItem><SelectItem value="SPACE">空间</SelectItem><SelectItem value="ASSET">资产</SelectItem></SelectGroup></SelectContent></Select></label> : null}
+            <label className="grid gap-1.5 text-sm"><span>关系类型</span><Select value={rebindDraft.kind} onValueChange={(value) => { if (isOneOf(REBIND_KINDS, value)) updateRebind('kind', value); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="DEVICE_ASSET">设备 → 资产</SelectItem><SelectItem value="ASSET_SPACE">资产 → 空间</SelectItem><SelectItem value="DEVICE_SPACE">设备 → 空间</SelectItem><SelectItem value="POINT_SUBJECT">点位 → 测量对象</SelectItem></SelectGroup></SelectContent></Select></label>
+            {rebindDraft.kind === 'POINT_SUBJECT' ? <label className="grid gap-1.5 text-sm"><span>目标对象类型</span><Select value={rebindDraft.targetType} onValueChange={(value) => { if (isOneOf(POINT_SUBJECT_TYPES, value)) updateRebind('targetType', value); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="SITE">站点</SelectItem><SelectItem value="SPACE">空间</SelectItem><SelectItem value="ASSET">资产</SelectItem></SelectGroup></SelectContent></Select></label> : null}
             <label className="grid gap-1.5 text-sm"><span>来源对象</span><Select value={rebindDraft.sourceId || undefined} onValueChange={(value) => updateRebind('sourceId', value)}><SelectTrigger><SelectValue placeholder="选择来源对象" /></SelectTrigger><SelectContent><SelectGroup>{bindingOptions.sources.map((option) => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
             <label className="grid gap-1.5 text-sm"><span>目标对象</span><Select value={rebindDraft.targetId || undefined} onValueChange={(value) => updateRebind('targetId', value)}><SelectTrigger><SelectValue placeholder="选择目标对象" /></SelectTrigger><SelectContent><SelectGroup>{bindingOptions.targets.map((option) => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
             <label className="grid gap-1.5 text-sm"><span>关系角色</span><Select value={rebindDraft.role} onValueChange={(value) => updateRebind('role', value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{rebindRoles.map((role) => <SelectItem key={role} value={role}>{role}</SelectItem>)}</SelectGroup></SelectContent></Select></label>

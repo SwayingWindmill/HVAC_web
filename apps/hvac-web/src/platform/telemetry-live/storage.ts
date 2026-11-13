@@ -3,6 +3,7 @@ import type {
   OpaqueRecoveryCursor,
   TelemetryKey,
 } from '@/api/generated/s2Telemetry.gen';
+import { isPlainRecord } from '../../lib/typed.ts';
 import { cloneSnapshot, parseSnapshot, scopeKey } from './contract';
 
 const storagePrefix = 'hvac:s2:telemetry-live:v1:';
@@ -19,7 +20,7 @@ export interface PersistedRecoveryRecord {
 }
 
 export interface RecoveryStore {
-  load(target: { clientSubscriptionId: string; deviceId: string; keys: ReadonlyArray<string> }): PersistedRecoveryRecord | null;
+  load(target: { clientSubscriptionId: string; deviceId: string; keys: ReadonlyArray<TelemetryKey> }): PersistedRecoveryRecord | null;
   save(record: PersistedRecoveryRecord): void;
   remove(clientSubscriptionId: string): void;
   clear(): void;
@@ -31,11 +32,11 @@ function storageKey(clientSubscriptionId: string): string {
 
 function validateRecord(
   value: unknown,
-  target: { clientSubscriptionId: string; deviceId: string; keys: ReadonlyArray<string> },
+  target: { clientSubscriptionId: string; deviceId: string; keys: ReadonlyArray<TelemetryKey> },
   now: Date,
 ): PersistedRecoveryRecord | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const input = value as Record<string, unknown>;
+  if (!isPlainRecord(value)) return null;
+  const input = value;
   if (input.schemaVersion !== 1
     || input.clientSubscriptionId !== target.clientSubscriptionId
     || input.deviceId !== target.deviceId
@@ -57,7 +58,7 @@ function validateRecord(
       schemaVersion: 1,
       clientSubscriptionId: target.clientSubscriptionId,
       deviceId: target.deviceId,
-      keys: [...target.keys] as TelemetryKey[],
+      keys: [...target.keys],
       snapshot,
       recoveryCursor: input.recoveryCursor,
       cursorExpiresAt: input.cursorExpiresAt,
@@ -81,7 +82,7 @@ export class BrowserRecoveryStore implements RecoveryStore {
     this.now = now;
   }
 
-  load(target: { clientSubscriptionId: string; deviceId: string; keys: ReadonlyArray<string> }): PersistedRecoveryRecord | null {
+  load(target: { clientSubscriptionId: string; deviceId: string; keys: ReadonlyArray<TelemetryKey> }): PersistedRecoveryRecord | null {
     const key = storageKey(target.clientSubscriptionId);
     const serialized = this.read(key);
     if (!serialized) return null;

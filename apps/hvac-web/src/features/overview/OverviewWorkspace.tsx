@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getRouteApi, useNavigate } from "@tanstack/react-router";
 import { RefreshCw } from "lucide-react";
 import { HeatmapChartCard } from "@/components/heatmap-chart-card";
-import { MetricTabsChartCard } from "@/components/metric-tabs-chart-card";
+import { MetricTabsChartCard, type MetricTab } from "@/components/metric-tabs-chart-card";
 import { PageHeader } from "@/blocks/page-header";
 import { Panel, PanelHeader, PanelLink } from "@/blocks/panel";
 import { Main } from "@/components/layout/Main";
@@ -79,6 +79,52 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
     ? { today: costsByLabel(today.rows), yesterday: costsByLabel(wholeYesterday.rows) }
     : null;
   const incompleteCaption = today.missingMeters.length > 0 ? `不完整，缺 ${today.missingMeters.join("、")}` : undefined;
+  const metrics: MetricTab<OverviewMetric>[] = [
+    {
+      key: "electricityKWh",
+      label: "今日空调用电",
+      compareKey: "previousElectricityKWh",
+      value: known(today.electricityKWh, 1),
+      delta: relativeChange(today.electricityKWh, yesterday.electricityKWh),
+      unit: "kWh",
+      fractionDigits: 1,
+      invertDelta: true,
+      ...(incompleteCaption ? { caption: incompleteCaption } : {}),
+    },
+    {
+      key: "coolingKWh",
+      label: "今日供冷量",
+      compareKey: "previousCoolingKWh",
+      value: known(today.coolingKWh, 1),
+      delta: relativeChange(today.coolingKWh, yesterday.coolingKWh),
+      unit: "kWh",
+      fractionDigits: 1,
+      neutralDelta: true,
+    },
+    {
+      key: "cop",
+      label: "今日综合能效",
+      compareKey: "previousCop",
+      value: known(today.cop, 2),
+      delta: relativeChange(today.cop, yesterday.cop),
+      unit: "COP",
+      fractionDigits: 2,
+    },
+    ...(priced ? [{
+      key: "cost" as const,
+      label: "今日电费（估算）",
+      compareKey: "previousCost",
+      value: todayCost.energyKWh > 0 ? formatDecimal(todayCost.total, 0) : null,
+      delta: relativeChange(
+        todayCost.energyKWh > 0 ? todayCost.total : null,
+        yesterdayCost.energyKWh > 0 ? yesterdayCost.total : null,
+      ),
+      unit: "元",
+      fractionDigits: 0,
+      invertDelta: true,
+      ...(todayCost.unpricedKWh > 0.5 ? { caption: `另有 ${formatDecimal(todayCost.unpricedKWh, 0)} kWh 没有电价，未计入` } : {}),
+    }] : []),
+  ];
   return (
     <MetricTabsChartCard
       role="region"
@@ -94,7 +140,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       }))}
       xKey="label"
       selected={metric}
-      onSelectedChange={(key) => onMetricChange(key as OverviewMetric)}
+      onSelectedChange={onMetricChange}
       color="var(--chart-1)"
       compareColor="var(--chart-5)"
       compareLabel="昨日"
@@ -104,52 +150,7 @@ function TodayAgainstYesterday({ metric, onMetricChange }: { readonly metric: Ov
       yDomain="zero"
       chartClassName="h-[220px]"
       empty="今日还没有计量数据"
-      metrics={[
-        {
-          key: "electricityKWh",
-          label: "今日空调用电",
-          compareKey: "previousElectricityKWh",
-          value: known(today.electricityKWh, 1),
-          delta: relativeChange(today.electricityKWh, yesterday.electricityKWh),
-          unit: "kWh",
-          fractionDigits: 1,
-          invertDelta: true,
-          ...(incompleteCaption ? { caption: incompleteCaption } : {}),
-        },
-        {
-          key: "coolingKWh",
-          label: "今日供冷量",
-          compareKey: "previousCoolingKWh",
-          value: known(today.coolingKWh, 1),
-          delta: relativeChange(today.coolingKWh, yesterday.coolingKWh),
-          unit: "kWh",
-          fractionDigits: 1,
-          neutralDelta: true,
-        },
-        {
-          key: "cop",
-          label: "今日综合能效",
-          compareKey: "previousCop",
-          value: known(today.cop, 2),
-          delta: relativeChange(today.cop, yesterday.cop),
-          unit: "COP",
-          fractionDigits: 2,
-        },
-        ...(priced ? [{
-          key: "cost",
-          label: "今日电费（估算）",
-          compareKey: "previousCost",
-          value: todayCost.energyKWh > 0 ? formatDecimal(todayCost.total, 0) : null,
-          delta: relativeChange(
-            todayCost.energyKWh > 0 ? todayCost.total : null,
-            yesterdayCost.energyKWh > 0 ? yesterdayCost.total : null,
-          ),
-          unit: "元",
-          fractionDigits: 0,
-          invertDelta: true,
-          ...(todayCost.unpricedKWh > 0.5 ? { caption: `另有 ${formatDecimal(todayCost.unpricedKWh, 0)} kWh 没有电价，未计入` } : {}),
-        }] : []),
-      ]}
+      metrics={metrics}
     />
   );
 }

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { Generator, getConfig } from '@tanstack/router-generator';
@@ -17,6 +17,10 @@ interface ComponentRange {
 
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultRoot = resolve(dirname(scriptPath), '..');
+
+function repoRelative(root: string, filePath: string): string {
+  return relative(root, filePath).replaceAll('\\', '/');
+}
 
 async function collectFeatureSources(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -36,7 +40,7 @@ async function validateTableComponentUsage(root: string, errors: string[]): Prom
   const featureRoot = resolve(root, 'apps/hvac-web/src/features');
   for (const path of await collectFeatureSources(featureRoot)) {
     const source = await readFile(path, 'utf8');
-    const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
+    const relativePath = repoRelative(root, path);
 
     if (/<DataTable(?=[\s>])[^>]*\bsurface=/.test(source)) {
       errors.push(`${relativePath} must not use DataTable surface variants; DataTable is standalone-only and compact read-only tables use @/components/ui/table`);
@@ -67,7 +71,7 @@ async function validateContentGrammar(root: string, errors: string[]): Promise<v
   const featureRoot = resolve(root, 'apps/hvac-web/src/features');
   for (const path of await collectFeatureSources(featureRoot)) {
     const source = await readFile(path, 'utf8');
-    const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
+    const relativePath = repoRelative(root, path);
 
     for (const match of source.matchAll(/<DataTableBlock(?=[\s>])[^>]*\btitle=["']([^"']+)["']/g)) {
       const title = match[1];
@@ -87,7 +91,7 @@ async function validateDataTableSurfaceGrammar(root: string, errors: string[]): 
   const featureRoot = resolve(root, 'apps/hvac-web/src/features');
   for (const path of await collectFeatureSources(featureRoot)) {
     const source = await readFile(path, 'utf8');
-    const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
+    const relativePath = repoRelative(root, path);
     const surfaceCardTableException = /@surface-card-table-exception\s+07\b/.test(source);
 
     if (source.includes('DataTableViewPills')) {
@@ -150,7 +154,7 @@ async function validateImeSafeEnterHandlers(root: string, errors: string[]): Pro
   const tagPattern = /<(?:input|textarea|Input|Textarea|InputGroupInput|CommandInput)\b/g;
   for (const path of await collectFeatureSources(srcRoot)) {
     const source = await readFile(path, 'utf8');
-    const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
+    const relativePath = repoRelative(root, path);
     for (const match of source.matchAll(tagPattern)) {
       const rest = source.slice(match.index);
       const keyDownMatch = /\bonKeyDown\s*=\s*\{/.exec(rest);
@@ -225,7 +229,7 @@ async function validateFactTileProps(root: string, errors: string[]): Promise<vo
   const srcRoot = resolve(root, 'apps/hvac-web/src');
   for (const path of await collectFeatureSources(srcRoot)) {
     const source = await readFile(path, 'utf8');
-    const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
+    const relativePath = repoRelative(root, path);
     for (const match of source.matchAll(/<FactTile(?=\s|\/?>)/g)) {
       const openingTag = jsxOpeningTag(source, match.index);
       if (/\sclassName\s*=/.test(openingTag)) {
@@ -296,17 +300,63 @@ function isCopyLiteralNode(node: ts.Node): node is ts.StringLiteral | ts.NoSubst
   return true;
 }
 
-function hasSecondaryButtonVariant(attributes: ts.JsxAttributes): boolean {
-  for (const attribute of attributes.properties) {
-    if (!ts.isJsxAttribute(attribute) || !ts.isIdentifier(attribute.name) || attribute.name.text !== 'variant') continue;
-    const initializer = attribute.initializer;
-    if (!initializer) continue;
-    if (ts.isStringLiteral(initializer) && initializer.text === 'secondary') return true;
-    if (ts.isJsxExpression(initializer) && initializer.expression && ts.isStringLiteral(initializer.expression) && initializer.expression.text === 'secondary') {
-      return true;
+function expressionCanYieldSecondary(expr: ts.Expression): boolean {
+  if (ts.isStringLiteralLike(expr)) return expr.text === 'secondary';
+  if (ts.isParenthesizedExpression(expr) || ts.isAsExpression(expr) || ts.isSatisfiesExpression(expr)) {
+    return expressionCanYieldSecondary(expr.expression);
+  }
+  if (ts.isConditionalExpression(expr)) {
+    return expressionCanYieldSecondary(expr.whenTrue) || expressionCanYieldSecondary(expr.whenFalse);
+  }
+  if (ts.isBinaryExpression(expr)) {
+    const op = expr.operatorToken.kind;
+    if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken) {
+      return expressionCanYieldSecondary(expr.left) || expressionCanYieldSecondary(expr.right);
+    }
+    if (op === ts.SyntaxKind.AmpersandAmpersandToken) {
+      return expressionCanYieldSecondary(expr.right);
     }
   }
   return false;
+}
+
+function hasSecondaryButtonVariant(attributes: ts.JsxAttributes): boolean {
+  for (const attribute of attributes.properties) {
+    if (!ts.isJsxAttribute(attribute) || !ts.isIdentifier(attribute.name) || attribute.name.text !== 'variant') continue;
+    const init = attribute.initializer;
+    if (!init) continue;
+    if (ts.isStringLiteralLike(init) && init.text === 'secondary') return true;
+    if (ts.isJsxExpression(init) && init.expression && expressionCanYieldSecondary(init.expression)) return true;
+  }
+  return false;
+}
+
+function disallowedConsoleMethod(expression: ts.LeftHandSideExpression): 'log' | 'debug' | 'info' | null {
+  if (!ts.isPropertyAccessExpression(expression)) return null;
+  const method = expression.name.text;
+  if (method !== 'log' && method !== 'debug' && method !== 'info') return null;
+  const target = expression.expression;
+  if (ts.isIdentifier(target) && target.text === 'console') return method;
+  if (ts.isPropertyAccessExpression(target)
+    && target.name.text === 'console'
+    && ts.isIdentifier(target.expression)
+    && (target.expression.text === 'window' || target.expression.text === 'globalThis')) {
+    return method;
+  }
+  return null;
+}
+
+function isMethodCallOnIdentifier(call: ts.CallExpression, objectName: string, methodName: string): boolean {
+  return ts.isPropertyAccessExpression(call.expression)
+    && ts.isIdentifier(call.expression.expression)
+    && call.expression.expression.text === objectName
+    && call.expression.name.text === methodName;
+}
+
+function isJsonRoundTripClone(node: ts.CallExpression): boolean {
+  if (!isMethodCallOnIdentifier(node, 'JSON', 'parse') || node.arguments.length === 0) return false;
+  const firstArg = unwrapParentheses(node.arguments[0]!);
+  return ts.isCallExpression(firstArg) && isMethodCallOnIdentifier(firstArg, 'JSON', 'stringify');
 }
 
 async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): Promise<void> {
@@ -320,9 +370,10 @@ async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): 
 
   for (const path of sourcePaths) {
     const source = await readFile(path, 'utf8');
-    const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
+    const relativePath = repoRelative(root, path);
     const isFeatureOrRoute = relativePath.startsWith('apps/hvac-web/src/features/')
       || relativePath.startsWith('apps/hvac-web/src/routes/');
+    const isUiPrimitive = relativePath.startsWith('apps/hvac-web/src/components/ui/');
     const sourceFile = ts.createSourceFile(
       path,
       source,
@@ -331,12 +382,49 @@ async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): 
       path.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
     );
 
+    if (!isUiPrimitive) {
+      for (const statement of sourceFile.statements) {
+        if (ts.isExpressionStatement(statement)
+          && ts.isStringLiteralLike(statement.expression)
+          && statement.expression.text === 'use client') {
+          errors.push(`${relativePath}:${lineOfNode(sourceFile, statement)} avoid Next.js "use client" directives in Vite SPA modules; remove it`);
+        }
+      }
+    }
+
+    const seenCommentStarts = new Set<number>();
+    const checkCommentsAt = (ranges: readonly ts.CommentRange[] | undefined): void => {
+      if (!ranges) return;
+      for (const range of ranges) {
+        if (seenCommentStarts.has(range.pos)) continue;
+        seenCommentStarts.add(range.pos);
+        const commentText = source.slice(range.pos, range.end);
+        if (/(?:@ts-ignore|@ts-nocheck|eslint-disable)\b/.test(commentText)) {
+          const line = sourceFile.getLineAndCharacterOfPosition(range.pos).line + 1;
+          errors.push(`${relativePath}:${line} avoid @ts-ignore, @ts-nocheck, and eslint-disable comments; fix the type or guardrail directly`);
+        }
+      }
+    };
+
     const visit = (node: ts.Node): void => {
+      checkCommentsAt(ts.getLeadingCommentRanges(source, node.getFullStart()));
+      checkCommentsAt(ts.getTrailingCommentRanges(source, node.getEnd()));
+
       if (ts.isAsExpression(node) && !isConstAsExpression(node)) {
         nonConstAsCastCount += 1;
         const inner = unwrapParentheses(node.expression);
         if (ts.isAsExpression(inner) && inner.type.kind === ts.SyntaxKind.UnknownKeyword) {
           errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} avoid \`as unknown as\`; narrow with a type guard or use typed DTOs instead`);
+        }
+      }
+
+      if (ts.isCallExpression(node)) {
+        const consoleMethod = disallowedConsoleMethod(node.expression);
+        if (consoleMethod) {
+          errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} avoid console.${consoleMethod}() in web source; remove debug logging or surface errors explicitly`);
+        }
+        if (isJsonRoundTripClone(node)) {
+          errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} avoid JSON.parse(JSON.stringify(...)); use structuredClone(...) instead`);
         }
       }
 
@@ -367,6 +455,7 @@ async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): 
       ts.forEachChild(node, visit);
     };
 
+    checkCommentsAt(ts.getLeadingCommentRanges(source, sourceFile.endOfFileToken.getFullStart()));
     visit(sourceFile);
   }
 
@@ -459,7 +548,8 @@ function parseArgs(argv: readonly string[]): { root: string } {
   return { root: rootArg ? resolve(rootArg.slice('--root='.length)) : defaultRoot };
 }
 
-export async function validateDesignSystem(root = defaultRoot): Promise<{ errors: string[] }> {
+export async function validateDesignSystem(rawRoot = defaultRoot): Promise<{ errors: string[] }> {
+  const root = resolve(rawRoot);
   const errors: string[] = [];
   await validateTableComponentUsage(root, errors);
   await validateContentGrammar(root, errors);

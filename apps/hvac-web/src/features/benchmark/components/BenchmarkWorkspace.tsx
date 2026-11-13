@@ -13,7 +13,7 @@ import { Main } from '@/components/layout/Main';
 import { Button } from '@/components/ui/button';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { DeltaBadge } from '@/components/ui/delta-badge';
-import { PeriodTabs } from '@/components/ui/period-tabs';
+import { PeriodTabs, type PeriodOption } from '@/components/ui/period-tabs';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { periodWindow, summarizeEnergy, wallTime } from '@/features/energy-analysis/consumption/model';
@@ -25,7 +25,7 @@ import { benchmark, DEGREE_DAY_BASE_C, type BenchmarkSite } from '../benchmark-m
 const client = createPlatformGatewayClient();
 const telemetry = createS2TelemetryClient();
 type BenchmarkPeriod = '7d' | 'month';
-const PERIODS = [{ value: '7d', label: '近 7 天' }, { value: 'month', label: '本月' }];
+const PERIODS: readonly PeriodOption<BenchmarkPeriod>[] = [{ value: '7d', label: '近 7 天' }, { value: 'month', label: '本月' }];
 type RankBy = 'cop' | 'intensity' | 'climate';
 // Each ranking: its tab, the panel's caption, its note and the site's place in it.
 const RANKINGS: Record<RankBy, { label: string; title: string; note: string; place: (site: BenchmarkSite) => number | null }> = {
@@ -38,7 +38,8 @@ const RANKINGS: Record<RankBy, { label: string; title: string; note: string; pla
     place: (site) => site.climateRank,
   },
 };
-const RANKING_TABS = Object.entries(RANKINGS).map(([value, ranking]) => ({ value, label: ranking.label }));
+const RANK_ORDER = ['cop', 'intensity', 'climate'] as const satisfies readonly RankBy[];
+const RANKING_TABS: readonly PeriodOption<RankBy>[] = RANK_ORDER.map((value) => ({ value, label: RANKINGS[value].label }));
 const DRY_BULB_SOURCE_KEY = 'weather.ambient_dry_bulb_temperature';
 const SITE_COLORS = ['var(--chart-1)', 'var(--chart-3)', 'var(--chart-2)', 'var(--chart-4)', 'var(--chart-5)'];
 
@@ -247,7 +248,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
         actions={(
           <>
             {range ? <span className="text-xs text-muted-foreground">{range}</span> : null}
-            <PeriodTabs aria-label="对比期间" options={PERIODS} value={period} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, period: value as BenchmarkPeriod }), replace: true })} />
+            <PeriodTabs aria-label="对比期间" options={PERIODS} value={period} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, period: value }), replace: true })} />
             <Button variant="outline" disabled={!result} onClick={exportCsv}>
               <Download data-icon="inline-start" aria-hidden="true" />
               导出
@@ -287,7 +288,7 @@ export function BenchmarkWorkspace({ snapshot }: { readonly snapshot: ShellSnaps
             <PanelHeader
               title={<span className="flex items-center gap-1.5">站点排名<InfoTip>{RANKINGS[rankBy].note}</InfoTip></span>}
               caption={RANKINGS[rankBy].title}
-              action={<PeriodTabs aria-label="排名依据" options={RANKING_TABS} value={rankBy} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, rank: value as RankBy }), replace: true })} />}
+              action={<PeriodTabs aria-label="排名依据" options={RANKING_TABS} value={rankBy} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, rank: value }), replace: true })} />}
             />
             {rankBy !== 'cop' ? <p className="border-b border-divider px-5 py-2 text-xs text-muted-foreground">{RANKINGS[rankBy].note}</p> : null}
             <Table>

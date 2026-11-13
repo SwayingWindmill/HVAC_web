@@ -169,10 +169,12 @@ function curtainWall(kit: Kit, plan: TwinBuildingPlan, y: number, height: number
   kit.add('mullion', box(plan.width, 0.06, 0.08, 0.01), { at: [plan.width / 2, transom, plan.depth - 0.06] });
 }
 
+const v3 = (x: number, y: number, z: number): V3 => [x, y, z];
+
 function ring(count: number, radius: number, cx: number, cz: number, y: number, offset = 0): Placement[] {
   return Array.from({ length: count }, (_, index) => {
     const angle = offset + (index / count) * Math.PI * 2;
-    return { at: [cx + Math.sin(angle) * radius, y, cz + Math.cos(angle) * radius] as V3, turn: angle + Math.PI };
+    return { at: v3(cx + Math.sin(angle) * radius, y, cz + Math.cos(angle) * radius), turn: angle + Math.PI };
   });
 }
 
@@ -323,7 +325,7 @@ export function buildBuildingLayout(plan: TwinBuildingPlan): BuildingLayout {
       .filter((space) => space.kind !== 'corridor' && space.kind !== 'shaft' && space.kind !== 'core')
       .map((space) => {
         const [cx, cz] = centre(space);
-        return { room: space, at: [cx, floorY + 0.05, space.kind === 'hall' ? 16.9 : cz] as V3 };
+        return { room: space, at: v3(cx, floorY + 0.05, space.kind === 'hall' ? 16.9 : cz) };
       });
     return {
       level: floor.level,

@@ -1,3 +1,5 @@
+import { isPlainRecord } from '../lib/typed.ts';
+
 /**
  * One request layer for the Gateway's hand-written feature reads and writes. It sends the session
  * cookie, the CSRF token on a write and asks for problem+json, then sorts every answer into the few
@@ -100,33 +102,30 @@ export function classifyFailure(status: number, problem: GatewayProblem | null):
 function parseJSON(text: string | null): unknown {
   if (!text) return undefined;
   try {
-    return JSON.parse(text) as unknown;
+    const parsed: unknown = JSON.parse(text);
+    return parsed;
   } catch {
     return undefined;
   }
 }
 
 function problemOf(status: number, payload: unknown): GatewayProblem | null {
-  if (payload === null || typeof payload !== 'object') return null;
-  const body = payload as Record<string, unknown>;
-  if (typeof body.code === 'string') {
+  if (!isPlainRecord(payload)) return null;
+  if (typeof payload.code === 'string') {
     return {
       status,
-      code: body.code,
-      title: typeof body.title === 'string' ? body.title : undefined,
-      detail: typeof body.detail === 'string' ? body.detail : undefined,
-      retryable: typeof body.retryable === 'boolean' ? body.retryable : undefined,
+      code: payload.code,
+      title: typeof payload.title === 'string' ? payload.title : undefined,
+      detail: typeof payload.detail === 'string' ? payload.detail : undefined,
+      retryable: typeof payload.retryable === 'boolean' ? payload.retryable : undefined,
     };
   }
-  if (typeof body.error === 'object' && body.error !== null) {
-    const nested = body.error as Record<string, unknown>;
-    if (typeof nested.code === 'string') {
-      return {
-        status,
-        code: nested.code,
-        detail: typeof nested.message === 'string' ? nested.message : undefined,
-      };
-    }
+  if (isPlainRecord(payload.error) && typeof payload.error.code === 'string') {
+    return {
+      status,
+      code: payload.error.code,
+      detail: typeof payload.error.message === 'string' ? payload.error.message : undefined,
+    };
   }
   return null;
 }

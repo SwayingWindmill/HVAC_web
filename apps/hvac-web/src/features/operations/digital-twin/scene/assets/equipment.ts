@@ -148,9 +148,10 @@ function buildTower(): Asset {
   }
   // Casing curving in to the fan deck, with moulded ribs.
   kit.add('panel', lathe([[1.6, 1.62], ...TOWER_BODY, [1.3, 3.04], [0, 3.04]], 72));
+  const v3 = (x: number, y: number, z: number): V3 => [x, y, z];
   for (let index = 0; index < 16; index += 1) {
     const angle = (index / 16) * Math.PI * 2 + Math.PI / 16;
-    const points = TOWER_BODY.map(([r, y]) => [Math.cos(angle) * (r + 0.012), y, Math.sin(angle) * (r + 0.012)] as V3);
+    const points = TOWER_BODY.map(([r, y]) => v3(Math.cos(angle) * (r + 0.012), y, Math.sin(angle) * (r + 0.012)));
     kit.add('paint', tube(points, 0.022, 6, 0.2));
   }
   // Fan stack: a shroud with wall thickness and a rolled rim.

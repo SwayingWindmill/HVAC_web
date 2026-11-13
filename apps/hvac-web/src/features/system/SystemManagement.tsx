@@ -277,8 +277,11 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
   ] as const;
   const normalizedActiveTab = items.some((item) => item.key === activeTab) ? activeTab : 'overview';
   function setTab(key: string) {
+    const matched = items.find((item) => item.key === key);
+    if (!matched) return;
+    const nextTab = matched.key === 'overview' ? undefined : matched.key;
     void navigate({
-      search: (previous) => ({ ...previous, tab: key === 'overview' ? undefined : key as NonNullable<typeof search.tab> }),
+      search: (previous) => ({ ...previous, tab: nextTab }),
       replace: true,
     });
   }

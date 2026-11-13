@@ -15,6 +15,9 @@ import {
   type WorkOrderSourceReference,
 } from '@/api/work-orders';
 import { PRIORITY_LABELS } from './work-order-presentation';
+import { isOneOf } from '@/lib/typed';
+
+const PRIORITIES = ['URGENT', 'HIGH', 'MEDIUM', 'LOW'] as const satisfies readonly WorkOrderPriority[];
 
 const siteRoute = getRouteApi('/_app/_site');
 
@@ -106,10 +109,10 @@ function CreateWorkOrderDialogContent({
           </div>
           <div className="space-y-1.5">
             <Label>优先级</Label>
-            <Select value={form.watch('priority')} onValueChange={(value) => form.setValue('priority', value as WorkOrderPriority)}>
+            <Select value={form.watch('priority')} onValueChange={(value) => { if (isOneOf(PRIORITIES, value)) form.setValue('priority', value); }}>
               <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {(Object.keys(PRIORITY_LABELS) as WorkOrderPriority[]).map((priority) => (
+                {PRIORITIES.map((priority) => (
                   <SelectItem key={priority} value={priority}>{PRIORITY_LABELS[priority]}</SelectItem>
                 ))}
               </SelectContent>

@@ -2,20 +2,21 @@ import type { ProtectedScopeRequestToken } from '@/app/protected-scope.ts';
 
 function linkedAbortSignal(...signals: readonly AbortSignal[]): { signal: AbortSignal; dispose(): void } {
   const controller = new AbortController();
-  const abort = (event: Event) => {
-    const source = event.target as AbortSignal;
-    if (!controller.signal.aborted) controller.abort(source.reason);
-  };
+  const listeners: Array<() => void> = [];
   for (const signal of signals) {
     if (signal.aborted) {
       controller.abort(signal.reason);
       break;
     }
+    const abort = () => {
+      if (!controller.signal.aborted) controller.abort(signal.reason);
+    };
     signal.addEventListener('abort', abort, { once: true });
+    listeners.push(() => signal.removeEventListener('abort', abort));
   }
   return {
     signal: controller.signal,
-    dispose: () => signals.forEach((signal) => signal.removeEventListener('abort', abort)),
+    dispose: () => listeners.forEach((remove) => remove()),
   };
 }
 

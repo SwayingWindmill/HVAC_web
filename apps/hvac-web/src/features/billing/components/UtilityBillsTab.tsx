@@ -227,9 +227,10 @@ export function UtilityBillsTab({
             variant="outline"
             value={scopeFilter ?? 'ALL'}
             onValueChange={(value) => {
-              if (!value) return;
+              const matched = SCOPE_FILTERS.find((item) => item.value === value);
+              if (!matched) return;
               table.setPageIndex(0);
-              onScopeFilterChange(value === 'ALL' ? undefined : (value as UtilityBillMeterScope));
+              onScopeFilterChange(matched.value === 'ALL' ? undefined : matched.value);
             }}
             aria-label="表计范围筛选"
           >
@@ -246,9 +247,10 @@ export function UtilityBillsTab({
             variant="outline"
             value={statusFilter ?? 'ALL'}
             onValueChange={(value) => {
-              if (!value) return;
+              const matched = STATUS_FILTERS.find((item) => item.value === value);
+              if (!matched) return;
               table.setPageIndex(0);
-              onStatusFilterChange(value === 'ALL' ? undefined : (value as UtilityBillStatus));
+              onStatusFilterChange(matched.value === 'ALL' ? undefined : matched.value);
             }}
             aria-label="结算电费单状态筛选"
           >

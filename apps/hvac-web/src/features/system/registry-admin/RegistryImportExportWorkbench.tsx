@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { Download, FileJson, Upload } from 'lucide-react';
 import { DataTableBlock } from '@/blocks/data-table';
-import type { Capability, ImportPlan, ImportPlanRequest, Site, SiteAssetModel } from '@/api/generated/platformGateway.gen';
+import type { Capability, ImportPlan, Site, SiteAssetModel } from '@/api/generated/platformGateway.gen';
 import { importPlanRequestSchema } from '@/api/generated/platformGateway.gen';
 import { presentRegistryError, registryAdminApi } from '@/api/registry';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -58,7 +58,7 @@ export function RegistryImportExportWorkbench({ site, model, capabilities, onDir
     setError(null);
     setCommitMessage(null);
     try {
-      const parsed = importPlanRequestSchema.parse(JSON.parse(source)) as ImportPlanRequest;
+      const parsed = importPlanRequestSchema.parse(JSON.parse(source));
       const nextPlan = await registryAdminApi.planImport(site.id, parsed);
       setPlan(nextPlan);
       setDirty(false);

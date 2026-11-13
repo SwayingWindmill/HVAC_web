@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { isOneOf, isPlainRecord } from '@/lib/typed';
 import { makeRegistryMutationMeta, newRegistryIdempotencyKey } from './model';
 
 interface Props {
@@ -39,17 +40,24 @@ type AssignmentDraft = {
   reason: string;
 };
 
+const TEMPLATE_KINDS = ['ASSET', 'DEVICE', 'POINT'] as const satisfies readonly TemplateKind[];
+
 function parseObject(source: string, label: string): Record<string, unknown> {
   const parsed: unknown = JSON.parse(source);
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error(`${label} 必须是 JSON object。`);
-  return parsed as Record<string, unknown>;
+  if (!isPlainRecord(parsed)) throw new Error(`${label} 必须是 JSON object。`);
+  return parsed;
 }
 
 function parseStringMap(source: string): Record<string, string> {
   const value = parseObject(source, '发布引用');
   const entries = Object.entries(value);
-  if (!entries.length || entries.some(([, item]) => typeof item !== 'string' || !item.trim())) throw new Error('发布引用必须包含至少一个非空字符串值。');
-  return Object.fromEntries(entries) as Record<string, string>;
+  if (!entries.length) throw new Error('发布引用必须包含至少一个非空字符串值。');
+  const result: Record<string, string> = {};
+  for (const [key, item] of entries) {
+    if (typeof item !== 'string' || !item.trim()) throw new Error('发布引用必须包含至少一个非空字符串值。');
+    result[key] = item;
+  }
+  return result;
 }
 
 function kindLabel(kind: TemplateKind): string {
@@ -148,7 +156,7 @@ export function RegistryTemplateWorkbench({ site, model, capabilities, onDirtyCh
           <CardHeader><CardTitle className="flex items-center gap-2"><LayoutTemplate className="size-4" />发布模板版本</CardTitle><CardDescription>定义模板内容并发布一个新的不可变版本。</CardDescription></CardHeader>
           <CardContent className="space-y-4">
             <label className="grid gap-1.5 text-sm"><span>模板名称</span><Input disabled={!allowed} value={releaseDraft.templateKey} placeholder="ahu-standard" onChange={(event) => { setReleaseDraft((current) => ({ ...current, templateKey: event.target.value })); setReleaseDirty(true); }} /></label>
-            <label className="grid gap-1.5 text-sm"><span>适用对象</span><Select disabled={!allowed} value={releaseDraft.templateKind} onValueChange={(value) => { setReleaseDraft((current) => ({ ...current, templateKind: value as TemplateKind })); setReleaseDirty(true); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{(['ASSET', 'DEVICE', 'POINT'] as TemplateKind[]).map((kind) => <SelectItem key={kind} value={kind}>{kindLabel(kind)}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
+            <label className="grid gap-1.5 text-sm"><span>适用对象</span><Select disabled={!allowed} value={releaseDraft.templateKind} onValueChange={(value) => { if (!isOneOf(TEMPLATE_KINDS, value)) return; setReleaseDraft((current) => ({ ...current, templateKind: value })); setReleaseDirty(true); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{TEMPLATE_KINDS.map((kind) => <SelectItem key={kind} value={kind}>{kindLabel(kind)}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
             <label className="grid gap-1.5 text-sm"><span>模板内容 JSON</span><Textarea disabled={!allowed} rows={8} className="font-mono text-xs" value={releaseDraft.payload} onChange={(event) => { setReleaseDraft((current) => ({ ...current, payload: event.target.value })); setReleaseDirty(true); }} /></label>
             <label className="grid gap-1.5 text-sm"><span>发布引用 JSON</span><Textarea disabled={!allowed} rows={4} className="font-mono text-xs" value={releaseDraft.releaseReferences} onChange={(event) => { setReleaseDraft((current) => ({ ...current, releaseReferences: event.target.value })); setReleaseDirty(true); }} /></label>
             <label className="grid gap-1.5 text-sm"><span>发布原因</span><Textarea disabled={!allowed} rows={2} value={releaseDraft.reason} onChange={(event) => { setReleaseDraft((current) => ({ ...current, reason: event.target.value })); setReleaseDirty(true); }} /></label>
@@ -159,7 +167,7 @@ export function RegistryTemplateWorkbench({ site, model, capabilities, onDirtyCh
         <Card>
           <CardHeader><CardTitle className="flex items-center gap-2"><Send className="size-4" />应用或回滚模板</CardTitle><CardDescription>选择本次会话已知的模板版本并应用到登记对象。</CardDescription></CardHeader>
           <CardContent className="space-y-4">
-            <label className="grid gap-1.5 text-sm"><span>对象类型</span><Select disabled={!allowed} value={assignmentDraft.targetType} onValueChange={(value) => { setAssignmentDraft((current) => ({ ...current, targetType: value as TemplateKind, targetId: '' })); setAssignmentDirty(true); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{(['ASSET', 'DEVICE', 'POINT'] as TemplateKind[]).map((kind) => <SelectItem key={kind} value={kind}>{kindLabel(kind)}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
+            <label className="grid gap-1.5 text-sm"><span>对象类型</span><Select disabled={!allowed} value={assignmentDraft.targetType} onValueChange={(value) => { if (!isOneOf(TEMPLATE_KINDS, value)) return; setAssignmentDraft((current) => ({ ...current, targetType: value, targetId: '' })); setAssignmentDirty(true); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{TEMPLATE_KINDS.map((kind) => <SelectItem key={kind} value={kind}>{kindLabel(kind)}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
             <label className="grid gap-1.5 text-sm"><span>应用对象</span><Select disabled={!allowed || targets.length === 0} value={assignmentDraft.targetId || undefined} onValueChange={(value) => { setAssignmentDraft((current) => ({ ...current, targetId: value })); setAssignmentDirty(true); }}><SelectTrigger><SelectValue placeholder="选择对象" /></SelectTrigger><SelectContent><SelectGroup>{targets.map((target) => <SelectItem key={target.value} value={target.value}>{target.label}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
             <label className="grid gap-1.5 text-sm"><span>模板版本</span><Select disabled={!allowed || releases.length === 0} value={assignmentDraft.templateRevisionId || undefined} onValueChange={(value) => { const release = releaseById.get(value); setAssignmentDraft((current) => ({ ...current, templateRevisionId: value, targetType: release?.templateKind ?? current.targetType })); setAssignmentDirty(true); }}><SelectTrigger><SelectValue placeholder="选择已发布版本" /></SelectTrigger><SelectContent><SelectGroup>{releases.map((release) => <SelectItem key={release.id} value={release.id}>{release.templateKey} · 第 {release.revisionNumber} 版 · {kindLabel(release.templateKind)}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
             <label className="grid gap-1.5 text-sm"><span>应用原因</span><Textarea disabled={!allowed} rows={2} value={assignmentDraft.reason} onChange={(event) => { setAssignmentDraft((current) => ({ ...current, reason: event.target.value })); setAssignmentDirty(true); }} /></label>

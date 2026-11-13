@@ -199,10 +199,9 @@ export function ScheduleExceptionsTab({
             variant="outline"
             value={statusFilter ?? 'ALL'}
             onValueChange={(value) => {
-              if (!value) return;
-              onStatusFilterChange(
-                value === 'ALL' ? undefined : (value as OperatingExceptionStatus),
-              );
+              const matched = STATUS_FILTERS.find((item) => item.value === value);
+              if (!matched) return;
+              onStatusFilterChange(matched.value === 'ALL' ? undefined : matched.value);
             }}
             aria-label="运行例外状态筛选"
           >

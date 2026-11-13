@@ -192,10 +192,13 @@ function RoleScopeFields({ roleKey, siteId, roleError, onRoleChange, onSiteChang
   );
 }
 
-const assignmentOf = (scope: RoleScope, roles: readonly UserAdminRole[]) => ({
-  roleKey: scope.roleKey as BuiltInRoleKey,
-  ...(roles.find((role) => role.roleKey === scope.roleKey)?.tenantScoped ? {} : scopeOf(scope.siteId)),
-});
+const assignmentOf = (scope: RoleScope, roles: readonly UserAdminRole[]) => {
+  if (scope.roleKey === '') throw new Error('请选择角色');
+  return {
+    roleKey: scope.roleKey,
+    ...(roles.find((role) => role.roleKey === scope.roleKey)?.tenantScoped ? {} : scopeOf(scope.siteId)),
+  };
+};
 
 interface CreateForm extends RoleScope { displayName: string; username: string; email: string; password: string }
 

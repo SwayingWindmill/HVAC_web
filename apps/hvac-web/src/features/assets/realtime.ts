@@ -58,7 +58,7 @@ function exactArray(left: readonly string[], right: readonly string[]): boolean 
 }
 
 function cloneSnapshot(snapshot: DeviceObservationSnapshot): DeviceObservationSnapshot {
-  return JSON.parse(JSON.stringify(snapshot)) as DeviceObservationSnapshot;
+  return structuredClone(snapshot);
 }
 
 export const REAL_ASSETS_REALTIME_KEY_LIMIT = 64;

@@ -354,9 +354,10 @@ export function SensorCalibrationTab({
             variant="outline"
             value={filter}
             onValueChange={(next) => {
-              if (!next) return;
+              const matched = CALIBRATION_FILTERS.find((item) => item.value === next);
+              if (!matched) return;
               table.setPageIndex(0);
-              onFilterChange(next as SensorCalibrationFilter);
+              onFilterChange(matched.value);
             }}
             aria-label="传感器状态筛选"
           >

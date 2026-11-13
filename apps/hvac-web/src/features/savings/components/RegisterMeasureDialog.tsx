@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { useExecutedCommands } from '@/features/control/use-executed-commands';
+import { isOneOf } from '@/lib/typed';
 import { registerMeasure, SavingsRequestError } from '../query';
 import { instantFromSiteInput, KIND_LABEL, siteInputValue, type Measure, type MeasureKind } from '../savings-model';
 import { useMeteredMachines } from '../use-plant-machines';
@@ -31,6 +32,7 @@ interface MeasureForm {
 const NO_COMMAND = 'none';
 // The plant's total meter; any other boundary is a machine's device id.
 const PLANT_METER = 'plant';
+const MEASURE_KINDS = ['SETPOINT_RESET', 'CONTROL_SEQUENCE', 'EQUIPMENT_RETROFIT', 'OPERATING_SCHEDULE', 'OTHER'] as const satisfies readonly MeasureKind[];
 
 const optionalNumber = (value: string) => (value.trim() === '' ? undefined : Number(value));
 const nonNegative = (value: string) => value.trim() === '' || (Number.isFinite(Number(value)) && Number(value) >= 0) || '请填写不小于 0 的数字';
@@ -103,10 +105,10 @@ function MeasureFields({ machines, onCancel, onRegistered }: {
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label>类型</Label>
-          <Select value={form.watch('kind')} onValueChange={(value) => form.setValue('kind', value as MeasureKind)}>
+          <Select value={form.watch('kind')} onValueChange={(value) => { if (isOneOf(MEASURE_KINDS, value)) form.setValue('kind', value); }}>
             <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
             <SelectContent>
-              {(Object.keys(KIND_LABEL) as MeasureKind[]).map((kind) => <SelectItem key={kind} value={kind}>{KIND_LABEL[kind]}</SelectItem>)}
+              {MEASURE_KINDS.map((kind) => <SelectItem key={kind} value={kind}>{KIND_LABEL[kind]}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>

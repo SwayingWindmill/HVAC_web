@@ -3,7 +3,7 @@ import { ThreadListItemPrimitive, ThreadListPrimitive, useAuiState } from '@assi
 import { formatCompactTime } from '@/lib/operator-format';
 import type { AssistantConversation } from '../use-assistant-session';
 
-// My conversations on the Site (#639), built on assistant-ui's ThreadList primitives (adapted from
+// My conversations on the Site, built on assistant-ui's ThreadList primitives (adapted from
 // its shadcn `thread-list` registry item): search, rename, archive and delete are left out.
 
 const STATUS_WORDS: Readonly<Record<AssistantConversation['status'], string>> = Object.freeze({

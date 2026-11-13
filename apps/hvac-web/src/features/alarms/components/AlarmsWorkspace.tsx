@@ -26,6 +26,7 @@ import { useDeviceNames } from '@/features/assets/use-device-names';
 import { useDebouncedCallback } from '@/hooks/use-debounced-callback';
 import { useNow } from '@/hooks/use-now';
 import { formatRelative, formatTime, personLabel } from '@/lib/operator-format';
+import { isOneOf } from '@/lib/typed';
 import { cn } from '@/lib/utils';
 import {
   activeAlarmsQuery,
@@ -154,6 +155,8 @@ function AlarmSummary({ alarms, days, timeZone, now, deviceNames, onDevice }: {
   );
 }
 
+const INITIAL_ALARM_CURSOR: string | undefined = undefined;
+
 export function AlarmsWorkspace() {
   const { site, principal } = siteRoute.useRouteContext();
   const search = pageRoute.useSearch();
@@ -175,7 +178,7 @@ export function AlarmsWorkspace() {
   const list = useInfiniteQuery({
     queryKey: alarmKeys.list(site.id, filter),
     queryFn: ({ pageParam, signal }) => listAlarms(site.id, filter, pageParam, signal),
-    initialPageParam: undefined as string | undefined,
+    initialPageParam: INITIAL_ALARM_CURSOR,
     getNextPageParam: (page) => (page.hasMore ? page.nextCursor ?? undefined : undefined),
     refetchInterval: REFRESH_MS,
   });
@@ -210,7 +213,7 @@ export function AlarmsWorkspace() {
   // J / K move through the list, A acknowledges, C raises a work order; typing in a field is left alone.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
+      const target = event.target instanceof Element ? event.target : null;
       if (showingRules || event.metaKey || event.ctrlKey || event.altKey || target?.closest('input, textarea, [contenteditable], [role="dialog"]')) return;
       const index = ordered.findIndex((alarm) => alarm.alarmId === selectedId);
       const key = event.key.toLowerCase();
@@ -273,7 +276,10 @@ export function AlarmsWorkspace() {
             <ToggleGroup
               type="single"
               value={view}
-              onValueChange={(value) => { if (value) setSearch({ view: value as AlarmView, inspect: undefined }); }}
+              onValueChange={(value) => {
+                const matched = VIEWS.find((option) => option.value === value);
+                if (matched) setSearch({ view: matched.value, inspect: undefined });
+              }}
               aria-label="告警范围"
               className="h-11 w-full justify-start gap-5 rounded-none border-b border-divider px-4"
             >
@@ -305,7 +311,10 @@ export function AlarmsWorkspace() {
               <Faceted
                 multiple
                 value={severities}
-                onValueChange={(value) => setSearch({ severity: value && value.length > 0 ? value as AlarmSeverity[] : undefined })}
+                onValueChange={(value) => {
+                  const next = (value ?? []).filter((item): item is AlarmSeverity => isOneOf(SEVERITY_ORDER, item));
+                  setSearch({ severity: next.length > 0 ? next : undefined });
+                }}
               >
                 <FacetedTrigger asChild>
                   <Button variant="outline" className="border-dashed font-normal">

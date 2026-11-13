@@ -4,12 +4,13 @@ import { periodWindow, previousWindow, siteDayKey, type EnergyPeriod } from '@/f
 import { useEnergyReader } from '@/features/energy-analysis/consumption/query';
 import type { PlantDevice } from '@/features/operations/realtime/plant-model';
 import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
-import { energyBreakdown, EQUIPMENT_ORDER, type EquipmentCategory, type Machine } from './breakdown-model';
+import { isOneOf } from '../../lib/typed.ts';
+import { energyBreakdown, EQUIPMENT_ORDER, type Machine } from './breakdown-model';
 
 /** The plant's machines that use electricity, metered or not. */
 export function plantMachines(devices: readonly PlantDevice[]): Machine[] {
-  return devices.flatMap((device) => ((EQUIPMENT_ORDER as readonly string[]).includes(device.category)
-    ? [{ deviceId: device.deviceId, name: device.name, category: device.category as EquipmentCategory }]
+  return devices.flatMap((device) => (isOneOf(EQUIPMENT_ORDER, device.category)
+    ? [{ deviceId: device.deviceId, name: device.name, category: device.category }]
     : []));
 }
 

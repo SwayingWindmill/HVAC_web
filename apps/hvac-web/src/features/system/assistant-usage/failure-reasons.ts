@@ -1,4 +1,4 @@
-// Why a step of the assistant failed, in the operator's words (#624). The Agent records a code per
+// Why a step of the assistant failed, in the operator's words. The Agent records a code per
 // failed call; the page never shows the code itself.
 
 const FINDING_PARTS: Readonly<Record<string, string>> = Object.freeze({

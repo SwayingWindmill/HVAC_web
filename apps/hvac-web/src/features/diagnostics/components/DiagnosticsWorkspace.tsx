@@ -26,6 +26,7 @@ import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDia
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
 import { formatCompactTime, formatDecimal, formatTime } from '@/lib/operator-format';
+import { isOneOf } from '@/lib/typed';
 import { cn } from '@/lib/utils';
 import { LOW_DELTA_T, lowDeltaTTarget, meterOf, operatingCondition, ruleFor, severity, type DiagnosticRule, type Finding, type RuleRevision } from '../diagnostics-model';
 import { FindingSeverityBadge, SEVERITY } from '../finding-presentation';
@@ -40,6 +41,7 @@ const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/operations/diagnostics');
 
 type Range = '7d' | 'all';
+const RANGES = ['7d', 'all'] as const satisfies readonly Range[];
 
 const OUTCOME_LABEL = { FINDING: '发现问题', ONGOING: '仍在持续', CLEAR: '正常', NOT_OPERATING: '未运行' } as const;
 
@@ -467,7 +469,7 @@ export function DiagnosticsWorkspace() {
           <ToggleGroup
             type="single"
             value={range}
-            onValueChange={(value) => { if (value) setSearch({ range: value as Range, inspect: undefined }); }}
+            onValueChange={(value) => { if (isOneOf(RANGES, value)) setSearch({ range: value, inspect: undefined }); }}
             aria-label="诊断发现范围"
             className="h-11 w-full shrink-0 justify-start gap-5 rounded-none border-b border-divider px-4"
           >

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { contrastGrade, contrastRatio, surfaceOf, tinted, TOKEN_GROUPS } from '../apps/hvac-web/src/features/system/design-system/design-tokens.ts';
+import { isOneOf, isPlainRecord } from '../apps/hvac-web/src/lib/typed.ts';
 import { validateDesignSystem } from './check-design-system.ts';
 
 test('contrast follows WCAG: black on white is 21:1, a colour on itself 1:1', () => {
@@ -50,6 +51,18 @@ test('every light- and dark-theme pairing the design system lists meets its leve
   assert.equal(contrastGrade(contrastRatio('#ffffff', '#d9383a'), 'text'), 'AA');
 });
 
+test('typed narrowing helpers narrow plain records and literal tuples without casts', () => {
+  assert.equal(isPlainRecord({ ok: true }), true);
+  assert.equal(isPlainRecord(null), false);
+  assert.equal(isPlainRecord(['a']), false);
+  assert.equal(isPlainRecord('str'), false);
+
+  const views = ['trend', 'tou', 'detail'] as const;
+  assert.equal(isOneOf(views, 'tou'), true);
+  assert.equal(isOneOf(views, 'other'), false);
+  assert.equal(isOneOf(views, 123), false);
+});
+
 test('design system check passes on the repository and rejects violations across AST, copy, and routeTree', async () => {
   const repoRoot = fileURLToPath(new URL('..', import.meta.url));
   assert.deepEqual((await validateDesignSystem(repoRoot)).errors, []);
@@ -75,10 +88,24 @@ test('design system check passes on the repository and rejects violations across
       join(sandbox, 'apps/hvac-web/src/features/demo/BadFactTile.tsx'),
       `export const BadFactTile = () => (\n  <FactTile label="累计节电" className="col-span-2">12 kWh</FactTile>\n);\n`,
     );
+    mkdirSync(join(sandbox, 'apps/hvac-web/src/components/ui'), { recursive: true });
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/components/ui/AllowedClient.tsx'),
+      `"use client";\nexport const AllowedClient = () => <div />;\n`,
+    );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/BadClient.tsx'),
+      `"use client";\nexport const BadClient = ({ active }: { active: boolean }) => (\n  <Button variant={active ? 'secondary' : 'outline'}>确定</Button>\n);\n`,
+    );
     writeFileSync(
       join(sandbox, 'apps/hvac-web/src/features/demo/BadPatterns.tsx'),
       [
-        'export function badPatterns(raw: string) {',
+        'export function badPatterns(raw: string, obj: Record<string, unknown>) {',
+        '  // eslint-disable-next-line no-console',
+        '  console.log(raw);',
+        '  // @ts-ignore',
+        '  const copy = JSON.parse(JSON.stringify(obj));',
+        '  console.error(copy);',
         '  const x = raw as unknown as number;',
         '  void fetch("/api/v1/health");',
         '  const ws = new WebSocket("wss://example.com");',
@@ -87,6 +114,7 @@ test('design system check passes on the repository and rejects violations across
         '      <Button variant="secondary">认领</Button>',
         '      <span>分表计收</span>',
         '      <span>平台账号 整栋总表 返回执行结果</span>',
+        '      <Button variant={raw === "secondary" ? "outline" : "ghost"}>切换</Button>',
         '      {String(x) + String(ws)}',
         '    </div>',
         '  );',
@@ -103,20 +131,29 @@ test('design system check passes on the repository and rejects violations across
     writeFileSync(join(sandbox, 'apps/hvac-web/src/routeTree.gen.ts'), '// stale route tree\n');
 
     const { errors } = await validateDesignSystem(sandbox);
+    assert.equal(errors.some((entry: string) => entry.includes('AllowedClient.tsx')), false);
+    assert.ok(errors.some((entry: string) => entry.includes('BadClient.tsx:1 avoid Next.js "use client" directives')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadClient.tsx:3 avoid <Button variant="secondary">')));
     assert.ok(errors.some((entry: string) => entry.includes('BadInput.tsx:2 text input Enter onKeyDown must guard IME composition')));
     assert.ok(errors.some((entry: string) => entry.includes('BadFactTile.tsx:2 FactTile does not accept className; pass valueClassName')));
     assert.ok(errors.some((entry: string) => entry.includes('apps/hvac-web/index.html must declare <meta name="color-scheme"')));
     assert.ok(errors.some((entry: string) => entry.includes(':root must declare color-scheme: light dark;')));
     assert.ok(errors.some((entry: string) => entry.includes(':root[data-theme="light"] must declare color-scheme: light;')));
     assert.ok(errors.some((entry: string) => entry.includes('.dark must declare color-scheme: dark;')));
-    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:2 avoid `as unknown as`')));
-    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:3 feature/route modules must use gatewayRequest instead of raw fetch()')));
-    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:4 feature/route modules must use src/platform/telemetry-live/ instead of new WebSocket()')));
-    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:7 avoid <Button variant="secondary">')));
-    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:7 UI copy uses deprecated term "认领"')));
-    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:8 UI copy uses deprecated term "分表"')));
-    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:8 UI copy uses deprecated term "计收"')));
-    assert.equal(errors.some((entry: string) => entry.includes('BadPatterns.tsx:9')), false);
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:2 avoid @ts-ignore, @ts-nocheck, and eslint-disable comments')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:3 avoid console.log()')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:4 avoid @ts-ignore, @ts-nocheck, and eslint-disable comments')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:5 avoid JSON.parse(JSON.stringify(...))')));
+    assert.equal(errors.some((entry: string) => entry.includes('BadPatterns.tsx:6')), false);
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:7 avoid `as unknown as`')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:8 feature/route modules must use gatewayRequest instead of raw fetch()')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:9 feature/route modules must use src/platform/telemetry-live/ instead of new WebSocket()')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:12 avoid <Button variant="secondary">')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:12 UI copy uses deprecated term "认领"')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:13 UI copy uses deprecated term "分表"')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:13 UI copy uses deprecated term "计收"')));
+    assert.equal(errors.some((entry: string) => entry.includes('BadPatterns.tsx:14')), false);
+    assert.equal(errors.some((entry: string) => entry.includes('BadPatterns.tsx:15')), false);
     assert.ok(errors.some((entry: string) => entry.includes('apps/hvac-web/src non-const `as` casts grew from 0 to 2')));
     assert.ok(errors.some((entry: string) => entry.includes('apps/hvac-web/src/routeTree.gen.ts is stale')));
   } finally {

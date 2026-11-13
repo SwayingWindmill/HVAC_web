@@ -9,7 +9,7 @@ import { useDataTable } from '@/hooks/use-data-table';
 import { describeCondition, describeDevices, describeRaise, siteAlarmRulesQuery, type AlarmRule, type ReadingNames } from '../alarm-rules';
 import { SeverityBadge, severityRank } from '../alarm-presentation';
 
-/** The Site's rules in effect, read-only: what each watches, when it raises and when it clears (#693). */
+/** The Site's rules in effect, read-only: what each watches, when it raises and when it clears. */
 export function AlarmRulesTable({ siteId }: { readonly siteId: string }) {
   const rules = useQuery(siteAlarmRulesQuery(siteId));
   const equipment = useSiteEquipment(siteId);

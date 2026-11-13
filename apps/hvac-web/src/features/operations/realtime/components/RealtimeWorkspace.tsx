@@ -22,7 +22,7 @@ import { DataGapBanner } from '@/features/data-gaps/DataGapBanner';
 import { dataGapsKeys } from '@/features/data-gaps/query';
 import { formatCompactTime, formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { coolingUncertaintyText, copUncertaintyText, equipmentStatus, plantReading, probeOffsetText, type PlantReading, type PlantView } from '../plant-model';
+import { coolingUncertaintyText, copUncertaintyText, equipmentStatus, plantReading, probeOffsetText, type PlantView } from '../plant-model';
 import { useRealtimePlant } from '../use-realtime-plant';
 import { usePlantHistory } from '../use-plant-history';
 import { copSeries, COOLING_KEY, hourAgo, POWER_KEY } from '../plant-trend';
@@ -154,7 +154,7 @@ function PlantTrendPanel({ plant, metric, window, onMetric, onWindow, timeZone }
             type="single"
             variant="outline"
             value={window}
-            onValueChange={(value) => { if (value) onWindow(value as Window); }}
+            onValueChange={(value) => { if (value === '6h' || value === '24h') onWindow(value); }}
             aria-label="时间范围"
             spacing={0}
             className="ml-auto h-7"
@@ -332,7 +332,7 @@ function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly t
               </span>
               <span role="cell" className={cn('flex h-[42px] min-w-0 items-center gap-1 truncate border-b border-divider px-4 text-xs', stale ? 'text-muted-foreground' : 'text-secondary-foreground')}>
                 {loop.others.length === 0 ? '—' : loop.others.map(([label, key], index) => (
-                  <span key={key} className="whitespace-nowrap">{index > 0 ? ' · ' : ''}{label} <ReadingValue reading={plantReading(plant, key) as PlantReading | null} /></span>
+                  <span key={key} className="whitespace-nowrap">{index > 0 ? ' · ' : ''}{label} <ReadingValue reading={plantReading(plant, key)} /></span>
                 ))}
               </span>
               <span role="cell" className="flex h-[42px] items-center border-b border-divider px-4">

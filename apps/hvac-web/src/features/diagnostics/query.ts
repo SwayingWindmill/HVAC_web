@@ -1,7 +1,23 @@
 import { queryOptions } from '@tanstack/react-query';
+import { z } from 'zod';
 import { gatewayPath, gatewayRequest, valueOf } from '@/api/gateway-client';
 import { intelligencePaths } from '@/api/generated/platformGateway.gen';
 import type { Finding, RuleRevision } from './diagnostics-model';
+
+const findingSchema: z.ZodType<Finding> = z.object({
+  id: z.string(),
+  assetId: z.string(),
+  findingType: z.string(),
+  evaluationFrom: z.string(),
+  evaluationTo: z.string(),
+  observedValue: z.number(),
+  thresholdValue: z.number(),
+  valueUnit: z.string(),
+  confidence: z.number(),
+  createdAt: z.string(),
+});
+
+const findingsResponseSchema = z.object({ items: z.array(findingSchema) });
 
 export const diagnosticsKeys = {
   findings: (siteId: string) => ['fdd', siteId, 'findings'] as const,
@@ -16,7 +32,8 @@ export function siteFindingsQuery(siteId: string) {
     queryKey: diagnosticsKeys.findings(siteId),
     queryFn: async ({ signal }): Promise<Finding[]> => valueOf(
       await gatewayRequest(`${gatewayPath(intelligencePaths.siteFddFindings, { siteId })}?limit=100`, {
-        signal, parse: (payload) => (payload as { items: Finding[] }).items,
+        signal,
+        parse: (payload) => findingsResponseSchema.parse(payload).items,
       }),
       { unavailable: UNAVAILABLE },
     ),
@@ -55,7 +72,9 @@ export type EvaluationOutcome =
   | (Outcome<'ONGOING'> & { readonly finding: Finding })
   | (Outcome<'FINDING'> & { readonly finding: Finding });
 
-type EvaluationPayload = { status: EvaluationOutcome['status']; deltaTC: number; rule: RuleRevision; window: EvaluationWindow; finding?: Finding };
+type EvaluationPayload =
+  | { status: 'CLEAR' | 'NOT_OPERATING'; deltaTC: number; rule: RuleRevision; window: EvaluationWindow }
+  | { status: 'ONGOING' | 'FINDING'; deltaTC: number; rule: RuleRevision; window: EvaluationWindow; finding: Finding };
 
 /** Diagnoses the loop now; FDD reads its last window under the rule revision in effect. */
 export async function evaluateRule(
@@ -75,7 +94,12 @@ export async function evaluateRule(
         : problem.detail ?? UNAVAILABLE,
     },
   );
-  return payload.status === 'CLEAR' || payload.status === 'NOT_OPERATING'
-    ? { status: payload.status, observedValue: payload.deltaTC, rule: payload.rule, window: payload.window }
-    : { status: payload.status, observedValue: payload.deltaTC, rule: payload.rule, window: payload.window, finding: payload.finding as Finding };
+  switch (payload.status) {
+    case 'CLEAR':
+    case 'NOT_OPERATING':
+      return { status: payload.status, observedValue: payload.deltaTC, rule: payload.rule, window: payload.window };
+    case 'ONGOING':
+    case 'FINDING':
+      return { status: payload.status, observedValue: payload.deltaTC, rule: payload.rule, window: payload.window, finding: payload.finding };
+  }
 }

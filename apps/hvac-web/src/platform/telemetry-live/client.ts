@@ -2,12 +2,10 @@ import {
   createS2TelemetryClient,
   S2TelemetryClientError,
   type ClientSubscriptionId,
-  type OpaqueRecoveryCursor,
   type RecoveryCursorCheckpointResult,
   type S2TelemetryClient,
   type SubscriptionBootstrapResponse,
   type SubscriptionDescriptor,
-  type TelemetryKey,
 } from '@/api/generated/s2Telemetry.gen';
 import {
   createPlatformGatewayClient,
@@ -226,12 +224,15 @@ class LiveSession implements TelemetryLiveSession {
     const csrf = await this.csrf(signal);
     try {
       const response = await this.dependencies.telemetry.bootstrapTelemetrySubscriptions({
-        subscriptions: this.targets.map((target, index) => ({
-          clientSubscriptionId: target.clientSubscriptionId,
-          deviceId: target.deviceId,
-          keys: [...target.keys] as TelemetryKey[],
-          ...(stored[index] ? { recoveryCursor: stored[index]?.recoveryCursor as OpaqueRecoveryCursor } : {}),
-        })),
+        subscriptions: this.targets.map((target, index) => {
+          const recoveryCursor = stored[index]?.recoveryCursor;
+          return {
+            clientSubscriptionId: target.clientSubscriptionId,
+            deviceId: target.deviceId,
+            keys: [...target.keys],
+            ...(recoveryCursor ? { recoveryCursor } : {}),
+          };
+        }),
       }, { csrfToken: csrf, signal });
       return validateBootstrap(response, this.targets, this.dependencies.now());
     } catch (error) {
@@ -322,7 +323,7 @@ class LiveSession implements TelemetryLiveSession {
       schemaVersion: 1,
       clientSubscriptionId: captured.item.target.clientSubscriptionId,
       deviceId: captured.item.target.deviceId,
-      keys: [...captured.item.target.keys] as TelemetryKey[],
+      keys: [...captured.item.target.keys],
       snapshot: captured.candidate.snapshot,
       recoveryCursor: result.recoveryCursor,
       cursorExpiresAt: result.expiresAt,

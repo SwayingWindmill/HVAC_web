@@ -10,6 +10,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { WorkOrder, WorkOrderStatus } from '@/api/work-orders';
 import { useSiteEquipment } from '@/features/assets/use-device-names';
 import { formatCompactTime, personLabel } from '@/lib/operator-format';
+import { isOneOf } from '@/lib/typed';
 import { cn } from '@/lib/utils';
 import { CreateWorkOrderDialog } from '../CreateWorkOrderDialog';
 import { isOptimizationRecommendationSource } from '@/features/optimization/optimization-model';
@@ -19,6 +20,7 @@ import { StatusShape } from './StatusShape';
 import { WorkOrderInspector } from './WorkOrderInspector';
 
 export type WorkCenterView = 'open' | 'mine' | 'done' | 'all';
+const WORK_CENTER_VIEWS = ['open', 'mine', 'done', 'all'] as const satisfies readonly WorkCenterView[];
 
 const VIEW_LABELS: Readonly<Record<WorkCenterView, string>> = {
   open: '进行中',
@@ -171,9 +173,9 @@ export function WorkCenterWorkspace() {
         )}
       />
 
-      <Tabs value={view} onValueChange={(value) => setSearch({ view: value as WorkCenterView })}>
+      <Tabs value={view} onValueChange={(value) => { if (isOneOf(WORK_CENTER_VIEWS, value)) setSearch({ view: value }); }}>
         <TabsList variant="line" className="h-9 w-full justify-start gap-5 rounded-none border-b p-0">
-          {(Object.keys(VIEW_LABELS) as WorkCenterView[]).map((key) => (
+          {WORK_CENTER_VIEWS.map((key) => (
             <TabsTrigger key={key} value={key} className="h-9 flex-none gap-1.5 px-0 after:bottom-[-1px]!">
               {VIEW_LABELS[key]}
               {counts[key] !== undefined ? <span className="font-mono text-[11px] text-subtle-foreground">{counts[key]}</span> : null}

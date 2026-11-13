@@ -7,6 +7,7 @@ import { NavUser } from './NavUser';
 import { ScopeSwitcher } from './ScopeSwitcher';
 import { useWaitingAlarmCount } from '@/features/alarms/use-waiting-alarm-count';
 import { BrandMark } from '@/components/brand-mark';
+import { cn } from '@/lib/utils';
 
 interface AppHeaderProps {
   /** The Site the operator works in; the bell counts its alarms happening now that nobody acknowledged. */
@@ -73,8 +74,8 @@ export function AppHeader({
           </Button>
           {assistant !== undefined ? (
             <Button
-              variant={assistant.open ? 'secondary' : 'outline'}
-              className="gap-1.5"
+              variant="outline"
+              className={cn('gap-1.5', assistant.open && 'border-input-hover bg-accent text-foreground')}
               aria-pressed={assistant.open}
               onClick={assistant.onToggle}
             >

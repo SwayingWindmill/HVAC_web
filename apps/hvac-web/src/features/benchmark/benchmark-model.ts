@@ -98,10 +98,14 @@ export function benchmark(input: readonly SiteSummary[]): Benchmark {
   const climatePlace = placeBy((site) => site.climateIntensity);
   const rankedSites = sites.map((site): BenchmarkSite => ({ ...site, intensityRank: intensityPlace(site), climateRank: climatePlace(site) }));
 
-  const days = new Map<string, Record<string, number | string | null>>();
+  const days = new Map<string, { key: string; label: string } & Record<string, number | string | null>>();
   for (const site of input) {
     for (const row of site.summary.rows) {
-      const day = days.get(row.periodStart) ?? { key: row.periodStart, label: row.label, ...Object.fromEntries(input.map((entry) => [entry.siteId, null])) };
+      const day: { key: string; label: string } & Record<string, number | string | null> = days.get(row.periodStart) ?? {
+        ...Object.fromEntries(input.map((entry) => [entry.siteId, null])),
+        key: row.periodStart,
+        label: row.label,
+      };
       day[site.siteId] = row.cop;
       days.set(row.periodStart, day);
     }
@@ -110,6 +114,6 @@ export function benchmark(input: readonly SiteSummary[]): Benchmark {
   return {
     sites: rankedSites,
     fleet: { electricityKWh: total('electricityKWh'), coolingKWh: total('coolingKWh'), cop: fleetCop },
-    daily: [...days.values()].sort((left, right) => String(left.key).localeCompare(String(right.key))) as BenchmarkDay[],
+    daily: [...days.values()].sort((left, right) => left.key.localeCompare(right.key)),
   };
 }

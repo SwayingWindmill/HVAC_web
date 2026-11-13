@@ -6,7 +6,7 @@ import { formatDecimal } from '@/lib/operator-format';
 const formatValue = (value: number): string => formatDecimal(value, Number.isInteger(value) ? 0 : 1);
 
 /**
- * The card's chart (#640). The Agent drew it from one read, so every number is one the answer rests
+ * The card's chart. The Agent drew it from one read, so every number is one the answer rests
  * on: hours as a line, days and periods as bars, machines as a ranked bar list.
  */
 export function FindingChart({ chart }: { readonly chart: FindingChartData }) {

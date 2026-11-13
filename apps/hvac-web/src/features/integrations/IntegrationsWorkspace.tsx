@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useNow } from '@/hooks/use-now';
+import { isOneOf } from '@/lib/typed';
 import { GatewaysTab } from './components/GatewaysTab';
 import { MeterInspectionSheet } from './components/MeterInspectionSheet';
 import { MeterReconciliationTab } from './components/MeterReconciliationTab';
@@ -39,6 +40,7 @@ import {
 const route = getRouteApi('/_app/settings/integrations');
 
 const HOUR_MS = 3_600_000;
+const INTEGRATIONS_VIEWS = ['gateways', 'meters', 'sensors'] as const satisfies readonly IntegrationsTabView[];
 
 export function IntegrationsWorkspace() {
   const snapshot = useShellSnapshot();
@@ -280,11 +282,11 @@ export function IntegrationsWorkspace() {
       <Tabs
         value={activeView}
         onValueChange={(next) => {
-          const nextView = next as IntegrationsTabView;
+          if (!isOneOf(INTEGRATIONS_VIEWS, next)) return;
           void navigate({
             search: (prev) => ({
               ...prev,
-              view: nextView === 'gateways' ? undefined : nextView,
+              view: next === 'gateways' ? undefined : next,
               inspect: undefined,
             }),
           });

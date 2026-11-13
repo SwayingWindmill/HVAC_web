@@ -70,7 +70,7 @@ npm run deployment:phase1:check                          # 改了 Compose 或迁
 | --- | --- |
 | 脚本严格类型检查、遗留 JS 数量与字节上限（`102`，禁止 `.agents/` 新增 JS）、`.agents/skills` 与 `.claude/skills` 逐字节镜像一致、禁止跟踪 `.audit/` 与代码残留 `[DEBUG-*]`、`docs/HANDOFF.md` 单次读取上限（`<= 28 KiB`） | `npm run typecheck:scripts` 与 `npm run repo:check`（`tsconfig.scripts.json`、`scripts/check-repository-governance.ts`） |
 | 破坏性 Git 命令、打印运行密钥与未授权生产发布/重置本地库拦截 | `.agents/hooks.json` + `.claude/settings.json`（`scripts/hooks/pre-tool-guard.ts`，由 `npm run pr:gates:test` 测试） |
-| 页面组合语法（`DataTableBlock`、禁止 `<main>`、`FactTile` 禁用 `className`、`Button variant="secondary"`）、`DESIGN.md` §1 禁用文案、feature/route 禁裸 `fetch`/`WebSocket`、`as unknown as` 清零与非 `const` `as` 棘轮（`scripts/web-as-cast-baseline.json`）、`routeTree.gen.ts` 新鲜度、`Enter` 输入法防误触、`color-scheme` 与浅/深双主题 WCAG 对比度 | `npm run design:check`（`scripts/check-design-system.ts`）与 `scripts/test-real-design-tokens.ts` |
+| 页面组合语法（`DataTableBlock`、禁止 `<main>`、`FactTile` 禁用 `className`、禁 `<Button variant="secondary">`）、`DESIGN.md` §1 禁用文案、feature/route 禁裸 `fetch`/`WebSocket`、禁 `components/ui/` 外 `"use client"` / `@ts-ignore` / `eslint-disable` / `console.log` / `JSON.parse(JSON.stringify(...))`、`as unknown as` 清零与非 `const` `as` 棘轮（`scripts/web-as-cast-baseline.json` `43`）、`routeTree.gen.ts` 新鲜度、`Enter` 输入法防误触、`color-scheme` 与浅/深双主题 WCAG 对比度 | `npm run design:check`（`scripts/check-design-system.ts`）与 `scripts/test-real-design-tokens.ts` |
 | 权限目录与内置角色展示同 IAM 契约严格一致 | `npm -w @hvac/web run typecheck` 与 `npm run web:principal:contract`（`scripts/test-rms-principal-capability-contract.mjs`） |
 | 网关路由负责方、数据表负责方与冻结迁移不可修改 | `npm run ownership:check`、`npm run migrations:freeze:check` |
 
