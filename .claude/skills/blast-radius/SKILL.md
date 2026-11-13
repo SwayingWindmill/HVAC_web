@@ -9,7 +9,7 @@ Find what a change breaks somewhere else, before it ships. Use for "blast radius
 
 Companion to `how` and `why`. `how` tells you what the code does. `why` tells you why it's shaped that way. Blast radius tells you what it breaks somewhere else.
 
-Listing the callers is not the job. `codegraph_impact` or `git grep` finds those in a second. The job is the breakage symbol search won't show you.
+Listing the callers is not the job. `codegraph_explore` or `git grep` finds those in a second. The job is the breakage symbol search won't show you.
 
 ## Don't trust your own writeup
 
