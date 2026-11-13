@@ -13,7 +13,7 @@ On Antigravity, spawn read-only subagents via `invoke_subagent` with `TypeName: 
 
 If the scope is ambiguous, state your interpretation and explore. The user can redirect.
 
-- **Simple** (a single module, a small utility, a narrow question such as "how does function X work"): no explorers. Spawn one explainer that explores and explains in one pass, built from `references/explainer-prompt.md` without the explorer-findings section. Go to step 4.
+- **Simple** (a single module, a small utility, a narrow question such as "how does function X work"): when `codegraph_explore` / `codegraph_context` MCP tools are available, start there plus parallel `read_file` calls (`150–250` lines or small full files) and `git grep -n` instead of an extra subagent round-trip. When delegating without CodeGraph, spawn one explainer that explores and explains in one pass, built from `references/explainer-prompt.md` without the explorer-findings section. Go to step 4.
 - **Complex** (a subsystem spanning multiple files or services, a cross-cutting feature, a full architectural overview): go to step 2.
 
 When in doubt, take the simple path.

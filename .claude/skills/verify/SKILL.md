@@ -17,7 +17,7 @@ Pick the tier that matches the change:
 
 1. Check if port `5190` is already in use by another worktree or server in WSL:
    ```bash
-   ss -ltnp | grep ':5190' || true
+   npm run verify:doctor 5190
    ```
 2. Prefer running `apps/hvac-web` with an isolated build and port (`5194` or another free port) under `CI=1` so parallel worktrees never cross-wire `5190`:
    ```bash
@@ -39,13 +39,10 @@ Pick the tier that matches the change:
 
 ## Doctor
 
-Run this single read-only check in WSL before debugging a flaky or blank browser run:
+Run this single read-only check before debugging a flaky or blank browser run (it bridges Windows into WSL automatically and checks Linux Node, Chromium, and `/proc/net/tcp{,6}` ports without shell pipelines):
 
 ```bash
-wsl -e bash -lc 'cd /mnt/e/Code/HVAC_web && node --experimental-strip-types -e "
-import { resolveLinuxBrowserExecutable } from '\''./scripts/lib/browser-runtime.mjs'\'';
-console.log({ node: process.version, browser: resolveLinuxBrowserExecutable() });
-" && ss -ltnp | grep -E ":(5190|5194|8443)\b" || true'
+npm run verify:doctor
 ```
 
 Confirm:

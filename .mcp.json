@@ -2,10 +2,9 @@
   "mcpServers": {
     "codegraph": {
       "type": "stdio",
-      "command": "npx",
+      "command": "node",
       "args": [
-        "--no-install",
-        "codegraph",
+        "./node_modules/@colbymchenry/codegraph/npm-shim.js",
         "serve",
         "--mcp"
       ],

@@ -179,7 +179,7 @@ for (const file of files) {
     addReason(file, 'Go code, dependencies or Go check rules changed; lint and vulnerability-scan every Go module');
   }
   match(file === '.golangci.yml', () => {});
-  match(file === 'AGENTS.md' || file === 'CLAUDE.md' || file === 'README.md' || file === 'LICENSE' || file === '.mwgrc' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
+  match(file === 'AGENTS.md' || file === 'CLAUDE.md' || file === 'README.md' || file === 'LICENSE' || file === 'CHANGELOG.md' || file === '.mcp.json' || file === '.mwgrc' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
     addReason(file, 'repository documentation or metadata only');
   });
   match(file.startsWith('.github/workflows/'), () => selectBroad(file, 'workflow behavior changed'));
@@ -284,7 +284,7 @@ for (const file of files) {
       'scripts/test-pre-tool-guard.ts',
     ].includes(file), () => addReason(file, 'repository governance baseline or pre-tool hook guard changed (verified in static gate)'));
     scriptMatch(file === 'scripts/web-as-cast-baseline.json', () => selectWeb(file, 'web type-cast baseline changed'));
-    scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.includes('design-system') || lower.startsWith('scripts/test-real-'), () => selectWeb(file, 'browser, RMS or Web model test automation changed'));
+    scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.includes('design-system') || lower.includes('verify-runtime') || lower.startsWith('scripts/test-real-'), () => selectWeb(file, 'browser, RMS or Web model test automation changed'));
     scriptMatch(lower.includes('s0-') || lower.includes('durable'), () => selectPlatform(file, 'platform automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('s1-') || lower.includes('registry'), () => selectRegistry(file, 'registry automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('s2-') || lower.includes('telemetry'), () => {
