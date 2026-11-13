@@ -29,7 +29,7 @@
 - 设计系统见 `DESIGN.md`（1.0），视觉基准是 Claude Design 画布 https://claude.ai/artifact/LVwBRsavimfmaBHnRYJbdm 的「定稿」页，令牌在 `apps/hvac-web/src/global.css`；`text-sm` 正文 13/20、`text-xs` 说明 12/18、`text-title` 面板标题 14/20、`text-micro` 单位与徽标 11/16。
 - 复用现有组合块：`Main`、`PageHeader` / `PageMeta`、`Panel` / `PanelHeader` / `PanelLink`、`StateCard`、`SeverityMark`、`InfoTip`、`MetricTabsChartCard`、`FactTile`（值样式传 `valueClassName`）、`components/ui/table`、`Status` / `StatusBadge`。
 - 路由组合、`routeTree.gen.ts` 新鲜度、`DESIGN.md` §1 文案、Web AST（禁 `as unknown as` / 裸 `fetch` / `WebSocket` / `<Button variant="secondary">` / `"use client"`（`components/ui/` 外）/ `@ts-ignore` / `eslint-disable` / `console.log` / `JSON.parse(JSON.stringify)` 与非 `const` `as` 棘轮 `43`）、浅/深主题 WCAG 对比度与 IAM 权限/角色展示同步由 `npm run typecheck:scripts`、`npm run design:check`、`scripts/test-real-design-tokens.ts` 与 `npm run web:principal:contract` 自动检查；非弹窗未保存表单归所在页面拦截（如系统管理 `features/system/unsaved-drafts.tsx`）。
-- 视觉验收：用 `verify` 技能（Vite 5190/5194 录制网关或 `https://localhost:8443` 真实数据，`1440px` 宽度）。
+- 视觉验收：用 `verify` 技能（`features/README.md` 索引全站 23 份功能验收地图、覆盖 24 个 `e2e/*.spec.ts`；Tier 1 走 Vite 5190/5194 录制网关，Tier 2 走 `npm run verify:live` 对 `https://localhost:8443` 跑 1440×900 实库巡检并落盘截图）。
 
 ## 服务器（139.199.58.47）
 
@@ -55,7 +55,7 @@
 
 - 规格 `docs/specs/operations-assistant-v1.md`、`docs/specs/agent-semantic-query.md`；运行时使用 pi（`@earendil-works/pi-agent-core` 1.3.0，ADR 0014），面板基于 assistant-ui。
 - 只读工具覆盖资产、设备、实时与历史读数、能耗序列与拆分、语义查询、告警、诊断与未完工单；每次回答开始写入站点与本地时间，失败报 `SITE_CONTEXT_UNAVAILABLE`，每次最多 12 次模型调用、24 次工具调用。支持多轮续问（模型只看到历史文字不看卡片，追问重读数据）、结论卡片绑定工具原生 `chartFrom` 图表，并在系统管理「AI 助手」页按 `failure_code` 展示失败原因（限有操作记录权限者查看）。
-- 评测基准（`services/operations-agent-service/evals/BASELINE.md`，2026-10-20，#663 后 24 题 × 3 轮）：67/72 全部检查通过，平均 4.1 秒 / 读 1.7 次数据；已知问题包括约 3% 无正文只出卡片、跨站点提问偶有直接答当前站、设备名含 `UID` 非纯中文、正文偶漏 `UNABLE_TO_CONCLUDE`，以及数据不全题易超调用上限。
+- 评测基准（`services/operations-agent-service/evals/BASELINE.md`，2026-10-20，#663 后 24 题 × 3 轮）：67/72 全部检查通过，平均 4.1 秒 / 读 1.7 次数据；已知问题包括约 3% 无正文只出卡片、跨站点提问偶有直接答当前站、设备名含 `UID` 非纯中文、正文偶漏 `UNABLE_TO_CONCLUDE`，以及数据不全题易超调用上限；现支持 `npm run operations-agent:eval` 命令行 Bearer 会话认证执行与自动注销清理。
 
 ## 能耗和 Cube
 

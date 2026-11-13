@@ -12,6 +12,7 @@ import {
   findRequiredGuardrailFileViolations,
   findSkillMirrorViolations,
   findTrackedArtifactViolations,
+  findVerifyFeatureMapViolations,
   maximumHandoffBytes,
 } from './check-repository-governance.ts';
 
@@ -86,6 +87,9 @@ test('HVAC Web changes select stable domain profiles on the Linux browser runner
     'scripts/check-design-system.ts',
     'scripts/check-verify-runtime.ts',
     'scripts/test-verify-runtime.ts',
+    'scripts/verify-live-web.ts',
+    'scripts/test-verify-live-web.ts',
+    'scripts/lib/local-administrator-browser.d.mts',
   ]) {
     const classification = runClassification([file]);
     assert.deepEqual(classification.unitProfiles, ['web']);
@@ -280,10 +284,62 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
       'scripts/web-as-cast-baseline.json',
       'scripts/coverage-baseline.json',
       'scripts/check-coverage-regression.ts',
+      'scripts/verify-live-web.ts',
     ]).length,
     0,
   );
-  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 6);
+  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 7);
+
+  const verifyMapSandbox = mkdtempSync(join(tmpdir(), 'hvac-verify-map-'));
+  try {
+    mkdirSync(join(verifyMapSandbox, '.agents/skills/verify/features'), { recursive: true });
+    mkdirSync(join(verifyMapSandbox, 'apps/hvac-web/e2e'), { recursive: true });
+    const readmePath = '.agents/skills/verify/features/README.md';
+    const sampleMapPath = '.agents/skills/verify/features/sample.md';
+    const sampleSpecPath = 'apps/hvac-web/e2e/sample.spec.ts';
+    const validMapBody = [
+      '# Sample',
+      '## Sub-features',
+      '- Demo',
+      '## How to get to it (user POV)',
+      '- Open `/sample`',
+      '## Driving it with Playwright',
+      '- `e2e/sample.spec.ts`',
+      '## Gotchas',
+      '- None',
+      '',
+    ].join('\n');
+    writeFileSync(join(verifyMapSandbox, readmePath), '- [Sample](sample.md)\n');
+    writeFileSync(join(verifyMapSandbox, sampleMapPath), validMapBody);
+    writeFileSync(join(verifyMapSandbox, sampleSpecPath), '// spec\n');
+
+    assert.deepEqual(
+      findVerifyFeatureMapViolations({
+        root: verifyMapSandbox,
+        trackedFiles: [readmePath, sampleMapPath, sampleSpecPath],
+      }),
+      [],
+    );
+
+    const unmappedSpec = findVerifyFeatureMapViolations({
+      root: verifyMapSandbox,
+      trackedFiles: [readmePath, sampleMapPath, sampleSpecPath, 'apps/hvac-web/e2e/foo.spec.ts'],
+    });
+    assert.equal(unmappedSpec.length, 1);
+    assert.match(unmappedSpec[0], /apps\/hvac-web\/e2e\/foo\.spec\.ts: unmapped Playwright spec/);
+
+    writeFileSync(join(verifyMapSandbox, readmePath), '# Empty index\n');
+    writeFileSync(join(verifyMapSandbox, sampleMapPath), '# Sample\n## Sub-features\n- Demo\n');
+    const brokenMap = findVerifyFeatureMapViolations({
+      root: verifyMapSandbox,
+      trackedFiles: [readmePath, sampleMapPath],
+    });
+    assert.equal(brokenMap.length, 4);
+    assert.ok(brokenMap.some((v) => v.includes('not indexed in')));
+    assert.ok(brokenMap.some((v) => v.includes('missing required heading "## Gotchas"')));
+  } finally {
+    rmSync(verifyMapSandbox, { recursive: true, force: true });
+  }
 
   const debugSandbox = mkdtempSync(join(tmpdir(), 'hvac-debug-marker-'));
   try {

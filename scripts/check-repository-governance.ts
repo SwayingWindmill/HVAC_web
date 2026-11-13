@@ -205,6 +205,7 @@ const requiredGuardrailFiles = Object.freeze([
   'scripts/web-as-cast-baseline.json',
   'scripts/coverage-baseline.json',
   'scripts/check-coverage-regression.ts',
+  'scripts/verify-live-web.ts',
 ]);
 
 const debugMarkerExtensions = Object.freeze(['.go', '.ts', '.tsx', '.mjs', '.js', '.cjs']);
@@ -324,6 +325,96 @@ export const findSkillMirrorViolations = ({
   return violations;
 };
 
+const verifyFeaturesPrefix = '.agents/skills/verify/features/';
+const verifyFeaturesIndex = '.agents/skills/verify/features/README.md';
+const verifyE2eSpecPrefix = 'apps/hvac-web/e2e/';
+const verifyE2eSpecSuffix = '.spec.ts';
+const requiredVerifyFeatureHeadings = Object.freeze([
+  '## Sub-features',
+  '## How to get to it (user POV)',
+  '## Driving it with Playwright',
+  '## Gotchas',
+]);
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+export const findVerifyFeatureMapViolations = ({
+  root,
+  trackedFiles,
+}: {
+  root: string;
+  trackedFiles: string[];
+}): string[] => {
+  const violations: string[] = [];
+  const featureMaps = trackedFiles
+    .filter(
+      (file) =>
+        file.startsWith(verifyFeaturesPrefix) &&
+        file.endsWith('.md') &&
+        file !== verifyFeaturesIndex,
+    )
+    .sort();
+  const e2eSpecs = trackedFiles
+    .filter((file) => file.startsWith(verifyE2eSpecPrefix) && file.endsWith(verifyE2eSpecSuffix))
+    .sort();
+
+  const hasVerifyIndex = trackedFiles.includes(verifyFeaturesIndex);
+  if (!hasVerifyIndex && featureMaps.length === 0 && e2eSpecs.length === 0) {
+    return violations;
+  }
+
+  let readmeContent = '';
+  const readmeAbs = join(root, verifyFeaturesIndex);
+  if (!hasVerifyIndex || !existsSync(readmeAbs)) {
+    violations.push(`${verifyFeaturesIndex}: missing verify features index README.md`);
+  } else {
+    readmeContent = readFileSync(readmeAbs, 'utf8');
+  }
+
+  const referencedSpecs = new Set<string>();
+  for (const mapPath of featureMaps) {
+    const mapAbs = join(root, mapPath);
+    if (!existsSync(mapAbs)) {
+      violations.push(`${mapPath}: tracked verify feature map is missing on disk`);
+      continue;
+    }
+
+    const basename = mapPath.slice(verifyFeaturesPrefix.length);
+    if (readmeContent) {
+      const linkPattern = new RegExp(`\\[[^\\]]+\\]\\((?:\\./)?${escapeRegExp(basename)}\\)`);
+      if (!linkPattern.test(readmeContent)) {
+        violations.push(`${mapPath}: not indexed in ${verifyFeaturesIndex}`);
+      }
+    }
+
+    const content = readFileSync(mapAbs, 'utf8');
+    for (const heading of requiredVerifyFeatureHeadings) {
+      const headingPattern = new RegExp(`^${escapeRegExp(heading)}\\s*$`, 'm');
+      if (!headingPattern.test(content)) {
+        violations.push(`${mapPath}: missing required heading "${heading}"`);
+      }
+    }
+
+    for (const specPath of e2eSpecs) {
+      const specName = specPath.slice(verifyE2eSpecPrefix.length);
+      const specPattern = new RegExp(`(?:^|[^A-Za-z0-9_.-])${escapeRegExp(specName)}(?:$|[^A-Za-z0-9_.-])`);
+      if (specPattern.test(content)) {
+        referencedSpecs.add(specPath);
+      }
+    }
+  }
+
+  for (const specPath of e2eSpecs) {
+    if (!referencedSpecs.has(specPath)) {
+      violations.push(
+        `${specPath}: unmapped Playwright spec; document it under ${verifyFeaturesPrefix} and index it in ${verifyFeaturesIndex}`,
+      );
+    }
+  }
+
+  return violations;
+};
+
 export const findHandoffBudgetViolations = ({
   bytes,
   maxBytes = maximumHandoffBytes,
@@ -414,6 +505,7 @@ export const checkRepositoryGovernance = (root = repositoryRoot) => {
     ...findRequiredGuardrailFileViolations(trackedFiles),
     ...findDebugMarkerViolations({ root, trackedFiles }),
     ...findSkillMirrorViolations({ root, trackedFiles }),
+    ...findVerifyFeatureMapViolations({ root, trackedFiles }),
     ...collectJavascriptToolingViolations(root, trackedFiles),
     ...findPackageScriptViolations({
       scripts: packageJson.scripts ?? {},

@@ -27,6 +27,8 @@
 npm run check                                            # 仓库静态门禁与构建检查
 npm run domain:run -- --domain=<域>                      # 按改动域跑门禁（见 scripts/domain-task-matrix.ts）
 npm run verify:doctor                                    # 检查 WSL Node、Linux Chromium 与验证端口（5190/5194/8443）
+npm run verify:live -- --slug=<标识> --route=<路径>     # Tier-2 实库网页 1440px 截图与错误门禁（无 8443 时返回退出码 2）
+npm run operations-agent:eval -- --only=<题号>         # Tier-2 AI 助手 Bearer 会话 CLI 评测（凭据靠环境变量，不进命令行）
 npm -w @hvac/web run typecheck
 npm -w @hvac/web run build
 npm run web:shell:test && npm run web:model:test         # 网页的单元测试
@@ -73,7 +75,7 @@ npm run deployment:phase1:check                          # 改了 Compose 或迁
 
 | 规则 | 由什么自动守住 |
 | --- | --- |
-| 脚本严格类型检查、遗留 JS 数量与字节上限（`102`，禁止 `.agents/` 新增 JS）、`.agents/skills` 与 `.claude/skills` 逐字节镜像一致、禁止跟踪 `.audit/` 与代码残留 `[DEBUG-*]`、`docs/HANDOFF.md` 单次读取上限（`<= 28 KiB`） | `npm run typecheck:scripts` 与 `npm run repo:check`（`tsconfig.scripts.json`、`scripts/check-repository-governance.ts`） |
+| 脚本严格类型检查、遗留 JS 数量与字节上限（`102`，禁止 `.agents/` 新增 JS）、`.agents/skills` 与 `.claude/skills` 逐字节镜像一致、`verify/features` 全覆盖与四段结构、禁止跟踪 `.audit/` 与代码残留 `[DEBUG-*]`、`docs/HANDOFF.md` 单次读取上限（`<= 28 KiB`） | `npm run typecheck:scripts` 与 `npm run repo:check`（`tsconfig.scripts.json`、`scripts/check-repository-governance.ts`） |
 | 破坏性 Git 命令、打印运行密钥与未授权生产发布/重置本地库拦截 | `.agents/hooks.json` + `.claude/settings.json`（`scripts/hooks/pre-tool-guard.ts`，由 `npm run pr:gates:test` 测试） |
 | 页面组合语法（`DataTableBlock`、禁止 `<main>`、`FactTile` 禁用 `className`、禁 `<Button variant="secondary">`）、`DESIGN.md` §1 禁用文案、feature/route 禁裸 `fetch`/`WebSocket`、禁 `components/ui/` 外 `"use client"` / `@ts-ignore` / `eslint-disable` / `console.log` / `JSON.parse(JSON.stringify(...))`、`as unknown as` 清零与非 `const` `as` 棘轮（`scripts/web-as-cast-baseline.json` `43`）、`routeTree.gen.ts` 新鲜度、`Enter` 输入法防误触、`color-scheme` 与浅/深双主题 WCAG 对比度 | `npm run design:check`（`scripts/check-design-system.ts`）与 `scripts/test-real-design-tokens.ts` |
 | 权限目录与内置角色展示同 IAM 契约严格一致 | `npm -w @hvac/web run typecheck` 与 `npm run web:principal:contract`（`scripts/test-rms-principal-capability-contract.mjs`） |

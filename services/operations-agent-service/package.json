@@ -19,11 +19,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p evals/tsconfig.json",
     "build": "tsc -p tsconfig.build.json",
     "boundaries": "node ../../scripts/check-operations-agent-service-boundaries.mjs",
-    "test": "npm run build && node --experimental-strip-types --test ../../scripts/test-operations-agent-service-boundaries.mjs test/agent-contracts.test.ts test/agent-session-lifecycle.test.ts test/agent-session-service.test.ts test/agent-session-http.test.ts test/agent-session-event-stream.test.ts test/pi-runtime.test.ts test/pi-model-runtime.test.ts test/pi-tool-policy.test.ts test/pi-investigation-vertical.test.ts test/hvac-read-tools.test.ts test/owner-read-adapters.test.ts test/agent-eval-grading.test.ts",
+    "test": "npm run build && node --experimental-strip-types --test ../../scripts/test-operations-agent-service-boundaries.mjs test/agent-contracts.test.ts test/agent-session-lifecycle.test.ts test/agent-session-service.test.ts test/agent-session-http.test.ts test/agent-session-event-stream.test.ts test/pi-runtime.test.ts test/pi-model-runtime.test.ts test/pi-tool-policy.test.ts test/pi-investigation-vertical.test.ts test/hvac-read-tools.test.ts test/owner-read-adapters.test.ts test/agent-eval-grading.test.ts test/agent-eval-cli.test.ts",
     "test:postgres": "node ../../scripts/run-operations-agent-postgres-tests.mjs",
     "migrate:operations": "node ../../scripts/run-operations-agent-migration.mjs operations",
     "check": "npm run contracts && npm run typecheck && npm run boundaries && npm test",
-    "eval:build": "esbuild evals/run.ts --bundle --format=iife --global-name=operationsAgentEval --target=es2022 --outfile=../../out/operations-agent-eval/runner.js"
+    "eval:build": "esbuild evals/run.ts --bundle --format=iife --global-name=operationsAgentEval --target=es2022 --outfile=../../out/operations-agent-eval/runner.js",
+    "eval:cli": "node --experimental-strip-types evals/cli.ts"
   },
   "engines": {
     "node": ">=22.22.0"

@@ -1,0 +1,41 @@
+[
+  {
+    "ledgerSequence": 3,
+    "messageId": "01a12370-0000-7000-8000-000000000003",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "actor": "01a0e6dc-35fe-7c0f-bde3-959af7ea9e53",
+    "action": "SESSION_REVOKED",
+    "resourceType": "bff-session",
+    "resourceId": "01a12370-0000-7000-8000-000000000103",
+    "outcome": "SUCCEEDED",
+    "policyRevision": "7",
+    "correlationId": "01a12370-0000-7000-8000-000000000203",
+    "occurredAt": "2026-10-14T02:15:30Z"
+  },
+  {
+    "ledgerSequence": 2,
+    "messageId": "01a12370-0000-7000-8000-000000000002",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "actor": "01a12360-f4a7-76f6-a654-170eac9bc168",
+    "action": "SOMETHING_NEW",
+    "resourceType": "mystery",
+    "resourceId": "01a12370-0000-7000-8000-000000000102",
+    "outcome": "DENIED",
+    "policyRevision": "7",
+    "correlationId": "01a12370-0000-7000-8000-000000000202",
+    "occurredAt": "2026-10-14T01:45:12Z"
+  },
+  {
+    "ledgerSequence": 1,
+    "messageId": "01a12370-0000-7000-8000-000000000001",
+    "tenantId": "018f3d00-0000-7000-8000-000000000001",
+    "actor": "01a0e6dc-35fe-7c0f-bde3-959af7ea9e53",
+    "action": "SESSION_CREATED",
+    "resourceType": "bff-session",
+    "resourceId": "01a12370-0000-7000-8000-000000000101",
+    "outcome": "SUCCEEDED",
+    "policyRevision": "7",
+    "correlationId": "01a12370-0000-7000-8000-000000000201",
+    "occurredAt": "2026-10-14T01:20:00Z"
+  }
+]

@@ -52,11 +52,18 @@ Confirm:
 
 ## Drive
 
-- **Recorded gateway:** Put deterministic end-to-end checks in `apps/hvac-web/e2e/<spec>.spec.ts` using fixtures under `apps/hvac-web/e2e/fixtures/` and owner-faithful mutations in `apps/hvac-web/e2e/gateway.ts`. Run via:
+- **Recorded gateway:** Put deterministic end-to-end checks in `apps/hvac-web/e2e/<spec>.spec.ts` using fixtures under `apps/hvac-web/e2e/fixtures/` and owner-faithful mutations in `apps/hvac-web/e2e/gateway.ts`. Consult [`features/README.md`](features/README.md) to map user-facing features to exact routes and specs. Run via:
   ```bash
   CI=1 PLAYWRIGHT_PORT=5194 npm run web:e2e -- --workers=1 e2e/<spec>.spec.ts
   ```
-- **Live `hvac-local` (`https://localhost:8443`):** Reuse `localAdministratorBrowser('https://localhost:8443')` from `scripts/lib/local-administrator-browser.mjs`, which opens headless Chromium at `1440×900`, submits the real login form with `local-admin.credentials`, verifies `/api/v1/principal`, and returns `{ browser, context, page, principal }`.
+- **Live `hvac-local` (`https://localhost:8443`):** Run the standard 1440×900 Tier-2 route verifier, which checks `/healthz` first (exiting `2` `PRECONDITION_UNMET` when offline), signs in via `localAdministratorBrowser('https://localhost:8443')`, checks console/page/5xx errors and horizontal overflow, saves PNG + JSON evidence under `.scratch/verify/<slug>/`, and closes the browser in `finally`:
+  ```bash
+  npm run verify:live -- --slug=<slug> --route=/operations/realtime --route=/system?tab=site
+  ```
+- **Live operations-agent eval (`https://localhost:8443`):** Run the authenticated Bearer-session CLI harness using `OPERATIONS_AGENT_EVAL_SESSION_TOKEN` or `OPERATIONS_AGENT_EVAL_USERNAME` + `OPERATIONS_AGENT_EVAL_PASSWORD` (exits `2` `PRECONDITION_UNMET` when credentials are omitted; logs out created sessions in `finally`):
+  ```bash
+  npm run operations-agent:eval -- --only=<questionId> --trials=1 --output=.scratch/verify/<slug>/agent-eval.json
+  ```
 - **Selectors:** Always target accessible roles (`getByRole`, `getByLabel`, `getByTestId`, `getByText` with `GLOSSARY.md` Chinese labels), never brittle CSS class names or pixel coordinates.
 
 ## Evidence
