@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  findDebugMarkerViolations,
   findHandoffBudgetViolations,
   findRequiredGuardrailFileViolations,
   findSkillMirrorViolations,
@@ -14,24 +15,42 @@ import {
   maximumHandoffBytes,
 } from './check-repository-governance.ts';
 
-const runClassification = (files) => {
-  const result = spawnSync(process.execPath, ['scripts/classify-pr-gates.mjs', `--files=${files.join(',')}`], {
+interface ClassificationReport {
+  changedFiles: string[];
+  broad: boolean;
+  unknown: boolean;
+  contracts: boolean;
+  units: boolean;
+  integrations: boolean;
+  browsers: boolean;
+  contractProfiles: string[];
+  unitProfiles: string[];
+  integrationProfiles: string[];
+  browserProfiles: string[];
+}
+
+interface GatePlan {
+  commands: string[];
+}
+
+const runClassification = (files: readonly string[]): ClassificationReport => {
+  const result = spawnSync(process.execPath, ['--experimental-strip-types', 'scripts/classify-pr-gates.ts', `--files=${files.join(',')}`], {
     cwd: process.cwd(),
     encoding: 'utf8',
     windowsHide: true,
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  return JSON.parse(result.stdout.trim());
+  return JSON.parse(result.stdout.trim()) as ClassificationReport;
 };
 
-const runPlan = (gate, profiles) => {
-  const result = spawnSync(process.execPath, ['scripts/run-pr-gate.mjs', `--gate=${gate}`, `--profiles=${profiles.join(',')}`, '--dry-run=true'], {
+const runPlan = (gate: string, profiles: readonly string[]): GatePlan => {
+  const result = spawnSync(process.execPath, ['--experimental-strip-types', 'scripts/run-pr-gate.ts', `--gate=${gate}`, `--profiles=${profiles.join(',')}`, '--dry-run=true'], {
     cwd: process.cwd(),
     encoding: 'utf8',
     windowsHide: true,
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  return JSON.parse(result.stdout.trim());
+  return JSON.parse(result.stdout.trim()) as GatePlan;
 };
 
 test('documentation-only changes keep expensive affected gates idle', () => {
@@ -60,7 +79,7 @@ test('package-lock changes compile and unit test without database or browser fan
 });
 
 test('HVAC Web changes select stable domain profiles on the Linux browser runner', () => {
-  for (const file of ['apps/hvac-web/src/app/router.ts', 'scripts/check-design-system.mjs']) {
+  for (const file of ['apps/hvac-web/src/app/router.ts', 'scripts/check-design-system.ts']) {
     const classification = runClassification([file]);
     assert.deepEqual(classification.unitProfiles, ['web']);
     assert.deepEqual(classification.browserProfiles, ['telemetry']);
@@ -121,7 +140,7 @@ test('package, workflow, and central task-matrix changes fail closed to broad co
   for (const file of [
     'package.json',
     '.github/workflows/pr-gates.yml',
-    'scripts/domain-task-matrix.mjs',
+    'scripts/domain-task-matrix.ts',
     'scripts/package-script-long-chain-baseline.json',
   ]) {
     const classification = runClassification([file]);
@@ -246,10 +265,31 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
   }
 
   assert.equal(
-    findRequiredGuardrailFileViolations(['.agents/hooks.json', '.claude/settings.json', 'scripts/hooks/pre-tool-guard.ts']).length,
+    findRequiredGuardrailFileViolations([
+      '.agents/hooks.json',
+      '.claude/settings.json',
+      'scripts/hooks/pre-tool-guard.ts',
+      'tsconfig.scripts.json',
+      'scripts/web-as-cast-baseline.json',
+      'scripts/coverage-baseline.json',
+      'scripts/check-coverage-regression.ts',
+    ]).length,
     0,
   );
-  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 2);
+  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 6);
+
+  const debugSandbox = mkdtempSync(join(tmpdir(), 'hvac-debug-marker-'));
+  try {
+    mkdirSync(join(debugSandbox, 'apps/hvac-web/src'), { recursive: true });
+    writeFileSync(join(debugSandbox, 'apps/hvac-web/src/leak.ts'), `console.log('[DEBUG-' + '9999]');\n`);
+    assert.equal(findDebugMarkerViolations({ root: debugSandbox, trackedFiles: ['apps/hvac-web/src/leak.ts'] }).length, 0);
+    writeFileSync(join(debugSandbox, 'apps/hvac-web/src/leak.ts'), `console.log('[DEBUG-${'1234'}]');\n`);
+    const markerViolations = findDebugMarkerViolations({ root: debugSandbox, trackedFiles: ['apps/hvac-web/src/leak.ts'] });
+    assert.equal(markerViolations.length, 1);
+    assert.ok(markerViolations[0].includes('leftover debug marker'));
+  } finally {
+    rmSync(debugSandbox, { recursive: true, force: true });
+  }
 
   for (const file of [
     '.agents/hooks.json',
@@ -257,9 +297,16 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
     'scripts/hooks/pre-tool-guard.ts',
     'scripts/test-pre-tool-guard.ts',
     'scripts/javascript-tooling-baseline.json',
+    'scripts/web-as-cast-baseline.json',
+    'scripts/coverage-baseline.json',
+    'scripts/check-coverage-regression.ts',
   ]) {
     const classification = runClassification([file]);
     assert.equal(classification.unknown, false, file);
     assert.equal(classification.broad, false, file);
   }
+
+  const tsconfigClassification = runClassification(['tsconfig.scripts.json']);
+  assert.equal(tsconfigClassification.unknown, false, 'tsconfig.scripts.json');
+  assert.equal(tsconfigClassification.broad, true, 'tsconfig.scripts.json');
 });

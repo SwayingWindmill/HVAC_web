@@ -104,7 +104,7 @@ export class FakeTelemetry {
         if (!item) throw new Error(`No Snapshot fixture for ${deviceId}`);
         return item.promise;
       },
-      batchGetObservationSnapshots: async () => ({ schemaVersion: 1, items: [] }),
+      batchGetDeviceObservationSnapshots: async () => ({ schemaVersion: 1, items: [] }),
       bootstrapTelemetrySubscriptions: async (request: SubscriptionBootstrapRequest) => {
         this.bootstrapRequests.push(structuredClone(request));
         const recovering = request.subscriptions.every((item) => Boolean(item.recoveryCursor));
@@ -135,7 +135,38 @@ export class FakeTelemetry {
           })),
         };
       },
-    } as S2TelemetryClient;
+      queryDeviceHistory: async (request) => ({
+        schemaVersion: 2,
+        tenantId: '0190f000-0000-7000-8000-000000000001',
+        siteId: '0190f000-0000-7000-8000-000000000002',
+        deviceId: request.deviceId,
+        observations: [],
+        metadata: {
+          requestedFrom: request.from,
+          requestedTo: request.to,
+          projectionWatermark: null,
+          pageSize: request.pageSize,
+          returnedObservations: 0,
+          nextCursor: null,
+        },
+      }),
+      queryDeviceHistoryAggregate: async (request) => ({
+        schemaVersion: 1,
+        tenantId: '0190f000-0000-7000-8000-000000000001',
+        siteId: '0190f000-0000-7000-8000-000000000002',
+        deviceId: request.deviceId,
+        buckets: [],
+        metadata: {
+          requestedFrom: request.from,
+          requestedTo: request.to,
+          granularity: request.granularity,
+          timezone: request.timezone,
+          qualityPolicy: request.qualityPolicy,
+          projectionWatermark: null,
+          returnedBuckets: 0,
+        },
+      }),
+    };
   }
 }
 

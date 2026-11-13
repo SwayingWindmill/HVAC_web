@@ -16,25 +16,22 @@ export interface ScenePalette {
   readonly inactive: string;
 }
 
-const TOKENS: Readonly<Record<keyof ScenePalette, string>> = {
-  background: '--background',
-  card: '--card',
-  border: '--border',
-  muted: '--muted',
-  foreground: '--foreground',
-  chilled: '--primary',
-  cooling: '--chart-2',
-  accent: '--chart-2',
-  running: '--success',
-  fault: '--destructive',
-  inactive: '--chart-inactive',
-};
-
 function readPalette(): ScenePalette {
   const style = getComputedStyle(document.documentElement);
-  return Object.fromEntries(
-    Object.entries(TOKENS).map(([name, token]) => [name, style.getPropertyValue(token).trim()]),
-  ) as unknown as ScenePalette;
+  const read = (token: string): string => style.getPropertyValue(token).trim();
+  return {
+    background: read('--background'),
+    card: read('--card'),
+    border: read('--border'),
+    muted: read('--muted'),
+    foreground: read('--foreground'),
+    chilled: read('--primary'),
+    cooling: read('--chart-2'),
+    accent: read('--chart-2'),
+    running: read('--success'),
+    fault: read('--destructive'),
+    inactive: read('--chart-inactive'),
+  };
 }
 
 export function useScenePalette(): ScenePalette {

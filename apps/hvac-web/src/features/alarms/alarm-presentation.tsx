@@ -15,8 +15,8 @@ export const SEVERITY_LABELS: Readonly<Record<AlarmSeverity, string>> = {
 const OPERATION_LABELS: Readonly<Record<AlarmOperation, string>> = {
   PUBLISH: '触发',
   ACKNOWLEDGE: '确认',
-  ASSIGN: '认领',
-  UNASSIGN: '取消认领',
+  ASSIGN: '分配',
+  UNASSIGN: '取消分配',
   SUPPRESS: '抑制',
   UNSUPPRESS: '解除抑制',
   CLEAR: '恢复',

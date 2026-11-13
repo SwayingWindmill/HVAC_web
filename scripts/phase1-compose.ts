@@ -67,6 +67,7 @@ const localRedis = redisMode === "local";
 const externalState = !localPostgres || !localClickHouse || !localRedis;
 const tierId =
   process.env.PHASE1_DEPLOYMENT_TIER || runtimeValues.PHASE1_DEPLOYMENT_TIER;
+if (!tierId) throw new Error("PHASE1_DEPLOYMENT_TIER is required");
 if (ownerSplit && tierId !== "single-full") {
   throw new Error(
     "The owner-split runtime mode requires PHASE1_DEPLOYMENT_TIER=single-full",
@@ -76,7 +77,7 @@ if (ownerSplit && tierId !== "single-full") {
 const ownerSplitCompose = ownerSplit
   ? readFileSync(path.join(phase1Dir, "owner-split.compose.yaml"), "utf8")
   : null;
-const runtimeProfiles = [
+const runtimeProfiles: string[] = [
   ...(localPostgres ? ["local-postgres"] : []),
   ...(localClickHouse ? ["local-clickhouse"] : []),
   ...(localRedis ? ["local-redis"] : []),
@@ -89,7 +90,7 @@ const deploymentTier = resolveDeploymentTier({
   tierId,
   environment: process.env.HVAC_ENV || runtimeValues.HVAC_ENV,
   runtimeEnvironment: { ...runtimeValues, ...process.env },
-  additionalComposeDocuments: ownerSplitCompose ? [ownerSplitCompose] : [],
+  additionalComposeDocuments: ownerSplitCompose !== null ? [ownerSplitCompose] : [],
   additionalProfiles: runtimeProfiles,
 });
 

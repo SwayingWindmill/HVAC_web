@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
 
 import {
-  gateCommandMatrix,
+  isGateName,
   resolveGateCommands,
   resolveGateProfileSet,
-} from './domain-task-matrix.mjs';
+} from './domain-task-matrix.ts';
 
 const argumentsMap = new Map(
   process.argv.slice(2).map((argument) => {
@@ -23,7 +23,7 @@ const explicitProfiles = [...new Set((argumentsMap.get('--profiles') ?? '')
 const profileSet = argumentsMap.get('--profile-set');
 const dryRun = argumentsMap.get('--dry-run') === 'true';
 
-if (!gate || !gateCommandMatrix[gate]) {
+if (!gate || !isGateName(gate)) {
   throw new Error(`Unsupported PR gate: ${gate ?? '<missing>'}`);
 }
 if (profileSet && explicitProfiles.length > 0) {

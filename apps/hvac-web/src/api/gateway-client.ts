@@ -33,12 +33,14 @@ export type GatewayFailure = Exclude<GatewayResult<unknown>, { kind: 'ok' }>;
 type Read = {
   readonly method?: 'GET';
   readonly csrfToken?: undefined;
+  readonly idempotencyKey?: undefined;
   readonly body?: undefined;
 };
 type Write = {
   readonly method: 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   /** Every write carries the session's CSRF token. */
   readonly csrfToken: string;
+  readonly idempotencyKey?: string;
   readonly body?: unknown;
 };
 
@@ -54,6 +56,7 @@ const ACCEPT = 'application/json, application/problem+json';
 export async function gatewayRequest<T>(path: string, request: GatewayRequest<T> = {}): Promise<GatewayResult<T>> {
   const headers: Record<string, string> = { Accept: ACCEPT };
   if (request.csrfToken !== undefined) headers['X-CSRF-Token'] = request.csrfToken;
+  if (request.idempotencyKey !== undefined) headers['Idempotency-Key'] = request.idempotencyKey;
   if (request.body !== undefined) headers['Content-Type'] = 'application/json';
   let response: Response;
   try {
@@ -106,14 +109,32 @@ function parseJSON(text: string | null): unknown {
 function problemOf(status: number, payload: unknown): GatewayProblem | null {
   if (payload === null || typeof payload !== 'object') return null;
   const body = payload as Record<string, unknown>;
-  if (typeof body.code !== 'string') return null;
-  return {
-    status,
-    code: body.code,
-    title: typeof body.title === 'string' ? body.title : undefined,
-    detail: typeof body.detail === 'string' ? body.detail : undefined,
-    retryable: typeof body.retryable === 'boolean' ? body.retryable : undefined,
-  };
+  if (typeof body.code === 'string') {
+    return {
+      status,
+      code: body.code,
+      title: typeof body.title === 'string' ? body.title : undefined,
+      detail: typeof body.detail === 'string' ? body.detail : undefined,
+      retryable: typeof body.retryable === 'boolean' ? body.retryable : undefined,
+    };
+  }
+  if (typeof body.error === 'object' && body.error !== null) {
+    const nested = body.error as Record<string, unknown>;
+    if (typeof nested.code === 'string') {
+      return {
+        status,
+        code: nested.code,
+        detail: typeof nested.message === 'string' ? nested.message : undefined,
+      };
+    }
+  }
+  return null;
+}
+
+export function failureStatus(failure: GatewayFailure): number {
+  return failure.kind === 'notPublished' || failure.kind === 'refused'
+    ? failure.problem.status
+    : (failure.status ?? 503);
 }
 
 export const ROUTE_MISSING_MESSAGE = '此功能尚未在服务器上启用';

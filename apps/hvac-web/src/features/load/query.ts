@@ -1,4 +1,5 @@
 import { queryOptions, skipToken } from '@tanstack/react-query';
+import { failureStatus, gatewayPath, gatewayRequest, ROUTE_MISSING_MESSAGE } from '@/api/gateway-client';
 import { intelligencePaths, type SiteAssetModel } from '@/api/generated/platformGateway.gen';
 import { createS2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
 import { demandWindows, quarterHours, type QuarterHour } from './demand-model';
@@ -53,13 +54,18 @@ export function siteLoadForecastQuery(siteId: string) {
   return queryOptions({
     queryKey: ['forecast', siteId, 'site-load'],
     queryFn: async ({ signal }): Promise<LoadForecast | null> => {
-      const response = await fetch(intelligencePaths.siteLoadForecast.replace('{siteId}', siteId), {
-        credentials: 'same-origin', signal, headers: { Accept: 'application/json, application/problem+json' },
+      const result = await gatewayRequest(gatewayPath(intelligencePaths.siteLoadForecast, { siteId }), {
+        signal,
+        parse: (payload) => parseLoadForecast(payload as PublishedForecast),
       });
-      if (response.status === 404) return null;
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new ForecastRequestError(response.status, payload?.detail ?? '预测服务暂时不可用');
-      return parseLoadForecast(payload as PublishedForecast);
+      if (result.kind === 'ok') return result.value;
+      if (result.kind === 'notPublished') return null;
+      throw new ForecastRequestError(
+        failureStatus(result),
+        result.kind === 'routeMissing'
+          ? ROUTE_MISSING_MESSAGE
+          : (result.kind === 'refused' ? (result.problem.detail ?? '预测服务暂时不可用') : '预测服务暂时不可用'),
+      );
     },
     // A new forecast is published every hour; five minutes keeps the page close to it.
     refetchInterval: 5 * 60_000,

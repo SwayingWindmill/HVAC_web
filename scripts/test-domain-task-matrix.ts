@@ -11,13 +11,39 @@ import {
   resolveDomainCommands,
   resolveGateCommands,
   resolveGateProfileSet,
-} from './domain-task-matrix.mjs';
+  type CommandSpec,
+  type DomainName,
+  type GateName,
+} from './domain-task-matrix.ts';
 
-const labels = (commands) => commands.map(({ label }) => label);
+interface DomainPlan {
+  profiles: Record<string, string[]>;
+  commands: string[];
+}
 
-const runDomainPlan = (domain, layers) => {
+interface GatePlan {
+  profileSet: string;
+  profiles: string[];
+  commands: string[];
+}
+
+interface WorkflowDocument {
+  jobs: {
+    unit_run: {
+      steps: Array<{
+        run?: string;
+        env?: Record<string, string>;
+      }>;
+    };
+  };
+}
+
+const labels = (commands: readonly CommandSpec[]): string[] => commands.map(({ label }) => label);
+
+const runDomainPlan = (domain: DomainName, layers: readonly string[]): DomainPlan => {
   const result = spawnSync(process.execPath, [
-    'scripts/run-domain-task.mjs',
+    '--experimental-strip-types',
+    'scripts/run-domain-task.ts',
     `--domain=${domain}`,
     `--layers=${layers.join(',')}`,
     '--dry-run=true',
@@ -27,12 +53,13 @@ const runDomainPlan = (domain, layers) => {
     windowsHide: true,
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  return JSON.parse(result.stdout.trim());
+  return JSON.parse(result.stdout.trim()) as DomainPlan;
 };
 
-const runGateProfileSetPlan = (gate, profileSet) => {
+const runGateProfileSetPlan = (gate: GateName, profileSet: 'all'): GatePlan => {
   const result = spawnSync(process.execPath, [
-    'scripts/run-pr-gate.mjs',
+    '--experimental-strip-types',
+    'scripts/run-pr-gate.ts',
     `--gate=${gate}`,
     `--profile-set=${profileSet}`,
     '--dry-run=true',
@@ -42,7 +69,7 @@ const runGateProfileSetPlan = (gate, profileSet) => {
     windowsHide: true,
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  return JSON.parse(result.stdout.trim());
+  return JSON.parse(result.stdout.trim()) as GatePlan;
 };
 
 test('domain matrix exposes stable product domains and standard layers', () => {
@@ -57,7 +84,7 @@ test('domain matrix exposes stable product domains and standard layers', () => {
     'analytics',
     'operations-agent',
   ]);
-  for (const profiles of Object.values(domainTaskProfiles)) {
+  for (const profiles of Object.values(domainTaskProfiles) as Array<Record<string, unknown>>) {
     assert.deepEqual(Object.keys(profiles), ['contracts', 'unit', 'integration', 'browser']);
   }
 });
@@ -88,6 +115,7 @@ test('gate profiles use product domains rather than implementation stage numbers
 test('static gate has one canonical repository check chain', () => {
   assert.deepEqual(labels(resolveGateCommands('static')), [
     'npm run repo:check',
+    'npm run typecheck:scripts',
     'npm run design:check',
     'npm run lint',
     'npm run build',
@@ -99,8 +127,8 @@ test('Go code checks run as the go unit profile: lint and vulnerability scan of 
 });
 
 test('the unit gate runs every Go test with the race detector', () => {
-  const workflow = yaml.load(readFileSync('.github/workflows/pr-gates.yml', 'utf8'));
-  const unitStep = workflow.jobs.unit_run.steps.find((step) => step.run?.includes('scripts/run-pr-gate.mjs --gate=unit'));
+  const workflow = yaml.load(readFileSync('.github/workflows/pr-gates.yml', 'utf8')) as WorkflowDocument;
+  const unitStep = workflow.jobs.unit_run.steps.find((step) => step.run?.includes('scripts/run-pr-gate.ts --gate=unit'));
   assert.ok(unitStep, 'unit gate step');
   assert.ok(String(unitStep.env?.GOFLAGS ?? '').split(/\s+/u).includes('-race'), `GOFLAGS=${unitStep.env?.GOFLAGS}`);
 });
@@ -126,7 +154,7 @@ test('telemetry integration is one domain profile with all durable fixtures', ()
 test('domain plans deduplicate shared setup across layers', () => {
   const plan = resolveDomainCommands('operations-agent', ['unit', 'integration']);
   assert.equal(
-    labels(plan.commands).filter((label) => label === 'npm --prefix services/operations-agent-service ci').length,
+    labels(plan.commands).filter((label: string) => label === 'npm --prefix services/operations-agent-service ci').length,
     1,
   );
   assert.ok(labels(plan.commands).includes('npm run operations-agent-service:postgres'));

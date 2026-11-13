@@ -39,9 +39,9 @@ const forbiddenTrackedSuffixes = Object.freeze([
 
 const forbiddenTrackedBasenames = new Set(['.DS_Store', 'Thumbs.db']);
 
-const normalizePath = (value) => value.split(sep).join('/').replaceAll('\\', '/');
-const hashScriptCommand = (command) => createHash('sha256').update(command).digest('hex');
-const countInlineCommands = (command) => command.split(/\s*&&\s*/u).filter(Boolean).length;
+const normalizePath = (value: string): string => value.split(sep).join('/').replaceAll('\\', '/');
+const hashScriptCommand = (command: string): string => createHash('sha256').update(command).digest('hex');
+const countInlineCommands = (command: string): number => command.split(/\s*&&\s*/u).filter(Boolean).length;
 
 type JavaScriptToolingFile = { path: string; bytes: number };
 type JavaScriptRootBaseline = { fileCount: number; maxBytes: number };
@@ -54,7 +54,19 @@ type JavaScriptToolingBaseline = {
   maxBytes: number;
 };
 
-export const createPackageScriptLongChainBaseline = (scripts) => ({
+type LongChainBaselineEntry = {
+  sha256?: string;
+  reason?: string;
+  mode?: string;
+};
+
+type LongChainBaseline = {
+  schemaVersion: number;
+  maximumInlineCommands: number;
+  scripts: Record<string, LongChainBaselineEntry>;
+};
+
+export const createPackageScriptLongChainBaseline = (scripts: Record<string, string>) => ({
   schemaVersion: 1,
   maximumInlineCommands,
   scripts: Object.fromEntries(
@@ -68,8 +80,14 @@ export const createPackageScriptLongChainBaseline = (scripts) => ({
   ),
 });
 
-export const findPackageScriptViolations = ({ scripts, baseline }) => {
-  const violations = [];
+export const findPackageScriptViolations = ({
+  scripts,
+  baseline,
+}: {
+  scripts: Record<string, string>;
+  baseline: LongChainBaseline;
+}) => {
+  const violations: string[] = [];
   if (baseline?.schemaVersion !== 1 || baseline?.maximumInlineCommands !== maximumInlineCommands
     || !baseline.scripts || typeof baseline.scripts !== 'object') {
     return [`${longChainBaselinePath}: invalid or unsupported baseline schema`];
@@ -103,8 +121,8 @@ export const findPackageScriptViolations = ({ scripts, baseline }) => {
   return violations;
 };
 
-export const findTrackedArtifactViolations = (trackedFiles) => {
-  const violations = [];
+export const findTrackedArtifactViolations = (trackedFiles: readonly string[]): string[] => {
+  const violations: string[] = [];
   for (const rawPath of trackedFiles) {
     const path = normalizePath(rawPath);
     const basename = path.slice(path.lastIndexOf('/') + 1);
@@ -168,12 +186,12 @@ export const findJavascriptToolingViolations = ({ files, baseline }: { files: Ja
   return violations;
 };
 
-export const findLinguistViolations = (gitattributes) => requiredLinguistExclusions
+export const findLinguistViolations = (gitattributes: string): string[] => requiredLinguistExclusions
   .filter((entry) => !gitattributes.includes(entry))
   .map((entry) => `.gitattributes: missing ancillary Linguist exclusion \`${entry}\``);
 
-export const findWorkflowViolations = (workflow) => {
-  const required = 'node scripts/run-pr-gate.mjs --gate=static';
+export const findWorkflowViolations = (workflow: string): string[] => {
+  const required = 'node --experimental-strip-types scripts/run-pr-gate.ts --gate=static';
   return workflow.includes(`- run: ${required}`)
     ? []
     : [`.github/workflows/pr-gates.yml: missing canonical static gate \`${required}\``];
@@ -183,7 +201,35 @@ const requiredGuardrailFiles = Object.freeze([
   '.agents/hooks.json',
   '.claude/settings.json',
   'scripts/hooks/pre-tool-guard.ts',
+  'tsconfig.scripts.json',
+  'scripts/web-as-cast-baseline.json',
+  'scripts/coverage-baseline.json',
+  'scripts/check-coverage-regression.ts',
 ]);
+
+const debugMarkerExtensions = Object.freeze(['.go', '.ts', '.tsx', '.mjs', '.js', '.cjs']);
+const debugMarkerPattern = /\[DEBUG-[A-Za-z0-9_-]+\]/;
+
+export const findDebugMarkerViolations = ({
+  root,
+  trackedFiles,
+}: {
+  root: string;
+  trackedFiles: readonly string[];
+}): string[] => {
+  const violations: string[] = [];
+  for (const rawPath of trackedFiles) {
+    const path = normalizePath(rawPath);
+    if (!debugMarkerExtensions.some((extension) => path.endsWith(extension))) continue;
+    const absPath = join(root, path);
+    if (!existsSync(absPath)) continue;
+    const match = debugMarkerPattern.exec(readFileSync(absPath, 'utf8'));
+    if (match) {
+      violations.push(`${path}: leftover debug marker ${match[0]}; remove temporary debug instrumentation before committing`);
+    }
+  }
+  return violations;
+};
 
 const allowedAgentsSkillRootFiles = new Set(['MATTPOCOCK-LICENSE.txt', 'PSTACK-LICENSE.txt']);
 const allowedClaudeSkillRootFiles = new Set(['README.md']);
@@ -290,12 +336,12 @@ export const findHandoffBudgetViolations = ({
     `docs/HANDOFF.md: ${bytes} bytes exceeds ${maxBytes}-byte single-read budget; keep only current state, next steps, and live environment deviations in docs/HANDOFF.md, move runbooks to docs/operations/, and encode recurring rules in checks (/correct)`,
   ]);
 
-const resolveGitListFilesInvocation = (root) => ({
+const resolveGitListFilesInvocation = (root: string) => ({
   gitExecutable: 'git',
   args: ['-C', root, 'ls-files', '-z'],
 });
 
-const listTrackedFiles = (root) => {
+const listTrackedFiles = (root: string): string[] => {
   const { gitExecutable, args } = resolveGitListFilesInvocation(root);
   const output = execFileSync(gitExecutable, args, {
     encoding: 'utf8',
@@ -304,7 +350,11 @@ const listTrackedFiles = (root) => {
   return output.split('\0').filter(Boolean);
 };
 
-const listTrackedJavaScriptFiles = (root, trackedFiles, extensions) => trackedFiles
+const listTrackedJavaScriptFiles = (
+  root: string,
+  trackedFiles: readonly string[],
+  extensions: readonly string[],
+): JavaScriptToolingFile[] => trackedFiles
   .map(normalizePath)
   .filter((path) => extensions.some((extension) => path.endsWith(extension)))
   .filter((path) => existsSync(join(root, path)))
@@ -313,8 +363,11 @@ const listTrackedJavaScriptFiles = (root, trackedFiles, extensions) => trackedFi
     bytes: readFileSync(join(root, path)).byteLength,
   }));
 
-const collectJavascriptToolingViolations = (root, trackedFiles = listTrackedFiles(root)) => {
-  const baseline = JSON.parse(readFileSync(join(root, javascriptToolingBaselinePath), 'utf8'));
+const collectJavascriptToolingViolations = (
+  root: string,
+  trackedFiles: readonly string[] = listTrackedFiles(root),
+): string[] => {
+  const baseline = JSON.parse(readFileSync(join(root, javascriptToolingBaselinePath), 'utf8')) as JavaScriptToolingBaseline;
   return [
     ...findJavascriptToolingViolations({
       files: listTrackedJavaScriptFiles(root, trackedFiles, baseline.trackedExtensions ?? []),
@@ -328,7 +381,7 @@ const collectJavascriptToolingViolations = (root, trackedFiles = listTrackedFile
 // system Go than the toolchain `go` runs. Go 1.27 reformats a multi-value return of composite
 // literals, so the two disagree. `go env GOROOT` with GOTOOLCHAIN set to the go.work version is
 // the same gofmt CI's setup-go puts on PATH.
-const workspaceGofmt = (root) => {
+const workspaceGofmt = (root: string): string => {
   const { goVersion } = readGoWorkspace(root);
   const goroot = execFileSync('go', ['env', 'GOROOT'], {
     cwd: root,
@@ -342,7 +395,7 @@ const workspaceGofmt = (root) => {
   return binary;
 };
 
-const findGoFormatViolations = (root, trackedFiles) => {
+const findGoFormatViolations = (root: string, trackedFiles: readonly string[]): string[] => {
   const goFiles = trackedFiles.map(normalizePath).filter((path) => path.endsWith('.go') && existsSync(join(root, path)));
   if (goFiles.length === 0) return [];
   const gofmt = workspaceGofmt(root);
@@ -353,12 +406,13 @@ const findGoFormatViolations = (root, trackedFiles) => {
 };
 
 export const checkRepositoryGovernance = (root = repositoryRoot) => {
-  const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-  const longChainBaseline = JSON.parse(readFileSync(join(root, longChainBaselinePath), 'utf8'));
+  const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+  const longChainBaseline = JSON.parse(readFileSync(join(root, longChainBaselinePath), 'utf8')) as LongChainBaseline;
   const trackedFiles = listTrackedFiles(root);
   const violations = [
     ...findTrackedArtifactViolations(trackedFiles),
     ...findRequiredGuardrailFileViolations(trackedFiles),
+    ...findDebugMarkerViolations({ root, trackedFiles }),
     ...findSkillMirrorViolations({ root, trackedFiles }),
     ...collectJavascriptToolingViolations(root, trackedFiles),
     ...findPackageScriptViolations({

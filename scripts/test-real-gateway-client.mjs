@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  failureMessage, gatewayPath, gatewayRequest, GatewayRequestError, publishedValueOf, ROUTE_MISSING_MESSAGE, valueOf,
+  failureMessage, failureStatus, gatewayPath, gatewayRequest, GatewayRequestError, publishedValueOf, ROUTE_MISSING_MESSAGE, valueOf,
 } from '../apps/hvac-web/src/api/gateway-client.ts';
 
 const problem = (status, code, extra = {}) => new Response(JSON.stringify({ status, code, title: 't', detail: `detail ${code}`, ...extra }), {
@@ -19,17 +19,29 @@ test('a read sends the session cookie and asks for problem+json, with no CSRF to
   assert.equal(seen.init.body, undefined);
 });
 
-test('a write carries the CSRF token and a JSON body', async () => {
+test('a write carries the CSRF token, optional idempotency key, and a JSON body', async () => {
   let seen;
   const result = await gatewayRequest('/api/v1/runs', {
-    method: 'POST', csrfToken: 'tok', body: { siteId: 's' },
+    method: 'POST', csrfToken: 'tok', idempotencyKey: 'idem-1', body: { siteId: 's' },
     fetch: async (path, init) => { seen = init; return new Response('{"optimizationRunId":"r"}', { status: 202 }); },
     parse: (payload) => payload.optimizationRunId,
   });
   assert.deepEqual(result, { kind: 'ok', value: 'r' });
   assert.equal(seen.headers['X-CSRF-Token'], 'tok');
+  assert.equal(seen.headers['Idempotency-Key'], 'idem-1');
   assert.equal(seen.headers['Content-Type'], 'application/json');
   assert.equal(seen.body, '{"siteId":"s"}');
+});
+
+test('nested error envelopes are parsed as problems and failureStatus extracts status codes', async () => {
+  const denied = await gatewayRequest('/api/v1/alarms', {
+    fetch: async () => new Response(JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Alarm list access is forbidden.' } }), { status: 403 }),
+  });
+  assert.equal(denied.kind, 'refused');
+  assert.equal(denied.problem.code, 'FORBIDDEN');
+  assert.equal(denied.problem.detail, 'Alarm list access is forbidden.');
+  assert.equal(failureStatus(denied), 403);
+  assert.equal(failureStatus({ kind: 'unavailable', status: null }), 503);
 });
 
 test('a missing result and a missing route are different outcomes', async () => {

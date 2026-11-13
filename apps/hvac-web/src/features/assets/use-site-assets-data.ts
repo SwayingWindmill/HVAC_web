@@ -12,7 +12,6 @@ import {
   assetsRegistryQueryKey,
   loadAssetsCurrentState,
   loadAssetsRegistry,
-  type LoadAssetsCurrentStateInput,
 } from '@/features/assets/data';
 import { buildAssetsHierarchy, buildAssetsRows } from '@/features/assets/model';
 import { runAssetsProtectedRequest } from '@/features/assets/protected-request';
@@ -71,8 +70,6 @@ export function useSiteAssetsData({ site, principal, runtime, currentRefetchInte
   const telemetryPoints = registry.data?.assetModel.telemetryPoints ?? [];
   const canReadCurrent = principal.authorization.capabilities.includes('telemetry.batch.read');
   const currentEnabled = registry.isSuccess && devices.length > 0 && canReadCurrent;
-  const sessionCapabilityField = ['csrf', 'Token'].join('');
-  const sessionCapability = principal.session[sessionCapabilityField as keyof typeof principal.session] as string;
 
   const current = useQuery({
     queryKey: assetsCurrentStateQueryKey(protectedGeneration, tenantId, site.id, devices, telemetryPoints),
@@ -80,20 +77,19 @@ export function useSiteAssetsData({ site, principal, runtime, currentRefetchInte
       if (__HVAC_WEB_FRONTEND_REVIEW__) {
         return Promise.resolve(createFrontendReviewAssetsCurrentState(devices, telemetryPoints));
       }
-      const input = {
-        client: telemetryRuntime.client,
-        devices,
-        telemetryPoints,
-        tenantId,
-        siteId: site.id,
-        [sessionCapabilityField]: sessionCapability,
-        currentRoutePolicyRevision: telemetryRuntime.currentRoutePolicyRevision,
-        signal,
-      } as unknown as LoadAssetsCurrentStateInput;
       return runAssetsProtectedRequest(
         runtime.protectedRequestToken(),
         signal,
-        () => loadAssetsCurrentState(input),
+        () => loadAssetsCurrentState({
+          client: telemetryRuntime.client,
+          devices,
+          telemetryPoints,
+          tenantId,
+          siteId: site.id,
+          csrfToken: principal.session.csrfToken,
+          currentRoutePolicyRevision: telemetryRuntime.currentRoutePolicyRevision,
+          signal,
+        }),
       );
     },
     enabled: currentEnabled,

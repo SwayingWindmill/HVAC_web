@@ -44,9 +44,34 @@ const release = validateOwnerSplitRelease({
   runtime,
   productRelease,
 });
+interface LiveJourneyStep {
+  owner: string;
+  method: string;
+  path: string;
+  headers?: Record<string, string>;
+  body?: string;
+  expectedStatuses: number[];
+}
+
+interface LiveJourneysContract {
+  schemaVersion: number;
+  environment: string;
+  steps: LiveJourneyStep[];
+}
+
+interface LiveContractFile {
+  owners?: Record<string, { method?: string; pathPattern?: string } | undefined>;
+}
+
+interface ComposePsStatus {
+  Service: string;
+  State: string;
+  Health?: string;
+}
+
 const liveJourneyBytes = await readFile(liveJourneysPath);
-const liveJourneys = JSON.parse(liveJourneyBytes.toString("utf8"));
-const liveContract = JSON.parse(liveContractBytes.toString("utf8"));
+const liveJourneys = JSON.parse(liveJourneyBytes.toString("utf8")) as LiveJourneysContract;
+const liveContract = JSON.parse(liveContractBytes.toString("utf8")) as LiveContractFile;
 if (
   liveJourneys.schemaVersion !== 1 ||
   liveJourneys.environment !== "staging"
@@ -78,7 +103,11 @@ const env = {
   PHASE1_DEPLOYMENT_TIER: "single-full",
 };
 
-function run(command, args, { capture = false } = {}) {
+function run(
+  command: string,
+  args: string[],
+  { capture = false }: { capture?: boolean } = {},
+): string {
   const result = spawnSync(command, args, {
     cwd: root,
     env,
@@ -123,18 +152,22 @@ const psText = run(
   ],
   { capture: true },
 ).trim();
-const statuses = psText.startsWith("[")
-  ? JSON.parse(psText)
+const parsedStatuses: ComposePsStatus[] = psText.startsWith("[")
+  ? (JSON.parse(psText) as ComposePsStatus[])
   : psText
       .split(/\r?\n/)
       .filter(Boolean)
-      .map((line) => JSON.parse(line));
+      .map((line) => JSON.parse(line) as ComposePsStatus);
+const statuses = parsedStatuses;
 for (const service of ownerServices) {
   const status = statuses.find((candidate) => candidate.Service === service);
   if (!status || status.State !== "running")
     throw new Error(`${service} is not running`);
   if (status.Health && status.Health !== "healthy")
     throw new Error(`${service} is not healthy`);
+}
+if (!runtime.PUBLIC_ORIGIN) {
+  throw new Error("PUBLIC_ORIGIN is required");
 }
 const publicOrigin = new URL(runtime.PUBLIC_ORIGIN);
 const journeyResults = [];

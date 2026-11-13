@@ -9,6 +9,8 @@ import {
 } from "./phase1-deployment-tier.ts";
 import { buildProcessFailurePlan } from "./phase1-process-failure-plan.ts";
 
+import type { ProcessFailureManifest } from "./phase1-process-failure-plan.ts";
+
 const root = resolve(import.meta.dirname, "..");
 const phase1Dir = resolve(root, "deploy/platform/phase1");
 const runtimeEnv = resolve(
@@ -18,6 +20,11 @@ const runtimeEnv = resolve(
 const outputArg = process.argv.find((arg) => arg.startsWith("--output="));
 const planOnly = process.argv.includes("--plan");
 const confirmed = process.argv.includes("--confirm-staging-process-failure");
+
+interface ComposePsStatus {
+  State: string;
+  Health?: string;
+}
 
 const [runtimeText, contract, compose, manifest, productRelease] =
   await Promise.all([
@@ -29,16 +36,18 @@ const [runtimeText, contract, compose, manifest, productRelease] =
     readFile(
       resolve(phase1Dir, "recovery/process-failure-scenarios.v1.json"),
       "utf8",
-    ).then(JSON.parse),
+    ).then((text) => JSON.parse(text) as ProcessFailureManifest),
     readFile(resolve(phase1Dir, "product-release.v1.json"), "utf8").then(
-      JSON.parse,
+      (text) => JSON.parse(text) as { criticalSmoke?: string[] },
     ),
   ]);
 const runtime = parseRuntimeEnvironment(runtimeText);
+const tierId = process.env.PHASE1_DEPLOYMENT_TIER || runtime.PHASE1_DEPLOYMENT_TIER;
+if (!tierId) throw new Error("PHASE1_DEPLOYMENT_TIER is required");
 const tier = resolveDeploymentTier({
   contract,
   compose,
-  tierId: process.env.PHASE1_DEPLOYMENT_TIER || runtime.PHASE1_DEPLOYMENT_TIER,
+  tierId,
   environment: runtime.HVAC_ENV,
   runtimeEnvironment: { ...runtime, ...process.env },
 });
@@ -78,7 +87,11 @@ const composePrefix = [
   resolve(phase1Dir, "compose.yaml"),
 ];
 
-function run(command, args, { capture = false } = {}) {
+function run(
+  command: string,
+  args: string[],
+  { capture = false }: { capture?: boolean } = {},
+): string {
   const result = spawnSync(command, args, {
     cwd: root,
     env,
@@ -94,25 +107,28 @@ function run(command, args, { capture = false } = {}) {
   return result.stdout ?? "";
 }
 
-function composeCommand(args, options) {
+function composeCommand(
+  args: string[],
+  options: { capture?: boolean } = {},
+): string {
   return run("docker", [...composePrefix, ...args], options);
 }
 
-function serviceStatus(target) {
+function serviceStatus(target: string): ComposePsStatus | null {
   const output = composeCommand(["ps", "--format", "json", target], {
     capture: true,
   }).trim();
   if (!output) return null;
-  const parsed = output.startsWith("[")
-    ? JSON.parse(output)
+  const parsed: ComposePsStatus[] = output.startsWith("[")
+    ? (JSON.parse(output) as ComposePsStatus[])
     : output
         .split(/\r?\n/)
         .filter(Boolean)
-        .map((line) => JSON.parse(line));
+        .map((line) => JSON.parse(line) as ComposePsStatus);
   return parsed[0] ?? null;
 }
 
-const activeReadinessUrls = {
+const activeReadinessUrls: Record<string, string | undefined> = {
   "energy-api": "http://127.0.0.1:19080/health/ready",
   scheduler: "http://127.0.0.1:19092/health/ready",
   "telemetry-worker": "http://127.0.0.1:19086/health/ready",
@@ -120,7 +136,7 @@ const activeReadinessUrls = {
   "connectivity": "http://127.0.0.1:19094/health/ready",
 };
 
-function activeReadinessPassed(target) {
+function activeReadinessPassed(target: string): boolean {
   const url = activeReadinessUrls[target];
   if (!url) return true;
   const result = spawnSync(
@@ -132,19 +148,25 @@ function activeReadinessPassed(target) {
   return result.status === 0;
 }
 
-async function waitForRecovery(target, deadline) {
+async function waitForRecovery(
+  target: string,
+  deadline: number,
+): Promise<ComposePsStatus> {
   while (Date.now() <= deadline) {
     const status = serviceStatus(target);
     const containerReady =
       status?.Health === "healthy" ||
       (!status?.Health && status?.State === "running");
-    if (containerReady && activeReadinessPassed(target)) return status;
+    if (status && containerReady && activeReadinessPassed(target)) return status;
     await new Promise((resolveWait) => setTimeout(resolveWait, 2000));
   }
   throw new Error(`${target} did not recover before the governed deadline`);
 }
 
-async function waitForReadinessFailure(target, deadline) {
+async function waitForReadinessFailure(
+  target: string,
+  deadline: number,
+): Promise<void> {
   while (Date.now() <= deadline) {
     if (!activeReadinessPassed(target)) return;
     await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
@@ -182,7 +204,7 @@ for (const step of plan) {
     incidentConfirmedAt: incidentConfirmedAt.toISOString(),
     recoveredAt: recoveredAt.toISOString(),
     actualRecoverySeconds: Math.ceil(
-      (recoveredAt - incidentConfirmedAt) / 1000,
+      (recoveredAt.getTime() - incidentConfirmedAt.getTime()) / 1000,
     ),
     recoveryProbes: probeStates,
   });

@@ -10,12 +10,33 @@ export const ownerSplitImageVariables = [
   "WORK_ORDER_SERVICE_IMAGE",
 ];
 
+export interface ProductReleaseInfo {
+  productVersion?: string;
+  releaseRevision?: string;
+}
+
+export interface ValidateOwnerSplitReleaseInput {
+  manifestBytes: Buffer | Uint8Array;
+  expectedSha256?: string;
+  runtime: Record<string, string | undefined>;
+  productRelease: ProductReleaseInfo;
+}
+
+interface OwnerSplitReleaseManifest {
+  schemaVersion?: number;
+  kind?: string;
+  productVersion?: string;
+  productReleaseRevision?: string;
+  sourceRevision?: string;
+  images?: Record<string, string | undefined>;
+}
+
 export function validateOwnerSplitRelease({
   manifestBytes,
   expectedSha256,
   runtime,
   productRelease,
-}) {
+}: ValidateOwnerSplitReleaseInput) {
   if (!/^[a-f0-9]{64}$/.test(expectedSha256 ?? "")) {
     throw new Error(
       "PHASE1_OWNER_SPLIT_RELEASE_MANIFEST_SHA256 must be an approved SHA-256",
@@ -27,7 +48,7 @@ export function validateOwnerSplitRelease({
       "Owner-split release manifest SHA-256 does not match the approved value",
     );
   }
-  const manifest = JSON.parse(manifestBytes.toString("utf8"));
+  const manifest = JSON.parse(Buffer.from(manifestBytes).toString("utf8")) as OwnerSplitReleaseManifest;
   if (
     manifest.schemaVersion !== 1 ||
     manifest.kind !== "PHASE1_OWNER_SPLIT_RELEASE"

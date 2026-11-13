@@ -2,7 +2,17 @@ import { spawnSync } from 'node:child_process';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
-import { gateProfileSets } from './domain-task-matrix.mjs';
+import { gateProfileSets } from './domain-task-matrix.ts';
+
+interface ClassificationReason {
+  file: string;
+  reason: string;
+}
+
+interface FlagOptions {
+  integration?: boolean;
+  browser?: boolean;
+}
 
 const root = resolve(process.cwd());
 const argumentsMap = new Map(
@@ -12,10 +22,10 @@ const argumentsMap = new Map(
   }),
 );
 
-const normalize = (value) => value.replaceAll('\\', '/').replace(/^\.\//, '').trim();
-const sorted = (values) => [...values].sort();
+const normalize = (value: string): string => value.replaceAll('\\', '/').replace(/^\.\//, '').trim();
+const sorted = (values: Iterable<string>): string[] => [...values].sort();
 
-async function changedFiles() {
+async function changedFiles(): Promise<string[]> {
   const filesFile = argumentsMap.get('--files-file');
   if (filesFile) {
     return (await readFile(resolve(root, filesFile), 'utf8'))
@@ -53,7 +63,7 @@ async function changedFiles() {
 }
 
 const files = [...new Set(await changedFiles())];
-const isGoCheckInput = (file) => file.endsWith('.go')
+const isGoCheckInput = (file: string): boolean => file.endsWith('.go')
   || /(?:^|\/)go\.(?:mod|sum)$/u.test(file)
   || ['go.work', 'go.work.sum', '.golangci.yml', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs', 'scripts/lib/go-workspace.mjs'].includes(file);
 
@@ -64,44 +74,46 @@ const phase1Migrations = new Set(
     .filter(Boolean)
     .map((line) => line.split('|')[1]),
 );
-const contractProfiles = new Set();
-const unitProfiles = new Set();
-const integrationProfiles = new Set();
-const browserProfiles = new Set();
-const reasons = [];
+const contractProfiles = new Set<string>();
+const unitProfiles = new Set<string>();
+const integrationProfiles = new Set<string>();
+const browserProfiles = new Set<string>();
+const reasons: ClassificationReason[] = [];
 let broad = false;
 let unknown = false;
 
-const add = (set, values) => values.forEach((value) => set.add(value));
-const addReason = (file, reason) => reasons.push({ file, reason });
-const selectBroad = (file, reason) => {
+const add = (set: Set<string>, values: readonly string[]): void => values.forEach((value) => set.add(value));
+const addReason = (file: string, reason: string): void => {
+  reasons.push({ file, reason });
+};
+const selectBroad = (file: string, reason: string): void => {
   broad = true;
   add(contractProfiles, gateProfileSets.all.contracts);
   add(unitProfiles, gateProfileSets.all.unit);
   addReason(file, reason);
 };
 
-const selectWeb = (file, reason, { browser = true } = {}) => {
+const selectWeb = (file: string, reason: string, { browser = true }: FlagOptions = {}): void => {
   add(unitProfiles, ['web']);
   if (browser) add(browserProfiles, ['telemetry']);
   addReason(file, reason);
 };
 
-const selectPlatform = (file, reason, { integration = false } = {}) => {
+const selectPlatform = (file: string, reason: string, { integration = false }: FlagOptions = {}): void => {
   add(contractProfiles, ['core']);
   add(unitProfiles, ['platform']);
   if (integration) add(integrationProfiles, ['platform']);
   addReason(file, reason);
 };
 
-const selectRegistry = (file, reason, { integration = false } = {}) => {
+const selectRegistry = (file: string, reason: string, { integration = false }: FlagOptions = {}): void => {
   add(contractProfiles, ['core', 'registry']);
   add(unitProfiles, ['registry']);
   if (integration) add(integrationProfiles, ['registry']);
   addReason(file, reason);
 };
 
-const selectTelemetry = (file, reason, { integration = false, browser = false } = {}) => {
+const selectTelemetry = (file: string, reason: string, { integration = false, browser = false }: FlagOptions = {}): void => {
   add(contractProfiles, ['core', 'telemetry']);
   add(unitProfiles, ['telemetry']);
   if (integration) add(integrationProfiles, ['telemetry']);
@@ -109,21 +121,21 @@ const selectTelemetry = (file, reason, { integration = false, browser = false } 
   addReason(file, reason);
 };
 
-const selectCommand = (file, reason, { integration = false } = {}) => {
+const selectCommand = (file: string, reason: string, { integration = false }: FlagOptions = {}): void => {
   add(contractProfiles, ['core', 'command']);
   add(unitProfiles, ['command']);
   if (integration) add(integrationProfiles, ['command']);
   addReason(file, reason);
 };
 
-const selectAlarm = (file, reason, { integration = false } = {}) => {
+const selectAlarm = (file: string, reason: string, { integration = false }: FlagOptions = {}): void => {
   add(contractProfiles, ['core']);
   add(unitProfiles, ['alarm']);
   if (integration) add(integrationProfiles, ['alarm']);
   addReason(file, reason);
 };
 
-const selectWorkOrder = (file, reason, { integration = false, browser = false } = {}) => {
+const selectWorkOrder = (file: string, reason: string, { integration = false, browser = false }: FlagOptions = {}): void => {
   add(contractProfiles, ['core']);
   add(unitProfiles, ['workorder']);
   if (integration) add(integrationProfiles, ['workorder']);
@@ -131,14 +143,14 @@ const selectWorkOrder = (file, reason, { integration = false, browser = false } 
   addReason(file, reason);
 };
 
-const selectAnalytics = (file, reason, { integration = false } = {}) => {
+const selectAnalytics = (file: string, reason: string, { integration = false }: FlagOptions = {}): void => {
   add(contractProfiles, ['core']);
   add(unitProfiles, ['analytics']);
   if (integration) add(integrationProfiles, ['analytics']);
   addReason(file, reason);
 };
 
-const selectOperationsAgent = (file, reason, { integration = false } = {}) => {
+const selectOperationsAgent = (file: string, reason: string, { integration = false }: FlagOptions = {}): void => {
   add(contractProfiles, ['core']);
   add(unitProfiles, ['operations-agent']);
   if (integration) add(integrationProfiles, ['operations-agent']);
@@ -147,13 +159,13 @@ const selectOperationsAgent = (file, reason, { integration = false } = {}) => {
 
 for (const file of files) {
   let matched = false;
-  const match = (condition, callback) => {
+  const match = (condition: boolean, callback: () => void): void => {
     if (!condition) return;
     matched = true;
     callback();
   };
 
-  match(file === 'package.json', () => selectBroad(file, 'root package scripts or dependency declarations changed'));
+  match(file === 'package.json' || file === 'tsconfig.scripts.json', () => selectBroad(file, 'root package scripts, dependency declarations or script tsconfig changed'));
   match(file === 'package-lock.json', () => {
     add(unitProfiles, ['web']);
     addReason(file, 'dependency lock changed; compile and unit checks run, database and browser gates stay selective');
@@ -181,13 +193,13 @@ for (const file of files) {
   }
   match([
     'scripts/check-repository-governance.ts',
-    'scripts/classify-pr-gates.mjs',
-    'scripts/domain-task-matrix.mjs',
+    'scripts/classify-pr-gates.ts',
+    'scripts/domain-task-matrix.ts',
     'scripts/package-script-long-chain-baseline.json',
-    'scripts/run-domain-task.mjs',
-    'scripts/run-pr-gate.mjs',
-    'scripts/test-domain-task-matrix.mjs',
-    'scripts/test-pr-gate-classifier.mjs',
+    'scripts/run-domain-task.ts',
+    'scripts/run-pr-gate.ts',
+    'scripts/test-domain-task-matrix.ts',
+    'scripts/test-pr-gate-classifier.ts',
     'scripts/update-package-script-long-chain-baseline.mjs',
   ].includes(file), () => selectBroad(file, 'PR gate or domain task matrix implementation changed'));
 
@@ -246,24 +258,32 @@ for (const file of files) {
   match(file.startsWith('scripts/'), () => {
     const lower = file.toLowerCase();
     let scriptMatched = false;
-    const scriptMatch = (condition, callback) => {
+    const scriptMatch = (condition: boolean, callback: () => void): void => {
       if (!condition) return;
       scriptMatched = true;
       callback();
     };
     scriptMatch([
       'scripts/check-repository-governance.ts',
-      'scripts/classify-pr-gates.mjs',
-      'scripts/domain-task-matrix.mjs',
+      'scripts/classify-pr-gates.ts',
+      'scripts/domain-task-matrix.ts',
       'scripts/package-script-long-chain-baseline.json',
-      'scripts/run-domain-task.mjs',
-      'scripts/run-pr-gate.mjs',
-      'scripts/test-domain-task-matrix.mjs',
-      'scripts/test-pr-gate-classifier.mjs',
+      'scripts/run-domain-task.ts',
+      'scripts/run-pr-gate.ts',
+      'scripts/test-domain-task-matrix.ts',
+      'scripts/test-pr-gate-classifier.ts',
       'scripts/update-package-script-long-chain-baseline.mjs',
     ].includes(file), () => {});
     scriptMatch(['scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs', 'scripts/lib/go-workspace.mjs'].includes(file), () => {});
-    scriptMatch(['scripts/javascript-tooling-baseline.json', 'scripts/hooks/pre-tool-guard.ts', 'scripts/test-pre-tool-guard.ts'].includes(file), () => addReason(file, 'repository governance baseline or pre-tool hook guard changed (verified in static gate)'));
+    scriptMatch([
+      'scripts/coverage-baseline.json',
+      'scripts/check-coverage-regression.ts',
+      'scripts/test-coverage-regression.ts',
+      'scripts/javascript-tooling-baseline.json',
+      'scripts/hooks/pre-tool-guard.ts',
+      'scripts/test-pre-tool-guard.ts',
+    ].includes(file), () => addReason(file, 'repository governance baseline or pre-tool hook guard changed (verified in static gate)'));
+    scriptMatch(file === 'scripts/web-as-cast-baseline.json', () => selectWeb(file, 'web type-cast baseline changed'));
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.includes('design-system') || lower.startsWith('scripts/test-real-'), () => selectWeb(file, 'browser, RMS or Web model test automation changed'));
     scriptMatch(lower.includes('s0-') || lower.includes('durable'), () => selectPlatform(file, 'platform automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('s1-') || lower.includes('registry'), () => selectRegistry(file, 'registry automation changed', { integration: lower.includes('postgres') }));

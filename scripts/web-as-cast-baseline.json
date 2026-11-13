@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "policy": "web-non-const-as-cast-ratchet",
+  "maxNonConstAsCasts": 171
+}
