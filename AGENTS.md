@@ -34,6 +34,7 @@ npm -w @hvac/web run build
 npm run web:shell:test && npm run web:model:test         # 网页的单元测试
 npm run web:e2e                                          # 浏览器测试：录制的网关数据，不需要后端
 (cd modules/telemetry && go vet ./... && go test ./...)   # go.work 多模块，按模块执行
+npm run command:formal                                   # 控制指令与 MQTT 关联状态机形式化模型检验（command-safety）
 npm run go:lint && npm run security:go-vuln              # 改了 Go 代码或依赖后：静态检查、漏洞扫描
 npm run deployment:phase1:check                          # 改了 Compose 或迁移清单后
 ```
@@ -80,6 +81,7 @@ npm run deployment:phase1:check                          # 改了 Compose 或迁
 | 页面组合语法（`DataTableBlock`、禁止 `<main>`、`FactTile` 禁用 `className`、禁 `<Button variant="secondary">`）、`DESIGN.md` §1 禁用文案、feature/route 禁裸 `fetch`/`WebSocket`、禁 `components/ui/` 外 `"use client"` / `@ts-ignore` / `eslint-disable` / `console.log` / `JSON.parse(JSON.stringify(...))`、`as unknown as` 清零与非 `const` `as` 棘轮（`scripts/web-as-cast-baseline.json` `43`）、`routeTree.gen.ts` 新鲜度、`Enter` 输入法防误触、`color-scheme` 与浅/深双主题 WCAG 对比度 | `npm run design:check`（`scripts/check-design-system.ts`）与 `scripts/test-real-design-tokens.ts` |
 | 权限目录与内置角色展示同 IAM 契约严格一致 | `npm -w @hvac/web run typecheck` 与 `npm run web:principal:contract`（`scripts/test-rms-principal-capability-contract.mjs`） |
 | 网关路由负责方、数据表负责方与冻结迁移不可修改 | `npm run ownership:check`、`npm run migrations:freeze:check` |
+| 控制指令授权、执行围栏、MQTT 提交点、超时核验、设备冻结与回执恢复队列不变量 | `npm run command:formal`（`modules/command/pkg/commandformal` + `.agents/skills/command-safety/SKILL.md`） |
 
 ## 网页和数据库
 

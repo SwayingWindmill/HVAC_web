@@ -33,12 +33,7 @@ func (store *PostgresStore) Reconcile(ctx context.Context, request commandmodel.
 }
 
 func (store *PostgresStore) reconcileOnce(ctx context.Context, request commandmodel.ReconcileRequest) (commandmodel.CommandIntent, error) {
-	final, reason := commandmodel.IntentSucceeded, "OPERATOR_RECONCILED_APPLIED"
-	switch request.Outcome {
-	case commandmodel.ReconciledApplied:
-	case commandmodel.ReconciledNotApplied:
-		final, reason = commandmodel.IntentFailed, "OPERATOR_RECONCILED_NOT_APPLIED"
-	default:
+	if request.Outcome != commandmodel.ReconciledApplied && request.Outcome != commandmodel.ReconciledNotApplied {
 		return commandmodel.CommandIntent{}, ErrReconciliationInvalid
 	}
 	now := store.now().UTC()
@@ -65,17 +60,13 @@ FOR UPDATE
 	if err != nil {
 		return commandmodel.CommandIntent{}, err
 	}
-	if intent.Status != commandmodel.IntentOutcomeUnknown {
-		return commandmodel.CommandIntent{}, ErrReconciliationInvalid
-	}
 	// Control authority is checked at the Capability's current revision: a revision released
 	// while the outcome was unknown must not lock the Device for good.
-	currentRevision, _, _, _ := commandCapabilityProfile(intent.Capability)
-	if err := validateAuthorizationScope(request.Authorization, commandmodel.AuthorizationCommandSubmit,
-		request.Authorization.PrincipalID, intent.TenantID, intent.SiteID, intent.DeviceID,
-		intent.Capability, currentRevision, intent.Risk, now); err != nil {
+	decision, err := DecideOperatorReconcile(intent, request, now)
+	if err != nil {
 		return commandmodel.CommandIntent{}, err
 	}
+	final, reason := decision.IntentFinal, decision.Reason
 
 	transitionID, err := store.newID(now)
 	if err != nil {

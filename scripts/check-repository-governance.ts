@@ -206,6 +206,9 @@ const requiredGuardrailFiles = Object.freeze([
   'scripts/coverage-baseline.json',
   'scripts/check-coverage-regression.ts',
   'scripts/verify-live-web.ts',
+  '.agents/skills/command-safety/SKILL.md',
+  '.claude/skills/command-safety/SKILL.md',
+  'scripts/run-command-formal-check.ts',
 ]);
 
 const debugMarkerExtensions = Object.freeze(['.go', '.ts', '.tsx', '.mjs', '.js', '.cjs']);

@@ -203,19 +203,15 @@ FOR UPDATE OF i, a
 		return ErrStaleFence
 	}
 
-	verified := result.Outcome == commandmodel.VerificationSucceeded && !now.After(verificationDeadline) && validReportedState(intent, envelope, result.Reported)
-	attemptFinal := commandmodel.AttemptOutcomeUnknown
-	intentFinal := commandmodel.IntentOutcomeUnknown
-	reason := "REPORTED_STATE_VERIFICATION_NOT_PROVEN"
-	freeze := true
-	if verified {
-		attemptFinal = commandmodel.AttemptVerified
-		intentFinal = commandmodel.IntentSucceeded
-		reason = "ACKNOWLEDGED_AND_REPORTED_STATE_VERIFIED"
-		freeze = false
-	} else if now.After(verificationDeadline) || result.Outcome == commandmodel.VerificationTimedOut {
-		reason = "REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED"
+	decision, err := DecideVerificationResolution(intent, envelope, result, verificationDeadline, now)
+	if err != nil {
+		return ErrInvalidRequest
 	}
+	verified := decision.Verified
+	attemptFinal := decision.AttemptFinal
+	intentFinal := decision.IntentFinal
+	reason := decision.Reason
+	freeze := decision.FreezeControlGroup
 
 	transitionID, err := store.newID(now)
 	if err != nil {

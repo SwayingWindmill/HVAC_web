@@ -25,7 +25,7 @@ func TestS11EdgeReplyClassificationPreservesBusinessBoundary(t *testing.T) {
 	executed := base
 	executed.ReplyStatus = "EXECUTED"
 	executed.EdgeExecution = edge
-	if got := completedEvidenceFromCorrelation(executed); got.ConnectorPhase != commandmodel.ConnectorAcknowledged || got.EdgeExecution == nil {
+	if got := CompletedEvidenceFromCorrelation(executed); got.ConnectorPhase != commandmodel.ConnectorAcknowledged || got.EdgeExecution == nil {
 		t.Fatalf("EXECUTED classification=%+v", got)
 	}
 
@@ -33,14 +33,14 @@ func TestS11EdgeReplyClassificationPreservesBusinessBoundary(t *testing.T) {
 	rejected.ReplyStatus = "REJECTED"
 	rejected.ReplyReasonCode = "INTERLOCK_OPEN"
 	rejected.EdgeExecution = &commandmodel.EdgeExecutionEvidence{Requested: requested, WinnerControllerID: "safety-interlock", Cycle: 8, Constraints: []commandmodel.EdgeConstraintEvidence{{ControllerID: "safety-interlock", Reason: "INTERLOCK_OPEN"}}}
-	if got := completedEvidenceFromCorrelation(rejected); got.ConnectorPhase != commandmodel.ConnectorExecutionRejected || got.FailureCode != "MQTT_EDGE_INTERLOCK_OPEN" {
+	if got := CompletedEvidenceFromCorrelation(rejected); got.ConnectorPhase != commandmodel.ConnectorExecutionRejected || got.FailureCode != "MQTT_EDGE_INTERLOCK_OPEN" {
 		t.Fatalf("REJECTED classification=%+v", got)
 	}
 
 	failed := base
 	failed.ReplyStatus = "FAILED"
 	failed.ReplyReasonCode = "DEVICE_WRITE_FAILED"
-	if got := completedEvidenceFromCorrelation(failed); got.ConnectorPhase != commandmodel.ConnectorRequestCommitted {
+	if got := CompletedEvidenceFromCorrelation(failed); got.ConnectorPhase != commandmodel.ConnectorRequestCommitted {
 		t.Fatalf("FAILED classification=%+v", got)
 	}
 }

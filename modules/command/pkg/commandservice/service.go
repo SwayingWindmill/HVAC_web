@@ -247,7 +247,8 @@ func (s *Service) ResolveDispatch(envelope commandmodel.DispatchEnvelope, result
 		return ErrAttemptNotFound
 	}
 	attempt := &intent.Attempts[attemptIndex]
-	if envelope.ExecutionFence != intent.ActiveFence || envelope.ExecutionFence != attempt.ExecutionFence {
+	if attempt.Status != commandmodel.AttemptPrepared || intent.Status != commandmodel.IntentDispatching ||
+		envelope.ExecutionFence != intent.ActiveFence || envelope.ExecutionFence != attempt.ExecutionFence {
 		return ErrStaleFence
 	}
 	if envelope.PointID != intent.PointID || envelope.PayloadHash != intent.PayloadHash || envelope.PayloadHash != attempt.PayloadHash {
@@ -268,37 +269,20 @@ func (s *Service) ResolveDispatch(envelope commandmodel.DispatchEnvelope, result
 	}
 
 	now := s.now().UTC()
+	decision, err := DecideDispatchResolution(result, now)
+	if err != nil {
+		return err
+	}
 	attempt.Version++
 	attempt.UpdatedAt = now
-
-	switch result.Phase {
-	case commandmodel.ConnectorPreSendRejected:
-		attempt.Status = commandmodel.AttemptNotSent
-		if failureCode := strings.TrimSpace(result.FailureCode); commandmodel.TerminalPreSendRejection(failureCode) {
-			transition(intent, commandmodel.IntentRejected, failureCode, "command-dispatcher", now, attempt.ID, result.EvidenceID)
-		} else {
-			transition(intent, commandmodel.IntentQueued, "PRE_SEND_REJECTED_SAFE_TO_RETRY", "command-dispatcher", now, attempt.ID, result.EvidenceID)
-		}
-	case commandmodel.ConnectorExecutionRejected:
-		attempt.Status = commandmodel.AttemptFailed
-		reason := strings.TrimSpace(result.FailureCode)
-		if reason == "" {
-			reason = "EDGE_EXECUTION_REJECTED"
-		}
-		transition(intent, commandmodel.IntentFailed, reason, "command-dispatcher", now, attempt.ID, result.EvidenceID)
-	case commandmodel.ConnectorRequestCommitted:
-		attempt.Status = commandmodel.AttemptOutcomeUnknown
-		transition(intent, commandmodel.IntentOutcomeUnknown, "REQUEST_COMMITTED_WITHOUT_PROVABLE_OUTCOME", "command-dispatcher", now, attempt.ID, result.EvidenceID)
-	case commandmodel.ConnectorAcknowledged:
-		attempt.Status = commandmodel.AttemptAcknowledged
+	attempt.Status = decision.AttemptFinal
+	if result.Phase == commandmodel.ConnectorAcknowledged {
 		attempt.ConnectorEvidenceID = result.EvidenceID
 		attempt.EdgeExecution = cloneEdgeExecutionEvidence(result.EdgeExecution)
-		attempt.AcknowledgedAt = now
-		attempt.VerificationDeadline = now.Add(verificationWindow)
-		transition(intent, commandmodel.IntentDispatching, "PROVIDER_ACKNOWLEDGED_AWAITING_REPORTED_STATE", "command-dispatcher", now, attempt.ID, result.EvidenceID)
-	default:
-		return ErrUnsupportedResult
+		attempt.AcknowledgedAt = *decision.AcknowledgedAt
+		attempt.VerificationDeadline = *decision.VerificationDeadline
 	}
+	transition(intent, decision.IntentFinal, decision.Reason, "command-dispatcher", now, attempt.ID, result.EvidenceID)
 	return nil
 }
 
@@ -380,29 +364,23 @@ func (s *Service) ResolveVerification(envelope commandmodel.VerificationEnvelope
 	attempt := &intent.Attempts[attemptIndex]
 	if attempt.Status != commandmodel.AttemptAcknowledged || attempt.ExecutionFence != envelope.ExecutionFence ||
 		attempt.PayloadHash != envelope.PayloadHash || attempt.VerificationLeaseOwner != envelope.LeaseOwner ||
-		attempt.VerificationLeaseUntil != envelope.LeaseUntil || attempt.ConnectorEvidenceID != envelope.ConnectorEvidenceID {
+		attempt.VerificationLeaseUntil != envelope.LeaseUntil || !attempt.VerificationDeadline.Equal(envelope.VerificationDeadline) ||
+		attempt.ConnectorEvidenceID != envelope.ConnectorEvidenceID {
 		return ErrStaleFence
 	}
 	now := s.now().UTC()
+	decision, err := DecideVerificationResolution(*intent, envelope, result, attempt.VerificationDeadline, now)
+	if err != nil {
+		return err
+	}
 	attempt.Version++
 	attempt.UpdatedAt = now
 	attempt.VerificationEvidenceID = result.EvidenceID
 	attempt.VerificationLeaseOwner = ""
 	attempt.VerificationLeaseUntil = time.Time{}
-
-	if result.Outcome == commandmodel.VerificationSucceeded && validReportedState(*intent, envelope, result.Reported) {
-		attempt.Status = commandmodel.AttemptVerified
-		transition(intent, commandmodel.IntentSucceeded, "ACKNOWLEDGED_AND_REPORTED_STATE_VERIFIED", "command-verifier", now, attempt.ID, result.EvidenceID)
-		return nil
-	}
-	switch result.Outcome {
-	case commandmodel.VerificationSucceeded, commandmodel.VerificationInconclusive, commandmodel.VerificationMismatch, commandmodel.VerificationTimedOut:
-		attempt.Status = commandmodel.AttemptOutcomeUnknown
-		transition(intent, commandmodel.IntentOutcomeUnknown, "REPORTED_STATE_VERIFICATION_NOT_PROVEN", "command-verifier", now, attempt.ID, result.EvidenceID)
-		return nil
-	default:
-		return ErrUnsupportedResult
-	}
+	attempt.Status = decision.AttemptFinal
+	transition(intent, decision.IntentFinal, decision.Reason, "command-verifier", now, attempt.ID, result.EvidenceID)
+	return nil
 }
 
 func validReportedState(intent commandmodel.CommandIntent, envelope commandmodel.VerificationEnvelope, reported commandmodel.ReportedStateEvidence) bool {

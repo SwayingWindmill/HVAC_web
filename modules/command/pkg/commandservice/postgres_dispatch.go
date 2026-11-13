@@ -313,50 +313,17 @@ FOR UPDATE
 		return ErrInvalidRequest
 	}
 
-	var attemptFinal commandmodel.AttemptStatus
-	var intentFinal commandmodel.IntentStatus
-	var reason string
-	freeze := true
-	retry := false
-	var acknowledgedAt *time.Time
-	var verificationDeadline *time.Time
-	switch result.Phase {
-	case commandmodel.ConnectorPreSendRejected:
-		attemptFinal = commandmodel.AttemptNotSent
-		freeze = false
-		if commandmodel.TerminalPreSendRejection(strings.TrimSpace(result.FailureCode)) {
-			intentFinal = commandmodel.IntentRejected
-			reason = strings.TrimSpace(result.FailureCode)
-			retry = false
-		} else {
-			intentFinal = commandmodel.IntentQueued
-			reason = "PROVABLY_NOT_SENT_REQUEUE"
-			retry = true
-		}
-	case commandmodel.ConnectorExecutionRejected:
-		attemptFinal = commandmodel.AttemptFailed
-		intentFinal = commandmodel.IntentFailed
-		freeze = false
-		reason = strings.TrimSpace(result.FailureCode)
-		if reason == "" {
-			reason = "EDGE_EXECUTION_REJECTED"
-		}
-	case commandmodel.ConnectorRequestCommitted:
-		attemptFinal = commandmodel.AttemptOutcomeUnknown
-		intentFinal = commandmodel.IntentOutcomeUnknown
-		reason = "REQUEST_COMMITTED_OUTCOME_UNKNOWN"
-	case commandmodel.ConnectorAcknowledged:
-		attemptFinal = commandmodel.AttemptAcknowledged
-		intentFinal = commandmodel.IntentDispatching
-		reason = "PROVIDER_ACKNOWLEDGED_AWAITING_REPORTED_STATE"
-		freeze = false
-		ackAt := now
-		deadline := now.Add(verificationWindow)
-		acknowledgedAt = &ackAt
-		verificationDeadline = &deadline
-	default:
+	decision, err := DecideDispatchResolution(result, now)
+	if err != nil {
 		return ErrInvalidRequest
 	}
+	attemptFinal := decision.AttemptFinal
+	intentFinal := decision.IntentFinal
+	reason := decision.Reason
+	freeze := decision.FreezeControlGroup
+	retry := decision.RequeueForRetry
+	acknowledgedAt := decision.AcknowledgedAt
+	verificationDeadline := decision.VerificationDeadline
 
 	transitionID, err := store.newID(now)
 	if err != nil {

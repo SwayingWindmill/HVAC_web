@@ -233,6 +233,75 @@ func TestConnectorCannotDeclareReportedStateVerified(t *testing.T) {
 	}
 }
 
+func TestVerificationPastDeadlineBecomesOutcomeUnknown(t *testing.T) {
+	now := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
+	service := New(func() time.Time { return now })
+	submitted, err := service.Submit(validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := service.PrepareDispatch(submitted.Intent.ID, "dispatcher-a", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ResolveDispatch(dispatch, commandmodel.ConnectorResult{
+		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "provider-ack-deadline", EdgeExecution: testEdgeExecution(24),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	verification, err := service.PrepareVerification(submitted.Intent.ID, "verifier-a", now.Add(30*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = verification.VerificationDeadline.Add(time.Second)
+	if err := service.ResolveVerification(verification, commandmodel.VerificationResult{
+		Outcome:    commandmodel.VerificationSucceeded,
+		EvidenceID: "s2-late-reported-state",
+		Reported: commandmodel.ReportedStateEvidence{
+			TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
+			EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
+			BusinessRevision: verification.BaselineBusinessRevision + 1, ReportedValue: commandmodel.NumberScalar(24),
+			ObservedAt: verification.AcknowledgedAt.Add(time.Second),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	intent, _ := service.Get(submitted.Intent.ID)
+	last := intent.Transitions[len(intent.Transitions)-1]
+	if intent.Status != commandmodel.IntentOutcomeUnknown || intent.Attempts[0].Status != commandmodel.AttemptOutcomeUnknown ||
+		last.Reason != "REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED" {
+		t.Fatalf("post-deadline verification=%s/%s reason=%s", intent.Status, intent.Attempts[0].Status, last.Reason)
+	}
+}
+
+func TestResolveDispatchRejectsAlreadySettledAttemptWithActiveFence(t *testing.T) {
+	clock := fixedClock()
+	service := New(clock)
+	submitted, err := service.Submit(validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := service.PrepareDispatch(submitted.Intent.ID, "dispatcher-a", clock().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ResolveDispatch(dispatch, commandmodel.ConnectorResult{
+		Phase: commandmodel.ConnectorRequestCommitted, EvidenceID: "req-committed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = service.ResolveDispatch(dispatch, commandmodel.ConnectorResult{
+		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "late-ack", EdgeExecution: testEdgeExecution(24),
+	})
+	if !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("expected ErrStaleFence on settled attempt, got %v", err)
+	}
+	intent, _ := service.Get(submitted.Intent.ID)
+	if intent.Status != commandmodel.IntentOutcomeUnknown || intent.Attempts[0].Status != commandmodel.AttemptOutcomeUnknown {
+		t.Fatalf("settled attempt mutated on duplicate resolution: intent=%s attempt=%s", intent.Status, intent.Attempts[0].Status)
+	}
+}
+
 func validRequest() commandmodel.SubmitRequest {
 	return commandmodel.SubmitRequest{
 		TenantID:             "tenant-1",

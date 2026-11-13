@@ -19,6 +19,7 @@ import (
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
 const commandSchemaVersion = "2.0"
@@ -146,6 +147,24 @@ func New(ctx context.Context, config Config) (*Connector, error) {
 	return connector, nil
 }
 
+// NewOffline creates a brokerless Connector for correlation recovery and
+// state-machine verification without establishing a TLS MQTT connection.
+func NewOffline(config Config) (*Connector, error) {
+	if config.TransportState == nil || config.EvidenceStore == nil {
+		return nil, errors.New("MQTT command stores are incomplete")
+	}
+	if config.ReplyTimeout == 0 {
+		config.ReplyTimeout = 15 * time.Second
+	}
+	if config.Now == nil {
+		config.Now = time.Now
+	}
+	return &Connector{
+		config:  config,
+		waiters: make(map[string]chan commandmodel.CommandCorrelation),
+	}, nil
+}
+
 func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.DispatchEnvelope) (commandmodel.ConnectorResult, error) {
 	if connector == nil || connector.manager == nil {
 		return commandmodel.ConnectorResult{}, errors.New("MQTT command connector is unavailable")
@@ -221,12 +240,12 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 	if correlation.Envelope.PayloadHash != envelope.PayloadHash {
 		return commandmodel.ConnectorResult{}, ErrPayloadMismatch
 	}
-	switch resumeActionForCorrelation(correlation.State) {
-	case resumeUseReply:
+	switch ResumeActionForCorrelation(correlation.State) {
+	case ResumeUseReply:
 		return connector.completeRecoveredReply(ctx, correlation)
-	case resumeOutcomeUnknown:
+	case ResumeOutcomeUnknown:
 		return connector.completeOutcomeUnknown(ctx, prepared, "MQTT_COMMAND_RECOVERED_MAY_COMMIT")
-	case resumePublish:
+	case ResumePublish:
 		// PREPARED is the only state from which a physical publish is permitted.
 	default:
 		return commandmodel.ConnectorResult{}, errors.New("MQTT command correlation state is invalid")
@@ -282,13 +301,14 @@ func (connector *Connector) Disconnect(ctx context.Context) error {
 }
 
 func (connector *Connector) FinalizeDispatch(ctx context.Context, envelope commandmodel.DispatchEnvelope, result commandmodel.ConnectorResult) error {
-	if connector == nil || !replyBackedResult(result) {
+	if connector == nil || !ReplyBackedResult(result) {
 		return nil
 	}
 	return connector.config.TransportState.MarkCommandCorrelationResolved(ctx, envelope.TenantID, envelope.AttemptID, envelope.ExecutionFence, connector.config.Now().UTC())
 }
 
-func replyBackedResult(result commandmodel.ConnectorResult) bool {
+// ReplyBackedResult reports whether a ConnectorResult corresponds to a durable reply.
+func ReplyBackedResult(result commandmodel.ConnectorResult) bool {
 	return result.Acknowledged || strings.HasPrefix(result.FailureCode, "MQTT_EDGE_") || result.FailureCode == "MQTT_COMMAND_REPLY_INVALID"
 }
 
@@ -351,7 +371,7 @@ func (connector *Connector) onReply(received paho.PublishReceived) (bool, error)
 		}
 		return true, nil
 	}
-	_ = connector.resolveRecoveredReply(ctx, correlation)
+	_ = connector.ResolveCorrelationReply(ctx, correlation)
 	return true, nil
 }
 
@@ -366,20 +386,36 @@ func (connector *Connector) recoverReplies(ctx context.Context) {
 		return
 	}
 	for _, tenantID := range tenants {
-		correlations, err := connector.config.TransportState.RecoverCommandReplies(recoveryContext, tenantID, 50)
-		if err != nil {
-			continue
+		if recoveryContext.Err() != nil {
+			return
 		}
-		for _, correlation := range correlations {
-			if recoveryContext.Err() != nil {
-				return
-			}
-			_ = connector.resolveRecoveredReply(recoveryContext, correlation)
-		}
+		_ = connector.RecoverTenantReplies(recoveryContext, tenantID, 50)
 	}
 }
 
-func (connector *Connector) resolveRecoveredReply(ctx context.Context, correlation commandmodel.CommandCorrelation) error {
+// RecoverTenantReplies drains up to limit persisted REPLIED correlations for a Tenant.
+func (connector *Connector) RecoverTenantReplies(ctx context.Context, tenantID string, limit int) error {
+	if connector.config.LateResultSink == nil {
+		return nil
+	}
+	correlations, err := connector.config.TransportState.RecoverCommandReplies(ctx, tenantID, limit)
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, correlation := range correlations {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err := connector.ResolveCorrelationReply(ctx, correlation); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// ResolveCorrelationReply settles one persisted REPLIED correlation against LateResultSink.
+func (connector *Connector) ResolveCorrelationReply(ctx context.Context, correlation commandmodel.CommandCorrelation) error {
 	if connector.config.LateResultSink == nil || correlation.State != commandmodel.CorrelationReplied {
 		return nil
 	}
@@ -387,14 +423,16 @@ func (connector *Connector) resolveRecoveredReply(ctx context.Context, correlati
 	if err != nil {
 		return err
 	}
-	if err := connector.config.LateResultSink.ResolveDispatch(ctx, correlation.Envelope, result); err != nil {
+	if err := connector.config.LateResultSink.ResolveDispatch(ctx, correlation.Envelope, result); err != nil &&
+		!errors.Is(err, commandservice.ErrStaleFence) &&
+		!errors.Is(err, commandservice.ErrCommandNotFound) {
 		return err
 	}
 	return connector.config.TransportState.MarkCommandCorrelationResolved(ctx, correlation.Envelope.TenantID, correlation.Envelope.AttemptID, correlation.Envelope.ExecutionFence, connector.config.Now().UTC())
 }
 
 func (connector *Connector) completeRecoveredReply(ctx context.Context, correlation commandmodel.CommandCorrelation) (commandmodel.ConnectorResult, error) {
-	completed := completedEvidenceFromCorrelation(correlation)
+	completed := CompletedEvidenceFromCorrelation(correlation)
 	result := connectorResult(completed)
 	if err := connector.config.EvidenceStore.Complete(ctx, completed); err != nil {
 		result.Phase = commandmodel.ConnectorRequestCommitted
@@ -420,7 +458,8 @@ func (connector *Connector) completeOutcomeUnknown(ctx context.Context, prepared
 	return result, nil
 }
 
-func completedEvidenceFromCorrelation(correlation commandmodel.CommandCorrelation) commandmodel.CompletedConnectorEvidence {
+// CompletedEvidenceFromCorrelation converts a durable MQTT command correlation into CompletedConnectorEvidence.
+func CompletedEvidenceFromCorrelation(correlation commandmodel.CommandCorrelation) commandmodel.CompletedConnectorEvidence {
 	prepared := commandmodel.PreparedConnectorEvidence{
 		AttemptID: correlation.Envelope.AttemptID, CommandID: correlation.Envelope.CommandID,
 		TenantID: correlation.Envelope.TenantID, SiteID: correlation.Envelope.SiteID, DeviceID: correlation.Envelope.DeviceID,
@@ -551,25 +590,27 @@ func replyGatewayID(topic string) (string, bool) {
 	return parts[2], true
 }
 
-type resumeAction uint8
+// ResumeAction defines how a recovered MQTT command correlation may resume.
+type ResumeAction uint8
 
 const (
-	resumeInvalid resumeAction = iota
-	resumePublish
-	resumeOutcomeUnknown
-	resumeUseReply
+	ResumeInvalid ResumeAction = iota
+	ResumePublish
+	ResumeOutcomeUnknown
+	ResumeUseReply
 )
 
-func resumeActionForCorrelation(state commandmodel.CorrelationState) resumeAction {
+// ResumeActionForCorrelation maps a persisted correlation state to the only safe recovery action.
+func ResumeActionForCorrelation(state commandmodel.CorrelationState) ResumeAction {
 	switch state {
 	case commandmodel.CorrelationPrepared:
-		return resumePublish
+		return ResumePublish
 	case commandmodel.CorrelationMayCommit:
-		return resumeOutcomeUnknown
+		return ResumeOutcomeUnknown
 	case commandmodel.CorrelationReplied, commandmodel.CorrelationResolved:
-		return resumeUseReply
+		return ResumeUseReply
 	default:
-		return resumeInvalid
+		return ResumeInvalid
 	}
 }
 
