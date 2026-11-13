@@ -6,28 +6,37 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import ts from 'typescript';
 
-const generatedPath = path.resolve('apps/hvac-web/src/api/generated/platformGateway.gen.ts');
-const source = fs.readFileSync(generatedPath, 'utf8');
-const compiled = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.CommonJS,
-    target: ts.ScriptTarget.ES2020,
-    esModuleInterop: true,
-  },
-  fileName: generatedPath,
-}).outputText;
+function loadTsModule(relativePath) {
+  const fullPath = path.resolve(relativePath);
+  const source = fs.readFileSync(fullPath, 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: fullPath,
+  }).outputText;
 
-const module = { exports: {} };
-vm.runInNewContext(compiled, {
-  module,
-  exports: module.exports,
-  require: createRequire(import.meta.url),
-  URL,
-  URLSearchParams,
-  fetch: () => Promise.reject(new Error('network is not available in contract tests')),
-}, { filename: generatedPath });
+  const module = { exports: {} };
+  vm.runInNewContext(compiled, {
+    module,
+    exports: module.exports,
+    require: createRequire(import.meta.url),
+    URL,
+    URLSearchParams,
+    fetch: () => Promise.reject(new Error('network is not available in contract tests')),
+  }, { filename: fullPath });
+  return module.exports;
+}
 
-const { currentPrincipalResponseSchema } = module.exports;
+const {
+  builtInRoleKeySchema,
+  capabilitySchema,
+  currentPrincipalResponseSchema,
+} = loadTsModule('apps/hvac-web/src/api/generated/platformGateway.gen.ts');
+const { CAPABILITY_CATALOG, capabilityGroups } = loadTsModule('apps/hvac-web/src/lib/capability-labels.ts');
+const { ROLE_LABELS, ROLE_SUMMARIES } = loadTsModule('apps/hvac-web/src/lib/role-labels.ts');
 
 function principalResponse(overrides = {}) {
   return {
@@ -100,4 +109,13 @@ test('generated browser contract rejects missing, duplicate, and unsupported cap
       capabilities: ['role.admin'],
     },
   })).success, false);
+});
+
+test('operator capability and built-in role catalogs match generated IAM schemas without unnamed or stale keys', () => {
+  assert.deepEqual(Object.keys(CAPABILITY_CATALOG).sort(), [...capabilitySchema.options].sort());
+  assert.equal(capabilityGroups(capabilitySchema.options).unnamed, 0);
+  assert.equal(capabilityGroups(['future.unknown.capability']).unnamed, 1);
+
+  assert.deepEqual(Object.keys(ROLE_LABELS).sort(), [...builtInRoleKeySchema.options].sort());
+  assert.deepEqual(Array.from(ROLE_SUMMARIES, (item) => item.key).sort(), [...builtInRoleKeySchema.options].sort());
 });

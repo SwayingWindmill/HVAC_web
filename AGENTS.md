@@ -47,7 +47,7 @@ npm run deployment:phase1:check                          # 改了 Compose 或迁
 - **只写现在需要的。** 目录和抽象只描述已经存在的复杂度；将来的需求等它真的来了再加。
 - **做长期的决定。** 选一个经得起时间的方案，不做「先凑合、以后再换」。
 - **先用已有依赖和成熟的库。** 先看项目里已有的依赖能不能做，查它的文档和类型再下结论；确实要新加时，选维护良好的，固定版本。
-- **参照外部实现时读源码。** 设备接入、遥测、告警、资产、报表、权限、能源管理这类功能，动手前看 ThingsBoard、OpenEMS、MyEMS 的实际代码（固定版本的记录在 `docs/architecture/references/`）。借鉴时固定版本和提交，读源码、测试和官方文档，在 `docs/architecture/` 里简短记下采纳、改造或拒绝了什么、为什么。已有代码和参照实现冲突、又说不出更好的理由时，按参照实现改。
+- **参照外部实现时读源码。** 设备接入、遥测、告警、资产、报表、权限、能源管理这类功能，动手前看 ThingsBoard、OpenEMS、MyEMS 的实际代码（固定版本的记录在 `docs/architecture/references/`）；工程工作流改造见 `docs/architecture/pstack-source-review-2026-11-13.md`。借鉴时固定版本和提交，读源码、测试和官方文档，在 `docs/architecture/` 里简短记下采纳、改造或拒绝了什么、为什么。已有代码和参照实现冲突、又说不出更好的理由时，按参照实现改。
 
 ## 测试
 
@@ -63,8 +63,16 @@ npm run deployment:phase1:check                          # 改了 Compose 或迁
 ## 门禁（CI 检查）
 
 - 一条规则用一个最小的检查守住，只跑和改动相关的领域。
+- **被纠正两次的错误必须固化，不靠堆文档叮嘱。** 同一类错误出现两次，或靠人手同步两份清单维持一致时，按 `correct` 技能依次用「单一事实源/架构消除 → 编译期类型约束 → 报错直接写明改法的检查 → 行为测试」消掉，不再往本文或 `docs/HANDOFF.md` 写文字叮嘱。每新加一条检查，先在真实旧错误上证明它会失败。
 - 门禁只运行 `scripts/domain-task-matrix.mjs` 里登记的命令，集成脚本只跑它用 `-run` 点名的 Go 测试。新检查要登记进去才会运行；不会运行的检查会悄悄过时，删掉它。
 - 检查只看代码和配置，文档的措辞靠审查。
+
+| 规则 | 由什么自动守住 |
+| --- | --- |
+| 仓库治理、遗留 JS 文件数上限（`111`）、禁止跟踪 `.audit/` 等临时目录、`docs/HANDOFF.md` 单次读取上限（`<= 28 KiB`） | `npm run repo:check`（`scripts/check-repository-governance.ts`） |
+| 页面组合语法（`DataTableBlock`、禁止 `<main>`、`FactTile` 禁用 `className`）、`Enter` 输入法防误触、`color-scheme` 与 WCAG 对比度 | `npm run design:check`（`scripts/check-design-system.mjs`）与 `scripts/test-real-design-tokens.mjs` |
+| 权限目录与内置角色展示同 IAM 契约严格一致 | `npm -w @hvac/web run typecheck` 与 `npm run web:principal:contract`（`scripts/test-rms-principal-capability-contract.mjs`） |
+| 网关路由负责方、数据表负责方与冻结迁移不可修改 | `npm run ownership:check`、`npm run migrations:freeze:check` |
 
 ## 网页和数据库
 

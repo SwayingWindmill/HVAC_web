@@ -1,6 +1,8 @@
 // The built-in Roles (ADR 0022); operators see their names and never the raw key.
 
-const ROLE_LABELS: Readonly<Record<string, string>> = {
+import type { BuiltInRoleKey } from '@/api/generated/platformGateway.gen';
+
+export const ROLE_LABELS: Readonly<Record<BuiltInRoleKey, string>> = {
   admin: '管理员',
   'site-manager': '运维主管',
   operator: '运维人员',
@@ -8,7 +10,7 @@ const ROLE_LABELS: Readonly<Record<string, string>> = {
 };
 
 /** What each built-in Role may do, in one line, lowest first. */
-export const ROLE_SUMMARIES: readonly { readonly key: string; readonly summary: string }[] = [
+export const ROLE_SUMMARIES: readonly { readonly key: BuiltInRoleKey; readonly summary: string }[] = [
   { key: 'viewer', summary: '查看站点、实时与历史数据、运行计划、能耗、告警和工单' },
   { key: 'operator', summary: '另外可以申请运行例外、确认告警、处理工单，下发中风险以下的指令' },
   { key: 'site-manager', summary: '另外可以编辑运行计划与审批运行例外、管理电费预算与结算账单、分派告警和工单、管理节能项目，下发和审批高风险以下的指令' },
@@ -18,7 +20,8 @@ export const ROLE_SUMMARIES: readonly { readonly key: string; readonly summary: 
 const UNNAMED_ROLE = '授权用户';
 
 export function roleLabel(role: string): string {
-  return ROLE_LABELS[role.trim().toLowerCase()] ?? UNNAMED_ROLE;
+  const lookup: Readonly<Record<string, string | undefined>> = ROLE_LABELS;
+  return lookup[role.trim().toLowerCase()] ?? UNNAMED_ROLE;
 }
 
 /** The names of a principal's roles, deduplicated; unknown roles share one generic name. */

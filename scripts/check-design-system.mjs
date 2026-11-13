@@ -187,6 +187,45 @@ function validateColorSchemeSetup(indexHtml, globalCss, errors) {
   }
 }
 
+function jsxOpeningTag(source, tagStartIndex) {
+  let braceDepth = 0;
+  let quote = null;
+  for (let index = tagStartIndex; index < source.length; index += 1) {
+    const ch = source[index];
+    if (quote) {
+      if (ch === '\\') {
+        index += 1;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch;
+      continue;
+    }
+    if (ch === '{') braceDepth += 1;
+    else if (ch === '}' && braceDepth > 0) braceDepth -= 1;
+    else if (ch === '>' && braceDepth === 0) return source.slice(tagStartIndex, index + 1);
+  }
+  return source.slice(tagStartIndex);
+}
+
+async function validateFactTileProps(root, errors) {
+  const srcRoot = resolve(root, 'apps/hvac-web/src');
+  for (const path of await collectFeatureSources(srcRoot)) {
+    const source = await readFile(path, 'utf8');
+    const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
+    for (const match of source.matchAll(/<FactTile(?=\s|\/?>)/g)) {
+      const openingTag = jsxOpeningTag(source, match.index);
+      if (/\sclassName\s*=/.test(openingTag)) {
+        const line = source.slice(0, match.index).split('\n').length;
+        errors.push(`${relativePath}:${line} FactTile does not accept className; pass valueClassName for the <dd> value or wrap FactTile in <div className="col-span-..."> for grid layout`);
+      }
+    }
+  }
+}
+
 function parseArgs(argv) {
   const rootArg = argv.find((argument) => argument.startsWith('--root='));
   return { root: rootArg ? resolve(rootArg.slice('--root='.length)) : defaultRoot };
@@ -198,6 +237,7 @@ export async function validateDesignSystem(root = defaultRoot) {
   await validateContentGrammar(root, errors);
   await validateDataTableSurfaceGrammar(root, errors);
   await validateImeSafeEnterHandlers(root, errors);
+  await validateFactTileProps(root, errors);
 
   const componentsJson = await readFile(resolve(root, 'apps/hvac-web/components.json'), 'utf8');
   for (const expected of ['"style": "radix-nova"', '"iconLibrary": "lucide"']) {
