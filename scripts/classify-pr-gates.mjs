@@ -263,6 +263,7 @@ for (const file of files) {
       'scripts/update-package-script-long-chain-baseline.mjs',
     ].includes(file), () => {});
     scriptMatch(['scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs', 'scripts/lib/go-workspace.mjs'].includes(file), () => {});
+    scriptMatch(['scripts/javascript-tooling-baseline.json', 'scripts/hooks/pre-tool-guard.ts', 'scripts/test-pre-tool-guard.ts'].includes(file), () => addReason(file, 'repository governance baseline or pre-tool hook guard changed (verified in static gate)'));
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.includes('design-system') || lower.startsWith('scripts/test-real-'), () => selectWeb(file, 'browser, RMS or Web model test automation changed'));
     scriptMatch(lower.includes('s0-') || lower.includes('durable'), () => selectPlatform(file, 'platform automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('s1-') || lower.includes('registry'), () => selectRegistry(file, 'registry automation changed', { integration: lower.includes('postgres') }));

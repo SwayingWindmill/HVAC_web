@@ -1,0 +1,16 @@
+{
+  "repository-safety-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command|read_file|view_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --experimental-strip-types ../scripts/hooks/pre-tool-guard.ts --runtime=agy",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

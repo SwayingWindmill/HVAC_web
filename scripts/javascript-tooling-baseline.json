@@ -7,17 +7,13 @@
       "fileCount": 109,
       "maxBytes": 1310720
     },
-    ".agents/": {
-      "fileCount": 1,
-      "maxBytes": 4096
-    },
     "edge/": {
       "fileCount": 1,
       "maxBytes": 12288
     }
   },
-  "fileCount": 111,
-  "maxBytes": 1327104,
+  "fileCount": 110,
+  "maxBytes": 1323008,
   "policyNotes": [
     "New repository tooling should use TypeScript rather than growing the reviewed legacy JavaScript caps.",
     "Product/runtime source must not use this baseline as an exception mechanism.",

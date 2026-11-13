@@ -47,6 +47,7 @@ Thumbs.db
 .cursor/
 .claude/*
 !.claude/skills/
+!.claude/settings.json
 .opencode/
 opencode.json
 .codex/
