@@ -39,7 +39,7 @@ jobs:
         env:
           GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/classify-pr-gates.mjs --base="$GITHUB_BASE_SHA" --head="$GITHUB_HEAD_SHA"
+        run: node --experimental-strip-types scripts/classify-pr-gates.ts --base="$GITHUB_BASE_SHA" --head="$GITHUB_HEAD_SHA"
 
   static:
     name: pr / static
@@ -61,7 +61,7 @@ jobs:
           go-version: "1.27.4"
           cache: false
       - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=static
+      - run: node --experimental-strip-types scripts/run-pr-gate.ts --gate=static
       - run: npm run --silent pr:gates:test
 
   contracts_run:
@@ -83,7 +83,7 @@ jobs:
       - run: npm ci
       - env:
           GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/run-pr-gate.mjs --gate=contracts --profiles="${{ needs.classify.outputs.contract_profiles }}"
+        run: node --experimental-strip-types scripts/run-pr-gate.ts --gate=contracts --profiles="${{ needs.classify.outputs.contract_profiles }}"
 
   contracts:
     name: pr / contracts
@@ -124,7 +124,7 @@ jobs:
       # -p=1 repeats the workflow-wide GOFLAGS, which a step-level GOFLAGS replaces rather than extends.
       - env:
           GOFLAGS: -p=1 -race
-        run: node scripts/run-pr-gate.mjs --gate=unit --profiles="${{ needs.classify.outputs.unit_profiles }}"
+        run: node --experimental-strip-types scripts/run-pr-gate.ts --gate=unit --profiles="${{ needs.classify.outputs.unit_profiles }}"
 
   unit:
     name: pr / affected-unit
@@ -160,7 +160,7 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: node scripts/run-pr-gate.mjs --gate=integration --profiles="${{ needs.classify.outputs.integration_profiles }}"
+      - run: node --experimental-strip-types scripts/run-pr-gate.ts --gate=integration --profiles="${{ needs.classify.outputs.integration_profiles }}"
 
   integration:
     name: pr / affected-integration

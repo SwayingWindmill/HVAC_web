@@ -80,16 +80,24 @@ function flowData(breakdown: Breakdown) {
   return { nodes, links };
 }
 
+function isFlowNode(value: unknown): value is FlowNode {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<FlowNode>;
+  return typeof candidate.name === 'string'
+    && typeof candidate.color === 'string'
+    && typeof candidate.energyKWh === 'number';
+}
+
 function FlowNodeShape({ x, y, width, height, payload }: SankeyNodeProps) {
-  const node = payload as unknown as FlowNode;
+  if (!isFlowNode(payload)) return <Layer />;
   return (
     <Layer>
-      <Rectangle x={x} y={y} width={width} height={height} fill={node.color} fillOpacity={0.9} radius={2} />
+      <Rectangle x={x} y={y} width={width} height={height} fill={payload.color} fillOpacity={0.9} radius={2} />
       <text x={x + width + 8} y={y + height / 2 - 7} dominantBaseline="middle" className="fill-foreground text-xs font-medium">
-        {node.name}
+        {payload.name}
       </text>
       <text x={x + width + 8} y={y + height / 2 + 8} dominantBaseline="middle" className="fill-muted-foreground text-[11px] tabular-nums">
-        {kWh(node.energyKWh)}
+        {kWh(payload.energyKWh)}
       </text>
     </Layer>
   );
@@ -197,7 +205,7 @@ export function EnergyDestination({ result, previousLabel }: { readonly result: 
         <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
           <span className="flex size-9 items-center justify-center rounded-xl bg-muted text-muted-foreground"><Workflow className="size-[18px]" aria-hidden="true" /></span>
           <p className="text-sm font-semibold">冷站没有登记用电设备</p>
-          <p className="text-xs text-muted-foreground">冷机、水泵与冷却塔登记并接入分表后，这里按设备拆分用电</p>
+          <p className="text-xs text-muted-foreground">冷机、水泵与冷却塔登记并接入设备电表后，这里按设备拆分用电</p>
         </div>
       </Panel>
     );
@@ -277,7 +285,7 @@ export function EnergyDestination({ result, previousLabel }: { readonly result: 
 /** Each category's energy bucket by bucket, on its own scale. */
 export function CategoryTrend({ result, granularity, timeZone }: { readonly result: BreakdownResult; readonly granularity: Granularity; readonly timeZone: string }) {
   const breakdown = result.query.data;
-  if (!breakdown || breakdown.rows.length === 0) return <p className="px-5 py-10 text-center text-sm text-muted-foreground">本期间还没有分表读数</p>;
+  if (!breakdown || breakdown.rows.length === 0) return <p className="px-5 py-10 text-center text-sm text-muted-foreground">本期间还没有设备电表读数</p>;
   const categories = EQUIPMENT_ORDER.filter((category) => breakdown.items.some((item) => item.category === category));
   return (
     <div role="region" aria-label="分项趋势" className="grid grid-cols-4 gap-3 p-4">

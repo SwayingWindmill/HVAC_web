@@ -1,7 +1,46 @@
 const resourceExpression = /^\$\{([A-Z0-9_]+):-([^}]+)\}$/;
 
-export function parseRuntimeEnvironment(text) {
-  const values = {};
+export interface ComposeResourceRef {
+  variable: string;
+  defaultValue: string;
+}
+
+export interface ComposeServiceResource {
+  name: string;
+  profiles: string[];
+  cpu: ComposeResourceRef | null;
+  memory: ComposeResourceRef | null;
+}
+
+export interface DeploymentTierDefinition {
+  id: string;
+  productionAllowed?: boolean;
+  profiles: string[];
+  maximumCpuLimitOvercommitRatio: number;
+  resourceOverrides?: Record<string, string>;
+  runtimeOverrides?: Record<string, string>;
+  resourceBudget: {
+    cpuCores: number;
+    memoryGiB: number;
+  };
+}
+
+export interface DeploymentTierContract {
+  tiers?: DeploymentTierDefinition[];
+}
+
+export interface ResolveDeploymentTierInput {
+  contract: DeploymentTierContract;
+  compose: string;
+  tierId: string;
+  environment?: string;
+  runtimeEnvironment?: Record<string, string | undefined>;
+  additionalComposeDocuments?: string[];
+  additionalProfiles?: string[];
+}
+
+export function parseRuntimeEnvironment(text: string): Record<string, string> {
+  const values: Record<string, string> = {};
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
@@ -12,7 +51,7 @@ export function parseRuntimeEnvironment(text) {
   return values;
 }
 
-function parseProfiles(block) {
+function parseProfiles(block: string): string[] {
   const match = block.match(/^    profiles:\s*\[([^\]]+)\]/m);
   if (!match) return [];
   return match[1]
@@ -20,7 +59,7 @@ function parseProfiles(block) {
     .map((value) => value.trim().replace(/^['"]|['"]$/g, ""));
 }
 
-function parseResource(block, field) {
+function parseResource(block: string, field: string): ComposeResourceRef | null {
   const match = block.match(
     new RegExp(`^    ${field}:\\s*(\\$\\{[A-Z0-9_]+:-[^}]+\\})`, "m"),
   );
@@ -31,7 +70,7 @@ function parseResource(block, field) {
   return { variable: expression[1], defaultValue: expression[2] };
 }
 
-export function parseComposeResourceModel(compose) {
+export function parseComposeResourceModel(compose: string): ComposeServiceResource[] {
   const servicesMarker = "\nservices:\n";
   const start = compose.indexOf(servicesMarker);
   if (start < 0) throw new Error("Phase 1 Compose services section is missing");
@@ -41,7 +80,7 @@ export function parseComposeResourceModel(compose) {
     networksStart < 0 ? remainder : remainder.slice(0, networksStart);
   const servicePattern =
     /^  ([a-z0-9][a-z0-9-]*):\r?\n([\s\S]*?)(?=^  [a-z0-9][a-z0-9-]*:\r?$|(?![\s\S]))/gm;
-  const services = [];
+  const services: ComposeServiceResource[] = [];
   for (const match of servicesText.matchAll(servicePattern)) {
     services.push({
       name: match[1],
@@ -55,14 +94,14 @@ export function parseComposeResourceModel(compose) {
   return services;
 }
 
-function parseCpu(value) {
+function parseCpu(value: string | number | undefined): number {
   const cpu = Number(value);
   if (!Number.isFinite(cpu) || cpu <= 0)
     throw new Error(`Invalid CPU limit: ${value}`);
   return cpu;
 }
 
-function parseMemoryGiB(value) {
+function parseMemoryGiB(value: string | number | undefined): number {
   const match = String(value)
     .trim()
     .match(/^(\d+(?:\.\d+)?)([kKmMgG]?)$/);
@@ -75,14 +114,21 @@ function parseMemoryGiB(value) {
   return amount / (1024 * 1024 * 1024);
 }
 
-function selectedService(service, profiles) {
+function selectedService(
+  service: ComposeServiceResource,
+  profiles: readonly string[],
+): boolean {
   return (
     service.profiles.length === 0 ||
     service.profiles.some((profile) => profiles.includes(profile))
   );
 }
 
-function calculateResourceTotals(services, profiles, overrides) {
+function calculateResourceTotals(
+  services: readonly ComposeServiceResource[],
+  profiles: readonly string[],
+  overrides: Record<string, string | undefined>,
+) {
   let cpuLimitCores = 0;
   let memoryGiB = 0;
   for (const service of services) {
@@ -110,7 +156,7 @@ export function resolveDeploymentTier({
   runtimeEnvironment = {},
   additionalComposeDocuments = [],
   additionalProfiles = [],
-}) {
+}: ResolveDeploymentTierInput) {
   const tier = contract.tiers?.find((candidate) => candidate.id === tierId);
   if (!tier) throw new Error(`Unknown Phase 1 deployment tier: ${tierId}`);
   if (environment === "production" && tier.productionAllowed !== true) {
@@ -141,7 +187,7 @@ export function resolveDeploymentTier({
   const knownVariables = new Set(
     services
       .flatMap((service) => [service.cpu?.variable, service.memory?.variable])
-      .filter(Boolean),
+      .filter((variable): variable is string => Boolean(variable)),
   );
   for (const variable of Object.keys(overrides)) {
     if (!knownVariables.has(variable))

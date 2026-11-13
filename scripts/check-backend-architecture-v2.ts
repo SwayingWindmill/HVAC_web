@@ -1,17 +1,54 @@
 import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+interface LogicalDomainEntry {
+  domain: string;
+  alignment: string;
+  implementation: string[];
+}
+
+interface ConformanceEntry {
+  id: string;
+  status: string;
+}
+
+interface BackendArchitectureBaseline {
+  schemaVersion: number;
+  document?: { documentId?: string; version?: string; status?: string };
+  authorityOverrides?: {
+    tenantModel?: string;
+    identityProvider?: string;
+    edgeControlPlane?: string;
+  };
+  serviceModel?: {
+    logicalDomainEqualsDeployableService?: boolean;
+    servicePerTableAllowed?: boolean;
+    kafkaRequiredInPhase1?: boolean;
+  };
+  logicalDomains: LogicalDomainEntry[];
+  conformance: ConformanceEntry[];
+  acceptanceEligible: boolean;
+  approvedRemovals?: string[];
+  api: { contractedPaths: string[] };
+}
+
+interface Phase1MigrationsManifest {
+  databases: Array<{ migrations: string[] }>;
+}
+
 const root = resolve(process.cwd());
-const baseline = JSON.parse(await readFile(resolve(root, 'contracts/architecture/backend-architecture.v2.json'), 'utf8'));
+const baseline = JSON.parse(
+  await readFile(resolve(root, 'contracts/architecture/backend-architecture.v2.json'), 'utf8'),
+) as BackendArchitectureBaseline;
 const edgeControlPlane = JSON.parse(await readFile(resolve(root, 'contracts/architecture/edge-control-plane.v1.json'), 'utf8'));
 
-function invariant(condition, message) {
+function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Backend Architecture V2.1.2 check failed: ${message}`);
 }
 
-async function exists(path) {
+async function exists(filePath: string): Promise<boolean> {
   try {
-    await stat(resolve(root, path));
+    await stat(resolve(root, filePath));
     return true;
   } catch {
     return false;
@@ -116,7 +153,9 @@ for (const token of ['mlops_artifacts', 'mlops_evaluations', 'mlops_approvals', 
   invariant(mlopsMetadata.includes(token), `MLOps Metadata boundary missing ${token}`);
 }
 
-const phase1Migrations = JSON.parse(await readFile(resolve(root, 'deploy/platform/phase1/migrations/manifest.v1.json'), 'utf8'));
+const phase1Migrations = JSON.parse(
+  await readFile(resolve(root, 'deploy/platform/phase1/migrations/manifest.v1.json'), 'utf8'),
+) as Phase1MigrationsManifest;
 const phase1MigrationPaths = phase1Migrations.databases.flatMap(({ migrations }) => migrations);
 invariant(phase1MigrationPaths.includes('infra/identity/postgres/init/001-identity-baseline.sql') && phase1MigrationPaths.includes('infra/identity/postgres/init/002-identity-runtime-grants.sql') && phase1MigrationPaths.includes('infra/identity/postgres/init/003-identity-directory-least-privilege.sql'), 'Phase1 must deploy the platform Identity database boundary');
 invariant(phase1MigrationPaths.includes('infra/registry/postgres/init/009d-data-governance-v2.sql'), 'Phase1 must deploy Data Governance before Object Storage governance');
@@ -156,7 +195,7 @@ invariant(compose.includes('ENERGY_API_EMBEDDED_OWNERS: all'), 'Phase1 energy-ap
 const embeddedEnergy = await readFile(resolve(root, 'cmd/energy-api/embedded_energy.go'), 'utf8');
 invariant(embeddedEnergy.includes('sessionstore.OpenOutbox') && embeddedEnergy.includes('auditserver.OpenStore'), 'Phase1 Audit must use PostgreSQL Outbox -> Audit Ledger in-process');
 
-const counts = baseline.conformance.reduce((acc, item) => {
+const counts = baseline.conformance.reduce<Record<string, number>>((acc, item) => {
   acc[item.status] = (acc[item.status] ?? 0) + 1;
   return acc;
 }, {});

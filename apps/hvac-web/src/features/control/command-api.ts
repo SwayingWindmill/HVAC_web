@@ -1,4 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
+import { failureStatus, gatewayPath, gatewayRequest, ROUTE_MISSING_MESSAGE, type GatewayRequest } from '@/api/gateway-client';
 import { commandPaths } from '@/api/generated/platformGateway.gen';
 
 // Command governance through the Platform Gateway: an operator asks, the owner assesses the risk,
@@ -43,21 +44,15 @@ export class CommandRequestError extends Error {
   }
 }
 
-async function send<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    credentials: 'same-origin',
-    headers: { Accept: 'application/json, application/problem+json', ...init.headers },
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new CommandRequestError(response.status, payload?.code, payload?.detail ?? payload?.title ?? '指令服务暂时不可用');
-  }
-  return payload as T;
-}
-
-function mutationHeaders(csrfToken: string): HeadersInit {
-  return { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken, 'Idempotency-Key': `command-${crypto.randomUUID()}` };
+async function send<T>(path: string, request: GatewayRequest<T> = {}): Promise<T> {
+  const result = await gatewayRequest<T>(path, request);
+  if (result.kind === 'ok') return result.value;
+  if (result.kind === 'routeMissing') throw new CommandRequestError(result.status, undefined, ROUTE_MISSING_MESSAGE);
+  const code = result.kind === 'unavailable' ? undefined : result.problem.code;
+  const message = result.kind === 'unavailable'
+    ? '指令服务暂时不可用'
+    : (result.problem.detail ?? result.problem.title ?? '指令服务暂时不可用');
+  throw new CommandRequestError(failureStatus(result), code, message);
 }
 
 export async function listCommands(siteId: string, signal?: AbortSignal): Promise<Command[]> {
@@ -70,18 +65,29 @@ export function createCommand(
   input: { readonly assetId: string; readonly commandPointId: string; readonly parameters: Readonly<Record<string, number>> },
   csrfToken: string,
 ): Promise<Command> {
-  return send<Command>(commandPaths.collection, { method: 'POST', headers: mutationHeaders(csrfToken), body: JSON.stringify(input) });
+  return send<Command>(commandPaths.collection, {
+    method: 'POST',
+    csrfToken,
+    idempotencyKey: `command-${crypto.randomUUID()}`,
+    body: input,
+  });
 }
 
 export function approveCommand(commandId: string, csrfToken: string): Promise<Command> {
-  return send<Command>(commandPaths.approve.replace('{commandId}', commandId), {
-    method: 'POST', headers: mutationHeaders(csrfToken), body: '{}',
+  return send<Command>(gatewayPath(commandPaths.approve, { commandId }), {
+    method: 'POST',
+    csrfToken,
+    idempotencyKey: `command-${crypto.randomUUID()}`,
+    body: {},
   });
 }
 
 export function reconcileCommand(commandId: string, outcome: ReconciledOutcome, csrfToken: string): Promise<Command> {
-  return send<Command>(commandPaths.reconcile.replace('{commandId}', commandId), {
-    method: 'POST', headers: mutationHeaders(csrfToken), body: JSON.stringify({ outcome }),
+  return send<Command>(gatewayPath(commandPaths.reconcile, { commandId }), {
+    method: 'POST',
+    csrfToken,
+    idempotencyKey: `command-${crypto.randomUUID()}`,
+    body: { outcome },
   });
 }
 

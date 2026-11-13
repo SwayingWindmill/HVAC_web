@@ -437,6 +437,9 @@ test('cross-gap electricity counts in monthly budget totals, TOU breakdown, and 
     energyChargeCny: 10_000,
   });
   const reconciliation = reconcileUtilityBill(bill, withCrossGap);
+  if (!('energyVarianceKwh' in reconciliation)) {
+    throw new Error('Expected utility bill reconciliation for CHILLER_PLANT scope');
+  }
   assert.equal(reconciliation.plantEnergyKwh, 12_000); // 10,000 + 2,000 cross-gap
   assert.equal(reconciliation.plantEstimatedEnergyCostCny, 9_600);
   assert.equal(reconciliation.energyVarianceKwh, 500);

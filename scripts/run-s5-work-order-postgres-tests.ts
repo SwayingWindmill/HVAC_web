@@ -41,6 +41,8 @@ async function waitForPostgres() {
   throw new Error(`S5 PostgreSQL fixture did not initialize\n${logs}`);
 }
 
+const lastLine = (output: string): string => output.split('\n').at(-1) ?? '';
+
 const report: PostgresAuthorityReport = {
   schemaVersion: 1,
   slice: 'S5',
@@ -84,18 +86,18 @@ try {
   if (!directLoginDenied.includes('permission denied')) throw new Error(`runtime login bypassed explicit role activation: ${directLoginDenied}`);
   report.assertions.explicitActivationRequired = true;
 
-  expectEqual(psql(`
+  expectEqual(lastLine(psql(`
     SET SESSION AUTHORIZATION s5_work_order_service;
     SET ROLE s5_work_order_runtime;
     SELECT set_config('app.tenant_id', '0191f000-0000-7000-8000-000000000001', false);
     SELECT count(*) FROM work_order_runtime.work_order_current;
-  `).split('\n').at(-1), '3', 'authorized Tenant visibility');
-  expectEqual(psql(`
+  `)), '3', 'authorized Tenant visibility');
+  expectEqual(lastLine(psql(`
     SET SESSION AUTHORIZATION s5_work_order_service;
     SET ROLE s5_work_order_runtime;
     SELECT set_config('app.tenant_id', '0191f000-0000-7000-8000-000000000002', false);
     SELECT count(*) FROM work_order_runtime.work_order_current;
-  `).split('\n').at(-1), '1', 'other Tenant sees only its own Work Order');
+  `)), '1', 'other Tenant sees only its own Work Order');
   report.assertions.tenantRls = true;
 
   for (const [operation, sql] of [

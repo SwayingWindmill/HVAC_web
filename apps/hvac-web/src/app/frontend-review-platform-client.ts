@@ -75,7 +75,7 @@ function reviewResponse<T>(data: T): PlatformResponse<T> {
 
 function reviewPrincipal(): CurrentPrincipalResponse {
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  const principal = {
+  return {
     principalId: '01940000-0002-7000-8000-000000000001',
     principal: {
       subject: 'frontend-review-operator',
@@ -110,12 +110,11 @@ function reviewPrincipal(): CurrentPrincipalResponse {
       id: 'frontend-review-session',
       expiresAt,
       idleTimeoutMs: 3_600_000,
+      csrfToken: ['frontend', 'review', 'capability'].join(':'),
       revocationObjectiveMs: 1_000,
       lastAuditMessageId: 'frontend-review-audit',
     },
-  } as unknown as CurrentPrincipalResponse;
-  Reflect.set(principal.session, ['csrf', 'Token'].join(''), ['frontend', 'review', 'capability'].join(':'));
-  return principal;
+  };
 }
 
 const reviewPlatformStatus: PlatformStatusResponse = {

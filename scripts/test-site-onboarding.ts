@@ -6,7 +6,9 @@ import {
   SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, checkSiteFile, expandPoints, planOnboarding, pointQuality, pointStatus, presenceApplicability, siteStateQuery, updateWhenChanged,
 } from './site-onboarding.mjs';
 
-const songyaxuan = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.site.json', import.meta.url), 'utf8'));
+import type { OnboardingAsset, OnboardingDevice, OnboardingPoint, OnboardingProfile, OnboardingState, PlanItem } from './site-onboarding.mjs';
+
+const songyaxuan = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.site.json', import.meta.url), 'utf8')) as OnboardingProfile;
 const songyaxuanAlarmRules = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.alarm-rules.json', import.meta.url), 'utf8'));
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -14,20 +16,21 @@ const copy = <T>(value: T): T => structuredClone(value);
 // copy with an active room reading and the section the manifest had before the probe was found missing.
 const optimized = (() => {
   const profile = copy(songyaxuan);
-  const room = profile.devices.find((device: any) => device.sourceKey === 'room').points[0];
+  const room = profile.devices.find((device) => device.sourceKey === 'room')?.points[0];
+  if (!room) throw new Error('room point missing');
   delete room.status;
   room.from = ['temperature', 't12'];
   profile.intelligence.optimization = {"cron": "20 * * * *", "enabled": true, "model": "hvac-recommendation-v1", "policy": {"code": "chilled_water_supply_cost", "objective": "COST", "dispatchMode": "SHADOW", "horizon": "DAY_AHEAD", "horizonMinutes": 1440, "granularity": "15MIN", "constraints": {"safety": {"supplyTempMinC": 5, "supplyTempMaxC": 8, "maxSupplyTempStepC": 1}, "comfort": {"zoneTempMinC": 22, "zoneTempMaxC": 26}, "manualLocks": {"resources": []}, "inputMapping": {"supplyTemperatureKey": "supply_water_temperature", "zoneTemperatureKey": "room_temperature"}, "responseModel": {"dailyEnergyDeltaKWhPerSupplyTempC": -60, "zoneTempDeltaCPerSupplyTempC": 0.3, "energyUncertaintyP90KWh": 20, "zoneTempUncertaintyP90C": 0.2}, "maintenanceConstraints": {"outOfService": []}}, "responseModelSource": "人工设定", "note": "优化策略是租户共用的（同一租户只有一份生效策略）。本站和模拟冷站的室内温度读数都是 room_temperature；接入不改租户共用的策略，validate 把不一致列为「需要人决定」，策略一致之前不登记本站的模型部署和定时优化。"}};
   return profile;
 })();
 
-function bindingSection(sql) {
+function bindingSection(sql: string): string {
   const start = sql.indexOf('INSERT INTO core_registry.point_subject_bindings');
   assert.notEqual(start, -1, 'point_subject_bindings insert is missing');
   return sql.slice(start, sql.indexOf('COMMIT;', start));
 }
 
-function pointRows(sql) {
+function pointRows(sql: string): string[] {
   const start = sql.indexOf('INSERT INTO core_registry.telemetry_points');
   return sql.slice(start, sql.indexOf('ON CONFLICT', start)).split('\n').filter((line) => line.startsWith('('));
 }
@@ -52,10 +55,10 @@ test('a rerun follows the site file instead of forcing ACTIVE', () => {
   const section = bindingSection(buildOnboardingSql(songyaxuan).registry);
   const conflict = section.slice(section.indexOf('ON CONFLICT'));
   assert.ok(!conflict.includes("status='ACTIVE'"), 'binding upsert must not hard-code ACTIVE');
-  const lifecycle = new Map(SUBJECT_BINDING_LIFECYCLE);
+  const lifecycle = new Map<string, string>(SUBJECT_BINDING_LIFECYCLE);
   assert.equal(lifecycle.get('status'), 'EXCLUDED.status');
-  assert.match(lifecycle.get('valid_to'), /^CASE WHEN EXCLUDED\.status = 'ACTIVE' THEN NULL/);
-  assert.match(lifecycle.get('valid_from'), /^CASE WHEN EXCLUDED\.status = 'ACTIVE' AND/);
+  assert.match(lifecycle.get('valid_to') ?? '', /^CASE WHEN EXCLUDED\.status = 'ACTIVE' THEN NULL/);
+  assert.match(lifecycle.get('valid_from') ?? '', /^CASE WHEN EXCLUDED\.status = 'ACTIVE' AND/);
   for (const [column, value] of SUBJECT_BINDING_LIFECYCLE) assert.ok(conflict.includes(`${column}=${value}`), `binding upsert sets ${column}`);
 });
 
@@ -144,8 +147,11 @@ test('a confirmed chiller nameplate is written and an unconfirmed pump power is 
     hitachi: { manufacturer: '日立', model: 'RCU180SC2', year: 2007, refrigerant: 'R22', ratedCapacityKw: 572, ratedPowerKw: 127.5, ratedCurrentA: 225 },
     pump: { manufacturer: '凯泉', speed: 'FIXED', role: 'UNKNOWN', unconfirmed: ['role', 'ratedPowerKw'], candidates: [{ model: 'YE3-180L-4', ratedPowerKw: 22, efficiency: 0.93 }] },
   };
-  profile.assets.find((asset) => asset.code === 'chiller-c').nameplate = 'hitachi';
-  profile.assets.find((asset) => asset.code === 'chwp-1').nameplate = 'pump';
+  const chillerC = profile.assets.find((asset) => asset.code === 'chiller-c');
+  const chwp1 = profile.assets.find((asset) => asset.code === 'chwp-1');
+  if (!chillerC || !chwp1) throw new Error('expected assets missing');
+  chillerC.nameplate = 'hitachi';
+  chwp1.nameplate = 'pump';
   profile.physicsChecks = [{
     code: 'chiller-c-power', kind: 'POWER_NAMEPLATE', asset: 'chiller-c', aboveRatedFraction: 0.15,
     subject: { device: 'meter-uid3', point: 'power_total' },
@@ -196,13 +202,13 @@ test('point status defaults to ACTIVE and rejects unknown values', () => {
 });
 
 // A database that already holds everything the songyaxuan manifest describes.
-function completeState(profile: any) {
+function completeState(profile: OnboardingProfile): OnboardingState {
   const synthesizedTotal = Boolean(profile.energy?.totalMeter && typeof profile.energy.totalMeter === 'object' && profile.energy.totalMeter.kind === 'sum-of-sub-meters');
-  const state: any = { site: 'ACTIVE', devices: {}, points: {}, assets: {}, schedules: {}, topology: true, synthesizedTotal, tariff: true, forecast: true };
+  const state: OnboardingState = { site: 'ACTIVE', devices: {}, points: {}, assets: {}, schedules: {}, topology: true, synthesizedTotal, tariff: true, forecast: true };
   for (const match of buildOnboardingSql(profile).registry.matchAll(/'(01a14000-4000-7000-8000-[0-9a-f]{12})'/g)) state.devices[match[1]] = 'ACTIVE';
   for (const row of pointRows(buildOnboardingSql(profile).registry)) {
     const [, id] = row.match(/^\('([0-9a-f-]{36})'/) ?? [];
-    state.points[id] = row.includes("'INACTIVE'") ? 'INACTIVE' : 'ACTIVE';
+    if (id) state.points[id] = row.includes("'INACTIVE'") ? 'INACTIVE' : 'ACTIVE';
   }
   for (const asset of profile.assets) state.assets[asset.id] = 'ACTIVE';
   for (const { item } of planOnboarding(profile, { ...state, schedules: {}, policy: null, modelRevision: null, optimizationBinding: null, lowDeltaTRule: null })) {
@@ -210,9 +216,12 @@ function completeState(profile: any) {
     if (code) state.schedules[code] = { jobType: '', cron: '', enabled: true, payload: {} };
   }
   const { lowDeltaT } = profile.intelligence.diagnosis;
+  const lowDeltaTAsset = profile.assets.find((asset) => asset.code === lowDeltaT.asset);
+  const lowDeltaTDevice = profile.devices.find((device) => device.code === lowDeltaT.device);
+  if (!lowDeltaTAsset || !lowDeltaTDevice) throw new Error('lowDeltaT asset or device missing');
   state.schedules[`chilled-water-low-delta-t-${profile.site.code}`] = {
     cron: lowDeltaT.cron, enabled: lowDeltaT.enabled,
-    payload: { assetId: profile.assets.find((asset: any) => asset.code === lowDeltaT.asset).id, deviceId: profile.devices.find((device: any) => device.code === lowDeltaT.device).id },
+    payload: { assetId: lowDeltaTAsset.id, deviceId: lowDeltaTDevice.id },
   };
   const { optimization } = profile.intelligence;
   if (optimization) {
@@ -226,24 +235,28 @@ function completeState(profile: any) {
   return state;
 }
 
-const byStatus = (items: any[], status: string) => items.filter((item) => item.status === status).map((item) => item.item);
+const byStatus = (items: PlanItem[], status: string) => items.filter((item) => item.status === status).map((item) => item.item);
 
 test('the songyaxuan manifest and its alarm rules pass the file check', () => {
   assert.deepEqual(checkSiteFile(songyaxuan, songyaxuanAlarmRules), []);
   assert.deepEqual(checkSiteFile(optimized, songyaxuanAlarmRules), []);
-  const meterPoints = expandPoints(songyaxuan.devices.find((device: any) => device.code === 'meter-uid2'), songyaxuan.meterPoints);
-  assert.equal(meterPoints.find((point: any) => point.code === 'active_energy_total')?.critical, true);
-  assert.equal(meterPoints.find((point: any) => point.code === 'power_total')?.critical, true);
-  assert.equal(meterPoints.find((point: any) => point.code === 'run_state')?.critical, undefined);
+  const meterPoints = expandPoints(songyaxuan.devices.find((device) => device.code === 'meter-uid2'), songyaxuan.meterPoints);
+  assert.equal(meterPoints.find((point) => point.code === 'active_energy_total')?.critical, true);
+  assert.equal(meterPoints.find((point) => point.code === 'power_total')?.critical, true);
+  assert.equal(meterPoints.find((point) => point.code === 'run_state')?.critical, undefined);
 });
 
 test('critical points must be active own readings and readingGaps must have positive ageSeconds', () => {
   const profile = copy(songyaxuan);
-  const meter = profile.devices.find((device: any) => device.code === 'meter-uid2');
-  meter.morePoints.find((point: any) => point.code === 'chw_leaving_temperature').critical = true;
-  const temp = profile.devices.find((device: any) => device.code === 'temperature-uid20');
-  temp.points.find((point: any) => point.code === 't14').critical = true;
-  temp.points.find((point: any) => point.code === 't1').critical = 'yes';
+  const meter = profile.devices.find((device) => device.code === 'meter-uid2');
+  const temp = profile.devices.find((device) => device.code === 'temperature-uid20');
+  const meterChw = meter?.morePoints?.find((point) => point.code === 'chw_leaving_temperature');
+  const temp14 = temp?.points.find((point) => point.code === 't14');
+  const temp1 = temp?.points.find((point) => point.code === 't1');
+  if (!meterChw || !temp14 || !temp1) throw new Error('expected points missing');
+  meterChw.critical = true;
+  temp14.critical = true;
+  temp1.critical = 'yes';
   const rules = copy(songyaxuanAlarmRules);
   rules.readingGaps = { title: '', summary: '', severity: 'UNKNOWN', ageSeconds: 0 };
   const problems = checkSiteFile(profile, rules).join('\n');
@@ -262,6 +275,7 @@ test('critical points must be active own readings and readingGaps must have posi
 
 test('the file check names alarm inputs, keys and fields that do not match the site', () => {
   const profile = copy(optimized);
+  if (!profile.intelligence.optimization) throw new Error('optimization missing');
   profile.intelligence.optimization.policy.constraints.inputMapping.zoneTemperatureKey = 'temperature';
   delete profile.intelligence.optimization.policy.responseModelSource;
   profile.intelligence.diagnosis.lowDeltaT.asset = 'no-such-asset';
@@ -287,7 +301,7 @@ test('validate on a complete site lists only what a person still decides', () =>
 test('the disabled low ΔT hint names the revision in force, not a number in the note', () => {
   const state = completeState(songyaxuan);
   state.lowDeltaTRule = { revision: 2, minimumDeltaTC: 1.5, windowMinutes: 15 };
-  const hint = (items: any[]) => items.find((item) => item.item === '低温差诊断未启用').detail;
+  const hint = (items: PlanItem[]) => items.find((item) => item.item === '低温差诊断未启用')?.detail ?? '';
   assert.match(hint(planOnboarding(songyaxuan, state)), /（现在生效的是第 2 版：温差低于 1\.5 K 持续 15 分钟）$/);
   assert.doesNotMatch(songyaxuan.intelligence.diagnosis.lowDeltaT.note, /第 \d+ 版|\d K/, 'the note leaves the threshold to the database');
   state.lowDeltaTRule = null;
@@ -296,14 +310,15 @@ test('the disabled low ΔT hint names the revision in force, not a number in the
 
 test('a Tenant policy that disagrees blocks the Optimization deployment and is left for a person', () => {
   const state = completeState(optimized);
+  if (!state.policy) throw new Error('policy missing');
   state.policy.constraints.inputMapping.zoneTemperatureKey = 'temperature';
   state.optimizationBinding = null;
   delete state.schedules['supply-temperature-optimization-songyaxuan'];
-  delete state.assets[optimized.assets.at(-1).id];
+  delete state.assets[optimized.assets[optimized.assets.length - 1].id];
   const items = planOnboarding(optimized, state);
   assert.deepEqual(byStatus(items, 'missing'), ['资产 17 台']);
   const decide = items.filter((item) => item.status === 'decide');
-  assert.match(decide.find((item) => item.item === '优化策略和清单不一致').detail, /zoneTemperatureKey: 清单 "room_temperature"，现在 "temperature"/);
+  assert.match(decide.find((item) => item.item === '优化策略和清单不一致')?.detail ?? '', /zoneTemperatureKey: 清单 "room_temperature"，现在 "temperature"/);
   assert.ok(decide.some((item) => item.item === '租户策略的 zoneTemperatureKey 是 temperature'));
   assert.ok(decide.some((item) => item.item === '本站的模型部署'));
   assert.ok(decide.some((item) => item.item === '调度定义 supply-temperature-optimization-songyaxuan'));
@@ -339,22 +354,26 @@ test('apply never rewrites what the Tenant shares and registers Optimization onl
 });
 
 test('copied points mark quality_checks.copied and copy-only or inactive devices set presence_applicability NOT_APPLICABLE', () => {
-  const devicesByCode = new Map(songyaxuan.devices.map((device: any) => [device.code, { ...device, points: expandPoints(device, songyaxuan.meterPoints) }]));
-  const meterUid2: any = devicesByCode.get('meter-uid2');
-  const ownEnergy = meterUid2.points.find((point: any) => point.code === 'active_energy_total');
-  const copiedChw = { ...meterUid2.points.find((point: any) => point.code === 'chw_leaving_temperature'), device: meterUid2 };
+  const devicesByCode = new Map<string, OnboardingDevice>(songyaxuan.devices.map((device) => [device.code, { ...device, points: expandPoints(device, songyaxuan.meterPoints) }]));
+  const meterUid2 = devicesByCode.get('meter-uid2');
+  const ownEnergy = meterUid2?.points.find((point) => point.code === 'active_energy_total');
+  const rawCopiedChw = meterUid2?.points.find((point) => point.code === 'chw_leaving_temperature');
+  if (!meterUid2 || !ownEnergy || !rawCopiedChw) throw new Error('expected meterUid2 points missing');
+  const copiedChw: OnboardingPoint = { ...rawCopiedChw, device: meterUid2 };
   assert.equal(pointQuality({ ...ownEnergy, device: meterUid2 }, songyaxuan, devicesByCode).checks, null);
   assert.match(pointQuality(copiedChw, songyaxuan, devicesByCode).checks ?? '', /"copied":true/);
 
-  const chwpMain: any = devicesByCode.get('chwp-main');
-  const copiedFlow = { ...chwpMain.points.find((point: any) => point.code === 'flow_rate'), device: chwpMain };
+  const chwpMain = devicesByCode.get('chwp-main');
+  const rawCopiedFlow = chwpMain?.points.find((point) => point.code === 'flow_rate');
+  if (!chwpMain || !rawCopiedFlow) throw new Error('expected chwpMain flow missing');
+  const copiedFlow: OnboardingPoint = { ...rawCopiedFlow, device: chwpMain };
   assert.equal(pointQuality(copiedFlow, songyaxuan, devicesByCode).checks, '\'{"copied":true}\'::jsonb');
 
   for (const device of songyaxuan.devices) {
     const expected = ['cooling-tower', 'outdoor', 'room'].includes(device.code) ? 'NOT_APPLICABLE' : 'APPLICABLE';
     assert.equal(presenceApplicability(expandPoints(device, songyaxuan.meterPoints)), expected, `${device.code} applicability`);
   }
-  const optimizedRoom = optimized.devices.find((device: any) => device.code === 'room');
+  const optimizedRoom = optimized.devices.find((device) => device.code === 'room');
   assert.equal(presenceApplicability(expandPoints(optimizedRoom, optimized.meterPoints)), 'NOT_APPLICABLE');
 
   const { telemetry } = buildOnboardingSql(songyaxuan);
@@ -378,9 +397,10 @@ test('validate reads the database with one read-only SELECT', () => {
 });
 
 test('songyaxuan synthesizes total electricity from the four chiller sub-meters and maps meters to A/B/C/D chillers', () => {
-  assert.deepEqual(songyaxuan.energy.totalMeter, { kind: 'sum-of-sub-meters' });
-  assert.deepEqual(songyaxuan.energy.checkMeters, ['ammeter-total']);
-  const meterTotal = songyaxuan.devices.find((device: any) => device.code === 'meter-total');
+  assert.deepEqual(songyaxuan.energy?.totalMeter, { kind: 'sum-of-sub-meters' });
+  assert.deepEqual(songyaxuan.energy?.checkMeters, ['ammeter-total']);
+  const meterTotal = songyaxuan.devices.find((device) => device.code === 'meter-total');
+  if (!meterTotal) throw new Error('meter-total missing');
   for (const point of meterTotal.points) assert.equal(point.critical, undefined, `meter-total/${point.code} must not be critical`);
 
   const expectedAssetByMeter: Record<string, string> = {
@@ -390,7 +410,7 @@ test('songyaxuan synthesizes total electricity from the four chiller sub-meters 
     'meter-uid2': '01a14000-3000-7000-8000-000000000004',
   };
   for (const [code, assetId] of Object.entries(expectedAssetByMeter)) {
-    assert.equal(songyaxuan.devices.find((device: any) => device.code === code)?.asset, assetId, `${code} asset binding`);
+    assert.equal(songyaxuan.devices.find((device) => device.code === code)?.asset, assetId, `${code} asset binding`);
   }
 
   const { registry, energy } = buildOnboardingSql(songyaxuan);
@@ -409,13 +429,14 @@ test('songyaxuan synthesizes total electricity from the four chiller sub-meters 
 
   // A synthesized site without checkMeters sums sub-meter power with TOLERANT quality policy.
   const noCheck = copy(songyaxuan);
-  delete noCheck.energy.checkMeters;
+  delete noCheck.energy?.checkMeters;
   const noCheckEnergy = buildOnboardingSql(noCheck).energy;
   assert.match(noCheckEnergy, /"site_load":\["01a14000-5000-7000-8000-000000030001","01a14000-5000-7000-8000-000000040001","01a14000-5000-7000-8000-000000050001","01a14000-5000-7000-8000-000000060001"\]/);
   assert.match(noCheckEnergy, /'15MIN', 'AVG', 'IDENTITY', NULL, 'TOLERANT'/);
 
   // A site with a physical total meter binds single-point site_energy and supersedes any prior virtual meter.
   const physical = copy(songyaxuan);
+  if (!physical.energy) throw new Error('physical energy missing');
   physical.energy.totalMeter = 'ammeter-total';
   delete physical.energy.checkMeters;
   const physicalEnergy = buildOnboardingSql(physical).energy;

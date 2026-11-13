@@ -30,6 +30,8 @@ async function waitForPostgres() {
   throw new Error(`S4 PostgreSQL fixture did not initialize\n${logs}`);
 }
 
+const lastLine = (output: string): string => output.split('\n').at(-1) ?? '';
+
 const report: PostgresAuthorityReport = {
   schemaVersion: 1,
   slice: 'S4',
@@ -74,31 +76,31 @@ try {
   if (!directLoginDenied.includes('permission denied')) throw new Error(`runtime login bypassed explicit role activation: ${directLoginDenied}`);
   report.assertions.explicitActivationRequired = true;
 
-  expectEqual(psql(`
+  expectEqual(lastLine(psql(`
     SET SESSION AUTHORIZATION s4_alarm_service;
     SET ROLE s4_alarm_runtime;
     SELECT set_config('app.tenant_id', '0190f000-0000-7000-8000-000000000001', false);
     SELECT count(*) FROM alarm_runtime.alarm_current;
-  `).split('\n').at(-1), '1', 'authorized Tenant visibility');
-  expectEqual(psql(`
+  `)), '1', 'authorized Tenant visibility');
+  expectEqual(lastLine(psql(`
     SET SESSION AUTHORIZATION s4_alarm_service;
     SET ROLE s4_alarm_runtime;
     SELECT set_config('app.tenant_id', '0190f000-0000-7000-8000-000000000099', false);
     SELECT count(*) FROM alarm_runtime.alarm_current;
-  `).split('\n').at(-1), '0', 'cross-Tenant invisibility');
-  expectEqual(psql(`
+  `)), '0', 'cross-Tenant invisibility');
+  expectEqual(lastLine(psql(`
     SET SESSION AUTHORIZATION s4_alarm_service;
     SET ROLE s4_alarm_runtime;
     SELECT set_config('app.tenant_id', '0190f000-0000-7000-8000-000000000001', false);
     SELECT event_type || '|' || coalesce(point_id::text, '') || '|' || severity || '|' || status
     FROM alarm_runtime.events;
-  `).split('\n').at(-1), 'SUPPLY_TEMPERATURE_DRIFT|01910000-4000-7000-8000-000000000001|MAJOR|ACTIVE', 'canonical Event projection');
-  expectEqual(psql(`
+  `)), 'SUPPLY_TEMPERATURE_DRIFT|01910000-4000-7000-8000-000000000001|MAJOR|ACTIVE', 'canonical Event projection');
+  expectEqual(lastLine(psql(`
     SET SESSION AUTHORIZATION s4_alarm_service;
     SET ROLE s4_alarm_runtime;
     SELECT set_config('app.tenant_id', '0190f000-0000-7000-8000-000000000099', false);
     SELECT count(*) FROM alarm_runtime.events;
-  `).split('\n').at(-1), '0', 'cross-Tenant Event invisibility');
+  `)), '0', 'cross-Tenant Event invisibility');
   expectEqual(psql(`
     SELECT a.alarm_type || '|' || a.event_id::text || '|' || a.point_id::text || '|' || e.event_type
     FROM alarm_runtime.alarm_current a

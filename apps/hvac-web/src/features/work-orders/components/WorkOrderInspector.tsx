@@ -96,7 +96,7 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
   };
   const claim = useMutation({
     mutationFn: (workOrder: WorkOrder) => assignWorkOrder(workOrder.workOrderId, {
-      expectedVersion: workOrder.version, assigneeId: myId, teamId: null, reason: '认领处理',
+      expectedVersion: workOrder.version, assigneeId: myId, teamId: null, reason: '由我负责',
     }, options),
     onSuccess: applyUpdate,
   });

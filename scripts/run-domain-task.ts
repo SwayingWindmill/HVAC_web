@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 
-import { domainTaskProfiles, resolveDomainCommands } from './domain-task-matrix.mjs';
+import { domainTaskProfiles, resolveDomainCommands } from './domain-task-matrix.ts';
 
 const argumentsMap = new Map(
   process.argv.slice(2).map((argument) => {

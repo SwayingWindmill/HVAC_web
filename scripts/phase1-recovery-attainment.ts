@@ -1,13 +1,50 @@
+import { createHash } from "node:crypto";
+
 const dayMilliseconds = 24 * 60 * 60 * 1000;
 
-function timestamp(name, value) {
-  const parsed = Date.parse(value);
+export interface RecoveryDrillRecord {
+  drillId: string;
+  environment: string;
+  scenario: string;
+  businessValidationCompletedAt: string;
+  [key: string]: unknown;
+}
+
+export interface RecoveryEvidence {
+  drillId: string;
+  environment: string;
+  scenario: string;
+  recordSha256: string;
+}
+
+export interface RecoveryAttainment {
+  schemaVersion: number;
+  minimumDrillCadenceDays: number;
+  containerOnlyEvidenceSufficient: boolean;
+  state: string;
+  productionClaimAllowed: boolean;
+  lastTimestampedRestoreDrill: string | null;
+  expiresAt: string | null;
+  evidence: RecoveryEvidence | null;
+  [key: string]: unknown;
+}
+
+function timestamp(name: string, value: string | null): number {
+  const parsed = Date.parse(value ?? "");
   if (!Number.isFinite(parsed))
     throw new Error(`${name} must be an RFC3339 timestamp`);
   return parsed;
 }
 
-export function buildDrillPassedAttainment({ current, record, recordSha256 }) {
+export function buildDrillPassedAttainment({
+  current,
+  record,
+  recordSha256,
+}: {
+  current: RecoveryAttainment;
+  record: RecoveryDrillRecord;
+  recordSha256: string;
+}): RecoveryAttainment {
   if (
     record.environment !== "production" ||
     record.scenario !== "WHOLE_SERVER_REPLACEMENT"
@@ -44,9 +81,9 @@ export function buildDrillPassedAttainment({ current, record, recordSha256 }) {
 }
 
 export function validateRecoveryAttainment(
-  attainment,
-  { now = new Date() } = {},
-) {
+  attainment: RecoveryAttainment,
+  { now = new Date() }: { now?: Date } = {},
+): RecoveryAttainment {
   if (attainment.schemaVersion !== 1)
     throw new Error("Recovery attainment schemaVersion must be 1");
   if (
@@ -110,9 +147,12 @@ export function validateRecoveryAttainment(
 }
 
 export function validateRecoveryEvidenceBinding(
-  attainment,
-  { recordBytes, governedCadenceDays },
-) {
+  attainment: RecoveryAttainment,
+  {
+    recordBytes,
+    governedCadenceDays,
+  }: { recordBytes: Buffer | Uint8Array; governedCadenceDays: number },
+): RecoveryDrillRecord {
   if (attainment.state !== "DRILL_PASSED") {
     throw new Error(
       "Recovery evidence binding requires DRILL_PASSED attainment",
@@ -129,7 +169,7 @@ export function validateRecoveryEvidenceBinding(
       "Recovery attainment does not match the supplied drill record",
     );
   }
-  const record = JSON.parse(recordBytes.toString("utf8"));
+  const record = JSON.parse(Buffer.from(recordBytes).toString("utf8")) as RecoveryDrillRecord;
   if (
     record.drillId !== attainment.evidence.drillId ||
     record.environment !== attainment.evidence.environment ||
@@ -143,4 +183,3 @@ export function validateRecoveryEvidenceBinding(
   }
   return record;
 }
-import { createHash } from "node:crypto";

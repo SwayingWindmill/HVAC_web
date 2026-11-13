@@ -1,13 +1,33 @@
-const npmCommand = (args, label) => ({ command: 'npm', args, label });
+export interface CommandSpec {
+  command: string;
+  args: string[];
+  label: string;
+  shell?: boolean;
+}
 
-export const npmRun = (script) => npmCommand(['run', '--silent', script], `npm run ${script}`);
-export const npmCi = (prefix) => npmCommand(['--prefix', prefix, 'ci'], `npm --prefix ${prefix} ci`);
-export const nodeRun = (...args) => ({ command: process.execPath, args, label: `node ${args.join(' ')}` });
+export type GateName = 'static' | 'contracts' | 'unit' | 'integration' | 'browser';
+export type DomainName =
+  | 'web'
+  | 'platform'
+  | 'registry'
+  | 'telemetry'
+  | 'command'
+  | 'alarm'
+  | 'workorder'
+  | 'analytics'
+  | 'operations-agent';
 
-export const gateCommandMatrix = Object.freeze({
+const npmCommand = (args: string[], label: string): CommandSpec => ({ command: 'npm', args, label });
+
+export const npmRun = (script: string): CommandSpec => npmCommand(['run', '--silent', script], `npm run ${script}`);
+export const npmCi = (prefix: string): CommandSpec => npmCommand(['--prefix', prefix, 'ci'], `npm --prefix ${prefix} ci`);
+export const nodeRun = (...args: string[]): CommandSpec => ({ command: process.execPath, args, label: `node ${args.join(' ')}` });
+
+export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string, readonly CommandSpec[]>>>> = Object.freeze({
   static: Object.freeze({
     default: Object.freeze([
       npmRun('repo:check'),
+      npmRun('typecheck:scripts'),
       npmRun('design:check'),
       npmRun('lint'),
       npmRun('build'),
@@ -126,7 +146,7 @@ export const gateCommandMatrix = Object.freeze({
   }),
 });
 
-export const gateProfileSets = Object.freeze({
+export const gateProfileSets: Readonly<Record<string, Readonly<Record<'contracts' | 'unit' | 'integration' | 'browser', readonly string[]>>>> = Object.freeze({
   all: Object.freeze({
     contracts: Object.freeze(['command', 'core', 'registry', 'telemetry', 'web']),
     unit: Object.freeze([
@@ -158,7 +178,10 @@ export const gateProfileSets = Object.freeze({
   }),
 });
 
-const assertExactProfiles = (label, actual, expected) => {
+export const isGateName = (value: string): value is GateName =>
+  value === 'static' || value === 'contracts' || value === 'unit' || value === 'integration' || value === 'browser';
+
+const assertExactProfiles = (label: string, actual: readonly string[], expected: readonly string[]): void => {
   const normalizedActual = [...actual].sort();
   const normalizedExpected = [...expected].sort();
   if (new Set(actual).size !== actual.length
@@ -168,7 +191,7 @@ const assertExactProfiles = (label, actual, expected) => {
   }
 };
 
-for (const gate of ['contracts', 'unit', 'integration', 'browser']) {
+for (const gate of ['contracts', 'unit', 'integration', 'browser'] as const) {
   assertExactProfiles(
     `Profile set all.${gate}`,
     gateProfileSets.all[gate],
@@ -176,7 +199,10 @@ for (const gate of ['contracts', 'unit', 'integration', 'browser']) {
   );
 }
 
-export const resolveGateProfileSet = (gate, profileSet) => {
+export const resolveGateProfileSet = (gate: GateName, profileSet: string): string[] => {
+  if (gate === 'static') {
+    throw new Error(`Unsupported ${gate} profile set: ${profileSet ?? '<missing>'}`);
+  }
   const profiles = gateProfileSets[profileSet]?.[gate];
   if (!profiles) {
     throw new Error(`Unsupported ${gate} profile set: ${profileSet ?? '<missing>'}`);
@@ -184,7 +210,7 @@ export const resolveGateProfileSet = (gate, profileSet) => {
   return [...profiles];
 };
 
-export const domainTaskProfiles = Object.freeze({
+export const domainTaskProfiles: Readonly<Record<DomainName, Readonly<Record<'contracts' | 'unit' | 'integration' | 'browser', readonly string[]>>>> = Object.freeze({
   web: Object.freeze({
     contracts: Object.freeze(['web']),
     unit: Object.freeze(['web']),
@@ -241,11 +267,11 @@ export const domainTaskProfiles = Object.freeze({
   }),
 });
 
-const commandIdentity = (command) => `${command.command}\0${command.args.join('\0')}`;
+const commandIdentity = (command: CommandSpec): string => `${command.command}\0${command.args.join('\0')}`;
 
-export const deduplicateCommands = (commands) => {
-  const deduplicated = [];
-  const seen = new Set();
+export const deduplicateCommands = (commands: readonly CommandSpec[]): CommandSpec[] => {
+  const deduplicated: CommandSpec[] = [];
+  const seen = new Set<string>();
   for (const command of commands) {
     const key = commandIdentity(command);
     if (seen.has(key)) continue;
@@ -255,7 +281,7 @@ export const deduplicateCommands = (commands) => {
   return deduplicated;
 };
 
-export const resolveGateCommands = (gate, profiles = []) => {
+export const resolveGateCommands = (gate: GateName, profiles: readonly string[] = []): CommandSpec[] => {
   const gateProfiles = gateCommandMatrix[gate];
   if (!gateProfiles) throw new Error(`Unsupported gate: ${gate ?? '<missing>'}`);
   const selected = gate === 'static'
@@ -268,14 +294,16 @@ export const resolveGateCommands = (gate, profiles = []) => {
   return deduplicateCommands(selected);
 };
 
-export const resolveDomainCommands = (domain, layers = ['unit']) => {
-  const profilesByLayer = domainTaskProfiles[domain];
-  if (!profilesByLayer) throw new Error(`Unsupported domain: ${domain ?? '<missing>'}`);
+export const isDomainName = (value: string): value is DomainName => Object.hasOwn(domainTaskProfiles, value);
 
-  const commands = [];
-  const selectedProfiles = {};
+export const resolveDomainCommands = (domain: string, layers: readonly string[] = ['unit']) => {
+  if (!isDomainName(domain)) throw new Error(`Unsupported domain: ${domain ?? '<missing>'}`);
+  const profilesByLayer = domainTaskProfiles[domain];
+
+  const commands: CommandSpec[] = [];
+  const selectedProfiles: Record<string, string[]> = {};
   for (const layer of layers) {
-    if (!Object.hasOwn(profilesByLayer, layer)) {
+    if (layer !== 'contracts' && layer !== 'unit' && layer !== 'integration' && layer !== 'browser') {
       throw new Error(`Unsupported domain layer: ${layer}`);
     }
     const profiles = profilesByLayer[layer];

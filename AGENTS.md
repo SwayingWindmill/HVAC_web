@@ -33,10 +33,9 @@ npm run go:lint && npm run security:go-vuln              # 改了 Go 代码或�
 npm run deployment:phase1:check                          # 改了 Compose 或迁移清单后
 ```
 
-- 交 PR 前，把 `scripts/domain-task-matrix.mjs` 里和改动相关的命令在本地跑一遍。
-- 新增或移动 `routes/` 下的文件后，跑一次 dev 或 build，更新生成的 `routeTree.gen.ts`。
+- 交 PR 前，把 `scripts/domain-task-matrix.ts` 里和改动相关的命令在本地跑一遍。
 - 浏览器测试的接口数据在 `apps/hvac-web/e2e/fixtures/`（从本地环境录制、已脱敏），写操作由 `e2e/gateway.ts` 按负责那类数据的模块的规则模拟。页面改了接口调用，同步改测试桩。
-- 日志里的 `error` 字段一律显示为 `[REDACTED]`。要看真实错误，写一个直接调用那个 Go 函数的测试，或临时把错误记在带 `[DEBUG-xxxx]` 前缀的字段里，查完删掉。
+- 日志里的 `error` 字段一律显示为 `[REDACTED]`；调试临时加的 `[DEBUG-*]` 字段须在提交前清理（`npm run repo:check` 拦截）。
 - 从 Windows 调 WSL 时，多行或带嵌套引号的命令先写成脚本文件，再 `wsl -e bash -lc "bash <脚本路径>"`；偶发 `WSAETIMEDOUT` 时重试。
 - `deploy/platform/phase1/runtime/**` 里是密钥和凭据：只按路径引用，不打印、不提交、不改权限。
 
@@ -64,14 +63,14 @@ npm run deployment:phase1:check                          # 改了 Compose 或迁
 
 - 一条规则用一个最小的检查守住，只跑和改动相关的领域。
 - **被纠正两次的错误必须固化，不靠堆文档叮嘱。** 同一类错误出现两次，或靠人手同步两份清单维持一致时，按 `correct` 技能依次用「单一事实源/架构消除 → 编译期类型约束 → 报错直接写明改法的检查 → 行为测试」消掉，不再往本文或 `docs/HANDOFF.md` 写文字叮嘱。每新加一条检查，先在真实旧错误上证明它会失败。
-- 门禁只运行 `scripts/domain-task-matrix.mjs` 里登记的命令，集成脚本只跑它用 `-run` 点名的 Go 测试。新检查要登记进去才会运行；不会运行的检查会悄悄过时，删掉它。
+- 门禁只运行 `scripts/domain-task-matrix.ts` 里登记的命令，集成脚本只跑它用 `-run` 点名的 Go 测试。新检查要登记进去才会运行；不会运行的检查会悄悄过时，删掉它。
 - 检查只看代码和配置，文档的措辞靠审查。
 
 | 规则 | 由什么自动守住 |
 | --- | --- |
-| 仓库治理、遗留 JS 文件数上限（`110`，禁止 `.agents/` 新增 JS）、`.agents/skills` 与 `.claude/skills` 逐字节镜像一致、禁止跟踪 `.audit/` 等临时目录、`docs/HANDOFF.md` 单次读取上限（`<= 28 KiB`） | `npm run repo:check`（`scripts/check-repository-governance.ts`） |
+| 脚本严格类型检查、遗留 JS 数量与字节上限（`102`，禁止 `.agents/` 新增 JS）、`.agents/skills` 与 `.claude/skills` 逐字节镜像一致、禁止跟踪 `.audit/` 与代码残留 `[DEBUG-*]`、`docs/HANDOFF.md` 单次读取上限（`<= 28 KiB`） | `npm run typecheck:scripts` 与 `npm run repo:check`（`tsconfig.scripts.json`、`scripts/check-repository-governance.ts`） |
 | 破坏性 Git 命令、打印运行密钥与未授权生产发布/重置本地库拦截 | `.agents/hooks.json` + `.claude/settings.json`（`scripts/hooks/pre-tool-guard.ts`，由 `npm run pr:gates:test` 测试） |
-| 页面组合语法（`DataTableBlock`、禁止 `<main>`、`FactTile` 禁用 `className`）、`Enter` 输入法防误触、`color-scheme` 与 WCAG 对比度 | `npm run design:check`（`scripts/check-design-system.mjs`）与 `scripts/test-real-design-tokens.mjs` |
+| 页面组合语法（`DataTableBlock`、禁止 `<main>`、`FactTile` 禁用 `className`、`Button variant="secondary"`）、`DESIGN.md` §1 禁用文案、feature/route 禁裸 `fetch`/`WebSocket`、`as unknown as` 清零与非 `const` `as` 棘轮（`scripts/web-as-cast-baseline.json`）、`routeTree.gen.ts` 新鲜度、`Enter` 输入法防误触、`color-scheme` 与浅/深双主题 WCAG 对比度 | `npm run design:check`（`scripts/check-design-system.ts`）与 `scripts/test-real-design-tokens.ts` |
 | 权限目录与内置角色展示同 IAM 契约严格一致 | `npm -w @hvac/web run typecheck` 与 `npm run web:principal:contract`（`scripts/test-rms-principal-capability-contract.mjs`） |
 | 网关路由负责方、数据表负责方与冻结迁移不可修改 | `npm run ownership:check`、`npm run migrations:freeze:check` |
 

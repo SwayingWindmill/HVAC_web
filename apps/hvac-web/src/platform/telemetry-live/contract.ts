@@ -1,30 +1,41 @@
 import type {
+  AvailabilityReasonCode,
+  DeviceDisplayState,
   DeviceObservationPublication,
   DeviceObservationSnapshot,
+  DevicePresenceState,
+  EvaluationAvailability,
+  MeasurementInterval,
+  PresenceApplicability,
   PresenceSnapshot,
+  ProbeOffsetSuggestion,
   QualityReasonCode,
   TelemetryKey,
   TelemetryKeyState,
+  TelemetryPointHealth,
+  TelemetryQuality,
+  TelemetryReadiness,
+  TelemetryValue,
 } from '@/api/generated/s2Telemetry.gen';
 
 const uuidV7Pattern = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const clientSubscriptionPattern = /^[A-Za-z0-9._:-]{1,128}$/;
 const telemetryKeyPattern = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/;
 const opaqueSubscriptionPattern = /^[A-Za-z0-9_-]{16,256}$/;
-const evaluationAvailability = new Set(['AVAILABLE', 'UNAVAILABLE']);
-const availabilityReasons = new Set([
+const evaluationAvailability: ReadonlySet<EvaluationAvailability> = new Set(['AVAILABLE', 'UNAVAILABLE']);
+const availabilityReasons: ReadonlySet<AvailabilityReasonCode> = new Set([
   'SOURCE_UNAVAILABLE',
   'OBSERVATION_COVERAGE_GAP',
   'POLICY_UNAVAILABLE',
   'OWNER_DEPENDENCY_UNAVAILABLE',
 ]);
-const presenceApplicability = new Set(['APPLICABLE', 'NOT_APPLICABLE']);
-const presenceStates = new Set(['ONLINE', 'OFFLINE', 'UNKNOWN']);
-const readinessStates = new Set(['CURRENT', 'DEGRADED', 'INCOMPLETE', 'NOT_APPLICABLE']);
-const displayStates = new Set(['ONLINE', 'OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE']);
-const freshnessStates = new Set(['FRESH', 'STALE']);
-const qualityStates = new Set(['GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID']);
-const qualityReasons = new Set([
+const presenceApplicability: ReadonlySet<PresenceApplicability> = new Set(['APPLICABLE', 'NOT_APPLICABLE']);
+const presenceStates: ReadonlySet<DevicePresenceState> = new Set(['ONLINE', 'OFFLINE', 'UNKNOWN']);
+const readinessStates: ReadonlySet<TelemetryReadiness> = new Set(['CURRENT', 'DEGRADED', 'INCOMPLETE', 'NOT_APPLICABLE']);
+const displayStates: ReadonlySet<Exclude<DeviceDisplayState, null>> = new Set(['ONLINE', 'OFFLINE', 'STALE', 'UNKNOWN', 'UNAVAILABLE']);
+const freshnessStates: ReadonlySet<'FRESH' | 'STALE'> = new Set(['FRESH', 'STALE']);
+const qualityStates: ReadonlySet<TelemetryQuality> = new Set(['GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID']);
+const qualityReasons: ReadonlySet<QualityReasonCode> = new Set([
   'SOURCE_UNTRUSTED',
   'TYPE_MISMATCH',
   'UNIT_MISMATCH',
@@ -49,8 +60,14 @@ const qualityReasons = new Set([
   'PHYSICS_HEAT_BALANCE',
   'PROBE_OFFSET',
 ]);
-const healthStatuses = new Set(['HEALTHY', 'SUSPECT', 'BAD', 'STALE']);
-const missingReasons = new Set(['NEVER_OBSERVED', 'ONLY_REJECTED_CANDIDATES', 'POLICY_NOT_CONFIGURED']);
+const healthStatuses: ReadonlySet<TelemetryPointHealth['status']> = new Set(['HEALTHY', 'SUSPECT', 'BAD', 'STALE']);
+const missingReasons: ReadonlySet<'NEVER_OBSERVED' | 'ONLY_REJECTED_CANDIDATES' | 'POLICY_NOT_CONFIGURED'> = new Set([
+  'NEVER_OBSERVED',
+  'ONLY_REJECTED_CANDIDATES',
+  'POLICY_NOT_CONFIGURED',
+]);
+const valueTypeSet: ReadonlySet<'NUMBER' | 'STRING' | 'BOOLEAN' | 'JSON'> = new Set(['NUMBER', 'STRING', 'BOOLEAN', 'JSON']);
+const probeAlarmSet: ReadonlySet<'OFFSET' | 'DRIFT' | 'OFFSET_AND_DRIFT'> = new Set(['OFFSET', 'DRIFT', 'OFFSET_AND_DRIFT']);
 
 export class TelemetryContractError extends Error {
   readonly category: 'shape' | 'scope' | 'schema';
@@ -106,32 +123,45 @@ function instant(value: unknown, label: string): string {
   return result;
 }
 
-function enumeration(value: unknown, allowed: ReadonlySet<string>, label: string): string {
+function hasMember<T extends string>(allowed: ReadonlySet<T>, candidate: string): candidate is T {
+  for (const item of allowed) {
+    if (item === candidate) return true;
+  }
+  return false;
+}
+
+function enumeration<T extends string>(value: unknown, allowed: ReadonlySet<T>, label: string): T {
   const result = string(value, label);
-  if (!allowed.has(result)) fail('schema', `${label} is not supported`);
+  if (!hasMember(allowed, result)) fail('schema', `${label} is not supported`);
   return result;
 }
 
-function stringArray(value: unknown, allowed: ReadonlySet<string>, label: string): string[] {
+function stringArray<T extends string>(value: unknown, allowed: ReadonlySet<T>, label: string): T[] {
   if (!Array.isArray(value)) fail('shape', `${label} must be an array`);
   const result = value.map((item, index) => enumeration(item, allowed, `${label}[${index}]`));
   if (new Set(result).size !== result.length) fail('shape', `${label} contains duplicates`);
   return result;
 }
 
-function telemetryValue(value: unknown, label: string): unknown {
+function telemetryValue(value: unknown, label: string): TelemetryValue {
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) fail('shape', `${label} number must be finite`);
     return value;
   }
   if (typeof value === 'string' || typeof value === 'boolean') return value;
   if (Array.isArray(value)) {
+    const items: Array<number | string | boolean> = [];
     for (const [index, item] of value.entries()) {
-      if (!['number', 'string', 'boolean'].includes(typeof item) || (typeof item === 'number' && !Number.isFinite(item))) {
+      if (typeof item === 'number') {
+        if (!Number.isFinite(item)) fail('shape', `${label}[${index}] has an unsupported value type`);
+        items.push(item);
+      } else if (typeof item === 'string' || typeof item === 'boolean') {
+        items.push(item);
+      } else {
         fail('shape', `${label}[${index}] has an unsupported value type`);
       }
     }
-    return value;
+    return items;
   }
   if (isRecord(value)) return value;
   return fail('shape', `${label} has an unsupported value type`);
@@ -144,14 +174,12 @@ function parsePresence(value: unknown, label: string): PresenceSnapshot {
   const currentState = input.currentState === null ? null : enumeration(input.currentState, presenceStates, `${label}.currentState`);
   const lastSeenAt = input.lastSeenAt === null ? null : instant(input.lastSeenAt, `${label}.lastSeenAt`);
   const policyRevision = input.policyRevision === null ? null : integer(input.policyRevision, `${label}.policyRevision`, 0);
-  let lastKnown = null;
+  let lastKnown: PresenceSnapshot['lastKnown'] = null;
   if (input.lastKnown !== null) {
     const known = record(input.lastKnown, `${label}.lastKnown`);
     exactKeys(known, ['state', 'lastSeenAt', 'evaluatedAt', 'policyRevision'], `${label}.lastKnown`);
     lastKnown = {
-      state: enumeration(known.state, presenceStates, `${label}.lastKnown.state`) as PresenceSnapshot['lastKnown'] extends infer T
-        ? T extends { state: infer S } ? S : never
-        : never,
+      state: enumeration(known.state, presenceStates, `${label}.lastKnown.state`),
       lastSeenAt: known.lastSeenAt === null ? null : instant(known.lastSeenAt, `${label}.lastKnown.lastSeenAt`),
       evaluatedAt: instant(known.evaluatedAt, `${label}.lastKnown.evaluatedAt`),
       policyRevision: integer(known.policyRevision, `${label}.lastKnown.policyRevision`, 0),
@@ -159,15 +187,15 @@ function parsePresence(value: unknown, label: string): PresenceSnapshot {
   }
   if (applicability === 'NOT_APPLICABLE' && currentState !== null) fail('shape', `${label}.currentState must be null when not applicable`);
   return {
-    applicability: applicability as PresenceSnapshot['applicability'],
-    currentState: currentState as PresenceSnapshot['currentState'],
+    applicability,
+    currentState,
     lastSeenAt,
     policyRevision,
     lastKnown,
   };
 }
 
-function parsePointHealth(value: unknown, label: string) {
+function parsePointHealth(value: unknown, label: string): TelemetryPointHealth | undefined {
   if (value === undefined) return undefined;
   const input = record(value, label);
   exactKeys(input, ['status', 'score', 'reasons'], label);
@@ -175,9 +203,9 @@ function parsePointHealth(value: unknown, label: string) {
   const score = integer(input.score, `${label}.score`, 0);
   if (score > 100) fail('shape', `${label}.score is above 100`);
   return {
-    status: status as 'HEALTHY' | 'SUSPECT' | 'BAD' | 'STALE',
+    status,
     score,
-    reasons: stringArray(input.reasons, qualityReasons, `${label}.reasons`) as QualityReasonCode[],
+    reasons: stringArray(input.reasons, qualityReasons, `${label}.reasons`),
   };
 }
 
@@ -186,7 +214,7 @@ function finiteNumber(value: unknown, label: string): number {
   return value;
 }
 
-function parseMeasurement(value: unknown, label: string) {
+function parseMeasurement(value: unknown, label: string): MeasurementInterval | undefined {
   if (value === undefined) return undefined;
   const input = record(value, label);
   exactKeys(input, ['relative', 'low', 'high', 'lowConfidence'], label, ['deltaTK', 'deltaTAccuracyK', 'copRelative']);
@@ -205,14 +233,14 @@ function parseMeasurement(value: unknown, label: string) {
   };
 }
 
-function parseProbeOffsets(value: unknown, label: string) {
+function parseProbeOffsets(value: unknown, label: string): ProbeOffsetSuggestion[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.length > 8) fail('shape', `${label} must be an array of at most 8`);
   return value.map((item, index) => {
     const input = record(item, `${label}[${index}]`);
     exactKeys(input, ['pairCode', 'offsetK', 'stddevK', 'sampleCount', 'windowStartedAt', 'windowEndedAt', 'suggested', 'applied'], `${label}[${index}]`, ['alarm']);
     if (typeof input.suggested !== 'boolean' || typeof input.applied !== 'boolean') fail('shape', `${label}[${index}] flags must be boolean`);
-    const alarm = input.alarm === undefined ? undefined : enumeration(input.alarm, new Set(['OFFSET', 'DRIFT', 'OFFSET_AND_DRIFT']), `${label}[${index}].alarm`);
+    const alarm = input.alarm === undefined ? undefined : enumeration(input.alarm, probeAlarmSet, `${label}[${index}].alarm`);
     return {
       pairCode: string(input.pairCode, `${label}[${index}].pairCode`),
       offsetK: finiteNumber(input.offsetK, `${label}[${index}].offsetK`),
@@ -222,7 +250,7 @@ function parseProbeOffsets(value: unknown, label: string) {
       windowEndedAt: instant(input.windowEndedAt, `${label}[${index}].windowEndedAt`),
       suggested: input.suggested,
       applied: input.applied,
-      ...(alarm ? { alarm: alarm as 'OFFSET' | 'DRIFT' | 'OFFSET_AND_DRIFT' } : {}),
+      ...(alarm ? { alarm } : {}),
     };
   });
 }
@@ -237,7 +265,7 @@ function parseTelemetryKeyState(value: unknown, label: string): TelemetryKeyStat
     const probeOffsets = parseProbeOffsets(input.probeOffsets, `${label}.probeOffsets`);
     const key = string(input.key, `${label}.key`);
     if (!telemetryKeyPattern.test(key)) fail('shape', `${label}.key is invalid`);
-    const valueType = enumeration(input.valueType, new Set(['NUMBER', 'STRING', 'BOOLEAN', 'JSON']), `${label}.valueType`);
+    const valueType = enumeration(input.valueType, valueTypeSet, `${label}.valueType`);
     const parsedValue = telemetryValue(input.value, `${label}.value`);
     if ((valueType === 'NUMBER' && typeof parsedValue !== 'number')
       || (valueType === 'STRING' && typeof parsedValue !== 'string')
@@ -248,20 +276,14 @@ function parseTelemetryKeyState(value: unknown, label: string): TelemetryKeyStat
     return {
       key,
       state: 'PRESENT',
-      value: parsedValue as TelemetryKeyState extends infer T
-        ? T extends { state: 'PRESENT'; value: infer V } ? V : never
-        : never,
-      valueType: valueType as 'NUMBER' | 'STRING' | 'BOOLEAN' | 'JSON',
+      value: parsedValue,
+      valueType,
       unit: nullableString(input.unit, `${label}.unit`),
       sampledAt: instant(input.sampledAt, `${label}.sampledAt`),
       receivedAt: instant(input.receivedAt, `${label}.receivedAt`),
-      freshness: enumeration(input.freshness, freshnessStates, `${label}.freshness`) as 'FRESH' | 'STALE',
-      quality: enumeration(input.quality, qualityStates, `${label}.quality`) as TelemetryKeyState extends infer T
-        ? T extends { state: 'PRESENT'; quality: infer Q } ? Q : never
-        : never,
-      qualityReasons: stringArray(input.qualityReasons, qualityReasons, `${label}.qualityReasons`) as TelemetryKeyState extends infer T
-        ? T extends { state: 'PRESENT'; qualityReasons: infer Q } ? Q : never
-        : never,
+      freshness: enumeration(input.freshness, freshnessStates, `${label}.freshness`),
+      quality: enumeration(input.quality, qualityStates, `${label}.quality`),
+      qualityReasons: stringArray(input.qualityReasons, qualityReasons, `${label}.qualityReasons`),
       policyRevision: integer(input.policyRevision, `${label}.policyRevision`, 0),
       ...(health ? { health } : {}),
       ...(measurement ? { measurement } : {}),
@@ -277,7 +299,7 @@ function parseTelemetryKeyState(value: unknown, label: string): TelemetryKeyStat
       key,
       state: 'MISSING',
       freshness: 'MISSING',
-      missingReason: enumeration(input.missingReason, missingReasons, `${label}.missingReason`) as 'NEVER_OBSERVED' | 'ONLY_REJECTED_CANDIDATES' | 'POLICY_NOT_CONFIGURED',
+      missingReason: enumeration(input.missingReason, missingReasons, `${label}.missingReason`),
       policyRevision: input.policyRevision === null ? null : integer(input.policyRevision, `${label}.policyRevision`, 0),
     };
   }
@@ -332,11 +354,11 @@ export function parseSnapshot(value: unknown, expectedDeviceId: string, expected
     siteId,
     businessRevision: integer(input.businessRevision, 'snapshot.businessRevision', 1),
     evaluatedAt: instant(input.evaluatedAt, 'snapshot.evaluatedAt'),
-    evaluationAvailability: enumeration(input.evaluationAvailability, evaluationAvailability, 'snapshot.evaluationAvailability') as 'AVAILABLE' | 'UNAVAILABLE',
-    availabilityReasons: stringArray(input.availabilityReasons, availabilityReasons, 'snapshot.availabilityReasons') as DeviceObservationSnapshot['availabilityReasons'],
+    evaluationAvailability: enumeration(input.evaluationAvailability, evaluationAvailability, 'snapshot.evaluationAvailability'),
+    availabilityReasons: stringArray(input.availabilityReasons, availabilityReasons, 'snapshot.availabilityReasons'),
     presence: parsePresence(input.presence, 'snapshot.presence'),
-    telemetryReadiness: enumeration(input.telemetryReadiness, readinessStates, 'snapshot.telemetryReadiness') as DeviceObservationSnapshot['telemetryReadiness'],
-    displayState: displayState as DeviceObservationSnapshot['displayState'],
+    telemetryReadiness: enumeration(input.telemetryReadiness, readinessStates, 'snapshot.telemetryReadiness'),
+    displayState,
     values,
   };
 }
@@ -375,17 +397,17 @@ export function parsePublication(
     revision: integer(input.revision, 'publication.revision', 1),
     evaluatedAt: instant(input.evaluatedAt, 'publication.evaluatedAt'),
     publishedAt: instant(input.publishedAt, 'publication.publishedAt'),
-    evaluationAvailability: enumeration(input.evaluationAvailability, evaluationAvailability, 'publication.evaluationAvailability') as 'AVAILABLE' | 'UNAVAILABLE',
-    availabilityReasons: stringArray(input.availabilityReasons, availabilityReasons, 'publication.availabilityReasons') as DeviceObservationPublication['availabilityReasons'],
+    evaluationAvailability: enumeration(input.evaluationAvailability, evaluationAvailability, 'publication.evaluationAvailability'),
+    availabilityReasons: stringArray(input.availabilityReasons, availabilityReasons, 'publication.availabilityReasons'),
     presence: parsePresence(input.presence, 'publication.presence'),
-    telemetryReadiness: enumeration(input.telemetryReadiness, readinessStates, 'publication.telemetryReadiness') as DeviceObservationPublication['telemetryReadiness'],
-    displayState: displayState as DeviceObservationPublication['displayState'],
+    telemetryReadiness: enumeration(input.telemetryReadiness, readinessStates, 'publication.telemetryReadiness'),
+    displayState,
     telemetryChanges: changes,
   };
 }
 
 export function cloneSnapshot(snapshot: DeviceObservationSnapshot): DeviceObservationSnapshot {
-  return JSON.parse(JSON.stringify(snapshot)) as DeviceObservationSnapshot;
+  return structuredClone(snapshot);
 }
 
 export function scopeKey(deviceId: string, keys: ReadonlyArray<string>): string {

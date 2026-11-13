@@ -1,4 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
+import { failureStatus, gatewayPath, gatewayRequest, ROUTE_MISSING_MESSAGE, type GatewayRequest } from '@/api/gateway-client';
 import { alarmPaths } from '@/api/generated/platformGateway.gen';
 
 // Alarm owner API through the Platform Gateway. Condition (active/cleared) and
@@ -60,26 +61,14 @@ export class AlarmRequestError extends Error {
   }
 }
 
-async function send<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    credentials: 'same-origin',
-    headers: { Accept: 'application/json, application/problem+json', ...init.headers },
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    const message = payload?.detail ?? payload?.error?.message ?? payload?.title ?? '告警服务暂时不可用';
-    throw new AlarmRequestError(response.status, message);
-  }
-  return payload as T;
-}
-
-function mutationHeaders(csrfToken: string): HeadersInit {
-  return {
-    'Content-Type': 'application/json',
-    'X-CSRF-Token': csrfToken,
-    'Idempotency-Key': `alarm-${crypto.randomUUID()}`,
-  };
+async function send<T>(path: string, request: GatewayRequest<T> = {}): Promise<T> {
+  const result = await gatewayRequest<T>(path, request);
+  if (result.kind === 'ok') return result.value;
+  if (result.kind === 'routeMissing') throw new AlarmRequestError(result.status, ROUTE_MISSING_MESSAGE);
+  const message = result.kind === 'unavailable'
+    ? '告警服务暂时不可用'
+    : (result.problem.detail ?? result.problem.title ?? '告警服务暂时不可用');
+  throw new AlarmRequestError(failureStatus(result), message);
 }
 
 export async function listAlarms(siteId: string, filter: AlarmListFilter, cursor?: string, signal?: AbortSignal): Promise<AlarmPage> {
@@ -97,24 +86,26 @@ export async function listAlarms(siteId: string, filter: AlarmListFilter, cursor
 }
 
 export async function getAlarm(alarmId: string, signal?: AbortSignal): Promise<Alarm> {
-  const body = await send<{ data: Alarm }>(alarmPaths.detail.replace('{alarmId}', alarmId), { signal });
+  const body = await send<{ data: Alarm }>(gatewayPath(alarmPaths.detail, { alarmId }), { signal });
   return body.data;
 }
 
 export async function acknowledgeAlarm(alarmId: string, comment: string, csrfToken: string): Promise<Alarm> {
-  const body = await send<{ data: Alarm }>(alarmPaths.acknowledge.replace('{alarmId}', alarmId), {
+  const body = await send<{ data: Alarm }>(gatewayPath(alarmPaths.acknowledge, { alarmId }), {
     method: 'POST',
-    headers: mutationHeaders(csrfToken),
-    body: JSON.stringify(comment.trim() ? { comment: comment.trim() } : {}),
+    csrfToken,
+    idempotencyKey: `alarm-${crypto.randomUUID()}`,
+    body: comment.trim() ? { comment: comment.trim() } : {},
   });
   return body.data;
 }
 
 export async function assignAlarm(alarm: Alarm, assigneeId: string, csrfToken: string): Promise<Alarm> {
-  const body = await send<{ data: Alarm }>(alarmPaths.assign.replace('{alarmId}', alarm.alarmId), {
+  const body = await send<{ data: Alarm }>(gatewayPath(alarmPaths.assign, { alarmId: alarm.alarmId }), {
     method: 'POST',
-    headers: mutationHeaders(csrfToken),
-    body: JSON.stringify({ expectedVersion: alarm.version, assigneeId, reason: '认领处理' }),
+    csrfToken,
+    idempotencyKey: `alarm-${crypto.randomUUID()}`,
+    body: { expectedVersion: alarm.version, assigneeId, reason: '由我负责' },
   });
   return body.data;
 }

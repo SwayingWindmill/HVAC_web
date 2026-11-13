@@ -1,4 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
+import { failureStatus, gatewayPath, gatewayRequest, ROUTE_MISSING_MESSAGE } from '@/api/gateway-client';
 import { intelligencePaths } from '@/api/generated/platformGateway.gen';
 import type { Measure, MeasureKind, SavingsSummary } from './savings-model';
 
@@ -25,14 +26,21 @@ const REFUSALS: Record<string, string> = {
   SAVINGS_MANAGE_FORBIDDEN: '你没有管理本站节能项目的权限',
 };
 
-const accept = { Accept: 'application/json, application/problem+json' };
-const path = (template: string, siteId: string, measureId = '') => template.replace('{siteId}', siteId).replace('{measureId}', measureId);
+const path = (template: string, siteId: string, measureId?: string) =>
+  gatewayPath(template, measureId === undefined ? { siteId } : { siteId, measureId });
+
+function unwrapSavingsResult<T>(
+  result: Awaited<ReturnType<typeof gatewayRequest<T>>>,
+  fallback: string,
+): T {
+  if (result.kind === 'ok') return result.value;
+  if (result.kind === 'routeMissing') throw new SavingsRequestError(result.status, ROUTE_MISSING_MESSAGE);
+  const code = result.kind === 'unavailable' ? undefined : result.problem.code;
+  throw new SavingsRequestError(failureStatus(result), (code && REFUSALS[code]) ?? fallback);
+}
 
 async function read<T>(url: string, signal: AbortSignal): Promise<T> {
-  const response = await fetch(url, { credentials: 'same-origin', signal, headers: accept });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) throw new SavingsRequestError(response.status, REFUSALS[payload?.code] ?? '节能统计服务暂时不可用');
-  return payload as T;
+  return unwrapSavingsResult(await gatewayRequest<T>(url, { signal }), '节能统计服务暂时不可用');
 }
 
 export function measuresQuery(siteId: string) {
@@ -62,15 +70,10 @@ export function summaryQuery(siteId: string, from: string, to: string) {
 }
 
 async function write(url: string, csrfToken: string, body: unknown): Promise<Measure> {
-  const response = await fetch(url, {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { ...accept, 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-    body: JSON.stringify(body),
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) throw new SavingsRequestError(response.status, REFUSALS[payload?.code] ?? '节能统计服务暂时不可用，请稍后重试');
-  return payload as Measure;
+  return unwrapSavingsResult(
+    await gatewayRequest<Measure>(url, { method: 'POST', csrfToken, body }),
+    '节能统计服务暂时不可用，请稍后重试',
+  );
 }
 
 export interface MeasureDraft {

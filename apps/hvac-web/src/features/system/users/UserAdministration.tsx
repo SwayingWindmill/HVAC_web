@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Controller, useForm, useWatch, type Control } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { MoreHorizontal, Plus, UserPlus, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { BuiltInRoleKey, UserAdminMember, UserAdminRole } from '@/api/generated/platformGateway.gen';
@@ -158,39 +158,35 @@ export function UserAdministration({ csrfToken, sites }: { readonly csrfToken: s
 }
 
 /** A Role and where it applies; a Role with Tenant-scoped capabilities always covers every Site. */
-function RoleScopeFields<Form extends RoleScope>({ control, roles, sites }: {
-  readonly control: Control<Form>;
+function RoleScopeFields({ roleKey, siteId, roleError, onRoleChange, onSiteChange, roles, sites }: {
+  readonly roleKey: string;
+  readonly siteId: string;
+  readonly roleError?: string;
+  readonly onRoleChange: (value: string) => void;
+  readonly onSiteChange: (value: string) => void;
   readonly roles: readonly UserAdminRole[];
   readonly sites: readonly SiteOption[];
 }) {
-  const scopeControl = control as unknown as Control<RoleScope>;
-  const roleKey = useWatch({ control: scopeControl, name: 'roleKey' });
   const tenantScoped = roles.find((role) => role.roleKey === roleKey)?.tenantScoped ?? false;
   return (
     <div className="grid grid-cols-2 gap-3">
       <Field>
         <FieldLabel>角色</FieldLabel>
-        <Controller control={scopeControl} name="roleKey" rules={{ required: '请选择角色' }} render={({ field, fieldState }) => (
-          <>
-            <Select value={field.value} onValueChange={field.onChange}>
-              <SelectTrigger aria-label="角色" aria-invalid={Boolean(fieldState.error) || undefined}><SelectValue placeholder="选择角色" /></SelectTrigger>
-              <SelectContent>{roles.map((role) => <SelectItem key={role.roleKey} value={role.roleKey}>{roleLabel(role.roleKey)}</SelectItem>)}</SelectContent>
-            </Select>
-            {fieldState.error ? <FieldDescription className="text-destructive-text">{fieldState.error.message}</FieldDescription> : null}
-          </>
-        )} />
+        <Select value={roleKey} onValueChange={onRoleChange}>
+          <SelectTrigger aria-label="角色" aria-invalid={Boolean(roleError) || undefined}><SelectValue placeholder="选择角色" /></SelectTrigger>
+          <SelectContent>{roles.map((role) => <SelectItem key={role.roleKey} value={role.roleKey}>{roleLabel(role.roleKey)}</SelectItem>)}</SelectContent>
+        </Select>
+        {roleError ? <FieldDescription className="text-destructive-text">{roleError}</FieldDescription> : null}
       </Field>
       <Field>
         <FieldLabel>站点</FieldLabel>
-        <Controller control={scopeControl} name="siteId" render={({ field }) => (
-          <Select value={tenantScoped ? ALL_SITES : field.value} onValueChange={field.onChange} disabled={tenantScoped}>
-            <SelectTrigger aria-label="站点"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_SITES}>全部站点</SelectItem>
-              {sites.map((site) => <SelectItem key={site.id} value={site.id}>{site.displayName}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        )} />
+        <Select value={tenantScoped ? ALL_SITES : siteId} onValueChange={onSiteChange} disabled={tenantScoped}>
+          <SelectTrigger aria-label="站点"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_SITES}>全部站点</SelectItem>
+            {sites.map((site) => <SelectItem key={site.id} value={site.id}>{site.displayName}</SelectItem>)}
+          </SelectContent>
+        </Select>
       </Field>
     </div>
   );
@@ -244,7 +240,28 @@ function CreateUserDialog({ open, onOpenChange, csrfToken, roles, sites, onDone 
               <Input id="new-user-password" type="password" autoComplete="new-password" {...form.register('password', { required: true, minLength: 8, maxLength: 512 })} />
               <FieldDescription>{PASSWORD_HINT}</FieldDescription>
             </Field>
-            <RoleScopeFields control={form.control} roles={roles} sites={sites} />
+            <Controller
+              control={form.control}
+              name="roleKey"
+              rules={{ required: '请选择角色' }}
+              render={({ field: roleField, fieldState }) => (
+                <Controller
+                  control={form.control}
+                  name="siteId"
+                  render={({ field: siteField }) => (
+                    <RoleScopeFields
+                      roleKey={roleField.value}
+                      siteId={siteField.value}
+                      roleError={fieldState.error?.message}
+                      onRoleChange={roleField.onChange}
+                      onSiteChange={siteField.onChange}
+                      roles={roles}
+                      sites={sites}
+                    />
+                  )}
+                />
+              )}
+            />
           </FieldGroup>
           {create.isError ? <p role="alert" className="text-sm text-destructive-text">{userAdminErrorMessage(create.error)}</p> : null}
           <DialogFooter>
@@ -295,7 +312,28 @@ function RolesDialog({ member, onClose, csrfToken, roles, sites, siteName, onDon
           )) : <li className="px-4 py-3 text-sm text-muted-foreground">还没有角色，登录后看不到任何数据</li>}
         </ul>
         <form onSubmit={form.handleSubmit((values) => assign.mutate(values))} className="flex flex-col gap-3 rounded-lg bg-muted/40 p-4">
-          <RoleScopeFields control={form.control} roles={roles} sites={sites} />
+          <Controller
+            control={form.control}
+            name="roleKey"
+            rules={{ required: '请选择角色' }}
+            render={({ field: roleField, fieldState }) => (
+              <Controller
+                control={form.control}
+                name="siteId"
+                render={({ field: siteField }) => (
+                  <RoleScopeFields
+                    roleKey={roleField.value}
+                    siteId={siteField.value}
+                    roleError={fieldState.error?.message}
+                    onRoleChange={roleField.onChange}
+                    onSiteChange={siteField.onChange}
+                    roles={roles}
+                    sites={sites}
+                  />
+                )}
+              />
+            )}
+          />
           <Button type="submit" className="self-end" size="sm" disabled={assign.isPending}><Plus data-icon="inline-start" />添加角色</Button>
         </form>
         {error ? <p role="alert" className="text-sm text-destructive-text">{userAdminErrorMessage(error)}</p> : null}

@@ -1060,6 +1060,10 @@ test('all 14 quality reason codes, protocol/pair formatters, and Chinese gateway
       title: 'Error',
       status,
       detail: 'raw english backend detail',
+      instance: '/api/v1/test',
+      code: 'TEST_ERROR',
+      traceId: 'trace-test',
+      retryable: false,
     });
 
   assert.equal(describeIntegrationsError(makeProblem(403)), '当前账号没有读取该站点接入或能耗统计数据的权限');

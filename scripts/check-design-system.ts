@@ -1,16 +1,26 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
+import { Generator, getConfig } from '@tanstack/router-generator';
 
 // Checks the Web code against the design system's composition rules (DESIGN.md) and pinned
 // web-platform guardrails (docs/architecture/modern-web-guidance-source-review-2026-11-11.md).
 // Documents are not checked here.
+interface ComponentRange {
+  start: number;
+  end: number;
+  openTag: string;
+}
+
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultRoot = resolve(dirname(scriptPath), '..');
 
-async function collectFeatureSources(directory) {
+async function collectFeatureSources(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
-  const files = [];
+  const files: string[] = [];
   for (const entry of entries) {
     const path = resolve(directory, entry.name);
     if (entry.isDirectory()) {
@@ -22,7 +32,7 @@ async function collectFeatureSources(directory) {
   return files;
 }
 
-async function validateTableComponentUsage(root, errors) {
+async function validateTableComponentUsage(root: string, errors: string[]): Promise<void> {
   const featureRoot = resolve(root, 'apps/hvac-web/src/features');
   for (const path of await collectFeatureSources(featureRoot)) {
     const source = await readFile(path, 'utf8');
@@ -34,10 +44,10 @@ async function validateTableComponentUsage(root, errors) {
   }
 }
 
-function componentRanges(source, componentName) {
+function componentRanges(source: string, componentName: string): ComponentRange[] {
   const token = new RegExp(`<${componentName}(?=[\\s>])[^>]*>|<\\/${componentName}>`, 'g');
-  const stack = [];
-  const ranges = [];
+  const stack: Array<{ start: number; openTag: string }> = [];
+  const ranges: ComponentRange[] = [];
   for (const match of source.matchAll(token)) {
     if (match[0].startsWith('</')) {
       const open = stack.pop();
@@ -49,11 +59,11 @@ function componentRanges(source, componentName) {
   return ranges;
 }
 
-function cardRanges(source) {
+function cardRanges(source: string): ComponentRange[] {
   return componentRanges(source, 'Card');
 }
 
-async function validateContentGrammar(root, errors) {
+async function validateContentGrammar(root: string, errors: string[]): Promise<void> {
   const featureRoot = resolve(root, 'apps/hvac-web/src/features');
   for (const path of await collectFeatureSources(featureRoot)) {
     const source = await readFile(path, 'utf8');
@@ -73,7 +83,7 @@ async function validateContentGrammar(root, errors) {
   }
 }
 
-async function validateDataTableSurfaceGrammar(root, errors) {
+async function validateDataTableSurfaceGrammar(root: string, errors: string[]): Promise<void> {
   const featureRoot = resolve(root, 'apps/hvac-web/src/features');
   for (const path of await collectFeatureSources(featureRoot)) {
     const source = await readFile(path, 'utf8');
@@ -89,7 +99,7 @@ async function validateDataTableSurfaceGrammar(root, errors) {
     }
 
     const tableBlockRanges = componentRanges(source, 'DataTableBlock');
-    const isInDataTableBlock = (index) => tableBlockRanges.some((range) => index >= range.start && index < range.end);
+    const isInDataTableBlock = (index: number): boolean => tableBlockRanges.some((range) => index >= range.start && index < range.end);
 
     for (const match of source.matchAll(/<DataTable(?=[\s>])/g)) {
       if (!isInDataTableBlock(match.index) && !surfaceCardTableException) {
@@ -122,7 +132,7 @@ async function validateDataTableSurfaceGrammar(root, errors) {
   }
 }
 
-function balancedBraces(source, openBraceIndex) {
+function balancedBraces(source: string, openBraceIndex: number): string {
   let depth = 0;
   for (let index = openBraceIndex; index < source.length; index += 1) {
     const ch = source[index];
@@ -135,7 +145,7 @@ function balancedBraces(source, openBraceIndex) {
   return source.slice(openBraceIndex);
 }
 
-async function validateImeSafeEnterHandlers(root, errors) {
+async function validateImeSafeEnterHandlers(root: string, errors: string[]): Promise<void> {
   const srcRoot = resolve(root, 'apps/hvac-web/src');
   const tagPattern = /<(?:input|textarea|Input|Textarea|InputGroupInput|CommandInput)\b/g;
   for (const path of await collectFeatureSources(srcRoot)) {
@@ -169,7 +179,7 @@ async function validateImeSafeEnterHandlers(root, errors) {
   }
 }
 
-function validateColorSchemeSetup(indexHtml, globalCss, errors) {
+function validateColorSchemeSetup(indexHtml: string, globalCss: string, errors: string[]): void {
   if (!/<meta\s+name=["']color-scheme["']\s+content=["']light dark["']\s*\/?>/.test(indexHtml)) {
     errors.push('apps/hvac-web/index.html must declare <meta name="color-scheme" content="light dark" />');
   }
@@ -187,9 +197,9 @@ function validateColorSchemeSetup(indexHtml, globalCss, errors) {
   }
 }
 
-function jsxOpeningTag(source, tagStartIndex) {
+function jsxOpeningTag(source: string, tagStartIndex: number): string {
   let braceDepth = 0;
-  let quote = null;
+  let quote: string | null = null;
   for (let index = tagStartIndex; index < source.length; index += 1) {
     const ch = source[index];
     if (quote) {
@@ -211,7 +221,7 @@ function jsxOpeningTag(source, tagStartIndex) {
   return source.slice(tagStartIndex);
 }
 
-async function validateFactTileProps(root, errors) {
+async function validateFactTileProps(root: string, errors: string[]): Promise<void> {
   const srcRoot = resolve(root, 'apps/hvac-web/src');
   for (const path of await collectFeatureSources(srcRoot)) {
     const source = await readFile(path, 'utf8');
@@ -226,18 +236,238 @@ async function validateFactTileProps(root, errors) {
   }
 }
 
-function parseArgs(argv) {
+interface WebAsCastBaseline {
+  schemaVersion: number;
+  policy: string;
+  maxNonConstAsCasts: number;
+}
+
+const FORBIDDEN_COPY_RULES: ReadonlyArray<{ label: string; pattern: RegExp; replacement: string }> = [
+  { label: '台账', pattern: /(?<!平)台账/u, replacement: '设备清单 / 安装清单' },
+  { label: '核算', pattern: /核算/u, replacement: '统计 / 核对 / 计算' },
+  { label: '测量边界', pattern: /测量边界/u, replacement: '冷站进线电表 / 独立电表' },
+  { label: '分表', pattern: /分表/u, replacement: '设备电表' },
+  { label: '总表', pattern: /(?<!整栋)总表/u, replacement: '整栋总表 / 总电表' },
+  { label: '未分项', pattern: /未分项/u, replacement: '其他设备 / 其余设备' },
+  { label: '基线检验', pattern: /基线检验/u, replacement: '对比结果' },
+  { label: '回执', pattern: /(?<!返)回执/u, replacement: '执行结果' },
+  { label: '待核对', pattern: /待核对/u, replacement: '待确认 / 还没收到' },
+  { label: '工况', pattern: /工况/u, replacement: '运行条件 / 天气条件' },
+  { label: '计收', pattern: /计收/u, replacement: '计费' },
+  { label: '认领', pattern: /认领/u, replacement: '分配 / 由我负责' },
+  { label: '区间未计入', pattern: /区间未计入/u, replacement: '当前区间不算在内' },
+];
+
+function lineOfNode(sourceFile: ts.SourceFile, node: ts.Node): number {
+  return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+}
+
+function isConstAsExpression(node: ts.AsExpression): boolean {
+  return ts.isTypeReferenceNode(node.type)
+    && ts.isIdentifier(node.type.typeName)
+    && node.type.typeName.text === 'const';
+}
+
+function unwrapParentheses(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (ts.isParenthesizedExpression(current)) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function isDirectFetchCall(expression: ts.LeftHandSideExpression): boolean {
+  if (ts.isIdentifier(expression) && expression.text === 'fetch') return true;
+  return ts.isPropertyAccessExpression(expression)
+    && expression.name.text === 'fetch'
+    && ts.isIdentifier(expression.expression)
+    && (expression.expression.text === 'window' || expression.expression.text === 'globalThis');
+}
+
+function isCopyLiteralNode(node: ts.Node): node is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral | ts.TemplateHead | ts.TemplateMiddle | ts.TemplateTail | ts.JsxText {
+  if (!(ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node) || ts.isJsxText(node))) {
+    return false;
+  }
+  const parent = node.parent;
+  if (!parent) return true;
+  if ((ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent)) && parent.moduleSpecifier === node) return false;
+  if (ts.isExternalModuleReference(parent) && parent.expression === node) return false;
+  if (ts.isLiteralTypeNode(parent)) return false;
+  return true;
+}
+
+function hasSecondaryButtonVariant(attributes: ts.JsxAttributes): boolean {
+  for (const attribute of attributes.properties) {
+    if (!ts.isJsxAttribute(attribute) || !ts.isIdentifier(attribute.name) || attribute.name.text !== 'variant') continue;
+    const initializer = attribute.initializer;
+    if (!initializer) continue;
+    if (ts.isStringLiteral(initializer) && initializer.text === 'secondary') return true;
+    if (ts.isJsxExpression(initializer) && initializer.expression && ts.isStringLiteral(initializer.expression) && initializer.expression.text === 'secondary') {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): Promise<void> {
+  const srcRoot = resolve(root, 'apps/hvac-web/src');
+  if (!existsSync(srcRoot)) return;
+
+  const sourcePaths = (await collectFeatureSources(srcRoot))
+    .filter((path) => !path.endsWith('.gen.ts') && !path.endsWith('.d.ts'))
+    .sort();
+  let nonConstAsCastCount = 0;
+
+  for (const path of sourcePaths) {
+    const source = await readFile(path, 'utf8');
+    const relativePath = path.slice(root.length + 1).replaceAll('\\', '/');
+    const isFeatureOrRoute = relativePath.startsWith('apps/hvac-web/src/features/')
+      || relativePath.startsWith('apps/hvac-web/src/routes/');
+    const sourceFile = ts.createSourceFile(
+      path,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      path.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    );
+
+    const visit = (node: ts.Node): void => {
+      if (ts.isAsExpression(node) && !isConstAsExpression(node)) {
+        nonConstAsCastCount += 1;
+        const inner = unwrapParentheses(node.expression);
+        if (ts.isAsExpression(inner) && inner.type.kind === ts.SyntaxKind.UnknownKeyword) {
+          errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} avoid \`as unknown as\`; narrow with a type guard or use typed DTOs instead`);
+        }
+      }
+
+      if (isFeatureOrRoute) {
+        if (ts.isCallExpression(node) && isDirectFetchCall(node.expression)) {
+          errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} feature/route modules must use gatewayRequest instead of raw fetch()`);
+        } else if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'WebSocket') {
+          errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} feature/route modules must use src/platform/telemetry-live/ instead of new WebSocket()`);
+        }
+      }
+
+      if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node))
+        && ts.isIdentifier(node.tagName)
+        && node.tagName.text === 'Button'
+        && hasSecondaryButtonVariant(node.attributes)) {
+        errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} avoid <Button variant="secondary">; DESIGN.md uses default/outline/ghost/destructive variants`);
+      }
+
+      if (isCopyLiteralNode(node)) {
+        const text = node.text;
+        for (const rule of FORBIDDEN_COPY_RULES) {
+          if (rule.pattern.test(text)) {
+            errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} UI copy uses deprecated term "${rule.label}"; use "${rule.replacement}" (DESIGN.md §1)`);
+          }
+        }
+      }
+
+      ts.forEachChild(node, visit);
+    };
+
+    visit(sourceFile);
+  }
+
+  const baselinePath = resolve(root, 'scripts/web-as-cast-baseline.json');
+  if (!existsSync(baselinePath)) {
+    errors.push('scripts/web-as-cast-baseline.json is missing; add the non-const `as` cast baseline file');
+    return;
+  }
+  const baseline = JSON.parse(await readFile(baselinePath, 'utf8')) as WebAsCastBaseline;
+  if (nonConstAsCastCount > baseline.maxNonConstAsCasts) {
+    errors.push(`apps/hvac-web/src non-const \`as\` casts grew from ${baseline.maxNonConstAsCasts} to ${nonConstAsCastCount} (scripts/web-as-cast-baseline.json); narrow types or parse payloads instead of adding casts`);
+  }
+}
+
+async function validateRouteTreeFreshness(root: string, errors: string[]): Promise<void> {
+  const webRoot = resolve(root, 'apps/hvac-web');
+  const routesDir = resolve(webRoot, 'src/routes');
+  if (!existsSync(routesDir)) return;
+
+  const targetRouteTree = resolve(webRoot, 'src/routeTree.gen.ts');
+  if (!existsSync(targetRouteTree)) {
+    errors.push('apps/hvac-web/src/routeTree.gen.ts is missing; run npm -w @hvac/web run build to regenerate it');
+    return;
+  }
+
+  const config = getConfig({
+    target: 'react',
+    autoCodeSplitting: true,
+    tmpDir: resolve(tmpdir(), 'hvac-tanstack-router-check'),
+    disableLogging: true,
+  }, webRoot);
+  const virtualWrites = new Map<string, string>();
+  let wroteRouteTree = false;
+  let generatedContent: string | undefined;
+
+  const generator = new Generator({
+    config,
+    root: webRoot,
+    fs: {
+      stat: async (filePath) => {
+        if (virtualWrites.has(filePath)) {
+          return { mtimeMs: 1n, mode: 0o100644, uid: 0, gid: 0 };
+        }
+        const entryStat = await stat(filePath, { bigint: true });
+        return {
+          mtimeMs: entryStat.mtimeMs,
+          mode: Number(entryStat.mode),
+          uid: Number(entryStat.uid),
+          gid: Number(entryStat.gid),
+        };
+      },
+      readFile: async (filePath) => {
+        const cached = virtualWrites.get(filePath);
+        if (cached !== undefined) {
+          return { stat: { mtimeMs: 1n }, fileContent: cached };
+        }
+        if (!existsSync(filePath)) return 'file-not-existing';
+        const entryStat = await stat(filePath, { bigint: true });
+        const fileContent = (await readFile(filePath, 'utf8')).replaceAll('\r\n', '\n');
+        return { stat: { mtimeMs: entryStat.mtimeMs }, fileContent };
+      },
+      writeFile: async (filePath, content) => {
+        virtualWrites.set(filePath, content.replaceAll('\r\n', '\n'));
+      },
+      rename: async (oldPath, newPath) => {
+        const content = virtualWrites.get(oldPath);
+        if (content !== undefined) {
+          virtualWrites.delete(oldPath);
+          virtualWrites.set(newPath, content);
+        }
+        if (newPath === targetRouteTree) {
+          wroteRouteTree = true;
+          generatedContent = content;
+        }
+      },
+      chmod: async () => {},
+      chown: async () => {},
+    },
+  });
+
+  await generator.run();
+  const actualContent = (await readFile(targetRouteTree, 'utf8')).replaceAll('\r\n', '\n');
+  if (wroteRouteTree && generatedContent !== actualContent) {
+    errors.push('apps/hvac-web/src/routeTree.gen.ts is stale; run npm -w @hvac/web run build to regenerate it');
+  }
+}
+
+function parseArgs(argv: readonly string[]): { root: string } {
   const rootArg = argv.find((argument) => argument.startsWith('--root='));
   return { root: rootArg ? resolve(rootArg.slice('--root='.length)) : defaultRoot };
 }
 
-export async function validateDesignSystem(root = defaultRoot) {
-  const errors = [];
+export async function validateDesignSystem(root = defaultRoot): Promise<{ errors: string[] }> {
+  const errors: string[] = [];
   await validateTableComponentUsage(root, errors);
   await validateContentGrammar(root, errors);
   await validateDataTableSurfaceGrammar(root, errors);
   await validateImeSafeEnterHandlers(root, errors);
   await validateFactTileProps(root, errors);
+  await validateWebAstAndCopyGuardrails(root, errors);
+  await validateRouteTreeFreshness(root, errors);
 
   const componentsJson = await readFile(resolve(root, 'apps/hvac-web/components.json'), 'utf8');
   for (const expected of ['"style": "radix-nova"', '"iconLibrary": "lucide"']) {

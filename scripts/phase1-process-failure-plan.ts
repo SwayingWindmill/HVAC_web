@@ -8,8 +8,11 @@ const expectedTargets = [
   "telemetry-worker",
   "metric-worker",
   "connectivity",
-];
-const expectedRecoveryProbes = {
+] as const;
+
+type RecoveryTarget = (typeof expectedTargets)[number];
+
+const expectedRecoveryProbes: Record<RecoveryTarget, string[]> = {
   postgres: ["postgres", "energy-api", "scheduler"],
   redis: ["redis", "energy-api"],
   "mqtt-broker": ["connectivity"],
@@ -18,10 +21,33 @@ const expectedRecoveryProbes = {
   scheduler: ["scheduler"],
   "telemetry-worker": ["telemetry-worker"],
   "metric-worker": ["metric-worker"],
-  "connectivity": ["connectivity"],
+  connectivity: ["connectivity"],
 };
 
-export function buildProcessFailurePlan(manifest, { environment }) {
+const isRecoveryTarget = (target: string): target is RecoveryTarget =>
+  Object.prototype.hasOwnProperty.call(expectedRecoveryProbes, target);
+
+export interface ProcessFailureScenario {
+  id: string;
+  target: string;
+  maximumRecoverySeconds: number;
+  recoveryProbeServices: string[];
+  [key: string]: unknown;
+}
+
+export interface ProcessFailureManifest {
+  schemaVersion: number;
+  environment: string;
+  productionClaimAllowed: boolean;
+  containerOnlyEvidenceSufficient: boolean;
+  killSignal: string;
+  scenarios?: ProcessFailureScenario[];
+}
+
+export function buildProcessFailurePlan(
+  manifest: ProcessFailureManifest,
+  { environment }: { environment: string | undefined },
+) {
   if (environment !== "staging" || manifest.environment !== "staging") {
     throw new Error("Phase 1 process failure drill is staging only");
   }
@@ -58,8 +84,9 @@ export function buildProcessFailurePlan(manifest, { environment }) {
       );
     }
     if (
+      !isRecoveryTarget(scenario.target) ||
       JSON.stringify(scenario.recoveryProbeServices) !==
-      JSON.stringify(expectedRecoveryProbes[scenario.target])
+        JSON.stringify(expectedRecoveryProbes[scenario.target])
     ) {
       throw new Error(
         `Phase 1 process failure scenario ${scenario.id} has no governed live recovery probes`,

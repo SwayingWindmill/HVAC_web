@@ -962,7 +962,12 @@ export class Gateway {
       this.optimization = this.nextRecommendation;
       return { status: 202, body: { optimizationRunId: this.optimization.runId, inputSnapshotId: this.optimization.recommendation.inputSnapshotId, status: 'READY' } };
     }
-    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/forecast/load`) return { body: replayForecast(fixture<Json>('forecast-load.json'), this.forecastOrigin ?? now) };
+    const forecastMatch = method === 'GET' ? path.match(/^\/api\/v1\/sites\/([^/]+)\/forecast\/load$/) : null;
+    if (forecastMatch) {
+      return forecastMatch[1] === SITE_ID
+        ? { body: replayForecast(fixture<Json>('forecast-load.json'), this.forecastOrigin ?? now) }
+        : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+    }
     const scheduleReply = this.schedules(method, path, query, body, now);
     if (scheduleReply) return scheduleReply;
     const billingReply = this.electricityBilling(method, path, query, body, now);

@@ -4,16 +4,16 @@
   "trackedExtensions": [".js", ".mjs", ".cjs", ".jsx"],
   "allowedLegacyRoots": {
     "scripts/": {
-      "fileCount": 109,
-      "maxBytes": 1310720
+      "fileCount": 101,
+      "maxBytes": 1200128
     },
     "edge/": {
       "fileCount": 1,
       "maxBytes": 12288
     }
   },
-  "fileCount": 110,
-  "maxBytes": 1323008,
+  "fileCount": 102,
+  "maxBytes": 1212416,
   "policyNotes": [
     "New repository tooling should use TypeScript rather than growing the reviewed legacy JavaScript caps.",
     "Product/runtime source must not use this baseline as an exception mechanism.",
