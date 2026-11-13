@@ -6,7 +6,7 @@ import { PageHeader, PageMeta } from '@/blocks/page-header';
 import { InfoTip } from '@/components/info-tip';
 import { Main } from '@/components/layout/Main';
 import { Button } from '@/components/ui/button';
-import { PeriodTabs } from '@/components/ui/period-tabs';
+import { PeriodTabs, type PeriodOption } from '@/components/ui/period-tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { METER_SCOPE_LABEL } from '@/features/billing/billing-model';
@@ -29,7 +29,7 @@ import { YearlyReport } from './YearlyReport';
 const siteRoute = getRouteApi('/_app/_site');
 
 type ReportView = 'month' | 'year';
-const VIEWS = [{ value: 'month', label: '月报' }, { value: 'year', label: '年报' }];
+const VIEWS: readonly PeriodOption<ReportView>[] = [{ value: 'month', label: '月报' }, { value: 'year', label: '年报' }];
 const sheetFrame = 'mx-auto w-full max-w-[1040px]';
 
 export function ReportWorkspace() {
@@ -54,7 +54,7 @@ export function ReportWorkspace() {
         meta={view === 'year' ? <PageMeta>{year} 年</PageMeta> : span.complete ? <PageMeta dot="live">已结月</PageMeta> : <PageMeta dot="warning">本月进行中，统计到当前</PageMeta>}
         actions={(
           <div className="flex items-center gap-2 print:hidden">
-            <PeriodTabs aria-label="报告周期" options={VIEWS} value={view} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, view: value as ReportView }), replace: true })} />
+            <PeriodTabs aria-label="报告周期" options={VIEWS} value={view} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, view: value }), replace: true })} />
             {view === 'month' ? (
               <div className="flex items-center gap-1">
                 <Button

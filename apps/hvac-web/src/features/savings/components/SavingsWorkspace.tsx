@@ -183,7 +183,16 @@ export function SavingsWorkspace() {
         <PanelHeader
           title={<span className="flex items-center gap-1.5">节能措施<InfoTip>同一块电表同一时间只统计一项措施；用冷站总电表统计的措施，不能和单台设备的措施同时统计</InfoTip></span>}
           action={list.length > 0 ? (
-            <ToggleGroup type="single" value={filter} onValueChange={(value) => { if (value) setFilter(value as Filter); }} aria-label="措施状态" className="h-12 gap-5">
+            <ToggleGroup
+              type="single"
+              value={filter}
+              onValueChange={(value) => {
+                const matched = FILTERS.find((option) => option.value === value);
+                if (matched) setFilter(matched.value);
+              }}
+              aria-label="措施状态"
+              className="h-12 gap-5"
+            >
               {FILTERS.map((option) => (
                 <ToggleGroupItem
                   key={option.value}

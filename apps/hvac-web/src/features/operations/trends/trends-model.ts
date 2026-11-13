@@ -362,12 +362,15 @@ export function buildTrendCatalog(model: Pick<SiteAssetModel, 'assets' | 'device
     const device = devicesById.get(point.reportingDeviceId);
     if (!device || device.deviceType === 'GATEWAY') continue;
 
+    const pointType = point.pointType;
+    if (pointType !== 'TELEMETRY' && pointType !== 'SETTING' && pointType !== 'STATE') continue;
+
     const isGauge =
-      (point.pointType === 'TELEMETRY' || point.pointType === 'SETTING') &&
+      (pointType === 'TELEMETRY' || pointType === 'SETTING') &&
       point.valueType === 'NUMBER';
     const isState =
-      point.pointType === 'STATE' ||
-      ((point.pointType === 'TELEMETRY' || point.pointType === 'SETTING') &&
+      pointType === 'STATE' ||
+      ((pointType === 'TELEMETRY' || pointType === 'SETTING') &&
         (point.valueType === 'STRING' || point.valueType === 'BOOLEAN'));
 
     if (!isGauge && !isState) continue;
@@ -394,8 +397,8 @@ export function buildTrendCatalog(model: Pick<SiteAssetModel, 'assets' | 'device
       unit,
       precision: resolved.precision,
       kind: isGauge ? 'gauge' : 'state',
-      pointType: point.pointType as 'TELEMETRY' | 'SETTING' | 'STATE',
-      isSetpoint: point.pointType === 'SETTING',
+      pointType,
+      isSetpoint: pointType === 'SETTING',
     });
   }
 

@@ -1,5 +1,3 @@
-"use client"
-
 import * as React from "react"
 import { Info } from "lucide-react"
 
@@ -14,9 +12,9 @@ import { ComposedChart, type ComposedChartProps } from "@/components/ui/composed
 import { DeltaBadge } from "@/components/ui/delta-badge"
 import { MetricValue } from "@/components/ui/metric-value"
 
-export interface MetricTab {
+export interface MetricTab<K extends string = string> {
   /** Key of this metric in each data row. */
-  key: string
+  key: K
   label: string
   /** Key of the previous-period series in each row, drawn as a dashed line. */
   compareKey?: string
@@ -43,14 +41,15 @@ export interface MetricTab {
   partialKey?: string
 }
 
-export interface MetricTabsChartCardProps extends Omit<React.ComponentProps<typeof Card>, "title"> {
-  metrics: MetricTab[]
+export interface MetricTabsChartCardProps<K extends string = string>
+  extends Omit<React.ComponentProps<typeof Card>, "title"> {
+  metrics: readonly MetricTab<K>[]
   data: Record<string, unknown>[]
   xKey: string
   /** Controlled selected metric key. */
-  selected?: string
-  defaultSelected?: string
-  onSelectedChange?: (key: string) => void
+  selected?: K
+  defaultSelected?: K
+  onSelectedChange?: (key: K) => void
   /** Line color for the selected metric. */
   color?: string
   /** Line color for the previous-period series. */
@@ -95,7 +94,7 @@ function aggregate(
 }
 
 /** A card with a row of metric tabs, each with a value and delta, and a line chart of the selected metric against the previous period. */
-function MetricTabsChartCard({
+function MetricTabsChartCard<K extends string = string>({
   metrics,
   data,
   xKey,
@@ -120,15 +119,15 @@ function MetricTabsChartCard({
   onPointClick,
   className,
   ...props
-}: MetricTabsChartCardProps) {
+}: MetricTabsChartCardProps<K>) {
   const id = React.useId()
-  const [selectedState, setSelectedState] = React.useState(
+  const [selectedState, setSelectedState] = React.useState<K | undefined>(
     defaultSelected ?? metrics[0]?.key
   )
   const selectedKey = selectedProp ?? selectedState
   const active = metrics.find((metric) => metric.key === selectedKey) ?? metrics[0]
 
-  const select = (key: string) => {
+  const select = (key: K) => {
     setSelectedState(key)
     onSelectedChange?.(key)
   }

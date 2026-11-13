@@ -7,7 +7,7 @@ import { InfoTip } from '@/components/info-tip';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { ChartContainer, ChartTooltip, type ChartConfig } from '@/components/ui/chart';
-import { PeriodTabs } from '@/components/ui/period-tabs';
+import { PeriodTabs, type PeriodOption } from '@/components/ui/period-tabs';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Table,
@@ -32,10 +32,11 @@ import {
 } from '../optimization-model';
 import { latestShadowEvaluationQuery } from '../query';
 
-const FORECAST_VIEW_OPTIONS = [
+const FORECAST_VIEW_OPTIONS: readonly PeriodOption<'chart' | 'table'>[] = [
   { value: 'chart', label: '曲线' },
   { value: 'table', label: '表格' },
 ];
+const rangeBand = (low: number, high: number): [number, number] => [low, high];
 
 const FORECAST_CHART_CONFIG = {
   loadKW: { label: '预测负荷', color: 'var(--chart-1)' },
@@ -443,7 +444,7 @@ function ForecastSummaryPanel({
   const hours = useMemo(
     () => hourlyForecast(next24hPoints, timeZone).map((hour) => ({
       ...hour,
-      band: hour.lowerKW !== null && hour.upperKW !== null ? ([hour.lowerKW, hour.upperKW] as [number, number]) : null,
+      band: hour.lowerKW !== null && hour.upperKW !== null ? rangeBand(hour.lowerKW, hour.upperKW) : null,
     })),
     [next24hPoints, timeZone],
   );
@@ -465,7 +466,7 @@ function ForecastSummaryPanel({
                 aria-label="预测视图"
                 options={FORECAST_VIEW_OPTIONS}
                 value={viewMode}
-                onValueChange={(value) => setViewMode(value as 'chart' | 'table')}
+                onValueChange={setViewMode}
               />
             ) : null}
             <PanelLink to="/energy-analysis/load" search={{ site: siteId }}>

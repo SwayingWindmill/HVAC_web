@@ -46,7 +46,7 @@ export interface TouCost {
 }
 
 /**
- * The energy charge the Energy analytics owner priced for these buckets (#575), peak periods first.
+ * The energy charge the Energy analytics owner priced for these buckets, peak periods first.
  * Electricity it did not price counts as unpriced, never as free.
  */
 export function sumCosts(buckets: readonly { readonly electricityKWh: number | null; readonly cost: EnergyCost | null }[]): TouCost {

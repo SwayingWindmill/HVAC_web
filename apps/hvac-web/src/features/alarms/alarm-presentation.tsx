@@ -26,7 +26,7 @@ export function operationLabel(operation: AlarmOperation): string {
   return OPERATION_LABELS[operation];
 }
 
-/** Why the system recovered an alarm, when the reason is one the operator should read (#693). */
+/** Why the system recovered an alarm, when the reason is one the operator should read. */
 export function recoveryReason(entry: AlarmTimelineEntry): string | null {
   return entry.operation === 'CLEAR' && entry.reason === 'RULE_RETIRED' ? '规则已撤销' : null;
 }

@@ -137,7 +137,8 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(path, { ...init, credentials: 'same-origin' });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const problem = payload as z.infer<typeof problemSchema>;
+    const parsed = problemSchema.safeParse(payload);
+    const problem = parsed.success ? parsed.data : {};
     throw new WorkOrderApiError(response.status, problem.code ?? 'WORK_ORDER_UNAVAILABLE', problem.detail ?? problem.title ?? '工单服务暂时不可用', problem.retryable ?? false);
   }
   return payload as T;

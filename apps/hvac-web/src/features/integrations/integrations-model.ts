@@ -119,7 +119,7 @@ export interface BuildMeterReconciliationInput {
   readonly electricityWithSuspect: EnergySeriesResponse | null;
   readonly coolingValid: EnergySeriesResponse | null;
   readonly coolingWithSuspect: EnergySeriesResponse | null;
-  /** Own counter history for physical check meters on synthesized-total sites (#798). */
+  /** Own counter history for physical check meters on synthesized-total sites. */
   readonly checkMeterHourlyByDeviceId?: ReadonlyMap<string, CheckMeterHourlySeries>;
   readonly workOrders?: readonly WorkOrder[];
   readonly window: { readonly fromMs: number; readonly toMs: number };
@@ -412,12 +412,8 @@ function buildMeterTrendJump(
         pt.valueType === 'NUMBER',
     )
     .sort((left, right) => {
-      const leftRank = PREFERRED_METER_TREND_KEYS.indexOf(
-        left.pointCode as (typeof PREFERRED_METER_TREND_KEYS)[number],
-      );
-      const rightRank = PREFERRED_METER_TREND_KEYS.indexOf(
-        right.pointCode as (typeof PREFERRED_METER_TREND_KEYS)[number],
-      );
+      const leftRank = PREFERRED_METER_TREND_KEYS.findIndex((key) => key === left.pointCode);
+      const rightRank = PREFERRED_METER_TREND_KEYS.findIndex((key) => key === right.pointCode);
       const normLeft = leftRank === -1 ? 99 : leftRank;
       const normRight = rightRank === -1 ? 99 : rightRank;
       return normLeft - normRight || left.pointCode.localeCompare(right.pointCode);

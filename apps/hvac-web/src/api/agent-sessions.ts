@@ -61,7 +61,7 @@ export const listAssistantSessions = async (siteId: string): Promise<readonly Ag
   agentSessionListSchema.parse(await read(agentSessionPaths.collection(siteId)))
 );
 
-/** The assistant's last 14 Site-local days on a Site (#597); needs the audit.read capability. */
+/** The assistant's last 14 Site-local days on a Site; needs the audit.read capability. */
 export const getAssistantUsage = async (siteId: string, timezone: string): Promise<AgentUsage> => (
   agentUsageSchema.parse(await read(agentSessionPaths.usage(siteId, timezone)))
 );

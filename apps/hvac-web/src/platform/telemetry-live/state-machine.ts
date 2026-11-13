@@ -2,7 +2,6 @@ import type {
   DeviceObservationPublication,
   DeviceObservationSnapshot,
   SubscriptionDescriptor,
-  TelemetryKeyState,
   TransportPosition,
 } from '@/api/generated/s2Telemetry.gen';
 import {
@@ -48,23 +47,23 @@ function nowInstant(now: () => Date): string {
 function cloneState(state: TelemetryLiveState): TelemetryLiveState {
   return state.snapshot === null
     ? { ...state, keys: [...state.keys] }
-    : { ...state, keys: [...state.keys], snapshot: cloneSnapshot(state.snapshot as DeviceObservationSnapshot) };
+    : { ...state, keys: [...state.keys], snapshot: cloneSnapshot(state.snapshot) };
 }
 
 function applyPublication(snapshot: DeviceObservationSnapshot, publication: DeviceObservationPublication): DeviceObservationSnapshot {
   const valueByKey = new Map(snapshot.values.map((value) => [value.key, value]));
   for (const change of publication.telemetryChanges) valueByKey.set(change.key, change);
-  const values = snapshot.values.map((value) => valueByKey.get(value.key) as TelemetryKeyState);
+  const values = snapshot.values.map((value) => valueByKey.get(value.key) ?? value);
   return {
     ...cloneSnapshot(snapshot),
     businessRevision: publication.revision,
     evaluatedAt: publication.evaluatedAt,
     evaluationAvailability: publication.evaluationAvailability,
     availabilityReasons: [...publication.availabilityReasons],
-    presence: JSON.parse(JSON.stringify(publication.presence)) as DeviceObservationSnapshot['presence'],
+    presence: structuredClone(publication.presence),
     telemetryReadiness: publication.telemetryReadiness,
     displayState: publication.displayState,
-    values: values.map((value) => JSON.parse(JSON.stringify(value)) as TelemetryKeyState),
+    values: values.map((value) => structuredClone(value)),
   };
 }
 
@@ -146,17 +145,16 @@ export class SubscriptionStateMachine {
       for (const publication of buffered) {
         if (!this.applyRawPublication(publication)) return;
       }
-      this.state = {
-        status: this.subscribed ? 'live' : 'snapshot',
+      const baseState = {
         clientSubscriptionId: this.target.clientSubscriptionId,
         deviceId: this.target.deviceId,
         keys: [...this.target.keys],
         snapshot: cloneSnapshot(this.snapshot),
-        ...(this.subscribed
-          ? { recovered: false }
-          : { reason: 'authoritative-snapshot' as const }),
         updatedAt: nowInstant(this.now),
-      } as TelemetryLiveState;
+      };
+      this.state = this.subscribed
+        ? { ...baseState, status: 'live', recovered: false }
+        : { ...baseState, status: 'snapshot', reason: 'authoritative-snapshot' };
       this.callbacks.onStateChanged();
     } catch (error) {
       this.handleContractError(error);

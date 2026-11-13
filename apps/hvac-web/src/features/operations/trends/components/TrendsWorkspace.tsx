@@ -21,6 +21,7 @@ import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDia
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { useNow } from '@/hooks/use-now';
 import { formatCompactTime } from '@/lib/operator-format';
+import { cn } from '@/lib/utils';
 import {
   TrendHistoryPermissionError,
   siteAssetModelQuery,
@@ -36,7 +37,6 @@ import {
   deriveBuiltInPresets,
   resolveTrendWindow,
   type TrendPointItem,
-  type TrendPresetId,
   type TrendWindowPreset,
 } from '../trends-model';
 import {
@@ -361,11 +361,12 @@ export function TrendsWorkspace() {
                   size="sm"
                   value={activePreset?.id ?? ''}
                   onValueChange={(val) => {
-                    if (!val) return;
+                    const matched = presets.find((preset) => preset.id === val);
+                    if (!matched) return;
                     void navigate({
                       search: (prev) => ({
                         ...prev,
-                        preset: val as TrendPresetId,
+                        preset: matched.id,
                         points: undefined,
                       }),
                     });
@@ -396,11 +397,12 @@ export function TrendsWorkspace() {
                   spacing={0}
                   value={windowState.preset === 'custom' ? '' : windowState.preset}
                   onValueChange={(val) => {
-                    if (!val) return;
+                    const matched = WINDOW_ITEMS.find((item) => item.value === val);
+                    if (!matched) return;
                     void navigate({
                       search: (prev) => ({
                         ...prev,
-                        window: val as Exclude<TrendWindowPreset, 'custom'>,
+                        window: matched.value,
                         from: undefined,
                         to: undefined,
                         granularity: undefined,
@@ -428,9 +430,13 @@ export function TrendsWorkspace() {
                 >
                   <PopoverTrigger asChild>
                     <Button
-                      variant={windowState.preset === 'custom' ? 'secondary' : 'outline'}
+                      variant="outline"
                       size="sm"
-                      className="h-7 gap-1 px-2.5 text-xs"
+                      aria-pressed={windowState.preset === 'custom'}
+                      className={cn(
+                        'h-7 gap-1 px-2.5 text-xs',
+                        windowState.preset === 'custom' && 'border-input-hover bg-accent text-foreground',
+                      )}
                     >
                       <CalendarClock className="size-3.5" aria-hidden="true" />
                       自定义
@@ -501,11 +507,12 @@ export function TrendsWorkspace() {
                 spacing={0}
                 value={windowState.granularity}
                 onValueChange={(val) => {
-                  if (!val) return;
+                  const matched = GRANULARITY_ITEMS.find((item) => item.value === val);
+                  if (!matched) return;
                   void navigate({
                     search: (prev) => ({
                       ...prev,
-                      granularity: val as TrendGranularity,
+                      granularity: matched.value,
                     }),
                   });
                 }}

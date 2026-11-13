@@ -494,7 +494,10 @@ export function ControlWorkspace() {
           <ToggleGroup
             type="single"
             value={filter.value}
-            onValueChange={(value) => { if (value) setSearch({ status: value === 'all' ? undefined : value as LogFilter }); }}
+            onValueChange={(value) => {
+              const matched = FILTERS.find((option) => option.value === value);
+              if (matched) setSearch({ status: matched.value === 'all' ? undefined : matched.value });
+            }}
             aria-label="指令状态"
             className="h-11 w-full shrink-0 justify-start gap-5 rounded-none border-b border-divider px-4"
           >

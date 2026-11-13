@@ -43,7 +43,7 @@ const SUBSYSTEMS: readonly { name: string; categories: readonly EquipmentCategor
 const UNALLOCATED = '未单独计量';
 
 const chartConfig = Object.fromEntries(
-  (Object.keys(CATEGORY_LABEL) as EquipmentCategory[]).map((category) => [category, { label: CATEGORY_LABEL[category], color: CATEGORY_COLOR[category] }]),
+  EQUIPMENT_ORDER.map((category) => [category, { label: CATEGORY_LABEL[category], color: CATEGORY_COLOR[category] }]),
 ) satisfies ChartConfig;
 
 const kWh = (value: number) => (value >= 10_000 ? `${formatDecimal(value / 1000, 2)} MWh` : `${formatDecimal(value, 0)} kWh`);

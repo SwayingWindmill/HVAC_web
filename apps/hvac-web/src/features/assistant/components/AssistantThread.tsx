@@ -118,7 +118,7 @@ const AssistantMessage: FC = () => {
   );
 };
 
-// The last answer's follow-ups, under its card, scrolling with the conversation (#638).
+// The last answer's follow-ups, under its card, scrolling with the conversation.
 const FollowUps: FC = () => (
   <AuiIf condition={(state) => !state.thread.isRunning && state.thread.suggestions.length > 0}>
     <div className="flex flex-col gap-1.5" data-testid="assistant-follow-ups">

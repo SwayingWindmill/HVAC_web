@@ -16,6 +16,7 @@ import { siteTariffQuery } from '@/features/tariff/query';
 import { demandCharges, periodAt, periodRanges } from '@/features/tariff/tariff-model';
 import { useNow } from '@/hooks/use-now';
 import { formatDecimal, formatTime } from '@/lib/operator-format';
+import { isOneOf } from '@/lib/typed';
 import { cn } from '@/lib/utils';
 import { demandSummary, type DemandPeak, type QuarterHour } from '../demand-model';
 import { forecastBetween, forecastPeak, hourlyForecast, type LoadForecastPoint } from '../forecast-model';
@@ -36,6 +37,7 @@ const HOUR_MS = 3_600_000;
 const QUARTERS_PER_DAY = 96;
 
 type LoadView = 'hours' | 'days' | 'charge';
+const LOAD_VIEWS = ['hours', 'days', 'charge'] as const satisfies readonly LoadView[];
 
 /** One figure of the overview strip: label, value with unit, and a line of context. */
 function Figure({ label, value, unit, info, live, children }: {
@@ -254,7 +256,7 @@ export function LoadWorkspace() {
           </Panel>
 
           <Panel aria-label="负荷明细">
-            <Tabs value={view} onValueChange={(value) => void navigate({ search: (previous) => ({ ...previous, view: value as LoadView }) })} className="gap-0">
+            <Tabs value={view} onValueChange={(value) => { if (isOneOf(LOAD_VIEWS, value)) void navigate({ search: (previous) => ({ ...previous, view: value }) }); }} className="gap-0">
               <header className="flex h-12 shrink-0 items-center gap-4 border-b border-divider px-5">
                 <TabsList variant="line" className="h-12 gap-5 p-0">
                   <TabsTrigger value="hours" className="h-12 flex-none px-0 after:bottom-0!">逐时预测</TabsTrigger>

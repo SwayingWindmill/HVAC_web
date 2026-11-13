@@ -1,5 +1,6 @@
 import type { AssetRelationship, SiteAssetModel, TelemetryPoint } from '../../api/generated/platformGateway.gen';
 import { formatTelemetryUnit } from '../../domain/centralPlantTelemetry.ts';
+import { isOneOf } from '../../lib/typed.ts';
 
 // What an operator can command on the plant, read from the Registry: each COMMAND point that
 // CONTROLS an asset, with its range and the reading that confirms it took effect.
@@ -42,9 +43,18 @@ export interface ControlTarget {
   readonly settings: readonly ControlSetting[];
 }
 
-const ACTION_ORDER: readonly ActionCapability[] = ['START', 'STOP', 'RESET_FAULT'];
+const ACTION_ORDER = ['START', 'STOP', 'RESET_FAULT'] as const satisfies readonly ActionCapability[];
+const SETTING_CAPABILITIES = [
+  'SET_TEMPERATURE_SETPOINT',
+  'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+  'SET_FREQUENCY',
+  'SET_FAN_SPEED',
+  'SET_LOAD_LIMIT',
+  'SET_OPENING',
+] as const satisfies readonly SettingCapability[];
 
-const isAction = (capability: string): capability is ActionCapability => (ACTION_ORDER as readonly string[]).includes(capability);
+const isAction = (capability: string): capability is ActionCapability => isOneOf(ACTION_ORDER, capability);
+const isSettingCapability = (capability: string): capability is SettingCapability => isOneOf(SETTING_CAPABILITIES, capability);
 
 function controls(relationship: AssetRelationship, at: Date): boolean {
   return relationship.role === 'CONTROLS' && relationship.status === 'ACTIVE' && relationship.fromType === 'POINT'
@@ -71,6 +81,7 @@ export function controlTargets(model: Pick<SiteAssetModel, 'assets' | 'telemetry
       target.actions.push({ assetId, pointId: point.id, capability, label: point.displayName });
       continue;
     }
+    if (!isSettingCapability(capability)) continue;
     const minimum = metadataNumber(point, 'minimum');
     const maximum = metadataNumber(point, 'maximum');
     const parameterKey = point.sourceMetadata.parameterKey;
@@ -80,7 +91,7 @@ export function controlTargets(model: Pick<SiteAssetModel, 'assets' | 'telemetry
     const feedback = model.telemetryPoints.find((candidate) =>
       candidate.reportingDeviceId === point.reportingDeviceId && candidate.pointType !== 'COMMAND' && candidate.pointCode === feedbackCode);
     target.settings.push({
-      assetId, pointId: point.id, capability: capability as SettingCapability, label: point.displayName, parameterKey,
+      assetId, pointId: point.id, capability, label: point.displayName, parameterKey,
       unit: formatTelemetryUnit(point.unit), minimum, maximum, step: metadataNumber(point, 'step') ?? 1,
       feedbackSourceKey: feedback?.sourceKey ?? null,
     });

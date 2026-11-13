@@ -22,7 +22,7 @@ export interface MaterialLibrary {
   readonly ghost: MaterialSet;
 }
 
-type Spec = THREE.MeshStandardMaterialParameters;
+type Spec = Omit<THREE.MeshStandardMaterialParameters, 'color'> & { readonly color: string };
 
 const mix = (from: string, to: string, amount: number) => `#${new THREE.Color(from).lerp(new THREE.Color(to), amount).getHexString()}`;
 
@@ -79,17 +79,67 @@ function create(spec: Spec): THREE.Material {
   return new THREE.MeshStandardMaterial(spec);
 }
 
+function mapMaterialSet(
+  all: Readonly<Record<MaterialKey, Spec>>,
+  build: (key: MaterialKey, spec: Spec) => THREE.Material,
+): MaterialSet {
+  return {
+    brand: build('brand', all.brand),
+    window: build('window', all.window),
+    paint: build('paint', all.paint),
+    panel: build('panel', all.panel),
+    paintDark: build('paintDark', all.paintDark),
+    steel: build('steel', all.steel),
+    darkSteel: build('darkSteel', all.darkSteel),
+    galvanized: build('galvanized', all.galvanized),
+    insulation: build('insulation', all.insulation),
+    rubber: build('rubber', all.rubber),
+    screen: build('screen', all.screen),
+    dial: build('dial', all.dial),
+    concrete: build('concrete', all.concrete),
+    glass: build('glass', all.glass),
+    mullion: build('mullion', all.mullion),
+    wall: build('wall', all.wall),
+    slab: build('slab', all.slab),
+    floorStone: build('floorStone', all.floorStone),
+    floorWood: build('floorWood', all.floorWood),
+    floorCarpet: build('floorCarpet', all.floorCarpet),
+    wood: build('wood', all.wood),
+    fabric: build('fabric', all.fabric),
+    cloth: build('cloth', all.cloth),
+    leaf: build('leaf', all.leaf),
+    bark: build('bark', all.bark),
+    stainless: build('stainless', all.stainless),
+    grille: build('grille', all.grille),
+    plinth: build('plinth', all.plinth),
+    plinthSide: build('plinthSide', all.plinthSide),
+    road: build('road', all.road),
+    marking: build('marking', all.marking),
+    lawn: build('lawn', all.lawn),
+    curb: build('curb', all.curb),
+    paving: build('paving', all.paving),
+    ledRun: build('ledRun', all.ledRun),
+    ledFault: build('ledFault', all.ledFault),
+    ledOff: build('ledOff', all.ledOff),
+    chilledAccent: build('chilledAccent', all.chilledAccent),
+    coolingAccent: build('coolingAccent', all.coolingAccent),
+  };
+}
+
 export function createMaterialLibrary(palette: ScenePalette): MaterialLibrary {
   const all = specs(palette);
-  const entries = Object.entries(all) as [MaterialKey, Spec][];
   const lift = new THREE.Color(palette.chilled);
-  const base = Object.fromEntries(entries.map(([key, spec]) => [key, create(spec)])) as MaterialSet;
-  const hover = Object.fromEntries(entries.map(([key, spec]) => [key, create({ ...spec, emissive: spec.emissive ?? lift, emissiveIntensity: spec.emissive ? spec.emissiveIntensity : 0.07 })])) as MaterialSet;
-  const ghost = Object.fromEntries(entries.map(([key, spec]) => {
-    if (key === 'glass') return [key, create({ ...spec, opacity: 0.05 })];
+  const base = mapMaterialSet(all, (_key, spec) => create(spec));
+  const hover = mapMaterialSet(all, (_key, spec) => create({
+    ...spec,
+    emissive: spec.emissive ?? lift,
+    emissiveIntensity: spec.emissive ? spec.emissiveIntensity : 0.07,
+  }));
+  const ghost = mapMaterialSet(all, (key, spec) => {
+    if (key === 'glass') return create({ ...spec, opacity: 0.05 });
     const { emissive: _emissive, emissiveIntensity: _intensity, ...rest } = spec;
-    return [key, create({ ...rest, color: mix(spec.color as string, palette.background, 0.62), metalness: 0, roughness: 1 })];
-  })) as MaterialSet;
+    return create({ ...rest, color: mix(spec.color, palette.background, 0.62), metalness: 0, roughness: 1 });
+  });
   return { base, hover, ghost };
 }
 

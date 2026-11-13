@@ -11,7 +11,7 @@ const client = createPlatformGatewayClient();
 
 export type { AlarmRule };
 
-/** The rules the Site evaluates now (#693). They change only when someone publishes the rules file. */
+/** The rules the Site evaluates now. They change only when someone publishes the rules file. */
 export function siteAlarmRulesQuery(siteId: string) {
   return queryOptions({
     queryKey: ['alarms', siteId, 'rules'] as const,

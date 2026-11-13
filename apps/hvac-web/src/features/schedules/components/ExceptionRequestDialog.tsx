@@ -38,6 +38,8 @@ import {
   validateCoolingSlotRowInput,
 } from '../schedule-model';
 
+const EXCEPTION_KINDS = ['HOLIDAY_SHUTDOWN', 'OVERTIME_COOLING', 'MAINTENANCE_WINDOW'] as const satisfies readonly OperatingExceptionKind[];
+
 const replacementSlotSchema = z.object({
   startTime: z.string().min(1, '请填写开始时间'),
   endTime: z.string().min(1, '请填写结束时间'),
@@ -253,7 +255,7 @@ export function ExceptionRequestDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {(Object.keys(EXCEPTION_KIND_LABELS) as OperatingExceptionKind[]).map(
+                      {EXCEPTION_KINDS.map(
                         (itemKind) => (
                           <SelectItem key={itemKind} value={itemKind}>
                             {EXCEPTION_KIND_LABELS[itemKind]}

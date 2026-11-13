@@ -1,9 +1,26 @@
 import { queryOptions, skipToken } from '@tanstack/react-query';
+import { z } from 'zod';
 import { failureStatus, gatewayPath, gatewayRequest, ROUTE_MISSING_MESSAGE } from '@/api/gateway-client';
 import { intelligencePaths, type SiteAssetModel } from '@/api/generated/platformGateway.gen';
 import { createS2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
 import { demandWindows, quarterHours, type QuarterHour } from './demand-model';
 import { parseLoadForecast, type LoadForecast, type PublishedForecast } from './forecast-model';
+
+const forecastQualitySchema = z.enum(['VALID', 'FALLBACK']);
+
+const publishedForecastSchema: z.ZodType<PublishedForecast> = z.object({
+  snapshot: z.object({
+    forecastOrigin: z.string(),
+    quality: forecastQualitySchema,
+  }),
+  points: z.array(z.object({
+    forecast_for: z.string(),
+    value: z.number(),
+    lower_bound: z.number().nullable(),
+    upper_bound: z.number().nullable(),
+    quality: forecastQualitySchema,
+  })),
+});
 
 const client = createS2TelemetryClient();
 
@@ -54,10 +71,13 @@ export function siteLoadForecastQuery(siteId: string) {
   return queryOptions({
     queryKey: ['forecast', siteId, 'site-load'],
     queryFn: async ({ signal }): Promise<LoadForecast | null> => {
-      const result = await gatewayRequest(gatewayPath(intelligencePaths.siteLoadForecast, { siteId }), {
-        signal,
-        parse: (payload) => parseLoadForecast(payload as PublishedForecast),
-      });
+      const result = await gatewayRequest(
+        gatewayPath(intelligencePaths.siteLoadForecast, { siteId }),
+        {
+          signal,
+          parse: (payload) => parseLoadForecast(publishedForecastSchema.parse(payload)),
+        },
+      );
       if (result.kind === 'ok') return result.value;
       if (result.kind === 'notPublished') return null;
       throw new ForecastRequestError(

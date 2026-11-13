@@ -11,7 +11,7 @@ import { Main } from "@/components/layout/Main";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DeltaBadge } from "@/components/ui/delta-badge";
-import { PeriodTabs } from "@/components/ui/period-tabs";
+import { PeriodTabs, type PeriodOption } from "@/components/ui/period-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -24,6 +24,7 @@ import { TouCostDetail } from "@/features/tariff/components/TouCostDetail";
 import { siteTariffQuery } from "@/features/tariff/query";
 import { PERIOD_LABEL, sumCosts, type PeriodCode, type TouCost } from "@/features/tariff/tariff-model";
 import { formatDecimal, formatTime } from "@/lib/operator-format";
+import { isOneOf } from "@/lib/typed";
 import { cn } from "@/lib/utils";
 import {
   BUCKET_NOUN,
@@ -41,7 +42,8 @@ import { useEnergyComparison } from "../query";
 
 const siteRoute = getRouteApi("/_app/_site");
 
-const PERIOD_OPTIONS = (Object.keys(ENERGY_PERIODS) as EnergyPeriod[]).map((value) => ({ value, label: ENERGY_PERIODS[value] }));
+const ENERGY_PERIOD_KEYS = ["today", "7d", "month", "year"] as const satisfies readonly EnergyPeriod[];
+const PERIOD_OPTIONS: readonly PeriodOption<EnergyPeriod>[] = ENERGY_PERIOD_KEYS.map((value) => ({ value, label: ENERGY_PERIODS[value] }));
 
 /** What the period is compared with: the same span of the period before. */
 const PREVIOUS_LABEL: Record<EnergyPeriod, string> = { today: "昨日同时段", "7d": "前 7 天", month: "上月同期", year: "去年同期" };
@@ -51,6 +53,7 @@ const PERIOD_ORDER: readonly PeriodCode[] = ["SUPER_PEAK", "PEAK", "FLAT", "VALL
 
 type ConsumptionMetric = "electricityKWh" | "coolingKWh" | "cop" | "cost";
 type ConsumptionView = "trend" | "tou" | "detail";
+const CONSUMPTION_VIEWS = ["trend", "tou", "detail"] as const satisfies readonly ConsumptionView[];
 
 /** Energy in kWh, or in MWh once `scale` (the largest figure shown beside it) reaches 10,000 kWh. */
 function energy(value: number | null, scale = value ?? 0): { value: string | null; unit: string } {
@@ -141,7 +144,7 @@ export function ConsumptionWorkspace() {
                 </span>
               ) : null}
             </span>
-            <PeriodTabs aria-label="统计期间" options={PERIOD_OPTIONS} value={period} onValueChange={(value) => setSearch({ period: value as EnergyPeriod })} />
+            <PeriodTabs aria-label="统计期间" options={PERIOD_OPTIONS} value={period} onValueChange={(value) => setSearch({ period: value })} />
             <Button variant="outline" size="icon" aria-label="刷新能耗" onClick={() => { void query.refetch(); void destination.query.refetch(); void destination.previous.refetch(); void queryClient.invalidateQueries({ queryKey: dataGapsKeys.site(site.id) }); }}>
               <RefreshCw />
             </Button>
@@ -168,7 +171,7 @@ export function ConsumptionWorkspace() {
           <PeriodChart comparison={comparison} pricing={pricing} previousLabel={previousLabel} metric={metric} onMetricChange={(next) => setSearch({ metric: next })} timeZone={site.timezone} />
           <EnergyDestination result={destination} previousLabel={previousLabel} />
           <Panel aria-label="能耗明细">
-            <Tabs value={view} onValueChange={(value) => setSearch({ view: value as ConsumptionView })} className="gap-0">
+            <Tabs value={view} onValueChange={(value) => { if (isOneOf(CONSUMPTION_VIEWS, value)) setSearch({ view: value }); }} className="gap-0">
               <header className="flex h-12 shrink-0 items-center gap-4 border-b border-divider px-5">
                 <TabsList variant="line" className="h-12 gap-5 p-0">
                   <TabsTrigger value="trend" className="h-12 flex-none px-0 after:bottom-0!">分项趋势</TabsTrigger>
@@ -244,7 +247,7 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
     ...split(bucket, "cost", pricing?.byLabel.get(bucket.label)?.total ?? null),
   }));
 
-  const metrics: MetricTab[] = [
+  const metrics: MetricTab<ConsumptionMetric>[] = [
     {
       key: "electricityKWh", label: "空调用电", compareKey: "previousElectricityKWh", partialKey: "electricityKWhPartial",
       value: electricity.value, unit: electricity.unit, fractionDigits: 1, invertDelta: true,
@@ -270,7 +273,7 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
       caption: pricing.current.energyKWh - pricing.current.unpricedKWh > 0
         ? `均价 ${formatDecimal(pricing.current.total / (pricing.current.energyKWh - pricing.current.unpricedKWh), 3)} 元/kWh · 用电 ${formatDecimal(pricing.current.energyKWh, 0)} kWh`
         : "本期间还没有计量数据",
-    } satisfies MetricTab] : []),
+    } satisfies MetricTab<ConsumptionMetric>] : []),
   ];
   const active = metrics.find((candidate) => candidate.key === metric) ?? metrics[0];
   const unit = active.key === "cop" ? "COP" : active.key === "cost" ? "元" : "kWh";
@@ -285,7 +288,7 @@ function PeriodChart({ comparison, pricing, previousLabel, metric, onMetricChang
       data={data}
       xKey="label"
       selected={active.key}
-      onSelectedChange={(key) => onMetricChange(key as ConsumptionMetric)}
+      onSelectedChange={onMetricChange}
       color="var(--chart-1)"
       compareColor="var(--chart-5)"
       compareLabel={previousLabel}

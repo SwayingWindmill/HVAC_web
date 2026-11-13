@@ -68,6 +68,8 @@ const retryRegistryQuery = (failureCount: number, error: Error) => {
 const nextCursor = (collection: { hasMore: boolean; nextCursor: string | null }) =>
   collection.hasMore ? collection.nextCursor ?? undefined : undefined;
 
+const INITIAL_CURSOR: string | undefined = undefined;
+
 export const flattenRegistryPages = <T>(data: { pages: Array<{ items: T[] }> } | undefined): T[] =>
   data?.pages.flatMap((page) => page.items) ?? [];
 
@@ -123,7 +125,7 @@ export function useRegistrySites(enabled = true) {
       if (typeof pageParam === 'string') params.cursor = pageParam;
       return (await client.listSites(params, { signal })).data;
     },
-    initialPageParam: undefined as string | undefined,
+    initialPageParam: INITIAL_CURSOR,
     getNextPageParam: nextCursor,
     enabled: registryQueryEnabled(enabled),
     retry: retryRegistryQuery,
@@ -166,7 +168,7 @@ export function useRegistryAssets(siteId: string | null, enabled = true) {
       if (typeof pageParam === 'string') params.cursor = pageParam;
       return (await client.listSiteAssets(registryId(siteId!), params, { signal })).data;
     },
-    initialPageParam: undefined as string | undefined,
+    initialPageParam: INITIAL_CURSOR,
     getNextPageParam: nextCursor,
     enabled: registryQueryEnabled(enabled && Boolean(siteId)),
     retry: retryRegistryQuery,
@@ -190,7 +192,7 @@ export function useRegistryDevices(siteId: string | null, enabled = true) {
       if (typeof pageParam === 'string') params.cursor = pageParam;
       return (await client.listSiteDevices(registryId(siteId!), params, { signal })).data;
     },
-    initialPageParam: undefined as string | undefined,
+    initialPageParam: INITIAL_CURSOR,
     getNextPageParam: nextCursor,
     enabled: registryQueryEnabled(enabled && Boolean(siteId)),
     retry: retryRegistryQuery,
@@ -214,7 +216,7 @@ export function useRegistryDeviceBindings(siteId: string | null, enabled = true)
       if (typeof pageParam === 'string') params.cursor = pageParam;
       return (await client.listSiteDeviceBindings(registryId(siteId!), params, { signal })).data;
     },
-    initialPageParam: undefined as string | undefined,
+    initialPageParam: INITIAL_CURSOR,
     getNextPageParam: nextCursor,
     enabled: registryQueryEnabled(enabled && Boolean(siteId)),
     retry: retryRegistryQuery,
@@ -279,7 +281,7 @@ export function useRegistrySpaceChildren(siteId: string | null, parentSpaceId: s
       if (typeof pageParam === 'string') params.cursor = pageParam;
       return (await client.listSiteSpaceChildren(registryId(siteId!), parentSpaceId, params, { signal })).data;
     },
-    initialPageParam: undefined as string | undefined,
+    initialPageParam: INITIAL_CURSOR,
     getNextPageParam: nextCursor,
     enabled: registryQueryEnabled(enabled && Boolean(siteId)),
     retry: retryRegistryQuery,
@@ -294,7 +296,7 @@ export function useRegistryDevicePoints(deviceId: string | null, enabled = true)
       if (typeof pageParam === 'string') params.cursor = pageParam;
       return (await client.listDevicePoints(registryId(deviceId!), params, { signal })).data;
     },
-    initialPageParam: undefined as string | undefined,
+    initialPageParam: INITIAL_CURSOR,
     getNextPageParam: nextCursor,
     enabled: registryQueryEnabled(enabled && Boolean(deviceId)),
     retry: retryRegistryQuery,

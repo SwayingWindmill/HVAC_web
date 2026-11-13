@@ -145,7 +145,10 @@ export function SystemsDevicesWorkspace() {
             <ToggleGroup
               type="single"
               value={search.status ?? 'all'}
-              onValueChange={(value) => { if (value) setSearch({ status: value === 'all' ? undefined : value as StatusFilter }); }}
+              onValueChange={(value) => {
+                const matched = STATUS_FILTERS.find((option) => option.value === value);
+                if (matched) setSearch({ status: matched.value === 'all' ? undefined : matched.value });
+              }}
               aria-label="运行状态"
               className="h-9 gap-5"
             >
@@ -172,7 +175,14 @@ export function SystemsDevicesWorkspace() {
               </InputGroup>
               <Select
                 value={search.category ?? 'ALL'}
-                onValueChange={(value) => setSearch({ category: value === 'ALL' ? undefined : value as PlantCategory })}
+                onValueChange={(value) => {
+                  if (value === 'ALL') {
+                    setSearch({ category: undefined });
+                    return;
+                  }
+                  const matched = plant.groups.find((group) => group.category === value);
+                  if (matched) setSearch({ category: matched.category });
+                }}
               >
                 <SelectTrigger className="h-8 w-32" aria-label="设备类型"><SelectValue /></SelectTrigger>
                 <SelectContent>

@@ -1,5 +1,6 @@
 import { queryOptions, useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
+import { z } from 'zod';
 import { gatewayPath, gatewayRequest, publishedValueOf, valueOf } from '@/api/gateway-client';
 import { intelligencePaths } from '@/api/generated/platformGateway.gen';
 import { createS2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
@@ -35,12 +36,64 @@ async function alarmsSince(siteId: string, from: Date, signal: AbortSignal): Pro
 
 const ARCHIVE_UNAVAILABLE = { unavailable: '报告存档暂不可用' };
 
+const storedReportSchema: z.ZodType<StoredReport> = z.object({
+  id: z.string(),
+  month: z.string(),
+  version: z.number(),
+  generatedAt: z.string(),
+  report: z.object({
+    schemaVersion: z.literal(1),
+    month: z.string(),
+    timezone: z.string(),
+    daysInMonth: z.number(),
+    daysWithData: z.number(),
+    electricityKWh: z.number(),
+    crossGapElectricityKWh: z.number().nullish().transform((value) => value ?? undefined),
+    coolingKWh: z.number(),
+    cop: z.number().nullable(),
+    energyCostCNY: z.number().nullable(),
+    energyCostStatus: z.enum(['PRICED', 'NO_TARIFF', 'UNPRICED_HOURS']),
+    tariffPeriods: z.array(z.object({
+      code: z.string(),
+      electricityKWh: z.number(),
+      costCNY: z.number(),
+    })),
+    days: z.array(z.object({
+      date: z.string(),
+      electricityKWh: z.number(),
+      coolingKWh: z.number(),
+      cop: z.number().nullable(),
+      energyCostCNY: z.number().nullable(),
+    })),
+    findings: z.object({
+      count: z.number(),
+      byType: z.array(z.object({
+        findingType: z.string(),
+        count: z.number(),
+      })),
+    }),
+    savings: z.object({
+      days: z.number(),
+      adjustedBaselineKWh: z.number(),
+      avoidedKWh: z.number(),
+      avoidedCost: z.number(),
+      unpricedHours: z.number(),
+      plantKWh: z.number(),
+    }),
+  }),
+});
+
+const yearSnapshotsResponseSchema = z.object({ items: z.array(storedReportSchema) });
+
 /** A month's latest snapshot, or null when the month has none. */
 export function monthlySnapshotQuery(siteId: string, month: string) {
   return queryOptions({
     queryKey: ['report-snapshot', siteId, month],
     queryFn: async ({ signal }): Promise<StoredReport | null> => publishedValueOf(
-      await gatewayRequest<StoredReport>(gatewayPath(intelligencePaths.siteMonthlyReport, { siteId, month }), { signal }),
+      await gatewayRequest(
+        gatewayPath(intelligencePaths.siteMonthlyReport, { siteId, month }),
+        { signal, parse: (payload) => storedReportSchema.parse(payload) },
+      ),
       ARCHIVE_UNAVAILABLE,
     ),
     retry: false,
@@ -52,9 +105,13 @@ export function yearSnapshotsQuery(siteId: string, year: number) {
   return queryOptions({
     queryKey: ['report-snapshots', siteId, year],
     queryFn: async ({ signal }): Promise<StoredReport[]> => valueOf(
-      await gatewayRequest(`${gatewayPath(intelligencePaths.siteMonthlyReports, { siteId })}?year=${year}`, {
-        signal, parse: (payload) => (payload as { items: StoredReport[] }).items,
-      }),
+      await gatewayRequest(
+        `${gatewayPath(intelligencePaths.siteMonthlyReports, { siteId })}?year=${year}`,
+        {
+          signal,
+          parse: (payload) => yearSnapshotsResponseSchema.parse(payload).items,
+        },
+      ),
       ARCHIVE_UNAVAILABLE,
     ),
     retry: false,

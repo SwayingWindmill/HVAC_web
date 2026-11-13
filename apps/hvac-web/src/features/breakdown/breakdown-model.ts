@@ -20,7 +20,7 @@ export interface EnergyPoint {
 export interface DeviceEnergy {
   readonly deviceId: string;
   readonly points: readonly EnergyPoint[];
-  /** Non-monthly cross-gap energy recovered for this machine (#798): counted in totals, excluded from chart buckets. */
+  /** Non-monthly cross-gap energy recovered for this machine: counted in totals, excluded from chart buckets. */
   readonly crossGapKWh?: number;
 }
 

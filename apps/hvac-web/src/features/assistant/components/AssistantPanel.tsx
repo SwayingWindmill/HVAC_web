@@ -46,7 +46,7 @@ export function AssistantPanel({ siteId, siteName, timezone, csrfToken }: {
   const { thread, history, loading, error, ask, answer, cancel, startNew, open } = useAssistantSession(siteId, csrfToken);
   useFoldedNavigation();
   const pending = thread.pendingInput;
-  // 历史 shows my conversations in place of the open one; choosing one opens it (#639).
+  // 历史 shows my conversations in place of the open one; choosing one opens it.
   const [showingHistory, setShowingHistory] = useState(false);
   const threads = useMemo(() => history.map(({ id, question }) => ({ id, status: 'regular' as const, title: question })), [history]);
 

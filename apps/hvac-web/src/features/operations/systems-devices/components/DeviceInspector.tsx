@@ -113,14 +113,15 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
             <dl className="grid grid-cols-2 gap-2">
               {points.map((point) => {
                 const current = pointIsTrusted(point);
+                const healthBadges = { SUSPECT: ['可疑', 'warning'], BAD: ['无效', 'destructive'], STALE: ['过期', 'neutral'] } as const;
                 const health = point.health && point.health.status !== 'HEALTHY'
-                  ? { SUSPECT: ['可疑', 'warning'], BAD: ['无效', 'destructive'], STALE: ['过期', 'neutral'] }[point.health.status]
+                  ? healthBadges[point.health.status]
                   : null;
                 return (
                   <div key={point.key} className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-divider bg-muted px-3 py-2">
                     <dt className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
                       <span className="truncate">{point.label}</span>
-                      {health ? <StatusBadge tone={health[1] as 'warning' | 'destructive' | 'neutral'} label={health[0]} /> : null}
+                      {health ? <StatusBadge tone={health[1]} label={health[0]} /> : null}
                     </dt>
                     <dd className={cn('text-base leading-[22px] font-semibold tracking-[-0.02em] tabular-nums', !current && 'text-muted-foreground')} title={current ? undefined : '数据过期或不可靠'}>
                       {point.state === 'PRESENT' ? point.displayValue : '—'}

@@ -197,10 +197,15 @@ function connectionOf(row: AssetsDeviceRow): ConnectionState {
   return 'UNKNOWN';
 }
 
+const NAMESPACE_BY_CATEGORY: Partial<Record<PlantCategory, string>> = {
+  CHILLER: 'chiller',
+  CHILLED_WATER_PUMP: 'chwp',
+  COOLING_WATER_PUMP: 'cwp',
+  COOLING_TOWER: 'cooling_tower',
+};
+
 function runStateOf(row: AssetsDeviceRow, category: PlantCategory): RunState {
-  const namespace = { CHILLER: 'chiller', CHILLED_WATER_PUMP: 'chwp', COOLING_WATER_PUMP: 'cwp', COOLING_TOWER: 'cooling_tower' }[
-    category as 'CHILLER' | 'CHILLED_WATER_PUMP' | 'COOLING_WATER_PUMP' | 'COOLING_TOWER'
-  ];
+  const namespace = NAMESPACE_BY_CATEGORY[category];
   if (!namespace) return 'UNKNOWN';
   const point = row.telemetryPoints.find((candidate) => candidate.sourceKey === `${namespace}.run_state`);
   const value = point ? snapshotValue(row, point.pointCode) : undefined;

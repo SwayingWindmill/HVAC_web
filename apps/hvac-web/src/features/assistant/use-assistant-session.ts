@@ -20,7 +20,7 @@ const latest = (sessions: readonly AgentSessionSnapshot[]): AgentSessionSnapshot
   ), null)
 );
 
-/** One of my conversations on the Site, as the history lists it (#639). */
+/** One of my conversations on the Site, as the history lists it. */
 export interface AssistantConversation {
   readonly id: string;
   readonly question: string;

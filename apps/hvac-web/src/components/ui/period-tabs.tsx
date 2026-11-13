@@ -3,8 +3,8 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
-export interface PeriodOption {
-  value: string
+export interface PeriodOption<T extends string = string> {
+  value: T
   label: string
 }
 
@@ -14,12 +14,15 @@ export const defaultPeriods: PeriodOption[] = [
   { value: "year", label: "Year" },
 ]
 
-export interface PeriodTabsProps
-  extends Omit<React.ComponentProps<typeof Tabs>, "children"> {
-  options?: PeriodOption[]
+export interface PeriodTabsProps<T extends string = string>
+  extends Omit<React.ComponentProps<typeof Tabs>, "children" | "value" | "defaultValue" | "onValueChange"> {
+  options?: readonly PeriodOption<T>[]
   size?: "sm" | "default"
   /** Slide a single pill between tabs instead of swapping backgrounds. */
   animated?: boolean
+  value?: T
+  defaultValue?: T
+  onValueChange?: (value: T) => void
 }
 
 interface IndicatorRect {
@@ -30,8 +33,14 @@ interface IndicatorRect {
 }
 
 /** Small segmented control for switching a chart's time range. */
+function PeriodTabs<T extends string>(
+  props: PeriodTabsProps<T> & { options: readonly PeriodOption<T>[] }
+): React.JSX.Element
+function PeriodTabs(
+  props: PeriodTabsProps<string> & { options?: undefined }
+): React.JSX.Element
 function PeriodTabs({
-  options = defaultPeriods,
+  options,
   size = "sm",
   animated = false,
   className,
@@ -39,10 +48,11 @@ function PeriodTabs({
   defaultValue,
   onValueChange,
   ...props
-}: PeriodTabsProps) {
+}: PeriodTabsProps<string>) {
+  const renderedOptions: readonly PeriodOption[] = options ?? defaultPeriods
   const listRef = React.useRef<HTMLDivElement>(null)
-  const [internalValue, setInternalValue] = React.useState(
-    defaultValue ?? options[0]?.value
+  const [internalValue, setInternalValue] = React.useState<string | undefined>(
+    defaultValue ?? renderedOptions[0]?.value
   )
   const active = value ?? internalValue
   const [rect, setRect] = React.useState<IndicatorRect | null>(null)
@@ -80,7 +90,8 @@ function PeriodTabs({
       defaultValue={defaultValue}
       onValueChange={(next) => {
         setInternalValue(next)
-        onValueChange?.(next)
+        const matched = renderedOptions.find((option) => option.value === next)?.value
+        if (matched !== undefined) onValueChange?.(matched)
       }}
       {...props}
     >
@@ -99,7 +110,7 @@ function PeriodTabs({
             style={rect}
           />
         ) : null}
-        {options.map((option) => (
+        {renderedOptions.map((option) => (
           <TabsTrigger
             key={option.value}
             value={option.value}

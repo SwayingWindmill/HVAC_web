@@ -4,7 +4,7 @@ import type { Finding } from '../diagnostics/diagnostics-model';
 import { siteMidnight, wallTime } from '../energy-analysis/consumption/model.ts';
 
 // A Site's monthly report. A closed month reads from its snapshot, kept by report-service once the
-// month was over (#483); the running month, and a closed month without one, are assembled on demand
+// month was over; the running month, and a closed month without one, are assembled on demand
 // from the owners' records. Demand, alarms and work orders are never in a snapshot.
 
 export interface ReportWindow {

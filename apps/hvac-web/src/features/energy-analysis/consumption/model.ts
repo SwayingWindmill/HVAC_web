@@ -3,7 +3,7 @@ import type { EnergySeriesQuery, EnergySeriesResponse } from '../../../api/gener
 export const ENERGY_PERIODS = { today: '今日', '7d': '近 7 天', month: '本月', year: '本年' } as const;
 export type EnergyPeriod = keyof typeof ENERGY_PERIODS;
 export type Granularity = EnergySeriesQuery['granularity'];
-/** A bucket's electricity as the Energy analytics owner priced it at the Site's Tariff (#575). */
+/** A bucket's electricity as the Energy analytics owner priced it at the Site's Tariff. */
 export type EnergyCost = NonNullable<EnergySeriesResponse['points'][number]['cost']>;
 export const BUCKET_NOUN: Record<Granularity, string> = { hour: '时段', day: '日', month: '月' };
 
@@ -49,7 +49,7 @@ export interface EnergyRow {
   readonly cop: number | null;
   /** The electricity's estimated energy charge; null without electricity. */
   readonly cost: EnergyCost | null;
-  /** Synthesized-total hour missing one or more sub-meters (#798). */
+  /** Synthesized-total hour missing one or more sub-meters. */
   readonly incomplete: boolean;
   readonly missingMeters: readonly string[];
 }
@@ -65,7 +65,7 @@ export interface EnergySummary {
   readonly dataWatermark: string | null;
   /** Suspect or invalid meter intervals left out of every total. */
   readonly excludedIntervals: number;
-  /** Counter intervals > 1h recovered in the window: counted in totals, excluded from hourly/daily curves (#798). */
+  /** Counter intervals > 1h recovered in the window: counted in totals, excluded from hourly/daily curves. */
   readonly crossGapElectricityKWh: number;
   readonly crossGapCost: EnergyCost | null;
   /** Distinct sub-meters missing across any incomplete hour in this window. */
@@ -309,7 +309,7 @@ export interface HeatmapDay {
 
 /** Hourly energy laid out as Site-local days by hour of day, oldest day first. */
 export function hourlyHeatmap(series: EnergySeriesResponse, timeZone: string, days: readonly string[]): HeatmapDay[] {
-  const byDay = new Map(days.map((day) => [day, Array.from({ length: 24 }, () => null as number | null)]));
+  const byDay = new Map(days.map((day) => [day, Array.from({ length: 24 }, (): number | null => null)]));
   for (const point of series.points) {
     const local = wallTime(new Date(point.periodStart), timeZone);
     const key = `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;

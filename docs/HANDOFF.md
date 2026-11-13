@@ -28,7 +28,7 @@
 
 - 设计系统见 `DESIGN.md`（1.0），视觉基准是 Claude Design 画布 https://claude.ai/artifact/LVwBRsavimfmaBHnRYJbdm 的「定稿」页，令牌在 `apps/hvac-web/src/global.css`；`text-sm` 正文 13/20、`text-xs` 说明 12/18、`text-title` 面板标题 14/20、`text-micro` 单位与徽标 11/16。
 - 复用现有组合块：`Main`、`PageHeader` / `PageMeta`、`Panel` / `PanelHeader` / `PanelLink`、`StateCard`、`SeverityMark`、`InfoTip`、`MetricTabsChartCard`、`FactTile`（值样式传 `valueClassName`）、`components/ui/table`、`Status` / `StatusBadge`。
-- 路由组合、`routeTree.gen.ts` 新鲜度、`DESIGN.md` §1 文案、Web AST（禁 `as unknown as` / 裸 `fetch` / `WebSocket` / `<Button variant="secondary">` 与非 `const` `as` 棘轮）、浅/深主题 WCAG 对比度与 IAM 权限/角色展示同步由 `npm run typecheck:scripts`、`npm run design:check`、`scripts/test-real-design-tokens.ts` 与 `npm run web:principal:contract` 自动检查；非弹窗未保存表单归所在页面拦截（如系统管理 `features/system/unsaved-drafts.tsx`）。
+- 路由组合、`routeTree.gen.ts` 新鲜度、`DESIGN.md` §1 文案、Web AST（禁 `as unknown as` / 裸 `fetch` / `WebSocket` / `<Button variant="secondary">` / `"use client"`（`components/ui/` 外）/ `@ts-ignore` / `eslint-disable` / `console.log` / `JSON.parse(JSON.stringify)` 与非 `const` `as` 棘轮 `43`）、浅/深主题 WCAG 对比度与 IAM 权限/角色展示同步由 `npm run typecheck:scripts`、`npm run design:check`、`scripts/test-real-design-tokens.ts` 与 `npm run web:principal:contract` 自动检查；非弹窗未保存表单归所在页面拦截（如系统管理 `features/system/unsaved-drafts.tsx`）。
 - 视觉验收：用 `verify` 技能（Vite 5190/5194 录制网关或 `https://localhost:8443` 真实数据，`1440px` 宽度）。
 
 ## 服务器（139.199.58.47）

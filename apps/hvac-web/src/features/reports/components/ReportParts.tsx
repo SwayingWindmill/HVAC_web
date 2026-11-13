@@ -8,8 +8,9 @@ import { SEVERITY_LABELS, SEVERITY_ORDER } from '@/features/alarms/alarm-present
 import { ruleFor } from '@/features/diagnostics/diagnostics-model';
 import { costBasis, siteSavingsRate } from '@/features/savings/savings-model';
 import { PERIOD_COLOR } from '@/features/tariff/period-presentation';
-import { PERIOD_LABEL, type DemandCharge } from '@/features/tariff/tariff-model';
+import { PERIOD_LABEL, type DemandCharge, type PeriodCode } from '@/features/tariff/tariff-model';
 import { formatDecimal } from '@/lib/operator-format';
+import { isOneOf } from '@/lib/typed';
 import { cn } from '@/lib/utils';
 import type { AlarmSummary } from '../report-model';
 
@@ -141,6 +142,8 @@ export interface PeriodLine {
   readonly rate: number;
 }
 
+const PERIOD_CODES = ['SUPER_PEAK', 'PEAK', 'FLAT', 'VALLEY'] as const satisfies readonly PeriodCode[];
+
 const headCell = 'h-9 bg-muted px-3 text-xs font-medium whitespace-nowrap text-muted-foreground';
 const bodyCell = 'border-b border-divider px-3 py-2.5';
 
@@ -178,10 +181,12 @@ export function CostTable({ periods, charges, chargesNote, energyKWh }: {
       </thead>
       <tbody className="tabular-nums">
         {periods.map((period) => {
-          const color = PERIOD_COLOR[period.code as keyof typeof PERIOD_COLOR];
+          const knownCode = isOneOf(PERIOD_CODES, period.code) ? period.code : null;
+          const color = knownCode ? PERIOD_COLOR[knownCode] : 'var(--muted-foreground)';
+          const label = knownCode ? PERIOD_LABEL[knownCode] : period.code;
           return (
             <tr key={period.code}>
-              <td className={bodyCell}><span className="flex items-center gap-2"><span className="size-2 rounded-[2px]" style={{ background: color }} aria-hidden="true" />{PERIOD_LABEL[period.code as keyof typeof PERIOD_LABEL] ?? period.code}时段电度电费</span></td>
+              <td className={bodyCell}><span className="flex items-center gap-2"><span className="size-2 rounded-[2px]" style={{ background: color }} aria-hidden="true" />{label}时段电度电费</span></td>
               <td className={cn(bodyCell, 'text-right')}>{formatDecimal(period.energyKWh, 0)} kWh</td>
               <td className={cn(bodyCell, 'text-right')}>{formatDecimal(period.rate, 2)} 元/kWh</td>
               <td className={bodyCell}><ShareBar value={period.cost} total={total} color={color} /></td>

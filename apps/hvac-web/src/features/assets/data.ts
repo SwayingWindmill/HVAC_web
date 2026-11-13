@@ -5,7 +5,6 @@ import type {
   TelemetryPoint,
 } from '../../api/generated/platformGateway.gen.ts';
 import type {
-  BatchObservationFailure,
   DeviceObservationSnapshot,
   S2TelemetryClient,
 } from '../../api/generated/s2Telemetry.gen.ts';
@@ -99,14 +98,11 @@ function validateAssetModel(model: SiteAssetModel, tenantId: string, siteId: str
     }
   }
 
-  const expectedCounts = {
-    spaces: model.spaces.length,
-    assets: model.assets.length,
-    deviceEndpoints: model.devices.length,
-    physicalSensors: model.sensors.length,
-    points: model.telemetryPoints.length,
-  };
-  if (Object.entries(expectedCounts).some(([key, value]) => model.counts[key as keyof typeof expectedCounts] !== value)) {
+  if (model.counts.spaces !== model.spaces.length
+    || model.counts.assets !== model.assets.length
+    || model.counts.deviceEndpoints !== model.devices.length
+    || model.counts.physicalSensors !== model.sensors.length
+    || model.counts.points !== model.telemetryPoints.length) {
     throw new Error('Asset Model counts do not match the returned relationship graph');
   }
 }
@@ -233,7 +229,7 @@ export async function loadAssetsCurrentState(input: LoadAssetsCurrentStateInput)
       if (item.status === 'OK') {
         byDeviceId.set(item.deviceId, { status: 'ok', snapshot: validateSnapshot(item.snapshot, target.device, target.keys) });
       } else {
-        byDeviceId.set(item.deviceId, { status: 'error', problem: (item as BatchObservationFailure).problem });
+        byDeviceId.set(item.deviceId, { status: 'error', problem: item.problem });
       }
     });
   }

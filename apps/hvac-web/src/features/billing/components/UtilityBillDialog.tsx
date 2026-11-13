@@ -40,6 +40,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { formatDecimal } from '@/lib/operator-format';
+import { isOneOf } from '@/lib/typed';
 import { cn } from '@/lib/utils';
 import {
   BASIC_CHARGE_MODE_LABEL,
@@ -54,6 +55,9 @@ import {
   describeBillingApiError,
   isBillingRevisionConflict,
 } from '../query';
+
+const METER_SCOPES = ['CHILLER_PLANT', 'WHOLE_BUILDING'] as const satisfies readonly UtilityBillMeterScope[];
+const BASIC_CHARGE_MODES = ['NONE', 'TRANSFORMER_CAPACITY_KVA', 'MAX_DEMAND_KW'] as const satisfies readonly UtilityBillBasicChargeMode[];
 
 const nonNegativeMoneyPattern = /^\d+(?:\.\d{1,2})?$/;
 const signedMoneyPattern = /^-?\d+(?:\.\d{1,2})?$/;
@@ -666,9 +670,9 @@ export function UtilityBillDialog({
                 value={watchedMeterScope}
                 disabled={mutation.isPending}
                 onValueChange={(value) => {
-                  const scope = value as UtilityBillMeterScope;
-                  form.setValue('meterScope', scope, { shouldValidate: true });
-                  if (scope !== 'WHOLE_BUILDING') {
+                  if (!isOneOf(METER_SCOPES, value)) return;
+                  form.setValue('meterScope', value, { shouldValidate: true });
+                  if (value !== 'WHOLE_BUILDING') {
                     form.setValue('chillerShareOverridePercentInput', '');
                   }
                 }}
@@ -764,9 +768,9 @@ export function UtilityBillDialog({
                   value={watchedBasicMode}
                   disabled={mutation.isPending}
                   onValueChange={(value) => {
-                    const nextMode = value as UtilityBillBasicChargeMode;
-                    form.setValue('basicChargeMode', nextMode, { shouldValidate: true });
-                    if (nextMode === 'NONE') {
+                    if (!isOneOf(BASIC_CHARGE_MODES, value)) return;
+                    form.setValue('basicChargeMode', value, { shouldValidate: true });
+                    if (value === 'NONE') {
                       form.setValue('basicChargeInput', '0', { shouldValidate: true });
                       form.setValue('basicChargeQuantityInput', '');
                     }

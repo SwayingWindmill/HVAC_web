@@ -231,12 +231,13 @@ export function TwinScene({ plant, plan, palette, view, cut, shell, emphasis, se
   const origin = layout.buildingOrigin ?? [0, 0, 0];
   const markers = useMemo(() => {
     const at = (position: V3, height: number): V3 => [position[0], position[1] + height, position[2]];
+    const markerEntry = (item: TwinEquipment, position: V3): [TwinEquipment, V3] => [item, position];
     const entries: [TwinEquipment, V3][] = [
-      ...plant.chillers.map((item, index) => [item, at(layout.chillers[index], 2.1)] as [TwinEquipment, V3]),
-      ...plant.coolingPumps.map((item, index) => [item, at(layout.coolingPumps[index], 1.3)] as [TwinEquipment, V3]),
-      ...plant.chilledPumps.map((item, index) => [item, at(layout.chilledPumps[index], 1.3)] as [TwinEquipment, V3]),
-      ...plant.towers.map((item, index) => [item, at(layout.towers[index], 4.0)] as [TwinEquipment, V3]),
-      ...(building?.floors.flatMap((floor) => floor.terminals.map((placement) => [placement.terminal.equipment, [origin[0] + placement.at[0], placement.at[1] + 0.55, origin[2] + placement.at[2]]] as [TwinEquipment, V3])) ?? []),
+      ...plant.chillers.map((item, index) => markerEntry(item, at(layout.chillers[index], 2.1))),
+      ...plant.coolingPumps.map((item, index) => markerEntry(item, at(layout.coolingPumps[index], 1.3))),
+      ...plant.chilledPumps.map((item, index) => markerEntry(item, at(layout.chilledPumps[index], 1.3))),
+      ...plant.towers.map((item, index) => markerEntry(item, at(layout.towers[index], 4.0))),
+      ...(building?.floors.flatMap((floor) => floor.terminals.map((placement) => markerEntry(placement.terminal.equipment, [origin[0] + placement.at[0], placement.at[1] + 0.55, origin[2] + placement.at[2]]))) ?? []),
     ];
     return new Map(entries.map(([item, position]) => [item.assetId, { item, position }]));
   }, [building, layout, origin, plant]);
