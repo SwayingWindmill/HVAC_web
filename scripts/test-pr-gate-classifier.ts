@@ -238,7 +238,6 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
       findSkillMirrorViolations({
         root: scratchRoot,
         trackedFiles: [
-          '.agents/skills/MATTPOCOCK-LICENSE.txt',
           '.agents/skills/PSTACK-LICENSE.txt',
           '.claude/skills/README.md',
           '.agents/skills/sample/SKILL.md',

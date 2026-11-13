@@ -235,7 +235,7 @@ export const findDebugMarkerViolations = ({
   return violations;
 };
 
-const allowedAgentsSkillRootFiles = new Set(['MATTPOCOCK-LICENSE.txt', 'PSTACK-LICENSE.txt']);
+const allowedAgentsSkillRootFiles = new Set(['PSTACK-LICENSE.txt']);
 const allowedClaudeSkillRootFiles = new Set(['README.md']);
 
 export const findRequiredGuardrailFileViolations = (trackedFiles: string[]) => {
