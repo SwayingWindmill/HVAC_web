@@ -8,6 +8,7 @@ import { readGoWorkspace } from './lib/go-workspace.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const maximumInlineCommands = 4;
+export const maximumHandoffBytes = 28 * 1024;
 const longChainBaselinePath = 'scripts/package-script-long-chain-baseline.json';
 const javascriptToolingBaselinePath = 'scripts/javascript-tooling-baseline.json';
 const requiredLinguistExclusions = Object.freeze([
@@ -18,6 +19,7 @@ const requiredLinguistExclusions = Object.freeze([
 
 const forbiddenTrackedPrefixes = Object.freeze([
   '.ai-bridge/',
+  '.audit/',
   '.clones/',
   '.codegraph/',
   '.workbuddy/',
@@ -177,6 +179,18 @@ export const findWorkflowViolations = (workflow) => {
     : [`.github/workflows/pr-gates.yml: missing canonical static gate \`${required}\``];
 };
 
+export const findHandoffBudgetViolations = ({
+  bytes,
+  maxBytes = maximumHandoffBytes,
+}: {
+  bytes: number;
+  maxBytes?: number;
+}) => (bytes <= maxBytes
+  ? []
+  : [
+    `docs/HANDOFF.md: ${bytes} bytes exceeds ${maxBytes}-byte single-read budget; keep only current state, next steps, and live environment deviations in docs/HANDOFF.md, move runbooks to docs/operations/, and encode recurring rules in checks (/correct)`,
+  ]);
+
 const resolveGitListFilesInvocation = (root) => ({
   gitExecutable: 'git',
   args: ['-C', root, 'ls-files', '-z'],
@@ -251,6 +265,7 @@ export const checkRepositoryGovernance = (root = repositoryRoot) => {
       baseline: longChainBaseline,
     }),
     ...findWorkflowViolations(readFileSync(join(root, '.github/workflows/pr-gates.yml'), 'utf8')),
+    ...findHandoffBudgetViolations({ bytes: readFileSync(join(root, 'docs/HANDOFF.md')).byteLength }),
     ...findGoFormatViolations(root, trackedFiles),
   ];
 

@@ -3,6 +3,12 @@ import { spawnSync } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
 
+import {
+  findHandoffBudgetViolations,
+  findTrackedArtifactViolations,
+  maximumHandoffBytes,
+} from './check-repository-governance.ts';
+
 const runClassification = (files) => {
   const result = spawnSync(process.execPath, ['scripts/classify-pr-gates.mjs', `--files=${files.join(',')}`], {
     cwd: process.cwd(),
@@ -24,7 +30,13 @@ const runPlan = (gate, profiles) => {
 };
 
 test('documentation-only changes keep expensive affected gates idle', () => {
-  for (const file of ['docs/architecture/overview.md', '.mwgrc']) {
+  for (const file of [
+    'docs/architecture/overview.md',
+    '.mwgrc',
+    'CLAUDE.md',
+    '.agents/skills/correct/SKILL.md',
+    '.claude/skills/correct/SKILL.md',
+  ]) {
     const classification = runClassification([file]);
     assert.equal(classification.contracts, false);
     assert.equal(classification.units, false);
@@ -169,4 +181,12 @@ test('Go code, Go dependencies, lint rules and the Go check scripts select the g
 test('active workflow filenames no longer encode historical implementation stages', async () => {
   const workflowNames = (await readdir('.github/workflows')).filter((name) => /\.ya?ml$/u.test(name));
   assert.deepEqual(workflowNames.filter((name) => /^(?:s\d+|rms)-/u.test(name)), []);
+});
+
+test('repository governance blocks tracked .audit scratch files and oversized docs/HANDOFF.md', () => {
+  assert.equal(findTrackedArtifactViolations(['.audit/check.todo.md']).length, 1);
+  assert.equal(findHandoffBudgetViolations({ bytes: maximumHandoffBytes }).length, 0);
+  const overflow = findHandoffBudgetViolations({ bytes: maximumHandoffBytes + 1 });
+  assert.equal(overflow.length, 1);
+  assert.ok(overflow[0].includes('exceeds 28672-byte single-read budget'));
 });

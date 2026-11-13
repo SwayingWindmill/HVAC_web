@@ -1,4 +1,5 @@
 # Local project coordination data — keep out of the repo
+.audit/
 .workbuddy/
 .ai-bridge/
 .codegraph/

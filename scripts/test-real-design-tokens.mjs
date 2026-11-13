@@ -58,8 +58,13 @@ test('design system check passes on the repository and rejects unguarded Enter s
       join(sandbox, 'apps/hvac-web/src/features/demo/BadInput.tsx'),
       `export const BadInput = ({ submit }: { submit: () => void }) => (\n  <Input onKeyDown={(event) => { if (event.key === 'Enter') submit(); }} />\n);\n`,
     );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/BadFactTile.tsx'),
+      `export const BadFactTile = () => (\n  <FactTile label="累计节电" className="col-span-2">12 kWh</FactTile>\n);\n`,
+    );
     const { errors } = await validateDesignSystem(sandbox);
     assert.ok(errors.some((entry) => entry.includes('BadInput.tsx:2 text input Enter onKeyDown must guard IME composition')));
+    assert.ok(errors.some((entry) => entry.includes('BadFactTile.tsx:2 FactTile does not accept className; pass valueClassName')));
     assert.ok(errors.some((entry) => entry.includes('apps/hvac-web/index.html must declare <meta name="color-scheme"')));
     assert.ok(errors.some((entry) => entry.includes(':root must declare color-scheme: light dark;')));
     assert.ok(errors.some((entry) => entry.includes(':root[data-theme="light"] must declare color-scheme: light;')));

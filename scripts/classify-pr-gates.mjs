@@ -167,7 +167,7 @@ for (const file of files) {
     addReason(file, 'Go code, dependencies or Go check rules changed; lint and vulnerability-scan every Go module');
   }
   match(file === '.golangci.yml', () => {});
-  match(file === 'AGENTS.md' || file === 'README.md' || file === 'LICENSE' || file === '.mwgrc' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
+  match(file === 'AGENTS.md' || file === 'CLAUDE.md' || file === 'README.md' || file === 'LICENSE' || file === '.mwgrc' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
     addReason(file, 'repository documentation or metadata only');
   });
   match(file.startsWith('.github/workflows/'), () => selectBroad(file, 'workflow behavior changed'));
@@ -292,7 +292,7 @@ for (const file of files) {
     addReason(file, 'operations contract or runbook changed');
   });
 
-  match(file.startsWith('docs/') || file.startsWith('.github/') || file.startsWith('.agents/') || file.startsWith('.scratch/'), () => addReason(file, 'documentation or local tooling changed'));
+  match(file.startsWith('docs/') || file.startsWith('.github/') || file.startsWith('.agents/') || file.startsWith('.claude/') || file.startsWith('.scratch/'), () => addReason(file, 'documentation or local tooling changed'));
 
   if (!matched) {
     unknown = true;

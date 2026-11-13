@@ -17,7 +17,7 @@
 | `Panel` / `PanelHeader` / `PanelLink` / `PanelCount`（`panel`） | 唯一的白色面板，标题栏高 48px；数字放在面板里作为一条分隔的数字条 |
 | `StateCard`（`state`） | 空、失败、无权限、未接入，以及路由级的状态页和 404 |
 | `MetricValue`（`metric-card`） | 显示一个数：没有数据时写「暂无数据」而不是 0，数据过期时变淡 |
-| `FactTile`（`fact-list`） | 一个「标签 + 值」的小格子。`className` 作用在值上；要跨列，外面包一层 `<div className="col-span-…">` |
+| `FactTile`（`fact-list`） | 一个「标签 + 值」的小格子。`valueClassName` 作用在值上；要跨列，外面包一层 `<div className="col-span-…">` |
 | `DataTableBlock`（`data-table`） | 页面、标签页级别的表格 |
 
 不要再另做数字条、KPI 卡或状态胶囊；需要时扩展上面这些。
