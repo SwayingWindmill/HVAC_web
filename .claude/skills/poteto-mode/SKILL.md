@@ -21,8 +21,10 @@ Sibling skills live at `../<name>/SKILL.md` from this file; include this file's 
 - **Data shape & design**: Name the data shape and invariant first (`Model the Domain`, `typescript-best-practices`). Code crossing a function boundary or shared contract -> `architect` + `blast-radius` (`bug-fix` checks `focused-fix-exception` first).
 - **Parallelism & adversarial check**: Independent slices or coverage checks -> `swarm`. Competing architectures/implementations -> `arena`. Contested design or risky diff -> `interrogate`.
 - **Prose & code hygiene**: Any user reply, doc, commit, or PR body -> `unslop` (and `AGENTS.md` plain Chinese + concrete examples for repo docs). Before commit -> `deslop`. Before review -> `no-comments` (and `thermo-nuclear-code-quality-review` when structural rigor is warranted).
-- **Verification**: Web UI changes -> `verify` (`.agents/skills/verify/`, 1440px evidence in `.scratch/verify/`). Command/MQTT state machine changes -> `command-safety` (`npm run command:formal`). Bug fixes -> reproduce on the matching surface first.
-- **PR lifecycle**: `make-pr-easy-to-review` before opening; skeptical bot triage via [`references/bugbot-triage.md`](references/bugbot-triage.md); PR rescue via `babysit`, `fix-ci`, `fix-merge-conflicts`, `get-pr-comments`.
+- **Verification & modeling**: Web UI changes -> `verify` (`.agents/skills/verify/`, 1440px evidence in `.scratch/verify/`). Command/MQTT state machine changes -> `command-safety` (`npm run command:formal`). Ad-hoc TLA+ flow charts -> `statechart`. Perf claims -> `benchmark-checklist`. Bug fixes -> reproduce on the matching surface first.
+- **Writing, clarity & catch-up**: `technical-writing` + `unslop` for docs, PR bodies, and commits (`AGENTS.md` plain Chinese + concrete examples for repo docs); `sharpen`, `bro`, `teach`, `ketchup`, `ketchup-video` when asked.
+- **PR lifecycle**: `make-pr-easy-to-review` before opening; `thermos` (`thermo-nuclear-review` + `thermo-nuclear-code-quality-review`) for deep branch audits; skeptical bot triage via [`references/bugbot-triage.md`](references/bugbot-triage.md); PR rescue via `babysit`, `fix-ci`, `fix-merge-conflicts`, `get-pr-comments`.
+- **Continuity, logs & meta**: `recall` / `what-did-i-get-done` for context recovery; `show-me-your-work` (`.scratch/<slug>.tsv`) for long/autonomous trails; `reflect` / `automate-me` / `poteto-help` / `setup-pstack` for workflow & skills.
 - **Recurring mistakes & defects**: Repeated corrections -> `correct` (schema/architecture -> types -> targeted lint -> test -> docs). Broken skill or unrelated correctness defect -> fix in scope or track via `gh issue`.
 
 ## Principles
@@ -67,7 +69,7 @@ Sibling skills live at `../<name>/SKILL.md` from this file; include this file's 
 
 ## Subagents
 
-- **Antigravity dispatch**: Use `invoke_subagent` with `TypeName: "self"` (with `Workspace: "share"` or an isolated `git worktree`) for writable/shell tasks, `TypeName: "research"` for read-only inspection, and `Model: "inherit"` by default unless the user requests another model.
+- **Antigravity dispatch**: Use `invoke_subagent` with `TypeName: "self"` (with `Workspace: "share"` or an isolated `git worktree`) for writable/shell tasks, `TypeName: "research"` for read-only inspection, and `Model: "inherit"` by default unless the user specifies another model or configures `~/.gemini/config/pstack-models.md` via `setup-pstack`.
 - **Clean boundaries**: Pass file paths instead of pasting whole files; review every delegate diff and command output yourself before summarizing.
 - **Fresh delegates by default**: Give follow-up rounds fresh subagents with consolidated briefs unless live local state (uncommitted worktree, dev server) must stay alive. Before committing or merging, list and stop active child subagents (`manage_subagents`).
 - **Independent review gate**: Never count your own review or unit tests alone as an independent verification verdict; record any missing reviewer explicitly.
@@ -90,5 +92,22 @@ Copy the matched playbook's steps into your checklist before coding (mark unused
 | New or changed behavior from a named shape | [`playbooks/feature.md`](playbooks/feature.md) |
 | Behavior-preserving structural cleanup | [`playbooks/refactoring.md`](playbooks/refactoring.md) |
 | Committing, opening PR, watching CI, merging | [`playbooks/opening-a-pr.md`](playbooks/opening-a-pr.md) |
+| Throwaway UI or behavior design prototype | [`playbooks/prototype.md`](playbooks/prototype.md) |
+| Pixel-exact UI migration against baseline | [`playbooks/visual-parity.md`](playbooks/visual-parity.md) |
+| One-off profiled performance fix | [`playbooks/perf-issue.md`](playbooks/perf-issue.md) |
+| Iterative metric optimization loop | [`playbooks/hillclimb.md`](playbooks/hillclimb.md) |
+| Instrument live process to diagnose bug/leak | [`playbooks/runtime-forensics.md`](playbooks/runtime-forensics.md) |
+| Analyze existing trace/profile/heap dump | [`playbooks/trace-forensics.md`](playbooks/trace-forensics.md) |
+| Multi-phase / stacked-PR checklist plan | [`playbooks/multi-phase-plan.md`](playbooks/multi-phase-plan.md) |
+| Single-goal autonomous check loop | [`playbooks/autonomous-run.md`](playbooks/autonomous-run.md) |
+| Multi-day multi-PR coordinator program | [`playbooks/orchestrate.md`](playbooks/orchestrate.md) |
+| Parallel independent PR owners (auto-merge when verified) | [`playbooks/autopilot-full.md`](playbooks/autopilot-full.md) |
+| Parallel or stacked PR owners (stop at verified) | [`playbooks/autopilot-stack.md`](playbooks/autopilot-stack.md) |
+| Stacked/multi-PR babysit loop (or `../babysit/SKILL.md` for single PR) | [`playbooks/babysit.md`](playbooks/babysit.md) |
+| Verify and land a PR stack bottom-up | [`playbooks/shipping.md`](playbooks/shipping.md) |
+| Resume from checkpoint / prior session | [`playbooks/session-pickup.md`](playbooks/session-pickup.md) |
+| Stop cleanly and save resume checkpoint | [`playbooks/pause-safely.md`](playbooks/pause-safely.md) |
+| Safe git worktree & cache cleanup audit | [`playbooks/worktree-cleanup.md`](playbooks/worktree-cleanup.md) |
+| Author or revise a repo/personal skill | [`playbooks/authoring-a-skill.md`](playbooks/authoring-a-skill.md) |
+| Blinded evaluation of skill/prompt variants | [`playbooks/eval.md`](playbooks/eval.md) |
 | Large, ambiguous, or bespoke multi-phase effort | Use sibling `../figure-it-out/SKILL.md` |
-| Watching/fixing an already-open PR | Use sibling `../babysit/SKILL.md` |

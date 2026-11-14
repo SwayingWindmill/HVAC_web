@@ -95,4 +95,4 @@
 
 - 故障与变更手册见 `docs/operations/`：`disk-full.md`、`postgres-crash.md`、`restore-from-backup.md`、`rollback.md`、`certificate-renewal.md`、`rotate-secrets.md`、`alert-receivers.md`、`alerts.md`、`energy-hourly-rollup.md`。
 - `.github/workflows/quality.yml` 检查 Go 语句与网页 `src` 行覆盖率不低于基线（允许 0.1 个百分点误差），并用录制网关跑登录、告警与实时运行 e2e；控制指令与 MQTT 关联不变量另由 `npm run command:formal`（`command-safety`）在静态/单测门禁中穷举校验。
-- Agent 技能树已完成纯 `pstack` 切换（共 `31` 个技能：精简版 `poteto-mode` + 25 个 `pstack` 技能 + `verify` + `command-safety` + 3 个 UI 技能），由 `npm run repo:check` 自动校对 `.agents/skills/` 与 `.claude/skills/` 逐字节 1:1 镜像。
+- Agent 技能树已完成 `pstack` 全量落地（共 `48` 个技能：`43` 个 `pstack` 技能 + `verify` + `command-safety` + 3 个 UI 技能，配置全部 `23` 套剧本及 `.ts`/`.sh` 辅助脚本；仅 Cursor 云端 `make-bot-ui` 因无宿主 API 未装），由 `npm run repo:check` 自动校对 `.agents/skills/` 与 `.claude/skills/` 逐字节 1:1 镜像。

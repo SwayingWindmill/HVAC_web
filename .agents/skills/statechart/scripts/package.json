@@ -1,0 +1,5 @@
+{
+  "name": "@hvac/statechart-skill",
+  "private": true,
+  "type": "module"
+}

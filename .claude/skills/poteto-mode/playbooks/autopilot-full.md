@@ -1,0 +1,19 @@
+### Autopilot-full
+
+Resolve the repo driver skill first (`.agents/skills/verify/SKILL.md` for web UI / live stack, `.agents/skills/command-safety/SKILL.md` for command/MQTT state machine, or `scripts/domain-task-matrix.ts` for backend/static domains).
+
+**You own the verdicts, never the PRs. One owner carries each PR from build to merge-ready, and nothing merges until independent verifiers prove the code that lands.**
+
+A verdict covers one patch and green CI covers one head SHA. Step 4 runs a verification swarm once at the code-ready head, and again only for a major change. The `git patch-id` rule in [`shipping.md`](shipping.md) can carry a lane's result across clean rebases, while every new head still needs green CI.
+
+1. **The operator's gates come first.** The grant covers only the queue's items; PRs outside the queue stop at merge-ready. On the operator's go, write the full program objective into `.scratch/orchestrate/<slug>/notes.md` and restate it in your checklist so it stands across turns. Before spawning more than three owners, confirm the count if the user's request did not already specify queue size.
+2. **Spawn one owner per PR, and keep its work where a replacement can find it.** Use GitHub CLI (`gh`) for all PR operations (`gh pr create`, `gh pr view`, `gh pr checks`, `gh pr merge`). Each owner runs via `invoke_subagent` (`TypeName: "self"`, `Workspace: "share"` or an isolated git worktree) that builds, opens its PR per [`opening-a-pr.md`](opening-a-pr.md), proves the change on the real artifact, babysits to green per [`babysit.md`](babysit.md), and hands the PR off once steps 4 and 5 clear it.
+
+   Code is ready only after [`deslop`](../../deslop/SKILL.md) and [`no-comments`](../../no-comments/SKILL.md) plus a rebase onto current `main` and repo domain checks (`npm run domain:run` / `npm run check`). Soon after starting, push the branch and start a decision trail under `.scratch/orchestrate/<slug>/` per [`show-me-your-work`](../../show-me-your-work/SKILL.md), updating after each unit. Force-push only your own branch with `--force-with-lease` pinned to the last known remote SHA.
+3. **Run owners in parallel off `main`, never stacked,** unless the user requested [`autopilot-stack.md`](autopilot-stack.md), so each PR lands independently.
+4. **Swarm-verify once.** Fan out independent verifiers at the code-ready head per [`swarm`](../../swarm/SKILL.md): re-run gates, prove load-bearing behavior live on the real surface through `verify` / `command-safety`, and audit the diff. Block a PR only for a concrete bug, failed domain/CI gate, or wrong shipped doc. Cap fix-forwards at two rounds per PR before escalating to the operator with exact evidence.
+5. **Merge only verified heads tested on the base they land on.** Re-read [`merge-safety.md`](../references/merge-safety.md) and check `gh pr view` before merging with `gh pr merge <pr> --squash --match-head-commit <verified-head> --delete-branch` (or pause at merge-ready if the user restricted merge authority). Re-run checks if `main` touched callers or shared files in the meantime.
+6. **Run the root supervision tick.** Anything that loosens a gate needs independent verifier proof and explicit root approval. Arm an hourly audit tick via Antigravity `schedule` (cron/timer) when running long unattended queues. On each tick, re-read this playbook and `.scratch/orchestrate/<slug>/notes.md`, inspect child progress via git branches, PRs, and logs (never just self-reports), replace stalled workers, and catch the operator up via [`ketchup`](../../ketchup/SKILL.md) only when tracked state changed.
+7. **Stand down at once on operator stop.** Send every owner a zero-writes instruction and report current branch/PR state.
+
+**Reply:** catch the operator up per [`ketchup`](../../ketchup/SKILL.md), covering each PR's state and verdict, what merged or is merge-ready, countersigns, open operator gates, and follow-ups, with links to each PR and trail.

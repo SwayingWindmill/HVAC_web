@@ -1,24 +1,27 @@
-# pstack 工程工作流调研（2026-11-13，2026-11-14 全量切换）
+# pstack 工程工作流调研与全量扩展记录（2026-11-13 ~ 2026-11-14）
 
 ## 看了什么
 
-团队人手和 Agent 变多后，仅靠在 `AGENTS.md` 与 `docs/HANDOFF.md` 里追加「注意不要……」「记得同步修改……」很容易失效：单份交接文档膨胀到接近工具单次读取上限（48,434 字节对比 46,080 字节阈值），而 `capability-labels.ts` 等手工双写清单也已经发生实际漏同步。为此调研了：
+团队人手和 Agent 变多后，仅靠在 `AGENTS.md` 与 `docs/HANDOFF.md` 里追加「注意不要……」「记得同步修改……」很容易失效，且手工双写清单已经发生漏同步。为此完整比对并审阅了：
 
-- `michael-denyer/pstack-claude` `0.9.138`（提交 `2044f1810afc98c3aa80100587dd990c83cf6ea8`，MIT 协议），及其 `tools/upstream.json` 固定的三个上游来源：`cursor/plugins` 的 `pstack`（`c742dd61706fbacc1b95f1a20b7b988cf096ce6c`）、`cursor-team-kit`（`e46364b8be46000b7df0f260550cd712afbb8d36`）和 `thermos`（`118e73b0e196e4d49d5aade7ce6dd98985a621f68`）；
-- 完整审阅了 `poteto-mode`（含 `references/agy-tools.md`、`references/bugbot-triage.md` 及核心剧本 `feature`、`bug-fix`、`refactoring`、`investigation`、`opening-a-pr`）、`figure-it-out`、`architect`、`blast-radius`、`swarm`、`arena`、`tdd`、`interrogate`、`in-your-own-words`、`thermo-nuclear-code-quality-review`、`no-comments`（及 `plugins/pstack/agents/comment-sicko.md`）、`typescript-best-practices`、`correct`、`deslop`、`unslop`、`how`、`why`、`create-verification-skill`、`maintain-verification-skill`、`create-formal-verification-skill`、`maintain-formal-verification-skill`、`make-pr-easy-to-review`、`babysit`、`fix-ci`、`fix-merge-conflicts`、`get-pr-comments`，以及 Antigravity 插件包装与钩子脚本。
+- `michael-denyer/pstack-claude` `0.9.138`（提交 `2044f1810afc98c3aa80100587dd990c83cf6ea8`，MIT 协议）及其 `tools/upstream.json` 固定的三大来源（`cursor/plugins` `pstack`、`cursor-team-kit`、`thermos`）；
+- 上游最新版本中全部可用技能、23 套 `poteto-mode` 剧本，以及零依赖运行版 `statechart/scripts/`、`check-plan`、`resume`、`worktree-audit`、`log.sh` 与 Antigravity 工具映射。
 
 ## 决定
 
-**全面淘汰 15 个 `mattpocock/skills`（清理重名与方法论分歧），采用裁剪本地化后的 26 个纯 Markdown `pstack` 技能 + 2 个项目验证技能（`verify`、`command-safety`）+ 3 个 UI 技能（`frontend-design`、`shadcn`、`web-design-guidelines`），共 31 个技能在双目录 1:1 镜像；门禁检查与安全钩子继续由 TypeScript 承接，不安装全量 65 技能包及 `.mjs` 脚本。**
+**全面淘汰 `mattpocock/skills` 后，在 `.agents/skills/` 与 `.claude/skills/` 双目录逐字节 1:1 镜像安装全套 `pstack` 可用技能与剧本：43 个 `pstack` 技能（含全量 23 套剧本）+ 2 个项目验证技能（`verify`、`command-safety`）+ 3 个 UI 技能，共 48 个技能；门禁检查与安全钩子继续由仓库 `scripts/` TypeScript 承接，并严格守住 `.agents/` 零 `.js`/`.mjs` 与零 `.audit/` 上限。**
 
 - **采纳的**：
-  - **精简版 `poteto-mode` 总控 + 5 套核心剧本**：原版 `poteto-mode/SKILL.md` 为 `29,027` 字节，会超过 Antigravity 原生技能加载器 `24,000` 字节截断阈值。本次去掉 10 余套无关平台映射表与重型长跑/云端剧本（`orchestrate`、`autopilot-*`、`runtime-forensics` 等）和 23 个零散 `principle-*` 外链目录，把 24 条核心原则内联进小于 10 KB 的 `poteto-mode/SKILL.md`，只保留 `feature`、`bug-fix`、`refactoring`、`investigation`、`opening-a-pr` 5 套剧本及 `references/agy-tools.md`、`references/bugbot-triage.md`。
-  - **规划、协作、去噪与 PR 叶子技能组**：补齐 `figure-it-out`、`tdd`（`pstack` 轻量回归先红后绿版）、`swarm`、`arena`、`interrogate`、`in-your-own-words`、`thermo-nuclear-code-quality-review`、`no-comments`（将上游 `agents/comment-sicko.md` 收进 `references/comment-sicko-prompt.md`）、`make-pr-easy-to-review`、`babysit`、`fix-ci`、`fix-merge-conflicts`、`get-pr-comments`，以及两项验证维护循环技能 `maintain-verification-skill`、`maintain-formal-verification-skill`，与早先落地的 `architect`、`blast-radius`、`typescript-best-practices`、`correct`、`deslop`、`unslop`、`how`、`why`、`create-verification-skill`、`create-formal-verification-skill` 构成完整闭环。
-  - **验证与工程安全底座**：沿用已落地的 `verify`（Playwright 1440×900 录制网关与实库验证）、`command-safety`（`npm run command:formal` 状态机穷举检验）、跨平台 `PreToolUse` 安全钩子（`scripts/hooks/pre-tool-guard.ts`），以及 `scripts/check-repository-governance.ts` 强制校对 `.agents/skills/` 与 `.claude/skills/` 31 个技能逐字节 1:1 镜像和 `<= 102` 遗留 JS 上限。
+  - **`poteto-mode` 总控与全量 23 套剧本**：将 24 条核心原则内联进 `poteto-mode/SKILL.md`（控制在截断阈值 `24,000` 字节内），配置全套 23 套剧本（核心开发 5 套、`prototype`、`visual-parity`、`perf-issue`、`hillclimb`、`runtime-forensics`、`trace-forensics`、`multi-phase-plan`、`autonomous-run`、`orchestrate`、`autopilot-full`、`autopilot-stack`、`babysit`、`shipping`、`session-pickup`、`pause-safely`、`worktree-cleanup`、`authoring-a-skill`、`eval`）及 4 份参考文档（`agy-tools`、`bugbot-triage`、`merge-safety`、`resume-storage`）。
+  - **补齐全部 17 个可用拓展技能**：在首批 26 个基础上补齐 `automate-me`、`benchmark-checklist`、`bro`、`ketchup`、`ketchup-video`、`poteto-help`、`recall`、`reflect`、`setup-pstack`、`sharpen`、`show-me-your-work`、`statechart`、`teach`、`technical-writing`、`thermo-nuclear-review`、`thermos`、`what-did-i-get-done`。
+  - **零 `.js`/`.mjs`、零第三方运行依赖辅助脚本**：
+    - `statechart/scripts/` 直接选用 Node 24+ 原生可运行的零依赖 TypeScript 版本（去除 `test/` 中的 `.mjs` 与 `fast-check` 测试依赖）；跑 TLC 模型检查需在环境中配置 `TLA2TOOLS`/`JAVA` 或由 `mise` 下载。
+    - `check-plan.ts`、`resume.ts`、`worktree-audit.ts` 由上游 `.mjs` 改写为纯标准库 TypeScript（通过 WSL `node --disable-warning=ExperimentalWarning` 直接执行），其中 `worktree-audit.ts` 同时扫描 Antigravity `<appDataDir>/brain`（含 Windows `/mnt/<drive>` 路径映射）与 Claude Code 会话历史；`show-me-your-work/scripts/log.sh` 保留纯 POSIX bash。
 - **改造的**：
-  - **全量替换 `mattpocock/skills`**：移除原 14 个 `mattpocock` 技能目录、原地替换 `tdd`（共淘汰 15 个 `mattpocock` 技能）并删除 `MATTPOCOCK-LICENSE.txt`（`skills-lock.json` 仅保留 `shadcn`），消除双套 `tdd`、`pr`/`make-pr-easy-to-review`、`diagnosing-bugs`/`bug-fix`、`code-review`/`interrogate` 重名与规则冲突；同步把 `architect` 里的 `grilling` 改为 `interrogate`，把术语表与 ADR 格式摘要直接沉淀进 `docs/agents/domain.md`，重写 `docs/agents/issue-delivery.md`、`docs/agents/issue-tracker.md`、`docs/agents/triage-labels.md` 与 `AGENTS.md` 引用。
-  - **清理跨工具链死链与不兼容规则**：去掉 Codex/Copilot/Muse/Pi 映射、`Origin` CLI 分支、`/setup-pstack`/`pstack-models.md` 外部模型覆盖表（统一 `invoke_subagent` 默认 `Model: "inherit"`，除非用户显式指定）、上游 `poteto-mode/scripts/*`（避免 `.agents/` 新增 JS 与 `.audit/` 违禁文件，本地临时检查单改为 `.scratch/todo.md`）以及全部不存在的 `principle-*` 技能链接。
-  - **PR 交付与自动合入以 `AGENTS.md` 为准**：重写 `poteto-mode/playbooks/opening-a-pr.md` 与 `babysit/SKILL.md`，保留上游结构化 PR 说明，取消「开 PR 后不盯 CI、不自动合并」限制，改为推分支（Windows `git push`）与开 PR（WSL `gh`）后立即用 `gh pr checks --watch` 跟进直到 CI 全绿并自动执行 `gh pr merge --squash --delete-branch`；仅生产部署、数据销毁与外部消息须先请示。
-- **拒绝的**：
-  - **`SessionStart` 启动钩子（`hooks.json` + `session-start.sh`）**：上游在 Antigravity 清单写死执行 `./hooks/session-start.sh agy`，Windows 下会通过 `cmd /c` 失败，且每轮注入大段英文总控提示会与 `AGENTS.md` 重叠。
-  - **无关平台工具、云端工作流与通用语料脚本**：23 个独立 `principle-*` 技能目录、9 份非本工具链平台映射表、`pstack-claude` 自带 `.mjs` 脚本（`watch-pr`、`worktree-audit`、`check-playbooks`）、`setup-pstack` / `grainulator` / `orchestrate` / `autopilot-*`、`why` 中的 6 份 SaaS 外部手册，以及 `tla-plus`/`statechart` 重语料（具体并发不变量直接由 `command-safety` 用 Go 校验）。
+  - **严格兼容 Antigravity 与仓库静态门禁**：把所有上游 `.audit/` 路径统一迁至 `.scratch/`；所有 `.cursor/` / `/loop` / `AskUserQuestion` / `create-skill` / `Origin` 引用适配为 Antigravity `transcript.jsonl`、`schedule`、`ask_question`、`agy-customizations` 与原生 `gh`/`git`。
+  - **模型覆盖与 PR 合入边界清晰化**：默认仍遵守 `AGENTS.md`（未配 `pstack-models.md` 时 Antigravity 一律传 `Model: "inherit"`；`setup-pstack` 仅按用户明确配置写入 `~/.gemini/config/pstack-models.md` 或 `.claude/pstack-models.md`）；单 PR 交付继续按 `opening-a-pr.md` 自动跟进 CI 并 squash 合并，而 `babysit`/`autopilot-stack` 等堆叠场景停止在 merge-ready，明确交由 `shipping` 或人工确认后合并。
+  - **领域边界提示**：控制指令与 MQTT 关联状态机继续以 [`command-safety`](../../.agents/skills/command-safety/SKILL.md)（`npm run command:formal`）为权威形式化验证，`statechart` 用于临时/通用状态流 TLA+ 建模与可视化。
+- **拒绝的（唯一不可用技能及运行时不可移植项）**：
+  - **`make-bot-ui`**：强依赖 Cursor 云端 Webhook 与 `update_state`/`secret-request` 等专有云接口，无法在 Antigravity / Claude Code 本地环境运行。
+  - **23 个独立 `principle-*` 外链目录**：原则条文已完整内联在 `poteto-mode/SKILL.md`，不再拆出 23 个单规则目录。
+  - **上游 `SessionStart` 启动钩子（`session-start.sh`）与 Bun 版 `watch-pr`/`ship-pr`**：前者与 `AGENTS.md` / Windows 冲突；后者强依赖 `bun` + `commander`，改以 `gh pr view`/`gh pr checks`/`gh pr merge --match-head-commit` 原生命令在 `babysit`/`shipping`/`merge-safety` 中直接实现。
