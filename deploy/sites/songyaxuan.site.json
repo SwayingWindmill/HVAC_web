@@ -668,6 +668,34 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID31 地址 15"
+        },
+        {
+          "code": "u51",
+          "name": "A 组主机关机脉冲",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 16"
+        },
+        {
+          "code": "u52",
+          "name": "B 组主机关机脉冲",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 17"
+        },
+        {
+          "code": "u53",
+          "name": "C 组主机关机脉冲",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 18"
+        },
+        {
+          "code": "u54",
+          "name": "D 组主机关机脉冲",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID31 地址 19"
         }
       ]
     },
@@ -929,6 +957,998 @@
           "valueType": "NUMBER",
           "address": "房间没有温度探头（通道 15 测的是室外温度）",
           "status": "INACTIVE"
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-00000000000e",
+      "code": "ctrl-chiller-a",
+      "name": "1# 螺杆主机控制器",
+      "type": "CHILLER_CONTROLLER",
+      "sourceKey": "ctrl-chiller-a",
+      "asset": "01a14000-3000-7000-8000-000000000001",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "1# 主机运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "ammeter-unit3 powerTotal>5"
+        },
+        {
+          "code": "start",
+          "name": "开启 1# 螺杆主机",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 3 (u14)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "PULSE",
+            "channel": "u14",
+            "coilAddress": 3,
+            "pulseDurationMs": 500,
+            "interlocks": [
+              { "device": "ctrl-chwp-1", "point": "run_state", "expected": "RUNNING", "reason": "1# 冻水泵需先处于运行状态，方可脉冲开启 1# 主机" },
+              { "device": "ctrl-cwp-1", "point": "run_state", "expected": "RUNNING", "reason": "1# 冷却泵需先处于运行状态，方可脉冲开启 1# 主机" },
+              { "device": "ctrl-tower-1", "point": "run_state", "expected": "RUNNING", "reason": "1# 冷却塔风机需先处于运行状态，方可脉冲开启 1# 主机" }
+            ]
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 1# 螺杆主机",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 16 (u51)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "PULSE",
+            "channel": "u51",
+            "coilAddress": 16,
+            "pulseDurationMs": 500
+          }
+        },
+        {
+          "code": "start_unit_sequence",
+          "name": "一键启动 A 机组",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 A 组启动序列 (u11->u12->u13->u14)",
+          "sourceMetadata": {
+            "capability": "START_UNIT_SEQUENCE",
+            "capabilityRevision": "capability:start-unit-sequence:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "UNIT_SEQUENCE",
+            "channel": "unit-a",
+            "pulseDurationMs": 500
+          }
+        },
+        {
+          "code": "stop_unit_sequence",
+          "name": "一键停机 A 机组",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 A 组停机序列 (u51->u13->u12->u11)",
+          "sourceMetadata": {
+            "capability": "STOP_UNIT_SEQUENCE",
+            "capabilityRevision": "capability:stop-unit-sequence:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "UNIT_SEQUENCE",
+            "channel": "unit-a",
+            "pulseDurationMs": 500
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-00000000000f",
+      "code": "ctrl-chwp-1",
+      "name": "1# 冻水泵控制器",
+      "type": "PUMP_CONTROLLER",
+      "sourceKey": "ctrl-chwp-1",
+      "asset": "01a14000-3000-7000-8000-000000000009",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "1# 冻水泵运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "UID31 地址 0 (u11)"
+        },
+        {
+          "code": "start",
+          "name": "启动 1# 冻水泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 0 (u11)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u11",
+            "coilAddress": 0
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 1# 冻水泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 0 (u11)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u11",
+            "coilAddress": 0,
+            "interlocks": [
+              { "device": "ctrl-chiller-a", "point": "run_state", "expected": "STOPPED", "reason": "1# 主机尚未停机，禁止断开 1# 冻水泵" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000010",
+      "code": "ctrl-cwp-1",
+      "name": "1# 冷却泵控制器",
+      "type": "PUMP_CONTROLLER",
+      "sourceKey": "ctrl-cwp-1",
+      "asset": "01a14000-3000-7000-8000-00000000000d",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "1# 冷却泵运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "UID31 地址 1 (u12)"
+        },
+        {
+          "code": "start",
+          "name": "启动 1# 冷却泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 1 (u12)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u12",
+            "coilAddress": 1
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 1# 冷却泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 1 (u12)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u12",
+            "coilAddress": 1,
+            "interlocks": [
+              { "device": "ctrl-chiller-a", "point": "run_state", "expected": "STOPPED", "reason": "1# 主机尚未停机，禁止断开 1# 冷却泵" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000011",
+      "code": "ctrl-tower-1",
+      "name": "1# 冷却塔控制器",
+      "type": "COOLING_TOWER_CONTROLLER",
+      "sourceKey": "ctrl-tower-1",
+      "asset": "01a14000-3000-7000-8000-000000000005",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "1# 冷却塔运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "UID31 地址 2 (u13)"
+        },
+        {
+          "code": "start",
+          "name": "启动 1# 冷却塔",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 2 (u13)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u13",
+            "coilAddress": 2
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 1# 冷却塔",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 2 (u13)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u13",
+            "coilAddress": 2,
+            "interlocks": [
+              { "device": "ctrl-chiller-a", "point": "run_state", "expected": "STOPPED", "reason": "1# 主机尚未停机，禁止断开 1# 冷却塔" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000012",
+      "code": "ctrl-chiller-b",
+      "name": "2# 螺杆主机控制器",
+      "type": "CHILLER_CONTROLLER",
+      "sourceKey": "ctrl-chiller-b",
+      "asset": "01a14000-3000-7000-8000-000000000002",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "2# 主机运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "ammeter-unit4 powerTotal>5"
+        },
+        {
+          "code": "start",
+          "name": "开启 2# 螺杆主机",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 7 (u24)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "PULSE",
+            "channel": "u24",
+            "coilAddress": 7,
+            "pulseDurationMs": 500,
+            "interlocks": [
+              { "device": "ctrl-chwp-2", "point": "run_state", "expected": "RUNNING", "reason": "2# 冻水泵需先处于运行状态，方可脉冲开启 2# 主机" },
+              { "device": "ctrl-cwp-2", "point": "run_state", "expected": "RUNNING", "reason": "2# 冷却泵需先处于运行状态，方可脉冲开启 2# 主机" },
+              { "device": "ctrl-tower-2", "point": "run_state", "expected": "RUNNING", "reason": "2# 冷却塔风机需先处于运行状态，方可脉冲开启 2# 主机" }
+            ]
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 2# 螺杆主机",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 17 (u52)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "PULSE",
+            "channel": "u52",
+            "coilAddress": 17,
+            "pulseDurationMs": 500
+          }
+        },
+        {
+          "code": "start_unit_sequence",
+          "name": "一键启动 B 机组",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 B 组启动序列 (u21->u22->u23->u24)",
+          "sourceMetadata": {
+            "capability": "START_UNIT_SEQUENCE",
+            "capabilityRevision": "capability:start-unit-sequence:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "UNIT_SEQUENCE",
+            "channel": "unit-b",
+            "pulseDurationMs": 500
+          }
+        },
+        {
+          "code": "stop_unit_sequence",
+          "name": "一键停机 B 机组",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 B 组停机序列 (u52->u23->u22->u21)",
+          "sourceMetadata": {
+            "capability": "STOP_UNIT_SEQUENCE",
+            "capabilityRevision": "capability:stop-unit-sequence:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "UNIT_SEQUENCE",
+            "channel": "unit-b",
+            "pulseDurationMs": 500
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000013",
+      "code": "ctrl-chwp-2",
+      "name": "2# 冻水泵控制器",
+      "type": "PUMP_CONTROLLER",
+      "sourceKey": "ctrl-chwp-2",
+      "asset": "01a14000-3000-7000-8000-00000000000a",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "2# 冻水泵运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "UID31 地址 4 (u21)"
+        },
+        {
+          "code": "start",
+          "name": "启动 2# 冻水泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 4 (u21)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u21",
+            "coilAddress": 4
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 2# 冻水泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 4 (u21)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u21",
+            "coilAddress": 4,
+            "interlocks": [
+              { "device": "ctrl-chiller-b", "point": "run_state", "expected": "STOPPED", "reason": "2# 主机尚未停机，禁止断开 2# 冻水泵" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000014",
+      "code": "ctrl-cwp-2",
+      "name": "2# 冷却泵控制器",
+      "type": "PUMP_CONTROLLER",
+      "sourceKey": "ctrl-cwp-2",
+      "asset": "01a14000-3000-7000-8000-00000000000e",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "2# 冷却泵运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "UID31 地址 5 (u22)"
+        },
+        {
+          "code": "start",
+          "name": "启动 2# 冷却泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 5 (u22)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u22",
+            "coilAddress": 5
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 2# 冷却泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 5 (u22)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u22",
+            "coilAddress": 5,
+            "interlocks": [
+              { "device": "ctrl-chiller-b", "point": "run_state", "expected": "STOPPED", "reason": "2# 主机尚未停机，禁止断开 2# 冷却泵" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000015",
+      "code": "ctrl-tower-2",
+      "name": "2# 冷却塔控制器",
+      "type": "COOLING_TOWER_CONTROLLER",
+      "sourceKey": "ctrl-tower-2",
+      "asset": "01a14000-3000-7000-8000-000000000006",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "2# 冷却塔运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "UID31 地址 6 (u23)"
+        },
+        {
+          "code": "start",
+          "name": "启动 2# 冷却塔",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 6 (u23)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u23",
+            "coilAddress": 6
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 2# 冷却塔",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 6 (u23)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u23",
+            "coilAddress": 6,
+            "interlocks": [
+              { "device": "ctrl-chiller-b", "point": "run_state", "expected": "STOPPED", "reason": "2# 主机尚未停机，禁止断开 2# 冷却塔" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000016",
+      "code": "ctrl-chiller-c",
+      "name": "3# 螺杆主机控制器",
+      "type": "CHILLER_CONTROLLER",
+      "sourceKey": "ctrl-chiller-c",
+      "asset": "01a14000-3000-7000-8000-000000000003",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "3# 主机运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "ammeter-unit1 powerTotal>5"
+        },
+        {
+          "code": "start",
+          "name": "开启 3# 螺杆主机",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 11 (u34)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "PULSE",
+            "channel": "u34",
+            "coilAddress": 11,
+            "pulseDurationMs": 500,
+            "interlocks": [
+              { "device": "ctrl-chwp-3", "point": "run_state", "expected": "RUNNING", "reason": "3# 冻水泵需先处于运行状态，方可脉冲开启 3# 主机" },
+              { "device": "ctrl-cwp-3", "point": "run_state", "expected": "RUNNING", "reason": "3# 冷却泵需先处于运行状态，方可脉冲开启 3# 主机" },
+              { "device": "ctrl-tower-3", "point": "run_state", "expected": "RUNNING", "reason": "3# 冷却塔风机需先处于运行状态，方可脉冲开启 3# 主机" }
+            ]
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 3# 螺杆主机",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 18 (u53)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "PULSE",
+            "channel": "u53",
+            "coilAddress": 18,
+            "pulseDurationMs": 500
+          }
+        },
+        {
+          "code": "start_unit_sequence",
+          "name": "一键启动 C 机组",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 C 组启动序列 (u31->u32->u33->u34)",
+          "sourceMetadata": {
+            "capability": "START_UNIT_SEQUENCE",
+            "capabilityRevision": "capability:start-unit-sequence:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "UNIT_SEQUENCE",
+            "channel": "unit-c",
+            "pulseDurationMs": 500
+          }
+        },
+        {
+          "code": "stop_unit_sequence",
+          "name": "一键停机 C 机组",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 C 组停机序列 (u53->u33->u32->u31)",
+          "sourceMetadata": {
+            "capability": "STOP_UNIT_SEQUENCE",
+            "capabilityRevision": "capability:stop-unit-sequence:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "UNIT_SEQUENCE",
+            "channel": "unit-c",
+            "pulseDurationMs": 500
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000017",
+      "code": "ctrl-chwp-3",
+      "name": "3# 冻水泵控制器",
+      "type": "PUMP_CONTROLLER",
+      "sourceKey": "ctrl-chwp-3",
+      "asset": "01a14000-3000-7000-8000-00000000000b",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "3# 冻水泵运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "UID31 地址 8 (u31)"
+        },
+        {
+          "code": "start",
+          "name": "启动 3# 冻水泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 8 (u31)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u31",
+            "coilAddress": 8
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 3# 冻水泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 8 (u31)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u31",
+            "coilAddress": 8,
+            "interlocks": [
+              { "device": "ctrl-chiller-c", "point": "run_state", "expected": "STOPPED", "reason": "3# 主机尚未停机，禁止断开 3# 冻水泵" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000018",
+      "code": "ctrl-cwp-3",
+      "name": "3# 冷却泵控制器",
+      "type": "PUMP_CONTROLLER",
+      "sourceKey": "ctrl-cwp-3",
+      "asset": "01a14000-3000-7000-8000-00000000000f",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "3# 冷却泵运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "UID31 地址 9 (u32)"
+        },
+        {
+          "code": "start",
+          "name": "启动 3# 冷却泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 9 (u32)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u32",
+            "coilAddress": 9
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 3# 冷却泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 9 (u32)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u32",
+            "coilAddress": 9,
+            "interlocks": [
+              { "device": "ctrl-chiller-c", "point": "run_state", "expected": "STOPPED", "reason": "3# 主机尚未停机，禁止断开 3# 冷却泵" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000019",
+      "code": "ctrl-tower-3",
+      "name": "3# 冷却塔控制器",
+      "type": "COOLING_TOWER_CONTROLLER",
+      "sourceKey": "ctrl-tower-3",
+      "asset": "01a14000-3000-7000-8000-000000000007",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "3# 冷却塔运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "UID31 地址 10 (u33)"
+        },
+        {
+          "code": "start",
+          "name": "启动 3# 冷却塔",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 10 (u33)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u33",
+            "coilAddress": 10
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 3# 冷却塔",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 10 (u33)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u33",
+            "coilAddress": 10,
+            "interlocks": [
+              { "device": "ctrl-chiller-c", "point": "run_state", "expected": "STOPPED", "reason": "3# 主机尚未停机，禁止断开 3# 冷却塔" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-00000000001a",
+      "code": "ctrl-chiller-d",
+      "name": "4# 螺杆主机控制器",
+      "type": "CHILLER_CONTROLLER",
+      "sourceKey": "ctrl-chiller-d",
+      "asset": "01a14000-3000-7000-8000-000000000004",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "4# 主机运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "ammeter-unit2 powerTotal>5"
+        },
+        {
+          "code": "start",
+          "name": "开启 4# 螺杆主机",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 15 (u44)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "PULSE",
+            "channel": "u44",
+            "coilAddress": 15,
+            "pulseDurationMs": 500,
+            "interlocks": [
+              { "device": "ctrl-chwp-4", "point": "run_state", "expected": "RUNNING", "reason": "4# 冻水泵需先处于运行状态，方可脉冲开启 4# 主机" },
+              { "device": "ctrl-cwp-4", "point": "run_state", "expected": "RUNNING", "reason": "4# 冷却泵需先处于运行状态，方可脉冲开启 4# 主机" },
+              { "device": "ctrl-tower-4", "point": "run_state", "expected": "RUNNING", "reason": "4# 冷却塔风机需先处于运行状态，方可脉冲开启 4# 主机" }
+            ]
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 4# 螺杆主机",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 19 (u54)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "PULSE",
+            "channel": "u54",
+            "coilAddress": 19,
+            "pulseDurationMs": 500
+          }
+        },
+        {
+          "code": "start_unit_sequence",
+          "name": "一键启动 D 机组",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 D 组启动序列 (u41->u42->u43->u44)",
+          "sourceMetadata": {
+            "capability": "START_UNIT_SEQUENCE",
+            "capabilityRevision": "capability:start-unit-sequence:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "UNIT_SEQUENCE",
+            "channel": "unit-d",
+            "pulseDurationMs": 500
+          }
+        },
+        {
+          "code": "stop_unit_sequence",
+          "name": "一键停机 D 机组",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 D 组停机序列 (u54->u43->u42->u41)",
+          "sourceMetadata": {
+            "capability": "STOP_UNIT_SEQUENCE",
+            "capabilityRevision": "capability:stop-unit-sequence:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "UNIT_SEQUENCE",
+            "channel": "unit-d",
+            "pulseDurationMs": 500
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-00000000001b",
+      "code": "ctrl-chwp-4",
+      "name": "4# 冻水泵控制器",
+      "type": "PUMP_CONTROLLER",
+      "sourceKey": "ctrl-chwp-4",
+      "asset": "01a14000-3000-7000-8000-00000000000c",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "4# 冻水泵运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "UID31 地址 12 (u41)"
+        },
+        {
+          "code": "start",
+          "name": "启动 4# 冻水泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 12 (u41)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u41",
+            "coilAddress": 12
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 4# 冻水泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 12 (u41)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u41",
+            "coilAddress": 12,
+            "interlocks": [
+              { "device": "ctrl-chiller-d", "point": "run_state", "expected": "STOPPED", "reason": "4# 主机尚未停机，禁止断开 4# 冻水泵" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-00000000001c",
+      "code": "ctrl-cwp-4",
+      "name": "4# 冷却泵控制器",
+      "type": "PUMP_CONTROLLER",
+      "sourceKey": "ctrl-cwp-4",
+      "asset": "01a14000-3000-7000-8000-000000000010",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "4# 冷却泵运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "UID31 地址 13 (u42)"
+        },
+        {
+          "code": "start",
+          "name": "启动 4# 冷却泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 13 (u42)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u42",
+            "coilAddress": 13
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 4# 冷却泵",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 13 (u42)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u42",
+            "coilAddress": 13,
+            "interlocks": [
+              { "device": "ctrl-chiller-d", "point": "run_state", "expected": "STOPPED", "reason": "4# 主机尚未停机，禁止断开 4# 冷却泵" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-00000000001d",
+      "code": "ctrl-tower-4",
+      "name": "4# 冷却塔控制器",
+      "type": "COOLING_TOWER_CONTROLLER",
+      "sourceKey": "ctrl-tower-4",
+      "asset": "01a14000-3000-7000-8000-000000000008",
+      "sampleSeconds": 60,
+      "points": [
+        {
+          "code": "run_state",
+          "name": "4# 冷却塔运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "UID31 地址 14 (u43)"
+        },
+        {
+          "code": "start",
+          "name": "启动 4# 冷却塔",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 14 (u43)",
+          "sourceMetadata": {
+            "capability": "START",
+            "capabilityRevision": "capability:start:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u43",
+            "coilAddress": 14
+          }
+        },
+        {
+          "code": "stop",
+          "name": "停止 4# 冷却塔",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "address": "UID31 地址 14 (u43)",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "LEVEL",
+            "channel": "u43",
+            "coilAddress": 14,
+            "interlocks": [
+              { "device": "ctrl-chiller-d", "point": "run_state", "expected": "STOPPED", "reason": "4# 主机尚未停机，禁止断开 4# 冷却塔" }
+            ]
+          }
         }
       ]
     }

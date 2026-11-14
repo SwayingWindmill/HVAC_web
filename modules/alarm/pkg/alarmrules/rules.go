@@ -157,6 +157,7 @@ type physicsCheck struct {
 type sitePoint struct {
 	Code           string          `json:"code"`
 	Name           string          `json:"name"`
+	PointType      string          `json:"pointType"`
 	Unit           string          `json:"unit"`
 	ValueType      string          `json:"valueType"`
 	Status         string          `json:"status"`
@@ -229,6 +230,9 @@ func Load(rulesPath string) (Compiled, error) {
 		}
 		active := []sitePoint{}
 		for _, point := range append(points, entry.MorePoints...) {
+			if point.PointType == "COMMAND" {
+				continue
+			}
 			if point.Status == "" || point.Status == "ACTIVE" {
 				active = append(active, point)
 			}
@@ -258,7 +262,7 @@ func Load(rulesPath string) (Compiled, error) {
 		for _, code := range order {
 			entry := devices[code]
 			for _, point := range entry.points {
-				if !point.Critical || point.isCopied() {
+				if !point.Critical || !point.isReading() || point.isCopied() {
 					continue
 				}
 				noData, fresh := watched(entry.id, []sitePoint{point}, gaps.AgeSeconds)
@@ -273,7 +277,7 @@ func Load(rulesPath string) (Compiled, error) {
 	} else {
 		for _, code := range order {
 			for _, point := range devices[code].points {
-				if point.Critical && !point.isCopied() {
+				if point.Critical && point.isReading() && !point.isCopied() {
 					return Compiled{}, fmt.Errorf("%s: critical point %s/%s requires readingGaps", rulesPath, code, point.Code)
 				}
 			}
@@ -284,7 +288,7 @@ func Load(rulesPath string) (Compiled, error) {
 			entry := devices[code]
 			var nonCriticalOwn []sitePoint
 			for _, point := range entry.points {
-				if !point.isCopied() && !point.Critical {
+				if point.isReading() && !point.isCopied() && !point.Critical {
 					nonCriticalOwn = append(nonCriticalOwn, point)
 				}
 			}
@@ -310,10 +314,16 @@ func Load(rulesPath string) (Compiled, error) {
 		var noData, fresh []alarmservice.Condition
 		for _, code := range order {
 			entry := devices[code]
-			if len(entry.points) == 0 {
+			var readings []sitePoint
+			for _, point := range entry.points {
+				if point.isReading() {
+					readings = append(readings, point)
+				}
+			}
+			if len(readings) == 0 {
 				continue
 			}
-			deviceNoData, deviceFresh := watched(entry.id, entry.points, silence.AgeSeconds)
+			deviceNoData, deviceFresh := watched(entry.id, readings, silence.AgeSeconds)
 			noData = append(noData, either(alarmservice.ConditionAnd, deviceNoData))
 			fresh = append(fresh, either(alarmservice.ConditionOr, deviceFresh))
 		}
@@ -403,6 +413,12 @@ func resolve(condition alarmservice.Condition, devices map[string]device) (alarm
 func (point sitePoint) isCopied() bool {
 	trimmed := bytes.TrimSpace(point.From)
 	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+}
+
+// isReading reports whether a point carries a telemetry or counter reading rather than a logical
+// controller state ("STATE") or write target ("COMMAND").
+func (point sitePoint) isReading() bool {
+	return point.PointType == "" || point.PointType == "TELEMETRY" || point.PointType == "COUNTER"
 }
 
 // watched is, for each of the given points on deviceID, "no reading for ageSeconds" and "has a reading".

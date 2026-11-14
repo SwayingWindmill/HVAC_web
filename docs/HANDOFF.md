@@ -2,7 +2,7 @@
 
 现在做到哪、下一步做什么、服务器和本地环境有哪些特殊情况。改了这里说的事，就在同一个 PR 里更新本文（单次读取预算 `<= 28 KiB`，`npm run repo:check` 会检查；详细运维步骤放 `docs/operations/`）。怎么构建、测试和运行见 `AGENTS.md`；用户能看到的变化见 `CHANGELOG.md`；每张单的细节在 GitHub 问题单里。
 
-最后更新：2026-11-14。
+最后更新：2026-11-15。
 
 ## 产品现在有什么
 
@@ -44,7 +44,7 @@
 ### 松雅轩（第一个真实站点）
 
 - 规格：`docs/specs/site-gateway-onboarding.md`。Node-RED 网关通过双向 TLS 连 8884 端口（nginx 转 Mosquitto），证书 2027-01-12 到期；ThingsBoard 已停（备份在 `/opt/backups/thingsboard/`），历史导入批次 `01a14000-7000-7000-8000-000000000001`（截至 `2026-10-14T10:26:30Z`）的按设备条数尚未核对。
-- 网关支持耐久发件箱（24 小时 MQTT 会话落盘）；ET1010 控制指令下发待接入（#696）；修改单个 Modbus 读取节点会卡住同串口其余六个，改后须重启所有流程。
+- 网关支持耐久发件箱（24 小时 MQTT 会话落盘）；ET1010 20 通道控制（12 路保持型水泵/塔 `LEVEL`、8 路主机制动开机/关机脉冲 `PULSE` `u14..u44`/`u51..u54` 与一键冷机组启停 `UNIT_SEQUENCE`）、Registry 路由视图 `command_point_routes_v1`（迁移 `038`）、双闸门水路联锁与 Edge 执行器均已进代码并配置 `songyaxuan.site.json`；修改单个 Modbus 读取节点会卡住同串口其余六个，网关流更新须在人工审定后重启全部流程。
 - **能耗与电表**：站点启用合成总表（`"totalMeter": {"kind": "sum-of-sub-meters"}`，#798），将四台冷机分表相加（有表缺数时显示已有之和并标「不完整」；网关计算的总表保留为普通电表对照）。四块电表名与从站已按 2026-11-12 核实统一：`A 机组电表`（UID 3）、`B 机组电表`（UID 4，电量 = 寄存器 60 - 基数 `76938` kWh）、`C 机组电表`（UID 5）、`D 机组电表`（UID 2，RS485-1 `/dev/ttyAS3` 仍无应答待现场查线）。超过 1 小时断点后的恢复差值记为跨缺口电量（`is_cross_gap = 1`），计入周期总量与账单但不进逐时图。电价暂用深圳分时电价。ClickHouse 迁移 `015`、`016` 及 `site-onboarding.mjs apply` 已在服务器生效。
 - **温度与在线**：温度通道按 2026-11-08 手绘点位表配置（A–D 蒸发出 t1–t4、冷凝出 t6–t9、冷却总管进 t5、A 支管进 t10、冷却塔出/进 t12/t13、室外 t15、总回 t16–t17、总供 t18–t19；t14/t20 无探头；房间暂无探头，房间温度停用）。带 `from` 的复制点位不写在线信号，无自有启用点位的设备（冷却塔、室外环境、房间）设为 `NOT_APPLICABLE`；`telemetry-worker` 每分钟执行 `SweepDuePresence` 置离线（#797，已在服务器生效）。
 - **告警规则**（`deploy/sites/songyaxuan.alarm-rules.json`）：用 `modules/alarm/cmd/alarm-rules` 发布（未在文件里的规则按 `RULE_RETIRED` 自动撤销并恢复）。2026-11-13 已在服务器套用最新站点文件并发布 112 条规则：含 13 个关键点位的「读数中断」（15 分钟，#796）、其余设备自有启用点位的「读数长时间没有更新」（30 分钟）、网关整站 78 点位 15 分钟无读数中断，以及超过 24 小时未确认读数中断自动升一级并推每日 08:00 微信汇总（#800）。数据质量告警（#750/#751/#752，规格 `docs/specs/telemetry-data-quality.md`）须待服务器上按顺序跑完迁移 `011-point-quality.sql`、部署服务、`site-onboarding.mjs apply` 与规则发布后才替换旧的 6 小时「一动不动」提示。在服务器查看/发布命令：`docker run --rm --network container:hvac-platform-energy-api-1 --volumes-from hvac-platform-energy-api-1 -e ALARM_DATABASE_URL_FILE=/run/hvac/secrets/alarm.dsn -v <目录>:/alarm-rules:ro --entrypoint /alarm-rules/alarm-rules <energy-api 镜像> /alarm-rules/songyaxuan.alarm-rules.json`（加 `-print` 只检查不写库）。
@@ -69,7 +69,7 @@
 2. **#664 微信小程序**：绑定、告警提醒、一键登录与界面改版已上线；0.2.0 已提交微信审核，待过审发布后把服务器 `IDENTITY_WECHAT_MINIPROGRAM_STATE` 改为 `formal` 并重启 `identity-service`；另待真机收到第一条每日运行结论（点「多收一天」）对数后关 #664 与 #677。以后小程序界面改动不靠开发者工具慢速截图，直接按单元测试守住整理逻辑、真机验收。`identity` / `notification` 库测试为 `npm run test:identity-postgres`、`npm run test:notification-postgres`；点位词典同步用 `npm -w @hvac/miniprogram run sync`。
 3. **#614 现场探头补齐**：等松雅轩现场加装房间温度探头后接回点位并评估是否恢复优化调度。
 4. **#641 AI 助手**：用评测前后对比决定是否启用 pi codemode。
-5. **对标复查（91 项余 16 项，`docs/research/thingsboard-gap-review-2026-10.md`）**：按顺序做 Alertmanager 发邮件 → 清理服务器残留旧数据库角色配置（`outbound_delivery_*`、`rule_runtime_*` 须从服务器 `role-credentials` 删除那两行后再彻底删角色，以免新空库迁移中止；本机 `local:up` 会自动处理）→ 企业微信设备告警 → 机组/水泵启停控制（#542，待现场确认 ET1010 通道）；备份上云（#689）暂不做；换云/换企业域名调研见 `docs/research/cloud-migration-options-2026-10.md`。
+5. **对标复查（91 项余 16 项，`docs/research/thingsboard-gap-review-2026-10.md`）**：按顺序做 Alertmanager 发邮件 → 清理服务器残留旧数据库角色配置（`outbound_delivery_*`、`rule_runtime_*` 须从服务器 `role-credentials` 删除那两行后再彻底删角色，以免新空库迁移中止；本机 `local:up` 会自动处理）→ 企业微信设备告警 → **冷站网页控制与节能联动（#542）**：Wave 1 控制退出模式（`MANUAL_OVERRIDE` / `SAFE_SHUTDOWN_EXIT` / 单机锁，#824/#825）与 Wave 2 ET1010 20 通道控制及水路联锁已完成并合入；Figma 原型（文件 `JWOOM4pyfWfug5bYxfBJeE`）已出待审，审核通过后实施网页端控制页面与节能策略调度；备份上云（#689）暂不做；换云/换企业域名调研见 `docs/research/cloud-migration-options-2026-10.md`。
 6. **宣传片与小程序对齐**：`tools/promo-video`（Windows 显卡渲染）里先画出的小程序功能见 `tools/promo-video/film/FEATURE-GAPS.md`，片后补齐。
 7. **功能与技术收尾**：节能验证（#484：非常规调整、需量与多措施分摊）、站点对标（#485：行业基准来源接入）、COP 影子模型积累后决定是否切换发布求解器、FDD 低温差新版本阈值（`node scripts/publish-fdd-rule-revision.mjs`，水泵 15/22 kW 铭牌与运行状态绑定待现场核实）、长范围分时电费查询内存优化、服务器部署能耗小时汇总（按 `docs/operations/energy-hourly-rollup.md`）、设备详情与工单侧栏新设计打磨。
 

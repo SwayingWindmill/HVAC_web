@@ -35,20 +35,34 @@ function pointRows(sql: string): string[] {
   return sql.slice(start, sql.indexOf('ON CONFLICT', start)).split('\n').filter((line) => line.startsWith('('));
 }
 
-test('each DESCRIBES binding carries its point status', () => {
-  const { registry } = buildOnboardingSql(songyaxuan);
+test('each DESCRIBES and CONTROLS binding carries its point status and command metadata', () => {
+  const { registry, telemetry } = buildOnboardingSql(songyaxuan);
   const points = pointRows(registry);
-  const bindings = bindingSection(registry).split('\n').filter((line) => line.includes("'DESCRIBES'"));
-  assert.equal(bindings.length, points.length);
+  const observedPoints = points.filter((row) => !row.includes("'COMMAND'"));
+  const commandPoints = points.filter((row) => row.includes("'COMMAND'"));
+  const describes = bindingSection(registry).split('\n').filter((line) => line.includes("'DESCRIBES'"));
+  const controls = bindingSection(registry).split('\n').filter((line) => line.includes("'CONTROLS'"));
+  assert.equal(describes.length, observedPoints.length);
+  assert.equal(controls.length, commandPoints.length);
+  assert.equal(commandPoints.length, 40);
   const inactive = points.filter((row) => row.includes("'INACTIVE'"));
   assert.ok(inactive.length >= 2, 'the songyaxuan site file marks unwired channels INACTIVE');
-  for (const [index, row] of points.entries()) {
+  for (const [index, row] of observedPoints.entries()) {
     const status = row.includes("'INACTIVE'") ? 'INACTIVE' : 'ACTIVE';
-    assert.match(bindings[index], new RegExp(`'DESCRIBES', '${status}', clock_timestamp\\(\\), NULL`), `binding ${index + 1} should be ${status}`);
+    assert.match(describes[index], new RegExp(`'DESCRIBES', '${status}', clock_timestamp\\(\\), NULL`), `DESCRIBES binding ${index + 1} should be ${status}`);
   }
-  const t14 = points.findIndex((row) => row.includes("'t14'"));
+  for (const [index, row] of commandPoints.entries()) {
+    assert.ok(row.includes(', true, '), `COMMAND point ${index + 1} must be writable`);
+    assert.match(controls[index], /'CONTROLS', 'ACTIVE', clock_timestamp\(\), NULL/);
+    assert.ok(!row.includes('"interlocks"'), 'raw interlocks must be compiled into interlockChecks');
+  }
+  assert.ok(commandPoints.some((row) => row.includes('"interlockChecks"') && row.includes('"coilAddress":3')));
+  assert.ok(commandPoints.some((row) => row.includes('"coilAddress":16')));
+  const freshnessSection = telemetry.slice(telemetry.indexOf('INSERT INTO telemetry_runtime.freshness_policies'));
+  assert.ok(!freshnessSection.includes('start_unit_sequence'), 'COMMAND points must not enter freshness_policies');
+  const t14 = observedPoints.findIndex((row) => row.includes("'t14'"));
   assert.notEqual(t14, -1);
-  assert.match(bindings[t14], /'DESCRIBES', 'INACTIVE'/);
+  assert.match(describes[t14], /'DESCRIBES', 'INACTIVE'/);
 });
 
 test('a rerun follows the site file instead of forcing ACTIVE', () => {

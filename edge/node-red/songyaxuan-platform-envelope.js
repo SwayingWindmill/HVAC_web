@@ -51,6 +51,8 @@ const SPARE = { temperature: ["t8", "t11", "t14", "t20"] };
 // A machine runs while its meter reads more than 5 kW (idle ones read under 1 kW); the chilled-water
 // pumps run while the header flow exceeds 10 m³/h.
 const runState = (running) => (running ? "RUNNING" : "STOPPED");
+const DO_CONTROLLERS = { u11: "ctrl-chwp-1", u12: "ctrl-cwp-1", u13: "ctrl-tower-1", u21: "ctrl-chwp-2", u22: "ctrl-cwp-2", u23: "ctrl-tower-2", u31: "ctrl-chwp-3", u32: "ctrl-cwp-3", u33: "ctrl-tower-3", u41: "ctrl-chwp-4", u42: "ctrl-cwp-4", u43: "ctrl-tower-4" };
+const METER_CONTROLLERS = { "ammeter-unit3": "ctrl-chiller-a", "ammeter-unit4": "ctrl-chiller-b", "ammeter-unit1": "ctrl-chiller-c", "ammeter-unit2": "ctrl-chiller-d" };
 
 const source = msg.payload;
 const device = Object.keys(source)[0];
@@ -177,5 +179,13 @@ if (device === "temperature") {
       { code: "accumulated_cooling_energy", value: Math.round(cooling.energy * 1000) / 1000, quality: 0, unit: "kWh" },
     ]));
   }
+}
+if (device === "et1010") {
+  for (const [ch, ctrl] of Object.entries(DO_CONTROLLERS)) {
+    if (Number.isFinite(sample.values[ch])) entries.push(entry(ctrl, sample.ts, [{ code: "run_state", value: runState(sample.values[ch] > 0), quality: 0 }]));
+  }
+}
+if (METER_CONTROLLERS[device] && Number.isFinite(sample.values.powerTotal)) {
+  entries.push(entry(METER_CONTROLLERS[device], sample.ts, [{ code: "run_state", value: runState(sample.values.powerTotal > 5), quality: 0 }]));
 }
 return envelope(entries);

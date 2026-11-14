@@ -387,6 +387,21 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
   assert.equal(formalRunner.unknown, false);
   assert.equal(formalRunner.broad, false);
 
+  const edgeExecutor = runClassification(['edge/node-red/songyaxuan-command-executor.ts']);
+  assert.deepEqual(edgeExecutor.unitProfiles, ['command', 'telemetry']);
+  assert.equal(edgeExecutor.unknown, false);
+  assert.equal(edgeExecutor.broad, false);
+
+  const siteManifest = runClassification(['deploy/sites/songyaxuan.site.json']);
+  assert.deepEqual(siteManifest.unitProfiles, ['command', 'registry', 'telemetry']);
+  assert.equal(siteManifest.unknown, false);
+  assert.equal(siteManifest.broad, false);
+
+  const onboardingControl = runClassification(['scripts/lib/site-onboarding-control.ts']);
+  assert.deepEqual(onboardingControl.unitProfiles, ['command', 'registry', 'telemetry']);
+  assert.equal(onboardingControl.unknown, false);
+  assert.equal(onboardingControl.broad, false);
+
   assert.equal(goExecutableName('gofmt', 'win32'), 'gofmt.exe');
   assert.equal(goExecutableName('gofmt.exe', 'win32'), 'gofmt.exe');
   assert.equal(goExecutableName('gofmt', 'linux'), 'gofmt');

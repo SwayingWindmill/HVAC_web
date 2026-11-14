@@ -2,12 +2,22 @@ package connectivity
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
+
+type commandPointSourceMetadata struct {
+	ActuationMode   string                        `json:"actuationMode"`
+	Channel         string                        `json:"channel"`
+	CoilAddress     *int                          `json:"coilAddress"`
+	PulseDurationMs int                           `json:"pulseDurationMs"`
+	InterlockChecks []commandmodel.InterlockCheck `json:"interlockChecks"`
+}
 
 // ResolveCommandRoute finds where a command goes from the Registry read port, and
 // refuses it before anything is sent when the Device is not behind a registered
@@ -27,16 +37,37 @@ WHERE site_id = $1::uuid AND device_id = $2::uuid
 		if err != nil {
 			return fmt.Errorf("resolve command Device source key: %w", err)
 		}
-		var controlEnabled bool
+		var pointCode string
+		var rawMetadata []byte
 		if err := tx.QueryRow(ctx, `
-SELECT EXISTS (
-  SELECT 1 FROM core_registry.point_bindings_v1
-  WHERE point_id = $1::uuid AND device_id = $2::uuid AND writable
-)`, envelope.PointID, envelope.DeviceID).Scan(&controlEnabled); err != nil {
+SELECT pb.point_code, COALESCE(cr.source_metadata, '{}'::jsonb)
+FROM core_registry.point_bindings_v1 AS pb
+LEFT JOIN core_registry.command_point_routes_v1 AS cr
+  ON cr.point_id = pb.point_id AND cr.device_id = pb.device_id
+WHERE pb.point_id = $1::uuid AND pb.device_id = $2::uuid AND pb.writable
+`, envelope.PointID, envelope.DeviceID).Scan(&pointCode, &rawMetadata); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return commandmodel.ErrCommandControlDisabled
+			}
 			return fmt.Errorf("read command Point binding: %w", err)
 		}
-		if !controlEnabled {
-			return commandmodel.ErrCommandControlDisabled
+		if len(rawMetadata) > 0 {
+			var metadata commandPointSourceMetadata
+			if err := json.Unmarshal(rawMetadata, &metadata); err != nil {
+				return fmt.Errorf("decode command Point source metadata: %w", err)
+			}
+			if mode := strings.TrimSpace(metadata.ActuationMode); mode != "" {
+				route.PointCode = pointCode
+				route.ActuationMode = mode
+				route.Channel = strings.TrimSpace(metadata.Channel)
+				if metadata.PulseDurationMs > 0 {
+					route.PulseDurationMs = metadata.PulseDurationMs
+				}
+				if metadata.CoilAddress != nil && *metadata.CoilAddress >= 0 {
+					route.CoilAddress = *metadata.CoilAddress
+					route.HasCoilAddress = true
+				}
+			}
 		}
 		var controlLocked bool
 		if err := tx.QueryRow(ctx, `
@@ -70,6 +101,34 @@ SELECT EXISTS (
 		return commandmodel.DeviceRoute{}, err
 	}
 	return route, nil
+}
+
+// ResolveCommandInterlocks loads declarative peer interlock preconditions from the
+// active COMMAND point metadata on the Registry read port.
+func (store *Store) ResolveCommandInterlocks(ctx context.Context, envelope commandmodel.DispatchEnvelope) ([]commandmodel.InterlockCheck, error) {
+	var checks []commandmodel.InterlockCheck
+	err := store.readAsTenant(ctx, envelope.TenantID, func(tx pgx.Tx) error {
+		var rawInterlocks []byte
+		err := tx.QueryRow(ctx, `
+SELECT COALESCE(source_metadata->'interlockChecks', '[]'::jsonb)
+FROM core_registry.command_point_routes_v1
+WHERE site_id = $1::uuid AND device_id = $2::uuid AND point_id = $3::uuid AND writable
+`, envelope.SiteID, envelope.DeviceID, envelope.PointID).Scan(&rawInterlocks)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read command interlock metadata: %w", err)
+		}
+		if err := json.Unmarshal(rawInterlocks, &checks); err != nil {
+			return fmt.Errorf("decode command interlock metadata: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return checks, nil
 }
 
 // GatewayTenant returns the Tenant of a Gateway in the Registry gateway directory, so a

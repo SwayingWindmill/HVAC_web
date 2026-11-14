@@ -85,16 +85,18 @@ type assetCommandTarget struct {
 	point         platformapi.TelemetryPoint
 	feedbackPoint platformapi.TelemetryPoint
 	capability    commandmodel.Capability
+	interlocks    []commandmodel.InterlockCheck
 }
 
 type commandCurrentState struct {
-	EvaluationAvailability string    `json:"evaluationAvailability"`
-	Presence               string    `json:"presence"`
-	Readiness              string    `json:"readiness"`
-	Quality                string    `json:"quality"`
-	BusinessRevision       uint64    `json:"businessRevision"`
-	CurrentValue           *float64  `json:"currentValue,omitempty"`
-	ObservedAt             time.Time `json:"observedAt"`
+	EvaluationAvailability string                   `json:"evaluationAvailability"`
+	Presence               string                   `json:"presence"`
+	Readiness              string                   `json:"readiness"`
+	Quality                string                   `json:"quality"`
+	BusinessRevision       uint64                   `json:"businessRevision"`
+	CurrentValue           *float64                 `json:"currentValue,omitempty"`
+	ReportedValue          commandmodel.ScalarValue `json:"-"`
+	ObservedAt             time.Time                `json:"observedAt"`
 }
 
 type internalCommandCreate struct {
@@ -327,6 +329,10 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 	currentState, failure := h.readCommandCurrentState(request, session, target.device, target.feedbackPoint.PointCode)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	if interlockFailure := h.enforceCommandInterlocks(request, session, target); interlockFailure != nil {
+		h.writeCommandFailure(writer, request, *interlockFailure)
 		return
 	}
 	if risk, _, ok := commandmodel.EvaluateRiskLevel(target.capability, input.Parameters, currentState.CurrentValue); ok && (risk == commandmodel.RiskHigh || risk == commandmodel.RiskCritical) {
@@ -877,10 +883,87 @@ func (h *handler) resolveAssetCommandTarget(request *http.Request, session bffSe
 		failure := commandUnavailable("The COMMAND Point has no active authoritative feedback Point.")
 		return assetCommandTarget{}, &failure
 	}
+	interlocks, interlockFailure := parseCommandInterlockChecks(point.SourceMetadata, asset.TenantID, asset.SiteID, assetModel.Devices, assetModel.TelemetryPoints)
+	if interlockFailure != nil {
+		return assetCommandTarget{}, interlockFailure
+	}
 	return assetCommandTarget{
 		asset: asset, device: *device, point: *point, feedbackPoint: *feedbackPoint,
-		capability: capability,
+		capability: capability, interlocks: interlocks,
 	}, nil
+}
+
+func parseCommandInterlockChecks(
+	sourceMetadata map[string]any,
+	tenantID string,
+	siteID string,
+	devices []platformapi.Device,
+	points []platformapi.TelemetryPoint,
+) ([]commandmodel.InterlockCheck, *commandFailure) {
+	raw, present := sourceMetadata["interlockChecks"]
+	if !present || raw == nil {
+		return nil, nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		failure := commandUnavailable("The COMMAND Point declares an invalid interlock precondition contract.")
+		return nil, &failure
+	}
+	activeDevices := make(map[string]struct{}, len(devices))
+	for _, device := range devices {
+		if device.TenantID == tenantID && device.SiteID == siteID && strings.EqualFold(device.Status, "ACTIVE") {
+			activeDevices[device.ID] = struct{}{}
+		}
+	}
+	activeDevicePoints := make(map[string]struct{}, len(points))
+	for _, pt := range points {
+		if pt.TenantID == tenantID && pt.SiteID == siteID && strings.EqualFold(pt.Status, "ACTIVE") &&
+			(pt.PointType == "STATE" || pt.PointType == "TELEMETRY" || pt.PointType == "SETTING") {
+			activeDevicePoints[pt.ReportingDeviceID+"|"+pt.PointCode] = struct{}{}
+		}
+	}
+	checks := make([]commandmodel.InterlockCheck, 0, len(items))
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			failure := commandUnavailable("The COMMAND Point declares an invalid interlock precondition contract.")
+			return nil, &failure
+		}
+		deviceID, _ := obj["deviceId"].(string)
+		deviceID = strings.TrimSpace(deviceID)
+		key, _ := obj["key"].(string)
+		key = strings.TrimSpace(key)
+		expected, _ := obj["expected"].(string)
+		expected = strings.TrimSpace(expected)
+		if !isLowerUUIDv7(deviceID) || key == "" || (expected != "RUNNING" && expected != "STOPPED") {
+			failure := commandUnavailable("The COMMAND Point declares an invalid interlock precondition contract.")
+			return nil, &failure
+		}
+		if _, exists := activeDevices[deviceID]; !exists {
+			failure := commandUnavailable("The COMMAND Point references an inactive or missing interlock peer device.")
+			return nil, &failure
+		}
+		if _, exists := activeDevicePoints[deviceID+"|"+key]; !exists {
+			failure := commandUnavailable("The COMMAND Point references an inactive or missing interlock peer feedback Point.")
+			return nil, &failure
+		}
+		reason := ""
+		if rawReason, hasReason := obj["reason"]; hasReason && rawReason != nil {
+			text, isString := rawReason.(string)
+			if !isString {
+				failure := commandUnavailable("The COMMAND Point declares an invalid interlock precondition contract.")
+				return nil, &failure
+			}
+			reason = strings.TrimSpace(text)
+		}
+		checks = append(checks, commandmodel.InterlockCheck{
+			DeviceID: deviceID,
+			Key:      key,
+			Expected: expected,
+			Reason:   reason,
+		})
+	}
+	return checks, nil
 }
 
 func commandRelationshipCurrent(relationship platformapi.AssetRelationship, now time.Time) bool {
@@ -974,13 +1057,30 @@ func (h *handler) readCommandCurrentState(request *http.Request, session bffSess
 	}
 	present := snapshot.Values[0].Present
 	var currentValue *float64
-	if present.ValueType == "NUMBER" {
+	var reportedValue commandmodel.ScalarValue
+	switch present.ValueType {
+	case "NUMBER":
 		var numeric float64
 		if json.Unmarshal(present.Value, &numeric) != nil {
 			failure := commandUnsafe("The required feedback value is not a usable numeric observation.")
 			return commandCurrentState{}, &failure
 		}
 		currentValue = &numeric
+		reportedValue = commandmodel.NumberScalar(numeric)
+	case "STRING":
+		var text string
+		if json.Unmarshal(present.Value, &text) != nil {
+			failure := commandUnsafe("The required feedback value is not a usable string observation.")
+			return commandCurrentState{}, &failure
+		}
+		reportedValue = commandmodel.TextScalar(text)
+	case "BOOLEAN":
+		var flag bool
+		if json.Unmarshal(present.Value, &flag) != nil {
+			failure := commandUnsafe("The required feedback value is not a usable boolean observation.")
+			return commandCurrentState{}, &failure
+		}
+		reportedValue = commandmodel.BooleanScalar(flag)
 	}
 	observedAt, err := time.Parse(time.RFC3339Nano, string(present.SampledAt))
 	if err != nil {
@@ -994,13 +1094,57 @@ func (h *handler) readCommandCurrentState(request *http.Request, session bffSess
 	state := commandCurrentState{
 		EvaluationAvailability: string(snapshot.EvaluationAvailability), Presence: presence,
 		Readiness: string(snapshot.TelemetryReadiness), Quality: string(present.Quality),
-		BusinessRevision: uint64(snapshot.BusinessRevision), CurrentValue: currentValue, ObservedAt: observedAt.UTC(),
+		BusinessRevision: uint64(snapshot.BusinessRevision), CurrentValue: currentValue, ReportedValue: reportedValue, ObservedAt: observedAt.UTC(),
 	}
 	if state.EvaluationAvailability != "AVAILABLE" || state.Presence != "ONLINE" || state.Readiness != "CURRENT" || present.Freshness != "FRESH" || state.Quality != "GOOD" {
 		failure := commandUnsafe("The current Device state does not satisfy the control preconditions.")
 		return commandCurrentState{}, &failure
 	}
 	return state, nil
+}
+
+func (h *handler) enforceCommandInterlocks(request *http.Request, session bffSession, target assetCommandTarget) *commandFailure {
+	for _, check := range target.interlocks {
+		peerDevice := platformapi.Device{
+			ID:       check.DeviceID,
+			TenantID: target.asset.TenantID,
+			SiteID:   target.asset.SiteID,
+			Status:   "ACTIVE",
+		}
+		peerState, peerFailure := h.readCommandCurrentState(request, session, peerDevice, check.Key)
+		if peerFailure != nil {
+			if peerFailure.status == http.StatusServiceUnavailable {
+				return peerFailure
+			}
+			detail := "Prerequisite peer device state is unavailable or stale for safe execution."
+			if check.Reason != "" {
+				detail += " (" + check.Reason + ")"
+			}
+			failure := commandFailure{
+				status:    http.StatusConflict,
+				code:      "COMMAND_INTERLOCK_UNVERIFIABLE",
+				title:     "Command Interlock Precondition Unavailable",
+				detail:    detail,
+				retryable: false,
+			}
+			return &failure
+		}
+		if !commandmodel.ScalarMatches(peerState.ReportedValue, commandmodel.TextScalar(check.Expected), 0) {
+			detail := "Command is blocked by hydraulic interlock preconditions."
+			if check.Reason != "" {
+				detail += " " + check.Reason
+			}
+			failure := commandFailure{
+				status:    http.StatusConflict,
+				code:      "COMMAND_INTERLOCK_BLOCKED",
+				title:     "Command Interlock Blocked",
+				detail:    detail,
+				retryable: false,
+			}
+			return &failure
+		}
+	}
+	return nil
 }
 
 func (h *handler) authorizeCommand(request *http.Request, session bffSession, device platformapi.Device, capability commandmodel.Capability, purpose commandmodel.AuthorizationPurpose) (string, string, *commandFailure) {

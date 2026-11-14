@@ -538,6 +538,11 @@ for (const entry of manifestEntries) {
   const source = await read(sourcePath);
   assert(!/local-only|local-fixture-only|local-mutation-fixture-only/i.test(source), `production migration source contains local/test credential material: ${sourcePath}`);
 }
+for (const stage of migrationDockerfile.split(/^FROM\s+/m).slice(1)) {
+  const stageHeader = stage.split(/\r?\n/, 1)[0].trim();
+  const layerCount = stage.split(/\r?\n/).filter((line) => /^(COPY|ADD|RUN)\s+/.test(line.trim())).length;
+  assert(layerCount <= 100, `migration Dockerfile stage "${stageHeader}" has ${layerCount} layer instructions; split scratch stages to stay <= 100 (OverlayFS limit is 127)`);
+}
 assert(migrationDockerfile.includes("! grep -R -E 'local-only|fixture-only' /opt/hvac/repo"), 'migration image must fail if local/test credential markers survive the build');
 assert(!migrationDockerfile.includes('sed -i'), 'migration image must not rewrite reviewed SQL bytes');
 assert(!migrationRunner.includes('sanitize_sql'), 'migration runner must execute reviewed SQL without runtime sanitization');

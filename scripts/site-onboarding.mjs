@@ -18,6 +18,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { localContainer } from './lib/local-environment.mjs';
+import { buildPointSourceMetadata, validateControlPoints } from './lib/site-onboarding-control.ts';
 
 const sqlLiteral = (value) => `'${String(value).replaceAll("'", "''")}'`;
 const sqlJson = (value) => `${sqlLiteral(JSON.stringify(value))}::jsonb`;
@@ -349,7 +350,7 @@ export function expandPoints(device, meterPoints) {
 
 // A device has presence only when at least one active point comes from the device itself.
 export function presenceApplicability(points) {
-  return points.some((point) => pointStatus(point) === 'ACTIVE' && !point.from) ? 'APPLICABLE' : 'NOT_APPLICABLE';
+  return points.some((point) => point.pointType !== 'COMMAND' && pointStatus(point) === 'ACTIVE' && !point.from) ? 'APPLICABLE' : 'NOT_APPLICABLE';
 }
 
 // The site file's devices with their points, each point with the row id it is registered under.
@@ -391,9 +392,11 @@ export function buildOnboardingSql(profile) {
   const assetPlacementRows = assets.map((asset, index) => `(${sqlLiteral(rowId(site.id, '6500', index + 1))}, ${tenant}, ${siteId}, ${sqlLiteral(asset.id)}, ${sqlLiteral(space.id)}, 'INSTALLED_IN', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`).join(',\n');
   // A meter wired to one machine is that machine's meter.
   const deviceBindingRows = devices.filter((device) => device.asset).map((device) => `(${sqlLiteral(rowId(site.id, '6400', device.deviceIndex))}, ${siteId}, ${sqlLiteral(device.id)}, ${sqlLiteral(device.asset)}, ${device.type.endsWith('METER') ? "'METER'" : "'CONTROLLER'"}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp(), ${tenant})`).join(',\n');
+  const devicesByCode = new Map(devices.map((device) => [device.code, device]));
   const pointRows = points.map((point) => {
     const interval = point.device.sampleSeconds * 1000;
-    return `(${sqlLiteral(point.id)}, ${tenant}, ${siteId}, ${sqlLiteral(point.device.id)}, NULL, ${sqlLiteral(point.code)}, ${sqlLiteral(point.sourceKey ?? point.code)}, ${sqlLiteral(point.name)}, ${sqlLiteral(point.pointType)}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, false, ${interval}, ${interval}, ${interval * 3}, ${sqlJson({ protocol: 'MODBUS_RTU', address: point.address, gatewaySourceKey: point.device.sourceKey })}, ${sqlLiteral(pointStatus(point))}, 1, clock_timestamp(), clock_timestamp(), NULL, NULL, ${point.pointType === 'COUNTER' ? "'RESET_TO_ZERO'" : 'NULL'}, NULL)`;
+    const writable = point.pointType === 'COMMAND' && point.writable !== false;
+    return `(${sqlLiteral(point.id)}, ${tenant}, ${siteId}, ${sqlLiteral(point.device.id)}, NULL, ${sqlLiteral(point.code)}, ${sqlLiteral(point.sourceKey ?? point.code)}, ${sqlLiteral(point.name)}, ${sqlLiteral(point.pointType)}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, ${writable}, ${interval}, ${interval}, ${interval * 3}, ${sqlJson(buildPointSourceMetadata(point, devicesByCode))}, ${sqlLiteral(pointStatus(point))}, 1, clock_timestamp(), clock_timestamp(), NULL, NULL, ${point.pointType === 'COUNTER' ? "'RESET_TO_ZERO'" : 'NULL'}, NULL)`;
   }).join(',\n');
   // A point describes the machine it measures, else the Site. The binding carries the point's
   // status, so a point the site file marks INACTIVE (no probe wired) is not a current binding.
@@ -402,7 +405,8 @@ export function buildOnboardingSql(profile) {
   const subjectRows = points.map((point) => {
     const asset = point.asset ?? point.device.asset;
     const fallbackId = rowId(site.id, '6300', point.device.deviceIndex * 0x10000 + point.pointIndex + 1);
-    return `  (${sqlLiteral(fallbackId)}, ${tenant}, ${siteId}, ${sqlLiteral(point.id)}, ${asset ? "'ASSET'" : "'SITE'"}, NULL, ${asset ? sqlLiteral(asset) : 'NULL'}, 'DESCRIBES', ${sqlLiteral(pointStatus(point))}, clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
+    const bindingRole = point.pointType === 'COMMAND' ? "'CONTROLS'" : "'DESCRIBES'";
+    return `  (${sqlLiteral(fallbackId)}, ${tenant}, ${siteId}, ${sqlLiteral(point.id)}, ${asset ? "'ASSET'" : "'SITE'"}, NULL, ${asset ? sqlLiteral(asset) : 'NULL'}, ${bindingRole}, ${sqlLiteral(pointStatus(point))}, clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
   }).join(',\n');
 
   const registry = `BEGIN;
@@ -440,7 +444,7 @@ ON CONFLICT (id) ${updateWhenChanged('device_bindings', [...fromFile('device_id'
 ` : ''}
 INSERT INTO core_registry.telemetry_points (id, tenant_id, site_id, reporting_device_id, sensor_id, point_code, source_key, display_name, point_type, value_type, unit, writable, sample_interval_ms, publish_interval_ms, stale_after_ms, source_metadata, status, revision, created_at, updated_at, point_template_id, template_version_id, counter_decrease_mode, counter_rollover_modulus) VALUES
 ${pointRows}
-ON CONFLICT (id) ${updateWhenChanged('telemetry_points', fromFile('point_code', 'source_key', 'display_name', 'point_type', 'value_type', 'unit', 'sample_interval_ms', 'publish_interval_ms', 'stale_after_ms', 'source_metadata', 'counter_decrease_mode', 'status'))};
+ON CONFLICT (id) ${updateWhenChanged('telemetry_points', fromFile('point_code', 'source_key', 'display_name', 'point_type', 'value_type', 'unit', 'writable', 'sample_interval_ms', 'publish_interval_ms', 'stale_after_ms', 'source_metadata', 'counter_decrease_mode', 'status'))};
 
 INSERT INTO core_registry.point_subject_bindings (id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at)
 SELECT COALESCE((SELECT existing.id FROM core_registry.point_subject_bindings existing WHERE existing.tenant_id = v.tenant_id::uuid AND existing.site_id = v.site_id::uuid AND existing.point_id = v.point_id::uuid AND existing.binding_role = v.binding_role ORDER BY existing.created_at LIMIT 1), v.id::uuid),
@@ -455,8 +459,7 @@ COMMIT;`;
   // replays after an outage, so samples up to a day late are still accepted.
   const runtimeDevices = devices.map((device) => `(${sqlLiteral(device.id)}, ${tenant}, ${siteId}, ${sqlLiteral(presenceApplicability(device.points))}, clock_timestamp())`).join(',\n');
   const presence = devices.map((device) => `(${sqlLiteral(device.id)}, 1, ${device.sampleSeconds * 2 + 30}, ${device.sampleSeconds * 5}, true, ARRAY['SOURCE_ACTIVITY']::text[], 60, 86400, clock_timestamp())`).join(',\n');
-  const devicesByCode = new Map(devices.map((device) => [device.code, device]));
-  const freshness = points.map((point) => {
+  const freshness = points.filter((point) => point.pointType !== 'COMMAND').map((point) => {
     const quality = pointQuality(point, profile, devicesByCode);
     const fresh = quality.staleAfterSeconds ?? point.device.sampleSeconds * 3;
     const minimum = quality.range ? quality.range.min : null;
@@ -1033,6 +1036,7 @@ export function checkSiteFile(profile, alarmRules = null) {
     }
     if (!['人工设定', '现场数据'].includes(optimization.policy?.responseModelSource)) problems.push('optimization.policy.responseModelSource must say where the response model comes from: 人工设定 or 现场数据');
   }
+  problems.push(...validateControlPoints(devices, profile.assets ?? [], activePoints));
   return problems;
 }
 

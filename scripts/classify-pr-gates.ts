@@ -240,6 +240,15 @@ for (const file of files) {
   match(file.startsWith('libs/commandauth/') || file.startsWith('libs/commandmodel/') || file.startsWith('modules/command/') || file.startsWith('infra/command/'), () => selectCommand(file, 'command capability changed', { integration: true }));
   match(file === 'modules/connectivity/pkg/connectivity/store.go' || file === 'modules/connectivity/pkg/connectivity/command_route.go' || file === 'cmd/connectivity/command_runtime.go', () => selectCommand(file, 'connectivity command correlation or runtime changed'));
   match(file.startsWith('libs/edgecontrol/') || file.startsWith('tools/eg8200-simulator/'), () => selectCommand(file, 'Edge control or plant simulator changed'));
+  match(file.startsWith('edge/'), () => {
+    selectCommand(file, 'Edge Node-RED uplink or downlink logic changed');
+    selectTelemetry(file, 'Edge Node-RED uplink or downlink logic changed');
+  });
+  match(file.startsWith('deploy/sites/'), () => {
+    selectRegistry(file, 'site onboarding manifest changed');
+    selectTelemetry(file, 'site onboarding manifest changed');
+    selectCommand(file, 'site onboarding manifest changed');
+  });
   match(file.startsWith('libs/alarmauth/') || file.startsWith('libs/alarmmodel/') || file.startsWith('modules/alarm/') || file.startsWith('infra/alarm/'), () => selectAlarm(file, 'Alarm capability changed', { integration: true }));
   match(file.startsWith('libs/workorderauth/') || file.startsWith('libs/workordermodel/') || file.startsWith('modules/workorder/') || file.startsWith('infra/workorder/'), () => selectWorkOrder(file, 'Work Order capability changed', { integration: true }));
   match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/analyticsmodel/') || file.startsWith('libs/energyseries/') || file.startsWith('modules/telemetry/internal/analytics/') || file.startsWith('modules/telemetry/internal/cube/') || file.startsWith('modules/telemetry/internal/history/') || file.startsWith('modules/telemetry/internal/query/') || file.startsWith('modules/telemetry/pkg/queryservice/') || file.startsWith('modules/telemetry/cmd/telemetry-query-owner/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('modules/energy/') || file.startsWith('deploy/analytics/') || file.startsWith('libs/intelligencemodel/') || file.startsWith('modules/metric/') || file.startsWith('modules/scheduler/') || file.startsWith('cmd/metric-worker/') || file.startsWith('services/forecast-service/') || file.startsWith('services/optimization-service/') || file.startsWith('services/fdd-service/') || file.startsWith('services/mv-service/') || file.startsWith('services/report-service/') || file.startsWith('libs/schedulerjob/') || file.startsWith('libs/tariffmodel/'), () => selectAnalytics(file, 'analytics capability changed', { integration: true }));
@@ -293,6 +302,11 @@ for (const file of files) {
       selectTelemetry(file, 'telemetry automation changed', { integration, browser: lower.includes('browser') || lower.includes('live-client') || lower.includes('hvac-web') });
     });
     scriptMatch(lower.includes('s3-') || lower.includes('command'), () => selectCommand(file, 'command automation changed', { integration: lower.includes('postgres') }));
+    scriptMatch(lower.includes('site-onboarding'), () => {
+      selectRegistry(file, 'site onboarding automation changed');
+      selectTelemetry(file, 'site onboarding automation changed');
+      selectCommand(file, 'site onboarding automation changed');
+    });
     scriptMatch(lower.includes('s4-') || lower.includes('alarm'), () => selectAlarm(file, 'Alarm automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('s5-') || lower.includes('work-order') || lower.includes('workorder'), () => selectWorkOrder(file, 'Work Order automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') }));
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));

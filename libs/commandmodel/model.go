@@ -585,12 +585,29 @@ type ConnectorResult struct {
 	EdgeExecution *EdgeExecutionEvidence
 }
 
+// InterlockCheck describes a prerequisite peer device state that must hold before
+// executing a command (for example requiring pumps and cooling towers to be RUNNING before
+// pulsing a chiller ON, or requiring a chiller to be STOPPED before opening a pump contactor).
+type InterlockCheck struct {
+	DeviceID string `json:"deviceId"`
+	Key      string `json:"key"`
+	Expected string `json:"expected"`
+	Reason   string `json:"reason,omitempty"`
+}
+
 // DeviceRoute is where a command for a Device goes: the Gateway the Device is behind and
-// the source key the Gateway knows it by, from the Registry read port.
+// the source key the Gateway knows it by, from the Registry read port. Optional actuation
+// fields stay at zero values unless the active COMMAND point declares source_metadata.
 type DeviceRoute struct {
 	GatewayID        string
 	ExternalDeviceID string
 	BindingRevision  uint64
+	PointCode        string
+	ActuationMode    string
+	Channel          string
+	CoilAddress      int
+	HasCoilAddress   bool
+	PulseDurationMs  int
 }
 
 // Command routing failures, each known before anything is sent to a Gateway.
