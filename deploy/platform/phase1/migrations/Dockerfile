@@ -1,6 +1,6 @@
-# Each reviewed file is copied on its own into a stage that is never run, then into the image as one
-# layer: one layer per file put the image over Docker's layer limit (#659).
-FROM scratch AS sources
+# Each reviewed file is copied into two scratch stages (each well under OverlayFS's 127-layer
+# limit), then merged into the runtime image (#659).
+FROM scratch AS sources-core
 
 COPY deploy/platform/phase1/migrations/bootstrap-roles.sql /opt/hvac/migrations/bootstrap-roles.sql
 COPY deploy/platform/phase1/migrations/migration-list.tsv /opt/hvac/migrations/migration-list.tsv
@@ -90,6 +90,8 @@ COPY infra/registry/postgres/init/037-site-and-asset-control-locks.sql /opt/hvac
 COPY infra/registry/postgres/init/038-command-route-point-metadata.sql /opt/hvac/repo/infra/registry/postgres/init/038-command-route-point-metadata.sql
 COPY services/notification-service/migrations/005_reading_gap_reminders.sql /opt/hvac/repo/services/notification-service/migrations/005_reading_gap_reminders.sql
 
+FROM scratch AS sources-runtime
+
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 COPY infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql /opt/hvac/repo/infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql
@@ -141,7 +143,8 @@ COPY services/operations-agent-service/migrations/operations/002_finding_without
 FROM postgres:16.4-bookworm
 
 WORKDIR /opt/hvac
-COPY --from=sources /opt/hvac /opt/hvac
+COPY --from=sources-core /opt/hvac /opt/hvac
+COPY --from=sources-runtime /opt/hvac /opt/hvac
 RUN ! grep -R -E 'local-only|fixture-only' /opt/hvac/repo \
     && chmod 0555 /opt/hvac/migrations/run-phase1-migrations.sh /opt/hvac/migrations/verify-phase1-schema.sh
 ENTRYPOINT ["/opt/hvac/migrations/run-phase1-migrations.sh"]

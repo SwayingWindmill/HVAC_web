@@ -129,9 +129,15 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	if !ok || flowRest.Raise.Kind != alarmservice.ConditionNoData || !reflect.DeepEqual(inputs(flowRest.Raise), []string{"01a14000-4000-7000-8000-000000000002/flow_velocity"}) {
 		t.Fatalf("flow meter readings rule should watch only flow_velocity as leaf: %#v", flowRest)
 	}
-	for _, omitted := range []string{"冷却塔读数长时间没有更新", "室外环境读数长时间没有更新", "房间读数长时间没有更新"} {
+	for _, omitted := range []string{
+		"冷却塔读数长时间没有更新",
+		"室外环境读数长时间没有更新",
+		"房间读数长时间没有更新",
+		"1# 螺杆主机控制器读数长时间没有更新",
+		"1# 冻水泵控制器读数长时间没有更新",
+	} {
 		if _, exists := byTitle[omitted]; exists {
-			t.Fatalf("%s should not be emitted when device has 0 own non-critical active points", omitted)
+			t.Fatalf("%s should not be emitted when device has 0 own non-critical active reading points", omitted)
 		}
 	}
 
@@ -145,11 +151,11 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		t.Fatalf("expected legacy cooling-tower readings-not-updated rule to be retired, got %#v", plan.Retired)
 	}
 
-	// #615: the Site has stopped reporting when none of its 78 active points has a reading for 15 minutes
-	// (67 until 2026-11-10 wired every chiller's water temperatures and the cooling tower back in and withdrew
-	// the room temperature, which has no probe).
+	// #615: the Site has stopped reporting when none of its 82 active reading points has a reading for
+	// 15 minutes (78 earlier active readings + 4 ET1010 shutdown pulse telemetry channels u51–u54;
+	// logical controller STATE/COMMAND points are excluded).
 	silent, ok := byTitle["网关上报中断"]
-	if !ok || silent.Severity != "MAJOR" || len(inputs(silent.Raise)) != 78 || len(inputs(silent.Clear)) != 78 {
+	if !ok || silent.Severity != "MAJOR" || len(inputs(silent.Raise)) != 82 || len(inputs(silent.Clear)) != 82 {
 		t.Fatalf("网关上报中断 rule: %#v", silent)
 	}
 	if !strings.Contains(silent.Summary, "15 分钟") {
@@ -197,8 +203,8 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		}
 	}
 
-	// All 78 active Site inputs fit within EvaluationSnapshot's 128-input cap, and every compiled
-	// Songyaxuan policy evaluates cleanly against a full Site snapshot.
+	// All 82 active reading inputs (and 82 reading + 16 controller STATE = 98 runtime inputs) fit
+	// within EvaluationSnapshot's 128-input cap, and every compiled Songyaxuan policy evaluates cleanly.
 	now := time.Date(2026, 11, 8, 8, 0, 0, 0, time.UTC)
 	fullInputs := map[string]alarmservice.InputFact{}
 	for _, key := range inputs(silent.Raise) {
@@ -208,11 +214,25 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 			fullInputs[key] = alarmservice.NumberInput(key, 20, "GOOD", now.Format(time.RFC3339Nano))
 		}
 	}
-	if len(fullInputs) != 78 {
-		t.Fatalf("expected 78 distinct Site inputs, got %d", len(fullInputs))
+	if len(fullInputs) != 82 {
+		t.Fatalf("expected 82 distinct Site reading inputs, got %d", len(fullInputs))
 	}
 	for _, policy := range byTitle {
 		_ = evaluate(t, policy, "full-site-1", fullInputs, alarmservice.AlarmEvaluationState{}, now)
+	}
+	withControllers := make(map[string]alarmservice.InputFact, len(fullInputs)+16)
+	for key, fact := range fullInputs {
+		withControllers[key] = fact
+	}
+	for index := 0x0e; index <= 0x1d; index++ {
+		key := fmt.Sprintf("01a14000-4000-7000-8000-%012x/run_state", index)
+		withControllers[key] = alarmservice.StringInput(key, "STOPPED", "GOOD", now.Format(time.RFC3339Nano))
+	}
+	if len(withControllers) != 98 {
+		t.Fatalf("expected 98 distinct Site runtime inputs including controllers, got %d", len(withControllers))
+	}
+	for _, policy := range byTitle {
+		_ = evaluate(t, policy, "full-site-with-ctrl-1", withControllers, alarmservice.AlarmEvaluationState{}, now)
 	}
 
 	again, err := Load(songyaxuanRules)
@@ -418,7 +438,7 @@ func TestRulesNamingAPointTheSiteDoesNotReadAreRefused(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "site.json"), site, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, input := range []string{"outdoor/ambient_wet_bulb_temperature", "no-such-device/run_state"} {
+	for _, input := range []string{"outdoor/ambient_wet_bulb_temperature", "no-such-device/run_state", "ctrl-chiller-a/start"} {
 		rules, _ := json.Marshal(map[string]any{
 			"schemaVersion": 1, "siteFile": "site.json",
 			"rules": []any{map[string]any{
