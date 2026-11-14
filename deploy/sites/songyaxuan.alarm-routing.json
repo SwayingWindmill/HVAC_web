@@ -8,7 +8,7 @@
   "rateLimitPerHour": 6,
   "quietHours": { "start": "22:00", "end": "07:00", "bypassSeverity": "MAJOR" },
   "rootCauseAlarmType": "reports-interrupted",
-  "suppressWhenRootCause": ["readings-not-updated/", "readings-flat/", "data-quality/", "rules-unevaluable"],
+  "suppressWhenRootCause": ["reading-gap/", "readings-not-updated/", "readings-flat/", "data-quality/", "rules-unevaluable"],
   "routes": [
     {
       "name": "major",
