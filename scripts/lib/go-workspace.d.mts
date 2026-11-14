@@ -3,6 +3,8 @@ export interface GoWorkspace {
   modules: string[];
 }
 
+export function goExecutableName(name: string, platform?: NodeJS.Platform): string;
+
 export function readGoWorkspace(root: string): GoWorkspace;
 
 export function installGoTool(options: {

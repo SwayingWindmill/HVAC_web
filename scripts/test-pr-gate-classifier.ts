@@ -14,7 +14,9 @@ import {
   findTrackedArtifactViolations,
   findVerifyFeatureMapViolations,
   maximumHandoffBytes,
+  splitArgsByLength,
 } from './check-repository-governance.ts';
+import { goExecutableName } from './lib/go-workspace.mjs';
 
 interface ClassificationReport {
   changedFiles: string[];
@@ -384,4 +386,13 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
   assert.deepEqual(formalRunner.unitProfiles, ['command']);
   assert.equal(formalRunner.unknown, false);
   assert.equal(formalRunner.broad, false);
+
+  assert.equal(goExecutableName('gofmt', 'win32'), 'gofmt.exe');
+  assert.equal(goExecutableName('gofmt.exe', 'win32'), 'gofmt.exe');
+  assert.equal(goExecutableName('gofmt', 'linux'), 'gofmt');
+  assert.deepEqual(splitArgsByLength(['a.go', 'b.go', 'c.go', 'd.go'], 10), [
+    ['a.go', 'b.go'],
+    ['c.go', 'd.go'],
+  ]);
+  assert.deepEqual(splitArgsByLength([]), []);
 });

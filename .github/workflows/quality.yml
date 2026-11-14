@@ -48,10 +48,5 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - id: browser
-        continue-on-error: true
-        run: npx playwright install --with-deps chromium
-      - if: steps.browser.outcome == 'success'
-        run: npm run web:e2e -- e2e/sign-in.spec.ts e2e/alarms.spec.ts e2e/realtime.spec.ts
-      - if: steps.browser.outcome != 'success'
-        run: echo "::warning::Playwright Chromium could not be installed; login, alarm, and realtime smoke was skipped."
+      - run: npx playwright install --with-deps chromium
+      - run: npm run web:e2e -- e2e/sign-in.spec.ts e2e/alarms.spec.ts e2e/realtime.spec.ts

@@ -21,7 +21,7 @@ The JSON output contains the project config and installed components (in `HVAC_w
 
 ## Principles
 
-1. **Use existing components first.** Use `npx shadcn@latest search` to check registries before writing custom UI. Check community registries too.
+1. **Use existing components first.** Use `npm run ui:shadcn -- search` (`npx shadcn@latest search` outside `HVAC_web`) to check registries before writing custom UI. Check community registries too.
 2. **Compose, don't reinvent.** Settings page = Tabs + Card + form controls. Dashboard = Sidebar + Card + Chart + Table.
 3. **Use built-in variants before custom styles.** `variant="outline"`, `size="sm"`, etc.
 4. **Use semantic colors.** `bg-primary`, `text-muted-foreground` — never raw values like `bg-blue-500`.
@@ -52,7 +52,7 @@ These rules are **always enforced**. Each links to a file with Incorrect/Correct
 ### Component Structure → [composition.md](./rules/composition.md)
 
 - **Items always inside their Group.** `SelectItem` → `SelectGroup`. `DropdownMenuItem` → `DropdownMenuGroup`. `CommandItem` → `CommandGroup`.
-- **Use `asChild` (radix) or `render` (base) for custom triggers.** Check `base` field from `npx shadcn@latest info`. → [base-vs-radix.md](./rules/base-vs-radix.md)
+- **Use `asChild` (radix) or `render` (base) for custom triggers.** Check `base` field from `npm run ui:shadcn -- info` (`npx shadcn@latest info` outside `HVAC_web`). → [base-vs-radix.md](./rules/base-vs-radix.md)
 - **Dialog, Sheet, and Drawer always need a Title.** `DialogTitle`, `SheetTitle`, `DrawerTitle` required for accessibility. Use `className="sr-only"` if visually hidden.
 - **Use full Card composition.** `CardHeader`/`CardTitle`/`CardDescription`/`CardContent`/`CardFooter`. Don't dump everything in `CardContent`.
 - **Button has no `isPending`/`isLoading`.** Compose with `Spinner` + `data-icon` + `disabled`.
@@ -85,8 +85,8 @@ These rules are **always enforced**. Each links to a file with Incorrect/Correct
 
 ### CLI
 
-- **Never decode preset codes or build preset URLs manually.** Use `npx shadcn@latest preset decode <code>`, `preset url <code>`, or `preset open <code>`. For project-aware preset detection, use `npx shadcn@latest preset resolve`.
-- **Apply preset codes directly with the CLI.** Use `npx shadcn@latest apply <code>` for existing projects, or `npx shadcn@latest init --preset <code>` when initializing.
+- **Never decode preset codes or build preset URLs manually.** Use `npm run ui:shadcn -- preset decode <code>`, `preset url <code>`, or `preset open <code>`. For project-aware preset detection, use `npm run ui:shadcn -- preset resolve`.
+- **Apply preset codes directly with the CLI.** Use `npm run ui:shadcn -- apply <code>` for existing projects, or `npx shadcn@latest init --preset <code>` when initializing outside `HVAC_web`.
 
 ## Key Patterns
 
@@ -160,7 +160,7 @@ The `info --json` project context contains these key fields:
 - **`resolvedPaths`** → exact file-system destinations for components, utils, hooks, etc.
 - **`framework`** → routing and file conventions (e.g. Next.js App Router vs Vite SPA).
 - **`packageManager`** → use this for any non-shadcn dependency installs (e.g. `pnpm add date-fns` vs `npm install date-fns`).
-- **`preset`** → resolved preset code and values for the current project. Use `npx shadcn@latest preset resolve --json` when you only need preset information.
+- **`preset`** → resolved preset code and values for the current project. Use `npm run ui:shadcn -- preset resolve --json` when you only need preset information.
 
 See [cli.md — `info` command](./cli.md) for the full field reference.
 
@@ -181,24 +181,24 @@ npm run ui:shadcn -- docs button dialog select
 3. **Find components** — `npm run ui:shadcn -- search` (outside `HVAC_web`: `npx shadcn@latest search`).
 4. **Get docs and examples** — run `npm run ui:shadcn -- docs <component>` to get URLs, then fetch them. Use `npm run ui:shadcn -- view` to browse registry items you haven't installed. To preview changes to installed components, use `npm run ui:shadcn -- add --diff`.
 5. **Install or update** — `npm run ui:shadcn -- add` (also inspect `DESIGN.md` and `npm run design:check` rules in `HVAC_web`, e.g. `FactTile` / `DataTableBlock` / forbidden `<Button variant="secondary">`). When updating existing components, use `--dry-run` and `--diff` to preview changes first (see [Updating Components](#updating-components) below).
-6. **Fix imports in third-party components** — After adding components from community registries (e.g. `@bundui`, `@magicui`), check the added non-UI files for hardcoded import paths like `@/components/ui/...`. These won't match the project's actual aliases. Use `npx shadcn@latest info` to get the correct `ui` alias (e.g. `@workspace/ui/components`) and rewrite the imports accordingly. The CLI rewrites imports for its own UI files, but third-party registry components may use default paths that don't match the project.
+6. **Fix imports in third-party components** — After adding components from community registries (e.g. `@bundui`, `@magicui`), check the added non-UI files for hardcoded import paths like `@/components/ui/...`. These won't match the project's actual aliases. Use `npm run ui:shadcn -- info` to get the correct `ui` alias (e.g. `@workspace/ui/components`) and rewrite the imports accordingly. The CLI rewrites imports for its own UI files, but third-party registry components may use default paths that don't match the project.
 7. **Review added components** — After adding a component or block from any registry, **always read the added files and verify they are correct**. Check for missing sub-components (e.g. `SelectItem` without `SelectGroup`), missing imports, incorrect composition, or violations of the [Critical Rules](#critical-rules). Also replace any icon imports with the project's `iconLibrary` from the project context (e.g. if the registry item uses `lucide-react` but the project uses `hugeicons`, swap the imports and icon names accordingly). Fix all issues before moving on.
 8. **Registry must be explicit** — When the user asks to add a block or component, **do not guess the registry**. If no registry is specified (e.g. user says "add a login block" without specifying `@shadcn`, `@tailark`, `owner/repo`, etc.), ask which registry to use. Never default to a registry on behalf of the user.
 9. **Switching presets** — Ask the user first: **overwrite**, **partial**, **merge**, or **skip**?
-   - **Inspect current preset**: `npx shadcn@latest preset resolve`. Use `--json` when you need structured values.
-   - **Inspect incoming preset**: `npx shadcn@latest preset decode <code>`. Use `preset url <code>` or `preset open <code>` to share or open the preset builder.
-   - **Overwrite**: `npx shadcn@latest apply <code>`. Overwrites detected components, fonts, and CSS variables.
-   - **Partial**: `npx shadcn@latest apply <code> --only theme,font`. Updates only the selected preset parts without reinstalling UI components. Supported values are `theme` and `font`; comma-separated combinations are allowed. `icon` is intentionally not supported, because icon changes may require full component reinstall and transforms.
-   - **Merge**: `npx shadcn@latest init --preset <code> --force --no-reinstall`, then run `npx shadcn@latest info` to list installed components, then for each installed component use `--dry-run` and `--diff` to [smart merge](#updating-components) it individually.
-   - **Skip**: `npx shadcn@latest init --preset <code> --force --no-reinstall`. Only updates config and CSS, leaves components as-is.
+   - **Inspect current preset**: `npm run ui:shadcn -- preset resolve`. Use `--json` when you need structured values.
+   - **Inspect incoming preset**: `npm run ui:shadcn -- preset decode <code>`. Use `preset url <code>` or `preset open <code>` to share or open the preset builder.
+   - **Overwrite**: `npm run ui:shadcn -- apply <code>`. Overwrites detected components, fonts, and CSS variables.
+   - **Partial**: `npm run ui:shadcn -- apply <code> --only theme,font`. Updates only the selected preset parts without reinstalling UI components. Supported values are `theme` and `font`; comma-separated combinations are allowed. `icon` is intentionally not supported, because icon changes may require full component reinstall and transforms.
+   - **Merge**: `npx shadcn@latest init --preset <code> --force --no-reinstall` (or `npm run ui:shadcn -- init --preset <code> --force --no-reinstall`), then run `npm run ui:shadcn -- info` to list installed components, then for each installed component use `--dry-run` and `--diff` to [smart merge](#updating-components) it individually.
+   - **Skip**: `npx shadcn@latest init --preset <code> --force --no-reinstall` (or `npm run ui:shadcn -- init --preset <code> --force --no-reinstall`). Only updates config and CSS, leaves components as-is.
    - **Important**: Always run preset commands inside the user's project directory. `apply` only works in an existing project with a `components.json` file. The CLI automatically preserves the current base (`base` vs `radix`) from `components.json`. If you must use a scratch/temp directory (e.g. for `--dry-run` comparisons), pass `--base <current-base>` explicitly — preset codes do not encode the base.
 
 ## Updating Components
 
 When the user asks to update a component from upstream while keeping their local changes, use `--dry-run` and `--diff` to intelligently merge. **NEVER fetch raw files from GitHub manually — always use the CLI.**
 
-1. Run `npx shadcn@latest add <component> --dry-run` to see all files that would be affected.
-2. For each file, run `npx shadcn@latest add <component> --diff <file>` to see what changed upstream vs local.
+1. Run `npm run ui:shadcn -- add <component> --dry-run` to see all files that would be affected.
+2. For each file, run `npm run ui:shadcn -- add <component> --diff <file>` to see what changed upstream vs local.
 3. Decide per file based on the diff:
    - No local changes → safe to overwrite.
    - Has local changes → read the local file, analyze the diff, and apply upstream updates while preserving local modifications.
@@ -220,44 +220,44 @@ npx shadcn@latest init --name my-app --preset base-nova --template next --monore
 npx shadcn@latest init --preset base-nova
 npx shadcn@latest init --defaults  # shortcut: --template=next --preset=nova (base style implied)
 
-# Apply a preset to an existing project.
-npx shadcn@latest apply a2r6bw
-npx shadcn@latest apply a2r6bw --only theme
-npx shadcn@latest apply a2r6bw --only font
-npx shadcn@latest apply a2r6bw --only theme,font
+# Apply a preset to an existing project (`HVAC_web` uses npm run ui:shadcn -- ...).
+npm run ui:shadcn -- apply a2r6bw
+npm run ui:shadcn -- apply a2r6bw --only theme
+npm run ui:shadcn -- apply a2r6bw --only font
+npm run ui:shadcn -- apply a2r6bw --only theme,font
 
 # Inspect preset codes and project preset state.
-npx shadcn@latest preset decode a2r6bw
-npx shadcn@latest preset url a2r6bw
-npx shadcn@latest preset open a2r6bw
-npx shadcn@latest preset resolve
-npx shadcn@latest preset resolve --json
+npm run ui:shadcn -- preset decode a2r6bw
+npm run ui:shadcn -- preset url a2r6bw
+npm run ui:shadcn -- preset open a2r6bw
+npm run ui:shadcn -- preset resolve
+npm run ui:shadcn -- preset resolve --json
 
 # Add components.
-npx shadcn@latest add button card dialog
-npx shadcn@latest add @magicui/shimmer-button
-npx shadcn@latest add owner/repo/item
-npx shadcn@latest add --all
+npm run ui:shadcn -- add button card dialog
+npm run ui:shadcn -- add @magicui/shimmer-button
+npm run ui:shadcn -- add owner/repo/item
+npm run ui:shadcn -- add --all
 
 # Preview changes before adding/updating.
-npx shadcn@latest add button --dry-run
-npx shadcn@latest add button --diff button.tsx
-npx shadcn@latest add @acme/form --view button.tsx
-npx shadcn@latest add owner/repo/item --dry-run
+npm run ui:shadcn -- add button --dry-run
+npm run ui:shadcn -- add button --diff button.tsx
+npm run ui:shadcn -- add @acme/form --view button.tsx
+npm run ui:shadcn -- add owner/repo/item --dry-run
 
 # Search registries.
-npx shadcn@latest search @shadcn -q "sidebar"
-npx shadcn@latest search @tailark -q "stats"
-npx shadcn@latest search owner/repo -q "login"
-npx shadcn@latest search                          # all configured registries
-npx shadcn@latest search @shadcn -q "menu" -t ui  # filter by item type
+npm run ui:shadcn -- search @shadcn -q "sidebar"
+npm run ui:shadcn -- search @tailark -q "stats"
+npm run ui:shadcn -- search owner/repo -q "login"
+npm run ui:shadcn -- search                          # all configured registries
+npm run ui:shadcn -- search @shadcn -q "menu" -t ui  # filter by item type
 
 # Get component docs and example URLs.
-npx shadcn@latest docs button dialog select
+npm run ui:shadcn -- docs button dialog select
 
 # View registry item details (for items not yet installed).
-npx shadcn@latest view @shadcn/button
-npx shadcn@latest view owner/repo/item
+npm run ui:shadcn -- view @shadcn/button
+npm run ui:shadcn -- view owner/repo/item
 ```
 
 **Named presets:** `nova`, `vega`, `maia`, `lyra`, `mira`, `luma`

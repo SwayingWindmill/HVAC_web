@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { readGoWorkspace } from './lib/go-workspace.mjs';
+import { goExecutableName, readGoWorkspace } from './lib/go-workspace.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const maximumInlineCommands = 4;
@@ -482,20 +482,41 @@ const workspaceGofmt = (root: string): string => {
     encoding: 'utf8',
     env: { ...process.env, GOTOOLCHAIN: `go${goVersion}` },
   }).trim();
-  const binary = join(goroot, 'bin', 'gofmt');
+  const binary = join(goroot, 'bin', goExecutableName('gofmt'));
   if (!existsSync(binary)) {
     throw new Error(`gofmt for go${goVersion} is not at ${binary}`);
   }
   return binary;
 };
 
+export const splitArgsByLength = (args: readonly string[], maxChars = 16_000): string[][] => {
+  const batches: string[][] = [];
+  let current: string[] = [];
+  let currentChars = 0;
+  for (const arg of args) {
+    const nextChars = currentChars + arg.length + 1;
+    if (current.length > 0 && nextChars > maxChars) {
+      batches.push(current);
+      current = [arg];
+      currentChars = arg.length;
+    } else {
+      current.push(arg);
+      currentChars = nextChars;
+    }
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+};
+
 const findGoFormatViolations = (root: string, trackedFiles: readonly string[]): string[] => {
   const goFiles = trackedFiles.map(normalizePath).filter((path) => path.endsWith('.go') && existsSync(join(root, path)));
   if (goFiles.length === 0) return [];
   const gofmt = workspaceGofmt(root);
-  const unformatted = execFileSync(gofmt, ['-l', ...goFiles], { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
-    .split('\n')
-    .filter(Boolean);
+  const unformatted = splitArgsByLength(goFiles).flatMap((batch) =>
+    execFileSync(gofmt, ['-l', ...batch], { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+      .split(/\r?\n/u)
+      .filter(Boolean),
+  );
   return unformatted.map((path) => `${path}: not gofmt-formatted (run ${gofmt} -w ${path})`);
 };
 
