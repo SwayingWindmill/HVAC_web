@@ -28,7 +28,7 @@ Note: In Antigravity, lazily-loaded MCP tools are invoked via `call_mcp_tool` af
 
 ## Tools
 
-> **Tip:** MCP tools handle registry operations (search, view, install). For project configuration (aliases, framework, Tailwind version), use `npx shadcn@latest info` — there is no MCP equivalent.
+> **Tip:** MCP tools handle registry operations (search, view, install). For project configuration (aliases, framework, Tailwind version), use `npm run ui:shadcn -- info` (`npx shadcn@latest info` outside `HVAC_web`) — there is no MCP equivalent.
 
 ### `shadcn:get_project_registries`
 

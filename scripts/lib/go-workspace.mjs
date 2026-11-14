@@ -13,12 +13,16 @@ export function readGoWorkspace(root) {
   return { goVersion, modules };
 }
 
+export function goExecutableName(name, platform = process.platform) {
+  return platform === 'win32' && !name.endsWith('.exe') ? `${name}.exe` : name;
+}
+
 // Installs a pinned Go tool once per (version, Go version) and returns its path. The tool is built with the
 // workspace's Go: golangci-lint and govulncheck cannot load code that targets a newer Go than they were built with.
 // GOFLAGS is cleared so a gate's -race does not build a race-instrumented tool.
 export function installGoTool({ root, goBinary, goCacheDir, goVersion, name, packagePath, version }) {
   const toolDir = join(tmpdir(), 'hvac-go-tools', `${name}-${version}-go${goVersion}`);
-  const binary = join(toolDir, name);
+  const binary = join(toolDir, goExecutableName(name));
   if (existsSync(binary)) return binary;
   mkdirSync(toolDir, { recursive: true });
   mkdirSync(goCacheDir, { recursive: true });
