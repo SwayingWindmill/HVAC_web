@@ -126,6 +126,7 @@
           "403": { "$ref": "#/components/responses/Problem" },
           "404": { "$ref": "#/components/responses/Problem" },
           "409": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" },
           "503": { "$ref": "#/components/responses/Problem" }
         }
       }
@@ -269,6 +270,61 @@
           "503": { "$ref": "#/components/responses/Problem" }
         }
       }
+    },
+    "/api/v1/commands/{commandId}/cancel": {
+      "post": {
+        "operationId": "cancelCommand",
+        "summary": "Cancel an APPROVAL_PENDING or QUEUED Command before dispatch begins",
+        "x-activation-status": "expand-baseline",
+        "x-production-traffic-percent": 0,
+        "x-client-forbidden-fields": [
+          "tenantId",
+          "siteId",
+          "deviceId",
+          "principalId",
+          "payloadHash",
+          "risk",
+          "providerMethod",
+          "providerParams"
+        ],
+        "parameters": [
+          {
+            "name": "commandId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "minLength": 1 }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "minLength": 16 }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CancelCommandRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command cancelled before dispatch.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Command" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
     }
   },
   "components": {
@@ -285,6 +341,11 @@
             "maxProperties": 1,
             "additionalProperties": { "type": "number" },
             "description": "Capability parameters only. Device Endpoint and capability are derived from the Registry COMMAND/CONTROLS Point."
+          },
+          "verificationCode": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$",
+            "description": "6-digit TOTP step-up verification code required for HIGH and CRITICAL Commands."
           }
         }
       },
@@ -293,6 +354,14 @@
         "additionalProperties": false,
         "maxProperties": 0,
         "description": "Empty by design. Principal, role and resource scope are derived from the authenticated Session, Registry and IAM."
+      },
+      "CancelCommandRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": { "type": "string", "maxLength": 256 }
+        },
+        "description": "Optional reason for cancelling a Command before dispatch. Principal and resource scope are derived from the authenticated Session, Registry and IAM."
       },
       "ReconcileCommandRequest": {
         "type": "object",
@@ -337,7 +406,7 @@
           "pointId": { "type": "string", "format": "uuid" },
           "capability": {
             "type": "string",
-            "enum": ["START", "STOP", "RESET_FAULT", "SET_TEMPERATURE_SETPOINT", "SET_CHILLED_WATER_TEMPERATURE_SETPOINT", "SET_FREQUENCY", "SET_FAN_SPEED", "SET_LOAD_LIMIT", "SET_OPENING"]
+            "enum": ["START", "STOP", "START_UNIT_SEQUENCE", "STOP_UNIT_SEQUENCE", "RESET_FAULT", "SET_TEMPERATURE_SETPOINT", "SET_CHILLED_WATER_TEMPERATURE_SETPOINT", "SET_FREQUENCY", "SET_FAN_SPEED", "SET_LOAD_LIMIT", "SET_OPENING"]
           },
           "capabilityRevision": { "type": "string" },
           "status": {
@@ -357,7 +426,7 @@
               "OUTCOME_UNKNOWN"
             ]
           },
-          "risk": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"] },
+          "risk": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
           "approvalPolicy": { "type": "string", "enum": ["NONE", "SINGLE_APPROVER", "TWO_PERSON"] },
           "approvalCount": { "type": "integer", "minimum": 0 },
           "requiredApprovalCount": { "type": "integer", "minimum": 0, "maximum": 2 },
@@ -411,6 +480,10 @@
               "COMMAND_IDEMPOTENCY_CONFLICT",
               "COMMAND_APPROVAL_REQUEST_INVALID",
               "COMMAND_APPROVAL_INVALID",
+              "COMMAND_CANCEL_REQUEST_INVALID",
+              "COMMAND_CANCEL_INVALID",
+              "COMMAND_CONTROL_LOCKED",
+              "STEP_UP_REQUIRED",
               "COMMAND_UNAVAILABLE"
             ]
           },

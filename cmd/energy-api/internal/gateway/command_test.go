@@ -42,7 +42,7 @@ func TestGatewayCreateCommandDerivesAuthorityAndCurrentState(t *testing.T) {
 	if recorder.Header().Get("Location") != "/api/v1/commands/"+fixture.commandID {
 		t.Fatalf("location=%s", recorder.Header().Get("Location"))
 	}
-	if fixture.iamCalls.Load() != 4 || fixture.registryCalls.Load() != 2 || fixture.telemetryCalls.Load() != 1 || fixture.commandCalls.Load() != 1 {
+	if fixture.iamCalls.Load() != 5 || fixture.registryCalls.Load() != 3 || fixture.telemetryCalls.Load() != 1 || fixture.commandCalls.Load() != 1 {
 		t.Fatalf("calls iam=%d registry=%d telemetry=%d command=%d", fixture.iamCalls.Load(), fixture.registryCalls.Load(), fixture.telemetryCalls.Load(), fixture.commandCalls.Load())
 	}
 	var view commandView
@@ -121,7 +121,7 @@ func TestGatewayUnsafeCurrentStateStopsBeforeCommandAuthorization(t *testing.T) 
 	if recorder.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if fixture.iamCalls.Load() != 3 || fixture.registryCalls.Load() != 2 || fixture.telemetryCalls.Load() != 1 || fixture.commandCalls.Load() != 0 {
+	if fixture.iamCalls.Load() != 4 || fixture.registryCalls.Load() != 3 || fixture.telemetryCalls.Load() != 1 || fixture.commandCalls.Load() != 0 {
 		t.Fatalf("unsafe calls iam=%d registry=%d telemetry=%d command=%d", fixture.iamCalls.Load(), fixture.registryCalls.Load(), fixture.telemetryCalls.Load(), fixture.commandCalls.Load())
 	}
 }
@@ -366,6 +366,7 @@ type commandGatewayFixture struct {
 	registryCalls         atomic.Int32
 	telemetryCalls        atomic.Int32
 	commandCalls          atomic.Int32
+	identityCalls         atomic.Int32
 	unsafeState           atomic.Bool
 	crossTenantView       atomic.Bool
 	approvalPending       atomic.Bool
@@ -373,6 +374,18 @@ type commandGatewayFixture struct {
 	outcomeUnknown        atomic.Bool
 	reconciled            atomic.Bool
 	approvalCompleted     atomic.Bool
+	dispatching           atomic.Bool
+	cancelled             atomic.Bool
+	commandCapability     commandmodel.Capability
+	expectedSetpoint      *float64
+	totpResponder         func(code string) (int, map[string]any)
+	denyScheduleManage    atomic.Bool
+	siteControlMode       string
+	siteControlRevision   int64
+	assetLockMode         string
+	assetLockRevision     int64
+	cancelledPendingIDs   []string
+	lastCancelPending     *internalCommandCancelPendingRequest
 }
 
 func newCommandGatewayFixture(t *testing.T, feedbackTypes ...string) *commandGatewayFixture {
@@ -404,7 +417,7 @@ func newCommandGatewayFixture(t *testing.T, feedbackTypes ...string) *commandGat
 			PublicOrigin: "https://web.example.test", IAMURL: "https://iam.example.test", IAMAudience: "iam-service",
 			ExecutingWorkloadSPIFFE: "spiffe://hvac.local/platform-gateway", PolicyRevision: "identity-policy-1", DelegationSigner: gatewaySigner,
 			TokenEncryptionKey: make([]byte, 32), SessionStore: store, SessionTTL: time.Hour, DelegationTTL: 30 * time.Second,
-			IAMHTTPClient: fixture.commandIAMClient(t, now),
+			IAMHTTPClient: fixture.commandIAMClient(t, now), OIDCHTTPClient: fixture.commandIdentityClient(t, now),
 		},
 		Registry:  &RegistryConfig{CoreBaseURL: "https://registry.example.test", CoreHTTPClient: fixture.commandRegistryClient(t, now), CoreTimeout: time.Second},
 		Telemetry: &TelemetryConfig{RuntimeBaseURL: "https://telemetry.example.test", RuntimeHTTPClient: fixture.commandTelemetryClient(t, now), RuntimeAudience: "telemetry-runtime-service", Timeout: time.Second},
@@ -488,8 +501,17 @@ func (fixture *commandGatewayFixture) registryDecisionResponse(t *testing.T, req
 	t.Helper()
 	var input registryauth.DecisionRequest
 	if json.NewDecoder(request.Body).Decode(&input) != nil ||
-		(input.Action != registryauth.ActionAssetRead && input.Action != registryauth.ActionAssetModelRead && input.Action != registryauth.ActionDeviceRead && input.Action != registryauth.ActionSiteRead) {
+		(input.Action != registryauth.ActionAssetRead && input.Action != registryauth.ActionAssetModelRead && input.Action != registryauth.ActionDeviceRead && input.Action != registryauth.ActionSiteRead && input.Action != registryauth.ActionScheduleManage) {
 		t.Fatal("invalid Registry decision request")
+	}
+	if input.Action == registryauth.ActionScheduleManage && fixture.denyScheduleManage.Load() {
+		decision := registryauth.Decision{
+			Allowed: false, PrincipalID: fixture.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
+			TenantID: fixture.tenantID, Actions: []registryauth.Action{input.Action},
+			PolicyRevision: "registry-read:1/iam:1", ReasonCode: registryauth.ReasonDenyActionNotGranted,
+			DecidedAt: now.Format(time.RFC3339Nano),
+		}
+		return telemetryJSONResponse(http.StatusOK, registryauth.DecisionResponse{Decision: decision})
 	}
 	decision := registryauth.Decision{
 		Allowed: true, PrincipalID: fixture.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
@@ -544,10 +566,14 @@ func (fixture *commandGatewayFixture) commandDecisionResponse(t *testing.T, requ
 		input.DeviceID != fixture.deviceID || input.SiteID != fixture.siteID {
 		t.Fatal("invalid Command decision request")
 	}
+	profile, ok := commandmodel.CapabilityProfileFor(input.Capability)
+	if !ok {
+		t.Fatalf("unexpected capability %q", input.Capability)
+	}
 	decision := commandauth.Decision{
 		Allowed: true, PrincipalID: fixture.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
 		TenantID: fixture.tenantID, SiteID: fixture.siteID, DeviceID: fixture.deviceID,
-		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
+		Capability: input.Capability, CapabilityRevision: profile.Revision,
 		Purpose: input.Purpose, MaximumRisk: commandmodel.RiskHigh,
 		PolicyRevision: "identity-policy-1", EmergencyRevocationRevision: 3,
 		ReasonCode: commandauth.ReasonAllowExactCapability, DecidedAt: now.Format(time.RFC3339Nano),
@@ -582,40 +608,49 @@ func (fixture *commandGatewayFixture) commandRegistryClient(t *testing.T, now ti
 		Code: "AHU-01-CTRL", DisplayName: "AHU 01 Controller", DeviceType: "AHU_CONTROLLER", Status: "ACTIVE", Revision: 7,
 		CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
-	commandPoint := platformapi.TelemetryPoint{
-		ID: fixture.commandPointID, TenantID: fixture.tenantID, SiteID: fixture.siteID, ReportingDeviceID: fixture.deviceID,
-		PointCode: "zone_temperature_setpoint_command", SourceKey: "zone.temperature.setpoint.command", DisplayName: "Zone temperature setpoint command",
-		PointType: "COMMAND", ValueType: "NUMBER", Unit: &unit, Writable: true, SampleIntervalMS: 1000, PublishIntervalMS: 1000, StaleAfterMS: 3000,
-		SourceMetadata: map[string]any{
-			"capability": commandmodel.CapabilitySetTemperatureSetpoint, "capabilityRevision": "capability:set-temperature-setpoint:v1",
-			"feedbackSourceKey": "zoneTemperatureC", "feedbackPointKey": "zone_temperature", "parameterKey": commandmodel.ParameterSetpointC,
-		},
-		Status: "ACTIVE", Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
-	}
-	feedbackPoint := platformapi.TelemetryPoint{
-		ID: fixture.feedbackPointID, TenantID: fixture.tenantID, SiteID: fixture.siteID, ReportingDeviceID: fixture.deviceID,
-		PointCode: "zone_temperature", SourceKey: "zone.temperature", DisplayName: "Zone temperature",
-		PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unit, Writable: false, SampleIntervalMS: 1000, PublishIntervalMS: 1000, StaleAfterMS: 3000,
-		SourceMetadata: map[string]any{}, Status: "ACTIVE", Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
-	}
-	if fixture.feedbackPointType != "" {
-		feedbackPoint.PointType = fixture.feedbackPointType
-	}
-	assetModel := platformapi.SiteAssetModel{
-		SchemaVersion: 2, TenantID: fixture.tenantID, SiteID: fixture.siteID, Assets: []platformapi.Asset{asset}, Devices: []platformapi.Device{device},
-		Spaces: []platformapi.Space{}, Sensors: []platformapi.Sensor{}, TelemetryPoints: []platformapi.TelemetryPoint{commandPoint, feedbackPoint},
-		Relationships: []platformapi.AssetRelationship{{
-			ID: fixture.controlRelationshipID, TenantID: fixture.tenantID, SiteID: fixture.siteID,
-			FromType: "POINT", FromID: fixture.commandPointID, ToType: "ASSET", ToID: fixture.assetID, Role: "CONTROLS", Status: "ACTIVE",
-			ValidFrom: createdAt, ValidTo: nil, Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
-		}},
-		Counts: platformapi.AssetModelCounts{Assets: 1, DeviceEndpoints: 1, PhysicalSensors: 0, Points: 2},
-	}
 	return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		fixture.registryCalls.Add(1)
 		assertCommandInternalHeaders(t, request)
 		if request.Header.Get("X-Delegation-Grant") == "" {
 			t.Fatal("missing Registry delegation grant")
+		}
+		capTarget := fixture.commandCapability
+		if capTarget == "" {
+			capTarget = commandmodel.CapabilitySetTemperatureSetpoint
+		}
+		targetProfile, _ := commandmodel.CapabilityProfileFor(capTarget)
+		sourceMetadata := map[string]any{
+			"capability": capTarget, "capabilityRevision": targetProfile.Revision,
+			"feedbackSourceKey": "zoneTemperatureC", "feedbackPointKey": "zone_temperature",
+		}
+		if targetProfile.ParameterKey != "" {
+			sourceMetadata["parameterKey"] = targetProfile.ParameterKey
+		}
+		commandPoint := platformapi.TelemetryPoint{
+			ID: fixture.commandPointID, TenantID: fixture.tenantID, SiteID: fixture.siteID, ReportingDeviceID: fixture.deviceID,
+			PointCode: "zone_temperature_setpoint_command", SourceKey: "zone.temperature.setpoint.command", DisplayName: "Zone temperature setpoint command",
+			PointType: "COMMAND", ValueType: "NUMBER", Unit: &unit, Writable: true, SampleIntervalMS: 1000, PublishIntervalMS: 1000, StaleAfterMS: 3000,
+			SourceMetadata: sourceMetadata,
+			Status:         "ACTIVE", Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
+		}
+		feedbackPoint := platformapi.TelemetryPoint{
+			ID: fixture.feedbackPointID, TenantID: fixture.tenantID, SiteID: fixture.siteID, ReportingDeviceID: fixture.deviceID,
+			PointCode: "zone_temperature", SourceKey: "zone.temperature", DisplayName: "Zone temperature",
+			PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unit, Writable: false, SampleIntervalMS: 1000, PublishIntervalMS: 1000, StaleAfterMS: 3000,
+			SourceMetadata: map[string]any{}, Status: "ACTIVE", Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
+		}
+		if fixture.feedbackPointType != "" {
+			feedbackPoint.PointType = fixture.feedbackPointType
+		}
+		assetModel := platformapi.SiteAssetModel{
+			SchemaVersion: 2, TenantID: fixture.tenantID, SiteID: fixture.siteID, Assets: []platformapi.Asset{asset}, Devices: []platformapi.Device{device},
+			Spaces: []platformapi.Space{}, Sensors: []platformapi.Sensor{}, TelemetryPoints: []platformapi.TelemetryPoint{commandPoint, feedbackPoint},
+			Relationships: []platformapi.AssetRelationship{{
+				ID: fixture.controlRelationshipID, TenantID: fixture.tenantID, SiteID: fixture.siteID,
+				FromType: "POINT", FromID: fixture.commandPointID, ToType: "ASSET", ToID: fixture.assetID, Role: "CONTROLS", Status: "ACTIVE",
+				ValidFrom: createdAt, ValidTo: nil, Revision: 1, CreatedAt: createdAt, UpdatedAt: updatedAt,
+			}},
+			Counts: platformapi.AssetModelCounts{Assets: 1, DeviceEndpoints: 1, PhysicalSensors: 0, Points: 2},
 		}
 		switch request.URL.Path {
 		case "/internal/v1/registry/sites/" + fixture.siteID:
@@ -629,11 +664,108 @@ func (fixture *commandGatewayFixture) commandRegistryClient(t *testing.T, now ti
 			return telemetryJSONResponse(http.StatusOK, assetModel), nil
 		case "/internal/v1/registry/devices/" + fixture.deviceID:
 			return telemetryJSONResponse(http.StatusOK, device), nil
+		case "/internal/v1/registry/sites/" + fixture.siteID + "/control-state":
+			if request.Method != http.MethodGet {
+				t.Fatalf("unexpected method %s for control-state", request.Method)
+			}
+			return telemetryJSONResponse(http.StatusOK, fixture.currentSiteControlState(updatedAt)), nil
+		case "/internal/v1/registry/sites/" + fixture.siteID + "/control-mode":
+			if request.Method != http.MethodPut {
+				t.Fatalf("unexpected method %s for control-mode", request.Method)
+			}
+			var payload struct {
+				ControlMode string              `json:"controlMode"`
+				Reason      string              `json:"reason"`
+				Meta        controlRegistryMeta `json:"meta"`
+			}
+			if json.NewDecoder(request.Body).Decode(&payload) != nil {
+				return telemetryJSONResponse(http.StatusBadRequest, map[string]any{"code": "REGISTRY_MUTATION_INVALID"}), nil
+			}
+			if payload.Meta.ExpectedRevision != fixture.siteControlRevision {
+				return telemetryJSONResponse(http.StatusConflict, map[string]any{"code": "REGISTRY_REVISION_CONFLICT", "detail": "The expected Registry revision is stale."}), nil
+			}
+			fixture.siteControlMode = payload.ControlMode
+			fixture.siteControlRevision++
+			state := fixture.currentSiteControlState(updatedAt)
+			state.Reason = payload.Reason
+			return telemetryJSONResponse(http.StatusOK, state), nil
+		case "/internal/v1/registry/assets/" + fixture.assetID + "/control-lock":
+			if request.Method != http.MethodPut {
+				t.Fatalf("unexpected method %s for asset control-lock", request.Method)
+			}
+			var payload struct {
+				LockMode string              `json:"lockMode"`
+				Reason   string              `json:"reason"`
+				Meta     controlRegistryMeta `json:"meta"`
+			}
+			if json.NewDecoder(request.Body).Decode(&payload) != nil {
+				return telemetryJSONResponse(http.StatusBadRequest, map[string]any{"code": "REGISTRY_MUTATION_INVALID"}), nil
+			}
+			if payload.Meta.ExpectedRevision != fixture.assetLockRevision {
+				return telemetryJSONResponse(http.StatusConflict, map[string]any{"code": "REGISTRY_REVISION_CONFLICT", "detail": "The expected Registry revision is stale."}), nil
+			}
+			fixture.assetLockMode = payload.LockMode
+			fixture.assetLockRevision++
+			lockID := "018f3e00-9900-7000-8000-000000000002"
+			return telemetryJSONResponse(http.StatusOK, assetControlLockView{
+				ID:             lockID,
+				TenantID:       fixture.tenantID,
+				SiteID:         fixture.siteID,
+				AssetID:        fixture.assetID,
+				LockMode:       fixture.assetLockMode,
+				Reason:         payload.Reason,
+				UpdatedBy:      &fixture.principalID,
+				UpdatedAt:      &updatedAt,
+				Revision:       fixture.assetLockRevision,
+				BoundDeviceIDs: []string{fixture.deviceID},
+			}), nil
 		default:
 			t.Fatalf("unexpected Registry request %s", request.URL.Path)
 			return nil, io.EOF
 		}
 	})}
+}
+
+func (fixture *commandGatewayFixture) currentSiteControlState(updatedAt string) siteControlStateView {
+	mode := fixture.siteControlMode
+	if mode == "" {
+		mode = siteControlModeRemoteAuto
+	}
+	locks := []assetControlLockView{}
+	if fixture.assetLockMode != "" {
+		lockID := "018f3e00-9900-7000-8000-000000000002"
+		locks = append(locks, assetControlLockView{
+			ID:             lockID,
+			TenantID:       fixture.tenantID,
+			SiteID:         fixture.siteID,
+			AssetID:        fixture.assetID,
+			LockMode:       fixture.assetLockMode,
+			Reason:         "asset lock",
+			UpdatedBy:      &fixture.principalID,
+			UpdatedAt:      &updatedAt,
+			Revision:       fixture.assetLockRevision,
+			BoundDeviceIDs: []string{fixture.deviceID},
+		})
+	}
+	var stateID *string
+	var updatedBy, updatedAtPtr *string
+	if fixture.siteControlRevision > 0 {
+		id := "018f3e00-9900-7000-8000-000000000001"
+		stateID = &id
+		updatedBy = &fixture.principalID
+		updatedAtPtr = &updatedAt
+	}
+	return siteControlStateView{
+		ID:          stateID,
+		TenantID:    fixture.tenantID,
+		SiteID:      fixture.siteID,
+		ControlMode: mode,
+		Reason:      "",
+		UpdatedBy:   updatedBy,
+		UpdatedAt:   updatedAtPtr,
+		Revision:    fixture.siteControlRevision,
+		AssetLocks:  locks,
+	}
 }
 
 func (fixture *commandGatewayFixture) commandTelemetryClient(t *testing.T, now time.Time) *http.Client {
@@ -679,6 +811,23 @@ func (fixture *commandGatewayFixture) commandBackendClient(t *testing.T, now tim
 		assertCommandInternalHeaders(t, request)
 		switch request.Method {
 		case http.MethodPost:
+			if request.URL.Path == internalCommandsCancelPendingPath {
+				claims, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, request.Header.Get("X-Command-Control-Context"))
+				if err != nil || claims.TenantID != fixture.tenantID || len(claims.Actions) != 1 || claims.Actions[0] != "command:cancel-pending" ||
+					!commandTestContains(claims.Scopes, "tenant:"+fixture.tenantID) || !commandTestContains(claims.Scopes, "site:"+fixture.siteID) {
+					t.Fatalf("invalid cancel-pending control context claims=%#v err=%v", claims, err)
+				}
+				var input internalCommandCancelPendingRequest
+				if json.NewDecoder(request.Body).Decode(&input) != nil || input.TenantID != fixture.tenantID || input.SiteID != fixture.siteID || input.PrincipalID != fixture.principalID {
+					t.Fatalf("unexpected internal cancel-pending input %#v", input)
+				}
+				fixture.lastCancelPending = &input
+				cancelled := fixture.cancelledPendingIDs
+				if cancelled == nil {
+					cancelled = []string{}
+				}
+				return telemetryJSONResponse(http.StatusOK, map[string]any{"cancelledCommandIds": cancelled}), nil
+			}
 			claims, err := commandauth.VerifyGrant(&fixture.iamSigner.PublicKey, request.Header.Get("X-Command-Grant"))
 			if strings.HasSuffix(request.URL.Path, "/reconcile") {
 				if err != nil || claims.Purpose != commandmodel.AuthorizationCommandSubmit || claims.DeviceID != fixture.deviceID {
@@ -690,6 +839,19 @@ func (fixture *commandGatewayFixture) commandBackendClient(t *testing.T, now tim
 					t.Fatalf("unexpected internal reconciliation input %#v", input)
 				}
 				fixture.reconciled.Store(true)
+				return telemetryJSONResponse(http.StatusOK, fixture.commandView(now)), nil
+			}
+			if strings.HasSuffix(request.URL.Path, "/cancel") {
+				if err != nil || claims.Purpose != commandmodel.AuthorizationCommandSubmit || claims.DeviceID != fixture.deviceID {
+					t.Fatalf("invalid backend cancel grant claims=%#v err=%v", claims, err)
+				}
+				var input internalCommandCancel
+				if json.NewDecoder(request.Body).Decode(&input) != nil || input.TenantID != fixture.tenantID || input.SiteID != fixture.siteID ||
+					input.DeviceID != fixture.deviceID || input.PrincipalID != fixture.principalID {
+					t.Fatalf("unexpected internal cancel input %#v", input)
+				}
+				fixture.approvalPending.Store(false)
+				fixture.cancelled.Store(true)
 				return telemetryJSONResponse(http.StatusOK, fixture.commandView(now)), nil
 			}
 			if strings.HasSuffix(request.URL.Path, "/approve") {
@@ -709,8 +871,21 @@ func (fixture *commandGatewayFixture) commandBackendClient(t *testing.T, now tim
 				t.Fatalf("invalid backend Command grant claims=%#v err=%v", claims, err)
 			}
 			var input internalCommandCreate
-			if json.NewDecoder(request.Body).Decode(&input) != nil || input.TenantID != fixture.tenantID || input.SiteID != fixture.siteID || input.PrincipalID != fixture.principalID || input.CurrentState.BusinessRevision != 17 || input.CurrentState.CurrentValue == nil || *input.CurrentState.CurrentValue != 23 || input.Capability != commandmodel.CapabilitySetTemperatureSetpoint || input.Parameters[commandmodel.ParameterSetpointC] != 24.5 || input.VerificationPointKey != "zone_temperature" || input.IdempotencyKey == "" {
+			wantCapability := fixture.commandCapability
+			if wantCapability == "" {
+				wantCapability = commandmodel.CapabilitySetTemperatureSetpoint
+			}
+			if json.NewDecoder(request.Body).Decode(&input) != nil || input.TenantID != fixture.tenantID || input.SiteID != fixture.siteID || input.PrincipalID != fixture.principalID || input.CurrentState.BusinessRevision != 17 || input.CurrentState.CurrentValue == nil || *input.CurrentState.CurrentValue != 23 || input.Capability != wantCapability || input.VerificationPointKey != "zone_temperature" || input.IdempotencyKey == "" {
 				t.Fatalf("unexpected internal command input %#v", input)
+			}
+			if wantCapability == commandmodel.CapabilitySetTemperatureSetpoint {
+				wantSetpoint := 24.5
+				if fixture.expectedSetpoint != nil {
+					wantSetpoint = *fixture.expectedSetpoint
+				}
+				if input.Parameters[commandmodel.ParameterSetpointC] != wantSetpoint {
+					t.Fatalf("unexpected setpoint %v want %v", input.Parameters, wantSetpoint)
+				}
 			}
 			response := telemetryJSONResponse(http.StatusAccepted, fixture.commandView(now))
 			response.Header.Set("Location", "/api/v1/commands/"+fixture.commandID)
@@ -723,7 +898,7 @@ func (fixture *commandGatewayFixture) commandBackendClient(t *testing.T, now tim
 				claims, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, request.Header.Get("X-Command-Read-Context"))
 				if err != nil || len(claims.Actions) != 1 || claims.Actions[0] != "command:read" || len(claims.Scopes) != 2 ||
 					!commandTestContains(claims.Scopes, "tenant:"+fixture.tenantID) || !commandTestContains(claims.Scopes, "site:"+fixture.siteID) ||
-					request.URL.Query().Get("siteId") != fixture.siteID || request.URL.Query().Get("limit") != "20" {
+					request.URL.Query().Get("siteId") != fixture.siteID || (request.URL.Query().Get("limit") != "20" && request.URL.Query().Get("limit") != "100") {
 					t.Fatalf("invalid command list context claims=%#v query=%s err=%v", claims, request.URL.RawQuery, err)
 				}
 				return telemetryJSONResponse(http.StatusOK, map[string][]commandView{"data": {fixture.commandView(now)}}), nil
@@ -778,6 +953,19 @@ func (fixture *commandGatewayFixture) commandView(now time.Time) commandView {
 			commandTransitionView{FromStatus: commandStatusPointer(commandmodel.IntentApproved), ToStatus: commandmodel.IntentQueued, Reason: "COMMAND_QUEUED", ActorType: "WORKLOAD", OccurredAt: now, Version: 5},
 		)
 	}
+	if fixture.cancelled.Load() {
+		status = commandmodel.IntentCancelled
+		version = 4
+		transitions = append(transitions, commandTransitionView{
+			FromStatus: commandStatusPointer(commandmodel.IntentQueued), ToStatus: commandmodel.IntentCancelled, Reason: "OPERATOR_CANCELLED", ActorType: "PRINCIPAL", OccurredAt: now, Version: 4,
+		})
+	} else if fixture.dispatching.Load() {
+		status = commandmodel.IntentDispatching
+		version = 4
+		transitions = append(transitions, commandTransitionView{
+			FromStatus: commandStatusPointer(commandmodel.IntentQueued), ToStatus: commandmodel.IntentDispatching, Reason: "DISPATCH_ATTEMPT_PREPARED", ActorType: "WORKLOAD", OccurredAt: now, Version: 4,
+		})
+	}
 	if fixture.outcomeUnknown.Load() {
 		status = commandmodel.IntentOutcomeUnknown
 		version = 5
@@ -791,12 +979,25 @@ func (fixture *commandGatewayFixture) commandView(now time.Time) commandView {
 			transitions = append(transitions, commandTransitionView{FromStatus: commandStatusPointer(commandmodel.IntentOutcomeUnknown), ToStatus: commandmodel.IntentFailed, Reason: "OPERATOR_RECONCILED_NOT_APPLIED", ActorType: "PRINCIPAL", OccurredAt: now, Version: 6})
 		}
 	}
+	capTarget := fixture.commandCapability
+	if capTarget == "" {
+		capTarget = commandmodel.CapabilitySetTemperatureSetpoint
+	}
+	profile, _ := commandmodel.CapabilityProfileFor(capTarget)
+	params := commandmodel.CommandParameters{}
+	if profile.ParameterKey != "" {
+		setpoint := 24.5
+		if fixture.expectedSetpoint != nil {
+			setpoint = *fixture.expectedSetpoint
+		}
+		params[profile.ParameterKey] = setpoint
+	}
 	return commandView{
 		SchemaVersion: 1, CommandID: fixture.commandID, TenantID: tenantID,
 		SiteID: fixture.siteID, DeviceID: fixture.deviceID, PointID: fixture.commandPointID,
-		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
+		Capability: capTarget, CapabilityRevision: profile.Revision,
 		Status: status, Risk: risk, ApprovalPolicy: policy, ApprovalCount: approvalCount, RequiredApprovalCount: requiredCount,
-		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24.5}, DeviceCommandSequence: 1, Version: version, SnapshotRevision: 17,
+		Parameters: params, DeviceCommandSequence: 1, Version: version, SnapshotRevision: 17,
 		Transitions: transitions, CreatedAt: now.Add(-3 * time.Second), UpdatedAt: now,
 	}
 }
@@ -835,6 +1036,202 @@ func assertCommandInternalHeaders(t *testing.T, request *http.Request) {
 		if request.Header.Get(header) != "" {
 			t.Fatalf("browser authority leaked to internal request header %s", header)
 		}
+	}
+}
+
+func (fixture *commandGatewayFixture) commandIdentityClient(t *testing.T, now time.Time) *http.Client {
+	t.Helper()
+	return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		fixture.identityCalls.Add(1)
+		assertCommandInternalHeaders(t, request)
+		if request.Method != http.MethodPost || request.URL.Path != identityTOTPVerifyPath {
+			t.Fatalf("unexpected identity request %s %s", request.Method, request.URL.Path)
+		}
+		claims, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, request.Header.Get("X-Delegation-Grant"))
+		if err != nil {
+			t.Fatalf("invalid identity delegation grant: %v", err)
+		}
+		if err := identitycontext.ValidateDelegationFromIssuer(
+			claims, now, "spiffe://hvac.local/platform-gateway", "spiffe://hvac.local/platform-gateway",
+			identityTOTPVerifyAudience, identityTOTPVerifyAction, "session:"+fixture.sessionID,
+		); err != nil {
+			t.Fatalf("invalid identity delegation scope/action: %v", err)
+		}
+		var payload struct {
+			Code string `json:"code"`
+		}
+		if json.NewDecoder(request.Body).Decode(&payload) != nil {
+			t.Fatal("invalid TOTP payload sent to identity-service")
+		}
+		if fixture.totpResponder != nil {
+			status, body := fixture.totpResponder(payload.Code)
+			return telemetryJSONResponse(status, body), nil
+		}
+		if payload.Code == "123456" {
+			return telemetryJSONResponse(http.StatusOK, map[string]any{"verified": true, "method": "TOTP"}), nil
+		}
+		return telemetryJSONResponse(http.StatusUnauthorized, map[string]any{"error": "mfa_code_invalid"}), nil
+	})}
+}
+
+func TestGatewayHighRiskSubmitRequiresValidTOTP(t *testing.T) {
+	t.Run("missing or malformed code fails with 428 before identity or command upstreams", func(t *testing.T) {
+		for _, code := range []string{"", "12345", "abcdef"} {
+			fixture := newCommandGatewayFixture(t)
+			fixture.commandCapability = commandmodel.CapabilityStart
+			body := `{"assetId":"` + fixture.assetID + `","commandPointId":"` + fixture.commandPointID + `","parameters":{}`
+			if code != "" {
+				body += `,"verificationCode":"` + code + `"`
+			}
+			body += `}`
+			req := httptest.NewRequest(http.MethodPost, publicCommandsPath, strings.NewReader(body))
+			fixture.authenticate(req, true)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Idempotency-Key", "missing-totp-"+code)
+			rec := httptest.NewRecorder()
+			fixture.handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusPreconditionRequired {
+				t.Fatalf("code=%q status=%d body=%s", code, rec.Code, rec.Body.String())
+			}
+			var problem platformapi.ProblemDetails
+			if json.NewDecoder(rec.Body).Decode(&problem) != nil || problem.Code != "STEP_UP_REQUIRED" {
+				t.Fatalf("unexpected problem %#v", problem)
+			}
+			if fixture.identityCalls.Load() != 0 || fixture.commandCalls.Load() != 0 {
+				t.Fatalf("expected 0 identity/command calls, got identity=%d command=%d", fixture.identityCalls.Load(), fixture.commandCalls.Load())
+			}
+		}
+	})
+
+	t.Run("identity rejections map to 428 STEP_UP_REQUIRED without reaching command backend", func(t *testing.T) {
+		cases := []struct {
+			name   string
+			status int
+			errKey string
+		}{
+			{name: "wrong_code", status: http.StatusUnauthorized, errKey: "mfa_code_invalid"},
+			{name: "replayed_code", status: http.StatusConflict, errKey: "mfa_code_replayed"},
+			{name: "mfa_not_configured", status: http.StatusPreconditionFailed, errKey: "mfa_not_configured"},
+			{name: "mfa_locked", status: http.StatusLocked, errKey: "mfa_locked"},
+		}
+		for _, tc := range cases {
+			fixture := newCommandGatewayFixture(t)
+			fixture.commandCapability = commandmodel.CapabilityStartUnitSequence
+			fixture.totpResponder = func(code string) (int, map[string]any) {
+				return tc.status, map[string]any{"error": tc.errKey}
+			}
+			body := `{"assetId":"` + fixture.assetID + `","commandPointId":"` + fixture.commandPointID + `","parameters":{},"verificationCode":"654321"}`
+			req := httptest.NewRequest(http.MethodPost, publicCommandsPath, strings.NewReader(body))
+			fixture.authenticate(req, true)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Idempotency-Key", "totp-"+tc.name)
+			rec := httptest.NewRecorder()
+			fixture.handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusPreconditionRequired {
+				t.Fatalf("%s status=%d body=%s", tc.name, rec.Code, rec.Body.String())
+			}
+			var problem platformapi.ProblemDetails
+			if json.NewDecoder(rec.Body).Decode(&problem) != nil || problem.Code != "STEP_UP_REQUIRED" {
+				t.Fatalf("%s unexpected problem %#v", tc.name, problem)
+			}
+			if fixture.identityCalls.Load() != 1 || fixture.commandCalls.Load() != 0 {
+				t.Fatalf("%s calls identity=%d command=%d", tc.name, fixture.identityCalls.Load(), fixture.commandCalls.Load())
+			}
+		}
+	})
+
+	t.Run("valid TOTP submits high-risk discrete and large-delta setpoint commands", func(t *testing.T) {
+		for _, capability := range []commandmodel.Capability{
+			commandmodel.CapabilityStart,
+			commandmodel.CapabilityStop,
+			commandmodel.CapabilityStartUnitSequence,
+			commandmodel.CapabilityStopUnitSequence,
+		} {
+			fixture := newCommandGatewayFixture(t)
+			fixture.commandCapability = capability
+			body := `{"assetId":"` + fixture.assetID + `","commandPointId":"` + fixture.commandPointID + `","parameters":{},"verificationCode":"123456"}`
+			req := httptest.NewRequest(http.MethodPost, publicCommandsPath, strings.NewReader(body))
+			fixture.authenticate(req, true)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Idempotency-Key", "valid-discrete-"+string(capability))
+			rec := httptest.NewRecorder()
+			fixture.handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusAccepted || fixture.identityCalls.Load() != 1 || fixture.commandCalls.Load() != 1 {
+				t.Fatalf("%s status=%d identity=%d command=%d body=%s", capability, rec.Code, fixture.identityCalls.Load(), fixture.commandCalls.Load(), rec.Body.String())
+			}
+		}
+
+		// Delta 2.5C (25.5 vs 23) is RiskHigh and requires TOTP.
+		fixture := newCommandGatewayFixture(t)
+		highSetpoint := 25.5
+		fixture.expectedSetpoint = &highSetpoint
+		noCodeReq := httptest.NewRequest(http.MethodPost, publicCommandsPath, strings.NewReader(
+			`{"assetId":"`+fixture.assetID+`","commandPointId":"`+fixture.commandPointID+`","parameters":{"setpointC":25.5}}`,
+		))
+		fixture.authenticate(noCodeReq, true)
+		noCodeReq.Header.Set("Content-Type", "application/json")
+		noCodeReq.Header.Set("Idempotency-Key", "high-delta-no-totp")
+		rec := httptest.NewRecorder()
+		fixture.handler.ServeHTTP(rec, noCodeReq)
+		if rec.Code != http.StatusPreconditionRequired {
+			t.Fatalf("high delta without totp status=%d body=%s", rec.Code, rec.Body.String())
+		}
+
+		withCodeReq := httptest.NewRequest(http.MethodPost, publicCommandsPath, strings.NewReader(
+			`{"assetId":"`+fixture.assetID+`","commandPointId":"`+fixture.commandPointID+`","parameters":{"setpointC":25.5},"verificationCode":"123456"}`,
+		))
+		fixture.authenticate(withCodeReq, true)
+		withCodeReq.Header.Set("Content-Type", "application/json")
+		withCodeReq.Header.Set("Idempotency-Key", "high-delta-with-totp")
+		rec = httptest.NewRecorder()
+		fixture.handler.ServeHTTP(rec, withCodeReq)
+		if rec.Code != http.StatusAccepted || fixture.identityCalls.Load() != 1 || fixture.commandCalls.Load() != 1 {
+			t.Fatalf("high delta with totp status=%d identity=%d command=%d body=%s", rec.Code, fixture.identityCalls.Load(), fixture.commandCalls.Load(), rec.Body.String())
+		}
+	})
+}
+
+func TestGatewayCancelCommandRoutesAndEnforcesLifecycleAndAuthority(t *testing.T) {
+	fixture := newCommandGatewayFixture(t)
+	fixture.approvalPending.Store(true)
+
+	// Valid empty-body cancel of an AWAITING_APPROVAL command succeeds with SUBMIT grant.
+	req := httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+fixture.commandID+"/cancel", nil)
+	fixture.authenticate(req, true)
+	rec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || fixture.commandCalls.Load() != 2 || fixture.iamCalls.Load() != 2 {
+		t.Fatalf("cancel awaiting failed: status=%d calls cmd=%d iam=%d body=%s", rec.Code, fixture.commandCalls.Load(), fixture.iamCalls.Load(), rec.Body.String())
+	}
+	var view commandView
+	if json.NewDecoder(rec.Body).Decode(&view) != nil || view.Status != commandmodel.IntentCancelled {
+		t.Fatalf("unexpected cancelled view %#v", view)
+	}
+
+	// Browser authority fields in cancel JSON body are rejected with 400 before upstreams.
+	badBodyReq := httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+fixture.commandID+"/cancel", strings.NewReader(`{"principalId":"spoofed"}`))
+	fixture.authenticate(badBodyReq, true)
+	badBodyReq.Header.Set("Content-Type", "application/json")
+	badBodyRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(badBodyRec, badBodyReq)
+	if badBodyRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on browser authority field in cancel, got %d body=%s", badBodyRec.Code, badBodyRec.Body.String())
+	}
+
+	// DISPATCHING commands return 409 COMMAND_CANCEL_INVALID before touching IAM/Registry.
+	dispFixture := newCommandGatewayFixture(t)
+	dispFixture.dispatching.Store(true)
+	dispReq := httptest.NewRequest(http.MethodPost, publicCommandsPath+"/"+dispFixture.commandID+"/cancel", strings.NewReader(`{"reason":"TOO_LATE"}`))
+	dispFixture.authenticate(dispReq, true)
+	dispReq.Header.Set("Content-Type", "application/json")
+	dispRec := httptest.NewRecorder()
+	dispFixture.handler.ServeHTTP(dispRec, dispReq)
+	if dispRec.Code != http.StatusConflict || dispFixture.iamCalls.Load() != 0 {
+		t.Fatalf("expected 409 COMMAND_CANCEL_INVALID with 0 iam calls, got %d iam=%d body=%s", dispRec.Code, dispFixture.iamCalls.Load(), dispRec.Body.String())
+	}
+	var problem platformapi.ProblemDetails
+	if json.NewDecoder(dispRec.Body).Decode(&problem) != nil || problem.Code != "COMMAND_CANCEL_INVALID" {
+		t.Fatalf("unexpected conflict problem %#v", problem)
 	}
 }
 

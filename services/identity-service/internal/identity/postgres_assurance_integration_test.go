@@ -213,3 +213,65 @@ func TestCreateUserRollsBackWhenSecurityOutboxWriteFails(t *testing.T) {
 		t.Fatalf("expected audit intent to roll back with outbox failure, found %d row(s)", auditCount)
 	}
 }
+
+func TestVerifyTOTPByUserIDUpdatesCounterAndLocksOnFailures(t *testing.T) {
+	adminURL := os.Getenv("IDENTITY_TEST_ADMIN_DATABASE_URL")
+	if adminURL == "" {
+		t.Skip("IDENTITY_TEST_ADMIN_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	store, err := OpenStore(ctx, adminURL)
+	if err != nil {
+		t.Fatalf("open identity admin store: %v", err)
+	}
+	defer store.Close()
+
+	encodedKey, err := GenerateMFAEncryptionKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(t.TempDir(), "mfa-encryption.key")
+	if err := os.WriteFile(keyPath, []byte(encodedKey+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	protector, err := LoadMFAProtectorFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	username := "mfa-stepup-" + strings.ReplaceAll(now.Format("20060102T150405.000000000"), ".", "")
+	user, err := store.CreateUser(ctx, CreateUserInput{
+		Username: username, DisplayName: "MFA StepUp", Email: username + "@example.invalid", Password: randomToken(24), Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.VerifyTOTPByUserID(ctx, user.ID, "123456", protector, now); !errors.Is(err, ErrMFANotConfigured) {
+		t.Fatalf("VerifyTOTPByUserID(no mfa)=%v want ErrMFANotConfigured", err)
+	}
+	enrollment, err := store.StartTOTPEnrollment(ctx, username, "HVAC", protector, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actCode, err := totp.GenerateCode(enrollment.ProvisioningKey, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ActivateTOTP(ctx, username, actCode, protector, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.VerifyTOTPByUserID(ctx, user.ID, actCode, protector, now); !errors.Is(err, ErrMFAReplayed) {
+		t.Fatalf("VerifyTOTPByUserID(replay)=%v want ErrMFAReplayed", err)
+	}
+	nextNow := now.Add(60 * time.Second)
+	nextCode, err := totp.GenerateCode(enrollment.ProvisioningKey, nextNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.VerifyTOTPByUserID(ctx, user.ID, nextCode, protector, nextNow); err != nil {
+		t.Fatalf("VerifyTOTPByUserID(valid)=%v", err)
+	}
+}

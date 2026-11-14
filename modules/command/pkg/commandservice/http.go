@@ -17,11 +17,13 @@ import (
 )
 
 const (
-	InternalCommandsPath       = "/internal/v1/commands"
-	commandGrantHeader         = "X-Command-Grant"
-	commandReadContextHeader   = "X-Command-Read-Context"
-	tenantHeader               = "X-Tenant-ID"
-	maximumInternalRequestBody = int64(64 << 10)
+	InternalCommandsPath        = "/internal/v1/commands"
+	InternalCommandsCancelBatch = "/internal/v1/commands/cancel-pending"
+	commandGrantHeader          = "X-Command-Grant"
+	commandReadContextHeader    = "X-Command-Read-Context"
+	commandControlContextHeader = "X-Command-Control-Context"
+	tenantHeader                = "X-Tenant-ID"
+	maximumInternalRequestBody  = int64(64 << 10)
 )
 
 type HTTPAuthority interface {
@@ -30,6 +32,8 @@ type HTTPAuthority interface {
 	List(ctx context.Context, tenantID, siteID string, limit int) ([]commandmodel.CommandIntent, error)
 	Approve(context.Context, commandmodel.ApproveRequest) (commandmodel.CommandIntent, error)
 	Reconcile(context.Context, commandmodel.ReconcileRequest) (commandmodel.CommandIntent, error)
+	Cancel(context.Context, commandmodel.CancelRequest) (commandmodel.CommandIntent, error)
+	CancelPending(context.Context, commandmodel.CancelPendingRequest) ([]string, error)
 }
 
 type HTTPConfig struct {
@@ -85,6 +89,23 @@ type internalReconcileCommandRequest struct {
 	DeviceID    string                         `json:"deviceId"`
 	PrincipalID string                         `json:"principalId"`
 	Outcome     commandmodel.ReconciledOutcome `json:"outcome"`
+}
+
+type internalCancelCommandRequest struct {
+	TenantID    string `json:"tenantId"`
+	SiteID      string `json:"siteId"`
+	DeviceID    string `json:"deviceId"`
+	PrincipalID string `json:"principalId"`
+	Reason      string `json:"reason,omitempty"`
+}
+
+type internalCancelPendingRequest struct {
+	TenantID    string   `json:"tenantId"`
+	SiteID      string   `json:"siteId"`
+	DeviceIDs   []string `json:"deviceIds,omitempty"`
+	PrincipalID string   `json:"principalId"`
+	Reason      string   `json:"reason,omitempty"`
+	CausationID string   `json:"causationId,omitempty"`
 }
 
 type CommandTransitionView struct {
@@ -153,6 +174,15 @@ func (h *HTTPHandler) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		}
 		return
 	}
+	if request.URL.Path == InternalCommandsCancelBatch {
+		if request.Method != http.MethodPost {
+			writer.Header().Set("Allow", http.MethodPost)
+			writeCommandProblem(writer, http.StatusMethodNotAllowed, "COMMAND_METHOD_NOT_ALLOWED", false)
+			return
+		}
+		h.cancelPendingCommands(writer, request)
+		return
+	}
 	prefix := InternalCommandsPath + "/"
 	if strings.HasPrefix(request.URL.Path, prefix) {
 		raw := strings.TrimPrefix(request.URL.Path, prefix)
@@ -168,6 +198,20 @@ func (h *HTTPHandler) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 				return
 			}
 			h.reconcileCommand(writer, request, commandID)
+			return
+		}
+		if strings.HasSuffix(raw, "/cancel") {
+			commandID := strings.TrimSuffix(raw, "/cancel")
+			if commandID == "" || strings.Contains(commandID, "/") {
+				writeCommandProblem(writer, http.StatusNotFound, "COMMAND_ROUTE_NOT_FOUND", false)
+				return
+			}
+			if request.Method != http.MethodPost {
+				writer.Header().Set("Allow", http.MethodPost)
+				writeCommandProblem(writer, http.StatusMethodNotAllowed, "COMMAND_METHOD_NOT_ALLOWED", false)
+				return
+			}
+			h.cancelCommand(writer, request, commandID)
 			return
 		}
 		if strings.HasSuffix(raw, "/approve") {
@@ -316,31 +360,8 @@ func (h *HTTPHandler) reconcileCommand(writer http.ResponseWriter, request *http
 		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_RECONCILIATION_REQUEST_INVALID", false)
 		return
 	}
-	claims, err := commandauth.VerifyGrant(h.config.CommandGrantPublicKey, request.Header.Get(commandGrantHeader))
-	if err != nil {
-		writeCommandProblem(writer, http.StatusUnauthorized, "COMMAND_GRANT_INVALID", false)
-		return
-	}
-	intent, err := h.config.Authority.Get(request.Context(), input.TenantID, commandID)
-	if err != nil {
-		writeAuthorityError(writer, err)
-		return
-	}
-	// The grant is for the Capability's current revision, as the Gateway requests it.
-	currentRevision, _, _, supported := commandCapabilityProfile(intent.Capability)
-	if intent.SiteID != input.SiteID || intent.DeviceID != input.DeviceID || !supported {
-		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_GRANT_REJECTED", false)
-		return
-	}
-	validation := commandauth.Validation{
-		Now: h.now().UTC(), Issuer: h.config.CommandGrantIssuer, Presenter: h.config.GatewaySPIFFE,
-		Audience: h.config.CommandGrantAudience, Purpose: commandmodel.AuthorizationCommandSubmit,
-		PrincipalID: input.PrincipalID, TenantID: input.TenantID, SiteID: input.SiteID, DeviceID: input.DeviceID,
-		Capability: intent.Capability, CapabilityRevision: currentRevision,
-		Risk: intent.Risk, UseChecker: h.config.CommandGrantUseChecker,
-	}
-	if commandauth.ValidateGrant(claims, validation) != nil {
-		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_GRANT_REJECTED", false)
+	claims, ok := h.authorizeSubmittedDeviceAction(writer, request, commandID, input.TenantID, input.SiteID, input.DeviceID, input.PrincipalID)
+	if !ok {
 		return
 	}
 	reconciled, err := h.config.Authority.Reconcile(request.Context(), commandmodel.ReconcileRequest{
@@ -351,6 +372,93 @@ func (h *HTTPHandler) reconcileCommand(writer http.ResponseWriter, request *http
 		return
 	}
 	writeCommandJSON(writer, http.StatusOK, commandView(reconciled))
+}
+
+func (h *HTTPHandler) cancelCommand(writer http.ResponseWriter, request *http.Request, commandID string) {
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumInternalRequestBody)
+	var input internalCancelCommandRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureCommandJSONEOF(decoder) != nil || len(commandID) > 256 {
+		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", false)
+		return
+	}
+	claims, ok := h.authorizeSubmittedDeviceAction(writer, request, commandID, input.TenantID, input.SiteID, input.DeviceID, input.PrincipalID)
+	if !ok {
+		return
+	}
+	cancelled, err := h.config.Authority.Cancel(request.Context(), commandmodel.CancelRequest{
+		TenantID: input.TenantID, CommandID: commandID, Reason: input.Reason, Authorization: commandauth.Snapshot(claims),
+	})
+	if err != nil {
+		writeAuthorityError(writer, err)
+		return
+	}
+	writeCommandJSON(writer, http.StatusOK, commandView(cancelled))
+}
+
+func (h *HTTPHandler) cancelPendingCommands(writer http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumInternalRequestBody)
+	var input internalCancelPendingRequest
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureCommandJSONEOF(decoder) != nil ||
+		input.TenantID == "" || input.SiteID == "" || input.PrincipalID == "" {
+		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", false)
+		return
+	}
+	claims, err := identitycontext.VerifyDelegation(h.config.GatewayDelegationPublicKey, request.Header.Get(commandControlContextHeader))
+	if err != nil || claims.TenantID != input.TenantID || len(claims.Scopes) != 2 ||
+		identitycontext.ValidateDelegationAnyScope(claims, h.now().UTC(), h.config.GatewaySPIFFE, h.config.GatewayReadAudience,
+			"command:cancel-pending", []string{"tenant:" + input.TenantID, "site:" + input.SiteID}) != nil ||
+		!containsCommandScope(claims.Scopes, "tenant:"+input.TenantID) || !containsCommandScope(claims.Scopes, "site:"+input.SiteID) {
+		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_CONTROL_CONTEXT_REJECTED", false)
+		return
+	}
+	cancelledIDs, err := h.config.Authority.CancelPending(request.Context(), commandmodel.CancelPendingRequest{
+		TenantID:    input.TenantID,
+		SiteID:      input.SiteID,
+		DeviceIDs:   input.DeviceIDs,
+		PrincipalID: input.PrincipalID,
+		Reason:      input.Reason,
+		CausationID: input.CausationID,
+	})
+	if err != nil {
+		writeAuthorityError(writer, err)
+		return
+	}
+	writeCommandJSON(writer, http.StatusOK, map[string]any{"cancelledCommandIds": cancelledIDs})
+}
+
+func (h *HTTPHandler) authorizeSubmittedDeviceAction(writer http.ResponseWriter, request *http.Request, commandID, tenantID, siteID, deviceID, principalID string) (commandauth.GrantClaims, bool) {
+	claims, err := commandauth.VerifyGrant(h.config.CommandGrantPublicKey, request.Header.Get(commandGrantHeader))
+	if err != nil {
+		writeCommandProblem(writer, http.StatusUnauthorized, "COMMAND_GRANT_INVALID", false)
+		return commandauth.GrantClaims{}, false
+	}
+	intent, err := h.config.Authority.Get(request.Context(), tenantID, commandID)
+	if err != nil {
+		writeAuthorityError(writer, err)
+		return commandauth.GrantClaims{}, false
+	}
+	// The grant is for the Capability's current revision, as the Gateway requests it.
+	currentRevision, _, _, supported := commandCapabilityProfile(intent.Capability)
+	if intent.SiteID != siteID || intent.DeviceID != deviceID || !supported {
+		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_GRANT_REJECTED", false)
+		return commandauth.GrantClaims{}, false
+	}
+	validation := commandauth.Validation{
+		Now: h.now().UTC(), Issuer: h.config.CommandGrantIssuer, Presenter: h.config.GatewaySPIFFE,
+		Audience: h.config.CommandGrantAudience, Purpose: commandmodel.AuthorizationCommandSubmit,
+		PrincipalID: principalID, TenantID: tenantID, SiteID: siteID, DeviceID: deviceID,
+		Capability: intent.Capability, CapabilityRevision: currentRevision,
+		Risk: intent.Risk, UseChecker: h.config.CommandGrantUseChecker,
+	}
+	if commandauth.ValidateGrant(claims, validation) != nil {
+		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_GRANT_REJECTED", false)
+		return commandauth.GrantClaims{}, false
+	}
+	return claims, true
 }
 
 func (h *HTTPHandler) getCommand(writer http.ResponseWriter, request *http.Request, commandID string) {
@@ -471,6 +579,8 @@ func writeAuthorityError(writer http.ResponseWriter, err error) {
 		writeCommandProblem(writer, http.StatusForbidden, "COMMAND_AUTHORIZATION_DENIED", false)
 	case errors.Is(err, ErrReconciliationInvalid):
 		writeCommandProblem(writer, http.StatusConflict, "COMMAND_RECONCILIATION_INVALID", false)
+	case errors.Is(err, ErrCancelInvalid):
+		writeCommandProblem(writer, http.StatusConflict, "COMMAND_CANCEL_INVALID", false)
 	case errors.Is(err, ErrApprovalInvalid), errors.Is(err, ErrApprovalRequired):
 		writeCommandProblem(writer, http.StatusConflict, "COMMAND_APPROVAL_INVALID", false)
 	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrCapabilityDenied), errors.Is(err, ErrCurrentStateUnsafe):

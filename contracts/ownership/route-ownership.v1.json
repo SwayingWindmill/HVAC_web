@@ -768,6 +768,23 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/api/v1/commands/{commandId}/cancel",
+      "owner": "command-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "device",
+        "principal"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/v1/alarms",
       "owner": "alarm-service",
@@ -1760,6 +1777,55 @@
       "allowedScopeDimensions": [
         "tenant",
         "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/sites/{siteId}/control-state",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/sites/{siteId}/control-mode",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "principal"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/assets/{assetId}/control-lock",
+      "owner": "platform-core-service",
+      "publicIngress": "platform-gateway",
+      "revision": 1,
+      "rollout": {
+        "mode": "all"
+      },
+      "compatibilityMode": "native",
+      "allowedScopeDimensions": [
+        "tenant",
+        "site",
+        "asset",
         "principal"
       ]
     }

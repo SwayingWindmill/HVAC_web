@@ -121,6 +121,7 @@ const expectedOperations = {
   getCommandV212: ['get', '/api/v1/commands/{commandId}'],
   approveCommandV212: ['post', '/api/v1/commands/{commandId}/approve'],
   reconcileCommandV212: ['post', '/api/v1/commands/{commandId}/reconcile'],
+  cancelCommandV212: ['post', '/api/v1/commands/{commandId}/cancel'],
   getSiteLoadForecastV212: ['get', '/api/v1/sites/{siteId}/forecast/load'],
   listSiteFddFindingsV212: ['get', '/api/v1/sites/{siteId}/fdd/findings'],
   evaluateSiteFddLowDeltaTV212: ['post', '/api/v1/sites/{siteId}/fdd/evaluate/low-delta-t'],
@@ -150,6 +151,9 @@ const expectedOperations = {
   updateSiteUtilityBill: ['put', '/api/v1/sites/{siteId}/utility-bills/{billId}'],
   confirmSiteUtilityBill: ['post', '/api/v1/sites/{siteId}/utility-bills/{billId}/confirm'],
   listSiteDataGaps: ['get', '/api/v1/sites/{siteId}/data-gaps'],
+  getSiteControlState: ['get', '/api/v1/sites/{siteId}/control-state'],
+  updateSiteControlMode: ['put', '/api/v1/sites/{siteId}/control-mode'],
+  updateAssetControlLock: ['put', '/api/v1/assets/{assetId}/control-lock'],
 };
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {
@@ -190,6 +194,9 @@ const expectedSuccessSchemas = {
   updateSiteUtilityBill: 'UtilityBill',
   confirmSiteUtilityBill: 'UtilityBill',
   listSiteDataGaps: 'SiteDataGapList',
+  getSiteControlState: 'SiteControlState',
+  updateSiteControlMode: 'SiteControlModeMutationResponse',
+  updateAssetControlLock: 'AssetControlLockMutationResponse',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
@@ -250,6 +257,24 @@ const schemaRequirements = {
     ['alarmId', 'deviceId', 'deviceName', 'pointId', 'pointCode', 'pointName', 'since', 'affectedFigures', 'excludesDeviceFromTotal'],
   ],
   SiteDataGapList: [['items'], ['items']],
+  AssetControlLockState: [
+    ['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision'],
+    ['id', 'tenantId', 'siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'boundDeviceIds'],
+  ],
+  SiteControlState: [
+    ['tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks'],
+    ['id', 'tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks'],
+  ],
+  SiteControlModeMutation: [['controlMode'], ['controlMode', 'reason', 'expectedRevision', 'meta']],
+  SiteControlModeMutationResponse: [
+    ['tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks', 'cancelledCommandIds'],
+    ['id', 'tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks', 'cancelledCommandIds'],
+  ],
+  AssetControlLockMutation: [['lockMode'], ['lockMode', 'reason', 'expectedRevision', 'meta']],
+  AssetControlLockMutationResponse: [
+    ['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'cancelledCommandIds'],
+    ['id', 'tenantId', 'siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'boundDeviceIds', 'cancelledCommandIds'],
+  ],
   FieldError: [['field', 'message'], ['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
 };
@@ -377,6 +402,7 @@ const replacements = {
   __COMMAND_PATH__: operations.getCommandV212.path,
   __COMMAND_APPROVE_PATH__: operations.approveCommandV212.path,
   __COMMAND_RECONCILE_PATH__: operations.reconcileCommandV212.path,
+  __COMMAND_CANCEL_PATH__: operations.cancelCommandV212.path,
   __SITE_LOAD_FORECAST_PATH__: operations.getSiteLoadForecastV212.path,
   __SITE_FDD_FINDINGS_PATH__: operations.listSiteFddFindingsV212.path,
   __SITE_FDD_LOW_DELTA_T_PATH__: operations.evaluateSiteFddLowDeltaTV212.path,
@@ -401,6 +427,9 @@ const replacements = {
   __SITE_UTILITY_BILL_PATH__: operations.updateSiteUtilityBill.path,
   __SITE_UTILITY_BILL_CONFIRM_PATH__: operations.confirmSiteUtilityBill.path,
   __SITE_DATA_GAPS_PATH__: operations.listSiteDataGaps.path,
+  __SITE_CONTROL_STATE_PATH__: operations.getSiteControlState.path,
+  __SITE_CONTROL_MODE_PATH__: operations.updateSiteControlMode.path,
+  __ASSET_CONTROL_LOCK_PATH__: operations.updateAssetControlLock.path,
 };
 
 function render(template) {

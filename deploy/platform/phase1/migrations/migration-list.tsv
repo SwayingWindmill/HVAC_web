@@ -75,6 +75,7 @@ hvac_s1|infra/registry/postgres/init/033-fdd-operating-gates.sql
 hvac_s1|infra/registry/postgres/init/034-operating-schedules.sql
 hvac_s1|infra/registry/postgres/init/035-electricity-budgets-and-utility-bills.sql
 hvac_s1|infra/registry/postgres/init/036-asset-nameplate.sql
+hvac_s1|infra/registry/postgres/init/037-site-and-asset-control-locks.sql
 hvac_s1|services/notification-service/migrations/005_reading_gap_reminders.sql
 hvac_s2|infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
@@ -97,6 +98,7 @@ hvac_s3|modules/command/migrations/002_s3_target_runtime.sql
 hvac_s3|modules/command/migrations/003_s3_tenant_scope.sql
 hvac_s3|modules/command/migrations/004_s3_command_point_identity.sql
 hvac_s3|modules/command/migrations/005_s11_edge_execution_evidence.sql
+hvac_s3|modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql
 hvac_s4|modules/alarm/migrations/001_s4_alarm_runtime.sql
 hvac_s4|modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 hvac_s4|modules/alarm/migrations/003_s4_tenant_scope.sql

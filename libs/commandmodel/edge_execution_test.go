@@ -21,8 +21,22 @@ func TestExpectedVerificationValueKeepsActionSemanticReadback(t *testing.T) {
 	requested := BooleanScalar(true)
 	edge := &EdgeExecutionEvidence{Requested: requested, Effective: &requested, WinnerControllerID: "cloud-command-intent", Cycle: 3}
 
-	got, ok := ExpectedVerificationValue(CapabilityStart, nil, edge)
-	if !ok || got.Text == nil || *got.Text != "RUNNING" {
-		t.Fatalf("verification target = %#v, want RUNNING", got)
+	for _, testCase := range []struct {
+		capability Capability
+		want       string
+	}{
+		{capability: CapabilityStart, want: "RUNNING"},
+		{capability: CapabilityStop, want: "STOPPED"},
+		{capability: CapabilityStartUnitSequence, want: "RUNNING"},
+		{capability: CapabilityStopUnitSequence, want: "STOPPED"},
+	} {
+		profile, ok := CapabilityProfileFor(testCase.capability)
+		if !ok || profile.BaseRisk != RiskHigh {
+			t.Fatalf("CapabilityProfileFor(%s) = (%#v, %v), want RiskHigh", testCase.capability, profile, ok)
+		}
+		got, ok := ExpectedVerificationValue(testCase.capability, nil, edge)
+		if !ok || got.Text == nil || *got.Text != testCase.want {
+			t.Fatalf("verification target(%s) = %#v, want %s", testCase.capability, got, testCase.want)
+		}
 	}
 }

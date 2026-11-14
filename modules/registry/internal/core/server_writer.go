@@ -171,6 +171,22 @@ func (server *server) handleAuthorizedWrite(writer http.ResponseWriter, request 
 		input.ActorDisplayName = request.Header.Get("X-Actor-Display-Name")
 		value, replayed, err := server.writer.ConfirmUtilityBill(request.Context(), claims, input)
 		return server.writeMutationResult(writer, request, value, replayed, false, err)
+	case "site-control-mode-write":
+		var input SiteControlModeMutation
+		if !decodeRegistryMutation(writer, request, &input) {
+			return http.StatusBadRequest
+		}
+		input.SiteID = route.parentID
+		value, replayed, err := server.writer.SaveSiteControlMode(request.Context(), claims, input)
+		return server.writeMutationResult(writer, request, value, replayed, false, err)
+	case "asset-control-lock-write":
+		var input AssetControlLockMutation
+		if !decodeRegistryMutation(writer, request, &input) {
+			return http.StatusBadRequest
+		}
+		input.AssetID = route.id
+		value, replayed, err := server.writer.SaveAssetControlLock(request.Context(), claims, input)
+		return server.writeMutationResult(writer, request, value, replayed, false, err)
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "CORE_ROUTE_NOT_FOUND", "The requested Core Registry route does not exist.", false)
 		return http.StatusNotFound

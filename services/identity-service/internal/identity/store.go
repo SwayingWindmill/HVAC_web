@@ -24,6 +24,9 @@ var (
 	ErrMFARequired                 = errors.New("multi-factor authentication is required")
 	ErrMFAEnrollmentRequired       = errors.New("multi-factor authentication enrollment is required")
 	ErrMFAInvalid                  = errors.New("multi-factor authentication code is invalid")
+	ErrMFAReplayed                 = errors.New("multi-factor authentication code has already been used")
+	ErrMFANotConfigured            = errors.New("multi-factor authentication is not active")
+	ErrMFALocked                   = errors.New("multi-factor authentication is temporarily locked")
 )
 
 type Store struct {

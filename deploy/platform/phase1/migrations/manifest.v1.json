@@ -100,6 +100,7 @@
         "infra/registry/postgres/init/034-operating-schedules.sql",
         "infra/registry/postgres/init/035-electricity-budgets-and-utility-bills.sql",
         "infra/registry/postgres/init/036-asset-nameplate.sql",
+        "infra/registry/postgres/init/037-site-and-asset-control-locks.sql",
         "services/notification-service/migrations/005_reading_gap_reminders.sql"
       ]
     },
@@ -131,7 +132,8 @@
         "modules/command/migrations/002_s3_target_runtime.sql",
         "modules/command/migrations/003_s3_tenant_scope.sql",
         "modules/command/migrations/004_s3_command_point_identity.sql",
-        "modules/command/migrations/005_s11_edge_execution_evidence.sql"
+        "modules/command/migrations/005_s11_edge_execution_evidence.sql",
+        "modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql"
       ]
     },
     {

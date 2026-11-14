@@ -69,6 +69,17 @@ func TestPostgresVerificationAndReconcileShareTransitionDecisions(t *testing.T) 
 	if !strings.Contains(reconcileSrc, "DecideOperatorReconcile(") {
 		t.Fatalf("postgres_reconcile.go must delegate to DecideOperatorReconcile")
 	}
+	cancelSrc := readRepoSource(t, filepath.Join("..", "commandservice", "postgres_cancel.go"))
+	requiredCancelSnippets := []string{
+		"DecideCommandCancel(",
+		"SET delivered_at = $3, lease_until = NULL",
+		"AND status IN ('AWAITING_APPROVAL', 'QUEUED')",
+	}
+	for _, snippet := range requiredCancelSnippets {
+		if !strings.Contains(cancelSrc, snippet) {
+			t.Fatalf("postgres_cancel.go missing expected transition/outbox guard %q", snippet)
+		}
+	}
 }
 
 func TestConnectivityReplyRecoveryQueryMatchesModel(t *testing.T) {

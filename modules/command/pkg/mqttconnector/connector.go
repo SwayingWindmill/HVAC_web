@@ -562,6 +562,10 @@ func capabilityMethod(capability commandmodel.Capability) (string, error) {
 		return "start", nil
 	case commandmodel.CapabilityStop:
 		return "stop", nil
+	case commandmodel.CapabilityStartUnitSequence:
+		return "startUnitSequence", nil
+	case commandmodel.CapabilityStopUnitSequence:
+		return "stopUnitSequence", nil
 	case commandmodel.CapabilityResetFault:
 		return "resetFault", nil
 	case commandmodel.CapabilitySetTemperatureSetpoint:

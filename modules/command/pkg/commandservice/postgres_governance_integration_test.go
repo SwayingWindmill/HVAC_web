@@ -83,7 +83,7 @@ func TestPostgresApprovalUsesFreshAuthorizationAndCreatesOutboxOnlyAfterThreshol
 	}
 }
 
-func TestPostgresHighRiskRequiresTwoDistinctApprovals(t *testing.T) {
+func TestPostgresHighRiskEntersQueuedWithoutApproval(t *testing.T) {
 	runtimeURL, adminURL := commandPostgresTestURLs(t)
 	ctx := t.Context()
 	admin, err := pgxpool.New(ctx, adminURL)
@@ -101,46 +101,20 @@ func TestPostgresHighRiskRequiresTwoDistinctApprovals(t *testing.T) {
 	now := time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC)
 	store := NewPostgresStore(opened.pool, func() time.Time { return now }, nil)
 
-	request := postgresCommandRequest("postgres-high-approval", 25.5)
+	request := postgresCommandRequest("postgres-high-direct", 25.5)
 	created, err := store.Submit(ctx, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Intent.Risk != commandmodel.RiskHigh || created.Intent.ApprovalPolicy != commandmodel.ApprovalTwoPerson {
+	if created.Intent.Risk != commandmodel.RiskHigh || created.Intent.ApprovalPolicy != commandmodel.ApprovalNone || created.Intent.Status != commandmodel.IntentQueued {
 		t.Fatalf("high-risk command=%#v", created.Intent)
-	}
-
-	first := postgresApproval(created.Intent, now,
-		"018f3e00-a000-7000-8000-000000000011",
-		"018f3e00-5000-7000-8000-000000000011",
-		"approval-grant-high-1")
-	partial, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandTenantA, CommandID: created.Intent.ID, Approval: first})
-	if !errors.Is(err, ErrApprovalRequired) || partial.Status != commandmodel.IntentAwaitingApproval || len(partial.Approvals) != 1 {
-		t.Fatalf("first approval result=%#v err=%v", partial, err)
 	}
 	evidence, err := store.SubmissionEvidence(ctx, commandTenantA, created.Intent.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if evidence.ApprovalCount != 1 || evidence.OutboxCount != 0 || evidence.TransitionCount != 4 {
-		t.Fatalf("partial approval evidence=%#v", evidence)
-	}
-
-	now = now.Add(2 * time.Second)
-	second := postgresApproval(partial, now,
-		"018f3e00-a000-7000-8000-000000000012",
-		"018f3e00-5000-7000-8000-000000000012",
-		"approval-grant-high-2")
-	approved, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandTenantA, CommandID: created.Intent.ID, Approval: second})
-	if err != nil || approved.Status != commandmodel.IntentQueued || len(approved.Approvals) != 2 {
-		t.Fatalf("second approval result=%#v err=%v", approved, err)
-	}
-	evidence, err = store.SubmissionEvidence(ctx, commandTenantA, created.Intent.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if evidence.ApprovalCount != 2 || evidence.OutboxCount != 1 || evidence.TransitionCount != 6 || evidence.AuditIntentCount != 3 {
-		t.Fatalf("two-person approval evidence=%#v", evidence)
+	if evidence.ApprovalCount != 0 || evidence.OutboxCount != 1 || evidence.TransitionCount != 3 || evidence.AuditIntentCount != 1 {
+		t.Fatalf("high-risk evidence=%#v", evidence)
 	}
 }
 
@@ -162,7 +136,7 @@ func TestPostgresExecutionExpiresWhenAnyApprovalAuthorizationExpires(t *testing.
 	now := time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC)
 	store := NewPostgresStore(opened.pool, func() time.Time { return now }, nil)
 
-	created, err := store.Submit(ctx, postgresCommandRequest("postgres-expired-earlier-approval", 25.5))
+	created, err := store.Submit(ctx, postgresCommandRequest("postgres-expired-earlier-approval", 24.5))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,20 +145,11 @@ func TestPostgresExecutionExpiresWhenAnyApprovalAuthorizationExpires(t *testing.
 		"018f3e00-5000-7000-8000-000000000021",
 		"approval-grant-expiring")
 	first.Authorization.ExpiresAt = now.Add(5 * time.Second)
-	partial, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandTenantA, CommandID: created.Intent.ID, Approval: first})
-	if !errors.Is(err, ErrApprovalRequired) {
-		t.Fatalf("first approval result=%#v err=%v", partial, err)
-	}
-	now = now.Add(2 * time.Second)
-	second := postgresApproval(partial, now,
-		"018f3e00-a000-7000-8000-000000000022",
-		"018f3e00-5000-7000-8000-000000000022",
-		"approval-grant-current")
-	approved, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandTenantA, CommandID: created.Intent.ID, Approval: second})
+	approved, err := store.Approve(ctx, commandmodel.ApproveRequest{TenantID: commandTenantA, CommandID: created.Intent.ID, Approval: first})
 	if err != nil || approved.Status != commandmodel.IntentQueued {
-		t.Fatalf("second approval result=%#v err=%v", approved, err)
+		t.Fatalf("approval result=%#v err=%v", approved, err)
 	}
-	now = now.Add(4 * time.Second)
+	now = now.Add(6 * time.Second)
 	if _, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
 		t.Fatalf("expired approval authorization became dispatchable: %v", err)
 	}

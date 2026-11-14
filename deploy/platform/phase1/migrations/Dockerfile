@@ -86,6 +86,7 @@ COPY infra/registry/postgres/init/033-fdd-operating-gates.sql /opt/hvac/repo/inf
 COPY infra/registry/postgres/init/034-operating-schedules.sql /opt/hvac/repo/infra/registry/postgres/init/034-operating-schedules.sql
 COPY infra/registry/postgres/init/035-electricity-budgets-and-utility-bills.sql /opt/hvac/repo/infra/registry/postgres/init/035-electricity-budgets-and-utility-bills.sql
 COPY infra/registry/postgres/init/036-asset-nameplate.sql /opt/hvac/repo/infra/registry/postgres/init/036-asset-nameplate.sql
+COPY infra/registry/postgres/init/037-site-and-asset-control-locks.sql /opt/hvac/repo/infra/registry/postgres/init/037-site-and-asset-control-locks.sql
 COPY services/notification-service/migrations/005_reading_gap_reminders.sql /opt/hvac/repo/services/notification-service/migrations/005_reading_gap_reminders.sql
 
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
@@ -110,6 +111,7 @@ COPY modules/command/migrations/002_s3_target_runtime.sql /opt/hvac/repo/modules
 COPY modules/command/migrations/003_s3_tenant_scope.sql /opt/hvac/repo/modules/command/migrations/003_s3_tenant_scope.sql
 COPY modules/command/migrations/004_s3_command_point_identity.sql /opt/hvac/repo/modules/command/migrations/004_s3_command_point_identity.sql
 COPY modules/command/migrations/005_s11_edge_execution_evidence.sql /opt/hvac/repo/modules/command/migrations/005_s11_edge_execution_evidence.sql
+COPY modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql /opt/hvac/repo/modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql
 COPY modules/alarm/migrations/001_s4_alarm_runtime.sql /opt/hvac/repo/modules/alarm/migrations/001_s4_alarm_runtime.sql
 COPY modules/alarm/migrations/002_s4_alarm_lifecycle.sql /opt/hvac/repo/modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 COPY modules/alarm/migrations/003_s4_tenant_scope.sql /opt/hvac/repo/modules/alarm/migrations/003_s4_tenant_scope.sql

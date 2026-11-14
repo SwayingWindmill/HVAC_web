@@ -291,48 +291,23 @@ FOR UPDATE OF u, m
 	}
 	counter, ok := validateTOTP(keyMaterial, passcode, now, record.LastUsedCounter)
 	if !ok {
-		record.FailedAttempts++
-		var nextLockedUntil *time.Time
-		lockedNow := false
-		if record.FailedAttempts >= 5 {
-			value := now.Add(15 * time.Minute)
-			nextLockedUntil = &value
-			lockedNow = true
-		}
-		if _, err := tx.Exec(ctx, `
-UPDATE identity.user_mfa
-SET failed_attempts = $2, locked_until = $3, revision = revision + 1, updated_at = $4
-WHERE user_id = $1::uuid
-`, request.UserID, record.FailedAttempts, nextLockedUntil, now); err != nil {
-			return LoginGrant{}, fmt.Errorf("record identity MFA failure: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `UPDATE identity.authorization_requests SET attempt_count = attempt_count + 1 WHERE challenge_hash = $1`, challengeHash); err != nil {
-			return LoginGrant{}, fmt.Errorf("record identity MFA request failure: %w", err)
-		}
 		eventType := "MFA_FAILED"
 		if request.RequiredACR == AssuranceMFA {
 			eventType = "STEP_UP_FAILED"
 		}
-		if err := insertSecurityAudit(ctx, tx, eventType, request.UserID, storedUsername, "FAILED", "TOTP_CODE_INVALID", now, map[string]any{"method": "TOTP"}); err != nil {
+		if _, err := recordTOTPVerificationFailure(ctx, tx, request.UserID, storedUsername, &record, now, eventType, "TOTP_CODE_INVALID"); err != nil {
 			return LoginGrant{}, err
 		}
-		if lockedNow {
-			if err := insertSecurityAudit(ctx, tx, "MFA_LOCKED", request.UserID, storedUsername, "FAILED", "MFA_FAILED_ATTEMPT_LIMIT", now, map[string]any{"lockSeconds": 900}); err != nil {
-				return LoginGrant{}, err
-			}
+		if _, err := tx.Exec(ctx, `UPDATE identity.authorization_requests SET attempt_count = attempt_count + 1 WHERE challenge_hash = $1`, challengeHash); err != nil {
+			return LoginGrant{}, fmt.Errorf("record identity MFA request failure: %w", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return LoginGrant{}, fmt.Errorf("commit identity MFA failure: %w", err)
 		}
 		return LoginGrant{}, ErrMFAInvalid
 	}
-	if _, err := tx.Exec(ctx, `
-UPDATE identity.user_mfa
-SET failed_attempts = 0, locked_until = NULL, last_used_counter = $2, last_verified_at = $3,
-    revision = revision + 1, updated_at = $3
-WHERE user_id = $1::uuid
-`, request.UserID, counter, now); err != nil {
-		return LoginGrant{}, fmt.Errorf("record identity MFA success: %w", err)
+	if err := markTOTPVerificationSucceeded(ctx, tx, request.UserID, counter, now); err != nil {
+		return LoginGrant{}, err
 	}
 	amr := []string{request.FirstFactor, "otp"}
 	grant, err := issueAuthorizationCode(ctx, tx, challengeHash, request, request.UserID, AssuranceMFA, amr, now)
@@ -355,15 +330,176 @@ WHERE user_id = $1::uuid
 	return grant, nil
 }
 
-func validateTOTP(secret, passcode string, now time.Time, lastUsedCounter int64) (int64, bool) {
+func (store *Store) VerifyTOTPByUserID(ctx context.Context, userID, passcode string, protector *MFAProtector, now time.Time) error {
+	if !validUserID(userID) || protector == nil {
+		return errors.New("valid user ID and MFA protector are required")
+	}
+	now = resolveIdentityTime(now)
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return fmt.Errorf("begin step-up TOTP transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var storedUsername, userStatus string
+	var keyID, mfaStatus *string
+	var nonce, ciphertext []byte
+	var failedAttempts *int
+	var lockedUntil *time.Time
+	var lastUsedCounter *int64
+	err = tx.QueryRow(ctx, `
+SELECT u.username, u.status, m.key_id, m.cipher_nonce, m.ciphertext, m.status,
+       m.failed_attempts, m.locked_until, m.last_used_counter
+FROM identity.users u
+LEFT JOIN identity.user_mfa m ON m.user_id = u.id
+WHERE u.id = $1::uuid
+FOR UPDATE OF u
+`, userID).Scan(&storedUsername, &userStatus, &keyID, &nonce, &ciphertext, &mfaStatus, &failedAttempts, &lockedUntil, &lastUsedCounter)
+	if errors.Is(err, pgx.ErrNoRows) || userStatus != "ACTIVE" {
+		return ErrMFANotConfigured
+	}
+	if err != nil {
+		return fmt.Errorf("query step-up MFA state: %w", err)
+	}
+	if mfaStatus == nil || *mfaStatus != "ACTIVE" || keyID == nil || failedAttempts == nil || lastUsedCounter == nil {
+		if err := insertSecurityAudit(ctx, tx, "STEP_UP_FAILED", userID, storedUsername, "FAILED", "MFA_NOT_ACTIVE", now, map[string]any{"method": "TOTP"}); err != nil {
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit missing MFA audit: %w", err)
+		}
+		return ErrMFANotConfigured
+	}
+	record := mfaRecord{
+		KeyID:           *keyID,
+		Nonce:           nonce,
+		Ciphertext:      ciphertext,
+		Status:          *mfaStatus,
+		FailedAttempts:  *failedAttempts,
+		LockedUntil:     lockedUntil,
+		LastUsedCounter: *lastUsedCounter,
+	}
+	if record.LockedUntil != nil && record.LockedUntil.After(now) {
+		if err := insertSecurityAudit(ctx, tx, "STEP_UP_FAILED", userID, storedUsername, "FAILED", "MFA_LOCKED", now, map[string]any{"method": "TOTP"}); err != nil {
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit locked MFA audit: %w", err)
+		}
+		return ErrMFALocked
+	}
 	passcode = strings.TrimSpace(passcode)
+	if !isSixDigitTOTP(passcode) {
+		return ErrMFAInvalid
+	}
+	keyMaterial, err := protector.Open(record.KeyID, record.Nonce, record.Ciphertext)
+	if err != nil {
+		return err
+	}
+	counter, ok := validateTOTP(keyMaterial, passcode, now, record.LastUsedCounter)
+	if !ok {
+		verifyErr := classifyTOTPFailure(keyMaterial, passcode, now, record.LastUsedCounter)
+		reasonCode := "TOTP_CODE_INVALID"
+		if errors.Is(verifyErr, ErrMFAReplayed) {
+			reasonCode = "TOTP_CODE_REPLAYED"
+		}
+		lockedNow, err := recordTOTPVerificationFailure(ctx, tx, userID, storedUsername, &record, now, "STEP_UP_FAILED", reasonCode)
+		if err != nil {
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit step-up MFA failure: %w", err)
+		}
+		if lockedNow {
+			return ErrMFALocked
+		}
+		return verifyErr
+	}
+	if err := markTOTPVerificationSucceeded(ctx, tx, userID, counter, now); err != nil {
+		return err
+	}
+	if err := insertSecurityAudit(ctx, tx, "STEP_UP_SUCCEEDED", userID, storedUsername, "SUCCEEDED", "TOTP_STEP_UP_VERIFIED", now, map[string]any{"method": "TOTP"}); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit step-up MFA verification: %w", err)
+	}
+	return nil
+}
+
+func recordTOTPVerificationFailure(ctx context.Context, tx pgx.Tx, userID, username string, record *mfaRecord, now time.Time, eventType, reasonCode string) (bool, error) {
+	record.FailedAttempts++
+	var nextLockedUntil *time.Time
+	lockedNow := false
+	if record.FailedAttempts >= 5 {
+		value := now.Add(15 * time.Minute)
+		nextLockedUntil = &value
+		lockedNow = true
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE identity.user_mfa
+SET failed_attempts = $2, locked_until = $3, revision = revision + 1, updated_at = $4
+WHERE user_id = $1::uuid
+`, userID, record.FailedAttempts, nextLockedUntil, now); err != nil {
+		return false, fmt.Errorf("record identity MFA failure: %w", err)
+	}
+	if err := insertSecurityAudit(ctx, tx, eventType, userID, username, "FAILED", reasonCode, now, map[string]any{"method": "TOTP"}); err != nil {
+		return false, err
+	}
+	if lockedNow {
+		if err := insertSecurityAudit(ctx, tx, "MFA_LOCKED", userID, username, "FAILED", "MFA_FAILED_ATTEMPT_LIMIT", now, map[string]any{"lockSeconds": 900}); err != nil {
+			return false, err
+		}
+	}
+	return lockedNow, nil
+}
+
+func markTOTPVerificationSucceeded(ctx context.Context, tx pgx.Tx, userID string, counter int64, now time.Time) error {
+	if _, err := tx.Exec(ctx, `
+UPDATE identity.user_mfa
+SET failed_attempts = 0, locked_until = NULL, last_used_counter = $2, last_verified_at = $3,
+    revision = revision + 1, updated_at = $3
+WHERE user_id = $1::uuid
+`, userID, counter, now); err != nil {
+		return fmt.Errorf("record identity MFA verification: %w", err)
+	}
+	return nil
+}
+
+func isSixDigitTOTP(passcode string) bool {
 	if len(passcode) != 6 {
-		return 0, false
+		return false
 	}
 	for _, value := range passcode {
 		if value < '0' || value > '9' {
-			return 0, false
+			return false
 		}
+	}
+	return true
+}
+
+func classifyTOTPFailure(secret, passcode string, now time.Time, lastUsedCounter int64) error {
+	if lastUsedCounter < 0 {
+		return ErrMFAInvalid
+	}
+	base := now.UTC().Unix() / 30
+	for _, offset := range []int64{-1, 0, 1} {
+		counter := base + offset
+		if counter < 0 || counter > lastUsedCounter {
+			continue
+		}
+		code, err := totp.GenerateCode(secret, time.Unix(counter*30, 0).UTC())
+		if err == nil && subtleStringCompare(code, passcode) {
+			return ErrMFAReplayed
+		}
+	}
+	return ErrMFAInvalid
+}
+
+func validateTOTP(secret, passcode string, now time.Time, lastUsedCounter int64) (int64, bool) {
+	passcode = strings.TrimSpace(passcode)
+	if !isSixDigitTOTP(passcode) {
+		return 0, false
 	}
 	base := now.UTC().Unix() / 30
 	for _, offset := range []int64{-1, 0, 1} {

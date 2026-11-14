@@ -78,6 +78,7 @@ type registryBackendResult struct {
 
 type registryAuthorization struct {
 	coreGrant      string
+	principalID    string
 	allowedSiteIDs map[string]struct{}
 	policyRevision string
 }
@@ -340,7 +341,7 @@ func (h *handler) authorizeRegistryForPresenter(
 	if err != nil {
 		return registryAuthorization{}, &registryAuthorizationFailure{http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "IAM returned an invalid exact-Site Registry scope.", true}
 	}
-	return registryAuthorization{coreGrant: decision.DelegationGrant, allowedSiteIDs: allowedSites, policyRevision: decision.Decision.PolicyRevision}, nil
+	return registryAuthorization{coreGrant: decision.DelegationGrant, principalID: decision.Decision.PrincipalID, allowedSiteIDs: allowedSites, policyRevision: decision.Decision.PolicyRevision}, nil
 }
 
 func validateExactSiteRegistryScope(decision registryauth.Decision, action registryauth.Action) (map[string]struct{}, error) {

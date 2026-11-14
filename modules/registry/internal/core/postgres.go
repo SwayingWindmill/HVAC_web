@@ -33,6 +33,7 @@ type RegistryStore interface {
 	ListOperatingExceptions(context.Context, registryauth.GrantClaims, string, OperatingExceptionFilter) (OperatingExceptionList, error)
 	ListMonthlyElectricityBudgets(context.Context, registryauth.GrantClaims, string, MonthlyElectricityBudgetFilter) (MonthlyElectricityBudgetList, error)
 	ListUtilityBills(context.Context, registryauth.GrantClaims, string, UtilityBillFilter) (UtilityBillList, error)
+	GetSiteControlState(context.Context, registryauth.GrantClaims, string) (SiteControlState, error)
 }
 
 type PostgresStore struct {

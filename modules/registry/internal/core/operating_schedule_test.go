@@ -321,6 +321,12 @@ func (*memoryScheduleBackend) SaveUtilityBill(context.Context, registryauth.Gran
 func (*memoryScheduleBackend) ConfirmUtilityBill(context.Context, registryauth.GrantClaims, ConfirmUtilityBillRequest) (UtilityBill, bool, error) {
 	return UtilityBill{}, false, ErrInvalidMutation
 }
+func (*memoryScheduleBackend) SaveSiteControlMode(context.Context, registryauth.GrantClaims, SiteControlModeMutation) (SiteControlState, bool, error) {
+	return SiteControlState{}, false, ErrInvalidMutation
+}
+func (*memoryScheduleBackend) SaveAssetControlLock(context.Context, registryauth.GrantClaims, AssetControlLockMutation) (AssetControlLockState, bool, error) {
+	return AssetControlLockState{}, false, ErrInvalidMutation
+}
 
 type scheduleHTTPClient struct {
 	handler http.Handler

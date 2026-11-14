@@ -17,35 +17,15 @@ var (
 )
 
 func evaluateGovernance(request commandmodel.SubmitRequest, now time.Time) (commandmodel.RiskSnapshot, commandmodel.ApprovalPolicy, error) {
-	profile, ok := commandmodel.CapabilityProfileFor(request.Capability)
+	level, reasons, ok := commandmodel.EvaluateRiskLevel(request.Capability, request.Parameters, request.CurrentState.CurrentValue)
 	if !ok {
 		return commandmodel.RiskSnapshot{}, "", ErrCapabilityDenied
 	}
 	risk := commandmodel.RiskSnapshot{
-		Level:        profile.BaseRisk,
+		Level:        level,
 		RuleRevision: riskRuleRevision,
-		Reasons:      []string{"CAPABILITY_BASE_RISK"},
+		Reasons:      reasons,
 		EvaluatedAt:  now,
-	}
-	if profile.ParameterKey != "" {
-		value, valid := commandmodel.ParameterValue(request.Capability, request.Parameters)
-		if !valid || request.CurrentState.CurrentValue == nil {
-			return commandmodel.RiskSnapshot{}, "", ErrCapabilityDenied
-		}
-		delta := absolute(value - *request.CurrentState.CurrentValue)
-		switch {
-		case delta <= profile.LowRiskDelta:
-			risk.Level = commandmodel.RiskLow
-			risk.Reasons = []string{"CAPABILITY_DELTA_LOW"}
-		case delta <= profile.MediumRiskDelta:
-			risk.Level = commandmodel.RiskMedium
-			risk.Reasons = []string{"CAPABILITY_DELTA_MEDIUM"}
-		case delta <= profile.MaximumDelta:
-			risk.Level = commandmodel.RiskHigh
-			risk.Reasons = []string{"CAPABILITY_DELTA_HIGH"}
-		default:
-			return commandmodel.RiskSnapshot{}, "", ErrCapabilityDenied
-		}
 	}
 
 	if err := validateAuthorizationSnapshot(request, risk.Level, now); err != nil {
@@ -87,7 +67,9 @@ func approvalPolicyForRisk(risk commandmodel.RiskLevel) commandmodel.ApprovalPol
 		return commandmodel.ApprovalNone
 	case commandmodel.RiskMedium:
 		return commandmodel.ApprovalSingleApprover
-	case commandmodel.RiskHigh, commandmodel.RiskCritical:
+	case commandmodel.RiskHigh:
+		return commandmodel.ApprovalNone
+	case commandmodel.RiskCritical:
 		return commandmodel.ApprovalTwoPerson
 	default:
 		return commandmodel.ApprovalTwoPerson

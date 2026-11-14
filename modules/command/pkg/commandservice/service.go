@@ -164,6 +164,24 @@ func (s *Service) Approve(request commandmodel.ApproveRequest) (commandmodel.Com
 	return cloneIntent(*intent), nil
 }
 
+// Cancel transitions an AWAITING_APPROVAL or QUEUED command to CANCELLED before dispatch starts.
+func (s *Service) Cancel(request commandmodel.CancelRequest) (commandmodel.CommandIntent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	intent, ok := s.intents[request.CommandID]
+	if !ok || intent.TenantID != request.TenantID {
+		return commandmodel.CommandIntent{}, ErrCommandNotFound
+	}
+	now := s.now().UTC()
+	decision, err := DecideCommandCancel(*intent, request, now)
+	if err != nil {
+		return commandmodel.CommandIntent{}, err
+	}
+	transition(intent, decision.IntentFinal, decision.Reason, request.Authorization.PrincipalID, now, request.Authorization.GrantID, request.Authorization.GrantID)
+	return cloneIntent(*intent), nil
+}
+
 func (s *Service) Get(commandID string) (commandmodel.CommandIntent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

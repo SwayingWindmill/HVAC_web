@@ -2067,6 +2067,15 @@
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/commands/{commandId}/cancel": {
+      "post": {
+        "operationId": "cancelCommandV212",
+        "x-architecture-status": "CONTRACTED",
+        "x-shape-source": "contracts/http/s3-command-public.openapi.json",
+        "parameters": [{ "name": "commandId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
+        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
     "/api/v1/sites/{siteId}/forecast/load": {
       "get": {
         "operationId": "getSiteLoadForecastV212",
@@ -2510,6 +2519,60 @@
           "403": { "$ref": "#/components/responses/Problem" },
           "404": { "$ref": "#/components/responses/Problem" },
           "503": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/control-state": {
+      "get": {
+        "operationId": "getSiteControlState",
+        "summary": "Read a Site's active control exit mode and per-Asset control locks",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": {
+          "200": { "description": "Current Site control state and active Asset locks.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteControlState" } } } },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/control-mode": {
+      "put": {
+        "operationId": "updateSiteControlMode",
+        "summary": "Switch a Site between REMOTE_AUTO, MANUAL_OVERRIDE, and SAFE_SHUTDOWN_EXIT",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteControlModeMutation" } } } },
+        "responses": {
+          "200": { "description": "Updated Site control state and cancelled pending Command IDs.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteControlModeMutationResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/assets/{assetId}/control-lock": {
+      "put": {
+        "operationId": "updateAssetControlLock",
+        "summary": "Set or clear an Asset control lock (UNLOCKED, MANUAL_LOCK, or MAINTENANCE_LOCK)",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [{ "$ref": "#/components/parameters/AssetId" }, { "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AssetControlLockMutation" } } } },
+        "responses": {
+          "200": { "description": "Updated Asset control lock and cancelled pending Command IDs.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AssetControlLockMutationResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
           "default": { "$ref": "#/components/responses/Problem" }
         }
       }
@@ -4688,6 +4751,96 @@
             "type": "array",
             "items": { "$ref": "#/components/schemas/SiteDataGap" }
           }
+        }
+      },
+      "AssetControlLockState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["siteId", "assetId", "lockMode", "reason", "updatedBy", "updatedAt", "revision"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "assetId": { "$ref": "#/components/schemas/UUIDv7" },
+          "lockMode": { "type": "string", "enum": ["UNLOCKED", "MANUAL_LOCK", "MAINTENANCE_LOCK"] },
+          "reason": { "type": "string", "maxLength": 1000 },
+          "updatedBy": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+          "updatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "revision": { "type": "integer", "minimum": 0 },
+          "boundDeviceIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } }
+        }
+      },
+      "SiteControlState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tenantId", "siteId", "controlMode", "reason", "updatedBy", "updatedAt", "revision", "assetLocks"],
+        "properties": {
+          "id": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "controlMode": { "type": "string", "enum": ["REMOTE_AUTO", "MANUAL_OVERRIDE", "SAFE_SHUTDOWN_EXIT"] },
+          "reason": { "type": "string", "maxLength": 1000 },
+          "updatedBy": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+          "updatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "revision": { "type": "integer", "minimum": 0 },
+          "assetLocks": { "type": "array", "items": { "$ref": "#/components/schemas/AssetControlLockState" } }
+        }
+      },
+      "SiteControlModeMutation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["controlMode"],
+        "properties": {
+          "controlMode": { "type": "string", "enum": ["REMOTE_AUTO", "MANUAL_OVERRIDE", "SAFE_SHUTDOWN_EXIT"] },
+          "reason": { "type": "string", "maxLength": 1000 },
+          "expectedRevision": { "type": "integer", "minimum": 0 },
+          "meta": { "$ref": "#/components/schemas/RegistryMutationMeta" }
+        }
+      },
+      "SiteControlModeMutationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tenantId", "siteId", "controlMode", "reason", "updatedBy", "updatedAt", "revision", "assetLocks", "cancelledCommandIds"],
+        "properties": {
+          "id": { "oneOf": [{ "$ref": "#/components/schemas/UUIDv7" }, { "type": "null" }] },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "controlMode": { "type": "string", "enum": ["REMOTE_AUTO", "MANUAL_OVERRIDE", "SAFE_SHUTDOWN_EXIT"] },
+          "reason": { "type": "string", "maxLength": 1000 },
+          "updatedBy": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+          "updatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "revision": { "type": "integer", "minimum": 0 },
+          "assetLocks": { "type": "array", "items": { "$ref": "#/components/schemas/AssetControlLockState" } },
+          "cancelledCommandIds": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "AssetControlLockMutation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["lockMode"],
+        "properties": {
+          "lockMode": { "type": "string", "enum": ["UNLOCKED", "MANUAL_LOCK", "MAINTENANCE_LOCK"] },
+          "reason": { "type": "string", "maxLength": 1000 },
+          "expectedRevision": { "type": "integer", "minimum": 0 },
+          "meta": { "$ref": "#/components/schemas/RegistryMutationMeta" }
+        }
+      },
+      "AssetControlLockMutationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["siteId", "assetId", "lockMode", "reason", "updatedBy", "updatedAt", "revision", "cancelledCommandIds"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "assetId": { "$ref": "#/components/schemas/UUIDv7" },
+          "lockMode": { "type": "string", "enum": ["UNLOCKED", "MANUAL_LOCK", "MAINTENANCE_LOCK"] },
+          "reason": { "type": "string", "maxLength": 1000 },
+          "updatedBy": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+          "updatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
+          "revision": { "type": "integer", "minimum": 0 },
+          "boundDeviceIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } },
+          "cancelledCommandIds": { "type": "array", "items": { "type": "string" } }
         }
       },
       "FieldError": {

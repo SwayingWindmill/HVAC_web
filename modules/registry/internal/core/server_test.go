@@ -146,6 +146,11 @@ func (store *fakeRegistryStore) ListUtilityBills(_ context.Context, claims regis
 	return UtilityBillList{}, store.err
 }
 
+func (store *fakeRegistryStore) GetSiteControlState(_ context.Context, claims registryauth.GrantClaims, id string) (SiteControlState, error) {
+	store.lastClaims, store.lastID = claims, id
+	return SiteControlState{SiteID: id, ControlMode: SiteControlModeRemoteAuto, AssetLocks: []AssetControlLockState{}}, store.err
+}
+
 func TestServerReadsSiteTotalElectricitySources(t *testing.T) {
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	store := &fakeRegistryStore{totalSources: SiteTotalElectricitySources{
