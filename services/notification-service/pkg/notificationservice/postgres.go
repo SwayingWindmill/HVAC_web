@@ -44,8 +44,9 @@ func (store *PostgresStore) Ping(ctx context.Context) error {
 }
 
 // RecordAlarmEvent takes one Alarm event from the Alarm owner's outbox: immediate WeChat
-// reminders for urgent/important Alarms and 24-hour reading-gap escalations, plus open reading-gap
-// tracking for the 08:00 daily summary.
+// reminders for urgent/important Alarms and 24-hour reading-gap escalations (#800), open
+// reading-gap tracking for the 08:00 daily summary, and per-site Alarm delivery/escalation
+// (alarm_delivery.go). Seeing the same event again changes nothing.
 func (store *PostgresStore) RecordAlarmEvent(ctx context.Context, event AlarmEvent, recordedAt time.Time) error {
 	if err := event.Validate(); err != nil {
 		return err
@@ -62,6 +63,9 @@ func (store *PostgresStore) RecordAlarmEvent(ctx context.Context, event AlarmEve
 		return err
 	}
 	if err := recordOpenReadingGap(ctx, tx, event, recordedAt); err != nil {
+		return err
+	}
+	if err := recordAlarmDelivery(ctx, tx, event, recordedAt); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

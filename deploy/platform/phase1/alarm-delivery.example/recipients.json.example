@@ -1,0 +1,7 @@
+{
+  "recipients": {
+    "songyaxuan-duty": { "name": "松雅轩值班（示例）", "email": "duty@example.com", "wecomUserId": "REPLACE_WITH_WECOM_USERID" },
+    "songyaxuan-lead": { "name": "松雅轩负责人（示例）", "email": "lead@example.com", "wecomUserId": "REPLACE_WITH_WECOM_USERID" },
+    "platform-oncall": { "name": "平台值班（示例）", "email": "oncall@example.com" }
+  }
+}

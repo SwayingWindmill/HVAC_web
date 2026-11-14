@@ -89,6 +89,7 @@ COPY infra/registry/postgres/init/036-asset-nameplate.sql /opt/hvac/repo/infra/r
 COPY infra/registry/postgres/init/037-site-and-asset-control-locks.sql /opt/hvac/repo/infra/registry/postgres/init/037-site-and-asset-control-locks.sql
 COPY infra/registry/postgres/init/038-command-route-point-metadata.sql /opt/hvac/repo/infra/registry/postgres/init/038-command-route-point-metadata.sql
 COPY services/notification-service/migrations/005_reading_gap_reminders.sql /opt/hvac/repo/services/notification-service/migrations/005_reading_gap_reminders.sql
+COPY services/notification-service/migrations/006_alarm_delivery.sql /opt/hvac/repo/services/notification-service/migrations/006_alarm_delivery.sql
 
 FROM scratch AS sources-runtime
 
@@ -130,6 +131,7 @@ COPY modules/alarm/migrations/012_s29_reading_unchanged_since.sql /opt/hvac/repo
 COPY modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql /opt/hvac/repo/modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql
 COPY modules/alarm/migrations/014_s31_retired_site_rules.sql /opt/hvac/repo/modules/alarm/migrations/014_s31_retired_site_rules.sql
 COPY modules/alarm/migrations/015_s32_reading_gap_escalation.sql /opt/hvac/repo/modules/alarm/migrations/015_s32_reading_gap_escalation.sql
+COPY modules/alarm/migrations/016_s32_rules_unevaluable.sql /opt/hvac/repo/modules/alarm/migrations/016_s32_rules_unevaluable.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql
