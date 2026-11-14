@@ -21,6 +21,7 @@ func main() {
 	addr := flag.String("addr", envOr("WECOM_ADAPTER_ADDR", ":9095"), "listen address")
 	urlFile := flag.String("webhook-url-file", envOr("WECOM_WEBHOOK_URL_FILE", "/etc/alert-receiver/wecom-webhook-url"), "file containing the WeCom robot webhook URL")
 	sendTokenFile := flag.String("send-token-file", envOr("ALARM_SEND_TOKEN_FILE", "/etc/alarm-delivery/alarm-send-token"), "file containing the bearer token energy-api presents to POST /send")
+	recipientsFile := flag.String("recipients-file", envOr("ALARM_DELIVERY_RECIPIENTS_FILE", "/etc/alarm-delivery/recipients.json"), "file listing allowed alarm delivery recipients")
 	receiverDir := flag.String("receiver-dir", envOr("ALERT_RECEIVER_DIR", "/etc/alert-receiver"), "directory with smtp.env, smtp-password, wecom-app.env and wecom-app-secret")
 	flag.Parse()
 	if *health {
@@ -29,7 +30,7 @@ func main() {
 	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: refuseRedirect}
 	server := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandler(*urlFile, client, newSender(*sendTokenFile, *receiverDir, *urlFile, client)),
+		Handler:           newHandler(*urlFile, client, newSender(*sendTokenFile, *recipientsFile, *receiverDir, *urlFile, client)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +31,8 @@ func newSendFixture(t *testing.T) *sendFixture {
 	t.Helper()
 	dir := t.TempDir()
 	write(t, dir, "alarm-send-token", testSendToken+"\n")
-	send := newSender(filepath.Join(dir, "alarm-send-token"), dir, filepath.Join(dir, "wecom-webhook-url"), &http.Client{Timeout: 2 * time.Second})
+	write(t, dir, "recipients.json", `{"recipients":{"duty":{"name":"值班","email":"duty@example.com","wecomUserId":"ZhangSan"},"nobody":{"name":"无效","email":"nobody@example.com"}}}`)
+	send := newSender(filepath.Join(dir, "alarm-send-token"), filepath.Join(dir, "recipients.json"), dir, filepath.Join(dir, "wecom-webhook-url"), &http.Client{Timeout: 2 * time.Second})
 	send.dialSMTP = func(context.Context, string, string) (net.Conn, error) {
 		t.Fatal("a mail server was dialled")
 		return nil, nil
@@ -284,6 +286,43 @@ func TestSendWeComBotUpstreamFailureIsRetryable(t *testing.T) {
 	})}
 	if code := f.post(t, testSendToken, message("wecom_bot", "group", false)); code != http.StatusBadGateway {
 		t.Fatalf("robot rate limited: %d", code)
+	}
+}
+
+func TestSendMailEnforcesRecipientsDirectoryAndEncodesSubject(t *testing.T) {
+	f := newSendFixture(t)
+	write(t, f.dir, "smtp.env", "SMTP_SMARTHOST=localhost:465\nSMTP_FROM=alarm@example.com\nSMTP_AUTH_USERNAME=alarm@example.com\n")
+	write(t, f.dir, "smtp-password", "app-password\n")
+	// An unlisted address is rejected before dialling SMTP.
+	if code := f.post(t, testSendToken, message("smtp", "stranger@example.com", false)); code != http.StatusUnprocessableEntity {
+		t.Fatalf("unlisted recipient: %d", code)
+	}
+	// Missing recipients directory is reported as unconfigured.
+	if err := os.Remove(filepath.Join(f.dir, "recipients.json")); err != nil {
+		t.Fatal(err)
+	}
+	if code := f.post(t, testSendToken, message("smtp", "duty@example.com", true)); code != http.StatusNotImplemented {
+		t.Fatalf("missing recipients file: %d", code)
+	}
+
+	decoder := new(mime.WordDecoder)
+	for _, subject := range []string{
+		"plain ASCII subject: alarm",
+		"【告警升级·紧急】松雅轩冷站：3号冷机冷冻水出水温度传感器持续异常且超过预设阈值范围（无人确认）",
+	} {
+		encoded := encodeRFC2047Base64(subject)
+		for _, word := range strings.Split(encoded, "\r\n ") {
+			if !strings.HasPrefix(word, "=?UTF-8?b?") || !strings.HasSuffix(word, "?=") || len(word) > 75 {
+				t.Fatalf("invalid RFC 2047 word %q", word)
+			}
+		}
+		decoded, err := decoder.DecodeHeader(strings.ReplaceAll(encoded, "\r\n ", " "))
+		if err != nil {
+			t.Fatalf("decode %q: %v", encoded, err)
+		}
+		if decoded != subject {
+			t.Fatalf("round trip mismatch: got %q want %q", decoded, subject)
+		}
 	}
 }
 

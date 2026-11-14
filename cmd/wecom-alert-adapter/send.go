@@ -19,9 +19,9 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"mime"
 	"net"
 	"net/http"
+	"net/mail"
 	"net/smtp"
 	"net/textproto"
 	"net/url"
@@ -31,6 +31,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type sendRequest struct {
@@ -45,10 +46,11 @@ type sendRequest struct {
 // sender holds where the /send secrets are; it reads them at each request, so a rotated secret
 // needs no restart.
 type sender struct {
-	tokenFile   string
-	receiverDir string
-	urlFile     string
-	client      *http.Client
+	tokenFile      string
+	recipientsFile string
+	receiverDir    string
+	urlFile        string
+	client         *http.Client
 	// dialSMTP opens the connection to the mail server; tests replace it.
 	dialSMTP func(ctx context.Context, host, port string) (net.Conn, error)
 	now      func() time.Time
@@ -63,9 +65,9 @@ var (
 	errRejected      = errors.New("recipient rejected")
 )
 
-func newSender(tokenFile, receiverDir, urlFile string, client *http.Client) *sender {
+func newSender(tokenFile, recipientsFile, receiverDir, urlFile string, client *http.Client) *sender {
 	return &sender{
-		tokenFile: tokenFile, receiverDir: receiverDir, urlFile: urlFile, client: client, now: time.Now,
+		tokenFile: tokenFile, recipientsFile: recipientsFile, receiverDir: receiverDir, urlFile: urlFile, client: client, now: time.Now,
 		dialSMTP: func(ctx context.Context, host, port string) (net.Conn, error) {
 			dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 10 * time.Second}, Config: &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}}
 			return dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
@@ -170,9 +172,9 @@ func (s *sender) sendMail(ctx context.Context, message sendRequest) error {
 	if err != nil {
 		return err
 	}
-	to := strings.TrimSpace(message.To)
-	if to == "" || !strings.Contains(to, "@") || strings.ContainsAny(to, " \r\n<>,") {
-		return fmt.Errorf("%w: invalid mail address", errRejected)
+	to, err := s.resolveMailRecipient(message.To)
+	if err != nil {
+		return err
 	}
 	if message.DryRun {
 		return nil
@@ -227,6 +229,68 @@ func (s *sender) sendMail(ctx context.Context, message sendRequest) error {
 	return nil
 }
 
+func (s *sender) resolveMailRecipient(requested string) (string, error) {
+	want := strings.TrimSpace(requested)
+	if want == "" || !strings.Contains(want, "@") || strings.ContainsAny(want, " \r\n<>,") {
+		return "", fmt.Errorf("%w: invalid mail address", errRejected)
+	}
+	parsedWant, err := mail.ParseAddress(want)
+	if err != nil || parsedWant.Address != want {
+		return "", fmt.Errorf("%w: invalid mail address", errRejected)
+	}
+	body, err := os.ReadFile(s.recipientsFile)
+	if err != nil {
+		return "", fmt.Errorf("%w: recipients file is missing or unreadable", errNotConfigured)
+	}
+	var directory struct {
+		Recipients map[string]struct {
+			Email string `json:"email"`
+		} `json:"recipients"`
+	}
+	if err := json.Unmarshal(body, &directory); err != nil {
+		return "", fmt.Errorf("%w: recipients file is invalid JSON", errNotConfigured)
+	}
+	for _, entry := range directory.Recipients {
+		candidate := strings.TrimSpace(entry.Email)
+		if candidate == "" || strings.ContainsAny(candidate, " \r\n<>,") {
+			continue
+		}
+		parsed, err := mail.ParseAddress(candidate)
+		if err != nil || parsed.Address != candidate {
+			continue
+		}
+		if strings.EqualFold(parsed.Address, parsedWant.Address) {
+			return parsed.Address, nil
+		}
+	}
+	return "", fmt.Errorf("%w: recipient is not in recipients directory", errRejected)
+}
+
+// encodeRFC2047Base64 encodes every Subject chunk unconditionally with base64 UTF-8
+// (<= 45 raw bytes -> <= 72 ASCII header chars per encoded-word, RFC 2047) so raw
+// request text never appears directly in SMTP headers.
+func encodeRFC2047Base64(value string) string {
+	cleaned := strings.NewReplacer("\r", "", "\n", "", "\x00", "").Replace(strings.TrimSpace(value))
+	if cleaned == "" {
+		return ""
+	}
+	const maxChunkBytes = 45
+	var words []string
+	var chunk strings.Builder
+	for _, r := range cleaned {
+		size := utf8.RuneLen(r)
+		if chunk.Len() > 0 && chunk.Len()+size > maxChunkBytes {
+			words = append(words, "=?UTF-8?b?"+base64.StdEncoding.EncodeToString([]byte(chunk.String()))+"?=")
+			chunk.Reset()
+		}
+		chunk.WriteRune(r)
+	}
+	if chunk.Len() > 0 {
+		words = append(words, "=?UTF-8?b?"+base64.StdEncoding.EncodeToString([]byte(chunk.String()))+"?=")
+	}
+	return strings.Join(words, "\r\n ")
+}
+
 func mailBody(from, to, subject, text string, now time.Time) []byte {
 	var id [12]byte
 	_, _ = rand.Read(id[:])
@@ -236,8 +300,9 @@ func mailBody(from, to, subject, text string, now time.Time) []byte {
 	}
 	var body bytes.Buffer
 	fmt.Fprintf(&body, "From: %s\r\nTo: %s\r\nSubject: %s\r\nDate: %s\r\nMessage-ID: <%s@%s>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n",
-		from, to, mime.BEncoding.Encode("UTF-8", subject), now.Format(time.RFC1123Z), hex.EncodeToString(id[:]), domain)
-	encoded := base64.StdEncoding.EncodeToString([]byte(strings.ReplaceAll(text, "\n", "\r\n")))
+		from, to, encodeRFC2047Base64(subject), now.Format(time.RFC1123Z), hex.EncodeToString(id[:]), domain)
+	normalized := strings.ReplaceAll(strings.NewReplacer("\x00", "", "\r\n", "\n", "\r", "\n").Replace(text), "\n", "\r\n")
+	encoded := base64.StdEncoding.EncodeToString([]byte(normalized))
 	for len(encoded) > 76 {
 		body.WriteString(encoded[:76] + "\r\n")
 		encoded = encoded[76:]

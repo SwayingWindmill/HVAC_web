@@ -92,7 +92,10 @@ func (fixture *deliveryFixture) record(alarmID, alarmType string, action AlarmAc
 	event := AlarmEvent{
 		TenantID: alarmReminderTenantID, SiteID: fixture.siteID, SourceEventID: fixture.reminders.uuid(), AlarmID: alarmID, IncidentCorrelationID: alarmID,
 		AlarmVersion: version, Action: action, CurrentSeverity: severity, PeakSeverity: severity, Condition: condition, OccurredAt: at,
-		Attributes: map[string]string{"title": "网关上报中断", "alarmType": alarmType, "summary": "松雅轩 15 分钟没有收到任何读数。", "acknowledgedBy": "王工"},
+		Attributes: map[string]string{
+			"title": "网关上报中断", "alarmType": alarmType, "summary": "松雅轩 15 分钟没有收到任何读数。",
+			"acknowledgedBy": "王工", "firstOccurredAt": at.UTC().Format(time.RFC3339Nano),
+		},
 	}
 	if err := fixture.reminders.store.RecordAlarmEvent(context.Background(), event, at); err != nil {
 		fixture.t.Fatal(err)

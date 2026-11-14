@@ -1227,7 +1227,7 @@ services:
       SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
     volumes:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/alert-receiver:/etc/alert-receiver:ro
-      # Only alarm-send-token is read from here: the bearer token energy-api presents to POST /send.
+      # alarm-send-token (bearer token for POST /send) and recipients.json (SMTP recipient allowlist) are read from here.
       - ${PHASE1_RUNTIME_DIR:-./runtime}/alarm-delivery:/etc/alarm-delivery:ro
     expose: ["9095"]
     # application: energy-api posts Alarm messages to /send (P0-4). alert-egress: SMTP and WeCom.
