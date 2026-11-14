@@ -8,7 +8,7 @@
 // Usage: node --disable-warning=ExperimentalWarning worktree-audit.ts [repo-path] [transcripts-path ...]
 
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import process from "node:process";
@@ -85,10 +85,12 @@ function parseWorktrees(output: string): WorktreeEntry[] {
   return worktrees;
 }
 
-function defaultTranscriptRoots(): string[] {
+export function defaultTranscriptRoots(): string[] {
   const home = homedir();
   const candidates = [
     process.env.ANTIGRAVITY_BRAIN_DIR || join(home, ".gemini", "antigravity", "brain"),
+    join(home, ".gemini", "antigravity-cli", "brain"),
+    join(home, ".gemini", "antigravity-ide", "brain"),
     join(process.env.CLAUDE_CONFIG_DIR || join(home, ".claude"), "projects"),
     join(process.env.CODEX_HOME || join(home, ".codex"), "sessions"),
     join(process.env.CODEX_HOME || join(home, ".codex"), "archived_sessions"),
@@ -99,6 +101,8 @@ function defaultTranscriptRoots(): string[] {
       for (const entry of readdirSync("/mnt/c/Users", { withFileTypes: true })) {
         if (!entry.isDirectory() || skip.has(entry.name)) continue;
         candidates.push(join("/mnt/c/Users", entry.name, ".gemini", "antigravity", "brain"));
+        candidates.push(join("/mnt/c/Users", entry.name, ".gemini", "antigravity-cli", "brain"));
+        candidates.push(join("/mnt/c/Users", entry.name, ".gemini", "antigravity-ide", "brain"));
         candidates.push(join("/mnt/c/Users", entry.name, ".claude", "projects"));
       }
     } catch {
@@ -212,17 +216,32 @@ function mentions(text: Buffer, needle: Buffer): boolean {
   return false;
 }
 
-function transcriptNeedles(spellings: string[]): Buffer[] {
+function addDriveAndUriVariants(forms: string[], drive: string, slashRest: string): void {
+  const cleanRest = slashRest.replace(/^\/+/, "");
+  const backRest = cleanRest.replaceAll("/", "\\");
+  const encodedRest = cleanRest.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+  const uriRests = encodedRest === cleanRest ? [cleanRest] : [cleanRest, encodedRest];
+  for (const letter of [drive.toLowerCase(), drive.toUpperCase()]) {
+    forms.push(`${letter}:/${cleanRest}`, `${letter}:\\${backRest}`);
+    for (const uriRest of uriRests) {
+      forms.push(`file:///${letter}:/${uriRest}`, `file:///${letter}%3A/${uriRest}`, `file:///${letter}%3a/${uriRest}`);
+    }
+  }
+}
+
+export function transcriptNeedles(spellings: string[]): Buffer[] {
   const expanded = spellings.flatMap((spelling) => {
     const forms = [spelling];
     const wslMatch = /^\/mnt\/([a-z])\/(.*)$/i.exec(spelling);
     if (wslMatch) {
-      const drive = wslMatch[1];
-      const rest = wslMatch[2];
-      forms.push(`${drive.toLowerCase()}:/${rest}`, `${drive.toUpperCase()}:/${rest}`);
-      forms.push(`${drive.toLowerCase()}:\\${rest.replaceAll("/", "\\")}`, `${drive.toUpperCase()}:\\${rest.replaceAll("/", "\\")}`);
+      addDriveAndUriVariants(forms, wslMatch[1], wslMatch[2]);
     }
-    if (/^(?:[a-z]:[\\/]|\\\\|\/\/)/i.test(spelling)) {
+    const winMatch = /^([a-z]):[\\/](.*)$/i.exec(spelling);
+    if (winMatch) {
+      const slashRest = winMatch[2].replaceAll("\\", "/");
+      forms.push(`/mnt/${winMatch[1].toLowerCase()}/${slashRest}`);
+      addDriveAndUriVariants(forms, winMatch[1], slashRest);
+    } else if (/^(?:\\\\|\/\/)/.test(spelling)) {
       forms.push(spelling.replaceAll("\\", "/"), spelling.replaceAll("/", "\\"));
     }
     return forms;
@@ -305,13 +324,42 @@ function remoteState(wtPath: string, branch: string, head: string): string {
   return [ahead > 0 && `ahead${ahead}`, behind > 0 && `behind${behind}`].filter(Boolean).join(",");
 }
 
+function formatHumanBytes(bytes: number): string {
+  const units = ["B", "K", "M", "G", "T", "P", "E"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return unit === 0 ? `${Math.round(value)}${units[unit]}` : `${value >= 10 ? value.toFixed(0) : value.toFixed(1)}${units[unit]}`;
+}
+
 function size(wtPath: string): string {
   try {
     return execFileSync("du", ["-sh", wtPath], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
       .trim()
       .split(/\s/)[0];
   } catch {
-    return "?";
+    let total = 0;
+    let entries = 0;
+    const maxEntries = 100_000;
+    const stack = [wtPath];
+    try {
+      while (stack.length > 0) {
+        const dir = stack.pop()!;
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          if (++entries > maxEntries) return "?";
+          const full = join(dir, entry.name);
+          if (entry.isSymbolicLink()) continue;
+          if (entry.isDirectory()) stack.push(full);
+          else if (entry.isFile()) total += lstatSync(full).size;
+        }
+      }
+      return formatHumanBytes(total);
+    } catch {
+      return "?";
+    }
   }
 }
 
@@ -365,8 +413,37 @@ function classify(facts: {
   return "review";
 }
 
+export function resolveHostWorktreePath(
+  wtPath: string,
+  platform = process.platform,
+): { hostPath: string; isWindowsPath: boolean; existsOnHost: boolean } {
+  const winMatch = /^([a-z]):[\\/](.*)$/i.exec(wtPath);
+  if (!winMatch) {
+    return {
+      hostPath: wtPath,
+      isWindowsPath: false,
+      existsOnHost: statSync(wtPath, { throwIfNoEntry: false })?.isDirectory() ?? false,
+    };
+  }
+  const hostPath =
+    platform === "linux" ? `/mnt/${winMatch[1].toLowerCase()}/${winMatch[2].replaceAll("\\", "/")}` : wtPath;
+  return {
+    hostPath,
+    isWindowsPath: true,
+    existsOnHost: statSync(hostPath, { throwIfNoEntry: false })?.isDirectory() ?? false,
+  };
+}
+
 function auditWorktree(
-  { path: wtPath, locked }: WorktreeEntry,
+  {
+    worktree: { path: wtPath, locked },
+    hostPath,
+    isWindowsPathOnWsl,
+  }: {
+    worktree: WorktreeEntry;
+    hostPath: string;
+    isWindowsPathOnWsl: boolean;
+  },
   ctx: {
     repo: string;
     trunk: string;
@@ -375,19 +452,25 @@ function auditWorktree(
     chats: Map<string, Fact<number | null>>;
     branchLogs: Fact<Set<string>>;
     now: number;
+    warn: (line: string) => void;
   },
 ): string[] {
-  const head = probe(() => git(wtPath, "rev-parse", "HEAD"));
-  const age = bind(head, () => probe(() => Math.trunc((ctx.now - Number(git(wtPath, "log", "-1", "--format=%ct", "HEAD"))) / DAY)));
+  const head = probe(() => git(hostPath, "rev-parse", "HEAD"));
+  if (isWindowsPathOnWsl && !head.known) {
+    ctx.warn(
+      `warn: ${wtPath} is a live Windows worktree (${hostPath}); WSL git cannot read its Windows .git link — inspect or prune from Windows instead of WSL`,
+    );
+  }
+  const age = bind(head, () => probe(() => Math.trunc((ctx.now - Number(git(hostPath, "log", "-1", "--format=%ct", "HEAD"))) / DAY)));
   const ancestry = bind(head, (sha) => probe(() => isAncestor(ctx.repo, sha, ctx.trunk)));
-  const dirty = probe(() => dirtyState(wtPath));
-  const orphans = bind(head, () => bind(ctx.branchLogs, (logged) => probe(() => reflogOnly(wtPath, logged))));
+  const dirty = probe(() => dirtyState(hostPath));
+  const orphans = bind(head, () => bind(ctx.branchLogs, (logged) => probe(() => reflogOnly(hostPath, logged))));
   const branch = probe(() => {
-    const name = git(wtPath, "rev-parse", "--abbrev-ref", "HEAD");
+    const name = git(hostPath, "rev-parse", "--abbrev-ref", "HEAD");
     return name === "HEAD" ? null : name;
   });
   const remote = bind(branch, (name) =>
-    name === null ? known("detached") : bind(head, (sha) => probe(() => remoteState(wtPath, name, sha))),
+    name === null ? known("detached") : bind(head, (sha) => probe(() => remoteState(hostPath, name, sha))),
   );
   const pr = bind(ctx.prs, (list) =>
     bind(branch, (name) => {
@@ -399,7 +482,7 @@ function auditWorktree(
   const recent = bind(lastChat, (ts) => known(ts !== null && Math.trunc((ctx.now - ts) / DAY) <= RECENT_DAYS));
   const bucket = classify({ trunk: ctx.fetched, head, age, ancestry, dirty, orphans, remote, pr, recent, locked: known(locked) });
   return [
-    size(wtPath),
+    size(hostPath),
     age.known ? `${age.value}d` : "?",
     ancestry.known ? (ancestry.value ? "YES" : "no") : "?",
     dirty.known ? dirtyLabel(dirty.value, orphans) : "unknown",
@@ -435,8 +518,16 @@ function audit(repo: string, transcripts: string[], now = Math.floor(Date.now() 
     return list as PrEntry[];
   }, "gh pr list failed; PR column will be empty");
 
-  const worktrees = parseWorktrees(git(repo, "worktree", "list", "--porcelain", "-z")).slice(1);
-  const live = worktrees.filter((worktree) => !worktree.prunable).map((worktree) => worktree.path);
+  const resolvedWorktrees = parseWorktrees(git(repo, "worktree", "list", "--porcelain", "-z"))
+    .slice(1)
+    .map((worktree) => {
+      const { hostPath, isWindowsPath, existsOnHost } = resolveHostWorktreePath(worktree.path);
+      const isWindowsPathOnWsl = process.platform === "linux" && isWindowsPath && existsOnHost;
+      // WSL git flags live Windows drive worktrees (E:/...) as prunable because it cannot stat DOS paths.
+      const effectivePrunable = worktree.prunable && !isWindowsPathOnWsl;
+      return { worktree, hostPath, isWindowsPathOnWsl, effectivePrunable };
+    });
+  const live = resolvedWorktrees.filter((item) => !item.effectivePrunable);
   const links = new Map<string, Array<[string, { id: string; name: string | undefined }]>>();
   const linksIn = (dir: string) => {
     const cached = links.get(dir);
@@ -446,9 +537,12 @@ function audit(repo: string, transcripts: string[], now = Math.floor(Date.now() 
     return loaded;
   };
   const spellings = new Map(
-    live.map((wtPath) => [
-      wtPath,
-      discover(() => pathSpellings(wtPath, linksIn), `could not resolve spellings of ${wtPath}; LAST_CHAT column will be empty`),
+    live.map((item) => [
+      item.worktree.path,
+      discover(
+        () => [...new Set([item.worktree.path, ...pathSpellings(item.hostPath, linksIn)])],
+        `could not resolve spellings of ${item.worktree.path}; LAST_CHAT column will be empty`,
+      ),
     ]),
   );
   const scanFailed = "transcript scan failed; LAST_CHAT column will be empty";
@@ -467,18 +561,20 @@ function audit(repo: string, transcripts: string[], now = Math.floor(Date.now() 
     return discover(() => lastChats(transcripts, knownSpellings), scanFailed);
   });
   const chats = new Map(
-    live.map((wtPath) => [
-      wtPath,
-      bind(spellings.get(wtPath) ?? UNKNOWN, () => bind(found, (latest) => known(latest.get(wtPath) ?? null))),
+    live.map((item) => [
+      item.worktree.path,
+      bind(spellings.get(item.worktree.path) ?? UNKNOWN, () => bind(found, (latest) => known(latest.get(item.worktree.path) ?? null))),
     ]),
   );
   const branchLogs = discover(
     () => new Set(git(repo, "rev-list", "--walk-reflogs", "--branches").split("\n").filter(Boolean)),
     "could not read branch reflogs; no worktree can reach safe",
   );
-  const context = { repo, trunk, fetched, prs, chats, branchLogs, now };
-  const rows = worktrees.map((worktree) =>
-    worktree.prunable ? ["-", "?", "-", "-", "-", "-", "-", "prunable", "-", worktree.path] : auditWorktree(worktree, context),
+  const context = { repo, trunk, fetched, prs, chats, branchLogs, now, warn };
+  const rows = resolvedWorktrees.map((item) =>
+    item.effectivePrunable
+      ? ["-", "?", "-", "-", "-", "-", "-", "prunable", "-", item.worktree.path]
+      : auditWorktree(item, context),
   );
   rows.sort((a, b) => sizeKey(b[0]) - sizeKey(a[0]) || (a.join("\t") < b.join("\t") ? 1 : -1));
   return [HEADER, ...rows].map((row) => `${row.join("\t")}\n`).join("");

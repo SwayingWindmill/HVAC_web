@@ -5,11 +5,11 @@ description: "Fan out N parallel workers, drain them, and return one report. Use
 
 # Swarm
 
-On Antigravity, read [`../poteto-mode/references/agy-tools.md`](../poteto-mode/references/agy-tools.md) before dispatching workers. On Claude Code, spawn parallel `Agent` calls with `run_in_background: true`.
+On Antigravity, read [`../poteto-mode/references/agy-tools.md`](../poteto-mode/references/agy-tools.md) before dispatching workers. Antigravity also has a built-in peer-board `swarm` tool: prefer `invoke_subagent` (this skill's default parent-supervised pattern returning structured `PASS` / `ISSUES` / `BLOCKED` verdicts) unless workers specifically need peer-to-peer coordination on the shared `swarm` board (`workspace: "share"` for writers). On Claude Code, spawn parallel `Agent` calls with `run_in_background: true`.
 
 ## Start
 
-Open a checklist with one entry per phase before launching workers:
+Open a checklist (`.scratch/todo.md` on Antigravity; never `.audit/`) with one entry per phase before launching workers:
 
 1. Frame
 2. Fan out

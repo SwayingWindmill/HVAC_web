@@ -29,7 +29,9 @@ Before spawning investigators, build the seed context inline: file paths and lin
 
 ### Discovery
 
-Before spawning investigators, list the available MCPs in the Claude Code environment. Use the tool list at the top of the system prompt (every MCP appears as a tool with prefix `mcp__<server>__<name>`). Otherwise read `.mcp.json` in the plugin/project, or run `claude mcp list`.
+Before spawning investigators, list the available MCP servers in the current runtime:
+- **Antigravity**: check eager tools (`mcp_<serverName>_<toolName>`) and the `<mcp_servers>` list in the system prompt (lazy tools are called via `call_mcp_tool` after reading `<appDataDir>/mcp/<serverName>/<toolName>.json`), and check `~/.gemini/config/mcp_config.json` if needed.
+- **Claude Code**: check `mcp__<server>__<name>` tools in the prompt, `.mcp.json`, or `claude mcp list`.
 
 Map each available MCP to one evidence category:
 

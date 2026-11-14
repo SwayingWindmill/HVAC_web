@@ -14,13 +14,13 @@ This skill orchestrates three parts: an inline mining pass (step 1), Antigravity
 
 ### 0. Check for an existing skill
 
-Look for `.agents/skills/**/*-mode/SKILL.md` (and `.claude/skills/` mirror, or personal `~/.gemini/antigravity/skills/*-mode/SKILL.md`) matching the user's handle. If one exists, confirm intent with `ask_question` (unless they already said "update my skill" or similar):
+Look for `.agents/skills/**/*-mode/SKILL.md` (and `.claude/skills/` mirror) or a personal skill under Antigravity's discovered global roots (`~/.gemini/config/skills/*-mode/SKILL.md`, plus `~/.agents/skills/*-mode/SKILL.md` or `~/.gemini/skills/*-mode/SKILL.md` when registered in `~/.gemini/config/skills.json`) matching the user's handle. If one exists, confirm intent with `ask_question` (unless they already said "update my skill" or similar):
 
 - Update the existing skill (default for repeat runs)
 - Start fresh (rare, ask why before doing it)
 
 Update mode changes the rest of the flow:
-- Step 1 mines only history since the skill was last edited (`git log -1 --format=%cI <path>`).
+- For repo-shared skills, Step 1 mines only history since the skill was last edited (`git log -1 --format=%cI <path>`). For personal skills outside the git repo, compare against file modification time (`stat`) instead of `git log`.
 - Step 2 asks what's changed or missing, not what to capture from zero.
 - Step 4 edits the existing file in place. Preserve sections the user hasn't contradicted. Revise ones with new evidence. Add new sections only for genuinely new rules.
 
@@ -68,7 +68,7 @@ Group the combined signals into sections. Common ones (use only what applies):
 
 Read the built-in `agy-customizations` skill to author cleanly under `HVAC_web`'s rules:
 
-- Path: for a repo-shared skill, `.agents/skills/<handle>-mode/SKILL.md` mirrored 1:1 to `.claude/skills/<handle>-mode/SKILL.md` (with LF endings and zero JS files); for a personal skill across projects, `~/.gemini/antigravity/skills/<handle>-mode/SKILL.md`.
+- Path: for a repo-shared skill, `.agents/skills/<handle>-mode/SKILL.md` mirrored 1:1 to `.claude/skills/<handle>-mode/SKILL.md` (with LF endings and zero JS files); for a personal skill across projects on Antigravity, `~/.gemini/config/skills/<handle>-mode/SKILL.md` (or `~/.agents/skills/` / `~/.gemini/skills/` if registered in `~/.gemini/config/skills.json`).
 - Handle: the user's first name or chosen identifier.
 - Frontmatter `description`: trigger on their name + `/<handle>-mode` + "work in their style", not on generic keywords like "write code" or "review PR".
 - Frontmatter formatting: valid YAML scalar (`description: "..."` or `description: >-`).

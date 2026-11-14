@@ -12,19 +12,20 @@ This repository runs dual-harness pure-Markdown skills under `.agents/skills/` (
 | Search code & call graph | `codegraph_explore` first, then single `git grep -n` / `git ls-files` commands |
 | Fetch web / docs | `search_web` or `curl` via `run_command` |
 | Invoke a skill (`Skill`, `/name`) | `read_file` on its `<skills>` path (`poteto-mode/SKILL.md` is kept well under `24,000` bytes to avoid loader truncation) |
-| Dispatch subagents (`Agent` / `Task`) | `invoke_subagent` with `TypeName`, `Role`, `Prompt`, `Model`, and `Workspace` (multiple calls in one turn run in parallel; end turn to await) |
-| Steer or stop subagents | `send_message` (`Recipient: conversationId`) and `manage_subagents` (`list`, `kill`, `kill_all`) |
+| Dispatch subagents (`Agent` / `Task`) | `invoke_subagent` with `TypeName`, `Role`, `Prompt`, `Model`, and `Workspace` (`"inherit"`, `"share"` isolated worktree, or `"branch"` clone; multiple calls run in parallel; end turn to await). Note `"share"` does not inherit untracked main-repo `.scratch/` files |
+| Steer or stop subagents | `send_message` (`Recipient: conversationId`) and `manage_subagents` (`Action`: `"list"`, `"kill"` with required `ConversationIds: [...]`, `"kill_all"`) |
 | Track tasks (`TaskCreate` / `TodoWrite`) | Keep an untracked checklist in `.scratch/todo.md` or `<appDataDir>/brain/<conversation-id>/scratch/todo.md` (never `.audit/`) |
 | Ask user (`AskUserQuestion`) | `ask_question` (`questions: [{ question, options, is_multi_select }]`) |
-| Recurring/delayed check (`loop`) | `schedule` (`DurationSeconds` or `CronExpression`) |
-| MCP tool (`mcp__<server>__<tool>`) | `call_mcp_tool` after reading `<appDataDir>/mcp/<serverName>/<toolName>.json` |
-| Session transcript lookup | `<appDataDir>/brain/<conversation-id>/.system_generated/logs/transcript.jsonl` |
+| Recurring/delayed check (`loop`) | `schedule` (`Prompt` plus `DurationSeconds` or `CronExpression`; returns immediately so end turn to receive wakeups; never shell `sleep`) |
+| MCP tool (`mcp__<server>__<tool>`) | `mcp_<serverName>_<toolName>` or `call_mcp_tool` after reading `<appDataDir>/mcp/<serverName>/<toolName>.json` (`~/.gemini/config/mcp_config.json`) |
+| Session transcript lookup | `<appDataDir>/brain/<conversation-id>/.system_generated/logs/transcript.jsonl` (`transcript_full.jsonl` when `truncated_fields` is present) |
 
 ## Subagent policy
 
-- **Writable / shell / MCP work**: Use `TypeName: "self"`. Pass `Workspace: "share"` (or create an isolated git worktree) whenever multiple workers write code or run builds concurrently.
-- **Read-only inspection / review**: Use `TypeName: "research"` when no shell command, file edit, or MCP call is required. When a reviewer needs `run_command` (e.g., `interrogate` running repro scripts or `comment-sicko` running `git diff`), use `TypeName: "self"` with explicit instructions not to modify application code outside scope.
-- **Model selection**: Default to `Model: "inherit"` unless the user explicitly asks for another model (`flash`, `flash_lite`, `pro`) or explicitly configures `~/.gemini/config/pstack-models.md` via [`../../setup-pstack/SKILL.md`](../../setup-pstack/SKILL.md). Keep `"inherit"` whenever no override sheet exists.
+- **Writable / shell / network work**: Use `TypeName: "self"`. Pass `Workspace: "share"` (or create an isolated git worktree) whenever multiple workers edit code or run builds concurrently.
+- **Read-only inspection / review**: Use `TypeName: "research"` (has `read_file`, `codegraph_explore`, read-only `run_command`, and MCP read tools; cannot edit/write files or access external network). When a reviewer needs `write_file`, `.scratch/` temp files, or network (`gh`), use `TypeName: "self"` with explicit instructions not to modify application code outside scope.
+- **Windows + WSL `Workspace: "share"` rule**: On Windows Antigravity, `Workspace: "share"` and Windows `git worktree add` create worktrees whose `.git` pointers store Windows paths (`E:/...`). Inside a Windows worktree, WSL `git` fails (`fatal: not a git repository`) and WSL `gh` requires `-R <owner>/<repo>` (or run `gh` from `/mnt/e/Code/HVAC_web`); run `git` commands inside that worktree via Windows `run_command`, keep builds/tests in WSL, and **never** run `git worktree prune` in WSL while Windows worktrees exist.
+- **Model selection**: Default to `Model: "inherit"` unless the user explicitly asks for another model (`flash`, `flash_lite`, `pro`) or explicitly configures `~/.gemini/config/pstack-models.md` (included from `~/.gemini/config/GEMINI.md`) via [`../../setup-pstack/SKILL.md`](../../setup-pstack/SKILL.md). Keep `"inherit"` whenever no override sheet exists.
 - **Brief hygiene**: Pass `AGENTS.md` and required `SKILL.md` paths (not full file dumps). Always end subagents holding shared/branched workspaces via `manage_subagents` before committing or merging.
 
 ## Repository skill equivalents

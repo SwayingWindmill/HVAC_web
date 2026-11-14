@@ -5,13 +5,13 @@ description: "Sketch types, signatures, and module structure before code, then s
 
 # Architect
 
-On Antigravity, dispatch parallel candidate runners via `invoke_subagent` (`TypeName: "self"` or `"research"`, read-only exploration unless writing to an isolated scratch dir). On Claude Code, dispatch parallel `Agent` subagents.
+On Antigravity, dispatch parallel candidate runners via `invoke_subagent` (`TypeName: "self"` with `Workspace: "share"` or isolated `.scratch/architect-<slug>/candidate-<n>/` outputs when candidates write design files per `references/runner-prompt.md`, or `TypeName: "research"` ONLY when runners return sketches inline without writing files). Set `Model` per [`../poteto-mode/references/agy-tools.md`](../poteto-mode/references/agy-tools.md). On Claude Code, dispatch parallel `Agent` subagents.
 
 Sketch types, function signatures, class shapes, and module boundaries with `not implemented` bodies and pseudocode. Synthesize across multiple perspectives, then fill in code against the chosen sketch.
 
 ## Start
 
-Open a todolist with one entry per phase before starting.
+Open a checklist (`.scratch/todo.md` on Antigravity; never `.audit/`) with one entry per phase before starting.
 
 1. Ground
 2. Sketch

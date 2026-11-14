@@ -15,7 +15,7 @@
 **Steps:**
 
 1. **Frame.** State what variant is under test and what behavior counts as success. Write the rubric (3-6 concrete criteria) for the judge only; hold it back from candidates.
-2. **Set up sanitized environments.** Prepare per-candidate isolated directories (`Workspace: "share"` or isolated scratch copies under `.scratch/`) containing the variant under test and realistic context.
+2. **Set up sanitized environments.** Prepare per-candidate isolated directories (`Workspace: "share"` or isolated scratch copies under `.scratch/`) containing the variant under test and realistic context. Note: `Workspace: "share"` copies tracked repo state and does **not** inherit untracked `.scratch/` files from the parent workspace — stage untracked variant inputs via temporary branch commits, inside each candidate directory, or pass explicit parent workspace paths; run Node/repo commands in WSL login shell (`wsl -e bash -lc ...`).
 3. **Author one organic prompt.** What a real user would type, with zero leakage of what is being measured.
 4. **Spawn N parallel candidates.** Launch subagents via `invoke_subagent` (`TypeName: "self"`, `Workspace: "share"` if editing files) using the same organic prompt. Follow [`agy-tools.md`](../references/agy-tools.md) for model choices (`Model: "inherit"` unless configured otherwise or user explicitly compares models).
 5. **Spawn one blinded judge.** Launch an independent read-only subagent per [`arena`](../../arena/SKILL.md) Phase C (`TypeName: "research"` or read-only `"self"`). Judge sees outputs by sanitized label and the rubric only.

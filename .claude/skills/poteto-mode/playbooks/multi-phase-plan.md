@@ -54,7 +54,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 - [ ] Use GitHub CLI (`gh`) and `git` for every PR operation.
 - [ ] Open the PR ready via `gh pr create --base <base-branch>` per `opening-a-pr.md`. A stack child targets its parent branch.
-- [ ] Run repo checks (`npm run domain:run` / `npm run check`) before pushing. Push with hooks on.
+- [ ] Run repo checks (`wsl -e bash -lc "npm run domain:run ..."` / `npm run check`) before pushing from Windows `git`. Push with hooks on.
 - [ ] Run `deslop` before each commit and `no-comments` before review.
 - [ ] Triage every review comment per `.agents/skills/poteto-mode/references/bugbot-triage.md`.
 - [ ] Before the code-ready report and babysit, and again after merge prep, record the base and head SHAs.
@@ -63,14 +63,14 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 - [ ] A full swarm runs once at the code-ready head (re-run only for new behavior, redesign, or large diff). Run each full swarm per `.agents/skills/swarm/SKILL.md` with unit/gates lane, ten live lanes, perf lane, and audit lanes.
 - [ ] Block only on proven failures or wrong docs. A new head gets a fresh verdict unless `git patch-id` confirms unchanged code per `.agents/skills/poteto-mode/playbooks/shipping.md`.
-- [ ] <Merge or handoff rule from the execution playbook.>
+- [ ] Solo PRs follow `opening-a-pr.md` + `AGENTS.md` auto-squash merge on green CI; stacked queues follow `shipping.md`.
 
 ### Boot recipe, for every live lane
 
 - [ ] `git fetch origin <head-branch> && git checkout <head SHA>`.
-- [ ] <Start backend / recorded gateway or dev server and wait for ready.>
-- [ ] <Drive surface through `.agents/skills/verify/SKILL.md` or `.agents/skills/command-safety/SKILL.md`.>
-- [ ] Save every screenshot under `.scratch/swarm-<pr-id>/worker-<n>/<slug>.png` and return exact paths.
+- [ ] <Start backend / recorded gateway or dev server via `wsl -e bash -lc` and wait for ready.>
+- [ ] <Drive surface in WSL through `.agents/skills/verify/SKILL.md` or `.agents/skills/command-safety/SKILL.md`.>
+- [ ] Save every screenshot under `/mnt/e/Code/HVAC_web/.scratch/swarm-<pr-id>/worker-<n>/<slug>.png` (explicit main-repo path so `Workspace: "share"` results remain visible) and return exact paths.
 
 ## <Task as a verb phrase> (<PR id>)
 

@@ -49,7 +49,7 @@ Colors use OKLCH: `--primary: oklch(0.205 0 0)` where values are lightness (0–
 
 ## Dark Mode
 
-Class-based toggle via `.dark` on the root element. In Next.js, use `next-themes`:
+In `HVAC_web`, themes toggle via `:root[data-theme="light"]` and `.dark` in `apps/hvac-web/src/global.css` (`color-scheme` and dual-theme WCAG contrast are enforced by `npm run design:check`). Outside `HVAC_web` in Next.js apps, class-based `.dark` toggling often uses `next-themes`:
 
 ```tsx
 import { ThemeProvider } from "next-themes"

@@ -14,7 +14,7 @@ Write the current runtime's per-role model override sheet. In `HVAC_web`:
 
 ## Sheet locations
 
-- **Antigravity (`agy`)**: `~/.gemini/config/pstack-models.md` (included from `~/.gemini/config/AGENTS.md` or read explicitly before role-model skills).
+- **Antigravity (`agy`)**: `~/.gemini/config/pstack-models.md` (included from `~/.gemini/config/GEMINI.md` via `@[pstack-models](~/.gemini/config/pstack-models.md)`, or read explicitly before dispatching role subagents — Antigravity loads `~/.gemini/config/GEMINI.md`, not `AGENTS.md`, for user global rules).
 - **Claude Code**: `~/.claude/pstack-models.md` (or `.claude/pstack-models.md` at the repository root when committed for the team; included via `@~/.claude/pstack-models.md` or `@.claude/pstack-models.md` in `CLAUDE.md`).
 
 ## Steps
@@ -71,7 +71,7 @@ no-comments reviewer: inherit
 
 ### 5. Confirm
 
-Tell the user where the override sheet was written, remind them how it loads into context (`~/.gemini/config/AGENTS.md` or `@.../pstack-models.md` in `CLAUDE.md`), and confirm that verification skills for `HVAC_web` already exist:
+Tell the user where the override sheet was written, remind them how it loads into context (`@[pstack-models](~/.gemini/config/pstack-models.md)` in `~/.gemini/config/GEMINI.md`, or `@~/.claude/pstack-models.md` / `@.claude/pstack-models.md` in `CLAUDE.md`), and confirm that verification skills for `HVAC_web` already exist:
 
 - App E2E / UI proof: [`verify`](../verify/SKILL.md)
 - Control-command / MQTT formal check: [`command-safety`](../command-safety/SKILL.md)

@@ -2,13 +2,13 @@
 
 Invoked at the end of Bug fix, Feature, and Refactoring (unless the task explicitly forbids opening a PR). Follow `AGENTS.md` and `docs/agents/issue-delivery.md` strictly.
 
-**Workspace & subagents.** Before staging or committing, inspect `manage_subagents` (`list`) and stop every child agent holding a shared/worktree directory. Confirm `git status` shows only intended changes and zero `.audit/`, `.scratch/` artifacts, or `[DEBUG-*]` markers.
+**Workspace & subagents.** Before staging or committing, inspect `manage_subagents` (`Action: "list"`) and stop every child agent holding a shared/worktree directory. Confirm `git status` shows only intended changes and zero `.audit/`, `.scratch/` artifacts, or `[DEBUG-*]` markers.
 
-**Commits & hygiene.** Commit cleanly with Conventional Commits (`type(scope): subject`, no trailing period; LF line endings). Before opening or updating the PR:
-1. Run `/deslop` over the branch diff against `main`.
-2. Run `/no-comments` over touched code paths.
-3. Run `/make-pr-easy-to-review` (check commit ordering, `CHANGELOG.md` for user-visible changes, and `docs/HANDOFF.md` under `28 KiB`).
-4. Apply `/unslop` and verify all relevant `scripts/domain-task-matrix.ts` gates + `npm run check` passed locally in WSL after your last edit.
+**Commits & hygiene.** Commit cleanly with Conventional Commits (`type(scope): subject`, no trailing period; LF line endings). Activate each review skill by reading its `SKILL.md` with `read_file` before opening or updating the PR:
+1. Run [`deslop`](../../deslop/SKILL.md) over the branch diff against `main`.
+2. Run [`no-comments`](../../no-comments/SKILL.md) over touched code paths.
+3. Run [`make-pr-easy-to-review`](../../make-pr-easy-to-review/SKILL.md) (check commit ordering, `CHANGELOG.md` for user-visible changes, and `docs/HANDOFF.md` under `28 KiB`).
+4. Apply [`unslop`](../../unslop/SKILL.md) to PR copy/docs and verify all relevant `scripts/domain-task-matrix.ts` gates + `npm run check` passed locally via `wsl -e bash -lc "..."` after your last edit.
 
 **PR body.** Keep the PR body concise and scannable (under ~40 lines when squashed):
 - `## Why`: 1-3 sentences stating the problem and approach.

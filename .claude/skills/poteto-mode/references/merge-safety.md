@@ -1,6 +1,6 @@
 # Merge and restack safety
 
-Use this reference with [`shipping.md`](../playbooks/shipping.md) and before topology changes in [`autopilot-stack.md`](../playbooks/autopilot-stack.md). These checks govern revision and destination safety using `gh` and `git`; they do not grant merge authority by themselves.
+Use this reference with [`shipping.md`](../playbooks/shipping.md) and before topology changes in [`autopilot-stack.md`](../playbooks/autopilot-stack.md). These checks govern revision and destination safety using WSL `gh` (`wsl -e bash -lc ...`) and Windows/repo `git`; they do not grant merge authority by themselves. Note for Windows `Workspace: "share"` worktrees: run `git push` / `git rebase` on Windows `run_command`, and run `gh` inside WSL from `/mnt/e/Code/HVAC_web` (or with `-R <owner>/<repo>`).
 
 ## Inspect and cancel pending merge requests
 
