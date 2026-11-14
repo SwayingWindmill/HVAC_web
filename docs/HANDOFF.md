@@ -33,12 +33,7 @@
 
 ## 服务器（139.199.58.47）
 
-- 运行分支为 `main`，Compose 项目 `hvac-platform`，目录 `/opt/hvac-platform`，`single-lite` 档位（含预测/优化/FDD/M&V/报告与 AI 助手，两个模拟器按要求停用），主机 nginx 转发至 `127.0.0.1:18443`；root 禁密码登录，操作账户 `ubuntu`（需要 root 改运行时目录权限时走免密 `sudo`）。
-- **部署流水线**（`.github/workflows/deploy-production.yml`，挂在需要人工审核点头的 GitHub Environment `production` 上；手动触发可勾 `rebuild_base` 重建基础镜像，详见 `docs/operations/disk-full.md#重建部署基础镜像`）：在 GitHub 运行器编译 Go 服务（`1.27.4`，`CGO_ENABLED=0 -trimpath -buildvcs=false -ldflags="-s -w"`）、网页与 AI 助手，按 `git archive` + zstd 增量包通过 SSH 传至 `/opt/hvac-platform`（保留运行目录密钥和数据），给旧镜像打 `before-<时间>` 后只替换 `/service`、`/healthcheck` 与网页 dist，然后执行 `deploy/platform/phase1/cd/deploy.sh`（失败回退老的 `/opt/hvac-platform-tools/deploy.sh` 或运行 `cd/rollback.sh`）。部署前先验证本机及公网 `/healthz`、`/sign-in`、`/login`、身份发现与容器健康，成功后只保留最近两套 `before-*` 镜像并清悬空镜像。所需 Actions secrets：`DEPLOY_SSH_KEY`（优先）或 `DEPLOY_SSH_PASSWORD`（可选 `DEPLOY_SSH_USER`、`DEPLOY_SSH_HOST`、`DEPLOY_SSH_PORT`）。只重启单服务用 `node scripts/phase1-wsl-compose.mjs --integration [--intelligence] up -d --no-deps <服务>`。
-- `DEEPSEEK_API_KEY` 在 `server.runtime.env` 中由用户维护。
-- 服务器运行着的 Go 服务仍为旧的 Go 1.25.12 构建（仓库从 #707 起用 Go 1.27.4、`golang.org/x/text` v0.41.0），须等生产部署流水线跑通一次才会换上 1.27.4。
-- 夜间备份由 `hvac-backup.timer` 写在本机同一块盘上，尚未拷到异地；两个演示站点（`central-plant`、`local-energy-site-b`）的 28 个调度定义已停用。
-- 告警发送：在运行目录 `alert-receiver/` 放企业微信机器人地址与/或 SMTP（样例见 `observability/alert-receiver.example/`，步骤见 `docs/operations/alerts.md`）；Prometheus 使用仓库内 `observability/prometheus.yaml`（15 天 / 2 GB 上限），Centrifugo 指标从容器内网明文 9000 抓取。
+- 告警发送：平台告警在运行目录 `alert-receiver/` 放企业微信机器人地址与/或 SMTP（样例见 `observability/alert-receiver.example/`，步骤见 `docs/operations/alerts.md`）；设备告警不走 Alertmanager，由 `energy-api` 按 `deploy/sites/*.alarm-routing.json` 经 `wecom-alert-adapter` 发送（默认 `ALARM_DELIVERY_MODE=off`，收件人与令牌放运行目录 `alarm-delivery/`，企业微信自建应用密钥放 `alert-receiver/`，见 `docs/operations/alarm-delivery.md`）。Prometheus 使用仓库内 `observability/prometheus.yaml`（15 天 / 2 GB 上限），Centrifugo 指标从容器内网明文 9000 抓取。
 - 磁盘与清理：#553 每小时清理已送达历史事件和 7 天前原始读数；#651 仅在告警判断结果或规则版本变化时写 `alarm_runtime.alarm_evaluation_event` 并清理 30 天前记录。磁盘清理与 `VACUUM FULL telemetry_runtime.source_observations` 见 `docs/operations/disk-full.md`（空闲空间不足数据体量前勿跑 `VACUUM FULL`）。
 
 ### 松雅轩（第一个真实站点）
@@ -69,7 +64,7 @@
 2. **#664 微信小程序**：绑定、告警提醒、一键登录与界面改版已上线；0.2.0 已提交微信审核，待过审发布后把服务器 `IDENTITY_WECHAT_MINIPROGRAM_STATE` 改为 `formal` 并重启 `identity-service`；另待真机收到第一条每日运行结论（点「多收一天」）对数后关 #664 与 #677。以后小程序界面改动不靠开发者工具慢速截图，直接按单元测试守住整理逻辑、真机验收。`identity` / `notification` 库测试为 `npm run test:identity-postgres`、`npm run test:notification-postgres`；点位词典同步用 `npm -w @hvac/miniprogram run sync`。
 3. **#614 现场探头补齐**：等松雅轩现场加装房间温度探头后接回点位并评估是否恢复优化调度。
 4. **#641 AI 助手**：用评测前后对比决定是否启用 pi codemode。
-5. **对标复查（91 项余 16 项，`docs/research/thingsboard-gap-review-2026-10.md`）**：按顺序做 Alertmanager 发邮件 → 清理服务器残留旧数据库角色配置（`outbound_delivery_*`、`rule_runtime_*` 须从服务器 `role-credentials` 删除那两行后再彻底删角色，以免新空库迁移中止；本机 `local:up` 会自动处理）→ 企业微信设备告警 → **冷站网页控制与节能联动（#542）**：Wave 1 控制退出模式（`MANUAL_OVERRIDE` / `SAFE_SHUTDOWN_EXIT` / 单机锁，#824/#825）与 Wave 2 ET1010 20 通道控制及水路联锁已完成并合入；Figma 原型（文件 `JWOOM4pyfWfug5bYxfBJeE`）已出待审，审核通过后实施网页端控制页面与节能策略调度；备份上云（#689）暂不做；换云/换企业域名调研见 `docs/research/cloud-migration-options-2026-10.md`。
+5. **对标复查（91 项余 16 项，`docs/research/thingsboard-gap-review-2026-10.md`）**：按顺序做 Alertmanager 发邮件 → 清理服务器残留旧数据库角色配置（`outbound_delivery_*`、`rule_runtime_*` 须从服务器 `role-credentials` 删除那两行后再彻底删角色，以免新空库迁移中止；本机 `local:up` 会自动处理）→ 设备告警路由器与升级收尾（#753 已进 `main`，默认 `ALARM_DELIVERY_MODE=off`：部署并在运行目录放好 `recipients.json`、`alarm-send-token` 与企业微信自建应用密钥及可信 IP，按 `docs/operations/alarm-delivery.md` 先跑至少一天 `dry-run`，将松雅轩占位收件人换为正式值班人员后再切 `live`，稳定一周后按 ADR 0026 删除小程序订阅提醒） → **冷站网页控制与节能联动（#542）**：Wave 1 控制退出模式（`MANUAL_OVERRIDE` / `SAFE_SHUTDOWN_EXIT` / 单机锁，#824/#825）与 Wave 2 ET1010 20 通道控制及水路联锁已完成并合入；Figma 原型（文件 `JWOOM4pyfWfug5bYxfBJeE`）已出待审，审核通过后实施网页端控制页面与节能策略调度；备份上云（#689）暂不做；换云/换企业域名调研见 `docs/research/cloud-migration-options-2026-10.md`。
 6. **宣传片与小程序对齐**：`tools/promo-video`（Windows 显卡渲染）里先画出的小程序功能见 `tools/promo-video/film/FEATURE-GAPS.md`，片后补齐。
 7. **功能与技术收尾**：节能验证（#484：非常规调整、需量与多措施分摊）、站点对标（#485：行业基准来源接入）、COP 影子模型积累后决定是否切换发布求解器、FDD 低温差新版本阈值（`node scripts/publish-fdd-rule-revision.mjs`，水泵 15/22 kW 铭牌与运行状态绑定待现场核实）、长范围分时电费查询内存优化、服务器部署能耗小时汇总（按 `docs/operations/energy-hourly-rollup.md`）、设备详情与工单侧栏新设计打磨。
 
@@ -93,6 +88,6 @@
 
 ## 运维手册与覆盖率
 
-- 故障与变更手册见 `docs/operations/`：`disk-full.md`、`postgres-crash.md`、`restore-from-backup.md`、`rollback.md`、`certificate-renewal.md`、`rotate-secrets.md`、`alert-receivers.md`、`alerts.md`、`energy-hourly-rollup.md`。
+- 故障与变更手册见 `docs/operations/`：`disk-full.md`（磁盘写满）、`postgres-crash.md`（Postgres 崩溃）、`restore-from-backup.md`（从备份恢复）、`rollback.md`（回滚）、`certificate-renewal.md`（证书续期）、`rotate-secrets.md`（密钥轮换）、`alert-receivers.md`（平台告警接收）、`alarm-delivery.md`（设备告警按站点发送与升级）、`alerts.md`、`energy-hourly-rollup.md`。
 - `.github/workflows/quality.yml` 检查 Go 语句与网页 `src` 行覆盖率不低于基线（允许 0.1 个百分点误差），并用录制网关跑登录、告警与实时运行 e2e；控制指令与 MQTT 关联不变量另由 `npm run command:formal`（`command-safety`）在静态/单测门禁中穷举校验。
 - Agent 技能树已完成 `pstack` 全量落地与 Antigravity + Windows/WSL 适配（共 `48` 个技能：`43` 个 `pstack` 技能 + `verify` + `command-safety` + 3 个 UI 技能，配置全部 `23` 套剧本及 `.ts`/`.sh` 辅助脚本；仅 Cursor 云端 `make-bot-ui` 因无宿主 API 未装）：统一了 `~/.gemini/config/GEMINI.md`、`~/.gemini/config/skills/`、`call_mcp_tool` / `mcp_<server>_<tool>`、`npm run ui:shadcn`、WSL 登录壳（`wsl -e bash -lc`）、Windows worktree 与 WSL `git`/`gh` 隔离、`worktree-audit.ts` URL 编码轨迹匹配与防误删保护，并在 WSL 仓库外预装 `mise`、`java@temurin-25`、`tla2tools@1.7.4`、`ffmpeg`/`ffprobe` 及 `/home/haozhang/.local/share/pele`（`pele@1.9.0`）；`.agents/skills/` 与 `.claude/skills/` 逐字节 1:1 镜像由 `npm run repo:check` 自动校对。

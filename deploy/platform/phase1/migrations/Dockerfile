@@ -89,6 +89,7 @@ COPY infra/registry/postgres/init/036-asset-nameplate.sql /opt/hvac/repo/infra/r
 COPY infra/registry/postgres/init/037-site-and-asset-control-locks.sql /opt/hvac/repo/infra/registry/postgres/init/037-site-and-asset-control-locks.sql
 COPY infra/registry/postgres/init/038-command-route-point-metadata.sql /opt/hvac/repo/infra/registry/postgres/init/038-command-route-point-metadata.sql
 COPY services/notification-service/migrations/005_reading_gap_reminders.sql /opt/hvac/repo/services/notification-service/migrations/005_reading_gap_reminders.sql
+COPY services/notification-service/migrations/006_alarm_delivery.sql /opt/hvac/repo/services/notification-service/migrations/006_alarm_delivery.sql
 
 FROM scratch AS sources-runtime
 

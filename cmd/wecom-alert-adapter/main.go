@@ -1,4 +1,5 @@
-// Command wecom-alert-adapter turns Alertmanager webhook posts into 企业微信 group-robot messages.
+// Command wecom-alert-adapter turns Alertmanager webhook posts into 企业微信 group-robot messages,
+// and sends energy-api's Alarm messages (POST /send, send.go) by mail, WeCom app or group robot.
 // The robot URL stays in a file on the host. When that file is missing, the process stays up and drops posts.
 package main
 
@@ -19,16 +20,19 @@ func main() {
 	health := flag.Bool("healthcheck", false, "exit 0 when /healthz on this address answers")
 	addr := flag.String("addr", envOr("WECOM_ADAPTER_ADDR", ":9095"), "listen address")
 	urlFile := flag.String("webhook-url-file", envOr("WECOM_WEBHOOK_URL_FILE", "/etc/alert-receiver/wecom-webhook-url"), "file containing the WeCom robot webhook URL")
+	sendTokenFile := flag.String("send-token-file", envOr("ALARM_SEND_TOKEN_FILE", "/etc/alarm-delivery/alarm-send-token"), "file containing the bearer token energy-api presents to POST /send")
+	receiverDir := flag.String("receiver-dir", envOr("ALERT_RECEIVER_DIR", "/etc/alert-receiver"), "directory with smtp.env, smtp-password, wecom-app.env and wecom-app-secret")
 	flag.Parse()
 	if *health {
 		os.Exit(healthcheck(*addr))
 	}
+	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: refuseRedirect}
 	server := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandler(*urlFile, &http.Client{Timeout: 8 * time.Second, CheckRedirect: refuseRedirect}),
+		Handler:           newHandlerWithSend(*urlFile, client, newSender(*sendTokenFile, *receiverDir, *urlFile, client)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      15 * time.Second,
+		WriteTimeout:      30 * time.Second,
 	}
 	log.Printf("wecom alert adapter listening on %s", *addr)
 	if err := server.ListenAndServe(); err != nil {
@@ -67,7 +71,14 @@ func healthcheck(addr string) int {
 }
 
 func newHandler(urlFile string, client *http.Client) http.Handler {
+	return newHandlerWithSend(urlFile, client, nil)
+}
+
+func newHandlerWithSend(urlFile string, client *http.Client, send *sender) http.Handler {
 	mux := http.NewServeMux()
+	if send != nil {
+		mux.HandleFunc("POST /send", send.serve)
+	}
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusOK)
 		_, _ = writer.Write([]byte("ok\n"))
