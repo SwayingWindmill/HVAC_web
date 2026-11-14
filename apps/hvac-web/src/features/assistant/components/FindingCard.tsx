@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { ArrowUpRight, Info } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
 import type { AssistantPart } from '../thread-model';
 import { toolPresentation } from '../tool-labels';
 import { FindingChart } from './FindingChart';
@@ -28,7 +29,7 @@ export function FindingCard({ finding, evidenceTools, siteId }: FindingData & { 
               <dt className="text-xs text-muted-foreground">{figure.label}</dt>
               <dd className="m-0 text-base font-semibold tabular-nums">
                 {figure.value}
-                {figure.unit === undefined ? null : <span className="ml-1 text-xs font-normal text-muted-foreground">{figure.unit}</span>}
+                {figure.unit === undefined ? null : <span className="ml-1 text-xs font-normal text-muted-foreground">{formatTelemetryUnit(figure.unit) ?? figure.unit}</span>}
               </dd>
             </div>
           ))}

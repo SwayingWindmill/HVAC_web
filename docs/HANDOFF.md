@@ -20,7 +20,7 @@
 | 运维 | 告警、故障诊断、工单、控制指令 | 告警、FDD（每 15 分钟跑一次）、工单、控制指令审批 |
 | 平台 | 通知、集成管理（`/settings/integrations`：现场网关、电表数据核对、传感器校准）、系统管理（用户与角色、改密、AI 助手用量） | 告警（与小程序同源）、网关证书、传感器/电表核对与探头零点建议（`docs/specs/integrations-workspace.md`）、IAM 角色指派（ADR 0022）、操作记录 |
 | 手机 | 微信小程序（`apps/hvac-miniprogram`，#664 已上线，0.2.0 审核中） | 经同一网关 `/api/v1/auth/app/sessions`（微信一键登录 `/sessions/wechat`，`Authorization` 头）；总览、运行、通知、我的已开放，助手页为过审暂藏（恢复见小程序 README） |
-| 全站 | AI 助手（页头 420px 面板；能耗/告警/设备详情「解释」） | `operations-agent-service` 经平台网关；未配 `DEEPSEEK_API_KEY` 时显示「未接入」 |
+| 全站 | AI 助手（页头 420px 面板；能耗/告警/设备详情「分析原因」） | `operations-agent-service` 经平台网关；未配 `DEEPSEEK_API_KEY` 时显示「未接入」 |
 
 日常用电曲线上的电费为按站点分时电价计算的估算值；正式电费以「电费账单」页归档的供电局结算电费单（或 `services/settlement-service`）为准。
 

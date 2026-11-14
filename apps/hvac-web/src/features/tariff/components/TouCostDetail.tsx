@@ -82,7 +82,7 @@ export function TouCostDetail({ tariff, cost, timeZone }: {
           </TableHeader>
           <TableBody>
             {cost.byPeriod.length === 0 ? (
-              <TableRow className="hover:bg-transparent"><TableCell colSpan={6} className="py-6 text-center text-muted-foreground">本期间还没有计量数据</TableCell></TableRow>
+              <TableRow className="hover:bg-transparent"><TableCell colSpan={6} className="py-6 text-center text-muted-foreground">所选时段暂无计量数据</TableCell></TableRow>
             ) : cost.byPeriod.map((usage) => (
               <TableRow key={usage.code} className="hover:bg-transparent">
                 <TableCell>

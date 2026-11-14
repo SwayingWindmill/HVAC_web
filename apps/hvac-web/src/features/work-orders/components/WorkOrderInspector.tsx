@@ -49,7 +49,7 @@ const FIXED_REASONS: Partial<Record<Transition, string>> = { start: '开始处�
 
 const OPERATION_LABELS: Readonly<Record<string, string>> = {
   CREATE: '创建',
-  OPEN: '开放',
+  OPEN: '转为待处理',
   ASSIGN: '指派',
   UNASSIGN: '取消指派',
   SCHEDULE: '计划',
@@ -191,7 +191,7 @@ export function WorkOrderInspector({ workOrderId, onClose }: {
                 {pending ? <Button variant="ghost" onClick={() => { setPending(null); setNote(''); }}>取消</Button> : null}
               </div>
               {workOrder.status === 'OPEN' && !workOrder.assigneeId ? <p className="text-xs text-muted-foreground">需先指定负责人</p> : null}
-              {workOrder.status === 'IN_PROGRESS' && tasksIncomplete ? <p className="text-xs text-muted-foreground">检查项全部完成后才能完成</p> : null}
+              {workOrder.status === 'IN_PROGRESS' && tasksIncomplete ? <p className="text-xs text-muted-foreground">勾完所有检查项后才能结单</p> : null}
               {error ? <p className="text-sm text-destructive-text">{workOrderErrorMessage(error)}</p> : null}
             </section>
 

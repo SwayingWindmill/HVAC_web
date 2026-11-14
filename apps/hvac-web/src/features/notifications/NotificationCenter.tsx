@@ -65,9 +65,9 @@ export function NotificationCenter() {
     {
       label: '正在发生',
       rows: happeningRows,
-      empty: unacknowledgedOnly && happening.length > 0 ? `正在发生的 ${happening.length} 条都有人确认了` : '现在没有正在发生的告警',
+      empty: unacknowledgedOnly && happening.length > 0 ? `正在发生的 ${happening.length} 条均已确认` : '现在没有正在发生的告警',
     },
-    { label: '最近恢复', rows: clearedRows, empty: unacknowledgedOnly ? '最近恢复的都有人确认了' : '最近没有恢复的告警' },
+    { label: '最近恢复', rows: clearedRows, empty: unacknowledgedOnly ? '最近恢复的均已确认' : '最近没有恢复的告警' },
   ];
   const shown = groups.flatMap((group) => group.rows);
   const selectedId = search.inspect ?? shown[0]?.alarm.alarmId;
@@ -82,7 +82,7 @@ export function NotificationCenter() {
       <PageHeader
         title="通知"
         description={site.displayName}
-        meta={active.isSuccess ? <PageMeta dot={waiting > 0 ? 'warning' : 'idle'}>{waiting > 0 ? `${waiting} 条正在发生、没人确认` : '正在发生的都有人确认了'}</PageMeta> : undefined}
+        meta={active.isSuccess ? <PageMeta dot={waiting > 0 ? 'warning' : 'idle'}>{waiting > 0 ? `${waiting} 条活动告警待确认` : '活动告警均已确认'}</PageMeta> : undefined}
         actions={(
           <Button variant="outline" size="sm" onClick={refresh} disabled={active.isFetching || cleared.isFetching}>
             <RefreshCw data-icon="inline-start" className={active.isFetching || cleared.isFetching ? 'animate-spin' : undefined} />

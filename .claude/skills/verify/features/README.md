@@ -27,7 +27,7 @@ This directory indexes user-facing verification journeys for HVAC Web across all
 
 - [Sign-in and MFA](./sign-in-and-mfa.md) covers `/sign-in` password and TOTP form submissions, error alerts, and expired login notices (`e2e/sign-in.spec.ts`).
 - [Overview and data-gap banner](./overview-and-data-gaps.md) covers `/overview` energy tabs, live plant KPIs, queue navigation, and top `data-gap-banner` alerts (`e2e/overview.spec.ts`).
-- [Operations AI assistant panel](./assistant-panel.md) covers the 420px `AI 助手` drawer, inline `解释` prompts, finding charts, follow-up turns, and disconnected error copy (`e2e/assistant.spec.ts`).
+- [Operations AI assistant panel](./assistant-panel.md) covers the 420px `AI 助手` drawer, inline `分析原因` prompts, finding charts, follow-up turns, and disconnected error copy (`e2e/assistant.spec.ts`).
 - [Notifications](./notifications.md) covers `/notifications` active-above-cleared alarm feed, `只看未确认` filtering, in-place acknowledgement, and header bell count sync (`e2e/notifications.spec.ts`).
 
 ### 运行与运维
@@ -56,4 +56,4 @@ This directory indexes user-facing verification journeys for HVAC Web across all
 
 - [Integrations workspace](./integrations-workspace.md) covers `/settings/integrations` tabs (`现场网关`, `电表数据核对`, `传感器校准`), enrollment-code disposal on `Escape`, and permanent gateway revocation (`e2e/integrations.spec.ts`, `e2e/gateway-credentials.spec.ts`).
 - [System users and roles](./system-users-and-roles.md) covers `/system?tab=users` user administration, role summaries, password change, and capability group rendering without unnamed keys (`e2e/users.spec.ts`, `e2e/system.spec.ts`).
-- [System governance and audit log](./system-governance-and-audit.md) covers `/system` platform overview, `站点与组织`, `资产与点位` unsaved draft guard, `操作记录` (`audit.read` + translated facts), and `AI 助手` usage (`e2e/system.spec.ts`).
+- [System governance and audit log](./system-governance-and-audit.md) covers `/system` platform overview, `站点与组织`, `设备与点位登记` unsaved draft guard, `操作记录` (`audit.read` + translated facts), and `AI 助手` usage (`e2e/system.spec.ts`).

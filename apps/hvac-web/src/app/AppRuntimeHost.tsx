@@ -22,7 +22,7 @@ export function ConfigurationBlocked({ failures }: { failures: RuntimeConfigFail
       <section className="real-shell-card" aria-labelledby="real-config-title">
         <p className="real-shell-eyebrow">无法启动</p>
         <FocusHeading id="real-config-title">运行配置无效</FocusHeading>
-        <p>配置有误，应用已停止：不打开业务页面，也不会用本地数据代替。</p>
+        <p>当前环境配置有误，无法打开页面，请联系管理员检查部署配置。</p>
         <ul className="real-shell-failures">
           {failures.map((failure) => (
             <li key={failure.code}>
@@ -68,11 +68,11 @@ function PrincipalUnavailableState({ config, snapshot, retry }: { config: Runtim
     <section className="real-shell-card" aria-labelledby="real-unavailable-title" data-testid="real-shell-unavailable">
       <p className="real-shell-eyebrow">登录身份</p>
       <FocusHeading id="real-unavailable-title">无法确认登录身份</FocusHeading>
-      <p>业务页面暂不打开；系统不会用本地数据或缓存的身份代替。</p>
+      <p>暂时无法验证当前登录会话，请稍后重试。</p>
       {snapshot.failure ? (
         <div className="real-shell-problem" role="alert" data-retryable={String(snapshot.failure.retryable)}>
           <strong>身份服务暂时不可用</strong>
-          <span>请稍后重试；系统不会使用缓存身份进入业务页面。</span>
+          <span>连接恢复后点击重试即可继续使用。</span>
         </div>
       ) : null}
       <div className="real-shell-actions">

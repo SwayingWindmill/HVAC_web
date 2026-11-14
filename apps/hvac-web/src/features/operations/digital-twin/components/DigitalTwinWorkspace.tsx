@@ -114,14 +114,14 @@ export function DigitalTwinWorkspace() {
       caption: `进 ${selectedChiller.values['chiller.entering_chilled_water_temperature']?.display ?? '—'} → 出 ${selectedChiller.values['chiller.leaving_chilled_water_temperature']?.display ?? '—'}`,
       state: 'current',
     } : { icon: LOOP_ICONS.chiller, label: '冷水机组', caption: `${runningOf(chillers)} / ${chillers.length} 运行`, state: runningOf(chillers) > 0 ? 'done' : 'idle' },
-    { icon: LOOP_ICONS.supply, label: '供水', caption: supply ? `${supply.display} ℃` : '—', state: supply ? 'done' : 'idle' },
+    { icon: LOOP_ICONS.supply, label: '供水', caption: supply ? `${supply.display} °C` : '—', state: supply ? 'done' : 'idle' },
     {
       icon: cut ? LOOP_ICONS.fcu : LOOP_ICONS.terminal,
       label: selectedTerminal ? selectedTerminal.name : cut ? `${cut}F 末端` : '楼宇末端',
       caption: terminalConnected ? '已接入' : '未接入',
       state: selectedTerminal ? 'current' : terminalConnected ? 'done' : 'idle',
     },
-    { icon: LOOP_ICONS.return, label: '回水', caption: back ? `${back.display} ℃` : '—', state: back ? 'done' : 'idle' },
+    { icon: LOOP_ICONS.return, label: '回水', caption: back ? `${back.display} °C` : '—', state: back ? 'done' : 'idle' },
   ];
   const difference = supply?.numeric != null && back?.numeric != null ? formatDecimal(back.numeric - supply.numeric, 1) : null;
 

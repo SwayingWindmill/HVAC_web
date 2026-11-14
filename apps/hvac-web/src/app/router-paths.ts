@@ -12,6 +12,6 @@ export function siteIdFromLocation(search: string): string | undefined {
 
 /** The same workspace re-targeted at another Site. Object selections are dropped. */
 export function workspaceLocationForSite(pathname: string, siteId: string): string {
-  if (!isUUIDv7(siteId)) throw new Error('Site identity must be a Registry UUIDv7.');
+  if (!isUUIDv7(siteId)) throw new Error('站点标识格式无效。');
   return `${pathname}?site=${siteId}`;
 }

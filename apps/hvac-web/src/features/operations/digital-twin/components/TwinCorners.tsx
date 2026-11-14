@@ -213,7 +213,7 @@ export function SiteCard({ siteId, siteName, sampledAt, timeZone, today, outdoor
         <Tile label="今日用电"><Value value={today.electricity} unit="kWh" /></Tile>
         <Tile label="今日供冷"><Value value={today.cooling} unit="kWh" /></Tile>
         <Tile label="综合能效"><Value value={today.cop} /></Tile>
-        <Tile label="室外 · 湿球"><Value value={outdoor.dry} unit="℃" /> <Value value={outdoor.wet} unit="℃" /></Tile>
+        <Tile label="室外 · 湿球"><Value value={outdoor.dry} unit="°C" /> <Value value={outdoor.wet} unit="°C" /></Tile>
       </dl>
       <div className="border-t border-divider px-3.5 pt-0.5 pb-1.5">
         <div className="flex h-[30px] items-center text-xs font-semibold">设备<span className="ml-auto font-normal text-muted-foreground">运行 / 台数</span></div>
@@ -418,7 +418,7 @@ export function TwinLoop({ title, flow, nodes, difference, siteId }: {
       </div>
       <Link to="/operations/realtime" search={{ site: siteId }} className="m-2 flex w-[170px] shrink-0 flex-col gap-1 rounded-lg border border-divider bg-muted px-3 py-2.5 outline-none hover:border-input-hover focus-visible:border-ring">
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Thermometer className="size-3.5" aria-hidden="true" />供回水温差</span>
-        <span className="text-xl leading-[26px] font-semibold"><Value value={difference} unit="℃" /></span>
+        <span className="text-xl leading-[26px] font-semibold"><Value value={difference} unit="°C" /></span>
         <span className="flex items-center text-xs font-medium text-primary">实时运行<ChevronRight className="ml-auto size-3.5" aria-hidden="true" /></span>
       </Link>
     </section>

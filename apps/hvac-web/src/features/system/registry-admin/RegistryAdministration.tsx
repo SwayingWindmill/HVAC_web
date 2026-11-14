@@ -160,7 +160,7 @@ export function RegistryAdministration({ capabilities: capabilityList, registerU
           <Card>
             <CardHeader><CardTitle className="flex items-center gap-2"><Plus className="size-4" />创建首个站点</CardTitle><CardDescription>站点创建由服务端登记系统确认并写入。</CardDescription></CardHeader>
             <CardContent className="space-y-4">
-              <Alert><AlertTitle>当前还没有可管理站点</AlertTitle><AlertDescription>填写正式站点信息后提交；浏览器不会生成本地模拟站点。</AlertDescription></Alert>
+              <Alert><AlertTitle>当前还没有可管理站点</AlertTitle><AlertDescription>填写站点编码、名称和时区后即可创建首个站点。</AlertDescription></Alert>
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="grid gap-1.5 text-sm"><span>站点编码</span><Input value={createDraft.code} placeholder="central-plant" onChange={(event) => { setCreateDraft((current) => ({ ...current, code: event.target.value })); setDirty(true); }} /></label>
                 <label className="grid gap-1.5 text-sm"><span>站点名称</span><Input value={createDraft.displayName} onChange={(event) => { setCreateDraft((current) => ({ ...current, displayName: event.target.value })); setDirty(true); }} /></label>
