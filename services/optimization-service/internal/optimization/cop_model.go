@@ -428,22 +428,25 @@ func (chiller ChillerFit) referenceEnergy(since time.Time, delta float64) (float
 // least electricity, inside the frozen comfort and safety constraints. It only recommends; the
 // condenser-water reset needs a condenser setpoint Point, which no Site maps yet.
 type COPModelSolver struct {
-	History PlantHistory
+	History       PlantHistory
+	Staging       StagingSnapshotReader
+	StagingPolicy *StagingPolicy
 }
 
 // ShadowEvaluation is what a shadow solver made of one Optimization run.
 type ShadowEvaluation struct {
-	Solver         string           `json:"solver"`
-	Mode           string           `json:"mode"`
-	Outcome        string           `json:"outcome"`
-	Reason         string           `json:"reason,omitempty"`
-	Fit            *PlantFit        `json:"fit,omitempty"`
-	CVRMSE         *float64         `json:"cvRmse"`
-	CondenserReset map[string]any   `json:"condenserReset"`
-	EnergyResponse map[string]any   `json:"energyResponse,omitempty"`
-	ZoneResponse   map[string]any   `json:"zoneResponse,omitempty"`
-	Candidates     []map[string]any `json:"candidates,omitempty"`
-	Recommendation *Recommendation  `json:"recommendation"`
+	Solver         string             `json:"solver"`
+	Mode           string             `json:"mode"`
+	Outcome        string             `json:"outcome"`
+	Reason         string             `json:"reason,omitempty"`
+	Fit            *PlantFit          `json:"fit,omitempty"`
+	CVRMSE         *float64           `json:"cvRmse"`
+	CondenserReset map[string]any     `json:"condenserReset"`
+	EnergyResponse map[string]any     `json:"energyResponse,omitempty"`
+	ZoneResponse   map[string]any     `json:"zoneResponse,omitempty"`
+	Candidates     []map[string]any   `json:"candidates,omitempty"`
+	Staging        *StagingEvaluation `json:"staging,omitempty"`
+	Recommendation *Recommendation    `json:"recommendation"`
 }
 
 const (
@@ -489,6 +492,7 @@ func (solver COPModelSolver) Evaluate(ctx context.Context, request Request, at t
 	}
 	fit := FitPlant(buckets, from, to)
 	evaluation.Fit, evaluation.CVRMSE = &fit, fit.CVRMSEPower
+	evaluation.Staging = evaluateStagingWithFit(ctx, request.TenantID, request.SiteID, at, fit, solver.Staging, solver.StagingPolicy)
 	usable := fit.usable()
 	if len(usable) == 0 {
 		evaluation.Outcome, evaluation.Reason = ShadowNoUsableModel, "no Chiller has a usable COP fit"
