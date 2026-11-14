@@ -105,7 +105,7 @@ try {
       || count(*) FILTER (WHERE retry_policy <> 'PRE_SEND_ONLY')::text
     FROM command_runtime.capability_profiles
   `);
-  expectEqual(capabilityState, '9|1|8|0', 'Capability target runtime');
+  expectEqual(capabilityState, '11|1|10|0', 'Capability target runtime');
   report.assertions.capabilityState = capabilityState;
   report.assertions.capabilityProfiles = psql(`
     SELECT capability_name || '|' || capability_revision || '|' || status || '|' || connector_kind || '|' || retry_policy

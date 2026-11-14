@@ -59,8 +59,10 @@ type protoStepKind uint8
 const (
 	stepSubmitLowRisk protoStepKind = iota + 1
 	stepSubmitMediumRisk
+	stepSubmitHighRisk
 	stepApproveValid
 	stepApproveSelfRejected
+	stepCancelIntent
 	stepPrepareDispatchValid
 	stepPrepareDispatchExpiredGrant
 	stepPrepareDispatchWhenFrozen
@@ -89,10 +91,14 @@ func (k protoStepKind) String() string {
 		return "Submit(lowRisk)"
 	case stepSubmitMediumRisk:
 		return "Submit(mediumRisk)"
+	case stepSubmitHighRisk:
+		return "Submit(highRisk)"
 	case stepApproveValid:
 		return "Approve(validApprover)"
 	case stepApproveSelfRejected:
 		return "Approve(selfApprover)"
+	case stepCancelIntent:
+		return "CancelIntent"
 	case stepPrepareDispatchValid:
 		return "PrepareDispatch(validGrant)"
 	case stepPrepareDispatchExpiredGrant:
@@ -139,19 +145,20 @@ func (k protoStepKind) String() string {
 }
 
 type protoStateKey struct {
-	submitted        bool
-	intentStatus     commandmodel.IntentStatus
-	attemptCount     int
-	attemptStatus    commandmodel.AttemptStatus
-	corrState        commandmodel.CorrelationState
-	publishesAttempt int
-	deviceFrozen     bool
-	verificationOpen bool
-	pastDeadline     bool
-	staleAttemptUsed bool
-	selfApproveTried bool
-	expiredClaimTry  bool
-	missingEdgeTried bool
+	submitted           bool
+	intentStatus        commandmodel.IntentStatus
+	attemptCount        int
+	attemptStatus       commandmodel.AttemptStatus
+	corrState           commandmodel.CorrelationState
+	publishesAttempt    int
+	deviceFrozen        bool
+	verificationOpen    bool
+	pastDeadline        bool
+	staleAttemptUsed    bool
+	selfApproveTried    bool
+	expiredClaimTry     bool
+	missingEdgeTried    bool
+	cancelDispatchTried bool
 }
 
 type protoNode struct {
@@ -160,21 +167,22 @@ type protoNode struct {
 }
 
 type protoSim struct {
-	now              time.Time
-	service          *commandservice.Service
-	commandID        string
-	mediumRisk       bool
-	dispatchEnv      commandmodel.DispatchEnvelope
-	verifyEnv        commandmodel.VerificationEnvelope
-	hasVerifyEnv     bool
-	corrState        commandmodel.CorrelationState
-	publishesAttempt int
-	deviceFrozen     bool
-	staleAttemptUsed bool
-	selfApproveTried bool
-	expiredClaimTry  bool
-	missingEdgeTried bool
-	stepCount        int
+	now                 time.Time
+	service             *commandservice.Service
+	commandID           string
+	targetSetpoint      float64
+	dispatchEnv         commandmodel.DispatchEnvelope
+	verifyEnv           commandmodel.VerificationEnvelope
+	hasVerifyEnv        bool
+	corrState           commandmodel.CorrelationState
+	publishesAttempt    int
+	deviceFrozen        bool
+	staleAttemptUsed    bool
+	selfApproveTried    bool
+	expiredClaimTry     bool
+	missingEdgeTried    bool
+	cancelDispatchTried bool
+	stepCount           int
 }
 
 func newProtoSim() *protoSim {
@@ -196,19 +204,20 @@ func (s *protoSim) key() protoStateKey {
 		attemptStatus = intent.Attempts[len(intent.Attempts)-1].Status
 	}
 	return protoStateKey{
-		submitted:        true,
-		intentStatus:     intent.Status,
-		attemptCount:     len(intent.Attempts),
-		attemptStatus:    attemptStatus,
-		corrState:        s.corrState,
-		publishesAttempt: s.publishesAttempt,
-		deviceFrozen:     s.deviceFrozen,
-		verificationOpen: s.hasVerifyEnv,
-		pastDeadline:     s.hasVerifyEnv && s.now.After(s.verifyEnv.VerificationDeadline),
-		staleAttemptUsed: s.staleAttemptUsed,
-		selfApproveTried: s.selfApproveTried,
-		expiredClaimTry:  s.expiredClaimTry,
-		missingEdgeTried: s.missingEdgeTried,
+		submitted:           true,
+		intentStatus:        intent.Status,
+		attemptCount:        len(intent.Attempts),
+		attemptStatus:       attemptStatus,
+		corrState:           s.corrState,
+		publishesAttempt:    s.publishesAttempt,
+		deviceFrozen:        s.deviceFrozen,
+		verificationOpen:    s.hasVerifyEnv,
+		pastDeadline:        s.hasVerifyEnv && s.now.After(s.verifyEnv.VerificationDeadline),
+		staleAttemptUsed:    s.staleAttemptUsed,
+		selfApproveTried:    s.selfApproveTried,
+		expiredClaimTry:     s.expiredClaimTry,
+		missingEdgeTried:    s.missingEdgeTried,
+		cancelDispatchTried: s.cancelDispatchTried,
 	}
 }
 
@@ -236,16 +245,26 @@ func replayProtoSim(steps []protoStepKind, hooks FaultHooks) (*protoSim, *Counte
 func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Counterexample, error) {
 	sim.stepCount++
 	switch step {
-	case stepSubmitLowRisk, stepSubmitMediumRisk:
+	case stepSubmitLowRisk, stepSubmitMediumRisk, stepSubmitHighRisk:
 		setpoint := 24.0
-		if step == stepSubmitMediumRisk {
+		switch step {
+		case stepSubmitMediumRisk:
 			setpoint = 25.0
-			sim.mediumRisk = true
+		case stepSubmitHighRisk:
+			setpoint = 26.0
 		}
+		sim.targetSetpoint = setpoint
 		req := makeSubmitRequest("formal-req", setpoint, sim.now)
 		res, err := sim.service.Submit(req)
 		if err != nil {
 			return nil, fmt.Errorf("submit failed unexpectedly: %w", err)
+		}
+		if step == stepSubmitHighRisk && (res.Intent.Risk != commandmodel.RiskHigh || res.Intent.ApprovalPolicy != commandmodel.ApprovalNone || res.Intent.Status != commandmodel.IntentQueued) {
+			return &Counterexample{
+				Property: PropertyP1,
+				Suite:    "SingleCommandProtocol",
+				Summary:  fmt.Sprintf("high-risk submit did not enter QUEUED with ApprovalNone directly: risk=%s policy=%s status=%s", res.Intent.Risk, res.Intent.ApprovalPolicy, res.Intent.Status),
+			}, nil
 		}
 		sim.commandID = res.Intent.ID
 
@@ -296,6 +315,57 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 				Summary:  "self-approval by requester was accepted",
 			}, nil
 		}
+
+	case stepCancelIntent:
+		intent := mustIntent(sim)
+		cancelReq := commandmodel.CancelRequest{
+			CommandID:     sim.commandID,
+			TenantID:      baseTenantID,
+			Reason:        "OPERATOR_CANCELLED",
+			Authorization: submitAuthorization(submitPrincipalID, sim.now, commandmodel.RiskHigh),
+		}
+		if intent.Status != commandmodel.IntentAwaitingApproval && intent.Status != commandmodel.IntentQueued {
+			sim.cancelDispatchTried = true
+			if decision, err := commandservice.DecideCommandCancel(intent, cancelReq, sim.now); err == nil {
+				return &Counterexample{
+					Property: PropertyP3,
+					Suite:    "SingleCommandProtocol",
+					Summary:  fmt.Sprintf("cancel allowed non-pending status %s -> %s", intent.Status, decision.IntentFinal),
+				}, nil
+			}
+			if _, err := sim.service.Cancel(cancelReq); err == nil {
+				return &Counterexample{
+					Property: PropertyP3,
+					Suite:    "SingleCommandProtocol",
+					Summary:  fmt.Sprintf("service.Cancel allowed status %s", intent.Status),
+				}, nil
+			}
+			return nil, nil
+		}
+		decision, decErr := commandservice.DecideCommandCancel(intent, cancelReq, sim.now)
+		if decErr != nil {
+			return nil, fmt.Errorf("valid cancel decision failed: %w", decErr)
+		}
+		cancelled, err := sim.service.Cancel(cancelReq)
+		if err != nil {
+			return nil, fmt.Errorf("valid cancel failed unexpectedly: %w", err)
+		}
+		if cancelled.Status != commandmodel.IntentCancelled || decision.IntentFinal != commandmodel.IntentCancelled {
+			return nil, fmt.Errorf("cancel did not transition to CANCELLED (intent=%s decision=%s)", cancelled.Status, decision.IntentFinal)
+		}
+		canClaim := commandservice.CanClaimQueuedIntent(cancelled, sim.deviceFrozen, nil, sim.now)
+		_, prepErr := sim.service.PrepareDispatch(sim.commandID, "dispatcher-cancelled", sim.now.Add(dispatchLeaseWindow))
+		if hooks.AllowDispatchCancelledIntent {
+			canClaim = true
+		}
+		if canClaim || prepErr == nil {
+			return &Counterexample{
+				Property: PropertyP1,
+				Suite:    "SingleCommandProtocol",
+				Summary:  "cancelled intent remained claimable or dispatchable",
+			}, nil
+		}
+		sim.commandID = "" // Cancelled terminal intent cleanly ends this protocol lifecycle.
 
 	case stepPrepareDispatchValid:
 		env, err := sim.service.PrepareDispatch(sim.commandID, "dispatcher-a", sim.now.Add(dispatchLeaseWindow))
@@ -439,8 +509,8 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 
 	case stepResolveAckValid:
 		target := 24.0
-		if sim.mediumRisk {
-			target = 25.0
+		if sim.targetSetpoint > 0 {
+			target = sim.targetSetpoint
 		}
 		res := commandmodel.ConnectorResult{
 			Phase:         commandmodel.ConnectorAcknowledged,
@@ -514,8 +584,8 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 	case stepResolveVerificationValidInWindow:
 		sim.now = sim.now.Add(2 * time.Second)
 		target := 24.0
-		if sim.mediumRisk {
-			target = 25.0
+		if sim.targetSetpoint > 0 {
+			target = sim.targetSetpoint
 		}
 		vRes := commandmodel.VerificationResult{
 			Outcome:    commandmodel.VerificationSucceeded,
@@ -553,8 +623,8 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 	case stepResolveVerificationValidPastDeadline:
 		sim.now = sim.verifyEnv.VerificationDeadline.Add(time.Second)
 		target := 24.0
-		if sim.mediumRisk {
-			target = 25.0
+		if sim.targetSetpoint > 0 {
+			target = sim.targetSetpoint
 		}
 		vRes := commandmodel.VerificationResult{
 			Outcome:    commandmodel.VerificationSucceeded,
@@ -640,7 +710,7 @@ func candidateProtoSteps(sim *protoSim) []protoStepKind {
 		if sim.stepCount > 0 {
 			return nil
 		}
-		return []protoStepKind{stepSubmitLowRisk, stepSubmitMediumRisk}
+		return []protoStepKind{stepSubmitLowRisk, stepSubmitMediumRisk, stepSubmitHighRisk}
 	}
 	intent := mustIntent(sim)
 	var latestAttemptStatus commandmodel.AttemptStatus
@@ -653,7 +723,7 @@ func candidateProtoSteps(sim *protoSim) []protoStepKind {
 		if !sim.selfApproveTried {
 			out = append(out, stepApproveSelfRejected)
 		}
-		out = append(out, stepApproveValid)
+		out = append(out, stepApproveValid, stepCancelIntent)
 
 	case commandmodel.IntentQueued:
 		if len(intent.Attempts) < maxAttemptsPerCommand {
@@ -662,9 +732,12 @@ func candidateProtoSteps(sim *protoSim) []protoStepKind {
 				out = append(out, stepPrepareDispatchExpiredGrant)
 			}
 		}
-		out = append(out, stepPrepareDispatchWhenFrozen)
+		out = append(out, stepPrepareDispatchWhenFrozen, stepCancelIntent)
 
 	case commandmodel.IntentDispatching:
+		if !sim.cancelDispatchTried {
+			out = append(out, stepCancelIntent)
+		}
 		switch latestAttemptStatus {
 		case commandmodel.AttemptPrepared:
 			switch sim.corrState {
@@ -928,6 +1001,66 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 			next := st
 			next.c1GrantValid = false
 			if cx, err := enqueue(next, "ExpireGrant(cmd-1)", cur.trace); err != nil {
+				return SuiteReport{}, err
+			} else if cx != nil {
+				return SuiteReport{Suite: "MultiCommandDeviceExclusivity", VisitedStates: len(visited), Transitions: transitions, Passed: false, Counterexample: cx}, nil
+			}
+		}
+
+		// Cancel pending/queued commands before dispatch and confirm cancellation unblocks later queued intents.
+		for cmdNum := 1; cmdNum <= 2; cmdNum++ {
+			status := st.c1Status
+			grantValid := st.c1GrantValid
+			if cmdNum == 2 {
+				status = st.c2Status
+				grantValid = st.c2GrantValid
+			}
+			if status == commandmodel.IntentCancelled {
+				i := makeSyntheticIntent(uint64(cmdNum), status, grantValid, now)
+				canClaim := commandservice.CanClaimQueuedIntent(i, st.deviceFrozen, nil, now)
+				if hooks.AllowDispatchCancelledIntent {
+					canClaim = true
+				}
+				if canClaim {
+					trace := append(append([]string(nil), cur.trace...), fmt.Sprintf("ClaimCancelled(cmd-%d)", cmdNum))
+					return SuiteReport{
+						Suite:         "MultiCommandDeviceExclusivity",
+						VisitedStates: len(visited),
+						Transitions:   transitions,
+						Passed:        false,
+						Counterexample: &Counterexample{
+							Property: PropertyP1,
+							Suite:    "MultiCommandDeviceExclusivity",
+							Summary:  fmt.Sprintf("cancelled cmd-%d remained claimable for dispatch", cmdNum),
+							Trace:    trace,
+						},
+					}, nil
+				}
+				continue
+			}
+			if !grantValid || (status != commandmodel.IntentAwaitingApproval && status != commandmodel.IntentQueued) {
+				continue
+			}
+			decision, err := commandservice.DecideCommandCancel(
+				makeSyntheticIntent(uint64(cmdNum), status, grantValid, now),
+				commandmodel.CancelRequest{
+					CommandID:     fmt.Sprintf("cmd-%d", cmdNum),
+					TenantID:      baseTenantID,
+					Reason:        "OPERATOR_CANCELLED",
+					Authorization: submitAuthorization(submitPrincipalID, now, commandmodel.RiskHigh),
+				},
+				now,
+			)
+			if err != nil {
+				return SuiteReport{}, err
+			}
+			next := st
+			if cmdNum == 1 {
+				next.c1Status = decision.IntentFinal
+			} else {
+				next.c2Status = decision.IntentFinal
+			}
+			if cx, err := enqueue(next, fmt.Sprintf("Cancel(cmd-%d)", cmdNum), cur.trace); err != nil {
 				return SuiteReport{}, err
 			} else if cx != nil {
 				return SuiteReport{Suite: "MultiCommandDeviceExclusivity", VisitedStates: len(visited), Transitions: transitions, Passed: false, Counterexample: cx}, nil

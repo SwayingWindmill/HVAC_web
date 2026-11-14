@@ -12,6 +12,8 @@ type Capability string
 const (
 	CapabilityStart                              Capability = "START"
 	CapabilityStop                               Capability = "STOP"
+	CapabilityStartUnitSequence                  Capability = "START_UNIT_SEQUENCE"
+	CapabilityStopUnitSequence                   Capability = "STOP_UNIT_SEQUENCE"
 	CapabilityResetFault                         Capability = "RESET_FAULT"
 	CapabilitySetTemperatureSetpoint             Capability = "SET_TEMPERATURE_SETPOINT"
 	CapabilitySetChilledWaterTemperatureSetpoint Capability = "SET_CHILLED_WATER_TEMPERATURE_SETPOINT"
@@ -74,9 +76,13 @@ type CapabilityProfile struct {
 func CapabilityProfileFor(capability Capability) (CapabilityProfile, bool) {
 	switch capability {
 	case CapabilityStart:
-		return CapabilityProfile{Revision: "capability:start:v1", BaseRisk: RiskMedium}, true
+		return CapabilityProfile{Revision: "capability:start:v1", BaseRisk: RiskHigh}, true
 	case CapabilityStop:
-		return CapabilityProfile{Revision: "capability:stop:v1", BaseRisk: RiskMedium}, true
+		return CapabilityProfile{Revision: "capability:stop:v1", BaseRisk: RiskHigh}, true
+	case CapabilityStartUnitSequence:
+		return CapabilityProfile{Revision: "capability:start-unit-sequence:v1", BaseRisk: RiskHigh}, true
+	case CapabilityStopUnitSequence:
+		return CapabilityProfile{Revision: "capability:stop-unit-sequence:v1", BaseRisk: RiskHigh}, true
 	case CapabilityResetFault:
 		return CapabilityProfile{Revision: "capability:reset-fault:v1", BaseRisk: RiskLow}, true
 	case CapabilitySetTemperatureSetpoint:
@@ -125,11 +131,38 @@ func ParametersValid(capability Capability, parameters CommandParameters) bool {
 	return ok && value >= profile.Minimum && value <= profile.Maximum
 }
 
+// EvaluateRiskLevel computes the deterministic command risk level and reasons from
+// the capability profile and, for numeric capabilities, the current reported value.
+func EvaluateRiskLevel(capability Capability, parameters CommandParameters, currentValue *float64) (RiskLevel, []string, bool) {
+	profile, ok := CapabilityProfileFor(capability)
+	if !ok {
+		return "", nil, false
+	}
+	if profile.ParameterKey == "" {
+		return profile.BaseRisk, []string{"CAPABILITY_BASE_RISK"}, true
+	}
+	value, valid := ParameterValue(capability, parameters)
+	if !valid || currentValue == nil {
+		return "", nil, false
+	}
+	delta := math.Abs(value - *currentValue)
+	switch {
+	case delta <= profile.LowRiskDelta:
+		return RiskLow, []string{"CAPABILITY_DELTA_LOW"}, true
+	case delta <= profile.MediumRiskDelta:
+		return RiskMedium, []string{"CAPABILITY_DELTA_MEDIUM"}, true
+	case delta <= profile.MaximumDelta:
+		return RiskHigh, []string{"CAPABILITY_DELTA_HIGH"}, true
+	default:
+		return "", nil, false
+	}
+}
+
 func ExpectedReportedValue(capability Capability, parameters CommandParameters) (ScalarValue, bool) {
 	switch capability {
-	case CapabilityStart:
+	case CapabilityStart, CapabilityStartUnitSequence:
 		return TextScalar("RUNNING"), len(parameters) == 0
-	case CapabilityStop:
+	case CapabilityStop, CapabilityStopUnitSequence:
 		return TextScalar("STOPPED"), len(parameters) == 0
 	case CapabilityResetFault:
 		return TextScalar(""), len(parameters) == 0
@@ -424,6 +457,26 @@ type ReconcileRequest struct {
 	CommandID     string
 	Outcome       ReconciledOutcome
 	Authorization AuthorizationSnapshot
+}
+
+// CancelRequest cancels an AWAITING_APPROVAL or QUEUED command before dispatch starts.
+// Authorization is the caller's COMMAND_SUBMIT grant for the command's Device and Capability.
+type CancelRequest struct {
+	TenantID      string
+	CommandID     string
+	Reason        string
+	Authorization AuthorizationSnapshot
+}
+
+// CancelPendingRequest cancels pending commands scoped to a Site (and optional Device IDs)
+// when an operator activates a control exit or asset lock.
+type CancelPendingRequest struct {
+	TenantID    string
+	SiteID      string
+	DeviceIDs   []string
+	PrincipalID string
+	Reason      string
+	CausationID string
 }
 
 type DispatchEnvelope struct {

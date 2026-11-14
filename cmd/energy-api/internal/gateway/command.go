@@ -52,10 +52,17 @@ type commandController struct {
 	maxResponseBytes int64
 }
 
+const (
+	identityTOTPVerifyPath     = "/internal/v1/mfa/totp/verify"
+	identityTOTPVerifyAudience = "identity-service"
+	identityTOTPVerifyAction   = "mfa:totp:verify"
+)
+
 type createCommandRequest struct {
-	AssetID        string                         `json:"assetId"`
-	CommandPointID string                         `json:"commandPointId"`
-	Parameters     commandmodel.CommandParameters `json:"parameters"`
+	AssetID          string                         `json:"assetId"`
+	CommandPointID   string                         `json:"commandPointId"`
+	Parameters       commandmodel.CommandParameters `json:"parameters"`
+	VerificationCode string                         `json:"verificationCode,omitempty"`
 }
 
 type preparedCommand struct {
@@ -118,6 +125,14 @@ type internalCommandReconciliation struct {
 	Outcome     commandmodel.ReconciledOutcome `json:"outcome"`
 }
 
+type internalCommandCancel struct {
+	TenantID    string `json:"tenantId"`
+	SiteID      string `json:"siteId"`
+	DeviceID    string `json:"deviceId"`
+	PrincipalID string `json:"principalId"`
+	Reason      string `json:"reason,omitempty"`
+}
+
 type commandTransitionView struct {
 	FromStatus *commandmodel.IntentStatus `json:"fromStatus,omitempty"`
 	ToStatus   commandmodel.IntentStatus  `json:"toStatus"`
@@ -161,6 +176,7 @@ const (
 	commandRouteItem
 	commandRouteApproval
 	commandRouteReconciliation
+	commandRouteCancel
 )
 
 func newCommandController(config *CommandConfig) *commandController {
@@ -211,6 +227,9 @@ func matchPublicCommandRoute(path string) (commandRouteKind, string, bool) {
 	} else if strings.HasSuffix(raw, "/reconcile") {
 		kind = commandRouteReconciliation
 		raw = strings.TrimSuffix(raw, "/reconcile")
+	} else if strings.HasSuffix(raw, "/cancel") {
+		kind = commandRouteCancel
+		raw = strings.TrimSuffix(raw, "/cancel")
 	}
 	if raw == "" || strings.Contains(raw, "/") {
 		return 0, "", false
@@ -255,6 +274,12 @@ func dispatchCommandRoute(h *handler, writer http.ResponseWriter, request *http.
 			return
 		}
 		h.reconcileCommand(writer, request, commandID)
+	case commandRouteCancel:
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowedFor(writer, request, http.MethodPost)
+			return
+		}
+		h.cancelCommand(writer, request, commandID)
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route does not exist.", false, nil)
 	}
@@ -295,10 +320,20 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The Asset capability parameters are invalid.", false, nil)
 		return
 	}
+	if lockFailure := h.enforceControlLockForCommand(request, session, target.device.SiteID, target.asset.ID, target.device.ID); lockFailure != nil {
+		h.writeCommandFailure(writer, request, *lockFailure)
+		return
+	}
 	currentState, failure := h.readCommandCurrentState(request, session, target.device, target.feedbackPoint.PointCode)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
 		return
+	}
+	if risk, _, ok := commandmodel.EvaluateRiskLevel(target.capability, input.Parameters, currentState.CurrentValue); ok && (risk == commandmodel.RiskHigh || risk == commandmodel.RiskCritical) {
+		if stepUpFailure := h.verifySubmitStepUpTOTP(request, session, input.VerificationCode); stepUpFailure != nil {
+			h.writeCommandFailure(writer, request, *stepUpFailure)
+			return
+		}
 	}
 	principalID, grant, failure := h.authorizeCommand(request, session, target.device, target.capability, commandmodel.AuthorizationCommandSubmit)
 	if failure != nil {
@@ -475,16 +510,7 @@ func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Reque
 		writeProblem(writer, request, http.StatusPreconditionRequired, "STEP_UP_REQUIRED", "Security confirmation required", "This high-risk Command approval requires recent multi-factor authentication. Start a high-assurance login and retry the approval.", false, nil)
 		return
 	}
-	device, failure := h.resolveCommandDevice(request, session, current.DeviceID)
-	if failure != nil {
-		h.writeCommandFailure(writer, request, *failure)
-		return
-	}
-	if device.ID != current.DeviceID {
-		h.writeCommandFailure(writer, request, commandUnavailable("Registry returned a Device outside the Command approval boundary."))
-		return
-	}
-	principalID, grant, failure := h.authorizeCommand(request, session, device, current.Capability, commandmodel.AuthorizationCommandApprove)
+	device, principalID, grant, failure := h.resolveAndAuthorizeCommandAction(request, session, current, commandmodel.AuthorizationCommandApprove, "approval")
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
 		return
@@ -501,6 +527,79 @@ func (h *handler) approveCommand(writer http.ResponseWriter, request *http.Reque
 	writeJSON(writer, http.StatusOK, approved)
 }
 
+func (h *handler) cancelCommand(writer http.ResponseWriter, request *http.Request, commandID string) {
+	session, ok := h.commandSession(writer, request, true)
+	if !ok {
+		return
+	}
+	if !h.allowRateLimitedTenant(writer, request, limitpolicy.DimensionCommandWrite, session.TenantID) {
+		return
+	}
+	if !isLowerUUID(commandID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Command was not found.", false, nil)
+		return
+	}
+	rawBody, err := io.ReadAll(io.LimitReader(request.Body, 1025))
+	if err != nil || len(rawBody) > 1024 {
+		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_CANCEL_REQUEST_INVALID", "Command cancel invalid", "The Command cancel request body is invalid.", false, nil)
+		return
+	}
+	var input struct {
+		Reason string `json:"reason,omitempty"`
+	}
+	if len(bytes.TrimSpace(rawBody)) > 0 {
+		if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != "application/json" {
+			writeProblem(writer, request, http.StatusUnsupportedMediaType, "COMMAND_CANCEL_REQUEST_INVALID", "Command cancel invalid", "The Command cancel request must use application/json.", false, nil)
+			return
+		}
+		decoder := json.NewDecoder(bytes.NewReader(rawBody))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&input) != nil || ensureCommandJSONEOF(decoder) != nil || len(strings.TrimSpace(input.Reason)) > 256 {
+			writeProblem(writer, request, http.StatusBadRequest, "COMMAND_CANCEL_REQUEST_INVALID", "Command cancel invalid", "The Command cancel request must be an empty JSON object or contain only a reason string.", false, nil)
+			return
+		}
+	}
+	current, failure := h.executeCommandRead(request, session, commandID)
+	if failure != nil {
+		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	if current.Status != commandmodel.IntentAwaitingApproval && current.Status != commandmodel.IntentQueued {
+		writeProblem(writer, request, http.StatusConflict, "COMMAND_CANCEL_INVALID", "Command cannot be cancelled", "Only a pending or queued Command can be cancelled before dispatch begins.", false, nil)
+		return
+	}
+	device, principalID, grant, failure := h.resolveAndAuthorizeCommandAction(request, session, current, commandmodel.AuthorizationCommandSubmit, "cancel")
+	if failure != nil {
+		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	cancelled, failure := h.executeCommandCancel(request.Context(), commandID, internalCommandCancel{
+		TenantID: session.TenantID, SiteID: device.SiteID, DeviceID: device.ID, PrincipalID: principalID, Reason: strings.TrimSpace(input.Reason),
+	}, grant)
+	if failure != nil {
+		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, cancelled)
+}
+
+func (h *handler) resolveAndAuthorizeCommandAction(request *http.Request, session bffSession, current commandView, purpose commandmodel.AuthorizationPurpose, label string) (platformapi.Device, string, string, *commandFailure) {
+	device, failure := h.resolveCommandDevice(request, session, current.DeviceID)
+	if failure != nil {
+		return platformapi.Device{}, "", "", failure
+	}
+	if device.ID != current.DeviceID {
+		unavailable := commandUnavailable("Registry returned a Device outside the Command " + label + " boundary.")
+		return platformapi.Device{}, "", "", &unavailable
+	}
+	principalID, grant, failure := h.authorizeCommand(request, session, device, current.Capability, purpose)
+	if failure != nil {
+		return platformapi.Device{}, "", "", failure
+	}
+	return device, principalID, grant, nil
+}
+
 func commandApprovalRequiresStepUp(current commandView, session bffSession, now time.Time) bool {
 	if current.Risk != commandmodel.RiskHigh && current.Risk != commandmodel.RiskCritical {
 		return false
@@ -514,6 +613,82 @@ func freshMFAAssurance(session bffSession, now time.Time) bool {
 	}
 	age := now.UTC().Sub(session.AuthenticationTime.UTC())
 	return age >= 0 && age <= 10*time.Minute
+}
+
+func (h *handler) verifySubmitStepUpTOTP(request *http.Request, session bffSession, rawCode string) *commandFailure {
+	code := strings.TrimSpace(rawCode)
+	if !isSixDigitTOTPCode(code) {
+		failure := commandStepUpRequired("High-risk commands require a 6-digit verificationCode from your authenticator app.")
+		return &failure
+	}
+	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.identity.config.OIDCHTTPClient == nil {
+		failure := commandUnavailable("Identity verification is unavailable for high-risk commands.")
+		return &failure
+	}
+	grant, err := h.signIdentitySessionGrant(session, identityTOTPVerifyAudience, identityTOTPVerifyAction)
+	if err != nil {
+		failure := commandUnavailable("Could not sign the identity verification request.")
+		return &failure
+	}
+	status, reply, err := h.identity.backchannel(request, http.MethodPost, identityTOTPVerifyPath, map[string]string{"code": code}, map[string]string{"X-Delegation-Grant": grant})
+	if err != nil {
+		failure := commandUnavailable("The identity service could not verify the step-up code.")
+		return &failure
+	}
+	if status == http.StatusOK {
+		var verified struct {
+			Verified bool `json:"verified"`
+		}
+		if json.Unmarshal(reply, &verified) != nil || !verified.Verified {
+			failure := commandUnavailable("The identity service returned an invalid step-up verification response.")
+			return &failure
+		}
+		return nil
+	}
+	return mapTOTPVerifyError(status, reply)
+}
+
+func isSixDigitTOTPCode(code string) bool {
+	if len(code) != 6 {
+		return false
+	}
+	for i := 0; i < len(code); i++ {
+		if code[i] < '0' || code[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func commandStepUpRequired(detail string) commandFailure {
+	return commandFailure{
+		status:    http.StatusPreconditionRequired,
+		code:      "STEP_UP_REQUIRED",
+		title:     "Security confirmation required",
+		detail:    detail,
+		retryable: false,
+	}
+}
+
+func mapTOTPVerifyError(status int, reply []byte) *commandFailure {
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(reply, &refusal)
+	var failure commandFailure
+	switch {
+	case status == http.StatusBadRequest || (status == http.StatusUnauthorized && refusal.Error == "mfa_code_invalid"):
+		failure = commandStepUpRequired("The 6-digit verification code is invalid. Enter the current authenticator code and try again.")
+	case status == http.StatusConflict || refusal.Error == "mfa_code_replayed":
+		failure = commandStepUpRequired("This 6-digit verification code has already been used. Wait for the next authenticator code and try again.")
+	case status == http.StatusPreconditionFailed || refusal.Error == "mfa_not_configured":
+		failure = commandStepUpRequired("Authenticator TOTP MFA is not configured on this account. Enroll TOTP before submitting high-risk commands.")
+	case status == http.StatusLocked || refusal.Error == "mfa_locked":
+		failure = commandStepUpRequired("Authenticator verification is temporarily locked after repeated invalid attempts. Wait before trying again.")
+	default:
+		failure = commandUnavailable("The identity service could not verify the step-up code.")
+	}
+	return &failure
 }
 
 func (h *handler) commandSession(writer http.ResponseWriter, request *http.Request, requireCSRF bool) (bffSession, bool) {
@@ -1032,16 +1207,7 @@ func (h *handler) reconcileCommand(writer http.ResponseWriter, request *http.Req
 		writeProblem(writer, request, http.StatusConflict, "COMMAND_RECONCILIATION_INVALID", "Command reconciliation invalid", "Only a Command whose outcome is unknown can be reconciled.", false, nil)
 		return
 	}
-	device, failure := h.resolveCommandDevice(request, session, current.DeviceID)
-	if failure != nil {
-		h.writeCommandFailure(writer, request, *failure)
-		return
-	}
-	if device.ID != current.DeviceID {
-		h.writeCommandFailure(writer, request, commandUnavailable("Registry returned a Device outside the Command reconciliation boundary."))
-		return
-	}
-	principalID, grant, failure := h.authorizeCommand(request, session, device, current.Capability, commandmodel.AuthorizationCommandSubmit)
+	device, principalID, grant, failure := h.resolveAndAuthorizeCommandAction(request, session, current, commandmodel.AuthorizationCommandSubmit, "reconciliation")
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
 		return
@@ -1063,6 +1229,10 @@ func (h *handler) executeCommandApproval(ctx context.Context, commandID string, 
 
 func (h *handler) executeCommandReconciliation(ctx context.Context, commandID string, input internalCommandReconciliation, grant string) (commandView, *commandFailure) {
 	return h.executeCommandAction(ctx, commandID, "reconcile", input, input.TenantID, input.SiteID, input.DeviceID, grant)
+}
+
+func (h *handler) executeCommandCancel(ctx context.Context, commandID string, input internalCommandCancel, grant string) (commandView, *commandFailure) {
+	return h.executeCommandAction(ctx, commandID, "cancel", input, input.TenantID, input.SiteID, input.DeviceID, grant)
 }
 
 // executeCommandAction posts a governed action on one Command to Command Service and checks
@@ -1097,7 +1267,7 @@ func (h *handler) executeCommandAction(ctx context.Context, commandID, action st
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		failure := commandBackendFailure(response.StatusCode)
+		failure := commandActionFailure(action, response.StatusCode)
 		return commandView{}, &failure
 	}
 	view, ok := h.decodeCommandView(response.Body)
@@ -1265,6 +1435,20 @@ func commandUnavailable(detail string) commandFailure {
 
 func commandUnsafe(detail string) commandFailure {
 	return commandFailure{status: http.StatusConflict, code: "COMMAND_CURRENT_STATE_UNSAFE", title: "Current state unsafe", detail: detail, retryable: false}
+}
+
+func commandActionFailure(action string, status int) commandFailure {
+	if status == http.StatusConflict {
+		switch action {
+		case "cancel":
+			return commandFailure{status: status, code: "COMMAND_CANCEL_INVALID", title: "Command cannot be cancelled", detail: "Only a pending or queued Command can be cancelled before dispatch begins.", retryable: false}
+		case "reconcile":
+			return commandFailure{status: status, code: "COMMAND_RECONCILIATION_INVALID", title: "Command reconciliation invalid", detail: "Only a Command whose outcome is unknown can be reconciled.", retryable: false}
+		case "approve":
+			return commandFailure{status: status, code: "COMMAND_APPROVAL_INVALID", title: "Command approval invalid", detail: "The Command is not awaiting another approval.", retryable: false}
+		}
+	}
+	return commandBackendFailure(status)
 }
 
 func commandBackendFailure(status int) commandFailure {

@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -38,5 +39,11 @@ func TestValidateTOTPRejectsReplay(t *testing.T) {
 	}
 	if _, ok := validateTOTP(secret, code, now, counter); ok {
 		t.Fatal("expected the same TOTP counter to be rejected as replay")
+	}
+	if err := classifyTOTPFailure(secret, code, now, counter); !errors.Is(err, ErrMFAReplayed) {
+		t.Fatalf("classifyTOTPFailure(replayed)=%v want ErrMFAReplayed", err)
+	}
+	if err := classifyTOTPFailure(secret, "000000", now, counter); !errors.Is(err, ErrMFAInvalid) && code != "000000" {
+		t.Fatalf("classifyTOTPFailure(wrong)=%v want ErrMFAInvalid", err)
 	}
 }

@@ -95,6 +95,10 @@ func (h *handler) MeWeChat(writer http.ResponseWriter, request *http.Request) {
 
 // identityWeChatGrant names the Session's account for identity-service, for one WeChat call.
 func (h *handler) identityWeChatGrant(session bffSession) (string, error) {
+	return h.signIdentitySessionGrant(session, identityWeChatAudience, identityWeChatAction)
+}
+
+func (h *handler) signIdentitySessionGrant(session bffSession, audience, action string) (string, error) {
 	now := h.identity.now().UTC()
 	expiresAt := now.Add(h.identity.config.DelegationTTL)
 	if expiresAt.After(session.ExpiresAt) {
@@ -103,7 +107,7 @@ func (h *handler) identityWeChatGrant(session bffSession) (string, error) {
 	return identitycontext.SignDelegation(h.identity.config.DelegationSigner, identitycontext.DelegationClaims{
 		Issuer: h.identity.config.ExecutingWorkloadSPIFFE, ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
 		Subject: session.Principal.Subject, SubjectIssuer: session.Principal.Issuer,
-		Audience: identityWeChatAudience, TenantID: session.TenantID, Actions: []string{identityWeChatAction},
+		Audience: audience, TenantID: session.TenantID, Actions: []string{action},
 		Scopes: []string{"session:" + session.ID}, PolicyRevision: h.identity.config.PolicyRevision,
 		SessionID: session.ID, IssuedAt: now.Unix(), ExpiresAt: expiresAt.Unix(), TokenID: randomURLToken(16),
 	})

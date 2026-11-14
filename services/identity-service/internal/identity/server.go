@@ -53,7 +53,12 @@ type Server struct {
 	// The Gateway's delegation key and workload, for the grants on WeChat calls.
 	gatewayKey    crypto.PublicKey
 	gatewaySPIFFE string
+	totpVerifier  totpStepUpVerifier
 	logger        *slog.Logger
+}
+
+type totpStepUpVerifier interface {
+	VerifyTOTPByUserID(ctx context.Context, userID, passcode string, protector *MFAProtector, now time.Time) error
 }
 
 func (server *Server) log() *slog.Logger {
@@ -143,6 +148,7 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /app/wechat/binding", server.unbindWeChat)
 	mux.HandleFunc("GET /app/wechat/binding", server.readWeChatBinding)
 	mux.HandleFunc("POST /app/wechat/messages", server.sendWeChatMessage)
+	mux.HandleFunc("POST /internal/v1/mfa/totp/verify", server.verifyInternalTOTP)
 	mux.HandleFunc("GET /session/end", server.endSession)
 	return securityHeaders(mux)
 }

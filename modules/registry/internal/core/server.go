@@ -242,6 +242,18 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		writeJSON(writer, http.StatusOK, sources)
 		return http.StatusOK
 	}
+	if route.resource == "site-control-state" {
+		if len(request.URL.Query()) != 0 {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The Site control state query does not accept parameters.", false)
+			return http.StatusBadRequest
+		}
+		state, err := server.store.GetSiteControlState(request.Context(), claims, route.parentID)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, state)
+		return http.StatusOK
+	}
 	if route.resource == "import-tariffs" {
 		query := request.URL.Query()
 		before, err := time.Parse(time.RFC3339Nano, query.Get("before"))
@@ -693,6 +705,12 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/utility-bills/{billId}", resource: "utility-bill-write", parentID: segments[1], id: segments[3], action: registryauth.ActionBillingManage, write: true}, true
 	case method == http.MethodPost && len(segments) == 5 && segments[0] == "sites" && segments[2] == "utility-bills" && segments[4] == "confirm":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/utility-bills/{billId}/confirm", resource: "utility-bill-confirm", parentID: segments[1], id: segments[3], action: registryauth.ActionBillingManage, write: true}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "control-state":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/control-state", resource: "site-control-state", parentID: segments[1], action: registryauth.ActionSiteRead}, true
+	case method == http.MethodPut && len(segments) == 3 && segments[0] == "sites" && segments[2] == "control-mode":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/control-mode", resource: "site-control-mode-write", parentID: segments[1], action: registryauth.ActionScheduleManage, write: true}, true
+	case method == http.MethodPut && len(segments) == 3 && segments[0] == "assets" && segments[2] == "control-lock":
+		return registryRoute{template: RegistryPathPrefix + "assets/{assetId}/control-lock", resource: "asset-control-lock-write", id: segments[1], action: registryauth.ActionScheduleManage, write: true}, true
 	default:
 		return registryRoute{}, false
 	}

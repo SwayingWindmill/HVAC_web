@@ -28,6 +28,26 @@ func (store *PostgresStore) ResolveOptimizationPreparation(ctx context.Context, 
 	if err != nil {
 		return PreparationDefinition{}, err
 	}
+	var siteControlMode string
+	var hasAssetLock bool
+	if err = tx.QueryRow(ctx, `
+SELECT COALESCE((
+  SELECT mode FROM core_registry.site_control_states
+  WHERE tenant_id=$1::uuid AND site_id=$2::uuid
+), 'REMOTE_AUTO'),
+EXISTS (
+  SELECT 1 FROM core_registry.asset_control_locks
+  WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND lock_mode <> 'UNLOCKED'
+)`, request.TenantID, request.SiteID).Scan(&siteControlMode, &hasAssetLock); err != nil {
+		return PreparationDefinition{}, err
+	}
+	if lockMessage, locked := controlLockBlockMessage(siteControlMode, hasAssetLock); locked {
+		_ = tx.Rollback(ctx)
+		if suppressErr := store.suppressLockedDraftRecommendations(ctx, request.TenantID, request.SiteID, at); suppressErr != nil {
+			return PreparationDefinition{}, suppressErr
+		}
+		return PreparationDefinition{}, unavailable(ReasonMaintenanceActive, "%s", lockMessage)
+	}
 	var policyCount int
 	err = tx.QueryRow(ctx, `SELECT
  pv.id::text,pv.objective,pv.horizon,pv.horizon_minutes,pv.granularity,pv.constraints,count(*) OVER ()
@@ -305,4 +325,32 @@ WHERE run.tenant_id=$1::uuid AND run.site_id=$2::uuid AND run.id=$3::uuid
 		return Request{}, err
 	}
 	return request, nil
+}
+
+func controlLockBlockMessage(siteControlMode string, hasAssetLock bool) (string, bool) {
+	if siteControlMode != "" && siteControlMode != "REMOTE_AUTO" {
+		return fmt.Sprintf("site control mode %s suppresses automated optimization", siteControlMode), true
+	}
+	if hasAssetLock {
+		return "active asset control lock suppresses automated optimization", true
+	}
+	return "", false
+}
+
+func (store *PostgresStore) suppressLockedDraftRecommendations(ctx context.Context, tenantID, siteID string, at time.Time) error {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = optimizationScope(ctx, tx, tenantID, siteID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE core_registry.optimization_recommendations
+SET approval_state='REJECTED',revision=revision+1,updated_at=GREATEST($3, updated_at)
+WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND approval_state='DRAFT' AND command_intent_id IS NULL`,
+		tenantID, siteID, at.UTC()); err != nil {
+		return fmt.Errorf("suppress locked optimization draft recommendations: %w", err)
+	}
+	return tx.Commit(ctx)
 }

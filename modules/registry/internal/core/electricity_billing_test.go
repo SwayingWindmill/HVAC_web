@@ -312,6 +312,12 @@ func (*memoryBillingBackend) CreateOperatingException(context.Context, registrya
 func (*memoryBillingBackend) DecideOperatingException(context.Context, registryauth.GrantClaims, DecideOperatingExceptionRequest) (OperatingException, bool, error) {
 	return OperatingException{}, false, ErrInvalidMutation
 }
+func (*memoryBillingBackend) SaveSiteControlMode(context.Context, registryauth.GrantClaims, SiteControlModeMutation) (SiteControlState, bool, error) {
+	return SiteControlState{}, false, ErrInvalidMutation
+}
+func (*memoryBillingBackend) SaveAssetControlLock(context.Context, registryauth.GrantClaims, AssetControlLockMutation) (AssetControlLockState, bool, error) {
+	return AssetControlLockState{}, false, ErrInvalidMutation
+}
 
 func newBillingHTTPClient(t *testing.T, backend *memoryBillingBackend) scheduleHTTPClient {
 	t.Helper()

@@ -38,6 +38,20 @@ SELECT EXISTS (
 		if !controlEnabled {
 			return commandmodel.ErrCommandControlDisabled
 		}
+		var controlLocked bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM core_registry.site_control_states_v1
+  WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND mode <> 'REMOTE_AUTO'
+) OR EXISTS (
+  SELECT 1 FROM core_registry.device_control_locks_v1
+  WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid AND lock_mode <> 'UNLOCKED'
+)`, envelope.TenantID, envelope.SiteID, envelope.DeviceID).Scan(&controlLocked); err != nil {
+			return fmt.Errorf("read command control lock state: %w", err)
+		}
+		if controlLocked {
+			return commandmodel.ErrCommandControlDisabled
+		}
 		var credentialActive bool
 		if err := tx.QueryRow(ctx, `
 SELECT EXISTS (

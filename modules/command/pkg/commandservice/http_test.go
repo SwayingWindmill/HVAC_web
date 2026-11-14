@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,15 +20,17 @@ import (
 )
 
 type fakeHTTPAuthority struct {
-	submitted  commandmodel.SubmitRequest
-	approved   commandmodel.ApproveRequest
-	reconciled commandmodel.ReconcileRequest
-	intent     commandmodel.CommandIntent
-	getOrg     string
-	getID      string
-	listSite   string
-	listLimit  int
-	err        error
+	submitted     commandmodel.SubmitRequest
+	approved      commandmodel.ApproveRequest
+	reconciled    commandmodel.ReconcileRequest
+	cancelled     commandmodel.CancelRequest
+	cancelPending commandmodel.CancelPendingRequest
+	intent        commandmodel.CommandIntent
+	getOrg        string
+	getID         string
+	listSite      string
+	listLimit     int
+	err           error
 }
 
 func (authority *fakeHTTPAuthority) List(_ context.Context, tenantID, siteID string, limit int) ([]commandmodel.CommandIntent, error) {
@@ -82,6 +85,24 @@ func (authority *fakeHTTPAuthority) Reconcile(_ context.Context, request command
 	intent := authority.intent
 	intent.Status = commandmodel.IntentFailed
 	return intent, authority.err
+}
+
+func (authority *fakeHTTPAuthority) Cancel(_ context.Context, request commandmodel.CancelRequest) (commandmodel.CommandIntent, error) {
+	authority.cancelled = request
+	if authority.err != nil {
+		return commandmodel.CommandIntent{}, authority.err
+	}
+	intent := authority.intent
+	intent.Status = commandmodel.IntentCancelled
+	return intent, nil
+}
+
+func (authority *fakeHTTPAuthority) CancelPending(_ context.Context, request commandmodel.CancelPendingRequest) ([]string, error) {
+	authority.cancelPending = request
+	if authority.err != nil {
+		return nil, authority.err
+	}
+	return []string{authority.intent.ID}, nil
 }
 
 func TestCommandHTTPReconciliationRequiresTheDevicesSubmitGrant(t *testing.T) {
@@ -366,6 +387,68 @@ func newECDSASigner(t *testing.T) *ecdsa.PrivateKey {
 		t.Fatal(err)
 	}
 	return key
+}
+
+func TestCommandHTTPCancelRequiresSubmitGrantAndMapsConflict(t *testing.T) {
+	now := time.Date(2026, 7, 26, 14, 0, 0, 0, time.UTC)
+	iamSigner := newECDSASigner(t)
+	gatewaySigner := newECDSASigner(t)
+	authority := &fakeHTTPAuthority{intent: commandmodel.CommandIntent{
+		ID: "command-1", TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1", PrincipalID: "initiator-1",
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: setpointCapabilityRevision,
+		Status: commandmodel.IntentQueued, Risk: commandmodel.RiskLow,
+		DeviceCommandSequence: 2, Version: 3, CreatedAt: now, UpdatedAt: now,
+	}}
+	handler := newCommandHTTPTestHandler(t, authority, iamSigner, gatewaySigner, now)
+	body, _ := json.Marshal(internalCancelCommandRequest{
+		TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1", PrincipalID: "operator-2", Reason: "OPERATOR_EXIT",
+	})
+	request := httptest.NewRequest(http.MethodPost, InternalCommandsPath+"/command-1/cancel", bytes.NewReader(body))
+	request.Header.Set(commandGrantHeader, signCommandTestGrant(t, iamSigner, now, commandmodel.AuthorizationCommandSubmit, "operator-2", "device-1"))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || authority.cancelled.Reason != "OPERATOR_EXIT" ||
+		authority.cancelled.Authorization.PrincipalID != "operator-2" {
+		t.Fatalf("status=%d cancelled=%#v body=%s", recorder.Code, authority.cancelled, recorder.Body.String())
+	}
+
+	authority.err = ErrCancelInvalid
+	conflictReq := httptest.NewRequest(http.MethodPost, InternalCommandsPath+"/command-1/cancel", bytes.NewReader(body))
+	conflictReq.Header.Set(commandGrantHeader, signCommandTestGrant(t, iamSigner, now, commandmodel.AuthorizationCommandSubmit, "operator-2", "device-1"))
+	conflictRec := httptest.NewRecorder()
+	handler.ServeHTTP(conflictRec, conflictReq)
+	if conflictRec.Code != http.StatusConflict || !strings.Contains(conflictRec.Body.String(), "COMMAND_CANCEL_INVALID") {
+		t.Fatalf("expected 409 COMMAND_CANCEL_INVALID, got %d body=%s", conflictRec.Code, conflictRec.Body.String())
+	}
+}
+
+func TestCommandHTTPCancelPendingValidatesGatewayDelegationContext(t *testing.T) {
+	now := time.Date(2026, 7, 26, 14, 0, 0, 0, time.UTC)
+	iamSigner := newECDSASigner(t)
+	gatewaySigner := newECDSASigner(t)
+	authority := &fakeHTTPAuthority{intent: commandmodel.CommandIntent{ID: "command-1"}}
+	handler := newCommandHTTPTestHandler(t, authority, iamSigner, gatewaySigner, now)
+
+	body, _ := json.Marshal(internalCancelPendingRequest{
+		TenantID: "org-1", SiteID: "site-1", DeviceIDs: []string{"device-1"}, PrincipalID: "manager-1", Reason: "MANUAL_OVERRIDE",
+	})
+	req := httptest.NewRequest(http.MethodPost, InternalCommandsCancelBatch, bytes.NewReader(body))
+	contextToken, err := identitycontext.SignDelegation(gatewaySigner, identitycontext.DelegationClaims{
+		Issuer: "spiffe://hvac.local/platform-gateway", ExecutingService: "spiffe://hvac.local/platform-gateway",
+		Subject: "user-1", SubjectIssuer: "https://issuer.example.test", Audience: "command-service",
+		TenantID: "org-1", Actions: []string{"command:cancel-pending"},
+		Scopes: []string{"tenant:org-1", "site:site-1"}, PolicyRevision: "policy-1",
+		SessionID: "session-1", TokenID: "cancel-batch-1", IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(commandControlContextHeader, contextToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || authority.cancelPending.Reason != "MANUAL_OVERRIDE" || len(authority.cancelPending.DeviceIDs) != 1 {
+		t.Fatalf("status=%d cancelPending=%#v body=%s", rec.Code, authority.cancelPending, rec.Body.String())
+	}
 }
 
 var _ HTTPAuthority = (*fakeHTTPAuthority)(nil)

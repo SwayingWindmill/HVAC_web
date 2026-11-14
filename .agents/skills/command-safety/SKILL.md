@@ -7,7 +7,7 @@ description: Exhaustively model-check command intent, execution fence, MQTT comm
 
 Run the exhaustive explicit-state model checker (`modules/command/pkg/commandformal`) against real production transition decisions in `commandservice`, `mqttconnector`, and aligned SQL predicates in `postgres_*.go` / `connectivity/store.go`.
 
-- **Base syncCommit**: `baf9a73712a41d6aede4b8049831213fffb1e6d6`
+- **Base syncCommit**: `fd27e730fbd595c279ea47f3d6ef442486cd7ec2`
 
 ## Quick Run
 
@@ -27,9 +27,9 @@ If any invariant or mutation test fails, the runner prints the shortest failing 
 
 | ID | Plain-sentence invariant | Verified production symbols |
 | --- | --- | --- |
-| **P1** | A command is never dispatched without an unexpired matching authorization grant (and required approvals), and requesters can never approve their own command. | `commandservice.Service.Submit`, `commandservice.Service.Approve`, `commandservice.Service.PrepareDispatch`, `commandservice.CanClaimQueuedIntent` |
+| **P1** | A command is never dispatched without an unexpired matching authorization grant (and required approvals, while `CANCELLED` intents are terminal and unclaimable), and requesters can never approve their own command. | `commandservice.Service.Submit`, `commandservice.Service.Approve`, `commandservice.Service.Cancel`, `commandservice.Service.PrepareDispatch`, `commandservice.CanClaimQueuedIntent` |
 | **P2** | After persisting `MAY_COMMIT` (`ArmCommandCorrelation`), MQTT recovery never republishes a physical command and at most one publish occurs per attempt. | `mqttconnector.ResumeActionForCorrelation`, `mqttconnector.CompletedEvidenceFromCorrelation`, `mqttconnector.ReplyBackedResult` |
-| **P3** | `OUTCOME_UNKNOWN` freezes the device control group, blocks any later queued command on the same device from claiming dispatch, and clears only via authorized operator reconciliation; `Service.ResolveDispatch` never mutates an already settled attempt. | `commandservice.BlockingEarlierIntentStatuses`, `commandservice.IsBlockingEarlierIntentStatus`, `commandservice.CanClaimQueuedIntent`, `commandservice.DecideDispatchResolution`, `commandservice.DecideOperatorReconcile` |
+| **P3** | `OUTCOME_UNKNOWN` freezes the device control group, blocks any later queued command on the same device from claiming dispatch, and clears only via authorized operator reconciliation; cancelling an `AWAITING_APPROVAL`/`QUEUED` command unblocks later queued intents without clearing device freezes; `Service.ResolveDispatch` never mutates an already settled attempt. | `commandservice.BlockingEarlierIntentStatuses`, `commandservice.IsBlockingEarlierIntentStatus`, `commandservice.CanClaimQueuedIntent`, `commandservice.DecideDispatchResolution`, `commandservice.DecideOperatorReconcile`, `commandservice.DecideCommandCancel` |
 | **P4** | Edge ACK without valid `EdgeExecution` fails closed and never declares `IntentSucceeded` before independent readback verification. | `commandservice.Service.ResolveDispatch`, `commandservice.DecideDispatchResolution`, `libs/commandmodel.EdgeExecutionEvidence.ValidExecuted` |
 | **P5** | Post-`VerificationDeadline` telemetry cannot succeed even with `VERIFIED` outcome, and stale-fence or already-settled dispatch resolutions return `ErrStaleFence`. | `commandservice.Service.ResolveDispatch`, `commandservice.Service.ResolveVerification`, `commandservice.DecideVerificationResolution` |
 | **P6** | Persisted `REPLIED` correlations whose attempts are fenced or missing advance to `RESOLVED` and cannot accumulate to starve live `EXECUTED` replies behind `LIMIT 50`. | `mqttconnector.Connector.RecoverTenantReplies`, `mqttconnector.Connector.ResolveCorrelationReply`, `connectivity.Store.RecoverCommandReplies` |
@@ -46,11 +46,12 @@ If any invariant or mutation test fails, the runner prints the shortest failing 
 
 | File | Verified symbols & invariants |
 | --- | --- |
-| `libs/commandmodel/model.go` | Command enums, `CapabilityProfileFor`, `EdgeExecutionEvidence.ValidExecuted`, `CorrelationState` |
-| `modules/command/pkg/commandservice/service.go` | `Submit`, `Approve`, `PrepareDispatch`, `ResolveDispatch`, `PrepareVerification`, `ResolveVerification` |
-| `modules/command/pkg/commandservice/governance.go` | `evaluateGovernance`, `validateApproval`, `validateExecutionGovernance` |
-| `modules/command/pkg/commandservice/transitions.go` | `BlockingEarlierIntentStatuses`, `CanClaimQueuedIntent`, `DecideDispatchResolution`, `DecideVerificationResolution`, `DecideOperatorReconcile` |
+| `libs/commandmodel/model.go` | Command enums, `CapabilityProfileFor`, `EvaluateRiskLevel`, `EdgeExecutionEvidence.ValidExecuted`, `CorrelationState` |
+| `modules/command/pkg/commandservice/service.go` | `Submit`, `Approve`, `Cancel`, `PrepareDispatch`, `ResolveDispatch`, `PrepareVerification`, `ResolveVerification` |
+| `modules/command/pkg/commandservice/governance.go` | `evaluateGovernance`, `approvalPolicyForRisk`, `validateApproval`, `validateExecutionGovernance` |
+| `modules/command/pkg/commandservice/transitions.go` | `BlockingEarlierIntentStatuses`, `CanClaimQueuedIntent`, `DecideCommandCancel`, `DecideDispatchResolution`, `DecideVerificationResolution`, `DecideOperatorReconcile` |
 | `modules/command/pkg/commandservice/postgres_dispatch.go` | `ClaimDispatch` (`claimDispatchOnce`) SQL blocking statuses & device freeze check, `ResolveDispatch` delegation |
+| `modules/command/pkg/commandservice/postgres_cancel.go` | `Cancel` (`cancelOnce`) & `CancelPending` delegation to `DecideCommandCancel`, outbox retirement (`delivered_at = $3, lease_until = NULL`) |
 | `modules/command/pkg/commandservice/postgres_verification.go` | `ResolveVerification` delegation to `DecideVerificationResolution` |
 | `modules/command/pkg/commandservice/postgres_reconcile.go` | `reconcileOnce` delegation to `DecideOperatorReconcile` |
 | `modules/command/pkg/mqttconnector/connector.go` | `ResumeActionForCorrelation`, `RecoverTenantReplies`, `ResolveCorrelationReply`, `ReplyBackedResult` |
@@ -61,7 +62,7 @@ If any invariant or mutation test fails, the runner prints the shortest failing 
 When modifying any covered file, inspect changes since `syncCommit`:
 
 ```bash
-git diff baf9a73712a41d6aede4b8049831213fffb1e6d6 -- libs/commandmodel/ modules/command/pkg/commandservice/ modules/command/pkg/mqttconnector/connector.go modules/connectivity/pkg/connectivity/store.go
+git diff fd27e730fbd595c279ea47f3d6ef442486cd7ec2 -- libs/commandmodel/ modules/command/pkg/commandservice/ modules/command/pkg/mqttconnector/connector.go modules/connectivity/pkg/connectivity/store.go
 ```
 
 If transitions, SQL guards, or recovery batch limits change:

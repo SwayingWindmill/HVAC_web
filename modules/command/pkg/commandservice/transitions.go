@@ -1,6 +1,7 @@
 package commandservice
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -180,5 +181,39 @@ func DecideOperatorReconcile(intent commandmodel.CommandIntent, request commandm
 		IntentFinal:         final,
 		Reason:              reason,
 		ReleaseControlGroup: true,
+	}, nil
+}
+
+// ErrCancelInvalid reports an attempt to cancel a command whose lifecycle state already entered
+// dispatch or settled, or a malformed cancel request.
+var ErrCancelInvalid = errors.New("command cannot be cancelled in its current state")
+
+// CancelDecision is the deterministic state decision produced when cancelling a command intent.
+type CancelDecision struct {
+	IntentFinal     commandmodel.IntentStatus
+	Reason          string
+	RetireOutboxRow bool
+}
+
+// DecideCommandCancel validates that the Intent is AWAITING_APPROVAL or QUEUED and the caller
+// holds a valid current-revision COMMAND_SUBMIT grant before settling to CANCELLED.
+func DecideCommandCancel(intent commandmodel.CommandIntent, request commandmodel.CancelRequest, now time.Time) (CancelDecision, error) {
+	if intent.Status != commandmodel.IntentAwaitingApproval && intent.Status != commandmodel.IntentQueued {
+		return CancelDecision{}, ErrCancelInvalid
+	}
+	currentRevision, _, _, _ := commandCapabilityProfile(intent.Capability)
+	if err := validateAuthorizationScope(request.Authorization, commandmodel.AuthorizationCommandSubmit,
+		request.Authorization.PrincipalID, intent.TenantID, intent.SiteID, intent.DeviceID,
+		intent.Capability, currentRevision, intent.Risk, now.UTC()); err != nil {
+		return CancelDecision{}, err
+	}
+	reason := strings.TrimSpace(request.Reason)
+	if reason == "" {
+		reason = "OPERATOR_CANCELLED"
+	}
+	return CancelDecision{
+		IntentFinal:     commandmodel.IntentCancelled,
+		Reason:          reason,
+		RetireOutboxRow: true,
 	}, nil
 }

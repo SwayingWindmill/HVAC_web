@@ -51,6 +51,7 @@ type FaultHooks struct {
 	AllowAckWithoutEdgeExecution  bool
 	IgnoreVerificationDeadline    bool
 	DropStaleReplyRecoveryAsError bool
+	AllowDispatchCancelledIntent  bool
 }
 
 // Counterexample captures the failing invariant, suite name, and shortest BFS trace from initial state.

@@ -77,6 +77,11 @@ func TestFormalPropertiesCanFailOnBrokenTransitions(t *testing.T) {
 			wantProp: PropertyP6,
 			hooks:    FaultHooks{DropStaleReplyRecoveryAsError: true},
 		},
+		{
+			name:     "P1 cancelled intent dispatch must fail",
+			wantProp: PropertyP1,
+			hooks:    FaultHooks{AllowDispatchCancelledIntent: true},
+		},
 	}
 
 	for _, tc := range cases {

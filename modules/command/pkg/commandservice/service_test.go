@@ -335,6 +335,71 @@ func validRequest() commandmodel.SubmitRequest {
 	}
 }
 
+func TestServiceCancelAllowsAwaitingApprovalAndQueuedAndRejectsLaterStates(t *testing.T) {
+	service := New(fixedClock())
+
+	// AWAITING_APPROVAL (medium risk delta 1.5C) -> CANCELLED.
+	mediumReq := validRequest()
+	mediumReq.IdempotencyKey = "cancel-awaiting-key"
+	mediumReq.Parameters = commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24.5}
+	mediumReq.Authorization.MaximumRisk = commandmodel.RiskMedium
+	mediumRes, err := service.Submit(mediumReq)
+	if err != nil || mediumRes.Intent.Status != commandmodel.IntentAwaitingApproval {
+		t.Fatalf("submit medium failed: res=%#v err=%v", mediumRes, err)
+	}
+	cancelledAwaiting, err := service.Cancel(commandmodel.CancelRequest{
+		TenantID:      mediumReq.TenantID,
+		CommandID:     mediumRes.Intent.ID,
+		Reason:        "OPERATOR_CANCELLED",
+		Authorization: mediumReq.Authorization,
+	})
+	if err != nil || cancelledAwaiting.Status != commandmodel.IntentCancelled {
+		t.Fatalf("cancel awaiting failed: intent=%#v err=%v", cancelledAwaiting, err)
+	}
+
+	// QUEUED -> CANCELLED, and DISPATCHING -> ErrCancelInvalid.
+	queuedReq := validRequest()
+	queuedReq.IdempotencyKey = "cancel-queued-key"
+	queuedRes, err := service.Submit(queuedReq)
+	if err != nil || queuedRes.Intent.Status != commandmodel.IntentQueued {
+		t.Fatalf("submit queued failed: res=%#v err=%v", queuedRes, err)
+	}
+	cancelledQueued, err := service.Cancel(commandmodel.CancelRequest{
+		TenantID:      queuedReq.TenantID,
+		CommandID:     queuedRes.Intent.ID,
+		Authorization: queuedReq.Authorization,
+	})
+	if err != nil || cancelledQueued.Status != commandmodel.IntentCancelled {
+		t.Fatalf("cancel queued failed: intent=%#v err=%v", cancelledQueued, err)
+	}
+	// Terminal CANCELLED cannot be cancelled again or dispatched.
+	if _, err := service.Cancel(commandmodel.CancelRequest{
+		TenantID:      queuedReq.TenantID,
+		CommandID:     queuedRes.Intent.ID,
+		Authorization: queuedReq.Authorization,
+	}); !errors.Is(err, ErrCancelInvalid) {
+		t.Fatalf("expected ErrCancelInvalid on repeat cancel, got %v", err)
+	}
+
+	// Dispatched command rejects cancel.
+	dispReq := validRequest()
+	dispReq.IdempotencyKey = "cancel-dispatching-key"
+	dispRes, err := service.Submit(dispReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PrepareDispatch(dispRes.Intent.ID, "disp-1", fixedClock()().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Cancel(commandmodel.CancelRequest{
+		TenantID:      dispReq.TenantID,
+		CommandID:     dispRes.Intent.ID,
+		Authorization: dispReq.Authorization,
+	}); !errors.Is(err, ErrCancelInvalid) {
+		t.Fatalf("expected ErrCancelInvalid when DISPATCHING, got %v", err)
+	}
+}
+
 func fixedClock() func() time.Time {
 	return func() time.Time {
 		return time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)

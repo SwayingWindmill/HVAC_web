@@ -275,6 +275,10 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		dispatchCommandRoute(h, writer, request, commandRoute, commandID)
 		return
 	}
+	if controlRoute, matches := matchPublicControlExitRoute(request.URL.Path); matches {
+		dispatchControlExitRoute(h, writer, request, controlRoute)
+		return
+	}
 	if request.URL.Path == PublicEnergySeriesPath {
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowedFor(writer, request, http.MethodPost)
@@ -712,6 +716,9 @@ func safeLogPath(path string) string {
 			if scheduleRoute, matches := matchPublicOperatingScheduleRoute(method, path); matches {
 				return scheduleRoute.template
 			}
+		}
+		if controlRoute, matches := matchPublicControlExitRoute(path); matches {
+			return controlRoute.template
 		}
 		if agentSessionRoute, matches := matchPublicAgentSessionRoute(path); matches {
 			return agentSessionRoute.template

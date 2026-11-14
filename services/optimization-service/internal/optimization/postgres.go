@@ -262,9 +262,22 @@ func (store *PostgresStore) LatestRecommendation(ctx context.Context, tenantID, 
 	var runID string
 	// The latest is the one prepared last: an older run still queued when a newer one published
 	// must not replace it by finishing later.
-	err = tx.QueryRow(ctx, `SELECT id::text FROM core_registry.optimization_runs
-WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status='PUBLISHED'
-ORDER BY created_at DESC, id DESC LIMIT 1`, tenantID, siteID).Scan(&runID)
+	err = tx.QueryRow(ctx, `SELECT run.id::text
+FROM core_registry.optimization_runs run
+JOIN core_registry.optimization_recommendations rec
+  ON rec.tenant_id=run.tenant_id AND rec.site_id=run.site_id AND rec.optimization_run_id=run.id
+WHERE run.tenant_id=$1::uuid
+  AND run.site_id=$2::uuid
+  AND run.status='PUBLISHED'
+  AND rec.approval_state <> 'REJECTED'
+  AND (
+    rec.approval_state <> 'DRAFT'
+    OR (
+      COALESCE((SELECT mode FROM core_registry.site_control_states WHERE tenant_id=$1::uuid AND site_id=$2::uuid), 'REMOTE_AUTO') = 'REMOTE_AUTO'
+      AND NOT EXISTS (SELECT 1 FROM core_registry.asset_control_locks WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND lock_mode <> 'UNLOCKED')
+    )
+  )
+ORDER BY run.created_at DESC, run.id DESC LIMIT 1`, tenantID, siteID).Scan(&runID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PublishedRecommendation{}, ErrOptimizationNotFound
 	}

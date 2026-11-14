@@ -619,4 +619,6 @@ type RegistryWriter interface {
 	SaveMonthlyElectricityBudget(context.Context, registryauth.GrantClaims, MonthlyElectricityBudgetMutation) (MonthlyElectricityBudget, bool, error)
 	SaveUtilityBill(context.Context, registryauth.GrantClaims, UtilityBillMutation) (UtilityBill, bool, error)
 	ConfirmUtilityBill(context.Context, registryauth.GrantClaims, ConfirmUtilityBillRequest) (UtilityBill, bool, error)
+	SaveSiteControlMode(context.Context, registryauth.GrantClaims, SiteControlModeMutation) (SiteControlState, bool, error)
+	SaveAssetControlLock(context.Context, registryauth.GrantClaims, AssetControlLockMutation) (AssetControlLockState, bool, error)
 }
