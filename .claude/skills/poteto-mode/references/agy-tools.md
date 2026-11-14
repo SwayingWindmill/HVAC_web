@@ -11,7 +11,7 @@ This repository runs dual-harness pure-Markdown skills under `.agents/skills/` (
 | Run a shell command | `run_command` and `manage_task` (run builds, Go, Playwright, and `gh` in WSL `/mnt/e/Code/HVAC_web`; run `git push` on Windows) |
 | Search code & call graph | `codegraph_explore` first, then single `git grep -n` / `git ls-files` commands |
 | Fetch web / docs | `search_web` or `curl` via `run_command` |
-| Invoke a skill (`Skill`, `/name`) | `read_file` on its `<skills>` path (`poteto-mode/SKILL.md` is kept under 10 KB to avoid truncation) |
+| Invoke a skill (`Skill`, `/name`) | `read_file` on its `<skills>` path (`poteto-mode/SKILL.md` is kept well under `24,000` bytes to avoid loader truncation) |
 | Dispatch subagents (`Agent` / `Task`) | `invoke_subagent` with `TypeName`, `Role`, `Prompt`, `Model`, and `Workspace` (multiple calls in one turn run in parallel; end turn to await) |
 | Steer or stop subagents | `send_message` (`Recipient: conversationId`) and `manage_subagents` (`list`, `kill`, `kill_all`) |
 | Track tasks (`TaskCreate` / `TodoWrite`) | Keep an untracked checklist in `.scratch/todo.md` or `<appDataDir>/brain/<conversation-id>/scratch/todo.md` (never `.audit/`) |
@@ -24,7 +24,7 @@ This repository runs dual-harness pure-Markdown skills under `.agents/skills/` (
 
 - **Writable / shell / MCP work**: Use `TypeName: "self"`. Pass `Workspace: "share"` (or create an isolated git worktree) whenever multiple workers write code or run builds concurrently.
 - **Read-only inspection / review**: Use `TypeName: "research"` when no shell command, file edit, or MCP call is required. When a reviewer needs `run_command` (e.g., `interrogate` running repro scripts or `comment-sicko` running `git diff`), use `TypeName: "self"` with explicit instructions not to modify application code outside scope.
-- **Model selection**: Default to `Model: "inherit"` unless the user explicitly asks for another model (`flash`, `flash_lite`, `pro`). Do not look for external `pstack-models.md` or `/setup-pstack`.
+- **Model selection**: Default to `Model: "inherit"` unless the user explicitly asks for another model (`flash`, `flash_lite`, `pro`) or explicitly configures `~/.gemini/config/pstack-models.md` via [`../../setup-pstack/SKILL.md`](../../setup-pstack/SKILL.md). Keep `"inherit"` whenever no override sheet exists.
 - **Brief hygiene**: Pass `AGENTS.md` and required `SKILL.md` paths (not full file dumps). Always end subagents holding shared/branched workspaces via `manage_subagents` before committing or merging.
 
 ## Repository skill equivalents
@@ -36,6 +36,7 @@ This repository runs dual-harness pure-Markdown skills under `.agents/skills/` (
 | `comment-sicko` agent (`no-comments`) | Read [`../../no-comments/references/comment-sicko-prompt.md`](../../no-comments/references/comment-sicko-prompt.md) and pass it to `invoke_subagent` |
 | Skill authoring guidance | Built-in `agy-customizations` skill, keeping `AGENTS.md` + `npm run repo:check` mirror & LF rules |
 | Governance & static gates | `scripts/domain-task-matrix.ts`, `npm run check`, `npm run repo:check`, `npm run design:check` |
+| Skill helper scripts (WSL Node 24+ / Bash) | `scripts/{check-plan.ts,resume.ts,worktree-audit.ts}`, `show-me-your-work/scripts/log.sh`, `statechart/scripts/statechart` |
 
 ## Instructions & skill sync rule
 
