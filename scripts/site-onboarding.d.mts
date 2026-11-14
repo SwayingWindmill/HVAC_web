@@ -7,7 +7,14 @@ export interface OnboardingAsset {
 export interface OnboardingPoint {
   id?: string;
   code: string;
+  pointType?: string;
+  valueType?: string;
   status?: string;
+  writable?: boolean;
+  asset?: string;
+  address?: string;
+  protocol?: string;
+  sourceMetadata?: Record<string, unknown>;
   critical?: boolean | string;
   from?: string[];
   device?: OnboardingDevice;

@@ -29,18 +29,19 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 	defer admin.Close()
 
 	const (
-		tenantA  = "0192f000-0000-7000-8000-00000000000a"
-		tenantB  = "0192f000-0000-7000-8000-00000000000b"
-		siteA    = "0192f000-1000-7000-8000-00000000000a"
-		siteB    = "0192f000-1000-7000-8000-00000000000b"
-		gatewayA = "0192f000-2000-7000-8000-00000000000a"
-		gatewayB = "0192f000-2000-7000-8000-00000000000b"
-		meterA   = "0192f000-3000-7000-8000-00000000000a"
-		meterB   = "0192f000-3000-7000-8000-00000000000b"
-		pointA   = "0192f000-4000-7000-8000-00000000000a"
-		commandA = "0192f000-4000-7000-8000-0000000000ca"
-		commandB = "0192f000-4000-7000-8000-0000000000cb"
-		unknown  = "0192f000-2000-7000-8000-0000000000ff"
+		tenantA       = "0192f000-0000-7000-8000-00000000000a"
+		tenantB       = "0192f000-0000-7000-8000-00000000000b"
+		siteA         = "0192f000-1000-7000-8000-00000000000a"
+		siteB         = "0192f000-1000-7000-8000-00000000000b"
+		gatewayA      = "0192f000-2000-7000-8000-00000000000a"
+		gatewayB      = "0192f000-2000-7000-8000-00000000000b"
+		meterA        = "0192f000-3000-7000-8000-00000000000a"
+		meterB        = "0192f000-3000-7000-8000-00000000000b"
+		pointA        = "0192f000-4000-7000-8000-00000000000a"
+		commandA      = "0192f000-4000-7000-8000-0000000000ca"
+		commandB      = "0192f000-4000-7000-8000-0000000000cb"
+		commandBPulse = "0192f000-4000-7000-8000-0000000000cp"
+		unknown       = "0192f000-2000-7000-8000-0000000000ff"
 	)
 	cleanup := func() {
 		for _, statement := range []string{
@@ -84,6 +85,8 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 		{`INSERT INTO core_registry.telemetry_points (id,tenant_id,site_id,reporting_device_id,point_code,source_key,display_name,point_type,value_type,unit,writable,sample_interval_ms,publish_interval_ms,stale_after_ms,status,revision,created_at,updated_at) VALUES
 		  ($1::uuid,$3::uuid,$5::uuid,$7::uuid,'run_command','meter.run_command','Run command','COMMAND','BOOLEAN',NULL,true,1000,5000,30000,'ACTIVE',1,$9,$9),
 		  ($2::uuid,$4::uuid,$6::uuid,$8::uuid,'run_command','meter.run_command','Run command','COMMAND','BOOLEAN',NULL,true,1000,5000,30000,'ACTIVE',1,$9,$9)`, []any{commandA, commandB, tenantA, tenantB, siteA, siteB, meterA, meterB, now}},
+		{`INSERT INTO core_registry.telemetry_points (id,tenant_id,site_id,reporting_device_id,point_code,source_key,display_name,point_type,value_type,unit,writable,sample_interval_ms,publish_interval_ms,stale_after_ms,source_metadata,status,revision,created_at,updated_at) VALUES
+		  ($1::uuid,$2::uuid,$3::uuid,$4::uuid,'stop','u51','Stop pulse','COMMAND','BOOLEAN',NULL,true,60000,60000,180000,'{"actuationMode":"PULSE","channel":"u51","coilAddress":16,"pulseDurationMs":500,"interlockChecks":[{"deviceId":"0192f000-3000-7000-8000-00000000000b","key":"run_state","expected":"RUNNING","reason":"pump must run"}]}'::jsonb,'ACTIVE',1,$5,$5)`, []any{commandBPulse, tenantB, siteB, meterB, now}},
 		{`INSERT INTO connectivity.gateway_credentials (id,tenant_id,gateway_id,certificate_fingerprint_sha256,status,valid_from,valid_until,revoked_at,created_at,updated_at) VALUES
 		  ('0192f000-6000-7000-8000-00000000000a',$1::uuid,$3::uuid,repeat('a',64),'ACTIVE',$5,$6,NULL,$5,$5),
 		  ('0192f000-6000-7000-8000-00000000000b',$2::uuid,$4::uuid,repeat('b',64),'ACTIVE',$5,$6,NULL,$5,$5)`, []any{tenantA, tenantB, gatewayA, gatewayB, now.Add(-time.Minute), now.Add(time.Hour)}},
@@ -135,6 +138,20 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 	if route, err := store.ResolveCommandRoute(ctx, commandTo(tenantB, siteB, meterB, commandB)); err != nil ||
 		route != (commandmodel.DeviceRoute{GatewayID: gatewayB, ExternalDeviceID: "METER-01", BindingRevision: 1}) {
 		t.Fatalf("command route=%#v err=%v", route, err)
+	}
+	if locks, err := store.ResolveCommandInterlocks(ctx, commandTo(tenantB, siteB, meterB, commandB)); err != nil || len(locks) != 0 {
+		t.Fatalf("commandB interlocks=%#v err=%v", locks, err)
+	}
+	wantPulseRoute := commandmodel.DeviceRoute{
+		GatewayID: gatewayB, ExternalDeviceID: "METER-01", BindingRevision: 1,
+		PointCode: "stop", ActuationMode: "PULSE", Channel: "u51", CoilAddress: 16, HasCoilAddress: true, PulseDurationMs: 500,
+	}
+	if route, err := store.ResolveCommandRoute(ctx, commandTo(tenantB, siteB, meterB, commandBPulse)); err != nil || route != wantPulseRoute {
+		t.Fatalf("pulse command route=%#v want=%#v err=%v", route, wantPulseRoute, err)
+	}
+	locks, err := store.ResolveCommandInterlocks(ctx, commandTo(tenantB, siteB, meterB, commandBPulse))
+	if err != nil || len(locks) != 1 || locks[0] != (commandmodel.InterlockCheck{DeviceID: meterB, Key: "run_state", Expected: "RUNNING", Reason: "pump must run"}) {
+		t.Fatalf("pulse command interlocks=%#v err=%v", locks, err)
 	}
 	if _, err := store.ResolveCommandRoute(ctx, commandTo(tenantA, siteA, meterA, pointA)); !errors.Is(err, commandmodel.ErrCommandControlDisabled) {
 		t.Fatalf("read-only Point err=%v", err)

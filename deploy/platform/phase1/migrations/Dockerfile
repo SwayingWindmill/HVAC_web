@@ -87,6 +87,7 @@ COPY infra/registry/postgres/init/034-operating-schedules.sql /opt/hvac/repo/inf
 COPY infra/registry/postgres/init/035-electricity-budgets-and-utility-bills.sql /opt/hvac/repo/infra/registry/postgres/init/035-electricity-budgets-and-utility-bills.sql
 COPY infra/registry/postgres/init/036-asset-nameplate.sql /opt/hvac/repo/infra/registry/postgres/init/036-asset-nameplate.sql
 COPY infra/registry/postgres/init/037-site-and-asset-control-locks.sql /opt/hvac/repo/infra/registry/postgres/init/037-site-and-asset-control-locks.sql
+COPY infra/registry/postgres/init/038-command-route-point-metadata.sql /opt/hvac/repo/infra/registry/postgres/init/038-command-route-point-metadata.sql
 COPY services/notification-service/migrations/005_reading_gap_reminders.sql /opt/hvac/repo/services/notification-service/migrations/005_reading_gap_reminders.sql
 
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql

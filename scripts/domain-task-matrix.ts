@@ -89,6 +89,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
         './libs/edgecontrol/...',
         './tools/eg8200-simulator/...',
       ),
+      nodeRun('--experimental-strip-types', '--test', 'scripts/test-songyaxuan-command-executor.ts'),
       npmRun('command:formal'),
     ]),
     alarm: Object.freeze([

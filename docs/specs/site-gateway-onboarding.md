@@ -73,3 +73,14 @@
 
 - 平台 MQTT 服务器证书只有 `mqtt-broker` 这个名字，Node-RED 所用的 MQTT 库会用连接地址覆盖校验名，所以网关按 IP `139.199.58.47` 连接。应为 Mosquitto 签发带公网域名的证书，之后改回域名。
 - 证书续期：2026-12-29 起可以续期。网关需要用当前证书调用 `/gateway/v1/renew`，在「平台·证书」标签页加续期流程。
+
+## 可控点位、ET1010 执行模式与液压联锁（2026-11 更新）
+
+- Site JSON 里的控制器设备（`CHILLER_CONTROLLER`、`PUMP_CONTROLLER`、`COOLING_TOWER_CONTROLLER`）可声明 `pointType: "COMMAND"` 的点位：
+  - `scripts/site-onboarding.mjs` 会把 `COMMAND` 点位的 `writable` 写成 `true`，把资产绑定关系写成 `CONTROLS`（而不是 `DESCRIBES`），并在设备存在性判断 `presenceApplicability` 与采集新鲜度策略 `telemetry_runtime.freshness_policies` 中排除只写的指令点位（避免系统把仅用于下发的点位误判为离线或采集断流）。
+- 每个 `COMMAND` 点位的 `sourceMetadata` 必须声明平台权威能力合约（`capability`、`capabilityRevision`、`feedbackPointKey`），真实站点网关执行字段如下：
+  - `actuationMode`：`LEVEL`（电平保持，如水泵/冷却塔启停 `u11..u13/u21..u23/u31..u33/u41..u43`，`coilAddress` `0..15` 写 `1/0`）、`PULSE`（脉冲闭合后自动复位为 `0`，如主机开机 `u14/u24/u34/u44` 与主机停机 `u51..u54` coil `16..19`，默认 `pulseDurationMs: 500`）或 `UNIT_SEQUENCE`（按冷机组编排一键启停，对应 `unit-a..unit-d`，整体动作和回执需在网关 `15s` `ReplyTimeout` 内完成）。
+  - `interlocks`：`site-onboarding.mjs`（通过 `scripts/lib/site-onboarding-control.ts`）会在入库时把它编译成 `source_metadata.interlockChecks`（保存目标同伴控制器 `deviceId`、点位 `run_state` 与期望状态 `"RUNNING"` 或 `"STOPPED"`），并通过只读视图 `core_registry.command_point_routes_v1`（迁移 `038`）暴露给 `connectivity_runtime`。
+- 运行时双闸门拦截：
+  - 提交闸门（`cmd/energy-api/internal/gateway/command.go`）：在创建指令前核对所有同伴设备最新 `run_state`；状态不满足返回 `409 COMMAND_INTERLOCK_BLOCKED`，同伴遥测离线或过期返回 `409 COMMAND_INTERLOCK_UNVERIFIABLE`。
+  - 下发前闸门（`cmd/connectivity` + `dynamic_safety.go`）：MQTT 下发前再次读最新遥测；未满足时返回 `DISPATCH_SAFETY_INTERLOCK_VIOLATED` 或 `DISPATCH_SAFETY_INTERLOCK_STATE_UNAVAILABLE` 并终止本次下发。

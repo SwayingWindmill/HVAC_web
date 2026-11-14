@@ -101,6 +101,7 @@
         "infra/registry/postgres/init/035-electricity-budgets-and-utility-bills.sql",
         "infra/registry/postgres/init/036-asset-nameplate.sql",
         "infra/registry/postgres/init/037-site-and-asset-control-locks.sql",
+        "infra/registry/postgres/init/038-command-route-point-metadata.sql",
         "services/notification-service/migrations/005_reading_gap_reminders.sql"
       ]
     },

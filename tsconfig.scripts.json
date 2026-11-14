@@ -18,6 +18,7 @@
     "types": ["vite/client", "node", "react", "react-dom"]
   },
   "include": [
+    "edge/**/*.ts",
     "scripts/**/*.ts",
     "scripts/**/*.d.ts",
     "scripts/**/*.d.mts",

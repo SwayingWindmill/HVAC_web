@@ -1,7 +1,9 @@
 package mqttconnector
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"sync"
@@ -225,4 +227,92 @@ func TestRecoverTenantRepliesResolvesStaleFenceWithoutStarvingLiveReplies(t *tes
 	if settledLive.Attempts[0].Status != commandmodel.AttemptAcknowledged {
 		t.Fatalf("live attempt=%s want=%s", settledLive.Attempts[0].Status, commandmodel.AttemptAcknowledged)
 	}
+}
+
+func TestBuildCommandEnvelopeActuationFields(t *testing.T) {
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	expireAt := now.Add(15 * time.Second)
+	env := commandmodel.DispatchEnvelope{
+		CommandID:      "cmd-1",
+		AttemptID:      "att-1",
+		Capability:     commandmodel.CapabilityStart,
+		Parameters:     commandmodel.CommandParameters{},
+		ExecutionFence: 3,
+		PayloadHash:    "hash-1",
+	}
+
+	t.Run("legacy simulator route omits optional actuation fields", func(t *testing.T) {
+		msg := buildCommandEnvelope(env, commandmodel.DeviceRoute{
+			GatewayID: "gw-1", ExternalDeviceID: "SIM-CHILLER-01", BindingRevision: 1,
+		}, "SIM-CHILLER-01", now, expireAt, 15*time.Second)
+		body, err := json.Marshal(msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var legacy struct {
+			SchemaVersion  string                         `json:"schemaVersion"`
+			MessageID      string                         `json:"messageId"`
+			CommandID      string                         `json:"commandId"`
+			TraceID        string                         `json:"traceId,omitempty"`
+			IssuedAt       int64                          `json:"issuedAt"`
+			ExpireAt       int64                          `json:"expireAt"`
+			DeviceID       string                         `json:"deviceId"`
+			CommandCode    string                         `json:"commandCode"`
+			Params         commandmodel.CommandParameters `json:"params"`
+			Policy         commandPolicy                  `json:"policy"`
+			ExecutionFence uint64                         `json:"executionFence"`
+			PayloadHash    string                         `json:"payloadHash"`
+		}
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&legacy); err != nil {
+			t.Fatalf("unexpected non-legacy JSON field in %s: %v", string(body), err)
+		}
+	})
+
+	t.Run("level coil 0 serializes explicit zero coilAddress", func(t *testing.T) {
+		msg := buildCommandEnvelope(env, commandmodel.DeviceRoute{
+			GatewayID: "gw-1", ExternalDeviceID: "ctrl-chwp-1", BindingRevision: 1,
+			PointCode: "start", ActuationMode: "LEVEL", Channel: "u11", CoilAddress: 0, HasCoilAddress: true,
+		}, "ctrl-chwp-1", now, expireAt, 15*time.Second)
+		body, err := json.Marshal(msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(body, []byte(`"coilAddress":0`)) || !bytes.Contains(body, []byte(`"actuationMode":"LEVEL"`)) || !bytes.Contains(body, []byte(`"channel":"u11"`)) {
+			t.Fatalf("unexpected LEVEL envelope json=%s", string(body))
+		}
+	})
+
+	t.Run("pulse coil 16 serializes pulseDurationMs and omits coilAddress for unit sequence", func(t *testing.T) {
+		pulseEnv := env
+		pulseEnv.Capability = commandmodel.CapabilityStop
+		pulseMsg := buildCommandEnvelope(pulseEnv, commandmodel.DeviceRoute{
+			GatewayID: "gw-1", ExternalDeviceID: "ctrl-chiller-a", BindingRevision: 1,
+			PointCode: "stop", ActuationMode: "PULSE", Channel: "u51", CoilAddress: 16, HasCoilAddress: true, PulseDurationMs: 500,
+		}, "ctrl-chiller-a", now, expireAt, 15*time.Second)
+		pulseBody, err := json.Marshal(pulseMsg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{`"pointCode":"stop"`, `"actuationMode":"PULSE"`, `"channel":"u51"`, `"coilAddress":16`, `"pulseDurationMs":500`} {
+			if !bytes.Contains(pulseBody, []byte(want)) {
+				t.Fatalf("missing %s in pulse json=%s", want, string(pulseBody))
+			}
+		}
+
+		seqEnv := env
+		seqEnv.Capability = commandmodel.CapabilityStartUnitSequence
+		seqMsg := buildCommandEnvelope(seqEnv, commandmodel.DeviceRoute{
+			GatewayID: "gw-1", ExternalDeviceID: "ctrl-chiller-a", BindingRevision: 1,
+			PointCode: "start_unit_sequence", ActuationMode: "UNIT_SEQUENCE", Channel: "unit-a", PulseDurationMs: 500,
+		}, "ctrl-chiller-a", now, expireAt, 15*time.Second)
+		seqBody, err := json.Marshal(seqMsg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(seqBody, []byte(`"coilAddress"`)) || !bytes.Contains(seqBody, []byte(`"actuationMode":"UNIT_SEQUENCE"`)) || !bytes.Contains(seqBody, []byte(`"channel":"unit-a"`)) {
+			t.Fatalf("unexpected UNIT_SEQUENCE json=%s", string(seqBody))
+		}
+	})
 }

@@ -5,6 +5,17 @@
 
 ## 未发布
 
+### 2026-11-15
+
+#### 新增
+
+- 松雅轩冷站 ET1010 20 通道控制能力与双闸门水路联锁保护（Wave 2）：
+  - 在站点清单 `deploy/sites/songyaxuan.site.json` 与 `scripts/site-onboarding.mjs` 中补齐主机停机脉冲点位 `u51`–`u54`（UID 31 地址 `16`–`19`）与 16 台设备控制器（`ctrl-chiller-a..d`、`ctrl-chwp-1..4`、`ctrl-cwp-1..4`、`ctrl-tower-1..4`，共 40 个 `COMMAND` 点位，`CONTROLS` 绑定），仅对观测点位应用存在性与新鲜度监控。
+  - 资产登记模块新增读取视图 `core_registry.command_point_routes_v1`（迁移 `038-command-route-point-metadata.sql`），使网关下行链路自动下发 `actuationMode`（`LEVEL` / `PULSE` / `UNIT_SEQUENCE`）、`channel`、`coilAddress` 与 `pulseDurationMs`。
+  - 在平台网关提交前（`cmd/energy-api/internal/gateway/command.go`）与 MQTT 下发前（`cmd/connectivity` + `dynamic_safety.go`）双闸门实时核验同伴设备 `run_state` 联锁条件，水泵或冷却塔未运行禁止脉冲开启主机、主机未停机禁止断开对应水泵或冷却塔。
+  - 更新 Edge 网关报文函数 `edge/node-red/songyaxuan-platform-envelope.js` 上报控制器运行状态，并实现 `edge/node-red/songyaxuan-command-executor.ts` 下行脉冲复位与 15 秒内一键冷机启停序列执行。
+- 站点与单台设备控制退出边界与交互原型（Wave 1 #824、#825）：后端落地站点控制模式（`REMOTE_AUTO` / `MANUAL_OVERRIDE` / `SAFE_SHUTDOWN_EXIT`）、单台设备锁（`UNLOCKED` / `MANUAL_LOCK` / `MAINTENANCE_LOCK`）及未开始派发指令取消，并完成网页端「运行控制与节能联动」Figma 原型设计待审。
+
 ### 2026-11-14
 
 #### 改进

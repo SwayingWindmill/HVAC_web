@@ -58,7 +58,7 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store) (*comman
 	if err != nil {
 		return nil, err
 	}
-	safetyVerifier, err := commanddispatcher.NewAuthoritativeDispatchSafetyVerifier(safetyReader, commanddispatcher.DispatchSafetyStateKey)
+	safetyVerifier, err := commanddispatcher.NewAuthoritativeDispatchSafetyVerifierWithInterlocks(safetyReader, commanddispatcher.DispatchSafetyStateKey, store)
 	if err != nil {
 		return nil, err
 	}

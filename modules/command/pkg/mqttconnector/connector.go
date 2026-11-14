@@ -59,18 +59,57 @@ type commandPolicy struct {
 }
 
 type commandEnvelope struct {
-	SchemaVersion  string                         `json:"schemaVersion"`
-	MessageID      string                         `json:"messageId"`
-	CommandID      string                         `json:"commandId"`
-	TraceID        string                         `json:"traceId,omitempty"`
-	IssuedAt       int64                          `json:"issuedAt"`
-	ExpireAt       int64                          `json:"expireAt"`
-	DeviceID       string                         `json:"deviceId"`
-	CommandCode    string                         `json:"commandCode"`
-	Params         commandmodel.CommandParameters `json:"params"`
-	Policy         commandPolicy                  `json:"policy"`
-	ExecutionFence uint64                         `json:"executionFence"`
-	PayloadHash    string                         `json:"payloadHash"`
+	SchemaVersion   string                         `json:"schemaVersion"`
+	MessageID       string                         `json:"messageId"`
+	CommandID       string                         `json:"commandId"`
+	TraceID         string                         `json:"traceId,omitempty"`
+	IssuedAt        int64                          `json:"issuedAt"`
+	ExpireAt        int64                          `json:"expireAt"`
+	DeviceID        string                         `json:"deviceId"`
+	CommandCode     string                         `json:"commandCode"`
+	Params          commandmodel.CommandParameters `json:"params"`
+	Policy          commandPolicy                  `json:"policy"`
+	ExecutionFence  uint64                         `json:"executionFence"`
+	PayloadHash     string                         `json:"payloadHash"`
+	PointCode       string                         `json:"pointCode,omitempty"`
+	ActuationMode   string                         `json:"actuationMode,omitempty"`
+	Channel         string                         `json:"channel,omitempty"`
+	CoilAddress     *int                           `json:"coilAddress,omitempty"`
+	PulseDurationMs int                            `json:"pulseDurationMs,omitempty"`
+}
+
+func buildCommandEnvelope(
+	envelope commandmodel.DispatchEnvelope,
+	route commandmodel.DeviceRoute,
+	externalDeviceID string,
+	now time.Time,
+	expireAt time.Time,
+	verificationWindow time.Duration,
+) commandEnvelope {
+	request := commandEnvelope{
+		SchemaVersion:  commandSchemaVersion,
+		MessageID:      envelope.AttemptID,
+		CommandID:      envelope.CommandID,
+		IssuedAt:       now.UnixMilli(),
+		ExpireAt:       expireAt.UnixMilli(),
+		DeviceID:       externalDeviceID,
+		CommandCode:    string(envelope.Capability),
+		Params:         envelope.Parameters,
+		Policy:         commandPolicy{RequiresReadback: true, VerificationWindowMS: verificationWindow.Milliseconds()},
+		ExecutionFence: envelope.ExecutionFence,
+		PayloadHash:    envelope.PayloadHash,
+	}
+	if route.ActuationMode != "" {
+		request.PointCode = route.PointCode
+		request.ActuationMode = route.ActuationMode
+		request.Channel = route.Channel
+		request.PulseDurationMs = route.PulseDurationMs
+		if route.HasCoilAddress {
+			addr := route.CoilAddress
+			request.CoilAddress = &addr
+		}
+	}
+	return request
 }
 
 type commandReply struct {
@@ -195,19 +234,7 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 	if verificationWindow <= 0 {
 		verificationWindow = 15 * time.Second
 	}
-	request := commandEnvelope{
-		SchemaVersion:  commandSchemaVersion,
-		MessageID:      envelope.AttemptID,
-		CommandID:      envelope.CommandID,
-		IssuedAt:       now.UnixMilli(),
-		ExpireAt:       expireAt.UnixMilli(),
-		DeviceID:       externalDeviceID,
-		CommandCode:    string(envelope.Capability),
-		Params:         envelope.Parameters,
-		Policy:         commandPolicy{RequiresReadback: true, VerificationWindowMS: verificationWindow.Milliseconds()},
-		ExecutionFence: envelope.ExecutionFence,
-		PayloadHash:    envelope.PayloadHash,
-	}
+	request := buildCommandEnvelope(envelope, route, externalDeviceID, now, expireAt, verificationWindow)
 	body, err := json.Marshal(request)
 	if err != nil {
 		return commandmodel.ConnectorResult{}, err
