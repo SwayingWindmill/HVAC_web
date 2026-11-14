@@ -116,6 +116,7 @@ type Service struct {
 	clock        Clock
 	shadow       *shadowSolver
 	shadowReader ShadowEvaluationReader
+	staging      *StagingEvaluator
 }
 
 var ErrShadowEvaluationNotFound = errors.New("optimization shadow evaluation not found")
@@ -159,25 +160,33 @@ type ShadowSummary struct {
 // PublishedShadowEvaluation is the read-only shadow diagnostics envelope for a Site's latest
 // published Optimization run. It never carries an executable Recommendation.
 type PublishedShadowEvaluation struct {
-	EvaluationID              string           `json:"evaluationId"`
-	RunID                     string           `json:"runId"`
-	PublishedRecommendationID string           `json:"publishedRecommendationId"`
-	GeneratedAt               time.Time        `json:"generatedAt"`
-	Solver                    string           `json:"solver"`
-	Mode                      string           `json:"mode"`
-	Outcome                   string           `json:"outcome"`
-	Reason                    string           `json:"reason,omitempty"`
-	Fit                       *PlantFit        `json:"fit,omitempty"`
-	CVRMSE                    *float64         `json:"cvRmse"`
-	CondenserReset            map[string]any   `json:"condenserReset"`
-	EnergyResponse            map[string]any   `json:"energyResponse,omitempty"`
-	ZoneResponse              map[string]any   `json:"zoneResponse,omitempty"`
-	Candidates                []map[string]any `json:"candidates,omitempty"`
-	Summary                   *ShadowSummary   `json:"summary,omitempty"`
+	EvaluationID              string             `json:"evaluationId"`
+	RunID                     string             `json:"runId"`
+	PublishedRecommendationID string             `json:"publishedRecommendationId"`
+	GeneratedAt               time.Time          `json:"generatedAt"`
+	Solver                    string             `json:"solver"`
+	Mode                      string             `json:"mode"`
+	Outcome                   string             `json:"outcome"`
+	Reason                    string             `json:"reason,omitempty"`
+	Fit                       *PlantFit          `json:"fit,omitempty"`
+	CVRMSE                    *float64           `json:"cvRmse"`
+	CondenserReset            map[string]any     `json:"condenserReset"`
+	EnergyResponse            map[string]any     `json:"energyResponse,omitempty"`
+	ZoneResponse              map[string]any     `json:"zoneResponse,omitempty"`
+	Candidates                []map[string]any   `json:"candidates,omitempty"`
+	Staging                   *StagingEvaluation `json:"staging,omitempty"`
+	Summary                   *ShadowSummary     `json:"summary,omitempty"`
 }
 
 func (service *Service) WithShadowReader(reader ShadowEvaluationReader) *Service {
 	service.shadowReader = reader
+	return service
+}
+
+// WithStaging configures Decision 3A chiller stage-down and idle auxiliary shutdown evaluation
+// without requiring zone_temperature or writable chilled-water setpoints.
+func (service *Service) WithStaging(evaluator *StagingEvaluator) *Service {
+	service.staging = evaluator
 	return service
 }
 
@@ -366,8 +375,18 @@ func (service *Service) LatestShadowEvaluation(ctx context.Context, tenantID, si
 		EnergyResponse:            stored.EnergyResponse,
 		ZoneResponse:              stored.ZoneResponse,
 		Candidates:                stored.Candidates,
+		Staging:                   stored.Staging,
 		Summary:                   summarizeShadowRecommendation(stored.Recommendation),
 	}, nil
+}
+
+// LatestStagingEvaluation evaluates Decision 3A chiller staging and idle auxiliary recommendations
+// directly from COP fits and live telemetry, without requiring zone_temperature.
+func (service *Service) LatestStagingEvaluation(ctx context.Context, tenantID, siteID string) (StagingEvaluation, error) {
+	if service.staging == nil {
+		return StagingEvaluation{}, ErrStagingEvaluationNotFound
+	}
+	return service.staging.Evaluate(ctx, tenantID, siteID, service.clock().UTC())
 }
 
 func summarizeShadowRecommendation(rec *Recommendation) *ShadowSummary {
