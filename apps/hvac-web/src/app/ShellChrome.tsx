@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { lazy, Suspense, useMemo, type ReactNode } from 'react';
 import { primaryRoleLabel } from '@/lib/role-labels';
 import { useLocation, useRouter } from '@tanstack/react-router';
 import { AppHeader } from '@/components/layout/AppHeader';
@@ -8,11 +8,29 @@ import { Toaster } from '@/components/ui/sonner';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
-import { AssistantPanel } from '@/features/assistant/components/AssistantPanel';
+import { Spinner } from '@/components/ui/spinner';
 import { useAssistantPanel } from '@/features/assistant/assistant-panel-store';
 import { createIdleRealtimeStatus, realtimeStatusPresentation } from './realtime-status';
 import { useAppTheme } from './ThemeGate';
 import { useShellRuntime, useShellSnapshot } from './ShellRuntimeContext';
+
+const LazyAssistantPanel = lazy(() =>
+  import('@/features/assistant/components/AssistantPanel').then((mod) => ({ default: mod.AssistantPanel })),
+);
+
+function AssistantPanelLoading() {
+  return (
+    <aside
+      aria-label="AI 助手"
+      className="sticky top-(--header-height) flex h-[calc(100svh-var(--header-height))] w-[420px] shrink-0 items-center justify-center border-l bg-card text-sm text-muted-foreground print:hidden"
+    >
+      <div className="flex items-center gap-2" role="status">
+        <Spinner className="size-4" />
+        <span>正在载入助手</span>
+      </div>
+    </aside>
+  );
+}
 
 function TransitionSurface({ state, detail, retryHref }: { readonly state: 'purging' | 'failed'; readonly detail?: string; readonly retryHref?: string }) {
   if (state === 'purging') {
@@ -128,7 +146,9 @@ export function ShellChrome({ children }: { readonly children: ReactNode }) {
         {!transitionBlocksContent ? <div id="content" tabIndex={-1} className="min-w-0 flex-1 outline-none">{children}</div> : null}
       </SidebarInset>
       {assistantOpen && activeSite !== undefined && !transitionBlocksContent ? (
-        <AssistantPanel key={activeSite.id} siteId={activeSite.id} siteName={activeSite.displayName} timezone={activeSite.timezone} csrfToken={principal.session.csrfToken} />
+        <Suspense fallback={<AssistantPanelLoading />}>
+          <LazyAssistantPanel key={activeSite.id} siteId={activeSite.id} siteName={activeSite.displayName} timezone={activeSite.timezone} csrfToken={principal.session.csrfToken} />
+        </Suspense>
       ) : null}
       </div>
       <Toaster theme={themeMode} position="bottom-right" richColors closeButton />

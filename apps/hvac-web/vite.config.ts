@@ -14,9 +14,15 @@ const https = viteTLSCert && viteTLSKey
   : undefined;
 
 function manualChunks(id: string) {
-  if (!id.includes('node_modules')) return undefined;
-
   const normalized = id.replace(/\\/g, '/');
+  if (
+    normalized.includes('vite/preload-helper') ||
+    normalized.includes('commonjsHelpers') ||
+    /node_modules\/@babel\/runtime\//.test(normalized)
+  ) {
+    return 'vendor-react';
+  }
+  if (!normalized.includes('node_modules')) return undefined;
 
   if (/node_modules\/(react|react-dom|scheduler)\//.test(normalized)) return 'vendor-react';
   if (/node_modules\/@tanstack\/(?:react-router|router-core|history)\//.test(normalized)) return 'vendor-router';
