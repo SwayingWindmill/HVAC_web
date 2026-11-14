@@ -12,10 +12,10 @@ Note for `HVAC_web`: for the repo's control-command and MQTT correlation state m
 
 ## Run
 
-Work in a scratch folder under `.scratch/` (or `/tmp` outside the repo). Run inside WSL (`wsl -e bash -lc ...`) where Node 24+ is installed. Write a TLA+ spec and its config, then run:
+Work in a scratch folder under `.scratch/` (or `/tmp` outside the repo). Run inside WSL with a **login shell** (`wsl -e bash -lc ...`) so Node 24+ and `/home/haozhang/.local/bin` (`mise`) are on `PATH`. Write a TLA+ spec and its config, then run:
 
 ```sh
-.agents/skills/statechart/scripts/statechart SPEC.tla [--config FILE] [--view FILE] [--out DIR]
+wsl -e bash -lc ".agents/skills/statechart/scripts/statechart SPEC.tla [--config FILE] [--view FILE] [--out DIR]"
 ```
 
 `scripts/statechart.ts` is TypeScript with no external npm runtime dependencies; the wrapper selects Node (`22.18–22.x` or `>= 23.6`), Bun, or Deno automatically.
@@ -23,7 +23,7 @@ Work in a scratch folder under `.scratch/` (or `/tmp` outside the repo). Run ins
 Running TLC requires either:
 
 - `TLA2TOOLS` pointing to `tla2tools.jar` (and `JAVA` pointing to a Java 11+ binary, or `java` on `PATH`), or
-- `mise` on `PATH` with network access on first run to install `java@temurin-25` and `tla2tools.jar@1.7.4`.
+- `mise` on `PATH` (in WSL on this machine, `mise`, `java@temurin-25`, and `http:tla2tools@1.7.4` are already preinstalled; pass `bash -lc` so login `PATH` picks up `~/.local/bin/mise`).
 
 ## Write the spec
 

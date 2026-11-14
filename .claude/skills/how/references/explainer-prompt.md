@@ -20,7 +20,7 @@ When explorers ran, they each investigated a different angle of the same subsyst
 
 Write an explanation a senior engineer unfamiliar with this area could read and walk away with a solid mental model, understanding the architecture well enough to start working in it confidently.
 
-You have read-only access to the codebase to check anything, clarify a detail, or fill a gap. Use Read, Grep, and Glob as needed. If this prompt has no explorer findings, no explorers ran. Trace the code yourself before you explain. Otherwise start from the findings and do not re-explore from scratch.
+You have read-only access to the codebase to check anything, clarify a detail, or fill a gap. Use `read_file`, `codegraph_explore`, and read-only `git grep -n` / `git ls-files` queries via `run_command` (or `Read`, `Grep`, and `Glob` on Claude Code) as needed. If this prompt has no explorer findings, no explorers ran. Trace the code yourself before you explain. Otherwise start from the findings and do not re-explore from scratch.
 
 ## Output Format
 

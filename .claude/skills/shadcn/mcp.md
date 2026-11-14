@@ -13,13 +13,16 @@ shadcn mcp init   # write config for your editor
 
 Editor config files:
 
-| Editor      | Config file                     |
-| ----------- | ------------------------------- |
-| Claude Code | `.mcp.json`                     |
-| Cursor      | `.cursor/mcp.json`              |
-| VS Code     | `.vscode/mcp.json`              |
-| OpenCode    | `opencode.json`                 |
-| Codex       | `~/.codex/config.toml` (manual) |
+| Editor      | Config file                                          |
+| ----------- | ---------------------------------------------------- |
+| Antigravity | `~/.gemini/config/mcp_config.json` (`call_mcp_tool`) |
+| Claude Code | `.mcp.json`                                          |
+| Cursor      | `.cursor/mcp.json`                                   |
+| VS Code     | `.vscode/mcp.json`                                   |
+| OpenCode    | `opencode.json`                                      |
+| Codex       | `~/.codex/config.toml` (manual)                      |
+
+Note: In Antigravity, lazily-loaded MCP tools are invoked via `call_mcp_tool` after reading `<appDataDir>/mcp/<serverName>/<toolName>.json`. Use `npm run ui:shadcn -- info --json` for local project config (`HVAC_web` has no `shadcn` MCP server configured by default — prefer `npm run ui:shadcn` over configuring new global MCPs unless requested).
 
 ---
 

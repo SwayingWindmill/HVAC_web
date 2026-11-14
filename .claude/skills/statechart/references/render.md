@@ -1,6 +1,6 @@
 # Render a chart
 
-Render each `.mmd` file that you show as an SVG with the npm package `pele@1.9.0`, and give the user the SVG. Install Pele once outside the repo (for example under `.scratch/` or `/tmp`, never modifying `HVAC_web`'s `package.json`). Write each SVG next to its `.mmd` file, with the same name. The API is at https://pele.run/api. Pass `{ limit: 1_000_000, outputLimit: 8_000_000, maxEdges: 10_000 }` as the options of `render`. Pele's defaults are smaller than a chart of 500 states can be. When Pele throws a `PeleError`, show the user the Mermaid text and the error.
+Render each `.mmd` file that you show as an SVG with `pele@1.9.0`, and give the user the SVG. On this WSL host, `pele@1.9.0` is preinstalled outside the repo at `/home/haozhang/.local/share/pele/node_modules/pele/dist/pele.js` (never modify `HVAC_web`'s `package.json`; on another machine, install once into `~/.local/share/pele` or `/tmp` via `npm install --prefix ... pele@1.9.0`). Import `render` from that absolute WSL path in a `.mjs` scratch script run via `wsl -e bash -lc "node ..."` (`const { svg } = render(mmd, { limit: 1_000_000, outputLimit: 8_000_000, maxEdges: 10_000 })` returns `{ svg, width, height }`). Write each SVG next to its `.mmd` file, with the same name. The API is at https://pele.run/api. Pass `{ limit: 1_000_000, outputLimit: 8_000_000, maxEdges: 10_000 }` as the options of `render`. Pele's defaults are smaller than a chart of 500 states can be. When Pele throws a `PeleError`, show the user the Mermaid text and the error.
 
 ## Colors
 

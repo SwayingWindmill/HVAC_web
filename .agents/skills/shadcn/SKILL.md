@@ -1,23 +1,23 @@
 ---
 name: shadcn
 description: Manages shadcn components and projects — adding, searching, fixing, debugging, styling, and composing UI, including chat interfaces. Provides project context, component docs, and usage examples. Applies when working with shadcn/ui, component registries, presets, --preset codes, or any project with a components.json file. Also triggers for "shadcn init", "create an app with --preset", or "switch to --preset".
-user-invocable: false
-allowed-tools: Bash(npx shadcn@latest *), Bash(pnpm dlx shadcn@latest *), Bash(bunx --bun shadcn@latest *)
 ---
 
 # shadcn/ui
 
 A framework for building ui, components and design systems. Components are added as source code to the user's project via the CLI.
 
-> **IMPORTANT:** Run all CLI commands using the project's package runner: `npx shadcn@latest`, `pnpm dlx shadcn@latest`, or `bunx --bun shadcn@latest` — based on the project's `packageManager`. Examples below use `npx shadcn@latest` but substitute the correct runner for the project.
+> **IMPORTANT:** In `HVAC_web`, always run shadcn CLI commands from the repo root inside WSL (`wsl -e bash -lc ...`) via the project wrapper `npm run ui:shadcn -- <cmd>` (defined in `scripts/shadcn-cli.mjs`, targeting `apps/hvac-web/components.json`) instead of bare `npx shadcn@latest` or `bunx`. Outside `HVAC_web`, use the project's package runner (`npx shadcn@latest`, `pnpm dlx shadcn@latest`, or `bunx --bun shadcn@latest`) based on `packageManager`.
 
 ## Current Project Context
 
-```json
-!`npx shadcn@latest info --json`
+Antigravity does **not** execute inline shell macros (`!`command``) when loading skills. Refresh project context explicitly before adding or editing components:
+
+```bash
+wsl -e bash -lc "npm run ui:shadcn -- info --json"
 ```
 
-The JSON above contains the project config and installed components. Use `npx shadcn@latest docs <component>` to get documentation and example URLs for any component.
+The JSON output contains the project config and installed components (in `HVAC_web`, `apps/hvac-web` uses Vite + React SPA, `"rsc": false`, and `apps/hvac-web/src/global.css`). Use `npm run ui:shadcn -- docs <component>` (or `npx shadcn@latest docs <component>` outside `HVAC_web`) to get documentation and example URLs for any component.
 
 ## Principles
 
@@ -144,16 +144,16 @@ These are the most common patterns that differentiate correct shadcn/ui code. Fo
 | Empty states               | `Empty`                                                                                             |
 | Menus                      | `DropdownMenu`, `ContextMenu`, `Menubar`                                                            |
 | Tooltips/info              | `Tooltip`, `HoverCard`, `Popover`                                                                   |
-| Chat / conversation UI     | `MessageScroller`, `Message`, `Bubble`, `Attachment`, `Marker`                                      |
+| Chat / conversation UI     | `@assistant-ui/react` (`HVAC_web` copilot stack; outside this repo: `MessageScroller`, `Message`, `Bubble`, `Attachment`, `Marker`) |
 
 ## Key Fields
 
-The injected project context contains these key fields:
+The `info --json` project context contains these key fields:
 
 - **`aliases`** → use the actual alias prefix for imports (e.g. `@/`, `~/`), never hardcode.
-- **`isRSC`** → when `true`, components using `useState`, `useEffect`, event handlers, or browser APIs need `"use client"` at the top of the file. Always reference this field when advising on the directive.
+- **`isRSC`** → when `true`, components using `useState`, `useEffect`, event handlers, or browser APIs need `"use client"` at the top of the file. In `HVAC_web`, `"rsc": false` (Vite SPA) and `npm run design:check` forbids `"use client"` outside `apps/hvac-web/src/components/ui/`.
 - **`tailwindVersion`** → `"v4"` uses `@theme inline` blocks; `"v3"` uses `tailwind.config.js`.
-- **`tailwindCssFile`** → the global CSS file where custom CSS variables are defined. Always edit this file, never create a new one.
+- **`tailwindCssFile`** → the global CSS file where custom CSS variables are defined (`apps/hvac-web/src/global.css` in `HVAC_web`). Always edit this file, never create a new one.
 - **`style`** → component visual treatment (e.g. `nova`, `vega`).
 - **`base`** → primitive library (`radix` or `base`). Affects component APIs and available props.
 - **`iconLibrary`** → determines icon imports. Use `lucide-react` for `lucide`, `@tabler/icons-react` for `tabler`, etc. Never assume `lucide-react`.
@@ -166,21 +166,21 @@ See [cli.md — `info` command](./cli.md) for the full field reference.
 
 ## Component Docs, Examples, and Usage
 
-Run `npx shadcn@latest docs <component>` to get the URLs for a component's documentation, examples, and API reference. Fetch these URLs to get the actual content.
+Run `npm run ui:shadcn -- docs <component>` (or `npx shadcn@latest docs <component>` outside `HVAC_web`) to get the URLs for a component's documentation, examples, and API reference. Fetch these URLs to get the actual content.
 
 ```bash
-npx shadcn@latest docs button dialog select
+npm run ui:shadcn -- docs button dialog select
 ```
 
-**When creating, fixing, debugging, or using a component, always run `npx shadcn@latest docs` and fetch the URLs first.** This ensures you're working with the correct API and usage patterns rather than guessing.
+**When creating, fixing, debugging, or using a component, always run `docs` and fetch the URLs first.** This ensures you're working with the correct API and usage patterns rather than guessing.
 
 ## Workflow
 
-1. **Get project context** — already injected above. Run `npx shadcn@latest info` again if you need to refresh.
-2. **Check installed components first** — before running `add`, always check the `components` list from project context or list the `resolvedPaths.ui` directory. Don't import components that haven't been added, and don't re-add ones already installed.
-3. **Find components** — `npx shadcn@latest search`.
-4. **Get docs and examples** — run `npx shadcn@latest docs <component>` to get URLs, then fetch them. Use `npx shadcn@latest view` to browse registry items you haven't installed. To preview changes to installed components, use `npx shadcn@latest add --diff`.
-5. **Install or update** — `npx shadcn@latest add`. When updating existing components, use `--dry-run` and `--diff` to preview changes first (see [Updating Components](#updating-components) below).
+1. **Get project context** — run `wsl -e bash -lc "npm run ui:shadcn -- info --json"` (outside `HVAC_web`, run `npx shadcn@latest info`). Refresh whenever components change.
+2. **Check installed components first** — before running `add`, always check the `components` list from project context or list the `resolvedPaths.ui` directory (`apps/hvac-web/src/components/ui` in `HVAC_web`). Don't import components that haven't been added, and don't re-add ones already installed.
+3. **Find components** — `npm run ui:shadcn -- search` (outside `HVAC_web`: `npx shadcn@latest search`).
+4. **Get docs and examples** — run `npm run ui:shadcn -- docs <component>` to get URLs, then fetch them. Use `npm run ui:shadcn -- view` to browse registry items you haven't installed. To preview changes to installed components, use `npm run ui:shadcn -- add --diff`.
+5. **Install or update** — `npm run ui:shadcn -- add` (also inspect `DESIGN.md` and `npm run design:check` rules in `HVAC_web`, e.g. `FactTile` / `DataTableBlock` / forbidden `<Button variant="secondary">`). When updating existing components, use `--dry-run` and `--diff` to preview changes first (see [Updating Components](#updating-components) below).
 6. **Fix imports in third-party components** — After adding components from community registries (e.g. `@bundui`, `@magicui`), check the added non-UI files for hardcoded import paths like `@/components/ui/...`. These won't match the project's actual aliases. Use `npx shadcn@latest info` to get the correct `ui` alias (e.g. `@workspace/ui/components`) and rewrite the imports accordingly. The CLI rewrites imports for its own UI files, but third-party registry components may use default paths that don't match the project.
 7. **Review added components** — After adding a component or block from any registry, **always read the added files and verify they are correct**. Check for missing sub-components (e.g. `SelectItem` without `SelectGroup`), missing imports, incorrect composition, or violations of the [Critical Rules](#critical-rules). Also replace any icon imports with the project's `iconLibrary` from the project context (e.g. if the registry item uses `lucide-react` but the project uses `hugeicons`, swap the imports and icon names accordingly). Fix all issues before moving on.
 8. **Registry must be explicit** — When the user asks to add a block or component, **do not guess the registry**. If no registry is specified (e.g. user says "add a login block" without specifying `@shadcn`, `@tailark`, `owner/repo`, etc.), ask which registry to use. Never default to a registry on behalf of the user.
