@@ -345,7 +345,7 @@ func buildSiteEvaluationSnapshot(triggerEventID, tenantID, siteID string, record
 			inputs[key] = fact
 		}
 	}
-	if len(inputs) > 128 || asOf.IsZero() {
+	if len(inputs) > MaxEvaluationSnapshotInputs || asOf.IsZero() {
 		return EvaluationSnapshot{}, ErrTelemetryEvaluationInvalid
 	}
 	return EvaluationSnapshot{

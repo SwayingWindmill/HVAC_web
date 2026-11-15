@@ -1,6 +1,7 @@
 package alarmservice
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -329,5 +330,26 @@ func TestEvaluatePolicyQualityReasonsUseHealthNotTheDisplayedValue(t *testing.T)
 	cleared, err := EvaluatePolicy(policy, evaluationSnapshot("r-2", at.Add(time.Minute).Format(time.RFC3339Nano), good), raised.State, at.Add(time.Minute))
 	if err != nil || cleared.Effect != EvaluationEffectClear {
 		t.Fatalf("a healthy sample did not clear: %#v %v", cleared, err)
+	}
+}
+
+func TestEvaluationSnapshotInputCapAllowsExpandedSiteInputsAndRejectsOverflow(t *testing.T) {
+	at := "2026-11-14T10:00:00Z"
+	makeInputs := func(count int) []InputFact {
+		inputs := make([]InputFact, 0, count)
+		for index := range count {
+			inputs = append(inputs, NumberInput("p"+strconv.Itoa(index), float64(index), "GOOD", at))
+		}
+		return inputs
+	}
+
+	withinCap := evaluationSnapshot("cap-ok", at, makeInputs(200)...)
+	if err := withinCap.Validate(); err != nil {
+		t.Fatalf("snapshot with 200 inputs failed validation: %v", err)
+	}
+
+	overflow := evaluationSnapshot("cap-over", at, makeInputs(MaxEvaluationSnapshotInputs+1)...)
+	if err := overflow.Validate(); err == nil {
+		t.Fatalf("snapshot exceeding MaxEvaluationSnapshotInputs (%d) unexpectedly passed validation", MaxEvaluationSnapshotInputs)
 	}
 }

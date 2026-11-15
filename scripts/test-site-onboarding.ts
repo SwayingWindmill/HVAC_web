@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import vm from 'node:vm';
 
 import {
   SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, checkSiteFile, expandPoints, planOnboarding, pointQuality, pointStatus, presenceApplicability, siteStateQuery, updateWhenChanged,
@@ -62,7 +63,10 @@ test('each DESCRIBES and CONTROLS binding carries its point status and command m
   assert.ok(!freshnessSection.includes('start_unit_sequence'), 'COMMAND points must not enter freshness_policies');
   const t14 = observedPoints.findIndex((row) => row.includes("'t14'"));
   assert.notEqual(t14, -1);
-  assert.match(describes[t14], /'DESCRIBES', 'INACTIVE'/);
+  assert.match(describes[t14], /'DESCRIBES', 'ACTIVE'/);
+  const t20 = observedPoints.findIndex((row) => row.includes("'t20'"));
+  assert.notEqual(t20, -1);
+  assert.match(describes[t20], /'DESCRIBES', 'INACTIVE'/);
 });
 
 test('a rerun follows the site file instead of forcing ACTIVE', () => {
@@ -129,7 +133,7 @@ test('songyaxuan outdoor temperature carries its quality profile into the freshn
   assert.match(row, /, -10, 45, '/);
   assert.match(row, /38\.4/);
   assert.match(row, /"flatlineSeconds":10800/);
-  const inactive = telemetry.split('\n').find((line) => line.includes("'t14'"));
+  const inactive = telemetry.split('\n').find((line) => line.includes("'t20'"));
   assert.ok(inactive);
   assert.doesNotMatch(inactive, /38\.4/);
 });
@@ -265,17 +269,17 @@ test('critical points must be active own readings and readingGaps must have posi
   const meter = profile.devices.find((device) => device.code === 'meter-uid2');
   const temp = profile.devices.find((device) => device.code === 'temperature-uid20');
   const meterChw = meter?.morePoints?.find((point) => point.code === 'chw_leaving_temperature');
-  const temp14 = temp?.points.find((point) => point.code === 't14');
+  const temp20 = temp?.points.find((point) => point.code === 't20');
   const temp1 = temp?.points.find((point) => point.code === 't1');
-  if (!meterChw || !temp14 || !temp1) throw new Error('expected points missing');
+  if (!meterChw || !temp20 || !temp1) throw new Error('expected points missing');
   meterChw.critical = true;
-  temp14.critical = true;
+  temp20.critical = true;
   temp1.critical = 'yes';
   const rules = copy(songyaxuanAlarmRules);
   rules.readingGaps = { title: '', summary: '', severity: 'UNKNOWN', ageSeconds: 0 };
   const problems = checkSiteFile(profile, rules).join('\n');
   assert.match(problems, /meter-uid2\/chw_leaving_temperature: critical point/);
-  assert.match(problems, /temperature-uid20\/t14: critical point/);
+  assert.match(problems, /temperature-uid20\/t20: critical point/);
   assert.match(problems, /temperature-uid20\/t1: critical must be true or false/);
   assert.match(problems, /readingGaps\.title/);
   assert.match(problems, /readingGaps\.summary/);
@@ -456,4 +460,126 @@ test('songyaxuan synthesizes total electricity from the four chiller sub-meters 
   const physicalEnergy = buildOnboardingSql(physical).energy;
   assert.match(physicalEnergy, /"site_energy":"01a14000-5000-7000-8000-000000080002"/);
   assert.match(physicalEnergy, /UPDATE core_registry\.virtual_meters[\s\S]*?SET status = 'SUPERSEDED'/);
+});
+
+test('concentrator voltage, rssi and status devices preserve ids and respect alarm/telemetry caps', () => {
+  const diagnosticCodes = ['temperature-voltage-uid20', 'temperature-rssi-uid20', 'temperature-status-uid20'];
+  const activeDevicesWithPoints = songyaxuan.devices.filter((device) =>
+    expandPoints(device, songyaxuan.meterPoints).some((point) => pointStatus(point) === 'ACTIVE'));
+  assert.ok(activeDevicesWithPoints.length <= 32, `active-point device count ${activeDevicesWithPoints.length} exceeds 32`);
+
+  for (const code of diagnosticCodes) {
+    const device = songyaxuan.devices.find((candidate) => candidate.code === code);
+    assert.ok(device, `${code} missing`);
+    const expanded = expandPoints(device, songyaxuan.meterPoints);
+    const activeOwn = expanded.filter((point) => pointStatus(point) === 'ACTIVE' && !point.from && !point.critical);
+    assert.ok(expanded.length <= 64, `${code} exceeds 64 points`);
+    assert.ok(activeOwn.length <= 32, `${code} active non-critical own points (${activeOwn.length}) exceed 32`);
+    const inactiveCodes = expanded.filter((point) => pointStatus(point) === 'INACTIVE').map((point) => point.code);
+    assert.equal(inactiveCodes.length, 1, `${code} must keep channel 20 INACTIVE`);
+    assert.ok(inactiveCodes.every((pointCode) => pointCode.endsWith('20')));
+  }
+});
+
+test('songyaxuan Node-RED envelope stays under edge byte cap and aligns with site manifest', () => {
+  const envelopeSource = readFileSync(new URL('../edge/node-red/songyaxuan-platform-envelope.js', import.meta.url), 'utf8');
+  assert.ok(Buffer.byteLength(envelopeSource, 'utf8') <= 12288, 'songyaxuan-platform-envelope.js exceeds 12288 byte governance cap');
+
+  const flowContext = new Map<string, unknown>();
+  const runEnvelope = (payload: Record<string, unknown>): {
+    payload: {
+      schemaVersion: string;
+      gatewayId: string;
+      payload: {
+        devices: Array<{
+          deviceId: string;
+          deviceTimestamp: number;
+          points: Array<{ code: string; value: number | string; quality: number; unit?: string }>;
+        }>;
+      };
+    };
+  } | null => {
+    const fn = new vm.Script(`(function(msg, context) { ${envelopeSource}\n })`).runInThisContext() as (
+      msg: { payload: Record<string, unknown> },
+      context: { get: (key: string) => unknown; set: (key: string, value: unknown) => void },
+    ) => ReturnType<typeof runEnvelope>;
+    return fn({ payload }, {
+      get: (key) => flowContext.get(key),
+      set: (key, value) => { flowContext.set(key, value); },
+    });
+  };
+
+  const ts = 1794643200000;
+  for (const unit of ['ammeter-unit1', 'ammeter-unit2', 'ammeter-unit3', 'ammeter-unit4']) {
+    runEnvelope({ [unit]: [{ ts, values: { powerTotal: 50, combinedActiveTotalElectricalEnergy: unit === 'ammeter-unit4' ? 77000 : 100 } }] });
+  }
+  runEnvelope({ waterflow: [{ ts, values: { flowMeter: 120, flowVelocity: 1.5 } }] });
+
+  const temps: Record<string, number> = {};
+  const volts: Record<string, number> = {};
+  const rssis: Record<string, number> = {};
+  const statuses: Record<string, number | string> = {
+    online_count: 17,
+    offline_count: 1,
+    low_battery_count: 1,
+    min_voltage_mv: 2650,
+    min_rssi_dbm: -88,
+  };
+  for (const ch of [...Array.from({ length: 20 }, (_, i) => i + 1), 51, 52, 53, 54, 55]) {
+    temps[`t${ch}`] = ch === 20 || ch === 52 || ch === 8 ? 0 : ch === 18 ? 7.0 : ch === 16 ? 12.0 : 10 + ch / 10;
+    volts[`v${ch}`] = ch === 8 || ch === 52 ? 0 : ch === 1 ? 2650 : 3550;
+    rssis[`rssi${ch}`] = ch === 8 || ch === 52 ? 0 : ch === 1 ? -88 : -62;
+    statuses[`status${ch}`] = ch === 8 || ch === 52 ? 'OFFLINE' : 'ONLINE';
+  }
+
+  const out = runEnvelope({
+    temperature: [{ ts, values: temps }],
+    'temperature-voltage': [{ ts, values: volts }],
+    'temperature-rssi': [{ ts, values: rssis }],
+    'temperature-status': [{ ts, values: statuses }],
+  });
+  assert.ok(out, 'expected combined envelope');
+  assert.equal(out.payload.schemaVersion, '2.0');
+
+  const activeBySourceKey = new Map(
+    songyaxuan.devices.map((device) => [
+      device.sourceKey,
+      new Map(expandPoints(device, songyaxuan.meterPoints).filter((p) => pointStatus(p) === 'ACTIVE').map((p) => [p.code, p])),
+    ]),
+  );
+
+  const byDevice = new Map(out.payload.payload.devices.map((entry) => [entry.deviceId, entry]));
+  for (const key of ['temperature', 'temperature-voltage', 'temperature-rssi', 'temperature-status', 'btu-calc', 'ammeter-unit1', 'cooling-tower', 'outdoor', 'room']) {
+    assert.ok(byDevice.has(key), `missing ${key} in combined envelope`);
+  }
+
+  for (const deviceEntry of out.payload.payload.devices) {
+    const manifestPoints = activeBySourceKey.get(deviceEntry.deviceId);
+    assert.ok(manifestPoints, `unknown deviceId ${deviceEntry.deviceId} emitted by envelope`);
+    for (const point of deviceEntry.points) {
+      const def = manifestPoints.get(point.code);
+      assert.ok(def, `inactive or unregistered point ${deviceEntry.deviceId}/${point.code}`);
+      if (def.unit) assert.equal(point.unit, def.unit, `${deviceEntry.deviceId}/${point.code} unit mismatch`);
+      else assert.equal(point.unit, undefined, `${deviceEntry.deviceId}/${point.code} unexpected unit`);
+    }
+  }
+
+  const voltPoints = new Map(byDevice.get('temperature-voltage')?.points.map((p) => [p.code, p]));
+  assert.equal(voltPoints.get('v8')?.quality, 1, 'offline probe voltage must carry quality=1');
+  assert.equal(voltPoints.get('v1')?.quality, 0);
+  assert.equal(voltPoints.get('v52'), undefined, 'disabled spare channel 52 must not be reported');
+  assert.equal(voltPoints.get('v51')?.quality, 0);
+  const rssiPoints = new Map(byDevice.get('temperature-rssi')?.points.map((p) => [p.code, p]));
+  assert.equal(rssiPoints.get('rssi8')?.quality, 1, 'offline probe rssi must carry quality=1');
+  assert.equal(rssiPoints.get('rssi1')?.value, -88);
+  const roomPoints = new Map(byDevice.get('room')?.points.map((p) => [p.code, p]));
+  assert.equal(roomPoints.get('room_temperature')?.value, 15.3);
+  assert.equal(roomPoints.get('banquet_room_temperature')?.value, 15.4);
+  const meter1Points = new Map(byDevice.get('ammeter-unit1')?.points.map((p) => [p.code, p]));
+  assert.equal(meter1Points.get('cw_leaving_temperature'), undefined, 'offline t8 must not copy into ammeter-unit1');
+  const statusPoints = new Map(byDevice.get('temperature-status')?.points.map((p) => [p.code, p]));
+  assert.equal(statusPoints.get('status8')?.value, 'OFFLINE');
+  assert.equal(statusPoints.get('status8')?.quality, 0);
+  assert.equal(statusPoints.get('min_voltage_mv')?.unit, 'mV');
+  assert.equal(statusPoints.get('min_rssi_dbm')?.unit, 'dBm');
 });

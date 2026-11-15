@@ -13,6 +13,7 @@
 
 #### 新增
 
+- 松雅轩站点清单新增温度采集模块（UID 20）无线探头电池电压（`temperature-voltage-uid20`，`v1`–`v20` 与 `v51`/`v53`–`v55`，`mV`）、信号强度（`temperature-rssi-uid20`，`rssi1`–`rssi20` 与 `rssi51`/`rssi53`–`rssi55`，`dBm`）与通道通信状态及汇总诊断（`temperature-status-uid20`，`status1`–`status20`、`status51`/`status53`–`status55` 及 `online_count` / `offline_count` / `low_battery_count` / `min_voltage_mv` / `min_rssi_dbm`）；同步启用 14 号冷却水塔水探头、11/51 与 12/55 共存冷却塔通道及房间大厅（`t53` -> `room_temperature` / `zone.temperature`）与宴会厅（`t54` -> `banquet_room_temperature` / `zone.banquet_temperature`）室内温度，仅保留 20 号备用通道为 `INACTIVE`（网关 `SPARE` 同时屏蔽已停用的 52 号通道）；网页与微信小程序遥测词典和实时监测视图同步补齐 `mV`、`dBm` 整数精度及 `zone.banquet_temperature`，网关信封脚本 `edge/node-red/songyaxuan-platform-envelope.js` 同步最新通道映射、诊断合并上报与离线通道质量降级（`quality: 1`）。
 - 松雅轩冷站 ET1010 20 通道控制能力与双闸门水路联锁保护（Wave 2）：
   - 在站点清单 `deploy/sites/songyaxuan.site.json` 与 `scripts/site-onboarding.mjs` 中补齐主机停机脉冲点位 `u51`–`u54`（UID 31 地址 `16`–`19`）与 16 台设备控制器（`ctrl-chiller-a..d`、`ctrl-chwp-1..4`、`ctrl-cwp-1..4`、`ctrl-tower-1..4`，共 40 个 `COMMAND` 点位，`CONTROLS` 绑定），仅对观测点位应用存在性与新鲜度监控。
   - 资产登记模块新增读取视图 `core_registry.command_point_routes_v1`（迁移 `038-command-route-point-metadata.sql`），使网关下行链路自动下发 `actuationMode`（`LEVEL` / `PULSE` / `UNIT_SEQUENCE`）、`channel`、`coilAddress` 与 `pulseDurationMs`。
@@ -22,6 +23,10 @@
 - 补齐节能减台与闲置辅机联动评估后端接口与联锁控制感知（#542）：
   - 网关新增 `GET /api/v1/sites/{siteId}/optimization/staging-recommendations/latest` 只读接口、OpenAPI 契约与前端生成客户端（`apps/hvac-web/src/api/generated/platformGateway.gen.ts`），并在 `POST /api/v1/commands` 放行 `CRITICAL` 风险等级控制指令。
   - `services/optimization-service` 新增数据库迁移 `039-optimization-staging-catalog-read.sql`，按站点与租户行级权限读取站点控制模式、单台设备锁定状态、全部绑定设备、可控 `COMMAND` 点位以及点位 `interlockChecks` 液压关联：全站处于手动接管（`MANUAL_OVERRIDE`）或安全停机退出（`SAFE_SHUTDOWN_EXIT`）时暂停产出停机建议，被锁定的冷机或水泵/冷却塔会被跳过并给出原因诊断，允许停机的建议会直接带回 `suggestedCommandPointId`。
+
+#### 修复
+
+- 将告警评估快照的站点输入点数上限（`MaxEvaluationSnapshotInputs`）从 `128` 提升至 `512`，支持站点扩充无线探头诊断点位后的全量规则评估。
 
 ### 2026-11-14
 

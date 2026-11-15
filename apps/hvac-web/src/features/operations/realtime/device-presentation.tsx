@@ -29,7 +29,7 @@ export const KEY_READINGS: Readonly<Record<PlantCategory, readonly string[]>> = 
     'btu_meter.flow_rate',
   ],
   WEATHER: ['weather.ambient_dry_bulb_temperature', 'weather.ambient_wet_bulb_temperature', 'weather.relative_humidity'],
-  ZONE: ['zone.temperature'],
+  ZONE: ['zone.temperature', 'zone.banquet_temperature'],
   ACQUISITION: [],
   OTHER: [],
 };
