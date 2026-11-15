@@ -1,6 +1,6 @@
 # 问题单的交付流程
 
-每张问题单按这五步交付（复杂或跨模块工作可配合 `poteto-mode` 总控剧本，非标准大型迁移用 `figure-it-out` 先拆步骤），每一步做到「完成」那一句才进下一步。
+每张问题单与开发任务均以 `pstack`（`.agents/skills/poteto-mode/SKILL.md`）剧本为主流程：断点续跑走 `session-pickup.md`，中途暂停留痕走 `pause-safely.md` 与 `resume.ts`，常规开发走 `feature.md` / `bug-fix.md` / `refactoring.md`，大型跨模块迁移走 `figure-it-out`，收尾走 `opening-a-pr.md`。推进时按以下五步落实本仓库门禁，每一步做到「完成」那一句才进下一步。
 
 1. **读清楚要做什么。** 用 `in-your-own-words` 先复述用户目标、要解决的问题和最小预期改动；读问题单、上级规格、评论、依赖的单子、`GLOSSARY.md` 和相关的 ADR，记下从哪个提交开始做。改动不熟悉的模块前先用 `how` 走读运行路径；涉及防御逻辑、阈值或历史取舍时先用 `why` 查 `git blame`、PR 讨论与 ADR；跨模块多状态设计或共享契约改动先用 `architect` 出结构草图（备选多形状时用 `arena` 比选），并用 `blast-radius` 跑真实代码验证关键假设。多切片并行时按 `swarm` 拆独立工作树或目录。
    完成：能用 `GLOSSARY.md` 的词说出要交付的每个行为和它的验收方式。

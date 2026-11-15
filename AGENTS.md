@@ -4,11 +4,11 @@
 
 ## 先读什么
 
-- `docs/HANDOFF.md`：现在做到哪、下一步、服务器和本地环境的特殊情况。接手工作先读它。
+- **流程与断点交接以 `pstack`（`.agents/skills/poteto-mode/SKILL.md`）为准**：先读对应剧本，断点续跑走 `poteto-mode/playbooks/session-pickup.md`（优先查 `resume.ts` 断点，再看会话记录、活跃分支和开放 PR）；需求与待办认领只看 GitHub Issues（`docs/agents/issue-tracker.md`），不再把 `docs/HANDOFF.md` 当作任务排期队列。
 - `GLOSSARY.md` 和 `docs/adr/`：业务名词和架构决定。动一个领域的代码前，读相关的名词和决定。
 - `docs/specs/`：每个功能做什么、不做什么、怎么验收。
 - `DESIGN.md`：页面的设计系统。`PRODUCT.md`：用户是谁、要完成什么、哪些安全边界不能碰。
-- 改本地环境、查一个服务的配置、用开发服务器连本地平台时，读 `docs/agents/local-environment.md`。
+- `docs/HANDOFF.md` 与 `docs/agents/local-environment.md`：仅在涉及服务器（`139.199.58.47`）已部署状态/待执行运维操作、松雅轩现场点位约束或本地环境偏差与已知坑时查阅。
 
 ## 仓库结构
 
@@ -95,11 +95,11 @@ npm run deployment:phase1:check                          # 改了 Compose 或迁
 - 只写现在成立的事：过时的直接改掉或删掉，历史留在 git 里。状态写「已采纳」「已实现」「还没做」这类现在的状态；阶段代号（S0–S5）和「目标态」「候选」这类标签换成具体的现状。
 - 调研和参照比对的记录，只在被现行的 ADR、规格、HANDOFF 或代码引用时保留。
 - 新的架构决定只在难以撤回、不看背景会让人意外、又确实在几个方案里做了取舍时写 ADR；格式和名词的维护见 `docs/agents/domain.md`。
-- 用户看得到的变化记进 `CHANGELOG.md`，当前状态和下一步记进 `docs/HANDOFF.md`，都随 PR 一起更新。
+- 用户看得到的变化记进 `CHANGELOG.md`（随 PR 更新）；只在实际改动了服务器部署前提、松雅轩现场基线或本地环境偏差时同步更新 `docs/HANDOFF.md`（不再在其中维护开发计划或写文字规则）。
 
 ## 交付和 Git
 
-- 认领问题单、看标签、更新进度读 `docs/agents/issue-tracker.md` 和 `docs/agents/triage-labels.md`，每张问题单按 `docs/agents/issue-delivery.md` 交付。
+- 认领问题单、看标签、更新进度读 `docs/agents/issue-tracker.md` 和 `docs/agents/triage-labels.md`；实际开工、中途暂停/续跑与收尾均按 `.agents/skills/poteto-mode/SKILL.md` 对应 `pstack` 剧本（配合 `docs/agents/issue-delivery.md` 的仓库门禁）执行。
 - `main` 只通过 PR 合并。每项阶段性工作一个分支，用 Conventional Commits 写清楚原因；本地检查与审查完成后直接推分支、开 PR、盯完 GitHub Actions：CI 全绿即自动 squash 合并进 `main` 并清理分支，CI 失败则直接修复重跑直到全绿合并。
 - 文本文件统一 LF（见 `.gitattributes`）；构建产物和二进制留在仓库外。
 - `git push` 用 Windows 侧的 git（WSL 访问 GitHub 有 TLS 问题）；`gh` 用 WSL 里已登录的那份。

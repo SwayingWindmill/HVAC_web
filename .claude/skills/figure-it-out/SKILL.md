@@ -40,7 +40,7 @@ Each unit is an experiment. State the hypothesis, make the smallest change, meas
 
 ## Phase D: Keep the audit trail
 
-Maintain an explicit decision trail covering hypotheses, commands run, verdicts, and pivots. Store scratch logs in `.scratch/` for ephemeral runs, or summarize in PR/doc notes (keeping `docs/HANDOFF.md` under 28 KiB and never writing `.audit/`).
+Maintain an explicit decision trail covering hypotheses, commands run, verdicts, and pivots. Store scratch logs in `.scratch/` (or checkpoints via `poteto-mode`'s `resume.ts`), or summarize in PR notes (never turn `docs/HANDOFF.md` into a task tracker, keep it under 28 KiB if server/site facts change, and never write `.audit/`).
 
 ## Phase E: Verify and hand back
 
