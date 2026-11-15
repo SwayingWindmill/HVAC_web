@@ -3,6 +3,7 @@ package optimization
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -201,11 +202,114 @@ ORDER BY tp.reporting_device_id, tp.point_code, tp.id`, tenantID, siteID, evalAt
 	}
 	pointRows.Close()
 
+	scheduleCtx, err := loadOperatingScheduleContext(ctx, tx, tenantID, siteID, evalAt)
+	if err != nil {
+		return StagingTopology{}, err
+	}
+
 	if err = tx.Commit(ctx); err != nil {
 		return StagingTopology{}, err
 	}
 
-	return buildStagingTopologyFromRecords(siteControlMode, siteControlReason, locks, assets, devices, bindings, commandPoints), nil
+	topology := buildStagingTopologyFromRecords(siteControlMode, siteControlReason, locks, assets, devices, bindings, commandPoints)
+	topology.OperatingSchedule = scheduleCtx
+	return topology, nil
+}
+
+func loadOperatingScheduleContext(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID, siteID string,
+	evalAt time.Time,
+) (*OperatingScheduleContext, error) {
+	var siteTimezone string
+	err := tx.QueryRow(ctx, `
+SELECT COALESCE(timezone, 'UTC')
+FROM core_registry.sites
+WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, siteID).Scan(&siteTimezone)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("load site timezone: %w", err)
+	}
+	scheduleCtx := &OperatingScheduleContext{
+		SiteTimezone: strings.TrimSpace(siteTimezone),
+	}
+	if scheduleCtx.SiteTimezone == "" {
+		scheduleCtx.SiteTimezone = "UTC"
+	}
+
+	var scheduleID string
+	var scheduleRevision int
+	err = tx.QueryRow(ctx, `
+SELECT id::text, pre_cool_lead_minutes, coast_down_lag_minutes, revision
+FROM core_registry.operating_schedules
+WHERE tenant_id=$1::uuid AND site_id=$2::uuid
+ORDER BY id ASC
+LIMIT 1`, tenantID, siteID).Scan(&scheduleID, &scheduleCtx.PreCoolLeadMinutes, &scheduleCtx.CoastDownLagMinutes, &scheduleRevision)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("load operating schedule: %w", err)
+	}
+	if err == nil {
+		scheduleCtx.Configured = true
+		slotRows, slotErr := tx.Query(ctx, `
+SELECT day_of_week, start_minute, end_minute
+FROM core_registry.operating_schedule_slots
+WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND schedule_id=$3::uuid AND schedule_revision=$4
+ORDER BY day_of_week ASC, start_minute ASC, end_minute ASC, id ASC`,
+			tenantID, siteID, scheduleID, scheduleRevision)
+		if slotErr != nil {
+			return nil, fmt.Errorf("load operating schedule slots: %w", slotErr)
+		}
+		for slotRows.Next() {
+			var slot OperatingScheduleSlotWindow
+			if scanErr := slotRows.Scan(&slot.DayOfWeek, &slot.StartMinute, &slot.EndMinute); scanErr != nil {
+				slotRows.Close()
+				return nil, scanErr
+			}
+			scheduleCtx.Slots = append(scheduleCtx.Slots, slot)
+		}
+		if slotRowsErr := slotRows.Err(); slotRowsErr != nil {
+			slotRows.Close()
+			return nil, slotRowsErr
+		}
+		slotRows.Close()
+	}
+
+	localDate := siteLocalDateString(scheduleCtx.SiteTimezone, evalAt)
+	excRows, err := tx.Query(ctx, `
+SELECT id::text, COALESCE(title, ''), kind, to_char(start_date, 'YYYY-MM-DD'), to_char(end_date, 'YYYY-MM-DD'),
+       COALESCE(replacement_slots, '[]'::jsonb), COALESCE(reason, '')
+FROM core_registry.operating_exceptions
+WHERE tenant_id=$1::uuid
+  AND site_id=$2::uuid
+  AND status='APPROVED'
+  AND start_date <= ($3::date + 1)
+  AND end_date >= ($3::date - 1)
+ORDER BY start_date ASC, id ASC`, tenantID, siteID, localDate)
+	if err != nil {
+		return nil, fmt.Errorf("load operating schedule exceptions: %w", err)
+	}
+	for excRows.Next() {
+		var exc ApprovedOperatingExceptionWindow
+		var rawSlots []byte
+		if scanErr := excRows.Scan(&exc.ID, &exc.Title, &exc.Kind, &exc.StartDate, &exc.EndDate, &rawSlots, &exc.Reason); scanErr != nil {
+			excRows.Close()
+			return nil, scanErr
+		}
+		if len(rawSlots) > 0 {
+			if unmarshalErr := json.Unmarshal(rawSlots, &exc.ReplacementSlots); unmarshalErr != nil {
+				excRows.Close()
+				return nil, fmt.Errorf("decode operating exception %s replacement_slots: %w", exc.ID, unmarshalErr)
+			}
+		}
+		scheduleCtx.ApprovedExceptions = append(scheduleCtx.ApprovedExceptions, exc)
+	}
+	if excRowsErr := excRows.Err(); excRowsErr != nil {
+		excRows.Close()
+		return nil, excRowsErr
+	}
+	excRows.Close()
+
+	return scheduleCtx, nil
 }
 
 func buildStagingTopologyFromRecords(

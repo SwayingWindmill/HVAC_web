@@ -91,6 +91,7 @@ COPY infra/registry/postgres/init/038-command-route-point-metadata.sql /opt/hvac
 COPY services/notification-service/migrations/005_reading_gap_reminders.sql /opt/hvac/repo/services/notification-service/migrations/005_reading_gap_reminders.sql
 COPY services/notification-service/migrations/006_alarm_delivery.sql /opt/hvac/repo/services/notification-service/migrations/006_alarm_delivery.sql
 COPY infra/registry/postgres/init/039-optimization-staging-catalog-read.sql /opt/hvac/repo/infra/registry/postgres/init/039-optimization-staging-catalog-read.sql
+COPY infra/registry/postgres/init/040-optimization-operating-schedule-read.sql /opt/hvac/repo/infra/registry/postgres/init/040-optimization-operating-schedule-read.sql
 
 FROM scratch AS sources-runtime
 

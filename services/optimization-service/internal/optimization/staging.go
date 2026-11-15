@@ -23,6 +23,7 @@ const (
 
 	RecommendationKindChillerStageDown  = "CHILLER_STAGE_DOWN"
 	RecommendationKindIdleAuxiliaryStop = "IDLE_AUXILIARY_STOP"
+	RecommendationKindOffHoursStop      = "OFF_HOURS_STOP"
 
 	SuggestedCapabilityStopUnitSequence = "STOP_UNIT_SEQUENCE"
 	SuggestedCapabilityStop             = "STOP"
@@ -261,6 +262,41 @@ type AuxiliaryUnitInput struct {
 	ServesChillerIDs []string        `json:"servesChillerIds,omitempty"`
 }
 
+// OperatingScheduleSlotWindow defines one weekly cooling slot in Site-local time.
+type OperatingScheduleSlotWindow struct {
+	DayOfWeek   int `json:"dayOfWeek"` // 1=Monday..7=Sunday
+	StartMinute int `json:"startMinute"`
+	EndMinute   int `json:"endMinute"`
+}
+
+// OperatingExceptionReplacementSlot overrides regular weekly cooling hours on an OVERTIME_COOLING day.
+type OperatingExceptionReplacementSlot struct {
+	StartMinute int `json:"startMinute"`
+	EndMinute   int `json:"endMinute"`
+}
+
+// ApprovedOperatingExceptionWindow mirrors an approved full-day operating schedule exception.
+type ApprovedOperatingExceptionWindow struct {
+	ID               string                              `json:"id"`
+	Title            string                              `json:"title"`
+	Kind             string                              `json:"kind"`      // HOLIDAY_SHUTDOWN | MAINTENANCE_WINDOW | OVERTIME_COOLING
+	StartDate        string                              `json:"startDate"` // YYYY-MM-DD
+	EndDate          string                              `json:"endDate"`   // YYYY-MM-DD
+	ReplacementSlots []OperatingExceptionReplacementSlot `json:"replacementSlots,omitempty"`
+	Reason           string                              `json:"reason,omitempty"`
+}
+
+// OperatingScheduleContext provides weekly cooling slots, buffer minutes, and approved exceptions
+// evaluated in the Site's local timezone.
+type OperatingScheduleContext struct {
+	SiteTimezone        string                             `json:"siteTimezone,omitempty"`
+	Configured          bool                               `json:"configured"`
+	PreCoolLeadMinutes  int                                `json:"preCoolLeadMinutes"`
+	CoastDownLagMinutes int                                `json:"coastDownLagMinutes"`
+	Slots               []OperatingScheduleSlotWindow      `json:"slots,omitempty"`
+	ApprovedExceptions  []ApprovedOperatingExceptionWindow `json:"approvedExceptions,omitempty"`
+}
+
 // StagingTopology supplies authoritative asset, meter-binding, lock state and hydraulic SERVES edge definitions
 // for a Site.
 type StagingTopology struct {
@@ -269,6 +305,7 @@ type StagingTopology struct {
 	SiteControlReason   string                          `json:"siteControlReason,omitempty"`
 	AssetControlLocks   map[string]AssetControlLockInfo `json:"assetControlLocks,omitempty"`
 	CommandPointIDs     map[string]string               `json:"commandPointIds,omitempty"`
+	OperatingSchedule   *OperatingScheduleContext       `json:"operatingSchedule,omitempty"`
 	Chillers            []ChillerMeterBinding           `json:"chillers"`
 	Auxiliaries         []AuxiliaryUnitBinding          `json:"auxiliaries,omitempty"`
 	Edges               []HydraulicEdge                 `json:"edges,omitempty"`
@@ -302,6 +339,7 @@ type StagingSnapshot struct {
 	SiteControlReason string                          `json:"siteControlReason,omitempty"`
 	AssetControlLocks map[string]AssetControlLockInfo `json:"assetControlLocks,omitempty"`
 	CommandPointIDs   map[string]string               `json:"commandPointIds,omitempty"`
+	OperatingSchedule *OperatingScheduleContext       `json:"operatingSchedule,omitempty"`
 	PlantCoolingLoad  *TelemetryValue                 `json:"plantCoolingLoad,omitempty"`
 	HeaderSupplyC     *TelemetryValue                 `json:"headerSupplyC,omitempty"`
 	Chillers          []ChillerUnitInput              `json:"chillers"`
@@ -486,7 +524,7 @@ func evaluateStagingWithFit(ctx context.Context, tenantID, siteID string, at tim
 	return &eval
 }
 
-// EvaluateStaging runs both CHILLER_STAGE_DOWN and IDLE_AUXILIARY_STOP checks on a sensor snapshot.
+// EvaluateStaging runs chiller stage-down, off-hours stop, and idle auxiliary shutdown checks on a sensor snapshot.
 func EvaluateStaging(snapshot StagingSnapshot, policy StagingPolicy) (StagingEvaluation, error) {
 	normPolicy, err := policy.normalized()
 	if err != nil {
@@ -508,6 +546,50 @@ func EvaluateStaging(snapshot StagingSnapshot, policy StagingPolicy) (StagingEva
 		Diagnostics:      []StagingDiagnostic{},
 	}
 
+	scheduleState := evaluateScheduleState(snapshot.OperatingSchedule, evaluatedAt)
+	if scheduleState.activeMaintenance != nil {
+		detail := formatScheduleExceptionDetail("站点当前处于已批准的计划检修窗口，暂停生成减台及启停建议", *scheduleState.activeMaintenance)
+		result.Diagnostics = append(result.Diagnostics,
+			StagingDiagnostic{
+				Scope:  RecommendationKindChillerStageDown,
+				Status: "SUPPRESSED",
+				Reason: "MAINTENANCE_WINDOW_ACTIVE",
+				Detail: detail,
+			},
+			StagingDiagnostic{
+				Scope:  RecommendationKindOffHoursStop,
+				Status: "SUPPRESSED",
+				Reason: "MAINTENANCE_WINDOW_ACTIVE",
+				Detail: detail,
+			},
+		)
+		if len(snapshot.Auxiliaries) > 0 {
+			result.Diagnostics = append(result.Diagnostics, StagingDiagnostic{
+				Scope:  RecommendationKindIdleAuxiliaryStop,
+				Status: "SUPPRESSED",
+				Reason: "MAINTENANCE_WINDOW_ACTIVE",
+				Detail: detail,
+			})
+		}
+		return result, nil
+	}
+
+	if scheduleState.scheduleActive && !scheduleState.inCoolingWindow {
+		offDrafts, offDiags := evaluateOffHoursStop(snapshot, normPolicy, scheduleState)
+		result.Recommendations = append(result.Recommendations, offDrafts...)
+		result.Diagnostics = append(result.Diagnostics, offDiags...)
+		result.Diagnostics = append(result.Diagnostics, StagingDiagnostic{
+			Scope:  RecommendationKindChillerStageDown,
+			Status: "NO_OP",
+			Reason: "OFF_HOURS_WINDOW_ACTIVE",
+			Detail: "当前处于非供冷运行时间窗口，已切换为非营业时段停机评估，不重复生成冷机减台建议。",
+		})
+		auxDrafts, auxDiags := evaluateIdleAuxiliaries(snapshot, normPolicy)
+		result.Recommendations = append(result.Recommendations, auxDrafts...)
+		result.Diagnostics = append(result.Diagnostics, auxDiags...)
+		return result, nil
+	}
+
 	if draft, diag := evaluateChillerStageDown(snapshot, normPolicy); draft != nil {
 		result.Recommendations = append(result.Recommendations, *draft)
 		result.Diagnostics = append(result.Diagnostics, diag)
@@ -518,6 +600,15 @@ func EvaluateStaging(snapshot StagingSnapshot, policy StagingPolicy) (StagingEva
 	auxDrafts, auxDiags := evaluateIdleAuxiliaries(snapshot, normPolicy)
 	result.Recommendations = append(result.Recommendations, auxDrafts...)
 	result.Diagnostics = append(result.Diagnostics, auxDiags...)
+
+	if scheduleState.scheduleActive {
+		result.Diagnostics = append(result.Diagnostics, StagingDiagnostic{
+			Scope:  RecommendationKindOffHoursStop,
+			Status: "NO_OP",
+			Reason: "IN_COOLING_WINDOW",
+			Detail: "当前处于有效供冷运行窗口内（含预冷与后吹扫缓冲），不生成非营业时段停机建议。",
+		})
+	}
 
 	return result, nil
 }
@@ -1973,6 +2064,311 @@ func applyStagingTopology(snapshot *StagingSnapshot, topology *StagingTopology) 
 			}
 		}
 	}
+	if topology.OperatingSchedule != nil && snapshot.OperatingSchedule == nil {
+		snapshot.OperatingSchedule = cloneOperatingScheduleContext(topology.OperatingSchedule)
+	}
+}
+
+func cloneOperatingScheduleContext(src *OperatingScheduleContext) *OperatingScheduleContext {
+	if src == nil {
+		return nil
+	}
+	out := &OperatingScheduleContext{
+		SiteTimezone:        strings.TrimSpace(src.SiteTimezone),
+		Configured:          src.Configured,
+		PreCoolLeadMinutes:  src.PreCoolLeadMinutes,
+		CoastDownLagMinutes: src.CoastDownLagMinutes,
+	}
+	if len(src.Slots) > 0 {
+		out.Slots = append([]OperatingScheduleSlotWindow(nil), src.Slots...)
+	}
+	if len(src.ApprovedExceptions) > 0 {
+		out.ApprovedExceptions = make([]ApprovedOperatingExceptionWindow, len(src.ApprovedExceptions))
+		for i, exc := range src.ApprovedExceptions {
+			out.ApprovedExceptions[i] = exc
+			if len(exc.ReplacementSlots) > 0 {
+				out.ApprovedExceptions[i].ReplacementSlots = append([]OperatingExceptionReplacementSlot(nil), exc.ReplacementSlots...)
+			}
+		}
+	}
+	return out
+}
+
+type scheduleEvalState struct {
+	scheduleActive            bool
+	inCoolingWindow           bool
+	hasApprovedExceptionToday bool
+	todayDate                 string
+	todayException            *ApprovedOperatingExceptionWindow
+	activeMaintenance         *ApprovedOperatingExceptionWindow
+}
+
+func loadSiteLocation(timezone string) *time.Location {
+	if trimmed := strings.TrimSpace(timezone); trimmed != "" {
+		if loaded, err := time.LoadLocation(trimmed); err == nil {
+			return loaded
+		}
+	}
+	return time.UTC
+}
+
+func isoWeekdayNumber(weekday time.Weekday) int {
+	if weekday == time.Sunday {
+		return 7
+	}
+	return int(weekday)
+}
+
+func findApprovedExceptionForDate(exceptions []ApprovedOperatingExceptionWindow, dateStr string) *ApprovedOperatingExceptionWindow {
+	for _, exc := range exceptions {
+		start := strings.TrimSpace(exc.StartDate)
+		end := strings.TrimSpace(exc.EndDate)
+		if start == "" || end == "" || start > end {
+			continue
+		}
+		if dateStr >= start && dateStr <= end {
+			copied := exc
+			return &copied
+		}
+	}
+	return nil
+}
+
+func evaluateScheduleState(schedule *OperatingScheduleContext, at time.Time) scheduleEvalState {
+	if schedule == nil {
+		return scheduleEvalState{
+			scheduleActive:  false,
+			inCoolingWindow: true,
+		}
+	}
+	loc := loadSiteLocation(schedule.SiteTimezone)
+	atLocal := at.In(loc)
+	day0 := time.Date(atLocal.Year(), atLocal.Month(), atLocal.Day(), 0, 0, 0, 0, loc)
+	todayStr := day0.Format("2006-01-02")
+
+	state := scheduleEvalState{
+		todayDate: todayStr,
+	}
+	todayExc := findApprovedExceptionForDate(schedule.ApprovedExceptions, todayStr)
+	if todayExc != nil {
+		state.hasApprovedExceptionToday = true
+		state.todayException = todayExc
+		if strings.EqualFold(strings.TrimSpace(todayExc.Kind), "MAINTENANCE_WINDOW") {
+			state.activeMaintenance = todayExc
+		}
+	}
+	state.scheduleActive = schedule.Configured || state.hasApprovedExceptionToday
+	if !state.scheduleActive {
+		state.inCoolingWindow = true
+		return state
+	}
+
+	lead := time.Duration(max(0, schedule.PreCoolLeadMinutes)) * time.Minute
+	lag := time.Duration(max(0, schedule.CoastDownLagMinutes)) * time.Minute
+
+	matchesExpandedSlot := func(dayStart time.Time, startMinute, endMinute int) bool {
+		if endMinute <= startMinute {
+			return false
+		}
+		winStart := dayStart.Add(time.Duration(startMinute)*time.Minute - lead)
+		winEnd := dayStart.Add(time.Duration(endMinute)*time.Minute + lag)
+		return !at.Before(winStart) && at.Before(winEnd)
+	}
+
+	if todayExc != nil {
+		kind := strings.ToUpper(strings.TrimSpace(todayExc.Kind))
+		if kind == "HOLIDAY_SHUTDOWN" || kind == "MAINTENANCE_WINDOW" {
+			state.inCoolingWindow = false
+			return state
+		}
+		if kind == "OVERTIME_COOLING" {
+			for _, slot := range todayExc.ReplacementSlots {
+				if matchesExpandedSlot(day0, slot.StartMinute, slot.EndMinute) {
+					state.inCoolingWindow = true
+					return state
+				}
+			}
+			state.inCoolingWindow = false
+			return state
+		}
+	}
+
+	days := []time.Time{day0.AddDate(0, 0, -1), day0, day0.AddDate(0, 0, 1)}
+	for _, d := range days {
+		exc := findApprovedExceptionForDate(schedule.ApprovedExceptions, d.Format("2006-01-02"))
+		if exc != nil {
+			kind := strings.ToUpper(strings.TrimSpace(exc.Kind))
+			if kind == "HOLIDAY_SHUTDOWN" || kind == "MAINTENANCE_WINDOW" {
+				continue
+			}
+			if kind == "OVERTIME_COOLING" {
+				for _, slot := range exc.ReplacementSlots {
+					if matchesExpandedSlot(d, slot.StartMinute, slot.EndMinute) {
+						state.inCoolingWindow = true
+						return state
+					}
+				}
+				continue
+			}
+		}
+		dow := isoWeekdayNumber(d.Weekday())
+		for _, slot := range schedule.Slots {
+			if slot.DayOfWeek != dow {
+				continue
+			}
+			if matchesExpandedSlot(d, slot.StartMinute, slot.EndMinute) {
+				state.inCoolingWindow = true
+				return state
+			}
+		}
+	}
+
+	state.inCoolingWindow = false
+	return state
+}
+
+func formatScheduleExceptionDetail(prefix string, exc ApprovedOperatingExceptionWindow) string {
+	title := strings.TrimSpace(exc.Title)
+	if title == "" {
+		title = strings.TrimSpace(exc.Kind)
+	}
+	dateRange := strings.TrimSpace(exc.StartDate)
+	if end := strings.TrimSpace(exc.EndDate); end != "" && end != dateRange {
+		dateRange += " 至 " + end
+	}
+	detail := prefix + "（" + title
+	if dateRange != "" {
+		detail += "，" + dateRange
+	}
+	if reason := strings.TrimSpace(exc.Reason); reason != "" {
+		detail += "，原因：" + reason
+	}
+	return detail + "）。"
+}
+
+func evaluateOffHoursStop(snapshot StagingSnapshot, policy StagingPolicy, state scheduleEvalState) ([]StagingRecommendationDraft, []StagingDiagnostic) {
+	if detail, active := siteControlExitDetail(snapshot); active {
+		return []StagingRecommendationDraft{}, []StagingDiagnostic{{
+			Scope:  RecommendationKindOffHoursStop,
+			Status: "SUPPRESSED",
+			Reason: "SITE_CONTROL_EXIT_ACTIVE",
+			Detail: fmt.Sprintf("%s，暂停生成非营业时段停机建议。", detail),
+		}}
+	}
+	at := snapshot.EvaluatedAt.UTC()
+	chillers := append([]ChillerUnitInput(nil), snapshot.Chillers...)
+	sort.Slice(chillers, func(i, j int) bool {
+		if chillers[i].AssetCode != chillers[j].AssetCode {
+			return chillers[i].AssetCode < chillers[j].AssetCode
+		}
+		return chillers[i].AssetID < chillers[j].AssetID
+	})
+
+	drafts := make([]StagingRecommendationDraft, 0)
+	diagnostics := make([]StagingDiagnostic, 0, len(chillers))
+
+	for _, unit := range chillers {
+		if lock, locked := lookupAssetControlLock(snapshot.AssetControlLocks, unit.AssetID, unit.AssetCode); locked {
+			diagnostics = append(diagnostics, StagingDiagnostic{
+				Scope: RecommendationKindOffHoursStop, AssetID: unit.AssetID, AssetCode: unit.AssetCode,
+				Status: "SUPPRESSED", Reason: "ASSET_CONTROL_LOCKED",
+				Detail: fmt.Sprintf("冷机 %s 已被单机锁定（%s）%s，暂停生成非营业时段停机建议。", unitDisplayName(unit), lock.LockMode, lockReasonSuffix(lock.Reason)),
+			})
+			continue
+		}
+
+		runState, runReason := resolveChillerRunState(unit, at, policy)
+		if runState != RunStateRunning && runState != RunStateStarting {
+			status := "NO_OP"
+			reason := "CHILLER_ALREADY_STOPPED"
+			if runState == RunStateUnknown {
+				status = "SUPPRESSED"
+				if runReason != "" {
+					reason = runReason
+				} else {
+					reason = "CHILLER_STATE_UNKNOWN"
+				}
+			}
+			diagnostics = append(diagnostics, StagingDiagnostic{
+				Scope: RecommendationKindOffHoursStop, AssetID: unit.AssetID, AssetCode: unit.AssetCode,
+				Status: status, Reason: reason,
+				Detail: fmt.Sprintf("冷机 %s 当前状态为 %s，无需触发非营业时段停机建议。", unitDisplayName(unit), runState),
+			})
+			continue
+		}
+
+		targetID := unit.AssetID
+		if targetID == "" {
+			targetID = unit.AssetCode
+		}
+		savingKW, powerBasis := resolveChillerOffHoursPowerSaving(unit, at, policy)
+		savingKWRounded := round(savingKW, 2)
+		hourlyKWh := savingKWRounded
+		shiftKWh := round(savingKW*policy.ShiftHours, 2)
+
+		suggestedCap := SuggestedCapabilityStopUnitSequence
+		suggestedPointID := lookupCommandPointID(snapshot.CommandPointIDs, targetID, unit.AssetCode, SuggestedCapabilityStopUnitSequence)
+		if suggestedPointID == "" {
+			if stopPointID := lookupCommandPointID(snapshot.CommandPointIDs, targetID, unit.AssetCode, SuggestedCapabilityStop); stopPointID != "" {
+				suggestedCap = SuggestedCapabilityStop
+				suggestedPointID = stopPointID
+			}
+		}
+
+		scheduleNotice := fmt.Sprintf("站点 %s（%s）当前处于非供冷营业时间窗口", state.todayDate, loadSiteLocation(snapshot.OperatingSchedule.SiteTimezone).String())
+		if state.todayException != nil && strings.EqualFold(strings.TrimSpace(state.todayException.Kind), "HOLIDAY_SHUTDOWN") {
+			scheduleNotice = fmt.Sprintf("站点 %s 处于已批准节假日停机窗口（%s）", state.todayDate, strings.TrimSpace(state.todayException.Title))
+		}
+		rationale := fmt.Sprintf(
+			"%s，但冷机 %s 仍处于 %s 状态。建议值班主管人工复核并确认下发 %s 停机指令，预计可避免无效电耗 %.1f kW（约 %.1f kWh/小时、%.1f kWh/%.0f小时班次）。",
+			scheduleNotice, unitDisplayName(unit), runState, suggestedCap, savingKWRounded, hourlyKWh, shiftKWh, policy.ShiftHours,
+		)
+		preconditions := []string{
+			fmt.Sprintf("人工确认模式（%s）：必须经值班主管复核并完成 TOTP 双因子验证后方可下发 %s 停机指令。", ConfirmationModeManual, suggestedCap),
+			"停机前确认现场无临时加班供冷、防冻保护或设备调试需求。",
+			fmt.Sprintf("确认 %s 配套水泵、冷却塔与电动蝶阀联锁逻辑均处于正常受控状态。", unitDisplayName(unit)),
+		}
+
+		draft := StagingRecommendationDraft{
+			ID:                       deterministicV7(snapshot.SiteID+":"+RecommendationKindOffHoursStop, targetID, at),
+			Kind:                     RecommendationKindOffHoursStop,
+			ConfirmationMode:         ConfirmationModeManual,
+			RequiresSupervisorReview: true,
+			RequiresTOTP:             true,
+			SuggestedCapability:      suggestedCap,
+			SuggestedCommandPointID:  suggestedPointID,
+			TargetAssetID:            targetID,
+			TargetAssetCode:          unit.AssetCode,
+			TargetAssetName:          unit.AssetName,
+			TargetAssetType:          AssetTypeChiller,
+			PredictedPowerSavingKW:   savingKWRounded,
+			EstimatedHourlySavingKWh: hourlyKWh,
+			EstimatedShiftSavingKWh:  shiftKWh,
+			ShiftHours:               policy.ShiftHours,
+			PowerSavingBasis:         powerBasis,
+			Rationale:                rationale,
+			Preconditions:            preconditions,
+		}
+		drafts = append(drafts, draft)
+		diagnostics = append(diagnostics, StagingDiagnostic{
+			Scope: RecommendationKindOffHoursStop, AssetID: targetID, AssetCode: unit.AssetCode,
+			Status: "RECOMMENDED", Reason: "OFF_HOURS_STOP_ELIGIBLE", Detail: rationale,
+		})
+	}
+
+	return drafts, diagnostics
+}
+
+func resolveChillerOffHoursPowerSaving(unit ChillerUnitInput, at time.Time, policy StagingPolicy) (float64, string) {
+	if unit.Power != nil {
+		if ok, _ := isFreshGoodObservation(unit.Power.Quality, unit.Power.SampledAt, at, policy.MaxTelemetryAge); ok && finite(unit.Power.Value) && unit.Power.Value > 0 {
+			return unit.Power.Value, "METER"
+		}
+	}
+	if unit.RatedPowerKW > 0 && finite(unit.RatedPowerKW) {
+		return unit.RatedPowerKW, "NAMEPLATE"
+	}
+	return policy.ChillerRunningPowerKW, "DEFAULT"
 }
 
 func cloneAssetControlLocks(src map[string]AssetControlLockInfo) map[string]AssetControlLockInfo {
