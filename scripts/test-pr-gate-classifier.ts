@@ -411,6 +411,17 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
   assert.equal(onboardingControl.unknown, false);
   assert.equal(onboardingControl.broad, false);
 
+  for (const connFile of [
+    'scripts/test-concentrator-mqtt-rpc.ts',
+    'scripts/test-gateway-nodered-tunnel.ts',
+    'scripts/run-mqtt-broker-acl-tests.mjs',
+  ]) {
+    const concClassification = runClassification([connFile]);
+    assert.deepEqual(concClassification.unitProfiles, ['telemetry']);
+    assert.equal(concClassification.unknown, false, connFile);
+    assert.equal(concClassification.broad, false, connFile);
+  }
+
   assert.equal(goExecutableName('gofmt', 'win32'), 'gofmt.exe');
   assert.equal(goExecutableName('gofmt.exe', 'win32'), 'gofmt.exe');
   assert.equal(goExecutableName('gofmt', 'linux'), 'gofmt');

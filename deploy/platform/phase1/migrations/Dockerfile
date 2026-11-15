@@ -97,6 +97,7 @@ COPY infra/registry/postgres/init/040-optimization-operating-schedule-read.sql /
 COPY infra/connectivity/postgres/init/005-schema-and-table-comments.sql /opt/hvac/repo/infra/connectivity/postgres/init/005-schema-and-table-comments.sql
 COPY services/notification-service/migrations/007_schema_and_table_comments.sql /opt/hvac/repo/services/notification-service/migrations/007_schema_and_table_comments.sql
 COPY infra/registry/postgres/init/041-schema-and-table-comments.sql /opt/hvac/repo/infra/registry/postgres/init/041-schema-and-table-comments.sql
+COPY infra/connectivity/postgres/init/006-gateway-concentrator-audit.sql /opt/hvac/repo/infra/connectivity/postgres/init/006-gateway-concentrator-audit.sql
 
 FROM scratch AS sources-runtime
 

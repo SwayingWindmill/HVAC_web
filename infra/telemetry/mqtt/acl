@@ -4,9 +4,10 @@
 pattern write hvac/v1/%u/up/#
 pattern read hvac/v1/%u/down/#
 
-# Connectivity consumes every Gateway's uplink.
+# Connectivity consumes every Gateway's uplink and sends concentrator RPC requests.
 user mqtt-telemetry-adapter
 topic read hvac/v1/+/up/#
+topic write hvac/v1/+/down/concentrator
 
 # Connectivity's command connection sends to every Gateway and reads every reply.
 user command-dispatcher

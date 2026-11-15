@@ -229,7 +229,11 @@ for (const file of files) {
     selectCommand(file, 'shared grant signing changed', { integration: true });
   });
   match(file.startsWith('libs/identitycontext/') || file.startsWith('libs/oidctest/') || file.startsWith('libs/sessionevent/') || file.startsWith('libs/sessionstore/') || file.startsWith('libs/observability/') || file.startsWith('modules/audit/') || file.startsWith('modules/registry/'), () => selectPlatform(file, 'platform identity, durability, or observability code changed', { integration: file.includes('session') || file.includes('outbox') }));
-  match(file.startsWith('libs/ownershipregistry/') || file.startsWith('libs/registryauth/') || file.startsWith('infra/s1-'), () => selectRegistry(file, 'registry capability changed', { integration: true }));
+  match(file.startsWith('libs/ownershipregistry/') || file.startsWith('libs/registryauth/') || file.startsWith('infra/s1-') || file.startsWith('infra/registry/'), () => selectRegistry(file, 'registry capability changed', { integration: true }));
+  match(file.startsWith('infra/connectivity/'), () => {
+    selectTelemetry(file, 'Connectivity database schema changed', { integration: true });
+    selectRegistry(file, 'Connectivity database schema changed', { integration: true });
+  });
   match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/telemetryauth/') || file.startsWith('libs/telemetryhistorymodel/') || file.startsWith('modules/connectivity/') || file.startsWith('cmd/connectivity/') || file.startsWith('cmd/telemetry-worker/') || file.startsWith('modules/telemetry/pkg/telemetry/') || file.startsWith('modules/telemetry/pkg/telemetryapi/') || file.startsWith('modules/telemetry/cmd/telemetry-history-projector/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('infra/telemetry/'), () => {
     const lower = file.toLowerCase();
     selectTelemetry(file, 'telemetry capability changed', {
@@ -311,6 +315,7 @@ for (const file of files) {
     scriptMatch(lower.includes('s5-') || lower.includes('work-order') || lower.includes('workorder'), () => selectWorkOrder(file, 'Work Order automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') }));
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));
     scriptMatch(lower.includes('operations-agent'), () => selectOperationsAgent(file, 'Operations Agent automation changed', { integration: lower.includes('postgres') || lower.includes('migration') }));
+    scriptMatch(lower.includes('concentrator') || lower.includes('mqtt-broker-acl') || lower.includes('gateway-nodered-tunnel'), () => selectTelemetry(file, 'Connectivity or MQTT automation changed'));
     // The migration freeze and convention checks run in the contracts core; their tests run in every static gate.
     scriptMatch(
       lower.includes('ownership') ||

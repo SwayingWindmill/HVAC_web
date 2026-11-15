@@ -79,6 +79,8 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
         './cmd/telemetry-worker/...',
         './cmd/energy-api/...',
       ),
+      nodeRun('--experimental-strip-types', '--test', 'scripts/test-gateway-nodered-tunnel.ts'),
+      nodeRun('--experimental-strip-types', '--test', 'scripts/test-concentrator-mqtt-rpc.ts'),
     ]),
     command: Object.freeze([
       nodeRun(

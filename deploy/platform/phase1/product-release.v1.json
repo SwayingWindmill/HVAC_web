@@ -7,8 +7,8 @@
   "authorityLock": {
     "routeOwnership": {
       "path": "contracts/ownership/route-ownership.v1.json",
-      "registryRevision": 29,
-      "sha256": "7f0d279a19e1a7789988e7143bd2a4c60d157ee72f776bc2e738c9fb14cb4266"
+      "registryRevision": 48,
+      "sha256": "259b5dfdb68c431ffa2a08d0cf35e0b2c31850f34f481207cfe24952da29bbc3"
     },
     "dataOwnership": {
       "path": "contracts/ownership/data-ownership.v1.json",
@@ -17,7 +17,7 @@
     },
     "httpContract": {
       "path": "contracts/http/platform-gateway.openapi.yaml",
-      "sha256": "cbeae3497486fe6399eb8c5e2644d12b7a9e945b36ee72dd2c335b1015682513"
+      "sha256": "f0f3975d489e4c2ca35f87863913be7b4d39e96226bb985fce8cf10955649398"
     },
     "edgeReplicationContract": {
       "path": "contracts/mqtt/edge-replication-envelope.v1.schema.json",
@@ -26,7 +26,7 @@
   },
   "schemaContract": {
     "migrationManifest": "deploy/platform/phase1/migrations/manifest.v1.json",
-    "migrationManifestSha256": "962d0903df5d3c13414f0963132f2b18a774b5c3e88e8ecd651ec56a6b46c1c7",
+    "migrationManifestSha256": "0346e271cde0c38264b82634d85767c5294e579553a61a3dfeb962a2edb83eb9",
     "compatibilityMode": "exact-product-and-manifest",
     "skipAllowed": false,
     "requiredDatabases": [

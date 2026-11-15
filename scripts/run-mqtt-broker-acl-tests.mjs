@@ -1,8 +1,3 @@
-// Runs the real Mosquitto broker with the repository's config and ACL, and checks that
-// the static pattern ACL confines each Gateway to its own topics (ADR 0015): a Gateway
-// publishes only under hvac/v1/{its certificate CN}/up, a second Gateway needs no ACL
-// change, Connectivity receives every Gateway's uplink, and its command identity writes
-// only Gateway command topics.
 import { spawn, spawnSync } from 'node:child_process';
 import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -40,7 +35,6 @@ function clientArgs(identity) {
   ];
 }
 
-// publish returns the broker's PUBACK reason code for one QoS 1 publish.
 function publish(identity, topic) {
   const result = spawnSync('docker', ['compose', '-p', projectName, '-f', composePath, 'exec', '-T', 'mqtt-broker',
     'mosquitto_pub', '-d', ...clientArgs(identity), '-t', topic, '-m', '{}'], { cwd: root, env: composeEnvironment, encoding: 'utf8', windowsHide: true });
@@ -56,41 +50,43 @@ try {
   await rm(outputDir, { recursive: true, force: true });
   await mkdir(pkiDir, { recursive: true });
   run(process.execPath, ['scripts/run-go.mjs', 'run', './tools/s0-auth-fixture/cmd/generate-central-plant-pki', pkiDir]);
-  // Throwaway test keys: the broker runs as its own user inside the container.
   await chmod(join(pkiDir, 'mqtt-broker-key.pem'), 0o644);
   try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
   compose(['up', '-d', '--wait', 'mqtt-broker']);
 
-  // Connectivity's identity subscribes to every Gateway's uplink.
   subscriber = spawn('docker', ['compose', '-p', projectName, '-f', composePath, 'exec', '-T', 'mqtt-broker',
-    'mosquitto_sub', ...clientArgs('mqtt-adapter'), '-t', 'hvac/v1/+/up/#', '-v', '-C', '2', '-W', '20'], { cwd: root, env: composeEnvironment, windowsHide: true });
+    'mosquitto_sub', ...clientArgs('mqtt-adapter'), '-t', 'hvac/v1/+/up/#', '-v', '-C', '3', '-W', '20'], { cwd: root, env: composeEnvironment, windowsHide: true });
   let received = '';
   subscriber.stdout.on('data', (chunk) => { received += chunk.toString(); });
   const subscriberDone = new Promise((resolveDone) => subscriber.on('exit', resolveDone));
   await new Promise((resolveWait) => setTimeout(resolveWait, 1500));
 
   report.assertions.gatewayAOwnTopic = publish('mqtt-gateway', `hvac/v1/${gatewayA}/up/telemetry`);
+  report.assertions.gatewayAOwnConcentrator = publish('mqtt-gateway', `hvac/v1/${gatewayA}/up/concentrator`);
   report.assertions.gatewayBOwnTopic = publish('mqtt-gateway-b', `hvac/v1/${gatewayB}/up/event`);
   report.assertions.gatewayAIntoGatewayB = publish('mqtt-gateway', `hvac/v1/${gatewayB}/up/telemetry`);
+  report.assertions.gatewayAConcIntoB = publish('mqtt-gateway', `hvac/v1/${gatewayB}/up/concentrator`);
   report.assertions.gatewayAIntoDownlink = publish('mqtt-gateway', `hvac/v1/${gatewayA}/down/command`);
+  report.assertions.gatewayAIntoConcDown = publish('mqtt-gateway', `hvac/v1/${gatewayA}/down/concentrator`);
+  report.assertions.adapterConcToGatewayB = publish('mqtt-adapter', `hvac/v1/${gatewayB}/down/concentrator`);
   report.assertions.commandsToGatewayB = publish('command-dispatcher', `hvac/v1/${gatewayB}/down/command`);
   report.assertions.commandsIntoUplink = publish('command-dispatcher', `hvac/v1/${gatewayA}/up/telemetry`);
   await subscriberDone;
   report.assertions.connectivityReceived = received.trim().split('\n').map((line) => line.split(' ')[0]).sort();
 
-  if (report.assertions.gatewayAOwnTopic !== 0 || report.assertions.gatewayBOwnTopic !== 0) {
-    throw new Error(`a Gateway could not publish to its own uplink: ${JSON.stringify(report.assertions)}`);
+  const a = report.assertions;
+  if (a.gatewayAOwnTopic !== 0 || a.gatewayAOwnConcentrator !== 0 || a.gatewayBOwnTopic !== 0) {
+    throw new Error(`gateway uplink denied: ${JSON.stringify(a)}`);
   }
-  if (report.assertions.gatewayAIntoGatewayB !== 135 || report.assertions.gatewayAIntoDownlink !== 135) {
-    throw new Error(`Gateway A reached a topic outside its uplink: ${JSON.stringify(report.assertions)}`);
+  if (a.gatewayAIntoGatewayB !== 135 || a.gatewayAConcIntoB !== 135 || a.gatewayAIntoDownlink !== 135 || a.gatewayAIntoConcDown !== 135) {
+    throw new Error(`gateway escaped confinement: ${JSON.stringify(a)}`);
   }
-  // No Gateway is subscribed here, so an authorized command gets 16 (no matching subscribers).
-  if (report.assertions.commandsToGatewayB !== 16 || report.assertions.commandsIntoUplink !== 135) {
-    throw new Error(`the command identity is not confined to Gateway command topics: ${JSON.stringify(report.assertions)}`);
+  if (a.adapterConcToGatewayB !== 16 || a.commandsToGatewayB !== 16 || a.commandsIntoUplink !== 135) {
+    throw new Error(`connectivity downlink ACL broken: ${JSON.stringify(a)}`);
   }
-  const expected = [`hvac/v1/${gatewayA}/up/telemetry`, `hvac/v1/${gatewayB}/up/event`];
-  if (JSON.stringify(report.assertions.connectivityReceived) !== JSON.stringify(expected)) {
-    throw new Error(`Connectivity did not receive exactly both Gateways' uplink: ${received}`);
+  const expected = [`hvac/v1/${gatewayA}/up/concentrator`, `hvac/v1/${gatewayA}/up/telemetry`, `hvac/v1/${gatewayB}/up/event`];
+  if (JSON.stringify(a.connectivityReceived) !== JSON.stringify(expected)) {
+    throw new Error(`adapter missed expected uplinks: ${received}`);
   }
   report.status = 'passed';
   console.log(`MQTT broker ACL evidence passed: ${reportPath}`);

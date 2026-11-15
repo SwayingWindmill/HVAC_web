@@ -9,6 +9,10 @@
 
 #### 新增
 
+- 无线集中器远程配置与多路状态读取/写入后端（MQTT mTLS RPC、租户行级审计与平台网关接口）：
+  - `modules/connectivity` 新增数据库迁移 `006-gateway-concentrator-audit.sql`（启用并强制按 `app.tenant_id` 执行 `connectivity.gateway_concentrator_audit` 行级隔离，表约束封禁 RS485 保护地址 `{2, 3, 4, 5, 10, 31}`），以及 `pkg/concentrator` 服务层（按 `(gatewayId, unitId)` 串行加锁、`autopaho` QoS 1 MQTT RPC 收发与 `gatewayId` 强校验、内部 mTLS HTTP 接口）。
+  - 更新 Mosquitto 访问控制 `infra/telemetry/mqtt/acl`（仅允许平台适配器发布 `hvac/v1/+/down/concentrator` 并订阅 `hvac/v1/+/up/#`，禁止网关伪造下行或跨网关写入），并在 `cmd/connectivity` 与 `cmd/energy-api` 接入 `GET/PUT /api/v1/gateways/{gatewayId}/concentrators/{unitId}/{status,params,eids}`（`device.read` / `device.write` 鉴权、CSRF 校验、RFC 9457 错误映射与 `25s` 上游超时）及生成 OpenAPI 前后端客户端。
+  - Edge 侧新增 `edge/node-red/concentrator-mqtt-rpc.ts`，在网关本地二次校验并拒绝 `{2, 3, 4, 5, 10, 31}` 写操作、`WRITE_PARAMS` 末位写 `modbusId` 后执行 `0x9C41 = 6` 提交与回读核对、`WRITE_EIDS` 拒绝非零重复 EID 并将 200 槽位脏区合并为最多每批 `20` 槽的 `FC16` 写入及 `0x9C41 = 8` 提交核对。
 - 三层站点控制退出与安全停机编排（`POST /api/v1/sites/{siteId}/control-shutdown`）：
   - 在网关（`cmd/energy-api/internal/gateway/control_exit.go`）、OpenAPI 契约与生成客户端中新增 `executeSiteControlShutdown`，支持一键顺控中止（`ABORT_UNIT_SEQUENCE`，撤回排队与在途顺控指令并通知边缘停止计时器）、全站安全停机（`PLANT_SAFE_SHUTDOWN`，切换 `SAFE_SHUTDOWN_EXIT` 后先发未锁定冷机停机脉冲，仅对确认已停冷机放行水泵/冷却塔保持线圈并把仍在运行的泵/塔列入 `deferredHoldingAssetIds`）以及二次确认全站紧急断电（`EMERGENCY_DO_RELEASE`，自动核对阻断急停的历史未知指令后向 `et1010/emergency_stop_all` 下发全输出清零，即使断采也强制放行）。
   - `MANUAL_OVERRIDE` 与 `SAFE_SHUTDOWN_EXIT` 退出模式下，平台网关与接入路由双层放行 `STOP` 与 `STOP_UNIT_SEQUENCE`，允许冷机停妥后释放仍在保持的水泵与冷却塔继电器；非停机与设定类指令继续严格拦截。

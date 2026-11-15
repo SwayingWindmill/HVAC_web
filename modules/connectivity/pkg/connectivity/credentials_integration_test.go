@@ -41,7 +41,7 @@ func TestGatewayCredentialEnrollmentAndLifecycle(t *testing.T) {
 	const site = "0193f000-1000-7000-8000-000000000001"
 	const gateway = "0193f000-2000-7000-8000-000000000001"
 	cleanup := func() {
-		for _, table := range []string{"gateway_credential_audit", "gateway_enrollments", "gateway_credentials"} {
+		for _, table := range []string{"gateway_concentrator_audit", "gateway_credential_audit", "gateway_enrollments", "gateway_credentials"} {
 			_, _ = admin.Exec(ctx, "DELETE FROM connectivity."+table+" WHERE gateway_id=$1::uuid", gateway)
 		}
 		_, _ = admin.Exec(ctx, "DELETE FROM core_registry.devices WHERE id=$1::uuid", gateway)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/concentrator"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
 )
@@ -70,7 +71,22 @@ func main() {
 		os.Exit(1)
 	}
 	defer connectivityStore.Close()
-	credentials, tunnelHub, err := credentialServer(connectivityStore)
+	concentratorTransport, err := concentrator.NewMQTTTransport(ctx, concentrator.TransportConfig{
+		BrokerURL:  config.MQTT.BrokerURL,
+		ClientID:   envOr("CONNECTIVITY_CONCENTRATOR_MQTT_CLIENT_ID", config.MQTT.ClientID+"-concentrator"),
+		CAFile:     config.MQTT.CAFile,
+		CertFile:   config.MQTT.CertFile,
+		KeyFile:    config.MQTT.KeyFile,
+		ServerName: config.MQTT.ServerName,
+		RPCTimeout: 18 * time.Second,
+		Logger:     logger,
+	})
+	if err != nil {
+		logger.Error("connectivity_concentrator_mqtt_unavailable", "error_code", "CONCENTRATOR_MQTT_UNAVAILABLE", "error", err.Error())
+		os.Exit(1)
+	}
+	concentratorService := concentrator.NewService(connectivityStore, concentratorTransport)
+	credentials, tunnelHub, err := credentialServerWithConcentrator(connectivityStore, concentratorService)
 	if err != nil {
 		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE")
 		os.Exit(1)
@@ -137,6 +153,7 @@ func main() {
 	_ = diagnostics.Shutdown(shutdownContext)
 	tunnelHub.Close()
 	_ = credentials.Shutdown(shutdownContext)
+	_ = concentratorTransport.Close(shutdownContext)
 	if commands != nil {
 		_ = commands.Close(shutdownContext)
 	}
