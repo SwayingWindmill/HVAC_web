@@ -1049,7 +1049,7 @@
       "type": "CHILLER_CONTROLLER",
       "sourceKey": "ctrl-chiller-a",
       "asset": "01a14000-3000-7000-8000-000000000001",
-      "sampleSeconds": 60,
+      "sampleSeconds": 300,
       "points": [
         {
           "code": "run_state",
@@ -1297,7 +1297,7 @@
       "type": "CHILLER_CONTROLLER",
       "sourceKey": "ctrl-chiller-b",
       "asset": "01a14000-3000-7000-8000-000000000002",
-      "sampleSeconds": 60,
+      "sampleSeconds": 300,
       "points": [
         {
           "code": "run_state",
@@ -1545,7 +1545,7 @@
       "type": "CHILLER_CONTROLLER",
       "sourceKey": "ctrl-chiller-c",
       "asset": "01a14000-3000-7000-8000-000000000003",
-      "sampleSeconds": 60,
+      "sampleSeconds": 300,
       "points": [
         {
           "code": "run_state",
@@ -1793,7 +1793,7 @@
       "type": "CHILLER_CONTROLLER",
       "sourceKey": "ctrl-chiller-d",
       "asset": "01a14000-3000-7000-8000-000000000004",
-      "sampleSeconds": 60,
+      "sampleSeconds": 300,
       "points": [
         {
           "code": "run_state",
