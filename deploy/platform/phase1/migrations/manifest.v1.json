@@ -19,7 +19,8 @@
         "infra/identity/postgres/init/004-identity-auth-assurance.sql",
         "infra/identity/postgres/init/005-identity-user-administration.sql",
         "infra/identity/postgres/init/006-identity-wechat-bindings.sql",
-        "infra/identity/postgres/init/007-identity-first-factor.sql"
+        "infra/identity/postgres/init/007-identity-first-factor.sql",
+        "infra/identity/postgres/init/008-schema-and-table-comments.sql"
       ]
     },
     {
@@ -33,7 +34,8 @@
         "infra/durability/postgres/init/005-s0-session-assurance.sql",
         "infra/durability/postgres/init/006-s04-audit-search.sql",
         "infra/durability/postgres/init/007-audit-postgres-outbox-transport.sql",
-        "infra/durability/postgres/init/008-session-client.sql"
+        "infra/durability/postgres/init/008-session-client.sql",
+        "infra/durability/postgres/init/009-schema-and-table-comments.sql"
       ]
     },
     {
@@ -76,7 +78,6 @@
         "infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql",
         "infra/connectivity/postgres/init/003-gateway-uplink.sql",
         "infra/connectivity/postgres/init/004-gateway-enrollment.sql",
-        "infra/connectivity/postgres/init/005-gateway-concentrator-audit.sql",
         "infra/registry/postgres/init/013-s23-maintenance-retirement.sql",
         "infra/registry/postgres/init/014-s21-rule-management-capability.sql",
         "infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql",
@@ -106,7 +107,11 @@
         "services/notification-service/migrations/005_reading_gap_reminders.sql",
         "services/notification-service/migrations/006_alarm_delivery.sql",
         "infra/registry/postgres/init/039-optimization-staging-catalog-read.sql",
-        "infra/registry/postgres/init/040-optimization-operating-schedule-read.sql"
+        "infra/registry/postgres/init/040-optimization-operating-schedule-read.sql",
+        "infra/connectivity/postgres/init/005-schema-and-table-comments.sql",
+        "services/notification-service/migrations/007_schema_and_table_comments.sql",
+        "infra/registry/postgres/init/041-schema-and-table-comments.sql",
+        "infra/connectivity/postgres/init/006-gateway-concentrator-audit.sql"
       ]
     },
     {
@@ -127,7 +132,8 @@
         "infra/telemetry/postgres/init/009-realtime-revocation-relay.sql",
         "infra/telemetry/postgres/init/010-runtime-retention.sql",
         "infra/telemetry/postgres/init/011-point-quality.sql",
-        "infra/telemetry/postgres/init/012-measurement-uncertainty.sql"
+        "infra/telemetry/postgres/init/012-measurement-uncertainty.sql",
+        "infra/telemetry/postgres/init/013-schema-and-table-comments.sql"
       ]
     },
     {
@@ -138,7 +144,8 @@
         "modules/command/migrations/003_s3_tenant_scope.sql",
         "modules/command/migrations/004_s3_command_point_identity.sql",
         "modules/command/migrations/005_s11_edge_execution_evidence.sql",
-        "modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql"
+        "modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql",
+        "modules/command/migrations/007_schema_and_table_comments.sql"
       ]
     },
     {
@@ -159,7 +166,8 @@
         "modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql",
         "modules/alarm/migrations/014_s31_retired_site_rules.sql",
         "modules/alarm/migrations/015_s32_reading_gap_escalation.sql",
-        "modules/alarm/migrations/016_s32_rules_unevaluable.sql"
+        "modules/alarm/migrations/016_s32_rules_unevaluable.sql",
+        "modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tables.sql"
       ]
     },
     {
@@ -170,14 +178,16 @@
         "modules/workorder/migrations/003_s5_work_order_lifecycle.sql",
         "modules/workorder/migrations/004_s5_tenant_scope.sql",
         "modules/workorder/migrations/005_s19_alarm_links.sql",
-        "modules/workorder/migrations/006_s26_equipment_source_domain.sql"
+        "modules/workorder/migrations/006_s26_equipment_source_domain.sql",
+        "modules/workorder/migrations/007_schema_and_table_comments.sql"
       ]
     },
     {
       "name": "hvac_operations_agent",
       "migrations": [
         "services/operations-agent-service/migrations/operations/001_agent_sessions.sql",
-        "services/operations-agent-service/migrations/operations/002_finding_without_summary.sql"
+        "services/operations-agent-service/migrations/operations/002_finding_without_summary.sql",
+        "services/operations-agent-service/migrations/operations/003_schema_and_table_comments.sql"
       ]
     }
   ],

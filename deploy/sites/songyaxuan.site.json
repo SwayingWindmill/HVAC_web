@@ -292,7 +292,7 @@
           "name": "运行状态",
           "pointType": "TELEMETRY",
           "valueType": "STRING",
-          "address": "网关判断：本机电表功率 > 5 kW 为运行"
+          "address": "网关判断：本机电表功率 > 12.75 kW 启动运行，<= 5 kW 停机"
         },
         {
           "code": "chw_leaving_temperature",
@@ -373,7 +373,7 @@
           "name": "运行状态",
           "pointType": "TELEMETRY",
           "valueType": "STRING",
-          "address": "网关判断：本机电表功率 > 5 kW 为运行"
+          "address": "网关判断：本机电表功率 > 12.75 kW 启动运行，<= 5 kW 停机"
         },
         {
           "code": "chw_leaving_temperature",
@@ -445,7 +445,7 @@
           "name": "运行状态",
           "pointType": "TELEMETRY",
           "valueType": "STRING",
-          "address": "网关判断：本机电表功率 > 5 kW 为运行"
+          "address": "网关判断：本机电表功率 > 12.75 kW 启动运行，<= 5 kW 停机"
         },
         {
           "code": "chw_leaving_temperature",
@@ -526,7 +526,7 @@
           "name": "运行状态",
           "pointType": "TELEMETRY",
           "valueType": "STRING",
-          "address": "网关判断：本机电表功率 > 5 kW 为运行"
+          "address": "网关判断：本机电表功率 > 12.75 kW 启动运行，<= 5 kW 停机"
         },
         {
           "code": "chw_leaving_temperature",
@@ -741,6 +741,29 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID31 地址 19"
+        },
+        {
+          "code": "run_state",
+          "name": "ET1010 保持通道运行状态",
+          "pointType": "STATE",
+          "valueType": "STRING",
+          "address": "网关判断：任意泵/塔保持通道 > 0 为 RUNNING"
+        },
+        {
+          "code": "emergency_stop_all",
+          "name": "紧急全断全部 DO 通道",
+          "pointType": "COMMAND",
+          "valueType": "BOOLEAN",
+          "writable": true,
+          "asset": "01a14000-3000-7000-8000-000000000011",
+          "address": "UID31 地址 0..19 全断归零",
+          "sourceMetadata": {
+            "capability": "STOP",
+            "capabilityRevision": "capability:stop:v1",
+            "feedbackPointKey": "run_state",
+            "actuationMode": "EMERGENCY_DO_RELEASE",
+            "channel": "all-do"
+          }
         }
       ]
     },
@@ -1026,14 +1049,14 @@
       "type": "CHILLER_CONTROLLER",
       "sourceKey": "ctrl-chiller-a",
       "asset": "01a14000-3000-7000-8000-000000000001",
-      "sampleSeconds": 60,
+      "sampleSeconds": 300,
       "points": [
         {
           "code": "run_state",
           "name": "1# 主机运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "ammeter-unit4 powerTotal>5"
+          "address": "ammeter-unit4: > 12.75 kW 启动运行，<= 5 kW 停机"
         },
         {
           "code": "start",
@@ -1274,14 +1297,14 @@
       "type": "CHILLER_CONTROLLER",
       "sourceKey": "ctrl-chiller-b",
       "asset": "01a14000-3000-7000-8000-000000000002",
-      "sampleSeconds": 60,
+      "sampleSeconds": 300,
       "points": [
         {
           "code": "run_state",
           "name": "2# 主机运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "ammeter-unit3 powerTotal>5"
+          "address": "ammeter-unit3: > 12.75 kW 启动运行，<= 5 kW 停机"
         },
         {
           "code": "start",
@@ -1522,14 +1545,14 @@
       "type": "CHILLER_CONTROLLER",
       "sourceKey": "ctrl-chiller-c",
       "asset": "01a14000-3000-7000-8000-000000000003",
-      "sampleSeconds": 60,
+      "sampleSeconds": 300,
       "points": [
         {
           "code": "run_state",
           "name": "3# 主机运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "ammeter-unit1 powerTotal>5"
+          "address": "ammeter-unit1: > 12.75 kW 启动运行，<= 5 kW 停机"
         },
         {
           "code": "start",
@@ -1770,14 +1793,14 @@
       "type": "CHILLER_CONTROLLER",
       "sourceKey": "ctrl-chiller-d",
       "asset": "01a14000-3000-7000-8000-000000000004",
-      "sampleSeconds": 60,
+      "sampleSeconds": 300,
       "points": [
         {
           "code": "run_state",
           "name": "4# 主机运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "ammeter-unit2 powerTotal>5"
+          "address": "ammeter-unit2: > 12.75 kW 启动运行，<= 5 kW 停机"
         },
         {
           "code": "start",

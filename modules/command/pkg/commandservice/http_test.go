@@ -430,7 +430,7 @@ func TestCommandHTTPCancelPendingValidatesGatewayDelegationContext(t *testing.T)
 	handler := newCommandHTTPTestHandler(t, authority, iamSigner, gatewaySigner, now)
 
 	body, _ := json.Marshal(internalCancelPendingRequest{
-		TenantID: "org-1", SiteID: "site-1", DeviceIDs: []string{"device-1"}, PrincipalID: "manager-1", Reason: "MANUAL_OVERRIDE",
+		TenantID: "org-1", SiteID: "site-1", DeviceIDs: []string{"device-1"}, PrincipalID: "manager-1", Reason: "MANUAL_OVERRIDE", AbortActiveSequences: true,
 	})
 	req := httptest.NewRequest(http.MethodPost, InternalCommandsCancelBatch, bytes.NewReader(body))
 	contextToken, err := identitycontext.SignDelegation(gatewaySigner, identitycontext.DelegationClaims{
@@ -446,7 +446,7 @@ func TestCommandHTTPCancelPendingValidatesGatewayDelegationContext(t *testing.T)
 	req.Header.Set(commandControlContextHeader, contextToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || authority.cancelPending.Reason != "MANUAL_OVERRIDE" || len(authority.cancelPending.DeviceIDs) != 1 {
+	if rec.Code != http.StatusOK || authority.cancelPending.Reason != "MANUAL_OVERRIDE" || len(authority.cancelPending.DeviceIDs) != 1 || !authority.cancelPending.AbortActiveSequences {
 		t.Fatalf("status=%d cancelPending=%#v body=%s", rec.Code, authority.cancelPending, rec.Body.String())
 	}
 }

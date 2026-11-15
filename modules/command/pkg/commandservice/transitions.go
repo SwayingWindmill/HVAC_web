@@ -124,10 +124,26 @@ type VerificationResolutionDecision struct {
 // DecideVerificationResolution enforces the readback verification deadline and reported-state
 // quality/freshness/value checks before settling an acknowledged dispatch attempt.
 func DecideVerificationResolution(intent commandmodel.CommandIntent, envelope commandmodel.VerificationEnvelope, result commandmodel.VerificationResult, verificationDeadline time.Time, now time.Time) (VerificationResolutionDecision, error) {
+	return DecideVerificationResolutionWithEdge(intent, envelope, envelope.EdgeExecution, result, verificationDeadline, now)
+}
+
+// DecideVerificationResolutionWithEdge evaluates verification resolution using explicit
+// edge execution evidence so live verification and expired-attempt reconciliation share one rule.
+func DecideVerificationResolutionWithEdge(
+	intent commandmodel.CommandIntent,
+	envelope commandmodel.VerificationEnvelope,
+	edgeExecution *commandmodel.EdgeExecutionEvidence,
+	result commandmodel.VerificationResult,
+	verificationDeadline time.Time,
+	now time.Time,
+) (VerificationResolutionDecision, error) {
 	switch result.Outcome {
 	case commandmodel.VerificationSucceeded, commandmodel.VerificationInconclusive, commandmodel.VerificationMismatch, commandmodel.VerificationTimedOut:
 	default:
 		return VerificationResolutionDecision{}, ErrUnsupportedResult
+	}
+	if envelope.EdgeExecution == nil && edgeExecution != nil {
+		envelope.EdgeExecution = edgeExecution
 	}
 	nowUTC := now.UTC()
 	if result.Outcome == commandmodel.VerificationSucceeded && !nowUTC.After(verificationDeadline) && validReportedState(intent, envelope, result.Reported) {
@@ -136,6 +152,14 @@ func DecideVerificationResolution(intent commandmodel.CommandIntent, envelope co
 			AttemptFinal: commandmodel.AttemptVerified,
 			IntentFinal:  commandmodel.IntentSucceeded,
 			Reason:       "ACKNOWLEDGED_AND_REPORTED_STATE_VERIFIED",
+		}, nil
+	}
+	if isPulseCapabilityWithoutPowerConfirmation(intent.Capability, edgeExecution) {
+		return VerificationResolutionDecision{
+			AttemptFinal:       commandmodel.AttemptFailed,
+			IntentFinal:        commandmodel.IntentFailed,
+			Reason:             commandmodel.ReasonPulseDeliveredPowerUnconfirmed,
+			FreezeControlGroup: false,
 		}, nil
 	}
 	reason := "REPORTED_STATE_VERIFICATION_NOT_PROVEN"
@@ -148,6 +172,36 @@ func DecideVerificationResolution(intent commandmodel.CommandIntent, envelope co
 		Reason:             reason,
 		FreezeControlGroup: true,
 	}, nil
+}
+
+func isPulseCapabilityWithoutPowerConfirmation(capability commandmodel.Capability, edgeExecution *commandmodel.EdgeExecutionEvidence) bool {
+	if edgeExecution == nil {
+		return false
+	}
+	switch capability {
+	case commandmodel.CapabilityStart:
+		return edgeExecution.ValidPulseDualReadback()
+	case commandmodel.CapabilityStop:
+		return edgeExecution.ValidPulseDualReadback() || edgeExecution.ValidEmergencyDoReleaseReadback()
+	case commandmodel.CapabilityStartUnitSequence, commandmodel.CapabilityStopUnitSequence:
+		return edgeExecution.ValidUnitSequenceAcceptance()
+	default:
+		return false
+	}
+}
+
+// IsActiveAbortableSequence reports whether an already-ACKNOWLEDGED dispatching command
+// represents an in-flight unit sequence or emergency DO release that can be cleanly aborted
+// to FAILED without freezing the device control group when cancelling pending commands.
+func IsActiveAbortableSequence(capability commandmodel.Capability, edgeExecution *commandmodel.EdgeExecutionEvidence) bool {
+	switch capability {
+	case commandmodel.CapabilityStartUnitSequence, commandmodel.CapabilityStopUnitSequence:
+		return true
+	case commandmodel.CapabilityStop:
+		return edgeExecution != nil && edgeExecution.ValidEmergencyDoReleaseReadback()
+	default:
+		return false
+	}
 }
 
 // ReconcileDecision is the pure operator reconciliation transition for an OUTCOME_UNKNOWN command.

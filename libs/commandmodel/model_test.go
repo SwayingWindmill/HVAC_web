@@ -29,3 +29,266 @@ func TestVerificationWindowForCapabilities(t *testing.T) {
 		}
 	}
 }
+
+func TestEdgeExecutionEvidenceValidPulseDualReadback(t *testing.T) {
+	str := func(v string) *ScalarValue { return &ScalarValue{Text: &v} }
+	num := func(v float64) *ScalarValue { return &ScalarValue{Number: &v} }
+	requested := ScalarValue{Number: func() *float64 { v := 1.0; return &v }()}
+
+	tests := []struct {
+		name     string
+		evidence EdgeExecutionEvidence
+		want     bool
+	}{
+		{
+			name: "valid pulse dual readback",
+			evidence: EdgeExecutionEvidence{
+				Requested:          requested,
+				Effective:          str("u14:pulse(500ms)->0"),
+				Applied:            str("u14:pulse(500ms)->0"),
+				WinnerControllerID: "edge-local",
+				Cycle:              1,
+			},
+			want: true,
+		},
+		{
+			name: "level coil applied is false",
+			evidence: EdgeExecutionEvidence{
+				Requested:          requested,
+				Effective:          str("u11:1"),
+				Applied:            str("u11:1"),
+				WinnerControllerID: "edge-local",
+				Cycle:              1,
+			},
+			want: false,
+		},
+		{
+			name: "pulse stuck high is false",
+			evidence: EdgeExecutionEvidence{
+				Requested:          requested,
+				Effective:          str("u14:pulse(500ms)->1"),
+				Applied:            str("u14:pulse(500ms)->1"),
+				WinnerControllerID: "edge-local",
+				Cycle:              1,
+			},
+			want: false,
+		},
+		{
+			name: "request committed without effective is false",
+			evidence: EdgeExecutionEvidence{
+				Requested:          requested,
+				Effective:          nil,
+				Applied:            str("u14:pulse(500ms)->0"),
+				WinnerControllerID: "edge-local",
+				Cycle:              1,
+			},
+			want: false,
+		},
+		{
+			name: "missing applied is false",
+			evidence: EdgeExecutionEvidence{
+				Requested:          requested,
+				Effective:          str("u14:pulse(500ms)->0"),
+				Applied:            nil,
+				WinnerControllerID: "edge-local",
+				Cycle:              1,
+			},
+			want: false,
+		},
+		{
+			name: "numeric applied is false",
+			evidence: EdgeExecutionEvidence{
+				Requested:          requested,
+				Effective:          str("u14:pulse(500ms)->0"),
+				Applied:            num(0),
+				WinnerControllerID: "edge-local",
+				Cycle:              1,
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		if got := tc.evidence.ValidPulseDualReadback(); got != tc.want {
+			t.Fatalf("%s: ValidPulseDualReadback() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestEdgeExecutionEvidenceEmergencyDoAndUnitSequenceReadback(t *testing.T) {
+	str := func(v string) *ScalarValue { return &ScalarValue{Text: &v} }
+	num := func(v float64) *ScalarValue { return &ScalarValue{Number: &v} }
+	boolean := func(v bool) *ScalarValue { return &ScalarValue{Boolean: &v} }
+	requested := ScalarValue{Number: func() *float64 { v := 0.0; return &v }()}
+
+	t.Run("ValidEmergencyDoReleaseReadback", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			evidence EdgeExecutionEvidence
+			want     bool
+		}{
+			{
+				name: "all-do:0 executed is true",
+				evidence: EdgeExecutionEvidence{
+					Requested:          requested,
+					Effective:          str("all-do:0"),
+					Applied:            str("all-do:0"),
+					WinnerControllerID: "edge-local",
+					Cycle:              1,
+				},
+				want: true,
+			},
+			{
+				name: "pulse dual readback is false",
+				evidence: EdgeExecutionEvidence{
+					Requested:          requested,
+					Effective:          str("u14:pulse(500ms)->0"),
+					Applied:            str("u14:pulse(500ms)->0"),
+					WinnerControllerID: "edge-local",
+					Cycle:              1,
+				},
+				want: false,
+			},
+			{
+				name: "all-do:1 is false",
+				evidence: EdgeExecutionEvidence{
+					Requested:          requested,
+					Effective:          str("all-do:1"),
+					Applied:            str("all-do:1"),
+					WinnerControllerID: "edge-local",
+					Cycle:              1,
+				},
+				want: false,
+			},
+			{
+				name: "missing effective is false",
+				evidence: EdgeExecutionEvidence{
+					Requested:          requested,
+					Effective:          nil,
+					Applied:            str("all-do:0"),
+					WinnerControllerID: "edge-local",
+					Cycle:              1,
+				},
+				want: false,
+			},
+			{
+				name: "nil applied is false",
+				evidence: EdgeExecutionEvidence{
+					Requested:          requested,
+					Effective:          str("all-do:0"),
+					Applied:            nil,
+					WinnerControllerID: "edge-local",
+					Cycle:              1,
+				},
+				want: false,
+			},
+			{
+				name: "numeric or boolean mixed applied is false",
+				evidence: EdgeExecutionEvidence{
+					Requested:          requested,
+					Effective:          str("all-do:0"),
+					Applied:            &ScalarValue{Text: str("all-do:0").Text, Boolean: boolean(false).Boolean},
+					WinnerControllerID: "edge-local",
+					Cycle:              1,
+				},
+				want: false,
+			},
+			{
+				name: "numeric applied is false",
+				evidence: EdgeExecutionEvidence{
+					Requested:          requested,
+					Effective:          str("all-do:0"),
+					Applied:            num(0),
+					WinnerControllerID: "edge-local",
+					Cycle:              1,
+				},
+				want: false,
+			},
+		}
+		for _, tc := range tests {
+			if got := tc.evidence.ValidEmergencyDoReleaseReadback(); got != tc.want {
+				t.Fatalf("%s: ValidEmergencyDoReleaseReadback() = %v, want %v", tc.name, got, tc.want)
+			}
+		}
+	})
+
+	t.Run("ValidUnitSequenceAcceptance", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			evidence EdgeExecutionEvidence
+			want     bool
+		}{
+			{
+				name: "sequence-accepted executed is true",
+				evidence: EdgeExecutionEvidence{
+					Requested:          requested,
+					Effective:          str("chiller-1:sequence-accepted"),
+					Applied:            str("chiller-1:sequence-accepted"),
+					WinnerControllerID: "edge-local",
+					Cycle:              1,
+				},
+				want: true,
+			},
+			{
+				name: "sequence-failed is false",
+				evidence: EdgeExecutionEvidence{
+					Requested:          requested,
+					Effective:          str("chiller-1:sequence-failed"),
+					Applied:            str("chiller-1:sequence-failed"),
+					WinnerControllerID: "edge-local",
+					Cycle:              1,
+				},
+				want: false,
+			},
+			{
+				name: "all-do:0 is false",
+				evidence: EdgeExecutionEvidence{
+					Requested:          requested,
+					Effective:          str("all-do:0"),
+					Applied:            str("all-do:0"),
+					WinnerControllerID: "edge-local",
+					Cycle:              1,
+				},
+				want: false,
+			},
+			{
+				name: "missing effective is false",
+				evidence: EdgeExecutionEvidence{
+					Requested:          requested,
+					Effective:          nil,
+					Applied:            str("chiller-1:sequence-accepted"),
+					WinnerControllerID: "edge-local",
+					Cycle:              1,
+				},
+				want: false,
+			},
+			{
+				name: "nil applied is false",
+				evidence: EdgeExecutionEvidence{
+					Requested:          requested,
+					Effective:          str("chiller-1:sequence-accepted"),
+					Applied:            nil,
+					WinnerControllerID: "edge-local",
+					Cycle:              1,
+				},
+				want: false,
+			},
+			{
+				name: "mixed number and text applied is false",
+				evidence: EdgeExecutionEvidence{
+					Requested:          requested,
+					Effective:          str("chiller-1:sequence-accepted"),
+					Applied:            &ScalarValue{Text: str("chiller-1:sequence-accepted").Text, Number: num(1).Number},
+					WinnerControllerID: "edge-local",
+					Cycle:              1,
+				},
+				want: false,
+			},
+		}
+		for _, tc := range tests {
+			if got := tc.evidence.ValidUnitSequenceAcceptance(); got != tc.want {
+				t.Fatalf("%s: ValidUnitSequenceAcceptance() = %v, want %v", tc.name, got, tc.want)
+			}
+		}
+	})
+}

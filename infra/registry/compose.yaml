@@ -45,7 +45,6 @@ services:
       - ../connectivity/postgres/init/002-s11-command-reply-evidence.sql:/docker-entrypoint-initdb.d/310.sql:ro
       - ../connectivity/postgres/init/003-gateway-uplink.sql:/docker-entrypoint-initdb.d/320.sql:ro
       - ../connectivity/postgres/init/004-gateway-enrollment.sql:/docker-entrypoint-initdb.d/325.sql:ro
-      - ../connectivity/postgres/init/005-gateway-concentrator-audit.sql:/docker-entrypoint-initdb.d/326.sql:ro
       - ./postgres/init/013-s23-maintenance-retirement.sql:/docker-entrypoint-initdb.d/327.sql:ro
       - ./postgres/init/017-registry-read-port.sql:/docker-entrypoint-initdb.d/330.sql:ro
       - ./postgres/init/018-fdd-finding-measurement.sql:/docker-entrypoint-initdb.d/340.sql:ro
@@ -71,6 +70,9 @@ services:
       - ./postgres/init/038-command-route-point-metadata.sql:/docker-entrypoint-initdb.d/540.sql:ro
       - ./postgres/init/039-optimization-staging-catalog-read.sql:/docker-entrypoint-initdb.d/550.sql:ro
       - ./postgres/init/040-optimization-operating-schedule-read.sql:/docker-entrypoint-initdb.d/560.sql:ro
+      - ../connectivity/postgres/init/005-schema-and-table-comments.sql:/docker-entrypoint-initdb.d/570.sql:ro
+      - ./postgres/init/041-schema-and-table-comments.sql:/docker-entrypoint-initdb.d/580.sql:ro
+      - ../connectivity/postgres/init/006-gateway-concentrator-audit.sql:/docker-entrypoint-initdb.d/590.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

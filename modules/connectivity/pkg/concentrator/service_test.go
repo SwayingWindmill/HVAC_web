@@ -21,12 +21,12 @@ import (
 )
 
 type fakeStore struct {
-	mu       sync.Mutex
-	clock    time.Time
-	tenantID string
+	mu         sync.Mutex
+	clock      time.Time
+	tenantID   string
 	resolveErr error
-	auditErr error
-	audits   []connectivity.ConcentratorAuditEntry
+	auditErr   error
+	audits     []connectivity.ConcentratorAuditEntry
 }
 
 func newFakeStore() *fakeStore {

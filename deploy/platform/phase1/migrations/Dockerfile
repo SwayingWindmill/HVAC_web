@@ -15,6 +15,7 @@ COPY infra/identity/postgres/init/004-identity-auth-assurance.sql /opt/hvac/repo
 COPY infra/identity/postgres/init/005-identity-user-administration.sql /opt/hvac/repo/infra/identity/postgres/init/005-identity-user-administration.sql
 COPY infra/identity/postgres/init/006-identity-wechat-bindings.sql /opt/hvac/repo/infra/identity/postgres/init/006-identity-wechat-bindings.sql
 COPY infra/identity/postgres/init/007-identity-first-factor.sql /opt/hvac/repo/infra/identity/postgres/init/007-identity-first-factor.sql
+COPY infra/identity/postgres/init/008-schema-and-table-comments.sql /opt/hvac/repo/infra/identity/postgres/init/008-schema-and-table-comments.sql
 COPY infra/durability/postgres/init/001-s0-durable.sql /opt/hvac/repo/infra/durability/postgres/init/001-s0-durable.sql
 COPY infra/durability/postgres/init/002-s0-session-idle.sql /opt/hvac/repo/infra/durability/postgres/init/002-s0-session-idle.sql
 COPY infra/durability/postgres/init/002-s1-registry-routing-audit.sql /opt/hvac/repo/infra/durability/postgres/init/002-s1-registry-routing-audit.sql
@@ -24,6 +25,7 @@ COPY infra/durability/postgres/init/005-s0-session-assurance.sql /opt/hvac/repo/
 COPY infra/durability/postgres/init/006-s04-audit-search.sql /opt/hvac/repo/infra/durability/postgres/init/006-s04-audit-search.sql
 COPY infra/durability/postgres/init/007-audit-postgres-outbox-transport.sql /opt/hvac/repo/infra/durability/postgres/init/007-audit-postgres-outbox-transport.sql
 COPY infra/durability/postgres/init/008-session-client.sql /opt/hvac/repo/infra/durability/postgres/init/008-session-client.sql
+COPY infra/durability/postgres/init/009-schema-and-table-comments.sql /opt/hvac/repo/infra/durability/postgres/init/009-schema-and-table-comments.sql
 
 COPY infra/registry/postgres/init/001-s1-registry-baseline.sql /opt/hvac/repo/infra/registry/postgres/init/001-s1-registry-baseline.sql
 COPY infra/registry/postgres/init/001a-tenant-foundation.sql /opt/hvac/repo/infra/registry/postgres/init/001a-tenant-foundation.sql
@@ -62,7 +64,6 @@ COPY infra/connectivity/postgres/init/001-s09-connectivity.sql /opt/hvac/repo/in
 COPY infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql /opt/hvac/repo/infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
 COPY infra/connectivity/postgres/init/003-gateway-uplink.sql /opt/hvac/repo/infra/connectivity/postgres/init/003-gateway-uplink.sql
 COPY infra/connectivity/postgres/init/004-gateway-enrollment.sql /opt/hvac/repo/infra/connectivity/postgres/init/004-gateway-enrollment.sql
-COPY infra/connectivity/postgres/init/005-gateway-concentrator-audit.sql /opt/hvac/repo/infra/connectivity/postgres/init/005-gateway-concentrator-audit.sql
 COPY infra/registry/postgres/init/013-s23-maintenance-retirement.sql /opt/hvac/repo/infra/registry/postgres/init/013-s23-maintenance-retirement.sql
 COPY infra/registry/postgres/init/014-s21-rule-management-capability.sql /opt/hvac/repo/infra/registry/postgres/init/014-s21-rule-management-capability.sql
 COPY infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql /opt/hvac/repo/infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql
@@ -93,6 +94,10 @@ COPY services/notification-service/migrations/005_reading_gap_reminders.sql /opt
 COPY services/notification-service/migrations/006_alarm_delivery.sql /opt/hvac/repo/services/notification-service/migrations/006_alarm_delivery.sql
 COPY infra/registry/postgres/init/039-optimization-staging-catalog-read.sql /opt/hvac/repo/infra/registry/postgres/init/039-optimization-staging-catalog-read.sql
 COPY infra/registry/postgres/init/040-optimization-operating-schedule-read.sql /opt/hvac/repo/infra/registry/postgres/init/040-optimization-operating-schedule-read.sql
+COPY infra/connectivity/postgres/init/005-schema-and-table-comments.sql /opt/hvac/repo/infra/connectivity/postgres/init/005-schema-and-table-comments.sql
+COPY services/notification-service/migrations/007_schema_and_table_comments.sql /opt/hvac/repo/services/notification-service/migrations/007_schema_and_table_comments.sql
+COPY infra/registry/postgres/init/041-schema-and-table-comments.sql /opt/hvac/repo/infra/registry/postgres/init/041-schema-and-table-comments.sql
+COPY infra/connectivity/postgres/init/006-gateway-concentrator-audit.sql /opt/hvac/repo/infra/connectivity/postgres/init/006-gateway-concentrator-audit.sql
 
 FROM scratch AS sources-runtime
 
@@ -112,6 +117,7 @@ COPY infra/telemetry/postgres/init/009-realtime-revocation-relay.sql /opt/hvac/r
 COPY infra/telemetry/postgres/init/010-runtime-retention.sql /opt/hvac/repo/infra/telemetry/postgres/init/010-runtime-retention.sql
 COPY infra/telemetry/postgres/init/011-point-quality.sql /opt/hvac/repo/infra/telemetry/postgres/init/011-point-quality.sql
 COPY infra/telemetry/postgres/init/012-measurement-uncertainty.sql /opt/hvac/repo/infra/telemetry/postgres/init/012-measurement-uncertainty.sql
+COPY infra/telemetry/postgres/init/013-schema-and-table-comments.sql /opt/hvac/repo/infra/telemetry/postgres/init/013-schema-and-table-comments.sql
 
 COPY modules/command/migrations/001_s3_command_runtime.sql /opt/hvac/repo/modules/command/migrations/001_s3_command_runtime.sql
 COPY modules/command/migrations/002_s3_target_runtime.sql /opt/hvac/repo/modules/command/migrations/002_s3_target_runtime.sql
@@ -119,6 +125,7 @@ COPY modules/command/migrations/003_s3_tenant_scope.sql /opt/hvac/repo/modules/c
 COPY modules/command/migrations/004_s3_command_point_identity.sql /opt/hvac/repo/modules/command/migrations/004_s3_command_point_identity.sql
 COPY modules/command/migrations/005_s11_edge_execution_evidence.sql /opt/hvac/repo/modules/command/migrations/005_s11_edge_execution_evidence.sql
 COPY modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql /opt/hvac/repo/modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql
+COPY modules/command/migrations/007_schema_and_table_comments.sql /opt/hvac/repo/modules/command/migrations/007_schema_and_table_comments.sql
 COPY modules/alarm/migrations/001_s4_alarm_runtime.sql /opt/hvac/repo/modules/alarm/migrations/001_s4_alarm_runtime.sql
 COPY modules/alarm/migrations/002_s4_alarm_lifecycle.sql /opt/hvac/repo/modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 COPY modules/alarm/migrations/003_s4_tenant_scope.sql /opt/hvac/repo/modules/alarm/migrations/003_s4_tenant_scope.sql
@@ -135,15 +142,18 @@ COPY modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql /opt/hvac
 COPY modules/alarm/migrations/014_s31_retired_site_rules.sql /opt/hvac/repo/modules/alarm/migrations/014_s31_retired_site_rules.sql
 COPY modules/alarm/migrations/015_s32_reading_gap_escalation.sql /opt/hvac/repo/modules/alarm/migrations/015_s32_reading_gap_escalation.sql
 COPY modules/alarm/migrations/016_s32_rules_unevaluable.sql /opt/hvac/repo/modules/alarm/migrations/016_s32_rules_unevaluable.sql
+COPY modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tables.sql /opt/hvac/repo/modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tables.sql
 COPY modules/workorder/migrations/001_s5_work_order_runtime.sql /opt/hvac/repo/modules/workorder/migrations/001_s5_work_order_runtime.sql
 COPY modules/workorder/migrations/002_s5_work_order_create_assignment.sql /opt/hvac/repo/modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 COPY modules/workorder/migrations/003_s5_work_order_lifecycle.sql /opt/hvac/repo/modules/workorder/migrations/003_s5_work_order_lifecycle.sql
 COPY modules/workorder/migrations/004_s5_tenant_scope.sql /opt/hvac/repo/modules/workorder/migrations/004_s5_tenant_scope.sql
 COPY modules/workorder/migrations/005_s19_alarm_links.sql /opt/hvac/repo/modules/workorder/migrations/005_s19_alarm_links.sql
 COPY modules/workorder/migrations/006_s26_equipment_source_domain.sql /opt/hvac/repo/modules/workorder/migrations/006_s26_equipment_source_domain.sql
+COPY modules/workorder/migrations/007_schema_and_table_comments.sql /opt/hvac/repo/modules/workorder/migrations/007_schema_and_table_comments.sql
 
 COPY services/operations-agent-service/migrations/operations/001_agent_sessions.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/001_agent_sessions.sql
 COPY services/operations-agent-service/migrations/operations/002_finding_without_summary.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/002_finding_without_summary.sql
+COPY services/operations-agent-service/migrations/operations/003_schema_and_table_comments.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/003_schema_and_table_comments.sql
 
 FROM postgres:16.4-bookworm
 

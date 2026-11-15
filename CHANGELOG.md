@@ -9,12 +9,26 @@
 
 #### 新增
 
-- 无线集中器远程配置与多路状态回执后端（MQTT mTLS RPC、租户行级审计与平台网关接口）：
-  - `modules/connectivity` 新增数据库迁移 `005-gateway-concentrator-audit.sql`（启用并强制按 `app.tenant_id` 执行 `connectivity.gateway_concentrator_audit` 行级隔离，表约束封禁 RS485 保护地址 `{2, 3, 4, 5, 10, 31}`），以及 `pkg/concentrator` 服务层（按 `(gatewayId, unitId)` 串行加锁、`autopaho` QoS 1 MQTT RPC 收发与 `gatewayId` 强校验、内部 mTLS HTTP 接口）。
+- 无线集中器远程配置与多路状态读取/写入后端（MQTT mTLS RPC、租户行级审计与平台网关接口）：
+  - `modules/connectivity` 新增数据库迁移 `006-gateway-concentrator-audit.sql`（启用并强制按 `app.tenant_id` 执行 `connectivity.gateway_concentrator_audit` 行级隔离，表约束封禁 RS485 保护地址 `{2, 3, 4, 5, 10, 31}`），以及 `pkg/concentrator` 服务层（按 `(gatewayId, unitId)` 串行加锁、`autopaho` QoS 1 MQTT RPC 收发与 `gatewayId` 强校验、内部 mTLS HTTP 接口）。
   - 更新 Mosquitto 访问控制 `infra/telemetry/mqtt/acl`（仅允许平台适配器发布 `hvac/v1/+/down/concentrator` 并订阅 `hvac/v1/+/up/#`，禁止网关伪造下行或跨网关写入），并在 `cmd/connectivity` 与 `cmd/energy-api` 接入 `GET/PUT /api/v1/gateways/{gatewayId}/concentrators/{unitId}/{status,params,eids}`（`device.read` / `device.write` 鉴权、CSRF 校验、RFC 9457 错误映射与 `25s` 上游超时）及生成 OpenAPI 前后端客户端。
   - Edge 侧新增 `edge/node-red/concentrator-mqtt-rpc.ts`，在网关本地二次校验并拒绝 `{2, 3, 4, 5, 10, 31}` 写操作、`WRITE_PARAMS` 末位写 `modbusId` 后执行 `0x9C41 = 6` 提交与回读核对、`WRITE_EIDS` 拒绝非零重复 EID 并将 200 槽位脏区合并为最多每批 `20` 槽的 `FC16` 写入及 `0x9C41 = 8` 提交核对。
+- 三层站点控制退出与安全停机编排（`POST /api/v1/sites/{siteId}/control-shutdown`）：
+  - 在网关（`cmd/energy-api/internal/gateway/control_exit.go`）、OpenAPI 契约与生成客户端中新增 `executeSiteControlShutdown`，支持一键顺控中止（`ABORT_UNIT_SEQUENCE`，撤回排队与在途顺控指令并通知边缘停止计时器）、全站安全停机（`PLANT_SAFE_SHUTDOWN`，切换 `SAFE_SHUTDOWN_EXIT` 后先发未锁定冷机停机脉冲，仅对确认已停冷机放行水泵/冷却塔保持线圈并把仍在运行的泵/塔列入 `deferredHoldingAssetIds`）以及二次确认全站紧急断电（`EMERGENCY_DO_RELEASE`，自动核对阻断急停的历史未知指令后向 `et1010/emergency_stop_all` 下发全输出清零，即使断采也强制放行）。
+  - `MANUAL_OVERRIDE` 与 `SAFE_SHUTDOWN_EXIT` 退出模式下，平台网关与接入路由双层放行 `STOP` 与 `STOP_UNIT_SEQUENCE`，允许冷机停妥后释放仍在保持的水泵与冷却塔继电器；非停机与设定类指令继续严格拦截。
+
+#### 修复
+
+- 修正松雅轩电表启停迟滞、脉冲核验不误冻结与一键顺控硬件时序：
+  - 边缘信封脚本（`edge/node-red/songyaxuan-platform-envelope.js`）改用 `12.75 kW` 启动、`5 kW` 停机迟滞判定各机组电表与主机控制器运行状态，按设备持久化避免单泵空转误判为主机启动，同步上报 `et1010/run_state`，并将 `ctrl-chiller-a..d` 的采样周期统一对齐电表的 `300` 秒。
+  - 控制执行器（`edge/node-red/songyaxuan-command-executor.ts`）改为 `< 1` 秒先行返回已受理证据并在后台异步按硬件延迟（开机 `0s/30s/30s/60s`、停机 `0s/30s/10s/10s`）执行，`START_UNIT_SEQUENCE` 发冷机启动脉冲前二次读回水泵与冷却塔线圈，单设备 `STOP` 自动中止对应机组异步顺控；紧急停止指令将线圈 `0..19` 全部归零。
+  - 指令状态机（`libs/commandmodel`、`modules/command` 与 `commandformal`）在 10 分钟核验期满且电表功率未跨阈值时，对携带脉冲双读回、顺控受理或急停归零有效回执的指令统一收敛为 `FAILED`（`PULSE_DELIVERED_POWER_UNCONFIRMED`）且不再误冻结设备控制组，保持所有 `REQUEST_COMMITTED` 及普通保持/设定类指令结果不明必冻结不变量不变。
 
 ### 2026-11-15
+
+#### 变更
+
+- 清理 `hvac_s4.alarm_runtime` 中 4 张 S13 一次性迁移遗留表（`alarm_current_pre_s13_backup`、`alarm_idempotency_pre_s13_backup`、`s13_alarm_migration_report`、`s13_alarm_identity_map`）并移除对应过时回滚脚本；为 8 个 PostgreSQL 数据库下全部 12 个 schema 与 221 张在用数据表补齐中文 `COMMENT ON` 注释，并新增静态门禁 `npm run migrations:conventions:check` 拦截阶段性命名、`CREATE TABLE ... AS` 副本表与缺失注释的新迁移。
 
 #### 修复
 

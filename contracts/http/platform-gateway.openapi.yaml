@@ -2090,6 +2090,7 @@
     "/api/v1/commands": {
       "get": {
         "operationId": "listCommandsV212",
+        "description": "List recent governed Commands on a Site and their transition timelines, including PULSE_DELIVERED_POWER_UNCONFIRMED when pulse actuation was acknowledged before power readback settled.",
         "x-architecture-status": "CONTRACTED",
         "x-shape-source": "contracts/http/s3-command-public.openapi.json",
         "parameters": [
@@ -2127,6 +2128,7 @@
       },
       "post": {
         "operationId": "createCommandV212",
+        "description": "Submit a governed canonical Command Intent for a single asset control point. EMERGENCY_DO_RELEASE points are rejected here and must use POST /api/v1/sites/{siteId}/control-shutdown; pulse commands may transition through PULSE_DELIVERED_POWER_UNCONFIRMED when edge pulse execution precedes power readback confirmation.",
         "x-architecture-status": "CONTRACTED",
         "x-shape-source": "contracts/http/s3-command-public.openapi.json",
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
@@ -2135,6 +2137,7 @@
     "/api/v1/commands/{commandId}": {
       "get": {
         "operationId": "getCommandV212",
+        "description": "Read a governed Command and its transition timeline, including PULSE_DELIVERED_POWER_UNCONFIRMED when edge pulse execution completed before telemetry power readback settled.",
         "x-architecture-status": "CONTRACTED",
         "x-shape-source": "contracts/http/s3-command-public.openapi.json",
         "parameters": [{ "name": "commandId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }],
@@ -2663,6 +2666,27 @@
           "403": { "$ref": "#/components/responses/Problem" },
           "404": { "$ref": "#/components/responses/Problem" },
           "409": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/control-shutdown": {
+      "post": {
+        "operationId": "executeSiteControlShutdown",
+        "summary": "Execute three-tier Site shutdown (PLANT_SAFE_SHUTDOWN, EMERGENCY_DO_RELEASE, or ABORT_UNIT_SEQUENCE)",
+        "description": "Requires schedule.manage authorization and 6-digit TOTP verification. PLANT_SAFE_SHUTDOWN transitions to SAFE_SHUTDOWN_EXIT, cancels pending Commands, dispatches governed STOP commands to unlocked running chillers, stops unlocked auxiliaries only when all served chillers are STOPPED (deferring others in deferredHoldingAssetIds), and notes PULSE_DELIVERED_POWER_UNCONFIRMED pulse transitions when power readback lags.",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteControlShutdownRequest" } } } },
+        "responses": {
+          "200": { "description": "Executed Site control shutdown summary, cancelled pending Command IDs, submitted Command IDs, and deferred holding Asset IDs.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteControlShutdownResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" },
           "default": { "$ref": "#/components/responses/Problem" }
         }
       }
@@ -5104,6 +5128,31 @@
           "revision": { "type": "integer", "minimum": 0 },
           "boundDeviceIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } },
           "cancelledCommandIds": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "SiteControlShutdownRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode", "reason", "verificationCode"],
+        "properties": {
+          "mode": { "type": "string", "enum": ["PLANT_SAFE_SHUTDOWN", "EMERGENCY_DO_RELEASE", "ABORT_UNIT_SEQUENCE"] },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "verificationCode": { "type": "string", "pattern": "^[0-9]{6}$" },
+          "unitCode": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "confirmEmergencyDoRelease": { "type": "boolean" },
+          "expectedRevision": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "SiteControlShutdownResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["siteControlState", "mode", "cancelledCommandIds", "submittedCommandIds", "deferredHoldingAssetIds"],
+        "properties": {
+          "siteControlState": { "$ref": "#/components/schemas/SiteControlState" },
+          "mode": { "type": "string", "enum": ["PLANT_SAFE_SHUTDOWN", "EMERGENCY_DO_RELEASE", "ABORT_UNIT_SEQUENCE"] },
+          "cancelledCommandIds": { "type": "array", "items": { "type": "string" } },
+          "submittedCommandIds": { "type": "array", "items": { "type": "string" } },
+          "deferredHoldingAssetIds": { "type": "array", "items": { "type": "string" } }
         }
       },
       "StagingDiagnostic": {

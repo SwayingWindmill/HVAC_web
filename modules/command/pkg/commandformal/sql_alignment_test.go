@@ -62,8 +62,8 @@ func TestPostgresClaimDispatchBlockingStatusesMatchTransitionModel(t *testing.T)
 
 func TestPostgresVerificationAndReconcileShareTransitionDecisions(t *testing.T) {
 	verifySrc := readRepoSource(t, filepath.Join("..", "commandservice", "postgres_verification.go"))
-	if !strings.Contains(verifySrc, "DecideVerificationResolution(") {
-		t.Fatalf("postgres_verification.go must delegate to DecideVerificationResolution")
+	if !strings.Contains(verifySrc, "DecideVerificationResolutionWithEdge(") {
+		t.Fatalf("postgres_verification.go must delegate to DecideVerificationResolutionWithEdge")
 	}
 	reconcileSrc := readRepoSource(t, filepath.Join("..", "commandservice", "postgres_reconcile.go"))
 	if !strings.Contains(reconcileSrc, "DecideOperatorReconcile(") {

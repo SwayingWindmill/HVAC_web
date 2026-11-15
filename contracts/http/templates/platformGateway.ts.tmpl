@@ -161,6 +161,7 @@ export const commandPaths = {
 export const controlExitPaths = {
   siteControlState: '__SITE_CONTROL_STATE_PATH__',
   siteControlMode: '__SITE_CONTROL_MODE_PATH__',
+  siteControlShutdown: '__SITE_CONTROL_SHUTDOWN_PATH__',
   assetControlLock: '__ASSET_CONTROL_LOCK_PATH__',
 } as const;
 
@@ -991,6 +992,25 @@ export const assetControlLockMutationResponseSchema = assetControlLockStateSchem
   cancelledCommandIds: z.array(z.string()),
 }).strict();
 
+export const siteControlShutdownModeSchema = z.enum(['PLANT_SAFE_SHUTDOWN', 'EMERGENCY_DO_RELEASE', 'ABORT_UNIT_SEQUENCE']);
+
+export const siteControlShutdownRequestSchema = z.object({
+  mode: siteControlShutdownModeSchema,
+  reason: z.string().min(1).max(1000),
+  verificationCode: z.string().regex(/^[0-9]{6}$/),
+  unitCode: z.string().min(1).max(64).optional(),
+  confirmEmergencyDoRelease: z.boolean().optional(),
+  expectedRevision: z.number().int().nonnegative().optional(),
+}).strict();
+
+export const siteControlShutdownResponseSchema = z.object({
+  siteControlState: siteControlStateSchema,
+  mode: siteControlShutdownModeSchema,
+  cancelledCommandIds: z.array(z.string()),
+  submittedCommandIds: z.array(z.string()),
+  deferredHoldingAssetIds: z.array(z.string()),
+}).strict();
+
 export const stagingDiagnosticSchema = z.object({
   scope: z.string(),
   assetId: z.string().optional(),
@@ -1145,6 +1165,9 @@ export type SiteControlModeMutation = z.infer<typeof siteControlModeMutationSche
 export type SiteControlModeMutationResponse = z.infer<typeof siteControlModeMutationResponseSchema>;
 export type AssetControlLockMutation = z.infer<typeof assetControlLockMutationSchema>;
 export type AssetControlLockMutationResponse = z.infer<typeof assetControlLockMutationResponseSchema>;
+export type SiteControlShutdownMode = z.infer<typeof siteControlShutdownModeSchema>;
+export type SiteControlShutdownRequest = z.infer<typeof siteControlShutdownRequestSchema>;
+export type SiteControlShutdownResponse = z.infer<typeof siteControlShutdownResponseSchema>;
 export type StagingDiagnostic = z.infer<typeof stagingDiagnosticSchema>;
 export type StagingRecommendationDraft = z.infer<typeof stagingRecommendationDraftSchema>;
 export type StagingEvaluation = z.infer<typeof stagingEvaluationSchema>;
@@ -1472,6 +1495,14 @@ export function createPlatformGatewayClient(baseUrl = '') {
       body,
       siteControlModeMutationSchema,
       siteControlModeMutationResponseSchema,
+      { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
+    ),
+    executeSiteControlShutdown: (siteId: string, body: SiteControlShutdownRequest, csrfToken: string, init?: RequestInit) => mutation(
+      '__SITE_CONTROL_SHUTDOWN_PATH__'.replace('{siteId}', encodeURIComponent(siteId)),
+      'POST',
+      body,
+      siteControlShutdownRequestSchema,
+      siteControlShutdownResponseSchema,
       { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
     ),
     updateAssetControlLock: (assetId: string, body: AssetControlLockMutation, csrfToken: string, init?: RequestInit) => mutation(

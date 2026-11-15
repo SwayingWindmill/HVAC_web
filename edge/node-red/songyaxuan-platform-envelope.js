@@ -1,6 +1,8 @@
 // Node-RED「平台·形成信封」for Songyaxuan: { <device>: [{ ts, values }] } -> telemetry envelope 2.0.
 const GATEWAY_ID = "01a14000-4000-7000-8000-000000000100";
 const METERS = ["ammeter-unit1", "ammeter-unit2", "ammeter-unit3", "ammeter-unit4"];
+const CHILLER_START_RUN_KW = 12.75;
+const CHILLER_STOP_KW = 5;
 const METER_FRESH_MS = 900000;
 const DEVICES = {
   temperature: { codes: null, unit: "Cel" },
@@ -49,6 +51,7 @@ const SPARE = {
 };
 
 const runState = (running) => (running ? "RUNNING" : "STOPPED");
+const statePoint = (running) => ({ code: "run_state", value: runState(running), quality: 0 });
 const DO_CONTROLLERS = { u11: "ctrl-chwp-1", u12: "ctrl-cwp-1", u13: "ctrl-tower-1", u21: "ctrl-chwp-2", u22: "ctrl-cwp-2", u23: "ctrl-tower-2", u31: "ctrl-chwp-3", u32: "ctrl-cwp-3", u33: "ctrl-tower-3", u41: "ctrl-chwp-4", u42: "ctrl-cwp-4", u43: "ctrl-tower-4" };
 const METER_CONTROLLERS = { "ammeter-unit4": "ctrl-chiller-a", "ammeter-unit3": "ctrl-chiller-b", "ammeter-unit1": "ctrl-chiller-c", "ammeter-unit2": "ctrl-chiller-d" };
 const extract = (entryVal) => {
@@ -141,11 +144,23 @@ for (const [device, samples] of Object.entries(source)) {
     if (unit) point.unit = unit;
     points.push(point);
   }
+  const doVals = device === "et1010"
+    ? Object.entries(DO_CONTROLLERS).flatMap(([ch, ctrl]) => {
+        const v = numValue(sample.values, ch);
+        return Number.isFinite(v) ? [[ctrl, v]] : [];
+      })
+    : null;
+  if (doVals && doVals.length > 0) points.push(statePoint(doVals.some(([, v]) => v > 0)));
   if (points.length === 0) continue;
 
   const powerTotal = numValue(sample.values, "powerTotal");
+  let meterRunning = null;
   if (METERS.includes(device) && Number.isFinite(powerTotal)) {
-    points.push({ code: "run_state", value: runState(powerTotal > 5), quality: 0 });
+    const meterRunState = { ...(context.get("meterRunState") || {}) };
+    meterRunning = meterRunState[device] ? powerTotal > CHILLER_STOP_KW : powerTotal > CHILLER_START_RUN_KW;
+    meterRunState[device] = meterRunning;
+    context.set("meterRunState", meterRunState);
+    points.push(statePoint(meterRunning));
   }
   entries.push(entry(device, sample.ts, points));
 
@@ -162,7 +177,7 @@ for (const [device, samples] of Object.entries(source)) {
   if (device === "waterflow" && copies["chwp-main"]) {
     const flowMeter = numValue(sample.values, "flowMeter");
     if (Number.isFinite(flowMeter)) {
-      copies["chwp-main"].points.push({ code: "run_state", value: runState(flowMeter > 10), quality: 0 });
+      copies["chwp-main"].points.push(statePoint(flowMeter > 10));
     }
   }
 
@@ -225,15 +240,8 @@ for (const [device, samples] of Object.entries(source)) {
       ]));
     }
   }
-  if (device === "et1010") {
-    for (const [ch, ctrl] of Object.entries(DO_CONTROLLERS)) {
-      const val = numValue(sample.values, ch);
-      if (Number.isFinite(val)) entries.push(entry(ctrl, sample.ts, [{ code: "run_state", value: runState(val > 0), quality: 0 }]));
-    }
-  }
-  if (METER_CONTROLLERS[device] && Number.isFinite(powerTotal)) {
-    entries.push(entry(METER_CONTROLLERS[device], sample.ts, [{ code: "run_state", value: runState(powerTotal > 5), quality: 0 }]));
-  }
+  if (doVals) for (const [ctrl, val] of doVals) entries.push(entry(ctrl, sample.ts, [statePoint(val > 0)]));
+  if (METER_CONTROLLERS[device] && meterRunning !== null) entries.push(entry(METER_CONTROLLERS[device], sample.ts, [statePoint(meterRunning)]));
 }
 
 for (const [target, copied] of Object.entries(copies)) {

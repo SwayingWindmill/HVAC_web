@@ -20,14 +20,14 @@ import (
 
 type concentratorGatewayFixture struct {
 	*commandGatewayFixture
-	gatewayID         string
-	upstreamCalls     atomic.Int32
-	upstreamStatus    int
-	upstreamBody      string
-	upstreamErr       error
-	lastUpstreamPath  string
+	gatewayID          string
+	upstreamCalls      atomic.Int32
+	upstreamStatus     int
+	upstreamBody       string
+	upstreamErr        error
+	lastUpstreamPath   string
 	lastUpstreamMethod string
-	lastUpstreamBody  string
+	lastUpstreamBody   string
 }
 
 func newConcentratorGatewayFixture(t *testing.T) *concentratorGatewayFixture {
@@ -226,11 +226,11 @@ func TestGatewayConcentratorRejectsMissingConnectivityConfig(t *testing.T) {
 func TestGatewayConcentratorRejectsDotSegmentsWithoutUpstreamCall(t *testing.T) {
 	fix := newConcentratorGatewayFixture(t)
 	cases := []struct {
-		name      string
-		method    string
-		path      string
-		csrf      bool
-		body      string
+		name   string
+		method string
+		path   string
+		csrf   bool
+		body   string
 	}{
 		{name: "gateway dot", method: http.MethodGet, path: "/api/v1/gateways/./concentrators/1/status"},
 		{name: "gateway dotdot", method: http.MethodGet, path: "/api/v1/gateways/../concentrators/1/eids"},

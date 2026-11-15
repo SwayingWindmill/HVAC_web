@@ -23,4 +23,5 @@ CREATE POLICY gateway_concentrator_audit_tenant ON connectivity.gateway_concentr
   USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
   WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT ON connectivity.gateway_concentrator_audit TO connectivity_runtime;
+COMMENT ON TABLE connectivity.gateway_concentrator_audit IS '无线集中器串口、射频参数与 EID 槽位绑定下发的变更记录，由设备接入服务写入。';
 COMMIT;

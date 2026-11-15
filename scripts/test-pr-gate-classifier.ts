@@ -146,7 +146,14 @@ test('Phase 1 migration changes rerun the migration integration test and the fre
   }
   const plan = runPlan('integration', ['platform']);
   assert.ok(plan.commands.includes('npm run deployment:phase1:migration:test'));
-  assert.ok(runPlan('contracts', ['core']).commands.includes('npm run migrations:freeze:check'));
+  const contractCommands = runPlan('contracts', ['core']).commands;
+  assert.ok(contractCommands.includes('npm run migrations:freeze:check'));
+  assert.ok(contractCommands.includes('npm run migrations:conventions:check'));
+
+  for (const scriptFile of ['scripts/check-migration-conventions.ts', 'scripts/migration-conventions-baseline.json']) {
+    const scriptClassification = runClassification([scriptFile]);
+    assert.ok(scriptClassification.contractProfiles.includes('core'), scriptFile);
+  }
 });
 
 test('package, workflow, and central task-matrix changes fail closed to broad contract and unit coverage', () => {
@@ -289,10 +296,12 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
       '.agents/skills/command-safety/SKILL.md',
       '.claude/skills/command-safety/SKILL.md',
       'scripts/run-command-formal-check.ts',
+      'scripts/migration-conventions-baseline.json',
+      'scripts/check-migration-conventions.ts',
     ]).length,
     0,
   );
-  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 10);
+  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 12);
 
   const verifyMapSandbox = mkdtempSync(join(tmpdir(), 'hvac-verify-map-'));
   try {
