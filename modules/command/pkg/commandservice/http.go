@@ -100,12 +100,13 @@ type internalCancelCommandRequest struct {
 }
 
 type internalCancelPendingRequest struct {
-	TenantID    string   `json:"tenantId"`
-	SiteID      string   `json:"siteId"`
-	DeviceIDs   []string `json:"deviceIds,omitempty"`
-	PrincipalID string   `json:"principalId"`
-	Reason      string   `json:"reason,omitempty"`
-	CausationID string   `json:"causationId,omitempty"`
+	TenantID             string   `json:"tenantId"`
+	SiteID               string   `json:"siteId"`
+	DeviceIDs            []string `json:"deviceIds,omitempty"`
+	PrincipalID          string   `json:"principalId"`
+	Reason               string   `json:"reason,omitempty"`
+	CausationID          string   `json:"causationId,omitempty"`
+	AbortActiveSequences bool     `json:"abortActiveSequences,omitempty"`
 }
 
 type CommandTransitionView struct {
@@ -416,12 +417,13 @@ func (h *HTTPHandler) cancelPendingCommands(writer http.ResponseWriter, request 
 		return
 	}
 	cancelledIDs, err := h.config.Authority.CancelPending(request.Context(), commandmodel.CancelPendingRequest{
-		TenantID:    input.TenantID,
-		SiteID:      input.SiteID,
-		DeviceIDs:   input.DeviceIDs,
-		PrincipalID: input.PrincipalID,
-		Reason:      input.Reason,
-		CausationID: input.CausationID,
+		TenantID:             input.TenantID,
+		SiteID:               input.SiteID,
+		DeviceIDs:            input.DeviceIDs,
+		PrincipalID:          input.PrincipalID,
+		Reason:               input.Reason,
+		CausationID:          input.CausationID,
+		AbortActiveSequences: input.AbortActiveSequences,
 	})
 	if err != nil {
 		writeAuthorityError(writer, err)

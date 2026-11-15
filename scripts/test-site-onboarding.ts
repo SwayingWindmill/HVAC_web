@@ -45,7 +45,7 @@ test('each DESCRIBES and CONTROLS binding carries its point status and command m
   const controls = bindingSection(registry).split('\n').filter((line) => line.includes("'CONTROLS'"));
   assert.equal(describes.length, observedPoints.length);
   assert.equal(controls.length, commandPoints.length);
-  assert.equal(commandPoints.length, 40);
+  assert.equal(commandPoints.length, 41);
   const inactive = points.filter((row) => row.includes("'INACTIVE'"));
   assert.ok(inactive.length >= 2, 'the songyaxuan site file marks unwired channels INACTIVE');
   for (const [index, row] of observedPoints.entries()) {
@@ -582,4 +582,99 @@ test('songyaxuan Node-RED envelope stays under edge byte cap and aligns with sit
   assert.equal(statusPoints.get('status8')?.quality, 0);
   assert.equal(statusPoints.get('min_voltage_mv')?.unit, 'mV');
   assert.equal(statusPoints.get('min_rssi_dbm')?.unit, 'dBm');
+});
+
+test('songyaxuan.site.json aligns chiller controller sampleSeconds and includes et1010 run_state and emergency_stop_all', () => {
+  interface SitePoint {
+    code: string;
+    pointType: string;
+    valueType: string;
+    writable?: boolean;
+    sourceMetadata?: Record<string, unknown>;
+  }
+  interface SiteDevice {
+    code?: string;
+    sourceKey?: string;
+    sampleSeconds?: number;
+    points: SitePoint[];
+  }
+  const site = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.site.json', import.meta.url), 'utf8')) as { devices: SiteDevice[] };
+  for (const code of ['ammeter-unit1', 'ammeter-unit2', 'ammeter-unit3', 'ammeter-unit4', 'ctrl-chiller-a', 'ctrl-chiller-b', 'ctrl-chiller-c', 'ctrl-chiller-d']) {
+    const dev = site.devices.find((d) => d.code === code || d.sourceKey === code);
+    assert.ok(dev, `missing device ${code}`);
+    assert.equal(dev.sampleSeconds, 300, `${code} sampleSeconds must be 300`);
+  }
+  const et1010 = site.devices.find((d) => d.sourceKey === 'et1010');
+  assert.ok(et1010, 'missing et1010 device');
+  const runStatePt = et1010.points.find((p) => p.code === 'run_state');
+  assert.equal(runStatePt?.pointType, 'STATE');
+  assert.equal(runStatePt?.valueType, 'STRING');
+  const emergencyPt = et1010.points.find((p) => p.code === 'emergency_stop_all');
+  assert.equal(emergencyPt?.pointType, 'COMMAND');
+  assert.equal(emergencyPt?.valueType, 'BOOLEAN');
+  assert.equal(emergencyPt?.writable, true);
+  assert.equal(emergencyPt?.sourceMetadata?.capability, 'STOP');
+  assert.equal(emergencyPt?.sourceMetadata?.capabilityRevision, 'capability:stop:v1');
+  assert.equal(emergencyPt?.sourceMetadata?.feedbackPointKey, 'run_state');
+  assert.equal(emergencyPt?.sourceMetadata?.actuationMode, 'EMERGENCY_DO_RELEASE');
+  assert.equal(emergencyPt?.sourceMetadata?.channel, 'all-do');
+});
+
+test('songyaxuan-platform-envelope applies chiller power hysteresis and et1010 run_state', () => {
+  const script = readFileSync(new URL('../edge/node-red/songyaxuan-platform-envelope.js', import.meta.url), 'utf8');
+  const store = new Map<string, unknown>();
+  const runEnvelope = (payload: Record<string, Array<{ ts: number; values: Record<string, unknown> }>>) => {
+    const ctx = {
+      msg: { payload },
+      context: {
+        get: (key: string) => store.get(key),
+        set: (key: string, value: unknown) => {
+          store.set(key, value);
+        },
+      },
+      Date,
+      Math,
+    };
+    const out = vm.runInNewContext(`(() => { ${script} })()`, ctx) as {
+      payload: { payload: { devices: Array<{ deviceId: string; points: Array<{ code: string; value: unknown }> }> } };
+    };
+    return out.payload.payload.devices;
+  };
+  const readPoint = (devices: Array<{ deviceId: string; points: Array<{ code: string; value: unknown }> }>, deviceId: string, code: string) =>
+    devices.find((d) => d.deviceId === deviceId)?.points.find((p) => p.code === code)?.value;
+
+  const powerSteps: Array<[number, string]> = [
+    [0, 'STOPPED'],
+    [8, 'STOPPED'],
+    [12.75, 'STOPPED'],
+    [13, 'RUNNING'],
+    [8, 'RUNNING'],
+    [5, 'STOPPED'],
+    [8, 'STOPPED'],
+    [13, 'RUNNING'],
+    [4.8, 'STOPPED'],
+  ];
+  let ts = 1_760_000_000_000;
+  for (const [powerTotal, expected] of powerSteps) {
+    ts += 1000;
+    const devices = runEnvelope({
+      'ammeter-unit4': [{ ts, values: { powerTotal, combinedActiveTotalElectricalEnergy: 100 } }],
+    });
+    assert.equal(readPoint(devices, 'ammeter-unit4', 'run_state'), expected, `ammeter-unit4 at ${powerTotal}kW`);
+    assert.equal(readPoint(devices, 'ctrl-chiller-a', 'run_state'), expected, `ctrl-chiller-a at ${powerTotal}kW`);
+  }
+
+  const etStopped = runEnvelope({ et1010: [{ ts: ts + 1000, values: { u11: 0, u12: 0, u13: 0 } }] });
+  assert.equal(etStopped.filter((d) => d.deviceId === 'et1010').length, 1);
+  assert.equal(readPoint(etStopped, 'et1010', 'run_state'), 'STOPPED');
+  assert.equal(readPoint(etStopped, 'ctrl-chwp-1', 'run_state'), 'STOPPED');
+
+  const etRunning = runEnvelope({ et1010: [{ ts: ts + 2000, values: { u11: 1, u12: 0, u13: 0 } }] });
+  assert.equal(etRunning.filter((d) => d.deviceId === 'et1010').length, 1);
+  assert.equal(readPoint(etRunning, 'et1010', 'run_state'), 'RUNNING');
+  assert.equal(readPoint(etRunning, 'ctrl-chwp-1', 'run_state'), 'RUNNING');
+
+  const etPulseOnly = runEnvelope({ et1010: [{ ts: ts + 3000, values: { u14: 0, u51: 0 } }] });
+  assert.equal(etPulseOnly.filter((d) => d.deviceId === 'et1010').length, 1);
+  assert.equal(readPoint(etPulseOnly, 'et1010', 'run_state'), undefined);
 });

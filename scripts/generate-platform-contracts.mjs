@@ -154,6 +154,7 @@ const expectedOperations = {
   listSiteDataGaps: ['get', '/api/v1/sites/{siteId}/data-gaps'],
   getSiteControlState: ['get', '/api/v1/sites/{siteId}/control-state'],
   updateSiteControlMode: ['put', '/api/v1/sites/{siteId}/control-mode'],
+  executeSiteControlShutdown: ['post', '/api/v1/sites/{siteId}/control-shutdown'],
   updateAssetControlLock: ['put', '/api/v1/assets/{assetId}/control-lock'],
 };
 const operations = {};
@@ -197,6 +198,7 @@ const expectedSuccessSchemas = {
   listSiteDataGaps: 'SiteDataGapList',
   getSiteControlState: 'SiteControlState',
   updateSiteControlMode: 'SiteControlModeMutationResponse',
+  executeSiteControlShutdown: 'SiteControlShutdownResponse',
   updateAssetControlLock: 'AssetControlLockMutationResponse',
   getLatestSiteOptimizationStagingRecommendations: 'StagingEvaluation',
 };
@@ -216,57 +218,46 @@ invariant(operations.ackAlarmV212.operation.requestBody?.content?.['application/
 
 const schemas = spec.components?.schemas ?? {};
 const schemaRequirements = {
-  BuildInfo: [['service', 'version', 'commit', 'builtAt'], ['service', 'version', 'commit', 'builtAt']],
+  BuildInfo: [['service', 'version', 'commit', 'builtAt']],
   HealthResponse: [['status', 'service', 'checkedAt'], ['status', 'service', 'checkedAt', 'build']],
-  PlatformStatusResponse: [['status', 'service', 'implementation', 'version', 'checkedAt', 'routePolicyRevision', 'routeRevision', 'compatibilityMode'], ['status', 'service', 'implementation', 'version', 'checkedAt', 'routePolicyRevision', 'routeRevision', 'compatibilityMode']],
-  UserPrincipal: [['subject', 'issuer', 'displayName', 'email', 'roles'], ['subject', 'issuer', 'displayName', 'email', 'roles']],
-  ServicePrincipal: [['service', 'spiffeId'], ['service', 'spiffeId']],
-  PrincipalContext: [['initiatingPrincipal', 'executingServicePrincipal', 'tenantId', 'audience', 'policyRevision', 'delegationExpiresAt'], ['initiatingPrincipal', 'executingServicePrincipal', 'tenantId', 'audience', 'policyRevision', 'delegationExpiresAt']],
-  EffectiveAuthorization: [['capabilitySetVersion', 'policyRevision', 'capabilities'], ['capabilitySetVersion', 'policyRevision', 'capabilities']],
-  SessionView: [['id', 'expiresAt', 'idleTimeoutMs', 'csrfToken', 'revocationObjectiveMs', 'lastAuditMessageId'], ['id', 'expiresAt', 'idleTimeoutMs', 'csrfToken', 'revocationObjectiveMs', 'lastAuditMessageId']],
-  CurrentPrincipalResponse: [['principalId', 'principal', 'context', 'authorization', 'session'], ['principalId', 'principal', 'context', 'authorization', 'session']],
-  SessionRevocationResponse: [['sessionId', 'revokedAt', 'objectiveMs', 'auditMessageId'], ['sessionId', 'revokedAt', 'objectiveMs', 'auditMessageId']],
+  PlatformStatusResponse: [['status', 'service', 'implementation', 'version', 'checkedAt', 'routePolicyRevision', 'routeRevision', 'compatibilityMode']],
+  UserPrincipal: [['subject', 'issuer', 'displayName', 'email', 'roles']],
+  ServicePrincipal: [['service', 'spiffeId']],
+  PrincipalContext: [['initiatingPrincipal', 'executingServicePrincipal', 'tenantId', 'audience', 'policyRevision', 'delegationExpiresAt']],
+  EffectiveAuthorization: [['capabilitySetVersion', 'policyRevision', 'capabilities']],
+  SessionView: [['id', 'expiresAt', 'idleTimeoutMs', 'csrfToken', 'revocationObjectiveMs', 'lastAuditMessageId']],
+  CurrentPrincipalResponse: [['principalId', 'principal', 'context', 'authorization', 'session']],
+  SessionRevocationResponse: [['sessionId', 'revokedAt', 'objectiveMs', 'auditMessageId']],
   AuditRecord: [[
     'ledgerSequence', 'messageId', 'schemaVersion', 'tenantId', 'aggregateType', 'aggregateId', 'aggregateVersion',
     'occurredAt', 'initiatingSubject', 'initiatingIssuer', 'executingService', 'executingSpiffeId',
     'action', 'result', 'policyRevision', 'correlationId', 'causationId', 'traceId', 'payloadSha256', 'previousRecordHash',
     'recordHash', 'recordedAt',
-  ], [
-    'ledgerSequence', 'messageId', 'schemaVersion', 'tenantId', 'aggregateType', 'aggregateId', 'aggregateVersion',
-    'occurredAt', 'initiatingSubject', 'initiatingIssuer', 'executingService', 'executingSpiffeId',
-    'action', 'result', 'policyRevision', 'correlationId', 'causationId', 'traceId', 'payloadSha256', 'previousRecordHash',
-    'recordHash', 'recordedAt',
   ]],
-  Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone'], ['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone']],
+  Site: [['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision', 'createdAt', 'updatedAt', 'floorAreaM2', 'climateZone']],
   Asset: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision', 'createdAt', 'updatedAt', 'ratedPower', 'ratedCapacity']],
-  Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Device: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision', 'createdAt', 'updatedAt']],
   DeviceBinding: [['id', 'tenantId', 'siteId', 'deviceId', 'assetId', 'bindingRole', 'status', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'deviceId', 'assetId', 'bindingRole', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
   ExternalBinding: [['id', 'tenantId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'integrationInstanceId', 'provider', 'externalEntityType', 'externalId', 'bindingStatus', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
-  SiteCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
-  AssetCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
-  DeviceCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
-  DeviceBindingCollection: [['items', 'nextCursor', 'hasMore'], ['items', 'nextCursor', 'hasMore']],
-  Space: [['id', 'tenantId', 'siteId', 'parentSpaceId', 'code', 'displayName', 'spaceType', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'parentSpaceId', 'code', 'displayName', 'spaceType', 'status', 'revision', 'createdAt', 'updatedAt']],
-  Sensor: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt']],
-  TelemetryPoint: [['id', 'tenantId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointCode', 'sourceKey', 'displayName', 'pointType', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'counterDecreaseMode', 'counterRolloverModulus', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointCode', 'sourceKey', 'displayName', 'pointType', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'counterDecreaseMode', 'counterRolloverModulus', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt']],
-  AssetRelationship: [['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt'], ['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
-  AssetModelCounts: [['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points'], ['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points']],
-  SiteAssetModel: [['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts'], ['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts']],
-  SiteTariff: [['siteId', 'displayName', 'version', 'effectiveFrom', 'timezone', 'currency', 'periods'], ['siteId', 'displayName', 'version', 'effectiveFrom', 'timezone', 'currency', 'periods']],
-  TariffPeriod: [['periodCode', 'dayType', 'startMinute', 'endMinute', 'energyRatePerKWh', 'demandRatePerKW'], ['periodCode', 'dayType', 'startMinute', 'endMinute', 'energyRatePerKWh', 'demandRatePerKW']],
-  SiteDataGap: [
-    ['alarmId', 'deviceId', 'deviceName', 'pointId', 'pointCode', 'pointName', 'since', 'affectedFigures', 'excludesDeviceFromTotal'],
-    ['alarmId', 'deviceId', 'deviceName', 'pointId', 'pointCode', 'pointName', 'since', 'affectedFigures', 'excludesDeviceFromTotal'],
-  ],
-  SiteDataGapList: [['items'], ['items']],
+  SiteCollection: [['items', 'nextCursor', 'hasMore']],
+  AssetCollection: [['items', 'nextCursor', 'hasMore']],
+  DeviceCollection: [['items', 'nextCursor', 'hasMore']],
+  DeviceBindingCollection: [['items', 'nextCursor', 'hasMore']],
+  Space: [['id', 'tenantId', 'siteId', 'parentSpaceId', 'code', 'displayName', 'spaceType', 'status', 'revision', 'createdAt', 'updatedAt']],
+  Sensor: [['id', 'tenantId', 'siteId', 'code', 'displayName', 'sensorType', 'manufacturer', 'model', 'serialNumber', 'calibrationDueAt', 'metadata', 'status', 'revision', 'createdAt', 'updatedAt']],
+  TelemetryPoint: [['id', 'tenantId', 'siteId', 'reportingDeviceId', 'sensorId', 'pointCode', 'sourceKey', 'displayName', 'pointType', 'valueType', 'unit', 'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'counterDecreaseMode', 'counterRolloverModulus', 'sourceMetadata', 'status', 'revision', 'createdAt', 'updatedAt']],
+  AssetRelationship: [['id', 'tenantId', 'siteId', 'fromType', 'fromId', 'toType', 'toId', 'role', 'status', 'validFrom', 'validTo', 'revision', 'createdAt', 'updatedAt']],
+  AssetModelCounts: [['spaces', 'assets', 'deviceEndpoints', 'physicalSensors', 'points']],
+  SiteAssetModel: [['schemaVersion', 'tenantId', 'siteId', 'spaces', 'assets', 'devices', 'sensors', 'telemetryPoints', 'relationships', 'counts']],
+  SiteTariff: [['siteId', 'displayName', 'version', 'effectiveFrom', 'timezone', 'currency', 'periods']],
+  TariffPeriod: [['periodCode', 'dayType', 'startMinute', 'endMinute', 'energyRatePerKWh', 'demandRatePerKW']],
+  SiteDataGap: [['alarmId', 'deviceId', 'deviceName', 'pointId', 'pointCode', 'pointName', 'since', 'affectedFigures', 'excludesDeviceFromTotal']],
+  SiteDataGapList: [['items']],
   AssetControlLockState: [
     ['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision'],
     ['id', 'tenantId', 'siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'boundDeviceIds'],
   ],
-  ActiveMaintenanceWindow: [
-    ['id', 'title', 'startDate', 'endDate', 'reason'],
-    ['id', 'title', 'startDate', 'endDate', 'reason'],
-  ],
+  ActiveMaintenanceWindow: [['id', 'title', 'startDate', 'endDate', 'reason']],
   SiteControlState: [
     ['tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks'],
     ['id', 'tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks', 'activeMaintenanceWindow'],
@@ -281,6 +272,11 @@ const schemaRequirements = {
     ['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'cancelledCommandIds'],
     ['id', 'tenantId', 'siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'boundDeviceIds', 'cancelledCommandIds'],
   ],
+  SiteControlShutdownRequest: [
+    ['mode', 'reason', 'verificationCode'],
+    ['mode', 'reason', 'verificationCode', 'unitCode', 'confirmEmergencyDoRelease', 'expectedRevision'],
+  ],
+  SiteControlShutdownResponse: [['siteControlState', 'mode', 'cancelledCommandIds', 'submittedCommandIds', 'deferredHoldingAssetIds']],
   StagingDiagnostic: [
     ['scope', 'status', 'reason', 'detail'],
     ['scope', 'assetId', 'assetCode', 'status', 'reason', 'detail'],
@@ -293,10 +289,10 @@ const schemaRequirements = {
     ['tenantId', 'siteId', 'evaluatedAt', 'confirmationMode', 'recommendations', 'diagnostics'],
     ['tenantId', 'siteId', 'evaluatedAt', 'confirmationMode', 'siteControlMode', 'recommendations', 'diagnostics'],
   ],
-  FieldError: [['field', 'message'], ['field', 'message']],
+  FieldError: [['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
 };
-for (const [name, [required, properties]] of Object.entries(schemaRequirements)) {
+for (const [name, [required, properties = required]] of Object.entries(schemaRequirements)) {
   const schema = schemas[name];
   invariant(schema?.type === 'object' && schema.additionalProperties === false, `${name} must be a closed object schema`);
   invariant(exactMembers(schema.required, required), `${name} required fields are unsupported`);
@@ -448,6 +444,7 @@ const replacements = {
   __SITE_DATA_GAPS_PATH__: operations.listSiteDataGaps.path,
   __SITE_CONTROL_STATE_PATH__: operations.getSiteControlState.path,
   __SITE_CONTROL_MODE_PATH__: operations.updateSiteControlMode.path,
+  __SITE_CONTROL_SHUTDOWN_PATH__: operations.executeSiteControlShutdown.path,
   __ASSET_CONTROL_LOCK_PATH__: operations.updateAssetControlLock.path,
 };
 

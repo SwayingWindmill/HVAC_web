@@ -1,6 +1,12 @@
 package commandformal
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
+)
 
 func TestSingleCommandProtocolInvariants(t *testing.T) {
 	report, err := CheckSingleCommandProtocol(FaultHooks{})
@@ -97,5 +103,74 @@ func TestFormalPropertiesCanFailOnBrokenTransitions(t *testing.T) {
 				t.Fatalf("property=%s want=%s (%s)", report.Counterexample.Property, tc.wantProp, report.Counterexample.Error())
 			}
 		})
+	}
+}
+
+func TestPulseDualReadbackVsNonPulseFormalBranches(t *testing.T) {
+	now := baseModelTime
+	deadline := now.Add(10 * time.Minute)
+	pulseEdge := validPulseEdgeExecution("u14", 500)
+	levelEdge := validLevelEdgeExecution("u11", 1)
+	emergencyDoEdge := validEmergencyDoReleaseEdgeExecution()
+	unitSeqEdge := validUnitSequenceAcceptedEdgeExecution("chiller-1")
+
+	resolveTimedOut := func(cap commandmodel.Capability, edge *commandmodel.EdgeExecutionEvidence) commandservice.VerificationResolutionDecision {
+		t.Helper()
+		dec, err := commandservice.DecideVerificationResolutionWithEdge(
+			makeSyntheticIntentForCapability(1, cap, commandmodel.IntentDispatching, true, now),
+			commandmodel.VerificationEnvelope{VerificationPointKey: setpointVerificationKey, AcknowledgedAt: now, EdgeExecution: edge},
+			edge,
+			commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-timeout"},
+			deadline,
+			deadline.Add(time.Second),
+		)
+		if err != nil {
+			t.Fatalf("%s DecideVerificationResolutionWithEdge failed: %v", cap, err)
+		}
+		return dec
+	}
+
+	assertUnconfirmedFailed := func(cap commandmodel.Capability, label string, edge *commandmodel.EdgeExecutionEvidence) {
+		t.Helper()
+		dec := resolveTimedOut(cap, edge)
+		if dec.IntentFinal != commandmodel.IntentFailed || dec.Reason != commandmodel.ReasonPulseDeliveredPowerUnconfirmed || dec.FreezeControlGroup {
+			t.Fatalf("%s (%s) timeout = %+v, want FAILED without freeze", cap, label, dec)
+		}
+	}
+
+	assertFrozenUnknown := func(cap commandmodel.Capability, label string, edge *commandmodel.EdgeExecutionEvidence) {
+		t.Helper()
+		dec := resolveTimedOut(cap, edge)
+		if dec.IntentFinal != commandmodel.IntentOutcomeUnknown || !dec.FreezeControlGroup {
+			t.Fatalf("%s (%s) timeout = %+v, want OUTCOME_UNKNOWN with freeze", cap, label, dec)
+		}
+	}
+
+	for _, cap := range []commandmodel.Capability{commandmodel.CapabilityStart, commandmodel.CapabilityStop} {
+		assertUnconfirmedFailed(cap, "pulse dual", pulseEdge)
+		assertFrozenUnknown(cap, "level coil", levelEdge)
+		assertFrozenUnknown(cap, "missing edge", nil)
+		assertFrozenUnknown(cap, "unit sequence acceptance", unitSeqEdge)
+	}
+
+	// Emergency DO release ("all-do:0") only exempts STOP from freezing OUTCOME_UNKNOWN.
+	assertUnconfirmedFailed(commandmodel.CapabilityStop, "emergency DO release", emergencyDoEdge)
+	assertFrozenUnknown(commandmodel.CapabilityStart, "emergency DO release", emergencyDoEdge)
+
+	// Unit-sequence acceptance exempts START_UNIT_SEQUENCE / STOP_UNIT_SEQUENCE,
+	// whereas pulse/level/emergency-DO/missing-edge on unit-sequence MUST freeze OUTCOME_UNKNOWN.
+	for _, cap := range []commandmodel.Capability{commandmodel.CapabilityStartUnitSequence, commandmodel.CapabilityStopUnitSequence} {
+		assertUnconfirmedFailed(cap, "unit sequence acceptance", unitSeqEdge)
+		assertFrozenUnknown(cap, "pulse dual", pulseEdge)
+		assertFrozenUnknown(cap, "level coil", levelEdge)
+		assertFrozenUnknown(cap, "emergency DO release", emergencyDoEdge)
+		assertFrozenUnknown(cap, "missing edge", nil)
+	}
+
+	// Setpoint and fault-reset capabilities MUST always freeze OUTCOME_UNKNOWN even with special edge texts.
+	for _, cap := range []commandmodel.Capability{commandmodel.CapabilitySetTemperatureSetpoint, commandmodel.CapabilityResetFault} {
+		assertFrozenUnknown(cap, "pulse dual", pulseEdge)
+		assertFrozenUnknown(cap, "emergency DO release", emergencyDoEdge)
+		assertFrozenUnknown(cap, "unit sequence acceptance", unitSeqEdge)
 	}
 }

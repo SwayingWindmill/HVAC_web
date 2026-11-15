@@ -30,6 +30,10 @@ type InterlockRulesProvider interface {
 	ResolveCommandInterlocks(context.Context, commandmodel.DispatchEnvelope) ([]commandmodel.InterlockCheck, error)
 }
 
+type DispatchActuationModeProvider interface {
+	ResolveCommandActuationMode(context.Context, commandmodel.DispatchEnvelope) (string, error)
+}
+
 type authoritativeDispatchSafetyVerifier struct {
 	reader     DispatchSafetyStateReader
 	key        string
@@ -55,13 +59,39 @@ func (verifier *authoritativeDispatchSafetyVerifier) VerifyBeforeDispatch(ctx co
 	if verifier == nil || verifier.reader == nil || strings.TrimSpace(verifier.key) == "" {
 		return DispatchSafetyResult{}, errors.New("dispatch safety verifier is unavailable")
 	}
-	result, _, err := verifyBeforeDispatchWithKey(ctx, verifier.reader, envelope, verifier.key)
-	if err != nil || !result.Safe || verifier.interlocks == nil {
-		return result, err
+	var checks []commandmodel.InterlockCheck
+	if verifier.interlocks != nil {
+		var err error
+		checks, err = verifier.interlocks.ResolveCommandInterlocks(ctx, envelope)
+		if err != nil {
+			return DispatchSafetyResult{}, err
+		}
 	}
-	checks, err := verifier.interlocks.ResolveCommandInterlocks(ctx, envelope)
-	if err != nil {
-		return DispatchSafetyResult{}, err
+	var actuationMode string
+	if envelope.Capability == commandmodel.CapabilityStop && len(checks) == 0 && verifier.interlocks != nil {
+		if modeProvider, ok := verifier.interlocks.(DispatchActuationModeProvider); ok {
+			mode, err := modeProvider.ResolveCommandActuationMode(ctx, envelope)
+			if err != nil {
+				return DispatchSafetyResult{}, err
+			}
+			actuationMode = strings.ToUpper(strings.TrimSpace(mode))
+			if actuationMode == "EMERGENCY_DO_RELEASE" {
+				return DispatchSafetyResult{
+					Safe:       true,
+					EvidenceID: "emergency-do-release:" + envelope.CommandID,
+				}, nil
+			}
+		}
+	}
+	result, _, err := verifyBeforeDispatchWithKey(ctx, verifier.reader, envelope, verifier.key)
+	if err != nil || !result.Safe {
+		if envelope.Capability == commandmodel.CapabilityStop && len(checks) == 0 && actuationMode == "PULSE" {
+			return DispatchSafetyResult{
+				Safe:       true,
+				EvidenceID: "shutdown-pulse-bypass:" + envelope.CommandID,
+			}, nil
+		}
+		return result, err
 	}
 	for _, check := range checks {
 		peerEnvelope := envelope

@@ -99,6 +99,15 @@ func validCurrentState(currentValue float64, at time.Time) commandmodel.CurrentS
 }
 
 func submitAuthorization(principalID string, issuedAt time.Time, maxRisk commandmodel.RiskLevel) commandmodel.AuthorizationSnapshot {
+	return submitAuthorizationFor(principalID, commandmodel.CapabilitySetTemperatureSetpoint, issuedAt, maxRisk)
+}
+
+func submitAuthorizationFor(principalID string, capability commandmodel.Capability, issuedAt time.Time, maxRisk commandmodel.RiskLevel) commandmodel.AuthorizationSnapshot {
+	profile, ok := commandmodel.CapabilityProfileFor(capability)
+	revision := setpointCapabilityRev
+	if ok {
+		revision = profile.Revision
+	}
 	return commandmodel.AuthorizationSnapshot{
 		GrantID:                     "grant-submit-" + issuedAt.Format("150405"),
 		PolicyRevision:              "command-policy-1",
@@ -107,9 +116,9 @@ func submitAuthorization(principalID string, issuedAt time.Time, maxRisk command
 		TenantID:                    baseTenantID,
 		SiteID:                      baseSiteID,
 		DeviceID:                    baseDeviceID,
-		Capability:                  commandmodel.CapabilitySetTemperatureSetpoint,
+		Capability:                  capability,
 		MaximumRisk:                 maxRisk,
-		CapabilityRevision:          setpointCapabilityRev,
+		CapabilityRevision:          revision,
 		EmergencyRevocationRevision: 1,
 		IssuedAt:                    issuedAt.Add(-5 * time.Second),
 		ExpiresAt:                   issuedAt.Add(grantLifetime),
@@ -150,6 +159,22 @@ func makeSubmitRequest(idempotencyKey string, setpoint float64, issuedAt time.Ti
 	}
 }
 
+func makeSubmitRequestForCapability(idempotencyKey string, capability commandmodel.Capability, issuedAt time.Time) commandmodel.SubmitRequest {
+	return commandmodel.SubmitRequest{
+		TenantID:             baseTenantID,
+		SiteID:               baseSiteID,
+		DeviceID:             baseDeviceID,
+		PointID:              basePointID,
+		PrincipalID:          submitPrincipalID,
+		IdempotencyKey:       idempotencyKey,
+		Capability:           capability,
+		Parameters:           commandmodel.CommandParameters{},
+		VerificationPointKey: setpointVerificationKey,
+		CurrentState:         validCurrentState(23, issuedAt),
+		Authorization:        submitAuthorizationFor(submitPrincipalID, capability, issuedAt, commandmodel.RiskHigh),
+	}
+}
+
 func validEdgeExecution(effective float64) *commandmodel.EdgeExecutionEvidence {
 	requested := commandmodel.NumberScalar(24)
 	applied := commandmodel.NumberScalar(effective)
@@ -159,6 +184,70 @@ func validEdgeExecution(effective float64) *commandmodel.EdgeExecutionEvidence {
 		Applied:            &applied,
 		WinnerControllerID: "cloud-command-intent",
 		Cycle:              1,
+	}
+}
+
+func validPulseEdgeExecution(channel string, durationMS int) *commandmodel.EdgeExecutionEvidence {
+	requested := commandmodel.TextScalar("START")
+	pulse := commandmodel.TextScalar(fmt.Sprintf("%s:pulse(%dms)->0", channel, durationMS))
+	return &commandmodel.EdgeExecutionEvidence{
+		Requested:          requested,
+		Effective:          &pulse,
+		Applied:            &pulse,
+		WinnerControllerID: "cloud-command-intent",
+		Cycle:              1,
+	}
+}
+
+func validLevelEdgeExecution(channel string, level int) *commandmodel.EdgeExecutionEvidence {
+	requested := commandmodel.TextScalar("START")
+	applied := commandmodel.TextScalar(fmt.Sprintf("%s:%d", channel, level))
+	return &commandmodel.EdgeExecutionEvidence{
+		Requested:          requested,
+		Effective:          &applied,
+		Applied:            &applied,
+		WinnerControllerID: "cloud-command-intent",
+		Cycle:              1,
+	}
+}
+
+func validEmergencyDoReleaseEdgeExecution() *commandmodel.EdgeExecutionEvidence {
+	requested := commandmodel.TextScalar("STOP")
+	applied := commandmodel.TextScalar("all-do:0")
+	return &commandmodel.EdgeExecutionEvidence{
+		Requested:          requested,
+		Effective:          &applied,
+		Applied:            &applied,
+		WinnerControllerID: "cloud-command-intent",
+		Cycle:              1,
+	}
+}
+
+func validUnitSequenceAcceptedEdgeExecution(unit string) *commandmodel.EdgeExecutionEvidence {
+	requested := commandmodel.TextScalar("START_UNIT_SEQUENCE")
+	applied := commandmodel.TextScalar(fmt.Sprintf("%s:sequence-accepted", unit))
+	return &commandmodel.EdgeExecutionEvidence{
+		Requested:          requested,
+		Effective:          &applied,
+		Applied:            &applied,
+		WinnerControllerID: "cloud-command-intent",
+		Cycle:              1,
+	}
+}
+
+func validReportedTextEvidence(value string, observedAt time.Time, revision uint64) commandmodel.ReportedStateEvidence {
+	return commandmodel.ReportedStateEvidence{
+		TenantID:               baseTenantID,
+		SiteID:                 baseSiteID,
+		DeviceID:               baseDeviceID,
+		EvaluationAvailability: "AVAILABLE",
+		Presence:               "ONLINE",
+		Readiness:              "CURRENT",
+		Freshness:              "FRESH",
+		Quality:                "GOOD",
+		BusinessRevision:       revision,
+		ReportedValue:          commandmodel.TextScalar(value),
+		ObservedAt:             observedAt,
 	}
 }
 
