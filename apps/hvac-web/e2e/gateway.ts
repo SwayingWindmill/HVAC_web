@@ -345,6 +345,7 @@ export class Gateway {
   ];
   /** The Operations Agent's Agent Sessions for the Site. */
   readonly assistant = new AssistantOwner();
+  readonly concentratorStates = new Map<string, Json>();
   readonly writes: RecordedRequest[] = [];
   readonly unexpected: string[] = [];
 
@@ -357,10 +358,11 @@ export class Gateway {
     const url = new URL(request.url());
     const path = url.pathname;
     const method = request.method();
-    if (method !== 'GET') this.writes.push({ method, path, body: bodyOf(request), csrfToken: request.headers()['x-csrf-token'] });
+    const csrfToken = request.headers()['x-csrf-token'];
+    if (method !== 'GET') this.writes.push({ method, path, body: bodyOf(request), csrfToken });
     const agent = this.assistant.respond(SITE_ID, method, path, bodyOf(request));
     if (agent?.stream !== undefined) return route.fulfill({ status: 200, contentType: 'text/event-stream; charset=utf-8', body: agent.stream });
-    const reply = agent ?? this.respond(method, path, url.searchParams, bodyOf(request));
+    const reply = agent ?? this.respond(method, path, url.searchParams, bodyOf(request), csrfToken);
     if (!reply) {
       this.unexpected.push(`${method} ${path}`);
       return route.fulfill({ status: 404, contentType: 'application/problem+json', body: JSON.stringify({ status: 404, code: 'ROUTE_NOT_FOUND', title: 'Not found' }) });
@@ -904,7 +906,7 @@ export class Gateway {
     return { ...this.snapshots, items };
   }
 
-  private respond(method: string, path: string, query: URLSearchParams, body: Json | null): { status?: number; body: unknown } | undefined {
+  private respond(method: string, path: string, query: URLSearchParams, body: Json | null, csrfToken?: string): { status?: number; body: unknown } | undefined {
     const now = new Date().toISOString();
     if (method === 'GET' && path === '/api/v1/principal') return { body: this.principalOverride ?? principal };
     if (method === 'GET' && path === '/api/v1/platform/status') return { body: fixture('platform-status.json') };
@@ -944,6 +946,8 @@ export class Gateway {
     if (method === 'GET' && gatewayCredMatch) {
       return { body: { status: 'ACTIVE', expiresAt: new Date(Date.now() + 90 * 86_400_000).toISOString() } };
     }
+    const concentratorReply = this.concentrators(method, path, body, csrfToken, now);
+    if (concentratorReply) return concentratorReply;
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: this.assetModel };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/data-gaps`) return { body: { items: this.dataGaps } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/tariff`) {
@@ -1146,6 +1150,255 @@ export class Gateway {
     order.version += 1;
     order.updatedAt = now;
     order.timeline.push({ operation, toStatus, reason: reason ?? '', actorType: 'PRINCIPAL', actorId: MY_ID, occurredAt: now, version: order.version });
+  }
+
+  private getOrInitConcentratorState(gatewayId: string, unitId: number, now: string): Json {
+    const key = `${gatewayId}:${unitId}`;
+    const existing = this.concentratorStates.get(key);
+    if (existing) return existing;
+
+    const slots: Json[] = Array.from({ length: 200 }, (_, index) => {
+      const slot = index + 1;
+      const presetEids = [50, 51, 55, 13, 14, 53, 54];
+      const eid = slot <= presetEids.length ? presetEids[slot - 1]! : slot <= 23 ? 100 + slot : 0;
+      return { slot, eid };
+    });
+
+    const channels: Json[] = Array.from({ length: 23 }, (_, index) => {
+      const channel = index + 1;
+      const eid = slots[index]!.eid;
+      if (channel === 1) return { channel, eid, online: true, sensorType: 1, sensorModel: 'WHT20-N', temperatureC: 24.6, voltageMv: 2980, rssiDbm: -68 };
+      if (channel === 2) return { channel, eid, online: true, sensorType: 1, sensorModel: 'WHT20-N', temperatureC: 11.8, voltageMv: 2540, rssiDbm: -74 };
+      if (channel === 3) return { channel, eid, online: true, sensorType: 1, sensorModel: 'WHT20-N', temperatureC: 12.1, voltageMv: 2410, rssiDbm: -79 };
+      if (channel === 4) return { channel, eid, online: true, sensorType: 1, sensorModel: 'WHT20-N', temperatureC: 29.4, voltageMv: 3010, rssiDbm: -65 };
+      if (channel === 5) return { channel, eid, online: true, sensorType: 1, sensorModel: 'WHT20-N', temperatureC: 30.1, voltageMv: 2990, rssiDbm: -66 };
+      if (channel === 6) return { channel, eid, online: true, sensorType: 1, sensorModel: 'WHT20-N', temperatureC: 23.2, voltageMv: 2890, rssiDbm: -71 };
+      if (channel === 7) return { channel, eid, online: true, sensorType: 1, sensorModel: 'WHT20-N', temperatureC: 22.7, voltageMv: 2910, rssiDbm: -70 };
+      if (channel === 8) return { channel, eid, online: false, sensorType: 1, sensorModel: 'WHT20-N', temperatureC: null, voltageMv: null, rssiDbm: null };
+      return {
+        channel,
+        eid,
+        online: true,
+        sensorType: 1,
+        sensorModel: 'WHT20-N',
+        temperatureC: Number((18.5 + (channel % 7) * 1.1).toFixed(1)),
+        voltageMv: 2920 + (channel % 5) * 35,
+        rssiDbm: -64 - (channel % 8) * 2,
+      };
+    });
+
+    const created: Json = {
+      params: {
+        modbusId: unitId,
+        baudRateCode: 3,
+        offLineTime: 10,
+        dataUplinkCycle: 10,
+        localNet: 1,
+        timeMark: 1,
+        rfTxPower: 20,
+        rfFrequency: 433,
+        rfBandWidth: 0,
+        rfSf: 9,
+        rfLeadCode: 8,
+        txTimeout: 5,
+        rxTimeout: 5,
+        rssiOut: 1,
+      },
+      slots,
+      channels,
+      recentAudits: [
+        {
+          id: '01910000-0000-7000-8000-000000000801',
+          unitId,
+          actorId: MY_ID,
+          operation: 'WRITE_PARAMS',
+          requestId: '01910000-0000-7000-8000-000000000802',
+          outcome: 'APPLIED',
+          reason: '松雅轩 1 号无线集中器初始化巡检参数',
+          diff: { dataUplinkCycle: { before: 15, after: 10 } },
+          occurredAt: new Date(Date.parse(now) - 3_600_000).toISOString(),
+        },
+      ],
+      seq: 1,
+    };
+    this.concentratorStates.set(key, created);
+    return created;
+  }
+
+  private concentrators(
+    method: string,
+    path: string,
+    body: Json | null,
+    csrfToken: string | undefined,
+    now: string,
+  ): { status?: number; body: unknown } | undefined {
+    const match = path.match(/^\/api\/v1\/gateways\/([^/]+)\/concentrators\/([^/]+)\/(status|params|eids)$/);
+    if (!match) return undefined;
+
+    const gatewayId = decodeURIComponent(match[1]!);
+    const unitId = Number(decodeURIComponent(match[2]!));
+    const action = match[3]!;
+    const refuse = (status: number, code: string, detail: string) => ({
+      status,
+      body: { type: 'about:blank', title: detail, status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
+    });
+
+    const gatewayDevice = (this.assetModel.devices as Json[]).find((d) => d.id === gatewayId && d.deviceType === 'GATEWAY');
+    if (!gatewayDevice) return refuse(404, 'RESOURCE_NOT_FOUND', 'Gateway not found');
+    if (!Number.isInteger(unitId) || unitId < 1 || unitId > 247) {
+      return refuse(400, 'CONCENTRATOR_REQUEST_INVALID', 'Invalid concentrator unit ID');
+    }
+    if (new Set([2, 3, 4, 5, 10, 31]).has(unitId)) {
+      return refuse(409, 'CONCENTRATOR_UID_PROTECTED', 'Protected RS485 unit ID');
+    }
+
+    const activePrincipal = this.principalOverride ?? principal;
+    const caps = new Set<string>(activePrincipal.authorization?.capabilities ?? []);
+    if (method === 'GET' && !caps.has('device.read')) {
+      return refuse(403, 'FORBIDDEN', 'device.read required');
+    }
+    if (method === 'PUT' && (!caps.has('device.write') || !csrfToken)) {
+      return refuse(403, 'FORBIDDEN', 'device.write and CSRF token required');
+    }
+
+    const state = this.getOrInitConcentratorState(gatewayId, unitId, now);
+    state.seq += 1;
+    const reqSuffix = String(state.seq).padStart(12, '0');
+    const requestId = `01910000-0000-7000-8000-${reqSuffix}`;
+
+    if (method === 'GET' && action === 'status') {
+      return {
+        body: {
+          gatewayId,
+          unitId,
+          respondedAt: now,
+          params: state.params,
+          channels: state.channels,
+          recentAudits: state.recentAudits,
+        },
+      };
+    }
+
+    if (method === 'GET' && action === 'eids') {
+      return {
+        body: {
+          gatewayId,
+          unitId,
+          respondedAt: now,
+          slots: state.slots,
+          recentAudits: state.recentAudits,
+        },
+      };
+    }
+
+    if (method === 'PUT' && action === 'params') {
+      const patch = body?.params ?? {};
+      const reason = String(body?.reason ?? '').trim();
+      if (!reason || Object.keys(patch).length === 0) {
+        return refuse(400, 'CONCENTRATOR_REQUEST_INVALID', 'Invalid params patch or empty reason');
+      }
+      if (patch.modbusId !== undefined && new Set([2, 3, 4, 5, 10, 31]).has(Number(patch.modbusId))) {
+        return refuse(409, 'CONCENTRATOR_UID_PROTECTED', 'Protected RS485 modbusId');
+      }
+      const writtenCount = Object.keys(patch).length;
+      state.params = { ...state.params, ...patch };
+      const nextUnitId = Number(state.params.modbusId ?? unitId);
+      const audit = {
+        id: `01910000-1000-7000-8000-${reqSuffix}`,
+        unitId: nextUnitId,
+        actorId: MY_ID,
+        operation: 'WRITE_PARAMS',
+        requestId,
+        outcome: 'APPLIED',
+        reason,
+        diff: patch,
+        occurredAt: now,
+      };
+      state.recentAudits = [audit, ...state.recentAudits].slice(0, 20);
+      if (nextUnitId !== unitId) {
+        this.concentratorStates.delete(`${gatewayId}:${unitId}`);
+        this.concentratorStates.set(`${gatewayId}:${nextUnitId}`, state);
+      }
+      return {
+        body: {
+          gatewayId,
+          unitId: nextUnitId,
+          requestId,
+          writtenCount,
+          params: state.params,
+          audit,
+        },
+      };
+    }
+
+    if (method === 'PUT' && action === 'eids') {
+      const nextSlots = body?.slots;
+      const reason = String(body?.reason ?? '').trim();
+      if (!Array.isArray(nextSlots) || nextSlots.length !== 200 || !reason) {
+        return refuse(400, 'CONCENTRATOR_REQUEST_INVALID', 'Invalid slots or empty reason');
+      }
+      const seen = new Set<number>();
+      for (const entry of nextSlots) {
+        const eid = Number(entry.eid);
+        if (eid > 0) {
+          if (seen.has(eid)) {
+            return refuse(422, 'CONCENTRATOR_EID_DUPLICATE', `Duplicate non-zero EID ${eid}`);
+          }
+          seen.add(eid);
+        }
+      }
+      let updatedSlots = 0;
+      let chunkCount = 0;
+      let inChunk = false;
+      let runLen = 0;
+      for (let i = 0; i < 200; i += 1) {
+        const prev = state.slots[i]!.eid;
+        const next = Number(nextSlots[i]!.eid);
+        if (prev !== next) {
+          updatedSlots += 1;
+          if (!inChunk || runLen >= 20) {
+            chunkCount += 1;
+            inChunk = true;
+            runLen = 1;
+          } else {
+            runLen += 1;
+          }
+        } else {
+          inChunk = false;
+          runLen = 0;
+        }
+      }
+      state.slots = nextSlots.map((entry: Json) => ({ slot: Number(entry.slot), eid: Number(entry.eid) }));
+      state.channels = state.channels.map((ch: Json) => {
+        const updatedSlot = state.slots.find((s: Json) => s.slot === ch.channel);
+        return updatedSlot ? { ...ch, eid: updatedSlot.eid } : ch;
+      });
+      const audit = {
+        id: `01910000-2000-7000-8000-${reqSuffix}`,
+        unitId,
+        actorId: MY_ID,
+        operation: 'WRITE_EIDS',
+        requestId,
+        outcome: 'APPLIED',
+        reason,
+        diff: { updatedSlots, chunkCount },
+        occurredAt: now,
+      };
+      state.recentAudits = [audit, ...state.recentAudits].slice(0, 20);
+      return {
+        body: {
+          gatewayId,
+          unitId,
+          requestId,
+          updatedSlots,
+          chunkCount,
+          slots: state.slots,
+          audit,
+        },
+      };
+    }
+
+    return undefined;
   }
 }
 

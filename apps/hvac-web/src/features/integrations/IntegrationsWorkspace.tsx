@@ -19,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useNow } from '@/hooks/use-now';
 import { isOneOf } from '@/lib/typed';
 import { GatewaysTab } from './components/GatewaysTab';
+import { ConcentratorsTab } from './components/ConcentratorsTab';
 import { MeterInspectionSheet } from './components/MeterInspectionSheet';
 import { MeterReconciliationTab } from './components/MeterReconciliationTab';
 import { SensorCalibrationTab } from './components/SensorCalibrationTab';
@@ -40,7 +41,7 @@ import {
 const route = getRouteApi('/_app/settings/integrations');
 
 const HOUR_MS = 3_600_000;
-const INTEGRATIONS_VIEWS = ['gateways', 'meters', 'sensors'] as const satisfies readonly IntegrationsTabView[];
+const INTEGRATIONS_VIEWS = ['gateways', 'concentrators', 'meters', 'sensors'] as const satisfies readonly IntegrationsTabView[];
 
 export function IntegrationsWorkspace() {
   const snapshot = useShellSnapshot();
@@ -65,6 +66,7 @@ export function IntegrationsWorkspace() {
   const allDevices = flattenRegistryPages(devicesQuery.data);
 
   const capabilities = principal.authorization.capabilities;
+  const canReadDevices = capabilities.includes('device.read');
   const canWriteDevices = capabilities.includes('device.write');
   const canReadAssets = capabilities.includes('asset.read');
   const canReadSnapshots =
@@ -76,7 +78,9 @@ export function IntegrationsWorkspace() {
   const csrfToken = principal.session.csrfToken;
 
   const activeView: IntegrationsTabView =
-    search.view === 'meters' || search.view === 'sensors' ? search.view : 'gateways';
+    search.view === 'concentrators' || search.view === 'meters' || search.view === 'sensors'
+      ? search.view
+      : 'gateways';
   const needsGovernanceData = activeView === 'meters' || activeView === 'sensors';
   const sensorFilter: SensorCalibrationFilter = search.filter ?? 'ALL';
 
@@ -295,6 +299,7 @@ export function IntegrationsWorkspace() {
       >
         <TabsList variant="line">
           <TabsTrigger value="gateways">现场网关</TabsTrigger>
+          <TabsTrigger value="concentrators">无线集中器</TabsTrigger>
           <TabsTrigger value="meters">电表数据核对</TabsTrigger>
           <TabsTrigger value="sensors">传感器校准</TabsTrigger>
         </TabsList>
@@ -314,6 +319,18 @@ export function IntegrationsWorkspace() {
             csrfToken={csrfToken}
             inspectParam={activeView === 'gateways' ? search.inspect : undefined}
             onInspectChange={setInspect}
+          />
+        </TabsContent>
+
+        <TabsContent value="concentrators" className="mt-0">
+          <ConcentratorsTab
+            siteName={siteName}
+            allDevices={allDevices}
+            devicesPending={devicesQuery.isPending}
+            devicesError={devicesQuery.isError}
+            canReadDevices={canReadDevices}
+            canWrite={canWriteDevices}
+            csrfToken={csrfToken}
           />
         </TabsContent>
 
