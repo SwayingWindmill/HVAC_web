@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	_ "time/tzdata"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -35,16 +36,25 @@ type AssetControlLockState struct {
 	BoundDeviceIDs []string `json:"boundDeviceIds,omitempty"`
 }
 
+type ActiveMaintenanceWindow struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	StartDate string `json:"startDate"`
+	EndDate   string `json:"endDate"`
+	Reason    string `json:"reason"`
+}
+
 type SiteControlState struct {
-	ID          *string                 `json:"id,omitempty"`
-	TenantID    string                  `json:"tenantId"`
-	SiteID      string                  `json:"siteId"`
-	ControlMode string                  `json:"controlMode"`
-	Reason      string                  `json:"reason"`
-	UpdatedBy   *string                 `json:"updatedBy"`
-	UpdatedAt   *string                 `json:"updatedAt"`
-	Revision    int64                   `json:"revision"`
-	AssetLocks  []AssetControlLockState `json:"assetLocks"`
+	ID                      *string                  `json:"id,omitempty"`
+	TenantID                string                   `json:"tenantId"`
+	SiteID                  string                   `json:"siteId"`
+	ControlMode             string                   `json:"controlMode"`
+	Reason                  string                   `json:"reason"`
+	UpdatedBy               *string                  `json:"updatedBy"`
+	UpdatedAt               *string                  `json:"updatedAt"`
+	Revision                int64                    `json:"revision"`
+	AssetLocks              []AssetControlLockState  `json:"assetLocks"`
+	ActiveMaintenanceWindow *ActiveMaintenanceWindow `json:"activeMaintenanceWindow,omitempty"`
 }
 
 type SiteControlModeMutation struct {
@@ -107,12 +117,12 @@ func (store *PostgresStore) GetSiteControlState(ctx context.Context, claims regi
 	}
 	var state SiteControlState
 	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
-		var tenantID string
+		var tenantID, timezone string
 		err := transaction.QueryRow(ctx, `
-SELECT tenant_id::text
+SELECT tenant_id::text, timezone
 FROM core_registry.sites
 WHERE id = $1::uuid AND NOT (id = ANY($2::uuid[]))
-`, siteID, postgresUUIDArray(claims.DeniedSiteIDs)).Scan(&tenantID)
+`, siteID, postgresUUIDArray(claims.DeniedSiteIDs)).Scan(&tenantID, &timezone)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -145,6 +155,10 @@ WHERE tenant_id = $1::uuid AND site_id = $2::uuid
 		}
 
 		state.AssetLocks, err = querySiteAssetLocks(ctx, transaction, tenantID, siteID)
+		if err != nil {
+			return err
+		}
+		state.ActiveMaintenanceWindow, err = queryActiveMaintenanceWindow(ctx, transaction, tenantID, siteID, timezone, time.Now().UTC())
 		if err != nil {
 			return err
 		}
@@ -232,22 +246,22 @@ func (store *PostgresStore) SaveSiteControlMode(ctx context.Context, claims regi
 	trimmedMetaReason := strings.TrimSpace(input.Meta.Reason)
 
 	return runRegistryMutation(ctx, store, claims, registryauth.ActionScheduleManage, input.Meta.IdempotencyKey, trimmedMetaReason, input, func(tx pgx.Tx, now time.Time) (mutationRecord[SiteControlState], error) {
-		var siteExists bool
-		if err := tx.QueryRow(ctx, `
-SELECT EXISTS (
-  SELECT 1 FROM core_registry.sites
-  WHERE tenant_id = $1::uuid AND id = $2::uuid AND NOT (id = ANY($3::uuid[]))
-)
-`, claims.TenantID, input.SiteID, postgresUUIDArray(claims.DeniedSiteIDs)).Scan(&siteExists); err != nil {
-			return mutationRecord[SiteControlState]{}, fmt.Errorf("verify Site for control mode save: %w", err)
-		}
-		if !siteExists {
+		var timezone string
+		err := tx.QueryRow(ctx, `
+SELECT timezone
+FROM core_registry.sites
+WHERE tenant_id = $1::uuid AND id = $2::uuid AND NOT (id = ANY($3::uuid[]))
+`, claims.TenantID, input.SiteID, postgresUUIDArray(claims.DeniedSiteIDs)).Scan(&timezone)
+		if errors.Is(err, pgx.ErrNoRows) {
 			return mutationRecord[SiteControlState]{}, ErrNotFound
+		}
+		if err != nil {
+			return mutationRecord[SiteControlState]{}, fmt.Errorf("verify Site for control mode save: %w", err)
 		}
 
 		var stateID string
 		var currentRevision int64
-		err := tx.QueryRow(ctx, `
+		err = tx.QueryRow(ctx, `
 SELECT id::text, revision
 FROM core_registry.site_control_states
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid
@@ -304,20 +318,25 @@ WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid AND revision
 		if err != nil {
 			return mutationRecord[SiteControlState]{}, err
 		}
+		activeMaintenanceWindow, err := queryActiveMaintenanceWindow(ctx, tx, claims.TenantID, input.SiteID, timezone, now)
+		if err != nil {
+			return mutationRecord[SiteControlState]{}, err
+		}
 
 		updatedBy := claims.PrincipalID
 		updatedAt := formatInstant(now)
 		siteCopy := input.SiteID
 		saved := SiteControlState{
-			ID:          &stateID,
-			TenantID:    claims.TenantID,
-			SiteID:      input.SiteID,
-			ControlMode: input.ControlMode,
-			Reason:      reason,
-			UpdatedBy:   &updatedBy,
-			UpdatedAt:   &updatedAt,
-			Revision:    nextRevision,
-			AssetLocks:  assetLocks,
+			ID:                      &stateID,
+			TenantID:                claims.TenantID,
+			SiteID:                  input.SiteID,
+			ControlMode:             input.ControlMode,
+			Reason:                  reason,
+			UpdatedBy:               &updatedBy,
+			UpdatedAt:               &updatedAt,
+			Revision:                nextRevision,
+			AssetLocks:              assetLocks,
+			ActiveMaintenanceWindow: activeMaintenanceWindow,
 		}
 		return mutationRecord[SiteControlState]{
 			Result:           saved,
@@ -455,4 +474,39 @@ WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND asset_id = $3::uuid AND re
 			},
 		}, nil
 	})
+}
+
+func siteLocalCalendarDate(timezone string, at time.Time) string {
+	location := time.UTC
+	trimmed := strings.TrimSpace(timezone)
+	if trimmed != "" && !strings.EqualFold(trimmed, "Local") {
+		if loaded, err := time.LoadLocation(trimmed); err == nil {
+			location = loaded
+		}
+	}
+	return at.In(location).Format("2006-01-02")
+}
+
+func queryActiveMaintenanceWindow(ctx context.Context, transaction pgx.Tx, tenantID, siteID, timezone string, at time.Time) (*ActiveMaintenanceWindow, error) {
+	siteDate := siteLocalCalendarDate(timezone, at)
+	var window ActiveMaintenanceWindow
+	err := transaction.QueryRow(ctx, `
+SELECT id::text, title, to_char(start_date, 'YYYY-MM-DD'), to_char(end_date, 'YYYY-MM-DD'), reason
+FROM core_registry.operating_exceptions
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND status = 'APPROVED'
+  AND kind = 'MAINTENANCE_WINDOW'
+  AND start_date <= $3::date
+  AND end_date >= $3::date
+ORDER BY start_date ASC, id ASC
+LIMIT 1
+`, tenantID, siteID, siteDate).Scan(&window.ID, &window.Title, &window.StartDate, &window.EndDate, &window.Reason)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query active maintenance window: %w", err)
+	}
+	return &window, nil
 }

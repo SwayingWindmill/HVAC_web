@@ -348,44 +348,45 @@ func TestCommandRegistryDecisionUsesRegistryRouteOwnership(t *testing.T) {
 }
 
 type commandGatewayFixture struct {
-	feedbackPointType     string
-	handler               *handler
-	sessionID             string
-	tenantID              string
-	siteID                string
-	assetID               string
-	deviceID              string
-	commandPointID        string
-	feedbackPointID       string
-	controlRelationshipID string
-	commandID             string
-	principalID           string
-	gatewaySigner         *ecdsa.PrivateKey
-	iamSigner             *ecdsa.PrivateKey
-	iamCalls              atomic.Int32
-	registryCalls         atomic.Int32
-	telemetryCalls        atomic.Int32
-	commandCalls          atomic.Int32
-	identityCalls         atomic.Int32
-	unsafeState           atomic.Bool
-	crossTenantView       atomic.Bool
-	approvalPending       atomic.Bool
-	highRiskApproval      atomic.Bool
-	outcomeUnknown        atomic.Bool
-	reconciled            atomic.Bool
-	approvalCompleted     atomic.Bool
-	dispatching           atomic.Bool
-	cancelled             atomic.Bool
-	commandCapability     commandmodel.Capability
-	expectedSetpoint      *float64
-	totpResponder         func(code string) (int, map[string]any)
-	denyScheduleManage    atomic.Bool
-	siteControlMode       string
-	siteControlRevision   int64
-	assetLockMode         string
-	assetLockRevision     int64
-	cancelledPendingIDs   []string
-	lastCancelPending     *internalCommandCancelPendingRequest
+	feedbackPointType       string
+	handler                 *handler
+	sessionID               string
+	tenantID                string
+	siteID                  string
+	assetID                 string
+	deviceID                string
+	commandPointID          string
+	feedbackPointID         string
+	controlRelationshipID   string
+	commandID               string
+	principalID             string
+	gatewaySigner           *ecdsa.PrivateKey
+	iamSigner               *ecdsa.PrivateKey
+	iamCalls                atomic.Int32
+	registryCalls           atomic.Int32
+	telemetryCalls          atomic.Int32
+	commandCalls            atomic.Int32
+	identityCalls           atomic.Int32
+	unsafeState             atomic.Bool
+	crossTenantView         atomic.Bool
+	approvalPending         atomic.Bool
+	highRiskApproval        atomic.Bool
+	outcomeUnknown          atomic.Bool
+	reconciled              atomic.Bool
+	approvalCompleted       atomic.Bool
+	dispatching             atomic.Bool
+	cancelled               atomic.Bool
+	commandCapability       commandmodel.Capability
+	expectedSetpoint        *float64
+	totpResponder           func(code string) (int, map[string]any)
+	denyScheduleManage      atomic.Bool
+	siteControlMode         string
+	siteControlRevision     int64
+	assetLockMode           string
+	assetLockRevision       int64
+	activeMaintenanceWindow *activeMaintenanceWindowView
+	cancelledPendingIDs     []string
+	lastCancelPending       *internalCommandCancelPendingRequest
 }
 
 func newCommandGatewayFixture(t *testing.T, feedbackTypes ...string) *commandGatewayFixture {
@@ -756,15 +757,16 @@ func (fixture *commandGatewayFixture) currentSiteControlState(updatedAt string) 
 		updatedAtPtr = &updatedAt
 	}
 	return siteControlStateView{
-		ID:          stateID,
-		TenantID:    fixture.tenantID,
-		SiteID:      fixture.siteID,
-		ControlMode: mode,
-		Reason:      "",
-		UpdatedBy:   updatedBy,
-		UpdatedAt:   updatedAtPtr,
-		Revision:    fixture.siteControlRevision,
-		AssetLocks:  locks,
+		ID:                      stateID,
+		TenantID:                fixture.tenantID,
+		SiteID:                  fixture.siteID,
+		ControlMode:             mode,
+		Reason:                  "",
+		UpdatedBy:               updatedBy,
+		UpdatedAt:               updatedAtPtr,
+		Revision:                fixture.siteControlRevision,
+		AssetLocks:              locks,
+		ActiveMaintenanceWindow: fixture.activeMaintenanceWindow,
 	}
 }
 

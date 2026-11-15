@@ -2,7 +2,9 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
@@ -107,5 +109,95 @@ func TestPostgresOperatingScheduleAndExceptionsLifecycle(t *testing.T) {
 	})
 	if !errors.Is(err, ErrBindingConflict) {
 		t.Fatalf("overlapping APPROVED exception err=%v, want ErrBindingConflict", err)
+	}
+}
+
+func TestPostgresSiteControlStateActiveMaintenanceWindow(t *testing.T) {
+	ctx, store := openRegistryWriterIntegrationStore(t)
+
+	suffix := time.Now().UnixNano()
+	siteClaims := writerIntegrationClaims(registryauth.ActionSiteWrite)
+	site, _, err := store.SaveSite(ctx, siteClaims, SiteMutation{
+		Code:        fmt.Sprintf("w1-maint-%d", suffix),
+		DisplayName: "维保门禁集成测试站",
+		Timezone:    "Asia/Shanghai",
+		Status:      "ACTIVE",
+		Meta:        MutationMeta{IdempotencyKey: fmt.Sprintf("pg-w1-site-%d", suffix), Reason: "创建维保门禁测试站点"},
+	})
+	if err != nil {
+		t.Fatalf("SaveSite err=%v", err)
+	}
+
+	readClaims := writerIntegrationClaims(registryauth.ActionSiteRead, site.ID)
+	manageClaims := writerIntegrationClaims(registryauth.ActionScheduleManage, site.ID)
+
+	initialState, err := store.GetSiteControlState(ctx, readClaims, site.ID)
+	if err != nil {
+		t.Fatalf("initial GetSiteControlState err=%v", err)
+	}
+	if initialState.ActiveMaintenanceWindow != nil {
+		t.Fatalf("expected nil initial ActiveMaintenanceWindow, got %#v", initialState.ActiveMaintenanceWindow)
+	}
+
+	today := siteLocalCalendarDate("Asia/Shanghai", time.Now().UTC())
+	exc, _, err := store.CreateOperatingException(ctx, manageClaims, CreateOperatingExceptionRequest{
+		SiteID:           site.ID,
+		ActorDisplayName: "李主管",
+		Title:            "冷站主冷机季度维保",
+		Kind:             "MAINTENANCE_WINDOW",
+		StartDate:        today,
+		EndDate:          today,
+		ReplacementSlots: []OperatingExceptionSlot{},
+		AutoApprove:      true,
+		Meta:             MutationMeta{ExpectedRevision: 0, IdempotencyKey: fmt.Sprintf("pg-w1-exc-%d", suffix), Reason: "批准今日冷站维保窗口"},
+	})
+	if err != nil || exc.Status != "APPROVED" {
+		t.Fatalf("CreateOperatingException=%#v err=%v", exc, err)
+	}
+
+	activeState, err := store.GetSiteControlState(ctx, readClaims, site.ID)
+	if err != nil {
+		t.Fatalf("active GetSiteControlState err=%v", err)
+	}
+	if activeState.ActiveMaintenanceWindow == nil ||
+		activeState.ActiveMaintenanceWindow.ID != exc.ID ||
+		activeState.ActiveMaintenanceWindow.Title != "冷站主冷机季度维保" ||
+		activeState.ActiveMaintenanceWindow.StartDate != today ||
+		activeState.ActiveMaintenanceWindow.EndDate != today ||
+		activeState.ActiveMaintenanceWindow.Reason != "批准今日冷站维保窗口" {
+		t.Fatalf("unexpected GetSiteControlState ActiveMaintenanceWindow: %#v", activeState.ActiveMaintenanceWindow)
+	}
+
+	savedMode, _, err := store.SaveSiteControlMode(ctx, manageClaims, SiteControlModeMutation{
+		SiteID:      site.ID,
+		ControlMode: SiteControlModeManualOverride,
+		Reason:      "维保窗口内切换现场手动",
+		Meta:        MutationMeta{ExpectedRevision: 0, IdempotencyKey: fmt.Sprintf("pg-w1-mode-%d", suffix), Reason: "维保窗口内切换现场手动"},
+	})
+	if err != nil {
+		t.Fatalf("SaveSiteControlMode err=%v", err)
+	}
+	if savedMode.ActiveMaintenanceWindow == nil || savedMode.ActiveMaintenanceWindow.ID != exc.ID {
+		t.Fatalf("expected SaveSiteControlMode ActiveMaintenanceWindow=%s, got %#v", exc.ID, savedMode.ActiveMaintenanceWindow)
+	}
+
+	cancelled, _, err := store.DecideOperatingException(ctx, manageClaims, DecideOperatingExceptionRequest{
+		SiteID:           site.ID,
+		ExceptionID:      exc.ID,
+		ActorDisplayName: "李主管",
+		Decision:         "CANCEL",
+		DecisionNote:     "维保提前结束",
+		Meta:             MutationMeta{ExpectedRevision: exc.Revision, IdempotencyKey: fmt.Sprintf("pg-w1-cancel-%d", suffix), Reason: "取消今日维保窗口"},
+	})
+	if err != nil || cancelled.Status != "CANCELLED" {
+		t.Fatalf("DecideOperatingException CANCEL=%#v err=%v", cancelled, err)
+	}
+
+	afterCancel, err := store.GetSiteControlState(ctx, readClaims, site.ID)
+	if err != nil {
+		t.Fatalf("after-cancel GetSiteControlState err=%v", err)
+	}
+	if afterCancel.ActiveMaintenanceWindow != nil {
+		t.Fatalf("expected nil ActiveMaintenanceWindow after cancel, got %#v", afterCancel.ActiveMaintenanceWindow)
 	}
 }

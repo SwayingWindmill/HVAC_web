@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -55,16 +56,25 @@ type assetControlLockView struct {
 	BoundDeviceIDs []string `json:"boundDeviceIds,omitempty"`
 }
 
+type activeMaintenanceWindowView struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	StartDate string `json:"startDate"`
+	EndDate   string `json:"endDate"`
+	Reason    string `json:"reason"`
+}
+
 type siteControlStateView struct {
-	ID          *string                `json:"id,omitempty"`
-	TenantID    string                 `json:"tenantId"`
-	SiteID      string                 `json:"siteId"`
-	ControlMode string                 `json:"controlMode"`
-	Reason      string                 `json:"reason"`
-	UpdatedBy   *string                `json:"updatedBy"`
-	UpdatedAt   *string                `json:"updatedAt"`
-	Revision    int64                  `json:"revision"`
-	AssetLocks  []assetControlLockView `json:"assetLocks"`
+	ID                      *string                      `json:"id,omitempty"`
+	TenantID                string                       `json:"tenantId"`
+	SiteID                  string                       `json:"siteId"`
+	ControlMode             string                       `json:"controlMode"`
+	Reason                  string                       `json:"reason"`
+	UpdatedBy               *string                      `json:"updatedBy"`
+	UpdatedAt               *string                      `json:"updatedAt"`
+	Revision                int64                        `json:"revision"`
+	AssetLocks              []assetControlLockView       `json:"assetLocks"`
+	ActiveMaintenanceWindow *activeMaintenanceWindowView `json:"activeMaintenanceWindow,omitempty"`
 }
 
 type siteControlModeMutationResponse struct {
@@ -434,7 +444,16 @@ func (h *handler) readCoreSiteControlState(request *http.Request, session bffSes
 	return state, nil
 }
 
-func (h *handler) enforceControlLockForCommand(request *http.Request, session bffSession, siteID, assetID, deviceID string) *commandFailure {
+func isMaintenancePermittedCapability(capability commandmodel.Capability) bool {
+	switch capability {
+	case commandmodel.CapabilityStop, commandmodel.CapabilityStopUnitSequence, commandmodel.CapabilityResetFault:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *handler) enforceControlLockForCommand(request *http.Request, session bffSession, siteID, assetID, deviceID string, capability commandmodel.Capability) *commandFailure {
 	if h.registry == nil || h.registry.coreBaseURL == "" || h.registry.coreHTTPClient == nil {
 		failure := commandUnavailable("Core Registry is unavailable for Command lock enforcement.")
 		return &failure
@@ -464,6 +483,16 @@ func (h *handler) enforceControlLockForCommand(request *http.Request, session bf
 			}
 			return &locked
 		}
+	}
+	if state.ActiveMaintenanceWindow != nil && !isMaintenancePermittedCapability(capability) {
+		locked := commandFailure{
+			status:    http.StatusConflict,
+			code:      "COMMAND_CONTROL_LOCKED",
+			title:     "Site maintenance window active",
+			detail:    fmt.Sprintf("Only STOP, STOP_UNIT_SEQUENCE, and RESET_FAULT commands are permitted during active maintenance window %q (%s..%s).", state.ActiveMaintenanceWindow.Title, state.ActiveMaintenanceWindow.StartDate, state.ActiveMaintenanceWindow.EndDate),
+			retryable: false,
+		}
+		return &locked
 	}
 	return nil
 }
