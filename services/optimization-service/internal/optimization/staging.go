@@ -39,6 +39,12 @@ const (
 	RunStateStarting = "STARTING"
 	RunStateUnknown  = "UNKNOWN"
 
+	SiteControlModeRemoteAuto       = "REMOTE_AUTO"
+	SiteControlModeManualOverride   = "MANUAL_OVERRIDE"
+	SiteControlModeSafeShutdownExit = "SAFE_SHUTDOWN_EXIT"
+
+	AssetControlLockUnlocked = "UNLOCKED"
+
 	DefaultHeadroomReserveFraction = 0.15
 	DefaultMinimumPowerSavingKW    = 5.0
 	DefaultIdleAuxiliaryDebounce   = 5 * time.Minute
@@ -131,13 +137,20 @@ func (policy StagingPolicy) normalized() (StagingPolicy, error) {
 
 // ChillerMeterBinding links a physical CHILLER asset to its dedicated power meter and nameplate.
 type ChillerMeterBinding struct {
-	AssetID         string  `json:"assetId"`
-	AssetCode       string  `json:"assetCode"`
-	AssetName       string  `json:"assetName"`
-	MeterDeviceID   string  `json:"meterDeviceId"`
-	MeterSourceKey  string  `json:"meterSourceKey"`
-	RatedCapacityKW float64 `json:"ratedCapacityKW,omitempty"`
-	RatedPowerKW    float64 `json:"ratedPowerKW,omitempty"`
+	AssetID         string   `json:"assetId"`
+	AssetCode       string   `json:"assetCode"`
+	AssetName       string   `json:"assetName"`
+	MeterDeviceID   string   `json:"meterDeviceId"`
+	MeterSourceKey  string   `json:"meterSourceKey"`
+	BoundDeviceIDs  []string `json:"boundDeviceIds,omitempty"`
+	RatedCapacityKW float64  `json:"ratedCapacityKW,omitempty"`
+	RatedPowerKW    float64  `json:"ratedPowerKW,omitempty"`
+}
+
+// AssetControlLockInfo mirrors the per-asset lock from core_registry.asset_control_locks.
+type AssetControlLockInfo struct {
+	LockMode string `json:"lockMode"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 // SongyaxuanChillerMeterBindings returns the verified Songyaxuan plant chiller-to-meter mapping:
@@ -209,6 +222,7 @@ type ChillerUnitInput struct {
 	AssetName       string           `json:"assetName,omitempty"`
 	MeterDeviceID   string           `json:"meterDeviceId,omitempty"`
 	MeterSourceKey  string           `json:"meterSourceKey,omitempty"`
+	BoundDeviceIDs  []string         `json:"boundDeviceIds,omitempty"`
 	RatedCapacityKW float64          `json:"ratedCapacityKW,omitempty"`
 	RatedPowerKW    float64          `json:"ratedPowerKW,omitempty"`
 	RunState        string           `json:"runState,omitempty"`
@@ -238,6 +252,7 @@ type AuxiliaryUnitInput struct {
 	AssetType        string          `json:"assetType"`
 	DeviceID         string          `json:"deviceId,omitempty"`
 	DeviceSourceKey  string          `json:"deviceSourceKey,omitempty"`
+	BoundDeviceIDs   []string        `json:"boundDeviceIds,omitempty"`
 	RatedPowerKW     float64         `json:"ratedPowerKW,omitempty"`
 	RunState         string          `json:"runState,omitempty"`
 	RunStateQuality  string          `json:"runStateQuality,omitempty"`
@@ -246,13 +261,17 @@ type AuxiliaryUnitInput struct {
 	ServesChillerIDs []string        `json:"servesChillerIds,omitempty"`
 }
 
-// StagingTopology supplies authoritative asset, meter-binding and hydraulic SERVES edge definitions
+// StagingTopology supplies authoritative asset, meter-binding, lock state and hydraulic SERVES edge definitions
 // for a Site.
 type StagingTopology struct {
-	CoolingLoadDeviceID string                 `json:"coolingLoadDeviceId,omitempty"`
-	Chillers            []ChillerMeterBinding  `json:"chillers"`
-	Auxiliaries         []AuxiliaryUnitBinding `json:"auxiliaries,omitempty"`
-	Edges               []HydraulicEdge        `json:"edges,omitempty"`
+	CoolingLoadDeviceID string                          `json:"coolingLoadDeviceId,omitempty"`
+	SiteControlMode     string                          `json:"siteControlMode,omitempty"`
+	SiteControlReason   string                          `json:"siteControlReason,omitempty"`
+	AssetControlLocks   map[string]AssetControlLockInfo `json:"assetControlLocks,omitempty"`
+	CommandPointIDs     map[string]string               `json:"commandPointIds,omitempty"`
+	Chillers            []ChillerMeterBinding           `json:"chillers"`
+	Auxiliaries         []AuxiliaryUnitBinding          `json:"auxiliaries,omitempty"`
+	Edges               []HydraulicEdge                 `json:"edges,omitempty"`
 }
 
 // AuxiliaryUnitBinding connects an auxiliary asset record to its telemetry device and served chillers.
@@ -263,6 +282,7 @@ type AuxiliaryUnitBinding struct {
 	AssetType        string   `json:"assetType"`
 	DeviceID         string   `json:"deviceId,omitempty"`
 	DeviceSourceKey  string   `json:"deviceSourceKey,omitempty"`
+	BoundDeviceIDs   []string `json:"boundDeviceIds,omitempty"`
 	RatedPowerKW     float64  `json:"ratedPowerKW,omitempty"`
 	ServesChillerIDs []string `json:"servesChillerIds,omitempty"`
 }
@@ -275,15 +295,19 @@ type StagingSiteCatalog interface {
 // StagingSnapshot holds the sensor-honest inputs needed for staging evaluation without
 // requiring zone_temperature or writable chilled-water setpoints.
 type StagingSnapshot struct {
-	TenantID         string               `json:"tenantId"`
-	SiteID           string               `json:"siteId"`
-	EvaluatedAt      time.Time            `json:"evaluatedAt"`
-	PlantCoolingLoad *TelemetryValue      `json:"plantCoolingLoad,omitempty"`
-	HeaderSupplyC    *TelemetryValue      `json:"headerSupplyC,omitempty"`
-	Chillers         []ChillerUnitInput   `json:"chillers"`
-	Auxiliaries      []AuxiliaryUnitInput `json:"auxiliaries,omitempty"`
-	Edges            []HydraulicEdge      `json:"edges,omitempty"`
-	ChillerFits      []ChillerFit         `json:"chillerFits,omitempty"`
+	TenantID          string                          `json:"tenantId"`
+	SiteID            string                          `json:"siteId"`
+	EvaluatedAt       time.Time                       `json:"evaluatedAt"`
+	SiteControlMode   string                          `json:"siteControlMode,omitempty"`
+	SiteControlReason string                          `json:"siteControlReason,omitempty"`
+	AssetControlLocks map[string]AssetControlLockInfo `json:"assetControlLocks,omitempty"`
+	CommandPointIDs   map[string]string               `json:"commandPointIds,omitempty"`
+	PlantCoolingLoad  *TelemetryValue                 `json:"plantCoolingLoad,omitempty"`
+	HeaderSupplyC     *TelemetryValue                 `json:"headerSupplyC,omitempty"`
+	Chillers          []ChillerUnitInput              `json:"chillers"`
+	Auxiliaries       []AuxiliaryUnitInput            `json:"auxiliaries,omitempty"`
+	Edges             []HydraulicEdge                 `json:"edges,omitempty"`
+	ChillerFits       []ChillerFit                    `json:"chillerFits,omitempty"`
 }
 
 // StagingSnapshotQuery scopes a live staging snapshot read in ClickHouse.
@@ -309,6 +333,7 @@ type StagingRecommendationDraft struct {
 	RequiresSupervisorReview bool     `json:"requiresSupervisorReview"`
 	RequiresTOTP             bool     `json:"requiresTotp"`
 	SuggestedCapability      string   `json:"suggestedCapability"`
+	SuggestedCommandPointID  string   `json:"suggestedCommandPointId,omitempty"`
 	TargetAssetID            string   `json:"targetAssetId"`
 	TargetAssetCode          string   `json:"targetAssetCode,omitempty"`
 	TargetAssetName          string   `json:"targetAssetName,omitempty"`
@@ -351,6 +376,7 @@ type StagingEvaluation struct {
 	SiteID           string                       `json:"siteId"`
 	EvaluatedAt      time.Time                    `json:"evaluatedAt"`
 	ConfirmationMode string                       `json:"confirmationMode"`
+	SiteControlMode  string                       `json:"siteControlMode,omitempty"`
 	Recommendations  []StagingRecommendationDraft `json:"recommendations"`
 	Diagnostics      []StagingDiagnostic          `json:"diagnostics"`
 }
@@ -403,10 +429,11 @@ func (evaluator *StagingEvaluator) Evaluate(ctx context.Context, tenantID, siteI
 			snapshot.ChillerFits = fit.Chillers
 		}
 	}
+	applyStagingTopology(&snapshot, topology)
 	return EvaluateStaging(snapshot, policy)
 }
 
-func evaluateStagingWithFit(ctx context.Context, tenantID, siteID string, at time.Time, fit PlantFit, reader StagingSnapshotReader, policy *StagingPolicy) *StagingEvaluation {
+func evaluateStagingWithFit(ctx context.Context, tenantID, siteID string, at time.Time, fit PlantFit, reader StagingSnapshotReader, catalog StagingSiteCatalog, policy *StagingPolicy) *StagingEvaluation {
 	if reader == nil {
 		return nil
 	}
@@ -424,8 +451,14 @@ func evaluateStagingWithFit(ctx context.Context, tenantID, siteID string, at tim
 			}},
 		}
 	}
+	var topology *StagingTopology
+	if catalog != nil {
+		if loaded, catErr := catalog.StagingTopology(ctx, tenantID, siteID, at.UTC()); catErr == nil {
+			topology = &loaded
+		}
+	}
 	snapshot, err := reader.ReadStagingSnapshot(ctx, StagingSnapshotQuery{
-		TenantID: tenantID, SiteID: siteID, At: at.UTC(), Policy: normPolicy,
+		TenantID: tenantID, SiteID: siteID, At: at.UTC(), Policy: normPolicy, Topology: topology,
 	})
 	if err != nil {
 		return &StagingEvaluation{
@@ -436,6 +469,7 @@ func evaluateStagingWithFit(ctx context.Context, tenantID, siteID string, at tim
 			}},
 		}
 	}
+	applyStagingTopology(&snapshot, topology)
 	if len(snapshot.ChillerFits) == 0 {
 		snapshot.ChillerFits = fit.Chillers
 	}
@@ -469,6 +503,7 @@ func EvaluateStaging(snapshot StagingSnapshot, policy StagingPolicy) (StagingEva
 		SiteID:           snapshot.SiteID,
 		EvaluatedAt:      evaluatedAt,
 		ConfirmationMode: ConfirmationModeManual,
+		SiteControlMode:  strings.TrimSpace(snapshot.SiteControlMode),
 		Recommendations:  []StagingRecommendationDraft{},
 		Diagnostics:      []StagingDiagnostic{},
 	}
@@ -560,6 +595,14 @@ func lookupSongyaxuanBinding(
 
 func evaluateChillerStageDown(snapshot StagingSnapshot, policy StagingPolicy) (*StagingRecommendationDraft, StagingDiagnostic) {
 	at := snapshot.EvaluatedAt.UTC()
+	if detail, active := siteControlExitDetail(snapshot); active {
+		return nil, StagingDiagnostic{
+			Scope:  RecommendationKindChillerStageDown,
+			Status: "SUPPRESSED",
+			Reason: "SITE_CONTROL_EXIT_ACTIVE",
+			Detail: fmt.Sprintf("%s，暂停生成冷机减台建议。", detail),
+		}
+	}
 	if len(snapshot.Chillers) < 2 {
 		return nil, StagingDiagnostic{
 			Scope: RecommendationKindChillerStageDown, Status: "NO_OP", Reason: "INSUFFICIENT_CHILLERS",
@@ -682,13 +725,26 @@ func evaluateChillerStageDown(snapshot StagingSnapshot, policy StagingPolicy) (*
 	var best *candidateOutcome
 	rejectionReason := "NO_CANDIDATE_IMPROVED"
 	rejectionDetail := "未找到满足安全裕度与节能门槛的冷机减台方案。"
+	rejectedAssetID := ""
+	rejectedAssetCode := ""
 
 	recordRejection := func(reason, detail string) {
 		rejectionReason = reason
 		rejectionDetail = detail
+		rejectedAssetID = ""
+		rejectedAssetCode = ""
 	}
 
 	for dropIdx, candidate := range running {
+		if lock, locked := lookupAssetControlLock(snapshot.AssetControlLocks, candidate.unit.AssetID, candidate.unit.AssetCode); locked {
+			recordRejection(
+				"ASSET_CONTROL_LOCKED",
+				fmt.Sprintf("冷机 %s 已被单机锁定（%s）%s，本次不建议作为减台停机对象。", unitDisplayName(candidate.unit), lock.LockMode, lockReasonSuffix(lock.Reason)),
+			)
+			rejectedAssetID = candidate.unit.AssetID
+			rejectedAssetCode = candidate.unit.AssetCode
+			continue
+		}
 		remaining := make([]activeChiller, 0, len(running)-1)
 		remainingCapKW := 0.0
 		capacityKnown := true
@@ -794,10 +850,12 @@ func evaluateChillerStageDown(snapshot StagingSnapshot, policy StagingPolicy) (*
 
 	if best == nil {
 		return nil, StagingDiagnostic{
-			Scope:  RecommendationKindChillerStageDown,
-			Status: "SUPPRESSED",
-			Reason: rejectionReason,
-			Detail: rejectionDetail,
+			Scope:     RecommendationKindChillerStageDown,
+			AssetID:   rejectedAssetID,
+			AssetCode: rejectedAssetCode,
+			Status:    "SUPPRESSED",
+			Reason:    rejectionReason,
+			Detail:    rejectionDetail,
 		}
 	}
 
@@ -833,6 +891,7 @@ func evaluateChillerStageDown(snapshot StagingSnapshot, policy StagingPolicy) (*
 		RequiresSupervisorReview: true,
 		RequiresTOTP:             true,
 		SuggestedCapability:      SuggestedCapabilityStopUnitSequence,
+		SuggestedCommandPointID:  lookupCommandPointID(snapshot.CommandPointIDs, target.AssetID, target.AssetCode, SuggestedCapabilityStopUnitSequence),
 		TargetAssetID:            target.AssetID,
 		TargetAssetCode:          target.AssetCode,
 		TargetAssetName:          target.AssetName,
@@ -861,7 +920,15 @@ func evaluateChillerStageDown(snapshot StagingSnapshot, policy StagingPolicy) (*
 
 func evaluateIdleAuxiliaries(snapshot StagingSnapshot, policy StagingPolicy) ([]StagingRecommendationDraft, []StagingDiagnostic) {
 	if len(snapshot.Auxiliaries) == 0 {
-		return nil, nil
+		return []StagingRecommendationDraft{}, []StagingDiagnostic{}
+	}
+	if detail, active := siteControlExitDetail(snapshot); active {
+		return []StagingRecommendationDraft{}, []StagingDiagnostic{{
+			Scope:  RecommendationKindIdleAuxiliaryStop,
+			Status: "SUPPRESSED",
+			Reason: "SITE_CONTROL_EXIT_ACTIVE",
+			Detail: fmt.Sprintf("%s，暂停生成辅助设备联锁停机建议。", detail),
+		}}
 	}
 	at := snapshot.EvaluatedAt.UTC()
 
@@ -905,6 +972,14 @@ func evaluateIdleAuxiliaries(snapshot StagingSnapshot, policy StagingPolicy) ([]
 				Scope: RecommendationKindIdleAuxiliaryStop, AssetID: aux.AssetID, AssetCode: aux.AssetCode,
 				Status: "NO_OP", Reason: "UNSUPPORTED_AUXILIARY_TYPE",
 				Detail: fmt.Sprintf("设备类型 %q 不属于冷冻泵/冷却泵/冷却塔联动停机范围。", aux.AssetType),
+			})
+			continue
+		}
+		if lock, locked := lookupAssetControlLock(snapshot.AssetControlLocks, aux.AssetID, aux.AssetCode); locked {
+			diagnostics = append(diagnostics, StagingDiagnostic{
+				Scope: RecommendationKindIdleAuxiliaryStop, AssetID: aux.AssetID, AssetCode: aux.AssetCode,
+				Status: "SUPPRESSED", Reason: "ASSET_CONTROL_LOCKED",
+				Detail: fmt.Sprintf("辅助设备 %s 已被单机锁定（%s）%s，暂停生成联锁停机建议。", auxDisplayName(aux), lock.LockMode, lockReasonSuffix(lock.Reason)),
 			})
 			continue
 		}
@@ -1041,6 +1116,7 @@ func evaluateIdleAuxiliaries(snapshot StagingSnapshot, policy StagingPolicy) ([]
 			RequiresSupervisorReview: true,
 			RequiresTOTP:             true,
 			SuggestedCapability:      SuggestedCapabilityStop,
+			SuggestedCommandPointID:  lookupCommandPointID(snapshot.CommandPointIDs, targetID, aux.AssetCode, SuggestedCapabilityStop),
 			TargetAssetID:            targetID,
 			TargetAssetCode:          aux.AssetCode,
 			TargetAssetName:          aux.AssetName,
@@ -1636,6 +1712,7 @@ func buildStagingSnapshotFromObservations(
 		SiteID:      siteID,
 		EvaluatedAt: at.UTC(),
 	}
+	applyStagingTopology(&snapshot, topology)
 
 	byDeviceKey := map[string]map[string]stagingTelemetryRow{}
 	for _, row := range latest {
@@ -1717,6 +1794,7 @@ func buildStagingSnapshotFromObservations(
 				AssetType:        auxB.AssetType,
 				DeviceID:         auxB.DeviceID,
 				DeviceSourceKey:  auxB.DeviceSourceKey,
+				BoundDeviceIDs:   append([]string(nil), auxB.BoundDeviceIDs...),
 				RatedPowerKW:     auxB.RatedPowerKW,
 				ServesChillerIDs: append([]string(nil), auxB.ServesChillerIDs...),
 			}
@@ -1734,6 +1812,7 @@ func buildStagingSnapshotFromObservations(
 			AssetName:       binding.AssetName,
 			MeterDeviceID:   binding.MeterDeviceID,
 			MeterSourceKey:  binding.MeterSourceKey,
+			BoundDeviceIDs:  append([]string(nil), binding.BoundDeviceIDs...),
 			RatedCapacityKW: binding.RatedCapacityKW,
 			RatedPowerKW:    binding.RatedPowerKW,
 		}
@@ -1792,7 +1871,8 @@ func populateChillerTelemetry(
 	byDeviceKey map[string]map[string]stagingTelemetryRow,
 	historyByDevice map[string][]RunStateSample,
 ) {
-	keys := []string{unit.MeterDeviceID, unit.MeterSourceKey, unit.AssetID, unit.AssetCode}
+	keys := append([]string{unit.MeterDeviceID, unit.MeterSourceKey}, unit.BoundDeviceIDs...)
+	keys = append(keys, unit.AssetID, unit.AssetCode)
 	if r, ok := findPointAcrossKeys(byDeviceKey, keys, "chiller.run_state", "run_state"); ok && r.ValueString != nil {
 		unit.RunState = *r.ValueString
 		unit.RunStateQuality = r.Quality
@@ -1816,7 +1896,8 @@ func populateChillerTelemetry(
 }
 
 func populateAuxTelemetry(aux *AuxiliaryUnitInput, byDeviceKey map[string]map[string]stagingTelemetryRow) {
-	keys := []string{aux.DeviceID, aux.DeviceSourceKey, aux.AssetID, aux.AssetCode}
+	keys := append([]string{aux.DeviceID, aux.DeviceSourceKey}, aux.BoundDeviceIDs...)
+	keys = append(keys, aux.AssetID, aux.AssetCode)
 	if r, ok := findPointAcrossKeys(byDeviceKey, keys, "chwp.run_state", "cwp.run_state", "cooling_tower.run_state", "run_state"); ok && r.ValueString != nil {
 		aux.RunState = *r.ValueString
 		aux.RunStateQuality = r.Quality
@@ -1851,4 +1932,140 @@ func maxDuration(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
+}
+
+func applyStagingTopology(snapshot *StagingSnapshot, topology *StagingTopology) {
+	if snapshot == nil || topology == nil {
+		return
+	}
+	if strings.TrimSpace(snapshot.SiteControlMode) == "" && strings.TrimSpace(topology.SiteControlMode) != "" {
+		snapshot.SiteControlMode = strings.TrimSpace(topology.SiteControlMode)
+		if strings.TrimSpace(snapshot.SiteControlReason) == "" {
+			snapshot.SiteControlReason = strings.TrimSpace(topology.SiteControlReason)
+		}
+	}
+	if len(topology.AssetControlLocks) > 0 {
+		if snapshot.AssetControlLocks == nil {
+			snapshot.AssetControlLocks = cloneAssetControlLocks(topology.AssetControlLocks)
+		} else {
+			for k, v := range topology.AssetControlLocks {
+				normKey := strings.ToLower(strings.TrimSpace(k))
+				if normKey == "" {
+					continue
+				}
+				if _, exists := snapshot.AssetControlLocks[normKey]; !exists {
+					snapshot.AssetControlLocks[normKey] = v
+				}
+			}
+		}
+	}
+	if len(topology.CommandPointIDs) > 0 {
+		if snapshot.CommandPointIDs == nil {
+			snapshot.CommandPointIDs = make(map[string]string, len(topology.CommandPointIDs))
+		}
+		for k, v := range topology.CommandPointIDs {
+			cleanVal := strings.TrimSpace(v)
+			if cleanVal == "" {
+				continue
+			}
+			if _, exists := snapshot.CommandPointIDs[k]; !exists {
+				snapshot.CommandPointIDs[k] = cleanVal
+			}
+		}
+	}
+}
+
+func cloneAssetControlLocks(src map[string]AssetControlLockInfo) map[string]AssetControlLockInfo {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]AssetControlLockInfo, len(src))
+	for k, v := range src {
+		normKey := strings.ToLower(strings.TrimSpace(k))
+		if normKey == "" {
+			continue
+		}
+		out[normKey] = v
+	}
+	return out
+}
+
+func siteControlExitDetail(snapshot StagingSnapshot) (string, bool) {
+	mode := strings.ToUpper(strings.TrimSpace(snapshot.SiteControlMode))
+	if mode == "" || mode == SiteControlModeRemoteAuto {
+		return "", false
+	}
+	var detail string
+	switch mode {
+	case SiteControlModeManualOverride:
+		detail = "站点处于手动接管（MANUAL_OVERRIDE）控制退出状态，暂停自动生成减台与节能联动建议"
+	case SiteControlModeSafeShutdownExit:
+		detail = "站点处于安全停机退出（SAFE_SHUTDOWN_EXIT）状态，暂停自动生成减台与节能联动建议"
+	default:
+		detail = fmt.Sprintf("站点当前处于 %s 非自动控制模式，暂停生成节能联动建议", mode)
+	}
+	if reason := strings.TrimSpace(snapshot.SiteControlReason); reason != "" {
+		detail += fmt.Sprintf("（原因：%s）", reason)
+	}
+	return detail + "。", true
+}
+
+func lookupAssetControlLock(locks map[string]AssetControlLockInfo, assetID, assetCode string) (AssetControlLockInfo, bool) {
+	if len(locks) == 0 {
+		return AssetControlLockInfo{}, false
+	}
+	for _, ref := range []string{assetID, assetCode} {
+		cleanRef := strings.TrimSpace(ref)
+		if cleanRef == "" {
+			continue
+		}
+		if info, ok := locks[strings.ToLower(cleanRef)]; ok {
+			mode := strings.ToUpper(strings.TrimSpace(info.LockMode))
+			if mode != "" && mode != AssetControlLockUnlocked {
+				info.LockMode = mode
+				return info, true
+			}
+		}
+		for k, info := range locks {
+			if strings.EqualFold(strings.TrimSpace(k), cleanRef) {
+				mode := strings.ToUpper(strings.TrimSpace(info.LockMode))
+				if mode != "" && mode != AssetControlLockUnlocked {
+					info.LockMode = mode
+					return info, true
+				}
+			}
+		}
+	}
+	return AssetControlLockInfo{}, false
+}
+
+func lockReasonSuffix(reason string) string {
+	clean := strings.TrimSpace(reason)
+	if clean == "" {
+		return ""
+	}
+	return "：" + clean
+}
+
+func canonicalCommandPointKey(assetRef, capability string) string {
+	a := strings.ToLower(strings.TrimSpace(assetRef))
+	c := strings.ToUpper(strings.TrimSpace(capability))
+	if a == "" || c == "" {
+		return ""
+	}
+	return a + "|" + c
+}
+
+func lookupCommandPointID(commandPointIDs map[string]string, assetID, assetCode, capability string) string {
+	if len(commandPointIDs) == 0 {
+		return ""
+	}
+	for _, ref := range []string{assetID, assetCode} {
+		if key := canonicalCommandPointKey(ref, capability); key != "" {
+			if pointID := strings.TrimSpace(commandPointIDs[key]); pointID != "" {
+				return pointID
+			}
+		}
+	}
+	return ""
 }

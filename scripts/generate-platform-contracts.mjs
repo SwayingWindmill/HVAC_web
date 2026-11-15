@@ -139,6 +139,7 @@ const expectedOperations = {
   getLatestSiteOptimizationRecommendationV212: ['get', '/api/v1/sites/{siteId}/optimization/recommendations/latest'],
   getLatestSiteOptimizationPreparationV212: ['get', '/api/v1/sites/{siteId}/optimization/preparations/latest'],
   getLatestSiteOptimizationShadowEvaluationV212: ['get', '/api/v1/sites/{siteId}/optimization/shadow-evaluations/latest'],
+  getLatestSiteOptimizationStagingRecommendations: ['get', '/api/v1/sites/{siteId}/optimization/staging-recommendations/latest'],
   getSiteOperatingSchedule: ['get', '/api/v1/sites/{siteId}/operating-schedule'],
   saveSiteOperatingSchedule: ['put', '/api/v1/sites/{siteId}/operating-schedule'],
   listSiteOperatingExceptions: ['get', '/api/v1/sites/{siteId}/operating-exceptions'],
@@ -197,6 +198,7 @@ const expectedSuccessSchemas = {
   getSiteControlState: 'SiteControlState',
   updateSiteControlMode: 'SiteControlModeMutationResponse',
   updateAssetControlLock: 'AssetControlLockMutationResponse',
+  getLatestSiteOptimizationStagingRecommendations: 'StagingEvaluation',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
@@ -274,6 +276,18 @@ const schemaRequirements = {
   AssetControlLockMutationResponse: [
     ['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'cancelledCommandIds'],
     ['id', 'tenantId', 'siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'boundDeviceIds', 'cancelledCommandIds'],
+  ],
+  StagingDiagnostic: [
+    ['scope', 'status', 'reason', 'detail'],
+    ['scope', 'assetId', 'assetCode', 'status', 'reason', 'detail'],
+  ],
+  StagingRecommendationDraft: [
+    ['id', 'kind', 'confirmationMode', 'requiresSupervisorReview', 'requiresTotp', 'suggestedCapability', 'targetAssetId', 'targetAssetType', 'predictedPowerSavingKW', 'estimatedHourlySavingKWh', 'estimatedShiftSavingKWh', 'shiftHours', 'rationale', 'preconditions'],
+    ['id', 'kind', 'confirmationMode', 'requiresSupervisorReview', 'requiresTotp', 'suggestedCapability', 'suggestedCommandPointId', 'targetAssetId', 'targetAssetCode', 'targetAssetName', 'targetAssetType', 'predictedPowerSavingKW', 'estimatedHourlySavingKWh', 'estimatedShiftSavingKWh', 'shiftHours', 'powerSavingBasis', 'currentTotalPowerKW', 'projectedTotalPowerKW', 'currentCoolingLoadKW', 'remainingCapacityKW', 'headroomMarginFraction', 'copBefore', 'projectedCopAfter', 'continuousIdleSeconds', 'continuousIdleMinutes', 'servedChillerIds', 'interlockSafetyStatement', 'extrapolated', 'rationale', 'preconditions'],
+  ],
+  StagingEvaluation: [
+    ['tenantId', 'siteId', 'evaluatedAt', 'confirmationMode', 'recommendations', 'diagnostics'],
+    ['tenantId', 'siteId', 'evaluatedAt', 'confirmationMode', 'siteControlMode', 'recommendations', 'diagnostics'],
   ],
   FieldError: [['field', 'message'], ['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
@@ -419,6 +433,7 @@ const replacements = {
   __LATEST_OPTIMIZATION_RECOMMENDATION_PATH__: operations.getLatestSiteOptimizationRecommendationV212.path,
   __LATEST_OPTIMIZATION_PREPARATION_PATH__: operations.getLatestSiteOptimizationPreparationV212.path,
   __LATEST_OPTIMIZATION_SHADOW_EVALUATION_PATH__: operations.getLatestSiteOptimizationShadowEvaluationV212.path,
+  __LATEST_OPTIMIZATION_STAGING_RECOMMENDATIONS_PATH__: operations.getLatestSiteOptimizationStagingRecommendations.path,
   __SITE_OPERATING_SCHEDULE_PATH__: operations.getSiteOperatingSchedule.path,
   __SITE_OPERATING_EXCEPTIONS_PATH__: operations.listSiteOperatingExceptions.path,
   __SITE_OPERATING_EXCEPTION_DECIDE_PATH__: operations.decideSiteOperatingException.path,

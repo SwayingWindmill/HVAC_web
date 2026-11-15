@@ -428,9 +428,10 @@ func (chiller ChillerFit) referenceEnergy(since time.Time, delta float64) (float
 // least electricity, inside the frozen comfort and safety constraints. It only recommends; the
 // condenser-water reset needs a condenser setpoint Point, which no Site maps yet.
 type COPModelSolver struct {
-	History       PlantHistory
-	Staging       StagingSnapshotReader
-	StagingPolicy *StagingPolicy
+	History        PlantHistory
+	Staging        StagingSnapshotReader
+	StagingCatalog StagingSiteCatalog
+	StagingPolicy  *StagingPolicy
 }
 
 // ShadowEvaluation is what a shadow solver made of one Optimization run.
@@ -492,7 +493,7 @@ func (solver COPModelSolver) Evaluate(ctx context.Context, request Request, at t
 	}
 	fit := FitPlant(buckets, from, to)
 	evaluation.Fit, evaluation.CVRMSE = &fit, fit.CVRMSEPower
-	evaluation.Staging = evaluateStagingWithFit(ctx, request.TenantID, request.SiteID, at, fit, solver.Staging, solver.StagingPolicy)
+	evaluation.Staging = evaluateStagingWithFit(ctx, request.TenantID, request.SiteID, at, fit, solver.Staging, solver.StagingCatalog, solver.StagingPolicy)
 	usable := fit.usable()
 	if len(usable) == 0 {
 		evaluation.Outcome, evaluation.Reason = ShadowNoUsableModel, "no Chiller has a usable COP fit"

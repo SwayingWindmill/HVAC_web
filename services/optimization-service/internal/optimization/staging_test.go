@@ -773,3 +773,310 @@ func TestOptimizationServiceAndHTTPStagingWiring(t *testing.T) {
 		t.Fatalf("expected ShadowEvaluation.Staging to include staging recommendations, got %+v", shadowEval.Staging)
 	}
 }
+
+func TestStagingSuppressedDuringSiteControlExit(t *testing.T) {
+	at := time.Date(2026, 11, 14, 14, 0, 0, 0, time.UTC)
+	buckets := syntheticStagingChillerHistory(at, map[string]float64{
+		"01a14000-4000-7000-8000-000000000005": 1.00,
+		"01a14000-4000-7000-8000-000000000006": 1.00,
+		"01a14000-4000-7000-8000-000000000003": 0.85,
+		"01a14000-4000-7000-8000-000000000004": 0.98,
+	})
+	to := at.Truncate(copBucketMinutes * time.Minute)
+	fit := FitPlant(buckets, to.AddDate(0, 0, -copHistoryDays), to)
+
+	for _, tc := range []struct {
+		mode   string
+		reason string
+	}{
+		{mode: SiteControlModeManualOverride, reason: "现场手操接管"},
+		{mode: SiteControlModeSafeShutdownExit, reason: "安全停机退出"},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			snapshot := StagingSnapshot{
+				TenantID:          "01990000-3000-7000-8000-000000000001",
+				SiteID:            "01a14000-5000-7000-8000-000000000001",
+				EvaluatedAt:       at,
+				SiteControlMode:   tc.mode,
+				SiteControlReason: tc.reason,
+				PlantCoolingLoad: &TelemetryValue{
+					DeviceID: "01a14000-4000-7000-8000-000000000009", SourceKey: "btu-calc", Value: 520, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-20 * time.Second),
+				},
+				Chillers: testSongyaxuanUnits(at, ptr(55.0), ptr(0.2), ptr(74.0), ptr(56.0)),
+				Auxiliaries: []AuxiliaryUnitInput{
+					{
+						AssetID: "01a14000-3000-7000-8000-00000000000a", AssetCode: "chwp-2", AssetName: "2 号冷冻泵",
+						AssetType: AssetTypeCHWP, RunState: RunStateRunning, RunStateQuality: "GOOD", RunStateAt: at.Add(-30 * time.Second),
+						RatedPowerKW: 18.5, ServesChillerIDs: []string{"01a14000-3000-7000-8000-000000000002"},
+					},
+				},
+				ChillerFits: fit.Chillers,
+			}
+
+			eval, err := EvaluateStaging(snapshot, DefaultStagingPolicy())
+			if err != nil {
+				t.Fatalf("EvaluateStaging error: %v", err)
+			}
+			if eval.Recommendations == nil || len(eval.Recommendations) != 0 {
+				t.Fatalf("expected non-nil empty recommendations under %s, got %+v", tc.mode, eval.Recommendations)
+			}
+			if eval.SiteControlMode != tc.mode {
+				t.Fatalf("SiteControlMode = %q, want %q", eval.SiteControlMode, tc.mode)
+			}
+			var chillerSuppressed, auxSuppressed bool
+			for _, d := range eval.Diagnostics {
+				if d.Status == "SUPPRESSED" && d.Reason == "SITE_CONTROL_EXIT_ACTIVE" && strings.Contains(d.Detail, tc.reason) {
+					if d.Scope == RecommendationKindChillerStageDown {
+						chillerSuppressed = true
+					}
+					if d.Scope == RecommendationKindIdleAuxiliaryStop {
+						auxSuppressed = true
+					}
+				}
+			}
+			if !chillerSuppressed || !auxSuppressed {
+				t.Fatalf("expected both scopes suppressed with SITE_CONTROL_EXIT_ACTIVE, diagnostics=%+v", eval.Diagnostics)
+			}
+		})
+	}
+}
+
+func TestStagingRespectsAssetControlLocks(t *testing.T) {
+	at := time.Date(2026, 11, 14, 14, 0, 0, 0, time.UTC)
+	buckets := syntheticStagingChillerHistory(at, map[string]float64{
+		"01a14000-4000-7000-8000-000000000005": 1.00,
+		"01a14000-4000-7000-8000-000000000006": 1.00,
+		"01a14000-4000-7000-8000-000000000003": 0.85,
+		"01a14000-4000-7000-8000-000000000004": 0.98,
+	})
+	to := at.Truncate(copBucketMinutes * time.Minute)
+	fit := FitPlant(buckets, to.AddDate(0, 0, -copHistoryDays), to)
+
+	// Lock only chiller-c; evaluator must never suggest stopping chiller-c.
+	partialLockSnapshot := StagingSnapshot{
+		TenantID:    "01990000-3000-7000-8000-000000000001",
+		SiteID:      "01a14000-5000-7000-8000-000000000001",
+		EvaluatedAt: at,
+		AssetControlLocks: map[string]AssetControlLockInfo{
+			"01a14000-3000-7000-8000-000000000003": {LockMode: "MAINTENANCE_LOCK", Reason: "检修保养"},
+		},
+		PlantCoolingLoad: &TelemetryValue{
+			DeviceID: "01a14000-4000-7000-8000-000000000009", SourceKey: "btu-calc", Value: 420, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-20 * time.Second),
+		},
+		Chillers:    testSongyaxuanUnits(at, ptr(52.0), ptr(0.2), ptr(74.0), ptr(54.0)),
+		ChillerFits: fit.Chillers,
+	}
+	evalPartial, err := EvaluateStaging(partialLockSnapshot, DefaultStagingPolicy())
+	if err != nil {
+		t.Fatalf("EvaluateStaging partial lock error: %v", err)
+	}
+	if len(evalPartial.Recommendations) != 1 || evalPartial.Recommendations[0].TargetAssetCode == "chiller-c" {
+		t.Fatalf("expected unlocked candidate chiller recommendation instead of locked chiller-c, got recs=%+v diags=%+v", evalPartial.Recommendations, evalPartial.Diagnostics)
+	}
+
+	// Lock all running chillers and running idle auxiliary pump, while explicit UNLOCKED does not suppress.
+	fullLockSnapshot := partialLockSnapshot
+	fullLockSnapshot.AssetControlLocks = map[string]AssetControlLockInfo{
+		"01a14000-3000-7000-8000-000000000001": {LockMode: "MANUAL_LOCK", Reason: "值班锁定"},
+		"01a14000-3000-7000-8000-000000000003": {LockMode: "MAINTENANCE_LOCK", Reason: "检修清理"},
+		"01a14000-3000-7000-8000-000000000004": {LockMode: "MANUAL_LOCK"},
+		"01a14000-3000-7000-8000-00000000000a": {LockMode: "MAINTENANCE_LOCK", Reason: "泵阀检修"},
+		"01a14000-3000-7000-8000-00000000000b": {LockMode: AssetControlLockUnlocked},
+	}
+	fullLockSnapshot.Auxiliaries = []AuxiliaryUnitInput{
+		{
+			AssetID: "01a14000-3000-7000-8000-00000000000a", AssetCode: "chwp-2", AssetName: "2 号冷冻泵",
+			AssetType: AssetTypeCHWP, RunState: RunStateRunning, RunStateQuality: "GOOD", RunStateAt: at.Add(-30 * time.Second),
+			RatedPowerKW: 18.5, ServesChillerIDs: []string{"01a14000-3000-7000-8000-000000000002"},
+		},
+		{
+			AssetID: "01a14000-3000-7000-8000-00000000000b", AssetCode: "chwp-3", AssetName: "3 号冷冻泵",
+			AssetType: AssetTypeCHWP, RunState: RunStateRunning, RunStateQuality: "GOOD", RunStateAt: at.Add(-30 * time.Second),
+			RatedPowerKW: 18.5, ServesChillerIDs: []string{"01a14000-3000-7000-8000-000000000002"},
+		},
+	}
+	evalLocked, err := EvaluateStaging(fullLockSnapshot, DefaultStagingPolicy())
+	if err != nil {
+		t.Fatalf("EvaluateStaging full lock error: %v", err)
+	}
+	if len(evalLocked.Recommendations) != 1 || evalLocked.Recommendations[0].TargetAssetCode != "chwp-3" {
+		t.Fatalf("expected only unlocked chwp-3 recommendation, got recs=%+v diags=%+v", evalLocked.Recommendations, evalLocked.Diagnostics)
+	}
+	var sawChillerLock, sawAuxLock bool
+	for _, d := range evalLocked.Diagnostics {
+		if d.Status == "SUPPRESSED" && d.Reason == "ASSET_CONTROL_LOCKED" {
+			if d.Scope == RecommendationKindChillerStageDown {
+				sawChillerLock = true
+			}
+			if d.Scope == RecommendationKindIdleAuxiliaryStop && d.AssetCode == "chwp-2" {
+				sawAuxLock = true
+			}
+		}
+	}
+	if !sawChillerLock || !sawAuxLock {
+		t.Fatalf("expected ASSET_CONTROL_LOCKED diagnostics for chiller and chwp-2, got %+v", evalLocked.Diagnostics)
+	}
+}
+
+func TestStagingPopulatesSuggestedCommandPointID(t *testing.T) {
+	at := time.Date(2026, 11, 14, 14, 0, 0, 0, time.UTC)
+	buckets := syntheticStagingChillerHistory(at, map[string]float64{
+		"01a14000-4000-7000-8000-000000000005": 1.00,
+		"01a14000-4000-7000-8000-000000000006": 1.00,
+		"01a14000-4000-7000-8000-000000000003": 0.85,
+	})
+	to := at.Truncate(copBucketMinutes * time.Minute)
+	fit := FitPlant(buckets, to.AddDate(0, 0, -copHistoryDays), to)
+
+	snapshot := StagingSnapshot{
+		TenantID:    "01990000-3000-7000-8000-000000000001",
+		SiteID:      "01a14000-5000-7000-8000-000000000001",
+		EvaluatedAt: at,
+		CommandPointIDs: map[string]string{
+			canonicalCommandPointKey("01a14000-3000-7000-8000-000000000003", SuggestedCapabilityStopUnitSequence): "pt-chiller-c-stop-seq",
+			canonicalCommandPointKey("01a14000-3000-7000-8000-00000000000a", SuggestedCapabilityStop):             "pt-chwp-2-stop",
+		},
+		PlantCoolingLoad: &TelemetryValue{
+			DeviceID: "01a14000-4000-7000-8000-000000000009", SourceKey: "btu-calc", Value: 520, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-20 * time.Second),
+		},
+		Chillers: testSongyaxuanUnits(at, ptr(55.0), ptr(55.0), ptr(74.0), nil),
+		Auxiliaries: []AuxiliaryUnitInput{
+			{
+				AssetID: "01a14000-3000-7000-8000-00000000000a", AssetCode: "chwp-2", AssetName: "2 号冷冻泵",
+				AssetType: AssetTypeCHWP, RunState: RunStateRunning, RunStateQuality: "GOOD", RunStateAt: at.Add(-30 * time.Second),
+				RatedPowerKW: 18.5, ServesChillerIDs: []string{"01a14000-3000-7000-8000-000000000004"},
+			},
+		},
+		ChillerFits: fit.Chillers,
+	}
+
+	eval, err := EvaluateStaging(snapshot, DefaultStagingPolicy())
+	if err != nil {
+		t.Fatalf("EvaluateStaging error: %v", err)
+	}
+	if len(eval.Recommendations) != 2 {
+		t.Fatalf("expected 2 recommendations, got %+v", eval.Recommendations)
+	}
+	seenChillerPoint := false
+	seenAuxPoint := false
+	for _, rec := range eval.Recommendations {
+		if rec.Kind == RecommendationKindChillerStageDown && rec.SuggestedCommandPointID == "pt-chiller-c-stop-seq" {
+			seenChillerPoint = true
+		}
+		if rec.Kind == RecommendationKindIdleAuxiliaryStop && rec.SuggestedCommandPointID == "pt-chwp-2-stop" {
+			seenAuxPoint = true
+		}
+	}
+	if !seenChillerPoint || !seenAuxPoint {
+		t.Fatalf("missing SuggestedCommandPointID in recommendations: %+v", eval.Recommendations)
+	}
+}
+
+func TestBuildStagingSnapshotUsesBoundDeviceIDs(t *testing.T) {
+	at := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
+	runState := RunStateRunning
+	topology := &StagingTopology{
+		CoolingLoadDeviceID: "dev-btu",
+		SiteControlMode:     SiteControlModeRemoteAuto,
+		Chillers: []ChillerMeterBinding{
+			{
+				AssetID:         "asset-chiller-c",
+				AssetCode:       "chiller-c",
+				AssetName:       "C 机组",
+				MeterDeviceID:   "dev-meter-1",
+				MeterSourceKey:  "ammeter-unit1",
+				BoundDeviceIDs:  []string{"dev-ctrl-chiller-c", "et1010-chiller-c"},
+				RatedCapacityKW: 572,
+				RatedPowerKW:    127.5,
+			},
+		},
+		Auxiliaries: []AuxiliaryUnitBinding{
+			{
+				AssetID:          "asset-chwp-2",
+				AssetCode:        "chwp-2",
+				AssetName:        "2 号冷冻泵",
+				AssetType:        AssetTypeCHWP,
+				BoundDeviceIDs:   []string{"dev-ctrl-chwp-2", "et1010-chwp-2"},
+				RatedPowerKW:     18.5,
+				ServesChillerIDs: []string{"asset-chiller-c"},
+			},
+		},
+	}
+
+	latest := []stagingTelemetryRow{
+		{DeviceID: "dev-btu", SourceID: "btu-calc", TelemetryKey: "instant_cooling_capacity", ValueNumber: ptr(510.0), Unit: "kW", Quality: "GOOD", SampledAt: at},
+		{DeviceID: "dev-meter-1", SourceID: "ammeter-unit1", TelemetryKey: "power_total", ValueNumber: ptr(81.5), Unit: "kW", Quality: "GOOD", SampledAt: at},
+		{DeviceID: "dev-ctrl-chiller-c", SourceID: "et1010-chiller-c", TelemetryKey: "chiller.run_state", ValueString: &runState, Quality: "GOOD", SampledAt: at},
+		{DeviceID: "dev-ctrl-chwp-2", SourceID: "et1010-chwp-2", TelemetryKey: "chwp.run_state", ValueString: &runState, Quality: "GOOD", SampledAt: at},
+	}
+
+	snapshot := buildStagingSnapshotFromObservations("tenant-1", "site-1", at, topology, latest, nil)
+	if snapshot.SiteControlMode != SiteControlModeRemoteAuto {
+		t.Fatalf("SiteControlMode = %q, want REMOTE_AUTO", snapshot.SiteControlMode)
+	}
+	if len(snapshot.Chillers) != 1 || snapshot.Chillers[0].Power == nil || snapshot.Chillers[0].Power.Value != 81.5 || snapshot.Chillers[0].RunState != RunStateRunning {
+		t.Fatalf("chiller telemetry across bound devices failed: %+v", snapshot.Chillers)
+	}
+	if len(snapshot.Auxiliaries) != 1 || snapshot.Auxiliaries[0].RunState != RunStateRunning {
+		t.Fatalf("aux telemetry across bound devices failed: %+v", snapshot.Auxiliaries)
+	}
+}
+
+func TestBuildStagingTopologyFromRecordsExtractsLocksCommandsAndEdges(t *testing.T) {
+	locks := map[string]AssetControlLockInfo{
+		"ASSET-CHILLER-C": {LockMode: "MAINTENANCE_LOCK", Reason: "维保锁定"},
+		"asset-chiller-a": {LockMode: AssetControlLockUnlocked},
+	}
+	assets := []stagingAssetRow{
+		{ID: "asset-chiller-a", Code: "chiller-a", DisplayName: "A 机组", AssetType: AssetTypeChiller, RatedPowerKW: 127.5, RatedCapacityKW: 572},
+		{ID: "asset-chiller-c", Code: "chiller-c", DisplayName: "C 机组", AssetType: AssetTypeChiller, RatedPowerKW: 127.5, RatedCapacityKW: 572},
+		{ID: "asset-chwp-2", Code: "chwp-2", DisplayName: "2 号冷冻泵", AssetType: AssetTypeCHWP, RatedPowerKW: 18.5},
+	}
+	devices := []stagingDeviceRow{
+		{ID: "dev-btu", Code: "btu-calc", DeviceType: "BTU_METER", SourceKey: "btu-calc"},
+		{ID: "dev-meter-1", Code: "ammeter-unit1", DeviceType: "POWER_METER", SourceKey: "ammeter-unit1"},
+		{ID: "dev-ctrl-c", Code: "ctrl-chiller-c", DeviceType: "GATEWAY_IO", SourceKey: "et1010-c"},
+		{ID: "dev-ctrl-p2", Code: "ctrl-chwp-2", DeviceType: "GATEWAY_IO", SourceKey: "et1010-p2"},
+	}
+	bindings := []stagingDeviceBindingRow{
+		{AssetID: "asset-chiller-c", DeviceID: "dev-meter-1", BindingRole: "METER"},
+		{AssetID: "asset-chiller-c", DeviceID: "dev-ctrl-c", BindingRole: "CONTROLLER"},
+		{AssetID: "asset-chwp-2", DeviceID: "dev-ctrl-p2", BindingRole: "CONTROLLER"},
+	}
+	commandPoints := []stagingCommandPointRow{
+		{
+			PointID: "pt-chiller-c-stop-seq", ReportingDeviceID: "dev-ctrl-c", PointCode: "stop_seq", BoundAssetID: "asset-chiller-c",
+			SourceMetadata: []byte(`{"capability":"STOP_UNIT_SEQUENCE","interlockChecks":[{"deviceId":"dev-ctrl-p2","key":"chwp.run_state"}]}`),
+		},
+		{
+			PointID: "pt-chwp-2-stop", ReportingDeviceID: "dev-ctrl-p2", PointCode: "stop", BoundAssetID: "asset-chwp-2",
+			SourceMetadata: []byte(`{"capability":"STOP","interlockChecks":[{"deviceId":"dev-ctrl-c","key":"chiller.run_state"}]}`),
+		},
+	}
+
+	topology := buildStagingTopologyFromRecords(SiteControlModeManualOverride, "值班手操", locks, assets, devices, bindings, commandPoints)
+	if topology.SiteControlMode != SiteControlModeManualOverride || topology.SiteControlReason != "值班手操" {
+		t.Fatalf("unexpected site control mode fields: %+v", topology)
+	}
+	if topology.CoolingLoadDeviceID != "dev-btu" {
+		t.Fatalf("CoolingLoadDeviceID = %q, want dev-btu", topology.CoolingLoadDeviceID)
+	}
+	if got := topology.CommandPointIDs[canonicalCommandPointKey("asset-chiller-c", SuggestedCapabilityStopUnitSequence)]; got != "pt-chiller-c-stop-seq" {
+		t.Fatalf("chiller stop seq point = %q", got)
+	}
+	if got := topology.CommandPointIDs[canonicalCommandPointKey("asset-chwp-2", SuggestedCapabilityStop)]; got != "pt-chwp-2-stop" {
+		t.Fatalf("aux stop point = %q", got)
+	}
+	if len(topology.Edges) != 1 || topology.Edges[0] != (HydraulicEdge{FromAssetID: "asset-chwp-2", ToAssetID: "asset-chiller-c", Role: HydraulicEdgeServes}) {
+		t.Fatalf("expected deduplicated SERVES edge, got %+v", topology.Edges)
+	}
+	if len(topology.Auxiliaries) != 1 || len(topology.Auxiliaries[0].ServesChillerIDs) != 1 || topology.Auxiliaries[0].ServesChillerIDs[0] != "asset-chiller-c" {
+		t.Fatalf("expected aux ServesChillerIDs=[asset-chiller-c], got %+v", topology.Auxiliaries)
+	}
+	if lock, ok := lookupAssetControlLock(topology.AssetControlLocks, "asset-chiller-c", "chiller-c"); !ok || lock.LockMode != "MAINTENANCE_LOCK" {
+		t.Fatalf("expected MAINTENANCE_LOCK on chiller-c, got ok=%v lock=%+v", ok, lock)
+	}
+	if _, ok := lookupAssetControlLock(topology.AssetControlLocks, "asset-chiller-a", "chiller-a"); ok {
+		t.Fatalf("UNLOCKED lock entry should not suppress chiller-a")
+	}
+}

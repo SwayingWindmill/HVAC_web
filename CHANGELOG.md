@@ -15,6 +15,9 @@
   - 在平台网关提交前（`cmd/energy-api/internal/gateway/command.go`）与 MQTT 下发前（`cmd/connectivity` + `dynamic_safety.go`）双闸门实时核验同伴设备 `run_state` 联锁条件，水泵或冷却塔未运行禁止脉冲开启主机、主机未停机禁止断开对应水泵或冷却塔。
   - 更新 Edge 网关报文函数 `edge/node-red/songyaxuan-platform-envelope.js` 上报控制器运行状态，并实现 `edge/node-red/songyaxuan-command-executor.ts` 下行脉冲复位与 15 秒内一键冷机启停序列执行。
 - 站点与单台设备控制退出边界与交互原型（Wave 1 #824、#825）：后端落地站点控制模式（`REMOTE_AUTO` / `MANUAL_OVERRIDE` / `SAFE_SHUTDOWN_EXIT`）、单台设备锁（`UNLOCKED` / `MANUAL_LOCK` / `MAINTENANCE_LOCK`）及未开始派发指令取消，并完成网页端「运行控制与节能联动」Figma 原型设计待审。
+- 补齐节能减台与闲置辅机联动评估后端接口与联锁控制感知（#542）：
+  - 网关新增 `GET /api/v1/sites/{siteId}/optimization/staging-recommendations/latest` 只读接口、OpenAPI 契约与前端生成客户端（`apps/hvac-web/src/api/generated/platformGateway.gen.ts`），并在 `POST /api/v1/commands` 放行 `CRITICAL` 风险等级控制指令。
+  - `services/optimization-service` 新增数据库迁移 `039-optimization-staging-catalog-read.sql`，按站点与租户行级权限读取站点控制模式、单台设备锁定状态、全部绑定设备、可控 `COMMAND` 点位以及点位 `interlockChecks` 液压关联：全站处于手动接管（`MANUAL_OVERRIDE`）或安全停机退出（`SAFE_SHUTDOWN_EXIT`）时暂停产出停机建议，被锁定的冷机或水泵/冷却塔会被跳过并给出原因诊断，允许停机的建议会直接带回 `suggestedCommandPointId`。
 
 ### 2026-11-14
 

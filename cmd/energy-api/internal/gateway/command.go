@@ -1525,7 +1525,7 @@ func validCommandIntentStatus(status commandmodel.IntentStatus) bool {
 }
 
 func validCommandRisk(risk commandmodel.RiskLevel) bool {
-	return risk == commandmodel.RiskLow || risk == commandmodel.RiskMedium || risk == commandmodel.RiskHigh
+	return risk == commandmodel.RiskLow || risk == commandmodel.RiskMedium || risk == commandmodel.RiskHigh || risk == commandmodel.RiskCritical
 }
 
 func validCommandApprovalPolicy(policy commandmodel.ApprovalPolicy, approvalCount, requiredCount int) bool {
