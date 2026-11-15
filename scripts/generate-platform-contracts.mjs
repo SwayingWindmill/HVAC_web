@@ -154,6 +154,7 @@ const expectedOperations = {
   listSiteDataGaps: ['get', '/api/v1/sites/{siteId}/data-gaps'],
   getSiteControlState: ['get', '/api/v1/sites/{siteId}/control-state'],
   updateSiteControlMode: ['put', '/api/v1/sites/{siteId}/control-mode'],
+  executeSiteControlShutdown: ['post', '/api/v1/sites/{siteId}/control-shutdown'],
   updateAssetControlLock: ['put', '/api/v1/assets/{assetId}/control-lock'],
 };
 const operations = {};
@@ -197,6 +198,7 @@ const expectedSuccessSchemas = {
   listSiteDataGaps: 'SiteDataGapList',
   getSiteControlState: 'SiteControlState',
   updateSiteControlMode: 'SiteControlModeMutationResponse',
+  executeSiteControlShutdown: 'SiteControlShutdownResponse',
   updateAssetControlLock: 'AssetControlLockMutationResponse',
   getLatestSiteOptimizationStagingRecommendations: 'StagingEvaluation',
 };
@@ -280,6 +282,14 @@ const schemaRequirements = {
   AssetControlLockMutationResponse: [
     ['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'cancelledCommandIds'],
     ['id', 'tenantId', 'siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'boundDeviceIds', 'cancelledCommandIds'],
+  ],
+  SiteControlShutdownRequest: [
+    ['mode', 'reason', 'verificationCode'],
+    ['mode', 'reason', 'verificationCode', 'unitCode', 'confirmEmergencyDoRelease', 'expectedRevision'],
+  ],
+  SiteControlShutdownResponse: [
+    ['siteControlState', 'mode', 'cancelledCommandIds', 'submittedCommandIds', 'deferredHoldingAssetIds'],
+    ['siteControlState', 'mode', 'cancelledCommandIds', 'submittedCommandIds', 'deferredHoldingAssetIds'],
   ],
   StagingDiagnostic: [
     ['scope', 'status', 'reason', 'detail'],
@@ -448,6 +458,7 @@ const replacements = {
   __SITE_DATA_GAPS_PATH__: operations.listSiteDataGaps.path,
   __SITE_CONTROL_STATE_PATH__: operations.getSiteControlState.path,
   __SITE_CONTROL_MODE_PATH__: operations.updateSiteControlMode.path,
+  __SITE_CONTROL_SHUTDOWN_PATH__: operations.executeSiteControlShutdown.path,
   __ASSET_CONTROL_LOCK_PATH__: operations.updateAssetControlLock.path,
 };
 

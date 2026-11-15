@@ -387,6 +387,7 @@ type commandGatewayFixture struct {
 	activeMaintenanceWindow *activeMaintenanceWindowView
 	cancelledPendingIDs     []string
 	lastCancelPending       *internalCommandCancelPendingRequest
+	commandSourceMetadata   map[string]any
 }
 
 func newCommandGatewayFixture(t *testing.T, feedbackTypes ...string) *commandGatewayFixture {
@@ -626,6 +627,9 @@ func (fixture *commandGatewayFixture) commandRegistryClient(t *testing.T, now ti
 		}
 		if targetProfile.ParameterKey != "" {
 			sourceMetadata["parameterKey"] = targetProfile.ParameterKey
+		}
+		for key, value := range fixture.commandSourceMetadata {
+			sourceMetadata[key] = value
 		}
 		commandPoint := platformapi.TelemetryPoint{
 			ID: fixture.commandPointID, TenantID: fixture.tenantID, SiteID: fixture.siteID, ReportingDeviceID: fixture.deviceID,
@@ -1234,6 +1238,45 @@ func TestGatewayCancelCommandRoutesAndEnforcesLifecycleAndAuthority(t *testing.T
 	var problem platformapi.ProblemDetails
 	if json.NewDecoder(dispRec.Body).Decode(&problem) != nil || problem.Code != "COMMAND_CANCEL_INVALID" {
 		t.Fatalf("unexpected conflict problem %#v", problem)
+	}
+}
+
+func TestGatewayRejectsEmergencyDoReleaseDirectCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		actuationMode string
+	}{
+		{name: "exact", actuationMode: "EMERGENCY_DO_RELEASE"},
+		{name: "trimmed_lowercase", actuationMode: " emergency_do_release "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newCommandGatewayFixture(t)
+			fixture.commandCapability = commandmodel.CapabilityStop
+			fixture.commandSourceMetadata = map[string]any{
+				"actuationMode": tc.actuationMode,
+			}
+
+			body := `{"assetId":"` + fixture.assetID + `","commandPointId":"` + fixture.commandPointID + `","parameters":{},"verificationCode":"123456"}`
+			req := httptest.NewRequest(http.MethodPost, publicCommandsPath, strings.NewReader(body))
+			fixture.authenticate(req, true)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Idempotency-Key", "cmd-block-emergency-do-"+tc.name)
+			rec := httptest.NewRecorder()
+			fixture.handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d want 400 body=%s", rec.Code, rec.Body.String())
+			}
+			var problem platformapi.ProblemDetails
+			if json.NewDecoder(rec.Body).Decode(&problem) != nil || problem.Code != "COMMAND_REQUEST_INVALID" ||
+				!strings.Contains(problem.Detail, "/control-shutdown") {
+				t.Fatalf("unexpected problem %#v", problem)
+			}
+			if fixture.telemetryCalls.Load() != 0 || fixture.identityCalls.Load() != 0 || fixture.commandCalls.Load() != 0 {
+				t.Fatalf("expected anti-bypass rejection before telemetry/totp/command; telemetry=%d identity=%d command=%d",
+					fixture.telemetryCalls.Load(), fixture.identityCalls.Load(), fixture.commandCalls.Load())
+			}
+		})
 	}
 }
 

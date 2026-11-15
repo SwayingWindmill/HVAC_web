@@ -318,6 +318,10 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 		h.writeCommandFailure(writer, request, *failure)
 		return
 	}
+	if actuationMode, _ := target.point.SourceMetadata["actuationMode"].(string); strings.EqualFold(strings.TrimSpace(actuationMode), "EMERGENCY_DO_RELEASE") {
+		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "EMERGENCY_DO_RELEASE points must be triggered via POST /api/v1/sites/{siteId}/control-shutdown with explicit secondary risk confirmation.", false, nil)
+		return
+	}
 	if !validCommandParameters(target.capability, target.point.SourceMetadata, input.Parameters) {
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The Asset capability parameters are invalid.", false, nil)
 		return
@@ -759,6 +763,41 @@ func (h *handler) resolveCommandDevice(request *http.Request, session bffSession
 	return device, nil
 }
 
+func (h *handler) loadSiteAssetModel(request *http.Request, session bffSession, siteID string) (platformapi.SiteAssetModel, *commandFailure) {
+	assetModelAuthorization, authFailure := h.authorizeRegistry(request.Context(), session, registryauth.ActionAssetModelRead)
+	if authFailure != nil {
+		failure := commandFailure{status: authFailure.status, code: authFailure.code, title: authFailure.title, detail: authFailure.detail, retryable: authFailure.retryable}
+		return platformapi.SiteAssetModel{}, &failure
+	}
+	assetModelPath := strings.Replace(platformapi.GetSiteAssetModelPathTemplate, "{siteId}", url.PathEscape(siteID), 1)
+	assetModelRoute, _, matches := matchPublicRegistryRoute(http.MethodGet, assetModelPath)
+	if !matches {
+		failure := commandUnavailable("Registry Asset Model route is unavailable for Command execution.")
+		return platformapi.SiteAssetModel{}, &failure
+	}
+	assetModelDecision, decisionFailure := h.commandRegistryDecisionForPath(request, session, assetModelRoute, assetModelPath, "Asset Model lookup")
+	if decisionFailure != nil {
+		return platformapi.SiteAssetModel{}, decisionFailure
+	}
+	assetModelResult := h.executeCoreRegistry(request.Context(), assetModelRoute, "", assetModelAuthorization.coreGrant, assetModelDecision)
+	if assetModelResult.status != http.StatusOK {
+		if assetModelResult.status == http.StatusNotFound || assetModelResult.status == http.StatusForbidden {
+			failure := commandNotFound()
+			return platformapi.SiteAssetModel{}, &failure
+		}
+		failure := commandUnavailable("Registry could not resolve the authoritative Asset Model for this Command.")
+		return platformapi.SiteAssetModel{}, &failure
+	}
+	var assetModel platformapi.SiteAssetModel
+	decoder := json.NewDecoder(bytes.NewReader(assetModelResult.body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&assetModel) != nil || ensureCommandJSONEOF(decoder) != nil || validateSiteAssetModel(assetModel, siteID) != nil {
+		failure := commandUnavailable("Registry returned an invalid Asset Model for Command execution.")
+		return platformapi.SiteAssetModel{}, &failure
+	}
+	return assetModel, nil
+}
+
 func (h *handler) resolveAssetCommandTarget(request *http.Request, session bffSession, assetID, commandPointID string) (assetCommandTarget, *commandFailure) {
 	assetAuthorization, authFailure := h.authorizeRegistry(request.Context(), session, registryauth.ActionAssetRead)
 	if authFailure != nil {
@@ -793,30 +832,15 @@ func (h *handler) resolveAssetCommandTarget(request *http.Request, session bffSe
 		return assetCommandTarget{}, &failure
 	}
 
-	assetModelAuthorization, authFailure := h.authorizeRegistry(request.Context(), session, registryauth.ActionAssetModelRead)
-	if authFailure != nil {
-		failure := commandFailure{status: authFailure.status, code: authFailure.code, title: authFailure.title, detail: authFailure.detail, retryable: authFailure.retryable}
-		return assetCommandTarget{}, &failure
+	assetModel, modelFailure := h.loadSiteAssetModel(request, session, asset.SiteID)
+	if modelFailure != nil {
+		if modelFailure.status == http.StatusNotFound {
+			failure := commandUnavailable("Registry could not resolve the authoritative Asset Model for this Command.")
+			return assetCommandTarget{}, &failure
+		}
+		return assetCommandTarget{}, modelFailure
 	}
-	assetModelPath := strings.Replace(platformapi.GetSiteAssetModelPathTemplate, "{siteId}", url.PathEscape(asset.SiteID), 1)
-	assetModelRoute, _, matches := matchPublicRegistryRoute(http.MethodGet, assetModelPath)
-	if !matches {
-		failure := commandUnavailable("Registry Asset Model route is unavailable for Command execution.")
-		return assetCommandTarget{}, &failure
-	}
-	assetModelDecision, decisionFailure := h.commandRegistryDecisionForPath(request, session, assetModelRoute, assetModelPath, "Asset Model lookup")
-	if decisionFailure != nil {
-		return assetCommandTarget{}, decisionFailure
-	}
-	assetModelResult := h.executeCoreRegistry(request.Context(), assetModelRoute, "", assetModelAuthorization.coreGrant, assetModelDecision)
-	if assetModelResult.status != http.StatusOK {
-		failure := commandUnavailable("Registry could not resolve the authoritative Asset Model for this Command.")
-		return assetCommandTarget{}, &failure
-	}
-	var assetModel platformapi.SiteAssetModel
-	decoder = json.NewDecoder(bytes.NewReader(assetModelResult.body))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&assetModel) != nil || ensureCommandJSONEOF(decoder) != nil || validateSiteAssetModel(assetModel, asset.SiteID) != nil || assetModel.TenantID != asset.TenantID {
+	if assetModel.TenantID != asset.TenantID {
 		failure := commandUnavailable("Registry returned an invalid Asset Model for Command execution.")
 		return assetCommandTarget{}, &failure
 	}
