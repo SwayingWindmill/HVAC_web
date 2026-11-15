@@ -653,6 +653,7 @@ func TestPostgresCancelPendingAbortActiveSequences(t *testing.T) {
 
 	queuedCmd := submitForDevice("pg-cancel-queued", devQueued, commandmodel.CapabilityStart)
 
+	*now = now.Add(time.Second)
 	ids, err := store.CancelPending(ctx, commandmodel.CancelPendingRequest{
 		TenantID:             commandTenantA,
 		SiteID:               commandSiteA,
@@ -679,8 +680,8 @@ func TestPostgresCancelPendingAbortActiveSequences(t *testing.T) {
 		var leaseOwner *string
 		if err := admin.QueryRow(ctx, `
 SELECT a.verification_lease_owner,
-       (SELECT t.reason FROM command_runtime.command_transitions t WHERE t.command_id = i.command_id ORDER BY t.command_version DESC LIMIT 1),
-       (SELECT au.redacted_payload->>'reason' FROM command_runtime.command_audit_intents au WHERE au.command_id = i.command_id ORDER BY au.created_at DESC LIMIT 1)
+       COALESCE((SELECT t.reason FROM command_runtime.command_transitions t WHERE t.command_id = i.command_id ORDER BY t.command_version DESC LIMIT 1), ''),
+       COALESCE((SELECT au.redacted_payload->>'reason' FROM command_runtime.command_audit_intents au WHERE au.command_id = i.command_id AND au.event_kind = 'COMMAND_CANCELLED' ORDER BY au.created_at DESC LIMIT 1), '')
 FROM command_runtime.command_intents i
 JOIN command_runtime.command_attempts a ON a.command_id = i.command_id
 WHERE i.command_id = $1::uuid
