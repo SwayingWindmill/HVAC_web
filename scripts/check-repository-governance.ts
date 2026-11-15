@@ -209,6 +209,8 @@ const requiredGuardrailFiles = Object.freeze([
   '.agents/skills/command-safety/SKILL.md',
   '.claude/skills/command-safety/SKILL.md',
   'scripts/run-command-formal-check.ts',
+  'scripts/migration-conventions-baseline.json',
+  'scripts/check-migration-conventions.ts',
 ]);
 
 const debugMarkerExtensions = Object.freeze(['.go', '.ts', '.tsx', '.mjs', '.js', '.cjs']);

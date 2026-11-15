@@ -128,6 +128,7 @@ PostgreSQL（本机或外部）上有身份库 `hvac_identity`，以及各业务
 - 测试数据和凭据不在正式的迁移里；
 - 在每个库里记下迁移状态和源文件哈希，发现被改过或恢复不完整就停下；
 - 新增迁移文件（在 `infra/*/postgres/init/` 或各模块的 `migrations/` 下）要同时登记到 `manifest.v1.json`、`migration-list.tsv` 和 `Dockerfile`。
+- 新增数据库、schema、角色、表与视图须按业务域小写下划线命名，禁止阶段代号（`hvac_s*`、`s13_*`）、`CREATE TABLE ... AS` 临时备份表及重复 schema 前缀；所有在用 schema 和表须附带非空中文 `COMMENT ON SCHEMA` / `COMMENT ON TABLE`（由 `npm run migrations:conventions:check` 拦截）。
 
 迁移已经冻结（2026-10-22，#688）：服务器上已有真实站点的数据，`migration-list.tsv` 里登记过的迁移都执行过，内容一个字节都不能改，改表结构只能新增迁移（已有库遇到改过的迁移，迁移器会按哈希中止）。不要的迁移可以从清单里去掉，但它建的每张表都要由清单里还在的某条迁移删掉（`DROP TABLE`，或 `DROP SCHEMA ... CASCADE` 删掉整个 schema），例如 `031-drop-outbound-delivery.sql`、`032-drop-generic-rules.sql` 用 `DROP SCHEMA ... CASCADE` 删掉了已去掉的模块的表。`npm run migrations:freeze:check` 拿当前分支和它从 main 分出来的那个提交比，守住这两条，门禁的 contracts 一步会跑它。
 

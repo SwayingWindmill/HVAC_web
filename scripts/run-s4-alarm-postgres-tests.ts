@@ -20,7 +20,7 @@ const { postgresHostPort, run, compose, psql, pause } = await createPostgresComp
 async function waitForPostgres() {
   for (let attempt = 0; attempt < 300; attempt += 1) {
     try {
-      const state = psql("SELECT (to_regclass('alarm_runtime.alarm_current') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_timeline') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.s13_alarm_migration_report') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_evaluation_state') IS NOT NULL)::text || '|' || (SELECT count(*) FROM alarm_runtime.alarm_current)::text || '|' || (current_setting('listen_addresses') <> '')::text");
+      const state = psql("SELECT (to_regclass('alarm_runtime.alarm_current') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_timeline') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.s13_alarm_migration_report') IS NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_evaluation_state') IS NOT NULL)::text || '|' || (SELECT count(*) FROM alarm_runtime.alarm_current)::text || '|' || (current_setting('listen_addresses') <> '')::text");
       if (state === 'true|true|true|true|1|true') return;
     } catch {}
     await pause(250);
@@ -132,8 +132,8 @@ try {
   if (!deleteDenied.includes('permission denied')) throw new Error(`runtime can delete Alarm authority rows: ${deleteDenied}`);
   report.assertions.leastPrivilegeColumns = true;
 
-  expectEqual(psql(`SELECT source_incident_count::text || '|' || target_incident_count::text || '|' || identity_preserved::text FROM alarm_runtime.s13_alarm_migration_report WHERE migration_id = 'S13-2026-08-19'`), '0|0|true', 'S13 one-shot migration report');
-  expectEqual(psql(`SELECT (to_regclass('alarm_runtime.alarm_current_pre_s13_backup') IS NOT NULL)::text || '|' || (to_regclass('alarm_runtime.alarm_idempotency_pre_s13_backup') IS NOT NULL)::text`), 'true|true', 'S13 pre-migration backups');
+  expectEqual(psql(`SELECT count(*)::text FROM pg_tables WHERE schemaname = 'alarm_runtime' AND tablename IN ('s13_alarm_migration_report', 's13_alarm_identity_map', 'alarm_current_pre_s13_backup', 'alarm_idempotency_pre_s13_backup')`), '0', 'retired S13 backup and migration report tables dropped');
+  expectEqual(psql(`SELECT (coalesce(length(btrim(obj_description(to_regnamespace('alarm_runtime'), 'pg_namespace'))), 0) > 0)::text`), 'true', 'alarm_runtime schema comment present');
   expectEqual(psql(`SELECT count(*)::text FROM pg_indexes WHERE schemaname = 'alarm_runtime' AND indexname = 'alarm_current_one_active_fingerprint_uidx' AND indexdef LIKE '%WHERE (condition = ''ACTIVE''::text)%'`), '1', 'S13 active fingerprint partial unique index');
   const timelineMutationDenied = psql(`
     SET ROLE s4_alarm_migrator;

@@ -7,6 +7,10 @@
 
 ### 2026-11-15
 
+#### 变更
+
+- 清理 `hvac_s4.alarm_runtime` 中 4 张 S13 一次性迁移遗留表（`alarm_current_pre_s13_backup`、`alarm_idempotency_pre_s13_backup`、`s13_alarm_migration_report`、`s13_alarm_identity_map`）并移除对应过时回滚脚本；为 8 个 PostgreSQL 数据库下全部 12 个 schema 与 221 张在用数据表补齐中文 `COMMENT ON` 注释，并新增静态门禁 `npm run migrations:conventions:check` 拦截阶段性命名、`CREATE TABLE ... AS` 副本表与缺失注释的新迁移。
+
 #### 修复
 
 - 修正控制指令回执与模拟器下发时序：设备启停及一键启停序列（`START`、`STOP`、`START_UNIT_SEQUENCE`、`STOP_UNIT_SEQUENCE`）的遥测状态核验窗口从 2 分钟延长至 10 分钟，匹配现场电表采样周期与冷机加卸载延迟；数值设定与故障复位仍保持 2 分钟。同时将 `connectivity` 下行应答超时从 15 秒放宽至 25 秒（派发步 40 秒、租约 45 秒），并为 `eg8200-simulator` 补齐 `pointCode`、`actuationMode`、`channel`、`coilAddress`、`pulseDurationMs` 报文字段与一键启停序列仿真，避免携带路由元数据的控制报文在模拟网关被静默丢弃。

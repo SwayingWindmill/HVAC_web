@@ -311,8 +311,15 @@ for (const file of files) {
     scriptMatch(lower.includes('s5-') || lower.includes('work-order') || lower.includes('workorder'), () => selectWorkOrder(file, 'Work Order automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') }));
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));
     scriptMatch(lower.includes('operations-agent'), () => selectOperationsAgent(file, 'Operations Agent automation changed', { integration: lower.includes('postgres') || lower.includes('migration') }));
-    // The migration freeze check runs in the contracts core; its tests run in every static gate.
-    scriptMatch(lower.includes('ownership') || lower.includes('contract') || lower.includes('production-rollout') || lower.includes('migration-freeze'), () => add(contractProfiles, ['core']));
+    // The migration freeze and convention checks run in the contracts core; their tests run in every static gate.
+    scriptMatch(
+      lower.includes('ownership') ||
+        lower.includes('contract') ||
+        lower.includes('production-rollout') ||
+        lower.includes('migration-freeze') ||
+        lower.includes('migration-conventions'),
+      () => add(contractProfiles, ['core']),
+    );
     if (!scriptMatched) {
       unknown = true;
       selectBroad(file, 'unknown automation script selected the broad fail-closed suite');
