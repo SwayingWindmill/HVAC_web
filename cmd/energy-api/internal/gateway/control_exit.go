@@ -131,12 +131,13 @@ type assetControlLockRequest struct {
 }
 
 type internalCommandCancelPendingRequest struct {
-	TenantID    string   `json:"tenantId"`
-	SiteID      string   `json:"siteId"`
-	DeviceIDs   []string `json:"deviceIds,omitempty"`
-	PrincipalID string   `json:"principalId"`
-	Reason      string   `json:"reason,omitempty"`
-	CausationID string   `json:"causationId,omitempty"`
+	TenantID             string   `json:"tenantId"`
+	SiteID               string   `json:"siteId"`
+	DeviceIDs            []string `json:"deviceIds,omitempty"`
+	PrincipalID          string   `json:"principalId"`
+	Reason               string   `json:"reason,omitempty"`
+	CausationID          string   `json:"causationId,omitempty"`
+	AbortActiveSequences bool     `json:"abortActiveSequences,omitempty"`
 }
 
 func matchPublicControlExitRoute(path string) (publicControlExitRoute, bool) {
@@ -286,7 +287,7 @@ func (h *handler) putSiteControlMode(writer http.ResponseWriter, request *http.R
 		"reason":      reason,
 		"meta":        meta,
 	}
-	saved, cancelledIDs, ok := h.saveSiteControlModeAndCancelPending(writer, request, session, route, auth, siteID, payload, reason)
+	saved, cancelledIDs, ok := h.saveSiteControlModeAndCancelPending(writer, request, session, route, auth, siteID, payload, reason, false)
 	if !ok {
 		return
 	}
@@ -307,6 +308,7 @@ func (h *handler) saveSiteControlModeAndCancelPending(
 	siteID string,
 	payload map[string]any,
 	reason string,
+	abortActiveSequences bool,
 ) (siteControlStateView, []string, bool) {
 	status, raw, coreFailure := h.callCoreControlRegistry(request.Context(), http.MethodPut, route.internalPath, auth.coreGrant, payload, routeRevisionFromRequest(request))
 	if coreFailure != nil {
@@ -332,7 +334,7 @@ func (h *handler) saveSiteControlModeAndCancelPending(
 		if saved.ID != nil {
 			causationID = *saved.ID
 		}
-		cancelled, cancelFailure := h.executeCommandCancelPending(request.Context(), session, siteID, nil, auth.principalID, reason, causationID)
+		cancelled, cancelFailure := h.executeCommandCancelPending(request.Context(), session, siteID, nil, auth.principalID, reason, causationID, abortActiveSequences)
 		if cancelFailure != nil {
 			h.writeCommandFailure(writer, request, *cancelFailure)
 			return siteControlStateView{}, nil, false
@@ -409,7 +411,7 @@ func (h *handler) putAssetControlLock(writer http.ResponseWriter, request *http.
 
 	cancelledIDs := []string{}
 	if saved.LockMode != assetControlLockUnlocked && len(saved.BoundDeviceIDs) > 0 {
-		cancelled, cancelFailure := h.executeCommandCancelPending(request.Context(), session, saved.SiteID, saved.BoundDeviceIDs, auth.principalID, reason, saved.ID)
+		cancelled, cancelFailure := h.executeCommandCancelPending(request.Context(), session, saved.SiteID, saved.BoundDeviceIDs, auth.principalID, reason, saved.ID, false)
 		if cancelFailure != nil {
 			h.writeCommandFailure(writer, request, *cancelFailure)
 			return
@@ -736,7 +738,7 @@ func (h *handler) writeCoreControlRegistryError(writer http.ResponseWriter, requ
 	}
 }
 
-func (h *handler) executeCommandCancelPending(ctx context.Context, session bffSession, siteID string, deviceIDs []string, principalID, reason, causationID string) ([]string, *commandFailure) {
+func (h *handler) executeCommandCancelPending(ctx context.Context, session bffSession, siteID string, deviceIDs []string, principalID, reason, causationID string, abortActiveSequences bool) ([]string, *commandFailure) {
 	if h.command == nil || h.command.baseURL == "" || h.command.httpClient == nil {
 		return []string{}, nil
 	}
@@ -749,12 +751,13 @@ func (h *handler) executeCommandCancelPending(ctx context.Context, session bffSe
 		return nil, failure
 	}
 	body, err := json.Marshal(internalCommandCancelPendingRequest{
-		TenantID:    session.TenantID,
-		SiteID:      siteID,
-		DeviceIDs:   deviceIDs,
-		PrincipalID: principalID,
-		Reason:      reason,
-		CausationID: causationID,
+		TenantID:             session.TenantID,
+		SiteID:               siteID,
+		DeviceIDs:            deviceIDs,
+		PrincipalID:          principalID,
+		Reason:               reason,
+		CausationID:          causationID,
+		AbortActiveSequences: abortActiveSequences,
 	})
 	if err != nil {
 		failure := commandUnavailable("The pending command cancellation request could not be encoded.")
@@ -1211,35 +1214,102 @@ func (h *handler) dispatchShutdownTarget(
 	return view.CommandID, nil
 }
 
+func (h *handler) degradedShutdownCommandState() commandCurrentState {
+	return commandCurrentState{
+		EvaluationAvailability: "AVAILABLE",
+		Presence:               "ONLINE",
+		Readiness:              "CURRENT",
+		Quality:                "GOOD",
+		BusinessRevision:       1,
+		ObservedAt:             h.currentGatewayTime(),
+	}
+}
+
+func (h *handler) reconcileOutcomeUnknownDeviceCommands(request *http.Request, session bffSession, siteID string, target shutdownControlTarget) {
+	if h.command == nil || h.command.baseURL == "" {
+		return
+	}
+	views, listFailure := h.executeCommandList(request, session, siteID, maximumListedCommands)
+	if listFailure != nil {
+		return
+	}
+	for _, view := range views {
+		if view.DeviceID != target.device.ID || view.Status != commandmodel.IntentOutcomeUnknown {
+			continue
+		}
+		principalID, grant, authFailure := h.authorizeCommand(request, session, target.device, view.Capability, commandmodel.AuthorizationCommandSubmit)
+		if authFailure != nil {
+			continue
+		}
+		_, _ = h.executeCommandReconciliation(request.Context(), view.CommandID, internalCommandReconciliation{
+			TenantID:    session.TenantID,
+			SiteID:      target.device.SiteID,
+			DeviceID:    target.device.ID,
+			PrincipalID: principalID,
+			Outcome:     commandmodel.ReconciledNotApplied,
+		}, grant)
+	}
+}
+
+func resolveShutdownChillerByUnitCode(topo shutdownTopology, unitCode string) (platformapi.Asset, bool) {
+	normalized := strings.ToLower(unitCode)
+	if chiller, found := topo.chillersByCode[normalized]; found {
+		return chiller, true
+	}
+	if strings.HasPrefix(normalized, "unit-") {
+		if chiller, found := topo.chillersByCode["chiller-"+strings.TrimPrefix(normalized, "unit-")]; found {
+			return chiller, true
+		}
+	}
+	return platformapi.Asset{}, false
+}
+
 func (h *handler) stopUnlockedChillers(
 	request *http.Request,
 	session bffSession,
 	topo shutdownTopology,
 	chillers []platformapi.Asset,
+	forceStopWhenStopped bool,
 	idemBase string,
 ) ([]string, map[string]bool, *commandFailure) {
 	submitted := []string{}
 	confirmedStopped := make(map[string]bool, len(chillers))
 	for _, chiller := range chillers {
 		state, stopped, probeFailure := h.probeAssetRunState(request, session, topo, chiller.ID)
+		degradedDispatch := false
 		if probeFailure != nil {
 			if probeFailure.status == http.StatusServiceUnavailable {
 				return nil, nil, probeFailure
 			}
 			confirmedStopped[chiller.ID] = false
-			continue
+			degradedDispatch = true
+			state = h.degradedShutdownCommandState()
+		} else {
+			confirmedStopped[chiller.ID] = stopped
+			if stopped && !forceStopWhenStopped {
+				continue
+			}
 		}
-		if stopped {
-			confirmedStopped[chiller.ID] = true
-			continue
-		}
-		confirmedStopped[chiller.ID] = false
 		if topo.lockedAssets[chiller.ID] {
 			continue
 		}
 		stopTarget, hasStop := topo.regularStopByAsset[chiller.ID]
-		if !hasStop {
+		if !hasStop || (degradedDispatch && len(stopTarget.interlocks) > 0) {
 			continue
+		}
+		if len(stopTarget.interlocks) > 0 {
+			if interlockFailure := h.enforceCommandInterlocks(request, session, stopTarget.asAssetCommandTarget()); interlockFailure != nil {
+				if interlockFailure.status == http.StatusServiceUnavailable {
+					return nil, nil, interlockFailure
+				}
+				if interlockFailure.status == http.StatusConflict {
+					continue
+				}
+				return nil, nil, interlockFailure
+			}
+		}
+		if state.ObservedAt.IsZero() {
+			state = h.degradedShutdownCommandState()
 		}
 		cmdID, cmdFailure := h.dispatchShutdownTarget(request, session, stopTarget, state, idemBase)
 		if cmdFailure != nil {
@@ -1422,7 +1492,7 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 	idemBase := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
 
 	if mode == siteControlShutdownModeAbortUnitSequence {
-		chiller, found := topo.chillersByCode[strings.ToLower(unitCode)]
+		chiller, found := resolveShutdownChillerByUnitCode(topo, unitCode)
 		if !found {
 			writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Control exit request invalid", fmt.Sprintf("unitCode %q did not match an active CHILLER asset on this Site.", unitCode), false, nil)
 			return
@@ -1440,7 +1510,7 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 		cancelledIDs := []string{}
 		if len(deviceIDs) > 0 {
 			sort.Strings(deviceIDs)
-			cancelled, cancelFailure := h.executeCommandCancelPending(request.Context(), session, siteID, deviceIDs, auth.principalID, reason, "")
+			cancelled, cancelFailure := h.executeCommandCancelPending(request.Context(), session, siteID, deviceIDs, auth.principalID, reason, "", true)
 			if cancelFailure != nil {
 				h.writeCommandFailure(writer, request, *cancelFailure)
 				return
@@ -1449,7 +1519,7 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 				cancelledIDs = cancelled
 			}
 		}
-		submittedIDs, confirmedStopped, chillerFailure := h.stopUnlockedChillers(request, session, topo, []platformapi.Asset{chiller}, idemBase)
+		submittedIDs, confirmedStopped, chillerFailure := h.stopUnlockedChillers(request, session, topo, []platformapi.Asset{chiller}, true, idemBase)
 		if chillerFailure != nil {
 			h.writeCommandFailure(writer, request, *chillerFailure)
 			return
@@ -1460,6 +1530,10 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 			return
 		}
 		submittedIDs = append(submittedIDs, auxSubmitted...)
+		if len(cancelledIDs) == 0 && len(submittedIDs) == 0 && (topo.lockedAssets[chiller.ID] || len(deferredIDs) > 0) {
+			writeProblem(writer, request, http.StatusConflict, "CONTROL_SHUTDOWN_LOCKED", "Control shutdown locked", "Unable to abort or stop the requested unit sequence because target assets are locked or waiting on active chillers.", false, nil)
+			return
+		}
 		writer.Header().Set("Cache-Control", "private, no-store")
 		writeJSON(writer, http.StatusOK, siteControlShutdownResponse{
 			SiteControlState:        currentState,
@@ -1471,12 +1545,17 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 		return
 	}
 
+	if mode == siteControlShutdownModeEmergencyDoRelease && topo.emergencyReleaseTarget == nil {
+		writeProblem(writer, request, http.StatusConflict, "EMERGENCY_DO_RELEASE_UNAVAILABLE", "Emergency DO release unavailable", "This Site has no active EMERGENCY_DO_RELEASE command point.", false, nil)
+		return
+	}
+
 	payload := map[string]any{
 		"controlMode": siteControlModeSafeShutdownExit,
 		"reason":      reason,
 		"meta":        meta,
 	}
-	savedState, cancelledIDs, ok := h.saveSiteControlModeAndCancelPending(writer, request, session, route, auth, siteID, payload, reason)
+	savedState, cancelledIDs, ok := h.saveSiteControlModeAndCancelPending(writer, request, session, route, auth, siteID, payload, reason, true)
 	if !ok {
 		return
 	}
@@ -1484,12 +1563,12 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 
 	submittedIDs := []string{}
 	deferredIDs := []string{}
-	if mode == siteControlShutdownModeEmergencyDoRelease && topo.emergencyReleaseTarget != nil {
+	if mode == siteControlShutdownModeEmergencyDoRelease {
 		target := *topo.emergencyReleaseTarget
+		h.reconcileOutcomeUnknownDeviceCommands(request, session, siteID, target)
 		current, stateReadFailure := h.readCommandCurrentState(request, session, target.device, target.feedbackPoint.PointCode)
 		if stateReadFailure != nil {
-			h.writeCommandFailure(writer, request, *stateReadFailure)
-			return
+			current = h.degradedShutdownCommandState()
 		}
 		cmdID, cmdFailure := h.dispatchShutdownTarget(request, session, target, current, idemBase)
 		if cmdFailure != nil {
@@ -1498,7 +1577,7 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 		}
 		submittedIDs = append(submittedIDs, cmdID)
 	} else {
-		chillerSubmitted, confirmedStopped, chillerFailure := h.stopUnlockedChillers(request, session, topo, topo.chillers, idemBase)
+		chillerSubmitted, confirmedStopped, chillerFailure := h.stopUnlockedChillers(request, session, topo, topo.chillers, false, idemBase)
 		if chillerFailure != nil {
 			h.writeCommandFailure(writer, request, *chillerFailure)
 			return

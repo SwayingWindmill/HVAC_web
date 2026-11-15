@@ -531,8 +531,9 @@ func TestGatewaySiteControlShutdown(t *testing.T) {
 			t.Fatalf("unexpected shutdown state %#v", resp)
 		}
 		if f.lastCancelPending == nil || len(f.lastCancelPending.DeviceIDs) != 0 ||
+			!f.lastCancelPending.AbortActiveSequences ||
 			!slices.Equal(resp.CancelledCommandIDs, []string{"cmd-pending-site-1"}) {
-			t.Fatalf("expected site-wide cancel-pending, got cancel=%#v resp=%#v", f.lastCancelPending, resp.CancelledCommandIDs)
+			t.Fatalf("expected site-wide cancel-pending with abortActiveSequences, got cancel=%#v resp=%#v", f.lastCancelPending, resp.CancelledCommandIDs)
 		}
 
 		// Dispatches STOP for running chiller-a and safe tower-1 (chiller-b is already STOPPED),
@@ -555,6 +556,33 @@ func TestGatewaySiteControlShutdown(t *testing.T) {
 		}
 	})
 
+	t.Run("plant_safe_shutdown_with_stale_chiller_telemetry_still_stops_chiller_and_defers_pumps", func(t *testing.T) {
+		f := newShutdownPlantFixture(t)
+		f.runStates[f.chillerADevID] = "RUNNING"
+		f.telemetryMode[f.chillerADevID] = "STALE"
+		f.runStates[f.chillerBDevID] = "STOPPED"
+
+		rec := f.postShutdown(`{"mode":"PLANT_SAFE_SHUTDOWN","reason":"遥测陈旧下安全停冷保泵","verificationCode":"123456"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d want 200 body=%s", rec.Code, rec.Body.String())
+		}
+		var resp siteControlShutdownResponse
+		if json.NewDecoder(rec.Body).Decode(&resp) != nil {
+			t.Fatalf("decode failed: %s", rec.Body.String())
+		}
+		dispatchedPoints := f.dispatchedPointIDs()
+		if !slices.Contains(dispatchedPoints, f.chillerAStopPointID) ||
+			!slices.Contains(dispatchedPoints, f.tower1StopPointID) ||
+			slices.Contains(dispatchedPoints, f.chwp1StopPointID) ||
+			slices.Contains(dispatchedPoints, f.chwp2StopPointID) {
+			t.Fatalf("unexpected dispatched points under stale chiller telemetry: %v", dispatchedPoints)
+		}
+		if !slices.Contains(resp.DeferredHoldingAssetIds, f.chwp1AssetID) ||
+			!slices.Contains(resp.DeferredHoldingAssetIds, f.chwp2AssetID) {
+			t.Fatalf("expected pumps deferred when chiller telemetry stale, got %v", resp.DeferredHoldingAssetIds)
+		}
+	})
+
 	t.Run("abort_unit_sequence_while_chiller_running_stops_chiller_and_defers_pumps", func(t *testing.T) {
 		f := newShutdownPlantFixture(t)
 		f.siteControlMode = siteControlModeRemoteAuto
@@ -573,6 +601,7 @@ func TestGatewaySiteControlShutdown(t *testing.T) {
 			t.Fatalf("expected ABORT_UNIT_SEQUENCE to preserve site control mode, got %#v updates=%d", resp.SiteControlState, f.controlModeUpdates.Load())
 		}
 		if f.lastCancelPending == nil ||
+			!f.lastCancelPending.AbortActiveSequences ||
 			!slices.Contains(f.lastCancelPending.DeviceIDs, f.chillerADevID) ||
 			!slices.Contains(f.lastCancelPending.DeviceIDs, f.chwp1DevID) ||
 			!slices.Contains(f.lastCancelPending.DeviceIDs, f.chwp2DevID) ||
@@ -590,46 +619,68 @@ func TestGatewaySiteControlShutdown(t *testing.T) {
 		}
 	})
 
-	t.Run("abort_unit_sequence_after_chiller_stopped_releases_safe_pump_and_respects_shared_or_locked", func(t *testing.T) {
-		f := newShutdownPlantFixture(t)
-		f.runStates[f.chillerADevID] = "STOPPED"
-		f.runStates[f.chillerBDevID] = "RUNNING"
+	t.Run("abort_unit_sequence_after_chiller_stopped_stops_chiller_releases_safe_pump_and_handles_locks", func(t *testing.T) {
+		for _, unitCode := range []string{"chiller-a", "unit-a"} {
+			t.Run(unitCode, func(t *testing.T) {
+				f := newShutdownPlantFixture(t)
+				f.runStates[f.chillerADevID] = "STOPPED"
+				f.runStates[f.chillerBDevID] = "RUNNING"
 
-		rec := f.postShutdown(`{"mode":"ABORT_UNIT_SEQUENCE","unitCode":"chiller-a","reason":"释放A组闲置水泵保持通道","verificationCode":"123456"}`)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-		}
-		var resp siteControlShutdownResponse
-		if json.NewDecoder(rec.Body).Decode(&resp) != nil {
-			t.Fatalf("decode failed: %s", rec.Body.String())
-		}
-		dispatchedPoints := f.dispatchedPointIDs()
-		if !slices.Equal(dispatchedPoints, []string{f.chwp1StopPointID}) || len(resp.SubmittedCommandIDs) != 1 {
-			t.Fatalf("expected chwp-1 STOP only, got points=%v ids=%v", dispatchedPoints, resp.SubmittedCommandIDs)
-		}
-		if !slices.Equal(resp.DeferredHoldingAssetIds, []string{f.chwp2AssetID}) {
-			t.Fatalf("expected shared chwp-2 deferred while chiller-b running, got %v", resp.DeferredHoldingAssetIds)
+				body := fmt.Sprintf(`{"mode":"ABORT_UNIT_SEQUENCE","unitCode":%q,"reason":"释放A组闲置水泵保持通道","verificationCode":"123456"}`, unitCode)
+				rec := f.postShutdown(body)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+				}
+				var resp siteControlShutdownResponse
+				if json.NewDecoder(rec.Body).Decode(&resp) != nil {
+					t.Fatalf("decode failed: %s", rec.Body.String())
+				}
+				if f.lastCancelPending == nil || !f.lastCancelPending.AbortActiveSequences {
+					t.Fatalf("expected abortActiveSequences=true, got %#v", f.lastCancelPending)
+				}
+				dispatchedPoints := f.dispatchedPointIDs()
+				if !slices.Contains(dispatchedPoints, f.chillerAStopPointID) ||
+					!slices.Contains(dispatchedPoints, f.chwp1StopPointID) ||
+					len(resp.SubmittedCommandIDs) != 2 {
+					t.Fatalf("expected chiller-a and chwp-1 STOP, got points=%v ids=%v", dispatchedPoints, resp.SubmittedCommandIDs)
+				}
+				if !slices.Equal(resp.DeferredHoldingAssetIds, []string{f.chwp2AssetID}) {
+					t.Fatalf("expected shared chwp-2 deferred while chiller-b running, got %v", resp.DeferredHoldingAssetIds)
+				}
+			})
 		}
 
-		// Locked auxiliary is also deferred rather than overridden.
-		fLocked := newShutdownPlantFixture(t)
-		fLocked.runStates[fLocked.chillerBDevID] = "STOPPED"
-		fLocked.assetLocks[fLocked.tower1AssetID] = assetControlLockManual
-		recLocked := fLocked.postShutdown(`{"mode":"ABORT_UNIT_SEQUENCE","unitCode":"chiller-b","reason":"B组停机收尾","verificationCode":"123456"}`)
-		if recLocked.Code != http.StatusOK {
-			t.Fatalf("status=%d body=%s", recLocked.Code, recLocked.Body.String())
+		// Unlocked chiller still receives STOP while locked auxiliary is deferred.
+		fAuxLocked := newShutdownPlantFixture(t)
+		fAuxLocked.runStates[fAuxLocked.chillerBDevID] = "STOPPED"
+		fAuxLocked.assetLocks[fAuxLocked.tower1AssetID] = assetControlLockManual
+		recAuxLocked := fAuxLocked.postShutdown(`{"mode":"ABORT_UNIT_SEQUENCE","unitCode":"chiller-b","reason":"B组停机收尾","verificationCode":"123456"}`)
+		if recAuxLocked.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", recAuxLocked.Code, recAuxLocked.Body.String())
 		}
-		var respLocked siteControlShutdownResponse
-		if json.NewDecoder(recLocked.Body).Decode(&respLocked) != nil {
-			t.Fatalf("decode failed: %s", recLocked.Body.String())
+		var respAuxLocked siteControlShutdownResponse
+		if json.NewDecoder(recAuxLocked.Body).Decode(&respAuxLocked) != nil {
+			t.Fatalf("decode failed: %s", recAuxLocked.Body.String())
 		}
-		if len(respLocked.SubmittedCommandIDs) != 0 ||
-			!slices.Contains(respLocked.DeferredHoldingAssetIds, fLocked.tower1AssetID) {
-			t.Fatalf("expected locked tower-1 deferred with 0 submissions, got %#v", respLocked)
+		if !slices.Equal(fAuxLocked.dispatchedPointIDs(), []string{fAuxLocked.chillerBStopPointID}) ||
+			!slices.Contains(respAuxLocked.DeferredHoldingAssetIds, fAuxLocked.tower1AssetID) {
+			t.Fatalf("expected chiller-b STOP and locked tower-1 deferred, got points=%v resp=%#v", fAuxLocked.dispatchedPointIDs(), respAuxLocked)
+		}
+
+		// When all target assets are locked and nothing was cancelled or submitted, return 409 CONTROL_SHUTDOWN_LOCKED.
+		fAllLocked := newShutdownPlantFixture(t)
+		fAllLocked.runStates[fAllLocked.chillerBDevID] = "STOPPED"
+		fAllLocked.assetLocks[fAllLocked.chillerBAssetID] = assetControlLockMaintenance
+		fAllLocked.assetLocks[fAllLocked.tower1AssetID] = assetControlLockManual
+		recAllLocked := fAllLocked.postShutdown(`{"mode":"ABORT_UNIT_SEQUENCE","unitCode":"unit-b","reason":"全锁拦截验证","verificationCode":"123456"}`)
+		var lockedProblem platformapi.ProblemDetails
+		if recAllLocked.Code != http.StatusConflict || json.NewDecoder(recAllLocked.Body).Decode(&lockedProblem) != nil ||
+			lockedProblem.Code != "CONTROL_SHUTDOWN_LOCKED" {
+			t.Fatalf("status=%d want 409 CONTROL_SHUTDOWN_LOCKED problem=%#v body=%s", recAllLocked.Code, lockedProblem, recAllLocked.Body.String())
 		}
 	})
 
-	t.Run("emergency_do_release_uses_configured_point_and_falls_back_when_absent", func(t *testing.T) {
+	t.Run("emergency_do_release_requires_point_reconciles_unknown_and_tolerates_degraded_telemetry", func(t *testing.T) {
 		fConfigured := newShutdownPlantFixture(t)
 		fConfigured.includeEmergencyPoint = true
 		fConfigured.cancelledPendingIDs = []string{"cmd-pending-emerg"}
@@ -642,30 +693,64 @@ func TestGatewaySiteControlShutdown(t *testing.T) {
 			t.Fatalf("decode failed: %s", rec.Body.String())
 		}
 		if resp.SiteControlState.ControlMode != siteControlModeSafeShutdownExit ||
+			fConfigured.lastCancelPending == nil || !fConfigured.lastCancelPending.AbortActiveSequences ||
 			!slices.Equal(resp.CancelledCommandIDs, []string{"cmd-pending-emerg"}) ||
 			!slices.Equal(fConfigured.dispatchedPointIDs(), []string{fConfigured.emergencyPointID}) ||
 			len(resp.SubmittedCommandIDs) != 1 ||
 			len(resp.DeferredHoldingAssetIds) != 0 {
-			t.Fatalf("unexpected configured emergency response=%#v points=%v", resp, fConfigured.dispatchedPointIDs())
+			t.Fatalf("unexpected configured emergency response=%#v points=%v cancel=%#v", resp, fConfigured.dispatchedPointIDs(), fConfigured.lastCancelPending)
 		}
 
-		fFallback := newShutdownPlantFixture(t)
-		fFallback.includeEmergencyPoint = false
-		fFallback.runStates[fFallback.chillerADevID] = "RUNNING"
-		fFallback.runStates[fFallback.chillerBDevID] = "STOPPED"
-		recFB := fFallback.postShutdown(`{"mode":"EMERGENCY_DO_RELEASE","confirmEmergencyDoRelease":true,"reason":"无专点回退安全急停","verificationCode":"123456"}`)
-		if recFB.Code != http.StatusOK {
-			t.Fatalf("fallback status=%d body=%s", recFB.Code, recFB.Body.String())
+		// Reconciles OUTCOME_UNKNOWN command on emergency DO device and proceeds even when telemetry returns 409 or 503.
+		for _, mode := range []string{"STALE", "UNAVAILABLE"} {
+			t.Run("degraded_"+strings.ToLower(mode), func(t *testing.T) {
+				fDegraded := newShutdownPlantFixture(t)
+				fDegraded.includeEmergencyPoint = true
+				fDegraded.telemetryMode[fDegraded.emergencyDevID] = mode
+				unknownCmdID := "019a8000-dddd-7000-8000-000000000099"
+				stopProfile, _ := commandmodel.CapabilityProfileFor(commandmodel.CapabilityStop)
+				ts := time.Date(2026, 11, 15, 15, 58, 0, 0, time.UTC)
+				fDegraded.listedCommands = []commandView{{
+					SchemaVersion: 1, CommandID: unknownCmdID, TenantID: fDegraded.tenantID, SiteID: fDegraded.siteID,
+					DeviceID: fDegraded.emergencyDevID, PointID: fDegraded.emergencyPointID, Capability: commandmodel.CapabilityStop,
+					CapabilityRevision: stopProfile.Revision, Status: commandmodel.IntentOutcomeUnknown,
+					Risk: commandmodel.RiskHigh, ApprovalPolicy: commandmodel.ApprovalNone,
+					Parameters: commandmodel.CommandParameters{}, DeviceCommandSequence: 99, Version: 5, SnapshotRevision: 1,
+					CreatedAt: ts, UpdatedAt: ts.Add(time.Minute),
+					Transitions: []commandTransitionView{
+						{ToStatus: commandmodel.IntentSubmitted, Reason: "COMMAND_SUBMITTED", ActorType: "PRINCIPAL", OccurredAt: ts, Version: 1},
+						{FromStatus: commandStatusPointer(commandmodel.IntentSubmitted), ToStatus: commandmodel.IntentValidating, Reason: "COMMAND_VALIDATING", ActorType: "WORKLOAD", OccurredAt: ts.Add(10 * time.Second), Version: 2},
+						{FromStatus: commandStatusPointer(commandmodel.IntentValidating), ToStatus: commandmodel.IntentQueued, Reason: "COMMAND_QUEUED", ActorType: "WORKLOAD", OccurredAt: ts.Add(20 * time.Second), Version: 3},
+						{FromStatus: commandStatusPointer(commandmodel.IntentQueued), ToStatus: commandmodel.IntentDispatching, Reason: "DISPATCH_ATTEMPT_PREPARED", ActorType: "WORKLOAD", OccurredAt: ts.Add(30 * time.Second), Version: 4},
+						{FromStatus: commandStatusPointer(commandmodel.IntentDispatching), ToStatus: commandmodel.IntentOutcomeUnknown, Reason: "LEASE_EXPIRED_WITHOUT_SEND_PROOF", ActorType: "WORKLOAD", OccurredAt: ts.Add(time.Minute), Version: 5},
+					},
+				}}
+
+				recDeg := fDegraded.postShutdown(`{"mode":"EMERGENCY_DO_RELEASE","confirmEmergencyDoRelease":true,"reason":"断采故障下仍必达急停","verificationCode":"123456"}`)
+				if recDeg.Code != http.StatusOK {
+					t.Fatalf("%s status=%d want 200 body=%s", mode, recDeg.Code, recDeg.Body.String())
+				}
+				if len(fDegraded.reconciledInputs) != 1 || fDegraded.reconciledInputs[0].Outcome != commandmodel.ReconciledNotApplied {
+					t.Fatalf("expected NOT_APPLIED reconciliation for OUTCOME_UNKNOWN, got %#v", fDegraded.reconciledInputs)
+				}
+				if !slices.Equal(fDegraded.dispatchedPointIDs(), []string{fDegraded.emergencyPointID}) {
+					t.Fatalf("expected emergency STOP dispatched under degraded %s telemetry, got %v", mode, fDegraded.dispatchedPointIDs())
+				}
+			})
 		}
-		var respFB siteControlShutdownResponse
-		if json.NewDecoder(recFB.Body).Decode(&respFB) != nil {
-			t.Fatalf("decode fallback failed: %s", recFB.Body.String())
+
+		// Missing EMERGENCY_DO_RELEASE point returns 409 EMERGENCY_DO_RELEASE_UNAVAILABLE without changing controlMode.
+		fAbsent := newShutdownPlantFixture(t)
+		fAbsent.includeEmergencyPoint = false
+		recAbsent := fAbsent.postShutdown(`{"mode":"EMERGENCY_DO_RELEASE","confirmEmergencyDoRelease":true,"reason":"未配置急停点拦截","verificationCode":"123456"}`)
+		var absentProblem platformapi.ProblemDetails
+		if recAbsent.Code != http.StatusConflict || json.NewDecoder(recAbsent.Body).Decode(&absentProblem) != nil ||
+			absentProblem.Code != "EMERGENCY_DO_RELEASE_UNAVAILABLE" {
+			t.Fatalf("absent status=%d want 409 EMERGENCY_DO_RELEASE_UNAVAILABLE problem=%#v body=%s", recAbsent.Code, absentProblem, recAbsent.Body.String())
 		}
-		fbPoints := fFallback.dispatchedPointIDs()
-		if !slices.Contains(fbPoints, fFallback.chillerAStopPointID) ||
-			slices.Contains(fbPoints, fFallback.chwp1StopPointID) ||
-			!slices.Contains(respFB.DeferredHoldingAssetIds, fFallback.chwp1AssetID) {
-			t.Fatalf("unexpected fallback behavior points=%v resp=%#v", fbPoints, respFB)
+		if fAbsent.controlModeUpdates.Load() != 0 || fAbsent.siteControlMode != siteControlModeRemoteAuto || len(fAbsent.dispatched) != 0 {
+			t.Fatalf("expected no control-mode mutation or command dispatch when emergency point absent, updates=%d mode=%s dispatched=%d",
+				fAbsent.controlModeUpdates.Load(), fAbsent.siteControlMode, len(fAbsent.dispatched))
 		}
 	})
 }
@@ -705,6 +790,9 @@ type shutdownPlantFixture struct {
 	siteControlRevision   int64
 	assetLocks            map[string]string
 	runStates             map[string]string
+	telemetryMode         map[string]string
+	listedCommands        []commandView
+	reconciledInputs      []internalCommandReconciliation
 	cancelledPendingIDs   []string
 	lastCancelPending     *internalCommandCancelPendingRequest
 	dispatched            []internalCommandCreate
@@ -747,6 +835,7 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 		emergencyPointID:    "019a8000-7100-7000-8000-000000000006",
 		siteControlMode:     siteControlModeRemoteAuto,
 		assetLocks:          map[string]string{},
+		telemetryMode:       map[string]string{},
 		runStates: map[string]string{
 			"019a8000-3000-7000-8000-000000000001": "RUNNING",
 			"019a8000-3000-7000-8000-000000000002": "RUNNING",
@@ -909,6 +998,9 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 	telemetryClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
 		deviceID := parts[len(parts)-2]
+		if f.telemetryMode[deviceID] == "UNAVAILABLE" {
+			return telemetryJSONResponse(http.StatusServiceUnavailable, map[string]any{"code": "TELEMETRY_UNAVAILABLE"}), nil
+		}
 		val := f.runStates[deviceID]
 		if val == "" {
 			val = "STOPPED"
@@ -918,15 +1010,21 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 		display := s2telemetryapi.DeviceDisplayStateOnline
 		instant := s2telemetryapi.Instant(now.Add(-time.Second).Format(time.RFC3339Nano))
 		policy := s2telemetryapi.PolicyRevision(5)
+		readiness := s2telemetryapi.TelemetryReadinessCurrent
+		freshness := "FRESH"
+		if f.telemetryMode[deviceID] == "STALE" {
+			readiness = s2telemetryapi.TelemetryReadinessDegraded
+			freshness = "STALE"
+		}
 		snapshot := s2telemetryapi.DeviceObservationSnapshot{
 			SchemaVersion: 1, TenantId: s2telemetryapi.UUIDv7(f.tenantID), SiteId: s2telemetryapi.UUIDv7(f.siteID), DeviceId: s2telemetryapi.UUIDv7(deviceID),
 			BusinessRevision: 17, EvaluatedAt: s2telemetryapi.Instant(now.Format(time.RFC3339Nano)),
 			EvaluationAvailability: s2telemetryapi.EvaluationAvailabilityAvailable, AvailabilityReasons: []s2telemetryapi.AvailabilityReasonCode{},
 			Presence:           s2telemetryapi.PresenceSnapshot{Applicability: s2telemetryapi.PresenceApplicabilityApplicable, CurrentState: &state, LastSeenAt: &instant, PolicyRevision: &policy},
-			TelemetryReadiness: s2telemetryapi.TelemetryReadinessCurrent, DisplayState: &display,
+			TelemetryReadiness: readiness, DisplayState: &display,
 			Values: []s2telemetryapi.TelemetryKeyState{{Present: &s2telemetryapi.TelemetryPresentState{
 				Key: s2telemetryapi.TelemetryKey("run_state"), State: "PRESENT", Value: json.RawMessage(rawVal), ValueType: "STRING",
-				SampledAt: instant, ReceivedAt: instant, Freshness: "FRESH", Quality: s2telemetryapi.TelemetryQualityGood,
+				SampledAt: instant, ReceivedAt: instant, Freshness: freshness, Quality: s2telemetryapi.TelemetryQualityGood,
 				QualityReasons: []s2telemetryapi.QualityReasonCode{}, PolicyRevision: policy,
 			}}},
 		}
@@ -945,6 +1043,27 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 				cancelled = []string{}
 			}
 			return telemetryJSONResponse(http.StatusOK, map[string]any{"cancelledCommandIds": cancelled}), nil
+		}
+		if strings.HasSuffix(request.URL.Path, "/reconcile") && request.Method == http.MethodPost {
+			var input internalCommandReconciliation
+			if json.NewDecoder(request.Body).Decode(&input) != nil {
+				t.Fatal("invalid reconcile payload")
+			}
+			f.reconciledInputs = append(f.reconciledInputs, input)
+			for _, existing := range f.listedCommands {
+				if strings.HasSuffix(request.URL.Path, "/"+existing.CommandID+"/reconcile") {
+					reconciled := existing
+					reconciled.Status = commandmodel.IntentFailed
+					reconciled.Version++
+					reconciled.UpdatedAt = now
+					reconciled.Transitions = append(append([]commandTransitionView(nil), existing.Transitions...), commandTransitionView{
+						FromStatus: commandStatusPointer(commandmodel.IntentOutcomeUnknown), ToStatus: commandmodel.IntentFailed,
+						Reason: "OPERATOR_RECONCILED_NOT_APPLIED", ActorType: "PRINCIPAL", OccurredAt: now, Version: reconciled.Version,
+					})
+					return telemetryJSONResponse(http.StatusOK, reconciled), nil
+				}
+			}
+			return telemetryJSONResponse(http.StatusNotFound, map[string]any{"code": "RESOURCE_NOT_FOUND"}), nil
 		}
 		if request.URL.Path == internalCommandsPath && request.Method == http.MethodPost {
 			var input internalCommandCreate
@@ -974,7 +1093,11 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 			}), nil
 		}
 		if request.URL.Path == internalCommandsPath && request.Method == http.MethodGet {
-			return telemetryJSONResponse(http.StatusOK, map[string][]commandView{"data": {}}), nil
+			listed := f.listedCommands
+			if listed == nil {
+				listed = []commandView{}
+			}
+			return telemetryJSONResponse(http.StatusOK, map[string][]commandView{"data": listed}), nil
 		}
 		t.Fatalf("unexpected command backend call %s %s", request.Method, request.URL.Path)
 		return nil, io.EOF
