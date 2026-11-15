@@ -69,18 +69,25 @@ WHERE pb.point_id = $1::uuid AND pb.device_id = $2::uuid AND pb.writable
 				}
 			}
 		}
-		var controlLocked bool
+		var siteControlMode string
+		var deviceLockMode string
 		if err := tx.QueryRow(ctx, `
-SELECT EXISTS (
-  SELECT 1 FROM core_registry.site_control_states_v1
-  WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND mode <> 'REMOTE_AUTO'
-) OR EXISTS (
-  SELECT 1 FROM core_registry.device_control_locks_v1
-  WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid AND lock_mode <> 'UNLOCKED'
-)`, envelope.TenantID, envelope.SiteID, envelope.DeviceID).Scan(&controlLocked); err != nil {
+SELECT
+  COALESCE((
+    SELECT mode FROM core_registry.site_control_states_v1
+    WHERE tenant_id = $1::uuid AND site_id = $2::uuid
+    LIMIT 1
+  ), ''),
+  COALESCE((
+    SELECT lock_mode FROM core_registry.device_control_locks_v1
+    WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid
+    ORDER BY (lock_mode <> 'UNLOCKED') DESC, revision DESC
+    LIMIT 1
+  ), '')
+`, envelope.TenantID, envelope.SiteID, envelope.DeviceID).Scan(&siteControlMode, &deviceLockMode); err != nil {
 			return fmt.Errorf("read command control lock state: %w", err)
 		}
-		if controlLocked {
+		if isControlLockBlocking(siteControlMode, deviceLockMode, envelope.Capability, route.ActuationMode) {
 			return commandmodel.ErrCommandControlDisabled
 		}
 		var credentialActive bool
@@ -101,6 +108,18 @@ SELECT EXISTS (
 		return commandmodel.DeviceRoute{}, err
 	}
 	return route, nil
+}
+
+func isControlLockBlocking(siteControlMode string, deviceLockMode string, capability commandmodel.Capability, actuationMode string) bool {
+	isShutdown := capability == commandmodel.CapabilityStop || capability == commandmodel.CapabilityStopUnitSequence
+	isEmergencyDoRelease := isShutdown && actuationMode == "EMERGENCY_DO_RELEASE"
+	if siteControlMode != "" && siteControlMode != "REMOTE_AUTO" && !isShutdown {
+		return true
+	}
+	if deviceLockMode != "" && deviceLockMode != "UNLOCKED" && !isEmergencyDoRelease {
+		return true
+	}
+	return false
 }
 
 // ResolveCommandInterlocks loads declarative peer interlock preconditions from the

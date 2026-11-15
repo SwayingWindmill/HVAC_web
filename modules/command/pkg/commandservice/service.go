@@ -320,10 +320,21 @@ func (s *Service) PrepareVerification(commandID, leaseOwner string, leaseUntil t
 			continue
 		}
 		if !attempt.VerificationDeadline.After(now) {
-			attempt.Status = commandmodel.AttemptOutcomeUnknown
+			decision, err := DecideVerificationResolutionWithEdge(
+				*intent,
+				commandmodel.VerificationEnvelope{EdgeExecution: attempt.EdgeExecution},
+				attempt.EdgeExecution,
+				commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut},
+				attempt.VerificationDeadline,
+				now,
+			)
+			if err != nil {
+				return commandmodel.VerificationEnvelope{}, err
+			}
+			attempt.Status = decision.AttemptFinal
 			attempt.Version++
 			attempt.UpdatedAt = now
-			transition(intent, commandmodel.IntentOutcomeUnknown, "REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED", "command-verifier", now, attempt.ID, attempt.ConnectorEvidenceID)
+			transition(intent, decision.IntentFinal, decision.Reason, "command-verifier", now, attempt.ID, attempt.ConnectorEvidenceID)
 			return commandmodel.VerificationEnvelope{}, ErrVerificationNotAvailable
 		}
 		if !attempt.VerificationLeaseUntil.IsZero() && attempt.VerificationLeaseUntil.After(now) {
@@ -385,6 +396,9 @@ func (s *Service) ResolveVerification(envelope commandmodel.VerificationEnvelope
 		return ErrStaleFence
 	}
 	now := s.now().UTC()
+	if envelope.EdgeExecution == nil && attempt.EdgeExecution != nil {
+		envelope.EdgeExecution = cloneEdgeExecutionEvidence(attempt.EdgeExecution)
+	}
 	decision, err := DecideVerificationResolution(*intent, envelope, result, attempt.VerificationDeadline, now)
 	if err != nil {
 		return err

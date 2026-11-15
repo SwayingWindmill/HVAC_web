@@ -390,3 +390,139 @@ func recordAcknowledgedConnectorEvidence(t *testing.T, store *PostgresStore, at 
 	}
 	return edge
 }
+
+func recordAcknowledgedTextConnectorEvidence(t *testing.T, store *PostgresStore, at time.Time, dispatch commandmodel.DispatchEnvelope, edge *commandmodel.EdgeExecutionEvidence) *commandmodel.EdgeExecutionEvidence {
+	t.Helper()
+	prepared := commandmodel.PreparedConnectorEvidence{
+		AttemptID: dispatch.AttemptID, CommandID: dispatch.CommandID,
+		TenantID: dispatch.TenantID, SiteID: dispatch.SiteID, DeviceID: dispatch.DeviceID,
+		ExternalDeviceID: "CHILLER-01", ExecutionFence: dispatch.ExecutionFence, PayloadHash: dispatch.PayloadHash,
+		MappingRevision: "mqtt-command-v1", BindingRevision: "registry-source-key:1",
+		ProviderEndpoint: "hvac/v1/018f3e00-4000-7000-8000-000000000100/down/command", ProviderMethod: string(dispatch.Capability),
+		RequestSHA256: strings.Repeat("a", 64), PreparedAt: at,
+	}
+	if err := store.PrepareConnectorEvidence(t.Context(), prepared); err != nil {
+		t.Fatalf("prepare connector evidence: %v", err)
+	}
+	if err := store.CompleteConnectorEvidence(t.Context(), commandmodel.CompletedConnectorEvidence{
+		PreparedConnectorEvidence: prepared, RequestWritten: true, ConnectorPhase: commandmodel.ConnectorAcknowledged,
+		ProviderStatusCode: 200, ResponseSHA256: strings.Repeat("b", 64), EdgeExecution: edge, CompletedAt: at,
+	}); err != nil {
+		t.Fatalf("complete connector evidence: %v", err)
+	}
+	return edge
+}
+
+func postgresStartStopCommandRequest(idempotencyKey string, capability commandmodel.Capability, at time.Time) commandmodel.SubmitRequest {
+	profile, _ := commandmodel.CapabilityProfileFor(capability)
+	return commandmodel.SubmitRequest{
+		TenantID: commandTenantA, SiteID: commandSiteA, DeviceID: commandDeviceA, PointID: commandPointA,
+		PrincipalID: commandPrincipalA, IdempotencyKey: idempotencyKey, Capability: capability,
+		Parameters: commandmodel.CommandParameters{}, VerificationPointKey: "equipment.run_state",
+		CurrentState: commandmodel.CurrentStateEvidence{
+			EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Quality: "GOOD",
+			BusinessRevision: 21, ObservedAt: at,
+		},
+		Authorization: commandmodel.AuthorizationSnapshot{
+			GrantID: "018f3e00-9000-7000-8000-000000000002", PolicyRevision: "command-policy-1",
+			Purpose: commandmodel.AuthorizationCommandSubmit, PrincipalID: commandPrincipalA,
+			TenantID: commandTenantA, SiteID: commandSiteA, DeviceID: commandDeviceA,
+			Capability: capability, MaximumRisk: commandmodel.RiskHigh, CapabilityRevision: profile.Revision,
+			EmergencyRevocationRevision: 1,
+			IssuedAt:                    at.Add(-5 * time.Second),
+			ExpiresAt:                   at.Add(25 * time.Second),
+		},
+	}
+}
+
+func TestPostgresExpiredPulseStartDoesNotFreezeAndUnblocksFollowup(t *testing.T) {
+	store, admin, now, cleanup := postgresDispatchFixture(t)
+	defer cleanup()
+	ctx := t.Context()
+
+	created, err := store.Submit(ctx, postgresStartStopCommandRequest("pulse-start-expired", commandmodel.CapabilityStart, *now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulseText := "u14:pulse(500ms)->0"
+	edge := &commandmodel.EdgeExecutionEvidence{
+		Requested: commandmodel.TextScalar("START"),
+		Effective: &commandmodel.ScalarValue{Text: &pulseText}, Applied: &commandmodel.ScalarValue{Text: &pulseText},
+		WinnerControllerID: "cloud-command-intent", Cycle: 1,
+	}
+	if err := store.ResolveDispatch(ctx, dispatch, commandmodel.ConnectorResult{
+		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "provider-ack-pulse",
+		EdgeExecution: recordAcknowledgedTextConnectorEvidence(t, store, *now, dispatch, edge),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	*now = now.Add(commandmodel.VerificationWindowFor(commandmodel.CapabilityStart) + time.Second)
+	if _, err := store.ClaimVerification(ctx, commandTenantA, "verifier-a", 15*time.Second); !errors.Is(err, ErrVerificationNotAvailable) {
+		t.Fatalf("expired pulse verification was leased: %v", err)
+	}
+	assertDispatchDatabaseState(t, admin, created.Intent.ID, "FAILED", "FAILED", 1, false)
+
+	var attemptEvidence, transitionReason string
+	if err := admin.QueryRow(ctx, `
+SELECT COALESCE(a.verification_evidence_id, ''),
+       COALESCE((SELECT t.reason FROM command_runtime.command_transitions t WHERE t.command_id = a.command_id ORDER BY t.command_version DESC LIMIT 1), '')
+FROM command_runtime.command_attempts a
+WHERE a.command_id = $1::uuid
+`, created.Intent.ID).Scan(&attemptEvidence, &transitionReason); err != nil {
+		t.Fatal(err)
+	}
+	if attemptEvidence != commandmodel.ReasonPulseDeliveredPowerUnconfirmed || transitionReason != commandmodel.ReasonPulseDeliveredPowerUnconfirmed {
+		t.Fatalf("unexpected evidence/reason: evidence=%q reason=%q", attemptEvidence, transitionReason)
+	}
+
+	// Subsequent STOP command on the same device must NOT be blocked by a frozen control group.
+	followup, err := store.Submit(ctx, postgresStartStopCommandRequest("pulse-followup-stop", commandmodel.CapabilityStop, *now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextDispatch, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-b", 10*time.Second)
+	if err != nil {
+		t.Fatalf("follow-up STOP dispatch was deadlocked after pulse failure: %v", err)
+	}
+	if nextDispatch.CommandID != followup.Intent.ID {
+		t.Fatalf("claimed unexpected command %s want %s", nextDispatch.CommandID, followup.Intent.ID)
+	}
+}
+
+func TestPostgresExpiredLevelStartStillFreezesControlGroup(t *testing.T) {
+	store, admin, now, cleanup := postgresDispatchFixture(t)
+	defer cleanup()
+	ctx := t.Context()
+
+	created, err := store.Submit(ctx, postgresStartStopCommandRequest("level-start-expired", commandmodel.CapabilityStart, *now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	levelText := "u11:1"
+	edge := &commandmodel.EdgeExecutionEvidence{
+		Requested: commandmodel.TextScalar("START"),
+		Effective: &commandmodel.ScalarValue{Text: &levelText}, Applied: &commandmodel.ScalarValue{Text: &levelText},
+		WinnerControllerID: "cloud-command-intent", Cycle: 1,
+	}
+	if err := store.ResolveDispatch(ctx, dispatch, commandmodel.ConnectorResult{
+		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "provider-ack-level",
+		EdgeExecution: recordAcknowledgedTextConnectorEvidence(t, store, *now, dispatch, edge),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	*now = now.Add(commandmodel.VerificationWindowFor(commandmodel.CapabilityStart) + time.Second)
+	if _, err := store.ClaimVerification(ctx, commandTenantA, "verifier-a", 15*time.Second); !errors.Is(err, ErrVerificationNotAvailable) {
+		t.Fatalf("expired level verification was leased: %v", err)
+	}
+	assertDispatchDatabaseState(t, admin, created.Intent.ID, "OUTCOME_UNKNOWN", "OUTCOME_UNKNOWN", 1, true)
+}

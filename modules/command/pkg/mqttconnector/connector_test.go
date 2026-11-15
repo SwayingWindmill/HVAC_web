@@ -315,6 +315,27 @@ func TestBuildCommandEnvelopeActuationFields(t *testing.T) {
 			t.Fatalf("unexpected UNIT_SEQUENCE json=%s", string(seqBody))
 		}
 	})
+
+	t.Run("EMERGENCY_DO_RELEASE omits coilAddress and serializes pointCode actuationMode and all-do channel", func(t *testing.T) {
+		eStopEnv := env
+		eStopEnv.Capability = commandmodel.CapabilityStop
+		eStopMsg := buildCommandEnvelope(eStopEnv, commandmodel.DeviceRoute{
+			GatewayID: "gw-1", ExternalDeviceID: "et1010", BindingRevision: 1,
+			PointCode: "emergency_do_release", ActuationMode: "EMERGENCY_DO_RELEASE", Channel: "all-do",
+		}, "et1010", now, expireAt, 15*time.Second)
+		eStopBody, err := json.Marshal(eStopMsg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(eStopBody, []byte(`"coilAddress"`)) {
+			t.Fatalf("EMERGENCY_DO_RELEASE must omit coilAddress, json=%s", string(eStopBody))
+		}
+		for _, want := range []string{`"pointCode":"emergency_do_release"`, `"actuationMode":"EMERGENCY_DO_RELEASE"`, `"channel":"all-do"`} {
+			if !bytes.Contains(eStopBody, []byte(want)) {
+				t.Fatalf("missing %s in EMERGENCY_DO_RELEASE json=%s", want, string(eStopBody))
+			}
+		}
+	})
 }
 
 func TestBuildCommandEnvelopeUsesCapabilityVerificationWindowAndValidateConfigTimeout(t *testing.T) {

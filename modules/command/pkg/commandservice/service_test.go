@@ -431,3 +431,203 @@ func fixedClock() func() time.Time {
 		return time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
 	}
 }
+
+func TestDecideVerificationResolutionPulseDualReadback(t *testing.T) {
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	deadline := now.Add(10 * time.Minute)
+	pulseText := "u14:pulse(500ms)->0"
+	stuckPulseText := "u14:pulse(500ms)->1"
+	levelText := "u11:1"
+	requested := commandmodel.TextScalar("START")
+
+	pulseDual := &commandmodel.EdgeExecutionEvidence{
+		Requested: requested, Effective: &commandmodel.ScalarValue{Text: &pulseText}, Applied: &commandmodel.ScalarValue{Text: &pulseText},
+		WinnerControllerID: "cloud-command-intent", Cycle: 1,
+	}
+	pulseStuck := &commandmodel.EdgeExecutionEvidence{
+		Requested: requested, Effective: &commandmodel.ScalarValue{Text: &stuckPulseText}, Applied: &commandmodel.ScalarValue{Text: &stuckPulseText},
+		WinnerControllerID: "cloud-command-intent", Cycle: 1,
+	}
+	levelCoil := &commandmodel.EdgeExecutionEvidence{
+		Requested: requested, Effective: &commandmodel.ScalarValue{Text: &levelText}, Applied: &commandmodel.ScalarValue{Text: &levelText},
+		WinnerControllerID: "cloud-command-intent", Cycle: 1,
+	}
+
+	makeEnvelope := func(cap commandmodel.Capability, edge *commandmodel.EdgeExecutionEvidence) (commandmodel.CommandIntent, commandmodel.VerificationEnvelope) {
+		intent := commandmodel.CommandIntent{
+			ID: "cmd-1", TenantID: "t-1", SiteID: "s-1", DeviceID: "d-1", PointID: "p-1",
+			Capability: cap, VerificationPointKey: "equipment.run_state", SnapshotRevision: 10,
+		}
+		env := commandmodel.VerificationEnvelope{
+			CommandID: "cmd-1", AttemptID: "att-1", TenantID: "t-1", SiteID: "s-1", DeviceID: "d-1", PointID: "p-1",
+			Capability: cap, VerificationPointKey: "equipment.run_state", BaselineBusinessRevision: 10,
+			AcknowledgedAt: now, VerificationDeadline: deadline, EdgeExecution: edge,
+		}
+		return intent, env
+	}
+
+	tests := []struct {
+		name        string
+		capability  commandmodel.Capability
+		edge        *commandmodel.EdgeExecutionEvidence
+		result      commandmodel.VerificationResult
+		at          time.Time
+		wantAttempt commandmodel.AttemptStatus
+		wantIntent  commandmodel.IntentStatus
+		wantReason  string
+		wantFreeze  bool
+		wantVerify  bool
+	}{
+		{
+			name:        "pulse START timed out fails without freeze",
+			capability:  commandmodel.CapabilityStart,
+			edge:        pulseDual,
+			result:      commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-timeout"},
+			at:          deadline.Add(time.Second),
+			wantAttempt: commandmodel.AttemptFailed,
+			wantIntent:  commandmodel.IntentFailed,
+			wantReason:  commandmodel.ReasonPulseDeliveredPowerUnconfirmed,
+			wantFreeze:  false,
+		},
+		{
+			name:        "pulse STOP mismatch fails without freeze",
+			capability:  commandmodel.CapabilityStop,
+			edge:        pulseDual,
+			result:      commandmodel.VerificationResult{Outcome: commandmodel.VerificationMismatch, EvidenceID: "ev-mismatch"},
+			at:          now.Add(time.Minute),
+			wantAttempt: commandmodel.AttemptFailed,
+			wantIntent:  commandmodel.IntentFailed,
+			wantReason:  commandmodel.ReasonPulseDeliveredPowerUnconfirmed,
+			wantFreeze:  false,
+		},
+		{
+			name:        "pulse START late verified past deadline still fails without freeze",
+			capability:  commandmodel.CapabilityStart,
+			edge:        pulseDual,
+			result:      commandmodel.VerificationResult{Outcome: commandmodel.VerificationSucceeded, EvidenceID: "ev-late", Reported: commandmodel.ReportedStateEvidence{TenantID: "t-1", SiteID: "s-1", DeviceID: "d-1", EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD", BusinessRevision: 11, ReportedValue: commandmodel.TextScalar("RUNNING"), ObservedAt: now.Add(time.Second)}},
+			at:          deadline.Add(time.Second),
+			wantAttempt: commandmodel.AttemptFailed,
+			wantIntent:  commandmodel.IntentFailed,
+			wantReason:  commandmodel.ReasonPulseDeliveredPowerUnconfirmed,
+			wantFreeze:  false,
+		},
+		{
+			name:        "pulse START in window succeeds",
+			capability:  commandmodel.CapabilityStart,
+			edge:        pulseDual,
+			result:      commandmodel.VerificationResult{Outcome: commandmodel.VerificationSucceeded, EvidenceID: "ev-ok", Reported: commandmodel.ReportedStateEvidence{TenantID: "t-1", SiteID: "s-1", DeviceID: "d-1", EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD", BusinessRevision: 11, ReportedValue: commandmodel.TextScalar("RUNNING"), ObservedAt: now.Add(time.Second)}},
+			at:          now.Add(10 * time.Second),
+			wantAttempt: commandmodel.AttemptVerified,
+			wantIntent:  commandmodel.IntentSucceeded,
+			wantReason:  "ACKNOWLEDGED_AND_REPORTED_STATE_VERIFIED",
+			wantFreeze:  false,
+			wantVerify:  true,
+		},
+		{
+			name:        "level START timed out freezes OUTCOME_UNKNOWN",
+			capability:  commandmodel.CapabilityStart,
+			edge:        levelCoil,
+			result:      commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-level-timeout"},
+			at:          deadline.Add(time.Second),
+			wantAttempt: commandmodel.AttemptOutcomeUnknown,
+			wantIntent:  commandmodel.IntentOutcomeUnknown,
+			wantReason:  "REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED",
+			wantFreeze:  true,
+		},
+		{
+			name:        "pulse stuck high freezes OUTCOME_UNKNOWN",
+			capability:  commandmodel.CapabilityStart,
+			edge:        pulseStuck,
+			result:      commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-stuck"},
+			at:          deadline.Add(time.Second),
+			wantAttempt: commandmodel.AttemptOutcomeUnknown,
+			wantIntent:  commandmodel.IntentOutcomeUnknown,
+			wantReason:  "REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED",
+			wantFreeze:  true,
+		},
+		{
+			name:        "missing edge freezes OUTCOME_UNKNOWN",
+			capability:  commandmodel.CapabilityStart,
+			edge:        nil,
+			result:      commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-nil-edge"},
+			at:          deadline.Add(time.Second),
+			wantAttempt: commandmodel.AttemptOutcomeUnknown,
+			wantIntent:  commandmodel.IntentOutcomeUnknown,
+			wantReason:  "REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED",
+			wantFreeze:  true,
+		},
+		{
+			name:        "unit sequence timed out freezes OUTCOME_UNKNOWN even with pulse readback",
+			capability:  commandmodel.CapabilityStartUnitSequence,
+			edge:        pulseDual,
+			result:      commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-seq"},
+			at:          deadline.Add(time.Second),
+			wantAttempt: commandmodel.AttemptOutcomeUnknown,
+			wantIntent:  commandmodel.IntentOutcomeUnknown,
+			wantReason:  "REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED",
+			wantFreeze:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			intent, env := makeEnvelope(tc.capability, tc.edge)
+			decision, err := DecideVerificationResolution(intent, env, tc.result, deadline, tc.at)
+			if err != nil {
+				t.Fatalf("DecideVerificationResolution error: %v", err)
+			}
+			if decision.AttemptFinal != tc.wantAttempt || decision.IntentFinal != tc.wantIntent ||
+				decision.Reason != tc.wantReason || decision.FreezeControlGroup != tc.wantFreeze ||
+				decision.Verified != tc.wantVerify {
+				t.Fatalf("got %+v, want attempt=%s intent=%s reason=%s freeze=%v verified=%v",
+					decision, tc.wantAttempt, tc.wantIntent, tc.wantReason, tc.wantFreeze, tc.wantVerify)
+			}
+		})
+	}
+}
+
+func TestServicePrepareVerificationPulseExpiryFailsWithoutBlockingFollowup(t *testing.T) {
+	now := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
+	svc := New(func() time.Time { return now })
+
+	submitStart := validRequest()
+	submitStart.IdempotencyKey = "pulse-start-1"
+	submitStart.Capability = commandmodel.CapabilityStart
+	submitStart.Parameters = commandmodel.CommandParameters{}
+	submitStart.VerificationPointKey = "chiller.run_state"
+	submitStart.Authorization.Capability = commandmodel.CapabilityStart
+	submitStart.Authorization.CapabilityRevision = "capability:start:v1"
+	res, err := svc.Submit(submitStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disp, err := svc.PrepareDispatch(res.Intent.ID, "disp-1", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulse := "u14:pulse(500ms)->0"
+	if err := svc.ResolveDispatch(disp, commandmodel.ConnectorResult{
+		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "ev-ack",
+		EdgeExecution: &commandmodel.EdgeExecutionEvidence{
+			Requested: commandmodel.TextScalar("START"),
+			Effective: &commandmodel.ScalarValue{Text: &pulse}, Applied: &commandmodel.ScalarValue{Text: &pulse},
+			WinnerControllerID: "edge", Cycle: 1,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(10*time.Minute + time.Second)
+	if _, err := svc.PrepareVerification(res.Intent.ID, "ver-1", now.Add(time.Minute)); !errors.Is(err, ErrVerificationNotAvailable) {
+		t.Fatalf("expected ErrVerificationNotAvailable, got %v", err)
+	}
+	settled, err := svc.Get(res.Intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.Status != commandmodel.IntentFailed {
+		t.Fatalf("expected IntentFailed, got %s", settled.Status)
+	}
+	if len(settled.Transitions) == 0 || settled.Transitions[len(settled.Transitions)-1].Reason != commandmodel.ReasonPulseDeliveredPowerUnconfirmed {
+		t.Fatalf("unexpected transition reason: %+v", settled.Transitions)
+	}
+}

@@ -370,6 +370,16 @@ func (e EdgeExecutionEvidence) ValidExecuted() bool {
 	return e.Valid() && e.Effective != nil
 }
 
+// ValidPulseDualReadback reports whether edge execution evidence proves a pulse relay
+// closed and then returned to 0 (dual readback: "${channel}:pulse(${duration}ms)->0").
+func (e EdgeExecutionEvidence) ValidPulseDualReadback() bool {
+	if !e.ValidExecuted() || e.Applied == nil || e.Applied.Text == nil || e.Applied.Number != nil || e.Applied.Boolean != nil {
+		return false
+	}
+	applied := *e.Applied.Text
+	return strings.Contains(applied, ":pulse(") && strings.HasSuffix(applied, ")->0")
+}
+
 func (value ScalarValue) Valid() bool {
 	count := 0
 	if value.Number != nil {
@@ -519,6 +529,8 @@ const (
 	VerificationInconclusive VerificationOutcome = "INCONCLUSIVE"
 	VerificationMismatch     VerificationOutcome = "MISMATCH"
 	VerificationTimedOut     VerificationOutcome = "TIMED_OUT"
+
+	ReasonPulseDeliveredPowerUnconfirmed = "PULSE_DELIVERED_POWER_UNCONFIRMED"
 )
 
 type VerificationEnvelope struct {

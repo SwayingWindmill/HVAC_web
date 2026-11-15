@@ -162,7 +162,7 @@ func (store *PostgresStore) resolveVerificationOnce(ctx context.Context, envelop
 
 	var intent commandmodel.CommandIntent
 	var capability, attemptStatus, attemptPayloadHash, connectorEvidenceID string
-	var parameters []byte
+	var parameters, edgeExecutionJSON []byte
 	var activeFence, attemptFence, attemptVersion uint64
 	var acknowledgedAt, verificationDeadline, verificationLeaseUntil time.Time
 	var verificationLeaseOwner string
@@ -170,10 +170,15 @@ func (store *PostgresStore) resolveVerificationOnce(ctx context.Context, envelop
 SELECT i.command_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
        i.capability_name, i.capability_revision, i.canonical_parameters, i.verification_point_key,
        i.payload_hash, i.snapshot_revision, i.version, i.status, i.active_execution_fence,
-       a.status, a.version, a.execution_fence, a.payload_hash, a.connector_evidence_id,
-       a.acknowledged_at, a.verification_deadline, a.verification_lease_owner, a.verification_lease_until
+       a.status, a.version, a.execution_fence, a.payload_hash, COALESCE(a.connector_evidence_id, ''),
+       a.acknowledged_at, a.verification_deadline, a.verification_lease_owner, a.verification_lease_until,
+       ce.edge_execution_evidence
 FROM command_runtime.command_intents i
 JOIN command_runtime.command_attempts a ON a.command_id = i.command_id
+LEFT JOIN command_runtime.connector_evidence ce
+  ON ce.tenant_id = i.tenant_id AND ce.command_id = i.command_id
+ AND ce.attempt_id = a.attempt_id AND ce.execution_fence = a.execution_fence
+ AND ce.connector_phase = 'ACKNOWLEDGED'
 WHERE i.tenant_id = $1::uuid AND i.command_id = $2::uuid AND a.attempt_id = $3::uuid
 FOR UPDATE OF i, a
 `, envelope.TenantID, envelope.CommandID, envelope.AttemptID).Scan(
@@ -182,6 +187,7 @@ FOR UPDATE OF i, a
 		&intent.PayloadHash, &intent.SnapshotRevision, &intent.Version, &intent.Status, &activeFence,
 		&attemptStatus, &attemptVersion, &attemptFence, &attemptPayloadHash, &connectorEvidenceID,
 		&acknowledgedAt, &verificationDeadline, &verificationLeaseOwner, &verificationLeaseUntil,
+		&edgeExecutionJSON,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrCommandNotFound
@@ -191,6 +197,13 @@ FOR UPDATE OF i, a
 	}
 	if err := json.Unmarshal(parameters, &intent.Parameters); err != nil {
 		return fmt.Errorf("decode verification resolution parameters: %w", err)
+	}
+	if len(edgeExecutionJSON) > 0 {
+		var dbEdge commandmodel.EdgeExecutionEvidence
+		if err := json.Unmarshal(edgeExecutionJSON, &dbEdge); err != nil {
+			return fmt.Errorf("decode verification connector edge execution: %w", err)
+		}
+		envelope.EdgeExecution = &dbEdge
 	}
 	intent.Capability = commandmodel.Capability(capability)
 	if intent.Status != commandmodel.IntentDispatching || attemptStatus != string(commandmodel.AttemptAcknowledged) ||
@@ -258,6 +271,7 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 	if err := insertDispatchAudit(ctx, tx, auditID, intent, "COMMAND_REPORTED_STATE_VERIFICATION_RESOLVED", map[string]any{
 		"attemptId": envelope.AttemptID, "executionFence": envelope.ExecutionFence,
 		"outcome": result.Outcome, "verified": verified, "reason": reason,
+		"intentStatus": intentFinal, "freezeControlGroup": freeze,
 		"connectorEvidenceId": envelope.ConnectorEvidenceID, "verificationEvidenceId": result.EvidenceID,
 		"baselineBusinessRevision": envelope.BaselineBusinessRevision, "reportedBusinessRevision": result.Reported.BusinessRevision,
 	}, now); err != nil {
@@ -271,14 +285,26 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 
 func (store *PostgresStore) reconcileExpiredAcknowledgedAttempts(ctx context.Context, tx pgx.Tx, tenantID string, now time.Time) error {
 	type expiredVerification struct {
-		AttemptID, CommandID, SiteID, DeviceID, PayloadHash, ConnectorEvidenceID string
-		Fence, IntentVersion, AttemptVersion                                     uint64
+		AttemptID, CommandID, SiteID, DeviceID, PointID        string
+		Capability, CapabilityRevision, VerificationPointKey   string
+		PayloadHash, ConnectorEvidenceID                       string
+		Parameters, EdgeExecutionJSON                          []byte
+		SnapshotRevision, Fence, IntentVersion, AttemptVersion uint64
+		AcknowledgedAt, VerificationDeadline                   time.Time
 	}
 	rows, err := tx.Query(ctx, `
 SELECT a.attempt_id::text, a.command_id::text, a.site_id::text, a.device_id::text,
-       a.payload_hash, a.connector_evidence_id, a.execution_fence, i.version, a.version
+       i.point_id::text, i.capability_name, i.capability_revision, i.canonical_parameters,
+       i.verification_point_key, i.snapshot_revision,
+       a.payload_hash, COALESCE(a.connector_evidence_id, ''), a.execution_fence,
+       i.version, a.version, a.acknowledged_at, a.verification_deadline,
+       ce.edge_execution_evidence
 FROM command_runtime.command_attempts a
 JOIN command_runtime.command_intents i ON i.command_id = a.command_id
+LEFT JOIN command_runtime.connector_evidence ce
+  ON ce.tenant_id = i.tenant_id AND ce.command_id = i.command_id
+ AND ce.attempt_id = a.attempt_id AND ce.execution_fence = a.execution_fence
+ AND ce.connector_phase = 'ACKNOWLEDGED'
 WHERE a.tenant_id = $1::uuid
   AND a.status = 'ACKNOWLEDGED'
   AND a.verification_deadline <= $2
@@ -292,8 +318,14 @@ LIMIT 50
 	items := make([]expiredVerification, 0)
 	for rows.Next() {
 		var item expiredVerification
-		if err := rows.Scan(&item.AttemptID, &item.CommandID, &item.SiteID, &item.DeviceID,
-			&item.PayloadHash, &item.ConnectorEvidenceID, &item.Fence, &item.IntentVersion, &item.AttemptVersion); err != nil {
+		if err := rows.Scan(
+			&item.AttemptID, &item.CommandID, &item.SiteID, &item.DeviceID,
+			&item.PointID, &item.Capability, &item.CapabilityRevision, &item.Parameters,
+			&item.VerificationPointKey, &item.SnapshotRevision,
+			&item.PayloadHash, &item.ConnectorEvidenceID, &item.Fence,
+			&item.IntentVersion, &item.AttemptVersion, &item.AcknowledgedAt, &item.VerificationDeadline,
+			&item.EdgeExecutionJSON,
+		); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan expired reported-state verification: %w", err)
 		}
@@ -305,6 +337,61 @@ LIMIT 50
 	}
 	rows.Close()
 	for _, item := range items {
+		var params commandmodel.CommandParameters
+		if err := json.Unmarshal(item.Parameters, &params); err != nil {
+			return fmt.Errorf("decode expired verification command parameters: %w", err)
+		}
+		var edgeExecution *commandmodel.EdgeExecutionEvidence
+		if len(item.EdgeExecutionJSON) > 0 {
+			var parsed commandmodel.EdgeExecutionEvidence
+			if err := json.Unmarshal(item.EdgeExecutionJSON, &parsed); err == nil {
+				edgeExecution = &parsed
+			}
+		}
+		intent := commandmodel.CommandIntent{
+			ID:                   item.CommandID,
+			TenantID:             tenantID,
+			SiteID:               item.SiteID,
+			DeviceID:             item.DeviceID,
+			PointID:              item.PointID,
+			Capability:           commandmodel.Capability(item.Capability),
+			CapabilityRevision:   item.CapabilityRevision,
+			Parameters:           params,
+			VerificationPointKey: item.VerificationPointKey,
+			PayloadHash:          item.PayloadHash,
+			SnapshotRevision:     item.SnapshotRevision,
+			Version:              item.IntentVersion,
+			Status:               commandmodel.IntentDispatching,
+		}
+		envelope := commandmodel.VerificationEnvelope{
+			CommandID:                item.CommandID,
+			AttemptID:                item.AttemptID,
+			TenantID:                 tenantID,
+			SiteID:                   item.SiteID,
+			DeviceID:                 item.DeviceID,
+			PointID:                  item.PointID,
+			Capability:               intent.Capability,
+			CapabilityRevision:       item.CapabilityRevision,
+			Parameters:               params,
+			VerificationPointKey:     item.VerificationPointKey,
+			PayloadHash:              item.PayloadHash,
+			ExecutionFence:           item.Fence,
+			BaselineBusinessRevision: item.SnapshotRevision,
+			AcknowledgedAt:           item.AcknowledgedAt,
+			VerificationDeadline:     item.VerificationDeadline,
+			ConnectorEvidenceID:      item.ConnectorEvidenceID,
+			EdgeExecution:            edgeExecution,
+		}
+		decision, err := DecideVerificationResolution(
+			intent,
+			envelope,
+			commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut},
+			item.VerificationDeadline,
+			now,
+		)
+		if err != nil {
+			return err
+		}
 		transitionID, err := store.newID(now)
 		if err != nil {
 			return err
@@ -315,21 +402,22 @@ LIMIT 50
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_attempts
-SET status = 'OUTCOME_UNKNOWN', version = $4,
-    verification_evidence_id = 'REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED',
-    verification_lease_owner = NULL, verification_lease_until = NULL, updated_at = $5
+SET status = $4, version = $5,
+    verification_evidence_id = $6,
+    verification_lease_owner = NULL, verification_lease_until = NULL, updated_at = $7
 WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND attempt_id = $3::uuid
-`, tenantID, item.CommandID, item.AttemptID, item.AttemptVersion+1, now); err != nil {
+`, tenantID, item.CommandID, item.AttemptID, decision.AttemptFinal, item.AttemptVersion+1, decision.Reason, now); err != nil {
 			return fmt.Errorf("expire reported-state verification attempt: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_intents
-SET status = 'OUTCOME_UNKNOWN', version = $3, updated_at = $4
+SET status = $3, version = $4, updated_at = $5
 WHERE tenant_id = $1::uuid AND command_id = $2::uuid
-`, tenantID, item.CommandID, item.IntentVersion+1, now); err != nil {
+`, tenantID, item.CommandID, decision.IntentFinal, item.IntentVersion+1, now); err != nil {
 			return fmt.Errorf("expire reported-state verification intent: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
+		if decision.FreezeControlGroup {
+			if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.device_control_state
 SET frozen_control_groups = CASE
       WHEN frozen_control_groups ? $3 THEN frozen_control_groups
@@ -338,18 +426,21 @@ SET frozen_control_groups = CASE
     updated_at = $4
 WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 `, tenantID, item.DeviceID, setpointControlGroup, now); err != nil {
-			return fmt.Errorf("freeze expired verification control group: %w", err)
+				return fmt.Errorf("freeze expired verification control group: %w", err)
+			}
 		}
-		intent := commandmodel.CommandIntent{ID: item.CommandID, TenantID: tenantID, SiteID: item.SiteID, DeviceID: item.DeviceID, PayloadHash: item.PayloadHash, Version: item.IntentVersion}
 		if err := insertDispatchTransition(ctx, tx, transitionID, intent, item.IntentVersion+1,
-			commandmodel.IntentDispatching, commandmodel.IntentOutcomeUnknown,
-			"REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED", "command-verifier", item.AttemptID,
-			"REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED", now); err != nil {
+			commandmodel.IntentDispatching, decision.IntentFinal,
+			decision.Reason, "command-verifier", item.AttemptID,
+			decision.Reason, now); err != nil {
 			return err
 		}
 		if err := insertDispatchAudit(ctx, tx, auditID, intent, "COMMAND_REPORTED_STATE_VERIFICATION_EXPIRED", map[string]any{
 			"attemptId": item.AttemptID, "executionFence": item.Fence,
 			"connectorEvidenceId": item.ConnectorEvidenceID,
+			"intentStatus":        decision.IntentFinal,
+			"reason":              decision.Reason,
+			"freezeControlGroup":  decision.FreezeControlGroup,
 		}, now); err != nil {
 			return err
 		}

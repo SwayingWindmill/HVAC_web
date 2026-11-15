@@ -29,3 +29,88 @@ func TestVerificationWindowForCapabilities(t *testing.T) {
 		}
 	}
 }
+
+func TestEdgeExecutionEvidenceValidPulseDualReadback(t *testing.T) {
+	str := func(v string) *ScalarValue { return &ScalarValue{Text: &v} }
+	num := func(v float64) *ScalarValue { return &ScalarValue{Number: &v} }
+	requested := ScalarValue{Number: func() *float64 { v := 1.0; return &v }()}
+
+	tests := []struct {
+		name     string
+		evidence EdgeExecutionEvidence
+		want     bool
+	}{
+		{
+			name: "valid pulse dual readback",
+			evidence: EdgeExecutionEvidence{
+				Requested:          requested,
+				Effective:          str("u14:pulse(500ms)->0"),
+				Applied:            str("u14:pulse(500ms)->0"),
+				WinnerControllerID: "edge-local",
+				Cycle:              1,
+			},
+			want: true,
+		},
+		{
+			name: "level coil applied is false",
+			evidence: EdgeExecutionEvidence{
+				Requested:          requested,
+				Effective:          str("u11:1"),
+				Applied:            str("u11:1"),
+				WinnerControllerID: "edge-local",
+				Cycle:              1,
+			},
+			want: false,
+		},
+		{
+			name: "pulse stuck high is false",
+			evidence: EdgeExecutionEvidence{
+				Requested:          requested,
+				Effective:          str("u14:pulse(500ms)->1"),
+				Applied:            str("u14:pulse(500ms)->1"),
+				WinnerControllerID: "edge-local",
+				Cycle:              1,
+			},
+			want: false,
+		},
+		{
+			name: "request committed without effective is false",
+			evidence: EdgeExecutionEvidence{
+				Requested:          requested,
+				Effective:          nil,
+				Applied:            str("u14:pulse(500ms)->0"),
+				WinnerControllerID: "edge-local",
+				Cycle:              1,
+			},
+			want: false,
+		},
+		{
+			name: "missing applied is false",
+			evidence: EdgeExecutionEvidence{
+				Requested:          requested,
+				Effective:          str("u14:pulse(500ms)->0"),
+				Applied:            nil,
+				WinnerControllerID: "edge-local",
+				Cycle:              1,
+			},
+			want: false,
+		},
+		{
+			name: "numeric applied is false",
+			evidence: EdgeExecutionEvidence{
+				Requested:          requested,
+				Effective:          str("u14:pulse(500ms)->0"),
+				Applied:            num(0),
+				WinnerControllerID: "edge-local",
+				Cycle:              1,
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		if got := tc.evidence.ValidPulseDualReadback(); got != tc.want {
+			t.Fatalf("%s: ValidPulseDualReadback() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

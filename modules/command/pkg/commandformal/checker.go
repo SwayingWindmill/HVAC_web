@@ -60,6 +60,9 @@ const (
 	stepSubmitLowRisk protoStepKind = iota + 1
 	stepSubmitMediumRisk
 	stepSubmitHighRisk
+	stepSubmitStartPulse
+	stepSubmitStopPulse
+	stepSubmitStartUnitSequence
 	stepApproveValid
 	stepApproveSelfRejected
 	stepCancelIntent
@@ -75,6 +78,7 @@ const (
 	stepResolveExecRejected
 	stepResolveRequestCommitted
 	stepResolveAckValid
+	stepResolveAckPulseDualReadback
 	stepResolveAckMissingEdge
 	stepResolveDispatchStaleFence
 	stepPrepareVerification
@@ -93,6 +97,12 @@ func (k protoStepKind) String() string {
 		return "Submit(mediumRisk)"
 	case stepSubmitHighRisk:
 		return "Submit(highRisk)"
+	case stepSubmitStartPulse:
+		return "Submit(start)"
+	case stepSubmitStopPulse:
+		return "Submit(stop)"
+	case stepSubmitStartUnitSequence:
+		return "Submit(startUnitSequence)"
 	case stepApproveValid:
 		return "Approve(validApprover)"
 	case stepApproveSelfRejected:
@@ -123,6 +133,8 @@ func (k protoStepKind) String() string {
 		return "ResolveDispatch(requestCommitted)"
 	case stepResolveAckValid:
 		return "ResolveDispatch(ackValidEdge)"
+	case stepResolveAckPulseDualReadback:
+		return "ResolveDispatch(ackPulseDualReadback)"
 	case stepResolveAckMissingEdge:
 		return "ResolveDispatch(ackWithoutEdge)"
 	case stepResolveDispatchStaleFence:
@@ -145,20 +157,22 @@ func (k protoStepKind) String() string {
 }
 
 type protoStateKey struct {
-	submitted           bool
-	intentStatus        commandmodel.IntentStatus
-	attemptCount        int
-	attemptStatus       commandmodel.AttemptStatus
-	corrState           commandmodel.CorrelationState
-	publishesAttempt    int
-	deviceFrozen        bool
-	verificationOpen    bool
-	pastDeadline        bool
-	staleAttemptUsed    bool
-	selfApproveTried    bool
-	expiredClaimTry     bool
-	missingEdgeTried    bool
-	cancelDispatchTried bool
+	submitted            bool
+	capability           commandmodel.Capability
+	intentStatus         commandmodel.IntentStatus
+	attemptCount         int
+	attemptStatus        commandmodel.AttemptStatus
+	ackPulseDualReadback bool
+	corrState            commandmodel.CorrelationState
+	publishesAttempt     int
+	deviceFrozen         bool
+	verificationOpen     bool
+	pastDeadline         bool
+	staleAttemptUsed     bool
+	selfApproveTried     bool
+	expiredClaimTry      bool
+	missingEdgeTried     bool
+	cancelDispatchTried  bool
 }
 
 type protoNode struct {
@@ -167,22 +181,24 @@ type protoNode struct {
 }
 
 type protoSim struct {
-	now                 time.Time
-	service             *commandservice.Service
-	commandID           string
-	targetSetpoint      float64
-	dispatchEnv         commandmodel.DispatchEnvelope
-	verifyEnv           commandmodel.VerificationEnvelope
-	hasVerifyEnv        bool
-	corrState           commandmodel.CorrelationState
-	publishesAttempt    int
-	deviceFrozen        bool
-	staleAttemptUsed    bool
-	selfApproveTried    bool
-	expiredClaimTry     bool
-	missingEdgeTried    bool
-	cancelDispatchTried bool
-	stepCount           int
+	now                  time.Time
+	service              *commandservice.Service
+	commandID            string
+	capability           commandmodel.Capability
+	targetSetpoint       float64
+	ackPulseDualReadback bool
+	dispatchEnv          commandmodel.DispatchEnvelope
+	verifyEnv            commandmodel.VerificationEnvelope
+	hasVerifyEnv         bool
+	corrState            commandmodel.CorrelationState
+	publishesAttempt     int
+	deviceFrozen         bool
+	staleAttemptUsed     bool
+	selfApproveTried     bool
+	expiredClaimTry      bool
+	missingEdgeTried     bool
+	cancelDispatchTried  bool
+	stepCount            int
 }
 
 func newProtoSim() *protoSim {
@@ -204,20 +220,22 @@ func (s *protoSim) key() protoStateKey {
 		attemptStatus = intent.Attempts[len(intent.Attempts)-1].Status
 	}
 	return protoStateKey{
-		submitted:           true,
-		intentStatus:        intent.Status,
-		attemptCount:        len(intent.Attempts),
-		attemptStatus:       attemptStatus,
-		corrState:           s.corrState,
-		publishesAttempt:    s.publishesAttempt,
-		deviceFrozen:        s.deviceFrozen,
-		verificationOpen:    s.hasVerifyEnv,
-		pastDeadline:        s.hasVerifyEnv && s.now.After(s.verifyEnv.VerificationDeadline),
-		staleAttemptUsed:    s.staleAttemptUsed,
-		selfApproveTried:    s.selfApproveTried,
-		expiredClaimTry:     s.expiredClaimTry,
-		missingEdgeTried:    s.missingEdgeTried,
-		cancelDispatchTried: s.cancelDispatchTried,
+		submitted:            true,
+		capability:           s.capability,
+		intentStatus:         intent.Status,
+		attemptCount:         len(intent.Attempts),
+		attemptStatus:        attemptStatus,
+		ackPulseDualReadback: s.ackPulseDualReadback,
+		corrState:            s.corrState,
+		publishesAttempt:     s.publishesAttempt,
+		deviceFrozen:         s.deviceFrozen,
+		verificationOpen:     s.hasVerifyEnv,
+		pastDeadline:         s.hasVerifyEnv && s.now.After(s.verifyEnv.VerificationDeadline),
+		staleAttemptUsed:     s.staleAttemptUsed,
+		selfApproveTried:     s.selfApproveTried,
+		expiredClaimTry:      s.expiredClaimTry,
+		missingEdgeTried:     s.missingEdgeTried,
+		cancelDispatchTried:  s.cancelDispatchTried,
 	}
 }
 
@@ -253,6 +271,7 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 		case stepSubmitHighRisk:
 			setpoint = 26.0
 		}
+		sim.capability = commandmodel.CapabilitySetTemperatureSetpoint
 		sim.targetSetpoint = setpoint
 		req := makeSubmitRequest("formal-req", setpoint, sim.now)
 		res, err := sim.service.Submit(req)
@@ -264,6 +283,28 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 				Property: PropertyP1,
 				Suite:    "SingleCommandProtocol",
 				Summary:  fmt.Sprintf("high-risk submit did not enter QUEUED with ApprovalNone directly: risk=%s policy=%s status=%s", res.Intent.Risk, res.Intent.ApprovalPolicy, res.Intent.Status),
+			}, nil
+		}
+		sim.commandID = res.Intent.ID
+
+	case stepSubmitStartPulse, stepSubmitStopPulse, stepSubmitStartUnitSequence:
+		capability := commandmodel.CapabilityStart
+		if step == stepSubmitStopPulse {
+			capability = commandmodel.CapabilityStop
+		} else if step == stepSubmitStartUnitSequence {
+			capability = commandmodel.CapabilityStartUnitSequence
+		}
+		sim.capability = capability
+		req := makeSubmitRequestForCapability("formal-req", capability, sim.now)
+		res, err := sim.service.Submit(req)
+		if err != nil {
+			return nil, fmt.Errorf("submit %s failed unexpectedly: %w", capability, err)
+		}
+		if res.Intent.Risk != commandmodel.RiskHigh || res.Intent.ApprovalPolicy != commandmodel.ApprovalNone || res.Intent.Status != commandmodel.IntentQueued {
+			return &Counterexample{
+				Property: PropertyP1,
+				Suite:    "SingleCommandProtocol",
+				Summary:  fmt.Sprintf("%s submit did not enter QUEUED with ApprovalNone directly: risk=%s policy=%s status=%s", capability, res.Intent.Risk, res.Intent.ApprovalPolicy, res.Intent.Status),
 			}, nil
 		}
 		sim.commandID = res.Intent.ID
@@ -322,7 +363,7 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 			CommandID:     sim.commandID,
 			TenantID:      baseTenantID,
 			Reason:        "OPERATOR_CANCELLED",
-			Authorization: submitAuthorization(submitPrincipalID, sim.now, commandmodel.RiskHigh),
+			Authorization: submitAuthorizationFor(submitPrincipalID, intent.Capability, sim.now, commandmodel.RiskHigh),
 		}
 		if intent.Status != commandmodel.IntentAwaitingApproval && intent.Status != commandmodel.IntentQueued {
 			sim.cancelDispatchTried = true
@@ -375,6 +416,7 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 		sim.dispatchEnv = env
 		sim.corrState = ""
 		sim.publishesAttempt = 0
+		sim.ackPulseDualReadback = false
 		sim.hasVerifyEnv = false
 
 	case stepPrepareDispatchExpiredGrant:
@@ -507,21 +549,19 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 			}, nil
 		}
 
-	case stepResolveAckValid:
-		target := 24.0
-		if sim.targetSetpoint > 0 {
-			target = sim.targetSetpoint
-		}
+	case stepResolveAckValid, stepResolveAckPulseDualReadback:
+		pulseDual := step == stepResolveAckPulseDualReadback
 		res := commandmodel.ConnectorResult{
 			Phase:         commandmodel.ConnectorAcknowledged,
 			Acknowledged:  true,
 			Verified:      false,
 			EvidenceID:    "ev-ack-" + sim.dispatchEnv.AttemptID,
-			EdgeExecution: validEdgeExecution(target),
+			EdgeExecution: protoEdgeExecution(sim, pulseDual),
 		}
 		if err := sim.service.ResolveDispatch(sim.dispatchEnv, res); err != nil {
 			return nil, fmt.Errorf("resolve valid ack failed: %w", err)
 		}
+		sim.ackPulseDualReadback = pulseDual
 		sim.corrState = commandmodel.CorrelationResolved
 		intent := mustIntent(sim)
 		if intent.Status != commandmodel.IntentDispatching || isIntentTerminal(intent.Status) {
@@ -583,14 +623,10 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 
 	case stepResolveVerificationValidInWindow:
 		sim.now = sim.now.Add(2 * time.Second)
-		target := 24.0
-		if sim.targetSetpoint > 0 {
-			target = sim.targetSetpoint
-		}
 		vRes := commandmodel.VerificationResult{
 			Outcome:    commandmodel.VerificationSucceeded,
 			EvidenceID: "ev-verify-ok",
-			Reported:   validReportedEvidence(target, sim.verifyEnv.AcknowledgedAt.Add(time.Second), sim.verifyEnv.BaselineBusinessRevision+1),
+			Reported:   protoReportedEvidence(sim, true),
 		}
 		if err := sim.service.ResolveVerification(sim.verifyEnv, vRes); err != nil {
 			return nil, fmt.Errorf("resolve verification in window failed: %w", err)
@@ -605,31 +641,22 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 		vRes := commandmodel.VerificationResult{
 			Outcome:    commandmodel.VerificationMismatch,
 			EvidenceID: "ev-verify-mismatch",
-			Reported:   validReportedEvidence(21, sim.verifyEnv.AcknowledgedAt.Add(time.Second), sim.verifyEnv.BaselineBusinessRevision+1),
+			Reported:   protoReportedEvidence(sim, false),
 		}
 		if err := sim.service.ResolveVerification(sim.verifyEnv, vRes); err != nil {
 			return nil, fmt.Errorf("resolve verification mismatch failed: %w", err)
 		}
 		sim.hasVerifyEnv = false
-		sim.deviceFrozen = !hooks.UnfreezeWithoutReconcile
-		if !sim.deviceFrozen {
-			return &Counterexample{
-				Property: PropertyP3,
-				Suite:    "SingleCommandProtocol",
-				Summary:  "verification mismatch transitioned to OUTCOME_UNKNOWN without freezing control group",
-			}, nil
+		if cx := verifyUnconfirmedProtoSettlement(sim, mustIntent(sim), hooks, "verification mismatch"); cx != nil {
+			return cx, nil
 		}
 
 	case stepResolveVerificationValidPastDeadline:
 		sim.now = sim.verifyEnv.VerificationDeadline.Add(time.Second)
-		target := 24.0
-		if sim.targetSetpoint > 0 {
-			target = sim.targetSetpoint
-		}
 		vRes := commandmodel.VerificationResult{
 			Outcome:    commandmodel.VerificationSucceeded,
 			EvidenceID: "ev-verify-late",
-			Reported:   validReportedEvidence(target, sim.verifyEnv.AcknowledgedAt.Add(time.Second), sim.verifyEnv.BaselineBusinessRevision+1),
+			Reported:   protoReportedEvidence(sim, true),
 		}
 		if err := sim.service.ResolveVerification(sim.verifyEnv, vRes); err != nil {
 			return nil, fmt.Errorf("resolve verification past deadline returned err: %w", err)
@@ -647,13 +674,8 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 				Summary:  "verification settled IntentSucceeded after VerificationDeadline expired",
 			}, nil
 		}
-		sim.deviceFrozen = !hooks.UnfreezeWithoutReconcile
-		if intent.Status != commandmodel.IntentOutcomeUnknown || !sim.deviceFrozen {
-			return &Counterexample{
-				Property: PropertyP3,
-				Suite:    "SingleCommandProtocol",
-				Summary:  fmt.Sprintf("expired verification did not enter frozen OUTCOME_UNKNOWN: status=%s frozen=%v", intent.Status, sim.deviceFrozen),
-			}, nil
+		if cx := verifyUnconfirmedProtoSettlement(sim, intent, hooks, "expired verification"); cx != nil {
+			return cx, nil
 		}
 
 	case stepReconcileApplied, stepReconcileNotApplied:
@@ -661,13 +683,13 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 		if step == stepReconcileNotApplied {
 			outcome = commandmodel.ReconciledNotApplied
 		}
+		intent := mustIntent(sim)
 		req := commandmodel.ReconcileRequest{
 			CommandID:     sim.commandID,
 			TenantID:      baseTenantID,
 			Outcome:       outcome,
-			Authorization: submitAuthorization(reconcilePrincipalID, sim.now, commandmodel.RiskHigh),
+			Authorization: submitAuthorizationFor(reconcilePrincipalID, intent.Capability, sim.now, commandmodel.RiskHigh),
 		}
-		intent := mustIntent(sim)
 		if intent.Status != commandmodel.IntentOutcomeUnknown {
 			decision, err := commandservice.DecideOperatorReconcile(intent, req, sim.now)
 			if err == nil {
@@ -704,13 +726,100 @@ func mustIntent(sim *protoSim) commandmodel.CommandIntent {
 	return intent
 }
 
+func protoEdgeExecution(sim *protoSim, pulseDual bool) *commandmodel.EdgeExecutionEvidence {
+	if pulseDual {
+		return validPulseEdgeExecution("u14", 500)
+	}
+	switch sim.capability {
+	case commandmodel.CapabilityStart, commandmodel.CapabilityStop, commandmodel.CapabilityStartUnitSequence:
+		return validLevelEdgeExecution("u11", 1)
+	default:
+		target := 24.0
+		if sim.targetSetpoint > 0 {
+			target = sim.targetSetpoint
+		}
+		return validEdgeExecution(target)
+	}
+}
+
+func protoReportedEvidence(sim *protoSim, match bool) commandmodel.ReportedStateEvidence {
+	observedAt := sim.verifyEnv.AcknowledgedAt.Add(time.Second)
+	revision := sim.verifyEnv.BaselineBusinessRevision + 1
+	switch sim.capability {
+	case commandmodel.CapabilityStart, commandmodel.CapabilityStartUnitSequence:
+		if match {
+			return validReportedTextEvidence("RUNNING", observedAt, revision)
+		}
+		return validReportedTextEvidence("STOPPED", observedAt, revision)
+	case commandmodel.CapabilityStop:
+		if match {
+			return validReportedTextEvidence("STOPPED", observedAt, revision)
+		}
+		return validReportedTextEvidence("RUNNING", observedAt, revision)
+	default:
+		target := 24.0
+		if sim.targetSetpoint > 0 {
+			target = sim.targetSetpoint
+		}
+		if !match {
+			target = 21
+		}
+		return validReportedEvidence(target, observedAt, revision)
+	}
+}
+
+func lastTransitionReason(intent commandmodel.CommandIntent) string {
+	if len(intent.Transitions) == 0 {
+		return ""
+	}
+	return intent.Transitions[len(intent.Transitions)-1].Reason
+}
+
+func verifyUnconfirmedProtoSettlement(sim *protoSim, intent commandmodel.CommandIntent, hooks FaultHooks, contextLabel string) *Counterexample {
+	if (intent.Capability == commandmodel.CapabilityStart || intent.Capability == commandmodel.CapabilityStop) && sim.ackPulseDualReadback {
+		reason := lastTransitionReason(intent)
+		if intent.Status != commandmodel.IntentFailed || sim.deviceFrozen || reason != commandmodel.ReasonPulseDeliveredPowerUnconfirmed {
+			return &Counterexample{
+				Property: PropertyP3,
+				Suite:    "SingleCommandProtocol",
+				Summary:  fmt.Sprintf("%s on pulse %s with dual readback must fail without freeze (%s/%s frozen=%v)", contextLabel, intent.Capability, intent.Status, reason, sim.deviceFrozen),
+			}
+		}
+		followup := makeSyntheticIntentForCapability(2, commandmodel.CapabilityStop, commandmodel.IntentQueued, true, sim.now)
+		if !commandservice.CanClaimQueuedIntent(followup, sim.deviceFrozen, []commandmodel.IntentStatus{intent.Status}, sim.now) {
+			return &Counterexample{
+				Property: PropertyP3,
+				Suite:    "SingleCommandProtocol",
+				Summary:  fmt.Sprintf("follow-up START/STOP deadlocked after pulse %s failed without freeze", intent.Capability),
+			}
+		}
+		return nil
+	}
+	sim.deviceFrozen = !hooks.UnfreezeWithoutReconcile
+	if intent.Status != commandmodel.IntentOutcomeUnknown || !sim.deviceFrozen {
+		return &Counterexample{
+			Property: PropertyP3,
+			Suite:    "SingleCommandProtocol",
+			Summary:  fmt.Sprintf("%s did not enter frozen OUTCOME_UNKNOWN: capability=%s status=%s frozen=%v", contextLabel, intent.Capability, intent.Status, sim.deviceFrozen),
+		}
+	}
+	return nil
+}
+
 func candidateProtoSteps(sim *protoSim) []protoStepKind {
 	if sim.commandID == "" {
 		// Distinguish initial unsubmitted state from settled protocol completion.
 		if sim.stepCount > 0 {
 			return nil
 		}
-		return []protoStepKind{stepSubmitLowRisk, stepSubmitMediumRisk, stepSubmitHighRisk}
+		return []protoStepKind{
+			stepSubmitLowRisk,
+			stepSubmitMediumRisk,
+			stepSubmitHighRisk,
+			stepSubmitStartPulse,
+			stepSubmitStopPulse,
+			stepSubmitStartUnitSequence,
+		}
 	}
 	intent := mustIntent(sim)
 	var latestAttemptStatus commandmodel.AttemptStatus
@@ -758,6 +867,9 @@ func candidateProtoSteps(sim *protoSim) []protoStepKind {
 					stepResolveRequestCommitted,
 					stepResolveAckValid,
 				)
+				if sim.capability == commandmodel.CapabilityStart || sim.capability == commandmodel.CapabilityStop || sim.capability == commandmodel.CapabilityStartUnitSequence {
+					out = append(out, stepResolveAckPulseDualReadback)
+				}
 			}
 		case commandmodel.AttemptAcknowledged:
 			if !sim.staleAttemptUsed {
@@ -845,13 +957,14 @@ func CheckSingleCommandProtocol(hooks FaultHooks) (SuiteReport, error) {
 }
 
 type multiCmdState struct {
-	c1Status     commandmodel.IntentStatus
-	c2Status     commandmodel.IntentStatus
-	c1Attempts   uint8
-	c2Attempts   uint8
-	c1GrantValid bool
-	c2GrantValid bool
-	deviceFrozen bool
+	c1Status           commandmodel.IntentStatus
+	c2Status           commandmodel.IntentStatus
+	c1Attempts         uint8
+	c2Attempts         uint8
+	c1GrantValid       bool
+	c2GrantValid       bool
+	c1PulseUnconfirmed bool
+	deviceFrozen       bool
 }
 
 type multiCmdNode struct {
@@ -860,9 +973,22 @@ type multiCmdNode struct {
 }
 
 func makeSyntheticIntent(seq uint64, status commandmodel.IntentStatus, grantValid bool, now time.Time) commandmodel.CommandIntent {
+	return makeSyntheticIntentForCapability(seq, commandmodel.CapabilitySetTemperatureSetpoint, status, grantValid, now)
+}
+
+func makeSyntheticIntentForCapability(seq uint64, capability commandmodel.Capability, status commandmodel.IntentStatus, grantValid bool, now time.Time) commandmodel.CommandIntent {
 	issuedAt := now
 	if !grantValid {
 		issuedAt = now.Add(-(grantLifetime + 5*time.Second))
+	}
+	profile, ok := commandmodel.CapabilityProfileFor(capability)
+	revision := setpointCapabilityRev
+	var params commandmodel.CommandParameters
+	if ok {
+		revision = profile.Revision
+		if profile.ParameterKey == commandmodel.ParameterSetpointC {
+			params = commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}
+		}
 	}
 	return commandmodel.CommandIntent{
 		ID:                    fmt.Sprintf("cmd-%d", seq),
@@ -871,16 +997,16 @@ func makeSyntheticIntent(seq uint64, status commandmodel.IntentStatus, grantVali
 		DeviceID:              baseDeviceID,
 		PointID:               basePointID,
 		PrincipalID:           submitPrincipalID,
-		Capability:            commandmodel.CapabilitySetTemperatureSetpoint,
-		CapabilityRevision:    setpointCapabilityRev,
-		Risk:                  commandmodel.RiskLow,
+		Capability:            capability,
+		CapabilityRevision:    revision,
+		Risk:                  commandmodel.RiskHigh,
 		ApprovalPolicy:        commandmodel.ApprovalNone,
-		Parameters:            commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24},
+		Parameters:            params,
 		VerificationPointKey:  setpointVerificationKey,
 		SnapshotRevision:      17,
 		DeviceCommandSequence: seq,
 		Status:                status,
-		Authorization:         submitAuthorization(submitPrincipalID, issuedAt, commandmodel.RiskHigh),
+		Authorization:         submitAuthorizationFor(submitPrincipalID, capability, issuedAt, commandmodel.RiskHigh),
 	}
 }
 
@@ -941,6 +1067,7 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 	visited := map[multiCmdState]bool{initial: true}
 	transitions := 0
 	now := baseModelTime
+	sawPulseUnconfirmedThenNextSucceeded := false
 
 	enqueue := func(next multiCmdState, action string, parentTrace []string) (*Counterexample, error) {
 		transitions++
@@ -964,7 +1091,7 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 
 		// Try claiming cmd 1 (no earlier commands).
 		if st.c1Status == commandmodel.IntentQueued && st.c1Attempts < maxAttemptsPerCommand {
-			i1 := makeSyntheticIntent(1, st.c1Status, st.c1GrantValid, now)
+			i1 := makeSyntheticIntentForCapability(1, commandmodel.CapabilityStart, st.c1Status, st.c1GrantValid, now)
 			canClaim := commandservice.CanClaimQueuedIntent(i1, st.deviceFrozen, nil, now)
 			if hooks.BypassExpiredGrantOnClaim && !st.c1GrantValid {
 				canClaim = true
@@ -983,7 +1110,7 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 
 		// Try claiming cmd 2 (gated by cmd 1 status).
 		if st.c2Status == commandmodel.IntentQueued && st.c2Attempts < maxAttemptsPerCommand {
-			i2 := makeSyntheticIntent(2, st.c2Status, st.c2GrantValid, now)
+			i2 := makeSyntheticIntentForCapability(2, commandmodel.CapabilityStop, st.c2Status, st.c2GrantValid, now)
 			if commandservice.CanClaimQueuedIntent(i2, st.deviceFrozen, []commandmodel.IntentStatus{st.c1Status}, now) {
 				next := st
 				next.c2Status = commandmodel.IntentDispatching
@@ -1041,13 +1168,17 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 			if !grantValid || (status != commandmodel.IntentAwaitingApproval && status != commandmodel.IntentQueued) {
 				continue
 			}
+			cancelCap := commandmodel.CapabilityStart
+			if cmdNum == 2 {
+				cancelCap = commandmodel.CapabilityStop
+			}
 			decision, err := commandservice.DecideCommandCancel(
-				makeSyntheticIntent(uint64(cmdNum), status, grantValid, now),
+				makeSyntheticIntentForCapability(uint64(cmdNum), cancelCap, status, grantValid, now),
 				commandmodel.CancelRequest{
 					CommandID:     fmt.Sprintf("cmd-%d", cmdNum),
 					TenantID:      baseTenantID,
 					Reason:        "OPERATOR_CANCELLED",
-					Authorization: submitAuthorization(submitPrincipalID, now, commandmodel.RiskHigh),
+					Authorization: submitAuthorizationFor(submitPrincipalID, cancelCap, now, commandmodel.RiskHigh),
 				},
 				now,
 			)
@@ -1070,8 +1201,14 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 		// Resolve dispatching outcomes for cmd 1 & cmd 2 using production DecideDispatchResolution / DecideVerificationResolution.
 		for cmdNum := 1; cmdNum <= 2; cmdNum++ {
 			status := st.c1Status
+			cmdCap := commandmodel.CapabilityStart
+			seqCap := commandmodel.CapabilityStartUnitSequence
+			expectedReported := "RUNNING"
 			if cmdNum == 2 {
 				status = st.c2Status
+				cmdCap = commandmodel.CapabilityStop
+				seqCap = commandmodel.CapabilityStopUnitSequence
+				expectedReported = "STOPPED"
 			}
 			if status != commandmodel.IntentDispatching {
 				continue
@@ -1084,31 +1221,40 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 				{label: "PreSendTerminal", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorPreSendRejected, FailureCode: "COMMAND_CONTROL_DISABLED"}},
 				{label: "ExecRejected", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorExecutionRejected, FailureCode: "MQTT_EDGE_INTERLOCK_OPEN"}},
 				{label: "RequestCommitted", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorRequestCommitted, FailureCode: "MQTT_COMMAND_REPLY_TIMEOUT"}},
-				{label: "AckVerified", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validEdgeExecution(24)}},
+				{label: "AckVerified", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validPulseEdgeExecution("u14", 500)}},
+				{label: "AckPulseExpired", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validPulseEdgeExecution("u14", 500)}},
+				{label: "AckPulseLateVerified", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validPulseEdgeExecution("u14", 500)}},
+				{label: "AckLevelExpired", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validLevelEdgeExecution("u11", 1)}},
+				{label: "AckUnitSequencePulseExpired", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validPulseEdgeExecution("u14", 500)}},
 			}
 			for _, outcome := range outcomes {
-				decision, err := commandservice.DecideDispatchResolution(commandmodel.CapabilitySetTemperatureSetpoint, outcome.res, now)
+				evalCap := cmdCap
+				if outcome.label == "AckUnitSequencePulseExpired" {
+					evalCap = seqCap
+				}
+				decision, err := commandservice.DecideDispatchResolution(evalCap, outcome.res, now)
 				if err != nil {
 					return SuiteReport{}, err
 				}
 				next := st
 				targetStatus := decision.IntentFinal
 				frozen := decision.FreezeControlGroup
-				if outcome.label == "AckVerified" {
+				switch outcome.label {
+				case "AckVerified":
 					vDec, vErr := commandservice.DecideVerificationResolution(
-						makeSyntheticIntent(uint64(cmdNum), commandmodel.IntentDispatching, true, now),
+						makeSyntheticIntentForCapability(uint64(cmdNum), evalCap, commandmodel.IntentDispatching, true, now),
 						commandmodel.VerificationEnvelope{
 							VerificationPointKey:     setpointVerificationKey,
 							BaselineBusinessRevision: 17,
 							AcknowledgedAt:           now,
-							EdgeExecution:            validEdgeExecution(24),
+							EdgeExecution:            outcome.res.EdgeExecution,
 						},
 						commandmodel.VerificationResult{
 							Outcome:    commandmodel.VerificationSucceeded,
 							EvidenceID: "ev-multi",
-							Reported:   validReportedEvidence(24, now.Add(time.Second), 18),
+							Reported:   validReportedTextEvidence(expectedReported, now.Add(time.Second), 18),
 						},
-						now.Add(defaultVerificationGrace),
+						now.Add(commandmodel.VerificationWindowFor(evalCap)),
 						now.Add(2*time.Second),
 					)
 					if vErr != nil {
@@ -1116,6 +1262,72 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 					}
 					targetStatus = vDec.IntentFinal
 					frozen = vDec.FreezeControlGroup
+				case "AckPulseExpired", "AckPulseLateVerified", "AckLevelExpired", "AckUnitSequencePulseExpired":
+					deadline := now.Add(commandmodel.VerificationWindowFor(evalCap))
+					pastDeadline := deadline.Add(time.Second)
+					vRes := commandmodel.VerificationResult{
+						Outcome:    commandmodel.VerificationTimedOut,
+						EvidenceID: "ev-multi-expired",
+					}
+					if outcome.label == "AckPulseLateVerified" {
+						vRes = commandmodel.VerificationResult{
+							Outcome:    commandmodel.VerificationSucceeded,
+							EvidenceID: "ev-multi-late-verified",
+							Reported:   validReportedTextEvidence(expectedReported, now.Add(time.Second), 18),
+						}
+					}
+					vDec, vErr := commandservice.DecideVerificationResolution(
+						makeSyntheticIntentForCapability(uint64(cmdNum), evalCap, commandmodel.IntentDispatching, true, now),
+						commandmodel.VerificationEnvelope{
+							VerificationPointKey:     setpointVerificationKey,
+							BaselineBusinessRevision: 17,
+							AcknowledgedAt:           now,
+							EdgeExecution:            outcome.res.EdgeExecution,
+						},
+						vRes,
+						deadline,
+						pastDeadline,
+					)
+					if vErr != nil {
+						return SuiteReport{}, vErr
+					}
+					if outcome.label == "AckPulseLateVerified" && (hooks.IgnoreVerificationDeadline || vDec.IntentFinal == commandmodel.IntentSucceeded) {
+						trace := append(append([]string(nil), cur.trace...), fmt.Sprintf("Resolve(cmd-%d,%s)", cmdNum, outcome.label))
+						return SuiteReport{
+							Suite:         "MultiCommandDeviceExclusivity",
+							VisitedStates: len(visited),
+							Transitions:   transitions,
+							Passed:        false,
+							Counterexample: &Counterexample{
+								Property: PropertyP5,
+								Suite:    "MultiCommandDeviceExclusivity",
+								Summary:  "pulse verification settled SUCCEEDED after 10m VerificationDeadline expired",
+								Trace:    trace,
+							},
+						}, nil
+					}
+					targetStatus = vDec.IntentFinal
+					frozen = vDec.FreezeControlGroup
+					if outcome.label == "AckPulseExpired" || outcome.label == "AckPulseLateVerified" {
+						if targetStatus != commandmodel.IntentFailed || vDec.Reason != commandmodel.ReasonPulseDeliveredPowerUnconfirmed || frozen {
+							trace := append(append([]string(nil), cur.trace...), fmt.Sprintf("Resolve(cmd-%d,%s)", cmdNum, outcome.label))
+							return SuiteReport{
+								Suite:         "MultiCommandDeviceExclusivity",
+								VisitedStates: len(visited),
+								Transitions:   transitions,
+								Passed:        false,
+								Counterexample: &Counterexample{
+									Property: PropertyP3,
+									Suite:    "MultiCommandDeviceExclusivity",
+									Summary:  fmt.Sprintf("pulse power-unconfirmed resolution violated contract: status=%s reason=%s frozen=%v", targetStatus, vDec.Reason, frozen),
+									Trace:    trace,
+								},
+							}, nil
+						}
+						if cmdNum == 1 {
+							next.c1PulseUnconfirmed = true
+						}
+					}
 				}
 				if hooks.UnfreezeWithoutReconcile && targetStatus == commandmodel.IntentOutcomeUnknown {
 					frozen = false
@@ -1126,6 +1338,9 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 					next.c2Status = targetStatus
 				}
 				next.deviceFrozen = st.deviceFrozen || frozen
+				if st.c1PulseUnconfirmed && cmdNum == 2 && outcome.label == "AckVerified" && targetStatus == commandmodel.IntentSucceeded && !next.deviceFrozen {
+					sawPulseUnconfirmedThenNextSucceeded = true
+				}
 				if cx, err := enqueue(next, fmt.Sprintf("Resolve(cmd-%d,%s)", cmdNum, outcome.label), cur.trace); err != nil {
 					return SuiteReport{}, err
 				} else if cx != nil {
@@ -1144,13 +1359,17 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 				continue
 			}
 			for _, outcome := range []commandmodel.ReconciledOutcome{commandmodel.ReconciledApplied, commandmodel.ReconciledNotApplied} {
+				reconcileCap := commandmodel.CapabilityStart
+				if cmdNum == 2 {
+					reconcileCap = commandmodel.CapabilityStop
+				}
 				decision, err := commandservice.DecideOperatorReconcile(
-					makeSyntheticIntent(uint64(cmdNum), status, true, now),
+					makeSyntheticIntentForCapability(uint64(cmdNum), reconcileCap, status, true, now),
 					commandmodel.ReconcileRequest{
 						CommandID:     fmt.Sprintf("cmd-%d", cmdNum),
 						TenantID:      baseTenantID,
 						Outcome:       outcome,
-						Authorization: submitAuthorization(reconcilePrincipalID, now, commandmodel.RiskHigh),
+						Authorization: submitAuthorizationFor(reconcilePrincipalID, reconcileCap, now, commandmodel.RiskHigh),
 					},
 					now,
 				)
@@ -1173,6 +1392,20 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 				}
 			}
 		}
+	}
+
+	if !sawPulseUnconfirmedThenNextSucceeded {
+		return SuiteReport{
+			Suite:         "MultiCommandDeviceExclusivity",
+			VisitedStates: len(visited),
+			Transitions:   transitions,
+			Passed:        false,
+			Counterexample: &Counterexample{
+				Property: PropertyP3,
+				Suite:    "MultiCommandDeviceExclusivity",
+				Summary:  "pulse power-unconfirmed FAILED outcome failed to allow subsequent START/STOP command completion",
+			},
+		}, nil
 	}
 
 	return SuiteReport{

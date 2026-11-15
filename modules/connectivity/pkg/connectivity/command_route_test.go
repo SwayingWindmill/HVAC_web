@@ -1,0 +1,116 @@
+package connectivity
+
+import (
+	"testing"
+
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+)
+
+func TestIsControlLockBlocking(t *testing.T) {
+	tests := []struct {
+		name            string
+		siteControlMode string
+		deviceLockMode  string
+		capability      commandmodel.Capability
+		actuationMode   string
+		want            bool
+	}{
+		{
+			name:            "empty lock states allow control",
+			siteControlMode: "",
+			deviceLockMode:  "",
+			capability:      commandmodel.CapabilityStart,
+			actuationMode:   "PULSE",
+			want:            false,
+		},
+		{
+			name:            "remote auto and unlocked allow all commands",
+			siteControlMode: "REMOTE_AUTO",
+			deviceLockMode:  "UNLOCKED",
+			capability:      commandmodel.CapabilitySetFrequency,
+			actuationMode:   "LEVEL",
+			want:            false,
+		},
+		{
+			name:            "manual override blocks non-shutdown commands",
+			siteControlMode: "MANUAL_OVERRIDE",
+			deviceLockMode:  "UNLOCKED",
+			capability:      commandmodel.CapabilityStart,
+			actuationMode:   "PULSE",
+			want:            true,
+		},
+		{
+			name:            "safe shutdown exit blocks setpoint commands",
+			siteControlMode: "SAFE_SHUTDOWN_EXIT",
+			deviceLockMode:  "",
+			capability:      commandmodel.CapabilitySetTemperatureSetpoint,
+			actuationMode:   "",
+			want:            true,
+		},
+		{
+			name:            "manual override allows stop to release holding channel",
+			siteControlMode: "MANUAL_OVERRIDE",
+			deviceLockMode:  "UNLOCKED",
+			capability:      commandmodel.CapabilityStop,
+			actuationMode:   "LEVEL",
+			want:            false,
+		},
+		{
+			name:            "safe shutdown exit allows stop unit sequence",
+			siteControlMode: "SAFE_SHUTDOWN_EXIT",
+			deviceLockMode:  "",
+			capability:      commandmodel.CapabilityStopUnitSequence,
+			actuationMode:   "UNIT_SEQUENCE",
+			want:            false,
+		},
+		{
+			name:            "device lock blocks normal stop under remote auto",
+			siteControlMode: "REMOTE_AUTO",
+			deviceLockMode:  "MAINTENANCE_LOCKED",
+			capability:      commandmodel.CapabilityStop,
+			actuationMode:   "LEVEL",
+			want:            true,
+		},
+		{
+			name:            "device lock blocks normal stop under safe shutdown exit",
+			siteControlMode: "SAFE_SHUTDOWN_EXIT",
+			deviceLockMode:  "ASSET_LOCKED",
+			capability:      commandmodel.CapabilityStopUnitSequence,
+			actuationMode:   "UNIT_SEQUENCE",
+			want:            true,
+		},
+		{
+			name:            "device lock blocks non-shutdown even if actuationMode is emergency do release",
+			siteControlMode: "REMOTE_AUTO",
+			deviceLockMode:  "EMERGENCY_STOPPED",
+			capability:      commandmodel.CapabilityStart,
+			actuationMode:   "EMERGENCY_DO_RELEASE",
+			want:            true,
+		},
+		{
+			name:            "emergency do release bypasses site mode and device lock on stop",
+			siteControlMode: "MANUAL_OVERRIDE",
+			deviceLockMode:  "EMERGENCY_STOPPED",
+			capability:      commandmodel.CapabilityStop,
+			actuationMode:   "EMERGENCY_DO_RELEASE",
+			want:            false,
+		},
+		{
+			name:            "emergency do release bypasses site mode and device lock on stop unit sequence",
+			siteControlMode: "SAFE_SHUTDOWN_EXIT",
+			deviceLockMode:  "ASSET_LOCKED",
+			capability:      commandmodel.CapabilityStopUnitSequence,
+			actuationMode:   "EMERGENCY_DO_RELEASE",
+			want:            false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isControlLockBlocking(tc.siteControlMode, tc.deviceLockMode, tc.capability, tc.actuationMode); got != tc.want {
+				t.Fatalf("isControlLockBlocking(%q, %q, %q, %q) = %v, want %v",
+					tc.siteControlMode, tc.deviceLockMode, tc.capability, tc.actuationMode, got, tc.want)
+			}
+		})
+	}
+}

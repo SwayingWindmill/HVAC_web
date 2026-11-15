@@ -1,6 +1,12 @@
 package commandformal
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
+)
 
 func TestSingleCommandProtocolInvariants(t *testing.T) {
 	report, err := CheckSingleCommandProtocol(FaultHooks{})
@@ -97,5 +103,58 @@ func TestFormalPropertiesCanFailOnBrokenTransitions(t *testing.T) {
 				t.Fatalf("property=%s want=%s (%s)", report.Counterexample.Property, tc.wantProp, report.Counterexample.Error())
 			}
 		})
+	}
+}
+
+func TestPulseDualReadbackVsNonPulseFormalBranches(t *testing.T) {
+	now := baseModelTime
+	deadline := now.Add(10 * time.Minute)
+	pulseEdge := validPulseEdgeExecution("u14", 500)
+	levelEdge := validLevelEdgeExecution("u11", 1)
+
+	for _, cap := range []commandmodel.Capability{commandmodel.CapabilityStart, commandmodel.CapabilityStop} {
+		dec, err := commandservice.DecideVerificationResolution(
+			makeSyntheticIntentForCapability(1, cap, commandmodel.IntentDispatching, true, now),
+			commandmodel.VerificationEnvelope{VerificationPointKey: setpointVerificationKey, AcknowledgedAt: now, EdgeExecution: pulseEdge},
+			commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-pulse-timeout"},
+			deadline,
+			deadline.Add(time.Second),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dec.IntentFinal != commandmodel.IntentFailed || dec.Reason != commandmodel.ReasonPulseDeliveredPowerUnconfirmed || dec.FreezeControlGroup {
+			t.Fatalf("%s pulse timeout = %+v, want FAILED without freeze", cap, dec)
+		}
+
+		// Level coil or missing edge MUST freeze OUTCOME_UNKNOWN.
+		levelDec, err := commandservice.DecideVerificationResolution(
+			makeSyntheticIntentForCapability(1, cap, commandmodel.IntentDispatching, true, now),
+			commandmodel.VerificationEnvelope{VerificationPointKey: setpointVerificationKey, AcknowledgedAt: now, EdgeExecution: levelEdge},
+			commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-level-timeout"},
+			deadline,
+			deadline.Add(time.Second),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if levelDec.IntentFinal != commandmodel.IntentOutcomeUnknown || !levelDec.FreezeControlGroup {
+			t.Fatalf("%s level timeout = %+v, want OUTCOME_UNKNOWN with freeze", cap, levelDec)
+		}
+	}
+
+	// Unit-sequence MUST freeze OUTCOME_UNKNOWN even with pulse dual readback.
+	seqDec, err := commandservice.DecideVerificationResolution(
+		makeSyntheticIntentForCapability(1, commandmodel.CapabilityStartUnitSequence, commandmodel.IntentDispatching, true, now),
+		commandmodel.VerificationEnvelope{VerificationPointKey: setpointVerificationKey, AcknowledgedAt: now, EdgeExecution: pulseEdge},
+		commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-seq-timeout"},
+		deadline,
+		deadline.Add(time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seqDec.IntentFinal != commandmodel.IntentOutcomeUnknown || !seqDec.FreezeControlGroup {
+		t.Fatalf("unit-sequence timeout = %+v, want OUTCOME_UNKNOWN with freeze", seqDec)
 	}
 }
