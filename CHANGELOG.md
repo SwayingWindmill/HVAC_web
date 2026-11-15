@@ -14,6 +14,7 @@
 
 #### 新增
 
+- 打通周运行计划检修窗口自动拦截与停机时段冷机停机建议（`OFF_HOURS_STOP`）：`GET /api/v1/sites/{siteId}/control-state` 新增 `activeMaintenanceWindow` 字段，站点处于已批准检修窗口期间自动拦截非停机、非复位的远程控制指令并暂停设定温度优化草案；同时在停机时段对仍在运行的冷机自动生成人工确认停机建议，不自动强制停机。
 - 松雅轩站点清单新增温度采集模块（UID 20）无线探头电池电压（`temperature-voltage-uid20`，`v1`–`v20` 与 `v51`/`v53`–`v55`，`mV`）、信号强度（`temperature-rssi-uid20`，`rssi1`–`rssi20` 与 `rssi51`/`rssi53`–`rssi55`，`dBm`）与通道通信状态及汇总诊断（`temperature-status-uid20`，`status1`–`status20`、`status51`/`status53`–`status55` 及 `online_count` / `offline_count` / `low_battery_count` / `min_voltage_mv` / `min_rssi_dbm`）；同步启用 14 号冷却水塔水探头、11/51 与 12/55 共存冷却塔通道及房间大厅（`t53` -> `room_temperature` / `zone.temperature`）与宴会厅（`t54` -> `banquet_room_temperature` / `zone.banquet_temperature`）室内温度，仅保留 20 号备用通道为 `INACTIVE`（网关 `SPARE` 同时屏蔽已停用的 52 号通道）；网页与微信小程序遥测词典和实时监测视图同步补齐 `mV`、`dBm` 整数精度及 `zone.banquet_temperature`，网关信封脚本 `edge/node-red/songyaxuan-platform-envelope.js` 同步最新通道映射、诊断合并上报与离线通道质量降级（`quality: 1`）。
 - 松雅轩冷站 ET1010 20 通道控制能力与双闸门水路联锁保护（Wave 2）：
   - 在站点清单 `deploy/sites/songyaxuan.site.json` 与 `scripts/site-onboarding.mjs` 中补齐主机停机脉冲点位 `u51`–`u54`（UID 31 地址 `16`–`19`）与 16 台设备控制器（`ctrl-chiller-a..d`、`ctrl-chwp-1..4`、`ctrl-cwp-1..4`、`ctrl-tower-1..4`，共 40 个 `COMMAND` 点位，`CONTROLS` 绑定），仅对观测点位应用存在性与新鲜度监控。
