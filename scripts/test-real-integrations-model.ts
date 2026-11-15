@@ -2,20 +2,42 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   PlatformApiError,
+  type ConcentratorAuditItem,
+  type ConcentratorChannelReading,
+  type ConcentratorEidSlot,
+  type ConcentratorParams,
   type EnergySeriesResponse,
   type SiteAssetModel,
 } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
 import type { WorkOrder } from '../apps/hvac-web/src/api/work-orders.ts';
 import type { AssetsSnapshotResult } from '../apps/hvac-web/src/features/assets/operational-projection.ts';
 import {
+  CONCENTRATOR_AUDIT_OPERATION_LABELS,
+  CONCENTRATOR_AUDIT_OUTCOME_PRESENTATION,
+  PROTECTED_RS485_UIDS,
   QUALITY_REASON_EXPLANATIONS,
+  applyConcentratorEidBatchFill,
+  buildConcentratorChannelRow,
+  buildConcentratorEidDiff,
+  buildConcentratorParamsDiff,
+  buildConcentratorSummary,
   buildMeterReconciliationModel,
   buildSensorCalibrationModel,
+  classifyConcentratorBattery,
+  describeConcentratorError,
   describeIntegrationsError,
+  detectDuplicateNonZeroEids,
   explainQualityReason,
+  filterConcentratorChannels,
   findMainElectricityCounterDevices,
+  formatConcentratorBaudRate,
+  formatConcentratorBandwidth,
+  formatConcentratorEidDisplay,
   formatProbePairLabel,
   formatSourceChannel,
+  isProtectedConcentratorUid,
+  mergeConcentratorAudits,
+  validateConcentratorParamsDraft,
 } from '../apps/hvac-web/src/features/integrations/integrations-model.ts';
 
 const TENANT_ID = '018f3d00-0000-7000-8000-000000000001';
@@ -1152,4 +1174,236 @@ test('synthesized site total does not copy sub-meter sum onto physical check met
   assert.ok(checkRowOwn);
   assert.equal(checkRowOwn.validEnergyKwh, 240);
   assert.equal(checkRowOwn.missingCompletedHours, 22);
+});
+
+test('concentrator protected RS485 UIDs, formatters, and battery classification cover Songyaxuan boundaries', () => {
+  assert.deepEqual([...PROTECTED_RS485_UIDS], [2, 3, 4, 5, 10, 31]);
+  for (const protectedUid of PROTECTED_RS485_UIDS) {
+    assert.equal(isProtectedConcentratorUid(protectedUid), true);
+  }
+  assert.equal(isProtectedConcentratorUid(1), false);
+  assert.equal(isProtectedConcentratorUid(11), false);
+  assert.equal(isProtectedConcentratorUid(1.5), false);
+
+  assert.equal(formatConcentratorBaudRate(3), '9600 bps');
+  assert.equal(formatConcentratorBandwidth(0), '125 kHz');
+  assert.equal(formatConcentratorEidDisplay(0), '未绑定 (0)');
+  assert.equal(formatConcentratorEidDisplay(50), '50 (0x00000032)');
+
+  assert.equal(classifyConcentratorBattery(2449).health, 'CRITICAL_LOW');
+  assert.equal(classifyConcentratorBattery(2449).status.tone, 'danger');
+  assert.equal(classifyConcentratorBattery(2450).health, 'LOW_VOLTAGE');
+  assert.equal(classifyConcentratorBattery(2599).health, 'LOW_VOLTAGE');
+  assert.equal(classifyConcentratorBattery(2600).health, 'NORMAL');
+  assert.equal(classifyConcentratorBattery(2600).status.tone, 'success');
+  assert.equal(classifyConcentratorBattery(null).health, 'UNKNOWN');
+});
+
+test('concentrator channel summary, filter, and search handle Songyaxuan telemetry accurately', () => {
+  const readings: ConcentratorChannelReading[] = [
+    { channel: 1, eid: 50, online: true, sensorType: 1, sensorModel: 'PT1000-W', temperatureC: 24.6, voltageMv: 2980, rssiDbm: -68 },
+    { channel: 2, eid: 51, online: true, sensorType: 1, sensorModel: 'PT1000-W', temperatureC: 11.8, voltageMv: 2540, rssiDbm: -74 },
+    { channel: 3, eid: 55, online: true, sensorType: 1, sensorModel: 'PT1000-W', temperatureC: 12.1, voltageMv: 2410, rssiDbm: -79 },
+    { channel: 4, eid: 0, online: false, sensorType: 1, sensorModel: 'UNBOUND', temperatureC: null, voltageMv: null, rssiDbm: null },
+  ];
+  const rows = readings.map(buildConcentratorChannelRow);
+  const summary = buildConcentratorSummary(rows);
+
+  assert.equal(summary.totalChannels, 4);
+  assert.equal(summary.boundChannels, 3);
+  assert.equal(summary.onlineCount, 3);
+  assert.equal(summary.offlineCount, 1);
+  assert.equal(summary.lowBatteryCount, 2);
+  assert.equal(summary.criticalBatteryCount, 1);
+  assert.equal(summary.avgTemperatureC, 16.2);
+
+  assert.equal(filterConcentratorChannels(rows, 'LOW_BATTERY', '').length, 2);
+  assert.equal(filterConcentratorChannels(rows, 'OFFLINE', '').length, 1);
+  assert.deepEqual(
+    filterConcentratorChannels(rows, 'ALL', '0x00000037').map((row) => row.channel),
+    [3],
+  );
+  assert.deepEqual(
+    filterConcentratorChannels(rows, 'LOW_BATTERY', '51').map((row) => row.channel),
+    [2],
+  );
+});
+
+test('concentrator params validation & diff catch protected UID and build exact partial patch', () => {
+  const original: ConcentratorParams = {
+    modbusId: 1,
+    baudRateCode: 3,
+    offLineTime: 10,
+    dataUplinkCycle: 10,
+    localNet: 1,
+    timeMark: 1,
+    rfTxPower: 20,
+    rfFrequency: 433,
+    rfBandWidth: 0,
+    rfSf: 9,
+    rfLeadCode: 8,
+    txTimeout: 5,
+    rxTimeout: 5,
+    rssiOut: 1,
+  };
+
+  assert.equal(validateConcentratorParamsDraft(original).valid, true);
+  assert.equal(buildConcentratorParamsDiff(original, original).hasChanges, false);
+
+  const protectedDraft: ConcentratorParams = { ...original, modbusId: 5 };
+  const protectedResult = validateConcentratorParamsDraft(protectedDraft);
+  assert.equal(protectedResult.valid, false);
+  assert.equal(protectedResult.protectedModbusId, true);
+  assert.match(protectedResult.errors.modbusId ?? '', /受保护/);
+
+  const validEdit: ConcentratorParams = { ...original, rfTxPower: 22, dataUplinkCycle: 15 };
+  const diff = buildConcentratorParamsDiff(original, validEdit);
+  assert.equal(diff.hasChanges, true);
+  assert.deepEqual(diff.patch, { dataUplinkCycle: 15, rfTxPower: 22 });
+  assert.equal(diff.changes.length, 2);
+  assert.equal(diff.changes[0]?.beforeDisplay, '10 秒');
+  assert.equal(diff.changes[1]?.afterDisplay, '22 dBm');
+});
+
+test('concentrator 200-slot EID duplicate guard, batch fill, diff, and error messages work end to end', () => {
+  const initialSlots: ConcentratorEidSlot[] = Array.from({ length: 200 }, (_, index) => ({
+    slot: index + 1,
+    eid: index < 3 ? 50 + index : 0,
+  }));
+
+  // Duplicate 0s are unbound and must never conflict.
+  assert.equal(detectDuplicateNonZeroEids(initialSlots).hasConflicts, false);
+
+  // Batch fill 4 consecutive EIDs starting at slot 10, then clear slots 12..13.
+  const filled = applyConcentratorEidBatchFill(initialSlots, {
+    startSlot: 10,
+    count: 4,
+    startEid: 101,
+    step: 1,
+  });
+  assert.equal(filled[9]?.eid, 101);
+  assert.equal(filled[12]?.eid, 104);
+
+  const cleared = applyConcentratorEidBatchFill(filled, {
+    startSlot: 12,
+    count: 2,
+    startEid: 0,
+    step: 1,
+  });
+  assert.equal(cleared[11]?.eid, 0);
+  assert.equal(cleared[12]?.eid, 0);
+
+  const eidDiff = buildConcentratorEidDiff(initialSlots, cleared);
+  assert.deepEqual(eidDiff, [
+    { slot: 10, beforeEid: 0, afterEid: 101 },
+    { slot: 11, beforeEid: 0, afterEid: 102 },
+  ]);
+
+  // Setting slot 20 to an existing positive EID (50) flags both slot 1 and slot 20.
+  const duplicated = cleared.map((entry) =>
+    entry.slot === 20 ? { slot: 20, eid: 50 } : entry,
+  );
+  const conflict = detectDuplicateNonZeroEids(duplicated);
+  assert.equal(conflict.hasConflicts, true);
+  assert.deepEqual(conflict.duplicatesByEid.get(50), [1, 20]);
+  assert.equal(conflict.conflictingSlotSet.has(1), true);
+  assert.equal(conflict.conflictingSlotSet.has(20), true);
+
+  assert.equal(CONCENTRATOR_AUDIT_OPERATION_LABELS.WRITE_PARAMS, '串口与射频参数写入');
+  assert.equal(CONCENTRATOR_AUDIT_OUTCOME_PRESENTATION.APPLIED.label, '已写入 Flash');
+
+  const merged = mergeConcentratorAudits(
+    [
+      {
+        id: '01910000-0000-7000-8000-000000000001',
+        unitId: 1,
+        actorId: '01910000-0000-7000-8000-000000000010',
+        operation: 'WRITE_PARAMS',
+        requestId: '01910000-0000-7000-8000-000000000011',
+        outcome: 'APPLIED',
+        reason: 'earlier',
+        diff: {},
+        occurredAt: '2026-11-15T01:00:00Z',
+      } satisfies ConcentratorAuditItem,
+    ],
+    [
+      {
+        id: '01910000-0000-7000-8000-000000000001',
+        unitId: 1,
+        actorId: '01910000-0000-7000-8000-000000000010',
+        operation: 'WRITE_PARAMS',
+        requestId: '01910000-0000-7000-8000-000000000011',
+        outcome: 'APPLIED',
+        reason: 'duplicate id skipped',
+        diff: {},
+        occurredAt: '2026-11-15T01:00:00Z',
+      },
+      {
+        id: '01910000-0000-7000-8000-000000000002',
+        unitId: 1,
+        actorId: '01910000-0000-7000-8000-000000000010',
+        operation: 'WRITE_EIDS',
+        requestId: '01910000-0000-7000-8000-000000000012',
+        outcome: 'TIMEOUT',
+        reason: 'newer',
+        diff: {},
+        occurredAt: '2026-11-15T02:00:00Z',
+      },
+    ],
+  );
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0]?.id, '01910000-0000-7000-8000-000000000002');
+
+  const uidError = new PlatformApiError({
+    type: 'about:blank',
+    title: 'Protected UID',
+    status: 409,
+    detail: 'protected',
+    instance: '/api/v1/gateways/g/concentrators/2/status',
+    code: 'CONCENTRATOR_UID_PROTECTED',
+    traceId: '0'.repeat(32),
+    retryable: false,
+  });
+  assert.match(describeConcentratorError(uidError), /受保护/);
+
+  const rpcTimeoutError = new PlatformApiError({
+    type: 'about:blank',
+    title: 'RPC Timeout',
+    status: 504,
+    detail: 'timeout',
+    instance: '/api/v1/gateways/g/concentrators/1/params',
+    code: 'CONCENTRATOR_RPC_TIMEOUT',
+    traceId: '0'.repeat(32),
+    retryable: true,
+  });
+  assert.match(describeConcentratorError(rpcTimeoutError), /未及时应答/);
+
+  const transportError = new PlatformApiError({
+    type: 'about:blank',
+    title: 'Transport Unavailable',
+    status: 503,
+    detail: 'unavailable',
+    instance: '/api/v1/gateways/g/concentrators/1/status',
+    code: 'CONCENTRATOR_TRANSPORT_UNAVAILABLE',
+    traceId: '0'.repeat(32),
+    retryable: true,
+  });
+  assert.match(describeConcentratorError(transportError), /远程连接通道暂未就绪/);
+
+  const revokedError = new PlatformApiError({
+    type: 'about:blank',
+    title: 'Revoked',
+    status: 409,
+    detail: 'revoked',
+    instance: '/api/v1/gateways/g/concentrators/1/eids',
+    code: 'GATEWAY_REVOKED',
+    traceId: '0'.repeat(32),
+    retryable: false,
+  });
+  assert.match(describeConcentratorError(revokedError), /接入凭据已停用/);
+
+  assert.match(
+    describeConcentratorError(new Error('unknown failure'), '参数写入集中器 Flash 失败'),
+    /参数写入集中器 Flash 失败/,
+  );
 });
