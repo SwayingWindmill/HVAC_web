@@ -38,6 +38,98 @@
         "responses": {"200": {"description": "All credentials and outstanding enrollment codes revoked", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayCredentialStatus"}}}}}
       }
     },
+    "/api/v1/gateways/{gatewayId}/concentrators/{unitId}/status": {
+      "get": {
+        "operationId": "getGatewayConcentratorStatus", "summary": "Read wireless concentrator parameters, live channels, and audit entries",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}},
+          {"name": "unitId", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 247}}
+        ],
+        "responses": {
+          "200": {"description": "Concentrator status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConcentratorStatus"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"},
+          "504": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/concentrators/{unitId}/params": {
+      "put": {
+        "operationId": "updateGatewayConcentratorParams", "summary": "Write wireless concentrator serial/RF parameters, commit flash, and verify readback",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}},
+          {"name": "unitId", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 247}},
+          {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConcentratorParamsUpdateRequest"}}}},
+        "responses": {
+          "200": {"description": "Updated parameters committed and verified", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConcentratorParamsWriteResult"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "422": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"},
+          "504": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/concentrators/{unitId}/eids": {
+      "get": {
+        "operationId": "getGatewayConcentratorEids", "summary": "Read all 200 wireless concentrator EID binding slots",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}},
+          {"name": "unitId", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 247}}
+        ],
+        "responses": {
+          "200": {"description": "200-slot EID table", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConcentratorEidTable"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"},
+          "504": {"$ref": "#/components/responses/Problem"}
+        }
+      },
+      "put": {
+        "operationId": "updateGatewayConcentratorEids", "summary": "Write dirty wireless concentrator EID slots via FC16 chunks, commit flash, and verify readback",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}},
+          {"name": "unitId", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 247}},
+          {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConcentratorEidUpdateRequest"}}}},
+        "responses": {
+          "200": {"description": "EID slots committed and verified", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConcentratorEidWriteResult"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "422": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"},
+          "504": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "operationId": "getHealth",
@@ -2750,6 +2842,146 @@
       "GatewayEnrollmentCode": {
         "type": "object", "additionalProperties": false, "required": ["enrollmentCode", "expiresAt"],
         "properties": {"enrollmentCode": {"type": "string", "minLength": 43, "maxLength": 43}, "expiresAt": {"type": "string", "format": "date-time"}}
+      },
+      "ConcentratorParams": {
+        "type": "object", "additionalProperties": false,
+        "required": ["modbusId", "baudRateCode", "offLineTime", "dataUplinkCycle", "localNet", "timeMark", "rfTxPower", "rfFrequency", "rfBandWidth", "rfSf", "rfLeadCode", "txTimeout", "rxTimeout", "rssiOut"],
+        "properties": {
+          "modbusId": {"type": "integer", "minimum": 1, "maximum": 247},
+          "baudRateCode": {"type": "integer", "minimum": 0, "maximum": 5},
+          "offLineTime": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "dataUplinkCycle": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "localNet": {"type": "integer", "minimum": 0, "maximum": 65535},
+          "timeMark": {"type": "integer", "minimum": 0, "maximum": 3},
+          "rfTxPower": {"type": "integer", "minimum": 0, "maximum": 30},
+          "rfFrequency": {"type": "integer", "minimum": 100, "maximum": 1000},
+          "rfBandWidth": {"type": "integer", "minimum": 0, "maximum": 2},
+          "rfSf": {"type": "integer", "minimum": 5, "maximum": 12},
+          "rfLeadCode": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "txTimeout": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "rxTimeout": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "rssiOut": {"type": "integer", "minimum": 0, "maximum": 1}
+        }
+      },
+      "ConcentratorParamsPatch": {
+        "type": "object", "additionalProperties": false, "minProperties": 1,
+        "properties": {
+          "modbusId": {"type": "integer", "minimum": 1, "maximum": 247},
+          "baudRateCode": {"type": "integer", "minimum": 0, "maximum": 5},
+          "offLineTime": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "dataUplinkCycle": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "localNet": {"type": "integer", "minimum": 0, "maximum": 65535},
+          "timeMark": {"type": "integer", "minimum": 0, "maximum": 3},
+          "rfTxPower": {"type": "integer", "minimum": 0, "maximum": 30},
+          "rfFrequency": {"type": "integer", "minimum": 100, "maximum": 1000},
+          "rfBandWidth": {"type": "integer", "minimum": 0, "maximum": 2},
+          "rfSf": {"type": "integer", "minimum": 5, "maximum": 12},
+          "rfLeadCode": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "txTimeout": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "rxTimeout": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "rssiOut": {"type": "integer", "minimum": 0, "maximum": 1}
+        }
+      },
+      "ConcentratorChannelReading": {
+        "type": "object", "additionalProperties": false,
+        "required": ["channel", "eid", "online", "sensorType", "sensorModel", "temperatureC", "voltageMv", "rssiDbm"],
+        "properties": {
+          "channel": {"type": "integer", "minimum": 1, "maximum": 200},
+          "eid": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+          "online": {"type": "boolean"},
+          "sensorType": {"type": "integer", "minimum": 0, "maximum": 65535},
+          "sensorModel": {"type": "string"},
+          "temperatureC": {"type": ["number", "null"]},
+          "voltageMv": {"type": ["integer", "null"], "minimum": 0},
+          "rssiDbm": {"type": ["integer", "null"]}
+        }
+      },
+      "ConcentratorAuditItem": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "unitId", "actorId", "operation", "requestId", "outcome", "reason", "diff", "occurredAt"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/UUIDv7"},
+          "unitId": {"type": "integer", "minimum": 1, "maximum": 247},
+          "actorId": {"$ref": "#/components/schemas/UUIDv7"},
+          "operation": {"type": "string", "enum": ["WRITE_PARAMS", "WRITE_EIDS"]},
+          "requestId": {"$ref": "#/components/schemas/UUIDv7"},
+          "outcome": {"type": "string", "enum": ["APPLIED", "REJECTED", "FAILED", "TIMEOUT"]},
+          "reason": {"type": "string", "maxLength": 512},
+          "diff": {"type": "object", "additionalProperties": true},
+          "occurredAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "ConcentratorStatus": {
+        "type": "object", "additionalProperties": false,
+        "required": ["gatewayId", "unitId", "respondedAt", "params", "channels", "recentAudits"],
+        "properties": {
+          "gatewayId": {"$ref": "#/components/schemas/UUIDv7"},
+          "unitId": {"type": "integer", "minimum": 1, "maximum": 247},
+          "respondedAt": {"type": "string", "format": "date-time"},
+          "params": {"$ref": "#/components/schemas/ConcentratorParams"},
+          "channels": {"type": "array", "items": {"$ref": "#/components/schemas/ConcentratorChannelReading"}},
+          "recentAudits": {"type": "array", "items": {"$ref": "#/components/schemas/ConcentratorAuditItem"}}
+        }
+      },
+      "ConcentratorParamsUpdateRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["params", "reason"],
+        "properties": {
+          "params": {"$ref": "#/components/schemas/ConcentratorParamsPatch"},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 512}
+        }
+      },
+      "ConcentratorParamsWriteResult": {
+        "type": "object", "additionalProperties": false,
+        "required": ["gatewayId", "unitId", "requestId", "writtenCount", "params", "audit"],
+        "properties": {
+          "gatewayId": {"$ref": "#/components/schemas/UUIDv7"},
+          "unitId": {"type": "integer", "minimum": 1, "maximum": 247},
+          "requestId": {"$ref": "#/components/schemas/UUIDv7"},
+          "writtenCount": {"type": "integer", "minimum": 0, "maximum": 14},
+          "params": {"$ref": "#/components/schemas/ConcentratorParams"},
+          "audit": {"$ref": "#/components/schemas/ConcentratorAuditItem"}
+        }
+      },
+      "ConcentratorEidSlot": {
+        "type": "object", "additionalProperties": false,
+        "required": ["slot", "eid"],
+        "properties": {
+          "slot": {"type": "integer", "minimum": 1, "maximum": 200},
+          "eid": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+        }
+      },
+      "ConcentratorEidTable": {
+        "type": "object", "additionalProperties": false,
+        "required": ["gatewayId", "unitId", "respondedAt", "slots", "recentAudits"],
+        "properties": {
+          "gatewayId": {"$ref": "#/components/schemas/UUIDv7"},
+          "unitId": {"type": "integer", "minimum": 1, "maximum": 247},
+          "respondedAt": {"type": "string", "format": "date-time"},
+          "slots": {"type": "array", "minItems": 200, "maxItems": 200, "items": {"$ref": "#/components/schemas/ConcentratorEidSlot"}},
+          "recentAudits": {"type": "array", "items": {"$ref": "#/components/schemas/ConcentratorAuditItem"}}
+        }
+      },
+      "ConcentratorEidUpdateRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["slots", "reason"],
+        "properties": {
+          "slots": {"type": "array", "minItems": 200, "maxItems": 200, "items": {"$ref": "#/components/schemas/ConcentratorEidSlot"}},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 512}
+        }
+      },
+      "ConcentratorEidWriteResult": {
+        "type": "object", "additionalProperties": false,
+        "required": ["gatewayId", "unitId", "requestId", "updatedSlots", "chunkCount", "slots", "audit"],
+        "properties": {
+          "gatewayId": {"$ref": "#/components/schemas/UUIDv7"},
+          "unitId": {"type": "integer", "minimum": 1, "maximum": 247},
+          "requestId": {"$ref": "#/components/schemas/UUIDv7"},
+          "updatedSlots": {"type": "integer", "minimum": 0, "maximum": 200},
+          "chunkCount": {"type": "integer", "minimum": 0, "maximum": 200},
+          "slots": {"type": "array", "minItems": 200, "maxItems": 200, "items": {"$ref": "#/components/schemas/ConcentratorEidSlot"}},
+          "audit": {"$ref": "#/components/schemas/ConcentratorAuditItem"}
+        }
       },
       "V212Meta": {
         "type": "object",

@@ -11,12 +11,17 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/concentrator"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
 	"github.com/quanlaihe/hvac-web/modules/registry/pkg/coreservice"
 )
 
 func credentialServer(store *connectivity.Store) (*http.Server, *tunnel.Hub, error) {
+	return credentialServerWithConcentrator(store, nil)
+}
+
+func credentialServerWithConcentrator(store *connectivity.Store, concentratorService *concentrator.Service) (*http.Server, *tunnel.Hub, error) {
 	loopbackAddr := strings.TrimSpace(envOr("CONNECTIVITY_TUNNEL_LOOPBACK_ADDR", "127.0.0.1:18800"))
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {
 		if err := tunnel.ValidateLoopbackAddr(loopbackAddr); err != nil {
@@ -98,9 +103,13 @@ func credentialServer(store *connectivity.Store) (*http.Server, *tunnel.Hub, err
 		}
 	}
 	tunnelHandler := tunnel.NewUpgradeHandler(tunnelHub, connectivity.ParseGatewayPeerCert, service.VerifyActiveCredential)
+	var concentratorHandler http.Handler
+	if concentratorService != nil {
+		concentratorHandler = concentrator.NewHTTPHandler(concentratorService, authorize)
+	}
 	return &http.Server{
 		Addr:    envOr("CONNECTIVITY_CREDENTIAL_ADDR", ":8448"),
-		Handler: connectivity.NewCredentialHandlerWithTunnel(service, authorize, tunnelHandler),
+		Handler: connectivity.NewCredentialHandlerWithExtensions(service, authorize, tunnelHandler, concentratorHandler),
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,
 			Certificates: []tls.Certificate{serverIdentity},
@@ -110,7 +119,7 @@ func credentialServer(store *connectivity.Store) (*http.Server, *tunnel.Hub, err
 		},
 		ReadHeaderTimeout: 3 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
+		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       30 * time.Second,
 	}, tunnelHub, nil
 }

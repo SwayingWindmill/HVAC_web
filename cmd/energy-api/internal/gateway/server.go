@@ -211,6 +211,9 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 		if h.serveGatewayCredentials(writer, request) {
 			return
 		}
+		if h.serveGatewayConcentrator(writer, request) {
+			return
+		}
 		if registryRoute, id, matches := matchPublicRegistryRoute(request.Method, request.URL.Path); matches {
 			dispatchRegistryRoute(h, writer, request, registryRoute, id)
 			return
@@ -725,6 +728,9 @@ func safeLogPath(path string) string {
 		}
 		if telemetryRoute, _, matches := matchPublicTelemetryRoute(path); matches {
 			return telemetryRoute.template
+		}
+		if template, matches := matchConcentratorPathTemplate(path); matches {
+			return template
 		}
 		if _, matches := matchSessionAuditPath(path); matches {
 			return platformapi.GetSessionAuditEventPathTemplate

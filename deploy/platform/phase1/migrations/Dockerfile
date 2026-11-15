@@ -62,6 +62,7 @@ COPY infra/connectivity/postgres/init/001-s09-connectivity.sql /opt/hvac/repo/in
 COPY infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql /opt/hvac/repo/infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
 COPY infra/connectivity/postgres/init/003-gateway-uplink.sql /opt/hvac/repo/infra/connectivity/postgres/init/003-gateway-uplink.sql
 COPY infra/connectivity/postgres/init/004-gateway-enrollment.sql /opt/hvac/repo/infra/connectivity/postgres/init/004-gateway-enrollment.sql
+COPY infra/connectivity/postgres/init/005-gateway-concentrator-audit.sql /opt/hvac/repo/infra/connectivity/postgres/init/005-gateway-concentrator-audit.sql
 COPY infra/registry/postgres/init/013-s23-maintenance-retirement.sql /opt/hvac/repo/infra/registry/postgres/init/013-s23-maintenance-retirement.sql
 COPY infra/registry/postgres/init/014-s21-rule-management-capability.sql /opt/hvac/repo/infra/registry/postgres/init/014-s21-rule-management-capability.sql
 COPY infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql /opt/hvac/repo/infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql

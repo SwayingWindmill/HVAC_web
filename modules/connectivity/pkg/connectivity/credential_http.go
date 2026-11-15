@@ -35,10 +35,14 @@ func ParseGatewayPeerCert(r *http.Request) (*x509.Certificate, error) {
 }
 
 func NewCredentialHandler(service *CredentialService, authorize CredentialAuthorizer) http.Handler {
-	return NewCredentialHandlerWithTunnel(service, authorize, nil)
+	return NewCredentialHandlerWithExtensions(service, authorize, nil, nil)
 }
 
 func NewCredentialHandlerWithTunnel(service *CredentialService, authorize CredentialAuthorizer, tunnelHandler http.Handler) http.Handler {
+	return NewCredentialHandlerWithExtensions(service, authorize, tunnelHandler, nil)
+}
+
+func NewCredentialHandlerWithExtensions(service *CredentialService, authorize CredentialAuthorizer, tunnelHandler, concentratorHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	finish := func(w http.ResponseWriter, value any, err error) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -106,6 +110,9 @@ func NewCredentialHandlerWithTunnel(service *CredentialService, authorize Creden
 	})
 	if tunnelHandler != nil {
 		mux.Handle("GET /gateway/v1/tunnel", tunnelHandler)
+	}
+	if concentratorHandler != nil {
+		mux.Handle("/internal/v1/gateways/{gatewayId}/concentrators/", concentratorHandler)
 	}
 	for _, route := range []struct {
 		method, path string

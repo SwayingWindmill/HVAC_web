@@ -51,6 +51,7 @@ hvac_s1|infra/connectivity/postgres/init/001-s09-connectivity.sql
 hvac_s1|infra/connectivity/postgres/init/002-s11-command-reply-evidence.sql
 hvac_s1|infra/connectivity/postgres/init/003-gateway-uplink.sql
 hvac_s1|infra/connectivity/postgres/init/004-gateway-enrollment.sql
+hvac_s1|infra/connectivity/postgres/init/005-gateway-concentrator-audit.sql
 hvac_s1|infra/registry/postgres/init/013-s23-maintenance-retirement.sql
 hvac_s1|infra/registry/postgres/init/014-s21-rule-management-capability.sql
 hvac_s1|infra/registry/postgres/init/015-s04-role-binding-telemetry-revocation.sql

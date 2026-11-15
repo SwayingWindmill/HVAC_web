@@ -5,6 +5,15 @@
 
 ## 未发布
 
+### 2026-11-16
+
+#### 新增
+
+- 无线集中器远程配置与多路状态回执后端（MQTT mTLS RPC、租户行级审计与平台网关接口）：
+  - `modules/connectivity` 新增数据库迁移 `005-gateway-concentrator-audit.sql`（启用并强制按 `app.tenant_id` 执行 `connectivity.gateway_concentrator_audit` 行级隔离，表约束封禁 RS485 保护地址 `{2, 3, 4, 5, 10, 31}`），以及 `pkg/concentrator` 服务层（按 `(gatewayId, unitId)` 串行加锁、`autopaho` QoS 1 MQTT RPC 收发与 `gatewayId` 强校验、内部 mTLS HTTP 接口）。
+  - 更新 Mosquitto 访问控制 `infra/telemetry/mqtt/acl`（仅允许平台适配器发布 `hvac/v1/+/down/concentrator` 并订阅 `hvac/v1/+/up/#`，禁止网关伪造下行或跨网关写入），并在 `cmd/connectivity` 与 `cmd/energy-api` 接入 `GET/PUT /api/v1/gateways/{gatewayId}/concentrators/{unitId}/{status,params,eids}`（`device.read` / `device.write` 鉴权、CSRF 校验、RFC 9457 错误映射与 `25s` 上游超时）及生成 OpenAPI 前后端客户端。
+  - Edge 侧新增 `edge/node-red/concentrator-mqtt-rpc.ts`，在网关本地二次校验并拒绝 `{2, 3, 4, 5, 10, 31}` 写操作、`WRITE_PARAMS` 末位写 `modbusId` 后执行 `0x9C41 = 6` 提交与回读核对、`WRITE_EIDS` 拒绝非零重复 EID 并将 200 槽位脏区合并为最多每批 `20` 槽的 `FC16` 写入及 `0x9C41 = 8` 提交核对。
+
 ### 2026-11-15
 
 #### 修复

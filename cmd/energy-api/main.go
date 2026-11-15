@@ -136,7 +136,7 @@ func main() {
 			logger.Error("connectivity_client_config_invalid", "error_code", "CONNECTIVITY_CLIENT_CONFIG_INVALID")
 			os.Exit(1)
 		}
-		connectivityConfig = &gateway.ConnectivityConfig{BaseURL: envOr("CONNECTIVITY_SERVICE_URL", "https://connectivity:8448"), HTTPClient: &http.Client{Timeout: 5 * time.Second, Transport: workloadTransport(roots, workloadCertificate, "connectivity"), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+		connectivityConfig = &gateway.ConnectivityConfig{BaseURL: envOr("CONNECTIVITY_SERVICE_URL", "https://connectivity:8448"), HTTPClient: &http.Client{Timeout: 25 * time.Second, Transport: workloadTransport(roots, workloadCertificate, "connectivity"), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	}
 
 	var handler = gateway.NewHandler(gateway.Config{

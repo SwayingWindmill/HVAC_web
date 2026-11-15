@@ -40,11 +40,12 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 		pointA        = "0192f000-4000-7000-8000-00000000000a"
 		commandA      = "0192f000-4000-7000-8000-0000000000ca"
 		commandB      = "0192f000-4000-7000-8000-0000000000cb"
-		commandBPulse = "0192f000-4000-7000-8000-0000000000cp"
+		commandBPulse = "0192f000-4000-7000-8000-0000000000cc"
 		unknown       = "0192f000-2000-7000-8000-0000000000ff"
 	)
 	cleanup := func() {
 		for _, statement := range []string{
+			`DELETE FROM connectivity.gateway_concentrator_audit WHERE gateway_id IN ($1::uuid,$2::uuid)`,
 			`DELETE FROM connectivity.gateway_credential_audit WHERE gateway_id IN ($1::uuid,$2::uuid)`,
 			`DELETE FROM connectivity.gateway_enrollments WHERE gateway_id IN ($1::uuid,$2::uuid)`,
 			`DELETE FROM connectivity.uplink_quarantine WHERE gateway_id IN ($1, $2, $3)`,
