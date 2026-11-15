@@ -63,7 +63,7 @@ type DispatchResolutionDecision struct {
 
 // DecideDispatchResolution computes the command attempt, command intent, retry, and device-freeze
 // outcomes for a ConnectorResult returned by Dispatch.
-func DecideDispatchResolution(result commandmodel.ConnectorResult, now time.Time) (DispatchResolutionDecision, error) {
+func DecideDispatchResolution(capability commandmodel.Capability, result commandmodel.ConnectorResult, now time.Time) (DispatchResolutionDecision, error) {
 	nowUTC := now.UTC()
 	switch result.Phase {
 	case commandmodel.ConnectorPreSendRejected:
@@ -99,7 +99,7 @@ func DecideDispatchResolution(result commandmodel.ConnectorResult, now time.Time
 		}, nil
 	case commandmodel.ConnectorAcknowledged:
 		ackAt := nowUTC
-		deadline := nowUTC.Add(verificationWindow)
+		deadline := nowUTC.Add(commandmodel.VerificationWindowFor(capability))
 		return DispatchResolutionDecision{
 			AttemptFinal:         commandmodel.AttemptAcknowledged,
 			IntentFinal:          commandmodel.IntentDispatching,

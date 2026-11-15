@@ -87,7 +87,7 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store) (*comman
 		TransportState: store,
 		EvidenceStore:  dispatcherRuntimeClient,
 		LateResultSink: dispatcherRuntimeClient,
-		ReplyTimeout:   15 * time.Second,
+		ReplyTimeout:   25 * time.Second,
 	})
 	if err != nil {
 		return nil, err
@@ -97,7 +97,7 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store) (*comman
 	verifierWorkerID := envOr("COMMAND_VERIFIER_WORKER_ID", hostnameOr("connectivity-command-verifier"))
 	return &commandRuntime{
 		store:            store,
-		dispatcher:       commanddispatcher.NewDurable(dispatcherRuntimeClient, safetyVerifier, connector, dispatcherWorkerID, 30*time.Second),
+		dispatcher:       commanddispatcher.NewDurable(dispatcherRuntimeClient, safetyVerifier, connector, dispatcherWorkerID, 45*time.Second),
 		dispatcherWorker: dispatcherWorkerID,
 		verifier:         commanddispatcher.NewDurableVerificationWorker(verifierRuntimeClient, commanddispatcher.NewAuthoritativeReportedStateVerifier(verificationReader), verifierWorkerID, 15*time.Second),
 		verifierWorker:   verifierWorkerID,
@@ -107,7 +107,7 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store) (*comman
 
 func (runtime *commandRuntime) Run(ctx context.Context, logger *slog.Logger) {
 	logger.Info("connectivity_command_runtime_started", "dispatcher_worker_id", runtime.dispatcherWorker, "verifier_worker_id", runtime.verifierWorker)
-	go runtime.runForEveryTenant(ctx, logger, "dispatch", 25*time.Second, runtime.dispatcher.RunOnce, commandservice.ErrNoDispatchAvailable)
+	go runtime.runForEveryTenant(ctx, logger, "dispatch", 40*time.Second, runtime.dispatcher.RunOnce, commandservice.ErrNoDispatchAvailable)
 	go runtime.runForEveryTenant(ctx, logger, "verification", 12*time.Second, runtime.verifier.RunOnce, commandservice.ErrVerificationNotAvailable)
 	<-ctx.Done()
 }

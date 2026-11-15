@@ -9,6 +9,7 @@
 
 #### 修复
 
+- 修正控制指令回执与模拟器下发时序：设备启停及一键启停序列（`START`、`STOP`、`START_UNIT_SEQUENCE`、`STOP_UNIT_SEQUENCE`）的遥测状态核验窗口从 2 分钟延长至 10 分钟，匹配现场电表采样周期与冷机加卸载延迟；数值设定与故障复位仍保持 2 分钟。同时将 `connectivity` 下行应答超时从 15 秒放宽至 25 秒（派发步 40 秒、租约 45 秒），并为 `eg8200-simulator` 补齐 `pointCode`、`actuationMode`、`channel`、`coilAddress`、`pulseDurationMs` 报文字段与一键启停序列仿真，避免携带路由元数据的控制报文在模拟网关被静默丢弃。
 - 修正松雅轩 A、B 机组电表映射：确认 Modbus `UID 4`（`ammeter-unit4`）为 A 机组电表、`UID 3`（`ammeter-unit3`）为 B 机组电表（此前 2026-11-12 现场核对将两者对调）；同步迁移 A 机组支管进水温度 `chw_entering_temperature_branch`（`t10`）到 `ammeter-unit4`、`ctrl-chiller-a/b` 运行状态绑定与冷站阶段加减机映射，保持原 76938 kWh 基线留在物理表 `ammeter-unit4` 上，并补充 C、D 机组电表各自合并计量对应机组、水泵与冷却塔的说明。
 
 #### 新增

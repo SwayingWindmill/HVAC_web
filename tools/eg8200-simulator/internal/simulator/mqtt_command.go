@@ -24,18 +24,23 @@ type mqttCommandPolicy struct {
 }
 
 type mqttCommandEnvelope struct {
-	SchemaVersion  string             `json:"schemaVersion"`
-	MessageID      string             `json:"messageId"`
-	CommandID      string             `json:"commandId"`
-	TraceID        string             `json:"traceId,omitempty"`
-	IssuedAt       int64              `json:"issuedAt"`
-	ExpireAt       int64              `json:"expireAt"`
-	DeviceID       string             `json:"deviceId"`
-	CommandCode    string             `json:"commandCode"`
-	Params         map[string]float64 `json:"params"`
-	Policy         mqttCommandPolicy  `json:"policy"`
-	ExecutionFence uint64             `json:"executionFence"`
-	PayloadHash    string             `json:"payloadHash"`
+	SchemaVersion   string             `json:"schemaVersion"`
+	MessageID       string             `json:"messageId"`
+	CommandID       string             `json:"commandId"`
+	TraceID         string             `json:"traceId,omitempty"`
+	IssuedAt        int64              `json:"issuedAt"`
+	ExpireAt        int64              `json:"expireAt"`
+	DeviceID        string             `json:"deviceId"`
+	CommandCode     string             `json:"commandCode"`
+	Params          map[string]float64 `json:"params"`
+	Policy          mqttCommandPolicy  `json:"policy"`
+	ExecutionFence  uint64             `json:"executionFence"`
+	PayloadHash     string             `json:"payloadHash"`
+	PointCode       string             `json:"pointCode,omitempty"`
+	ActuationMode   string             `json:"actuationMode,omitempty"`
+	Channel         string             `json:"channel,omitempty"`
+	CoilAddress     *int               `json:"coilAddress,omitempty"`
+	PulseDurationMs *int               `json:"pulseDurationMs,omitempty"`
 }
 
 type mqttCommandReply struct {
@@ -153,14 +158,22 @@ func persistEdgeCommandLedger(path string, records map[string]edgeCommandRecord)
 	return nil
 }
 
+func decodeMQTTCommandEnvelope(payload []byte) (mqttCommandEnvelope, error) {
+	var request mqttCommandEnvelope
+	decoder := json.NewDecoder(strings.NewReader(string(payload)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		return mqttCommandEnvelope{}, err
+	}
+	return request, nil
+}
+
 func (handler *edgeCommandHandler) Handle(received paho.PublishReceived) (bool, error) {
 	if handler == nil || received.Packet == nil || received.Client == nil {
 		return false, nil
 	}
-	var request mqttCommandEnvelope
-	decoder := json.NewDecoder(strings.NewReader(string(received.Packet.Payload)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
+	request, err := decodeMQTTCommandEnvelope(received.Packet.Payload)
+	if err != nil {
 		return true, nil
 	}
 	reply := handler.evaluate(request)
@@ -260,8 +273,8 @@ func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCom
 	}
 
 	waitDuration := time.UnixMilli(request.ExpireAt).Sub(now)
-	if waitDuration > 10*time.Second {
-		waitDuration = 10 * time.Second
+	if waitDuration > 25*time.Second {
+		waitDuration = 25 * time.Second
 	}
 	if waitDuration <= 0 {
 		handler.edgeRuntime.CancelCommand(base.CommandID, "EXPIRED")

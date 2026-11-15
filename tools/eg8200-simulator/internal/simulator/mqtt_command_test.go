@@ -2,6 +2,7 @@ package simulator
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -144,4 +145,117 @@ func TestEdgeMQTTCommandRejectsExpiredOrMismatchedMapping(t *testing.T) {
 	if reply := handler.evaluate(mismatched); reply.EdgeStatus != "REJECTED" || reply.ReasonCode == nil || *reply.ReasonCode != "COMMAND_MAPPING_INVALID" {
 		t.Fatalf("expected command mapping rejection, got %+v", reply)
 	}
+}
+
+func configWithUnitSequencePoints(t *testing.T) Config {
+	t.Helper()
+	config := loadGeneratedCentralPlantConfig(t)
+	config.Points = append(config.Points,
+		PointConfig{
+			PointID: "01910000-0000-7000-8000-500000000091", DeviceID: config.Plant.Chiller.ID,
+			SubjectType: "ASSET", SubjectID: "equipment-chiller-01",
+			SourceKey: "startUnitSequence", TelemetryKey: "chiller.command.start_unit_sequence", PointCode: "start_unit_sequence",
+			Name: "一键启机顺序", PointType: "COMMAND", ValueType: "BOOLEAN", Writable: true,
+			SampleInterval: "1s", PublishInterval: "2s", StaleAfter: "10s",
+			SourceMetadata: map[string]any{
+				"controlKind": "ACTION", "capability": "START_UNIT_SEQUENCE",
+				"capabilityRevision": "capability:start-unit-sequence:v1",
+				"feedbackPointKey":   "run_state", "feedbackSourceKey": "runState",
+			},
+		},
+		PointConfig{
+			PointID: "01910000-0000-7000-8000-500000000092", DeviceID: config.Plant.Chiller.ID,
+			SubjectType: "ASSET", SubjectID: "equipment-chiller-01",
+			SourceKey: "stopUnitSequence", TelemetryKey: "chiller.command.stop_unit_sequence", PointCode: "stop_unit_sequence",
+			Name: "一键停机顺序", PointType: "COMMAND", ValueType: "BOOLEAN", Writable: true,
+			SampleInterval: "1s", PublishInterval: "2s", StaleAfter: "10s",
+			SourceMetadata: map[string]any{
+				"controlKind": "ACTION", "capability": "STOP_UNIT_SEQUENCE",
+				"capabilityRevision": "capability:stop-unit-sequence:v1",
+				"feedbackPointKey":   "run_state", "feedbackSourceKey": "runState",
+			},
+		},
+	)
+	return config
+}
+
+func TestEdgeMQTTCommandAcceptsRouteMetadataAndUnitSequence(t *testing.T) {
+	config := configWithUnitSequencePoints(t)
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	plant := NewPlant(config.Plant, config.Scenario, now)
+	edgeRuntime, err := NewEdgeControlRuntime(config, plant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newEdgeCommandHandler(edgeRuntime, MQTTGatewayConfig{QueueDirectory: t.TempDir()}, config.Plant.DeviceIDs(), testMQTTEvidenceSpool(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.now = func() time.Time { return now }
+
+	pulseJSON := `{
+		"schemaVersion":"2.0",
+		"messageId":"018f3e00-9000-7000-8000-000000000101",
+		"commandId":"018f3e00-9000-7000-8000-000000000102",
+		"issuedAt":` + jsonNumber(now.Add(-time.Second).UnixMilli()) + `,
+		"expireAt":` + jsonNumber(now.Add(25*time.Second).UnixMilli()) + `,
+		"deviceId":"` + config.Plant.Chiller.ID + `",
+		"commandCode":"STOP_UNIT_SEQUENCE",
+		"params":{},
+		"policy":{"requiresReadback":true,"verificationWindowMs":600000},
+		"executionFence":1,
+		"payloadHash":"payload-stop-seq",
+		"pointCode":"stop_unit_sequence",
+		"actuationMode":"UNIT_SEQUENCE",
+		"channel":"unit-a",
+		"coilAddress":16,
+		"pulseDurationMs":500
+	}`
+	stopEnv, err := decodeMQTTCommandEnvelope([]byte(pulseJSON))
+	if err != nil {
+		t.Fatalf("038 route metadata must decode cleanly: %v", err)
+	}
+	stopReply := evaluateMQTTCommandWithEdgeCycle(t, handler, edgeRuntime, stopEnv, now)
+	if stopReply.EdgeStatus != "EXECUTED" || stopReply.ReasonCode != nil {
+		t.Fatalf("STOP_UNIT_SEQUENCE reply=%+v want EXECUTED", stopReply)
+	}
+	plant.Tick(5 * time.Minute)
+	if got := plant.Snapshot().Devices[config.Plant.Chiller.ID]["runState"]; got != "STOPPED" {
+		t.Fatalf("STOP_UNIT_SEQUENCE did not stop chiller: %v", got)
+	}
+
+	startJSON := `{
+		"schemaVersion":"2.0",
+		"messageId":"018f3e00-9000-7000-8000-000000000103",
+		"commandId":"018f3e00-9000-7000-8000-000000000104",
+		"issuedAt":` + jsonNumber(now.Add(-time.Second).UnixMilli()) + `,
+		"expireAt":` + jsonNumber(now.Add(25*time.Second).UnixMilli()) + `,
+		"deviceId":"` + config.Plant.Chiller.ID + `",
+		"commandCode":"START_UNIT_SEQUENCE",
+		"params":{},
+		"policy":{"requiresReadback":true,"verificationWindowMs":600000},
+		"executionFence":2,
+		"payloadHash":"payload-start-seq",
+		"pointCode":"start_unit_sequence",
+		"actuationMode":"UNIT_SEQUENCE",
+		"channel":"unit-a",
+		"pulseDurationMs":500
+	}`
+	startEnv, err := decodeMQTTCommandEnvelope([]byte(startJSON))
+	if err != nil {
+		t.Fatalf("START_UNIT_SEQUENCE envelope must decode cleanly: %v", err)
+	}
+	startReply := evaluateMQTTCommandWithEdgeCycle(t, handler, edgeRuntime, startEnv, now.Add(time.Second))
+	if startReply.EdgeStatus != "EXECUTED" || startReply.ReasonCode != nil {
+		t.Fatalf("START_UNIT_SEQUENCE reply=%+v want EXECUTED", startReply)
+	}
+	plant.Tick(20 * time.Second)
+	if got := plant.Snapshot().Devices[config.Plant.Chiller.ID]["runState"]; got != "RUNNING" {
+		t.Fatalf("START_UNIT_SEQUENCE did not bring plant back online: %v", got)
+	}
+}
+
+func jsonNumber(v int64) string {
+	b, _ := json.Marshal(v)
+	return string(b)
 }
