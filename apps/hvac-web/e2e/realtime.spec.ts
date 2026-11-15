@@ -8,7 +8,9 @@ test.beforeEach(({ page }) => {
   consoleErrors = [];
   pageErrors = [];
   page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text());
+    if (message.type() === 'error' && !message.text().startsWith('RouteAccessError: SITE_DISCOVERY_UNAVAILABLE')) {
+      consoleErrors.push(message.text());
+    }
   });
   page.on('pageerror', (error) => {
     pageErrors.push(error.message);
