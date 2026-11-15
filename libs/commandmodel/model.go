@@ -370,14 +370,35 @@ func (e EdgeExecutionEvidence) ValidExecuted() bool {
 	return e.Valid() && e.Effective != nil
 }
 
+func (e EdgeExecutionEvidence) validAppliedText() (string, bool) {
+	if !e.ValidExecuted() || e.Applied == nil || e.Applied.Text == nil || e.Applied.Number != nil || e.Applied.Boolean != nil {
+		return "", false
+	}
+	return *e.Applied.Text, true
+}
+
 // ValidPulseDualReadback reports whether edge execution evidence proves a pulse relay
 // closed and then returned to 0 (dual readback: "${channel}:pulse(${duration}ms)->0").
 func (e EdgeExecutionEvidence) ValidPulseDualReadback() bool {
-	if !e.ValidExecuted() || e.Applied == nil || e.Applied.Text == nil || e.Applied.Number != nil || e.Applied.Boolean != nil {
+	applied, ok := e.validAppliedText()
+	if !ok {
 		return false
 	}
-	applied := *e.Applied.Text
 	return strings.Contains(applied, ":pulse(") && strings.HasSuffix(applied, ")->0")
+}
+
+// ValidEmergencyDoReleaseReadback reports whether edge execution evidence proves
+// an emergency DO release read back all outputs released ("all-do:0").
+func (e EdgeExecutionEvidence) ValidEmergencyDoReleaseReadback() bool {
+	applied, ok := e.validAppliedText()
+	return ok && applied == "all-do:0"
+}
+
+// ValidUnitSequenceAcceptance reports whether edge execution evidence proves
+// a unit-controller sequence command was accepted ("${unit}:sequence-accepted").
+func (e EdgeExecutionEvidence) ValidUnitSequenceAcceptance() bool {
+	applied, ok := e.validAppliedText()
+	return ok && strings.HasSuffix(applied, ":sequence-accepted")
 }
 
 func (value ScalarValue) Valid() bool {
@@ -497,12 +518,13 @@ type CancelRequest struct {
 // CancelPendingRequest cancels pending commands scoped to a Site (and optional Device IDs)
 // when an operator activates a control exit or asset lock.
 type CancelPendingRequest struct {
-	TenantID    string
-	SiteID      string
-	DeviceIDs   []string
-	PrincipalID string
-	Reason      string
-	CausationID string
+	TenantID             string
+	SiteID               string
+	DeviceIDs            []string
+	PrincipalID          string
+	Reason               string
+	CausationID          string
+	AbortActiveSequences bool `json:"abortActiveSequences,omitempty"`
 }
 
 type DispatchEnvelope struct {

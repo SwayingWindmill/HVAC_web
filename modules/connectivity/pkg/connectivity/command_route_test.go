@@ -1,6 +1,7 @@
 package connectivity
 
 import (
+	"context"
 	"testing"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
@@ -112,5 +113,27 @@ func TestIsControlLockBlocking(t *testing.T) {
 					tc.siteControlMode, tc.deviceLockMode, tc.capability, tc.actuationMode, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolveCommandActuationModeGuardsAndNormalization(t *testing.T) {
+	var nilStore *Store
+	if _, err := nilStore.ResolveCommandActuationMode(context.Background(), commandmodel.DispatchEnvelope{}); err == nil {
+		t.Fatal("expected error from nil connectivity store")
+	}
+	closedStore := &Store{}
+	if _, err := closedStore.ResolveCommandActuationMode(context.Background(), commandmodel.DispatchEnvelope{}); err == nil {
+		t.Fatal("expected error from closed connectivity store")
+	}
+	for raw, want := range map[string]string{
+		"":                        "",
+		"   ":                     "",
+		"pulse":                   "PULSE",
+		"  emergency_do_release ": "EMERGENCY_DO_RELEASE",
+		"LEVEL":                   "LEVEL",
+	} {
+		if got := normalizeActuationMode(raw); got != want {
+			t.Fatalf("normalizeActuationMode(%q) = %q, want %q", raw, got, want)
+		}
 	}
 }

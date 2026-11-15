@@ -111,50 +111,66 @@ func TestPulseDualReadbackVsNonPulseFormalBranches(t *testing.T) {
 	deadline := now.Add(10 * time.Minute)
 	pulseEdge := validPulseEdgeExecution("u14", 500)
 	levelEdge := validLevelEdgeExecution("u11", 1)
+	emergencyDoEdge := validEmergencyDoReleaseEdgeExecution()
+	unitSeqEdge := validUnitSequenceAcceptedEdgeExecution("chiller-1")
+
+	resolveTimedOut := func(cap commandmodel.Capability, edge *commandmodel.EdgeExecutionEvidence) commandservice.VerificationResolutionDecision {
+		t.Helper()
+		dec, err := commandservice.DecideVerificationResolutionWithEdge(
+			makeSyntheticIntentForCapability(1, cap, commandmodel.IntentDispatching, true, now),
+			commandmodel.VerificationEnvelope{VerificationPointKey: setpointVerificationKey, AcknowledgedAt: now, EdgeExecution: edge},
+			edge,
+			commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-timeout"},
+			deadline,
+			deadline.Add(time.Second),
+		)
+		if err != nil {
+			t.Fatalf("%s DecideVerificationResolutionWithEdge failed: %v", cap, err)
+		}
+		return dec
+	}
+
+	assertUnconfirmedFailed := func(cap commandmodel.Capability, label string, edge *commandmodel.EdgeExecutionEvidence) {
+		t.Helper()
+		dec := resolveTimedOut(cap, edge)
+		if dec.IntentFinal != commandmodel.IntentFailed || dec.Reason != commandmodel.ReasonPulseDeliveredPowerUnconfirmed || dec.FreezeControlGroup {
+			t.Fatalf("%s (%s) timeout = %+v, want FAILED without freeze", cap, label, dec)
+		}
+	}
+
+	assertFrozenUnknown := func(cap commandmodel.Capability, label string, edge *commandmodel.EdgeExecutionEvidence) {
+		t.Helper()
+		dec := resolveTimedOut(cap, edge)
+		if dec.IntentFinal != commandmodel.IntentOutcomeUnknown || !dec.FreezeControlGroup {
+			t.Fatalf("%s (%s) timeout = %+v, want OUTCOME_UNKNOWN with freeze", cap, label, dec)
+		}
+	}
 
 	for _, cap := range []commandmodel.Capability{commandmodel.CapabilityStart, commandmodel.CapabilityStop} {
-		dec, err := commandservice.DecideVerificationResolution(
-			makeSyntheticIntentForCapability(1, cap, commandmodel.IntentDispatching, true, now),
-			commandmodel.VerificationEnvelope{VerificationPointKey: setpointVerificationKey, AcknowledgedAt: now, EdgeExecution: pulseEdge},
-			commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-pulse-timeout"},
-			deadline,
-			deadline.Add(time.Second),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if dec.IntentFinal != commandmodel.IntentFailed || dec.Reason != commandmodel.ReasonPulseDeliveredPowerUnconfirmed || dec.FreezeControlGroup {
-			t.Fatalf("%s pulse timeout = %+v, want FAILED without freeze", cap, dec)
-		}
-
-		// Level coil or missing edge MUST freeze OUTCOME_UNKNOWN.
-		levelDec, err := commandservice.DecideVerificationResolution(
-			makeSyntheticIntentForCapability(1, cap, commandmodel.IntentDispatching, true, now),
-			commandmodel.VerificationEnvelope{VerificationPointKey: setpointVerificationKey, AcknowledgedAt: now, EdgeExecution: levelEdge},
-			commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-level-timeout"},
-			deadline,
-			deadline.Add(time.Second),
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if levelDec.IntentFinal != commandmodel.IntentOutcomeUnknown || !levelDec.FreezeControlGroup {
-			t.Fatalf("%s level timeout = %+v, want OUTCOME_UNKNOWN with freeze", cap, levelDec)
-		}
+		assertUnconfirmedFailed(cap, "pulse dual", pulseEdge)
+		assertFrozenUnknown(cap, "level coil", levelEdge)
+		assertFrozenUnknown(cap, "missing edge", nil)
+		assertFrozenUnknown(cap, "unit sequence acceptance", unitSeqEdge)
 	}
 
-	// Unit-sequence MUST freeze OUTCOME_UNKNOWN even with pulse dual readback.
-	seqDec, err := commandservice.DecideVerificationResolution(
-		makeSyntheticIntentForCapability(1, commandmodel.CapabilityStartUnitSequence, commandmodel.IntentDispatching, true, now),
-		commandmodel.VerificationEnvelope{VerificationPointKey: setpointVerificationKey, AcknowledgedAt: now, EdgeExecution: pulseEdge},
-		commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-seq-timeout"},
-		deadline,
-		deadline.Add(time.Second),
-	)
-	if err != nil {
-		t.Fatal(err)
+	// Emergency DO release ("all-do:0") only exempts STOP from freezing OUTCOME_UNKNOWN.
+	assertUnconfirmedFailed(commandmodel.CapabilityStop, "emergency DO release", emergencyDoEdge)
+	assertFrozenUnknown(commandmodel.CapabilityStart, "emergency DO release", emergencyDoEdge)
+
+	// Unit-sequence acceptance exempts START_UNIT_SEQUENCE / STOP_UNIT_SEQUENCE,
+	// whereas pulse/level/emergency-DO/missing-edge on unit-sequence MUST freeze OUTCOME_UNKNOWN.
+	for _, cap := range []commandmodel.Capability{commandmodel.CapabilityStartUnitSequence, commandmodel.CapabilityStopUnitSequence} {
+		assertUnconfirmedFailed(cap, "unit sequence acceptance", unitSeqEdge)
+		assertFrozenUnknown(cap, "pulse dual", pulseEdge)
+		assertFrozenUnknown(cap, "level coil", levelEdge)
+		assertFrozenUnknown(cap, "emergency DO release", emergencyDoEdge)
+		assertFrozenUnknown(cap, "missing edge", nil)
 	}
-	if seqDec.IntentFinal != commandmodel.IntentOutcomeUnknown || !seqDec.FreezeControlGroup {
-		t.Fatalf("unit-sequence timeout = %+v, want OUTCOME_UNKNOWN with freeze", seqDec)
+
+	// Setpoint and fault-reset capabilities MUST always freeze OUTCOME_UNKNOWN even with special edge texts.
+	for _, cap := range []commandmodel.Capability{commandmodel.CapabilitySetTemperatureSetpoint, commandmodel.CapabilityResetFault} {
+		assertFrozenUnknown(cap, "pulse dual", pulseEdge)
+		assertFrozenUnknown(cap, "emergency DO release", emergencyDoEdge)
+		assertFrozenUnknown(cap, "unit sequence acceptance", unitSeqEdge)
 	}
 }

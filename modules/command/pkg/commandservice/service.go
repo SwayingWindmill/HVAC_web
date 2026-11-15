@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -178,6 +179,85 @@ func (s *Service) Cancel(request commandmodel.CancelRequest) (commandmodel.Comma
 	}
 	transition(intent, decision.IntentFinal, decision.Reason, request.Authorization.PrincipalID, now, request.Authorization.GrantID, request.Authorization.GrantID)
 	return cloneIntent(*intent), nil
+}
+
+// CancelPending cancels all AWAITING_APPROVAL or QUEUED commands for a site (and optional device IDs)
+// and, when AbortActiveSequences is set, cleanly fails ACKNOWLEDGED unit-sequence and emergency DO release commands.
+func (s *Service) CancelPending(request commandmodel.CancelPendingRequest) ([]string, error) {
+	if strings.TrimSpace(request.TenantID) == "" || strings.TrimSpace(request.SiteID) == "" || strings.TrimSpace(request.PrincipalID) == "" {
+		return nil, ErrInvalidRequest
+	}
+	reason := strings.TrimSpace(request.Reason)
+	if reason == "" {
+		reason = "CONTROL_EXIT_CANCELLED"
+	}
+	causationID := strings.TrimSpace(request.CausationID)
+	if causationID == "" {
+		causationID = reason
+	}
+	var deviceFilter map[string]bool
+	if len(request.DeviceIDs) > 0 {
+		deviceFilter = make(map[string]bool, len(request.DeviceIDs))
+		for _, id := range request.DeviceIDs {
+			deviceFilter[id] = true
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := s.now().UTC()
+	var scoped []*commandmodel.CommandIntent
+	for _, intent := range s.intents {
+		if intent.TenantID != request.TenantID || intent.SiteID != request.SiteID {
+			continue
+		}
+		if deviceFilter != nil && !deviceFilter[intent.DeviceID] {
+			continue
+		}
+		scoped = append(scoped, intent)
+	}
+	sort.Slice(scoped, func(i, j int) bool {
+		if scoped[i].DeviceCommandSequence != scoped[j].DeviceCommandSequence {
+			return scoped[i].DeviceCommandSequence < scoped[j].DeviceCommandSequence
+		}
+		return scoped[i].ID < scoped[j].ID
+	})
+
+	var cancelledIDs []string
+	for _, intent := range scoped {
+		if intent.Status != commandmodel.IntentAwaitingApproval && intent.Status != commandmodel.IntentQueued {
+			continue
+		}
+		transition(intent, commandmodel.IntentCancelled, reason, request.PrincipalID, now, causationID, causationID)
+		cancelledIDs = append(cancelledIDs, intent.ID)
+	}
+	if !request.AbortActiveSequences {
+		return cancelledIDs, nil
+	}
+	for _, intent := range scoped {
+		if intent.Status != commandmodel.IntentDispatching {
+			continue
+		}
+		for index := range intent.Attempts {
+			attempt := &intent.Attempts[index]
+			if attempt.ExecutionFence != intent.ActiveFence || attempt.Status != commandmodel.AttemptAcknowledged {
+				continue
+			}
+			if !IsActiveAbortableSequence(intent.Capability, attempt.EdgeExecution) {
+				break
+			}
+			attempt.Status = commandmodel.AttemptFailed
+			attempt.Version++
+			attempt.VerificationLeaseOwner = ""
+			attempt.VerificationLeaseUntil = time.Time{}
+			attempt.UpdatedAt = now
+			transition(intent, commandmodel.IntentFailed, "ACTIVE_SEQUENCE_ABORTED", request.PrincipalID, now, causationID, causationID)
+			cancelledIDs = append(cancelledIDs, intent.ID)
+			break
+		}
+	}
+	return cancelledIDs, nil
 }
 
 func (s *Service) Get(commandID string) (commandmodel.CommandIntent, error) {
@@ -399,7 +479,7 @@ func (s *Service) ResolveVerification(envelope commandmodel.VerificationEnvelope
 	if envelope.EdgeExecution == nil && attempt.EdgeExecution != nil {
 		envelope.EdgeExecution = cloneEdgeExecutionEvidence(attempt.EdgeExecution)
 	}
-	decision, err := DecideVerificationResolution(*intent, envelope, result, attempt.VerificationDeadline, now)
+	decision, err := DecideVerificationResolutionWithEdge(*intent, envelope, envelope.EdgeExecution, result, attempt.VerificationDeadline, now)
 	if err != nil {
 		return err
 	}

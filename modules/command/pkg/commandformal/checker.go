@@ -63,6 +63,7 @@ const (
 	stepSubmitStartPulse
 	stepSubmitStopPulse
 	stepSubmitStartUnitSequence
+	stepSubmitStopUnitSequence
 	stepApproveValid
 	stepApproveSelfRejected
 	stepCancelIntent
@@ -79,6 +80,8 @@ const (
 	stepResolveRequestCommitted
 	stepResolveAckValid
 	stepResolveAckPulseDualReadback
+	stepResolveAckEmergencyDoRelease
+	stepResolveAckUnitSequenceAccepted
 	stepResolveAckMissingEdge
 	stepResolveDispatchStaleFence
 	stepPrepareVerification
@@ -103,6 +106,8 @@ func (k protoStepKind) String() string {
 		return "Submit(stop)"
 	case stepSubmitStartUnitSequence:
 		return "Submit(startUnitSequence)"
+	case stepSubmitStopUnitSequence:
+		return "Submit(stopUnitSequence)"
 	case stepApproveValid:
 		return "Approve(validApprover)"
 	case stepApproveSelfRejected:
@@ -135,6 +140,10 @@ func (k protoStepKind) String() string {
 		return "ResolveDispatch(ackValidEdge)"
 	case stepResolveAckPulseDualReadback:
 		return "ResolveDispatch(ackPulseDualReadback)"
+	case stepResolveAckEmergencyDoRelease:
+		return "ResolveDispatch(ackEmergencyDoRelease)"
+	case stepResolveAckUnitSequenceAccepted:
+		return "ResolveDispatch(ackUnitSequenceAccepted)"
 	case stepResolveAckMissingEdge:
 		return "ResolveDispatch(ackWithoutEdge)"
 	case stepResolveDispatchStaleFence:
@@ -156,23 +165,32 @@ func (k protoStepKind) String() string {
 	}
 }
 
+type protoAckEdgeKind uint8
+
+const (
+	ackEdgeDefault protoAckEdgeKind = iota
+	ackEdgePulseDual
+	ackEdgeEmergencyDoRelease
+	ackEdgeUnitSequenceAccepted
+)
+
 type protoStateKey struct {
-	submitted            bool
-	capability           commandmodel.Capability
-	intentStatus         commandmodel.IntentStatus
-	attemptCount         int
-	attemptStatus        commandmodel.AttemptStatus
-	ackPulseDualReadback bool
-	corrState            commandmodel.CorrelationState
-	publishesAttempt     int
-	deviceFrozen         bool
-	verificationOpen     bool
-	pastDeadline         bool
-	staleAttemptUsed     bool
-	selfApproveTried     bool
-	expiredClaimTry      bool
-	missingEdgeTried     bool
-	cancelDispatchTried  bool
+	submitted           bool
+	capability          commandmodel.Capability
+	intentStatus        commandmodel.IntentStatus
+	attemptCount        int
+	attemptStatus       commandmodel.AttemptStatus
+	ackEdgeKind         protoAckEdgeKind
+	corrState           commandmodel.CorrelationState
+	publishesAttempt    int
+	deviceFrozen        bool
+	verificationOpen    bool
+	pastDeadline        bool
+	staleAttemptUsed    bool
+	selfApproveTried    bool
+	expiredClaimTry     bool
+	missingEdgeTried    bool
+	cancelDispatchTried bool
 }
 
 type protoNode struct {
@@ -181,24 +199,24 @@ type protoNode struct {
 }
 
 type protoSim struct {
-	now                  time.Time
-	service              *commandservice.Service
-	commandID            string
-	capability           commandmodel.Capability
-	targetSetpoint       float64
-	ackPulseDualReadback bool
-	dispatchEnv          commandmodel.DispatchEnvelope
-	verifyEnv            commandmodel.VerificationEnvelope
-	hasVerifyEnv         bool
-	corrState            commandmodel.CorrelationState
-	publishesAttempt     int
-	deviceFrozen         bool
-	staleAttemptUsed     bool
-	selfApproveTried     bool
-	expiredClaimTry      bool
-	missingEdgeTried     bool
-	cancelDispatchTried  bool
-	stepCount            int
+	now                 time.Time
+	service             *commandservice.Service
+	commandID           string
+	capability          commandmodel.Capability
+	targetSetpoint      float64
+	ackEdgeKind         protoAckEdgeKind
+	dispatchEnv         commandmodel.DispatchEnvelope
+	verifyEnv           commandmodel.VerificationEnvelope
+	hasVerifyEnv        bool
+	corrState           commandmodel.CorrelationState
+	publishesAttempt    int
+	deviceFrozen        bool
+	staleAttemptUsed    bool
+	selfApproveTried    bool
+	expiredClaimTry     bool
+	missingEdgeTried    bool
+	cancelDispatchTried bool
+	stepCount           int
 }
 
 func newProtoSim() *protoSim {
@@ -220,22 +238,22 @@ func (s *protoSim) key() protoStateKey {
 		attemptStatus = intent.Attempts[len(intent.Attempts)-1].Status
 	}
 	return protoStateKey{
-		submitted:            true,
-		capability:           s.capability,
-		intentStatus:         intent.Status,
-		attemptCount:         len(intent.Attempts),
-		attemptStatus:        attemptStatus,
-		ackPulseDualReadback: s.ackPulseDualReadback,
-		corrState:            s.corrState,
-		publishesAttempt:     s.publishesAttempt,
-		deviceFrozen:         s.deviceFrozen,
-		verificationOpen:     s.hasVerifyEnv,
-		pastDeadline:         s.hasVerifyEnv && s.now.After(s.verifyEnv.VerificationDeadline),
-		staleAttemptUsed:     s.staleAttemptUsed,
-		selfApproveTried:     s.selfApproveTried,
-		expiredClaimTry:      s.expiredClaimTry,
-		missingEdgeTried:     s.missingEdgeTried,
-		cancelDispatchTried:  s.cancelDispatchTried,
+		submitted:           true,
+		capability:          s.capability,
+		intentStatus:        intent.Status,
+		attemptCount:        len(intent.Attempts),
+		attemptStatus:       attemptStatus,
+		ackEdgeKind:         s.ackEdgeKind,
+		corrState:           s.corrState,
+		publishesAttempt:    s.publishesAttempt,
+		deviceFrozen:        s.deviceFrozen,
+		verificationOpen:    s.hasVerifyEnv,
+		pastDeadline:        s.hasVerifyEnv && s.now.After(s.verifyEnv.VerificationDeadline),
+		staleAttemptUsed:    s.staleAttemptUsed,
+		selfApproveTried:    s.selfApproveTried,
+		expiredClaimTry:     s.expiredClaimTry,
+		missingEdgeTried:    s.missingEdgeTried,
+		cancelDispatchTried: s.cancelDispatchTried,
 	}
 }
 
@@ -287,12 +305,15 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 		}
 		sim.commandID = res.Intent.ID
 
-	case stepSubmitStartPulse, stepSubmitStopPulse, stepSubmitStartUnitSequence:
+	case stepSubmitStartPulse, stepSubmitStopPulse, stepSubmitStartUnitSequence, stepSubmitStopUnitSequence:
 		capability := commandmodel.CapabilityStart
-		if step == stepSubmitStopPulse {
+		switch step {
+		case stepSubmitStopPulse:
 			capability = commandmodel.CapabilityStop
-		} else if step == stepSubmitStartUnitSequence {
+		case stepSubmitStartUnitSequence:
 			capability = commandmodel.CapabilityStartUnitSequence
+		case stepSubmitStopUnitSequence:
+			capability = commandmodel.CapabilityStopUnitSequence
 		}
 		sim.capability = capability
 		req := makeSubmitRequestForCapability("formal-req", capability, sim.now)
@@ -416,7 +437,7 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 		sim.dispatchEnv = env
 		sim.corrState = ""
 		sim.publishesAttempt = 0
-		sim.ackPulseDualReadback = false
+		sim.ackEdgeKind = ackEdgeDefault
 		sim.hasVerifyEnv = false
 
 	case stepPrepareDispatchExpiredGrant:
@@ -549,19 +570,27 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 			}, nil
 		}
 
-	case stepResolveAckValid, stepResolveAckPulseDualReadback:
-		pulseDual := step == stepResolveAckPulseDualReadback
+	case stepResolveAckValid, stepResolveAckPulseDualReadback, stepResolveAckEmergencyDoRelease, stepResolveAckUnitSequenceAccepted:
+		edgeKind := ackEdgeDefault
+		switch step {
+		case stepResolveAckPulseDualReadback:
+			edgeKind = ackEdgePulseDual
+		case stepResolveAckEmergencyDoRelease:
+			edgeKind = ackEdgeEmergencyDoRelease
+		case stepResolveAckUnitSequenceAccepted:
+			edgeKind = ackEdgeUnitSequenceAccepted
+		}
 		res := commandmodel.ConnectorResult{
 			Phase:         commandmodel.ConnectorAcknowledged,
 			Acknowledged:  true,
 			Verified:      false,
 			EvidenceID:    "ev-ack-" + sim.dispatchEnv.AttemptID,
-			EdgeExecution: protoEdgeExecution(sim, pulseDual),
+			EdgeExecution: protoEdgeExecution(sim, edgeKind),
 		}
 		if err := sim.service.ResolveDispatch(sim.dispatchEnv, res); err != nil {
 			return nil, fmt.Errorf("resolve valid ack failed: %w", err)
 		}
-		sim.ackPulseDualReadback = pulseDual
+		sim.ackEdgeKind = edgeKind
 		sim.corrState = commandmodel.CorrelationResolved
 		intent := mustIntent(sim)
 		if intent.Status != commandmodel.IntentDispatching || isIntentTerminal(intent.Status) {
@@ -726,12 +755,17 @@ func mustIntent(sim *protoSim) commandmodel.CommandIntent {
 	return intent
 }
 
-func protoEdgeExecution(sim *protoSim, pulseDual bool) *commandmodel.EdgeExecutionEvidence {
-	if pulseDual {
+func protoEdgeExecution(sim *protoSim, edgeKind protoAckEdgeKind) *commandmodel.EdgeExecutionEvidence {
+	switch edgeKind {
+	case ackEdgePulseDual:
 		return validPulseEdgeExecution("u14", 500)
+	case ackEdgeEmergencyDoRelease:
+		return validEmergencyDoReleaseEdgeExecution()
+	case ackEdgeUnitSequenceAccepted:
+		return validUnitSequenceAcceptedEdgeExecution("unit-a")
 	}
 	switch sim.capability {
-	case commandmodel.CapabilityStart, commandmodel.CapabilityStop, commandmodel.CapabilityStartUnitSequence:
+	case commandmodel.CapabilityStart, commandmodel.CapabilityStop, commandmodel.CapabilityStartUnitSequence, commandmodel.CapabilityStopUnitSequence:
 		return validLevelEdgeExecution("u11", 1)
 	default:
 		target := 24.0
@@ -751,7 +785,7 @@ func protoReportedEvidence(sim *protoSim, match bool) commandmodel.ReportedState
 			return validReportedTextEvidence("RUNNING", observedAt, revision)
 		}
 		return validReportedTextEvidence("STOPPED", observedAt, revision)
-	case commandmodel.CapabilityStop:
+	case commandmodel.CapabilityStop, commandmodel.CapabilityStopUnitSequence:
 		if match {
 			return validReportedTextEvidence("STOPPED", observedAt, revision)
 		}
@@ -775,14 +809,27 @@ func lastTransitionReason(intent commandmodel.CommandIntent) string {
 	return intent.Transitions[len(intent.Transitions)-1].Reason
 }
 
+func protoEdgeEligibleWithoutPowerConfirm(capability commandmodel.Capability, edgeKind protoAckEdgeKind) bool {
+	switch capability {
+	case commandmodel.CapabilityStart:
+		return edgeKind == ackEdgePulseDual
+	case commandmodel.CapabilityStop:
+		return edgeKind == ackEdgePulseDual || edgeKind == ackEdgeEmergencyDoRelease
+	case commandmodel.CapabilityStartUnitSequence, commandmodel.CapabilityStopUnitSequence:
+		return edgeKind == ackEdgeUnitSequenceAccepted
+	default:
+		return false
+	}
+}
+
 func verifyUnconfirmedProtoSettlement(sim *protoSim, intent commandmodel.CommandIntent, hooks FaultHooks, contextLabel string) *Counterexample {
-	if (intent.Capability == commandmodel.CapabilityStart || intent.Capability == commandmodel.CapabilityStop) && sim.ackPulseDualReadback {
+	if protoEdgeEligibleWithoutPowerConfirm(intent.Capability, sim.ackEdgeKind) {
 		reason := lastTransitionReason(intent)
 		if intent.Status != commandmodel.IntentFailed || sim.deviceFrozen || reason != commandmodel.ReasonPulseDeliveredPowerUnconfirmed {
 			return &Counterexample{
 				Property: PropertyP3,
 				Suite:    "SingleCommandProtocol",
-				Summary:  fmt.Sprintf("%s on pulse %s with dual readback must fail without freeze (%s/%s frozen=%v)", contextLabel, intent.Capability, intent.Status, reason, sim.deviceFrozen),
+				Summary:  fmt.Sprintf("%s on %s with edgeKind=%d must fail without freeze (%s/%s frozen=%v)", contextLabel, intent.Capability, sim.ackEdgeKind, intent.Status, reason, sim.deviceFrozen),
 			}
 		}
 		followup := makeSyntheticIntentForCapability(2, commandmodel.CapabilityStop, commandmodel.IntentQueued, true, sim.now)
@@ -790,7 +837,7 @@ func verifyUnconfirmedProtoSettlement(sim *protoSim, intent commandmodel.Command
 			return &Counterexample{
 				Property: PropertyP3,
 				Suite:    "SingleCommandProtocol",
-				Summary:  fmt.Sprintf("follow-up START/STOP deadlocked after pulse %s failed without freeze", intent.Capability),
+				Summary:  fmt.Sprintf("follow-up START/STOP deadlocked after %s failed without freeze", intent.Capability),
 			}
 		}
 		return nil
@@ -819,6 +866,7 @@ func candidateProtoSteps(sim *protoSim) []protoStepKind {
 			stepSubmitStartPulse,
 			stepSubmitStopPulse,
 			stepSubmitStartUnitSequence,
+			stepSubmitStopUnitSequence,
 		}
 	}
 	intent := mustIntent(sim)
@@ -867,8 +915,12 @@ func candidateProtoSteps(sim *protoSim) []protoStepKind {
 					stepResolveRequestCommitted,
 					stepResolveAckValid,
 				)
-				if sim.capability == commandmodel.CapabilityStart || sim.capability == commandmodel.CapabilityStop || sim.capability == commandmodel.CapabilityStartUnitSequence {
-					out = append(out, stepResolveAckPulseDualReadback)
+				if sim.capability == commandmodel.CapabilityStart || sim.capability == commandmodel.CapabilityStop ||
+					sim.capability == commandmodel.CapabilityStartUnitSequence || sim.capability == commandmodel.CapabilityStopUnitSequence {
+					out = append(out, stepResolveAckPulseDualReadback, stepResolveAckUnitSequenceAccepted)
+				}
+				if sim.capability == commandmodel.CapabilityStart || sim.capability == commandmodel.CapabilityStop {
+					out = append(out, stepResolveAckEmergencyDoRelease)
 				}
 			}
 		case commandmodel.AttemptAcknowledged:
@@ -1224,12 +1276,26 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 				{label: "AckVerified", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validPulseEdgeExecution("u14", 500)}},
 				{label: "AckPulseExpired", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validPulseEdgeExecution("u14", 500)}},
 				{label: "AckPulseLateVerified", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validPulseEdgeExecution("u14", 500)}},
+				{label: "AckEmergencyDoExpired", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validEmergencyDoReleaseEdgeExecution()}},
+				{label: "AckEmergencyDoLateVerified", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validEmergencyDoReleaseEdgeExecution()}},
+				{label: "AckStartEmergencyDoMismatchExpired", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validEmergencyDoReleaseEdgeExecution()}},
+				{label: "AckUnitSequenceAcceptedExpired", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validUnitSequenceAcceptedEdgeExecution("unit-a")}},
+				{label: "AckUnitSequenceAcceptedLateVerified", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validUnitSequenceAcceptedEdgeExecution("unit-a")}},
 				{label: "AckLevelExpired", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validLevelEdgeExecution("u11", 1)}},
 				{label: "AckUnitSequencePulseExpired", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validPulseEdgeExecution("u14", 500)}},
 			}
 			for _, outcome := range outcomes {
 				evalCap := cmdCap
-				if outcome.label == "AckUnitSequencePulseExpired" {
+				switch outcome.label {
+				case "AckEmergencyDoExpired", "AckEmergencyDoLateVerified":
+					if cmdCap != commandmodel.CapabilityStop {
+						continue
+					}
+				case "AckStartEmergencyDoMismatchExpired":
+					if cmdCap != commandmodel.CapabilityStart {
+						continue
+					}
+				case "AckUnitSequencePulseExpired", "AckUnitSequenceAcceptedExpired", "AckUnitSequenceAcceptedLateVerified":
 					evalCap = seqCap
 				}
 				decision, err := commandservice.DecideDispatchResolution(evalCap, outcome.res, now)
@@ -1241,7 +1307,7 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 				frozen := decision.FreezeControlGroup
 				switch outcome.label {
 				case "AckVerified":
-					vDec, vErr := commandservice.DecideVerificationResolution(
+					vDec, vErr := commandservice.DecideVerificationResolutionWithEdge(
 						makeSyntheticIntentForCapability(uint64(cmdNum), evalCap, commandmodel.IntentDispatching, true, now),
 						commandmodel.VerificationEnvelope{
 							VerificationPointKey:     setpointVerificationKey,
@@ -1249,6 +1315,7 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 							AcknowledgedAt:           now,
 							EdgeExecution:            outcome.res.EdgeExecution,
 						},
+						outcome.res.EdgeExecution,
 						commandmodel.VerificationResult{
 							Outcome:    commandmodel.VerificationSucceeded,
 							EvidenceID: "ev-multi",
@@ -1262,21 +1329,28 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 					}
 					targetStatus = vDec.IntentFinal
 					frozen = vDec.FreezeControlGroup
-				case "AckPulseExpired", "AckPulseLateVerified", "AckLevelExpired", "AckUnitSequencePulseExpired":
+				case "AckPulseExpired", "AckPulseLateVerified",
+					"AckEmergencyDoExpired", "AckEmergencyDoLateVerified",
+					"AckStartEmergencyDoMismatchExpired",
+					"AckUnitSequenceAcceptedExpired", "AckUnitSequenceAcceptedLateVerified",
+					"AckLevelExpired", "AckUnitSequencePulseExpired":
 					deadline := now.Add(commandmodel.VerificationWindowFor(evalCap))
 					pastDeadline := deadline.Add(time.Second)
 					vRes := commandmodel.VerificationResult{
 						Outcome:    commandmodel.VerificationTimedOut,
 						EvidenceID: "ev-multi-expired",
 					}
-					if outcome.label == "AckPulseLateVerified" {
+					lateVerified := outcome.label == "AckPulseLateVerified" ||
+						outcome.label == "AckEmergencyDoLateVerified" ||
+						outcome.label == "AckUnitSequenceAcceptedLateVerified"
+					if lateVerified {
 						vRes = commandmodel.VerificationResult{
 							Outcome:    commandmodel.VerificationSucceeded,
 							EvidenceID: "ev-multi-late-verified",
 							Reported:   validReportedTextEvidence(expectedReported, now.Add(time.Second), 18),
 						}
 					}
-					vDec, vErr := commandservice.DecideVerificationResolution(
+					vDec, vErr := commandservice.DecideVerificationResolutionWithEdge(
 						makeSyntheticIntentForCapability(uint64(cmdNum), evalCap, commandmodel.IntentDispatching, true, now),
 						commandmodel.VerificationEnvelope{
 							VerificationPointKey:     setpointVerificationKey,
@@ -1284,6 +1358,7 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 							AcknowledgedAt:           now,
 							EdgeExecution:            outcome.res.EdgeExecution,
 						},
+						outcome.res.EdgeExecution,
 						vRes,
 						deadline,
 						pastDeadline,
@@ -1291,7 +1366,7 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 					if vErr != nil {
 						return SuiteReport{}, vErr
 					}
-					if outcome.label == "AckPulseLateVerified" && (hooks.IgnoreVerificationDeadline || vDec.IntentFinal == commandmodel.IntentSucceeded) {
+					if lateVerified && (hooks.IgnoreVerificationDeadline || vDec.IntentFinal == commandmodel.IntentSucceeded) {
 						trace := append(append([]string(nil), cur.trace...), fmt.Sprintf("Resolve(cmd-%d,%s)", cmdNum, outcome.label))
 						return SuiteReport{
 							Suite:         "MultiCommandDeviceExclusivity",
@@ -1301,14 +1376,20 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 							Counterexample: &Counterexample{
 								Property: PropertyP5,
 								Suite:    "MultiCommandDeviceExclusivity",
-								Summary:  "pulse verification settled SUCCEEDED after 10m VerificationDeadline expired",
+								Summary:  "verification settled SUCCEEDED after 10m VerificationDeadline expired",
 								Trace:    trace,
 							},
 						}, nil
 					}
 					targetStatus = vDec.IntentFinal
 					frozen = vDec.FreezeControlGroup
-					if outcome.label == "AckPulseExpired" || outcome.label == "AckPulseLateVerified" {
+					unconfirmedNoFreeze := outcome.label == "AckPulseExpired" ||
+						outcome.label == "AckPulseLateVerified" ||
+						outcome.label == "AckEmergencyDoExpired" ||
+						outcome.label == "AckEmergencyDoLateVerified" ||
+						outcome.label == "AckUnitSequenceAcceptedExpired" ||
+						outcome.label == "AckUnitSequenceAcceptedLateVerified"
+					if unconfirmedNoFreeze {
 						if targetStatus != commandmodel.IntentFailed || vDec.Reason != commandmodel.ReasonPulseDeliveredPowerUnconfirmed || frozen {
 							trace := append(append([]string(nil), cur.trace...), fmt.Sprintf("Resolve(cmd-%d,%s)", cmdNum, outcome.label))
 							return SuiteReport{
@@ -1319,7 +1400,7 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 								Counterexample: &Counterexample{
 									Property: PropertyP3,
 									Suite:    "MultiCommandDeviceExclusivity",
-									Summary:  fmt.Sprintf("pulse power-unconfirmed resolution violated contract: status=%s reason=%s frozen=%v", targetStatus, vDec.Reason, frozen),
+									Summary:  fmt.Sprintf("edge-confirmed unverified resolution violated contract (%s): status=%s reason=%s frozen=%v", outcome.label, targetStatus, vDec.Reason, frozen),
 									Trace:    trace,
 								},
 							}, nil
@@ -1327,6 +1408,20 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 						if cmdNum == 1 {
 							next.c1PulseUnconfirmed = true
 						}
+					} else if targetStatus != commandmodel.IntentOutcomeUnknown || !frozen {
+						trace := append(append([]string(nil), cur.trace...), fmt.Sprintf("Resolve(cmd-%d,%s)", cmdNum, outcome.label))
+						return SuiteReport{
+							Suite:         "MultiCommandDeviceExclusivity",
+							VisitedStates: len(visited),
+							Transitions:   transitions,
+							Passed:        false,
+							Counterexample: &Counterexample{
+								Property: PropertyP3,
+								Suite:    "MultiCommandDeviceExclusivity",
+								Summary:  fmt.Sprintf("non-eligible unverified resolution (%s) failed to freeze OUTCOME_UNKNOWN: status=%s frozen=%v", outcome.label, targetStatus, frozen),
+								Trace:    trace,
+							},
+						}, nil
 					}
 				}
 				if hooks.UnfreezeWithoutReconcile && targetStatus == commandmodel.IntentOutcomeUnknown {

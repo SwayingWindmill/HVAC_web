@@ -631,3 +631,255 @@ func TestServicePrepareVerificationPulseExpiryFailsWithoutBlockingFollowup(t *te
 		t.Fatalf("unexpected transition reason: %+v", settled.Transitions)
 	}
 }
+
+func TestDecideVerificationResolutionEmergencyDoAndUnitSequence(t *testing.T) {
+	now := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
+	deadline := now.Add(10 * time.Minute)
+	str := func(v string) *commandmodel.ScalarValue { return &commandmodel.ScalarValue{Text: &v} }
+	requested := commandmodel.TextScalar("STOP")
+
+	emergencyDoEdge := &commandmodel.EdgeExecutionEvidence{
+		Requested: requested, Effective: str("all-do:0"), Applied: str("all-do:0"),
+		WinnerControllerID: "edge-local", Cycle: 1,
+	}
+	unitSeqEdge := &commandmodel.EdgeExecutionEvidence{
+		Requested: commandmodel.TextScalar("START_UNIT_SEQUENCE"), Effective: str("chiller-1:sequence-accepted"), Applied: str("chiller-1:sequence-accepted"),
+		WinnerControllerID: "edge-local", Cycle: 1,
+	}
+	pulseEdge := &commandmodel.EdgeExecutionEvidence{
+		Requested: commandmodel.TextScalar("START"), Effective: str("u14:pulse(500ms)->0"), Applied: str("u14:pulse(500ms)->0"),
+		WinnerControllerID: "edge-local", Cycle: 1,
+	}
+
+	tests := []struct {
+		name       string
+		capability commandmodel.Capability
+		edge       *commandmodel.EdgeExecutionEvidence
+		wantIntent commandmodel.IntentStatus
+		wantReason string
+		wantFreeze bool
+	}{
+		{
+			name:       "emergency DO release STOP expires without freeze",
+			capability: commandmodel.CapabilityStop,
+			edge:       emergencyDoEdge,
+			wantIntent: commandmodel.IntentFailed,
+			wantReason: commandmodel.ReasonPulseDeliveredPowerUnconfirmed,
+			wantFreeze: false,
+		},
+		{
+			name:       "emergency DO release edge on START still freezes OUTCOME_UNKNOWN",
+			capability: commandmodel.CapabilityStart,
+			edge:       emergencyDoEdge,
+			wantIntent: commandmodel.IntentOutcomeUnknown,
+			wantReason: "REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED",
+			wantFreeze: true,
+		},
+		{
+			name:       "START_UNIT_SEQUENCE accepted expires without freeze",
+			capability: commandmodel.CapabilityStartUnitSequence,
+			edge:       unitSeqEdge,
+			wantIntent: commandmodel.IntentFailed,
+			wantReason: commandmodel.ReasonPulseDeliveredPowerUnconfirmed,
+			wantFreeze: false,
+		},
+		{
+			name:       "STOP_UNIT_SEQUENCE accepted expires without freeze",
+			capability: commandmodel.CapabilityStopUnitSequence,
+			edge:       unitSeqEdge,
+			wantIntent: commandmodel.IntentFailed,
+			wantReason: commandmodel.ReasonPulseDeliveredPowerUnconfirmed,
+			wantFreeze: false,
+		},
+		{
+			name:       "unit sequence with pulse readback still freezes OUTCOME_UNKNOWN",
+			capability: commandmodel.CapabilityStartUnitSequence,
+			edge:       pulseEdge,
+			wantIntent: commandmodel.IntentOutcomeUnknown,
+			wantReason: "REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED",
+			wantFreeze: true,
+		},
+		{
+			name:       "START with sequence-accepted still freezes OUTCOME_UNKNOWN",
+			capability: commandmodel.CapabilityStart,
+			edge:       unitSeqEdge,
+			wantIntent: commandmodel.IntentOutcomeUnknown,
+			wantReason: "REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED",
+			wantFreeze: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			intent := commandmodel.CommandIntent{
+				ID:                   "cmd-edge-class",
+				Capability:           tc.capability,
+				VerificationPointKey: "equipment.run_state",
+				Status:               commandmodel.IntentDispatching,
+			}
+			env := commandmodel.VerificationEnvelope{
+				VerificationPointKey: "equipment.run_state",
+				AcknowledgedAt:       now,
+				EdgeExecution:        tc.edge,
+			}
+			decision, err := DecideVerificationResolutionWithEdge(
+				intent, env, tc.edge,
+				commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut, EvidenceID: "ev-timeout"},
+				deadline, deadline.Add(time.Second),
+			)
+			if err != nil {
+				t.Fatalf("DecideVerificationResolutionWithEdge error: %v", err)
+			}
+			if decision.IntentFinal != tc.wantIntent || decision.Reason != tc.wantReason || decision.FreezeControlGroup != tc.wantFreeze {
+				t.Fatalf("got %+v, want intent=%s reason=%s freeze=%v", decision, tc.wantIntent, tc.wantReason, tc.wantFreeze)
+			}
+		})
+	}
+}
+
+func TestServiceCancelPendingAbortActiveSequences(t *testing.T) {
+	now := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
+	svc := New(func() time.Time { return now })
+
+	submitDevice := func(key, deviceID string, cap commandmodel.Capability, setpoint *float64) commandmodel.CommandIntent {
+		t.Helper()
+		req := validRequest()
+		req.IdempotencyKey = key
+		req.DeviceID = deviceID
+		req.Authorization.DeviceID = deviceID
+		req.Capability = cap
+		req.Authorization.Capability = cap
+		profile, ok := commandmodel.CapabilityProfileFor(cap)
+		if !ok {
+			t.Fatalf("missing capability profile for %s", cap)
+		}
+		req.Authorization.CapabilityRevision = profile.Revision
+		if setpoint != nil {
+			req.Parameters = commandmodel.CommandParameters{commandmodel.ParameterSetpointC: *setpoint}
+			req.VerificationPointKey = "zone.temperature_setpoint"
+		} else {
+			req.Parameters = commandmodel.CommandParameters{}
+			req.VerificationPointKey = "chiller.run_state"
+		}
+		res, err := svc.Submit(req)
+		if err != nil {
+			t.Fatalf("submit %s: %v", key, err)
+		}
+		return res.Intent
+	}
+	ackDevice := func(commandID, evidence string, edgeText string) {
+		t.Helper()
+		env, err := svc.PrepareDispatch(commandID, "disp-1", now.Add(time.Minute))
+		if err != nil {
+			t.Fatalf("prepare dispatch %s: %v", commandID, err)
+		}
+		applied := commandmodel.TextScalar(edgeText)
+		if err := svc.ResolveDispatch(env, commandmodel.ConnectorResult{
+			Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: evidence,
+			EdgeExecution: &commandmodel.EdgeExecutionEvidence{
+				Requested: commandmodel.TextScalar(string(env.Capability)),
+				Effective: &applied, Applied: &applied,
+				WinnerControllerID: "edge", Cycle: 1,
+			},
+		}); err != nil {
+			t.Fatalf("ack dispatch %s: %v", commandID, err)
+		}
+	}
+
+	queued := submitDevice("k-queued", "device-queued", commandmodel.CapabilityStart, nil)
+	preparedSeq := submitDevice("k-prepared-seq", "device-prepared", commandmodel.CapabilityStartUnitSequence, nil)
+	if _, err := svc.PrepareDispatch(preparedSeq.ID, "disp-1", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	ackStartSeq := submitDevice("k-ack-start-seq", "device-seq-start", commandmodel.CapabilityStartUnitSequence, nil)
+	ackDevice(ackStartSeq.ID, "ev-seq-start", "chiller-1:sequence-accepted")
+	if _, err := svc.PrepareVerification(ackStartSeq.ID, "verifier-1", now.Add(30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	ackStopSeq := submitDevice("k-ack-stop-seq", "device-seq-stop", commandmodel.CapabilityStopUnitSequence, nil)
+	ackDevice(ackStopSeq.ID, "ev-seq-stop", "chiller-2:sequence-accepted")
+
+	ackEmergencyDo := submitDevice("k-ack-edo", "device-edo", commandmodel.CapabilityStop, nil)
+	ackDevice(ackEmergencyDo.ID, "ev-edo", "all-do:0")
+
+	ackPulseStop := submitDevice("k-ack-pulse-stop", "device-pulse", commandmodel.CapabilityStop, nil)
+	ackDevice(ackPulseStop.ID, "ev-pulse", "u14:pulse(500ms)->0")
+
+	sp := 24.0
+	ackSetpoint := submitDevice("k-ack-sp", "device-sp", commandmodel.CapabilitySetTemperatureSetpoint, &sp)
+	envSP, err := svc.PrepareDispatch(ackSetpoint.ID, "disp-1", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	numApplied := commandmodel.NumberScalar(24.0)
+	if err := svc.ResolveDispatch(envSP, commandmodel.ConnectorResult{
+		Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "ev-sp",
+		EdgeExecution: &commandmodel.EdgeExecutionEvidence{
+			Requested: numApplied, Effective: &numApplied, Applied: &numApplied,
+			WinnerControllerID: "edge", Cycle: 1,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// AbortActiveSequences == false MUST only cancel QUEUED, never touch ACKNOWLEDGED sequences.
+	idsWithoutAbort, err := svc.CancelPending(commandmodel.CancelPendingRequest{
+		TenantID:             "tenant-1",
+		SiteID:               "site-1",
+		DeviceIDs:            []string{"device-queued", "device-seq-stop"},
+		PrincipalID:          "operator-1",
+		Reason:               "MANUAL_OVERRIDE",
+		AbortActiveSequences: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(idsWithoutAbort) != 1 || idsWithoutAbort[0] != queued.ID {
+		t.Fatalf("expected only queued command cancelled without AbortActiveSequences, got %v", idsWithoutAbort)
+	}
+	if got, _ := svc.Get(ackStopSeq.ID); got.Status != commandmodel.IntentDispatching {
+		t.Fatalf("ackStopSeq changed without AbortActiveSequences: %s", got.Status)
+	}
+
+	// AbortActiveSequences == true MUST abort ACKNOWLEDGED sequences & emergency DO release,
+	// while leaving PREPARED, pulse STOP, and SET_TEMPERATURE_SETPOINT DISPATCHING.
+	abortedIDs, err := svc.CancelPending(commandmodel.CancelPendingRequest{
+		TenantID:             "tenant-1",
+		SiteID:               "site-1",
+		PrincipalID:          "operator-1",
+		Reason:               "SAFE_SHUTDOWN_EXIT",
+		AbortActiveSequences: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(abortedIDs) != 3 {
+		t.Fatalf("expected 3 aborted active sequence IDs, got %v", abortedIDs)
+	}
+	for _, id := range []string{ackStartSeq.ID, ackStopSeq.ID, ackEmergencyDo.ID} {
+		got, err := svc.Get(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != commandmodel.IntentFailed {
+			t.Fatalf("expected %s IntentFailed, got %s", id, got.Status)
+		}
+		if got.Attempts[0].Status != commandmodel.AttemptFailed || got.Attempts[0].VerificationLeaseOwner != "" || !got.Attempts[0].VerificationLeaseUntil.IsZero() {
+			t.Fatalf("expected attempt FAILED with cleared lease on %s, got %+v", id, got.Attempts[0])
+		}
+		last := got.Transitions[len(got.Transitions)-1]
+		if last.Reason != "ACTIVE_SEQUENCE_ABORTED" {
+			t.Fatalf("expected ACTIVE_SEQUENCE_ABORTED transition reason on %s, got %+v", id, last)
+		}
+	}
+	for _, untouchedID := range []string{preparedSeq.ID, ackPulseStop.ID, ackSetpoint.ID} {
+		got, err := svc.Get(untouchedID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != commandmodel.IntentDispatching {
+			t.Fatalf("command %s must remain DISPATCHING, got %s", untouchedID, got.Status)
+		}
+	}
+}

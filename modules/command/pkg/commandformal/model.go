@@ -211,6 +211,30 @@ func validLevelEdgeExecution(channel string, level int) *commandmodel.EdgeExecut
 	}
 }
 
+func validEmergencyDoReleaseEdgeExecution() *commandmodel.EdgeExecutionEvidence {
+	requested := commandmodel.TextScalar("STOP")
+	applied := commandmodel.TextScalar("all-do:0")
+	return &commandmodel.EdgeExecutionEvidence{
+		Requested:          requested,
+		Effective:          &applied,
+		Applied:            &applied,
+		WinnerControllerID: "cloud-command-intent",
+		Cycle:              1,
+	}
+}
+
+func validUnitSequenceAcceptedEdgeExecution(unit string) *commandmodel.EdgeExecutionEvidence {
+	requested := commandmodel.TextScalar("START_UNIT_SEQUENCE")
+	applied := commandmodel.TextScalar(fmt.Sprintf("%s:sequence-accepted", unit))
+	return &commandmodel.EdgeExecutionEvidence{
+		Requested:          requested,
+		Effective:          &applied,
+		Applied:            &applied,
+		WinnerControllerID: "cloud-command-intent",
+		Cycle:              1,
+	}
+}
+
 func validReportedTextEvidence(value string, observedAt time.Time, revision uint64) commandmodel.ReportedStateEvidence {
 	return commandmodel.ReportedStateEvidence{
 		TenantID:               baseTenantID,

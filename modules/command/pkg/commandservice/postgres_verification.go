@@ -198,11 +198,13 @@ FOR UPDATE OF i, a
 	if err := json.Unmarshal(parameters, &intent.Parameters); err != nil {
 		return fmt.Errorf("decode verification resolution parameters: %w", err)
 	}
+	edgeExecution := envelope.EdgeExecution
 	if len(edgeExecutionJSON) > 0 {
 		var dbEdge commandmodel.EdgeExecutionEvidence
 		if err := json.Unmarshal(edgeExecutionJSON, &dbEdge); err != nil {
 			return fmt.Errorf("decode verification connector edge execution: %w", err)
 		}
+		edgeExecution = &dbEdge
 		envelope.EdgeExecution = &dbEdge
 	}
 	intent.Capability = commandmodel.Capability(capability)
@@ -216,7 +218,7 @@ FOR UPDATE OF i, a
 		return ErrStaleFence
 	}
 
-	decision, err := DecideVerificationResolution(intent, envelope, result, verificationDeadline, now)
+	decision, err := DecideVerificationResolutionWithEdge(intent, envelope, edgeExecution, result, verificationDeadline, now)
 	if err != nil {
 		return ErrInvalidRequest
 	}
@@ -382,9 +384,10 @@ LIMIT 50
 			ConnectorEvidenceID:      item.ConnectorEvidenceID,
 			EdgeExecution:            edgeExecution,
 		}
-		decision, err := DecideVerificationResolution(
+		decision, err := DecideVerificationResolutionWithEdge(
 			intent,
 			envelope,
+			edgeExecution,
 			commandmodel.VerificationResult{Outcome: commandmodel.VerificationTimedOut},
 			item.VerificationDeadline,
 			now,

@@ -175,10 +175,33 @@ func DecideVerificationResolutionWithEdge(
 }
 
 func isPulseCapabilityWithoutPowerConfirmation(capability commandmodel.Capability, edgeExecution *commandmodel.EdgeExecutionEvidence) bool {
-	if capability != commandmodel.CapabilityStart && capability != commandmodel.CapabilityStop {
+	if edgeExecution == nil {
 		return false
 	}
-	return edgeExecution != nil && edgeExecution.ValidPulseDualReadback()
+	switch capability {
+	case commandmodel.CapabilityStart:
+		return edgeExecution.ValidPulseDualReadback()
+	case commandmodel.CapabilityStop:
+		return edgeExecution.ValidPulseDualReadback() || edgeExecution.ValidEmergencyDoReleaseReadback()
+	case commandmodel.CapabilityStartUnitSequence, commandmodel.CapabilityStopUnitSequence:
+		return edgeExecution.ValidUnitSequenceAcceptance()
+	default:
+		return false
+	}
+}
+
+// IsActiveAbortableSequence reports whether an already-ACKNOWLEDGED dispatching command
+// represents an in-flight unit sequence or emergency DO release that can be cleanly aborted
+// to FAILED without freezing the device control group when cancelling pending commands.
+func IsActiveAbortableSequence(capability commandmodel.Capability, edgeExecution *commandmodel.EdgeExecutionEvidence) bool {
+	switch capability {
+	case commandmodel.CapabilityStartUnitSequence, commandmodel.CapabilityStopUnitSequence:
+		return true
+	case commandmodel.CapabilityStop:
+		return edgeExecution != nil && edgeExecution.ValidEmergencyDoReleaseReadback()
+	default:
+		return false
+	}
 }
 
 // ReconcileDecision is the pure operator reconciliation transition for an OUTCOME_UNKNOWN command.

@@ -526,3 +526,169 @@ func TestPostgresExpiredLevelStartStillFreezesControlGroup(t *testing.T) {
 	}
 	assertDispatchDatabaseState(t, admin, created.Intent.ID, "OUTCOME_UNKNOWN", "OUTCOME_UNKNOWN", 1, true)
 }
+
+func TestPostgresExpiredEmergencyDoReleaseAndUnitSequenceDoNotFreeze(t *testing.T) {
+	cases := []struct {
+		name       string
+		key        string
+		capability commandmodel.Capability
+		edgeText   string
+	}{
+		{
+			name:       "emergency DO release STOP expires without freeze",
+			key:        "edo-stop-expired",
+			capability: commandmodel.CapabilityStop,
+			edgeText:   "all-do:0",
+		},
+		{
+			name:       "unit sequence acceptance expires without freeze",
+			key:        "unit-seq-start-expired",
+			capability: commandmodel.CapabilityStartUnitSequence,
+			edgeText:   "chiller-1:sequence-accepted",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, admin, now, cleanup := postgresDispatchFixture(t)
+			defer cleanup()
+			ctx := t.Context()
+
+			created, err := store.Submit(ctx, postgresStartStopCommandRequest(tc.key, tc.capability, *now))
+			if err != nil {
+				t.Fatal(err)
+			}
+			dispatch, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			applied := tc.edgeText
+			edge := &commandmodel.EdgeExecutionEvidence{
+				Requested: commandmodel.TextScalar(string(tc.capability)),
+				Effective: &commandmodel.ScalarValue{Text: &applied}, Applied: &commandmodel.ScalarValue{Text: &applied},
+				WinnerControllerID: "cloud-command-intent", Cycle: 1,
+			}
+			if err := store.ResolveDispatch(ctx, dispatch, commandmodel.ConnectorResult{
+				Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "provider-ack-" + tc.key,
+				EdgeExecution: recordAcknowledgedTextConnectorEvidence(t, store, *now, dispatch, edge),
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			*now = now.Add(commandmodel.VerificationWindowFor(tc.capability) + time.Second)
+			if _, err := store.ClaimVerification(ctx, commandTenantA, "verifier-a", 15*time.Second); !errors.Is(err, ErrVerificationNotAvailable) {
+				t.Fatalf("expired verification was leased: %v", err)
+			}
+			assertDispatchDatabaseState(t, admin, created.Intent.ID, "FAILED", "FAILED", 1, false)
+		})
+	}
+}
+
+func TestPostgresCancelPendingAbortActiveSequences(t *testing.T) {
+	store, admin, now, cleanup := postgresDispatchFixture(t)
+	defer cleanup()
+	ctx := t.Context()
+
+	submitForDevice := func(key, deviceID string, cap commandmodel.Capability) commandmodel.CommandIntent {
+		t.Helper()
+		req := postgresStartStopCommandRequest(key, cap, *now)
+		req.DeviceID = deviceID
+		req.Authorization.DeviceID = deviceID
+		res, err := store.Submit(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Intent
+	}
+	ackEdge := func(dispatch commandmodel.DispatchEnvelope, evidenceID, edgeText string) {
+		t.Helper()
+		applied := edgeText
+		edge := &commandmodel.EdgeExecutionEvidence{
+			Requested: commandmodel.TextScalar(string(dispatch.Capability)),
+			Effective: &commandmodel.ScalarValue{Text: &applied}, Applied: &commandmodel.ScalarValue{Text: &applied},
+			WinnerControllerID: "cloud-command-intent", Cycle: 1,
+		}
+		if err := store.ResolveDispatch(ctx, dispatch, commandmodel.ConnectorResult{
+			Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: evidenceID,
+			EdgeExecution: recordAcknowledgedTextConnectorEvidence(t, store, *now, dispatch, edge),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	devQueued := "018f3e00-3000-7000-8000-000000000101"
+	devPrepared := "018f3e00-3000-7000-8000-000000000102"
+	devSeqStart := "018f3e00-3000-7000-8000-000000000103"
+	devEmergencyDo := "018f3e00-3000-7000-8000-000000000104"
+	devPulseStop := "018f3e00-3000-7000-8000-000000000105"
+
+	seqStart := submitForDevice("pg-abort-seq", devSeqStart, commandmodel.CapabilityStartUnitSequence)
+	dispSeqStart, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ackEdge(dispSeqStart, "ev-pg-seq", "chiller-1:sequence-accepted")
+	if _, err := store.ClaimVerification(ctx, commandTenantA, "verifier-a", 15*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	emergencyDo := submitForDevice("pg-abort-edo", devEmergencyDo, commandmodel.CapabilityStop)
+	dispEmergencyDo, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ackEdge(dispEmergencyDo, "ev-pg-edo", "all-do:0")
+
+	pulseStop := submitForDevice("pg-keep-pulse", devPulseStop, commandmodel.CapabilityStop)
+	dispPulseStop, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ackEdge(dispPulseStop, "ev-pg-pulse", "u14:pulse(500ms)->0")
+
+	preparedSeq := submitForDevice("pg-keep-prepared", devPrepared, commandmodel.CapabilityStartUnitSequence)
+	if _, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	queuedCmd := submitForDevice("pg-cancel-queued", devQueued, commandmodel.CapabilityStart)
+
+	ids, err := store.CancelPending(ctx, commandmodel.CancelPendingRequest{
+		TenantID:             commandTenantA,
+		SiteID:               commandSiteA,
+		PrincipalID:          commandPrincipalA,
+		Reason:               "SAFE_SHUTDOWN_EXIT",
+		CausationID:          "exit-1",
+		AbortActiveSequences: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 3 {
+		t.Fatalf("expected 3 cancelled/aborted IDs (%s, %s, %s), got %v", queuedCmd.ID, seqStart.ID, emergencyDo.ID, ids)
+	}
+
+	assertDispatchDatabaseState(t, admin, queuedCmd.ID, "CANCELLED", "", 0, false)
+	assertDispatchDatabaseState(t, admin, seqStart.ID, "FAILED", "FAILED", 1, false)
+	assertDispatchDatabaseState(t, admin, emergencyDo.ID, "FAILED", "FAILED", 1, false)
+	assertDispatchDatabaseState(t, admin, pulseStop.ID, "DISPATCHING", "ACKNOWLEDGED", 1, false)
+	assertDispatchDatabaseState(t, admin, preparedSeq.ID, "DISPATCHING", "PREPARED", 1, false)
+
+	for _, abortedID := range []string{seqStart.ID, emergencyDo.ID} {
+		var reason, auditReason string
+		var leaseOwner *string
+		if err := admin.QueryRow(ctx, `
+SELECT a.verification_lease_owner,
+       (SELECT t.reason FROM command_runtime.command_transitions t WHERE t.command_id = i.command_id ORDER BY t.command_version DESC LIMIT 1),
+       (SELECT au.redacted_payload->>'reason' FROM command_runtime.command_audit_intents au WHERE au.command_id = i.command_id ORDER BY au.created_at DESC LIMIT 1)
+FROM command_runtime.command_intents i
+JOIN command_runtime.command_attempts a ON a.command_id = i.command_id
+WHERE i.command_id = $1::uuid
+`, abortedID).Scan(&leaseOwner, &reason, &auditReason); err != nil {
+			t.Fatal(err)
+		}
+		if leaseOwner != nil || reason != "ACTIVE_SEQUENCE_ABORTED" || auditReason != "ACTIVE_SEQUENCE_ABORTED" {
+			t.Fatalf("unexpected aborted state for %s: leaseOwner=%v reason=%q auditReason=%q", abortedID, leaseOwner, reason, auditReason)
+		}
+	}
+}

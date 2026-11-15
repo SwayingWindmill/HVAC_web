@@ -150,6 +150,40 @@ WHERE site_id = $1::uuid AND device_id = $2::uuid AND point_id = $3::uuid AND wr
 	return checks, nil
 }
 
+func normalizeActuationMode(mode string) string {
+	return strings.ToUpper(strings.TrimSpace(mode))
+}
+
+// ResolveCommandActuationMode loads the normalized actuationMode from active COMMAND
+// point metadata on the Registry read port.
+func (store *Store) ResolveCommandActuationMode(ctx context.Context, envelope commandmodel.DispatchEnvelope) (string, error) {
+	if store == nil || store.pool == nil {
+		return "", errors.New("connectivity store is closed")
+	}
+	var actuationMode string
+	err := store.readAsTenant(ctx, envelope.TenantID, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `
+SELECT UPPER(TRIM(COALESCE(source_metadata->>'actuationMode', '')))
+FROM core_registry.command_point_routes_v1
+WHERE point_id = $1::uuid
+  AND device_id = $2::uuid
+  AND tenant_id = $3::uuid
+  AND site_id = $4::uuid
+`, envelope.PointID, envelope.DeviceID, envelope.TenantID, envelope.SiteID).Scan(&actuationMode)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read command actuation mode metadata: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return normalizeActuationMode(actuationMode), nil
+}
+
 // GatewayTenant returns the Tenant of a Gateway in the Registry gateway directory, so a
 // reply on hvac/v1/{gatewayId}/up/reply is recorded in that Tenant.
 func (store *Store) GatewayTenant(ctx context.Context, gatewayID string) (string, error) {
