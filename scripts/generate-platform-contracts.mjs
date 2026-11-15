@@ -263,14 +263,18 @@ const schemaRequirements = {
     ['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision'],
     ['id', 'tenantId', 'siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'boundDeviceIds'],
   ],
+  ActiveMaintenanceWindow: [
+    ['id', 'title', 'startDate', 'endDate', 'reason'],
+    ['id', 'title', 'startDate', 'endDate', 'reason'],
+  ],
   SiteControlState: [
     ['tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks'],
-    ['id', 'tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks'],
+    ['id', 'tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks', 'activeMaintenanceWindow'],
   ],
   SiteControlModeMutation: [['controlMode'], ['controlMode', 'reason', 'expectedRevision', 'meta']],
   SiteControlModeMutationResponse: [
     ['tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks', 'cancelledCommandIds'],
-    ['id', 'tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks', 'cancelledCommandIds'],
+    ['id', 'tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks', 'activeMaintenanceWindow', 'cancelledCommandIds'],
   ],
   AssetControlLockMutation: [['lockMode'], ['lockMode', 'reason', 'expectedRevision', 'meta']],
   AssetControlLockMutationResponse: [
