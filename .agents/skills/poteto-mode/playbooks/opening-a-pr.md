@@ -7,7 +7,7 @@ Invoked at the end of Bug fix, Feature, and Refactoring (unless the task explici
 **Commits & hygiene.** Commit cleanly with Conventional Commits (`type(scope): subject`, no trailing period; LF line endings). Activate each review skill by reading its `SKILL.md` with `read_file` before opening or updating the PR:
 1. Run [`deslop`](../../deslop/SKILL.md) over the branch diff against `main`.
 2. Run [`no-comments`](../../no-comments/SKILL.md) over touched code paths.
-3. Run [`make-pr-easy-to-review`](../../make-pr-easy-to-review/SKILL.md) (check commit ordering, `CHANGELOG.md` for user-visible changes, and `docs/HANDOFF.md` under `28 KiB`).
+3. Run [`make-pr-easy-to-review`](../../make-pr-easy-to-review/SKILL.md) (check commit ordering and `CHANGELOG.md` for user-visible changes; update `docs/HANDOFF.md` only when server, site, or local-env facts changed, keeping it under `28 KiB`).
 4. Apply [`unslop`](../../unslop/SKILL.md) to PR copy/docs and verify all relevant `scripts/domain-task-matrix.ts` gates + `npm run check` passed locally via `wsl -e bash -lc "..."` after your last edit.
 
 **PR body.** Keep the PR body concise and scannable (under ~40 lines when squashed):

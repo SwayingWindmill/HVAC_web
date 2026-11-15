@@ -1,6 +1,6 @@
-# 交接
+# 服务器、现场与环境基线
 
-现在做到哪、下一步做什么、服务器和本地环境有哪些特殊情况。改了这里说的事，就在同一个 PR 里更新本文（单次读取预算 `<= 28 KiB`，`npm run repo:check` 会检查；详细运维步骤放 `docs/operations/`）。怎么构建、测试和运行见 `AGENTS.md`；用户能看到的变化见 `CHANGELOG.md`；每张单的细节在 GitHub 问题单里。
+记录线上服务器、松雅轩现场和本地环境的当前事实与已知偏差（单次读取预算 `<= 28 KiB`，`npm run repo:check` 会检查；详细运维步骤放 `docs/operations/`）。**本文件不作为开发计划或「下一步」任务清单**；需求排期与进度认领见 GitHub Issues（`docs/agents/issue-tracker.md`），跨会话断点续跑、暂停留痕与交付流程一律按 `pstack`（`.agents/skills/poteto-mode/SKILL.md`）执行。怎么构建、测试和运行见 `AGENTS.md`；用户能看到的变化见 `CHANGELOG.md`。
 
 最后更新：2026-11-15。
 
@@ -35,6 +35,7 @@
 
 - 告警发送：平台告警在运行目录 `alert-receiver/` 放企业微信机器人地址与/或 SMTP（样例见 `observability/alert-receiver.example/`，步骤见 `docs/operations/alerts.md`）；设备告警不走 Alertmanager，由 `energy-api` 按 `deploy/sites/*.alarm-routing.json` 经 `wecom-alert-adapter` 发送（默认 `ALARM_DELIVERY_MODE=off`，收件人与令牌放运行目录 `alarm-delivery/`，企业微信自建应用密钥放 `alert-receiver/`，见 `docs/operations/alarm-delivery.md`）。Prometheus 使用仓库内 `observability/prometheus.yaml`（15 天 / 2 GB 上限），Centrifugo 指标从容器内网明文 9000 抓取。
 - 磁盘与清理：#553 每小时清理已送达历史事件和 7 天前原始读数；#651 仅在告警判断结果或规则版本变化时写 `alarm_runtime.alarm_evaluation_event` 并清理 30 天前记录。磁盘清理与 `VACUUM FULL telemetry_runtime.source_observations` 见 `docs/operations/disk-full.md`（空闲空间不足数据体量前勿跑 `VACUUM FULL`）。
+- 待人工触发的服务器上线操作（对应代码已合入 `main`）：① 部署前先删去服务器 `role-credentials` 里遗留的 `outbound_delivery_*` 与 `rule_runtime_*` 两行再清理旧角色（本机 `local:up` 已自动处理）；② 点位质量（#750/#751/#752）与设备告警路由（#753）按序执行 PostgreSQL 迁移（`011-point-quality.sql`、`006_alarm_delivery.sql`）、部署新镜像、执行 `site-onboarding.mjs apply` 并发布 `alarm-rules`，在运行目录放好 `recipients.json`、`alarm-send-token` 与企业微信自建应用密钥及可信 IP 后，按 `docs/operations/alarm-delivery.md` 先跑至少 1 天 `dry-run` 演练、替换松雅轩占位收件人再切换 `live`（稳定 1 周后按 ADR 0026 移除小程序订阅提醒）；③ 按 `docs/operations/energy-hourly-rollup.md` 部署能耗小时汇总；④ 微信小程序 0.2.0 过审发布后把服务器 `IDENTITY_WECHAT_MINIPROGRAM_STATE` 改为 `formal` 并重启 `identity-service`（#664）。
 
 ### 松雅轩（第一个真实站点）
 
@@ -55,18 +56,6 @@
 ## 能耗和 Cube
 
 - 所有能耗读取经过 Cube（ADR 0023）三个视图：`site_energy`、`equipment_energy`、`site_energy_cost`（按 UTC 分时电价表 `analytics.tariff_price_windows` 计价，`docs/specs/estimated-energy-cost.md`）；后台服务以 ADR 0017 身份领取 30 秒授权访问（证书由 `scripts/issue-workload-identities.mjs` 签发）。网页仍自己用供冷除以用电算能效。
-
-## 下一步
-
-按顺序推进：
-
-1. **点位质量与不确定度上线（#750/#751/#752）**：代码已进 `main`（网页「集成管理」已支持电表核对与探头零点建议），须在服务器按顺序执行数据库迁移、部署新服务、`site-onboarding.mjs apply` 与 `alarm-rules` 发布。
-2. **#664 微信小程序**：绑定、告警提醒、一键登录与界面改版已上线；0.2.0 已提交微信审核，待过审发布后把服务器 `IDENTITY_WECHAT_MINIPROGRAM_STATE` 改为 `formal` 并重启 `identity-service`；另待真机收到第一条每日运行结论（点「多收一天」）对数后关 #664 与 #677。以后小程序界面改动不靠开发者工具慢速截图，直接按单元测试守住整理逻辑、真机验收。`identity` / `notification` 库测试为 `npm run test:identity-postgres`、`npm run test:notification-postgres`；点位词典同步用 `npm -w @hvac/miniprogram run sync`。
-3. **#614 现场探头补齐**：等松雅轩现场加装房间温度探头后接回点位并评估是否恢复优化调度。
-4. **#641 AI 助手**：用评测前后对比决定是否启用 pi codemode。
-5. **对标复查（91 项余 16 项，`docs/research/thingsboard-gap-review-2026-10.md`）**：按顺序做 Alertmanager 发邮件 → 清理服务器残留旧数据库角色配置（`outbound_delivery_*`、`rule_runtime_*` 须从服务器 `role-credentials` 删除那两行后再彻底删角色，以免新空库迁移中止；本机 `local:up` 会自动处理）→ 设备告警路由器与升级收尾（#753 已进 `main`，默认 `ALARM_DELIVERY_MODE=off`：部署并在运行目录放好 `recipients.json`、`alarm-send-token` 与企业微信自建应用密钥及可信 IP，按 `docs/operations/alarm-delivery.md` 先跑至少一天 `dry-run`，将松雅轩占位收件人换为正式值班人员后再切 `live`，稳定一周后按 ADR 0026 删除小程序订阅提醒） → **冷站网页控制与节能联动（#542）**：Wave 1 控制退出模式（`MANUAL_OVERRIDE` / `SAFE_SHUTDOWN_EXIT` / 单机锁，#824/#825）与 Wave 2 ET1010 20 通道控制及水路联锁已完成并合入；Figma 原型（文件 `JWOOM4pyfWfug5bYxfBJeE`）已出待审，审核通过后实施网页端控制页面与节能策略调度；备份上云（#689）暂不做；换云/换企业域名调研见 `docs/research/cloud-migration-options-2026-10.md`。
-6. **宣传片与小程序对齐**：`tools/promo-video`（Windows 显卡渲染）里先画出的小程序功能见 `tools/promo-video/film/FEATURE-GAPS.md`，片后补齐。
-7. **功能与技术收尾**：节能验证（#484：非常规调整、需量与多措施分摊）、站点对标（#485：行业基准来源接入）、COP 影子模型积累后决定是否切换发布求解器、FDD 低温差新版本阈值（`node scripts/publish-fdd-rule-revision.mjs`，水泵 15/22 kW 铭牌与运行状态绑定待现场核实）、长范围分时电费查询内存优化、服务器部署能耗小时汇总（按 `docs/operations/energy-hourly-rollup.md`）、设备详情与工单侧栏新设计打磨。
 
 ## 本地环境的偏差
 

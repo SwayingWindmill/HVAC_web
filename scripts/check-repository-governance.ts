@@ -427,7 +427,7 @@ export const findHandoffBudgetViolations = ({
 }) => (bytes <= maxBytes
   ? []
   : [
-    `docs/HANDOFF.md: ${bytes} bytes exceeds ${maxBytes}-byte single-read budget; keep only current state, next steps, and live environment deviations in docs/HANDOFF.md, move runbooks to docs/operations/, and encode recurring rules in checks (/correct)`,
+    `docs/HANDOFF.md: ${bytes} bytes exceeds ${maxBytes}-byte single-read budget; keep only live server state, site constraints, and local environment deviations in docs/HANDOFF.md, move runbooks to docs/operations/, and encode recurring rules in checks (/correct)`,
   ]);
 
 const resolveGitListFilesInvocation = (root: string) => ({

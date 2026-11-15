@@ -10,7 +10,7 @@ Prepare a PR so a reviewer can quickly understand intent, important files, and b
 ## Workflow
 
 1. Resolve the target PR from URL or current branch (`gh pr view` in WSL).
-2. Inspect commits, diff size, changed paths, generated files, `CHANGELOG.md` / `docs/HANDOFF.md` alignment, and PR description.
+2. Inspect commits, diff size, changed paths, generated files, `CHANGELOG.md` alignment (and `docs/HANDOFF.md` only if server, site, or local-env facts changed), and PR description.
 3. Identify reviewability issues: noisy WIP commits, stale descriptions, unrelated edits mixed in, missing test/verification notes, or unclear entry points.
 4. Propose or confirm the cleanup plan before rewriting pushed history.
 5. Apply safe improvements, then confirm the resulting tree matches the pre-cleanup tree.
@@ -31,7 +31,7 @@ Clean commit groupings typically follow dependency order:
 2. Core module / domain logic.
 3. Wiring, gateway, and integration.
 4. UI or operator surface changes.
-5. Tests, docs, and handoff/changelog updates.
+5. Tests, docs, and changelog updates (update `docs/HANDOFF.md` only if server, site, or local-env facts changed).
 
 After rebasing or squashing, verify tree content identity before force-pushing:
 
