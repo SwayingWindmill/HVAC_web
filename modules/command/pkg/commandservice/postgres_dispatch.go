@@ -259,6 +259,7 @@ func (store *PostgresStore) resolveDispatchOnce(ctx context.Context, envelope co
 		return err
 	}
 	var intent commandmodel.CommandIntent
+	var capability string
 	var attemptStatus string
 	var attemptVersion uint64
 	var activeFence uint64
@@ -268,7 +269,7 @@ func (store *PostgresStore) resolveDispatchOnce(ctx context.Context, envelope co
 	var outboxID string
 	err = tx.QueryRow(ctx, `
 SELECT i.command_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
-       i.payload_hash, i.version, i.active_execution_fence, i.status,
+       i.capability_name, i.payload_hash, i.version, i.active_execution_fence, i.status,
        a.status, a.version, a.execution_fence, a.payload_hash, a.lease_owner, a.lease_until,
        o.outbox_id::text
 FROM command_runtime.command_intents i
@@ -279,7 +280,7 @@ WHERE i.tenant_id = $1::uuid AND i.command_id = $2::uuid AND a.attempt_id = $3::
 FOR UPDATE OF i, a, o
 `, envelope.TenantID, envelope.CommandID, envelope.AttemptID).Scan(
 		&intent.ID, &intent.TenantID, &intent.SiteID, &intent.DeviceID, &intent.PointID,
-		&intent.PayloadHash, &intent.Version, &activeFence, &intent.Status,
+		&capability, &intent.PayloadHash, &intent.Version, &activeFence, &intent.Status,
 		&attemptStatus, &attemptVersion, &attemptFence, &attemptPayloadHash, &leaseOwner, &leaseUntil,
 		&outboxID,
 	)
@@ -313,7 +314,8 @@ FOR UPDATE
 		return ErrInvalidRequest
 	}
 
-	decision, err := DecideDispatchResolution(result, now)
+	intent.Capability = commandmodel.Capability(capability)
+	decision, err := DecideDispatchResolution(intent.Capability, result, now)
 	if err != nil {
 		return ErrInvalidRequest
 	}

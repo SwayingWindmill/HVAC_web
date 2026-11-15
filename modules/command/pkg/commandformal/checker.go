@@ -1087,7 +1087,7 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 				{label: "AckVerified", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validEdgeExecution(24)}},
 			}
 			for _, outcome := range outcomes {
-				decision, err := commandservice.DecideDispatchResolution(outcome.res, now)
+				decision, err := commandservice.DecideDispatchResolution(commandmodel.CapabilitySetTemperatureSetpoint, outcome.res, now)
 				if err != nil {
 					return SuiteReport{}, err
 				}

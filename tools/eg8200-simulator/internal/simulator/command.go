@@ -60,6 +60,28 @@ func (plant *Plant) applyChillerCommand(method string, params map[string]float64
 		}
 		plant.chiller.runRequested = false
 		return CommandResult{Success: true, Code: "APPLIED"}
+	case "startUnitSequence":
+		if len(params) != 0 {
+			return invalidParameters()
+		}
+		if plant.chiller.faultCode != "" || plant.chilledWaterPump.faultCode != "" ||
+			plant.coolingWaterPump.faultCode != "" || plant.coolingTower.faultCode != "" {
+			return CommandResult{Success: false, Code: "FAULT_ACTIVE"}
+		}
+		plant.chilledWaterPump.runRequested = true
+		plant.coolingWaterPump.runRequested = true
+		plant.coolingTower.runRequested = true
+		plant.chiller.runRequested = true
+		return CommandResult{Success: true, Code: "APPLIED"}
+	case "stopUnitSequence":
+		if len(params) != 0 {
+			return invalidParameters()
+		}
+		plant.chiller.runRequested = false
+		plant.coolingTower.runRequested = false
+		plant.coolingWaterPump.runRequested = false
+		plant.chilledWaterPump.runRequested = false
+		return CommandResult{Success: true, Code: "APPLIED"}
 	case "setChilledWaterTemperatureSetpoint":
 		value, ok := singleCommandParam(params, "setpointC")
 		if !ok {

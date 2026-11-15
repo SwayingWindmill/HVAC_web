@@ -237,7 +237,7 @@ func TestPostgresExpiredReportedStateVerificationFreezesOutcomeUnknown(t *testin
 	}); err != nil {
 		t.Fatal(err)
 	}
-	*now = now.Add(verificationWindow + time.Second)
+	*now = now.Add(commandmodel.VerificationWindowFor(commandmodel.CapabilitySetTemperatureSetpoint) + time.Second)
 	if _, err := store.ClaimVerification(ctx, commandTenantA, "verifier-a", 15*time.Second); !errors.Is(err, ErrVerificationNotAvailable) {
 		t.Fatalf("expired verification was leased: %v", err)
 	}

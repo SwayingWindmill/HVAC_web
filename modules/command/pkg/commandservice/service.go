@@ -26,8 +26,6 @@ var (
 	ErrVerificationNotAvailable = errors.New("no acknowledged command is available for verification")
 )
 
-const verificationWindow = 2 * time.Minute
-
 func commandCapabilityProfile(capability commandmodel.Capability) (revision string, minimum, maximum float64, ok bool) {
 	profile, ok := commandmodel.CapabilityProfileFor(capability)
 	if !ok {
@@ -287,7 +285,7 @@ func (s *Service) ResolveDispatch(envelope commandmodel.DispatchEnvelope, result
 	}
 
 	now := s.now().UTC()
-	decision, err := DecideDispatchResolution(result, now)
+	decision, err := DecideDispatchResolution(intent.Capability, result, now)
 	if err != nil {
 		return err
 	}

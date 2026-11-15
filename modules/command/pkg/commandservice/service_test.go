@@ -400,6 +400,32 @@ func TestServiceCancelAllowsAwaitingApprovalAndQueuedAndRejectsLaterStates(t *te
 	}
 }
 
+func TestDecideDispatchResolutionUsesCapabilityVerificationWindow(t *testing.T) {
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	ack := commandmodel.ConnectorResult{
+		Phase:         commandmodel.ConnectorAcknowledged,
+		Acknowledged:  true,
+		EvidenceID:    "ev-1",
+		EdgeExecution: testEdgeExecution(1),
+	}
+
+	seqDecision, err := DecideDispatchResolution(commandmodel.CapabilityStartUnitSequence, ack, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seqDecision.VerificationDeadline == nil || seqDecision.VerificationDeadline.Sub(now) != 10*time.Minute {
+		t.Fatalf("unit-sequence deadline=%v want %s", seqDecision.VerificationDeadline, 10*time.Minute)
+	}
+
+	setpointDecision, err := DecideDispatchResolution(commandmodel.CapabilitySetTemperatureSetpoint, ack, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setpointDecision.VerificationDeadline == nil || setpointDecision.VerificationDeadline.Sub(now) != 2*time.Minute {
+		t.Fatalf("setpoint deadline=%v want %s", setpointDecision.VerificationDeadline, 2*time.Minute)
+	}
+}
+
 func fixedClock() func() time.Time {
 	return func() time.Time {
 		return time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)

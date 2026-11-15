@@ -60,6 +60,11 @@ const (
 	RiskCritical RiskLevel = "CRITICAL"
 )
 
+const (
+	defaultVerificationWindow  = 2 * time.Minute
+	sequenceVerificationWindow = 10 * time.Minute
+)
+
 type CapabilityProfile struct {
 	Revision              string
 	ParameterKey          string
@@ -71,20 +76,21 @@ type CapabilityProfile struct {
 	MediumRiskDelta       float64
 	BaseRisk              RiskLevel
 	VerificationTolerance float64
+	VerificationWindow    time.Duration
 }
 
 func CapabilityProfileFor(capability Capability) (CapabilityProfile, bool) {
 	switch capability {
 	case CapabilityStart:
-		return CapabilityProfile{Revision: "capability:start:v1", BaseRisk: RiskHigh}, true
+		return CapabilityProfile{Revision: "capability:start:v1", BaseRisk: RiskHigh, VerificationWindow: sequenceVerificationWindow}, true
 	case CapabilityStop:
-		return CapabilityProfile{Revision: "capability:stop:v1", BaseRisk: RiskHigh}, true
+		return CapabilityProfile{Revision: "capability:stop:v1", BaseRisk: RiskHigh, VerificationWindow: sequenceVerificationWindow}, true
 	case CapabilityStartUnitSequence:
-		return CapabilityProfile{Revision: "capability:start-unit-sequence:v1", BaseRisk: RiskHigh}, true
+		return CapabilityProfile{Revision: "capability:start-unit-sequence:v1", BaseRisk: RiskHigh, VerificationWindow: sequenceVerificationWindow}, true
 	case CapabilityStopUnitSequence:
-		return CapabilityProfile{Revision: "capability:stop-unit-sequence:v1", BaseRisk: RiskHigh}, true
+		return CapabilityProfile{Revision: "capability:stop-unit-sequence:v1", BaseRisk: RiskHigh, VerificationWindow: sequenceVerificationWindow}, true
 	case CapabilityResetFault:
-		return CapabilityProfile{Revision: "capability:reset-fault:v1", BaseRisk: RiskLow}, true
+		return CapabilityProfile{Revision: "capability:reset-fault:v1", BaseRisk: RiskLow, VerificationWindow: defaultVerificationWindow}, true
 	case CapabilitySetTemperatureSetpoint:
 		return numericCapability("capability:set-temperature-setpoint:v1", ParameterSetpointC, 16, 30, 0.5, 3, 1, 2, 0.1), true
 	case CapabilitySetChilledWaterTemperatureSetpoint:
@@ -102,11 +108,21 @@ func CapabilityProfileFor(capability Capability) (CapabilityProfile, bool) {
 	}
 }
 
+// VerificationWindowFor returns how long readback verification waits for reported-state
+// confirmation after an edge acknowledge. Equipment start/stop and unit-sequence actions
+// allow 10 minutes for telemetry intervals and ramp/coast inertia; setpoints keep 2 minutes.
+func VerificationWindowFor(capability Capability) time.Duration {
+	if profile, ok := CapabilityProfileFor(capability); ok && profile.VerificationWindow > 0 {
+		return profile.VerificationWindow
+	}
+	return defaultVerificationWindow
+}
+
 func numericCapability(revision, parameterKey string, minimum, maximum, step, maximumDelta, lowRiskDelta, mediumRiskDelta, tolerance float64) CapabilityProfile {
 	return CapabilityProfile{
 		Revision: revision, ParameterKey: parameterKey, Minimum: minimum, Maximum: maximum, Step: step,
 		MaximumDelta: maximumDelta, LowRiskDelta: lowRiskDelta, MediumRiskDelta: mediumRiskDelta,
-		BaseRisk: RiskLow, VerificationTolerance: tolerance,
+		BaseRisk: RiskLow, VerificationTolerance: tolerance, VerificationWindow: defaultVerificationWindow,
 	}
 }
 

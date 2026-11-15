@@ -230,10 +230,7 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 	if expireAt.IsZero() || !expireAt.After(now) {
 		return commandmodel.ConnectorResult{}, errors.New("command dispatch lease is expired")
 	}
-	verificationWindow := connector.config.ReplyTimeout
-	if verificationWindow <= 0 {
-		verificationWindow = 15 * time.Second
-	}
+	verificationWindow := commandmodel.VerificationWindowFor(envelope.Capability)
 	request := buildCommandEnvelope(envelope, route, externalDeviceID, now, expireAt, verificationWindow)
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -561,7 +558,7 @@ func validateConfig(config Config) error {
 	if config.TransportState == nil || config.EvidenceStore == nil {
 		return errors.New("MQTT command durable dependencies are incomplete")
 	}
-	if config.ReplyTimeout < 0 || config.ReplyTimeout > 30*time.Second {
+	if config.ReplyTimeout < 0 || config.ReplyTimeout > 60*time.Second {
 		return errors.New("MQTT command reply timeout is invalid")
 	}
 	return nil

@@ -316,3 +316,43 @@ func TestBuildCommandEnvelopeActuationFields(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildCommandEnvelopeUsesCapabilityVerificationWindowAndValidateConfigTimeout(t *testing.T) {
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	expireAt := now.Add(25 * time.Second)
+
+	seqMsg := buildCommandEnvelope(commandmodel.DispatchEnvelope{
+		CommandID: "cmd-seq", AttemptID: "att-seq", Capability: commandmodel.CapabilityStopUnitSequence,
+		Parameters: commandmodel.CommandParameters{}, ExecutionFence: 1, PayloadHash: "h1",
+	}, commandmodel.DeviceRoute{GatewayID: "gw-1", ExternalDeviceID: "ctrl-chiller-a", BindingRevision: 1}, "ctrl-chiller-a", now, expireAt, commandmodel.VerificationWindowFor(commandmodel.CapabilityStopUnitSequence))
+	if seqMsg.Policy.VerificationWindowMS != 600000 {
+		t.Fatalf("STOP_UNIT_SEQUENCE verificationWindowMs=%d want 600000", seqMsg.Policy.VerificationWindowMS)
+	}
+
+	setMsg := buildCommandEnvelope(commandmodel.DispatchEnvelope{
+		CommandID: "cmd-set", AttemptID: "att-set", Capability: commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, ExecutionFence: 2, PayloadHash: "h2",
+	}, commandmodel.DeviceRoute{GatewayID: "gw-1", ExternalDeviceID: "ctrl-chiller-a", BindingRevision: 1}, "ctrl-chiller-a", now, expireAt, commandmodel.VerificationWindowFor(commandmodel.CapabilitySetTemperatureSetpoint))
+	if setMsg.Policy.VerificationWindowMS != 120000 {
+		t.Fatalf("SET_TEMPERATURE_SETPOINT verificationWindowMs=%d want 120000", setMsg.Policy.VerificationWindowMS)
+	}
+
+	baseCfg := Config{
+		BrokerURL:      "tls://mqtt-broker:8883",
+		ClientID:       "connectivity-commands",
+		CAFile:         "/tmp/ca.crt",
+		CertFile:       "/tmp/client.crt",
+		KeyFile:        "/tmp/client.key",
+		ServerName:     "mqtt-broker",
+		TransportState: &fakeTransportState{correlations: map[string]commandmodel.CommandCorrelation{}},
+		EvidenceStore:  fakeEvidenceStore{},
+		ReplyTimeout:   25 * time.Second,
+	}
+	if err := validateConfig(baseCfg); err != nil {
+		t.Fatalf("expected 25s replyTimeout to be valid, got %v", err)
+	}
+	baseCfg.ReplyTimeout = 61 * time.Second
+	if err := validateConfig(baseCfg); err == nil {
+		t.Fatal("expected replyTimeout > 60s to fail validation")
+	}
+}
