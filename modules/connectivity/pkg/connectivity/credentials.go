@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -37,10 +38,19 @@ type CredentialStatus struct {
 type CredentialService struct {
 	store     *Store
 	authority *CertificateAuthority
+	revokeMu  sync.RWMutex
+	onRevoke  func(gatewayID string)
 }
 
 func NewCredentialService(store *Store, authority *CertificateAuthority) *CredentialService {
-	return &CredentialService{store, authority}
+	return &CredentialService{store: store, authority: authority}
+}
+
+// SetRevokeHook registers a callback invoked right after a Gateway credential revocation commits.
+func (service *CredentialService) SetRevokeHook(hook func(gatewayID string)) {
+	service.revokeMu.Lock()
+	defer service.revokeMu.Unlock()
+	service.onRevoke = hook
 }
 func hashCredential(value []byte) string {
 	sum := sha256.Sum256(value)
@@ -159,6 +169,54 @@ func (service *CredentialService) Enroll(ctx context.Context, code, csrPEM strin
 	return service.persistIssued(ctx, tx, tenant, gatewayID, gatewayID, "ISSUED", csr, now)
 }
 
+func (service *CredentialService) verifyPeerCertificate(ctx context.Context, tx pgx.Tx, peer *x509.Certificate, now time.Time) error {
+	roots := x509.NewCertPool()
+	roots.AddCert(service.authority.certificate)
+	if _, err := peer.Verify(x509.VerifyOptions{Roots: roots, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+		return ErrEnrollmentRejected
+	}
+	var active bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM connectivity.gateway_credentials WHERE gateway_id=$1::uuid AND certificate_fingerprint_sha256=$2 AND status='ACTIVE' AND valid_from<=$3 AND valid_until>$3)`, peer.Subject.CommonName, hashCredential(peer.Raw), now).Scan(&active); err != nil {
+		return err
+	}
+	if !active {
+		return ErrEnrollmentRejected
+	}
+	return nil
+}
+
+func (service *CredentialService) VerifyActiveCredential(ctx context.Context, peer *x509.Certificate) (string, error) {
+	if peer == nil {
+		return "", ErrEnrollmentRejected
+	}
+	gatewayID := peer.Subject.CommonName
+	tenant, _, err := service.gateway(ctx, gatewayID)
+	if err != nil {
+		return "", ErrEnrollmentRejected
+	}
+	tx, err := service.beginTenant(ctx, tenant)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	var revoked *time.Time
+	err = tx.QueryRow(ctx, `SELECT revoked_at FROM connectivity.gateway_enrollments WHERE gateway_id=$1::uuid`, gatewayID).Scan(&revoked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrEnrollmentRejected
+	}
+	if err != nil {
+		return "", err
+	}
+	if revoked != nil {
+		return "", ErrCredentialRevoked
+	}
+	now := service.store.clock().UTC()
+	if err := service.verifyPeerCertificate(ctx, tx, peer, now); err != nil {
+		return "", err
+	}
+	return gatewayID, nil
+}
+
 func (service *CredentialService) Renew(ctx context.Context, peer *x509.Certificate, csrPEM string) (IssuedCredential, error) {
 	if peer == nil {
 		return IssuedCredential{}, ErrEnrollmentRejected
@@ -180,17 +238,8 @@ func (service *CredentialService) Renew(ctx context.Context, peer *x509.Certific
 		return IssuedCredential{}, err
 	}
 	now := service.store.clock().UTC()
-	roots := x509.NewCertPool()
-	roots.AddCert(service.authority.certificate)
-	if _, err = peer.Verify(x509.VerifyOptions{Roots: roots, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
-		return IssuedCredential{}, ErrEnrollmentRejected
-	}
-	var active bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM connectivity.gateway_credentials WHERE gateway_id=$1::uuid AND certificate_fingerprint_sha256=$2 AND status='ACTIVE' AND valid_from<=$3 AND valid_until>$3)`, peer.Subject.CommonName, hashCredential(peer.Raw), now).Scan(&active); err != nil {
+	if err = service.verifyPeerCertificate(ctx, tx, peer, now); err != nil {
 		return IssuedCredential{}, err
-	}
-	if !active {
-		return IssuedCredential{}, ErrEnrollmentRejected
 	}
 	return service.persistIssued(ctx, tx, tenant, peer.Subject.CommonName, peer.Subject.CommonName, "RENEWED", csr, now)
 }
@@ -235,7 +284,16 @@ func (service *CredentialService) Revoke(ctx context.Context, claims registryaut
 	if err = credentialAudit(ctx, tx, claims.TenantID, gateway, claims.PrincipalID, "REVOKED", now); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+	service.revokeMu.RLock()
+	hook := service.onRevoke
+	service.revokeMu.RUnlock()
+	if hook != nil {
+		hook(gateway)
+	}
+	return nil
 }
 
 func (service *CredentialService) Status(ctx context.Context, claims registryauth.GrantClaims, gateway string) (CredentialStatus, error) {

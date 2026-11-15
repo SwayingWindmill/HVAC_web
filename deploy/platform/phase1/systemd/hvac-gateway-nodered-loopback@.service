@@ -1,0 +1,12 @@
+[Unit]
+Description=HVAC Gateway Node-RED Loopback Stdio Bridge (%i)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=simple
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+TimeoutStopSec=15
+ExecStart=/usr/bin/docker exec -i hvac-phase1-connectivity-1 /service -tunnel-stdio 127.0.0.1:18800

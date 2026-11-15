@@ -17,7 +17,28 @@ import (
 // checked against Registry by CredentialService, not by a caller's Tenant header.
 type CredentialAuthorizer func(*http.Request, registryauth.Action) (registryauth.GrantClaims, error)
 
+// ParseGatewayPeerCert parses nginx's URL-escaped PEM client certificate header.
+func ParseGatewayPeerCert(r *http.Request) (*x509.Certificate, error) {
+	encoded, err := url.QueryUnescape(r.Header.Get("X-Gateway-Client-Cert"))
+	if err != nil {
+		return nil, ErrEnrollmentRejected
+	}
+	block, rest := pem.Decode([]byte(encoded))
+	if block == nil || block.Type != "CERTIFICATE" || len(rest) != 0 {
+		return nil, ErrEnrollmentRejected
+	}
+	peer, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, ErrEnrollmentRejected
+	}
+	return peer, nil
+}
+
 func NewCredentialHandler(service *CredentialService, authorize CredentialAuthorizer) http.Handler {
+	return NewCredentialHandlerWithTunnel(service, authorize, nil)
+}
+
+func NewCredentialHandlerWithTunnel(service *CredentialService, authorize CredentialAuthorizer, tunnelHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	finish := func(w http.ResponseWriter, value any, err error) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -75,24 +96,17 @@ func NewCredentialHandler(service *CredentialService, authorize CredentialAuthor
 		}
 		// nginx overwrites this header after client-certificate verification; this
 		// listener accepts only the platform-gateway workload certificate.
-		encoded, err := url.QueryUnescape(r.Header.Get("X-Gateway-Client-Cert"))
+		peer, err := ParseGatewayPeerCert(r)
 		if err != nil {
-			finish(w, nil, ErrEnrollmentRejected)
-			return
-		}
-		block, rest := pem.Decode([]byte(encoded))
-		if block == nil || block.Type != "CERTIFICATE" || len(rest) != 0 {
-			finish(w, nil, ErrEnrollmentRejected)
-			return
-		}
-		peer, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			finish(w, nil, ErrEnrollmentRejected)
+			finish(w, nil, err)
 			return
 		}
 		value, err := service.Renew(r.Context(), peer, input.CSR)
 		finish(w, value, err)
 	})
+	if tunnelHandler != nil {
+		mux.Handle("GET /gateway/v1/tunnel", tunnelHandler)
+	}
 	for _, route := range []struct {
 		method, path string
 		action       registryauth.Action
