@@ -10,6 +10,8 @@ import {
   type PublishedRecommendation,
   type PublishedShadowEvaluation,
 } from '../apps/hvac-web/src/features/optimization/optimization-model.ts';
+import { stagingReason, stagingView } from '../apps/hvac-web/src/features/optimization/staging-model.ts';
+import type { StagingEvaluation } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
 
 const publishedFixture = JSON.parse(
   readFileSync(new URL('../apps/hvac-web/e2e/fixtures/optimization-latest.json', import.meta.url), 'utf8'),
@@ -192,4 +194,48 @@ test('parseShadowEvaluation preserves NO_USABLE_MODEL per-chiller rejection reas
   assert.match(shadow.fit?.chillers[0]?.reasonLabel ?? '', /96/);
   assert.equal(shadow.fit?.chillers[1]?.displayName, '未命名冷机');
   assert.match(shadow.fit?.chillers[1]?.reasonLabel ?? '', /物理规律/);
+});
+
+test('stagingView turns the service evaluation into cards, paused blockers and plain reasons without its internal sentences', () => {
+  const evaluation: StagingEvaluation = {
+    tenantId: '018f3d00-0000-7000-8000-000000000001',
+    siteId: '018f3e00-1000-7000-8000-000000000001',
+    evaluatedAt: '2026-11-15T02:05:00Z',
+    confirmationMode: 'MANUAL_CONFIRM',
+    siteControlMode: 'REMOTE_AUTO',
+    recommendations: [
+      {
+        id: 'r-aux', kind: 'IDLE_AUXILIARY_STOP', confirmationMode: 'MANUAL_CONFIRM', requiresSupervisorReview: true, requiresTotp: true,
+        suggestedCapability: 'STOP', suggestedCommandPointId: 'p-tower-4-stop', targetAssetId: 'a-tower-4', targetAssetType: 'COOLING_TOWER',
+        predictedPowerSavingKW: 6.5, estimatedHourlySavingKWh: 6.5, estimatedShiftSavingKWh: 52, shiftHours: 8, continuousIdleMinutes: 52,
+        rationale: 'IDLE STOP', preconditions: ['MANUAL_CONFIRM'],
+      },
+      {
+        id: 'r-chiller', kind: 'CHILLER_STAGE_DOWN', confirmationMode: 'MANUAL_CONFIRM', requiresSupervisorReview: true, requiresTotp: true,
+        suggestedCapability: 'STOP_UNIT_SEQUENCE', targetAssetId: 'a-chiller-c', targetAssetName: 'chiller-c', targetAssetType: 'CHILLER',
+        predictedPowerSavingKW: 42, estimatedHourlySavingKWh: 42, estimatedShiftSavingKWh: 336, shiftHours: 8, currentTotalPowerKW: 507.5,
+        currentCoolingLoadKW: 1380, remainingCapacityKW: 1760, headroomMarginFraction: 0.216, copBefore: 4.1, projectedCopAfter: 4.6,
+        rationale: 'STOP_UNIT_SEQUENCE', preconditions: [],
+      },
+    ],
+    diagnostics: [
+      { scope: 'IDLE_AUXILIARY_STOP', assetId: 'a-cwp-4', status: 'SUPPRESSED', reason: 'ASSET_CONTROL_LOCKED', detail: 'MANUAL_LOCK' },
+      { scope: 'IDLE_AUXILIARY_STOP', assetId: 'a-cwp-1', status: 'SUPPRESSED', reason: 'PAIRED_CHILLER_RUNNING', detail: 'RUNNING' },
+      { scope: 'CHILLER_STAGE_DOWN', assetId: 'a-chiller-a', status: 'SUPPRESSED', reason: 'CHILLER_METER_STALE', detail: 'btu-calc' },
+    ],
+  };
+  const names = new Map([['a-tower-4', '4 号冷却塔'], ['a-chiller-c', 'C 机组'], ['a-cwp-4', '4 号冷却泵'], ['a-chiller-a', 'A 机组']]);
+  const view = stagingView(evaluation, (assetId) => names.get(assetId));
+
+  // Stage-down first; the registry's name wins over the service's code.
+  assert.deepEqual(view.cards.map((card) => [card.kind, card.assetName, card.pointId]), [['CHILLER_STAGE_DOWN', 'C 机组', null], ['IDLE_AUXILIARY_STOP', '4 号冷却塔', 'p-tower-4-stop']]);
+  assert.deepEqual(view.cards[0].capacity, { loadKW: 1380, remainingKW: 1760, headroomPercent: 22 });
+  assert.deepEqual(view.totals, { savingKW: 48.5, shiftKWh: 388, shiftHours: 8, powerBeforeKW: 507.5 });
+  // A chiller still running for its pump is the plant's state, not a blocker.
+  assert.deepEqual(view.paused.map((item) => [item.name, item.why, item.controlFix]), [
+    ['4 号冷却泵', '已锁定，解锁后才会给停机建议', true],
+    ['A 机组', '冷机电表读数不可用，不给减台建议', false],
+  ]);
+  assert.equal(stagingReason('SOMETHING_NEW'), '这次没有给出建议');
+  assert.equal(JSON.stringify(view).includes('MANUAL'), false);
 });

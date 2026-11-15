@@ -1,6 +1,6 @@
 import { formatDecimal } from '../../lib/operator-format.ts';
 import type { Command, CommandApprovalPolicy, CommandRisk, CommandStatus } from './command-api';
-import type { CommandLabel } from './control-model';
+import type { ActionCapability, CommandLabel } from './control-model';
 
 type StatusVariant = 'default' | 'success' | 'error' | 'warning' | 'info';
 
@@ -14,18 +14,33 @@ export const STATUS_PRESENTATION: Readonly<Record<CommandStatus, { label: string
   SUCCEEDED: { label: '已执行', variant: 'success' },
   FAILED: { label: '执行失败', variant: 'error' },
   REJECTED: { label: '已拒绝', variant: 'error' },
-  CANCELLED: { label: '已取消', variant: 'default' },
+  CANCELLED: { label: '已撤回', variant: 'default' },
   EXPIRED: { label: '已过期', variant: 'default' },
   OUTCOME_UNKNOWN: { label: '待现场确认', variant: 'warning' },
 };
 
-export const RISK_LABEL: Readonly<Record<CommandRisk, string>> = { LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险' };
+export const RISK_LABEL: Readonly<Record<CommandRisk, string>> = { LOW: '低风险', MEDIUM: '中风险', HIGH: '高风险', CRITICAL: '极高风险' };
 
 export const APPROVAL_LABEL: Readonly<Record<CommandApprovalPolicy, string>> = {
   NONE: '无需审批',
   SINGLE_APPROVER: '需一人审批',
   TWO_PERSON: '需两人审批',
 };
+
+/** The verb on a button and in a command's title, e.g. 一键停机. */
+export const ACTION_VERB: Readonly<Record<ActionCapability, string>> = {
+  START: '启动',
+  STOP: '停止',
+  START_UNIT_SEQUENCE: '一键启动',
+  STOP_UNIT_SEQUENCE: '一键停机',
+  RESET_FAULT: '复位故障',
+};
+
+/**
+ * Starting or stopping plant equipment is high risk at its base, so the Gateway asks for the
+ * authenticator code at submit; settings are assessed per change and may ask for it on refusal.
+ */
+export const CODE_AT_SUBMIT: ReadonlySet<ActionCapability> = new Set(['START', 'STOP', 'START_UNIT_SEQUENCE', 'STOP_UNIT_SEQUENCE']);
 
 /** Moving toward the plant: submitted but neither settled nor waiting on a person. */
 export const IN_FLIGHT: ReadonlySet<CommandStatus> = new Set(['SUBMITTED', 'VALIDATING', 'APPROVED', 'QUEUED', 'DISPATCHING']);
@@ -37,3 +52,6 @@ export function commandSummary(command: Pick<Command, 'pointId' | 'parameters'>,
   const setTo = value === undefined ? '' : ` → ${formatDecimal(value, 1)}${label?.unit ? ` ${label.unit}` : ''}`;
   return { title: `${label?.label ?? '已移除的控制点'}${setTo}`, target: label?.assetName ?? '未登记设备' };
 }
+
+/** Waiting on a person: an approval, or a site check after the plant did not answer. */
+export const needsPerson = (command: Pick<Command, 'status'>) => command.status === 'AWAITING_APPROVAL' || command.status === 'OUTCOME_UNKNOWN';

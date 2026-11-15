@@ -147,7 +147,7 @@ function Evidence({ measure }: { readonly measure: Measure }) {
   return (
     <span className="flex flex-col gap-0.5">
       <Link to="/operations/control" search={{ site: site.id, inspect: measure.evidenceCommandId }} className="text-primary hover:underline">
-        {cited ? cited.description : commands.isPending ? '正在读取指令…' : '指令已不在最近记录中，查看控制指令'}
+        {cited ? cited.description : commands.isPending ? '正在读取指令…' : '指令已不在最近记录中，去运行控制查看'}
       </Link>
       {measure.evidence ? <span className="text-xs text-muted-foreground">{measure.evidence}</span> : null}
     </span>

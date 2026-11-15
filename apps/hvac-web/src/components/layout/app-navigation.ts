@@ -111,10 +111,10 @@ export const APP_NAVIGATION_CONFIG: readonly AppNavigationGroup[] = [
   },
   {
     id: 'control-group',
-    label: '控制指令',
+    label: '运行控制',
     icon: SlidersHorizontal,
     section: 'control',
-    items: [{ id: 'operations-control', title: '控制指令', path: '/operations/control', icon: SlidersHorizontal }],
+    items: [{ id: 'operations-control', title: '运行控制', path: '/operations/control', icon: SlidersHorizontal }],
   },
   {
     id: 'platform',

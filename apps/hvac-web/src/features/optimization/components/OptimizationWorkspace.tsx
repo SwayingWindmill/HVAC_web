@@ -30,7 +30,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { siteCommandsQuery, type Command } from '@/features/control/command-api';
 import { APPROVAL_LABEL, STATUS_PRESENTATION } from '@/features/control/command-presentation';
 import { CommandMark } from '@/features/control/components/CommandMark';
-import { ConfirmCommand, useSubmitCommand, type PendingCommand } from '@/features/control/components/CommandConfirmation';
+import { ConfirmCommand, type PendingCommand } from '@/features/control/components/CommandConfirmation';
+import { siteControlStateQuery } from '@/features/control/control-state';
 import { controlTargets, type ControlSetting, type ControlTarget } from '@/features/control/control-model';
 import { useRealtimePlant } from '@/features/operations/realtime/use-realtime-plant';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
@@ -59,10 +60,13 @@ import {
 import {
   latestPreparationQuery,
   latestRecommendationQuery,
+  latestStagingQuery,
   recommendationWorkOrdersQuery,
   requestRecommendation,
 } from '../query';
+import { stagingView } from '../staging-model';
 import { OptimizationAnalysisTab } from './OptimizationAnalysisTab';
+import { StagingPanel } from './StagingPanel';
 
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/energy-analysis/optimization');
@@ -170,7 +174,8 @@ export function OptimizationWorkspace() {
     enabled: capabilities.includes('site.read'),
   });
   const { plant, registry } = useRealtimePlant();
-  const submit = useSubmitCommand(site.id, principal.session.csrfToken);
+  const staging = useQuery(latestStagingQuery(site.id));
+  const controlState = useQuery(siteControlStateQuery(site.id));
   const recommendation = latest.data ?? null;
   // How the hourly schedule last fired, so a page with no new recommendation says which input was missing.
   const preparation = useQuery(latestPreparationQuery(site.id));
@@ -203,10 +208,13 @@ export function OptimizationWorkspace() {
     return () => window.clearTimeout(timer);
   }, [waiting, recommendation?.runId]);
 
-  const supply = useMemo(
-    () => (registry.data ? supplySetpoint(controlTargets(registry.data.assetModel, new Date(now))) : null),
-    [registry.data, now],
-  );
+  const targets = useMemo(() => (registry.data ? controlTargets(registry.data.assetModel, new Date(now)) : []), [registry.data, now]);
+  const supply = useMemo(() => (registry.data ? supplySetpoint(targets) : null), [registry.data, targets]);
+  const stagingResult = useMemo(() => {
+    if (!staging.data) return null;
+    const names = new Map(registry.data?.assetModel.assets.map((asset) => [asset.id, asset.displayName]) ?? []);
+    return stagingView(staging.data, (assetId) => names.get(assetId));
+  }, [staging.data, registry.data]);
   const manualWorkOrderMode = registry.isSuccess && supply === null && recommendation !== null && changesSupply(recommendation);
   const recommendationWorkOrders = useQuery(
     recommendationWorkOrdersQuery(site.id, recommendation?.id ?? null, manualWorkOrderMode && canListWorkOrders),
@@ -289,6 +297,20 @@ export function OptimizationWorkspace() {
         </div>
 
         <TabsContent value="proposal" className="flex flex-col gap-4">
+          <StagingPanel
+            siteId={site.id}
+            timeZone={site.timezone}
+            state={staging.isPending ? 'pending' : staging.isError ? 'error' : 'ready'}
+            view={stagingResult}
+            evaluatedAt={staging.data?.evaluatedAt ?? null}
+            mode={controlState.data?.controlMode ?? staging.data?.siteControlMode ?? 'REMOTE_AUTO'}
+            targets={targets}
+            commands={commands.data ?? []}
+            onConfirm={setPending}
+            onRetry={() => void staging.refetch()}
+          />
+
+          <h2 className="mt-2 text-title font-semibold">供水温度优化</h2>
           {notice ? (
             <Alert>
               <TriangleAlert />
@@ -392,12 +414,7 @@ export function OptimizationWorkspace() {
         />
       ) : null}
 
-      <ConfirmCommand
-        pending={pending}
-        submitting={submit.isPending}
-        onCancel={() => setPending(null)}
-        onConfirm={() => { if (pending) submit.mutate(pending, { onSettled: () => setPending(null) }); }}
-      />
+      <ConfirmCommand pending={pending} siteId={site.id} csrfToken={principal.session.csrfToken} onClose={() => setPending(null)} />
     </Main>
   );
 }

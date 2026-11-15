@@ -1,11 +1,11 @@
-import type { AssetRelationship, SiteAssetModel, TelemetryPoint } from '../../api/generated/platformGateway.gen';
+import type { AssetRelationship, Device, SiteAssetModel, TelemetryPoint } from '../../api/generated/platformGateway.gen';
 import { formatTelemetryUnit } from '../../domain/centralPlantTelemetry.ts';
-import { isOneOf } from '../../lib/typed.ts';
+import { isOneOf, isPlainRecord } from '../../lib/typed.ts';
 
 // What an operator can command on the plant, read from the Registry: each COMMAND point that
 // CONTROLS an asset, with its range and the reading that confirms it took effect.
 
-export type ActionCapability = 'START' | 'STOP' | 'RESET_FAULT';
+export type ActionCapability = 'START' | 'STOP' | 'START_UNIT_SEQUENCE' | 'STOP_UNIT_SEQUENCE' | 'RESET_FAULT';
 export type SettingCapability =
   | 'SET_TEMPERATURE_SETPOINT'
   | 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT'
@@ -14,11 +14,20 @@ export type SettingCapability =
   | 'SET_LOAD_LIMIT'
   | 'SET_OPENING';
 
+/** A device whose run state must match before the plant lets this action through. */
+export interface Interlock {
+  readonly deviceCode: string;
+  readonly expected: 'RUNNING' | 'STOPPED';
+  /** The Registry's own sentence for the rule, e.g. 1# 主机尚未停机，禁止断开 1# 冻水泵. */
+  readonly reason: string;
+}
+
 export interface ControlAction {
   readonly assetId: string;
   readonly pointId: string;
   readonly capability: ActionCapability;
   readonly label: string;
+  readonly interlocks: readonly Interlock[];
 }
 
 export interface ControlSetting {
@@ -38,12 +47,13 @@ export interface ControlSetting {
 export interface ControlTarget {
   readonly assetId: string;
   readonly assetName: string;
+  readonly assetType: string;
   readonly deviceId: string;
   readonly actions: readonly ControlAction[];
   readonly settings: readonly ControlSetting[];
 }
 
-const ACTION_ORDER = ['START', 'STOP', 'RESET_FAULT'] as const satisfies readonly ActionCapability[];
+const ACTION_ORDER = ['START', 'STOP', 'START_UNIT_SEQUENCE', 'STOP_UNIT_SEQUENCE', 'RESET_FAULT'] as const satisfies readonly ActionCapability[];
 const SETTING_CAPABILITIES = [
   'SET_TEMPERATURE_SETPOINT',
   'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
@@ -67,6 +77,17 @@ const metadataNumber = (point: TelemetryPoint, key: string): number | null => {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 };
 
+function interlocksOf(point: TelemetryPoint): Interlock[] {
+  const declared = point.sourceMetadata.interlocks;
+  if (!Array.isArray(declared)) return [];
+  return declared.flatMap((entry: unknown): Interlock[] => {
+    if (!isPlainRecord(entry)) return [];
+    const { device, expected, reason } = entry;
+    if (typeof device !== 'string' || (expected !== 'RUNNING' && expected !== 'STOPPED')) return [];
+    return [{ deviceCode: device, expected, reason: typeof reason === 'string' ? reason : '' }];
+  });
+}
+
 export function controlTargets(model: Pick<SiteAssetModel, 'assets' | 'telemetryPoints' | 'relationships'>, at: Date): ControlTarget[] {
   const pointsById = new Map(model.telemetryPoints.filter((point) => point.status === 'ACTIVE').map((point) => [point.id, point]));
   const byAsset = new Map<string, { deviceId: string; actions: ControlAction[]; settings: ControlSetting[] }>();
@@ -78,7 +99,7 @@ export function controlTargets(model: Pick<SiteAssetModel, 'assets' | 'telemetry
     const target = byAsset.get(assetId) ?? { deviceId: point.reportingDeviceId, actions: [], settings: [] };
     byAsset.set(assetId, target);
     if (isAction(capability)) {
-      target.actions.push({ assetId, pointId: point.id, capability, label: point.displayName });
+      target.actions.push({ assetId, pointId: point.id, capability, label: point.displayName, interlocks: interlocksOf(point) });
       continue;
     }
     if (!isSettingCapability(capability)) continue;
@@ -102,6 +123,7 @@ export function controlTargets(model: Pick<SiteAssetModel, 'assets' | 'telemetry
     .map(([assetId, target]) => ({
       assetId,
       assetName: assetsById.get(assetId)!.displayName,
+      assetType: assetsById.get(assetId)!.assetType,
       deviceId: target.deviceId,
       actions: [...target.actions].sort((left, right) => ACTION_ORDER.indexOf(left.capability) - ACTION_ORDER.indexOf(right.capability)),
       settings: target.settings,
@@ -134,4 +156,36 @@ export function commandLabels(targets: readonly ControlTarget[]): ReadonlyMap<st
     for (const setting of target.settings) labels.set(setting.pointId, { assetName: target.assetName, label: setting.label, unit: setting.unit });
   }
   return labels;
+}
+
+/**
+ * A chiller with the pumps and tower its start interlocks name: the group the plant starts and stops
+ * together. Assets no chiller names stay in `others`, so a Site without interlocks still lists them.
+ */
+export interface PlantUnit {
+  readonly chiller: ControlTarget;
+  readonly members: readonly ControlTarget[];
+}
+
+export function plantUnits(targets: readonly ControlTarget[], devices: readonly Pick<Device, 'id' | 'code'>[]): { units: PlantUnit[]; others: ControlTarget[] } {
+  const deviceIdByCode = new Map(devices.map((device) => [device.code, device.id]));
+  const byDevice = new Map(targets.map((target) => [target.deviceId, target]));
+  const claimed = new Set<string>();
+  const units = targets.filter((target) => target.assetType === 'CHILLER').map((chiller): PlantUnit => {
+    claimed.add(chiller.assetId);
+    const named = chiller.actions.find((action) => action.capability === 'START')?.interlocks ?? [];
+    const members = named.flatMap((interlock) => {
+      const member = byDevice.get(deviceIdByCode.get(interlock.deviceCode) ?? '');
+      if (!member || claimed.has(member.assetId)) return [];
+      claimed.add(member.assetId);
+      return [member];
+    });
+    return { chiller, members: [...members].sort((left, right) => plantPosition(left.assetType) - plantPosition(right.assetType)) };
+  });
+  return { units, others: targets.filter((target) => !claimed.has(target.assetId)) };
+}
+
+/** The interlocks that would stop this action now, given each device's run state by device code. */
+export function blockingInterlocks(action: ControlAction, runStateByDeviceCode: ReadonlyMap<string, string>): Interlock[] {
+  return action.interlocks.filter((interlock) => runStateByDeviceCode.get(interlock.deviceCode) !== interlock.expected);
 }

@@ -243,7 +243,7 @@ function SlotInspectorBody({
                 {slot.targetSupplyTempC !== null ? `${slot.targetSupplyTempC.toFixed(1)} °C` : '未设置'}
               </p>
               <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                仅作冷站值班交接参考，平台不会据此自动下发设备启停或设定值指令。如需下发冷冻水供水温度设定值，请前往「优化建议」或「控制指令」。
+                仅作冷站值班交接参考，平台不会据此自动下发设备启停或设定值指令。如需下发冷冻水供水温度设定值，请前往「优化建议」或「运行控制」。
               </div>
             </div>
           </FactRow>
