@@ -20,39 +20,44 @@ const DEVICES = {
 for (const meter of METERS) {
   DEVICES[meter] = { codes: { powerTotal: ["power_total", "kW"], combinedActiveTotalElectricalEnergy: ["active_energy_total", "kWh"] } };
 }
-// Meter 4 was read from register 64, which is always 0; on 2026-10-14 its energy register was found at 60
+// Meter 4 (ammeter-unit4, A 机组电表 UID 4) was read from register 64, which is always 0; on 2026-10-14 its energy register was found at 60
 // (76938 kWh then). The platform had counted it from 0, so it keeps counting from there: the reading
 // less what the meter showed when the address was corrected, with no jump into one interval.
 const ENERGY_BASELINE = { "ammeter-unit4": 76938 };
-// Temperature channels and the header flow copied onto the equipment they measure, as the points with
-// `from` in deploy/sites/songyaxuan.site.json. The site's hand-drawn channel table (2026-10-15) did not
-// match the readings; on 2026-10-21 a week of 15-minute data showed (#614): t2 and t1 are C's and D's
-// evaporator outlets (each one's drop below the header return follows that machine's power), t7 and t6
-// their condenser outlets, and every evaporator takes the header's return water (t16). A and B have not
-// run, so their channels cannot be told apart yet; their water temperatures and every condenser inlet
-// are withdrawn until the site checks the pipes.
+// 温度通道按现场点位表与电表—机组对应关系复制到对应设备（见 deploy/sites/songyaxuan.site.json 的 from 字段，
+// 改动对应关系时两处一起改）：
+//   ammeter-unit4 (UID 4) = A 机组 (t1 蒸发出、t6 冷凝出、t10 冷冻水支管进水)
+//   ammeter-unit3 (UID 3) = B 机组 (t2 蒸发出、t7 冷凝出)
+//   ammeter-unit1 (UID 5) = C 机组 (t3 蒸发出、t8 冷凝出；电表同时连有对应水泵与冷却塔)
+//   ammeter-unit2 (UID 2) = D 机组 (t4 蒸发出、t9 冷凝出；电表同时连有对应水泵与冷却塔)
+//   冷却水总管进水 t5；冷却塔外侧总管出水 t12、进水 t13；室外温度 t15；冷冻水总回水 t16。
 const COPIES = {
   temperature: {
     t16: METERS.map((meter) => [meter, "chw_entering_temperature"]),
-    t2: [["ammeter-unit3", "chw_leaving_temperature"]],
-    t7: [["ammeter-unit3", "cw_leaving_temperature"]],
+    t5: METERS.map((meter) => [meter, "cw_entering_temperature"]),
     t1: [["ammeter-unit4", "chw_leaving_temperature"]],
     t6: [["ammeter-unit4", "cw_leaving_temperature"]],
-    t12: [["room", "room_temperature"]],
-    t13: [["outdoor", "ambient_temperature"]],
-    t15: [["outdoor", "ambient_wet_bulb_temperature"]],
+    t10: [["ammeter-unit4", "chw_entering_temperature_branch"]],
+    t2: [["ammeter-unit3", "chw_leaving_temperature"]],
+    t7: [["ammeter-unit3", "cw_leaving_temperature"]],
+    t3: [["ammeter-unit1", "chw_leaving_temperature"]],
+    t8: [["ammeter-unit1", "cw_leaving_temperature"]],
+    t4: [["ammeter-unit2", "chw_leaving_temperature"]],
+    t9: [["ammeter-unit2", "cw_leaving_temperature"]],
+    t12: [["cooling-tower", "cooling_tower_leaving_temperature"]],
+    t13: [["cooling-tower", "cooling_tower_entering_temperature"]],
+    t15: [["outdoor", "ambient_temperature"]],
   },
   waterflow: { flowMeter: [["chwp-main", "flow_rate"]] },
 };
 const COPY_UNITS = { temperature: "Cel", waterflow: "m3/h" };
-// Spare inputs with no probe read 0 every minute; the platform has them INACTIVE and they are not sent.
-// t14 (and the outdoor copy ambient_temperature_2) joined this list on 2026-10-29.
-const SPARE = { temperature: ["t8", "t11", "t14", "t20"] };
-// A machine runs while its meter reads more than 5 kW (idle ones read under 1 kW); the chilled-water
-// pumps run while the header flow exceeds 10 m³/h.
+// 没接探头的通道不上报（原始值一直是 0）；站点文件将其标为 INACTIVE。
+const SPARE = { temperature: ["t14", "t20"] };
+// A machine runs while its meter reads more than 5 kW (idle ones read under 1 kW; note C/D meters also carry
+// their pumps and cooling tower); the chilled-water pumps run while the header flow exceeds 10 m³/h.
 const runState = (running) => (running ? "RUNNING" : "STOPPED");
 const DO_CONTROLLERS = { u11: "ctrl-chwp-1", u12: "ctrl-cwp-1", u13: "ctrl-tower-1", u21: "ctrl-chwp-2", u22: "ctrl-cwp-2", u23: "ctrl-tower-2", u31: "ctrl-chwp-3", u32: "ctrl-cwp-3", u33: "ctrl-tower-3", u41: "ctrl-chwp-4", u42: "ctrl-cwp-4", u43: "ctrl-tower-4" };
-const METER_CONTROLLERS = { "ammeter-unit3": "ctrl-chiller-a", "ammeter-unit4": "ctrl-chiller-b", "ammeter-unit1": "ctrl-chiller-c", "ammeter-unit2": "ctrl-chiller-d" };
+const METER_CONTROLLERS = { "ammeter-unit4": "ctrl-chiller-a", "ammeter-unit3": "ctrl-chiller-b", "ammeter-unit1": "ctrl-chiller-c", "ammeter-unit2": "ctrl-chiller-d" };
 
 const source = msg.payload;
 const device = Object.keys(source)[0];
