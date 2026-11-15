@@ -11,7 +11,7 @@
 | `temperature` | UID 20 输入寄存器 30401–30420，÷10 | 60 s | `t1`–`t20`，°C |
 | `waterflow` | UID 10 保持寄存器 1、5，换算为 m³/h、m/s | 60 s | `flow_meter`、`flow_velocity` |
 | `ammeter-unit1`–`4` | UID 5、2、3、4 保持寄存器 36（÷10）、60（A 机组电表 UID 4 原读 64，已改读 60；C/D 各合并计量机组+水泵+冷却塔） | 300 s | `power_total` kW、`active_energy_total` kWh（累计量） |
-| `et1010` | UID 31，16 路 | 60 s | `u11`–`u44` |
+| `et1010` | UID 31，20 路（原 16 路 + `u51`–`u54`） | 60 s | `u11`–`u54` |
 
 2026-10-14 用户请我先自行定义对应关系，依据现场系统图、ThingsBoard 大屏标签和 6 月旧设备的通道编号暂定：t1 公共冷却水进水、t2 公共冷冻水进水、t3–t10 依次为 A–D 机组的冷冻水出水和冷却水出水、t11 室外冷却水回水、t12 室外冷却水出水、t13/t14 A/B 冷却塔水温、t15 室外环境、t16/t17 总冷冻水回水/供水、t18/t19 总冷却水回水/供水、t20 备用；四块分表暂作 A–D 机组电表，流量计为总冷冻水流量。A–D 机组登记为资产，电表绑定到各自机组，机组出水温度描述对应机组。ET1010 预留做控制，登记为控制模块，目前只读回 16 路通道状态；下发控制需要平台指令下行接到 Node-RED，另行设计。现场确认后改站点文件重跑即可，数据不受影响。
 
@@ -43,7 +43,7 @@
 | 指标 | 绑定租户已有的已发布指标：`hourly_energy`、`daily_energy`（读四块机组电表的累计电量求和）、`device_hourly_energy`（每台机组电表），并按小时 / 每日计算；每月 1 日生成月度报告快照 |
 | 电价 | 暂定深圳工商业分时电价：峰 1.03（10–12、14–19 时）、平 0.62（8–10、12–14、19–24 时）、谷 0.24（0–8 时）元/kWh，工作日与周末相同，按实际电费单修改站点文件后重跑 |
 | 冷量 / COP | 现场没有冷量表，网关计算「冷量计（总冷冻水流量 × 供回水温差计算）」：四台机组功率之和大于 20 kW 时为 1.163 × 流量 × (t16 − t18)（不小于 0），否则为 0（机组停机时水泵仍在循环，回水被管路和末端加热，那段温差不是制冷），按时间累加成累计供冷量，间隔超过 10 分钟不累加。供回水通道由 2026-08-22 至 10-14 的逐时历史判定：在所有通道组合里 t16 − t18 与四台机组功率之和的相关系数最高（0.96），高负荷（> 150 kW）时温差约 1.65 ℃、COP 中位数约 4.2。点位 source key 用 `btu_meter.*`，实时页的瞬时制冷量、COP 读它。站点文件 `energy.coolingMeter` 指向它：能源拓扑里是「冷站 → 建筑冷负荷」的冷量计，累计供冷量被算成每段时间的冷量，总览的今日供冷量、综合能效和能耗分析读这份能耗；逐时供冷量指标也绑它 |
-| 设备读数 | 温度通道按 2026-11-14 现场核对后的点位映射（仓库清单与 `edge/node-red/songyaxuan-platform-envelope.js` 已同步）：A–D 蒸发出 t1–t4、冷凝出 t6–t9（8 号槽位当前绑定物理 EID 50），冷却水总管进水 t5（四台的冷却水进水都用它），A 机组冷冻水支管进水 t10（A 机组电表上的 `chw_entering_temperature_branch`），冷却塔内侧总管 t11（与 t51 同点位共存）、外侧总管 t12（暂作出塔水温，与 t55 同点位共存）、冷却水塔水 t13（暂作进塔水温）与 t14（已上线），室外温度 t15（原来的室外湿球温度没有探头了，停用），冷冻水总回水 t16、t17，总供水 t18、t19（四台的冷冻水进水都用 t16），大厅室内温度 t53（复制到 `room/room_temperature` -> `zone.temperature`）、宴会厅室内温度 t54（复制到 `room/banquet_room_temperature` -> `zone.banquet_temperature`）。t20（备用）与 t52（离线停用）网关不上报（函数里的 `SPARE`）。冷量计算用 t16 回水、t18 供水，网关读取节点的通道说明（「冷冻总回水(016)」「冷冻总供水(018)」）和 2026-08-22 至 10-14 的数据都是这样。总冷冻水流量作冷冻水泵（总管）的流量；机组电表功率 > 5 kW 为运行（C、D 电表还连接了各自的水泵和冷却塔，且 C、D 冷机基本不开，仅泵/塔运行时功率也可能超过 5 kW）、总冷冻水流量 > 10 m³/h 为冷冻水泵运行。站点文件里这些点位带 `from`（来源通道），网关函数的 `COPIES` 照它把读数复制到对应设备，改对应关系时两处一起改；网关复制到站点文件里没有的设备或点位时，平台把那条读数隔离（`POINT_MAPPING_NOT_FOUND` 或 `MAPPING_NOT_FOUND`），不记成读数 |
+| 设备读数 | 温度通道按 2026-11-14 现场核对后的点位映射（仓库清单与 `edge/node-red/songyaxuan-platform-envelope.js` 已同步）：A–D 蒸发出 t1–t4、冷凝出 t6–t9（8 号槽位当前绑定物理 EID 50），冷却水总管进水 t5（四台的冷却水进水都用它），A 机组冷冻水支管进水 t10（A 机组电表上的 `chw_entering_temperature_branch`），冷却塔内侧总管 t11（与 t51 同点位共存）、外侧总管 t12（暂作出塔水温，与 t55 同点位共存）、冷却水塔水 t13（暂作进塔水温）与 t14（已上线），室外温度 t15（原来的室外湿球温度没有探头了，停用），冷冻水总回水 t16、t17，总供水 t18、t19（四台的冷冻水进水都用 t16），大厅室内温度 t53（复制到 `room/room_temperature` -> `zone.temperature`）、宴会厅室内温度 t54（复制到 `room/banquet_room_temperature` -> `zone.banquet_temperature`）。t20（备用）与 t52（离线停用）网关不上报（函数里的 `SPARE`）。冷量计算用 t16 回水、t18 供水，网关读取节点的通道说明（「冷冻总回水(016)」「冷冻总供水(018)」）和 2026-08-22 至 10-14 的数据都是这样。总冷冻水流量作冷冻水泵（总管）的流量；机组电表按迟滞阈值判定启停（总功率大于 `12.75 kW` 转为运行，降至 `5 kW` 及以下转为停机，C、D 电表还连接了各自的水泵和冷却塔，因此单泵或单塔运行时不误判为主机启动）、总冷冻水流量 > 10 m³/h 为冷冻水泵运行。站点文件里这些点位带 `from`（来源通道），网关函数的 `COPIES` 照它把读数复制到对应设备，改对应关系时两处一起改；网关复制到站点文件里没有的设备或点位时，平台把那条读数隔离（`POINT_MAPPING_NOT_FOUND` 或 `MAPPING_NOT_FOUND`），不记成读数 |
 | 负荷预测 | 与演示站点同一条链：总表有功功率按 15 分钟取平均，作为站点自己的指标「空调用电负荷（15 分钟）」（每 15 分钟计算）；日前基线模型（过去一周同一时刻的平均）部署在它上面，每小时第 7 分钟预测未来 48 小时，页面显示其中 24 小时。预测至少要 4 个 15 分钟数据，接入有历史的站点后用 `site-metric-recalc.mjs` 补算一周。松雅轩 2026-10-16 补上（之前接入脚本没有这一段，负荷预测页一直是空的） |
 | 智能服务 | 服务器启用报告、节能、预测、诊断、优化 5 个服务（`single-lite` 档位、`--intelligence`）；AI 助手 2026-10-16 起启用（用户放好了大模型密钥） |
 | 历史指标 | `scripts/site-metric-recalc.mjs <站点文件> --from --to` 先算读点位的指标，再算依赖其它指标的电费 |
@@ -78,9 +78,12 @@
 
 - Site JSON 里的控制器设备（`CHILLER_CONTROLLER`、`PUMP_CONTROLLER`、`COOLING_TOWER_CONTROLLER`）可声明 `pointType: "COMMAND"` 的点位：
   - `scripts/site-onboarding.mjs` 会把 `COMMAND` 点位的 `writable` 写成 `true`，把资产绑定关系写成 `CONTROLS`（而不是 `DESCRIBES`），并在设备存在性判断 `presenceApplicability` 与采集新鲜度策略 `telemetry_runtime.freshness_policies` 中排除只写的指令点位（避免系统把仅用于下发的点位误判为离线或采集断流）。
+  - `ctrl-chiller-a..d` 的 `sampleSeconds` 对齐 `ammeter-unit1..4` 的 `300` 秒采样周期，使主机 `run_state` 与电表同周期刷新而不误报离线。
 - 每个 `COMMAND` 点位的 `sourceMetadata` 必须声明平台权威能力合约（`capability`、`capabilityRevision`、`feedbackPointKey`），真实站点网关执行字段如下：
-  - `actuationMode`：`LEVEL`（电平保持，如水泵/冷却塔启停 `u11..u13/u21..u23/u31..u33/u41..u43`，`coilAddress` `0..15` 写 `1/0`）、`PULSE`（脉冲闭合后自动复位为 `0`，如主机开机 `u14/u24/u34/u44` 与主机停机 `u51..u54` coil `16..19`，默认 `pulseDurationMs: 500`）或 `UNIT_SEQUENCE`（按冷机组编排一键启停，对应 `unit-a..unit-d`，整体动作和回执需在网关 `15s` `ReplyTimeout` 内完成）。
+  - `actuationMode`：`LEVEL`（电平保持，如水泵/冷却塔启停 `u11..u13/u21..u23/u31..u33/u41..u43`，`coilAddress` `0..15` 写 `1/0`）、`PULSE`（脉冲闭合后自动复位为 `0`，如主机开机 `u14/u24/u34/u44` 与主机停机 `u51..u54` coil `16..19`，默认 `pulseDurationMs: 500`）、`UNIT_SEQUENCE`（按冷机组编排一键启停，对应 `unit-a..unit-d`，在 1 秒内回复已受理并在后台按硬件时序执行 `0s/30s/30s/60s` 开机或 `0s/30s/10s/10s` 停机，发主机开机脉冲前二次读回水泵和冷却塔线圈）或 `EMERGENCY_DO_RELEASE`（`et1010-uid31/emergency_stop_all` 强制清零 `0..19` 全部输出线圈）。
+  - 退出模式与安全停机：站点处于 `MANUAL_OVERRIDE` 或 `SAFE_SHUTDOWN_EXIT` 时，网关与接入层仍放行 `STOP` 与 `STOP_UNIT_SEQUENCE` 以释放未锁定设备的保持继电器；全站安全停机（`PLANT_SAFE_SHUTDOWN`）、一键顺控中止（`ABORT_UNIT_SEQUENCE`）与紧急全断（`EMERGENCY_DO_RELEASE`）通过 `POST /api/v1/sites/{siteId}/control-shutdown`（需 `schedule.manage` 与 6 位动态口令核验）统一编排。
   - `interlocks`：`site-onboarding.mjs`（通过 `scripts/lib/site-onboarding-control.ts`）会在入库时把它编译成 `source_metadata.interlockChecks`（保存目标同伴控制器 `deviceId`、点位 `run_state` 与期望状态 `"RUNNING"` 或 `"STOPPED"`），并通过只读视图 `core_registry.command_point_routes_v1`（迁移 `038`）暴露给 `connectivity_runtime`。
-- 运行时双闸门拦截：
-  - 提交闸门（`cmd/energy-api/internal/gateway/command.go`）：在创建指令前核对所有同伴设备最新 `run_state`；状态不满足返回 `409 COMMAND_INTERLOCK_BLOCKED`，同伴遥测离线或过期返回 `409 COMMAND_INTERLOCK_UNVERIFIABLE`。
-  - 下发前闸门（`cmd/connectivity` + `dynamic_safety.go`）：MQTT 下发前再次读最新遥测；未满足时返回 `DISPATCH_SAFETY_INTERLOCK_VIOLATED` 或 `DISPATCH_SAFETY_INTERLOCK_STATE_UNAVAILABLE` 并终止本次下发。
+- 运行时双闸门与不误冻结核验：
+  - 提交闸门（`cmd/energy-api/internal/gateway/command.go`）：在创建指令前核对所有同伴设备最新 `run_state`；状态不满足返回 `409 COMMAND_INTERLOCK_BLOCKED`，同伴遥测离线或过期返回 `409 COMMAND_INTERLOCK_UNVERIFIABLE`；同时禁止直接通过 `/api/v1/commands` 触发 `EMERGENCY_DO_RELEASE`。
+  - 下发前闸门（`cmd/connectivity` + `dynamic_safety.go`）：MQTT 下发前再次读最新遥测；存在互锁的设备未满足时返回 `DISPATCH_SAFETY_INTERLOCK_VIOLATED` 或 `DISPATCH_SAFETY_INTERLOCK_STATE_UNAVAILABLE` 并终止本次下发；无互锁的 `EMERGENCY_DO_RELEASE` 与 `PULSE` 停机指令可在遥测缺失或陈旧时继续停机而不受阻塞。
+  - 脉冲与顺控核验结果：`START`/`STOP` 脉冲回传闭合及归零双读回、`UNIT_SEQUENCE` 回传受理证据或 `EMERGENCY_DO_RELEASE` 回传全清零后，若 10 分钟内电表功率仍未跨过阈值，状态收敛为 `FAILED`（原因为 `PULSE_DELIVERED_POWER_UNCONFIRMED`）而不冻结设备控制组。
