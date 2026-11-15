@@ -523,6 +523,9 @@ func (value TypedValue) Valid() bool {
 	return value.Type == EvaluationValueNumber || value.Type == EvaluationValueString || value.Type == EvaluationValueBoolean
 }
 
+// MaxEvaluationSnapshotInputs bounds the number of Site-level Point inputs carried in a single evaluation snapshot.
+const MaxEvaluationSnapshotInputs = 512
+
 func (snapshot EvaluationSnapshot) Validate() error {
 	if !alarmmodel.IsUUIDv7(snapshot.TenantID) || !alarmmodel.IsUUIDv7(snapshot.SiteID) || !validEvaluationSubjectType(snapshot.SubjectType) || !alarmmodel.IsUUIDv7(snapshot.SubjectID) || !boundedText(snapshot.InputRevision, 256) || !boundedText(snapshot.CorrelationID, 256) {
 		return errors.New("alarm evaluation snapshot identity is invalid")
@@ -547,7 +550,7 @@ func (snapshot EvaluationSnapshot) Validate() error {
 	if _, err := time.Parse(time.RFC3339Nano, snapshot.AsOf); err != nil {
 		return errors.New("alarm evaluation snapshot time is invalid")
 	}
-	if snapshot.Inputs == nil || len(snapshot.Inputs) > 128 {
+	if snapshot.Inputs == nil || len(snapshot.Inputs) > MaxEvaluationSnapshotInputs {
 		return errors.New("alarm evaluation snapshot inputs are invalid")
 	}
 	for key, input := range snapshot.Inputs {

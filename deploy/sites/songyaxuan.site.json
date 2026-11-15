@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：平台把四块机组电表的电量合成全站总电量（energy.totalMeter 设为 sum-of-sub-meters，网关保留 ammeter-total 作为总有功功率汇总），网关按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。机组电表的 Modbus 从站地址（2026-11-15 结合运行数据重新核对确认）：A 机组电表为 UID 4，B 机组电表为 UID 3，C 机组电表为 UID 5，D 机组电表为 UID 2（C、D 电表各自同时连接对应机组、水泵与冷却塔，且 C、D 冷机基本不开）。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场手绘点位表（2026-11-08 网关按它改过）：A–D 蒸发出 t1–t4，冷却水总管进水 t5（四台共用），A–D 冷凝出 t6–t9，A 机组冷冻水支管进水 t10，冷却塔内侧总管 t11、外侧总管 t12（当作出塔），冷却塔进水 t13、t14，室外温度 t15（房间没有温度探头），冷冻水总回水 t16、t17，总供水 t18、t19；t14、t20 没有探头。t14、t20 网关不上报（函数里的 SPARE）。点位带 from（来源通道），网关函数的 COPIES 照它复制。 点位质量见 qualityProfiles：冷冻水 3–20 ℃、冷却水 15–45 ℃、房间 10–40 ℃、室外 −10–45 ℃；38.4 是模块通讯异常值。 铭牌见 nameplateCatalog：四台冷机是 2007 年日立 RCU180SC2（572 kW / 127.5 kW）；八台凯泉泵的 22 kW 和 15 kW 还没分到冷冻还是冷却；冷却塔风机铭牌未到。物理检查见 physicsChecks。测量不确定度见 measurement：温度 ±0.1 K，流量 ±2%，总功率 ±1%；温差相对误差超过 10% 时冷量标成部分。探头零点见 probePairs，只建议不改数。",
+  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：平台把四块机组电表的电量合成全站总电量（energy.totalMeter 设为 sum-of-sub-meters，网关保留 ammeter-total 作为总有功功率汇总），网关按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。机组电表的 Modbus 从站地址（2026-11-15 结合运行数据重新核对确认）：A 机组电表为 UID 4，B 机组电表为 UID 3，C 机组电表为 UID 5，D 机组电表为 UID 2（C、D 电表各自同时连接对应机组、水泵与冷却塔，且 C、D 冷机基本不开）。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场点位确认：A–D 蒸发出 t1–t4，冷却水总管进水 t5（四台共用），A–D 冷凝出 t6–t9，A 机组冷冻水支管进水 t10，冷却塔内侧总管 t11（与 t51 同点位共存）、外侧总管 t12（暂作出塔，与 t55 同点位共存），冷却水塔水 t13（暂作进塔）、t14，室外温度 t15，冷冻水总回水 t16、t17，总供水 t18、t19，大厅室内 t53、宴会厅室内 t54；t20、t52 备用不上报（函数里的 SPARE）。点位带 from（来源通道），网关函数的 COPIES 照它复制。 点位质量见 qualityProfiles：冷冻水 3–20 ℃、冷却水 15–45 ℃、房间 10–40 ℃、室外 −10–45 ℃；38.4 是模块通讯异常值。 铭牌见 nameplateCatalog：四台冷机是 2007 年日立 RCU180SC2（572 kW / 127.5 kW）；八台凯泉泵的 22 kW 和 15 kW 还没分到冷冻还是冷却；冷却塔风机铭牌未到。物理检查见 physicsChecks。测量不确定度见 measurement：温度 ±0.1 K，流量 ±2%，总功率 ±1%；温差相对误差超过 10% 时冷量标成部分。探头零点见 probePairs，只建议不改数。",
   "tenantId": "018f3d00-0000-7000-8000-000000000001",
   "site": {
     "id": "01a14000-1000-7000-8000-000000000001",
@@ -147,12 +147,12 @@
         },
         {
           "code": "t14",
-          "name": "冷却塔进水温度 2（没有探头）",
+          "name": "冷却水塔水温度 2",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30414",
-          "status": "INACTIVE"
+          "qualityProfile": "condenser-water"
         },
         {
           "code": "t15",
@@ -209,6 +209,42 @@
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30420",
           "status": "INACTIVE"
+        },
+        {
+          "code": "t51",
+          "name": "冷却塔内侧总管温度（通道 51，与通道 11 共存）",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30451",
+          "qualityProfile": "condenser-water"
+        },
+        {
+          "code": "t53",
+          "name": "大厅室内温度（通道 53）",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30453",
+          "qualityProfile": "room"
+        },
+        {
+          "code": "t54",
+          "name": "宴会厅室内温度（通道 54）",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30454",
+          "qualityProfile": "room"
+        },
+        {
+          "code": "t55",
+          "name": "冷却塔外侧总管温度（通道 55，与通道 12 共存）",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "UID20 输入寄存器 30455",
+          "qualityProfile": "condenser-water"
         }
       ]
     },
@@ -862,7 +898,7 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "冷却塔进水 1，温度模块通道 13",
+          "address": "冷却水塔水（暂作冷却塔进水），温度模块通道 13",
           "from": [
             "temperature",
             "t13"
@@ -936,16 +972,12 @@
         {
           "code": "ambient_temperature_2",
           "sourceKey": "ambient_temperature_2",
-          "name": "室外温度（通道 14，没有探头）",
+          "name": "室外温度 2（未接入）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "温度模块通道 14，没有探头",
-          "status": "INACTIVE",
-          "from": [
-            "temperature",
-            "t14"
-          ]
+          "address": "没有第 2 个室外温度探头",
+          "status": "INACTIVE"
         }
       ]
     },
@@ -960,12 +992,30 @@
         {
           "code": "room_temperature",
           "sourceKey": "zone.temperature",
-          "name": "房间温度",
+          "name": "大厅室内温度",
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "房间没有温度探头（通道 15 测的是室外温度）",
-          "status": "INACTIVE"
+          "address": "大厅室内，温度模块通道 53",
+          "qualityProfile": "room",
+          "from": [
+            "temperature",
+            "t53"
+          ]
+        },
+        {
+          "code": "banquet_room_temperature",
+          "sourceKey": "zone.banquet_temperature",
+          "name": "宴会厅室内温度",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "宴会厅室内，温度模块通道 54",
+          "qualityProfile": "room",
+          "from": [
+            "temperature",
+            "t54"
+          ]
         }
       ]
     },
@@ -1960,6 +2010,113 @@
           }
         }
       ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-00000000001e",
+      "sourceKey": "temperature-voltage",
+      "code": "temperature-voltage-uid20",
+      "name": "温度采集模块电池电压（UID 20）",
+      "type": "TEMPERATURE_MODULE",
+      "sampleSeconds": 60,
+      "points": [
+        { "code": "v1", "name": "A 机组冷冻水出水（通道 1）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30201" },
+        { "code": "v2", "name": "B 机组冷冻水出水（通道 2）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30202" },
+        { "code": "v3", "name": "C 机组冷冻水出水（通道 3）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30203" },
+        { "code": "v4", "name": "D 机组冷冻水出水（通道 4）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30204" },
+        { "code": "v5", "name": "冷却水总管进水（通道 5）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30205" },
+        { "code": "v6", "name": "A 机组冷却水出水（通道 6）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30206" },
+        { "code": "v7", "name": "B 机组冷却水出水（通道 7）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30207" },
+        { "code": "v8", "name": "C 机组冷却水出水（通道 8）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30208" },
+        { "code": "v9", "name": "D 机组冷却水出水（通道 9）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30209" },
+        { "code": "v10", "name": "A 机组冷冻水支管进水（通道 10）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30210" },
+        { "code": "v11", "name": "冷却塔内侧总管（通道 11）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30211" },
+        { "code": "v12", "name": "冷却塔出水（通道 12）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30212" },
+        { "code": "v13", "name": "冷却塔进水 1（通道 13）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30213" },
+        { "code": "v14", "name": "冷却水塔水 2（通道 14）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30214" },
+        { "code": "v15", "name": "室外温度（通道 15）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30215" },
+        { "code": "v16", "name": "冷冻水总回水 1（通道 16）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30216" },
+        { "code": "v17", "name": "冷冻水总回水 2（通道 17）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30217" },
+        { "code": "v18", "name": "冷冻水总供水 1（通道 18）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30218" },
+        { "code": "v19", "name": "冷冻水总供水 2（通道 19）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30219" },
+        { "code": "v20", "name": "备用通道 20（未接探头）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30220", "status": "INACTIVE" },
+        { "code": "v51", "name": "冷却塔内侧总管（通道 51，与通道 11 共存）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30251" },
+        { "code": "v53", "name": "大厅室内（通道 53）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30253" },
+        { "code": "v54", "name": "宴会厅室内（通道 54）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30254" },
+        { "code": "v55", "name": "冷却塔外侧总管（通道 55，与通道 12 共存）电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 30255" }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-00000000001f",
+      "sourceKey": "temperature-rssi",
+      "code": "temperature-rssi-uid20",
+      "name": "温度采集模块信号强度（UID 20）",
+      "type": "TEMPERATURE_MODULE",
+      "sampleSeconds": 60,
+      "points": [
+        { "code": "rssi1", "name": "A 机组冷冻水出水（通道 1）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37001" },
+        { "code": "rssi2", "name": "B 机组冷冻水出水（通道 2）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37002" },
+        { "code": "rssi3", "name": "C 机组冷冻水出水（通道 3）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37003" },
+        { "code": "rssi4", "name": "D 机组冷冻水出水（通道 4）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37004" },
+        { "code": "rssi5", "name": "冷却水总管进水（通道 5）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37005" },
+        { "code": "rssi6", "name": "A 机组冷却水出水（通道 6）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37006" },
+        { "code": "rssi7", "name": "B 机组冷却水出水（通道 7）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37007" },
+        { "code": "rssi8", "name": "C 机组冷却水出水（通道 8）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37008" },
+        { "code": "rssi9", "name": "D 机组冷却水出水（通道 9）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37009" },
+        { "code": "rssi10", "name": "A 机组冷冻水支管进水（通道 10）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37010" },
+        { "code": "rssi11", "name": "冷却塔内侧总管（通道 11）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37011" },
+        { "code": "rssi12", "name": "冷却塔出水（通道 12）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37012" },
+        { "code": "rssi13", "name": "冷却塔进水 1（通道 13）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37013" },
+        { "code": "rssi14", "name": "冷却水塔水 2（通道 14）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37014" },
+        { "code": "rssi15", "name": "室外温度（通道 15）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37015" },
+        { "code": "rssi16", "name": "冷冻水总回水 1（通道 16）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37016" },
+        { "code": "rssi17", "name": "冷冻水总回水 2（通道 17）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37017" },
+        { "code": "rssi18", "name": "冷冻水总供水 1（通道 18）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37018" },
+        { "code": "rssi19", "name": "冷冻水总供水 2（通道 19）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37019" },
+        { "code": "rssi20", "name": "备用通道 20（未接探头）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37020", "status": "INACTIVE" },
+        { "code": "rssi51", "name": "冷却塔内侧总管（通道 51，与通道 11 共存）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37051" },
+        { "code": "rssi53", "name": "大厅室内（通道 53）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37053" },
+        { "code": "rssi54", "name": "宴会厅室内（通道 54）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37054" },
+        { "code": "rssi55", "name": "冷却塔外侧总管（通道 55，与通道 12 共存）信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "UID20 输入寄存器 37055" }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000020",
+      "sourceKey": "temperature-status",
+      "code": "temperature-status-uid20",
+      "name": "温度采集模块通道状态（UID 20）",
+      "type": "TEMPERATURE_MODULE",
+      "sampleSeconds": 60,
+      "points": [
+        { "code": "status1", "name": "A 机组冷冻水出水（通道 1）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30001（ONLINE/OFFLINE）" },
+        { "code": "status2", "name": "B 机组冷冻水出水（通道 2）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30002（ONLINE/OFFLINE）" },
+        { "code": "status3", "name": "C 机组冷冻水出水（通道 3）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30003（ONLINE/OFFLINE）" },
+        { "code": "status4", "name": "D 机组冷冻水出水（通道 4）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30004（ONLINE/OFFLINE）" },
+        { "code": "status5", "name": "冷却水总管进水（通道 5）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30005（ONLINE/OFFLINE）" },
+        { "code": "status6", "name": "A 机组冷却水出水（通道 6）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30006（ONLINE/OFFLINE）" },
+        { "code": "status7", "name": "B 机组冷却水出水（通道 7）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30007（ONLINE/OFFLINE）" },
+        { "code": "status8", "name": "C 机组冷却水出水（通道 8）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30008（ONLINE/OFFLINE）" },
+        { "code": "status9", "name": "D 机组冷却水出水（通道 9）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30009（ONLINE/OFFLINE）" },
+        { "code": "status10", "name": "A 机组冷冻水支管进水（通道 10）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30010（ONLINE/OFFLINE）" },
+        { "code": "status11", "name": "冷却塔内侧总管（通道 11）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30011（ONLINE/OFFLINE）" },
+        { "code": "status12", "name": "冷却塔出水（通道 12）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30012（ONLINE/OFFLINE）" },
+        { "code": "status13", "name": "冷却塔进水 1（通道 13）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30013（ONLINE/OFFLINE）" },
+        { "code": "status14", "name": "冷却水塔水 2（通道 14）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30014（ONLINE/OFFLINE）" },
+        { "code": "status15", "name": "室外温度（通道 15）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30015（ONLINE/OFFLINE）" },
+        { "code": "status16", "name": "冷冻水总回水 1（通道 16）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30016（ONLINE/OFFLINE）" },
+        { "code": "status17", "name": "冷冻水总回水 2（通道 17）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30017（ONLINE/OFFLINE）" },
+        { "code": "status18", "name": "冷冻水总供水 1（通道 18）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30018（ONLINE/OFFLINE）" },
+        { "code": "status19", "name": "冷冻水总供水 2（通道 19）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30019（ONLINE/OFFLINE）" },
+        { "code": "status20", "name": "备用通道 20（未接探头）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30020（ONLINE/OFFLINE）", "status": "INACTIVE" },
+        { "code": "online_count", "name": "在线探头数", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "网关统计：启用通道（1–19、51、53–55，不含备用通道 20 与停用通道 52）中传感器类型非 0 的探头数" },
+        { "code": "offline_count", "name": "离线探头数", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "网关统计：启用通道（1–19、51、53–55，不含备用通道 20 与停用通道 52）中传感器类型为 0 的探头数" },
+        { "code": "low_battery_count", "name": "低电量探头数", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "网关统计：在线探头中电池电压低于 2700 mV 的探头数" },
+        { "code": "min_voltage_mv", "name": "最低电池电压", "unit": "mV", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "网关统计：在线探头中的最低电池电压" },
+        { "code": "min_rssi_dbm", "name": "最弱信号强度", "unit": "dBm", "pointType": "TELEMETRY", "valueType": "NUMBER", "address": "网关统计：在线探头中的最弱信号强度" },
+        { "code": "status51", "name": "冷却塔内侧总管（通道 51，与通道 11 共存）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30051（ONLINE/OFFLINE）" },
+        { "code": "status53", "name": "大厅室内（通道 53）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30053（ONLINE/OFFLINE）" },
+        { "code": "status54", "name": "宴会厅室内（通道 54）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30054（ONLINE/OFFLINE）" },
+        { "code": "status55", "name": "冷却塔外侧总管（通道 55，与通道 12 共存）通信状态", "pointType": "TELEMETRY", "valueType": "STRING", "address": "UID20 输入寄存器 30055（ONLINE/OFFLINE）" }
+      ]
     }
   ],
   "meterPoints": [
@@ -2168,7 +2325,7 @@
     "coolingMeter": "btu-calc"
   },
   "intelligence": {
-    "note": "站点接入清单的智能部分（ADR 0028）。告警规则在自己的文件里，由 alarm-rules 发布；这里只写它的文件名。房间还没有温度探头，优化建议要读房间温度，先不登记；装上探头后再把 optimization 一段加回来。",
+    "note": "站点接入清单的智能部分（ADR 0028）。告警规则在自己的文件里，由 alarm-rules 发布；这里只写它的文件名。大厅（通道 53）与宴会厅（通道 54）室内温度已接入；因优化响应系数尚未标定、且与模拟冷站共用租户优化策略前需人工确认，optimization 一段暂不登记。",
     "alarmRules": "songyaxuan.alarm-rules.json",
     "diagnosis": {
       "lowDeltaT": {

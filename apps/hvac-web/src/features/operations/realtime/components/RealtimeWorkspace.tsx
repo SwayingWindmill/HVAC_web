@@ -294,7 +294,7 @@ const LOOPS: readonly {
 }[] = [
   { name: '冷冻水', tone: 'bg-chart-1', main: ['温差', 'btu_meter.temperature_difference'], others: [['供', 'btu_meter.supply_water_temperature'], ['回', 'btu_meter.return_water_temperature'], ['流量', 'btu_meter.flow_rate']] },
   { name: '冷却水', tone: 'bg-chart-2', main: ['与湿球差', 'cooling_tower.approach_temperature'], others: [['出塔', 'cooling_tower.leaving_water_temperature'], ['进塔', 'cooling_tower.entering_water_temperature'], ['流量', 'cwp.flow_rate']] },
-  { name: '室内', tone: 'bg-subtle-foreground', main: ['温度', 'zone.temperature'], others: [] },
+  { name: '室内', tone: 'bg-subtle-foreground', main: ['温度', 'zone.temperature'], others: [['宴会厅', 'zone.banquet_temperature']] },
   { name: '室外', tone: 'bg-subtle-foreground', main: ['干球', 'weather.ambient_dry_bulb_temperature'], others: [['湿球', 'weather.ambient_wet_bulb_temperature'], ['相对湿度', 'weather.relative_humidity']] },
 ];
 

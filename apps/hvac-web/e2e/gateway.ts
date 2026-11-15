@@ -886,6 +886,19 @@ export class Gateway {
     const items = body.requests.map((request: Json) => {
       const recorded = this.snapshots.items.find((item: Json) => item.deviceId === request.deviceId);
       if (!recorded) throw new Error(`no recorded Snapshot for Device ${request.deviceId}`);
+      if (recorded.status === 'OK' && Array.isArray(request.keys) && Array.isArray(recorded.snapshot?.values)) {
+        const byKey = new Map<string, Json>(
+          recorded.snapshot.values.map((entry: Json) => [entry.key, entry] as const),
+        );
+        const values = request.keys.map((key: string) => byKey.get(key) ?? {
+          key,
+          state: 'MISSING',
+          freshness: 'MISSING',
+          missingReason: 'NEVER_OBSERVED',
+          policyRevision: 1,
+        });
+        return { ...recorded, requestId: request.requestId, snapshot: { ...recorded.snapshot, values } };
+      }
       return { ...recorded, requestId: request.requestId };
     });
     return { ...this.snapshots, items };
@@ -944,7 +957,7 @@ export class Gateway {
       const custom = this.aggregateHandler?.(body!);
       if (custom) return custom;
       if (body?.granularity === 'MINUTE' || body?.granularity === 'FIVE_MINUTE') {
-        return { body: synthesizeTrendAggregate(fixture<Json>('asset-model.json'), this.snapshots, body) };
+        return { body: synthesizeTrendAggregate(this.assetModel, this.snapshots, body) };
       }
       if (body?.granularity === 'QUARTER_HOUR' && body.keys.length === 1 && body.keys[0] === 'active_power') {
         return { body: replayDemand(fixture<Json>('demand-quarter-hours.json'), body) };
@@ -953,7 +966,7 @@ export class Gateway {
         const demand = replayDemand(fixture<Json>('demand-quarter-hours.json'), body);
         return demand.buckets.length > 0
           ? { body: demand }
-          : { body: synthesizeTrendAggregate(fixture<Json>('asset-model.json'), this.snapshots, body) };
+          : { body: synthesizeTrendAggregate(this.assetModel, this.snapshots, body) };
       }
       if (body?.granularity === 'DAY' && body.keys[0] === 'ambient_dry_bulb_temperature') {
         if (this.outdoorFailing) return { status: 503, body: { type: 'about:blank', title: 'Telemetry history unavailable', status: 503, detail: 'Telemetry Query Service is unavailable.', instance: path, code: 'TELEMETRY_HISTORY_UNAVAILABLE', traceId: '0'.repeat(32), retryable: true } };
@@ -968,7 +981,7 @@ export class Gateway {
           Array.from(requestedKeys).every((key) => history.buckets.some((b: Json) => b.telemetryKey === key));
         if (historyCoversAllKeys) return { body: history };
       }
-      return { body: synthesizeTrendAggregate(fixture<Json>('asset-model.json'), this.snapshots, body!) };
+      return { body: synthesizeTrendAggregate(this.assetModel, this.snapshots, body!) };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/findings`) return { body: { items: this.findings } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/fdd/rules/low-delta-t`) {

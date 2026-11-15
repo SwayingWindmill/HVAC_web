@@ -9,6 +9,7 @@ export interface OnboardingPoint {
   code: string;
   pointType?: string;
   valueType?: string;
+  unit?: string;
   status?: string;
   writable?: boolean;
   asset?: string;

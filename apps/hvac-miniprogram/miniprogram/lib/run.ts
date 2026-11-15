@@ -158,7 +158,7 @@ const LOOPS: readonly {
     headline: [['出塔', 'cooling_tower.leaving_water_temperature'], ['进塔', 'cooling_tower.entering_water_temperature']],
     detail: [['与湿球差', 'cooling_tower.approach_temperature'], ['流量', 'cwp.flow_rate']],
   },
-  { name: '室内', icon: 'house', lead: 'zone.temperature', headline: [['', 'zone.temperature']], detail: [] },
+  { name: '室内', icon: 'house', lead: 'zone.temperature', headline: [['', 'zone.temperature']], detail: [['宴会厅', 'zone.banquet_temperature']] },
   {
     name: '室外',
     icon: 'cloud-sun',
@@ -342,7 +342,7 @@ const LEAD_KEYS: Readonly<Record<PlantCategory, readonly string[]>> = {
   COOLING_TOWER: ['cooling_tower.power'],
   METER: ['hvac_meter.active_power', 'btu_meter.instant_cooling_capacity', 'btu_meter.flow_rate'],
   WEATHER: ['weather.ambient_dry_bulb_temperature'],
-  ZONE: ['zone.temperature'],
+  ZONE: ['zone.temperature', 'zone.banquet_temperature'],
   ACQUISITION: [],
   OTHER: [],
 };

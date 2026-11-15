@@ -603,3 +603,168 @@ test('buildAlarmTrendSearch and buildFindingTrendSearch construct fault windows,
   assert.equal(findingSearch.sourceTitle, '冷冻水低温差');
   assert.ok(findingSearch.points?.includes('temperature_difference'));
 });
+
+test('zone banquet temperature, cooling tower water 2, and wireless battery/RSSI points project accurately', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { resolve } = await import('node:path');
+  const {
+    formatTelemetryDisplayValue,
+    formatTelemetryUnit,
+    telemetryPointDefinition,
+  } = await import('../apps/hvac-web/src/domain/centralPlantTelemetry.ts');
+  const { buildAssetsRows } = await import('../apps/hvac-web/src/features/assets/model.ts');
+  const { buildPlantView, plantReading } = await import('../apps/hvac-web/src/features/operations/realtime/plant-model.ts');
+
+  const zoneTempDef = telemetryPointDefinition('zone.temperature');
+  const banquetDef = telemetryPointDefinition('zone.banquet_temperature');
+  assert.deepEqual(zoneTempDef, { key: 'zone.temperature', label: '室内温度', defaultUnit: 'Cel', precision: 1 });
+  assert.deepEqual(banquetDef, { key: 'zone.banquet_temperature', label: '宴会厅室内温度', defaultUnit: 'Cel', precision: 1 });
+  assert.equal(formatTelemetryUnit('mV'), 'mV');
+  assert.equal(formatTelemetryUnit('dBm'), 'dBm');
+  assert.equal(formatTelemetryUnit('Cel'), '°C');
+  assert.equal(formatTelemetryDisplayValue(25.4, banquetDef?.precision), '25.4');
+  assert.equal(formatTelemetryDisplayValue(3550, 0), '3550');
+  assert.equal(formatTelemetryDisplayValue(-62, 0), '-62');
+
+  const assetModel = JSON.parse(
+    readFileSync(resolve(process.cwd(), 'apps/hvac-web/e2e/fixtures/asset-model.json'), 'utf8'),
+  ) as import('../apps/hvac-web/src/api/generated/platformGateway.gen.ts').SiteAssetModel;
+  const snapshotsPayload = JSON.parse(
+    readFileSync(resolve(process.cwd(), 'apps/hvac-web/e2e/fixtures/snapshots.json'), 'utf8'),
+  ) as {
+    readonly items: {
+      readonly deviceId: string;
+      readonly status: string;
+      readonly snapshot?: import('../apps/hvac-web/src/api/generated/s2Telemetry.gen.ts').DeviceObservationSnapshot;
+      readonly problem?: import('../apps/hvac-web/src/api/generated/s2Telemetry.gen.ts').ProblemDetails;
+    }[];
+  };
+
+  const zoneDeviceId = '018f3e00-4000-7000-8000-000000000008';
+  const moduleDeviceId = '018f3e00-4000-7000-8000-000000000020';
+  const zoneTemplatePoint = assetModel.telemetryPoints.find((point) => point.reportingDeviceId === zoneDeviceId && point.sourceKey === 'zone.temperature');
+  const zoneSnapshotItem = snapshotsPayload.items.find((item) => item.deviceId === zoneDeviceId);
+  assert.ok(zoneTemplatePoint);
+  assert.ok(zoneSnapshotItem);
+
+  let nextPointSuffix = 101;
+  const samplePoint = (pointCode: string, sourceKey: string, displayName: string, unit: string, reportingDeviceId: string) => ({
+    ...zoneTemplatePoint,
+    id: `01910000-0000-7000-8000-10000000${String(nextPointSuffix++).padStart(4, '0')}`,
+    reportingDeviceId,
+    pointCode,
+    sourceKey,
+    displayName,
+    unit,
+  });
+
+  const nextDevices = [
+    ...assetModel.devices,
+    {
+      ...assetModel.devices.find((device) => device.id === zoneDeviceId)!,
+      id: moduleDeviceId,
+      code: 'temperature-module',
+      displayName: '无线测温集中器 (UID 20)',
+      deviceType: 'TEMPERATURE_MODULE',
+    },
+  ];
+  const nextPoints = [
+    ...assetModel.telemetryPoints,
+    samplePoint('banquet_room_temperature', 'zone.banquet_temperature', '宴会厅室内温度', 'Cel', zoneDeviceId),
+    samplePoint('t14', 'acquisition.t14', '冷却水塔水 2（通道 14）', 'Cel', moduleDeviceId),
+    samplePoint('t11', 'acquisition.t11', '冷却塔内侧总管（通道 11）', 'Cel', moduleDeviceId),
+    samplePoint('t51', 'acquisition.t51', '冷却塔内侧总管（通道 51）', 'Cel', moduleDeviceId),
+    samplePoint('t12', 'acquisition.t12', '冷却塔出水（通道 12）', 'Cel', moduleDeviceId),
+    samplePoint('t55', 'acquisition.t55', '冷却塔出水（通道 55）', 'Cel', moduleDeviceId),
+    samplePoint('v1', 'acquisition.v1', 'A 机组冷冻水出水（通道 1）电池电压', 'mV', moduleDeviceId),
+    samplePoint('rssi1', 'acquisition.rssi1', 'A 机组冷冻水出水（通道 1）信号强度', 'dBm', moduleDeviceId),
+  ];
+  const augmentedModel: typeof assetModel = {
+    ...assetModel,
+    devices: nextDevices,
+    telemetryPoints: nextPoints,
+    counts: {
+      ...assetModel.counts,
+      deviceEndpoints: nextDevices.length,
+      points: nextPoints.length,
+    },
+  };
+
+  const zoneSnapshot = zoneSnapshotItem.snapshot;
+  if (!zoneSnapshot) throw new Error('missing zone snapshot fixture');
+  const sampleValueTemplate = zoneSnapshot.values[0];
+  if (!sampleValueTemplate || sampleValueTemplate.state !== 'PRESENT') {
+    throw new Error('expected PRESENT zone temperature sample fixture');
+  }
+  const makeValue = (key: string, value: number, unit: string) => ({
+    ...sampleValueTemplate,
+    key,
+    state: 'PRESENT' as const,
+    value,
+    valueType: 'NUMBER' as const,
+    unit,
+    freshness: 'FRESH' as const,
+    quality: 'GOOD' as const,
+  });
+
+  const snapshots = new Map<string, import('../apps/hvac-web/src/features/assets/model.ts').AssetsSnapshotResult>();
+  for (const item of snapshotsPayload.items) {
+    if (item.deviceId === zoneDeviceId && item.snapshot) {
+      snapshots.set(item.deviceId, {
+        status: 'ok',
+        snapshot: {
+          ...item.snapshot,
+          values: [
+            ...item.snapshot.values,
+            makeValue('banquet_room_temperature', 25.4, 'Cel'),
+          ].sort((left, right) => left.key.localeCompare(right.key)),
+        },
+      });
+    } else if (item.status === 'OK' && item.snapshot) {
+      snapshots.set(item.deviceId, { status: 'ok', snapshot: item.snapshot });
+    } else if (item.problem) {
+      snapshots.set(item.deviceId, { status: 'error', problem: item.problem });
+    }
+  }
+  snapshots.set(moduleDeviceId, {
+    status: 'ok',
+    snapshot: {
+      ...zoneSnapshot,
+      deviceId: moduleDeviceId,
+      values: [
+        makeValue('t14', 33.8, 'Cel'),
+        makeValue('t11', 31.2, 'Cel'),
+        makeValue('t51', 31.2, 'Cel'),
+        makeValue('t12', 30.7, 'Cel'),
+        makeValue('t55', 30.7, 'Cel'),
+        makeValue('v1', 3550, 'mV'),
+        makeValue('rssi1', -62, 'dBm'),
+      ].sort((left, right) => left.key.localeCompare(right.key)),
+    },
+  });
+
+  const rows = buildAssetsRows({
+    assetModel: augmentedModel,
+    snapshots,
+    now: new Date('2026-10-01T15:30:00.000Z'),
+  });
+  const plant = buildPlantView(rows);
+
+  assert.equal(plantReading(plant, 'zone.temperature')?.display, '24.1');
+  assert.equal(plantReading(plant, 'zone.temperature')?.unit, '°C');
+  assert.equal(plantReading(plant, 'zone.banquet_temperature')?.display, '25.4');
+  assert.equal(plantReading(plant, 'zone.banquet_temperature')?.unit, '°C');
+
+  const concentrator = plant.devices.find((device) => device.deviceId === moduleDeviceId);
+  assert.ok(concentrator);
+  assert.equal(concentrator.category, 'ACQUISITION');
+  assert.equal(concentrator.reading('acquisition.t14')?.display, '33.8');
+  assert.equal(concentrator.reading('acquisition.t11')?.display, '31.2');
+  assert.equal(concentrator.reading('acquisition.t51')?.display, '31.2');
+  assert.equal(concentrator.reading('acquisition.t12')?.display, '30.7');
+  assert.equal(concentrator.reading('acquisition.t55')?.display, '30.7');
+  assert.equal(concentrator.reading('acquisition.v1')?.display, '3550');
+  assert.equal(concentrator.reading('acquisition.v1')?.unit, 'mV');
+  assert.equal(concentrator.reading('acquisition.rssi1')?.display, '-62');
+  assert.equal(concentrator.reading('acquisition.rssi1')?.unit, 'dBm');
+});

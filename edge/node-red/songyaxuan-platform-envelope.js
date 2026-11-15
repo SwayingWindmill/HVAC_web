@@ -1,93 +1,69 @@
-// Node-RED function node「平台·形成信封」on the Songyaxuan Gateway (tab「Edge·采集与上报」).
-// Input: a device function's message { <device>: [{ ts, values }] }.
-// Output: one platform telemetry envelope (Connectivity MQTT contract, schemaVersion 2.0) per device
-// message, or nothing for devices the platform has no source key for (the Gateway's own status). A meter
-// message also carries the plant total, a temperature message the calculated cooling, and both the
-// equipment readings (COPIES), below, as further devices in the same envelope. One envelope per sample
-// matters: the durable outbox republishes every unacknowledged record on each enqueue, so several
-// envelopes in a row went out up to eight times each (2026-10-16, platform-side duplicates). It goes on
-// to「Outbox·形成事件」, which stores it in the durable outbox until the broker acknowledges it:
-//   msg.outboxCommand = "enqueue";
-//   msg.outboxRecord = { id: msg.payload.messageId, topic: msg.topic, payload: msg.payload };
-// Registered devices and points: deploy/sites/songyaxuan.site.json.
+// Node-RED「平台·形成信封」for Songyaxuan: { <device>: [{ ts, values }] } -> telemetry envelope 2.0.
 const GATEWAY_ID = "01a14000-4000-7000-8000-000000000100";
 const METERS = ["ammeter-unit1", "ammeter-unit2", "ammeter-unit3", "ammeter-unit4"];
+const METER_FRESH_MS = 900000;
 const DEVICES = {
   temperature: { codes: null, unit: "Cel" },
+  "temperature-voltage": { codes: null, unit: "mV" },
+  "temperature-rssi": { codes: null, unit: "dBm" },
+  "temperature-status": { codes: null, unit: null, allowString: true },
   waterflow: { codes: { flowMeter: ["flow_meter", "m3/h"], flowVelocity: ["flow_velocity", "m/s"] } },
   et1010: { codes: null, unit: null },
 };
 for (const meter of METERS) {
   DEVICES[meter] = { codes: { powerTotal: ["power_total", "kW"], combinedActiveTotalElectricalEnergy: ["active_energy_total", "kWh"] } };
 }
-// Meter 4 (ammeter-unit4, A 机组电表 UID 4) was read from register 64, which is always 0; on 2026-10-14 its energy register was found at 60
-// (76938 kWh then). The platform had counted it from 0, so it keeps counting from there: the reading
-// less what the meter showed when the address was corrected, with no jump into one interval.
+const POINT_UNITS = { min_voltage_mv: "mV", min_rssi_dbm: "dBm" };
 const ENERGY_BASELINE = { "ammeter-unit4": 76938 };
-// 温度通道按现场点位表与电表—机组对应关系复制到对应设备（见 deploy/sites/songyaxuan.site.json 的 from 字段，
-// 改动对应关系时两处一起改）：
-//   ammeter-unit4 (UID 4) = A 机组 (t1 蒸发出、t6 冷凝出、t10 冷冻水支管进水)
-//   ammeter-unit3 (UID 3) = B 机组 (t2 蒸发出、t7 冷凝出)
-//   ammeter-unit1 (UID 5) = C 机组 (t3 蒸发出、t8 冷凝出；电表同时连有对应水泵与冷却塔)
-//   ammeter-unit2 (UID 2) = D 机组 (t4 蒸发出、t9 冷凝出；电表同时连有对应水泵与冷却塔)
-//   冷却水总管进水 t5；冷却塔外侧总管出水 t12、进水 t13；室外温度 t15；冷冻水总回水 t16。
+
+// 温度复制映射须与 deploy/sites/songyaxuan.site.json 的 from 一致
 const COPIES = {
   temperature: {
+    t1: [["ammeter-unit4", "chw_leaving_temperature"]],
+    t2: [["ammeter-unit3", "chw_leaving_temperature"]],
+    t3: [["ammeter-unit1", "chw_leaving_temperature"]],
+    t4: [["ammeter-unit2", "chw_leaving_temperature"]],
+    t6: [["ammeter-unit4", "cw_leaving_temperature"]],
+    t7: [["ammeter-unit3", "cw_leaving_temperature"]],
+    t8: [["ammeter-unit1", "cw_leaving_temperature"]],
+    t9: [["ammeter-unit2", "cw_leaving_temperature"]],
+    t10: [["ammeter-unit4", "chw_entering_temperature_branch"]],
     t16: METERS.map((meter) => [meter, "chw_entering_temperature"]),
     t5: METERS.map((meter) => [meter, "cw_entering_temperature"]),
-    t1: [["ammeter-unit4", "chw_leaving_temperature"]],
-    t6: [["ammeter-unit4", "cw_leaving_temperature"]],
-    t10: [["ammeter-unit4", "chw_entering_temperature_branch"]],
-    t2: [["ammeter-unit3", "chw_leaving_temperature"]],
-    t7: [["ammeter-unit3", "cw_leaving_temperature"]],
-    t3: [["ammeter-unit1", "chw_leaving_temperature"]],
-    t8: [["ammeter-unit1", "cw_leaving_temperature"]],
-    t4: [["ammeter-unit2", "chw_leaving_temperature"]],
-    t9: [["ammeter-unit2", "cw_leaving_temperature"]],
     t12: [["cooling-tower", "cooling_tower_leaving_temperature"]],
     t13: [["cooling-tower", "cooling_tower_entering_temperature"]],
     t15: [["outdoor", "ambient_temperature"]],
+    t53: [["room", "room_temperature"]],
+    t54: [["room", "banquet_room_temperature"]],
   },
   waterflow: { flowMeter: [["chwp-main", "flow_rate"]] },
 };
 const COPY_UNITS = { temperature: "Cel", waterflow: "m3/h" };
-// 没接探头的通道不上报（原始值一直是 0）；站点文件将其标为 INACTIVE。
-const SPARE = { temperature: ["t14", "t20"] };
-// A machine runs while its meter reads more than 5 kW (idle ones read under 1 kW; note C/D meters also carry
-// their pumps and cooling tower); the chilled-water pumps run while the header flow exceeds 10 m³/h.
+
+// 没接探头或停用的通道不上报（如 20 备用、52 离线停用）。
+const SPARE = {
+  temperature: ["t20", "t52"],
+  "temperature-voltage": ["v20", "v52"],
+  "temperature-rssi": ["rssi20", "rssi52"],
+  "temperature-status": ["status20", "status52"],
+};
+
 const runState = (running) => (running ? "RUNNING" : "STOPPED");
 const DO_CONTROLLERS = { u11: "ctrl-chwp-1", u12: "ctrl-cwp-1", u13: "ctrl-tower-1", u21: "ctrl-chwp-2", u22: "ctrl-cwp-2", u23: "ctrl-tower-2", u31: "ctrl-chwp-3", u32: "ctrl-cwp-3", u33: "ctrl-tower-3", u41: "ctrl-chwp-4", u42: "ctrl-cwp-4", u43: "ctrl-tower-4" };
 const METER_CONTROLLERS = { "ammeter-unit4": "ctrl-chiller-a", "ammeter-unit3": "ctrl-chiller-b", "ammeter-unit1": "ctrl-chiller-c", "ammeter-unit2": "ctrl-chiller-d" };
-
-const source = msg.payload;
-const device = Object.keys(source)[0];
-const mapping = DEVICES[device];
-if (!mapping) return null;
-const sample = { ...source[device][0], values: { ...source[device][0].values } };
-if (ENERGY_BASELINE[device] !== undefined && Number.isFinite(sample.values.combinedActiveTotalElectricalEnergy)) {
-  sample.values.combinedActiveTotalElectricalEnergy -= ENERGY_BASELINE[device];
-}
-
-const points = [];
-for (const [key, value] of Object.entries(sample.values)) {
-  let code = key;
-  let unit = mapping.unit;
-  if (mapping.codes) {
-    if (!mapping.codes[key]) continue;
-    [code, unit] = mapping.codes[key];
+const extract = (entryVal) => {
+  if (entryVal !== null && typeof entryVal === "object") {
+    return {
+      value: entryVal.value,
+      quality: Number.isInteger(entryVal.quality) ? entryVal.quality : null,
+    };
   }
-  if (typeof value !== "number" || !Number.isFinite(value)) continue;
-  if ((SPARE[device] || []).includes(key)) continue;
-  // An unconnected temperature input reads exactly 0; it is not a 0 °C measurement.
-  const quality = device === "temperature" && value === 0 ? 1 : 0;
-  const point = { code, value, quality };
-  if (unit) point.unit = unit;
-  points.push(point);
-}
-if (points.length === 0) return null;
-if (METERS.includes(device) && Number.isFinite(sample.values.powerTotal)) {
-  points.push({ code: "run_state", value: runState(sample.values.powerTotal > 5), quality: 0 });
-}
+  return { value: entryVal, quality: null };
+};
+const numValue = (values, key) => {
+  const value = extract(values[key]).value;
+  return typeof value === "number" && Number.isFinite(value) ? value : NaN;
+};
 
 // UUIDv7: 48-bit Unix milliseconds, version 7, variant 10, random rest.
 function uuidv7(ms) {
@@ -97,8 +73,6 @@ function uuidv7(ms) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-7${random().slice(1)}-${variant}-${random()}${random()}${random()}`;
 }
 
-// The platform drops any message whose sequence does not exceed the last one it saw, so the
-// sequence follows the clock and survives a restart: milliseconds × 1000 plus a counter.
 function envelope(devices) {
   const now = Date.now();
   const sequence = Math.max(now * 1000, (context.get("lastSequence") || 0) + 1);
@@ -119,78 +93,151 @@ function envelope(devices) {
   };
 }
 
+const source = msg.payload;
+if (!source || typeof source !== "object") return null;
+
 const entry = (deviceId, deviceTimestamp, devicePoints) => ({ deviceId, deviceTimestamp, points: devicePoints });
-const entries = [entry(device, sample.ts, points)];
-
+const entries = [];
 const copies = {};
-for (const [field, targets] of Object.entries(COPIES[device] || {})) {
-  const value = sample.values[field];
-  if (typeof value !== "number" || !Number.isFinite(value) || (device === "temperature" && value === 0)) continue;
-  for (const [target, code] of targets) {
-    if (!copies[target]) copies[target] = [];
-    copies[target].push({ code, value, quality: 0, unit: COPY_UNITS[device] });
-  }
-}
-if (copies["chwp-main"]) copies["chwp-main"].push({ code: "run_state", value: runState(sample.values.flowMeter > 10), quality: 0 });
-for (const [target, targetPoints] of Object.entries(copies)) entries.push(entry(target, sample.ts, targetPoints));
+const statusValues = source["temperature-status"]?.[0]?.values || null;
+const isOfflineChannel = (device, key) => {
+  if (!statusValues || (device !== "temperature" && device !== "temperature-voltage" && device !== "temperature-rssi")) return false;
+  const match = /^[a-z]+(\d+)$/.exec(key);
+  if (!match) return false;
+  return extract(statusValues[`status${match[1]}`]).value === "OFFLINE";
+};
 
-// The plant room has no total meter: the four machines' meters added up stand for it
-// (「空调总电表（四台机组合计）」), once each has reported since the flow started.
-if (METERS.includes(device)) {
-  const latest = context.get("meterLatest") || {};
-  latest[device] = { power: sample.values.powerTotal, energy: sample.values.combinedActiveTotalElectricalEnergy };
-  context.set("meterLatest", latest);
-  const readings = METERS.map((meter) => latest[meter]);
-  if (readings.every((reading) => reading && Number.isFinite(reading.power) && Number.isFinite(reading.energy))) {
-    const sum = (field) => Math.round(readings.reduce((total, reading) => total + reading[field], 0) * 1000) / 1000;
-    entries.push(entry("ammeter-total", sample.ts, [
-      { code: "power_total", value: sum("power"), quality: 0, unit: "kW" },
-      { code: "active_energy_total", value: sum("energy"), quality: 0, unit: "kWh" },
-    ]));
-  }
-}
+for (const [device, samples] of Object.entries(source)) {
+  const mapping = DEVICES[device];
+  if (!mapping || !Array.isArray(samples) || !samples[0] || !samples[0].values) continue;
+  const sample = samples[0];
+  const baseline = ENERGY_BASELINE[device];
+  const spare = SPARE[device] || [];
+  const points = [];
 
-// No BTU meter either: cooling is 1.163 × chilled-water flow (m³/h) × (return t16 − supply t18) in kW
-// while the machines draw more than 20 kW, else zero (the pumps keep water moving while they are off,
-// and that warming is not cooling), never below zero, with a flow reading from the last 3 minutes,
-// integrated into kWh; a gap of more than 10 minutes is not integrated. Until all four meters have
-// reported there is no power to judge by and nothing is sent. scripts/thingsboard-history-import.mjs
-// derives the history the same way.
-if (device === "waterflow" && Number.isFinite(sample.values.flowMeter)) {
-  context.set("latestFlow", { ts: sample.ts, value: sample.values.flowMeter });
-}
-if (device === "temperature") {
-  const flow = context.get("latestFlow");
-  const meters = context.get("meterLatest") || {};
-  const plantPower = METERS.every((meter) => meters[meter] && Number.isFinite(meters[meter].power))
-    ? METERS.reduce((total, meter) => total + meters[meter].power, 0) : null;
-  const supply = sample.values.t18;
-  const returnTemperature = sample.values.t16;
-  if (flow && sample.ts - flow.ts <= 180000 && plantPower !== null && supply > 0 && returnTemperature > 0) {
-    const difference = returnTemperature - supply;
-    const capacity = plantPower > 20 ? Math.max(0, 1.163 * flow.value * difference) : 0;
-    const cooling = context.get("cooling") || { energy: 0, previous: null };
-    if (cooling.previous && sample.ts - cooling.previous.ts <= 600000) {
-      cooling.energy += (cooling.previous.capacity + capacity) / 2 * (sample.ts - cooling.previous.ts) / 3600000;
+  for (const [key, entryVal] of Object.entries(sample.values)) {
+    let code = key;
+    let unit = POINT_UNITS[key] || mapping.unit;
+    if (mapping.codes) {
+      if (!mapping.codes[key]) continue;
+      [code, unit] = mapping.codes[key];
     }
-    cooling.previous = { ts: sample.ts, capacity };
-    context.set("cooling", cooling);
-    entries.push(entry("btu-calc", sample.ts, [
-      { code: "supply_water_temperature", value: supply, quality: 0, unit: "Cel" },
-      { code: "return_water_temperature", value: returnTemperature, quality: 0, unit: "Cel" },
-      { code: "temperature_difference", value: Math.round(difference * 100) / 100, quality: 0, unit: "K" },
-      { code: "flow_rate", value: flow.value, quality: 0, unit: "m3/h" },
-      { code: "instant_cooling_capacity", value: Math.round(capacity * 10) / 10, quality: 0, unit: "kW" },
-      { code: "accumulated_cooling_energy", value: Math.round(cooling.energy * 1000) / 1000, quality: 0, unit: "kWh" },
-    ]));
+    if (spare.includes(key)) continue;
+
+    let { value, quality } = extract(entryVal);
+    if (baseline !== undefined && key === "combinedActiveTotalElectricalEnergy" && typeof value === "number" && Number.isFinite(value)) {
+      value -= baseline;
+    }
+    const isNumber = typeof value === "number" && Number.isFinite(value);
+    const isString = mapping.allowString && typeof value === "string" && value.length > 0;
+    if (!isNumber && !isString) continue;
+
+    if (quality === null) {
+      // An unconnected temperature input reads 0, and offline probe voltage/RSSI registers are not live readings.
+      if ((device === "temperature" && value === 0) || isOfflineChannel(device, key)) quality = 1;
+      else quality = 0;
+    }
+    const point = { code, value, quality };
+    if (unit) point.unit = unit;
+    points.push(point);
+  }
+  if (points.length === 0) continue;
+
+  const powerTotal = numValue(sample.values, "powerTotal");
+  if (METERS.includes(device) && Number.isFinite(powerTotal)) {
+    points.push({ code: "run_state", value: runState(powerTotal > 5), quality: 0 });
+  }
+  entries.push(entry(device, sample.ts, points));
+
+  for (const [field, targets] of Object.entries(COPIES[device] || {})) {
+    const parsed = extract(sample.values[field]);
+    const copyQuality = parsed.quality ?? 0;
+    if (typeof parsed.value !== "number" || !Number.isFinite(parsed.value)) continue;
+    if (device === "temperature" && (parsed.value === 0 || copyQuality !== 0 || isOfflineChannel(device, field))) continue;
+    for (const [target, code] of targets) {
+      if (!copies[target]) copies[target] = { ts: sample.ts, points: [] };
+      copies[target].points.push({ code, value: parsed.value, quality: 0, unit: COPY_UNITS[device] });
+    }
+  }
+  if (device === "waterflow" && copies["chwp-main"]) {
+    const flowMeter = numValue(sample.values, "flowMeter");
+    if (Number.isFinite(flowMeter)) {
+      copies["chwp-main"].points.push({ code: "run_state", value: runState(flowMeter > 10), quality: 0 });
+    }
+  }
+
+  const isFreshMeter = (reading, nowTs) =>
+    Boolean(reading && Number.isFinite(reading.ts) && nowTs - reading.ts <= METER_FRESH_MS && Number.isFinite(reading.power) && Number.isFinite(reading.energy));
+
+  // 4台冷冻机组电表在 15 分钟内都有新鲜读数时合计为总电表（用于对账）
+  if (METERS.includes(device)) {
+    const energy = numValue(sample.values, "combinedActiveTotalElectricalEnergy") - (baseline || 0);
+    const latest = context.get("meterLatest") || {};
+    latest[device] = { ts: sample.ts, power: powerTotal, energy };
+    context.set("meterLatest", latest);
+    const readings = METERS.map((meter) => latest[meter]);
+    if (readings.every((reading) => isFreshMeter(reading, sample.ts))) {
+      const sum = (field) => Math.round(readings.reduce((total, reading) => total + reading[field], 0) * 1000) / 1000;
+      entries.push(entry("ammeter-total", sample.ts, [
+        { code: "power_total", value: sum("power"), quality: 0, unit: "kW" },
+        { code: "active_energy_total", value: sum("energy"), quality: 0, unit: "kWh" },
+      ]));
+    }
+  }
+
+  // 制冷量计算：1.163 × 冷水流量(m³/h) × (总管回水 t16 − 总管供水 t18)
+  if (device === "waterflow") {
+    const flowMeter = numValue(sample.values, "flowMeter");
+    if (Number.isFinite(flowMeter)) context.set("latestFlow", { ts: sample.ts, value: flowMeter });
+  }
+  if (device === "temperature") {
+    const flow = context.get("latestFlow");
+    const meters = context.get("meterLatest") || {};
+    const freshMeters = METERS.map((meter) => meters[meter]).filter(
+      (reading) => reading && Number.isFinite(reading.ts) && sample.ts - reading.ts <= METER_FRESH_MS && Number.isFinite(reading.power),
+    );
+    const plantPower = freshMeters.length > 0
+      ? freshMeters.reduce((total, reading) => total + reading.power, 0) : null;
+    const t18 = extract(sample.values.t18);
+    const t16 = extract(sample.values.t16);
+    const supply = t18.value;
+    const returnTemperature = t16.value;
+    const goodTemps = typeof supply === "number" && typeof returnTemperature === "number"
+      && supply > 0 && returnTemperature > 0
+      && (t18.quality ?? 0) === 0 && (t16.quality ?? 0) === 0
+      && !isOfflineChannel("temperature", "t18") && !isOfflineChannel("temperature", "t16");
+    if (flow && sample.ts - flow.ts <= 180000 && plantPower !== null && goodTemps) {
+      const difference = returnTemperature - supply;
+      const capacity = plantPower > 20 ? Math.max(0, 1.163 * flow.value * difference) : 0;
+      const cooling = context.get("cooling") || { energy: 0, previous: null };
+      if (cooling.previous && sample.ts - cooling.previous.ts <= 600000) {
+        cooling.energy += (cooling.previous.capacity + capacity) / 2 * (sample.ts - cooling.previous.ts) / 3600000;
+      }
+      cooling.previous = { ts: sample.ts, capacity };
+      context.set("cooling", cooling);
+      entries.push(entry("btu-calc", sample.ts, [
+        { code: "supply_water_temperature", value: supply, quality: 0, unit: "Cel" },
+        { code: "return_water_temperature", value: returnTemperature, quality: 0, unit: "Cel" },
+        { code: "temperature_difference", value: Math.round(difference * 100) / 100, quality: 0, unit: "K" },
+        { code: "flow_rate", value: flow.value, quality: 0, unit: "m3/h" },
+        { code: "instant_cooling_capacity", value: Math.round(capacity * 10) / 10, quality: 0, unit: "kW" },
+        { code: "accumulated_cooling_energy", value: Math.round(cooling.energy * 1000) / 1000, quality: 0, unit: "kWh" },
+      ]));
+    }
+  }
+  if (device === "et1010") {
+    for (const [ch, ctrl] of Object.entries(DO_CONTROLLERS)) {
+      const val = numValue(sample.values, ch);
+      if (Number.isFinite(val)) entries.push(entry(ctrl, sample.ts, [{ code: "run_state", value: runState(val > 0), quality: 0 }]));
+    }
+  }
+  if (METER_CONTROLLERS[device] && Number.isFinite(powerTotal)) {
+    entries.push(entry(METER_CONTROLLERS[device], sample.ts, [{ code: "run_state", value: runState(powerTotal > 5), quality: 0 }]));
   }
 }
-if (device === "et1010") {
-  for (const [ch, ctrl] of Object.entries(DO_CONTROLLERS)) {
-    if (Number.isFinite(sample.values[ch])) entries.push(entry(ctrl, sample.ts, [{ code: "run_state", value: runState(sample.values[ch] > 0), quality: 0 }]));
-  }
+
+for (const [target, copied] of Object.entries(copies)) {
+  entries.push(entry(target, copied.ts, copied.points));
 }
-if (METER_CONTROLLERS[device] && Number.isFinite(sample.values.powerTotal)) {
-  entries.push(entry(METER_CONTROLLERS[device], sample.ts, [{ code: "run_state", value: runState(sample.values.powerTotal > 5), quality: 0 }]));
-}
+if (entries.length === 0) return null;
 return envelope(entries);

@@ -16,7 +16,7 @@ import (
 const songyaxuanRules = "../../../../deploy/sites/songyaxuan.alarm-rules.json"
 
 // #609: 松雅轩's rules file becomes policies the evaluator accepts, over the points the site file
-// marks active; inactive points (no probe wired, like t14) are watched by no rule.
+// marks active; inactive points (no probe wired, like t20) are watched by no rule.
 func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	compiled, err := Load(songyaxuanRules)
 	if err != nil {
@@ -51,12 +51,12 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	// The supply-temperature rule, the four plant rules kept after 2026-11-10 (供水偏高、供水过低、
 	// 冷却水出水过高、机组运行无流量), 网关上报中断, 13 critical-point reading-gap rules (#796/#798: 4 sub-meters ×
 	// 2, cooling meter × 2, header supply/return t16 & t18, main chilled-water flow), one
-	// 读数长时间没有更新 per device that still has non-critical own active points (10, including
-	// meter-total which is kept as a non-critical reconciliation meter under sum-of-sub-meters;
-	// cooling-tower and outdoor have only copied points, room has no probe),
+	// 读数长时间没有更新 per device that still has non-critical own active points (13, including
+	// meter-total and the three temperature concentrator voltage/RSSI/status devices;
+	// cooling-tower, outdoor, and room have only copied points),
 	// the data-quality rules from each point's quality profile, the physics checks over active
 	// points (16), and five probe-offset suggestions (header + chillers A–D).
-	if len(byTitle) != 112 {
+	if len(byTitle) != 128 {
 		t.Fatalf("got %d rules: %v", len(byTitle), keys(byTitle))
 	}
 
@@ -151,11 +151,11 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		t.Fatalf("expected legacy cooling-tower readings-not-updated rule to be retired, got %#v", plan.Retired)
 	}
 
-	// #615: the Site has stopped reporting when none of its 82 active reading points has a reading for
-	// 15 minutes (78 earlier active readings + 4 ET1010 shutdown pulse telemetry channels u51–u54;
+	// #615: the Site has stopped reporting when none of its 163 active reading points has a reading for
+	// 15 minutes (82 earlier active readings including u51–u54 + 81 active concentrator channels/diagnostics;
 	// logical controller STATE/COMMAND points are excluded).
 	silent, ok := byTitle["网关上报中断"]
-	if !ok || silent.Severity != "MAJOR" || len(inputs(silent.Raise)) != 82 || len(inputs(silent.Clear)) != 82 {
+	if !ok || silent.Severity != "MAJOR" || len(inputs(silent.Raise)) != 163 || len(inputs(silent.Clear)) != 163 {
 		t.Fatalf("网关上报中断 rule: %#v", silent)
 	}
 	if !strings.Contains(silent.Summary, "15 分钟") {
@@ -194,7 +194,7 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	}
 
 	module := inputs(byTitle["温度采集模块读数长时间没有更新"].Raise)
-	if len(module) != 16 || contains(module, "01a14000-4000-7000-8000-000000000001/t14") || contains(module, "01a14000-4000-7000-8000-000000000001/t20") || contains(module, "01a14000-4000-7000-8000-000000000001/t16") || contains(module, "01a14000-4000-7000-8000-000000000001/t18") {
+	if len(module) != 21 || contains(module, "01a14000-4000-7000-8000-000000000001/t20") || contains(module, "01a14000-4000-7000-8000-000000000001/t16") || contains(module, "01a14000-4000-7000-8000-000000000001/t18") {
 		t.Fatalf("temperature module readings rule watches inactive or critical channels: %v", module)
 	}
 	for _, policy := range byTitle {
@@ -203,19 +203,21 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		}
 	}
 
-	// All 82 active reading inputs (and 82 reading + 16 controller STATE = 98 runtime inputs) fit
-	// within EvaluationSnapshot's 128-input cap, and every compiled Songyaxuan policy evaluates cleanly.
+	// All 163 active Site reading inputs (and 163 reading + 16 controller STATE = 179 runtime inputs) fit
+	// within EvaluationSnapshot's 512-input cap, and every compiled Songyaxuan policy evaluates cleanly.
 	now := time.Date(2026, 11, 8, 8, 0, 0, 0, time.UTC)
 	fullInputs := map[string]alarmservice.InputFact{}
 	for _, key := range inputs(silent.Raise) {
 		if strings.HasSuffix(key, "/run_state") {
 			fullInputs[key] = alarmservice.StringInput(key, "STOPPED", "GOOD", now.Format(time.RFC3339Nano))
+		} else if strings.Contains(key, "/status") {
+			fullInputs[key] = alarmservice.StringInput(key, "ONLINE", "GOOD", now.Format(time.RFC3339Nano))
 		} else {
 			fullInputs[key] = alarmservice.NumberInput(key, 20, "GOOD", now.Format(time.RFC3339Nano))
 		}
 	}
-	if len(fullInputs) != 82 {
-		t.Fatalf("expected 82 distinct Site reading inputs, got %d", len(fullInputs))
+	if len(fullInputs) != 163 {
+		t.Fatalf("expected 163 distinct Site reading inputs, got %d", len(fullInputs))
 	}
 	for _, policy := range byTitle {
 		_ = evaluate(t, policy, "full-site-1", fullInputs, alarmservice.AlarmEvaluationState{}, now)
@@ -228,8 +230,8 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		key := fmt.Sprintf("01a14000-4000-7000-8000-%012x/run_state", index)
 		withControllers[key] = alarmservice.StringInput(key, "STOPPED", "GOOD", now.Format(time.RFC3339Nano))
 	}
-	if len(withControllers) != 98 {
-		t.Fatalf("expected 98 distinct Site runtime inputs including controllers, got %d", len(withControllers))
+	if len(withControllers) != 179 {
+		t.Fatalf("expected 179 distinct Site runtime inputs including controllers, got %d", len(withControllers))
 	}
 	for _, policy := range byTitle {
 		_ = evaluate(t, policy, "full-site-with-ctrl-1", withControllers, alarmservice.AlarmEvaluationState{}, now)

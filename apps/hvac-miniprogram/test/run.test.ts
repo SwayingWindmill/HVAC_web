@@ -271,3 +271,69 @@ test('any other doubt on the cooling load still withholds the efficiency', () =>
   }));
   assert.deepEqual(view.metrics.map((each) => [each.value, each.late, each.lowConfidence]), [['211.9', false, undefined], ['864', true, undefined], ['—', false, undefined]]);
 });
+
+test('indoor loop presents hall and banquet room temperatures and preserves mV/dBm unit formatting', async () => {
+  const { formatTelemetryUnit, telemetryPointDefinition } = await import('../miniprogram/shared/centralPlantTelemetry');
+  assert.deepEqual(telemetryPointDefinition('zone.banquet_temperature'), {
+    key: 'zone.banquet_temperature',
+    label: '宴会厅室内温度',
+    defaultUnit: 'Cel',
+    precision: 1,
+  });
+  assert.equal(formatTelemetryUnit('mV'), 'mV');
+  assert.equal(formatTelemetryUnit('dBm'), 'dBm');
+
+  const zoneDeviceId = '018f3e00-4000-7000-8000-000000000008';
+  const baseZonePoint = assetModel.telemetryPoints.find(
+    (point: { reportingDeviceId: string; sourceKey: string }) =>
+      point.reportingDeviceId === zoneDeviceId && point.sourceKey === 'zone.temperature',
+  );
+  assert.ok(baseZonePoint);
+
+  const extendedModel = {
+    ...assetModel,
+    telemetryPoints: [
+      ...assetModel.telemetryPoints,
+      {
+        ...baseZonePoint,
+        id: '01910000-0000-7000-8000-100000000054',
+        pointCode: 'banquet_room_temperature',
+        sourceKey: 'zone.banquet_temperature',
+        displayName: '宴会厅室内温度',
+        unit: 'Cel',
+      },
+    ],
+  };
+
+  const nextSnapshots: import('../miniprogram/lib/plant').SnapshotsResponse = {
+    items: (snapshots.items as import('../miniprogram/lib/plant').SnapshotsResponse['items']).map((item) => (
+      item.deviceId !== zoneDeviceId || !item.snapshot
+        ? item
+        : {
+          ...item,
+          snapshot: {
+            ...item.snapshot,
+            values: [
+              ...item.snapshot.values,
+              {
+                ...item.snapshot.values[0],
+                key: 'banquet_room_temperature',
+                state: 'PRESENT',
+                value: 25.4,
+                unit: 'Cel',
+                freshness: 'FRESH',
+                quality: 'GOOD',
+                qualityReasons: [],
+              },
+            ],
+          },
+        }
+    )),
+  };
+
+  const view = presentRealtime(buildPlant(extendedModel, nextSnapshots, now));
+  const indoor = view.loops.find((loop) => loop.name === '室内');
+  assert.ok(indoor);
+  assert.equal(indoor.headline, '24.1 °C');
+  assert.equal(indoor.detail, '宴会厅 25.4 °C');
+});
