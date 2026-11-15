@@ -5,6 +5,7 @@ hvac_identity|infra/identity/postgres/init/004-identity-auth-assurance.sql
 hvac_identity|infra/identity/postgres/init/005-identity-user-administration.sql
 hvac_identity|infra/identity/postgres/init/006-identity-wechat-bindings.sql
 hvac_identity|infra/identity/postgres/init/007-identity-first-factor.sql
+hvac_identity|infra/identity/postgres/init/008-schema-and-table-comments.sql
 hvac_s0|infra/durability/postgres/init/001-s0-durable.sql
 hvac_s0|infra/durability/postgres/init/002-s0-session-idle.sql
 hvac_s0|infra/durability/postgres/init/002-s1-registry-routing-audit.sql
@@ -14,6 +15,7 @@ hvac_s0|infra/durability/postgres/init/005-s0-session-assurance.sql
 hvac_s0|infra/durability/postgres/init/006-s04-audit-search.sql
 hvac_s0|infra/durability/postgres/init/007-audit-postgres-outbox-transport.sql
 hvac_s0|infra/durability/postgres/init/008-session-client.sql
+hvac_s0|infra/durability/postgres/init/009-schema-and-table-comments.sql
 hvac_s1|infra/registry/postgres/init/001-s1-registry-baseline.sql
 hvac_s1|infra/registry/postgres/init/001a-tenant-foundation.sql
 hvac_s1|infra/registry/postgres/init/001b-device-binding-invariants.sql
@@ -81,6 +83,9 @@ hvac_s1|services/notification-service/migrations/005_reading_gap_reminders.sql
 hvac_s1|services/notification-service/migrations/006_alarm_delivery.sql
 hvac_s1|infra/registry/postgres/init/039-optimization-staging-catalog-read.sql
 hvac_s1|infra/registry/postgres/init/040-optimization-operating-schedule-read.sql
+hvac_s1|infra/connectivity/postgres/init/005-schema-and-table-comments.sql
+hvac_s1|services/notification-service/migrations/007_schema_and_table_comments.sql
+hvac_s1|infra/registry/postgres/init/041-schema-and-table-comments.sql
 hvac_s2|infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 hvac_s2|infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql
@@ -97,12 +102,14 @@ hvac_s2|infra/telemetry/postgres/init/009-realtime-revocation-relay.sql
 hvac_s2|infra/telemetry/postgres/init/010-runtime-retention.sql
 hvac_s2|infra/telemetry/postgres/init/011-point-quality.sql
 hvac_s2|infra/telemetry/postgres/init/012-measurement-uncertainty.sql
+hvac_s2|infra/telemetry/postgres/init/013-schema-and-table-comments.sql
 hvac_s3|modules/command/migrations/001_s3_command_runtime.sql
 hvac_s3|modules/command/migrations/002_s3_target_runtime.sql
 hvac_s3|modules/command/migrations/003_s3_tenant_scope.sql
 hvac_s3|modules/command/migrations/004_s3_command_point_identity.sql
 hvac_s3|modules/command/migrations/005_s11_edge_execution_evidence.sql
 hvac_s3|modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql
+hvac_s3|modules/command/migrations/007_schema_and_table_comments.sql
 hvac_s4|modules/alarm/migrations/001_s4_alarm_runtime.sql
 hvac_s4|modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 hvac_s4|modules/alarm/migrations/003_s4_tenant_scope.sql
@@ -119,11 +126,14 @@ hvac_s4|modules/alarm/migrations/013_s30_rules_awaiting_their_version.sql
 hvac_s4|modules/alarm/migrations/014_s31_retired_site_rules.sql
 hvac_s4|modules/alarm/migrations/015_s32_reading_gap_escalation.sql
 hvac_s4|modules/alarm/migrations/016_s32_rules_unevaluable.sql
+hvac_s4|modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tables.sql
 hvac_s5|modules/workorder/migrations/001_s5_work_order_runtime.sql
 hvac_s5|modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 hvac_s5|modules/workorder/migrations/003_s5_work_order_lifecycle.sql
 hvac_s5|modules/workorder/migrations/004_s5_tenant_scope.sql
 hvac_s5|modules/workorder/migrations/005_s19_alarm_links.sql
 hvac_s5|modules/workorder/migrations/006_s26_equipment_source_domain.sql
+hvac_s5|modules/workorder/migrations/007_schema_and_table_comments.sql
 hvac_operations_agent|services/operations-agent-service/migrations/operations/001_agent_sessions.sql
 hvac_operations_agent|services/operations-agent-service/migrations/operations/002_finding_without_summary.sql
+hvac_operations_agent|services/operations-agent-service/migrations/operations/003_schema_and_table_comments.sql

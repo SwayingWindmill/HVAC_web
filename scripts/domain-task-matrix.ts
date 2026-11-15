@@ -42,6 +42,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       npmRun('events:check'),
       npmRun('deployment:phase1:check'),
       npmRun('migrations:freeze:check'),
+      npmRun('migrations:conventions:check'),
       npmRun('acceptance:phase1:check'),
       npmRun('architecture:phase1:check'),
       npmRun('backend:architecture:check'),

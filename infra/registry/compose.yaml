@@ -70,6 +70,8 @@ services:
       - ./postgres/init/038-command-route-point-metadata.sql:/docker-entrypoint-initdb.d/540.sql:ro
       - ./postgres/init/039-optimization-staging-catalog-read.sql:/docker-entrypoint-initdb.d/550.sql:ro
       - ./postgres/init/040-optimization-operating-schedule-read.sql:/docker-entrypoint-initdb.d/560.sql:ro
+      - ../connectivity/postgres/init/005-schema-and-table-comments.sql:/docker-entrypoint-initdb.d/570.sql:ro
+      - ./postgres/init/041-schema-and-table-comments.sql:/docker-entrypoint-initdb.d/580.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

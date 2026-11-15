@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
 
@@ -126,16 +126,8 @@ try {
   compose(['up', '-d', 'postgres']);
   await waitForPostgres();
 
-  applyMigration(
-    'operations_agent_operations_migrator',
-    'operations-migrator-local-only',
-    '/migrations/operations/001_agent_sessions.sql',
-  );
-  applyMigration(
-    'operations_agent_operations_migrator',
-    'operations-migrator-local-only',
-    '/migrations/operations/002_finding_without_summary.sql',
-  );
+  const migrationFiles = (await readdir(resolve(root, 'services/operations-agent-service/migrations/operations'))).filter((f) => f.endsWith('.sql')).sort();
+  for (const file of migrationFiles) applyMigration('operations_agent_operations_migrator', 'operations-migrator-local-only', `/migrations/operations/${file}`);
 
   const roleState = adminPsql(`
     SELECT rolname || ':'
