@@ -197,7 +197,7 @@ test('songyaxuan nameplates are the photographed plates and the pump motors stay
   }
   const chillerALeaving = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000001', 't1'"));
   assert.match(chillerALeaving ?? '', /CHW_DIRECTION/);
-  const copied = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000005', 'chw_leaving_temperature'"));
+  const copied = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000006', 'chw_leaving_temperature'"));
   assert.match(copied ?? '', /CHW_DIRECTION/);
   const chillerACondenser = telemetry.split('\n').find((row) => row.startsWith("('01a14000-4000-7000-8000-000000000001', 't6'"));
   assert.match(chillerACondenser ?? '', /CW_DIRECTION/);
@@ -418,8 +418,8 @@ test('songyaxuan synthesizes total electricity from the four chiller sub-meters 
   for (const point of meterTotal.points) assert.equal(point.critical, undefined, `meter-total/${point.code} must not be critical`);
 
   const expectedAssetByMeter: Record<string, string> = {
-    'meter-uid3': '01a14000-3000-7000-8000-000000000001',
-    'meter-uid4': '01a14000-3000-7000-8000-000000000002',
+    'meter-uid3': '01a14000-3000-7000-8000-000000000002',
+    'meter-uid4': '01a14000-3000-7000-8000-000000000001',
     'meter-uid5': '01a14000-3000-7000-8000-000000000003',
     'meter-uid2': '01a14000-3000-7000-8000-000000000004',
   };

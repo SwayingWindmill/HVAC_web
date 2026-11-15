@@ -141,15 +141,15 @@ type ChillerMeterBinding struct {
 }
 
 // SongyaxuanChillerMeterBindings returns the verified Songyaxuan plant chiller-to-meter mapping:
-// chiller-c -> ammeter-unit1, chiller-d -> ammeter-unit2, chiller-a -> ammeter-unit3, chiller-b -> ammeter-unit4.
+// chiller-c -> ammeter-unit1 (UID 5), chiller-d -> ammeter-unit2 (UID 2), chiller-b -> ammeter-unit3 (UID 3), chiller-a -> ammeter-unit4 (UID 4).
 func SongyaxuanChillerMeterBindings() []ChillerMeterBinding {
 	return []ChillerMeterBinding{
 		{
 			AssetID:         "01a14000-3000-7000-8000-000000000001",
 			AssetCode:       "chiller-a",
 			AssetName:       "A 机组",
-			MeterDeviceID:   "01a14000-4000-7000-8000-000000000005",
-			MeterSourceKey:  "ammeter-unit3",
+			MeterDeviceID:   "01a14000-4000-7000-8000-000000000006",
+			MeterSourceKey:  "ammeter-unit4",
 			RatedCapacityKW: 572,
 			RatedPowerKW:    127.5,
 		},
@@ -157,8 +157,8 @@ func SongyaxuanChillerMeterBindings() []ChillerMeterBinding {
 			AssetID:         "01a14000-3000-7000-8000-000000000002",
 			AssetCode:       "chiller-b",
 			AssetName:       "B 机组",
-			MeterDeviceID:   "01a14000-4000-7000-8000-000000000006",
-			MeterSourceKey:  "ammeter-unit4",
+			MeterDeviceID:   "01a14000-4000-7000-8000-000000000005",
+			MeterSourceKey:  "ammeter-unit3",
 			RatedCapacityKW: 572,
 			RatedPowerKW:    127.5,
 		},

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：平台把四块机组电表的电量合成全站总电量（energy.totalMeter 设为 sum-of-sub-meters，网关保留 ammeter-total 作为总有功功率汇总），网关按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。机组电表的 Modbus 从站地址（2026-11-12 现场确认）：A 机组电表为 UID 3，B 机组电表为 UID 4，C 机组电表为 UID 5，D 机组电表为 UID 2。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场手绘点位表（2026-11-08 网关按它改过）：A–D 蒸发出 t1–t4，冷却水总管进水 t5（四台共用），A–D 冷凝出 t6–t9，A 机组冷冻水支管进水 t10，冷却塔内侧总管 t11、外侧总管 t12（当作出塔），冷却塔进水 t13、t14，室外温度 t15（房间没有温度探头），冷冻水总回水 t16、t17，总供水 t18、t19；t14、t20 没有探头。t14、t20 网关不上报（函数里的 SPARE）。点位带 from（来源通道），网关函数的 COPIES 照它复制。 点位质量见 qualityProfiles：冷冻水 3–20 ℃、冷却水 15–45 ℃、房间 10–40 ℃、室外 −10–45 ℃；38.4 是模块通讯异常值。 铭牌见 nameplateCatalog：四台冷机是 2007 年日立 RCU180SC2（572 kW / 127.5 kW）；八台凯泉泵的 22 kW 和 15 kW 还没分到冷冻还是冷却；冷却塔风机铭牌未到。物理检查见 physicsChecks。测量不确定度见 measurement：温度 ±0.1 K，流量 ±2%，总功率 ±1%；温差相对误差超过 10% 时冷量标成部分。探头零点见 probePairs，只建议不改数。",
+  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：平台把四块机组电表的电量合成全站总电量（energy.totalMeter 设为 sum-of-sub-meters，网关保留 ammeter-total 作为总有功功率汇总），网关按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。机组电表的 Modbus 从站地址（2026-11-15 结合运行数据重新核对确认）：A 机组电表为 UID 4，B 机组电表为 UID 3，C 机组电表为 UID 5，D 机组电表为 UID 2（C、D 电表各自同时连接对应机组、水泵与冷却塔，且 C、D 冷机基本不开）。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场手绘点位表（2026-11-08 网关按它改过）：A–D 蒸发出 t1–t4，冷却水总管进水 t5（四台共用），A–D 冷凝出 t6–t9，A 机组冷冻水支管进水 t10，冷却塔内侧总管 t11、外侧总管 t12（当作出塔），冷却塔进水 t13、t14，室外温度 t15（房间没有温度探头），冷冻水总回水 t16、t17，总供水 t18、t19；t14、t20 没有探头。t14、t20 网关不上报（函数里的 SPARE）。点位带 from（来源通道），网关函数的 COPIES 照它复制。 点位质量见 qualityProfiles：冷冻水 3–20 ℃、冷却水 15–45 ℃、房间 10–40 ℃、室外 −10–45 ℃；38.4 是模块通讯异常值。 铭牌见 nameplateCatalog：四台冷机是 2007 年日立 RCU180SC2（572 kW / 127.5 kW）；八台凯泉泵的 22 kW 和 15 kW 还没分到冷冻还是冷却；冷却塔风机铭牌未到。物理检查见 physicsChecks。测量不确定度见 measurement：温度 ±0.1 K，流量 ±2%，总功率 ±1%；温差相对误差超过 10% 时冷量标成部分。探头零点见 probePairs，只建议不改数。",
   "tenantId": "018f3d00-0000-7000-8000-000000000001",
   "site": {
     "id": "01a14000-1000-7000-8000-000000000001",
@@ -316,7 +316,7 @@
           "unit": "Cel",
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
-          "address": "A 机组支管进水通道 10，已归到 A 机组电表",
+          "address": "A 机组支管进水通道 10，已归到 A 机组电表（UID 4）",
           "status": "INACTIVE"
         }
       ]
@@ -397,6 +397,87 @@
       "id": "01a14000-4000-7000-8000-000000000005",
       "sourceKey": "ammeter-unit3",
       "code": "meter-uid3",
+      "name": "B 机组电表",
+      "type": "HVAC_POWER_METER",
+      "sampleSeconds": 300,
+      "points": "meter",
+      "asset": "01a14000-3000-7000-8000-000000000002",
+      "morePoints": [
+        {
+          "code": "run_state",
+          "sourceKey": "chiller.run_state",
+          "name": "运行状态",
+          "pointType": "TELEMETRY",
+          "valueType": "STRING",
+          "address": "网关判断：本机电表功率 > 5 kW 为运行"
+        },
+        {
+          "code": "chw_leaving_temperature",
+          "sourceKey": "chiller.leaving_chilled_water_temperature",
+          "name": "冷冻水出水温度（蒸发出）",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "B 机组蒸发出，温度模块通道 2",
+          "from": [
+            "temperature",
+            "t2"
+          ]
+        },
+        {
+          "code": "chw_entering_temperature",
+          "sourceKey": "chiller.entering_chilled_water_temperature",
+          "name": "冷冻水进水温度（总冷冻水回水，四台共用）",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "冷冻水总回水，温度模块通道 16（四台共用）",
+          "from": [
+            "temperature",
+            "t16"
+          ]
+        },
+        {
+          "code": "cw_entering_temperature",
+          "sourceKey": "chiller.entering_cooling_water_temperature",
+          "name": "冷却水进水温度（冷凝进）",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "冷却水总管进水，温度模块通道 5（四台共用）",
+          "from": [
+            "temperature",
+            "t5"
+          ]
+        },
+        {
+          "code": "cw_leaving_temperature",
+          "sourceKey": "chiller.leaving_cooling_water_temperature",
+          "name": "冷却水出水温度（冷凝出）",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "B 机组冷凝出，温度模块通道 7",
+          "from": [
+            "temperature",
+            "t7"
+          ]
+        },
+        {
+          "code": "chw_entering_temperature_branch",
+          "name": "冷冻水进水温度（支管，已改到 A 机组电表）",
+          "unit": "Cel",
+          "pointType": "TELEMETRY",
+          "valueType": "NUMBER",
+          "address": "A 机组支管进水通道 10，已归到 A 机组电表（UID 4）",
+          "status": "INACTIVE"
+        }
+      ]
+    },
+    {
+      "id": "01a14000-4000-7000-8000-000000000006",
+      "sourceKey": "ammeter-unit4",
+      "code": "meter-uid4",
       "name": "A 机组电表",
       "type": "HVAC_POWER_METER",
       "sampleSeconds": 300,
@@ -473,78 +554,6 @@
           "from": [
             "temperature",
             "t10"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "01a14000-4000-7000-8000-000000000006",
-      "sourceKey": "ammeter-unit4",
-      "code": "meter-uid4",
-      "name": "B 机组电表",
-      "type": "HVAC_POWER_METER",
-      "sampleSeconds": 300,
-      "points": "meter",
-      "asset": "01a14000-3000-7000-8000-000000000002",
-      "morePoints": [
-        {
-          "code": "run_state",
-          "sourceKey": "chiller.run_state",
-          "name": "运行状态",
-          "pointType": "TELEMETRY",
-          "valueType": "STRING",
-          "address": "网关判断：本机电表功率 > 5 kW 为运行"
-        },
-        {
-          "code": "chw_leaving_temperature",
-          "sourceKey": "chiller.leaving_chilled_water_temperature",
-          "name": "冷冻水出水温度（蒸发出）",
-          "unit": "Cel",
-          "pointType": "TELEMETRY",
-          "valueType": "NUMBER",
-          "address": "B 机组蒸发出，温度模块通道 2",
-          "from": [
-            "temperature",
-            "t2"
-          ]
-        },
-        {
-          "code": "chw_entering_temperature",
-          "sourceKey": "chiller.entering_chilled_water_temperature",
-          "name": "冷冻水进水温度（总冷冻水回水，四台共用）",
-          "unit": "Cel",
-          "pointType": "TELEMETRY",
-          "valueType": "NUMBER",
-          "address": "冷冻水总回水，温度模块通道 16（四台共用）",
-          "from": [
-            "temperature",
-            "t16"
-          ]
-        },
-        {
-          "code": "cw_entering_temperature",
-          "sourceKey": "chiller.entering_cooling_water_temperature",
-          "name": "冷却水进水温度（冷凝进）",
-          "unit": "Cel",
-          "pointType": "TELEMETRY",
-          "valueType": "NUMBER",
-          "address": "冷却水总管进水，温度模块通道 5（四台共用）",
-          "from": [
-            "temperature",
-            "t5"
-          ]
-        },
-        {
-          "code": "cw_leaving_temperature",
-          "sourceKey": "chiller.leaving_cooling_water_temperature",
-          "name": "冷却水出水温度（冷凝出）",
-          "unit": "Cel",
-          "pointType": "TELEMETRY",
-          "valueType": "NUMBER",
-          "address": "B 机组冷凝出，温度模块通道 7",
-          "from": [
-            "temperature",
-            "t7"
           ]
         }
       ]
@@ -974,7 +983,7 @@
           "name": "1# 主机运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "ammeter-unit3 powerTotal>5"
+          "address": "ammeter-unit4 powerTotal>5"
         },
         {
           "code": "start",
@@ -1222,7 +1231,7 @@
           "name": "2# 主机运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "ammeter-unit4 powerTotal>5"
+          "address": "ammeter-unit3 powerTotal>5"
         },
         {
           "code": "start",
@@ -2489,12 +2498,12 @@
       "asset": "chiller-a",
       "aboveRatedFraction": 0.15,
       "subject": {
-        "device": "meter-uid3",
+        "device": "meter-uid4",
         "point": "power_total"
       },
       "alarm": {
         "title": "A 机组功率超过铭牌",
-        "summary": "A 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A。松雅轩 A 机组电表曾到 191.8 kW，原因可能是电流变比或这只表上还有别的负荷。回到 146.6 kW 以内后自动恢复。",
+        "summary": "A 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A。松雅轩 B 机组电表曾到 191.8 kW，原因可能是电流变比或电表上还有别的负荷。回到 146.6 kW 以内后自动恢复。",
         "severity": "MAJOR"
       }
     },
@@ -2504,12 +2513,12 @@
       "asset": "chiller-b",
       "aboveRatedFraction": 0.15,
       "subject": {
-        "device": "meter-uid4",
+        "device": "meter-uid3",
         "point": "power_total"
       },
       "alarm": {
         "title": "B 机组功率超过铭牌",
-        "summary": "B 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A。松雅轩 A 机组电表曾到 191.8 kW，原因可能是电流变比或这只表上还有别的负荷。回到 146.6 kW 以内后自动恢复。",
+        "summary": "B 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A。松雅轩 B 机组电表曾到 191.8 kW，原因可能是电流变比或这只表上还有别的负荷。回到 146.6 kW 以内后自动恢复。",
         "severity": "MAJOR"
       }
     },
@@ -2524,7 +2533,7 @@
       },
       "alarm": {
         "title": "C 机组功率超过铭牌",
-        "summary": "C 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A。松雅轩 A 机组电表曾到 191.8 kW，原因可能是电流变比或这只表上还有别的负荷。回到 146.6 kW 以内后自动恢复。",
+        "summary": "C 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A，且 C 机组电表同时接有 C 机组、水泵与冷却塔。回到 146.6 kW 以内后自动恢复。",
         "severity": "MAJOR"
       }
     },
@@ -2539,7 +2548,7 @@
       },
       "alarm": {
         "title": "D 机组功率超过铭牌",
-        "summary": "D 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A。松雅轩 A 机组电表曾到 191.8 kW，原因可能是电流变比或这只表上还有别的负荷。回到 146.6 kW 以内后自动恢复。",
+        "summary": "D 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A，且 D 机组电表同时接有 D 机组、水泵与冷却塔。回到 146.6 kW 以内后自动恢复。",
         "severity": "MAJOR"
       }
     },
@@ -2681,7 +2690,7 @@
       },
       "running": [
         {
-          "device": "meter-uid3",
+          "device": "meter-uid4",
           "point": "run_state",
           "equals": "RUNNING"
         }
@@ -2707,7 +2716,7 @@
       },
       "running": [
         {
-          "device": "meter-uid4",
+          "device": "meter-uid3",
           "point": "run_state",
           "equals": "RUNNING"
         }
@@ -2785,7 +2794,7 @@
       },
       "running": [
         {
-          "device": "meter-uid3",
+          "device": "meter-uid4",
           "point": "run_state",
           "equals": "RUNNING"
         }
@@ -2811,7 +2820,7 @@
       },
       "running": [
         {
-          "device": "meter-uid4",
+          "device": "meter-uid3",
           "point": "run_state",
           "equals": "RUNNING"
         }

@@ -7,6 +7,10 @@
 
 ### 2026-11-15
 
+#### 修复
+
+- 修正松雅轩 A、B 机组电表映射：确认 Modbus `UID 4`（`ammeter-unit4`）为 A 机组电表、`UID 3`（`ammeter-unit3`）为 B 机组电表（此前 2026-11-12 现场核对将两者对调）；同步迁移 A 机组支管进水温度 `chw_entering_temperature_branch`（`t10`）到 `ammeter-unit4`、`ctrl-chiller-a/b` 运行状态绑定与冷站阶段加减机映射，保持原 76938 kWh 基线留在物理表 `ammeter-unit4` 上，并补充 C、D 机组电表各自合并计量对应机组、水泵与冷却塔的说明。
+
 #### 新增
 
 - 松雅轩冷站 ET1010 20 通道控制能力与双闸门水路联锁保护（Wave 2）：

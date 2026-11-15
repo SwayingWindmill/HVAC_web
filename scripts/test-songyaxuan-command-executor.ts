@@ -132,11 +132,17 @@ test('songyaxuan-platform-envelope emits u51..u54 and controller run_state proje
   assert.equal(byDevice.get('ctrl-tower-1')?.find((p) => p.code === 'run_state')?.value, 'RUNNING');
   assert.equal(byDevice.get('ctrl-cwp-2')?.find((p) => p.code === 'run_state')?.value, 'RUNNING');
 
-  const meterOut = runPlatformEnvelopeNode({
+  const meterBOut = runPlatformEnvelopeNode({
     'ammeter-unit3': [{ ts: 1_763_120_001_000, values: { powerTotal: 142.5, combinedActiveTotalElectricalEnergy: 1000 } }],
   });
-  const chillerA = meterOut.payload.payload.devices.find((d) => d.deviceId === 'ctrl-chiller-a');
-  assert.equal(chillerA?.points[0]?.value, 'RUNNING');
+  const chillerB = meterBOut.payload.payload.devices.find((d) => d.deviceId === 'ctrl-chiller-b');
+  assert.equal(chillerB?.points[0]?.value, 'RUNNING');
+
+  const meterAOut = runPlatformEnvelopeNode({
+    'ammeter-unit4': [{ ts: 1_763_120_002_000, values: { powerTotal: 0.2, combinedActiveTotalElectricalEnergy: 76938 } }],
+  });
+  const chillerA = meterAOut.payload.payload.devices.find((d) => d.deviceId === 'ctrl-chiller-a');
+  assert.equal(chillerA?.points[0]?.value, 'STOPPED');
 });
 
 test('executor handles LEVEL coils 0 and 14 with immediate state uplink and schemaVersion 2.0 reply', async () => {

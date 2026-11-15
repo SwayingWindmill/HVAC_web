@@ -93,10 +93,10 @@ func testSongyaxuanUnits(at time.Time, powerA, powerB, powerC, powerD *float64) 
 
 func TestChillerStageDownSongyaxuanFourChillerPartialLoad(t *testing.T) {
 	at := time.Date(2026, 11, 14, 14, 0, 0, 0, time.UTC)
-	// Fit Songyaxuan meters: unit3=chiller-a, unit4=chiller-b, unit1=chiller-c (degraded 0.85), unit2=chiller-d.
+	// Fit Songyaxuan meters: unit4=chiller-a (UID 4), unit3=chiller-b (UID 3), unit1=chiller-c (degraded 0.85), unit2=chiller-d.
 	buckets := syntheticStagingChillerHistory(at, map[string]float64{
-		"01a14000-4000-7000-8000-000000000005": 1.00, // ammeter-unit3 -> chiller-a
-		"01a14000-4000-7000-8000-000000000006": 1.00, // ammeter-unit4 -> chiller-b
+		"01a14000-4000-7000-8000-000000000006": 1.00, // ammeter-unit4 -> chiller-a
+		"01a14000-4000-7000-8000-000000000005": 1.00, // ammeter-unit3 -> chiller-b
 		"01a14000-4000-7000-8000-000000000003": 0.85, // ammeter-unit1 -> chiller-c (least efficient)
 		"01a14000-4000-7000-8000-000000000004": 0.98, // ammeter-unit2 -> chiller-d
 	})
@@ -167,13 +167,13 @@ func TestChillerStageDownSongyaxuanFourChillerPartialLoad(t *testing.T) {
 func TestChillerStageDownSongyaxuanMeterAliasResolution(t *testing.T) {
 	at := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
 	fitA := ChillerFit{
-		DeviceID:          "ammeter-unit3", // chiller-a meter
+		DeviceID:          "ammeter-unit4", // chiller-a meter (UID 4)
 		Status:            ChillerFitted,
 		CapacityReference: &CapacityReference{KW: 572, Source: "OBSERVED_P99_LOAD"},
 		Coefficients:      map[string]float64{"intercept": 2.9, "loadRatio": 3.8, "loadRatioSquared": -2.2, "chilledWaterSupplyTempC": 0.08},
 	}
 	fitB := ChillerFit{
-		DeviceID:          "ammeter-unit4", // chiller-b meter
+		DeviceID:          "ammeter-unit3", // chiller-b meter (UID 3)
 		Status:            ChillerFitted,
 		CapacityReference: &CapacityReference{KW: 572, Source: "OBSERVED_P99_LOAD"},
 		Coefficients:      map[string]float64{"intercept": 2.5, "loadRatio": 3.0, "loadRatioSquared": -1.8, "chilledWaterSupplyTempC": 0.08},
@@ -187,7 +187,7 @@ func TestChillerStageDownSongyaxuanMeterAliasResolution(t *testing.T) {
 		},
 		Chillers: []ChillerUnitInput{
 			{
-				MeterSourceKey:  "ammeter-unit3",
+				MeterSourceKey:  "ammeter-unit4",
 				RunState:        RunStateRunning,
 				RunStateQuality: "GOOD",
 				RunStateAt:      at.Add(-time.Minute),
@@ -195,7 +195,7 @@ func TestChillerStageDownSongyaxuanMeterAliasResolution(t *testing.T) {
 				ChwLeavingC:     &TelemetryValue{Value: 7.0, Unit: "Cel", Quality: "GOOD", SampledAt: at.Add(-time.Minute)},
 			},
 			{
-				MeterSourceKey:  "ammeter-unit4",
+				MeterSourceKey:  "ammeter-unit3",
 				RunState:        RunStateRunning,
 				RunStateQuality: "GOOD",
 				RunStateAt:      at.Add(-time.Minute),
@@ -215,7 +215,7 @@ func TestChillerStageDownSongyaxuanMeterAliasResolution(t *testing.T) {
 	}
 	rec := eval.Recommendations[0]
 	if rec.TargetAssetCode != "chiller-b" || rec.TargetAssetID != "01a14000-3000-7000-8000-000000000002" {
-		t.Fatalf("expected ammeter-unit4 to resolve to chiller-b (01a14000-3000-7000-8000-000000000002), got %+v", rec)
+		t.Fatalf("expected ammeter-unit3 to resolve to chiller-b (01a14000-3000-7000-8000-000000000002), got %+v", rec)
 	}
 }
 
