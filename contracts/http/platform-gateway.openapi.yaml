@@ -4787,6 +4787,18 @@
           "boundDeviceIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } }
         }
       },
+      "ActiveMaintenanceWindow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "startDate", "endDate", "reason"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "startDate": { "type": "string", "format": "date" },
+          "endDate": { "type": "string", "format": "date" },
+          "reason": { "type": "string", "maxLength": 1000 }
+        }
+      },
       "SiteControlState": {
         "type": "object",
         "additionalProperties": false,
@@ -4800,7 +4812,8 @@
           "updatedBy": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
           "updatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
           "revision": { "type": "integer", "minimum": 0 },
-          "assetLocks": { "type": "array", "items": { "$ref": "#/components/schemas/AssetControlLockState" } }
+          "assetLocks": { "type": "array", "items": { "$ref": "#/components/schemas/AssetControlLockState" } },
+          "activeMaintenanceWindow": { "$ref": "#/components/schemas/ActiveMaintenanceWindow" }
         }
       },
       "SiteControlModeMutation": {
@@ -4828,6 +4841,7 @@
           "updatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
           "revision": { "type": "integer", "minimum": 0 },
           "assetLocks": { "type": "array", "items": { "$ref": "#/components/schemas/AssetControlLockState" } },
+          "activeMaintenanceWindow": { "$ref": "#/components/schemas/ActiveMaintenanceWindow" },
           "cancelledCommandIds": { "type": "array", "items": { "type": "string" } }
         }
       },
@@ -4894,7 +4908,7 @@
         ],
         "properties": {
           "id": { "type": "string" },
-          "kind": { "type": "string", "enum": ["CHILLER_STAGE_DOWN", "IDLE_AUXILIARY_STOP"] },
+          "kind": { "type": "string", "enum": ["CHILLER_STAGE_DOWN", "IDLE_AUXILIARY_STOP", "OFF_HOURS_STOP"] },
           "confirmationMode": { "type": "string", "enum": ["MANUAL_CONFIRM"] },
           "requiresSupervisorReview": { "type": "boolean" },
           "requiresTotp": { "type": "boolean" },

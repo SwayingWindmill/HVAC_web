@@ -240,3 +240,43 @@ func TestOptimizationPreparationNamesTheMissingInput(t *testing.T) {
 		})
 	}
 }
+
+func TestSiteLocalDateString(t *testing.T) {
+	at := time.Date(2026, 11, 15, 16, 30, 0, 0, time.UTC)
+	if got := siteLocalDateString("Asia/Shanghai", at); got != "2026-11-16" {
+		t.Fatalf("Asia/Shanghai after UTC+8 midnight=%q, want 2026-11-16", got)
+	}
+	beforeMidnight := time.Date(2026, 11, 15, 15, 30, 0, 0, time.UTC)
+	if got := siteLocalDateString("Asia/Shanghai", beforeMidnight); got != "2026-11-15" {
+		t.Fatalf("Asia/Shanghai before UTC+8 midnight=%q, want 2026-11-15", got)
+	}
+	if got := siteLocalDateString("", at); got != "2026-11-15" {
+		t.Fatalf("empty timezone=%q, want UTC date 2026-11-15", got)
+	}
+	if got := siteLocalDateString("Mars/Olympus", at); got != "2026-11-15" {
+		t.Fatalf("invalid timezone=%q, want UTC fallback date 2026-11-15", got)
+	}
+}
+
+func TestOperatingExceptionBlockMessage(t *testing.T) {
+	msg, blocked := operatingExceptionBlockMessage("MAINTENANCE_WINDOW", "1# 冷机清洗", "2026-11-16", "2026-11-18", "年度维保")
+	if !blocked {
+		t.Fatal("expected MAINTENANCE_WINDOW to block preparation")
+	}
+	if !strings.Contains(msg, "MAINTENANCE_WINDOW") || !strings.Contains(msg, "1# 冷机清洗") || !strings.Contains(msg, "2026-11-16 至 2026-11-18") || !strings.Contains(msg, "年度维保") {
+		t.Fatalf("unexpected maintenance message=%q", msg)
+	}
+
+	holidayMsg, holidayBlocked := operatingExceptionBlockMessage("HOLIDAY_SHUTDOWN", "", "2026-10-01", "2026-10-01", "")
+	if !holidayBlocked {
+		t.Fatal("expected HOLIDAY_SHUTDOWN to block preparation")
+	}
+	if !strings.Contains(holidayMsg, "HOLIDAY_SHUTDOWN") || !strings.Contains(holidayMsg, "2026-10-01") || strings.Contains(holidayMsg, " 至 ") {
+		t.Fatalf("unexpected holiday message=%q", holidayMsg)
+	}
+
+	overtimeMsg, overtimeBlocked := operatingExceptionBlockMessage("OVERTIME_COOLING", "周末加班供冷", "2026-11-21", "2026-11-21", "活动保障")
+	if overtimeBlocked || overtimeMsg != "" {
+		t.Fatalf("expected OVERTIME_COOLING not to block, got blocked=%v msg=%q", overtimeBlocked, overtimeMsg)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -47,6 +48,31 @@ EXISTS (
 			return PreparationDefinition{}, suppressErr
 		}
 		return PreparationDefinition{}, unavailable(ReasonMaintenanceActive, "%s", lockMessage)
+	}
+	localDate := siteLocalDateString(definition.SiteTimezone, at.UTC())
+	var excTitle, excKind, excStartDate, excEndDate, excReason string
+	err = tx.QueryRow(ctx, `
+SELECT COALESCE(title, ''), kind, to_char(start_date, 'YYYY-MM-DD'), to_char(end_date, 'YYYY-MM-DD'), COALESCE(reason, '')
+FROM core_registry.operating_exceptions
+WHERE tenant_id=$1::uuid
+  AND site_id=$2::uuid
+  AND status='APPROVED'
+  AND kind IN ('MAINTENANCE_WINDOW', 'HOLIDAY_SHUTDOWN')
+  AND start_date <= $3::date
+  AND end_date >= $3::date
+ORDER BY start_date ASC, id ASC
+LIMIT 1`, request.TenantID, request.SiteID, localDate).Scan(&excTitle, &excKind, &excStartDate, &excEndDate, &excReason)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return PreparationDefinition{}, err
+	}
+	if err == nil {
+		if blockMessage, blocked := operatingExceptionBlockMessage(excKind, excTitle, excStartDate, excEndDate, excReason); blocked {
+			_ = tx.Rollback(ctx)
+			if suppressErr := store.suppressLockedDraftRecommendations(ctx, request.TenantID, request.SiteID, at); suppressErr != nil {
+				return PreparationDefinition{}, suppressErr
+			}
+			return PreparationDefinition{}, unavailable(ReasonMaintenanceActive, "%s", blockMessage)
+		}
 	}
 	var policyCount int
 	err = tx.QueryRow(ctx, `SELECT
@@ -335,6 +361,43 @@ func controlLockBlockMessage(siteControlMode string, hasAssetLock bool) (string,
 		return "active asset control lock suppresses automated optimization", true
 	}
 	return "", false
+}
+
+func siteLocalDateString(timezone string, at time.Time) string {
+	loc := time.UTC
+	if trimmed := strings.TrimSpace(timezone); trimmed != "" {
+		if loaded, err := time.LoadLocation(trimmed); err == nil {
+			loc = loaded
+		}
+	}
+	return at.In(loc).Format("2006-01-02")
+}
+
+func operatingExceptionBlockMessage(kind, title, startDate, endDate, reason string) (string, bool) {
+	cleanKind := strings.TrimSpace(kind)
+	if cleanKind != "MAINTENANCE_WINDOW" && cleanKind != "HOLIDAY_SHUTDOWN" {
+		return "", false
+	}
+	cleanTitle := strings.TrimSpace(title)
+	if cleanTitle == "" {
+		if cleanKind == "MAINTENANCE_WINDOW" {
+			cleanTitle = "计划检修窗口"
+		} else {
+			cleanTitle = "节假日停机窗口"
+		}
+	}
+	dateRange := strings.TrimSpace(startDate)
+	if end := strings.TrimSpace(endDate); end != "" && end != dateRange {
+		dateRange = dateRange + " 至 " + end
+	}
+	message := fmt.Sprintf("operating schedule %s (%s) suppresses automated optimization", cleanKind, cleanTitle)
+	if dateRange != "" {
+		message = fmt.Sprintf("operating schedule %s (%s, %s) suppresses automated optimization", cleanKind, cleanTitle, dateRange)
+	}
+	if cleanReason := strings.TrimSpace(reason); cleanReason != "" {
+		message += " (" + cleanReason + ")"
+	}
+	return message, true
 }
 
 func (store *PostgresStore) suppressLockedDraftRecommendations(ctx context.Context, tenantID, siteID string, at time.Time) error {

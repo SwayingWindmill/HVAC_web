@@ -1080,3 +1080,476 @@ func TestBuildStagingTopologyFromRecordsExtractsLocksCommandsAndEdges(t *testing
 		t.Fatalf("UNLOCKED lock entry should not suppress chiller-a")
 	}
 }
+
+func testScheduleStagingSnapshot(at time.Time, schedule *OperatingScheduleContext) StagingSnapshot {
+	history := syntheticStagingChillerHistory(at, map[string]float64{
+		"ammeter-unit4": 1.0,
+		"ammeter-unit3": 0.95,
+	})
+	fit := FitPlant(history, at.UTC().AddDate(0, 0, -copHistoryDays), at.UTC())
+
+	return StagingSnapshot{
+		TenantID:          "01a14000-1000-7000-8000-000000000001",
+		SiteID:            "01a14000-2000-7000-8000-000000000001",
+		EvaluatedAt:       at,
+		SiteControlMode:   SiteControlModeRemoteAuto,
+		OperatingSchedule: schedule,
+		CommandPointIDs: map[string]string{
+			canonicalCommandPointKey("01a14000-3000-7000-8000-000000000001", SuggestedCapabilityStopUnitSequence): "pt-chiller-a-stop-seq",
+			canonicalCommandPointKey("01a14000-3000-7000-8000-000000000002", SuggestedCapabilityStop):             "pt-chiller-b-stop",
+			canonicalCommandPointKey("asset-chwp-2", SuggestedCapabilityStop):                                     "pt-chwp-2-stop",
+		},
+		PlantCoolingLoad: &TelemetryValue{Value: 290, Quality: "GOOD", SampledAt: at},
+		HeaderSupplyC:    &TelemetryValue{Value: 7.0, Quality: "GOOD", SampledAt: at},
+		Chillers: []ChillerUnitInput{
+			{
+				AssetID:         "01a14000-3000-7000-8000-000000000001",
+				AssetCode:       "chiller-a",
+				AssetName:       "A 机组",
+				MeterDeviceID:   "01a14000-4000-7000-8000-000000000006",
+				MeterSourceKey:  "ammeter-unit4",
+				RatedCapacityKW: 572,
+				RatedPowerKW:    127.5,
+				RunState:        RunStateRunning,
+				RunStateQuality: "GOOD",
+				RunStateAt:      at,
+				Power:           &TelemetryValue{Value: 62.4, Quality: "GOOD", SampledAt: at},
+				ChwLeavingC:     &TelemetryValue{Value: 7.0, Quality: "GOOD", SampledAt: at},
+				CwLeavingC:      &TelemetryValue{Value: 30.0, Quality: "GOOD", SampledAt: at},
+			},
+			{
+				AssetID:         "01a14000-3000-7000-8000-000000000002",
+				AssetCode:       "chiller-b",
+				AssetName:       "B 机组",
+				MeterDeviceID:   "01a14000-4000-7000-8000-000000000005",
+				MeterSourceKey:  "ammeter-unit3",
+				RatedCapacityKW: 572,
+				RatedPowerKW:    127.5,
+				RunState:        RunStateRunning,
+				RunStateQuality: "GOOD",
+				RunStateAt:      at,
+				Power:           &TelemetryValue{Value: 64.0, Quality: "GOOD", SampledAt: at},
+				ChwLeavingC:     &TelemetryValue{Value: 7.1, Quality: "GOOD", SampledAt: at},
+				CwLeavingC:      &TelemetryValue{Value: 30.2, Quality: "GOOD", SampledAt: at},
+			},
+			{
+				AssetID:         "01a14000-3000-7000-8000-000000000004",
+				AssetCode:       "chiller-d",
+				AssetName:       "D 机组",
+				MeterDeviceID:   "01a14000-4000-7000-8000-000000000004",
+				MeterSourceKey:  "ammeter-unit2",
+				RatedCapacityKW: 572,
+				RatedPowerKW:    127.5,
+				RunState:        RunStateStopped,
+				RunStateQuality: "GOOD",
+				RunStateAt:      at,
+				RunStateHistory: []RunStateSample{
+					{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-6 * time.Minute)},
+					{State: RunStateStopped, Quality: "GOOD", SampledAt: at},
+				},
+			},
+		},
+		Auxiliaries: []AuxiliaryUnitInput{
+			{
+				AssetID:          "asset-chwp-2",
+				AssetCode:        "chwp-2",
+				AssetName:        "2 号冷冻泵",
+				AssetType:        AssetTypeCHWP,
+				RatedPowerKW:     18.5,
+				RunState:         RunStateRunning,
+				RunStateQuality:  "GOOD",
+				RunStateAt:       at,
+				Power:            &TelemetryValue{Value: 16.2, Quality: "GOOD", SampledAt: at},
+				ServesChillerIDs: []string{"01a14000-3000-7000-8000-000000000004"},
+			},
+		},
+		ChillerFits: fit.Chillers,
+	}
+}
+
+func shanghaiTime(year int, month time.Month, day, hour, minute int) time.Time {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.FixedZone("Asia/Shanghai", 8*3600)
+	}
+	return time.Date(year, month, day, hour, minute, 0, 0, loc)
+}
+
+func hasDiagnostic(diags []StagingDiagnostic, scope, status, reason string) bool {
+	for _, d := range diags {
+		if (scope == "" || d.Scope == scope) &&
+			(status == "" || d.Status == status) &&
+			(reason == "" || d.Reason == reason) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestStagingOperatingScheduleInWindowPreCoolAndCoastDown(t *testing.T) {
+	// 2026-11-16 is a Monday.
+	baseSchedule := &OperatingScheduleContext{
+		SiteTimezone:        "Asia/Shanghai",
+		Configured:          true,
+		PreCoolLeadMinutes:  30,
+		CoastDownLagMinutes: 20,
+		Slots: []OperatingScheduleSlotWindow{
+			{DayOfWeek: 1, StartMinute: 8*60 + 30, EndMinute: 18 * 60}, // Mon 08:30-18:00
+		},
+	}
+
+	cases := map[string]time.Time{
+		"inside regular cooling slot":  shanghaiTime(2026, 11, 16, 10, 0),
+		"within pre-cool lead buffer":  shanghaiTime(2026, 11, 16, 8, 10),  // 08:00-08:30
+		"within coast-down lag buffer": shanghaiTime(2026, 11, 16, 18, 10), // 18:00-18:20
+	}
+
+	for name, at := range cases {
+		t.Run(name, func(t *testing.T) {
+			eval, err := EvaluateStaging(testScheduleStagingSnapshot(at, baseSchedule), DefaultStagingPolicy())
+			if err != nil {
+				t.Fatalf("EvaluateStaging error: %v", err)
+			}
+			var stageDownCount, idleAuxCount int
+			for _, rec := range eval.Recommendations {
+				switch rec.Kind {
+				case RecommendationKindOffHoursStop:
+					t.Fatalf("unexpected OFF_HOURS_STOP inside cooling window: %+v", rec)
+				case RecommendationKindChillerStageDown:
+					stageDownCount++
+				case RecommendationKindIdleAuxiliaryStop:
+					idleAuxCount++
+				}
+			}
+			if stageDownCount != 1 || idleAuxCount != 1 {
+				t.Fatalf("expected 1 CHILLER_STAGE_DOWN + 1 IDLE_AUXILIARY_STOP inside window, got stageDown=%d aux=%d diags=%+v", stageDownCount, idleAuxCount, eval.Diagnostics)
+			}
+			if !hasDiagnostic(eval.Diagnostics, RecommendationKindOffHoursStop, "NO_OP", "IN_COOLING_WINDOW") {
+				t.Fatalf("expected IN_COOLING_WINDOW diagnostic, got %+v", eval.Diagnostics)
+			}
+		})
+	}
+}
+
+func TestStagingOperatingScheduleOffHoursEmitsStopDraftsAndChecksAux(t *testing.T) {
+	// Monday 20:00 Shanghai is past 18:00 + 20m coast-down lag.
+	at := shanghaiTime(2026, 11, 16, 20, 0)
+	schedule := &OperatingScheduleContext{
+		SiteTimezone:        "Asia/Shanghai",
+		Configured:          true,
+		PreCoolLeadMinutes:  30,
+		CoastDownLagMinutes: 20,
+		Slots: []OperatingScheduleSlotWindow{
+			{DayOfWeek: 1, StartMinute: 8*60 + 30, EndMinute: 18 * 60},
+		},
+	}
+
+	snap := testScheduleStagingSnapshot(at, schedule)
+	// Test power saving basis fallback on running chiller-b (no fresh meter -> NAMEPLATE) and add chiller-c (DEFAULT).
+	snap.Chillers[1].Power = nil
+	snap.Chillers = append(snap.Chillers, ChillerUnitInput{
+		AssetID:         "asset-chiller-custom",
+		AssetCode:       "chiller-custom",
+		AssetName:       "临时备用机组",
+		RatedCapacityKW: 500,
+		RatedPowerKW:    0,
+		RunState:        RunStateStarting,
+		RunStateQuality: "GOOD",
+		RunStateAt:      at,
+	})
+
+	eval, err := EvaluateStaging(snap, DefaultStagingPolicy())
+	if err != nil {
+		t.Fatalf("EvaluateStaging error: %v", err)
+	}
+
+	offByCode := map[string]StagingRecommendationDraft{}
+	var auxCount int
+	for _, rec := range eval.Recommendations {
+		switch rec.Kind {
+		case RecommendationKindChillerStageDown:
+			t.Fatalf("should not emit duplicate CHILLER_STAGE_DOWN during off-hours: %+v", rec)
+		case RecommendationKindOffHoursStop:
+			offByCode[rec.TargetAssetCode] = rec
+		case RecommendationKindIdleAuxiliaryStop:
+			auxCount++
+		}
+	}
+
+	if len(offByCode) != 3 {
+		t.Fatalf("expected 3 OFF_HOURS_STOP drafts (chiller-a, chiller-b, chiller-custom), got %+v", offByCode)
+	}
+	if auxCount != 1 {
+		t.Fatalf("expected IDLE_AUXILIARY_STOP still evaluated during off-hours, got auxCount=%d", auxCount)
+	}
+	if !hasDiagnostic(eval.Diagnostics, RecommendationKindChillerStageDown, "NO_OP", "OFF_HOURS_WINDOW_ACTIVE") {
+		t.Fatalf("expected OFF_HOURS_WINDOW_ACTIVE diagnostic for CHILLER_STAGE_DOWN, got %+v", eval.Diagnostics)
+	}
+
+	a := offByCode["chiller-a"]
+	if a.ConfirmationMode != ConfirmationModeManual || !a.RequiresSupervisorReview || !a.RequiresTOTP {
+		t.Fatalf("off-hours draft must require manual confirmation + TOTP: %+v", a)
+	}
+	if a.SuggestedCapability != SuggestedCapabilityStopUnitSequence || a.SuggestedCommandPointID != "pt-chiller-a-stop-seq" {
+		t.Fatalf("unexpected chiller-a capability/point: %+v", a)
+	}
+	if a.PowerSavingBasis != "METER" || a.PredictedPowerSavingKW != 62.4 || a.EstimatedHourlySavingKWh != 62.4 || a.EstimatedShiftSavingKWh != 499.2 {
+		t.Fatalf("unexpected chiller-a meter saving metrics: %+v", a)
+	}
+
+	b := offByCode["chiller-b"]
+	if b.SuggestedCapability != SuggestedCapabilityStop || b.SuggestedCommandPointID != "pt-chiller-b-stop" {
+		t.Fatalf("expected fallback to STOP capability when STOP_UNIT_SEQUENCE absent: %+v", b)
+	}
+	if b.PowerSavingBasis != "NAMEPLATE" || b.PredictedPowerSavingKW != 127.5 {
+		t.Fatalf("unexpected chiller-b nameplate saving metrics: %+v", b)
+	}
+
+	custom := offByCode["chiller-custom"]
+	if custom.PowerSavingBasis != "DEFAULT" || custom.PredictedPowerSavingKW != DefaultChillerRunningPowerKW {
+		t.Fatalf("unexpected default saving metrics: %+v", custom)
+	}
+}
+
+func TestStagingOperatingScheduleHolidayShutdownMasksSpilloverAndRegularSlots(t *testing.T) {
+	// Tuesday 2026-11-17 has HOLIDAY_SHUTDOWN; Monday 2026-11-16 had 22:00-24:00 + 30m coast-down lag.
+	schedule := &OperatingScheduleContext{
+		SiteTimezone:        "Asia/Shanghai",
+		Configured:          true,
+		PreCoolLeadMinutes:  15,
+		CoastDownLagMinutes: 30,
+		Slots: []OperatingScheduleSlotWindow{
+			{DayOfWeek: 1, StartMinute: 22 * 60, EndMinute: 24 * 60}, // Mon 22:00-24:00
+			{DayOfWeek: 2, StartMinute: 8 * 60, EndMinute: 18 * 60},  // Tue 08:00-18:00
+		},
+		ApprovedExceptions: []ApprovedOperatingExceptionWindow{
+			{
+				ID:        "exc-holiday-1",
+				Title:     "全厂公休日停机",
+				Kind:      "HOLIDAY_SHUTDOWN",
+				StartDate: "2026-11-17",
+				EndDate:   "2026-11-17",
+			},
+		},
+	}
+
+	for name, at := range map[string]time.Time{
+		"masks prior day coast-down spillover at 00:15": shanghaiTime(2026, 11, 17, 0, 15),
+		"masks regular weekday cooling slot at 10:00":   shanghaiTime(2026, 11, 17, 10, 0),
+	} {
+		t.Run(name, func(t *testing.T) {
+			eval, err := EvaluateStaging(testScheduleStagingSnapshot(at, schedule), DefaultStagingPolicy())
+			if err != nil {
+				t.Fatalf("EvaluateStaging error: %v", err)
+			}
+			var offCount int
+			for _, rec := range eval.Recommendations {
+				if rec.Kind == RecommendationKindChillerStageDown {
+					t.Fatalf("unexpected CHILLER_STAGE_DOWN on HOLIDAY_SHUTDOWN: %+v", rec)
+				}
+				if rec.Kind == RecommendationKindOffHoursStop {
+					offCount++
+				}
+			}
+			if offCount != 2 {
+				t.Fatalf("expected 2 OFF_HOURS_STOP drafts on HOLIDAY_SHUTDOWN, got %d (%+v)", offCount, eval.Recommendations)
+			}
+		})
+	}
+}
+
+func TestStagingOperatingScheduleMaintenanceWindowSuppressesAll(t *testing.T) {
+	at := shanghaiTime(2026, 11, 16, 21, 0) // even if off-hours, MAINTENANCE_WINDOW suppresses all
+	schedule := &OperatingScheduleContext{
+		SiteTimezone: "Asia/Shanghai",
+		Configured:   true,
+		Slots: []OperatingScheduleSlotWindow{
+			{DayOfWeek: 1, StartMinute: 8 * 60, EndMinute: 18 * 60},
+		},
+		ApprovedExceptions: []ApprovedOperatingExceptionWindow{
+			{
+				ID:        "exc-maint-1",
+				Title:     "年度冷机大修",
+				Kind:      "MAINTENANCE_WINDOW",
+				StartDate: "2026-11-16",
+				EndDate:   "2026-11-16",
+				Reason:    "拆机清洗冷凝器",
+			},
+		},
+	}
+
+	eval, err := EvaluateStaging(testScheduleStagingSnapshot(at, schedule), DefaultStagingPolicy())
+	if err != nil {
+		t.Fatalf("EvaluateStaging error: %v", err)
+	}
+	if len(eval.Recommendations) != 0 {
+		t.Fatalf("expected 0 recommendations during MAINTENANCE_WINDOW, got %+v", eval.Recommendations)
+	}
+	if !hasDiagnostic(eval.Diagnostics, RecommendationKindChillerStageDown, "SUPPRESSED", "MAINTENANCE_WINDOW_ACTIVE") ||
+		!hasDiagnostic(eval.Diagnostics, RecommendationKindOffHoursStop, "SUPPRESSED", "MAINTENANCE_WINDOW_ACTIVE") ||
+		!hasDiagnostic(eval.Diagnostics, RecommendationKindIdleAuxiliaryStop, "SUPPRESSED", "MAINTENANCE_WINDOW_ACTIVE") {
+		t.Fatalf("expected MAINTENANCE_WINDOW_ACTIVE suppression diagnostics across scopes, got %+v", eval.Diagnostics)
+	}
+}
+
+func TestStagingOperatingScheduleOvertimeCoolingOverridesDayAndBuffers(t *testing.T) {
+	// 2026-11-15 is Sunday (normally off-hours). Approved OVERTIME_COOLING runs 10:00-15:00 with lead=30, lag=15.
+	// Saturday 2026-11-14 had 22:00-24:00, which must NOT bleed past Sunday 00:00 because Sunday is overridden.
+	schedule := &OperatingScheduleContext{
+		SiteTimezone:        "Asia/Shanghai",
+		Configured:          true,
+		PreCoolLeadMinutes:  30,
+		CoastDownLagMinutes: 15,
+		Slots: []OperatingScheduleSlotWindow{
+			{DayOfWeek: 6, StartMinute: 22 * 60, EndMinute: 24 * 60}, // Sat 22:00-24:00
+		},
+		ApprovedExceptions: []ApprovedOperatingExceptionWindow{
+			{
+				ID:        "exc-ot-1",
+				Title:     "周末活动保障加班供冷",
+				Kind:      "OVERTIME_COOLING",
+				StartDate: "2026-11-15",
+				EndDate:   "2026-11-15",
+				ReplacementSlots: []OperatingExceptionReplacementSlot{
+					{StartMinute: 10 * 60, EndMinute: 15 * 60},
+				},
+			},
+		},
+	}
+
+	inCases := map[string]time.Time{
+		"within overtime slot":      shanghaiTime(2026, 11, 15, 11, 0),
+		"within overtime pre-cool":  shanghaiTime(2026, 11, 15, 9, 40),
+		"within overtime coast-lag": shanghaiTime(2026, 11, 15, 15, 10),
+	}
+	for name, at := range inCases {
+		t.Run(name, func(t *testing.T) {
+			eval, err := EvaluateStaging(testScheduleStagingSnapshot(at, schedule), DefaultStagingPolicy())
+			if err != nil {
+				t.Fatalf("EvaluateStaging error: %v", err)
+			}
+			for _, rec := range eval.Recommendations {
+				if rec.Kind == RecommendationKindOffHoursStop {
+					t.Fatalf("unexpected OFF_HOURS_STOP during OVERTIME_COOLING (%s): %+v", name, rec)
+				}
+			}
+		})
+	}
+
+	offCases := map[string]time.Time{
+		"prior-day spillover blocked at 00:05": shanghaiTime(2026, 11, 15, 0, 5),
+		"before overtime pre-cool at 09:00":    shanghaiTime(2026, 11, 15, 9, 0),
+		"after overtime coast-down at 16:00":   shanghaiTime(2026, 11, 15, 16, 0),
+	}
+	for name, at := range offCases {
+		t.Run(name, func(t *testing.T) {
+			eval, err := EvaluateStaging(testScheduleStagingSnapshot(at, schedule), DefaultStagingPolicy())
+			if err != nil {
+				t.Fatalf("EvaluateStaging error: %v", err)
+			}
+			var offCount int
+			for _, rec := range eval.Recommendations {
+				if rec.Kind == RecommendationKindOffHoursStop {
+					offCount++
+				}
+			}
+			if offCount != 2 {
+				t.Fatalf("expected 2 OFF_HOURS_STOP outside OVERTIME_COOLING (%s), got %d", name, offCount)
+			}
+		})
+	}
+}
+
+func TestStagingOperatingScheduleTimezoneMidnightRollover(t *testing.T) {
+	// 2026-11-15 16:30:00Z == 2026-11-16 00:30:00+08:00 (Monday morning in Shanghai).
+	atUTC := time.Date(2026, 11, 15, 16, 30, 0, 0, time.UTC)
+	schedule := &OperatingScheduleContext{
+		SiteTimezone: "Asia/Shanghai",
+		Configured:   true,
+		Slots: []OperatingScheduleSlotWindow{
+			// Sunday 00:00-24:00 is cooling, Monday 00:00-08:00 is OFF.
+			// In UTC it's still Sunday, in Shanghai it's Monday -> must evaluate Monday (off-hours).
+			{DayOfWeek: 7, StartMinute: 0, EndMinute: 24 * 60},
+			{DayOfWeek: 1, StartMinute: 8 * 60, EndMinute: 18 * 60},
+		},
+	}
+
+	eval, err := EvaluateStaging(testScheduleStagingSnapshot(atUTC, schedule), DefaultStagingPolicy())
+	if err != nil {
+		t.Fatalf("EvaluateStaging error: %v", err)
+	}
+	var offCount int
+	for _, rec := range eval.Recommendations {
+		if rec.Kind == RecommendationKindOffHoursStop {
+			offCount++
+		}
+	}
+	if offCount != 2 {
+		t.Fatalf("expected Monday 00:30 Asia/Shanghai to be off-hours despite Sunday UTC date, got %+v", eval.Recommendations)
+	}
+}
+
+func TestStagingOperatingScheduleRespectsSiteExitAndAssetLocks(t *testing.T) {
+	at := shanghaiTime(2026, 11, 16, 21, 0) // off-hours Monday
+	schedule := &OperatingScheduleContext{
+		SiteTimezone: "Asia/Shanghai",
+		Configured:   true,
+		Slots: []OperatingScheduleSlotWindow{
+			{DayOfWeek: 1, StartMinute: 8 * 60, EndMinute: 18 * 60},
+		},
+	}
+
+	t.Run("site control exit suppresses off-hours recommendations", func(t *testing.T) {
+		snap := testScheduleStagingSnapshot(at, schedule)
+		snap.SiteControlMode = SiteControlModeManualOverride
+		snap.SiteControlReason = "现场值守接管"
+
+		eval, err := EvaluateStaging(snap, DefaultStagingPolicy())
+		if err != nil {
+			t.Fatalf("EvaluateStaging error: %v", err)
+		}
+		if len(eval.Recommendations) != 0 {
+			t.Fatalf("expected 0 recommendations under MANUAL_OVERRIDE, got %+v", eval.Recommendations)
+		}
+		if !hasDiagnostic(eval.Diagnostics, RecommendationKindOffHoursStop, "SUPPRESSED", "SITE_CONTROL_EXIT_ACTIVE") {
+			t.Fatalf("expected SITE_CONTROL_EXIT_ACTIVE diagnostic for OFF_HOURS_STOP, got %+v", eval.Diagnostics)
+		}
+	})
+
+	t.Run("per-asset control lock suppresses only locked chiller during off-hours", func(t *testing.T) {
+		snap := testScheduleStagingSnapshot(at, schedule)
+		snap.AssetControlLocks = map[string]AssetControlLockInfo{
+			"01a14000-3000-7000-8000-000000000001": {LockMode: "MAINTENANCE_LOCK", Reason: "A机单机锁定"},
+		}
+
+		eval, err := EvaluateStaging(snap, DefaultStagingPolicy())
+		if err != nil {
+			t.Fatalf("EvaluateStaging error: %v", err)
+		}
+		var offTargets []string
+		for _, rec := range eval.Recommendations {
+			if rec.Kind == RecommendationKindOffHoursStop {
+				offTargets = append(offTargets, rec.TargetAssetCode)
+			}
+		}
+		if len(offTargets) != 1 || offTargets[0] != "chiller-b" {
+			t.Fatalf("expected only unlocked chiller-b in OFF_HOURS_STOP, got %+v", offTargets)
+		}
+		if !hasDiagnostic(eval.Diagnostics, RecommendationKindOffHoursStop, "SUPPRESSED", "ASSET_CONTROL_LOCKED") {
+			t.Fatalf("expected ASSET_CONTROL_LOCKED diagnostic for locked chiller, got %+v", eval.Diagnostics)
+		}
+	})
+
+	t.Run("applyStagingTopology propagates OperatingSchedule without overriding existing snapshot schedule", func(t *testing.T) {
+		topology := &StagingTopology{OperatingSchedule: schedule}
+		snap := StagingSnapshot{}
+		applyStagingTopology(&snap, topology)
+		if snap.OperatingSchedule == nil || !snap.OperatingSchedule.Configured || len(snap.OperatingSchedule.Slots) != 1 {
+			t.Fatalf("expected OperatingSchedule copied by applyStagingTopology, got %+v", snap.OperatingSchedule)
+		}
+		snap.OperatingSchedule.Slots[0].StartMinute = 0
+		if schedule.Slots[0].StartMinute == 0 {
+			t.Fatal("expected OperatingSchedule clone to isolate slot slice mutations")
+		}
+	})
+}

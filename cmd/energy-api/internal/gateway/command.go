@@ -322,7 +322,7 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The Asset capability parameters are invalid.", false, nil)
 		return
 	}
-	if lockFailure := h.enforceControlLockForCommand(request, session, target.device.SiteID, target.asset.ID, target.device.ID); lockFailure != nil {
+	if lockFailure := h.enforceControlLockForCommand(request, session, target.device.SiteID, target.asset.ID, target.device.ID, target.capability); lockFailure != nil {
 		h.writeCommandFailure(writer, request, *lockFailure)
 		return
 	}
