@@ -12,7 +12,7 @@ const CAPABILITY_REVISIONS: Record<string, string> = {
   SET_OPENING: 'capability:set-opening:v1',
 };
 
-const VALID_ACTUATION_MODES = new Set(['LEVEL', 'PULSE', 'UNIT_SEQUENCE']);
+const VALID_ACTUATION_MODES = new Set(['LEVEL', 'PULSE', 'UNIT_SEQUENCE', 'EMERGENCY_DO_RELEASE']);
 const VALID_INTERLOCK_STATES = new Set(['RUNNING', 'STOPPED']);
 
 export interface ControlInterlockInput {
@@ -144,11 +144,11 @@ export function validateControlPoints(
         const mode = metadata.actuationMode;
         if (typeof mode !== 'string' || !VALID_ACTUATION_MODES.has(mode)) {
           problems.push(`command point ${where}: unsupported actuationMode ${String(mode)}`);
-        } else if (mode === 'LEVEL' || mode === 'PULSE') {
+        } else if (mode === 'LEVEL' || mode === 'PULSE' || mode === 'EMERGENCY_DO_RELEASE') {
           if (typeof metadata.channel !== 'string' || metadata.channel.trim() === '') {
             problems.push(`command point ${where}: actuationMode ${mode} requires channel`);
           }
-          if (typeof metadata.coilAddress !== 'number' || !Number.isInteger(metadata.coilAddress) || metadata.coilAddress < 0) {
+          if (mode !== 'EMERGENCY_DO_RELEASE' && (typeof metadata.coilAddress !== 'number' || !Number.isInteger(metadata.coilAddress) || metadata.coilAddress < 0)) {
             problems.push(`command point ${where}: actuationMode ${mode} requires non-negative integer coilAddress`);
           }
           if (mode === 'PULSE' && (typeof metadata.pulseDurationMs !== 'number' || !Number.isInteger(metadata.pulseDurationMs) || metadata.pulseDurationMs <= 0)) {

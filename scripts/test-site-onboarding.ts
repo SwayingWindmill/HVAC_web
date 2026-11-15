@@ -45,7 +45,7 @@ test('each DESCRIBES and CONTROLS binding carries its point status and command m
   const controls = bindingSection(registry).split('\n').filter((line) => line.includes("'CONTROLS'"));
   assert.equal(describes.length, observedPoints.length);
   assert.equal(controls.length, commandPoints.length);
-  assert.equal(commandPoints.length, 40);
+  assert.equal(commandPoints.length, 41);
   const inactive = points.filter((row) => row.includes("'INACTIVE'"));
   assert.ok(inactive.length >= 2, 'the songyaxuan site file marks unwired channels INACTIVE');
   for (const [index, row] of observedPoints.entries()) {
@@ -582,4 +582,103 @@ test('songyaxuan Node-RED envelope stays under edge byte cap and aligns with sit
   assert.equal(statusPoints.get('status8')?.quality, 0);
   assert.equal(statusPoints.get('min_voltage_mv')?.unit, 'mV');
   assert.equal(statusPoints.get('min_rssi_dbm')?.unit, 'dBm');
+});
+
+const { test: onboardingExtraTest } = await import('node:test');
+
+onboardingExtraTest('songyaxuan.site.json includes et1010 run_state and emergency_stop_all', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { resolve } = await import('node:path');
+  const assertMod = await import('node:assert/strict');
+  const a = assertMod.default;
+  interface SitePoint {
+    code: string;
+    pointType: string;
+    valueType: string;
+    writable?: boolean;
+    sourceMetadata?: Record<string, unknown>;
+  }
+  interface SiteDevice {
+    sourceKey?: string;
+    points: SitePoint[];
+  }
+  const site = JSON.parse(readFileSync(resolve('deploy/sites/songyaxuan.site.json'), 'utf8')) as { devices: SiteDevice[] };
+  const et1010 = site.devices.find((d) => d.sourceKey === 'et1010');
+  a.ok(et1010, 'missing et1010 device');
+  const runStatePt = et1010.points.find((p) => p.code === 'run_state');
+  a.equal(runStatePt?.pointType, 'STATE');
+  a.equal(runStatePt?.valueType, 'STRING');
+  const emergencyPt = et1010.points.find((p) => p.code === 'emergency_stop_all');
+  a.equal(emergencyPt?.pointType, 'COMMAND');
+  a.equal(emergencyPt?.valueType, 'BOOLEAN');
+  a.equal(emergencyPt?.writable, true);
+  a.equal(emergencyPt?.sourceMetadata?.capability, 'STOP');
+  a.equal(emergencyPt?.sourceMetadata?.capabilityRevision, 'capability:stop:v1');
+  a.equal(emergencyPt?.sourceMetadata?.feedbackPointKey, 'run_state');
+  a.equal(emergencyPt?.sourceMetadata?.actuationMode, 'EMERGENCY_DO_RELEASE');
+  a.equal(emergencyPt?.sourceMetadata?.channel, 'all-do');
+});
+
+onboardingExtraTest('songyaxuan-platform-envelope applies chiller power hysteresis and et1010 run_state', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { resolve } = await import('node:path');
+  const vmMod = await import('node:vm');
+  const assertMod = await import('node:assert/strict');
+  const a = assertMod.default;
+  const script = readFileSync(resolve('edge/node-red/songyaxuan-platform-envelope.js'), 'utf8');
+  const store = new Map<string, unknown>();
+  const runEnvelope = (payload: Record<string, Array<{ ts: number; values: Record<string, unknown> }>>) => {
+    const ctx = {
+      msg: { payload },
+      context: {
+        get: (key: string) => store.get(key),
+        set: (key: string, value: unknown) => {
+          store.set(key, value);
+        },
+      },
+      Date,
+      Math,
+    };
+    const out = vmMod.runInNewContext(`(() => { ${script} })()`, ctx) as {
+      payload: { payload: { devices: Array<{ deviceId: string; points: Array<{ code: string; value: unknown }> }> } };
+    };
+    return out.payload.payload.devices;
+  };
+  const readPoint = (devices: Array<{ deviceId: string; points: Array<{ code: string; value: unknown }> }>, deviceId: string, code: string) =>
+    devices.find((d) => d.deviceId === deviceId)?.points.find((p) => p.code === code)?.value;
+
+  const powerSteps: Array<[number, string]> = [
+    [0, 'STOPPED'],
+    [8, 'STOPPED'],
+    [12.75, 'STOPPED'],
+    [13, 'RUNNING'],
+    [8, 'RUNNING'],
+    [5, 'STOPPED'],
+    [8, 'STOPPED'],
+    [13, 'RUNNING'],
+    [4.8, 'STOPPED'],
+  ];
+  let ts = 1_760_000_000_000;
+  for (const [powerTotal, expected] of powerSteps) {
+    ts += 1000;
+    const devices = runEnvelope({
+      'ammeter-unit4': [{ ts, values: { powerTotal, combinedActiveTotalElectricalEnergy: 100 } }],
+    });
+    a.equal(readPoint(devices, 'ammeter-unit4', 'run_state'), expected, `ammeter-unit4 at ${powerTotal}kW`);
+    a.equal(readPoint(devices, 'ctrl-chiller-a', 'run_state'), expected, `ctrl-chiller-a at ${powerTotal}kW`);
+  }
+
+  const etStopped = runEnvelope({ et1010: [{ ts: ts + 1000, values: { u11: 0, u12: 0, u13: 0 } }] });
+  a.equal(etStopped.filter((d) => d.deviceId === 'et1010').length, 1);
+  a.equal(readPoint(etStopped, 'et1010', 'run_state'), 'STOPPED');
+  a.equal(readPoint(etStopped, 'ctrl-chwp-1', 'run_state'), 'STOPPED');
+
+  const etRunning = runEnvelope({ et1010: [{ ts: ts + 2000, values: { u11: 1, u12: 0, u13: 0 } }] });
+  a.equal(etRunning.filter((d) => d.deviceId === 'et1010').length, 1);
+  a.equal(readPoint(etRunning, 'et1010', 'run_state'), 'RUNNING');
+  a.equal(readPoint(etRunning, 'ctrl-chwp-1', 'run_state'), 'RUNNING');
+
+  const etPulseOnly = runEnvelope({ et1010: [{ ts: ts + 3000, values: { u14: 0, u51: 0 } }] });
+  a.equal(etPulseOnly.filter((d) => d.deviceId === 'et1010').length, 1);
+  a.equal(readPoint(etPulseOnly, 'et1010', 'run_state'), undefined);
 });
