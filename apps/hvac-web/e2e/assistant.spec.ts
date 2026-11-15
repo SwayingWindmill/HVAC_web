@@ -67,7 +67,7 @@ test('opening the assistant folds the navigation to icons so the page keeps its 
   await page.getByRole('button', { name: 'AI 助手' }).click();
   await expect(navigation).toHaveAttribute('data-state', 'collapsed');
   // 1440 less the folded navigation and the 420px panel.
-  expect(await page.locator('#content').evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(940);
+  await expect.poll(() => page.locator('#content').evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(940);
 
   await page.getByRole('complementary', { name: 'AI 助手' }).getByRole('button', { name: '收起助手' }).click();
   await expect(navigation).toHaveAttribute('data-state', 'expanded');

@@ -83,6 +83,7 @@ export const intelligencePaths = {
   latestOptimizationRecommendation: '__LATEST_OPTIMIZATION_RECOMMENDATION_PATH__',
   latestOptimizationPreparation: '__LATEST_OPTIMIZATION_PREPARATION_PATH__',
   latestOptimizationShadowEvaluation: '__LATEST_OPTIMIZATION_SHADOW_EVALUATION_PATH__',
+  latestOptimizationStagingRecommendations: '__LATEST_OPTIMIZATION_STAGING_RECOMMENDATIONS_PATH__',
 } as const;
 
 export const buildInfoSchema = z.object({
@@ -883,6 +884,58 @@ export const assetControlLockMutationResponseSchema = assetControlLockStateSchem
   cancelledCommandIds: z.array(z.string()),
 }).strict();
 
+export const stagingDiagnosticSchema = z.object({
+  scope: z.string(),
+  assetId: z.string().optional(),
+  assetCode: z.string().optional(),
+  status: z.string(),
+  reason: z.string(),
+  detail: z.string(),
+}).strict();
+
+export const stagingRecommendationDraftSchema = z.object({
+  id: z.string(),
+  kind: z.enum(['CHILLER_STAGE_DOWN', 'IDLE_AUXILIARY_STOP']),
+  confirmationMode: z.enum(['MANUAL_CONFIRM']),
+  requiresSupervisorReview: z.boolean(),
+  requiresTotp: z.boolean(),
+  suggestedCapability: z.enum(['STOP_UNIT_SEQUENCE', 'STOP']),
+  suggestedCommandPointId: z.string().optional(),
+  targetAssetId: z.string(),
+  targetAssetCode: z.string().optional(),
+  targetAssetName: z.string().optional(),
+  targetAssetType: z.enum(['CHILLER', 'CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP', 'COOLING_TOWER']),
+  predictedPowerSavingKW: z.number(),
+  estimatedHourlySavingKWh: z.number(),
+  estimatedShiftSavingKWh: z.number(),
+  shiftHours: z.number(),
+  powerSavingBasis: z.string().optional(),
+  currentTotalPowerKW: z.number().optional(),
+  projectedTotalPowerKW: z.number().optional(),
+  currentCoolingLoadKW: z.number().optional(),
+  remainingCapacityKW: z.number().optional(),
+  headroomMarginFraction: z.number().optional(),
+  copBefore: z.number().optional(),
+  projectedCopAfter: z.number().optional(),
+  continuousIdleSeconds: z.number().int().optional(),
+  continuousIdleMinutes: z.number().optional(),
+  servedChillerIds: z.array(z.string()).optional(),
+  interlockSafetyStatement: z.string().optional(),
+  extrapolated: z.boolean().optional(),
+  rationale: z.string(),
+  preconditions: z.array(z.string()),
+}).strict();
+
+export const stagingEvaluationSchema = z.object({
+  tenantId: uuidV7Schema,
+  siteId: uuidV7Schema,
+  evaluatedAt: z.string().datetime({ offset: true }),
+  confirmationMode: z.enum(['MANUAL_CONFIRM']),
+  siteControlMode: siteControlModeSchema.optional(),
+  recommendations: z.array(stagingRecommendationDraftSchema),
+  diagnostics: z.array(stagingDiagnosticSchema),
+}).strict();
+
 export const fieldErrorSchema = z.object({ field: z.string(), message: z.string() }).strict();
 export const registryProblemCodes = [
   'RESOURCE_NOT_FOUND', 'CURSOR_INVALID', 'REGISTRY_UNAVAILABLE', 'REGISTRY_TIMEOUT', 'MAPPING_INVALID', 'MAPPING_QUARANTINED',
@@ -984,6 +1037,9 @@ export type SiteControlModeMutation = z.infer<typeof siteControlModeMutationSche
 export type SiteControlModeMutationResponse = z.infer<typeof siteControlModeMutationResponseSchema>;
 export type AssetControlLockMutation = z.infer<typeof assetControlLockMutationSchema>;
 export type AssetControlLockMutationResponse = z.infer<typeof assetControlLockMutationResponseSchema>;
+export type StagingDiagnostic = z.infer<typeof stagingDiagnosticSchema>;
+export type StagingRecommendationDraft = z.infer<typeof stagingRecommendationDraftSchema>;
+export type StagingEvaluation = z.infer<typeof stagingEvaluationSchema>;
 export type ProblemDetails = z.infer<typeof problemDetailsSchema>;
 export type RegistryListParams = { limit?: number; cursor?: string };
 
@@ -1303,6 +1359,11 @@ export function createPlatformGatewayClient(baseUrl = '') {
       assetControlLockMutationSchema,
       assetControlLockMutationResponseSchema,
       { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
+    ),
+    getLatestSiteOptimizationStagingRecommendations: (siteId: string, init?: RequestInit) => request(
+      '__LATEST_OPTIMIZATION_STAGING_RECOMMENDATIONS_PATH__'.replace('{siteId}', encodeURIComponent(siteId)),
+      stagingEvaluationSchema,
+      { ...init, method: 'GET' },
     ),
   };
 }

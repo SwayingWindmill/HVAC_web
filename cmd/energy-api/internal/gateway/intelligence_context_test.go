@@ -63,7 +63,7 @@ func TestForecastReadsCarryAGatewaySignedContext(t *testing.T) {
 func TestOptimizationCallsCarryAGatewaySignedContextForTheirAction(t *testing.T) {
 	fixture := newOperationsGatewayFixture(t, 30)
 	controller := fixture.handler.(*handler)
-	for _, resource := range []string{"recommendations", "preparations"} {
+	for _, resource := range []string{"recommendations", "preparations", "shadow-evaluations", "staging-recommendations"} {
 		fixture.lastOwner.Store(nil)
 		response := httptest.NewRecorder()
 		controller.serveLatestOptimizationRead(response, httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+fixture.siteID+"/optimization/"+resource+"/latest", nil),

@@ -90,6 +90,7 @@ COPY infra/registry/postgres/init/037-site-and-asset-control-locks.sql /opt/hvac
 COPY infra/registry/postgres/init/038-command-route-point-metadata.sql /opt/hvac/repo/infra/registry/postgres/init/038-command-route-point-metadata.sql
 COPY services/notification-service/migrations/005_reading_gap_reminders.sql /opt/hvac/repo/services/notification-service/migrations/005_reading_gap_reminders.sql
 COPY services/notification-service/migrations/006_alarm_delivery.sql /opt/hvac/repo/services/notification-service/migrations/006_alarm_delivery.sql
+COPY infra/registry/postgres/init/039-optimization-staging-catalog-read.sql /opt/hvac/repo/infra/registry/postgres/init/039-optimization-staging-catalog-read.sql
 
 FROM scratch AS sources-runtime
 

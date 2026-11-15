@@ -103,7 +103,8 @@
         "infra/registry/postgres/init/037-site-and-asset-control-locks.sql",
         "infra/registry/postgres/init/038-command-route-point-metadata.sql",
         "services/notification-service/migrations/005_reading_gap_reminders.sql",
-        "services/notification-service/migrations/006_alarm_delivery.sql"
+        "services/notification-service/migrations/006_alarm_delivery.sql",
+        "infra/registry/postgres/init/039-optimization-staging-catalog-read.sql"
       ]
     },
     {

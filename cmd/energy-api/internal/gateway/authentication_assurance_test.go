@@ -57,4 +57,12 @@ func TestHighRiskCommandApprovalRequiresRecentMFA(t *testing.T) {
 	if commandApprovalRequiresStepUp(commandView{Risk: commandmodel.RiskCritical}, recentMFA, now) {
 		t.Fatal("expected recent MFA assurance to satisfy CRITICAL-risk approval step-up")
 	}
+	for _, risk := range []commandmodel.RiskLevel{commandmodel.RiskLow, commandmodel.RiskMedium, commandmodel.RiskHigh, commandmodel.RiskCritical} {
+		if !validCommandRisk(risk) {
+			t.Fatalf("expected risk %q to be valid in command view validation", risk)
+		}
+	}
+	if validCommandRisk(commandmodel.RiskLevel("EXTREME")) {
+		t.Fatal("expected unknown risk level to be rejected")
+	}
 }

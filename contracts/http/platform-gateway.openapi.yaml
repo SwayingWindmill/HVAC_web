@@ -2280,6 +2280,23 @@
         "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/sites/{siteId}/optimization/staging-recommendations/latest": {
+      "get": {
+        "operationId": "getLatestSiteOptimizationStagingRecommendations",
+        "summary": "Read the latest sensor-honest chiller staging and idle auxiliary linkage draft recommendations for a Site",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "optimization-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": {
+          "200": { "description": "Latest chiller staging and idle auxiliary linkage evaluation.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StagingEvaluation" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/optimization/runs": {
       "post": {
         "operationId": "createOptimizationRunV212",
@@ -4841,6 +4858,85 @@
           "revision": { "type": "integer", "minimum": 0 },
           "boundDeviceIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } },
           "cancelledCommandIds": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "StagingDiagnostic": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["scope", "status", "reason", "detail"],
+        "properties": {
+          "scope": { "type": "string" },
+          "assetId": { "type": "string" },
+          "assetCode": { "type": "string" },
+          "status": { "type": "string" },
+          "reason": { "type": "string" },
+          "detail": { "type": "string" }
+        }
+      },
+      "StagingRecommendationDraft": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "confirmationMode",
+          "requiresSupervisorReview",
+          "requiresTotp",
+          "suggestedCapability",
+          "targetAssetId",
+          "targetAssetType",
+          "predictedPowerSavingKW",
+          "estimatedHourlySavingKWh",
+          "estimatedShiftSavingKWh",
+          "shiftHours",
+          "rationale",
+          "preconditions"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": { "type": "string", "enum": ["CHILLER_STAGE_DOWN", "IDLE_AUXILIARY_STOP"] },
+          "confirmationMode": { "type": "string", "enum": ["MANUAL_CONFIRM"] },
+          "requiresSupervisorReview": { "type": "boolean" },
+          "requiresTotp": { "type": "boolean" },
+          "suggestedCapability": { "type": "string", "enum": ["STOP_UNIT_SEQUENCE", "STOP"] },
+          "suggestedCommandPointId": { "type": "string" },
+          "targetAssetId": { "type": "string" },
+          "targetAssetCode": { "type": "string" },
+          "targetAssetName": { "type": "string" },
+          "targetAssetType": { "type": "string", "enum": ["CHILLER", "CHILLED_WATER_PUMP", "COOLING_WATER_PUMP", "COOLING_TOWER"] },
+          "predictedPowerSavingKW": { "type": "number" },
+          "estimatedHourlySavingKWh": { "type": "number" },
+          "estimatedShiftSavingKWh": { "type": "number" },
+          "shiftHours": { "type": "number" },
+          "powerSavingBasis": { "type": "string" },
+          "currentTotalPowerKW": { "type": "number" },
+          "projectedTotalPowerKW": { "type": "number" },
+          "currentCoolingLoadKW": { "type": "number" },
+          "remainingCapacityKW": { "type": "number" },
+          "headroomMarginFraction": { "type": "number" },
+          "copBefore": { "type": "number" },
+          "projectedCopAfter": { "type": "number" },
+          "continuousIdleSeconds": { "type": "integer" },
+          "continuousIdleMinutes": { "type": "number" },
+          "servedChillerIds": { "type": "array", "items": { "type": "string" } },
+          "interlockSafetyStatement": { "type": "string" },
+          "extrapolated": { "type": "boolean" },
+          "rationale": { "type": "string" },
+          "preconditions": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "StagingEvaluation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tenantId", "siteId", "evaluatedAt", "confirmationMode", "recommendations", "diagnostics"],
+        "properties": {
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "evaluatedAt": { "type": "string", "format": "date-time" },
+          "confirmationMode": { "type": "string", "enum": ["MANUAL_CONFIRM"] },
+          "siteControlMode": { "type": "string", "enum": ["REMOTE_AUTO", "MANUAL_OVERRIDE", "SAFE_SHUTDOWN_EXIT"] },
+          "recommendations": { "type": "array", "items": { "$ref": "#/components/schemas/StagingRecommendationDraft" } },
+          "diagnostics": { "type": "array", "items": { "$ref": "#/components/schemas/StagingDiagnostic" } }
         }
       },
       "FieldError": {
