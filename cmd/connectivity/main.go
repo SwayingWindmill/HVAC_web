@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,16 +17,28 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
 )
 
 func main() {
+	diagnosticsAddress := flag.String("diagnostics-addr", envOr("MQTT_TELEMETRY_ADAPTER_DIAGNOSTICS_ADDR", ":19094"), "health server listen address")
+	initializeCA := flag.Bool("initialize-gateway-ca", false, "initialize new Gateway CA files and exit")
+	tunnelStdio := flag.String("tunnel-stdio", "", "bridge stdin/stdout to loopback tunnel address and exit")
+	flag.Parse()
+	if strings.TrimSpace(*tunnelStdio) != "" {
+		stdioCtx, stdioCancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		err := tunnel.RunStdioBridge(stdioCtx, *tunnelStdio, os.Stdin, os.Stdout)
+		stdioCancel()
+		if err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+		return
+	}
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "mqtt-telemetry-adapter", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
-	diagnosticsAddress := flag.String("diagnostics-addr", envOr("MQTT_TELEMETRY_ADAPTER_DIAGNOSTICS_ADDR", ":19094"), "health server listen address")
-	initializeCA := flag.Bool("initialize-gateway-ca", false, "initialize new Gateway CA files and exit")
-	flag.Parse()
 	if *initializeCA {
 		workloadCA, err := os.ReadFile(envOr("CONNECTIVITY_CA", "/run/hvac/pki/ca.crt"))
 		if err == nil {
@@ -57,11 +70,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer connectivityStore.Close()
-	credentials, err := credentialServer(connectivityStore)
+	credentials, tunnelHub, err := credentialServer(connectivityStore)
 	if err != nil {
 		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE")
 		os.Exit(1)
 	}
+	defer tunnelHub.Close()
 	telemetryRuntime, err := adapter.NewTelemetryRuntimeClient(config.TelemetryRuntime)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_runtime_client_invalid", "error", err.Error())
@@ -121,6 +135,7 @@ func main() {
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	_ = diagnostics.Shutdown(shutdownContext)
+	tunnelHub.Close()
 	_ = credentials.Shutdown(shutdownContext)
 	if commands != nil {
 		_ = commands.Close(shutdownContext)

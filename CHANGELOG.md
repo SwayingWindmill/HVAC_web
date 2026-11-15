@@ -14,6 +14,7 @@
 
 #### 新增
 
+- 现场网关 Node-RED 24/7 常驻双向 TLS 反向隧道与 14 天证书自动续签：新增 `nginx` `:443/gateway/v1/tunnel` HTTP Upgrade mTLS 代理、`modules/connectivity/pkg/tunnel` 多路复用隧道中枢（强制只转发网关 `127.0.0.1:1880` 与宿主机 `127.0.0.1:18800` 回环监听、25 秒心跳保活、吊销即断线）、`cmd/connectivity` `-tunnel-stdio` 桥接与 `systemd` 套接字激活模板、网关侧 `edge/node-red/gateway-nodered-tunnel.ts`（`平台·常驻隧道` 与关键页签防误删保护）和 `edge/node-red/gateway-cert-autorenew.ts`（`平台·证书` 剩余有效期 `<= 14` 天走 `/gateway/v1/renew` 原子续签）。
 - 打通周运行计划检修窗口自动拦截与停机时段冷机停机建议（`OFF_HOURS_STOP`）：`GET /api/v1/sites/{siteId}/control-state` 新增 `activeMaintenanceWindow` 字段，站点处于已批准检修窗口期间自动拦截非停机、非复位的远程控制指令并暂停设定温度优化草案；同时在停机时段对仍在运行的冷机自动生成人工确认停机建议，不自动强制停机。
 - 松雅轩站点清单新增温度采集模块（UID 20）无线探头电池电压（`temperature-voltage-uid20`，`v1`–`v20` 与 `v51`/`v53`–`v55`，`mV`）、信号强度（`temperature-rssi-uid20`，`rssi1`–`rssi20` 与 `rssi51`/`rssi53`–`rssi55`，`dBm`）与通道通信状态及汇总诊断（`temperature-status-uid20`，`status1`–`status20`、`status51`/`status53`–`status55` 及 `online_count` / `offline_count` / `low_battery_count` / `min_voltage_mv` / `min_rssi_dbm`）；同步启用 14 号冷却水塔水探头、11/51 与 12/55 共存冷却塔通道及房间大厅（`t53` -> `room_temperature` / `zone.temperature`）与宴会厅（`t54` -> `banquet_room_temperature` / `zone.banquet_temperature`）室内温度，仅保留 20 号备用通道为 `INACTIVE`（网关 `SPARE` 同时屏蔽已停用的 52 号通道）；网页与微信小程序遥测词典和实时监测视图同步补齐 `mV`、`dBm` 整数精度及 `zone.banquet_temperature`，网关信封脚本 `edge/node-red/songyaxuan-platform-envelope.js` 同步最新通道映射、诊断合并上报与离线通道质量降级（`quality: 1`）。
 - 松雅轩冷站 ET1010 20 通道控制能力与双闸门水路联锁保护（Wave 2）：

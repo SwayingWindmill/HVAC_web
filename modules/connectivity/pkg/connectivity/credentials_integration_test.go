@@ -75,6 +75,13 @@ func TestGatewayCredentialEnrollmentAndLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := NewCredentialService(store, authority)
+	var revokedGateways []string
+	var revokeHookMu sync.Mutex
+	service.SetRevokeHook(func(id string) {
+		revokeHookMu.Lock()
+		revokedGateways = append(revokedGateways, id)
+		revokeHookMu.Unlock()
+	})
 	assertCodeRejectedHTTP := func(code, csr string) {
 		t.Helper()
 		body, err := json.Marshal(map[string]string{"enrollmentCode": code, "csrPem": csr})
@@ -159,6 +166,9 @@ func TestGatewayCredentialEnrollmentAndLifecycle(t *testing.T) {
 	if renewed.CertificatePEM == issued.CertificatePEM {
 		t.Fatal("renewal returned old certificate")
 	}
+	if activeGateway, err := service.VerifyActiveCredential(ctx, cert); err != nil || activeGateway != gateway {
+		t.Fatalf("expected active credential verification to succeed, got gw=%q err=%v", activeGateway, err)
+	}
 	if _, err := service.Renew(ctx, cert, csr); err != nil {
 		t.Fatalf("old certificate no longer works after renewal: %v", err)
 	}
@@ -185,6 +195,19 @@ func TestGatewayCredentialEnrollmentAndLifecycle(t *testing.T) {
 	}
 	if _, err := service.Renew(ctx, cert, csr); !errors.Is(err, ErrCredentialRevoked) {
 		t.Fatalf("revoked renewal: %v", err)
+	}
+	if _, err := service.VerifyActiveCredential(ctx, cert); !errors.Is(err, ErrCredentialRevoked) {
+		t.Fatalf("revoked VerifyActiveCredential accepted: %v", err)
+	}
+	revokeHookMu.Lock()
+	hookCount := len(revokedGateways)
+	hookID := ""
+	if hookCount > 0 {
+		hookID = revokedGateways[0]
+	}
+	revokeHookMu.Unlock()
+	if hookCount != 1 || hookID != gateway {
+		t.Fatalf("expected revoke hook called once for %s, got count=%d id=%q", gateway, hookCount, hookID)
 	}
 	if _, err := service.GenerateEnrollmentCode(ctx, claims, gateway); !errors.Is(err, ErrCredentialRevoked) {
 		t.Fatalf("revoked identity re-enabled: %v", err)

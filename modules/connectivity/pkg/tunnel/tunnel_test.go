@@ -1,0 +1,444 @@
+package tunnel
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/binary"
+	"errors"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func testServerCert(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "tunnel-test"},
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+func startTestTunnelHarness(
+	t *testing.T,
+	targetHandler http.Handler,
+	httpReadTimeout time.Duration,
+	httpWriteTimeout time.Duration,
+	pingInterval time.Duration,
+	hubOpts ...Option,
+) (loopbackAddr string, hub *Hub, edgeErrCh chan error, cancel context.CancelFunc) {
+	t.Helper()
+	const gatewayID = "0193f000-2000-7000-8000-000000000001"
+	targetSrv := httptest.NewServer(targetHandler)
+	t.Cleanup(targetSrv.Close)
+	targetHostPort := strings.TrimPrefix(targetSrv.URL, "http://")
+
+	hub = NewHub(hubOpts...)
+	t.Cleanup(hub.Close)
+
+	mux := http.NewServeMux()
+	mux.Handle("GET /gateway/v1/tunnel", NewUpgradeHandler(
+		hub,
+		func(r *http.Request) (*x509.Certificate, error) {
+			if r.Header.Get("X-Test-Gateway") != gatewayID {
+				return nil, errors.New("missing gateway header")
+			}
+			return &x509.Certificate{Subject: pkix.Name{CommonName: gatewayID}}, nil
+		},
+		func(_ context.Context, peer *x509.Certificate) (string, error) {
+			if peer == nil || peer.Subject.CommonName != gatewayID {
+				return "", errors.New("rejected gateway")
+			}
+			return peer.Subject.CommonName, nil
+		},
+	))
+
+	cert := testServerCert(t)
+	srvLn, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{cert},
+		NextProtos:   []string{"http/1.1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srvLn.Close() })
+	httpSrv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 3 * time.Second,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+	}
+	go func() { _ = httpSrv.Serve(srvLn) }()
+	t.Cleanup(func() { _ = httpSrv.Close() })
+
+	edgeConn, err := tls.Dial("tcp", srvLn.Addr().String(), &tls.Config{
+		InsecureSkipVerify: true, // test-only self-signed localhost cert
+		NextProtos:         []string{"http/1.1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqText := "GET /gateway/v1/tunnel HTTP/1.1\r\n" +
+		"Host: " + srvLn.Addr().String() + "\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Upgrade: " + ProtocolName + "\r\n" +
+		"X-Test-Gateway: " + gatewayID + "\r\n\r\n"
+	if _, err := io.WriteString(edgeConn, reqText); err != nil {
+		_ = edgeConn.Close()
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(edgeConn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		_ = edgeConn.Close()
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		_ = edgeConn.Close()
+		t.Fatalf("expected 101 Switching Protocols, got %d", resp.StatusCode)
+	}
+	var muxConn net.Conn = edgeConn
+	if br.Buffered() > 0 {
+		muxConn = &bufferedConn{Conn: edgeConn, r: br}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	edgeErrCh = make(chan error, 1)
+	go func() {
+		edgeErrCh <- RunEdgeConn(ctx, muxConn, func(dialCtx context.Context, port uint16) (net.Conn, error) {
+			if port != AllowedTargetPort {
+				return nil, ErrPortForbidden
+			}
+			var d net.Dialer
+			return d.DialContext(dialCtx, "tcp", targetHostPort)
+		}, pingInterval)
+	}()
+
+	loopbackLn, err := startLoopbackWithRetry(hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(hub.ActiveGateways()) == 1 {
+			return loopbackLn.Addr().String(), hub, edgeErrCh, cancel
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("gateway tunnel did not register in time")
+	return "", nil, nil, nil
+}
+
+func startLoopbackWithRetry(hub *Hub) (net.Listener, error) {
+	var lastErr error
+	for range 5 {
+		probe, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		addr := probe.Addr().String()
+		_ = probe.Close()
+		ln, err := hub.StartLoopbackListener(addr)
+		if err == nil {
+			return ln, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func TestTunnelHTTPAndLargeBodyOverLoopback(t *testing.T) {
+	largeBody := bytes.Repeat([]byte("A1B2C3D4"), 16384) // 128 KiB > 64 KiB MaxFramePayload
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/flows" && r.Method == http.MethodPost {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true,"path":"`+r.URL.Path+`"}`)
+	})
+
+	addr, _, _, _ := startTestTunnelHarness(t, handler, 10*time.Second, 10*time.Second, 50*time.Millisecond)
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	resp, err := client.Get("http://" + addr + "/red/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET failed: status=%d err=%v body=%q", resp.StatusCode, err, string(body))
+	}
+	if string(body) != `{"ok":true,"path":"/red/settings"}` {
+		t.Fatalf("unexpected GET body: %q", string(body))
+	}
+
+	postResp, err := client.Post("http://"+addr+"/flows", "application/json", bytes.NewReader(largeBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotLarge, err := io.ReadAll(postResp.Body)
+	_ = postResp.Body.Close()
+	if err != nil || postResp.StatusCode != http.StatusOK {
+		t.Fatalf("POST large failed: status=%d err=%v", postResp.StatusCode, err)
+	}
+	if !bytes.Equal(gotLarge, largeBody) {
+		t.Fatalf("large body mismatch: got %d bytes want %d", len(gotLarge), len(largeBody))
+	}
+}
+
+func TestTunnelUpgradeStreamCommsEcho(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/comms" || !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			http.Error(w, "expected ws upgrade", http.StatusBadRequest)
+			return
+		}
+		rc := http.NewResponseController(w)
+		c, brw, err := rc.Hijack()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer func() { _ = c.Close() }()
+		_, _ = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+		_ = brw.Flush()
+		line, err := brw.ReadString('\n')
+		if err == nil {
+			_, _ = brw.WriteString("echo:" + line)
+			_ = brw.Flush()
+		}
+	})
+
+	addr, _, _, _ := startTestTunnelHarness(t, handler, 10*time.Second, 10*time.Second, 50*time.Millisecond)
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	_, err = io.WriteString(conn, "GET /comms HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("expected 101 from /comms upgrade, got %d", resp.StatusCode)
+	}
+	if _, err := io.WriteString(conn, "nodered-deploy-ping\n"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "echo:nodered-deploy-ping\n" {
+		t.Fatalf("unexpected ws upgrade stream response: %q", got)
+	}
+}
+
+func TestTunnelRejectsForbiddenTargetPorts(t *testing.T) {
+	hub := NewHub()
+	defer hub.Close()
+	for _, forbidden := range []uint16{22, 80, 443, 1883, 5432} {
+		if _, err := hub.OpenStream(context.Background(), "", forbidden); !errors.Is(err, ErrPortForbidden) {
+			t.Fatalf("port %d expected ErrPortForbidden, got %v", forbidden, err)
+		}
+	}
+
+	left, right := net.Pipe()
+	defer func() { _ = left.Close() }()
+	defer func() { _ = right.Close() }()
+	var dialCount atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_ = RunEdgeConn(ctx, right, func(_ context.Context, _ uint16) (net.Conn, error) {
+			dialCount.Add(1)
+			return nil, errors.New("should never dial")
+		}, 0)
+	}()
+
+	var p22 [2]byte
+	binary.BigEndian.PutUint16(p22[:], 22)
+	if err := WriteFrame(left, Frame{Type: FrameOpen, StreamID: 1, Payload: p22[:]}); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := ReadFrame(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Type != FrameOpenErr || !strings.Contains(string(reply.Payload), ErrPortForbidden.Error()) {
+		t.Fatalf("expected FrameOpenErr for port 22, got type=%d payload=%q", reply.Type, string(reply.Payload))
+	}
+	if err := WriteFrame(left, Frame{Type: FrameOpen, StreamID: 3, Payload: []byte{0x01}}); err != nil {
+		t.Fatal(err)
+	}
+	badLenReply, err := ReadFrame(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if badLenReply.Type != FrameOpenErr {
+		t.Fatalf("expected FrameOpenErr for invalid open payload, got %d", badLenReply.Type)
+	}
+	if dialCount.Load() != 0 {
+		t.Fatalf("edge dialed target %d times on forbidden port requests", dialCount.Load())
+	}
+}
+
+func TestTunnelFailClosedOnNonLoopbackAddresses(t *testing.T) {
+	hub := NewHub()
+	defer hub.Close()
+	for _, addr := range []string{"0.0.0.0:18800", ":18800", "127.0.0.1:0", "192.168.1.50:18800", "10.0.0.2:18800", "localhost:18800", "not-an-addr"} {
+		if err := ValidateLoopbackAddr(addr); !errors.Is(err, ErrNonLoopbackAddress) {
+			t.Fatalf("ValidateLoopbackAddr(%q) = %v, want ErrNonLoopbackAddress", addr, err)
+		}
+		if _, err := hub.StartLoopbackListener(addr); !errors.Is(err, ErrNonLoopbackAddress) {
+			t.Fatalf("StartLoopbackListener(%q) = %v, want ErrNonLoopbackAddress", addr, err)
+		}
+		if err := RunStdioBridge(context.Background(), addr, strings.NewReader(""), io.Discard); !errors.Is(err, ErrNonLoopbackAddress) {
+			t.Fatalf("RunStdioBridge(%q) = %v, want ErrNonLoopbackAddress", addr, err)
+		}
+	}
+	for _, okAddr := range []string{"127.0.0.1:18800", "[::1]:18800"} {
+		if err := ValidateLoopbackAddr(okAddr); err != nil {
+			t.Fatalf("ValidateLoopbackAddr(%q) unexpected err: %v", okAddr, err)
+		}
+	}
+}
+
+func TestTunnelRevokeDisconnectsActiveSessionAndRejectsUnverified(t *testing.T) {
+	hub := NewHub()
+	defer hub.Close()
+	h := NewUpgradeHandler(
+		hub,
+		func(*http.Request) (*x509.Certificate, error) {
+			return &x509.Certificate{Subject: pkix.Name{CommonName: "gw-1"}}, nil
+		},
+		func(_ context.Context, _ *x509.Certificate) (string, error) {
+			return "", errors.New("revoked")
+		},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/gateway/v1/tunnel", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", ProtocolName)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 when peer rejected, got %d", rec.Code)
+	}
+
+	_, activeHub, edgeErrCh, _ := startTestTunnelHarness(t, http.NewServeMux(), 5*time.Second, 5*time.Second, 50*time.Millisecond)
+	activeHub.CloseGateway("0193f000-2000-7000-8000-000000000001")
+	select {
+	case err := <-edgeErrCh:
+		if err == nil {
+			t.Fatal("expected edge tunnel error after CloseGateway")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("active gateway tunnel did not close within 1s of revoke")
+	}
+	if _, err := activeHub.OpenStream(context.Background(), "", AllowedTargetPort); !errors.Is(err, ErrNoActiveGateway) {
+		t.Fatalf("expected ErrNoActiveGateway after CloseGateway, got %v", err)
+	}
+}
+
+func TestTunnelSurvivesShortHTTPServerTimeoutsViaKeepalive(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "alive-after-idle")
+	})
+	addr, _, _, _ := startTestTunnelHarness(
+		t,
+		handler,
+		80*time.Millisecond,
+		80*time.Millisecond,
+		30*time.Millisecond,
+		WithPingInterval(30*time.Millisecond),
+		WithReadTimeout(220*time.Millisecond),
+	)
+	time.Sleep(320 * time.Millisecond)
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://" + addr + "/red/probe")
+	if err != nil {
+		t.Fatalf("request failed after idle past http.Server timeouts: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if string(body) != "alive-after-idle" {
+		t.Fatalf("unexpected response body after idle: %q", string(body))
+	}
+}
+
+func TestRunStdioBridgeRoundTrip(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "stdio:"+r.URL.Path)
+	})
+	addr, _, _, _ := startTestTunnelHarness(t, handler, 5*time.Second, 5*time.Second, 50*time.Millisecond)
+
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	bridgeDone := make(chan error, 1)
+	go func() {
+		bridgeDone <- RunStdioBridge(ctx, addr, inR, outW)
+		_ = outW.Close()
+	}()
+
+	go func() {
+		_, _ = io.WriteString(inW, "GET /red/stdio-check HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+		_ = inW.Close()
+	}()
+
+	rawResp, err := io.ReadAll(outR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rawResp), "stdio:/red/stdio-check") {
+		t.Fatalf("expected HTTP body from stdio bridge, got %q", string(rawResp))
+	}
+	if err := <-bridgeDone; err != nil {
+		t.Fatalf("RunStdioBridge returned error: %v", err)
+	}
+}
