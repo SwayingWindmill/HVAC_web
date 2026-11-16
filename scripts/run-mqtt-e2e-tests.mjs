@@ -1,6 +1,4 @@
-// End-to-end MQTT uplink gate: the EG8200 publisher, the real Mosquitto broker and ACL,
-// Connectivity resolving the Gateway, Devices and Points from a real Registry database,
-// and a stand-in Telemetry Runtime that records what Connectivity sends.
+// End-to-end MQTT uplink gate across Mosquitto, Registry, and Connectivity.
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -89,7 +87,6 @@ async function httpStatus(url) {
 
 async function metric(url, name) {
   const body = await (await fetch(url)).text();
-  // name is a metric name (summing every series) or one series such as name{label="value"}.
   const matches = (line) => line.startsWith(`${name} `) || (!name.includes('{') && line.startsWith(`${name}{`));
   return body.split('\n').filter(matches).reduce((sum, line) => sum + Number(line.split(' ').at(-1)), 0);
 }
@@ -153,16 +150,15 @@ try {
   psql(registrySeed());
   runDockerCompose(run, ['-p', brokerProject, '-f', brokerCompose, 'up', '-d', '--wait', 'mqtt-broker'], { env: brokerEnv });
 
-  // Stand-in Telemetry Runtime: fails the first observation, can be slowed, records the rest.
   const observations = [];
   let sourceIdentityVerified = false;
   let failNext = true;
-  let responseDelay = 0;
+  let slowBatchGate = null;
   telemetryServer = createHTTPSServer({
     key: await readFile(join(pkiDir, 'telemetry-key.pem')), cert: await readFile(join(pkiDir, 'telemetry-cert.pem')),
     ca: await readFile(join(pkiDir, 'ca.pem')), minVersion: 'TLSv1.3', requestCert: true, rejectUnauthorized: true,
   }, async (request, response) => {
-    if (request.method !== 'POST' || request.url !== '/internal/v1/telemetry/sources/observations:accept') {
+    if (request.method !== 'POST' || request.url !== '/internal/v1/telemetry/sources/observations:acceptBatch') {
       response.writeHead(404).end();
       return;
     }
@@ -170,19 +166,27 @@ try {
     sourceIdentityVerified = String(peer?.subjectaltname ?? '').includes('URI:spiffe://hvac.local/mqtt-telemetry-adapter');
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
-    const observation = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    if (responseDelay > 0) await new Promise((resolveWait) => setTimeout(resolveWait, responseDelay));
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const batch = Array.isArray(body?.observations) ? body.observations : null;
+    if (!batch || batch.length === 0 || batch.length > 512) {
+      response.writeHead(400, { 'content-type': 'application/json' }).end('{"error":"invalid observation batch"}');
+      return;
+    }
+    if (slowBatchGate) await slowBatchGate;
     if (failNext) {
       failNext = false;
       response.writeHead(503, { 'content-type': 'application/json' }).end('{"error":"temporary test outage"}');
       return;
     }
-    observations.push(observation);
-    response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
-      observationId: randomUUID(), evidenceId: '', status: observation.device && observation.point ? 'ACCEPTED' : 'QUARANTINED', quality: 'GOOD',
-      qualityReasons: [], quarantineReason: '', deviceId: observation.device?.deviceId ?? '', businessRevision: observations.length,
-      stateChanged: true, positionAdvanced: true,
-    }));
+    const receipts = batch.map((observation) => {
+      observations.push(observation);
+      return {
+        observationId: randomUUID(), evidenceId: '', status: observation.device && observation.point ? 'ACCEPTED' : 'QUARANTINED', quality: 'GOOD',
+        qualityReasons: [], quarantineReason: '', deviceId: observation.device?.deviceId ?? '', businessRevision: observations.length,
+        stateChanged: true, positionAdvanced: true,
+      };
+    });
+    response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ receipts }));
   });
   telemetryServer.listen({ host: '127.0.0.1', port: telemetryPort });
   await once(telemetryServer, 'listening');
@@ -203,10 +207,7 @@ try {
   const connectivityMetrics = `http://127.0.0.1:${connectivityPort}/metrics`;
   await waitFor(async () => await httpStatus(connectivityReady) === 200, 30000, 'Connectivity readiness');
 
-  // Public TLS ingress stand-in forwards only its own verified workload identity.
-  // The lifecycle and issuance run in the real Connectivity process and database.
-  // First enrollment carries no client certificate and the stand-in never reads one,
-  // so it does not ask for one (and never accepts an unverified one).
+  // Ingress stand-in forwards verified workload identity without requesting client certs.
   enrollmentServer = createHTTPSServer({
     key: await readFile(join(pkiDir, 'web-key.pem')), cert: await readFile(join(pkiDir, 'web-cert.pem')), minVersion: 'TLSv1.3',
   }, (request, response) => {
@@ -234,7 +235,6 @@ try {
   const publisherReady = `http://127.0.0.1:${publisherPort}/health/ready`;
   const publisherMetrics = `http://127.0.0.1:${publisherPort}/metrics`;
   await waitFor(async () => await httpStatus(publisherReady) === 200, 30000, 'publisher readiness');
-  // Credential state exists only after the real code/CSR enrollment above.
   run('docker', ['compose', '-p', brokerProject, '-f', brokerCompose, 'exec', '-T', 'mqtt-broker', 'mosquitto_pub',
     '-h', 'localhost', '-p', '8883', '-V', 'mqttv5', '-q', '1', '--cafile', '/mosquitto/config/pki/ca.pem',
     '--cert', '/mosquitto/config/pki/mqtt-gateway-cert.pem', '--key', '/mosquitto/config/pki/mqtt-gateway-key.pem',
@@ -242,7 +242,6 @@ try {
   await waitFor(() => psql(`SELECT count(*) FROM connectivity.uplink_quarantine WHERE gateway_id = ${quote(gatewayId)} AND reason_code = 'MESSAGE_INVALID'`) === '1', 15000, 'poison message quarantine evidence');
   await waitFor(() => observations.length >= expectedPointCount, 60000, `${expectedPointCount} observations`);
 
-  // Every value names the Gateway as its source and carries the Registry identity.
   const first = observations.slice(0, expectedPointCount);
   const deviceIds = new Set(first.map((observation) => observation.device?.deviceId));
   const unresolved = first.filter((observation) => observation.sourceId !== gatewayId || observation.device?.tenantId !== tenantId || observation.device?.siteId !== siteId
@@ -254,13 +253,18 @@ try {
   }
 
   // Backlog: a slow Telemetry fills the Gateway queue; nothing is dropped once it recovers.
-  responseDelay = 150;
+  let releaseSlowTelemetry = null;
+  slowBatchGate = new Promise((resolveGate) => { releaseSlowTelemetry = resolveGate; });
   let peakQueueDepth = 0;
-  await waitFor(async () => {
-    peakQueueDepth = Math.max(peakQueueDepth, await metric(connectivityMetrics, 'hvac_mqtt_gateway_queue_depth'));
-    return peakQueueDepth >= 2;
-  }, 60000, 'a full Gateway queue while Telemetry is slow');
-  responseDelay = 0;
+  try {
+    await waitFor(async () => {
+      peakQueueDepth = Math.max(peakQueueDepth, await metric(connectivityMetrics, 'hvac_mqtt_gateway_queue_depth'));
+      return peakQueueDepth >= 2;
+    }, 60000, 'a full Gateway queue while Telemetry is slow');
+  } finally {
+    slowBatchGate = null;
+    releaseSlowTelemetry?.();
+  }
   const publishedMessages = async () => metric(publisherMetrics, 'hvac_edge_mqtt_publishes_total{outcome="queued"}');
   const processedMessages = async () => metric(connectivityMetrics, 'hvac_mqtt_messages_processed_total{outcome="success"}');
   await waitFor(async () => (await processedMessages()) >= (await publishedMessages()) && await metric(connectivityMetrics, 'hvac_mqtt_gateway_queue_depth') === 0, 120000, 'backlog drained with every published message processed');

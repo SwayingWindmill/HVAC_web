@@ -2,12 +2,17 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const mqttSourceSPIFFE = "spiffe://hvac.local/mqtt-telemetry-adapter"
@@ -18,19 +23,34 @@ const resolvedIdentityJSON = `"device":{"tenantId":"` + ingestTenantA + `","site
 	`"point":{"pointId":"018f2e00-3100-7000-8000-000000000001","sensorId":null,"pointType":"TELEMETRY","valueType":"NUMBER","unit":"Cel","counterDecreaseMode":null,"counterRolloverModulus":null,"pointRevision":3}`
 
 type fakeObservationAcceptor struct {
+	batches    [][]ObservationCandidate
 	candidates []ObservationCandidate
-	receipt    ObservationReceipt
+	receipts   []ObservationReceipt
+	receiptFn  func([]ObservationCandidate) ([]ObservationReceipt, error)
 	err        error
 }
 
-func (fake *fakeObservationAcceptor) AcceptObservation(_ context.Context, candidate ObservationCandidate) (ObservationReceipt, error) {
-	fake.candidates = append(fake.candidates, candidate)
-	return fake.receipt, fake.err
+func (fake *fakeObservationAcceptor) AcceptObservationBatch(_ context.Context, candidates []ObservationCandidate) ([]ObservationReceipt, error) {
+	copied := append([]ObservationCandidate(nil), candidates...)
+	fake.batches = append(fake.batches, copied)
+	fake.candidates = append(fake.candidates, copied...)
+	if fake.receiptFn != nil {
+		return fake.receiptFn(copied)
+	}
+	if fake.err != nil {
+		return nil, fake.err
+	}
+	if len(fake.receipts) > 0 {
+		return append([]ObservationReceipt(nil), fake.receipts...), nil
+	}
+	return make([]ObservationReceipt, len(candidates)), nil
 }
 
 type fakeHistoricalObservationAcceptor struct {
 	candidates []ObservationCandidate
+	batches    [][]ObservationCandidate
 	receipt    ObservationReceipt
+	receipts   []ObservationReceipt
 	err        error
 }
 
@@ -39,27 +59,47 @@ func (fake *fakeHistoricalObservationAcceptor) AcceptHistoricalObservation(_ con
 	return fake.receipt, fake.err
 }
 
+func (fake *fakeHistoricalObservationAcceptor) AcceptHistoricalObservationBatch(_ context.Context, candidates []ObservationCandidate) ([]ObservationReceipt, error) {
+	copied := append([]ObservationCandidate(nil), candidates...)
+	fake.batches = append(fake.batches, copied)
+	fake.candidates = append(fake.candidates, copied...)
+	if fake.err != nil {
+		return nil, fake.err
+	}
+	if len(fake.receipts) > 0 {
+		return append([]ObservationReceipt(nil), fake.receipts...), nil
+	}
+	return make([]ObservationReceipt, len(candidates)), nil
+}
+
 func TestSourceModesReuseOneAcceptancePath(t *testing.T) {
 	now := time.Date(2026, 7, 24, 2, 0, 5, 0, time.UTC)
 	for _, sourcePath := range []SourcePath{SourcePathWebhook, SourcePathPush, SourcePathPoll, SourcePathReconciliation} {
 		t.Run(string(sourcePath), func(t *testing.T) {
-			acceptor := &fakeObservationAcceptor{receipt: ObservationReceipt{
+			acceptor := &fakeObservationAcceptor{receipts: []ObservationReceipt{{
 				ObservationID: eventA, Status: ObservationAccepted, Quality: QualityGood,
 				DeviceID: deviceA, BusinessRevision: 2, StateChanged: true, PositionAdvanced: true,
-			}}
+			}}}
 			handler := NewHandler(ServerConfig{
 				ObservationAcceptor: acceptor,
 				AllowedSourceSPIFFE: mqttSourceSPIFFE,
 				Now:                 func() time.Time { return now },
 			})
-			body := `{"sourceId":"` + sourceA + `","sourcePath":"` + string(sourcePath) + `","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
-			request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, strings.NewReader(body))
+			item := `{"sourceId":"` + sourceA + `","sourcePath":"` + string(sourcePath) + `","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
+			request := httptest.NewRequest(http.MethodPost, InternalSourceObservationBatchPath, strings.NewReader(`{"observations":[`+item+`]}`))
 			request.Header.Set("Content-Type", "application/json")
 			request.TLS = verifiedTLSState(mqttSourceSPIFFE)
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, request)
 			if recorder.Code != http.StatusOK {
 				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			var response sourceObservationBatchResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if len(response.Receipts) != 1 || response.Receipts[0].ObservationID != eventA || response.Receipts[0].BusinessRevision != 2 {
+				t.Fatalf("response=%#v", response)
 			}
 			if len(acceptor.candidates) != 1 {
 				t.Fatalf("candidates=%#v", acceptor.candidates)
@@ -139,8 +179,8 @@ func TestHistoricalReplayCannotEnterThroughLiveSourceRoute(t *testing.T) {
 		ObservationAcceptor: &fakeObservationAcceptor{},
 		AllowedSourceSPIFFE: mqttSourceSPIFFE,
 	})
-	body := `{"sourceId":"` + sourceA + `","sourcePath":"HISTORY_REPLAY","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"replay","offset":7,"eventId":"` + eventA + `"}}`
-	request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, strings.NewReader(body))
+	body := `{"observations":[{"sourceId":"` + sourceA + `","sourcePath":"HISTORY_REPLAY","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"replay","offset":7,"eventId":"` + eventA + `"}}]}`
+	request := httptest.NewRequest(http.MethodPost, InternalSourceObservationBatchPath, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.TLS = verifiedTLSState(mqttSourceSPIFFE)
 	recorder := httptest.NewRecorder()
@@ -156,7 +196,7 @@ func TestSourceAuthenticationAndScopeFailClosed(t *testing.T) {
 		ObservationAcceptor: acceptor,
 		AllowedSourceSPIFFE: mqttSourceSPIFFE,
 	})
-	validBody := `{"sourceId":"` + sourceA + `","sourcePath":"WEBHOOK","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
+	validBody := `{"observations":[{"sourceId":"` + sourceA + `","sourcePath":"WEBHOOK","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}]}`
 
 	tests := []struct {
 		name   string
@@ -173,7 +213,7 @@ func TestSourceAuthenticationAndScopeFailClosed(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, strings.NewReader(test.body))
+			request := httptest.NewRequest(http.MethodPost, InternalSourceObservationBatchPath, strings.NewReader(test.body))
 			request.Header.Set("Content-Type", "application/json")
 			if test.header != "" {
 				request.Header.Set(test.header, sourceA)
@@ -194,7 +234,13 @@ func TestSourceAuthenticationAndScopeFailClosed(t *testing.T) {
 }
 
 func TestSourceFailsClosedOnMalformedAndDependencyFailure(t *testing.T) {
-	validBody := `{"sourceId":"` + sourceA + `","sourcePath":"WEBHOOK","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
+	validItem := `{"sourceId":"` + sourceA + `","sourcePath":"WEBHOOK","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"tb-telemetry-0","offset":100,"eventId":"` + eventA + `"}}`
+	validBody := `{"observations":[` + validItem + `]}`
+	tooManyItems := make([]string, MaxObservationBatchSize+1)
+	for index := range tooManyItems {
+		tooManyItems[index] = validItem
+	}
+	oversizedBatchBody := `{"observations":[` + strings.Join(tooManyItems, ",") + `]}`
 	for _, test := range []struct {
 		name        string
 		acceptor    *fakeObservationAcceptor
@@ -204,13 +250,16 @@ func TestSourceFailsClosedOnMalformedAndDependencyFailure(t *testing.T) {
 		code        string
 	}{
 		{name: "malformed", acceptor: &fakeObservationAcceptor{}, body: `{}`, contentType: "application/json", status: http.StatusBadRequest, code: "TELEMETRY_SOURCE_REQUEST_INVALID"},
+		{name: "empty batch", acceptor: &fakeObservationAcceptor{}, body: `{"observations":[]}`, contentType: "application/json", status: http.StatusBadRequest, code: "TELEMETRY_SOURCE_REQUEST_INVALID"},
+		{name: "over max batch size", acceptor: &fakeObservationAcceptor{}, body: oversizedBatchBody, contentType: "application/json", status: http.StatusBadRequest, code: "TELEMETRY_SOURCE_REQUEST_INVALID"},
+		{name: "unknown outer field", acceptor: &fakeObservationAcceptor{}, body: `{"observations":[` + validItem + `],"extra":1}`, contentType: "application/json", status: http.StatusBadRequest, code: "TELEMETRY_SOURCE_REQUEST_INVALID"},
 		{name: "missing content type", acceptor: &fakeObservationAcceptor{}, body: validBody, status: http.StatusBadRequest, code: "TELEMETRY_SOURCE_REQUEST_INVALID"},
 		{name: "JSON prefix bypass", acceptor: &fakeObservationAcceptor{}, body: validBody, contentType: "application/jsonp", status: http.StatusBadRequest, code: "TELEMETRY_SOURCE_REQUEST_INVALID"},
 		{name: "store unavailable", acceptor: &fakeObservationAcceptor{err: errors.New("postgres unavailable")}, body: validBody, contentType: "application/json", status: http.StatusServiceUnavailable, code: "TELEMETRY_SOURCE_UNAVAILABLE"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			handler := NewHandler(ServerConfig{ObservationAcceptor: test.acceptor, AllowedSourceSPIFFE: mqttSourceSPIFFE})
-			request := httptest.NewRequest(http.MethodPost, InternalSourceObservationPath, strings.NewReader(test.body))
+			request := httptest.NewRequest(http.MethodPost, InternalSourceObservationBatchPath, strings.NewReader(test.body))
 			if test.contentType != "" {
 				request.Header.Set("Content-Type", test.contentType)
 			}
@@ -221,6 +270,130 @@ func TestSourceFailsClosedOnMalformedAndDependencyFailure(t *testing.T) {
 				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 			}
 		})
+	}
+}
+
+type recordingRateCounter struct {
+	calls []string
+	deny  map[string]bool
+}
+
+func (counter *recordingRateCounter) Allow(_ context.Context, key string, _ time.Duration, _ int) (bool, error) {
+	counter.calls = append(counter.calls, key)
+	return !counter.deny[key], nil
+}
+
+func TestSourceBatchChecksRateLimitOncePerUniqueSourceAndPreservesAlignment(t *testing.T) {
+	now := time.Date(2026, 7, 24, 2, 0, 5, 0, time.UTC)
+	counter := &recordingRateCounter{deny: map[string]bool{}}
+	limiter := limitpolicy.NewLimiter(counter, &limitpolicy.Policy{
+		Version: 1,
+		Limits:  []limitpolicy.Limit{{Dimension: limitpolicy.DimensionTelemetryIngest, Window: time.Minute, Burst: 1, FailClosed: true}},
+	})
+	registry := observability.NewRegistry()
+	acceptor := &fakeObservationAcceptor{
+		receiptFn: func(candidates []ObservationCandidate) ([]ObservationReceipt, error) {
+			receipts := make([]ObservationReceipt, len(candidates))
+			for index, candidate := range candidates {
+				if index == 1 {
+					receipts[index] = ObservationReceipt{
+						ObservationID: candidate.Position.EventID, Status: ObservationQuarantined, Quality: QualityInvalid,
+						QualityReasons: []QualityReason{}, QuarantineReason: QuarantineMappingNotFound, PositionAdvanced: true,
+					}
+					continue
+				}
+				receipts[index] = ObservationReceipt{
+					ObservationID: candidate.Position.EventID, Status: ObservationAccepted, Quality: QualityGood,
+					QualityReasons: []QualityReason{}, DeviceID: deviceA, BusinessRevision: 4, StateChanged: true, PositionAdvanced: true,
+				}
+			}
+			return receipts, nil
+		},
+	}
+	handler := NewHandler(ServerConfig{
+		ObservationAcceptor: acceptor,
+		AllowedSourceSPIFFE: mqttSourceSPIFFE,
+		Metrics:             registry,
+		RateLimiter:         limiter,
+		Now:                 func() time.Time { return now },
+	})
+
+	source2 := "EG8200-COMMERCIAL-002"
+	item1 := `{"sourceId":"` + sourceA + `","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"p0","offset":1,"eventId":"018f2e00-8000-7000-8000-000000000001"}}`
+	item2 := `{"sourceId":"` + sourceA + `","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-99","device":null,"point":null,"telemetryKey":"zone.temperature","value":24.0,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:01Z","sourcePosition":{"partition":"p0","offset":2,"eventId":"018f2e00-8000-7000-8000-000000000002"}}`
+	item3 := `{"sourceId":"` + source2 + `","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.humidity","value":55.0,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:02Z","sourcePosition":{"partition":"p1","offset":1,"eventId":"018f2e00-8000-7000-8000-000000000003"}}`
+	body := `{"observations":[` + item1 + `,` + item2 + `,` + item3 + `]}`
+
+	request := httptest.NewRequest(http.MethodPost, InternalSourceObservationBatchPath, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(counter.calls) != 2 || counter.calls[0] != "telemetry-ingest:"+sourceA || counter.calls[1] != "telemetry-ingest:"+source2 {
+		t.Fatalf("rate limiter calls=%#v, want once per unique sourceId", counter.calls)
+	}
+	var response sourceObservationBatchResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Receipts) != 3 ||
+		response.Receipts[0].ObservationID != "018f2e00-8000-7000-8000-000000000001" || response.Receipts[0].Status != ObservationAccepted ||
+		response.Receipts[1].ObservationID != "018f2e00-8000-7000-8000-000000000002" || response.Receipts[1].Status != ObservationQuarantined ||
+		response.Receipts[2].ObservationID != "018f2e00-8000-7000-8000-000000000003" || response.Receipts[2].Status != ObservationAccepted {
+		t.Fatalf("misaligned receipts=%#v", response.Receipts)
+	}
+
+	metricsRec := httptest.NewRecorder()
+	registry.Handler().ServeHTTP(metricsRec, httptest.NewRequest("GET", "/metrics", nil))
+	metricsBody := metricsRec.Body.String()
+	if !strings.Contains(metricsBody, `hvac_s2_ingest_records_total{outcome="success",reason_family="none"} 2`) ||
+		!strings.Contains(metricsBody, `hvac_s2_ingest_records_total{outcome="rejected",reason_family="scope"} 1`) ||
+		!strings.Contains(metricsBody, `hvac_s2_quarantine_records_total{outcome="rejected",reason_family="scope"} 1`) {
+		t.Fatalf("unexpected batch metrics:\n%s", metricsBody)
+	}
+
+	counter.deny["telemetry-ingest:"+source2] = true
+	limitedReq := httptest.NewRequest(http.MethodPost, InternalSourceObservationBatchPath, strings.NewReader(body))
+	limitedReq.Header.Set("Content-Type", "application/json")
+	limitedReq.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	limitedRec := httptest.NewRecorder()
+	handler.ServeHTTP(limitedRec, limitedReq)
+	if limitedRec.Code != http.StatusTooManyRequests || !strings.Contains(limitedRec.Body.String(), "TELEMETRY_INGEST_RATE_LIMITED") {
+		t.Fatalf("rate limited status=%d body=%s", limitedRec.Code, limitedRec.Body.String())
+	}
+	if len(acceptor.batches) != 1 {
+		t.Fatalf("rate limited batch still reached acceptor: %d", len(acceptor.batches))
+	}
+}
+
+func TestSourceBatchAllowsLargeBodyAboveLegacy96KiBLimit(t *testing.T) {
+	items := make([]string, 300)
+	for index := range items {
+		items[index] = fmt.Sprintf(
+			`{"sourceId":"%s","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-01",%s,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-07-24T02:00:00Z","sourcePosition":{"partition":"p0","offset":%d,"eventId":"018f2e00-8000-7000-8000-%012d"}}`,
+			sourceA, resolvedIdentityJSON, index+1, index+1,
+		)
+	}
+	body := `{"observations":[` + strings.Join(items, ",") + `]}`
+	if len(body) <= maximumSourceObservationSize {
+		t.Fatalf("expected body > 96 KiB, got %d", len(body))
+	}
+	acceptor := &fakeObservationAcceptor{}
+	handler := NewHandler(ServerConfig{
+		ObservationAcceptor: acceptor,
+		AllowedSourceSPIFFE: mqttSourceSPIFFE,
+		Now:                 func() time.Time { return time.Date(2026, 7, 24, 2, 0, 5, 0, time.UTC) },
+	})
+	request := httptest.NewRequest(http.MethodPost, InternalSourceObservationBatchPath, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || len(acceptor.candidates) != 300 {
+		t.Fatalf("large batch status=%d count=%d body=%s", recorder.Code, len(acceptor.candidates), recorder.Body.String())
 	}
 }
 

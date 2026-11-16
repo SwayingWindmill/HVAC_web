@@ -117,11 +117,45 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 	if device, err := store.ResolveDevice(ctx, resolvedA, "UNKNOWN"); err != nil || device != "" {
 		t.Fatalf("unregistered source key=%q err=%v", device, err)
 	}
-	if point, err := store.ResolvePoint(ctx, resolvedA, meterA, "active_power"); err != nil || point == nil || point.PointID != pointA || point.PointRevision != 1 {
-		t.Fatalf("Point=%#v err=%v", point, err)
+	bindingsA, err := store.ResolveBindings(ctx, resolvedA, []adapter.DevicePointQuery{
+		{SourceKey: "METER-01", PointCode: "active_power"},
+		{SourceKey: "METER-01", PointCode: "active_power"},
+		{SourceKey: "METER-01", PointCode: "unregistered_point"},
+		{SourceKey: "UNKNOWN", PointCode: "active_power"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveBindings A err=%v", err)
 	}
-	if point, err := store.ResolvePoint(ctx, resolvedB, meterA, "active_power"); err != nil || point != nil {
-		t.Fatalf("Tenant B resolved Tenant A's Point=%#v err=%v", point, err)
+	if bindingsA.Device("METER-01") != meterA || bindingsA.Device("UNKNOWN") != "" {
+		t.Fatalf("bindingsA.Devices=%#v", bindingsA.Devices)
+	}
+	if point := bindingsA.Point(meterA, "active_power"); point == nil || point.PointID != pointA || point.PointRevision != 1 {
+		t.Fatalf("Point=%#v", point)
+	}
+	if point := bindingsA.Point(meterA, "unregistered_point"); point != nil {
+		t.Fatalf("unregistered point=%#v", point)
+	}
+	bindingsB, err := store.ResolveBindings(ctx, resolvedB, []adapter.DevicePointQuery{
+		{SourceKey: "METER-01", PointCode: "active_power"},
+		{SourceKey: "METER-01", PointCode: "run_command"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveBindings B err=%v", err)
+	}
+	if bindingsB.Device("METER-01") != meterB || bindingsB.Point(meterA, "active_power") != nil || bindingsB.Point(meterB, "active_power") != nil {
+		t.Fatalf("Tenant B resolved unexpected bindings=%#v", bindingsB)
+	}
+	if point := bindingsB.Point(meterB, "run_command"); point == nil || point.PointID != commandB {
+		t.Fatalf("Tenant B command point=%#v", point)
+	}
+	crossTenant, err := store.ResolveBindings(ctx, adapter.Gateway{ID: gatewayA, TenantID: tenantB, SiteID: siteB}, []adapter.DevicePointQuery{
+		{SourceKey: "METER-01", PointCode: "active_power"},
+	})
+	if err != nil {
+		t.Fatalf("cross-tenant ResolveBindings err=%v", err)
+	}
+	if len(crossTenant.Devices) != 0 || len(crossTenant.Points) != 0 {
+		t.Fatalf("Tenant B resolved Tenant A's Gateway bindings=%#v", crossTenant)
 	}
 	if _, err := store.ResolveGateway(ctx, unknown); !errors.Is(err, adapter.ErrGatewayUnknown) {
 		t.Fatalf("unknown Gateway err=%v", err)

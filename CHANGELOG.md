@@ -9,6 +9,10 @@
 
 #### 变更
 
+- 将实时遥测写入热路径重构为端到端微批处理，消除逐点同步 HTTP、逐点档案库查询与逐点 PostgreSQL 事务锁竞争：
+  - `modules/connectivity`（`pkg/connectivity.Store.ResolveBindings`、`pkg/adapter` 与 `cmd/connectivity`）在单个只读事务中批量解析网关下属设备与点位绑定，队列支持空队列零延迟直刷或窗口聚合（`CONNECTIVITY_BATCH_MAX_MESSAGES` / `CONNECTIVITY_BATCH_WINDOW`，受 `512` 条与 `3 MiB` 编码上限约束），通过 `POST /internal/v1/telemetry/sources/observations:acceptBatch` 转发给 `telemetry-worker` 并严格按到达顺序在整批落盘后回执 MQTT ACK；同步移除旧的逐点接口 `/internal/v1/telemetry/sources/observations:accept` 与 `ResolvePoint`。
+  - `modules/telemetry`（`AcceptObservationBatch` / `AcceptHistoricalObservationBatch`、`source_server.go` 与 `probe_offset.go`）在单次 `ReadCommitted` 事务内按统一 `hashtextextended` 锁序获取分区、事件与设备咨询锁并预取事实，内存顺序判定后经 `pgx.Batch` 批量落盘，每台设备每批最多重算一次设备快照与实时推送出站消息，保持与历史重放、点位健康检查及 ClickHouse 历史中继链路完全兼容。
+
 - 将遥测在离线状态收敛为单一事实源，并降低能耗计算对档案服务的逐条查询开销：
   - MQTT 上线、断线与遗嘱事件（`LWT`）在 `modules/connectivity` 解析出目标设备后，统一写入 `telemetry_runtime.presence_signals` 并仅重算该设备自身快照，网关离线不再级联把下属子设备标为离线（ADR 0002、ADR 0015）。
   - 遥测在读与定时巡检共同收口冻结的「最新」快照：`TelemetryPresentState` 新增可选的 `unchangedSince` 与 `freshWithinSeconds`，`SweepDuePresence` 定时重算已过鲜活窗的设备，`readLatestSnapshot` 在读侧通过 `RefreshSnapshotAt` 实时投影过期状态且不改写库内缓存与 `businessRevision`（ADR 0003）。

@@ -365,3 +365,168 @@ func TestEvaluateObservationSourceUntrustedSkipsFlatlineAndRecordsRejectedHealth
 		t.Fatalf("older rejected untrusted candidate must not record health: %#v", olderDecision)
 	}
 }
+
+func TestPostgresStoreBatchBoundaryValidation(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	store := &PostgresStore{}
+	live := validObservationCandidate(now)
+
+	if _, err := store.AcceptObservationBatch(t.Context(), nil); err == nil {
+		t.Fatal("expected empty live batch rejection")
+	}
+	if _, err := store.AcceptObservationBatch(t.Context(), make([]ObservationCandidate, MaxObservationBatchSize+1)); err == nil {
+		t.Fatal("expected oversized live batch rejection")
+	}
+	replay := live
+	replay.SourcePath = SourcePathHistoryReplay
+	if _, err := store.AcceptObservationBatch(t.Context(), []ObservationCandidate{live, replay}); err == nil {
+		t.Fatal("expected HISTORY_REPLAY rejection in live batch")
+	}
+
+	if _, err := store.AcceptHistoricalObservationBatch(t.Context(), nil); err == nil {
+		t.Fatal("expected empty historical batch rejection")
+	}
+	if _, err := store.AcceptHistoricalObservationBatch(t.Context(), make([]ObservationCandidate, MaxObservationBatchSize+1)); err == nil {
+		t.Fatal("expected oversized historical batch rejection")
+	}
+	if _, err := store.AcceptHistoricalObservationBatch(t.Context(), []ObservationCandidate{live}); err == nil {
+		t.Fatal("expected non-HISTORY_REPLAY rejection in historical batch")
+	}
+	badEntity := replay
+	badEntity.ExternalEntityType = "ASSET"
+	if _, err := store.AcceptHistoricalObservationBatch(t.Context(), []ObservationCandidate{badEntity}); err == nil {
+		t.Fatal("expected non-DEVICE rejection in historical batch")
+	}
+	withDevice := replay
+	withDevice.Device = &ResolvedDevice{TenantID: ingestTenantA, SiteID: siteA, DeviceID: deviceA}
+	if _, err := store.AcceptHistoricalObservationBatch(t.Context(), []ObservationCandidate{withDevice}); err == nil {
+		t.Fatal("expected caller-supplied Device rejection in historical batch")
+	}
+	withPoint := replay
+	withPoint.Point = &ResolvedPoint{PointID: "018f2e00-3100-7000-8000-000000000001", PointType: "TELEMETRY", ValueType: "NUMBER", PointRevision: 1}
+	if _, err := store.AcceptHistoricalObservationBatch(t.Context(), []ObservationCandidate{withPoint}); err == nil {
+		t.Fatal("expected caller-supplied Point rejection in historical batch")
+	}
+}
+
+func TestCollectBatchLockKeysAndEvaluateBatchCandidatesInMemory(t *testing.T) {
+	t0 := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	unitCel := "Cel"
+	dev := ResolvedDevice{TenantID: ingestTenantA, SiteID: siteA, DeviceID: deviceA}
+	ptRun := ResolvedPoint{PointID: "018f2e00-3100-7000-8000-000000000010", PointType: "STATE", ValueType: "STRING", PointRevision: 1}
+	ptTemp := ResolvedPoint{PointID: "018f2e00-3100-7000-8000-000000000011", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unitCel, PointRevision: 1}
+	ptTempV2 := ResolvedPoint{PointID: "018f2e00-3100-7000-8000-000000000011", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unitCel, PointRevision: 2}
+	ptCool := ResolvedPoint{PointID: "018f2e00-3100-7000-8000-000000000012", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &unitCel, PointRevision: 1}
+
+	c0 := ObservationCandidate{
+		SourceID: sourceA, SourcePath: SourcePathPush, ExternalEntityType: "DEVICE", ExternalID: "dev-a",
+		Device: &dev, Point: &ptRun, TelemetryKey: "run_state",
+		Value: json.RawMessage(`"RUNNING"`), ValueType: "STRING",
+		SampledAt: t0, ReceivedAt: t0, Position: SourcePosition{Partition: "p0", Offset: 1, EventID: "018f2e00-8000-7000-8000-000000000001"},
+	}
+	c1 := ObservationCandidate{
+		SourceID: sourceA, SourcePath: SourcePathPush, ExternalEntityType: "DEVICE", ExternalID: "dev-a",
+		Device: &dev, Point: &ptTemp, TelemetryKey: "zone.temperature",
+		Value: json.RawMessage(`24.0`), ValueType: "NUMBER", Unit: &unitCel,
+		SampledAt: t0.Add(time.Second), ReceivedAt: t0.Add(time.Second),
+		Position: SourcePosition{Partition: "p0", Offset: 2, EventID: "018f2e00-8000-7000-8000-000000000002"},
+	}
+	c2 := ObservationCandidate{
+		SourceID: sourceA, SourcePath: SourcePathPush, ExternalEntityType: "DEVICE", ExternalID: "dev-a",
+		Device: &dev, Point: &ptTempV2, TelemetryKey: "zone.temperature",
+		Value: json.RawMessage(`500.0`), ValueType: "NUMBER", Unit: &unitCel,
+		SampledAt: t0.Add(2 * time.Second), ReceivedAt: t0.Add(2 * time.Second),
+		Position: SourcePosition{Partition: "p0", Offset: 3, EventID: "018f2e00-8000-7000-8000-000000000003"},
+	}
+	c3 := ObservationCandidate{
+		SourceID: sourceA, SourcePath: SourcePathPush, ExternalEntityType: "DEVICE", ExternalID: "dev-a",
+		Device: &dev, Point: &ptCool, TelemetryKey: "derived.temp",
+		Value: json.RawMessage(`10.0`), ValueType: "NUMBER", Unit: &unitCel,
+		SampledAt: t0.Add(3 * time.Second), ReceivedAt: t0.Add(3 * time.Second),
+		Position: SourcePosition{Partition: "p0", Offset: 4, EventID: "018f2e00-8000-7000-8000-000000000004"},
+	}
+	c4Dup := c1
+	c4Dup.Position.Offset = 5
+	c5Unmapped := ObservationCandidate{
+		SourceID: sourceA, SourcePath: SourcePathPush, ExternalEntityType: "DEVICE", ExternalID: "missing-dev",
+		TelemetryKey: "zone.temperature", Value: json.RawMessage(`20.0`), ValueType: "NUMBER", Unit: &unitCel,
+		SampledAt: t0.Add(4 * time.Second), ReceivedAt: t0.Add(4 * time.Second),
+		Position: SourcePosition{Partition: "p0", Offset: 6, EventID: "018f2e00-8000-7000-8000-000000000005"},
+	}
+
+	candidates := []ObservationCandidate{c0, c1, c2, c3, c4Dup, c5Unmapped}
+	lockKeys := collectBatchLockKeys(candidates)
+	if len(lockKeys) != 7 {
+		t.Fatalf("expected 7 deduplicated lock keys (1 partition + 5 events + 1 device), got %d: %#v", len(lockKeys), lockKeys)
+	}
+
+	minTemp, maxTemp := -50.0, 100.0
+	state := &batchWorkingState{
+		seenEvents:    map[sourceEventKey]string{},
+		positions:     map[sourcePartitionKey]SourcePositionHead{},
+		knownDevices:  map[string]ResolvedDevice{},
+		knownPoints:   map[deviceKey]ResolvedPoint{},
+		latestByPoint: map[deviceKey]latestPointState{},
+		policies: map[deviceKey]loadedPolicy{
+			{deviceID: deviceA, key: "run_state"}: {
+				policy: ObservationPolicy{Revision: 1, PresencePolicyRevision: 1, ValueType: "STRING", MaxFutureClockSkew: 30 * time.Second, MaxSourceLag: 10 * time.Minute},
+			},
+			{deviceID: deviceA, key: "zone.temperature"}: {
+				policy: ObservationPolicy{Revision: 1, PresencePolicyRevision: 1, ValueType: "NUMBER", Unit: &unitCel, MinimumNumber: &minTemp, MaximumNumber: &maxTemp, MaxFutureClockSkew: 30 * time.Second, MaxSourceLag: 10 * time.Minute},
+			},
+			{deviceID: deviceA, key: "derived.temp"}: {
+				policy: ObservationPolicy{
+					Revision: 1, PresencePolicyRevision: 1, ValueType: "NUMBER", Unit: &unitCel,
+					MaxFutureClockSkew: 30 * time.Second, MaxSourceLag: 10 * time.Minute,
+					QualityChecks: &QualityChecks{
+						Running: []OperatingExpect{{DeviceID: deviceA, Key: "run_state", Equals: "RUNNING"}},
+						Inputs:  []PointRef{{DeviceID: deviceA, Key: "zone.temperature"}},
+					},
+				},
+			},
+		},
+	}
+
+	payloadSHAs := make([]string, len(candidates))
+	for index, candidate := range candidates {
+		sha, err := observationPayloadSHA(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payloadSHAs[index] = sha
+	}
+	seq := 0
+	genID := func(time.Time) (string, error) {
+		seq++
+		return ingestEvent(seq), nil
+	}
+
+	receipts, plan, err := evaluateBatchCandidates(candidates, payloadSHAs, state, EvaluateObservation, genID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipts[0].Status != ObservationAccepted || receipts[1].Status != ObservationAccepted ||
+		receipts[2].Status != ObservationRejected || receipts[3].Status != ObservationAccepted ||
+		receipts[3].Quality != QualityPartial || len(receipts[3].QualityReasons) != 1 || receipts[3].QualityReasons[0] != QualityReasonDerivedInput ||
+		receipts[4].Status != ObservationDuplicate || receipts[4].ObservationID != receipts[1].ObservationID ||
+		receipts[5].Status != ObservationQuarantined {
+		t.Fatalf("unexpected batch receipts: %#v", receipts)
+	}
+	if len(plan.devices) != 1 || len(plan.positions) != 1 || plan.positions[0].candidate.Position.Offset != 6 {
+		t.Fatalf("unexpected deduped devices/positions: devices=%d positions=%#v", len(plan.devices), plan.positions)
+	}
+	if len(plan.points) != 3 {
+		t.Fatalf("expected 3 deduped points, got %d", len(plan.points))
+	}
+	for _, pt := range plan.points {
+		if pt.key == "zone.temperature" && pt.point.PointRevision != 2 {
+			t.Fatalf("expected last point revision kept to prevent 21000, got %d", pt.point.PointRevision)
+		}
+	}
+	if len(plan.latestUpdates) != 4 || !plan.latestUpdates[0].replaceLatest || !plan.latestUpdates[1].replaceLatest || plan.latestUpdates[2].replaceLatest || !plan.latestUpdates[3].replaceLatest {
+		t.Fatalf("unexpected ordered latest updates: %#v", plan.latestUpdates)
+	}
+	if len(plan.reevalDeviceOrder) != 1 || plan.reevalDeviceOrder[0] != deviceA || !plan.maxReceivedAtByDevice[deviceA].Equal(t0.Add(3*time.Second)) {
+		t.Fatalf("unexpected reeval plan: order=%v max=%v", plan.reevalDeviceOrder, plan.maxReceivedAtByDevice)
+	}
+}

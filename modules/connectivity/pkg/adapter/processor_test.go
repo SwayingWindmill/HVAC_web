@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -143,4 +144,180 @@ func newTestProcessor(t *testing.T, identities IdentityResolver, telemetry Runti
 		t.Fatal(err)
 	}
 	return processor
+}
+
+func TestProcessPrefixCoalescesContiguousValidTelemetryAndResolvesBindingsOnce(t *testing.T) {
+	identities := newFakeIdentities()
+	telemetry := &fakeTelemetry{}
+	processor := newTestProcessor(t, identities, telemetry)
+
+	messages := []UplinkMessage{
+		{Topic: telemetryTopic(testGatewayA), Payload: multiPointTelemetryPayload(testGatewayA, messageID(1), 1, "METER-01", 3)},
+		{Topic: telemetryTopic(testGatewayA), Payload: multiPointTelemetryPayload(testGatewayA, messageID(2), 2, "METER-01", 2)},
+		{Topic: telemetryTopic(testGatewayA), Payload: telemetryPayload(testGatewayA, messageID(3), 3, "UNKNOWN-CHILD", "unregistered_point")},
+	}
+	outcomes, err := processor.ProcessPrefix(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("ProcessPrefix error: %v", err)
+	}
+	if len(outcomes) != 3 {
+		t.Fatalf("outcomes=%d, want 3", len(outcomes))
+	}
+	if outcomes[0].Result.Accepted != 3 || outcomes[0].Result.PointCount != 3 || outcomes[0].Result.MessageID != messageID(1) {
+		t.Fatalf("outcome[0]=%#v", outcomes[0])
+	}
+	if outcomes[1].Result.Accepted != 2 || outcomes[1].Result.PointCount != 2 || outcomes[1].Result.MessageID != messageID(2) {
+		t.Fatalf("outcome[1]=%#v", outcomes[1])
+	}
+	if outcomes[2].Result.Quarantined != 1 || outcomes[2].Result.PointCount != 1 || outcomes[2].Result.MessageID != messageID(3) {
+		t.Fatalf("outcome[2]=%#v", outcomes[2])
+	}
+	if calls := identities.bindingsCalls(); len(calls) != 1 {
+		t.Fatalf("ResolveBindings calls=%d, want 1", len(calls))
+	}
+	batches := telemetry.recordedBatches()
+	if len(batches) != 1 || len(batches[0]) != 6 {
+		t.Fatalf("batches=%d len=%d, want 1 batch of 6 observations", len(batches), len(batches[0]))
+	}
+}
+
+func TestProcessPrefixStopsAtBoundaryAnd512PointLimit(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		messages     []UplinkMessage
+		wantConsumed int
+		wantPoints   int
+	}{
+		{
+			name: "stops before invalid telemetry",
+			messages: []UplinkMessage{
+				{Topic: telemetryTopic(testGatewayA), Payload: multiPointTelemetryPayload(testGatewayA, messageID(1), 1, "METER-01", 2)},
+				{Topic: telemetryTopic(testGatewayA), Payload: []byte(`{bad json`)},
+				{Topic: telemetryTopic(testGatewayA), Payload: multiPointTelemetryPayload(testGatewayA, messageID(3), 3, "METER-01", 2)},
+			},
+			wantConsumed: 1,
+			wantPoints:   2,
+		},
+		{
+			name: "stops before runtime event",
+			messages: []UplinkMessage{
+				{Topic: telemetryTopic(testGatewayA), Payload: multiPointTelemetryPayload(testGatewayA, messageID(1), 1, "METER-01", 2)},
+				{Topic: eventTopic(testGatewayA), Payload: eventPayload(testGatewayA, messageID(2), 2)},
+				{Topic: telemetryTopic(testGatewayA), Payload: multiPointTelemetryPayload(testGatewayA, messageID(3), 3, "METER-01", 2)},
+			},
+			wantConsumed: 1,
+			wantPoints:   2,
+		},
+		{
+			name: "stops before exceeding 512 points",
+			messages: []UplinkMessage{
+				{Topic: telemetryTopic(testGatewayA), Payload: multiPointTelemetryPayload(testGatewayA, messageID(1), 1, "METER-01", 300)},
+				{Topic: telemetryTopic(testGatewayA), Payload: multiPointTelemetryPayload(testGatewayA, messageID(2), 2, "METER-01", 212)},
+				{Topic: telemetryTopic(testGatewayA), Payload: multiPointTelemetryPayload(testGatewayA, messageID(3), 3, "METER-01", 1)},
+			},
+			wantConsumed: 2,
+			wantPoints:   512,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			telemetry := &fakeTelemetry{}
+			outcomes, err := newTestProcessor(t, newFakeIdentities(), telemetry).ProcessPrefix(context.Background(), test.messages)
+			if err != nil {
+				t.Fatalf("ProcessPrefix error: %v", err)
+			}
+			if len(outcomes) != test.wantConsumed {
+				t.Fatalf("consumed=%d, want %d", len(outcomes), test.wantConsumed)
+			}
+			batches := telemetry.recordedBatches()
+			if len(batches) != 1 || len(batches[0]) != test.wantPoints {
+				t.Fatalf("batches=%d points=%d, want 1 batch of %d points", len(batches), len(batches[0]), test.wantPoints)
+			}
+		})
+	}
+}
+
+func TestProcessPrefixChunksSingleEnvelopeOver512Points(t *testing.T) {
+	identities := newFakeIdentities()
+	telemetry := &fakeTelemetry{}
+	processor := newTestProcessor(t, identities, telemetry)
+
+	messages := []UplinkMessage{
+		{Topic: telemetryTopic(testGatewayA), Payload: multiPointTelemetryPayload(testGatewayA, messageID(1), 1, "METER-01", 1100)},
+		{Topic: telemetryTopic(testGatewayA), Payload: multiPointTelemetryPayload(testGatewayA, messageID(2), 2, "METER-01", 2)},
+	}
+	outcomes, err := processor.ProcessPrefix(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("ProcessPrefix error: %v", err)
+	}
+	if len(outcomes) != 1 || outcomes[0].Result.PointCount != 1100 || outcomes[0].Result.Accepted != 1100 {
+		t.Fatalf("outcomes=%#v", outcomes)
+	}
+	if calls := identities.bindingsCalls(); len(calls) != 1 || len(calls[0]) != 1100 {
+		t.Fatalf("ResolveBindings calls=%d points=%d", len(calls), len(calls[0]))
+	}
+	batches := telemetry.recordedBatches()
+	if len(batches) != 3 || len(batches[0]) != 512 || len(batches[1]) != 512 || len(batches[2]) != 76 {
+		t.Fatalf("chunk sizes=%v, want [512 512 76]", []int{len(batches[0]), len(batches[1]), len(batches[2])})
+	}
+}
+
+func TestProcessorSplitsLargeBytePayloadsBelowBatchByteLimit(t *testing.T) {
+	identities := newFakeIdentities()
+	telemetry := &fakeTelemetry{}
+	processor := newTestProcessor(t, identities, telemetry)
+
+	largeValue := strings.Repeat("a", 40<<10)
+	messages := make([]UplinkMessage, 90)
+	for index := range messages {
+		payload, err := json.Marshal(map[string]any{
+			"schemaVersion": "2.0",
+			"messageId":     messageID(index + 1),
+			"gatewayId":     testGatewayA,
+			"timestamp":     1786352400000 + int64(index),
+			"sequence":      index + 1,
+			"replay":        false,
+			"payload": map[string]any{
+				"devices": []map[string]any{{
+					"deviceId":        "METER-01",
+					"deviceTimestamp": 1786352399000 + int64(index),
+					"points": []map[string]any{{
+						"code":    "status_text",
+						"value":   largeValue,
+						"quality": 0,
+					}},
+				}},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages[index] = UplinkMessage{Topic: telemetryTopic(testGatewayA), Payload: payload}
+	}
+
+	var allOutcomes []ProcessingOutcome
+	remaining := messages
+	for len(remaining) > 0 {
+		outcomes, err := processor.ProcessPrefix(context.Background(), remaining)
+		if err != nil {
+			t.Fatalf("ProcessPrefix error with %d remaining: %v", len(remaining), err)
+		}
+		allOutcomes = append(allOutcomes, outcomes...)
+		remaining = remaining[len(outcomes):]
+	}
+	if len(allOutcomes) != len(messages) {
+		t.Fatalf("processed=%d, want %d", len(allOutcomes), len(messages))
+	}
+	batches := telemetry.recordedBatches()
+	if len(batches) < 2 {
+		t.Fatalf("expected >1 byte-bounded batch for ~3.6MiB payload, got %d", len(batches))
+	}
+	for batchIndex, batch := range batches {
+		encoded, err := json.Marshal(observationBatchRequest{Observations: batch})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(encoded) > MaxObservationBatchBytes {
+			t.Fatalf("batch[%d] serialized length=%d exceeds MaxObservationBatchBytes=%d", batchIndex, len(encoded), MaxObservationBatchBytes)
+		}
+	}
 }

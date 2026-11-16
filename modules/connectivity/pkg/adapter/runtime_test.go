@@ -43,6 +43,12 @@ func (log *ackLog) await(t *testing.T, id string) {
 	}
 }
 
+func (log *ackLog) snapshot() []string {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	return append([]string(nil), log.acked...)
+}
+
 func TestFullGatewayQueuePausesInsteadOfDropping(t *testing.T) {
 	telemetry := &fakeTelemetry{release: make(chan struct{})}
 	runtime := newTestRuntime(t, telemetry, 1)
@@ -226,4 +232,266 @@ func awaitQueued(t *testing.T, runtime *Runtime, gatewayID string, depth int) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("Gateway %s queue never reached depth %d", gatewayID, depth)
+}
+
+func TestCoalescedBacklogBatchDeliversAndAcksInStrictFIFOOrder(t *testing.T) {
+	telemetry := &fakeTelemetry{
+		release: make(chan struct{}),
+		entered: make(chan struct{}, 4),
+	}
+	runtime := newTestRuntime(t, telemetry, 16)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+	acks := newAckLog()
+
+	// Hold M0 inside AcceptObservationBatch so M1..M3 queue up before the next drain.
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
+		t.Fatal(err)
+	}
+	<-telemetry.entered
+	for index, pointCount := range []int{3, 2, 4} {
+		msgNum := index + 2
+		item := &paho.Publish{
+			Topic:   telemetryTopic(testGatewayA),
+			Payload: multiPointTelemetryPayload(testGatewayA, messageID(msgNum), msgNum, "METER-01", pointCount),
+			QoS:     1,
+		}
+		if err := runtime.enqueue(ctx, nil, item, acks.ack(messageID(msgNum))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(acks.snapshot()) != 0 {
+		t.Fatalf("messages acked before persistence: %v", acks.snapshot())
+	}
+
+	close(telemetry.release)
+	for index := 1; index <= 4; index++ {
+		acks.await(t, messageID(index))
+	}
+	batches := telemetry.recordedBatches()
+	if len(batches) != 2 || len(batches[0]) != 1 || len(batches[1]) != 9 {
+		t.Fatalf("batches=%v, want [1 9] points across 2 AcceptObservationBatch calls", batchSizes(batches))
+	}
+}
+
+func TestMixedBatchPreservesFIFOOrderAndDoesNotReprocessAckedPrefixOnLaterRetry(t *testing.T) {
+	identities := newFakeIdentities()
+	acks := newAckLog()
+	var sawM4Failure int
+	var acksAtM4Failure []string
+	m4Failed := make(chan struct{}, 1)
+
+	telemetry := &fakeTelemetry{
+		release: make(chan struct{}),
+		entered: make(chan struct{}, 4),
+		failHook: func(call int, batch []Observation) error {
+			if len(batch) > 0 && batch[0].SourcePosition.Offset == 5 && sawM4Failure == 0 {
+				sawM4Failure++
+				acksAtM4Failure = acks.snapshot()
+				select {
+				case m4Failed <- struct{}{}:
+				default:
+				}
+				return context.DeadlineExceeded
+			}
+			return nil
+		},
+	}
+	runtime, err := NewRuntime(Config{
+		MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+		TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+		QueueCapacity:    16,
+	}, newTestProcessor(t, identities, telemetry), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.retryDelay = func(int) time.Duration { return 5 * time.Millisecond }
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+
+	// M0 holds the worker while mixed batch [M1(telemetry), M2(invalid JSON), M3(event), M4(telemetry)] queues.
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
+		t.Fatal(err)
+	}
+	<-telemetry.entered
+
+	mixed := []struct {
+		id  string
+		pub *paho.Publish
+	}{
+		{messageID(2), publish(testGatewayA, 2)},
+		{messageID(3), &paho.Publish{Topic: telemetryTopic(testGatewayA), Payload: []byte(`{not-json`), QoS: 1}},
+		{messageID(4), &paho.Publish{Topic: eventTopic(testGatewayA), Payload: eventPayload(testGatewayA, messageID(4), 4), QoS: 1}},
+		{messageID(5), publish(testGatewayA, 5)},
+	}
+	for _, msg := range mixed {
+		if err := runtime.enqueue(ctx, nil, msg.pub, acks.ack(msg.id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	close(telemetry.release)
+	<-m4Failed
+	for index := 1; index <= 5; index++ {
+		acks.await(t, messageID(index))
+	}
+
+	wantAckedBeforeRetry := []string{messageID(1), messageID(2), messageID(3), messageID(4)}
+	if len(acksAtM4Failure) != len(wantAckedBeforeRetry) {
+		t.Fatalf("acks at M4 failure=%v, want %v", acksAtM4Failure, wantAckedBeforeRetry)
+	}
+	for index, want := range wantAckedBeforeRetry {
+		if acksAtM4Failure[index] != want {
+			t.Fatalf("acksAtM4Failure[%d]=%s, want %s", index, acksAtM4Failure[index], want)
+		}
+	}
+	if quarantines := identities.snapshotQuarantines(); len(quarantines) != 1 {
+		t.Fatalf("quarantines=%d, want 1 (M2 must not be re-quarantined)", len(quarantines))
+	}
+	if events := telemetry.recordedEvents(); len(events) != 1 || events[0].MessageID != messageID(4) {
+		t.Fatalf("events=%#v, want 1 event for M3", events)
+	}
+	if got := acks.snapshot(); len(got) != 5 {
+		t.Fatalf("final acks=%v, want 5", got)
+	}
+}
+
+func TestOversizedEnvelopeChunksAcrossBatchCallsBeforeAck(t *testing.T) {
+	acks := newAckLog()
+	var acksBeforeSecondChunk []string
+	telemetry := &fakeTelemetry{
+		failHook: func(call int, batch []Observation) error {
+			if call == 2 {
+				acksBeforeSecondChunk = acks.snapshot()
+			}
+			return nil
+		},
+	}
+	runtime := newTestRuntime(t, telemetry, 8)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+
+	large := &paho.Publish{
+		Topic:   telemetryTopic(testGatewayA),
+		Payload: multiPointTelemetryPayload(testGatewayA, messageID(1), 1, "METER-01", 600),
+		QoS:     1,
+	}
+	if err := runtime.enqueue(ctx, nil, large, acks.ack(messageID(1))); err != nil {
+		t.Fatal(err)
+	}
+	acks.await(t, messageID(1))
+	if len(acksBeforeSecondChunk) != 0 {
+		t.Fatalf("message acked before second chunk completed: %v", acksBeforeSecondChunk)
+	}
+	batches := telemetry.recordedBatches()
+	if len(batches) != 2 || len(batches[0]) != 512 || len(batches[1]) != 88 {
+		t.Fatalf("chunk sizes=%v, want [512 88]", batchSizes(batches))
+	}
+}
+
+func TestTransientBatchFailureRetriesInPlaceWithoutAckingSlice(t *testing.T) {
+	acks := newAckLog()
+	var acksOnFailure [][]string
+	telemetry := &fakeTelemetry{
+		release: make(chan struct{}),
+		entered: make(chan struct{}, 4),
+		failHook: func(call int, batch []Observation) error {
+			if call == 2 || call == 3 {
+				acksOnFailure = append(acksOnFailure, acks.snapshot())
+				return context.DeadlineExceeded
+			}
+			return nil
+		},
+	}
+	runtime := newTestRuntime(t, telemetry, 8)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
+		t.Fatal(err)
+	}
+	<-telemetry.entered
+	for index := 2; index <= 4; index++ {
+		if err := runtime.enqueue(ctx, nil, publish(testGatewayA, index), acks.ack(messageID(index))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(telemetry.release)
+	for index := 1; index <= 4; index++ {
+		acks.await(t, messageID(index))
+	}
+	if len(acksOnFailure) != 2 {
+		t.Fatalf("observed %d transient batch failures, want 2", len(acksOnFailure))
+	}
+	for attempt, seen := range acksOnFailure {
+		if len(seen) != 1 || seen[0] != messageID(1) {
+			t.Fatalf("attempt %d acks=%v, want only [%s]", attempt, seen, messageID(1))
+		}
+	}
+	batches := telemetry.recordedBatches()
+	if len(batches) != 2 || len(batches[0]) != 1 || len(batches[1]) != 3 {
+		t.Fatalf("batches=%v, want [1 3]", batchSizes(batches))
+	}
+}
+
+func TestBatchFlushWindowFlushesImmediatelyAtLimitAndOnTimer(t *testing.T) {
+	t.Run("flushes immediately when batch reaches limit", func(t *testing.T) {
+		telemetry := &fakeTelemetry{}
+		runtime, err := NewRuntime(Config{
+			MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+			TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+			QueueCapacity:    2,
+			BatchMaxMessages: 2,
+			BatchFlushWindow: time.Second,
+		}, newTestProcessor(t, newFakeIdentities(), telemetry), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+		acks := newAckLog()
+
+		started := time.Now()
+		for index := 1; index <= 2; index++ {
+			if err := runtime.enqueue(ctx, nil, publish(testGatewayA, index), acks.ack(messageID(index))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		acks.await(t, messageID(1))
+		acks.await(t, messageID(2))
+		if elapsed := time.Since(started); elapsed >= 500*time.Millisecond {
+			t.Fatalf("limit-reached batch waited %s instead of flushing immediately", elapsed)
+		}
+	})
+
+	t.Run("flushes partial batch when flush window expires", func(t *testing.T) {
+		telemetry := &fakeTelemetry{}
+		runtime, err := NewRuntime(Config{
+			MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+			TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+			QueueCapacity:    8,
+			BatchMaxMessages: 8,
+			BatchFlushWindow: 20 * time.Millisecond,
+		}, newTestProcessor(t, newFakeIdentities(), telemetry), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+		acks := newAckLog()
+
+		if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
+			t.Fatal(err)
+		}
+		acks.await(t, messageID(1))
+	})
+}
+
+func batchSizes(batches [][]Observation) []int {
+	sizes := make([]int, len(batches))
+	for index, batch := range batches {
+		sizes[index] = len(batch)
+	}
+	return sizes
 }

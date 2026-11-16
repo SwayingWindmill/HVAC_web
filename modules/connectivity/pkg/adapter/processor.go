@@ -58,14 +58,53 @@ func (quarantine UplinkQuarantine) PayloadSHA256() string {
 	return hex.EncodeToString(digest[:])
 }
 
+// DevicePointQuery identifies a Device source key and Point code pair to resolve in batch.
+type DevicePointQuery struct {
+	SourceKey string
+	PointCode string
+}
+
+// ResolvedBindings carries Registry Device IDs by source key and Point bindings keyed by
+// PointBindingKey(deviceID, pointCode).
+type ResolvedBindings struct {
+	Devices map[string]string
+	Points  map[string]*ResolvedPoint
+}
+
+// PointBindingKey encodes a Device ID and Point code lookup key for ResolvedBindings.Points.
+func PointBindingKey(deviceID, pointCode string) string {
+	return deviceID + "\x00" + pointCode
+}
+
+func (bindings ResolvedBindings) Device(sourceKey string) string {
+	return bindings.Devices[sourceKey]
+}
+
+func (bindings ResolvedBindings) Point(deviceID, pointCode string) *ResolvedPoint {
+	return bindings.Points[PointBindingKey(deviceID, pointCode)]
+}
+
+// UplinkMessage is one raw MQTT publish waiting to be processed in FIFO order.
+type UplinkMessage struct {
+	Topic   string
+	Payload []byte
+}
+
+// ProcessingOutcome is the per-message outcome of ProcessPrefix. When Err is a permanent
+// message error, the message was quarantined; otherwise Err is nil and Result is populated.
+type ProcessingOutcome struct {
+	Result ProcessingResult
+	Err    error
+}
+
 // IdentityResolver resolves what a Gateway's messages name from the Registry read
 // port: the Gateway itself (ErrGatewayUnknown, ErrGatewayCredentialInactive), a Device
-// by its source key ("" when unregistered) and a Device's Point by Point Code (nil when
-// unregistered). It also keeps quarantine evidence.
+// by its source key ("" when unregistered), and batch Device/Point bindings. It also
+// keeps quarantine evidence.
 type IdentityResolver interface {
 	ResolveGateway(ctx context.Context, gatewayID string) (Gateway, error)
 	ResolveDevice(ctx context.Context, gateway Gateway, sourceKey string) (string, error)
-	ResolvePoint(ctx context.Context, gateway Gateway, deviceID, pointCode string) (*ResolvedPoint, error)
+	ResolveBindings(ctx context.Context, gateway Gateway, queries []DevicePointQuery) (ResolvedBindings, error)
 	QuarantineUplink(ctx context.Context, quarantine UplinkQuarantine) error
 }
 
@@ -86,36 +125,67 @@ func NewProcessor(identities IdentityResolver, runtime RuntimeClient) (*Processo
 // kept as quarantine evidence and returned as a permanent error, so it is acknowledged;
 // any other error is transient and the message is retried.
 func (processor *Processor) Process(ctx context.Context, topic string, payload []byte) (ProcessingResult, error) {
-	quarantine := UplinkQuarantine{GatewayID: TopicGatewayID(topic), Topic: topic, Payload: payload, ReceivedAt: processor.now().UTC()}
-	messageTopic, err := ParseMessageTopic(topic)
+	outcomes, err := processor.ProcessPrefix(ctx, []UplinkMessage{{Topic: topic, Payload: payload}})
 	if err != nil {
-		return ProcessingResult{}, processor.quarantine(ctx, quarantine, QuarantineMessageInvalid, err)
+		return ProcessingResult{}, err
+	}
+	if len(outcomes) != 1 {
+		return ProcessingResult{}, fmt.Errorf("unexpected uplink batch outcome count %d", len(outcomes))
+	}
+	return outcomes[0].Result, outcomes[0].Err
+}
+
+// ProcessPrefix processes the longest contiguous prefix of messages that can share one
+// batch execution, or returns a single outcome when messages[0] must be quarantined or
+// handled as a runtime event. A non-nil returned error is transient and no message in
+// the slice was committed as acknowledged.
+func (processor *Processor) ProcessPrefix(ctx context.Context, messages []UplinkMessage) ([]ProcessingOutcome, error) {
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	first := messages[0]
+	quarantine := UplinkQuarantine{GatewayID: TopicGatewayID(first.Topic), Topic: first.Topic, Payload: first.Payload, ReceivedAt: processor.now().UTC()}
+	messageTopic, err := ParseMessageTopic(first.Topic)
+	if err != nil {
+		return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
 	}
 	gateway, err := processor.identities.ResolveGateway(ctx, messageTopic.GatewayID)
 	switch {
 	case errors.Is(err, ErrGatewayUnknown):
-		return ProcessingResult{}, processor.quarantine(ctx, quarantine, QuarantineGatewayUnknown, err)
+		return processor.quarantinedOutcome(ctx, quarantine, QuarantineGatewayUnknown, err)
 	case errors.Is(err, ErrGatewayCredentialInactive):
 		quarantine.TenantID = gateway.TenantID
-		return ProcessingResult{}, processor.quarantine(ctx, quarantine, QuarantineGatewayCredentialInactive, err)
+		return processor.quarantinedOutcome(ctx, quarantine, QuarantineGatewayCredentialInactive, err)
 	case err != nil:
-		return ProcessingResult{}, fmt.Errorf("resolve MQTT Gateway: %w", err)
+		return nil, fmt.Errorf("resolve MQTT Gateway: %w", err)
 	}
 	quarantine.TenantID = gateway.TenantID
 	switch messageTopic.MessageType {
 	case MessageTypeTelemetry:
-		envelope, err := DecodeTelemetryEnvelope(payload, gateway.ID)
+		envelope, err := DecodeTelemetryEnvelope(first.Payload, gateway.ID)
 		if err != nil {
-			return ProcessingResult{}, processor.quarantine(ctx, quarantine, QuarantineMessageInvalid, err)
+			return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
 		}
-		return processor.processTelemetry(ctx, gateway, envelope)
+		return processor.processTelemetryBatch(ctx, gateway, quarantine, envelope, messages)
 	default:
-		envelope, err := DecodeEventEnvelope(payload, gateway.ID)
+		envelope, err := DecodeEventEnvelope(first.Payload, gateway.ID)
 		if err != nil {
-			return ProcessingResult{}, processor.quarantine(ctx, quarantine, QuarantineMessageInvalid, err)
+			return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
 		}
-		return processor.processEvent(ctx, gateway, envelope)
+		result, err := processor.processEvent(ctx, gateway, envelope)
+		if err != nil {
+			return nil, err
+		}
+		return []ProcessingOutcome{{Result: result}}, nil
 	}
+}
+
+func (processor *Processor) quarantinedOutcome(ctx context.Context, quarantine UplinkQuarantine, reasonCode string, cause error) ([]ProcessingOutcome, error) {
+	err := processor.quarantine(ctx, quarantine, reasonCode, cause)
+	if !isPermanentMessageError(err) {
+		return nil, err
+	}
+	return []ProcessingOutcome{{Err: err}}, nil
 }
 
 func (processor *Processor) quarantine(ctx context.Context, quarantine UplinkQuarantine, reasonCode string, cause error) error {
@@ -130,59 +200,222 @@ func (processor *Processor) quarantine(ctx context.Context, quarantine UplinkQua
 	return permanentMessage(cause)
 }
 
-func (processor *Processor) processTelemetry(ctx context.Context, gateway Gateway, envelope TelemetryEnvelope) (ProcessingResult, error) {
-	result := ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeTelemetry, Replay: envelope.Replay}
+type telemetryMessageBounds struct {
+	messageID string
+	replay    bool
+	start     int
+	end       int
+}
+
+func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway Gateway, firstQuarantine UplinkQuarantine, firstEnvelope TelemetryEnvelope, messages []UplinkMessage) ([]ProcessingOutcome, error) {
+	observations, bounds, err := coalesceTelemetryBatch(gateway, firstEnvelope, messages)
+	if err != nil {
+		return processor.quarantinedOutcome(ctx, firstQuarantine, QuarantineMessageInvalid, err)
+	}
+	queries := uniqueDevicePointQueries(observations)
+	bindings, err := processor.identities.ResolveBindings(ctx, gateway, queries)
+	if err != nil {
+		return nil, fmt.Errorf("resolve MQTT bindings: %w", err)
+	}
+	attachResolvedBindings(observations, gateway, bindings)
+	receipts, err := processor.sendObservationBatchChunks(ctx, observations)
+	if err != nil {
+		return nil, err
+	}
+	outcomes := make([]ProcessingOutcome, len(bounds))
+	for index, bound := range bounds {
+		result, err := buildProcessingResult(bound.messageID, bound.replay, receipts[bound.start:bound.end])
+		if err != nil {
+			return nil, err
+		}
+		outcomes[index] = ProcessingOutcome{Result: result}
+	}
+	return outcomes, nil
+}
+
+const estimatedObservationEnvelopeOverheadBytes = 768
+
+func coalesceTelemetryBatch(gateway Gateway, firstEnvelope TelemetryEnvelope, messages []UplinkMessage) ([]Observation, []telemetryMessageBounds, error) {
+	firstObs, err := buildEnvelopeObservations(gateway.ID, firstEnvelope)
+	if err != nil {
+		return nil, nil, err
+	}
+	observations := firstObs
+	approxBytes := len(messages[0].Payload) + len(firstObs)*estimatedObservationEnvelopeOverheadBytes
+	bounds := []telemetryMessageBounds{{
+		messageID: firstEnvelope.MessageID,
+		replay:    firstEnvelope.Replay,
+		start:     0,
+		end:       len(observations),
+	}}
+	for index := 1; index < len(messages); index++ {
+		if len(observations) >= MaxObservationBatchSize || approxBytes >= MaxObservationBatchBytes {
+			break
+		}
+		topic, err := ParseMessageTopic(messages[index].Topic)
+		if err != nil || topic.MessageType != MessageTypeTelemetry || topic.GatewayID != gateway.ID {
+			break
+		}
+		envelope, err := DecodeTelemetryEnvelope(messages[index].Payload, gateway.ID)
+		if err != nil {
+			break
+		}
+		msgCount := envelopePointCount(envelope)
+		msgApproxBytes := len(messages[index].Payload) + msgCount*estimatedObservationEnvelopeOverheadBytes
+		if len(observations)+msgCount > MaxObservationBatchSize || approxBytes+msgApproxBytes > MaxObservationBatchBytes {
+			break
+		}
+		msgObs, err := buildEnvelopeObservations(gateway.ID, envelope)
+		if err != nil {
+			break
+		}
+		start := len(observations)
+		observations = append(observations, msgObs...)
+		approxBytes += msgApproxBytes
+		bounds = append(bounds, telemetryMessageBounds{
+			messageID: envelope.MessageID,
+			replay:    envelope.Replay,
+			start:     start,
+			end:       len(observations),
+		})
+	}
+	return observations, bounds, nil
+}
+
+func envelopePointCount(envelope TelemetryEnvelope) int {
+	total := 0
+	for _, device := range envelope.Payload.Devices {
+		total += len(device.Points)
+	}
+	return total
+}
+
+func buildEnvelopeObservations(gatewayID string, envelope TelemetryEnvelope) ([]Observation, error) {
+	observations := make([]Observation, 0, envelopePointCount(envelope))
 	for _, device := range envelope.Payload.Devices {
 		sourceKey := strings.TrimSpace(device.DeviceID)
-		var resolved *ResolvedDevice
-		deviceID, err := processor.identities.ResolveDevice(ctx, gateway, sourceKey)
-		if err != nil {
-			return ProcessingResult{}, fmt.Errorf("resolve MQTT Device %s: %w", sourceKey, err)
-		}
-		if deviceID != "" {
-			resolved = &ResolvedDevice{TenantID: gateway.TenantID, SiteID: gateway.SiteID, DeviceID: deviceID}
-		}
+		sampledAt := unixMillisRFC3339(device.DeviceTimestamp)
 		for _, point := range device.Points {
 			pointCode := strings.TrimSpace(point.Code)
-			var resolvedPoint *ResolvedPoint
-			if resolved != nil {
-				if resolvedPoint, err = processor.identities.ResolvePoint(ctx, gateway, deviceID, pointCode); err != nil {
-					return ProcessingResult{}, fmt.Errorf("resolve MQTT point %s/%s: %w", sourceKey, pointCode, err)
-				}
-			}
-			partition := sourcePartition(gateway.ID, sourceKey, pointCode)
+			partition := sourcePartition(gatewayID, sourceKey, pointCode)
 			eventID, err := deterministicPointEventID(envelope.MessageID, device.DeviceTimestamp, point, partition)
 			if err != nil {
-				return ProcessingResult{}, permanentMessage(err)
+				return nil, err
 			}
 			valueType, err := wireValueType(point.Value)
 			if err != nil {
-				return ProcessingResult{}, permanentMessage(err)
+				return nil, err
 			}
-			receipt, err := processor.runtime.AcceptObservation(ctx, Observation{
-				SourceID: gateway.ID, Device: resolved, Point: resolvedPoint,
-				SourcePath: "PUSH", ExternalEntityType: "DEVICE", ExternalID: sourceKey, TelemetryKey: pointCode,
-				Value: point.Value, ValueType: valueType, Unit: point.Unit, WireQuality: point.Quality, SampledAt: unixMillisRFC3339(device.DeviceTimestamp),
-				SourcePosition: SourcePosition{Partition: partition, Offset: int64(envelope.Sequence), EventID: eventID},
+			observations = append(observations, Observation{
+				SourceID:           gatewayID,
+				SourcePath:         "PUSH",
+				ExternalEntityType: "DEVICE",
+				ExternalID:         sourceKey,
+				TelemetryKey:       pointCode,
+				Value:              point.Value,
+				ValueType:          valueType,
+				Unit:               point.Unit,
+				WireQuality:        point.Quality,
+				SampledAt:          sampledAt,
+				SourcePosition:     SourcePosition{Partition: partition, Offset: int64(envelope.Sequence), EventID: eventID},
 			})
-			if err != nil {
-				return ProcessingResult{}, fmt.Errorf("accept MQTT point %s/%s: %w", sourceKey, pointCode, err)
+		}
+	}
+	return observations, nil
+}
+
+func uniqueDevicePointQueries(observations []Observation) []DevicePointQuery {
+	seen := make(map[DevicePointQuery]struct{}, len(observations))
+	queries := make([]DevicePointQuery, 0, len(observations))
+	for _, observation := range observations {
+		query := DevicePointQuery{SourceKey: observation.ExternalID, PointCode: observation.TelemetryKey}
+		if _, ok := seen[query]; !ok {
+			seen[query] = struct{}{}
+			queries = append(queries, query)
+		}
+	}
+	return queries
+}
+
+func attachResolvedBindings(observations []Observation, gateway Gateway, bindings ResolvedBindings) {
+	for index := range observations {
+		observation := &observations[index]
+		if deviceID := bindings.Device(observation.ExternalID); deviceID != "" {
+			observation.Device = &ResolvedDevice{TenantID: gateway.TenantID, SiteID: gateway.SiteID, DeviceID: deviceID}
+			observation.Point = bindings.Point(deviceID, observation.TelemetryKey)
+		}
+	}
+}
+
+const batchRequestEnvelopeBaseBytes = len(`{"observations":[]}`)
+
+func splitObservationBatchChunks(observations []Observation, maxCount, maxBytes int) ([][]Observation, error) {
+	if len(observations) == 0 {
+		return nil, nil
+	}
+	encodedLengths := make([]int, len(observations))
+	for index, observation := range observations {
+		encoded, err := json.Marshal(observation)
+		if err != nil {
+			return nil, fmt.Errorf("encode observation for batch sizing: %w", err)
+		}
+		encodedLengths[index] = len(encoded)
+	}
+	var chunks [][]Observation
+	start := 0
+	for start < len(observations) {
+		chunkBytes := batchRequestEnvelopeBaseBytes + encodedLengths[start]
+		end := start + 1
+		for end < len(observations) && end-start < maxCount {
+			nextBytes := chunkBytes + 1 + encodedLengths[end]
+			if nextBytes > maxBytes {
+				break
 			}
-			result.PointCount++
-			switch receipt.Status {
-			case "ACCEPTED":
-				result.Accepted++
-			case "DUPLICATE":
-				result.Duplicate++
-			case "OUT_OF_ORDER":
-				result.OutOfOrder++
-			case "QUARANTINED":
-				result.Quarantined++
-			case "REJECTED":
-				result.Rejected++
-			default:
-				return ProcessingResult{}, fmt.Errorf("unexpected Telemetry receipt status %s", receipt.Status)
-			}
+			chunkBytes = nextBytes
+			end++
+		}
+		chunks = append(chunks, observations[start:end])
+		start = end
+	}
+	return chunks, nil
+}
+
+func (processor *Processor) sendObservationBatchChunks(ctx context.Context, observations []Observation) ([]ObservationReceipt, error) {
+	chunks, err := splitObservationBatchChunks(observations, MaxObservationBatchSize, MaxObservationBatchBytes)
+	if err != nil {
+		return nil, err
+	}
+	receipts := make([]ObservationReceipt, 0, len(observations))
+	for _, chunk := range chunks {
+		chunkReceipts, err := processor.runtime.AcceptObservationBatch(ctx, chunk)
+		if err != nil {
+			return nil, fmt.Errorf("accept MQTT observation batch: %w", err)
+		}
+		if len(chunkReceipts) != len(chunk) {
+			return nil, fmt.Errorf("unexpected Telemetry receipt count %d for batch size %d", len(chunkReceipts), len(chunk))
+		}
+		receipts = append(receipts, chunkReceipts...)
+	}
+	return receipts, nil
+}
+
+func buildProcessingResult(messageID string, replay bool, receipts []ObservationReceipt) (ProcessingResult, error) {
+	result := ProcessingResult{MessageID: messageID, MessageType: MessageTypeTelemetry, Replay: replay}
+	for _, receipt := range receipts {
+		result.PointCount++
+		switch receipt.Status {
+		case "ACCEPTED":
+			result.Accepted++
+		case "DUPLICATE":
+			result.Duplicate++
+		case "OUT_OF_ORDER":
+			result.OutOfOrder++
+		case "QUARANTINED":
+			result.Quarantined++
+		case "REJECTED":
+			result.Rejected++
+		default:
+			return ProcessingResult{}, fmt.Errorf("unexpected Telemetry receipt status %s", receipt.Status)
 		}
 	}
 	return result, nil

@@ -80,7 +80,7 @@ func (metrics *s2Metrics) observeRequest(path string, status int, elapsed time.D
 	}
 	outcome, reason := metricOutcome(status)
 	switch {
-	case path == InternalSourceObservationPath:
+	case path == InternalSourceObservationBatchPath:
 		if status < http.StatusOK || status >= http.StatusMultipleChoices {
 			metrics.observeIngest(outcome, reason)
 		}
