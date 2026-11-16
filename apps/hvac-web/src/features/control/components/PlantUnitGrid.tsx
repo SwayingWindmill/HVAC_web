@@ -23,6 +23,8 @@ export interface PlantContext {
   readonly canLock: boolean;
   readonly onCommand: (pending: PendingCommand) => void;
   readonly onLock: (target: ControlTarget) => void;
+  /** Aborts a unit's running one-click sequence and stops the unit in order. */
+  readonly onAbort: (unit: PlantUnit) => void;
   readonly onSettings: (target: ControlTarget) => void;
   readonly onInspect: (commandId: string) => void;
 }
@@ -193,9 +195,21 @@ function UnitColumn({ unit, context }: { readonly unit: PlantUnit; readonly cont
         </div>
       ) : null}
       {open ? (
-        <button type="button" className="self-start rounded-sm text-xs outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring-soft" onClick={() => context.onInspect(open.commandId)}>
-          <StatusBadge tone="warning" label={`一键启停 · ${STATUS_PRESENTATION[open.status].label}`} />
-        </button>
+        <div className="flex items-center justify-between gap-2">
+          <button type="button" className="rounded-sm text-xs outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring-soft" onClick={() => context.onInspect(open.commandId)}>
+            <StatusBadge tone="warning" label={`一键启停 · ${STATUS_PRESENTATION[open.status].label}`} />
+          </button>
+          <Button
+            variant="ghost"
+            size="xs"
+            className="text-destructive-text hover:text-destructive-text"
+            disabled={!context.canLock}
+            title={context.canLock ? '撤回这组没下发的指令，按顺序停机' : '你没有停机的权限'}
+            onClick={() => context.onAbort(unit)}
+          >
+            中止…
+          </Button>
+        </div>
       ) : null}
       <div className="flex flex-col border-t border-divider">
         <DeviceRow target={chiller} label="主机" context={context} />

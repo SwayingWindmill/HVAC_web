@@ -43,7 +43,36 @@ export interface PendingCommand {
   readonly submitLabel?: string;
 }
 
-const CODE_PATTERN = /^\d{6}$/;
+export const CODE_PATTERN = /^\d{6}$/;
+
+/** The authenticator's 6 digits; anything else typed or pasted is dropped. */
+export function CodeField({ id, value, error, onChange }: {
+  readonly id: string;
+  readonly value: string;
+  readonly error: string | null;
+  readonly onChange: (value: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={id} className="flex justify-between text-xs">
+        动态口令
+        <span className="font-normal text-muted-foreground">打开身份验证器查看 6 位数字</span>
+      </Label>
+      <Input
+        id={id}
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        placeholder="······"
+        value={value}
+        aria-invalid={error !== null}
+        aria-describedby={error ? `${id}-error` : undefined}
+        onChange={(event) => onChange(event.target.value.replace(/\D/g, '').slice(0, 6))}
+        className="h-10 text-center font-mono text-xl tracking-[0.5em]"
+      />
+      {error ? <p id={`${id}-error`} className="text-xs text-destructive-text">{error}</p> : null}
+    </div>
+  );
+}
 
 export function commandFailure(error: unknown) {
   toast.error(error instanceof CommandRequestError ? error.message : '指令服务暂时不可用，请稍后再试');
@@ -156,26 +185,7 @@ function ConfirmBody({ pending, siteId, csrfToken, onClose }: {
           </dl>
         ) : null}
       </div>
-      {askCode ? (
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={codeId} className="flex justify-between text-xs">
-            动态口令
-            <span className="font-normal text-muted-foreground">打开身份验证器查看 6 位数字</span>
-          </Label>
-          <Input
-            id={codeId}
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            placeholder="······"
-            value={code}
-            aria-invalid={codeError !== null}
-            aria-describedby={codeError ? `${codeId}-error` : undefined}
-            onChange={(event) => { setCode(event.target.value.replace(/\D/g, '').slice(0, 6)); setCodeError(null); }}
-            className="h-10 text-center font-mono text-xl tracking-[0.5em]"
-          />
-          {codeError ? <p id={`${codeId}-error`} className="text-xs text-destructive-text">{codeError}</p> : null}
-        </div>
-      ) : null}
+      {askCode ? <CodeField id={codeId} value={code} error={codeError} onChange={(value) => { setCode(value); setCodeError(null); }} /> : null}
       {pending.acknowledgement ? (
         <div className="flex items-start gap-2">
           <Checkbox id={ackId} checked={acknowledged} onCheckedChange={(value) => setAcknowledged(value === true)} className="mt-0.5" />
