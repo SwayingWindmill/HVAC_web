@@ -452,12 +452,13 @@ func TestChillerStageDownCOPEdgeCases(t *testing.T) {
 func TestIdleAuxiliaryStopDebounceAndSafetyInterlocks(t *testing.T) {
 	at := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
 
-	t.Run("triggers_only_after_5m_continuous_chiller_stop_across_aux_types", func(t *testing.T) {
-		chillerStoppedSince := at.Add(-8 * time.Minute)
+	t.Run("triggers_only_after_15m_continuous_chiller_stop_across_aux_types", func(t *testing.T) {
+		chillerStoppedSince := at.Add(-18 * time.Minute)
 		chillerStoppedHist := []RunStateSample{
-			{State: RunStateRunning, Quality: "GOOD", SampledAt: at.Add(-12 * time.Minute)},
-			{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-8 * time.Minute)},
-			{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-5 * time.Minute)},
+			{State: RunStateRunning, Quality: "GOOD", SampledAt: at.Add(-22 * time.Minute)},
+			{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-18 * time.Minute)},
+			{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-12 * time.Minute)},
+			{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-6 * time.Minute)},
 			{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-1 * time.Minute)},
 		}
 		snapshot := StagingSnapshot{
@@ -513,10 +514,10 @@ func TestIdleAuxiliaryStopDebounceAndSafetyInterlocks(t *testing.T) {
 			if rec.Kind != RecommendationKindIdleAuxiliaryStop || rec.ConfirmationMode != ConfirmationModeManual || rec.SuggestedCapability != SuggestedCapabilityStop {
 				t.Fatalf("unexpected aux draft metadata: %+v", rec)
 			}
-			if rec.ContinuousIdleSeconds == nil || *rec.ContinuousIdleSeconds < 300 {
-				t.Fatalf("idle duration below 5m: %+v", rec)
+			if rec.ContinuousIdleSeconds == nil || *rec.ContinuousIdleSeconds < 900 {
+				t.Fatalf("idle duration below 15m: %+v", rec)
 			}
-			if !strings.Contains(rec.InterlockSafetyStatement, "所服务冷机均已停机超过 5 分钟") {
+			if !strings.Contains(rec.InterlockSafetyStatement, "所服务冷机均已停机超过 15 分钟") {
 				t.Fatalf("missing required Chinese interlock safety statement: %q", rec.InterlockSafetyStatement)
 			}
 			if rec.PredictedPowerSavingKW <= 0 {
@@ -525,7 +526,49 @@ func TestIdleAuxiliaryStopDebounceAndSafetyInterlocks(t *testing.T) {
 		}
 	})
 
-	t.Run("suppresses_below_5m_debounce_and_safety_blocks", func(t *testing.T) {
+	t.Run("rejects_10m_two_polls_and_passes_at_15m", func(t *testing.T) {
+		snap := func(hist []RunStateSample) StagingSnapshot {
+			return StagingSnapshot{
+				TenantID:    "01990000-3000-7000-8000-000000000001",
+				SiteID:      "01a14000-5000-7000-8000-000000000001",
+				EvaluatedAt: at,
+				Chillers: []ChillerUnitInput{{
+					AssetID: "c1", AssetCode: "chiller-a", RunState: RunStateStopped, RunStateQuality: "GOOD", RunStateAt: at.Add(-time.Minute),
+					RunStateHistory: hist,
+					Power:           &TelemetryValue{Value: 0.4, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute)},
+				}},
+				Auxiliaries: []AuxiliaryUnitInput{{
+					AssetID: "p1", AssetCode: "chwp-1", AssetType: AssetTypeCHWP, RunState: RunStateRunning, RunStateQuality: "GOOD", RunStateAt: at.Add(-time.Minute),
+					RatedPowerKW: 18.5, ServesChillerIDs: []string{"c1"},
+				}},
+			}
+		}
+
+		eval10m, err := EvaluateStaging(snap([]RunStateSample{
+			{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-10 * time.Minute)},
+			{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-5 * time.Minute)},
+		}), DefaultStagingPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(eval10m.Recommendations) != 0 || !hasDiagnostic(eval10m.Diagnostics, RecommendationKindIdleAuxiliaryStop, "SUPPRESSED", "IDLE_DEBOUNCE_NOT_MET") {
+			t.Fatalf("expected 10m/2-poll window suppressed with IDLE_DEBOUNCE_NOT_MET, got recs=%+v diags=%+v", eval10m.Recommendations, eval10m.Diagnostics)
+		}
+
+		eval15m, err := EvaluateStaging(snap([]RunStateSample{
+			{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-15 * time.Minute)},
+			{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-10 * time.Minute)},
+			{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-5 * time.Minute)},
+		}), DefaultStagingPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(eval15m.Recommendations) != 1 || eval15m.Recommendations[0].Kind != RecommendationKindIdleAuxiliaryStop {
+			t.Fatalf("expected 15m window to pass IDLE_AUXILIARY_STOP, got recs=%+v diags=%+v", eval15m.Recommendations, eval15m.Diagnostics)
+		}
+	})
+
+	t.Run("suppresses_below_15m_debounce_and_safety_blocks", func(t *testing.T) {
 		blockedCases := []struct {
 			name       string
 			chiller    ChillerUnitInput
@@ -1144,7 +1187,8 @@ func testScheduleStagingSnapshot(at time.Time, schedule *OperatingScheduleContex
 				RunStateQuality: "GOOD",
 				RunStateAt:      at,
 				RunStateHistory: []RunStateSample{
-					{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-6 * time.Minute)},
+					{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-18 * time.Minute)},
+					{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-9 * time.Minute)},
 					{State: RunStateStopped, Quality: "GOOD", SampledAt: at},
 				},
 			},
@@ -1599,5 +1643,317 @@ func TestResolveChillerRunStateAccountsForFeederAuxiliaryPower(t *testing.T) {
 	)
 	if len(topology.Chillers) != 1 || topology.Chillers[0].FeederAuxiliaryPowerKW != 30 {
 		t.Fatalf("expected FeederAuxiliaryPowerKW=30 in topology, got %+v", topology.Chillers)
+	}
+}
+
+func TestChillerStageDownAntiHuntingDwellHysteresisMinRunAndSupplyGuard(t *testing.T) {
+	at := time.Date(2026, 11, 14, 14, 0, 0, 0, time.UTC)
+	buckets := syntheticStagingChillerHistory(at, map[string]float64{
+		"01a14000-4000-7000-8000-000000000006": 1.00,
+		"01a14000-4000-7000-8000-000000000003": 0.85,
+	})
+	to := at.Truncate(copBucketMinutes * time.Minute)
+	fit := FitPlant(buckets, to.AddDate(0, 0, -copHistoryDays), to)
+
+	baseSnapshot := func(loadKW float64) StagingSnapshot {
+		return StagingSnapshot{
+			TenantID:    "01990000-3000-7000-8000-000000000001",
+			SiteID:      "01a14000-5000-7000-8000-000000000001",
+			EvaluatedAt: at,
+			PlantCoolingLoad: &TelemetryValue{
+				DeviceID: "01a14000-4000-7000-8000-000000000009", SourceKey: "btu-calc",
+				Value: loadKW, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-30 * time.Second),
+			},
+			HeaderSupplyC: &TelemetryValue{Value: 7.0, Unit: "Cel", Quality: "GOOD", SampledAt: at.Add(-30 * time.Second)},
+			Chillers:      testSongyaxuanUnits(at, ptr(56.0), nil, ptr(74.0), nil),
+			ChillerFits:   fit.Chillers,
+		}
+	}
+
+	t.Run("transient_load_dip_suppressed_while_sustained_15m_low_load_passes", func(t *testing.T) {
+		transient := baseSnapshot(360)
+		transient.PlantLoadHistory = []TelemetryValue{
+			{Value: 530, Quality: "GOOD", SampledAt: at.Add(-18 * time.Minute)},
+			{Value: 520, Quality: "GOOD", SampledAt: at.Add(-12 * time.Minute)},
+			{Value: 510, Quality: "GOOD", SampledAt: at.Add(-6 * time.Minute)},
+			{Value: 360, Quality: "GOOD", SampledAt: at.Add(-30 * time.Second)},
+		}
+		evalTransient, err := EvaluateStaging(transient, DefaultStagingPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(evalTransient.Recommendations) != 0 || !hasDiagnostic(evalTransient.Diagnostics, RecommendationKindChillerStageDown, "SUPPRESSED", "STAGE_DOWN_DWELL_NOT_MET") {
+			t.Fatalf("expected transient dip suppressed with STAGE_DOWN_DWELL_NOT_MET, got recs=%+v diags=%+v", evalTransient.Recommendations, evalTransient.Diagnostics)
+		}
+
+		shortHistory := baseSnapshot(360)
+		shortHistory.PlantLoadHistory = []TelemetryValue{
+			{Value: 360, Quality: "GOOD", SampledAt: at.Add(-10 * time.Minute)},
+			{Value: 360, Quality: "GOOD", SampledAt: at.Add(-5 * time.Minute)},
+			{Value: 360, Quality: "GOOD", SampledAt: at.Add(-30 * time.Second)},
+		}
+		evalShort, err := EvaluateStaging(shortHistory, DefaultStagingPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(evalShort.Recommendations) != 0 || !hasDiagnostic(evalShort.Diagnostics, RecommendationKindChillerStageDown, "SUPPRESSED", "STAGE_DOWN_DWELL_NOT_MET") {
+			t.Fatalf("expected <15m history suppressed, got recs=%+v diags=%+v", evalShort.Recommendations, evalShort.Diagnostics)
+		}
+
+		sustained := baseSnapshot(360)
+		sustained.PlantLoadHistory = []TelemetryValue{
+			{Value: 600, Quality: "GOOD", SampledAt: at.Add(-20 * time.Minute)},
+			{Value: 360, Quality: "GOOD", SampledAt: at.Add(-15 * time.Minute)},
+			{Value: 370, Quality: "GOOD", SampledAt: at.Add(-10 * time.Minute)},
+			{Value: 365, Quality: "GOOD", SampledAt: at.Add(-5 * time.Minute)},
+			{Value: 360, Quality: "GOOD", SampledAt: at.Add(-30 * time.Second)},
+		}
+		evalSustained, err := EvaluateStaging(sustained, DefaultStagingPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(evalSustained.Recommendations) != 1 || evalSustained.Recommendations[0].Kind != RecommendationKindChillerStageDown {
+			t.Fatalf("expected sustained 15m low load to trigger CHILLER_STAGE_DOWN, got recs=%+v diags=%+v", evalSustained.Recommendations, evalSustained.Diagnostics)
+		}
+	})
+
+	t.Run("hysteresis_deadband_adds_5_percent_margin_on_top_of_headroom", func(t *testing.T) {
+		snap := baseSnapshot(485)
+		eval, err := EvaluateStaging(snap, DefaultStagingPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(eval.Recommendations) != 0 || !hasDiagnostic(eval.Diagnostics, RecommendationKindChillerStageDown, "SUPPRESSED", "HEADROOM_INSUFFICIENT") {
+			t.Fatalf("expected 5%% deadband to reject 485 kW load, got recs=%+v diags=%+v", eval.Recommendations, eval.Diagnostics)
+		}
+	})
+
+	t.Run("min_chiller_run_duration_excludes_recently_started_candidates", func(t *testing.T) {
+		snap := baseSnapshot(360)
+		recent := at.Add(-15 * time.Minute)
+		older := at.Add(-45 * time.Minute)
+		snap.Chillers[0].RunningSince = &recent
+		snap.Chillers[2].RunningSince = &recent
+		evalBothShort, err := EvaluateStaging(snap, DefaultStagingPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(evalBothShort.Recommendations) != 0 || !hasDiagnostic(evalBothShort.Diagnostics, RecommendationKindChillerStageDown, "SUPPRESSED", "CHILLER_MIN_RUN_TIME_NOT_MET") {
+			t.Fatalf("expected CHILLER_MIN_RUN_TIME_NOT_MET when all running chillers < 30m, got recs=%+v diags=%+v", evalBothShort.Recommendations, evalBothShort.Diagnostics)
+		}
+
+		snap.Chillers[2].RunningSince = &older
+		snap.Chillers[2].RunStateHistory = []RunStateSample{
+			{State: RunStateRunning, Quality: "GOOD", SampledAt: at.Add(-35 * time.Minute)},
+			{State: RunStateRunning, Quality: "GOOD", SampledAt: at.Add(-25 * time.Minute)},
+			{State: RunStateRunning, Quality: "GOOD", SampledAt: at.Add(-15 * time.Minute)},
+			{State: RunStateRunning, Quality: "GOOD", SampledAt: at.Add(-5 * time.Minute)},
+			{State: RunStateRunning, Quality: "GOOD", SampledAt: at.Add(-30 * time.Second)},
+		}
+		evalMixed, err := EvaluateStaging(snap, DefaultStagingPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(evalMixed.Recommendations) != 1 || evalMixed.Recommendations[0].TargetAssetCode != "chiller-c" {
+			t.Fatalf("expected chiller-c eligible after 30m continuous run, got recs=%+v diags=%+v", evalMixed.Recommendations, evalMixed.Diagnostics)
+		}
+
+		snap.Chillers[0].RunningSince = &recent
+		snap.Chillers[2].RunningSince = nil
+		snap.Chillers[2].RunStateHistory = []RunStateSample{
+			{State: RunStateStopped, Quality: "GOOD", SampledAt: at.Add(-25 * time.Minute)},
+			{State: RunStateRunning, Quality: "GOOD", SampledAt: at.Add(-20 * time.Minute)},
+			{State: RunStateRunning, Quality: "GOOD", SampledAt: at.Add(-10 * time.Minute)},
+			{State: RunStateRunning, Quality: "GOOD", SampledAt: at.Add(-1 * time.Minute)},
+		}
+		evalRestarted, err := EvaluateStaging(snap, DefaultStagingPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(evalRestarted.Recommendations) != 0 || !hasDiagnostic(evalRestarted.Diagnostics, RecommendationKindChillerStageDown, "SUPPRESSED", "CHILLER_MIN_RUN_TIME_NOT_MET") {
+			t.Fatalf("expected restarted chiller (<30m run history) excluded, got recs=%+v diags=%+v", evalRestarted.Recommendations, evalRestarted.Diagnostics)
+		}
+	})
+
+	t.Run("supply_temperature_guard_suppresses_stage_down_above_12C", func(t *testing.T) {
+		snap := baseSnapshot(360)
+		snap.HeaderSupplyC = &TelemetryValue{Value: 12.5, Unit: "Cel", Quality: "GOOD", SampledAt: at.Add(-30 * time.Second)}
+		evalWarm, err := EvaluateStaging(snap, DefaultStagingPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(evalWarm.Recommendations) != 0 || !hasDiagnostic(evalWarm.Diagnostics, RecommendationKindChillerStageDown, "SUPPRESSED", "SUPPLY_TEMP_TOO_HIGH_FOR_STAGE_DOWN") {
+			t.Fatalf("expected SUPPLY_TEMP_TOO_HIGH_FOR_STAGE_DOWN at 12.5 C, got recs=%+v diags=%+v", evalWarm.Recommendations, evalWarm.Diagnostics)
+		}
+
+		snap.HeaderSupplyC.SampledAt = at.Add(-20 * time.Minute)
+		evalStale, err := EvaluateStaging(snap, DefaultStagingPolicy())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(evalStale.Recommendations) != 1 {
+			t.Fatalf("expected stale header supply not to trigger supply temp guard, got recs=%+v diags=%+v", evalStale.Recommendations, evalStale.Diagnostics)
+		}
+	})
+}
+
+func TestIdleAuxiliaryStopEvaporatorDeltaTGuard(t *testing.T) {
+	at := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
+	stoppedSince := at.Add(-20 * time.Minute)
+	makeSnapshot := func(enteringC, leavingC float64, enteringAge time.Duration) StagingSnapshot {
+		return StagingSnapshot{
+			TenantID:    "01990000-3000-7000-8000-000000000001",
+			SiteID:      "01a14000-5000-7000-8000-000000000001",
+			EvaluatedAt: at,
+			Chillers: []ChillerUnitInput{{
+				AssetID: "c1", AssetCode: "chiller-a", RunState: RunStateStopped, RunStateQuality: "GOOD", RunStateAt: at.Add(-time.Minute),
+				StoppedSince: &stoppedSince,
+				Power:        &TelemetryValue{Value: 2.0, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute)},
+				ChwEnteringC: &TelemetryValue{Value: enteringC, Unit: "Cel", Quality: "GOOD", SampledAt: at.Add(-enteringAge)},
+				ChwLeavingC:  &TelemetryValue{Value: leavingC, Unit: "Cel", Quality: "GOOD", SampledAt: at.Add(-time.Minute)},
+			}},
+			Auxiliaries: []AuxiliaryUnitInput{{
+				AssetID: "p1", AssetCode: "chwp-1", AssetType: AssetTypeCHWP,
+				RunState: RunStateRunning, RunStateQuality: "GOOD", RunStateAt: at.Add(-time.Minute),
+				RatedPowerKW: 18.5, ServesChillerIDs: []string{"c1"},
+			}},
+		}
+	}
+
+	evalActive, err := EvaluateStaging(makeSnapshot(9.0, 7.0, time.Minute), DefaultStagingPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evalActive.Recommendations) != 0 || !hasDiagnostic(evalActive.Diagnostics, RecommendationKindIdleAuxiliaryStop, "SUPPRESSED", "CHILLER_THERMAL_DELTA_ACTIVE") {
+		t.Fatalf("expected CHILLER_THERMAL_DELTA_ACTIVE suppression, got recs=%+v diags=%+v", evalActive.Recommendations, evalActive.Diagnostics)
+	}
+
+	evalBoundary, err := EvaluateStaging(makeSnapshot(7.8, 7.0, time.Minute), DefaultStagingPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evalBoundary.Recommendations) != 0 || !hasDiagnostic(evalBoundary.Diagnostics, RecommendationKindIdleAuxiliaryStop, "SUPPRESSED", "CHILLER_THERMAL_DELTA_ACTIVE") {
+		t.Fatalf("expected 0.8 C boundary to suppress with CHILLER_THERMAL_DELTA_ACTIVE, got recs=%+v diags=%+v", evalBoundary.Recommendations, evalBoundary.Diagnostics)
+	}
+
+	evalIdle, err := EvaluateStaging(makeSnapshot(7.5, 7.0, time.Minute), DefaultStagingPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evalIdle.Recommendations) != 1 || evalIdle.Recommendations[0].Kind != RecommendationKindIdleAuxiliaryStop {
+		t.Fatalf("expected IDLE_AUXILIARY_STOP when delta-T < 0.8 C, got recs=%+v diags=%+v", evalIdle.Recommendations, evalIdle.Diagnostics)
+	}
+}
+
+func TestStagingOperatingScheduleEmptySlotsSafety(t *testing.T) {
+	at := shanghaiTime(2026, 11, 16, 14, 0)
+
+	emptySchedule := &OperatingScheduleContext{
+		SiteTimezone: "Asia/Shanghai",
+		Configured:   true,
+		Slots:        nil,
+	}
+	eval, err := EvaluateStaging(testScheduleStagingSnapshot(at, emptySchedule), DefaultStagingPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rec := range eval.Recommendations {
+		if rec.Kind == RecommendationKindOffHoursStop {
+			t.Fatalf("empty schedule slots must not trigger OFF_HOURS_STOP 24x7: %+v", rec)
+		}
+	}
+	if !hasDiagnostic(eval.Diagnostics, RecommendationKindChillerStageDown, "RECOMMENDED", "CHILLER_STAGE_DOWN_ELIGIBLE") {
+		t.Fatalf("expected normal stage-down evaluation when slots are empty, got %+v", eval.Diagnostics)
+	}
+
+	holidayEmpty := &OperatingScheduleContext{
+		SiteTimezone: "Asia/Shanghai",
+		Configured:   true,
+		ApprovedExceptions: []ApprovedOperatingExceptionWindow{{
+			ID: "exc-h1", Title: "公休停机", Kind: "HOLIDAY_SHUTDOWN", StartDate: "2026-11-16", EndDate: "2026-11-16",
+		}},
+	}
+	evalHoliday, err := EvaluateStaging(testScheduleStagingSnapshot(at, holidayEmpty), DefaultStagingPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var offCount int
+	for _, rec := range evalHoliday.Recommendations {
+		if rec.Kind == RecommendationKindOffHoursStop {
+			offCount++
+		}
+	}
+	if offCount != 2 {
+		t.Fatalf("expected 2 OFF_HOURS_STOP during HOLIDAY_SHUTDOWN even with empty slots, got %d", offCount)
+	}
+}
+
+func TestClickHouseInputReaderReadsLoadHistoryAndChwEntering(t *testing.T) {
+	at := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
+	var seenQueries []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Error(err)
+			writer.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		sql := string(body)
+		seenQueries = append(seenQueries, sql)
+		writer.Header().Set("Content-Type", "application/x-ndjson")
+		if strings.Contains(sql, "row_number() OVER") {
+			rows := []string{
+				`{"deviceId":"01a14000-4000-7000-8000-000000000009","sourceId":"btu-calc","telemetryKey":"instant_cooling_capacity","valueNumber":380,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:30.000Z"}`,
+				`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"power_total","valueNumber":2.0,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+				`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"chw_entering_temperature","valueNumber":9.2,"valueString":null,"unit":"Cel","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+				`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"chw_leaving_temperature","valueNumber":7.1,"valueString":null,"unit":"Cel","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+				`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"chiller.run_state","valueNumber":null,"valueString":"STOPPED","unit":"","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+			}
+			if _, err := writer.Write([]byte(strings.Join(rows, "\n") + "\n")); err != nil {
+				t.Error(err)
+			}
+			return
+		}
+		rows := []string{
+			`{"deviceId":"01a14000-4000-7000-8000-000000000009","sourceId":"btu-calc","telemetryKey":"instant_cooling_capacity","valueNumber":410,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:42:00.000Z"}`,
+			`{"deviceId":"01a14000-4000-7000-8000-000000000009","sourceId":"btu-calc","telemetryKey":"instant_cooling_capacity","valueNumber":380,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:30.000Z"}`,
+			`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"chiller.run_state","valueNumber":null,"valueString":"STOPPED","unit":"","quality":"GOOD","sampledAt":"2026-11-14T14:40:00.000Z"}`,
+			`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"chiller.run_state","valueNumber":null,"valueString":"STOPPED","unit":"","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+		}
+		if _, err := writer.Write([]byte(strings.Join(rows, "\n") + "\n")); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+
+	reader, err := NewClickHouseInputReader(InputReaderConfig{BaseURL: server.URL, Energy: &energySeriesStub{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := reader.ReadStagingSnapshot(t.Context(), StagingSnapshotQuery{
+		TenantID: "01990000-3000-7000-8000-000000000001",
+		SiteID:   "01a14000-5000-7000-8000-000000000001",
+		At:       at,
+		Policy:   DefaultStagingPolicy(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seenQueries) != 2 || !strings.Contains(seenQueries[0], "chw_entering_temperature") ||
+		!strings.Contains(seenQueries[1], "instant_cooling_capacity") || !strings.Contains(seenQueries[1], "2026-11-14T14:40:00.000Z") {
+		t.Fatalf("unexpected staging queries: %+v", seenQueries)
+	}
+	if len(snapshot.PlantLoadHistory) != 2 || snapshot.PlantLoadHistory[0].Value != 410 {
+		t.Fatalf("PlantLoadHistory = %+v", snapshot.PlantLoadHistory)
+	}
+	var chillerC *ChillerUnitInput
+	for i := range snapshot.Chillers {
+		if snapshot.Chillers[i].AssetCode == "chiller-c" {
+			chillerC = &snapshot.Chillers[i]
+			break
+		}
+	}
+	if chillerC == nil || chillerC.ChwEnteringC == nil || chillerC.ChwEnteringC.Value != 9.2 {
+		t.Fatalf("expected chiller-c ChwEnteringC=9.2, got %+v", chillerC)
 	}
 }

@@ -46,13 +46,18 @@ const (
 
 	AssetControlLockUnlocked = "UNLOCKED"
 
-	DefaultHeadroomReserveFraction = 0.15
-	DefaultMinimumPowerSavingKW    = 5.0
-	DefaultIdleAuxiliaryDebounce   = 5 * time.Minute
-	DefaultMaxTelemetryAge         = 10 * time.Minute
-	DefaultStagingShiftHours       = 8.0
-	DefaultChillerRunningPowerKW   = 5.0
-	DefaultAuxiliaryRunningPowerKW = 0.5
+	DefaultHeadroomReserveFraction      = 0.15
+	DefaultStageDownDeadbandFraction    = 0.05
+	DefaultMinimumPowerSavingKW         = 5.0
+	DefaultStageDownDwellDuration       = 15 * time.Minute
+	DefaultMinChillerRunDuration        = 30 * time.Minute
+	DefaultMaxStageDownSupplyTempC      = 12.0
+	DefaultIdleAuxiliaryDebounce        = 15 * time.Minute
+	DefaultChillerThermalDeltaThreshold = 0.8
+	DefaultMaxTelemetryAge              = 10 * time.Minute
+	DefaultStagingShiftHours            = 8.0
+	DefaultChillerRunningPowerKW        = 5.0
+	DefaultAuxiliaryRunningPowerKW      = 0.5
 )
 
 var (
@@ -65,25 +70,33 @@ var (
 // StagingPolicy sets the physical reserve margins, hysteresis, debounce and telemetry freshness
 // limits for sensor-honest chiller staging and idle auxiliary recommendations.
 type StagingPolicy struct {
-	HeadroomReserveFraction float64       `json:"headroomReserveFraction"`
-	MinimumPowerSavingKW    float64       `json:"minimumPowerSavingKW"`
-	IdleAuxiliaryDebounce   time.Duration `json:"idleAuxiliaryDebounce"`
-	MaxTelemetryAge         time.Duration `json:"maxTelemetryAge"`
-	ShiftHours              float64       `json:"shiftHours"`
-	ChillerRunningPowerKW   float64       `json:"chillerRunningPowerKW"`
-	AuxiliaryRunningPowerKW float64       `json:"auxiliaryRunningPowerKW"`
+	HeadroomReserveFraction   float64       `json:"headroomReserveFraction"`
+	StageDownDeadbandFraction float64       `json:"stageDownDeadbandFraction"`
+	MinimumPowerSavingKW      float64       `json:"minimumPowerSavingKW"`
+	StageDownDwellDuration    time.Duration `json:"stageDownDwellDuration"`
+	MinChillerRunDuration     time.Duration `json:"minChillerRunDuration"`
+	MaxStageDownSupplyTempC   float64       `json:"maxStageDownSupplyTempC"`
+	IdleAuxiliaryDebounce     time.Duration `json:"idleAuxiliaryDebounce"`
+	MaxTelemetryAge           time.Duration `json:"maxTelemetryAge"`
+	ShiftHours                float64       `json:"shiftHours"`
+	ChillerRunningPowerKW     float64       `json:"chillerRunningPowerKW"`
+	AuxiliaryRunningPowerKW   float64       `json:"auxiliaryRunningPowerKW"`
 }
 
 // DefaultStagingPolicy returns safe defaults aligned with Decision 3A.
 func DefaultStagingPolicy() StagingPolicy {
 	return StagingPolicy{
-		HeadroomReserveFraction: DefaultHeadroomReserveFraction,
-		MinimumPowerSavingKW:    DefaultMinimumPowerSavingKW,
-		IdleAuxiliaryDebounce:   DefaultIdleAuxiliaryDebounce,
-		MaxTelemetryAge:         DefaultMaxTelemetryAge,
-		ShiftHours:              DefaultStagingShiftHours,
-		ChillerRunningPowerKW:   DefaultChillerRunningPowerKW,
-		AuxiliaryRunningPowerKW: DefaultAuxiliaryRunningPowerKW,
+		HeadroomReserveFraction:   DefaultHeadroomReserveFraction,
+		StageDownDeadbandFraction: DefaultStageDownDeadbandFraction,
+		MinimumPowerSavingKW:      DefaultMinimumPowerSavingKW,
+		StageDownDwellDuration:    DefaultStageDownDwellDuration,
+		MinChillerRunDuration:     DefaultMinChillerRunDuration,
+		MaxStageDownSupplyTempC:   DefaultMaxStageDownSupplyTempC,
+		IdleAuxiliaryDebounce:     DefaultIdleAuxiliaryDebounce,
+		MaxTelemetryAge:           DefaultMaxTelemetryAge,
+		ShiftHours:                DefaultStagingShiftHours,
+		ChillerRunningPowerKW:     DefaultChillerRunningPowerKW,
+		AuxiliaryRunningPowerKW:   DefaultAuxiliaryRunningPowerKW,
 	}
 }
 
@@ -97,11 +110,35 @@ func (policy StagingPolicy) normalized() (StagingPolicy, error) {
 	if policy.HeadroomReserveFraction == 0 {
 		policy.HeadroomReserveFraction = DefaultHeadroomReserveFraction
 	}
+	if policy.StageDownDeadbandFraction < 0 || !finite(policy.StageDownDeadbandFraction) {
+		return StagingPolicy{}, errors.New("stageDownDeadbandFraction must be non-negative")
+	}
+	if policy.StageDownDeadbandFraction == 0 {
+		policy.StageDownDeadbandFraction = DefaultStageDownDeadbandFraction
+	}
 	if policy.MinimumPowerSavingKW < 0 || !finite(policy.MinimumPowerSavingKW) {
 		return StagingPolicy{}, errors.New("minimumPowerSavingKW must be non-negative")
 	}
 	if policy.MinimumPowerSavingKW == 0 {
 		policy.MinimumPowerSavingKW = DefaultMinimumPowerSavingKW
+	}
+	if policy.StageDownDwellDuration < 0 {
+		return StagingPolicy{}, errors.New("stageDownDwellDuration must be non-negative")
+	}
+	if policy.StageDownDwellDuration == 0 {
+		policy.StageDownDwellDuration = DefaultStageDownDwellDuration
+	}
+	if policy.MinChillerRunDuration < 0 {
+		return StagingPolicy{}, errors.New("minChillerRunDuration must be non-negative")
+	}
+	if policy.MinChillerRunDuration == 0 {
+		policy.MinChillerRunDuration = DefaultMinChillerRunDuration
+	}
+	if policy.MaxStageDownSupplyTempC < 0 || !finite(policy.MaxStageDownSupplyTempC) {
+		return StagingPolicy{}, errors.New("maxStageDownSupplyTempC must be non-negative")
+	}
+	if policy.MaxStageDownSupplyTempC == 0 {
+		policy.MaxStageDownSupplyTempC = DefaultMaxStageDownSupplyTempC
 	}
 	if policy.IdleAuxiliaryDebounce < 0 {
 		return StagingPolicy{}, errors.New("idleAuxiliaryDebounce must be non-negative")
@@ -234,8 +271,10 @@ type ChillerUnitInput struct {
 	RunStateQuality        string           `json:"runStateQuality,omitempty"`
 	RunStateAt             time.Time        `json:"runStateAt,omitempty"`
 	StoppedSince           *time.Time       `json:"stoppedSince,omitempty"`
+	RunningSince           *time.Time       `json:"runningSince,omitempty"`
 	RunStateHistory        []RunStateSample `json:"runStateHistory,omitempty"`
 	Power                  *TelemetryValue  `json:"power,omitempty"`
+	ChwEnteringC           *TelemetryValue  `json:"chwEnteringC,omitempty"`
 	ChwLeavingC            *TelemetryValue  `json:"chwLeavingC,omitempty"`
 	CwLeavingC             *TelemetryValue  `json:"cwLeavingC,omitempty"`
 }
@@ -345,6 +384,7 @@ type StagingSnapshot struct {
 	CommandPointIDs   map[string]string               `json:"commandPointIds,omitempty"`
 	OperatingSchedule *OperatingScheduleContext       `json:"operatingSchedule,omitempty"`
 	PlantCoolingLoad  *TelemetryValue                 `json:"plantCoolingLoad,omitempty"`
+	PlantLoadHistory  []TelemetryValue                `json:"plantLoadHistory,omitempty"`
 	HeaderSupplyC     *TelemetryValue                 `json:"headerSupplyC,omitempty"`
 	Chillers          []ChillerUnitInput              `json:"chillers"`
 	Auxiliaries       []AuxiliaryUnitInput            `json:"auxiliaries,omitempty"`
@@ -807,8 +847,39 @@ func evaluateChillerStageDown(snapshot StagingSnapshot, policy StagingPolicy) (*
 		}
 	}
 
+	if snapshot.HeaderSupplyC != nil {
+		if ok, _ := isFreshGoodObservation(snapshot.HeaderSupplyC.Quality, snapshot.HeaderSupplyC.SampledAt, at, policy.MaxTelemetryAge); ok &&
+			finite(snapshot.HeaderSupplyC.Value) && snapshot.HeaderSupplyC.Value > policy.MaxStageDownSupplyTempC {
+			return nil, StagingDiagnostic{
+				Scope:  RecommendationKindChillerStageDown,
+				Status: "SUPPRESSED",
+				Reason: "SUPPLY_TEMP_TOO_HIGH_FOR_STAGE_DOWN",
+				Detail: fmt.Sprintf("总管冷冻水供水温度 %.1f ℃ 高于安全减台上限 %.1f ℃，暂停冷机减台评估。",
+					snapshot.HeaderSupplyC.Value, policy.MaxStageDownSupplyTempC),
+			}
+		}
+	}
+
+	hasLoadHistory := len(snapshot.PlantLoadHistory) > 0
+	dwellMaxLoadKW := coolingLoadKW
+	if hasLoadHistory {
+		var dwellReason string
+		dwellMaxLoadKW, dwellReason = confirmPlantLoadDwell(snapshot.PlantLoadHistory, at, policy)
+		if dwellReason != "" {
+			return nil, StagingDiagnostic{
+				Scope:  RecommendationKindChillerStageDown,
+				Status: "SUPPRESSED",
+				Reason: dwellReason,
+				Detail: fmt.Sprintf("冷站瞬时制冷量尚未在连续 %.0f 分钟驻留窗口内保持稳定有效低负荷（%s），暂停冷机减台建议。",
+					policy.StageDownDwellDuration.Minutes(), dwellReason),
+			}
+		}
+	}
+
 	copBefore := coolingLoadKW / totalCurrentPowerKW
-	requiredCapacityKW := coolingLoadKW * (1 + policy.HeadroomReserveFraction)
+	effectiveReserveFraction := policy.HeadroomReserveFraction + policy.StageDownDeadbandFraction
+	requiredCapacityKW := coolingLoadKW * (1 + effectiveReserveFraction)
+	dwellRequiredCapacityKW := dwellMaxLoadKW * (1 + effectiveReserveFraction)
 
 	type candidateOutcome struct {
 		stopped               activeChiller
@@ -843,6 +914,16 @@ func evaluateChillerStageDown(snapshot StagingSnapshot, policy StagingPolicy) (*
 			rejectedAssetCode = candidate.unit.AssetCode
 			continue
 		}
+		if !chillerMeetsMinRunDuration(candidate.unit, at, policy) {
+			recordRejection(
+				"CHILLER_MIN_RUN_TIME_NOT_MET",
+				fmt.Sprintf("冷机 %s 连续运行时间尚未满足 %.0f 分钟最小运行时长要求，本次不建议作为减台停机对象。",
+					unitDisplayName(candidate.unit), policy.MinChillerRunDuration.Minutes()),
+			)
+			rejectedAssetID = candidate.unit.AssetID
+			rejectedAssetCode = candidate.unit.AssetCode
+			continue
+		}
 		remaining := make([]activeChiller, 0, len(running)-1)
 		remainingCapKW := 0.0
 		capacityKnown := true
@@ -865,8 +946,16 @@ func evaluateChillerStageDown(snapshot StagingSnapshot, policy StagingPolicy) (*
 			margin := (remainingCapKW - coolingLoadKW) / coolingLoadKW
 			recordRejection(
 				"HEADROOM_INSUFFICIENT",
-				fmt.Sprintf("停运 %s 后剩余总冷量 %.1f kW，相对当前冷负荷 %.1f kW 裕度仅 %.1f%%，低于 %.1f%% 安全储备要求。",
-					unitDisplayName(candidate.unit), remainingCapKW, coolingLoadKW, margin*100, policy.HeadroomReserveFraction*100),
+				fmt.Sprintf("停运 %s 后剩余总冷量 %.1f kW，相对当前冷负荷 %.1f kW 裕度仅 %.1f%%，低于 %.1f%% 安全储备与迟滞要求。",
+					unitDisplayName(candidate.unit), remainingCapKW, coolingLoadKW, margin*100, effectiveReserveFraction*100),
+			)
+			continue
+		}
+		if hasLoadHistory && remainingCapKW < dwellRequiredCapacityKW {
+			recordRejection(
+				"STAGE_DOWN_DWELL_NOT_MET",
+				fmt.Sprintf("停运 %s 后剩余总冷量 %.1f kW 无法满足过去 %.0f 分钟窗口峰值冷负荷 %.1f kW 的 %.1f%% 安全储备与迟滞要求（需 %.1f kW），暂视为短时负荷波动。",
+					unitDisplayName(candidate.unit), remainingCapKW, policy.StageDownDwellDuration.Minutes(), dwellMaxLoadKW, effectiveReserveFraction*100, dwellRequiredCapacityKW),
 			)
 			continue
 		}
@@ -971,7 +1060,7 @@ func evaluateChillerStageDown(snapshot StagingSnapshot, policy StagingPolicy) (*
 	target := best.stopped.unit
 	rationale := fmt.Sprintf(
 		"当前 %d 台冷机运行（总电功率 %.1f kW，冷站冷负荷 %.1f kW，实测系统 COP %.2f）。建议人工确认停运 %s：停机后剩余冷量 %.1f kW（安全储备裕度 %.1f%% >= %.0f%%），预测系统 COP 升至 %.2f，可净省电功率 %.1f kW（约 %.1f kWh/小时、%.1f kWh/%.0f小时班次）。",
-		len(running), curPower, loadKW, copBeforeRounded, unitDisplayName(target), remCap, headroom*100, policy.HeadroomReserveFraction*100, copAfterRounded, savingKW, hourlyKWh, shiftKWh, policy.ShiftHours,
+		len(running), curPower, loadKW, copBeforeRounded, unitDisplayName(target), remCap, headroom*100, effectiveReserveFraction*100, copAfterRounded, savingKW, hourlyKWh, shiftKWh, policy.ShiftHours,
 	)
 	preconditions := []string{
 		fmt.Sprintf("人工确认模式（%s）：必须经值班主管复核并完成 TOTP 双因子验证后方可下发 %s 停机顺控。", ConfirmationModeManual, SuggestedCapabilityStopUnitSequence),
@@ -1154,6 +1243,17 @@ func evaluateIdleAuxiliaries(snapshot StagingSnapshot, policy StagingPolicy) ([]
 				blocked = true
 				break
 			}
+			if chillerHasActiveThermalDelta(chiller, at, policy.MaxTelemetryAge) {
+				deltaC := chiller.ChwEnteringC.Value - chiller.ChwLeavingC.Value
+				diagnostics = append(diagnostics, StagingDiagnostic{
+					Scope: RecommendationKindIdleAuxiliaryStop, AssetID: aux.AssetID, AssetCode: aux.AssetCode,
+					Status: "SUPPRESSED", Reason: "CHILLER_THERMAL_DELTA_ACTIVE",
+					Detail: fmt.Sprintf("所服务冷机 %s 蒸发器供回水温差 %.2f ℃（>= %.1f ℃），表明仍有冷量交换，严禁停运辅助设备 %s。",
+						unitDisplayName(chiller), deltaC, DefaultChillerThermalDeltaThreshold, auxDisplayName(aux)),
+				})
+				blocked = true
+				break
+			}
 
 			idleDur, durReason := confirmChillerStoppedDuration(chiller, at, policy)
 			if durReason != "" {
@@ -1188,10 +1288,7 @@ func evaluateIdleAuxiliaries(snapshot StagingSnapshot, policy StagingPolicy) ([]
 		savingKWRounded := round(savingKW, 2)
 		hourlyKWh := savingKWRounded
 		shiftKWh := round(savingKW*policy.ShiftHours, 2)
-		interlockStatement := fmt.Sprintf("所服务冷机均已停机超过 5 分钟（实测最短连续停机 %.1f 分钟），无 RUNNING/STARTING 状态机组。", idleMin)
-		if policy.IdleAuxiliaryDebounce > 5*time.Minute {
-			interlockStatement = fmt.Sprintf("所服务冷机均已停机超过 %.0f 分钟（实测最短连续停机 %.1f 分钟），无 RUNNING/STARTING 状态机组。", policy.IdleAuxiliaryDebounce.Minutes(), idleMin)
-		}
+		interlockStatement := fmt.Sprintf("所服务冷机均已停机超过 %.0f 分钟（实测最短连续停机 %.1f 分钟），无 RUNNING/STARTING 状态机组。", policy.IdleAuxiliaryDebounce.Minutes(), idleMin)
 
 		rationale := fmt.Sprintf(
 			"辅助设备 %s 仍在运行，但其所服务冷机（%d 台）均已连续停机 %.1f 分钟（>= %.0f 分钟防抖门槛）。建议人工复核并确认下发 %s 停机指令，预计可回收空转电功率 %.1f kW（约 %.1f kWh/小时）。",
@@ -1292,68 +1389,84 @@ func resolveChillerRunState(unit ChillerUnitInput, at time.Time, policy StagingP
 	return RunStateUnknown, "CHILLER_STATE_MISSING"
 }
 
+func chillerHasActiveThermalDelta(unit ChillerUnitInput, at time.Time, maxAge time.Duration) bool {
+	if unit.ChwEnteringC == nil || unit.ChwLeavingC == nil {
+		return false
+	}
+	enteringOK, _ := isFreshGoodObservation(unit.ChwEnteringC.Quality, unit.ChwEnteringC.SampledAt, at, maxAge)
+	leavingOK, _ := isFreshGoodObservation(unit.ChwLeavingC.Quality, unit.ChwLeavingC.SampledAt, at, maxAge)
+	if !enteringOK || !leavingOK || !finite(unit.ChwEnteringC.Value) || !finite(unit.ChwLeavingC.Value) {
+		return false
+	}
+	return unit.ChwEnteringC.Value-unit.ChwLeavingC.Value >= DefaultChillerThermalDeltaThreshold-1e-9
+}
+
+func chillerMeetsMinRunDuration(unit ChillerUnitInput, at time.Time, policy StagingPolicy) bool {
+	if unit.RunningSince != nil {
+		if unit.RunningSince.IsZero() || unit.RunningSince.After(at) || at.Sub(unit.RunningSince.UTC()) < policy.MinChillerRunDuration {
+			return false
+		}
+	}
+	if len(unit.RunStateHistory) > 0 {
+		_, reason := confirmContinuousRunState(
+			unit.RunStateHistory, RunStateRunning, policy.MinChillerRunDuration, policy.MaxTelemetryAge, at,
+			"CHILLER_MIN_RUN_TIME_NOT_MET", "CHILLER_MIN_RUN_TIME_NOT_MET", "CHILLER_MIN_RUN_TIME_NOT_MET", "CHILLER_MIN_RUN_TIME_NOT_MET",
+		)
+		return reason == ""
+	}
+	return true
+}
+
+func confirmPlantLoadDwell(history []TelemetryValue, at time.Time, policy StagingPolicy) (float64, string) {
+	cutoff := at.Add(-policy.StageDownDwellDuration)
+	samples := make([]TelemetryValue, 0, len(history))
+	for _, s := range history {
+		sampled := s.SampledAt.UTC()
+		if sampled.IsZero() || sampled.After(at) {
+			continue
+		}
+		s.SampledAt = sampled
+		samples = append(samples, s)
+	}
+	sort.Slice(samples, func(i, j int) bool {
+		return samples[i].SampledAt.Before(samples[j].SampledAt)
+	})
+	if len(samples) == 0 || at.Sub(samples[len(samples)-1].SampledAt) > policy.MaxTelemetryAge {
+		return 0, "COOLING_LOAD_DWELL_STALE"
+	}
+	anchorIdx := -1
+	for i, s := range samples {
+		if !s.SampledAt.After(cutoff) {
+			anchorIdx = i
+		}
+	}
+	if anchorIdx < 0 {
+		return 0, "STAGE_DOWN_DWELL_NOT_MET"
+	}
+	maxLoadKW := 0.0
+	var prevAt time.Time
+	for i := anchorIdx; i < len(samples); i++ {
+		s := samples[i]
+		if !strings.EqualFold(strings.TrimSpace(s.Quality), "GOOD") || !finite(s.Value) || s.Value <= 0 {
+			return 0, "COOLING_LOAD_DWELL_NON_GOOD"
+		}
+		if !prevAt.IsZero() && s.SampledAt.Sub(prevAt) > policy.MaxTelemetryAge {
+			return 0, "COOLING_LOAD_DWELL_TELEMETRY_GAP"
+		}
+		if s.Value > maxLoadKW {
+			maxLoadKW = s.Value
+		}
+		prevAt = s.SampledAt
+	}
+	return maxLoadKW, ""
+}
+
 func confirmChillerStoppedDuration(unit ChillerUnitInput, at time.Time, policy StagingPolicy) (time.Duration, string) {
 	if len(unit.RunStateHistory) > 0 {
-		cutoff := at.Add(-policy.IdleAuxiliaryDebounce)
-		samples := append([]RunStateSample(nil), unit.RunStateHistory...)
-		sort.Slice(samples, func(i, j int) bool {
-			return samples[i].SampledAt.Before(samples[j].SampledAt)
-		})
-
-		latestGoodAt := time.Time{}
-		earliestContinuousStopped := time.Time{}
-		hasBeforeCutoff := false
-		prevStoppedAt := time.Time{}
-
-		for _, s := range samples {
-			sampled := s.SampledAt.UTC()
-			if sampled.IsZero() || sampled.After(at) {
-				continue
-			}
-			if !strings.EqualFold(strings.TrimSpace(s.Quality), "GOOD") {
-				if !sampled.Before(cutoff) {
-					return 0, "IDLE_HISTORY_NON_GOOD"
-				}
-				earliestContinuousStopped = time.Time{}
-				hasBeforeCutoff = false
-				prevStoppedAt = time.Time{}
-				continue
-			}
-			state := normalizeRunState(s.State)
-			if state != RunStateStopped {
-				if !sampled.Before(cutoff) {
-					return 0, "IDLE_DEBOUNCE_NOT_MET"
-				}
-				earliestContinuousStopped = time.Time{}
-				hasBeforeCutoff = false
-				prevStoppedAt = time.Time{}
-				continue
-			}
-			if !prevStoppedAt.IsZero() && sampled.Sub(prevStoppedAt) > policy.MaxTelemetryAge {
-				if !sampled.Before(cutoff) {
-					return 0, "IDLE_HISTORY_TELEMETRY_GAP"
-				}
-				earliestContinuousStopped = sampled
-				hasBeforeCutoff = !sampled.After(cutoff)
-			} else {
-				if earliestContinuousStopped.IsZero() {
-					earliestContinuousStopped = sampled
-				}
-				if !sampled.After(cutoff) {
-					hasBeforeCutoff = true
-				}
-			}
-			prevStoppedAt = sampled
-			latestGoodAt = sampled
-		}
-
-		if latestGoodAt.IsZero() || at.Sub(latestGoodAt) > policy.MaxTelemetryAge {
-			return 0, "IDLE_HISTORY_STALE"
-		}
-		if !hasBeforeCutoff || earliestContinuousStopped.IsZero() {
-			return at.Sub(earliestContinuousStopped), "IDLE_DEBOUNCE_NOT_MET"
-		}
-		return at.Sub(earliestContinuousStopped), ""
+		return confirmContinuousRunState(
+			unit.RunStateHistory, RunStateStopped, policy.IdleAuxiliaryDebounce, policy.MaxTelemetryAge, at,
+			"IDLE_HISTORY_NON_GOOD", "IDLE_HISTORY_TELEMETRY_GAP", "IDLE_DEBOUNCE_NOT_MET", "IDLE_HISTORY_STALE",
+		)
 	}
 
 	if unit.StoppedSince != nil && !unit.StoppedSince.IsZero() && !unit.StoppedSince.After(at) {
@@ -1365,6 +1478,74 @@ func confirmChillerStoppedDuration(unit ChillerUnitInput, at time.Time, policy S
 	}
 
 	return 0, "IDLE_DURATION_UNCONFIRMED"
+}
+
+func confirmContinuousRunState(
+	history []RunStateSample,
+	targetState string,
+	requiredDuration, maxGap time.Duration,
+	at time.Time,
+	nonGoodReason, gapReason, notMetReason, staleReason string,
+) (time.Duration, string) {
+	cutoff := at.Add(-requiredDuration)
+	samples := append([]RunStateSample(nil), history...)
+	sort.Slice(samples, func(i, j int) bool {
+		return samples[i].SampledAt.Before(samples[j].SampledAt)
+	})
+
+	latestGoodAt := time.Time{}
+	earliestContinuous := time.Time{}
+	hasBeforeCutoff := false
+	prevMatchAt := time.Time{}
+
+	for _, s := range samples {
+		sampled := s.SampledAt.UTC()
+		if sampled.IsZero() || sampled.After(at) {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(s.Quality), "GOOD") {
+			if !sampled.Before(cutoff) {
+				return 0, nonGoodReason
+			}
+			earliestContinuous = time.Time{}
+			hasBeforeCutoff = false
+			prevMatchAt = time.Time{}
+			continue
+		}
+		if normalizeRunState(s.State) != targetState {
+			if !sampled.Before(cutoff) {
+				return 0, notMetReason
+			}
+			earliestContinuous = time.Time{}
+			hasBeforeCutoff = false
+			prevMatchAt = time.Time{}
+			continue
+		}
+		if !prevMatchAt.IsZero() && sampled.Sub(prevMatchAt) > maxGap {
+			if !sampled.Before(cutoff) {
+				return 0, gapReason
+			}
+			earliestContinuous = sampled
+			hasBeforeCutoff = !sampled.After(cutoff)
+		} else {
+			if earliestContinuous.IsZero() {
+				earliestContinuous = sampled
+			}
+			if !sampled.After(cutoff) {
+				hasBeforeCutoff = true
+			}
+		}
+		prevMatchAt = sampled
+		latestGoodAt = sampled
+	}
+
+	if latestGoodAt.IsZero() || at.Sub(latestGoodAt) > maxGap {
+		return 0, staleReason
+	}
+	if !hasBeforeCutoff || earliestContinuous.IsZero() {
+		return at.Sub(earliestContinuous), notMetReason
+	}
+	return at.Sub(earliestContinuous), ""
 }
 
 func resolveAuxiliaryRunning(aux AuxiliaryUnitInput, at time.Time, policy StagingPolicy) (bool, string) {
@@ -1625,7 +1806,12 @@ func (reader *ClickHouseInputReader) ReadStagingSnapshot(ctx context.Context, qu
 	}
 	at := query.At.UTC()
 	latestFrom := at.Add(-2 * maxDuration(policy.MaxTelemetryAge, time.Hour))
-	historyFrom := at.Add(-policy.IdleAuxiliaryDebounce - policy.MaxTelemetryAge)
+	runHistoryFrom := at.Add(-maxDuration(policy.IdleAuxiliaryDebounce, policy.MinChillerRunDuration) - policy.MaxTelemetryAge)
+	loadHistoryFrom := at.Add(-maxDuration(20*time.Minute, policy.StageDownDwellDuration+5*time.Minute))
+	earliestHistoryFrom := runHistoryFrom
+	if loadHistoryFrom.Before(earliestHistoryFrom) {
+		earliestHistoryFrom = loadHistoryFrom
+	}
 
 	latestSQL := fmt.Sprintf(`SELECT
  toString(device_id) AS deviceId,
@@ -1655,7 +1841,7 @@ FROM (
    AND site_id = toUUID('%s')
    AND telemetry_key IN (
     'power_total','instant_cooling_capacity','btu_meter.instant_cooling_capacity',
-    'chw_leaving_temperature','cw_leaving_temperature',
+    'chw_entering_temperature','chw_leaving_temperature','cw_leaving_temperature',
     'supply_water_temperature','btu_meter.supply_water_temperature',
     'run_state','chiller.run_state','chwp.run_state','cwp.run_state','cooling_tower.run_state'
    )
@@ -1684,13 +1870,19 @@ FORMAT JSONEachRow`,
  toString(device_id) AS deviceId,
  source_id AS sourceId,
  telemetry_key AS telemetryKey,
+ value_number AS valueNumber,
  value_string AS valueString,
+ ifNull(unit, '') AS unit,
  quality,
  formatDateTime(sampled_at,'%%Y-%%m-%%dT%%H:%%i:%%S.%%fZ','UTC') AS sampledAt
 FROM telemetry_history.observations
 WHERE tenant_id = toUUID('%s')
   AND site_id = toUUID('%s')
-  AND telemetry_key IN ('run_state','chiller.run_state')
+  AND (
+    (telemetry_key IN ('run_state','chiller.run_state') AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC'))
+    OR
+    (telemetry_key IN ('instant_cooling_capacity','btu_meter.instant_cooling_capacity') AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC'))
+  )
   AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC')
   AND sampled_at <= parseDateTime64BestEffort('%s',3,'UTC')
   AND received_at <= parseDateTime64BestEffort('%s',3,'UTC')
@@ -1699,16 +1891,17 @@ WHERE tenant_id = toUUID('%s')
 ORDER BY sampled_at ASC, received_at ASC, history_sequence ASC
 FORMAT JSONEachRow`,
 		clickHouseString(query.TenantID), clickHouseString(query.SiteID),
-		formatOptimizationTime(historyFrom), formatOptimizationTime(at), formatOptimizationTime(at),
+		formatOptimizationTime(runHistoryFrom), formatOptimizationTime(loadHistoryFrom),
+		formatOptimizationTime(earliestHistoryFrom), formatOptimizationTime(at), formatOptimizationTime(at),
 	)
 
 	historyPayload, err := reader.queryLimited(ctx, historySQL, maximumStagingSnapshotResponseBytes)
 	if err != nil {
-		return StagingSnapshot{}, fmt.Errorf("query staging run state history: %w", err)
+		return StagingSnapshot{}, fmt.Errorf("query staging history: %w", err)
 	}
-	historyRows, err := decodeStagingRunStateRows(bytes.NewReader(historyPayload))
+	historyRows, err := decodeStagingTelemetryRows(bytes.NewReader(historyPayload))
 	if err != nil {
-		return StagingSnapshot{}, fmt.Errorf("decode staging run state history: %w", err)
+		return StagingSnapshot{}, fmt.Errorf("decode staging history: %w", err)
 	}
 
 	return buildStagingSnapshotFromObservations(query.TenantID, query.SiteID, at, query.Topology, latestRows, historyRows), nil
@@ -1764,41 +1957,6 @@ func decodeStagingTelemetryRows(source io.Reader) ([]stagingTelemetryRow, error)
 	}
 }
 
-func decodeStagingRunStateRows(source io.Reader) ([]stagingTelemetryRow, error) {
-	type rawRow struct {
-		DeviceID     string  `json:"deviceId"`
-		SourceID     string  `json:"sourceId"`
-		TelemetryKey string  `json:"telemetryKey"`
-		ValueString  *string `json:"valueString"`
-		Quality      string  `json:"quality"`
-		SampledAt    string  `json:"sampledAt"`
-	}
-	decoder := json.NewDecoder(source)
-	rows := []stagingTelemetryRow{}
-	for {
-		var r rawRow
-		err := decoder.Decode(&r)
-		if errors.Is(err, io.EOF) {
-			return rows, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		sampledAt, err := time.Parse(time.RFC3339Nano, r.SampledAt)
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, stagingTelemetryRow{
-			DeviceID:     r.DeviceID,
-			SourceID:     r.SourceID,
-			TelemetryKey: r.TelemetryKey,
-			ValueString:  r.ValueString,
-			Quality:      r.Quality,
-			SampledAt:    sampledAt.UTC(),
-		})
-	}
-}
-
 func buildStagingSnapshotFromObservations(
 	tenantID, siteID string,
 	at time.Time,
@@ -1824,20 +1982,6 @@ func buildStagingSnapshotFromObservations(
 				byDeviceKey[k] = map[string]stagingTelemetryRow{}
 			}
 			byDeviceKey[k][row.TelemetryKey] = row
-		}
-	}
-
-	historyByDevice := map[string][]RunStateSample{}
-	for _, row := range history {
-		if row.ValueString == nil {
-			continue
-		}
-		sample := RunStateSample{State: *row.ValueString, Quality: row.Quality, SampledAt: row.SampledAt}
-		for _, id := range []string{row.DeviceID, row.SourceID} {
-			k := strings.ToLower(strings.TrimSpace(id))
-			if k != "" {
-				historyByDevice[k] = append(historyByDevice[k], sample)
-			}
 		}
 	}
 
@@ -1879,6 +2023,44 @@ func buildStagingSnapshotFromObservations(
 	if len(supplyMatches) >= 1 {
 		v := supplyMatches[0]
 		snapshot.HeaderSupplyC = &v
+	}
+
+	plantLoadDeviceID := ""
+	if topology != nil && topology.CoolingLoadDeviceID != "" {
+		plantLoadDeviceID = topology.CoolingLoadDeviceID
+	} else if snapshot.PlantCoolingLoad != nil {
+		plantLoadDeviceID = snapshot.PlantCoolingLoad.DeviceID
+	}
+
+	historyByDevice := map[string][]RunStateSample{}
+	for _, row := range history {
+		switch row.TelemetryKey {
+		case plantCoolingLoadKey, "btu_meter.instant_cooling_capacity":
+			if plantLoadDeviceID != "" &&
+				!strings.EqualFold(row.DeviceID, plantLoadDeviceID) &&
+				!strings.EqualFold(row.SourceID, plantLoadDeviceID) {
+				continue
+			}
+			val := 0.0
+			if row.ValueNumber != nil {
+				val = *row.ValueNumber
+			}
+			snapshot.PlantLoadHistory = append(snapshot.PlantLoadHistory, TelemetryValue{
+				DeviceID: row.DeviceID, SourceKey: row.SourceID, PointKey: row.TelemetryKey,
+				Value: val, Unit: row.Unit, Quality: row.Quality, SampledAt: row.SampledAt,
+			})
+		default:
+			if row.ValueString == nil {
+				continue
+			}
+			sample := RunStateSample{State: *row.ValueString, Quality: row.Quality, SampledAt: row.SampledAt}
+			for _, id := range []string{row.DeviceID, row.SourceID} {
+				k := strings.ToLower(strings.TrimSpace(id))
+				if k != "" {
+					historyByDevice[k] = append(historyByDevice[k], sample)
+				}
+			}
+		}
 	}
 
 	chillerBindings := []ChillerMeterBinding(nil)
@@ -1980,6 +2162,9 @@ func populateChillerTelemetry(
 	}
 	if r, ok := findPointAcrossKeys(byDeviceKey, keys, chillerPowerKey); ok && r.ValueNumber != nil {
 		unit.Power = &TelemetryValue{DeviceID: r.DeviceID, SourceKey: r.SourceID, PointKey: r.TelemetryKey, Value: *r.ValueNumber, Unit: r.Unit, Quality: r.Quality, SampledAt: r.SampledAt}
+	}
+	if r, ok := findPointAcrossKeys(byDeviceKey, keys, chilledWaterEnteringKey); ok && r.ValueNumber != nil {
+		unit.ChwEnteringC = &TelemetryValue{DeviceID: r.DeviceID, SourceKey: r.SourceID, PointKey: r.TelemetryKey, Value: *r.ValueNumber, Unit: r.Unit, Quality: r.Quality, SampledAt: r.SampledAt}
 	}
 	if r, ok := findPointAcrossKeys(byDeviceKey, keys, chilledWaterLeavingKey); ok && r.ValueNumber != nil {
 		unit.ChwLeavingC = &TelemetryValue{DeviceID: r.DeviceID, SourceKey: r.SourceID, PointKey: r.TelemetryKey, Value: *r.ValueNumber, Unit: r.Unit, Quality: r.Quality, SampledAt: r.SampledAt}
@@ -2159,14 +2344,23 @@ func evaluateScheduleState(schedule *OperatingScheduleContext, at time.Time) sch
 		todayDate: todayStr,
 	}
 	todayExc := findApprovedExceptionForDate(schedule.ApprovedExceptions, todayStr)
+	hasShutdownOrMaintenanceToday := false
 	if todayExc != nil {
 		state.hasApprovedExceptionToday = true
 		state.todayException = todayExc
-		if strings.EqualFold(strings.TrimSpace(todayExc.Kind), "MAINTENANCE_WINDOW") {
+		switch strings.ToUpper(strings.TrimSpace(todayExc.Kind)) {
+		case "MAINTENANCE_WINDOW":
 			state.activeMaintenance = todayExc
+			hasShutdownOrMaintenanceToday = true
+		case "HOLIDAY_SHUTDOWN":
+			hasShutdownOrMaintenanceToday = true
 		}
 	}
-	state.scheduleActive = schedule.Configured || state.hasApprovedExceptionToday
+	if len(schedule.Slots) > 0 {
+		state.scheduleActive = schedule.Configured || state.hasApprovedExceptionToday
+	} else {
+		state.scheduleActive = hasShutdownOrMaintenanceToday
+	}
 	if !state.scheduleActive {
 		state.inCoolingWindow = true
 		return state
