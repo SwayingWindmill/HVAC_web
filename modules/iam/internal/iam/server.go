@@ -41,6 +41,7 @@ const (
 
 type Config struct {
 	AllowedWorkloadSPIFFE          string
+	CommandAuthoritySPIFFE         string
 	CoreWorkloadSPIFFE             string
 	CredentialWorkloadSPIFFE       string
 	Audience                       string
@@ -92,6 +93,7 @@ type Config struct {
 
 type handler struct {
 	allowedWorkloadSPIFFE             string
+	commandAuthoritySPIFFE            string
 	coreWorkloadSPIFFE                string
 	credentialWorkloadSPIFFE          string
 	audience                          string
@@ -185,6 +187,13 @@ func NewHandler(config Config) http.Handler {
 	allowedRegistryGrantPresenters := map[string]struct{}{}
 	if presenter := strings.TrimSpace(config.AllowedWorkloadSPIFFE); presenter != "" {
 		allowedRegistryGrantPresenters[presenter] = struct{}{}
+	}
+	commandAuthoritySPIFFE := strings.TrimSpace(config.CommandAuthoritySPIFFE)
+	if commandAuthoritySPIFFE != "" {
+		if !strings.HasPrefix(commandAuthoritySPIFFE, "spiffe://") {
+			panic("IAM command authority SPIFFE is invalid")
+		}
+		allowedRegistryGrantPresenters[commandAuthoritySPIFFE] = struct{}{}
 	}
 	for _, candidate := range config.AllowedRegistryGrantPresenters {
 		presenter := strings.TrimSpace(candidate)
@@ -289,6 +298,7 @@ func NewHandler(config Config) http.Handler {
 	}
 	return &handler{
 		allowedWorkloadSPIFFE:             config.AllowedWorkloadSPIFFE,
+		commandAuthoritySPIFFE:            commandAuthoritySPIFFE,
 		coreWorkloadSPIFFE:                config.CoreWorkloadSPIFFE,
 		credentialWorkloadSPIFFE:          config.CredentialWorkloadSPIFFE,
 		audience:                          config.Audience,
@@ -408,7 +418,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	peerCertificate, spiffeID, ok := peerIdentity(request)
-	if !ok || spiffeID != h.allowedWorkloadSPIFFE {
+	allowedDelegationCaller := spiffeID == h.allowedWorkloadSPIFFE ||
+		(h.commandAuthoritySPIFFE != "" && spiffeID == h.commandAuthoritySPIFFE &&
+			(request.URL.Path == RegistryDecisionPath || request.URL.Path == CommandDecisionPath))
+	if !ok || !allowedDelegationCaller {
 		status = http.StatusUnauthorized
 		writeProblem(writer, status, "IAM_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.")
 		return

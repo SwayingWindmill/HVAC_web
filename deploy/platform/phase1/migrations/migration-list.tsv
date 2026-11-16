@@ -113,6 +113,7 @@ hvac_s3|modules/command/migrations/004_s3_command_point_identity.sql
 hvac_s3|modules/command/migrations/005_s11_edge_execution_evidence.sql
 hvac_s3|modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql
 hvac_s3|modules/command/migrations/007_schema_and_table_comments.sql
+hvac_s3|modules/command/migrations/008_command_precondition_mode.sql
 hvac_s4|modules/alarm/migrations/001_s4_alarm_runtime.sql
 hvac_s4|modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 hvac_s4|modules/alarm/migrations/003_s4_tenant_scope.sql

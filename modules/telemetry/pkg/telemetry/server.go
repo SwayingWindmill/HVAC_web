@@ -53,6 +53,7 @@ type ServerConfig struct {
 	AllowedIAMSPIFFE               string
 	AllowedCommandVerifierSPIFFE   string
 	AllowedCommandDispatcherSPIFFE string
+	AllowedCommandServiceSPIFFE    string
 	Metrics                        *observability.Registry
 	Now                            func() time.Time
 	RateLimiter                    *limitpolicy.Limiter
@@ -76,6 +77,7 @@ type handler struct {
 	allowedIAMSPIFFE               string
 	allowedCommandVerifierSPIFFE   string
 	allowedCommandDispatcherSPIFFE string
+	allowedCommandServiceSPIFFE    string
 	metrics                        *s2Metrics
 	now                            func() time.Time
 	rateLimiter                    *limitpolicy.Limiter
@@ -113,6 +115,7 @@ func NewHandler(config ServerConfig) http.Handler {
 		allowedIAMSPIFFE:               strings.TrimSpace(config.AllowedIAMSPIFFE),
 		allowedCommandVerifierSPIFFE:   strings.TrimSpace(config.AllowedCommandVerifierSPIFFE),
 		allowedCommandDispatcherSPIFFE: strings.TrimSpace(config.AllowedCommandDispatcherSPIFFE),
+		allowedCommandServiceSPIFFE:    strings.TrimSpace(config.AllowedCommandServiceSPIFFE),
 		metrics:                        newS2Metrics(config.Metrics, now),
 		now:                            now,
 		rateLimiter:                    config.RateLimiter,

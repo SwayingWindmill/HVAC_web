@@ -63,6 +63,8 @@ type internalCreateCommandRequest struct {
 	Capability           commandmodel.Capability        `json:"capability"`
 	Parameters           commandmodel.CommandParameters `json:"parameters"`
 	VerificationPointKey string                         `json:"verificationPointKey"`
+	PreconditionMode     commandmodel.PreconditionMode  `json:"preconditionMode,omitempty"`
+	BypassReason         string                         `json:"bypassReason,omitempty"`
 	CurrentState         internalCurrentState           `json:"currentState"`
 }
 
@@ -274,6 +276,7 @@ func (h *HTTPHandler) createCommand(writer http.ResponseWriter, request *http.Re
 		TenantID: input.TenantID, SiteID: input.SiteID, DeviceID: input.DeviceID, PointID: input.PointID,
 		PrincipalID: input.PrincipalID, IdempotencyKey: input.IdempotencyKey,
 		Capability: input.Capability, Parameters: cloneParameters(input.Parameters), VerificationPointKey: input.VerificationPointKey,
+		PreconditionMode: input.PreconditionMode, BypassReason: input.BypassReason,
 		CurrentState: commandmodel.CurrentStateEvidence{
 			EvaluationAvailability: input.CurrentState.EvaluationAvailability,
 			Presence:               input.CurrentState.Presence, Readiness: input.CurrentState.Readiness,
@@ -538,7 +541,23 @@ func validInternalCreate(input internalCreateCommandRequest) bool {
 		}
 	}
 	profile, supported := commandmodel.CapabilityProfileFor(input.Capability)
-	if !supported || !commandmodel.ParametersValid(input.Capability, input.Parameters) || input.CurrentState.BusinessRevision == 0 || input.CurrentState.ObservedAt.IsZero() {
+	if !supported || !commandmodel.ParametersValid(input.Capability, input.Parameters) {
+		return false
+	}
+	mode := input.PreconditionMode
+	if mode == "" {
+		mode = commandmodel.PreconditionRequireCurrentState
+	}
+	switch mode {
+	case commandmodel.PreconditionEmergencyBypass:
+		if !profile.SupportsEmergencyBypass || strings.TrimSpace(input.BypassReason) == "" {
+			return false
+		}
+	case commandmodel.PreconditionRequireCurrentState:
+		if input.CurrentState.BusinessRevision == 0 || input.CurrentState.ObservedAt.IsZero() {
+			return false
+		}
+	default:
 		return false
 	}
 	if profile.ParameterKey == "" {

@@ -63,7 +63,9 @@ func (h *handler) handleCommandReportedState(writer http.ResponseWriter, request
 		return
 	}
 	peer, verified := verifiedPeerSPIFFE(request)
-	allowedWorkload := peer == h.allowedCommandVerifierSPIFFE || peer == h.allowedCommandDispatcherSPIFFE
+	allowedWorkload := peer == h.allowedCommandVerifierSPIFFE ||
+		peer == h.allowedCommandDispatcherSPIFFE ||
+		(h.allowedCommandServiceSPIFFE != "" && peer == h.allowedCommandServiceSPIFFE)
 	if !verified || peer == "" || !allowedWorkload {
 		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted for authoritative command state.", false)
 		return

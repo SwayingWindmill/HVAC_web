@@ -119,6 +119,12 @@ services:
     environment:
       COMMAND_SERVICE_ADDR: :8447
       COMMAND_DIAGNOSTICS_ADDR: :19087
+      IAM_URL: https://iam-owner:8444
+      IAM_SERVER_NAME: iam-service
+      CORE_URL: https://core-owner:18445
+      CORE_SERVER_NAME: platform-core-service
+      TELEMETRY_RUNTIME_URL: https://telemetry-worker:8446
+      TELEMETRY_RUNTIME_SERVER_NAME: telemetry-runtime-service
     expose: ["8447", "19087"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19087/health/ready"]

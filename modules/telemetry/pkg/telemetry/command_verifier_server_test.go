@@ -82,3 +82,19 @@ func TestCommandReportedStateRejectsOtherWorkload(t *testing.T) {
 		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, store.calls, recorder.Body.String())
 	}
 }
+
+func TestCommandReportedStateAllowsCommandServiceSPIFFE(t *testing.T) {
+	const commandServiceSPIFFE = "spiffe://hvac.local/command-service"
+	store := &commandReportedStateStore{}
+	handler := NewHandler(ServerConfig{
+		Store: store, AllowedCommandServiceSPIFFE: commandServiceSPIFFE,
+		Now: func() time.Time { return time.Date(2026, 7, 26, 1, 2, 3, 0, time.UTC) },
+	})
+	request := httptest.NewRequest(http.MethodGet, InternalCommandReportedStatePath+"?deviceId="+deviceA+"&key=zone.temperature_setpoint", nil)
+	request.TLS = verifiedTLSState(commandServiceSPIFFE)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || store.calls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", recorder.Code, store.calls, recorder.Body.String())
+	}
+}

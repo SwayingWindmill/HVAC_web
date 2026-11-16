@@ -62,7 +62,6 @@ type AlarmConfig struct {
 
 type alarmController struct {
 	operations       AlarmOperations
-	store            alarmservice.Store
 	baseURL          string
 	httpClient       *http.Client
 	backendAudience  string
@@ -474,53 +473,12 @@ func newAlarmController(config *AlarmConfig) *alarmController {
 	}
 	return &alarmController{
 		operations:       ops,
-		store:            resolved.Store,
 		baseURL:          resolved.BackendBaseURL,
 		httpClient:       resolved.BackendHTTPClient,
 		backendAudience:  resolved.BackendAudience,
 		timeout:          resolved.Timeout,
 		maxResponseBytes: resolved.MaxResponseBytes,
 	}
-}
-
-func (h *handler) emitControlFailureAlarmAsync(event alarmservice.ControlEventRequest) {
-	if h == nil || h.alarm == nil {
-		return
-	}
-	if event.SchemaVersion == 0 {
-		event.SchemaVersion = 1
-	}
-	now := h.currentGatewayTime()
-	if strings.TrimSpace(event.OccurredAt) == "" {
-		event.OccurredAt = now.UTC().Format(time.RFC3339Nano)
-	}
-	store := h.alarm.store
-	baseURL := h.alarm.baseURL
-	httpClient := h.alarm.httpClient
-	if store == nil && (baseURL == "" || httpClient == nil) {
-		return
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if store != nil {
-			_, _ = alarmservice.PublishControlEvent(ctx, store, event, now)
-			return
-		}
-		raw, err := json.Marshal(event)
-		if err != nil {
-			return
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+alarmservice.InternalControlEventsPath, bytes.NewReader(raw))
-		if err != nil {
-			return
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := httpClient.Do(req)
-		if err == nil && resp != nil {
-			_ = resp.Body.Close()
-		}
-	}()
 }
 
 func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {

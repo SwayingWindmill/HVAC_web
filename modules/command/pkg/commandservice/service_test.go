@@ -892,6 +892,63 @@ func TestServiceCancelPendingAbortActiveSequences(t *testing.T) {
 	}
 }
 
+func TestSubmitEmergencyBypassPrecondition(t *testing.T) {
+	service := New(fixedClock())
+
+	stopProfile, _ := commandmodel.CapabilityProfileFor(commandmodel.CapabilityStop)
+	req := validRequest()
+	req.IdempotencyKey = "bypass-stop-1"
+	req.Capability = commandmodel.CapabilityStop
+	req.Parameters = commandmodel.CommandParameters{}
+	req.VerificationPointKey = "run_state"
+	req.Authorization.Capability = commandmodel.CapabilityStop
+	req.Authorization.CapabilityRevision = stopProfile.Revision
+	req.Authorization.MaximumRisk = commandmodel.RiskCritical
+	req.CurrentState = commandmodel.CurrentStateEvidence{}
+	req.PreconditionMode = commandmodel.PreconditionEmergencyBypass
+	req.BypassReason = "telemetry offline during site emergency shutdown"
+
+	submitted, err := service.Submit(req)
+	if err != nil {
+		t.Fatalf("expected STOP with EMERGENCY_BYPASS and zero revision to succeed, got %v", err)
+	}
+	if submitted.Intent.PreconditionMode != commandmodel.PreconditionEmergencyBypass || submitted.Intent.BypassReason == "" {
+		t.Fatalf("precondition fields not preserved: %+v", submitted.Intent)
+	}
+	if submitted.Intent.SnapshotRevision != 0 {
+		t.Fatalf("expected SnapshotRevision 0 on bypass, got %d", submitted.Intent.SnapshotRevision)
+	}
+
+	normalReq := req
+	normalReq.IdempotencyKey = "normal-stop-1"
+	normalReq.PreconditionMode = commandmodel.PreconditionRequireCurrentState
+	normalReq.BypassReason = ""
+	normalReq.CurrentState = validRequest().CurrentState
+	normalReq.CurrentState.CurrentValue = nil
+	normalSubmitted, err := service.Submit(normalReq)
+	if err != nil {
+		t.Fatalf("expected normal STOP submit to succeed: %v", err)
+	}
+	if normalSubmitted.Intent.PayloadHash == submitted.Intent.PayloadHash {
+		t.Fatalf("expected bypass payload hash to differ from REQUIRE_CURRENT_STATE hash")
+	}
+
+	missingReason := req
+	missingReason.IdempotencyKey = "bypass-missing-reason"
+	missingReason.BypassReason = "   "
+	if _, err := service.Submit(missingReason); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected ErrInvalidRequest when bypass reason empty, got %v", err)
+	}
+
+	unsupported := validRequest()
+	unsupported.IdempotencyKey = "bypass-setpoint"
+	unsupported.PreconditionMode = commandmodel.PreconditionEmergencyBypass
+	unsupported.BypassReason = "emergency"
+	if _, err := service.Submit(unsupported); !errors.Is(err, ErrCapabilityDenied) {
+		t.Fatalf("expected ErrCapabilityDenied on non-bypassable setpoint, got %v", err)
+	}
+}
+
 type stubRuntimeStore struct {
 	dispatchErr error
 	verifyErr   error

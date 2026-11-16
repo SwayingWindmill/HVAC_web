@@ -195,12 +195,6 @@ func (s syntheticDurableStore) ResolveDispatch(_ context.Context, envelope comma
 	return s.service.ResolveDispatch(envelope, result)
 }
 
-type syntheticSafeDispatch struct{}
-
-func (syntheticSafeDispatch) VerifyBeforeDispatch(context.Context, commandmodel.DispatchEnvelope) (DispatchSafetyResult, error) {
-	return DispatchSafetyResult{Safe: true}, nil
-}
-
 func newSyntheticDurableDispatcher(service *commandservice.Service, commandID string, connector Connector, workerID string, now func() time.Time) *DurableDispatcher {
-	return NewDurable(syntheticDurableStore{service, commandID, now}, syntheticSafeDispatch{}, connector, workerID, 30*time.Second)
+	return NewDurable(syntheticDurableStore{service, commandID, now}, connector, workerID, 30*time.Second)
 }

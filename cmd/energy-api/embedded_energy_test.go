@@ -92,4 +92,35 @@ func TestEmbeddedCommandControlFailureNotifierPublishesIntoAlarmStore(t *testing
 		!strings.Contains(alarm.Summary, commandID) {
 		t.Fatalf("unexpected operational alarm: %#v", alarm)
 	}
+
+	emergCmdID := "0195b5c0-0000-7000-8000-000000000015"
+	notifier(context.Background(), commandservice.ControlFailureEvent{
+		Kind:       alarmservice.ControlEventEmergencyDORelease,
+		TenantID:   tenantID,
+		SiteID:     siteID,
+		DeviceID:   deviceID,
+		PointID:    pointID,
+		CommandID:  emergCmdID,
+		Capability: commandmodel.CapabilityStop,
+		ReasonCode: alarmservice.ControlEventEmergencyDORelease,
+		Detail:     "emergency shutdown all DO outputs",
+		OccurredAt: time.Date(2026, 11, 16, 4, 5, 0, 0, time.UTC),
+		ActorType:  "PRINCIPAL",
+		ActorID:    "0195b5c0-0000-7000-8000-000000000099",
+	})
+	listEmerg, err := store.List(context.Background(), tenantID, siteID, alarmservice.Filter{Limit: 10})
+	if err != nil || len(listEmerg.Items) != 2 {
+		t.Fatalf("expected 2 operational alarms after EMERGENCY_DO_RELEASE, items=%d err=%v", len(listEmerg.Items), err)
+	}
+	var emergAlarm *alarmmodel.Alarm
+	for i := range listEmerg.Items {
+		if strings.Contains(listEmerg.Items[i].Summary, emergCmdID) {
+			emergAlarm = &listEmerg.Items[i]
+			break
+		}
+	}
+	if emergAlarm == nil || emergAlarm.CurrentSeverity != alarmmodel.SeverityCritical || emergAlarm.AlarmType != "EMERGENCY_DO_RELEASE" ||
+		!strings.Contains(emergAlarm.Summary, "0195b5c0-0000-7000-8000-000000000099") {
+		t.Fatalf("expected CRITICAL EMERGENCY_DO_RELEASE alarm with actor ID, got %#v", emergAlarm)
+	}
 }

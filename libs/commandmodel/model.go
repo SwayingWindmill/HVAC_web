@@ -66,17 +66,18 @@ const (
 )
 
 type CapabilityProfile struct {
-	Revision              string
-	ParameterKey          string
-	Minimum               float64
-	Maximum               float64
-	Step                  float64
-	MaximumDelta          float64
-	LowRiskDelta          float64
-	MediumRiskDelta       float64
-	BaseRisk              RiskLevel
-	VerificationTolerance float64
-	VerificationWindow    time.Duration
+	Revision                string
+	ParameterKey            string
+	Minimum                 float64
+	Maximum                 float64
+	Step                    float64
+	MaximumDelta            float64
+	LowRiskDelta            float64
+	MediumRiskDelta         float64
+	BaseRisk                RiskLevel
+	VerificationTolerance   float64
+	VerificationWindow      time.Duration
+	SupportsEmergencyBypass bool
 }
 
 func CapabilityProfileFor(capability Capability) (CapabilityProfile, bool) {
@@ -84,11 +85,11 @@ func CapabilityProfileFor(capability Capability) (CapabilityProfile, bool) {
 	case CapabilityStart:
 		return CapabilityProfile{Revision: "capability:start:v1", BaseRisk: RiskHigh, VerificationWindow: sequenceVerificationWindow}, true
 	case CapabilityStop:
-		return CapabilityProfile{Revision: "capability:stop:v1", BaseRisk: RiskHigh, VerificationWindow: sequenceVerificationWindow}, true
+		return CapabilityProfile{Revision: "capability:stop:v1", BaseRisk: RiskHigh, VerificationWindow: sequenceVerificationWindow, SupportsEmergencyBypass: true}, true
 	case CapabilityStartUnitSequence:
 		return CapabilityProfile{Revision: "capability:start-unit-sequence:v1", BaseRisk: RiskHigh, VerificationWindow: sequenceVerificationWindow}, true
 	case CapabilityStopUnitSequence:
-		return CapabilityProfile{Revision: "capability:stop-unit-sequence:v1", BaseRisk: RiskHigh, VerificationWindow: sequenceVerificationWindow}, true
+		return CapabilityProfile{Revision: "capability:stop-unit-sequence:v1", BaseRisk: RiskHigh, VerificationWindow: sequenceVerificationWindow, SupportsEmergencyBypass: true}, true
 	case CapabilityResetFault:
 		return CapabilityProfile{Revision: "capability:reset-fault:v1", BaseRisk: RiskLow, VerificationWindow: defaultVerificationWindow}, true
 	case CapabilitySetTemperatureSetpoint:
@@ -322,6 +323,8 @@ type SubmitRequest struct {
 	Capability           Capability
 	Parameters           CommandParameters
 	VerificationPointKey string
+	PreconditionMode     PreconditionMode
+	BypassReason         string
 	CurrentState         CurrentStateEvidence
 	Authorization        AuthorizationSnapshot
 }
@@ -473,6 +476,8 @@ type CommandIntent struct {
 	RetryPolicy           RetryPolicy
 	Parameters            CommandParameters
 	VerificationPointKey  string
+	PreconditionMode      PreconditionMode
+	BypassReason          string
 	PayloadHash           string
 	SnapshotRevision      uint64
 	DeviceCommandSequence uint64
@@ -691,7 +696,8 @@ func RouteFailureCode(err error) string {
 func TerminalPreSendRejection(failureCode string) bool {
 	code := strings.TrimSpace(failureCode)
 	switch code {
-	case "COMMAND_ROUTE_NOT_FOUND", "COMMAND_CONTROL_DISABLED", "COMMAND_GATEWAY_CREDENTIAL_INACTIVE":
+	case "COMMAND_ROUTE_NOT_FOUND", "COMMAND_CONTROL_DISABLED", "COMMAND_GATEWAY_CREDENTIAL_INACTIVE",
+		"DISPATCH_SAFETY_CONTROL_LOCKED", "DISPATCH_SAFETY_MAINTENANCE_WINDOW":
 		return true
 	case "DISPATCH_SAFETY_EVALUATION_FAILED":
 		return false

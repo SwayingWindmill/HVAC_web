@@ -49,20 +49,6 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store) (*comman
 	if err != nil {
 		return nil, err
 	}
-	dispatcherTelemetryClient, err := commandHTTPClient(dispatcherIdentity, ca, telemetryServerName, 10*time.Second)
-	if err != nil {
-		return nil, err
-	}
-	safetyReader, err := commanddispatcher.NewReportedStateClient(commanddispatcher.ReportedStateClientConfig{
-		BaseURL: telemetryURL, HTTPClient: dispatcherTelemetryClient,
-	})
-	if err != nil {
-		return nil, err
-	}
-	safetyVerifier, err := commanddispatcher.NewAuthoritativeDispatchSafetyVerifierWithInterlocks(safetyReader, commanddispatcher.DispatchSafetyStateKey, store)
-	if err != nil {
-		return nil, err
-	}
 	verifierRuntimeClient, err := commandRuntimeClient(verifierIdentity, ca, ownerURL, ownerServerName)
 	if err != nil {
 		return nil, err
@@ -98,7 +84,7 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store) (*comman
 	verifierWorkerID := envOr("COMMAND_VERIFIER_WORKER_ID", hostnameOr("connectivity-command-verifier"))
 	return &commandRuntime{
 		store:            store,
-		dispatcher:       commanddispatcher.NewDurable(dispatcherRuntimeClient, safetyVerifier, connector, dispatcherWorkerID, 45*time.Second),
+		dispatcher:       commanddispatcher.NewDurable(dispatcherRuntimeClient, connector, dispatcherWorkerID, 45*time.Second),
 		dispatcherWorker: dispatcherWorkerID,
 		verifier:         commanddispatcher.NewDurableVerificationWorker(verifierRuntimeClient, commanddispatcher.NewAuthoritativeReportedStateVerifier(verificationReader), verifierWorkerID, 5*time.Second),
 		verifierWorker:   verifierWorkerID,

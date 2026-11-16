@@ -191,7 +191,7 @@ func (h *handler) route(writer http.ResponseWriter, request *http.Request) {
 	_, _, verifiedTelemetryWorkload := verifiedTelemetryWorkloadIdentity(request)
 	_, _, telemetryRoute := matchPublicTelemetryRoute(request.URL.Path)
 	allowTelemetryWorkloadTenant := verifiedTelemetryWorkload && telemetryRoute
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Notification-Context", "X-Work-Order-Read-Context", "X-Work-Order-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Asset-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant", "X-Actor-Display-Name"} {
+	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant", "X-Command-Grant", "X-Command-Read-Context", "X-Command-Control-Context", "X-Alarm-Read-Context", "X-Alarm-Write-Context", "X-Notification-Context", "X-Work-Order-Read-Context", "X-Work-Order-Write-Context", "X-Acting-Organization-ID", "X-Operations-Registry-Site-Grant", "X-Operations-Registry-Asset-Grant", "X-Operations-Registry-Equipment-Grant", "X-Operations-Energy-Grant", "X-Actor-Display-Name"} {
 		if request.Header.Get(header) == "" || (header == "X-Tenant-ID" && allowTelemetryWorkloadTenant) {
 			continue
 		}

@@ -24,6 +24,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionevent"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
+	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
 	"github.com/quanlaihe/hvac-web/modules/audit/pkg/auditserver"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
@@ -387,6 +388,7 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 	}
 	config := iamserver.Config{
 		AllowedWorkloadSPIFFE:    envOr("IAM_ALLOWED_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-gateway"),
+		CommandAuthoritySPIFFE:   envOr("IAM_COMMAND_AUTHORITY_SPIFFE", "spiffe://hvac.local/command-service"),
 		CoreWorkloadSPIFFE:       envOr("IAM_CORE_WORKLOAD_SPIFFE", "spiffe://hvac.local/platform-core-service"),
 		CredentialWorkloadSPIFFE: "spiffe://hvac.local/mqtt-telemetry-adapter",
 		Audience:                 envOr("IAM_AUDIENCE", "iam-service"),
@@ -503,8 +505,10 @@ func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger) (*http.Serv
 				envOr("CORE_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
 				// Phase 1 runs the energy projector inside the Telemetry Runtime (ADR 0017).
 				envOr("CORE_ANALYTICS_PROJECTOR_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service"),
+				envOr("CORE_COMMAND_SERVICE_SPIFFE", "spiffe://hvac.local/command-service"),
 			},
-			Audience: envOr("CORE_AUDIENCE", "platform-core-service"), GrantStatus: grantStatus, Logger: logger, Observability: telemetry,
+			AllowedCommandServiceSPIFFE: envOr("CORE_COMMAND_SERVICE_SPIFFE", "spiffe://hvac.local/command-service"),
+			Audience:                    envOr("CORE_AUDIENCE", "platform-core-service"), GrantStatus: grantStatus, Logger: logger, Observability: telemetry,
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}, ClientCAs: clientCAs, ClientAuth: tls.RequireAndVerifyClientCert,
@@ -516,11 +520,18 @@ func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger) (*http.Serv
 }
 
 func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef) (*http.Server, *observability.Runtime, func(), error) {
-	certificate, err := tls.LoadX509KeyPair(energyRequiredEnv("COMMAND_TLS_CERT"), energyRequiredEnv("COMMAND_TLS_KEY"))
+	certPath := energyRequiredEnv("COMMAND_TLS_CERT")
+	keyPath := energyRequiredEnv("COMMAND_TLS_KEY")
+	clientCAPath := energyRequiredEnv("COMMAND_CLIENT_CA")
+	certificate, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
-	clientCAs, err := loadCertPool(energyRequiredEnv("COMMAND_CLIENT_CA"), "Command client CA")
+	delegationSigner, ok := certificate.PrivateKey.(crypto.Signer)
+	if !ok {
+		return nil, nil, func() {}, errors.New("command workload key cannot sign delegation tokens")
+	}
+	clientCAs, err := loadCertPool(clientCAPath, "Command client CA")
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
@@ -553,19 +564,68 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 		return nil, nil, func() {}, errors.New("command emergency revocation revision is invalid")
 	}
 	gatewaySPIFFE := envOr("COMMAND_GATEWAY_SPIFFE", "spiffe://hvac.local/platform-gateway")
+	commandServiceSPIFFE := envOr("COMMAND_WORKLOAD_SPIFFE", "spiffe://hvac.local/command-service")
+	grantIssuer := envOr("COMMAND_GRANT_ISSUER", "spiffe://hvac.local/iam-service")
+	grantAudience := envOr("COMMAND_GRANT_AUDIENCE", "command-service")
+	gatewayReadAudience := envOr("COMMAND_GATEWAY_READ_AUDIENCE", "command-service")
+	useChecker := func(claims commandauth.GrantClaims) (commandauth.UseStatus, error) {
+		checkContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return store.ConsumeCommandGrant(checkContext, claims, policyRevision, revocationRevision)
+	}
+	adapters, err := commandservice.NewWorkloadAdaptersFromEnv(commandservice.WorkloadEnvConfig{
+		CertificateFiles: workloadtls.CertificateFiles{
+			CertificatePath: certPath,
+			PrivateKeyPath:  keyPath,
+		},
+		DelegationSigner:      delegationSigner,
+		DefaultServerCA:       clientCAPath,
+		CommandServiceSPIFFE:  commandServiceSPIFFE,
+		PolicyRevision:        policyRevision,
+		CommandGrantPublicKey: commandGrantPublicKey,
+	})
+	if err != nil {
+		store.Close()
+		return nil, nil, func() {}, err
+	}
+	alarmNotifier := buildEmbeddedCommandControlFailureNotifier(alarmRef, &certificate, logger)
+	store.SetControlFailureNotifier(alarmNotifier)
+	authority, err := commandservice.NewControlAuthority(commandservice.ControlAuthorityConfig{
+		Store:                  store,
+		Runtime:                store,
+		Twin:                   adapters,
+		Live:                   adapters,
+		IAM:                    adapters,
+		CommandGrantPublicKey:  commandGrantPublicKey,
+		CommandGrantIssuer:     grantIssuer,
+		CommandGrantPresenter:  commandServiceSPIFFE,
+		CommandGrantAudience:   grantAudience,
+		CommandGrantUseChecker: useChecker,
+		ControlFailureNotifier: alarmNotifier,
+	})
+	if err != nil {
+		store.Close()
+		return nil, nil, func() {}, err
+	}
 	commandHandler, err := commandservice.NewHTTPHandler(commandservice.HTTPConfig{
 		Authority:                  store,
 		CommandGrantPublicKey:      commandGrantPublicKey,
-		CommandGrantIssuer:         envOr("COMMAND_GRANT_ISSUER", "spiffe://hvac.local/iam-service"),
+		CommandGrantIssuer:         grantIssuer,
 		GatewaySPIFFE:              gatewaySPIFFE,
-		CommandGrantAudience:       envOr("COMMAND_GRANT_AUDIENCE", "command-service"),
+		CommandGrantAudience:       grantAudience,
 		GatewayDelegationPublicKey: gatewayDelegationPublicKey,
-		GatewayReadAudience:        envOr("COMMAND_GATEWAY_READ_AUDIENCE", "command-service"),
-		CommandGrantUseChecker: func(claims commandauth.GrantClaims) (commandauth.UseStatus, error) {
-			checkContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			return store.ConsumeCommandGrant(checkContext, claims, policyRevision, revocationRevision)
-		},
+		GatewayReadAudience:        gatewayReadAudience,
+		CommandGrantUseChecker:     useChecker,
+	})
+	if err != nil {
+		store.Close()
+		return nil, nil, func() {}, err
+	}
+	operatorHandler, err := commandservice.NewOperatorHTTPHandler(commandservice.OperatorHTTPConfig{
+		Authority:                  authority,
+		GatewayDelegationPublicKey: gatewayDelegationPublicKey,
+		GatewaySPIFFE:              gatewaySPIFFE,
+		GatewayAudience:            gatewayReadAudience,
 	})
 	if err != nil {
 		store.Close()
@@ -574,14 +634,20 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "energy-api-command", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 2048, ExportTimeout: 500 * time.Millisecond,
 	})
-	alarmNotifier := buildEmbeddedCommandControlFailureNotifier(alarmRef, &certificate, logger)
-	store.SetControlFailureNotifier(alarmNotifier)
-	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(embeddedCommandRuntimeConfig(store, telemetry.Metrics, alarmNotifier))
+	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(embeddedCommandRuntimeConfig(authority, telemetry.Metrics, alarmNotifier))
 	if err != nil {
 		store.Close()
 		return nil, nil, func() {}, err
 	}
 	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == commandservice.InternalOperatorPrefix || strings.HasPrefix(request.URL.Path, commandservice.InternalOperatorPrefix+"/") {
+			if embeddedPeerSPIFFE(request) != gatewaySPIFFE {
+				embeddedWriteProblem(writer, http.StatusForbidden, "COMMAND_GATEWAY_WORKLOAD_FORBIDDEN")
+				return
+			}
+			operatorHandler.ServeHTTP(writer, request)
+			return
+		}
 		if request.URL.Path == commandservice.InternalCommandsPath || strings.HasPrefix(request.URL.Path, commandservice.InternalCommandsPath+"/") {
 			if embeddedPeerSPIFFE(request) != gatewaySPIFFE {
 				embeddedWriteProblem(writer, http.StatusForbidden, "COMMAND_GATEWAY_WORKLOAD_FORBIDDEN")
@@ -633,6 +699,14 @@ func buildEmbeddedCommandControlFailureNotifier(alarmRef *embeddedAlarmStoreRef,
 		}
 	}
 	return func(ctx context.Context, event commandservice.ControlFailureEvent) {
+		actorType := strings.TrimSpace(event.ActorType)
+		if actorType == "" {
+			actorType = "COMMAND_RUNTIME"
+		}
+		actorID := strings.TrimSpace(event.ActorID)
+		if actorID == "" {
+			actorID = "energy-api-command"
+		}
 		payload := alarmservice.ControlEventRequest{
 			SchemaVersion: 1,
 			TenantID:      event.TenantID,
@@ -643,8 +717,8 @@ func buildEmbeddedCommandControlFailureNotifier(alarmRef *embeddedAlarmStoreRef,
 			ReasonCode:    event.ReasonCode,
 			Detail:        event.Detail,
 			OccurredAt:    event.OccurredAt.UTC().Format(time.RFC3339Nano),
-			ActorType:     "COMMAND_RUNTIME",
-			ActorID:       "energy-api-command",
+			ActorType:     actorType,
+			ActorID:       actorID,
 			CorrelationID: event.CommandID,
 		}
 		if event.DeviceID != "" {

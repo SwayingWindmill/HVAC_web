@@ -162,6 +162,7 @@ func (store *PostgresStore) submitOnce(ctx context.Context, request commandmodel
 		return SubmitResult{}, err
 	}
 	capabilityRevision, _, _, _ := commandCapabilityProfile(request.Capability)
+	preconditionMode, bypassReason := normalizedPrecondition(request)
 
 	now := store.now().UTC()
 	ids, err := store.commandIDs(now)
@@ -250,6 +251,8 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 		Parameters:            cloneParameters(request.Parameters),
 		VerificationPointKey:  request.VerificationPointKey,
 		PayloadHash:           payloadHash,
+		PreconditionMode:      preconditionMode,
+		BypassReason:          bypassReason,
 		SnapshotRevision:      request.CurrentState.BusinessRevision,
 		DeviceCommandSequence: sequence,
 		Status:                finalStatus,
@@ -262,18 +265,19 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 INSERT INTO command_runtime.command_intents (
   command_id, tenant_id, site_id, device_id, principal_id, idempotency_key,
   capability_name, capability_revision, risk_level, risk_rule_revision, approval_policy,
-  retry_policy, canonical_parameters, verification_point_key, payload_hash, snapshot_revision, device_command_sequence,
+  retry_policy, canonical_parameters, verification_point_key, payload_hash, precondition_mode, bypass_reason, snapshot_revision, device_command_sequence,
   status, version, active_execution_fence, created_at, updated_at, point_id
 ) VALUES (
   $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6,
   $7, $8, $9, $10, $11,
   $12, $13::jsonb, $14, $15, $16, $17,
-  $18, $19, 0, $20, $20, $21::uuid
+  $18, $19, $20, $21, 0, $22, $22, $23::uuid
 )
 `, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID, intent.PrincipalID,
 		intent.IdempotencyKey, intent.Capability, intent.CapabilityRevision, intent.Risk,
 		intent.RiskSnapshot.RuleRevision, intent.ApprovalPolicy, intent.RetryPolicy, parameters,
-		intent.VerificationPointKey, intent.PayloadHash, intent.SnapshotRevision, intent.DeviceCommandSequence,
+		intent.VerificationPointKey, intent.PayloadHash, string(intent.PreconditionMode), intent.BypassReason,
+		intent.SnapshotRevision, intent.DeviceCommandSequence,
 		intent.Status, intent.Version, now, intent.PointID); err != nil {
 		return SubmitResult{}, classifyCommandWriteError("insert command intent", err)
 	}
@@ -346,11 +350,16 @@ INSERT INTO command_runtime.command_transitions (
 		})
 	}
 
-	redactedPayload, _ := json.Marshal(map[string]any{
-		"capability": intent.Capability,
-		"parameters": intent.Parameters,
-		"risk":       intent.Risk,
-	})
+	auditMap := map[string]any{
+		"capability":       intent.Capability,
+		"parameters":       intent.Parameters,
+		"risk":             intent.Risk,
+		"preconditionMode": intent.PreconditionMode,
+	}
+	if intent.BypassReason != "" {
+		auditMap["bypassReason"] = intent.BypassReason
+	}
+	redactedPayload, _ := json.Marshal(auditMap)
 	if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_audit_intents (
   audit_intent_id, command_id, tenant_id, site_id, device_id,
@@ -574,13 +583,13 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid AND idempotency_key = $3
 
 func loadIntent(ctx context.Context, tx pgx.Tx, tenantID, commandID string) (commandmodel.CommandIntent, error) {
 	var intent commandmodel.CommandIntent
-	var capability, risk, retry, status, approvalPolicy string
+	var capability, risk, retry, status, approvalPolicy, preconditionMode string
 	var parameters []byte
 	err := tx.QueryRow(ctx, `
 SELECT command_id::text, tenant_id::text, site_id::text, device_id::text, principal_id::text,
        idempotency_key, capability_name, capability_revision, risk_level, risk_rule_revision,
        approval_policy, retry_policy, canonical_parameters, verification_point_key,
-       payload_hash, snapshot_revision, device_command_sequence, status, version,
+       payload_hash, precondition_mode, bypass_reason, snapshot_revision, device_command_sequence, status, version,
        active_execution_fence, created_at, updated_at, point_id::text
 FROM command_runtime.command_intents
 WHERE tenant_id = $1::uuid AND command_id = $2::uuid
@@ -588,7 +597,7 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 		&intent.ID, &intent.TenantID, &intent.SiteID, &intent.DeviceID, &intent.PrincipalID,
 		&intent.IdempotencyKey, &capability, &intent.CapabilityRevision, &risk,
 		&intent.RiskSnapshot.RuleRevision, &approvalPolicy, &retry, &parameters, &intent.VerificationPointKey,
-		&intent.PayloadHash, &intent.SnapshotRevision, &intent.DeviceCommandSequence,
+		&intent.PayloadHash, &preconditionMode, &intent.BypassReason, &intent.SnapshotRevision, &intent.DeviceCommandSequence,
 		&status, &intent.Version, &intent.ActiveFence, &intent.CreatedAt, &intent.UpdatedAt, &intent.PointID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -605,6 +614,7 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 	intent.RiskSnapshot.Level = intent.Risk
 	intent.ApprovalPolicy = commandmodel.ApprovalPolicy(approvalPolicy)
 	intent.RetryPolicy = commandmodel.RetryPolicy(retry)
+	intent.PreconditionMode = commandmodel.PreconditionMode(preconditionMode)
 	intent.Status = commandmodel.IntentStatus(status)
 
 	var authorizationCapability, maximumRisk string

@@ -140,25 +140,12 @@ func TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort(t *testing.T) {
 		route != (commandmodel.DeviceRoute{GatewayID: gatewayB, ExternalDeviceID: "METER-01", BindingRevision: 1}) {
 		t.Fatalf("command route=%#v err=%v", route, err)
 	}
-	if locks, err := store.ResolveCommandInterlocks(ctx, commandTo(tenantB, siteB, meterB, commandB)); err != nil || len(locks) != 0 {
-		t.Fatalf("commandB interlocks=%#v err=%v", locks, err)
-	}
-	if mode, err := store.ResolveCommandActuationMode(ctx, commandTo(tenantB, siteB, meterB, commandB)); err != nil || mode != "" {
-		t.Fatalf("commandB actuationMode=%q err=%v", mode, err)
-	}
 	wantPulseRoute := commandmodel.DeviceRoute{
 		GatewayID: gatewayB, ExternalDeviceID: "METER-01", BindingRevision: 1,
 		PointCode: "stop", ActuationMode: "PULSE", Channel: "u51", CoilAddress: 16, HasCoilAddress: true, PulseDurationMs: 500,
 	}
 	if route, err := store.ResolveCommandRoute(ctx, commandTo(tenantB, siteB, meterB, commandBPulse)); err != nil || route != wantPulseRoute {
 		t.Fatalf("pulse command route=%#v want=%#v err=%v", route, wantPulseRoute, err)
-	}
-	if mode, err := store.ResolveCommandActuationMode(ctx, commandTo(tenantB, siteB, meterB, commandBPulse)); err != nil || mode != "PULSE" {
-		t.Fatalf("commandBPulse actuationMode=%q err=%v", mode, err)
-	}
-	locks, err := store.ResolveCommandInterlocks(ctx, commandTo(tenantB, siteB, meterB, commandBPulse))
-	if err != nil || len(locks) != 1 || locks[0] != (commandmodel.InterlockCheck{DeviceID: meterB, Key: "run_state", Expected: "RUNNING", Reason: "pump must run"}) {
-		t.Fatalf("pulse command interlocks=%#v err=%v", locks, err)
 	}
 	if _, err := store.ResolveCommandRoute(ctx, commandTo(tenantA, siteA, meterA, pointA)); !errors.Is(err, commandmodel.ErrCommandControlDisabled) {
 		t.Fatalf("read-only Point err=%v", err)

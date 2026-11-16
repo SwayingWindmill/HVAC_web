@@ -12,11 +12,10 @@ import (
 )
 
 type commandPointSourceMetadata struct {
-	ActuationMode   string                        `json:"actuationMode"`
-	Channel         string                        `json:"channel"`
-	CoilAddress     *int                          `json:"coilAddress"`
-	PulseDurationMs int                           `json:"pulseDurationMs"`
-	InterlockChecks []commandmodel.InterlockCheck `json:"interlockChecks"`
+	ActuationMode   string `json:"actuationMode"`
+	Channel         string `json:"channel"`
+	CoilAddress     *int   `json:"coilAddress"`
+	PulseDurationMs int    `json:"pulseDurationMs"`
 }
 
 // ResolveCommandRoute finds where a command goes from the Registry read port, and
@@ -53,27 +52,6 @@ WHERE pb.point_id = $1::uuid AND pb.device_id = $2::uuid AND pb.writable
 		}
 		if err := applyPointSourceMetadata(&route, pointCode, rawMetadata); err != nil {
 			return err
-		}
-		var siteControlMode string
-		var deviceLockMode string
-		if err := tx.QueryRow(ctx, `
-SELECT
-  COALESCE((
-    SELECT mode FROM core_registry.site_control_states_v1
-    WHERE tenant_id = $1::uuid AND site_id = $2::uuid
-    LIMIT 1
-  ), ''),
-  COALESCE((
-    SELECT lock_mode FROM core_registry.device_control_locks_v1
-    WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid
-    ORDER BY (lock_mode <> 'UNLOCKED') DESC, revision DESC
-    LIMIT 1
-  ), '')
-`, envelope.TenantID, envelope.SiteID, envelope.DeviceID).Scan(&siteControlMode, &deviceLockMode); err != nil {
-			return fmt.Errorf("read command control lock state: %w", err)
-		}
-		if isControlLockBlocking(siteControlMode, deviceLockMode, envelope.Capability, route.ActuationMode) {
-			return commandmodel.ErrCommandControlDisabled
 		}
 		var credentialActive bool
 		if err := tx.QueryRow(ctx, `
@@ -118,78 +96,8 @@ func applyPointSourceMetadata(route *commandmodel.DeviceRoute, pointCode string,
 	return nil
 }
 
-func isControlLockBlocking(siteControlMode string, deviceLockMode string, capability commandmodel.Capability, actuationMode string) bool {
-	isShutdown := capability == commandmodel.CapabilityStop || capability == commandmodel.CapabilityStopUnitSequence
-	isEmergencyDoRelease := isShutdown && normalizeActuationMode(actuationMode) == "EMERGENCY_DO_RELEASE"
-	if siteControlMode != "" && siteControlMode != "REMOTE_AUTO" && !isShutdown {
-		return true
-	}
-	if deviceLockMode != "" && deviceLockMode != "UNLOCKED" && !isEmergencyDoRelease {
-		return true
-	}
-	return false
-}
-
-// ResolveCommandInterlocks loads declarative peer interlock preconditions from the
-// active COMMAND point metadata on the Registry read port.
-func (store *Store) ResolveCommandInterlocks(ctx context.Context, envelope commandmodel.DispatchEnvelope) ([]commandmodel.InterlockCheck, error) {
-	var checks []commandmodel.InterlockCheck
-	err := store.readAsTenant(ctx, envelope.TenantID, func(tx pgx.Tx) error {
-		var rawInterlocks []byte
-		err := tx.QueryRow(ctx, `
-SELECT COALESCE(source_metadata->'interlockChecks', '[]'::jsonb)
-FROM core_registry.command_point_routes_v1
-WHERE site_id = $1::uuid AND device_id = $2::uuid AND point_id = $3::uuid AND writable
-`, envelope.SiteID, envelope.DeviceID, envelope.PointID).Scan(&rawInterlocks)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("read command interlock metadata: %w", err)
-		}
-		if err := json.Unmarshal(rawInterlocks, &checks); err != nil {
-			return fmt.Errorf("decode command interlock metadata: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return checks, nil
-}
-
 func normalizeActuationMode(mode string) string {
 	return strings.ToUpper(strings.TrimSpace(mode))
-}
-
-// ResolveCommandActuationMode loads the normalized actuationMode from active COMMAND
-// point metadata on the Registry read port.
-func (store *Store) ResolveCommandActuationMode(ctx context.Context, envelope commandmodel.DispatchEnvelope) (string, error) {
-	if store == nil || store.pool == nil {
-		return "", errors.New("connectivity store is closed")
-	}
-	var actuationMode string
-	err := store.readAsTenant(ctx, envelope.TenantID, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, `
-SELECT UPPER(TRIM(COALESCE(source_metadata->>'actuationMode', '')))
-FROM core_registry.command_point_routes_v1
-WHERE point_id = $1::uuid
-  AND device_id = $2::uuid
-  AND tenant_id = $3::uuid
-  AND site_id = $4::uuid
-`, envelope.PointID, envelope.DeviceID, envelope.TenantID, envelope.SiteID).Scan(&actuationMode)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("read command actuation mode metadata: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		return "", err
-	}
-	return normalizeActuationMode(actuationMode), nil
 }
 
 // GatewayTenant returns the Tenant of a Gateway in the Registry gateway directory, so a
