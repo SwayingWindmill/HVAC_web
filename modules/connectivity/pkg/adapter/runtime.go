@@ -259,52 +259,113 @@ func (runtime *Runtime) queueFor(ctx context.Context, gatewayID string) chan que
 }
 
 func (runtime *Runtime) processQueue(ctx context.Context, gatewayID string, queue chan queuedPublish) {
+	limit := min(runtime.config.effectiveBatchMaxMessages(), max(1, runtime.config.QueueCapacity))
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case item := <-queue:
+		case first := <-queue:
 			runtime.recordQueueDepth(gatewayID, len(queue))
-			if !runtime.processPublish(ctx, gatewayID, item) {
+			batch := runtime.drainBatch(ctx, gatewayID, queue, first, limit)
+			if len(batch) == 0 {
+				return
+			}
+			if !runtime.processBatch(ctx, gatewayID, batch) {
 				return
 			}
 		}
 	}
 }
 
-// processPublish retries a transient failure in place, keeping the Gateway's messages in
-// order, until the message is processed, quarantined or Connectivity stops. A message
-// left unacknowledged at shutdown is redelivered by the broker.
-func (runtime *Runtime) processPublish(ctx context.Context, gatewayID string, item queuedPublish) bool {
+func (runtime *Runtime) drainBatch(ctx context.Context, gatewayID string, queue chan queuedPublish, first queuedPublish, limit int) []queuedPublish {
+	batch := make([]queuedPublish, 1, limit)
+	batch[0] = first
+drainLoop:
+	for len(batch) < limit {
+		select {
+		case item := <-queue:
+			batch = append(batch, item)
+		default:
+			break drainLoop
+		}
+	}
+	runtime.recordQueueDepth(gatewayID, len(queue))
+	if runtime.config.BatchFlushWindow <= 0 || len(batch) >= limit {
+		return batch
+	}
+	timer := time.NewTimer(runtime.config.BatchFlushWindow)
+	defer timer.Stop()
+	for len(batch) < limit {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-timer.C:
+			return batch
+		case item := <-queue:
+			batch = append(batch, item)
+			runtime.recordQueueDepth(gatewayID, len(queue))
+		}
+	}
+	return batch
+}
+
+func (runtime *Runtime) processBatch(ctx context.Context, gatewayID string, batch []queuedPublish) bool {
+	messages := make([]UplinkMessage, len(batch))
+	for index, item := range batch {
+		messages[index] = UplinkMessage{Topic: item.packet.Topic, Payload: item.packet.Payload}
+	}
+	for len(batch) > 0 {
+		consumed, ok := runtime.processPrefix(ctx, gatewayID, batch, messages)
+		if !ok {
+			return false
+		}
+		batch = batch[consumed:]
+		messages = messages[consumed:]
+	}
+	return true
+}
+
+// processPrefix retries a transient failure in place, keeping the Gateway's messages in
+// order, until the contiguous prefix is processed, quarantined or Connectivity stops.
+// Messages left unacknowledged at shutdown are redelivered by the broker.
+func (runtime *Runtime) processPrefix(ctx context.Context, gatewayID string, pending []queuedPublish, messages []UplinkMessage) (int, bool) {
 	for attempt := 1; ; attempt++ {
 		started := time.Now()
 		processContext, cancel := context.WithTimeout(ctx, 30*time.Second)
-		result, err := runtime.processor.Process(processContext, item.packet.Topic, item.packet.Payload)
+		outcomes, err := runtime.processor.ProcessPrefix(processContext, messages)
 		cancel()
-		switch {
-		case err == nil:
-			runtime.ack(gatewayID, result.MessageID, item)
-			runtime.recordProcessingSuccess()
-			runtime.recordProcessingResult(result, time.Since(started))
-			runtime.logger.Info("mqtt_uplink_message_processed", "gateway_id", gatewayID, "message_id", result.MessageID, "message_type", result.MessageType,
-				"point_count", result.PointCount, "accepted", result.Accepted, "duplicate", result.Duplicate, "out_of_order", result.OutOfOrder,
-				"quarantined", result.Quarantined, "rejected", result.Rejected)
-			return true
-		case isPermanentMessageError(err):
-			runtime.ack(gatewayID, result.MessageID, item)
-			_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT uplink messages by processing outcome.", map[string]string{"outcome": "quarantined"}, 1)
-			runtime.logger.Warn("mqtt_uplink_message_quarantined", "gateway_id", gatewayID, "topic", item.packet.Topic, "error", err.Error())
-			return true
+		if err == nil && len(outcomes) > 0 {
+			elapsed := time.Since(started)
+			for index, outcome := range outcomes {
+				item := pending[index]
+				if isPermanentMessageError(outcome.Err) {
+					runtime.ack(gatewayID, outcome.Result.MessageID, item)
+					_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT uplink messages by processing outcome.", map[string]string{"outcome": "quarantined"}, 1)
+					runtime.logger.Warn("mqtt_uplink_message_quarantined", "gateway_id", gatewayID, "topic", item.packet.Topic, "error", outcome.Err.Error())
+					continue
+				}
+				result := outcome.Result
+				runtime.ack(gatewayID, result.MessageID, item)
+				runtime.recordProcessingSuccess()
+				runtime.recordProcessingResult(result, elapsed)
+				runtime.logger.Info("mqtt_uplink_message_processed", "gateway_id", gatewayID, "message_id", result.MessageID, "message_type", result.MessageType,
+					"point_count", result.PointCount, "accepted", result.Accepted, "duplicate", result.Duplicate, "out_of_order", result.OutOfOrder,
+					"quarantined", result.Quarantined, "rejected", result.Rejected)
+			}
+			return len(outcomes), true
+		}
+		if err == nil {
+			err = errors.New("MQTT uplink processor produced no outcomes")
 		}
 		runtime.recordProcessingFailure(err)
 		_ = runtime.metrics.AddCounter("hvac_mqtt_message_retries_total", "MQTT uplink processing retries after transient failures.", map[string]string{"reason_family": "dependency"}, 1)
 		delay := runtime.retryDelay(attempt)
-		runtime.logger.Warn("mqtt_uplink_message_retrying", "gateway_id", gatewayID, "topic", item.packet.Topic, "attempt", attempt, "retry_in", delay.String(), "error", err.Error())
+		runtime.logger.Warn("mqtt_uplink_message_retrying", "gateway_id", gatewayID, "topic", pending[0].packet.Topic, "attempt", attempt, "retry_in", delay.String(), "error", err.Error())
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return false
+			return 0, false
 		case <-timer.C:
 		}
 	}

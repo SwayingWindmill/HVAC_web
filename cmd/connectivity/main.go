@@ -179,7 +179,9 @@ func uplinkConfig() adapter.Config {
 			CAFile:  ca, CertFile: identityCert, KeyFile: identityKey,
 			ServerName: envOr("CONNECTIVITY_TELEMETRY_SERVER_NAME", "telemetry-runtime-service"),
 		},
-		QueueCapacity: queueCapacity(),
+		QueueCapacity:    queueCapacity(),
+		BatchMaxMessages: batchMaxMessages(),
+		BatchFlushWindow: batchFlushWindow(),
 	}
 }
 
@@ -191,6 +193,22 @@ func queueCapacity() int {
 		return 0
 	}
 	return capacity
+}
+
+func batchMaxMessages() int {
+	maxMessages, err := strconv.Atoi(envOr("CONNECTIVITY_BATCH_MAX_MESSAGES", strconv.Itoa(adapter.DefaultBatchMaxMessages)))
+	if err != nil || maxMessages < 1 {
+		return -1
+	}
+	return maxMessages
+}
+
+func batchFlushWindow() time.Duration {
+	window, err := time.ParseDuration(envOr("CONNECTIVITY_BATCH_WINDOW", "0s"))
+	if err != nil {
+		return -1
+	}
+	return window
 }
 
 func diagnosticsServer(address string, runtime *adapter.Runtime, telemetry *observability.Runtime) *http.Server {

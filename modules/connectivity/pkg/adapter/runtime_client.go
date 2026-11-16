@@ -17,9 +17,11 @@ import (
 )
 
 const (
-	sourceObservationPath            = "/internal/v1/telemetry/sources/observations:accept"
+	// MaxObservationBatchSize caps a single Telemetry runtime acceptBatch call.
+	MaxObservationBatchSize          = 512
+	sourceObservationBatchPath       = "/internal/v1/telemetry/sources/observations:acceptBatch"
 	mqttRuntimeEventPath             = "/internal/v1/telemetry/sources/mqtt/events:accept"
-	maximumTelemetryRuntimeBodyBytes = int64(256 << 10)
+	maximumTelemetryRuntimeBodyBytes = int64(2 << 20)
 )
 
 // Observation is one point value with the Device and Point resolved from Registry; either
@@ -92,7 +94,7 @@ type RuntimeEventEvidence struct {
 }
 
 type RuntimeClient interface {
-	AcceptObservation(context.Context, Observation) (ObservationReceipt, error)
+	AcceptObservationBatch(context.Context, []Observation) ([]ObservationReceipt, error)
 	AcceptRuntimeEvent(context.Context, RuntimeEventEvidence) error
 }
 
@@ -145,70 +147,77 @@ func newMTLSHTTPClient(config TelemetryRuntimeConfig) (*http.Client, error) {
 	}, nil
 }
 
-func (client *TelemetryRuntimeClient) AcceptObservation(ctx context.Context, observation Observation) (ObservationReceipt, error) {
-	body, err := json.Marshal(observation)
-	if err != nil {
-		return ObservationReceipt{}, fmt.Errorf("encode S2 observation: %w", err)
+type observationBatchRequest struct {
+	Observations []Observation `json:"observations"`
+}
+
+type observationBatchResponse struct {
+	Receipts []ObservationReceipt `json:"receipts"`
+}
+
+func (client *TelemetryRuntimeClient) AcceptObservationBatch(ctx context.Context, observations []Observation) ([]ObservationReceipt, error) {
+	if len(observations) == 0 || len(observations) > MaxObservationBatchSize {
+		return nil, fmt.Errorf("S2 observation batch size %d must be between 1 and %d", len(observations), MaxObservationBatchSize)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+sourceObservationPath, bytes.NewReader(body))
+	responseBody, err := client.postJSON(ctx, sourceObservationBatchPath, "S2 observation batch", observationBatchRequest{Observations: observations})
 	if err != nil {
-		return ObservationReceipt{}, fmt.Errorf("create S2 observation request: %w", err)
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(responseBody))
+	decoder.DisallowUnknownFields()
+	var batchResponse observationBatchResponse
+	if err := decoder.Decode(&batchResponse); err != nil || ensureJSONEOF(decoder) != nil {
+		return nil, errors.New("S2 observation batch receipt is invalid")
+	}
+	if len(batchResponse.Receipts) != len(observations) {
+		return nil, fmt.Errorf("S2 observation batch returned %d receipts for %d observations", len(batchResponse.Receipts), len(observations))
+	}
+	for _, receipt := range batchResponse.Receipts {
+		if !validReceiptStatus(receipt.Status) {
+			return nil, errors.New("S2 observation receipt status is invalid")
+		}
+	}
+	return batchResponse.Receipts, nil
+}
+
+func validReceiptStatus(status string) bool {
+	switch status {
+	case "ACCEPTED", "DUPLICATE", "OUT_OF_ORDER", "QUARANTINED", "REJECTED":
+		return true
+	default:
+		return false
+	}
+}
+
+func (client *TelemetryRuntimeClient) AcceptRuntimeEvent(ctx context.Context, evidence RuntimeEventEvidence) error {
+	_, err := client.postJSON(ctx, mqttRuntimeEventPath, "MQTT evidence", evidence)
+	return err
+}
+
+func (client *TelemetryRuntimeClient) postJSON(ctx context.Context, path, label string, value any) ([]byte, error) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encode %s: %w", label, err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create %s request: %w", label, err)
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/json")
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return ObservationReceipt{}, errors.New("S2 observation request failed")
+		return nil, fmt.Errorf("%s request failed", label)
 	}
 	defer response.Body.Close()
 	responseBody, err := readBounded(response.Body, maximumTelemetryRuntimeBodyBytes)
 	if err != nil {
-		return ObservationReceipt{}, fmt.Errorf("read S2 observation response: %w", err)
+		return nil, fmt.Errorf("read %s response: %w", label, err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return ObservationReceipt{}, fmt.Errorf("S2 observation returned %d", response.StatusCode)
+		return nil, fmt.Errorf("%s returned %d", label, response.StatusCode)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(responseBody))
-	decoder.DisallowUnknownFields()
-	var receipt ObservationReceipt
-	if err := decoder.Decode(&receipt); err != nil || ensureJSONEOF(decoder) != nil {
-		return ObservationReceipt{}, errors.New("S2 observation receipt is invalid")
-	}
-	switch receipt.Status {
-	case "ACCEPTED", "DUPLICATE", "OUT_OF_ORDER", "QUARANTINED", "REJECTED":
-	default:
-		return ObservationReceipt{}, errors.New("S2 observation receipt status is invalid")
-	}
-	return receipt, nil
-}
-
-func (client *TelemetryRuntimeClient) AcceptRuntimeEvent(ctx context.Context, evidence RuntimeEventEvidence) error {
-	return client.postEvidence(ctx, mqttRuntimeEventPath, evidence)
-}
-
-func (client *TelemetryRuntimeClient) postEvidence(ctx context.Context, path string, value any) error {
-	body, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Errorf("encode MQTT evidence: %w", err)
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create MQTT evidence request: %w", err)
-	}
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Content-Type", "application/json")
-	response, err := client.httpClient.Do(request)
-	if err != nil {
-		return errors.New("MQTT evidence request failed")
-	}
-	defer response.Body.Close()
-	if _, err := readBounded(response.Body, maximumTelemetryRuntimeBodyBytes); err != nil {
-		return fmt.Errorf("read MQTT evidence response: %w", err)
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("MQTT evidence returned %d", response.StatusCode)
-	}
-	return nil
+	return responseBody, nil
 }
 
 func validateHTTPSOrigin(raw string) error {

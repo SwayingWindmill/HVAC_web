@@ -15,6 +15,9 @@ const (
 	mqttKeepAliveSeconds     = 30
 	mqttSessionExpirySeconds = 24 * 60 * 60
 	mqttConnectTimeout       = 10 * time.Second
+	// DefaultBatchMaxMessages is the per-Gateway batch drain cap when BatchMaxMessages is 0.
+	DefaultBatchMaxMessages = 200
+	maxBatchFlushWindow     = time.Second
 )
 
 // Config is Connectivity's uplink configuration. It names no Tenant, Site or Gateway:
@@ -24,7 +27,9 @@ type Config struct {
 	TelemetryRuntime TelemetryRuntimeConfig
 	// QueueCapacity bounds each Gateway's in-process backlog; beyond it the broker holds
 	// the Gateway's messages until Connectivity catches up.
-	QueueCapacity int
+	QueueCapacity    int
+	BatchMaxMessages int
+	BatchFlushWindow time.Duration
 }
 
 type MQTTConfig struct {
@@ -70,5 +75,18 @@ func (config Config) Validate() error {
 	if config.QueueCapacity < 1 || config.QueueCapacity > 65536 {
 		return errors.New("queue capacity must be between 1 and 65536")
 	}
+	if config.BatchMaxMessages < 0 || config.BatchMaxMessages > MaxObservationBatchSize {
+		return fmt.Errorf("batch max messages must be between 0 and %d", MaxObservationBatchSize)
+	}
+	if config.BatchFlushWindow < 0 || config.BatchFlushWindow > maxBatchFlushWindow {
+		return fmt.Errorf("batch flush window must be between 0 and %s", maxBatchFlushWindow)
+	}
 	return nil
+}
+
+func (config Config) effectiveBatchMaxMessages() int {
+	if config.BatchMaxMessages <= 0 {
+		return DefaultBatchMaxMessages
+	}
+	return config.BatchMaxMessages
 }

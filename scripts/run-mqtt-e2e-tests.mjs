@@ -153,16 +153,17 @@ try {
   psql(registrySeed());
   runDockerCompose(run, ['-p', brokerProject, '-f', brokerCompose, 'up', '-d', '--wait', 'mqtt-broker'], { env: brokerEnv });
 
-  // Stand-in Telemetry Runtime: fails the first observation, can be slowed, records the rest.
+  // Stand-in Telemetry Runtime: fails the first batch, can hold/delay batches, records all observations.
   const observations = [];
   let sourceIdentityVerified = false;
   let failNext = true;
   let responseDelay = 0;
+  let slowBatchGate = null;
   telemetryServer = createHTTPSServer({
     key: await readFile(join(pkiDir, 'telemetry-key.pem')), cert: await readFile(join(pkiDir, 'telemetry-cert.pem')),
     ca: await readFile(join(pkiDir, 'ca.pem')), minVersion: 'TLSv1.3', requestCert: true, rejectUnauthorized: true,
   }, async (request, response) => {
-    if (request.method !== 'POST' || request.url !== '/internal/v1/telemetry/sources/observations:accept') {
+    if (request.method !== 'POST' || request.url !== '/internal/v1/telemetry/sources/observations:acceptBatch') {
       response.writeHead(404).end();
       return;
     }
@@ -170,19 +171,28 @@ try {
     sourceIdentityVerified = String(peer?.subjectaltname ?? '').includes('URI:spiffe://hvac.local/mqtt-telemetry-adapter');
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
-    const observation = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const batch = Array.isArray(body?.observations) ? body.observations : null;
+    if (!batch || batch.length === 0 || batch.length > 512) {
+      response.writeHead(400, { 'content-type': 'application/json' }).end('{"error":"invalid observation batch"}');
+      return;
+    }
+    if (slowBatchGate) await slowBatchGate;
     if (responseDelay > 0) await new Promise((resolveWait) => setTimeout(resolveWait, responseDelay));
     if (failNext) {
       failNext = false;
       response.writeHead(503, { 'content-type': 'application/json' }).end('{"error":"temporary test outage"}');
       return;
     }
-    observations.push(observation);
-    response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
-      observationId: randomUUID(), evidenceId: '', status: observation.device && observation.point ? 'ACCEPTED' : 'QUARANTINED', quality: 'GOOD',
-      qualityReasons: [], quarantineReason: '', deviceId: observation.device?.deviceId ?? '', businessRevision: observations.length,
-      stateChanged: true, positionAdvanced: true,
-    }));
+    const receipts = batch.map((observation) => {
+      observations.push(observation);
+      return {
+        observationId: randomUUID(), evidenceId: '', status: observation.device && observation.point ? 'ACCEPTED' : 'QUARANTINED', quality: 'GOOD',
+        qualityReasons: [], quarantineReason: '', deviceId: observation.device?.deviceId ?? '', businessRevision: observations.length,
+        stateChanged: true, positionAdvanced: true,
+      };
+    });
+    response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ receipts }));
   });
   telemetryServer.listen({ host: '127.0.0.1', port: telemetryPort });
   await once(telemetryServer, 'listening');
@@ -254,13 +264,18 @@ try {
   }
 
   // Backlog: a slow Telemetry fills the Gateway queue; nothing is dropped once it recovers.
-  responseDelay = 150;
+  let releaseSlowTelemetry = null;
+  slowBatchGate = new Promise((resolveGate) => { releaseSlowTelemetry = resolveGate; });
   let peakQueueDepth = 0;
-  await waitFor(async () => {
-    peakQueueDepth = Math.max(peakQueueDepth, await metric(connectivityMetrics, 'hvac_mqtt_gateway_queue_depth'));
-    return peakQueueDepth >= 2;
-  }, 60000, 'a full Gateway queue while Telemetry is slow');
-  responseDelay = 0;
+  try {
+    await waitFor(async () => {
+      peakQueueDepth = Math.max(peakQueueDepth, await metric(connectivityMetrics, 'hvac_mqtt_gateway_queue_depth'));
+      return peakQueueDepth >= 2;
+    }, 60000, 'a full Gateway queue while Telemetry is slow');
+  } finally {
+    slowBatchGate = null;
+    releaseSlowTelemetry?.();
+  }
   const publishedMessages = async () => metric(publisherMetrics, 'hvac_edge_mqtt_publishes_total{outcome="queued"}');
   const processedMessages = async () => metric(connectivityMetrics, 'hvac_mqtt_messages_processed_total{outcome="success"}');
   await waitFor(async () => (await processedMessages()) >= (await publishedMessages()) && await metric(connectivityMetrics, 'hvac_mqtt_gateway_queue_depth') === 0, 120000, 'backlog drained with every published message processed');
