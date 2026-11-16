@@ -551,3 +551,185 @@ func TestControlAuthorityDegradedSafeShutdownCoastDownAbortAndEmergencyAlarm(t *
 		t.Fatal("timed out waiting for EMERGENCY_DO_RELEASE ControlFailureEvent")
 	}
 }
+
+func TestControlAuthorityLastActiveChillerGuardScheduleVariants(t *testing.T) {
+	setup := func(now time.Time, tz string, slots []OperatingScheduleSlotDTO) (*TestControlHarness, OperatorIdentity) {
+		t.Helper()
+		h, op := seedPlantHarness(t, now)
+		op.StepUpTOTPVerified = true
+		h.Twin.Schedules[caSiteID] = OperatingScheduleDTO{
+			Timezone: tz,
+			Slots:    slots,
+		}
+		h.Live.Set(caChillerDev, "run_state", healthyTextObs(now, "RUNNING", 40), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000040")
+		return h, op
+	}
+
+	t.Run("pending_maintenance_keeps_protection_while_approved_holiday_lifts_it", func(t *testing.T) {
+		now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+		h, op := setup(now, "UTC", []OperatingScheduleSlotDTO{{DayOfWeek: 1, StartMinute: 480, EndMinute: 1080}})
+		h.Twin.Exceptions[caSiteID] = []OperatingExceptionDTO{{
+			Kind: "MAINTENANCE_WINDOW", StartDate: "2026-11-16", EndDate: "2026-11-16", Status: "PENDING_APPROVAL",
+		}}
+		_, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStopPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "pending-maint-still-blocked",
+		})
+		var ce *ControlError
+		if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusConflict || ce.Code != "COMMAND_LAST_ACTIVE_CHILLER_PROTECTED" {
+			t.Fatalf("expected 409 COMMAND_LAST_ACTIVE_CHILLER_PROTECTED for PENDING_APPROVAL exception, got %v", err)
+		}
+
+		h.Twin.Exceptions[caSiteID] = []OperatingExceptionDTO{{
+			Kind: "HOLIDAY_SHUTDOWN", StartDate: "2026-11-16", EndDate: "2026-11-16", Status: "APPROVED",
+		}}
+		if _, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStopPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "approved-holiday-ok",
+		}); err != nil {
+			t.Fatalf("expected APPROVED HOLIDAY_SHUTDOWN to allow chiller STOP, got %v", err)
+		}
+	})
+
+	t.Run("overtime_cooling_uses_replacement_slots_and_site_timezone", func(t *testing.T) {
+		// 2026-11-16 01:00 UTC is 09:00 Asia/Shanghai (inside 08:30-12:00 replacement slot).
+		inReplacement := time.Date(2026, 11, 16, 1, 0, 0, 0, time.UTC)
+		h, op := setup(inReplacement, "Asia/Shanghai", []OperatingScheduleSlotDTO{{DayOfWeek: 1, StartMinute: 480, EndMinute: 1080}})
+		h.Twin.Exceptions[caSiteID] = []OperatingExceptionDTO{{
+			Kind:             "OVERTIME_COOLING",
+			StartDate:        "2026-11-16",
+			EndDate:          "2026-11-16",
+			Status:           "APPROVED",
+			ReplacementSlots: []OperatingExceptionSlotDTO{{StartMinute: 510, EndMinute: 720}},
+		}}
+		_, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStopPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "overtime-inside-slot",
+		})
+		var ce *ControlError
+		if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusConflict || ce.Code != "COMMAND_LAST_ACTIVE_CHILLER_PROTECTED" {
+			t.Fatalf("expected 409 COMMAND_LAST_ACTIVE_CHILLER_PROTECTED inside overtime replacement slot, got %v", err)
+		}
+
+		// 2026-11-16 06:00 UTC is 14:00 Asia/Shanghai (inside weekly Monday slot, but outside 08:30-12:00 overtime replacement slot).
+		outsideReplacement := time.Date(2026, 11, 16, 6, 0, 0, 0, time.UTC)
+		hOut, opOut := setup(outsideReplacement, "Asia/Shanghai", []OperatingScheduleSlotDTO{{DayOfWeek: 1, StartMinute: 480, EndMinute: 1080}})
+		hOut.Twin.Exceptions[caSiteID] = h.Twin.Exceptions[caSiteID]
+		if _, err := hOut.Authority.SubmitOperatorCommand(context.Background(), opOut, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStopPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "overtime-outside-slot-ok",
+		}); err != nil {
+			t.Fatalf("expected chiller STOP outside overtime replacement slot to succeed, got %v", err)
+		}
+	})
+
+	t.Run("outside_scheduled_hours_allows_stop_and_invalid_timezone_fails_closed", func(t *testing.T) {
+		outsideHours := time.Date(2026, 11, 16, 20, 0, 0, 0, time.UTC)
+		hOff, opOff := setup(outsideHours, "UTC", []OperatingScheduleSlotDTO{{DayOfWeek: 1, StartMinute: 480, EndMinute: 1080}})
+		if _, err := hOff.Authority.SubmitOperatorCommand(context.Background(), opOff, SubmitOperatorCommandInput{
+			AssetID: caChillerID, CommandPointID: caStopPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "outside-hours-ok",
+		}); err != nil {
+			t.Fatalf("expected chiller STOP outside scheduled hours to succeed, got %v", err)
+		}
+
+		for _, tc := range []struct {
+			name string
+			tz   string
+		}{
+			{name: "empty", tz: ""},
+			{name: "invalid", tz: "Invalid/Zone"},
+		} {
+			now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+			hBad, opBad := setup(now, tc.tz, []OperatingScheduleSlotDTO{{DayOfWeek: 1, StartMinute: 480, EndMinute: 1080}})
+			_, err := hBad.Authority.SubmitOperatorCommand(context.Background(), opBad, SubmitOperatorCommandInput{
+				AssetID: caChillerID, CommandPointID: caStopPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "bad-tz-" + tc.name,
+			})
+			var ce *ControlError
+			if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusServiceUnavailable || ce.Code != "COMMAND_UNAVAILABLE" {
+				t.Fatalf("timezone %q: expected fail-closed 503 COMMAND_UNAVAILABLE, got %v", tc.tz, err)
+			}
+		}
+	})
+}
+
+func TestControlAuthorityServesTopologyUsesExplicitEdgesNotInterlockChecks(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	h, op := seedPlantHarness(t, now)
+	op.StepUpTOTPVerified = true
+
+	// Remove the explicit ASSET->ASSET SERVES edge while keeping interlockChecks on caPumpStopPt.
+	model := h.Twin.Models[caSiteID]
+	filtered := make([]AssetRelationshipDTO, 0, len(model.Relationships))
+	for _, rel := range model.Relationships {
+		if rel.FromType == "ASSET" && rel.ToType == "ASSET" && strings.EqualFold(rel.Role, "SERVES") {
+			continue
+		}
+		filtered = append(filtered, rel)
+	}
+	model.Relationships = filtered
+	h.Twin.Models[caSiteID] = model
+
+	topo := resolveSiteControlTopology(model, now)
+	if len(topo.servedChillersByAux[caPumpID]) != 0 {
+		t.Fatalf("expected empty servedChillersByAux without explicit SERVES edge, got %v", topo.servedChillersByAux[caPumpID])
+	}
+
+	// Point-level interlockChecks still blocks pump STOP while chiller is RUNNING.
+	h.Live.Set(caChillerDev, "run_state", healthyTextObs(now, "RUNNING", 20), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000050")
+	h.Live.Set(caPumpDev, "run_state", healthyTextObs(now, "RUNNING", 21), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000051")
+	_, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+		AssetID: caPumpID, CommandPointID: caPumpStopPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "interlock-still-blocks",
+	})
+	var ce *ControlError
+	if !errors.As(err, &ce) || ce.HTTPStatus != http.StatusConflict || ce.Code != "COMMAND_INTERLOCK_BLOCKED" {
+		t.Fatalf("expected point-level interlockChecks to still return 409 COMMAND_INTERLOCK_BLOCKED, got %v", err)
+	}
+
+	// Without explicit SERVES edge, chiller in-flight START no longer infers pump->chiller SERVES for startup blind window.
+	h.Live.Set(caChillerDev, "run_state", healthyTextObs(now, "STOPPED", 22), "s2:sha256:0000000000000000000000000000000000000000000000000000000000000052")
+	seedCommandHistoryEntry(t, h, op, caChillerDev, caStartPt, commandmodel.CapabilityStart, commandmodel.IntentQueued, now, "seed-chiller-queued-no-serves")
+	if _, err := h.Authority.SubmitOperatorCommand(context.Background(), op, SubmitOperatorCommandInput{
+		AssetID: caPumpID, CommandPointID: caPumpStopPt, Parameters: commandmodel.CommandParameters{}, IdempotencyKey: "pump-stop-no-serves-edge",
+	}); err != nil {
+		t.Fatalf("expected pump STOP without explicit SERVES edge not to infer startup blind window from interlockChecks, got %v", err)
+	}
+
+	// Multi-hop tower -> cwp -> chiller -> chw-loop and shared header pump -> chw-loop resolve via planttwin.NewHydraulicGraph.
+	ts := now.Format(time.RFC3339)
+	cwpID := "018f3e00-2000-7000-8000-000000000010"
+	towerID := "018f3e00-2000-7000-8000-000000000011"
+	hdrPumpID := "018f3e00-2000-7000-8000-000000000012"
+	chwLoopID := "018f3e00-2000-7000-8000-000000000013"
+	chillerBID := "018f3e00-2000-7000-8000-000000000014"
+	chwpBID := "018f3e00-2000-7000-8000-000000000015"
+	graphModel := SiteAssetModelDTO{
+		SchemaVersion: 2,
+		TenantID:      caTenantID,
+		SiteID:        caSiteID,
+		Assets: []AssetDTO{
+			{ID: caChillerID, TenantID: caTenantID, SiteID: caSiteID, Code: "chiller-a", AssetType: "CHILLER", Status: "ACTIVE"},
+			{ID: chillerBID, TenantID: caTenantID, SiteID: caSiteID, Code: "chiller-b", AssetType: "CHILLER", Status: "ACTIVE"},
+			{ID: caPumpID, TenantID: caTenantID, SiteID: caSiteID, Code: "chwp-1", AssetType: "CHILLED_WATER_PUMP", Status: "ACTIVE"},
+			{ID: chwpBID, TenantID: caTenantID, SiteID: caSiteID, Code: "chwp-2", AssetType: "CHILLED_WATER_PUMP", Status: "ACTIVE"},
+			{ID: cwpID, TenantID: caTenantID, SiteID: caSiteID, Code: "cwp-1", AssetType: "COOLING_WATER_PUMP", Status: "ACTIVE"},
+			{ID: towerID, TenantID: caTenantID, SiteID: caSiteID, Code: "ct-1", AssetType: "COOLING_TOWER", Status: "ACTIVE"},
+			{ID: hdrPumpID, TenantID: caTenantID, SiteID: caSiteID, Code: "chwp-hdr", AssetType: "CHILLED_WATER_PUMP", Status: "ACTIVE"},
+			{ID: chwLoopID, TenantID: caTenantID, SiteID: caSiteID, Code: "chw-loop", AssetType: "CHILLED_WATER_LOOP", Status: "ACTIVE"},
+		},
+		Relationships: []AssetRelationshipDTO{
+			{ID: "g1", TenantID: caTenantID, SiteID: caSiteID, FromType: "ASSET", FromID: caPumpID, ToType: "ASSET", ToID: caChillerID, Role: "SERVES", Status: "ACTIVE", ValidFrom: ts},
+			{ID: "g2", TenantID: caTenantID, SiteID: caSiteID, FromType: "ASSET", FromID: chwpBID, ToType: "ASSET", ToID: chillerBID, Role: "SERVES", Status: "ACTIVE", ValidFrom: ts},
+			{ID: "g3", TenantID: caTenantID, SiteID: caSiteID, FromType: "ASSET", FromID: towerID, ToType: "ASSET", ToID: cwpID, Role: "SERVES", Status: "ACTIVE", ValidFrom: ts},
+			{ID: "g4", TenantID: caTenantID, SiteID: caSiteID, FromType: "ASSET", FromID: cwpID, ToType: "ASSET", ToID: caChillerID, Role: "SERVES", Status: "ACTIVE", ValidFrom: ts},
+			{ID: "g5", TenantID: caTenantID, SiteID: caSiteID, FromType: "ASSET", FromID: caChillerID, ToType: "ASSET", ToID: chwLoopID, Role: "SERVES", Status: "ACTIVE", ValidFrom: ts},
+			{ID: "g6", TenantID: caTenantID, SiteID: caSiteID, FromType: "ASSET", FromID: chillerBID, ToType: "ASSET", ToID: chwLoopID, Role: "SERVES", Status: "ACTIVE", ValidFrom: ts},
+			{ID: "g7", TenantID: caTenantID, SiteID: caSiteID, FromType: "ASSET", FromID: hdrPumpID, ToType: "ASSET", ToID: chwLoopID, Role: "SERVES", Status: "ACTIVE", ValidFrom: ts},
+		},
+	}
+	graphTopo := resolveSiteControlTopology(graphModel, now)
+	if !slices.Equal(graphTopo.servedChillersByAux[caPumpID], []string{caChillerID}) {
+		t.Fatalf("chwp-1 served=%v, want [%s]", graphTopo.servedChillersByAux[caPumpID], caChillerID)
+	}
+	if !slices.Equal(graphTopo.servedChillersByAux[towerID], []string{caChillerID}) {
+		t.Fatalf("multi-hop ct-1 served=%v, want [%s]", graphTopo.servedChillersByAux[towerID], caChillerID)
+	}
+	if !slices.Equal(graphTopo.servedChillersByAux[hdrPumpID], []string{caChillerID, chillerBID}) {
+		t.Fatalf("header pump served=%v, want [%s %s]", graphTopo.servedChillersByAux[hdrPumpID], caChillerID, chillerBID)
+	}
+}
