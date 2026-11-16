@@ -594,6 +594,55 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 			t.Fatalf("expected rollback on >5m unhealthy telemetry, summary=%+v disp=%+v", summary, disp.submitInputs)
 		}
 	})
+
+	t.Run("rollback anchors risk delta on applied setpoint when live supply drifted over 3C", func(t *testing.T) {
+		applied := 8.5
+		restore := 7.0
+		monID := "01990000-9900-7000-8000-000000000012"
+		store := &fakeAutoControlStore{
+			lease:   testAutoLease(base),
+			siteCtx: testAutoSiteCtx(),
+			monitors: []OptimizationExecutionMonitorRecord{{
+				ID:                 monID,
+				TenantID:           "01990000-3000-7000-8000-000000000001",
+				SiteID:             "01990000-5000-7000-8000-000000000001",
+				LeaseID:            "01990000-8800-7000-8000-000000000011",
+				DeviceID:           "01990000-6000-7000-8000-000000000001",
+				TargetCapability:   string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+				AppliedSupplyTempC: &applied,
+				RestoreSupplyTempC: &restore,
+				ZoneTempMaxC:       26.0,
+				SupplyTempMaxC:     11.0,
+				StartedAt:          base,
+				WindowEndsAt:       base.Add(30 * time.Minute),
+				Status:             ExecutionMonitorObserving,
+			}},
+		}
+		// Physical supply water drifted to 11.4 C (>3.0C above RestoreSupplyTempC 7.0 C).
+		obs := testLiveObservation(base.Add(8*time.Minute), 11.4, 24.0)
+		disp := &fakeDispatcher{
+			decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
+			grant:     "rollback.sig",
+			commandID: "01990000-7700-7000-8000-000000000444",
+		}
+		ctrl, err := NewAutoController(store, &fakeTelemetryReader{obs: obs}, disp, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		summary, err := ctrl.RunMonitorPass(context.Background(), base.Add(8*time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if summary.RolledBack != 1 || len(disp.grantReqs) != 1 || disp.grantReqs[0].CurrentValue == nil {
+			t.Fatalf("expected rollback grant request after drift, summary=%+v grantReqs=%+v", summary, disp.grantReqs)
+		}
+		if *disp.grantReqs[0].CurrentValue != applied {
+			t.Fatalf("expected rollback currentValue anchored to applied setpoint %v, got %v", applied, *disp.grantReqs[0].CurrentValue)
+		}
+		if len(disp.submitInputs) != 1 || disp.submitInputs[0].CurrentValue != applied || disp.submitInputs[0].Parameters[commandmodel.ParameterSetpointC] != restore {
+			t.Fatalf("unexpected rollback command submit payload: %+v", disp.submitInputs)
+		}
+	})
 }
 
 func TestWorkloadCommandClientHTTP(t *testing.T) {

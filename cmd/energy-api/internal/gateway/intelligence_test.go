@@ -305,8 +305,24 @@ func TestGatewayOptimizationAutoCommandRequiresWorkloadIdentityAndGrant(t *testi
 
 	payload := `{"tenantId":"` + fixture.tenantID + `","deviceId":"` + fixture.deviceID + `","pointId":"` + fixture.commandPointID + `","capability":"SET_CHILLED_WATER_TEMPERATURE_SETPOINT","parameters":{"setpointC":8.0},"verificationPointKey":"chilled_water_supply_temp_sp","idempotencyKey":"auto-opt:01990000-8800-7000-8000-000000000031","currentState":{"evaluationAvailability":"AVAILABLE","presence":"ONLINE","readiness":"CURRENT","quality":"GOOD","businessRevision":1,"currentValue":7.0,"observedAt":"2026-07-26T14:58:00Z"},"commandGrant":"` + grant + `"}`
 
+	if !IsOptimizationAutoCommandPath("/api/v1/sites/" + fixture.siteID + "/optimization/auto-commands") {
+		t.Fatalf("expected IsOptimizationAutoCommandPath to match site auto-commands route")
+	}
+	if IsOptimizationAutoCommandPath("/api/v1/sites/"+fixture.siteID+"/optimization/auto-commands/") ||
+		IsOptimizationAutoCommandPath("/api/v1/sites/"+fixture.siteID+"/commands") {
+		t.Fatalf("expected IsOptimizationAutoCommandPath to reject unrelated paths")
+	}
+
+	// Reject plain HTTP without verified mTLS peer certificate even when no proxy headers are present.
+	plainHTTP := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-commands", strings.NewReader(payload))
+	plainHTTP.Header.Set("Content-Type", "application/json")
+	plainRec := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(plainRec, plainHTTP)
+	assertProblemCode(t, plainRec, http.StatusForbidden, "OPTIMIZATION_WORKLOAD_FORBIDDEN")
+
 	// Reject reverse-proxied requests from nginx even with a valid payload.
 	proxied := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+fixture.siteID+"/optimization/auto-commands", strings.NewReader(payload))
+	proxied.TLS = verifiedWorkloadTLSState(t, defaultOptimizationWorkloadID)
 	proxied.Header.Set("Content-Type", "application/json")
 	proxied.Header.Set("X-Forwarded-For", "203.0.113.10")
 	proxiedRec := httptest.NewRecorder()

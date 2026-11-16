@@ -517,10 +517,10 @@ func (controller *AutoController) tripAndRollback(
 		targetCapability := commandmodel.Capability(monitor.TargetCapability)
 		if profile, ok := commandmodel.CapabilityProfileFor(targetCapability); ok {
 			currentVal := restoreTemp
-			if live.SupplyTemp != nil {
-				currentVal = live.SupplyTemp.Value
-			} else if monitor.AppliedSupplyTempC != nil {
+			if monitor.AppliedSupplyTempC != nil {
 				currentVal = *monitor.AppliedSupplyTempC
+			} else if live.SupplyTemp != nil {
+				currentVal = live.SupplyTemp.Value
 			}
 			observedAt := monitor.StartedAt
 			var pointRevision uint64 = 1

@@ -178,6 +178,13 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	return publicIntelligenceRoute{}, false
 }
 
+// IsOptimizationAutoCommandPath reports whether path targets the workload-only automated
+// optimization Command endpoint served on the Gateway's internal mTLS listener.
+func IsOptimizationAutoCommandPath(path string) bool {
+	_, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/auto-commands", "{siteId}")
+	return ok
+}
+
 func matchFDDLinkPath(path string) (string, string, bool) {
 	remainder, ok := strings.CutPrefix(path, "/api/v1/sites/")
 	if !ok || strings.HasSuffix(remainder, "/") {
@@ -896,12 +903,10 @@ func (h *handler) serveOptimizationAutoCommand(writer http.ResponseWriter, reque
 		writeProblem(writer, request, http.StatusForbidden, "OPTIMIZATION_WORKLOAD_FORBIDDEN", "Optimization workload forbidden", "Automated optimization commands cannot be invoked through a user session or edge proxy.", false, nil)
 		return
 	}
-	if request.TLS != nil {
-		spiffeID, _, ok := verifiedTelemetryWorkloadIdentity(request)
-		if !ok || spiffeID != defaultOptimizationWorkloadID {
-			writeProblem(writer, request, http.StatusForbidden, "OPTIMIZATION_WORKLOAD_FORBIDDEN", "Optimization workload forbidden", "The calling TLS workload certificate is not authorized.", false, nil)
-			return
-		}
+	spiffeID, _, ok := verifiedTelemetryWorkloadIdentity(request)
+	if !ok || spiffeID != defaultOptimizationWorkloadID {
+		writeProblem(writer, request, http.StatusForbidden, "OPTIMIZATION_WORKLOAD_FORBIDDEN", "Optimization workload forbidden", "A verified optimization-service mutual TLS workload certificate is required.", false, nil)
+		return
 	}
 	if !isLowerUUIDv7(route.siteID) {
 		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)

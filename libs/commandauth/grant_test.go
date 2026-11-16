@@ -89,6 +89,10 @@ func TestGrantProvenanceAndWorkloadDecisionValidation(t *testing.T) {
 	if verified.WorkloadSPIFFE != claims.WorkloadSPIFFE || verified.LeaseID != claims.LeaseID || verified.ArmedBy != claims.ArmedBy {
 		t.Fatalf("provenance claims lost across sign/verify: %#v", verified)
 	}
+	snapshot := Snapshot(verified)
+	if snapshot.WorkloadSPIFFE != claims.WorkloadSPIFFE || snapshot.LeaseID != claims.LeaseID || snapshot.ArmedBy != claims.ArmedBy {
+		t.Fatalf("provenance fields lost in Snapshot(): %#v", snapshot)
+	}
 	current := 7.0
 	req := WorkloadDecisionRequest{
 		TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",

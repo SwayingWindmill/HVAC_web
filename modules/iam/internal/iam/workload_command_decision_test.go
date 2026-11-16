@@ -245,6 +245,33 @@ func TestIAMCommandWorkloadDecisionEnforcesAllSafetyGates(t *testing.T) {
 	if err != nil || !decision.Allowed || decision.ReasonCode != commandauth.ReasonAllowAutoLease {
 		t.Fatalf("expected valid rollback decision to allow, got %#v err=%v", decision, err)
 	}
+
+	// Rollback with matching OBSERVING monitor succeeds even after lease expires or is revoked mid-window.
+	expiredOrRevokedFacts := rollbackFacts
+	expiredOrRevokedFacts.ActiveLease = &AutoControlLeaseFacts{
+		ID:                  rollbackFacts.ActiveLease.ID,
+		ArmedBy:             rollbackFacts.ActiveLease.ArmedBy,
+		ExpiresAt:           now.Add(-5 * time.Minute),
+		AllowedCapabilities: rollbackFacts.ActiveLease.AllowedCapabilities,
+		MaxSetpointStepC:    1.5,
+		SupplyTempMinC:      6.0,
+		SupplyTempMaxC:      12.0,
+		MaxCommandsPerHour:  2,
+	}
+	appliedStep := 8.5
+	rollbackReq.CurrentValue = &appliedStep
+	decision, err = evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: expiredOrRevokedFacts}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, rollbackReq)
+	if err != nil || !decision.Allowed || decision.ReasonCode != commandauth.ReasonAllowAutoLease || decision.MaximumRisk != commandmodel.RiskMedium {
+		t.Fatalf("expected rollback under expired/revoked lease with OBSERVING monitor to allow medium risk, got %#v err=%v", decision, err)
+	}
+
+	// Control exit or asset control lock still blocks rollback during observation window.
+	lockedRollback := expiredOrRevokedFacts
+	lockedRollback.HasAssetControlLock = true
+	decision, err = evaluateWorkloadCommandAuthorization(t.Context(), &memoryCommandWorkloadStore{facts: lockedRollback}, now, "spiffe://hvac.local", defaultOptimizationCommandWorkload, rollbackReq)
+	if err != nil || decision.Allowed || decision.ReasonCode != commandauth.ReasonDenyControlLock {
+		t.Fatalf("expected asset control lock to block rollback, got %#v err=%v", decision, err)
+	}
 }
 
 func TestIAMCommandWorkloadDecisionRejectsUnlistedWorkloadAndForgedHeaders(t *testing.T) {

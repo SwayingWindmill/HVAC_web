@@ -402,8 +402,9 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 }
 
 // loadGatewayInternalServer serves the routes other workloads call on the Gateway (the
-// Operations Agent's Tool authorization) on a listener that requires a verified workload
-// certificate. Browser traffic stays on the public listener.
+// Operations Agent's Tool authorization and the Optimization Service's automated Command
+// dispatch) on a listener that requires a verified workload certificate. Browser traffic stays on
+// the public listener.
 func loadGatewayInternalServer(handler http.Handler) (*http.Server, error) {
 	address := strings.TrimSpace(os.Getenv("GATEWAY_INTERNAL_ADDR"))
 	if address == "" {
@@ -420,7 +421,7 @@ func loadGatewayInternalServer(handler http.Handler) (*http.Server, error) {
 	return &http.Server{
 		Addr: address,
 		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			if request.URL.Path != gateway.InternalOperationsToolAuthorizationPath {
+			if request.URL.Path != gateway.InternalOperationsToolAuthorizationPath && !gateway.IsOptimizationAutoCommandPath(request.URL.Path) {
 				http.NotFound(writer, request)
 				return
 			}

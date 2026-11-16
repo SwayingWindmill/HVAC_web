@@ -30,7 +30,7 @@
 
 1. **租约开通、查询与随时收回**：
    - 租约记录保存在 `core_registry.site_auto_control_leases`，同一站点同一时间最多只允许一条 `ACTIVE` 租约，最长有效期不超过 24 小时。
-   - 查询当前租约调用 `GET /api/v1/sites/{siteId}/optimization/auto-control-lease`（没有有效租约时返回 `effectiveMode: MANUAL_CONFIRM`）；开通调用 `PUT /api/v1/sites/{siteId}/optimization/auto-control-lease`（需要 `command.execute` 权限及 6 位认证器验证码，必须设定允许的能力白名单、`maxSetpointStepC` 上限 2 °C、`supplyTempMinC` 到 `supplyTempMaxC`、`zoneTempMaxC`、`minRunningChillers`、`maxCommandsPerHour` 1 到 6 次以及不超 24 小时的过期时间）；收回调用 `POST /api/v1/sites/{siteId}/optimization/auto-control-lease/revoke`，立即把状态置为 `REVOKED` 恢复人工确认。
+   - 查询当前租约调用 `GET /api/v1/sites/{siteId}/optimization/auto-control-lease`（没有有效租约时返回 `effectiveMode: MANUAL_CONFIRM`）；开通调用 `PUT /api/v1/sites/{siteId}/optimization/auto-control-lease`（需要 `schedule.manage` 权限即运维主管或管理员角色及 6 位认证器验证码，必须设定允许的能力白名单、`maxSetpointStepC` 上限 2 °C、`supplyTempMinC` 到 `supplyTempMaxC`、`zoneTempMaxC`、`minRunningChillers`、`maxCommandsPerHour` 1 到 6 次以及不超 24 小时的过期时间）；收回调用 `POST /api/v1/sites/{siteId}/optimization/auto-control-lease/revoke`（同样需要 `schedule.manage` 权限），立即把状态置为 `REVOKED` 恢复人工确认。
 2. **建议 65 分钟时效与下发前实时复核**：
    - 新生成的优化建议默认附带 65 分钟有效期（`validUntil`），过期后既不能手动也不能自动下发指令。
    - 优化运行发布建议后，若站点存在 `ACTIVE` 且未过期租约，优化服务在下发前会执行实时复核：确认站点仍处于 `REMOTE_AUTO` 且无资产控制锁、近 1 小时自动指令数未达上限、供水温度与全部室内温度及冷机功率测点健康且未超时、实测供水温度与建议基线 `baseline.supplyTempC` 相差不超过 `0.5 °C`、各冷机实测功率不超过额定功率 `0.90` 倍、目标设定点与当前实测温差均在租约边界之内。

@@ -135,6 +135,9 @@ func Snapshot(claims GrantClaims) commandmodel.AuthorizationSnapshot {
 		MaximumRisk:                 claims.MaximumRisk,
 		CapabilityRevision:          claims.CapabilityRevision,
 		EmergencyRevocationRevision: claims.EmergencyRevocationRevision,
+		WorkloadSPIFFE:              claims.WorkloadSPIFFE,
+		LeaseID:                     claims.LeaseID,
+		ArmedBy:                     claims.ArmedBy,
 		IssuedAt:                    time.Unix(claims.IssuedAt, 0).UTC(),
 		ExpiresAt:                   time.Unix(claims.ExpiresAt, 0).UTC(),
 	}

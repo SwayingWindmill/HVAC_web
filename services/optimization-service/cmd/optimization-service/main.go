@@ -109,7 +109,7 @@ func main() {
 		PrivateKeyPath:  requiredEnv("OPTIMIZATION_TLS_KEY"),
 		CAPath:          requiredEnv("OPTIMIZATION_TLS_CA"),
 		IAMURL:          requiredEnv("OPTIMIZATION_IAM_URL"),
-		GatewayURL:      envOrDefault("OPTIMIZATION_GATEWAY_URL", "http://platform-gateway:8080"),
+		GatewayURL:      envOrDefault("OPTIMIZATION_GATEWAY_URL", "https://platform-gateway:8452"),
 	})
 	if err != nil {
 		log.Fatal(err)
