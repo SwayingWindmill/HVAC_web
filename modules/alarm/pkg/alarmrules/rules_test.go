@@ -48,15 +48,11 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		byTitle[policy.Title] = policy
 		byAlarmType[policy.AlarmType] = policy
 	}
-	// The supply-temperature rule, the four plant rules kept after 2026-11-10 (供水偏高、供水过低、
-	// 冷却水出水过高、机组运行无流量), 网关上报中断, 13 critical-point reading-gap rules (#796/#798: 4 sub-meters ×
-	// 2, cooling meter × 2, header supply/return t16 & t18, main chilled-water flow), one
-	// 读数长时间没有更新 per device that still has non-critical own active points (13, including
-	// meter-total and the three temperature concentrator voltage/RSSI/status devices;
-	// cooling-tower, outdoor, and room have only copied points),
-	// the data-quality rules from each point's quality profile, the physics checks over active
-	// points (16), and five probe-offset suggestions (header + chillers A–D).
-	if len(byTitle) != 128 {
+	// Plant rules (5 including chiller-leaving-low), 网关上报中断, 13 critical-point reading-gap
+	// rules (#796/#798), 12 device readings-not-updated rules (excluding cooling derive btu-calc),
+	// non-derived point data-quality rules, device-untrusted/temperature-uid20 root cause, 15 active
+	// physics checks (excluding derived btu-chw-direction alarm), and 5 probe-offset rules.
+	if len(byTitle) != 119 {
 		t.Fatalf("got %d rules: %v", len(byTitle), keys(byTitle))
 	}
 
@@ -107,15 +103,16 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	}
 
 	// #796: 读数长时间没有更新 watches only the device's own non-critical active points (neither copied
-	// temperatures nor critical meter readings); a single remaining point stands as a leaf predicate.
+	// temperatures nor critical meter readings), gated by ReasonMatchNone so untrusted rejections
+	// do not duplicate suspect/device-untrusted alarms.
 	chillerC, ok := byTitle["C 机组电表读数长时间没有更新"]
 	if !ok || chillerC.Severity != "WARNING" {
 		t.Fatalf("no readings rule for C 机组电表: %v", keys(byTitle))
 	}
-	if chillerC.Raise.Kind != alarmservice.ConditionNoData || chillerC.Clear.Kind != alarmservice.ConditionCompare {
-		t.Fatalf("single-point readings rule wrapped in compound condition: raise=%#v clear=%#v", chillerC.Raise, chillerC.Clear)
+	if chillerC.Raise.Kind != alarmservice.ConditionAnd || chillerC.Clear.Kind != alarmservice.ConditionOr {
+		t.Fatalf("readings rule must gate NO_DATA with untrusted exclusion: raise=%#v clear=%#v", chillerC.Raise, chillerC.Clear)
 	}
-	if got := inputs(chillerC.Raise); !reflect.DeepEqual(got, []string{"01a14000-4000-7000-8000-000000000003/run_state"}) {
+	if got := uniqueInputs(chillerC.Raise); !reflect.DeepEqual(got, []string{"01a14000-4000-7000-8000-000000000003/run_state"}) {
 		t.Fatalf("C 机组电表 readings rule should watch only run_state, got %v", got)
 	}
 	if !strings.Contains(chillerC.Summary, "超过 30 分钟没有更新") || !strings.Contains(chillerC.Summary, "运行状态") || strings.Contains(chillerC.Summary, "冷却水出水温度") || strings.Contains(chillerC.Summary, "累计电量") || strings.Contains(chillerC.Title+chillerC.Summary, "UID") {
@@ -126,8 +123,8 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		t.Fatalf("meter-total reconciliation meter should compile to WARNING readings-not-updated: %#v", totalMeter)
 	}
 	flowRest, ok := byTitle["总冷冻水流量计读数长时间没有更新"]
-	if !ok || flowRest.Raise.Kind != alarmservice.ConditionNoData || !reflect.DeepEqual(inputs(flowRest.Raise), []string{"01a14000-4000-7000-8000-000000000002/flow_velocity"}) {
-		t.Fatalf("flow meter readings rule should watch only flow_velocity as leaf: %#v", flowRest)
+	if !ok || flowRest.Raise.Kind != alarmservice.ConditionAnd || !reflect.DeepEqual(uniqueInputs(flowRest.Raise), []string{"01a14000-4000-7000-8000-000000000002/flow_velocity"}) {
+		t.Fatalf("flow meter readings rule should watch only flow_velocity with untrusted gate: %#v", flowRest)
 	}
 	for _, omitted := range []string{
 		"冷却塔读数长时间没有更新",
@@ -165,8 +162,8 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	// Outdoor temperature on channel 15, 3 hours without a change, a 警告. The 室外环境 device
 	// only copies that channel, so it has no rule of its own.
 	flat, ok := byTitle["室外温度卡住"]
-	if !ok || flat.Severity != "WARNING" || !reflect.DeepEqual(inputs(flat.Raise), []string{"01a14000-4000-7000-8000-000000000001/t15"}) {
-		t.Fatalf("channel 15 flat-reading rule: %#v / %v", flat, inputs(flat.Raise))
+	if !ok || flat.Severity != "WARNING" || flat.QualityPolicy != alarmservice.EvaluationQualityValidOnly || !reflect.DeepEqual(uniqueInputs(flat.Raise), []string{"01a14000-4000-7000-8000-000000000001/t15"}) {
+		t.Fatalf("channel 15 flat-reading rule: %#v / %v", flat, uniqueInputs(flat.Raise))
 	}
 	if !strings.Contains(flat.Summary, "温度采集模块的室外温度连续 180 分钟") {
 		t.Fatalf("channel 15 flat-reading rule is not said plainly: %q", flat.Summary)
@@ -184,8 +181,20 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		t.Fatalf("pump-without-chiller rule: %#v", pumps)
 	}
 	supplyHealth, ok := byTitle["冷冻水总供水温度 1数据不可信"]
-	if !ok || supplyHealth.Severity != "MAJOR" || supplyHealth.Raise.Kind != "REASONS" {
+	if !ok || supplyHealth.Severity != "MAJOR" || supplyHealth.DurationSeconds != 300 || supplyHealth.Raise.Kind != alarmservice.ConditionAnd {
 		t.Fatalf("supply data-quality rule: %#v", supplyHealth)
+	}
+	if _, redundant := byAlarmType["physics/btu-chw-direction"]; redundant {
+		t.Fatalf("derived btu-chw-direction should not emit a redundant alarm alongside header-chw-direction")
+	}
+	for _, code := range []string{
+		"data-quality/suspect/btu-calc/supply_water_temperature",
+		"data-quality/suspect/btu-calc/instant_cooling_capacity",
+		"readings-not-updated/btu-calc",
+	} {
+		if _, redundant := byAlarmType[code]; redundant {
+			t.Fatalf("derived cooling calculator rule %s should not be emitted", code)
+		}
 	}
 	for title, policy := range byTitle {
 		if strings.Contains(title, "卡住") && strings.Contains(inputs(policy.Raise)[0], "-00000000000c/") {
@@ -193,7 +202,7 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		}
 	}
 
-	module := inputs(byTitle["温度采集模块读数长时间没有更新"].Raise)
+	module := uniqueInputs(byTitle["温度采集模块读数长时间没有更新"].Raise)
 	if len(module) != 21 || contains(module, "01a14000-4000-7000-8000-000000000001/t20") || contains(module, "01a14000-4000-7000-8000-000000000001/t16") || contains(module, "01a14000-4000-7000-8000-000000000001/t18") {
 		t.Fatalf("temperature module readings rule watches inactive or critical channels: %v", module)
 	}
@@ -471,6 +480,18 @@ func inputs(condition alarmservice.Condition) []string {
 	return all
 }
 
+func uniqueInputs(condition alarmservice.Condition) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, key := range inputs(condition) {
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
 func contains(values []string, value string) bool {
 	for _, candidate := range values {
 		if candidate == value {
@@ -735,4 +756,136 @@ func active(state alarmservice.AlarmEvaluationState) alarmservice.AlarmEvaluatio
 	state.ActiveAlarmID = "01a14000-7a03-7000-8000-000000000001"
 	state.ActiveIncidentCorrelationID = "01a14000-7a03-7000-8000-000000000002"
 	return state
+}
+
+// Replays three Songyaxuan incidents against compiled policies:
+//  1. Whole temperature module failure (23 channels sentinel 38.4) coalesces into one MAJOR
+//     device-untrusted alarm while suppressing per-point suspect and readings-not-updated;
+//     a single bad channel (t12) still raises only that point's suspect alarm.
+//  2. Running Chiller B at 2.8 °C leaving temperature raises CRITICAL chiller-leaving-low.
+//  3. Flat-running rules ignore PARTIAL sentinel values and honor the 600s startup stabilization window.
+func TestSongyaxuanHistoricalIncidentsFirstPrinciples(t *testing.T) {
+	compiled, err := Load(songyaxuanRules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byAlarmType := map[string]alarmservice.AlarmPolicyRevision{}
+	for _, item := range compiled.Policies {
+		policy := item.Policy
+		policy.PolicyRevisionID, policy.Revision = "01a14000-7a00-7000-8000-000000000001", 1
+		policy.Digest, _ = alarmservice.AlarmPolicyDigest(policy)
+		byAlarmType[policy.AlarmType] = policy
+	}
+
+	const uid20 = "01a14000-4000-7000-8000-000000000001"
+	start := time.Date(2026, 11, 16, 0, 5, 0, 0, time.UTC)
+
+	deviceRoot := byAlarmType["device-untrusted/temperature-uid20"]
+	if deviceRoot.Severity != "MAJOR" || deviceRoot.DurationSeconds != 180 || len(uniqueInputs(deviceRoot.Raise)) != 23 {
+		t.Fatalf("unexpected device-untrusted/temperature-uid20 policy: %#v", deviceRoot)
+	}
+	readingsRule := byAlarmType["readings-not-updated/temperature-uid20"]
+	uid20Keys := uniqueInputs(deviceRoot.Raise)
+
+	// Whole-module 38.4 sentinel storm: device-untrusted raises after 180s; all 23 suspect rules
+	// and readings-not-updated remain silent even after 300s / 1800s.
+	allSentinel := func(at time.Time) map[string]alarmservice.InputFact {
+		observed := at.Format(time.RFC3339Nano)
+		facts := map[string]alarmservice.InputFact{}
+		for _, key := range uid20Keys {
+			fact := alarmservice.NumberInput(key, 38.4, "PARTIAL", observed)
+			fact.HealthReasons = []string{"SENTINEL"}
+			facts[key] = fact
+		}
+		return facts
+	}
+	pendingRoot := evaluate(t, deviceRoot, "root-0", allSentinel(start), alarmservice.AlarmEvaluationState{}, start)
+	if pendingRoot.Effect != alarmservice.EvaluationEffectNone {
+		t.Fatalf("device-untrusted raised before 180s duration: %#v", pendingRoot)
+	}
+	raisedRoot := evaluate(t, deviceRoot, "root-1", allSentinel(start.Add(3*time.Minute)), pendingRoot.State, start.Add(3*time.Minute))
+	if raisedRoot.Effect != alarmservice.EvaluationEffectPublish {
+		t.Fatalf("device-untrusted did not raise at 180s: %#v", raisedRoot)
+	}
+	for _, key := range uid20Keys {
+		pointCode := strings.TrimPrefix(key, uid20+"/")
+		suspect := byAlarmType["data-quality/suspect/temperature-uid20/"+pointCode]
+		d1 := evaluate(t, suspect, "sup-"+pointCode+"-0", allSentinel(start), alarmservice.AlarmEvaluationState{}, start)
+		d2 := evaluate(t, suspect, "sup-"+pointCode+"-1", allSentinel(start.Add(6*time.Minute)), d1.State, start.Add(6*time.Minute))
+		if d2.Effect != alarmservice.EvaluationEffectNone {
+			t.Fatalf("point suspect %s should be suppressed during whole-device fault, got %#v", pointCode, d2)
+		}
+	}
+	noUpdate := evaluate(t, readingsRule, "rnu-all", allSentinel(start.Add(40*time.Minute)), alarmservice.AlarmEvaluationState{}, start.Add(40*time.Minute))
+	if noUpdate.Effect != alarmservice.EvaluationEffectNone {
+		t.Fatalf("readings-not-updated should not duplicate untrusted sentinel channels: %#v", noUpdate)
+	}
+
+	// Recover one healthy channel -> device-untrusted clears immediately.
+	partialRecovery := allSentinel(start.Add(4 * time.Minute))
+	partialRecovery[uid20+"/t16"] = alarmservice.NumberInput(uid20+"/t16", 12.1, "GOOD", start.Add(4*time.Minute).Format(time.RFC3339Nano))
+	if clearedRoot := evaluate(t, deviceRoot, "root-clear", partialRecovery, active(raisedRoot.State), start.Add(4*time.Minute)); clearedRoot.Effect != alarmservice.EvaluationEffectClear {
+		t.Fatalf("single healthy channel did not clear device-untrusted: %#v", clearedRoot)
+	}
+
+	// Single-channel fault (only t12 = 38.4 while others healthy): raises t12 suspect after 300s,
+	// does NOT raise device-untrusted or readings-not-updated.
+	singleFault := func(at time.Time) map[string]alarmservice.InputFact {
+		observed := at.Format(time.RFC3339Nano)
+		facts := map[string]alarmservice.InputFact{}
+		for _, key := range uid20Keys {
+			if key == uid20+"/t12" {
+				fact := alarmservice.NumberInput(key, 38.4, "PARTIAL", observed)
+				fact.HealthReasons = []string{"SENTINEL"}
+				facts[key] = fact
+			} else {
+				facts[key] = alarmservice.NumberInput(key, 24.5, "GOOD", observed)
+			}
+		}
+		return facts
+	}
+	t12Suspect := byAlarmType["data-quality/suspect/temperature-uid20/t12"]
+	s0 := evaluate(t, t12Suspect, "t12-0", singleFault(start), alarmservice.AlarmEvaluationState{}, start)
+	if s1 := evaluate(t, t12Suspect, "t12-1", singleFault(start.Add(5*time.Minute)), s0.State, start.Add(5*time.Minute)); s1.Effect != alarmservice.EvaluationEffectPublish {
+		t.Fatalf("single faulty channel t12 did not raise suspect at 300s: %#v", s1)
+	}
+	if r0 := evaluate(t, deviceRoot, "root-single", singleFault(start.Add(5*time.Minute)), alarmservice.AlarmEvaluationState{}, start.Add(5*time.Minute)); r0.Effect != alarmservice.EvaluationEffectNone {
+		t.Fatalf("single faulty channel unexpectedly raised device-untrusted: %#v", r0)
+	}
+
+	// Chiller B leaving water at 2.8 °C while running -> CRITICAL chiller-leaving-low after 180s.
+	freezeRule := byAlarmType["chiller-leaving-low"]
+	if freezeRule.Severity != "CRITICAL" || freezeRule.DurationSeconds != 180 {
+		t.Fatalf("chiller-leaving-low policy mismatch: %#v", freezeRule)
+	}
+	freezeFacts := func(at time.Time, bRunning bool, t2 float64) map[string]alarmservice.InputFact {
+		observed := at.Format(time.RFC3339Nano)
+		bState := "STOPPED"
+		if bRunning {
+			bState = "RUNNING"
+		}
+		return map[string]alarmservice.InputFact{
+			"01a14000-4000-7000-8000-000000000005/run_state": alarmservice.StringInput("01a14000-4000-7000-8000-000000000005/run_state", bState, "GOOD", observed),
+			"01a14000-4000-7000-8000-000000000003/run_state": alarmservice.StringInput("01a14000-4000-7000-8000-000000000003/run_state", "STOPPED", "GOOD", observed),
+			"01a14000-4000-7000-8000-000000000004/run_state": alarmservice.StringInput("01a14000-4000-7000-8000-000000000004/run_state", "STOPPED", "GOOD", observed),
+			"01a14000-4000-7000-8000-000000000006/run_state": alarmservice.StringInput("01a14000-4000-7000-8000-000000000006/run_state", "STOPPED", "GOOD", observed),
+			uid20 + "/t1": alarmservice.NumberInput(uid20+"/t1", 12.0, "GOOD", observed),
+			uid20 + "/t2": alarmservice.NumberInput(uid20+"/t2", t2, "GOOD", observed),
+			uid20 + "/t3": alarmservice.NumberInput(uid20+"/t3", 12.0, "GOOD", observed),
+			uid20 + "/t4": alarmservice.NumberInput(uid20+"/t4", 12.0, "GOOD", observed),
+		}
+	}
+	f0 := evaluate(t, freezeRule, "fz-0", freezeFacts(start, true, 2.8), alarmservice.AlarmEvaluationState{}, start)
+	if f1 := evaluate(t, freezeRule, "fz-1", freezeFacts(start.Add(3*time.Minute), true, 2.8), f0.State, start.Add(3*time.Minute)); f1.Effect != alarmservice.EvaluationEffectPublish {
+		t.Fatalf("running chiller B at 2.8 °C did not raise CRITICAL chiller-leaving-low: %#v", f1)
+	}
+	if fs := evaluate(t, freezeRule, "fz-stop", freezeFacts(start.Add(3*time.Minute), false, 2.8), alarmservice.AlarmEvaluationState{}, start.Add(3*time.Minute)); fs.Effect != alarmservice.EvaluationEffectNone {
+		t.Fatalf("stopped chiller B at 2.8 °C should not raise chiller-leaving-low: %#v", fs)
+	}
+
+	// Flat-running rule on chilled water uses VALID_ONLY + 600s startup stabilization duration.
+	flatRunning := byAlarmType["data-quality/flat-running/temperature-uid20/t18"]
+	if flatRunning.QualityPolicy != alarmservice.EvaluationQualityValidOnly || flatRunning.DurationSeconds != 600 {
+		t.Fatalf("flat-running policy must use VALID_ONLY and 600s stabilization: %#v", flatRunning)
+	}
 }

@@ -191,6 +191,16 @@ func (condition RuleCondition) validate() error {
 			(condition.Direction == DirectionAbove && *condition.Reset < *condition.Trigger || condition.Direction == DirectionBelow && *condition.Reset > *condition.Trigger)
 	case ConditionNoData, ConditionStale, ConditionUnchanged, ConditionChanged:
 		valid = condition.AgeSeconds > 0
+	case ConditionReasons:
+		if (condition.Match == ReasonMatchAny || condition.Match == ReasonMatchNone) && len(condition.Reasons) >= 1 && len(condition.Reasons) <= 8 {
+			valid = true
+			for _, reason := range condition.Reasons {
+				if !validConditionReason(reason) {
+					valid = false
+					break
+				}
+			}
+		}
 	}
 	if !valid {
 		return errors.New("site rule condition is invalid")

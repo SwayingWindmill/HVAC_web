@@ -108,6 +108,7 @@ export interface SchedulePlantMonitorTarget {
   readonly powerKey: string | null;
   readonly runStateKey: string | null;
   readonly ratedPowerKw: number | null;
+  readonly feederAuxiliaryPowerKw?: number | null;
 }
 
 export interface ScheduleDeviation {
@@ -493,6 +494,13 @@ function readNumericMetadata(meta: Record<string, unknown> | undefined, keys: re
   return null;
 }
 
+function readPositiveNumberProperty(obj: object | undefined, key: string): number | null {
+  if (!obj) return null;
+  const descriptor = Object.getOwnPropertyDescriptor(obj, key);
+  const value: unknown = descriptor?.value;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
 export function extractSchedulePlantMonitorTargets(assetModel: SiteAssetModel): SchedulePlantMonitorTarget[] {
   const activeAssets = assetModel.assets.filter((a) => a.status === 'ACTIVE');
   const assetById = new Map(activeAssets.map((a) => [a.id, a]));
@@ -554,6 +562,10 @@ export function extractSchedulePlantMonitorTargets(assetModel: SiteAssetModel): 
       ? (assetRatedPower ??
         readNumericMetadata(powerPoint?.sourceMetadata, ['ratedPowerKw', 'ratedPower', 'nominalPowerKw']))
       : null;
+    const feederAuxiliaryPowerKw = isChiller
+      ? (readPositiveNumberProperty(asset, 'feederAuxiliaryPowerKw') ??
+        readNumericMetadata(powerPoint?.sourceMetadata, ['feederAuxiliaryPowerKw']))
+      : null;
 
     targets.push({
       deviceId: device.id,
@@ -565,24 +577,30 @@ export function extractSchedulePlantMonitorTargets(assetModel: SiteAssetModel): 
       powerKey: powerPoint?.pointCode ?? null,
       runStateKey: runStatePoint?.pointCode ?? null,
       ratedPowerKw,
+      ...(feederAuxiliaryPowerKw !== null ? { feederAuxiliaryPowerKw } : {}),
     });
   }
 
   return targets;
 }
 
+function isRunningStateValue(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  return typeof value === 'string' && value.toUpperCase() === 'RUNNING';
+}
+
 function isStateBucketRunning(bucket: DeviceHistoryAggregateBucket | undefined): boolean {
   if (!bucket?.state) return false;
   if (Array.isArray(bucket.state.stateCounts) && bucket.state.stateCounts.length > 0) {
     const runningCount = bucket.state.stateCounts
-      .filter((entry) => entry.value === 'RUNNING' || entry.value === true || entry.value === 1)
+      .filter((entry) => isRunningStateValue(entry.value))
       .reduce((sum, entry) => sum + entry.count, 0);
     const totalCount = bucket.state.stateCounts.reduce((sum, entry) => sum + entry.count, 0);
     if (totalCount > 0) {
       return runningCount / totalCount >= 0.5;
     }
   }
-  return bucket.state.lastValue === 'RUNNING' || bucket.state.lastValue === true;
+  return isRunningStateValue(bucket.state.lastValue);
 }
 
 const QUARTER_HOUR_MS = 15 * 60_000;
@@ -662,20 +680,29 @@ export function detectUnscheduledRunningDeviations(input: {
       let running = false;
       const avgPower = powerBucket?.gauge?.average;
       if (target.role === 'CHILLER') {
+        const feederAuxKw =
+          typeof target.feederAuxiliaryPowerKw === 'number' &&
+          Number.isFinite(target.feederAuxiliaryPowerKw) &&
+          target.feederAuxiliaryPowerKw > 0
+            ? target.feederAuxiliaryPowerKw
+            : 0;
         const minKw =
-          target.ratedPowerKw !== null && target.ratedPowerKw > 0
+          feederAuxKw +
+          (target.ratedPowerKw !== null && target.ratedPowerKw > 0
             ? target.ratedPowerKw * 0.1
-            : FALLBACK_CHILLER_RUNNING_MIN_KW;
-        if (typeof avgPower === 'number' && Number.isFinite(avgPower) && avgPower >= minKw) {
+            : FALLBACK_CHILLER_RUNNING_MIN_KW);
+        if (runStateBucket?.state != null) {
+          if (isStateBucketRunning(runStateBucket)) {
+            running = true;
+            if (typeof avgPower === 'number' && Number.isFinite(avgPower)) {
+              chillerPowerSum += avgPower;
+              hasChillerPower = true;
+            }
+          }
+        } else if (typeof avgPower === 'number' && Number.isFinite(avgPower) && avgPower >= minKw) {
           running = true;
           chillerPowerSum += avgPower;
           hasChillerPower = true;
-        } else if (isStateBucketRunning(runStateBucket)) {
-          running = true;
-          if (typeof avgPower === 'number' && Number.isFinite(avgPower)) {
-            chillerPowerSum += avgPower;
-            hasChillerPower = true;
-          }
         }
       } else if (isStateBucketRunning(runStateBucket)) {
         running = true;

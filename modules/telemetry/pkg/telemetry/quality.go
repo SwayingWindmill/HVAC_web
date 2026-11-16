@@ -29,16 +29,17 @@ const valueEquality = 0.0001
 
 // QualityChecks is the optional per-point configuration stored on the freshness policy.
 type QualityChecks struct {
-	Copied          bool
-	MaxStep         *float64
-	MaxStepWindow   time.Duration
-	Sentinels       []float64
-	Flatline        time.Duration
-	FlatlineRunning time.Duration
-	Running         []OperatingExpect
-	Inputs          []PointRef
-	Physics         []PhysicsRule
-	Uncertainty     *UncertaintyCheck
+	Copied            bool
+	MaxStep           *float64
+	MaxStepWindow     time.Duration
+	Sentinels         []float64
+	Flatline          time.Duration
+	FlatlineRunning   time.Duration
+	FlatlineStabilize time.Duration
+	Running           []OperatingExpect
+	Inputs            []PointRef
+	Physics           []PhysicsRule
+	Uncertainty       *UncertaintyCheck
 }
 
 // UncertaintyCheck is the cooling-load or temperature-difference propagation compiled
@@ -77,13 +78,14 @@ type Measurement struct {
 // at ingest; history replay does not judge them, because it would compare a past
 // sample with today's peers.
 type PhysicsRule struct {
-	Kind     string
-	MarginK  *float64
-	Fraction *float64
-	Rated    float64
-	EpsilonK *float64
-	Peers    []PhysicsPeer
-	Running  []OperatingExpect
+	Kind      string
+	MarginK   *float64
+	Fraction  *float64
+	Rated     float64
+	EpsilonK  *float64
+	Peers     []PhysicsPeer
+	Running   []OperatingExpect
+	Stabilize time.Duration
 }
 
 // PhysicsPeer is another point this check reads, by the role the check gives it.
@@ -96,9 +98,26 @@ type PhysicsPeer struct {
 // PeerSample is the last accepted sample of a peer. Good is false when that
 // sample's quality is not GOOD, so a sentinel or a spike is not used as evidence.
 type PeerSample struct {
-	Number *float64
-	Text   string
-	Good   bool
+	Number         *float64
+	Text           string
+	Good           bool
+	SampledAt      time.Time
+	StaleAfter     time.Duration
+	UnchangedSince *time.Time
+}
+
+// FreshAt reports whether the peer sample is GOOD and within its freshness window around at.
+func (s PeerSample) FreshAt(at time.Time) bool {
+	if !s.Good {
+		return false
+	}
+	if s.StaleAfter > 0 && !s.SampledAt.IsZero() {
+		delta := at.Sub(s.SampledAt)
+		if delta > s.StaleAfter || delta < -s.StaleAfter {
+			return false
+		}
+	}
+	return true
 }
 
 // OperatingExpect is another point whose current value says the equipment is running.
@@ -127,7 +146,9 @@ type PointQualityInput struct {
 	Live            bool
 	Previous        *PriorNumeric
 	Running         bool
+	RunningSince    *time.Time
 	InputsUntrusted bool
+	SourceUntrusted bool
 	Peers           map[string]PeerSample
 }
 
@@ -152,14 +173,14 @@ func AssessPointQuality(value float64, at time.Time, checks *QualityChecks, inpu
 	if input.Live && input.PointType != "COUNTER" && input.Previous != nil && spike(value, at, *input.Previous, checks) {
 		reasons = append(reasons, QualityReasonSpike)
 	}
-	if input.Live && input.PointType != "COUNTER" && input.Previous != nil && flatline(value, at, *input.Previous, checks, input.Running) {
+	if input.Live && input.PointType != "COUNTER" && input.Previous != nil && !containsReason(reasons, QualityReasonSentinel) && !input.SourceUntrusted && flatline(value, at, *input.Previous, checks, input.Running, input.RunningSince) {
 		reasons = append(reasons, QualityReasonFlatline)
 	}
 	if input.Live && input.InputsUntrusted && len(checks.Inputs) > 0 {
 		reasons = append(reasons, QualityReasonDerivedInput)
 	}
 	if input.Live {
-		reasons = append(reasons, physicsReasons(value, checks, input)...)
+		reasons = append(reasons, physicsReasons(value, at, checks, input)...)
 	}
 	if measured, ok := AssessMeasurement(value, checks, input); ok && measured.LowConfidence {
 		reasons = append(reasons, QualityReasonLowConfidence)
@@ -244,17 +265,17 @@ func peerNumber(input PointQualityInput, ref PointRef) (float64, bool) {
 	return *sample.Number, true
 }
 
-func physicsReasons(value float64, checks *QualityChecks, input PointQualityInput) []QualityReason {
+func physicsReasons(value float64, at time.Time, checks *QualityChecks, input PointQualityInput) []QualityReason {
 	reasons := make([]QualityReason, 0, 1)
 	for _, rule := range checks.Physics {
 		code, ok := nameplate.QualityReason(rule.Kind)
 		if !ok {
 			continue
 		}
-		if !rule.peersReady(input) {
+		if !rule.peersReady(at, input) {
 			continue
 		}
-		violates, skipped := nameplate.Violates(rule.observation(value, input))
+		violates, skipped := nameplate.Violates(rule.observation(value, at, input))
 		if skipped || !violates {
 			continue
 		}
@@ -263,25 +284,25 @@ func physicsReasons(value float64, checks *QualityChecks, input PointQualityInpu
 	return reasons
 }
 
-func (rule PhysicsRule) peersReady(input PointQualityInput) bool {
+func (rule PhysicsRule) peersReady(at time.Time, input PointQualityInput) bool {
 	for _, peer := range rule.Peers {
 		sample, ok := input.Peers[peer.DeviceID+"/"+peer.Key]
-		if !ok || !sample.Good || sample.Number == nil {
+		if !ok || !sample.FreshAt(at) || sample.Number == nil {
 			return false
 		}
 	}
 	return true
 }
 
-func (rule PhysicsRule) observation(value float64, input PointQualityInput) nameplate.Observation {
+func (rule PhysicsRule) observation(value float64, at time.Time, input PointQualityInput) nameplate.Observation {
 	obs := nameplate.Observation{
 		Kind: rule.Kind, Value: value, Rated: rule.Rated,
 		MarginK: rule.MarginK, Fraction: rule.Fraction, EpsilonK: rule.EpsilonK,
-		Running: rule.running(input),
+		Running: rule.running(at, input),
 	}
 	for _, peer := range rule.Peers {
 		sample, ok := input.Peers[peer.DeviceID+"/"+peer.Key]
-		if !ok || !sample.Good || sample.Number == nil {
+		if !ok || !sample.FreshAt(at) || sample.Number == nil {
 			continue
 		}
 		number := *sample.Number
@@ -313,19 +334,43 @@ func (rule PhysicsRule) observation(value float64, input PointQualityInput) name
 	return obs
 }
 
-func (rule PhysicsRule) running(input PointQualityInput) *bool {
-	if len(rule.Running) == 0 {
-		return nil
-	}
-	matched := false
-	for _, expect := range rule.Running {
-		sample, ok := input.Peers[expect.DeviceID+"/"+expect.Key]
-		if ok && sample.Good && sample.Text == expect.Equals {
+func (rule PhysicsRule) running(at time.Time, input PointQualityInput) *bool {
+	if len(rule.Running) > 0 {
+		matched := false
+		var since time.Time
+		for _, expect := range rule.Running {
+			sample, ok := input.Peers[expect.DeviceID+"/"+expect.Key]
+			if !ok || !sample.FreshAt(at) || sample.Text != expect.Equals {
+				continue
+			}
 			matched = true
-			break
+			transition := sample.SampledAt
+			if sample.UnchangedSince != nil && !sample.UnchangedSince.IsZero() {
+				transition = *sample.UnchangedSince
+			}
+			if !transition.IsZero() && (since.IsZero() || transition.After(since)) {
+				since = transition
+			}
+		}
+		if !matched {
+			out := false
+			return &out
+		}
+		// Skip thermal physics checks during post-start pull-down before temperatures settle.
+		if rule.Stabilize > 0 && !since.IsZero() && at.Sub(since) < rule.Stabilize {
+			out := false
+			return &out
+		}
+		out := true
+		return &out
+	}
+	if rule.Stabilize > 0 {
+		if !input.Running || (input.RunningSince != nil && !input.RunningSince.IsZero() && at.Sub(*input.RunningSince) < rule.Stabilize) {
+			out := false
+			return &out
 		}
 	}
-	return &matched
+	return nil
 }
 
 func isPhysicsReason(reason QualityReason) bool {
@@ -355,7 +400,7 @@ func spike(value float64, at time.Time, previous PriorNumeric, checks *QualityCh
 	return math.Abs(value-previous.Value) > *checks.MaxStep
 }
 
-func flatline(value float64, at time.Time, previous PriorNumeric, checks *QualityChecks, running bool) bool {
+func flatline(value float64, at time.Time, previous PriorNumeric, checks *QualityChecks, running bool, runningSince *time.Time) bool {
 	if !nearlyEqual(value, previous.Value) {
 		return false
 	}
@@ -367,11 +412,14 @@ func flatline(value float64, at time.Time, previous PriorNumeric, checks *Qualit
 		return false
 	}
 	held := at.Sub(since)
-	if running && checks.FlatlineRunning > 0 && held >= checks.FlatlineRunning {
+	// Long stuck readings remain flatlined regardless of equipment starts.
+	if checks.Flatline > 0 && held >= checks.Flatline {
 		return true
 	}
-	// No running gate, or the plant is off: only the longer threshold applies.
-	if !running && checks.Flatline > 0 && held >= checks.Flatline {
+	if running && checks.FlatlineRunning > 0 && held >= checks.FlatlineRunning {
+		if runningSince != nil && !runningSince.IsZero() && checks.FlatlineStabilize > 0 && at.Sub(*runningSince) < checks.FlatlineStabilize {
+			return false
+		}
 		return true
 	}
 	return false
@@ -445,16 +493,17 @@ func UnchangedSinceOf(value float64, at time.Time, previous *PriorNumeric) time.
 }
 
 type qualityChecksDocument struct {
-	Copied                 bool             `json:"copied,omitempty"`
-	MaxStep                *float64         `json:"maxStep"`
-	MaxStepWindowSeconds   *int             `json:"maxStepWindowSeconds"`
-	Sentinels              []float64        `json:"sentinels"`
-	FlatlineSeconds        *int             `json:"flatlineSeconds"`
-	FlatlineRunningSeconds *int             `json:"flatlineRunningSeconds"`
-	Running                []operatingJSON  `json:"running"`
-	Inputs                 []pointRefJSON   `json:"inputs"`
-	Physics                []physicsJSON    `json:"physics"`
-	Uncertainty            *uncertaintyJSON `json:"uncertainty"`
+	Copied                   bool             `json:"copied,omitempty"`
+	MaxStep                  *float64         `json:"maxStep"`
+	MaxStepWindowSeconds     *int             `json:"maxStepWindowSeconds"`
+	Sentinels                []float64        `json:"sentinels"`
+	FlatlineSeconds          *int             `json:"flatlineSeconds"`
+	FlatlineRunningSeconds   *int             `json:"flatlineRunningSeconds"`
+	FlatlineStabilizeSeconds *int             `json:"flatlineStabilizeSeconds"`
+	Running                  []operatingJSON  `json:"running"`
+	Inputs                   []pointRefJSON   `json:"inputs"`
+	Physics                  []physicsJSON    `json:"physics"`
+	Uncertainty              *uncertaintyJSON `json:"uncertainty"`
 }
 
 type uncertaintyJSON struct {
@@ -483,6 +532,7 @@ type physicsJSON struct {
 	EpsilonK            *float64          `json:"epsilonK"`
 	Peers               []physicsPeerJSON `json:"peers"`
 	Running             []operatingJSON   `json:"running"`
+	StabilizeSeconds    *int              `json:"stabilizeSeconds"`
 }
 
 type physicsPeerJSON struct {
@@ -520,6 +570,9 @@ func parseQualityChecks(raw []byte) (*QualityChecks, error) {
 	if document.FlatlineRunningSeconds != nil && *document.FlatlineRunningSeconds > 0 {
 		checks.FlatlineRunning = time.Duration(*document.FlatlineRunningSeconds) * time.Second
 	}
+	if document.FlatlineStabilizeSeconds != nil && *document.FlatlineStabilizeSeconds > 0 {
+		checks.FlatlineStabilize = time.Duration(*document.FlatlineStabilizeSeconds) * time.Second
+	}
 	for _, item := range document.Running {
 		if item.DeviceID == "" || item.Key == "" || item.Equals == "" {
 			continue
@@ -546,7 +599,7 @@ func parseQualityChecks(raw []byte) (*QualityChecks, error) {
 		}
 		checks.Uncertainty = parsed
 	}
-	if !checks.Copied && checks.MaxStep == nil && len(checks.Sentinels) == 0 && checks.Flatline == 0 && checks.FlatlineRunning == 0 && len(checks.Running) == 0 && len(checks.Inputs) == 0 && len(checks.Physics) == 0 && checks.Uncertainty == nil {
+	if !checks.Copied && checks.MaxStep == nil && len(checks.Sentinels) == 0 && checks.Flatline == 0 && checks.FlatlineRunning == 0 && checks.FlatlineStabilize == 0 && len(checks.Running) == 0 && len(checks.Inputs) == 0 && len(checks.Physics) == 0 && checks.Uncertainty == nil {
 		return nil, nil
 	}
 	return checks, nil
@@ -612,6 +665,9 @@ func physicsRule(item physicsJSON) (PhysicsRule, error) {
 			continue
 		}
 		rule.Running = append(rule.Running, OperatingExpect(expect))
+	}
+	if item.StabilizeSeconds != nil && *item.StabilizeSeconds > 0 {
+		rule.Stabilize = time.Duration(*item.StabilizeSeconds) * time.Second
 	}
 	return rule, nil
 }

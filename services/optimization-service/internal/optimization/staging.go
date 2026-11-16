@@ -138,14 +138,15 @@ func (policy StagingPolicy) normalized() (StagingPolicy, error) {
 
 // ChillerMeterBinding links a physical CHILLER asset to its dedicated power meter and nameplate.
 type ChillerMeterBinding struct {
-	AssetID         string   `json:"assetId"`
-	AssetCode       string   `json:"assetCode"`
-	AssetName       string   `json:"assetName"`
-	MeterDeviceID   string   `json:"meterDeviceId"`
-	MeterSourceKey  string   `json:"meterSourceKey"`
-	BoundDeviceIDs  []string `json:"boundDeviceIds,omitempty"`
-	RatedCapacityKW float64  `json:"ratedCapacityKW,omitempty"`
-	RatedPowerKW    float64  `json:"ratedPowerKW,omitempty"`
+	AssetID                string   `json:"assetId"`
+	AssetCode              string   `json:"assetCode"`
+	AssetName              string   `json:"assetName"`
+	MeterDeviceID          string   `json:"meterDeviceId"`
+	MeterSourceKey         string   `json:"meterSourceKey"`
+	BoundDeviceIDs         []string `json:"boundDeviceIds,omitempty"`
+	RatedCapacityKW        float64  `json:"ratedCapacityKW,omitempty"`
+	RatedPowerKW           float64  `json:"ratedPowerKW,omitempty"`
+	FeederAuxiliaryPowerKW float64  `json:"feederAuxiliaryPowerKW,omitempty"`
 }
 
 // AssetControlLockInfo mirrors the per-asset lock from core_registry.asset_control_locks.
@@ -177,22 +178,24 @@ func SongyaxuanChillerMeterBindings() []ChillerMeterBinding {
 			RatedPowerKW:    127.5,
 		},
 		{
-			AssetID:         "01a14000-3000-7000-8000-000000000003",
-			AssetCode:       "chiller-c",
-			AssetName:       "C 机组",
-			MeterDeviceID:   "01a14000-4000-7000-8000-000000000003",
-			MeterSourceKey:  "ammeter-unit1",
-			RatedCapacityKW: 572,
-			RatedPowerKW:    127.5,
+			AssetID:                "01a14000-3000-7000-8000-000000000003",
+			AssetCode:              "chiller-c",
+			AssetName:              "C 机组",
+			MeterDeviceID:          "01a14000-4000-7000-8000-000000000003",
+			MeterSourceKey:         "ammeter-unit1",
+			RatedCapacityKW:        572,
+			RatedPowerKW:           127.5,
+			FeederAuxiliaryPowerKW: 30,
 		},
 		{
-			AssetID:         "01a14000-3000-7000-8000-000000000004",
-			AssetCode:       "chiller-d",
-			AssetName:       "D 机组",
-			MeterDeviceID:   "01a14000-4000-7000-8000-000000000004",
-			MeterSourceKey:  "ammeter-unit2",
-			RatedCapacityKW: 572,
-			RatedPowerKW:    127.5,
+			AssetID:                "01a14000-3000-7000-8000-000000000004",
+			AssetCode:              "chiller-d",
+			AssetName:              "D 机组",
+			MeterDeviceID:          "01a14000-4000-7000-8000-000000000004",
+			MeterSourceKey:         "ammeter-unit2",
+			RatedCapacityKW:        572,
+			RatedPowerKW:           127.5,
+			FeederAuxiliaryPowerKW: 30,
 		},
 	}
 }
@@ -218,22 +221,23 @@ type RunStateSample struct {
 // ChillerUnitInput carries live meter/temperature readings, runtime state and nameplate metadata
 // for a single CHILLER asset.
 type ChillerUnitInput struct {
-	AssetID         string           `json:"assetId"`
-	AssetCode       string           `json:"assetCode,omitempty"`
-	AssetName       string           `json:"assetName,omitempty"`
-	MeterDeviceID   string           `json:"meterDeviceId,omitempty"`
-	MeterSourceKey  string           `json:"meterSourceKey,omitempty"`
-	BoundDeviceIDs  []string         `json:"boundDeviceIds,omitempty"`
-	RatedCapacityKW float64          `json:"ratedCapacityKW,omitempty"`
-	RatedPowerKW    float64          `json:"ratedPowerKW,omitempty"`
-	RunState        string           `json:"runState,omitempty"`
-	RunStateQuality string           `json:"runStateQuality,omitempty"`
-	RunStateAt      time.Time        `json:"runStateAt,omitempty"`
-	StoppedSince    *time.Time       `json:"stoppedSince,omitempty"`
-	RunStateHistory []RunStateSample `json:"runStateHistory,omitempty"`
-	Power           *TelemetryValue  `json:"power,omitempty"`
-	ChwLeavingC     *TelemetryValue  `json:"chwLeavingC,omitempty"`
-	CwLeavingC      *TelemetryValue  `json:"cwLeavingC,omitempty"`
+	AssetID                string           `json:"assetId"`
+	AssetCode              string           `json:"assetCode,omitempty"`
+	AssetName              string           `json:"assetName,omitempty"`
+	MeterDeviceID          string           `json:"meterDeviceId,omitempty"`
+	MeterSourceKey         string           `json:"meterSourceKey,omitempty"`
+	BoundDeviceIDs         []string         `json:"boundDeviceIds,omitempty"`
+	RatedCapacityKW        float64          `json:"ratedCapacityKW,omitempty"`
+	RatedPowerKW           float64          `json:"ratedPowerKW,omitempty"`
+	FeederAuxiliaryPowerKW float64          `json:"feederAuxiliaryPowerKW,omitempty"`
+	RunState               string           `json:"runState,omitempty"`
+	RunStateQuality        string           `json:"runStateQuality,omitempty"`
+	RunStateAt             time.Time        `json:"runStateAt,omitempty"`
+	StoppedSince           *time.Time       `json:"stoppedSince,omitempty"`
+	RunStateHistory        []RunStateSample `json:"runStateHistory,omitempty"`
+	Power                  *TelemetryValue  `json:"power,omitempty"`
+	ChwLeavingC            *TelemetryValue  `json:"chwLeavingC,omitempty"`
+	CwLeavingC             *TelemetryValue  `json:"cwLeavingC,omitempty"`
 }
 
 // HydraulicEdge represents a directional pairing between an auxiliary asset and the chiller(s)
@@ -649,6 +653,9 @@ func resolveSnapshotBindings(snapshot StagingSnapshot) StagingSnapshot {
 			}
 			if unit.RatedPowerKW <= 0 {
 				unit.RatedPowerKW = match.RatedPowerKW
+			}
+			if unit.FeederAuxiliaryPowerKW <= 0 {
+				unit.FeederAuxiliaryPowerKW = match.FeederAuxiliaryPowerKW
 			}
 		}
 		if unit.AssetCode == "" {
@@ -1252,6 +1259,7 @@ func resolveChillerRunState(unit ChillerUnitInput, at time.Time, policy StagingP
 		}
 	}
 
+	runningPowerThresholdKW := policy.ChillerRunningPowerKW + math.Max(0, unit.FeederAuxiliaryPowerKW)
 	if hasExplicit {
 		if !explicitValid {
 			return RunStateUnknown, "CHILLER_STATE_" + explicitReason
@@ -1262,7 +1270,7 @@ func resolveChillerRunState(unit ChillerUnitInput, at time.Time, policy StagingP
 		case RunStateRunning:
 			return RunStateRunning, ""
 		case RunStateStopped:
-			if powerValid && powerKW > policy.ChillerRunningPowerKW {
+			if powerValid && powerKW > runningPowerThresholdKW {
 				return RunStateUnknown, "PAIRED_CHILLER_DRAWING_POWER"
 			}
 			return RunStateStopped, ""
@@ -1272,7 +1280,7 @@ func resolveChillerRunState(unit ChillerUnitInput, at time.Time, policy StagingP
 	}
 
 	if powerValid {
-		if powerKW > policy.ChillerRunningPowerKW {
+		if powerKW > runningPowerThresholdKW {
 			return RunStateRunning, ""
 		}
 		return RunStateStopped, ""
@@ -1898,14 +1906,15 @@ func buildStagingSnapshotFromObservations(
 
 	for _, binding := range chillerBindings {
 		unit := ChillerUnitInput{
-			AssetID:         binding.AssetID,
-			AssetCode:       binding.AssetCode,
-			AssetName:       binding.AssetName,
-			MeterDeviceID:   binding.MeterDeviceID,
-			MeterSourceKey:  binding.MeterSourceKey,
-			BoundDeviceIDs:  append([]string(nil), binding.BoundDeviceIDs...),
-			RatedCapacityKW: binding.RatedCapacityKW,
-			RatedPowerKW:    binding.RatedPowerKW,
+			AssetID:                binding.AssetID,
+			AssetCode:              binding.AssetCode,
+			AssetName:              binding.AssetName,
+			MeterDeviceID:          binding.MeterDeviceID,
+			MeterSourceKey:         binding.MeterSourceKey,
+			BoundDeviceIDs:         append([]string(nil), binding.BoundDeviceIDs...),
+			RatedCapacityKW:        binding.RatedCapacityKW,
+			RatedPowerKW:           binding.RatedPowerKW,
+			FeederAuxiliaryPowerKW: binding.FeederAuxiliaryPowerKW,
 		}
 		populateChillerTelemetry(&unit, byDeviceKey, historyByDevice)
 		snapshot.Chillers = append(snapshot.Chillers, unit)

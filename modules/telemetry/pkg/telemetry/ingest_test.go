@@ -265,3 +265,103 @@ func TestCounterSemanticsAreSnapshottedIntoHistory(t *testing.T) {
 		t.Fatalf("history counter semantics=%#v", observation)
 	}
 }
+
+func TestEvaluateObservationTracksNonNumericUnchangedSince(t *testing.T) {
+	t0 := time.Date(2026, 10, 27, 8, 0, 0, 0, time.UTC)
+	candidate := validObservationCandidate(t0.Add(5 * time.Second))
+	candidate.TelemetryKey = "run_state"
+	candidate.ValueType = "STRING"
+	candidate.Unit = nil
+	candidate.Value = json.RawMessage(`"RUNNING"`)
+	candidate.SampledAt = t0
+
+	facts := validObservationFacts()
+	facts.Point.PointType = "STATE"
+	facts.Point.ValueType = "STRING"
+	facts.Point.Unit = nil
+	facts.Policy.ValueType = "STRING"
+	facts.Policy.Unit = nil
+	facts.Policy.MinimumNumber = nil
+	facts.Policy.MaximumNumber = nil
+
+	first := EvaluateObservation(candidate, facts, candidate.ReceivedAt)
+	if first.Status != ObservationAccepted || !first.UnchangedSince.Equal(t0) {
+		t.Fatalf("initial run_state decision=%#v", first)
+	}
+
+	// Repeating "RUNNING" preserves the earlier unchanged_since.
+	t1 := t0.Add(5 * time.Minute)
+	repeat := candidate
+	repeat.SampledAt = t1
+	repeat.ReceivedAt = t1.Add(time.Second)
+	repeatFacts := facts
+	repeatFacts.LatestSampledAt = &t0
+	repeatFacts.PreviousSample = &PriorSample{Value: json.RawMessage(`"RUNNING"`), SampledAt: t0, UnchangedSince: t0}
+	held := EvaluateObservation(repeat, repeatFacts, repeat.ReceivedAt)
+	if held.Status != ObservationAccepted || !held.UnchangedSince.Equal(t0) {
+		t.Fatalf("held run_state unchanged_since=%s, want %s", held.UnchangedSince, t0)
+	}
+
+	// Missing unchanged_since on prior row falls back to prior SampledAt.
+	repeatFacts.PreviousSample = &PriorSample{Value: json.RawMessage(`"RUNNING"`), SampledAt: t0}
+	fallback := EvaluateObservation(repeat, repeatFacts, repeat.ReceivedAt)
+	if fallback.Status != ObservationAccepted || !fallback.UnchangedSince.Equal(t0) {
+		t.Fatalf("fallback run_state unchanged_since=%s, want %s", fallback.UnchangedSince, t0)
+	}
+
+	// Transitioning to "STOPPED" resets unchanged_since to the transition timestamp.
+	t2 := t0.Add(10 * time.Minute)
+	stopped := repeat
+	stopped.Value = json.RawMessage(`"STOPPED"`)
+	stopped.SampledAt = t2
+	stopped.ReceivedAt = t2.Add(time.Second)
+	stoppedFacts := repeatFacts
+	stoppedFacts.LatestSampledAt = &t1
+	stoppedFacts.PreviousSample = &PriorSample{Value: json.RawMessage(`"RUNNING"`), SampledAt: t1, UnchangedSince: t0}
+	changed := EvaluateObservation(stopped, stoppedFacts, stopped.ReceivedAt)
+	if changed.Status != ObservationAccepted || !changed.UnchangedSince.Equal(t2) {
+		t.Fatalf("changed run_state unchanged_since=%s, want %s", changed.UnchangedSince, t2)
+	}
+}
+
+func TestEvaluateObservationSourceUntrustedSkipsFlatlineAndRecordsRejectedHealth(t *testing.T) {
+	t0 := time.Date(2026, 10, 27, 8, 0, 0, 0, time.UTC)
+	at := t0.Add(5 * time.Hour)
+
+	candidate := validObservationCandidate(at.Add(time.Second))
+	candidate.SampledAt = at
+	candidate.WireQuality = 1
+	candidate.Value = json.RawMessage(`23.5`)
+
+	facts := validObservationFacts()
+	facts.LatestSampledAt = &t0
+	facts.Previous = &PriorNumeric{Value: 23.5, SampledAt: t0, UnchangedSince: t0}
+	facts.PreviousSample = &PriorSample{Value: json.RawMessage(`23.5`), SampledAt: t0, UnchangedSince: t0}
+	facts.Policy.QualityChecks = &QualityChecks{Flatline: 3 * time.Hour}
+
+	accepted := EvaluateObservation(candidate, facts, candidate.ReceivedAt)
+	assertObservationDecision(t, accepted, ObservationAccepted, QualityPartial, []QualityReason{QualityReasonSourceUntrusted}, true, true)
+	if !accepted.RecordHealth || accepted.HealthStatus != HealthSuspect {
+		t.Fatalf("untrusted accepted health=%#v", accepted)
+	}
+
+	// A wire-untrusted sample that is also rejected (type mismatch) must record BAD point health.
+	rejected := candidate
+	rejected.Value = json.RawMessage(`"bad"`)
+	rejectedDecision := EvaluateObservation(rejected, facts, rejected.ReceivedAt)
+	assertObservationDecision(t, rejectedDecision, ObservationRejected, QualityInvalid, []QualityReason{QualityReasonSourceUntrusted, QualityReasonTypeMismatch}, true, false)
+	if !rejectedDecision.RecordHealth || rejectedDecision.HealthStatus != HealthBad || rejectedDecision.HealthScore != 0 {
+		t.Fatalf("rejected untrusted candidate must record BAD health: %#v", rejectedDecision)
+	}
+	if len(rejectedDecision.HealthReasons) != 2 || rejectedDecision.HealthReasons[0] != QualityReasonSourceUntrusted || rejectedDecision.HealthReasons[1] != QualityReasonTypeMismatch {
+		t.Fatalf("rejected untrusted health reasons=%#v", rejectedDecision.HealthReasons)
+	}
+
+	// Older rejected untrusted samples must not overwrite newer point health.
+	older := rejected
+	older.SampledAt = t0.Add(-time.Minute)
+	olderDecision := EvaluateObservation(older, facts, rejected.ReceivedAt)
+	if olderDecision.RecordHealth {
+		t.Fatalf("older rejected untrusted candidate must not record health: %#v", olderDecision)
+	}
+}

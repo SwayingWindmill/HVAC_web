@@ -29,7 +29,8 @@ ACKNOWLEDGED / CLEARED           按路由文件决定发给谁、何时发、�
 | `maxAgeHours` | 第一次看到时告警已经开始超过这么久（发送关着、通知模块停过），不再补发，记 `TOO_OLD`。默认 12 |
 | `quietHours` | 每天的免打扰时段，可以跨午夜。低于 `bypassSeverity` 的告警等时段结束再发；确认和恢复的通知也等 |
 | `rateLimitPerHour` | 每个收件人每小时最多收多少条首发和升级消息。超出的记 `SUPPRESSED / RATE_LIMITED`，不再补发。`CRITICAL` 不限 |
-| `rootCauseAlarmType`、`suppressWhenRootCause` | 根因归并：站点上这个类型的告警亮着时，类型以这些前缀开头的告警谁都不告诉（记 `ROOT_CAUSE`，每分钟再看一次）。根因恢复后它们照常走 |
+| `rootCauseAlarmType`、`suppressWhenRootCause` | 全站单层根因归并（向后兼容旧配置）：站点上这个类型的告警亮着时，类型以这些前缀开头的告警谁都不告诉（记 `ROOT_CAUSE`，每分钟再看一次） |
+| `rootCauseRules` | 多条分作用域根因抑制规则列表：每条写 `whenActivePrefix`、`suppressPrefixes` 与可选 `scopeSameDevice`。设 `scopeSameDevice: true` 时（如 `device-untrusted/`），仅按匹配出的设备代号抑制同设备的 `data-quality/suspect/`、`reading-gap/`、`readings-not-updated/` 与 `probe-offset/` 通知，不影响站内其它正常设备 |
 | `routes` | 从上往下第一条匹配的路由决定。`minSeverity` 是最低等级，`alarmTypePrefixes` 可选 |
 | `routes[].steps` | 升级的各级。第一级 `afterMinutes` 必须是 0（等待结束就发），后面每级在第一条发出后这么多分钟、仍没人确认、告警还亮着时发。最多 5 级 |
 | `notifyAck`、`notifyRecovery` | 确认、恢复时，告诉这条告警已经发到过的每个人（只发给已经收到过的人，没收到过的不打扰） |

@@ -1553,3 +1553,51 @@ func TestStagingOperatingScheduleRespectsSiteExitAndAssetLocks(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveChillerRunStateAccountsForFeederAuxiliaryPower(t *testing.T) {
+	at := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	policy := DefaultStagingPolicy()
+	combinedUnit := ChillerUnitInput{
+		AssetID:                "01a14000-3000-7000-8000-000000000003",
+		AssetCode:              "chiller-c",
+		RatedPowerKW:           127.5,
+		FeederAuxiliaryPowerKW: 30,
+	}
+
+	// Power-only fallback: 32 kW is below 5 + 30 = 35 kW, so unit is STOPPED; 40 kW is RUNNING.
+	combinedUnit.Power = &TelemetryValue{Value: 32, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute)}
+	if state, reason := resolveChillerRunState(combinedUnit, at, policy); state != RunStateStopped || reason != "" {
+		t.Fatalf("expected 32 kW combined feeder to resolve STOPPED, got %s (%s)", state, reason)
+	}
+	combinedUnit.Power.Value = 40
+	if state, reason := resolveChillerRunState(combinedUnit, at, policy); state != RunStateRunning || reason != "" {
+		t.Fatalf("expected 40 kW combined feeder to resolve RUNNING, got %s (%s)", state, reason)
+	}
+
+	// Explicit STOPPED with 32 kW auxiliary load must not raise PAIRED_CHILLER_DRAWING_POWER.
+	combinedUnit.RunState = RunStateStopped
+	combinedUnit.RunStateQuality = "GOOD"
+	combinedUnit.RunStateAt = at.Add(-time.Minute)
+	combinedUnit.Power.Value = 32
+	if state, reason := resolveChillerRunState(combinedUnit, at, policy); state != RunStateStopped || reason != "" {
+		t.Fatalf("expected explicit STOPPED at 32 kW to remain STOPPED, got %s (%s)", state, reason)
+	}
+	combinedUnit.Power.Value = 40
+	if state, reason := resolveChillerRunState(combinedUnit, at, policy); state != RunStateUnknown || reason != "PAIRED_CHILLER_DRAWING_POWER" {
+		t.Fatalf("expected explicit STOPPED at 40 kW to flag PAIRED_CHILLER_DRAWING_POWER, got %s (%s)", state, reason)
+	}
+
+	// buildStagingTopologyFromRecords carries FeederAuxiliaryPowerKW onto ChillerMeterBinding.
+	topology := buildStagingTopologyFromRecords(
+		SiteControlModeRemoteAuto,
+		"",
+		nil,
+		[]stagingAssetRow{{ID: "asset-c", Code: "chiller-c", DisplayName: "C 机组", AssetType: AssetTypeChiller, RatedPowerKW: 127.5, RatedCapacityKW: 572, FeederAuxiliaryPowerKW: 30}},
+		[]stagingDeviceRow{{ID: "dev-c", Code: "meter-uid5", DeviceType: "HVAC_POWER_METER", SourceKey: "ammeter-unit1"}},
+		[]stagingDeviceBindingRow{{AssetID: "asset-c", DeviceID: "dev-c", BindingRole: "METER"}},
+		nil,
+	)
+	if len(topology.Chillers) != 1 || topology.Chillers[0].FeederAuxiliaryPowerKW != 30 {
+		t.Fatalf("expected FeederAuxiliaryPowerKW=30 in topology, got %+v", topology.Chillers)
+	}
+}

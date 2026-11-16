@@ -64,27 +64,28 @@ const (
 // Plate is one machine's nameplate. Candidates are motor plates that might belong
 // to this machine when the assignment is not confirmed.
 type Plate struct {
-	Manufacturer        string   `json:"manufacturer,omitempty"`
-	Model               string   `json:"model,omitempty"`
-	Year                int      `json:"year,omitempty"`
-	Refrigerant         string   `json:"refrigerant,omitempty"`
-	RatedCapacityKW     float64  `json:"ratedCapacityKw,omitempty"`
-	RatedPowerKW        float64  `json:"ratedPowerKw,omitempty"`
-	RatedCurrentA       float64  `json:"ratedCurrentA,omitempty"`
-	StartingCurrentA    float64  `json:"startingCurrentA,omitempty"`
-	Supply              string   `json:"supply,omitempty"`
-	HighSidePressureMPa float64  `json:"highSidePressureMpa,omitempty"`
-	LowSidePressureMPa  float64  `json:"lowSidePressureMpa,omitempty"`
-	CondenserAreaM2     float64  `json:"condenserAreaM2,omitempty"`
-	Efficiency          float64  `json:"efficiency,omitempty"`
-	RatedSpeedRPM       float64  `json:"ratedSpeedRpm,omitempty"`
-	Speed               string   `json:"speed,omitempty"`
-	Role                string   `json:"role,omitempty"`
-	Unconfirmed         []string `json:"unconfirmed,omitempty"`
-	Candidates          []Plate  `json:"candidates,omitempty"`
-	Pending             []string `json:"pending,omitempty"`
-	Note                string   `json:"note,omitempty"`
-	Catalog             string   `json:"catalog,omitempty"`
+	Manufacturer           string   `json:"manufacturer,omitempty"`
+	Model                  string   `json:"model,omitempty"`
+	Year                   int      `json:"year,omitempty"`
+	Refrigerant            string   `json:"refrigerant,omitempty"`
+	RatedCapacityKW        float64  `json:"ratedCapacityKw,omitempty"`
+	RatedPowerKW           float64  `json:"ratedPowerKw,omitempty"`
+	FeederAuxiliaryPowerKW float64  `json:"feederAuxiliaryPowerKw,omitempty"`
+	RatedCurrentA          float64  `json:"ratedCurrentA,omitempty"`
+	StartingCurrentA       float64  `json:"startingCurrentA,omitempty"`
+	Supply                 string   `json:"supply,omitempty"`
+	HighSidePressureMPa    float64  `json:"highSidePressureMpa,omitempty"`
+	LowSidePressureMPa     float64  `json:"lowSidePressureMpa,omitempty"`
+	CondenserAreaM2        float64  `json:"condenserAreaM2,omitempty"`
+	Efficiency             float64  `json:"efficiency,omitempty"`
+	RatedSpeedRPM          float64  `json:"ratedSpeedRpm,omitempty"`
+	Speed                  string   `json:"speed,omitempty"`
+	Role                   string   `json:"role,omitempty"`
+	Unconfirmed            []string `json:"unconfirmed,omitempty"`
+	Candidates             []Plate  `json:"candidates,omitempty"`
+	Pending                []string `json:"pending,omitempty"`
+	Note                   string   `json:"note,omitempty"`
+	Catalog                string   `json:"catalog,omitempty"`
 }
 
 // Confirmed reports whether field may be used as a rated value.
@@ -103,6 +104,18 @@ func (plate Plate) ProjectedRatedPower() (float64, bool) {
 		return 0, false
 	}
 	return plate.RatedPowerKW, true
+}
+
+// EffectiveFeederRatedPowerKW returns the combined confirmed rated power when constant-speed
+// auxiliaries share the unit feeder meter with the primary machine.
+func (p Plate) EffectiveFeederRatedPowerKW() float64 {
+	if !p.Confirmed("ratedPowerKw") || !finite(p.RatedPowerKW) || p.RatedPowerKW <= 0 {
+		return 0
+	}
+	if p.Confirmed("feederAuxiliaryPowerKw") && p.FeederAuxiliaryPowerKW > 0 && finite(p.FeederAuxiliaryPowerKW) {
+		return p.RatedPowerKW + p.FeederAuxiliaryPowerKW
+	}
+	return p.RatedPowerKW
 }
 
 // ProjectedRatedCapacity is the rated cooling kilowatts written onto the asset column.

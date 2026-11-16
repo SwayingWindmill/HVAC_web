@@ -232,7 +232,30 @@ ON CONFLICT (tenant_id, dedup_key) DO NOTHING`,
 
 func deliveryFacts(ctx context.Context, tx pgx.Tx, alarm DeliveryAlarm, routing SiteRouting, now time.Time) (DeliveryFacts, error) {
 	var facts DeliveryFacts
-	if routing.RootCauseAlarmType != "" && alarm.AlarmType != routing.RootCauseAlarmType {
+	if len(routing.RootCauseRules) > 0 {
+		rows, err := tx.Query(ctx, `SELECT DISTINCT alarm_type FROM notification_runtime.alarm_delivery
+WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND cleared_at IS NULL AND alarm_id <> $3::uuid`,
+			alarm.TenantID, alarm.SiteID, alarm.AlarmID)
+		if err != nil {
+			return facts, err
+		}
+		facts.ActiveAlarmTypes, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (string, error) {
+			var alarmType string
+			err := row.Scan(&alarmType)
+			return alarmType, err
+		})
+		if err != nil {
+			return facts, err
+		}
+		if routing.RootCauseAlarmType != "" && alarm.AlarmType != routing.RootCauseAlarmType {
+			for _, activeType := range facts.ActiveAlarmTypes {
+				if activeType == routing.RootCauseAlarmType {
+					facts.RootCauseActive = true
+					break
+				}
+			}
+		}
+	} else if routing.RootCauseAlarmType != "" && alarm.AlarmType != routing.RootCauseAlarmType {
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM notification_runtime.alarm_delivery
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND alarm_type = $3 AND cleared_at IS NULL AND alarm_id <> $4::uuid)`,
 			alarm.TenantID, alarm.SiteID, routing.RootCauseAlarmType, alarm.AlarmID).Scan(&facts.RootCauseActive); err != nil {
