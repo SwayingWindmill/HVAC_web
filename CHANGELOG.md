@@ -25,6 +25,7 @@
 
 #### 修复
 
+- 修复 `deploy/platform/phase1/cd/build-release.sh` 的 `collect_migrator_tree` 在读取 `migrations/Dockerfile` 时遇到第二个 `FROM scratch`（`sources-runtime` 阶段）即提前中断、导致发布包遗漏运行时迁移文件的问题，并新增基于 `migration-list.tsv` 的全量校验。
 - 对齐生产域名反向代理与松雅轩现场无线集中器默认值：
   - 为内部工作负载身份清单补充 `host-edge-proxy`，容器 `nginx` 使用 `trusted-client-ca.pem` 与身份主题映射，使宿主机 `nginx` 校验网关客户端证书后通过内部双向 TLS 安全透传 `X-Gateway-Client-Cert` 至 `connectivity`，并更新 `hvac-gateway-nodered-loopback@.service` 容器名为 `hvac-platform-connectivity-1`；`deploy.sh` 迁库前对齐 `roles.sql`、补建 `$R/alarm-delivery` 目录并在上线后向 `mqtt-broker` 发送 `SIGHUP` 重载 ACL。
   - 修复无线集中器 `WRITE_PARAMS` 在修改 `modbusId` 后改向新从站地址提交 `0x9C41 = 6`；为边缘隧道与证书自动续签补齐系统根证书（`tls.rootCertificates`）与私有网关 CA 的合并校验，确保直连生产 HTTPS 域名时同时验证公网证书与网关 CA 签名；网页端「无线集中器」默认从站点 `TEMPERATURE_MODULE` 推断初始从站地址（松雅轩默认为 `UID 20`）。
