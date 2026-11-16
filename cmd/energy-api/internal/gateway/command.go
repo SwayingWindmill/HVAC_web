@@ -1297,7 +1297,10 @@ func (h *handler) enforcePlantOperationalGuards(
 
 	now := h.currentGatewayTime()
 	topo := resolveSiteControlTopology(target.assetModel, now)
-	commands := h.loadSiteCommandHistoryBestEffort(request, session, target.asset.SiteID)
+	commands, historyFailure := h.loadSiteCommandHistory(request, session, target.asset.SiteID)
+	if historyFailure != nil {
+		return historyFailure
+	}
 
 	if isAuxStop {
 		servedChillers := append([]string(nil), topo.servedChillersByAux[target.asset.ID]...)
@@ -1333,15 +1336,15 @@ func (h *handler) enforcePlantOperationalGuards(
 	return nil
 }
 
-func (h *handler) loadSiteCommandHistoryBestEffort(request *http.Request, session bffSession, siteID string) []commandView {
+func (h *handler) loadSiteCommandHistory(request *http.Request, session bffSession, siteID string) ([]commandView, *commandFailure) {
 	if h == nil || h.command == nil || h.command.baseURL == "" || h.command.httpClient == nil {
-		return nil
+		return nil, nil
 	}
 	listed, failure := h.executeCommandList(request, session, siteID, maximumListedCommands)
 	if failure != nil {
-		return nil
+		return nil, failure
 	}
-	return listed
+	return listed, nil
 }
 
 func checkAuxStopStartupBlindWindow(

@@ -1101,3 +1101,155 @@ func TestControlFailureNotifierCoversUnknownOutcomeAndUnconfirmedPowerNonBlockin
 		t.Fatal("timed out waiting for runtime HTTP verification failure event")
 	}
 }
+
+func TestRuntimeHTTPVerificationSucceededPastDeadlineEmitsControlFailure(t *testing.T) {
+	httpEvents := make(chan ControlFailureEvent, 4)
+	runtimeHandler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
+		Store:            &stubRuntimeStore{},
+		DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher",
+		VerifierSPIFFE:   "spiffe://hvac.local/command-verifier",
+		ControlFailureNotifier: func(_ context.Context, event ControlFailureEvent) {
+			httpEvents <- event
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	postVerification := func(env commandmodel.VerificationEnvelope, reported commandmodel.ReportedStateEvidence) {
+		t.Helper()
+		body, marshalErr := json.Marshal(runtimeVerificationResolveRequest{
+			Envelope: env,
+			Result: commandmodel.VerificationResult{
+				Outcome:    commandmodel.VerificationSucceeded,
+				EvidenceID: "ev-verify-succeeded",
+				Reported:   reported,
+			},
+		})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		uri, parseErr := url.Parse("spiffe://hvac.local/command-verifier")
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		req := httptest.NewRequest(http.MethodPost, InternalVerificationResolvePath, strings.NewReader(string(body)))
+		req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{uri}}}}
+		rec := httptest.NewRecorder()
+		runtimeHandler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("resolveVerification HTTP code=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+
+	now := time.Now().UTC()
+	setpoint := 24.0
+	setpointScalar := commandmodel.NumberScalar(setpoint)
+	setpointEdge := &commandmodel.EdgeExecutionEvidence{
+		Requested:          setpointScalar,
+		Effective:          &setpointScalar,
+		Applied:            &setpointScalar,
+		WinnerControllerID: "cloud-command-intent",
+		Cycle:              1,
+	}
+	reportedSetpoint := commandmodel.ReportedStateEvidence{
+		TenantID:               "t1",
+		SiteID:                 "s1",
+		DeviceID:               "d1",
+		EvaluationAvailability: "AVAILABLE",
+		Presence:               "ONLINE",
+		Readiness:              "CURRENT",
+		Freshness:              "FRESH",
+		Quality:                "GOOD",
+		BusinessRevision:       11,
+		ReportedValue:          commandmodel.NumberScalar(setpoint),
+		ObservedAt:             now,
+	}
+
+	// 1. On-time VerificationSucceeded with valid reported state must NOT emit failure alarm.
+	postVerification(commandmodel.VerificationEnvelope{
+		CommandID:                "cmd-ontime",
+		TenantID:                 "t1",
+		SiteID:                   "s1",
+		DeviceID:                 "d1",
+		PointID:                  "p1",
+		Capability:               commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters:               commandmodel.CommandParameters{commandmodel.ParameterSetpointC: setpoint},
+		VerificationPointKey:     "temp_setpoint",
+		BaselineBusinessRevision: 10,
+		AcknowledgedAt:           now.Add(-5 * time.Second),
+		VerificationDeadline:     now.Add(time.Minute),
+		EdgeExecution:            setpointEdge,
+	}, reportedSetpoint)
+	select {
+	case unexpected := <-httpEvents:
+		t.Fatalf("unexpected failure notification for on-time verified command: %+v", unexpected)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// 2. Late VerificationSucceeded past VerificationDeadline for setpoint must emit OUTCOME_UNKNOWN.
+	postVerification(commandmodel.VerificationEnvelope{
+		CommandID:                "cmd-late-level",
+		TenantID:                 "t1",
+		SiteID:                   "s1",
+		DeviceID:                 "d1",
+		PointID:                  "p1",
+		Capability:               commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters:               commandmodel.CommandParameters{commandmodel.ParameterSetpointC: setpoint},
+		VerificationPointKey:     "temp_setpoint",
+		BaselineBusinessRevision: 10,
+		AcknowledgedAt:           now.Add(-2 * time.Minute),
+		VerificationDeadline:     now.Add(-time.Second),
+		EdgeExecution:            setpointEdge,
+	}, reportedSetpoint)
+	select {
+	case evt := <-httpEvents:
+		if evt.CommandID != "cmd-late-level" || evt.Kind != string(commandmodel.IntentOutcomeUnknown) || evt.ReasonCode != "REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED" {
+			t.Fatalf("unexpected late level failure event: %+v", evt)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for late VerificationSucceeded failure event")
+	}
+
+	// 3. Late VerificationSucceeded past VerificationDeadline for pulse START must emit PULSE_DELIVERED_POWER_UNCONFIRMED.
+	pulseText := "u14:pulse(500ms)->0"
+	pulseEdge := &commandmodel.EdgeExecutionEvidence{
+		Requested:          commandmodel.TextScalar("START"),
+		Effective:          &commandmodel.ScalarValue{Text: &pulseText},
+		Applied:            &commandmodel.ScalarValue{Text: &pulseText},
+		WinnerControllerID: "cloud-command-intent",
+		Cycle:              1,
+	}
+	postVerification(commandmodel.VerificationEnvelope{
+		CommandID:                "cmd-late-pulse",
+		TenantID:                 "t1",
+		SiteID:                   "s1",
+		DeviceID:                 "d1",
+		PointID:                  "p1",
+		Capability:               commandmodel.CapabilityStart,
+		VerificationPointKey:     "run_state",
+		BaselineBusinessRevision: 10,
+		AcknowledgedAt:           now.Add(-2 * time.Minute),
+		VerificationDeadline:     now.Add(-time.Second),
+		EdgeExecution:            pulseEdge,
+	}, commandmodel.ReportedStateEvidence{
+		TenantID:               "t1",
+		SiteID:                 "s1",
+		DeviceID:               "d1",
+		EvaluationAvailability: "AVAILABLE",
+		Presence:               "ONLINE",
+		Readiness:              "CURRENT",
+		Freshness:              "FRESH",
+		Quality:                "GOOD",
+		BusinessRevision:       11,
+		ReportedValue:          commandmodel.TextScalar("RUNNING"),
+		ObservedAt:             now,
+	})
+	select {
+	case evt := <-httpEvents:
+		if evt.CommandID != "cmd-late-pulse" || evt.Kind != commandmodel.ReasonPulseDeliveredPowerUnconfirmed || evt.ReasonCode != commandmodel.ReasonPulseDeliveredPowerUnconfirmed {
+			t.Fatalf("unexpected late pulse failure event: %+v", evt)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for late pulse VerificationSucceeded failure event")
+	}
+}

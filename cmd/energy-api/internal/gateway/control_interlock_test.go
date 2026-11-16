@@ -472,6 +472,7 @@ type plantGuardTestFixture struct {
 	operatingSchedule    *commandOperatingSchedule
 	operatingExceptions  []commandOperatingException
 	siteControlMode      string
+	listCommandsStatus   int
 	dispatched           []internalCommandCreate
 }
 
@@ -730,6 +731,9 @@ func newPlantGuardTestFixture(t *testing.T, localNow time.Time) *plantGuardTestF
 	seq := 0
 	commandClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path == internalCommandsPath && request.Method == http.MethodGet {
+			if f.listCommandsStatus != 0 {
+				return telemetryJSONResponse(f.listCommandsStatus, map[string]any{"code": "COMMAND_UNAVAILABLE", "retryable": true}), nil
+			}
 			listed := f.listedCommands
 			if listed == nil {
 				listed = []commandView{}
@@ -903,7 +907,7 @@ func TestGatewayChillerCooldownAndLastActiveChillerGuards(t *testing.T) {
 		}
 
 		// At exact 20m boundary with no active cooling schedule, STOP is allowed.
-		f.listedCommands[0].UpdatedAt = f.now.Add(-20 * time.Minute)
+		f.listedCommands[0] = makeTestCommandHistoryEntry("019a9000-aaaa-7000-8000-000000000010", f.tenantID, f.siteID, f.chillerADevID, f.chillerAStartPointID, commandmodel.CapabilityStart, commandmodel.IntentSucceeded, f.now.Add(-20*time.Minute))
 		recOk := f.submit(f.chillerAAssetID, f.chillerAStopPointID, "chiller-stop-20m")
 		if recOk.Code != http.StatusAccepted {
 			t.Fatalf("expected 202 at 20m min-run boundary, code=%d body=%s", recOk.Code, recOk.Body.String())
@@ -936,7 +940,7 @@ func TestGatewayChillerCooldownAndLastActiveChillerGuards(t *testing.T) {
 		}
 
 		// Cancelled or failed starts do NOT count toward the 2 starts/hour limit.
-		fRate.listedCommands[0].Status = commandmodel.IntentFailed
+		fRate.listedCommands[0] = makeTestCommandHistoryEntry("019a9000-aaaa-7000-8000-000000000012", fRate.tenantID, fRate.siteID, fRate.chillerADevID, fRate.chillerAStartPointID, commandmodel.CapabilityStart, commandmodel.IntentFailed, fRate.now.Add(-50*time.Minute))
 		recAfterFailedExcluded := fRate.submit(fRate.chillerAAssetID, fRate.chillerAStartPointID, "chiller-start-failed-excluded")
 		if recAfterFailedExcluded.Code != http.StatusAccepted {
 			t.Fatalf("expected failed start excluded from rate limit, code=%d body=%s", recAfterFailedExcluded.Code, recAfterFailedExcluded.Body.String())
@@ -1017,4 +1021,51 @@ func TestGatewayChillerCooldownAndLastActiveChillerGuards(t *testing.T) {
 			t.Fatalf("expected PLANT_SAFE_SHUTDOWN to dispatch chiller-a STOP, got %v", dispatchedPoints)
 		}
 	})
+}
+
+func TestGatewayOperationalGuardsFailClosedWhenCommandHistoryUnavailable(t *testing.T) {
+	shanghai, _ := time.LoadLocation("Asia/Shanghai")
+	base := time.Date(2026, 11, 16, 10, 0, 0, 0, shanghai)
+
+	cases := []struct {
+		name  string
+		asset func(f *plantGuardTestFixture) (string, string)
+		runA  string
+	}{
+		{
+			name:  "aux_stop_fails_closed_when_command_history_503",
+			asset: func(f *plantGuardTestFixture) (string, string) { return f.chwp1AssetID, f.chwp1StopPointID },
+			runA:  "STOPPED",
+		},
+		{
+			name:  "chiller_stop_fails_closed_when_command_history_503",
+			asset: func(f *plantGuardTestFixture) (string, string) { return f.chillerAAssetID, f.chillerAStopPointID },
+			runA:  "RUNNING",
+		},
+		{
+			name:  "chiller_start_fails_closed_when_command_history_503",
+			asset: func(f *plantGuardTestFixture) (string, string) { return f.chillerAAssetID, f.chillerAStartPointID },
+			runA:  "STOPPED",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPlantGuardTestFixture(t, base)
+			f.runStates[f.chillerADevID] = tc.runA
+			f.listCommandsStatus = http.StatusServiceUnavailable
+			assetID, pointID := tc.asset(f)
+			rec := f.submit(assetID, pointID, "history-unavailable-"+tc.name)
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("expected 503 when command history fails, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			var problem platformapi.ProblemDetails
+			if err := json.NewDecoder(rec.Body).Decode(&problem); err != nil || problem.Code != "COMMAND_UNAVAILABLE" {
+				t.Fatalf("expected COMMAND_UNAVAILABLE problem, got err=%v problem=%#v", err, problem)
+			}
+			if len(f.dispatched) != 0 {
+				t.Fatalf("expected no command dispatched when history failed, dispatched=%d", len(f.dispatched))
+			}
+		})
+	}
 }

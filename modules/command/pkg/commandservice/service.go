@@ -81,6 +81,15 @@ func (s *Service) SetControlFailureNotifier(notifier ControlFailureNotifier) {
 	s.failureNotifier = notifier
 }
 
+func (s *Service) hasControlFailureNotifier() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failureNotifier != nil
+}
+
 func controlFailureEventFromDecision(
 	intent commandmodel.CommandIntent,
 	status commandmodel.IntentStatus,

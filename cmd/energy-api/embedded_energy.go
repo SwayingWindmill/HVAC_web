@@ -575,6 +575,7 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 		Service: "energy-api-command", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 2048, ExportTimeout: 500 * time.Millisecond,
 	})
 	alarmNotifier := buildEmbeddedCommandControlFailureNotifier(alarmRef, &certificate, logger)
+	store.SetControlFailureNotifier(alarmNotifier)
 	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(embeddedCommandRuntimeConfig(store, telemetry.Metrics, alarmNotifier))
 	if err != nil {
 		store.Close()

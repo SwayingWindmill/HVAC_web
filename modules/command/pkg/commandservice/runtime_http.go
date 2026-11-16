@@ -140,6 +140,20 @@ func (handler *runtimeHTTPHandler) claimDispatch(writer http.ResponseWriter, req
 	writeRuntimeJSON(writer, http.StatusOK, envelope)
 }
 
+type controlFailureNotifyingStore interface {
+	hasControlFailureNotifier() bool
+}
+
+func (handler *runtimeHTTPHandler) shouldNotifyFromHTTP() bool {
+	if handler == nil || handler.failureNotifier == nil {
+		return false
+	}
+	if store, ok := handler.store.(controlFailureNotifyingStore); ok && store.hasControlFailureNotifier() {
+		return false
+	}
+	return true
+}
+
 func (handler *runtimeHTTPHandler) resolveDispatch(writer http.ResponseWriter, request *http.Request) {
 	var input runtimeDispatchResolveRequest
 	if !decodeRuntimeJSON(writer, request, &input) {
@@ -149,7 +163,7 @@ func (handler *runtimeHTTPHandler) resolveDispatch(writer http.ResponseWriter, r
 		writeRuntimeStoreError(writer, err)
 		return
 	}
-	if handler.failureNotifier != nil {
+	if handler.shouldNotifyFromHTTP() {
 		now := time.Now().UTC()
 		if decision, decErr := DecideDispatchResolution(input.Envelope.Capability, input.Result, now); decErr == nil {
 			intent := commandmodel.CommandIntent{
@@ -202,7 +216,7 @@ func (handler *runtimeHTTPHandler) resolveVerification(writer http.ResponseWrite
 		writeRuntimeStoreError(writer, err)
 		return
 	}
-	if handler.failureNotifier != nil {
+	if handler.shouldNotifyFromHTTP() {
 		now := time.Now().UTC()
 		intent := commandmodel.CommandIntent{
 			ID:         input.Envelope.CommandID,
@@ -213,11 +227,9 @@ func (handler *runtimeHTTPHandler) resolveVerification(writer http.ResponseWrite
 			Capability: input.Envelope.Capability,
 			Parameters: input.Envelope.Parameters,
 		}
-		if input.Result.Outcome != commandmodel.VerificationSucceeded || !validReportedState(intent, input.Envelope, input.Result.Reported) {
-			if decision, decErr := DecideVerificationResolutionWithEdge(intent, input.Envelope, input.Envelope.EdgeExecution, input.Result, input.Envelope.VerificationDeadline, now); decErr == nil {
-				if event, notify := controlFailureEventFromDecision(intent, decision.IntentFinal, decision.Reason, input.Result.FailureCode, now); notify {
-					notifyControlFailureAsync(handler.failureNotifier, event)
-				}
+		if decision, decErr := DecideVerificationResolutionWithEdge(intent, input.Envelope, input.Envelope.EdgeExecution, input.Result, input.Envelope.VerificationDeadline, now); decErr == nil {
+			if event, notify := controlFailureEventFromDecision(intent, decision.IntentFinal, decision.Reason, input.Result.FailureCode, now); notify {
+				notifyControlFailureAsync(handler.failureNotifier, event)
 			}
 		}
 	}
