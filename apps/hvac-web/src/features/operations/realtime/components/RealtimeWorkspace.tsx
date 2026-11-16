@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
+import type { SiteAssetModel } from '@/api/generated/platformGateway.gen';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
-import { ChevronRight, CircleCheck, RefreshCw } from 'lucide-react';
+import { ChevronRight, CircleCheck, Lock, RefreshCw } from 'lucide-react';
 import { PageHeader } from '@/blocks/page-header';
 import { Panel, PanelHeader } from '@/blocks/panel';
 import { InfoTip } from '@/components/info-tip';
@@ -17,7 +18,9 @@ import { operationLabel, SEVERITY_LABELS, SEVERITY_LEVEL } from '@/features/alar
 import { siteCommandsQuery } from '@/features/control/command-api';
 import { commandSummary, STATUS_PRESENTATION } from '@/features/control/command-presentation';
 import { CommandMark } from '@/features/control/components/CommandMark';
+import { ModeGlyph } from '@/features/control/components/ControlBoundary';
 import { commandLabels, controlTargets } from '@/features/control/control-model';
+import { activeLocks, LOCK_PRESENTATION, MODE_PRESENTATION, siteControlStateQuery } from '@/features/control/control-state';
 import { DataGapBanner } from '@/features/data-gaps/DataGapBanner';
 import { dataGapsKeys } from '@/features/data-gaps/query';
 import { formatCompactTime, formatDecimal } from '@/lib/operator-format';
@@ -205,11 +208,14 @@ function RecentEvents({ plant, siteId, timeZone, assetModel }: {
   readonly plant: PlantView;
   readonly siteId: string;
   readonly timeZone: string;
-  readonly assetModel: Parameters<typeof controlTargets>[0] | undefined;
+  readonly assetModel: (Parameters<typeof controlTargets>[0] & Pick<SiteAssetModel, 'assets'>) | undefined;
 }) {
   const alarms = useQuery(alarmHistoryQuery(siteId));
   const commands = useQuery(siteCommandsQuery(siteId));
+  const controlState = useQuery(siteControlStateQuery(siteId));
+  const modeState = controlState.data;
   const labels = useMemo(() => (assetModel ? commandLabels(controlTargets(assetModel, new Date())) : new Map()), [assetModel]);
+  const assetName = (assetId: string) => assetModel?.assets.find((asset) => asset.id === assetId)?.displayName ?? '设备';
   const deviceName = (deviceId: string | undefined) => (deviceId ? plant.devices.find((device) => device.deviceId === deviceId)?.name ?? '设备' : '站点');
   const today = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const isToday = (value: string) => new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value)) === today;
@@ -238,6 +244,22 @@ function RecentEvents({ plant, siteId, timeZone, assetModel }: {
         to: { path: '/operations/control', inspect: command.commandId },
       };
     }),
+    ...(modeState?.updatedAt && isToday(modeState.updatedAt) ? [{
+      key: `control-mode-${modeState.revision}`,
+      at: modeState.updatedAt,
+      mark: <ModeGlyph mode={modeState.controlMode} />,
+      title: `控制方式改为${MODE_PRESENTATION[modeState.controlMode].label}`,
+      detail: modeState.reason || '控制方式',
+      to: { path: '/operations/control' },
+    } satisfies PlantEvent] : []),
+    ...[...activeLocks(controlState.data).values()].filter((lock) => lock.updatedAt && isToday(lock.updatedAt)).map((lock): PlantEvent => ({
+      key: `control-lock-${lock.assetId}-${lock.revision}`,
+      at: lock.updatedAt ?? '',
+      mark: <Lock className="size-3 text-muted-foreground" aria-hidden="true" />,
+      title: `${assetName(lock.assetId)} · ${lock.lockMode === 'UNLOCKED' ? '解除锁定' : LOCK_PRESENTATION[lock.lockMode].label}`,
+      detail: lock.reason || '设备锁定',
+      to: { path: '/operations/control' },
+    })),
     ...plant.devices.filter((device) => device.hasStaleData || device.connection === 'OFFLINE').map((device): PlantEvent => ({
       key: `data-${device.deviceId}`,
       at: device.latestSampleAt ?? new Date().toISOString(),
@@ -254,7 +276,7 @@ function RecentEvents({ plant, siteId, timeZone, assetModel }: {
       {pending ? <div className="flex flex-col gap-2 p-4"><Skeleton className="h-10" /><Skeleton className="h-10" /><Skeleton className="h-10" /></div> : events.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
           <CircleCheck className="size-5 text-success" aria-hidden="true" />
-          <p className="text-sm font-semibold">今天没有告警和指令</p>
+          <p className="text-sm font-semibold">今天没有告警、指令和控制变更</p>
           <p className="text-xs text-muted-foreground">设备数据均为最新</p>
         </div>
       ) : (
@@ -357,6 +379,8 @@ export function RealtimeWorkspace() {
   const navigate = useNavigate({ from: '/operations/realtime' });
   const loading = registry.isPending || (current.isPending && current.fetchStatus !== 'idle');
   const equipment = equipmentStatus(plant);
+  const controlState = useQuery(siteControlStateQuery(site.id));
+  const lockCount = activeLocks(controlState.data).size;
   const setSearch = (patch: { metric?: Metric; window?: Window }) => void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true });
 
   return (
@@ -373,6 +397,15 @@ export function RealtimeWorkspace() {
                 <Link to="/operations/systems-devices" search={{ site: site.id }}>
                   <span className={cn('size-[7px] rounded-full', equipment.running === equipment.total ? 'bg-success' : 'bg-warning')} aria-hidden="true" />
                   主要设备 {equipment.running} / {equipment.total} 运行
+                  <ChevronRight className="size-3.5 text-subtle-foreground" aria-hidden="true" />
+                </Link>
+              </Button>
+            ) : null}
+            {lockCount > 0 ? (
+              <Button variant="ghost" asChild className="text-secondary-foreground">
+                <Link to="/operations/control" search={{ site: site.id }}>
+                  <Lock className="size-3.5 text-warning" aria-hidden="true" />
+                  {lockCount} 台锁定
                   <ChevronRight className="size-3.5 text-subtle-foreground" aria-hidden="true" />
                 </Link>
               </Button>

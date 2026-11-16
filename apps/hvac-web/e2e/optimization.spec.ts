@@ -71,7 +71,7 @@ test('a requested run publishes a recommendation that is dispatched as a confirm
   await expect(confirm).toContainText('8.0 °C');
   await expect(confirm).toContainText('下发后观察 30 分钟');
   await confirm.getByRole('button', { name: '确认下发' }).click();
-  await expect(page.getByText('指令已提交，正在下发')).toBeVisible();
+  await expect(page.getByText('已提交，正在下发')).toBeVisible();
   // The proposal now follows the command it was sent as.
   await expect(proposal.getByRole('link', { name: /已提交为控制指令/ })).toBeVisible();
   const submitted = gateway.writes.find((write) => write.path === '/api/v1/commands');
@@ -269,4 +269,64 @@ test('analysis tab distinguishes missing shadow records from NO_USABLE_MODEL per
   await expect(analysisPanel).toContainText('CHILLER-01');
   await expect(analysisPanel).toContainText('稳态样本不足');
   await expect(analysisPanel).toContainText('少于 96 个');
+});
+
+test('a stop recommendation for an idle tower is confirmed as a high-risk command; locked assets are listed as paused', async ({ page, gateway }) => {
+  const model = gateway.assetModel;
+  const asset = (code: string) => model.assets.find((candidate: { code: string }) => candidate.code === code);
+  const tower = asset('ct-01');
+  const pump = asset('cwp-01');
+  const stopPoint = model.telemetryPoints.find((point: { reportingDeviceId: string; pointCode: string }) =>
+    point.pointCode === 'stop' && model.devices.find((device: { id: string }) => device.id === point.reportingDeviceId)?.code === 'ct-01');
+  gateway.staging = {
+    tenantId: principal.context.tenantId, siteId: SITE_ID, evaluatedAt: new Date().toISOString(), confirmationMode: 'MANUAL_CONFIRM', siteControlMode: 'REMOTE_AUTO',
+    recommendations: [{
+      id: '01a19000-0000-7000-8000-000000000001', kind: 'IDLE_AUXILIARY_STOP', confirmationMode: 'MANUAL_CONFIRM', requiresSupervisorReview: true, requiresTotp: true,
+      suggestedCapability: 'STOP', suggestedCommandPointId: stopPoint.id, targetAssetId: tower.id, targetAssetCode: 'ct-01', targetAssetName: 'CT-01', targetAssetType: 'COOLING_TOWER',
+      predictedPowerSavingKW: 6.5, estimatedHourlySavingKWh: 6.5, estimatedShiftSavingKWh: 52, shiftHours: 8, continuousIdleSeconds: 3120, continuousIdleMinutes: 52,
+      rationale: 'IDLE_AUXILIARY_STOP', preconditions: ['MANUAL_CONFIRM'],
+    }],
+    diagnostics: [
+      { scope: 'CHILLER_STAGE_DOWN', assetId: asset('chiller-01').id, status: 'NO_OP', reason: 'SINGLE_CHILLER_RUNNING', detail: 'internal' },
+      { scope: 'IDLE_AUXILIARY_STOP', assetId: pump.id, status: 'SUPPRESSED', reason: 'ASSET_CONTROL_LOCKED', detail: 'MANUAL_LOCK internal' },
+    ],
+  };
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+
+  const staging = page.getByRole('region', { name: '减台与辅机停机' });
+  await expect(staging).toContainText('停 CT-01');
+  await expect(staging).toContainText('−6.5kW');
+  await expect(staging).toContainText('本班约 52 kWh');
+  await expect(staging).toContainText('对应主机已停52 分钟');
+  await expect(staging.getByLabel('暂停的建议')).toContainText('CWP-01已锁定，解锁后才会给停机建议');
+  // The service's internal sentences and codes never reach the page.
+  await expect(staging).not.toContainText('MANUAL');
+  await expect(staging).not.toContainText('internal');
+
+  await staging.getByRole('button', { name: '确认停机…' }).click();
+  const confirm = page.getByRole('alertdialog', { name: '停 CT-01？' });
+  await expect(confirm).toContainText('6.5 kW · 本班约 52 kWh');
+  await confirm.getByRole('textbox', { name: '动态口令' }).fill('246810');
+  await confirm.getByRole('checkbox', { name: '我已和现场确认可以停' }).check();
+  await confirm.getByRole('button', { name: '提交停机' }).click();
+
+  expect(gateway.writes.find((write) => write.path === '/api/v1/commands')?.body).toEqual({
+    assetId: tower.id, commandPointId: stopPoint.id, parameters: {}, verificationCode: '246810',
+  });
+  await expect(staging).toContainText('已提交 · 待审批');
+  await expect(staging.getByRole('link', { name: '在运行控制查看 ›' })).toBeVisible();
+});
+
+test('under manual control the stop recommendations say they are paused and cannot be confirmed', async ({ page, gateway }) => {
+  gateway.controlState = { ...gateway.controlState, controlMode: 'MANUAL_OVERRIDE', reason: '夜班巡检', revision: 2 };
+  gateway.staging = {
+    tenantId: principal.context.tenantId, siteId: SITE_ID, evaluatedAt: new Date().toISOString(), confirmationMode: 'MANUAL_CONFIRM', siteControlMode: 'MANUAL_OVERRIDE',
+    recommendations: [],
+    diagnostics: [{ scope: 'CHILLER_STAGE_DOWN', status: 'SUPPRESSED', reason: 'SITE_CONTROL_EXIT_ACTIVE', detail: 'MANUAL_OVERRIDE' }],
+  };
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+  const staging = page.getByRole('region', { name: '减台与辅机停机' });
+  await expect(staging.getByRole('status')).toContainText('人工接管中，停机建议已暂停');
+  await expect(staging.getByLabel('暂停的建议')).toContainText('减台站点不在远程自动控制，停机建议已暂停');
+  await expect(page.getByRole('banner').getByRole('link', { name: '人工接管' })).toBeVisible();
 });

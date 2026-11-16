@@ -20,6 +20,8 @@ import {
 } from '@/components/ui/sidebar';
 import { useAppTheme, type ThemeMode } from '@/app/ThemeGate';
 import { activeAlarmsQuery } from '@/features/alarms/alarm-api';
+import { siteCommandsQuery } from '@/features/control/command-api';
+import { needsPerson } from '@/features/control/command-presentation';
 import { openWorkOrdersQuery } from '@/features/work-orders/work-order-queries';
 import { useScope } from '@/hooks/use-scope';
 import { cn } from '@/lib/utils';
@@ -36,13 +38,15 @@ interface AppSidebarProps {
   readonly onNavigate: (target: string) => void;
 }
 
-/** What waits on the operator: active alarms and open work orders, from the same queries their pages use. */
+/** What waits on the operator: active alarms, open work orders and commands awaiting approval or a site check, from the same queries their pages use. */
 function useNavCounts(siteId: string | undefined): Readonly<Record<string, number | undefined>> {
   const alarms = useQuery({ ...activeAlarmsQuery(siteId ?? ''), enabled: Boolean(siteId) });
   const workOrders = useQuery({ ...openWorkOrdersQuery(siteId ?? ''), enabled: Boolean(siteId) });
+  const commands = useQuery({ ...siteCommandsQuery(siteId ?? ''), enabled: Boolean(siteId) });
   return {
     'operations-alarms': alarms.data?.items.length,
     'operations-work-center': workOrders.data?.length,
+    'operations-control': commands.data?.filter(needsPerson).length,
   };
 }
 

@@ -1,28 +1,35 @@
 # Operations control
 
-The `/operations/control` route issues setpoint and start/stop commands to plant equipment behind explicit `alertdialog` confirmations, handles multi-step approval workflows, tracks command execution timelines, and hosts the global appearance theme switch (`系统` / `浅色` / `深色`).
+The `/operations/control` route (`运行控制`) shows the Site's control mode, every controllable chiller unit with its pumps and tower, and the command log. Start/stop and unit sequences are high-risk commands behind an `alertdialog` that asks for the one-time code and a site check; setpoints open from a device row; switching the control mode or locking an asset withdraws commands not yet dispatched. It also hosts the global appearance theme switch (`系统` / `浅色` / `深色`).
 
 ## Sub-features
 
-- `control-setpoint-and-stop` submits low-risk setpoints (`冷冻水出水设定温度目标值`) and medium-risk stop commands (`停止冷冻水泵`) through `确认下发` confirmation dialogs (`POST /api/v1/commands` with `X-CSRF-Token`).
-- `control-ime-enter-safety` ignores CJK IME composition `Enter` events (`isComposing: true` or post-composition `keyCode === 229`) before opening `确认下发`.
-- `control-approval-and-timeline` lists `指令记录`, filters `待审批`, executes `:approve`, and opens `[role="dialog"]` (`?inspect=`) showing step transitions (`已提交` → `待审批` → `已批准` → `已执行`).
+- `control-mode-bar` reads `GET /api/v1/sites/{siteId}/control-state`; the `控制方式` region shows `远程自动控制` / `人工接管` / `安全退出`, who set it (`我` / `其他人员`), the reason, lock and pending counts, and a segmented choice that opens `切换到…？` (`PUT /control-mode` with `reason` and `expectedRevision`). Leaving remote auto lists the commands it withdraws; `安全退出` is disabled while any command is `下发中` or `待现场确认`.
+- `control-unit-grid` groups each `CHILLER` asset with the assets its `START` interlocks name (`group` per device row, `一键启动` / `一键停机` per unit); a blocked interlock shows `先开 …` / `先停 …` and disables the button; assets no chiller names sit in `其他设备`.
+- `control-high-risk-confirm` asks `动态口令` (6 digits) and `我已和现场确认可以停/开` before `提交停止` / `提交停机`; the request carries `verificationCode`. A `STEP_UP_REQUIRED` refusal on approval opens `批准前要再验证一次身份`, which signs in again with `assurance=high` and returns to `?inspect=`.
+- `control-maintenance-window` shows `检修窗口「…」… 至 …，只能停机和复位` in the `控制方式` region when `activeMaintenanceWindow` is set; start and setpoint controls are disabled while stop stays enabled.
+- `control-asset-lock` opens `锁定 …？` / `解除 … 的锁定？` from the lock icon (`PUT /api/v1/assets/{assetId}/control-lock`), greys the row and shows `手动锁定` / `检修锁定`.
+- `control-setpoint-and-ime` opens `调整 … 的设定值` from the sliders icon; composition `Enter` (`isComposing` or `keyCode === 229`) never submits.
+- `control-log-and-timeline` lists `指令记录` with `待审批` / `执行中` / `待现场确认` filters, `批准` / `撤回` / `已生效` / `没生效`, and the `?inspect=` sheet with transitions.
+- `control-shell-chip` shows `▲ 人工接管` / `◆ 安全退出` in the top bar on every Site page; the sidebar `运行控制` badge counts commands waiting on a person.
 - `control-theme-appearance` synchronizes `meta[name="color-scheme"]` and document `color-scheme` across system, light, and dark modes.
 
 ## How to get to it (user POV)
 
-- Click `控制指令` in the sidebar, or navigate to `/operations/control?site=<SITE_ID>`.
+- Click `运行控制` in the sidebar, the top-bar mode chip, or navigate to `/operations/control?site=<SITE_ID>`.
 
 ## Driving it with Playwright
 
 Preconditions:
 
-- Tier 1: run `CI=1 PLAYWRIGHT_PORT=5194 npm run web:e2e -- --workers=1 e2e/control.spec.ts`.
+- Tier 1: run `CI=1 PLAYWRIGHT_PORT=5194 npm run web:e2e -- --workers=1 e2e/control.spec.ts`. The recorded gateway answers start/stop as `HIGH` risk, requires `verificationCode`, refuses high-risk approval until `gateway.stepUpFresh = true`, and keeps `gateway.controlState`.
 
-- **Dispatch setpoint and stop command with IME guard.** Fill `7.5` in `CHILLER-01` `冷冻水出水设定温度目标值`, verify composition `Enter` (`keyCode: 229`) does NOT trigger `alertdialog`, press `Enter` cleanly, confirm `确认下发`, and approve `CHWP-01` `停止冷冻水泵` in `指令记录`.
-- **Verify color-scheme sync.** Toggle `外观` radios between `深色` and `浅色` and inspect `meta[name="color-scheme"]`.
-- **Proof.** Save stdout and `1440×900` light/dark screenshots under `.scratch/verify/<slug>/`.
+- **Setpoint with IME guard.** Open `调整 CHILLER-01 的设定值`, fill `7.5`, check composition `Enter` opens nothing, press `Enter`, confirm `确认下发`.
+- **High-risk stop and step-up.** `CHWP-01` → `停止`, type the code, tick the site check, `提交停止`; `批准` opens the step-up dialog until `stepUpFresh`.
+- **Mode switch and lock.** `人工接管` with a reason withdraws the pending command and shows the top-bar chip; `安全退出` is blocked by a `OUTCOME_UNKNOWN` command; `锁定 CWP-01` → `检修锁定` withdraws its command.
+- **Proof.** Save stdout and `1440×900` light/dark screenshots of the unit grid, the mode dialog and the confirm dialog under `.scratch/verify/<slug>/`.
 
 ## Gotchas
 
-- Never test command submission on live Tier-2 `hvac-local` unless safe simulator targets are confirmed; use Tier 1 (`e2e/control.spec.ts`) for setpoint/stop write verification.
+- Never submit commands on live Tier-2 `hvac-local` unless safe simulator targets are confirmed; use Tier 1 for writes.
+- The recorded asset model is the simulator plant (one chiller, no interlocks), so its grid shows `CHILLER-01` plus `其他设备`; the four-unit layout with interlock hints needs the Songyaxuan registry (Tier 2).

@@ -1,7 +1,7 @@
 import { queryOptions } from '@tanstack/react-query';
 import { z } from 'zod';
 import { gatewayPath, gatewayRequest, publishedValueOf, valueOf, type GatewayProblem } from '@/api/gateway-client';
-import { intelligencePaths } from '@/api/generated/platformGateway.gen';
+import { intelligencePaths, stagingEvaluationSchema, type StagingEvaluation } from '@/api/generated/platformGateway.gen';
 import { listWorkOrders, type WorkOrderList } from '@/api/work-orders';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import {
@@ -161,6 +161,7 @@ export const optimizationKeys = {
   latest: (siteId: string) => ['optimization', siteId, 'latest'] as const,
   preparation: (siteId: string) => ['optimization', siteId, 'preparation'] as const,
   shadow: (siteId: string, runId: string | null) => ['optimization', siteId, 'shadow', runId] as const,
+  staging: (siteId: string) => ['optimization', siteId, 'staging'] as const,
 };
 
 const UNAVAILABLE = '优化服务暂时不可用';
@@ -248,4 +249,20 @@ function runRefusal(problem: GatewayProblem): string {
       : '无法生成建议：站点的优化策略或模型部署不可用';
   }
   return UNAVAILABLE;
+}
+
+/** The latest stage-down and idle-auxiliary evaluation; null until the service has evaluated this Site. */
+export function latestStagingQuery(siteId: string) {
+  return queryOptions({
+    queryKey: optimizationKeys.staging(siteId),
+    queryFn: async ({ signal }): Promise<StagingEvaluation | null> => publishedValueOf(
+      await gatewayRequest(
+        gatewayPath(intelligencePaths.latestOptimizationStagingRecommendations, { siteId }),
+        { signal, parse: (payload) => stagingEvaluationSchema.parse(payload) },
+      ),
+      { unavailable: UNAVAILABLE },
+    ),
+    refetchInterval: 60_000,
+    retry: false,
+  });
 }

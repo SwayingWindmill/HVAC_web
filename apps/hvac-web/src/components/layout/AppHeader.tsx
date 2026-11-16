@@ -6,6 +6,7 @@ import { CommandSearch } from './CommandSearch';
 import { NavUser } from './NavUser';
 import { ScopeSwitcher } from './ScopeSwitcher';
 import { useWaitingAlarmCount } from '@/features/alarms/use-waiting-alarm-count';
+import { ControlModeChip } from '@/features/control/components/ControlModeChip';
 import { BrandMark } from '@/components/brand-mark';
 import { cn } from '@/lib/utils';
 
@@ -61,6 +62,7 @@ export function AppHeader({
         </a>
         <span className="mx-0.5 text-xl font-light text-border" aria-hidden="true">/</span>
         <ScopeSwitcher />
+        {siteId ? <ControlModeChip siteId={siteId} /> : null}
 
         <div className="ml-auto flex items-center gap-2">
           <Button

@@ -7,6 +7,6 @@ export const Route = createFileRoute('/_app/_site/operations/control')({
     status: z.enum(['approval', 'inflight', 'unknown']).optional(),
     inspect: z.string().optional(),
   }),
-  staticData: { title: '控制指令' },
+  staticData: { title: '运行控制' },
   component: ControlWorkspace,
 });
