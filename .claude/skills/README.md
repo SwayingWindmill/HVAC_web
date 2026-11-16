@@ -17,3 +17,4 @@
    - `improve-codebase-architecture`（完整版，含 `HTML-REPORT.md` 并直接联动 `codebase-design` 与 `grilling`，报告输出至 `.scratch/` 后交棒 `architect`/`refactoring.md`）
 3. 项目专属验证与形式化验证技能（2 个）：按 `create-verification-skill` / `create-formal-verification-skill` 为 `HVAC_web` 生成的 `verify`（1440px Playwright 录制网关与实库验证）与 `command-safety`（`modules/command/pkg/commandformal` 状态机穷举检验）。
 4. 项目前端与界面规范技能（3 个）：`frontend-design`、`shadcn`、`web-design-guidelines`。
+5. 外部代码审查脚手架技能（1 个）：`alibaba/open-code-review` `v1.13.10`（Apache-2.0 协议，提交 `7e5ce06c88de5ce81df5dc4f24e2e485b517fae8`）的 `open-code-review-delegate`，配合仓库 `.opencodereview/rule.json` 供大改动分支做确定性文件筛选与规则分组（只报告发现不自动改码），筛选与裁剪说明见 `docs/architecture/open-code-review-source-review-2026-11-16.md`。
