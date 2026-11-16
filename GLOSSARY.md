@@ -482,6 +482,24 @@ IAM 每次判断允许后签发的短时凭据，只对一次具体的读或写�
 
 不要说：站点初始化、开站、种子数据（种子数据只给模拟冷站）
 
+### 语义角色（Semantic Role）
+
+点位对其测量对象承担的物理职责分类（共 11 个固定枚举：`ACTIVE_POWER`、`RUN_STATE`、`CHW_LEAVING_TEMP`、`CHW_ENTERING_TEMP`、`CW_LEAVING_TEMP`、`CW_ENTERING_TEMP`、`SUPPLY_WATER_TEMP`、`RETURN_WATER_TEMP`、`COOLING_LOAD`、`WATER_FLOW`、`ZONE_TEMP`），写在 `core_registry.point_subject_bindings.semantic_role`。让诊断和优化按「测的是什么物理量」找点位，不再要求不同站点用完全相同的点位代码（ADR 0033）。
+
+不要说：点位标签、别名映射
+
+### 水力连接（Hydraulic Connection）
+
+冷站资产之间显式登记的有向水路服务关系（例如 1 号冷冻泵服务于 A 机组、A 机组服务于冷冻水总管，`SERVES`），保存在 `core_registry.asset_relationships`。控制安全联锁与节能停机判断直接读取这条显式关系，不再只靠解析控制器命令元数据猜拓扑。
+
+不要说：联锁拓扑、软连接
+
+### 设备群孪生（Plant Twin）
+
+平台在每次诊断或优化计算前从只读端口视图（`core_registry.plant_twin_*_v1`）拼出的站点只读运行图谱：包含站点控制模式、资产台账与铭牌、资产锁定、活动设备、点位语义角色、水力连接、周运行计划和已批准例外安排（ADR 0033）。
+
+不要说：冷站影子、静态档案快照
+
 ## 模拟器和历史导入
 
 ### 模拟冷站（Virtual Central Plant）

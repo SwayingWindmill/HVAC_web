@@ -116,7 +116,8 @@
         "infra/registry/postgres/init/043-auto-control-leases-and-monitors.sql",
         "infra/registry/postgres/init/iam-tenant-principal-names.sql",
         "infra/connectivity/postgres/init/gateway-tunnel-audit.sql",
-        "infra/registry/postgres/init/registry-outbox-delivery-grants.sql"
+        "infra/registry/postgres/init/registry-outbox-delivery-grants.sql",
+        "infra/registry/postgres/init/plant-twin-relationships-and-roles.sql"
       ]
     },
     {

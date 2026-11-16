@@ -30,6 +30,7 @@ func (store *PostgresStore) GetSiteAssetModel(ctx context.Context, claims regist
 		TelemetryPoints:      []TelemetryPoint{},
 		Relationships:        []AssetRelationship{},
 		PointSubjectBindings: []PointSubjectBinding{},
+		AssetRelationships:   []AssetRelationship{},
 	}
 
 	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
@@ -217,6 +218,7 @@ ORDER BY reporting_device_id, point_code COLLATE "C", id
 		if err := queryAssetRows(ctx, transaction, `
 SELECT id::text, tenant_id::text, site_id::text, point_id::text,
        subject_type, space_id::text, asset_id::text, binding_role,
+       COALESCE(semantic_role, ''),
        status, valid_from, valid_to, revision, created_at, updated_at
 FROM core_registry.point_subject_bindings
 WHERE site_id = $1::uuid
@@ -225,6 +227,23 @@ ORDER BY binding_role COLLATE "C", id
 			item, err := scanPointSubjectBinding(row)
 			if err == nil {
 				result.PointSubjectBindings = append(result.PointSubjectBindings, item)
+			}
+			return err
+		}); err != nil {
+			return err
+		}
+
+		if err := queryAssetRows(ctx, transaction, `
+SELECT id::text, tenant_id::text, site_id::text, from_asset_id::text,
+       to_asset_id::text, relationship_role, status, valid_from, valid_to,
+       revision, created_at, updated_at
+FROM core_registry.asset_relationships
+WHERE site_id = $1::uuid
+ORDER BY relationship_role COLLATE "C", from_asset_id, to_asset_id, id
+`, siteID, func(row rowScanner) error {
+			item, err := scanAssetRelationship(row)
+			if err == nil {
+				result.AssetRelationships = append(result.AssetRelationships, item)
 			}
 			return err
 		}); err != nil {
@@ -273,8 +292,10 @@ func queryAssetRows(
 func buildAssetRelationships(model SiteAssetModel) []AssetRelationship {
 	relationships := make([]AssetRelationship, 0,
 		len(model.DeviceBindings)+len(model.AssetSpaceBindings)+len(model.DeviceSpaceBindings)+
-			len(model.SensorDeviceBindings)+len(model.SensorSpaceBindings)+len(model.PointSubjectBindings),
+			len(model.SensorDeviceBindings)+len(model.SensorSpaceBindings)+len(model.PointSubjectBindings)+
+			len(model.AssetRelationships),
 	)
+	relationships = append(relationships, model.AssetRelationships...)
 	for _, binding := range model.AssetSpaceBindings {
 		relationships = append(relationships, relationshipFromBinding(
 			binding.ID, binding.TenantID, binding.SiteID,
@@ -497,10 +518,27 @@ func scanPointSubjectBinding(row rowScanner) (PointSubjectBinding, error) {
 	if err := row.Scan(
 		&item.ID, &item.TenantID, &item.SiteID,
 		&item.PointID, &item.SubjectType, &item.SpaceID, &item.AssetID,
-		&item.BindingRole, &item.Status, &validFrom, &validTo,
+		&item.BindingRole, &item.SemanticRole, &item.Status, &validFrom, &validTo,
 		&item.Revision, &createdAt, &updatedAt,
 	); err != nil {
 		return PointSubjectBinding{}, err
+	}
+	assignBindingTimes(validFrom, validTo, createdAt, updatedAt, &item.ValidFrom, &item.ValidTo, &item.CreatedAt, &item.UpdatedAt)
+	return item, nil
+}
+
+func scanAssetRelationship(row rowScanner) (AssetRelationship, error) {
+	item := AssetRelationship{FromType: "ASSET", ToType: "ASSET"}
+	var validFrom time.Time
+	var validTo *time.Time
+	var createdAt time.Time
+	var updatedAt time.Time
+	if err := row.Scan(
+		&item.ID, &item.TenantID, &item.SiteID,
+		&item.FromID, &item.ToID, &item.Role, &item.Status,
+		&validFrom, &validTo, &item.Revision, &createdAt, &updatedAt,
+	); err != nil {
+		return AssetRelationship{}, err
 	}
 	assignBindingTimes(validFrom, validTo, createdAt, updatedAt, &item.ValidFrom, &item.ValidTo, &item.CreatedAt, &item.UpdatedAt)
 	return item, nil

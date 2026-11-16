@@ -120,20 +120,21 @@ type TelemetryPoint struct {
 }
 
 type PointSubjectBinding struct {
-	ID          string  `json:"id"`
-	TenantID    string  `json:"tenantId"`
-	SiteID      string  `json:"siteId"`
-	PointID     string  `json:"pointId"`
-	SubjectType string  `json:"subjectType"`
-	SpaceID     *string `json:"spaceId"`
-	AssetID     *string `json:"assetId"`
-	BindingRole string  `json:"bindingRole"`
-	Status      string  `json:"status"`
-	ValidFrom   string  `json:"validFrom"`
-	ValidTo     *string `json:"validTo"`
-	Revision    int64   `json:"revision"`
-	CreatedAt   string  `json:"createdAt"`
-	UpdatedAt   string  `json:"updatedAt"`
+	ID           string  `json:"id"`
+	TenantID     string  `json:"tenantId"`
+	SiteID       string  `json:"siteId"`
+	PointID      string  `json:"pointId"`
+	SubjectType  string  `json:"subjectType"`
+	SpaceID      *string `json:"spaceId"`
+	AssetID      *string `json:"assetId"`
+	BindingRole  string  `json:"bindingRole"`
+	SemanticRole string  `json:"semanticRole,omitempty"`
+	Status       string  `json:"status"`
+	ValidFrom    string  `json:"validFrom"`
+	ValidTo      *string `json:"validTo"`
+	Revision     int64   `json:"revision"`
+	CreatedAt    string  `json:"createdAt"`
+	UpdatedAt    string  `json:"updatedAt"`
 }
 
 type AssetRelationship struct {
@@ -179,4 +180,5 @@ type SiteAssetModel struct {
 	SensorDeviceBindings []SensorDeviceBinding `json:"-"`
 	SensorSpaceBindings  []SensorSpaceBinding  `json:"-"`
 	PointSubjectBindings []PointSubjectBinding `json:"-"`
+	AssetRelationships   []AssetRelationship   `json:"-"`
 }

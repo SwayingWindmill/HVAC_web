@@ -298,6 +298,7 @@
         {
           "code": "run_state",
           "sourceKey": "chiller.run_state",
+          "semanticRole": "RUN_STATE",
           "name": "运行状态",
           "pointType": "TELEMETRY",
           "valueType": "STRING",
@@ -306,6 +307,7 @@
         {
           "code": "chw_leaving_temperature",
           "sourceKey": "chiller.leaving_chilled_water_temperature",
+          "semanticRole": "CHW_LEAVING_TEMP",
           "name": "冷冻水出水温度（蒸发出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -319,6 +321,7 @@
         {
           "code": "chw_entering_temperature",
           "sourceKey": "chiller.entering_chilled_water_temperature",
+          "semanticRole": "CHW_ENTERING_TEMP",
           "name": "冷冻水进水温度（总冷冻水回水，四台共用）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -332,6 +335,7 @@
         {
           "code": "cw_entering_temperature",
           "sourceKey": "chiller.entering_cooling_water_temperature",
+          "semanticRole": "CW_ENTERING_TEMP",
           "name": "冷却水进水温度（冷凝进）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -345,6 +349,7 @@
         {
           "code": "cw_leaving_temperature",
           "sourceKey": "chiller.leaving_cooling_water_temperature",
+          "semanticRole": "CW_LEAVING_TEMP",
           "name": "冷却水出水温度（冷凝出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -379,6 +384,7 @@
         {
           "code": "run_state",
           "sourceKey": "chiller.run_state",
+          "semanticRole": "RUN_STATE",
           "name": "运行状态",
           "pointType": "TELEMETRY",
           "valueType": "STRING",
@@ -387,6 +393,7 @@
         {
           "code": "chw_leaving_temperature",
           "sourceKey": "chiller.leaving_chilled_water_temperature",
+          "semanticRole": "CHW_LEAVING_TEMP",
           "name": "冷冻水出水温度（蒸发出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -400,6 +407,7 @@
         {
           "code": "chw_entering_temperature",
           "sourceKey": "chiller.entering_chilled_water_temperature",
+          "semanticRole": "CHW_ENTERING_TEMP",
           "name": "冷冻水进水温度（总冷冻水回水，四台共用）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -413,6 +421,7 @@
         {
           "code": "cw_entering_temperature",
           "sourceKey": "chiller.entering_cooling_water_temperature",
+          "semanticRole": "CW_ENTERING_TEMP",
           "name": "冷却水进水温度（冷凝进）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -426,6 +435,7 @@
         {
           "code": "cw_leaving_temperature",
           "sourceKey": "chiller.leaving_cooling_water_temperature",
+          "semanticRole": "CW_LEAVING_TEMP",
           "name": "冷却水出水温度（冷凝出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -451,6 +461,7 @@
         {
           "code": "run_state",
           "sourceKey": "chiller.run_state",
+          "semanticRole": "RUN_STATE",
           "name": "运行状态",
           "pointType": "TELEMETRY",
           "valueType": "STRING",
@@ -459,6 +470,7 @@
         {
           "code": "chw_leaving_temperature",
           "sourceKey": "chiller.leaving_chilled_water_temperature",
+          "semanticRole": "CHW_LEAVING_TEMP",
           "name": "冷冻水出水温度（蒸发出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -472,6 +484,7 @@
         {
           "code": "chw_entering_temperature",
           "sourceKey": "chiller.entering_chilled_water_temperature",
+          "semanticRole": "CHW_ENTERING_TEMP",
           "name": "冷冻水进水温度（总冷冻水回水，四台共用）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -485,6 +498,7 @@
         {
           "code": "cw_entering_temperature",
           "sourceKey": "chiller.entering_cooling_water_temperature",
+          "semanticRole": "CW_ENTERING_TEMP",
           "name": "冷却水进水温度（冷凝进）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -498,6 +512,7 @@
         {
           "code": "cw_leaving_temperature",
           "sourceKey": "chiller.leaving_cooling_water_temperature",
+          "semanticRole": "CW_LEAVING_TEMP",
           "name": "冷却水出水温度（冷凝出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -532,6 +547,7 @@
         {
           "code": "run_state",
           "sourceKey": "chiller.run_state",
+          "semanticRole": "RUN_STATE",
           "name": "运行状态",
           "pointType": "TELEMETRY",
           "valueType": "STRING",
@@ -540,6 +556,7 @@
         {
           "code": "chw_leaving_temperature",
           "sourceKey": "chiller.leaving_chilled_water_temperature",
+          "semanticRole": "CHW_LEAVING_TEMP",
           "name": "冷冻水出水温度（蒸发出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -553,6 +570,7 @@
         {
           "code": "chw_entering_temperature",
           "sourceKey": "chiller.entering_chilled_water_temperature",
+          "semanticRole": "CHW_ENTERING_TEMP",
           "name": "冷冻水进水温度（总冷冻水回水，四台共用）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -566,6 +584,7 @@
         {
           "code": "cw_entering_temperature",
           "sourceKey": "chiller.entering_cooling_water_temperature",
+          "semanticRole": "CW_ENTERING_TEMP",
           "name": "冷却水进水温度（冷凝进）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -579,6 +598,7 @@
         {
           "code": "cw_leaving_temperature",
           "sourceKey": "chiller.leaving_cooling_water_temperature",
+          "semanticRole": "CW_LEAVING_TEMP",
           "name": "冷却水出水温度（冷凝出）",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -787,6 +807,7 @@
         {
           "code": "power_total",
           "sourceKey": "hvac_meter.active_power",
+          "semanticRole": "ACTIVE_POWER",
           "name": "空调总有功功率",
           "unit": "kW",
           "pointType": "TELEMETRY",
@@ -842,6 +863,7 @@
         {
           "code": "supply_water_temperature",
           "sourceKey": "btu_meter.supply_water_temperature",
+          "semanticRole": "SUPPLY_WATER_TEMP",
           "name": "冷冻水供水温度",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -852,6 +874,7 @@
         {
           "code": "return_water_temperature",
           "sourceKey": "btu_meter.return_water_temperature",
+          "semanticRole": "RETURN_WATER_TEMP",
           "name": "冷冻水回水温度",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -872,6 +895,7 @@
         {
           "code": "flow_rate",
           "sourceKey": "btu_meter.flow_rate",
+          "semanticRole": "WATER_FLOW",
           "name": "冷冻水流量",
           "unit": "m3/h",
           "pointType": "TELEMETRY",
@@ -881,6 +905,7 @@
         {
           "code": "instant_cooling_capacity",
           "sourceKey": "btu_meter.instant_cooling_capacity",
+          "semanticRole": "COOLING_LOAD",
           "name": "瞬时制冷量",
           "unit": "kW",
           "pointType": "TELEMETRY",
@@ -913,6 +938,7 @@
         {
           "code": "cooling_tower_leaving_temperature",
           "sourceKey": "cooling_tower.leaving_water_temperature",
+          "semanticRole": "CW_LEAVING_TEMP",
           "name": "冷却塔出水温度",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -926,6 +952,7 @@
         {
           "code": "cooling_tower_entering_temperature",
           "sourceKey": "cooling_tower.entering_water_temperature",
+          "semanticRole": "CW_ENTERING_TEMP",
           "name": "冷却塔进水温度",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -1025,6 +1052,7 @@
         {
           "code": "room_temperature",
           "sourceKey": "zone.temperature",
+          "semanticRole": "ZONE_TEMP",
           "name": "大厅室内温度",
           "unit": "Cel",
           "pointType": "TELEMETRY",
@@ -1064,6 +1092,7 @@
         {
           "code": "run_state",
           "name": "1# 主机运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "ammeter-unit4: > 12.75 kW 启动运行，<= 5 kW 停机"
@@ -1154,6 +1183,7 @@
         {
           "code": "run_state",
           "name": "1# 冻水泵运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "UID31 地址 0 (u11)",
@@ -1208,6 +1238,7 @@
         {
           "code": "run_state",
           "name": "1# 冷却泵运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "UID31 地址 1 (u12)",
@@ -1262,6 +1293,7 @@
         {
           "code": "run_state",
           "name": "1# 冷却塔运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "UID31 地址 2 (u13)",
@@ -1316,6 +1348,7 @@
         {
           "code": "run_state",
           "name": "2# 主机运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "ammeter-unit3: > 12.75 kW 启动运行，<= 5 kW 停机"
@@ -1406,6 +1439,7 @@
         {
           "code": "run_state",
           "name": "2# 冻水泵运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "UID31 地址 4 (u21)",
@@ -1460,6 +1494,7 @@
         {
           "code": "run_state",
           "name": "2# 冷却泵运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "UID31 地址 5 (u22)",
@@ -1514,6 +1549,7 @@
         {
           "code": "run_state",
           "name": "2# 冷却塔运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "UID31 地址 6 (u23)",
@@ -1568,6 +1604,7 @@
         {
           "code": "run_state",
           "name": "3# 主机运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "ammeter-unit1: > 57.75 kW 启动运行，<= 45 kW 停机（含配套水泵与冷却塔合并馈线）"
@@ -1658,6 +1695,7 @@
         {
           "code": "run_state",
           "name": "3# 冻水泵运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "UID31 地址 8 (u31)",
@@ -1712,6 +1750,7 @@
         {
           "code": "run_state",
           "name": "3# 冷却泵运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "UID31 地址 9 (u32)",
@@ -1766,6 +1805,7 @@
         {
           "code": "run_state",
           "name": "3# 冷却塔运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "UID31 地址 10 (u33)",
@@ -1820,6 +1860,7 @@
         {
           "code": "run_state",
           "name": "4# 主机运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "ammeter-unit2: > 57.75 kW 启动运行，<= 45 kW 停机（含配套水泵与冷却塔合并馈线）"
@@ -1910,6 +1951,7 @@
         {
           "code": "run_state",
           "name": "4# 冻水泵运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "UID31 地址 12 (u41)",
@@ -1964,6 +2006,7 @@
         {
           "code": "run_state",
           "name": "4# 冷却泵运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "UID31 地址 13 (u42)",
@@ -2018,6 +2061,7 @@
         {
           "code": "run_state",
           "name": "4# 冷却塔运行状态",
+          "semanticRole": "RUN_STATE",
           "pointType": "STATE",
           "valueType": "STRING",
           "address": "UID31 地址 14 (u43)",
@@ -2177,6 +2221,7 @@
       "valueType": "NUMBER",
       "address": "保持寄存器 36",
       "sourceKey": "chiller.power",
+      "semanticRole": "ACTIVE_POWER",
       "critical": true
     },
     {
@@ -2310,6 +2355,24 @@
       "name": "冷冻水总管",
       "type": "CHILLED_WATER_LOOP"
     }
+  ],
+  "assetRelationships": [
+    { "from": "chwp-1", "to": "chiller-a", "role": "SERVES" },
+    { "from": "cwp-1", "to": "chiller-a", "role": "SERVES" },
+    { "from": "cooling-tower-1", "to": "chiller-a", "role": "SERVES" },
+    { "from": "chwp-2", "to": "chiller-b", "role": "SERVES" },
+    { "from": "cwp-2", "to": "chiller-b", "role": "SERVES" },
+    { "from": "cooling-tower-2", "to": "chiller-b", "role": "SERVES" },
+    { "from": "chwp-3", "to": "chiller-c", "role": "SERVES" },
+    { "from": "cwp-3", "to": "chiller-c", "role": "SERVES" },
+    { "from": "cooling-tower-3", "to": "chiller-c", "role": "SERVES" },
+    { "from": "chwp-4", "to": "chiller-d", "role": "SERVES" },
+    { "from": "cwp-4", "to": "chiller-d", "role": "SERVES" },
+    { "from": "cooling-tower-4", "to": "chiller-d", "role": "SERVES" },
+    { "from": "chiller-a", "to": "chilled-water-loop", "role": "SERVES" },
+    { "from": "chiller-b", "to": "chilled-water-loop", "role": "SERVES" },
+    { "from": "chiller-c", "to": "chilled-water-loop", "role": "SERVES" },
+    { "from": "chiller-d", "to": "chilled-water-loop", "role": "SERVES" }
   ],
   "energy": {
     "plantName": "空调机房",

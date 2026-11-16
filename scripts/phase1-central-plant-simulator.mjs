@@ -15,6 +15,7 @@ import {
 import { applyRegistryRigToPoints, loadAcceptanceRig } from './lib/acceptance-rig.mjs';
 import { localContainer, repoRoot, runtimeDir } from './lib/local-environment.mjs';
 import { localAdministratorBrowser } from './lib/local-administrator-browser.mjs';
+import { buildSimulatorPointSubjectsAndEdgesSql } from './lib/site-onboarding-twin.ts';
 
 const postgresContainer = process.env.PHASE1_POSTGRES_CONTAINER || localContainer('postgres');
 const runtimeRoot = runtimeDir;
@@ -186,20 +187,7 @@ function buildS1Seed(site, points) {
     )`;
   }).join(',\n');
 
-  const pointSubjects = points.map((point) => {
-    const pointID = ids.pointIdByRef.get(`${point.deviceId}/${point.telemetryKey}`);
-    const bindingRole = point.pointType === 'COMMAND' ? 'CONTROLS' : 'DESCRIBES';
-    if (point.subjectType === 'SITE') {
-      return `(${sqlLiteral(ids.nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(pointID)}, 'SITE', NULL, NULL, ${sqlLiteral(bindingRole)}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
-    }
-    if (point.subjectType === 'EQUIPMENT') {
-      return `(${sqlLiteral(ids.nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(pointID)}, 'ASSET', NULL, ${sqlLiteral(ids.assetIdByKey.get(point.subjectId))}, ${sqlLiteral(bindingRole)}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
-    }
-    if (point.subjectType === 'AREA') {
-      return `(${sqlLiteral(ids.nextID())}, ${sqlLiteral(tenantId)}, ${sqlLiteral(siteId)}, ${sqlLiteral(pointID)}, 'SPACE', ${sqlLiteral(ids.spaceIdByKey.get(point.subjectId))}, NULL, ${sqlLiteral(bindingRole)}, 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
-    }
-    throw new Error(`unsupported point subject ${point.subjectType}`);
-  }).join(',\n');
+  const pointSubjectsAndEdgesSql = buildSimulatorPointSubjectsAndEdgesSql(points, ids, tenantId, siteId, siteUUID, site);
 
   return `BEGIN;
 INSERT INTO core_registry.sites (id, code, display_name, timezone, status, revision, created_at, updated_at, tenant_id, floor_area_m2, climate_zone)
@@ -253,9 +241,7 @@ INSERT INTO core_registry.telemetry_points (id, tenant_id, site_id, reporting_de
 ${telemetryPoints}
 ON CONFLICT (id) DO UPDATE SET reporting_device_id=EXCLUDED.reporting_device_id, sensor_id=EXCLUDED.sensor_id, point_code=EXCLUDED.point_code, source_key=EXCLUDED.source_key, display_name=EXCLUDED.display_name, point_type=EXCLUDED.point_type, value_type=EXCLUDED.value_type, unit=EXCLUDED.unit, sample_interval_ms=EXCLUDED.sample_interval_ms, publish_interval_ms=EXCLUDED.publish_interval_ms, stale_after_ms=EXCLUDED.stale_after_ms, source_metadata=EXCLUDED.source_metadata, counter_decrease_mode=EXCLUDED.counter_decrease_mode, counter_rollover_modulus=EXCLUDED.counter_rollover_modulus, status='ACTIVE', updated_at=clock_timestamp();
 
-INSERT INTO core_registry.point_subject_bindings (id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
-${pointSubjects}
-ON CONFLICT (id) DO UPDATE SET point_id=EXCLUDED.point_id, subject_type=EXCLUDED.subject_type, space_id=EXCLUDED.space_id, asset_id=EXCLUDED.asset_id, binding_role=EXCLUDED.binding_role, status='ACTIVE', valid_to=NULL, updated_at=clock_timestamp();
+${pointSubjectsAndEdgesSql}
 COMMIT;`;
 }
 
