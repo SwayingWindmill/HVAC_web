@@ -20,6 +20,16 @@ ssh -N -L 18800:127.0.0.1:18800 <运维账号>@<平台服务器>
 
 隧道保持常驻时，本地浏览器打开 `http://127.0.0.1:18800` 即可直接编辑和部署 Node-RED（包括 WebSocket `/comms` 实时状态）。使用完关闭 SSH 端口转发即可。
 
+### 免手输口令一键接口同步 `平台·形成信封`
+
+网关本身还暴露给站内局域网，因此 Node-RED 网页管理端保留账号口令验证。日常同步 `edge/node-red/songyaxuan-platform-envelope.js` 时不需要在终端或网页里重复输入账号密码：在平台服务器一次性放入只读运行口令文件 `/opt/hvac-platform/runtime/secrets/songyaxuan-nodered-admin`（权限 `0600`），运维机器通过一条命令直接经服务端回环接口增量热更新：
+
+```bash
+node --experimental-strip-types scripts/sync-songyaxuan-nodered.ts --ssh ubuntu@139.199.58.47
+```
+
+脚本会先调 `GET /flows` 校验 `ET1010·机组启停` 和 `平台·常驻隧道` 页签存在且启用，再只替换 `平台·形成信封` 的函数正文并以 `Node-RED-Deployment-Type: nodes` 增量提交，不重部署 Modbus 串口节点，随后回读 `/flows` 核对源码一致。
+
 ## 安全边界与断线规则
 
 - **只放行 `1880` 端口**：服务端 `OpenStream` 和网关侧 `GatewayTunnelClient` 都在建流阶段强制校验目标端口必须等于 `1880`。哪怕收到目标端口 `22`（SSH）或 `80`（HTTP）的 `OPEN` 帧，网关也会直接返回 `OPEN_ERR`，不会向本地套接字发起连接。

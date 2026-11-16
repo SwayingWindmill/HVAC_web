@@ -36,6 +36,10 @@ import {
   checkAndRenewGatewayCertificate,
   shouldRenewCertificate,
 } from '../edge/node-red/gateway-cert-autorenew.ts';
+import {
+  buildRemoteModulePayload,
+  syncSongyaxuanEnvelopeViaApi,
+} from '../scripts/sync-songyaxuan-nodered.ts';
 
 function derLen(len: number): Buffer {
   if (len < 0x80) return Buffer.from([len]);
@@ -959,4 +963,161 @@ test('tunnel and cert autorenew trust system root CAs alongside pinned gateway C
       }
     });
   });
+});
+
+test('syncSongyaxuanEnvelopeViaApi handles 401 password-file token exchange, passwordless 200, and protected tab guards', async (t) => {
+  const sampleEnvelope = '// test envelope\nreturn msg;\n';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hvac-nodered-sync-'));
+  tempDirs.push(dir);
+  const passwordFile = path.join(dir, 'nodered-admin');
+  fs.writeFileSync(passwordFile, 'secret-pass-from-file\n', { mode: 0o600 });
+
+  // Case (a): 401 on unauthenticated GET /flows exchanges /auth/token via passwordFile and hot-swaps only target func.
+  {
+    let requireAuth = true;
+    let rev = 'rev-a-1';
+    let postDeployHeader = '';
+    let authCalls = 0;
+    let flows = [
+      { id: 'tab-et', type: 'tab', label: 'ET1010·机组启停', disabled: false },
+      { id: 'tab-tun', type: 'tab', label: '平台·常驻隧道', disabled: false },
+      { id: 'tab-edge', type: 'tab', label: 'Edge·采集与上报', disabled: false },
+      { id: 'fn-env', type: 'function', z: 'tab-edge', name: '平台·形成信封', func: '// stale' },
+      { id: 'mb-1', type: 'modbusRead', z: 'tab-edge', name: 'ET1010 UID31', uid: '31' },
+    ];
+    const srv = http.createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const rawBody = Buffer.concat(chunks).toString('utf8');
+
+      if (req.method === 'POST' && req.url === '/auth/token') {
+        authCalls += 1;
+        const form = new URLSearchParams(rawBody);
+        assert.equal(form.get('username'), 'admin');
+        assert.equal(form.get('password'), 'secret-pass-from-file');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ access_token: 'tok-abc', token_type: 'Bearer' }));
+        return;
+      }
+      if (requireAuth && req.headers.authorization !== 'Bearer tok-abc') {
+        res.writeHead(401, { 'Content-Type': 'text/plain' });
+        res.end('Unauthorized');
+        return;
+      }
+      if (req.method === 'GET' && req.url === '/flows') {
+        assert.equal(req.headers['node-red-api-version'], 'v2');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ rev, flows }));
+        return;
+      }
+      if (req.method === 'POST' && req.url === '/flows') {
+        assert.equal(req.headers['node-red-api-version'], 'v2');
+        postDeployHeader = String(req.headers['node-red-deployment-type'] ?? '');
+        const body = JSON.parse(rawBody) as { rev: string; flows: typeof flows };
+        assert.equal(body.rev, rev);
+        flows = body.flows;
+        rev = 'rev-a-2';
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ rev }));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+    t.after(() => new Promise<void>((resolve) => srv.close(() => resolve())));
+    const addr = srv.address();
+    assert.ok(addr && typeof addr === 'object');
+
+    const resA = await syncSongyaxuanEnvelopeViaApi({
+      baseUrl: `http://127.0.0.1:${addr.port}`,
+      envelopeSource: sampleEnvelope,
+      passwordFile,
+    });
+    assert.equal(authCalls, 1);
+    assert.equal(postDeployHeader, 'nodes');
+    assert.equal(resA.ok, true);
+    assert.equal(resA.revBefore, 'rev-a-1');
+    assert.equal(resA.revAfter, 'rev-a-2');
+    assert.equal(resA.verifiedMatch, true);
+    assert.deepEqual(flows.find((n) => n.id === 'mb-1'), {
+      id: 'mb-1',
+      type: 'modbusRead',
+      z: 'tab-edge',
+      name: 'ET1010 UID31',
+      uid: '31',
+    });
+
+    // Case (b): Passwordless Node-RED (200 on initial GET /flows) completes with zero credentials or /auth/token calls.
+    requireAuth = false;
+    authCalls = 0;
+    const resB = await syncSongyaxuanEnvelopeViaApi({
+      baseUrl: `http://127.0.0.1:${addr.port}`,
+      envelopeSource: '// second pass\nreturn null;\n',
+    });
+    assert.equal(authCalls, 0);
+    assert.equal(resB.verifiedMatch, true);
+
+    // Case (c): Missing or disabled protected tab aborts with ProtectedFlowTabError before POST /flows.
+    let postAttempted = false;
+    const badSrv = http.createServer((req, res) => {
+      if (req.method === 'POST' && req.url === '/flows') {
+        postAttempted = true;
+      }
+      if (req.method === 'GET' && req.url === '/flows') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            rev: 'rev-bad',
+            flows: [
+              { id: 'tab-et', type: 'tab', label: 'ET1010·机组启停', disabled: true },
+              { id: 'tab-tun', type: 'tab', label: '平台·常驻隧道', disabled: false },
+              { id: 'tab-edge', type: 'tab', label: 'Edge·采集与上报', disabled: false },
+              { id: 'fn-env', type: 'function', z: 'tab-edge', name: '平台·形成信封', func: '// stale' },
+            ],
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve) => badSrv.listen(0, '127.0.0.1', resolve));
+    t.after(() => new Promise<void>((resolve) => badSrv.close(() => resolve())));
+    const badAddr = badSrv.address();
+    assert.ok(badAddr && typeof badAddr === 'object');
+
+    await assert.rejects(
+      () =>
+        syncSongyaxuanEnvelopeViaApi({
+          baseUrl: `http://127.0.0.1:${badAddr.port}`,
+          envelopeSource: sampleEnvelope,
+        }),
+      (err) => err instanceof ProtectedFlowTabError && err.missingLabels.includes('ET1010·机组启停'),
+    );
+    assert.equal(postAttempted, false);
+
+    // Verify buildRemoteModulePayload produces syntactically valid ESM JS.
+    const remoteScript = buildRemoteModulePayload({
+      baseUrl: 'http://127.0.0.1:18800',
+      envelopeSource: sampleEnvelope,
+      username: 'admin',
+      passwordFile,
+    });
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(process.execPath, ['--input-type=module', '--check', '-'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString('utf8');
+      });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`remote bundle syntax check failed (${code}): ${stderr}`));
+      });
+      child.stdin.end(remoteScript);
+    });
+  }
 });

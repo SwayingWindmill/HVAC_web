@@ -1238,6 +1238,33 @@ test('songyaxuan-platform-envelope decouples C/D auxiliary load from chiller run
   }, manualCtx);
   assert.equal(manualChillerOn.payload.payload.devices.find((d) => d.deviceId === 'ammeter-unit2')?.points.find((p) => p.code === 'run_state')?.value, 'RUNNING');
   assert.equal(manualChillerOn.payload.payload.devices.find((d) => d.deviceId === 'ctrl-chiller-d')?.points[0]?.value, 'RUNNING');
+
+  // Live ET1010 UID31 modbusRead emits raw coil keys u0..u19; normalize to u11..u54 for storage and coil subtraction.
+  const rawCtx = new Map<string, unknown>();
+  const rawOut = runPlatformEnvelopeNode({
+    et1010: [{
+      ts: ts + 9000,
+      values: {
+        u0: 1, u1: 0, u2: 0, u3: 0,
+        u4: 0, u5: 0, u6: 0, u7: 0,
+        u8: 0, u9: 0, u10: 0, u11: 0,
+        u12: 1, u13: 1, u14: 0, u15: 0,
+        u16: 0, u17: 0, u18: 0, u19: 1,
+      },
+    }],
+    'ammeter-unit2': [{ ts: ts + 9000, values: { powerTotal: 34, combinedActiveTotalElectricalEnergy: 204 } }],
+  }, rawCtx);
+  const rawDevices = new Map(rawOut.payload.payload.devices.map((d) => [d.deviceId, d.points]));
+  assert.equal(rawDevices.get('et1010')?.find((p) => p.code === 'u11')?.value, 1);
+  assert.equal(rawDevices.get('et1010')?.find((p) => p.code === 'u41')?.value, 1);
+  assert.equal(rawDevices.get('et1010')?.find((p) => p.code === 'u54')?.value, 1);
+  assert.equal(rawDevices.get('et1010')?.find((p) => p.code === 'u0'), undefined);
+  assert.equal(rawDevices.get('ctrl-chwp-1')?.find((p) => p.code === 'run_state')?.value, 'RUNNING');
+  assert.equal(rawDevices.get('ctrl-chwp-4')?.find((p) => p.code === 'run_state')?.value, 'RUNNING');
+  assert.equal(rawDevices.get('ctrl-cwp-4')?.find((p) => p.code === 'run_state')?.value, 'RUNNING');
+  // Unit D subtracts 30 kW (u41+u42) -> chillerKw 4 kW <= 12.75 kW -> STOPPED.
+  assert.equal(rawDevices.get('ammeter-unit2')?.find((p) => p.code === 'run_state')?.value, 'STOPPED');
+  assert.equal(rawDevices.get('ctrl-chiller-d')?.find((p) => p.code === 'run_state')?.value, 'STOPPED');
 });
 
 test('songyaxuan.site.json enforces chwp-main start interlock and 120s run_state freshness', () => {

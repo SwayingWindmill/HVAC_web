@@ -415,6 +415,7 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
   for (const connFile of [
     'scripts/test-concentrator-mqtt-rpc.ts',
     'scripts/test-gateway-nodered-tunnel.ts',
+    'scripts/sync-songyaxuan-nodered.ts',
     'scripts/run-mqtt-broker-acl-tests.mjs',
   ]) {
     const concClassification = runClassification([connFile]);
