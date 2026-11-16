@@ -44,6 +44,7 @@
 
 #### 修复
 
+- 修复 `deploy/platform/phase1/cd/observability-config.sh` 的 `wait_loaded` 在启用 `pipefail` 时用 `grep -Eq` 过滤大体积 `/metrics` 输出提前退出、导致 `wget` 触发 `SIGPIPE`（退出码 `141`）并让监控配置重载误判超时的故障。
 - 同步松雅轩冷却塔出水温度通道（`t55`）并停用无线集中器空槽位 `51`：
   - 将松雅轩 `cooling-tower/cooling_tower_leaving_temperature`（`cooling_tower.leaving_water_temperature`）主来源切至现场在线的 55 号通道探头（`t55`），并在边缘包络函数 `edge/node-red/songyaxuan-platform-envelope.js` 对同点位共存通道（`t55` 优先、`t12` 回退）按 `(target, code)` 去重，防止双通道同时在线时重复写入或离线通道覆盖有效读数。
   - 鉴于物理探头 `EID 51` 实测绑定在 11 号槽位、51 号槽位未绑探头，将 `t51`、`v51`、`rssi51`、`status51` 在站点清单标记为 `"status": "INACTIVE"`（保留数组顺序与 `pointIndex`），并在边缘侧将 `SPARE` 扩展为 `{20, 51, 52}`，使空槽位不再计入 `offline_count` 或触发误报警。
