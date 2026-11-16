@@ -1279,6 +1279,75 @@ func TestDeployScriptRefusesToRunWithoutARevision(t *testing.T) {
 	}
 }
 
+func TestDeployScriptRecreatesMqttBrokerWhenBindMountedAclDrifts(t *testing.T) {
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	for name, tc := range map[string]struct {
+		containerACL string
+		wantRecreate bool
+	}{
+		"matching bind-mounted files": {
+			containerACL: "user mqtt-telemetry-adapter\ntopic read hvac/v1/+/up/#\ntopic write hvac/v1/+/down/concentrator\n",
+			wantRecreate: false,
+		},
+		"stale acl inode after tar extract": {
+			containerACL: "user mqtt-telemetry-adapter\ntopic read hvac/v1/+/up/#\n",
+			wantRecreate: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			platform, bin, log := deployFixture(t, revision)
+			mqttDir := filepath.Join(platform, "infra", "telemetry", "mqtt")
+			if err := os.MkdirAll(mqttDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			const mosquittoConf = "acl_file /mosquitto/config/acl\n"
+			const hostACL = "user mqtt-telemetry-adapter\ntopic read hvac/v1/+/up/#\ntopic write hvac/v1/+/down/concentrator\n"
+			const gatewayCA = "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n"
+			if err := os.WriteFile(filepath.Join(mqttDir, "mosquitto.conf"), []byte(mosquittoConf), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(mqttDir, "acl"), []byte(hostACL), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			caDir := filepath.Join(platform, "deploy", "platform", "phase1", "runtime", "server", "gateway-ca")
+			if err := os.MkdirAll(caDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(caDir, "trusted-client-ca.pem"), []byte(gatewayCA), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			writeExe(t, bin, "docker", `#!/bin/sh
+printf 'docker %s\n' "$*" >> "$CALLS_LOG"
+if [ "$1" = exec ] && [ "$3" = cat ]; then
+  case "$4" in
+    /mosquitto/config/mosquitto.conf) printf '%s' "$MOCK_MOSQUITTO_CONF" ;;
+    /mosquitto/config/acl) printf '%s' "$MOCK_CONTAINER_ACL" ;;
+    /mosquitto/config/gateway-ca.pem) printf '%s' "$MOCK_GATEWAY_CA" ;;
+  esac
+fi
+`)
+			cmd := exec.Command("bash", "deploy.sh")
+			cmd.Env = commandEnv(bin,
+				"HVAC_PLATFORM_DIR="+platform,
+				"CALLS_LOG="+log,
+				"MOCK_MOSQUITTO_CONF="+mosquittoConf,
+				"MOCK_CONTAINER_ACL="+tc.containerACL,
+				"MOCK_GATEWAY_CA="+gatewayCA,
+			)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("deploy.sh: %v\n%s", err, output)
+			}
+			calls := string(mustRead(t, log))
+			recreateCall := "node scripts/phase1-wsl-compose.mjs --integration up -d --force-recreate --no-deps mqtt-broker"
+			gotRecreate := strings.Contains(calls, recreateCall)
+			if gotRecreate != tc.wantRecreate {
+				t.Fatalf("recreate mqtt-broker = %v, want %v\ncalls:\n%s", gotRecreate, tc.wantRecreate, calls)
+			}
+		})
+	}
+}
+
 func TestReleaseShipsAndRunsTheRepositoryDeployScript(t *testing.T) {
 	build := string(mustRead(t, "build-release.sh"))
 	if !regexp.MustCompile(`for script in [^\n]*\bdeploy\.sh; do`).MatchString(build) {
