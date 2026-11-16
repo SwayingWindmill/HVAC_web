@@ -104,6 +104,14 @@ func TestIsControlLockBlocking(t *testing.T) {
 			actuationMode:   "EMERGENCY_DO_RELEASE",
 			want:            false,
 		},
+		{
+			name:            "lowercase emergency do release with spaces still bypasses device lock",
+			siteControlMode: "MANUAL_OVERRIDE",
+			deviceLockMode:  "EMERGENCY_STOPPED",
+			capability:      commandmodel.CapabilityStop,
+			actuationMode:   " emergency_do_release ",
+			want:            false,
+		},
 	}
 
 	for _, tc := range tests {
@@ -113,6 +121,20 @@ func TestIsControlLockBlocking(t *testing.T) {
 					tc.siteControlMode, tc.deviceLockMode, tc.capability, tc.actuationMode, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestApplyPointSourceMetadataNormalizesActuationModeForLockCheck(t *testing.T) {
+	var route commandmodel.DeviceRoute
+	raw := []byte(`{"actuationMode":" emergency_do_release ","channel":" all-do "}`)
+	if err := applyPointSourceMetadata(&route, "emergency_do_release", raw); err != nil {
+		t.Fatal(err)
+	}
+	if route.ActuationMode != "EMERGENCY_DO_RELEASE" || route.Channel != "all-do" {
+		t.Fatalf("unexpected normalized route: %#v", route)
+	}
+	if isControlLockBlocking("SAFE_SHUTDOWN_EXIT", "EMERGENCY_STOPPED", commandmodel.CapabilityStop, route.ActuationMode) {
+		t.Fatal("normalized EMERGENCY_DO_RELEASE route should not be blocked by control lock")
 	}
 }
 

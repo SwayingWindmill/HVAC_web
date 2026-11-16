@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
@@ -375,5 +377,356 @@ func TestBuildCommandEnvelopeUsesCapabilityVerificationWindowAndValidateConfigTi
 	baseCfg.ReplyTimeout = 61 * time.Second
 	if err := validateConfig(baseCfg); err == nil {
 		t.Fatal("expected replyTimeout > 60s to fail validation")
+	}
+}
+
+type routeAndReplyTransportState struct {
+	fakeTransportState
+	route commandmodel.DeviceRoute
+}
+
+func (s *routeAndReplyTransportState) ResolveCommandRoute(context.Context, commandmodel.DispatchEnvelope) (commandmodel.DeviceRoute, error) {
+	return s.route, nil
+}
+
+type failingEvidenceStore struct {
+	mu          sync.Mutex
+	completeErr error
+	completeCnt int
+}
+
+func (s *failingEvidenceStore) Prepare(context.Context, commandmodel.PreparedConnectorEvidence) error {
+	return nil
+}
+
+func (s *failingEvidenceStore) Complete(context.Context, commandmodel.CompletedConnectorEvidence) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.completeCnt++
+	return s.completeErr
+}
+
+func (s *failingEvidenceStore) setError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.completeErr = err
+}
+
+func TestExecuteCapsWireExpireAtAndSetsMessageExpiry(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	route := commandmodel.DeviceRoute{GatewayID: "01900000-0000-7000-8000-000000000100", ExternalDeviceID: "CHILLER-01", BindingRevision: 1}
+	transport := &routeAndReplyTransportState{
+		fakeTransportState: fakeTransportState{correlations: make(map[string]commandmodel.CommandCorrelation)},
+		route:              route,
+	}
+
+	var published []*paho.Publish
+	connector, err := NewOffline(Config{
+		TransportState: transport,
+		EvidenceStore:  fakeEvidenceStore{},
+		ReplyTimeout:   25 * time.Second,
+		Now:            func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connector.rootContext = context.Background()
+	requested := commandmodel.NumberScalar(24)
+	edgeExec := &commandmodel.EdgeExecutionEvidence{
+		Requested: requested, Effective: &requested, Applied: &requested,
+		WinnerControllerID: "cloud-command-intent", Cycle: 1,
+	}
+	connector.publish = func(_ context.Context, pub *paho.Publish) (*paho.PublishResponse, error) {
+		published = append(published, pub)
+		var env commandEnvelope
+		if err := json.Unmarshal(pub.Payload, &env); err != nil {
+			return nil, err
+		}
+		key := replyKey(env.CommandID, env.ExecutionFence)
+		connector.mu.Lock()
+		waiter := connector.waiters[key]
+		connector.mu.Unlock()
+		waiter <- commandmodel.CommandCorrelation{
+			Envelope: commandmodel.DispatchEnvelope{
+				CommandID: env.CommandID, AttemptID: env.MessageID, TenantID: "tenant-1",
+				SiteID: "site-1", DeviceID: "device-1", ExecutionFence: env.ExecutionFence,
+			},
+			State: commandmodel.CorrelationReplied, ReplyStatus: "EXECUTED",
+			ReplyEventTime: now, RepliedAt: now, EdgeExecution: edgeExec,
+		}
+		return &paho.PublishResponse{}, nil
+	}
+
+	envLongLease := commandmodel.DispatchEnvelope{
+		CommandID: "cmd-cap", AttemptID: "att-cap", TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
+		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, PayloadHash: "h1",
+		ExecutionFence: 1, LeaseUntil: now.Add(45 * time.Second),
+	}
+	res, err := connector.Execute(context.Background(), envLongLease)
+	if err != nil || !res.Acknowledged {
+		t.Fatalf("Execute failed: res=%#v err=%v", res, err)
+	}
+	if len(published) != 1 || published[0].Properties == nil || published[0].Properties.MessageExpiry == nil {
+		t.Fatalf("missing PublishProperties.MessageExpiry: %#v", published)
+	}
+	if *published[0].Properties.MessageExpiry != 25 {
+		t.Fatalf("MessageExpiry=%d want 25", *published[0].Properties.MessageExpiry)
+	}
+	var wire commandEnvelope
+	if err := json.Unmarshal(published[0].Payload, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.ExpireAt != now.Add(25*time.Second).UnixMilli() {
+		t.Fatalf("wire ExpireAt=%d want %d", wire.ExpireAt, now.Add(25*time.Second).UnixMilli())
+	}
+
+	envShortLease := envLongLease
+	envShortLease.AttemptID = "att-short"
+	envShortLease.ExecutionFence = 2
+	envShortLease.LeaseUntil = now.Add(10*time.Second + 200*time.Millisecond)
+	res, err = connector.Execute(context.Background(), envShortLease)
+	if err != nil || !res.Acknowledged {
+		t.Fatalf("Execute short lease failed: res=%#v err=%v", res, err)
+	}
+	if *published[1].Properties.MessageExpiry != 11 {
+		t.Fatalf("short-lease MessageExpiry=%d want 11", *published[1].Properties.MessageExpiry)
+	}
+	if err := json.Unmarshal(published[1].Payload, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.ExpireAt != envShortLease.LeaseUntil.UnixMilli() {
+		t.Fatalf("short-lease ExpireAt=%d want %d", wire.ExpireAt, envShortLease.LeaseUntil.UnixMilli())
+	}
+}
+
+func TestRecoverRepliesDrainsBeyondLimit50AndStopsOnDisconnect(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	service := commandservice.New(func() time.Time { return now })
+	transport := &fakeTransportState{correlations: make(map[string]commandmodel.CommandCorrelation)}
+	connector, err := NewOffline(Config{
+		TransportState: transport,
+		EvidenceStore:  fakeEvidenceStore{},
+		LateResultSink: fakeLateResultSink{service: service},
+		Now:            func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requested := commandmodel.NumberScalar(24)
+	edgeExec := &commandmodel.EdgeExecutionEvidence{
+		Requested: requested, Effective: &requested, Applied: &requested,
+		WinnerControllerID: "cloud-command-intent", Cycle: 1,
+	}
+	for i := 0; i < 120; i++ {
+		transport.put(commandmodel.CommandCorrelation{
+			Envelope: commandmodel.DispatchEnvelope{
+				TenantID: "tenant-1", CommandID: fmt.Sprintf("missing-%03d", i), AttemptID: fmt.Sprintf("att-missing-%03d", i), ExecutionFence: 1,
+			},
+			GatewayID: "gateway-1", ExternalDeviceID: "ext-1",
+			State: commandmodel.CorrelationReplied, ReplyStatus: "EXECUTED",
+			ReplyEventTime: now, RepliedAt: now.Add(time.Duration(i) * time.Millisecond), EdgeExecution: edgeExec,
+		})
+	}
+	current := 23.0
+	liveSub, err := service.Submit(commandmodel.SubmitRequest{
+		TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-live", PointID: "point-1",
+		PrincipalID: "principal-1", IdempotencyKey: "drain-live",
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24},
+		VerificationPointKey: "zone.temperature_setpoint",
+		CurrentState: commandmodel.CurrentStateEvidence{
+			EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Quality: "GOOD",
+			BusinessRevision: 17, CurrentValue: &current, ObservedAt: now,
+		},
+		Authorization: commandmodel.AuthorizationSnapshot{
+			GrantID: "grant-live", PolicyRevision: "command-policy-1", Purpose: commandmodel.AuthorizationCommandSubmit,
+			PrincipalID: "principal-1", TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-live",
+			Capability: commandmodel.CapabilitySetTemperatureSetpoint, MaximumRisk: commandmodel.RiskHigh,
+			CapabilityRevision: "capability:set-temperature-setpoint:v1", EmergencyRevocationRevision: 1,
+			IssuedAt: now.Add(-5 * time.Second), ExpiresAt: now.Add(25 * time.Second),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveEnv, err := service.PrepareDispatch(liveSub.Intent.ID, "dispatcher-live", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport.put(commandmodel.CommandCorrelation{
+		Envelope: liveEnv, GatewayID: "gateway-1", ExternalDeviceID: "ext-1",
+		State: commandmodel.CorrelationReplied, ReplyStatus: "EXECUTED",
+		ReplyEventTime: now, RepliedAt: now.Add(time.Second), EdgeExecution: edgeExec,
+	})
+
+	connector.recoverReplies(context.Background())
+	remaining, err := transport.RecoverCommandReplies(context.Background(), "tenant-1", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("expected all 121 REPLIED correlations drained in one sweep, %d remained", len(remaining))
+	}
+	settledLive, err := service.Get(liveSub.Intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settledLive.Attempts[0].Status != commandmodel.AttemptAcknowledged {
+		t.Fatalf("live attempt=%s want=%s", settledLive.Attempts[0].Status, commandmodel.AttemptAcknowledged)
+	}
+
+	loopCtx, loopCancel := context.WithCancel(context.Background())
+	connector.stopRecovery = loopCancel
+	connector.recoveryDone = make(chan struct{})
+	live2Sub, err := service.Submit(commandmodel.SubmitRequest{
+		TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-live-2", PointID: "point-1",
+		PrincipalID: "principal-1", IdempotencyKey: "ticker-live",
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24},
+		VerificationPointKey: "zone.temperature_setpoint",
+		CurrentState: commandmodel.CurrentStateEvidence{
+			EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Quality: "GOOD",
+			BusinessRevision: 17, CurrentValue: &current, ObservedAt: now,
+		},
+		Authorization: commandmodel.AuthorizationSnapshot{
+			GrantID: "grant-live-2", PolicyRevision: "command-policy-1", Purpose: commandmodel.AuthorizationCommandSubmit,
+			PrincipalID: "principal-1", TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-live-2",
+			Capability: commandmodel.CapabilitySetTemperatureSetpoint, MaximumRisk: commandmodel.RiskHigh,
+			CapabilityRevision: "capability:set-temperature-setpoint:v1", EmergencyRevocationRevision: 1,
+			IssuedAt: now.Add(-5 * time.Second), ExpiresAt: now.Add(25 * time.Second),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live2Env, err := service.PrepareDispatch(live2Sub.Intent.ID, "dispatcher-live", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport.put(commandmodel.CommandCorrelation{
+		Envelope: live2Env, GatewayID: "gateway-1", ExternalDeviceID: "ext-1",
+		State: commandmodel.CorrelationReplied, ReplyStatus: "EXECUTED",
+		ReplyEventTime: now, RepliedAt: now.Add(2 * time.Second), EdgeExecution: edgeExec,
+	})
+	go connector.runReplyRecoveryLoop(loopCtx, 10*time.Millisecond)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		got, err := service.Get(live2Sub.Intent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Attempts) > 0 && got.Attempts[0].Status == commandmodel.AttemptAcknowledged {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := connector.Disconnect(context.Background()); err != nil {
+		t.Fatalf("Disconnect failed: %v", err)
+	}
+	got2, err := service.Get(live2Sub.Intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got2.Attempts) == 0 || got2.Attempts[0].Status != commandmodel.AttemptAcknowledged {
+		t.Fatalf("periodic recovery ticker did not settle live2 attempt: %#v", got2.Attempts)
+	}
+}
+
+func TestCompleteRecoveredReplyPropagatesEvidenceStoreErrorInsteadOfOutcomeUnknown(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	service := commandservice.New(func() time.Time { return now })
+	evidenceStore := &failingEvidenceStore{completeErr: errors.New("evidence store temporarily unavailable")}
+	transport := &routeAndReplyTransportState{
+		fakeTransportState: fakeTransportState{correlations: make(map[string]commandmodel.CommandCorrelation)},
+		route:              commandmodel.DeviceRoute{GatewayID: "01900000-0000-7000-8000-000000000100", ExternalDeviceID: "CHILLER-01", BindingRevision: 1},
+	}
+	connector, err := NewOffline(Config{
+		TransportState: transport,
+		EvidenceStore:  evidenceStore,
+		LateResultSink: fakeLateResultSink{service: service},
+		ReplyTimeout:   25 * time.Second,
+		Now:            func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current := 23.0
+	sub, err := service.Submit(commandmodel.SubmitRequest{
+		TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1", PointID: "point-1",
+		PrincipalID: "principal-1", IdempotencyKey: "evidence-err",
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24},
+		VerificationPointKey: "zone.temperature_setpoint",
+		CurrentState: commandmodel.CurrentStateEvidence{
+			EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Quality: "GOOD",
+			BusinessRevision: 17, CurrentValue: &current, ObservedAt: now,
+		},
+		Authorization: commandmodel.AuthorizationSnapshot{
+			GrantID: "grant-ev", PolicyRevision: "command-policy-1", Purpose: commandmodel.AuthorizationCommandSubmit,
+			PrincipalID: "principal-1", TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
+			Capability: commandmodel.CapabilitySetTemperatureSetpoint, MaximumRisk: commandmodel.RiskHigh,
+			CapabilityRevision: "capability:set-temperature-setpoint:v1", EmergencyRevocationRevision: 1,
+			IssuedAt: now.Add(-5 * time.Second), ExpiresAt: now.Add(25 * time.Second),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := service.PrepareDispatch(sub.Intent.ID, "dispatcher-a", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested := commandmodel.NumberScalar(24)
+	edgeExec := &commandmodel.EdgeExecutionEvidence{
+		Requested: requested, Effective: &requested, Applied: &requested,
+		WinnerControllerID: "cloud-command-intent", Cycle: 1,
+	}
+	corr := commandmodel.CommandCorrelation{
+		Envelope: env, GatewayID: "gateway-1", ExternalDeviceID: "CHILLER-01",
+		State: commandmodel.CorrelationReplied, ReplyStatus: "EXECUTED",
+		ReplyEventTime: now, RepliedAt: now, EdgeExecution: edgeExec,
+	}
+	transport.put(corr)
+
+	connector.publish = func(_ context.Context, pub *paho.Publish) (*paho.PublishResponse, error) {
+		key := replyKey(env.CommandID, env.ExecutionFence)
+		connector.mu.Lock()
+		waiter := connector.waiters[key]
+		connector.mu.Unlock()
+		waiter <- corr
+		return &paho.PublishResponse{}, nil
+	}
+	if _, execErr := connector.Execute(context.Background(), env); execErr == nil {
+		t.Fatal("expected Execute to propagate EvidenceStore.Complete error")
+	}
+
+	if recErr := connector.ResolveCorrelationReply(context.Background(), corr); recErr == nil {
+		t.Fatal("expected ResolveCorrelationReply to propagate EvidenceStore.Complete error")
+	}
+	intentAfterErr, err := service.Get(sub.Intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intentAfterErr.Status != commandmodel.IntentDispatching || len(intentAfterErr.Attempts) == 0 || intentAfterErr.Attempts[0].Status != commandmodel.AttemptPrepared {
+		t.Fatalf("EvidenceStore failure froze or mutated intent: status=%s attempts=%#v", intentAfterErr.Status, intentAfterErr.Attempts)
+	}
+	remaining, err := transport.RecoverCommandReplies(context.Background(), "tenant-1", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 1 {
+		t.Fatalf("expected REPLIED correlation preserved for retry, got %d", len(remaining))
+	}
+
+	evidenceStore.setError(nil)
+	if recErr := connector.DrainTenantReplies(context.Background(), "tenant-1", 50); recErr != nil {
+		t.Fatalf("expected recovery after EvidenceStore healed, got %v", recErr)
+	}
+	intentHealed, err := service.Get(sub.Intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intentHealed.Attempts) == 0 || intentHealed.Attempts[0].Status != commandmodel.AttemptAcknowledged {
+		t.Fatalf("healed attempts=%#v want=%s", intentHealed.Attempts, commandmodel.AttemptAcknowledged)
 	}
 }

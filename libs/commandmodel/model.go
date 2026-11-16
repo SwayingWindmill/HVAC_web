@@ -686,11 +686,14 @@ func RouteFailureCode(err error) string {
 // TerminalPreSendRejection reports whether a command refused before send must end
 // rejected rather than be dispatched again.
 func TerminalPreSendRejection(failureCode string) bool {
-	switch failureCode {
+	code := strings.TrimSpace(failureCode)
+	switch code {
 	case "COMMAND_ROUTE_NOT_FOUND", "COMMAND_CONTROL_DISABLED", "COMMAND_GATEWAY_CREDENTIAL_INACTIVE":
 		return true
+	case "DISPATCH_SAFETY_EVALUATION_FAILED":
+		return false
 	}
-	return strings.HasPrefix(failureCode, "DISPATCH_SAFETY_")
+	return strings.HasPrefix(code, "DISPATCH_SAFETY_")
 }
 
 type CorrelationState string

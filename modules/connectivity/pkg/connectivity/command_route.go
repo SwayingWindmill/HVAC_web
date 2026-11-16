@@ -51,23 +51,8 @@ WHERE pb.point_id = $1::uuid AND pb.device_id = $2::uuid AND pb.writable
 			}
 			return fmt.Errorf("read command Point binding: %w", err)
 		}
-		if len(rawMetadata) > 0 {
-			var metadata commandPointSourceMetadata
-			if err := json.Unmarshal(rawMetadata, &metadata); err != nil {
-				return fmt.Errorf("decode command Point source metadata: %w", err)
-			}
-			if mode := strings.TrimSpace(metadata.ActuationMode); mode != "" {
-				route.PointCode = pointCode
-				route.ActuationMode = mode
-				route.Channel = strings.TrimSpace(metadata.Channel)
-				if metadata.PulseDurationMs > 0 {
-					route.PulseDurationMs = metadata.PulseDurationMs
-				}
-				if metadata.CoilAddress != nil && *metadata.CoilAddress >= 0 {
-					route.CoilAddress = *metadata.CoilAddress
-					route.HasCoilAddress = true
-				}
-			}
+		if err := applyPointSourceMetadata(&route, pointCode, rawMetadata); err != nil {
+			return err
 		}
 		var siteControlMode string
 		var deviceLockMode string
@@ -110,9 +95,32 @@ SELECT EXISTS (
 	return route, nil
 }
 
+func applyPointSourceMetadata(route *commandmodel.DeviceRoute, pointCode string, rawMetadata []byte) error {
+	if len(rawMetadata) == 0 {
+		return nil
+	}
+	var metadata commandPointSourceMetadata
+	if err := json.Unmarshal(rawMetadata, &metadata); err != nil {
+		return fmt.Errorf("decode command Point source metadata: %w", err)
+	}
+	if mode := normalizeActuationMode(metadata.ActuationMode); mode != "" {
+		route.PointCode = pointCode
+		route.ActuationMode = mode
+		route.Channel = strings.TrimSpace(metadata.Channel)
+		if metadata.PulseDurationMs > 0 {
+			route.PulseDurationMs = metadata.PulseDurationMs
+		}
+		if metadata.CoilAddress != nil && *metadata.CoilAddress >= 0 {
+			route.CoilAddress = *metadata.CoilAddress
+			route.HasCoilAddress = true
+		}
+	}
+	return nil
+}
+
 func isControlLockBlocking(siteControlMode string, deviceLockMode string, capability commandmodel.Capability, actuationMode string) bool {
 	isShutdown := capability == commandmodel.CapabilityStop || capability == commandmodel.CapabilityStopUnitSequence
-	isEmergencyDoRelease := isShutdown && actuationMode == "EMERGENCY_DO_RELEASE"
+	isEmergencyDoRelease := isShutdown && normalizeActuationMode(actuationMode) == "EMERGENCY_DO_RELEASE"
 	if siteControlMode != "" && siteControlMode != "REMOTE_AUTO" && !isShutdown {
 		return true
 	}

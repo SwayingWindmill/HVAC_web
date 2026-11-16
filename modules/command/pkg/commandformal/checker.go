@@ -67,6 +67,8 @@ const (
 	stepApproveValid
 	stepApproveSelfRejected
 	stepCancelIntent
+	stepCancelPendingNoAbort
+	stepCancelPendingAbortActive
 	stepPrepareDispatchValid
 	stepPrepareDispatchExpiredGrant
 	stepPrepareDispatchWhenFrozen
@@ -75,7 +77,9 @@ const (
 	stepPublishEdge
 	stepRecoverCorrelation
 	stepResolvePreSendRetry
+	stepResolvePreSendSafetyEvalFailed
 	stepResolvePreSendTerminal
+	stepResolvePreSendSafetyTerminal
 	stepResolveExecRejected
 	stepResolveRequestCommitted
 	stepResolveAckValid
@@ -114,6 +118,10 @@ func (k protoStepKind) String() string {
 		return "Approve(selfApprover)"
 	case stepCancelIntent:
 		return "CancelIntent"
+	case stepCancelPendingNoAbort:
+		return "CancelPending(abort=false)"
+	case stepCancelPendingAbortActive:
+		return "CancelPending(abort=true)"
 	case stepPrepareDispatchValid:
 		return "PrepareDispatch(validGrant)"
 	case stepPrepareDispatchExpiredGrant:
@@ -130,8 +138,12 @@ func (k protoStepKind) String() string {
 		return "RecoverCorrelation"
 	case stepResolvePreSendRetry:
 		return "ResolveDispatch(preSendRetry)"
+	case stepResolvePreSendSafetyEvalFailed:
+		return "ResolveDispatch(preSendSafetyEvalFailed)"
 	case stepResolvePreSendTerminal:
 		return "ResolveDispatch(preSendTerminal)"
+	case stepResolvePreSendSafetyTerminal:
+		return "ResolveDispatch(preSendSafetyTerminal)"
 	case stepResolveExecRejected:
 		return "ResolveDispatch(execRejected)"
 	case stepResolveRequestCommitted:
@@ -191,6 +203,8 @@ type protoStateKey struct {
 	expiredClaimTry     bool
 	missingEdgeTried    bool
 	cancelDispatchTried bool
+	cancelPendingTried  bool
+	abortActiveTried    bool
 }
 
 type protoNode struct {
@@ -216,6 +230,8 @@ type protoSim struct {
 	expiredClaimTry     bool
 	missingEdgeTried    bool
 	cancelDispatchTried bool
+	cancelPendingTried  bool
+	abortActiveTried    bool
 	stepCount           int
 }
 
@@ -254,6 +270,8 @@ func (s *protoSim) key() protoStateKey {
 		expiredClaimTry:     s.expiredClaimTry,
 		missingEdgeTried:    s.missingEdgeTried,
 		cancelDispatchTried: s.cancelDispatchTried,
+		cancelPendingTried:  s.cancelPendingTried,
+		abortActiveTried:    s.abortActiveTried,
 	}
 }
 
@@ -429,6 +447,11 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 		}
 		sim.commandID = "" // Cancelled terminal intent cleanly ends this protocol lifecycle.
 
+	case stepCancelPendingNoAbort, stepCancelPendingAbortActive:
+		if cx, err := applyCancelPendingStep(sim, mustIntent(sim), step == stepCancelPendingAbortActive, hooks); cx != nil || err != nil {
+			return cx, err
+		}
+
 	case stepPrepareDispatchValid:
 		env, err := sim.service.PrepareDispatch(sim.commandID, "dispatcher-a", sim.now.Add(dispatchLeaseWindow))
 		if err != nil {
@@ -439,6 +462,8 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 		sim.publishesAttempt = 0
 		sim.ackEdgeKind = ackEdgeDefault
 		sim.hasVerifyEnv = false
+		sim.cancelPendingTried = false
+		sim.abortActiveTried = false
 
 	case stepPrepareDispatchExpiredGrant:
 		sim.expiredClaimTry = true
@@ -521,6 +546,8 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 				return nil, fmt.Errorf("resolve may-commit failed: %w", err)
 			}
 			sim.deviceFrozen = !hooks.UnfreezeWithoutReconcile
+			sim.cancelPendingTried = false
+			sim.abortActiveTried = false
 			if !sim.deviceFrozen {
 				return &Counterexample{
 					Property: PropertyP3,
@@ -530,10 +557,15 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 			}
 		}
 
-	case stepResolvePreSendRetry, stepResolvePreSendTerminal:
+	case stepResolvePreSendRetry, stepResolvePreSendSafetyEvalFailed, stepResolvePreSendTerminal, stepResolvePreSendSafetyTerminal:
 		code := "MQTT_ROUTE_UNAVAILABLE"
-		if step == stepResolvePreSendTerminal {
+		switch step {
+		case stepResolvePreSendSafetyEvalFailed:
+			code = "DISPATCH_SAFETY_EVALUATION_FAILED"
+		case stepResolvePreSendTerminal:
 			code = "COMMAND_CONTROL_DISABLED"
+		case stepResolvePreSendSafetyTerminal:
+			code = "DISPATCH_SAFETY_STATE_NOT_FRESH"
 		}
 		if err := sim.service.ResolveDispatch(sim.dispatchEnv, commandmodel.ConnectorResult{
 			Phase:       commandmodel.ConnectorPreSendRejected,
@@ -541,6 +573,28 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 			EvidenceID:  "ev-presend",
 		}); err != nil {
 			return nil, fmt.Errorf("resolve pre-send failed: %w", err)
+		}
+		updated := mustIntent(sim)
+		if step == stepResolvePreSendSafetyEvalFailed {
+			if hooks.TreatSafetyEvalFailureAsTerminal || updated.Status != commandmodel.IntentQueued {
+				return &Counterexample{
+					Property: PropertyP1,
+					Suite:    "SingleCommandProtocol",
+					Summary:  fmt.Sprintf("transient DISPATCH_SAFETY_EVALUATION_FAILED settled %s instead of requeuing QUEUED", updated.Status),
+				}, nil
+			}
+		}
+		if step == stepResolvePreSendTerminal || step == stepResolvePreSendSafetyTerminal {
+			canClaim := commandservice.CanClaimQueuedIntent(updated, sim.deviceFrozen, nil, sim.now)
+			_, prepErr := sim.service.PrepareDispatch(sim.commandID, "dispatcher-rejected", sim.now.Add(dispatchLeaseWindow))
+			if updated.Status != commandmodel.IntentRejected || canClaim || prepErr == nil {
+				return &Counterexample{
+					Property: PropertyP1,
+					Suite:    "SingleCommandProtocol",
+					Summary:  fmt.Sprintf("terminal pre-send %s allowed claim or failed to reject (status=%s)", code, updated.Status),
+				}, nil
+			}
+			sim.commandID = ""
 		}
 
 	case stepResolveExecRejected:
@@ -562,6 +616,8 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 			return nil, fmt.Errorf("resolve request-committed failed: %w", err)
 		}
 		sim.deviceFrozen = !hooks.UnfreezeWithoutReconcile
+		sim.cancelPendingTried = false
+		sim.abortActiveTried = false
 		if !sim.deviceFrozen {
 			return &Counterexample{
 				Property: PropertyP3,
@@ -592,6 +648,8 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 		}
 		sim.ackEdgeKind = edgeKind
 		sim.corrState = commandmodel.CorrelationResolved
+		sim.cancelPendingTried = false
+		sim.abortActiveTried = false
 		intent := mustIntent(sim)
 		if intent.Status != commandmodel.IntentDispatching || isIntentTerminal(intent.Status) {
 			return &Counterexample{
@@ -649,6 +707,7 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 		}
 		sim.verifyEnv = vEnv
 		sim.hasVerifyEnv = true
+		sim.abortActiveTried = false
 
 	case stepResolveVerificationValidInWindow:
 		sim.now = sim.now.Add(2 * time.Second)
@@ -753,6 +812,102 @@ func applyProtoStep(sim *protoSim, step protoStepKind, hooks FaultHooks) (*Count
 func mustIntent(sim *protoSim) commandmodel.CommandIntent {
 	intent, _ := sim.service.Get(sim.commandID)
 	return intent
+}
+
+func applyCancelPendingStep(sim *protoSim, before commandmodel.CommandIntent, abortActive bool, hooks FaultHooks) (*Counterexample, error) {
+	if abortActive {
+		sim.abortActiveTried = true
+	} else {
+		sim.cancelPendingTried = true
+	}
+	ids, err := sim.service.CancelPending(commandmodel.CancelPendingRequest{
+		TenantID:             baseTenantID,
+		SiteID:               baseSiteID,
+		DeviceIDs:            []string{baseDeviceID},
+		PrincipalID:          submitPrincipalID,
+		Reason:               "SAFE_SHUTDOWN_EXIT",
+		CausationID:          "formal-cancel-pending",
+		AbortActiveSequences: abortActive,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("CancelPending(abort=%v) errored: %w", abortActive, err)
+	}
+	after := mustIntent(sim)
+
+	if before.Status == commandmodel.IntentAwaitingApproval || before.Status == commandmodel.IntentQueued {
+		canClaim := commandservice.CanClaimQueuedIntent(after, sim.deviceFrozen, nil, sim.now)
+		_, prepErr := sim.service.PrepareDispatch(sim.commandID, "dispatcher-cancel-pending", sim.now.Add(dispatchLeaseWindow))
+		if len(ids) != 1 || ids[0] != sim.commandID || after.Status != commandmodel.IntentCancelled || canClaim || prepErr == nil {
+			return &Counterexample{
+				Property: PropertyP1,
+				Suite:    "SingleCommandProtocol",
+				Summary:  fmt.Sprintf("CancelPending on %s failed to cancel atomically (ids=%v status=%s)", before.Status, ids, after.Status),
+			}, nil
+		}
+		sim.commandID = ""
+		return nil, nil
+	}
+
+	var beforeAttempt commandmodel.CommandAttempt
+	if len(before.Attempts) > 0 {
+		beforeAttempt = before.Attempts[len(before.Attempts)-1]
+	}
+	shouldAbort := abortActive &&
+		before.Status == commandmodel.IntentDispatching &&
+		beforeAttempt.Status == commandmodel.AttemptAcknowledged &&
+		commandservice.IsActiveAbortableSequence(before.Capability, beforeAttempt.EdgeExecution)
+
+	if shouldAbort {
+		var afterAttempt commandmodel.CommandAttempt
+		if len(after.Attempts) > 0 {
+			afterAttempt = after.Attempts[len(after.Attempts)-1]
+		}
+		if len(ids) != 1 || ids[0] != sim.commandID || after.Status != commandmodel.IntentFailed ||
+			afterAttempt.Status != commandmodel.AttemptFailed || afterAttempt.VerificationLeaseOwner != "" ||
+			!afterAttempt.VerificationLeaseUntil.IsZero() || lastTransitionReason(after) != "ACTIVE_SEQUENCE_ABORTED" || sim.deviceFrozen {
+			return &Counterexample{
+				Property: PropertyP3,
+				Suite:    "SingleCommandProtocol",
+				Summary:  fmt.Sprintf("CancelPending(abort=true) failed to cleanly abort active sequence %s (%s/%s)", before.Capability, after.Status, afterAttempt.Status),
+			}, nil
+		}
+		if sim.hasVerifyEnv {
+			vErr := sim.service.ResolveVerification(sim.verifyEnv, commandmodel.VerificationResult{
+				Outcome: commandmodel.VerificationSucceeded, EvidenceID: "ev-post-abort", Reported: protoReportedEvidence(sim, true),
+			})
+			if !errors.Is(vErr, commandservice.ErrStaleFence) {
+				return &Counterexample{
+					Property: PropertyP5,
+					Suite:    "SingleCommandProtocol",
+					Summary:  fmt.Sprintf("aborted active sequence allowed post-abort verification resolution (%v)", vErr),
+				}, nil
+			}
+			sim.hasVerifyEnv = false
+		}
+		followup := makeSyntheticIntentForCapability(2, commandmodel.CapabilityStop, commandmodel.IntentQueued, true, sim.now)
+		if !commandservice.CanClaimQueuedIntent(followup, sim.deviceFrozen, []commandmodel.IntentStatus{after.Status}, sim.now) {
+			return &Counterexample{
+				Property: PropertyP3,
+				Suite:    "SingleCommandProtocol",
+				Summary:  "aborted active sequence deadlocked follow-up command without freeze",
+			}, nil
+		}
+		sim.commandID = ""
+		return nil, nil
+	}
+
+	mutated := len(ids) != 0 || after.Status != before.Status
+	if hooks.AllowAbortNonSequenceCommand && abortActive && before.Status == commandmodel.IntentDispatching && beforeAttempt.Status == commandmodel.AttemptAcknowledged {
+		mutated = true
+	}
+	if mutated {
+		return &Counterexample{
+			Property: PropertyP3,
+			Suite:    "SingleCommandProtocol",
+			Summary:  fmt.Sprintf("CancelPending(abort=%v) mutated non-abortable %s state %s -> %s (ids=%v)", abortActive, before.Capability, before.Status, after.Status, ids),
+		}, nil
+	}
+	return nil, nil
 }
 
 func protoEdgeExecution(sim *protoSim, edgeKind protoAckEdgeKind) *commandmodel.EdgeExecutionEvidence {
@@ -880,7 +1035,7 @@ func candidateProtoSteps(sim *protoSim) []protoStepKind {
 		if !sim.selfApproveTried {
 			out = append(out, stepApproveSelfRejected)
 		}
-		out = append(out, stepApproveValid, stepCancelIntent)
+		out = append(out, stepApproveValid, stepCancelIntent, stepCancelPendingNoAbort, stepCancelPendingAbortActive)
 
 	case commandmodel.IntentQueued:
 		if len(intent.Attempts) < maxAttemptsPerCommand {
@@ -889,11 +1044,17 @@ func candidateProtoSteps(sim *protoSim) []protoStepKind {
 				out = append(out, stepPrepareDispatchExpiredGrant)
 			}
 		}
-		out = append(out, stepPrepareDispatchWhenFrozen, stepCancelIntent)
+		out = append(out, stepPrepareDispatchWhenFrozen, stepCancelIntent, stepCancelPendingNoAbort, stepCancelPendingAbortActive)
 
 	case commandmodel.IntentDispatching:
 		if !sim.cancelDispatchTried {
 			out = append(out, stepCancelIntent)
+		}
+		if !sim.cancelPendingTried {
+			out = append(out, stepCancelPendingNoAbort)
+		}
+		if !sim.abortActiveTried {
+			out = append(out, stepCancelPendingAbortActive)
 		}
 		switch latestAttemptStatus {
 		case commandmodel.AttemptPrepared:
@@ -904,7 +1065,7 @@ func candidateProtoSteps(sim *protoSim) []protoStepKind {
 				if sim.publishesAttempt == 0 {
 					out = append(out, stepCorrelationArm, stepPublishEdge)
 				}
-				out = append(out, stepResolvePreSendRetry, stepResolvePreSendTerminal)
+				out = append(out, stepResolvePreSendRetry, stepResolvePreSendSafetyEvalFailed, stepResolvePreSendTerminal, stepResolvePreSendSafetyTerminal)
 				if !sim.missingEdgeTried {
 					out = append(out, stepResolveAckMissingEdge)
 				}
@@ -941,6 +1102,12 @@ func candidateProtoSteps(sim *protoSim) []protoStepKind {
 	case commandmodel.IntentOutcomeUnknown:
 		if !sim.staleAttemptUsed {
 			out = append(out, stepResolveDispatchStaleFence)
+		}
+		if !sim.cancelPendingTried {
+			out = append(out, stepCancelPendingNoAbort)
+		}
+		if !sim.abortActiveTried {
+			out = append(out, stepCancelPendingAbortActive)
 		}
 		out = append(out, stepReconcileApplied, stepReconcileNotApplied)
 	}
@@ -1270,7 +1437,9 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 				res   commandmodel.ConnectorResult
 			}{
 				{label: "PreSendRetry", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorPreSendRejected, FailureCode: "MQTT_ROUTE_UNAVAILABLE"}},
+				{label: "PreSendSafetyEvalFailed", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorPreSendRejected, FailureCode: "DISPATCH_SAFETY_EVALUATION_FAILED"}},
 				{label: "PreSendTerminal", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorPreSendRejected, FailureCode: "COMMAND_CONTROL_DISABLED"}},
+				{label: "PreSendSafetyTerminal", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorPreSendRejected, FailureCode: "DISPATCH_SAFETY_INTERLOCK_VIOLATED"}},
 				{label: "ExecRejected", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorExecutionRejected, FailureCode: "MQTT_EDGE_INTERLOCK_OPEN"}},
 				{label: "RequestCommitted", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorRequestCommitted, FailureCode: "MQTT_COMMAND_REPLY_TIMEOUT"}},
 				{label: "AckVerified", res: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EdgeExecution: validPulseEdgeExecution("u14", 500)}},
@@ -1301,6 +1470,21 @@ func CheckMultiCommandDeviceExclusivity(hooks FaultHooks) (SuiteReport, error) {
 				decision, err := commandservice.DecideDispatchResolution(evalCap, outcome.res, now)
 				if err != nil {
 					return SuiteReport{}, err
+				}
+				if outcome.label == "PreSendSafetyEvalFailed" && (hooks.TreatSafetyEvalFailureAsTerminal || decision.IntentFinal != commandmodel.IntentQueued || !decision.RequeueForRetry) {
+					trace := append(append([]string(nil), cur.trace...), fmt.Sprintf("Resolve(cmd-%d,%s)", cmdNum, outcome.label))
+					return SuiteReport{
+						Suite:         "MultiCommandDeviceExclusivity",
+						VisitedStates: len(visited),
+						Transitions:   transitions,
+						Passed:        false,
+						Counterexample: &Counterexample{
+							Property: PropertyP1,
+							Suite:    "MultiCommandDeviceExclusivity",
+							Summary:  "transient DISPATCH_SAFETY_EVALUATION_FAILED failed to requeue under PRE_SEND_ONLY",
+							Trace:    trace,
+						},
+					}, nil
 				}
 				next := st
 				targetStatus := decision.IntentFinal
@@ -1625,7 +1809,7 @@ func (s serviceLateResultSink) ResolveDispatch(_ context.Context, envelope comma
 	return err
 }
 
-func runRecoveryBatchScenario(staleCount int, batchLimit int, hooks FaultHooks) (states int, edges int, cx *Counterexample, err error) {
+func runRecoveryBatchScenario(staleCount int, batchLimit int, singleDrainSweep bool, hooks FaultHooks) (states int, edges int, cx *Counterexample, err error) {
 	now := baseModelTime
 	svc := commandservice.New(func() time.Time { return now })
 	transport := newModelTransportState()
@@ -1721,28 +1905,44 @@ func runRecoveryBatchScenario(staleCount int, batchLimit int, hooks FaultHooks) 
 		validEdgeExecution(24),
 	))
 
-	trace := []string{fmt.Sprintf("Seed(stale=%d,live=1,limit=%d)", staleCount, batchLimit)}
-	maxRounds := (staleCount / batchLimit) + 3
-	for round := 1; round <= maxRounds; round++ {
-		beforeReplied := transport.CountReplied(baseTenantID)
+	trace := []string{fmt.Sprintf("Seed(stale=%d,live=1,limit=%d,drain=%v)", staleCount, batchLimit, singleDrainSweep)}
+	if singleDrainSweep {
 		states++
-		if beforeReplied == 0 {
-			break
-		}
 		edges++
-		trace = append(trace, fmt.Sprintf("RecoverTenantReplies(round=%d,limit=%d)", round, batchLimit))
-		recErr := connector.RecoverTenantReplies(context.Background(), baseTenantID, batchLimit)
-		if recErr != nil && !hooks.DropStaleReplyRecoveryAsError {
-			return states, edges, nil, recErr
+		var drainErr error
+		if hooks.FailDrainedRecoveryPastBatchLimit {
+			trace = append(trace, fmt.Sprintf("RecoverTenantRepliesSinglePass(limit=%d)", batchLimit))
+			drainErr = connector.RecoverTenantReplies(context.Background(), baseTenantID, batchLimit)
+		} else {
+			trace = append(trace, fmt.Sprintf("DrainTenantReplies(limit=%d)", batchLimit))
+			drainErr = connector.DrainTenantReplies(context.Background(), baseTenantID, batchLimit)
 		}
-		afterReplied := transport.CountReplied(baseTenantID)
-		if afterReplied == beforeReplied {
-			return states, edges, &Counterexample{
-				Property: PropertyP6,
-				Suite:    "ReplyRecoveryQueueDrain",
-				Summary:  fmt.Sprintf("RecoverTenantReplies made zero progress: %d REPLIED correlations remained stuck and starved live reply %s", afterReplied, liveEnv.AttemptID),
-				Trace:    trace,
-			}, nil
+		if drainErr != nil && !hooks.DropStaleReplyRecoveryAsError {
+			return states, edges, nil, drainErr
+		}
+	} else {
+		maxRounds := (staleCount / batchLimit) + 3
+		for round := 1; round <= maxRounds; round++ {
+			beforeReplied := transport.CountReplied(baseTenantID)
+			states++
+			if beforeReplied == 0 {
+				break
+			}
+			edges++
+			trace = append(trace, fmt.Sprintf("RecoverTenantReplies(round=%d,limit=%d)", round, batchLimit))
+			recErr := connector.RecoverTenantReplies(context.Background(), baseTenantID, batchLimit)
+			if recErr != nil && !hooks.DropStaleReplyRecoveryAsError {
+				return states, edges, nil, recErr
+			}
+			afterReplied := transport.CountReplied(baseTenantID)
+			if afterReplied == beforeReplied {
+				return states, edges, &Counterexample{
+					Property: PropertyP6,
+					Suite:    "ReplyRecoveryQueueDrain",
+					Summary:  fmt.Sprintf("RecoverTenantReplies made zero progress: %d REPLIED correlations remained stuck and starved live reply %s", afterReplied, liveEnv.AttemptID),
+					Trace:    trace,
+				}, nil
+			}
 		}
 	}
 
@@ -1750,7 +1950,7 @@ func runRecoveryBatchScenario(staleCount int, batchLimit int, hooks FaultHooks) 
 		return states, edges, &Counterexample{
 			Property: PropertyP6,
 			Suite:    "ReplyRecoveryQueueDrain",
-			Summary:  fmt.Sprintf("%d REPLIED correlations still undrained after %d recovery rounds", remaining, maxRounds),
+			Summary:  fmt.Sprintf("%d REPLIED correlations still undrained after recovery sweep", remaining),
 			Trace:    trace,
 		}, nil
 	}
@@ -1777,16 +1977,18 @@ func runRecoveryBatchScenario(staleCount int, batchLimit int, hooks FaultHooks) 
 // are marked RESOLVED rather than starving live EXECUTED replies behind SQL LIMIT 50.
 func CheckReplyRecoveryQueueDrain(hooks FaultHooks) (SuiteReport, error) {
 	configs := []struct {
-		staleCount int
-		batchLimit int
+		staleCount       int
+		batchLimit       int
+		singleDrainSweep bool
 	}{
 		{staleCount: 3, batchLimit: 2},
 		{staleCount: 50, batchLimit: 50},
+		{staleCount: 120, batchLimit: 50, singleDrainSweep: true},
 	}
 	totalStates := 0
 	totalEdges := 0
 	for _, cfg := range configs {
-		s, e, cx, err := runRecoveryBatchScenario(cfg.staleCount, cfg.batchLimit, hooks)
+		s, e, cx, err := runRecoveryBatchScenario(cfg.staleCount, cfg.batchLimit, cfg.singleDrainSweep, hooks)
 		totalStates += s
 		totalEdges += e
 		if err != nil {

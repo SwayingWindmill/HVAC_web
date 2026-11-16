@@ -275,7 +275,7 @@ SELECT i.command_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text
 FROM command_runtime.command_intents i
 JOIN command_runtime.command_attempts a ON a.command_id = i.command_id
 JOIN command_runtime.command_dispatch_outbox o
-  ON o.command_id = i.command_id AND o.lease_owner = a.lease_owner
+  ON o.command_id = i.command_id AND o.delivered_at IS NULL AND o.lease_owner = a.lease_owner
 WHERE i.tenant_id = $1::uuid AND i.command_id = $2::uuid AND a.attempt_id = $3::uuid
 FOR UPDATE OF i, a, o
 `, envelope.TenantID, envelope.CommandID, envelope.AttemptID).Scan(
@@ -285,7 +285,21 @@ FOR UPDATE OF i, a, o
 		&outboxID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrCommandNotFound
+		var existingAttemptStatus string
+		checkErr := tx.QueryRow(ctx, `
+SELECT a.status
+FROM command_runtime.command_intents i
+JOIN command_runtime.command_attempts a ON a.command_id = i.command_id
+WHERE i.tenant_id = $1::uuid AND i.command_id = $2::uuid AND a.attempt_id = $3::uuid
+FOR UPDATE OF i, a
+`, envelope.TenantID, envelope.CommandID, envelope.AttemptID).Scan(&existingAttemptStatus)
+		if errors.Is(checkErr, pgx.ErrNoRows) {
+			return ErrCommandNotFound
+		}
+		if checkErr != nil {
+			return fmt.Errorf("check dispatch resolution state: %w", checkErr)
+		}
+		return ErrStaleFence
 	}
 	if err != nil {
 		return fmt.Errorf("lock dispatch resolution state: %w", err)
@@ -512,14 +526,12 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 
 func (store *PostgresStore) expireGovernanceInvalidQueued(ctx context.Context, tx pgx.Tx, tenantID string, now time.Time) error {
 	type expiredCommand struct {
-		CommandID, SiteID, DeviceID, PayloadHash, OutboxID string
-		Version                                            uint64
+		CommandID, SiteID, DeviceID, PayloadHash string
+		Version                                  uint64
 	}
 	rows, err := tx.Query(ctx, `
-SELECT i.command_id::text, i.site_id::text, i.device_id::text, i.payload_hash,
-       o.outbox_id::text, i.version
+SELECT i.command_id::text, i.site_id::text, i.device_id::text, i.payload_hash, i.version
 FROM command_runtime.command_intents i
-JOIN command_runtime.command_dispatch_outbox o ON o.command_id = i.command_id AND o.delivered_at IS NULL
 WHERE i.tenant_id = $1::uuid AND i.status = 'QUEUED'
   AND (
     EXISTS (
@@ -537,7 +549,7 @@ WHERE i.tenant_id = $1::uuid AND i.status = 'QUEUED'
       )
     )
   )
-FOR UPDATE OF i, o SKIP LOCKED
+FOR UPDATE OF i SKIP LOCKED
 LIMIT 50
 `, tenantID, now)
 	if err != nil {
@@ -546,7 +558,7 @@ LIMIT 50
 	expired := make([]expiredCommand, 0)
 	for rows.Next() {
 		var item expiredCommand
-		if err := rows.Scan(&item.CommandID, &item.SiteID, &item.DeviceID, &item.PayloadHash, &item.OutboxID, &item.Version); err != nil {
+		if err := rows.Scan(&item.CommandID, &item.SiteID, &item.DeviceID, &item.PayloadHash, &item.Version); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan governance-expired command: %w", err)
 		}
@@ -569,15 +581,15 @@ LIMIT 50
 		if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_intents
 SET status = 'EXPIRED', version = $3, updated_at = $4
-WHERE tenant_id = $1::uuid AND command_id = $2::uuid
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND status = 'QUEUED'
 `, tenantID, item.CommandID, item.Version+1, now); err != nil {
 			return fmt.Errorf("expire governance-invalid command: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_dispatch_outbox
 SET delivered_at = $3, lease_until = NULL
-WHERE tenant_id = $1::uuid AND outbox_id = $2::uuid
-`, tenantID, item.OutboxID, now); err != nil {
+WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND delivered_at IS NULL
+`, tenantID, item.CommandID, now); err != nil {
 			return fmt.Errorf("complete governance-expired outbox: %w", err)
 		}
 		intent := commandmodel.CommandIntent{ID: item.CommandID, TenantID: tenantID, SiteID: item.SiteID, DeviceID: item.DeviceID, PayloadHash: item.PayloadHash, Version: item.Version}
