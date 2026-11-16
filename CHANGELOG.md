@@ -5,6 +5,20 @@
 
 ## 未发布
 
+### 2026-11-17
+
+#### 新增
+
+- 引入共享语义设备群孪生库 `libs/planttwin`（`SiteTwin`、`HydraulicGraph`、`EvaluateOperatingSchedule` 及单事务只读视图适配器 `PostgresLoader` / 测试桩 `StaticLoader`），并新建增量迁移 `plant-twin-relationships-and-roles.sql` 与 `ADR 0033`：
+  - 新增 `core_registry.asset_relationships`（`SERVES` 水力服务有向无环连接）与 `core_registry.point_subject_bindings.semantic_role`（11 类物理语义角色闭合枚举），配套 10 个按租户与授权站点行级隔离的只读视图 `core_registry.plant_twin_*_v1`。
+  - `deploy/sites/songyaxuan.site.json` 补全 16 条水力连接与点位语义角色，`scripts/site-onboarding.mjs` 与 `scripts/phase1-central-plant-simulator.mjs` 同步校验、幂等下发并检测漂移。
+
+#### 变更
+
+- 将运行优化（`services/optimization-service`）、故障诊断（`services/fdd-service`）与控制门禁（`modules/command`）收口到 `libs/planttwin`：
+  - 删除 `SongyaxuanChillerMeterBindings()` 硬编码、多键 `run_state` 猜测、按 `deviceId` 强绑定的四信号假设，以及优化与控制侧从 `interlockChecks` 逆推 `SERVES` 的兜底逻辑；改为按 `SemanticRole` 跨拆分设备（电表、温度集中器、热量表）与 `HydraulicGraph` 解析设备与点位。
+  - 将优化备选、诊断工况门控与控制时段检查统一收口至 `EvaluateOperatingSchedule`（统一 IANA 时区、预冷/延后缓冲与已批准运行例外）。
+
 ### 2026-11-16
 
 #### 变更
