@@ -315,7 +315,7 @@ for (const file of files) {
     scriptMatch(lower.includes('s5-') || lower.includes('work-order') || lower.includes('workorder'), () => selectWorkOrder(file, 'Work Order automation changed', { integration: lower.includes('postgres'), browser: lower.includes('browser') }));
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));
     scriptMatch(lower.includes('operations-agent'), () => selectOperationsAgent(file, 'Operations Agent automation changed', { integration: lower.includes('postgres') || lower.includes('migration') }));
-    scriptMatch(lower.includes('concentrator') || lower.includes('mqtt-broker-acl') || lower.includes('gateway-nodered-tunnel'), () => selectTelemetry(file, 'Connectivity or MQTT automation changed'));
+    scriptMatch(lower.includes('concentrator') || lower.includes('mqtt-broker-acl') || lower.includes('gateway-nodered-tunnel') || lower.includes('nodered'), () => selectTelemetry(file, 'Connectivity or MQTT automation changed'));
     // The migration freeze and convention checks run in the contracts core; their tests run in every static gate.
     scriptMatch(
       lower.includes('ownership') ||

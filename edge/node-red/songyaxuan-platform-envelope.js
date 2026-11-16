@@ -39,24 +39,15 @@ const COPY_UNITS = { temperature: "Cel", waterflow: "m3/h" };
 // 没接探头或停用的通道不上报（如 20 备用、52 离线停用）。
 const SPARE_PREFIX = { temperature: "t", "temperature-voltage": "v", "temperature-rssi": "rssi", "temperature-status": "status" };
 
-const runState = (running) => (running ? "RUNNING" : "STOPPED");
-const statePoint = (running) => ({ code: "run_state", value: runState(running), quality: 0 });
+const statePoint = (r) => ({ code: "run_state", value: r ? "RUNNING" : "STOPPED", quality: 0 });
 const DO_CONTROLLERS = Object.fromEntries([1, 2, 3, 4].flatMap((i) => [[`u${i}1`, `ctrl-chwp-${i}`], [`u${i}2`, `ctrl-cwp-${i}`], [`u${i}3`, `ctrl-tower-${i}`]]));
+const ET_KEYS = [1, 2, 3, 4, 5].flatMap((g) => [1, 2, 3, 4].map((c) => `u${g}${c}`));
 const SHARED_AUX_KW = { "ammeter-unit1": { u31: 15, u32: 15, u33: 4 }, "ammeter-unit2": { u41: 15, u42: 15, u43: 4 } };
-const extract = (entryVal) => {
-  if (entryVal !== null && typeof entryVal === "object") {
-    return {
-      value: entryVal.value,
-      quality: Number.isInteger(entryVal.quality) ? entryVal.quality : null,
-    };
-  }
-  return { value: entryVal, quality: null };
-};
+const extract = (v) => (v !== null && typeof v === "object"
+  ? { value: v.value, quality: Number.isInteger(v.quality) ? v.quality : null }
+  : { value: v, quality: null });
 const isNum = Number.isFinite;
-const numValue = (values, key) => {
-  const value = extract(values[key]).value;
-  return isNum(value) ? value : NaN;
-};
+const numValue = (values, key) => { const v = extract(values[key]).value; return isNum(v) ? v : NaN; };
 
 // UUIDv7: 48-bit Unix milliseconds, version 7, variant 10, random rest.
 function uuidv7(ms) {
@@ -94,11 +85,12 @@ const entries = [];
 const copies = {};
 const statusValues = source["temperature-status"]?.[0]?.values || null;
 const et1010Coils = { ...(context.get("et1010Coils") || {}) };
-const etValues = source.et1010?.[0]?.values;
+const rawEt = source.et1010?.[0]?.values;
+const etValues = rawEt && "u0" in rawEt ? Object.fromEntries(ET_KEYS.flatMap((k, i) => (`u${i}` in rawEt ? [[k, rawEt[`u${i}`]]] : []))) : rawEt;
 if (etValues) {
   for (const ch of ["u31", "u32", "u33", "u41", "u42", "u43"]) {
     const v = numValue(etValues, ch);
-    if (Number.isFinite(v)) et1010Coils[ch] = v > 0 ? 1 : 0;
+    if (isNum(v)) et1010Coils[ch] = v > 0 ? 1 : 0;
   }
   context.set("et1010Coils", et1010Coils);
 }
@@ -110,19 +102,20 @@ const isOfflineChannel = (device, key) => {
 };
 
 const isFreshMeter = (reading, nowTs, needEnergy) =>
-  Boolean(reading && Number.isFinite(reading.ts) && nowTs - reading.ts <= METER_FRESH_MS && Number.isFinite(reading.power) && (!needEnergy || Number.isFinite(reading.energy)));
+  Boolean(reading && isNum(reading.ts) && nowTs - reading.ts <= METER_FRESH_MS && isNum(reading.power) && (!needEnergy || isNum(reading.energy)));
 const roundTo = (value, scale) => Math.round(value * scale) / scale;
 
 for (const [device, samples] of Object.entries(source)) {
   const mapping = DEVICES[device];
   if (!mapping || !Array.isArray(samples) || !samples[0] || !samples[0].values) continue;
   const sample = samples[0];
+  const vals = device === "et1010" ? etValues : sample.values;
   const baseline = ENERGY_BASELINE[device];
   const sparePrefix = SPARE_PREFIX[device];
   const isMeter = METERS.includes(device);
   const points = [];
 
-  for (const [key, entryVal] of Object.entries(sample.values)) {
+  for (const [key, entryVal] of Object.entries(vals)) {
     let code = key;
     let unit = POINT_UNITS[key] || mapping.unit;
     if (mapping.codes) {
@@ -147,21 +140,20 @@ for (const [device, samples] of Object.entries(source)) {
   }
   const doVals = device === "et1010"
     ? Object.entries(DO_CONTROLLERS).flatMap(([ch, ctrl]) => {
-        const v = numValue(sample.values, ch);
-        return Number.isFinite(v) ? [[ctrl, v]] : [];
+        const v = numValue(vals, ch);
+        return isNum(v) ? [[ctrl, v]] : [];
       })
     : null;
   if (doVals && doVals.length > 0) points.push(statePoint(doVals.some(([, v]) => v > 0)));
   if (points.length === 0) continue;
 
-  const powerTotal = numValue(sample.values, "powerTotal");
+  const powerTotal = numValue(vals, "powerTotal");
   let meterRunning = null;
-  if (isMeter && Number.isFinite(powerTotal)) {
+  if (isMeter && isNum(powerTotal)) {
     const meterRunState = { ...(context.get("meterRunState") || {}) };
     const shared = SHARED_AUX_KW[device];
-    const hasCoils = shared && Object.keys(shared).some((ch) => ch in et1010Coils);
-    const auxKw = hasCoils ? Object.entries(shared).reduce((sum, [ch, kw]) => sum + (et1010Coils[ch] > 0 ? kw : 0), 0) : 0;
-    const bounds = !shared || hasCoils ? AB : METER_RUN_KW[device];
+    const auxKw = shared ? Object.entries(shared).reduce((sum, [ch, kw]) => sum + ((et1010Coils[ch] || 0) > 0 ? kw : 0), 0) : 0;
+    const bounds = !shared || auxKw > 0 ? AB : METER_RUN_KW[device];
     const chillerKw = Math.max(0, powerTotal - auxKw);
     meterRunning = meterRunState[device] ? chillerKw > bounds.stopKw : chillerKw > bounds.startKw;
     meterRunState[device] = meterRunning;
@@ -171,7 +163,7 @@ for (const [device, samples] of Object.entries(source)) {
   entries.push(entry(device, sample.ts, points));
 
   for (const [field, targets] of Object.entries(COPIES[device] || {})) {
-    const parsed = extract(sample.values[field]);
+    const parsed = extract(vals[field]);
     const copyQuality = parsed.quality ?? 0;
     if (!isNum(parsed.value)) continue;
     if (device === "temperature" && (parsed.value === 0 || copyQuality !== 0 || isOfflineChannel(device, field))) continue;
@@ -183,7 +175,7 @@ for (const [device, samples] of Object.entries(source)) {
 
   // 4台冷冻机组电表在 15 分钟内都有新鲜读数时合计为总电表（用于对账）
   if (isMeter) {
-    const energy = numValue(sample.values, "combinedActiveTotalElectricalEnergy") - (baseline || 0);
+    const energy = numValue(vals, "combinedActiveTotalElectricalEnergy") - (baseline || 0);
     const latest = context.get("meterLatest") || {};
     latest[device] = { ts: sample.ts, power: powerTotal, energy };
     context.set("meterLatest", latest);
@@ -199,8 +191,8 @@ for (const [device, samples] of Object.entries(source)) {
 
   // 制冷量计算：1.163 × 冷水流量(m³/h) × (总管回水 t16 − 总管供水 t18)
   if (device === "waterflow") {
-    const flowMeter = numValue(sample.values, "flowMeter");
-    if (Number.isFinite(flowMeter)) {
+    const flowMeter = numValue(vals, "flowMeter");
+    if (isNum(flowMeter)) {
       context.set("latestFlow", { ts: sample.ts, value: flowMeter });
       if (copies["chwp-main"]) copies["chwp-main"].points.push(statePoint(flowMeter > 10));
     }
@@ -210,8 +202,8 @@ for (const [device, samples] of Object.entries(source)) {
     const meters = context.get("meterLatest") || {};
     const freshMeters = METERS.map((meter) => meters[meter]).filter((reading) => isFreshMeter(reading, sample.ts, false));
     const plantPower = freshMeters.length > 0 ? freshMeters.reduce((total, reading) => total + reading.power, 0) : null;
-    const t18 = extract(sample.values.t18);
-    const t16 = extract(sample.values.t16);
+    const t18 = extract(vals.t18);
+    const t16 = extract(vals.t16);
     const goodTemp = (t, key) => typeof t.value === "number" && t.value > 0 && (t.quality ?? 0) === 0 && !isOfflineChannel("temperature", key);
     if (flow && sample.ts - flow.ts <= 180000 && plantPower !== null && goodTemp(t18, "t18") && goodTemp(t16, "t16")) {
       const difference = t16.value - t18.value;
