@@ -693,3 +693,79 @@ WHERE i.command_id = $1::uuid
 		}
 	}
 }
+
+func TestPostgresSameOwnerSafetyEvalRetryRetiresEveryOutboxRowAndExpiresCleanly(t *testing.T) {
+	store, admin, now, cleanup := postgresDispatchFixture(t)
+	defer cleanup()
+	ctx := t.Context()
+
+	created, err := store.Submit(ctx, postgresCommandRequest("same-owner-retry", 24))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-same", 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResolveDispatch(ctx, first, commandmodel.ConnectorResult{
+		Phase: commandmodel.ConnectorPreSendRejected, FailureCode: "DISPATCH_SAFETY_EVALUATION_FAILED",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-same", 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.AttemptID == first.AttemptID || second.ExecutionFence <= first.ExecutionFence {
+		t.Fatalf("expected new attempt and fence on same-owner retry: first=%#v second=%#v", first, second)
+	}
+	acknowledgeAndVerifyPostgres(t, store, admin, now, second, "same-owner", 2)
+	assertDispatchDatabaseState(t, admin, created.Intent.ID, "SUCCEEDED", "VERIFIED", 2, false)
+
+	var undelivered int
+	if err := admin.QueryRow(ctx, `
+SELECT count(*) FROM command_runtime.command_dispatch_outbox
+WHERE command_id = $1::uuid AND delivered_at IS NULL
+`, created.Intent.ID).Scan(&undelivered); err != nil {
+		t.Fatal(err)
+	}
+	if undelivered != 0 {
+		t.Fatalf("expected 0 undelivered outbox rows after same-owner retry, got %d", undelivered)
+	}
+
+	// Governance-expired QUEUED command with >1 undelivered outbox rows must expire in one update without 23505.
+	dupReq := postgresCommandRequest("dup-outbox-expire", 23.5)
+	dupReq.CurrentState.ObservedAt = *now
+	dupReq.Authorization.IssuedAt = now.Add(-5 * time.Second)
+	dupReq.Authorization.ExpiresAt = now.Add(25 * time.Second)
+	dupCmd, err := store.Submit(ctx, dupReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `
+INSERT INTO command_runtime.command_dispatch_outbox (
+  outbox_id, command_id, tenant_id, site_id, device_id, command_version,
+  available_at, lease_owner, lease_until, delivered_at, attempt_count, payload, created_at
+) VALUES (
+  '018f3e00-aaaa-7000-8000-000000000001'::uuid, $1::uuid, $2::uuid, $3::uuid, $4::uuid, 99,
+  $5, NULL, NULL, NULL, 0, '{}'::jsonb, $5
+)
+`, dupCmd.Intent.ID, commandTenantA, commandSiteA, commandDeviceA, *now); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(30 * time.Second)
+	if _, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-same", 10*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
+		t.Fatalf("expected ErrNoDispatchAvailable after governance expiry, got %v", err)
+	}
+	assertDispatchDatabaseState(t, admin, dupCmd.Intent.ID, "EXPIRED", "", 0, false)
+	if err := admin.QueryRow(ctx, `
+SELECT count(*) FROM command_runtime.command_dispatch_outbox
+WHERE command_id = $1::uuid AND delivered_at IS NULL
+`, dupCmd.Intent.ID).Scan(&undelivered); err != nil {
+		t.Fatal(err)
+	}
+	if undelivered != 0 {
+		t.Fatalf("expected all undelivered outbox rows retired on governance expiry, got %d", undelivered)
+	}
+}

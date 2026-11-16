@@ -52,10 +52,30 @@ func TestPostgresClaimDispatchBlockingStatusesMatchTransitionModel(t *testing.T)
 		"NOT (d.frozen_control_groups ? $3)",
 		"attemptStatus != string(commandmodel.AttemptPrepared) || intent.Status != commandmodel.IntentDispatching",
 		"DecideDispatchResolution(",
+		"ON o.command_id = i.command_id AND o.delivered_at IS NULL AND o.lease_owner = a.lease_owner",
+		"FOR UPDATE OF i, a, o",
 	}
 	for _, snippet := range requiredSnippets {
 		if !strings.Contains(source, snippet) {
 			t.Fatalf("postgres_dispatch.go missing expected safety guard %q", snippet)
+		}
+	}
+
+	expireStart := strings.Index(source, "func (store *PostgresStore) expireGovernanceInvalidQueued(")
+	expireEnd := strings.Index(source, "func (store *PostgresStore) expireUnapprovedCommands(")
+	if expireStart < 0 || expireEnd <= expireStart {
+		t.Fatalf("unable to locate expireGovernanceInvalidQueued in postgres_dispatch.go")
+	}
+	expireBody := source[expireStart:expireEnd]
+	if strings.Contains(expireBody, "JOIN command_runtime.command_dispatch_outbox") || strings.Contains(expireBody, "FOR UPDATE OF i, o") {
+		t.Fatalf("expireGovernanceInvalidQueued must lock command_intents without joining outbox rows to prevent duplicate 23505 version transitions")
+	}
+	for _, snippet := range []string{
+		"FOR UPDATE OF i SKIP LOCKED",
+		"WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND delivered_at IS NULL",
+	} {
+		if !strings.Contains(expireBody, snippet) {
+			t.Fatalf("expireGovernanceInvalidQueued missing %q", snippet)
 		}
 	}
 }
@@ -74,10 +94,23 @@ func TestPostgresVerificationAndReconcileShareTransitionDecisions(t *testing.T) 
 		"DecideCommandCancel(",
 		"SET delivered_at = $3, lease_until = NULL",
 		"AND status IN ('AWAITING_APPROVAL', 'QUEUED')",
+		"IsActiveAbortableSequence(",
+		"AND i.status = 'DISPATCHING'",
+		"AND a.status = 'ACKNOWLEDGED'",
+		"verification_lease_owner = NULL, verification_lease_until = NULL",
+		`"ACTIVE_SEQUENCE_ABORTED"`,
 	}
 	for _, snippet := range requiredCancelSnippets {
 		if !strings.Contains(cancelSrc, snippet) {
 			t.Fatalf("postgres_cancel.go missing expected transition/outbox guard %q", snippet)
+		}
+	}
+	if commandmodel.TerminalPreSendRejection("DISPATCH_SAFETY_EVALUATION_FAILED") {
+		t.Fatalf("DISPATCH_SAFETY_EVALUATION_FAILED must remain retryable under PRE_SEND_ONLY")
+	}
+	for _, terminalCode := range []string{"DISPATCH_SAFETY_STATE_UNAVAILABLE", "DISPATCH_SAFETY_DEVICE_NOT_ONLINE", "DISPATCH_SAFETY_INTERLOCK_VIOLATED"} {
+		if !commandmodel.TerminalPreSendRejection(terminalCode) {
+			t.Fatalf("%s must remain a terminal pre-send rejection", terminalCode)
 		}
 	}
 }
@@ -96,7 +129,19 @@ func TestConnectivityReplyRecoveryQueryMatchesModel(t *testing.T) {
 	}
 
 	connectorSrc := readRepoSource(t, filepath.Join("..", "mqttconnector", "connector.go"))
-	if !strings.Contains(connectorSrc, "RecoverTenantReplies(recoveryContext, tenantID, 50)") {
-		t.Fatalf("mqttconnector/connector.go recoverReplies must call RecoverTenantReplies with batch limit 50")
+	if !strings.Contains(connectorSrc, "replyRecoveryBatchLimit      = 50") {
+		t.Fatalf("mqttconnector/connector.go must define replyRecoveryBatchLimit = 50")
+	}
+	if !strings.Contains(connectorSrc, "DrainTenantReplies(recoveryContext, tenantID, replyRecoveryBatchLimit)") {
+		t.Fatalf("mqttconnector/connector.go recoverReplies must drain all batches via DrainTenantReplies with batch limit 50")
+	}
+	completeStart := strings.Index(connectorSrc, "func (connector *Connector) completeRecoveredReply(")
+	completeEnd := strings.Index(connectorSrc, "func (connector *Connector) completeOutcomeUnknown(")
+	if completeStart < 0 || completeEnd <= completeStart {
+		t.Fatalf("unable to locate completeRecoveredReply in connector.go")
+	}
+	completeBody := connectorSrc[completeStart:completeEnd]
+	if strings.Contains(completeBody, "ConnectorRequestCommitted") {
+		t.Fatalf("completeRecoveredReply must propagate EvidenceStore.Complete errors instead of fabricating ConnectorRequestCommitted")
 	}
 }

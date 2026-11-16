@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"strconv"
@@ -22,7 +23,11 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
-const commandSchemaVersion = "2.0"
+const (
+	commandSchemaVersion         = "2.0"
+	replyRecoveryBatchLimit      = 50
+	defaultReplyRecoveryInterval = 15 * time.Second
+)
 
 var (
 	ErrPayloadMismatch = errors.New("MQTT command attempt payload mismatch")
@@ -129,8 +134,12 @@ type Connector struct {
 	config      Config
 	manager     *autopaho.ConnectionManager
 
-	mu      sync.Mutex
-	waiters map[string]chan commandmodel.CommandCorrelation
+	mu           sync.Mutex
+	waiters      map[string]chan commandmodel.CommandCorrelation
+	recoverMu    sync.Mutex
+	stopRecovery context.CancelFunc
+	recoveryDone chan struct{}
+	publish      func(context.Context, *paho.Publish) (*paho.PublishResponse, error)
 }
 
 func New(ctx context.Context, config Config) (*Connector, error) {
@@ -151,10 +160,13 @@ func New(ctx context.Context, config Config) (*Connector, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
+	loopContext, stopRecovery := context.WithCancel(ctx)
 	connector := &Connector{
-		rootContext: ctx,
-		config:      config,
-		waiters:     make(map[string]chan commandmodel.CommandCorrelation),
+		rootContext:  ctx,
+		config:       config,
+		waiters:      make(map[string]chan commandmodel.CommandCorrelation),
+		stopRecovery: stopRecovery,
+		recoveryDone: make(chan struct{}),
 	}
 	clientConfig := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{brokerURL},
@@ -172,17 +184,20 @@ func New(ctx context.Context, config Config) (*Connector, error) {
 		},
 	}
 	clientConfig.OnConnectionUp = func(manager *autopaho.ConnectionManager, _ *paho.Connack) {
-		subscribeContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+		subscribeContext, cancel := context.WithTimeout(loopContext, 10*time.Second)
 		defer cancel()
 		if _, subscribeErr := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{Topic: ReplyTopicFilter, QoS: 1}}}); subscribeErr == nil {
-			go connector.recoverReplies(ctx)
+			go connector.recoverReplies(loopContext)
 		}
 	}
 	manager, err := autopaho.NewConnection(ctx, clientConfig)
 	if err != nil {
+		stopRecovery()
+		close(connector.recoveryDone)
 		return nil, fmt.Errorf("create MQTT command connection: %w", err)
 	}
 	connector.manager = manager
+	go connector.runReplyRecoveryLoop(loopContext, defaultReplyRecoveryInterval)
 	return connector, nil
 }
 
@@ -205,7 +220,7 @@ func NewOffline(config Config) (*Connector, error) {
 }
 
 func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.DispatchEnvelope) (commandmodel.ConnectorResult, error) {
-	if connector == nil || connector.manager == nil {
+	if connector == nil || (connector.manager == nil && connector.publish == nil) {
 		return commandmodel.ConnectorResult{}, errors.New("MQTT command connector is unavailable")
 	}
 	route, err := connector.config.TransportState.ResolveCommandRoute(ctx, envelope)
@@ -226,7 +241,7 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 		return commandmodel.ConnectorResult{}, err
 	}
 	now := connector.config.Now().UTC()
-	expireAt := envelope.LeaseUntil.UTC()
+	expireAt := capCommandExpireAt(now, envelope.LeaseUntil.UTC(), connector.config.ReplyTimeout)
 	if expireAt.IsZero() || !expireAt.After(now) {
 		return commandmodel.ConnectorResult{}, errors.New("command dispatch lease is expired")
 	}
@@ -291,8 +306,16 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 		return commandmodel.ConnectorResult{}, errors.New("MQTT command publish commit-point arm failed")
 	}
 
+	remainingBeforePublish := expireAt.Sub(connector.config.Now().UTC())
+	expirySeconds := messageExpirySeconds(remainingBeforePublish)
 	publishContext, cancel := context.WithTimeout(ctx, 10*time.Second)
-	_, publishErr := connector.manager.Publish(publishContext, &paho.Publish{QoS: 1, Retain: false, Topic: commandTopic, Payload: body})
+	_, publishErr := connector.publishCommand(publishContext, &paho.Publish{
+		QoS:        1,
+		Retain:     false,
+		Topic:      commandTopic,
+		Payload:    body,
+		Properties: &paho.PublishProperties{MessageExpiry: &expirySeconds},
+	})
 	cancel()
 	if publishErr != nil {
 		// The durable correlation is armed before calling the MQTT client. A process
@@ -301,9 +324,12 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 		return connector.completeOutcomeUnknown(ctx, prepared, "MQTT_COMMAND_PUBLISH_OUTCOME_UNKNOWN")
 	}
 
-	wait := connector.config.ReplyTimeout
-	if remaining := time.Until(expireAt); remaining < wait {
-		wait = remaining
+	wait := expireAt.Sub(connector.config.Now().UTC())
+	if connector.config.ReplyTimeout > 0 && connector.config.ReplyTimeout < wait {
+		wait = connector.config.ReplyTimeout
+	}
+	if wait < 0 {
+		wait = 0
 	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
@@ -317,8 +343,54 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 	}
 }
 
+func (connector *Connector) publishCommand(ctx context.Context, publish *paho.Publish) (*paho.PublishResponse, error) {
+	if connector.publish != nil {
+		return connector.publish(ctx, publish)
+	}
+	if connector.manager == nil {
+		return nil, errors.New("MQTT command connector is unavailable")
+	}
+	return connector.manager.Publish(ctx, publish)
+}
+
+func capCommandExpireAt(now, leaseUntil time.Time, replyTimeout time.Duration) time.Time {
+	if leaseUntil.IsZero() {
+		return time.Time{}
+	}
+	expireAt := leaseUntil.UTC()
+	if replyTimeout > 0 {
+		if replyDeadline := now.UTC().Add(replyTimeout); replyDeadline.Before(expireAt) {
+			expireAt = replyDeadline
+		}
+	}
+	return expireAt
+}
+
+func messageExpirySeconds(remaining time.Duration) uint32 {
+	seconds := math.Ceil(remaining.Seconds())
+	if seconds < 1 {
+		return 1
+	}
+	if seconds > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(seconds)
+}
+
 func (connector *Connector) Disconnect(ctx context.Context) error {
-	if connector == nil || connector.manager == nil {
+	if connector == nil {
+		return nil
+	}
+	if connector.stopRecovery != nil {
+		connector.stopRecovery()
+	}
+	if connector.recoveryDone != nil {
+		select {
+		case <-connector.recoveryDone:
+		case <-ctx.Done():
+		}
+	}
+	if connector.manager == nil {
 		return nil
 	}
 	return connector.manager.Disconnect(ctx)
@@ -399,11 +471,34 @@ func (connector *Connector) onReply(received paho.PublishReceived) (bool, error)
 	return true, nil
 }
 
+func (connector *Connector) runReplyRecoveryLoop(ctx context.Context, interval time.Duration) {
+	if connector.recoveryDone != nil {
+		defer close(connector.recoveryDone)
+	}
+	if interval <= 0 {
+		interval = defaultReplyRecoveryInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			connector.recoverReplies(ctx)
+		}
+	}
+}
+
 func (connector *Connector) recoverReplies(ctx context.Context) {
 	if connector.config.LateResultSink == nil {
 		return
 	}
-	recoveryContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+	if !connector.recoverMu.TryLock() {
+		return
+	}
+	defer connector.recoverMu.Unlock()
+	recoveryContext, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	tenants, err := connector.config.TransportState.Tenants(recoveryContext)
 	if err != nil {
@@ -413,7 +508,33 @@ func (connector *Connector) recoverReplies(ctx context.Context) {
 		if recoveryContext.Err() != nil {
 			return
 		}
-		_ = connector.RecoverTenantReplies(recoveryContext, tenantID, 50)
+		if err := connector.DrainTenantReplies(recoveryContext, tenantID, replyRecoveryBatchLimit); err != nil && recoveryContext.Err() != nil {
+			return
+		}
+	}
+}
+
+// DrainTenantReplies drains persisted REPLIED correlations for a Tenant across
+// batches of batchLimit until fewer than batchLimit rows remain or no progress occurs.
+func (connector *Connector) DrainTenantReplies(ctx context.Context, tenantID string, batchLimit int) error {
+	if connector.config.LateResultSink == nil {
+		return nil
+	}
+	if batchLimit <= 0 {
+		batchLimit = replyRecoveryBatchLimit
+	}
+	var firstErr error
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		fetched, resolved, err := connector.recoverTenantReplyBatch(ctx, tenantID, batchLimit)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if fetched < batchLimit || resolved == 0 {
+			return firstErr
+		}
 	}
 }
 
@@ -422,20 +543,28 @@ func (connector *Connector) RecoverTenantReplies(ctx context.Context, tenantID s
 	if connector.config.LateResultSink == nil {
 		return nil
 	}
+	_, _, err := connector.recoverTenantReplyBatch(ctx, tenantID, limit)
+	return err
+}
+
+func (connector *Connector) recoverTenantReplyBatch(ctx context.Context, tenantID string, limit int) (fetched int, resolved int, firstErr error) {
 	correlations, err := connector.config.TransportState.RecoverCommandReplies(ctx, tenantID, limit)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
-	var firstErr error
 	for _, correlation := range correlations {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return len(correlations), resolved, ctx.Err()
 		}
-		if err := connector.ResolveCorrelationReply(ctx, correlation); err != nil && firstErr == nil {
-			firstErr = err
+		if err := connector.ResolveCorrelationReply(ctx, correlation); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
+		resolved++
 	}
-	return firstErr
+	return len(correlations), resolved, firstErr
 }
 
 // ResolveCorrelationReply settles one persisted REPLIED correlation against LateResultSink.
@@ -459,10 +588,7 @@ func (connector *Connector) completeRecoveredReply(ctx context.Context, correlat
 	completed := CompletedEvidenceFromCorrelation(correlation)
 	result := connectorResult(completed)
 	if err := connector.config.EvidenceStore.Complete(ctx, completed); err != nil {
-		result.Phase = commandmodel.ConnectorRequestCommitted
-		result.Acknowledged = false
-		result.FailureCode = "CONNECTOR_EVIDENCE_COMPLETION_FAILED"
-		return result, nil
+		return commandmodel.ConnectorResult{}, err
 	}
 	return result, nil
 }

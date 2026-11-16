@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
@@ -99,7 +100,7 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store) (*comman
 		store:            store,
 		dispatcher:       commanddispatcher.NewDurable(dispatcherRuntimeClient, safetyVerifier, connector, dispatcherWorkerID, 45*time.Second),
 		dispatcherWorker: dispatcherWorkerID,
-		verifier:         commanddispatcher.NewDurableVerificationWorker(verifierRuntimeClient, commanddispatcher.NewAuthoritativeReportedStateVerifier(verificationReader), verifierWorkerID, 15*time.Second),
+		verifier:         commanddispatcher.NewDurableVerificationWorker(verifierRuntimeClient, commanddispatcher.NewAuthoritativeReportedStateVerifier(verificationReader), verifierWorkerID, 5*time.Second),
 		verifierWorker:   verifierWorkerID,
 		connector:        connector,
 	}, nil
@@ -116,40 +117,175 @@ func (runtime *commandRuntime) Close(ctx context.Context) error {
 	return runtime.connector.Disconnect(ctx)
 }
 
-// runForEveryTenant drains each Tenant's work in turn and idles briefly once no Tenant
-// has any.
+const (
+	maxConcurrentCommandTenants = 4
+	commandTenantBaseBackoff    = 100 * time.Millisecond
+	commandTenantMaxBackoff     = 5 * time.Second
+	commandTenantsRefreshWindow = 500 * time.Millisecond
+)
+
+type tenantRunOutcome struct {
+	tenantID string
+	err      error
+}
+
+// runForEveryTenant schedules each Tenant's work concurrently up to maxConcurrentCommandTenants.
 func (runtime *commandRuntime) runForEveryTenant(ctx context.Context, logger *slog.Logger, work string, timeout time.Duration, runOnce func(context.Context, string) error, noWork error) {
-	backoff := 100 * time.Millisecond
-	for ctx.Err() == nil {
-		tenants, err := runtime.store.Tenants(ctx)
-		if err != nil {
-			logger.Error("connectivity_command_tenants_unavailable", "work", work, "error", err.Error())
-			sleepCommandContext(ctx, backoff)
-			backoff = min(backoff*2, 5*time.Second)
-			continue
+	inFlight := make(map[string]bool)
+	readyAt := make(map[string]time.Time)
+	backoffByTenant := make(map[string]time.Duration)
+	doneCh := make(chan tenantRunOutcome, maxConcurrentCommandTenants)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	var cachedTenants []string
+	var tenantsFetchedAt time.Time
+	var tenantsReadyAt time.Time
+	tenantsBackoff := commandTenantBaseBackoff
+	cursor := 0
+
+	applyOutcome := func(outcome tenantRunOutcome) {
+		delete(inFlight, outcome.tenantID)
+		switch {
+		case outcome.err == nil:
+			delete(readyAt, outcome.tenantID)
+			backoffByTenant[outcome.tenantID] = commandTenantBaseBackoff
+		case errors.Is(outcome.err, noWork):
+			readyAt[outcome.tenantID] = time.Now().Add(commandTenantBaseBackoff)
+			backoffByTenant[outcome.tenantID] = commandTenantBaseBackoff
+		case errors.Is(outcome.err, commandservice.ErrStaleFence), errors.Is(outcome.err, commandservice.ErrCommandNotFound):
+			logger.Warn("connectivity_command_stale_work_discarded", "work", work, "tenant_id", outcome.tenantID)
+			readyAt[outcome.tenantID] = time.Now().Add(commandTenantBaseBackoff)
+			backoffByTenant[outcome.tenantID] = commandTenantBaseBackoff
+		case ctx.Err() != nil:
+		default:
+			backoff := backoffByTenant[outcome.tenantID]
+			if backoff <= 0 {
+				backoff = commandTenantBaseBackoff
+			}
+			logger.Error("connectivity_command_failed", "work", work, "tenant_id", outcome.tenantID, "error", outcome.err.Error())
+			readyAt[outcome.tenantID] = time.Now().Add(backoff)
+			backoffByTenant[outcome.tenantID] = min(backoff*2, commandTenantMaxBackoff)
 		}
-		found := false
-		for _, tenantID := range tenants {
-			runContext, cancel := context.WithTimeout(ctx, timeout)
-			err := runOnce(runContext, tenantID)
-			cancel()
-			switch {
-			case err == nil:
-				found = true
-				backoff = 100 * time.Millisecond
-			case errors.Is(err, noWork):
-			case errors.Is(err, commandservice.ErrStaleFence), errors.Is(err, commandservice.ErrCommandNotFound):
-				logger.Warn("connectivity_command_stale_work_discarded", "work", work, "tenant_id", tenantID)
-			case ctx.Err() != nil:
-				return
+	}
+
+	drainDone := func() {
+		for {
+			select {
+			case outcome := <-doneCh:
+				applyOutcome(outcome)
 			default:
-				logger.Error("connectivity_command_failed", "work", work, "tenant_id", tenantID, "error", err.Error())
-				sleepCommandContext(ctx, backoff)
-				backoff = min(backoff*2, 5*time.Second)
+				return
 			}
 		}
-		if !found {
-			sleepCommandContext(ctx, 100*time.Millisecond)
+	}
+
+	for ctx.Err() == nil {
+		drainDone()
+		now := time.Now()
+		if !now.Before(tenantsReadyAt) && (tenantsFetchedAt.IsZero() || !now.Before(tenantsFetchedAt.Add(commandTenantsRefreshWindow))) {
+			tenants, err := runtime.store.Tenants(ctx)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				logger.Error("connectivity_command_tenants_unavailable", "work", work, "error", err.Error())
+				tenantsReadyAt = time.Now().Add(tenantsBackoff)
+				tenantsBackoff = min(tenantsBackoff*2, commandTenantMaxBackoff)
+			} else {
+				cachedTenants = tenants
+				tenantsFetchedAt = time.Now()
+				tenantsReadyAt = time.Time{}
+				tenantsBackoff = commandTenantBaseBackoff
+				pruneTenantMaps(cachedTenants, readyAt, backoffByTenant)
+			}
+		}
+
+		now = time.Now()
+		for i := 0; i < len(cachedTenants) && len(inFlight) < maxConcurrentCommandTenants; i++ {
+			idx := (cursor + i) % len(cachedTenants)
+			tenantID := cachedTenants[idx]
+			if inFlight[tenantID] {
+				continue
+			}
+			if nextAt, ok := readyAt[tenantID]; ok && now.Before(nextAt) {
+				continue
+			}
+			inFlight[tenantID] = true
+			cursor = (idx + 1) % len(cachedTenants)
+			wg.Add(1)
+			go func(tid string) {
+				defer wg.Done()
+				runContext, cancel := context.WithTimeout(ctx, timeout)
+				err := runOnce(runContext, tid)
+				cancel()
+				doneCh <- tenantRunOutcome{tenantID: tid, err: err}
+			}(tenantID)
+		}
+
+		if len(inFlight) >= maxConcurrentCommandTenants {
+			select {
+			case <-ctx.Done():
+				return
+			case outcome := <-doneCh:
+				applyOutcome(outcome)
+			}
+			continue
+		}
+
+		waitFor := nextTenantWakeDelay(now, cachedTenants, inFlight, readyAt, tenantsReadyAt)
+		timer := time.NewTimer(waitFor)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case outcome := <-doneCh:
+			timer.Stop()
+			applyOutcome(outcome)
+		case <-timer.C:
+		}
+	}
+}
+
+func nextTenantWakeDelay(now time.Time, tenants []string, inFlight map[string]bool, readyAt map[string]time.Time, tenantsReadyAt time.Time) time.Duration {
+	if len(tenants) == 0 {
+		if tenantsReadyAt.After(now) {
+			return tenantsReadyAt.Sub(now)
+		}
+		return commandTenantBaseBackoff
+	}
+	waitFor := commandTenantBaseBackoff
+	for _, tenantID := range tenants {
+		if inFlight[tenantID] {
+			continue
+		}
+		nextAt, ok := readyAt[tenantID]
+		if !ok {
+			return time.Millisecond
+		}
+		if d := nextAt.Sub(now); d < waitFor {
+			waitFor = d
+		}
+	}
+	if waitFor < time.Millisecond {
+		return time.Millisecond
+	}
+	return waitFor
+}
+
+func pruneTenantMaps(tenants []string, readyAt map[string]time.Time, backoffByTenant map[string]time.Duration) {
+	active := make(map[string]bool, len(tenants))
+	for _, tenantID := range tenants {
+		active[tenantID] = true
+	}
+	for tenantID := range readyAt {
+		if !active[tenantID] {
+			delete(readyAt, tenantID)
+		}
+	}
+	for tenantID := range backoffByTenant {
+		if !active[tenantID] {
+			delete(backoffByTenant, tenantID)
 		}
 	}
 }
@@ -169,15 +305,6 @@ func commandHTTPClient(identity workloadtls.CertificateFiles, ca, serverName str
 		ServerName:       serverName,
 		Timeout:          timeout,
 	})
-}
-
-func sleepCommandContext(ctx context.Context, duration time.Duration) {
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-	case <-timer.C:
-	}
 }
 
 func hostnameOr(fallback string) string {

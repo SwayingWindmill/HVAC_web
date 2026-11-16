@@ -8,20 +8,67 @@ import {
   COMMAND_TOPIC,
   DEFAULT_SEQUENCE_TIMINGS,
   ET1010_UNIT_ID,
+  PULSE_COILS,
+  PulseResetError,
   REPLY_TOPIC,
+  SONGYAXUAN_GATEWAY_ID,
   SongyaxuanCommandExecutor,
   TELEMETRY_TOPIC,
   WINNER_CONTROLLER_ID,
   type CommandReplyEnvelope,
   type DownlinkCommandEnvelope,
+  type ExecutorPersistedState,
+  type ExecutorStateStore,
   type SequenceDiagnosticEvent,
   type SequenceTimings,
+  type UnitCoilPlan,
   type UplinkTelemetryMessage,
 } from '../edge/node-red/songyaxuan-command-executor.ts';
+import { BUS_PRIORITY_NORMAL, BUS_PRIORITY_PULSE_RESET, Rs485BusLock } from '../edge/node-red/rs485-bus-lock.ts';
+import { ConcentratorRpcExecutor, REG, type ModbusBusClient } from '../edge/node-red/concentrator-mqtt-rpc.ts';
+import { buildOnboardingSql, checkSiteFile } from './site-onboarding.mjs';
 
-function runPlatformEnvelopeNode(payload: Record<string, Array<{ ts: number; values: Record<string, number> }>>) {
+const UUID_V7_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function assertValidTelemetryEnvelope20(message: UplinkTelemetryMessage) {
+  assert.equal(message.topic, TELEMETRY_TOPIC);
+  const p = message.payload;
+  assert.deepEqual(Object.keys(p).sort(), [
+    'gatewayId',
+    'messageId',
+    'payload',
+    'replay',
+    'schemaVersion',
+    'sequence',
+    'timestamp',
+  ]);
+  assert.equal(p.schemaVersion, '2.0');
+  assert.equal(p.gatewayId, SONGYAXUAN_GATEWAY_ID);
+  assert.match(p.messageId, UUID_V7_REGEX);
+  assert.equal(typeof p.timestamp, 'number');
+  assert.ok(Number.isInteger(p.timestamp) && p.timestamp >= 0 && p.timestamp < 2 ** 48);
+  assert.equal(typeof p.sequence, 'number');
+  assert.ok(Number.isSafeInteger(p.sequence) && p.sequence >= p.timestamp * 1000);
+  assert.equal(p.replay, false);
+  assert.ok(Array.isArray(p.payload.devices) && p.payload.devices.length > 0);
+  for (const device of p.payload.devices) {
+    assert.ok(device.deviceId.length > 0);
+    assert.ok(Number.isInteger(device.deviceTimestamp) && device.deviceTimestamp >= 0);
+    assert.ok(Array.isArray(device.points) && device.points.length > 0);
+    for (const point of device.points) {
+      assert.match(point.code, /^[a-z][a-z0-9_]{0,127}$/);
+      assert.ok(point.value !== null && point.value !== undefined);
+      assert.ok(Number.isInteger(point.quality) && point.quality >= 0 && point.quality <= 255);
+    }
+  }
+}
+
+function runPlatformEnvelopeNode(
+  payload: Record<string, Array<{ ts: number; values: Record<string, number> }>>,
+  existingState?: Map<string, unknown>,
+) {
   const source = readFileSync(new URL('../edge/node-red/songyaxuan-platform-envelope.js', import.meta.url), 'utf8');
-  const state = new Map<string, unknown>();
+  const state = existingState ?? new Map<string, unknown>();
   const sandbox = {
     msg: { payload },
     context: {
@@ -45,8 +92,29 @@ function runPlatformEnvelopeNode(payload: Record<string, Array<{ ts: number; val
     payload: {
       schemaVersion: string;
       gatewayId: string;
+      timestamp: number;
+      sequence: number;
       payload: { devices: Array<{ deviceId: string; deviceTimestamp: number; points: Array<{ code: string; value: number | string; quality: number }> }> };
     };
+  };
+}
+
+function createMemoryStateStore(initial: ExecutorPersistedState | null = null) {
+  let current: ExecutorPersistedState | null = initial ? structuredClone(initial) : null;
+  const savedSnapshots: ExecutorPersistedState[] = [];
+  const store: ExecutorStateStore = {
+    async load() {
+      return current ? structuredClone(current) : null;
+    },
+    async save(state) {
+      current = structuredClone(state);
+      savedSnapshots.push(structuredClone(state));
+    },
+  };
+  return {
+    store,
+    savedSnapshots,
+    getState: () => (current ? structuredClone(current) : null),
   };
 }
 
@@ -55,8 +123,13 @@ function createFakeExecutor(options: {
   failResetOnCoil?: number;
   startNowMs?: number;
   coilReader?: (coilAddress: number) => Promise<0 | 1>;
+  chillerPowerReader?: (unitCode: UnitCoilPlan['unitCode']) => Promise<number | null>;
+  chillerStopPowerKw?: number;
+  stateStore?: ExecutorStateStore;
+  busLock?: Rs485BusLock;
   sleepMs?: (durationMs: number, signal?: AbortSignal) => Promise<void>;
   sequenceTimings?: Partial<SequenceTimings>;
+  onWriteCoil?: (unitId: number, coilAddress: number, value: 0 | 1) => Promise<void> | void;
 } = {}) {
   let now = options.startNowMs ?? 1_763_120_000_000;
   let seq = 0;
@@ -64,11 +137,14 @@ function createFakeExecutor(options: {
   const replies: Array<{ topic: string; reply: CommandReplyEnvelope }> = [];
   const telemetries: UplinkTelemetryMessage[] = [];
   const diagnostics: SequenceDiagnosticEvent[] = [];
-  let failOnceOnReset = options.failResetOnCoil;
+  const failOnceOnReset = options.failResetOnCoil;
 
   const executor = new SongyaxuanCommandExecutor({
     coilWriter: {
       async writeCoil(unitId, coilAddress, value) {
+        if (options.onWriteCoil) {
+          await options.onWriteCoil(unitId, coilAddress, value);
+        }
         if (options.failOnCoil === coilAddress && value === 1) {
           throw new Error('simulated modbus timeout');
         }
@@ -79,10 +155,15 @@ function createFakeExecutor(options: {
       },
     },
     coilReader: options.coilReader,
+    chillerPowerReader: options.chillerPowerReader,
+    chillerStopPowerKw: options.chillerStopPowerKw,
+    stateStore: options.stateStore,
+    busLock: options.busLock,
     publishReply: (topic, reply) => {
       replies.push({ topic, reply });
     },
     publishTelemetry: (message) => {
+      assertValidTelemetryEnvelope20(message);
       telemetries.push(message);
     },
     onDiagnostic: (event) => {
@@ -220,6 +301,10 @@ test('songyaxuan-platform-envelope uses per-meter hysteresis for A/B vs combined
 
 test('executor handles LEVEL coils 0 and 14 with immediate state uplink and schemaVersion 2.0 reply', async () => {
   const { executor, writes, replies, telemetries } = createFakeExecutor();
+  await executor.initialize();
+  writes.length = 0;
+  telemetries.length = 0;
+
   const r1 = await executor.handleCommand(makeCommand({
     commandId: 'cmd-chwp-1-start',
     deviceId: 'ctrl-chwp-1',
@@ -255,6 +340,9 @@ test('executor handles LEVEL coils 0 and 14 with immediate state uplink and sche
 
 test('executor executes PULSE coils 3 and 16..19 and guarantees 0 reset in finally', async () => {
   const { executor, writes } = createFakeExecutor();
+  await executor.initialize();
+  writes.length = 0;
+
   const startChillerA = await executor.handleCommand(makeCommand({
     commandId: 'cmd-chiller-a-start',
     deviceId: 'ctrl-chiller-a',
@@ -323,6 +411,8 @@ test('executor accepts START_UNIT_SEQUENCE and STOP_UNIT_SEQUENCE within 1s and 
   });
 
   const { executor, writes, getNowMs } = createFakeExecutor({ startNowMs: 1_763_120_000_000 });
+  await executor.initialize();
+  writes.length = 0;
   const t0 = getNowMs();
   const startRes = await executor.handleCommand(makeCommand({
     commandId: 'cmd-unit-a-start',
@@ -402,6 +492,9 @@ test('executor enforces mid-sequence abort without stopping running steady pumps
     },
   });
 
+  await executorRef.initialize();
+  writes.length = 0;
+
   const accepted = await executorRef.handleCommand(makeCommand({
     commandId: 'cmd-abort-seq',
     deviceId: 'ctrl-chiller-a',
@@ -452,6 +545,9 @@ test('executor aborts START_UNIT_SEQUENCE before chiller pulse when coilReader r
       return coilAddress === 1 ? 0 : 1;
     },
   });
+  await executor.initialize();
+  writes.length = 0;
+  telemetries.length = 0;
 
   const accepted = await executor.handleCommand(makeCommand({
     commandId: 'cmd-prepulse-guard',
@@ -488,6 +584,8 @@ test('executor immediately aborts unit countdown when single-device STOP arrives
       signal?.addEventListener('abort', () => resolve(), { once: true });
     }),
   });
+  await executor.initialize();
+  writes.length = 0;
 
   const startReply = await executor.handleCommand(makeCommand({
     commandId: 'cmd-seq-before-stop',
@@ -597,4 +695,559 @@ test('executor handles EMERGENCY_DO_RELEASE by aborting all active sequences and
   assert.equal(fallbackReply.edgeStatus, 'EXECUTED');
   assert.equal(fallbackReply.executionEvidence.applied.text, 'all-do:0');
   assert.equal(writes.length, 20);
+});
+
+test('executor initializes all 8 pulse coils and recovers pending coils with retry', async () => {
+  const persisted = createMemoryStateStore({
+    lastSequence: 1_763_120_000_000 * 1000 + 50,
+    lastFenceByDevice: { 'ctrl-chwp-1': 5 },
+    executedCommandIds: ['cmd-before-crash'],
+    pendingPulseCoils: [3, 19],
+  });
+
+  let coil19FailuresRemaining = 2;
+  const { executor, writes, telemetries, diagnostics } = createFakeExecutor({
+    stateStore: persisted.store,
+    onWriteCoil: (_unitId, coil, value) => {
+      if (coil === 19 && value === 0 && coil19FailuresRemaining > 0) {
+        coil19FailuresRemaining -= 1;
+        throw new Error('transient RS485 collision');
+      }
+    },
+  });
+
+  await executor.initialize();
+  assert.deepEqual(
+    writes.map((w) => [w.coil, w.value]),
+    PULSE_COILS.map((coil) => [coil, 0]),
+  );
+  assert.equal(coil19FailuresRemaining, 0);
+  assert.ok(diagnostics.some((d) => d.code === 'STARTUP_PENDING_PULSE_RESET' && d.level === 'warn'));
+  assert.equal(telemetries.length, 1);
+  assertValidTelemetryEnvelope20(telemetries[0]!);
+  assert.ok(telemetries[0]!.payload.sequence > 1_763_120_000_000 * 1000 + 50);
+  const etPoints = telemetries[0]!.payload.payload.devices.find((d) => d.deviceId === 'et1010')?.points ?? [];
+  assert.equal(etPoints.length, 8);
+  assert.ok(etPoints.every((p) => p.value === 0));
+  assert.deepEqual(persisted.getState()?.pendingPulseCoils, []);
+});
+
+test('executor auto-initializes pulse coils before first command when initialize() was skipped', async () => {
+  const autoStore = createMemoryStateStore();
+  const autoExec = createFakeExecutor({ stateStore: autoStore.store });
+  const levelReply = await autoExec.executor.handleCommand(makeCommand({
+    commandId: 'cmd-auto-init-level',
+    deviceId: 'ctrl-chwp-1',
+    commandCode: 'START',
+    actuationMode: 'LEVEL',
+    channel: 'u11',
+    coilAddress: 0,
+  }));
+  assert.equal(levelReply.edgeStatus, 'EXECUTED');
+  assert.deepEqual(
+    autoExec.writes.map((w) => [w.coil, w.value]),
+    [...PULSE_COILS.map((coil) => [coil, 0]), [0, 1]],
+  );
+});
+
+test('executor keeps unconfirmed pendingPulseCoils on initialize reset failure', async () => {
+  const startStore = createMemoryStateStore({
+    lastSequence: 0,
+    lastFenceByDevice: {},
+    executedCommandIds: [],
+    pendingPulseCoils: [16],
+  });
+  const initFailing = createFakeExecutor({
+    stateStore: startStore.store,
+    failResetOnCoil: 16,
+  });
+  await initFailing.executor.initialize();
+  assert.deepEqual(startStore.getState()?.pendingPulseCoils, [16]);
+  assert.ok(initFailing.diagnostics.some((d) => d.code === 'PULSE_RESET_FAILED' && d.level === 'error'));
+  const telemetryPoints = initFailing.telemetries[0]?.payload.payload.devices[0]?.points ?? [];
+  assert.equal(telemetryPoints.length, 7);
+  assert.equal(telemetryPoints.some((p) => p.code === 'u51'), false);
+});
+
+test('executor persists pendingPulseCoils before pulse write and clears after 3rd reset attempt', async () => {
+  const pulseStore = createMemoryStateStore();
+  let resetAttempts = 0;
+  let savedPendingBeforeCoil1 = false;
+  const pulseExec = createFakeExecutor({
+    stateStore: pulseStore.store,
+    onWriteCoil: (_unitId, coil, value) => {
+      if (coil === 3 && value === 1) {
+        savedPendingBeforeCoil1 = (pulseStore.getState()?.pendingPulseCoils ?? []).includes(3);
+      }
+      if (coil === 3 && value === 0 && pulseExec.writes.some((w) => w.coil === 3 && w.value === 1)) {
+        resetAttempts += 1;
+        if (resetAttempts < 3) {
+          throw new Error(`reset attempt ${resetAttempts} failed`);
+        }
+      }
+    },
+  });
+  await pulseExec.executor.initialize();
+  const pulseReply = await pulseExec.executor.handleCommand(makeCommand({
+    commandId: 'cmd-pulse-retry-ok',
+    deviceId: 'ctrl-chiller-a',
+    commandCode: 'START',
+    actuationMode: 'PULSE',
+    channel: 'u14',
+    coilAddress: 3,
+    pulseDurationMs: 500,
+    executionFence: 1,
+  }));
+  assert.equal(pulseReply.edgeStatus, 'EXECUTED');
+  assert.equal(savedPendingBeforeCoil1, true);
+  assert.equal(resetAttempts, 3);
+  assert.deepEqual(pulseStore.getState()?.pendingPulseCoils, []);
+});
+
+test('executor reports PULSE_RESET_FAILED and keeps pending coil when executePulse reset fails permanently', async () => {
+  const permStore = createMemoryStateStore();
+  const permFail = createFakeExecutor({
+    stateStore: permStore.store,
+    failResetOnCoil: 17,
+  });
+  await permFail.executor.initialize();
+  permFail.diagnostics.length = 0;
+  const permReply = await permFail.executor.handleCommand(makeCommand({
+    commandId: 'cmd-pulse-perm-fail',
+    deviceId: 'ctrl-chiller-b',
+    commandCode: 'STOP',
+    actuationMode: 'PULSE',
+    channel: 'u52',
+    coilAddress: 17,
+    pulseDurationMs: 500,
+    executionFence: 1,
+  }));
+  assert.equal(permReply.edgeStatus, 'FAILED');
+  assert.equal(permReply.reasonCode, 'PULSE_RESET_FAILED');
+  assert.deepEqual(permStore.getState()?.pendingPulseCoils, [17]);
+  assert.ok(permFail.diagnostics.some((d) => d.code === 'PULSE_RESET_FAILED' && d.commandId === 'cmd-pulse-perm-fail'));
+  assert.ok(new PulseResetError('x') instanceof Error);
+});
+
+test('executor validates NaN/non-finite timestamps, checks duplicate/expiry before mutating fence, and persists monotonic sequence across restarts', async () => {
+  const shared = createMemoryStateStore();
+  const run1 = createFakeExecutor({ stateStore: shared.store, startNowMs: 1_763_120_000_000 });
+  await run1.executor.initialize();
+  run1.writes.length = 0;
+
+  const nanExpire = await run1.executor.handleCommand(makeCommand({
+    commandId: 'cmd-nan-expire',
+    expireAt: Number.NaN,
+    executionFence: 5,
+  }));
+  assert.equal(nanExpire.edgeStatus, 'REJECTED');
+  assert.equal(nanExpire.reasonCode, 'INVALID_COMMAND_ENVELOPE');
+
+  const nanIssued = await run1.executor.handleCommand(makeCommand({
+    commandId: 'cmd-nan-issued',
+    issuedAt: Number.NaN,
+    expireAt: 1_763_120_015_000,
+    executionFence: 5,
+  }));
+  assert.equal(nanIssued.edgeStatus, 'REJECTED');
+  assert.equal(nanIssued.reasonCode, 'INVALID_COMMAND_ENVELOPE');
+
+  const badWindow = await run1.executor.handleCommand(makeCommand({
+    commandId: 'cmd-bad-window',
+    issuedAt: 1_763_120_000_000,
+    expireAt: 1_763_120_000_000,
+    executionFence: 5,
+  }));
+  assert.equal(badWindow.edgeStatus, 'REJECTED');
+  assert.equal(badWindow.reasonCode, 'INVALID_COMMAND_ENVELOPE');
+
+  const expiredHighFence = await run1.executor.handleCommand(makeCommand({
+    commandId: 'cmd-expired-fence5',
+    issuedAt: 1_763_119_900_000,
+    expireAt: 1_763_119_999_000,
+    executionFence: 5,
+  }));
+  assert.equal(expiredHighFence.edgeStatus, 'EXPIRED');
+  assert.equal(expiredHighFence.reasonCode, 'COMMAND_EXPIRED');
+
+  const validFence5 = await run1.executor.handleCommand(makeCommand({
+    commandId: 'cmd-valid-fence5',
+    deviceId: 'ctrl-chwp-1',
+    commandCode: 'START',
+    actuationMode: 'LEVEL',
+    channel: 'u11',
+    coilAddress: 0,
+    executionFence: 5,
+  }));
+  assert.equal(validFence5.edgeStatus, 'EXECUTED');
+  assert.equal(run1.writes.length, 1);
+
+  const lastSeqBeforeRestart = shared.getState()?.lastSequence ?? 0;
+  assert.ok(lastSeqBeforeRestart >= 1_763_120_000_000 * 1000);
+
+  const run2 = createFakeExecutor({ stateStore: shared.store, startNowMs: 1_763_119_990_000 });
+  await run2.executor.initialize();
+  run2.writes.length = 0;
+
+  assert.ok((run2.telemetries[0]?.payload.sequence ?? 0) > lastSeqBeforeRestart);
+
+  const duplicate = await run2.executor.handleCommand(makeCommand({
+    commandId: 'cmd-valid-fence5',
+    issuedAt: 1_763_119_990_000,
+    expireAt: 1_763_120_005_000,
+    executionFence: 6,
+  }));
+  assert.equal(duplicate.edgeStatus, 'REJECTED');
+  assert.equal(duplicate.reasonCode, 'DUPLICATE_COMMAND');
+  assert.equal(run2.writes.length, 0);
+
+  const staleAfterRestart = await run2.executor.handleCommand(makeCommand({
+    commandId: 'cmd-stale-restart',
+    issuedAt: 1_763_119_990_000,
+    expireAt: 1_763_120_005_000,
+    executionFence: 5,
+  }));
+  assert.equal(staleAfterRestart.edgeStatus, 'REJECTED');
+  assert.equal(staleAfterRestart.reasonCode, 'STALE_EXECUTION_FENCE');
+});
+
+test('Rs485BusLock enforces mutual exclusion, priority ordering, and FIFO tie-breaking without microtask barge-in', async () => {
+  const lock = new Rs485BusLock();
+  const order: string[] = [];
+  let active = 0;
+  let maxActive = 0;
+
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+
+  const first = lock.runExclusive(BUS_PRIORITY_NORMAL, async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    order.push('first-start');
+    await gate;
+    order.push('first-end');
+    active -= 1;
+  });
+  const low1 = lock.runExclusive(BUS_PRIORITY_NORMAL, async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    order.push('low-1');
+    active -= 1;
+  });
+  const low2 = lock.runExclusive(BUS_PRIORITY_NORMAL, async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    order.push('low-2');
+    active -= 1;
+  });
+  const high1 = lock.runExclusive(BUS_PRIORITY_PULSE_RESET, async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    order.push('high-1');
+    active -= 1;
+  });
+  const high2 = lock.runExclusive(BUS_PRIORITY_PULSE_RESET, async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    order.push('high-2');
+    active -= 1;
+  });
+
+  releaseGate();
+  await first;
+  const bargeIn = lock.runExclusive(BUS_PRIORITY_PULSE_RESET, async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    order.push('barge-in');
+    active -= 1;
+  });
+  await Promise.all([low1, low2, high1, high2, bargeIn]);
+  assert.equal(maxActive, 1);
+  assert.deepEqual(order, ['first-start', 'first-end', 'high-1', 'high-2', 'barge-in', 'low-1', 'low-2']);
+});
+
+test('Rs485BusLock lets pulse-reset preempt queued ConcentratorRpcExecutor transactions', async () => {
+  const sharedLock = new Rs485BusLock();
+  const busEvents: string[] = [];
+  let pulseSleepEntered!: () => void;
+  const inPulseSleep = new Promise<void>((resolve) => {
+    pulseSleepEntered = resolve;
+  });
+  let finishPulseSleep!: () => void;
+  const pulseSleepGate = new Promise<void>((resolve) => {
+    finishPulseSleep = resolve;
+  });
+  let firstRpcEntered!: () => void;
+  const firstRpcStarted = new Promise<void>((resolve) => {
+    firstRpcEntered = resolve;
+  });
+  let releaseFirstRpc!: () => void;
+  const firstRpcGate = new Promise<void>((resolve) => {
+    releaseFirstRpc = resolve;
+  });
+  let rpcCounter = 0;
+  const modbus: ModbusBusClient = {
+    async readHoldingRegisters(_unitId, address) {
+      if (address === REG.EID_BASE) {
+        rpcCounter += 1;
+        const idx = rpcCounter;
+        busEvents.push(`rpc-${idx}-start`);
+        if (idx === 1) {
+          firstRpcEntered();
+          await firstRpcGate;
+        }
+      }
+      if (address === REG.EID_BASE + 180 * 2) {
+        busEvents.push(`rpc-${rpcCounter}-end`);
+      }
+      return new Array(40).fill(0);
+    },
+    async readInputRegisters() {
+      return new Array(40).fill(0);
+    },
+    async writeRegister() {},
+    async writeRegisters() {},
+  };
+  const rpcExec = new ConcentratorRpcExecutor(modbus, { settleMs: 0, busLock: sharedLock });
+  const cmdExec = createFakeExecutor({
+    busLock: sharedLock,
+    onWriteCoil: (_unitId, coil, value) => {
+      busEvents.push(`coil-${coil}=${value}`);
+    },
+    sleepMs: async () => {
+      pulseSleepEntered();
+      await pulseSleepGate;
+    },
+  });
+  await cmdExec.executor.initialize();
+  busEvents.length = 0;
+
+  const pulsePromise = cmdExec.executor.handleCommand(makeCommand({
+    commandId: 'cmd-bus-pulse',
+    deviceId: 'ctrl-chiller-a',
+    commandCode: 'START',
+    actuationMode: 'PULSE',
+    channel: 'u14',
+    coilAddress: 3,
+    executionFence: 1,
+  }));
+  await inPulseSleep;
+
+  const rpcFirst = rpcExec.execute({
+    schemaVersion: '1.0',
+    requestId: '018f3d00-3000-7000-8000-000000000001',
+    gatewayId: '018f3d00-2000-7000-8000-000000000001',
+    unitId: 1,
+    operation: 'READ_EIDS',
+    issuedAt: 1000,
+    expireAt: Date.now() + 10_000,
+  });
+  await firstRpcStarted;
+
+  const rpcQueued = rpcExec.execute({
+    schemaVersion: '1.0',
+    requestId: '018f3d00-3000-7000-8000-000000000002',
+    gatewayId: '018f3d00-2000-7000-8000-000000000001',
+    unitId: 1,
+    operation: 'READ_EIDS',
+    issuedAt: 1000,
+    expireAt: Date.now() + 10_000,
+  });
+
+  finishPulseSleep();
+  await Promise.resolve();
+  await Promise.resolve();
+  releaseFirstRpc();
+
+  const [res1, res2, pulseReply] = await Promise.all([rpcFirst, rpcQueued, pulsePromise]);
+  assert.equal(res1.status, 'OK');
+  assert.equal(res2.status, 'OK');
+  assert.equal(pulseReply.edgeStatus, 'EXECUTED');
+  assert.deepEqual(busEvents, ['coil-3=1', 'rpc-1-start', 'rpc-1-end', 'coil-3=0', 'rpc-2-start', 'rpc-2-end']);
+});
+
+test('executor supports explicit ABORT_UNIT_SEQUENCE without pulsing idle chillers', async () => {
+  let releaseSleep!: () => void;
+  const sleepEntered = new Promise<void>((resolve) => {
+    releaseSleep = resolve;
+  });
+  let finishSleep!: () => void;
+  const abortExec = createFakeExecutor({
+    sleepMs: (_ms, signal) => new Promise((resolve) => {
+      releaseSleep();
+      finishSleep = resolve;
+      if (signal?.aborted) {
+        resolve();
+        return;
+      }
+      signal?.addEventListener('abort', () => resolve(), { once: true });
+    }),
+  });
+  await abortExec.executor.initialize();
+  abortExec.writes.length = 0;
+
+  const startRes = await abortExec.executor.handleCommand(makeCommand({
+    commandId: 'cmd-start-unit-a-abortable',
+    deviceId: 'ctrl-chiller-a',
+    commandCode: 'START_UNIT_SEQUENCE',
+    actuationMode: 'UNIT_SEQUENCE',
+    channel: 'unit-a',
+    executionFence: 1,
+  }));
+  assert.equal(startRes.edgeStatus, 'EXECUTED');
+  await sleepEntered;
+
+  const abortByCode = await abortExec.executor.handleCommand(makeCommand({
+    commandId: 'cmd-abort-unit-a',
+    deviceId: 'ctrl-chiller-a',
+    commandCode: 'ABORT_UNIT_SEQUENCE',
+    actuationMode: 'ABORT_UNIT_SEQUENCE',
+    channel: 'unit-a',
+    executionFence: 2,
+  }));
+  assert.equal(abortByCode.edgeStatus, 'EXECUTED');
+  assert.equal(abortByCode.executionEvidence.applied.text, 'unit-a:sequence-aborted');
+  await abortExec.executor.waitForActiveSequences();
+  assert.deepEqual(abortExec.writes.map((w) => [w.coil, w.value]), [[0, 1]]);
+  finishSleep?.();
+
+  const idleAbort = await abortExec.executor.handleCommand(makeCommand({
+    commandId: 'cmd-abort-unit-b-idle',
+    deviceId: 'ctrl-chiller-b',
+    commandCode: 'STOP_UNIT_SEQUENCE',
+    actuationMode: 'ABORT_UNIT_SEQUENCE',
+    channel: 'unit-b',
+    executionFence: 1,
+  }));
+  assert.equal(idleAbort.edgeStatus, 'EXECUTED');
+  assert.equal(idleAbort.executionEvidence.applied.text, 'unit-b:sequence-aborted');
+  assert.equal(abortExec.writes.length, 1);
+
+  const badAbortRoute = await abortExec.executor.handleCommand(makeCommand({
+    commandId: 'cmd-abort-invalid-route',
+    deviceId: 'ctrl-chwp-1',
+    commandCode: 'ABORT_UNIT_SEQUENCE',
+    executionFence: 1,
+  }));
+  assert.equal(badAbortRoute.edgeStatus, 'REJECTED');
+  assert.equal(badAbortRoute.reasonCode, 'UNKNOWN_ACTUATION_ROUTE');
+});
+
+test('STOP_UNIT_SEQUENCE holds auxiliaries when chillerPowerReader remains above 5 kW', async () => {
+  let powerChecks = 0;
+  const heldExec = createFakeExecutor({
+    chillerPowerReader: async () => {
+      powerChecks += 1;
+      return 84.5;
+    },
+  });
+  await heldExec.executor.initialize();
+  heldExec.writes.length = 0;
+  const stopHeld = await heldExec.executor.handleCommand(makeCommand({
+    commandId: 'cmd-stop-held',
+    deviceId: 'ctrl-chiller-a',
+    commandCode: 'STOP_UNIT_SEQUENCE',
+    actuationMode: 'UNIT_SEQUENCE',
+    channel: 'unit-a',
+    executionFence: 1,
+  }));
+  assert.equal(stopHeld.edgeStatus, 'EXECUTED');
+  await heldExec.executor.waitForActiveSequences();
+  assert.equal(powerChecks, 3);
+  assert.deepEqual(heldExec.writes.map((w) => [w.coil, w.value]), [[16, 1], [16, 0]]);
+  assert.ok(heldExec.diagnostics.some((d) => d.code === 'CHILLER_STOP_UNCONFIRMED_AUX_HELD' && d.unitCode === 'unit-a'));
+});
+
+test('STOP_UNIT_SEQUENCE completes auxiliary shutdown once chillerPowerReader drops to <= 5 kW on recheck', async () => {
+  let recheckSample = 0;
+  const coastExec = createFakeExecutor({
+    chillerPowerReader: async () => {
+      recheckSample += 1;
+      return recheckSample === 1 ? 18.0 : 3.2;
+    },
+  });
+  await coastExec.executor.initialize();
+  coastExec.writes.length = 0;
+  await coastExec.executor.handleCommand(makeCommand({
+    commandId: 'cmd-stop-coast-ok',
+    deviceId: 'ctrl-chiller-a',
+    commandCode: 'STOP_UNIT_SEQUENCE',
+    actuationMode: 'UNIT_SEQUENCE',
+    channel: 'unit-a',
+    executionFence: 1,
+  }));
+  await coastExec.executor.waitForActiveSequences();
+  assert.equal(recheckSample, 2);
+  assert.deepEqual(coastExec.writes.map((w) => [w.coil, w.value]), [[16, 1], [16, 0], [2, 0], [1, 0], [0, 0]]);
+});
+
+test('songyaxuan-platform-envelope decouples C/D auxiliary load from chiller run_state', () => {
+  const ctx = new Map<string, unknown>();
+  const ts = 1_763_120_000_000;
+
+  runPlatformEnvelopeNode({
+    et1010: [{ ts, values: { u31: 1, u32: 1, u33: 1, u41: 1, u42: 1, u43: 1 } }],
+  }, ctx);
+
+  const unitCPumpsOnly = runPlatformEnvelopeNode({
+    'ammeter-unit1': [{ ts: ts + 1000, values: { powerTotal: 34, combinedActiveTotalElectricalEnergy: 100 } }],
+  }, ctx);
+  const meterC = unitCPumpsOnly.payload.payload.devices.find((d) => d.deviceId === 'ammeter-unit1');
+  const chillerC = unitCPumpsOnly.payload.payload.devices.find((d) => d.deviceId === 'ctrl-chiller-c');
+  assert.equal(meterC?.points.find((p) => p.code === 'power_total')?.value, 34);
+  assert.equal(meterC?.points.find((p) => p.code === 'run_state')?.value, 'STOPPED');
+  assert.equal(chillerC?.points.find((p) => p.code === 'run_state')?.value, 'STOPPED');
+
+  const unitCCompressorOn = runPlatformEnvelopeNode({
+    'ammeter-unit1': [{ ts: ts + 2000, values: { powerTotal: 55, combinedActiveTotalElectricalEnergy: 101 } }],
+  }, ctx);
+  assert.equal(unitCCompressorOn.payload.payload.devices.find((d) => d.deviceId === 'ctrl-chiller-c')?.points[0]?.value, 'RUNNING');
+
+  const unitCCompressorOff = runPlatformEnvelopeNode({
+    'ammeter-unit1': [{ ts: ts + 3000, values: { powerTotal: 38, combinedActiveTotalElectricalEnergy: 102 } }],
+  }, ctx);
+  assert.equal(unitCCompressorOff.payload.payload.devices.find((d) => d.deviceId === 'ctrl-chiller-c')?.points[0]?.value, 'STOPPED');
+
+  const combinedSameMsg = runPlatformEnvelopeNode({
+    'ammeter-unit2': [{ ts: ts + 4000, values: { powerTotal: 34, combinedActiveTotalElectricalEnergy: 200 } }],
+    et1010: [{ ts: ts + 4000, values: { u41: 1, u42: 1, u43: 1 } }],
+  });
+  assert.equal(combinedSameMsg.payload.payload.devices.find((d) => d.deviceId === 'ctrl-chiller-d')?.points[0]?.value, 'STOPPED');
+
+  const unitDCompressorOn = runPlatformEnvelopeNode({
+    'ammeter-unit2': [{ ts: ts + 5000, values: { powerTotal: 55, combinedActiveTotalElectricalEnergy: 201 } }],
+  }, ctx);
+  assert.equal(unitDCompressorOn.payload.payload.devices.find((d) => d.deviceId === 'ctrl-chiller-d')?.points[0]?.value, 'RUNNING');
+});
+
+test('songyaxuan.site.json enforces chwp-main start interlock and 120s run_state freshness', () => {
+  const site = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.site.json', import.meta.url), 'utf8'));
+  const alarmRules = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.alarm-rules.json', import.meta.url), 'utf8'));
+  assert.deepEqual(checkSiteFile(site, alarmRules), []);
+
+  for (const chillerCode of ['ctrl-chiller-a', 'ctrl-chiller-b', 'ctrl-chiller-c', 'ctrl-chiller-d']) {
+    const dev = site.devices.find((d: { code: string }) => d.code === chillerCode);
+    const startPt = dev.points.find((p: { code: string }) => p.code === 'start');
+    const hasMainFlowInterlock = startPt.sourceMetadata.interlocks.some(
+      (item: { device: string; point: string; expected: string }) =>
+        item.device === 'chwp-main' && item.point === 'run_state' && item.expected === 'RUNNING',
+    );
+    assert.equal(hasMainFlowInterlock, true, `${chillerCode}/start missing chwp-main interlock`);
+  }
+
+  const { telemetry } = buildOnboardingSql(site);
+  const expected120Devices = [
+    'chwp-main',
+    'ctrl-chwp-1', 'ctrl-chwp-2', 'ctrl-chwp-3', 'ctrl-chwp-4',
+    'ctrl-cwp-1', 'ctrl-cwp-2', 'ctrl-cwp-3', 'ctrl-cwp-4',
+    'ctrl-tower-1', 'ctrl-tower-2', 'ctrl-tower-3', 'ctrl-tower-4',
+  ];
+  for (const code of expected120Devices) {
+    const dev = site.devices.find((d: { code: string }) => d.code === code);
+    const row = telemetry.split('\n').find((line: string) => line.startsWith(`('${dev.id}', 'run_state',`));
+    assert.ok(row, `missing freshness row for ${code}/run_state`);
+    assert.match(row, new RegExp(`^\\('${dev.id}', 'run_state', 1, 120, true, 60,`), `${code}/run_state must have fresh_within_seconds=120`);
+  }
 });

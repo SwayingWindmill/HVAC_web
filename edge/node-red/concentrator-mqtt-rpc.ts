@@ -1,3 +1,5 @@
+import { BUS_PRIORITY_NORMAL, Rs485BusLock } from './rs485-bus-lock.ts';
+
 export const RPC_SCHEMA_VERSION = '1.0' as const;
 export const EID_SLOT_COUNT = 200;
 export const MAX_EID_SLOTS_PER_FC16 = 20;
@@ -128,6 +130,8 @@ export interface ExecutorOptions {
   settleMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  busLock?: Rs485BusLock;
+  busPriority?: number;
 }
 
 const UUID_V7_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -232,9 +236,11 @@ export function computeDirtyEIDChunks(
   return chunks;
 }
 
-function validateEIDUpdateSlots(rawSlots: EIDSlot[] | undefined): { ordered?: EIDSlot[]; code?: string; message?: string } {
+type ValidationResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string };
+
+function validateEIDUpdateSlots(rawSlots: EIDSlot[] | undefined): ValidationResult<EIDSlot[]> {
   if (!Array.isArray(rawSlots) || rawSlots.length !== EID_SLOT_COUNT) {
-    return { code: 'CONCENTRATOR_EIDS_INVALID', message: `expected ${EID_SLOT_COUNT} EID slots` };
+    return { ok: false, code: 'CONCENTRATOR_EIDS_INVALID', message: `expected ${EID_SLOT_COUNT} EID slots` };
   }
   const ordered: EIDSlot[] = new Array(EID_SLOT_COUNT);
   const seenSlots = new Set<number>();
@@ -249,13 +255,14 @@ function validateEIDUpdateSlots(rawSlots: EIDSlot[] | undefined): { ordered?: EI
       item.eid < 0 ||
       item.eid > 0xffffffff
     ) {
-      return { code: 'CONCENTRATOR_EIDS_INVALID', message: `invalid EID slot entry at slot ${item.slot}` };
+      return { ok: false, code: 'CONCENTRATOR_EIDS_INVALID', message: `invalid EID slot entry at slot ${item.slot}` };
     }
     seenSlots.add(item.slot);
     if (item.eid > 0) {
       const prev = seenNonZero.get(item.eid);
       if (prev !== undefined) {
         return {
+          ok: false,
           code: 'CONCENTRATOR_EID_DUPLICATE',
           message: `duplicate EID ${item.eid} in slots ${prev} and ${item.slot}`,
         };
@@ -264,43 +271,44 @@ function validateEIDUpdateSlots(rawSlots: EIDSlot[] | undefined): { ordered?: EI
     }
     ordered[item.slot - 1] = { slot: item.slot, eid: item.eid >>> 0 };
   }
-  return { ordered };
+  return { ok: true, value: ordered };
 }
 
 function validateParamsPatch(
   rawPatch: Partial<Record<ConcentratorParamKey, number>> | undefined,
-): { entries?: Array<[ConcentratorParamKey, number]>; code?: string; message?: string } {
+): ValidationResult<Array<[ConcentratorParamKey, number]>> {
   if (!rawPatch || typeof rawPatch !== 'object') {
-    return { code: 'CONCENTRATOR_PARAMS_INVALID', message: 'params object is required' };
+    return { ok: false, code: 'CONCENTRATOR_PARAMS_INVALID', message: 'params object is required' };
   }
   const entries: Array<[ConcentratorParamKey, number]> = [];
   for (const key of Object.keys(rawPatch)) {
     if (!(key in PARAM_SPECS)) {
-      return { code: 'CONCENTRATOR_PARAMS_INVALID', message: `unknown concentrator parameter ${key}` };
+      return { ok: false, code: 'CONCENTRATOR_PARAMS_INVALID', message: `unknown concentrator parameter ${key}` };
     }
     const typedKey = key as ConcentratorParamKey;
     const val = rawPatch[typedKey];
     if (typeof val !== 'number' || !Number.isInteger(val)) {
-      return { code: 'CONCENTRATOR_PARAMS_INVALID', message: `${typedKey} must be an integer` };
+      return { ok: false, code: 'CONCENTRATOR_PARAMS_INVALID', message: `${typedKey} must be an integer` };
     }
     const spec = PARAM_SPECS[typedKey];
     if (val < spec.min || val > spec.max) {
       return {
+        ok: false,
         code: 'CONCENTRATOR_PARAMS_INVALID',
         message: `${typedKey}=${val} out of range [${spec.min},${spec.max}]`,
       };
     }
     if (typedKey === 'modbusId' && PROTECTED_WRITE_UIDS.has(val)) {
-      return { code: 'CONCENTRATOR_UID_PROTECTED', message: `modbusId ${val} is protected on RS485 bus` };
+      return { ok: false, code: 'CONCENTRATOR_UID_PROTECTED', message: `modbusId ${val} is protected on RS485 bus` };
     }
     entries.push([typedKey, val]);
   }
   if (entries.length === 0) {
-    return { code: 'CONCENTRATOR_PARAMS_INVALID', message: 'at least one parameter must be provided' };
+    return { ok: false, code: 'CONCENTRATOR_PARAMS_INVALID', message: 'at least one parameter must be provided' };
   }
   // Write modbusId last so preceding registers reach the current unitId before commit.
   entries.sort(([a], [b]) => (a === 'modbusId' ? 1 : b === 'modbusId' ? -1 : 0));
-  return { entries };
+  return { ok: true, value: entries };
 }
 
 export class ConcentratorRpcExecutor {
@@ -308,22 +316,22 @@ export class ConcentratorRpcExecutor {
   private readonly settleMs: number;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
-  private busQueue: Promise<void> = Promise.resolve();
+  private readonly busLock: Rs485BusLock;
+  private readonly busPriority: number;
 
   constructor(modbus: ModbusBusClient, options: ExecutorOptions = {}) {
     this.modbus = modbus;
     this.settleMs = options.settleMs ?? 300;
     this.now = options.now ?? (() => Date.now());
     this.sleep = options.sleep ?? defaultSleep;
+    this.busLock = options.busLock ?? new Rs485BusLock();
+    this.busPriority = typeof options.busPriority === 'number' && Number.isFinite(options.busPriority)
+      ? options.busPriority
+      : BUS_PRIORITY_NORMAL;
   }
 
   private runSerialized<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.busQueue.then(fn, fn);
-    this.busQueue = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
+    return this.busLock.runExclusive(this.busPriority, fn);
   }
 
   async execute(req: ConcentratorRPCRequest): Promise<ConcentratorRPCResponse> {
@@ -350,60 +358,53 @@ export class ConcentratorRpcExecutor {
     if (PROTECTED_WRITE_UIDS.has(req.unitId)) {
       return baseReply('REJECTED', { errorCode: 'CONCENTRATOR_UID_PROTECTED', errorMessage: `unitId ${req.unitId} is protected on RS485 bus` });
     }
-    if (typeof req.expireAt === 'number' && this.now() > req.expireAt) {
+    if (req.issuedAt !== undefined && (typeof req.issuedAt !== 'number' || !Number.isFinite(req.issuedAt))) {
+      return baseReply('REJECTED', { errorCode: 'CONCENTRATOR_REQUEST_INVALID', errorMessage: 'invalid issuedAt' });
+    }
+    if (
+      !Number.isFinite(req.expireAt) ||
+      (typeof req.issuedAt === 'number' && Number.isFinite(req.issuedAt) && req.expireAt <= req.issuedAt) ||
+      this.now() >= req.expireAt
+    ) {
       return baseReply('FAILED', { errorCode: 'CONCENTRATOR_RPC_EXPIRED', errorMessage: 'request expired before execution' });
     }
 
+    const executeOnBus = <T>(
+      errorCode: string,
+      action: () => Promise<Partial<ConcentratorRPCResponse>>,
+    ): Promise<ConcentratorRPCResponse> => this.runSerialized(async () => {
+      if (this.now() >= req.expireAt) {
+        return baseReply('FAILED', { errorCode: 'CONCENTRATOR_RPC_EXPIRED', errorMessage: 'request expired while waiting for RS485 bus' });
+      }
+      try {
+        return baseReply('OK', await action());
+      } catch (err) {
+        return baseReply('FAILED', { errorCode, errorMessage: errorText(err) });
+      }
+    });
+
     if (req.operation === 'WRITE_PARAMS') {
       const checked = validateParamsPatch(req.params);
-      if (!checked.entries) {
+      if (!checked.ok) {
         return baseReply('REJECTED', { errorCode: checked.code, errorMessage: checked.message });
       }
-      return this.runSerialized(async () => {
-        try {
-          const result = await this.writeParams(req.unitId, checked.entries!);
-          return baseReply('OK', result);
-        } catch (err) {
-          return baseReply('FAILED', { errorCode: 'CONCENTRATOR_WRITE_FAILED', errorMessage: errorText(err) });
-        }
-      });
+      return executeOnBus('CONCENTRATOR_WRITE_FAILED', () => this.writeParams(req.unitId, checked.value));
     }
 
     if (req.operation === 'WRITE_EIDS') {
       const checked = validateEIDUpdateSlots(req.slots);
-      if (!checked.ordered) {
+      if (!checked.ok) {
         return baseReply('REJECTED', { errorCode: checked.code, errorMessage: checked.message });
       }
-      return this.runSerialized(async () => {
-        try {
-          const result = await this.writeEids(req.unitId, checked.ordered!);
-          return baseReply('OK', result);
-        } catch (err) {
-          return baseReply('FAILED', { errorCode: 'CONCENTRATOR_WRITE_FAILED', errorMessage: errorText(err) });
-        }
-      });
+      return executeOnBus('CONCENTRATOR_WRITE_FAILED', () => this.writeEids(req.unitId, checked.value));
     }
 
     if (req.operation === 'READ_EIDS') {
-      return this.runSerialized(async () => {
-        try {
-          const slots = await this.readAllEids(req.unitId);
-          return baseReply('OK', { slots });
-        } catch (err) {
-          return baseReply('FAILED', { errorCode: 'CONCENTRATOR_READ_FAILED', errorMessage: errorText(err) });
-        }
-      });
+      return executeOnBus('CONCENTRATOR_READ_FAILED', async () => ({ slots: await this.readAllEids(req.unitId) }));
     }
 
     if (req.operation === 'READ_STATUS') {
-      return this.runSerialized(async () => {
-        try {
-          const status = await this.readStatus(req.unitId);
-          return baseReply('OK', status);
-        } catch (err) {
-          return baseReply('FAILED', { errorCode: 'CONCENTRATOR_READ_FAILED', errorMessage: errorText(err) });
-        }
-      });
+      return executeOnBus('CONCENTRATOR_READ_FAILED', () => this.readStatus(req.unitId));
     }
 
     return baseReply('REJECTED', { errorCode: 'CONCENTRATOR_OPERATION_UNSUPPORTED', errorMessage: `unsupported operation ${String(req.operation)}` });

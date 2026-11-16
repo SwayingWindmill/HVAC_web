@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { BUS_PRIORITY_NORMAL, BUS_PRIORITY_PULSE_RESET, Rs485BusLock } from './rs485-bus-lock.ts';
 
 export const SONGYAXUAN_GATEWAY_ID = '01a14000-4000-7000-8000-000000000100';
 export const COMMAND_TOPIC = `hvac/v1/${SONGYAXUAN_GATEWAY_ID}/down/command`;
@@ -7,6 +8,12 @@ export const TELEMETRY_TOPIC = `hvac/v1/${SONGYAXUAN_GATEWAY_ID}/up/telemetry`;
 export const ET1010_UNIT_ID = 31;
 export const WINNER_CONTROLLER_ID = 'songyaxuan-et1010-uid31';
 export const DEFAULT_PULSE_DURATION_MS = 500;
+export const DEFAULT_CHILLER_STOP_POWER_KW = 5;
+
+const PULSE_RESET_ATTEMPTS = 3;
+const PULSE_RESET_BACKOFF_MS = 50;
+const CHILLER_STOP_RECHECK_LIMIT = 2;
+const MAX_EXECUTED_COMMAND_IDS = 1000;
 
 export interface SequenceTimings {
   pumpToCoolingPumpMs: number;
@@ -24,7 +31,7 @@ export const DEFAULT_SEQUENCE_TIMINGS: Readonly<SequenceTimings> = {
   auxiliaryStopStepMs: 10_000,
 };
 
-export type ActuationMode = 'LEVEL' | 'PULSE' | 'UNIT_SEQUENCE' | 'EMERGENCY_DO_RELEASE';
+export type ActuationMode = 'LEVEL' | 'PULSE' | 'UNIT_SEQUENCE' | 'ABORT_UNIT_SEQUENCE' | 'EMERGENCY_DO_RELEASE';
 export type EdgeReplyStatus = 'EXECUTED' | 'REJECTED' | 'EXPIRED' | 'FAILED';
 
 export interface DownlinkCommandEnvelope {
@@ -86,11 +93,23 @@ export interface UplinkTelemetryMessage {
     schemaVersion: '2.0';
     gatewayId: string;
     messageId: string;
-    eventTime: number;
+    timestamp: number;
     sequence: number;
     replay: boolean;
     payload: { devices: UplinkDeviceEntry[] };
   };
+}
+
+export interface ExecutorPersistedState {
+  lastSequence: number;
+  lastFenceByDevice: Record<string, number>;
+  executedCommandIds: string[];
+  pendingPulseCoils: number[];
+}
+
+export interface ExecutorStateStore {
+  load(): Promise<ExecutorPersistedState | null>;
+  save(state: ExecutorPersistedState): Promise<void>;
 }
 
 export interface CoilWritePort {
@@ -108,9 +127,13 @@ export interface SequenceDiagnosticEvent {
 export interface SongyaxuanCommandExecutorOptions {
   coilWriter: CoilWritePort;
   coilReader?: (coilAddress: number) => Promise<0 | 1>;
+  chillerPowerReader?: (unitCode: UnitCoilPlan['unitCode']) => Promise<number | null>;
+  chillerStopPowerKw?: number;
   publishReply: (topic: string, reply: CommandReplyEnvelope) => Promise<void> | void;
   publishTelemetry?: (message: UplinkTelemetryMessage) => Promise<void> | void;
   onDiagnostic?: (event: SequenceDiagnosticEvent) => void;
+  stateStore?: ExecutorStateStore;
+  busLock?: Rs485BusLock;
   nowMs?: () => number;
   sleepMs?: (durationMs: number, signal?: AbortSignal) => Promise<void>;
   uuidv7?: () => string;
@@ -209,6 +232,22 @@ const ALL_DO_COIL_ENTRIES: ReadonlyArray<{ channel: string; coil: number }> = Ob
 
 const ALL_AUX_CONTROLLERS = Object.values(UNIT_PLANS).flatMap((plan) => [plan.chwp, plan.cwp, plan.tower]);
 
+interface PulseCoilDescriptor {
+  coil: number;
+  channel: string;
+  unitCode: UnitCoilPlan['unitCode'];
+}
+
+const PULSE_COIL_DESCRIPTORS: ReadonlyArray<PulseCoilDescriptor> = Object.values(UNIT_PLANS)
+  .flatMap((plan) => [
+    { coil: plan.chillerStart.coil, channel: plan.chillerStart.channel, unitCode: plan.unitCode },
+    { coil: plan.chillerStop.coil, channel: plan.chillerStop.channel, unitCode: plan.unitCode },
+  ])
+  .sort((a, b) => a.coil - b.coil);
+
+export const PULSE_COILS: ReadonlyArray<number> = PULSE_COIL_DESCRIPTORS.map((entry) => entry.coil);
+const PULSE_COIL_SET = new Set<number>(PULSE_COILS);
+
 export function defaultUuidv7(nowMs = Date.now()): string {
   const bytes = randomBytes(16);
   const ts = BigInt(Math.max(0, Math.floor(nowMs)));
@@ -263,10 +302,20 @@ class SequenceAbortError extends Error {
   }
 }
 
-class PulseResetError extends Error {
+export class PulseResetError extends Error {
   constructor(cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause));
+    super(errorText(cause));
   }
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function abortReasonText(signal?: AbortSignal): string {
+  return typeof signal?.reason === 'string' && signal.reason.length > 0
+    ? signal.reason
+    : 'SEQUENCE_ABORTED_BY_OPERATOR';
 }
 
 export class SongyaxuanCommandExecutor {
@@ -275,12 +324,18 @@ export class SongyaxuanCommandExecutor {
   private readonly sleepMs: (durationMs: number, signal?: AbortSignal) => Promise<void>;
   private readonly uuidv7: () => string;
   private readonly pulseDurationMs: number;
+  private readonly chillerStopPowerKw: number;
   private readonly sequenceTimings: SequenceTimings;
   private readonly lastFenceByDevice = new Map<string, number>();
+  private readonly executedCommandIds = new Set<string>();
+  private readonly pendingPulseCoils = new Set<number>();
   private readonly knownCoilStates = new Map<number, 0 | 1>();
   private readonly activeSequenceAborts = new Map<UnitCoilPlan['unitCode'], AbortController>();
   private readonly activeSequenceTasks = new Map<UnitCoilPlan['unitCode'], Promise<void>>();
   private readonly allSequenceTasks = new Set<Promise<void>>();
+  private initialized = false;
+  private initPromise: Promise<void> | null = null;
+  private persistChain: Promise<void> = Promise.resolve();
   private cycle = 0;
   private uplinkSeq = 0;
 
@@ -290,6 +345,9 @@ export class SongyaxuanCommandExecutor {
     this.sleepMs = options.sleepMs ?? defaultSleepMs;
     this.uuidv7 = options.uuidv7 ?? (() => defaultUuidv7(this.nowMs()));
     this.pulseDurationMs = options.pulseDurationMs ?? options.timings?.pulseDurationMs ?? DEFAULT_PULSE_DURATION_MS;
+    this.chillerStopPowerKw = typeof options.chillerStopPowerKw === 'number' && Number.isFinite(options.chillerStopPowerKw) && options.chillerStopPowerKw >= 0
+      ? options.chillerStopPowerKw
+      : DEFAULT_CHILLER_STOP_POWER_KW;
     const overrides = options.sequenceTimings ?? options.timings?.sequenceTimings;
     this.sequenceTimings = {
       pumpToCoolingPumpMs: overrides?.pumpToCoolingPumpMs ?? DEFAULT_SEQUENCE_TIMINGS.pumpToCoolingPumpMs,
@@ -300,10 +358,26 @@ export class SongyaxuanCommandExecutor {
     };
   }
 
-  abortUnitSequence(unitCode: UnitCoilPlan['unitCode'], _reasonCode = 'SEQUENCE_ABORTED_BY_OPERATOR'): boolean {
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
+    if (!this.initPromise) {
+      this.initPromise = this.runInitialize().then(
+        () => {
+          this.initialized = true;
+        },
+        (err) => {
+          this.initPromise = null;
+          throw err;
+        },
+      );
+    }
+    return this.initPromise;
+  }
+
+  abortUnitSequence(unitCode: UnitCoilPlan['unitCode'], reasonCode = 'SEQUENCE_ABORTED_BY_OPERATOR'): boolean {
     const controller = this.activeSequenceAborts.get(unitCode);
     if (!controller || controller.signal.aborted) return false;
-    controller.abort();
+    controller.abort(reasonCode);
     return true;
   }
 
@@ -314,29 +388,65 @@ export class SongyaxuanCommandExecutor {
   }
 
   async handleCommand(command: DownlinkCommandEnvelope): Promise<CommandReplyEnvelope> {
-    if (!command || command.schemaVersion !== '2.0' || !command.commandId || !command.deviceId || !command.commandCode || !Number.isInteger(command.executionFence) || command.executionFence < 1) {
+    if (
+      !command ||
+      command.schemaVersion !== '2.0' ||
+      typeof command.commandId !== 'string' ||
+      !command.commandId ||
+      typeof command.deviceId !== 'string' ||
+      !command.deviceId ||
+      typeof command.commandCode !== 'string' ||
+      !command.commandCode ||
+      !Number.isInteger(command.executionFence) ||
+      command.executionFence < 1 ||
+      typeof command.issuedAt !== 'number' ||
+      !Number.isFinite(command.issuedAt) ||
+      typeof command.expireAt !== 'number' ||
+      !Number.isFinite(command.expireAt) ||
+      command.expireAt <= command.issuedAt
+    ) {
       return this.emitReply(command, 'REJECTED', 'INVALID_COMMAND_ENVELOPE', 'INVALID_ENVELOPE', 'NOT_APPLIED');
+    }
+
+    await this.initialize();
+
+    if (this.executedCommandIds.has(command.commandId)) {
+      return this.emitReply(command, 'REJECTED', 'DUPLICATE_COMMAND', command.commandCode, 'NOT_APPLIED');
     }
 
     const previousFence = this.lastFenceByDevice.get(command.deviceId) ?? 0;
     if (command.executionFence <= previousFence) {
       return this.emitReply(command, 'REJECTED', 'STALE_EXECUTION_FENCE', command.commandCode, 'NOT_APPLIED');
     }
-    this.lastFenceByDevice.set(command.deviceId, command.executionFence);
 
     if (this.nowMs() >= command.expireAt) {
       return this.emitReply(command, 'EXPIRED', 'COMMAND_EXPIRED', command.commandCode, 'NOT_APPLIED');
     }
 
     if (this.isEmergencyDoRelease(command)) {
+      this.commitCommandAccepted(command);
+      await this.persistState();
       return this.executeEmergencyDoRelease(command);
     }
 
-    if (command.commandCode === 'START_UNIT_SEQUENCE' || command.commandCode === 'STOP_UNIT_SEQUENCE') {
-      const unitCode = this.resolveUnitCode(command);
+    if (this.isAbortUnitSequence(command)) {
+      const unitCode = this.resolveUnitCode(command, true);
       if (!unitCode) {
         return this.emitReply(command, 'REJECTED', 'UNKNOWN_ACTUATION_ROUTE', command.commandCode, 'NOT_APPLIED');
       }
+      this.commitCommandAccepted(command);
+      await this.persistState();
+      this.abortUnitSequence(unitCode, 'SEQUENCE_ABORTED_BY_OPERATOR');
+      return this.emitReply(command, 'EXECUTED', null, command.commandCode, `${unitCode}:sequence-aborted`);
+    }
+
+    if (command.commandCode === 'START_UNIT_SEQUENCE' || command.commandCode === 'STOP_UNIT_SEQUENCE') {
+      const unitCode = this.resolveUnitCode(command, false);
+      if (!unitCode) {
+        return this.emitReply(command, 'REJECTED', 'UNKNOWN_ACTUATION_ROUTE', command.commandCode, 'NOT_APPLIED');
+      }
+      this.commitCommandAccepted(command);
+      await this.persistState();
       this.abortUnitSequence(unitCode);
       return this.executeUnitSequence(command, UNIT_PLANS[unitCode]);
     }
@@ -345,6 +455,9 @@ export class SongyaxuanCommandExecutor {
     if (!route || !this.matchesExplicitRoute(command, route)) {
       return this.emitReply(command, 'REJECTED', 'UNKNOWN_ACTUATION_ROUTE', command.commandCode, 'NOT_APPLIED');
     }
+
+    this.commitCommandAccepted(command);
+    await this.persistState();
 
     if (command.commandCode === 'STOP') {
       this.abortUnitSequence(route.unitCode);
@@ -363,9 +476,11 @@ export class SongyaxuanCommandExecutor {
       return this.emitReply(command, 'EXECUTED', null, `${route.channel}=${route.value}`, `${route.channel}=${route.value}`);
     }
 
-    const duration = command.pulseDurationMs && command.pulseDurationMs > 0 ? command.pulseDurationMs : this.pulseDurationMs;
+    const duration = typeof command.pulseDurationMs === 'number' && Number.isFinite(command.pulseDurationMs) && command.pulseDurationMs > 0
+      ? command.pulseDurationMs
+      : this.pulseDurationMs;
     try {
-      await this.executePulse(route.coil, route.channel, duration);
+      await this.executePulse(route.coil, route.channel, duration, undefined, { unitCode: route.unitCode, commandId: command.commandId });
     } catch (error) {
       const reason = error instanceof PulseResetError ? 'PULSE_RESET_FAILED' : 'MODBUS_WRITE_FAILED';
       return this.emitReply(command, 'FAILED', reason, `${route.channel}:pulse(${duration}ms)`, 'NOT_APPLIED');
@@ -373,11 +488,118 @@ export class SongyaxuanCommandExecutor {
     return this.emitReply(command, 'EXECUTED', null, `${route.channel}:pulse(${duration}ms)`, `${route.channel}:pulse(${duration}ms)->0`);
   }
 
-  private resolveUnitCode(command: DownlinkCommandEnvelope): UnitCoilPlan['unitCode'] | null {
+  private async runInitialize(): Promise<void> {
+    const loaded = await this.options.stateStore?.load();
+    if (loaded) {
+      if (typeof loaded.lastSequence === 'number' && Number.isSafeInteger(loaded.lastSequence) && loaded.lastSequence > this.uplinkSeq) {
+        this.uplinkSeq = loaded.lastSequence;
+      }
+      for (const [deviceId, fence] of Object.entries(loaded.lastFenceByDevice ?? {})) {
+        if (typeof fence === 'number' && Number.isInteger(fence) && fence >= 1) {
+          const existing = this.lastFenceByDevice.get(deviceId) ?? 0;
+          if (fence > existing) this.lastFenceByDevice.set(deviceId, fence);
+        }
+      }
+      for (const commandId of loaded.executedCommandIds ?? []) {
+        if (typeof commandId === 'string' && commandId.length > 0) {
+          this.recordExecutedCommandId(commandId);
+        }
+      }
+      for (const coil of loaded.pendingPulseCoils ?? []) {
+        if (typeof coil === 'number' && PULSE_COIL_SET.has(coil)) {
+          this.pendingPulseCoils.add(coil);
+        }
+      }
+    }
+
+    const recoveredPending = new Set(this.pendingPulseCoils);
+    const resetPoints: UplinkPoint[] = [];
+    const clearedRecoveredLabels: string[] = [];
+
+    for (const { coil, channel, unitCode } of PULSE_COIL_DESCRIPTORS) {
+      try {
+        await this.resetPulseCoilWithRetry(coil);
+        this.pendingPulseCoils.delete(coil);
+        resetPoints.push({ code: channel, value: 0, quality: 0 });
+        if (recoveredPending.has(coil)) {
+          clearedRecoveredLabels.push(`${channel}(coil=${coil})`);
+        }
+      } catch (err) {
+        this.pendingPulseCoils.add(coil);
+        this.reportDiagnostic({
+          level: 'error',
+          code: 'PULSE_RESET_FAILED',
+          unitCode,
+          message: `startup failed to reset pulse coil ${channel}(coil=${coil}) to 0 after ${PULSE_RESET_ATTEMPTS} attempts: ${errorText(err)}`,
+        });
+      }
+    }
+
+    if (clearedRecoveredLabels.length > 0) {
+      this.reportDiagnostic({
+        level: 'warn',
+        code: 'STARTUP_PENDING_PULSE_RESET',
+        message: `cleared pending pulse coils on startup: ${clearedRecoveredLabels.join(', ')}`,
+      });
+    }
+
+    await this.persistState();
+    if (resetPoints.length > 0) {
+      await this.emitTelemetryEntries([
+        { deviceId: 'et1010', deviceTimestamp: this.nowMs(), points: resetPoints },
+      ]);
+    }
+  }
+
+  private commitCommandAccepted(command: DownlinkCommandEnvelope): void {
+    this.lastFenceByDevice.set(command.deviceId, command.executionFence);
+    this.recordExecutedCommandId(command.commandId);
+  }
+
+  private recordExecutedCommandId(commandId: string): void {
+    if (this.executedCommandIds.has(commandId)) return;
+    this.executedCommandIds.add(commandId);
+    while (this.executedCommandIds.size > MAX_EXECUTED_COMMAND_IDS) {
+      const oldest = this.executedCommandIds.values().next().value;
+      if (oldest === undefined) break;
+      this.executedCommandIds.delete(oldest);
+    }
+  }
+
+  private snapshotState(): ExecutorPersistedState {
+    return {
+      lastSequence: this.uplinkSeq,
+      lastFenceByDevice: Object.fromEntries(this.lastFenceByDevice.entries()),
+      executedCommandIds: [...this.executedCommandIds],
+      pendingPulseCoils: [...this.pendingPulseCoils].sort((a, b) => a - b),
+    };
+  }
+
+  private persistState(): Promise<void> {
+    const store = this.options.stateStore;
+    if (!store) return Promise.resolve();
+    const writeTask = this.persistChain.then(() => store.save(this.snapshotState()));
+    this.persistChain = writeTask.catch(() => undefined);
+    return writeTask;
+  }
+
+  private isAbortUnitSequence(command: DownlinkCommandEnvelope): boolean {
+    return command.actuationMode === 'ABORT_UNIT_SEQUENCE' || command.commandCode === 'ABORT_UNIT_SEQUENCE';
+  }
+
+  private resolveUnitCode(command: DownlinkCommandEnvelope, allowAbortMode: boolean): UnitCoilPlan['unitCode'] | null {
     const inferred = CHILLER_UNIT_BY_DEVICE.get(command.deviceId) ?? null;
     if (!inferred) return null;
     if (command.channel && command.channel !== inferred) return null;
-    if (command.actuationMode && command.actuationMode !== 'UNIT_SEQUENCE') return null;
+    if (command.actuationMode) {
+      if (allowAbortMode) {
+        if (command.actuationMode !== 'ABORT_UNIT_SEQUENCE' && command.actuationMode !== 'UNIT_SEQUENCE') {
+          return null;
+        }
+      } else if (command.actuationMode !== 'UNIT_SEQUENCE') {
+        return null;
+      }
+    }
     return inferred;
   }
 
@@ -399,26 +621,88 @@ export class SongyaxuanCommandExecutor {
     return true;
   }
 
-  private async writeCoil(coilAddress: number, value: 0 | 1): Promise<void> {
-    await this.options.coilWriter.writeCoil(ET1010_UNIT_ID, coilAddress, value);
-    this.knownCoilStates.set(coilAddress, value);
+  private async writeCoil(coilAddress: number, value: 0 | 1, priority = BUS_PRIORITY_NORMAL): Promise<void> {
+    const run = async () => {
+      await this.options.coilWriter.writeCoil(ET1010_UNIT_ID, coilAddress, value);
+      this.knownCoilStates.set(coilAddress, value);
+    };
+    if (this.options.busLock) {
+      await this.options.busLock.runExclusive(priority, run);
+      return;
+    }
+    await run();
   }
 
-  private async executePulse(coil: number, channel: string, durationMs: number, signal?: AbortSignal): Promise<void> {
+  private async readCoil(coilAddress: number): Promise<0 | 1> {
+    const reader = this.options.coilReader;
+    if (!reader) return this.knownCoilStates.get(coilAddress) ?? 0;
+    const run = async () => {
+      const state = await reader(coilAddress);
+      this.knownCoilStates.set(coilAddress, state);
+      return state;
+    };
+    return this.options.busLock ? this.options.busLock.runExclusive(BUS_PRIORITY_NORMAL, run) : run();
+  }
+
+  private async resetPulseCoilWithRetry(coil: number): Promise<void> {
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= PULSE_RESET_ATTEMPTS; attempt += 1) {
+      try {
+        await this.writeCoil(coil, 0, BUS_PRIORITY_PULSE_RESET);
+        return;
+      } catch (err) {
+        lastError = err;
+        if (attempt < PULSE_RESET_ATTEMPTS) {
+          await this.sleepMs(PULSE_RESET_BACKOFF_MS * attempt);
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  private async executePulse(
+    coil: number,
+    channel: string,
+    durationMs: number,
+    signal?: AbortSignal,
+    context?: { unitCode?: UnitCoilPlan['unitCode']; commandId?: string },
+  ): Promise<void> {
+    this.pendingPulseCoils.add(coil);
+    await this.persistState();
     await this.writeCoil(coil, 1);
     let resetError: unknown = null;
     try {
       await this.sleepMs(durationMs, signal);
     } finally {
       try {
-        await this.writeCoil(coil, 0);
+        await this.resetPulseCoilWithRetry(coil);
+        this.pendingPulseCoils.delete(coil);
       } catch (err) {
         resetError = err;
       }
     }
     if (resetError !== null) {
+      try {
+        await this.persistState();
+      } catch (persistErr) {
+        this.reportDiagnostic({
+          level: 'error',
+          code: 'STATE_PERSIST_FAILED',
+          unitCode: context?.unitCode,
+          commandId: context?.commandId,
+          message: `failed to persist pending pulse coil ${channel}(coil=${coil}) after reset failure: ${errorText(persistErr)}`,
+        });
+      }
+      this.reportDiagnostic({
+        level: 'error',
+        code: 'PULSE_RESET_FAILED',
+        unitCode: context?.unitCode,
+        commandId: context?.commandId,
+        message: `failed to reset pulse coil ${channel}(coil=${coil}) to 0 after ${PULSE_RESET_ATTEMPTS} attempts: ${errorText(resetError)}`,
+      });
       throw new PulseResetError(resetError);
     }
+    await this.persistState();
     await this.emitTelemetryEntries([
       { deviceId: 'et1010', deviceTimestamp: this.nowMs(), points: [{ code: channel, value: 0, quality: 0 }] },
     ]);
@@ -432,11 +716,13 @@ export class SongyaxuanCommandExecutor {
     let writeFailures = 0;
     for (const { coil } of ALL_DO_COIL_ENTRIES) {
       try {
-        await this.writeCoil(coil, 0);
+        await this.writeCoil(coil, 0, BUS_PRIORITY_PULSE_RESET);
+        this.pendingPulseCoils.delete(coil);
       } catch {
         writeFailures += 1;
       }
     }
+    await this.persistState();
 
     const now = this.nowMs();
     const controllerEntries: UplinkDeviceEntry[] = ALL_AUX_CONTROLLERS
@@ -468,10 +754,12 @@ export class SongyaxuanCommandExecutor {
   private async executeUnitSequence(command: DownlinkCommandEnvelope, plan: UnitCoilPlan): Promise<CommandReplyEnvelope> {
     const controller = new AbortController();
     this.activeSequenceAborts.set(plan.unitCode, controller);
-    const pulseMs = command.pulseDurationMs && command.pulseDurationMs > 0 ? command.pulseDurationMs : this.pulseDurationMs;
+    const pulseMs = typeof command.pulseDurationMs === 'number' && Number.isFinite(command.pulseDurationMs) && command.pulseDurationMs > 0
+      ? command.pulseDurationMs
+      : this.pulseDurationMs;
     const isStart = command.commandCode === 'START_UNIT_SEQUENCE';
     const checkAborted = () => {
-      if (controller.signal.aborted) throw new SequenceAbortError('SEQUENCE_ABORTED_BY_OPERATOR');
+      if (controller.signal.aborted) throw new SequenceAbortError(abortReasonText(controller.signal));
     };
     const writeStep = async (part: { deviceId: string; channel: string; coil: number }, value: 0 | 1) => {
       checkAborted();
@@ -500,16 +788,30 @@ export class SongyaxuanCommandExecutor {
           const allClosed = await this.verifyRequiredCoilsClosed(plan, command.commandId, controller.signal);
           if (!allClosed) return;
           checkAborted();
-          await this.executePulse(plan.chillerStart.coil, plan.chillerStart.channel, pulseMs, controller.signal);
+          await this.executePulse(
+            plan.chillerStart.coil,
+            plan.chillerStart.channel,
+            pulseMs,
+            controller.signal,
+            { unitCode: plan.unitCode, commandId: command.commandId },
+          );
         });
         return this.emitReply(command, 'EXECUTED', null, command.commandCode, `${plan.unitCode}:sequence-accepted`);
       }
 
       checkAborted();
-      await this.executePulse(plan.chillerStop.coil, plan.chillerStop.channel, pulseMs, controller.signal);
+      await this.executePulse(
+        plan.chillerStop.coil,
+        plan.chillerStop.channel,
+        pulseMs,
+        controller.signal,
+        { unitCode: plan.unitCode, commandId: command.commandId },
+      );
       checkAborted();
       this.launchSequenceTask(plan.unitCode, command.commandId, controller, async () => {
         await waitStep(this.sequenceTimings.chillerStopCoastDownMs);
+        const stopConfirmed = await this.confirmChillerStoppedBeforeAuxShutdown(plan, command.commandId, controller.signal);
+        if (!stopConfirmed) return;
         await writeStep(plan.tower, 0);
         await waitStep(this.sequenceTimings.auxiliaryStopStepMs);
         await writeStep(plan.cwp, 0);
@@ -531,6 +833,44 @@ export class SongyaxuanCommandExecutor {
     }
   }
 
+  private async confirmChillerStoppedBeforeAuxShutdown(
+    plan: UnitCoilPlan,
+    commandId: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const reader = this.options.chillerPowerReader;
+    if (!reader) return true;
+
+    const readPower = async (): Promise<number | null> => {
+      if (signal.aborted) throw new SequenceAbortError(abortReasonText(signal));
+      const value = await reader(plan.unitCode);
+      if (signal.aborted) throw new SequenceAbortError(abortReasonText(signal));
+      return typeof value === 'number' && Number.isFinite(value) ? value : null;
+    };
+
+    let power = await readPower();
+    if (power === null || power <= this.chillerStopPowerKw) return true;
+
+    for (let recheck = 0; recheck < CHILLER_STOP_RECHECK_LIMIT; recheck += 1) {
+      await this.sleepMs(this.sequenceTimings.auxiliaryStopStepMs, signal);
+      if (signal.aborted) throw new SequenceAbortError(abortReasonText(signal));
+      const nextPower = await readPower();
+      if (nextPower !== null) {
+        power = nextPower;
+        if (power <= this.chillerStopPowerKw) return true;
+      }
+    }
+
+    this.reportDiagnostic({
+      level: 'error',
+      code: 'CHILLER_STOP_UNCONFIRMED_AUX_HELD',
+      unitCode: plan.unitCode,
+      commandId,
+      message: `${plan.unitCode}: aborted auxiliary shutdown because chiller power remained ${power} kW (> ${this.chillerStopPowerKw} kW)`,
+    });
+    return false;
+  }
+
   private async verifyRequiredCoilsClosed(
     plan: UnitCoilPlan,
     commandId: string,
@@ -539,15 +879,9 @@ export class SongyaxuanCommandExecutor {
     const required = [plan.chwp, plan.cwp, plan.tower];
     const openParts: Array<{ deviceId: string; channel: string; coil: number }> = [];
     for (const part of required) {
-      if (signal.aborted) throw new SequenceAbortError('SEQUENCE_ABORTED_BY_OPERATOR');
-      let state: 0 | 1;
-      if (this.options.coilReader) {
-        state = await this.options.coilReader(part.coil);
-        this.knownCoilStates.set(part.coil, state);
-      } else {
-        state = this.knownCoilStates.get(part.coil) ?? 0;
-      }
-      if (signal.aborted) throw new SequenceAbortError('SEQUENCE_ABORTED_BY_OPERATOR');
+      if (signal.aborted) throw new SequenceAbortError(abortReasonText(signal));
+      const state = await this.readCoil(part.coil);
+      if (signal.aborted) throw new SequenceAbortError(abortReasonText(signal));
       if (state !== 1) {
         openParts.push(part);
       }
@@ -591,13 +925,15 @@ export class SongyaxuanCommandExecutor {
         await runTail();
       } catch (error) {
         if (error instanceof SequenceAbortError) return;
-        this.reportDiagnostic({
-          level: 'error',
-          code: error instanceof PulseResetError ? 'PULSE_RESET_FAILED' : 'SEQUENCE_STEP_FAILED',
-          unitCode,
-          commandId,
-          message: `${unitCode}: background sequence failed: ${error instanceof Error ? error.message : String(error)}`,
-        });
+        if (!(error instanceof PulseResetError)) {
+          this.reportDiagnostic({
+            level: 'error',
+            code: 'SEQUENCE_STEP_FAILED',
+            unitCode,
+            commandId,
+            message: `${unitCode}: background sequence failed: ${errorText(error)}`,
+          });
+        }
       } finally {
         if (this.activeSequenceAborts.get(unitCode) === controller) {
           this.activeSequenceAborts.delete(unitCode);
@@ -622,15 +958,17 @@ export class SongyaxuanCommandExecutor {
   private async emitTelemetryEntries(devices: UplinkDeviceEntry[]): Promise<void> {
     if (!this.options.publishTelemetry) return;
     const now = this.nowMs();
-    this.uplinkSeq += 1;
+    const nextSequence = Math.max(now * 1000, this.uplinkSeq + 1);
+    this.uplinkSeq = nextSequence;
+    await this.persistState();
     await this.options.publishTelemetry({
       topic: TELEMETRY_TOPIC,
       payload: {
         schemaVersion: '2.0',
         gatewayId: SONGYAXUAN_GATEWAY_ID,
         messageId: this.uuidv7(),
-        eventTime: now,
-        sequence: this.uplinkSeq,
+        timestamp: now,
+        sequence: nextSequence,
         replay: false,
         payload: { devices },
       },

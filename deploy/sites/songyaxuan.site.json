@@ -952,7 +952,8 @@
           "name": "运行状态",
           "pointType": "TELEMETRY",
           "valueType": "STRING",
-          "address": "网关判断：总冷冻水流量 > 10 m³/h 为运行"
+          "address": "网关判断：总冷冻水流量 > 10 m³/h 为运行",
+          "qualityProfile": "control-run-state"
         },
         {
           "code": "flow_rate",
@@ -1085,7 +1086,8 @@
             "interlocks": [
               { "device": "ctrl-chwp-1", "point": "run_state", "expected": "RUNNING", "reason": "1# 冻水泵需先处于运行状态，方可脉冲开启 1# 主机" },
               { "device": "ctrl-cwp-1", "point": "run_state", "expected": "RUNNING", "reason": "1# 冷却泵需先处于运行状态，方可脉冲开启 1# 主机" },
-              { "device": "ctrl-tower-1", "point": "run_state", "expected": "RUNNING", "reason": "1# 冷却塔风机需先处于运行状态，方可脉冲开启 1# 主机" }
+              { "device": "ctrl-tower-1", "point": "run_state", "expected": "RUNNING", "reason": "1# 冷却塔风机需先处于运行状态，方可脉冲开启 1# 主机" },
+              { "device": "chwp-main", "point": "run_state", "expected": "RUNNING", "reason": "冷冻水总管流量不足，禁止脉冲开启主机" }
             ]
           }
         },
@@ -1154,7 +1156,8 @@
           "name": "1# 冻水泵运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "UID31 地址 0 (u11)"
+          "address": "UID31 地址 0 (u11)",
+          "qualityProfile": "control-run-state"
         },
         {
           "code": "start",
@@ -1207,7 +1210,8 @@
           "name": "1# 冷却泵运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "UID31 地址 1 (u12)"
+          "address": "UID31 地址 1 (u12)",
+          "qualityProfile": "control-run-state"
         },
         {
           "code": "start",
@@ -1260,7 +1264,8 @@
           "name": "1# 冷却塔运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "UID31 地址 2 (u13)"
+          "address": "UID31 地址 2 (u13)",
+          "qualityProfile": "control-run-state"
         },
         {
           "code": "start",
@@ -1333,7 +1338,8 @@
             "interlocks": [
               { "device": "ctrl-chwp-2", "point": "run_state", "expected": "RUNNING", "reason": "2# 冻水泵需先处于运行状态，方可脉冲开启 2# 主机" },
               { "device": "ctrl-cwp-2", "point": "run_state", "expected": "RUNNING", "reason": "2# 冷却泵需先处于运行状态，方可脉冲开启 2# 主机" },
-              { "device": "ctrl-tower-2", "point": "run_state", "expected": "RUNNING", "reason": "2# 冷却塔风机需先处于运行状态，方可脉冲开启 2# 主机" }
+              { "device": "ctrl-tower-2", "point": "run_state", "expected": "RUNNING", "reason": "2# 冷却塔风机需先处于运行状态，方可脉冲开启 2# 主机" },
+              { "device": "chwp-main", "point": "run_state", "expected": "RUNNING", "reason": "冷冻水总管流量不足，禁止脉冲开启主机" }
             ]
           }
         },
@@ -1402,7 +1408,8 @@
           "name": "2# 冻水泵运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "UID31 地址 4 (u21)"
+          "address": "UID31 地址 4 (u21)",
+          "qualityProfile": "control-run-state"
         },
         {
           "code": "start",
@@ -1455,7 +1462,8 @@
           "name": "2# 冷却泵运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "UID31 地址 5 (u22)"
+          "address": "UID31 地址 5 (u22)",
+          "qualityProfile": "control-run-state"
         },
         {
           "code": "start",
@@ -1508,7 +1516,8 @@
           "name": "2# 冷却塔运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "UID31 地址 6 (u23)"
+          "address": "UID31 地址 6 (u23)",
+          "qualityProfile": "control-run-state"
         },
         {
           "code": "start",
@@ -1581,7 +1590,8 @@
             "interlocks": [
               { "device": "ctrl-chwp-3", "point": "run_state", "expected": "RUNNING", "reason": "3# 冻水泵需先处于运行状态，方可脉冲开启 3# 主机" },
               { "device": "ctrl-cwp-3", "point": "run_state", "expected": "RUNNING", "reason": "3# 冷却泵需先处于运行状态，方可脉冲开启 3# 主机" },
-              { "device": "ctrl-tower-3", "point": "run_state", "expected": "RUNNING", "reason": "3# 冷却塔风机需先处于运行状态，方可脉冲开启 3# 主机" }
+              { "device": "ctrl-tower-3", "point": "run_state", "expected": "RUNNING", "reason": "3# 冷却塔风机需先处于运行状态，方可脉冲开启 3# 主机" },
+              { "device": "chwp-main", "point": "run_state", "expected": "RUNNING", "reason": "冷冻水总管流量不足，禁止脉冲开启主机" }
             ]
           }
         },
@@ -1650,7 +1660,8 @@
           "name": "3# 冻水泵运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "UID31 地址 8 (u31)"
+          "address": "UID31 地址 8 (u31)",
+          "qualityProfile": "control-run-state"
         },
         {
           "code": "start",
@@ -1703,7 +1714,8 @@
           "name": "3# 冷却泵运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "UID31 地址 9 (u32)"
+          "address": "UID31 地址 9 (u32)",
+          "qualityProfile": "control-run-state"
         },
         {
           "code": "start",
@@ -1756,7 +1768,8 @@
           "name": "3# 冷却塔运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "UID31 地址 10 (u33)"
+          "address": "UID31 地址 10 (u33)",
+          "qualityProfile": "control-run-state"
         },
         {
           "code": "start",
@@ -1829,7 +1842,8 @@
             "interlocks": [
               { "device": "ctrl-chwp-4", "point": "run_state", "expected": "RUNNING", "reason": "4# 冻水泵需先处于运行状态，方可脉冲开启 4# 主机" },
               { "device": "ctrl-cwp-4", "point": "run_state", "expected": "RUNNING", "reason": "4# 冷却泵需先处于运行状态，方可脉冲开启 4# 主机" },
-              { "device": "ctrl-tower-4", "point": "run_state", "expected": "RUNNING", "reason": "4# 冷却塔风机需先处于运行状态，方可脉冲开启 4# 主机" }
+              { "device": "ctrl-tower-4", "point": "run_state", "expected": "RUNNING", "reason": "4# 冷却塔风机需先处于运行状态，方可脉冲开启 4# 主机" },
+              { "device": "chwp-main", "point": "run_state", "expected": "RUNNING", "reason": "冷冻水总管流量不足，禁止脉冲开启主机" }
             ]
           }
         },
@@ -1898,7 +1912,8 @@
           "name": "4# 冻水泵运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "UID31 地址 12 (u41)"
+          "address": "UID31 地址 12 (u41)",
+          "qualityProfile": "control-run-state"
         },
         {
           "code": "start",
@@ -1951,7 +1966,8 @@
           "name": "4# 冷却泵运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "UID31 地址 13 (u42)"
+          "address": "UID31 地址 13 (u42)",
+          "qualityProfile": "control-run-state"
         },
         {
           "code": "start",
@@ -2004,7 +2020,8 @@
           "name": "4# 冷却塔运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "UID31 地址 14 (u43)"
+          "address": "UID31 地址 14 (u43)",
+          "qualityProfile": "control-run-state"
         },
         {
           "code": "start",
@@ -2575,6 +2592,9 @@
           "point": "t18"
         }
       ]
+    },
+    "control-run-state": {
+      "staleAfterSeconds": 120
     }
   },
   "nameplateCatalog": {
