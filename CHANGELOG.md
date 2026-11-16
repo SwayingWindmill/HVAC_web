@@ -9,6 +9,9 @@
 
 #### 新增
 
+- 系统管理「用户与角色」页面（`/system?tab=users`）新增「两步验证」列，并在管理员与运维主管提交高风险指令前提前预警（#831）：
+  - `services/identity-service`（`DirectoryUser`）与网关成员接口（`GET /api/v1/iam/members`）仅返回每个成员是否已开通认证器两步验证的布尔状态 `mfaEnabled`（不返回密钥、密文或恢复码等敏感信息），同步更新 OpenAPI 与生成客户端 `UserAdminMember`。
+  - 用户列表展示「已开通 / 未开通」，对启用中且拥有管理员或运维主管角色但未开通两步验证的成员标出 `▲ 未开通` 与「提交不了高风险指令」，停用账号时自动撤去提醒。
 - 网页端「集成管理」新增「无线集中器」管理页签（`/settings/integrations?view=concentrators`）：
   - 在 `IntegrationsWorkspace`、`Gateways` 客户端与纯模型（`integrations-model.ts`）接入 `getGatewayConcentratorStatus` / `updateGatewayConcentratorParams` / `getGatewayConcentratorEids` / `updateGatewayConcentratorEids`，提供网关与 RS485 从站选择（拦截受保护从站 `{2, 3, 4, 5, 10, 31}`）、实时探头通道状态与低电压分级告警（`< 2600 mV` / `< 2450 mV`）、IME 安全的通道搜索与侧边详情抽屉。
   - 提供 14 项串口与 LoRa 射频参数编辑器、每页不超过 `50` 行的 200 槽 EID 分页映射表（支持区间批量填充、非零重复 EID 冲突拦截）、带变更前后对比与必填原因的 Flash 写入确认弹窗（`0x9C41 = 6 / 8`）、近期下发变更审计记录以及 `device.write` 只读保护。

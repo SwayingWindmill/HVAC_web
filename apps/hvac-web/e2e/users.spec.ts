@@ -15,7 +15,12 @@ test('an administrator creates a user with a role on one site', async ({ page, g
   await page.goto('/system?tab=users');
   const users = page.getByRole('table', { name: '用户与角色' });
   await expect(users).toContainText('周敏');
-  await expect(users.getByRole('row', { name: /周敏/ })).toContainText('运维人员中央机房');
+  await expect(users.getByRole('row', { name: /值班工程师/ })).toContainText('已开通');
+  await expect(users.getByRole('row', { name: /值班工程师/ })).not.toContainText('提交不了高风险指令');
+  const zhouMin = users.getByRole('row', { name: /周敏/ });
+  await expect(zhouMin).toContainText('运维人员中央机房');
+  await expect(zhouMin).toContainText('未开通');
+  await expect(zhouMin).not.toContainText('提交不了高风险指令');
 
   await page.getByRole('button', { name: '新建用户', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '新建用户' });
@@ -68,4 +73,35 @@ test('a signed-in user changes their own password from the user menu', async ({ 
   await dialog.getByLabel('当前密码').fill('current-secret');
   await dialog.getByRole('button', { name: '修改密码', exact: true }).click();
   await expect(dialog).toBeHidden();
+});
+
+test('users who can submit high-risk commands without two-factor verification show a warning until disabled', async ({ page }) => {
+  await signInAsAdministrator(page);
+  await page.goto('/system?tab=users');
+  const users = page.getByRole('table', { name: '用户与角色' });
+
+  await page.getByRole('button', { name: '新建用户', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新建用户' });
+  await dialog.getByLabel('姓名').fill('陈强');
+  await dialog.getByLabel('用户名').fill('chen.qiang');
+  await dialog.getByLabel('邮箱').fill('chen.qiang@example.invalid');
+  await dialog.getByLabel('登录密码').fill('night-shift-chiller');
+  await dialog.getByRole('combobox', { name: '角色' }).click();
+  await page.getByRole('option', { name: '运维主管', exact: true }).click();
+  await dialog.getByRole('combobox', { name: '站点' }).click();
+  await page.getByRole('option', { name: '中央机房', exact: true }).click();
+  await dialog.getByRole('button', { name: '创建', exact: true }).click();
+  await expect(dialog).toBeHidden();
+
+  const supervisorRow = users.getByRole('row', { name: /陈强/ });
+  await expect(supervisorRow).toContainText('运维主管中央机房');
+  await expect(supervisorRow).toContainText('▲');
+  await expect(supervisorRow).toContainText('未开通');
+  await expect(supervisorRow).toContainText('提交不了高风险指令');
+
+  await users.getByRole('button', { name: '陈强 的操作' }).click();
+  await page.getByRole('menuitem', { name: '停用' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: '停用', exact: true }).click();
+  await expect(supervisorRow).toContainText('已停用');
+  await expect(supervisorRow).not.toContainText('提交不了高风险指令');
 });
