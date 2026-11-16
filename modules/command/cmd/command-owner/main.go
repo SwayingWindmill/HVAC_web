@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -29,14 +30,26 @@ func main() {
 		Service: "command-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 2048, ExportTimeout: 500 * time.Millisecond,
 	})
 
+	certFiles := workloadtls.CertificateFiles{
+		CertificatePath: requiredEnv("COMMAND_TLS_CERT"),
+		PrivateKeyPath:  requiredEnv("COMMAND_TLS_KEY"),
+	}
+	clientCAPath := requiredEnv("COMMAND_CLIENT_CA")
 	serverTLSConfig, err := workloadtls.NewServerTLSConfig(workloadtls.ServerConfig{
-		CertificateFiles: workloadtls.CertificateFiles{
-			CertificatePath: requiredEnv("COMMAND_TLS_CERT"),
-			PrivateKeyPath:  requiredEnv("COMMAND_TLS_KEY"),
-		},
-		ClientCAPath: requiredEnv("COMMAND_CLIENT_CA"),
+		CertificateFiles: certFiles,
+		ClientCAPath:     clientCAPath,
 	})
 	if err != nil {
+		logger.Error("command_tls_configuration_invalid", "error_code", "COMMAND_TLS_CONFIGURATION_INVALID")
+		os.Exit(1)
+	}
+	tlsCert, err := tls.LoadX509KeyPair(certFiles.CertificatePath, certFiles.PrivateKeyPath)
+	if err != nil {
+		logger.Error("command_tls_configuration_invalid", "error_code", "COMMAND_TLS_CONFIGURATION_INVALID")
+		os.Exit(1)
+	}
+	delegationSigner, ok := tlsCert.PrivateKey.(crypto.Signer)
+	if !ok {
 		logger.Error("command_tls_configuration_invalid", "error_code", "COMMAND_TLS_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
@@ -72,32 +85,83 @@ func main() {
 		os.Exit(1)
 	}
 	gatewaySPIFFE := envOr("COMMAND_GATEWAY_SPIFFE", "spiffe://hvac.local/platform-gateway")
+	commandServiceSPIFFE := envOr("COMMAND_WORKLOAD_SPIFFE", "spiffe://hvac.local/command-service")
+	grantIssuer := envOr("COMMAND_GRANT_ISSUER", "spiffe://hvac.local/iam-service")
+	grantAudience := envOr("COMMAND_GRANT_AUDIENCE", "command-service")
+	gatewayReadAudience := envOr("COMMAND_GATEWAY_READ_AUDIENCE", "command-service")
+	useChecker := func(claims commandauth.GrantClaims) (commandauth.UseStatus, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return store.ConsumeCommandGrant(ctx, claims, policyRevision, revocationRevision)
+	}
+	adapters, err := commandservice.NewWorkloadAdaptersFromEnv(commandservice.WorkloadEnvConfig{
+		CertificateFiles:      certFiles,
+		DelegationSigner:      delegationSigner,
+		DefaultServerCA:       clientCAPath,
+		CommandServiceSPIFFE:  commandServiceSPIFFE,
+		PolicyRevision:        policyRevision,
+		CommandGrantPublicKey: commandGrantPublicKey,
+	})
+	if err != nil {
+		logger.Error("command_adapters_configuration_invalid", "error_code", "COMMAND_ADAPTERS_CONFIGURATION_INVALID")
+		os.Exit(1)
+	}
+	authority, err := commandservice.NewControlAuthority(commandservice.ControlAuthorityConfig{
+		Store:                  store,
+		Runtime:                store,
+		Twin:                   adapters,
+		Live:                   adapters,
+		IAM:                    adapters,
+		CommandGrantPublicKey:  commandGrantPublicKey,
+		CommandGrantIssuer:     grantIssuer,
+		CommandGrantPresenter:  commandServiceSPIFFE,
+		CommandGrantAudience:   grantAudience,
+		CommandGrantUseChecker: useChecker,
+	})
+	if err != nil {
+		logger.Error("command_authority_configuration_invalid", "error_code", "COMMAND_AUTHORITY_CONFIGURATION_INVALID")
+		os.Exit(1)
+	}
 
 	commandHandler, err := commandservice.NewHTTPHandler(commandservice.HTTPConfig{
 		Authority:                  store,
 		CommandGrantPublicKey:      commandGrantPublicKey,
-		CommandGrantIssuer:         envOr("COMMAND_GRANT_ISSUER", "spiffe://hvac.local/iam-service"),
+		CommandGrantIssuer:         grantIssuer,
 		GatewaySPIFFE:              gatewaySPIFFE,
-		CommandGrantAudience:       envOr("COMMAND_GRANT_AUDIENCE", "command-service"),
+		CommandGrantAudience:       grantAudience,
 		GatewayDelegationPublicKey: gatewayDelegationPublicKey,
-		GatewayReadAudience:        envOr("COMMAND_GATEWAY_READ_AUDIENCE", "command-service"),
-		CommandGrantUseChecker: func(claims commandauth.GrantClaims) (commandauth.UseStatus, error) {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			return store.ConsumeCommandGrant(ctx, claims, policyRevision, revocationRevision)
-		},
+		GatewayReadAudience:        gatewayReadAudience,
+		CommandGrantUseChecker:     useChecker,
 	})
 	if err != nil {
 		logger.Error("command_http_configuration_invalid", "error_code", "COMMAND_HTTP_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
-	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(runtimeHTTPConfig(store, telemetry.Metrics))
+	operatorHandler, err := commandservice.NewOperatorHTTPHandler(commandservice.OperatorHTTPConfig{
+		Authority:                  authority,
+		GatewayDelegationPublicKey: gatewayDelegationPublicKey,
+		GatewaySPIFFE:              gatewaySPIFFE,
+		GatewayAudience:            gatewayReadAudience,
+	})
+	if err != nil {
+		logger.Error("command_operator_http_configuration_invalid", "error_code", "COMMAND_OPERATOR_HTTP_CONFIGURATION_INVALID")
+		os.Exit(1)
+	}
+	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(runtimeHTTPConfig(authority, telemetry.Metrics))
 	if err != nil {
 		logger.Error("command_runtime_configuration_invalid", "error_code", "COMMAND_RUNTIME_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
 
 	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == commandservice.InternalOperatorPrefix || strings.HasPrefix(request.URL.Path, commandservice.InternalOperatorPrefix+"/") {
+			if peerSPIFFE(request) != gatewaySPIFFE {
+				writeProblem(writer, http.StatusForbidden, "COMMAND_GATEWAY_WORKLOAD_FORBIDDEN")
+				return
+			}
+			operatorHandler.ServeHTTP(writer, request)
+			return
+		}
 		if request.URL.Path == commandservice.InternalCommandsPath || strings.HasPrefix(request.URL.Path, commandservice.InternalCommandsPath+"/") {
 			if peerSPIFFE(request) != gatewaySPIFFE {
 				writeProblem(writer, http.StatusForbidden, "COMMAND_GATEWAY_WORKLOAD_FORBIDDEN")
@@ -169,6 +233,14 @@ func commandObservabilityRoute(request *http.Request) string {
 	switch path {
 	case commandservice.InternalCommandsPath:
 		return "commands.create"
+	case commandservice.InternalOperatorCommandsPath:
+		if request.Method == http.MethodGet {
+			return "commands.get"
+		}
+		if request.Method == http.MethodPost {
+			return "commands.create"
+		}
+		return "unknown"
 	case commandservice.InternalDispatchClaimPath:
 		return "dispatch.claim"
 	case commandservice.InternalDispatchResolvePath:
@@ -187,6 +259,31 @@ func commandObservabilityRoute(request *http.Request) string {
 			return "commands.approve"
 		}
 		return "commands.get"
+	}
+	if strings.HasPrefix(path, commandservice.InternalOperatorCommandsPath+"/") {
+		switch {
+		case strings.HasSuffix(path, "/approve"):
+			return "commands.approve"
+		case strings.HasSuffix(path, "/reconcile"):
+			return "commands.reconcile"
+		case strings.HasSuffix(path, "/cancel"):
+			return "commands.cancel"
+		default:
+			return "commands.get"
+		}
+	}
+	if strings.HasPrefix(path, commandservice.InternalOperatorPrefix+"/sites/") {
+		switch {
+		case strings.HasSuffix(path, "/control-state"):
+			return "control.state"
+		case strings.HasSuffix(path, "/control-mode"):
+			return "control.mode"
+		case strings.HasSuffix(path, "/control-shutdown"):
+			return "control.shutdown"
+		}
+	}
+	if strings.HasPrefix(path, commandservice.InternalOperatorPrefix+"/assets/") && strings.HasSuffix(path, "/control-lock") {
+		return "control.lock"
 	}
 	return "unknown"
 }

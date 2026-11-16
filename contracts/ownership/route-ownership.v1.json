@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 48,
+  "registryRevision": 49,
   "routes": [
     {"method": "GET", "path": "/api/v1/sites/{siteId}/data-gaps", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "GET", "path": "/api/v1/iam/members", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
@@ -1787,9 +1787,9 @@
     {
       "method": "GET",
       "path": "/api/v1/sites/{siteId}/control-state",
-      "owner": "platform-core-service",
+      "owner": "command-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
+      "revision": 2,
       "rollout": {
         "mode": "all"
       },
@@ -1803,9 +1803,9 @@
     {
       "method": "PUT",
       "path": "/api/v1/sites/{siteId}/control-mode",
-      "owner": "platform-core-service",
+      "owner": "command-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
+      "revision": 2,
       "rollout": {
         "mode": "all"
       },
@@ -1819,9 +1819,9 @@
     {
       "method": "PUT",
       "path": "/api/v1/assets/{assetId}/control-lock",
-      "owner": "platform-core-service",
+      "owner": "command-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
+      "revision": 2,
       "rollout": {
         "mode": "all"
       },
@@ -1836,9 +1836,9 @@
     {
       "method": "POST",
       "path": "/api/v1/sites/{siteId}/control-shutdown",
-      "owner": "platform-core-service",
+      "owner": "command-service",
       "publicIngress": "platform-gateway",
-      "revision": 1,
+      "revision": 2,
       "rollout": {
         "mode": "all"
       },

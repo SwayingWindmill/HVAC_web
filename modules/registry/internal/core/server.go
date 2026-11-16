@@ -27,6 +27,7 @@ type ServerConfig struct {
 	GrantIssuer                       string
 	AllowedPresenterSPIFFE            string
 	AdditionalAllowedPresenterSPIFFEs []string
+	AllowedCommandServiceSPIFFE       string
 	Audience                          string
 	GrantStatus                       GrantStatusProvider
 	Logger                            *slog.Logger
@@ -35,17 +36,18 @@ type ServerConfig struct {
 }
 
 type server struct {
-	store                   RegistryStore
-	writer                  RegistryWriter
-	cursorCodec             *CursorCodec
-	grantPublicKey          crypto.PublicKey
-	grantIssuer             string
-	allowedPresenterSPIFFEs map[string]struct{}
-	audience                string
-	grantStatus             GrantStatusProvider
-	logger                  *slog.Logger
-	observability           *observability.Runtime
-	now                     func() time.Time
+	store                       RegistryStore
+	writer                      RegistryWriter
+	cursorCodec                 *CursorCodec
+	grantPublicKey              crypto.PublicKey
+	grantIssuer                 string
+	allowedPresenterSPIFFEs     map[string]struct{}
+	allowedCommandServiceSPIFFE string
+	audience                    string
+	grantStatus                 GrantStatusProvider
+	logger                      *slog.Logger
+	observability               *observability.Runtime
+	now                         func() time.Time
 }
 
 type registryRoute struct {
@@ -71,6 +73,12 @@ func NewHandler(config ServerConfig) http.Handler {
 		}
 		allowedPresenters[presenter] = struct{}{}
 	}
+	allowedCommandServiceSPIFFE := strings.TrimSpace(config.AllowedCommandServiceSPIFFE)
+	if allowedCommandServiceSPIFFE == "" {
+		allowedCommandServiceSPIFFE = "spiffe://hvac.local/command-service"
+	} else if !strings.HasPrefix(allowedCommandServiceSPIFFE, "spiffe://") {
+		panic("Core Registry allowed command service SPIFFE is invalid")
+	}
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -84,17 +92,18 @@ func NewHandler(config ServerConfig) http.Handler {
 		now = time.Now
 	}
 	return &server{
-		store:                   config.Store,
-		writer:                  config.Writer,
-		cursorCodec:             config.CursorCodec,
-		grantPublicKey:          config.GrantPublicKey,
-		grantIssuer:             config.GrantIssuer,
-		allowedPresenterSPIFFEs: allowedPresenters,
-		audience:                config.Audience,
-		grantStatus:             config.GrantStatus,
-		logger:                  logger,
-		observability:           telemetry,
-		now:                     now,
+		store:                       config.Store,
+		writer:                      config.Writer,
+		cursorCodec:                 config.CursorCodec,
+		grantPublicKey:              config.GrantPublicKey,
+		grantIssuer:                 config.GrantIssuer,
+		allowedPresenterSPIFFEs:     allowedPresenters,
+		allowedCommandServiceSPIFFE: allowedCommandServiceSPIFFE,
+		audience:                    config.Audience,
+		grantStatus:                 config.GrantStatus,
+		logger:                      logger,
+		observability:               telemetry,
+		now:                         now,
 	}
 }
 
@@ -102,7 +111,9 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	started := server.now()
 	route, routeOK := parseRegistryRoute(request.Method, request.URL.Path)
 	routeName := "unmatched"
-	if routeOK {
+	if request.URL.Path == CommandDispatchContextPath {
+		routeName = CommandDispatchContextPath
+	} else if routeOK {
 		routeName = route.template
 	}
 	ctx := server.observability.Tracer.ExtractHTTP(request.Context(), request.Header)
@@ -133,6 +144,28 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 			"trace_id", observability.TraceID(request.Context()),
 		)
 	}()
+
+	if request.URL.Path == CommandDispatchContextPath {
+		if request.Method != http.MethodGet {
+			statusCode = http.StatusMethodNotAllowed
+			writer.Header().Set("Allow", http.MethodGet)
+			writeProblem(writer, request, statusCode, "CORE_METHOD_NOT_ALLOWED", "The command dispatch context route only supports GET.", false)
+			return
+		}
+		if hasForgedIdentityHeader(request.Header) {
+			statusCode = http.StatusBadRequest
+			writeProblem(writer, request, statusCode, "CORE_FORGED_IDENTITY_HEADER", "Caller-supplied identity or business-scope headers are not accepted.", false)
+			return
+		}
+		peerSPIFFE, ok := verifiedPeerSPIFFE(request)
+		if !ok || peerSPIFFE != server.allowedCommandServiceSPIFFE {
+			statusCode = http.StatusUnauthorized
+			writeProblem(writer, request, statusCode, "CORE_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.", false)
+			return
+		}
+		statusCode = server.handleCommandDispatchContext(writer, request)
+		return
+	}
 
 	if !routeOK {
 		statusCode = http.StatusNotFound

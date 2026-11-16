@@ -679,3 +679,69 @@ func assertStringsEqual(t *testing.T, actual, expected []string) {
 		t.Fatalf("values = %#v, want %#v", actual, expected)
 	}
 }
+
+func TestIAMCommandAuthoritySPIFFEDelegationScope(t *testing.T) {
+	const commandServiceSPIFFE = "spiffe://hvac.local/command-service"
+	harness := newIAMHarnessWithConfig(t, func(config *iam.Config) {
+		config.CommandAuthoritySPIFFE = commandServiceSPIFFE
+	})
+	bundle, err := testpki.Generate("spiffe://hvac.local/iam-service", commandServiceSPIFFE, harness.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := tls.X509KeyPair(bundle.ClientCertPEM, bundle.ClientKeyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmdSigner, ok := pair.PrivateKey.(crypto.Signer)
+	if !ok {
+		t.Fatal("command service key is not a signer")
+	}
+	sendAsCmdService := func(path string, action string, body string) *httptest.ResponseRecorder {
+		claims := validIAMClaims(harness.now, "fixture-user", action)
+		claims.Issuer = commandServiceSPIFFE
+		claims.ExecutingService = commandServiceSPIFFE
+		delegation, signErr := identitycontext.SignDelegation(cmdSigner, claims)
+		if signErr != nil {
+			t.Fatal(signErr)
+		}
+		var req *http.Request
+		if body == "" {
+			req = httptest.NewRequest(http.MethodPost, path, nil)
+		} else {
+			req = httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Header.Set("X-Delegation-Grant", delegation)
+		req.TLS = &tls.ConnectionState{
+			PeerCertificates: []*x509.Certificate{cert},
+			VerifiedChains:   [][]*x509.Certificate{{cert}},
+		}
+		rec := httptest.NewRecorder()
+		harness.handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	regRec := sendAsCmdService(iam.RegistryDecisionPath, registryAuthorize, `{"tenantId":"`+iam.S1FixtureTenantAID+`","action":"`+string(registryauth.ActionSiteRead)+`"}`)
+	if regRec.Code != http.StatusOK {
+		t.Fatalf("registry decision status=%d body=%s", regRec.Code, regRec.Body.String())
+	}
+	var regResp registryauth.DecisionResponse
+	if json.NewDecoder(regRec.Body).Decode(&regResp) != nil || !regResp.Decision.Allowed {
+		t.Fatalf("unexpected registry decision response: %+v", regResp)
+	}
+	grant, err := registryauth.VerifyGrant(harness.iamSigner.Public(), regResp.DelegationGrant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.Presenter != commandServiceSPIFFE {
+		t.Fatalf("grant presenter=%q, want %q", grant.Presenter, commandServiceSPIFFE)
+	}
+
+	principalRec := sendAsCmdService(iam.CurrentPrincipalPath, "principal:read", "")
+	assertIAMProblem(t, principalRec, http.StatusUnauthorized, "IAM_WORKLOAD_IDENTITY_INVALID")
+}

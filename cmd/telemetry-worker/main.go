@@ -193,6 +193,7 @@ func main() {
 			AllowedIAMSPIFFE:               envOr("TELEMETRY_ALLOWED_IAM_SPIFFE", "spiffe://hvac.local/iam-service"),
 			AllowedCommandVerifierSPIFFE:   envOr("TELEMETRY_ALLOWED_COMMAND_VERIFIER_SPIFFE", "spiffe://hvac.local/command-verifier"),
 			AllowedCommandDispatcherSPIFFE: envOr("TELEMETRY_ALLOWED_COMMAND_DISPATCHER_SPIFFE", "spiffe://hvac.local/command-dispatcher"),
+			AllowedCommandServiceSPIFFE:    envOr("TELEMETRY_ALLOWED_COMMAND_SERVICE_SPIFFE", "spiffe://hvac.local/command-service"),
 			Metrics:                        observabilityRuntime.Metrics,
 			RateLimiter:                    rateLimiter,
 		}),

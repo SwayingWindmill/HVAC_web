@@ -7,6 +7,11 @@
 
 ### 2026-11-16
 
+#### 变更
+
+- 将控制指令校验、三档控制退出、资产控制锁、检修窗口与水路联锁规则统一收拢至控制服务 `ControlAuthority`（ADR 0032），新增迁移 `008_command_precondition_mode.sql` 以显式 `EMERGENCY_BYPASS` + `bypass_reason` 取代急停断采时的虚假遥测拼接，并由 `ClaimDispatch` 在下发 MQTT 前复用同一套 `EvaluateControlGate` 安全闸门。
+- 平台网关 `cmd/energy-api/internal/gateway/{command.go, control_exit.go}` 收薄为会话、CSRF、限流、边缘两步验证与 `X-Command-Control-Context` 签名转发层，`route-ownership.v1.json` 升级至第 49 版并将 `/api/v1/sites/{siteId}/control-{state,mode,shutdown}` 与 `/api/v1/assets/{assetId}/control-lock` 划归 `command-service`；同步移除派发器 `dynamic_safety.go` 与连接层 `command_route.go` 的重复安全策略分支。
+
 #### 新增
 
 - 系统管理「用户与角色」页面（`/system?tab=users`）新增「两步验证」列，并在管理员与运维主管提交高风险指令前提前预警（#831）：

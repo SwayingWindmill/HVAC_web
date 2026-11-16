@@ -7,8 +7,8 @@
   "authorityLock": {
     "routeOwnership": {
       "path": "contracts/ownership/route-ownership.v1.json",
-      "registryRevision": 48,
-      "sha256": "259b5dfdb68c431ffa2a08d0cf35e0b2c31850f34f481207cfe24952da29bbc3"
+      "registryRevision": 49,
+      "sha256": "fecea5e20146734aeb56cb1476ded8f6b6fab76754772c2c15d769fc5f6a7bfb"
     },
     "dataOwnership": {
       "path": "contracts/ownership/data-ownership.v1.json",
@@ -26,7 +26,7 @@
   },
   "schemaContract": {
     "migrationManifest": "deploy/platform/phase1/migrations/manifest.v1.json",
-    "migrationManifestSha256": "0346e271cde0c38264b82634d85767c5294e579553a61a3dfeb962a2edb83eb9",
+    "migrationManifestSha256": "2dfdf1662b261fb45be8293c1a513786b7a23a0412c3a716aad14065ea2a7c8c",
     "compatibilityMode": "exact-product-and-manifest",
     "skipAllowed": false,
     "requiredDatabases": [

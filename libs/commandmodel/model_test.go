@@ -310,6 +310,8 @@ func TestTerminalPreSendRejection(t *testing.T) {
 		{code: "DISPATCH_SAFETY_DEVICE_NOT_ONLINE", want: true},
 		{code: "DISPATCH_SAFETY_INTERLOCK_STATE_UNAVAILABLE", want: true},
 		{code: "DISPATCH_SAFETY_INTERLOCK_VIOLATED", want: true},
+		{code: "DISPATCH_SAFETY_CONTROL_LOCKED", want: true},
+		{code: "DISPATCH_SAFETY_MAINTENANCE_WINDOW", want: true},
 		{code: "DISPATCH_SAFETY_UNAVAILABLE", want: true},
 	}
 	for _, tc := range tests {

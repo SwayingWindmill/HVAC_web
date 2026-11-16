@@ -93,10 +93,11 @@ func (s *Service) Submit(request commandmodel.SubmitRequest) (SubmitResult, erro
 		return SubmitResult{}, err
 	}
 	s.nextCommandID++
-	commandID := fmt.Sprintf("cmd-%08d", s.nextCommandID)
+	commandID := fmt.Sprintf("018f3e00-0000-7000-8000-%012d", s.nextCommandID)
 	s.deviceSequence[request.DeviceID]++
 
 	capabilityRevision, _, _, _ := commandCapabilityProfile(request.Capability)
+	preconditionMode, bypassReason := normalizedPrecondition(request)
 	intent := &commandmodel.CommandIntent{
 		ID:                    commandID,
 		TenantID:              request.TenantID,
@@ -116,6 +117,8 @@ func (s *Service) Submit(request commandmodel.SubmitRequest) (SubmitResult, erro
 		Parameters:            cloneParameters(request.Parameters),
 		VerificationPointKey:  request.VerificationPointKey,
 		PayloadHash:           payloadHash,
+		PreconditionMode:      preconditionMode,
+		BypassReason:          bypassReason,
 		SnapshotRevision:      request.CurrentState.BusinessRevision,
 		DeviceCommandSequence: s.deviceSequence[request.DeviceID],
 		Status:                commandmodel.IntentSubmitted,
@@ -516,25 +519,31 @@ func validateAndHash(request commandmodel.SubmitRequest) (string, error) {
 	if !ok || !commandmodel.ParametersValid(request.Capability, request.Parameters) {
 		return "", ErrCapabilityDenied
 	}
+	preconditionMode, bypassReason, err := validatePrecondition(request, profile)
+	if err != nil {
+		return "", err
+	}
 	parameterCanonical := ""
 	if profile.ParameterKey != "" {
 		value, _ := commandmodel.ParameterValue(request.Capability, request.Parameters)
 		parameterCanonical = profile.ParameterKey + "=" + strconv.FormatFloat(value, 'f', 3, 64)
 	}
-	state := request.CurrentState
-	if state.EvaluationAvailability != "AVAILABLE" || state.Presence != "ONLINE" ||
-		state.Readiness != "CURRENT" || state.Quality != "GOOD" || state.BusinessRevision == 0 ||
-		state.ObservedAt.IsZero() {
-		return "", ErrCurrentStateUnsafe
-	}
-	if profile.ParameterKey != "" {
-		value, _ := commandmodel.ParameterValue(request.Capability, request.Parameters)
-		if state.CurrentValue == nil || absolute(value-*state.CurrentValue) > profile.MaximumDelta {
-			return "", ErrCapabilityDenied
+	if preconditionMode == commandmodel.PreconditionRequireCurrentState {
+		state := request.CurrentState
+		if state.EvaluationAvailability != "AVAILABLE" || state.Presence != "ONLINE" ||
+			state.Readiness != "CURRENT" || state.Quality != "GOOD" || state.BusinessRevision == 0 ||
+			state.ObservedAt.IsZero() {
+			return "", ErrCurrentStateUnsafe
+		}
+		if profile.ParameterKey != "" {
+			value, _ := commandmodel.ParameterValue(request.Capability, request.Parameters)
+			if state.CurrentValue == nil || absolute(value-*state.CurrentValue) > profile.MaximumDelta {
+				return "", ErrCapabilityDenied
+			}
 		}
 	}
 
-	canonical := strings.Join([]string{
+	canonicalParts := []string{
 		request.TenantID,
 		request.SiteID,
 		request.DeviceID,
@@ -543,9 +552,42 @@ func validateAndHash(request commandmodel.SubmitRequest) (string, error) {
 		parameterCanonical,
 		request.VerificationPointKey,
 		profile.Revision,
-	}, "|")
+	}
+	if preconditionMode == commandmodel.PreconditionEmergencyBypass {
+		canonicalParts = append(canonicalParts, string(preconditionMode), bypassReason)
+	}
+	canonical := strings.Join(canonicalParts, "|")
 	digest := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(digest[:]), nil
+}
+
+func validatePrecondition(request commandmodel.SubmitRequest, profile commandmodel.CapabilityProfile) (commandmodel.PreconditionMode, string, error) {
+	mode := request.PreconditionMode
+	if mode == "" {
+		mode = commandmodel.PreconditionRequireCurrentState
+	}
+	reason := strings.TrimSpace(request.BypassReason)
+	switch mode {
+	case commandmodel.PreconditionRequireCurrentState:
+		return mode, "", nil
+	case commandmodel.PreconditionEmergencyBypass:
+		if !profile.SupportsEmergencyBypass {
+			return "", "", ErrCapabilityDenied
+		}
+		if reason == "" {
+			return "", "", ErrInvalidRequest
+		}
+		return mode, reason, nil
+	default:
+		return "", "", ErrInvalidRequest
+	}
+}
+
+func normalizedPrecondition(request commandmodel.SubmitRequest) (commandmodel.PreconditionMode, string) {
+	if request.PreconditionMode == commandmodel.PreconditionEmergencyBypass {
+		return commandmodel.PreconditionEmergencyBypass, strings.TrimSpace(request.BypassReason)
+	}
+	return commandmodel.PreconditionRequireCurrentState, ""
 }
 
 func transition(intent *commandmodel.CommandIntent, to commandmodel.IntentStatus, reason, actor string, at time.Time, causation, evidenceID string) {

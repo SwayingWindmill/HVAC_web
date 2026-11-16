@@ -117,6 +117,7 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		"X-Admin",
 		"X-Command-Grant",
 		"X-Command-Read-Context",
+		"X-Command-Control-Context",
 		"X-Operations-Registry-Site-Grant",
 		"X-Operations-Registry-Asset-Grant",
 		"X-Operations-Energy-Grant",

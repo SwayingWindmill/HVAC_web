@@ -89,11 +89,13 @@ func main() {
 			AdditionalAllowedPresenterSPIFFEs: []string{
 				envOr("CORE_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
 				envOr("CORE_ANALYTICS_PROJECTOR_SPIFFE", "spiffe://hvac.local/analytics-read-model-projector"),
+				envOr("CORE_COMMAND_SERVICE_SPIFFE", "spiffe://hvac.local/command-service"),
 			},
-			Audience:      envOr("CORE_AUDIENCE", "platform-core-service"),
-			GrantStatus:   grantStatus,
-			Logger:        logger,
-			Observability: telemetry,
+			AllowedCommandServiceSPIFFE: envOr("CORE_COMMAND_SERVICE_SPIFFE", "spiffe://hvac.local/command-service"),
+			Audience:                    envOr("CORE_AUDIENCE", "platform-core-service"),
+			GrantStatus:                 grantStatus,
+			Logger:                      logger,
+			Observability:               telemetry,
 		}),
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,
