@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
 func TestSetpointVerifierRequiresNewFreshReportedState(t *testing.T) {
@@ -140,6 +141,10 @@ func (verifier *verificationResultVerifier) Verify(context.Context, commandmodel
 	return verifier.result, verifier.err
 }
 
+func (verifier *verificationResultVerifier) VerifyOnce(context.Context, commandmodel.VerificationEnvelope) (commandmodel.VerificationResult, error) {
+	return verifier.result, verifier.err
+}
+
 type verificationStore struct {
 	envelope          commandmodel.VerificationEnvelope
 	claimOrganization string
@@ -182,5 +187,210 @@ func validReportedState(envelope commandmodel.VerificationEnvelope) commandmodel
 		EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
 		BusinessRevision: envelope.BaselineBusinessRevision + 1, ReportedValue: commandmodel.NumberScalar(envelope.Parameters[commandmodel.ParameterSetpointC]),
 		ObservedAt: envelope.AcknowledgedAt.Add(time.Second),
+	}
+}
+
+func TestAuthoritativeVerifierVerifyOnceNonBlocking(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	envelope := verificationEnvelope()
+	envelope.AcknowledgedAt = now
+	envelope.VerificationDeadline = now.Add(10 * time.Minute)
+
+	stale := validReportedState(envelope)
+	stale.BusinessRevision = envelope.BaselineBusinessRevision
+	reader := &verificationReader{evidenceID: "s2-once-stale", reported: stale}
+	verifier := NewAuthoritativeReportedStateVerifier(reader)
+	verifier.now = func() time.Time { return now.Add(time.Second) }
+
+	res, err := verifier.VerifyOnce(context.Background(), envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != commandmodel.VerificationInconclusive || res.FailureCode != "" || reader.calls != 1 {
+		t.Fatalf("VerifyOnce stale before deadline: res=%#v calls=%d", res, reader.calls)
+	}
+
+	mismatch := validReportedState(envelope)
+	mismatch.ReportedValue = commandmodel.NumberScalar(21)
+	reader.reported = mismatch
+	res, err = verifier.VerifyOnce(context.Background(), envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != commandmodel.VerificationInconclusive || reader.calls != 2 {
+		t.Fatalf("VerifyOnce mismatch before deadline: res=%#v calls=%d", res, reader.calls)
+	}
+
+	verifier.now = func() time.Time { return envelope.VerificationDeadline.Add(time.Second) }
+	res, err = verifier.VerifyOnce(context.Background(), envelope)
+	if err != nil || res.Outcome != commandmodel.VerificationMismatch || res.FailureCode != "REPORTED_VALUE_MISMATCH" {
+		t.Fatalf("VerifyOnce mismatch after deadline: res=%#v err=%v", res, err)
+	}
+	reader.reported = stale
+	res, err = verifier.VerifyOnce(context.Background(), envelope)
+	if err != nil || res.Outcome != commandmodel.VerificationTimedOut || res.FailureCode != "REPORTED_STATE_VERIFICATION_TIMED_OUT" {
+		t.Fatalf("VerifyOnce stale after deadline: res=%#v err=%v", res, err)
+	}
+
+	verifier.now = func() time.Time { return now.Add(time.Second) }
+	wrongScope := validReportedState(envelope)
+	wrongScope.DeviceID = "other-device"
+	reader.reported = wrongScope
+	res, err = verifier.VerifyOnce(context.Background(), envelope)
+	if err != nil || res.Outcome != commandmodel.VerificationInconclusive || res.FailureCode != "REPORTED_STATE_SCOPE_MISMATCH" {
+		t.Fatalf("VerifyOnce scope mismatch: res=%#v err=%v", res, err)
+	}
+}
+
+func TestDurableVerificationWorkerResolvesScopeMismatchBeforeDeadline(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	envelope := verificationEnvelope()
+	envelope.AcknowledgedAt = now
+	envelope.VerificationDeadline = now.Add(2 * time.Minute)
+	store := &verificationStore{envelope: envelope}
+	wrongScope := validReportedState(envelope)
+	wrongScope.DeviceID = "device-wrong"
+	verifier := NewAuthoritativeReportedStateVerifier(&verificationReader{evidenceID: "s2-scope", reported: wrongScope})
+	verifier.now = func() time.Time { return now.Add(time.Second) }
+	worker := NewDurableVerificationWorker(store, verifier, "verifier-a", 5*time.Second)
+	worker.now = verifier.now
+
+	if err := worker.RunOnce(context.Background(), envelope.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	if store.resolveCalls != 1 || store.resolvedResult.FailureCode != "REPORTED_STATE_SCOPE_MISMATCH" {
+		t.Fatalf("expected immediate scope-mismatch resolution, calls=%d result=%#v", store.resolveCalls, store.resolvedResult)
+	}
+}
+
+type queuedVerificationItem struct {
+	envelope commandmodel.VerificationEnvelope
+	resolved *commandmodel.VerificationResult
+}
+
+type multiCommandVerificationStore struct {
+	now   func() time.Time
+	items []*queuedVerificationItem
+}
+
+func (store *multiCommandVerificationStore) ClaimVerification(_ context.Context, tenantID, leaseOwner string, leaseFor time.Duration) (commandmodel.VerificationEnvelope, error) {
+	now := store.now()
+	for _, item := range store.items {
+		if item.resolved != nil || item.envelope.TenantID != tenantID {
+			continue
+		}
+		if !item.envelope.VerificationDeadline.After(now) {
+			continue
+		}
+		if !item.envelope.LeaseUntil.IsZero() && item.envelope.LeaseUntil.After(now) {
+			continue
+		}
+		leaseUntil := now.Add(leaseFor)
+		if item.envelope.VerificationDeadline.Before(leaseUntil) {
+			leaseUntil = item.envelope.VerificationDeadline
+		}
+		item.envelope.LeaseOwner = leaseOwner
+		item.envelope.LeaseUntil = leaseUntil
+		return item.envelope, nil
+	}
+	return commandmodel.VerificationEnvelope{}, commandservice.ErrVerificationNotAvailable
+}
+
+func (store *multiCommandVerificationStore) ResolveVerification(_ context.Context, envelope commandmodel.VerificationEnvelope, result commandmodel.VerificationResult) error {
+	for _, item := range store.items {
+		if item.envelope.AttemptID == envelope.AttemptID {
+			if item.resolved != nil || item.envelope.LeaseOwner != envelope.LeaseOwner || !item.envelope.LeaseUntil.Equal(envelope.LeaseUntil) {
+				return commandservice.ErrStaleFence
+			}
+			copied := result
+			item.resolved = &copied
+			return nil
+		}
+	}
+	return commandservice.ErrCommandNotFound
+}
+
+type perCommandReportedReader struct {
+	byDevice map[string]commandmodel.ReportedStateEvidence
+}
+
+func (reader *perCommandReportedReader) ReadReportedState(_ context.Context, envelope commandmodel.VerificationEnvelope) (string, commandmodel.ReportedStateEvidence, error) {
+	return "s2-ev-" + envelope.DeviceID, reader.byDevice[envelope.DeviceID], nil
+}
+
+func TestDurableVerificationWorkerMultiCommandNonStarvation(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+
+	cmdA := commandmodel.VerificationEnvelope{
+		CommandID: "cmd-a", AttemptID: "att-a", TenantID: "org-1", SiteID: "site-1", DeviceID: "device-a",
+		Capability: commandmodel.CapabilityStartUnitSequence, CapabilityRevision: "capability:start-unit-sequence:v1",
+		Parameters: commandmodel.CommandParameters{}, VerificationPointKey: "equipment.run_state",
+		PayloadHash: "hash-a", ExecutionFence: 1, BaselineBusinessRevision: 10,
+		AcknowledgedAt: now, VerificationDeadline: now.Add(10 * time.Minute),
+		ConnectorEvidenceID: "ack-a",
+	}
+	cmdB := commandmodel.VerificationEnvelope{
+		CommandID: "cmd-b", AttemptID: "att-b", TenantID: "org-1", SiteID: "site-1", DeviceID: "device-b",
+		Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
+		Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, VerificationPointKey: "zone.temperature_setpoint",
+		PayloadHash: "hash-b", ExecutionFence: 2, BaselineBusinessRevision: 20,
+		AcknowledgedAt: now, VerificationDeadline: now.Add(2 * time.Minute),
+		ConnectorEvidenceID: "ack-b",
+	}
+
+	now = now.Add(time.Second)
+	store := &multiCommandVerificationStore{
+		now:   clock,
+		items: []*queuedVerificationItem{{envelope: cmdA}, {envelope: cmdB}},
+	}
+	reader := &perCommandReportedReader{
+		byDevice: map[string]commandmodel.ReportedStateEvidence{
+			"device-a": {
+				TenantID: "org-1", SiteID: "site-1", DeviceID: "device-a",
+				EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
+				BusinessRevision: 10, ReportedValue: commandmodel.TextScalar("STOPPED"), ObservedAt: cmdA.AcknowledgedAt,
+			},
+			"device-b": {
+				TenantID: "org-1", SiteID: "site-1", DeviceID: "device-b",
+				EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
+				BusinessRevision: 21, ReportedValue: commandmodel.NumberScalar(24), ObservedAt: now,
+			},
+		},
+	}
+	verifier := NewAuthoritativeReportedStateVerifier(reader)
+	verifier.now = clock
+	worker := NewDurableVerificationWorker(store, verifier, "verifier-a", 5*time.Second)
+	worker.now = clock
+
+	if err := worker.RunOnce(context.Background(), "org-1"); err != nil {
+		t.Fatalf("tick 1 failed: %v", err)
+	}
+	if store.items[0].resolved != nil || !store.items[0].envelope.LeaseUntil.Equal(now.Add(5*time.Second)) {
+		t.Fatalf("Command A should be paused with 5s lease, item=%#v", store.items[0])
+	}
+
+	if err := worker.RunOnce(context.Background(), "org-1"); err != nil {
+		t.Fatalf("tick 2 failed: %v", err)
+	}
+	if store.items[1].resolved == nil || store.items[1].resolved.Outcome != commandmodel.VerificationSucceeded {
+		t.Fatalf("Command B was starved or unresolved: %#v", store.items[1].resolved)
+	}
+
+	if err := worker.RunOnce(context.Background(), "org-1"); !errors.Is(err, commandservice.ErrVerificationNotAvailable) {
+		t.Fatalf("expected ErrVerificationNotAvailable while Command A is leased, got %v", err)
+	}
+
+	now = now.Add(5 * time.Second)
+	reader.byDevice["device-a"] = commandmodel.ReportedStateEvidence{
+		TenantID: "org-1", SiteID: "site-1", DeviceID: "device-a",
+		EvaluationAvailability: "AVAILABLE", Presence: "ONLINE", Readiness: "CURRENT", Freshness: "FRESH", Quality: "GOOD",
+		BusinessRevision: 11, ReportedValue: commandmodel.TextScalar("RUNNING"), ObservedAt: now,
+	}
+	if err := worker.RunOnce(context.Background(), "org-1"); err != nil {
+		t.Fatalf("tick 4 failed: %v", err)
+	}
+	if store.items[0].resolved == nil || store.items[0].resolved.Outcome != commandmodel.VerificationSucceeded {
+		t.Fatalf("Command A did not settle after lease elapsed: %#v", store.items[0].resolved)
 	}
 }

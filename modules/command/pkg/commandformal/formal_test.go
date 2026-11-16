@@ -88,6 +88,21 @@ func TestFormalPropertiesCanFailOnBrokenTransitions(t *testing.T) {
 			wantProp: PropertyP1,
 			hooks:    FaultHooks{AllowDispatchCancelledIntent: true},
 		},
+		{
+			name:     "P1 transient safety evaluation failure treated terminal must fail",
+			wantProp: PropertyP1,
+			hooks:    FaultHooks{TreatSafetyEvalFailureAsTerminal: true},
+		},
+		{
+			name:     "P3 aborting non-sequence acknowledged command must fail",
+			wantProp: PropertyP3,
+			hooks:    FaultHooks{AllowAbortNonSequenceCommand: true},
+		},
+		{
+			name:     "P6 single-batch recovery stopping at LIMIT 50 must fail",
+			wantProp: PropertyP6,
+			hooks:    FaultHooks{FailDrainedRecoveryPastBatchLimit: true},
+		},
 	}
 
 	for _, tc := range cases {

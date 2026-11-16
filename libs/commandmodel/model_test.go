@@ -292,3 +292,29 @@ func TestEdgeExecutionEvidenceEmergencyDoAndUnitSequenceReadback(t *testing.T) {
 		}
 	})
 }
+
+func TestTerminalPreSendRejection(t *testing.T) {
+	tests := []struct {
+		code string
+		want bool
+	}{
+		{code: "DISPATCH_SAFETY_EVALUATION_FAILED", want: false},
+		{code: " DISPATCH_SAFETY_EVALUATION_FAILED ", want: false},
+		{code: "MQTT_ROUTE_UNAVAILABLE", want: false},
+		{code: "", want: false},
+		{code: "COMMAND_ROUTE_NOT_FOUND", want: true},
+		{code: "COMMAND_CONTROL_DISABLED", want: true},
+		{code: "COMMAND_GATEWAY_CREDENTIAL_INACTIVE", want: true},
+		{code: "DISPATCH_SAFETY_STATE_UNAVAILABLE", want: true},
+		{code: "DISPATCH_SAFETY_STATE_NOT_FRESH", want: true},
+		{code: "DISPATCH_SAFETY_DEVICE_NOT_ONLINE", want: true},
+		{code: "DISPATCH_SAFETY_INTERLOCK_STATE_UNAVAILABLE", want: true},
+		{code: "DISPATCH_SAFETY_INTERLOCK_VIOLATED", want: true},
+		{code: "DISPATCH_SAFETY_UNAVAILABLE", want: true},
+	}
+	for _, tc := range tests {
+		if got := TerminalPreSendRejection(tc.code); got != tc.want {
+			t.Fatalf("TerminalPreSendRejection(%q) = %v, want %v", tc.code, got, tc.want)
+		}
+	}
+}
