@@ -25,12 +25,13 @@ import {
   type ReconciledOutcome,
 } from '../command-api';
 import { commandSummary, IN_FLIGHT, needsPerson, STATUS_PRESENTATION } from '../command-presentation';
-import { commandLabels, controlTargets, plantUnits, type ControlTarget } from '../control-model';
+import { commandLabels, controlTargets, hasEmergencyRelease, plantUnits, type ControlTarget, type PlantUnit } from '../control-model';
 import { activeLocks, siteControlStateQuery, type SiteControlMode } from '../control-state';
 import { CommandLog, CommandSheet, StepUpDialog, type CommandActions } from './CommandLog';
 import { commandFailure, ConfirmCommand, type PendingCommand } from './CommandConfirmation';
 import { AssetLockDialog, ControlModeBar, ControlModeDialog, type LockSubject } from './ControlBoundary';
 import { PlantUnitGrid, type PlantContext } from './PlantUnitGrid';
+import { SiteShutdownDialog, type ShutdownSubject } from './SiteShutdown';
 import { SettingsDialog } from './SettingsDialog';
 
 const siteRoute = getRouteApi('/_app/_site');
@@ -62,6 +63,7 @@ export function ControlWorkspace() {
   const [lockTarget, setLockTarget] = useState<ControlTarget | null>(null);
   const [settingsTarget, setSettingsTarget] = useState<ControlTarget | null>(null);
   const [stepUp, setStepUp] = useState<Command | null>(null);
+  const [shutdown, setShutdown] = useState<ShutdownSubject | null>(null);
 
   const model = registry.data?.assetModel;
   const targets = useMemo(() => (model ? controlTargets(model, new Date(now)) : []), [model, now]);
@@ -123,7 +125,19 @@ export function ControlWorkspace() {
   }, [model, targets, devices]);
   const context: PlantContext = {
     mode, maintenance: controlState.data?.activeMaintenanceWindow ?? null, devices, ...interlockFacts, locks, commands: list, canLock: canManage,
-    onCommand: setPending, onLock: setLockTarget, onSettings: setSettingsTarget, onInspect: inspect,
+    onCommand: setPending, onLock: setLockTarget, onAbort: (unit) => setShutdown(abortSubject(unit)), onSettings: setSettingsTarget, onInspect: inspect,
+  };
+
+  // A unit is named to the gateway by its chiller's asset code, e.g. chiller-a.
+  const abortSubject = (unit: PlantUnit): ShutdownSubject => {
+    const points = new Set([unit.chiller, ...unit.members].flatMap((target) => [...target.actions, ...target.settings].map((point) => point.pointId)));
+    return {
+      kind: 'unit',
+      unitCode: model?.assets.find((asset) => asset.id === unit.chiller.assetId)?.code ?? unit.chiller.assetId,
+      unitName: unit.chiller.assetName,
+      members: unit.members.map((member) => member.assetName),
+      withdrawCount: list.filter((command) => WITHDRAWABLE.has(command.status) && points.has(command.pointId)).length,
+    };
   };
 
   const lockSubject: LockSubject | null = lockTarget ? {
@@ -169,6 +183,7 @@ export function ControlWorkspace() {
           timeZone={site.timezone}
           canManage={canManage}
           onPick={setModeTarget}
+          onShutdown={() => setShutdown({ kind: 'site', emergencyAvailable: model ? hasEmergencyRelease(model) : false, withdrawCount: list.filter((command) => WITHDRAWABLE.has(command.status)).length })}
         />
       )}
 
@@ -263,6 +278,9 @@ export function ControlWorkspace() {
           onClose={() => setModeTarget(null)}
           onShowUnsettled={() => { setModeTarget(null); setSearch({ status: 'unknown' }); }}
         />
+      ) : null}
+      {controlState.data ? (
+        <SiteShutdownDialog siteId={site.id} csrfToken={csrfToken} state={controlState.data} subject={shutdown} onClose={() => setShutdown(null)} />
       ) : null}
       <AssetLockDialog siteId={site.id} csrfToken={csrfToken} subject={lockSubject} myId={myId} timeZone={site.timezone} onClose={() => setLockTarget(null)} />
       <StepUpDialog command={stepUp} describe={describe} onClose={() => setStepUp(null)} />

@@ -9,6 +9,7 @@
 
 #### 新增
 
+- 「运行控制」可以直接从平台停机：控制方式条右侧「停机…」执行安全停机（先停所有没锁定的冷机，主机停稳后再停对应的水泵和冷却塔，站点切到安全退出并撤回没下发的指令）；站点登记了紧急全断点位时还可以选「紧急全断」，立刻断开全部输出通道。机组的一键启停还没结束时，机组列上出现「中止…」，只中止并按顺序停这一组。三种都要填原因、输入动态口令并确认已和现场沟通。松雅轩登记在冷冻水总管上的「紧急全断全部 DO 通道」不再显示成普通的「停止」按钮。
 - 第一性原理重构遥测可信边界、冷机防冻保护与整机根因抑制（#749）：
   - `deploy/sites/songyaxuan.alarm-rules.json` 与 `modules/alarm/pkg/alarmrules` 新增设备级根因告警规则 `deviceUntrusted`（`device-untrusted/<device>`，`MAJOR`，连续 `180 秒`）：非派生设备的全部 `>= 2` 个监测点位同时出现超量程、通讯异常值 `38.4` 或 `SOURCE_UNTRUSTED` 时，仅发出 1 条整台根因告警，并在条件树内部同步抑制同设备逐点 `suspect`（支持 `durationSeconds: 300`）与 `readings-not-updated` 症状告警，避免 23 路探头同时掉线刷屏；同时排除 `device-untrusted/` 触发无意义的 `rules-unevaluable`。
   - `deploy/sites/songyaxuan.alarm-rules.json` 新增 `chiller-leaving-low`（`CRITICAL`，`180 秒`）：任意运行中的冷机（A `t1`、B `t2`、C `t3`、D `t4`）冷冻水出水低于 `4.0 °C` 时立即触发防冻保护告警（冷机停机或水温回升过 `4.5 °C` 恢复）。

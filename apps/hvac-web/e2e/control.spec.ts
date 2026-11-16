@@ -153,6 +153,93 @@ test('during a maintenance window only stopping and resetting stay available', a
   await expect(page.getByRole('group', { name: 'CHWP-01' }).getByRole('button', { name: '停止' })).toBeEnabled();
 });
 
+test('a safe shutdown of the whole site asks for a reason, the code and a site check, then switches to safe exit', async ({ page, gateway }) => {
+  await page.goto(`/operations/control?site=${SITE_ID}`);
+  await page.getByRole('group', { name: 'CT-01' }).getByRole('button', { name: '停止' }).click();
+  const confirm = page.getByRole('alertdialog');
+  await confirm.getByRole('textbox', { name: '动态口令' }).fill('654321');
+  await confirm.getByRole('checkbox').check();
+  await confirm.getByRole('button', { name: '提交停止' }).click();
+  await expect(page.getByRole('list', { name: '指令记录' }).getByRole('listitem').first()).toContainText('待审批');
+
+  await page.getByRole('region', { name: '控制方式' }).getByRole('button', { name: '停机…' }).click();
+  const dialog = page.getByRole('dialog', { name: '安全停机整个站点？' });
+  // The recorded plant has no emergency release point, so only the ordered shutdown is offered.
+  await expect(dialog.getByRole('radiogroup')).toHaveCount(0);
+  await expect(dialog).toContainText('会撤回 1 条还没下发的指令');
+  const submit = dialog.getByRole('button', { name: '执行安全停机' });
+  await dialog.getByRole('textbox', { name: '原因' }).fill('冷冻水管漏水');
+  await dialog.getByRole('textbox', { name: '动态口令' }).fill('112233');
+  await expect(submit).toBeDisabled();
+  await dialog.getByRole('checkbox', { name: '我已和现场确认可以停机' }).check();
+  await submit.click();
+
+  await expect(page.getByText('已开始安全停机：提交 1 条停机指令，撤回 1 条，3 台水泵或冷却塔等主机停稳后再停')).toBeVisible();
+  const write = gateway.writes.find((entry) => entry.path === `/api/v1/sites/${SITE_ID}/control-shutdown`);
+  expect(write?.body).toEqual({ mode: 'PLANT_SAFE_SHUTDOWN', reason: '冷冻水管漏水', verificationCode: '112233', expectedRevision: 1 });
+  expect(write?.csrfToken).toBeTruthy();
+  await expect(page.getByRole('region', { name: '控制方式' })).toContainText('安全退出');
+  await expect(page.getByRole('banner').getByRole('link', { name: '安全退出' })).toBeVisible();
+});
+
+test('the emergency cut-off is offered only where the site registers one and needs its own confirmation', async ({ page, gateway }) => {
+  const model = gateway.assetModel;
+  const stop = model.telemetryPoints.find((point: { pointCode: string }) => point.pointCode === 'stop');
+  model.telemetryPoints.push({ ...stop, id: '0190c000-0000-7000-8000-0000000000e1', pointCode: 'emergency_stop_all', displayName: '紧急全断全部 DO 通道', sourceKey: 'controller.emergency_stop_all', sourceMetadata: { ...stop.sourceMetadata, actuationMode: 'EMERGENCY_DO_RELEASE' } });
+  model.counts.points += 1;
+  await page.goto(`/operations/control?site=${SITE_ID}`);
+
+  await page.getByRole('region', { name: '控制方式' }).getByRole('button', { name: '停机…' }).click();
+  await page.getByRole('dialog').getByText('紧急全断', { exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '紧急全断整个站点？' });
+  await dialog.getByRole('textbox', { name: '原因' }).fill('冷却塔起火');
+  await dialog.getByRole('textbox', { name: '动态口令' }).fill('445566');
+  await dialog.getByRole('checkbox', { name: '我已和现场确认可以停机' }).check();
+  const submit = dialog.getByRole('button', { name: '立刻全断' });
+  await expect(submit).toBeDisabled();
+  await dialog.getByRole('checkbox', { name: '我确认要立刻断开全部输出通道' }).check();
+  await submit.click();
+
+  await expect(page.getByText('已发出紧急全断：提交 1 条停机指令')).toBeVisible();
+  const write = gateway.writes.find((entry) => entry.path === `/api/v1/sites/${SITE_ID}/control-shutdown`);
+  expect(write?.body).toEqual({ mode: 'EMERGENCY_DO_RELEASE', reason: '冷却塔起火', verificationCode: '445566', expectedRevision: 1, confirmEmergencyDoRelease: true });
+});
+
+test('a unit whose one-click sequence is on its way can be aborted and stopped in order', async ({ page, gateway }) => {
+  const model = gateway.assetModel;
+  const chiller = model.assets.find((asset: { code: string }) => asset.code === 'chiller-01');
+  const stop = model.telemetryPoints.find((point: { id: string; pointCode: string }) => model.relationships.some((relationship: { fromId: string; toId: string }) => relationship.fromId === point.id && relationship.toId === chiller.id)
+    && point.pointCode === 'stop');
+  const sequence = { ...stop, id: '0190c000-0000-7000-8000-0000000000f1', pointCode: 'stop_unit_sequence', sourceKey: 'chiller.stop_unit_sequence', displayName: '一键停机', sourceMetadata: { ...stop.sourceMetadata, capability: 'STOP_UNIT_SEQUENCE' } };
+  model.telemetryPoints.push(sequence);
+  model.counts.points += 1;
+  const controlsStop = model.relationships.find((relationship: { fromId: string }) => relationship.fromId === stop.id);
+  model.relationships.push({ ...controlsStop, id: '0190c000-0000-7000-8000-0000000000f2', fromId: sequence.id });
+  await page.goto(`/operations/control?site=${SITE_ID}`);
+
+  const unit = page.getByRole('region', { name: 'CHILLER-01' });
+  await unit.getByRole('button', { name: '一键停机' }).click();
+  const confirm = page.getByRole('alertdialog');
+  await confirm.getByRole('textbox', { name: '动态口令' }).fill('778899');
+  await confirm.getByRole('checkbox').check();
+  await confirm.getByRole('button', { name: '提交一键停机' }).click();
+  await expect(unit).toContainText('一键启停 · 待审批');
+
+  await unit.getByRole('button', { name: '中止…' }).click();
+  const dialog = page.getByRole('dialog', { name: '中止CHILLER-01的一键启停？' });
+  await expect(dialog).toContainText('控制方式不变，其他机组照常运行');
+  await expect(dialog).toContainText('会撤回 1 条还没下发的指令');
+  await dialog.getByRole('textbox', { name: '原因' }).fill('现场发现冷却水阀未开');
+  await dialog.getByRole('textbox', { name: '动态口令' }).fill('990011');
+  await dialog.getByRole('checkbox', { name: '我已和现场确认可以停机' }).check();
+  await dialog.getByRole('button', { name: '中止并停机' }).click();
+
+  await expect(page.getByText('已中止CHILLER-01：提交 1 条停机指令，撤回 1 条')).toBeVisible();
+  const write = gateway.writes.find((entry) => entry.path === `/api/v1/sites/${SITE_ID}/control-shutdown`);
+  expect(write?.body).toEqual({ mode: 'ABORT_UNIT_SEQUENCE', reason: '现场发现冷却水阀未开', verificationCode: '990011', expectedRevision: 1, unitCode: 'chiller-01' });
+  await expect(page.getByRole('region', { name: '控制方式' })).toContainText('远程自动控制');
+});
+
 test('the appearance switch keeps document color-scheme and meta[name="color-scheme"] in sync across system, light and dark', async ({ page }) => {
   await page.goto(`/operations/control?site=${SITE_ID}`);
 

@@ -152,6 +152,13 @@ export interface CommandLabel {
 }
 
 /** Each command point's asset and name, so a command reads as the operator issued it. */
+/** Whether the Site registers an emergency release: a STOP point that drops every output channel at once. */
+export function hasEmergencyRelease(model: Pick<SiteAssetModel, 'telemetryPoints'>): boolean {
+  return model.telemetryPoints.some((point) =>
+    point.status === 'ACTIVE' && point.pointType === 'COMMAND'
+    && point.sourceMetadata.capability === 'STOP' && point.sourceMetadata.actuationMode === 'EMERGENCY_DO_RELEASE');
+}
+
 export function commandLabels(targets: readonly ControlTarget[]): ReadonlyMap<string, CommandLabel> {
   const labels = new Map<string, CommandLabel>();
   for (const target of targets) {

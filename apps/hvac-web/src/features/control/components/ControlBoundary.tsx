@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Lock, LockOpen } from 'lucide-react';
+import { Lock, LockOpen, Power } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import { Panel } from '@/blocks/panel';
@@ -61,7 +61,7 @@ export interface WithdrawnSummary {
  * The Site's control mode across the top of the control page: which mode, who set it and why,
  * and the other two as a segmented choice that opens the switch dialog.
  */
-export function ControlModeBar({ state, lockCount, pendingCount, myId, timeZone, canManage, onPick }: {
+export function ControlModeBar({ state, lockCount, pendingCount, myId, timeZone, canManage, onPick, onShutdown }: {
   readonly state: SiteControlState;
   readonly lockCount: number;
   readonly pendingCount: number;
@@ -69,10 +69,12 @@ export function ControlModeBar({ state, lockCount, pendingCount, myId, timeZone,
   readonly timeZone: string;
   readonly canManage: boolean;
   readonly onPick: (mode: SiteControlMode) => void;
+  /** Opens the site shutdown dialog. */
+  readonly onShutdown: () => void;
 }) {
   const presentation = MODE_PRESENTATION[state.controlMode];
   return (
-    <Panel aria-label="控制方式" className={cn('grid grid-cols-[240px_minmax(0,1fr)_auto] items-center gap-6 px-4 py-3.5', BAR_TONE[state.controlMode])}>
+    <Panel aria-label="控制方式" className={cn('grid grid-cols-[240px_minmax(0,1fr)_auto_auto] items-center gap-x-6 gap-y-3 px-4 py-3.5', BAR_TONE[state.controlMode])}>
       <div className="flex flex-col">
         <span className="text-xs text-muted-foreground">控制方式</span>
         <span className="flex items-center gap-2 text-xl leading-7 font-semibold tracking-[-0.02em]">
@@ -122,11 +124,21 @@ export function ControlModeBar({ state, lockCount, pendingCount, myId, timeZone,
           );
         })}
       </div>
+      <Button
+        variant="outline"
+        size="sm"
+        className="text-destructive-text hover:text-destructive-text"
+        disabled={!canManage}
+        title={canManage ? undefined : '你没有停机的权限'}
+        onClick={onShutdown}
+      >
+        <Power data-icon="inline-start" />停机…
+      </Button>
     </Panel>
   );
 }
 
-function ReasonField({ id, value, onChange, placeholder }: {
+export function ReasonField({ id, value, onChange, placeholder }: {
   readonly id: string;
   readonly value: string;
   readonly onChange: (value: string) => void;
@@ -143,7 +155,7 @@ function ReasonField({ id, value, onChange, placeholder }: {
   );
 }
 
-function ChoiceCard({ value, title, hint, current, children }: {
+export function ChoiceCard({ value, title, hint, current, children }: {
   readonly value: string;
   readonly title: string;
   readonly hint: string;
