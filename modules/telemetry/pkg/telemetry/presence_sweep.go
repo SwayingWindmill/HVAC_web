@@ -75,6 +75,24 @@ WHERE stored_applicability IS DISTINCT FROM presence_applicability
          WHERE elem->>'key' = fp.telemetry_key
        )
    )
+   OR EXISTS (
+     SELECT 1
+     FROM telemetry_runtime.freshness_policies fp
+     JOIN telemetry_runtime.latest_accepted_telemetry lat
+       ON lat.device_id = fp.device_id AND lat.telemetry_key = fp.telemetry_key
+     WHERE fp.device_id = candidates.device_id
+       AND fp.configured
+       AND (
+         fp.fresh_within_seconds <= 0
+         OR lat.sampled_at < ($1::timestamptz - (fp.fresh_within_seconds * interval '1 second'))
+       )
+       AND EXISTS (
+         SELECT 1
+         FROM jsonb_array_elements(COALESCE(candidates.stored_snapshot->'values', '[]'::jsonb)) AS elem
+         WHERE elem->>'key' = fp.telemetry_key
+           AND elem->>'freshness' = 'FRESH'
+       )
+   )
 ORDER BY device_id
 LIMIT $2
 `

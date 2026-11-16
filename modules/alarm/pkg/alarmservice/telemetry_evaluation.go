@@ -376,8 +376,12 @@ func inputFactFromTelemetry(record telemetryEvaluationInputRecord, state telemet
 		if err != nil {
 			return "", InputFact{}, fmt.Errorf("%w: telemetry key %q value cannot be evaluated", ErrTelemetryEvaluationInvalid, key)
 		}
+		unchanged := record.UnchangedSince[key]
+		if unchanged == "" && present.UnchangedSince != nil {
+			unchanged = strings.TrimSpace(string(*present.UnchangedSince))
+		}
 		fact := InputFact{
-			Key: key, Present: true, Revision: revision, Value: value, Quality: quality, ObservedAt: observedAt, UnchangedSince: record.UnchangedSince[key],
+			Key: key, Present: true, Revision: revision, Value: value, Quality: quality, ObservedAt: observedAt, UnchangedSince: unchanged,
 			QualityReasons: reasonStrings(present.QualityReasons),
 			Evidence:       []alarmmodel.EvidenceReference{{Kind: "telemetry-device-snapshot", Reference: record.EventID + "#" + key, CapturedAt: observedAt}},
 		}
@@ -401,20 +405,27 @@ func inputFactFromTelemetry(record telemetryEvaluationInputRecord, state telemet
 	return "", InputFact{}, fmt.Errorf("%w: telemetry key state is ambiguous", ErrTelemetryEvaluationInvalid)
 }
 
-// unchangedSince is, for each reading present in next, when it took the value it still has: kept
-// from the previous snapshot while the value is the same, else next's own sample time (#616).
+// unchangedSince prefers the authoritative unchangedSince timestamp on each snapshot reading,
+// falling back to value diffing against the prior snapshot only when the field is absent (#616).
 func unchangedSince(previous *telemetryapi.DeviceObservationSnapshot, previousSince map[string]string, next telemetryapi.DeviceObservationSnapshot) (map[string]string, error) {
-	prior := map[string]any{}
-	if previous != nil {
-		for _, state := range previous.Values {
-			if state.Present != nil {
-				var value any
-				if err := json.Unmarshal(state.Present.Value, &value); err != nil {
-					return nil, fmt.Errorf("%w: stored telemetry key %q value cannot be read", ErrTelemetryEvaluationInvalid, state.Present.Key)
+	var prior map[string]any
+	ensurePrior := func() (map[string]any, error) {
+		if prior != nil {
+			return prior, nil
+		}
+		prior = map[string]any{}
+		if previous != nil {
+			for _, state := range previous.Values {
+				if state.Present != nil {
+					var value any
+					if err := json.Unmarshal(state.Present.Value, &value); err != nil {
+						return nil, fmt.Errorf("%w: stored telemetry key %q value cannot be read", ErrTelemetryEvaluationInvalid, state.Present.Key)
+					}
+					prior[string(state.Present.Key)] = value
 				}
-				prior[string(state.Present.Key)] = value
 			}
 		}
+		return prior, nil
 	}
 	held := map[string]string{}
 	for _, state := range next.Values {
@@ -422,11 +433,25 @@ func unchangedSince(previous *telemetryapi.DeviceObservationSnapshot, previousSi
 			continue
 		}
 		key := string(state.Present.Key)
+		if state.Present.UnchangedSince != nil {
+			since := strings.TrimSpace(string(*state.Present.UnchangedSince))
+			if since != "" {
+				if _, err := time.Parse(time.RFC3339Nano, since); err != nil {
+					return nil, fmt.Errorf("%w: telemetry key %q unchangedSince is invalid", ErrTelemetryEvaluationInvalid, key)
+				}
+				held[key] = since
+				continue
+			}
+		}
+		priorValues, err := ensurePrior()
+		if err != nil {
+			return nil, err
+		}
 		var value any
 		if err := json.Unmarshal(state.Present.Value, &value); err != nil {
 			return nil, fmt.Errorf("%w: telemetry key %q value cannot be read", ErrTelemetryEvaluationInvalid, key)
 		}
-		if before, seen := prior[key]; seen && previousSince[key] != "" && reflect.DeepEqual(before, value) {
+		if before, seen := priorValues[key]; seen && previousSince[key] != "" && reflect.DeepEqual(before, value) {
 			held[key] = previousSince[key]
 			continue
 		}

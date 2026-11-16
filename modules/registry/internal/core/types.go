@@ -79,14 +79,13 @@ type DeviceBinding struct {
 	UpdatedAt   string  `json:"updatedAt"`
 }
 
-type MeterBindingResolveRequest struct {
-	DeviceID  string    `json:"deviceId"`
-	PointID   string    `json:"pointId"`
-	SampledAt time.Time `json:"sampledAt"`
+type SiteMeterBindings struct {
+	SiteID string                   `json:"siteId"`
+	Items  []MeterBindingResolution `json:"items"`
 }
 
 type MeterBindingResolution struct {
-	Status            string     `json:"status"`
+	Status            string     `json:"status,omitempty"`
 	TenantID          string     `json:"tenantId,omitempty"`
 	SiteID            string     `json:"siteId,omitempty"`
 	MeterID           string     `json:"meterId,omitempty"`

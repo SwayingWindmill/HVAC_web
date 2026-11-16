@@ -402,6 +402,8 @@
           "unit": { "type": ["string", "null"], "maxLength": 64 },
           "sampledAt": { "$ref": "#/components/schemas/Instant" },
           "receivedAt": { "$ref": "#/components/schemas/Instant" },
+          "unchangedSince": { "$ref": "#/components/schemas/Instant" },
+          "freshWithinSeconds": { "type": "integer", "minimum": 1 },
           "freshness": { "type": "string", "enum": ["FRESH", "STALE"] },
           "quality": { "$ref": "#/components/schemas/TelemetryQuality" },
           "qualityReasons": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/components/schemas/QualityReasonCode" } },

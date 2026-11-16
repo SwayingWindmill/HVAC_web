@@ -48,23 +48,23 @@ func (provider *countingGrantStatusProvider) Lookup(_ context.Context, _ registr
 }
 
 type fakeRegistryStore struct {
-	sites           PageResult[Site]
-	site            Site
-	assets          PageResult[Asset]
-	assetItem       Asset
-	devices         PageResult[Device]
-	device          Device
-	bindings        PageResult[DeviceBinding]
-	meterResolution MeterBindingResolution
-	totalSources    SiteTotalElectricitySources
-	spaceChildren   PageResult[Space]
-	devicePoints    PageResult[TelemetryPoint]
-	assetModel      SiteAssetModel
-	tariff          SiteTariff
-	err             error
-	lastClaims      registryauth.GrantClaims
-	lastPage        PageRequest
-	lastID          string
+	sites         PageResult[Site]
+	site          Site
+	assets        PageResult[Asset]
+	assetItem     Asset
+	devices       PageResult[Device]
+	device        Device
+	bindings      PageResult[DeviceBinding]
+	siteBindings  SiteMeterBindings
+	totalSources  SiteTotalElectricitySources
+	spaceChildren PageResult[Space]
+	devicePoints  PageResult[TelemetryPoint]
+	assetModel    SiteAssetModel
+	tariff        SiteTariff
+	err           error
+	lastClaims    registryauth.GrantClaims
+	lastPage      PageRequest
+	lastID        string
 }
 
 func (store *fakeRegistryStore) ListSites(_ context.Context, claims registryauth.GrantClaims, page PageRequest) (PageResult[Site], error) {
@@ -95,9 +95,9 @@ func (store *fakeRegistryStore) ListDeviceBindings(_ context.Context, claims reg
 	store.lastClaims, store.lastID, store.lastPage = claims, id, page
 	return store.bindings, store.err
 }
-func (store *fakeRegistryStore) ResolveMeterBinding(_ context.Context, claims registryauth.GrantClaims, siteID string, input MeterBindingResolveRequest) (MeterBindingResolution, error) {
-	store.lastClaims, store.lastID = claims, siteID+"|"+input.DeviceID+"|"+input.PointID
-	return store.meterResolution, store.err
+func (store *fakeRegistryStore) ListSiteMeterBindings(_ context.Context, claims registryauth.GrantClaims, siteID string) (SiteMeterBindings, error) {
+	store.lastClaims, store.lastID = claims, siteID
+	return store.siteBindings, store.err
 }
 func (store *fakeRegistryStore) GetSiteTotalElectricitySources(_ context.Context, claims registryauth.GrantClaims, siteID string) (SiteTotalElectricitySources, error) {
 	store.lastClaims, store.lastID = claims, siteID
@@ -232,24 +232,32 @@ func TestServerListsSitesAndReturnsBoundCursor(t *testing.T) {
 	}
 }
 
-func TestServerResolvesMeterBindingWithinPrivateCoreRoute(t *testing.T) {
+func TestServerListsSiteMeterBindingsWithinPrivateCoreRoute(t *testing.T) {
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
-	store := &fakeRegistryStore{meterResolution: MeterBindingResolution{
-		Status: "MATCH", TenantID: testTenantA, SiteID: testSiteA1, MeterID: testBindingA1,
-		MeterBindingID: testBindingA1, EnergyType: "electricity", MeterRole: "PRIMARY", PointType: "COUNTER",
+	store := &fakeRegistryStore{siteBindings: SiteMeterBindings{
+		SiteID: testSiteA1,
+		Items: []MeterBindingResolution{{
+			TenantID: testTenantA, SiteID: testSiteA1, MeterID: testBindingA1,
+			MeterBindingID: testBindingA1, EnergyType: "electricity", MeterRole: "PRIMARY", PointType: "COUNTER",
+			DeviceID: testDeviceA1, PointID: testBindingA1, EffectiveFrom: now,
+		}},
 	}}
 	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
-	path := RegistryPathPrefix + "sites/" + testSiteA1 + "/meter-bindings/resolve?deviceId=" + url.QueryEscape(testDeviceA1) + "&pointId=" + url.QueryEscape(testBindingA1) + "&sampledAt=" + url.QueryEscape(now.Format(time.RFC3339Nano))
+	path := RegistryPathPrefix + "sites/" + testSiteA1 + "/meter-bindings"
 	response := harness.serve(t, http.MethodGet, path, testGrantClaims(registryauth.ActionMeterBindingResolve), nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
 	}
-	var result MeterBindingResolution
+	var result SiteMeterBindings
 	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != "MATCH" || store.lastID != testSiteA1+"|"+testDeviceA1+"|"+testBindingA1 {
+	if result.SiteID != testSiteA1 || len(result.Items) != 1 || result.Items[0].MeterBindingID != testBindingA1 || store.lastID != testSiteA1 {
 		t.Fatalf("result=%#v lastID=%q", result, store.lastID)
+	}
+	rejectedQuery := harness.serve(t, http.MethodGet, path+"?deviceId="+url.QueryEscape(testDeviceA1), testGrantClaims(registryauth.ActionMeterBindingResolve), nil)
+	if rejectedQuery.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected query status = %d; body=%s", rejectedQuery.Code, rejectedQuery.Body.String())
 	}
 }
 

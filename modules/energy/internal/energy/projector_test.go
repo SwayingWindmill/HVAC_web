@@ -299,3 +299,47 @@ func TestNewProjectorRequiresARebuildEventSink(t *testing.T) {
 		t.Fatal("projector built without a rebuild event sink")
 	}
 }
+
+func TestStaticBindingResolverAndMatchMeterBindingsEnforceEffectiveWindows(t *testing.T) {
+	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	mid := from.Add(24 * time.Hour)
+	end := mid.Add(24 * time.Hour)
+
+	v1 := validBinding()
+	v1.EffectiveFrom = from
+	v1.EffectiveTo = &mid
+
+	v2 := validBinding()
+	v2.MeterBindingID = "018f4e00-1200-7000-8000-000000000002"
+	v2.BindingVersion = 5
+	v2.EffectiveFrom = mid
+	v2.EffectiveTo = &end
+
+	overlap := validBinding()
+	overlap.MeterBindingID = "018f4e00-1200-7000-8000-000000000003"
+	overlap.EffectiveFrom = end.Add(-time.Hour)
+
+	resolver := NewStaticBindingResolver(v1, v2, overlap)
+	query := func(at time.Time) BindingResolution {
+		res, err := resolver.Resolve(context.Background(), BindingResolveInput{
+			TenantID: testTenantID, SiteID: testSiteID, DeviceID: testDeviceID, PointID: testPointID, SampledAt: at,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+
+	if before := query(from.Add(-time.Second)); before.Status != BindingNoMatch {
+		t.Fatalf("before effectiveFrom=%#v, want NO_MATCH", before)
+	}
+	if hit1 := query(from); hit1.Status != BindingMatch || hit1.MeterBindingID != v1.MeterBindingID {
+		t.Fatalf("at effectiveFrom=%#v, want v1", hit1)
+	}
+	if hit2 := query(mid); hit2.Status != BindingMatch || hit2.MeterBindingID != v2.MeterBindingID {
+		t.Fatalf("at half-open boundary=%#v, want v2", hit2)
+	}
+	if ambiguous := query(end.Add(-30 * time.Minute)); ambiguous.Status != BindingAmbiguous {
+		t.Fatalf("overlap=%#v, want AMBIGUOUS", ambiguous)
+	}
+}

@@ -147,11 +147,6 @@ func (store *PostgresStore) acceptObservationOnce(ctx context.Context, candidate
 		if err := upsertLatestObservation(ctx, tx, candidate, decision); err != nil {
 			return ObservationReceipt{}, err
 		}
-		if candidate.SourcePath != SourcePathHistoryReplay && decision.Status == ObservationAccepted {
-			if err := foldProbeOffsets(ctx, tx, decision.SiteID, decision.DeviceID, candidate.TelemetryKey); err != nil {
-				return ObservationReceipt{}, err
-			}
-		}
 	} else if decision.RecordHealth {
 		if err := updatePointHealth(ctx, tx, candidate, decision); err != nil {
 			return ObservationReceipt{}, err

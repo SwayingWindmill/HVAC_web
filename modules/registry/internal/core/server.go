@@ -237,24 +237,14 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 }
 
 func (server *server) handleAuthorized(writer http.ResponseWriter, request *http.Request, route registryRoute, claims registryauth.GrantClaims) int {
-	if route.resource == "meter-binding-resolve" {
-		query := request.URL.Query()
-		for name, values := range query {
-			if (name != "deviceId" && name != "pointId" && name != "sampledAt") || len(values) != 1 {
-				writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The meter binding resolver query is invalid.", false)
-				return http.StatusBadRequest
-			}
-		}
-		sampledAt, err := time.Parse(time.RFC3339Nano, query.Get("sampledAt"))
-		if err != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The meter binding resolver query is invalid.", false)
+	if route.resource == "site-meter-bindings" {
+		if len(request.URL.Query()) != 0 {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The Site meter bindings query does not accept parameters.", false)
 			return http.StatusBadRequest
 		}
-		result, err := server.store.ResolveMeterBinding(request.Context(), claims, route.parentID, MeterBindingResolveRequest{
-			DeviceID: query.Get("deviceId"), PointID: query.Get("pointId"), SampledAt: sampledAt,
-		})
+		result, err := server.store.ListSiteMeterBindings(request.Context(), claims, route.parentID)
 		if errors.Is(err, ErrInvalidBindingResolution) {
-			writeProblem(writer, request, http.StatusBadRequest, "METER_BINDING_RESOLUTION_INVALID", "The meter binding resolver input is invalid.", false)
+			writeProblem(writer, request, http.StatusBadRequest, "METER_BINDING_RESOLUTION_INVALID", "The meter binding site scope is invalid.", false)
 			return http.StatusBadRequest
 		}
 		if err != nil {
@@ -714,8 +704,8 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/points/{pointId}", resource: "point-write", parentID: segments[1], id: segments[3], action: registryauth.ActionPointWrite, write: true}, true
 	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "device-bindings":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/device-bindings", resource: "device-bindings", parentID: segments[1], action: registryauth.ActionDeviceBindingList, list: true}, true
-	case method == http.MethodGet && len(segments) == 4 && segments[0] == "sites" && segments[2] == "meter-bindings" && segments[3] == "resolve":
-		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/meter-bindings/resolve", resource: "meter-binding-resolve", parentID: segments[1], action: registryauth.ActionMeterBindingResolve}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "meter-bindings":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/meter-bindings", resource: "site-meter-bindings", parentID: segments[1], action: registryauth.ActionMeterBindingResolve}, true
 	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "total-electricity-sources":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/total-electricity-sources", resource: "total-electricity-sources", parentID: segments[1], action: registryauth.ActionMeterBindingResolve}, true
 	case method == http.MethodPost && len(segments) == 4 && segments[0] == "sites" && segments[2] == "bindings" && segments[3] == "rebind":

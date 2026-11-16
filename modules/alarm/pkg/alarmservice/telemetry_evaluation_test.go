@@ -168,3 +168,49 @@ func TestColdStartRejectedCandidateRaisesReasonsAlarm(t *testing.T) {
 		t.Fatalf("NEVER_OBSERVED unexpectedly matched OUT_OF_RANGE: %#v", neverDecision)
 	}
 }
+
+func TestUnchangedSincePrefersAuthoritativeSnapshotTimestamp(t *testing.T) {
+	t0 := time.Date(2026, 11, 16, 8, 0, 0, 0, time.UTC)
+	heldSince := telemetryapi.Instant("2026-11-16T06:15:00.000Z")
+	first := presentTelemetryState("run_state", "STRING", `"RUNNING"`, "GOOD", "FRESH", t0)
+	first.Present.UnchangedSince = &heldSince
+	second := presentTelemetryState("pressure", "NUMBER", `120`, "GOOD", "FRESH", t0)
+
+	snapshot := telemetryapi.DeviceObservationSnapshot{
+		SchemaVersion: 1, DeviceId: telemetryEvaluationTestChillerID, TenantId: telemetryEvaluationTestTenantID, SiteId: telemetryEvaluationTestSiteID,
+		BusinessRevision: 1, EvaluatedAt: telemetryapi.Instant(t0.Format(time.RFC3339Nano)), EvaluationAvailability: telemetryapi.EvaluationAvailabilityAvailable,
+		Values: []telemetryapi.TelemetryKeyState{first, second},
+	}
+
+	// Even with no prior Alarm snapshot (cold start / process restart), authoritative unchangedSince is honored.
+	held, err := unchangedSince(nil, nil, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held["run_state"] != string(heldSince) || held["pressure"] != t0.Format(time.RFC3339Nano) {
+		t.Fatalf("held=%#v", held)
+	}
+
+	// On fallback key without snapshot UnchangedSince, local diffing still carries forward prior start time.
+	later := snapshot
+	later.BusinessRevision = 2
+	later.Values = []telemetryapi.TelemetryKeyState{first, presentTelemetryState("pressure", "NUMBER", `120`, "GOOD", "FRESH", t0.Add(time.Minute))}
+	carried, err := unchangedSince(&snapshot, held, later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if carried["run_state"] != string(heldSince) || carried["pressure"] != t0.Format(time.RFC3339Nano) {
+		t.Fatalf("carried=%#v", carried)
+	}
+
+	// inputFactFromTelemetry falls back cleanly to present.UnchangedSince if record map omits the key.
+	factSnapshot, err := buildSiteEvaluationSnapshot(telemetryEvaluationTestEventA, telemetryEvaluationTestTenantID, telemetryEvaluationTestSiteID, []telemetryEvaluationInputRecord{
+		{DeviceID: telemetryEvaluationTestChillerID, BusinessRevision: 1, EventID: telemetryEvaluationTestEventA, EvaluatedAt: t0, Snapshot: snapshot},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if factSnapshot.Inputs[telemetryEvaluationTestChillerID+"/run_state"].UnchangedSince != string(heldSince) {
+		t.Fatalf("fact unchangedSince=%q, want %q", factSnapshot.Inputs[telemetryEvaluationTestChillerID+"/run_state"].UnchangedSince, heldSince)
+	}
+}

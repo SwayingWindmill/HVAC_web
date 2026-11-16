@@ -164,51 +164,47 @@ func TestPostgresStoreResolvesEffectivePrimaryElectricityCounterBinding(t *testi
 	)
 	claims := integrationClaims(registryauth.ActionMeterBindingResolve)
 	claims.AllowedSiteIDs = []string{testSiteA1}
-	resolved, err := store.ResolveMeterBinding(ctx, claims, testSiteA1, MeterBindingResolveRequest{
-		DeviceID: meterDeviceID, PointID: meterPointID, SampledAt: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC),
-	})
+	listed, err := store.ListSiteMeterBindings(ctx, claims, testSiteA1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.Status != "MATCH" || resolved.TenantID != testTenantA || resolved.SiteID != testSiteA1 ||
+	findItem := func(items []MeterBindingResolution, devID, ptID string) (MeterBindingResolution, bool) {
+		for _, item := range items {
+			if item.DeviceID == devID && item.PointID == ptID {
+				return item, true
+			}
+		}
+		return MeterBindingResolution{}, false
+	}
+	resolved, ok := findItem(listed.Items, meterDeviceID, meterPointID)
+	if !ok || listed.SiteID != testSiteA1 || resolved.TenantID != testTenantA || resolved.SiteID != testSiteA1 ||
 		resolved.MeterID != meterID || resolved.MeterBindingID != bindingID || resolved.TopologyVersionID != topologyID ||
 		resolved.EnergyTypeID != energyTypeID || resolved.EnergyType != "electricity" || resolved.MeterRole != "PRIMARY" ||
 		resolved.PointType != "COUNTER" || resolved.BindingVersion != 1 || resolved.AccountingScope != "SITE" || resolved.LoadDeviceID != "" {
-		t.Fatalf("resolved Meter Binding = %#v", resolved)
+		t.Fatalf("listed Meter Bindings missing primary meter = %#v", listed)
 	}
 
 	// A meter on the feed into one piece of equipment is a sub-meter of the Site, not its total,
 	// and its energy belongs to the equipment it feeds, not to the meter reporting it.
-	subMeter, err := store.ResolveMeterBinding(ctx, claims, testSiteA1, MeterBindingResolveRequest{
-		DeviceID: meterDeviceID, PointID: "01990000-1340-7000-8000-000000000020", SampledAt: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if subMeter.Status != "MATCH" || subMeter.AccountingScope != "BRANCH" || subMeter.Direction != "CONSUME" ||
+	subMeter, ok := findItem(listed.Items, meterDeviceID, "01990000-1340-7000-8000-000000000020")
+	if !ok || subMeter.AccountingScope != "BRANCH" || subMeter.Direction != "CONSUME" ||
 		subMeter.DeviceID != meterDeviceID || subMeter.LoadDeviceID != "018f1e00-4100-7000-8000-000000000021" {
-		t.Fatalf("resolved sub-meter = %#v", subMeter)
+		t.Fatalf("listed Meter Bindings missing sub-meter = %#v", listed)
 	}
 
-	beforeEffective, err := store.ResolveMeterBinding(ctx, claims, testSiteA1, MeterBindingResolveRequest{
-		DeviceID: meterDeviceID, PointID: meterPointID, SampledAt: time.Date(2026, 7, 31, 23, 59, 59, 0, time.UTC),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if beforeEffective.Status != "NO_MATCH" {
-		t.Fatalf("binding resolved before effective_from: %#v", beforeEffective)
+	harness := newCoreHarness(t, time.Now().UTC(), store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	httpResp := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites/"+testSiteA1+"/meter-bindings", claims, nil)
+	if httpResp.Code != http.StatusOK {
+		t.Fatalf("HTTP site meter-bindings status = %d; body=%s", httpResp.Code, httpResp.Body.String())
 	}
 
 	deniedClaims := claims
 	deniedClaims.AllowedSiteIDs = []string{testSiteA2}
-	denied, err := store.ResolveMeterBinding(ctx, deniedClaims, testSiteA1, MeterBindingResolveRequest{
-		DeviceID: meterDeviceID, PointID: meterPointID, SampledAt: time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC),
-	})
+	denied, err := store.ListSiteMeterBindings(ctx, deniedClaims, testSiteA1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if denied.Status != "NO_MATCH" {
+	if len(denied.Items) != 0 {
 		t.Fatalf("binding escaped exact Site RLS: %#v", denied)
 	}
 }

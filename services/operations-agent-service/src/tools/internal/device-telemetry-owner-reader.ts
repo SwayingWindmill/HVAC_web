@@ -30,6 +30,8 @@ export interface DeviceTelemetryPresentStateDto {
   readonly quality: 'GOOD' | 'PARTIAL' | 'ESTIMATED' | 'MANUAL' | 'STALE' | 'INVALID';
   readonly qualityReasons: readonly string[];
   readonly policyRevision: number;
+  readonly unchangedSince?: string;
+  readonly freshWithinSeconds?: number;
   readonly health?: {
     readonly status: 'HEALTHY' | 'SUSPECT' | 'BAD' | 'STALE';
     readonly score: number;
@@ -117,12 +119,14 @@ const decodeKeyState = (value: unknown): DeviceTelemetryKeyStateDto => {
   }
   if (value.state === 'PRESENT') {
     const keys = Object.keys(value);
-    const allowed = new Set<string>([...presentKeys, 'health']);
+    const allowed = new Set<string>([...presentKeys, 'unchangedSince', 'freshWithinSeconds', 'health', 'measurement', 'probeOffsets']);
     if (!presentKeys.every((key) => keys.includes(key)) || keys.some((key) => !allowed.has(key))
       || !valueTypes.has(String(value.valueType))
       || (value.unit !== null && typeof value.unit !== 'string')
       || !isInstant(value.sampledAt)
       || !isInstant(value.receivedAt)
+      || (value.unchangedSince !== undefined && !isInstant(value.unchangedSince))
+      || (value.freshWithinSeconds !== undefined && (!Number.isSafeInteger(value.freshWithinSeconds) || Number(value.freshWithinSeconds) < 1))
       || (value.freshness !== 'FRESH' && value.freshness !== 'STALE')
       || !presentQualities.has(String(value.quality))
       || !Array.isArray(value.qualityReasons)

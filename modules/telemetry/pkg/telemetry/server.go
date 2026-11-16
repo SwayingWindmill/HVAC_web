@@ -329,7 +329,7 @@ func (h *handler) readLatestSnapshot(ctx context.Context, access AccessContext, 
 		values = append(values, state)
 	}
 	snapshot.Values = values
-	return snapshot, nil
+	return RefreshSnapshotAt(snapshot, h.now().UTC()), nil
 }
 
 func (h *handler) handleSubscriptionBootstrap(writer http.ResponseWriter, request *http.Request) {

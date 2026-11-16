@@ -461,6 +461,49 @@ func TestProblemDetailsAlwaysUseContractTraceID(t *testing.T) {
 	}
 }
 
+func TestInternalSnapshotAppliesReadTimeFreshnessWithoutMutatingCache(t *testing.T) {
+	t0 := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	now := t0.Add(6 * time.Minute)
+	freshSeconds := 300
+	online := telemetryapi.DevicePresenceStateOnline
+	displayOnline := telemetryapi.DeviceDisplayStateOnline
+	cached := telemetryapi.DeviceObservationSnapshot{
+		SchemaVersion: 1, TenantId: telemetryapi.UUIDv7(tenantA), SiteId: telemetryapi.UUIDv7(siteA), DeviceId: telemetryapi.UUIDv7(deviceA),
+		BusinessRevision: 8, EvaluatedAt: instant(t0), EvaluationAvailability: telemetryapi.EvaluationAvailabilityAvailable,
+		AvailabilityReasons: []telemetryapi.AvailabilityReasonCode{},
+		Presence:            telemetryapi.PresenceSnapshot{Applicability: telemetryapi.PresenceApplicabilityApplicable, CurrentState: &online},
+		TelemetryReadiness:  telemetryapi.TelemetryReadinessCurrent, DisplayState: &displayOnline,
+		Values: []telemetryapi.TelemetryKeyState{{Present: &telemetryapi.TelemetryPresentState{
+			Key: "zone.temperature", State: "PRESENT", Value: json.RawMessage(`23.4`), ValueType: "NUMBER",
+			SampledAt: instant(t0), ReceivedAt: instant(t0), FreshWithinSeconds: &freshSeconds,
+			Freshness: "FRESH", Quality: telemetryapi.TelemetryQualityGood, QualityReasons: []telemetryapi.QualityReasonCode{}, PolicyRevision: 1,
+			Health: &telemetryapi.TelemetryPointHealth{Status: HealthHealthy, Score: 100, Reasons: []telemetryapi.QualityReasonCode{}},
+		}}},
+	}
+	latestCache := &fakeLatestCache{snapshots: map[string]telemetryapi.DeviceObservationSnapshot{deviceA: cached}}
+	handler := NewHandler(ServerConfig{
+		Store: &fakeSnapshotStore{}, LatestCache: latestCache, Authorizer: &fakeAuthorizer{},
+		AllowedGatewaySPIFFE: gatewaySPIFFE, Now: func() time.Time { return now },
+	})
+	recorder := getSnapshot(handler, deviceA, "zone.temperature")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var got telemetryapi.DeviceObservationSnapshot
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.BusinessRevision != 8 || got.TelemetryReadiness != telemetryapi.TelemetryReadinessDegraded || got.DisplayState == nil || *got.DisplayState != telemetryapi.DeviceDisplayStateStale {
+		t.Fatalf("projected snapshot=%#v", got)
+	}
+	if got.Values[0].Present.Freshness != "STALE" || got.Values[0].Present.Health.Status != HealthStale {
+		t.Fatalf("projected key=%#v", got.Values[0].Present)
+	}
+	if latestCache.snapshots[deviceA].Values[0].Present.Freshness != "FRESH" {
+		t.Fatalf("cache was mutated during read: %#v", latestCache.snapshots[deviceA].Values[0].Present)
+	}
+}
+
 func verifiedTLSState(spiffe string) *tls.ConnectionState {
 	uri, _ := url.Parse(spiffe)
 	certificate := &x509.Certificate{URIs: []*url.URL{uri}}

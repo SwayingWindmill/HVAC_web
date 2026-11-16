@@ -63,52 +63,126 @@ FROM (
 	return suggestions, nil
 }
 
-func foldProbeOffsets(ctx context.Context, tx pgx.Tx, siteID, deviceID, key string) error {
-	if siteID == "" || deviceID == "" || key == "" {
-		return nil
+type configuredProbePair struct {
+	siteID string
+	code   string
+	config probePairConfig
+}
+
+// SweepProbeOffsets folds open idle-circulation zero-point windows for all configured
+// supply/return probe pairs outside the synchronous observation ingest transaction.
+func (store *PostgresStore) SweepProbeOffsets(ctx context.Context, evaluatedAt time.Time) (int, error) {
+	if store == nil || store.pool == nil {
+		return 0, errors.New("telemetry runtime store is closed")
+	}
+	if evaluatedAt.IsZero() {
+		evaluatedAt = time.Now().UTC()
+	} else {
+		evaluatedAt = evaluatedAt.UTC()
+	}
+	pairs, err := store.listConfiguredProbePairs(ctx)
+	if err != nil {
+		return 0, err
+	}
+	estimated := 0
+	for _, pair := range pairs {
+		created, err := store.sweepOneProbePair(ctx, pair, evaluatedAt)
+		if err != nil {
+			return estimated, err
+		}
+		if created {
+			estimated++
+		}
+	}
+	return estimated, nil
+}
+
+func (store *PostgresStore) listConfiguredProbePairs(ctx context.Context) ([]configuredProbePair, error) {
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("begin probe pairs read: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s2_telemetry_runtime`); err != nil {
+		return nil, fmt.Errorf("activate telemetry runtime database identity: %w", err)
 	}
 	rows, err := tx.Query(ctx, `
-SELECT pair_code, config
+SELECT site_id::text, pair_code, config
 FROM telemetry_runtime.probe_pairs
-WHERE site_id = $1::uuid
-`, siteID)
+ORDER BY site_id, pair_code
+`)
 	if err != nil {
-		return fmt.Errorf("query probe pairs: %w", err)
+		return nil, fmt.Errorf("query probe pairs: %w", err)
 	}
-	type configured struct {
-		code   string
-		config probePairConfig
-	}
-	var pairs []configured
+	defer rows.Close()
+	var pairs []configuredProbePair
 	for rows.Next() {
-		var code string
+		var item configuredProbePair
 		var raw []byte
-		if err := rows.Scan(&code, &raw); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan probe pair: %w", err)
+		if err := rows.Scan(&item.siteID, &item.code, &raw); err != nil {
+			return nil, fmt.Errorf("scan probe pair: %w", err)
 		}
-		var config probePairConfig
-		if err := json.Unmarshal(raw, &config); err != nil {
-			rows.Close()
-			return fmt.Errorf("parse probe pair %s: %w", code, err)
+		if err := json.Unmarshal(raw, &item.config); err != nil {
+			return nil, fmt.Errorf("parse probe pair %s: %w", item.code, err)
 		}
-		pairs = append(pairs, configured{code: code, config: config})
+		pairs = append(pairs, item)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("iterate probe pairs: %w", err)
+		return nil, fmt.Errorf("iterate probe pairs: %w", err)
 	}
-	rows.Close()
+	return pairs, nil
+}
 
-	for _, pair := range pairs {
-		if !pair.config.mentions(deviceID, key) {
-			continue
-		}
-		if err := foldOnePair(ctx, tx, siteID, pair.code, pair.config); err != nil {
-			return err
+func (store *PostgresStore) sweepOneProbePair(ctx context.Context, pair configuredProbePair, evaluatedAt time.Time) (bool, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		created, err := store.sweepOneProbePairOnce(ctx, pair, evaluatedAt)
+		if err == nil || !retryableTelemetryTransaction(err) {
+			return created, err
 		}
 	}
-	return nil
+	return false, fmt.Errorf("probe offset sweep retry budget exhausted for %s", pair.code)
+}
+
+func (store *PostgresStore) sweepOneProbePairOnce(ctx context.Context, pair configuredProbePair, evaluatedAt time.Time) (bool, error) {
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return false, fmt.Errorf("begin probe offset sweep transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s2_telemetry_runtime`); err != nil {
+		return false, fmt.Errorf("activate telemetry runtime database identity: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('telemetry-probe-pair:' || $1 || ':' || $2, 0))`, pair.siteID, pair.code); err != nil {
+		return false, fmt.Errorf("lock probe pair %s: %w", pair.code, err)
+	}
+	for _, deviceID := range orderedProbeDeviceIDs(pair.config.Supply.DeviceID, pair.config.Return.DeviceID) {
+		if err := lockDevice(ctx, tx, deviceID); err != nil {
+			return false, err
+		}
+	}
+	created, err := store.foldOnePair(ctx, tx, pair.siteID, pair.code, pair.config, evaluatedAt)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit probe offset sweep %s: %w", pair.code, err)
+	}
+	return created, nil
+}
+
+func orderedProbeDeviceIDs(supplyDeviceID, returnDeviceID string) []string {
+	switch {
+	case supplyDeviceID == "" && returnDeviceID == "":
+		return nil
+	case supplyDeviceID == "":
+		return []string{returnDeviceID}
+	case returnDeviceID == "" || supplyDeviceID == returnDeviceID:
+		return []string{supplyDeviceID}
+	case supplyDeviceID < returnDeviceID:
+		return []string{supplyDeviceID, returnDeviceID}
+	default:
+		return []string{returnDeviceID, supplyDeviceID}
+	}
 }
 
 type probePairConfig struct {
@@ -122,18 +196,6 @@ type probePairConfig struct {
 	MaxGapMinutes  int             `json:"maxGapMinutes"`
 	OffsetAlarmK   float64         `json:"offsetAlarmK"`
 	DriftAlarmK    float64         `json:"driftAlarmK"`
-}
-
-func (cfg probePairConfig) mentions(device, key string) bool {
-	if cfg.Supply.DeviceID == device && cfg.Supply.Key == key || cfg.Return.DeviceID == device && cfg.Return.Key == key {
-		return true
-	}
-	for _, item := range append(append([]operatingJSON{}, cfg.Pumps...), cfg.Chillers...) {
-		if item.DeviceID == device && item.Key == key {
-			return true
-		}
-	}
-	return false
 }
 
 func (cfg probePairConfig) offsetConfig() measurement.OffsetConfig {
@@ -162,13 +224,13 @@ type storedOffsetWindow struct {
 	ReturnMax float64   `json:"returnMax"`
 }
 
-func foldOnePair(ctx context.Context, tx pgx.Tx, siteID, code string, cfg probePairConfig) error {
-	sample, ok, err := idleSample(ctx, tx, cfg)
+func (store *PostgresStore) foldOnePair(ctx context.Context, tx pgx.Tx, siteID, code string, cfg probePairConfig, evaluatedAt time.Time) (bool, error) {
+	sample, ok, err := idleSample(ctx, tx, cfg, evaluatedAt)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !ok {
-		sample = measurement.OffsetSample{At: time.Now().UTC(), Eligible: false}
+		sample = measurement.OffsetSample{At: evaluatedAt.UTC(), Eligible: false}
 	}
 	var window measurement.OffsetWindow
 	var state []byte
@@ -179,7 +241,7 @@ WHERE site_id = $1::uuid AND pair_code = $2
 	if err == nil {
 		var stored storedOffsetWindow
 		if err := json.Unmarshal(state, &stored); err != nil {
-			return fmt.Errorf("parse probe window %s: %w", code, err)
+			return false, fmt.Errorf("parse probe window %s: %w", code, err)
 		}
 		window = measurement.OffsetWindow{
 			Open: stored.Open, StartedAt: stored.StartedAt, LastAt: stored.LastAt, Count: stored.Count,
@@ -187,7 +249,7 @@ WHERE site_id = $1::uuid AND pair_code = $2
 			SupplyMin: stored.SupplyMin, SupplyMax: stored.SupplyMax, ReturnMin: stored.ReturnMin, ReturnMax: stored.ReturnMax,
 		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("query probe window %s: %w", code, err)
+		return false, fmt.Errorf("query probe window %s: %w", code, err)
 	}
 	var previous *float64
 	var prior float64
@@ -200,23 +262,22 @@ LIMIT 1
 	if err == nil {
 		previous = &prior
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("query previous probe offset %s: %w", code, err)
-	}
-	if !ok {
-		sample = measurement.OffsetSample{At: time.Now().UTC(), Eligible: false}
+		return false, fmt.Errorf("query previous probe offset %s: %w", code, err)
 	}
 	next, estimate := measurement.FoldOffset(cfg.offsetConfig(), window, previous, sample)
-	if err := saveProbeWindow(ctx, tx, siteID, code, next); err != nil {
-		return err
+	if !sameOffsetWindow(window, next) {
+		if err := saveProbeWindow(ctx, tx, siteID, code, next); err != nil {
+			return false, err
+		}
 	}
 	if estimate == nil {
-		return nil
+		return false, nil
 	}
 	alarm := any(nil)
 	if estimate.Alarm != "" {
 		alarm = estimate.Alarm
 	}
-	if _, err := tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 INSERT INTO telemetry_runtime.probe_offset_estimates (
   site_id, pair_code, window_started_at, window_ended_at, sample_count,
   offset_k, stddev_k, supply_mean_c, return_mean_c, applied, alarm,
@@ -228,13 +289,40 @@ INSERT INTO telemetry_runtime.probe_offset_estimates (
 ON CONFLICT (site_id, pair_code, window_started_at) DO NOTHING
 `, siteID, code, estimate.StartedAt.UTC(), estimate.EndedAt.UTC(), estimate.Count,
 		estimate.OffsetK, estimate.StddevK, estimate.SupplyMeanC, estimate.ReturnMeanC, alarm,
-		cfg.Supply.DeviceID, cfg.Supply.Key, cfg.Return.DeviceID, cfg.Return.Key); err != nil {
-		return fmt.Errorf("store probe offset %s: %w", code, err)
+		cfg.Supply.DeviceID, cfg.Supply.Key, cfg.Return.DeviceID, cfg.Return.Key)
+	if err != nil {
+		return false, fmt.Errorf("store probe offset %s: %w", code, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
 	}
 	if err := reflectProbeOffsetAlarm(ctx, tx, siteID, cfg.Supply.DeviceID, cfg.Supply.Key); err != nil {
-		return err
+		return false, err
 	}
-	return reflectProbeOffsetAlarm(ctx, tx, siteID, cfg.Return.DeviceID, cfg.Return.Key)
+	if err := reflectProbeOffsetAlarm(ctx, tx, siteID, cfg.Return.DeviceID, cfg.Return.Key); err != nil {
+		return false, err
+	}
+	for _, deviceID := range orderedProbeDeviceIDs(cfg.Supply.DeviceID, cfg.Return.DeviceID) {
+		if _, err := store.evaluateAndPersistDeviceWithOptions(ctx, tx, deviceID, nil, evaluatedAt, true); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func sameOffsetWindow(left, right measurement.OffsetWindow) bool {
+	return left.Open == right.Open &&
+		left.Count == right.Count &&
+		left.StartedAt.Equal(right.StartedAt) &&
+		left.LastAt.Equal(right.LastAt) &&
+		left.SumOffset == right.SumOffset &&
+		left.SumSq == right.SumSq &&
+		left.SupplySum == right.SupplySum &&
+		left.ReturnSum == right.ReturnSum &&
+		left.SupplyMin == right.SupplyMin &&
+		left.SupplyMax == right.SupplyMax &&
+		left.ReturnMin == right.ReturnMin &&
+		left.ReturnMax == right.ReturnMax
 }
 
 func saveProbeWindow(ctx context.Context, tx pgx.Tx, siteID, code string, window measurement.OffsetWindow) error {
@@ -267,7 +355,7 @@ ON CONFLICT (site_id, pair_code) DO UPDATE SET state = EXCLUDED.state, updated_a
 	return nil
 }
 
-func idleSample(ctx context.Context, tx pgx.Tx, cfg probePairConfig) (measurement.OffsetSample, bool, error) {
+func idleSample(ctx context.Context, tx pgx.Tx, cfg probePairConfig, evaluatedAt time.Time) (measurement.OffsetSample, bool, error) {
 	if len(cfg.Pumps) == 0 || len(cfg.Chillers) == 0 {
 		return measurement.OffsetSample{}, false, nil
 	}
@@ -282,6 +370,9 @@ func idleSample(ctx context.Context, tx pgx.Tx, cfg probePairConfig) (measuremen
 	gap := cfg.offsetConfig().MaxGap
 	if gap <= 0 {
 		gap = measurement.DefaultOffsetMaxGap
+	}
+	if !evaluatedAt.IsZero() && (evaluatedAt.Sub(supply.At) > gap || evaluatedAt.Sub(ret.At) > gap) {
+		return measurement.OffsetSample{At: evaluatedAt.UTC(), Eligible: false}, true, nil
 	}
 	if supply.At.IsZero() || ret.At.IsZero() || supply.At.Sub(ret.At) > gap || ret.At.Sub(supply.At) > gap {
 		return measurement.OffsetSample{At: later(supply.At, ret.At), Eligible: false}, true, nil

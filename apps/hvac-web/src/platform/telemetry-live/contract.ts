@@ -259,7 +259,9 @@ function parseTelemetryKeyState(value: unknown, label: string): TelemetryKeyStat
   const input = record(value, label);
   const state = string(input.state, `${label}.state`);
   if (state === 'PRESENT') {
-    exactKeys(input, ['key', 'state', 'value', 'valueType', 'unit', 'sampledAt', 'receivedAt', 'freshness', 'quality', 'qualityReasons', 'policyRevision'], label, ['health', 'measurement', 'probeOffsets']);
+    exactKeys(input, ['key', 'state', 'value', 'valueType', 'unit', 'sampledAt', 'receivedAt', 'freshness', 'quality', 'qualityReasons', 'policyRevision'], label, ['unchangedSince', 'freshWithinSeconds', 'health', 'measurement', 'probeOffsets']);
+    const unchangedSince = input.unchangedSince === undefined ? undefined : instant(input.unchangedSince, `${label}.unchangedSince`);
+    const freshWithinSeconds = input.freshWithinSeconds === undefined ? undefined : integer(input.freshWithinSeconds, `${label}.freshWithinSeconds`, 1);
     const health = parsePointHealth(input.health, `${label}.health`);
     const measurement = parseMeasurement(input.measurement, `${label}.measurement`);
     const probeOffsets = parseProbeOffsets(input.probeOffsets, `${label}.probeOffsets`);
@@ -281,6 +283,8 @@ function parseTelemetryKeyState(value: unknown, label: string): TelemetryKeyStat
       unit: nullableString(input.unit, `${label}.unit`),
       sampledAt: instant(input.sampledAt, `${label}.sampledAt`),
       receivedAt: instant(input.receivedAt, `${label}.receivedAt`),
+      ...(unchangedSince ? { unchangedSince } : {}),
+      ...(freshWithinSeconds === undefined ? {} : { freshWithinSeconds }),
       freshness: enumeration(input.freshness, freshnessStates, `${label}.freshness`),
       quality: enumeration(input.quality, qualityStates, `${label}.quality`),
       qualityReasons: stringArray(input.qualityReasons, qualityReasons, `${label}.qualityReasons`),
