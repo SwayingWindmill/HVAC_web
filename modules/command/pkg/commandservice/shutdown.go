@@ -11,6 +11,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
 type shutdownControlTarget struct {
@@ -553,13 +554,20 @@ func resolveSiteControlTopology(model SiteAssetModelDTO, now time.Time) shutdown
 		servedChillersByAux:   map[string][]string{},
 	}
 	assetsByID := make(map[string]AssetDTO, len(model.Assets))
+	plantUnits := make([]planttwin.PlantUnit, 0, len(model.Assets))
 	for _, asset := range model.Assets {
 		if !strings.EqualFold(asset.Status, "ACTIVE") {
 			continue
 		}
 		assetsByID[asset.ID] = asset
+		plantUnits = append(plantUnits, planttwin.PlantUnit{
+			AssetID:   asset.ID,
+			AssetCode: asset.Code,
+			AssetName: asset.DisplayName,
+			AssetType: asset.AssetType,
+		})
 		switch strings.ToUpper(strings.TrimSpace(asset.AssetType)) {
-		case "CHILLER":
+		case planttwin.AssetTypeChiller:
 			topo.chillers = append(topo.chillers, asset)
 			if code := strings.ToLower(strings.TrimSpace(asset.Code)); code != "" {
 				topo.chillersByCode[code] = asset
@@ -601,7 +609,7 @@ func resolveSiteControlTopology(model SiteAssetModelDTO, now time.Time) shutdown
 
 	controlsByPoint := map[string][]string{}
 	controlsSite := map[string]bool{}
-	deviceToChillers := map[string][]string{}
+	var hydraulicEdges []planttwin.HydraulicEdge
 	for _, rel := range model.Relationships {
 		if !commandRelationshipCurrent(rel, now) {
 			continue
@@ -616,35 +624,52 @@ func resolveSiteControlTopology(model SiteAssetModelDTO, now time.Time) shutdown
 					controlsByPoint[rel.FromID] = appendUniqueShutdownString(controlsByPoint[rel.FromID], asset.ID)
 					if pt, ok := pointsByID[rel.FromID]; ok {
 						topo.boundDevicesByAsset[asset.ID] = appendUniqueShutdownString(topo.boundDevicesByAsset[asset.ID], pt.ReportingDeviceID)
-						if strings.EqualFold(asset.AssetType, "CHILLER") {
-							deviceToChillers[pt.ReportingDeviceID] = appendUniqueShutdownString(deviceToChillers[pt.ReportingDeviceID], asset.ID)
-						}
 					}
 				}
 			}
 		case rel.FromType == "DEVICE" && rel.ToType == "ASSET":
 			if asset, ok := assetsByID[rel.ToID]; ok {
 				topo.boundDevicesByAsset[asset.ID] = appendUniqueShutdownString(topo.boundDevicesByAsset[asset.ID], rel.FromID)
-				if strings.EqualFold(asset.AssetType, "CHILLER") {
-					deviceToChillers[rel.FromID] = appendUniqueShutdownString(deviceToChillers[rel.FromID], asset.ID)
+			}
+		case strings.EqualFold(rel.FromType, planttwin.SubjectTypeAsset) &&
+			strings.EqualFold(rel.ToType, planttwin.SubjectTypeAsset) &&
+			strings.EqualFold(rel.Role, planttwin.RelationshipServes):
+			if _, fromOK := assetsByID[rel.FromID]; fromOK {
+				if _, toOK := assetsByID[rel.ToID]; toOK {
+					hydraulicEdges = append(hydraulicEdges, planttwin.HydraulicEdge{
+						FromAssetID:      rel.FromID,
+						ToAssetID:        rel.ToID,
+						RelationshipRole: planttwin.RelationshipServes,
+					})
 				}
 			}
-		case rel.FromType == "ASSET" && rel.ToType == "ASSET" && strings.EqualFold(rel.Role, "SERVES"):
-			fromAsset, fromOK := assetsByID[rel.FromID]
-			toAsset, toOK := assetsByID[rel.ToID]
-			if fromOK && toOK && isShutdownHoldingAuxiliaryType(fromAsset.AssetType) && strings.EqualFold(toAsset.AssetType, "CHILLER") {
-				topo.servedChillersByAux[fromAsset.ID] = appendUniqueShutdownString(topo.servedChillersByAux[fromAsset.ID], toAsset.ID)
+		}
+	}
+
+	if graph, err := planttwin.NewHydraulicGraph(plantUnits, hydraulicEdges); err == nil {
+		for _, aux := range topo.auxiliaries {
+			for _, downstreamID := range graph.ReachableDownstream(aux.ID) {
+				if asset, ok := assetsByID[downstreamID]; ok && strings.EqualFold(strings.TrimSpace(asset.AssetType), planttwin.AssetTypeChiller) {
+					topo.servedChillersByAux[aux.ID] = appendUniqueShutdownString(topo.servedChillersByAux[aux.ID], asset.ID)
+				}
+			}
+			for _, directID := range graph.Downstream(aux.ID) {
+				if directAsset, ok := assetsByID[directID]; ok && isHydraulicLoopAssetType(directAsset.AssetType) {
+					for _, ch := range graph.EquipmentServingLoop(directAsset.ID, planttwin.AssetTypeChiller) {
+						topo.servedChillersByAux[aux.ID] = appendUniqueShutdownString(topo.servedChillersByAux[aux.ID], ch.AssetID)
+					}
+				}
+			}
+			if chIDs := topo.servedChillersByAux[aux.ID]; len(chIDs) > 0 {
+				sort.Strings(chIDs)
+				topo.servedChillersByAux[aux.ID] = chIDs
 			}
 		}
 	}
 
 	topo.controlsAssetsByPoint = controlsByPoint
-	topo.resolveTargets(model, assetsByID, devicesByID, points, feedbackByDeviceKey, controlsByPoint, controlsSite, deviceToChillers)
+	topo.resolveTargets(model, assetsByID, devicesByID, points, feedbackByDeviceKey, controlsByPoint, controlsSite)
 	topo.assignFallbackRunStates(assetsByID, devicesByID, feedbackByDeviceKey)
-	for auxID, chIDs := range topo.servedChillersByAux {
-		sort.Strings(chIDs)
-		topo.servedChillersByAux[auxID] = chIDs
-	}
 	return topo
 }
 
@@ -701,7 +726,6 @@ func (topo *shutdownTopology) resolveTargets(
 	feedbackByDeviceKey map[string]TelemetryPointDTO,
 	controlsByPoint map[string][]string,
 	controlsSite map[string]bool,
-	deviceToChillers map[string][]string,
 ) {
 	var fallbackEmergency *shutdownControlTarget
 	for _, point := range points {
@@ -771,13 +795,6 @@ func (topo *shutdownTopology) resolveTargets(
 			} else if _, exists := topo.statusCheckByAsset[assetID]; !exists {
 				topo.statusCheckByAsset[assetID] = target
 			}
-			if (capability == commandmodel.CapabilityStop || capability == commandmodel.CapabilityStopUnitSequence) && isShutdownHoldingAuxiliaryType(target.asset.AssetType) {
-				for _, check := range interlocks {
-					for _, chID := range deviceToChillers[check.DeviceID] {
-						topo.servedChillersByAux[assetID] = appendUniqueShutdownString(topo.servedChillersByAux[assetID], chID)
-					}
-				}
-			}
 		}
 	}
 	if topo.emergencyReleaseTarget == nil {
@@ -824,7 +841,25 @@ func resolveShutdownChillerByUnitCode(topo shutdownTopology, unitCode string) (A
 
 func isShutdownHoldingAuxiliaryType(assetType string) bool {
 	switch strings.ToUpper(strings.TrimSpace(assetType)) {
-	case "CHILLED_WATER_PUMP", "COOLING_WATER_PUMP", "COOLING_TOWER", "PUMP":
+	case planttwin.AssetTypeChilledWaterPump, planttwin.AssetTypeCoolingWaterPump, planttwin.AssetTypeCoolingTower, "PUMP":
+		return true
+	default:
+		return false
+	}
+}
+
+func isHydraulicLoopAssetType(assetType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(assetType)) {
+	case planttwin.AssetTypeChilledWaterLoop,
+		planttwin.AssetTypeCoolingWaterLoop,
+		"CHW_LOOP",
+		"CW_LOOP",
+		"CHILLED_WATER_HEADER",
+		"COOLING_WATER_HEADER",
+		"LOOP",
+		"PLANT_LOOP",
+		"HYDRAULIC_LOOP",
+		"HEADER":
 		return true
 	default:
 		return false
