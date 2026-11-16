@@ -244,6 +244,61 @@ test('songyaxuan-platform-envelope emits u51..u54 and controller run_state proje
   assert.equal(chillerA?.points[0]?.value, 'STOPPED');
 });
 
+test('songyaxuan-platform-envelope uses per-meter hysteresis for A/B vs combined-feeder C/D', () => {
+  const source = readFileSync(new URL('../edge/node-red/songyaxuan-platform-envelope.js', import.meta.url), 'utf8');
+  const state = new Map<string, unknown>();
+  const payload: Record<string, Array<{ ts: number; values: Record<string, number> }>> = {};
+  const sandbox = {
+    msg: { payload },
+    context: {
+      get: (key: string) => state.get(key),
+      set: (key: string, value: unknown) => state.set(key, value),
+    },
+    flow: {
+      get: (key: string) => state.get(`flow:${key}`),
+      set: (key: string, value: unknown) => state.set(`flow:${key}`, value),
+    },
+    Math,
+    Date,
+    Number,
+    Object,
+    Array,
+    crypto: undefined,
+  };
+  const fn: (
+    msg: typeof sandbox.msg,
+    context: typeof sandbox.context,
+    flow: typeof sandbox.flow,
+  ) => ReturnType<typeof runPlatformEnvelopeNode> = vm.runInNewContext(
+    `(function(msg, context, flow) {\n${source}\n})`,
+    sandbox,
+  );
+  const runStep = (device: string, powerTotal: number, ts: number) => {
+    sandbox.msg = {
+      payload: {
+        [device]: [{ ts, values: { powerTotal, combinedActiveTotalElectricalEnergy: 1000 } }],
+      },
+    };
+    const out = fn(sandbox.msg, sandbox.context, sandbox.flow);
+    return out.payload.payload.devices.find((d) => d.deviceId === device)?.points.find((p) => p.code === 'run_state')?.value;
+  };
+
+  let ts = 1_763_120_100_000;
+  // A/B meters measure chiller only: 38 kW starts immediately.
+  assert.equal(runStep('ammeter-unit4', 38, ts += 1000), 'RUNNING');
+  assert.equal(runStep('ammeter-unit3', 38, ts += 1000), 'RUNNING');
+
+  // C/D meters include ~30 kW auxiliaries: 38 kW and 57.75 kW stay STOPPED; > 57.75 kW starts; <= 45 kW stops.
+  for (const cdMeter of ['ammeter-unit1', 'ammeter-unit2'] as const) {
+    assert.equal(runStep(cdMeter, 38, ts += 1000), 'STOPPED', `${cdMeter} at 38 kW`);
+    assert.equal(runStep(cdMeter, 57.75, ts += 1000), 'STOPPED', `${cdMeter} at 57.75 kW`);
+    assert.equal(runStep(cdMeter, 58, ts += 1000), 'RUNNING', `${cdMeter} at 58 kW`);
+    assert.equal(runStep(cdMeter, 48, ts += 1000), 'RUNNING', `${cdMeter} holds at 48 kW`);
+    assert.equal(runStep(cdMeter, 45, ts += 1000), 'STOPPED', `${cdMeter} stops at 45 kW`);
+    assert.equal(runStep(cdMeter, 48, ts += 1000), 'STOPPED', `${cdMeter} remains stopped at 48 kW`);
+  }
+});
+
 test('executor handles LEVEL coils 0 and 14 with immediate state uplink and schemaVersion 2.0 reply', async () => {
   const { executor, writes, replies, telemetries } = createFakeExecutor();
   await executor.initialize();

@@ -130,7 +130,7 @@ test('songyaxuan outdoor temperature carries its quality profile into the freshn
   const { telemetry } = buildOnboardingSql(songyaxuan);
   const row = telemetry.split('\n').find((line) => line.includes("'t15'"));
   if (!row) throw new Error('t15 freshness row missing');
-  assert.match(row, /, -10, 45, '/);
+  assert.match(row, /, -25, 50, '/);
   assert.match(row, /38\.4/);
   assert.match(row, /"flatlineSeconds":10800/);
   const inactive = telemetry.split('\n').find((line) => line.includes("'t20'"));
@@ -677,4 +677,95 @@ test('songyaxuan-platform-envelope applies chiller power hysteresis and et1010 r
   const etPulseOnly = runEnvelope({ et1010: [{ ts: ts + 3000, values: { u14: 0, u51: 0 } }] });
   assert.equal(etPulseOnly.filter((d) => d.deviceId === 'et1010').length, 1);
   assert.equal(readPoint(etPulseOnly, 'et1010', 'run_state'), undefined);
+});
+
+test('feederAuxiliaryPowerKw, point running override, stabilizeSeconds and flatlineStabilizeSeconds compile and validate', () => {
+  const { registry, telemetry } = buildOnboardingSql(songyaxuan);
+  const chillerCPower = telemetry.split('\n').find((line) => line.startsWith("('01a14000-4000-7000-8000-000000000003', 'power_total'"));
+  const chillerAPower = telemetry.split('\n').find((line) => line.startsWith("('01a14000-4000-7000-8000-000000000006', 'power_total'"));
+  assert.match(chillerCPower ?? '', /"ratedPowerKw":157\.5/);
+  assert.doesNotMatch(chillerCPower ?? '', /"stabilizeSeconds":/);
+  assert.match(chillerAPower ?? '', /"ratedPowerKw":127\.5/);
+  assert.doesNotMatch(chillerAPower ?? '', /"stabilizeSeconds":/);
+
+  const chillerCAsset = registry.split('\n').find((line) => line.includes("'chiller-c'"));
+  assert.match(chillerCAsset ?? '', /"feederAuxiliaryPowerKw":30/);
+  const chillerCMeterPowerRow = registry.split('\n').find((line) => line.includes("'01a14000-4000-7000-8000-000000000003'") && line.includes("'power_total'"));
+  assert.match(chillerCMeterPowerRow ?? '', /"ratedPowerKw":127\.5/);
+  assert.match(chillerCMeterPowerRow ?? '', /"feederAuxiliaryPowerKw":30/);
+
+  const devicesByCode = new Map<string, OnboardingDevice>(
+    songyaxuan.devices.map((device) => [device.code, { ...device, points: expandPoints(device, songyaxuan.meterPoints) }]),
+  );
+  const btu = devicesByCode.get('btu-calc');
+  assert.ok(btu);
+  const coolCap = btu.points.find((candidate) => candidate.code === 'instant_cooling_capacity');
+  assert.ok(coolCap);
+  const copChecks = pointQuality({ ...coolCap, device: btu }, songyaxuan, devicesByCode).checks ?? '';
+  assert.match(copChecks, /"kind":"COP_CARNOT"/);
+  assert.match(copChecks, /"stabilizeSeconds":600/);
+  assert.match(copChecks, /"deviceId":"01a14000-4000-7000-8000-000000000003","key":"run_state","equals":"RUNNING"/);
+  const temp = devicesByCode.get('temperature-uid20');
+  assert.ok(temp);
+  const findTemp = (code: string) => {
+    const pt = temp.points.find((candidate) => candidate.code === code);
+    if (!pt) throw new Error(`missing temperature-uid20/${code}`);
+    return pointQuality({ ...pt, device: temp }, songyaxuan, devicesByCode);
+  };
+
+  const t1Checks = findTemp('t1').checks ?? '';
+  assert.match(t1Checks, /"flatlineStabilizeSeconds":600/);
+  assert.match(t1Checks, /"stabilizeSeconds":600/);
+  assert.match(t1Checks, /"running":\[\{"deviceId":"01a14000-4000-7000-8000-000000000006","key":"run_state","equals":"RUNNING"\}\]/);
+  assert.doesNotMatch(t1Checks, /01a14000-4000-7000-8000-000000000003/);
+
+  const t3Checks = findTemp('t3').checks ?? '';
+  assert.match(t3Checks, /"running":\[\{"deviceId":"01a14000-4000-7000-8000-000000000003","key":"run_state","equals":"RUNNING"\}\]/);
+  assert.doesNotMatch(t3Checks, /01a14000-4000-7000-8000-000000000006/);
+
+  const t16Checks = findTemp('t16').checks ?? '';
+  assert.match(t16Checks, /"flatlineStabilizeSeconds":600/);
+  assert.match(t16Checks, /01a14000-4000-7000-8000-000000000003/);
+  assert.match(t16Checks, /01a14000-4000-7000-8000-000000000006/);
+
+  for (const device of devicesByCode.values()) {
+    for (const point of device.points) {
+      if (point.pointType === 'COMMAND') continue;
+      const quality = pointQuality({ ...point, device }, songyaxuan, devicesByCode);
+      if (quality.checks) {
+        const rawJson = quality.checks.slice(1, quality.checks.lastIndexOf("'::jsonb")).replaceAll("''", "'");
+        assert.ok(Buffer.byteLength(rawJson, 'utf8') <= 4096, `${device.code}/${point.code} exceeds 4096 bytes`);
+      }
+    }
+  }
+
+  const invalid = copy(songyaxuan);
+  const catalogPlate = invalid.nameplateCatalog?.['hitachi-rcu180sc2-2007-unit-feeder'];
+  if (!catalogPlate) throw new Error('unit-feeder catalog entry missing');
+  catalogPlate.feederAuxiliaryPowerKw = -5;
+  if (invalid.qualityProfiles?.['chilled-water']) {
+    invalid.qualityProfiles['chilled-water'].flatlineStabilizeSeconds = -1;
+  }
+  if (invalid.physicsChecks?.[0]) {
+    invalid.physicsChecks[0].stabilizeSeconds = -10;
+  }
+  const copCheck = invalid.physicsChecks?.find((c) => c.code === 'plant-cop-carnot');
+  if (copCheck) {
+    delete (copCheck as Record<string, unknown>).running;
+  }
+  const invalidTemp = invalid.devices.find((d) => d.code === 'temperature-uid20')?.points.find((p) => p.code === 't1');
+  if (!invalidTemp) throw new Error('temperature-uid20/t1 missing');
+  invalidTemp.running = [{ device: 'no-such-device', point: 'run_state', equals: 'RUNNING' }];
+
+  const invalidRules = copy(songyaxuanAlarmRules);
+  invalidRules.deviceUntrusted = { ...invalidRules.deviceUntrusted, minPoints: 1, durationSeconds: -1, reasons: ['NOT_A_REASON'] };
+  const problems = checkSiteFile(invalid, invalidRules).join('\n');
+  assert.match(problems, /feederAuxiliaryPowerKw/);
+  assert.match(problems, /flatlineStabilizeSeconds/);
+  assert.match(problems, /physics check .*stabilizeSeconds must be a non-negative integer/);
+  assert.match(problems, /plant-cop-carnot: stabilizeSeconds requires running criteria/);
+  assert.match(problems, /temperature-uid20\/t1: running names unknown device no-such-device/);
+  assert.match(problems, /deviceUntrusted\.minPoints/);
+  assert.match(problems, /deviceUntrusted\.durationSeconds/);
+  assert.match(problems, /deviceUntrusted\.reasons/);
 });

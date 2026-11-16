@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：平台把四块机组电表的电量合成全站总电量（energy.totalMeter 设为 sum-of-sub-meters，网关保留 ammeter-total 作为总有功功率汇总），网关按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。机组电表的 Modbus 从站地址（2026-11-15 结合运行数据重新核对确认）：A 机组电表为 UID 4，B 机组电表为 UID 3，C 机组电表为 UID 5，D 机组电表为 UID 2（C、D 电表各自同时连接对应机组、水泵与冷却塔，且 C、D 冷机基本不开）。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场点位确认：A–D 蒸发出 t1–t4，冷却水总管进水 t5（四台共用），A–D 冷凝出 t6–t9，A 机组冷冻水支管进水 t10，冷却塔内侧总管 t11（与 t51 同点位共存）、外侧总管 t12（暂作出塔，与 t55 同点位共存），冷却水塔水 t13（暂作进塔）、t14，室外温度 t15，冷冻水总回水 t16、t17，总供水 t18、t19，大厅室内 t53、宴会厅室内 t54；t20、t52 备用不上报（函数里的 SPARE）。点位带 from（来源通道），网关函数的 COPIES 照它复制。 点位质量见 qualityProfiles：冷冻水 3–20 ℃、冷却水 15–45 ℃、房间 10–40 ℃、室外 −10–45 ℃；38.4 是模块通讯异常值。 铭牌见 nameplateCatalog：四台冷机是 2007 年日立 RCU180SC2（572 kW / 127.5 kW）；八台凯泉泵的 22 kW 和 15 kW 还没分到冷冻还是冷却；冷却塔风机铭牌未到。物理检查见 physicsChecks。测量不确定度见 measurement：温度 ±0.1 K，流量 ±2%，总功率 ±1%；温差相对误差超过 10% 时冷量标成部分。探头零点见 probePairs，只建议不改数。",
+  "note": "松雅轩空调机房的真实网关（Node-RED，RS485-1 /dev/ttyAS3 9600 8N1）。现场没有总电表和冷量表：平台把四块机组电表的电量合成全站总电量（energy.totalMeter 设为 sum-of-sub-meters，网关保留 ammeter-total 作为总有功功率汇总），网关按「1.163 × 总冷冻水流量 × (回水 − 供水)」计算冷量。机组电表的 Modbus 从站地址（2026-11-15 结合运行数据重新核对确认）：A 机组电表为 UID 4，B 机组电表为 UID 3，C 机组电表为 UID 5，D 机组电表为 UID 2（C、D 电表各自同时连接对应机组、水泵与冷却塔，辅机合计约 30 kW，且 C、D 冷机基本不开）。供回水通道由 2026-08-22 至 10-14 的历史判定：t16 − t18 与四台机组功率之和的相关系数 0.96，高负荷时温差约 1.65 ℃、COP 中位数约 4.2。电价为暂定的深圳工商业分时电价，按实际电费单修改。ET1010 预留做控制，目前只读回通道状态。 温度通道按现场点位确认：A–D 蒸发出 t1–t4，冷却水总管进水 t5（四台共用），A–D 冷凝出 t6–t9，A 机组冷冻水支管进水 t10，冷却塔内侧总管 t11（与 t51 同点位共存）、外侧总管 t12（暂作出塔，与 t55 同点位共存），冷却水塔水 t13（暂作进塔）、t14，室外温度 t15，冷冻水总回水 t16、t17，总供水 t18、t19，大厅室内 t53、宴会厅室内 t54；t20、t52 备用不上报（函数里的 SPARE）。点位带 from（来源通道），网关函数的 COPIES 照它复制。 点位质量见 qualityProfiles：冷冻水 −2–40 ℃、冷却水 0–50 ℃、房间 −10–50 ℃、室外 −25–50 ℃；38.4、−999、85、999 是异常占位值。 铭牌见 nameplateCatalog：四台冷机是 2007 年日立 RCU180SC2（572 kW / 127.5 kW，其中 C/D 含 30 kW 合并馈线辅机）；八台凯泉泵的 22 kW 和 15 kW 还没分到冷冻还是冷却；冷却塔风机铭牌未到。物理检查见 physicsChecks。测量不确定度见 measurement：温度 ±0.1 K，流量 ±2%，总功率 ±1%；温差相对误差超过 10% 时冷量标成部分。探头零点见 probePairs，只建议不改数。",
   "tenantId": "018f3d00-0000-7000-8000-000000000001",
   "site": {
     "id": "01a14000-1000-7000-8000-000000000001",
@@ -35,7 +35,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30401",
-          "qualityProfile": "chilled-water"
+          "qualityProfile": "chilled-water",
+          "running": [{ "device": "meter-uid4", "point": "run_state", "equals": "RUNNING" }]
         },
         {
           "code": "t2",
@@ -44,7 +45,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30402",
-          "qualityProfile": "chilled-water"
+          "qualityProfile": "chilled-water",
+          "running": [{ "device": "meter-uid3", "point": "run_state", "equals": "RUNNING" }]
         },
         {
           "code": "t3",
@@ -53,7 +55,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30403",
-          "qualityProfile": "chilled-water"
+          "qualityProfile": "chilled-water",
+          "running": [{ "device": "meter-uid5", "point": "run_state", "equals": "RUNNING" }]
         },
         {
           "code": "t4",
@@ -62,7 +65,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30404",
-          "qualityProfile": "chilled-water"
+          "qualityProfile": "chilled-water",
+          "running": [{ "device": "meter-uid2", "point": "run_state", "equals": "RUNNING" }]
         },
         {
           "code": "t5",
@@ -80,7 +84,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30406",
-          "qualityProfile": "condenser-water"
+          "qualityProfile": "condenser-water",
+          "running": [{ "device": "meter-uid4", "point": "run_state", "equals": "RUNNING" }]
         },
         {
           "code": "t7",
@@ -89,7 +94,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30407",
-          "qualityProfile": "condenser-water"
+          "qualityProfile": "condenser-water",
+          "running": [{ "device": "meter-uid3", "point": "run_state", "equals": "RUNNING" }]
         },
         {
           "code": "t8",
@@ -98,7 +104,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30408",
-          "qualityProfile": "condenser-water"
+          "qualityProfile": "condenser-water",
+          "running": [{ "device": "meter-uid5", "point": "run_state", "equals": "RUNNING" }]
         },
         {
           "code": "t9",
@@ -107,7 +114,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30409",
-          "qualityProfile": "condenser-water"
+          "qualityProfile": "condenser-water",
+          "running": [{ "device": "meter-uid2", "point": "run_state", "equals": "RUNNING" }]
         },
         {
           "code": "t10",
@@ -116,7 +124,8 @@
           "pointType": "TELEMETRY",
           "valueType": "NUMBER",
           "address": "UID20 输入寄存器 30410",
-          "qualityProfile": "chilled-water"
+          "qualityProfile": "chilled-water",
+          "running": [{ "device": "meter-uid4", "point": "run_state", "equals": "RUNNING" }]
         },
         {
           "code": "t11",
@@ -292,7 +301,7 @@
           "name": "运行状态",
           "pointType": "TELEMETRY",
           "valueType": "STRING",
-          "address": "网关判断：本机电表功率 > 12.75 kW 启动运行，<= 5 kW 停机"
+          "address": "网关判断：本机电表功率 > 57.75 kW 启动运行，<= 45 kW 停机（含 C 机组与配套水泵、冷却塔合并馈线）"
         },
         {
           "code": "chw_leaving_temperature",
@@ -373,7 +382,7 @@
           "name": "运行状态",
           "pointType": "TELEMETRY",
           "valueType": "STRING",
-          "address": "网关判断：本机电表功率 > 12.75 kW 启动运行，<= 5 kW 停机"
+          "address": "网关判断：本机电表功率 > 57.75 kW 启动运行，<= 45 kW 停机（含 D 机组与配套水泵、冷却塔合并馈线）"
         },
         {
           "code": "chw_leaving_temperature",
@@ -1561,7 +1570,7 @@
           "name": "3# 主机运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "ammeter-unit1: > 12.75 kW 启动运行，<= 5 kW 停机"
+          "address": "ammeter-unit1: > 57.75 kW 启动运行，<= 45 kW 停机（含配套水泵与冷却塔合并馈线）"
         },
         {
           "code": "start",
@@ -1813,7 +1822,7 @@
           "name": "4# 主机运行状态",
           "pointType": "STATE",
           "valueType": "STRING",
-          "address": "ammeter-unit2: > 12.75 kW 启动运行，<= 5 kW 停机"
+          "address": "ammeter-unit2: > 57.75 kW 启动运行，<= 45 kW 停机（含配套水泵与冷却塔合并馈线）"
         },
         {
           "code": "start",
@@ -2200,14 +2209,16 @@
       "code": "chiller-c",
       "name": "C 机组",
       "type": "CHILLER",
-      "nameplate": "hitachi-rcu180sc2-2007"
+      "nameplate": "hitachi-rcu180sc2-2007-unit-feeder",
+      "note": "C 机组电表同时计量 C 主机与配套冷冻水泵、冷却水泵、冷却塔合并馈线（辅机约 30 kW）。"
     },
     {
       "id": "01a14000-3000-7000-8000-000000000004",
       "code": "chiller-d",
       "name": "D 机组",
       "type": "CHILLER",
-      "nameplate": "hitachi-rcu180sc2-2007"
+      "nameplate": "hitachi-rcu180sc2-2007-unit-feeder",
+      "note": "D 机组电表同时计量 D 主机与配套冷冻水泵、冷却水泵、冷却塔合并馈线（辅机约 30 kW）。"
     },
     {
       "id": "01a14000-3000-7000-8000-000000000005",
@@ -2385,17 +2396,21 @@
     "chilled-water": {
       "accuracyK": 0.1,
       "range": {
-        "min": 3,
-        "max": 20
+        "min": -2,
+        "max": 40
       },
       "maxStep": 2.5,
       "maxStepWindowSeconds": 600,
       "sentinels": [
-        38.4
+        38.4,
+        -999,
+        85,
+        999
       ],
       "staleAfterSeconds": 180,
       "flatlineSeconds": 86400,
       "flatlineRunningSeconds": 1800,
+      "flatlineStabilizeSeconds": 600,
       "running": [
         {
           "device": "meter-uid5",
@@ -2422,17 +2437,21 @@
     "condenser-water": {
       "accuracyK": 0.1,
       "range": {
-        "min": 15,
-        "max": 45
+        "min": 0,
+        "max": 50
       },
       "maxStep": 4,
       "maxStepWindowSeconds": 600,
       "sentinels": [
-        38.4
+        38.4,
+        -999,
+        85,
+        999
       ],
       "staleAfterSeconds": 180,
       "flatlineSeconds": 86400,
       "flatlineRunningSeconds": 2700,
+      "flatlineStabilizeSeconds": 600,
       "running": [
         {
           "device": "meter-uid5",
@@ -2459,13 +2478,16 @@
     "room": {
       "accuracyK": 0.1,
       "range": {
-        "min": 10,
-        "max": 40
+        "min": -10,
+        "max": 50
       },
       "maxStep": 1.5,
       "maxStepWindowSeconds": 600,
       "sentinels": [
-        38.4
+        38.4,
+        -999,
+        85,
+        999
       ],
       "staleAfterSeconds": 180,
       "flatlineSeconds": 21600
@@ -2473,13 +2495,16 @@
     "outdoor": {
       "accuracyK": 0.1,
       "range": {
-        "min": -10,
-        "max": 45
+        "min": -25,
+        "max": 50
       },
       "maxStep": 3,
       "maxStepWindowSeconds": 600,
       "sentinels": [
-        38.4
+        38.4,
+        -999,
+        85,
+        999
       ],
       "staleAfterSeconds": 180,
       "flatlineSeconds": 10800
@@ -2587,6 +2612,22 @@
       "lowSidePressureMpa": 1.3,
       "condenserAreaM2": 60.6,
       "note": "2007 年铭牌，四台相同。冷凝器传热面积 60.60 m²。冷却塔风机铭牌还没拍到。"
+    },
+    "hitachi-rcu180sc2-2007-unit-feeder": {
+      "manufacturer": "日立",
+      "model": "RCU180SC2",
+      "year": 2007,
+      "refrigerant": "R22",
+      "ratedCapacityKw": 572,
+      "ratedPowerKw": 127.5,
+      "feederAuxiliaryPowerKw": 30,
+      "ratedCurrentA": 225,
+      "startingCurrentA": 222,
+      "supply": "380V/3PH/50Hz",
+      "highSidePressureMpa": 2.2,
+      "lowSidePressureMpa": 1.3,
+      "condenserAreaM2": 60.6,
+      "note": "2007 年日立铭牌与 A/B 相同（冷量 572 kW、主机输入功率 127.5 kW），C/D 机组电表同时计量主机与配套冷冻水泵、冷却水泵、冷却塔合并馈线，辅机功率约 30 kW。"
     },
     "kaiquan-fixed-unassigned": {
       "manufacturer": "凯泉",
@@ -2733,7 +2774,7 @@
       },
       "alarm": {
         "title": "C 机组功率超过铭牌",
-        "summary": "C 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A，且 C 机组电表同时接有 C 机组、水泵与冷却塔。回到 146.6 kW 以内后自动恢复。",
+        "summary": "C 机组电表功率超过主机铭牌 127.5 kW 与合并馈线辅机 30 kW 合计（157.5 kW）的 15%（181.1 kW）。铭牌运行电流 225 A，该表同时接有 C 机组、水泵与冷却塔。回到 181.1 kW 以内后自动恢复。",
         "severity": "MAJOR"
       }
     },
@@ -2748,7 +2789,7 @@
       },
       "alarm": {
         "title": "D 机组功率超过铭牌",
-        "summary": "D 机组电表功率超过铭牌输入功率 127.5 kW 的 15%（146.6 kW）。铭牌运行电流 225 A，且 D 机组电表同时接有 D 机组、水泵与冷却塔。回到 146.6 kW 以内后自动恢复。",
+        "summary": "D 机组电表功率超过主机铭牌 127.5 kW 与合并馈线辅机 30 kW 合计（157.5 kW）的 15%（181.1 kW）。铭牌运行电流 225 A，该表同时接有 D 机组、水泵与冷却塔。回到 181.1 kW 以内后自动恢复。",
         "severity": "MAJOR"
       }
     },
@@ -2756,6 +2797,29 @@
       "code": "plant-cop-carnot",
       "kind": "COP_CARNOT",
       "carnotFraction": 0.7,
+      "stabilizeSeconds": 600,
+      "running": [
+        {
+          "device": "meter-uid5",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid2",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid3",
+          "point": "run_state",
+          "equals": "RUNNING"
+        },
+        {
+          "device": "meter-uid4",
+          "point": "run_state",
+          "equals": "RUNNING"
+        }
+      ],
       "subject": {
         "device": "btu-calc",
         "point": "instant_cooling_capacity"
@@ -2799,6 +2863,7 @@
       "code": "header-chw-direction",
       "kind": "CHW_DIRECTION",
       "epsilonK": 0.05,
+      "stabilizeSeconds": 600,
       "subject": {
         "device": "temperature-uid20",
         "point": "t18"
@@ -2840,6 +2905,7 @@
       "code": "btu-chw-direction",
       "kind": "CHW_DIRECTION",
       "epsilonK": 0.05,
+      "stabilizeSeconds": 600,
       "subject": {
         "device": "btu-calc",
         "point": "supply_water_temperature"
@@ -2870,16 +2936,13 @@
           "equals": "RUNNING"
         }
       ],
-      "alarm": {
-        "title": "冷量计冷冻水供水不低于回水",
-        "summary": "有机组在运行，冷量计上的供水不低于回水。供冷量是用这对温度算的，接反时冷量不可信。供水低于回水，或机组全部停机后自动恢复。",
-        "severity": "MAJOR"
-      }
+      "note": "保留冷量计方向质量标记，不再单独发告警（避免与 header-chw-direction 重复）。"
     },
     {
       "code": "chiller-a-chw-direction",
       "kind": "CHW_DIRECTION",
       "epsilonK": 0.05,
+      "stabilizeSeconds": 600,
       "subject": {
         "device": "temperature-uid20",
         "point": "t1"
@@ -2906,6 +2969,7 @@
       "code": "chiller-b-chw-direction",
       "kind": "CHW_DIRECTION",
       "epsilonK": 0.05,
+      "stabilizeSeconds": 600,
       "subject": {
         "device": "temperature-uid20",
         "point": "t2"
@@ -2932,6 +2996,7 @@
       "code": "chiller-c-chw-direction",
       "kind": "CHW_DIRECTION",
       "epsilonK": 0.05,
+      "stabilizeSeconds": 600,
       "subject": {
         "device": "temperature-uid20",
         "point": "t3"
@@ -2958,6 +3023,7 @@
       "code": "chiller-d-chw-direction",
       "kind": "CHW_DIRECTION",
       "epsilonK": 0.05,
+      "stabilizeSeconds": 600,
       "subject": {
         "device": "temperature-uid20",
         "point": "t4"
@@ -2984,6 +3050,7 @@
       "code": "chiller-a-cw-direction",
       "kind": "CW_DIRECTION",
       "epsilonK": 0.05,
+      "stabilizeSeconds": 600,
       "subject": {
         "device": "temperature-uid20",
         "point": "t6"
@@ -3010,6 +3077,7 @@
       "code": "chiller-b-cw-direction",
       "kind": "CW_DIRECTION",
       "epsilonK": 0.05,
+      "stabilizeSeconds": 600,
       "subject": {
         "device": "temperature-uid20",
         "point": "t7"
@@ -3036,6 +3104,7 @@
       "code": "chiller-c-cw-direction",
       "kind": "CW_DIRECTION",
       "epsilonK": 0.05,
+      "stabilizeSeconds": 600,
       "subject": {
         "device": "temperature-uid20",
         "point": "t8"
@@ -3062,6 +3131,7 @@
       "code": "chiller-d-cw-direction",
       "kind": "CW_DIRECTION",
       "epsilonK": 0.05,
+      "stabilizeSeconds": 600,
       "subject": {
         "device": "temperature-uid20",
         "point": "t9"

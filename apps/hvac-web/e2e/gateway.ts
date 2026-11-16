@@ -234,6 +234,9 @@ function replayFindings(findings: Json[], now: string): Json[] {
   return findings.map((finding) => ({ ...finding, evaluationFrom: moved(finding.evaluationFrom), evaluationTo: moved(finding.evaluationTo), createdAt: moved(finding.createdAt) }));
 }
 
+/** Starting or stopping plant equipment is high risk at its base, as Command Governance assesses it. */
+const HIGH_RISK: readonly string[] = ['START', 'STOP', 'START_UNIT_SEQUENCE', 'STOP_UNIT_SEQUENCE'];
+
 function advance(command: Json, status: string, at: string) {
   command.transitions.push({
     ...(command.transitions.length ? { fromStatus: command.status } : {}),
@@ -262,6 +265,14 @@ export class Gateway {
   readonly workOrders = fixture<Json[]>('work-orders.json');
   readonly snapshots = fixture<Json>('snapshots.json');
   readonly commands: Json[] = [];
+  /** The Site's control mode and asset locks, as the Registry owner keeps them. */
+  controlState: Json = {
+    tenantId: principal.context.tenantId, siteId: SITE_ID, controlMode: 'REMOTE_AUTO', reason: '', updatedBy: null, updatedAt: null, revision: 1, assetLocks: [],
+  };
+  /** The latest stage-down and idle-auxiliary evaluation; null until the service evaluated the Site. */
+  staging: Json | null = null;
+  /** The session signed in with two steps in the last 10 minutes, so high-risk approvals go through. */
+  stepUpFresh = false;
   /** When the forecast is replayed as published; tests that pin the page clock set it to that instant. */
   forecastOrigin: string | null = null;
   /** Optional custom handler for `device-series:aggregate` so tests can simulate outages or specific series. */
@@ -371,10 +382,93 @@ export class Gateway {
     return route.fulfill({ status: reply.status ?? 200, contentType: 'application/json', body: JSON.stringify(reply.body) });
   }
 
+  /** Withdraws the commands not yet dispatched on these devices, as leaving auto control or locking does. */
+  private withdraw(deviceIds: readonly string[] | null, now: string): string[] {
+    return this.commands
+      .filter((command) => ['AWAITING_APPROVAL', 'QUEUED'].includes(command.status) && (deviceIds === null || deviceIds.includes(command.deviceId)))
+      .map((command) => { advance(command, 'CANCELLED', now); return command.commandId; });
+  }
+
+  private updateControlMode(input: Json, now: string): { status?: number; body: unknown } {
+    if (!input.reason?.trim()) return { status: 400, body: { status: 400, code: 'CONTROL_EXIT_REQUEST_INVALID', detail: 'The control state mutation is invalid.' } };
+    if (input.expectedRevision !== undefined && input.expectedRevision !== this.controlState.revision) {
+      return { status: 409, body: { status: 409, code: 'REGISTRY_REVISION_CONFLICT', detail: 'The expected control state revision is stale.' } };
+    }
+    if (input.controlMode === 'SAFE_SHUTDOWN_EXIT' && this.commands.some((command) => ['DISPATCHING', 'OUTCOME_UNKNOWN'].includes(command.status))) {
+      return { status: 409, body: { status: 409, code: 'SAFE_SHUTDOWN_PRECONDITION_FAILED', detail: 'Commands are still dispatching or awaiting reconciliation.' } };
+    }
+    const cancelled = this.controlState.controlMode === 'REMOTE_AUTO' && input.controlMode !== 'REMOTE_AUTO' ? this.withdraw(null, now) : [];
+    this.controlState = { ...this.controlState, controlMode: input.controlMode, reason: input.reason, updatedBy: MY_ID, updatedAt: now, revision: this.controlState.revision + 1 };
+    return { body: { ...this.controlState, cancelledCommandIds: cancelled } };
+  }
+
+  private updateControlLock(assetId: string, input: Json, now: string): { status?: number; body: unknown } {
+    if (!input.reason?.trim()) return { status: 400, body: { status: 400, code: 'CONTROL_EXIT_REQUEST_INVALID', detail: 'The control state mutation is invalid.' } };
+    const current = this.controlState.assetLocks.find((lock: Json) => lock.assetId === assetId);
+    if (current && input.expectedRevision !== undefined && input.expectedRevision !== current.revision) {
+      return { status: 409, body: { status: 409, code: 'REGISTRY_REVISION_CONFLICT', detail: 'The expected control lock revision is stale.' } };
+    }
+    const boundDeviceIds: string[] = Array.from(new Set<string>(this.assetModel.relationships
+      .filter((relationship: Json) => relationship.role === 'CONTROLS' && relationship.toId === assetId)
+      .map((relationship: Json) => this.assetModel.telemetryPoints.find((point: Json) => point.id === relationship.fromId)?.reportingDeviceId)
+      .filter(Boolean)));
+    const lock = { siteId: SITE_ID, assetId, lockMode: input.lockMode, reason: input.reason, updatedBy: MY_ID, updatedAt: now, revision: (current?.revision ?? 0) + 1, boundDeviceIds };
+    this.controlState = { ...this.controlState, assetLocks: [...this.controlState.assetLocks.filter((item: Json) => item.assetId !== assetId), lock] };
+    const cancelled = input.lockMode === 'UNLOCKED' ? [] : this.withdraw(boundDeviceIds, now);
+    return { body: { ...lock, cancelledCommandIds: cancelled } };
+  }
+
+  // Site shutdown as the gateway runs it: every mode needs a reason and the authenticator code;
+  // the plant and emergency modes switch the Site to safe exit and withdraw what is not dispatched.
+  private shutdownSite(input: Json, now: string): { status?: number; body: unknown } {
+    const refuse = (status: number, code: string, detail: string) => ({ status, body: { status, code, detail } });
+    if (!input.reason?.trim()) return refuse(400, 'CONTROL_EXIT_REQUEST_INVALID', 'reason is required.');
+    if (!/^\d{6}$/.test(input.verificationCode ?? '')) return refuse(428, 'STEP_UP_REQUIRED', 'Site shutdown requires a 6-digit verificationCode.');
+    if (input.expectedRevision !== undefined && input.expectedRevision !== this.controlState.revision) {
+      return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'The expected control state revision is stale.');
+    }
+    const points: Json[] = this.assetModel.telemetryPoints;
+    const assets: Json[] = this.assetModel.assets;
+    const chillers = assets.filter((asset) => asset.assetType === 'CHILLER');
+    const submit = (count: number) => Array.from({ length: count }, (_, index) => `0190c000-0000-7000-8000-${String(this.writes.length * 10 + index).padStart(12, '0')}`);
+    if (input.mode === 'ABORT_UNIT_SEQUENCE') {
+      const chiller = chillers.find((asset) => asset.code.toLowerCase() === String(input.unitCode ?? '').toLowerCase());
+      if (!chiller) return refuse(400, 'CONTROL_EXIT_REQUEST_INVALID', 'unitCode did not match an active CHILLER asset on this Site.');
+      const deviceIds = this.assetModel.relationships
+        .filter((relationship: Json) => relationship.role === 'CONTROLS' && relationship.toId === chiller.id)
+        .map((relationship: Json) => points.find((point) => point.id === relationship.fromId)?.reportingDeviceId)
+        .filter(Boolean);
+      const cancelled = this.withdraw(deviceIds, now);
+      return { body: { siteControlState: this.controlState, mode: input.mode, cancelledCommandIds: cancelled, submittedCommandIds: submit(1), deferredHoldingAssetIds: [] } };
+    }
+    if (input.mode === 'EMERGENCY_DO_RELEASE') {
+      if (input.confirmEmergencyDoRelease !== true) return refuse(400, 'CONTROL_EXIT_REQUEST_INVALID', 'confirmEmergencyDoRelease must be explicitly true.');
+      if (!points.some((point) => point.sourceMetadata?.actuationMode === 'EMERGENCY_DO_RELEASE')) {
+        return refuse(409, 'EMERGENCY_DO_RELEASE_UNAVAILABLE', 'This Site has no active EMERGENCY_DO_RELEASE command point.');
+      }
+    } else if (input.mode !== 'PLANT_SAFE_SHUTDOWN') {
+      return refuse(400, 'CONTROL_EXIT_REQUEST_INVALID', 'mode is invalid.');
+    }
+    const cancelled = this.withdraw(null, now);
+    this.controlState = { ...this.controlState, controlMode: 'SAFE_SHUTDOWN_EXIT', reason: input.reason, updatedBy: MY_ID, updatedAt: now, revision: this.controlState.revision + 1 };
+    const auxiliaries = assets.filter((asset) => ['CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP', 'COOLING_TOWER'].includes(asset.assetType));
+    const plant = input.mode === 'PLANT_SAFE_SHUTDOWN';
+    return {
+      body: {
+        siteControlState: this.controlState,
+        mode: input.mode,
+        cancelledCommandIds: cancelled,
+        submittedCommandIds: submit(plant ? chillers.length : 1),
+        // The recorded chiller is still running, so its pumps and tower wait for it to stop.
+        deferredHoldingAssetIds: plant ? auxiliaries.map((asset) => asset.id) : [],
+      },
+    };
+  }
+
   private submitCommand(input: Json, now: string): Json {
-    const point = fixture<Json>('asset-model.json').telemetryPoints.find((candidate: Json) => candidate.id === input.commandPointId);
+    const point = this.assetModel.telemetryPoints.find((candidate: Json) => candidate.id === input.commandPointId);
     const capability: string = point.sourceMetadata.capability;
-    const risk = capability === 'START' || capability === 'STOP' ? 'MEDIUM' : 'LOW';
+    const risk = HIGH_RISK.includes(capability) ? 'HIGH' : 'LOW';
     const command: Json = {
       schemaVersion: 1, commandId: `ec61c2dc-2d2c-4933-8fb7-${String(this.commands.length + 1).padStart(12, '0')}`, siteId: SITE_ID, deviceId: point.reportingDeviceId, pointId: point.id,
       capability, status: 'SUBMITTED', risk, approvalPolicy: risk === 'LOW' ? 'NONE' : 'SINGLE_APPROVER',
@@ -1088,11 +1182,44 @@ export class Gateway {
       }
       return { body: { data: this.commands } };
     }
-    if (method === 'POST' && path === '/api/v1/commands') return { status: 202, body: this.submitCommand(body!, now) };
+    if (method === 'POST' && path === '/api/v1/commands') {
+      if (this.controlState.controlMode !== 'REMOTE_AUTO') return { status: 409, body: { status: 409, code: 'COMMAND_CONTROL_LOCKED', detail: 'Site control is not remote auto.' } };
+      const point = this.assetModel.telemetryPoints.find((candidate: Json) => candidate.id === body?.commandPointId);
+      if (this.controlState.assetLocks.some((lock: Json) => lock.assetId === body?.assetId && lock.lockMode !== 'UNLOCKED')) {
+        return { status: 409, body: { status: 409, code: 'COMMAND_CONTROL_LOCKED', detail: 'Asset is locked.' } };
+      }
+      if (this.controlState.activeMaintenanceWindow && !['STOP', 'STOP_UNIT_SEQUENCE', 'RESET_FAULT'].includes(point?.sourceMetadata?.capability)) {
+        return { status: 409, body: { status: 409, code: 'COMMAND_CONTROL_LOCKED', detail: 'Only stop and reset commands are permitted during the maintenance window.' } };
+      }
+      if (HIGH_RISK.includes(point?.sourceMetadata?.capability) && !/^\d{6}$/.test(body?.verificationCode ?? '')) {
+        return { status: 428, body: { status: 428, code: 'STEP_UP_REQUIRED', detail: 'High-risk commands require a 6-digit verificationCode from your authenticator app.' } };
+      }
+      return { status: 202, body: this.submitCommand(body!, now) };
+    }
+    const cancellation = path.match(/^\/api\/v1\/commands\/([^/]+)\/cancel$/);
+    if (method === 'POST' && cancellation) {
+      const command = this.commands.find((candidate) => candidate.commandId === cancellation[1]);
+      if (!command || !['AWAITING_APPROVAL', 'QUEUED'].includes(command.status)) {
+        return { status: 409, body: { status: 409, code: 'COMMAND_CANCEL_INVALID', detail: 'Only a pending or queued Command can be cancelled before dispatch begins.' } };
+      }
+      advance(command, 'CANCELLED', now);
+      return { body: command };
+    }
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/control-state`) return { body: this.controlState };
+    if (method === 'PUT' && path === `/api/v1/sites/${SITE_ID}/control-mode`) return this.updateControlMode(body!, now);
+    if (method === 'POST' && path === `/api/v1/sites/${SITE_ID}/control-shutdown`) return this.shutdownSite(body!, now);
+    const lockMatch = path.match(/^\/api\/v1\/assets\/([^/]+)\/control-lock$/);
+    if (method === 'PUT' && lockMatch) return this.updateControlLock(lockMatch[1], body!, now);
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/staging-recommendations/latest`) {
+      return this.staging ? { body: this.staging } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+    }
     const approval = path.match(/^\/api\/v1\/commands\/([^/]+)\/approve$/);
     if (method === 'POST' && approval) {
       const command = this.commands.find((candidate) => candidate.commandId === approval[1]);
-      if (!command || command.status !== 'AWAITING_APPROVAL') return { status: 409, body: { status: 409, code: 'COMMAND_APPROVAL_INVALID', detail: '指令不在待审批状态' } };
+      if (!command || command.status !== 'AWAITING_APPROVAL') return { status: 409, body: { status: 409, code: 'COMMAND_APPROVAL_INVALID', detail: 'The Command is not awaiting another approval.' } };
+      if ((command.risk === 'HIGH' || command.risk === 'CRITICAL') && !this.stepUpFresh) {
+        return { status: 428, body: { status: 428, code: 'STEP_UP_REQUIRED', detail: 'This high-risk Command approval requires recent multi-factor authentication.' } };
+      }
       command.approvalCount += 1;
       advance(command, 'APPROVED', now);
       advance(command, 'SUCCEEDED', now);

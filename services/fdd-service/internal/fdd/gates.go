@@ -114,10 +114,11 @@ type Topology struct {
 
 // GateAsset is one active asset with the devices bound to it; rated values are kW, 0 when unknown.
 type GateAsset struct {
-	AssetID         string
-	DeviceIDs       []string
-	RatedPowerKW    float64
-	RatedCapacityKW float64
+	AssetID                string
+	DeviceIDs              []string
+	RatedPowerKW           float64
+	RatedCapacityKW        float64
+	FeederAuxiliaryPowerKW float64
 }
 
 // DeviceIDs are the devices whose power and run state the gates read.
@@ -387,7 +388,7 @@ func chillerRunning(index series, chiller GateAsset, minute time.Time, gates Ope
 	if chiller.RatedPowerKW > 0 {
 		for _, device := range chiller.DeviceIDs {
 			if power, ok := index.at(device, powerTotalKey, minute, gates.GateHoldMinutes, validKilowatts); ok {
-				return power.Number > gates.ChillerRunning.MinimumRatedPowerFraction*chiller.RatedPowerKW, runningBasisRatedPower
+				return power.Number > math.Max(0, chiller.FeederAuxiliaryPowerKW)+gates.ChillerRunning.MinimumRatedPowerFraction*chiller.RatedPowerKW, runningBasisRatedPower
 			}
 		}
 	}

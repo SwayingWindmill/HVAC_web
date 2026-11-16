@@ -10,10 +10,15 @@
 #### 变更
 
 - 将控制指令校验、三档控制退出、资产控制锁、检修窗口与水路联锁规则统一收拢至控制服务 `ControlAuthority`（ADR 0032），新增迁移 `008_command_precondition_mode.sql` 以显式 `EMERGENCY_BYPASS` + `bypass_reason` 取代急停断采时的虚假遥测拼接，并由 `ClaimDispatch` 在下发 MQTT 前复用同一套 `EvaluateControlGate` 安全闸门。
-- 平台网关 `cmd/energy-api/internal/gateway/{command.go, control_exit.go}` 收薄为会话、CSRF、限流、边缘两步验证与 `X-Command-Control-Context` 签名转发层，`route-ownership.v1.json` 升级至第 49 版并将 `/api/v1/sites/{siteId}/control-{state,mode,shutdown}` 与 `/api/v1/assets/{assetId}/control-lock` 划归 `command-service`；同步移除派发器 `dynamic_safety.go` 与连接层 `command_route.go` 的重复安全策略分支。
+- 平台网关 `cmd/energy-api/internal/gateway/{command.go, control_exit.go}` 收薄为会话、CSRF、限流、边缘两步验证与 `X-Command-Control-Context` 签名转发层，`route-ownership.v1.json` 升级至第 50 版并将 `/api/v1/sites/{siteId}/control-{state,mode,shutdown}` 与 `/api/v1/assets/{assetId}/control-lock` 划归 `command-service`；同步移除派发器 `dynamic_safety.go` 与连接层 `command_route.go` 的重复安全策略分支。
 
 #### 新增
 
+- 「运行控制」可以直接从平台停机：控制方式条右侧「停机…」执行安全停机（先停所有没锁定的冷机，主机停稳后再停对应的水泵和冷却塔，站点切到安全退出并撤回没下发的指令）；站点登记了紧急全断点位时还可以选「紧急全断」，立刻断开全部输出通道。机组的一键启停还没结束时，机组列上出现「中止…」，只中止并按顺序停这一组。三种都要填原因、输入动态口令并确认已和现场沟通。松雅轩登记在冷冻水总管上的「紧急全断全部 DO 通道」不再显示成普通的「停止」按钮。
+- 第一性原理重构遥测可信边界、冷机防冻保护与整机根因抑制（#749）：
+  - `deploy/sites/songyaxuan.alarm-rules.json` 与 `modules/alarm/pkg/alarmrules` 新增设备级根因告警规则 `deviceUntrusted`（`device-untrusted/<device>`，`MAJOR`，连续 `180 秒`）：非派生设备的全部 `>= 2` 个监测点位同时出现超量程、通讯异常值 `38.4` 或 `SOURCE_UNTRUSTED` 时，仅发出 1 条整台根因告警，并在条件树内部同步抑制同设备逐点 `suspect`（支持 `durationSeconds: 300`）与 `readings-not-updated` 症状告警，避免 23 路探头同时掉线刷屏；同时排除 `device-untrusted/` 触发无意义的 `rules-unevaluable`。
+  - `deploy/sites/songyaxuan.alarm-rules.json` 新增 `chiller-leaving-low`（`CRITICAL`，`180 秒`）：任意运行中的冷机（A `t1`、B `t2`、C `t3`、D `t4`）冷冻水出水低于 `4.0 °C` 时立即触发防冻保护告警（冷机停机或水温回升过 `4.5 °C` 恢复）。
+  - 资产铭牌（`libs/nameplate` 与 `scripts/site-onboarding.mjs`）新增 `feederAuxiliaryPowerKw` 字段，用于表达合并计量冷机与定频辅机（水泵、冷却塔）的总馈线电表辅机功耗基数（并新增迁移 `042-grant-asset-nameplate-read.sql` 按最小权限授予 `fdd_runtime` 与 `optimization_runtime` 只读 `core_registry.assets.nameplate`）；通知路由新增多条分作用域根因抑制规则 `rootCauseRules`（`scopeSameDevice: true` 让 `device-untrusted/<device>` 只静默同设备的下游告警通知，不误伤站内其它正常设备）。
 - 系统管理「用户与角色」页面（`/system?tab=users`）新增「两步验证」列，并在管理员与运维主管提交高风险指令前提前预警（#831）：
   - `services/identity-service`（`DirectoryUser`）与网关成员接口（`GET /api/v1/iam/members`）仅返回每个成员是否已开通认证器两步验证的布尔状态 `mfaEnabled`（不返回密钥、密文或恢复码等敏感信息），同步更新 OpenAPI 与生成客户端 `UserAdminMember`。
   - 用户列表展示「已开通 / 未开通」，对启用中且拥有管理员或运维主管角色但未开通两步验证的成员标出 `▲ 未开通` 与「提交不了高风险指令」，停用账号时自动撤去提醒。
@@ -27,12 +32,20 @@
 - 三层站点控制退出与安全停机编排（`POST /api/v1/sites/{siteId}/control-shutdown`）：
   - 在网关（`cmd/energy-api/internal/gateway/control_exit.go`）、OpenAPI 契约与生成客户端中新增 `executeSiteControlShutdown`，支持一键顺控中止（`ABORT_UNIT_SEQUENCE`，撤回排队与在途顺控指令并通知边缘停止计时器）、全站安全停机（`PLANT_SAFE_SHUTDOWN`，切换 `SAFE_SHUTDOWN_EXIT` 后先发未锁定冷机停机脉冲，仅对确认已停冷机放行水泵/冷却塔保持线圈并把仍在运行的泵/塔列入 `deferredHoldingAssetIds`）以及二次确认全站紧急断电（`EMERGENCY_DO_RELEASE`，自动核对阻断急停的历史未知指令后向 `et1010/emergency_stop_all` 下发全输出清零，即使断采也强制放行）。
   - `MANUAL_OVERRIDE` 与 `SAFE_SHUTDOWN_EXIT` 退出模式下，平台网关与接入路由双层放行 `STOP` 与 `STOP_UNIT_SEQUENCE`，允许冷机停妥后释放仍在保持的水泵与冷却塔继电器；非停机与设定类指令继续严格拦截。
+- 站点自动控制租约、下发前实时安全复核与 30 分钟执行监护回滚机制：
+  - 新增迁移 `043-auto-control-leases-and-monitors.sql` 与核心注册表（`modules/registry`）租约接口，在站点下新增 `site_auto_control_leases` 与 `optimization_execution_monitors` 两张表；默认保持 `MANUAL_CONFIRM`（不自动下发），仅支持持 `schedule.manage` 权限（运维主管或管理员）并完成 6 位认证器动态验证码两步验证的操作员通过 `PUT /api/v1/sites/{siteId}/optimization/auto-control-lease` 开通最长 24 小时、限定能力白名单与温升/功率/频次边界的自动控制租约，或通过 `revoke` 随时收回，并通过 `GET .../execution-monitors` 查看监护状态。
+  - 在 `libs/commandauth` 与 `modules/iam` 新增内部工作负载指令授权端点 `POST /internal/v1/command/workload-decision` 与审计字段（`WorkloadSPIFFE`、`LeaseID`、`ArmedBy`），二次核验租约未过期、站点处于 `REMOTE_AUTO` 且无资产锁定、能力与设定值边界、每小时频次上限及回滚预置匹配后，签发不超过 30 秒且不可转授的控制授权；网关新增仅接受已认证 `optimization-service` 内部呼叫的 `POST /api/v1/sites/{siteId}/optimization/auto-commands`。
+  - 在 `libs/intelligencemodel` 与 `services/optimization-service` 为优化建议加上 65 分钟有效期 `validUntil`，发布后仅在持有有效租约时执行供水偏差不超过 `0.5 °C`、冷机功率不超过额定 `0.90` 倍与实时温控健康复核后以 `auto-opt:<recommendationId>` 自动下发，并在随后 30 分钟每分钟巡检实时温度、冷机负荷与遥测健康状态；一旦越界或断采超过 5 分钟，立即以 `auto-rollback:<monitorId>` 自动回滚设定点、将租约断路置为 `TRIPPED` 并投递 `AUTO_CONTROL_LEASE_TRIPPED` 告警通知。
 
 #### 修复
 
+- 系统消除松雅轩机组辅机误判、开机热平衡瞬态误报与异常值连带刷屏：
+  - **C/D 总馈线与压缩机专用表解耦**：松雅轩 C（`meter-uid5` / `ammeter-unit1`）、D（`meter-uid2` / `ammeter-unit2`）铭牌配置 `feederAuxiliaryPowerKw: 30`；边缘包络脚本 `edge/node-red/songyaxuan-platform-envelope.js` 改用逐表迟滞 `METER_RUN_KW`（A/B `12.75 / 5 kW`，C/D `57.75 / 45 kW`）；FDD 开机门控、优化减台评估与网页排班偏差检测统一计入 `feederAuxiliaryPowerKw` 并在排班模型中优先采用 `run_state` 判定，消除 C/D 单开水泵和冷却塔（`31–44 kW`）误报冷机运行及温差倒挂的问题。
+  - **开机热惯性稳定窗与同伴新鲜度校验**：`modules/telemetry` 把 `unchanged_since` 连续状态追踪扩充至非数值点位（含 `run_state`），跨点检查与运行状态门控在入库评估时读取 `freshness_policies.fresh_within_seconds` 过滤过期同伴读数；物理规则新增 `stabilizeSeconds`（热力方向、总管方向与能效比设为 `600 秒`，`PHYSICS_POWER` 保持 `0 秒` 瞬时拦截），平线规则新增 `flatlineStabilizeSeconds`（`600 秒`）且统一走 `VALID_ONLY`，A–D 蒸发/冷凝出水通道按点位绑定各自冷机电表 `run_state`。
+  - **放宽物理真实量程与补全异常/冷启动链路**：松雅轩 `qualityProfiles` 放宽至物理极限（冷冻水 `[-2, 40] °C`、冷却水 `[0, 50] °C` 等），`2.8 °C` 过冷低温正常入库并进入 `chiller-leaving-low` 保护而非被拒收；`SENTINEL` 与 `SOURCE_UNTRUSTED` 不再叠加 `FLATLINE`；修复冷启动仅收到拒收读数（`ONLY_REJECTED_CANDIDATES`）时的 `OUT_OF_RANGE` 评估、拒收行 `SOURCE_UNTRUSTED` 健康记录、`site_rules_http.go` 的 `REASONS` 谓词校验缺口、OpenAPI/前后端 `SOURCE_UNTRUSTED` 契约枚举，以及去掉派生设备 `btu-calc` / `meter-total` 冗余的 `suspect` 与 `btu-chw-direction` 告警。
 - 修复 `deploy/platform/phase1/cd/build-release.sh` 的 `collect_migrator_tree` 在读取 `migrations/Dockerfile` 时遇到第二个 `FROM scratch`（`sources-runtime` 阶段）即提前中断、导致发布包遗漏运行时迁移文件的问题，并新增基于 `migration-list.tsv` 的全量校验。
 - 对齐生产域名反向代理与松雅轩现场无线集中器默认值：
-  - 为内部工作负载身份清单补充 `host-edge-proxy`，容器 `nginx` 使用 `trusted-client-ca.pem` 与身份主题映射，使宿主机 `nginx` 校验网关客户端证书后通过内部双向 TLS 安全透传 `X-Gateway-Client-Cert` 至 `connectivity`，并更新 `hvac-gateway-nodered-loopback@.service` 容器名为 `hvac-platform-connectivity-1`；`deploy.sh` 迁库前对齐 `roles.sql`、补建 `$R/alarm-delivery` 目录并在上线后向 `mqtt-broker` 发送 `SIGHUP` 重载 ACL。
+  - 为内部工作负载身份清单补充 `host-edge-proxy`，容器 `nginx` 使用 `trusted-client-ca.pem` 与身份主题映射，使宿主机 `nginx` 校验网关客户端证书后通过内部双向 TLS 安全透传 `X-Gateway-Client-Cert` 至 `connectivity`，并更新 `hvac-gateway-nodered-loopback@.service` 容器名为 `hvac-platform-connectivity-1`；`deploy.sh` 迁库前对齐 `roles.sql`、补建 `$R/alarm-delivery` 目录，并核对 `mqtt-broker` 容器内单文件挂载（`mosquitto.conf`、`acl`、`gateway-ca.pem`）并在内容漂移时自动重建容器绑定新 inode。
   - 修复无线集中器 `WRITE_PARAMS` 在修改 `modbusId` 后改向新从站地址提交 `0x9C41 = 6`；为边缘隧道与证书自动续签补齐系统根证书（`tls.rootCertificates`）与私有网关 CA 的合并校验，确保直连生产 HTTPS 域名时同时验证公网证书与网关 CA 签名；网页端「无线集中器」默认从站点 `TEMPERATURE_MODULE` 推断初始从站地址（松雅轩默认为 `UID 20`）。
 - 修正松雅轩电表启停迟滞、脉冲核验不误冻结与一键顺控硬件时序：
   - 边缘信封脚本（`edge/node-red/songyaxuan-platform-envelope.js`）改用 `12.75 kW` 启动、`5 kW` 停机迟滞判定各机组电表与主机控制器运行状态，按设备持久化避免单泵空转误判为主机启动，同步上报 `et1010/run_state`，并将 `ctrl-chiller-a..d` 的采样周期统一对齐电表的 `300` 秒。
@@ -44,6 +57,22 @@
 #### 变更
 
 - 清理 `hvac_s4.alarm_runtime` 中 4 张 S13 一次性迁移遗留表（`alarm_current_pre_s13_backup`、`alarm_idempotency_pre_s13_backup`、`s13_alarm_migration_report`、`s13_alarm_identity_map`）并移除对应过时回滚脚本；为 8 个 PostgreSQL 数据库下全部 12 个 schema 与 221 张在用数据表补齐中文 `COMMENT ON` 注释，并新增静态门禁 `npm run migrations:conventions:check` 拦截阶段性命名、`CREATE TABLE ... AS` 副本表与缺失注释的新迁移。
+
+#### 改进
+
+- 「控制指令」页改为「运行控制」，按值班习惯重排：
+  - 顶部一条「控制方式」显示远程自动控制 / 人工接管 / 安全退出、谁在几点设的、原因、锁定设备数和待处理指令数，点另外两种方式即可切换（必须填原因）；切离远程自动时列出会被撤回的待审批、排队指令，还有指令在下发或等现场确认时不能安全退出。
+  - 设备按机组排成列：每台冷机和它的冷冻泵、冷却泵、冷却塔（取自登记的开机联锁）一列，带「一键启动」「一键停机」；每台设备只给当前能做的那个按钮，水路联锁不满足时直接写「先开 1 号冷冻泵」「先停 A 机组主机」并置灰。
+  - 运行计划里今天有检修窗口时，控制方式条写出窗口名称和日期，启动和调整设定值置灰，只留停机和复位。
+  - 每台设备可以「手动锁定」「检修锁定」或解除锁定（必须填原因），锁定后撤回它还没下发的指令，平台不再给它下发指令或停机建议。
+  - 启停和一键启停属于高风险指令：确认时要输入认证器上的 6 位动态口令并勾选「已和现场确认」；批准高风险指令时如果两步验证超过 10 分钟，会提示「批准前要再验证一次身份」，验证后回到这条指令。
+  - 指令记录新增「撤回」，网关拒绝时显示中文原因（例如「被水路联锁拦下」「还有指令正在下发或等现场确认，先处理完再安全退出」），不再显示英文错误。
+- 站点处于人工接管或安全退出时，所有站点页面顶栏都显示「▲ 人工接管」「◆ 安全退出」并链到运行控制；侧栏「运行控制」角标显示待审批和待现场确认的指令数。
+- 实时运行页头部在有设备锁定时显示「N 台锁定」，「最近事件」加入今天的控制方式切换和设备锁定；设备详情侧栏对锁定的设备显示锁定方式、谁锁的和原因。
+
+#### 新增
+
+- 优化建议页「当前建议」新增「减台与辅机停机」：列出可以停的冷机（停机后剩余制冷能力、余量、能效变化）、运行计划停机时段里还在转的冷机，以及对应主机已停但仍在转的水泵、冷却塔，各自显示预计省多少千瓦、本班约省多少电；逐条「确认停机…」走高风险确认后下发，已提交的显示审批状态并链到运行控制；被锁定、因控制方式或检修窗口暂停的项目单列「暂停 N 条」并写明原因。供水温度优化放在下方，两者互不影响。
 
 #### 修复
 

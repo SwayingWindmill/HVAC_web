@@ -656,3 +656,122 @@ test('extractSchedulePlantMonitorTargets reads Asset.ratedPower, matches Songyax
     ]),
   );
 });
+
+test('detectUnscheduledRunningDeviations prefers run_state over power for combined-feeder C/D chillers and adds feederAuxiliaryPowerKw fallback', () => {
+  const baseModel = buildMinimalAssetModel(127.5);
+  const cdModel: SiteAssetModel = {
+    ...baseModel,
+    assets: [
+      {
+        ...baseModel.assets[0],
+        code: 'chiller-c',
+        displayName: 'C 机组',
+        ratedPower: 127.5,
+      },
+    ],
+    devices: [
+      {
+        ...baseModel.devices[0],
+        code: 'meter-uid5',
+        displayName: 'C 机组电表',
+        deviceType: 'HVAC_POWER_METER',
+      },
+    ],
+    telemetryPoints: [
+      {
+        ...baseModel.telemetryPoints[0],
+        pointCode: 'power_total',
+        sourceKey: 'chiller.power',
+        sourceMetadata: { ratedPowerKw: 127.5, feederAuxiliaryPowerKw: 30 },
+      },
+      baseModel.telemetryPoints[1],
+    ],
+    relationships: [baseModel.relationships[0]],
+  };
+
+  const targets = extractSchedulePlantMonitorTargets(cdModel);
+  assert.equal(targets.length, 1);
+  assert.equal(targets[0].feederAuxiliaryPowerKw, 30);
+
+  const mondayMidnightUtc = Date.parse('2026-10-11T16:00:00.000Z');
+  const schedule: OperatingSchedule = {
+    id: '01990000-6000-7000-8000-000000000003',
+    tenantId: TENANT_ID,
+    siteId: SITE_ID,
+    timezone: TIMEZONE,
+    name: '松雅轩运行计划',
+    preCoolLeadMinutes: 0,
+    coastDownLagMinutes: 0,
+    revision: 1,
+    updatedBy: '018f3e00-2000-7000-8000-000000000001',
+    updatedAt: '2026-10-12T00:00:00.000Z',
+    slots: [{ dayOfWeek: 1, startMinute: 480, endMinute: 1080 }],
+  };
+  const week = resolveEffectiveWeek({
+    schedule,
+    exceptions: [],
+    anchorDate: '2026-10-12',
+    timezone: TIMEZONE,
+  });
+
+  const makePowerBucket = (minuteStart: number, kw: number): DeviceHistoryAggregateBucket => ({
+    telemetryKey: 'power_total',
+    pointId: '01910000-0000-7000-8000-00000000001c',
+    pointRevision: 1,
+    pointType: 'TELEMETRY',
+    unit: 'kW',
+    periodStart: new Date(mondayMidnightUtc + minuteStart * 60_000).toISOString(),
+    periodEnd: new Date(mondayMidnightUtc + (minuteStart + 15) * 60_000).toISOString(),
+    quality: { good: 3, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
+    completeness: 1,
+    gauge: { average: kw, minimum: kw, maximum: kw, first: kw, last: kw, sampleCount: 3 },
+  });
+  const makeStateBucket = (minuteStart: number, stateValue: string): DeviceHistoryAggregateBucket => ({
+    telemetryKey: 'run_state',
+    pointId: '01910000-0000-7000-8000-000000000014',
+    pointRevision: 1,
+    pointType: 'STATE',
+    unit: null,
+    periodStart: new Date(mondayMidnightUtc + minuteStart * 60_000).toISOString(),
+    periodEnd: new Date(mondayMidnightUtc + (minuteStart + 15) * 60_000).toISOString(),
+    quality: { good: 3, partial: 0, estimated: 0, manual: 0, stale: 0, invalid: 0 },
+    completeness: 1,
+    state: {
+      valueType: 'STRING',
+      lastValue: stateValue,
+      sampleCount: 3,
+      changeCount: 0,
+      stateCounts: [{ value: stateValue, count: 3 }],
+    },
+  });
+
+  const deviations = detectUnscheduledRunningDeviations({
+    siteId: SITE_ID,
+    week,
+    targets,
+    bucketsByDevice: new Map([
+      [
+        CHILLER_DEVICE_ID,
+        [
+          // 38 kW standby (aux pumps only) with run_state 'standby': must NOT flag!
+          makePowerBucket(60, 38),
+          makeStateBucket(60, 'standby'),
+          // 70 kW with run_state 'RUNNING': MUST flag!
+          makePowerBucket(120, 70),
+          makeStateBucket(120, 'RUNNING'),
+          // Power-only fallback (no run_state bucket): 38 kW < 42.75 kW (30 + 12.75) -> NOT flagged!
+          makePowerBucket(180, 38),
+          // Power-only fallback (no run_state bucket): 58 kW >= 42.75 kW -> MUST flag!
+          makePowerBucket(240, 58),
+        ],
+      ],
+    ]),
+    nowMs: mondayMidnightUtc + 6 * 60 * 60_000,
+  });
+
+  assert.equal(deviations.length, 2);
+  assert.equal(deviations[0].startMinute, 120);
+  assert.equal(deviations[0].averagePowerKw, 70);
+  assert.equal(deviations[1].startMinute, 240);
+  assert.equal(deviations[1].averagePowerKw, 58);
+});

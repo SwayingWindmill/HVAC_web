@@ -593,6 +593,7 @@ func TestCommandRegistryDecisionUsesRegistryRouteOwnership(t *testing.T) {
 type commandGatewayFixture struct {
 	mu                 sync.Mutex
 	feedbackPointType  string
+	commandCapability  commandmodel.Capability
 	now                time.Time
 	handler            *handler
 	sessionID          string
@@ -605,6 +606,7 @@ type commandGatewayFixture struct {
 	commandID          string
 	principalID        string
 	gatewaySigner      *ecdsa.PrivateKey
+	iamSigner          *ecdsa.PrivateKey
 	store              *sessionstore.MemoryStore
 	control            *commandservice.TestControlHarness
 	iamCalls           atomic.Int32
@@ -636,6 +638,7 @@ func newCommandGatewayFixture(t *testing.T, feedbackTypes ...string) *commandGat
 		commandPointID:  "018f3e00-7000-7000-8000-000000000001",
 		feedbackPointID: "018f3e00-8000-7000-8000-000000000001",
 		gatewaySigner:   gatewaySigner,
+		iamSigner:       control.GrantSigner.(*ecdsa.PrivateKey),
 		control:         control,
 	}
 	if len(feedbackTypes) > 0 {
@@ -835,6 +838,40 @@ func (fixture *commandGatewayFixture) commandIAMClient(t *testing.T) *http.Clien
 	t.Helper()
 	return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		fixture.iamCalls.Add(1)
+		if request.URL.Path == "/internal/v1/registry/decision" {
+			parent, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, request.Header.Get("X-Delegation-Grant"))
+			if err != nil {
+				return jsonTestResponse(http.StatusUnauthorized, map[string]any{"code": "IAM_DELEGATION_INVALID"}), nil
+			}
+			var input registryauth.DecisionRequest
+			if json.NewDecoder(request.Body).Decode(&input) != nil {
+				return jsonTestResponse(http.StatusBadRequest, map[string]any{"code": "IAM_REQUEST_INVALID"}), nil
+			}
+			switch input.Action {
+			case registryauth.ActionAssetRead, registryauth.ActionAssetModelRead, registryauth.ActionDeviceRead, registryauth.ActionSiteRead, registryauth.ActionScheduleManage:
+			default:
+				return jsonTestResponse(http.StatusBadRequest, map[string]any{"code": "IAM_ACTION_INVALID"}), nil
+			}
+			now := fixture.now.UTC()
+			decision := registryauth.Decision{
+				Allowed: true, PrincipalID: fixture.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
+				TenantID: fixture.tenantID, AllowedSiteIDs: []string{fixture.siteID},
+				Actions: []registryauth.Action{input.Action}, PolicyRevision: "registry-read:1/iam:1",
+				ReasonCode: registryauth.ReasonAllowSiteRole, DecidedAt: now.Format(time.RFC3339Nano),
+			}
+			claims := registryauth.GrantClaims{
+				Issuer: "spiffe://hvac.local/iam-service", Presenter: "spiffe://hvac.local/platform-gateway", Audience: "platform-core-service",
+				PrincipalID: fixture.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
+				TenantID: fixture.tenantID, AllowedSiteIDs: []string{fixture.siteID},
+				Actions: []registryauth.Action{input.Action}, PolicyRevision: "registry-read:1/iam:1",
+				DecisionReason: registryauth.ReasonAllowSiteRole, SessionID: parent.SessionID, ParentTokenID: parent.TokenID,
+				IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: randomURLToken(16),
+			}
+			return jsonTestResponse(http.StatusOK, registryauth.DecisionResponse{
+				Decision:        decision,
+				DelegationGrant: commandUnsignedRegistryGrant(claims),
+			}), nil
+		}
 		return nil, context.DeadlineExceeded
 	})}
 }

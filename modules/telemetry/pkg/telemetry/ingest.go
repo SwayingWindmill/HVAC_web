@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"time"
 
@@ -140,6 +141,13 @@ type ObservationPolicy struct {
 	QualityChecks          *QualityChecks
 }
 
+// PriorSample is the previous accepted value for non-numeric or mixed unchanged-since tracking.
+type PriorSample struct {
+	Value          json.RawMessage
+	SampledAt      time.Time
+	UnchangedSince time.Time
+}
+
 type ObservationFacts struct {
 	Device           *ResolvedDevice
 	DeviceConflict   bool
@@ -149,7 +157,9 @@ type ObservationFacts struct {
 	EventAlreadySeen bool
 	LatestSampledAt  *time.Time
 	Previous         *PriorNumeric
+	PreviousSample   *PriorSample
 	Running          bool
+	RunningSince     *time.Time
 	InputsUntrusted  bool
 	Peers            map[string]PeerSample
 }
@@ -216,7 +226,7 @@ func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts,
 		decision.Status = ObservationRejected
 		decision.Quality = QualityInvalid
 		decision.ReevaluateSnapshot = true
-		if slices.Contains(reasons, QualityReasonOutOfRange) && (facts.LatestSampledAt == nil || candidate.SampledAt.After(facts.LatestSampledAt.UTC())) {
+		if (slices.Contains(reasons, QualityReasonOutOfRange) || slices.Contains(reasons, QualityReasonSourceUntrusted)) && (facts.LatestSampledAt == nil || candidate.SampledAt.After(facts.LatestSampledAt.UTC())) {
 			recordPointHealth(&decision, QualityInvalid, reasons)
 		}
 		return decision
@@ -230,9 +240,7 @@ func EvaluateObservation(candidate ObservationCandidate, facts ObservationFacts,
 		decision.Quality = QualityStale
 	}
 	recordPointHealth(&decision, decision.Quality, reasons)
-	if number, ok := numericSample(candidate); ok {
-		decision.UnchangedSince = UnchangedSinceOf(number, candidate.SampledAt, facts.Previous)
-	}
+	decision.UnchangedSince = unchangedSinceOfCandidate(candidate, facts)
 	if facts.LatestSampledAt != nil && !candidate.SampledAt.After(facts.LatestSampledAt.UTC()) {
 		decision.Status = ObservationOutOfOrder
 		decision.QualityReasons = append(decision.QualityReasons, QualityReasonOutOfOrder)
@@ -332,9 +340,59 @@ func qualityInput(candidate ObservationCandidate, facts ObservationFacts, live b
 		pointType = facts.Point.PointType
 	}
 	return PointQualityInput{
-		PointType: pointType, Live: live, Previous: facts.Previous, Running: facts.Running, InputsUntrusted: facts.InputsUntrusted,
-		Peers: facts.Peers,
+		PointType:       pointType,
+		Live:            live,
+		Previous:        facts.Previous,
+		Running:         facts.Running,
+		RunningSince:    facts.RunningSince,
+		InputsUntrusted: facts.InputsUntrusted,
+		SourceUntrusted: candidate.WireQuality != 0,
+		Peers:           facts.Peers,
 	}
+}
+
+func unchangedSinceOfCandidate(candidate ObservationCandidate, facts ObservationFacts) time.Time {
+	sampledAt := candidate.SampledAt.UTC()
+	if number, ok := numericSample(candidate); ok {
+		if facts.Previous != nil {
+			return UnchangedSinceOf(number, sampledAt, facts.Previous).UTC()
+		}
+		if facts.PreviousSample != nil {
+			if prevNumber, prevOK := numericJSON(facts.PreviousSample.Value); prevOK {
+				return UnchangedSinceOf(number, sampledAt, &PriorNumeric{
+					Value:          prevNumber,
+					SampledAt:      facts.PreviousSample.SampledAt,
+					UnchangedSince: facts.PreviousSample.UnchangedSince,
+				}).UTC()
+			}
+		}
+		return sampledAt
+	}
+	if facts.PreviousSample != nil && sameJSONValueAndType(candidate.Value, facts.PreviousSample.Value) {
+		if !facts.PreviousSample.UnchangedSince.IsZero() {
+			return facts.PreviousSample.UnchangedSince.UTC()
+		}
+		if !facts.PreviousSample.SampledAt.IsZero() {
+			return facts.PreviousSample.SampledAt.UTC()
+		}
+	}
+	return sampledAt
+}
+
+func sameJSONValueAndType(leftRaw, rightRaw json.RawMessage) bool {
+	leftKind, leftNumber, leftOK := observationValueType(leftRaw)
+	rightKind, rightNumber, rightOK := observationValueType(rightRaw)
+	if !leftOK || !rightOK || leftKind != rightKind {
+		return false
+	}
+	if leftKind == "NUMBER" {
+		return nearlyEqual(leftNumber, rightNumber)
+	}
+	var leftValue, rightValue any
+	if json.Unmarshal(leftRaw, &leftValue) != nil || json.Unmarshal(rightRaw, &rightValue) != nil {
+		return false
+	}
+	return reflect.DeepEqual(leftValue, rightValue)
 }
 
 func numericSample(candidate ObservationCandidate) (float64, bool) {

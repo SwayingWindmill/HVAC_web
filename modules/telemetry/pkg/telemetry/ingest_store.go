@@ -293,22 +293,25 @@ WHERE device_id = $1::uuid AND telemetry_key = $2
 	if err == nil {
 		latest = latest.UTC()
 		facts.LatestSampledAt = &latest
+		priorSample := PriorSample{Value: append(json.RawMessage(nil), latestValue...), SampledAt: latest}
+		if unchangedSince != nil {
+			priorSample.UnchangedSince = unchangedSince.UTC()
+		}
+		facts.PreviousSample = &priorSample
 		if number, ok := numericJSON(latestValue); ok {
-			prior := PriorNumeric{Value: number, SampledAt: latest}
-			if unchangedSince != nil {
-				prior.UnchangedSince = unchangedSince.UTC()
-			}
+			prior := PriorNumeric{Value: number, SampledAt: latest, UnchangedSince: priorSample.UnchangedSince}
 			facts.Previous = &prior
 		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return ObservationFacts{}, "", fmt.Errorf("query latest telemetry ordering fact: %w", err)
 	}
 	if facts.Policy != nil && facts.Policy.QualityChecks != nil {
-		running, untrusted, err := loadQualityContext(ctx, tx, facts.Policy.QualityChecks)
+		running, runningSince, untrusted, err := loadQualityContext(ctx, tx, facts.Policy.QualityChecks, candidate.SampledAt)
 		if err != nil {
 			return ObservationFacts{}, "", err
 		}
 		facts.Running = running
+		facts.RunningSince = runningSince
 		facts.InputsUntrusted = untrusted
 		if len(facts.Policy.QualityChecks.Physics) > 0 || facts.Policy.QualityChecks.Uncertainty != nil {
 			peers, err := loadPhysicsPeers(ctx, tx, facts.Policy.QualityChecks)
@@ -328,23 +331,45 @@ func numericJSON(raw []byte) (float64, bool) {
 
 // loadQualityContext reads the other points a check names. It does not lock them:
 // a running flag or an input's quality is the last committed sample.
-func loadQualityContext(ctx context.Context, tx pgx.Tx, checks *QualityChecks) (running bool, inputsUntrusted bool, err error) {
+func loadQualityContext(ctx context.Context, tx pgx.Tx, checks *QualityChecks, at time.Time) (running bool, runningSince *time.Time, inputsUntrusted bool, err error) {
+	var latestSince time.Time
 	for _, expect := range checks.Running {
 		var encoded []byte
+		var quality string
+		var sampledAt time.Time
+		var since time.Time
+		var freshWithinSeconds *int
 		err := tx.QueryRow(ctx, `
-SELECT value FROM telemetry_runtime.latest_accepted_telemetry
-WHERE device_id = $1::uuid AND telemetry_key = $2
-`, expect.DeviceID, expect.Key).Scan(&encoded)
+SELECT l.value, l.quality, l.sampled_at, COALESCE(l.unchanged_since, l.sampled_at), fp.fresh_within_seconds
+FROM telemetry_runtime.latest_accepted_telemetry l
+LEFT JOIN telemetry_runtime.freshness_policies fp
+  ON fp.device_id = l.device_id AND fp.telemetry_key = l.telemetry_key AND fp.configured
+WHERE l.device_id = $1::uuid AND l.telemetry_key = $2
+`, expect.DeviceID, expect.Key).Scan(&encoded, &quality, &sampledAt, &since, &freshWithinSeconds)
 		if errors.Is(err, pgx.ErrNoRows) {
 			continue
 		}
 		if err != nil {
-			return false, false, fmt.Errorf("query operating point %s/%s: %w", expect.DeviceID, expect.Key, err)
+			return false, nil, false, fmt.Errorf("query operating point %s/%s: %w", expect.DeviceID, expect.Key, err)
 		}
-		if jsonEquals(encoded, expect.Equals) {
-			running = true
-			break
+		if quality != string(QualityGood) || !jsonEquals(encoded, expect.Equals) {
+			continue
 		}
+		if freshWithinSeconds != nil && *freshWithinSeconds > 0 {
+			staleAfter := time.Duration(*freshWithinSeconds) * time.Second
+			delta := at.Sub(sampledAt.UTC())
+			if delta > staleAfter || delta < -staleAfter {
+				continue
+			}
+		}
+		running = true
+		transition := since.UTC()
+		if latestSince.IsZero() || transition.After(latestSince) {
+			latestSince = transition
+		}
+	}
+	if running && !latestSince.IsZero() {
+		runningSince = &latestSince
 	}
 	for _, input := range checks.Inputs {
 		var quality string
@@ -357,14 +382,14 @@ WHERE device_id = $1::uuid AND telemetry_key = $2
 			continue
 		}
 		if err != nil {
-			return false, false, fmt.Errorf("query quality input %s/%s: %w", input.DeviceID, input.Key, err)
+			return false, nil, false, fmt.Errorf("query quality input %s/%s: %w", input.DeviceID, input.Key, err)
 		}
 		if quality != string(QualityGood) || (health != nil && (*health == HealthBad || *health == HealthSuspect)) {
 			inputsUntrusted = true
 			break
 		}
 	}
-	return running, inputsUntrusted, nil
+	return running, runningSince, inputsUntrusted, nil
 }
 
 // loadPhysicsPeers reads the other points a physics check names. A missing point
@@ -406,17 +431,34 @@ func loadPhysicsPeers(ctx context.Context, tx pgx.Tx, checks *QualityChecks) (ma
 	for _, item := range refs {
 		var raw []byte
 		var quality string
+		var sampledAt time.Time
+		var unchangedSince *time.Time
+		var freshWithinSeconds *int
 		err := tx.QueryRow(ctx, `
-SELECT value, quality FROM telemetry_runtime.latest_accepted_telemetry
-WHERE device_id = $1::uuid AND telemetry_key = $2
-`, item.device, item.key).Scan(&raw, &quality)
+SELECT l.value, l.quality, l.sampled_at, l.unchanged_since, fp.fresh_within_seconds
+FROM telemetry_runtime.latest_accepted_telemetry l
+LEFT JOIN telemetry_runtime.freshness_policies fp
+  ON fp.device_id = l.device_id AND fp.telemetry_key = l.telemetry_key AND fp.configured
+WHERE l.device_id = $1::uuid AND l.telemetry_key = $2
+`, item.device, item.key).Scan(&raw, &quality, &sampledAt, &unchangedSince, &freshWithinSeconds)
 		if errors.Is(err, pgx.ErrNoRows) {
 			continue
 		}
 		if err != nil {
 			return nil, fmt.Errorf("query physics peer %s/%s: %w", item.device, item.key, err)
 		}
-		sample := PeerSample{Text: jsonText(raw), Good: quality == string(QualityGood)}
+		sample := PeerSample{
+			Text:      jsonText(raw),
+			Good:      quality == string(QualityGood),
+			SampledAt: sampledAt.UTC(),
+		}
+		if unchangedSince != nil {
+			since := unchangedSince.UTC()
+			sample.UnchangedSince = &since
+		}
+		if freshWithinSeconds != nil && *freshWithinSeconds > 0 {
+			sample.StaleAfter = time.Duration(*freshWithinSeconds) * time.Second
+		}
 		if number, ok := numericJSON(raw); ok {
 			sample.Number = &number
 		}
@@ -437,8 +479,16 @@ func jsonText(raw []byte) string {
 	if json.Unmarshal(raw, &value) != nil {
 		return ""
 	}
-	text, _ := value.(string)
-	return text
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(typed)
+	default:
+		return ""
+	}
 }
 
 func jsonEquals(raw []byte, want string) bool {

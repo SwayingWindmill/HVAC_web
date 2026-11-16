@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Plus, Sparkles } from 'lucide-react';
+import { Lock, Plus, Sparkles } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { Area, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts';
@@ -15,7 +15,8 @@ import { useAssistantPanel } from '@/features/assistant/assistant-panel-store';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
-import { formatTime } from '@/lib/operator-format';
+import { activeLocks, LOCK_PRESENTATION, siteControlStateQuery } from '@/features/control/control-state';
+import { formatCompactTime, formatTime, personLabel } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { pointIsTrusted } from '@/features/assets/operational-projection';
 import { deviceStatus, KEY_READINGS, POWER_KEY } from '../../realtime/device-presentation';
@@ -43,6 +44,26 @@ function trendKeys(device: PlantDevice): string[] {
     .sort((left, right) => rank(left.sourceKey) - rank(right.sourceKey))
     .slice(0, MAX_HISTORY_KEYS)
     .map((point) => point.pointCode);
+}
+
+/** The asset's control lock, owned by the control page: shown here only as a summary with the way there. */
+function ControlLockSummary({ siteId, assetId, myId, timeZone }: { readonly siteId: string; readonly assetId: string; readonly myId: string; readonly timeZone: string }) {
+  const state = useQuery(siteControlStateQuery(siteId));
+  const lock = activeLocks(state.data).get(assetId);
+  if (!lock || lock.lockMode === 'UNLOCKED') return null;
+  return (
+    <section aria-label="控制" className="flex flex-col gap-2.5">
+      <h3 className="text-sm font-semibold">控制</h3>
+      <div className="grid grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-0.5 rounded-lg bg-warning-soft px-3 py-2.5">
+        <Lock className="size-[15px] text-warning-text" aria-hidden="true" />
+        <span className="text-sm font-semibold">{LOCK_PRESENTATION[lock.lockMode].label} · 平台不下发指令</span>
+        <Link to="/operations/control" search={{ site: siteId }} className="text-xs font-medium text-primary hover:underline">去运行控制 ›</Link>
+        <span className="col-span-2 col-start-2 text-xs text-secondary-foreground">
+          {personLabel(lock.updatedBy ?? undefined, myId)}{lock.updatedAt ? ` ${formatCompactTime(lock.updatedAt, timeZone)}` : ''}{lock.reason ? ` · ${lock.reason}` : ''}
+        </span>
+      </div>
+    </section>
+  );
 }
 
 export function DeviceInspector({ device, categoryLabel, onClose }: {
@@ -104,6 +125,8 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
             </div>
           ))}
         </dl>
+
+        {assetId ? <ControlLockSummary siteId={site.id} assetId={assetId} myId={principal.principalId} timeZone={site.timezone} /> : null}
 
         <section className="flex flex-col gap-2.5">
           <h3 className="text-sm font-semibold">当前读数<span className="ml-2 text-xs font-normal text-muted-foreground">{points.length} 个点位</span></h3>

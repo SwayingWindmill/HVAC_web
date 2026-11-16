@@ -119,6 +119,41 @@ func TestAlarmHTTPSiteRulesNeedAnAlarmReadGrantForThatSite(t *testing.T) {
 	}
 }
 
+func TestSiteRuleListValidatesReasonsConditions(t *testing.T) {
+	rule, err := siteRuleView(SiteRule{
+		AssignmentID: "018f3e00-7a02-7000-8000-000000000002",
+		Policy: AlarmPolicyRevision{
+			Title:       "数据不可信",
+			Severity:    alarmmodel.SeverityWarning,
+			TriggerMode: TriggerSimple,
+			Raise:       Condition{Kind: ConditionReasons, Input: testDeviceID + "/t18", Match: ReasonMatchAny, Reasons: []string{"OUT_OF_RANGE", "SOURCE_UNTRUSTED"}},
+			Clear:       Condition{Kind: ConditionReasons, Input: testDeviceID + "/t18", Match: ReasonMatchNone, Reasons: []string{"OUT_OF_RANGE", "SOURCE_UNTRUSTED"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := SiteRuleList{Items: []SiteRuleView{rule}}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid REASONS rule rejected: %v", err)
+	}
+
+	reading := &RuleReading{DeviceID: testDeviceID, PointCode: "t18"}
+	for name, cond := range map[string]RuleCondition{
+		"bad match":    {Kind: ConditionReasons, Reading: reading, Match: "ALL", Reasons: []string{"OUT_OF_RANGE"}},
+		"empty":        {Kind: ConditionReasons, Reading: reading, Match: ReasonMatchAny},
+		"too many":     {Kind: ConditionReasons, Reading: reading, Match: ReasonMatchAny, Reasons: []string{"OUT_OF_RANGE", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT", "LOW_CONFIDENCE", "SOURCE_UNTRUSTED", "PROBE_OFFSET", "PHYSICS_POWER"}},
+		"unknown code": {Kind: ConditionReasons, Reading: reading, Match: ReasonMatchAny, Reasons: []string{"BOGUS_REASON"}},
+	} {
+		invalid := valid
+		invalid.Items = []SiteRuleView{rule}
+		invalid.Items[0].Raise = cond
+		if err := invalid.Validate(); err == nil {
+			t.Errorf("%s: invalid REASONS condition accepted", name)
+		}
+	}
+}
+
 func mustJSON(t *testing.T, value any) string {
 	t.Helper()
 	encoded, err := json.Marshal(value)

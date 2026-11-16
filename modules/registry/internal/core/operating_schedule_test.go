@@ -327,6 +327,18 @@ func (*memoryScheduleBackend) SaveSiteControlMode(context.Context, registryauth.
 func (*memoryScheduleBackend) SaveAssetControlLock(context.Context, registryauth.GrantClaims, AssetControlLockMutation) (AssetControlLockState, bool, error) {
 	return AssetControlLockState{}, false, ErrInvalidMutation
 }
+func (*memoryScheduleBackend) GetSiteAutoControlLease(_ context.Context, claims registryauth.GrantClaims, siteID string) (SiteAutoControlLeaseState, error) {
+	return SiteAutoControlLeaseState{TenantID: claims.TenantID, SiteID: siteID, ConfirmationMode: ConfirmationModeManual}, nil
+}
+func (*memoryScheduleBackend) ListOptimizationExecutionMonitors(_ context.Context, claims registryauth.GrantClaims, siteID string) (OptimizationExecutionMonitorList, error) {
+	return OptimizationExecutionMonitorList{TenantID: claims.TenantID, SiteID: siteID, Items: []OptimizationExecutionMonitor{}}, nil
+}
+func (*memoryScheduleBackend) ArmSiteAutoControlLease(context.Context, registryauth.GrantClaims, ArmAutoControlLeaseMutation) (SiteAutoControlLeaseState, bool, error) {
+	return SiteAutoControlLeaseState{}, false, ErrInvalidMutation
+}
+func (*memoryScheduleBackend) RevokeSiteAutoControlLease(context.Context, registryauth.GrantClaims, RevokeAutoControlLeaseMutation) (SiteAutoControlLeaseState, bool, error) {
+	return SiteAutoControlLeaseState{}, false, ErrInvalidMutation
+}
 
 type scheduleHTTPClient struct {
 	handler http.Handler

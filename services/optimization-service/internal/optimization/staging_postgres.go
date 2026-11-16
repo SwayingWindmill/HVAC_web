@@ -13,12 +13,13 @@ import (
 )
 
 type stagingAssetRow struct {
-	ID              string
-	Code            string
-	DisplayName     string
-	AssetType       string
-	RatedPowerKW    float64
-	RatedCapacityKW float64
+	ID                     string
+	Code                   string
+	DisplayName            string
+	AssetType              string
+	RatedPowerKW           float64
+	RatedCapacityKW        float64
+	FeederAuxiliaryPowerKW float64
 }
 
 type stagingDeviceRow struct {
@@ -98,7 +99,9 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND lock_mode <> 'UNLOCKED'`, tena
 	lockRows.Close()
 
 	assetRows, err := tx.Query(ctx, `
-SELECT id::text, code, display_name, asset_type, COALESCE(rated_power, 0), COALESCE(rated_capacity, 0)
+SELECT id::text, code, display_name, asset_type, COALESCE(rated_power, 0), COALESCE(rated_capacity, 0),
+CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(nameplate->'unconfirmed', '[]'::jsonb)) u(f) WHERE u.f = 'feederAuxiliaryPowerKw')
+  THEN 0 ELSE COALESCE((nameplate->>'feederAuxiliaryPowerKw')::double precision, 0) END
 FROM core_registry.assets
 WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status='ACTIVE'
   AND asset_type IN ('CHILLER', 'CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP', 'COOLING_TOWER')
@@ -109,7 +112,7 @@ ORDER BY code, id`, tenantID, siteID)
 	var assets []stagingAssetRow
 	for assetRows.Next() {
 		var row stagingAssetRow
-		if scanErr := assetRows.Scan(&row.ID, &row.Code, &row.DisplayName, &row.AssetType, &row.RatedPowerKW, &row.RatedCapacityKW); scanErr != nil {
+		if scanErr := assetRows.Scan(&row.ID, &row.Code, &row.DisplayName, &row.AssetType, &row.RatedPowerKW, &row.RatedCapacityKW, &row.FeederAuxiliaryPowerKW); scanErr != nil {
 			assetRows.Close()
 			return StagingTopology{}, scanErr
 		}
@@ -452,14 +455,15 @@ func buildStagingTopologyFromRecords(
 				meterSourceKey = firstNonEmptyString(bound[0].device.SourceKey, bound[0].device.Code)
 			}
 			topology.Chillers = append(topology.Chillers, ChillerMeterBinding{
-				AssetID:         asset.ID,
-				AssetCode:       asset.Code,
-				AssetName:       asset.DisplayName,
-				MeterDeviceID:   meterDeviceID,
-				MeterSourceKey:  meterSourceKey,
-				BoundDeviceIDs:  boundIDs,
-				RatedCapacityKW: asset.RatedCapacityKW,
-				RatedPowerKW:    asset.RatedPowerKW,
+				AssetID:                asset.ID,
+				AssetCode:              asset.Code,
+				AssetName:              asset.DisplayName,
+				MeterDeviceID:          meterDeviceID,
+				MeterSourceKey:         meterSourceKey,
+				BoundDeviceIDs:         boundIDs,
+				RatedCapacityKW:        asset.RatedCapacityKW,
+				RatedPowerKW:           asset.RatedPowerKW,
+				FeederAuxiliaryPowerKW: asset.FeederAuxiliaryPowerKW,
 			})
 			continue
 		}

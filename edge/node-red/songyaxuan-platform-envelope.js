@@ -1,8 +1,8 @@
 // Node-RED「平台·形成信封」for Songyaxuan: { <device>: [{ ts, values }] } -> telemetry envelope 2.0.
 const GATEWAY_ID = "01a14000-4000-7000-8000-000000000100";
-const METERS = ["ammeter-unit1", "ammeter-unit2", "ammeter-unit3", "ammeter-unit4"];
-const CHILLER_START_RUN_KW = 12.75;
-const CHILLER_STOP_KW = 5;
+const AB = { startKw: 12.75, stopKw: 5 }, CD = { startKw: 57.75, stopKw: 45 };
+const METER_RUN_KW = { "ammeter-unit1": CD, "ammeter-unit2": CD, "ammeter-unit3": AB, "ammeter-unit4": AB };
+const METERS = Object.keys(METER_RUN_KW);
 const METER_FRESH_MS = 900000;
 const DEVICES = {
   temperature: { codes: null, unit: "Cel" },
@@ -52,9 +52,10 @@ const extract = (entryVal) => {
   }
   return { value: entryVal, quality: null };
 };
+const isNum = Number.isFinite;
 const numValue = (values, key) => {
   const value = extract(values[key]).value;
-  return typeof value === "number" && Number.isFinite(value) ? value : NaN;
+  return isNum(value) ? value : NaN;
 };
 
 // UUIDv7: 48-bit Unix milliseconds, version 7, variant 10, random rest.
@@ -131,10 +132,10 @@ for (const [device, samples] of Object.entries(source)) {
     if (sparePrefix && (key === `${sparePrefix}20` || key === `${sparePrefix}52`)) continue;
 
     let { value, quality } = extract(entryVal);
-    if (baseline !== undefined && key === "combinedActiveTotalElectricalEnergy" && typeof value === "number" && Number.isFinite(value)) {
+    if (baseline !== undefined && key === "combinedActiveTotalElectricalEnergy" && isNum(value)) {
       value -= baseline;
     }
-    const isNumber = typeof value === "number" && Number.isFinite(value);
+    const isNumber = isNum(value);
     const isString = mapping.allowString && typeof value === "string" && value.length > 0;
     if (!isNumber && !isString) continue;
 
@@ -157,9 +158,12 @@ for (const [device, samples] of Object.entries(source)) {
   let meterRunning = null;
   if (isMeter && Number.isFinite(powerTotal)) {
     const meterRunState = { ...(context.get("meterRunState") || {}) };
-    const auxKw = Object.entries(SHARED_AUX_KW[device] || {}).reduce((sum, [ch, kw]) => sum + ((et1010Coils[ch] || 0) > 0 ? kw : 0), 0);
+    const shared = SHARED_AUX_KW[device];
+    const hasCoils = shared && Object.keys(shared).some((ch) => ch in et1010Coils);
+    const auxKw = hasCoils ? Object.entries(shared).reduce((sum, [ch, kw]) => sum + (et1010Coils[ch] > 0 ? kw : 0), 0) : 0;
+    const bounds = !shared || hasCoils ? AB : METER_RUN_KW[device];
     const chillerKw = Math.max(0, powerTotal - auxKw);
-    meterRunning = meterRunState[device] ? chillerKw > CHILLER_STOP_KW : chillerKw > CHILLER_START_RUN_KW;
+    meterRunning = meterRunState[device] ? chillerKw > bounds.stopKw : chillerKw > bounds.startKw;
     meterRunState[device] = meterRunning;
     context.set("meterRunState", meterRunState);
     points.push(statePoint(meterRunning));
@@ -169,7 +173,7 @@ for (const [device, samples] of Object.entries(source)) {
   for (const [field, targets] of Object.entries(COPIES[device] || {})) {
     const parsed = extract(sample.values[field]);
     const copyQuality = parsed.quality ?? 0;
-    if (typeof parsed.value !== "number" || !Number.isFinite(parsed.value)) continue;
+    if (!isNum(parsed.value)) continue;
     if (device === "temperature" && (parsed.value === 0 || copyQuality !== 0 || isOfflineChannel(device, field))) continue;
     for (const [target, code] of targets) {
       if (!copies[target]) copies[target] = { ts: sample.ts, points: [] };

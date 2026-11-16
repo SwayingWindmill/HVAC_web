@@ -110,9 +110,10 @@ test("measures on two machines' sub-meters report side by side", async ({ page, 
 
 test('a measure cites the setpoint command it came from, named as the control page names it', async ({ page, gateway }) => {
   await page.goto(`/operations/control?site=${SITE_ID}`);
-  const chiller = page.getByRole('rowgroup', { name: 'CHILLER-01' });
-  await chiller.getByRole('textbox', { name: '冷冻水出水设定温度目标值' }).fill('8');
-  await chiller.getByRole('button', { name: '下发' }).first().click();
+  await page.getByRole('button', { name: '调整 CHILLER-01 的设定值' }).click();
+  const settings = page.getByRole('dialog', { name: '调整 CHILLER-01 的设定值' });
+  await settings.getByRole('textbox', { name: '冷冻水出水设定温度目标值' }).fill('8');
+  await settings.getByRole('textbox', { name: '冷冻水出水设定温度目标值' }).press('Enter');
   await page.getByRole('alertdialog').getByRole('button', { name: '确认下发' }).click();
   await expect(page.getByRole('list', { name: '指令记录' }).getByRole('listitem').first()).toContainText('已执行');
 

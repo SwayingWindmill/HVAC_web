@@ -14,7 +14,7 @@
 
 1. **控制业务语义全部收拢到 `command-service` 内的 `ControlAuthority`（ADR 0032）**
    - `ControlAuthority` 通过三个显式端口与上游交互：`PlantTwinPort`（调 Core Registry 资产/模型/控制态及新内部端点 `GET /internal/v1/registry/commands/dispatch-context`）、`TelemetryLivePort`（读 Telemetry Runtime 最新在线读数 `GET /internal/v1/commands/reported-state`）、`IAMAuthorizerPort`（以 `spiffe://hvac.local/command-service` 身份申请只作用域在 `decision/registry` 与 `decision/command` 的单次授权）。
-   - `POST /api/v1/commands` 家族与 `/api/v1/sites/{siteId}/control-{state,mode,shutdown}`、`/api/v1/assets/{assetId}/control-lock`（路由所有权第 49 版起全部划归 `command-service`）由平台网关在验完会话、CSRF、限流、边缘两步验证与严格 JSON 后，签发短时 `X-Command-Control-Context` 转给 `OperatorHTTPHandler`（`/internal/v1/operator/...`）。
+   - `POST /api/v1/commands` 家族与 `/api/v1/sites/{siteId}/control-{state,mode,shutdown}`、`/api/v1/assets/{assetId}/control-lock`（路由所有权第 50 版起全部划归 `command-service`）由平台网关在验完会话、CSRF、限流、边缘两步验证与严格 JSON 后，签发短时 `X-Command-Control-Context` 转给 `OperatorHTTPHandler`（`/internal/v1/operator/...`）。
 2. **纯函数 `EvaluateControlGate` 统一提交前与派发前两道闸门，严守拒止与花销顺序**
    - `libs/commandmodel.EvaluateControlGate` 在提交阶段（`GatePhaseSubmit`）和出队列派发前阶段（`GatePhasePreDispatch`）复用同一套判定：禁止直接调用 `EMERGENCY_DO_RELEASE` 点位 → 站点控制模式 → 资产控制锁 → 站点检修窗口 → 目标设备遥测健康度 → 全部同伴设备联锁 → 高风险 `STEP_UP_REQUIRED`（`428`）。
    - 任何硬拦截（`403` / `409` / `503`）必须在 `428 STEP_UP_REQUIRED` 之前返回；`428` 必须在向 IAM 申请或消费一次性 `Command Grant` 之前返回。

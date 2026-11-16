@@ -23,7 +23,7 @@ const (
 	rulesUnevaluableListed          = 10
 )
 
-var rulesUnevaluableExcludedPrefixes = []string{"data-quality/", "reading-gap/", "readings-not-updated", "readings-flat", "reports-interrupted", RulesUnevaluableAlarmType}
+var rulesUnevaluableExcludedPrefixes = []string{"data-quality/", "device-untrusted/", "reading-gap/", "readings-not-updated", "readings-flat", "reports-interrupted", RulesUnevaluableAlarmType}
 
 // UnevaluableRule is one rule the watchdog lists.
 type UnevaluableRule struct {

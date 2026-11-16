@@ -312,3 +312,191 @@ func TestSentinelToleranceBoundary(t *testing.T) {
 		t.Fatal("tolerance setup")
 	}
 }
+
+func TestParseStabilizeQualityChecks(t *testing.T) {
+	checks, err := parseQualityChecks([]byte(`{
+		"flatlineRunningSeconds": 1800,
+		"flatlineStabilizeSeconds": 600,
+		"physics": [{
+			"kind": "CW_DIRECTION",
+			"epsilonK": 0.05,
+			"stabilizeSeconds": 600,
+			"peers": [{"role": "entering", "deviceId": "temp", "key": "t2"}],
+			"running": [{"deviceId": "meter", "key": "run_state", "equals": "RUNNING"}]
+		}]
+	}`))
+	if err != nil {
+		t.Fatalf("parseQualityChecks: %v", err)
+	}
+	if checks == nil || checks.FlatlineStabilize != 10*time.Minute || len(checks.Physics) != 1 || checks.Physics[0].Stabilize != 10*time.Minute {
+		t.Fatalf("unexpected parsed checks: %+v", checks)
+	}
+}
+
+func TestMorningStartupStabilizeWindowSkipsPhysicsChecksUntilSettled(t *testing.T) {
+	started := time.Date(2026, 10, 27, 8, 0, 0, 0, time.UTC)
+	epsilon := nameplate.DefaultDirectionEpsilonK
+	number := func(v float64) *float64 { return &v }
+	checks := &QualityChecks{
+		Physics: []PhysicsRule{
+			{
+				Kind:      nameplate.KindCondenserDirection,
+				EpsilonK:  &epsilon,
+				Stabilize: 10 * time.Minute,
+				Peers:     []PhysicsPeer{{Role: "entering", DeviceID: "temp", Key: "cw_in"}},
+				Running:   []OperatingExpect{{DeviceID: "chiller", Key: "run_state", Equals: "RUNNING"}},
+			},
+			{
+				Kind:      nameplate.KindChilledDirection,
+				EpsilonK:  &epsilon,
+				Stabilize: 10 * time.Minute,
+				Peers:     []PhysicsPeer{{Role: "return", DeviceID: "temp", Key: "chw_ret"}},
+				Running:   []OperatingExpect{{DeviceID: "chiller", Key: "run_state", Equals: "RUNNING"}},
+			},
+		},
+	}
+
+	at2m := started.Add(2 * time.Minute)
+	peers2m := map[string]PeerSample{
+		"temp/cw_in":        {Number: number(28.0), Good: true, SampledAt: at2m},
+		"temp/chw_ret":      {Number: number(11.0), Good: true, SampledAt: at2m},
+		"chiller/run_state": {Text: "RUNNING", Good: true, SampledAt: at2m, UnchangedSince: &started},
+	}
+	// Reversed temperatures at t=2m (cw_out 27 < cw_in 28, chw_sup 12 > chw_ret 11) must skip during pull-down.
+	if reasons := AssessPointQuality(27.0, at2m, checks, PointQualityInput{PointType: "TELEMETRY", Live: true, Peers: peers2m}); len(reasons) != 0 {
+		t.Fatalf("t=2m pull-down should skip physics checks, got %v", reasons)
+	}
+
+	at11m := started.Add(11 * time.Minute)
+	peers11m := map[string]PeerSample{
+		"temp/cw_in":        {Number: number(28.0), Good: true, SampledAt: at11m},
+		"temp/chw_ret":      {Number: number(11.0), Good: true, SampledAt: at11m},
+		"chiller/run_state": {Text: "RUNNING", Good: true, SampledAt: at11m, UnchangedSince: &started},
+	}
+	// After 10m stabilization, reversed cw_out (27 < 28) fires cw_direction and reversed chw_sup (12 > 11) fires chw_direction.
+	cwReasons := AssessPointQuality(27.0, at11m, &QualityChecks{Physics: []PhysicsRule{checks.Physics[0]}}, PointQualityInput{PointType: "TELEMETRY", Live: true, Peers: peers11m})
+	if !sameReasons(cwReasons, QualityReasonPhysicsCwDirection) {
+		t.Fatalf("t=11m cw_direction: got %v", cwReasons)
+	}
+	chwReasons := AssessPointQuality(12.0, at11m, &QualityChecks{Physics: []PhysicsRule{checks.Physics[1]}}, PointQualityInput{PointType: "TELEMETRY", Live: true, Peers: peers11m})
+	if !sameReasons(chwReasons, QualityReasonPhysicsChwDirection) {
+		t.Fatalf("t=11m chw_direction: got %v", chwReasons)
+	}
+
+	// Rule without its own Running list falls back to input.Running / input.RunningSince when Stabilize > 0.
+	fallbackChecks := &QualityChecks{
+		Physics: []PhysicsRule{{
+			Kind:      nameplate.KindCondenserDirection,
+			EpsilonK:  &epsilon,
+			Stabilize: 10 * time.Minute,
+			Peers:     []PhysicsPeer{{Role: "entering", DeviceID: "temp", Key: "cw_in"}},
+		}},
+	}
+	if reasons := AssessPointQuality(27.0, at2m, fallbackChecks, PointQualityInput{PointType: "TELEMETRY", Live: true, Running: true, RunningSince: &started, Peers: peers2m}); len(reasons) != 0 {
+		t.Fatalf("fallback RunningSince at t=2m should skip, got %v", reasons)
+	}
+	if reasons := AssessPointQuality(27.0, at11m, fallbackChecks, PointQualityInput{PointType: "TELEMETRY", Live: true, Running: true, RunningSince: &started, Peers: peers11m}); !sameReasons(reasons, QualityReasonPhysicsCwDirection) {
+		t.Fatalf("fallback RunningSince at t=11m should fire, got %v", reasons)
+	}
+
+	// Among multiple running peers, the latest start transition governs the stabilization window.
+	multiRuleChecks := &QualityChecks{
+		Physics: []PhysicsRule{{
+			Kind:      nameplate.KindCondenserDirection,
+			EpsilonK:  &epsilon,
+			Stabilize: 10 * time.Minute,
+			Peers:     []PhysicsPeer{{Role: "entering", DeviceID: "temp", Key: "cw_in"}},
+			Running: []OperatingExpect{
+				{DeviceID: "chiller-a", Key: "run_state", Equals: "RUNNING"},
+				{DeviceID: "chiller-b", Key: "run_state", Equals: "RUNNING"},
+			},
+		}},
+	}
+	chillerAStart := at11m.Add(-30 * time.Minute)
+	chillerBStart := at11m.Add(-2 * time.Minute)
+	multiPeers := map[string]PeerSample{
+		"temp/cw_in":          {Number: number(28.0), Good: true, SampledAt: at11m},
+		"chiller-a/run_state": {Text: "RUNNING", Good: true, SampledAt: at11m, UnchangedSince: &chillerAStart},
+		"chiller-b/run_state": {Text: "RUNNING", Good: true, SampledAt: at11m, UnchangedSince: &chillerBStart},
+	}
+	if reasons := AssessPointQuality(27.0, at11m, multiRuleChecks, PointQualityInput{PointType: "TELEMETRY", Live: true, Peers: multiPeers}); len(reasons) != 0 {
+		t.Fatalf("latest start transition (2m ago) must keep physics check in stabilization window, got %v", reasons)
+	}
+}
+
+func TestStaleRunStateAndPeerTemperatureAreIgnored(t *testing.T) {
+	at := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	epsilon := nameplate.DefaultDirectionEpsilonK
+	number := func(v float64) *float64 { return &v }
+	checks := &QualityChecks{
+		Physics: []PhysicsRule{{
+			Kind:     nameplate.KindCondenserDirection,
+			EpsilonK: &epsilon,
+			Peers:    []PhysicsPeer{{Role: "entering", DeviceID: "temp", Key: "cw_in"}},
+			Running:  []OperatingExpect{{DeviceID: "chiller", Key: "run_state", Equals: "RUNNING"}},
+		}},
+	}
+
+	staleRunState := map[string]PeerSample{
+		"temp/cw_in":        {Number: number(28.0), Good: true, SampledAt: at.Add(-30 * time.Second), StaleAfter: 3 * time.Minute},
+		"chiller/run_state": {Text: "RUNNING", Good: true, SampledAt: at.Add(-5 * time.Minute), StaleAfter: 3 * time.Minute},
+	}
+	if reasons := AssessPointQuality(26.0, at, checks, PointQualityInput{PointType: "TELEMETRY", Live: true, Peers: staleRunState}); len(reasons) != 0 {
+		t.Fatalf("stale run_state must be treated as not running, got %v", reasons)
+	}
+
+	staleTemp := map[string]PeerSample{
+		"temp/cw_in":        {Number: number(28.0), Good: true, SampledAt: at.Add(-5 * time.Minute), StaleAfter: 3 * time.Minute},
+		"chiller/run_state": {Text: "RUNNING", Good: true, SampledAt: at.Add(-30 * time.Second), StaleAfter: 3 * time.Minute},
+	}
+	if reasons := AssessPointQuality(26.0, at, checks, PointQualityInput{PointType: "TELEMETRY", Live: true, Peers: staleTemp}); len(reasons) != 0 {
+		t.Fatalf("stale peer temperature must skip physics check, got %v", reasons)
+	}
+}
+
+func TestFlatlineSuppressedBySentinelSourceUntrustedAndStabilizeWindow(t *testing.T) {
+	start := time.Date(2026, 10, 27, 8, 0, 0, 0, time.UTC)
+	at := start.Add(40 * time.Minute)
+
+	sentinelChecks := &QualityChecks{Flatline: 30 * time.Minute, Sentinels: []float64{38.4}}
+	heldSentinel := PriorNumeric{Value: 38.4, SampledAt: start, UnchangedSince: start}
+	if reasons := AssessPointQuality(38.4, at, sentinelChecks, PointQualityInput{PointType: "TELEMETRY", Live: true, Previous: &heldSentinel}); !sameReasons(reasons, QualityReasonSentinel) {
+		t.Fatalf("sentinel must suppress flatline: got %v", reasons)
+	}
+
+	heldValue := PriorNumeric{Value: 18.7, SampledAt: start, UnchangedSince: start}
+	if reasons := AssessPointQuality(18.7, at, sentinelChecks, PointQualityInput{PointType: "TELEMETRY", Live: true, Previous: &heldValue, SourceUntrusted: true}); len(reasons) != 0 {
+		t.Fatalf("untrusted source must suppress flatline: got %v", reasons)
+	}
+
+	stabilizedChecks := &QualityChecks{
+		Flatline:          24 * time.Hour,
+		FlatlineRunning:   30 * time.Minute,
+		FlatlineStabilize: 10 * time.Minute,
+	}
+	justStarted := at.Add(-2 * time.Minute)
+	if reasons := AssessPointQuality(18.7, at, stabilizedChecks, PointQualityInput{
+		PointType: "TELEMETRY", Live: true, Previous: &heldValue, Running: true, RunningSince: &justStarted,
+	}); len(reasons) != 0 {
+		t.Fatalf("running flatline inside FlatlineStabilize window must skip: got %v", reasons)
+	}
+
+	settled := at.Add(-11 * time.Minute)
+	if reasons := AssessPointQuality(18.7, at, stabilizedChecks, PointQualityInput{
+		PointType: "TELEMETRY", Live: true, Previous: &heldValue, Running: true, RunningSince: &settled,
+	}); !sameReasons(reasons, QualityReasonFlatline) {
+		t.Fatalf("running flatline after FlatlineStabilize window must fire: got %v", reasons)
+	}
+
+	longStuck := PriorNumeric{Value: 18.7, SampledAt: at.Add(-25 * time.Hour), UnchangedSince: at.Add(-25 * time.Hour)}
+	if reasons := AssessPointQuality(18.7, at, stabilizedChecks, PointQualityInput{
+		PointType: "TELEMETRY", Live: true, Previous: &longStuck, Running: true, RunningSince: &justStarted,
+	}); !sameReasons(reasons, QualityReasonFlatline) {
+		t.Fatalf("long flatline exceeding Flatline must still fire immediately on start: got %v", reasons)
+	}
+
+	futurePeer := PeerSample{Good: true, Text: "RUNNING", SampledAt: at.Add(10 * time.Minute), StaleAfter: 3 * time.Minute}
+	if futurePeer.FreshAt(at) {
+		t.Fatal("future peer beyond StaleAfter must not be treated as fresh for outbox replay")
+	}
+}

@@ -77,6 +77,9 @@ type Config struct {
 	TelemetryRuntimeSPIFFE            string
 	TelemetryGrantStore               TelemetryGrantStore
 	CommandAuthorizationStore         CommandAuthorizationStore
+	CommandWorkloadAuthorizationStore CommandWorkloadAuthorizationStore
+	AllowedCommandWorkloads           []string
+	CommandWorkloadPresenter          string
 	CommandGrantSigner                crypto.Signer
 	CommandGrantIssuer                string
 	CommandGrantAudience              string
@@ -122,6 +125,9 @@ type handler struct {
 	telemetryRuntimeSPIFFE            string
 	telemetryGrantStore               TelemetryGrantStore
 	commandAuthorizationStore         CommandAuthorizationStore
+	commandWorkloadAuthorizationStore CommandWorkloadAuthorizationStore
+	allowedCommandWorkloads           []string
+	commandWorkloadPresenter          string
 	commandGrantSigner                crypto.Signer
 	commandGrantIssuer                string
 	commandGrantAudience              string
@@ -243,6 +249,25 @@ func NewHandler(config Config) http.Handler {
 	if commandStore == nil {
 		commandStore = newDenyAllCommandAuthorizationStore("command-policy-unconfigured")
 	}
+	commandWorkloadStore := config.CommandWorkloadAuthorizationStore
+	if commandWorkloadStore == nil {
+		if candidate, ok := commandStore.(CommandWorkloadAuthorizationStore); ok {
+			commandWorkloadStore = candidate
+		} else {
+			commandWorkloadStore = denyAllCommandWorkloadStore{policyRevision: "command-policy-unconfigured"}
+		}
+	}
+	allowedCommandWorkloads := append([]string(nil), config.AllowedCommandWorkloads...)
+	if config.AllowedCommandWorkloads == nil {
+		allowedCommandWorkloads = []string{defaultOptimizationCommandWorkload}
+	}
+	commandWorkloadPresenter := strings.TrimSpace(config.CommandWorkloadPresenter)
+	if commandWorkloadPresenter == "" {
+		commandWorkloadPresenter = strings.TrimSpace(config.AllowedWorkloadSPIFFE)
+	}
+	if commandWorkloadPresenter == "" {
+		commandWorkloadPresenter = defaultCommandWorkloadPresenter
+	}
 	commandSigner := config.CommandGrantSigner
 	if commandSigner == nil {
 		commandSigner = config.RegistryGrantSigner
@@ -305,6 +330,9 @@ func NewHandler(config Config) http.Handler {
 		telemetryRuntimeSPIFFE:            config.TelemetryRuntimeSPIFFE,
 		telemetryGrantStore:               config.TelemetryGrantStore,
 		commandAuthorizationStore:         commandStore,
+		commandWorkloadAuthorizationStore: commandWorkloadStore,
+		allowedCommandWorkloads:           allowedCommandWorkloads,
+		commandWorkloadPresenter:          commandWorkloadPresenter,
 		commandGrantSigner:                commandSigner,
 		commandGrantIssuer:                commandIssuer,
 		commandGrantAudience:              commandAudience,
@@ -364,6 +392,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if request.URL.Path == ReminderRecipientDecisionPath {
 		status = h.handleReminderRecipientDecision(writer, request)
+		return
+	}
+	if request.URL.Path == CommandWorkloadDecisionPath {
+		status = h.handleCommandWorkloadDecision(writer, request)
 		return
 	}
 
@@ -719,7 +751,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, AdminMutationPath, AdminMembersPath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath, ReminderRecipientDecisionPath:
+	case CurrentPrincipalPath, AdminMutationPath, AdminMembersPath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath, AnalyticsWorkloadDecisionPath, ReminderRecipientDecisionPath, CommandWorkloadDecisionPath:
 		return path
 	default:
 		return "unmatched"

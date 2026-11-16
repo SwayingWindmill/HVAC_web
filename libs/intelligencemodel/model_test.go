@@ -46,4 +46,19 @@ func TestRecommendationCannotCreateCommandWithoutFreshIndependentRevalidation(t 
 	if err := recommendation.CanCreateCommand(now); err != nil {
 		t.Fatalf("fresh accepted revalidation should allow command intent creation: %v", err)
 	}
+
+	// Expired recommendation (> 65m default TTL) must be rejected even with a fresh revalidation.
+	expiredByDefault := recommendation
+	expiredByDefault.CreatedAt = now.Add(-DefaultRecommendationTTL)
+	if err := expiredByDefault.CanCreateCommand(now); err == nil {
+		t.Fatal("expected recommendation past 65m TTL to be rejected")
+	}
+
+	// Explicit ValidUntil past now must also be rejected.
+	expiredExplicit := recommendation
+	expiredAt := now.Add(-time.Second)
+	expiredExplicit.ValidUntil = &expiredAt
+	if err := expiredExplicit.CanCreateCommand(now); err == nil {
+		t.Fatal("expected recommendation past explicit validUntil to be rejected")
+	}
 }

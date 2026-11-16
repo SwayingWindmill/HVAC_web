@@ -23,6 +23,7 @@ import (
 
 const (
 	publicCommandsPath           = "/api/v1/commands"
+	internalCommandsPath         = commandservice.InternalCommandsPath
 	internalOperatorPrefix       = commandservice.InternalOperatorPrefix
 	internalOperatorCommandsPath = commandservice.InternalOperatorCommandsPath
 	commandControlContextHeader  = "X-Command-Control-Context"
@@ -60,6 +61,44 @@ type createCommandRequest struct {
 	CommandPointID   string                         `json:"commandPointId"`
 	Parameters       commandmodel.CommandParameters `json:"parameters"`
 	VerificationCode string                         `json:"verificationCode,omitempty"`
+}
+
+type commandCurrentState struct {
+	EvaluationAvailability string                   `json:"evaluationAvailability"`
+	Presence               string                   `json:"presence"`
+	Readiness              string                   `json:"readiness"`
+	Quality                string                   `json:"quality"`
+	BusinessRevision       uint64                   `json:"businessRevision"`
+	CurrentValue           *float64                 `json:"currentValue,omitempty"`
+	ReportedValue          commandmodel.ScalarValue `json:"-"`
+	ObservedAt             time.Time                `json:"observedAt"`
+}
+
+type preparedCommand struct {
+	tenantID             string
+	siteID               string
+	deviceID             string
+	pointID              string
+	principalID          string
+	idempotencyKey       string
+	capability           commandmodel.Capability
+	parameters           commandmodel.CommandParameters
+	verificationPointKey string
+	currentState         commandCurrentState
+	grant                string
+}
+
+type internalCommandCreate struct {
+	TenantID             string                         `json:"tenantId"`
+	SiteID               string                         `json:"siteId"`
+	DeviceID             string                         `json:"deviceId"`
+	PointID              string                         `json:"pointId"`
+	PrincipalID          string                         `json:"principalId"`
+	IdempotencyKey       string                         `json:"idempotencyKey"`
+	Capability           commandmodel.Capability        `json:"capability"`
+	Parameters           commandmodel.CommandParameters `json:"parameters"`
+	VerificationPointKey string                         `json:"verificationPointKey"`
+	CurrentState         commandCurrentState            `json:"currentState"`
 }
 
 type commandTransitionView struct {
@@ -852,6 +891,71 @@ func commandBackendFailure(status int) commandFailure {
 	default:
 		return commandUnavailable("Command Service could not complete the request.")
 	}
+}
+
+func (h *handler) executeCommandCreate(ctx context.Context, prepared preparedCommand) (commandView, int, string, *commandFailure) {
+	if h.command == nil || h.command.baseURL == "" || h.command.httpClient == nil {
+		failure := commandUnavailable("Command Service is not configured.")
+		return commandView{}, 0, "", &failure
+	}
+	body, err := json.Marshal(internalCommandCreate{
+		TenantID:             prepared.tenantID,
+		SiteID:               prepared.siteID,
+		DeviceID:             prepared.deviceID,
+		PointID:              prepared.pointID,
+		PrincipalID:          prepared.principalID,
+		IdempotencyKey:       prepared.idempotencyKey,
+		Capability:           prepared.capability,
+		Parameters:           cloneCommandParameters(prepared.parameters),
+		VerificationPointKey: prepared.verificationPointKey,
+		CurrentState:         prepared.currentState,
+	})
+	if err != nil {
+		failure := commandUnavailable("The Command request payload could not be encoded.")
+		return commandView{}, 0, "", &failure
+	}
+	requestContext, cancel := context.WithTimeout(ctx, h.command.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, h.command.baseURL+internalCommandsPath, bytes.NewReader(body))
+	if err != nil {
+		failure := commandUnavailable("The Command Service request could not be constructed.")
+		return commandView{}, 0, "", &failure
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, application/problem+json")
+	request.Header.Set("X-Command-Grant", prepared.grant)
+	request.Header.Set("X-Request-ID", requestIDFromContext(ctx))
+	observability.InjectHTTP(ctx, request.Header)
+	response, err := h.command.httpClient.Do(request)
+	if err != nil {
+		failure := commandUnavailable("Command Service is temporarily unavailable.")
+		return commandView{}, 0, "", &failure
+	}
+	defer response.Body.Close()
+	rawBody, err := readBoundedBody(response.Body, h.command.maxResponseBytes)
+	if err != nil {
+		failure := commandUnavailable("Command Service response exceeded size limit.")
+		return commandView{}, 0, "", &failure
+	}
+	if response.StatusCode != http.StatusAccepted {
+		failure := commandBackendFailure(response.StatusCode)
+		return commandView{}, 0, "", &failure
+	}
+	view, ok := decodeAndValidateCommandView(rawBody)
+	if !ok || view.TenantID != prepared.tenantID || view.SiteID != prepared.siteID ||
+		view.DeviceID != prepared.deviceID || view.PointID != prepared.pointID || view.Capability != prepared.capability {
+		failure := commandUnavailable("Command Service returned an invalid accepted Command.")
+		return commandView{}, 0, "", &failure
+	}
+	return view, http.StatusAccepted, response.Header.Get("Location"), nil
+}
+
+func cloneCommandParameters(parameters commandmodel.CommandParameters) commandmodel.CommandParameters {
+	cloned := make(commandmodel.CommandParameters, len(parameters))
+	for key, value := range parameters {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (h *handler) writeCommandFailure(writer http.ResponseWriter, request *http.Request, failure commandFailure) {

@@ -1,12 +1,20 @@
 package gateway
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
+	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
@@ -26,6 +34,8 @@ const (
 	maximumControlExitRequestBody = int64(8 << 10)
 )
 
+var controlWriteKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}\z`)
+
 type publicControlExitRoute struct {
 	template     string
 	kind         string
@@ -39,6 +49,7 @@ type activeMaintenanceWindowView = commandservice.ActiveMaintenanceWindowView
 type siteControlStateView = commandservice.SiteControlStateView
 type siteControlModeMutationResponse = commandservice.SiteControlModeResponse
 type assetControlLockMutationResponse = commandservice.AssetControlLockResponse
+type controlRegistryMeta = commandservice.ControlMutationMeta
 type siteControlModeRequest = commandservice.SiteControlModeInput
 type assetControlLockRequest = commandservice.AssetControlLockInput
 type siteControlShutdownResponse = commandservice.SiteControlShutdownResponse
@@ -321,4 +332,181 @@ func decodeStrictControlJSON(writer http.ResponseWriter, request *http.Request, 
 		return false
 	}
 	return ensureCommandJSONEOF(decoder) == nil
+}
+
+func (h *handler) authorizeSiteControlExitWrite(writer http.ResponseWriter, request *http.Request, session bffSession, siteID, detail string) (registryAuthorization, bool) {
+	authorization, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionScheduleManage)
+	if failure != nil && failure.status != http.StatusForbidden && failure.status != http.StatusNotFound {
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+		return registryAuthorization{}, false
+	}
+	if _, allowed := authorization.allowedSiteIDs[siteID]; failure != nil || !allowed {
+		writeProblem(writer, request, http.StatusForbidden, "CONTROL_EXIT_FORBIDDEN", "Control exit forbidden", detail, false, nil)
+		return registryAuthorization{}, false
+	}
+	return authorization, true
+}
+
+func (h *handler) resolveControlExitMeta(
+	request *http.Request,
+	rawReason string,
+	expectedRevision *int64,
+	providedMeta *controlRegistryMeta,
+	fetchCurrentRevision func() (int64, *commandFailure),
+) (string, controlRegistryMeta, *commandFailure) {
+	reason := strings.TrimSpace(rawReason)
+	if providedMeta != nil {
+		if reason == "" {
+			reason = strings.TrimSpace(providedMeta.Reason)
+		}
+		metaReason := strings.TrimSpace(providedMeta.Reason)
+		if metaReason == "" {
+			metaReason = reason
+		}
+		if reason == "" || utf8.RuneCountInString(reason) > 1000 || utf8.RuneCountInString(metaReason) > 1000 ||
+			!controlWriteKeyPattern.MatchString(providedMeta.IdempotencyKey) || providedMeta.ExpectedRevision < 0 {
+			invalid := commandFailure{
+				status:    http.StatusBadRequest,
+				code:      "CONTROL_EXIT_REQUEST_INVALID",
+				title:     "Control exit request invalid",
+				detail:    "A valid reason, non-negative expectedRevision, and valid idempotencyKey are required.",
+				retryable: false,
+			}
+			return "", controlRegistryMeta{}, &invalid
+		}
+		return reason, controlRegistryMeta{
+			ExpectedRevision: providedMeta.ExpectedRevision,
+			IdempotencyKey:   providedMeta.IdempotencyKey,
+			Reason:           metaReason,
+		}, nil
+	}
+
+	if reason == "" || utf8.RuneCountInString(reason) > 1000 {
+		invalid := commandFailure{
+			status:    http.StatusBadRequest,
+			code:      "CONTROL_EXIT_REQUEST_INVALID",
+			title:     "Control exit request invalid",
+			detail:    "A non-empty reason up to 1000 characters is required.",
+			retryable: false,
+		}
+		return "", controlRegistryMeta{}, &invalid
+	}
+
+	idempotencyKey := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	if idempotencyKey != "" && !controlWriteKeyPattern.MatchString(idempotencyKey) {
+		invalid := commandFailure{
+			status:    http.StatusBadRequest,
+			code:      "CONTROL_EXIT_REQUEST_INVALID",
+			title:     "Control exit request invalid",
+			detail:    "The Idempotency-Key header format is invalid.",
+			retryable: false,
+		}
+		return "", controlRegistryMeta{}, &invalid
+	}
+	if idempotencyKey == "" {
+		idempotencyKey = "ctrl-" + randomURLToken(16)
+	}
+
+	var revision int64
+	if expectedRevision != nil {
+		if *expectedRevision < 0 {
+			invalid := commandFailure{
+				status:    http.StatusBadRequest,
+				code:      "CONTROL_EXIT_REQUEST_INVALID",
+				title:     "Control exit request invalid",
+				detail:    "expectedRevision must be non-negative.",
+				retryable: false,
+			}
+			return "", controlRegistryMeta{}, &invalid
+		}
+		revision = *expectedRevision
+	} else {
+		var revFailure *commandFailure
+		revision, revFailure = fetchCurrentRevision()
+		if revFailure != nil {
+			return "", controlRegistryMeta{}, revFailure
+		}
+	}
+
+	return reason, controlRegistryMeta{
+		ExpectedRevision: revision,
+		IdempotencyKey:   idempotencyKey,
+		Reason:           reason,
+	}, nil
+}
+
+func (h *handler) callCoreControlRegistry(ctx context.Context, method, internalPath, grant string, payload any, routeRevision int64) (int, []byte, *commandFailure) {
+	if h.registry == nil || h.registry.coreBaseURL == "" || h.registry.coreHTTPClient == nil {
+		failure := commandUnavailable("Core Registry is not configured.")
+		return 0, nil, &failure
+	}
+	var bodyReader io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			failure := commandUnavailable("The Registry request could not be encoded.")
+			return 0, nil, &failure
+		}
+		bodyReader = bytes.NewReader(encoded)
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, h.registry.coreTimeout)
+	defer cancel()
+	upstreamReq, err := http.NewRequestWithContext(reqCtx, method, h.registry.coreBaseURL+internalPath, bodyReader)
+	if err != nil {
+		failure := commandUnavailable("The Core Registry request could not be constructed.")
+		return 0, nil, &failure
+	}
+	upstreamReq.Header.Set("Accept", "application/json, application/problem+json")
+	if payload != nil {
+		upstreamReq.Header.Set("Content-Type", "application/json")
+	}
+	upstreamReq.Header.Set("X-Delegation-Grant", grant)
+	upstreamReq.Header.Set("X-Route-Policy-Revision", formatRevision(routeRevision))
+	upstreamReq.Header.Set("X-Request-ID", requestIDFromContext(ctx))
+	observability.InjectHTTP(ctx, upstreamReq.Header)
+	response, err := h.registry.coreHTTPClient.Do(upstreamReq)
+	if err != nil {
+		failure := commandUnavailable("Core Registry is temporarily unavailable.")
+		return 0, nil, &failure
+	}
+	defer response.Body.Close()
+	raw, err := readBoundedBody(response.Body, h.registry.maxResponseBytes)
+	if err != nil {
+		failure := commandUnavailable("Core Registry response exceeded the supported size.")
+		return 0, nil, &failure
+	}
+	return response.StatusCode, raw, nil
+}
+
+func (h *handler) writeCoreControlRegistryError(writer http.ResponseWriter, request *http.Request, status int, raw []byte) {
+	var upstream platformapi.ProblemDetails
+	if json.Unmarshal(raw, &upstream) == nil && upstream.Code != "" {
+		detail := upstream.Detail
+		if detail == "" {
+			detail = "Core Registry rejected the control state mutation."
+		}
+		title := upstream.Title
+		if title == "" {
+			title = http.StatusText(status)
+		}
+		writeProblem(writer, request, status, upstream.Code, title, detail, upstream.Retryable, nil)
+		return
+	}
+	switch status {
+	case http.StatusBadRequest:
+		writeProblem(writer, request, http.StatusBadRequest, "CONTROL_EXIT_REQUEST_INVALID", "Control exit request invalid", "The control state mutation is invalid.", false, nil)
+	case http.StatusForbidden:
+		writeProblem(writer, request, http.StatusForbidden, "CONTROL_EXIT_FORBIDDEN", "Control exit forbidden", "The authenticated Principal is not allowed to update control state.", false, nil)
+	case http.StatusNotFound:
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site or Asset was not found.", false, nil)
+	case http.StatusConflict:
+		writeProblem(writer, request, http.StatusConflict, "REGISTRY_REVISION_CONFLICT", "Control state conflict", "The expected control state revision is stale or conflicts with another request.", false, nil)
+	default:
+		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "Core Registry is temporarily unavailable.", true, nil)
+	}
+}
+
+func routeRevisionFromRequest(request *http.Request) int64 {
+	decision := routeDecisionFromContext(request.Context())
+	return decision.RegistryRevision
 }

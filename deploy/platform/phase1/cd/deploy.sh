@@ -75,7 +75,15 @@ $L run --rm -T identity-reconciler < "$R/identity-reconcile.json"
 
 step up
 $L --integration up -d
-docker kill -s HUP "${HVAC_LOCAL_PROJECT}-mqtt-broker-1" >/dev/null 2>&1 || true
+# Single-file bind mounts retain the previous host inode after `tar -xf` replaces a file;
+# recreate mqtt-broker only when a mounted file in the container differs from the host tree.
+if [ -f infra/telemetry/mqtt/mosquitto.conf ] && [ -f infra/telemetry/mqtt/acl ]; then
+  if ! docker exec "${HVAC_LOCAL_PROJECT}-mqtt-broker-1" cat /mosquitto/config/mosquitto.conf 2>/dev/null | cmp -s - infra/telemetry/mqtt/mosquitto.conf \
+    || ! docker exec "${HVAC_LOCAL_PROJECT}-mqtt-broker-1" cat /mosquitto/config/acl 2>/dev/null | cmp -s - infra/telemetry/mqtt/acl \
+    || { [ -f "$R/gateway-ca/trusted-client-ca.pem" ] && ! docker exec "${HVAC_LOCAL_PROJECT}-mqtt-broker-1" cat /mosquitto/config/gateway-ca.pem 2>/dev/null | cmp -s - "$R/gateway-ca/trusted-client-ca.pem"; }; then
+    $L --integration up -d --force-recreate --no-deps mqtt-broker
+  fi
+fi
 # Intelligence services, the Operations Agent included (DEEPSEEK_API_KEY in the runtime env, 2026-10-16).
 $L --integration --intelligence up -d --no-deps forecast-service optimization-service fdd-service mv-service report-service operations-agent-service
 

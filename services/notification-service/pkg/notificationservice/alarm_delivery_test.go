@@ -277,10 +277,66 @@ func TestRoutingFilesAreCheckedAgainstTheRecipients(t *testing.T) {
 		"bad zone":         `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Beijing","routes":[{"name":"a","minSeverity":"MAJOR","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
 		"unknown channel":  `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","routes":[{"name":"a","minSeverity":"MAJOR","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["sms"]}]}]}`,
 		"no root cause":    `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","suppressWhenRootCause":["data-quality/"],"routes":[{"name":"a","minSeverity":"MAJOR","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"rule no trigger":  `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","rootCauseRules":[{"whenActivePrefix":" ","suppressPrefixes":["data-quality/"]}],"routes":[{"name":"a","minSeverity":"MAJOR","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"rule no suppress": `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","rootCauseRules":[{"whenActivePrefix":"device-untrusted/","scopeSameDevice":true,"suppressPrefixes":[]}],"routes":[{"name":"a","minSeverity":"MAJOR","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"rule blank item":  `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","rootCauseRules":[{"whenActivePrefix":"device-untrusted/","suppressPrefixes":[""]}],"routes":[{"name":"a","minSeverity":"MAJOR","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"rule missing /":   `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","rootCauseRules":[{"whenActivePrefix":"device-untrusted","scopeSameDevice":true,"suppressPrefixes":["data-quality/"]}],"routes":[{"name":"a","minSeverity":"MAJOR","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
 	} {
 		if _, err := ParseSiteRouting([]byte(body)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestDecideRootCauseRulesRespectSameDeviceScope(t *testing.T) {
+	routing, err := ParseSiteRouting([]byte(`{
+  "schemaVersion": 1, "siteId": "` + deliveryTestSiteID + `", "siteName": "松雅轩", "timezone": "Asia/Shanghai",
+  "holdMinutes": 3, "maxAgeHours": 12, "rateLimitPerHour": 2,
+  "rootCauseAlarmType": "reports-interrupted",
+  "suppressWhenRootCause": ["readings-not-updated/"],
+  "rootCauseRules": [
+    {"whenActivePrefix": "device-untrusted/", "scopeSameDevice": true, "suppressPrefixes": ["data-quality/", "reading-gap/", "readings-not-updated/", "readings-flat/"]},
+    {"whenActivePrefix": "site-maintenance/", "suppressPrefixes": ["physics/"]}
+  ],
+  "routes": [
+    {"name": "all", "minSeverity": "WARNING", "steps": [{"afterMinutes": 0, "recipients": ["duty"], "channels": ["smtp"]}]}
+  ]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := deliveryBase.Add(10 * time.Minute)
+	facts := DeliveryFacts{ActiveAlarmTypes: []string{"device-untrusted/temperature-uid20"}}
+
+	for _, suppressedType := range []string{
+		"data-quality/suspect/temperature-uid20/t16",
+		"data-quality/flat-running/temperature-uid20/t1",
+		"reading-gap/temperature-uid20/t16",
+		"readings-not-updated/temperature-uid20",
+		"readings-flat/temperature-uid20/t15",
+	} {
+		decision := DecideDelivery(activeAlarm(suppressedType, alarmmodel.SeverityMajor), routing, facts, at)
+		if len(decision.Messages) != 0 || decision.Held != "ROOT_CAUSE" {
+			t.Fatalf("%s should be held by device-untrusted/temperature-uid20: %+v", suppressedType, decision)
+		}
+	}
+
+	for _, allowedType := range []string{
+		"device-untrusted/temperature-uid20",
+		"reading-gap/meter-uid5/power_total",
+		"readings-not-updated/meter-uid5",
+		"readings-flat/outdoor/ambient_temperature",
+		"readings-not-updated/temperature-uid20-other",
+		"physics/chiller-a-chw-direction",
+	} {
+		decision := DecideDelivery(activeAlarm(allowedType, alarmmodel.SeverityMajor), routing, facts, at)
+		if len(decision.Messages) != 1 || decision.Held != "" {
+			t.Fatalf("%s should NOT be suppressed by device-untrusted/temperature-uid20: %+v", allowedType, decision)
+		}
+	}
+
+	siteWide := DecideDelivery(activeAlarm("physics/chiller-a-chw-direction", alarmmodel.SeverityMajor), routing, DeliveryFacts{ActiveAlarmTypes: []string{"site-maintenance/all"}}, at)
+	if len(siteWide.Messages) != 0 || siteWide.Held != "ROOT_CAUSE" {
+		t.Fatalf("site-wide rule without scopeSameDevice should suppress matching prefix: %+v", siteWide)
 	}
 }
 

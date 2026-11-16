@@ -286,6 +286,9 @@ type AuthorizationSnapshot struct {
 	MaximumRisk                 RiskLevel
 	CapabilityRevision          string
 	EmergencyRevocationRevision uint64
+	WorkloadSPIFFE              string
+	LeaseID                     string
+	ArmedBy                     string
 	IssuedAt                    time.Time
 	ExpiresAt                   time.Time
 }

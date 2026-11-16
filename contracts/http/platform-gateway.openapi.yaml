@@ -2709,6 +2709,75 @@
           "default": { "$ref": "#/components/responses/Problem" }
         }
       }
+    },
+    "/api/v1/sites/{siteId}/optimization/auto-control-lease": {
+      "get": {
+        "operationId": "getSiteAutoControlLease",
+        "summary": "Read a Site's active automatic optimization control lease and default confirmation mode",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": {
+          "200": { "description": "Current automatic control lease state (MANUAL_CONFIRM by default).", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteAutoControlLeaseState" } } } },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "put": {
+        "operationId": "armSiteAutoControlLease",
+        "summary": "Arm a bounded automatic optimization control lease for a Site (requires schedule.manage and 6-digit TOTP)",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ArmAutoControlLeaseRequest" } } } },
+        "responses": {
+          "200": { "description": "Armed Site automatic control lease.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteAutoControlLeaseState" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/optimization/auto-control-lease/revoke": {
+      "post": {
+        "operationId": "revokeSiteAutoControlLease",
+        "summary": "Revoke the active automatic optimization control lease for a Site and return to MANUAL_CONFIRM",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }, { "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RevokeAutoControlLeaseRequest" } } } },
+        "responses": {
+          "200": { "description": "Revoked Site automatic control lease.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SiteAutoControlLeaseState" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/optimization/execution-monitors": {
+      "get": {
+        "operationId": "listSiteOptimizationExecutionMonitors",
+        "summary": "List recent automated optimization execution observation windows and rollback outcomes for a Site",
+        "x-architecture-status": "ACTIVE",
+        "x-owner": "platform-core-service",
+        "x-public-ingress": "platform-gateway",
+        "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
+        "responses": {
+          "200": { "description": "Execution monitor records for the Site.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptimizationExecutionMonitorList" } } } },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
     }
   },
   "components": {
@@ -3800,7 +3869,7 @@
           "trigger": { "type": "number" },
           "reset": { "type": "number" },
           "ageSeconds": { "type": "integer", "minimum": 1 },
-          "reasons": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "enum": ["OUT_OF_RANGE", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT", "LOW_CONFIDENCE", "PHYSICS_WET_BULB_DRY", "PHYSICS_WET_BULB_CONDENSER", "PHYSICS_POWER", "PHYSICS_COP", "PHYSICS_CHW_DIRECTION", "PHYSICS_CW_DIRECTION", "PHYSICS_HEAT_BALANCE", "PROBE_OFFSET"] } },
+          "reasons": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "enum": ["OUT_OF_RANGE", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT", "LOW_CONFIDENCE", "SOURCE_UNTRUSTED", "PHYSICS_WET_BULB_DRY", "PHYSICS_WET_BULB_CONDENSER", "PHYSICS_POWER", "PHYSICS_COP", "PHYSICS_CHW_DIRECTION", "PHYSICS_CW_DIRECTION", "PHYSICS_HEAT_BALANCE", "PROBE_OFFSET"] } },
           "match": { "type": "string", "enum": ["ANY", "NONE"] },
           "children": { "type": "array", "minItems": 2, "maxItems": 32, "items": { "$ref": "#/components/schemas/AlarmRuleCondition" } }
         }
@@ -5236,6 +5305,110 @@
           "siteControlMode": { "type": "string", "enum": ["REMOTE_AUTO", "MANUAL_OVERRIDE", "SAFE_SHUTDOWN_EXIT"] },
           "recommendations": { "type": "array", "items": { "$ref": "#/components/schemas/StagingRecommendationDraft" } },
           "diagnostics": { "type": "array", "items": { "$ref": "#/components/schemas/StagingDiagnostic" } }
+        }
+      },
+      "AutoControlLease": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "tenantId", "siteId", "status", "armedBy", "armedAt", "expiresAt", "allowedCapabilities", "maxSetpointStepC", "supplyTempMinC", "supplyTempMaxC", "zoneTempMaxC", "minRunningChillers", "maxCommandsPerHour", "revision", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "status": { "type": "string", "enum": ["ACTIVE", "TRIPPED", "REVOKED", "EXPIRED"] },
+          "armedBy": { "$ref": "#/components/schemas/UUIDv7" },
+          "armedAt": { "$ref": "#/components/schemas/Instant" },
+          "expiresAt": { "$ref": "#/components/schemas/Instant" },
+          "allowedCapabilities": { "type": "array", "items": { "type": "string" } },
+          "maxSetpointStepC": { "type": "number" },
+          "supplyTempMinC": { "type": "number" },
+          "supplyTempMaxC": { "type": "number" },
+          "zoneTempMaxC": { "type": "number" },
+          "minRunningChillers": { "type": "integer" },
+          "maxCommandsPerHour": { "type": "integer" },
+          "tripReason": { "type": "string" },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "createdAt": { "$ref": "#/components/schemas/Instant" },
+          "updatedAt": { "$ref": "#/components/schemas/Instant" }
+        }
+      },
+      "SiteAutoControlLeaseState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tenantId", "siteId", "confirmationMode", "activeLease", "latestLease"],
+        "properties": {
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "confirmationMode": { "type": "string", "enum": ["MANUAL_CONFIRM", "AUTO_WITH_LEASE"] },
+          "activeLease": { "oneOf": [{ "$ref": "#/components/schemas/AutoControlLease" }, { "type": "null" }] },
+          "latestLease": { "oneOf": [{ "$ref": "#/components/schemas/AutoControlLease" }, { "type": "null" }] }
+        }
+      },
+      "ArmAutoControlLeaseRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["allowedCapabilities", "supplyTempMinC", "supplyTempMaxC", "reason", "verificationCode"],
+        "properties": {
+          "expiresInHours": { "type": "integer", "minimum": 1, "maximum": 24 },
+          "expiresAt": { "$ref": "#/components/schemas/Instant" },
+          "allowedCapabilities": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "maxSetpointStepC": { "type": "number" },
+          "supplyTempMinC": { "type": "number" },
+          "supplyTempMaxC": { "type": "number" },
+          "zoneTempMaxC": { "type": "number" },
+          "minRunningChillers": { "type": "integer", "minimum": 0 },
+          "maxCommandsPerHour": { "type": "integer", "minimum": 1, "maximum": 6 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "verificationCode": { "type": "string", "pattern": "^[0-9]{6}$" },
+          "expectedRevision": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "RevokeAutoControlLeaseRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason"],
+        "properties": {
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "expectedRevision": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "OptimizationExecutionMonitor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "tenantId", "siteId", "leaseId", "recommendationId", "commandIntentId", "deviceId", "targetCapability", "zoneTempMaxC", "supplyTempMaxC", "startedAt", "windowEndsAt", "status", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "leaseId": { "$ref": "#/components/schemas/UUIDv7" },
+          "recommendationId": { "$ref": "#/components/schemas/UUIDv7" },
+          "commandIntentId": { "$ref": "#/components/schemas/UUIDv7" },
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "targetCapability": { "type": "string" },
+          "baselineSupplyTempC": { "type": "number" },
+          "appliedSupplyTempC": { "type": "number" },
+          "restoreSupplyTempC": { "type": "number" },
+          "zoneTempMaxC": { "type": "number" },
+          "supplyTempMaxC": { "type": "number" },
+          "startedAt": { "$ref": "#/components/schemas/Instant" },
+          "windowEndsAt": { "$ref": "#/components/schemas/Instant" },
+          "lastCheckedAt": { "$ref": "#/components/schemas/Instant" },
+          "telemetryUnhealthySince": { "$ref": "#/components/schemas/Instant" },
+          "status": { "type": "string", "enum": ["OBSERVING", "VERIFIED", "ROLLED_BACK", "TRIPPED"] },
+          "tripReason": { "type": "string" },
+          "rollbackCommandIntentId": { "$ref": "#/components/schemas/UUIDv7" },
+          "createdAt": { "$ref": "#/components/schemas/Instant" },
+          "updatedAt": { "$ref": "#/components/schemas/Instant" }
+        }
+      },
+      "OptimizationExecutionMonitorList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tenantId", "siteId", "items"],
+        "properties": {
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "siteId": { "$ref": "#/components/schemas/UUIDv7" },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/OptimizationExecutionMonitor" } }
         }
       },
       "FieldError": {
