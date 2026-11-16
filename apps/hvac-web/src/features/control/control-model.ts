@@ -94,6 +94,9 @@ export function controlTargets(model: Pick<SiteAssetModel, 'assets' | 'telemetry
   for (const relationship of model.relationships) {
     const point = pointsById.get(relationship.fromId);
     if (!point || point.pointType !== 'COMMAND' || !controls(relationship, at)) continue;
+    // A STOP that drops every output channel at once is the plant's emergency release, reached only
+    // through the site shutdown flow; on a device row it would read as an ordinary stop.
+    if (point.sourceMetadata.actuationMode === 'EMERGENCY_DO_RELEASE') continue;
     const capability = String(point.sourceMetadata.capability ?? '');
     const assetId = relationship.toId;
     const target = byAsset.get(assetId) ?? { deviceId: point.reportingDeviceId, actions: [], settings: [] };

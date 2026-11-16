@@ -33,6 +33,7 @@
 ## 不做
 
 - 不显示人员姓名：网关只给人员编号，没有按编号查姓名的接口，按 `personLabel` 显示「我 / 其他人员」。
+- 设备行不显示 `actuationMode` 为 `EMERGENCY_DO_RELEASE` 的点位（松雅轩的「紧急全断全部 DO 通道」挂在冷冻水总管上）：它一按就断开全部输出通道，不能当成普通的「停止」。
 - 整站安全停机、急停释放和中止一键序列（`POST /api/v1/sites/{siteId}/control-shutdown`）还没有页面入口。
 
 ## 验收与测试接缝

@@ -56,6 +56,18 @@ test('a plant asset offers the actions and settings its command points control, 
   }]);
 });
 
+test('the emergency release that drops every output channel is never offered as a device stop', () => {
+  const model = {
+    assets: [asset('a-loop', '冷冻水总管', 'CHILLED_WATER_LOOP'), asset('a-pump', '1 号冷冻泵', 'CHILLED_WATER_PUMP')],
+    telemetryPoints: [
+      point('p-emergency', 'd-et1010', 'emergency_stop_all', 'COMMAND', { capability: 'STOP', actuationMode: 'EMERGENCY_DO_RELEASE', feedbackPointKey: 'run_state' }),
+      point('p-pump', 'd-et1010', 'chwp_1_stop', 'COMMAND', { capability: 'STOP', actuationMode: 'LEVEL', feedbackPointKey: 'run_state' }),
+    ],
+    relationships: [controls('r1', 'p-emergency', 'a-loop'), controls('r2', 'p-pump', 'a-pump')],
+  };
+  assert.deepEqual(controlTargets(model, now).map((target) => [target.assetName, target.actions.map((action) => action.pointId)]), [['1 号冷冻泵', ['p-pump']]]);
+});
+
 test('plant assets are offered in the order water flows through the plant', () => {
   const ids = ['a-ct', 'a-cwp', 'a-chiller', 'a-chwp'];
   const model = {
