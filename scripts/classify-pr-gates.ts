@@ -179,7 +179,7 @@ for (const file of files) {
     addReason(file, 'Go code, dependencies or Go check rules changed; lint and vulnerability-scan every Go module');
   }
   match(file === '.golangci.yml', () => {});
-  match(file === 'AGENTS.md' || file === 'CLAUDE.md' || file === 'README.md' || file === 'LICENSE' || file === 'CHANGELOG.md' || file === '.mcp.json' || file === '.mwgrc' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
+  match(file === 'AGENTS.md' || file === 'CLAUDE.md' || file === 'README.md' || file === 'LICENSE' || file === 'CHANGELOG.md' || file === 'GLOSSARY.md' || file === '.mcp.json' || file === '.mwgrc' || file.startsWith('.github/ISSUE_TEMPLATE/'), () => {
     addReason(file, 'repository documentation or metadata only');
   });
   match(file.startsWith('.github/workflows/'), () => selectBroad(file, 'workflow behavior changed'));
@@ -227,6 +227,11 @@ for (const file of files) {
     selectRegistry(file, 'shared grant signing changed');
     selectTelemetry(file, 'shared grant signing changed', { integration: true });
     selectCommand(file, 'shared grant signing changed', { integration: true });
+  });
+  match(file.startsWith('libs/planttwin/'), () => {
+    selectRegistry(file, 'semantic plant twin library changed', { integration: true });
+    selectCommand(file, 'semantic plant twin library changed', { integration: true });
+    selectAnalytics(file, 'semantic plant twin library changed', { integration: true });
   });
   match(file.startsWith('libs/identitycontext/') || file.startsWith('libs/oidctest/') || file.startsWith('libs/sessionevent/') || file.startsWith('libs/sessionstore/') || file.startsWith('libs/observability/') || file.startsWith('modules/audit/') || file.startsWith('modules/registry/'), () => selectPlatform(file, 'platform identity, durability, or observability code changed', { integration: file.includes('session') || file.includes('outbox') }));
   match(file.startsWith('libs/ownershipregistry/') || file.startsWith('libs/registryauth/') || file.startsWith('infra/s1-') || file.startsWith('infra/registry/'), () => selectRegistry(file, 'registry capability changed', { integration: true }));

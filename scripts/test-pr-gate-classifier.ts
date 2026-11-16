@@ -63,6 +63,7 @@ test('documentation-only changes keep expensive affected gates idle', () => {
     '.mcp.json',
     'CHANGELOG.md',
     'CLAUDE.md',
+    'GLOSSARY.md',
     '.agents/skills/correct/SKILL.md',
     '.claude/skills/correct/SKILL.md',
     '.opencodereview/rule.json',
@@ -136,6 +137,14 @@ test('domain module changes stay scoped to product domains', () => {
 test('shared grant signing changes select every domain that signs or verifies grants', () => {
   const classification = runClassification(['libs/grant/grant.go']);
   assert.deepEqual(classification.unitProfiles, ['command', 'go', 'platform', 'registry', 'telemetry']);
+  assert.equal(classification.broad, false);
+});
+
+test('semantic plant twin library changes select registry, command, and analytics gates', () => {
+  const classification = runClassification(['libs/planttwin/twin.go']);
+  assert.deepEqual(classification.unitProfiles, ['analytics', 'command', 'go', 'registry']);
+  assert.deepEqual(classification.integrationProfiles, ['analytics', 'command', 'registry']);
+  assert.equal(classification.unknown, false);
   assert.equal(classification.broad, false);
 });
 

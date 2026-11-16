@@ -236,6 +236,27 @@ async function runConnectivityGoTests() {
   if (signal || code !== 0) throw new Error(`Connectivity PostgreSQL tests failed: ${signal ?? code}`);
 }
 
+async function runPlantTwinGoTests() {
+  const optPassword = randomBytes(24).toString('hex');
+  const fddPassword = randomBytes(24).toString('hex');
+  psql(`ALTER ROLE optimization_runtime PASSWORD '${optPassword}'`);
+  psql(`ALTER ROLE fdd_runtime PASSWORD '${fddPassword}'`);
+  const child = spawn(goBinary, ['test', '-count=1', '-v', './libs/planttwin'], {
+    cwd: root,
+    stdio: 'inherit',
+    shell: false,
+    env: {
+      ...process.env,
+      GOCACHE: goCacheDir,
+      PLANTTWIN_TEST_ADMIN_DSN: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+      PLANTTWIN_TEST_POSTGRES_DSN: `postgres://optimization_runtime:${optPassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+      PLANTTWIN_TEST_FDD_DSN: `postgres://fdd_runtime:${fddPassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
+    },
+  });
+  const [code, signal] = await once(child, 'exit');
+  if (signal || code !== 0) throw new Error(`PlantTwin PostgreSQL tests failed: ${signal ?? code}`);
+}
+
 async function runGatewayRoutingGoTests() {
   await mkdir(goCacheDir, { recursive: true });
   const child = spawn(goBinary, ['test', '-count=1', '-v', './cmd/energy-api/internal/gateway', '-run', 'TestGatewayRegistry'], {
@@ -1788,6 +1809,8 @@ try {
   await runGatewayRoutingGoTests();
   await runConnectivityGoTests();
   report.assertions.gatewayRegistryRouting = 'passed';
+  await runPlantTwinGoTests();
+  report.assertions.plantTwinViews = 'passed';
 
   const optimizationPolicyId = '01990000-1910-7000-8000-000000000001';
   const optimizationPolicyVersionId = '01990000-1920-7000-8000-000000000001';
