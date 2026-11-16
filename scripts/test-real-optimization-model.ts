@@ -237,6 +237,8 @@ test('stagingView turns the service evaluation into cards, paused blockers and p
     ['A 机组', '冷机电表读数不可用，不给减台建议', false],
   ]);
   assert.equal(stagingReason('SOMETHING_NEW'), '这次没有给出建议');
+  assert.equal(stagingReason('CHILLER_THERMAL_DELTA_ACTIVE'), '对应主机进出水还有温差，还在换热，不能停');
+  assert.equal(stagingReason('COOLING_LOAD_DWELL_STALE'), '冷站制冷量读数不可信，暂停减台评估');
   assert.equal(JSON.stringify(view).includes('MANUAL'), false);
 });
 
