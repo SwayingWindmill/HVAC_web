@@ -17,12 +17,13 @@ import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
-import { formatCompactTime, personLabel } from '@/lib/operator-format';
+import { formatCompactTime } from '@/lib/operator-format';
 import { isOneOf } from '@/lib/typed';
 import { cn } from '@/lib/utils';
 import { CommandRequestError, commandKeys, WITHDRAWABLE, type Command } from '../command-api';
 import { STATUS_PRESENTATION } from '../command-presentation';
 import {
+  controlActorLabel,
   controlStateKeys,
   LOCK_PRESENTATION,
   MODE_ORDER,
@@ -87,7 +88,7 @@ export function ControlModeBar({ state, lockCount, pendingCount, myId, timeZone,
           {state.updatedAt ? (
             <span className="flex items-baseline gap-1.5 text-sm">
               <span className="text-xs text-muted-foreground">设定</span>
-              <span className="font-semibold">{personLabel(state.updatedBy ?? undefined, myId)}</span>
+              <span className="font-semibold">{controlActorLabel(state, myId)}</span>
               <span className="font-mono text-xs text-muted-foreground">{formatCompactTime(state.updatedAt, timeZone)}</span>
             </span>
           ) : null}
@@ -365,7 +366,7 @@ function LockForm({ siteId, csrfToken, subject, myId, timeZone, onClose }: {
       {current ? (
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 rounded-lg border border-divider bg-muted p-3 text-xs">
           <dt className="text-muted-foreground">现在</dt>
-          <dd className="font-medium">{current.lockMode === 'UNLOCKED' ? '未锁定' : LOCK_PRESENTATION[current.lockMode].label} · {personLabel(current.updatedBy ?? undefined, myId)}{current.updatedAt ? ` ${formatCompactTime(current.updatedAt, timeZone)}` : ''}</dd>
+          <dd className="font-medium">{current.lockMode === 'UNLOCKED' ? '未锁定' : LOCK_PRESENTATION[current.lockMode].label} · {controlActorLabel(current, myId)}{current.updatedAt ? ` ${formatCompactTime(current.updatedAt, timeZone)}` : ''}</dd>
           {current.reason ? <><dt className="text-muted-foreground">原因</dt><dd className="font-medium">{current.reason}</dd></> : null}
         </dl>
       ) : null}

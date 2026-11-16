@@ -227,6 +227,7 @@ type AssetControlLockView struct {
 	LockMode       string   `json:"lockMode"`
 	Reason         string   `json:"reason"`
 	UpdatedBy      *string  `json:"updatedBy"`
+	UpdatedByName  *string  `json:"updatedByName"`
 	UpdatedAt      *string  `json:"updatedAt"`
 	Revision       int64    `json:"revision"`
 	BoundDeviceIDs []string `json:"boundDeviceIds,omitempty"`
@@ -247,6 +248,7 @@ type SiteControlStateView struct {
 	ControlMode             string                       `json:"controlMode"`
 	Reason                  string                       `json:"reason"`
 	UpdatedBy               *string                      `json:"updatedBy"`
+	UpdatedByName           *string                      `json:"updatedByName"`
 	UpdatedAt               *string                      `json:"updatedAt"`
 	Revision                int64                        `json:"revision"`
 	AssetLocks              []AssetControlLockView       `json:"assetLocks"`

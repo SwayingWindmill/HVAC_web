@@ -67,7 +67,7 @@ export function ControlWorkspace() {
 
   const model = registry.data?.assetModel;
   const targets = useMemo(() => (model ? controlTargets(model, new Date(now)) : []), [model, now]);
-  const grouped = useMemo(() => plantUnits(targets, model?.devices ?? []), [targets, model]);
+  const grouped = useMemo(() => (model ? plantUnits(targets, model, new Date(now)) : { units: [], others: [] }), [targets, model, now]);
   const labels = useMemo(() => commandLabels(targets), [targets]);
   const devices = useMemo(() => new Map(plant.devices.map((device) => [device.deviceId, device])), [plant.devices]);
   const locks = useMemo(() => activeLocks(controlState.data), [controlState.data]);

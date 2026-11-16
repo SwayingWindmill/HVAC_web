@@ -257,3 +257,142 @@ test('the appearance switch keeps document color-scheme and meta[name="color-sch
   await appearance.getByRole('radio', { name: '系统' }).click();
   await expect(page.locator('meta[name="color-scheme"]')).toHaveAttribute('content', 'light dark');
 });
+
+test('control mode and asset locks show operator display names without fallback labels', async ({ page, gateway }) => {
+  const nowIso = new Date().toISOString();
+  gateway.controlState = {
+    ...gateway.controlState,
+    controlMode: 'MANUAL_OVERRIDE',
+    reason: '巡检接管',
+    updatedBy: '018f3e00-2000-7000-8000-000000000099',
+    updatedByName: '周敏',
+    updatedAt: nowIso,
+    assetLocks: [
+      {
+        siteId: SITE_ID,
+        assetId: '01910000-0000-7000-8000-000000000006',
+        lockMode: 'MAINTENANCE_LOCK',
+        reason: '换密封垫',
+        updatedBy: '018f3e00-2000-7000-8000-000000000099',
+        updatedByName: '周敏',
+        updatedAt: nowIso,
+        revision: 2,
+        boundDeviceIds: ['018f3e00-4000-7000-8000-000000000002'],
+      },
+    ],
+  };
+
+  await page.goto(`/operations/control?site=${SITE_ID}`);
+  const modeRegion = page.getByRole('region', { name: '控制方式' });
+  await expect(modeRegion).toContainText(/设定\s*周敏/);
+  await expect(modeRegion).not.toContainText('其他人员');
+  await page.getByRole('group', { name: 'CHWP-01' }).getByRole('button', { name: '解除锁定 CHWP-01' }).click();
+  const lockDialog = page.getByRole('dialog', { name: '解除 CHWP-01 的锁定？' });
+  await expect(lockDialog).toContainText('周敏');
+  await lockDialog.getByRole('button', { name: '取消' }).click();
+
+  await page.goto(`/operations/realtime?site=${SITE_ID}`);
+  await expect(page.getByText('周敏').first()).toBeVisible();
+  await expect(page.getByText('其他人员')).toHaveCount(0);
+
+  await page.goto(`/operations/systems-devices?site=${SITE_ID}`);
+  await page.getByText('CHWP-01').first().click();
+  await expect(page.getByText('周敏').first()).toBeVisible();
+});
+
+test('unit column header shows active power from bound HVAC_POWER_METER and falls back when stale', async ({ page, gateway }) => {
+  await page.goto(`/operations/control?site=${SITE_ID}`);
+  const unitRegion = page.getByRole('region', { name: 'CHILLER-01' });
+  await expect(unitRegion).toContainText('暂无读数');
+
+  const meter = gateway.assetModel.devices.find((d: { code: string }) => d.code === 'hvac-meter');
+  meter.deviceType = 'HVAC_POWER_METER';
+  gateway.assetModel.relationships.push({
+    id: '01910000-0000-7000-8000-ffffffff0099',
+    tenantId: gateway.assetModel.tenantId,
+    siteId: SITE_ID,
+    fromType: 'DEVICE',
+    fromId: meter.id,
+    toType: 'ASSET',
+    toId: '01910000-0000-7000-8000-000000000005',
+    role: 'MONITORED_BY',
+    status: 'ACTIVE',
+    validFrom: '2026-09-28T07:15:32.298Z',
+    validTo: null,
+    revision: 1,
+    createdAt: '2026-09-28T07:15:32.298Z',
+    updatedAt: '2026-09-29T08:51:35.738Z',
+  });
+  const meterSnap = gateway.snapshots.items.find((item: { deviceId: string }) => item.deviceId === meter.id);
+  const powerVal = meterSnap.snapshot.values.find((entry: { key: string }) => entry.key === 'active_power');
+  powerVal.value = 186.24;
+
+  await page.reload();
+  await expect(page.getByRole('region', { name: 'CHILLER-01' })).toContainText('186.2 kW');
+
+  powerVal.freshness = 'STALE';
+  await page.reload();
+  await expect(page.getByRole('region', { name: 'CHILLER-01' })).toContainText('暂无读数');
+});
+
+test('compiled interlockChecks render interlock preconditions in unit group', async ({ page, gateway }) => {
+  const stopPoint = gateway.assetModel.telemetryPoints.find(
+    (point: { id: string }) => point.id === '01910000-0000-7000-8000-500000000002',
+  );
+  stopPoint.sourceMetadata.interlockChecks = [
+    {
+      deviceId: '018f3e00-4000-7000-8000-000000000002',
+      key: 'run_state',
+      expected: 'STOPPED',
+      reason: '停冷机前需先停冷冻泵',
+    },
+  ];
+
+  await page.goto(`/operations/control?site=${SITE_ID}`);
+  const chillerGroup = page.getByRole('group', { name: 'CHILLER-01' });
+  await expect(chillerGroup).toContainText('先停 CHWP-01');
+  await expect(chillerGroup.getByRole('button', { name: '停止' })).toBeDisabled();
+});
+
+test('TOTP step-up failure reasons show actionable guidance and MFA enroll link', async ({ page, gateway }) => {
+  await page.goto(`/operations/control?site=${SITE_ID}`);
+
+  const submitWithReason = async (reason: 'CODE_INVALID' | 'CODE_REPLAYED' | 'MFA_LOCKED' | 'MFA_NOT_CONFIGURED') => {
+    gateway.stepUpFailureReason = reason;
+    await page.getByRole('group', { name: 'CT-01' }).getByRole('button', { name: '停止' }).click();
+    const confirm = page.getByRole('alertdialog');
+    await confirm.getByRole('textbox', { name: '动态口令' }).fill('111222');
+    await confirm.getByRole('checkbox').check();
+    await confirm.getByRole('button', { name: '提交停止' }).click();
+    return confirm;
+  };
+
+  await page.getByRole('group', { name: 'CT-01' }).getByRole('button', { name: '停止' }).click();
+  const imeConfirm = page.getByRole('alertdialog');
+  const codeInput = imeConfirm.getByRole('textbox', { name: '动态口令' });
+  await codeInput.fill('111222');
+  await imeConfirm.getByRole('checkbox').check();
+  await codeInput.dispatchEvent('keydown', { key: 'Enter', isComposing: true, keyCode: 229 });
+  expect(gateway.writes.filter((write) => write.path === '/api/v1/commands')).toEqual([]);
+  await imeConfirm.getByRole('button', { name: '取消' }).click();
+
+  const invalidConfirm = await submitWithReason('CODE_INVALID');
+  await expect(invalidConfirm.getByRole('alert')).toBeVisible();
+  await invalidConfirm.getByRole('button', { name: '取消' }).click();
+
+  const replayedConfirm = await submitWithReason('CODE_REPLAYED');
+  await expect(replayedConfirm.getByRole('alert')).toBeVisible();
+  await replayedConfirm.getByRole('button', { name: '取消' }).click();
+
+  const lockedConfirm = await submitWithReason('MFA_LOCKED');
+  await expect(lockedConfirm.getByRole('alert')).toBeVisible();
+  await lockedConfirm.getByRole('button', { name: '取消' }).click();
+
+  const mfaConfirm = await submitWithReason('MFA_NOT_CONFIGURED');
+  await expect(mfaConfirm.getByRole('alert')).toBeVisible();
+  const enrollLink = mfaConfirm.getByRole('link', { name: /去开通两步验证/ });
+  await expect(enrollLink).toBeVisible();
+  await enrollLink.click();
+  await expect(page).toHaveURL(/\/system\?tab=users/);
+  await expect(page.getByText(/两步验证|动态口令|认证器/).first()).toBeVisible();
+});

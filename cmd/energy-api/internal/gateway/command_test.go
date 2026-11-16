@@ -24,6 +24,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
+	"github.com/quanlaihe/hvac-web/modules/iam/pkg/iamserver"
 )
 
 func TestGatewayCreateCommandDerivesAuthorityAndCurrentState(t *testing.T) {
@@ -377,7 +378,7 @@ func TestGatewayHighRiskSubmitRequiresValidTOTP(t *testing.T) {
 				t.Fatalf("code=%q status=%d body=%s", code, rec.Code, rec.Body.String())
 			}
 			var problem platformapi.ProblemDetails
-			if json.NewDecoder(rec.Body).Decode(&problem) != nil || problem.Code != "STEP_UP_REQUIRED" {
+			if json.NewDecoder(rec.Body).Decode(&problem) != nil || problem.Code != "STEP_UP_REQUIRED" || problem.Reason != "" {
 				t.Fatalf("unexpected problem %#v", problem)
 			}
 			if fixture.identityCalls.Load() != 0 || fixture.control.IAM.CommandAuthorizeCalls != 0 {
@@ -414,11 +415,12 @@ func TestGatewayHighRiskSubmitRequiresValidTOTP(t *testing.T) {
 			name   string
 			status int
 			errKey string
+			reason string
 		}{
-			{name: "wrong_code", status: http.StatusUnauthorized, errKey: "mfa_code_invalid"},
-			{name: "replayed_code", status: http.StatusConflict, errKey: "mfa_code_replayed"},
-			{name: "mfa_not_configured", status: http.StatusPreconditionFailed, errKey: "mfa_not_configured"},
-			{name: "mfa_locked", status: http.StatusLocked, errKey: "mfa_locked"},
+			{name: "wrong_code", status: http.StatusUnauthorized, errKey: "mfa_code_invalid", reason: "CODE_INVALID"},
+			{name: "replayed_code", status: http.StatusConflict, errKey: "mfa_code_replayed", reason: "CODE_REPLAYED"},
+			{name: "mfa_not_configured", status: http.StatusPreconditionFailed, errKey: "mfa_not_configured", reason: "MFA_NOT_CONFIGURED"},
+			{name: "mfa_locked", status: http.StatusLocked, errKey: "mfa_locked", reason: "MFA_LOCKED"},
 		}
 		for _, tc := range cases {
 			fixture := newCommandGatewayFixture(t)
@@ -437,8 +439,8 @@ func TestGatewayHighRiskSubmitRequiresValidTOTP(t *testing.T) {
 				t.Fatalf("%s status=%d body=%s", tc.name, rec.Code, rec.Body.String())
 			}
 			var problem platformapi.ProblemDetails
-			if json.NewDecoder(rec.Body).Decode(&problem) != nil || problem.Code != "STEP_UP_REQUIRED" {
-				t.Fatalf("%s unexpected problem %#v", tc.name, problem)
+			if json.NewDecoder(rec.Body).Decode(&problem) != nil || problem.Code != "STEP_UP_REQUIRED" || problem.Reason != tc.reason {
+				t.Fatalf("%s unexpected problem %#v want reason=%q", tc.name, problem, tc.reason)
 			}
 			if fixture.identityCalls.Load() != 1 || fixture.commandCalls.Load() != 0 {
 				t.Fatalf("%s calls identity=%d command=%d", tc.name, fixture.identityCalls.Load(), fixture.commandCalls.Load())
@@ -616,6 +618,7 @@ type commandGatewayFixture struct {
 	identityCalls      atomic.Int32
 	crossTenantView    atomic.Bool
 	totpResponder      func(code string) (int, map[string]any)
+	principalNames     map[string]string
 	lastControlContext string
 }
 
@@ -871,6 +874,30 @@ func (fixture *commandGatewayFixture) commandIAMClient(t *testing.T) *http.Clien
 				Decision:        decision,
 				DelegationGrant: commandUnsignedRegistryGrant(claims),
 			}), nil
+		}
+		if request.URL.Path == iamserver.PrincipalNamesPath {
+			parent, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, request.Header.Get("X-Delegation-Grant"))
+			if err != nil {
+				return jsonTestResponse(http.StatusUnauthorized, map[string]any{"code": "IAM_DELEGATION_INVALID"}), nil
+			}
+			if !commandTestContains(parent.Actions, "iam:principal:read") {
+				return jsonTestResponse(http.StatusForbidden, map[string]any{"code": "IAM_DELEGATION_REJECTED"}), nil
+			}
+			var input iamserver.TenantPrincipalNamesRequest
+			if json.NewDecoder(request.Body).Decode(&input) != nil {
+				return jsonTestResponse(http.StatusBadRequest, map[string]any{"code": "IAM_REQUEST_INVALID"}), nil
+			}
+			names := map[string]string{}
+			configured := fixture.principalNames
+			if configured == nil {
+				configured = map[string]string{fixture.principalID: "值班工程师"}
+			}
+			for _, id := range input.PrincipalIDs {
+				if name, ok := configured[id]; ok {
+					names[id] = name
+				}
+			}
+			return jsonTestResponse(http.StatusOK, iamserver.TenantPrincipalNamesResponse{Names: names}), nil
 		}
 		return nil, context.DeadlineExceeded
 	})}

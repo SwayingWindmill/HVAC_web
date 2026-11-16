@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
-import { failureStatus, gatewayPath, gatewayRequest, ROUTE_MISSING_MESSAGE, type GatewayRequest } from '@/api/gateway-client';
+import { failureStatus, gatewayPath, gatewayRequest, ROUTE_MISSING_MESSAGE, type GatewayRequest, type StepUpFailureReason } from '@/api/gateway-client';
 import { commandPaths } from '@/api/generated/platformGateway.gen';
 import { controlErrorMessage } from './control-errors';
 
@@ -40,7 +40,12 @@ export interface Command {
 }
 
 export class CommandRequestError extends Error {
-  constructor(readonly status: number, readonly code: string | undefined, message: string) {
+  constructor(
+    readonly status: number,
+    readonly code: string | undefined,
+    message: string,
+    readonly reason?: StepUpFailureReason,
+  ) {
     super(message);
   }
 }
@@ -50,7 +55,8 @@ async function send<T>(path: string, request: GatewayRequest<T> = {}): Promise<T
   if (result.kind === 'ok') return result.value;
   if (result.kind === 'routeMissing') throw new CommandRequestError(result.status, undefined, ROUTE_MISSING_MESSAGE);
   const code = result.kind === 'unavailable' ? undefined : result.problem.code;
-  throw new CommandRequestError(failureStatus(result), code, controlErrorMessage(code, result.kind === 'unavailable' ? '指令服务暂时不可用，请稍后再试' : '指令没有被接受，请刷新后再试'));
+  const reason = result.kind === 'unavailable' ? undefined : result.problem.reason;
+  throw new CommandRequestError(failureStatus(result), code, controlErrorMessage(code, result.kind === 'unavailable' ? '指令服务暂时不可用，请稍后再试' : '指令没有被接受，请刷新后再试'), reason);
 }
 
 const idempotencyKey = () => `command-${crypto.randomUUID()}`;

@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { Asset, AssetRelationship, TelemetryPoint } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
-import { blockingInterlocks, controlTargets, plantUnits } from '../apps/hvac-web/src/features/control/control-model.ts';
+import type { Asset, AssetRelationship, Device, TelemetryPoint } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
+import type { PlantReading } from '../apps/hvac-web/src/features/operations/realtime/plant-model.ts';
+import { blockingInterlocks, controlTargets, plantUnits, unitActivePower } from '../apps/hvac-web/src/features/control/control-model.ts';
+import { stepUpErrorPresentation } from '../apps/hvac-web/src/features/control/control-errors.ts';
 
 const at = '2026-10-01T00:00:00.000Z';
 const site = { tenantId: 't', siteId: 's' };
 const asset = (id: string, displayName: string, assetType = 'CHILLER'): Asset => ({
   id, ...site, code: displayName, displayName, assetType, status: 'ACTIVE', revision: 1, createdAt: at, updatedAt: at,
+});
+const device = (id: string, code: string, deviceType = 'CHILLER_CONTROLLER', status: Device['status'] = 'ACTIVE'): Device => ({
+  id, ...site, code, displayName: code, deviceType, status, revision: 1, createdAt: at, updatedAt: at,
+});
+const boundMeter = (id: string, deviceId: string, assetId: string, validTo: string | null = null): AssetRelationship => ({
+  id, ...site, fromType: 'DEVICE', fromId: deviceId, toType: 'ASSET', toId: assetId, role: 'OBSERVES', status: 'ACTIVE',
+  validFrom: at, validTo, revision: 1, createdAt: at, updatedAt: at,
 });
 const point = (
   id: string,
@@ -78,25 +87,54 @@ test('plant assets are offered in the order water flows through the plant', () =
   assert.deepEqual(controlTargets(model, now).map((target) => target.assetName), ['CHILLER-01', 'CHWP-01', 'CWP-01', 'CT-01']);
 });
 
-test('a chiller and the pumps and tower its start interlocks name form one unit; unnamed assets stay apart', () => {
-  const interlocks = [
-    { device: 'ctrl-chwp-1', point: 'run_state', expected: 'RUNNING', reason: '1# 冻水泵需先处于运行状态，方可脉冲开启 1# 主机' },
-    { device: 'ctrl-tower-1', point: 'run_state', expected: 'RUNNING', reason: '1# 冷却塔风机需先处于运行状态，方可脉冲开启 1# 主机' },
+test('a chiller and the pumps and tower its compiled interlockChecks name form one unit with its active HVAC_POWER_METER; unnamed assets stay apart', () => {
+  const chillerInterlocks = [
+    { deviceId: 'd-chwp', key: 'run_state', expected: 'RUNNING', reason: '1# 冻水泵需先处于运行状态，方可脉冲开启 1# 主机' },
+    { deviceId: 'd-tower', key: 'run_state', expected: 'RUNNING', reason: '1# 冷却塔风机需先处于运行状态，方可脉冲开启 1# 主机' },
+    { deviceId: 'd-ignored-key', key: 'fault_code', expected: 'STOPPED', reason: 'non run_state checks are ignored' },
   ];
   const model = {
-    assets: [asset('a-chiller', 'A 机组'), asset('a-chwp', '1 号冷冻泵', 'CHILLED_WATER_PUMP'), asset('a-tower', '1 号冷却塔', 'COOLING_TOWER'), asset('a-spare', '5 号冷却塔', 'COOLING_TOWER')],
+    assets: [asset('a-chiller', 'A 机组'), asset('a-chiller-b', 'B 机组'), asset('a-chwp', '1 号冷冻泵', 'CHILLED_WATER_PUMP'), asset('a-tower', '1 号冷却塔', 'COOLING_TOWER'), asset('a-spare', '5 号冷却塔', 'COOLING_TOWER')],
+    devices: [
+      device('d-chiller', 'ctrl-chiller-a'),
+      device('d-chiller-b', 'ctrl-chiller-b'),
+      device('d-chwp', 'ctrl-chwp-1'),
+      device('d-tower', 'ctrl-tower-1'),
+      device('d-spare', 'ctrl-tower-5'),
+      device('d-meter-a', 'meter-uid4', 'HVAC_POWER_METER'),
+      device('d-meter-retired', 'meter-old', 'HVAC_POWER_METER', 'RETIRED'),
+      device('d-meter-expired', 'meter-exp', 'HVAC_POWER_METER'),
+    ],
     telemetryPoints: [
-      point('p-start', 'd-chiller', 'start', 'COMMAND', { capability: 'START', interlocks }),
+      point('p-start', 'd-chiller', 'start', 'COMMAND', { capability: 'START', interlockChecks: chillerInterlocks }),
       point('p-seq', 'd-chiller', 'stop_unit_sequence', 'COMMAND', { capability: 'STOP_UNIT_SEQUENCE' }),
-      point('p-chwp', 'd-chwp', 'stop', 'COMMAND', { capability: 'STOP', interlocks: [{ device: 'ctrl-chiller-a', expected: 'STOPPED', reason: '1# 主机尚未停机，禁止断开 1# 冻水泵' }] }),
+      point('p-start-b', 'd-chiller-b', 'start', 'COMMAND', { capability: 'START' }),
+      // Legacy sourceMetadata.interlocks is deleted and no longer parsed.
+      point('p-chwp', 'd-chwp', 'stop', 'COMMAND', {
+        capability: 'STOP',
+        interlockChecks: [{ deviceId: 'd-chiller', expected: 'STOPPED', reason: '1# 主机尚未停机，禁止断开 1# 冻水泵' }],
+        interlocks: [{ device: 'ctrl-tower-5', expected: 'STOPPED', reason: 'legacy field ignored' }],
+      }),
       point('p-tower', 'd-tower', 'stop', 'COMMAND', { capability: 'STOP' }),
       point('p-spare', 'd-spare', 'stop', 'COMMAND', { capability: 'STOP' }),
     ],
-    relationships: [controls('r1', 'p-start', 'a-chiller'), controls('r2', 'p-seq', 'a-chiller'), controls('r3', 'p-chwp', 'a-chwp'), controls('r4', 'p-tower', 'a-tower'), controls('r5', 'p-spare', 'a-spare')],
+    relationships: [
+      controls('r1', 'p-start', 'a-chiller'),
+      controls('r2', 'p-seq', 'a-chiller'),
+      controls('r2b', 'p-start-b', 'a-chiller-b'),
+      controls('r3', 'p-chwp', 'a-chwp'),
+      controls('r4', 'p-tower', 'a-tower'),
+      controls('r5', 'p-spare', 'a-spare'),
+      boundMeter('m1', 'd-meter-a', 'a-chiller'),
+      boundMeter('m2', 'd-meter-retired', 'a-chiller-b'),
+      boundMeter('m3', 'd-meter-expired', 'a-chiller-b', '2026-10-05T00:00:00.000Z'),
+    ],
   };
-  const devices = [{ id: 'd-chiller', code: 'ctrl-chiller-a' }, { id: 'd-chwp', code: 'ctrl-chwp-1' }, { id: 'd-tower', code: 'ctrl-tower-1' }, { id: 'd-spare', code: 'ctrl-tower-5' }];
-  const { units, others } = plantUnits(controlTargets(model, now), devices);
-  assert.deepEqual(units.map((unit) => [unit.chiller.assetName, unit.members.map((member) => member.assetName)]), [['A 机组', ['1 号冷冻泵', '1 号冷却塔']]]);
+  const { units, others } = plantUnits(controlTargets(model, now), model, now);
+  assert.deepEqual(units.map((unit) => [unit.chiller.assetName, unit.members.map((member) => member.assetName), unit.powerMeterDeviceId]), [
+    ['A 机组', ['1 号冷冻泵', '1 号冷却塔'], 'd-meter-a'],
+    ['B 机组', [], null],
+  ]);
   assert.deepEqual(others.map((target) => target.assetName), ['5 号冷却塔']);
   assert.deepEqual(units[0].chiller.actions.map((action) => action.capability), ['START', 'STOP_UNIT_SEQUENCE']);
 
@@ -105,4 +143,58 @@ test('a chiller and the pumps and tower its start interlocks name form one unit;
   assert.deepEqual(blocked.map((interlock) => interlock.deviceCode), ['ctrl-tower-1']);
   // A device whose state is unreadable blocks too: the plant refuses what it cannot verify.
   assert.equal(blockingInterlocks(start, new Map()).length, 2);
+  // Only compiled interlockChecks (not legacy interlocks) appear on chwp STOP.
+  const chwpTarget = units[0].members.find((member) => member.assetId === 'a-chwp');
+  assert.deepEqual(chwpTarget?.actions[0].interlocks.map((item) => item.deviceCode), ['ctrl-chiller-a']);
+});
+
+test('unitActivePower reads fresh or low-confidence unit power and returns null for stale, missing, or unbound meters', () => {
+  const reading = (overrides: Partial<PlantReading>): PlantReading => ({
+    label: '有功功率',
+    display: '186.2 kW',
+    unit: 'kW',
+    numeric: 186.2,
+    current: true,
+    lowConfidence: false,
+    measurement: null,
+    probeOffsets: [],
+    state: 'PRESENT',
+    freshness: 'FRESH',
+    sampledAt: '2026-10-11T00:00:00.000Z',
+    ...overrides,
+  });
+
+  const active = unitActivePower({ reading: (key) => (key === 'hvac_meter.active_power' ? reading({ numeric: 186.2 }) : null) });
+  assert.equal(active?.numeric, 186.2);
+
+  const lowConfidence = unitActivePower({ reading: (key) => (key === 'chiller.power' ? reading({ current: false, lowConfidence: true, numeric: 94.5 }) : null) });
+  assert.equal(lowConfidence?.numeric, 94.5);
+  assert.equal(lowConfidence?.lowConfidence, true);
+
+  // Stale or absent readings never render stale numbers.
+  assert.equal(unitActivePower({ reading: (key) => (key === 'hvac_meter.active_power' ? reading({ current: false, lowConfidence: false, freshness: 'STALE' }) : null) }), null);
+  assert.equal(unitActivePower({ reading: (key) => (key === 'hvac_meter.active_power' ? reading({ state: 'MISSING', numeric: null, current: false }) : null) }), null);
+  assert.equal(unitActivePower(undefined), null);
+});
+
+test('stepUpErrorPresentation distinguishes all four TOTP reasons and flags enrollment only on MFA_NOT_CONFIGURED', () => {
+  const invalid = stepUpErrorPresentation('CODE_INVALID', true);
+  assert.equal(invalid.showEnrollLink, false);
+  assert.match(invalid.message, /动态口令不对/);
+
+  const replayed = stepUpErrorPresentation('CODE_REPLAYED', true);
+  assert.equal(replayed.showEnrollLink, false);
+  assert.match(replayed.message, /已经用过/);
+
+  const notConfigured = stepUpErrorPresentation('MFA_NOT_CONFIGURED', true);
+  assert.equal(notConfigured.showEnrollLink, true);
+  assert.match(notConfigured.message, /开通两步验证/);
+
+  const locked = stepUpErrorPresentation('MFA_LOCKED', true);
+  assert.equal(locked.showEnrollLink, false);
+  assert.match(locked.message, /暂时锁定/);
+
+  const promptFirst = stepUpErrorPresentation(undefined, false);
+  assert.equal(promptFirst.showEnrollLink, false);
+  assert.match(promptFirst.message, /高风险/);
 });

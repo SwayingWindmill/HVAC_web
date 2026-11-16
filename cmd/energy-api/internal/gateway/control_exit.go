@@ -12,10 +12,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
+	"github.com/quanlaihe/hvac-web/modules/iam/pkg/iamserver"
 )
 
 const (
@@ -172,6 +174,7 @@ func (h *handler) getSiteControlState(writer http.ResponseWriter, request *http.
 		h.writeCommandFailure(writer, request, commandUnavailable("Command Service returned an invalid Site control state."))
 		return
 	}
+	h.populateSiteControlStateNames(request.Context(), session, "", &state)
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, state)
 }
@@ -211,6 +214,7 @@ func (h *handler) putSiteControlMode(writer http.ResponseWriter, request *http.R
 		h.writeCommandFailure(writer, request, commandUnavailable("Command Service returned an invalid Site control mode response."))
 		return
 	}
+	h.populateSiteControlStateNames(request.Context(), session, derefOptionalString(resp.UpdatedBy), &resp.SiteControlStateView)
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, resp)
 }
@@ -250,6 +254,7 @@ func (h *handler) putAssetControlLock(writer http.ResponseWriter, request *http.
 		h.writeCommandFailure(writer, request, commandUnavailable("Command Service returned an invalid Asset control lock response."))
 		return
 	}
+	h.populateAssetControlLockName(request.Context(), session, derefOptionalString(resp.UpdatedBy), &resp.AssetControlLockView)
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, resp)
 }
@@ -320,6 +325,7 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 		h.writeCommandFailure(writer, request, commandUnavailable("Command Service returned an invalid Site control shutdown response."))
 		return
 	}
+	h.populateSiteControlStateNames(request.Context(), session, derefOptionalString(resp.SiteControlState.UpdatedBy), &resp.SiteControlState)
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, resp)
 }
@@ -509,4 +515,139 @@ func (h *handler) writeCoreControlRegistryError(writer http.ResponseWriter, requ
 func routeRevisionFromRequest(request *http.Request) int64 {
 	decision := routeDecisionFromContext(request.Context())
 	return decision.RegistryRevision
+}
+
+func derefOptionalString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
+}
+
+func (h *handler) populateSiteControlStateNames(ctx context.Context, session bffSession, actorPrincipalID string, state *siteControlStateView) {
+	if state == nil {
+		return
+	}
+	ids := make([]string, 0, 1+len(state.AssetLocks))
+	if state.UpdatedBy != nil && strings.TrimSpace(*state.UpdatedBy) != "" {
+		ids = append(ids, strings.TrimSpace(*state.UpdatedBy))
+	}
+	for _, lock := range state.AssetLocks {
+		if lock.UpdatedBy != nil && strings.TrimSpace(*lock.UpdatedBy) != "" {
+			ids = append(ids, strings.TrimSpace(*lock.UpdatedBy))
+		}
+	}
+	names := h.lookupTenantPrincipalNames(ctx, session, actorPrincipalID, ids)
+	state.UpdatedByName = resolvedPrincipalName(state.UpdatedBy, names)
+	for i := range state.AssetLocks {
+		state.AssetLocks[i].UpdatedByName = resolvedPrincipalName(state.AssetLocks[i].UpdatedBy, names)
+	}
+}
+
+func (h *handler) populateAssetControlLockName(ctx context.Context, session bffSession, actorPrincipalID string, lock *assetControlLockView) {
+	if lock == nil || lock.UpdatedBy == nil || strings.TrimSpace(*lock.UpdatedBy) == "" {
+		return
+	}
+	names := h.lookupTenantPrincipalNames(ctx, session, actorPrincipalID, []string{strings.TrimSpace(*lock.UpdatedBy)})
+	lock.UpdatedByName = resolvedPrincipalName(lock.UpdatedBy, names)
+}
+
+func resolvedPrincipalName(updatedBy *string, names map[string]string) *string {
+	if updatedBy == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*updatedBy)
+	if trimmed == "" {
+		return nil
+	}
+	if name, ok := names[trimmed]; ok && strings.TrimSpace(name) != "" {
+		copyName := name
+		return &copyName
+	}
+	return nil
+}
+
+func (h *handler) lookupTenantPrincipalNames(ctx context.Context, session bffSession, actorPrincipalID string, principalIDs []string) map[string]string {
+	unique := make([]string, 0, len(principalIDs))
+	seen := make(map[string]struct{}, len(principalIDs))
+	for _, id := range principalIDs {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		unique = append(unique, trimmed)
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	if h == nil || h.identity == nil || h.identity.config.IAMHTTPClient == nil ||
+		strings.TrimSpace(h.identity.config.IAMURL) == "" || h.identity.config.DelegationSigner == nil {
+		if actorPrincipalID != "" && !strings.HasPrefix(actorPrincipalID, "spiffe://") && strings.TrimSpace(session.Principal.DisplayName) != "" {
+			if _, ok := seen[actorPrincipalID]; ok {
+				return map[string]string{actorPrincipalID: session.Principal.DisplayName}
+			}
+		}
+		return nil
+	}
+
+	now := h.identity.now().UTC()
+	expiry := now.Add(h.identity.config.DelegationTTL)
+	if !session.ExpiresAt.IsZero() && expiry.After(session.ExpiresAt) {
+		expiry = session.ExpiresAt
+	}
+	claims := identitycontext.DelegationClaims{
+		Issuer:           h.identity.config.ExecutingWorkloadSPIFFE,
+		Subject:          session.Principal.Subject,
+		SubjectIssuer:    session.Principal.Issuer,
+		DisplayName:      session.Principal.DisplayName,
+		Email:            session.Principal.Email,
+		Roles:            append([]string(nil), session.Principal.Roles...),
+		ExecutingService: h.identity.config.ExecutingWorkloadSPIFFE,
+		Audience:         h.identity.config.IAMAudience,
+		TenantID:         session.TenantID,
+		Actions:          []string{"iam:principal:read"},
+		Scopes:           []string{"session:" + session.ID},
+		PolicyRevision:   h.identity.config.PolicyRevision,
+		SessionID:        session.ID,
+		IssuedAt:         now.Unix(),
+		ExpiresAt:        expiry.Unix(),
+		TokenID:          randomURLToken(16),
+	}
+	grant, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
+	if err != nil {
+		return nil
+	}
+	payload, err := json.Marshal(iamserver.TenantPrincipalNamesRequest{
+		TenantID:     session.TenantID,
+		PrincipalIDs: unique,
+	})
+	if err != nil {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h.identity.config.IAMURL, "/")+iamserver.PrincipalNamesPath, bytes.NewReader(payload))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, application/problem+json")
+	req.Header.Set("X-Delegation-Grant", grant)
+	observability.InjectHTTP(ctx, req.Header)
+	resp, err := h.identity.config.IAMHTTPClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	var body iamserver.TenantPrincipalNamesResponse
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
+	if decoder.Decode(&body) != nil {
+		return nil
+	}
+	return body.Names
 }

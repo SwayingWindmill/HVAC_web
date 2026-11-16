@@ -190,6 +190,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
             </TableRow>
           </TableBody>
         </Table>
+        <p className="border-t border-divider px-5 py-3 text-xs text-muted-foreground">提交高风险控制指令需要认证器两步验证，如尚未开通请联系管理员办理。</p>
       </Panel>
       <Panel aria-label={`${roles} 的权限`}>
         <PanelHeader title={`${roles} 的权限`} caption={`当前登录用户的角色${unnamed ? ` · 另有 ${unnamed} 项未命名的权限` : ''}`} />

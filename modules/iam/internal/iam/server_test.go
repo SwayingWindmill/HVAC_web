@@ -745,3 +745,57 @@ func TestIAMCommandAuthoritySPIFFEDelegationScope(t *testing.T) {
 	principalRec := sendAsCmdService(iam.CurrentPrincipalPath, "principal:read", "")
 	assertIAMProblem(t, principalRec, http.StatusUnauthorized, "IAM_WORKLOAD_IDENTITY_INVALID")
 }
+
+func TestIAMResolvesTenantPrincipalNamesWithoutAdminCapability(t *testing.T) {
+	harness := newIAMHarness(t)
+	claims := validIAMClaims(harness.now, "fixture-delegated-user", "iam:principal:read")
+	claims.Roles = []string{"operator"}
+	claims.TenantID = iam.S1FixtureTenantAID
+
+	body, err := json.Marshal(iam.TenantPrincipalNamesRequest{
+		TenantID: iam.S1FixtureTenantAID,
+		PrincipalIDs: []string{
+			iam.S1FixtureOwnerAPrincipalID,
+			iam.S1FixtureDelegatedID,
+			iam.S1FixtureRevokedMemberID,
+			"spiffe://hvac.local/scheduler",
+			"018f1e00-2000-7000-8000-999999999999",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	harness.handler.ServeHTTP(rec, harness.request(t, iam.PrincipalNamesPath, strings.NewReader(string(body)), claims, harness.gatewaySigner))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp iam.TenantPrincipalNamesResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Names[iam.S1FixtureOwnerAPrincipalID] != "Owner A" || resp.Names[iam.S1FixtureDelegatedID] != "Delegated User" {
+		t.Fatalf("unexpected names: %#v", resp.Names)
+	}
+	if _, leaked := resp.Names[iam.S1FixtureRevokedMemberID]; leaked {
+		t.Fatalf("revoked member leaked into names: %#v", resp.Names)
+	}
+	if len(resp.Names) != 2 {
+		t.Fatalf("expected exactly 2 active names, got %#v", resp.Names)
+	}
+
+	// Cross-tenant lookup is rejected.
+	mismatchBody, _ := json.Marshal(iam.TenantPrincipalNamesRequest{
+		TenantID:     iam.S1FixtureTenantBID,
+		PrincipalIDs: []string{iam.S1FixtureOwnerAPrincipalID},
+	})
+	mismatch := httptest.NewRecorder()
+	harness.handler.ServeHTTP(mismatch, harness.request(t, iam.PrincipalNamesPath, strings.NewReader(string(mismatchBody)), claims, harness.gatewaySigner))
+	assertIAMProblem(t, mismatch, http.StatusForbidden, "IAM_TENANT_CONTEXT_MISMATCH")
+
+	// Delegation missing iam:principal:read is rejected.
+	wrongAction := validIAMClaims(harness.now, "fixture-delegated-user", "principal:read")
+	denied := httptest.NewRecorder()
+	harness.handler.ServeHTTP(denied, harness.request(t, iam.PrincipalNamesPath, strings.NewReader(string(body)), wrongAction, harness.gatewaySigner))
+	assertIAMProblem(t, denied, http.StatusForbidden, "IAM_DELEGATION_REJECTED")
+}

@@ -11,6 +11,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { isOneOf } from '@/lib/typed';
 import type { SiteControlShutdownMode, SiteControlShutdownResponse } from '@/api/generated/platformGateway.gen';
 import { CommandRequestError, commandKeys } from '../command-api';
+import { stepUpErrorPresentation, type StepUpErrorPresentation } from '../control-errors';
 import { controlStateKeys, executeSiteShutdown, type SiteControlState } from '../control-state';
 import { CODE_PATTERN, CodeField } from './CommandConfirmation';
 import { ChoiceCard, ReasonField } from './ControlBoundary';
@@ -80,7 +81,7 @@ function ShutdownForm({ siteId, csrfToken, state, subject, onClose }: {
   const [siteMode, setSiteMode] = useState<(typeof SITE_MODES)[number]>('PLANT_SAFE_SHUTDOWN');
   const [reason, setReason] = useState('');
   const [code, setCode] = useState('');
-  const [codeError, setCodeError] = useState<string | null>(null);
+  const [codeError, setCodeError] = useState<StepUpErrorPresentation | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [emergencyConfirmed, setEmergencyConfirmed] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -106,7 +107,7 @@ function ShutdownForm({ siteId, csrfToken, state, subject, onClose }: {
     onError: (error) => {
       if (error instanceof CommandRequestError && error.code === 'STEP_UP_REQUIRED') {
         setCode('');
-        setCodeError('动态口令不对、已经用过，或账号还没开通两步验证。请输入认证器上新的 6 位数字。');
+        setCodeError(stepUpErrorPresentation(error.reason, true));
         return;
       }
       if (error instanceof CommandRequestError && error.code && IN_PLACE.has(error.code)) {
@@ -155,7 +156,15 @@ function ShutdownForm({ siteId, csrfToken, state, subject, onClose }: {
         <span className="text-xs text-secondary-foreground">会撤回 {subject.withdrawCount} 条还没下发的指令</span>
       ) : null}
       <ReasonField id={reasonId} value={reason} onChange={(value) => { setReason(value); setRefusal(null); }} placeholder="例如：冷冻水管漏水，停机检修" />
-      <CodeField id={codeId} value={code} error={codeError} onChange={(value) => { setCode(value); setCodeError(null); }} />
+      <CodeField
+        id={codeId}
+        value={code}
+        error={codeError?.message ?? null}
+        showEnrollLink={codeError?.showEnrollLink}
+        onNavigateEnroll={onClose}
+        onSubmit={() => { if (ready && !run.isPending) run.mutate(); }}
+        onChange={(value) => { setCode(value); setCodeError(null); }}
+      />
       <div className="flex items-start gap-2">
         <Checkbox id={ackId} checked={acknowledged} onCheckedChange={(value) => setAcknowledged(value === true)} className="mt-0.5" />
         <Label htmlFor={ackId} className="text-sm font-normal">我已和现场确认可以停机</Label>

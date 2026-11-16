@@ -15,6 +15,8 @@ import (
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
@@ -419,6 +421,34 @@ func TestGatewaySiteControlShutdown(t *testing.T) {
 				if rec.Code != http.StatusPreconditionRequired || json.NewDecoder(rec.Body).Decode(&problem) != nil ||
 					problem.Code != "STEP_UP_REQUIRED" {
 					t.Fatalf("status=%d want 428 STEP_UP_REQUIRED problem=%#v body=%s", rec.Code, problem, rec.Body.String())
+				}
+			})
+		}
+	})
+
+	t.Run("step_up_failure_reasons", func(t *testing.T) {
+		cases := []struct {
+			name   string
+			status int
+			errKey string
+			reason string
+		}{
+			{name: "code_invalid", status: http.StatusUnauthorized, errKey: "mfa_code_invalid", reason: "CODE_INVALID"},
+			{name: "code_replayed", status: http.StatusConflict, errKey: "mfa_code_replayed", reason: "CODE_REPLAYED"},
+			{name: "mfa_not_configured", status: http.StatusPreconditionFailed, errKey: "mfa_not_configured", reason: "MFA_NOT_CONFIGURED"},
+			{name: "mfa_locked", status: http.StatusLocked, errKey: "mfa_locked", reason: "MFA_LOCKED"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				f := newShutdownPlantFixture(t)
+				f.totpResponder = func(string) (int, map[string]any) {
+					return tc.status, map[string]any{"error": tc.errKey}
+				}
+				rec := f.postShutdown(`{"mode":"PLANT_SAFE_SHUTDOWN","reason":"全站停机","verificationCode":"654321"}`)
+				var problem platformapi.ProblemDetails
+				if rec.Code != http.StatusPreconditionRequired || json.NewDecoder(rec.Body).Decode(&problem) != nil ||
+					problem.Code != "STEP_UP_REQUIRED" || problem.Reason != tc.reason {
+					t.Fatalf("%s status=%d problem=%#v want reason=%q body=%s", tc.name, rec.Code, problem, tc.reason, rec.Body.String())
 				}
 			})
 		}
@@ -889,3 +919,156 @@ func (f *shutdownPlantFixture) submittedPointIDs(t *testing.T, commandIDs []stri
 }
 
 var _ = bytes.NewReader
+
+func TestGatewayControlExitResolvesUpdatedByNameAndFallsBackCleanly(t *testing.T) {
+	otherPrincipalID := "018f3e00-2000-7000-8000-000000000099"
+	workloadActor := "spiffe://hvac.local/scheduler"
+	ts := "2026-11-15T16:00:00.000Z"
+
+	t.Run("iam_lookup_populates_mode_lock_and_shutdown_and_leaves_workloads_null", func(t *testing.T) {
+		fixture := newCommandGatewayFixture(t)
+		fixture.control.Twin.ControlStates[fixture.siteID] = commandservice.SiteControlStateView{
+			TenantID:    fixture.tenantID,
+			SiteID:      fixture.siteID,
+			ControlMode: siteControlModeManualOverride,
+			Reason:      "巡检",
+			UpdatedBy:   &fixture.principalID,
+			UpdatedAt:   &ts,
+			Revision:    2,
+			AssetLocks: []assetControlLockView{
+				{
+					SiteID:    fixture.siteID,
+					AssetID:   fixture.assetID,
+					LockMode:  assetControlLockManual,
+					Reason:    "检修",
+					UpdatedBy: &fixture.principalID,
+					UpdatedAt: &ts,
+					Revision:  3,
+				},
+			},
+		}
+		fixture.principalNames = map[string]string{
+			fixture.principalID: "周敏",
+			"command-user":      "周敏",
+		}
+
+		// GET control-state resolves principal names via IAM.
+		getReq := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+fixture.siteID+"/control-state", nil)
+		fixture.authenticate(getReq, false)
+		getRec := httptest.NewRecorder()
+		fixture.handler.ServeHTTP(getRec, getReq)
+		if getRec.Code != http.StatusOK {
+			t.Fatalf("GET control-state status=%d body=%s", getRec.Code, getRec.Body.String())
+		}
+		var state siteControlStateView
+		if err := json.NewDecoder(getRec.Body).Decode(&state); err != nil {
+			t.Fatal(err)
+		}
+		if state.UpdatedByName == nil || *state.UpdatedByName != "周敏" {
+			t.Fatalf("GET control-state updatedByName=%v want 周敏", state.UpdatedByName)
+		}
+		if len(state.AssetLocks) != 1 || state.AssetLocks[0].UpdatedByName == nil || *state.AssetLocks[0].UpdatedByName != "周敏" {
+			t.Fatalf("GET control-state lock updatedByName=%#v want 周敏", state.AssetLocks)
+		}
+
+		// PUT control-mode returns UpdatedByName.
+		modeReq := httptest.NewRequest(http.MethodPut, "/api/v1/sites/"+fixture.siteID+"/control-mode", strings.NewReader(`{"controlMode":"REMOTE_AUTO","reason":"恢复自动","expectedRevision":2}`))
+		fixture.authenticate(modeReq, true)
+		modeReq.Header.Set("Content-Type", "application/json")
+		modeRec := httptest.NewRecorder()
+		fixture.handler.ServeHTTP(modeRec, modeReq)
+		if modeRec.Code != http.StatusOK {
+			t.Fatalf("PUT control-mode status=%d body=%s", modeRec.Code, modeRec.Body.String())
+		}
+		var modeResp siteControlModeMutationResponse
+		if err := json.NewDecoder(modeRec.Body).Decode(&modeResp); err != nil {
+			t.Fatal(err)
+		}
+		if modeResp.UpdatedByName == nil || *modeResp.UpdatedByName != "周敏" {
+			t.Fatalf("PUT control-mode updatedByName=%v want 周敏", modeResp.UpdatedByName)
+		}
+
+		// PUT asset control-lock returns UpdatedByName.
+		lockReq := httptest.NewRequest(http.MethodPut, "/api/v1/assets/"+fixture.assetID+"/control-lock", strings.NewReader(`{"lockMode":"MAINTENANCE_LOCK","reason":"检修","expectedRevision":3}`))
+		fixture.authenticate(lockReq, true)
+		lockReq.Header.Set("Content-Type", "application/json")
+		lockRec := httptest.NewRecorder()
+		fixture.handler.ServeHTTP(lockRec, lockReq)
+		if lockRec.Code != http.StatusOK {
+			t.Fatalf("PUT control-lock status=%d body=%s", lockRec.Code, lockRec.Body.String())
+		}
+		var lockResp assetControlLockMutationResponse
+		if err := json.NewDecoder(lockRec.Body).Decode(&lockResp); err != nil {
+			t.Fatal(err)
+		}
+		if lockResp.UpdatedByName == nil || *lockResp.UpdatedByName != "周敏" {
+			t.Fatalf("PUT control-lock updatedByName=%v want 周敏", lockResp.UpdatedByName)
+		}
+
+		// POST control-shutdown returns SiteControlState.UpdatedByName, while workload/missing actors stay null.
+		sf := newShutdownPlantFixture(t)
+		sf.principalNames = map[string]string{sf.principalID: "李明", "command-user": "李明"}
+		shutdownRec := sf.postShutdown(`{"mode":"PLANT_SAFE_SHUTDOWN","reason":"全站停机","verificationCode":"123456"}`)
+		if shutdownRec.Code != http.StatusOK {
+			t.Fatalf("POST control-shutdown status=%d body=%s", shutdownRec.Code, shutdownRec.Body.String())
+		}
+		var shutdownResp siteControlShutdownResponse
+		if err := json.NewDecoder(shutdownRec.Body).Decode(&shutdownResp); err != nil {
+			t.Fatal(err)
+		}
+		if shutdownResp.SiteControlState.UpdatedByName == nil || *shutdownResp.SiteControlState.UpdatedByName != "李明" {
+			t.Fatalf("POST control-shutdown updatedByName=%v want 李明", shutdownResp.SiteControlState.UpdatedByName)
+		}
+
+		// Direct enrichment test: another tenant principal resolves; workload/missing stays null.
+		view := siteControlStateView{
+			TenantID:    fixture.tenantID,
+			SiteID:      fixture.siteID,
+			ControlMode: siteControlModeManualOverride,
+			UpdatedBy:   &otherPrincipalID,
+			UpdatedAt:   &ts,
+			AssetLocks: []assetControlLockView{
+				{SiteID: fixture.siteID, AssetID: fixture.assetID, LockMode: assetControlLockManual, UpdatedBy: &workloadActor, UpdatedAt: &ts},
+			},
+		}
+		fixture.principalNames[otherPrincipalID] = "王强"
+		session := bffSession{Session: sessionstore.Session{
+			ID: "session-names-check", TenantID: fixture.tenantID,
+			Principal: identitycontext.UserPrincipal{Subject: "op", Issuer: "https://issuer.example.test", DisplayName: "周敏"},
+			ExpiresAt: time.Now().UTC().Add(time.Hour),
+		}}
+		fixture.handler.populateSiteControlStateNames(context.Background(), session, fixture.principalID, &view)
+		if view.UpdatedByName == nil || *view.UpdatedByName != "王强" {
+			t.Fatalf("other principal updatedByName=%v want 王强", view.UpdatedByName)
+		}
+		if view.AssetLocks[0].UpdatedByName != nil {
+			t.Fatalf("workload updatedByName=%v want nil", view.AssetLocks[0].UpdatedByName)
+		}
+	})
+
+	t.Run("minimal_gateway_without_iam_falls_back_to_session_display_name", func(t *testing.T) {
+		h := &handler{}
+		selfID := "018f3e00-2000-7000-8000-000000000001"
+		view := siteControlStateView{
+			TenantID:    "018f3d00-0000-7000-8000-000000000001",
+			SiteID:      "018f3e00-1000-7000-8000-000000000001",
+			ControlMode: siteControlModeManualOverride,
+			UpdatedBy:   &selfID,
+			UpdatedAt:   &ts,
+			AssetLocks: []assetControlLockView{
+				{SiteID: "018f3e00-1000-7000-8000-000000000001", AssetID: "018f3e00-6000-7000-8000-000000000001", LockMode: assetControlLockManual, UpdatedBy: &otherPrincipalID, UpdatedAt: &ts},
+			},
+		}
+		session := bffSession{Session: sessionstore.Session{
+			ID:        "minimal-session",
+			Principal: identitycontext.UserPrincipal{Subject: "op", Issuer: "https://issuer.example.test", DisplayName: "周敏"},
+		}}
+		h.populateSiteControlStateNames(context.Background(), session, selfID, &view)
+		if view.UpdatedByName == nil || *view.UpdatedByName != "周敏" {
+			t.Fatalf("self updatedByName=%v want 周敏", view.UpdatedByName)
+		}
+		if view.AssetLocks[0].UpdatedByName != nil {
+			t.Fatalf("other actor without IAM should stay nil, got %v", view.AssetLocks[0].UpdatedByName)
+		}
+	})
+}

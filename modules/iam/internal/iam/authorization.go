@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -23,6 +24,7 @@ type PrincipalRecord struct {
 	ID            string
 	SubjectIssuer string
 	Subject       string
+	DisplayName   string
 	Status        FactStatus
 }
 
@@ -56,6 +58,11 @@ type AuthorizationStore interface {
 	LookupRegistryAuthorization(context.Context, AuthorizationLookup) (AuthorizationFacts, error)
 }
 
+// TenantPrincipalNameStore resolves display names of active members within one Tenant.
+type TenantPrincipalNameStore interface {
+	LookupTenantPrincipalNames(ctx context.Context, tenantID string, principalIDs []string, at time.Time) (map[string]string, error)
+}
+
 type staticAuthorizationStore struct {
 	policyRevision string
 	facts          map[string]AuthorizationFacts
@@ -86,6 +93,32 @@ func (store *staticAuthorizationStore) LookupRegistryAuthorization(_ context.Con
 		return AuthorizationFacts{Found: false, PolicyRevision: store.policyRevision}, nil
 	}
 	return cloneAuthorizationFacts(value), nil
+}
+
+func (store *staticAuthorizationStore) LookupTenantPrincipalNames(_ context.Context, tenantID string, principalIDs []string, at time.Time) (map[string]string, error) {
+	names := map[string]string{}
+	if store == nil || strings.TrimSpace(tenantID) == "" || len(principalIDs) == 0 {
+		return names, nil
+	}
+	wanted := make(map[string]struct{}, len(principalIDs))
+	for _, id := range principalIDs {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			wanted[trimmed] = struct{}{}
+		}
+	}
+	instant := lookupInstant(at)
+	for _, facts := range store.facts {
+		if _, ok := wanted[facts.Principal.ID]; !ok {
+			continue
+		}
+		if facts.Principal.Status != FactStatusActive || strings.TrimSpace(facts.Principal.DisplayName) == "" {
+			continue
+		}
+		if active, _ := tenantMembershipState(facts.Memberships, tenantID, instant); active {
+			names[facts.Principal.ID] = facts.Principal.DisplayName
+		}
+	}
+	return names, nil
 }
 
 func evaluateRegistryAuthorization(ctx context.Context, store AuthorizationStore, now time.Time, subjectIssuer, subject string, request registryauth.DecisionRequest) (registryauth.Decision, error) {

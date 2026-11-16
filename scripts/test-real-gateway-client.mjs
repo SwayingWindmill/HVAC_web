@@ -58,6 +58,12 @@ test('declines are refused with their problem; outages and bad bodies are unavai
   assert.equal(conflict.problem.code, 'CONFLICT');
   const rejected = await gatewayRequest('/x', { fetch: answer(problem(502, 'INTELLIGENCE_UPSTREAM_REJECTED', { retryable: true })) });
   assert.deepEqual([rejected.kind, rejected.problem.retryable], ['refused', true]);
+  const stepUpNotConfigured = await gatewayRequest('/x', { fetch: answer(problem(428, 'STEP_UP_REQUIRED', { reason: 'MFA_NOT_CONFIGURED' })) });
+  assert.equal(stepUpNotConfigured.kind, 'refused');
+  assert.equal(stepUpNotConfigured.problem.reason, 'MFA_NOT_CONFIGURED');
+  const unknownReason = await gatewayRequest('/x', { fetch: answer(problem(428, 'STEP_UP_REQUIRED', { reason: 'OTHER' })) });
+  assert.equal(unknownReason.kind, 'refused');
+  assert.equal(unknownReason.problem.reason, undefined);
   assert.deepEqual(await gatewayRequest('/x', { fetch: answer(problem(502, 'INTELLIGENCE_UPSTREAM_UNAVAILABLE')) }), { kind: 'unavailable', status: 502 });
   assert.deepEqual(await gatewayRequest('/x', { fetch: answer(new Response('<html>', { status: 200 })) }), { kind: 'unavailable', status: 200 });
   assert.deepEqual(await gatewayRequest('/x', { fetch: async () => { throw new TypeError('network'); } }), { kind: 'unavailable', status: null });

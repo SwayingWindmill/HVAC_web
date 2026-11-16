@@ -263,22 +263,22 @@ const schemaRequirements = {
   SiteDataGapList: [['items']],
   AssetControlLockState: [
     ['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision'],
-    ['id', 'tenantId', 'siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'boundDeviceIds'],
+    ['id', 'tenantId', 'siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedByName', 'updatedAt', 'revision', 'boundDeviceIds'],
   ],
   ActiveMaintenanceWindow: [['id', 'title', 'startDate', 'endDate', 'reason']],
   SiteControlState: [
     ['tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks'],
-    ['id', 'tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks', 'activeMaintenanceWindow'],
+    ['id', 'tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedByName', 'updatedAt', 'revision', 'assetLocks', 'activeMaintenanceWindow'],
   ],
   SiteControlModeMutation: [['controlMode'], ['controlMode', 'reason', 'expectedRevision', 'meta']],
   SiteControlModeMutationResponse: [
     ['tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks', 'cancelledCommandIds'],
-    ['id', 'tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'assetLocks', 'activeMaintenanceWindow', 'cancelledCommandIds'],
+    ['id', 'tenantId', 'siteId', 'controlMode', 'reason', 'updatedBy', 'updatedByName', 'updatedAt', 'revision', 'assetLocks', 'activeMaintenanceWindow', 'cancelledCommandIds'],
   ],
   AssetControlLockMutation: [['lockMode'], ['lockMode', 'reason', 'expectedRevision', 'meta']],
   AssetControlLockMutationResponse: [
     ['siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'cancelledCommandIds'],
-    ['id', 'tenantId', 'siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedAt', 'revision', 'boundDeviceIds', 'cancelledCommandIds'],
+    ['id', 'tenantId', 'siteId', 'assetId', 'lockMode', 'reason', 'updatedBy', 'updatedByName', 'updatedAt', 'revision', 'boundDeviceIds', 'cancelledCommandIds'],
   ],
   SiteControlShutdownRequest: [
     ['mode', 'reason', 'verificationCode'],
@@ -298,7 +298,7 @@ const schemaRequirements = {
     ['tenantId', 'siteId', 'evaluatedAt', 'confirmationMode', 'siteControlMode', 'recommendations', 'diagnostics'],
   ],
   FieldError: [['field', 'message']],
-  ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'fieldErrors']],
+  ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'reason', 'fieldErrors']],
 };
 for (const [name, [required, properties = required]] of Object.entries(schemaRequirements)) {
   const schema = schemas[name];
@@ -372,6 +372,12 @@ invariant(exactMembers(schemas.ProblemDetails.properties.code['x-stable-codes'],
   'MAPPING_INVALID',
   'MAPPING_QUARANTINED',
 ]), 'Registry Problem Details codes are unsupported');
+invariant(exactMembers(schemas.ProblemDetails.properties.reason?.enum, [
+  'CODE_INVALID',
+  'CODE_REPLAYED',
+  'MFA_NOT_CONFIGURED',
+  'MFA_LOCKED',
+]), 'ProblemDetails.reason enum is unsupported');
 invariant(schemas.ProblemDetails.properties.code.pattern === '^[A-Z][A-Z0-9_]+$', 'ProblemDetails.code pattern is unsupported');
 invariant(schemas.ProblemDetails.properties.traceId.pattern === '^[a-f0-9]{32}$', 'ProblemDetails.traceId pattern is unsupported');
 invariant(spec.components?.responses?.Problem?.content?.['application/problem+json']?.schema?.$ref === '#/components/schemas/ProblemDetails', 'public Problem response must use application/problem+json');

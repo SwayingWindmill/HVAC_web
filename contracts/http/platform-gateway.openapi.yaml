@@ -5111,6 +5111,7 @@
           "lockMode": { "type": "string", "enum": ["UNLOCKED", "MANUAL_LOCK", "MAINTENANCE_LOCK"] },
           "reason": { "type": "string", "maxLength": 1000 },
           "updatedBy": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+          "updatedByName": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
           "updatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
           "revision": { "type": "integer", "minimum": 0 },
           "boundDeviceIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } }
@@ -5139,6 +5140,7 @@
           "controlMode": { "type": "string", "enum": ["REMOTE_AUTO", "MANUAL_OVERRIDE", "SAFE_SHUTDOWN_EXIT"] },
           "reason": { "type": "string", "maxLength": 1000 },
           "updatedBy": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+          "updatedByName": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
           "updatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
           "revision": { "type": "integer", "minimum": 0 },
           "assetLocks": { "type": "array", "items": { "$ref": "#/components/schemas/AssetControlLockState" } },
@@ -5167,6 +5169,7 @@
           "controlMode": { "type": "string", "enum": ["REMOTE_AUTO", "MANUAL_OVERRIDE", "SAFE_SHUTDOWN_EXIT"] },
           "reason": { "type": "string", "maxLength": 1000 },
           "updatedBy": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+          "updatedByName": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
           "updatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
           "revision": { "type": "integer", "minimum": 0 },
           "assetLocks": { "type": "array", "items": { "$ref": "#/components/schemas/AssetControlLockState" } },
@@ -5197,6 +5200,7 @@
           "lockMode": { "type": "string", "enum": ["UNLOCKED", "MANUAL_LOCK", "MAINTENANCE_LOCK"] },
           "reason": { "type": "string", "maxLength": 1000 },
           "updatedBy": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+          "updatedByName": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
           "updatedAt": { "oneOf": [{ "$ref": "#/components/schemas/Instant" }, { "type": "null" }] },
           "revision": { "type": "integer", "minimum": 0 },
           "boundDeviceIds": { "type": "array", "items": { "$ref": "#/components/schemas/UUIDv7" } },
@@ -5477,6 +5481,15 @@
           },
           "retryable": {
             "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "CODE_INVALID",
+              "CODE_REPLAYED",
+              "MFA_NOT_CONFIGURED",
+              "MFA_LOCKED"
+            ]
           },
           "fieldErrors": {
             "type": "array",

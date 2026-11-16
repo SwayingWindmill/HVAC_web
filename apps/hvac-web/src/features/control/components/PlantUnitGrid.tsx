@@ -1,12 +1,13 @@
 import { Link2, Lock, LockOpen, Play, RotateCcw, SlidersHorizontal, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { StatusBadge, statusDotClass } from '@/components/common/StatusBadge';
-import { deviceStatus } from '@/features/operations/realtime/device-presentation';
+import { deviceStatus, LowConfidenceBadge } from '@/features/operations/realtime/device-presentation';
 import type { PlantDevice } from '@/features/operations/realtime/plant-model';
+import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { WITHDRAWABLE, type Command } from '../command-api';
 import { ACTION_VERB, CODE_AT_SUBMIT, STATUS_PRESENTATION } from '../command-presentation';
-import { blockingInterlocks, type ControlAction, type ControlTarget, type Interlock, type PlantUnit } from '../control-model';
+import { blockingInterlocks, unitActivePower, type ControlAction, type ControlTarget, type Interlock, type PlantUnit } from '../control-model';
 import { LOCK_PRESENTATION, MAINTENANCE_BLOCKED, MAINTENANCE_PERMITTED, MODE_PRESENTATION, type ActiveMaintenanceWindow, type AssetControlLockState, type SiteControlMode } from '../control-state';
 import type { PendingCommand } from './CommandConfirmation';
 
@@ -152,6 +153,7 @@ function UnitColumn({ unit, context }: { readonly unit: PlantUnit; readonly cont
   const { chiller, members } = unit;
   const device = context.devices.get(chiller.deviceId);
   const status = device ? deviceStatus(device) : null;
+  const power = unitActivePower(unit.powerMeterDeviceId ? context.devices.get(unit.powerMeterDeviceId) : undefined);
   const sequence = (capability: 'START_UNIT_SEQUENCE' | 'STOP_UNIT_SEQUENCE') => chiller.actions.find((action) => action.capability === capability);
   const startSeq = sequence('START_UNIT_SEQUENCE');
   const stopSeq = sequence('STOP_UNIT_SEQUENCE');
@@ -168,9 +170,17 @@ function UnitColumn({ unit, context }: { readonly unit: PlantUnit; readonly cont
   const stopOrder = ['主机', ...[...members].reverse().map((member) => member.assetName)];
   return (
     <section aria-label={chiller.assetName} className="flex min-w-0 flex-col gap-2.5 border-r border-divider px-3.5 pt-3.5 pb-2.5 last:border-r-0">
-      <header className="flex items-center gap-2">
-        <h3 className="text-title font-semibold">{chiller.assetName}</h3>
+      <header className="flex min-w-0 items-center gap-2">
+        <h3 className="truncate text-title font-semibold">{chiller.assetName}</h3>
         {status ? <StatusBadge tone={status.tone} label={status.label} /> : <span className="text-xs text-muted-foreground">暂无实时数据</span>}
+        {power && power.numeric !== null ? (
+          <span className="ml-auto inline-flex shrink-0 items-baseline text-xs font-medium tabular-nums">
+            {formatDecimal(power.numeric, 1)} kW
+            {power.lowConfidence ? <LowConfidenceBadge /> : null}
+          </span>
+        ) : (
+          <span className="ml-auto shrink-0 text-xs text-muted-foreground">暂无读数</span>
+        )}
       </header>
       {startSeq || stopSeq ? (
         <div className="grid grid-cols-2 gap-1.5">

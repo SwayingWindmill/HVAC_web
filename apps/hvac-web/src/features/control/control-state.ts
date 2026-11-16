@@ -58,7 +58,8 @@ async function send<T>(path: string, request: Parameters<typeof gatewayRequest<T
   if (result.kind === 'ok') return result.value;
   if (result.kind === 'routeMissing') throw new CommandRequestError(result.status, undefined, ROUTE_MISSING_MESSAGE);
   const code = result.kind === 'unavailable' ? undefined : result.problem.code;
-  throw new CommandRequestError(failureStatus(result), code, controlErrorMessage(code, result.kind === 'unavailable' ? '控制状态暂时读不到，请稍后再试' : '没有保存成功，请刷新后再试'));
+  const reason = result.kind === 'unavailable' ? undefined : result.problem.reason;
+  throw new CommandRequestError(failureStatus(result), code, controlErrorMessage(code, result.kind === 'unavailable' ? '控制状态暂时读不到，请稍后再试' : '没有保存成功，请刷新后再试'), reason);
 }
 
 /** The Site's control mode and asset locks; a missing route means this deployment has no control boundary yet. */
@@ -107,4 +108,15 @@ export function executeSiteShutdown(siteId: string, input: SiteControlShutdownRe
 /** The asset's lock when it is locked; unlocked rows are not locks. */
 export function activeLocks(state: SiteControlState | undefined): ReadonlyMap<string, AssetControlLockState> {
   return new Map((state?.assetLocks ?? []).filter((lock) => lock.lockMode !== 'UNLOCKED').map((lock) => [lock.assetId, lock]));
+}
+
+/** Plain actor name on control mode and asset lock records without the legacy generic fallback. */
+export function controlActorLabel(
+  actor: { readonly updatedBy?: string | null; readonly updatedByName?: string | null },
+  myId?: string,
+): string {
+  const name = actor.updatedByName?.trim();
+  if (name) return name;
+  if (myId && actor.updatedBy === myId) return '我';
+  return '系统';
 }

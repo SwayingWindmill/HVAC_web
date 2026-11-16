@@ -661,7 +661,7 @@ func freshMFAAssurance(session bffSession, now time.Time) bool {
 func (h *handler) verifySubmitStepUpTOTP(request *http.Request, session bffSession, rawCode string) *commandFailure {
 	code := strings.TrimSpace(rawCode)
 	if !isSixDigitTOTPCode(code) {
-		failure := commandStepUpRequired("High-risk commands require a 6-digit verificationCode from your authenticator app.")
+		failure := commandStepUpRequired("High-risk commands require a 6-digit verificationCode from your authenticator app.", "")
 		return &failure
 	}
 	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.identity.config.OIDCHTTPClient == nil {
@@ -703,12 +703,13 @@ func isSixDigitTOTPCode(code string) bool {
 	return true
 }
 
-func commandStepUpRequired(detail string) commandFailure {
+func commandStepUpRequired(detail, reason string) commandFailure {
 	return commandFailure{
 		status:    http.StatusPreconditionRequired,
 		code:      "STEP_UP_REQUIRED",
 		title:     "Security confirmation required",
 		detail:    detail,
+		reason:    reason,
 		retryable: false,
 	}
 }
@@ -721,13 +722,13 @@ func mapTOTPVerifyError(status int, reply []byte) *commandFailure {
 	var failure commandFailure
 	switch {
 	case status == http.StatusBadRequest || (status == http.StatusUnauthorized && refusal.Error == "mfa_code_invalid"):
-		failure = commandStepUpRequired("The 6-digit verification code is invalid. Enter the current authenticator code and try again.")
+		failure = commandStepUpRequired("The 6-digit verification code is invalid. Enter the current authenticator code and try again.", "CODE_INVALID")
 	case status == http.StatusConflict || refusal.Error == "mfa_code_replayed":
-		failure = commandStepUpRequired("This 6-digit verification code has already been used. Wait for the next authenticator code and try again.")
+		failure = commandStepUpRequired("This 6-digit verification code has already been used. Wait for the next authenticator code and try again.", "CODE_REPLAYED")
 	case status == http.StatusPreconditionFailed || refusal.Error == "mfa_not_configured":
-		failure = commandStepUpRequired("Authenticator TOTP MFA is not configured on this account. Enroll TOTP before submitting high-risk commands.")
+		failure = commandStepUpRequired("Authenticator TOTP MFA is not configured on this account. Enroll TOTP before submitting high-risk commands.", "MFA_NOT_CONFIGURED")
 	case status == http.StatusLocked || refusal.Error == "mfa_locked":
-		failure = commandStepUpRequired("Authenticator verification is temporarily locked after repeated invalid attempts. Wait before trying again.")
+		failure = commandStepUpRequired("Authenticator verification is temporarily locked after repeated invalid attempts. Wait before trying again.", "MFA_LOCKED")
 	default:
 		failure = commandUnavailable("The identity service could not verify the step-up code.")
 	}
@@ -855,6 +856,7 @@ type commandFailure struct {
 	code      string
 	title     string
 	detail    string
+	reason    string
 	retryable bool
 }
 
@@ -959,7 +961,7 @@ func cloneCommandParameters(parameters commandmodel.CommandParameters) commandmo
 }
 
 func (h *handler) writeCommandFailure(writer http.ResponseWriter, request *http.Request, failure commandFailure) {
-	writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+	writeProblemWithReason(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, failure.reason, nil)
 }
 
 func ensureCommandJSONEOF(decoder *json.Decoder) error {
