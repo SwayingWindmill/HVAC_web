@@ -7,8 +7,9 @@ Invoked at the end of Bug fix, Feature, and Refactoring (unless the task explici
 **Commits & hygiene.** Commit cleanly with Conventional Commits (`type(scope): subject`, no trailing period; LF line endings). Activate each review skill by reading its `SKILL.md` with `read_file` before opening or updating the PR:
 1. Run [`deslop`](../../deslop/SKILL.md) over the branch diff against `main`.
 2. Run [`no-comments`](../../no-comments/SKILL.md) over touched code paths.
-3. Run [`make-pr-easy-to-review`](../../make-pr-easy-to-review/SKILL.md) (check commit ordering and `CHANGELOG.md` for user-visible changes; update `docs/HANDOFF.md` only when server, site, or local-env facts changed, keeping it under `28 KiB`).
-4. Apply [`unslop`](../../unslop/SKILL.md) to PR copy/docs and verify all relevant `scripts/domain-task-matrix.ts` gates + `npm run check` passed locally via `wsl -e bash -lc "..."` after your last edit.
+3. For large or cross-module branches (>10 changed files vs `main` or multiple domains; otherwise `skip: <=10 files in single domain`), run [`open-code-review-delegate`](../../open-code-review-delegate/SKILL.md) in findings-only mode (`ocr delegate preview --from main --format json` + `ocr delegate rule`) so every reviewable file is checked before pushing.
+4. Run [`make-pr-easy-to-review`](../../make-pr-easy-to-review/SKILL.md) (check commit ordering and `CHANGELOG.md` for user-visible changes; update `docs/HANDOFF.md` only when server, site, or local-env facts changed, keeping it under `28 KiB`).
+5. Apply [`unslop`](../../unslop/SKILL.md) to PR copy/docs and verify all relevant `scripts/domain-task-matrix.ts` gates + `npm run check` passed locally via `wsl -e bash -lc "..."` after your last edit.
 
 **PR body.** Keep the PR body concise and scannable (under ~40 lines when squashed):
 - `## Why`: 1-3 sentences stating the problem and approach.
