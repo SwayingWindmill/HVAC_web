@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -174,4 +175,115 @@ func TestClickHouseInputReaderReadsShadowEvaluationForPublishedRun(t *testing.T)
 	if !errors.Is(err, ErrShadowEvaluationNotFound) {
 		t.Fatalf("missing shadow err=%v, want ErrShadowEvaluationNotFound", err)
 	}
+}
+
+func TestOptimizationInputReaderEnforcesMaxAgeMultiZoneAndHealthGates(t *testing.T) {
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 30, 20, 20, 0, 0, shanghai)
+	day := time.Date(2026, 10, 29, 0, 0, 0, 0, shanghai)
+	watermark := at.Add(-time.Hour).UTC()
+	energy := &energySeriesStub{response: analyticsmodel.EnergySeriesResponse{SchemaVersion: 1, Points: []analyticsmodel.EnergySeriesPoint{{
+		PeriodStart: day.UTC(), PeriodEnd: day.AddDate(0, 0, 1).UTC(), EnergyKWh: 1118, Cost: &analyticsmodel.EnergyCost{AmountCNY: 690, Periods: []analyticsmodel.PeriodCost{}},
+	}}, Metadata: analyticsmodel.EnergySeriesMetadata{DatasetRevision: "songyaxuan:1", DataWatermark: &watermark}}}
+
+	baseObs := func(pointID, key string, sampledAt time.Time, value float64, reasons string) string {
+		return `{"observation_id":"01990000-2940-7000-8000-000000000001","device_id":"01990000-2900-7000-8000-000000000001","point_id":"` + pointID + `","telemetry_key":"` + key + `","point_revision":1,"sampled_at":"` + sampledAt.UTC().Format("2006-01-02T15:04:05.000Z") + `","received_at":"` + at.Add(-5*time.Second).UTC().Format("2006-01-02T15:04:05.000Z") + `","value":` + strconv.FormatFloat(value, 'f', -1, 64) + `,"unit":"Cel","quality":"GOOD","quality_reasons":` + reasons + `,"source_event_id":"01990000-2930-7000-8000-000000000001","source_partition":"telemetry-0","source_offset":2}` + "\n"
+	}
+
+	t.Run("rejects_days_old_good_reading", func(t *testing.T) {
+		var seenSQL string
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Error(err)
+				writer.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			seenSQL = string(body)
+			writer.Header().Set("Content-Type", "application/x-ndjson")
+			if _, err := writer.Write([]byte(baseObs("01990000-2910-7000-8000-000000000001", "supply_water_temperature", at.Add(-48*time.Hour), 7.0, "[]"))); err != nil {
+				t.Error(err)
+			}
+		}))
+		defer server.Close()
+		reader, err := NewClickHouseInputReader(InputReaderConfig{BaseURL: server.URL, Energy: energy})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = reader.ReadOptimizationState(t.Context(), OptimizationStateQuery{
+			TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
+			SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Timezone: "Asia/Shanghai", At: at.UTC(),
+			SupplyTemperatureKey: "supply_water_temperature", ZoneTemperatureKey: "zone.t53",
+		})
+		if reason, ok := PreparationReasonOf(err); !ok || reason != ReasonSupplyTempMissing {
+			t.Fatalf("expected SUPPLY_TEMPERATURE_MISSING for days-old GOOD reading, got reason=%q ok=%v err=%v", reason, ok, err)
+		}
+		if !strings.Contains(seenSQL, "observation.sampled_at >=") {
+			t.Fatalf("expected SQL staleness lower bound on sampled_at, got: %s", seenSQL)
+		}
+	})
+
+	t.Run("multi_zone_selects_max_and_fails_closed_when_any_zone_missing_or_unhealthy", func(t *testing.T) {
+		t54Sampled := at.Add(-2 * time.Minute)
+		t54Reasons := "[]"
+		includeT54 := true
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			query, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Error(err)
+				writer.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			sql := string(query)
+			writer.Header().Set("Content-Type", "application/x-ndjson")
+			switch {
+			case strings.Contains(sql, "telemetry_key='supply_water_temperature'"):
+				if _, err := writer.Write([]byte(baseObs("01990000-2910-7000-8000-000000000001", "supply_water_temperature", at.Add(-1*time.Minute), 7.0, "[]"))); err != nil {
+					t.Error(err)
+				}
+			case strings.Contains(sql, "telemetry_key='zone.t53'"):
+				if _, err := writer.Write([]byte(baseObs("01990000-2910-7000-8000-000000000002", "zone.t53", at.Add(-1*time.Minute), 22.0, "[]"))); err != nil {
+					t.Error(err)
+				}
+			case strings.Contains(sql, "telemetry_key='zone.t54'") && includeT54:
+				if _, err := writer.Write([]byte(baseObs("01990000-2910-7000-8000-000000000003", "zone.t54", t54Sampled, 24.8, t54Reasons))); err != nil {
+					t.Error(err)
+				}
+			}
+		}))
+		defer server.Close()
+		reader, err := NewClickHouseInputReader(InputReaderConfig{BaseURL: server.URL, Energy: energy})
+		if err != nil {
+			t.Fatal(err)
+		}
+		query := OptimizationStateQuery{
+			TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
+			SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Timezone: "Asia/Shanghai", At: at.UTC(),
+			SupplyTemperatureKey: "supply_water_temperature", ZoneTemperatureKey: "zone.t53",
+			ZoneTemperatureKeys: []string{"zone.t53", "zone.t54"},
+		}
+		state, err := reader.ReadOptimizationState(t.Context(), query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.ZoneTemperature.Value != 24.8 || state.ZoneTemperature.TelemetryKey != "zone.t54" || len(state.ZoneTemperatures) != 2 {
+			t.Fatalf("expected worst-case max zone t54=24.8 across 2 zones, got %+v", state)
+		}
+
+		t54Reasons = `["PROBE_OFFSET"]`
+		_, err = reader.ReadOptimizationState(t.Context(), query)
+		if reason, ok := PreparationReasonOf(err); !ok || reason != ReasonInputsInvalid {
+			t.Fatalf("expected INPUTS_INVALID on PROBE_OFFSET, got reason=%q ok=%v err=%v", reason, ok, err)
+		}
+		t54Reasons = "[]"
+
+		includeT54 = false
+		_, err = reader.ReadOptimizationState(t.Context(), query)
+		if reason, ok := PreparationReasonOf(err); !ok || reason != ReasonZoneTempMissing {
+			t.Fatalf("expected ZONE_TEMPERATURE_MISSING when t54 missing, got reason=%q ok=%v err=%v", reason, ok, err)
+		}
+	})
 }

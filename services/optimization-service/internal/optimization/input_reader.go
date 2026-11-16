@@ -65,7 +65,8 @@ func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, 
 			return AuthoritativeState{}, fmt.Errorf("%s must be a UUID", field)
 		}
 	}
-	if query.SubjectType != "SITE" || query.SubjectID != query.SiteID || query.At.IsZero() || query.SupplyTemperatureKey == "" || query.ZoneTemperatureKey == "" {
+	zoneKeys := query.effectiveZoneKeys()
+	if query.SubjectType != "SITE" || query.SubjectID != query.SiteID || query.At.IsZero() || query.SupplyTemperatureKey == "" || len(zoneKeys) == 0 {
 		return AuthoritativeState{}, errors.New("optimization state query is invalid")
 	}
 	pricedDay, err := reader.readPricedDay(ctx, query)
@@ -76,13 +77,32 @@ func (reader *ClickHouseInputReader) ReadOptimizationState(ctx context.Context, 
 	if err != nil {
 		return AuthoritativeState{}, err
 	}
-	zoneTemperature, err := reader.readTelemetry(ctx, query, query.ZoneTemperatureKey, ReasonZoneTempMissing)
-	if err != nil {
-		return AuthoritativeState{}, err
+	if reason, unhealthy := telemetryHealthBlockReason(supplyTemperature.HealthStatus, supplyTemperature.QualityReasons); unhealthy {
+		return AuthoritativeState{}, unavailable(ReasonInputsInvalid, "authoritative telemetry %s is unhealthy (%s)", query.SupplyTemperatureKey, reason)
+	}
+	zoneTemperatures := make([]TelemetryEvidence, 0, len(zoneKeys))
+	var worstZone TelemetryEvidence
+	for idx, key := range zoneKeys {
+		zoneObs, zoneErr := reader.readTelemetry(ctx, query, key, ReasonZoneTempMissing)
+		if zoneErr != nil {
+			return AuthoritativeState{}, zoneErr
+		}
+		if reason, unhealthy := telemetryHealthBlockReason(zoneObs.HealthStatus, zoneObs.QualityReasons); unhealthy {
+			return AuthoritativeState{}, unavailable(ReasonInputsInvalid, "authoritative telemetry %s is unhealthy (%s)", key, reason)
+		}
+		if validErr := validateTelemetryEvidence(zoneObs, key, query.At); validErr != nil {
+			return AuthoritativeState{}, unavailable(ReasonZoneTempMissing, "%v", validErr)
+		}
+		zoneTemperatures = append(zoneTemperatures, zoneObs)
+		if idx == 0 || zoneObs.Value > worstZone.Value {
+			worstZone = zoneObs
+		}
 	}
 	return AuthoritativeState{
 		PricedDay:         pricedDay,
-		SupplyTemperature: supplyTemperature, ZoneTemperature: zoneTemperature,
+		SupplyTemperature: supplyTemperature,
+		ZoneTemperature:   worstZone,
+		ZoneTemperatures:  zoneTemperatures,
 	}, nil
 }
 
@@ -122,6 +142,8 @@ func (reader *ClickHouseInputReader) readPricedDay(ctx context.Context, query Op
 }
 
 func (reader *ClickHouseInputReader) readTelemetry(ctx context.Context, query OptimizationStateQuery, telemetryKey string, missing PreparationReason) (TelemetryEvidence, error) {
+	atUTC := query.At.UTC()
+	earliest := atUTC.Add(-DefaultPreparationMaxTelemetryAge)
 	sql := fmt.Sprintf(`SELECT
  toString(observation_id) AS observation_id,
  toString(device_id) AS device_id,
@@ -133,6 +155,7 @@ func (reader *ClickHouseInputReader) readTelemetry(ctx context.Context, query Op
  assumeNotNull(value_number) AS value,
  assumeNotNull(unit) AS unit,
  quality,
+ quality_reasons,
  toString(source_event_id) AS source_event_id,
  source_partition,
  source_offset
@@ -142,6 +165,7 @@ FROM (
  WHERE observation.tenant_id=toUUID('%s')
    AND observation.site_id=toUUID('%s')
    AND observation.telemetry_key='%s'
+   AND observation.sampled_at >= parseDateTime64BestEffort('%s',3,'UTC')
    AND observation.sampled_at <= parseDateTime64BestEffort('%s',3,'UTC')
    AND observation.received_at <= parseDateTime64BestEffort('%s',3,'UTC')
    AND observation.acceptance_status IN ('ACCEPTED','OUT_OF_ORDER')
@@ -154,25 +178,26 @@ FROM (
 WHERE point_rank=1
 ORDER BY sampled_at DESC,received_at DESC,source_offset DESC,toString(observation_id) ASC
 LIMIT 2
-FORMAT JSONEachRow`, query.TenantID, query.SiteID, clickHouseString(telemetryKey), formatOptimizationTime(query.At), formatOptimizationTime(query.At))
+FORMAT JSONEachRow`, query.TenantID, query.SiteID, clickHouseString(telemetryKey), formatOptimizationTime(earliest), formatOptimizationTime(atUTC), formatOptimizationTime(atUTC))
 	payload, err := reader.query(ctx, sql)
 	if err != nil {
 		return TelemetryEvidence{}, fmt.Errorf("query authoritative Optimization telemetry %s: %w", telemetryKey, err)
 	}
 	type row struct {
-		ObservationID   string  `json:"observation_id"`
-		DeviceID        string  `json:"device_id"`
-		PointID         string  `json:"point_id"`
-		TelemetryKey    string  `json:"telemetry_key"`
-		PointRevision   uint64  `json:"point_revision"`
-		SampledAt       string  `json:"sampled_at"`
-		ReceivedAt      string  `json:"received_at"`
-		Value           float64 `json:"value"`
-		Unit            string  `json:"unit"`
-		Quality         string  `json:"quality"`
-		SourceEventID   string  `json:"source_event_id"`
-		SourcePartition string  `json:"source_partition"`
-		SourceOffset    uint64  `json:"source_offset"`
+		ObservationID   string   `json:"observation_id"`
+		DeviceID        string   `json:"device_id"`
+		PointID         string   `json:"point_id"`
+		TelemetryKey    string   `json:"telemetry_key"`
+		PointRevision   uint64   `json:"point_revision"`
+		SampledAt       string   `json:"sampled_at"`
+		ReceivedAt      string   `json:"received_at"`
+		Value           float64  `json:"value"`
+		Unit            string   `json:"unit"`
+		Quality         string   `json:"quality"`
+		QualityReasons  []string `json:"quality_reasons"`
+		SourceEventID   string   `json:"source_event_id"`
+		SourcePartition string   `json:"source_partition"`
+		SourceOffset    uint64   `json:"source_offset"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	rows := make([]row, 0, 2)
@@ -196,6 +221,9 @@ FORMAT JSONEachRow`, query.TenantID, query.SiteID, clickHouseString(telemetryKey
 	if err != nil {
 		return TelemetryEvidence{}, err
 	}
+	if atUTC.Sub(sampledAt.UTC()) > DefaultPreparationMaxTelemetryAge {
+		return TelemetryEvidence{}, unavailable(missing, "authoritative telemetry %s latest observation is stale (sampled_at %s)", telemetryKey, sampledAt.UTC().Format(time.RFC3339))
+	}
 	receivedAt, err := time.Parse(time.RFC3339Nano, rows[0].ReceivedAt)
 	if err != nil {
 		return TelemetryEvidence{}, err
@@ -204,7 +232,8 @@ FORMAT JSONEachRow`, query.TenantID, query.SiteID, clickHouseString(telemetryKey
 		ObservationID: rows[0].ObservationID, DeviceID: rows[0].DeviceID, PointID: rows[0].PointID,
 		TelemetryKey: rows[0].TelemetryKey, PointRevision: rows[0].PointRevision,
 		SampledAt: sampledAt.UTC(), ReceivedAt: receivedAt.UTC(), Value: rows[0].Value, Unit: rows[0].Unit, Quality: rows[0].Quality,
-		SourceEventID: rows[0].SourceEventID, SourcePartition: rows[0].SourcePartition, SourceOffset: rows[0].SourceOffset,
+		QualityReasons: rows[0].QualityReasons,
+		SourceEventID:  rows[0].SourceEventID, SourcePartition: rows[0].SourcePartition, SourceOffset: rows[0].SourceOffset,
 	}, nil
 }
 

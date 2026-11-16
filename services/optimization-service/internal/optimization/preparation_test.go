@@ -280,3 +280,207 @@ func TestOperatingExceptionBlockMessage(t *testing.T) {
 		t.Fatalf("expected OVERTIME_COOLING not to block, got blocked=%v msg=%q", overtimeBlocked, overtimeMsg)
 	}
 }
+
+func TestOptimizationPreparationStalenessMultiZoneAndHealthGates(t *testing.T) {
+	at := time.Date(2026, 10, 30, 12, 20, 0, 0, time.UTC)
+	request := PreparationRequest{
+		TenantID: "01990000-3000-7000-8000-000000000001", SiteID: "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE", SubjectID: "01990000-5000-7000-8000-000000000001", Trigger: TriggerSchedule,
+	}
+
+	t.Run("enforces_15m_max_telemetry_age", func(t *testing.T) {
+		staleSupply := testAuthoritativeState(at)
+		staleSupply.SupplyTemperature.SampledAt = at.Add(-16 * time.Minute)
+		preparer, err := NewPreparer(&preparationStoreStub{definition: testPreparationDefinition()}, &authoritativeInputStub{state: staleSupply}, func() time.Time { return at })
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = preparer.Prepare(t.Context(), request)
+		if reason, ok := PreparationReasonOf(err); !ok || reason != ReasonSupplyTempMissing {
+			t.Fatalf("expected SUPPLY_TEMPERATURE_MISSING for 16m stale supply, got reason=%q ok=%v err=%v", reason, ok, err)
+		}
+
+		staleZone := testAuthoritativeState(at)
+		staleZone.ZoneTemperature.SampledAt = at.Add(-20 * time.Minute)
+		preparerZone, err := NewPreparer(&preparationStoreStub{definition: testPreparationDefinition()}, &authoritativeInputStub{state: staleZone}, func() time.Time { return at })
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = preparerZone.Prepare(t.Context(), request)
+		if reason, ok := PreparationReasonOf(err); !ok || reason != ReasonZoneTempMissing {
+			t.Fatalf("expected ZONE_TEMPERATURE_MISSING for 20m stale zone, got reason=%q ok=%v err=%v", reason, ok, err)
+		}
+
+		fresh14m := testAuthoritativeState(at)
+		fresh14m.SupplyTemperature.SampledAt = at.Add(-14 * time.Minute)
+		fresh14m.ZoneTemperature.SampledAt = at.Add(-14 * time.Minute)
+		storeOK := &preparationStoreStub{definition: testPreparationDefinition(), result: PreparedOptimization{Status: "PENDING"}}
+		preparerOK, err := NewPreparer(storeOK, &authoritativeInputStub{state: fresh14m}, func() time.Time { return at })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := preparerOK.Prepare(t.Context(), request); err != nil {
+			t.Fatalf("expected 14m reading to pass, got %v", err)
+		}
+	})
+
+	t.Run("multi_zone_prevents_overheating_warmest_zone", func(t *testing.T) {
+		def := testPreparationDefinition()
+		def.PolicyConstraints = []byte(`{
+          "comfort":{"zoneTempMinC":21,"zoneTempMaxC":25},
+          "safety":{"supplyTempMinC":6,"supplyTempMaxC":10,"maxSupplyTempStepC":1},
+          "inputMapping":{"supplyTemperatureKey":"btu_meter.supply_water_temperature","zoneTemperatureKey":"zone.t53","zoneTemperatureKeys":["zone.t53","zone.t54"]},
+          "maintenanceConstraints":{"outOfService":[]},
+          "manualLocks":{"resources":[]},
+          "responseModel":{"dailyEnergyDeltaKWhPerSupplyTempC":-180,"zoneTempDeltaCPerSupplyTempC":0.4,"energyUncertaintyP90KWh":60,"zoneTempUncertaintyP90C":0.2}
+        }`)
+
+		state := testAuthoritativeState(at)
+		t53 := state.ZoneTemperature
+		t53.TelemetryKey = "zone.t53"
+		t53.Value = 22.0
+		t54 := state.ZoneTemperature
+		t54.TelemetryKey = "zone.t54"
+		t54.ObservationID = "01990000-2200-7000-8000-000000000003"
+		t54.PointID = "01990000-2400-7000-8000-000000000003"
+		t54.Value = 24.8
+		state.ZoneTemperatures = []TelemetryEvidence{t53, t54}
+
+		store := &preparationStoreStub{definition: def, result: PreparedOptimization{Status: "PENDING"}}
+		preparer, err := NewPreparer(store, &authoritativeInputStub{state: state}, func() time.Time { return at })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := preparer.Prepare(t.Context(), request); err != nil {
+			t.Fatalf("expected multi-zone preparation to succeed, got %v", err)
+		}
+		if store.created[0].CurrentState.Baseline.ZoneTempC != 24.8 || len(store.created[0].CurrentState.TelemetryEvidence) != 3 {
+			t.Fatalf("expected worst-case zone temp 24.8 and 3 telemetry evidences, got baseline=%+v evidences=%d",
+				store.created[0].CurrentState.Baseline, len(store.created[0].CurrentState.TelemetryEvidence))
+		}
+
+		state.ZoneTemperatures[1].Value = 25.3
+		_, err = preparer.Prepare(t.Context(), request)
+		if reason, ok := PreparationReasonOf(err); !ok || reason != ReasonBaselineOutsideLimits {
+			t.Fatalf("expected BASELINE_OUTSIDE_LIMITS when t54=25.3, got reason=%q ok=%v err=%v", reason, ok, err)
+		}
+	})
+
+	t.Run("probe_offset_and_unhealthy_gates_block_with_inputs_invalid", func(t *testing.T) {
+		if reason, blocked := telemetryHealthBlockReason("HEALTHY", []string{"LOW_CONFIDENCE"}); blocked || reason != "" {
+			t.Fatalf("expected HEALTHY+LOW_CONFIDENCE not blocked, got blocked=%v reason=%q", blocked, reason)
+		}
+		for _, tc := range []struct {
+			status  string
+			reasons []string
+		}{
+			{status: "HEALTHY", reasons: []string{"PROBE_OFFSET"}},
+			{status: "UNHEALTHY", reasons: nil},
+			{status: "BAD", reasons: nil},
+		} {
+			if _, blocked := telemetryHealthBlockReason(tc.status, tc.reasons); !blocked {
+				t.Fatalf("expected %s/%v to block", tc.status, tc.reasons)
+			}
+		}
+
+		state := testAuthoritativeState(at)
+		state.SupplyTemperature.QualityReasons = []string{"PROBE_OFFSET"}
+		preparer, err := NewPreparer(&preparationStoreStub{definition: testPreparationDefinition()}, &authoritativeInputStub{state: state}, func() time.Time { return at })
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = preparer.Prepare(t.Context(), request)
+		if reason, ok := PreparationReasonOf(err); !ok || reason != ReasonInputsInvalid {
+			t.Fatalf("expected INPUTS_INVALID on PROBE_OFFSET, got reason=%q ok=%v err=%v", reason, ok, err)
+		}
+	})
+}
+
+func TestOperatingScheduleWindowBlockMessage(t *testing.T) {
+	shanghai := func(year int, month time.Month, day, hour, minute int) time.Time {
+		loc, err := time.LoadLocation("Asia/Shanghai")
+		if err != nil {
+			loc = time.FixedZone("Asia/Shanghai", 8*3600)
+		}
+		return time.Date(year, month, day, hour, minute, 0, 0, loc)
+	}
+
+	if _, blocked := operatingScheduleWindowBlockMessage(nil, shanghai(2026, 11, 16, 22, 0)); blocked {
+		t.Fatal("nil schedule should not block")
+	}
+	if _, blocked := operatingScheduleWindowBlockMessage(&OperatingScheduleContext{SiteTimezone: "Asia/Shanghai", Configured: false}, shanghai(2026, 11, 16, 22, 0)); blocked {
+		t.Fatal("unconfigured schedule should not block")
+	}
+	if _, blocked := operatingScheduleWindowBlockMessage(&OperatingScheduleContext{SiteTimezone: "Asia/Shanghai", Configured: true}, shanghai(2026, 11, 16, 22, 0)); blocked {
+		t.Fatal("configured schedule with zero slots should not block 24x7")
+	}
+
+	schedule := &OperatingScheduleContext{
+		SiteTimezone:        "Asia/Shanghai",
+		Configured:          true,
+		PreCoolLeadMinutes:  30,
+		CoastDownLagMinutes: 20,
+		Slots: []OperatingScheduleSlotWindow{
+			{DayOfWeek: 1, StartMinute: 8*60 + 30, EndMinute: 18 * 60},
+		},
+	}
+
+	cases := []struct {
+		name        string
+		at          time.Time
+		wantBlocked bool
+	}{
+		{name: "before pre-cool lead", at: shanghai(2026, 11, 16, 7, 59), wantBlocked: true},
+		{name: "at pre-cool start", at: shanghai(2026, 11, 16, 8, 0), wantBlocked: false},
+		{name: "midday inside slot", at: shanghai(2026, 11, 16, 14, 0), wantBlocked: false},
+		{name: "31m before endMinute", at: shanghai(2026, 11, 16, 17, 29), wantBlocked: false},
+		{name: "exact 30m before endMinute", at: shanghai(2026, 11, 16, 17, 30), wantBlocked: true},
+		{name: "10m before endMinute", at: shanghai(2026, 11, 16, 17, 50), wantBlocked: true},
+		{name: "during coast-down lag after endMinute", at: shanghai(2026, 11, 16, 18, 10), wantBlocked: true},
+		{name: "off-hours evening", at: shanghai(2026, 11, 16, 21, 0), wantBlocked: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, blocked := operatingScheduleWindowBlockMessage(schedule, tc.at)
+			if blocked != tc.wantBlocked {
+				t.Fatalf("at=%s blocked=%v, want %v", tc.at, blocked, tc.wantBlocked)
+			}
+		})
+	}
+
+	crossMidnight := &OperatingScheduleContext{
+		SiteTimezone:       "Asia/Shanghai",
+		Configured:         true,
+		PreCoolLeadMinutes: 30,
+		Slots: []OperatingScheduleSlotWindow{
+			{DayOfWeek: 6, StartMinute: 22 * 60, EndMinute: 24 * 60},
+			{DayOfWeek: 7, StartMinute: 0, EndMinute: 2 * 60},
+		},
+	}
+	if _, blocked := operatingScheduleWindowBlockMessage(crossMidnight, shanghai(2026, 11, 14, 23, 45)); blocked {
+		t.Fatal("expected Sat 23:45 cross-midnight slot not to be blocked")
+	}
+	if _, blocked := operatingScheduleWindowBlockMessage(crossMidnight, shanghai(2026, 11, 15, 1, 35)); !blocked {
+		t.Fatal("expected Sun 01:35 within 30m of 02:00 slot end to be blocked")
+	}
+
+	overtime := &OperatingScheduleContext{
+		SiteTimezone:       "Asia/Shanghai",
+		Configured:         true,
+		PreCoolLeadMinutes: 30,
+		Slots: []OperatingScheduleSlotWindow{
+			{DayOfWeek: 1, StartMinute: 8 * 60, EndMinute: 18 * 60},
+		},
+		ApprovedExceptions: []ApprovedOperatingExceptionWindow{{
+			ID: "exc-ot-1", Title: "周末加班", Kind: "OVERTIME_COOLING",
+			StartDate: "2026-11-15", EndDate: "2026-11-15",
+			ReplacementSlots: []OperatingExceptionReplacementSlot{{StartMinute: 10 * 60, EndMinute: 15 * 60}},
+		}},
+	}
+	if _, blocked := operatingScheduleWindowBlockMessage(overtime, shanghai(2026, 11, 15, 9, 40)); blocked {
+		t.Fatal("expected OVERTIME_COOLING pre-cool window at 09:40 to be allowed")
+	}
+	if _, blocked := operatingScheduleWindowBlockMessage(overtime, shanghai(2026, 11, 15, 14, 35)); !blocked {
+		t.Fatal("expected OVERTIME_COOLING within 30m of 15:00 end to be blocked")
+	}
+}
