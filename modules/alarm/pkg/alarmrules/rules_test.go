@@ -16,7 +16,7 @@ import (
 const songyaxuanRules = "../../../../deploy/sites/songyaxuan.alarm-rules.json"
 
 // #609: 松雅轩's rules file becomes policies the evaluator accepts, over the points the site file
-// marks active; inactive points (no probe wired, like t20) are watched by no rule.
+// marks active; inactive points (no probe wired, like t20 and t51) are watched by no rule.
 func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	compiled, err := Load(songyaxuanRules)
 	if err != nil {
@@ -52,7 +52,7 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	// rules (#796/#798), 12 device readings-not-updated rules (excluding cooling derive btu-calc),
 	// non-derived point data-quality rules, device-untrusted/temperature-uid20 root cause, 15 active
 	// physics checks (excluding derived btu-chw-direction alarm), and 5 probe-offset rules.
-	if len(byTitle) != 119 {
+	if len(byTitle) != 116 {
 		t.Fatalf("got %d rules: %v", len(byTitle), keys(byTitle))
 	}
 
@@ -148,11 +148,11 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		t.Fatalf("expected legacy cooling-tower readings-not-updated rule to be retired, got %#v", plan.Retired)
 	}
 
-	// #615: the Site has stopped reporting when none of its 163 active reading points has a reading for
-	// 15 minutes (82 earlier active readings including u51–u54 + 81 active concentrator channels/diagnostics;
+	// #615: the Site has stopped reporting when none of its 159 active reading points has a reading for
+	// 15 minutes (82 earlier active readings including u51–u54 + 77 active concentrator channels/diagnostics;
 	// logical controller STATE/COMMAND points are excluded).
 	silent, ok := byTitle["网关上报中断"]
-	if !ok || silent.Severity != "MAJOR" || len(inputs(silent.Raise)) != 163 || len(inputs(silent.Clear)) != 163 {
+	if !ok || silent.Severity != "MAJOR" || len(inputs(silent.Raise)) != 159 || len(inputs(silent.Clear)) != 159 {
 		t.Fatalf("网关上报中断 rule: %#v", silent)
 	}
 	if !strings.Contains(silent.Summary, "15 分钟") {
@@ -203,7 +203,7 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 	}
 
 	module := uniqueInputs(byTitle["温度采集模块读数长时间没有更新"].Raise)
-	if len(module) != 21 || contains(module, "01a14000-4000-7000-8000-000000000001/t20") || contains(module, "01a14000-4000-7000-8000-000000000001/t16") || contains(module, "01a14000-4000-7000-8000-000000000001/t18") {
+	if len(module) != 20 || contains(module, "01a14000-4000-7000-8000-000000000001/t20") || contains(module, "01a14000-4000-7000-8000-000000000001/t51") || contains(module, "01a14000-4000-7000-8000-000000000001/t16") || contains(module, "01a14000-4000-7000-8000-000000000001/t18") {
 		t.Fatalf("temperature module readings rule watches inactive or critical channels: %v", module)
 	}
 	for _, policy := range byTitle {
@@ -212,7 +212,7 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		}
 	}
 
-	// All 163 active Site reading inputs (and 163 reading + 16 controller STATE = 179 runtime inputs) fit
+	// All 159 active Site reading inputs (and 159 reading + 16 controller STATE = 175 runtime inputs) fit
 	// within EvaluationSnapshot's 512-input cap, and every compiled Songyaxuan policy evaluates cleanly.
 	now := time.Date(2026, 11, 8, 8, 0, 0, 0, time.UTC)
 	fullInputs := map[string]alarmservice.InputFact{}
@@ -225,8 +225,8 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 			fullInputs[key] = alarmservice.NumberInput(key, 20, "GOOD", now.Format(time.RFC3339Nano))
 		}
 	}
-	if len(fullInputs) != 163 {
-		t.Fatalf("expected 163 distinct Site reading inputs, got %d", len(fullInputs))
+	if len(fullInputs) != 159 {
+		t.Fatalf("expected 159 distinct Site reading inputs, got %d", len(fullInputs))
 	}
 	for _, policy := range byTitle {
 		_ = evaluate(t, policy, "full-site-1", fullInputs, alarmservice.AlarmEvaluationState{}, now)
@@ -239,8 +239,8 @@ func TestSongyaxuanRulesCompileToValidPoliciesOverActivePoints(t *testing.T) {
 		key := fmt.Sprintf("01a14000-4000-7000-8000-%012x/run_state", index)
 		withControllers[key] = alarmservice.StringInput(key, "STOPPED", "GOOD", now.Format(time.RFC3339Nano))
 	}
-	if len(withControllers) != 179 {
-		t.Fatalf("expected 179 distinct Site runtime inputs including controllers, got %d", len(withControllers))
+	if len(withControllers) != 175 {
+		t.Fatalf("expected 175 distinct Site runtime inputs including controllers, got %d", len(withControllers))
 	}
 	for _, policy := range byTitle {
 		_ = evaluate(t, policy, "full-site-with-ctrl-1", withControllers, alarmservice.AlarmEvaluationState{}, now)
@@ -759,7 +759,7 @@ func active(state alarmservice.AlarmEvaluationState) alarmservice.AlarmEvaluatio
 }
 
 // Replays three Songyaxuan incidents against compiled policies:
-//  1. Whole temperature module failure (23 channels sentinel 38.4) coalesces into one MAJOR
+//  1. Whole temperature module failure (22 channels sentinel 38.4) coalesces into one MAJOR
 //     device-untrusted alarm while suppressing per-point suspect and readings-not-updated;
 //     a single bad channel (t12) still raises only that point's suspect alarm.
 //  2. Running Chiller B at 2.8 °C leaving temperature raises CRITICAL chiller-leaving-low.
@@ -781,13 +781,13 @@ func TestSongyaxuanHistoricalIncidentsFirstPrinciples(t *testing.T) {
 	start := time.Date(2026, 11, 16, 0, 5, 0, 0, time.UTC)
 
 	deviceRoot := byAlarmType["device-untrusted/temperature-uid20"]
-	if deviceRoot.Severity != "MAJOR" || deviceRoot.DurationSeconds != 180 || len(uniqueInputs(deviceRoot.Raise)) != 23 {
+	if deviceRoot.Severity != "MAJOR" || deviceRoot.DurationSeconds != 180 || len(uniqueInputs(deviceRoot.Raise)) != 22 {
 		t.Fatalf("unexpected device-untrusted/temperature-uid20 policy: %#v", deviceRoot)
 	}
 	readingsRule := byAlarmType["readings-not-updated/temperature-uid20"]
 	uid20Keys := uniqueInputs(deviceRoot.Raise)
 
-	// Whole-module 38.4 sentinel storm: device-untrusted raises after 180s; all 23 suspect rules
+	// Whole-module 38.4 sentinel storm: device-untrusted raises after 180s; all 22 suspect rules
 	// and readings-not-updated remain silent even after 300s / 1800s.
 	allSentinel := func(at time.Time) map[string]alarmservice.InputFact {
 		observed := at.Format(time.RFC3339Nano)

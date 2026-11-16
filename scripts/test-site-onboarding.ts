@@ -476,8 +476,8 @@ test('concentrator voltage, rssi and status devices preserve ids and respect ala
     assert.ok(expanded.length <= 64, `${code} exceeds 64 points`);
     assert.ok(activeOwn.length <= 32, `${code} active non-critical own points (${activeOwn.length}) exceed 32`);
     const inactiveCodes = expanded.filter((point) => pointStatus(point) === 'INACTIVE').map((point) => point.code);
-    assert.equal(inactiveCodes.length, 1, `${code} must keep channel 20 INACTIVE`);
-    assert.ok(inactiveCodes.every((pointCode) => pointCode.endsWith('20')));
+    assert.equal(inactiveCodes.length, 2, `${code} must keep channels 20 and 51 INACTIVE`);
+    assert.ok(inactiveCodes.every((pointCode) => pointCode.endsWith('20') || pointCode.endsWith('51')));
   }
 });
 
@@ -526,10 +526,10 @@ test('songyaxuan Node-RED envelope stays under edge byte cap and aligns with sit
     min_rssi_dbm: -88,
   };
   for (const ch of [...Array.from({ length: 20 }, (_, i) => i + 1), 51, 52, 53, 54, 55]) {
-    temps[`t${ch}`] = ch === 20 || ch === 52 || ch === 8 ? 0 : ch === 18 ? 7.0 : ch === 16 ? 12.0 : 10 + ch / 10;
-    volts[`v${ch}`] = ch === 8 || ch === 52 ? 0 : ch === 1 ? 2650 : 3550;
-    rssis[`rssi${ch}`] = ch === 8 || ch === 52 ? 0 : ch === 1 ? -88 : -62;
-    statuses[`status${ch}`] = ch === 8 || ch === 52 ? 'OFFLINE' : 'ONLINE';
+    temps[`t${ch}`] = ch === 20 || ch === 51 || ch === 52 || ch === 8 ? 0 : ch === 18 ? 7.0 : ch === 16 ? 12.0 : 10 + ch / 10;
+    volts[`v${ch}`] = ch === 8 || ch === 51 || ch === 52 ? 0 : ch === 1 ? 2650 : 3550;
+    rssis[`rssi${ch}`] = ch === 8 || ch === 51 || ch === 52 ? 0 : ch === 1 ? -88 : -62;
+    statuses[`status${ch}`] = ch === 8 || ch === 51 || ch === 52 ? 'OFFLINE' : 'ONLINE';
   }
 
   const out = runEnvelope({
@@ -567,21 +567,45 @@ test('songyaxuan Node-RED envelope stays under edge byte cap and aligns with sit
   const voltPoints = new Map(byDevice.get('temperature-voltage')?.points.map((p) => [p.code, p]));
   assert.equal(voltPoints.get('v8')?.quality, 1, 'offline probe voltage must carry quality=1');
   assert.equal(voltPoints.get('v1')?.quality, 0);
+  assert.equal(voltPoints.get('v51'), undefined, 'empty slot 51 must not be reported');
   assert.equal(voltPoints.get('v52'), undefined, 'disabled spare channel 52 must not be reported');
-  assert.equal(voltPoints.get('v51')?.quality, 0);
+  assert.equal(voltPoints.get('v55')?.quality, 0);
   const rssiPoints = new Map(byDevice.get('temperature-rssi')?.points.map((p) => [p.code, p]));
   assert.equal(rssiPoints.get('rssi8')?.quality, 1, 'offline probe rssi must carry quality=1');
   assert.equal(rssiPoints.get('rssi1')?.value, -88);
   const roomPoints = new Map(byDevice.get('room')?.points.map((p) => [p.code, p]));
   assert.equal(roomPoints.get('room_temperature')?.value, 15.3);
   assert.equal(roomPoints.get('banquet_room_temperature')?.value, 15.4);
+  const towerPoints = byDevice.get('cooling-tower')?.points ?? [];
+  const towerLeavingPoints = towerPoints.filter((p) => p.code === 'cooling_tower_leaving_temperature');
+  assert.equal(towerLeavingPoints.length, 1, 'coexisting t55 and t12 must emit only one cooling_tower_leaving_temperature');
+  assert.equal(towerLeavingPoints[0]?.value, 15.5, 'cooling_tower_leaving_temperature must prefer t55');
   const meter1Points = new Map(byDevice.get('ammeter-unit1')?.points.map((p) => [p.code, p]));
   assert.equal(meter1Points.get('cw_leaving_temperature'), undefined, 'offline t8 must not copy into ammeter-unit1');
   const statusPoints = new Map(byDevice.get('temperature-status')?.points.map((p) => [p.code, p]));
   assert.equal(statusPoints.get('status8')?.value, 'OFFLINE');
   assert.equal(statusPoints.get('status8')?.quality, 0);
+  assert.equal(statusPoints.get('status51'), undefined, 'empty slot 51 status must not be reported');
   assert.equal(statusPoints.get('min_voltage_mv')?.unit, 'mV');
   assert.equal(statusPoints.get('min_rssi_dbm')?.unit, 'dBm');
+
+  // Verify coexistence between t55 and t12: t12 fallback when t55 is offline, and t55 when t12 is offline.
+  const fallbackOut = runEnvelope({
+    temperature: [{ ts: ts + 60000, values: { ...temps, t55: 0, t12: 28.4 } }],
+    'temperature-status': [{ ts: ts + 60000, values: { ...statuses, status55: 'OFFLINE', status12: 'ONLINE' } }],
+  });
+  assert.equal(
+    fallbackOut?.payload.payload.devices.find((d) => d.deviceId === 'cooling-tower')?.points.find((p) => p.code === 'cooling_tower_leaving_temperature')?.value,
+    28.4,
+  );
+  const primaryOut = runEnvelope({
+    temperature: [{ ts: ts + 120000, values: { ...temps, t55: 26.7, t12: 0 } }],
+    'temperature-status': [{ ts: ts + 120000, values: { ...statuses, status55: 'ONLINE', status12: 'OFFLINE' } }],
+  });
+  assert.equal(
+    primaryOut?.payload.payload.devices.find((d) => d.deviceId === 'cooling-tower')?.points.find((p) => p.code === 'cooling_tower_leaving_temperature')?.value,
+    26.7,
+  );
 });
 
 test('songyaxuan.site.json aligns chiller controller sampleSeconds and includes et1010 run_state and emergency_stop_all', () => {

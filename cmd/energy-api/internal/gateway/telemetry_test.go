@@ -726,3 +726,102 @@ func assertTelemetryProblem(t *testing.T, recorder *httptest.ResponseRecorder, s
 	}
 	return problem
 }
+
+func TestTelemetryGatewayNotApplicableDisplayStateContract(t *testing.T) {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	onlinePresence := s2telemetryapi.DevicePresenceStateOnline
+	onlineDisplay := s2telemetryapi.DeviceDisplayStateOnline
+
+	cases := []struct {
+		name          string
+		applicability s2telemetryapi.PresenceApplicability
+		currentState  *s2telemetryapi.DevicePresenceState
+		displayState  *s2telemetryapi.DeviceDisplayState
+		wantStatus    int
+	}{
+		{
+			name:          "not_applicable_with_nil_display_and_presence_allows_200",
+			applicability: s2telemetryapi.PresenceApplicabilityNotApplicable,
+			wantStatus:    http.StatusOK,
+		},
+		{
+			name:          "applicable_with_nil_display_fails_503",
+			applicability: s2telemetryapi.PresenceApplicabilityApplicable,
+			currentState:  &onlinePresence,
+			wantStatus:    http.StatusServiceUnavailable,
+		},
+		{
+			name:          "not_applicable_with_non_nil_display_fails_503",
+			applicability: s2telemetryapi.PresenceApplicabilityNotApplicable,
+			displayState:  &onlineDisplay,
+			wantStatus:    http.StatusServiceUnavailable,
+		},
+		{
+			name:          "not_applicable_with_non_nil_current_state_fails_503",
+			applicability: s2telemetryapi.PresenceApplicabilityNotApplicable,
+			currentState:  &onlinePresence,
+			wantStatus:    http.StatusServiceUnavailable,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newTelemetryGatewayFixture(t, "")
+			fixture.runtimeHTTPClient.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path != internalTelemetryBatchPath {
+					t.Fatalf("unexpected runtime path %s", request.URL.Path)
+				}
+				snapshot := telemetrySnapshot(telemetryTestDeviceOne, []string{"cooling_tower_leaving_temperature"}, now)
+				snapshot.Presence = s2telemetryapi.PresenceSnapshot{
+					Applicability: tc.applicability,
+					CurrentState:  tc.currentState,
+				}
+				snapshot.DisplayState = tc.displayState
+				return telemetryJSONResponse(http.StatusOK, s2telemetryapi.BatchGetObservationSnapshotsResponse{
+					SchemaVersion: 1,
+					Items: []s2telemetryapi.BatchObservationResult{{
+						Success: &s2telemetryapi.BatchObservationSuccess{
+							RequestId: "copy-only",
+							DeviceId:  telemetryTestDeviceOne,
+							Status:    "OK",
+							Snapshot:  snapshot,
+						},
+					}},
+				}), nil
+			})
+
+			body, _ := json.Marshal(s2telemetryapi.BatchGetObservationSnapshotsRequest{
+				Requests: []s2telemetryapi.ObservationSnapshotTarget{{
+					RequestId: "copy-only",
+					DeviceId:  telemetryTestDeviceOne,
+					Keys:      []s2telemetryapi.TelemetryKey{"cooling_tower_leaving_temperature"},
+				}},
+			})
+			request := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, bytes.NewReader(body))
+			fixture.authenticate(request)
+			request.Header.Set("Origin", "https://web.example.test")
+			request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
+			recorder := httptest.NewRecorder()
+			fixture.handler.ServeHTTP(recorder, request)
+
+			if tc.wantStatus == http.StatusOK {
+				if recorder.Code != http.StatusOK {
+					t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+				}
+				var output s2telemetryapi.BatchGetObservationSnapshotsResponse
+				if err := json.NewDecoder(recorder.Body).Decode(&output); err != nil {
+					t.Fatal(err)
+				}
+				if len(output.Items) != 1 || output.Items[0].Success == nil {
+					t.Fatalf("unexpected batch output: %#v", output.Items)
+				}
+				got := output.Items[0].Success.Snapshot
+				if got.Presence.Applicability != s2telemetryapi.PresenceApplicabilityNotApplicable || got.Presence.CurrentState != nil || got.DisplayState != nil {
+					t.Fatalf("unexpected NOT_APPLICABLE snapshot fields: presence=%+v displayState=%v", got.Presence, got.DisplayState)
+				}
+				return
+			}
+			assertTelemetryProblem(t, recorder, tc.wantStatus, "TELEMETRY_UNAVAILABLE")
+		})
+	}
+}
