@@ -94,16 +94,13 @@ class FakeModbusConcentrator implements ModbusBusClient {
       if (!regMap) throw new Error(`no Modbus unit ${unitId}`);
       this.writes.push({ unitId, address, values: [value & 0xffff] });
       regMap.set(address, value & 0xffff);
-      if (address === REG.COMMIT && value === REG.COMMIT_WRITE_PARAMS) {
-        const nextUid = regMap.get(0x9c43) ?? unitId;
-        if (nextUid !== unitId) {
-          this.holding.set(nextUid, regMap);
-          this.holding.delete(unitId);
-          const inp = this.input.get(unitId);
-          if (inp) {
-            this.input.set(nextUid, inp);
-            this.input.delete(unitId);
-          }
+      if (address === 0x9c43 && value !== unitId) {
+        this.holding.set(value, regMap);
+        this.holding.delete(unitId);
+        const inp = this.input.get(unitId);
+        if (inp) {
+          this.input.set(value, inp);
+          this.input.delete(unitId);
         }
       }
     });
@@ -277,7 +274,7 @@ test('WRITE_PARAMS writes modbusId last, commits 0x9C41=6, settles & verifies re
   assert.deepEqual(fake.writes, [
     { unitId: 1, address: 0x9d6d, values: [25] },
     { unitId: 1, address: 0x9c43, values: [15] },
-    { unitId: 1, address: 0x9c41, values: [6] },
+    { unitId: 15, address: 0x9c41, values: [6] },
   ]);
 });
 
