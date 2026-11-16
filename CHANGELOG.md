@@ -10,6 +10,7 @@
 #### 新增
 
 - 新增免交互接口同步脚本 `scripts/sync-songyaxuan-nodered.ts`（配合平台主机 `/opt/hvac-platform/runtime/secrets/songyaxuan-nodered-admin` 只读密钥与 `--ssh` 服务端回环通道），先校对 `ET1010·机组启停` 和 `平台·常驻隧道` 页签启用，再仅热更新 `平台·形成信封` 并回读 `/flows` 核验。
+- 「运行控制」可以直接从平台停机：控制方式条右侧「停机…」执行安全停机（先停所有没锁定的冷机，主机停稳后再停对应的水泵和冷却塔，站点切到安全退出并撤回没下发的指令）；站点登记了紧急全断点位时还可以选「紧急全断」，立刻断开全部输出通道。机组的一键启停还没结束时，机组列上出现「中止…」，只中止并按顺序停这一组。三种都要填原因、输入动态口令并确认已和现场沟通。松雅轩登记在冷冻水总管上的「紧急全断全部 DO 通道」不再显示成普通的「停止」按钮。
 - 第一性原理重构遥测可信边界、冷机防冻保护与整机根因抑制（#749）：
   - `deploy/sites/songyaxuan.alarm-rules.json` 与 `modules/alarm/pkg/alarmrules` 新增设备级根因告警规则 `deviceUntrusted`（`device-untrusted/<device>`，`MAJOR`，连续 `180 秒`）：非派生设备的全部 `>= 2` 个监测点位同时出现超量程、通讯异常值 `38.4` 或 `SOURCE_UNTRUSTED` 时，仅发出 1 条整台根因告警，并在条件树内部同步抑制同设备逐点 `suspect`（支持 `durationSeconds: 300`）与 `readings-not-updated` 症状告警，避免 23 路探头同时掉线刷屏；同时排除 `device-untrusted/` 触发无意义的 `rules-unevaluable`。
   - `deploy/sites/songyaxuan.alarm-rules.json` 新增 `chiller-leaving-low`（`CRITICAL`，`180 秒`）：任意运行中的冷机（A `t1`、B `t2`、C `t3`、D `t4`）冷冻水出水低于 `4.0 °C` 时立即触发防冻保护告警（冷机停机或水温回升过 `4.5 °C` 恢复）。
@@ -27,6 +28,14 @@
 - 三层站点控制退出与安全停机编排（`POST /api/v1/sites/{siteId}/control-shutdown`）：
   - 在网关（`cmd/energy-api/internal/gateway/control_exit.go`）、OpenAPI 契约与生成客户端中新增 `executeSiteControlShutdown`，支持一键顺控中止（`ABORT_UNIT_SEQUENCE`，撤回排队与在途顺控指令并通知边缘停止计时器）、全站安全停机（`PLANT_SAFE_SHUTDOWN`，切换 `SAFE_SHUTDOWN_EXIT` 后先发未锁定冷机停机脉冲，仅对确认已停冷机放行水泵/冷却塔保持线圈并把仍在运行的泵/塔列入 `deferredHoldingAssetIds`）以及二次确认全站紧急断电（`EMERGENCY_DO_RELEASE`，自动核对阻断急停的历史未知指令后向 `et1010/emergency_stop_all` 下发全输出清零，即使断采也强制放行）。
   - `MANUAL_OVERRIDE` 与 `SAFE_SHUTDOWN_EXIT` 退出模式下，平台网关与接入路由双层放行 `STOP` 与 `STOP_UNIT_SEQUENCE`，允许冷机停妥后释放仍在保持的水泵与冷却塔继电器；非停机与设定类指令继续严格拦截。
+- 站点自动控制租约、下发前实时安全复核与 30 分钟执行监护回滚机制：
+  - 新增迁移 `043-auto-control-leases-and-monitors.sql` 与核心注册表（`modules/registry`）租约接口，在站点下新增 `site_auto_control_leases` 与 `optimization_execution_monitors` 两张表；默认保持 `MANUAL_CONFIRM`（不自动下发），仅支持持 `schedule.manage` 权限（运维主管或管理员）并完成 6 位认证器动态验证码两步验证的操作员通过 `PUT /api/v1/sites/{siteId}/optimization/auto-control-lease` 开通最长 24 小时、限定能力白名单与温升/功率/频次边界的自动控制租约，或通过 `revoke` 随时收回，并通过 `GET .../execution-monitors` 查看监护状态。
+  - 在 `libs/commandauth` 与 `modules/iam` 新增内部工作负载指令授权端点 `POST /internal/v1/command/workload-decision` 与审计字段（`WorkloadSPIFFE`、`LeaseID`、`ArmedBy`），二次核验租约未过期、站点处于 `REMOTE_AUTO` 且无资产锁定、能力与设定值边界、每小时频次上限及回滚预置匹配后，签发不超过 30 秒且不可转授的控制授权；网关新增仅接受已认证 `optimization-service` 内部呼叫的 `POST /api/v1/sites/{siteId}/optimization/auto-commands`。
+  - 在 `libs/intelligencemodel` 与 `services/optimization-service` 为优化建议加上 65 分钟有效期 `validUntil`，发布后仅在持有有效租约时执行供水偏差不超过 `0.5 °C`、冷机功率不超过额定 `0.90` 倍与实时温控健康复核后以 `auto-opt:<recommendationId>` 自动下发，并在随后 30 分钟每分钟巡检实时温度、冷机负荷与遥测健康状态；一旦越界或断采超过 5 分钟，立即以 `auto-rollback:<monitorId>` 自动回滚设定点、将租约断路置为 `TRIPPED` 并投递 `AUTO_CONTROL_LEASE_TRIPPED` 告警通知。
+- 冷站联锁防呆、主机启停保护与控制失败主动告警闭环：
+  - 平台网关（`cmd/energy-api/internal/gateway/command.go`）在常规启停下发前新增冷水机组与辅机防误操保护（当指令历史查询不可用时 fail-closed 返回 `503`）：对应主机开机指令在途或成功启动后的 `6 分钟` 启动盲窗内拦截关联冷冻泵、冷却泵与冷却塔停机（`COMMAND_INTERLOCK_BLOCKED`）；限制单台冷机满足 `20 分钟` 最小运行时间、`15 分钟` 最小停机时间及 `60 分钟` 内最多启动 `2 次`（`COMMAND_COOLDOWN_ACTIVE`）；在运营排班时段内且不存在有效 `MAINTENANCE_WINDOW` / `HOLIDAY_SHUTDOWN` 例外时阻止直接停掉最后一台在运冷机（`COMMAND_LAST_ACTIVE_CHILLER_PROTECTED`，引导改走全站安全停机 `PLANT_SAFE_SHUTDOWN`）。
+  - 完善三层退出与停机异常韧性（`cmd/energy-api/internal/gateway/control_exit.go` 与 `command.go`）：`PLANT_SAFE_SHUTDOWN` 在遥测不可用或过期时安全降级返回 `200 OK`（继续停未锁定且无联锁阻断的冷机，并将无法确认主机已停或联锁阻断的水泵/塔记入 `deferredHoldingAssetIds`），仅在核心注册表操作或下游非 `409` 指令派发失败时返回 `503`；处于 `SAFE_SHUTDOWN_EXIT` 时在确认对应主机停稳并越过 `60 秒` 惯性窗后最佳努力释放延迟保持的辅机；`PLANT_SAFE_SHUTDOWN` 通过 `cancelPending`（`abortActiveSequences: true`）撤回并终止在途顺控，而 `ABORT_UNIT_SEQUENCE` 停机模式与撤回派发中（`DISPATCHING`）的顺控指令时还会向边缘显式下发 `ABORT_UNIT_SEQUENCE` 点位指令。
+  - 补齐控制失败与紧急操作即时告警及监控指标汇聚（`modules/command`、`modules/alarm`、`libs/observability` 与 `infra/observability/alerts/domain-phase1.yaml`）：当指令落入 `OUTCOME_UNKNOWN`、`PULSE_DELIVERED_POWER_UNCONFIRMED`（含数据库超时对账、租约过期及超期后才到达的 `VerificationSucceeded` 回执）或触发 `EMERGENCY_DO_RELEASE` 时，非阻塞异步向 `alarm_runtime` 内部控制事件接口（`POST /internal/v1/alarms/control-events`）写入并去重关联告警；在 `cmd/energy-api` 中汇集内嵌领域模块指标并去重 Prometheus 同名指标族头，并将指令核验失败率与超时率告警阈值从高流量门槛调整为发生即触发（`>= 1`）。
 
 #### 修复
 

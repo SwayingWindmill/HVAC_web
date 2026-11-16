@@ -4,6 +4,7 @@ import {
   assetControlLockMutationResponseSchema,
   controlExitPaths,
   siteControlModeMutationResponseSchema,
+  siteControlShutdownResponseSchema,
   siteControlStateSchema,
   type ActiveMaintenanceWindow,
   type AssetControlLockMode,
@@ -11,6 +12,8 @@ import {
   type AssetControlLockState,
   type SiteControlMode,
   type SiteControlModeMutationResponse,
+  type SiteControlShutdownRequest,
+  type SiteControlShutdownResponse,
   type SiteControlState,
 } from '@/api/generated/platformGateway.gen';
 import { CommandRequestError } from './command-api';
@@ -83,6 +86,21 @@ export function updateAssetControlLock(assetId: string, input: { readonly lockMo
     csrfToken,
     body: input,
     parse: (payload) => assetControlLockMutationResponseSchema.parse(payload),
+  });
+}
+
+/**
+ * Stops the plant from the platform: the whole plant in order (chillers, then the pumps and towers
+ * they hold once each chiller is confirmed stopped), every output channel at once, or one unit's
+ * running sequence. The Idempotency-Key stays the same for one confirmation, so a retry never stops twice.
+ */
+export function executeSiteShutdown(siteId: string, input: SiteControlShutdownRequest, idempotencyKey: string, csrfToken: string): Promise<SiteControlShutdownResponse> {
+  return send(gatewayPath(controlExitPaths.siteControlShutdown, { siteId }), {
+    method: 'POST',
+    csrfToken,
+    idempotencyKey,
+    body: input,
+    parse: (payload) => siteControlShutdownResponseSchema.parse(payload),
   });
 }
 

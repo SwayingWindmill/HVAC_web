@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -17,10 +18,22 @@ import (
 // IDGenerator returns a PostgreSQL-compatible UUID string.
 type IDGenerator func(time.Time) (string, error)
 
+type postgresQueryExecutor interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+type postgresCommitter interface {
+	Commit(ctx context.Context) error
+}
+
 type PostgresStore struct {
-	pool  *pgxpool.Pool
-	now   func() time.Time
-	newID IDGenerator
+	pool            *pgxpool.Pool
+	now             func() time.Time
+	newID           IDGenerator
+	mu              sync.RWMutex
+	failureNotifier ControlFailureNotifier
 }
 
 func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
@@ -57,6 +70,55 @@ func NewPostgresStore(pool *pgxpool.Pool, now func() time.Time, generator IDGene
 		generator = newUUID
 	}
 	return &PostgresStore{pool: pool, now: now, newID: generator}
+}
+
+// SetControlFailureNotifier registers an optional non-blocking notifier for OUTCOME_UNKNOWN and unconfirmed-power settlements.
+func (store *PostgresStore) SetControlFailureNotifier(notifier ControlFailureNotifier) {
+	if store == nil {
+		return
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.failureNotifier = notifier
+}
+
+func (store *PostgresStore) hasControlFailureNotifier() bool {
+	if store == nil {
+		return false
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	return store.failureNotifier != nil
+}
+
+func (store *PostgresStore) notifyControlFailure(event ControlFailureEvent) {
+	if store == nil {
+		return
+	}
+	store.mu.RLock()
+	notifier := store.failureNotifier
+	store.mu.RUnlock()
+	notifyControlFailureAsync(notifier, event)
+}
+
+func (store *PostgresStore) notifyControlFailures(events []ControlFailureEvent) {
+	if store == nil || len(events) == 0 {
+		return
+	}
+	store.mu.RLock()
+	notifier := store.failureNotifier
+	store.mu.RUnlock()
+	for _, event := range events {
+		notifyControlFailureAsync(notifier, event)
+	}
+}
+
+func (store *PostgresStore) commitAndNotifyFailures(ctx context.Context, tx postgresCommitter, events []ControlFailureEvent) error {
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	store.notifyControlFailures(events)
+	return nil
 }
 
 func (store *PostgresStore) Close() {

@@ -99,6 +99,7 @@ COPY services/notification-service/migrations/007_schema_and_table_comments.sql 
 COPY infra/registry/postgres/init/041-schema-and-table-comments.sql /opt/hvac/repo/infra/registry/postgres/init/041-schema-and-table-comments.sql
 COPY infra/connectivity/postgres/init/006-gateway-concentrator-audit.sql /opt/hvac/repo/infra/connectivity/postgres/init/006-gateway-concentrator-audit.sql
 COPY infra/registry/postgres/init/042-grant-asset-nameplate-read.sql /opt/hvac/repo/infra/registry/postgres/init/042-grant-asset-nameplate-read.sql
+COPY infra/registry/postgres/init/043-auto-control-leases-and-monitors.sql /opt/hvac/repo/infra/registry/postgres/init/043-auto-control-leases-and-monitors.sql
 
 FROM scratch AS sources-runtime
 

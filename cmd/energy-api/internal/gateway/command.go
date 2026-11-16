@@ -7,9 +7,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -81,6 +83,7 @@ type preparedCommand struct {
 
 type assetCommandTarget struct {
 	asset         platformapi.Asset
+	assetModel    platformapi.SiteAssetModel
 	device        platformapi.Device
 	point         platformapi.TelemetryPoint
 	feedbackPoint platformapi.TelemetryPoint
@@ -339,6 +342,10 @@ func (h *handler) createCommand(writer http.ResponseWriter, request *http.Reques
 		h.writeCommandFailure(writer, request, *interlockFailure)
 		return
 	}
+	if guardFailure := h.enforcePlantOperationalGuards(request, session, target, currentState); guardFailure != nil {
+		h.writeCommandFailure(writer, request, *guardFailure)
+		return
+	}
 	if risk, _, ok := commandmodel.EvaluateRiskLevel(target.capability, input.Parameters, currentState.CurrentValue); ok && (risk == commandmodel.RiskHigh || risk == commandmodel.RiskCritical) {
 		if stepUpFailure := h.verifySubmitStepUpTOTP(request, session, input.VerificationCode); stepUpFailure != nil {
 			h.writeCommandFailure(writer, request, *stepUpFailure)
@@ -572,6 +579,45 @@ func (h *handler) cancelCommand(writer http.ResponseWriter, request *http.Reques
 	current, failure := h.executeCommandRead(request, session, commandID)
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
+		return
+	}
+	isUnitSequence := current.Capability == commandmodel.CapabilityStartUnitSequence || current.Capability == commandmodel.CapabilityStopUnitSequence
+	if current.Status == commandmodel.IntentDispatching && isUnitSequence {
+		device, principalID, _, authFailure := h.resolveAndAuthorizeCommandAction(request, session, current, commandmodel.AuthorizationCommandSubmit, "cancel")
+		if authFailure != nil {
+			h.writeCommandFailure(writer, request, *authFailure)
+			return
+		}
+		reason := strings.TrimSpace(input.Reason)
+		if reason == "" {
+			reason = "ABORT_UNIT_SEQUENCE"
+		}
+		cancelledIDs, cancelFailure := h.executeCommandCancelPending(request.Context(), session, device.SiteID, []string{device.ID}, principalID, reason, current.CommandID, true)
+		if cancelFailure != nil {
+			h.writeCommandFailure(writer, request, *cancelFailure)
+			return
+		}
+		updated, readFailure := h.executeCommandRead(request, session, commandID)
+		if readFailure != nil {
+			h.writeCommandFailure(writer, request, *readFailure)
+			return
+		}
+		if !containsString(cancelledIDs, commandID) && updated.Status == commandmodel.IntentDispatching {
+			writeProblem(writer, request, http.StatusConflict, "COMMAND_CANCEL_INVALID", "Command cannot be cancelled", "Only a pending, queued, or acknowledged unit-sequence Command can be cancelled or aborted.", false, nil)
+			return
+		}
+		if assetModel, modelErr := h.loadSiteAssetModel(request, session, device.SiteID); modelErr == nil {
+			topo := resolveSiteControlTopology(assetModel, h.currentGatewayTime())
+			if abortTarget, hasAbort := resolveAbortTargetForCommand(topo, current.PointID, device.ID); hasAbort {
+				abortState, stateFailure := h.readCommandCurrentState(request, session, abortTarget.device, abortTarget.feedbackPoint.PointCode)
+				if stateFailure != nil || abortState.ObservedAt.IsZero() {
+					abortState = h.degradedShutdownCommandState()
+				}
+				_, _ = h.dispatchShutdownTarget(request, session, abortTarget, abortState, "abort-"+current.CommandID)
+			}
+		}
+		writer.Header().Set("Cache-Control", "private, no-store")
+		writeJSON(writer, http.StatusOK, updated)
 		return
 	}
 	if current.Status != commandmodel.IntentAwaitingApproval && current.Status != commandmodel.IntentQueued {
@@ -912,7 +958,7 @@ func (h *handler) resolveAssetCommandTarget(request *http.Request, session bffSe
 		return assetCommandTarget{}, interlockFailure
 	}
 	return assetCommandTarget{
-		asset: asset, device: *device, point: *point, feedbackPoint: *feedbackPoint,
+		asset: asset, assetModel: assetModel, device: *device, point: *point, feedbackPoint: *feedbackPoint,
 		capability: capability, interlocks: interlocks,
 	}, nil
 }
@@ -1169,6 +1215,459 @@ func (h *handler) enforceCommandInterlocks(request *http.Request, session bffSes
 		}
 	}
 	return nil
+}
+
+const (
+	chillerStartupBlindWindow  = 6 * time.Minute
+	chillerMinRunDwell         = 20 * time.Minute
+	chillerMinOffDwell         = 15 * time.Minute
+	chillerStartWindowDuration = 60 * time.Minute
+	chillerMaxStartsPerHour    = 2
+)
+
+type commandOperatingScheduleSlot struct {
+	DayOfWeek   int `json:"dayOfWeek"`
+	StartMinute int `json:"startMinute"`
+	EndMinute   int `json:"endMinute"`
+}
+
+type commandOperatingSchedule struct {
+	Timezone string                         `json:"timezone"`
+	Slots    []commandOperatingScheduleSlot `json:"slots"`
+}
+
+type commandOperatingExceptionSlot struct {
+	StartMinute int `json:"startMinute"`
+	EndMinute   int `json:"endMinute"`
+}
+
+type commandOperatingException struct {
+	Kind             string                          `json:"kind"`
+	StartDate        string                          `json:"startDate"`
+	EndDate          string                          `json:"endDate"`
+	Status           string                          `json:"status"`
+	ReplacementSlots []commandOperatingExceptionSlot `json:"replacementSlots"`
+}
+
+type commandOperatingExceptionList struct {
+	Items []commandOperatingException `json:"items"`
+}
+
+func isStartupBlindWindowAuxType(assetType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(assetType)) {
+	case "CHILLED_WATER_PUMP", "COOLING_WATER_PUMP", "COOLING_TOWER":
+		return true
+	default:
+		return false
+	}
+}
+
+func isStartCapability(capability commandmodel.Capability) bool {
+	return capability == commandmodel.CapabilityStart || capability == commandmodel.CapabilityStartUnitSequence
+}
+
+func isStopCapability(capability commandmodel.Capability) bool {
+	return capability == commandmodel.CapabilityStop || capability == commandmodel.CapabilityStopUnitSequence
+}
+
+func isNonTerminalCommandStatus(status commandmodel.IntentStatus) bool {
+	switch status {
+	case commandmodel.IntentSubmitted, commandmodel.IntentValidating, commandmodel.IntentAwaitingApproval,
+		commandmodel.IntentApproved, commandmodel.IntentQueued, commandmodel.IntentDispatching,
+		commandmodel.IntentOutcomeUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *handler) enforcePlantOperationalGuards(
+	request *http.Request,
+	session bffSession,
+	target assetCommandTarget,
+	currentState commandCurrentState,
+) *commandFailure {
+	assetType := strings.ToUpper(strings.TrimSpace(target.asset.AssetType))
+	isAuxStop := isStartupBlindWindowAuxType(assetType) && isStopCapability(target.capability)
+	isChillerStart := assetType == "CHILLER" && isStartCapability(target.capability)
+	isChillerStop := assetType == "CHILLER" && isStopCapability(target.capability)
+	if !isAuxStop && !isChillerStart && !isChillerStop {
+		return nil
+	}
+
+	now := h.currentGatewayTime()
+	topo := resolveSiteControlTopology(target.assetModel, now)
+	commands, historyFailure := h.loadSiteCommandHistory(request, session, target.asset.SiteID)
+	if historyFailure != nil {
+		return historyFailure
+	}
+
+	if isAuxStop {
+		servedChillers := append([]string(nil), topo.servedChillersByAux[target.asset.ID]...)
+		for _, check := range target.interlocks {
+			for _, chiller := range topo.chillers {
+				if containsString(topo.boundDevicesByAsset[chiller.ID], check.DeviceID) {
+					servedChillers = appendUniqueShutdownString(servedChillers, chiller.ID)
+				}
+			}
+		}
+		sort.Strings(servedChillers)
+		if failure := checkAuxStopStartupBlindWindow(topo, target.asset, servedChillers, commands, now); failure != nil {
+			return failure
+		}
+	}
+
+	if isChillerStart || isChillerStop {
+		chillerDevices := appendUniqueShutdownString(append([]string(nil), topo.boundDevicesByAsset[target.asset.ID]...), target.device.ID)
+		if isChillerStop {
+			if failure := checkChillerMinRunCooldown(target.asset, chillerDevices, commands, now); failure != nil {
+				return failure
+			}
+			if failure := h.enforceLastActiveChillerGuard(request, session, topo, target, currentState, now); failure != nil {
+				return failure
+			}
+		}
+		if isChillerStart {
+			if failure := checkChillerStartCooldowns(target.asset, chillerDevices, commands, now); failure != nil {
+				return failure
+			}
+		}
+	}
+	return nil
+}
+
+func (h *handler) loadSiteCommandHistory(request *http.Request, session bffSession, siteID string) ([]commandView, *commandFailure) {
+	if h == nil || h.command == nil || h.command.baseURL == "" || h.command.httpClient == nil {
+		return nil, nil
+	}
+	listed, failure := h.executeCommandList(request, session, siteID, maximumListedCommands)
+	if failure != nil {
+		return nil, failure
+	}
+	return listed, nil
+}
+
+func checkAuxStopStartupBlindWindow(
+	topo shutdownTopology,
+	aux platformapi.Asset,
+	servedChillerIDs []string,
+	commands []commandView,
+	now time.Time,
+) *commandFailure {
+	chillerLabels := make(map[string]string, len(topo.chillers))
+	for _, ch := range topo.chillers {
+		label := strings.TrimSpace(ch.Code)
+		if label == "" {
+			label = ch.ID
+		}
+		chillerLabels[ch.ID] = label
+	}
+	for _, chID := range servedChillerIDs {
+		chillerDevices := topo.boundDevicesByAsset[chID]
+		if len(chillerDevices) == 0 {
+			continue
+		}
+		chillerLabel := chillerLabels[chID]
+		if chillerLabel == "" {
+			chillerLabel = chID
+		}
+		var latestSucceededStart time.Time
+		hasRecentSucceededStart := false
+		var latestSucceededStop time.Time
+		hasSucceededStop := false
+
+		for _, cmd := range commands {
+			if !containsString(chillerDevices, cmd.DeviceID) {
+				continue
+			}
+			if isStartCapability(cmd.Capability) {
+				if isNonTerminalCommandStatus(cmd.Status) {
+					failure := commandFailure{
+						status:    http.StatusConflict,
+						code:      "COMMAND_INTERLOCK_BLOCKED",
+						title:     "Command Interlock Blocked",
+						detail:    fmt.Sprintf("Cannot stop auxiliary %s while served chiller %s has an active %s command (%s) in progress.", aux.Code, chillerLabel, cmd.Capability, cmd.Status),
+						retryable: false,
+					}
+					return &failure
+				}
+				if cmd.Status == commandmodel.IntentSucceeded {
+					elapsed := now.Sub(cmd.UpdatedAt)
+					if elapsed >= 0 && elapsed < chillerStartupBlindWindow {
+						if !hasRecentSucceededStart || cmd.UpdatedAt.After(latestSucceededStart) {
+							latestSucceededStart = cmd.UpdatedAt
+							hasRecentSucceededStart = true
+						}
+					}
+				}
+			} else if isStopCapability(cmd.Capability) && cmd.Status == commandmodel.IntentSucceeded {
+				if !hasSucceededStop || cmd.UpdatedAt.After(latestSucceededStop) {
+					latestSucceededStop = cmd.UpdatedAt
+					hasSucceededStop = true
+				}
+			}
+		}
+
+		if hasRecentSucceededStart && (!hasSucceededStop || !latestSucceededStop.After(latestSucceededStart)) {
+			remaining := (chillerStartupBlindWindow - now.Sub(latestSucceededStart)).Round(time.Second)
+			if remaining < time.Second {
+				remaining = time.Second
+			}
+			failure := commandFailure{
+				status:    http.StatusConflict,
+				code:      "COMMAND_INTERLOCK_BLOCKED",
+				title:     "Command Interlock Blocked",
+				detail:    fmt.Sprintf("Cannot stop auxiliary %s within the 6-minute startup pulse and meter blind window after chiller %s started (%s remaining).", aux.Code, chillerLabel, remaining),
+				retryable: false,
+			}
+			return &failure
+		}
+	}
+	return nil
+}
+
+func checkChillerMinRunCooldown(
+	chiller platformapi.Asset,
+	chillerDevices []string,
+	commands []commandView,
+	now time.Time,
+) *commandFailure {
+	var latestStartAt time.Time
+	hasStart := false
+	var latestStopAt time.Time
+	hasStop := false
+
+	for _, cmd := range commands {
+		if !containsString(chillerDevices, cmd.DeviceID) || cmd.Status != commandmodel.IntentSucceeded {
+			continue
+		}
+		if isStartCapability(cmd.Capability) {
+			if !hasStart || cmd.UpdatedAt.After(latestStartAt) {
+				latestStartAt = cmd.UpdatedAt
+				hasStart = true
+			}
+		} else if isStopCapability(cmd.Capability) {
+			if !hasStop || cmd.UpdatedAt.After(latestStopAt) {
+				latestStopAt = cmd.UpdatedAt
+				hasStop = true
+			}
+		}
+	}
+	if !hasStart || (hasStop && latestStopAt.After(latestStartAt)) {
+		return nil
+	}
+	elapsed := now.Sub(latestStartAt)
+	if elapsed >= 0 && elapsed < chillerMinRunDwell {
+		remaining := (chillerMinRunDwell - elapsed).Round(time.Second)
+		if remaining < time.Second {
+			remaining = time.Second
+		}
+		failure := commandFailure{
+			status:    http.StatusConflict,
+			code:      "COMMAND_COOLDOWN_ACTIVE",
+			title:     "Chiller Minimum Run Cooldown Active",
+			detail:    fmt.Sprintf("Chiller %s must satisfy the 20-minute minimum compressor run dwell before stopping (%s remaining).", chiller.Code, remaining),
+			retryable: false,
+		}
+		return &failure
+	}
+	return nil
+}
+
+func checkChillerStartCooldowns(
+	chiller platformapi.Asset,
+	chillerDevices []string,
+	commands []commandView,
+	now time.Time,
+) *commandFailure {
+	var latestStopAt time.Time
+	hasStop := false
+	var latestStartAt time.Time
+	hasStart := false
+	windowStarts := make([]time.Time, 0, len(commands))
+
+	for _, cmd := range commands {
+		if !containsString(chillerDevices, cmd.DeviceID) {
+			continue
+		}
+		if isStopCapability(cmd.Capability) && cmd.Status == commandmodel.IntentSucceeded {
+			if !hasStop || cmd.UpdatedAt.After(latestStopAt) {
+				latestStopAt = cmd.UpdatedAt
+				hasStop = true
+			}
+		}
+		if isStartCapability(cmd.Capability) {
+			if cmd.Status == commandmodel.IntentSucceeded {
+				if !hasStart || cmd.UpdatedAt.After(latestStartAt) {
+					latestStartAt = cmd.UpdatedAt
+					hasStart = true
+				}
+			}
+			if cmd.Status != commandmodel.IntentFailed && cmd.Status != commandmodel.IntentCancelled &&
+				cmd.Status != commandmodel.IntentRejected && cmd.Status != commandmodel.IntentExpired {
+				refTime := cmd.UpdatedAt
+				if refTime.IsZero() {
+					refTime = cmd.CreatedAt
+				}
+				elapsed := now.Sub(refTime)
+				if elapsed >= 0 && elapsed < chillerStartWindowDuration {
+					windowStarts = append(windowStarts, refTime)
+				}
+			}
+		}
+	}
+
+	if hasStop && (!hasStart || !latestStartAt.After(latestStopAt)) {
+		elapsed := now.Sub(latestStopAt)
+		if elapsed >= 0 && elapsed < chillerMinOffDwell {
+			remaining := (chillerMinOffDwell - elapsed).Round(time.Second)
+			if remaining < time.Second {
+				remaining = time.Second
+			}
+			failure := commandFailure{
+				status:    http.StatusConflict,
+				code:      "COMMAND_COOLDOWN_ACTIVE",
+				title:     "Chiller Minimum Off Cooldown Active",
+				detail:    fmt.Sprintf("Chiller %s must satisfy the 15-minute minimum compressor off dwell before restarting (%s remaining).", chiller.Code, remaining),
+				retryable: false,
+			}
+			return &failure
+		}
+	}
+
+	if len(windowStarts) >= chillerMaxStartsPerHour {
+		sort.Slice(windowStarts, func(i, j int) bool { return windowStarts[i].Before(windowStarts[j]) })
+		oldestRelevant := windowStarts[len(windowStarts)-chillerMaxStartsPerHour]
+		remaining := (chillerStartWindowDuration - now.Sub(oldestRelevant)).Round(time.Second)
+		if remaining < time.Second {
+			remaining = time.Second
+		}
+		failure := commandFailure{
+			status:    http.StatusConflict,
+			code:      "COMMAND_COOLDOWN_ACTIVE",
+			title:     "Chiller Anti-Recycle Limit Active",
+			detail:    fmt.Sprintf("Chiller %s reached the maximum of %d starts per 60 minutes (%s remaining before next start).", chiller.Code, chillerMaxStartsPerHour, remaining),
+			retryable: false,
+		}
+		return &failure
+	}
+	return nil
+}
+
+func (h *handler) enforceLastActiveChillerGuard(
+	request *http.Request,
+	session bffSession,
+	topo shutdownTopology,
+	target assetCommandTarget,
+	currentState commandCurrentState,
+	now time.Time,
+) *commandFailure {
+	if !h.isSiteInActiveCoolingSlot(request, session, target.asset.SiteID, now) {
+		return nil
+	}
+	runningChillerIDs := make([]string, 0, len(topo.chillers))
+	for _, ch := range topo.chillers {
+		if ch.ID == target.asset.ID {
+			if commandmodel.ScalarMatches(currentState.ReportedValue, commandmodel.TextScalar("RUNNING"), 0) {
+				runningChillerIDs = append(runningChillerIDs, ch.ID)
+				continue
+			}
+			st, _, probeErr := h.probeAssetRunState(request, session, topo, ch.ID)
+			if probeErr == nil && commandmodel.ScalarMatches(st.ReportedValue, commandmodel.TextScalar("RUNNING"), 0) {
+				runningChillerIDs = append(runningChillerIDs, ch.ID)
+			}
+			continue
+		}
+		st, _, probeErr := h.probeAssetRunState(request, session, topo, ch.ID)
+		if probeErr == nil && commandmodel.ScalarMatches(st.ReportedValue, commandmodel.TextScalar("RUNNING"), 0) {
+			runningChillerIDs = append(runningChillerIDs, ch.ID)
+		}
+	}
+	if len(runningChillerIDs) == 1 && runningChillerIDs[0] == target.asset.ID {
+		failure := commandFailure{
+			status:    http.StatusConflict,
+			code:      "COMMAND_LAST_ACTIVE_CHILLER_PROTECTED",
+			title:     "Last Active Chiller Protected",
+			detail:    fmt.Sprintf("Cannot stop the last running chiller %s while an active cooling operating slot is in effect. Use PLANT_SAFE_SHUTDOWN via /control-shutdown if a full-plant shutdown is intended.", target.asset.Code),
+			retryable: false,
+		}
+		return &failure
+	}
+	return nil
+}
+
+func (h *handler) isSiteInActiveCoolingSlot(request *http.Request, session bffSession, siteID string, now time.Time) bool {
+	if h == nil || h.registry == nil || h.registry.coreBaseURL == "" || h.registry.coreHTTPClient == nil {
+		return false
+	}
+	auth, authFailure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
+	if authFailure != nil {
+		return false
+	}
+	schedPath := "/internal/v1/registry/sites/" + url.PathEscape(siteID) + "/operating-schedule"
+	status, raw, callFailure := h.callCoreControlRegistry(request.Context(), http.MethodGet, schedPath, auth.coreGrant, nil, routeRevisionFromRequest(request))
+	if callFailure != nil || status != http.StatusOK {
+		return false
+	}
+	var schedule commandOperatingSchedule
+	if json.Unmarshal(raw, &schedule) != nil {
+		return false
+	}
+	var exceptions commandOperatingExceptionList
+	excPath := "/internal/v1/registry/sites/" + url.PathEscape(siteID) + "/operating-exceptions?status=APPROVED"
+	excStatus, excRaw, excErr := h.callCoreControlRegistry(request.Context(), http.MethodGet, excPath, auth.coreGrant, nil, routeRevisionFromRequest(request))
+	if excErr == nil && excStatus == http.StatusOK {
+		_ = json.Unmarshal(excRaw, &exceptions)
+	}
+	return evaluateActiveCoolingSlot(schedule, exceptions.Items, now)
+}
+
+func evaluateActiveCoolingSlot(schedule commandOperatingSchedule, exceptions []commandOperatingException, now time.Time) bool {
+	loc := time.UTC
+	if tz := strings.TrimSpace(schedule.Timezone); tz != "" {
+		if loaded, err := time.LoadLocation(tz); err == nil {
+			loc = loaded
+		}
+	}
+	localNow := now.In(loc)
+	localDate := localNow.Format("2006-01-02")
+	minuteOfDay := localNow.Hour()*60 + localNow.Minute()
+	dayOfWeek := int(localNow.Weekday())
+	if dayOfWeek == 0 {
+		dayOfWeek = 7
+	}
+
+	hasOvertime := false
+	overtimeSlots := []commandOperatingExceptionSlot(nil)
+	for _, exc := range exceptions {
+		if !strings.EqualFold(strings.TrimSpace(exc.Status), "APPROVED") {
+			continue
+		}
+		if exc.StartDate == "" || exc.EndDate == "" || localDate < exc.StartDate || localDate > exc.EndDate {
+			continue
+		}
+		switch strings.ToUpper(strings.TrimSpace(exc.Kind)) {
+		case "MAINTENANCE_WINDOW", "HOLIDAY_SHUTDOWN":
+			return false
+		case "OVERTIME_COOLING":
+			hasOvertime = true
+			overtimeSlots = append(overtimeSlots, exc.ReplacementSlots...)
+		}
+	}
+	if hasOvertime {
+		for _, slot := range overtimeSlots {
+			if slot.StartMinute <= minuteOfDay && minuteOfDay < slot.EndMinute {
+				return true
+			}
+		}
+		return false
+	}
+	for _, slot := range schedule.Slots {
+		if slot.DayOfWeek == dayOfWeek && slot.StartMinute <= minuteOfDay && minuteOfDay < slot.EndMinute {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *handler) authorizeCommand(request *http.Request, session bffSession, device platformapi.Device, capability commandmodel.Capability, purpose commandmodel.AuthorizationPurpose) (string, string, *commandFailure) {

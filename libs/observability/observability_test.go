@@ -182,6 +182,48 @@ func TestDiagnosticsSeparateStartupLivenessAndReadiness(t *testing.T) {
 	}
 }
 
+func TestRuntimeFederatesChildMetricsWithoutDuplicateFamilyHeaders(t *testing.T) {
+	parent := NewRuntime(RuntimeConfig{Service: "platform-gateway", QueueSize: 1})
+	cmdRuntime := NewRuntime(RuntimeConfig{Service: "energy-api-command", QueueSize: 1})
+	alarmRuntime := NewRuntime(RuntimeConfig{Service: "energy-api-alarm", QueueSize: 1})
+
+	_ = parent.Metrics.AddCounter("s0_http_requests_total", "HTTP requests.", map[string]string{"service": "platform-gateway", "result": "2xx"}, 3)
+	_ = cmdRuntime.Metrics.AddCounter("hvac_command_verifications_total", "Command verification results by final outcome.", map[string]string{"outcome": "verified"}, 4)
+	_ = cmdRuntime.Metrics.AddCounter("hvac_command_verifications_total", "Command verification results by final outcome.", map[string]string{"outcome": "timed_out"}, 1)
+	_ = alarmRuntime.Metrics.AddCounter("hvac_alarm_http_requests_total", "Alarm HTTP requests.", map[string]string{"service": "alarm-service", "method": "GET", "route": "alarms.list", "status_class": "2xx"}, 2)
+	_ = alarmRuntime.Metrics.ObserveHistogram("hvac_alarm_http_request_duration_seconds", "Alarm request duration.", map[string]string{"service": "alarm-service", "method": "GET", "route": "alarms.list", "status_class": "2xx"}, 0.02, nil)
+
+	parent.AttachChildRuntime(cmdRuntime)
+	parent.AttachChildRuntime(cmdRuntime)
+	parent.AttachChildMetrics("alarm", alarmRuntime.Metrics)
+
+	rec := httptest.NewRecorder()
+	parent.DiagnosticsHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`s0_http_requests_total{result="2xx",service="platform-gateway"} 3`,
+		`hvac_command_verifications_total{outcome="verified"} 4`,
+		`hvac_command_verifications_total{outcome="timed_out"} 1`,
+		`hvac_alarm_http_requests_total{method="GET",route="alarms.list",service="alarm-service",status_class="2xx"} 2`,
+		`hvac_alarm_http_request_duration_seconds_count{method="GET",route="alarms.list",service="alarm-service",status_class="2xx"} 1`,
+		`s0_telemetry_dropped_spans{service="platform-gateway"} 0`,
+		`s0_telemetry_dropped_spans{service="energy-api-command"} 0`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("federated /metrics missing %q in:\n%s", want, body)
+		}
+	}
+	if count := strings.Count(body, "# TYPE hvac_command_verifications_total counter"); count != 1 {
+		t.Fatalf("expected deduplicated # TYPE hvac_command_verifications_total counter header, got %d:\n%s", count, body)
+	}
+	if count := strings.Count(body, "# HELP s0_telemetry_dropped_spans "); count != 1 {
+		t.Fatalf("expected deduplicated # HELP s0_telemetry_dropped_spans header, got %d:\n%s", count, body)
+	}
+}
+
 type blockingExporter struct{ release chan struct{} }
 
 func (exporter blockingExporter) Export(ctx context.Context, _ []SpanData) error {

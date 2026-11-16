@@ -15,11 +15,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
 )
 
 const (
@@ -237,6 +239,9 @@ func (h *handler) getSiteControlState(writer http.ResponseWriter, request *http.
 	if failure != nil {
 		h.writeCommandFailure(writer, request, *failure)
 		return
+	}
+	if state.ControlMode == siteControlModeSafeShutdownExit {
+		h.releaseSafeShutdownHoldingAuxiliariesBestEffort(request, session, siteID, state)
 	}
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, state)
@@ -870,7 +875,9 @@ type shutdownTopology struct {
 	chillersByCode         map[string]platformapi.Asset
 	lockedAssets           map[string]bool
 	boundDevicesByAsset    map[string][]string
+	controlsAssetsByPoint  map[string][]string
 	regularStopByAsset     map[string]shutdownControlTarget
+	abortSequenceByAsset   map[string]shutdownControlTarget
 	statusCheckByAsset     map[string]shutdownControlTarget
 	servedChillersByAux    map[string][]string
 	emergencyReleaseTarget *shutdownControlTarget
@@ -908,14 +915,16 @@ func sortAssetsDeterministically(items []platformapi.Asset) {
 	})
 }
 
-func buildShutdownTopology(model platformapi.SiteAssetModel, state siteControlStateView, now time.Time) shutdownTopology {
+func resolveSiteControlTopology(model platformapi.SiteAssetModel, now time.Time) shutdownTopology {
 	topo := shutdownTopology{
-		chillersByCode:      map[string]platformapi.Asset{},
-		lockedAssets:        map[string]bool{},
-		boundDevicesByAsset: map[string][]string{},
-		regularStopByAsset:  map[string]shutdownControlTarget{},
-		statusCheckByAsset:  map[string]shutdownControlTarget{},
-		servedChillersByAux: map[string][]string{},
+		chillersByCode:        map[string]platformapi.Asset{},
+		lockedAssets:          map[string]bool{},
+		boundDevicesByAsset:   map[string][]string{},
+		controlsAssetsByPoint: map[string][]string{},
+		regularStopByAsset:    map[string]shutdownControlTarget{},
+		abortSequenceByAsset:  map[string]shutdownControlTarget{},
+		statusCheckByAsset:    map[string]shutdownControlTarget{},
+		servedChillersByAux:   map[string][]string{},
 	}
 	assetsByID := make(map[string]platformapi.Asset, len(model.Assets))
 	for _, asset := range model.Assets {
@@ -941,7 +950,7 @@ func buildShutdownTopology(model platformapi.SiteAssetModel, state siteControlSt
 	devicesByID := indexActiveDevicesByID(model)
 	points, pointsByID, feedbackByDeviceKey := indexActivePoints(model)
 	controlsByPoint, controlsSite, deviceToChillers := topo.indexRelationships(model, assetsByID, pointsByID, now)
-	topo.indexAssetLocks(state.AssetLocks)
+	topo.controlsAssetsByPoint = controlsByPoint
 	topo.resolveControlTargets(model, assetsByID, devicesByID, points, feedbackByDeviceKey, controlsByPoint, controlsSite, deviceToChillers)
 	topo.assignFallbackRunStateTargets(assetsByID, devicesByID, feedbackByDeviceKey)
 	for auxID, chIDs := range topo.servedChillersByAux {
@@ -949,6 +958,26 @@ func buildShutdownTopology(model platformapi.SiteAssetModel, state siteControlSt
 		topo.servedChillersByAux[auxID] = chIDs
 	}
 	return topo
+}
+
+func buildShutdownTopology(model platformapi.SiteAssetModel, state siteControlStateView, now time.Time) shutdownTopology {
+	topo := resolveSiteControlTopology(model, now)
+	topo.indexAssetLocks(state.AssetLocks)
+	return topo
+}
+
+func resolveAbortTargetForCommand(topo shutdownTopology, pointID, deviceID string) (shutdownControlTarget, bool) {
+	for _, assetID := range topo.controlsAssetsByPoint[pointID] {
+		if target, ok := topo.abortSequenceByAsset[assetID]; ok {
+			return target, true
+		}
+	}
+	for _, target := range topo.abortSequenceByAsset {
+		if target.device.ID == deviceID {
+			return target, true
+		}
+	}
+	return shutdownControlTarget{}, false
 }
 
 func indexActiveDevicesByID(model platformapi.SiteAssetModel) map[string]platformapi.Device {
@@ -1112,6 +1141,16 @@ func (topo *shutdownTopology) resolveControlTargets(
 			}
 			continue
 		}
+		if (capability == commandmodel.CapabilityStop || capability == commandmodel.CapabilityStopUnitSequence) && trimmedMode == "ABORT_UNIT_SEQUENCE" {
+			for _, assetID := range controlsByPoint[point.ID] {
+				target := baseTarget
+				target.asset = assetsByID[assetID]
+				if _, exists := topo.abortSequenceByAsset[assetID]; !exists {
+					topo.abortSequenceByAsset[assetID] = target
+				}
+			}
+			continue
+		}
 		for _, assetID := range controlsByPoint[point.ID] {
 			target := baseTarget
 			target.asset = assetsByID[assetID]
@@ -1120,15 +1159,15 @@ func (topo *shutdownTopology) resolveControlTargets(
 					topo.regularStopByAsset[assetID] = target
 				}
 				topo.statusCheckByAsset[assetID] = target
-				if isShutdownHoldingAuxiliaryType(target.asset.AssetType) {
-					for _, check := range interlocks {
-						for _, chID := range deviceToChillers[check.DeviceID] {
-							topo.servedChillersByAux[assetID] = appendUniqueShutdownString(topo.servedChillersByAux[assetID], chID)
-						}
-					}
-				}
 			} else if _, exists := topo.statusCheckByAsset[assetID]; !exists {
 				topo.statusCheckByAsset[assetID] = target
+			}
+			if (capability == commandmodel.CapabilityStop || capability == commandmodel.CapabilityStopUnitSequence) && isShutdownHoldingAuxiliaryType(target.asset.AssetType) {
+				for _, check := range interlocks {
+					for _, chID := range deviceToChillers[check.DeviceID] {
+						topo.servedChillersByAux[assetID] = appendUniqueShutdownString(topo.servedChillersByAux[assetID], chID)
+					}
+				}
 			}
 		}
 	}
@@ -1278,9 +1317,6 @@ func (h *handler) stopUnlockedChillers(
 		state, stopped, probeFailure := h.probeAssetRunState(request, session, topo, chiller.ID)
 		degradedDispatch := false
 		if probeFailure != nil {
-			if probeFailure.status == http.StatusServiceUnavailable {
-				return nil, nil, probeFailure
-			}
 			confirmedStopped[chiller.ID] = false
 			degradedDispatch = true
 			state = h.degradedShutdownCommandState()
@@ -1299,10 +1335,7 @@ func (h *handler) stopUnlockedChillers(
 		}
 		if len(stopTarget.interlocks) > 0 {
 			if interlockFailure := h.enforceCommandInterlocks(request, session, stopTarget.asAssetCommandTarget()); interlockFailure != nil {
-				if interlockFailure.status == http.StatusServiceUnavailable {
-					return nil, nil, interlockFailure
-				}
-				if interlockFailure.status == http.StatusConflict {
+				if interlockFailure.status == http.StatusServiceUnavailable || interlockFailure.status == http.StatusConflict {
 					continue
 				}
 				return nil, nil, interlockFailure
@@ -1338,9 +1371,6 @@ func (h *handler) ensureChillersConfirmedStopped(
 		if !checked {
 			_, probedStopped, probeFailure := h.probeAssetRunState(request, session, topo, chID)
 			if probeFailure != nil {
-				if probeFailure.status == http.StatusServiceUnavailable {
-					return false, probeFailure
-				}
 				confirmedStopped[chID] = false
 				return false, nil
 			}
@@ -1370,10 +1400,7 @@ func (h *handler) releaseOrDeferHoldingAuxiliaries(
 		if topo.lockedAssets[aux.ID] {
 			if includeLockedInDeferred {
 				_, auxStopped, probeFailure := h.probeAssetRunState(request, session, topo, aux.ID)
-				if probeFailure != nil && probeFailure.status == http.StatusServiceUnavailable {
-					return nil, nil, probeFailure
-				}
-				if !auxStopped {
+				if probeFailure != nil || !auxStopped {
 					deferred = append(deferred, aux.ID)
 				}
 			}
@@ -1381,9 +1408,6 @@ func (h *handler) releaseOrDeferHoldingAuxiliaries(
 		}
 		auxState, auxStopped, probeFailure := h.probeAssetRunState(request, session, topo, aux.ID)
 		if probeFailure != nil {
-			if probeFailure.status == http.StatusServiceUnavailable {
-				return nil, nil, probeFailure
-			}
 			deferred = append(deferred, aux.ID)
 			continue
 		}
@@ -1408,11 +1432,11 @@ func (h *handler) releaseOrDeferHoldingAuxiliaries(
 			continue
 		}
 		if interlockFailure := h.enforceCommandInterlocks(request, session, stopTarget.asAssetCommandTarget()); interlockFailure != nil {
-			if interlockFailure.status == http.StatusServiceUnavailable {
-				return nil, nil, interlockFailure
+			if interlockFailure.status == http.StatusServiceUnavailable || interlockFailure.status == http.StatusConflict {
+				deferred = append(deferred, aux.ID)
+				continue
 			}
-			deferred = append(deferred, aux.ID)
-			continue
+			return nil, nil, interlockFailure
 		}
 		cmdID, cmdFailure := h.dispatchShutdownTarget(request, session, stopTarget, auxState, idemBase)
 		if cmdFailure != nil {
@@ -1519,11 +1543,28 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 				cancelledIDs = cancelled
 			}
 		}
-		submittedIDs, confirmedStopped, chillerFailure := h.stopUnlockedChillers(request, session, topo, []platformapi.Asset{chiller}, true, idemBase)
+		submittedIDs := []string{}
+		abortTarget, hasAbortTarget := topo.abortSequenceByAsset[chiller.ID]
+		if hasAbortTarget && !topo.lockedAssets[chiller.ID] {
+			abortState, _, probeErr := h.probeAssetRunState(request, session, topo, chiller.ID)
+			if probeErr != nil || abortState.ObservedAt.IsZero() {
+				abortState = h.degradedShutdownCommandState()
+			}
+			abortID, abortFailure := h.dispatchShutdownTarget(request, session, abortTarget, abortState, idemBase)
+			if abortFailure != nil && abortFailure.status != http.StatusConflict {
+				h.writeCommandFailure(writer, request, *abortFailure)
+				return
+			}
+			if abortFailure == nil {
+				submittedIDs = append(submittedIDs, abortID)
+			}
+		}
+		chillerSubmitted, confirmedStopped, chillerFailure := h.stopUnlockedChillers(request, session, topo, []platformapi.Asset{chiller}, !hasAbortTarget, idemBase)
 		if chillerFailure != nil {
 			h.writeCommandFailure(writer, request, *chillerFailure)
 			return
 		}
+		submittedIDs = append(submittedIDs, chillerSubmitted...)
 		auxSubmitted, deferredIDs, auxFailure := h.releaseOrDeferHoldingAuxiliaries(request, session, topo, unitAux, confirmedStopped, true, true, idemBase)
 		if auxFailure != nil {
 			h.writeCommandFailure(writer, request, *auxFailure)
@@ -1576,6 +1617,29 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 			return
 		}
 		submittedIDs = append(submittedIDs, cmdID)
+		alarmEvent := alarmservice.ControlEventRequest{
+			SchemaVersion: 1,
+			TenantID:      session.TenantID,
+			SiteID:        siteID,
+			CommandID:     cmdID,
+			EventKind:     alarmservice.ControlEventEmergencyDORelease,
+			Capability:    string(target.capability),
+			ReasonCode:    alarmservice.ControlEventEmergencyDORelease,
+			Detail:        reason,
+			OccurredAt:    h.currentGatewayTime().UTC().Format(time.RFC3339Nano),
+			ActorType:     "PRINCIPAL",
+			ActorID:       auth.principalID,
+			CorrelationID: cmdID,
+		}
+		if alarmmodel.IsUUIDv7(target.device.ID) {
+			devID := target.device.ID
+			alarmEvent.DeviceID = &devID
+		}
+		if alarmmodel.IsUUIDv7(target.point.ID) {
+			ptID := target.point.ID
+			alarmEvent.PointID = &ptID
+		}
+		h.emitControlFailureAlarmAsync(alarmEvent)
 	} else {
 		chillerSubmitted, confirmedStopped, chillerFailure := h.stopUnlockedChillers(request, session, topo, topo.chillers, false, idemBase)
 		if chillerFailure != nil {
@@ -1600,4 +1664,121 @@ func (h *handler) postSiteControlShutdown(writer http.ResponseWriter, request *h
 		SubmittedCommandIDs:     submittedIDs,
 		DeferredHoldingAssetIds: deferredIDs,
 	})
+}
+
+const safeShutdownAuxCoastDown = 60 * time.Second
+
+func (h *handler) releaseSafeShutdownHoldingAuxiliariesBestEffort(
+	request *http.Request,
+	session bffSession,
+	siteID string,
+	state siteControlStateView,
+) {
+	if h == nil || h.command == nil || h.command.baseURL == "" || h.telemetry == nil {
+		return
+	}
+	assetModel, modelFailure := h.loadSiteAssetModel(request, session, siteID)
+	if modelFailure != nil {
+		return
+	}
+	now := h.currentGatewayTime()
+	topo := buildShutdownTopology(assetModel, state, now)
+	if len(topo.auxiliaries) == 0 {
+		return
+	}
+	listedCommands, _ := h.executeCommandList(request, session, siteID, maximumListedCommands)
+
+	var safeShutdownEnteredAt time.Time
+	if state.UpdatedAt != nil {
+		if parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*state.UpdatedAt)); err == nil {
+			safeShutdownEnteredAt = parsed.UTC()
+		}
+	}
+
+	chillerReady := make(map[string]bool, len(topo.chillers))
+	isServedChillerCoastDownComplete := func(chID string) bool {
+		if ready, ok := chillerReady[chID]; ok {
+			return ready
+		}
+		chState, stopped, probeFailure := h.probeAssetRunState(request, session, topo, chID)
+		if probeFailure != nil || !stopped {
+			chillerReady[chID] = false
+			return false
+		}
+		latestStopSucceededAt, hasStopSucceeded, hasInFlightStop := latestDeviceStopStatus(topo.boundDevicesByAsset[chID], listedCommands)
+		if hasInFlightStop {
+			chillerReady[chID] = false
+			return false
+		}
+		if hasStopSucceeded && now.Sub(latestStopSucceededAt) < safeShutdownAuxCoastDown {
+			chillerReady[chID] = false
+			return false
+		}
+		ready := (hasStopSucceeded && now.Sub(latestStopSucceededAt) >= safeShutdownAuxCoastDown) ||
+			(!chState.ObservedAt.IsZero() && now.Sub(chState.ObservedAt) >= safeShutdownAuxCoastDown) ||
+			(!safeShutdownEnteredAt.IsZero() && now.Sub(safeShutdownEnteredAt) >= safeShutdownAuxCoastDown)
+		chillerReady[chID] = ready
+		return ready
+	}
+
+	for _, aux := range topo.auxiliaries {
+		if topo.lockedAssets[aux.ID] {
+			continue
+		}
+		stopTarget, hasStop := topo.regularStopByAsset[aux.ID]
+		if !hasStop {
+			continue
+		}
+		auxState, auxStopped, probeFailure := h.probeAssetRunState(request, session, topo, aux.ID)
+		if probeFailure != nil || auxStopped {
+			continue
+		}
+		auxDevices := append([]string{stopTarget.device.ID}, topo.boundDevicesByAsset[aux.ID]...)
+		if auxStopAt, hasAuxSucceeded, hasAuxInFlight := latestDeviceStopStatus(auxDevices, listedCommands); hasAuxInFlight || (hasAuxSucceeded && now.Sub(auxStopAt) < safeShutdownAuxCoastDown) {
+			continue
+		}
+		served := topo.servedChillersByAux[aux.ID]
+		if len(served) == 0 {
+			continue
+		}
+		allReady := true
+		for _, chID := range served {
+			if !isServedChillerCoastDownComplete(chID) {
+				allReady = false
+				break
+			}
+		}
+		if !allReady {
+			continue
+		}
+		if interlockFailure := h.enforceCommandInterlocks(request, session, stopTarget.asAssetCommandTarget()); interlockFailure != nil {
+			continue
+		}
+		_, _ = h.dispatchShutdownTarget(request, session, stopTarget, auxState, "")
+	}
+}
+
+func latestDeviceStopStatus(deviceIDs []string, commands []commandView) (time.Time, bool, bool) {
+	var latestSucceeded time.Time
+	hasSucceeded := false
+	hasInFlight := false
+	for _, cmd := range commands {
+		if !containsString(deviceIDs, cmd.DeviceID) {
+			continue
+		}
+		if cmd.Capability != commandmodel.CapabilityStop && cmd.Capability != commandmodel.CapabilityStopUnitSequence {
+			continue
+		}
+		switch cmd.Status {
+		case commandmodel.IntentSubmitted, commandmodel.IntentValidating, commandmodel.IntentAwaitingApproval,
+			commandmodel.IntentApproved, commandmodel.IntentQueued, commandmodel.IntentDispatching, commandmodel.IntentOutcomeUnknown:
+			hasInFlight = true
+		case commandmodel.IntentSucceeded:
+			if !hasSucceeded || cmd.UpdatedAt.After(latestSucceeded) {
+				latestSucceeded = cmd.UpdatedAt
+				hasSucceeded = true
+			}
+		}
+	}
+	return latestSucceeded, hasSucceeded, hasInFlight
 }

@@ -23,3 +23,18 @@
 6. 已发布的建议还带 `responseModel`：这次运行固定下来的策略响应系数（供水温度每升高 1 °C 冷站日用电和室内温度怎么变，以及两者的不确定性）。这些系数由人在优化策略里填写，不是从站点数据拟合的，页面「计算依据」里标「人工设定」。
 7. 「最新建议」是最后准备的那次已发布运行（按运行创建时间），排在队里的旧运行晚完成也不会盖掉它。
 8. 当站点控制模式退出自动控制（`MANUAL_OVERRIDE` 或 `SAFE_SHUTDOWN_EXIT`）、站点下任一资产存在未解锁的控制锁，或站点本地日历日命中已生效（`APPROVED`）的 `MAINTENANCE_WINDOW`、`HOLIDAY_SHUTDOWN` 运行例外（日期首尾都算，例如 10 月 13 日到 16 日就是四整天）时，无论是每小时定时触发还是页面手动发起的设定点优化都会在准备阶段暂停并返回 `MAINTENANCE_ACTIVE`，同时撤回该站点下尚未确认的草稿建议。
+
+## 站点自动控制租约与 30 分钟回滚监护
+
+默认情况下，所有站点保持人工确认模式（`MANUAL_CONFIRM`）：定时与手动运行只产生并保存优化建议，不自动下发控制指令。只有由有权限的操作员通过两步验证显式开通自动控制租约后，站点才允许在严格边界内自动执行优化建议：
+
+1. **租约开通、查询与随时收回**：
+   - 租约记录保存在 `core_registry.site_auto_control_leases`，同一站点同一时间最多只允许一条 `ACTIVE` 租约，最长有效期不超过 24 小时。
+   - 查询当前租约调用 `GET /api/v1/sites/{siteId}/optimization/auto-control-lease`（没有有效租约时返回 `effectiveMode: MANUAL_CONFIRM`）；开通调用 `PUT /api/v1/sites/{siteId}/optimization/auto-control-lease`（需要 `schedule.manage` 权限即运维主管或管理员角色及 6 位认证器验证码，必须设定允许的能力白名单、`maxSetpointStepC` 上限 2 °C、`supplyTempMinC` 到 `supplyTempMaxC`、`zoneTempMaxC`、`minRunningChillers`、`maxCommandsPerHour` 1 到 6 次以及不超 24 小时的过期时间）；收回调用 `POST /api/v1/sites/{siteId}/optimization/auto-control-lease/revoke`（同样需要 `schedule.manage` 权限），立即把状态置为 `REVOKED` 恢复人工确认。
+2. **建议 65 分钟时效与下发前实时复核**：
+   - 新生成的优化建议默认附带 65 分钟有效期（`validUntil`），过期后既不能手动也不能自动下发指令。
+   - 优化运行发布建议后，若站点存在 `ACTIVE` 且未过期租约，优化服务在下发前会执行实时复核：确认站点仍处于 `REMOTE_AUTO` 且无资产控制锁、近 1 小时自动指令数未达上限、供水温度与全部室内温度及冷机功率测点健康且未超时、实测供水温度与建议基线 `baseline.supplyTempC` 相差不超过 `0.5 °C`、各冷机实测功率不超过额定功率 `0.90` 倍、目标设定点与当前实测温差均在租约边界之内。
+   - 复核通过后，先记录 `APPROVED` 与实时复核凭证 `currentStateRevalidation`，再向 IAM `POST /internal/v1/command/workload-decision` 申请携带 `WorkloadSPIFFE`、`LeaseID`、`ArmedBy` 溯源且有效期不超过 30 秒的一次性授权（禁止转授），通过 `POST /api/v1/sites/{siteId}/optimization/auto-commands`（仅限经过验证的内部优化工作负载直接调用，拒绝浏览器会话与反代入口）以幂等键 `auto-opt:<recommendationId>` 提交指令。
+3. **30 分钟执行监护、自动回滚与断路跳闸**：
+   - 每次自动下发指令后立即在 `core_registry.optimization_execution_monitors` 写入一条 `OBSERVING` 监护记录（观察窗口 30 分钟），可通过 `GET /api/v1/sites/{siteId}/optimization/execution-monitors` 查看全部监护结果。
+   - 优化服务每分钟巡检处于 `OBSERVING` 的监护记录：一旦发现实测室内温度高于 `zoneTempMaxC`、实测供水温度高于 `supplyTempMaxC`、任一运行冷机功率超过额定功率 `0.90` 倍，或关键遥测持续不可用超过 5 分钟，立即下发 `auto-rollback:<monitorId>` 指令恢复原供水设定点 `restoreSupplyTempC`（支持在断采场景下执行回滚），并把租约原子置为 `TRIPPED` 跳闸锁定（防止继续自动下发）、写入 `AUTO_CONTROL_LEASE_TRIPPED` 事件通知值班人员；若 30 分钟窗口内始终安全达标，监护状态收敛为 `VERIFIED`。

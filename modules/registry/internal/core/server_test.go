@@ -151,6 +151,16 @@ func (store *fakeRegistryStore) GetSiteControlState(_ context.Context, claims re
 	return SiteControlState{SiteID: id, ControlMode: SiteControlModeRemoteAuto, AssetLocks: []AssetControlLockState{}}, store.err
 }
 
+func (store *fakeRegistryStore) GetSiteAutoControlLease(_ context.Context, claims registryauth.GrantClaims, id string) (SiteAutoControlLeaseState, error) {
+	store.lastClaims, store.lastID = claims, id
+	return SiteAutoControlLeaseState{TenantID: claims.TenantID, SiteID: id, ConfirmationMode: ConfirmationModeManual}, store.err
+}
+
+func (store *fakeRegistryStore) ListOptimizationExecutionMonitors(_ context.Context, claims registryauth.GrantClaims, id string) (OptimizationExecutionMonitorList, error) {
+	store.lastClaims, store.lastID = claims, id
+	return OptimizationExecutionMonitorList{TenantID: claims.TenantID, SiteID: id, Items: []OptimizationExecutionMonitor{}}, store.err
+}
+
 func TestServerReadsSiteTotalElectricitySources(t *testing.T) {
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	store := &fakeRegistryStore{totalSources: SiteTotalElectricitySources{

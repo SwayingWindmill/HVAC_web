@@ -35,6 +35,9 @@ type GrantClaims struct {
 	ExpiresAt                   int64                             `json:"expiresAt"`
 	TokenID                     string                            `json:"tokenId"`
 	Transitive                  bool                              `json:"transitive"`
+	WorkloadSPIFFE              string                            `json:"workloadSpiffe,omitempty"`
+	LeaseID                     string                            `json:"leaseId,omitempty"`
+	ArmedBy                     string                            `json:"armedBy,omitempty"`
 }
 
 type UseStatus struct {
@@ -132,6 +135,9 @@ func Snapshot(claims GrantClaims) commandmodel.AuthorizationSnapshot {
 		MaximumRisk:                 claims.MaximumRisk,
 		CapabilityRevision:          claims.CapabilityRevision,
 		EmergencyRevocationRevision: claims.EmergencyRevocationRevision,
+		WorkloadSPIFFE:              claims.WorkloadSPIFFE,
+		LeaseID:                     claims.LeaseID,
+		ArmedBy:                     claims.ArmedBy,
 		IssuedAt:                    time.Unix(claims.IssuedAt, 0).UTC(),
 		ExpiresAt:                   time.Unix(claims.ExpiresAt, 0).UTC(),
 	}

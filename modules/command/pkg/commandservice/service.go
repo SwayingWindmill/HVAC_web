@@ -1,6 +1,7 @@
 package commandservice
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -45,11 +46,98 @@ type Service struct {
 
 	now func() time.Time
 
-	nextCommandID  uint64
-	intents        map[string]*commandmodel.CommandIntent
-	idempotency    map[string]idempotencyRecord
-	deviceSequence map[string]uint64
-	deviceFence    map[string]uint64
+	nextCommandID   uint64
+	intents         map[string]*commandmodel.CommandIntent
+	idempotency     map[string]idempotencyRecord
+	deviceSequence  map[string]uint64
+	deviceFence     map[string]uint64
+	failureNotifier ControlFailureNotifier
+}
+
+// ControlFailureEvent describes an operational control failure that needs immediate operator visibility.
+type ControlFailureEvent struct {
+	Kind       string
+	TenantID   string
+	SiteID     string
+	DeviceID   string
+	PointID    string
+	CommandID  string
+	Capability commandmodel.Capability
+	ReasonCode string
+	Detail     string
+	OccurredAt time.Time
+}
+
+// ControlFailureNotifier asynchronously receives operational control failure events without delaying state settlement.
+type ControlFailureNotifier func(context.Context, ControlFailureEvent)
+
+// SetControlFailureNotifier registers an optional non-blocking notifier for OUTCOME_UNKNOWN and unconfirmed-power settlements.
+func (s *Service) SetControlFailureNotifier(notifier ControlFailureNotifier) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failureNotifier = notifier
+}
+
+func (s *Service) hasControlFailureNotifier() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failureNotifier != nil
+}
+
+func controlFailureEventFromDecision(
+	intent commandmodel.CommandIntent,
+	status commandmodel.IntentStatus,
+	reason string,
+	detail string,
+	occurredAt time.Time,
+) (ControlFailureEvent, bool) {
+	switch {
+	case status == commandmodel.IntentOutcomeUnknown:
+		return ControlFailureEvent{
+			Kind:       string(commandmodel.IntentOutcomeUnknown),
+			TenantID:   intent.TenantID,
+			SiteID:     intent.SiteID,
+			DeviceID:   intent.DeviceID,
+			PointID:    intent.PointID,
+			CommandID:  intent.ID,
+			Capability: intent.Capability,
+			ReasonCode: reason,
+			Detail:     strings.TrimSpace(detail),
+			OccurredAt: occurredAt,
+		}, true
+	case reason == commandmodel.ReasonPulseDeliveredPowerUnconfirmed:
+		return ControlFailureEvent{
+			Kind:       commandmodel.ReasonPulseDeliveredPowerUnconfirmed,
+			TenantID:   intent.TenantID,
+			SiteID:     intent.SiteID,
+			DeviceID:   intent.DeviceID,
+			PointID:    intent.PointID,
+			CommandID:  intent.ID,
+			Capability: intent.Capability,
+			ReasonCode: reason,
+			Detail:     strings.TrimSpace(detail),
+			OccurredAt: occurredAt,
+		}, true
+	default:
+		return ControlFailureEvent{}, false
+	}
+}
+
+func notifyControlFailureAsync(notifier ControlFailureNotifier, event ControlFailureEvent) {
+	if notifier == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		notifier(ctx, event)
+	}()
 }
 
 type idempotencyRecord struct {
@@ -379,6 +467,9 @@ func (s *Service) ResolveDispatch(envelope commandmodel.DispatchEnvelope, result
 		attempt.VerificationDeadline = *decision.VerificationDeadline
 	}
 	transition(intent, decision.IntentFinal, decision.Reason, "command-dispatcher", now, attempt.ID, result.EvidenceID)
+	if event, notify := controlFailureEventFromDecision(*intent, decision.IntentFinal, decision.Reason, result.FailureCode, now); notify {
+		notifyControlFailureAsync(s.failureNotifier, event)
+	}
 	return nil
 }
 
@@ -415,6 +506,9 @@ func (s *Service) PrepareVerification(commandID, leaseOwner string, leaseUntil t
 			attempt.Version++
 			attempt.UpdatedAt = now
 			transition(intent, decision.IntentFinal, decision.Reason, "command-verifier", now, attempt.ID, attempt.ConnectorEvidenceID)
+			if event, notify := controlFailureEventFromDecision(*intent, decision.IntentFinal, decision.Reason, "", now); notify {
+				notifyControlFailureAsync(s.failureNotifier, event)
+			}
 			return commandmodel.VerificationEnvelope{}, ErrVerificationNotAvailable
 		}
 		if !attempt.VerificationLeaseUntil.IsZero() && attempt.VerificationLeaseUntil.After(now) {
@@ -490,6 +584,9 @@ func (s *Service) ResolveVerification(envelope commandmodel.VerificationEnvelope
 	attempt.VerificationLeaseUntil = time.Time{}
 	attempt.Status = decision.AttemptFinal
 	transition(intent, decision.IntentFinal, decision.Reason, "command-verifier", now, attempt.ID, result.EvidenceID)
+	if event, notify := controlFailureEventFromDecision(*intent, decision.IntentFinal, decision.Reason, result.FailureCode, now); notify {
+		notifyControlFailureAsync(s.failureNotifier, event)
+	}
 	return nil
 }
 

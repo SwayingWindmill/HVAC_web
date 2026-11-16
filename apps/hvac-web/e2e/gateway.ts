@@ -418,8 +418,55 @@ export class Gateway {
     return { body: { ...lock, cancelledCommandIds: cancelled } };
   }
 
+  // Site shutdown as the gateway runs it: every mode needs a reason and the authenticator code;
+  // the plant and emergency modes switch the Site to safe exit and withdraw what is not dispatched.
+  private shutdownSite(input: Json, now: string): { status?: number; body: unknown } {
+    const refuse = (status: number, code: string, detail: string) => ({ status, body: { status, code, detail } });
+    if (!input.reason?.trim()) return refuse(400, 'CONTROL_EXIT_REQUEST_INVALID', 'reason is required.');
+    if (!/^\d{6}$/.test(input.verificationCode ?? '')) return refuse(428, 'STEP_UP_REQUIRED', 'Site shutdown requires a 6-digit verificationCode.');
+    if (input.expectedRevision !== undefined && input.expectedRevision !== this.controlState.revision) {
+      return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'The expected control state revision is stale.');
+    }
+    const points: Json[] = this.assetModel.telemetryPoints;
+    const assets: Json[] = this.assetModel.assets;
+    const chillers = assets.filter((asset) => asset.assetType === 'CHILLER');
+    const submit = (count: number) => Array.from({ length: count }, (_, index) => `0190c000-0000-7000-8000-${String(this.writes.length * 10 + index).padStart(12, '0')}`);
+    if (input.mode === 'ABORT_UNIT_SEQUENCE') {
+      const chiller = chillers.find((asset) => asset.code.toLowerCase() === String(input.unitCode ?? '').toLowerCase());
+      if (!chiller) return refuse(400, 'CONTROL_EXIT_REQUEST_INVALID', 'unitCode did not match an active CHILLER asset on this Site.');
+      const deviceIds = this.assetModel.relationships
+        .filter((relationship: Json) => relationship.role === 'CONTROLS' && relationship.toId === chiller.id)
+        .map((relationship: Json) => points.find((point) => point.id === relationship.fromId)?.reportingDeviceId)
+        .filter(Boolean);
+      const cancelled = this.withdraw(deviceIds, now);
+      return { body: { siteControlState: this.controlState, mode: input.mode, cancelledCommandIds: cancelled, submittedCommandIds: submit(1), deferredHoldingAssetIds: [] } };
+    }
+    if (input.mode === 'EMERGENCY_DO_RELEASE') {
+      if (input.confirmEmergencyDoRelease !== true) return refuse(400, 'CONTROL_EXIT_REQUEST_INVALID', 'confirmEmergencyDoRelease must be explicitly true.');
+      if (!points.some((point) => point.sourceMetadata?.actuationMode === 'EMERGENCY_DO_RELEASE')) {
+        return refuse(409, 'EMERGENCY_DO_RELEASE_UNAVAILABLE', 'This Site has no active EMERGENCY_DO_RELEASE command point.');
+      }
+    } else if (input.mode !== 'PLANT_SAFE_SHUTDOWN') {
+      return refuse(400, 'CONTROL_EXIT_REQUEST_INVALID', 'mode is invalid.');
+    }
+    const cancelled = this.withdraw(null, now);
+    this.controlState = { ...this.controlState, controlMode: 'SAFE_SHUTDOWN_EXIT', reason: input.reason, updatedBy: MY_ID, updatedAt: now, revision: this.controlState.revision + 1 };
+    const auxiliaries = assets.filter((asset) => ['CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP', 'COOLING_TOWER'].includes(asset.assetType));
+    const plant = input.mode === 'PLANT_SAFE_SHUTDOWN';
+    return {
+      body: {
+        siteControlState: this.controlState,
+        mode: input.mode,
+        cancelledCommandIds: cancelled,
+        submittedCommandIds: submit(plant ? chillers.length : 1),
+        // The recorded chiller is still running, so its pumps and tower wait for it to stop.
+        deferredHoldingAssetIds: plant ? auxiliaries.map((asset) => asset.id) : [],
+      },
+    };
+  }
+
   private submitCommand(input: Json, now: string): Json {
-    const point = fixture<Json>('asset-model.json').telemetryPoints.find((candidate: Json) => candidate.id === input.commandPointId);
+    const point = this.assetModel.telemetryPoints.find((candidate: Json) => candidate.id === input.commandPointId);
     const capability: string = point.sourceMetadata.capability;
     const risk = HIGH_RISK.includes(capability) ? 'HIGH' : 'LOW';
     const command: Json = {
@@ -1160,6 +1207,7 @@ export class Gateway {
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/control-state`) return { body: this.controlState };
     if (method === 'PUT' && path === `/api/v1/sites/${SITE_ID}/control-mode`) return this.updateControlMode(body!, now);
+    if (method === 'POST' && path === `/api/v1/sites/${SITE_ID}/control-shutdown`) return this.shutdownSite(body!, now);
     const lockMatch = path.match(/^\/api\/v1\/assets\/([^/]+)\/control-lock$/);
     if (method === 'PUT' && lockMatch) return this.updateControlLock(lockMatch[1], body!, now);
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/staging-recommendations/latest`) {

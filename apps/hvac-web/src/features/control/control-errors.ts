@@ -13,6 +13,8 @@ export type ControlErrorCode =
   | 'COMMAND_CANCEL_INVALID'
   | 'COMMAND_APPROVAL_INVALID'
   | 'COMMAND_RECONCILIATION_INVALID'
+  | 'CONTROL_SHUTDOWN_LOCKED'
+  | 'EMERGENCY_DO_RELEASE_UNAVAILABLE'
   | 'COMMAND_IDEMPOTENCY_CONFLICT';
 
 export const CONTROL_ERROR_MESSAGE: Readonly<Record<ControlErrorCode, string>> = {
@@ -27,6 +29,8 @@ export const CONTROL_ERROR_MESSAGE: Readonly<Record<ControlErrorCode, string>> =
   COMMAND_CANCEL_INVALID: '这条指令已经在下发或已结束，不能再撤回。',
   COMMAND_APPROVAL_INVALID: '这条指令已经不在等审批了，刷新指令记录看看最新状态。',
   COMMAND_RECONCILIATION_INVALID: '这条指令已经有结果了，不需要再现场确认。',
+  CONTROL_SHUTDOWN_LOCKED: '这组设备被锁定，或水泵、冷却塔还在等主机停稳，这次没有可以停的设备。',
+  EMERGENCY_DO_RELEASE_UNAVAILABLE: '这个站点没有登记紧急全断点位，不能紧急全断。',
   COMMAND_IDEMPOTENCY_CONFLICT: '同一条指令重复提交了，请刷新指令记录看看是否已经提交。',
 };
 

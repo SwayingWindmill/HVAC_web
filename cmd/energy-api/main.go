@@ -48,6 +48,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer embeddedServices.Close()
+	attachEmbeddedTelemetry(telemetry, embeddedServices)
 	identity, workloadCertificate, closeIdentity, err := loadIdentityConfig(runContext)
 	if err != nil {
 		logger.Error("gateway_identity_config_invalid", "error_code", "IDENTITY_CONFIG_INVALID")
@@ -402,8 +403,9 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 }
 
 // loadGatewayInternalServer serves the routes other workloads call on the Gateway (the
-// Operations Agent's Tool authorization) on a listener that requires a verified workload
-// certificate. Browser traffic stays on the public listener.
+// Operations Agent's Tool authorization and the Optimization Service's automated Command
+// dispatch) on a listener that requires a verified workload certificate. Browser traffic stays on
+// the public listener.
 func loadGatewayInternalServer(handler http.Handler) (*http.Server, error) {
 	address := strings.TrimSpace(os.Getenv("GATEWAY_INTERNAL_ADDR"))
 	if address == "" {
@@ -420,7 +422,7 @@ func loadGatewayInternalServer(handler http.Handler) (*http.Server, error) {
 	return &http.Server{
 		Addr: address,
 		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			if request.URL.Path != gateway.InternalOperationsToolAuthorizationPath {
+			if request.URL.Path != gateway.InternalOperationsToolAuthorizationPath && !gateway.IsOptimizationAutoCommandPath(request.URL.Path) {
 				http.NotFound(writer, request)
 				return
 			}
@@ -781,4 +783,13 @@ func envOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func attachEmbeddedTelemetry(parent *observability.Runtime, services *embeddedEnergyServices) {
+	if parent == nil || services == nil {
+		return
+	}
+	for _, child := range services.telemetry {
+		parent.AttachChildRuntime(child)
+	}
 }

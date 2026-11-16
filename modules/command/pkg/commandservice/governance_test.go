@@ -260,3 +260,46 @@ func freshApprovalAuthorization(intent commandmodel.CommandIntent, approverID st
 		EmergencyRevocationRevision: 2, IssuedAt: now.Add(-time.Second), ExpiresAt: now.Add(25 * time.Second),
 	}
 }
+
+func TestLeasedMediumRiskEntersQueuedDirectlyWhileHumanRequiresApproval(t *testing.T) {
+	clock := fixedClock()
+	service := New(clock)
+
+	humanReq := validRequest()
+	humanReq.IdempotencyKey = "human-medium-step"
+	humanReq.Capability = commandmodel.CapabilitySetChilledWaterTemperatureSetpoint
+	humanReq.Parameters = commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 8.5}
+	humanReq.CurrentState.CurrentValue = testFloat64Pointer(7.0)
+	humanReq.Authorization.Capability = commandmodel.CapabilitySetChilledWaterTemperatureSetpoint
+	humanReq.Authorization.CapabilityRevision = "capability:set-chilled-water-temperature-setpoint:v1"
+	humanReq.Authorization.MaximumRisk = commandmodel.RiskMedium
+
+	humanCreated, err := service.Submit(humanReq)
+	if err != nil {
+		t.Fatalf("human medium submit failed: %v", err)
+	}
+	if humanCreated.Intent.Risk != commandmodel.RiskMedium ||
+		humanCreated.Intent.ApprovalPolicy != commandmodel.ApprovalSingleApprover ||
+		humanCreated.Intent.Status != commandmodel.IntentAwaitingApproval {
+		t.Fatalf("expected human 1.5C command to await approval, got %#v", humanCreated.Intent)
+	}
+
+	leasedReq := humanReq
+	leasedReq.IdempotencyKey = "auto-opt:leased-medium-step"
+	leasedReq.Authorization.WorkloadSPIFFE = "spiffe://hvac.local/optimization-service"
+	leasedReq.Authorization.LeaseID = "01990000-8800-7000-8000-000000000011"
+	leasedReq.Authorization.ArmedBy = "operator-1"
+
+	leasedCreated, err := service.Submit(leasedReq)
+	if err != nil {
+		t.Fatalf("leased medium submit failed: %v", err)
+	}
+	if leasedCreated.Intent.Risk != commandmodel.RiskMedium ||
+		leasedCreated.Intent.ApprovalPolicy != commandmodel.ApprovalNone ||
+		leasedCreated.Intent.Status != commandmodel.IntentQueued {
+		t.Fatalf("expected leased 1.5C command to queue directly with ApprovalNone, got %#v", leasedCreated.Intent)
+	}
+	if _, err := service.PrepareDispatch(leasedCreated.Intent.ID, "dispatcher-a", clock().Add(time.Minute)); err != nil {
+		t.Fatalf("expected queued leased command to be dispatchable, err=%v", err)
+	}
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/x509"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -91,7 +93,9 @@ func main() {
 		logger.Error("command_http_configuration_invalid", "error_code", "COMMAND_HTTP_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
-	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(runtimeHTTPConfig(store, telemetry.Metrics))
+	failureNotifier := buildCommandControlFailureNotifier(logger)
+	store.SetControlFailureNotifier(failureNotifier)
+	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(runtimeHTTPConfig(store, telemetry.Metrics, failureNotifier))
 	if err != nil {
 		logger.Error("command_runtime_configuration_invalid", "error_code", "COMMAND_RUNTIME_CONFIGURATION_INVALID")
 		os.Exit(1)
@@ -152,12 +156,139 @@ func main() {
 }
 
 // runtimeHTTPConfig names the dispatcher and verifier workloads; each serves every Tenant.
-func runtimeHTTPConfig(store commandservice.RuntimeStore, metrics *observability.Registry) commandservice.RuntimeHTTPConfig {
+func runtimeHTTPConfig(store commandservice.RuntimeStore, metrics *observability.Registry, failureNotifier commandservice.ControlFailureNotifier) commandservice.RuntimeHTTPConfig {
 	return commandservice.RuntimeHTTPConfig{
-		Store:            store,
-		Metrics:          metrics,
-		DispatcherSPIFFE: envOr("COMMAND_DISPATCHER_SPIFFE", "spiffe://hvac.local/command-dispatcher"),
-		VerifierSPIFFE:   envOr("COMMAND_VERIFIER_SPIFFE", "spiffe://hvac.local/command-verifier"),
+		Store:                  store,
+		Metrics:                metrics,
+		DispatcherSPIFFE:       envOr("COMMAND_DISPATCHER_SPIFFE", "spiffe://hvac.local/command-dispatcher"),
+		VerifierSPIFFE:         envOr("COMMAND_VERIFIER_SPIFFE", "spiffe://hvac.local/command-verifier"),
+		ControlFailureNotifier: failureNotifier,
+	}
+}
+
+type commandControlEventPayload struct {
+	SchemaVersion int     `json:"schemaVersion"`
+	TenantID      string  `json:"tenantId"`
+	SiteID        string  `json:"siteId"`
+	DeviceID      *string `json:"deviceId,omitempty"`
+	PointID       *string `json:"pointId,omitempty"`
+	CommandID     string  `json:"commandId"`
+	EventKind     string  `json:"eventKind"`
+	Capability    string  `json:"capability,omitempty"`
+	ReasonCode    string  `json:"reasonCode,omitempty"`
+	Detail        string  `json:"detail,omitempty"`
+	OccurredAt    string  `json:"occurredAt,omitempty"`
+	ActorType     string  `json:"actorType,omitempty"`
+	ActorID       string  `json:"actorId,omitempty"`
+	CorrelationID string  `json:"correlationId,omitempty"`
+}
+
+func resolveCommandControlEventsEndpoint() string {
+	const controlEventsPath = "/internal/v1/alarms/control-events"
+	if explicit := strings.TrimSpace(os.Getenv("ALARM_CONTROL_EVENTS_URL")); explicit != "" {
+		parsed, err := url.Parse(explicit)
+		if err == nil && parsed.Scheme != "" && parsed.Host != "" && (parsed.Path == "" || parsed.Path == "/") {
+			parsed.Path = controlEventsPath
+			return strings.TrimRight(parsed.String(), "/")
+		}
+		return explicit
+	}
+	if base := strings.TrimRight(strings.TrimSpace(os.Getenv("ALARM_SERVICE_URL")), "/"); base != "" {
+		return base + controlEventsPath
+	}
+	return ""
+}
+
+func buildCommandControlFailureNotifier(logger *slog.Logger) commandservice.ControlFailureNotifier {
+	endpoint := resolveCommandControlEventsEndpoint()
+	if endpoint == "" {
+		return nil
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		if logger != nil {
+			logger.Warn("command_control_alarm_notifier_disabled", "error_code", "ALARM_CONTROL_EVENTS_URL_INVALID")
+		}
+		return nil
+	}
+	serverCA := strings.TrimSpace(os.Getenv("ALARM_SERVICE_SERVER_CA"))
+	if serverCA == "" {
+		if logger != nil {
+			logger.Warn("command_control_alarm_notifier_disabled", "error_code", "ALARM_SERVICE_SERVER_CA_MISSING")
+		}
+		return nil
+	}
+	var clientCerts *workloadtls.CertificateFiles
+	certPath := strings.TrimSpace(os.Getenv("COMMAND_TLS_CERT"))
+	keyPath := strings.TrimSpace(os.Getenv("COMMAND_TLS_KEY"))
+	if certPath != "" && keyPath != "" {
+		clientCerts = &workloadtls.CertificateFiles{
+			CertificatePath: certPath,
+			PrivateKeyPath:  keyPath,
+		}
+	}
+	client, err := workloadtls.NewHTTPClient(workloadtls.ClientConfig{
+		CertificateFiles: clientCerts,
+		ServerCAPath:     serverCA,
+		ServerName:       envOr("ALARM_SERVICE_SERVER_NAME", "localhost"),
+		Timeout:          3 * time.Second,
+	})
+	if err != nil {
+		if logger != nil {
+			logger.Warn("command_control_alarm_notifier_disabled", "error_code", "ALARM_CONTROL_EVENTS_TLS_INVALID")
+		}
+		return nil
+	}
+	return newHTTPControlFailureNotifier(endpoint, client, logger)
+}
+
+func newHTTPControlFailureNotifier(endpoint string, client *http.Client, logger *slog.Logger) commandservice.ControlFailureNotifier {
+	if strings.TrimSpace(endpoint) == "" || client == nil {
+		return nil
+	}
+	return func(ctx context.Context, event commandservice.ControlFailureEvent) {
+		payload := commandControlEventPayload{
+			SchemaVersion: 1,
+			TenantID:      event.TenantID,
+			SiteID:        event.SiteID,
+			CommandID:     event.CommandID,
+			EventKind:     event.Kind,
+			Capability:    string(event.Capability),
+			ReasonCode:    event.ReasonCode,
+			Detail:        event.Detail,
+			OccurredAt:    event.OccurredAt.UTC().Format(time.RFC3339Nano),
+			ActorType:     "COMMAND_RUNTIME",
+			ActorID:       "command-owner",
+			CorrelationID: event.CommandID,
+		}
+		if event.DeviceID != "" {
+			deviceID := event.DeviceID
+			payload.DeviceID = &deviceID
+		}
+		if event.PointID != "" {
+			pointID := event.PointID
+			payload.PointID = &pointID
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			if logger != nil {
+				logger.Warn("command_control_alarm_failed", "error_code", "CONTROL_ALARM_HTTP_FAILED", "command_id", event.CommandID, "event_kind", event.Kind)
+			}
+			return
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode >= http.StatusMultipleChoices && logger != nil {
+			logger.Warn("command_control_alarm_rejected", "error_code", "CONTROL_ALARM_HTTP_REJECTED", "status", resp.StatusCode, "command_id", event.CommandID, "event_kind", event.Kind)
+		}
 	}
 }
 

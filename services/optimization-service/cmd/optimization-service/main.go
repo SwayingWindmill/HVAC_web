@@ -104,12 +104,38 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	commandClient, err := optimization.NewWorkloadCommandClient(optimization.WorkloadCommandClientConfig{
+		CertificatePath: requiredEnv("OPTIMIZATION_TLS_CERT"),
+		PrivateKeyPath:  requiredEnv("OPTIMIZATION_TLS_KEY"),
+		CAPath:          requiredEnv("OPTIMIZATION_TLS_CA"),
+		IAMURL:          requiredEnv("OPTIMIZATION_IAM_URL"),
+		GatewayURL:      envOrDefault("OPTIMIZATION_GATEWAY_URL", "https://platform-gateway:8452"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	autoController, err := optimization.NewAutoController(publication, inputs, commandClient, time.Now, log.Printf)
+	if err != nil {
+		log.Fatal(err)
+	}
 	workerID := envOrDefault("OPTIMIZATION_WORKER_ID", defaultWorkerID())
 	claimInterval := durationEnv("OPTIMIZATION_CLAIM_INTERVAL", 5*time.Second)
 	leaseDuration := durationEnv("OPTIMIZATION_LEASE_DURATION", 2*time.Minute)
 	leaseRenew := durationEnv("OPTIMIZATION_LEASE_RENEW", 30*time.Second)
 	claimBatch := integerEnv("OPTIMIZATION_CLAIM_BATCH", 8)
-	go runOptimizationWorker(ctx, queue, publication, service, preparer, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew)
+	go runOptimizationWorker(ctx, queue, publication, service, preparer, autoController, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew)
+
+	go func() {
+		ticker := time.NewTicker(optimization.DefaultMonitorTickInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			monitorCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+			if _, monitorErr := autoController.RunMonitorPass(monitorCtx, time.Now().UTC()); monitorErr != nil {
+				log.Printf("optimization execution monitor pass failed: %v", monitorErr)
+			}
+			cancel()
+		}
+	}()
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -164,8 +190,8 @@ func requiredEnv(name string) string {
 	return value
 }
 
-func runOptimizationWorker(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, preparer *optimization.Preparer, workerID string, claimInterval time.Duration, claimBatch int, leaseDuration, leaseRenew time.Duration) {
-	claimAndRunOptimizationJobs(ctx, queue, store, service, preparer, workerID, claimBatch, leaseDuration, leaseRenew)
+func runOptimizationWorker(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, preparer *optimization.Preparer, autoController *optimization.AutoController, workerID string, claimInterval time.Duration, claimBatch int, leaseDuration, leaseRenew time.Duration) {
+	claimAndRunOptimizationJobs(ctx, queue, store, service, preparer, autoController, workerID, claimBatch, leaseDuration, leaseRenew)
 	ticker := time.NewTicker(claimInterval)
 	defer ticker.Stop()
 	for {
@@ -173,12 +199,12 @@ func runOptimizationWorker(ctx context.Context, queue *schedulerjob.Queue, store
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			claimAndRunOptimizationJobs(ctx, queue, store, service, preparer, workerID, claimBatch, leaseDuration, leaseRenew)
+			claimAndRunOptimizationJobs(ctx, queue, store, service, preparer, autoController, workerID, claimBatch, leaseDuration, leaseRenew)
 		}
 	}
 }
 
-func claimAndRunOptimizationJobs(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, preparer *optimization.Preparer, workerID string, claimBatch int, leaseDuration, leaseRenew time.Duration) {
+func claimAndRunOptimizationJobs(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, preparer *optimization.Preparer, autoController *optimization.AutoController, workerID string, claimBatch int, leaseDuration, leaseRenew time.Duration) {
 	claimCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	jobs, err := queue.Claim(claimCtx, workerID, claimBatch, leaseDuration, time.Now().UTC())
 	cancel()
@@ -191,7 +217,7 @@ func claimAndRunOptimizationJobs(ctx context.Context, queue *schedulerjob.Queue,
 			prepareScheduledOptimization(ctx, queue, preparer, job, leaseDuration)
 			continue
 		}
-		executeOptimizationJob(ctx, queue, store, service, job, leaseDuration, leaseRenew)
+		executeOptimizationJob(ctx, queue, store, service, autoController, job, leaseDuration, leaseRenew)
 	}
 }
 
@@ -227,7 +253,7 @@ func prepareScheduledOptimization(ctx context.Context, queue *schedulerjob.Queue
 	}
 }
 
-func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, job schedulerjob.Job, leaseDuration, leaseRenew time.Duration) {
+func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, store *optimization.PostgresStore, service *optimization.Service, autoController *optimization.AutoController, job schedulerjob.Job, leaseDuration, leaseRenew time.Duration) {
 	started, err := queue.Start(ctx, job, leaseDuration, time.Now().UTC())
 	if err != nil {
 		log.Printf("optimization job %s start failed: %v", job.JobID, err)
@@ -285,7 +311,31 @@ func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, stor
 		}
 		return
 	}
-	output := map[string]any{"optimizationRunId": request.OptimizationRunID, "recommendationId": recommendation.ID, "approvalState": recommendation.Approval}
+	dispatchCtx, dispatchCancel := context.WithTimeout(ctx, 20*time.Second)
+	dispatchOutcome, dispatchErr := autoController.TryDispatch(dispatchCtx, recommendation, time.Now().UTC())
+	dispatchCancel()
+	if dispatchErr != nil {
+		log.Printf("optimization job %s auto-control dispatch failed: %v", job.JobID, dispatchErr)
+	}
+	approvalState := recommendation.Approval
+	if dispatchOutcome.Dispatched {
+		approvalState = "APPROVED"
+	}
+	output := map[string]any{
+		"optimizationRunId": request.OptimizationRunID,
+		"recommendationId":  recommendation.ID,
+		"approvalState":     approvalState,
+		"autoDispatched":    dispatchOutcome.Dispatched,
+	}
+	if dispatchOutcome.SkipReason != "" {
+		output["autoDispatchSkipReason"] = dispatchOutcome.SkipReason
+	}
+	if dispatchOutcome.CommandIntentID != "" {
+		output["commandIntentId"] = dispatchOutcome.CommandIntentID
+	}
+	if dispatchOutcome.MonitorID != "" {
+		output["monitorId"] = dispatchOutcome.MonitorID
+	}
 	if err = queue.Complete(context.Background(), job, output, time.Now().UTC()); err != nil {
 		log.Printf("optimization job %s success finalization failed: %v", job.JobID, err)
 	}

@@ -254,6 +254,30 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		writeJSON(writer, http.StatusOK, state)
 		return http.StatusOK
 	}
+	if route.resource == "auto-control-lease" {
+		if len(request.URL.Query()) != 0 {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The Site auto control lease query does not accept parameters.", false)
+			return http.StatusBadRequest
+		}
+		state, err := server.store.GetSiteAutoControlLease(request.Context(), claims, route.parentID)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, state)
+		return http.StatusOK
+	}
+	if route.resource == "optimization-execution-monitors" {
+		if len(request.URL.Query()) != 0 {
+			writeProblem(writer, request, http.StatusBadRequest, "REGISTRY_QUERY_INVALID", "The optimization execution monitors query does not accept parameters.", false)
+			return http.StatusBadRequest
+		}
+		list, err := server.store.ListOptimizationExecutionMonitors(request.Context(), claims, route.parentID)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, list)
+		return http.StatusOK
+	}
 	if route.resource == "import-tariffs" {
 		query := request.URL.Query()
 		before, err := time.Parse(time.RFC3339Nano, query.Get("before"))
@@ -711,6 +735,14 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/control-mode", resource: "site-control-mode-write", parentID: segments[1], action: registryauth.ActionScheduleManage, write: true}, true
 	case method == http.MethodPut && len(segments) == 3 && segments[0] == "assets" && segments[2] == "control-lock":
 		return registryRoute{template: RegistryPathPrefix + "assets/{assetId}/control-lock", resource: "asset-control-lock-write", id: segments[1], action: registryauth.ActionScheduleManage, write: true}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "auto-control-lease":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/auto-control-lease", resource: "auto-control-lease", parentID: segments[1], action: registryauth.ActionSiteRead}, true
+	case method == http.MethodPut && len(segments) == 3 && segments[0] == "sites" && segments[2] == "auto-control-lease":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/auto-control-lease", resource: "auto-control-lease-write", parentID: segments[1], action: registryauth.ActionScheduleManage, write: true}, true
+	case method == http.MethodPost && len(segments) == 4 && segments[0] == "sites" && segments[2] == "auto-control-lease" && segments[3] == "revoke":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/auto-control-lease/revoke", resource: "auto-control-lease-revoke", parentID: segments[1], action: registryauth.ActionScheduleManage, write: true}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "optimization-execution-monitors":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/optimization-execution-monitors", resource: "optimization-execution-monitors", parentID: segments[1], action: registryauth.ActionSiteRead}, true
 	default:
 		return registryRoute{}, false
 	}
