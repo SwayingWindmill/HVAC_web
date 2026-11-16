@@ -45,6 +45,10 @@ func TestPostgresPresenceSweepAndCopiedReadings(t *testing.T) {
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.source_delivery_evidence WHERE source_partition = $1`, partition)
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.source_observations WHERE source_partition = $1`, partition)
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.source_positions WHERE source_id = $1`, sourceID)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.mqtt_runtime_events WHERE gateway_id LIKE '018f2e00-9700-%' OR source_id LIKE '018f2e00-9700-%'`)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.probe_offset_estimates WHERE pair_code = 'chw-sweep-test'`)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.probe_pair_windows WHERE pair_code = 'chw-sweep-test'`)
+		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.probe_pairs WHERE pair_code = 'chw-sweep-test'`)
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.telemetry_publication_outbox WHERE device_id::text LIKE '018f2e00-9700-%'`)
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.recovery_cursors WHERE subscription_id IN (SELECT subscription_id FROM telemetry_runtime.telemetry_subscriptions WHERE device_id::text LIKE '018f2e00-9700-%')`)
 		_, _ = admin.Exec(ctx, `DELETE FROM telemetry_runtime.telemetry_subscriptions WHERE device_id::text LIKE '018f2e00-9700-%'`)
@@ -313,5 +317,233 @@ INSERT INTO telemetry_runtime.freshness_policies (
 	reconciledNewKeyAgain, err := store.SweepDuePresence(ctx, base.Add(240*time.Second), 64)
 	if err != nil || reconciledNewKeyAgain != 0 {
 		t.Fatalf("reconciledNewKeyAgain=%d err=%v, want 0", reconciledNewKeyAgain, err)
+	}
+
+	// Q2: Freshness TTL expiry triggers SweepDuePresence once even when presence applicability is NOT_APPLICABLE,
+	// transitioning stored snapshot FRESH -> STALE without repeating on the next sweep.
+	if latestSilent.Values[0].Present == nil || latestSilent.Values[0].Present.Freshness != "FRESH" ||
+		latestSilent.Values[0].Present.FreshWithinSeconds == nil || *latestSilent.Values[0].Present.FreshWithinSeconds != 600 ||
+		latestSilent.Values[0].Present.UnchangedSince == nil {
+		t.Fatalf("expected active_energy_total FRESH with freshWithinSeconds=600 and unchangedSince before expiry, got %#v", latestSilent.Values[0].Present)
+	}
+	staleSweptAt601, err := store.SweepDuePresence(ctx, base.Add(601*time.Second), 64)
+	if err != nil || staleSweptAt601 < 1 {
+		t.Fatalf("staleSweptAt601=%d err=%v, want >= 1", staleSweptAt601, err)
+	}
+	staleSilent, err := store.LatestSnapshot(ctx, tenantA, deviceSilent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staleSilent.Values[0].Present == nil || staleSilent.Values[0].Present.Freshness != "STALE" {
+		t.Fatalf("expected active_energy_total transitioned to STALE after freshness sweep, got %#v", staleSilent.Values[0].Present)
+	}
+	staleSweptAgain, err := store.SweepDuePresence(ctx, base.Add(610*time.Second), 64)
+	if err != nil || staleSweptAgain != 0 {
+		t.Fatalf("staleSweptAgain=%d err=%v, want 0", staleSweptAgain, err)
+	}
+
+	// Q1: MQTT runtime connect/disconnect/LWT events enter presence_signals for the target Device only
+	// and never cascade-offline child devices.
+	gatewayDev := sweepDeviceID(4)
+	childDev := sweepDeviceID(5)
+	for _, item := range []struct {
+		id              string
+		acceptedSignals string
+	}{
+		{gatewayDev, "ARRAY['SOURCE_ACTIVITY', 'EXPLICIT_CONNECT', 'EXPLICIT_DISCONNECT']::text[]"},
+		{childDev, "ARRAY['SOURCE_ACTIVITY', 'EXPLICIT_CONNECT']::text[]"},
+	} {
+		if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.devices (device_id, tenant_id, site_id, presence_applicability, updated_at)
+VALUES ($1::uuid, $2::uuid, $3::uuid, 'APPLICABLE', $4)`, item.id, tenantA, siteA, base); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := admin.Exec(ctx, fmt.Sprintf(`
+INSERT INTO telemetry_runtime.presence_policies (
+  device_id, policy_revision, online_within_seconds, offline_after_seconds,
+  coverage_required, accepted_signal_types, max_future_clock_skew_seconds, max_source_lag_seconds, updated_at
+) VALUES ($1::uuid, 1, 600, 1800, true, %s, 60, 86400, $2)`, item.acceptedSignals), item.id, base); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.observation_coverage (device_id, available, continuous_since, reason_code, source_revision, updated_at)
+VALUES ($1::uuid, true, $2, NULL, 1, $3)`, item.id, base.Add(-time.Hour), base); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.freshness_policies (
+  device_id, telemetry_key, policy_revision, fresh_within_seconds, configured,
+  expected_sample_interval_seconds, value_type, expected_unit, quality_checks, updated_at
+) VALUES ($1::uuid, 'active_power', 1, 600, true, 60, 'NUMBER', 'kW', NULL, $2)`, childDev, base); err != nil {
+		t.Fatal(err)
+	}
+	send(childDev, sweepPointID(5), "active_power", "180", "kW", "TELEMETRY", base.Add(620*time.Second))
+
+	connectEvent := RuntimeEventEvidence{
+		TenantID: tenantA, SiteID: siteA, GatewayID: gatewayDev,
+		MessageID: sweepEventID(901), Sequence: 1, EventType: "GATEWAY_CONNECTED", SourceType: "GATEWAY", SourceID: gatewayDev,
+		Device:    &ResolvedDevice{TenantID: tenantA, SiteID: siteA, DeviceID: gatewayDev},
+		EventTime: base.Add(621 * time.Second), Severity: "INFO", Data: json.RawMessage(`{}`), ReceivedAt: base.Add(622 * time.Second),
+	}
+	if err := store.AcceptRuntimeEvent(ctx, connectEvent); err != nil {
+		t.Fatalf("gateway connect event: %v", err)
+	}
+	assertDevicePresence(gatewayDev, "APPLICABLE", "ONLINE", 1, 1, 1)
+
+	// Gateway LWT/disconnect transitions gatewayDev to OFFLINE immediately while leaving childDev ONLINE.
+	lwtEvent := RuntimeEventEvidence{
+		TenantID: tenantA, SiteID: siteA, GatewayID: gatewayDev,
+		MessageID: sweepEventID(902), Sequence: 2, EventType: "GATEWAY_DISCONNECTED", SourceType: "GATEWAY", SourceID: gatewayDev,
+		Device:    &ResolvedDevice{TenantID: tenantA, SiteID: siteA, DeviceID: gatewayDev},
+		EventTime: base.Add(625 * time.Second), Severity: "WARNING", Data: json.RawMessage(`{"reason":"lwt"}`), ReceivedAt: base.Add(626 * time.Second),
+	}
+	if err := store.AcceptRuntimeEvent(ctx, lwtEvent); err != nil {
+		t.Fatalf("gateway LWT event: %v", err)
+	}
+	// Duplicate delivery of the same messageId is idempotent.
+	if err := store.AcceptRuntimeEvent(ctx, lwtEvent); err != nil {
+		t.Fatalf("duplicate LWT event: %v", err)
+	}
+	assertDevicePresence(gatewayDev, "APPLICABLE", "OFFLINE", 2, 2, 2)
+	assertDevicePresence(childDev, "APPLICABLE", "ONLINE", 1, 1, 1)
+
+	// Device whose accepted_signal_types omits EXPLICIT_DISCONNECT records accepted=false and stays ONLINE.
+	ignoredDisconnect := RuntimeEventEvidence{
+		TenantID: tenantA, SiteID: siteA, GatewayID: gatewayDev,
+		MessageID: sweepEventID(903), Sequence: 3, EventType: "DEVICE_DISCONNECTED", SourceType: "DEVICE", SourceID: childDev,
+		EventTime: base.Add(630 * time.Second), Severity: "WARNING", Data: json.RawMessage(`{}`), ReceivedAt: base.Add(631 * time.Second),
+	}
+	if err := store.AcceptRuntimeEvent(ctx, ignoredDisconnect); err != nil {
+		t.Fatalf("ignored disconnect event: %v", err)
+	}
+	assertDevicePresence(childDev, "APPLICABLE", "ONLINE", 1, 1, 1)
+
+	// Gateway reconnect restores ONLINE.
+	reconnectEvent := RuntimeEventEvidence{
+		TenantID: tenantA, SiteID: siteA, GatewayID: gatewayDev,
+		MessageID: sweepEventID(904), Sequence: 4, EventType: "EXPLICIT_CONNECT", SourceType: "GATEWAY", SourceID: gatewayDev,
+		EventTime: base.Add(640 * time.Second), Severity: "INFO", Data: json.RawMessage(`{}`), ReceivedAt: base.Add(641 * time.Second),
+	}
+	if err := store.AcceptRuntimeEvent(ctx, reconnectEvent); err != nil {
+		t.Fatalf("gateway reconnect event: %v", err)
+	}
+	assertDevicePresence(gatewayDev, "APPLICABLE", "ONLINE", 3, 3, 3)
+
+	// Q3: Probe-offset folding no longer runs inside AcceptObservation and instead completes via SweepProbeOffsets.
+	probeDev := sweepDeviceID(6)
+	if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.devices (device_id, tenant_id, site_id, presence_applicability, updated_at)
+VALUES ($1::uuid, $2::uuid, $3::uuid, 'NOT_APPLICABLE', $4)`, probeDev, tenantA, siteA, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.presence_policies (
+  device_id, policy_revision, online_within_seconds, offline_after_seconds,
+  coverage_required, accepted_signal_types, max_future_clock_skew_seconds, max_source_lag_seconds, updated_at
+) VALUES ($1::uuid, 1, 600, 1800, false, ARRAY['SOURCE_ACTIVITY']::text[], 60, 86400, $2)`, probeDev, base); err != nil {
+		t.Fatal(err)
+	}
+	for _, pt := range []struct {
+		key       string
+		valueType string
+		unit      *string
+	}{
+		{"chw_supply_temperature", "NUMBER", ptrString("Cel")},
+		{"chw_return_temperature", "NUMBER", ptrString("Cel")},
+		{"chw_pump_running", "BOOLEAN", nil},
+		{"chiller_run_state", "STRING", nil},
+	} {
+		if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.freshness_policies (
+  device_id, telemetry_key, policy_revision, fresh_within_seconds, configured,
+  expected_sample_interval_seconds, value_type, expected_unit, quality_checks, updated_at
+) VALUES ($1::uuid, $2, 1, 1800, true, 180, $3, $4, NULL, $5)`, probeDev, pt.key, pt.valueType, pt.unit, base); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pairConfigJSON, err := json.Marshal(map[string]any{
+		"supply":         map[string]any{"deviceId": probeDev, "key": "chw_supply_temperature"},
+		"return":         map[string]any{"deviceId": probeDev, "key": "chw_return_temperature"},
+		"pumps":          []map[string]any{{"deviceId": probeDev, "key": "chw_pump_running", "equals": "true"}},
+		"chillers":       []map[string]any{{"deviceId": probeDev, "key": "chiller_run_state", "equals": "RUNNING"}},
+		"stableBandK":    0.10,
+		"minimumMinutes": 10,
+		"minimumSamples": 4,
+		"maxGapMinutes":  15,
+		"offsetAlarmK":   0.20,
+		"driftAlarmK":    0.10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.probe_pairs (site_id, pair_code, config, updated_at)
+VALUES ($1::uuid, 'chw-sweep-test', $2::jsonb, $3)`, siteA, pairConfigJSON, base); err != nil {
+		t.Fatal(err)
+	}
+	sendProbe := func(pointSuffix int, key, rawValue, valueType string, unit *string, pointType string, at time.Time) {
+		t.Helper()
+		nextOffset++
+		receipt, err := store.AcceptObservation(ctx, ObservationCandidate{
+			SourceID:           sourceID,
+			SourcePath:         SourcePathPush,
+			ExternalEntityType: "DEVICE",
+			ExternalID:         probeDev,
+			Device:             &ResolvedDevice{TenantID: tenantA, SiteID: siteA, DeviceID: probeDev},
+			Point:              &ResolvedPoint{PointID: sweepPointID(pointSuffix), PointType: pointType, ValueType: valueType, Unit: unit, PointRevision: 1},
+			TelemetryKey:       key,
+			Value:              json.RawMessage(rawValue),
+			ValueType:          valueType,
+			Unit:               unit,
+			SampledAt:          at,
+			ReceivedAt:         at,
+			Position:           SourcePosition{Partition: partition, Offset: nextOffset, EventID: sweepEventID(int(nextOffset))},
+		})
+		if err != nil || receipt.Status != ObservationAccepted {
+			t.Fatalf("sendProbe %s failed: receipt=%#v err=%v", key, receipt, err)
+		}
+	}
+	probeBase := base.Add(700 * time.Second)
+	for step := 0; step < 5; step++ {
+		at := probeBase.Add(time.Duration(step) * 3 * time.Minute)
+		sendProbe(6, "chw_pump_running", "true", "BOOLEAN", nil, "STATE", at)
+		sendProbe(7, "chiller_run_state", `"IDLE"`, "STRING", nil, "STATE", at)
+		sendProbe(8, "chw_supply_temperature", "7.0", "NUMBER", ptrString("Cel"), "TELEMETRY", at)
+		sendProbe(9, "chw_return_temperature", "7.25", "NUMBER", ptrString("Cel"), "TELEMETRY", at)
+		if step == 0 {
+			var windowCount int
+			if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.probe_pair_windows WHERE pair_code = 'chw-sweep-test'`).Scan(&windowCount); err != nil {
+				t.Fatal(err)
+			}
+			if windowCount != 0 {
+				t.Fatalf("AcceptObservation unexpectedly folded probe window synchronously: %d", windowCount)
+			}
+		}
+		created, err := store.SweepProbeOffsets(ctx, at.Add(time.Second))
+		if err != nil || created != 0 {
+			t.Fatalf("step %d SweepProbeOffsets=%d err=%v, want 0", step, created, err)
+		}
+	}
+	closeAt := probeBase.Add(15 * time.Minute)
+	sendProbe(7, "chiller_run_state", `"RUNNING"`, "STRING", nil, "STATE", closeAt)
+	created, err := store.SweepProbeOffsets(ctx, closeAt.Add(time.Second))
+	if err != nil || created != 1 {
+		t.Fatalf("closing SweepProbeOffsets=%d err=%v, want 1", created, err)
+	}
+	probeSnap, err := store.LatestSnapshot(ctx, tenantA, probeDev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundOffset := false
+	for _, value := range probeSnap.Values {
+		if value.Present != nil && value.Present.Key == "chw_supply_temperature" && len(value.Present.ProbeOffsets) == 1 &&
+			value.Present.ProbeOffsets[0].Alarm != nil && *value.Present.ProbeOffsets[0].Alarm == "OFFSET" &&
+			value.Present.Health != nil && len(value.Present.Health.Reasons) > 0 {
+			foundOffset = true
+		}
+	}
+	if !foundOffset {
+		t.Fatalf("expected PROBE_OFFSET suggestion reflected on snapshot after SweepProbeOffsets, got %#v", probeSnap.Values)
 	}
 }

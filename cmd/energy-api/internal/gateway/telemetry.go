@@ -821,6 +821,14 @@ func validPresentState(value s2telemetryapi.TelemetryPresentState) bool {
 	if _, err := time.Parse(time.RFC3339Nano, string(value.ReceivedAt)); err != nil {
 		return false
 	}
+	if value.UnchangedSince != nil {
+		if _, err := time.Parse(time.RFC3339Nano, string(*value.UnchangedSince)); err != nil {
+			return false
+		}
+	}
+	if value.FreshWithinSeconds != nil && *value.FreshWithinSeconds < 1 {
+		return false
+	}
 	if value.Health != nil && !validPointHealth(*value.Health) {
 		return false
 	}

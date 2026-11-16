@@ -85,6 +85,7 @@ type RuntimeEventEvidence struct {
 	EventType  string          `json:"eventType"`
 	SourceType string          `json:"sourceType"`
 	SourceID   string          `json:"sourceId"`
+	Device     *ResolvedDevice `json:"device,omitempty"`
 	EventTime  string          `json:"eventTime"`
 	Severity   string          `json:"severity"`
 	Data       json.RawMessage `json:"data"`

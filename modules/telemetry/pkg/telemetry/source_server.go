@@ -249,17 +249,18 @@ func deterministicHistoricalReplayEventID(datasetID, partition string, offset in
 }
 
 type mqttRuntimeEventRequest struct {
-	TenantID   string          `json:"tenantId"`
-	SiteID     string          `json:"siteId"`
-	GatewayID  string          `json:"gatewayId"`
-	MessageID  string          `json:"messageId"`
-	Sequence   int64           `json:"sequence"`
-	EventType  string          `json:"eventType"`
-	SourceType string          `json:"sourceType"`
-	SourceID   string          `json:"sourceId"`
-	EventTime  string          `json:"eventTime"`
-	Severity   string          `json:"severity"`
-	Data       json.RawMessage `json:"data"`
+	TenantID   string                 `json:"tenantId"`
+	SiteID     string                 `json:"siteId"`
+	GatewayID  string                 `json:"gatewayId"`
+	MessageID  string                 `json:"messageId"`
+	Sequence   int64                  `json:"sequence"`
+	EventType  string                 `json:"eventType"`
+	SourceType string                 `json:"sourceType"`
+	SourceID   string                 `json:"sourceId"`
+	Device     *resolvedDeviceRequest `json:"device"`
+	EventTime  string                 `json:"eventTime"`
+	Severity   string                 `json:"severity"`
+	Data       json.RawMessage        `json:"data"`
 }
 
 func (h *handler) handleMQTTRuntimeEvent(writer http.ResponseWriter, request *http.Request) {
@@ -284,8 +285,19 @@ func (h *handler) handleMQTTRuntimeEvent(writer http.ResponseWriter, request *ht
 		MessageID: strings.TrimSpace(input.MessageID), Sequence: input.Sequence, EventType: strings.TrimSpace(input.EventType), SourceType: strings.TrimSpace(input.SourceType), SourceID: strings.TrimSpace(input.SourceID),
 		EventTime: eventTime.UTC(), Severity: strings.ToUpper(strings.TrimSpace(input.Severity)), Data: append(json.RawMessage(nil), input.Data...), ReceivedAt: h.now().UTC(),
 	}
+	if device := input.Device; device != nil {
+		evidence.Device = &ResolvedDevice{
+			TenantID: strings.ToLower(strings.TrimSpace(device.TenantID)),
+			SiteID:   strings.ToLower(strings.TrimSpace(device.SiteID)),
+			DeviceID: strings.ToLower(strings.TrimSpace(device.DeviceID)),
+		}
+	}
 	if err = h.mqttEvidenceAcceptor.AcceptRuntimeEvent(request.Context(), evidence); err != nil {
-		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT runtime event request was rejected.", false)
+		if errors.Is(err, ErrRuntimeEventInvalid) {
+			writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT runtime event request was rejected.", false)
+			return
+		}
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The MQTT runtime event path is temporarily unavailable.", true)
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"accepted": true, "messageId": evidence.MessageID})

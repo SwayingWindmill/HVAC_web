@@ -42,6 +42,7 @@ type LatestObservation struct {
 	Unit           *string
 	SampledAt      time.Time
 	ReceivedAt     time.Time
+	UnchangedSince *time.Time
 	Quality        telemetryapi.TelemetryQuality
 	QualityReasons []telemetryapi.QualityReasonCode
 	Health         *PointHealth
@@ -138,6 +139,53 @@ func ProjectSnapshot(canonical telemetryapi.DeviceObservationSnapshot, requested
 	projected.TelemetryReadiness = deriveReadiness(projected.Values)
 	projected.DisplayState = deriveDisplay(projected.Presence.Applicability, projected.EvaluationAvailability, projected.Presence.CurrentState, projected.TelemetryReadiness)
 	return projected
+}
+
+// RefreshSnapshotAt projects time-elapsed freshness downgrades onto an already-committed
+// snapshot in memory without mutating businessRevision or writing to storage.
+func RefreshSnapshotAt(snapshot telemetryapi.DeviceObservationSnapshot, now time.Time) telemetryapi.DeviceObservationSnapshot {
+	if now.IsZero() || len(snapshot.Values) == 0 {
+		return snapshot
+	}
+	now = now.UTC()
+	var values []telemetryapi.TelemetryKeyState
+	downgraded := false
+	for index, state := range snapshot.Values {
+		present := state.Present
+		if present == nil || present.Freshness != string(telemetryapi.TelemetryFreshnessFresh) || present.FreshWithinSeconds == nil || *present.FreshWithinSeconds < 1 {
+			continue
+		}
+		sampledAt, err := time.Parse(time.RFC3339Nano, string(present.SampledAt))
+		if err != nil || now.Sub(sampledAt.UTC()) <= time.Duration(*present.FreshWithinSeconds)*time.Second {
+			continue
+		}
+		if values == nil {
+			values = append([]telemetryapi.TelemetryKeyState(nil), snapshot.Values...)
+		}
+		updated := *present
+		updated.Freshness = string(telemetryapi.TelemetryFreshnessStale)
+		if present.Health != nil {
+			reasons := make([]QualityReason, len(present.Health.Reasons))
+			for reasonIndex, code := range present.Health.Reasons {
+				reasons[reasonIndex] = QualityReason(code)
+			}
+			applied := ApplyFreshness(PointHealth{Status: present.Health.Status, Score: present.Health.Score, Reasons: reasons}, false)
+			updated.Health = &telemetryapi.TelemetryPointHealth{
+				Status:  applied.Status,
+				Score:   applied.Score,
+				Reasons: append([]telemetryapi.QualityReasonCode(nil), present.Health.Reasons...),
+			}
+		}
+		values[index] = telemetryapi.TelemetryKeyState{Present: &updated}
+		downgraded = true
+	}
+	if !downgraded {
+		return snapshot
+	}
+	snapshot.Values = values
+	snapshot.TelemetryReadiness = deriveReadiness(snapshot.Values)
+	snapshot.DisplayState = deriveDisplay(snapshot.Presence.Applicability, snapshot.EvaluationAvailability, snapshot.Presence.CurrentState, snapshot.TelemetryReadiness)
+	return snapshot
 }
 
 func evaluatePresence(facts DeviceFacts, evaluatedAt time.Time) (telemetryapi.PresenceSnapshot, telemetryapi.EvaluationAvailability, []telemetryapi.AvailabilityReasonCode) {
@@ -239,9 +287,19 @@ func evaluateKey(key string, policy FreshnessPolicy, latest LatestObservation, r
 	if err != nil {
 		return telemetryapi.TelemetryKeyState{}, err
 	}
+	var unchangedSince *telemetryapi.Instant
+	if latest.UnchangedSince != nil && !latest.UnchangedSince.IsZero() {
+		ts := instant(*latest.UnchangedSince)
+		unchangedSince = &ts
+	}
+	var freshWithinSeconds *int
+	if seconds := int(policy.FreshFor / time.Second); seconds >= 1 {
+		freshWithinSeconds = &seconds
+	}
 	return telemetryapi.TelemetryKeyState{Present: &telemetryapi.TelemetryPresentState{
 		Key: telemetryapi.TelemetryKey(key), State: "PRESENT", Value: value, ValueType: latest.ValueType,
 		Unit: cloneString(latest.Unit), SampledAt: instant(latest.SampledAt), ReceivedAt: instant(latest.ReceivedAt),
+		UnchangedSince: unchangedSince, FreshWithinSeconds: freshWithinSeconds,
 		Freshness: string(freshness), Quality: quality, QualityReasons: qualityReasons, PolicyRevision: policyRevision,
 		Health: health, Measurement: measurement, ProbeOffsets: probeOffsets,
 	}}, nil

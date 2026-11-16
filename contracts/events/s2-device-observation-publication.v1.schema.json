@@ -133,6 +133,8 @@
         "unit": { "type": ["string", "null"], "maxLength": 64 },
         "sampledAt": { "$ref": "#/$defs/Instant" },
         "receivedAt": { "$ref": "#/$defs/Instant" },
+        "unchangedSince": { "$ref": "#/$defs/Instant" },
+        "freshWithinSeconds": { "type": "integer", "minimum": 1 },
         "freshness": { "type": "string", "enum": ["FRESH", "STALE"] },
         "quality": { "$ref": "#/$defs/TelemetryQuality" },
         "qualityReasons": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/QualityReasonCode" } },

@@ -103,6 +103,39 @@ func TestProcessorRetriesWhenQuarantineEvidenceCannotBeKept(t *testing.T) {
 	}
 }
 
+func TestProcessorResolvesEventDeviceStrictlyWithoutGatewayCascade(t *testing.T) {
+	telemetry := &fakeTelemetry{}
+	processor := newTestProcessor(t, newFakeIdentities(), telemetry)
+
+	gatewayEvent := []byte(`{"schemaVersion":"2.0","messageId":"` + testMessageID + `","gatewayId":"` + testGatewayB + `","timestamp":1786352400000,"sequence":1,"payload":{"eventType":"GATEWAY_DISCONNECTED","sourceType":"GATEWAY","sourceId":"` + testGatewayB + `","eventTime":1786352399000,"severity":"WARNING","data":{"reason":"lwt"}}}`)
+	if _, err := processor.Process(context.Background(), "hvac/v1/"+testGatewayB+"/up/event", gatewayEvent); err != nil {
+		t.Fatal(err)
+	}
+
+	deviceEvent := []byte(`{"schemaVersion":"2.0","messageId":"` + messageID(2) + `","gatewayId":"` + testGatewayB + `","timestamp":1786352401000,"sequence":2,"payload":{"eventType":"DEVICE_OFFLINE","sourceType":"DEVICE","sourceId":"METER-01","eventTime":1786352400000,"severity":"WARNING","data":{}}}`)
+	if _, err := processor.Process(context.Background(), "hvac/v1/"+testGatewayB+"/up/event", deviceEvent); err != nil {
+		t.Fatal(err)
+	}
+
+	unknownEvent := []byte(`{"schemaVersion":"2.0","messageId":"` + messageID(3) + `","gatewayId":"` + testGatewayB + `","timestamp":1786352402000,"sequence":3,"payload":{"eventType":"DEVICE_OFFLINE","sourceType":"DEVICE","sourceId":"UNKNOWN-METER","eventTime":1786352401000,"severity":"INFO","data":{}}}`)
+	if _, err := processor.Process(context.Background(), "hvac/v1/"+testGatewayB+"/up/event", unknownEvent); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(telemetry.events) != 3 {
+		t.Fatalf("events=%#v", telemetry.events)
+	}
+	if telemetry.events[0].Device == nil || telemetry.events[0].Device.DeviceID != testGatewayB || telemetry.events[0].Device.SiteID != testSiteB {
+		t.Fatalf("gateway event device=%#v", telemetry.events[0].Device)
+	}
+	if telemetry.events[1].Device == nil || telemetry.events[1].Device.DeviceID != testDeviceID || telemetry.events[1].Device.SiteID != testSiteB {
+		t.Fatalf("device event device=%#v", telemetry.events[1].Device)
+	}
+	if telemetry.events[2].Device != nil {
+		t.Fatalf("unknown device event unexpectedly resolved: %#v", telemetry.events[2].Device)
+	}
+}
+
 func newTestProcessor(t *testing.T, identities IdentityResolver, telemetry RuntimeClient) *Processor {
 	t.Helper()
 	processor, err := NewProcessor(identities, telemetry)

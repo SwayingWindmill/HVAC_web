@@ -327,7 +327,7 @@ ORDER BY telemetry_key
 	rows.Close()
 
 	rows, err = tx.Query(ctx, `
-SELECT telemetry_key, value, value_type, unit, sampled_at, received_at, quality, quality_reasons,
+SELECT telemetry_key, value, value_type, unit, sampled_at, received_at, unchanged_since, quality, quality_reasons,
        health_status, health_score, health_reasons, measurement
 FROM telemetry_runtime.latest_accepted_telemetry
 WHERE device_id = $1::uuid
@@ -340,15 +340,20 @@ ORDER BY telemetry_key
 		var key string
 		var value []byte
 		var observation LatestObservation
+		var unchangedSince *time.Time
 		var quality string
 		var reasons []string
 		var healthStatus *string
 		var healthScore *int16
 		var healthReasons []string
 		var measurement []byte
-		if err := rows.Scan(&key, &value, &observation.ValueType, &observation.Unit, &observation.SampledAt, &observation.ReceivedAt, &quality, &reasons, &healthStatus, &healthScore, &healthReasons, &measurement); err != nil {
+		if err := rows.Scan(&key, &value, &observation.ValueType, &observation.Unit, &observation.SampledAt, &observation.ReceivedAt, &unchangedSince, &quality, &reasons, &healthStatus, &healthScore, &healthReasons, &measurement); err != nil {
 			rows.Close()
 			return DeviceFacts{}, fmt.Errorf("scan latest accepted telemetry: %w", err)
+		}
+		if unchangedSince != nil && !unchangedSince.IsZero() {
+			sinceUTC := unchangedSince.UTC()
+			observation.UnchangedSince = &sinceUTC
 		}
 		observation.Value = append(json.RawMessage(nil), value...)
 		observation.Quality = telemetryapi.TelemetryQuality(quality)

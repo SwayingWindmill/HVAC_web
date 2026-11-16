@@ -66,6 +66,7 @@ func main() {
 	defer retentionCancel()
 	go runRuntimeRetention(retentionContext, store, logger)
 	go runPresenceSweep(retentionContext, store, time.Minute, logger)
+	go runProbeOffsetSweep(retentionContext, store, 5*time.Second, logger)
 
 	latestCache, latestRelay, latestContext, latestCancel, err := loadLatestCache(store)
 	if err != nil {
@@ -660,6 +661,39 @@ func runPresenceSweep(ctx context.Context, sweeper presenceSweeper, interval tim
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		}
+	}
+}
+
+type probeOffsetSweeper interface {
+	SweepProbeOffsets(ctx context.Context, evaluatedAt time.Time) (int, error)
+}
+
+// runProbeOffsetSweep periodically folds idle supply/return probe-offset windows outside
+// the synchronous observation write path.
+func runProbeOffsetSweep(ctx context.Context, sweeper probeOffsetSweeper, interval time.Duration, logger *slog.Logger) {
+	if sweeper == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sweepCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			estimated, err := sweeper.SweepProbeOffsets(sweepCtx, time.Now().UTC())
+			cancel()
+			switch {
+			case err != nil && ctx.Err() == nil:
+				logger.Warn("telemetry_probe_offset_sweep_failed", "error_code", "TELEMETRY_PROBE_OFFSET_SWEEP_FAILED")
+			case estimated > 0:
+				logger.Info("telemetry_probe_offsets_estimated", "estimate_count", estimated)
+			}
 		}
 	}
 }

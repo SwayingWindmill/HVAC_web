@@ -9,6 +9,11 @@
 
 #### 变更
 
+- 将遥测在离线状态收敛为单一事实源，并降低能耗计算对档案服务的逐条查询开销：
+  - MQTT 上线、断线与遗嘱事件（`LWT`）在 `modules/connectivity` 解析出目标设备后，统一写入 `telemetry_runtime.presence_signals` 并仅重算该设备自身快照，网关离线不再级联把下属子设备标为离线（ADR 0002、ADR 0015）。
+  - 遥测在读与定时巡检共同收口冻结的「最新」快照：`TelemetryPresentState` 新增可选的 `unchangedSince` 与 `freshWithinSeconds`，`SweepDuePresence` 定时重算已过鲜活窗的设备，`readLatestSnapshot` 在读侧通过 `RefreshSnapshotAt` 实时投影过期状态且不改写库内缓存与 `businessRevision`（ADR 0003）。
+  - 告警计算优先读取遥测快照提供的 `unchangedSince`（仅在缺失时回退快照对比），并把探头偏移（`probeOffsets`）折叠从实时接收路径移至 `telemetry-worker` 后台周期执行（`SweepProbeOffsets`）。
+  - 注册表内部接口将逐点 `/meter-bindings/resolve` 替换为按站点批量读取的 `GET /internal/v1/registry/sites/{siteId}/meter-bindings`（保留站点行级隔离），`modules/energy` 提取纯匹配函数 `MatchMeterBindings` 与带 30 秒缓存及未命中单次刷新保护的 `coreclient.Resolver`，一次站点级拉取即可服务整批读数。
 - 将控制指令校验、三档控制退出、资产控制锁、检修窗口与水路联锁规则统一收拢至控制服务 `ControlAuthority`（ADR 0032），新增迁移 `008_command_precondition_mode.sql` 以显式 `EMERGENCY_BYPASS` + `bypass_reason` 取代急停断采时的虚假遥测拼接，并由 `ClaimDispatch` 在下发 MQTT 前复用同一套 `EvaluateControlGate` 安全闸门。
 - 平台网关 `cmd/energy-api/internal/gateway/{command.go, control_exit.go}` 收薄为会话、CSRF、限流、边缘两步验证与 `X-Command-Control-Context` 签名转发层，`route-ownership.v1.json` 升级至第 50 版并将 `/api/v1/sites/{siteId}/control-{state,mode,shutdown}` 与 `/api/v1/assets/{assetId}/control-lock` 划归 `command-service`；同步移除派发器 `dynamic_safety.go` 与连接层 `command_route.go` 的重复安全策略分支。
 

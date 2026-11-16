@@ -22,7 +22,7 @@ type RegistryStore interface {
 	ListDevices(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[Device], error)
 	GetDevice(context.Context, registryauth.GrantClaims, string) (Device, error)
 	ListDeviceBindings(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[DeviceBinding], error)
-	ResolveMeterBinding(context.Context, registryauth.GrantClaims, string, MeterBindingResolveRequest) (MeterBindingResolution, error)
+	ListSiteMeterBindings(context.Context, registryauth.GrantClaims, string) (SiteMeterBindings, error)
 	GetSiteTotalElectricitySources(context.Context, registryauth.GrantClaims, string) (SiteTotalElectricitySources, error)
 	ListSpaceChildren(context.Context, registryauth.GrantClaims, string, string, PageRequest) (PageResult[Space], error)
 	ListDevicePoints(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[TelemetryPoint], error)
@@ -374,11 +374,14 @@ LIMIT $5
 	return result, nil
 }
 
-func (store *PostgresStore) ResolveMeterBinding(ctx context.Context, claims registryauth.GrantClaims, siteID string, input MeterBindingResolveRequest) (MeterBindingResolution, error) {
-	if !validUUIDv7(siteID) || !validUUIDv7(input.DeviceID) || !validUUIDv7(input.PointID) || input.SampledAt.IsZero() {
-		return MeterBindingResolution{}, ErrInvalidBindingResolution
+func (store *PostgresStore) ListSiteMeterBindings(ctx context.Context, claims registryauth.GrantClaims, siteID string) (SiteMeterBindings, error) {
+	if !validUUIDv7(siteID) {
+		return SiteMeterBindings{}, ErrInvalidBindingResolution
 	}
-	var matches []MeterBindingResolution
+	result := SiteMeterBindings{
+		SiteID: siteID,
+		Items:  []MeterBindingResolution{},
+	}
 	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
 		rows, err := transaction.Query(ctx, `
 SELECT mb.tenant_id::text,
@@ -406,17 +409,13 @@ JOIN core_registry.energy_nodes AS fn ON fn.id = edge.from_node_id
 JOIN core_registry.energy_nodes AS tn ON tn.id = edge.to_node_id
 CROSS JOIN LATERAL (SELECT tn.node_type = 'LOAD' AND tn.device_id IS NOT NULL AND fn.node_type <> 'GRID' AS branch) AS scope
 WHERE mb.site_id = $1::uuid
-  AND mb.device_id = $2::uuid
-  AND mb.point_id = $3::uuid
   AND mb.point_type = 'COUNTER'
   AND mb.meter_role = 'PRIMARY'
   AND mb.status IN ('RELEASED', 'ACTIVE')
-  AND mb.effective_from <= $4
-  AND (mb.effective_to IS NULL OR $4 < mb.effective_to)
-ORDER BY mb.effective_from DESC, mb.version DESC, mb.id
-`, siteID, input.DeviceID, input.PointID, input.SampledAt.UTC())
+ORDER BY mb.device_id ASC, mb.point_id ASC, mb.effective_from DESC, mb.version DESC, mb.id ASC
+`, siteID)
 		if err != nil {
-			return fmt.Errorf("query Core meter binding resolution: %w", err)
+			return fmt.Errorf("query Core site meter bindings: %w", err)
 		}
 		defer rows.Close()
 		for rows.Next() {
@@ -427,7 +426,7 @@ ORDER BY mb.effective_from DESC, mb.version DESC, mb.id
 				&item.BindingVersion, &item.BindingRevision, &item.EnergyTypeID, &item.EnergyType, &item.MeterRole, &item.Direction,
 				&item.DeviceID, &item.PointID, &item.PointType, &item.EffectiveFrom, &item.EffectiveTo, &item.AccountingScope, &loadDeviceID,
 			); err != nil {
-				return fmt.Errorf("scan Core meter binding resolution: %w", err)
+				return fmt.Errorf("scan Core site meter binding: %w", err)
 			}
 			if loadDeviceID != nil {
 				item.LoadDeviceID = *loadDeviceID
@@ -437,22 +436,14 @@ ORDER BY mb.effective_from DESC, mb.version DESC, mb.id
 				value := item.EffectiveTo.UTC()
 				item.EffectiveTo = &value
 			}
-			matches = append(matches, item)
+			result.Items = append(result.Items, item)
 		}
 		return rows.Err()
 	})
 	if err != nil {
-		return MeterBindingResolution{}, err
+		return SiteMeterBindings{}, err
 	}
-	switch len(matches) {
-	case 0:
-		return MeterBindingResolution{Status: "NO_MATCH"}, nil
-	case 1:
-		matches[0].Status = "MATCH"
-		return matches[0], nil
-	default:
-		return MeterBindingResolution{Status: "AMBIGUOUS"}, nil
-	}
+	return result, nil
 }
 
 type rowScanner interface {

@@ -335,6 +335,86 @@ func TestCopiedReadingsDoNotKeepDeviceOnlineAndSweepStabilizesAtOffline(t *testi
 	}
 }
 
+func TestEvaluateCanonicalEmitsUnchangedSinceAndRefreshSnapshotAtProjectsStale(t *testing.T) {
+	t0 := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	heldSince := t0.Add(-20 * time.Minute)
+	facts := DeviceFacts{
+		DeviceID:      deviceA,
+		TenantID:      tenantA,
+		SiteID:        siteA,
+		Applicability: telemetryapi.PresenceApplicabilityApplicable,
+		PresencePolicy: &PresencePolicy{
+			Revision: 1, OnlineWithin: 3 * time.Minute, OfflineAfter: 6 * time.Minute,
+		},
+		Coverage:        Coverage{Available: true, ContinuousSince: ptrTime(t0.Add(-time.Hour))},
+		PresenceSignals: []PresenceSignal{{Type: "SOURCE_ACTIVITY", ObservedAt: t0}},
+		FreshnessPolicies: map[string]FreshnessPolicy{
+			"zone.humidity":    {Revision: 1, FreshFor: 10 * time.Minute, Configured: true},
+			"zone.temperature": {Revision: 1, FreshFor: 5 * time.Minute, Configured: true},
+		},
+		Latest: map[string]LatestObservation{
+			"zone.temperature": {
+				Value: json.RawMessage(`22.5`), ValueType: "NUMBER", Unit: ptrString("Cel"),
+				SampledAt: t0, ReceivedAt: t0.Add(time.Second), UnchangedSince: ptrTime(heldSince),
+				Quality: telemetryapi.TelemetryQualityGood,
+				Health:  &PointHealth{Status: HealthHealthy, Score: 100},
+			},
+			"zone.humidity": {
+				Value: json.RawMessage(`55`), ValueType: "NUMBER", Unit: ptrString("%RH"),
+				SampledAt: t0, ReceivedAt: t0.Add(time.Second), UnchangedSince: ptrTime(t0),
+				Quality: telemetryapi.TelemetryQualityPartial,
+				QualityReasons: []telemetryapi.QualityReasonCode{
+					telemetryapi.QualityReasonCodeLowConfidence,
+				},
+				Health: &PointHealth{
+					Status:  HealthSuspect,
+					Score:   40,
+					Reasons: []QualityReason{QualityReasonLowConfidence},
+				},
+			},
+		},
+	}
+
+	eval, err := EvaluateCanonical(facts, 4, t0.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	temp := eval.Snapshot.Values[1].Present
+	hum := eval.Snapshot.Values[0].Present
+	if temp == nil || temp.UnchangedSince == nil || *temp.UnchangedSince != instant(heldSince) || temp.FreshWithinSeconds == nil || *temp.FreshWithinSeconds != 300 {
+		t.Fatalf("temperature present=%#v", temp)
+	}
+	if hum == nil || hum.FreshWithinSeconds == nil || *hum.FreshWithinSeconds != 600 || hum.Freshness != "FRESH" {
+		t.Fatalf("humidity present=%#v", hum)
+	}
+
+	stillFresh := RefreshSnapshotAt(eval.Snapshot, t0.Add(4*time.Minute))
+	if stillFresh.Values[1].Present.Freshness != "FRESH" || stillFresh.BusinessRevision != 4 {
+		t.Fatalf("stillFresh=%#v", stillFresh)
+	}
+
+	expiredTemp := RefreshSnapshotAt(eval.Snapshot, t0.Add(6*time.Minute))
+	if expiredTemp.BusinessRevision != 4 || expiredTemp.EvaluatedAt != eval.Snapshot.EvaluatedAt {
+		t.Fatalf("read projection mutated revision/evaluatedAt: rev=%d evaluatedAt=%s", expiredTemp.BusinessRevision, expiredTemp.EvaluatedAt)
+	}
+	if expiredTemp.Values[1].Present.Freshness != "STALE" || expiredTemp.Values[1].Present.Health.Status != HealthStale || expiredTemp.Values[1].Present.Health.Score != 20 {
+		t.Fatalf("expired temperature=%#v", expiredTemp.Values[1].Present)
+	}
+	if expiredTemp.Values[0].Present.Freshness != "FRESH" || expiredTemp.TelemetryReadiness != telemetryapi.TelemetryReadinessDegraded || expiredTemp.DisplayState == nil || *expiredTemp.DisplayState != telemetryapi.DeviceDisplayStateStale {
+		t.Fatalf("expiredTemp readiness=%s display=%v hum=%#v", expiredTemp.TelemetryReadiness, expiredTemp.DisplayState, expiredTemp.Values[0].Present)
+	}
+	// Original snapshot slice remains unmutated.
+	if eval.Snapshot.Values[1].Present.Freshness != "FRESH" {
+		t.Fatalf("original cached snapshot mutated: %#v", eval.Snapshot.Values[1].Present)
+	}
+
+	// SUSPECT/BAD point keeps HealthStatus=SUSPECT even when Freshness transitions to STALE.
+	bothExpired := RefreshSnapshotAt(eval.Snapshot, t0.Add(11*time.Minute))
+	if bothExpired.Values[0].Present.Freshness != "STALE" || bothExpired.Values[0].Present.Health.Status != HealthSuspect || bothExpired.Values[0].Present.Health.Score != 40 {
+		t.Fatalf("suspect expired humidity=%#v", bothExpired.Values[0].Present)
+	}
+}
+
 func cloneFacts(value DeviceFacts) DeviceFacts {
 	copyValue := value
 	copyValue.PresenceSignals = append([]PresenceSignal(nil), value.PresenceSignals...)

@@ -190,13 +190,40 @@ func (processor *Processor) processTelemetry(ctx context.Context, gateway Gatewa
 
 func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, envelope EventEnvelope) (ProcessingResult, error) {
 	event := envelope.Payload
+	sourceType := strings.TrimSpace(event.SourceType)
+	sourceID := strings.TrimSpace(event.SourceID)
+	resolved, err := processor.resolveEventDevice(ctx, gateway, sourceType, sourceID)
+	if err != nil {
+		return ProcessingResult{}, err
+	}
 	if err := processor.runtime.AcceptRuntimeEvent(ctx, RuntimeEventEvidence{
 		TenantID: gateway.TenantID, SiteID: gateway.SiteID, GatewayID: gateway.ID,
 		MessageID: envelope.MessageID, Sequence: int64(envelope.Sequence), EventType: strings.TrimSpace(event.EventType),
-		SourceType: strings.TrimSpace(event.SourceType), SourceID: strings.TrimSpace(event.SourceID), EventTime: unixMillisRFC3339(event.EventTime),
+		SourceType: sourceType, SourceID: sourceID, Device: resolved, EventTime: unixMillisRFC3339(event.EventTime),
 		Severity: strings.ToUpper(strings.TrimSpace(event.Severity)), Data: append(json.RawMessage(nil), event.Data...),
 	}); err != nil {
 		return ProcessingResult{}, fmt.Errorf("accept MQTT runtime event: %w", err)
 	}
 	return ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeEvent}, nil
+}
+
+func (processor *Processor) resolveEventDevice(ctx context.Context, gateway Gateway, sourceType, sourceID string) (*ResolvedDevice, error) {
+	switch strings.ToUpper(sourceType) {
+	case "GATEWAY":
+		if sourceID == gateway.ID {
+			return &ResolvedDevice{TenantID: gateway.TenantID, SiteID: gateway.SiteID, DeviceID: gateway.ID}, nil
+		}
+		return nil, nil
+	case "DEVICE":
+		deviceID, err := processor.identities.ResolveDevice(ctx, gateway, sourceID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve MQTT event Device %s: %w", sourceID, err)
+		}
+		if deviceID == "" {
+			return nil, nil
+		}
+		return &ResolvedDevice{TenantID: gateway.TenantID, SiteID: gateway.SiteID, DeviceID: deviceID}, nil
+	default:
+		return nil, nil
+	}
 }

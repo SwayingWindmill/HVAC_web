@@ -224,6 +224,55 @@ func TestSourceFailsClosedOnMalformedAndDependencyFailure(t *testing.T) {
 	}
 }
 
+type fakeMQTTAcceptor struct {
+	events []RuntimeEventEvidence
+	err    error
+}
+
+func (fake *fakeMQTTAcceptor) AcceptRuntimeEvent(_ context.Context, evidence RuntimeEventEvidence) error {
+	fake.events = append(fake.events, evidence)
+	return fake.err
+}
+
+func TestMQTTRuntimeEventRouteForwardsResolvedDeviceAndMapsTransientErrors(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	acceptor := &fakeMQTTAcceptor{}
+	handler := NewHandler(ServerConfig{
+		MQTTEvidenceAcceptor: acceptor,
+		AllowedSourceSPIFFE:  mqttSourceSPIFFE,
+		Now:                  func() time.Time { return now },
+	})
+	body := `{"tenantId":"` + ingestTenantA + `","siteId":"` + siteA + `","gatewayId":"` + deviceA + `","messageId":"` + eventA + `","sequence":7,"eventType":"GATEWAY_DISCONNECTED","sourceType":"GATEWAY","sourceId":"` + deviceA + `","device":{"tenantId":"` + ingestTenantA + `","siteId":"` + siteA + `","deviceId":"` + deviceA + `"},"eventTime":"2026-11-16T09:59:59Z","severity":"WARNING","data":{}}`
+	request := httptest.NewRequest(http.MethodPost, InternalMQTTRuntimeEventPath, strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || len(acceptor.events) != 1 || acceptor.events[0].Device == nil || acceptor.events[0].Device.DeviceID != deviceA {
+		t.Fatalf("status=%d events=%#v body=%s", recorder.Code, acceptor.events, recorder.Body.String())
+	}
+
+	acceptor.err = ErrRuntimeEventInvalid
+	badReq := httptest.NewRequest(http.MethodPost, InternalMQTTRuntimeEventPath, strings.NewReader(body))
+	badReq.Header.Set("Content-Type", "application/json")
+	badReq.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	badRec := httptest.NewRecorder()
+	handler.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid runtime event status=%d, want 400", badRec.Code)
+	}
+
+	acceptor.err = errors.New("postgres unavailable")
+	errReq := httptest.NewRequest(http.MethodPost, InternalMQTTRuntimeEventPath, strings.NewReader(body))
+	errReq.Header.Set("Content-Type", "application/json")
+	errReq.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	errRec := httptest.NewRecorder()
+	handler.ServeHTTP(errRec, errReq)
+	if errRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unavailable runtime event status=%d, want 503", errRec.Code)
+	}
+}
+
 func TestLegacyIngestPathDoesNotExist(t *testing.T) {
 	handler := NewHandler(ServerConfig{})
 	request := httptest.NewRequest(http.MethodPost, "/api/telemetry/ingest", strings.NewReader(`{}`))
