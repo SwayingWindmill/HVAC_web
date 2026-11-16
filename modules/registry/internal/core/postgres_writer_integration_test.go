@@ -318,3 +318,108 @@ func TestPostgresRegistryWriterKeepsTheSiteProfile(t *testing.T) {
 		t.Fatalf("clear Site profile = %#v err=%v", cleared, err)
 	}
 }
+
+func TestPostgresRegistryGatewaySourceKeyBlocksAndUnblocksRetire(t *testing.T) {
+	ctx, store := openRegistryWriterIntegrationStore(t)
+	siteClaims := writerIntegrationClaims(registryauth.ActionSiteWrite)
+	site, _, err := store.SaveSite(ctx, siteClaims, SiteMutation{
+		Code: "sk-retire-site", DisplayName: "Source Key Retire Site", Timezone: "Asia/Shanghai", Status: "ACTIVE",
+		Meta: MutationMeta{IdempotencyKey: "sk-retire-site-create-01", Reason: "create isolated site for source-key retire integration test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceClaims := writerIntegrationClaims(registryauth.ActionDeviceWrite, site.ID)
+	gateway, _, err := store.SaveDevice(ctx, deviceClaims, DeviceMutation{
+		SiteID: site.ID, Code: "sk-gw-01", DisplayName: "Source Key Gateway", DeviceType: "GATEWAY", Status: "ACTIVE",
+		Meta: MutationMeta{IdempotencyKey: "sk-retire-gw-create-01", Reason: "create active gateway device"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, _, err := store.SaveDevice(ctx, deviceClaims, DeviceMutation{
+		SiteID: site.ID, Code: "sk-dev-01", DisplayName: "Source Key Chiller", DeviceType: "CHILLER", Status: "ACTIVE",
+		Meta: MutationMeta{IdempotencyKey: "sk-retire-dev-create-01", Reason: "create active non-gateway device"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDevice, _, err := store.SaveDevice(ctx, deviceClaims, DeviceMutation{
+		SiteID: site.ID, Code: "sk-dev-02", DisplayName: "Source Key Pump", DeviceType: "PUMP", Status: "ACTIVE",
+		Meta: MutationMeta{IdempotencyKey: "sk-retire-dev-create-02", Reason: "create second non-gateway device"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bindClaims := writerIntegrationClaims(registryauth.ActionBindingWrite, site.ID)
+	effectiveAt := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+
+	// Reject non-gateway TargetID for BindingGatewaySourceKey.
+	if _, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingGatewaySourceKey, SourceID: device.ID, TargetID: secondDevice.ID,
+		Role: "chiller-1", EffectiveAt: effectiveAt,
+		Meta: MutationMeta{IdempotencyKey: "sk-bind-nongw-01", Reason: "non-gateway target must fail"},
+	}); !errors.Is(err, ErrBindingConflict) {
+		t.Fatalf("non-gateway target err = %v, want ErrBindingConflict", err)
+	}
+
+	bound, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingGatewaySourceKey, SourceID: device.ID, TargetID: gateway.ID,
+		Role: "chiller-1", EffectiveAt: effectiveAt,
+		Meta: MutationMeta{IdempotencyKey: "sk-bind-gw-01", Reason: "bind device source key to gateway"},
+	})
+	if err != nil {
+		t.Fatalf("bind source key: %v", err)
+	}
+	if bound.Kind != string(BindingGatewaySourceKey) || bound.TargetID != gateway.ID || bound.Role != "chiller-1" {
+		t.Fatalf("unexpected binding result: %#v", bound)
+	}
+
+	retireClaims := writerIntegrationClaims(registryauth.ActionRegistryRetire, site.ID)
+	blockedDev, err := store.Retire(ctx, retireClaims, RetireRequest{
+		SiteID: site.ID, ResourceType: ResourceDevice, ResourceID: device.ID,
+		Meta: MutationMeta{ExpectedRevision: device.Revision, IdempotencyKey: "sk-retire-dev-blocked-01", Reason: "active source key must block device retirement"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blockedDev.Status != "BLOCKED" || blockedDev.DependencyCount < 1 {
+		t.Fatalf("expected device retire BLOCKED with DependencyCount>=1, got %#v", blockedDev)
+	}
+
+	blockedGW, err := store.Retire(ctx, retireClaims, RetireRequest{
+		SiteID: site.ID, ResourceType: ResourceDevice, ResourceID: gateway.ID,
+		Meta: MutationMeta{ExpectedRevision: gateway.Revision, IdempotencyKey: "sk-retire-gw-blocked-01", Reason: "active source key must block gateway retirement"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blockedGW.Status != "BLOCKED" || blockedGW.DependencyCount < 1 {
+		t.Fatalf("expected gateway retire BLOCKED with DependencyCount>=1, got %#v", blockedGW)
+	}
+
+	closed, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingGatewaySourceKey, SourceID: device.ID,
+		Role: "chiller-1", EffectiveAt: time.Date(2026, 11, 16, 10, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		CloseOnly: true,
+		Meta:      MutationMeta{IdempotencyKey: "sk-unbind-gw-01", Reason: "close source key before retirement"},
+	})
+	if err != nil {
+		t.Fatalf("close-only source key: %v", err)
+	}
+	if closed.TargetID != "" {
+		t.Fatalf("unexpected non-empty TargetID on closeOnly result: %#v", closed)
+	}
+
+	retiredDev, err := store.Retire(ctx, retireClaims, RetireRequest{
+		SiteID: site.ID, ResourceType: ResourceDevice, ResourceID: device.ID,
+		Meta: MutationMeta{ExpectedRevision: device.Revision, IdempotencyKey: "sk-retire-dev-ok-01", Reason: "retire device after closing source key"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retiredDev.Status != "COMPLETED" || retiredDev.DependencyCount != 0 {
+		t.Fatalf("expected device retire COMPLETED after unbind, got %#v", retiredDev)
+	}
+}

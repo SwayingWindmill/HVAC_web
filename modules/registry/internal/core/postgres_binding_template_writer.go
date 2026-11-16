@@ -23,11 +23,24 @@ func (store *PostgresStore) Rebind(ctx context.Context, claims registryauth.Gran
 		if err != nil {
 			return mutationRecord[BindingMutationResult]{}, err
 		}
-		if err := closeCurrentBinding(ctx, tx, input, effectiveAt, now); err != nil {
+		if !input.CloseOnly && input.Kind == BindingGatewaySourceKey {
+			if err := validateGatewaySourceKeyEndpoints(ctx, tx, claims.TenantID, input.SiteID, input.SourceID, input.TargetID); err != nil {
+				return mutationRecord[BindingMutationResult]{}, err
+			}
+		}
+		if err := closeCurrentBinding(ctx, tx, claims.TenantID, input, effectiveAt, now); err != nil {
 			return mutationRecord[BindingMutationResult]{}, err
 		}
-		if err := insertBinding(ctx, tx, claims.TenantID, id, input, effectiveAt, now); err != nil {
-			return mutationRecord[BindingMutationResult]{}, err
+		if !input.CloseOnly {
+			if err := insertBinding(ctx, tx, claims.TenantID, id, input, effectiveAt, now); err != nil {
+				return mutationRecord[BindingMutationResult]{}, err
+			}
+		}
+		eventType := "registry.binding.rebound"
+		payload := map[string]any{"siteId": input.SiteID, "kind": input.Kind, "sourceId": input.SourceID, "targetId": input.TargetID, "role": input.Role}
+		if input.CloseOnly {
+			eventType = "registry.binding.closed"
+			payload["closeOnly"] = true
 		}
 		value := BindingMutationResult{
 			BindingID: id, SiteID: input.SiteID, Kind: string(input.Kind), SourceID: input.SourceID,
@@ -35,8 +48,8 @@ func (store *PostgresStore) Rebind(ctx context.Context, claims registryauth.Gran
 		}
 		return mutationRecord[BindingMutationResult]{
 			Result: value, SiteID: &input.SiteID, ResourceType: "BINDING", ResourceID: id,
-			AfterRevision: revisionPointer(1), EventType: "registry.binding.rebound", AggregateVersion: 1,
-			Payload: map[string]any{"siteId": input.SiteID, "kind": input.Kind, "sourceId": input.SourceID, "targetId": input.TargetID, "role": input.Role},
+			AfterRevision: revisionPointer(1), EventType: eventType, AggregateVersion: 1,
+			Payload: payload,
 		}, nil
 	})
 	if err != nil {
@@ -46,22 +59,66 @@ func (store *PostgresStore) Rebind(ctx context.Context, claims registryauth.Gran
 	return result, nil
 }
 
-func closeCurrentBinding(ctx context.Context, tx pgx.Tx, input RebindRequest, effectiveAt, now time.Time) error {
+func validateGatewaySourceKeyEndpoints(ctx context.Context, tx pgx.Tx, tenantID, siteID, deviceID, gatewayDeviceID string) error {
+	var gatewayType, gatewayStatus string
+	err := tx.QueryRow(ctx, `SELECT device_type, status FROM core_registry.devices WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid`, tenantID, siteID, gatewayDeviceID).Scan(&gatewayType, &gatewayStatus)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrBindingConflict
+		}
+		return mapRegistryWriteError(err)
+	}
+	if gatewayType != "GATEWAY" || gatewayStatus != "ACTIVE" {
+		return ErrBindingConflict
+	}
+	var deviceType, deviceStatus string
+	err = tx.QueryRow(ctx, `SELECT device_type, status FROM core_registry.devices WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid`, tenantID, siteID, deviceID).Scan(&deviceType, &deviceStatus)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrBindingConflict
+		}
+		return mapRegistryWriteError(err)
+	}
+	if deviceType == "GATEWAY" || deviceStatus != "ACTIVE" || deviceID == gatewayDeviceID {
+		return ErrBindingConflict
+	}
+	return nil
+}
+
+func closeCurrentBinding(ctx context.Context, tx pgx.Tx, tenantID string, input RebindRequest, effectiveAt, now time.Time) error {
 	var err error
 	switch input.Kind {
 	case BindingDeviceAsset:
 		if input.Role == "GATEWAY" {
-			return nil
+			if !input.CloseOnly {
+				return nil
+			}
+			if input.TargetID != "" {
+				_, err = tx.Exec(ctx, `UPDATE core_registry.device_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND device_id = $2::uuid AND binding_role = $3 AND asset_id = $6::uuid AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now, input.TargetID)
+				return mapRegistryWriteError(err)
+			}
 		}
 		_, err = tx.Exec(ctx, `UPDATE core_registry.device_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND device_id = $2::uuid AND binding_role = $3 AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now)
 	case BindingAssetSpace:
 		if input.Role != "INSTALLED_IN" {
-			return nil
+			if !input.CloseOnly {
+				return nil
+			}
+			if input.TargetID != "" {
+				_, err = tx.Exec(ctx, `UPDATE core_registry.asset_space_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND asset_id = $2::uuid AND binding_role = $3 AND space_id = $6::uuid AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now, input.TargetID)
+				return mapRegistryWriteError(err)
+			}
 		}
 		_, err = tx.Exec(ctx, `UPDATE core_registry.asset_space_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND asset_id = $2::uuid AND binding_role = $3 AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now)
 	case BindingDeviceSpace:
 		if input.Role != "INSTALLED_IN" {
-			return nil
+			if !input.CloseOnly {
+				return nil
+			}
+			if input.TargetID != "" {
+				_, err = tx.Exec(ctx, `UPDATE core_registry.device_space_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND device_id = $2::uuid AND binding_role = $3 AND space_id = $6::uuid AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now, input.TargetID)
+				return mapRegistryWriteError(err)
+			}
 		}
 		_, err = tx.Exec(ctx, `UPDATE core_registry.device_space_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND device_id = $2::uuid AND binding_role = $3 AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now)
 	case BindingSensorDevice:
@@ -70,6 +127,8 @@ func closeCurrentBinding(ctx context.Context, tx pgx.Tx, input RebindRequest, ef
 		_, err = tx.Exec(ctx, `UPDATE core_registry.sensor_space_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND sensor_id = $2::uuid AND binding_role = $3 AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now)
 	case BindingPointSubject:
 		_, err = tx.Exec(ctx, `UPDATE core_registry.point_subject_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND point_id = $2::uuid AND binding_role = $3 AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now)
+	case BindingGatewaySourceKey:
+		_, err = tx.Exec(ctx, `UPDATE core_registry.gateway_device_source_keys SET status = 'RETIRED', revision = revision + 1, updated_at = $4 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid AND status = 'ACTIVE'`, tenantID, input.SiteID, input.SourceID, now)
 	default:
 		return ErrInvalidMutation
 	}
@@ -105,6 +164,8 @@ func insertBinding(ctx context.Context, tx pgx.Tx, tenantID, id string, input Re
 			return ErrInvalidMutation
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO core_registry.point_subject_bindings (id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::uuid,$7::uuid,$8,'ACTIVE',$9,NULL,1,$10,$10)`, id, tenantID, input.SiteID, input.SourceID, input.TargetType, spaceID, assetID, input.Role, effectiveAt, now)
+	case BindingGatewaySourceKey:
+		_, err = tx.Exec(ctx, `INSERT INTO core_registry.gateway_device_source_keys (id, tenant_id, site_id, gateway_device_id, source_key, device_id, status, revision, created_at, updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::uuid,'ACTIVE',1,$7,$7)`, id, tenantID, input.SiteID, input.TargetID, input.Role, input.SourceID, now)
 	default:
 		return ErrInvalidMutation
 	}

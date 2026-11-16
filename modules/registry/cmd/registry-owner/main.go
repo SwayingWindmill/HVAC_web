@@ -118,10 +118,20 @@ func main() {
 		}
 	}()
 
+	relayCtx, cancelRelay := context.WithCancel(context.Background())
+	defer cancelRelay()
+	if relay, relayErr := startOptionalOutboxRelay(relayCtx, store, certificate, iamCAs, logger); relayErr != nil {
+		logger.Error("core_outbox_relay_config_invalid", "error", relayErr.Error())
+		os.Exit(1)
+	} else if relay != nil {
+		go relay.Run(relayCtx)
+	}
+
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-shutdown
+		cancelRelay()
 		telemetry.MarkNotReady()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -165,6 +175,58 @@ func loadCertificatePublicKey(path string) (any, error) {
 		return nil, err
 	}
 	return certificate.PublicKey, nil
+}
+
+func startOptionalOutboxRelay(ctx context.Context, store *core.PostgresStore, cert tls.Certificate, defaultRoots *x509.CertPool, logger *slog.Logger) (*core.OutboxRelay, error) {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CORE_OUTBOX_RELAY_ENABLED")), "false") {
+		return nil, nil
+	}
+	telemetryURL := envOr("CORE_TELEMETRY_RUNTIME_URL", strings.TrimSpace(os.Getenv("TELEMETRY_RUNTIME_URL")))
+	connectivityURL := envOr("CORE_CONNECTIVITY_SERVICE_URL", strings.TrimSpace(os.Getenv("CONNECTIVITY_SERVICE_URL")))
+	commandURL := envOr("CORE_COMMAND_SERVICE_URL", strings.TrimSpace(os.Getenv("COMMAND_SERVICE_URL")))
+	if telemetryURL == "" && connectivityURL == "" && commandURL == "" {
+		return nil, nil
+	}
+	buildClient := func(caEnv string) (*http.Client, error) {
+		roots := defaultRoots
+		if caPath := strings.TrimSpace(os.Getenv(caEnv)); caPath != "" {
+			loaded, err := loadCertPool(caPath)
+			if err != nil {
+				return nil, err
+			}
+			roots = loaded
+		}
+		return &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{
+				MinVersion:   tls.VersionTLS13,
+				RootCAs:      roots,
+				Certificates: []tls.Certificate{cert},
+			}},
+		}, nil
+	}
+	telClient, err := buildClient("TELEMETRY_RUNTIME_SERVER_CA")
+	if err != nil {
+		return nil, err
+	}
+	connClient, err := buildClient("CONNECTIVITY_SERVER_CA")
+	if err != nil {
+		return nil, err
+	}
+	cmdClient, err := buildClient("COMMAND_SERVICE_SERVER_CA")
+	if err != nil {
+		return nil, err
+	}
+	_ = ctx
+	return core.NewOutboxRelay(store, core.OutboxRelayConfig{
+		TelemetryBaseURL:       telemetryURL,
+		TelemetryHTTPClient:    telClient,
+		ConnectivityBaseURL:    connectivityURL,
+		ConnectivityHTTPClient: connClient,
+		CommandBaseURL:         commandURL,
+		CommandHTTPClient:      cmdClient,
+		Logger:                 logger,
+	})
 }
 
 func envOr(name, fallback string) string {

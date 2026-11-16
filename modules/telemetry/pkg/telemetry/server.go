@@ -54,6 +54,8 @@ type ServerConfig struct {
 	AllowedCommandVerifierSPIFFE   string
 	AllowedCommandDispatcherSPIFFE string
 	AllowedCommandServiceSPIFFE    string
+	AllowedRegistrySyncSPIFFEs     []string
+	RegistrySyncer                 RegistrySyncer
 	Metrics                        *observability.Registry
 	Now                            func() time.Time
 	RateLimiter                    *limitpolicy.Limiter
@@ -78,6 +80,8 @@ type handler struct {
 	allowedCommandVerifierSPIFFE   string
 	allowedCommandDispatcherSPIFFE string
 	allowedCommandServiceSPIFFE    string
+	allowedRegistrySyncSPIFFEs     map[string]struct{}
+	registrySyncer                 RegistrySyncer
 	metrics                        *s2Metrics
 	now                            func() time.Time
 	rateLimiter                    *limitpolicy.Limiter
@@ -99,6 +103,24 @@ func NewHandler(config ServerConfig) http.Handler {
 		}
 		allowedSnapshotReaderSPIFFEs[reader] = struct{}{}
 	}
+	allowedRegistrySyncSPIFFEs := map[string]struct{}{}
+	syncCandidates := config.AllowedRegistrySyncSPIFFEs
+	if len(syncCandidates) == 0 {
+		syncCandidates = []string{"spiffe://hvac.local/platform-core-service", "spiffe://hvac.local/platform-gateway"}
+	}
+	for _, candidate := range syncCandidates {
+		syncerID := strings.TrimSpace(candidate)
+		if syncerID == "" || !strings.HasPrefix(syncerID, "spiffe://") {
+			panic("Telemetry registry sync SPIFFE allowlist is invalid")
+		}
+		allowedRegistrySyncSPIFFEs[syncerID] = struct{}{}
+	}
+	registrySyncer := config.RegistrySyncer
+	if registrySyncer == nil {
+		if candidate, ok := config.Store.(RegistrySyncer); ok {
+			registrySyncer = candidate
+		}
+	}
 	return &handler{
 		store: config.Store, latestCache: config.LatestCache, authorizer: config.Authorizer,
 		allowedGatewaySPIFFE:           strings.TrimSpace(config.AllowedGatewaySPIFFE),
@@ -116,6 +138,8 @@ func NewHandler(config ServerConfig) http.Handler {
 		allowedCommandVerifierSPIFFE:   strings.TrimSpace(config.AllowedCommandVerifierSPIFFE),
 		allowedCommandDispatcherSPIFFE: strings.TrimSpace(config.AllowedCommandDispatcherSPIFFE),
 		allowedCommandServiceSPIFFE:    strings.TrimSpace(config.AllowedCommandServiceSPIFFE),
+		allowedRegistrySyncSPIFFEs:     allowedRegistrySyncSPIFFEs,
+		registrySyncer:                 registrySyncer,
 		metrics:                        newS2Metrics(config.Metrics, now),
 		now:                            now,
 		rateLimiter:                    config.RateLimiter,
@@ -133,6 +157,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.metrics.observeRequest(request.URL.Path, status, h.now().UTC().Sub(startedAt))
 	}()
 	writer = captured
+	if request.URL.Path == InternalRegistrySyncPath {
+		h.handleRegistrySync(writer, request)
+		return
+	}
 	if request.URL.Path == InternalSourceObservationPath {
 		h.handleSourceObservation(writer, request)
 		return

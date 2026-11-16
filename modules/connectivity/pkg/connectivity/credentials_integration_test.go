@@ -222,6 +222,102 @@ func TestGatewayCredentialEnrollmentAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestPostgresRevokeRetiredGatewayRevokesWithoutActiveRegistryRow(t *testing.T) {
+	adminDSN, runtimeDSN := os.Getenv("CONNECTIVITY_ADMIN_DSN"), os.Getenv("CONNECTIVITY_POSTGRES_DSN")
+	if adminDSN == "" {
+		adminDSN = os.Getenv("S1_ADMIN_DATABASE_URL")
+	}
+	if runtimeDSN == "" {
+		runtimeDSN = os.Getenv("CONNECTIVITY_DATABASE_URL")
+	}
+	if adminDSN == "" || runtimeDSN == "" {
+		t.Skip("CONNECTIVITY_ADMIN_DSN and CONNECTIVITY_POSTGRES_DSN are required")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	admin, err := pgxpool.New(ctx, adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	tenant := "0192f300-1000-7000-8000-00000000000a"
+	otherTenant := "0192f300-1000-7000-8000-00000000000b"
+	site := "0192f300-2000-7000-8000-00000000000a"
+	gateway := "0192f300-3000-7000-8000-00000000000a"
+	credID := "0192f300-4000-7000-8000-00000000000a"
+
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		for _, table := range []string{"gateway_credential_audit", "gateway_enrollments", "gateway_credentials"} {
+			_, _ = admin.Exec(cleanupCtx, "DELETE FROM connectivity."+table+" WHERE gateway_id=$1::uuid", gateway)
+		}
+		_, _ = admin.Exec(cleanupCtx, `DELETE FROM core_registry.devices WHERE id=$1::uuid`, gateway)
+		_, _ = admin.Exec(cleanupCtx, `DELETE FROM core_registry.sites WHERE id=$1::uuid`, site)
+		_, _ = admin.Exec(cleanupCtx, `DELETE FROM iam.tenants WHERE id IN ($1::uuid, $2::uuid)`, tenant, otherTenant)
+	})
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO iam.tenants (id, code, display_name, timezone, currency, country, status, revision, created_at, updated_at)
+		  VALUES ($1::uuid,'retire-gw-a','Retire GW A','UTC','USD','US','ACTIVE',1,$3,$3),
+		         ($2::uuid,'retire-gw-b','Retire GW B','UTC','USD','US','ACTIVE',1,$3,$3)
+		  ON CONFLICT (id) DO NOTHING`, []any{tenant, otherTenant, now}},
+		{`INSERT INTO core_registry.sites (id, code, display_name, timezone, status, revision, created_at, updated_at, tenant_id)
+		  VALUES ($1::uuid,'retire-gw-site','Retire GW Site','UTC','ACTIVE',1,$3,$3,$2::uuid)
+		  ON CONFLICT (id) DO NOTHING`, []any{site, tenant, now}},
+		{`INSERT INTO core_registry.devices (id, tenant_id, site_id, code, display_name, device_type, status, revision, created_at, updated_at)
+		  VALUES ($1::uuid,$2::uuid,$3::uuid,'retire-gw-01','Retired GW','GATEWAY','RETIRED',2,$4,$4)
+		  ON CONFLICT (id) DO UPDATE SET status='RETIRED'`, []any{gateway, tenant, site, now}},
+		{`INSERT INTO connectivity.gateway_credentials (id, tenant_id, gateway_id, certificate_fingerprint_sha256, status, valid_from, valid_until, revoked_at, created_at, updated_at)
+		  VALUES ($1::uuid,$2::uuid,$3::uuid,repeat('c',64),'ACTIVE',$4,$5,NULL,$4,$4)
+		  ON CONFLICT (id) DO UPDATE SET status='ACTIVE', revoked_at=NULL`, []any{credID, tenant, gateway, now.Add(-time.Minute), now.Add(time.Hour)}},
+	} {
+		if _, err := admin.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("seed retired gateway fixture: %v", err)
+		}
+	}
+
+	store, err := Open(ctx, runtimeDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	caCertPEM, caKeyPEM := credentialTestCA(t, now)
+	authority, err := NewCertificateAuthority(caCertPEM, caKeyPEM, "tls://mqtt:8883")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewCredentialService(store, authority)
+	var hooked string
+	service.SetRevokeHook(func(id string) { hooked = id })
+
+	if err := service.RevokeRetiredGateway(ctx, otherTenant, gateway); !errors.Is(err, ErrCredentialForbidden) {
+		t.Fatalf("expected ErrCredentialForbidden on tenant mismatch, got %v", err)
+	}
+	if err := service.RevokeRetiredGateway(ctx, tenant, gateway); err != nil {
+		t.Fatalf("RevokeRetiredGateway failed: %v", err)
+	}
+	if hooked != gateway {
+		t.Fatalf("expected revoke hook %s, got %q", gateway, hooked)
+	}
+
+	var credStatus string
+	if err := admin.QueryRow(ctx, `SELECT status FROM connectivity.gateway_credentials WHERE id=$1::uuid`, credID).Scan(&credStatus); err != nil {
+		t.Fatal(err)
+	}
+	if credStatus != "REVOKED" {
+		t.Fatalf("expected credential status REVOKED, got %q", credStatus)
+	}
+}
+
 func credentialTestCA(t *testing.T, now time.Time) ([]byte, []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

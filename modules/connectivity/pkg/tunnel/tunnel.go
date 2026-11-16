@@ -2,8 +2,10 @@ package tunnel
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +17,72 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+const (
+	AuditSessionOpened  = "SESSION_OPENED"
+	AuditSessionClosed  = "SESSION_CLOSED"
+	AuditStreamOpened   = "STREAM_OPENED"
+	AuditStreamRejected = "STREAM_REJECTED"
+)
+
+// AuditEvent captures one tunnel lifecycle or stream event for durable audit.
+type AuditEvent struct {
+	GatewayID  string
+	SessionID  string
+	EventType  string
+	StreamID   *int64
+	TargetPort *uint16
+	RemoteAddr string
+	Reason     string
+	BytesTX    int64
+	BytesRX    int64
+	OccurredAt time.Time
+}
+
+// AuditSink persists tunnel session and stream audit events.
+type AuditSink interface {
+	RecordTunnelAudit(context.Context, AuditEvent) error
+}
+
+// WithAuditSink attaches a durable audit sink to a tunnel Hub.
+func WithAuditSink(sink AuditSink) Option {
+	return func(h *Hub) {
+		h.auditSink = sink
+	}
+}
+
+func newTunnelUUIDv7(now time.Time) string {
+	var raw [16]byte
+	_, _ = rand.Read(raw[:])
+	ms := uint64(now.UTC().UnixMilli())
+	raw[0] = byte(ms >> 40)
+	raw[1] = byte(ms >> 32)
+	raw[2] = byte(ms >> 24)
+	raw[3] = byte(ms >> 16)
+	raw[4] = byte(ms >> 8)
+	raw[5] = byte(ms)
+	raw[6] = (raw[6] & 0x0f) | 0x70
+	raw[8] = (raw[8] & 0x3f) | 0x80
+	var encoded [36]byte
+	hex.Encode(encoded[0:8], raw[0:4])
+	encoded[8] = '-'
+	hex.Encode(encoded[9:13], raw[4:6])
+	encoded[13] = '-'
+	hex.Encode(encoded[14:18], raw[6:8])
+	encoded[18] = '-'
+	hex.Encode(encoded[19:23], raw[8:10])
+	encoded[23] = '-'
+	hex.Encode(encoded[24:36], raw[10:16])
+	return string(encoded[:])
+}
+
+func truncateAuditReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if len(reason) > 512 {
+		return reason[:512]
+	}
+	return reason
+}
 
 const (
 	ProtocolName             = "hvac-gateway-tunnel/v1"
@@ -148,6 +216,7 @@ type Hub struct {
 	pingInterval     time.Duration
 	readTimeout      time.Duration
 	openTimeout      time.Duration
+	auditSink        AuditSink
 	closed           atomic.Bool
 }
 
@@ -162,6 +231,22 @@ func NewHub(options ...Option) *Hub {
 		option(h)
 	}
 	return h
+}
+
+func (h *Hub) recordAudit(ctx context.Context, event AuditEvent) {
+	if h == nil || h.auditSink == nil {
+		return
+	}
+	if event.OccurredAt.IsZero() {
+		event.OccurredAt = time.Now().UTC()
+	}
+	event.Reason = truncateAuditReason(event.Reason)
+	if len(event.RemoteAddr) > 256 {
+		event.RemoteAddr = event.RemoteAddr[:256]
+	}
+	auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = h.auditSink.RecordTunnelAudit(auditCtx, event)
 }
 
 func (h *Hub) ActiveGateways() []string {
@@ -182,7 +267,7 @@ func (h *Hub) CloseGateway(gatewayID string) {
 	}
 	h.mu.Unlock()
 	if session != nil {
-		session.Close()
+		session.closeWithReason("gateway_closed")
 	}
 }
 
@@ -203,7 +288,7 @@ func (h *Hub) Close() {
 		_ = ln.Close()
 	}
 	for _, s := range sessions {
-		s.Close()
+		s.closeWithReason("hub_closed")
 	}
 }
 
@@ -235,17 +320,60 @@ func (h *Hub) resolveSession(gatewayID string) (*Session, error) {
 
 func (h *Hub) OpenStream(ctx context.Context, gatewayID string, targetPort uint16) (*Stream, error) {
 	if targetPort != AllowedTargetPort {
+		port := targetPort
+		resolvedID := strings.TrimSpace(gatewayID)
+		if resolvedID == "" {
+			resolvedID = h.defaultGatewayID
+		}
+		var sessionID, remoteAddr string
+		if session, _ := h.resolveSession(gatewayID); session != nil {
+			resolvedID = session.gatewayID
+			sessionID = session.sessionID
+			remoteAddr = session.remoteAddr
+		} else {
+			sessionID = newTunnelUUIDv7(time.Now().UTC())
+		}
+		if resolvedID != "" {
+			h.recordAudit(ctx, AuditEvent{
+				GatewayID:  resolvedID,
+				SessionID:  sessionID,
+				EventType:  AuditStreamRejected,
+				TargetPort: &port,
+				RemoteAddr: remoteAddr,
+				Reason:     "port_forbidden",
+				OccurredAt: time.Now().UTC(),
+			})
+		}
 		return nil, fmt.Errorf("%w: port %d not allowed", ErrPortForbidden, targetPort)
 	}
 	session, err := h.resolveSession(gatewayID)
 	if err != nil {
+		resolvedID := strings.TrimSpace(gatewayID)
+		if resolvedID == "" {
+			resolvedID = h.defaultGatewayID
+		}
+		if resolvedID != "" {
+			port := targetPort
+			h.recordAudit(ctx, AuditEvent{
+				GatewayID:  resolvedID,
+				SessionID:  newTunnelUUIDv7(time.Now().UTC()),
+				EventType:  AuditStreamRejected,
+				TargetPort: &port,
+				Reason:     err.Error(),
+				OccurredAt: time.Now().UTC(),
+			})
+		}
 		return nil, err
 	}
 	return session.openStream(ctx, targetPort, h.openTimeout)
 }
 
 func (h *Hub) registerSession(gatewayID string, conn net.Conn) *Session {
-	s := newSession(h, gatewayID, conn)
+	return h.registerSessionWithAddr(gatewayID, conn, "")
+}
+
+func (h *Hub) registerSessionWithAddr(gatewayID string, conn net.Conn, remoteAddr string) *Session {
+	s := newSession(h, gatewayID, conn, remoteAddr)
 	h.mu.Lock()
 	if h.closed.Load() {
 		h.mu.Unlock()
@@ -256,7 +384,7 @@ func (h *Hub) registerSession(gatewayID string, conn net.Conn) *Session {
 	h.sessions[gatewayID] = s
 	h.mu.Unlock()
 	if previous != nil && previous != s {
-		previous.Close()
+		previous.closeWithReason("session_replaced")
 	}
 	return s
 }
@@ -332,16 +460,17 @@ func NewUpgradeHandler(hub *Hub, parsePeer PeerParser, verifyPeer PeerVerifier) 
 		if brw.Reader.Buffered() > 0 {
 			tunnelConn = &bufferedConn{Conn: conn, r: brw.Reader}
 		}
-		session := hub.registerSession(gatewayID, tunnelConn)
+		session := hub.registerSessionWithAddr(gatewayID, tunnelConn, r.RemoteAddr)
 		if session == nil {
 			return
 		}
 		// Re-check revocation after registration so a concurrent Revoke cannot slip in between pre-hijack auth and registerSession.
 		if verifiedID, recheckErr := verifyPeer(r.Context(), peer); recheckErr != nil || verifiedID != gatewayID {
 			hub.unregisterSession(session)
-			session.Close()
+			session.closeWithReason("peer_recheck_failed")
 			return
 		}
+		session.markOpened(r.Context())
 		session.run(r.Context())
 	})
 }
@@ -468,25 +597,49 @@ func spliceNetConn(localConn net.Conn, stream *Stream) {
 }
 
 type Session struct {
-	hub        *Hub
-	gatewayID  string
-	conn       net.Conn
-	writeMu    sync.Mutex
-	mu         sync.Mutex
-	streams    map[uint32]*Stream
-	nextStream uint32
-	closed     atomic.Bool
-	done       chan struct{}
+	hub            *Hub
+	gatewayID      string
+	sessionID      string
+	remoteAddr     string
+	conn           net.Conn
+	writeMu        sync.Mutex
+	mu             sync.Mutex
+	streams        map[uint32]*Stream
+	nextStream     uint32
+	bytesTX        atomic.Int64
+	bytesRX        atomic.Int64
+	opened         atomic.Bool
+	closeAuditOnce sync.Once
+	closed         atomic.Bool
+	done           chan struct{}
 }
 
-func newSession(hub *Hub, gatewayID string, conn net.Conn) *Session {
+func newSession(hub *Hub, gatewayID string, conn net.Conn, remoteAddr string) *Session {
+	addr := strings.TrimSpace(remoteAddr)
+	if addr == "" && conn != nil && conn.RemoteAddr() != nil {
+		addr = conn.RemoteAddr().String()
+	}
 	return &Session{
 		hub:        hub,
 		gatewayID:  gatewayID,
+		sessionID:  newTunnelUUIDv7(time.Now().UTC()),
+		remoteAddr: addr,
 		conn:       conn,
 		streams:    make(map[uint32]*Stream),
 		nextStream: 1,
 		done:       make(chan struct{}),
+	}
+}
+
+func (s *Session) markOpened(ctx context.Context) {
+	if s.opened.CompareAndSwap(false, true) {
+		s.hub.recordAudit(ctx, AuditEvent{
+			GatewayID:  s.gatewayID,
+			SessionID:  s.sessionID,
+			EventType:  AuditSessionOpened,
+			RemoteAddr: s.remoteAddr,
+			OccurredAt: time.Now().UTC(),
+		})
 	}
 }
 
@@ -499,10 +652,18 @@ func (s *Session) sendFrame(frame Frame) error {
 	if s.closed.Load() {
 		return net.ErrClosed
 	}
-	return WriteFrame(s.conn, frame)
+	err := WriteFrame(s.conn, frame)
+	if err == nil && frame.Type == FrameData {
+		s.bytesTX.Add(int64(len(frame.Payload)))
+	}
+	return err
 }
 
 func (s *Session) Close() {
+	s.closeWithReason("closed")
+}
+
+func (s *Session) closeWithReason(reason string) {
 	if !s.closed.CompareAndSwap(false, true) {
 		return
 	}
@@ -519,15 +680,50 @@ func (s *Session) Close() {
 		st.fail(io.EOF)
 	}
 	s.hub.unregisterSession(s)
+	if s.opened.Load() {
+		s.closeAuditOnce.Do(func() {
+			s.hub.recordAudit(context.Background(), AuditEvent{
+				GatewayID:  s.gatewayID,
+				SessionID:  s.sessionID,
+				EventType:  AuditSessionClosed,
+				RemoteAddr: s.remoteAddr,
+				Reason:     reason,
+				BytesTX:    s.bytesTX.Load(),
+				BytesRX:    s.bytesRX.Load(),
+				OccurredAt: time.Now().UTC(),
+			})
+		})
+	}
 }
 
 func (s *Session) openStream(ctx context.Context, targetPort uint16, timeout time.Duration) (*Stream, error) {
+	streamID := int64(0)
+	port := targetPort
+	recordRejected := func(err error) {
+		var sidPtr *int64
+		if streamID > 0 {
+			sid := streamID
+			sidPtr = &sid
+		}
+		s.hub.recordAudit(ctx, AuditEvent{
+			GatewayID:  s.gatewayID,
+			SessionID:  s.sessionID,
+			EventType:  AuditStreamRejected,
+			StreamID:   sidPtr,
+			TargetPort: &port,
+			RemoteAddr: s.remoteAddr,
+			Reason:     err.Error(),
+			OccurredAt: time.Now().UTC(),
+		})
+	}
 	if s.closed.Load() {
+		recordRejected(net.ErrClosed)
 		return nil, net.ErrClosed
 	}
 	s.mu.Lock()
 	id := s.nextStream
 	s.nextStream += 2
+	streamID = int64(id)
 	st := newStream(s, id)
 	s.streams[id] = st
 	s.mu.Unlock()
@@ -536,6 +732,7 @@ func (s *Session) openStream(ctx context.Context, targetPort uint16, timeout tim
 	binary.BigEndian.PutUint16(portBuf[:], targetPort)
 	if err := s.sendFrame(Frame{Type: FrameOpen, StreamID: id, Payload: portBuf[:]}); err != nil {
 		s.removeStream(id)
+		recordRejected(err)
 		return nil, err
 	}
 	timer := time.NewTimer(timeout)
@@ -544,19 +741,33 @@ func (s *Session) openStream(ctx context.Context, targetPort uint16, timeout tim
 	case err := <-st.openCh:
 		if err != nil {
 			s.removeStream(id)
+			recordRejected(err)
 			return nil, err
 		}
+		sid := streamID
+		s.hub.recordAudit(ctx, AuditEvent{
+			GatewayID:  s.gatewayID,
+			SessionID:  s.sessionID,
+			EventType:  AuditStreamOpened,
+			StreamID:   &sid,
+			TargetPort: &port,
+			RemoteAddr: s.remoteAddr,
+			OccurredAt: time.Now().UTC(),
+		})
 		return st, nil
 	case <-ctx.Done():
 		_ = s.sendFrame(Frame{Type: FrameRST, StreamID: id})
 		s.removeStream(id)
+		recordRejected(ctx.Err())
 		return nil, ctx.Err()
 	case <-s.done:
 		s.removeStream(id)
+		recordRejected(io.EOF)
 		return nil, io.EOF
 	case <-timer.C:
 		_ = s.sendFrame(Frame{Type: FrameRST, StreamID: id})
 		s.removeStream(id)
+		recordRejected(context.DeadlineExceeded)
 		return nil, context.DeadlineExceeded
 	}
 }
@@ -575,7 +786,10 @@ func (s *Session) getStream(id uint32) *Stream {
 }
 
 func (s *Session) run(ctx context.Context) {
-	defer s.Close()
+	closeReason := "session_ended"
+	defer func() {
+		s.closeWithReason(closeReason)
+	}()
 	go func() {
 		ticker := time.NewTicker(s.hub.pingInterval)
 		defer ticker.Stop()
@@ -583,11 +797,11 @@ func (s *Session) run(ctx context.Context) {
 			select {
 			case <-ticker.C:
 				if err := s.sendFrame(Frame{Type: FramePing}); err != nil {
-					s.Close()
+					s.closeWithReason("ping_failed: " + err.Error())
 					return
 				}
 			case <-ctx.Done():
-				s.Close()
+				s.closeWithReason("context_done")
 				return
 			case <-s.done:
 				return
@@ -601,6 +815,11 @@ func (s *Session) run(ctx context.Context) {
 		}
 		frame, err := ReadFrame(s.conn)
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				closeReason = "eof"
+			} else {
+				closeReason = "read_error: " + err.Error()
+			}
 			return
 		}
 		switch frame.Type {
@@ -617,6 +836,7 @@ func (s *Session) run(ctx context.Context) {
 				st.resolveOpen(errors.New(msg))
 			}
 		case FrameData:
+			s.bytesRX.Add(int64(len(frame.Payload)))
 			if st := s.getStream(frame.StreamID); st != nil {
 				if err := st.pushData(frame.Payload); err != nil {
 					_ = s.sendFrame(Frame{Type: FrameRST, StreamID: frame.StreamID})

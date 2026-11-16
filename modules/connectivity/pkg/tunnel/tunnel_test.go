@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -440,5 +441,96 @@ func TestRunStdioBridgeRoundTrip(t *testing.T) {
 	}
 	if err := <-bridgeDone; err != nil {
 		t.Fatalf("RunStdioBridge returned error: %v", err)
+	}
+}
+
+type recordingAuditSink struct {
+	mu     sync.Mutex
+	events []AuditEvent
+}
+
+func (s *recordingAuditSink) RecordTunnelAudit(_ context.Context, event AuditEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (s *recordingAuditSink) snapshot() []AuditEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]AuditEvent, len(s.events))
+	copy(out, s.events)
+	return out
+}
+
+func TestTunnelAuditSinkRecordsLifecycleStreamsAndByteCounts(t *testing.T) {
+	sink := &recordingAuditSink{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "tunnel-audit-ok")
+	})
+	addr, hub, edgeErrCh, _ := startTestTunnelHarness(
+		t,
+		handler,
+		5*time.Second,
+		5*time.Second,
+		50*time.Millisecond,
+		WithAuditSink(sink),
+	)
+
+	resp, err := (&http.Client{Timeout: 3 * time.Second}).Get("http://" + addr + "/red/audit-check")
+	if err != nil {
+		t.Fatalf("GET through tunnel failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if string(body) != "tunnel-audit-ok" {
+		t.Fatalf("unexpected tunnel response %q", string(body))
+	}
+
+	if _, err := hub.OpenStream(context.Background(), "", 22); !errors.Is(err, ErrPortForbidden) {
+		t.Fatalf("expected ErrPortForbidden for port 22, got %v", err)
+	}
+
+	hub.CloseGateway("0193f000-2000-7000-8000-000000000001")
+	select {
+	case <-edgeErrCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("expected edge loop to exit after CloseGateway")
+	}
+
+	events := sink.snapshot()
+	var seenOpen, seenStreamOpen, seenStreamReject, seenClosed bool
+	var closedEvent AuditEvent
+	var sessionID string
+	for _, ev := range events {
+		switch ev.EventType {
+		case AuditSessionOpened:
+			seenOpen = true
+			sessionID = ev.SessionID
+		case AuditStreamOpened:
+			seenStreamOpen = true
+			if ev.StreamID == nil || *ev.StreamID <= 0 || ev.TargetPort == nil || *ev.TargetPort != AllowedTargetPort {
+				t.Fatalf("unexpected STREAM_OPENED audit payload: %#v", ev)
+			}
+		case AuditStreamRejected:
+			seenStreamReject = true
+			if ev.TargetPort == nil || *ev.TargetPort != 22 {
+				t.Fatalf("unexpected STREAM_REJECTED audit payload: %#v", ev)
+			}
+		case AuditSessionClosed:
+			seenClosed = true
+			closedEvent = ev
+		}
+	}
+	if !seenOpen || !seenStreamOpen || !seenStreamReject || !seenClosed {
+		t.Fatalf("missing tunnel audit events: open=%v streamOpen=%v streamReject=%v closed=%v all=%#v",
+			seenOpen, seenStreamOpen, seenStreamReject, seenClosed, events)
+	}
+	if sessionID == "" || closedEvent.SessionID != sessionID {
+		t.Fatalf("session ID mismatch between open (%q) and close (%q)", sessionID, closedEvent.SessionID)
+	}
+	if closedEvent.BytesTX <= 0 || closedEvent.BytesRX <= 0 {
+		t.Fatalf("expected non-zero byte counts on SESSION_CLOSED, got tx=%d rx=%d", closedEvent.BytesTX, closedEvent.BytesRX)
 	}
 }

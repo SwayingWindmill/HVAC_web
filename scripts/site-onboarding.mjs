@@ -20,6 +20,12 @@ import { spawnSync } from 'node:child_process';
 import { localContainer } from './lib/local-environment.mjs';
 import { buildPointSourceMetadata, validateControlPoints } from './lib/site-onboarding-control.ts';
 import {
+  PRESENCE_ACCEPTED_SIGNAL_TYPES,
+  buildOnboardingAuditBeforeSql,
+  buildOnboardingAuditOutboxEmitSql,
+  buildOnboardingRevisionCheckSql,
+} from './lib/site-onboarding-convergence.ts';
+import {
   applyPointRunningAndStabilize,
   assertQualityChecksSize,
   enrichPowerPointMetadata,
@@ -377,8 +383,9 @@ function isSynthesizedTotalMeter(totalMeter) {
   return Boolean(totalMeter && typeof totalMeter === 'object' && !Array.isArray(totalMeter) && totalMeter.kind === 'sum-of-sub-meters');
 }
 
-export function buildOnboardingSql(profile) {
+export function buildOnboardingSql(profile, options = {}) {
   const tenant = sqlLiteral(profile.tenantId);
+  const principal = sqlLiteral(options?.principalId ?? profile.tenantId);
   const { site, space, gateway } = profile;
   const siteId = sqlLiteral(site.id);
   const { devices, points } = siteRows(profile);
@@ -423,7 +430,11 @@ export function buildOnboardingSql(profile) {
     return `  (${sqlLiteral(fallbackId)}, ${tenant}, ${siteId}, ${sqlLiteral(point.id)}, ${asset ? "'ASSET'" : "'SITE'"}, NULL, ${asset ? sqlLiteral(asset) : 'NULL'}, ${bindingRole}, ${sqlLiteral(pointStatus(point))}, clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
   }).join(',\n');
 
+  const revisionCheckSql = buildOnboardingRevisionCheckSql(siteId, options?.expectedSiteRevision);
+
   const registry = `BEGIN;
+${revisionCheckSql}${buildOnboardingAuditBeforeSql(tenant, siteId)}
+
 INSERT INTO core_registry.sites (id, code, display_name, timezone, status, revision, created_at, updated_at, tenant_id, floor_area_m2, climate_zone)
 VALUES (${siteId}, ${sqlLiteral(site.code)}, ${sqlLiteral(site.name)}, ${sqlLiteral(site.timezone)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp(), ${tenant}, NULL, NULL)
 ON CONFLICT (id) ${updateWhenChanged('sites', [...fromFile('code', 'display_name', 'timezone'), ...ACTIVE])};
@@ -467,12 +478,14 @@ FROM (VALUES
 ${subjectRows}
 ) AS v(id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at)
 ON CONFLICT (id) ${updateWhenChanged('point_subject_bindings', [...fromFile('point_id', 'subject_type', 'space_id', 'asset_id'), ...SUBJECT_BINDING_LIFECYCLE])};
+
+${buildOnboardingAuditOutboxEmitSql(tenant, siteId, principal)}
 COMMIT;`;
 
   // A Device is online while it reported within two of its sample periods. The Gateway's outbox
   // replays after an outage, so samples up to a day late are still accepted.
   const runtimeDevices = devices.map((device) => `(${sqlLiteral(device.id)}, ${tenant}, ${siteId}, ${sqlLiteral(presenceApplicability(device.points))}, clock_timestamp())`).join(',\n');
-  const presence = devices.map((device) => `(${sqlLiteral(device.id)}, 1, ${device.sampleSeconds * 2 + 30}, ${device.sampleSeconds * 5}, true, ARRAY['SOURCE_ACTIVITY']::text[], 60, 86400, clock_timestamp())`).join(',\n');
+  const presence = devices.map((device) => `(${sqlLiteral(device.id)}, 1, ${device.sampleSeconds * 2 + 30}, ${device.sampleSeconds * 5}, true, ${PRESENCE_ACCEPTED_SIGNAL_TYPES}, 60, 86400, clock_timestamp())`).join(',\n');
   const freshness = points.filter((point) => point.pointType !== 'COMMAND').map((point) => {
     const quality = pointQuality(point, profile, devicesByCode);
     const fresh = quality.staleAfterSeconds ?? point.device.sampleSeconds * 3;
@@ -1066,6 +1079,7 @@ export function siteStateQuery(profile) {
   return `BEGIN READ ONLY;
 SELECT json_build_object(
   'site', (SELECT status FROM core_registry.sites WHERE id = ${st}),
+  'siteRevision', (SELECT revision FROM core_registry.sites WHERE id = ${st}),
   'devices', (SELECT coalesce(json_object_agg(id, status), '{}') FROM core_registry.devices WHERE site_id = ${st}),
   'points', (SELECT coalesce(json_object_agg(id, status), '{}') FROM core_registry.telemetry_points WHERE site_id = ${st}),
   'assets', (SELECT coalesce(json_object_agg(id, status), '{}') FROM core_registry.assets WHERE site_id = ${st}),
@@ -1242,8 +1256,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log(`${file}：清单本身没有问题（${sql.deviceCount} 台设备、${sql.pointCount} 个点位）`);
     if (flag !== '--offline') console.log(formatPlan(planOnboarding(profile, readState(container, profile))));
   } else {
-    for (const [database, script] of [['hvac_s1', sql.registry], ['hvac_s2', sql.telemetry], ['hvac_s1', sql.energy], ['hvac_s1', sql.intelligence]].filter(([, script]) => script)) psql(container, database, script);
-    console.log(`${profile.site.name}: Gateway ${profile.gateway.name}, ${sql.deviceCount} devices, ${sql.pointCount} points registered`);
+    const currentState = flag === '--offline' ? null : readState(container, profile);
+    const applySql = currentState ? buildOnboardingSql(profile, { expectedSiteRevision: currentState.siteRevision }) : sql;
+    for (const [database, script] of [['hvac_s1', applySql.registry], ['hvac_s2', applySql.telemetry], ['hvac_s1', applySql.energy], ['hvac_s1', applySql.intelligence]].filter(([, script]) => script)) psql(container, database, script);
+    console.log(`${profile.site.name}: Gateway ${profile.gateway.name}, ${applySql.deviceCount} devices, ${applySql.pointCount} points registered`);
     const open = planOnboarding(profile, readState(container, profile)).filter((item) => item.status !== 'ok');
     if (open.length) console.log(`还没完成的：\n${formatPlan(open)}`);
   }

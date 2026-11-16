@@ -114,6 +114,29 @@ func NewCredentialHandlerWithExtensions(service *CredentialService, authorize Cr
 	if concentratorHandler != nil {
 		mux.Handle("/internal/v1/gateways/{gatewayId}/concentrators/", concentratorHandler)
 	}
+	mux.HandleFunc("POST /internal/v1/gateways/{target}", func(w http.ResponseWriter, r *http.Request) {
+		gatewayID, ok := strings.CutSuffix(r.PathValue("target"), ":retire")
+		if !ok || strings.TrimSpace(gatewayID) == "" {
+			http.NotFound(w, r)
+			return
+		}
+		var input struct {
+			TenantID string `json:"tenantId"`
+		}
+		if err := decode(w, r, &input); err != nil {
+			finish(w, nil, err)
+			return
+		}
+		if service == nil {
+			finish(w, nil, errors.New("credential service is not configured"))
+			return
+		}
+		if err := service.RevokeRetiredGateway(r.Context(), input.TenantID, gatewayID); err != nil {
+			finish(w, nil, err)
+			return
+		}
+		finish(w, map[string]any{"gatewayId": gatewayID, "revoked": true}, nil)
+	})
 	for _, route := range []struct {
 		method, path string
 		action       registryauth.Action
@@ -143,11 +166,17 @@ func NewCredentialHandlerWithExtensions(service *CredentialService, authorize Cr
 		})
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isRetireRoute := isGatewayRetireRequest(r)
 		trusted := false
 		if r.TLS != nil && len(r.TLS.VerifiedChains) > 0 && len(r.TLS.VerifiedChains[0]) > 0 {
 			for _, uri := range r.TLS.VerifiedChains[0][0].URIs {
-				if uri.String() == "spiffe://hvac.local/platform-gateway" {
+				switch uri.String() {
+				case "spiffe://hvac.local/platform-gateway":
 					trusted = true
+				case "spiffe://hvac.local/platform-core-service":
+					if isRetireRoute {
+						trusted = true
+					}
 				}
 			}
 		}
@@ -161,4 +190,16 @@ func NewCredentialHandlerWithExtensions(service *CredentialService, authorize Cr
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func isGatewayRetireRequest(r *http.Request) bool {
+	if r == nil || r.Method != http.MethodPost {
+		return false
+	}
+	rest, ok := strings.CutPrefix(r.URL.Path, "/internal/v1/gateways/")
+	if !ok || strings.Contains(rest, "/") {
+		return false
+	}
+	gatewayID, ok := strings.CutSuffix(rest, ":retire")
+	return ok && strings.TrimSpace(gatewayID) != ""
 }

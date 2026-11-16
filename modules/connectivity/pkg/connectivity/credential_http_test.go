@@ -1,6 +1,7 @@
 package connectivity
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -99,5 +100,58 @@ func TestCredentialHandlerWithTunnelRoutingAndPeerCertParsing(t *testing.T) {
 	svc.SetRevokeHook(func(string) {})
 	if _, err := svc.VerifyActiveCredential(context.Background(), nil); !errors.Is(err, ErrEnrollmentRejected) {
 		t.Fatalf("expected ErrEnrollmentRejected for nil cert, got %v", err)
+	}
+}
+
+func TestCredentialHTTPRetireRouteAuthorizationAndValidation(t *testing.T) {
+	concHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := NewCredentialHandlerWithExtensions(&CredentialService{}, nil, nil, concHandler)
+
+	coreURI, _ := url.Parse("spiffe://hvac.local/platform-core-service")
+	corePeer := &x509.Certificate{URIs: []*url.URL{coreURI}}
+	gwURI, _ := url.Parse("spiffe://hvac.local/platform-gateway")
+	gwPeer := &x509.Certificate{URIs: []*url.URL{gwURI}}
+
+	// platform-core-service must NOT access non-retire routes such as /gateway/v1/renew or operator /revoke.
+	for _, target := range []string{"/gateway/v1/renew", "/internal/v1/gateways/0193f000-2000-7000-8000-000000000001/revoke"} {
+		req := httptest.NewRequest(http.MethodPost, target, bytes.NewBufferString(`{}`))
+		req.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{corePeer}}}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("core-service unexpectedly authorized for %s: status=%d", target, rec.Code)
+		}
+	}
+
+	retirePath := "/internal/v1/gateways/0193f000-2000-7000-8000-000000000001:retire"
+
+	// Forged X-Gateway-Client-Cert on :retire must be rejected.
+	forgedReq := httptest.NewRequest(http.MethodPost, retirePath, bytes.NewBufferString(`{"tenantId":"0193f000-1000-7000-8000-000000000001"}`))
+	forgedReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{corePeer}}}
+	forgedReq.Header.Set("X-Gateway-Client-Cert", "forged")
+	forgedRec := httptest.NewRecorder()
+	handler.ServeHTTP(forgedRec, forgedReq)
+	if forgedRec.Code != http.StatusForbidden {
+		t.Fatalf("forged X-Gateway-Client-Cert accepted on :retire: %d", forgedRec.Code)
+	}
+
+	// platform-core-service passes SPIFFE check on :retire and reaches service validation (400 on invalid tenantId).
+	badReq := httptest.NewRequest(http.MethodPost, retirePath, bytes.NewBufferString(`{"tenantId":"not-a-uuid"}`))
+	badReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{corePeer}}}
+	badRec := httptest.NewRecorder()
+	handler.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 ENROLLMENT_REJECTED for malformed tenantId, got %d (%s)", badRec.Code, badRec.Body.String())
+	}
+
+	// platform-gateway remains authorized for concentrator routes alongside :retire.
+	concReq := httptest.NewRequest(http.MethodGet, "/internal/v1/gateways/0193f000-2000-7000-8000-000000000001/concentrators/units", nil)
+	concReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
+	concRec := httptest.NewRecorder()
+	handler.ServeHTTP(concRec, concReq)
+	if concRec.Code != http.StatusOK {
+		t.Fatalf("expected concentrator route 200, got %d", concRec.Code)
 	}
 }

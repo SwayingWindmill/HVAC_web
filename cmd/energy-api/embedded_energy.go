@@ -516,7 +516,68 @@ func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger) (*http.Serv
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second,
 	}
 	logger.Info("energy_api_core_configured", "address", server.Addr)
+	if relay, relayErr := newEmbeddedCoreOutboxRelay(store, certificate, iamRoots, clientCAs, logger); relayErr != nil {
+		store.Close()
+		return nil, nil, func() {}, relayErr
+	} else if relay != nil {
+		go relay.Run(ctx)
+	}
 	return server, telemetry, store.Close, nil
+}
+
+func newEmbeddedCoreOutboxRelay(store *coreservice.PostgresStore, cert tls.Certificate, defaultRoots, fallbackRoots *x509.CertPool, logger *slog.Logger) (*coreservice.OutboxRelay, error) {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CORE_OUTBOX_RELAY_ENABLED")), "false") {
+		return nil, nil
+	}
+	telemetryURL := envOr("CORE_TELEMETRY_RUNTIME_URL", strings.TrimSpace(os.Getenv("TELEMETRY_RUNTIME_URL")))
+	connectivityURL := envOr("CORE_CONNECTIVITY_SERVICE_URL", strings.TrimSpace(os.Getenv("CONNECTIVITY_SERVICE_URL")))
+	commandURL := envOr("CORE_COMMAND_SERVICE_URL", strings.TrimSpace(os.Getenv("COMMAND_SERVICE_URL")))
+	if telemetryURL == "" && connectivityURL == "" && commandURL == "" {
+		return nil, nil
+	}
+	roots := defaultRoots
+	if roots == nil {
+		roots = fallbackRoots
+	}
+	buildClient := func(caEnv string) (*http.Client, error) {
+		pool := roots
+		if customPath := strings.TrimSpace(os.Getenv(caEnv)); customPath != "" {
+			loaded, err := loadCertPool(customPath, caEnv)
+			if err != nil {
+				return nil, err
+			}
+			pool = loaded
+		}
+		return &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{
+				MinVersion:   tls.VersionTLS13,
+				RootCAs:      pool,
+				Certificates: []tls.Certificate{cert},
+			}},
+		}, nil
+	}
+	telClient, err := buildClient("TELEMETRY_RUNTIME_SERVER_CA")
+	if err != nil {
+		return nil, err
+	}
+	connClient, err := buildClient("CONNECTIVITY_SERVER_CA")
+	if err != nil {
+		return nil, err
+	}
+	cmdClient, err := buildClient("COMMAND_SERVICE_SERVER_CA")
+	if err != nil {
+		return nil, err
+	}
+	return coreservice.NewOutboxRelay(store, coreservice.OutboxRelayConfig{
+		TelemetryBaseURL:       telemetryURL,
+		TelemetryHTTPClient:    telClient,
+		ConnectivityBaseURL:    connectivityURL,
+		ConnectivityHTTPClient: connClient,
+		CommandBaseURL:         commandURL,
+		CommandHTTPClient:      cmdClient,
+		Logger:                 logger,
+	})
 }
 
 func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef) (*http.Server, *observability.Runtime, func(), error) {
@@ -674,8 +735,19 @@ func embeddedCommandRuntimeConfig(store commandservice.RuntimeStore, metrics *ob
 		Store: store, Metrics: metrics,
 		DispatcherSPIFFE:       envOr("COMMAND_DISPATCHER_SPIFFE", "spiffe://hvac.local/command-dispatcher"),
 		VerifierSPIFFE:         envOr("COMMAND_VERIFIER_SPIFFE", "spiffe://hvac.local/command-verifier"),
+		CoreRegistrySPIFFEs:    splitNonEmptyCSV(envOr("COMMAND_CORE_REGISTRY_SPIFFES", "spiffe://hvac.local/platform-core-service,spiffe://hvac.local/platform-gateway")),
 		ControlFailureNotifier: notifier,
 	}
+}
+
+func splitNonEmptyCSV(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func buildEmbeddedCommandControlFailureNotifier(alarmRef *embeddedAlarmStoreRef, clientCert *tls.Certificate, logger *slog.Logger) commandservice.ControlFailureNotifier {

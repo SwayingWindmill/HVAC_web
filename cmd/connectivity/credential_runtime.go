@@ -93,7 +93,10 @@ func credentialServerWithConcentrator(store *connectivity.Store, concentratorSer
 		}
 		return claims, nil
 	}
-	tunnelHub := tunnel.NewHub(tunnel.WithDefaultGateway(envOr("CONNECTIVITY_TUNNEL_GATEWAY_ID", "")))
+	tunnelHub := tunnel.NewHub(
+		tunnel.WithDefaultGateway(envOr("CONNECTIVITY_TUNNEL_GATEWAY_ID", "")),
+		tunnel.WithAuditSink(store),
+	)
 	service := connectivity.NewCredentialService(store, authority)
 	service.SetRevokeHook(tunnelHub.CloseGateway)
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {

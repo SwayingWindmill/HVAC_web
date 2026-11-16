@@ -978,6 +978,10 @@ func (stub *stubRuntimeStore) CompleteConnectorEvidence(context.Context, command
 	return nil
 }
 
+func (stub *stubRuntimeStore) CancelPending(context.Context, commandmodel.CancelPendingRequest) ([]string, error) {
+	return nil, nil
+}
+
 func TestControlFailureNotifierCoversUnknownOutcomeAndUnconfirmedPowerNonBlocking(t *testing.T) {
 	now := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
 	svc := New(func() time.Time { return now })

@@ -793,3 +793,27 @@ test('feederAuxiliaryPowerKw, point running override, stabilizeSeconds and flatl
   assert.match(problems, /deviceUntrusted\.durationSeconds/);
   assert.match(problems, /deviceUntrusted\.reasons/);
 });
+
+test('onboarding converges presence signal types, optimistic siteRevision lock, and audit/outbox emission', () => {
+  const query = siteStateQuery(songyaxuan);
+  assert.match(query, /'siteRevision', \(SELECT revision FROM core_registry\.sites WHERE id = /);
+
+  const base = buildOnboardingSql(songyaxuan);
+  assert.match(base.telemetry, /ARRAY\['SOURCE_ACTIVITY', 'EXPLICIT_CONNECT', 'EXPLICIT_DISCONNECT'\]::text\[\]/);
+  assert.match(base.registry, /CREATE TEMP TABLE _onboarding_before /);
+  assert.match(base.registry, /CREATE TEMP TABLE _onboarding_changes ON COMMIT DROP AS/);
+  assert.match(base.registry, /INSERT INTO core_registry\.registry_audit_facts/);
+  assert.match(base.registry, /INSERT INTO core_registry\.domain_outbox_events/);
+  assert.match(base.registry, /ON CONFLICT \(tenant_id, aggregate_type, aggregate_id, aggregate_version, event_type\) DO NOTHING/);
+  assert.doesNotMatch(base.registry, /site revision conflict/);
+
+  const guardedExisting = buildOnboardingSql(songyaxuan, { expectedSiteRevision: 3 });
+  assert.match(guardedExisting.registry, /IF current_rev IS DISTINCT FROM 3::bigint THEN/);
+  assert.match(guardedExisting.registry, /USING ERRCODE = '40001'/);
+
+  const guardedNew = buildOnboardingSql(songyaxuan, { expectedSiteRevision: null });
+  assert.match(guardedNew.registry, /IF current_rev IS NOT NULL THEN/);
+  assert.match(guardedNew.registry, /USING ERRCODE = '40001'/);
+
+  assert.throws(() => buildOnboardingSql(songyaxuan, { expectedSiteRevision: 0 }), /expectedSiteRevision/);
+});
