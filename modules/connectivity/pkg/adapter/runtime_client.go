@@ -22,6 +22,7 @@ const (
 	// MaxObservationBatchBytes keeps encoded acceptBatch requests under Telemetry's 4 MiB limit.
 	MaxObservationBatchBytes         = 3 << 20
 	sourceObservationBatchPath       = "/internal/v1/telemetry/sources/observations:acceptBatch"
+	sourceCoveragePath               = "/internal/v1/telemetry/sources/coverage:report"
 	mqttRuntimeEventPath             = "/internal/v1/telemetry/sources/mqtt/events:accept"
 	maximumTelemetryRuntimeBodyBytes = int64(2 << 20)
 )
@@ -81,23 +82,34 @@ type ObservationReceipt struct {
 }
 
 type RuntimeEventEvidence struct {
-	TenantID   string          `json:"tenantId"`
-	SiteID     string          `json:"siteId"`
-	GatewayID  string          `json:"gatewayId"`
-	MessageID  string          `json:"messageId"`
-	Sequence   int64           `json:"sequence"`
-	EventType  string          `json:"eventType"`
-	SourceType string          `json:"sourceType"`
-	SourceID   string          `json:"sourceId"`
-	Device     *ResolvedDevice `json:"device,omitempty"`
-	EventTime  string          `json:"eventTime"`
-	Severity   string          `json:"severity"`
-	Data       json.RawMessage `json:"data"`
+	TenantID          string          `json:"tenantId"`
+	SiteID            string          `json:"siteId"`
+	GatewayID         string          `json:"gatewayId"`
+	MessageID         string          `json:"messageId"`
+	Sequence          int64           `json:"sequence"`
+	EventType         string          `json:"eventType"`
+	SourceType        string          `json:"sourceType"`
+	SourceID          string          `json:"sourceId"`
+	EventTime         string          `json:"eventTime"`
+	Severity          string          `json:"severity"`
+	Data              json.RawMessage `json:"data"`
+	Device            *ResolvedDevice `json:"device,omitempty"`
+	CoverageDeviceIDs []string        `json:"coverageDeviceIds,omitempty"`
+}
+
+type SourceCoverageReport struct {
+	SourceID       string   `json:"sourceId"`
+	DeviceIDs      []string `json:"deviceIds"`
+	Available      bool     `json:"available"`
+	ReasonCode     *string  `json:"reasonCode,omitempty"`
+	ObservedAt     string   `json:"observedAt,omitempty"`
+	SourceRevision int64    `json:"sourceRevision,omitempty"`
 }
 
 type RuntimeClient interface {
 	AcceptObservationBatch(context.Context, []Observation) ([]ObservationReceipt, error)
 	AcceptRuntimeEvent(context.Context, RuntimeEventEvidence) error
+	ReportSourceCoverage(context.Context, SourceCoverageReport) error
 }
 
 type TelemetryRuntimeClient struct {
@@ -193,6 +205,11 @@ func validReceiptStatus(status string) bool {
 
 func (client *TelemetryRuntimeClient) AcceptRuntimeEvent(ctx context.Context, evidence RuntimeEventEvidence) error {
 	_, err := client.postJSON(ctx, mqttRuntimeEventPath, "MQTT evidence", evidence)
+	return err
+}
+
+func (client *TelemetryRuntimeClient) ReportSourceCoverage(ctx context.Context, report SourceCoverageReport) error {
+	_, err := client.postJSON(ctx, sourceCoveragePath, "MQTT coverage", report)
 	return err
 }
 

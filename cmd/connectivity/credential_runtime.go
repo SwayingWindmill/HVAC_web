@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/concentrator"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
@@ -18,10 +20,10 @@ import (
 )
 
 func credentialServer(store *connectivity.Store) (*http.Server, *tunnel.Hub, error) {
-	return credentialServerWithConcentrator(store, nil)
+	return credentialServerWithRuntime(store, nil, nil)
 }
 
-func credentialServerWithConcentrator(store *connectivity.Store, concentratorService *concentrator.Service) (*http.Server, *tunnel.Hub, error) {
+func credentialServerWithRuntime(store *connectivity.Store, concentratorService *concentrator.Service, coverageReporter adapter.CoverageReporter) (*http.Server, *tunnel.Hub, error) {
 	loopbackAddr := strings.TrimSpace(envOr("CONNECTIVITY_TUNNEL_LOOPBACK_ADDR", "127.0.0.1:18800"))
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {
 		if err := tunnel.ValidateLoopbackAddr(loopbackAddr); err != nil {
@@ -98,7 +100,10 @@ func credentialServerWithConcentrator(store *connectivity.Store, concentratorSer
 		tunnel.WithAuditSink(store),
 	)
 	service := connectivity.NewCredentialService(store, authority)
-	service.SetRevokeHook(tunnelHub.CloseGateway)
+	service.SetRevokeHook(func(gatewayID string) {
+		tunnelHub.CloseGateway(gatewayID)
+		reportGatewayRevokedCoverage(store, coverageReporter, gatewayID)
+	})
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {
 		if _, err := tunnelHub.StartLoopbackListener(loopbackAddr); err != nil {
 			tunnelHub.Close()
@@ -125,4 +130,80 @@ func credentialServerWithConcentrator(store *connectivity.Store, concentratorSer
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       30 * time.Second,
 	}, tunnelHub, nil
+}
+
+type gatewayChildLister interface {
+	ListGatewayChildDeviceIDs(ctx context.Context, gatewayID string) ([]string, error)
+}
+
+func reportGatewayRevokedCoverage(store *connectivity.Store, reporter adapter.CoverageReporter, gatewayID string) {
+	if store == nil {
+		return
+	}
+	reportGatewayRevokedCoverageWithLister(store, reporter, gatewayID)
+}
+
+func reportGatewayRevokedCoverageWithLister(lister gatewayChildLister, reporter adapter.CoverageReporter, gatewayID string) {
+	if lister == nil || reporter == nil {
+		return
+	}
+	trimmedGatewayID := strings.ToLower(strings.TrimSpace(gatewayID))
+	if trimmedGatewayID == "" {
+		return
+	}
+	reportCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	deviceIDs, err := lister.ListGatewayChildDeviceIDs(reportCtx, trimmedGatewayID)
+	if err != nil {
+		return
+	}
+	if isUUIDv7(trimmedGatewayID) {
+		seen := false
+		for _, id := range deviceIDs {
+			if strings.EqualFold(id, trimmedGatewayID) {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			deviceIDs = append(deviceIDs, trimmedGatewayID)
+		}
+	}
+	if len(deviceIDs) == 0 {
+		return
+	}
+	reason := "SOURCE_UNAVAILABLE"
+	now := time.Now().UTC()
+	observedAt := now.Format(time.RFC3339Nano)
+	sourceRev := max(now.UnixNano(), 1)
+	for start := 0; start < len(deviceIDs); start += adapter.MaximumCoverageBatchSize {
+		end := min(start+adapter.MaximumCoverageBatchSize, len(deviceIDs))
+		_ = reporter.ReportSourceCoverage(reportCtx, adapter.SourceCoverageReport{
+			SourceID:       trimmedGatewayID,
+			DeviceIDs:      deviceIDs[start:end],
+			Available:      false,
+			ReasonCode:     &reason,
+			ObservedAt:     observedAt,
+			SourceRevision: sourceRev,
+		})
+	}
+}
+
+func isUUIDv7(raw string) bool {
+	if len(raw) != 36 || raw[8] != '-' || raw[13] != '-' || raw[18] != '-' || raw[23] != '-' || raw[14] != '7' {
+		return false
+	}
+	if raw[19] != '8' && raw[19] != '9' && raw[19] != 'a' && raw[19] != 'b' {
+		return false
+	}
+	for i := 0; i < len(raw); i++ {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			continue
+		}
+		c := raw[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }

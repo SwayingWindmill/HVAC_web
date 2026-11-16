@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,11 +17,21 @@ import (
 
 const (
 	InternalSourceObservationBatchPath      = "/internal/v1/telemetry/sources/observations:acceptBatch"
+	InternalSourceCoveragePath              = "/internal/v1/telemetry/sources/coverage:report"
 	InternalHistoricalReplayObservationPath = "/internal/v1/telemetry/history-replay/observations:accept"
 	InternalMQTTRuntimeEventPath            = "/internal/v1/telemetry/sources/mqtt/events:accept"
 	maximumSourceObservationSize            = 96 << 10
 	maximumSourceObservationBatchSize       = 4 << 20
 )
+
+type sourceCoverageReportRequest struct {
+	SourceID       string   `json:"sourceId"`
+	DeviceIDs      []string `json:"deviceIds"`
+	Available      bool     `json:"available"`
+	ReasonCode     *string  `json:"reasonCode,omitempty"`
+	ObservedAt     string   `json:"observedAt,omitempty"`
+	SourceRevision int64    `json:"sourceRevision,omitempty"`
+}
 
 type sourceObservationBatchRequest struct {
 	Observations []sourceObservationRequest `json:"observations"`
@@ -115,13 +126,21 @@ func (h *handler) handleSourceObservationBatch(writer http.ResponseWriter, reque
 		candidates[index] = candidate
 	}
 	if h.rateLimiter != nil {
-		seenSources := make(map[string]struct{}, len(candidates))
+		sourceOrder := make([]string, 0, len(candidates))
+		eventIDsBySource := make(map[string][]string, len(candidates))
 		for _, candidate := range candidates {
-			if _, seen := seenSources[candidate.SourceID]; seen {
-				continue
+			if _, exists := eventIDsBySource[candidate.SourceID]; !exists {
+				sourceOrder = append(sourceOrder, candidate.SourceID)
 			}
-			seenSources[candidate.SourceID] = struct{}{}
-			if !h.rateLimiter.Allow(request.Context(), limitpolicy.DimensionTelemetryIngest, candidate.SourceID).Allowed {
+			eventIDsBySource[candidate.SourceID] = append(eventIDsBySource[candidate.SourceID], candidate.Position.EventID)
+		}
+		for _, sourceID := range sourceOrder {
+			allowed, err := h.allowUnseenSourceIngest(request.Context(), h.observationAcceptor, sourceID, eventIDsBySource[sourceID])
+			if err != nil {
+				writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The telemetry source acceptance path is temporarily unavailable.", true)
+				return
+			}
+			if !allowed {
 				writeProblem(writer, request, http.StatusTooManyRequests, "TELEMETRY_INGEST_RATE_LIMITED", "The telemetry source observation rate has been exceeded.", true)
 				return
 			}
@@ -149,6 +168,63 @@ func (h *handler) handleSourceObservationBatch(writer http.ResponseWriter, reque
 	writeJSON(writer, http.StatusOK, sourceObservationBatchResponse{Receipts: receipts})
 }
 
+func (h *handler) allowUnseenSourceIngest(ctx context.Context, acceptor any, sourceID string, eventIDs []string) (bool, error) {
+	if filter, hasFilter := acceptor.(UnseenObservationFilter); hasFilter {
+		unseen, err := filter.FilterUnseenObservations(ctx, sourceID, eventIDs)
+		if err != nil {
+			return false, err
+		}
+		if len(unseen) == 0 {
+			return true, nil
+		}
+	}
+	return h.rateLimiter.Allow(ctx, limitpolicy.DimensionTelemetryIngest, sourceID).Allowed, nil
+}
+
+func (h *handler) handleSourceCoverageReport(writer http.ResponseWriter, request *http.Request) {
+	if _, ok := h.trustedSourcePeer(writer, request, h.allowedSourceSPIFFE); !ok {
+		return
+	}
+	if h.coverageAcceptor == nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The telemetry source coverage path is temporarily unavailable.", true)
+		return
+	}
+	var input sourceCoverageReportRequest
+	if !decodeSourceRequestWithLimit(writer, request, &input, maximumSourceObservationBatchSize) {
+		return
+	}
+	observedAt := h.now().UTC()
+	if strings.TrimSpace(input.ObservedAt) != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.ObservedAt))
+		if err != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The telemetry source coverage request is invalid.", false)
+			return
+		}
+		observedAt = parsed.UTC()
+	}
+	sourceRevision := input.SourceRevision
+	if sourceRevision == 0 {
+		sourceRevision = 1
+	}
+	report := SourceCoverageReport{
+		SourceID:       input.SourceID,
+		DeviceIDs:      input.DeviceIDs,
+		Available:      input.Available,
+		ReasonCode:     cloneString(input.ReasonCode),
+		ObservedAt:     observedAt,
+		SourceRevision: sourceRevision,
+	}
+	if err := h.coverageAcceptor.ReportSourceCoverage(request.Context(), report); err != nil {
+		if errors.Is(err, ErrInvalidCoverageReport) {
+			writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The telemetry source coverage request is invalid.", false)
+			return
+		}
+		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The telemetry source coverage path is temporarily unavailable.", true)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"accepted": true})
+}
+
 func (h *handler) handleHistoricalReplayObservation(writer http.ResponseWriter, request *http.Request) {
 	if _, ok := h.trustedSourcePeer(writer, request, h.allowedHistoricalReplaySPIFFE); !ok {
 		return
@@ -166,9 +242,16 @@ func (h *handler) handleHistoricalReplayObservation(writer http.ResponseWriter, 
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_HISTORY_REPLAY_REQUEST_INVALID", "The Historical Replay observation request is invalid.", false)
 		return
 	}
-	if h.rateLimiter != nil && !h.rateLimiter.Allow(request.Context(), limitpolicy.DimensionTelemetryIngest, candidate.SourceID).Allowed {
-		writeProblem(writer, request, http.StatusTooManyRequests, "TELEMETRY_INGEST_RATE_LIMITED", "The Historical Replay observation rate has been exceeded.", true)
-		return
+	if h.rateLimiter != nil {
+		allowed, err := h.allowUnseenSourceIngest(request.Context(), h.historicalObservationAcceptor, candidate.SourceID, []string{candidate.Position.EventID})
+		if err != nil {
+			writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_HISTORY_REPLAY_UNAVAILABLE", "The telemetry Historical Replay path is temporarily unavailable.", true)
+			return
+		}
+		if !allowed {
+			writeProblem(writer, request, http.StatusTooManyRequests, "TELEMETRY_INGEST_RATE_LIMITED", "The Historical Replay observation rate has been exceeded.", true)
+			return
+		}
 	}
 	receipt, err := h.historicalObservationAcceptor.AcceptHistoricalObservation(request.Context(), candidate)
 	if err != nil {
@@ -279,18 +362,19 @@ func deterministicHistoricalReplayEventID(datasetID, partition string, offset in
 }
 
 type mqttRuntimeEventRequest struct {
-	TenantID   string                 `json:"tenantId"`
-	SiteID     string                 `json:"siteId"`
-	GatewayID  string                 `json:"gatewayId"`
-	MessageID  string                 `json:"messageId"`
-	Sequence   int64                  `json:"sequence"`
-	EventType  string                 `json:"eventType"`
-	SourceType string                 `json:"sourceType"`
-	SourceID   string                 `json:"sourceId"`
-	Device     *resolvedDeviceRequest `json:"device"`
-	EventTime  string                 `json:"eventTime"`
-	Severity   string                 `json:"severity"`
-	Data       json.RawMessage        `json:"data"`
+	TenantID          string                 `json:"tenantId"`
+	SiteID            string                 `json:"siteId"`
+	GatewayID         string                 `json:"gatewayId"`
+	MessageID         string                 `json:"messageId"`
+	Sequence          int64                  `json:"sequence"`
+	EventType         string                 `json:"eventType"`
+	SourceType        string                 `json:"sourceType"`
+	SourceID          string                 `json:"sourceId"`
+	EventTime         string                 `json:"eventTime"`
+	Severity          string                 `json:"severity"`
+	Data              json.RawMessage        `json:"data"`
+	Device            *resolvedDeviceRequest `json:"device,omitempty"`
+	CoverageDeviceIDs []string               `json:"coverageDeviceIds,omitempty"`
 }
 
 func (h *handler) handleMQTTRuntimeEvent(writer http.ResponseWriter, request *http.Request) {
@@ -314,6 +398,7 @@ func (h *handler) handleMQTTRuntimeEvent(writer http.ResponseWriter, request *ht
 		TenantID: strings.TrimSpace(input.TenantID), SiteID: strings.TrimSpace(input.SiteID), GatewayID: strings.TrimSpace(input.GatewayID),
 		MessageID: strings.TrimSpace(input.MessageID), Sequence: input.Sequence, EventType: strings.TrimSpace(input.EventType), SourceType: strings.TrimSpace(input.SourceType), SourceID: strings.TrimSpace(input.SourceID),
 		EventTime: eventTime.UTC(), Severity: strings.ToUpper(strings.TrimSpace(input.Severity)), Data: append(json.RawMessage(nil), input.Data...), ReceivedAt: h.now().UTC(),
+		CoverageDeviceIDs: append([]string(nil), input.CoverageDeviceIDs...),
 	}
 	if device := input.Device; device != nil {
 		evidence.Device = &ResolvedDevice{

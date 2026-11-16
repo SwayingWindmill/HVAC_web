@@ -43,6 +43,7 @@ type ServerConfig struct {
 	AllowedSnapshotReaderSPIFFEs   []string
 	RuntimeAudience                string
 	ObservationAcceptor            ObservationAcceptor
+	CoverageAcceptor               CoverageAcceptor
 	HistoricalObservationAcceptor  HistoricalObservationAcceptor
 	AllowedHistoricalReplaySPIFFE  string
 	MQTTEvidenceAcceptor           MQTTEvidenceAcceptor
@@ -69,6 +70,7 @@ type handler struct {
 	allowedSnapshotReaderSPIFFEs   map[string]struct{}
 	runtimeAudience                string
 	observationAcceptor            ObservationAcceptor
+	coverageAcceptor               CoverageAcceptor
 	historicalObservationAcceptor  HistoricalObservationAcceptor
 	allowedHistoricalReplaySPIFFE  string
 	mqttEvidenceAcceptor           MQTTEvidenceAcceptor
@@ -121,12 +123,19 @@ func NewHandler(config ServerConfig) http.Handler {
 			registrySyncer = candidate
 		}
 	}
+	coverageAcceptor := config.CoverageAcceptor
+	if coverageAcceptor == nil {
+		if fallback, ok := config.ObservationAcceptor.(CoverageAcceptor); ok {
+			coverageAcceptor = fallback
+		}
+	}
 	return &handler{
 		store: config.Store, latestCache: config.LatestCache, authorizer: config.Authorizer,
 		allowedGatewaySPIFFE:           strings.TrimSpace(config.AllowedGatewaySPIFFE),
 		allowedSnapshotReaderSPIFFEs:   allowedSnapshotReaderSPIFFEs,
 		runtimeAudience:                strings.TrimSpace(config.RuntimeAudience),
 		observationAcceptor:            config.ObservationAcceptor,
+		coverageAcceptor:               coverageAcceptor,
 		historicalObservationAcceptor:  config.HistoricalObservationAcceptor,
 		allowedHistoricalReplaySPIFFE:  strings.TrimSpace(config.AllowedHistoricalReplaySPIFFE),
 		mqttEvidenceAcceptor:           config.MQTTEvidenceAcceptor,
@@ -163,6 +172,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if request.URL.Path == InternalSourceObservationBatchPath {
 		h.handleSourceObservationBatch(writer, request)
+		return
+	}
+	if request.URL.Path == InternalSourceCoveragePath {
+		h.handleSourceCoverageReport(writer, request)
 		return
 	}
 	if request.URL.Path == InternalHistoricalReplayObservationPath {

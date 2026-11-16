@@ -12,6 +12,9 @@
 - 将实时遥测写入热路径重构为端到端微批处理，消除逐点同步 HTTP、逐点档案库查询与逐点 PostgreSQL 事务锁竞争：
   - `modules/connectivity`（`pkg/connectivity.Store.ResolveBindings`、`pkg/adapter` 与 `cmd/connectivity`）在单个只读事务中批量解析网关下属设备与点位绑定，队列支持空队列零延迟直刷或窗口聚合（`CONNECTIVITY_BATCH_MAX_MESSAGES` / `CONNECTIVITY_BATCH_WINDOW`，受 `512` 条与 `3 MiB` 编码上限约束），通过 `POST /internal/v1/telemetry/sources/observations:acceptBatch` 转发给 `telemetry-worker` 并严格按到达顺序在整批落盘后回执 MQTT ACK；同步移除旧的逐点接口 `/internal/v1/telemetry/sources/observations:accept` 与 `ResolvePoint`。
   - `modules/telemetry`（`AcceptObservationBatch` / `AcceptHistoricalObservationBatch`、`source_server.go` 与 `probe_offset.go`）在单次 `ReadCommitted` 事务内按统一 `hashtextextended` 锁序获取分区、事件与设备咨询锁并预取事实，内存顺序判定后经 `pgx.Batch` 批量落盘，每台设备每批最多重算一次设备快照与实时推送出站消息，保持与历史重放、点位健康检查及 ClickHouse 历史中继链路完全兼容。
+- 为遥测批量入库与历史重放补齐限流前查重防活锁，并为连接服务增加短生命周期绑定缓存：
+  - `modules/telemetry` 在 `:acceptBatch` 与历史重放入口限流前先通过 `FilterUnseenObservations` 过滤 `telemetry_runtime.source_observations` 已落盘 `source_event_id`，对全部命中的重试请求跳过限流计数以免 `429` Retry 活锁。
+  - `modules/connectivity`（`Store.ResolveGateway`、`Store.ResolveDevice` 与 `Store.ResolveBindings`）引入 `4096` 条上限、按网关 `epoch` 防护的短时缓存（正缓存 `30` 秒并受凭证 `valid_until` 上限约束，负缓存 `5` 秒），在凭证签发/吊销与已退役网关吊销时即时清退缓存并触发覆盖率摘除。
 
 - 将遥测在离线状态收敛为单一事实源，并降低能耗计算对档案服务的逐条查询开销：
   - MQTT 上线、断线与遗嘱事件（`LWT`）在 `modules/connectivity` 解析出目标设备后，统一写入 `telemetry_runtime.presence_signals` 并仅重算该设备自身快照，网关离线不再级联把下属子设备标为离线（ADR 0002、ADR 0015）。
@@ -23,6 +26,7 @@
 
 #### 新增
 
+- 打通网关 MQTT 上下线与下游设备观测覆盖率闭环（ADR 0002、ADR 0015）：新增迁移 `mqtt-runtime-events.sql`，边缘模拟器 `MQTTPublisher` 注册与建连同 `sessionId` 配对的 `LWT` 遗嘱消息及 `GATEWAY_CONNECTED` / `GATEWAY_DISCONNECTED` 事件；连接服务附带目标设备与下游子设备列表上报，遥测服务按同会话与事件时间定序（含 `60` 秒未来时钟偏斜防护），仅向网关自身写入 `presence_signals` 而将子设备通过 `observation_coverage` 置为 `UNAVAILABLE`（`SOURCE_UNAVAILABLE`）；连接运行期在订阅就绪、每 `60` 秒心跳、断连、进程优雅退出与网关凭证吊销时同步调用 `POST /internal/v1/telemetry/sources/coverage:report` 上报受管设备覆盖状态。
 - 注册表资源退役检查现同步校验仍处于启用状态的设备源键映射（`core_registry.gateway_device_source_keys`），新增 `GATEWAY_SOURCE_KEY` 绑定写入与 `closeOnly` 解绑关停（产出 `registry.binding.closed`），确保绑定先解绑后方可退役。
 - 网关反向运维隧道（`modules/connectivity/pkg/tunnel`）新增持久审计表 `connectivity.gateway_tunnel_audit` 与租户 RLS 策略，记录会话建立（`SESSION_OPENED`）、断开及收发字节数（`SESSION_CLOSED`）、流打开（`STREAM_OPENED`）与端口/建流拒绝（`STREAM_REJECTED`）。
 - 核心注册表新增域事件投递中继（`OutboxRelay`）与投递授权迁移 `registry-outbox-delivery-grants.sql`，在设备/点位变更、导入提交与设备/站点退役时自动向遥测运行时（`/internal/v1/telemetry/registry-sync:apply`）、连接凭证（`/internal/v1/gateways/{gatewayId}:retire`）与指令服务（`/internal/v1/commands:cancelRetiredTarget`）推送权威状态、吊销已退役网关凭证/隧道并取消挂起指令。

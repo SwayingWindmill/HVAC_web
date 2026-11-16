@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -53,6 +54,52 @@ type mqttEnvelopePoint struct {
 	Unit    *string `json:"unit,omitempty"`
 }
 
+type mqttEventEnvelope struct {
+	SchemaVersion string           `json:"schemaVersion"`
+	MessageID     string           `json:"messageId"`
+	GatewayID     string           `json:"gatewayId"`
+	Timestamp     int64            `json:"timestamp"`
+	Sequence      uint64           `json:"sequence"`
+	Payload       mqttEventPayload `json:"payload"`
+}
+
+type mqttEventPayload struct {
+	EventType  string          `json:"eventType"`
+	SourceType string          `json:"sourceType"`
+	SourceID   string          `json:"sourceId"`
+	EventTime  int64           `json:"eventTime"`
+	Severity   string          `json:"severity"`
+	Data       json.RawMessage `json:"data"`
+}
+
+type mqttSessionState struct {
+	mu          sync.Mutex
+	sessionID   string
+	sessionTime time.Time
+}
+
+func (s *mqttSessionState) next(now time.Time) (string, time.Time, error) {
+	t := now.UTC()
+	id, err := newUUIDV7(t)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	s.mu.Lock()
+	s.sessionID = id
+	s.sessionTime = t
+	s.mu.Unlock()
+	return id, t, nil
+}
+
+func (s *mqttSessionState) current() (string, time.Time) {
+	if s == nil {
+		return "", time.Time{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionID, s.sessionTime
+}
+
 type MQTTPublisher struct {
 	gatewayID      string
 	config         MQTTGatewayConfig
@@ -63,6 +110,8 @@ type MQTTPublisher struct {
 	commandTopic   string
 	metrics        *observability.Registry
 	connected      *atomic.Bool
+	eventSequence  *atomic.Uint64
+	session        *mqttSessionState
 }
 
 func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewayConfig, edgeRuntime *EdgeControlRuntime, metrics *observability.Registry) (*MQTTPublisher, error) {
@@ -95,8 +144,24 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		metrics = observability.NewRegistry()
 	}
 	connected := &atomic.Bool{}
+	eventSequence := &atomic.Uint64{}
+	session := &mqttSessionState{}
 	_ = metrics.SetGauge("hvac_edge_mqtt_connected", "Whether the Edge publisher is connected to the MQTT broker.", nil, 0)
 	_ = metrics.SetGauge("hvac_edge_mqtt_queue_capacity_bytes", "Configured persistent MQTT queue capacity in bytes.", nil, float64(config.MaximumQueueBytes))
+	initialSessionID, initialSessionTime, err := session.next(time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	initialWillPayload, err := buildSessionWillPayload(config.GatewayID, initialSessionID, eventSequence.Add(1), initialSessionTime)
+	if err != nil {
+		return nil, err
+	}
+	willMessage := &paho.WillMessage{
+		Retain:  false,
+		QoS:     1,
+		Topic:   mqttEventTopic(config.GatewayID),
+		Payload: initialWillPayload,
+	}
 	manager, err := autopaho.NewConnection(ctx, autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{brokerURL},
 		TlsCfg:                        tlsConfig,
@@ -105,6 +170,24 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		SessionExpiryInterval:         24 * 60 * 60,
 		ConnectTimeout:                10 * time.Second,
 		ReconnectBackoff:              autopaho.DefaultExponentialBackoff(),
+		WillMessage:                   willMessage,
+		ConnectPacketBuilder: func(connect *paho.Connect, _ *url.URL) (*paho.Connect, error) {
+			sessionID, sessionTime, err := session.next(time.Now().UTC())
+			if err != nil {
+				return nil, err
+			}
+			freshWillPayload, err := buildSessionWillPayload(config.GatewayID, sessionID, eventSequence.Add(1), sessionTime)
+			if err != nil {
+				return nil, err
+			}
+			connect.WillMessage = &paho.WillMessage{
+				Retain:  false,
+				QoS:     1,
+				Topic:   mqttEventTopic(config.GatewayID),
+				Payload: freshWillPayload,
+			}
+			return connect, nil
+		},
 		OnConnectError: func(error) {
 			connected.Store(false)
 			_ = metrics.SetGauge("hvac_edge_mqtt_connected", "Whether the Edge publisher is connected to the MQTT broker.", nil, 0)
@@ -117,6 +200,7 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			return true
 		},
 		OnConnectionUp: func(manager *autopaho.ConnectionManager, _ *paho.Connack) {
+			sessionID, sessionTime := session.current()
 			connected.Store(true)
 			_ = metrics.SetGauge("hvac_edge_mqtt_connected", "Whether the Edge publisher is connected to the MQTT broker.", nil, 1)
 			_ = metrics.AddCounter("hvac_edge_mqtt_connections_total", "Edge MQTT connection attempts by outcome.", map[string]string{"outcome": "success"}, 1)
@@ -128,6 +212,15 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 					{Topic: commandTopic, QoS: 1},
 				}}); err != nil {
 					return
+				}
+				if connectPayload, err := buildSessionConnectedPayload(config.GatewayID, sessionID, eventSequence.Add(1), sessionTime); err == nil {
+					eventContext, eventCancel := context.WithTimeout(ctx, 5*time.Second)
+					_, _ = manager.Publish(eventContext, &paho.Publish{
+						Topic:   mqttEventTopic(config.GatewayID),
+						QoS:     1,
+						Payload: connectPayload,
+					})
+					eventCancel()
 				}
 				flushContext, flushCancel := context.WithTimeout(ctx, 30*time.Second)
 				defer flushCancel()
@@ -156,6 +249,8 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		commandTopic:   mqttCommandTopic(config),
 		metrics:        metrics,
 		connected:      connected,
+		eventSequence:  eventSequence,
+		session:        session,
 	}, nil
 }
 
@@ -240,7 +335,94 @@ func (publisher *MQTTPublisher) Disconnect(ctx context.Context) error {
 	if publisher == nil || publisher.manager == nil {
 		return nil
 	}
+	if publisher.connected != nil && publisher.connected.Load() && publisher.eventSequence != nil {
+		sessionID, _ := publisher.session.current()
+		fields := map[string]any{"clean": true}
+		if sessionID != "" {
+			fields["sessionId"] = sessionID
+		}
+		if rawData, marshalErr := json.Marshal(fields); marshalErr == nil {
+			if disconnectPayload, err := buildLifecycleEventPayload(publisher.gatewayID, "GATEWAY_DISCONNECTED", publisher.eventSequence.Add(1), time.Now().UTC(), rawData); err == nil {
+				pubCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				_, _ = publisher.manager.Publish(pubCtx, &paho.Publish{
+					Topic:   mqttEventTopic(publisher.gatewayID),
+					QoS:     1,
+					Payload: disconnectPayload,
+				})
+				cancel()
+			}
+		}
+	}
 	return publisher.manager.Disconnect(ctx)
+}
+
+func buildSessionWillPayload(gatewayID, sessionID string, sequence uint64, sessionTime time.Time) ([]byte, error) {
+	fields := map[string]any{"reason": "broker_connection_lost"}
+	if strings.TrimSpace(sessionID) != "" {
+		fields["sessionId"] = strings.TrimSpace(sessionID)
+	}
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	return buildLifecycleEventPayload(gatewayID, "LWT", sequence, sessionTime, raw)
+}
+
+func buildSessionConnectedPayload(gatewayID, sessionID string, sequence uint64, sessionTime time.Time) ([]byte, error) {
+	if sessionTime.IsZero() {
+		sessionTime = time.Now().UTC()
+	}
+	fields := map[string]any{}
+	if strings.TrimSpace(sessionID) != "" {
+		fields["sessionId"] = strings.TrimSpace(sessionID)
+	}
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	return buildLifecycleEventPayload(gatewayID, "GATEWAY_CONNECTED", sequence, sessionTime, raw)
+}
+
+func buildLifecycleEventPayload(gatewayID, eventType string, sequence uint64, observedAt time.Time, data json.RawMessage) ([]byte, error) {
+	envelope, err := buildLifecycleEventEnvelope(gatewayID, eventType, sequence, observedAt, data)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(envelope)
+}
+
+func buildLifecycleEventEnvelope(gatewayID, eventType string, sequence uint64, observedAt time.Time, data json.RawMessage) (mqttEventEnvelope, error) {
+	now := observedAt.UTC()
+	messageID, err := newUUIDV7(now)
+	if err != nil {
+		return mqttEventEnvelope{}, err
+	}
+	severity := "INFO"
+	if strings.EqualFold(strings.TrimSpace(eventType), "LWT") {
+		severity = "WARNING"
+	}
+	if !json.Valid(data) {
+		data = json.RawMessage(`{}`)
+	}
+	return mqttEventEnvelope{
+		SchemaVersion: mqttTelemetryEnvelopeSchemaVersion,
+		MessageID:     messageID,
+		GatewayID:     gatewayID,
+		Timestamp:     now.UnixMilli(),
+		Sequence:      sequence,
+		Payload: mqttEventPayload{
+			EventType:  strings.TrimSpace(eventType),
+			SourceType: "GATEWAY",
+			SourceID:   gatewayID,
+			EventTime:  now.UnixMilli(),
+			Severity:   severity,
+			Data:       append(json.RawMessage(nil), data...),
+		},
+	}, nil
+}
+
+func mqttEventTopic(gatewayID string) string {
+	return "hvac/v1/" + gatewayID + "/up/event"
 }
 
 func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttTelemetryEnvelope, error) {

@@ -113,15 +113,17 @@ func (identities *fakeIdentities) bindingsCalls() [][]DevicePointQuery {
 // fakeTelemetry accepts observation batches, failing the first failures calls and holding
 // each call until release is closed when release is set.
 type fakeTelemetry struct {
-	mu           sync.Mutex
-	observations []Observation
-	batches      [][]Observation
-	events       []RuntimeEventEvidence
-	failures     int
-	calls        int
-	failHook     func(call int, batch []Observation) error
-	release      chan struct{}
-	entered      chan struct{}
+	mu              sync.Mutex
+	observations    []Observation
+	batches         [][]Observation
+	events          []RuntimeEventEvidence
+	coverageReports []SourceCoverageReport
+	coverageErr     error
+	failures        int
+	calls           int
+	failHook        func(call int, batch []Observation) error
+	release         chan struct{}
+	entered         chan struct{}
 }
 
 func (telemetry *fakeTelemetry) AcceptObservationBatch(ctx context.Context, observations []Observation) ([]ObservationReceipt, error) {
@@ -175,6 +177,16 @@ func (telemetry *fakeTelemetry) AcceptRuntimeEvent(_ context.Context, evidence R
 	telemetry.mu.Lock()
 	defer telemetry.mu.Unlock()
 	telemetry.events = append(telemetry.events, evidence)
+	return nil
+}
+
+func (telemetry *fakeTelemetry) ReportSourceCoverage(_ context.Context, report SourceCoverageReport) error {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	if telemetry.coverageErr != nil {
+		return telemetry.coverageErr
+	}
+	telemetry.coverageReports = append(telemetry.coverageReports, report)
 	return nil
 }
 

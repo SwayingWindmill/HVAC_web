@@ -42,12 +42,69 @@ type ObservationAcceptor interface {
 	AcceptObservationBatch(context.Context, []ObservationCandidate) ([]ObservationReceipt, error)
 }
 
+type UnseenObservationFilter interface {
+	FilterUnseenObservations(context.Context, string, []string) (map[string]bool, error)
+}
+
 type HistoricalObservationAcceptor interface {
 	AcceptHistoricalObservation(context.Context, ObservationCandidate) (ObservationReceipt, error)
 	AcceptHistoricalObservationBatch(context.Context, []ObservationCandidate) ([]ObservationReceipt, error)
 }
 
 type observationEvaluator func(ObservationCandidate, ObservationFacts, time.Time) ObservationDecision
+
+// FilterUnseenObservations returns the subset of eventIDs not yet recorded in
+// telemetry_runtime.source_observations for sourceID so retries do not burn rate limits.
+func (store *PostgresStore) FilterUnseenObservations(ctx context.Context, sourceID string, eventIDs []string) (map[string]bool, error) {
+	if store == nil || store.pool == nil {
+		return nil, errors.New("telemetry runtime store is closed")
+	}
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" || len(eventIDs) == 0 {
+		return map[string]bool{}, nil
+	}
+	unseen := make(map[string]bool, len(eventIDs))
+	uniqueIDs := make([]string, 0, len(eventIDs))
+	for _, rawID := range eventIDs {
+		id := strings.ToLower(strings.TrimSpace(rawID))
+		if !uuidV7Pattern.MatchString(id) || unseen[id] {
+			continue
+		}
+		unseen[id] = true
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	if len(uniqueIDs) == 0 {
+		return map[string]bool{}, nil
+	}
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("begin telemetry unseen observation query: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s2_telemetry_runtime`); err != nil {
+		return nil, fmt.Errorf("activate telemetry runtime database identity: %w", err)
+	}
+	rows, err := tx.Query(ctx, `
+SELECT source_event_id::text
+FROM telemetry_runtime.source_observations
+WHERE source_id = $1 AND source_event_id = ANY($2::uuid[])
+`, sourceID, uniqueIDs)
+	if err != nil {
+		return nil, fmt.Errorf("query existing telemetry source observations: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan existing telemetry source observation: %w", err)
+		}
+		delete(unseen, strings.ToLower(strings.TrimSpace(id)))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate existing telemetry source observations: %w", err)
+	}
+	return unseen, nil
+}
 
 func (store *PostgresStore) AcceptObservation(ctx context.Context, candidate ObservationCandidate) (ObservationReceipt, error) {
 	receipts, err := store.AcceptObservationBatch(ctx, []ObservationCandidate{candidate})

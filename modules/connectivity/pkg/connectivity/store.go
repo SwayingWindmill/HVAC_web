@@ -23,8 +23,9 @@ var (
 // Store is Connectivity's database access for every Tenant. Each call works inside
 // the Tenant it is given, resolved from the Registry gateway directory.
 type Store struct {
-	pool *pgxpool.Pool
-	now  func() time.Time
+	pool  *pgxpool.Pool
+	now   func() time.Time
+	cache uplinkCache
 }
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
