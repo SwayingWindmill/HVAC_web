@@ -60,3 +60,53 @@ func TestGrantScopeRiskAndRevisionValidation(t *testing.T) {
 		t.Fatal("authorization purpose drift unexpectedly accepted")
 	}
 }
+
+func TestGrantProvenanceAndWorkloadDecisionValidation(t *testing.T) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	claims := GrantClaims{
+		Issuer: "spiffe://hvac.local/iam-service", Presenter: "spiffe://hvac.local/platform-gateway", Audience: "command-service",
+		GrantID: "grant-auto-1", Purpose: commandmodel.AuthorizationCommandSubmit,
+		PrincipalID: "principal-opt", TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
+		Capability: commandmodel.CapabilitySetChilledWaterTemperatureSetpoint, MaximumRisk: commandmodel.RiskLow,
+		CapabilityRevision: "capability:set-chilled-water-temperature-setpoint:v1", PolicyRevision: "policy-1",
+		IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: "token-auto-1",
+		WorkloadSPIFFE: "spiffe://hvac.local/optimization-service",
+		LeaseID:        "lease-1",
+		ArmedBy:        "operator-1",
+	}
+	token, err := SignGrant(privateKey, claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := VerifyGrant(&privateKey.PublicKey, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.WorkloadSPIFFE != claims.WorkloadSPIFFE || verified.LeaseID != claims.LeaseID || verified.ArmedBy != claims.ArmedBy {
+		t.Fatalf("provenance claims lost across sign/verify: %#v", verified)
+	}
+	snapshot := Snapshot(verified)
+	if snapshot.WorkloadSPIFFE != claims.WorkloadSPIFFE || snapshot.LeaseID != claims.LeaseID || snapshot.ArmedBy != claims.ArmedBy {
+		t.Fatalf("provenance fields lost in Snapshot(): %#v", snapshot)
+	}
+	current := 7.0
+	req := WorkloadDecisionRequest{
+		TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
+		Capability:         commandmodel.CapabilitySetChilledWaterTemperatureSetpoint,
+		CapabilityRevision: "capability:set-chilled-water-temperature-setpoint:v1",
+		Purpose:            commandmodel.AuthorizationCommandSubmit,
+		Parameters:         commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 8.0},
+		CurrentValue:       &current,
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("valid workload request rejected: %v", err)
+	}
+	req.CurrentValue = nil
+	if err := req.Validate(); err == nil {
+		t.Fatal("expected setpoint request without currentValue to be rejected")
+	}
+}

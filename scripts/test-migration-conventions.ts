@@ -21,11 +21,11 @@ const emptyBaseline = (overrides: Partial<MigrationConventionBaseline> = {}): Mi
   grandfatheredMigrations: overrides.grandfatheredMigrations ?? [],
 });
 
-test('repository satisfies migration conventions with 12 live schemas and 222 live tables', () => {
+test('repository satisfies migration conventions with 12 live schemas and 224 live tables', () => {
   const result = inspectMigrationConventions(loadRepoConventionInput(repoRoot));
   assert.deepEqual(result.violations, []);
   assert.equal(result.liveSchemas.size, 12);
-  assert.equal(result.liveTables.size, 222);
+  assert.equal(result.liveTables.size, 224);
 });
 
 test('real historical 005_s13_alarm_orthogonal.sql fails when evaluated as a new migration', () => {
@@ -308,5 +308,5 @@ test('CLI reports repository migration conventions passing', () => {
     encoding: 'utf8',
   });
   assert.equal(cli.status, 0, cli.stderr || cli.stdout);
-  assert.match(cli.stdout, /12 live schemas, 222 live tables commented/);
+  assert.match(cli.stdout, /12 live schemas, 224 live tables commented/);
 });

@@ -5,6 +5,8 @@ go 1.27.4
 require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/quanlaihe/hvac-web/libs/analyticsmodel v0.0.0
+	github.com/quanlaihe/hvac-web/libs/commandauth v0.0.0
+	github.com/quanlaihe/hvac-web/libs/commandmodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/energyseries v0.0.0
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/intelligencemodel v0.0.0
@@ -12,6 +14,10 @@ require (
 	github.com/quanlaihe/hvac-web/libs/schedulerjob v0.0.0
 	github.com/quanlaihe/hvac-web/libs/workloadtls v0.0.0
 )
+
+replace github.com/quanlaihe/hvac-web/libs/commandauth => ../../libs/commandauth
+
+replace github.com/quanlaihe/hvac-web/libs/commandmodel => ../../libs/commandmodel
 
 replace github.com/quanlaihe/hvac-web/libs/intelligencemodel => ../../libs/intelligencemodel
 

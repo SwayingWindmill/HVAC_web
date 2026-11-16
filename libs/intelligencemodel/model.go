@@ -108,6 +108,10 @@ const (
 	RecommendationDraft    RecommendationApproval = "DRAFT"
 	RecommendationApproved RecommendationApproval = "APPROVED"
 	RecommendationRejected RecommendationApproval = "REJECTED"
+
+	// DefaultRecommendationTTL caps the validity of a generated setpoint recommendation so stale
+	// advice cannot execute past the next hourly optimization cycle plus preparation headroom.
+	DefaultRecommendationTTL = 65 * time.Minute
 )
 
 type CurrentStateRevalidation struct {
@@ -136,7 +140,18 @@ type OptimizationRecommendation struct {
 	Approval           RecommendationApproval    `json:"approval"`
 	Revalidation       *CurrentStateRevalidation `json:"currentStateRevalidation,omitempty"`
 	CommandIntentID    string                    `json:"commandIntentId,omitempty"`
+	ValidUntil         *time.Time                `json:"validUntil,omitempty"`
 	CreatedAt          time.Time                 `json:"createdAt"`
+}
+
+func (recommendation OptimizationRecommendation) EffectiveValidUntil() time.Time {
+	if recommendation.ValidUntil != nil && !recommendation.ValidUntil.IsZero() {
+		return recommendation.ValidUntil.UTC()
+	}
+	if recommendation.CreatedAt.IsZero() {
+		return time.Time{}
+	}
+	return recommendation.CreatedAt.UTC().Add(DefaultRecommendationTTL)
 }
 
 func (definition ModelDefinition) Validate() error {
@@ -186,6 +201,10 @@ func (recommendation OptimizationRecommendation) CanCreateCommand(now time.Time)
 	}
 	if !recommendation.Revalidation.ValidatedAt.After(recommendation.CreatedAt) || !recommendation.Revalidation.ExpiresAt.After(now.UTC()) {
 		return errors.New("current-state revalidation is stale")
+	}
+	validUntil := recommendation.EffectiveValidUntil()
+	if validUntil.IsZero() || !validUntil.After(now.UTC()) {
+		return errors.New("recommendation validity window has expired")
 	}
 	return nil
 }

@@ -34,6 +34,8 @@ type RegistryStore interface {
 	ListMonthlyElectricityBudgets(context.Context, registryauth.GrantClaims, string, MonthlyElectricityBudgetFilter) (MonthlyElectricityBudgetList, error)
 	ListUtilityBills(context.Context, registryauth.GrantClaims, string, UtilityBillFilter) (UtilityBillList, error)
 	GetSiteControlState(context.Context, registryauth.GrantClaims, string) (SiteControlState, error)
+	GetSiteAutoControlLease(context.Context, registryauth.GrantClaims, string) (SiteAutoControlLeaseState, error)
+	ListOptimizationExecutionMonitors(context.Context, registryauth.GrantClaims, string) (OptimizationExecutionMonitorList, error)
 }
 
 type PostgresStore struct {

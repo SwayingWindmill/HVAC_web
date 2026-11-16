@@ -31,6 +31,15 @@ func evaluateGovernance(request commandmodel.SubmitRequest, now time.Time) (comm
 	if err := validateAuthorizationSnapshot(request, risk.Level, now); err != nil {
 		return commandmodel.RiskSnapshot{}, "", err
 	}
+	// Automated commands backed by a human-armed lease skip redundant medium-risk approval
+	// because the operator already completed TOTP step-up when arming the lease and
+	// validateAuthorizationSnapshot verifies risk.Level <= auth.MaximumRisk.
+	if risk.Level != commandmodel.RiskCritical &&
+		strings.TrimSpace(request.Authorization.LeaseID) != "" &&
+		strings.TrimSpace(request.Authorization.WorkloadSPIFFE) != "" &&
+		strings.TrimSpace(request.Authorization.ArmedBy) != "" {
+		return risk, commandmodel.ApprovalNone, nil
+	}
 	return risk, approvalPolicyForRisk(risk.Level), nil
 }
 
