@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "maxGrandfatheredMigrations": 128,
-  "maxLegacyNumberedMigrations": 14,
+  "maxLegacyNumberedMigrations": 15,
   "legacyDatabases": [
     "hvac_s0",
     "hvac_s1",
@@ -152,6 +152,7 @@
     "infra/registry/postgres/init/043-auto-control-leases-and-monitors.sql",
     "infra/telemetry/postgres/init/013-schema-and-table-comments.sql",
     "modules/command/migrations/007_schema_and_table_comments.sql",
+    "modules/command/migrations/008_command_precondition_mode.sql",
     "modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tables.sql",
     "modules/workorder/migrations/007_schema_and_table_comments.sql",
     "services/operations-agent-service/migrations/operations/003_schema_and_table_comments.sql"
