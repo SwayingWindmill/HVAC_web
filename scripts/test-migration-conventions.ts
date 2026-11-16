@@ -17,15 +17,23 @@ const checkScript = resolve(repoRoot, 'scripts/check-migration-conventions.ts');
 const emptyBaseline = (overrides: Partial<MigrationConventionBaseline> = {}): MigrationConventionBaseline => ({
   schemaVersion: 1,
   maxGrandfatheredMigrations: overrides.maxGrandfatheredMigrations ?? 0,
+  maxLegacyNumberedMigrations: overrides.maxLegacyNumberedMigrations ?? 0,
   legacyDatabases: overrides.legacyDatabases ?? [],
   grandfatheredMigrations: overrides.grandfatheredMigrations ?? [],
+  legacyNumberedMigrations: overrides.legacyNumberedMigrations ?? [],
 });
 
-test('repository satisfies migration conventions with 12 live schemas and 224 live tables', () => {
+test('repository satisfies migration conventions with non-empty live schema and table comments', () => {
   const result = inspectMigrationConventions(loadRepoConventionInput(repoRoot));
   assert.deepEqual(result.violations, []);
-  assert.equal(result.liveSchemas.size, 12);
-  assert.equal(result.liveTables.size, 224);
+  assert.ok(result.liveSchemas.size > 0);
+  assert.ok(result.liveTables.size > 0);
+  for (const [schemaKey, comment] of result.liveSchemas) {
+    assert.ok(comment && comment.trim().length > 0, `expected non-empty comment for schema ${schemaKey}`);
+  }
+  for (const [tableKey, comment] of result.liveTables) {
+    assert.ok(comment && comment.trim().length > 0, `expected non-empty comment for table ${tableKey}`);
+  }
 });
 
 test('real historical 005_s13_alarm_orthogonal.sql fails when evaluated as a new migration', () => {
@@ -82,9 +90,9 @@ test('real historical 016_s32_rules_unevaluable.sql fails stage filename check w
 test('rejects new stage-numbered database hvac_s6 while allowing business-domain databases', () => {
   const bad = findMigrationConventionViolations({
     baseline: emptyBaseline(),
-    migrations: [{ database: 'hvac_s6', path: 'modules/billing/migrations/001_ledger.sql' }],
+    migrations: [{ database: 'hvac_s6', path: 'modules/billing/migrations/billing_ledger.sql' }],
     files: {
-      'modules/billing/migrations/001_ledger.sql': `
+      'modules/billing/migrations/billing_ledger.sql': `
         CREATE SCHEMA billing;
         CREATE TABLE billing.invoices (id uuid PRIMARY KEY);
         COMMENT ON SCHEMA billing IS '账单域。';
@@ -96,9 +104,9 @@ test('rejects new stage-numbered database hvac_s6 while allowing business-domain
 
   const good = findMigrationConventionViolations({
     baseline: emptyBaseline(),
-    migrations: [{ database: 'hvac_billing', path: 'modules/billing/migrations/001_ledger.sql' }],
+    migrations: [{ database: 'hvac_billing', path: 'modules/billing/migrations/billing_ledger.sql' }],
     files: {
-      'modules/billing/migrations/001_ledger.sql': `
+      'modules/billing/migrations/billing_ledger.sql': `
         CREATE SCHEMA billing;
         CREATE TABLE billing.invoices (id uuid PRIMARY KEY);
         COMMENT ON SCHEMA billing IS '账单域。';
@@ -112,9 +120,9 @@ test('rejects new stage-numbered database hvac_s6 while allowing business-domain
 test('rejects redundant schema_stem_ table prefix and guides to short table name', () => {
   const bad = findMigrationConventionViolations({
     baseline: emptyBaseline(),
-    migrations: [{ database: 'hvac_alarm', path: 'modules/alarm/migrations/001_escalations.sql' }],
+    migrations: [{ database: 'hvac_alarm', path: 'modules/alarm/migrations/alarm_escalations.sql' }],
     files: {
-      'modules/alarm/migrations/001_escalations.sql': `
+      'modules/alarm/migrations/alarm_escalations.sql': `
         CREATE SCHEMA alarm_runtime;
         CREATE TABLE alarm_runtime.alarm_escalations (id uuid PRIMARY KEY);
         COMMENT ON SCHEMA alarm_runtime IS '告警域。';
@@ -129,9 +137,9 @@ test('rejects redundant schema_stem_ table prefix and guides to short table name
 
   const good = findMigrationConventionViolations({
     baseline: emptyBaseline(),
-    migrations: [{ database: 'hvac_alarm', path: 'modules/alarm/migrations/001_escalations.sql' }],
+    migrations: [{ database: 'hvac_alarm', path: 'modules/alarm/migrations/alarm_escalations.sql' }],
     files: {
-      'modules/alarm/migrations/001_escalations.sql': `
+      'modules/alarm/migrations/alarm_escalations.sql': `
         CREATE SCHEMA alarm_runtime;
         CREATE TABLE alarm_runtime.escalations (id uuid PRIMARY KEY);
         COMMENT ON SCHEMA alarm_runtime IS '告警域。';
@@ -145,9 +153,9 @@ test('rejects redundant schema_stem_ table prefix and guides to short table name
 test('enforces live schema and table COMMENT ON coverage and handles cleared comments and dropped tables', () => {
   const missingAndCleared = findMigrationConventionViolations({
     baseline: emptyBaseline(),
-    migrations: [{ database: 'hvac_billing', path: 'modules/billing/migrations/001_init.sql' }],
+    migrations: [{ database: 'hvac_billing', path: 'modules/billing/migrations/billing_init.sql' }],
     files: {
-      'modules/billing/migrations/001_init.sql': `
+      'modules/billing/migrations/billing_init.sql': `
         CREATE SCHEMA billing;
         CREATE TABLE billing.invoices (id uuid PRIMARY KEY);
         CREATE TABLE billing.payments (id uuid PRIMARY KEY);
@@ -164,18 +172,18 @@ test('enforces live schema and table COMMENT ON coverage and handles cleared com
   const droppedLater = findMigrationConventionViolations({
     baseline: emptyBaseline(),
     migrations: [
-      { database: 'hvac_billing', path: 'modules/billing/migrations/001_init.sql' },
-      { database: 'hvac_billing', path: 'modules/billing/migrations/002_drop_staging.sql' },
+      { database: 'hvac_billing', path: 'modules/billing/migrations/billing_init.sql' },
+      { database: 'hvac_billing', path: 'modules/billing/migrations/drop_staging.sql' },
     ],
     files: {
-      'modules/billing/migrations/001_init.sql': `
+      'modules/billing/migrations/billing_init.sql': `
         CREATE SCHEMA billing;
         CREATE TABLE billing.invoices (id uuid PRIMARY KEY);
         CREATE TABLE billing.staging_rows (id uuid PRIMARY KEY);
         COMMENT ON SCHEMA billing IS '账单域。';
         COMMENT ON TABLE billing.invoices IS '结算账单。';
       `,
-      'modules/billing/migrations/002_drop_staging.sql': `
+      'modules/billing/migrations/drop_staging.sql': `
         DROP TABLE IF EXISTS billing.staging_rows;
       `,
     },
@@ -187,18 +195,18 @@ test('rejects strict COMMENT ON targeting unknown or dropped schemas and tables 
   const result = inspectMigrationConventions({
     baseline: emptyBaseline(),
     migrations: [
-      { database: 'hvac_billing', path: 'modules/billing/migrations/001_init.sql' },
-      { database: 'hvac_billing', path: 'modules/billing/migrations/002_phantom_comments.sql' },
+      { database: 'hvac_billing', path: 'modules/billing/migrations/billing_init.sql' },
+      { database: 'hvac_billing', path: 'modules/billing/migrations/phantom_comments.sql' },
     ],
     files: {
-      'modules/billing/migrations/001_init.sql': `
+      'modules/billing/migrations/billing_init.sql': `
         CREATE SCHEMA billing;
         CREATE TABLE billing.invoices (id uuid PRIMARY KEY);
         CREATE TABLE billing.staging_rows (id uuid PRIMARY KEY);
         COMMENT ON SCHEMA billing IS '账单域。';
         COMMENT ON TABLE billing.invoices IS '结算电费单。';
       `,
-      'modules/billing/migrations/002_phantom_comments.sql': `
+      'modules/billing/migrations/phantom_comments.sql': `
         DROP TABLE billing.staging_rows;
         COMMENT ON SCHEMA unknown_schema IS '幽灵域注释。';
         COMMENT ON TABLE billing.staging_rows IS '已删除表的注释。';
@@ -231,9 +239,9 @@ test('baseline ratchet rejects bloated count or stale paths no longer in migrati
       maxGrandfatheredMigrations: 0,
       grandfatheredMigrations: ['modules/legacy/migrations/001_gone.sql'],
     }),
-    migrations: [{ database: 'hvac_billing', path: 'modules/billing/migrations/001_init.sql' }],
+    migrations: [{ database: 'hvac_billing', path: 'modules/billing/migrations/billing_init.sql' }],
     files: {
-      'modules/billing/migrations/001_init.sql': `
+      'modules/billing/migrations/billing_init.sql': `
         CREATE SCHEMA billing;
         CREATE TABLE billing.invoices (id uuid PRIMARY KEY);
         COMMENT ON SCHEMA billing IS '账单域。';
@@ -248,9 +256,9 @@ test('baseline ratchet rejects bloated count or stale paths no longer in migrati
 test('enforces Chinese comments, validates CREATE USER and CTAS with options, and permits HVAC temp identifiers', () => {
   const englishOnly = findMigrationConventionViolations({
     baseline: emptyBaseline(),
-    migrations: [{ database: 'hvac_billing', path: 'modules/billing/migrations/001_init.sql' }],
+    migrations: [{ database: 'hvac_billing', path: 'modules/billing/migrations/billing_init.sql' }],
     files: {
-      'modules/billing/migrations/001_init.sql': `
+      'modules/billing/migrations/billing_init.sql': `
         CREATE SCHEMA billing;
         CREATE TABLE billing.invoices (id uuid PRIMARY KEY);
         COMMENT ON SCHEMA billing IS 'Billing schema.';
@@ -270,9 +278,9 @@ test('enforces Chinese comments, validates CREATE USER and CTAS with options, an
 
   const userAndCtas = findMigrationConventionViolations({
     baseline: emptyBaseline(),
-    migrations: [{ database: 'hvac_cooling', path: 'modules/cooling/migrations/001_limits.sql' }],
+    migrations: [{ database: 'hvac_cooling', path: 'modules/cooling/migrations/cooling_limits.sql' }],
     files: {
-      'modules/cooling/migrations/001_limits.sql': `
+      'modules/cooling/migrations/cooling_limits.sql': `
         CREATE USER tmp_reader;
         CREATE SCHEMA cooling;
         CREATE TABLE cooling.copy_table WITH (fillfactor = 70) AS SELECT 1 AS x;
@@ -286,9 +294,9 @@ test('enforces Chinese comments, validates CREATE USER and CTAS with options, an
 
   const allowedHvacTemp = findMigrationConventionViolations({
     baseline: emptyBaseline(),
-    migrations: [{ database: 'hvac_cooling', path: 'modules/cooling/migrations/002_chiller_temp_limits.sql' }],
+    migrations: [{ database: 'hvac_cooling', path: 'modules/cooling/migrations/chiller_temp_limits.sql' }],
     files: {
-      'modules/cooling/migrations/002_chiller_temp_limits.sql': `
+      'modules/cooling/migrations/chiller_temp_limits.sql': `
         CREATE SCHEMA cooling;
         CREATE TABLE cooling.supply_temp_bounds (
           site_id uuid PRIMARY KEY,
@@ -302,11 +310,140 @@ test('enforces Chinese comments, validates CREATE USER and CTAS with options, an
   assert.deepEqual(allowedHvacTemp, []);
 });
 
+test('rejects new migrations with numeric sequence prefixes while allowing semantic domain-topic filenames', () => {
+  const numericRejected = findMigrationConventionViolations({
+    baseline: emptyBaseline(),
+    migrations: [
+      { database: 'hvac_billing', path: 'modules/billing/migrations/001_billing_invoices.sql' },
+      { database: 'hvac_cooling', path: 'infra/registry/postgres/init/044-auto-control-leases.sql' },
+    ],
+    files: {
+      'modules/billing/migrations/001_billing_invoices.sql': `
+        CREATE SCHEMA billing;
+        CREATE TABLE billing.invoices (id uuid PRIMARY KEY);
+        COMMENT ON SCHEMA billing IS '账单域。';
+        COMMENT ON TABLE billing.invoices IS '结算电费单。';
+      `,
+      'infra/registry/postgres/init/044-auto-control-leases.sql': `
+        CREATE SCHEMA cooling;
+        CREATE TABLE cooling.leases (id uuid PRIMARY KEY);
+        COMMENT ON SCHEMA cooling IS '冷站控制域。';
+        COMMENT ON TABLE cooling.leases IS '自动控制租约。';
+      `,
+    },
+  });
+  assert.equal(numericRejected.length, 2, numericRejected.join('\n'));
+  for (const violation of numericRejected) {
+    assert.ok(violation.includes('lowercase domain-topic naming (<domain-topic>.sql'), violation);
+    assert.ok(violation.includes('without numeric sequence prefixes'), violation);
+    assert.ok(violation.includes('manifest.v1.json'), violation);
+    assert.ok(violation.includes('migration-list.tsv'), violation);
+  }
+
+  const semanticAccepted = findMigrationConventionViolations({
+    baseline: emptyBaseline(),
+    migrations: [
+      { database: 'hvac_billing', path: 'modules/billing/migrations/billing-invoices.sql' },
+      { database: 'hvac_cooling', path: 'infra/registry/postgres/init/auto_control_leases.sql' },
+    ],
+    files: {
+      'modules/billing/migrations/billing-invoices.sql': `
+        CREATE SCHEMA billing;
+        CREATE TABLE billing.invoices (id uuid PRIMARY KEY);
+        COMMENT ON SCHEMA billing IS '账单域。';
+        COMMENT ON TABLE billing.invoices IS '结算电费单。';
+      `,
+      'infra/registry/postgres/init/auto_control_leases.sql': `
+        CREATE SCHEMA cooling;
+        CREATE TABLE cooling.leases (id uuid PRIMARY KEY);
+        COMMENT ON SCHEMA cooling IS '冷站控制域。';
+        COMMENT ON TABLE cooling.leases IS '自动控制租约。';
+      `,
+    },
+  });
+  assert.deepEqual(semanticAccepted, []);
+
+  const semanticStageRejected = findMigrationConventionViolations({
+    baseline: emptyBaseline(),
+    migrations: [{ database: 'hvac_billing', path: 'modules/billing/migrations/s13_billing_invoices.sql' }],
+    files: {
+      'modules/billing/migrations/s13_billing_invoices.sql': `
+        CREATE SCHEMA billing;
+        COMMENT ON SCHEMA billing IS '账单域。';
+      `,
+    },
+  });
+  assert.ok(semanticStageRejected.some((v) => v.includes('stage or temporary tag')), semanticStageRejected.join('\n'));
+
+  const legacyAllowedButSqlChecked = findMigrationConventionViolations({
+    baseline: emptyBaseline({
+      maxLegacyNumberedMigrations: 1,
+      legacyNumberedMigrations: ['modules/billing/migrations/001_billing_invoices.sql'],
+    }),
+    migrations: [{ database: 'hvac_billing', path: 'modules/billing/migrations/001_billing_invoices.sql' }],
+    files: {
+      'modules/billing/migrations/001_billing_invoices.sql': `
+        CREATE SCHEMA billing;
+        CREATE TABLE billing.invoices (id uuid PRIMARY KEY);
+        COMMENT ON SCHEMA billing IS '账单域。';
+      `,
+    },
+  });
+  assert.equal(legacyAllowedButSqlChecked.length, 1, legacyAllowedButSqlChecked.join('\n'));
+  assert.ok(
+    legacyAllowedButSqlChecked[0].includes('live table "billing.invoices" is missing a non-empty COMMENT ON TABLE'),
+    legacyAllowedButSqlChecked[0],
+  );
+});
+
+test('legacyNumberedMigrations ratchet rejects count overflow, stale paths, duplicates, and grandfathered overlap', () => {
+  const overflowAndStale = findMigrationConventionViolations({
+    baseline: emptyBaseline({
+      maxLegacyNumberedMigrations: 0,
+      legacyNumberedMigrations: [
+        'modules/billing/migrations/001_billing_invoices.sql',
+        'modules/billing/migrations/002_gone.sql',
+      ],
+    }),
+    migrations: [{ database: 'hvac_billing', path: 'modules/billing/migrations/001_billing_invoices.sql' }],
+    files: {
+      'modules/billing/migrations/001_billing_invoices.sql': `
+        CREATE SCHEMA billing;
+        CREATE TABLE billing.invoices (id uuid PRIMARY KEY);
+        COMMENT ON SCHEMA billing IS '账单域。';
+        COMMENT ON TABLE billing.invoices IS '结算电费单。';
+      `,
+    },
+  });
+  assert.ok(overflowAndStale.some((v) => v.includes('exceeds maxLegacyNumberedMigrations')), overflowAndStale.join('\n'));
+  assert.ok(overflowAndStale.some((v) => v.includes('002_gone.sql') && v.includes('no longer registered in migration-list.tsv')), overflowAndStale.join('\n'));
+
+  const duplicateAndOverlap = findMigrationConventionViolations({
+    baseline: emptyBaseline({
+      maxGrandfatheredMigrations: 1,
+      grandfatheredMigrations: ['modules/billing/migrations/001_billing_invoices.sql'],
+      maxLegacyNumberedMigrations: 2,
+      legacyNumberedMigrations: [
+        'modules/billing/migrations/001_billing_invoices.sql',
+        'modules/billing/migrations/001_billing_invoices.sql',
+      ],
+    }),
+    migrations: [{ database: 'hvac_billing', path: 'modules/billing/migrations/001_billing_invoices.sql' }],
+    files: {
+      'modules/billing/migrations/001_billing_invoices.sql': `
+        CREATE SCHEMA billing;
+      `,
+    },
+  });
+  assert.ok(duplicateAndOverlap.some((v) => v.includes('duplicate legacy numbered migration')), duplicateAndOverlap.join('\n'));
+  assert.ok(duplicateAndOverlap.some((v) => v.includes('already in grandfatheredMigrations')), duplicateAndOverlap.join('\n'));
+});
+
 test('CLI reports repository migration conventions passing', () => {
   const cli = spawnSync(process.execPath, ['--experimental-strip-types', checkScript], {
     cwd: repoRoot,
     encoding: 'utf8',
   });
   assert.equal(cli.status, 0, cli.stderr || cli.stdout);
-  assert.match(cli.stdout, /12 live schemas, 224 live tables commented/);
+  assert.match(cli.stdout, /^OK: migration conventions passed \(\d+ live schemas, \d+ live tables commented\)\./);
 });

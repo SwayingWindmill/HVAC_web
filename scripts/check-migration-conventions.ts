@@ -10,8 +10,10 @@ export interface RegisteredMigration {
 export interface MigrationConventionBaseline {
   readonly schemaVersion: 1;
   readonly maxGrandfatheredMigrations: number;
+  readonly maxLegacyNumberedMigrations: number;
   readonly legacyDatabases: readonly string[];
   readonly grandfatheredMigrations: readonly string[];
+  readonly legacyNumberedMigrations: readonly string[];
 }
 
 export interface ConventionCheckInput {
@@ -41,7 +43,8 @@ type ParsedStatement =
 const SNAKE_CASE_PATTERN = /^[a-z][a-z0-9_]*$/;
 const VALID_DATABASE_PATTERN = /^hvac_[a-z][a-z0-9_]*$/;
 const STAGE_DATABASE_PATTERN = /^hvac_s\d+$/;
-const VALID_FILENAME_PATTERN = /^\d{3}[a-z]?[-_][a-z0-9]+(?:[-_][a-z0-9]+)*\.sql$/;
+const LEGACY_NUMBERED_FILENAME_PATTERN = /^\d{3}[a-z]?[-_][a-z0-9]+(?:[-_][a-z0-9]+)*\.sql$/;
+const SEMANTIC_FILENAME_PATTERN = /^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*\.sql$/;
 const STAGE_FILENAME_PATTERN = /(?:^|[-_])(?:s\d+|backup|tmp)(?:[-_.]|$)/;
 const FORBIDDEN_IDENTIFIER_PATTERN = /(?:^|_)(?:s\d+|pre_s\d+|backup|tmp)(?:_|$)|(?:migration_report|identity_map)/;
 const FORBIDDEN_ROLE_PATTERN = /(?:^|_)(?:s\d+|tmp|backup)(?:_|$)|local_only|fixture/;
@@ -78,8 +81,10 @@ export const parseBaselineJson = (rawJson: string): MigrationConventionBaseline 
   return {
     schemaVersion: 1,
     maxGrandfatheredMigrations: readNonNegativeInt(parsed, 'maxGrandfatheredMigrations'),
+    maxLegacyNumberedMigrations: readNonNegativeInt(parsed, 'maxLegacyNumberedMigrations'),
     legacyDatabases: readStringArray(parsed, 'legacyDatabases'),
     grandfatheredMigrations: readStringArray(parsed, 'grandfatheredMigrations'),
+    legacyNumberedMigrations: readStringArray(parsed, 'legacyNumberedMigrations'),
   };
 };
 
@@ -326,13 +331,22 @@ const validateTableRules = (
   }
 };
 
-const validateMigrationFileName = (violations: string[], migrationPath: string): void => {
+const validateMigrationFileName = (
+  violations: string[],
+  migrationPath: string,
+  allowLegacyNumbered: boolean,
+): void => {
   const fileName = basename(migrationPath);
-  if (!VALID_FILENAME_PATTERN.test(fileName)) {
+  if (allowLegacyNumbered) {
+    if (!LEGACY_NUMBERED_FILENAME_PATTERN.test(fileName)) {
+      violations.push(
+        `${migrationPath}: legacy migration filename "${fileName}" must match <NNN>-<domain-topic>.sql or <NNN>_<domain_topic>.sql in lowercase.`,
+      );
+    }
+  } else if (!SEMANTIC_FILENAME_PATTERN.test(fileName)) {
     violations.push(
-      `${migrationPath}: migration filename "${fileName}" must match <NNN>-<domain-topic>.sql or <NNN>_<domain_topic>.sql in lowercase.`,
+      `${migrationPath}: migration filename "${fileName}" must use lowercase domain-topic naming (<domain-topic>.sql or <domain_topic>.sql) without numeric sequence prefixes; execution order lives in manifest.v1.json and migration-list.tsv.`,
     );
-    return;
   }
   if (STAGE_FILENAME_PATTERN.test(fileName)) {
     violations.push(
@@ -686,28 +700,73 @@ const handleSqlStatement = ({
   }
 };
 
-export const inspectMigrationConventions = (input: ConventionCheckInput): MigrationConventionResult => {
-  const violations: string[] = [];
-  const legacyDbSet = new Set(input.baseline.legacyDatabases);
-  const seenGrandfathered = new Set<string>();
-  const registeredPaths = new Set(input.migrations.map((m) => m.path));
-  const activeDatabases = new Set(input.migrations.map((m) => m.database));
-
-  if (input.baseline.grandfatheredMigrations.length > input.baseline.maxGrandfatheredMigrations) {
+const collectBaselineRatchetSet = ({
+  violations,
+  paths,
+  maxCount,
+  listField,
+  maxField,
+  entryLabel,
+  registeredPaths,
+}: {
+  readonly violations: string[];
+  readonly paths: readonly string[];
+  readonly maxCount: number;
+  readonly listField: string;
+  readonly maxField: string;
+  readonly entryLabel: string;
+  readonly registeredPaths: ReadonlySet<string>;
+}): Set<string> => {
+  if (paths.length > maxCount) {
     violations.push(
-      `scripts/migration-conventions-baseline.json: grandfatheredMigrations count (${input.baseline.grandfatheredMigrations.length}) exceeds maxGrandfatheredMigrations (${input.baseline.maxGrandfatheredMigrations}).`,
+      `scripts/migration-conventions-baseline.json: ${listField} count (${paths.length}) exceeds ${maxField} (${maxCount}).`,
     );
   }
 
-  for (const path of input.baseline.grandfatheredMigrations) {
-    if (seenGrandfathered.has(path)) {
-      violations.push(`scripts/migration-conventions-baseline.json: duplicate grandfathered migration "${path}".`);
+  const seen = new Set<string>();
+  for (const path of paths) {
+    if (seen.has(path)) {
+      violations.push(`scripts/migration-conventions-baseline.json: duplicate ${entryLabel} "${path}".`);
       continue;
     }
-    seenGrandfathered.add(path);
+    seen.add(path);
     if (!registeredPaths.has(path)) {
       violations.push(
-        `scripts/migration-conventions-baseline.json: "${path}" is no longer registered in migration-list.tsv; remove it and lower maxGrandfatheredMigrations.`,
+        `scripts/migration-conventions-baseline.json: "${path}" is no longer registered in migration-list.tsv; remove it and lower ${maxField}.`,
+      );
+    }
+  }
+  return seen;
+};
+
+export const inspectMigrationConventions = (input: ConventionCheckInput): MigrationConventionResult => {
+  const violations: string[] = [];
+  const legacyDbSet = new Set(input.baseline.legacyDatabases);
+  const registeredPaths = new Set(input.migrations.map((m) => m.path));
+  const activeDatabases = new Set(input.migrations.map((m) => m.database));
+
+  const seenGrandfathered = collectBaselineRatchetSet({
+    violations,
+    paths: input.baseline.grandfatheredMigrations,
+    maxCount: input.baseline.maxGrandfatheredMigrations,
+    listField: 'grandfatheredMigrations',
+    maxField: 'maxGrandfatheredMigrations',
+    entryLabel: 'grandfathered migration',
+    registeredPaths,
+  });
+  const seenLegacyNumbered = collectBaselineRatchetSet({
+    violations,
+    paths: input.baseline.legacyNumberedMigrations,
+    maxCount: input.baseline.maxLegacyNumberedMigrations,
+    listField: 'legacyNumberedMigrations',
+    maxField: 'maxLegacyNumberedMigrations',
+    entryLabel: 'legacy numbered migration',
+    registeredPaths,
+  });
+  for (const path of seenLegacyNumbered) {
+    if (seenGrandfathered.has(path)) {
+      violations.push(
+        `scripts/migration-conventions-baseline.json: "${path}" is already in grandfatheredMigrations; remove it from legacyNumberedMigrations and lower maxLegacyNumberedMigrations.`,
       );
     }
   }
@@ -730,7 +789,7 @@ export const inspectMigrationConventions = (input: ConventionCheckInput): Migrat
 
   for (const { database, path } of input.migrations) {
     const strict = !seenGrandfathered.has(path);
-    if (strict) validateMigrationFileName(violations, path);
+    if (strict) validateMigrationFileName(violations, path, seenLegacyNumbered.has(path));
     const sql = input.files[path];
     if (sql === undefined) {
       violations.push(`${path}: registered in migration-list.tsv but SQL file is missing.`);
