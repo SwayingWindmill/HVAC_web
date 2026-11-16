@@ -57,25 +57,12 @@ func (repository *HistoryPostgresRepository) Close() {
 	}
 }
 
-func insertHistoryOutboxIntent(ctx context.Context, tx pgx.Tx, observationID string, candidate ObservationCandidate, decision ObservationDecision, sourcePayloadSHA string) error {
+func encodeHistoryOutboxPayload(observationID string, candidate ObservationCandidate, decision ObservationDecision, sourcePayloadSHA string) ([]byte, string, error) {
 	observation, err := buildHistoryObservation(observationID, candidate, decision, sourcePayloadSHA)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
-	payload, digest, err := encodeHistoryObservation(observation)
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec(ctx, `
-INSERT INTO telemetry_runtime.telemetry_history_outbox (
-  event_id, payload, outbox_payload_sha256, delivery_state, available_at,
-  attempts, last_error_code, lease_id, leased_until, published_at, created_at
-) VALUES ($1::uuid, $2::jsonb, $3, 'PENDING', $4, 0, NULL, NULL, NULL, NULL, $4)
-`, observationID, payload, digest, candidate.ReceivedAt)
-	if err != nil {
-		return fmt.Errorf("persist telemetry history outbox intent: %w", err)
-	}
-	return nil
+	return encodeHistoryObservation(observation)
 }
 
 func buildHistoryObservation(observationID string, candidate ObservationCandidate, decision ObservationDecision, sourcePayloadSHA string) (HistoryObservation, error) {

@@ -30,7 +30,7 @@ func TestS2MetricsUseBoundedLabelsAndBaseUnits(t *testing.T) {
 	registry := observability.NewRegistry()
 	metrics := newS2Metrics(registry, func() time.Time { return now })
 	metrics.observeRequest(InternalBatchSnapshotPath, 200, 250*time.Millisecond)
-	metrics.observeRequest(InternalSourceObservationPath, 200, 5*time.Millisecond)
+	metrics.observeRequest(InternalSourceObservationBatchPath, 200, 5*time.Millisecond)
 	metrics.observeIngest("rejected", "scope")
 	metrics.observeSourceLag("other", "rejected", now.Add(-3*time.Second), now)
 	metrics.observeDataQuality(ObservationReceipt{Status: ObservationAccepted, Quality: QualityGood})

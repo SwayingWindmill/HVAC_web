@@ -161,8 +161,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.handleRegistrySync(writer, request)
 		return
 	}
-	if request.URL.Path == InternalSourceObservationPath {
-		h.handleSourceObservation(writer, request)
+	if request.URL.Path == InternalSourceObservationBatchPath {
+		h.handleSourceObservationBatch(writer, request)
 		return
 	}
 	if request.URL.Path == InternalHistoricalReplayObservationPath {

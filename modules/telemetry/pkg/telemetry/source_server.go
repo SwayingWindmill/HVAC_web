@@ -15,11 +15,20 @@ import (
 )
 
 const (
-	InternalSourceObservationPath           = "/internal/v1/telemetry/sources/observations:accept"
+	InternalSourceObservationBatchPath      = "/internal/v1/telemetry/sources/observations:acceptBatch"
 	InternalHistoricalReplayObservationPath = "/internal/v1/telemetry/history-replay/observations:accept"
 	InternalMQTTRuntimeEventPath            = "/internal/v1/telemetry/sources/mqtt/events:accept"
 	maximumSourceObservationSize            = 96 << 10
+	maximumSourceObservationBatchSize       = 4 << 20
 )
+
+type sourceObservationBatchRequest struct {
+	Observations []sourceObservationRequest `json:"observations"`
+}
+
+type sourceObservationBatchResponse struct {
+	Receipts []ObservationReceipt `json:"receipts"`
+}
 
 type sourcePositionRequest struct {
 	Partition string `json:"partition"`
@@ -78,7 +87,7 @@ type historicalReplayObservationRequest struct {
 // Device replays in its own partition.
 const historicalReplaySourceID = "history-replay"
 
-func (h *handler) handleSourceObservation(writer http.ResponseWriter, request *http.Request) {
+func (h *handler) handleSourceObservationBatch(writer http.ResponseWriter, request *http.Request) {
 	peer, ok := h.trustedSourcePeer(writer, request, h.allowedSourceSPIFFE)
 	if !ok {
 		return
@@ -87,36 +96,57 @@ func (h *handler) handleSourceObservation(writer http.ResponseWriter, request *h
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The telemetry source acceptance path is temporarily unavailable.", true)
 		return
 	}
-	var input sourceObservationRequest
-	if !decodeSourceRequest(writer, request, &input) {
+	var input sourceObservationBatchRequest
+	if !decodeSourceRequestWithLimit(writer, request, &input, maximumSourceObservationBatchSize) {
 		return
 	}
-	candidate, err := normalizeSourceObservation(input, h.now().UTC())
-	if err != nil {
+	if len(input.Observations) == 0 || len(input.Observations) > MaxObservationBatchSize {
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The telemetry source request is invalid.", false)
 		return
 	}
-	if h.rateLimiter != nil && !h.rateLimiter.Allow(request.Context(), limitpolicy.DimensionTelemetryIngest, candidate.SourceID).Allowed {
-		writeProblem(writer, request, http.StatusTooManyRequests, "TELEMETRY_INGEST_RATE_LIMITED", "The telemetry source observation rate has been exceeded.", true)
-		return
+	receivedAt := h.now().UTC()
+	candidates := make([]ObservationCandidate, len(input.Observations))
+	for index, item := range input.Observations {
+		candidate, err := normalizeSourceObservation(item, receivedAt)
+		if err != nil {
+			writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The telemetry source request is invalid.", false)
+			return
+		}
+		candidates[index] = candidate
 	}
-	receipt, err := h.observationAcceptor.AcceptObservation(request.Context(), candidate)
-	if err != nil {
+	if h.rateLimiter != nil {
+		seenSources := make(map[string]struct{}, len(candidates))
+		for _, candidate := range candidates {
+			if _, seen := seenSources[candidate.SourceID]; seen {
+				continue
+			}
+			seenSources[candidate.SourceID] = struct{}{}
+			if !h.rateLimiter.Allow(request.Context(), limitpolicy.DimensionTelemetryIngest, candidate.SourceID).Allowed {
+				writeProblem(writer, request, http.StatusTooManyRequests, "TELEMETRY_INGEST_RATE_LIMITED", "The telemetry source observation rate has been exceeded.", true)
+				return
+			}
+		}
+	}
+	receipts, err := h.observationAcceptor.AcceptObservationBatch(request.Context(), candidates)
+	if err != nil || len(receipts) != len(candidates) {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "TELEMETRY_SOURCE_UNAVAILABLE", "The telemetry source acceptance path is temporarily unavailable.", true)
 		return
 	}
-	sourceOutcome, sourceReason := "success", "none"
-	if receipt.Status == ObservationQuarantined {
-		sourceOutcome = "rejected"
-		sourceReason = quarantineReasonFamily(receipt.QuarantineReason)
+	dependency := sourceDependency(peer)
+	for index, receipt := range receipts {
+		sourceOutcome, sourceReason := "success", "none"
+		if receipt.Status == ObservationQuarantined {
+			sourceOutcome = "rejected"
+			sourceReason = quarantineReasonFamily(receipt.QuarantineReason)
+		}
+		h.metrics.observeDataQuality(receipt)
+		h.metrics.observeIngest(sourceOutcome, sourceReason)
+		h.metrics.observeSourceLag(dependency, sourceOutcome, candidates[index].SampledAt, candidates[index].ReceivedAt)
+		if receipt.Status == ObservationQuarantined {
+			h.metrics.observeQuarantine(sourceReason)
+		}
 	}
-	h.metrics.observeDataQuality(receipt)
-	h.metrics.observeIngest(sourceOutcome, sourceReason)
-	h.metrics.observeSourceLag(sourceDependency(peer), sourceOutcome, candidate.SampledAt, candidate.ReceivedAt)
-	if receipt.Status == ObservationQuarantined {
-		h.metrics.observeQuarantine(sourceReason)
-	}
-	writeJSON(writer, http.StatusOK, receipt)
+	writeJSON(writer, http.StatusOK, sourceObservationBatchResponse{Receipts: receipts})
 }
 
 func (h *handler) handleHistoricalReplayObservation(writer http.ResponseWriter, request *http.Request) {
@@ -323,12 +353,16 @@ func (h *handler) trustedSourcePeer(writer http.ResponseWriter, request *http.Re
 }
 
 func decodeSourceRequest(writer http.ResponseWriter, request *http.Request, destination any) bool {
+	return decodeSourceRequestWithLimit(writer, request, destination, maximumSourceObservationSize)
+}
+
+func decodeSourceRequestWithLimit(writer http.ResponseWriter, request *http.Request, destination any, limit int64) bool {
 	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(request.Header.Get("Content-Type")))
 	if err != nil || mediaType != "application/json" {
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The telemetry source request is invalid.", false)
 		return false
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumSourceObservationSize)
+	request.Body = http.MaxBytesReader(writer, request.Body, limit)
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil || ensureJSONEOF(decoder) != nil {

@@ -725,3 +725,487 @@ WHERE device_id = $1::uuid
 		t.Fatalf("presence=%v expected=%s", currentPresence, presence)
 	}
 }
+
+func batchDeviceID(suffix int) string {
+	return fmt.Sprintf("018f2e00-9800-7000-8000-0000000000%02d", suffix)
+}
+
+func batchPointID(suffix int) string {
+	return fmt.Sprintf("018f2e00-9810-7000-8000-0000000000%02d", suffix)
+}
+
+func batchEventID(suffix int) string {
+	return fmt.Sprintf("018f2e00-9820-7000-8000-000000000%03d", suffix)
+}
+
+func cleanupBatchIntegrationState(t *testing.T, admin *pgxpool.Pool) {
+	t.Helper()
+	ctx := t.Context()
+	statements := []string{
+		`DELETE FROM telemetry_runtime.telemetry_history_outbox WHERE payload ->> 'source_partition' LIKE 'tb-batch-test-%'`,
+		`DELETE FROM telemetry_runtime.source_delivery_evidence WHERE source_partition LIKE 'tb-batch-test-%'`,
+		`DELETE FROM telemetry_runtime.ingest_quarantine WHERE evidence ->> 'sourcePartition' LIKE 'tb-batch-test-%' OR device_id::text LIKE '018f2e00-9800-%'`,
+		`DELETE FROM telemetry_runtime.source_observations WHERE source_partition LIKE 'tb-batch-test-%'`,
+		`DELETE FROM telemetry_runtime.source_positions WHERE source_partition LIKE 'tb-batch-test-%'`,
+		`DELETE FROM telemetry_runtime.telemetry_publication_outbox WHERE device_id::text LIKE '018f2e00-9800-%'`,
+		`DELETE FROM telemetry_runtime.device_observation_snapshots WHERE device_id::text LIKE '018f2e00-9800-%'`,
+		`DELETE FROM telemetry_runtime.device_presence WHERE device_id::text LIKE '018f2e00-9800-%'`,
+		`DELETE FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id::text LIKE '018f2e00-9800-%'`,
+		`DELETE FROM telemetry_runtime.presence_signals WHERE device_id::text LIKE '018f2e00-9800-%'`,
+		`DELETE FROM telemetry_runtime.observation_coverage WHERE device_id::text LIKE '018f2e00-9800-%'`,
+		`DELETE FROM telemetry_runtime.freshness_policies WHERE device_id::text LIKE '018f2e00-9800-%'`,
+		`DELETE FROM telemetry_runtime.presence_policies WHERE device_id::text LIKE '018f2e00-9800-%'`,
+		`DELETE FROM telemetry_runtime.points WHERE device_id::text LIKE '018f2e00-9800-%'`,
+		`DELETE FROM telemetry_runtime.devices WHERE device_id::text LIKE '018f2e00-9800-%'`,
+	}
+	for _, statement := range statements {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("cleanup batch integration state: %v\n%s", err, statement)
+		}
+	}
+}
+
+func seedBatchIntegrationDevice(t *testing.T, admin *pgxpool.Pool, deviceID string, base time.Time) {
+	t.Helper()
+	ctx := t.Context()
+	if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.devices (device_id, tenant_id, site_id, presence_applicability, updated_at)
+VALUES ($1::uuid, $2::uuid, $3::uuid, 'APPLICABLE', $4)`, deviceID, tenantA, siteA, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.presence_policies (
+  device_id, policy_revision, online_within_seconds, offline_after_seconds,
+  coverage_required, accepted_signal_types, max_future_clock_skew_seconds, max_source_lag_seconds, updated_at
+) VALUES ($1::uuid, 1, 60, 180, true, ARRAY['SOURCE_ACTIVITY']::text[], 30, 600, $2)`, deviceID, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.observation_coverage (device_id, available, continuous_since, reason_code, source_revision, updated_at)
+VALUES ($1::uuid, true, $2, NULL, 1, $3)`, deviceID, base.Add(-time.Hour), base); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedBatchFreshnessPolicy(t *testing.T, admin *pgxpool.Pool, deviceID, key, valueType string, unit *string, minVal, maxVal *float64, checks []byte, base time.Time) {
+	t.Helper()
+	if _, err := admin.Exec(t.Context(), `
+INSERT INTO telemetry_runtime.freshness_policies (
+  device_id, telemetry_key, policy_revision, fresh_within_seconds, configured,
+  expected_sample_interval_seconds, value_type, expected_unit, minimum_number, maximum_number, quality_checks, updated_at
+) VALUES ($1::uuid, $2, 1, 600, true, 60, $3, $4, $5, $6, $7::jsonb, $8)`, deviceID, key, valueType, unit, minVal, maxVal, checks, base); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func batchCandidate(eventSuffix int, partition string, offset int64, deviceID, pointID, key string, value json.RawMessage, valueType string, unit *string, pointType string, sampledAt, receivedAt time.Time) ObservationCandidate {
+	return ObservationCandidate{
+		SourceID: sourceA, SourcePath: SourcePathPush,
+		ExternalEntityType: "DEVICE", ExternalID: deviceID,
+		Device:       &ResolvedDevice{TenantID: tenantA, SiteID: siteA, DeviceID: deviceID},
+		Point:        &ResolvedPoint{PointID: pointID, PointType: pointType, ValueType: valueType, Unit: unit, PointRevision: 1},
+		TelemetryKey: key, Value: value, ValueType: valueType, Unit: unit,
+		SampledAt: sampledAt, ReceivedAt: receivedAt,
+		Position: SourcePosition{Partition: partition, Offset: offset, EventID: batchEventID(eventSuffix)},
+	}
+}
+
+func TestPostgresBatchMultiPointSingleDeviceAdvancesRevisionOnce(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	cleanupBatchIntegrationState(t, admin)
+	defer cleanupBatchIntegrationState(t, admin)
+
+	base := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	dev1 := batchDeviceID(1)
+	seedBatchIntegrationDevice(t, admin, dev1, base)
+	cel, rh, pa := "Cel", "%RH", "Pa"
+	seedBatchFreshnessPolicy(t, admin, dev1, "zone.temperature", "NUMBER", &cel, nil, nil, nil, base)
+	seedBatchFreshnessPolicy(t, admin, dev1, "zone.humidity", "NUMBER", &rh, nil, nil, nil, base)
+	seedBatchFreshnessPolicy(t, admin, dev1, "duct.pressure", "NUMBER", &pa, nil, nil, nil, base)
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	at := base.Add(10 * time.Second)
+	const partition = "tb-batch-test-multipoint"
+	receipts := acceptObservationBatchViaHTTP(t, store, []ObservationCandidate{
+		batchCandidate(1, partition, 1, dev1, batchPointID(1), "zone.temperature", json.RawMessage(`23.5`), "NUMBER", &cel, "TELEMETRY", at, at),
+		batchCandidate(2, partition, 2, dev1, batchPointID(2), "zone.humidity", json.RawMessage(`52.0`), "NUMBER", &rh, "TELEMETRY", at, at),
+		batchCandidate(3, partition, 3, dev1, batchPointID(3), "duct.pressure", json.RawMessage(`210.0`), "NUMBER", &pa, "TELEMETRY", at, at),
+	})
+	if len(receipts) != 3 {
+		t.Fatalf("receipts=%#v", receipts)
+	}
+	for index, receipt := range receipts {
+		if receipt.Status != ObservationAccepted || receipt.BusinessRevision != 1 || !receipt.StateChanged || !receipt.PositionAdvanced {
+			t.Fatalf("receipt[%d]=%#v", index, receipt)
+		}
+	}
+	assertIngestRevision(t, admin, dev1, 1, 1)
+	var latestCount, obsCount, outboxCount int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id = $1::uuid`, dev1).Scan(&latestCount); err != nil || latestCount != 3 {
+		t.Fatalf("latestCount=%d err=%v", latestCount, err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.source_observations WHERE source_partition = $1`, partition).Scan(&obsCount); err != nil || obsCount != 3 {
+		t.Fatalf("obsCount=%d err=%v", obsCount, err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.telemetry_history_outbox WHERE payload ->> 'source_partition' = $1`, partition).Scan(&outboxCount); err != nil || outboxCount != 3 {
+		t.Fatalf("outboxCount=%d err=%v", outboxCount, err)
+	}
+}
+
+func TestPostgresBatchInBatchDuplicateReplayedAndOutOfOrder(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	cleanupBatchIntegrationState(t, admin)
+	defer cleanupBatchIntegrationState(t, admin)
+
+	base := time.Date(2026, 7, 15, 1, 0, 0, 0, time.UTC)
+	dev1 := batchDeviceID(2)
+	seedBatchIntegrationDevice(t, admin, dev1, base)
+	cel := "Cel"
+	seedBatchFreshnessPolicy(t, admin, dev1, "zone.temperature", "NUMBER", &cel, nil, nil, nil, base)
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const partition = "tb-batch-test-dedup"
+	c0 := batchCandidate(11, partition, 10, dev1, batchPointID(11), "zone.temperature", json.RawMessage(`22.0`), "NUMBER", &cel, "TELEMETRY", base.Add(10*time.Second), base.Add(15*time.Second))
+	c1 := batchCandidate(12, partition, 11, dev1, batchPointID(11), "zone.temperature", json.RawMessage(`23.0`), "NUMBER", &cel, "TELEMETRY", base.Add(12*time.Second), base.Add(15*time.Second))
+	c2DupEvent := c0
+	c2DupEvent.Position.Offset = 12
+	c3ReplayedOffset := batchCandidate(13, partition, 11, dev1, batchPointID(11), "zone.temperature", json.RawMessage(`23.5`), "NUMBER", &cel, "TELEMETRY", base.Add(13*time.Second), base.Add(15*time.Second))
+	c4LowerOffset := batchCandidate(14, partition, 9, dev1, batchPointID(11), "zone.temperature", json.RawMessage(`21.0`), "NUMBER", &cel, "TELEMETRY", base.Add(14*time.Second), base.Add(15*time.Second))
+	c5LateSample := batchCandidate(15, partition, 12, dev1, batchPointID(11), "zone.temperature", json.RawMessage(`20.0`), "NUMBER", &cel, "TELEMETRY", base.Add(5*time.Second), base.Add(15*time.Second))
+
+	receipts, err := store.AcceptObservationBatch(ctx, []ObservationCandidate{c0, c1, c2DupEvent, c3ReplayedOffset, c4LowerOffset, c5LateSample})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipts[0].Status != ObservationAccepted || receipts[1].Status != ObservationAccepted || receipts[1].BusinessRevision != 1 {
+		t.Fatalf("accepted receipts=%#v", receipts[:2])
+	}
+	if receipts[2].Status != ObservationDuplicate || receipts[2].ObservationID != receipts[0].ObservationID || receipts[2].EvidenceID == "" || receipts[2].PositionAdvanced {
+		t.Fatalf("dupEvent receipt=%#v", receipts[2])
+	}
+	if receipts[3].Status != ObservationDuplicate || len(receipts[3].QualityReasons) != 1 || receipts[3].QualityReasons[0] != QualityReasonReplayed || receipts[3].EvidenceID == "" || receipts[3].PositionAdvanced {
+		t.Fatalf("replayedOffset receipt=%#v", receipts[3])
+	}
+	if receipts[4].Status != ObservationOutOfOrder || len(receipts[4].QualityReasons) != 1 || receipts[4].QualityReasons[0] != QualityReasonOutOfOrder || receipts[4].EvidenceID == "" || receipts[4].PositionAdvanced {
+		t.Fatalf("lowerOffset receipt=%#v", receipts[4])
+	}
+	if receipts[5].Status != ObservationOutOfOrder || receipts[5].Quality != QualityGood || !receipts[5].PositionAdvanced || receipts[5].BusinessRevision != 0 {
+		t.Fatalf("lateSample receipt=%#v", receipts[5])
+	}
+	var latestVal string
+	var headOffset int64
+	if err := admin.QueryRow(ctx, `SELECT value::text FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'`, dev1).Scan(&latestVal); err != nil || latestVal != "23.0" {
+		t.Fatalf("latest=%q err=%v", latestVal, err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT source_offset FROM telemetry_runtime.source_positions WHERE source_id = $1 AND source_partition = $2`, sourceA, partition).Scan(&headOffset); err != nil || headOffset != 12 {
+		t.Fatalf("headOffset=%d err=%v", headOffset, err)
+	}
+}
+
+func TestPostgresBatchSamePointHealthAndCrossPointQualityVisibility(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	cleanupBatchIntegrationState(t, admin)
+	defer cleanupBatchIntegrationState(t, admin)
+
+	base := time.Date(2026, 7, 15, 2, 0, 0, 0, time.UTC)
+	dev1 := batchDeviceID(3)
+	seedBatchIntegrationDevice(t, admin, dev1, base)
+	cel, kw := "Cel", "kW"
+	minTemp, maxTemp := -50.0, 100.0
+	seedBatchFreshnessPolicy(t, admin, dev1, "run_state", "STRING", nil, nil, nil, nil, base)
+	seedBatchFreshnessPolicy(t, admin, dev1, "cw_in", "NUMBER", &cel, nil, nil, nil, base)
+	seedBatchFreshnessPolicy(t, admin, dev1, "zone.temperature", "NUMBER", &cel, &minTemp, &maxTemp, nil, base)
+	derivedChecks, _ := json.Marshal(map[string]any{"inputs": []map[string]any{{"deviceId": dev1, "key": "zone.temperature"}}})
+	seedBatchFreshnessPolicy(t, admin, dev1, "derived.cooling", "NUMBER", &kw, nil, nil, derivedChecks, base)
+	supplyChecks, _ := json.Marshal(map[string]any{
+		"physics": []map[string]any{{
+			"kind": "CW_DIRECTION", "epsilonK": 0.05,
+			"peers":   []map[string]any{{"role": "entering", "deviceId": dev1, "key": "cw_in"}},
+			"running": []map[string]any{{"deviceId": dev1, "key": "run_state", "equals": "RUNNING"}},
+		}},
+	})
+	seedBatchFreshnessPolicy(t, admin, dev1, "cw_out", "NUMBER", &cel, nil, nil, supplyChecks, base)
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const partition = "tb-batch-test-quality"
+	t0 := base.Add(10 * time.Second)
+	receipts, err := store.AcceptObservationBatch(ctx, []ObservationCandidate{
+		batchCandidate(21, partition, 1, dev1, batchPointID(21), "run_state", json.RawMessage(`"RUNNING"`), "STRING", nil, "STATE", t0, t0),
+		batchCandidate(22, partition, 2, dev1, batchPointID(22), "cw_in", json.RawMessage(`28.0`), "NUMBER", &cel, "TELEMETRY", t0.Add(time.Second), t0.Add(time.Second)),
+		batchCandidate(23, partition, 3, dev1, batchPointID(23), "zone.temperature", json.RawMessage(`24.0`), "NUMBER", &cel, "TELEMETRY", t0.Add(time.Second), t0.Add(time.Second)),
+		batchCandidate(24, partition, 4, dev1, batchPointID(23), "zone.temperature", json.RawMessage(`500.0`), "NUMBER", &cel, "TELEMETRY", t0.Add(2*time.Second), t0.Add(2*time.Second)),
+		batchCandidate(25, partition, 5, dev1, batchPointID(24), "derived.cooling", json.RawMessage(`420.0`), "NUMBER", &kw, "TELEMETRY", t0.Add(3*time.Second), t0.Add(3*time.Second)),
+		batchCandidate(26, partition, 6, dev1, batchPointID(25), "cw_out", json.RawMessage(`27.0`), "NUMBER", &cel, "TELEMETRY", t0.Add(4*time.Second), t0.Add(4*time.Second)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipts[2].Status != ObservationAccepted || receipts[3].Status != ObservationRejected ||
+		receipts[4].Status != ObservationAccepted || receipts[4].Quality != QualityPartial ||
+		receipts[5].Status != ObservationAccepted || receipts[5].Quality != QualityPartial {
+		t.Fatalf("unexpected quality receipts=%#v", receipts)
+	}
+	if len(receipts[4].QualityReasons) != 1 || receipts[4].QualityReasons[0] != QualityReasonDerivedInput {
+		t.Fatalf("derived.cooling reasons=%#v", receipts[4].QualityReasons)
+	}
+	if len(receipts[5].QualityReasons) != 1 || receipts[5].QualityReasons[0] != QualityReasonPhysicsCwDirection {
+		t.Fatalf("cw_out reasons=%#v", receipts[5].QualityReasons)
+	}
+
+	var tempVal, tempHealth string
+	if err := admin.QueryRow(ctx, `SELECT value::text, health_status FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'`, dev1).Scan(&tempVal, &tempHealth); err != nil || tempVal != "24.0" || tempHealth != HealthBad {
+		t.Fatalf("zone.temperature value=%q health=%q err=%v", tempVal, tempHealth, err)
+	}
+	assertIngestRevision(t, admin, dev1, 1, 1)
+}
+
+func TestPostgresBatchMixedValidAndQuarantined(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	cleanupBatchIntegrationState(t, admin)
+	defer cleanupBatchIntegrationState(t, admin)
+
+	base := time.Date(2026, 7, 15, 3, 0, 0, 0, time.UTC)
+	dev1 := batchDeviceID(4)
+	seedBatchIntegrationDevice(t, admin, dev1, base)
+	cel := "Cel"
+	seedBatchFreshnessPolicy(t, admin, dev1, "zone.temperature", "NUMBER", &cel, nil, nil, nil, base)
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const partition = "tb-batch-test-quarantine"
+	at := base.Add(10 * time.Second)
+	valid := batchCandidate(31, partition, 1, dev1, batchPointID(31), "zone.temperature", json.RawMessage(`22.5`), "NUMBER", &cel, "TELEMETRY", at, at)
+	unmappedDev := ObservationCandidate{
+		SourceID: sourceA, SourcePath: SourcePathPush, ExternalEntityType: "DEVICE", ExternalID: "missing-device",
+		TelemetryKey: "zone.temperature", Value: json.RawMessage(`99.9`), ValueType: "NUMBER", Unit: &cel,
+		SampledAt: at, ReceivedAt: at, Position: SourcePosition{Partition: partition, Offset: 2, EventID: batchEventID(32)},
+	}
+	unmappedPt := batchCandidate(33, partition, 3, dev1, batchPointID(32), "zone.temperature", json.RawMessage(`23.0`), "NUMBER", &cel, "TELEMETRY", at, at)
+	unmappedPt.Point = nil
+	conflictDev := batchCandidate(34, partition, 4, dev1, batchPointID(31), "zone.temperature", json.RawMessage(`24.0`), "NUMBER", &cel, "TELEMETRY", at, at)
+	conflictDev.Device = &ResolvedDevice{TenantID: tenantB, SiteID: siteA, DeviceID: dev1}
+	unconfiguredPol := batchCandidate(35, partition, 5, dev1, batchPointID(33), "unconfigured.key", json.RawMessage(`25.0`), "NUMBER", &cel, "TELEMETRY", at, at)
+
+	receipts, err := store.AcceptObservationBatch(ctx, []ObservationCandidate{valid, unmappedDev, unmappedPt, conflictDev, unconfiguredPol})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantReasons := []QuarantineReason{"", QuarantineMappingNotFound, QuarantinePointMappingNotFound, QuarantineMappingConflict, QuarantinePolicyNotConfigured}
+	if receipts[0].Status != ObservationAccepted || receipts[0].BusinessRevision != 1 || receipts[0].DeviceID != dev1 {
+		t.Fatalf("valid receipt=%#v", receipts[0])
+	}
+	for index := 1; index < len(receipts); index++ {
+		if receipts[index].Status != ObservationQuarantined || receipts[index].QuarantineReason != wantReasons[index] || receipts[index].DeviceID != "" || !receipts[index].PositionAdvanced {
+			t.Fatalf("quarantine[%d]=%#v want=%s", index, receipts[index], wantReasons[index])
+		}
+	}
+	var qCount int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.ingest_quarantine WHERE evidence ->> 'sourcePartition' = $1`, partition).Scan(&qCount); err != nil || qCount != 4 {
+		t.Fatalf("quarantine count=%d err=%v", qCount, err)
+	}
+}
+
+func TestPostgresBatchOverlappingConcurrentDevicesAndReadsDoNotDeadlock(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	cleanupBatchIntegrationState(t, admin)
+	defer cleanupBatchIntegrationState(t, admin)
+
+	base := time.Date(2026, 7, 15, 4, 0, 0, 0, time.UTC)
+	dev1, dev2 := batchDeviceID(5), batchDeviceID(6)
+	cel := "Cel"
+	for _, devID := range []string{dev1, dev2} {
+		seedBatchIntegrationDevice(t, admin, devID, base)
+		seedBatchFreshnessPolicy(t, admin, devID, "zone.temperature", "NUMBER", &cel, nil, nil, nil, base)
+	}
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const rounds = 20
+	errs := make(chan error, 3)
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	runBatchWorker := func(eventBase int, partA, partB string, reverse bool) {
+		defer wg.Done()
+		for round := range rounds {
+			at := base.Add(time.Duration(round+1) * time.Second)
+			cA := batchCandidate(eventBase+round*2, partA, int64(round+1), dev1, batchPointID(41), "zone.temperature", json.RawMessage(`22.5`), "NUMBER", &cel, "TELEMETRY", at, at)
+			cB := batchCandidate(eventBase+round*2+1, partB, int64(round+1), dev2, batchPointID(42), "zone.temperature", json.RawMessage(`23.5`), "NUMBER", &cel, "TELEMETRY", at, at)
+			batch := []ObservationCandidate{cA, cB}
+			if reverse {
+				batch = []ObservationCandidate{cB, cA}
+			}
+			if _, err := store.AcceptObservationBatch(ctx, batch); err != nil {
+				errs <- fmt.Errorf("round %d reverse=%v: %w", round, reverse, err)
+				return
+			}
+		}
+		errs <- nil
+	}
+	go runBatchWorker(100, "tb-batch-test-conc-a1", "tb-batch-test-conc-a2", false)
+	go runBatchWorker(200, "tb-batch-test-conc-b1", "tb-batch-test-conc-b2", true)
+	go func() {
+		reads := 0
+		for {
+			select {
+			case <-done:
+				errs <- nil
+				return
+			default:
+			}
+			dev := []string{dev1, dev2}[reads%2]
+			if _, err := store.EvaluateAndRead(ctx, telemetryauth.Target{DeviceID: dev}, base.Add(time.Minute)); err != nil {
+				errs <- fmt.Errorf("EvaluateAndRead %d: %w", reads, err)
+				return
+			}
+			reads++
+		}
+	}()
+	wg.Wait()
+	close(done)
+	for range 3 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestPostgresHistoricalObservationBatchPreservesSnapshot(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	cleanupBatchIntegrationState(t, admin)
+	defer cleanupBatchIntegrationState(t, admin)
+
+	base := time.Date(2026, 7, 15, 5, 0, 0, 0, time.UTC)
+	dev1 := batchDeviceID(7)
+	seedBatchIntegrationDevice(t, admin, dev1, base)
+	cel := "Cel"
+	seedBatchFreshnessPolicy(t, admin, dev1, "zone.temperature", "NUMBER", &cel, nil, nil, nil, base)
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	liveAt := base.Add(time.Minute)
+	live := batchCandidate(301, "tb-batch-test-hist-live", 1, dev1, batchPointID(51), "zone.temperature", json.RawMessage(`24.5`), "NUMBER", &cel, "TELEMETRY", liveAt, liveAt)
+	liveReceipt, err := store.AcceptObservation(ctx, live)
+	if err != nil || liveReceipt.Status != ObservationAccepted || liveReceipt.BusinessRevision != 1 {
+		t.Fatalf("live=%#v err=%v", liveReceipt, err)
+	}
+
+	var beforeValue, beforeSHA string
+	var beforeSignals int64
+	if err := admin.QueryRow(ctx, `SELECT value::text FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'`, dev1).Scan(&beforeValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT snapshot_sha256 FROM telemetry_runtime.device_observation_snapshots WHERE device_id = $1::uuid`, dev1).Scan(&beforeSHA); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.presence_signals WHERE device_id = $1::uuid`, dev1).Scan(&beforeSignals); err != nil {
+		t.Fatal(err)
+	}
+
+	const replayPartition = "tb-batch-test-hist-replay"
+	r0 := ObservationCandidate{
+		SourceID: historicalReplaySourceID, SourcePath: SourcePathHistoryReplay,
+		ExternalEntityType: "DEVICE", ExternalID: dev1, TelemetryKey: "zone.temperature",
+		Value: json.RawMessage(`20.0`), ValueType: "NUMBER", Unit: &cel,
+		SampledAt: base.Add(-2 * time.Hour), ReceivedAt: liveAt.Add(time.Minute),
+		Position: SourcePosition{Partition: replayPartition, Offset: 1, EventID: batchEventID(302)},
+	}
+	r1 := r0
+	r1.Value = json.RawMessage(`20.5`)
+	r1.SampledAt = base.Add(-time.Hour)
+	r1.Position = SourcePosition{Partition: replayPartition, Offset: 2, EventID: batchEventID(303)}
+	r2Dup := r0
+	r2Dup.Position.Offset = 3
+
+	receipts, err := store.AcceptHistoricalObservationBatch(ctx, []ObservationCandidate{r0, r1, r2Dup})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipts[0].Status != ObservationAccepted || receipts[0].BusinessRevision != 0 || receipts[0].StateChanged || !receipts[0].PositionAdvanced ||
+		receipts[1].Status != ObservationAccepted || receipts[1].BusinessRevision != 0 || receipts[1].StateChanged || !receipts[1].PositionAdvanced ||
+		receipts[2].Status != ObservationDuplicate || receipts[2].ObservationID != receipts[0].ObservationID || receipts[2].PositionAdvanced {
+		t.Fatalf("historical batch receipts=%#v", receipts)
+	}
+	assertObservationRow(t, admin, r0.Position.EventID, "ACCEPTED", "GOOD", "HISTORY_REPLAY", true)
+	assertObservationRow(t, admin, r1.Position.EventID, "ACCEPTED", "GOOD", "HISTORY_REPLAY", true)
+	assertHistoryOutbox(t, admin, r0.Position.EventID, "ACCEPTED", tenantA, siteA, dev1, true)
+	assertHistoryOutbox(t, admin, r1.Position.EventID, "ACCEPTED", tenantA, siteA, dev1, true)
+
+	var afterValue, afterSHA string
+	var afterSignals int64
+	if err := admin.QueryRow(ctx, `SELECT value::text FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id = $1::uuid AND telemetry_key = 'zone.temperature'`, dev1).Scan(&afterValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT snapshot_sha256 FROM telemetry_runtime.device_observation_snapshots WHERE device_id = $1::uuid`, dev1).Scan(&afterSHA); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.presence_signals WHERE device_id = $1::uuid`, dev1).Scan(&afterSignals); err != nil {
+		t.Fatal(err)
+	}
+	if afterValue != beforeValue || afterSHA != beforeSHA || afterSignals != beforeSignals {
+		t.Fatalf("historical batch mutated current state: value=%s->%s sha=%s->%s signals=%d->%d", beforeValue, afterValue, beforeSHA, afterSHA, beforeSignals, afterSignals)
+	}
+}
