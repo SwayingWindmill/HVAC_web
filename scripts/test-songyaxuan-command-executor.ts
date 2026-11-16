@@ -1220,6 +1220,24 @@ test('songyaxuan-platform-envelope decouples C/D auxiliary load from chiller run
     'ammeter-unit2': [{ ts: ts + 5000, values: { powerTotal: 55, combinedActiveTotalElectricalEnergy: 201 } }],
   }, ctx);
   assert.equal(unitDCompressorOn.payload.payload.devices.find((d) => d.deviceId === 'ctrl-chiller-d')?.points[0]?.value, 'RUNNING');
+
+  // Local MCC manual pumps with ET1010 coils at 0 fall back to C/D feeder hysteresis ([57.75, 45]).
+  const manualCtx = new Map<string, unknown>();
+  runPlatformEnvelopeNode({
+    et1010: [{ ts: ts + 6000, values: { u31: 0, u32: 0, u33: 0, u41: 0, u42: 0, u43: 0 } }],
+  }, manualCtx);
+  for (const auxKw of [20.6, 34.4]) {
+    const manualAux = runPlatformEnvelopeNode({
+      'ammeter-unit2': [{ ts: ts + 7000 + auxKw, values: { powerTotal: auxKw, combinedActiveTotalElectricalEnergy: 202 } }],
+    }, manualCtx);
+    assert.equal(manualAux.payload.payload.devices.find((d) => d.deviceId === 'ammeter-unit2')?.points.find((p) => p.code === 'run_state')?.value, 'STOPPED');
+    assert.equal(manualAux.payload.payload.devices.find((d) => d.deviceId === 'ctrl-chiller-d')?.points[0]?.value, 'STOPPED');
+  }
+  const manualChillerOn = runPlatformEnvelopeNode({
+    'ammeter-unit2': [{ ts: ts + 8000, values: { powerTotal: 58, combinedActiveTotalElectricalEnergy: 203 } }],
+  }, manualCtx);
+  assert.equal(manualChillerOn.payload.payload.devices.find((d) => d.deviceId === 'ammeter-unit2')?.points.find((p) => p.code === 'run_state')?.value, 'RUNNING');
+  assert.equal(manualChillerOn.payload.payload.devices.find((d) => d.deviceId === 'ctrl-chiller-d')?.points[0]?.value, 'RUNNING');
 });
 
 test('songyaxuan.site.json enforces chwp-main start interlock and 120s run_state freshness', () => {

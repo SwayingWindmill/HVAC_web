@@ -159,9 +159,8 @@ for (const [device, samples] of Object.entries(source)) {
   if (isMeter && Number.isFinite(powerTotal)) {
     const meterRunState = { ...(context.get("meterRunState") || {}) };
     const shared = SHARED_AUX_KW[device];
-    const hasCoils = shared && Object.keys(shared).some((ch) => ch in et1010Coils);
-    const auxKw = hasCoils ? Object.entries(shared).reduce((sum, [ch, kw]) => sum + (et1010Coils[ch] > 0 ? kw : 0), 0) : 0;
-    const bounds = !shared || hasCoils ? AB : METER_RUN_KW[device];
+    const auxKw = shared ? Object.entries(shared).reduce((sum, [ch, kw]) => sum + ((et1010Coils[ch] || 0) > 0 ? kw : 0), 0) : 0;
+    const bounds = !shared || auxKw > 0 ? AB : METER_RUN_KW[device];
     const chillerKw = Math.max(0, powerTotal - auxKw);
     meterRunning = meterRunState[device] ? chillerKw > bounds.stopKw : chillerKw > bounds.startKw;
     meterRunState[device] = meterRunning;
