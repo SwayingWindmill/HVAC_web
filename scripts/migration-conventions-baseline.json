@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "maxGrandfatheredMigrations": 128,
+  "maxLegacyNumberedMigrations": 14,
   "legacyDatabases": [
     "hvac_s0",
     "hvac_s1",
@@ -138,5 +139,21 @@
     "modules/workorder/migrations/006_s26_equipment_source_domain.sql",
     "services/operations-agent-service/migrations/operations/001_agent_sessions.sql",
     "services/operations-agent-service/migrations/operations/002_finding_without_summary.sql"
+  ],
+  "legacyNumberedMigrations": [
+    "infra/identity/postgres/init/008-schema-and-table-comments.sql",
+    "infra/durability/postgres/init/009-schema-and-table-comments.sql",
+    "infra/registry/postgres/init/040-optimization-operating-schedule-read.sql",
+    "infra/connectivity/postgres/init/005-schema-and-table-comments.sql",
+    "services/notification-service/migrations/007_schema_and_table_comments.sql",
+    "infra/registry/postgres/init/041-schema-and-table-comments.sql",
+    "infra/connectivity/postgres/init/006-gateway-concentrator-audit.sql",
+    "infra/registry/postgres/init/042-grant-asset-nameplate-read.sql",
+    "infra/registry/postgres/init/043-auto-control-leases-and-monitors.sql",
+    "infra/telemetry/postgres/init/013-schema-and-table-comments.sql",
+    "modules/command/migrations/007_schema_and_table_comments.sql",
+    "modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tables.sql",
+    "modules/workorder/migrations/007_schema_and_table_comments.sql",
+    "services/operations-agent-service/migrations/operations/003_schema_and_table_comments.sql"
   ]
 }
