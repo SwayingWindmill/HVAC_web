@@ -1,6 +1,6 @@
 # Energy optimization
 
-The `/energy-analysis/optimization` route opens on `当前建议` with two sections: `减台与辅机停机` (stop a chiller the others can cover, or a pump or tower still running for a stopped chiller, each confirmed by a person) and `供水温度优化` (chilled-water supply temperature reset recommendations, dispatched as setpoint commands or manual adjustment work orders). `模型与负荷分析` inspects chiller COP shadow evaluations.
+The `/energy-analysis/optimization` route opens on `当前建议` with two sections: `减台与辅机停机` (stop a chiller the others can cover, every chiller during the schedule's off hours, or a pump or tower still running for a stopped chiller, each confirmed by a person) and `供水温度优化` (chilled-water supply temperature reset recommendations, dispatched as setpoint commands or manual adjustment work orders). `模型与负荷分析` inspects chiller COP shadow evaluations.
 
 ## Sub-features
 

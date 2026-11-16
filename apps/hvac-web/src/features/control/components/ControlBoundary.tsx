@@ -93,6 +93,11 @@ export function ControlModeBar({ state, lockCount, pendingCount, myId, timeZone,
           <span className="flex items-baseline gap-1.5 text-sm"><span className="text-xs text-muted-foreground">待处理指令</span><span className="font-semibold tabular-nums">{pendingCount} 条</span></span>
         </div>
         {state.reason ? <span className="truncate text-xs text-muted-foreground" title={state.reason}>原因：{state.reason}</span> : null}
+        {state.activeMaintenanceWindow ? (
+          <span className="truncate text-xs text-warning-text" title={state.activeMaintenanceWindow.reason || undefined}>
+            检修窗口「{state.activeMaintenanceWindow.title}」{state.activeMaintenanceWindow.startDate} 至 {state.activeMaintenanceWindow.endDate}，只能停机和复位
+          </span>
+        ) : null}
       </div>
       <div role="group" aria-label="切换控制方式" className={cn('inline-flex gap-0.5 rounded-lg p-0.5', state.controlMode === 'REMOTE_AUTO' ? 'bg-secondary' : 'bg-card')}>
         {MODE_ORDER.map((mode) => {

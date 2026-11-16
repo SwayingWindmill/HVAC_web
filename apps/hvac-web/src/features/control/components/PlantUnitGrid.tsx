@@ -7,11 +7,12 @@ import { cn } from '@/lib/utils';
 import { WITHDRAWABLE, type Command } from '../command-api';
 import { ACTION_VERB, CODE_AT_SUBMIT, STATUS_PRESENTATION } from '../command-presentation';
 import { blockingInterlocks, type ControlAction, type ControlTarget, type Interlock, type PlantUnit } from '../control-model';
-import { LOCK_PRESENTATION, MODE_PRESENTATION, type AssetControlLockState, type SiteControlMode } from '../control-state';
+import { LOCK_PRESENTATION, MAINTENANCE_BLOCKED, MAINTENANCE_PERMITTED, MODE_PRESENTATION, type ActiveMaintenanceWindow, type AssetControlLockState, type SiteControlMode } from '../control-state';
 import type { PendingCommand } from './CommandConfirmation';
 
 export interface PlantContext {
   readonly mode: SiteControlMode;
+  readonly maintenance: ActiveMaintenanceWindow | null;
   readonly devices: ReadonlyMap<string, PlantDevice>;
   /** Each registered device's run state by device code, which is how interlocks name devices. */
   readonly runStateByDeviceCode: ReadonlyMap<string, string>;
@@ -85,7 +86,8 @@ function DeviceRow({ target, label, context }: { readonly target: ControlTarget;
   const auto = context.mode === 'REMOTE_AUTO';
   const why = !auto ? `${MODE_PRESENTATION[context.mode].label}中，平台不下发指令`
     : lock ? '已锁定，先解锁'
-      : open ? '已有指令还没结束'
+      : context.maintenance && action && !MAINTENANCE_PERMITTED.has(action.capability) ? MAINTENANCE_BLOCKED
+        : open ? '已有指令还没结束'
         : hint ? `水路联锁：${blocked.map((item) => item.reason).filter(Boolean).join('；') || hint}`
           : !action ? '读不到运行状态，不能远程启停'
             : '';
@@ -110,7 +112,7 @@ function DeviceRow({ target, label, context }: { readonly target: ControlTarget;
           </Button>
         ) : null}
         {target.settings.length > 0 ? (
-          <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={`调整 ${target.assetName} 的设定值`} title={why || '调整设定值'} disabled={!auto || Boolean(lock)} onClick={() => context.onSettings(target)}>
+          <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={`调整 ${target.assetName} 的设定值`} title={!auto || lock ? why : context.maintenance ? MAINTENANCE_BLOCKED : '调整设定值'} disabled={!auto || Boolean(lock) || context.maintenance !== null} onClick={() => context.onSettings(target)}>
             <SlidersHorizontal />
           </Button>
         ) : null}
@@ -173,8 +175,8 @@ function UnitColumn({ unit, context }: { readonly unit: PlantUnit; readonly cont
           <Button
             variant="outline"
             size="sm"
-            disabled={!startSeq || why !== '' || running}
-            title={why || (running ? '主机已在运行' : undefined)}
+            disabled={!startSeq || why !== '' || running || context.maintenance !== null}
+            title={why || (running ? '主机已在运行' : context.maintenance ? MAINTENANCE_BLOCKED : undefined)}
             onClick={() => startSeq && context.onCommand(confirmation(chiller, startSeq, device, `一键启动 ${chiller.assetName}？`, startOrder))}
           >
             <Play data-icon="inline-start" />一键启动

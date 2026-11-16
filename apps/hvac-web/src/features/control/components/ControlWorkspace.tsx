@@ -122,7 +122,7 @@ export function ControlWorkspace() {
     return { runStateByDeviceCode, nameByDeviceCode };
   }, [model, targets, devices]);
   const context: PlantContext = {
-    mode, devices, ...interlockFacts, locks, commands: list, canLock: canManage,
+    mode, maintenance: controlState.data?.activeMaintenanceWindow ?? null, devices, ...interlockFacts, locks, commands: list, canLock: canManage,
     onCommand: setPending, onLock: setLockTarget, onSettings: setSettingsTarget, onInspect: inspect,
   };
 

@@ -48,8 +48,9 @@ function RecommendationRow({ item, target, sent, siteId, timeZone, paused, onCon
   readonly paused: boolean;
   readonly onConfirm: (pending: PendingCommand) => void;
 }) {
-  const stageDown = item.kind === 'CHILLER_STAGE_DOWN';
+  const wholeUnit = item.kind !== 'IDLE_AUXILIARY_STOP';
   const action = target?.actions.find((candidate) => candidate.pointId === item.pointId);
+  const sequence = action?.capability === 'STOP_UNIT_SEQUENCE';
   const confirm = () => {
     if (!target || !action) return;
     onConfirm({
@@ -73,7 +74,7 @@ function RecommendationRow({ item, target, sent, siteId, timeZone, paused, onCon
     <li className="grid grid-cols-[minmax(0,1fr)_176px] gap-4 border-b border-divider p-4 last:border-b-0">
       <div className="flex min-w-0 flex-col gap-2.5">
         <div className="flex items-center gap-2">
-          <StatusBadge tone={stageDown ? 'info' : 'neutral'} label={KIND_LABEL[item.kind]} />
+          <StatusBadge tone={wholeUnit ? 'info' : 'neutral'} label={KIND_LABEL[item.kind]} />
           <h3 className="text-base leading-[22px] font-semibold tracking-[-0.02em]">停 {item.assetName}</h3>
           {item.extrapolated ? <StatusBadge tone="warning" label="■ 超出近 14 天见过的负荷" /> : null}
         </div>
@@ -85,9 +86,10 @@ function RecommendationRow({ item, target, sent, siteId, timeZone, paused, onCon
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-secondary-foreground" aria-label="下发前提">
           {item.capacity ? <Check>{`剩余能力够用，余量 ${item.capacity.headroomPercent}%`}</Check> : null}
           {item.idleMinutes !== null ? <Check>对应主机已停，这台还在转</Check> : null}
-          <Check>{stageDown ? `${item.assetName}的设备都没锁定` : '这台设备没锁定'}</Check>
+          {item.kind === 'OFF_HOURS_STOP' ? <Check>运行计划里现在是停机时段</Check> : null}
+          <Check>{wholeUnit ? `${item.assetName}的设备都没锁定` : '这台设备没锁定'}</Check>
         </div>
-        {stageDown ? (
+        {sequence ? (
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Link2 className="size-3" aria-hidden="true" />一键顺序停：主机先停，对应冷却塔、冷却泵、冷冻泵随后</span>
         ) : null}
       </div>

@@ -239,3 +239,24 @@ test('stagingView turns the service evaluation into cards, paused blockers and p
   assert.equal(stagingReason('SOMETHING_NEW'), '这次没有给出建议');
   assert.equal(JSON.stringify(view).includes('MANUAL'), false);
 });
+
+test('off-hours whole-chiller stops come first, and the schedule windows read as plain reasons', () => {
+  const draft = (id: string, kind: StagingEvaluation['recommendations'][number]['kind'], targetAssetId: string, kw: number): StagingEvaluation['recommendations'][number] => ({
+    id, kind, confirmationMode: 'MANUAL_CONFIRM', requiresSupervisorReview: true, requiresTotp: true, suggestedCapability: 'STOP_UNIT_SEQUENCE',
+    targetAssetId, targetAssetType: 'CHILLER', predictedPowerSavingKW: kw, estimatedHourlySavingKWh: kw, estimatedShiftSavingKWh: kw * 8, shiftHours: 8,
+    rationale: kind, preconditions: [],
+  });
+  const view = stagingView({
+    tenantId: '018f3d00-0000-7000-8000-000000000001', siteId: '018f3e00-1000-7000-8000-000000000001', evaluatedAt: '2026-11-15T14:05:00Z',
+    confirmationMode: 'MANUAL_CONFIRM', siteControlMode: 'REMOTE_AUTO',
+    recommendations: [draft('r-aux', 'IDLE_AUXILIARY_STOP', 'a-tower-1', 6), draft('r-off-b', 'OFF_HOURS_STOP', 'a-chiller-b', 80), draft('r-off-a', 'OFF_HOURS_STOP', 'a-chiller-a', 95)],
+    diagnostics: [
+      { scope: 'CHILLER_STAGE_DOWN', status: 'NO_OP', reason: 'OFF_HOURS_WINDOW_ACTIVE', detail: '当前处于非供冷运行时间窗口' },
+      { scope: 'OFF_HOURS_STOP', assetId: 'a-chiller-c', status: 'NO_OP', reason: 'CHILLER_ALREADY_STOPPED', detail: '' },
+      { scope: 'IDLE_AUXILIARY_STOP', status: 'SUPPRESSED', reason: 'MAINTENANCE_WINDOW_ACTIVE', detail: '' },
+    ],
+  }, () => undefined);
+  assert.deepEqual(view.cards.map((card) => card.id), ['r-off-a', 'r-off-b', 'r-aux']);
+  assert.equal(view.stageDownIdle, '现在是运行计划里的停机时段，改为给整台停机建议');
+  assert.deepEqual(view.paused.map((item) => [item.name, item.why]), [['辅机停机', '今天在运行计划的检修窗口内，停机建议已暂停']]);
+});

@@ -141,6 +141,18 @@ test('locking a device withdraws its pending command and greys its controls unti
   await expect(pump.getByRole('button', { name: '停止' })).toBeEnabled();
 });
 
+test('during a maintenance window only stopping and resetting stay available', async ({ page, gateway }) => {
+  gateway.controlState = {
+    ...gateway.controlState,
+    activeMaintenanceWindow: { id: '01a19000-0000-7000-8000-0000000000aa', title: '冷却塔清洗', startDate: '2026-11-15', endDate: '2026-11-17', reason: '' },
+  };
+  await page.goto(`/operations/control?site=${SITE_ID}`);
+
+  await expect(page.getByRole('region', { name: '控制方式' })).toContainText('检修窗口「冷却塔清洗」2026-11-15 至 2026-11-17，只能停机和复位');
+  await expect(page.getByRole('button', { name: '调整 CHILLER-01 的设定值' })).toBeDisabled();
+  await expect(page.getByRole('group', { name: 'CHWP-01' }).getByRole('button', { name: '停止' })).toBeEnabled();
+});
+
 test('the appearance switch keeps document color-scheme and meta[name="color-scheme"] in sync across system, light and dark', async ({ page }) => {
   await page.goto(`/operations/control?site=${SITE_ID}`);
 

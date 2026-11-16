@@ -5,6 +5,7 @@ import {
   controlExitPaths,
   siteControlModeMutationResponseSchema,
   siteControlStateSchema,
+  type ActiveMaintenanceWindow,
   type AssetControlLockMode,
   type AssetControlLockMutationResponse,
   type AssetControlLockState,
@@ -18,7 +19,11 @@ import { controlErrorMessage } from './control-errors';
 // Who may command the plant right now: the Site's control mode, and each asset's own lock.
 // Leaving remote auto control, or locking an asset, withdraws the commands not yet dispatched.
 
-export type { AssetControlLockMode, AssetControlLockState, SiteControlMode, SiteControlState };
+export type { ActiveMaintenanceWindow, AssetControlLockMode, AssetControlLockState, SiteControlMode, SiteControlState };
+
+/** During a maintenance window from the operating schedule the gateway takes only these commands. */
+export const MAINTENANCE_PERMITTED: ReadonlySet<string> = new Set(['STOP', 'STOP_UNIT_SEQUENCE', 'RESET_FAULT']);
+export const MAINTENANCE_BLOCKED = '检修窗口内只能停机和复位';
 
 export const MODE_PRESENTATION: Readonly<Record<SiteControlMode, {
   readonly label: string;

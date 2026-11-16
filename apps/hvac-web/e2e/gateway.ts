@@ -1141,6 +1141,9 @@ export class Gateway {
       if (this.controlState.assetLocks.some((lock: Json) => lock.assetId === body?.assetId && lock.lockMode !== 'UNLOCKED')) {
         return { status: 409, body: { status: 409, code: 'COMMAND_CONTROL_LOCKED', detail: 'Asset is locked.' } };
       }
+      if (this.controlState.activeMaintenanceWindow && !['STOP', 'STOP_UNIT_SEQUENCE', 'RESET_FAULT'].includes(point?.sourceMetadata?.capability)) {
+        return { status: 409, body: { status: 409, code: 'COMMAND_CONTROL_LOCKED', detail: 'Only stop and reset commands are permitted during the maintenance window.' } };
+      }
       if (HIGH_RISK.includes(point?.sourceMetadata?.capability) && !/^\d{6}$/.test(body?.verificationCode ?? '')) {
         return { status: 428, body: { status: 428, code: 'STEP_UP_REQUIRED', detail: 'High-risk commands require a 6-digit verificationCode from your authenticator app.' } };
       }

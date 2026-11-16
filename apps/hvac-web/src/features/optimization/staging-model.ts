@@ -10,6 +10,7 @@ export type StagingKind = StagingRecommendationDraft['kind'];
 export const KIND_LABEL: Readonly<Record<StagingKind, string>> = {
   CHILLER_STAGE_DOWN: '减台',
   IDLE_AUXILIARY_STOP: '辅机空转',
+  OFF_HOURS_STOP: '停机时段',
 };
 
 export interface StagingCard {
@@ -48,17 +49,23 @@ export interface StagingView {
   readonly totals: { readonly savingKW: number; readonly shiftKWh: number; readonly shiftHours: number; readonly powerBeforeKW: number | null } | null;
 }
 
-const SCOPE_NAME: Readonly<Record<string, string>> = { CHILLER_STAGE_DOWN: '减台', IDLE_AUXILIARY_STOP: '辅机停机' };
+/** Whole-chiller stops first, then auxiliaries. */
+const KIND_ORDER: Readonly<Record<StagingKind, number>> = { OFF_HOURS_STOP: 0, CHILLER_STAGE_DOWN: 1, IDLE_AUXILIARY_STOP: 2 };
+
+const SCOPE_NAME: Readonly<Record<string, string>> = { CHILLER_STAGE_DOWN: '减台', IDLE_AUXILIARY_STOP: '辅机停机', OFF_HOURS_STOP: '停机时段停机' };
 
 /** Normal plant states the service reports while it looks, not blockers. */
 const QUIET = new Set([
   'CHILLER_STAGE_DOWN_ELIGIBLE', 'IDLE_AUXILIARY_ELIGIBLE', 'PAIRED_CHILLER_RUNNING', 'PAIRED_CHILLER_STARTING',
   'AUXILIARY_ALREADY_STOPPED', 'AUXILIARY_STARTING', 'IDLE_DEBOUNCE_NOT_MET', 'UNSUPPORTED_AUXILIARY_TYPE',
+  'OFF_HOURS_STOP_ELIGIBLE', 'IN_COOLING_WINDOW', 'CHILLER_ALREADY_STOPPED',
 ]);
 
 const EXACT: Readonly<Record<string, string>> = {
   SITE_CONTROL_EXIT_ACTIVE: '站点不在远程自动控制，停机建议已暂停',
   ASSET_CONTROL_LOCKED: '已锁定，解锁后才会给停机建议',
+  MAINTENANCE_WINDOW_ACTIVE: '今天在运行计划的检修窗口内，停机建议已暂停',
+  OFF_HOURS_WINDOW_ACTIVE: '现在是运行计划里的停机时段，改为给整台停机建议',
   INSUFFICIENT_CHILLERS: '登记的冷机不到 2 台，不需要减台',
   COOLING_LOAD_MISSING: '读不到冷站制冷量，为安全起见不给减台建议',
   COOLING_LOAD_NON_POSITIVE: '现在没有供冷负荷',
@@ -136,7 +143,7 @@ function pausedItem(diagnostic: StagingDiagnostic, index: number, assetName: (as
 /** What the page shows from the latest evaluation: the cards to confirm, what is paused and why, and the totals. */
 export function stagingView(evaluation: StagingEvaluation, assetName: (assetId: string) => string | undefined): StagingView {
   const cards = [...evaluation.recommendations]
-    .sort((left, right) => (left.kind === right.kind ? right.predictedPowerSavingKW - left.predictedPowerSavingKW : left.kind === 'CHILLER_STAGE_DOWN' ? -1 : 1))
+    .sort((left, right) => KIND_ORDER[left.kind] - KIND_ORDER[right.kind] || right.predictedPowerSavingKW - left.predictedPowerSavingKW)
     .map((draft) => card(draft, assetName));
   const paused = evaluation.diagnostics
     .filter((diagnostic) => diagnostic.status === 'SUPPRESSED' && !QUIET.has(diagnostic.reason))
