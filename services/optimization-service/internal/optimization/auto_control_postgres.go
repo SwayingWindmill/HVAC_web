@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
 func (store *PostgresStore) ActiveAutoControlLease(ctx context.Context, tenantID, siteID string, at time.Time) (*AutoControlLeaseRecord, error) {
@@ -108,7 +109,7 @@ LIMIT 1
 			InputMapping InputMapping `json:"inputMapping"`
 		}
 		if json.Unmarshal(policyConstraints, &parsed) == nil {
-			result.InputMapping = parsed.InputMapping
+			result.InputMapping = resolveInputMappingWithTwin(parsed.InputMapping, topology.Twin)
 		}
 	}
 
@@ -177,6 +178,10 @@ func (store *PostgresStore) CheckSiteTelemetryHealth(ctx context.Context, tenant
 	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) {
 		return errors.New("telemetry health check scope is invalid")
 	}
+	twin, err := store.LoadSiteTwin(ctx, planttwin.SiteScope{TenantID: tenantID, SiteID: siteID}, time.Now().UTC())
+	if err != nil {
+		return err
+	}
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return err
@@ -185,7 +190,7 @@ func (store *PostgresStore) CheckSiteTelemetryHealth(ctx context.Context, tenant
 	if err = optimizationScope(ctx, tx, tenantID, siteID); err != nil {
 		return err
 	}
-	if err = checkTelemetryPointHealth(ctx, tx, tenantID, siteID, keys); err != nil {
+	if err = checkTelemetryPointHealth(ctx, tx, siteID, twinDeviceUUIDs(twin), keys); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

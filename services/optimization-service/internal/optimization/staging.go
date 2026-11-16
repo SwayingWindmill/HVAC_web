@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/nameplate"
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
 const (
@@ -192,51 +193,6 @@ type AssetControlLockInfo struct {
 	Reason   string `json:"reason,omitempty"`
 }
 
-// SongyaxuanChillerMeterBindings returns the verified Songyaxuan plant chiller-to-meter mapping:
-// chiller-c -> ammeter-unit1 (UID 5), chiller-d -> ammeter-unit2 (UID 2), chiller-b -> ammeter-unit3 (UID 3), chiller-a -> ammeter-unit4 (UID 4).
-func SongyaxuanChillerMeterBindings() []ChillerMeterBinding {
-	return []ChillerMeterBinding{
-		{
-			AssetID:         "01a14000-3000-7000-8000-000000000001",
-			AssetCode:       "chiller-a",
-			AssetName:       "A 机组",
-			MeterDeviceID:   "01a14000-4000-7000-8000-000000000006",
-			MeterSourceKey:  "ammeter-unit4",
-			RatedCapacityKW: 572,
-			RatedPowerKW:    127.5,
-		},
-		{
-			AssetID:         "01a14000-3000-7000-8000-000000000002",
-			AssetCode:       "chiller-b",
-			AssetName:       "B 机组",
-			MeterDeviceID:   "01a14000-4000-7000-8000-000000000005",
-			MeterSourceKey:  "ammeter-unit3",
-			RatedCapacityKW: 572,
-			RatedPowerKW:    127.5,
-		},
-		{
-			AssetID:                "01a14000-3000-7000-8000-000000000003",
-			AssetCode:              "chiller-c",
-			AssetName:              "C 机组",
-			MeterDeviceID:          "01a14000-4000-7000-8000-000000000003",
-			MeterSourceKey:         "ammeter-unit1",
-			RatedCapacityKW:        572,
-			RatedPowerKW:           127.5,
-			FeederAuxiliaryPowerKW: 30,
-		},
-		{
-			AssetID:                "01a14000-3000-7000-8000-000000000004",
-			AssetCode:              "chiller-d",
-			AssetName:              "D 机组",
-			MeterDeviceID:          "01a14000-4000-7000-8000-000000000004",
-			MeterSourceKey:         "ammeter-unit2",
-			RatedCapacityKW:        572,
-			RatedPowerKW:           127.5,
-			FeederAuxiliaryPowerKW: 30,
-		},
-	}
-}
-
 // TelemetryValue is one timestamped sensor or meter observation with explicit quality.
 type TelemetryValue struct {
 	DeviceID  string    `json:"deviceId,omitempty"`
@@ -305,41 +261,6 @@ type AuxiliaryUnitInput struct {
 	ServesChillerIDs []string        `json:"servesChillerIds,omitempty"`
 }
 
-// OperatingScheduleSlotWindow defines one weekly cooling slot in Site-local time.
-type OperatingScheduleSlotWindow struct {
-	DayOfWeek   int `json:"dayOfWeek"` // 1=Monday..7=Sunday
-	StartMinute int `json:"startMinute"`
-	EndMinute   int `json:"endMinute"`
-}
-
-// OperatingExceptionReplacementSlot overrides regular weekly cooling hours on an OVERTIME_COOLING day.
-type OperatingExceptionReplacementSlot struct {
-	StartMinute int `json:"startMinute"`
-	EndMinute   int `json:"endMinute"`
-}
-
-// ApprovedOperatingExceptionWindow mirrors an approved full-day operating schedule exception.
-type ApprovedOperatingExceptionWindow struct {
-	ID               string                              `json:"id"`
-	Title            string                              `json:"title"`
-	Kind             string                              `json:"kind"`      // HOLIDAY_SHUTDOWN | MAINTENANCE_WINDOW | OVERTIME_COOLING
-	StartDate        string                              `json:"startDate"` // YYYY-MM-DD
-	EndDate          string                              `json:"endDate"`   // YYYY-MM-DD
-	ReplacementSlots []OperatingExceptionReplacementSlot `json:"replacementSlots,omitempty"`
-	Reason           string                              `json:"reason,omitempty"`
-}
-
-// OperatingScheduleContext provides weekly cooling slots, buffer minutes, and approved exceptions
-// evaluated in the Site's local timezone.
-type OperatingScheduleContext struct {
-	SiteTimezone        string                             `json:"siteTimezone,omitempty"`
-	Configured          bool                               `json:"configured"`
-	PreCoolLeadMinutes  int                                `json:"preCoolLeadMinutes"`
-	CoastDownLagMinutes int                                `json:"coastDownLagMinutes"`
-	Slots               []OperatingScheduleSlotWindow      `json:"slots,omitempty"`
-	ApprovedExceptions  []ApprovedOperatingExceptionWindow `json:"approvedExceptions,omitempty"`
-}
-
 // StagingTopology supplies authoritative asset, meter-binding, lock state and hydraulic SERVES edge definitions
 // for a Site.
 type StagingTopology struct {
@@ -348,10 +269,11 @@ type StagingTopology struct {
 	SiteControlReason   string                          `json:"siteControlReason,omitempty"`
 	AssetControlLocks   map[string]AssetControlLockInfo `json:"assetControlLocks,omitempty"`
 	CommandPointIDs     map[string]string               `json:"commandPointIds,omitempty"`
-	OperatingSchedule   *OperatingScheduleContext       `json:"operatingSchedule,omitempty"`
+	OperatingSchedule   *planttwin.OperatingSchedule    `json:"operatingSchedule,omitempty"`
 	Chillers            []ChillerMeterBinding           `json:"chillers"`
 	Auxiliaries         []AuxiliaryUnitBinding          `json:"auxiliaries,omitempty"`
 	Edges               []HydraulicEdge                 `json:"edges,omitempty"`
+	Twin                *planttwin.SiteTwin             `json:"-"`
 }
 
 // AuxiliaryUnitBinding connects an auxiliary asset record to its telemetry device and served chillers.
@@ -382,7 +304,7 @@ type StagingSnapshot struct {
 	SiteControlReason string                          `json:"siteControlReason,omitempty"`
 	AssetControlLocks map[string]AssetControlLockInfo `json:"assetControlLocks,omitempty"`
 	CommandPointIDs   map[string]string               `json:"commandPointIds,omitempty"`
-	OperatingSchedule *OperatingScheduleContext       `json:"operatingSchedule,omitempty"`
+	OperatingSchedule *planttwin.OperatingSchedule    `json:"operatingSchedule,omitempty"`
 	PlantCoolingLoad  *TelemetryValue                 `json:"plantCoolingLoad,omitempty"`
 	PlantLoadHistory  []TelemetryValue                `json:"plantLoadHistory,omitempty"`
 	HeaderSupplyC     *TelemetryValue                 `json:"headerSupplyC,omitempty"`
@@ -390,6 +312,7 @@ type StagingSnapshot struct {
 	Auxiliaries       []AuxiliaryUnitInput            `json:"auxiliaries,omitempty"`
 	Edges             []HydraulicEdge                 `json:"edges,omitempty"`
 	ChillerFits       []ChillerFit                    `json:"chillerFits,omitempty"`
+	Twin              *planttwin.SiteTwin             `json:"-"`
 }
 
 // StagingSnapshotQuery scopes a live staging snapshot read in ClickHouse.
@@ -399,6 +322,7 @@ type StagingSnapshotQuery struct {
 	At       time.Time
 	Policy   StagingPolicy
 	Topology *StagingTopology
+	Twin     *planttwin.SiteTwin
 }
 
 // StagingSnapshotReader reads live plant cooling load, chiller power/temperature/run-state and
@@ -466,10 +390,41 @@ type StagingEvaluation struct {
 // StagingEvaluator combines 14-day COP fitting and live staging snapshot evaluation independently
 // of zone_temperature or writable chilled-water setpoints.
 type StagingEvaluator struct {
-	History  PlantHistory
-	Snapshot StagingSnapshotReader
-	Catalog  StagingSiteCatalog
-	Policy   StagingPolicy
+	History    PlantHistory
+	Snapshot   StagingSnapshotReader
+	Catalog    StagingSiteCatalog
+	TwinLoader planttwin.Loader
+	Policy     StagingPolicy
+}
+
+func loadTwinAndTopology(
+	ctx context.Context,
+	tenantID, siteID string,
+	at time.Time,
+	loader planttwin.Loader,
+	catalog StagingSiteCatalog,
+) (*planttwin.SiteTwin, *StagingTopology, error) {
+	if loader == nil {
+		if asLoader, ok := catalog.(planttwin.Loader); ok {
+			loader = asLoader
+		}
+	}
+	if loader != nil {
+		twin, err := loader.LoadSiteTwin(ctx, planttwin.SiteScope{TenantID: tenantID, SiteID: siteID}, at)
+		if err != nil {
+			return nil, nil, err
+		}
+		topology := stagingTopologyFromTwin(twin)
+		return topology.Twin, &topology, nil
+	}
+	if catalog != nil {
+		loaded, err := catalog.StagingTopology(ctx, tenantID, siteID, at)
+		if err != nil {
+			return nil, nil, err
+		}
+		return loaded.Twin, &loaded, nil
+	}
+	return nil, nil, nil
 }
 
 // Evaluate reads plant history + live telemetry snapshot for a Site and computes staging recommendations.
@@ -485,13 +440,9 @@ func (evaluator *StagingEvaluator) Evaluate(ctx context.Context, tenantID, siteI
 		return StagingEvaluation{}, err
 	}
 	evaluatedAt := at.UTC()
-	var topology *StagingTopology
-	if evaluator.Catalog != nil {
-		loaded, catErr := evaluator.Catalog.StagingTopology(ctx, tenantID, siteID, evaluatedAt)
-		if catErr != nil {
-			return StagingEvaluation{}, fmt.Errorf("%w: %v", ErrStagingTopologyUnavailable, catErr)
-		}
-		topology = &loaded
+	twin, topology, catErr := loadTwinAndTopology(ctx, tenantID, siteID, evaluatedAt, evaluator.TwinLoader, evaluator.Catalog)
+	if catErr != nil {
+		return StagingEvaluation{}, fmt.Errorf("%w: %v", ErrStagingTopologyUnavailable, catErr)
 	}
 	snapshot, err := evaluator.Snapshot.ReadStagingSnapshot(ctx, StagingSnapshotQuery{
 		TenantID: tenantID,
@@ -499,6 +450,7 @@ func (evaluator *StagingEvaluator) Evaluate(ctx context.Context, tenantID, siteI
 		At:       evaluatedAt,
 		Policy:   policy,
 		Topology: topology,
+		Twin:     twin,
 	})
 	if err != nil {
 		return StagingEvaluation{}, err
@@ -506,7 +458,7 @@ func (evaluator *StagingEvaluator) Evaluate(ctx context.Context, tenantID, siteI
 	if len(snapshot.ChillerFits) == 0 && evaluator.History != nil {
 		to := evaluatedAt.Truncate(copBucketMinutes * time.Minute)
 		from := to.AddDate(0, 0, -copHistoryDays)
-		if buckets, histErr := evaluator.History.PlantBuckets(ctx, PlantHistoryQuery{TenantID: tenantID, SiteID: siteID, From: from, To: to}); histErr == nil {
+		if buckets, histErr := evaluator.History.PlantBuckets(ctx, PlantHistoryQuery{TenantID: tenantID, SiteID: siteID, From: from, To: to, Twin: twin}); histErr == nil {
 			fit := FitPlant(buckets, from, to)
 			snapshot.ChillerFits = fit.Chillers
 		}
@@ -515,7 +467,7 @@ func (evaluator *StagingEvaluator) Evaluate(ctx context.Context, tenantID, siteI
 	return EvaluateStaging(snapshot, policy)
 }
 
-func evaluateStagingWithFit(ctx context.Context, tenantID, siteID string, at time.Time, fit PlantFit, reader StagingSnapshotReader, catalog StagingSiteCatalog, policy *StagingPolicy) *StagingEvaluation {
+func evaluateStagingWithFit(ctx context.Context, tenantID, siteID string, at time.Time, fit PlantFit, reader StagingSnapshotReader, catalog StagingSiteCatalog, twin *planttwin.SiteTwin, topology *StagingTopology, policy *StagingPolicy) *StagingEvaluation {
 	if reader == nil {
 		return nil
 	}
@@ -533,14 +485,15 @@ func evaluateStagingWithFit(ctx context.Context, tenantID, siteID string, at tim
 			}},
 		}
 	}
-	var topology *StagingTopology
-	if catalog != nil {
-		if loaded, catErr := catalog.StagingTopology(ctx, tenantID, siteID, at.UTC()); catErr == nil {
-			topology = &loaded
-		}
+	if twin == nil && topology == nil && catalog != nil {
+		loadedTwin, loadedTopo, _ := loadTwinAndTopology(ctx, tenantID, siteID, at.UTC(), nil, catalog)
+		twin, topology = loadedTwin, loadedTopo
+	}
+	if twin == nil && topology != nil {
+		twin = topology.Twin
 	}
 	snapshot, err := reader.ReadStagingSnapshot(ctx, StagingSnapshotQuery{
-		TenantID: tenantID, SiteID: siteID, At: at.UTC(), Policy: normPolicy, Topology: topology,
+		TenantID: tenantID, SiteID: siteID, At: at.UTC(), Policy: normPolicy, Topology: topology, Twin: twin,
 	})
 	if err != nil {
 		return &StagingEvaluation{
@@ -577,7 +530,7 @@ func EvaluateStaging(snapshot StagingSnapshot, policy StagingPolicy) (StagingEva
 	if snapshot.EvaluatedAt.IsZero() {
 		return StagingEvaluation{}, errors.New("evaluatedAt is required")
 	}
-	snapshot = resolveSnapshotBindings(snapshot)
+	snapshot = normalizeSnapshotUnits(snapshot)
 	evaluatedAt := snapshot.EvaluatedAt.UTC()
 
 	result := StagingEvaluation{
@@ -590,9 +543,13 @@ func EvaluateStaging(snapshot StagingSnapshot, policy StagingPolicy) (StagingEva
 		Diagnostics:      []StagingDiagnostic{},
 	}
 
-	scheduleState := evaluateScheduleState(snapshot.OperatingSchedule, evaluatedAt)
-	if scheduleState.activeMaintenance != nil {
-		detail := formatScheduleExceptionDetail("站点当前处于已批准的计划检修窗口，暂停生成减台及启停建议", *scheduleState.activeMaintenance)
+	schedEval, hasSchedule, schedErr := evaluateStagingSchedule(snapshot, evaluatedAt)
+	if schedErr != nil {
+		return StagingEvaluation{}, schedErr
+	}
+	if hasSchedule && schedEval.Suppressed && schedEval.ActiveException != nil &&
+		strings.EqualFold(strings.TrimSpace(schedEval.ActiveException.Kind), planttwin.ExceptionMaintenanceWindow) {
+		detail := formatScheduleExceptionDetail("站点当前处于已批准的计划检修窗口，暂停生成减台及启停建议", *schedEval.ActiveException)
 		result.Diagnostics = append(result.Diagnostics,
 			StagingDiagnostic{
 				Scope:  RecommendationKindChillerStageDown,
@@ -618,8 +575,10 @@ func EvaluateStaging(snapshot StagingSnapshot, policy StagingPolicy) (StagingEva
 		return result, nil
 	}
 
-	if scheduleState.scheduleActive && !scheduleState.inCoolingWindow {
-		offDrafts, offDiags := evaluateOffHoursStop(snapshot, normPolicy, scheduleState)
+	scheduleConfigured := hasSchedule && schedEval.OperatingState != planttwin.OperatingStateUnconfigured
+	outsideCoolingWindow := scheduleConfigured && (schedEval.Suppressed || !schedEval.WithinOperatingWindow)
+	if outsideCoolingWindow {
+		offDrafts, offDiags := evaluateOffHoursStop(snapshot, normPolicy, schedEval)
 		result.Recommendations = append(result.Recommendations, offDrafts...)
 		result.Diagnostics = append(result.Diagnostics, offDiags...)
 		result.Diagnostics = append(result.Diagnostics, StagingDiagnostic{
@@ -645,7 +604,7 @@ func EvaluateStaging(snapshot StagingSnapshot, policy StagingPolicy) (StagingEva
 	result.Recommendations = append(result.Recommendations, auxDrafts...)
 	result.Diagnostics = append(result.Diagnostics, auxDiags...)
 
-	if scheduleState.scheduleActive {
+	if scheduleConfigured {
 		result.Diagnostics = append(result.Diagnostics, StagingDiagnostic{
 			Scope:  RecommendationKindOffHoursStop,
 			Status: "NO_OP",
@@ -657,47 +616,9 @@ func EvaluateStaging(snapshot StagingSnapshot, policy StagingPolicy) (StagingEva
 	return result, nil
 }
 
-func resolveSnapshotBindings(snapshot StagingSnapshot) StagingSnapshot {
-	songyaxuan := SongyaxuanChillerMeterBindings()
-	byAssetID := map[string]ChillerMeterBinding{}
-	byAssetCode := map[string]ChillerMeterBinding{}
-	byMeterID := map[string]ChillerMeterBinding{}
-	byMeterSource := map[string]ChillerMeterBinding{}
-	for _, b := range songyaxuan {
-		byAssetID[strings.ToLower(b.AssetID)] = b
-		byAssetCode[strings.ToLower(b.AssetCode)] = b
-		byMeterID[strings.ToLower(b.MeterDeviceID)] = b
-		byMeterSource[strings.ToLower(b.MeterSourceKey)] = b
-	}
-
+func normalizeSnapshotUnits(snapshot StagingSnapshot) StagingSnapshot {
 	resolved := make([]ChillerUnitInput, len(snapshot.Chillers))
 	for index, unit := range snapshot.Chillers {
-		if match, ok := lookupSongyaxuanBinding(unit, byAssetID, byAssetCode, byMeterID, byMeterSource); ok {
-			if unit.AssetID == "" {
-				unit.AssetID = match.AssetID
-			}
-			if unit.AssetCode == "" {
-				unit.AssetCode = match.AssetCode
-			}
-			if unit.AssetName == "" {
-				unit.AssetName = match.AssetName
-			}
-			if unit.MeterDeviceID == "" {
-				unit.MeterDeviceID = match.MeterDeviceID
-			}
-			if unit.MeterSourceKey == "" {
-				unit.MeterSourceKey = match.MeterSourceKey
-			}
-			if unit.RatedCapacityKW <= 0 {
-				unit.RatedCapacityKW = match.RatedCapacityKW
-			}
-			if unit.RatedPowerKW <= 0 {
-				unit.RatedPowerKW = match.RatedPowerKW
-			}
-			if unit.FeederAuxiliaryPowerKW <= 0 {
-				unit.FeederAuxiliaryPowerKW = match.FeederAuxiliaryPowerKW
-			}
-		}
 		if unit.AssetCode == "" {
 			unit.AssetCode = unit.AssetID
 		}
@@ -710,25 +631,30 @@ func resolveSnapshotBindings(snapshot StagingSnapshot) StagingSnapshot {
 	return snapshot
 }
 
-func lookupSongyaxuanBinding(
-	unit ChillerUnitInput,
-	byAssetID, byAssetCode, byMeterID, byMeterSource map[string]ChillerMeterBinding,
-) (ChillerMeterBinding, bool) {
-	if b, ok := byMeterID[strings.ToLower(strings.TrimSpace(unit.MeterDeviceID))]; ok {
-		return b, true
+func evaluateStagingSchedule(snapshot StagingSnapshot, at time.Time) (planttwin.ScheduleEvaluation, bool, error) {
+	var sched planttwin.OperatingSchedule
+	switch {
+	case snapshot.OperatingSchedule != nil:
+		sched = *snapshot.OperatingSchedule
+	case snapshot.Twin != nil:
+		sched = snapshot.Twin.Schedule
+	default:
+		return planttwin.ScheduleEvaluation{}, false, nil
 	}
-	if b, ok := byMeterSource[strings.ToLower(strings.TrimSpace(unit.MeterSourceKey))]; ok {
-		return b, true
+	if strings.TrimSpace(sched.Timezone) == "" && snapshot.Twin != nil {
+		sched.Timezone = snapshot.Twin.Timezone
 	}
-	if b, ok := byAssetID[strings.ToLower(strings.TrimSpace(unit.AssetID))]; ok {
-		return b, true
-	}
-	if unit.MeterDeviceID == "" && unit.MeterSourceKey == "" {
-		if b, ok := byAssetCode[strings.ToLower(strings.TrimSpace(unit.AssetCode))]; ok {
-			return b, true
+	if strings.TrimSpace(sched.Timezone) == "" {
+		if len(sched.Slots) == 0 && len(sched.Exceptions) == 0 {
+			return planttwin.ScheduleEvaluation{}, false, nil
 		}
+		sched.Timezone = "UTC"
 	}
-	return ChillerMeterBinding{}, false
+	eval, err := planttwin.EvaluateOperatingSchedule(at, sched)
+	if err != nil {
+		return planttwin.ScheduleEvaluation{}, true, err
+	}
+	return eval, true, nil
 }
 
 func evaluateChillerStageDown(snapshot StagingSnapshot, policy StagingPolicy) (*StagingRecommendationDraft, StagingDiagnostic) {
@@ -1695,7 +1621,9 @@ func indexChillerFits(fits []ChillerFit) map[string]ChillerFit {
 }
 
 func matchChillerFit(unit ChillerUnitInput, fits map[string]ChillerFit) *ChillerFit {
-	candidates := []string{unit.MeterDeviceID, unit.MeterSourceKey, unit.AssetID, unit.AssetCode}
+	candidates := make([]string, 0, 4+len(unit.BoundDeviceIDs))
+	candidates = append(candidates, unit.AssetID, unit.MeterDeviceID, unit.MeterSourceKey, unit.AssetCode)
+	candidates = append(candidates, unit.BoundDeviceIDs...)
 	for _, candidate := range candidates {
 		key := strings.ToLower(strings.TrimSpace(candidate))
 		if key == "" {
@@ -1788,8 +1716,8 @@ func auxDisplayName(aux AuxiliaryUnitInput) string {
 const maximumStagingSnapshotResponseBytes = int64(4 << 20)
 
 // ReadStagingSnapshot queries ClickHouse telemetry_history.observations for the Site's latest
-// chiller, btu-calc and auxiliary observations (never falling back past newer non-GOOD readings)
-// and recent chiller run-state history for continuous idle verification.
+// chiller, cooling-load, header-supply and auxiliary observations resolved by SiteTwin semantic roles
+// and recent chiller run-state and load history.
 func (reader *ClickHouseInputReader) ReadStagingSnapshot(ctx context.Context, query StagingSnapshotQuery) (StagingSnapshot, error) {
 	if reader == nil || reader.baseURL == nil || reader.client == nil {
 		return StagingSnapshot{}, errors.New("optimization staging snapshot reader is unavailable")
@@ -1805,12 +1733,51 @@ func (reader *ClickHouseInputReader) ReadStagingSnapshot(ctx context.Context, qu
 		return StagingSnapshot{}, err
 	}
 	at := query.At.UTC()
+	twin := query.Twin
+	if twin == nil && query.Topology != nil {
+		twin = query.Topology.Twin
+	}
+	topology := query.Topology
+	if topology == nil && twin != nil {
+		derived := stagingTopologyFromTwin(*twin)
+		topology = &derived
+	}
+
 	latestFrom := at.Add(-2 * maxDuration(policy.MaxTelemetryAge, time.Hour))
 	runHistoryFrom := at.Add(-maxDuration(policy.IdleAuxiliaryDebounce, policy.MinChillerRunDuration) - policy.MaxTelemetryAge)
 	loadHistoryFrom := at.Add(-maxDuration(20*time.Minute, policy.StageDownDwellDuration+5*time.Minute))
 	earliestHistoryFrom := runHistoryFrom
 	if loadHistoryFrom.Before(earliestHistoryFrom) {
 		earliestHistoryFrom = loadHistoryFrom
+	}
+
+	var latestFilterSQL, historyFilterSQL string
+	if twin != nil {
+		plan := buildTwinStagingQueryPlan(*twin)
+		latestFilterSQL = buildDeviceTelemetryFilterSQL(plan.allBindings)
+		if latestFilterSQL == "" {
+			return buildStagingSnapshotFromObservations(query.TenantID, query.SiteID, at, twin, topology, nil, nil), nil
+		}
+		var histBranches []string
+		if runFilter := buildDeviceTelemetryFilterSQL(plan.chillerRunStateBindings); runFilter != "" {
+			histBranches = append(histBranches, fmt.Sprintf("(%s AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC'))", runFilter, formatOptimizationTime(runHistoryFrom)))
+		}
+		if loadFilter := buildDeviceTelemetryFilterSQL(plan.coolingLoadBindings); loadFilter != "" {
+			histBranches = append(histBranches, fmt.Sprintf("(%s AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC'))", loadFilter, formatOptimizationTime(loadHistoryFrom)))
+		}
+		if len(histBranches) > 0 {
+			historyFilterSQL = "(" + strings.Join(histBranches, " OR ") + ")"
+		}
+	} else {
+		canonicalLatest := []string{
+			chillerPowerKey, plantCoolingLoadKey, chilledWaterEnteringKey,
+			chilledWaterLeavingKey, condenserWaterLeavingKey, "supply_water_temperature", "run_state",
+		}
+		latestFilterSQL = "telemetry_key IN (" + joinQuotedSQL(canonicalLatest) + ")"
+		historyFilterSQL = fmt.Sprintf(
+			"((telemetry_key = 'run_state' AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC')) OR (telemetry_key = '%s' AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC')))",
+			formatOptimizationTime(runHistoryFrom), plantCoolingLoadKey, formatOptimizationTime(loadHistoryFrom),
+		)
 	}
 
 	latestSQL := fmt.Sprintf(`SELECT
@@ -1839,12 +1806,7 @@ FROM (
  FROM telemetry_history.observations
  WHERE tenant_id = toUUID('%s')
    AND site_id = toUUID('%s')
-   AND telemetry_key IN (
-    'power_total','instant_cooling_capacity','btu_meter.instant_cooling_capacity',
-    'chw_entering_temperature','chw_leaving_temperature','cw_leaving_temperature',
-    'supply_water_temperature','btu_meter.supply_water_temperature',
-    'run_state','chiller.run_state','chwp.run_state','cwp.run_state','cooling_tower.run_state'
-   )
+   AND %s
    AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC')
    AND sampled_at <= parseDateTime64BestEffort('%s',3,'UTC')
    AND received_at <= parseDateTime64BestEffort('%s',3,'UTC')
@@ -1853,7 +1815,7 @@ FROM (
 )
 WHERE row_num = 1
 FORMAT JSONEachRow`,
-		clickHouseString(query.TenantID), clickHouseString(query.SiteID),
+		clickHouseString(query.TenantID), clickHouseString(query.SiteID), latestFilterSQL,
 		formatOptimizationTime(latestFrom), formatOptimizationTime(at), formatOptimizationTime(at),
 	)
 
@@ -1866,7 +1828,9 @@ FORMAT JSONEachRow`,
 		return StagingSnapshot{}, fmt.Errorf("decode staging latest observations: %w", err)
 	}
 
-	historySQL := fmt.Sprintf(`SELECT
+	var historyRows []stagingTelemetryRow
+	if historyFilterSQL != "" {
+		historySQL := fmt.Sprintf(`SELECT
  toString(device_id) AS deviceId,
  source_id AS sourceId,
  telemetry_key AS telemetryKey,
@@ -1878,11 +1842,7 @@ FORMAT JSONEachRow`,
 FROM telemetry_history.observations
 WHERE tenant_id = toUUID('%s')
   AND site_id = toUUID('%s')
-  AND (
-    (telemetry_key IN ('run_state','chiller.run_state') AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC'))
-    OR
-    (telemetry_key IN ('instant_cooling_capacity','btu_meter.instant_cooling_capacity') AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC'))
-  )
+  AND %s
   AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC')
   AND sampled_at <= parseDateTime64BestEffort('%s',3,'UTC')
   AND received_at <= parseDateTime64BestEffort('%s',3,'UTC')
@@ -1890,21 +1850,239 @@ WHERE tenant_id = toUUID('%s')
   AND device_id IS NOT NULL
 ORDER BY sampled_at ASC, received_at ASC, history_sequence ASC
 FORMAT JSONEachRow`,
-		clickHouseString(query.TenantID), clickHouseString(query.SiteID),
-		formatOptimizationTime(runHistoryFrom), formatOptimizationTime(loadHistoryFrom),
-		formatOptimizationTime(earliestHistoryFrom), formatOptimizationTime(at), formatOptimizationTime(at),
-	)
+			clickHouseString(query.TenantID), clickHouseString(query.SiteID), historyFilterSQL,
+			formatOptimizationTime(earliestHistoryFrom), formatOptimizationTime(at), formatOptimizationTime(at),
+		)
 
-	historyPayload, err := reader.queryLimited(ctx, historySQL, maximumStagingSnapshotResponseBytes)
-	if err != nil {
-		return StagingSnapshot{}, fmt.Errorf("query staging history: %w", err)
-	}
-	historyRows, err := decodeStagingTelemetryRows(bytes.NewReader(historyPayload))
-	if err != nil {
-		return StagingSnapshot{}, fmt.Errorf("decode staging history: %w", err)
+		historyPayload, err := reader.queryLimited(ctx, historySQL, maximumStagingSnapshotResponseBytes)
+		if err != nil {
+			return StagingSnapshot{}, fmt.Errorf("query staging history: %w", err)
+		}
+		historyRows, err = decodeStagingTelemetryRows(bytes.NewReader(historyPayload))
+		if err != nil {
+			return StagingSnapshot{}, fmt.Errorf("decode staging history: %w", err)
+		}
 	}
 
-	return buildStagingSnapshotFromObservations(query.TenantID, query.SiteID, at, query.Topology, latestRows, historyRows), nil
+	return buildStagingSnapshotFromObservations(query.TenantID, query.SiteID, at, twin, topology, latestRows, historyRows), nil
+}
+
+type twinStagingQueryPlan struct {
+	allBindings             []planttwin.PointBinding
+	chillerRunStateBindings []planttwin.PointBinding
+	coolingLoadBindings     []planttwin.PointBinding
+	supplyTempBindings      []planttwin.PointBinding
+}
+
+func buildTwinStagingQueryPlan(twin planttwin.SiteTwin) twinStagingQueryPlan {
+	var plan twinStagingQueryPlan
+	seen := map[string]struct{}{}
+	addPoint := func(dst *[]planttwin.PointBinding, pb planttwin.PointBinding) {
+		keys := collectPointKeys(pb)
+		if len(keys) == 0 {
+			return
+		}
+		id := strings.ToLower(strings.TrimSpace(pb.PointID))
+		if id == "" {
+			id = strings.ToLower(strings.TrimSpace(pb.DeviceID)) + "\x00" + keys[0]
+		}
+		if _, dup := seen[id]; dup {
+			return
+		}
+		seen[id] = struct{}{}
+		*dst = append(*dst, pb)
+	}
+
+	chillerRoles := []planttwin.SemanticRole{
+		planttwin.RoleActivePower,
+		planttwin.RoleRunState,
+		planttwin.RoleCHWLeavingTemp,
+		planttwin.RoleCHWEnteringTemp,
+		planttwin.RoleCWLeavingTemp,
+		planttwin.RoleCWEnteringTemp,
+	}
+	for _, chiller := range twin.UnitsByType(planttwin.AssetTypeChiller) {
+		for _, role := range chillerRoles {
+			if pb, ok := twin.ResolveAssetPoint(chiller.AssetID, role); ok {
+				addPoint(&plan.allBindings, pb)
+				if role == planttwin.RoleRunState {
+					plan.chillerRunStateBindings = append(plan.chillerRunStateBindings, pb)
+				}
+			}
+		}
+	}
+
+	auxTypes := []string{
+		planttwin.AssetTypeChilledWaterPump,
+		planttwin.AssetTypeCoolingWaterPump,
+		planttwin.AssetTypeCoolingTower,
+	}
+	for _, aux := range twin.UnitsByType(auxTypes...) {
+		for _, role := range []planttwin.SemanticRole{planttwin.RoleActivePower, planttwin.RoleRunState} {
+			if pb, ok := twin.ResolveAssetPoint(aux.AssetID, role); ok {
+				addPoint(&plan.allBindings, pb)
+			}
+		}
+	}
+
+	plan.coolingLoadBindings = resolvePrimaryPlantRolePoints(twin, planttwin.RoleCoolingLoad)
+	for _, pb := range plan.coolingLoadBindings {
+		addPoint(&plan.allBindings, pb)
+	}
+	plan.supplyTempBindings = resolvePrimaryPlantRolePoints(twin, planttwin.RoleSupplyWaterTemp)
+	for _, pb := range plan.supplyTempBindings {
+		addPoint(&plan.allBindings, pb)
+	}
+	return plan
+}
+
+func resolvePrimaryPlantRolePoints(twin planttwin.SiteTwin, role planttwin.SemanticRole) []planttwin.PointBinding {
+	all := twin.PointsByRole(role)
+	if len(all) == 0 {
+		return nil
+	}
+	primary := make([]planttwin.PointBinding, 0, len(all))
+	for _, pb := range all {
+		if !pb.IsCopied {
+			primary = append(primary, pb)
+		}
+	}
+	if len(primary) == 0 {
+		primary = all
+	}
+	// Prefer loop- or site-bound points before individual branch units when both carry the same role.
+	loopIDs := map[string]bool{}
+	for _, unit := range twin.Units {
+		unitType := strings.ToUpper(strings.TrimSpace(unit.AssetType))
+		if unitType == planttwin.AssetTypeChilledWaterLoop || unitType == planttwin.AssetTypeCoolingWaterLoop {
+			loopIDs[strings.ToLower(strings.TrimSpace(unit.AssetID))] = true
+		}
+	}
+	var prioritized []planttwin.PointBinding
+	var rest []planttwin.PointBinding
+	for _, pb := range primary {
+		subj := strings.ToUpper(strings.TrimSpace(pb.SubjectType))
+		if loopIDs[strings.ToLower(strings.TrimSpace(pb.AssetID))] || subj == planttwin.SubjectTypeSite {
+			prioritized = append(prioritized, pb)
+		} else {
+			rest = append(rest, pb)
+		}
+	}
+	combined := append(prioritized, rest...)
+	seen := map[string]struct{}{}
+	out := make([]planttwin.PointBinding, 0, len(combined))
+	for _, pb := range combined {
+		key := strings.ToLower(strings.TrimSpace(pb.PointID))
+		if key == "" {
+			key = strings.ToLower(strings.TrimSpace(pb.DeviceID)) + "\x00" + strings.Join(collectPointKeys(pb), ",")
+		}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, pb)
+	}
+	return out
+}
+
+func collectPointKeys(pb planttwin.PointBinding) []string {
+	var keys []string
+	for _, raw := range []string{pb.WireSourceKey, pb.PointCode} {
+		clean := strings.TrimSpace(raw)
+		if clean == "" {
+			continue
+		}
+		dup := false
+		for _, existing := range keys {
+			if existing == clean {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			keys = append(keys, clean)
+		}
+	}
+	return keys
+}
+
+func buildDeviceTelemetryFilterSQL(bindings []planttwin.PointBinding) string {
+	type deviceKeys struct {
+		deviceID  string
+		sourceKey string
+		keys      []string
+	}
+	byGroup := map[string]*deviceKeys{}
+	for _, pb := range bindings {
+		keys := collectPointKeys(pb)
+		if len(keys) == 0 {
+			continue
+		}
+		devID := strings.TrimSpace(pb.DeviceID)
+		sourceID := firstNonEmptyString(pb.DeviceSourceKey, pb.DeviceCode)
+		groupKey := "dev:" + strings.ToLower(devID)
+		if devID == "" {
+			if sourceID == "" {
+				groupKey = "any"
+			} else {
+				groupKey = "src:" + strings.ToLower(sourceID)
+			}
+		}
+		entry := byGroup[groupKey]
+		if entry == nil {
+			entry = &deviceKeys{deviceID: devID, sourceKey: sourceID}
+			byGroup[groupKey] = entry
+		}
+		for _, k := range keys {
+			dup := false
+			for _, existing := range entry.keys {
+				if existing == k {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				entry.keys = append(entry.keys, k)
+			}
+		}
+	}
+	if len(byGroup) == 0 {
+		return ""
+	}
+	groupOrder := make([]string, 0, len(byGroup))
+	for k := range byGroup {
+		groupOrder = append(groupOrder, k)
+	}
+	sort.Strings(groupOrder)
+
+	clauses := make([]string, 0, len(groupOrder))
+	for _, gk := range groupOrder {
+		entry := byGroup[gk]
+		sort.Strings(entry.keys)
+		keyClause := "telemetry_key IN (" + joinQuotedSQL(entry.keys) + ")"
+		switch {
+		case uuidPattern.MatchString(entry.deviceID):
+			clauses = append(clauses, fmt.Sprintf("(device_id = toUUID('%s') AND %s)", clickHouseString(entry.deviceID), keyClause))
+		case entry.deviceID != "":
+			clauses = append(clauses, fmt.Sprintf("(toString(device_id) = '%s' AND %s)", clickHouseString(entry.deviceID), keyClause))
+		case entry.sourceKey != "":
+			clauses = append(clauses, fmt.Sprintf("(source_id = '%s' AND %s)", clickHouseString(entry.sourceKey), keyClause))
+		default:
+			clauses = append(clauses, "("+keyClause+")")
+		}
+	}
+	if len(clauses) == 1 {
+		return clauses[0]
+	}
+	return "(" + strings.Join(clauses, " OR ") + ")"
+}
+
+func joinQuotedSQL(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, v := range values {
+		quoted = append(quoted, "'"+clickHouseString(v)+"'")
+	}
+	return strings.Join(quoted, ",")
 }
 
 type stagingTelemetryRow struct {
@@ -1960,10 +2138,18 @@ func decodeStagingTelemetryRows(source io.Reader) ([]stagingTelemetryRow, error)
 func buildStagingSnapshotFromObservations(
 	tenantID, siteID string,
 	at time.Time,
+	twin *planttwin.SiteTwin,
 	topology *StagingTopology,
 	latest []stagingTelemetryRow,
 	history []stagingTelemetryRow,
 ) StagingSnapshot {
+	if twin == nil && topology != nil {
+		twin = topology.Twin
+	}
+	if topology == nil && twin != nil {
+		derived := stagingTopologyFromTwin(*twin)
+		topology = &derived
+	}
 	snapshot := StagingSnapshot{
 		TenantID:    tenantID,
 		SiteID:      siteID,
@@ -1971,101 +2157,60 @@ func buildStagingSnapshotFromObservations(
 	}
 	applyStagingTopology(&snapshot, topology)
 
-	byDeviceKey := map[string]map[string]stagingTelemetryRow{}
-	for _, row := range latest {
-		for _, id := range []string{row.DeviceID, row.SourceID} {
-			k := strings.ToLower(strings.TrimSpace(id))
-			if k == "" {
-				continue
-			}
-			if byDeviceKey[k] == nil {
-				byDeviceKey[k] = map[string]stagingTelemetryRow{}
-			}
-			byDeviceKey[k][row.TelemetryKey] = row
-		}
+	byDeviceKey := indexStagingRowsByDevice(latest)
+	if twin != nil {
+		populateSnapshotFromTwin(&snapshot, *twin, topology, byDeviceKey, history)
+		return snapshot
 	}
 
-	var coolingMatches []TelemetryValue
-	var supplyMatches []TelemetryValue
-	for _, row := range latest {
-		if row.ValueNumber == nil {
-			continue
-		}
-		switch row.TelemetryKey {
-		case plantCoolingLoadKey, "btu_meter.instant_cooling_capacity":
-			if topology == nil || topology.CoolingLoadDeviceID == "" ||
-				strings.EqualFold(row.DeviceID, topology.CoolingLoadDeviceID) ||
-				strings.EqualFold(row.SourceID, topology.CoolingLoadDeviceID) {
-				coolingMatches = append(coolingMatches, TelemetryValue{
-					DeviceID: row.DeviceID, SourceKey: row.SourceID, PointKey: row.TelemetryKey,
-					Value: *row.ValueNumber, Unit: row.Unit, Quality: row.Quality, SampledAt: row.SampledAt,
-				})
-			}
-		case "supply_water_temperature", "btu_meter.supply_water_temperature":
-			supplyMatches = append(supplyMatches, TelemetryValue{
-				DeviceID: row.DeviceID, SourceKey: row.SourceID, PointKey: row.TelemetryKey,
-				Value: *row.ValueNumber, Unit: row.Unit, Quality: row.Quality, SampledAt: row.SampledAt,
-			})
-		}
-	}
-	if len(coolingMatches) == 1 {
-		v := coolingMatches[0]
-		snapshot.PlantCoolingLoad = &v
-	} else if len(coolingMatches) > 1 {
-		for _, m := range coolingMatches {
-			if strings.EqualFold(m.SourceKey, "btu-calc") || m.DeviceID == "01a14000-4000-7000-8000-000000000009" {
-				v := m
-				snapshot.PlantCoolingLoad = &v
-				break
-			}
-		}
-	}
-	if len(supplyMatches) >= 1 {
-		v := supplyMatches[0]
-		snapshot.HeaderSupplyC = &v
-	}
-
-	plantLoadDeviceID := ""
-	if topology != nil && topology.CoolingLoadDeviceID != "" {
-		plantLoadDeviceID = topology.CoolingLoadDeviceID
-	} else if snapshot.PlantCoolingLoad != nil {
-		plantLoadDeviceID = snapshot.PlantCoolingLoad.DeviceID
-	}
-
-	historyByDevice := map[string][]RunStateSample{}
-	for _, row := range history {
-		switch row.TelemetryKey {
-		case plantCoolingLoadKey, "btu_meter.instant_cooling_capacity":
-			if plantLoadDeviceID != "" &&
-				!strings.EqualFold(row.DeviceID, plantLoadDeviceID) &&
-				!strings.EqualFold(row.SourceID, plantLoadDeviceID) {
+	if topology != nil {
+		for _, row := range latest {
+			if row.ValueNumber == nil {
 				continue
 			}
-			val := 0.0
-			if row.ValueNumber != nil {
-				val = *row.ValueNumber
-			}
-			snapshot.PlantLoadHistory = append(snapshot.PlantLoadHistory, TelemetryValue{
-				DeviceID: row.DeviceID, SourceKey: row.SourceID, PointKey: row.TelemetryKey,
-				Value: val, Unit: row.Unit, Quality: row.Quality, SampledAt: row.SampledAt,
-			})
-		default:
-			if row.ValueString == nil {
-				continue
-			}
-			sample := RunStateSample{State: *row.ValueString, Quality: row.Quality, SampledAt: row.SampledAt}
-			for _, id := range []string{row.DeviceID, row.SourceID} {
-				k := strings.ToLower(strings.TrimSpace(id))
-				if k != "" {
-					historyByDevice[k] = append(historyByDevice[k], sample)
+			switch row.TelemetryKey {
+			case plantCoolingLoadKey:
+				if snapshot.PlantCoolingLoad == nil && (topology.CoolingLoadDeviceID == "" ||
+					strings.EqualFold(row.DeviceID, topology.CoolingLoadDeviceID) ||
+					strings.EqualFold(row.SourceID, topology.CoolingLoadDeviceID)) {
+					v := telemetryValueFromRow(row)
+					snapshot.PlantCoolingLoad = &v
+				}
+			case "supply_water_temperature":
+				if snapshot.HeaderSupplyC == nil {
+					v := telemetryValueFromRow(row)
+					snapshot.HeaderSupplyC = &v
 				}
 			}
 		}
-	}
 
-	chillerBindings := []ChillerMeterBinding(nil)
-	if topology != nil {
-		chillerBindings = topology.Chillers
+		plantLoadDeviceID := topology.CoolingLoadDeviceID
+		if plantLoadDeviceID == "" && snapshot.PlantCoolingLoad != nil {
+			plantLoadDeviceID = snapshot.PlantCoolingLoad.DeviceID
+		}
+		historyByDevice := map[string][]RunStateSample{}
+		for _, row := range history {
+			switch row.TelemetryKey {
+			case plantCoolingLoadKey:
+				if plantLoadDeviceID != "" &&
+					!strings.EqualFold(row.DeviceID, plantLoadDeviceID) &&
+					!strings.EqualFold(row.SourceID, plantLoadDeviceID) {
+					continue
+				}
+				snapshot.PlantLoadHistory = append(snapshot.PlantLoadHistory, telemetryValueFromRow(row))
+			case "run_state":
+				if row.ValueString == nil {
+					continue
+				}
+				sample := RunStateSample{State: *row.ValueString, Quality: row.Quality, SampledAt: row.SampledAt}
+				for _, id := range []string{row.DeviceID, row.SourceID} {
+					if k := strings.ToLower(strings.TrimSpace(id)); k != "" {
+						historyByDevice[k] = append(historyByDevice[k], sample)
+					}
+				}
+			}
+		}
+
 		snapshot.Edges = append(snapshot.Edges, topology.Edges...)
 		for _, auxB := range topology.Auxiliaries {
 			aux := AuxiliaryUnitInput{
@@ -2079,118 +2224,273 @@ func buildStagingSnapshotFromObservations(
 				RatedPowerKW:     auxB.RatedPowerKW,
 				ServesChillerIDs: append([]string(nil), auxB.ServesChillerIDs...),
 			}
-			populateAuxTelemetry(&aux, byDeviceKey)
+			keys := append([]string{aux.DeviceID, aux.DeviceSourceKey}, aux.BoundDeviceIDs...)
+			keys = append(keys, aux.AssetID, aux.AssetCode)
+			if r, ok := findPointAcrossKeys(byDeviceKey, keys, "run_state"); ok && r.ValueString != nil {
+				aux.RunState, aux.RunStateQuality, aux.RunStateAt = *r.ValueString, r.Quality, r.SampledAt
+			}
+			if r, ok := findPointAcrossKeys(byDeviceKey, keys, chillerPowerKey); ok && r.ValueNumber != nil {
+				v := telemetryValueFromRow(r)
+				aux.Power = &v
+			}
 			snapshot.Auxiliaries = append(snapshot.Auxiliaries, aux)
 		}
-	} else {
-		chillerBindings = discoverChillerBindingsFromRows(latest)
-	}
-
-	for _, binding := range chillerBindings {
-		unit := ChillerUnitInput{
-			AssetID:                binding.AssetID,
-			AssetCode:              binding.AssetCode,
-			AssetName:              binding.AssetName,
-			MeterDeviceID:          binding.MeterDeviceID,
-			MeterSourceKey:         binding.MeterSourceKey,
-			BoundDeviceIDs:         append([]string(nil), binding.BoundDeviceIDs...),
-			RatedCapacityKW:        binding.RatedCapacityKW,
-			RatedPowerKW:           binding.RatedPowerKW,
-			FeederAuxiliaryPowerKW: binding.FeederAuxiliaryPowerKW,
+		for _, binding := range topology.Chillers {
+			unit := ChillerUnitInput{
+				AssetID:                binding.AssetID,
+				AssetCode:              binding.AssetCode,
+				AssetName:              binding.AssetName,
+				MeterDeviceID:          binding.MeterDeviceID,
+				MeterSourceKey:         binding.MeterSourceKey,
+				BoundDeviceIDs:         append([]string(nil), binding.BoundDeviceIDs...),
+				RatedCapacityKW:        binding.RatedCapacityKW,
+				RatedPowerKW:           binding.RatedPowerKW,
+				FeederAuxiliaryPowerKW: binding.FeederAuxiliaryPowerKW,
+			}
+			keys := append([]string{unit.MeterDeviceID, unit.MeterSourceKey}, unit.BoundDeviceIDs...)
+			keys = append(keys, unit.AssetID, unit.AssetCode)
+			if r, ok := findPointAcrossKeys(byDeviceKey, keys, "run_state"); ok && r.ValueString != nil {
+				unit.RunState, unit.RunStateQuality, unit.RunStateAt = *r.ValueString, r.Quality, r.SampledAt
+			}
+			if r, ok := findPointAcrossKeys(byDeviceKey, keys, chillerPowerKey); ok && r.ValueNumber != nil {
+				v := telemetryValueFromRow(r)
+				unit.Power = &v
+			}
+			if r, ok := findPointAcrossKeys(byDeviceKey, keys, chilledWaterEnteringKey); ok && r.ValueNumber != nil {
+				v := telemetryValueFromRow(r)
+				unit.ChwEnteringC = &v
+			}
+			if r, ok := findPointAcrossKeys(byDeviceKey, keys, chilledWaterLeavingKey); ok && r.ValueNumber != nil {
+				v := telemetryValueFromRow(r)
+				unit.ChwLeavingC = &v
+			}
+			if r, ok := findPointAcrossKeys(byDeviceKey, keys, condenserWaterLeavingKey); ok && r.ValueNumber != nil {
+				v := telemetryValueFromRow(r)
+				unit.CwLeavingC = &v
+			}
+			for _, k := range keys {
+				if hist := historyByDevice[strings.ToLower(strings.TrimSpace(k))]; len(hist) > 0 {
+					unit.RunStateHistory = append([]RunStateSample(nil), hist...)
+					break
+				}
+			}
+			snapshot.Chillers = append(snapshot.Chillers, unit)
 		}
-		populateChillerTelemetry(&unit, byDeviceKey, historyByDevice)
-		snapshot.Chillers = append(snapshot.Chillers, unit)
 	}
-
 	return snapshot
 }
 
-func discoverChillerBindingsFromRows(rows []stagingTelemetryRow) []ChillerMeterBinding {
-	songyaxuan := SongyaxuanChillerMeterBindings()
-	byMeter := map[string]ChillerMeterBinding{}
-	for _, b := range songyaxuan {
-		byMeter[strings.ToLower(b.MeterDeviceID)] = b
-		byMeter[strings.ToLower(b.MeterSourceKey)] = b
-	}
-	hasSongyaxuan := false
-	seenDevice := map[string]bool{}
-	hasPower := map[string]bool{}
-	hasChwLeaving := map[string]bool{}
-	for _, r := range rows {
-		if _, ok := byMeter[strings.ToLower(r.DeviceID)]; ok {
-			hasSongyaxuan = true
-		}
-		if _, ok := byMeter[strings.ToLower(r.SourceID)]; ok {
-			hasSongyaxuan = true
-		}
-		seenDevice[r.DeviceID] = true
-		if r.TelemetryKey == chillerPowerKey {
-			hasPower[r.DeviceID] = true
-		}
-		if r.TelemetryKey == chilledWaterLeavingKey {
-			hasChwLeaving[r.DeviceID] = true
-		}
-	}
-	if hasSongyaxuan {
-		return songyaxuan
-	}
-	discovered := make([]ChillerMeterBinding, 0)
-	for devID := range seenDevice {
-		if hasPower[devID] && hasChwLeaving[devID] {
-			discovered = append(discovered, ChillerMeterBinding{
-				AssetID:       devID,
-				AssetCode:     devID,
-				MeterDeviceID: devID,
-			})
-		}
-	}
-	sort.Slice(discovered, func(i, j int) bool { return discovered[i].AssetID < discovered[j].AssetID })
-	return discovered
-}
-
-func populateChillerTelemetry(
-	unit *ChillerUnitInput,
+func populateSnapshotFromTwin(
+	snapshot *StagingSnapshot,
+	twin planttwin.SiteTwin,
+	topology *StagingTopology,
 	byDeviceKey map[string]map[string]stagingTelemetryRow,
-	historyByDevice map[string][]RunStateSample,
+	history []stagingTelemetryRow,
 ) {
-	keys := append([]string{unit.MeterDeviceID, unit.MeterSourceKey}, unit.BoundDeviceIDs...)
-	keys = append(keys, unit.AssetID, unit.AssetCode)
-	if r, ok := findPointAcrossKeys(byDeviceKey, keys, "chiller.run_state", "run_state"); ok && r.ValueString != nil {
-		unit.RunState = *r.ValueString
-		unit.RunStateQuality = r.Quality
-		unit.RunStateAt = r.SampledAt
+	plan := buildTwinStagingQueryPlan(twin)
+
+	if len(plan.coolingLoadBindings) > 0 {
+		for _, pb := range plan.coolingLoadBindings {
+			if row, ok := matchStagingObservation(byDeviceKey, pb); ok && row.ValueNumber != nil {
+				v := telemetryValueFromRow(row)
+				snapshot.PlantCoolingLoad = &v
+				break
+			}
+		}
+		primaryLoad := plan.coolingLoadBindings[0]
+		for _, row := range history {
+			if rowMatchesPointBinding(row, primaryLoad) {
+				snapshot.PlantLoadHistory = append(snapshot.PlantLoadHistory, telemetryValueFromRow(row))
+			}
+		}
 	}
-	if r, ok := findPointAcrossKeys(byDeviceKey, keys, chillerPowerKey); ok && r.ValueNumber != nil {
-		unit.Power = &TelemetryValue{DeviceID: r.DeviceID, SourceKey: r.SourceID, PointKey: r.TelemetryKey, Value: *r.ValueNumber, Unit: r.Unit, Quality: r.Quality, SampledAt: r.SampledAt}
-	}
-	if r, ok := findPointAcrossKeys(byDeviceKey, keys, chilledWaterEnteringKey); ok && r.ValueNumber != nil {
-		unit.ChwEnteringC = &TelemetryValue{DeviceID: r.DeviceID, SourceKey: r.SourceID, PointKey: r.TelemetryKey, Value: *r.ValueNumber, Unit: r.Unit, Quality: r.Quality, SampledAt: r.SampledAt}
-	}
-	if r, ok := findPointAcrossKeys(byDeviceKey, keys, chilledWaterLeavingKey); ok && r.ValueNumber != nil {
-		unit.ChwLeavingC = &TelemetryValue{DeviceID: r.DeviceID, SourceKey: r.SourceID, PointKey: r.TelemetryKey, Value: *r.ValueNumber, Unit: r.Unit, Quality: r.Quality, SampledAt: r.SampledAt}
-	}
-	if r, ok := findPointAcrossKeys(byDeviceKey, keys, condenserWaterLeavingKey); ok && r.ValueNumber != nil {
-		unit.CwLeavingC = &TelemetryValue{DeviceID: r.DeviceID, SourceKey: r.SourceID, PointKey: r.TelemetryKey, Value: *r.ValueNumber, Unit: r.Unit, Quality: r.Quality, SampledAt: r.SampledAt}
-	}
-	for _, k := range keys {
-		if hist := historyByDevice[strings.ToLower(strings.TrimSpace(k))]; len(hist) > 0 {
-			unit.RunStateHistory = append([]RunStateSample(nil), hist...)
+	for _, pb := range plan.supplyTempBindings {
+		if row, ok := matchStagingObservation(byDeviceKey, pb); ok && row.ValueNumber != nil {
+			v := telemetryValueFromRow(row)
+			snapshot.HeaderSupplyC = &v
 			break
 		}
 	}
+
+	if topology != nil {
+		snapshot.Edges = append(snapshot.Edges, topology.Edges...)
+	}
+
+	chillerByAssetID := map[string]ChillerMeterBinding{}
+	if topology != nil {
+		for _, c := range topology.Chillers {
+			chillerByAssetID[strings.ToLower(strings.TrimSpace(c.AssetID))] = c
+		}
+	}
+	for _, chiller := range twin.UnitsByType(planttwin.AssetTypeChiller) {
+		meta := chillerByAssetID[strings.ToLower(strings.TrimSpace(chiller.AssetID))]
+		unit := ChillerUnitInput{
+			AssetID:                chiller.AssetID,
+			AssetCode:              chiller.AssetCode,
+			AssetName:              chiller.AssetName,
+			MeterDeviceID:          meta.MeterDeviceID,
+			MeterSourceKey:         meta.MeterSourceKey,
+			BoundDeviceIDs:         append([]string(nil), meta.BoundDeviceIDs...),
+			RatedCapacityKW:        derefFloat(chiller.RatedCapacityKW),
+			RatedPowerKW:           derefFloat(chiller.RatedPowerKW),
+			FeederAuxiliaryPowerKW: chiller.FeederAuxiliaryPowerKW,
+		}
+		if pb, ok := twin.ResolveAssetPoint(chiller.AssetID, planttwin.RoleRunState); ok {
+			if row, found := matchStagingObservation(byDeviceKey, pb); found && row.ValueString != nil {
+				unit.RunState, unit.RunStateQuality, unit.RunStateAt = *row.ValueString, row.Quality, row.SampledAt
+			}
+			for _, row := range history {
+				if row.ValueString != nil && rowMatchesPointBinding(row, pb) {
+					unit.RunStateHistory = append(unit.RunStateHistory, RunStateSample{
+						State: *row.ValueString, Quality: row.Quality, SampledAt: row.SampledAt,
+					})
+				}
+			}
+		}
+		if pb, ok := twin.ResolveAssetPoint(chiller.AssetID, planttwin.RoleActivePower); ok {
+			if row, found := matchStagingObservation(byDeviceKey, pb); found && row.ValueNumber != nil {
+				v := telemetryValueFromRow(row)
+				unit.Power = &v
+			}
+		}
+		if pb, ok := twin.ResolveAssetPoint(chiller.AssetID, planttwin.RoleCHWEnteringTemp); ok {
+			if row, found := matchStagingObservation(byDeviceKey, pb); found && row.ValueNumber != nil {
+				v := telemetryValueFromRow(row)
+				unit.ChwEnteringC = &v
+			}
+		}
+		if pb, ok := twin.ResolveAssetPoint(chiller.AssetID, planttwin.RoleCHWLeavingTemp); ok {
+			if row, found := matchStagingObservation(byDeviceKey, pb); found && row.ValueNumber != nil {
+				v := telemetryValueFromRow(row)
+				unit.ChwLeavingC = &v
+			}
+		}
+		if pb, ok := twin.ResolveAssetPoint(chiller.AssetID, planttwin.RoleCWLeavingTemp); ok {
+			if row, found := matchStagingObservation(byDeviceKey, pb); found && row.ValueNumber != nil {
+				v := telemetryValueFromRow(row)
+				unit.CwLeavingC = &v
+			}
+		}
+		snapshot.Chillers = append(snapshot.Chillers, unit)
+	}
+
+	auxByAssetID := map[string]AuxiliaryUnitBinding{}
+	if topology != nil {
+		for _, a := range topology.Auxiliaries {
+			auxByAssetID[strings.ToLower(strings.TrimSpace(a.AssetID))] = a
+		}
+	}
+	auxTypes := []string{
+		planttwin.AssetTypeChilledWaterPump,
+		planttwin.AssetTypeCoolingWaterPump,
+		planttwin.AssetTypeCoolingTower,
+	}
+	for _, auxUnit := range twin.UnitsByType(auxTypes...) {
+		normType, ok := normalizeAuxiliaryAssetType(auxUnit.AssetType)
+		if !ok {
+			continue
+		}
+		meta := auxByAssetID[strings.ToLower(strings.TrimSpace(auxUnit.AssetID))]
+		aux := AuxiliaryUnitInput{
+			AssetID:          auxUnit.AssetID,
+			AssetCode:        auxUnit.AssetCode,
+			AssetName:        auxUnit.AssetName,
+			AssetType:        normType,
+			DeviceID:         meta.DeviceID,
+			DeviceSourceKey:  meta.DeviceSourceKey,
+			BoundDeviceIDs:   append([]string(nil), meta.BoundDeviceIDs...),
+			RatedPowerKW:     derefFloat(auxUnit.RatedPowerKW),
+			ServesChillerIDs: append([]string(nil), meta.ServesChillerIDs...),
+		}
+		if pb, foundPB := twin.ResolveAssetPoint(auxUnit.AssetID, planttwin.RoleRunState); foundPB {
+			if row, found := matchStagingObservation(byDeviceKey, pb); found && row.ValueString != nil {
+				aux.RunState, aux.RunStateQuality, aux.RunStateAt = *row.ValueString, row.Quality, row.SampledAt
+			}
+		}
+		if pb, foundPB := twin.ResolveAssetPoint(auxUnit.AssetID, planttwin.RoleActivePower); foundPB {
+			if row, found := matchStagingObservation(byDeviceKey, pb); found && row.ValueNumber != nil {
+				v := telemetryValueFromRow(row)
+				aux.Power = &v
+			}
+		}
+		snapshot.Auxiliaries = append(snapshot.Auxiliaries, aux)
+	}
 }
 
-func populateAuxTelemetry(aux *AuxiliaryUnitInput, byDeviceKey map[string]map[string]stagingTelemetryRow) {
-	keys := append([]string{aux.DeviceID, aux.DeviceSourceKey}, aux.BoundDeviceIDs...)
-	keys = append(keys, aux.AssetID, aux.AssetCode)
-	if r, ok := findPointAcrossKeys(byDeviceKey, keys, "chwp.run_state", "cwp.run_state", "cooling_tower.run_state", "run_state"); ok && r.ValueString != nil {
-		aux.RunState = *r.ValueString
-		aux.RunStateQuality = r.Quality
-		aux.RunStateAt = r.SampledAt
+func indexStagingRowsByDevice(rows []stagingTelemetryRow) map[string]map[string]stagingTelemetryRow {
+	byDeviceKey := map[string]map[string]stagingTelemetryRow{}
+	for _, row := range rows {
+		for _, id := range []string{row.DeviceID, row.SourceID} {
+			k := strings.ToLower(strings.TrimSpace(id))
+			if k == "" {
+				continue
+			}
+			if byDeviceKey[k] == nil {
+				byDeviceKey[k] = map[string]stagingTelemetryRow{}
+			}
+			byDeviceKey[k][row.TelemetryKey] = row
+		}
 	}
-	if r, ok := findPointAcrossKeys(byDeviceKey, keys, chillerPowerKey); ok && r.ValueNumber != nil {
-		aux.Power = &TelemetryValue{DeviceID: r.DeviceID, SourceKey: r.SourceID, PointKey: r.TelemetryKey, Value: *r.ValueNumber, Unit: r.Unit, Quality: r.Quality, SampledAt: r.SampledAt}
+	return byDeviceKey
+}
+
+func telemetryValueFromRow(row stagingTelemetryRow) TelemetryValue {
+	val := 0.0
+	if row.ValueNumber != nil {
+		val = *row.ValueNumber
 	}
+	return TelemetryValue{
+		DeviceID: row.DeviceID, SourceKey: row.SourceID, PointKey: row.TelemetryKey,
+		Value: val, Unit: row.Unit, Quality: row.Quality, SampledAt: row.SampledAt,
+	}
+}
+
+func matchStagingObservation(byDeviceKey map[string]map[string]stagingTelemetryRow, pb planttwin.PointBinding) (stagingTelemetryRow, bool) {
+	keys := collectPointKeys(pb)
+	if len(keys) == 0 {
+		return stagingTelemetryRow{}, false
+	}
+	devRefs := []string{pb.DeviceID, pb.DeviceSourceKey, pb.DeviceCode}
+	for _, devRef := range devRefs {
+		points := byDeviceKey[strings.ToLower(strings.TrimSpace(devRef))]
+		if points == nil {
+			continue
+		}
+		for _, k := range keys {
+			if row, ok := points[k]; ok {
+				if pb.DeviceID == "" || row.DeviceID == "" || strings.EqualFold(strings.TrimSpace(row.DeviceID), strings.TrimSpace(pb.DeviceID)) {
+					return row, true
+				}
+			}
+		}
+	}
+	return stagingTelemetryRow{}, false
+}
+
+func rowMatchesPointBinding(row stagingTelemetryRow, pb planttwin.PointBinding) bool {
+	matchedKey := false
+	for _, k := range collectPointKeys(pb) {
+		if row.TelemetryKey == k {
+			matchedKey = true
+			break
+		}
+	}
+	if !matchedKey {
+		return false
+	}
+	if strings.TrimSpace(pb.DeviceID) != "" && strings.TrimSpace(row.DeviceID) != "" {
+		return strings.EqualFold(strings.TrimSpace(row.DeviceID), strings.TrimSpace(pb.DeviceID))
+	}
+	for _, ref := range []string{pb.DeviceID, pb.DeviceSourceKey, pb.DeviceCode} {
+		clean := strings.TrimSpace(ref)
+		if clean == "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(row.DeviceID), clean) || strings.EqualFold(strings.TrimSpace(row.SourceID), clean) {
+			return true
+		}
+	}
+	return false
 }
 
 func findPointAcrossKeys(
@@ -2222,6 +2522,10 @@ func maxDuration(a, b time.Duration) time.Duration {
 func applyStagingTopology(snapshot *StagingSnapshot, topology *StagingTopology) {
 	if snapshot == nil || topology == nil {
 		return
+	}
+	if topology.Twin != nil && snapshot.Twin == nil {
+		twinCopy := *topology.Twin
+		snapshot.Twin = &twinCopy
 	}
 	if strings.TrimSpace(snapshot.SiteControlMode) == "" && strings.TrimSpace(topology.SiteControlMode) != "" {
 		snapshot.SiteControlMode = strings.TrimSpace(topology.SiteControlMode)
@@ -2259,178 +2563,37 @@ func applyStagingTopology(snapshot *StagingSnapshot, topology *StagingTopology) 
 		}
 	}
 	if topology.OperatingSchedule != nil && snapshot.OperatingSchedule == nil {
-		snapshot.OperatingSchedule = cloneOperatingScheduleContext(topology.OperatingSchedule)
+		snapshot.OperatingSchedule = cloneOperatingSchedule(topology.OperatingSchedule)
 	}
 }
 
-func cloneOperatingScheduleContext(src *OperatingScheduleContext) *OperatingScheduleContext {
+func cloneOperatingSchedule(src *planttwin.OperatingSchedule) *planttwin.OperatingSchedule {
 	if src == nil {
 		return nil
 	}
-	out := &OperatingScheduleContext{
-		SiteTimezone:        strings.TrimSpace(src.SiteTimezone),
-		Configured:          src.Configured,
+	out := &planttwin.OperatingSchedule{
+		ScheduleID:          src.ScheduleID,
+		Timezone:            strings.TrimSpace(src.Timezone),
 		PreCoolLeadMinutes:  src.PreCoolLeadMinutes,
 		CoastDownLagMinutes: src.CoastDownLagMinutes,
+		Revision:            src.Revision,
 	}
 	if len(src.Slots) > 0 {
-		out.Slots = append([]OperatingScheduleSlotWindow(nil), src.Slots...)
+		out.Slots = append([]planttwin.ScheduleSlot(nil), src.Slots...)
 	}
-	if len(src.ApprovedExceptions) > 0 {
-		out.ApprovedExceptions = make([]ApprovedOperatingExceptionWindow, len(src.ApprovedExceptions))
-		for i, exc := range src.ApprovedExceptions {
-			out.ApprovedExceptions[i] = exc
+	if len(src.Exceptions) > 0 {
+		out.Exceptions = make([]planttwin.ScheduleException, len(src.Exceptions))
+		for i, exc := range src.Exceptions {
+			out.Exceptions[i] = exc
 			if len(exc.ReplacementSlots) > 0 {
-				out.ApprovedExceptions[i].ReplacementSlots = append([]OperatingExceptionReplacementSlot(nil), exc.ReplacementSlots...)
+				out.Exceptions[i].ReplacementSlots = append([]planttwin.ScheduleSlot(nil), exc.ReplacementSlots...)
 			}
 		}
 	}
 	return out
 }
 
-type scheduleEvalState struct {
-	scheduleActive            bool
-	inCoolingWindow           bool
-	hasApprovedExceptionToday bool
-	todayDate                 string
-	todayException            *ApprovedOperatingExceptionWindow
-	activeMaintenance         *ApprovedOperatingExceptionWindow
-}
-
-func loadSiteLocation(timezone string) *time.Location {
-	if trimmed := strings.TrimSpace(timezone); trimmed != "" {
-		if loaded, err := time.LoadLocation(trimmed); err == nil {
-			return loaded
-		}
-	}
-	return time.UTC
-}
-
-func isoWeekdayNumber(weekday time.Weekday) int {
-	if weekday == time.Sunday {
-		return 7
-	}
-	return int(weekday)
-}
-
-func findApprovedExceptionForDate(exceptions []ApprovedOperatingExceptionWindow, dateStr string) *ApprovedOperatingExceptionWindow {
-	for _, exc := range exceptions {
-		start := strings.TrimSpace(exc.StartDate)
-		end := strings.TrimSpace(exc.EndDate)
-		if start == "" || end == "" || start > end {
-			continue
-		}
-		if dateStr >= start && dateStr <= end {
-			copied := exc
-			return &copied
-		}
-	}
-	return nil
-}
-
-func evaluateScheduleState(schedule *OperatingScheduleContext, at time.Time) scheduleEvalState {
-	if schedule == nil {
-		return scheduleEvalState{
-			scheduleActive:  false,
-			inCoolingWindow: true,
-		}
-	}
-	loc := loadSiteLocation(schedule.SiteTimezone)
-	atLocal := at.In(loc)
-	day0 := time.Date(atLocal.Year(), atLocal.Month(), atLocal.Day(), 0, 0, 0, 0, loc)
-	todayStr := day0.Format("2006-01-02")
-
-	state := scheduleEvalState{
-		todayDate: todayStr,
-	}
-	todayExc := findApprovedExceptionForDate(schedule.ApprovedExceptions, todayStr)
-	hasShutdownOrMaintenanceToday := false
-	if todayExc != nil {
-		state.hasApprovedExceptionToday = true
-		state.todayException = todayExc
-		switch strings.ToUpper(strings.TrimSpace(todayExc.Kind)) {
-		case "MAINTENANCE_WINDOW":
-			state.activeMaintenance = todayExc
-			hasShutdownOrMaintenanceToday = true
-		case "HOLIDAY_SHUTDOWN":
-			hasShutdownOrMaintenanceToday = true
-		}
-	}
-	if len(schedule.Slots) > 0 {
-		state.scheduleActive = schedule.Configured || state.hasApprovedExceptionToday
-	} else {
-		state.scheduleActive = hasShutdownOrMaintenanceToday
-	}
-	if !state.scheduleActive {
-		state.inCoolingWindow = true
-		return state
-	}
-
-	lead := time.Duration(max(0, schedule.PreCoolLeadMinutes)) * time.Minute
-	lag := time.Duration(max(0, schedule.CoastDownLagMinutes)) * time.Minute
-
-	matchesExpandedSlot := func(dayStart time.Time, startMinute, endMinute int) bool {
-		if endMinute <= startMinute {
-			return false
-		}
-		winStart := dayStart.Add(time.Duration(startMinute)*time.Minute - lead)
-		winEnd := dayStart.Add(time.Duration(endMinute)*time.Minute + lag)
-		return !at.Before(winStart) && at.Before(winEnd)
-	}
-
-	if todayExc != nil {
-		kind := strings.ToUpper(strings.TrimSpace(todayExc.Kind))
-		if kind == "HOLIDAY_SHUTDOWN" || kind == "MAINTENANCE_WINDOW" {
-			state.inCoolingWindow = false
-			return state
-		}
-		if kind == "OVERTIME_COOLING" {
-			for _, slot := range todayExc.ReplacementSlots {
-				if matchesExpandedSlot(day0, slot.StartMinute, slot.EndMinute) {
-					state.inCoolingWindow = true
-					return state
-				}
-			}
-			state.inCoolingWindow = false
-			return state
-		}
-	}
-
-	days := []time.Time{day0.AddDate(0, 0, -1), day0, day0.AddDate(0, 0, 1)}
-	for _, d := range days {
-		exc := findApprovedExceptionForDate(schedule.ApprovedExceptions, d.Format("2006-01-02"))
-		if exc != nil {
-			kind := strings.ToUpper(strings.TrimSpace(exc.Kind))
-			if kind == "HOLIDAY_SHUTDOWN" || kind == "MAINTENANCE_WINDOW" {
-				continue
-			}
-			if kind == "OVERTIME_COOLING" {
-				for _, slot := range exc.ReplacementSlots {
-					if matchesExpandedSlot(d, slot.StartMinute, slot.EndMinute) {
-						state.inCoolingWindow = true
-						return state
-					}
-				}
-				continue
-			}
-		}
-		dow := isoWeekdayNumber(d.Weekday())
-		for _, slot := range schedule.Slots {
-			if slot.DayOfWeek != dow {
-				continue
-			}
-			if matchesExpandedSlot(d, slot.StartMinute, slot.EndMinute) {
-				state.inCoolingWindow = true
-				return state
-			}
-		}
-	}
-
-	state.inCoolingWindow = false
-	return state
-}
-
-func formatScheduleExceptionDetail(prefix string, exc ApprovedOperatingExceptionWindow) string {
+func formatScheduleExceptionDetail(prefix string, exc planttwin.ScheduleException) string {
 	title := strings.TrimSpace(exc.Title)
 	if title == "" {
 		title = strings.TrimSpace(exc.Kind)
@@ -2449,7 +2612,7 @@ func formatScheduleExceptionDetail(prefix string, exc ApprovedOperatingException
 	return detail + "）。"
 }
 
-func evaluateOffHoursStop(snapshot StagingSnapshot, policy StagingPolicy, state scheduleEvalState) ([]StagingRecommendationDraft, []StagingDiagnostic) {
+func evaluateOffHoursStop(snapshot StagingSnapshot, policy StagingPolicy, schedEval planttwin.ScheduleEvaluation) ([]StagingRecommendationDraft, []StagingDiagnostic) {
 	if detail, active := siteControlExitDetail(snapshot); active {
 		return []StagingRecommendationDraft{}, []StagingDiagnostic{{
 			Scope:  RecommendationKindOffHoursStop,
@@ -2518,9 +2681,13 @@ func evaluateOffHoursStop(snapshot StagingSnapshot, policy StagingPolicy, state 
 			}
 		}
 
-		scheduleNotice := fmt.Sprintf("站点 %s（%s）当前处于非供冷营业时间窗口", state.todayDate, loadSiteLocation(snapshot.OperatingSchedule.SiteTimezone).String())
-		if state.todayException != nil && strings.EqualFold(strings.TrimSpace(state.todayException.Kind), "HOLIDAY_SHUTDOWN") {
-			scheduleNotice = fmt.Sprintf("站点 %s 处于已批准节假日停机窗口（%s）", state.todayDate, strings.TrimSpace(state.todayException.Title))
+		tzLabel := "UTC"
+		if loc := schedEval.LocalTime.Location(); loc != nil {
+			tzLabel = loc.String()
+		}
+		scheduleNotice := fmt.Sprintf("站点 %s（%s）当前处于非供冷营业时间窗口", schedEval.LocalDate, tzLabel)
+		if schedEval.ActiveException != nil && strings.EqualFold(strings.TrimSpace(schedEval.ActiveException.Kind), planttwin.ExceptionHolidayShutdown) {
+			scheduleNotice = fmt.Sprintf("站点 %s 处于已批准节假日停机窗口（%s）", schedEval.LocalDate, strings.TrimSpace(schedEval.ActiveException.Title))
 		}
 		rationale := fmt.Sprintf(
 			"%s，但冷机 %s 仍处于 %s 状态。建议值班主管人工复核并确认下发 %s 停机指令，预计可避免无效电耗 %.1f kW（约 %.1f kWh/小时、%.1f kWh/%.0f小时班次）。",

@@ -3,6 +3,7 @@ package optimization
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -10,7 +11,62 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
+
+const (
+	testPlantTenantID = "01b10000-1000-7000-8000-000000000001"
+	testPlantSiteID   = "01b10000-2000-7000-8000-000000000001"
+
+	testChillerAID = "01b10000-3000-7000-8000-000000000001"
+	testChillerBID = "01b10000-3000-7000-8000-000000000002"
+	testChillerCID = "01b10000-3000-7000-8000-000000000003"
+	testChillerDID = "01b10000-3000-7000-8000-000000000004"
+
+	testMeterAID = "01b10000-4000-7000-8000-000000000001"
+	testMeterBID = "01b10000-4000-7000-8000-000000000002"
+	testMeterCID = "01b10000-4000-7000-8000-000000000003"
+	testMeterDID = "01b10000-4000-7000-8000-000000000004"
+	testBTUDevID = "01b10000-4000-7000-8000-000000000009"
+)
+
+func testFourChillerTwin(tenantID, siteID string) planttwin.SiteTwin {
+	ratedCap := 572.0
+	ratedPower := 127.5
+	return planttwin.SiteTwin{
+		Scope:           planttwin.SiteScope{TenantID: tenantID, SiteID: siteID},
+		Timezone:        "Asia/Shanghai",
+		SiteControlMode: planttwin.ControlModeRemoteAuto,
+		Units: []planttwin.PlantUnit{
+			{AssetID: testChillerAID, AssetCode: "chiller-a", AssetName: "A 机组", AssetType: planttwin.AssetTypeChiller, RatedCapacityKW: &ratedCap, RatedPowerKW: &ratedPower, LockMode: planttwin.LockModeUnlocked},
+			{AssetID: testChillerBID, AssetCode: "chiller-b", AssetName: "B 机组", AssetType: planttwin.AssetTypeChiller, RatedCapacityKW: &ratedCap, RatedPowerKW: &ratedPower, LockMode: planttwin.LockModeUnlocked},
+			{AssetID: testChillerCID, AssetCode: "chiller-c", AssetName: "C 机组", AssetType: planttwin.AssetTypeChiller, RatedCapacityKW: &ratedCap, RatedPowerKW: &ratedPower, FeederAuxiliaryPowerKW: 30, LockMode: planttwin.LockModeUnlocked},
+			{AssetID: testChillerDID, AssetCode: "chiller-d", AssetName: "D 机组", AssetType: planttwin.AssetTypeChiller, RatedCapacityKW: &ratedCap, RatedPowerKW: &ratedPower, FeederAuxiliaryPowerKW: 30, LockMode: planttwin.LockModeUnlocked},
+		},
+		Devices: []planttwin.TwinDevice{
+			{DeviceID: testMeterAID, DeviceCode: "amp-a", DeviceType: "POWER_METER", SourceKey: "amp-a"},
+			{DeviceID: testMeterBID, DeviceCode: "amp-b", DeviceType: "POWER_METER", SourceKey: "amp-b"},
+			{DeviceID: testMeterCID, DeviceCode: "amp-c", DeviceType: "POWER_METER", SourceKey: "amp-c"},
+			{DeviceID: testMeterDID, DeviceCode: "amp-d", DeviceType: "POWER_METER", SourceKey: "amp-d"},
+			{DeviceID: testBTUDevID, DeviceCode: "plant-btu", DeviceType: "BTU_METER", SourceKey: "plant-btu"},
+		},
+		DeviceBindings: []planttwin.DeviceBinding{
+			{AssetID: testChillerAID, DeviceID: testMeterAID, BindingRole: "METER"},
+			{AssetID: testChillerBID, DeviceID: testMeterBID, BindingRole: "METER"},
+			{AssetID: testChillerCID, DeviceID: testMeterCID, BindingRole: "METER"},
+			{AssetID: testChillerDID, DeviceID: testMeterDID, BindingRole: "METER"},
+		},
+		PointBindings: []planttwin.PointBinding{
+			{PointID: "pt-load", DeviceID: testBTUDevID, DeviceCode: "plant-btu", DeviceSourceKey: "plant-btu", PointCode: "chw_load", WireSourceKey: "chw_load", PointType: "TELEMETRY", Unit: "kW", SubjectType: planttwin.SubjectTypeSite, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCoolingLoad},
+			{PointID: "pt-sup", DeviceID: testBTUDevID, DeviceCode: "plant-btu", DeviceSourceKey: "plant-btu", PointCode: "sup_temp", WireSourceKey: "sup_temp", PointType: "TELEMETRY", Unit: "Cel", SubjectType: planttwin.SubjectTypeSite, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleSupplyWaterTemp},
+			{PointID: "pt-pa", DeviceID: testMeterAID, DeviceCode: "amp-a", DeviceSourceKey: "amp-a", PointCode: "p_kw", WireSourceKey: "p_kw", PointType: "TELEMETRY", Unit: "kW", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerAID, BindingRole: planttwin.BindingMeters, SemanticRole: planttwin.RoleActivePower},
+			{PointID: "pt-pb", DeviceID: testMeterBID, DeviceCode: "amp-b", DeviceSourceKey: "amp-b", PointCode: "p_kw", WireSourceKey: "p_kw", PointType: "TELEMETRY", Unit: "kW", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerBID, BindingRole: planttwin.BindingMeters, SemanticRole: planttwin.RoleActivePower},
+			{PointID: "pt-pc", DeviceID: testMeterCID, DeviceCode: "amp-c", DeviceSourceKey: "amp-c", PointCode: "p_kw", WireSourceKey: "p_kw", PointType: "TELEMETRY", Unit: "kW", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerCID, BindingRole: planttwin.BindingMeters, SemanticRole: planttwin.RoleActivePower},
+			{PointID: "pt-pd", DeviceID: testMeterDID, DeviceCode: "amp-d", DeviceSourceKey: "amp-d", PointCode: "p_kw", WireSourceKey: "p_kw", PointType: "TELEMETRY", Unit: "kW", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerDID, BindingRole: planttwin.BindingMeters, SemanticRole: planttwin.RoleActivePower},
+		},
+	}
+}
 
 func syntheticStagingChillerHistory(at time.Time, devices map[string]float64) []PlantBucket {
 	start := at.UTC().Truncate(copBucketMinutes*time.Minute).AddDate(0, 0, -copHistoryDays)
@@ -44,29 +100,30 @@ func syntheticStagingChillerHistory(at time.Time, devices map[string]float64) []
 		}
 		buckets = append(buckets, PlantBucket{
 			Bucket:    when,
-			DeviceID:  "01a14000-4000-7000-8000-000000000009", // btu-calc
+			DeviceID:  testBTUDevID,
 			CoolingKW: ptr(totalCooling),
 		})
 	}
 	return buckets
 }
 
-func testSongyaxuanUnits(at time.Time, powerA, powerB, powerC, powerD *float64) []ChillerUnitInput {
-	bindings := SongyaxuanChillerMeterBindings()
+func testFourChillerUnits(at time.Time, powerA, powerB, powerC, powerD *float64) []ChillerUnitInput {
+	topology := stagingTopologyFromTwin(testFourChillerTwin(testPlantTenantID, testPlantSiteID))
 	powers := map[string]*float64{
 		"chiller-a": powerA,
 		"chiller-b": powerB,
 		"chiller-c": powerC,
 		"chiller-d": powerD,
 	}
-	units := make([]ChillerUnitInput, 0, len(bindings))
-	for _, b := range bindings {
+	units := make([]ChillerUnitInput, 0, len(topology.Chillers))
+	for _, b := range topology.Chillers {
 		unit := ChillerUnitInput{
 			AssetID:         b.AssetID,
 			AssetCode:       b.AssetCode,
 			AssetName:       b.AssetName,
 			MeterDeviceID:   b.MeterDeviceID,
 			MeterSourceKey:  b.MeterSourceKey,
+			BoundDeviceIDs:  append([]string(nil), b.BoundDeviceIDs...),
 			RatedCapacityKW: b.RatedCapacityKW,
 			RatedPowerKW:    b.RatedPowerKW,
 			RunStateQuality: "GOOD",
@@ -77,13 +134,13 @@ func testSongyaxuanUnits(at time.Time, powerA, powerB, powerC, powerD *float64) 
 		p := powers[b.AssetCode]
 		if p != nil && *p > DefaultChillerRunningPowerKW {
 			unit.RunState = RunStateRunning
-			unit.Power = &TelemetryValue{DeviceID: b.MeterDeviceID, SourceKey: b.MeterSourceKey, PointKey: "power_total", Value: *p, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-30 * time.Second)}
+			unit.Power = &TelemetryValue{DeviceID: b.MeterDeviceID, SourceKey: b.MeterSourceKey, PointKey: "p_kw", Value: *p, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-30 * time.Second)}
 		} else {
 			unit.RunState = RunStateStopped
 			stoppedAt := at.Add(-15 * time.Minute)
 			unit.StoppedSince = &stoppedAt
 			if p != nil {
-				unit.Power = &TelemetryValue{DeviceID: b.MeterDeviceID, SourceKey: b.MeterSourceKey, PointKey: "power_total", Value: *p, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-30 * time.Second)}
+				unit.Power = &TelemetryValue{DeviceID: b.MeterDeviceID, SourceKey: b.MeterSourceKey, PointKey: "p_kw", Value: *p, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-30 * time.Second)}
 			}
 		}
 		units = append(units, unit)
@@ -91,33 +148,32 @@ func testSongyaxuanUnits(at time.Time, powerA, powerB, powerC, powerD *float64) 
 	return units
 }
 
-func TestChillerStageDownSongyaxuanFourChillerPartialLoad(t *testing.T) {
+func TestChillerStageDownFourChillerPartialLoad(t *testing.T) {
 	at := time.Date(2026, 11, 14, 14, 0, 0, 0, time.UTC)
-	// Fit Songyaxuan meters: unit4=chiller-a (UID 4), unit3=chiller-b (UID 3), unit1=chiller-c (degraded 0.85), unit2=chiller-d.
 	buckets := syntheticStagingChillerHistory(at, map[string]float64{
-		"01a14000-4000-7000-8000-000000000006": 1.00, // ammeter-unit4 -> chiller-a
-		"01a14000-4000-7000-8000-000000000005": 1.00, // ammeter-unit3 -> chiller-b
-		"01a14000-4000-7000-8000-000000000003": 0.85, // ammeter-unit1 -> chiller-c (least efficient)
-		"01a14000-4000-7000-8000-000000000004": 0.98, // ammeter-unit2 -> chiller-d
+		testChillerAID: 1.00,
+		testChillerBID: 1.00,
+		testChillerCID: 0.85,
+		testChillerDID: 0.98,
 	})
 	to := at.Truncate(copBucketMinutes * time.Minute)
 	from := to.AddDate(0, 0, -copHistoryDays)
 	fit := FitPlant(buckets, from, to)
 	if len(fit.usable()) != 4 {
-		t.Fatalf("expected 4 fitted Songyaxuan chillers, got %+v", fit.Chillers)
+		t.Fatalf("expected 4 fitted chillers, got %+v", fit.Chillers)
 	}
 
 	// Partial-load scenario: A, C, D running (~540 kW cooling load across 3 chillers => ~31% PLR each); B stopped.
 	// Shutting down C leaves A+D = 1144 kW capacity (>= 540*1.15 = 621 kW), raises PLR to ~47% and replaces fouled C.
 	snapshot := StagingSnapshot{
-		TenantID:    "01990000-3000-7000-8000-000000000001",
-		SiteID:      "01a14000-5000-7000-8000-000000000001",
+		TenantID:    testPlantTenantID,
+		SiteID:      testPlantSiteID,
 		EvaluatedAt: at,
 		PlantCoolingLoad: &TelemetryValue{
-			DeviceID: "01a14000-4000-7000-8000-000000000009", SourceKey: "btu-calc", PointKey: "instant_cooling_capacity",
+			DeviceID: testBTUDevID, SourceKey: "plant-btu", PointKey: "chw_load",
 			Value: 540, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-20 * time.Second),
 		},
-		Chillers:    testSongyaxuanUnits(at, ptr(56.0), ptr(0.2), ptr(74.0), ptr(58.0)),
+		Chillers:    testFourChillerUnits(at, ptr(56.0), ptr(0.2), ptr(74.0), ptr(58.0)),
 		ChillerFits: fit.Chillers,
 	}
 
@@ -141,7 +197,7 @@ func TestChillerStageDownSongyaxuanFourChillerPartialLoad(t *testing.T) {
 	if rec.SuggestedCapability != SuggestedCapabilityStopUnitSequence {
 		t.Fatalf("SuggestedCapability = %q, want %s", rec.SuggestedCapability, SuggestedCapabilityStopUnitSequence)
 	}
-	if rec.TargetAssetID != "01a14000-3000-7000-8000-000000000003" || rec.TargetAssetCode != "chiller-c" {
+	if rec.TargetAssetID != testChillerCID || rec.TargetAssetCode != "chiller-c" {
 		t.Fatalf("target = (%s, %s), want chiller-c (least efficient unit)", rec.TargetAssetID, rec.TargetAssetCode)
 	}
 	if rec.PredictedPowerSavingKW < DefaultMinimumPowerSavingKW {
@@ -164,46 +220,43 @@ func TestChillerStageDownSongyaxuanFourChillerPartialLoad(t *testing.T) {
 	}
 }
 
-func TestChillerStageDownSongyaxuanMeterAliasResolution(t *testing.T) {
+func TestChillerStageDownTwinAssetPointResolution(t *testing.T) {
 	at := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
-	fitA := ChillerFit{
-		DeviceID:          "ammeter-unit4", // chiller-a meter (UID 4)
-		Status:            ChillerFitted,
-		CapacityReference: &CapacityReference{KW: 572, Source: "OBSERVED_P99_LOAD"},
-		Coefficients:      map[string]float64{"intercept": 2.9, "loadRatio": 3.8, "loadRatioSquared": -2.2, "chilledWaterSupplyTempC": 0.08},
+	twin := testFourChillerTwin(testPlantTenantID, testPlantSiteID)
+	twin.Units = twin.Units[:2]
+	loader, err := planttwin.NewStaticLoader(twin)
+	if err != nil {
+		t.Fatal(err)
 	}
-	fitB := ChillerFit{
-		DeviceID:          "ammeter-unit3", // chiller-b meter (UID 3)
-		Status:            ChillerFitted,
-		CapacityReference: &CapacityReference{KW: 572, Source: "OBSERVED_P99_LOAD"},
-		Coefficients:      map[string]float64{"intercept": 2.5, "loadRatio": 3.0, "loadRatioSquared": -1.8, "chilledWaterSupplyTempC": 0.08},
+	loadedTwin, err := loader.LoadSiteTwin(t.Context(), planttwin.SiteScope{TenantID: testPlantTenantID, SiteID: testPlantSiteID}, at)
+	if err != nil {
+		t.Fatal(err)
 	}
-	snapshot := StagingSnapshot{
-		TenantID:    "01990000-3000-7000-8000-000000000001",
-		SiteID:      "01a14000-5000-7000-8000-000000000001",
-		EvaluatedAt: at,
-		PlantCoolingLoad: &TelemetryValue{
-			SourceKey: "btu-calc", Value: 360, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute),
+	topology := stagingTopologyFromTwin(loadedTwin)
+
+	latest := []stagingTelemetryRow{
+		{DeviceID: testBTUDevID, SourceID: "plant-btu", TelemetryKey: "chw_load", ValueNumber: ptr(360.0), Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute)},
+		{DeviceID: testMeterAID, SourceID: "amp-a", TelemetryKey: "p_kw", ValueNumber: ptr(58.0), Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute)},
+		{DeviceID: testMeterBID, SourceID: "amp-b", TelemetryKey: "p_kw", ValueNumber: ptr(68.0), Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute)},
+	}
+	snapshot := buildStagingSnapshotFromObservations(testPlantTenantID, testPlantSiteID, at, &loadedTwin, &topology, latest, nil)
+	for i := range snapshot.Chillers {
+		snapshot.Chillers[i].RunState = RunStateRunning
+		snapshot.Chillers[i].RunStateQuality = "GOOD"
+		snapshot.Chillers[i].RunStateAt = at.Add(-time.Minute)
+		snapshot.Chillers[i].ChwLeavingC = &TelemetryValue{Value: 7.0, Unit: "Cel", Quality: "GOOD", SampledAt: at.Add(-time.Minute)}
+	}
+	snapshot.ChillerFits = []ChillerFit{
+		{
+			DeviceID: testChillerAID, Status: ChillerFitted,
+			CapacityReference: &CapacityReference{KW: 572, Source: "OBSERVED_P99_LOAD"},
+			Coefficients:      map[string]float64{"intercept": 2.9, "loadRatio": 3.8, "loadRatioSquared": -2.2, "chilledWaterSupplyTempC": 0.08},
 		},
-		Chillers: []ChillerUnitInput{
-			{
-				MeterSourceKey:  "ammeter-unit4",
-				RunState:        RunStateRunning,
-				RunStateQuality: "GOOD",
-				RunStateAt:      at.Add(-time.Minute),
-				Power:           &TelemetryValue{Value: 58, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute)},
-				ChwLeavingC:     &TelemetryValue{Value: 7.0, Unit: "Cel", Quality: "GOOD", SampledAt: at.Add(-time.Minute)},
-			},
-			{
-				MeterSourceKey:  "ammeter-unit3",
-				RunState:        RunStateRunning,
-				RunStateQuality: "GOOD",
-				RunStateAt:      at.Add(-time.Minute),
-				Power:           &TelemetryValue{Value: 68, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute)},
-				ChwLeavingC:     &TelemetryValue{Value: 7.0, Unit: "Cel", Quality: "GOOD", SampledAt: at.Add(-time.Minute)},
-			},
+		{
+			DeviceID: testChillerBID, Status: ChillerFitted,
+			CapacityReference: &CapacityReference{KW: 572, Source: "OBSERVED_P99_LOAD"},
+			Coefficients:      map[string]float64{"intercept": 2.5, "loadRatio": 3.0, "loadRatioSquared": -1.8, "chilledWaterSupplyTempC": 0.08},
 		},
-		ChillerFits: []ChillerFit{fitA, fitB},
 	}
 
 	eval, err := EvaluateStaging(snapshot, DefaultStagingPolicy())
@@ -211,11 +264,11 @@ func TestChillerStageDownSongyaxuanMeterAliasResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(eval.Recommendations) != 1 {
-		t.Fatalf("expected 1 recommendation from Songyaxuan meter alias lookup, got %+v (diags=%+v)", eval.Recommendations, eval.Diagnostics)
+		t.Fatalf("expected 1 recommendation from SiteTwin asset lookup, got %+v (diags=%+v)", eval.Recommendations, eval.Diagnostics)
 	}
 	rec := eval.Recommendations[0]
-	if rec.TargetAssetCode != "chiller-b" || rec.TargetAssetID != "01a14000-3000-7000-8000-000000000002" {
-		t.Fatalf("expected ammeter-unit3 to resolve to chiller-b (01a14000-3000-7000-8000-000000000002), got %+v", rec)
+	if rec.TargetAssetCode != "chiller-b" || rec.TargetAssetID != testChillerBID {
+		t.Fatalf("expected amp-b to resolve to chiller-b (%s), got %+v", testChillerBID, rec)
 	}
 }
 
@@ -231,14 +284,14 @@ func TestChillerStageDownHeadroomFailure(t *testing.T) {
 	}
 	// Remaining capacity of 1 chiller = 572 kW. At 510 kW cooling load, reserve is (572-510)/510 = 12.16% < 15%.
 	snapshot := StagingSnapshot{
-		TenantID:    "01990000-3000-7000-8000-000000000001",
-		SiteID:      "01a14000-5000-7000-8000-000000000001",
+		TenantID:    testPlantTenantID,
+		SiteID:      testPlantSiteID,
 		EvaluatedAt: at,
 		PlantCoolingLoad: &TelemetryValue{
-			SourceKey: "btu-calc", Value: 510, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute),
+			SourceKey: "plant-btu", Value: 510, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute),
 		},
-		Chillers:    testSongyaxuanUnits(at, ptr(80.0), ptr(82.0), nil, nil),
-		ChillerFits: []ChillerFit{fit("ammeter-unit3"), fit("ammeter-unit4")},
+		Chillers:    testFourChillerUnits(at, ptr(80.0), ptr(82.0), nil, nil),
+		ChillerFits: []ChillerFit{fit(testChillerAID), fit(testChillerBID)},
 	}
 
 	eval, err := EvaluateStaging(snapshot, DefaultStagingPolicy())
@@ -268,7 +321,7 @@ func TestChillerStageDownHeadroomFailure(t *testing.T) {
 func TestChillerStageDownGracefulNoOpOnMissingOrStaleTelemetry(t *testing.T) {
 	at := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
 	baseFit := ChillerFit{
-		DeviceID:          "ammeter-unit3",
+		DeviceID:          testChillerBID,
 		Status:            ChillerFitted,
 		CapacityReference: &CapacityReference{KW: 572},
 		Coefficients:      map[string]float64{"intercept": 3.0, "loadRatio": 4.0, "loadRatioSquared": -2.4, "chilledWaterSupplyTempC": 0.08},
@@ -317,7 +370,7 @@ func TestChillerStageDownGracefulNoOpOnMissingOrStaleTelemetry(t *testing.T) {
 		{
 			name: "only_one_chiller_running",
 			mutate: func(s *StagingSnapshot) {
-				s.Chillers = testSongyaxuanUnits(at, ptr(75.0), nil, nil, nil)
+				s.Chillers = testFourChillerUnits(at, ptr(75.0), nil, nil, nil)
 			},
 			wantReason: "SINGLE_CHILLER_RUNNING",
 		},
@@ -337,13 +390,13 @@ func TestChillerStageDownGracefulNoOpOnMissingOrStaleTelemetry(t *testing.T) {
 				s.Chillers[1].CwLeavingC = nil
 				s.ChillerFits = []ChillerFit{
 					{
-						DeviceID:          "ammeter-unit3",
+						DeviceID:          testChillerBID,
 						Status:            ChillerFitted,
 						CapacityReference: &CapacityReference{KW: 572},
 						Coefficients:      map[string]float64{"intercept": 4.0, "loadRatio": 3.0, "loadRatioSquared": -2.0, "chilledWaterSupplyTempC": 0.08, "condenserReturnTempC": -0.05},
 					},
 					{
-						DeviceID:          "ammeter-unit4",
+						DeviceID:          testChillerAID,
 						Status:            ChillerFitted,
 						CapacityReference: &CapacityReference{KW: 572},
 						Coefficients:      map[string]float64{"intercept": 4.0, "loadRatio": 3.0, "loadRatioSquared": -2.0, "chilledWaterSupplyTempC": 0.08, "condenserReturnTempC": -0.05},
@@ -356,17 +409,17 @@ func TestChillerStageDownGracefulNoOpOnMissingOrStaleTelemetry(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fitB := baseFit
-			fitB.DeviceID = "ammeter-unit4"
+			fitA := baseFit
+			fitA.DeviceID = testChillerAID
 			snapshot := StagingSnapshot{
-				TenantID:    "01990000-3000-7000-8000-000000000001",
-				SiteID:      "01a14000-5000-7000-8000-000000000001",
+				TenantID:    testPlantTenantID,
+				SiteID:      testPlantSiteID,
 				EvaluatedAt: at,
 				PlantCoolingLoad: &TelemetryValue{
-					SourceKey: "btu-calc", Value: 360, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute),
+					SourceKey: "plant-btu", Value: 360, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute),
 				},
-				Chillers:    testSongyaxuanUnits(at, ptr(60.0), ptr(62.0), nil, nil),
-				ChillerFits: []ChillerFit{baseFit, fitB},
+				Chillers:    testFourChillerUnits(at, ptr(60.0), ptr(62.0), nil, nil),
+				ChillerFits: []ChillerFit{baseFit, fitA},
 			}
 			tc.mutate(&snapshot)
 			eval, err := EvaluateStaging(snapshot, DefaultStagingPolicy())
@@ -387,13 +440,13 @@ func TestChillerStageDownCOPEdgeCases(t *testing.T) {
 	at := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
 	baseSnapshot := func(fitA, fitB ChillerFit, loadKW, pA, pB float64) StagingSnapshot {
 		return StagingSnapshot{
-			TenantID:    "01990000-3000-7000-8000-000000000001",
-			SiteID:      "01a14000-5000-7000-8000-000000000001",
+			TenantID:    testPlantTenantID,
+			SiteID:      testPlantSiteID,
 			EvaluatedAt: at,
 			PlantCoolingLoad: &TelemetryValue{
-				SourceKey: "btu-calc", Value: loadKW, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute),
+				SourceKey: "plant-btu", Value: loadKW, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-time.Minute),
 			},
-			Chillers:    testSongyaxuanUnits(at, ptr(pA), ptr(pB), nil, nil),
+			Chillers:    testFourChillerUnits(at, ptr(pA), ptr(pB), nil, nil),
 			ChillerFits: []ChillerFit{fitA, fitB},
 		}
 	}
@@ -401,11 +454,11 @@ func TestChillerStageDownCOPEdgeCases(t *testing.T) {
 	t.Run("cop_not_improved_suppresses_stage_down", func(t *testing.T) {
 		// Current: 450 kW load / (50 + 50 kW) = COP 4.50. At higher PLR on 1 chiller (~0.787), curve yields COP 4.10 -> higher power (109.8 kW).
 		fitA := ChillerFit{
-			DeviceID: "ammeter-unit3", Status: ChillerFitted, CapacityReference: &CapacityReference{KW: 572},
+			DeviceID: testChillerBID, Status: ChillerFitted, CapacityReference: &CapacityReference{KW: 572},
 			Coefficients: map[string]float64{"intercept": 4.9, "loadRatio": -1.5, "loadRatioSquared": 0.1, "chilledWaterSupplyTempC": 0.05},
 		}
 		fitB := fitA
-		fitB.DeviceID = "ammeter-unit4"
+		fitB.DeviceID = testChillerAID
 		eval, err := EvaluateStaging(baseSnapshot(fitA, fitB, 450, 50, 50), DefaultStagingPolicy())
 		if err != nil {
 			t.Fatal(err)
@@ -418,11 +471,11 @@ func TestChillerStageDownCOPEdgeCases(t *testing.T) {
 	t.Run("hysteresis_rejects_marginal_kw_saving", func(t *testing.T) {
 		// Current power = 44 + 44 = 88 kW at 360 kW cooling (COP=4.09). Projected single chiller power ~85.5 kW -> saving ~2.5 kW < 5.0 kW.
 		fitA := ChillerFit{
-			DeviceID: "ammeter-unit3", Status: ChillerFitted, CapacityReference: &CapacityReference{KW: 572},
+			DeviceID: testChillerBID, Status: ChillerFitted, CapacityReference: &CapacityReference{KW: 572},
 			Coefficients: map[string]float64{"intercept": 3.5, "loadRatio": 0.8, "loadRatioSquared": -0.3, "chilledWaterSupplyTempC": 0.05},
 		}
 		fitB := fitA
-		fitB.DeviceID = "ammeter-unit4"
+		fitB.DeviceID = testChillerAID
 		eval, err := EvaluateStaging(baseSnapshot(fitA, fitB, 360, 44, 44), DefaultStagingPolicy())
 		if err != nil {
 			t.Fatal(err)
@@ -434,11 +487,11 @@ func TestChillerStageDownCOPEdgeCases(t *testing.T) {
 
 	t.Run("implausible_predicted_cop_blocked", func(t *testing.T) {
 		fitA := ChillerFit{
-			DeviceID: "ammeter-unit3", Status: ChillerFitted, CapacityReference: &CapacityReference{KW: 572},
+			DeviceID: testChillerBID, Status: ChillerFitted, CapacityReference: &CapacityReference{KW: 572},
 			Coefficients: map[string]float64{"intercept": -10.0, "loadRatio": 1.0, "loadRatioSquared": 0.0, "chilledWaterSupplyTempC": 0.05},
 		}
 		fitB := fitA
-		fitB.DeviceID = "ammeter-unit4"
+		fitB.DeviceID = testChillerAID
 		eval, err := EvaluateStaging(baseSnapshot(fitA, fitB, 360, 60, 60), DefaultStagingPolicy())
 		if err != nil {
 			t.Fatal(err)
@@ -677,6 +730,22 @@ func TestIdleAuxiliaryStopDebounceAndSafetyInterlocks(t *testing.T) {
 
 func TestClickHouseInputReaderReadsStagingSnapshot(t *testing.T) {
 	at := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
+	twin := testFourChillerTwin(testPlantTenantID, testPlantSiteID)
+	twin.Units = twin.Units[2:4]
+	twin.PointBindings = append(twin.PointBindings,
+		planttwin.PointBinding{PointID: "pt-cl-c", DeviceID: testMeterCID, DeviceCode: "amp-c", DeviceSourceKey: "amp-c", PointCode: "chw_leaving_temperature", WireSourceKey: "chw_leaving_temperature", PointType: "TELEMETRY", Unit: "Cel", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerCID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCHWLeavingTemp},
+		planttwin.PointBinding{PointID: "pt-rs-c", DeviceID: testMeterCID, DeviceCode: "amp-c", DeviceSourceKey: "amp-c", PointCode: "run_state", WireSourceKey: "chiller.run_state", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerCID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleRunState},
+		planttwin.PointBinding{PointID: "pt-rs-d", DeviceID: testMeterDID, DeviceCode: "amp-d", DeviceSourceKey: "amp-d", PointCode: "run_state", WireSourceKey: "chiller.run_state", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerDID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleRunState},
+	)
+	loader, err := planttwin.NewStaticLoader(twin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedTwin, err := loader.LoadSiteTwin(t.Context(), planttwin.SiteScope{TenantID: testPlantTenantID, SiteID: testPlantSiteID}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var seenQueries []string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
@@ -685,18 +754,18 @@ func TestClickHouseInputReaderReadsStagingSnapshot(t *testing.T) {
 		writer.Header().Set("Content-Type", "application/x-ndjson")
 		if strings.Contains(sql, "row_number() OVER") {
 			rows := []string{
-				`{"deviceId":"01a14000-4000-7000-8000-000000000009","sourceId":"btu-calc","telemetryKey":"instant_cooling_capacity","valueNumber":480,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:30.000Z"}`,
-				`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"power_total","valueNumber":82,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
-				`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"chw_leaving_temperature","valueNumber":7.1,"valueString":null,"unit":"Cel","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
-				`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"chiller.run_state","valueNumber":null,"valueString":"RUNNING","unit":"","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
-				`{"deviceId":"01a14000-4000-7000-8000-000000000004","sourceId":"ammeter-unit2","telemetryKey":"chiller.run_state","valueNumber":null,"valueString":"STOPPED","unit":"","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+				`{"deviceId":"` + testBTUDevID + `","sourceId":"plant-btu","telemetryKey":"chw_load","valueNumber":480,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:30.000Z"}`,
+				`{"deviceId":"` + testMeterCID + `","sourceId":"amp-c","telemetryKey":"p_kw","valueNumber":82,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+				`{"deviceId":"` + testMeterCID + `","sourceId":"amp-c","telemetryKey":"chw_leaving_temperature","valueNumber":7.1,"valueString":null,"unit":"Cel","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+				`{"deviceId":"` + testMeterCID + `","sourceId":"amp-c","telemetryKey":"chiller.run_state","valueNumber":null,"valueString":"RUNNING","unit":"","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+				`{"deviceId":"` + testMeterDID + `","sourceId":"amp-d","telemetryKey":"chiller.run_state","valueNumber":null,"valueString":"STOPPED","unit":"","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
 			}
 			_, _ = writer.Write([]byte(strings.Join(rows, "\n") + "\n"))
 			return
 		}
 		_, _ = writer.Write([]byte(
-			`{"deviceId":"01a14000-4000-7000-8000-000000000004","sourceId":"ammeter-unit2","telemetryKey":"chiller.run_state","valueString":"STOPPED","quality":"GOOD","sampledAt":"2026-11-14T14:50:00.000Z"}` + "\n" +
-				`{"deviceId":"01a14000-4000-7000-8000-000000000004","sourceId":"ammeter-unit2","telemetryKey":"chiller.run_state","valueString":"STOPPED","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}` + "\n",
+			`{"deviceId":"` + testMeterDID + `","sourceId":"amp-d","telemetryKey":"chiller.run_state","valueString":"STOPPED","quality":"GOOD","sampledAt":"2026-11-14T14:50:00.000Z"}` + "\n" +
+				`{"deviceId":"` + testMeterDID + `","sourceId":"amp-d","telemetryKey":"chiller.run_state","valueString":"STOPPED","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}` + "\n",
 		))
 	}))
 	defer server.Close()
@@ -706,10 +775,11 @@ func TestClickHouseInputReaderReadsStagingSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot, err := reader.ReadStagingSnapshot(t.Context(), StagingSnapshotQuery{
-		TenantID: "01990000-3000-7000-8000-000000000001",
-		SiteID:   "01a14000-5000-7000-8000-000000000001",
+		TenantID: testPlantTenantID,
+		SiteID:   testPlantSiteID,
 		At:       at,
 		Policy:   DefaultStagingPolicy(),
+		Twin:     &loadedTwin,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -719,6 +789,9 @@ func TestClickHouseInputReaderReadsStagingSnapshot(t *testing.T) {
 	}
 	if strings.Contains(seenQueries[0], "quality = 'GOOD'") || strings.Contains(seenQueries[0], "quality='GOOD'") {
 		t.Fatalf("latest query must not skip newer non-GOOD observation: %s", seenQueries[0])
+	}
+	if !strings.Contains(seenQueries[0], testMeterCID) || !strings.Contains(seenQueries[0], "'p_kw'") {
+		t.Fatalf("latest query must scope by SiteTwin deviceId and point key: %s", seenQueries[0])
 	}
 	if snapshot.PlantCoolingLoad == nil || snapshot.PlantCoolingLoad.Value != 480 {
 		t.Fatalf("PlantCoolingLoad = %+v", snapshot.PlantCoolingLoad)
@@ -768,20 +841,20 @@ func TestOptimizationServiceAndHTTPStagingWiring(t *testing.T) {
 
 	// Configure staging evaluator independently of zone_temperature or published recommendations.
 	buckets := syntheticStagingChillerHistory(fixture.now, map[string]float64{
-		"01a14000-4000-7000-8000-000000000005": 1.00,
-		"01a14000-4000-7000-8000-000000000006": 1.00,
-		"01a14000-4000-7000-8000-000000000003": 0.85,
+		testChillerAID: 1.00,
+		testChillerBID: 1.00,
+		testChillerCID: 0.85,
 	})
 	snapshot := StagingSnapshot{
 		PlantCoolingLoad: &TelemetryValue{
-			DeviceID: "01a14000-4000-7000-8000-000000000009", SourceKey: "btu-calc", Value: 520, Unit: "kW", Quality: "GOOD", SampledAt: fixture.now.Add(-time.Minute),
+			DeviceID: testBTUDevID, SourceKey: "plant-btu", Value: 520, Unit: "kW", Quality: "GOOD", SampledAt: fixture.now.Add(-time.Minute),
 		},
-		Chillers: testSongyaxuanUnits(fixture.now, ptr(55.0), ptr(55.0), ptr(74.0), nil),
+		Chillers: testFourChillerUnits(fixture.now, ptr(55.0), ptr(55.0), ptr(74.0), nil),
 		Auxiliaries: []AuxiliaryUnitInput{
 			{
-				AssetID: "01a14000-3000-7000-8000-00000000000a", AssetCode: "chwp-2", AssetName: "2 号冷冻泵",
+				AssetID: "01b10000-3000-7000-8000-00000000000a", AssetCode: "chwp-2", AssetName: "2 号冷冻泵",
 				AssetType: AssetTypeCHWP, RunState: RunStateRunning, RunStateQuality: "GOOD", RunStateAt: fixture.now.Add(-time.Minute),
-				RatedPowerKW: 18.5, ServesChillerIDs: []string{"01a14000-3000-7000-8000-000000000004"},
+				RatedPowerKW: 18.5, ServesChillerIDs: []string{testChillerDID},
 			},
 		},
 	}
@@ -820,10 +893,10 @@ func TestOptimizationServiceAndHTTPStagingWiring(t *testing.T) {
 func TestStagingSuppressedDuringSiteControlExit(t *testing.T) {
 	at := time.Date(2026, 11, 14, 14, 0, 0, 0, time.UTC)
 	buckets := syntheticStagingChillerHistory(at, map[string]float64{
-		"01a14000-4000-7000-8000-000000000005": 1.00,
-		"01a14000-4000-7000-8000-000000000006": 1.00,
-		"01a14000-4000-7000-8000-000000000003": 0.85,
-		"01a14000-4000-7000-8000-000000000004": 0.98,
+		testChillerAID: 1.00,
+		testChillerBID: 1.00,
+		testChillerCID: 0.85,
+		testChillerDID: 0.98,
 	})
 	to := at.Truncate(copBucketMinutes * time.Minute)
 	fit := FitPlant(buckets, to.AddDate(0, 0, -copHistoryDays), to)
@@ -837,20 +910,20 @@ func TestStagingSuppressedDuringSiteControlExit(t *testing.T) {
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			snapshot := StagingSnapshot{
-				TenantID:          "01990000-3000-7000-8000-000000000001",
-				SiteID:            "01a14000-5000-7000-8000-000000000001",
+				TenantID:          testPlantTenantID,
+				SiteID:            testPlantSiteID,
 				EvaluatedAt:       at,
 				SiteControlMode:   tc.mode,
 				SiteControlReason: tc.reason,
 				PlantCoolingLoad: &TelemetryValue{
-					DeviceID: "01a14000-4000-7000-8000-000000000009", SourceKey: "btu-calc", Value: 520, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-20 * time.Second),
+					DeviceID: testBTUDevID, SourceKey: "plant-btu", Value: 520, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-20 * time.Second),
 				},
-				Chillers: testSongyaxuanUnits(at, ptr(55.0), ptr(0.2), ptr(74.0), ptr(56.0)),
+				Chillers: testFourChillerUnits(at, ptr(55.0), ptr(0.2), ptr(74.0), ptr(56.0)),
 				Auxiliaries: []AuxiliaryUnitInput{
 					{
-						AssetID: "01a14000-3000-7000-8000-00000000000a", AssetCode: "chwp-2", AssetName: "2 号冷冻泵",
+						AssetID: "01b10000-3000-7000-8000-00000000000a", AssetCode: "chwp-2", AssetName: "2 号冷冻泵",
 						AssetType: AssetTypeCHWP, RunState: RunStateRunning, RunStateQuality: "GOOD", RunStateAt: at.Add(-30 * time.Second),
-						RatedPowerKW: 18.5, ServesChillerIDs: []string{"01a14000-3000-7000-8000-000000000002"},
+						RatedPowerKW: 18.5, ServesChillerIDs: []string{testChillerBID},
 					},
 				},
 				ChillerFits: fit.Chillers,
@@ -887,26 +960,26 @@ func TestStagingSuppressedDuringSiteControlExit(t *testing.T) {
 func TestStagingRespectsAssetControlLocks(t *testing.T) {
 	at := time.Date(2026, 11, 14, 14, 0, 0, 0, time.UTC)
 	buckets := syntheticStagingChillerHistory(at, map[string]float64{
-		"01a14000-4000-7000-8000-000000000005": 1.00,
-		"01a14000-4000-7000-8000-000000000006": 1.00,
-		"01a14000-4000-7000-8000-000000000003": 0.85,
-		"01a14000-4000-7000-8000-000000000004": 0.98,
+		testChillerAID: 1.00,
+		testChillerBID: 1.00,
+		testChillerCID: 0.85,
+		testChillerDID: 0.98,
 	})
 	to := at.Truncate(copBucketMinutes * time.Minute)
 	fit := FitPlant(buckets, to.AddDate(0, 0, -copHistoryDays), to)
 
 	// Lock only chiller-c; evaluator must never suggest stopping chiller-c.
 	partialLockSnapshot := StagingSnapshot{
-		TenantID:    "01990000-3000-7000-8000-000000000001",
-		SiteID:      "01a14000-5000-7000-8000-000000000001",
+		TenantID:    testPlantTenantID,
+		SiteID:      testPlantSiteID,
 		EvaluatedAt: at,
 		AssetControlLocks: map[string]AssetControlLockInfo{
-			"01a14000-3000-7000-8000-000000000003": {LockMode: "MAINTENANCE_LOCK", Reason: "检修保养"},
+			testChillerCID: {LockMode: "MAINTENANCE_LOCK", Reason: "检修保养"},
 		},
 		PlantCoolingLoad: &TelemetryValue{
-			DeviceID: "01a14000-4000-7000-8000-000000000009", SourceKey: "btu-calc", Value: 420, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-20 * time.Second),
+			DeviceID: testBTUDevID, SourceKey: "plant-btu", Value: 420, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-20 * time.Second),
 		},
-		Chillers:    testSongyaxuanUnits(at, ptr(52.0), ptr(0.2), ptr(74.0), ptr(54.0)),
+		Chillers:    testFourChillerUnits(at, ptr(52.0), ptr(0.2), ptr(74.0), ptr(54.0)),
 		ChillerFits: fit.Chillers,
 	}
 	evalPartial, err := EvaluateStaging(partialLockSnapshot, DefaultStagingPolicy())
@@ -920,22 +993,22 @@ func TestStagingRespectsAssetControlLocks(t *testing.T) {
 	// Lock all running chillers and running idle auxiliary pump, while explicit UNLOCKED does not suppress.
 	fullLockSnapshot := partialLockSnapshot
 	fullLockSnapshot.AssetControlLocks = map[string]AssetControlLockInfo{
-		"01a14000-3000-7000-8000-000000000001": {LockMode: "MANUAL_LOCK", Reason: "值班锁定"},
-		"01a14000-3000-7000-8000-000000000003": {LockMode: "MAINTENANCE_LOCK", Reason: "检修清理"},
-		"01a14000-3000-7000-8000-000000000004": {LockMode: "MANUAL_LOCK"},
-		"01a14000-3000-7000-8000-00000000000a": {LockMode: "MAINTENANCE_LOCK", Reason: "泵阀检修"},
-		"01a14000-3000-7000-8000-00000000000b": {LockMode: AssetControlLockUnlocked},
+		testChillerAID:                         {LockMode: "MANUAL_LOCK", Reason: "值班锁定"},
+		testChillerCID:                         {LockMode: "MAINTENANCE_LOCK", Reason: "检修清理"},
+		testChillerDID:                         {LockMode: "MANUAL_LOCK"},
+		"01b10000-3000-7000-8000-00000000000a": {LockMode: "MAINTENANCE_LOCK", Reason: "泵阀检修"},
+		"01b10000-3000-7000-8000-00000000000b": {LockMode: AssetControlLockUnlocked},
 	}
 	fullLockSnapshot.Auxiliaries = []AuxiliaryUnitInput{
 		{
-			AssetID: "01a14000-3000-7000-8000-00000000000a", AssetCode: "chwp-2", AssetName: "2 号冷冻泵",
+			AssetID: "01b10000-3000-7000-8000-00000000000a", AssetCode: "chwp-2", AssetName: "2 号冷冻泵",
 			AssetType: AssetTypeCHWP, RunState: RunStateRunning, RunStateQuality: "GOOD", RunStateAt: at.Add(-30 * time.Second),
-			RatedPowerKW: 18.5, ServesChillerIDs: []string{"01a14000-3000-7000-8000-000000000002"},
+			RatedPowerKW: 18.5, ServesChillerIDs: []string{testChillerBID},
 		},
 		{
-			AssetID: "01a14000-3000-7000-8000-00000000000b", AssetCode: "chwp-3", AssetName: "3 号冷冻泵",
+			AssetID: "01b10000-3000-7000-8000-00000000000b", AssetCode: "chwp-3", AssetName: "3 号冷冻泵",
 			AssetType: AssetTypeCHWP, RunState: RunStateRunning, RunStateQuality: "GOOD", RunStateAt: at.Add(-30 * time.Second),
-			RatedPowerKW: 18.5, ServesChillerIDs: []string{"01a14000-3000-7000-8000-000000000002"},
+			RatedPowerKW: 18.5, ServesChillerIDs: []string{testChillerBID},
 		},
 	}
 	evalLocked, err := EvaluateStaging(fullLockSnapshot, DefaultStagingPolicy())
@@ -964,30 +1037,30 @@ func TestStagingRespectsAssetControlLocks(t *testing.T) {
 func TestStagingPopulatesSuggestedCommandPointID(t *testing.T) {
 	at := time.Date(2026, 11, 14, 14, 0, 0, 0, time.UTC)
 	buckets := syntheticStagingChillerHistory(at, map[string]float64{
-		"01a14000-4000-7000-8000-000000000005": 1.00,
-		"01a14000-4000-7000-8000-000000000006": 1.00,
-		"01a14000-4000-7000-8000-000000000003": 0.85,
+		testChillerAID: 1.00,
+		testChillerBID: 1.00,
+		testChillerCID: 0.85,
 	})
 	to := at.Truncate(copBucketMinutes * time.Minute)
 	fit := FitPlant(buckets, to.AddDate(0, 0, -copHistoryDays), to)
 
 	snapshot := StagingSnapshot{
-		TenantID:    "01990000-3000-7000-8000-000000000001",
-		SiteID:      "01a14000-5000-7000-8000-000000000001",
+		TenantID:    testPlantTenantID,
+		SiteID:      testPlantSiteID,
 		EvaluatedAt: at,
 		CommandPointIDs: map[string]string{
-			canonicalCommandPointKey("01a14000-3000-7000-8000-000000000003", SuggestedCapabilityStopUnitSequence): "pt-chiller-c-stop-seq",
-			canonicalCommandPointKey("01a14000-3000-7000-8000-00000000000a", SuggestedCapabilityStop):             "pt-chwp-2-stop",
+			canonicalCommandPointKey(testChillerCID, SuggestedCapabilityStopUnitSequence):             "pt-chiller-c-stop-seq",
+			canonicalCommandPointKey("01b10000-3000-7000-8000-00000000000a", SuggestedCapabilityStop): "pt-chwp-2-stop",
 		},
 		PlantCoolingLoad: &TelemetryValue{
-			DeviceID: "01a14000-4000-7000-8000-000000000009", SourceKey: "btu-calc", Value: 520, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-20 * time.Second),
+			DeviceID: testBTUDevID, SourceKey: "plant-btu", Value: 520, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-20 * time.Second),
 		},
-		Chillers: testSongyaxuanUnits(at, ptr(55.0), ptr(55.0), ptr(74.0), nil),
+		Chillers: testFourChillerUnits(at, ptr(55.0), ptr(55.0), ptr(74.0), nil),
 		Auxiliaries: []AuxiliaryUnitInput{
 			{
-				AssetID: "01a14000-3000-7000-8000-00000000000a", AssetCode: "chwp-2", AssetName: "2 号冷冻泵",
+				AssetID: "01b10000-3000-7000-8000-00000000000a", AssetCode: "chwp-2", AssetName: "2 号冷冻泵",
 				AssetType: AssetTypeCHWP, RunState: RunStateRunning, RunStateQuality: "GOOD", RunStateAt: at.Add(-30 * time.Second),
-				RatedPowerKW: 18.5, ServesChillerIDs: []string{"01a14000-3000-7000-8000-000000000004"},
+				RatedPowerKW: 18.5, ServesChillerIDs: []string{testChillerDID},
 			},
 		},
 		ChillerFits: fit.Chillers,
@@ -1027,7 +1100,7 @@ func TestBuildStagingSnapshotUsesBoundDeviceIDs(t *testing.T) {
 				AssetCode:       "chiller-c",
 				AssetName:       "C 机组",
 				MeterDeviceID:   "dev-meter-1",
-				MeterSourceKey:  "ammeter-unit1",
+				MeterSourceKey:  "amp-c",
 				BoundDeviceIDs:  []string{"dev-ctrl-chiller-c", "et1010-chiller-c"},
 				RatedCapacityKW: 572,
 				RatedPowerKW:    127.5,
@@ -1047,13 +1120,13 @@ func TestBuildStagingSnapshotUsesBoundDeviceIDs(t *testing.T) {
 	}
 
 	latest := []stagingTelemetryRow{
-		{DeviceID: "dev-btu", SourceID: "btu-calc", TelemetryKey: "instant_cooling_capacity", ValueNumber: ptr(510.0), Unit: "kW", Quality: "GOOD", SampledAt: at},
-		{DeviceID: "dev-meter-1", SourceID: "ammeter-unit1", TelemetryKey: "power_total", ValueNumber: ptr(81.5), Unit: "kW", Quality: "GOOD", SampledAt: at},
-		{DeviceID: "dev-ctrl-chiller-c", SourceID: "et1010-chiller-c", TelemetryKey: "chiller.run_state", ValueString: &runState, Quality: "GOOD", SampledAt: at},
-		{DeviceID: "dev-ctrl-chwp-2", SourceID: "et1010-chwp-2", TelemetryKey: "chwp.run_state", ValueString: &runState, Quality: "GOOD", SampledAt: at},
+		{DeviceID: "dev-btu", SourceID: "plant-btu", TelemetryKey: "instant_cooling_capacity", ValueNumber: ptr(510.0), Unit: "kW", Quality: "GOOD", SampledAt: at},
+		{DeviceID: "dev-meter-1", SourceID: "amp-c", TelemetryKey: "power_total", ValueNumber: ptr(81.5), Unit: "kW", Quality: "GOOD", SampledAt: at},
+		{DeviceID: "dev-ctrl-chiller-c", SourceID: "et1010-chiller-c", TelemetryKey: "run_state", ValueString: &runState, Quality: "GOOD", SampledAt: at},
+		{DeviceID: "dev-ctrl-chwp-2", SourceID: "et1010-chwp-2", TelemetryKey: "run_state", ValueString: &runState, Quality: "GOOD", SampledAt: at},
 	}
 
-	snapshot := buildStagingSnapshotFromObservations("tenant-1", "site-1", at, topology, latest, nil)
+	snapshot := buildStagingSnapshotFromObservations("tenant-1", "site-1", at, nil, topology, latest, nil)
 	if snapshot.SiteControlMode != SiteControlModeRemoteAuto {
 		t.Fatalf("SiteControlMode = %q, want REMOTE_AUTO", snapshot.SiteControlMode)
 	}
@@ -1065,39 +1138,50 @@ func TestBuildStagingSnapshotUsesBoundDeviceIDs(t *testing.T) {
 	}
 }
 
-func TestBuildStagingTopologyFromRecordsExtractsLocksCommandsAndEdges(t *testing.T) {
-	locks := map[string]AssetControlLockInfo{
-		"ASSET-CHILLER-C": {LockMode: "MAINTENANCE_LOCK", Reason: "维保锁定"},
-		"asset-chiller-a": {LockMode: AssetControlLockUnlocked},
-	}
-	assets := []stagingAssetRow{
-		{ID: "asset-chiller-a", Code: "chiller-a", DisplayName: "A 机组", AssetType: AssetTypeChiller, RatedPowerKW: 127.5, RatedCapacityKW: 572},
-		{ID: "asset-chiller-c", Code: "chiller-c", DisplayName: "C 机组", AssetType: AssetTypeChiller, RatedPowerKW: 127.5, RatedCapacityKW: 572},
-		{ID: "asset-chwp-2", Code: "chwp-2", DisplayName: "2 号冷冻泵", AssetType: AssetTypeCHWP, RatedPowerKW: 18.5},
-	}
-	devices := []stagingDeviceRow{
-		{ID: "dev-btu", Code: "btu-calc", DeviceType: "BTU_METER", SourceKey: "btu-calc"},
-		{ID: "dev-meter-1", Code: "ammeter-unit1", DeviceType: "POWER_METER", SourceKey: "ammeter-unit1"},
-		{ID: "dev-ctrl-c", Code: "ctrl-chiller-c", DeviceType: "GATEWAY_IO", SourceKey: "et1010-c"},
-		{ID: "dev-ctrl-p2", Code: "ctrl-chwp-2", DeviceType: "GATEWAY_IO", SourceKey: "et1010-p2"},
-	}
-	bindings := []stagingDeviceBindingRow{
-		{AssetID: "asset-chiller-c", DeviceID: "dev-meter-1", BindingRole: "METER"},
-		{AssetID: "asset-chiller-c", DeviceID: "dev-ctrl-c", BindingRole: "CONTROLLER"},
-		{AssetID: "asset-chwp-2", DeviceID: "dev-ctrl-p2", BindingRole: "CONTROLLER"},
-	}
-	commandPoints := []stagingCommandPointRow{
-		{
-			PointID: "pt-chiller-c-stop-seq", ReportingDeviceID: "dev-ctrl-c", PointCode: "stop_seq", BoundAssetID: "asset-chiller-c",
-			SourceMetadata: []byte(`{"capability":"STOP_UNIT_SEQUENCE","interlockChecks":[{"deviceId":"dev-ctrl-p2","key":"chwp.run_state"}]}`),
+func TestStagingTopologyFromTwinExtractsLocksCommandsAndSERVESEdges(t *testing.T) {
+	ratedCap := 572.0
+	ratedPower := 127.5
+	auxPower := 18.5
+	twin := planttwin.SiteTwin{
+		Scope:             planttwin.SiteScope{TenantID: testPlantTenantID, SiteID: testPlantSiteID},
+		Timezone:          "Asia/Shanghai",
+		SiteControlMode:   SiteControlModeManualOverride,
+		SiteControlReason: "值班手操",
+		Units: []planttwin.PlantUnit{
+			{AssetID: "asset-chiller-a", AssetCode: "chiller-a", AssetName: "A 机组", AssetType: planttwin.AssetTypeChiller, RatedPowerKW: &ratedPower, RatedCapacityKW: &ratedCap, LockMode: planttwin.LockModeUnlocked},
+			{AssetID: "asset-chiller-c", AssetCode: "chiller-c", AssetName: "C 机组", AssetType: planttwin.AssetTypeChiller, RatedPowerKW: &ratedPower, RatedCapacityKW: &ratedCap, LockMode: "MAINTENANCE_LOCK", LockReason: "维保锁定"},
+			{AssetID: "asset-chwp-2", AssetCode: "chwp-2", AssetName: "2 号冷冻泵", AssetType: planttwin.AssetTypeChilledWaterPump, RatedPowerKW: &auxPower, LockMode: planttwin.LockModeUnlocked},
 		},
-		{
-			PointID: "pt-chwp-2-stop", ReportingDeviceID: "dev-ctrl-p2", PointCode: "stop", BoundAssetID: "asset-chwp-2",
-			SourceMetadata: []byte(`{"capability":"STOP","interlockChecks":[{"deviceId":"dev-ctrl-c","key":"chiller.run_state"}]}`),
+		Devices: []planttwin.TwinDevice{
+			{DeviceID: "dev-btu", DeviceCode: "plant-btu", DeviceType: "BTU_METER", SourceKey: "plant-btu"},
+			{DeviceID: "dev-meter-1", DeviceCode: "amp-c", DeviceType: "POWER_METER", SourceKey: "amp-c"},
+			{DeviceID: "dev-ctrl-c", DeviceCode: "ctrl-chiller-c", DeviceType: "GATEWAY_IO", SourceKey: "et1010-c"},
+			{DeviceID: "dev-ctrl-p2", DeviceCode: "ctrl-chwp-2", DeviceType: "GATEWAY_IO", SourceKey: "et1010-p2"},
+		},
+		DeviceBindings: []planttwin.DeviceBinding{
+			{AssetID: "asset-chiller-c", DeviceID: "dev-meter-1", BindingRole: "METER"},
+			{AssetID: "asset-chiller-c", DeviceID: "dev-ctrl-c", BindingRole: "CONTROLLER"},
+			{AssetID: "asset-chwp-2", DeviceID: "dev-ctrl-p2", BindingRole: "CONTROLLER"},
+		},
+		PointBindings: []planttwin.PointBinding{
+			{PointID: "pt-load", DeviceID: "dev-btu", DeviceCode: "plant-btu", DeviceSourceKey: "plant-btu", PointCode: "chw_load", WireSourceKey: "chw_load", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeSite, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCoolingLoad},
+			{
+				PointID: "pt-chiller-c-stop-seq", DeviceID: "dev-ctrl-c", PointCode: "stop_seq", PointType: planttwin.PointTypeCommand, Writable: true,
+				SubjectType: planttwin.SubjectTypeAsset, AssetID: "asset-chiller-c", BindingRole: planttwin.BindingControls,
+				SourceMetadata: []byte(`{"capability":"STOP_UNIT_SEQUENCE"}`),
+			},
+			{
+				PointID: "pt-chwp-2-stop", DeviceID: "dev-ctrl-p2", PointCode: "stop", PointType: planttwin.PointTypeCommand, Writable: true,
+				SubjectType: planttwin.SubjectTypeAsset, AssetID: "asset-chwp-2", BindingRole: planttwin.BindingControls,
+				SourceMetadata: []byte(`{"capability":"STOP"}`),
+			},
+		},
+		HydraulicEdges: []planttwin.HydraulicEdge{
+			{FromAssetID: "asset-chwp-2", ToAssetID: "asset-chiller-c", RelationshipRole: planttwin.RelationshipServes},
 		},
 	}
 
-	topology := buildStagingTopologyFromRecords(SiteControlModeManualOverride, "值班手操", locks, assets, devices, bindings, commandPoints)
+	topology := stagingTopologyFromTwin(twin)
 	if topology.SiteControlMode != SiteControlModeManualOverride || topology.SiteControlReason != "值班手操" {
 		t.Fatalf("unexpected site control mode fields: %+v", topology)
 	}
@@ -1111,7 +1195,7 @@ func TestBuildStagingTopologyFromRecordsExtractsLocksCommandsAndEdges(t *testing
 		t.Fatalf("aux stop point = %q", got)
 	}
 	if len(topology.Edges) != 1 || topology.Edges[0] != (HydraulicEdge{FromAssetID: "asset-chwp-2", ToAssetID: "asset-chiller-c", Role: HydraulicEdgeServes}) {
-		t.Fatalf("expected deduplicated SERVES edge, got %+v", topology.Edges)
+		t.Fatalf("expected explicit SERVES edge, got %+v", topology.Edges)
 	}
 	if len(topology.Auxiliaries) != 1 || len(topology.Auxiliaries[0].ServesChillerIDs) != 1 || topology.Auxiliaries[0].ServesChillerIDs[0] != "asset-chiller-c" {
 		t.Fatalf("expected aux ServesChillerIDs=[asset-chiller-c], got %+v", topology.Auxiliaries)
@@ -1124,33 +1208,33 @@ func TestBuildStagingTopologyFromRecordsExtractsLocksCommandsAndEdges(t *testing
 	}
 }
 
-func testScheduleStagingSnapshot(at time.Time, schedule *OperatingScheduleContext) StagingSnapshot {
+func testScheduleStagingSnapshot(at time.Time, schedule *planttwin.OperatingSchedule) StagingSnapshot {
 	history := syntheticStagingChillerHistory(at, map[string]float64{
-		"ammeter-unit4": 1.0,
-		"ammeter-unit3": 0.95,
+		testChillerAID: 1.0,
+		testChillerBID: 0.95,
 	})
 	fit := FitPlant(history, at.UTC().AddDate(0, 0, -copHistoryDays), at.UTC())
 
 	return StagingSnapshot{
-		TenantID:          "01a14000-1000-7000-8000-000000000001",
-		SiteID:            "01a14000-2000-7000-8000-000000000001",
+		TenantID:          testPlantTenantID,
+		SiteID:            testPlantSiteID,
 		EvaluatedAt:       at,
 		SiteControlMode:   SiteControlModeRemoteAuto,
 		OperatingSchedule: schedule,
 		CommandPointIDs: map[string]string{
-			canonicalCommandPointKey("01a14000-3000-7000-8000-000000000001", SuggestedCapabilityStopUnitSequence): "pt-chiller-a-stop-seq",
-			canonicalCommandPointKey("01a14000-3000-7000-8000-000000000002", SuggestedCapabilityStop):             "pt-chiller-b-stop",
-			canonicalCommandPointKey("asset-chwp-2", SuggestedCapabilityStop):                                     "pt-chwp-2-stop",
+			canonicalCommandPointKey(testChillerAID, SuggestedCapabilityStopUnitSequence): "pt-chiller-a-stop-seq",
+			canonicalCommandPointKey(testChillerBID, SuggestedCapabilityStop):             "pt-chiller-b-stop",
+			canonicalCommandPointKey("asset-chwp-2", SuggestedCapabilityStop):             "pt-chwp-2-stop",
 		},
 		PlantCoolingLoad: &TelemetryValue{Value: 290, Quality: "GOOD", SampledAt: at},
 		HeaderSupplyC:    &TelemetryValue{Value: 7.0, Quality: "GOOD", SampledAt: at},
 		Chillers: []ChillerUnitInput{
 			{
-				AssetID:         "01a14000-3000-7000-8000-000000000001",
+				AssetID:         testChillerAID,
 				AssetCode:       "chiller-a",
 				AssetName:       "A 机组",
-				MeterDeviceID:   "01a14000-4000-7000-8000-000000000006",
-				MeterSourceKey:  "ammeter-unit4",
+				MeterDeviceID:   testMeterAID,
+				MeterSourceKey:  "amp-a",
 				RatedCapacityKW: 572,
 				RatedPowerKW:    127.5,
 				RunState:        RunStateRunning,
@@ -1161,11 +1245,11 @@ func testScheduleStagingSnapshot(at time.Time, schedule *OperatingScheduleContex
 				CwLeavingC:      &TelemetryValue{Value: 30.0, Quality: "GOOD", SampledAt: at},
 			},
 			{
-				AssetID:         "01a14000-3000-7000-8000-000000000002",
+				AssetID:         testChillerBID,
 				AssetCode:       "chiller-b",
 				AssetName:       "B 机组",
-				MeterDeviceID:   "01a14000-4000-7000-8000-000000000005",
-				MeterSourceKey:  "ammeter-unit3",
+				MeterDeviceID:   testMeterBID,
+				MeterSourceKey:  "amp-b",
 				RatedCapacityKW: 572,
 				RatedPowerKW:    127.5,
 				RunState:        RunStateRunning,
@@ -1176,11 +1260,11 @@ func testScheduleStagingSnapshot(at time.Time, schedule *OperatingScheduleContex
 				CwLeavingC:      &TelemetryValue{Value: 30.2, Quality: "GOOD", SampledAt: at},
 			},
 			{
-				AssetID:         "01a14000-3000-7000-8000-000000000004",
+				AssetID:         testChillerDID,
 				AssetCode:       "chiller-d",
 				AssetName:       "D 机组",
-				MeterDeviceID:   "01a14000-4000-7000-8000-000000000004",
-				MeterSourceKey:  "ammeter-unit2",
+				MeterDeviceID:   testMeterDID,
+				MeterSourceKey:  "amp-d",
 				RatedCapacityKW: 572,
 				RatedPowerKW:    127.5,
 				RunState:        RunStateStopped,
@@ -1204,7 +1288,7 @@ func testScheduleStagingSnapshot(at time.Time, schedule *OperatingScheduleContex
 				RunStateQuality:  "GOOD",
 				RunStateAt:       at,
 				Power:            &TelemetryValue{Value: 16.2, Quality: "GOOD", SampledAt: at},
-				ServesChillerIDs: []string{"01a14000-3000-7000-8000-000000000004"},
+				ServesChillerIDs: []string{testChillerDID},
 			},
 		},
 		ChillerFits: fit.Chillers,
@@ -1232,12 +1316,11 @@ func hasDiagnostic(diags []StagingDiagnostic, scope, status, reason string) bool
 
 func TestStagingOperatingScheduleInWindowPreCoolAndCoastDown(t *testing.T) {
 	// 2026-11-16 is a Monday.
-	baseSchedule := &OperatingScheduleContext{
-		SiteTimezone:        "Asia/Shanghai",
-		Configured:          true,
+	baseSchedule := &planttwin.OperatingSchedule{
+		Timezone:            "Asia/Shanghai",
 		PreCoolLeadMinutes:  30,
 		CoastDownLagMinutes: 20,
-		Slots: []OperatingScheduleSlotWindow{
+		Slots: []planttwin.ScheduleSlot{
 			{DayOfWeek: 1, StartMinute: 8*60 + 30, EndMinute: 18 * 60}, // Mon 08:30-18:00
 		},
 	}
@@ -1278,12 +1361,11 @@ func TestStagingOperatingScheduleInWindowPreCoolAndCoastDown(t *testing.T) {
 func TestStagingOperatingScheduleOffHoursEmitsStopDraftsAndChecksAux(t *testing.T) {
 	// Monday 20:00 Shanghai is past 18:00 + 20m coast-down lag.
 	at := shanghaiTime(2026, 11, 16, 20, 0)
-	schedule := &OperatingScheduleContext{
-		SiteTimezone:        "Asia/Shanghai",
-		Configured:          true,
+	schedule := &planttwin.OperatingSchedule{
+		Timezone:            "Asia/Shanghai",
 		PreCoolLeadMinutes:  30,
 		CoastDownLagMinutes: 20,
-		Slots: []OperatingScheduleSlotWindow{
+		Slots: []planttwin.ScheduleSlot{
 			{DayOfWeek: 1, StartMinute: 8*60 + 30, EndMinute: 18 * 60},
 		},
 	}
@@ -1357,20 +1439,19 @@ func TestStagingOperatingScheduleOffHoursEmitsStopDraftsAndChecksAux(t *testing.
 
 func TestStagingOperatingScheduleHolidayShutdownMasksSpilloverAndRegularSlots(t *testing.T) {
 	// Tuesday 2026-11-17 has HOLIDAY_SHUTDOWN; Monday 2026-11-16 had 22:00-24:00 + 30m coast-down lag.
-	schedule := &OperatingScheduleContext{
-		SiteTimezone:        "Asia/Shanghai",
-		Configured:          true,
+	schedule := &planttwin.OperatingSchedule{
+		Timezone:            "Asia/Shanghai",
 		PreCoolLeadMinutes:  15,
 		CoastDownLagMinutes: 30,
-		Slots: []OperatingScheduleSlotWindow{
+		Slots: []planttwin.ScheduleSlot{
 			{DayOfWeek: 1, StartMinute: 22 * 60, EndMinute: 24 * 60}, // Mon 22:00-24:00
 			{DayOfWeek: 2, StartMinute: 8 * 60, EndMinute: 18 * 60},  // Tue 08:00-18:00
 		},
-		ApprovedExceptions: []ApprovedOperatingExceptionWindow{
+		Exceptions: []planttwin.ScheduleException{
 			{
 				ID:        "exc-holiday-1",
 				Title:     "全厂公休日停机",
-				Kind:      "HOLIDAY_SHUTDOWN",
+				Kind:      planttwin.ExceptionHolidayShutdown,
 				StartDate: "2026-11-17",
 				EndDate:   "2026-11-17",
 			},
@@ -1404,17 +1485,16 @@ func TestStagingOperatingScheduleHolidayShutdownMasksSpilloverAndRegularSlots(t 
 
 func TestStagingOperatingScheduleMaintenanceWindowSuppressesAll(t *testing.T) {
 	at := shanghaiTime(2026, 11, 16, 21, 0) // even if off-hours, MAINTENANCE_WINDOW suppresses all
-	schedule := &OperatingScheduleContext{
-		SiteTimezone: "Asia/Shanghai",
-		Configured:   true,
-		Slots: []OperatingScheduleSlotWindow{
+	schedule := &planttwin.OperatingSchedule{
+		Timezone: "Asia/Shanghai",
+		Slots: []planttwin.ScheduleSlot{
 			{DayOfWeek: 1, StartMinute: 8 * 60, EndMinute: 18 * 60},
 		},
-		ApprovedExceptions: []ApprovedOperatingExceptionWindow{
+		Exceptions: []planttwin.ScheduleException{
 			{
 				ID:        "exc-maint-1",
 				Title:     "年度冷机大修",
-				Kind:      "MAINTENANCE_WINDOW",
+				Kind:      planttwin.ExceptionMaintenanceWindow,
 				StartDate: "2026-11-16",
 				EndDate:   "2026-11-16",
 				Reason:    "拆机清洗冷凝器",
@@ -1439,22 +1519,21 @@ func TestStagingOperatingScheduleMaintenanceWindowSuppressesAll(t *testing.T) {
 func TestStagingOperatingScheduleOvertimeCoolingOverridesDayAndBuffers(t *testing.T) {
 	// 2026-11-15 is Sunday (normally off-hours). Approved OVERTIME_COOLING runs 10:00-15:00 with lead=30, lag=15.
 	// Saturday 2026-11-14 had 22:00-24:00, which must NOT bleed past Sunday 00:00 because Sunday is overridden.
-	schedule := &OperatingScheduleContext{
-		SiteTimezone:        "Asia/Shanghai",
-		Configured:          true,
+	schedule := &planttwin.OperatingSchedule{
+		Timezone:            "Asia/Shanghai",
 		PreCoolLeadMinutes:  30,
 		CoastDownLagMinutes: 15,
-		Slots: []OperatingScheduleSlotWindow{
+		Slots: []planttwin.ScheduleSlot{
 			{DayOfWeek: 6, StartMinute: 22 * 60, EndMinute: 24 * 60}, // Sat 22:00-24:00
 		},
-		ApprovedExceptions: []ApprovedOperatingExceptionWindow{
+		Exceptions: []planttwin.ScheduleException{
 			{
 				ID:        "exc-ot-1",
 				Title:     "周末活动保障加班供冷",
-				Kind:      "OVERTIME_COOLING",
+				Kind:      planttwin.ExceptionOvertimeCooling,
 				StartDate: "2026-11-15",
 				EndDate:   "2026-11-15",
-				ReplacementSlots: []OperatingExceptionReplacementSlot{
+				ReplacementSlots: []planttwin.ScheduleSlot{
 					{StartMinute: 10 * 60, EndMinute: 15 * 60},
 				},
 			},
@@ -1507,10 +1586,9 @@ func TestStagingOperatingScheduleOvertimeCoolingOverridesDayAndBuffers(t *testin
 func TestStagingOperatingScheduleTimezoneMidnightRollover(t *testing.T) {
 	// 2026-11-15 16:30:00Z == 2026-11-16 00:30:00+08:00 (Monday morning in Shanghai).
 	atUTC := time.Date(2026, 11, 15, 16, 30, 0, 0, time.UTC)
-	schedule := &OperatingScheduleContext{
-		SiteTimezone: "Asia/Shanghai",
-		Configured:   true,
-		Slots: []OperatingScheduleSlotWindow{
+	schedule := &planttwin.OperatingSchedule{
+		Timezone: "Asia/Shanghai",
+		Slots: []planttwin.ScheduleSlot{
 			// Sunday 00:00-24:00 is cooling, Monday 00:00-08:00 is OFF.
 			// In UTC it's still Sunday, in Shanghai it's Monday -> must evaluate Monday (off-hours).
 			{DayOfWeek: 7, StartMinute: 0, EndMinute: 24 * 60},
@@ -1535,10 +1613,9 @@ func TestStagingOperatingScheduleTimezoneMidnightRollover(t *testing.T) {
 
 func TestStagingOperatingScheduleRespectsSiteExitAndAssetLocks(t *testing.T) {
 	at := shanghaiTime(2026, 11, 16, 21, 0) // off-hours Monday
-	schedule := &OperatingScheduleContext{
-		SiteTimezone: "Asia/Shanghai",
-		Configured:   true,
-		Slots: []OperatingScheduleSlotWindow{
+	schedule := &planttwin.OperatingSchedule{
+		Timezone: "Asia/Shanghai",
+		Slots: []planttwin.ScheduleSlot{
 			{DayOfWeek: 1, StartMinute: 8 * 60, EndMinute: 18 * 60},
 		},
 	}
@@ -1563,7 +1640,7 @@ func TestStagingOperatingScheduleRespectsSiteExitAndAssetLocks(t *testing.T) {
 	t.Run("per-asset control lock suppresses only locked chiller during off-hours", func(t *testing.T) {
 		snap := testScheduleStagingSnapshot(at, schedule)
 		snap.AssetControlLocks = map[string]AssetControlLockInfo{
-			"01a14000-3000-7000-8000-000000000001": {LockMode: "MAINTENANCE_LOCK", Reason: "A机单机锁定"},
+			testChillerAID: {LockMode: "MAINTENANCE_LOCK", Reason: "A机单机锁定"},
 		}
 
 		eval, err := EvaluateStaging(snap, DefaultStagingPolicy())
@@ -1588,7 +1665,7 @@ func TestStagingOperatingScheduleRespectsSiteExitAndAssetLocks(t *testing.T) {
 		topology := &StagingTopology{OperatingSchedule: schedule}
 		snap := StagingSnapshot{}
 		applyStagingTopology(&snap, topology)
-		if snap.OperatingSchedule == nil || !snap.OperatingSchedule.Configured || len(snap.OperatingSchedule.Slots) != 1 {
+		if snap.OperatingSchedule == nil || len(snap.OperatingSchedule.Slots) != 1 {
 			t.Fatalf("expected OperatingSchedule copied by applyStagingTopology, got %+v", snap.OperatingSchedule)
 		}
 		snap.OperatingSchedule.Slots[0].StartMinute = 0
@@ -1602,7 +1679,7 @@ func TestResolveChillerRunStateAccountsForFeederAuxiliaryPower(t *testing.T) {
 	at := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
 	policy := DefaultStagingPolicy()
 	combinedUnit := ChillerUnitInput{
-		AssetID:                "01a14000-3000-7000-8000-000000000003",
+		AssetID:                testChillerCID,
 		AssetCode:              "chiller-c",
 		RatedPowerKW:           127.5,
 		FeederAuxiliaryPowerKW: 30,
@@ -1631,16 +1708,19 @@ func TestResolveChillerRunStateAccountsForFeederAuxiliaryPower(t *testing.T) {
 		t.Fatalf("expected explicit STOPPED at 40 kW to flag PAIRED_CHILLER_DRAWING_POWER, got %s (%s)", state, reason)
 	}
 
-	// buildStagingTopologyFromRecords carries FeederAuxiliaryPowerKW onto ChillerMeterBinding.
-	topology := buildStagingTopologyFromRecords(
-		SiteControlModeRemoteAuto,
-		"",
-		nil,
-		[]stagingAssetRow{{ID: "asset-c", Code: "chiller-c", DisplayName: "C 机组", AssetType: AssetTypeChiller, RatedPowerKW: 127.5, RatedCapacityKW: 572, FeederAuxiliaryPowerKW: 30}},
-		[]stagingDeviceRow{{ID: "dev-c", Code: "meter-uid5", DeviceType: "HVAC_POWER_METER", SourceKey: "ammeter-unit1"}},
-		[]stagingDeviceBindingRow{{AssetID: "asset-c", DeviceID: "dev-c", BindingRole: "METER"}},
-		nil,
-	)
+	// stagingTopologyFromTwin carries FeederAuxiliaryPowerKW onto ChillerMeterBinding.
+	ratedPower := 127.5
+	ratedCap := 572.0
+	topology := stagingTopologyFromTwin(planttwin.SiteTwin{
+		Scope:    planttwin.SiteScope{TenantID: testPlantTenantID, SiteID: testPlantSiteID},
+		Timezone: "Asia/Shanghai",
+		Units: []planttwin.PlantUnit{{
+			AssetID: "asset-c", AssetCode: "chiller-c", AssetName: "C 机组", AssetType: planttwin.AssetTypeChiller,
+			RatedPowerKW: &ratedPower, RatedCapacityKW: &ratedCap, FeederAuxiliaryPowerKW: 30, LockMode: planttwin.LockModeUnlocked,
+		}},
+		Devices:        []planttwin.TwinDevice{{DeviceID: "dev-c", DeviceCode: "meter-c", DeviceType: "HVAC_POWER_METER", SourceKey: "amp-c"}},
+		DeviceBindings: []planttwin.DeviceBinding{{AssetID: "asset-c", DeviceID: "dev-c", BindingRole: "METER"}},
+	})
 	if len(topology.Chillers) != 1 || topology.Chillers[0].FeederAuxiliaryPowerKW != 30 {
 		t.Fatalf("expected FeederAuxiliaryPowerKW=30 in topology, got %+v", topology.Chillers)
 	}
@@ -1649,23 +1729,23 @@ func TestResolveChillerRunStateAccountsForFeederAuxiliaryPower(t *testing.T) {
 func TestChillerStageDownAntiHuntingDwellHysteresisMinRunAndSupplyGuard(t *testing.T) {
 	at := time.Date(2026, 11, 14, 14, 0, 0, 0, time.UTC)
 	buckets := syntheticStagingChillerHistory(at, map[string]float64{
-		"01a14000-4000-7000-8000-000000000006": 1.00,
-		"01a14000-4000-7000-8000-000000000003": 0.85,
+		testChillerAID: 1.00,
+		testChillerCID: 0.85,
 	})
 	to := at.Truncate(copBucketMinutes * time.Minute)
 	fit := FitPlant(buckets, to.AddDate(0, 0, -copHistoryDays), to)
 
 	baseSnapshot := func(loadKW float64) StagingSnapshot {
 		return StagingSnapshot{
-			TenantID:    "01990000-3000-7000-8000-000000000001",
-			SiteID:      "01a14000-5000-7000-8000-000000000001",
+			TenantID:    testPlantTenantID,
+			SiteID:      testPlantSiteID,
 			EvaluatedAt: at,
 			PlantCoolingLoad: &TelemetryValue{
-				DeviceID: "01a14000-4000-7000-8000-000000000009", SourceKey: "btu-calc",
+				DeviceID: testBTUDevID, SourceKey: "plant-btu",
 				Value: loadKW, Unit: "kW", Quality: "GOOD", SampledAt: at.Add(-30 * time.Second),
 			},
 			HeaderSupplyC: &TelemetryValue{Value: 7.0, Unit: "Cel", Quality: "GOOD", SampledAt: at.Add(-30 * time.Second)},
-			Chillers:      testSongyaxuanUnits(at, ptr(56.0), nil, ptr(74.0), nil),
+			Chillers:      testFourChillerUnits(at, ptr(56.0), nil, ptr(74.0), nil),
 			ChillerFits:   fit.Chillers,
 		}
 	}
@@ -1848,10 +1928,9 @@ func TestIdleAuxiliaryStopEvaporatorDeltaTGuard(t *testing.T) {
 func TestStagingOperatingScheduleEmptySlotsSafety(t *testing.T) {
 	at := shanghaiTime(2026, 11, 16, 14, 0)
 
-	emptySchedule := &OperatingScheduleContext{
-		SiteTimezone: "Asia/Shanghai",
-		Configured:   true,
-		Slots:        nil,
+	emptySchedule := &planttwin.OperatingSchedule{
+		Timezone: "Asia/Shanghai",
+		Slots:    nil,
 	}
 	eval, err := EvaluateStaging(testScheduleStagingSnapshot(at, emptySchedule), DefaultStagingPolicy())
 	if err != nil {
@@ -1866,11 +1945,10 @@ func TestStagingOperatingScheduleEmptySlotsSafety(t *testing.T) {
 		t.Fatalf("expected normal stage-down evaluation when slots are empty, got %+v", eval.Diagnostics)
 	}
 
-	holidayEmpty := &OperatingScheduleContext{
-		SiteTimezone: "Asia/Shanghai",
-		Configured:   true,
-		ApprovedExceptions: []ApprovedOperatingExceptionWindow{{
-			ID: "exc-h1", Title: "公休停机", Kind: "HOLIDAY_SHUTDOWN", StartDate: "2026-11-16", EndDate: "2026-11-16",
+	holidayEmpty := &planttwin.OperatingSchedule{
+		Timezone: "Asia/Shanghai",
+		Exceptions: []planttwin.ScheduleException{{
+			ID: "exc-h1", Title: "公休停机", Kind: planttwin.ExceptionHolidayShutdown, StartDate: "2026-11-16", EndDate: "2026-11-16",
 		}},
 	}
 	evalHoliday, err := EvaluateStaging(testScheduleStagingSnapshot(at, holidayEmpty), DefaultStagingPolicy())
@@ -1890,6 +1968,22 @@ func TestStagingOperatingScheduleEmptySlotsSafety(t *testing.T) {
 
 func TestClickHouseInputReaderReadsLoadHistoryAndChwEntering(t *testing.T) {
 	at := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
+	twin := testFourChillerTwin(testPlantTenantID, testPlantSiteID)
+	twin.Units = twin.Units[2:3]
+	twin.PointBindings = append(twin.PointBindings,
+		planttwin.PointBinding{PointID: "pt-ce-c", DeviceID: testMeterCID, DeviceCode: "amp-c", DeviceSourceKey: "amp-c", PointCode: "chw_entering_temperature", WireSourceKey: "chw_entering_temperature", PointType: "TELEMETRY", Unit: "Cel", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerCID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCHWEnteringTemp},
+		planttwin.PointBinding{PointID: "pt-cl-c", DeviceID: testMeterCID, DeviceCode: "amp-c", DeviceSourceKey: "amp-c", PointCode: "chw_leaving_temperature", WireSourceKey: "chw_leaving_temperature", PointType: "TELEMETRY", Unit: "Cel", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerCID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCHWLeavingTemp},
+		planttwin.PointBinding{PointID: "pt-rs-c", DeviceID: testMeterCID, DeviceCode: "amp-c", DeviceSourceKey: "amp-c", PointCode: "run_state", WireSourceKey: "chiller.run_state", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: testChillerCID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleRunState},
+	)
+	loader, err := planttwin.NewStaticLoader(twin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedTwin, err := loader.LoadSiteTwin(t.Context(), planttwin.SiteScope{TenantID: testPlantTenantID, SiteID: testPlantSiteID}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var seenQueries []string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		body, err := io.ReadAll(request.Body)
@@ -1903,11 +1997,11 @@ func TestClickHouseInputReaderReadsLoadHistoryAndChwEntering(t *testing.T) {
 		writer.Header().Set("Content-Type", "application/x-ndjson")
 		if strings.Contains(sql, "row_number() OVER") {
 			rows := []string{
-				`{"deviceId":"01a14000-4000-7000-8000-000000000009","sourceId":"btu-calc","telemetryKey":"instant_cooling_capacity","valueNumber":380,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:30.000Z"}`,
-				`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"power_total","valueNumber":2.0,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
-				`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"chw_entering_temperature","valueNumber":9.2,"valueString":null,"unit":"Cel","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
-				`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"chw_leaving_temperature","valueNumber":7.1,"valueString":null,"unit":"Cel","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
-				`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"chiller.run_state","valueNumber":null,"valueString":"STOPPED","unit":"","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+				`{"deviceId":"` + testBTUDevID + `","sourceId":"plant-btu","telemetryKey":"chw_load","valueNumber":380,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:30.000Z"}`,
+				`{"deviceId":"` + testMeterCID + `","sourceId":"amp-c","telemetryKey":"p_kw","valueNumber":2.0,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+				`{"deviceId":"` + testMeterCID + `","sourceId":"amp-c","telemetryKey":"chw_entering_temperature","valueNumber":9.2,"valueString":null,"unit":"Cel","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+				`{"deviceId":"` + testMeterCID + `","sourceId":"amp-c","telemetryKey":"chw_leaving_temperature","valueNumber":7.1,"valueString":null,"unit":"Cel","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+				`{"deviceId":"` + testMeterCID + `","sourceId":"amp-c","telemetryKey":"chiller.run_state","valueNumber":null,"valueString":"STOPPED","unit":"","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
 			}
 			if _, err := writer.Write([]byte(strings.Join(rows, "\n") + "\n")); err != nil {
 				t.Error(err)
@@ -1915,10 +2009,10 @@ func TestClickHouseInputReaderReadsLoadHistoryAndChwEntering(t *testing.T) {
 			return
 		}
 		rows := []string{
-			`{"deviceId":"01a14000-4000-7000-8000-000000000009","sourceId":"btu-calc","telemetryKey":"instant_cooling_capacity","valueNumber":410,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:42:00.000Z"}`,
-			`{"deviceId":"01a14000-4000-7000-8000-000000000009","sourceId":"btu-calc","telemetryKey":"instant_cooling_capacity","valueNumber":380,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:30.000Z"}`,
-			`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"chiller.run_state","valueNumber":null,"valueString":"STOPPED","unit":"","quality":"GOOD","sampledAt":"2026-11-14T14:40:00.000Z"}`,
-			`{"deviceId":"01a14000-4000-7000-8000-000000000003","sourceId":"ammeter-unit1","telemetryKey":"chiller.run_state","valueNumber":null,"valueString":"STOPPED","unit":"","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
+			`{"deviceId":"` + testBTUDevID + `","sourceId":"plant-btu","telemetryKey":"chw_load","valueNumber":410,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:42:00.000Z"}`,
+			`{"deviceId":"` + testBTUDevID + `","sourceId":"plant-btu","telemetryKey":"chw_load","valueNumber":380,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":"2026-11-14T14:59:30.000Z"}`,
+			`{"deviceId":"` + testMeterCID + `","sourceId":"amp-c","telemetryKey":"chiller.run_state","valueNumber":null,"valueString":"STOPPED","unit":"","quality":"GOOD","sampledAt":"2026-11-14T14:40:00.000Z"}`,
+			`{"deviceId":"` + testMeterCID + `","sourceId":"amp-c","telemetryKey":"chiller.run_state","valueNumber":null,"valueString":"STOPPED","unit":"","quality":"GOOD","sampledAt":"2026-11-14T14:59:00.000Z"}`,
 		}
 		if _, err := writer.Write([]byte(strings.Join(rows, "\n") + "\n")); err != nil {
 			t.Error(err)
@@ -1931,16 +2025,17 @@ func TestClickHouseInputReaderReadsLoadHistoryAndChwEntering(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot, err := reader.ReadStagingSnapshot(t.Context(), StagingSnapshotQuery{
-		TenantID: "01990000-3000-7000-8000-000000000001",
-		SiteID:   "01a14000-5000-7000-8000-000000000001",
+		TenantID: testPlantTenantID,
+		SiteID:   testPlantSiteID,
 		At:       at,
 		Policy:   DefaultStagingPolicy(),
+		Twin:     &loadedTwin,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(seenQueries) != 2 || !strings.Contains(seenQueries[0], "chw_entering_temperature") ||
-		!strings.Contains(seenQueries[1], "instant_cooling_capacity") || !strings.Contains(seenQueries[1], "2026-11-14T14:40:00.000Z") {
+		!strings.Contains(seenQueries[1], "chw_load") || !strings.Contains(seenQueries[1], "2026-11-14T14:40:00.000Z") {
 		t.Fatalf("unexpected staging queries: %+v", seenQueries)
 	}
 	if len(snapshot.PlantLoadHistory) != 2 || snapshot.PlantLoadHistory[0].Value != 410 {
@@ -1955,5 +2050,260 @@ func TestClickHouseInputReaderReadsLoadHistoryAndChwEntering(t *testing.T) {
 	}
 	if chillerC == nil || chillerC.ChwEnteringC == nil || chillerC.ChwEnteringC.Value != 9.2 {
 		t.Fatalf("expected chiller-c ChwEnteringC=9.2, got %+v", chillerC)
+	}
+}
+
+func TestSplitSensorNonSongyaxuanPlantEndToEndWithStaticLoader(t *testing.T) {
+	tenantID := "22222222-1000-7000-8000-000000000001"
+	siteID := "22222222-2000-7000-8000-000000000001"
+
+	chNorthID := "22222222-3000-7000-8000-000000000001"
+	chSouthID := "22222222-3000-7000-8000-000000000002"
+	pumpNorthID := "22222222-3000-7000-8000-000000000011"
+	pumpSouthID := "22222222-3000-7000-8000-000000000012"
+	chwLoopID := "22222222-3000-7000-8000-000000000020"
+
+	ampNorthID := "22222222-4000-7000-8000-000000000001"
+	ampSouthID := "22222222-4000-7000-8000-000000000002"
+	tempHubID := "22222222-4000-7000-8000-000000000003"
+	plcID := "22222222-4000-7000-8000-000000000004"
+	btuLoopID := "22222222-4000-7000-8000-000000000005"
+
+	ratedCap := 600.0
+	ratedChillerKW := 130.0
+	ratedPumpKW := 22.0
+
+	baseTwin := planttwin.SiteTwin{
+		Scope:           planttwin.SiteScope{TenantID: tenantID, SiteID: siteID},
+		Timezone:        "Asia/Shanghai",
+		SiteControlMode: planttwin.ControlModeRemoteAuto,
+		Units: []planttwin.PlantUnit{
+			{AssetID: chNorthID, AssetCode: "ch-north", AssetName: "北冷机", AssetType: planttwin.AssetTypeChiller, RatedCapacityKW: &ratedCap, RatedPowerKW: &ratedChillerKW, LockMode: planttwin.LockModeUnlocked},
+			{AssetID: chSouthID, AssetCode: "ch-south", AssetName: "南冷机", AssetType: planttwin.AssetTypeChiller, RatedCapacityKW: &ratedCap, RatedPowerKW: &ratedChillerKW, LockMode: planttwin.LockModeUnlocked},
+			{AssetID: pumpNorthID, AssetCode: "pump-north", AssetName: "北冷冻泵", AssetType: planttwin.AssetTypeChilledWaterPump, RatedPowerKW: &ratedPumpKW, LockMode: planttwin.LockModeUnlocked},
+			{AssetID: pumpSouthID, AssetCode: "pump-south", AssetName: "南冷冻泵", AssetType: planttwin.AssetTypeChilledWaterPump, RatedPowerKW: &ratedPumpKW, LockMode: planttwin.LockModeUnlocked},
+			{AssetID: chwLoopID, AssetCode: "loop-main", AssetName: "主冷冻水环路", AssetType: planttwin.AssetTypeChilledWaterLoop, LockMode: planttwin.LockModeUnlocked},
+		},
+		Devices: []planttwin.TwinDevice{
+			{DeviceID: ampNorthID, DeviceCode: "am-north", DeviceType: "POWER_METER", SourceKey: "am-north"},
+			{DeviceID: ampSouthID, DeviceCode: "am-south", DeviceType: "POWER_METER", SourceKey: "am-south"},
+			{DeviceID: tempHubID, DeviceCode: "temp-concentrator", DeviceType: "TEMP_HUB", SourceKey: "temp-hub"},
+			{DeviceID: plcID, DeviceCode: "plant-plc", DeviceType: "CONTROLLER", SourceKey: "plant-plc"},
+			{DeviceID: btuLoopID, DeviceCode: "loop-btu", DeviceType: "BTU_METER", SourceKey: "loop-btu"},
+		},
+		DeviceBindings: []planttwin.DeviceBinding{
+			{AssetID: chNorthID, DeviceID: ampNorthID, BindingRole: "METER"},
+			{AssetID: chSouthID, DeviceID: ampSouthID, BindingRole: "METER"},
+			{AssetID: chNorthID, DeviceID: tempHubID, BindingRole: "SENSOR"},
+			{AssetID: chSouthID, DeviceID: tempHubID, BindingRole: "SENSOR"},
+			{AssetID: chNorthID, DeviceID: plcID, BindingRole: "CONTROLLER"},
+			{AssetID: chSouthID, DeviceID: plcID, BindingRole: "CONTROLLER"},
+			{AssetID: pumpNorthID, DeviceID: plcID, BindingRole: "CONTROLLER"},
+			{AssetID: pumpSouthID, DeviceID: plcID, BindingRole: "CONTROLLER"},
+			{AssetID: chwLoopID, DeviceID: btuLoopID, BindingRole: "METER"},
+		},
+		PointBindings: []planttwin.PointBinding{
+			{PointID: "pt-an", DeviceID: ampNorthID, DeviceCode: "am-north", DeviceSourceKey: "am-north", PointCode: "p_kw", WireSourceKey: "p_kw", PointType: "TELEMETRY", Unit: "kW", SubjectType: planttwin.SubjectTypeAsset, AssetID: chNorthID, BindingRole: planttwin.BindingMeters, SemanticRole: planttwin.RoleActivePower},
+			{PointID: "pt-as", DeviceID: ampSouthID, DeviceCode: "am-south", DeviceSourceKey: "am-south", PointCode: "p_kw", WireSourceKey: "p_kw", PointType: "TELEMETRY", Unit: "kW", SubjectType: planttwin.SubjectTypeAsset, AssetID: chSouthID, BindingRole: planttwin.BindingMeters, SemanticRole: planttwin.RoleActivePower},
+			// Split temperature probes sharing ONE concentrator device (temp-concentrator).
+			{PointID: "pt-t1", DeviceID: tempHubID, DeviceCode: "temp-concentrator", DeviceSourceKey: "temp-hub", PointCode: "probe_t1", WireSourceKey: "probe_t1", PointType: "TELEMETRY", Unit: "Cel", SubjectType: planttwin.SubjectTypeAsset, AssetID: chNorthID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCHWLeavingTemp},
+			{PointID: "pt-t2", DeviceID: tempHubID, DeviceCode: "temp-concentrator", DeviceSourceKey: "temp-hub", PointCode: "probe_t2", WireSourceKey: "probe_t2", PointType: "TELEMETRY", Unit: "Cel", SubjectType: planttwin.SubjectTypeAsset, AssetID: chNorthID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCHWEnteringTemp},
+			{PointID: "pt-t3", DeviceID: tempHubID, DeviceCode: "temp-concentrator", DeviceSourceKey: "temp-hub", PointCode: "probe_t3", WireSourceKey: "probe_t3", PointType: "TELEMETRY", Unit: "Cel", SubjectType: planttwin.SubjectTypeAsset, AssetID: chNorthID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCWLeavingTemp},
+			{PointID: "pt-t4", DeviceID: tempHubID, DeviceCode: "temp-concentrator", DeviceSourceKey: "temp-hub", PointCode: "probe_t4", WireSourceKey: "probe_t4", PointType: "TELEMETRY", Unit: "Cel", SubjectType: planttwin.SubjectTypeAsset, AssetID: chSouthID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCHWLeavingTemp},
+			{PointID: "pt-t5", DeviceID: tempHubID, DeviceCode: "temp-concentrator", DeviceSourceKey: "temp-hub", PointCode: "probe_t5", WireSourceKey: "probe_t5", PointType: "TELEMETRY", Unit: "Cel", SubjectType: planttwin.SubjectTypeAsset, AssetID: chSouthID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCHWEnteringTemp},
+			{PointID: "pt-t6", DeviceID: tempHubID, DeviceCode: "temp-concentrator", DeviceSourceKey: "temp-hub", PointCode: "probe_t6", WireSourceKey: "probe_t6", PointType: "TELEMETRY", Unit: "Cel", SubjectType: planttwin.SubjectTypeAsset, AssetID: chSouthID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCWLeavingTemp},
+			// Split PLC run states and control points.
+			{PointID: "pt-rn", DeviceID: plcID, DeviceCode: "plant-plc", DeviceSourceKey: "plant-plc", PointCode: "north_run", WireSourceKey: "north_run", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: chNorthID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleRunState},
+			{PointID: "pt-rs", DeviceID: plcID, DeviceCode: "plant-plc", DeviceSourceKey: "plant-plc", PointCode: "south_run", WireSourceKey: "south_run", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: chSouthID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleRunState},
+			{PointID: "pt-pn", DeviceID: plcID, DeviceCode: "plant-plc", DeviceSourceKey: "plant-plc", PointCode: "pump_n_run", WireSourceKey: "pump_n_run", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: pumpNorthID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleRunState},
+			{PointID: "pt-ps", DeviceID: plcID, DeviceCode: "plant-plc", DeviceSourceKey: "plant-plc", PointCode: "pump_s_run", WireSourceKey: "pump_s_run", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: pumpSouthID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleRunState},
+			{PointID: "cmd-ch-s", DeviceID: plcID, DeviceCode: "plant-plc", DeviceSourceKey: "plant-plc", PointCode: "stop_south", PointType: planttwin.PointTypeCommand, Writable: true, SubjectType: planttwin.SubjectTypeAsset, AssetID: chSouthID, BindingRole: planttwin.BindingControls, SourceMetadata: []byte(`{"capability":"STOP_UNIT_SEQUENCE"}`)},
+			{PointID: "cmd-p-s", DeviceID: plcID, DeviceCode: "plant-plc", DeviceSourceKey: "plant-plc", PointCode: "stop_pump_s", PointType: planttwin.PointTypeCommand, Writable: true, SubjectType: planttwin.SubjectTypeAsset, AssetID: pumpSouthID, BindingRole: planttwin.BindingControls, SourceMetadata: []byte(`{"capability":"STOP"}`)},
+			// Loop-level cooling load and header supply.
+			{PointID: "pt-load", DeviceID: btuLoopID, DeviceCode: "loop-btu", DeviceSourceKey: "loop-btu", PointCode: "chw_load", WireSourceKey: "chw_load", PointType: "TELEMETRY", Unit: "kW", SubjectType: planttwin.SubjectTypeAsset, AssetID: chwLoopID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCoolingLoad},
+			{PointID: "pt-sup", DeviceID: btuLoopID, DeviceCode: "loop-btu", DeviceSourceKey: "loop-btu", PointCode: "hdr_sup_t", WireSourceKey: "hdr_sup_t", PointType: "TELEMETRY", Unit: "Cel", SubjectType: planttwin.SubjectTypeAsset, AssetID: chwLoopID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleSupplyWaterTemp},
+		},
+		HydraulicEdges: []planttwin.HydraulicEdge{
+			{FromAssetID: pumpNorthID, ToAssetID: chNorthID, RelationshipRole: planttwin.RelationshipServes},
+			{FromAssetID: pumpSouthID, ToAssetID: chSouthID, RelationshipRole: planttwin.RelationshipServes},
+			{FromAssetID: chNorthID, ToAssetID: chwLoopID, RelationshipRole: planttwin.RelationshipServes},
+			{FromAssetID: chSouthID, ToAssetID: chwLoopID, RelationshipRole: planttwin.RelationshipServes},
+		},
+		Schedule: planttwin.OperatingSchedule{
+			Timezone:            "Asia/Shanghai",
+			PreCoolLeadMinutes:  30,
+			CoastDownLagMinutes: 15,
+			Slots: []planttwin.ScheduleSlot{
+				{DayOfWeek: 1, StartMinute: 8 * 60, EndMinute: 18 * 60},
+			},
+			Exceptions: []planttwin.ScheduleException{
+				{
+					ID: "exc-ot-sun", Title: "周日加班供冷", Kind: planttwin.ExceptionOvertimeCooling,
+					StartDate: "2026-11-15", EndDate: "2026-11-15",
+					ReplacementSlots: []planttwin.ScheduleSlot{{StartMinute: 9 * 60, EndMinute: 17 * 60}},
+				},
+				{
+					ID: "exc-maint-tue", Title: "周二水系统检修", Kind: planttwin.ExceptionMaintenanceWindow,
+					StartDate: "2026-11-17", EndDate: "2026-11-17", Reason: "阀门保养",
+				},
+			},
+		},
+	}
+
+	// Monday 2026-11-16 14:00+08:00 (06:00Z) inside regular schedule; Sunday 2026-11-15 10:00+08:00 inside overtime slot.
+	evalAt := shanghaiTime(2026, 11, 16, 14, 0).UTC()
+	histStart := evalAt.Truncate(copBucketMinutes*time.Minute).AddDate(0, 0, -copHistoryDays)
+
+	var historyLines []string
+	for step := 0; step < 14*96; step++ {
+		when := histStart.Add(time.Duration(step) * copBucketMinutes * time.Minute)
+		bStr := when.Format(time.RFC3339)
+		plr := 0.25 + 0.65*float64(step%17)/16.0
+		supC := 6.0 + 2.0*float64((step/17)%5)/4.0
+		cwC := 28.0 + 4.0*float64((step/5)%4)/3.0
+		loadEach := ratedCap * plr
+		entC := supC + 3.5*plr + 0.8
+
+		copNorth := 3.4 + 4.2*plr - 2.8*plr*plr + 0.08*(supC-7.0) - 0.03*(cwC-30.0)
+		copSouth := 0.80 * copNorth
+		pNorth := loadEach / copNorth
+		pSouth := loadEach / copSouth
+
+		addRow := func(devID, key string, val float64) {
+			historyLines = append(historyLines, fmt.Sprintf(`{"bucket":%q,"deviceId":%q,"telemetryKey":%q,"meanValue":%.6f}`, bStr, devID, key, val))
+		}
+		addRow(ampNorthID, "p_kw", pNorth)
+		addRow(tempHubID, "probe_t1", supC)
+		addRow(tempHubID, "probe_t2", entC)
+		addRow(tempHubID, "probe_t3", cwC)
+		addRow(ampSouthID, "p_kw", pSouth)
+		addRow(tempHubID, "probe_t4", supC+0.1)
+		addRow(tempHubID, "probe_t5", entC)
+		addRow(tempHubID, "probe_t6", cwC+0.2)
+		addRow(btuLoopID, "chw_load", 2*loadEach)
+	}
+
+	liveScenarioRunningBoth := false
+	activeAt := evalAt
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		sql := string(body)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		if strings.Contains(sql, "toStartOfFifteenMinutes") {
+			if !strings.Contains(sql, tempHubID) || !strings.Contains(sql, "'probe_t1'") || !strings.Contains(sql, "'chw_load'") {
+				t.Errorf("COP history SQL must filter split devices and semantic role keys: %s", sql)
+			}
+			_, _ = w.Write([]byte(strings.Join(historyLines, "\n") + "\n"))
+			return
+		}
+		if strings.Contains(sql, "row_number() OVER") {
+			pSouthVal := 1.0
+			southRun := RunStateStopped
+			if liveScenarioRunningBoth {
+				pSouthVal = 76.0
+				southRun = RunStateRunning
+			}
+			tsStr := activeAt.Add(-20 * time.Second).Format(time.RFC3339Nano)
+			latest := []string{
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"loop-btu","telemetryKey":"chw_load","valueNumber":350,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":%q}`, btuLoopID, tsStr),
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"loop-btu","telemetryKey":"hdr_sup_t","valueNumber":7.0,"valueString":null,"unit":"Cel","quality":"GOOD","sampledAt":%q}`, btuLoopID, tsStr),
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"am-north","telemetryKey":"p_kw","valueNumber":55.0,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":%q}`, ampNorthID, tsStr),
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"am-south","telemetryKey":"p_kw","valueNumber":%.1f,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":%q}`, ampSouthID, pSouthVal, tsStr),
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"temp-hub","telemetryKey":"probe_t1","valueNumber":7.0,"valueString":null,"unit":"Cel","quality":"GOOD","sampledAt":%q}`, tempHubID, tsStr),
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"temp-hub","telemetryKey":"probe_t4","valueNumber":7.1,"valueString":null,"unit":"Cel","quality":"GOOD","sampledAt":%q}`, tempHubID, tsStr),
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"temp-hub","telemetryKey":"probe_t3","valueNumber":30.0,"valueString":null,"unit":"Cel","quality":"GOOD","sampledAt":%q}`, tempHubID, tsStr),
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"temp-hub","telemetryKey":"probe_t6","valueNumber":30.2,"valueString":null,"unit":"Cel","quality":"GOOD","sampledAt":%q}`, tempHubID, tsStr),
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"plant-plc","telemetryKey":"north_run","valueNumber":null,"valueString":"RUNNING","unit":"","quality":"GOOD","sampledAt":%q}`, plcID, tsStr),
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"plant-plc","telemetryKey":"south_run","valueNumber":null,"valueString":%q,"unit":"","quality":"GOOD","sampledAt":%q}`, plcID, southRun, tsStr),
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"plant-plc","telemetryKey":"pump_n_run","valueNumber":null,"valueString":"RUNNING","unit":"","quality":"GOOD","sampledAt":%q}`, plcID, tsStr),
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"plant-plc","telemetryKey":"pump_s_run","valueNumber":null,"valueString":"RUNNING","unit":"","quality":"GOOD","sampledAt":%q}`, plcID, tsStr),
+			}
+			_, _ = w.Write([]byte(strings.Join(latest, "\n") + "\n"))
+			return
+		}
+		var hist []string
+		for _, mins := range []int{40, 30, 25, 18, 10, 2} {
+			ts := activeAt.Add(-time.Duration(mins) * time.Minute).Format(time.RFC3339Nano)
+			hist = append(hist,
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"loop-btu","telemetryKey":"chw_load","valueNumber":350,"valueString":null,"unit":"kW","quality":"GOOD","sampledAt":%q}`, btuLoopID, ts),
+				fmt.Sprintf(`{"deviceId":%q,"sourceId":"plant-plc","telemetryKey":"north_run","valueNumber":null,"valueString":"RUNNING","unit":"","quality":"GOOD","sampledAt":%q}`, plcID, ts),
+			)
+			southState := RunStateStopped
+			if liveScenarioRunningBoth {
+				southState = RunStateRunning
+			}
+			hist = append(hist, fmt.Sprintf(`{"deviceId":%q,"sourceId":"plant-plc","telemetryKey":"south_run","valueNumber":null,"valueString":%q,"unit":"","quality":"GOOD","sampledAt":%q}`, plcID, southState, ts))
+		}
+		_, _ = w.Write([]byte(strings.Join(hist, "\n") + "\n"))
+	}))
+	defer server.Close()
+
+	reader, err := NewClickHouseInputReader(InputReaderConfig{BaseURL: server.URL, Energy: &energySeriesStub{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loader, err := planttwin.NewStaticLoader(baseTwin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluator := &StagingEvaluator{
+		History:    reader,
+		Snapshot:   reader,
+		TwinLoader: loader,
+		Policy:     DefaultStagingPolicy(),
+	}
+
+	// Case 1: ch-south stopped for 25m -> pump-south idle stop recommended, pump-north NOT stopped (ch-north running).
+	evalAux, err := evaluator.Evaluate(t.Context(), tenantID, siteID, evalAt)
+	if err != nil {
+		t.Fatalf("Evaluate split-sensor aux stop failed: %v", err)
+	}
+	if len(evalAux.Recommendations) != 1 ||
+		evalAux.Recommendations[0].Kind != RecommendationKindIdleAuxiliaryStop ||
+		evalAux.Recommendations[0].TargetAssetID != pumpSouthID ||
+		evalAux.Recommendations[0].SuggestedCommandPointID != "cmd-p-s" {
+		t.Fatalf("expected IDLE_AUXILIARY_STOP for pump-south with cmd-p-s, got recs=%+v diags=%+v", evalAux.Recommendations, evalAux.Diagnostics)
+	}
+
+	// Case 2: both chillers running with COP gap -> stage-down targets ch-south cleanly via AssetID-grouped fit.
+	liveScenarioRunningBoth = true
+	evalStage, err := evaluator.Evaluate(t.Context(), tenantID, siteID, evalAt)
+	if err != nil {
+		t.Fatalf("Evaluate split-sensor stage-down failed: %v", err)
+	}
+	if len(evalStage.Recommendations) != 1 ||
+		evalStage.Recommendations[0].Kind != RecommendationKindChillerStageDown ||
+		evalStage.Recommendations[0].TargetAssetID != chSouthID ||
+		evalStage.Recommendations[0].SuggestedCommandPointID != "cmd-ch-s" {
+		t.Fatalf("expected CHILLER_STAGE_DOWN for ch-south with cmd-ch-s, got recs=%+v diags=%+v", evalStage.Recommendations, evalStage.Diagnostics)
+	}
+
+	// Case 3: COPModelSolver fits split-sensor COP model & runs staging shadow evaluation.
+	req := copRequest()
+	req.TenantID, req.SiteID, req.SubjectID = tenantID, siteID, siteID
+	shadow := (COPModelSolver{History: reader, Staging: reader, TwinLoader: loader}).Evaluate(t.Context(), req, evalAt)
+	if shadow.Outcome != ShadowFeasible || shadow.Fit == nil || len(shadow.Fit.usable()) != 2 {
+		t.Fatalf("expected FEASIBLE shadow COP fit for 2 split-sensor chillers, got outcome=%s reason=%s fit=%+v", shadow.Outcome, shadow.Reason, shadow.Fit)
+	}
+	if shadow.Staging == nil || len(shadow.Staging.Recommendations) != 1 || shadow.Staging.Recommendations[0].TargetAssetID != chSouthID {
+		t.Fatalf("expected shadow staging recommendation for ch-south, got %+v", shadow.Staging)
+	}
+
+	// Case 4: Schedule evaluation via SiteTwin during Sunday OVERTIME_COOLING and Tuesday MAINTENANCE_WINDOW.
+	activeAt = shanghaiTime(2026, 11, 15, 10, 0).UTC()
+	evalOvertime, err := evaluator.Evaluate(t.Context(), tenantID, siteID, activeAt)
+	if err != nil {
+		t.Fatalf("Evaluate overtime failed: %v", err)
+	}
+	if len(evalOvertime.Recommendations) != 1 || evalOvertime.Recommendations[0].Kind != RecommendationKindChillerStageDown {
+		t.Fatalf("expected normal stage-down inside OVERTIME_COOLING, got %+v", evalOvertime)
+	}
+	activeAt = shanghaiTime(2026, 11, 17, 10, 0).UTC()
+	evalMaint, err := evaluator.Evaluate(t.Context(), tenantID, siteID, activeAt)
+	if err != nil {
+		t.Fatalf("Evaluate maintenance window failed: %v", err)
+	}
+	if len(evalMaint.Recommendations) != 0 || !hasDiagnostic(evalMaint.Diagnostics, RecommendationKindChillerStageDown, "SUPPRESSED", "MAINTENANCE_WINDOW_ACTIVE") {
+		t.Fatalf("expected MAINTENANCE_WINDOW suppression, got recs=%+v diags=%+v", evalMaint.Recommendations, evalMaint.Diagnostics)
 	}
 }

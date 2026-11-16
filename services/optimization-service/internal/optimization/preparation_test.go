@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
 type preparationStoreStub struct {
@@ -396,7 +398,7 @@ func TestOptimizationPreparationStalenessMultiZoneAndHealthGates(t *testing.T) {
 	})
 }
 
-func TestOperatingScheduleWindowBlockMessage(t *testing.T) {
+func TestPreparationScheduleBlockMessage(t *testing.T) {
 	shanghai := func(year int, month time.Month, day, hour, minute int) time.Time {
 		loc, err := time.LoadLocation("Asia/Shanghai")
 		if err != nil {
@@ -405,23 +407,23 @@ func TestOperatingScheduleWindowBlockMessage(t *testing.T) {
 		return time.Date(year, month, day, hour, minute, 0, 0, loc)
 	}
 
-	if _, blocked := operatingScheduleWindowBlockMessage(nil, shanghai(2026, 11, 16, 22, 0)); blocked {
-		t.Fatal("nil schedule should not block")
+	unconfigured := planttwin.SiteTwin{
+		Timezone: "Asia/Shanghai",
+		Schedule: planttwin.OperatingSchedule{Timezone: "Asia/Shanghai"},
 	}
-	if _, blocked := operatingScheduleWindowBlockMessage(&OperatingScheduleContext{SiteTimezone: "Asia/Shanghai", Configured: false}, shanghai(2026, 11, 16, 22, 0)); blocked {
-		t.Fatal("unconfigured schedule should not block")
-	}
-	if _, blocked := operatingScheduleWindowBlockMessage(&OperatingScheduleContext{SiteTimezone: "Asia/Shanghai", Configured: true}, shanghai(2026, 11, 16, 22, 0)); blocked {
-		t.Fatal("configured schedule with zero slots should not block 24x7")
+	if _, blocked, suppressed := preparationScheduleBlockMessage(unconfigured, shanghai(2026, 11, 16, 22, 0)); blocked || suppressed {
+		t.Fatalf("empty schedule slots should not block 24x7 (blocked=%v suppressed=%v)", blocked, suppressed)
 	}
 
-	schedule := &OperatingScheduleContext{
-		SiteTimezone:        "Asia/Shanghai",
-		Configured:          true,
-		PreCoolLeadMinutes:  30,
-		CoastDownLagMinutes: 20,
-		Slots: []OperatingScheduleSlotWindow{
-			{DayOfWeek: 1, StartMinute: 8*60 + 30, EndMinute: 18 * 60},
+	scheduleTwin := planttwin.SiteTwin{
+		Timezone: "Asia/Shanghai",
+		Schedule: planttwin.OperatingSchedule{
+			Timezone:            "Asia/Shanghai",
+			PreCoolLeadMinutes:  30,
+			CoastDownLagMinutes: 20,
+			Slots: []planttwin.ScheduleSlot{
+				{DayOfWeek: 1, StartMinute: 8*60 + 30, EndMinute: 18 * 60},
+			},
 		},
 	}
 
@@ -441,47 +443,91 @@ func TestOperatingScheduleWindowBlockMessage(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, blocked := operatingScheduleWindowBlockMessage(schedule, tc.at)
-			if blocked != tc.wantBlocked {
-				t.Fatalf("at=%s blocked=%v, want %v", tc.at, blocked, tc.wantBlocked)
+			_, blocked, suppressed := preparationScheduleBlockMessage(scheduleTwin, tc.at)
+			if blocked != tc.wantBlocked || suppressed {
+				t.Fatalf("at=%s blocked=%v suppressed=%v, want blocked=%v", tc.at, blocked, suppressed, tc.wantBlocked)
 			}
 		})
 	}
 
-	crossMidnight := &OperatingScheduleContext{
-		SiteTimezone:       "Asia/Shanghai",
-		Configured:         true,
-		PreCoolLeadMinutes: 30,
-		Slots: []OperatingScheduleSlotWindow{
-			{DayOfWeek: 6, StartMinute: 22 * 60, EndMinute: 24 * 60},
-			{DayOfWeek: 7, StartMinute: 0, EndMinute: 2 * 60},
+	crossMidnight := planttwin.SiteTwin{
+		Timezone: "Asia/Shanghai",
+		Schedule: planttwin.OperatingSchedule{
+			Timezone:           "Asia/Shanghai",
+			PreCoolLeadMinutes: 30,
+			Slots: []planttwin.ScheduleSlot{
+				{DayOfWeek: 6, StartMinute: 22 * 60, EndMinute: 24 * 60},
+				{DayOfWeek: 7, StartMinute: 0, EndMinute: 2 * 60},
+			},
 		},
 	}
-	if _, blocked := operatingScheduleWindowBlockMessage(crossMidnight, shanghai(2026, 11, 14, 23, 45)); blocked {
+	if _, blocked, _ := preparationScheduleBlockMessage(crossMidnight, shanghai(2026, 11, 14, 23, 45)); blocked {
 		t.Fatal("expected Sat 23:45 cross-midnight slot not to be blocked")
 	}
-	if _, blocked := operatingScheduleWindowBlockMessage(crossMidnight, shanghai(2026, 11, 15, 1, 35)); !blocked {
+	if _, blocked, _ := preparationScheduleBlockMessage(crossMidnight, shanghai(2026, 11, 15, 1, 35)); !blocked {
 		t.Fatal("expected Sun 01:35 within 30m of 02:00 slot end to be blocked")
 	}
 
-	overtime := &OperatingScheduleContext{
-		SiteTimezone:       "Asia/Shanghai",
-		Configured:         true,
-		PreCoolLeadMinutes: 30,
-		Slots: []OperatingScheduleSlotWindow{
-			{DayOfWeek: 1, StartMinute: 8 * 60, EndMinute: 18 * 60},
+	overtime := planttwin.SiteTwin{
+		Timezone: "Asia/Shanghai",
+		Schedule: planttwin.OperatingSchedule{
+			Timezone:           "Asia/Shanghai",
+			PreCoolLeadMinutes: 30,
+			Slots: []planttwin.ScheduleSlot{
+				{DayOfWeek: 1, StartMinute: 8 * 60, EndMinute: 18 * 60},
+			},
+			Exceptions: []planttwin.ScheduleException{{
+				ID: "exc-ot-1", Title: "周末加班", Kind: planttwin.ExceptionOvertimeCooling,
+				StartDate: "2026-11-15", EndDate: "2026-11-15",
+				ReplacementSlots: []planttwin.ScheduleSlot{{StartMinute: 10 * 60, EndMinute: 15 * 60}},
+			}},
 		},
-		ApprovedExceptions: []ApprovedOperatingExceptionWindow{{
-			ID: "exc-ot-1", Title: "周末加班", Kind: "OVERTIME_COOLING",
-			StartDate: "2026-11-15", EndDate: "2026-11-15",
-			ReplacementSlots: []OperatingExceptionReplacementSlot{{StartMinute: 10 * 60, EndMinute: 15 * 60}},
-		}},
 	}
-	if _, blocked := operatingScheduleWindowBlockMessage(overtime, shanghai(2026, 11, 15, 9, 40)); blocked {
+	if _, blocked, _ := preparationScheduleBlockMessage(overtime, shanghai(2026, 11, 15, 9, 40)); blocked {
 		t.Fatal("expected OVERTIME_COOLING pre-cool window at 09:40 to be allowed")
 	}
-	if _, blocked := operatingScheduleWindowBlockMessage(overtime, shanghai(2026, 11, 15, 14, 35)); !blocked {
+	if _, blocked, _ := preparationScheduleBlockMessage(overtime, shanghai(2026, 11, 15, 14, 35)); !blocked {
 		t.Fatal("expected OVERTIME_COOLING within 30m of 15:00 end to be blocked")
+	}
+
+	maintenance := scheduleTwin
+	maintenance.Schedule.Exceptions = []planttwin.ScheduleException{{
+		ID: "exc-maint-1", Title: "检修", Kind: planttwin.ExceptionMaintenanceWindow,
+		StartDate: "2026-11-16", EndDate: "2026-11-16", Reason: "清洗",
+	}}
+	if msg, blocked, suppressed := preparationScheduleBlockMessage(maintenance, shanghai(2026, 11, 16, 10, 0)); !blocked || !suppressed || !strings.Contains(msg, "MAINTENANCE_WINDOW") {
+		t.Fatalf("expected suppressed MAINTENANCE_WINDOW, got blocked=%v suppressed=%v msg=%q", blocked, suppressed, msg)
+	}
+}
+
+func TestResolveInputMappingWithTwin(t *testing.T) {
+	policy := InputMapping{
+		SupplyTemperatureKey: "btu_meter.supply_water_temperature",
+		ZoneTemperatureKey:   "zone.temperature",
+	}
+	emptyTwin := planttwin.SiteTwin{Timezone: "Asia/Shanghai"}
+	if got := resolveInputMappingWithTwin(policy, &emptyTwin); got.SupplyTemperatureKey != policy.SupplyTemperatureKey || got.ZoneTemperatureKey != policy.ZoneTemperatureKey {
+		t.Fatalf("empty twin should preserve policy inputMapping verbatim, got %+v", got)
+	}
+
+	roleTwin := planttwin.SiteTwin{
+		Timezone: "Asia/Shanghai",
+		PointBindings: []planttwin.PointBinding{
+			{PointID: "p-sup", DeviceID: "d-btu", PointCode: "hdr_sup_t", WireSourceKey: "hdr_sup_t", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeSite, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleSupplyWaterTemp},
+			{PointID: "p-z1", DeviceID: "d-z1", PointCode: "room_t_1", WireSourceKey: "room_t_1", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeSpace, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleZoneTemp},
+		},
+	}
+	got := resolveInputMappingWithTwin(policy, &roleTwin)
+	if got.SupplyTemperatureKey != "hdr_sup_t" || len(got.ZoneTemperatureKeys) != 1 || got.ZoneTemperatureKeys[0] != "room_t_1" {
+		t.Fatalf("expected SiteTwin roles to resolve unmapped policy keys, got %+v", got)
+	}
+
+	explicitPolicy := InputMapping{
+		SupplyTemperatureKey: "hdr_sup_t",
+		ZoneTemperatureKey:   "room_t_1",
+	}
+	if kept := resolveInputMappingWithTwin(explicitPolicy, &roleTwin); kept.SupplyTemperatureKey != "hdr_sup_t" || kept.ZoneTemperatureKey != "room_t_1" {
+		t.Fatalf("explicitly matched twin key must remain stable, got %+v", kept)
 	}
 }
 

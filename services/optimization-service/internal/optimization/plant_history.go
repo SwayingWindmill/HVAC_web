@@ -7,20 +7,29 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
 // 14 days of 15-minute buckets for a few dozen devices.
 const maximumPlantHistoryResponseBytes = int64(16 << 20)
 
 // PlantBuckets reads the Site's chiller power, chilled- and condenser-water temperatures and
-// cooling load as per-device 15-minute means, as only what had arrived by the window's end.
+// cooling load as 15-minute means, including only observations arrived by the window's end.
+// When query.Twin is supplied, points are resolved by semantic role across split devices and
+// aggregated per physical AssetID.
 func (reader *ClickHouseInputReader) PlantBuckets(ctx context.Context, query PlantHistoryQuery) ([]PlantBucket, error) {
 	if reader == nil || reader.baseURL == nil || reader.client == nil {
 		return nil, errors.New("optimization input reader is not configured")
 	}
 	if !query.From.Before(query.To) {
 		return nil, errors.New("plant history window is empty")
+	}
+	if query.Twin != nil {
+		return reader.plantBucketsFromTwin(ctx, query)
 	}
 	keys := []string{chillerPowerKey, chilledWaterLeavingKey, chilledWaterEnteringKey, condenserWaterLeavingKey, plantCoolingLoadKey}
 	mean := func(alias, key string) string {
@@ -58,6 +67,240 @@ FORMAT JSONEachRow`,
 		return nil, fmt.Errorf("query plant history: %w", err)
 	}
 	return decodePlantBuckets(bytes.NewReader(payload))
+}
+
+type plantMetricBucketRow struct {
+	Bucket       time.Time
+	DeviceID     string
+	TelemetryKey string
+	MeanValue    float64
+}
+
+func (reader *ClickHouseInputReader) plantBucketsFromTwin(ctx context.Context, query PlantHistoryQuery) ([]PlantBucket, error) {
+	twin := *query.Twin
+	plan := buildTwinCOPQueryPlan(twin)
+	filterSQL := buildDeviceTelemetryFilterSQL(plan.allBindings)
+	if filterSQL == "" {
+		return []PlantBucket{}, nil
+	}
+
+	sql := fmt.Sprintf(`SELECT
+ formatDateTime(toStartOfFifteenMinutes(sampled_at),'%%Y-%%m-%%dT%%H:%%i:%%SZ','UTC') AS bucket,
+ toString(device_id) AS deviceId,
+ telemetry_key AS telemetryKey,
+ avg(value_number) AS meanValue
+FROM telemetry_history.observations
+WHERE tenant_id=toUUID('%s')
+  AND site_id=toUUID('%s')
+  AND %s
+  AND sampled_at >= parseDateTime64BestEffort('%s',3,'UTC')
+  AND sampled_at < parseDateTime64BestEffort('%s',3,'UTC')
+  AND received_at <= parseDateTime64BestEffort('%s',3,'UTC')
+  AND acceptance_status IN ('ACCEPTED','OUT_OF_ORDER')
+  AND quality = 'GOOD'
+  AND value_number IS NOT NULL
+  AND isFinite(value_number)
+  AND device_id IS NOT NULL
+GROUP BY bucket, deviceId, telemetryKey
+ORDER BY bucket, deviceId, telemetryKey
+FORMAT JSONEachRow`,
+		clickHouseString(query.TenantID), clickHouseString(query.SiteID), filterSQL,
+		formatOptimizationTime(query.From), formatOptimizationTime(query.To), formatOptimizationTime(query.To),
+	)
+	payload, err := reader.queryLimited(ctx, sql, maximumPlantHistoryResponseBytes)
+	if err != nil {
+		return nil, fmt.Errorf("query plant history: %w", err)
+	}
+	rows, err := decodePlantMetricBucketRows(bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	return aggregatePlantBucketsFromTwin(plan, rows), nil
+}
+
+type twinChillerCOPBindings struct {
+	unit        planttwin.PlantUnit
+	power       *planttwin.PointBinding
+	chwLeaving  *planttwin.PointBinding
+	chwEntering *planttwin.PointBinding
+	cwLeaving   *planttwin.PointBinding
+}
+
+type twinCOPQueryPlan struct {
+	allBindings  []planttwin.PointBinding
+	chillers     []twinChillerCOPBindings
+	coolingLoads []planttwin.PointBinding
+}
+
+func buildTwinCOPQueryPlan(twin planttwin.SiteTwin) twinCOPQueryPlan {
+	var plan twinCOPQueryPlan
+	seen := map[string]struct{}{}
+	addPoint := func(pb planttwin.PointBinding) {
+		keys := collectPointKeys(pb)
+		if len(keys) == 0 {
+			return
+		}
+		key := strings.ToLower(strings.TrimSpace(pb.PointID))
+		if key == "" {
+			key = strings.ToLower(strings.TrimSpace(pb.DeviceID)) + "\x00" + keys[0]
+		}
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		plan.allBindings = append(plan.allBindings, pb)
+	}
+
+	resolveOpt := func(assetID string, role planttwin.SemanticRole) *planttwin.PointBinding {
+		pb, ok := twin.ResolveAssetPoint(assetID, role)
+		if !ok {
+			return nil
+		}
+		addPoint(pb)
+		copied := pb
+		return &copied
+	}
+
+	for _, chiller := range twin.UnitsByType(planttwin.AssetTypeChiller) {
+		entry := twinChillerCOPBindings{
+			unit:        chiller,
+			power:       resolveOpt(chiller.AssetID, planttwin.RoleActivePower),
+			chwLeaving:  resolveOpt(chiller.AssetID, planttwin.RoleCHWLeavingTemp),
+			chwEntering: resolveOpt(chiller.AssetID, planttwin.RoleCHWEnteringTemp),
+			cwLeaving:   resolveOpt(chiller.AssetID, planttwin.RoleCWLeavingTemp),
+		}
+		if entry.power != nil || entry.chwLeaving != nil || entry.chwEntering != nil || entry.cwLeaving != nil {
+			plan.chillers = append(plan.chillers, entry)
+		}
+	}
+
+	plan.coolingLoads = resolvePrimaryPlantRolePoints(twin, planttwin.RoleCoolingLoad)
+	for _, pb := range plan.coolingLoads {
+		addPoint(pb)
+	}
+	return plan
+}
+
+func aggregatePlantBucketsFromTwin(plan twinCOPQueryPlan, rows []plantMetricBucketRow) []PlantBucket {
+	if len(rows) == 0 {
+		return []PlantBucket{}
+	}
+	byBucket := map[time.Time]map[string]map[string]float64{}
+	var times []time.Time
+	for _, row := range rows {
+		at := row.Bucket.UTC()
+		devMap := byBucket[at]
+		if devMap == nil {
+			devMap = map[string]map[string]float64{}
+			byBucket[at] = devMap
+			times = append(times, at)
+		}
+		devKey := strings.ToLower(strings.TrimSpace(row.DeviceID))
+		if devMap[devKey] == nil {
+			devMap[devKey] = map[string]float64{}
+		}
+		devMap[devKey][row.TelemetryKey] = row.MeanValue
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+
+	lookupMetric := func(devMap map[string]map[string]float64, pb *planttwin.PointBinding) *float64 {
+		if pb == nil {
+			return nil
+		}
+		keys := collectPointKeys(*pb)
+		for _, devRef := range []string{pb.DeviceID, pb.DeviceSourceKey, pb.DeviceCode} {
+			metrics := devMap[strings.ToLower(strings.TrimSpace(devRef))]
+			if metrics == nil {
+				continue
+			}
+			for _, k := range keys {
+				if v, ok := metrics[k]; ok {
+					copied := v
+					return &copied
+				}
+			}
+		}
+		return nil
+	}
+
+	buckets := make([]PlantBucket, 0, len(times)*(len(plan.chillers)+len(plan.coolingLoads)))
+	for _, at := range times {
+		devMap := byBucket[at]
+		var slotBuckets []PlantBucket
+		for _, ch := range plan.chillers {
+			pwr := lookupMetric(devMap, ch.power)
+			chwL := lookupMetric(devMap, ch.chwLeaving)
+			chwE := lookupMetric(devMap, ch.chwEntering)
+			cwL := lookupMetric(devMap, ch.cwLeaving)
+			if pwr == nil && chwL == nil && chwE == nil && cwL == nil {
+				continue
+			}
+			var rated *float64
+			if ch.unit.RatedPowerKW != nil {
+				v := *ch.unit.RatedPowerKW
+				rated = &v
+			}
+			slotBuckets = append(slotBuckets, PlantBucket{
+				Bucket:       at,
+				DeviceID:     ch.unit.AssetID,
+				PowerKW:      pwr,
+				ChwLeavingC:  chwL,
+				ChwEnteringC: chwE,
+				CwLeavingC:   cwL,
+				RatedPowerKW: rated,
+			})
+		}
+		for _, loadPB := range plan.coolingLoads {
+			pb := loadPB
+			if val := lookupMetric(devMap, &pb); val != nil {
+				loadID := "cooling-load:" + firstNonEmptyString(pb.PointID, pb.DeviceID+":"+pb.PointCode)
+				slotBuckets = append(slotBuckets, PlantBucket{
+					Bucket:    at,
+					DeviceID:  loadID,
+					CoolingKW: val,
+				})
+			}
+		}
+		sort.Slice(slotBuckets, func(i, j int) bool {
+			return slotBuckets[i].DeviceID < slotBuckets[j].DeviceID
+		})
+		buckets = append(buckets, slotBuckets...)
+	}
+	return buckets
+}
+
+func decodePlantMetricBucketRows(source io.Reader) ([]plantMetricBucketRow, error) {
+	type rawRow struct {
+		Bucket       string   `json:"bucket"`
+		DeviceID     string   `json:"deviceId"`
+		TelemetryKey string   `json:"telemetryKey"`
+		MeanValue    *float64 `json:"meanValue"`
+	}
+	decoder := json.NewDecoder(source)
+	var rows []plantMetricBucketRow
+	for {
+		var r rawRow
+		err := decoder.Decode(&r)
+		if errors.Is(err, io.EOF) {
+			return rows, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if r.MeanValue == nil {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, r.Bucket)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, plantMetricBucketRow{
+			Bucket:       at.UTC(),
+			DeviceID:     r.DeviceID,
+			TelemetryKey: r.TelemetryKey,
+			MeanValue:    *r.MeanValue,
+		})
+	}
 }
 
 func decodePlantBuckets(source io.Reader) ([]PlantBucket, error) {

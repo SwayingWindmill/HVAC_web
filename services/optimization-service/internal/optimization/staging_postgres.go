@@ -3,48 +3,16 @@ package optimization
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
-type stagingAssetRow struct {
-	ID                     string
-	Code                   string
-	DisplayName            string
-	AssetType              string
-	RatedPowerKW           float64
-	RatedCapacityKW        float64
-	FeederAuxiliaryPowerKW float64
-}
-
-type stagingDeviceRow struct {
-	ID         string
-	Code       string
-	DeviceType string
-	SourceKey  string
-}
-
-type stagingDeviceBindingRow struct {
-	AssetID     string
-	DeviceID    string
-	BindingRole string
-}
-
-type stagingCommandPointRow struct {
-	PointID           string
-	ReportingDeviceID string
-	PointCode         string
-	SourceMetadata    []byte
-	BoundAssetID      string
-}
-
-// StagingTopology reads site control mode, per-asset locks, active assets, bound devices,
-// command points, and interlock-derived hydraulic SERVES pairings from Postgres under RLS.
+// StagingTopology loads a Site's semantic Plant Twin snapshot and projects chillers,
+// auxiliaries, control locks, command routes, operating schedule, and SERVES edges.
 func (store *PostgresStore) StagingTopology(ctx context.Context, tenantID, siteID string, at time.Time) (StagingTopology, error) {
 	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) {
 		return StagingTopology{}, fmt.Errorf("tenantId and siteId must be UUIDs")
@@ -53,373 +21,115 @@ func (store *PostgresStore) StagingTopology(ctx context.Context, tenantID, siteI
 	if evalAt.IsZero() {
 		evalAt = time.Now().UTC()
 	}
-
-	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	twin, err := store.LoadSiteTwin(ctx, planttwin.SiteScope{TenantID: tenantID, SiteID: siteID}, evalAt)
 	if err != nil {
 		return StagingTopology{}, err
 	}
-	defer tx.Rollback(ctx)
-	if err = optimizationScope(ctx, tx, tenantID, siteID); err != nil {
-		return StagingTopology{}, err
+	return stagingTopologyFromTwin(twin), nil
+}
+
+func stagingTopologyFromTwin(twin planttwin.SiteTwin) StagingTopology {
+	if twin.Graph == nil {
+		if normalized, err := planttwin.NewSiteTwin(twin); err == nil {
+			twin = normalized
+		}
+	}
+	twinCopy := twin
+	topology := StagingTopology{
+		SiteControlMode:   strings.TrimSpace(twin.SiteControlMode),
+		SiteControlReason: strings.TrimSpace(twin.SiteControlReason),
+		Chillers:          []ChillerMeterBinding{},
+		Twin:              &twinCopy,
 	}
 
-	var siteControlMode, siteControlReason string
-	if err = tx.QueryRow(ctx, `
-SELECT COALESCE((
-  SELECT mode FROM core_registry.site_control_states
-  WHERE tenant_id=$1::uuid AND site_id=$2::uuid
-), 'REMOTE_AUTO'),
-COALESCE((
-  SELECT reason FROM core_registry.site_control_states
-  WHERE tenant_id=$1::uuid AND site_id=$2::uuid
-), '')`, tenantID, siteID).Scan(&siteControlMode, &siteControlReason); err != nil {
-		return StagingTopology{}, fmt.Errorf("load site control state: %w", err)
+	sched := twin.Schedule
+	if strings.TrimSpace(sched.Timezone) == "" {
+		sched.Timezone = strings.TrimSpace(twin.Timezone)
 	}
+	topology.OperatingSchedule = &sched
 
 	locks := map[string]AssetControlLockInfo{}
-	lockRows, err := tx.Query(ctx, `
-SELECT asset_id::text, lock_mode, COALESCE(reason, '')
-FROM core_registry.asset_control_locks
-WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND lock_mode <> 'UNLOCKED'`, tenantID, siteID)
-	if err != nil {
-		return StagingTopology{}, fmt.Errorf("load asset control locks: %w", err)
-	}
-	for lockRows.Next() {
-		var assetID, mode, reason string
-		if scanErr := lockRows.Scan(&assetID, &mode, &reason); scanErr != nil {
-			lockRows.Close()
-			return StagingTopology{}, scanErr
-		}
-		locks[strings.ToLower(strings.TrimSpace(assetID))] = AssetControlLockInfo{LockMode: mode, Reason: reason}
-	}
-	if err = lockRows.Err(); err != nil {
-		lockRows.Close()
-		return StagingTopology{}, err
-	}
-	lockRows.Close()
-
-	assetRows, err := tx.Query(ctx, `
-SELECT id::text, code, display_name, asset_type, COALESCE(rated_power, 0), COALESCE(rated_capacity, 0),
-CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(nameplate->'unconfirmed', '[]'::jsonb)) u(f) WHERE u.f = 'feederAuxiliaryPowerKw')
-  THEN 0 ELSE COALESCE((nameplate->>'feederAuxiliaryPowerKw')::double precision, 0) END
-FROM core_registry.assets
-WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status='ACTIVE'
-  AND asset_type IN ('CHILLER', 'CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP', 'COOLING_TOWER')
-ORDER BY code, id`, tenantID, siteID)
-	if err != nil {
-		return StagingTopology{}, fmt.Errorf("load staging assets: %w", err)
-	}
-	var assets []stagingAssetRow
-	for assetRows.Next() {
-		var row stagingAssetRow
-		if scanErr := assetRows.Scan(&row.ID, &row.Code, &row.DisplayName, &row.AssetType, &row.RatedPowerKW, &row.RatedCapacityKW, &row.FeederAuxiliaryPowerKW); scanErr != nil {
-			assetRows.Close()
-			return StagingTopology{}, scanErr
-		}
-		assets = append(assets, row)
-	}
-	if err = assetRows.Err(); err != nil {
-		assetRows.Close()
-		return StagingTopology{}, err
-	}
-	assetRows.Close()
-
-	deviceRows, err := tx.Query(ctx, `
-SELECT d.id::text, d.code, d.device_type, COALESCE(sk.source_key, '')
-FROM core_registry.devices d
-LEFT JOIN core_registry.gateway_device_source_keys sk
-  ON sk.tenant_id=d.tenant_id AND sk.site_id=d.site_id AND sk.device_id=d.id AND sk.status='ACTIVE'
-WHERE d.tenant_id=$1::uuid AND d.site_id=$2::uuid AND d.status='ACTIVE'
-ORDER BY d.code, d.id`, tenantID, siteID)
-	if err != nil {
-		return StagingTopology{}, fmt.Errorf("load staging devices: %w", err)
-	}
-	var devices []stagingDeviceRow
-	for deviceRows.Next() {
-		var row stagingDeviceRow
-		if scanErr := deviceRows.Scan(&row.ID, &row.Code, &row.DeviceType, &row.SourceKey); scanErr != nil {
-			deviceRows.Close()
-			return StagingTopology{}, scanErr
-		}
-		devices = append(devices, row)
-	}
-	if err = deviceRows.Err(); err != nil {
-		deviceRows.Close()
-		return StagingTopology{}, err
-	}
-	deviceRows.Close()
-
-	bindingRows, err := tx.Query(ctx, `
-SELECT asset_id::text, device_id::text, binding_role
-FROM core_registry.device_bindings
-WHERE tenant_id=$1::uuid AND site_id=$2::uuid
-  AND status='ACTIVE'
-  AND valid_from <= $3
-  AND (valid_to IS NULL OR valid_to > $3)
-ORDER BY asset_id, binding_role, device_id`, tenantID, siteID, evalAt)
-	if err != nil {
-		return StagingTopology{}, fmt.Errorf("load staging device bindings: %w", err)
-	}
-	var bindings []stagingDeviceBindingRow
-	for bindingRows.Next() {
-		var row stagingDeviceBindingRow
-		if scanErr := bindingRows.Scan(&row.AssetID, &row.DeviceID, &row.BindingRole); scanErr != nil {
-			bindingRows.Close()
-			return StagingTopology{}, scanErr
-		}
-		bindings = append(bindings, row)
-	}
-	if err = bindingRows.Err(); err != nil {
-		bindingRows.Close()
-		return StagingTopology{}, err
-	}
-	bindingRows.Close()
-
-	pointRows, err := tx.Query(ctx, `
-SELECT tp.id::text, tp.reporting_device_id::text, tp.point_code, tp.source_metadata,
-       COALESCE(psb.asset_id::text, '')
-FROM core_registry.telemetry_points tp
-LEFT JOIN core_registry.point_subject_bindings psb
-  ON psb.tenant_id=tp.tenant_id AND psb.site_id=tp.site_id
-  AND psb.point_id=tp.id AND psb.binding_role='CONTROLS'
-  AND psb.subject_type='ASSET' AND psb.status='ACTIVE'
-  AND psb.valid_from <= $3 AND (psb.valid_to IS NULL OR psb.valid_to > $3)
-WHERE tp.tenant_id=$1::uuid AND tp.site_id=$2::uuid
-  AND tp.point_type='COMMAND' AND tp.writable=true AND tp.status='ACTIVE'
-ORDER BY tp.reporting_device_id, tp.point_code, tp.id`, tenantID, siteID, evalAt)
-	if err != nil {
-		return StagingTopology{}, fmt.Errorf("load staging command points: %w", err)
-	}
-	var commandPoints []stagingCommandPointRow
-	for pointRows.Next() {
-		var row stagingCommandPointRow
-		if scanErr := pointRows.Scan(&row.PointID, &row.ReportingDeviceID, &row.PointCode, &row.SourceMetadata, &row.BoundAssetID); scanErr != nil {
-			pointRows.Close()
-			return StagingTopology{}, scanErr
-		}
-		commandPoints = append(commandPoints, row)
-	}
-	if err = pointRows.Err(); err != nil {
-		pointRows.Close()
-		return StagingTopology{}, err
-	}
-	pointRows.Close()
-
-	scheduleCtx, err := loadOperatingScheduleContext(ctx, tx, tenantID, siteID, evalAt)
-	if err != nil {
-		return StagingTopology{}, err
-	}
-
-	if err = tx.Commit(ctx); err != nil {
-		return StagingTopology{}, err
-	}
-
-	topology := buildStagingTopologyFromRecords(siteControlMode, siteControlReason, locks, assets, devices, bindings, commandPoints)
-	topology.OperatingSchedule = scheduleCtx
-	return topology, nil
-}
-
-func loadOperatingScheduleContext(
-	ctx context.Context,
-	tx pgx.Tx,
-	tenantID, siteID string,
-	evalAt time.Time,
-) (*OperatingScheduleContext, error) {
-	var siteTimezone string
-	err := tx.QueryRow(ctx, `
-SELECT COALESCE(timezone, 'UTC')
-FROM core_registry.sites
-WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, siteID).Scan(&siteTimezone)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("load site timezone: %w", err)
-	}
-	scheduleCtx := &OperatingScheduleContext{
-		SiteTimezone: strings.TrimSpace(siteTimezone),
-	}
-	if scheduleCtx.SiteTimezone == "" {
-		scheduleCtx.SiteTimezone = "UTC"
-	}
-
-	var scheduleID string
-	var scheduleRevision int
-	err = tx.QueryRow(ctx, `
-SELECT id::text, pre_cool_lead_minutes, coast_down_lag_minutes, revision
-FROM core_registry.operating_schedules
-WHERE tenant_id=$1::uuid AND site_id=$2::uuid
-ORDER BY id ASC
-LIMIT 1`, tenantID, siteID).Scan(&scheduleID, &scheduleCtx.PreCoolLeadMinutes, &scheduleCtx.CoastDownLagMinutes, &scheduleRevision)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("load operating schedule: %w", err)
-	}
-	if err == nil {
-		scheduleCtx.Configured = true
-		slotRows, slotErr := tx.Query(ctx, `
-SELECT day_of_week, start_minute, end_minute
-FROM core_registry.operating_schedule_slots
-WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND schedule_id=$3::uuid AND schedule_revision=$4
-ORDER BY day_of_week ASC, start_minute ASC, end_minute ASC, id ASC`,
-			tenantID, siteID, scheduleID, scheduleRevision)
-		if slotErr != nil {
-			return nil, fmt.Errorf("load operating schedule slots: %w", slotErr)
-		}
-		for slotRows.Next() {
-			var slot OperatingScheduleSlotWindow
-			if scanErr := slotRows.Scan(&slot.DayOfWeek, &slot.StartMinute, &slot.EndMinute); scanErr != nil {
-				slotRows.Close()
-				return nil, scanErr
-			}
-			scheduleCtx.Slots = append(scheduleCtx.Slots, slot)
-		}
-		if slotRowsErr := slotRows.Err(); slotRowsErr != nil {
-			slotRows.Close()
-			return nil, slotRowsErr
-		}
-		slotRows.Close()
-	}
-
-	localDate := siteLocalDateString(scheduleCtx.SiteTimezone, evalAt)
-	excRows, err := tx.Query(ctx, `
-SELECT id::text, COALESCE(title, ''), kind, to_char(start_date, 'YYYY-MM-DD'), to_char(end_date, 'YYYY-MM-DD'),
-       COALESCE(replacement_slots, '[]'::jsonb), COALESCE(reason, '')
-FROM core_registry.operating_exceptions
-WHERE tenant_id=$1::uuid
-  AND site_id=$2::uuid
-  AND status='APPROVED'
-  AND start_date <= ($3::date + 1)
-  AND end_date >= ($3::date - 1)
-ORDER BY start_date ASC, id ASC`, tenantID, siteID, localDate)
-	if err != nil {
-		return nil, fmt.Errorf("load operating schedule exceptions: %w", err)
-	}
-	for excRows.Next() {
-		var exc ApprovedOperatingExceptionWindow
-		var rawSlots []byte
-		if scanErr := excRows.Scan(&exc.ID, &exc.Title, &exc.Kind, &exc.StartDate, &exc.EndDate, &rawSlots, &exc.Reason); scanErr != nil {
-			excRows.Close()
-			return nil, scanErr
-		}
-		if len(rawSlots) > 0 {
-			if unmarshalErr := json.Unmarshal(rawSlots, &exc.ReplacementSlots); unmarshalErr != nil {
-				excRows.Close()
-				return nil, fmt.Errorf("decode operating exception %s replacement_slots: %w", exc.ID, unmarshalErr)
+	for _, unit := range twin.Units {
+		mode := strings.ToUpper(strings.TrimSpace(unit.LockMode))
+		if mode != "" && mode != AssetControlLockUnlocked {
+			locks[strings.ToLower(strings.TrimSpace(unit.AssetID))] = AssetControlLockInfo{
+				LockMode: mode,
+				Reason:   strings.TrimSpace(unit.LockReason),
 			}
 		}
-		scheduleCtx.ApprovedExceptions = append(scheduleCtx.ApprovedExceptions, exc)
-	}
-	if excRowsErr := excRows.Err(); excRowsErr != nil {
-		excRows.Close()
-		return nil, excRowsErr
-	}
-	excRows.Close()
-
-	return scheduleCtx, nil
-}
-
-func buildStagingTopologyFromRecords(
-	siteControlMode, siteControlReason string,
-	locks map[string]AssetControlLockInfo,
-	assets []stagingAssetRow,
-	devices []stagingDeviceRow,
-	bindings []stagingDeviceBindingRow,
-	commandPoints []stagingCommandPointRow,
-) StagingTopology {
-	topology := StagingTopology{
-		SiteControlMode:   strings.TrimSpace(siteControlMode),
-		SiteControlReason: strings.TrimSpace(siteControlReason),
-		Chillers:          []ChillerMeterBinding{},
 	}
 	if len(locks) > 0 {
-		topology.AssetControlLocks = cloneAssetControlLocks(locks)
+		topology.AssetControlLocks = locks
 	}
 
-	assetsByKey := make(map[string]stagingAssetRow, len(assets))
-	for _, a := range assets {
-		assetsByKey[strings.ToLower(strings.TrimSpace(a.ID))] = a
-	}
-
-	devicesByKey := make(map[string]stagingDeviceRow, len(devices))
-	for _, d := range devices {
-		devicesByKey[strings.ToLower(strings.TrimSpace(d.ID))] = d
-		if strings.EqualFold(d.DeviceType, "BTU_METER") {
-			if topology.CoolingLoadDeviceID == "" || strings.EqualFold(d.SourceKey, "btu-calc") || strings.EqualFold(d.Code, "btu-calc") {
-				topology.CoolingLoadDeviceID = d.ID
-			}
-		}
-	}
-
-	type assetDevice struct {
-		device stagingDeviceRow
-		role   string
-	}
-	assetDevices := map[string][]assetDevice{}
-	deviceToAssets := map[string][]string{}
-	appendMapSlice := func(target map[string][]string, key, raw string) {
-		items := target[key]
-		appendUniqueString(&items, raw)
-		target[key] = items
-	}
-	for _, b := range bindings {
-		dev, hasDev := devicesByKey[strings.ToLower(strings.TrimSpace(b.DeviceID))]
-		if !hasDev {
-			continue
-		}
-		aKey := strings.ToLower(strings.TrimSpace(b.AssetID))
-		dKey := strings.ToLower(strings.TrimSpace(dev.ID))
-		assetDevices[aKey] = append(assetDevices[aKey], assetDevice{device: dev, role: strings.ToUpper(strings.TrimSpace(b.BindingRole))})
-		appendMapSlice(deviceToAssets, dKey, aKey)
+	if loadPts := twin.PointsByRole(planttwin.RoleCoolingLoad); len(loadPts) > 0 {
+		topology.CoolingLoadDeviceID = loadPts[0].DeviceID
 	}
 
 	commandPointIDs := map[string]string{}
-	edgeSet := map[string]HydraulicEdge{}
-	servesByAux := map[string][]string{}
-
-	addServeEdge := func(auxAsset, chillerAsset stagingAssetRow) {
-		key := strings.ToLower(auxAsset.ID) + "|" + strings.ToLower(chillerAsset.ID)
-		if _, exists := edgeSet[key]; !exists {
-			edgeSet[key] = HydraulicEdge{FromAssetID: auxAsset.ID, ToAssetID: chillerAsset.ID, Role: HydraulicEdgeServes}
-		}
-		appendMapSlice(servesByAux, strings.ToLower(auxAsset.ID), chillerAsset.ID)
-	}
-
-	for _, pt := range commandPoints {
-		capability, peerDeviceIDs := parseCommandPointStagingMetadata(pt.SourceMetadata)
-		if capability == "" {
-			capability = strings.ToUpper(strings.TrimSpace(pt.PointCode))
-		}
-		ownerKeys := []string{}
-		if cleanAsset := strings.ToLower(strings.TrimSpace(pt.BoundAssetID)); cleanAsset != "" {
-			ownerKeys = append(ownerKeys, cleanAsset)
-		} else {
-			ownerKeys = append(ownerKeys, deviceToAssets[strings.ToLower(strings.TrimSpace(pt.ReportingDeviceID))]...)
-		}
-		for _, ownerKey := range ownerKeys {
-			ownerAsset, hasOwner := assetsByKey[ownerKey]
-			if !hasOwner {
+	for _, unit := range twin.Units {
+		for _, pt := range twin.CommandRoutesForAsset(unit.AssetID) {
+			capability := parseCommandPointCapability(pt.SourceMetadata, pt.PointCode)
+			if capability == "" || strings.TrimSpace(pt.PointID) == "" {
 				continue
 			}
-			if capability != "" && pt.PointID != "" {
-				cmdKey := canonicalCommandPointKey(ownerAsset.ID, capability)
-				if _, exists := commandPointIDs[cmdKey]; !exists {
-					commandPointIDs[cmdKey] = pt.PointID
-				}
-			}
-			for _, peerDevID := range peerDeviceIDs {
-				for _, peerAssetKey := range deviceToAssets[strings.ToLower(strings.TrimSpace(peerDevID))] {
-					peerAsset, hasPeer := assetsByKey[peerAssetKey]
-					if !hasPeer || strings.EqualFold(ownerAsset.ID, peerAsset.ID) {
-						continue
-					}
-					if isAuxiliaryAssetType(ownerAsset.AssetType) && strings.EqualFold(peerAsset.AssetType, AssetTypeChiller) {
-						addServeEdge(ownerAsset, peerAsset)
-					} else if strings.EqualFold(ownerAsset.AssetType, AssetTypeChiller) && isAuxiliaryAssetType(peerAsset.AssetType) {
-						addServeEdge(peerAsset, ownerAsset)
-					}
-				}
+			cmdKey := canonicalCommandPointKey(unit.AssetID, capability)
+			if _, exists := commandPointIDs[cmdKey]; !exists {
+				commandPointIDs[cmdKey] = pt.PointID
 			}
 		}
 	}
 	if len(commandPointIDs) > 0 {
 		topology.CommandPointIDs = commandPointIDs
+	}
+
+	chillers := twin.UnitsByType(planttwin.AssetTypeChiller)
+	edgeSet := map[string]HydraulicEdge{}
+	servesByAux := map[string][]string{}
+	addServeEdge := func(auxID, chillerID string) {
+		key := strings.ToLower(auxID) + "|" + strings.ToLower(chillerID)
+		if _, exists := edgeSet[key]; !exists {
+			edgeSet[key] = HydraulicEdge{FromAssetID: auxID, ToAssetID: chillerID, Role: HydraulicEdgeServes}
+		}
+		auxKey := strings.ToLower(strings.TrimSpace(auxID))
+		served := servesByAux[auxKey]
+		appendUniqueString(&served, chillerID)
+		servesByAux[auxKey] = served
+	}
+
+	auxTypes := []string{
+		planttwin.AssetTypeChilledWaterPump,
+		planttwin.AssetTypeCoolingWaterPump,
+		planttwin.AssetTypeCoolingTower,
+	}
+	if twin.Graph != nil {
+		for _, chiller := range chillers {
+			for _, aux := range twin.Graph.EquipmentServingUnit(chiller.AssetID, auxTypes...) {
+				addServeEdge(aux.AssetID, chiller.AssetID)
+			}
+		}
+		// Auxiliaries wired to a shared header loop without direct chiller edges serve chillers attached to that loop.
+		auxiliaries := twin.UnitsByType(auxTypes...)
+		for _, aux := range auxiliaries {
+			auxKey := strings.ToLower(strings.TrimSpace(aux.AssetID))
+			if len(servesByAux[auxKey]) > 0 {
+				continue
+			}
+			for _, targetID := range twin.Graph.Downstream(aux.AssetID) {
+				targetUnit, ok := twin.UnitByID(targetID)
+				if !ok || strings.EqualFold(targetUnit.AssetType, AssetTypeChiller) || isAuxiliaryAssetType(targetUnit.AssetType) {
+					continue
+				}
+				for _, chiller := range chillers {
+					for _, dsID := range twin.Graph.ReachableDownstream(chiller.AssetID) {
+						if strings.EqualFold(dsID, targetUnit.AssetID) {
+							addServeEdge(aux.AssetID, chiller.AssetID)
+							break
+						}
+					}
+				}
+			}
+		}
 	}
 
 	for _, edge := range edgeSet {
@@ -432,93 +142,104 @@ func buildStagingTopologyFromRecords(
 		return topology.Edges[i].ToAssetID < topology.Edges[j].ToAssetID
 	})
 
-	for _, asset := range assets {
-		bound := assetDevices[strings.ToLower(strings.TrimSpace(asset.ID))]
-		var boundIDs []string
-		for _, b := range bound {
-			appendUniqueString(&boundIDs, b.device.ID)
-			appendUniqueString(&boundIDs, b.device.SourceKey)
-			appendUniqueString(&boundIDs, b.device.Code)
+	for _, chiller := range chillers {
+		boundDevs := twin.DevicesForAsset(chiller.AssetID)
+		boundIDs := collectBoundDeviceIdentifiers(boundDevs)
+		var meterDeviceID, meterSourceKey string
+		if pt, ok := twin.ResolveAssetPoint(chiller.AssetID, planttwin.RoleActivePower); ok {
+			meterDeviceID = pt.DeviceID
+			meterSourceKey = firstNonEmptyString(pt.DeviceSourceKey, pt.DeviceCode)
+			appendUniqueString(&boundIDs, pt.DeviceID)
+			appendUniqueString(&boundIDs, pt.DeviceSourceKey)
+			appendUniqueString(&boundIDs, pt.DeviceCode)
+		} else if meterDevs := twin.DevicesForAsset(chiller.AssetID, "METER"); len(meterDevs) > 0 {
+			meterDeviceID = meterDevs[0].DeviceID
+			meterSourceKey = firstNonEmptyString(meterDevs[0].SourceKey, meterDevs[0].DeviceCode)
+		} else if len(boundDevs) > 0 {
+			meterDeviceID = boundDevs[0].DeviceID
+			meterSourceKey = firstNonEmptyString(boundDevs[0].SourceKey, boundDevs[0].DeviceCode)
 		}
+		topology.Chillers = append(topology.Chillers, ChillerMeterBinding{
+			AssetID:                chiller.AssetID,
+			AssetCode:              chiller.AssetCode,
+			AssetName:              chiller.AssetName,
+			MeterDeviceID:          meterDeviceID,
+			MeterSourceKey:         meterSourceKey,
+			BoundDeviceIDs:         boundIDs,
+			RatedCapacityKW:        derefFloat(chiller.RatedCapacityKW),
+			RatedPowerKW:           derefFloat(chiller.RatedPowerKW),
+			FeederAuxiliaryPowerKW: chiller.FeederAuxiliaryPowerKW,
+		})
+	}
 
-		if strings.EqualFold(asset.AssetType, AssetTypeChiller) {
-			var meterDeviceID, meterSourceKey string
-			for _, b := range bound {
-				if b.role == "METER" || strings.HasSuffix(strings.ToUpper(b.device.DeviceType), "METER") {
-					meterDeviceID = b.device.ID
-					meterSourceKey = firstNonEmptyString(b.device.SourceKey, b.device.Code)
-					break
-				}
-			}
-			if meterDeviceID == "" && len(bound) > 0 {
-				meterDeviceID = bound[0].device.ID
-				meterSourceKey = firstNonEmptyString(bound[0].device.SourceKey, bound[0].device.Code)
-			}
-			topology.Chillers = append(topology.Chillers, ChillerMeterBinding{
-				AssetID:                asset.ID,
-				AssetCode:              asset.Code,
-				AssetName:              asset.DisplayName,
-				MeterDeviceID:          meterDeviceID,
-				MeterSourceKey:         meterSourceKey,
-				BoundDeviceIDs:         boundIDs,
-				RatedCapacityKW:        asset.RatedCapacityKW,
-				RatedPowerKW:           asset.RatedPowerKW,
-				FeederAuxiliaryPowerKW: asset.FeederAuxiliaryPowerKW,
-			})
+	for _, aux := range twin.UnitsByType(auxTypes...) {
+		normAuxType, isAux := normalizeAuxiliaryAssetType(aux.AssetType)
+		if !isAux {
 			continue
 		}
-
-		if normAuxType, isAux := normalizeAuxiliaryAssetType(asset.AssetType); isAux {
-			var deviceID, deviceSourceKey string
-			for _, b := range bound {
-				if b.role == "CONTROLLER" {
-					deviceID = b.device.ID
-					deviceSourceKey = firstNonEmptyString(b.device.SourceKey, b.device.Code)
-					break
-				}
-			}
-			if deviceID == "" && len(bound) > 0 {
-				deviceID = bound[0].device.ID
-				deviceSourceKey = firstNonEmptyString(bound[0].device.SourceKey, bound[0].device.Code)
-			}
-			served := append([]string(nil), servesByAux[strings.ToLower(strings.TrimSpace(asset.ID))]...)
-			sort.Strings(served)
-			topology.Auxiliaries = append(topology.Auxiliaries, AuxiliaryUnitBinding{
-				AssetID:          asset.ID,
-				AssetCode:        asset.Code,
-				AssetName:        asset.DisplayName,
-				AssetType:        normAuxType,
-				DeviceID:         deviceID,
-				DeviceSourceKey:  deviceSourceKey,
-				BoundDeviceIDs:   boundIDs,
-				RatedPowerKW:     asset.RatedPowerKW,
-				ServesChillerIDs: served,
-			})
+		boundDevs := twin.DevicesForAsset(aux.AssetID)
+		boundIDs := collectBoundDeviceIdentifiers(boundDevs)
+		var deviceID, deviceSourceKey string
+		if pt, ok := twin.ResolveAssetPoint(aux.AssetID, planttwin.RoleRunState); ok {
+			deviceID = pt.DeviceID
+			deviceSourceKey = firstNonEmptyString(pt.DeviceSourceKey, pt.DeviceCode)
+			appendUniqueString(&boundIDs, pt.DeviceID)
+			appendUniqueString(&boundIDs, pt.DeviceSourceKey)
+			appendUniqueString(&boundIDs, pt.DeviceCode)
+		} else if ctrlDevs := twin.DevicesForAsset(aux.AssetID, "CONTROLLER"); len(ctrlDevs) > 0 {
+			deviceID = ctrlDevs[0].DeviceID
+			deviceSourceKey = firstNonEmptyString(ctrlDevs[0].SourceKey, ctrlDevs[0].DeviceCode)
+		} else if len(boundDevs) > 0 {
+			deviceID = boundDevs[0].DeviceID
+			deviceSourceKey = firstNonEmptyString(boundDevs[0].SourceKey, boundDevs[0].DeviceCode)
 		}
+		served := append([]string(nil), servesByAux[strings.ToLower(strings.TrimSpace(aux.AssetID))]...)
+		sort.Strings(served)
+		topology.Auxiliaries = append(topology.Auxiliaries, AuxiliaryUnitBinding{
+			AssetID:          aux.AssetID,
+			AssetCode:        aux.AssetCode,
+			AssetName:        aux.AssetName,
+			AssetType:        normAuxType,
+			DeviceID:         deviceID,
+			DeviceSourceKey:  deviceSourceKey,
+			BoundDeviceIDs:   boundIDs,
+			RatedPowerKW:     derefFloat(aux.RatedPowerKW),
+			ServesChillerIDs: served,
+		})
 	}
 
 	return topology
 }
 
-func parseCommandPointStagingMetadata(raw []byte) (string, []string) {
-	if len(raw) == 0 {
-		return "", nil
+func collectBoundDeviceIdentifiers(devices []planttwin.TwinDevice) []string {
+	var out []string
+	for _, dev := range devices {
+		appendUniqueString(&out, dev.DeviceID)
+		appendUniqueString(&out, dev.SourceKey)
+		appendUniqueString(&out, dev.DeviceCode)
 	}
-	var payload struct {
-		Capability      string `json:"capability"`
-		InterlockChecks []struct {
-			DeviceID string `json:"deviceId"`
-		} `json:"interlockChecks"`
+	return out
+}
+
+func parseCommandPointCapability(raw []byte, pointCode string) string {
+	if len(raw) > 0 {
+		var payload struct {
+			Capability string `json:"capability"`
+		}
+		if err := json.Unmarshal(raw, &payload); err == nil {
+			if clean := strings.ToUpper(strings.TrimSpace(payload.Capability)); clean != "" {
+				return clean
+			}
+		}
 	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return "", nil
+	return strings.ToUpper(strings.TrimSpace(pointCode))
+}
+
+func derefFloat(v *float64) float64 {
+	if v == nil {
+		return 0
 	}
-	capName := strings.ToUpper(strings.TrimSpace(payload.Capability))
-	var peerDevices []string
-	for _, check := range payload.InterlockChecks {
-		appendUniqueString(&peerDevices, check.DeviceID)
-	}
-	return capName, peerDevices
+	return *v
 }
 
 func isAuxiliaryAssetType(raw string) bool {

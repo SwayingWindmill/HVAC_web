@@ -10,6 +10,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
 	"github.com/quanlaihe/hvac-web/libs/nameplate"
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
 // ChillerCOPSolverName names the Chiller COP Model solver in its evaluation records.
@@ -52,6 +53,7 @@ type PlantHistoryQuery struct {
 	SiteID   string
 	From     time.Time
 	To       time.Time
+	Twin     *planttwin.SiteTwin
 }
 
 // PlantHistory reads a Site's chilled-water Plant as 15-minute buckets.
@@ -431,6 +433,7 @@ type COPModelSolver struct {
 	History        PlantHistory
 	Staging        StagingSnapshotReader
 	StagingCatalog StagingSiteCatalog
+	TwinLoader     planttwin.Loader
 	StagingPolicy  *StagingPolicy
 }
 
@@ -484,16 +487,17 @@ func (solver COPModelSolver) Evaluate(ctx context.Context, request Request, at t
 		evaluation.Outcome, evaluation.Reason = ShadowHistoryUnavailable, "no Plant history reader"
 		return evaluation
 	}
+	twin, topology, _ := loadTwinAndTopology(ctx, request.TenantID, request.SiteID, at.UTC(), solver.TwinLoader, solver.StagingCatalog)
 	to := at.UTC().Truncate(copBucketMinutes * time.Minute)
 	from := to.AddDate(0, 0, -copHistoryDays)
-	buckets, err := solver.History.PlantBuckets(ctx, PlantHistoryQuery{TenantID: request.TenantID, SiteID: request.SiteID, From: from, To: to})
+	buckets, err := solver.History.PlantBuckets(ctx, PlantHistoryQuery{TenantID: request.TenantID, SiteID: request.SiteID, From: from, To: to, Twin: twin})
 	if err != nil {
 		evaluation.Outcome, evaluation.Reason = ShadowHistoryUnavailable, err.Error()
 		return evaluation
 	}
 	fit := FitPlant(buckets, from, to)
 	evaluation.Fit, evaluation.CVRMSE = &fit, fit.CVRMSEPower
-	evaluation.Staging = evaluateStagingWithFit(ctx, request.TenantID, request.SiteID, at, fit, solver.Staging, solver.StagingCatalog, solver.StagingPolicy)
+	evaluation.Staging = evaluateStagingWithFit(ctx, request.TenantID, request.SiteID, at, fit, solver.Staging, solver.StagingCatalog, twin, topology, solver.StagingPolicy)
 	usable := fit.usable()
 	if len(usable) == 0 {
 		evaluation.Outcome, evaluation.Reason = ShadowNoUsableModel, "no Chiller has a usable COP fit"

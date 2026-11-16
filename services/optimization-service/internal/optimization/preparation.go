@@ -59,6 +59,7 @@ type PreparationDefinition struct {
 	Granularity            string
 	PolicyConstraints      json.RawMessage
 	SiteTimezone           string
+	ResolvedInputMapping   *InputMapping
 }
 
 type InputMapping struct {
@@ -274,11 +275,15 @@ func (preparer *Preparer) Prepare(ctx context.Context, request PreparationReques
 	if len(policy.MaintenanceConstraints.OutOfService) != 0 || len(policy.ManualLocks.Resources) != 0 {
 		return PreparedOptimization{}, unavailable(ReasonMaintenanceActive, "current HVAC solver cannot safely optimize while maintenance constraints or manual locks are active")
 	}
+	effectiveMapping := policy.InputMapping
+	if definition.ResolvedInputMapping != nil {
+		effectiveMapping = *definition.ResolvedInputMapping
+	}
 	state, err := preparer.inputs.ReadOptimizationState(ctx, OptimizationStateQuery{
 		TenantID: request.TenantID, SiteID: request.SiteID, SubjectType: request.SubjectType, SubjectID: request.SubjectID,
-		SupplyTemperatureKey: policy.InputMapping.SupplyTemperatureKey,
-		ZoneTemperatureKey:   policy.InputMapping.ZoneTemperatureKey,
-		ZoneTemperatureKeys:  policy.InputMapping.ZoneTemperatureKeys,
+		SupplyTemperatureKey: effectiveMapping.SupplyTemperatureKey,
+		ZoneTemperatureKey:   effectiveMapping.ZoneTemperatureKey,
+		ZoneTemperatureKeys:  effectiveMapping.ZoneTemperatureKeys,
 		Timezone:             definition.SiteTimezone, At: capturedAt,
 	})
 	if err != nil {
@@ -287,7 +292,7 @@ func (preparer *Preparer) Prepare(ctx context.Context, request PreparationReques
 		}
 		return PreparedOptimization{}, unavailable(ReasonInputsUnreadable, "read authoritative Optimization state: %v", err)
 	}
-	currentState, err := freezeAuthoritativeState(state, policy.InputMapping, capturedAt)
+	currentState, err := freezeAuthoritativeState(state, effectiveMapping, capturedAt)
 	if err != nil {
 		return PreparedOptimization{}, err
 	}
@@ -310,7 +315,7 @@ func (preparer *Preparer) Prepare(ctx context.Context, request PreparationReques
 		Objective: definition.Objective, Horizon: definition.Horizon, HorizonMinutes: definition.HorizonMinutes, Granularity: definition.Granularity,
 		CapturedAt: capturedAt, CurrentState: currentState,
 		SafetyConstraints: FrozenSafetyConstraints{
-			Comfort: policy.Comfort, Safety: policy.Safety, InputMapping: policy.InputMapping, ResponseModel: policy.ResponseModel,
+			Comfort: policy.Comfort, Safety: policy.Safety, InputMapping: effectiveMapping, ResponseModel: policy.ResponseModel,
 			ModelDeploymentRevisionID: definition.DeploymentRevisionID,
 		},
 		MaintenanceConstraints: policy.MaintenanceConstraints, ManualLocks: policy.ManualLocks,
