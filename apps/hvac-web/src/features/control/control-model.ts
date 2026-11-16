@@ -1,6 +1,7 @@
 import type { AssetRelationship, Device, SiteAssetModel, TelemetryPoint } from '../../api/generated/platformGateway.gen';
 import { formatTelemetryUnit } from '../../domain/centralPlantTelemetry.ts';
 import { isOneOf, isPlainRecord } from '../../lib/typed.ts';
+import type { PlantDevice, PlantReading } from '../operations/realtime/plant-model';
 
 // What an operator can command on the plant, read from the Registry: each COMMAND point that
 // CONTROLS an asset, with its range and the reading that confirms it took effect.
@@ -66,10 +67,15 @@ const SETTING_CAPABILITIES = [
 const isAction = (capability: string): capability is ActionCapability => isOneOf(ACTION_ORDER, capability);
 const isSettingCapability = (capability: string): capability is SettingCapability => isOneOf(SETTING_CAPABILITIES, capability);
 
-function controls(relationship: AssetRelationship, at: Date): boolean {
-  return relationship.role === 'CONTROLS' && relationship.status === 'ACTIVE' && relationship.fromType === 'POINT'
-    && relationship.toType === 'ASSET' && new Date(relationship.validFrom) <= at
+function isActiveAt(relationship: AssetRelationship, at: Date): boolean {
+  return relationship.status === 'ACTIVE'
+    && new Date(relationship.validFrom) <= at
     && (relationship.validTo === null || new Date(relationship.validTo) > at);
+}
+
+function controls(relationship: AssetRelationship, at: Date): boolean {
+  return relationship.role === 'CONTROLS' && relationship.fromType === 'POINT'
+    && relationship.toType === 'ASSET' && isActiveAt(relationship, at);
 }
 
 const metadataNumber = (point: TelemetryPoint, key: string): number | null => {
@@ -77,18 +83,27 @@ const metadataNumber = (point: TelemetryPoint, key: string): number | null => {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 };
 
-function interlocksOf(point: TelemetryPoint): Interlock[] {
-  const declared = point.sourceMetadata.interlocks;
+function interlocksOf(point: TelemetryPoint, deviceCodeById: ReadonlyMap<string, string>): Interlock[] {
+  const declared = point.sourceMetadata.interlockChecks;
   if (!Array.isArray(declared)) return [];
   return declared.flatMap((entry: unknown): Interlock[] => {
     if (!isPlainRecord(entry)) return [];
-    const { device, expected, reason } = entry;
-    if (typeof device !== 'string' || (expected !== 'RUNNING' && expected !== 'STOPPED')) return [];
-    return [{ deviceCode: device, expected, reason: typeof reason === 'string' ? reason : '' }];
+    const { deviceId, key, expected, reason } = entry;
+    if (typeof deviceId !== 'string' || (key !== undefined && key !== 'run_state')) return [];
+    if (expected !== 'RUNNING' && expected !== 'STOPPED') return [];
+    const deviceCode = deviceCodeById.get(deviceId);
+    if (!deviceCode) return [];
+    return [{ deviceCode, expected, reason: typeof reason === 'string' ? reason : '' }];
   });
 }
 
-export function controlTargets(model: Pick<SiteAssetModel, 'assets' | 'telemetryPoints' | 'relationships'>, at: Date): ControlTarget[] {
+export function controlTargets(
+  model: Pick<SiteAssetModel, 'assets' | 'telemetryPoints' | 'relationships'> & {
+    readonly devices?: readonly Pick<Device, 'id' | 'code'>[];
+  },
+  at: Date,
+): ControlTarget[] {
+  const deviceCodeById = new Map((model.devices ?? []).map((device) => [device.id, device.code]));
   const pointsById = new Map(model.telemetryPoints.filter((point) => point.status === 'ACTIVE').map((point) => [point.id, point]));
   const byAsset = new Map<string, { deviceId: string; actions: ControlAction[]; settings: ControlSetting[] }>();
   for (const relationship of model.relationships) {
@@ -102,7 +117,7 @@ export function controlTargets(model: Pick<SiteAssetModel, 'assets' | 'telemetry
     const target = byAsset.get(assetId) ?? { deviceId: point.reportingDeviceId, actions: [], settings: [] };
     byAsset.set(assetId, target);
     if (isAction(capability)) {
-      target.actions.push({ assetId, pointId: point.id, capability, label: point.displayName, interlocks: interlocksOf(point) });
+      target.actions.push({ assetId, pointId: point.id, capability, label: point.displayName, interlocks: interlocksOf(point, deviceCodeById) });
       continue;
     }
     if (!isSettingCapability(capability)) continue;
@@ -175,10 +190,27 @@ export function commandLabels(targets: readonly ControlTarget[]): ReadonlyMap<st
 export interface PlantUnit {
   readonly chiller: ControlTarget;
   readonly members: readonly ControlTarget[];
+  readonly powerMeterDeviceId: string | null;
 }
 
-export function plantUnits(targets: readonly ControlTarget[], devices: readonly Pick<Device, 'id' | 'code'>[]): { units: PlantUnit[]; others: ControlTarget[] } {
-  const deviceIdByCode = new Map(devices.map((device) => [device.code, device.id]));
+export function plantUnits(
+  targets: readonly ControlTarget[],
+  model: Pick<SiteAssetModel, 'relationships'> & {
+    readonly devices: readonly Pick<Device, 'id' | 'code' | 'deviceType' | 'status'>[];
+  },
+  at: Date,
+): { units: PlantUnit[]; others: ControlTarget[] } {
+  const devicesById = new Map(model.devices.map((device) => [device.id, device]));
+  const deviceIdByCode = new Map(model.devices.map((device) => [device.code, device.id]));
+  const powerMeterByAssetId = new Map<string, string>();
+  for (const relationship of model.relationships) {
+    if (relationship.fromType !== 'DEVICE' || relationship.toType !== 'ASSET' || !isActiveAt(relationship, at)) continue;
+    const meter = devicesById.get(relationship.fromId);
+    if (!meter || meter.status !== 'ACTIVE' || meter.deviceType !== 'HVAC_POWER_METER') continue;
+    if (!powerMeterByAssetId.has(relationship.toId)) {
+      powerMeterByAssetId.set(relationship.toId, meter.id);
+    }
+  }
   const byDevice = new Map(targets.map((target) => [target.deviceId, target]));
   const claimed = new Set<string>();
   const units = targets.filter((target) => target.assetType === 'CHILLER').map((chiller): PlantUnit => {
@@ -190,9 +222,25 @@ export function plantUnits(targets: readonly ControlTarget[], devices: readonly 
       claimed.add(member.assetId);
       return [member];
     });
-    return { chiller, members: [...members].sort((left, right) => plantPosition(left.assetType) - plantPosition(right.assetType)) };
+    return {
+      chiller,
+      members: [...members].sort((left, right) => plantPosition(left.assetType) - plantPosition(right.assetType)),
+      powerMeterDeviceId: powerMeterByAssetId.get(chiller.assetId) ?? null,
+    };
   });
   return { units, others: targets.filter((target) => !claimed.has(target.assetId)) };
+}
+
+/** Active power reading for one unit's meter, or null when offline, stale, or absent. */
+export function unitActivePower(meter: Pick<PlantDevice, 'reading'> | undefined): PlantReading | null {
+  if (!meter) return null;
+  for (const key of ['chiller.power', 'hvac_meter.active_power']) {
+    const reading = meter.reading(key);
+    if (reading && reading.state === 'PRESENT' && (reading.current || reading.lowConfidence) && reading.numeric !== null) {
+      return reading;
+    }
+  }
+  return null;
 }
 
 /** The interlocks that would stop this action now, given each device's run state by device code. */

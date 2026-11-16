@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { ArrowRight } from 'lucide-react';
 import { Fragment, useId, useState } from 'react';
 import { toast } from 'sonner';
@@ -21,6 +22,7 @@ import type { PlantReading } from '@/features/operations/realtime/plant-model';
 import { formatDecimal } from '@/lib/operator-format';
 import { CommandRequestError, commandKeys, createCommand, type Command } from '../command-api';
 import { APPROVAL_LABEL } from '../command-presentation';
+import { stepUpErrorPresentation, type StepUpErrorPresentation } from '../control-errors';
 import type { ControlTarget } from '../control-model';
 
 /** A command waiting for the operator's confirmation. */
@@ -46,10 +48,21 @@ export interface PendingCommand {
 export const CODE_PATTERN = /^\d{6}$/;
 
 /** The authenticator's 6 digits; anything else typed or pasted is dropped. */
-export function CodeField({ id, value, error, onChange }: {
+export function CodeField({
+  id,
+  value,
+  error,
+  showEnrollLink = false,
+  onNavigateEnroll,
+  onSubmit,
+  onChange,
+}: {
   readonly id: string;
   readonly value: string;
   readonly error: string | null;
+  readonly showEnrollLink?: boolean;
+  readonly onNavigateEnroll?: () => void;
+  readonly onSubmit?: () => void;
   readonly onChange: (value: string) => void;
 }) {
   return (
@@ -60,16 +73,45 @@ export function CodeField({ id, value, error, onChange }: {
       </Label>
       <Input
         id={id}
+        type="text"
         inputMode="numeric"
         autoComplete="one-time-code"
+        autoCorrect="off"
+        autoCapitalize="none"
+        spellCheck={false}
         placeholder="······"
         value={value}
         aria-invalid={error !== null}
         aria-describedby={error ? `${id}-error` : undefined}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter') return;
+          if (event.nativeEvent.isComposing || event.keyCode === 229) {
+            event.preventDefault();
+            return;
+          }
+          if (onSubmit) {
+            event.preventDefault();
+            onSubmit();
+          }
+        }}
         onChange={(event) => onChange(event.target.value.replace(/\D/g, '').slice(0, 6))}
         className="h-10 text-center font-mono text-xl tracking-[0.5em]"
       />
-      {error ? <p id={`${id}-error`} className="text-xs text-destructive-text">{error}</p> : null}
+      {error ? (
+        <div id={`${id}-error`} role="alert" className="flex flex-col gap-1 text-xs text-destructive-text">
+          <p>{error}</p>
+          {showEnrollLink ? (
+            <Link
+              to="/system"
+              search={{ tab: 'users' }}
+              onClick={onNavigateEnroll}
+              className="inline-flex min-h-6 w-fit items-center font-medium text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring-soft"
+            >
+              去开通两步验证 ›
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -126,7 +168,7 @@ function ConfirmBody({ pending, siteId, csrfToken, onClose }: {
   const [askCode, setAskCode] = useState(pending.requiresCode === true);
   const [code, setCode] = useState('');
   const [acknowledged, setAcknowledged] = useState(false);
-  const [codeError, setCodeError] = useState<string | null>(null);
+  const [codeError, setCodeError] = useState<StepUpErrorPresentation | null>(null);
   const ready = (!askCode || CODE_PATTERN.test(code)) && (!pending.acknowledgement || acknowledged);
   const confirm = () => {
     submit.mutate({ pending, verificationCode: askCode ? code : undefined }, {
@@ -136,7 +178,7 @@ function ConfirmBody({ pending, siteId, csrfToken, onClose }: {
         if (error instanceof CommandRequestError && error.code === 'STEP_UP_REQUIRED') {
           setAskCode(true);
           setCode('');
-          setCodeError(askCode ? '动态口令不对或已经用过，请输入认证器上新的 6 位数字。' : '这条指令被评为高风险，请输入动态口令。');
+          setCodeError(stepUpErrorPresentation(error.reason, askCode));
           return;
         }
         commandFailure(error);
@@ -185,7 +227,17 @@ function ConfirmBody({ pending, siteId, csrfToken, onClose }: {
           </dl>
         ) : null}
       </div>
-      {askCode ? <CodeField id={codeId} value={code} error={codeError} onChange={(value) => { setCode(value); setCodeError(null); }} /> : null}
+      {askCode ? (
+        <CodeField
+          id={codeId}
+          value={code}
+          error={codeError?.message ?? null}
+          showEnrollLink={codeError?.showEnrollLink}
+          onNavigateEnroll={onClose}
+          onSubmit={() => { if (ready && !submit.isPending) confirm(); }}
+          onChange={(value) => { setCode(value); setCodeError(null); }}
+        />
+      ) : null}
       {pending.acknowledgement ? (
         <div className="flex items-start gap-2">
           <Checkbox id={ackId} checked={acknowledged} onCheckedChange={(value) => setAcknowledged(value === true)} className="mt-0.5" />

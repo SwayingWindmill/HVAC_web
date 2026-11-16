@@ -4,9 +4,9 @@ The `/operations/control` route (`运行控制`) shows the Site's control mode, 
 
 ## Sub-features
 
-- `control-mode-bar` reads `GET /api/v1/sites/{siteId}/control-state`; the `控制方式` region shows `远程自动控制` / `人工接管` / `安全退出`, who set it (`我` / `其他人员`), the reason, lock and pending counts, and a segmented choice that opens `切换到…？` (`PUT /control-mode` with `reason` and `expectedRevision`). Leaving remote auto lists the commands it withdraws; `安全退出` is disabled while any command is `下发中` or `待现场确认`.
-- `control-unit-grid` groups each `CHILLER` asset with the assets its `START` interlocks name (`group` per device row, `一键启动` / `一键停机` per unit); a blocked interlock shows `先开 …` / `先停 …` and disables the button; assets no chiller names sit in `其他设备`.
-- `control-high-risk-confirm` asks `动态口令` (6 digits) and `我已和现场确认可以停/开` before `提交停止` / `提交停机`; the request carries `verificationCode`. A `STEP_UP_REQUIRED` refusal on approval opens `批准前要再验证一次身份`, which signs in again with `assurance=high` and returns to `?inspect=`.
+- `control-mode-bar` reads `GET /api/v1/sites/{siteId}/control-state`; the `控制方式` region shows `远程自动控制` / `人工接管` / `安全退出`, who set it (`updatedByName` from IAM, falling back only to `我` for self or `系统` without `其他人员`), the reason, lock and pending counts, and a segmented choice that opens `切换到…？` (`PUT /control-mode` with `reason` and `expectedRevision`). Leaving remote auto lists the commands it withdraws; `安全退出` is disabled while any command is `下发中` or `待现场确认`.
+- `control-unit-grid` groups each `CHILLER` asset with the assets named by its compiled `START` `sourceMetadata.interlockChecks` (`deviceId` mapped to `deviceCode`, checking `key === 'run_state'`), displays bound `HVAC_POWER_METER` active power (`kW` with `tabular-nums`, or `暂无读数` when unbound or stale) in the column header (`group` per device row, `一键启动` / `一键停机` per unit); a blocked interlock shows `先开 …` / `先停 …` and disables the button; assets no chiller names sit in `其他设备`.
+- `control-high-risk-confirm` asks `动态口令` (`inputMode="numeric"`, `autoComplete="one-time-code"`, 6 digits) and `我已和现场确认可以停/开` before `提交停止` / `提交停机`; the request carries `verificationCode`. Step-up failures return `ProblemDetails.reason` (`CODE_INVALID`, `CODE_REPLAYED`, `MFA_LOCKED`, `MFA_NOT_CONFIGURED`) rendered in a `role="alert"` message (`MFA_NOT_CONFIGURED` includes a `去开通两步验证 ›` link to `/system?tab=users` where non-admin `selfView` notes two-step setup). A `STEP_UP_REQUIRED` refusal on approval opens `批准前要再验证一次身份`, which signs in again with `assurance=high` and returns to `?inspect=`.
 - `control-maintenance-window` shows `检修窗口「…」… 至 …，只能停机和复位` in the `控制方式` region when `activeMaintenanceWindow` is set; start and setpoint controls are disabled while stop stays enabled.
 - `control-asset-lock` opens `锁定 …？` / `解除 … 的锁定？` from the lock icon (`PUT /api/v1/assets/{assetId}/control-lock`), greys the row and shows `手动锁定` / `检修锁定`.
 - `control-setpoint-and-ime` opens `调整 … 的设定值` from the sliders icon; composition `Enter` (`isComposing` or `keyCode === 229`) never submits.
@@ -26,8 +26,9 @@ Preconditions:
 
 - **Setpoint with IME guard.** Open `调整 CHILLER-01 的设定值`, fill `7.5`, check composition `Enter` opens nothing, press `Enter`, confirm `确认下发`.
 - **High-risk stop and step-up.** `CHWP-01` → `停止`, type the code, tick the site check, `提交停止`; `批准` opens the step-up dialog until `stepUpFresh`.
-- **Mode switch and lock.** `人工接管` with a reason withdraws the pending command and shows the top-bar chip; `安全退出` is blocked by a `OUTCOME_UNKNOWN` command; `锁定 CWP-01` → `检修锁定` withdraws its command.
-- **Proof.** Save stdout and `1440×900` light/dark screenshots of the unit grid, the mode dialog and the confirm dialog under `.scratch/verify/<slug>/`.
+- **Mode switch and lock.** `人工接管` with a reason withdraws the pending command, shows `updatedByName` (without `其他人员`), and displays the top-bar chip; `安全退出` is blocked by a `OUTCOME_UNKNOWN` command; `锁定 CWP-01` → `检修锁定` withdraws its command.
+- **Unit power, interlocks, and TOTP step-up failures.** Verify unbound chillers show `暂无读数`, bound active `HVAC_POWER_METER` shows `186.2 kW` (reverting to `暂无读数` when stale), compiled `interlockChecks` render precondition hints, and all four `ProblemDetails.reason` failures (`CODE_INVALID`, `CODE_REPLAYED`, `MFA_LOCKED`, `MFA_NOT_CONFIGURED`) show distinct guidance including the `/system?tab=users` enrollment link.
+- **Proof.** Save stdout and `1440×900` light/dark plus `375×812` mobile screenshots of the unit grid, the mode dialog and the confirm dialog under `.scratch/verify/<slug>/`.
 
 ## Gotchas
 

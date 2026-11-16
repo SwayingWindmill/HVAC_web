@@ -9,11 +9,15 @@ import (
 
 const (
 	CurrentPrincipalPath = iam.CurrentPrincipalPath
+	PrincipalNamesPath   = iam.PrincipalNamesPath
 	RegistryDecisionPath = iam.RegistryDecisionPath
 )
 
 type Config = iam.Config
 type AuthorizationStore = iam.AuthorizationStore
+type TenantPrincipalNameStore = iam.TenantPrincipalNameStore
+type TenantPrincipalNamesRequest = iam.TenantPrincipalNamesRequest
+type TenantPrincipalNamesResponse = iam.TenantPrincipalNamesResponse
 type AuthorizationLookup = iam.AuthorizationLookup
 type PrincipalCapabilityResolver = iam.PrincipalCapabilityResolver
 type PrincipalCapabilityLookup = iam.PrincipalCapabilityLookup

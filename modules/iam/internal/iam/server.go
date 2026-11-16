@@ -49,6 +49,7 @@ type Config struct {
 	Observability                  *observability.Runtime
 	Now                            func() time.Time
 	AuthorizationStore             AuthorizationStore
+	TenantPrincipalNameStore       TenantPrincipalNameStore
 	PrincipalCapabilityResolver    PrincipalCapabilityResolver
 	AdminStore                     AdminStore
 	RegistryGrantSigner            crypto.Signer
@@ -101,6 +102,7 @@ type handler struct {
 	observability                     *observability.Runtime
 	now                               func() time.Time
 	authorizationStore                AuthorizationStore
+	tenantPrincipalNameStore          TenantPrincipalNameStore
 	principalCapabilityResolver       PrincipalCapabilityResolver
 	adminStore                        AdminStore
 	registryGrantSigner               crypto.Signer
@@ -155,6 +157,12 @@ func NewHandler(config Config) http.Handler {
 	store := config.AuthorizationStore
 	if store == nil {
 		store = NewDenyAllAuthorizationStore("policy-unconfigured")
+	}
+	tenantPrincipalNameStore := config.TenantPrincipalNameStore
+	if tenantPrincipalNameStore == nil {
+		if candidate, ok := store.(TenantPrincipalNameStore); ok {
+			tenantPrincipalNameStore = candidate
+		}
 	}
 	telemetryStore := config.TelemetryAuthorizationStore
 	if telemetryStore == nil {
@@ -306,6 +314,7 @@ func NewHandler(config Config) http.Handler {
 		observability:                     telemetry,
 		now:                               now,
 		authorizationStore:                store,
+		tenantPrincipalNameStore:          tenantPrincipalNameStore,
 		principalCapabilityResolver:       principalCapabilityResolver,
 		adminStore:                        config.AdminStore,
 		registryGrantSigner:               config.RegistryGrantSigner,
@@ -443,6 +452,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	switch request.URL.Path {
 	case CurrentPrincipalPath:
 		status = h.handleCurrentPrincipal(request.Context(), writer, claims, spiffeID)
+	case PrincipalNamesPath:
+		status = h.handleTenantPrincipalNames(writer, request, claims)
 	case AdminMutationPath, AdminMembersPath:
 		status = h.handleAdminRoute(writer, request, claims)
 	case RegistryDecisionPath:
@@ -715,6 +726,8 @@ func expectedInboundAction(path string) (string, bool) {
 	switch path {
 	case CurrentPrincipalPath:
 		return "principal:read", true
+	case PrincipalNamesPath:
+		return principalNamesAction, true
 	case AdminMutationPath, AdminMembersPath:
 		return "iam:admin", true
 	case RegistryDecisionPath:
@@ -751,7 +764,7 @@ type x509CertificateView struct {
 
 func safePath(path string) string {
 	switch path {
-	case CurrentPrincipalPath, AdminMutationPath, AdminMembersPath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath, AnalyticsWorkloadDecisionPath, ReminderRecipientDecisionPath, CommandWorkloadDecisionPath:
+	case CurrentPrincipalPath, PrincipalNamesPath, AdminMutationPath, AdminMembersPath, RegistryDecisionPath, TelemetryDecisionPath, CommandDecisionPath, AnalyticsDecisionPath, AlarmDecisionPath, WorkOrderDecisionPath, RegistryGrantStatusPath, TelemetryGrantConsumePath, TelemetryRevocationPollPath, RegistryWorkloadDecisionPath, AnalyticsWorkloadDecisionPath, ReminderRecipientDecisionPath, CommandWorkloadDecisionPath:
 		return path
 	default:
 		return "unmatched"

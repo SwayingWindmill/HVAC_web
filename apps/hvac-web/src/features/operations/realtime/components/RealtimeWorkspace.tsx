@@ -20,7 +20,7 @@ import { commandSummary, STATUS_PRESENTATION } from '@/features/control/command-
 import { CommandMark } from '@/features/control/components/CommandMark';
 import { ModeGlyph } from '@/features/control/components/ControlBoundary';
 import { commandLabels, controlTargets } from '@/features/control/control-model';
-import { activeLocks, LOCK_PRESENTATION, MODE_PRESENTATION, siteControlStateQuery } from '@/features/control/control-state';
+import { activeLocks, controlActorLabel, LOCK_PRESENTATION, MODE_PRESENTATION, siteControlStateQuery } from '@/features/control/control-state';
 import { DataGapBanner } from '@/features/data-gaps/DataGapBanner';
 import { dataGapsKeys } from '@/features/data-gaps/query';
 import { formatCompactTime, formatDecimal } from '@/lib/operator-format';
@@ -33,6 +33,7 @@ import { formatClock, LiveIndicator, LowConfidenceBadge, ReadingMetric, ReadingV
 import { buildTimeSlots, fillGaugeSlots, fillScalarSlots } from '../../trends/timeline';
 
 const pageRoute = getRouteApi('/_app/_site/operations/realtime');
+const siteRoute = getRouteApi('/_app/_site');
 
 type Metric = 'power' | 'cooling' | 'cop';
 type Window = '6h' | '24h';
@@ -204,9 +205,10 @@ interface PlantEvent {
 }
 
 /** Today at the plant, newest first: alarms, commands and devices whose data stopped. */
-function RecentEvents({ plant, siteId, timeZone, assetModel }: {
+function RecentEvents({ plant, siteId, myId, timeZone, assetModel }: {
   readonly plant: PlantView;
   readonly siteId: string;
+  readonly myId: string;
   readonly timeZone: string;
   readonly assetModel: (Parameters<typeof controlTargets>[0] & Pick<SiteAssetModel, 'assets'>) | undefined;
 }) {
@@ -249,7 +251,7 @@ function RecentEvents({ plant, siteId, timeZone, assetModel }: {
       at: modeState.updatedAt,
       mark: <ModeGlyph mode={modeState.controlMode} />,
       title: `控制方式改为${MODE_PRESENTATION[modeState.controlMode].label}`,
-      detail: modeState.reason || '控制方式',
+      detail: [controlActorLabel(modeState, myId), modeState.reason || '控制方式'].join(' · '),
       to: { path: '/operations/control' },
     } satisfies PlantEvent] : []),
     ...[...activeLocks(controlState.data).values()].filter((lock) => lock.updatedAt && isToday(lock.updatedAt)).map((lock): PlantEvent => ({
@@ -257,7 +259,7 @@ function RecentEvents({ plant, siteId, timeZone, assetModel }: {
       at: lock.updatedAt ?? '',
       mark: <Lock className="size-3 text-muted-foreground" aria-hidden="true" />,
       title: `${assetName(lock.assetId)} · ${lock.lockMode === 'UNLOCKED' ? '解除锁定' : LOCK_PRESENTATION[lock.lockMode].label}`,
-      detail: lock.reason || '设备锁定',
+      detail: [controlActorLabel(lock, myId), lock.reason || '设备锁定'].join(' · '),
       to: { path: '/operations/control' },
     })),
     ...plant.devices.filter((device) => device.hasStaleData || device.connection === 'OFFLINE').map((device): PlantEvent => ({
@@ -373,6 +375,7 @@ function LoopsTable({ plant, timeZone }: { readonly plant: PlantView; readonly t
 }
 
 export function RealtimeWorkspace() {
+  const { principal } = siteRoute.useRouteContext();
   const { site, plant, mode, registry, current, currentUnavailable, refresh } = useRealtimePlant();
   const queryClient = useQueryClient();
   const search = pageRoute.useSearch();
@@ -445,7 +448,7 @@ export function RealtimeWorkspace() {
               onWindow={(window) => setSearch({ window })}
               timeZone={site.timezone}
             />
-            <RecentEvents plant={plant} siteId={site.id} timeZone={site.timezone} assetModel={registry.data?.assetModel} />
+            <RecentEvents plant={plant} siteId={site.id} myId={principal.principalId} timeZone={site.timezone} assetModel={registry.data?.assetModel} />
           </div>
           <LoopsTable plant={plant} timeZone={site.timezone} />
         </>

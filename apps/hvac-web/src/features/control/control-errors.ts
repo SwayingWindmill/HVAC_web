@@ -1,3 +1,5 @@
+import type { StepUpFailureReason } from '../../api/gateway-client';
+
 // What a refused control request means to the operator. The Gateway's problem detail is written for
 // engineers in English, so the page shows these sentences for the codes it knows and a plain fallback otherwise.
 
@@ -39,4 +41,33 @@ const isControlErrorCode = (code: string): code is ControlErrorCode => Object.pr
 /** The sentence for a refusal: the known code's, or a generic one; never the Gateway's own text. */
 export function controlErrorMessage(code: string | undefined, fallback: string): string {
   return code !== undefined && isControlErrorCode(code) ? CONTROL_ERROR_MESSAGE[code] : fallback;
+}
+
+export interface StepUpErrorPresentation {
+  readonly message: string;
+  readonly showEnrollLink: boolean;
+}
+
+/** Plain Chinese guidance for each TOTP verification refusal reason. */
+export function stepUpErrorPresentation(
+  reason: StepUpFailureReason | undefined,
+  hadCodeInput: boolean,
+): StepUpErrorPresentation {
+  switch (reason) {
+    case 'CODE_INVALID':
+      return { message: '动态口令不对，请核对认证器当前显示的 6 位数字再试。', showEnrollLink: false };
+    case 'CODE_REPLAYED':
+      return { message: '这个动态口令已经用过了，请等认证器刷新下一组 6 位数字后再试。', showEnrollLink: false };
+    case 'MFA_NOT_CONFIGURED':
+      return { message: '当前账号还没有开通两步验证，暂时不能提交高风险指令。', showEnrollLink: true };
+    case 'MFA_LOCKED':
+      return { message: '动态口令输错次数过多，两步验证已暂时锁定，请稍后再试。', showEnrollLink: false };
+    default:
+      return {
+        message: hadCodeInput
+          ? '动态口令不对、已经用过或尚未开通两步验证，请核对认证器后重试。'
+          : '这条指令被评为高风险，请输入动态口令。',
+        showEnrollLink: false,
+      };
+  }
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -163,5 +164,53 @@ SELECT EXISTS (
 	return RegistryGrantStatus{CurrentPolicyRevision: policyRevision, Revoked: revoked}, nil
 }
 
+func (store *PostgresAuthorizationStore) LookupTenantPrincipalNames(ctx context.Context, tenantID string, principalIDs []string, at time.Time) (map[string]string, error) {
+	if store == nil || store.pool == nil {
+		return nil, errors.New("IAM authorization store is closed")
+	}
+	trimmedTenant := strings.TrimSpace(tenantID)
+	if !isCanonicalUUID(trimmedTenant) {
+		return nil, errors.New("IAM tenant ID is invalid")
+	}
+	validIDs := uniqueCanonicalUUIDs(principalIDs)
+	if len(validIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	transaction, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("begin IAM tenant principal name lookup: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+	if err := setIAMAuthorizationContext(ctx, transaction, "", trimmedTenant); err != nil {
+		return nil, err
+	}
+	rows, err := transaction.Query(ctx, `
+SELECT principal_id::text, display_name
+FROM iam.resolve_tenant_principal_names($1::uuid, $2::uuid[], $3::timestamptz)
+`, trimmedTenant, validIDs, lookupInstant(at))
+	if err != nil {
+		return nil, fmt.Errorf("query IAM tenant principal names: %w", err)
+	}
+	defer rows.Close()
+	names := make(map[string]string, len(validIDs))
+	for rows.Next() {
+		var principalID, displayName string
+		if err := rows.Scan(&principalID, &displayName); err != nil {
+			return nil, fmt.Errorf("scan IAM tenant principal name: %w", err)
+		}
+		if strings.TrimSpace(displayName) != "" {
+			names[principalID] = displayName
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate IAM tenant principal names: %w", err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit IAM tenant principal name lookup: %w", err)
+	}
+	return names, nil
+}
+
 var _ AuthorizationStore = (*PostgresAuthorizationStore)(nil)
+var _ TenantPrincipalNameStore = (*PostgresAuthorizationStore)(nil)
 var _ RegistryGrantStatusStore = (*PostgresAuthorizationStore)(nil)

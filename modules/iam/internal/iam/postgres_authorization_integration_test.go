@@ -323,6 +323,32 @@ func TestPostgresAuthorizationRuntimeIsRLSBoundAndRoleChecked(t *testing.T) {
 	}
 }
 
+func TestPostgresTenantPrincipalNamesReturnsOnlyActiveMembersOfTenant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store := openPostgresAuthorizationStore(t, ctx)
+
+	names, err := store.LookupTenantPrincipalNames(ctx, postgresTenantAID, []string{
+		postgresOwnerAPrincipalID,
+		postgresDelegatedPrincipalID,
+		"not-a-uuid",
+		"018f1e00-2000-7000-8000-999999999999",
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names[postgresOwnerAPrincipalID] == "" || names[postgresDelegatedPrincipalID] == "" || len(names) != 2 {
+		t.Fatalf("unexpected Tenant A principal names: %#v", names)
+	}
+	otherTenant, err := store.LookupTenantPrincipalNames(ctx, postgresTenantBID, []string{postgresOwnerAPrincipalID}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(otherTenant) != 0 {
+		t.Fatalf("Tenant A principal leaked to Tenant B: %#v", otherTenant)
+	}
+}
+
 func requiredIAMPostgresEnv(t *testing.T, name string) string {
 	t.Helper()
 	value := strings.TrimSpace(os.Getenv(name))

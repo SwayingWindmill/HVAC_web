@@ -1,4 +1,4 @@
-import { isPlainRecord } from '../lib/typed.ts';
+import { isOneOf, isPlainRecord } from '../lib/typed.ts';
 
 /**
  * One request layer for the Gateway's hand-written feature reads and writes. It sends the session
@@ -15,9 +15,13 @@ import { isPlainRecord } from '../lib/typed.ts';
  * Free of app imports so the plain Node tests run it as it ships.
  */
 
+const STEP_UP_FAILURE_REASONS = ['CODE_INVALID', 'CODE_REPLAYED', 'MFA_NOT_CONFIGURED', 'MFA_LOCKED'] as const;
+export type StepUpFailureReason = (typeof STEP_UP_FAILURE_REASONS)[number];
+
 export interface GatewayProblem {
   readonly status: number;
   readonly code?: string;
+  readonly reason?: StepUpFailureReason;
   readonly title?: string;
   readonly detail?: string;
   readonly retryable?: boolean;
@@ -115,6 +119,7 @@ function problemOf(status: number, payload: unknown): GatewayProblem | null {
     return {
       status,
       code: payload.code,
+      reason: typeof payload.reason === 'string' && isOneOf(STEP_UP_FAILURE_REASONS, payload.reason) ? payload.reason : undefined,
       title: typeof payload.title === 'string' ? payload.title : undefined,
       detail: typeof payload.detail === 'string' ? payload.detail : undefined,
       retryable: typeof payload.retryable === 'boolean' ? payload.retryable : undefined,

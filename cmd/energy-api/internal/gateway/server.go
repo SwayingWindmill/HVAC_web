@@ -689,6 +689,20 @@ func writeProblem(
 	retryable bool,
 	fieldErrors []platformapi.FieldError,
 ) {
+	writeProblemWithReason(writer, request, status, code, title, detail, retryable, "", fieldErrors)
+}
+
+func writeProblemWithReason(
+	writer http.ResponseWriter,
+	request *http.Request,
+	status int,
+	code string,
+	title string,
+	detail string,
+	retryable bool,
+	reason string,
+	fieldErrors []platformapi.FieldError,
+) {
 	problem := platformapi.ProblemDetails{
 		Type:        problemTypeBaseURL + strings.ToLower(strings.ReplaceAll(code, "_", "-")),
 		Title:       title,
@@ -696,6 +710,7 @@ func writeProblem(
 		Detail:      detail,
 		Instance:    request.URL.Path,
 		Code:        code,
+		Reason:      reason,
 		TraceID:     traceIDFromContext(request.Context()),
 		Retryable:   retryable,
 		FieldErrors: fieldErrors,

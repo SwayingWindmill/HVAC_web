@@ -267,12 +267,14 @@ export class Gateway {
   readonly commands: Json[] = [];
   /** The Site's control mode and asset locks, as the Registry owner keeps them. */
   controlState: Json = {
-    tenantId: principal.context.tenantId, siteId: SITE_ID, controlMode: 'REMOTE_AUTO', reason: '', updatedBy: null, updatedAt: null, revision: 1, assetLocks: [],
+    tenantId: principal.context.tenantId, siteId: SITE_ID, controlMode: 'REMOTE_AUTO', reason: '', updatedBy: null, updatedByName: null, updatedAt: null, revision: 1, assetLocks: [],
   };
   /** The latest stage-down and idle-auxiliary evaluation; null until the service evaluated the Site. */
   staging: Json | null = null;
   /** The session signed in with two steps in the last 10 minutes, so high-risk approvals go through. */
   stepUpFresh = false;
+  /** Optional synthetic step-up refusal reason for testing TOTP failure handling. */
+  stepUpFailureReason: 'CODE_INVALID' | 'CODE_REPLAYED' | 'MFA_NOT_CONFIGURED' | 'MFA_LOCKED' | null = null;
   /** When the forecast is replayed as published; tests that pin the page clock set it to that instant. */
   forecastOrigin: string | null = null;
   /** Optional custom handler for `device-series:aggregate` so tests can simulate outages or specific series. */
@@ -398,7 +400,7 @@ export class Gateway {
       return { status: 409, body: { status: 409, code: 'SAFE_SHUTDOWN_PRECONDITION_FAILED', detail: 'Commands are still dispatching or awaiting reconciliation.' } };
     }
     const cancelled = this.controlState.controlMode === 'REMOTE_AUTO' && input.controlMode !== 'REMOTE_AUTO' ? this.withdraw(null, now) : [];
-    this.controlState = { ...this.controlState, controlMode: input.controlMode, reason: input.reason, updatedBy: MY_ID, updatedAt: now, revision: this.controlState.revision + 1 };
+    this.controlState = { ...this.controlState, controlMode: input.controlMode, reason: input.reason, updatedBy: MY_ID, updatedByName: principal.principal.displayName, updatedAt: now, revision: this.controlState.revision + 1 };
     return { body: { ...this.controlState, cancelledCommandIds: cancelled } };
   }
 
@@ -412,7 +414,7 @@ export class Gateway {
       .filter((relationship: Json) => relationship.role === 'CONTROLS' && relationship.toId === assetId)
       .map((relationship: Json) => this.assetModel.telemetryPoints.find((point: Json) => point.id === relationship.fromId)?.reportingDeviceId)
       .filter(Boolean)));
-    const lock = { siteId: SITE_ID, assetId, lockMode: input.lockMode, reason: input.reason, updatedBy: MY_ID, updatedAt: now, revision: (current?.revision ?? 0) + 1, boundDeviceIds };
+    const lock = { siteId: SITE_ID, assetId, lockMode: input.lockMode, reason: input.reason, updatedBy: MY_ID, updatedByName: principal.principal.displayName, updatedAt: now, revision: (current?.revision ?? 0) + 1, boundDeviceIds };
     this.controlState = { ...this.controlState, assetLocks: [...this.controlState.assetLocks.filter((item: Json) => item.assetId !== assetId), lock] };
     const cancelled = input.lockMode === 'UNLOCKED' ? [] : this.withdraw(boundDeviceIds, now);
     return { body: { ...lock, cancelledCommandIds: cancelled } };
@@ -421,8 +423,14 @@ export class Gateway {
   // Site shutdown as the gateway runs it: every mode needs a reason and the authenticator code;
   // the plant and emergency modes switch the Site to safe exit and withdraw what is not dispatched.
   private shutdownSite(input: Json, now: string): { status?: number; body: unknown } {
-    const refuse = (status: number, code: string, detail: string) => ({ status, body: { status, code, detail } });
+    const refuse = (status: number, code: string, detail: string, reason?: string) => ({
+      status,
+      body: reason ? { status, code, detail, reason } : { status, code, detail },
+    });
     if (!input.reason?.trim()) return refuse(400, 'CONTROL_EXIT_REQUEST_INVALID', 'reason is required.');
+    if (this.stepUpFailureReason) {
+      return refuse(428, 'STEP_UP_REQUIRED', 'Site shutdown failed step-up verification.', this.stepUpFailureReason);
+    }
     if (!/^\d{6}$/.test(input.verificationCode ?? '')) return refuse(428, 'STEP_UP_REQUIRED', 'Site shutdown requires a 6-digit verificationCode.');
     if (input.expectedRevision !== undefined && input.expectedRevision !== this.controlState.revision) {
       return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'The expected control state revision is stale.');
@@ -450,7 +458,7 @@ export class Gateway {
       return refuse(400, 'CONTROL_EXIT_REQUEST_INVALID', 'mode is invalid.');
     }
     const cancelled = this.withdraw(null, now);
-    this.controlState = { ...this.controlState, controlMode: 'SAFE_SHUTDOWN_EXIT', reason: input.reason, updatedBy: MY_ID, updatedAt: now, revision: this.controlState.revision + 1 };
+    this.controlState = { ...this.controlState, controlMode: 'SAFE_SHUTDOWN_EXIT', reason: input.reason, updatedBy: MY_ID, updatedByName: principal.principal.displayName, updatedAt: now, revision: this.controlState.revision + 1 };
     const auxiliaries = assets.filter((asset) => ['CHILLED_WATER_PUMP', 'COOLING_WATER_PUMP', 'COOLING_TOWER'].includes(asset.assetType));
     const plant = input.mode === 'PLANT_SAFE_SHUTDOWN';
     return {
@@ -1191,8 +1199,21 @@ export class Gateway {
       if (this.controlState.activeMaintenanceWindow && !['STOP', 'STOP_UNIT_SEQUENCE', 'RESET_FAULT'].includes(point?.sourceMetadata?.capability)) {
         return { status: 409, body: { status: 409, code: 'COMMAND_CONTROL_LOCKED', detail: 'Only stop and reset commands are permitted during the maintenance window.' } };
       }
-      if (HIGH_RISK.includes(point?.sourceMetadata?.capability) && !/^\d{6}$/.test(body?.verificationCode ?? '')) {
-        return { status: 428, body: { status: 428, code: 'STEP_UP_REQUIRED', detail: 'High-risk commands require a 6-digit verificationCode from your authenticator app.' } };
+      if (HIGH_RISK.includes(point?.sourceMetadata?.capability)) {
+        if (this.stepUpFailureReason) {
+          return {
+            status: 428,
+            body: {
+              status: 428,
+              code: 'STEP_UP_REQUIRED',
+              detail: 'High-risk commands failed step-up verification.',
+              reason: this.stepUpFailureReason,
+            },
+          };
+        }
+        if (!/^\d{6}$/.test(body?.verificationCode ?? '')) {
+          return { status: 428, body: { status: 428, code: 'STEP_UP_REQUIRED', detail: 'High-risk commands require a 6-digit verificationCode from your authenticator app.' } };
+        }
       }
       return { status: 202, body: this.submitCommand(body!, now) };
     }

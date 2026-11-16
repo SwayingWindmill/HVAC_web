@@ -15,8 +15,8 @@ import { useAssistantPanel } from '@/features/assistant/assistant-panel-store';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
-import { activeLocks, LOCK_PRESENTATION, siteControlStateQuery } from '@/features/control/control-state';
-import { formatCompactTime, formatTime, personLabel } from '@/lib/operator-format';
+import { activeLocks, controlActorLabel, LOCK_PRESENTATION, siteControlStateQuery } from '@/features/control/control-state';
+import { formatCompactTime, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { pointIsTrusted } from '@/features/assets/operational-projection';
 import { deviceStatus, KEY_READINGS, POWER_KEY } from '../../realtime/device-presentation';
@@ -59,7 +59,7 @@ function ControlLockSummary({ siteId, assetId, myId, timeZone }: { readonly site
         <span className="text-sm font-semibold">{LOCK_PRESENTATION[lock.lockMode].label} · 平台不下发指令</span>
         <Link to="/operations/control" search={{ site: siteId }} className="text-xs font-medium text-primary hover:underline">去运行控制 ›</Link>
         <span className="col-span-2 col-start-2 text-xs text-secondary-foreground">
-          {personLabel(lock.updatedBy ?? undefined, myId)}{lock.updatedAt ? ` ${formatCompactTime(lock.updatedAt, timeZone)}` : ''}{lock.reason ? ` · ${lock.reason}` : ''}
+          {controlActorLabel(lock, myId)}{lock.updatedAt ? ` ${formatCompactTime(lock.updatedAt, timeZone)}` : ''}{lock.reason ? ` · ${lock.reason}` : ''}
         </span>
       </div>
     </section>
