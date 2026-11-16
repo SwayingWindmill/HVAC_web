@@ -41,7 +41,8 @@ func (store *PostgresStore) claimVerificationOnce(ctx context.Context, tenantID 
 	if err := activateTenant(ctx, tx, tenantID); err != nil {
 		return commandmodel.VerificationEnvelope{}, err
 	}
-	if err := store.reconcileExpiredAcknowledgedAttempts(ctx, tx, tenantID, now); err != nil {
+	failureEvents, err := store.reconcileExpiredAcknowledgedAttempts(ctx, tx, tenantID, now)
+	if err != nil {
 		return commandmodel.VerificationEnvelope{}, err
 	}
 
@@ -80,7 +81,7 @@ LIMIT 1
 		&envelope.AcknowledgedAt, &envelope.VerificationDeadline, &envelope.ConnectorEvidenceID, &attemptVersion, &edgeExecutionJSON,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if err := tx.Commit(ctx); err != nil {
+		if err := store.commitAndNotifyFailures(ctx, tx, failureEvents); err != nil {
 			return commandmodel.VerificationEnvelope{}, fmt.Errorf("commit empty verification claim: %w", err)
 		}
 		return commandmodel.VerificationEnvelope{}, ErrVerificationNotAvailable
@@ -116,7 +117,7 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND attempt_id = $3::uuid
 `, tenantID, envelope.CommandID, envelope.AttemptID, leaseOwner, leaseUntil, attemptVersion+1, now); err != nil {
 		return commandmodel.VerificationEnvelope{}, fmt.Errorf("lease reported-state verification: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := store.commitAndNotifyFailures(ctx, tx, failureEvents); err != nil {
 		return commandmodel.VerificationEnvelope{}, fmt.Errorf("commit verification claim: %w", err)
 	}
 	envelope.LeaseOwner = leaseOwner
@@ -282,10 +283,13 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit verification resolution: %w", err)
 	}
+	if event, notify := controlFailureEventFromDecision(intent, intentFinal, reason, result.FailureCode, now); notify {
+		store.notifyControlFailure(event)
+	}
 	return nil
 }
 
-func (store *PostgresStore) reconcileExpiredAcknowledgedAttempts(ctx context.Context, tx pgx.Tx, tenantID string, now time.Time) error {
+func (store *PostgresStore) reconcileExpiredAcknowledgedAttempts(ctx context.Context, tx postgresQueryExecutor, tenantID string, now time.Time) ([]ControlFailureEvent, error) {
 	type expiredVerification struct {
 		AttemptID, CommandID, SiteID, DeviceID, PointID        string
 		Capability, CapabilityRevision, VerificationPointKey   string
@@ -315,7 +319,7 @@ FOR UPDATE OF a, i SKIP LOCKED
 LIMIT 50
 `, tenantID, now)
 	if err != nil {
-		return fmt.Errorf("select expired reported-state verifications: %w", err)
+		return nil, fmt.Errorf("select expired reported-state verifications: %w", err)
 	}
 	items := make([]expiredVerification, 0)
 	for rows.Next() {
@@ -329,19 +333,20 @@ LIMIT 50
 			&item.EdgeExecutionJSON,
 		); err != nil {
 			rows.Close()
-			return fmt.Errorf("scan expired reported-state verification: %w", err)
+			return nil, fmt.Errorf("scan expired reported-state verification: %w", err)
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return fmt.Errorf("iterate expired reported-state verifications: %w", err)
+		return nil, fmt.Errorf("iterate expired reported-state verifications: %w", err)
 	}
 	rows.Close()
+	events := make([]ControlFailureEvent, 0, len(items))
 	for _, item := range items {
 		var params commandmodel.CommandParameters
 		if err := json.Unmarshal(item.Parameters, &params); err != nil {
-			return fmt.Errorf("decode expired verification command parameters: %w", err)
+			return nil, fmt.Errorf("decode expired verification command parameters: %w", err)
 		}
 		var edgeExecution *commandmodel.EdgeExecutionEvidence
 		if len(item.EdgeExecutionJSON) > 0 {
@@ -393,15 +398,15 @@ LIMIT 50
 			now,
 		)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		transitionID, err := store.newID(now)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		auditID, err := store.newID(now)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_attempts
@@ -410,14 +415,14 @@ SET status = $4, version = $5,
     verification_lease_owner = NULL, verification_lease_until = NULL, updated_at = $7
 WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND attempt_id = $3::uuid
 `, tenantID, item.CommandID, item.AttemptID, decision.AttemptFinal, item.AttemptVersion+1, decision.Reason, now); err != nil {
-			return fmt.Errorf("expire reported-state verification attempt: %w", err)
+			return nil, fmt.Errorf("expire reported-state verification attempt: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_intents
 SET status = $3, version = $4, updated_at = $5
 WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 `, tenantID, item.CommandID, decision.IntentFinal, item.IntentVersion+1, now); err != nil {
-			return fmt.Errorf("expire reported-state verification intent: %w", err)
+			return nil, fmt.Errorf("expire reported-state verification intent: %w", err)
 		}
 		if decision.FreezeControlGroup {
 			if _, err := tx.Exec(ctx, `
@@ -429,14 +434,14 @@ SET frozen_control_groups = CASE
     updated_at = $4
 WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 `, tenantID, item.DeviceID, setpointControlGroup, now); err != nil {
-				return fmt.Errorf("freeze expired verification control group: %w", err)
+				return nil, fmt.Errorf("freeze expired verification control group: %w", err)
 			}
 		}
 		if err := insertDispatchTransition(ctx, tx, transitionID, intent, item.IntentVersion+1,
 			commandmodel.IntentDispatching, decision.IntentFinal,
 			decision.Reason, "command-verifier", item.AttemptID,
 			decision.Reason, now); err != nil {
-			return err
+			return nil, err
 		}
 		if err := insertDispatchAudit(ctx, tx, auditID, intent, "COMMAND_REPORTED_STATE_VERIFICATION_EXPIRED", map[string]any{
 			"attemptId": item.AttemptID, "executionFence": item.Fence,
@@ -445,8 +450,11 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 			"reason":              decision.Reason,
 			"freezeControlGroup":  decision.FreezeControlGroup,
 		}, now); err != nil {
-			return err
+			return nil, err
+		}
+		if event, notify := controlFailureEventFromDecision(intent, decision.IntentFinal, decision.Reason, "", now); notify {
+			events = append(events, event)
 		}
 	}
-	return nil
+	return events, nil
 }

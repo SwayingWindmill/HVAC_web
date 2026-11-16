@@ -15,12 +15,14 @@ import (
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
 )
 
 func TestGatewaySiteControlStateAndControlModeExit(t *testing.T) {
@@ -753,51 +755,213 @@ func TestGatewaySiteControlShutdown(t *testing.T) {
 				fAbsent.controlModeUpdates.Load(), fAbsent.siteControlMode, len(fAbsent.dispatched))
 		}
 	})
+
+	t.Run("plant_safe_shutdown_with_503_telemetry_outage_degrades_stops_chillers_and_respects_locks", func(t *testing.T) {
+		f := newShutdownPlantFixture(t)
+		f.telemetryMode[f.chillerADevID] = "UNAVAILABLE"
+		f.telemetryMode[f.chillerBDevID] = "UNAVAILABLE"
+		f.assetLocks[f.chillerBAssetID] = assetControlLockManual
+
+		rec := f.postShutdown(`{"mode":"PLANT_SAFE_SHUTDOWN","reason":"遥测503断采安全停机","verificationCode":"123456"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected degraded 200 OK on 503 telemetry outage, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp siteControlShutdownResponse
+		if json.NewDecoder(rec.Body).Decode(&resp) != nil {
+			t.Fatalf("decode failed: %s", rec.Body.String())
+		}
+		if resp.SiteControlState.ControlMode != siteControlModeSafeShutdownExit {
+			t.Fatalf("expected SAFE_SHUTDOWN_EXIT mode, got %s", resp.SiteControlState.ControlMode)
+		}
+		dispatched := f.dispatchedPointIDs()
+		if !slices.Contains(dispatched, f.chillerAStopPointID) || slices.Contains(dispatched, f.chillerBStopPointID) {
+			t.Fatalf("expected unlocked chiller-a STOP and locked chiller-b skipped, got %v", dispatched)
+		}
+		if !slices.Contains(resp.DeferredHoldingAssetIds, f.chwp1AssetID) ||
+			!slices.Contains(resp.DeferredHoldingAssetIds, f.chwp2AssetID) ||
+			!slices.Contains(resp.DeferredHoldingAssetIds, f.tower1AssetID) {
+			t.Fatalf("expected holding auxiliaries deferred during telemetry outage, got %v", resp.DeferredHoldingAssetIds)
+		}
+	})
+
+	t.Run("explicit_abort_unit_sequence_dispatches_edge_abort_without_pulsing_idle_chiller", func(t *testing.T) {
+		f := newShutdownPlantFixture(t)
+		f.includeAbortPoint = true
+		f.runStates[f.chillerADevID] = "STOPPED"
+		f.runStates[f.chillerBDevID] = "RUNNING"
+
+		rec := f.postShutdown(`{"mode":"ABORT_UNIT_SEQUENCE","unitCode":"chiller-a","reason":"中止A组顺控计时器","verificationCode":"123456"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		dispatched := f.dispatchedPointIDs()
+		if !slices.Contains(dispatched, f.chillerAAbortPointID) {
+			t.Fatalf("expected explicit ABORT_UNIT_SEQUENCE point dispatched, got %v", dispatched)
+		}
+		if slices.Contains(dispatched, f.chillerAStopPointID) {
+			t.Fatalf("must not pulse regular STOP on idle STOPPED chiller when explicit abort point exists, got %v", dispatched)
+		}
+
+		// Also verify cancelling a DISPATCHING START_UNIT_SEQUENCE aborts active sequence and dispatches explicit edge abort point.
+		fCancel := newShutdownPlantFixture(t)
+		fCancel.includeAbortPoint = true
+		activeSeqID := "019a8000-dddd-7000-8000-000000000001"
+		fCancel.listedCommands = []commandView{{
+			SchemaVersion: 1, CommandID: activeSeqID, TenantID: fCancel.tenantID, SiteID: fCancel.siteID,
+			DeviceID: fCancel.chillerADevID, PointID: fCancel.chillerAStartSeqPointID,
+			Capability: commandmodel.CapabilityStartUnitSequence, CapabilityRevision: "capability:start-unit-sequence:v1",
+			Status: commandmodel.IntentDispatching, Risk: commandmodel.RiskHigh,
+			ApprovalPolicy: commandmodel.ApprovalNone, Parameters: commandmodel.CommandParameters{},
+			DeviceCommandSequence: 1, Version: 4, SnapshotRevision: 1,
+			CreatedAt: fCancel.currentTime.Add(-3 * time.Second), UpdatedAt: fCancel.currentTime,
+			Transitions: []commandTransitionView{
+				{ToStatus: commandmodel.IntentSubmitted, Reason: "COMMAND_SUBMITTED", ActorType: "PRINCIPAL", OccurredAt: fCancel.currentTime.Add(-3 * time.Second), Version: 1},
+				{FromStatus: commandStatusPointer(commandmodel.IntentSubmitted), ToStatus: commandmodel.IntentValidating, Reason: "COMMAND_VALIDATING", ActorType: "WORKLOAD", OccurredAt: fCancel.currentTime.Add(-2 * time.Second), Version: 2},
+				{FromStatus: commandStatusPointer(commandmodel.IntentValidating), ToStatus: commandmodel.IntentQueued, Reason: "COMMAND_QUEUED", ActorType: "WORKLOAD", OccurredAt: fCancel.currentTime.Add(-time.Second), Version: 3},
+				{FromStatus: commandStatusPointer(commandmodel.IntentQueued), ToStatus: commandmodel.IntentDispatching, Reason: "DISPATCH_CLAIMED", ActorType: "WORKLOAD", OccurredAt: fCancel.currentTime, Version: 4},
+			},
+		}}
+		fCancel.cancelledPendingIDs = []string{activeSeqID}
+		cancelReq := httptest.NewRequest(http.MethodPost, "/api/v1/commands/"+activeSeqID+"/cancel", strings.NewReader(`{"reason":"操作员取消顺控"}`))
+		fCancel.authenticate(cancelReq)
+		cancelRec := httptest.NewRecorder()
+		fCancel.handler.ServeHTTP(cancelRec, cancelReq)
+		if cancelRec.Code != http.StatusOK {
+			t.Fatalf("cancel DISPATCHING sequence status=%d body=%s", cancelRec.Code, cancelRec.Body.String())
+		}
+		if fCancel.lastCancelPending == nil || !fCancel.lastCancelPending.AbortActiveSequences {
+			t.Fatalf("expected AbortActiveSequences=true on sequence cancel, got %#v", fCancel.lastCancelPending)
+		}
+		if !slices.Contains(fCancel.dispatchedPointIDs(), fCancel.chillerAAbortPointID) {
+			t.Fatalf("expected explicit edge ABORT_UNIT_SEQUENCE dispatch on cancel, got %v", fCancel.dispatchedPointIDs())
+		}
+	})
+
+	t.Run("safe_shutdown_control_state_auto_releases_aux_after_coast_down_and_never_blocks_offline", func(t *testing.T) {
+		f := newShutdownPlantFixture(t)
+		f.siteControlMode = siteControlModeSafeShutdownExit
+		enteredRecently := f.currentTime.Add(-10 * time.Second).Format(time.RFC3339Nano)
+		f.controlStateUpdatedAt = &enteredRecently
+		f.runStates[f.chillerADevID] = "STOPPED"
+		f.runStates[f.chillerBDevID] = "STOPPED"
+		f.runStates[f.chwp1DevID] = "RUNNING"
+		f.runStates[f.tower1DevID] = "RUNNING"
+		f.assetLocks[f.tower1AssetID] = assetControlLockManual
+
+		// Coast-down < 60s: GET control-state must not release pumps yet.
+		getEarly := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+f.siteID+"/control-state", nil)
+		f.authenticate(getEarly)
+		recEarly := httptest.NewRecorder()
+		f.handler.ServeHTTP(recEarly, getEarly)
+		if recEarly.Code != http.StatusOK {
+			t.Fatalf("early GET control-state status=%d body=%s", recEarly.Code, recEarly.Body.String())
+		}
+		if len(f.dispatched) != 0 {
+			t.Fatalf("expected 0 aux STOPs before 60s coast-down, got %v", f.dispatchedPointIDs())
+		}
+
+		// After >= 60s coast-down: GET control-state auto-releases unlocked chwp-1 while preserving locked tower-1.
+		f.currentTime = f.currentTime.Add(65 * time.Second)
+		getReady := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+f.siteID+"/control-state", nil)
+		f.authenticate(getReady)
+		recReady := httptest.NewRecorder()
+		f.handler.ServeHTTP(recReady, getReady)
+		if recReady.Code != http.StatusOK {
+			t.Fatalf("ready GET control-state status=%d body=%s", recReady.Code, recReady.Body.String())
+		}
+		dispatched := f.dispatchedPointIDs()
+		if !slices.Contains(dispatched, f.chwp1StopPointID) || slices.Contains(dispatched, f.tower1StopPointID) {
+			t.Fatalf("expected unlocked chwp-1 auto-released and locked tower-1 untouched, got %v", dispatched)
+		}
+
+		// Telemetry outage must never fail GET /control-state.
+		f.telemetryMode[f.chillerADevID] = "UNAVAILABLE"
+		f.telemetryMode[f.chwp1DevID] = "UNAVAILABLE"
+		getOffline := httptest.NewRequest(http.MethodGet, "/api/v1/sites/"+f.siteID+"/control-state", nil)
+		f.authenticate(getOffline)
+		recOffline := httptest.NewRecorder()
+		f.handler.ServeHTTP(recOffline, getOffline)
+		if recOffline.Code != http.StatusOK {
+			t.Fatalf("expected non-blocking 200 OK during offline telemetry, got %d", recOffline.Code)
+		}
+	})
+
+	t.Run("emergency_do_release_emits_critical_operational_alarm", func(t *testing.T) {
+		f := newShutdownPlantFixture(t)
+		f.includeEmergencyPoint = true
+		rec := f.postShutdown(`{"mode":"EMERGENCY_DO_RELEASE","confirmEmergencyDoRelease":true,"reason":"配电柜急停演练","verificationCode":"123456"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			list, err := f.alarmStore.List(context.Background(), f.tenantID, f.siteID, alarmservice.Filter{Limit: 10})
+			if err == nil && len(list.Items) > 0 {
+				alarm := list.Items[0]
+				if alarm.SourceType != alarmmodel.SourceExternal ||
+					alarm.AlarmType != "EMERGENCY_DO_RELEASE" ||
+					alarm.CurrentSeverity != alarmmodel.SeverityCritical {
+					t.Fatalf("unexpected EMERGENCY_DO_RELEASE alarm: %#v", alarm)
+				}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for EMERGENCY_DO_RELEASE operational alarm")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
 }
 
 type shutdownPlantFixture struct {
-	handler               *handler
-	sessionID             string
-	tenantID              string
-	siteID                string
-	principalID           string
-	chillerAAssetID       string
-	chillerBAssetID       string
-	chwp1AssetID          string
-	chwp2AssetID          string
-	tower1AssetID         string
-	chillerADevID         string
-	chillerBDevID         string
-	chwp1DevID            string
-	chwp2DevID            string
-	tower1DevID           string
-	emergencyDevID        string
-	chillerARunPointID    string
-	chillerBRunPointID    string
-	chwp1RunPointID       string
-	chwp2RunPointID       string
-	tower1RunPointID      string
-	emergencyRunPointID   string
-	chillerAStopPointID   string
-	chillerBStopPointID   string
-	chwp1StopPointID      string
-	chwp2StopPointID      string
-	tower1StopPointID     string
-	emergencyPointID      string
-	includeEmergencyPoint bool
-	denyScheduleManage    atomic.Bool
-	siteControlMode       string
-	siteControlRevision   int64
-	assetLocks            map[string]string
-	runStates             map[string]string
-	telemetryMode         map[string]string
-	listedCommands        []commandView
-	reconciledInputs      []internalCommandReconciliation
-	cancelledPendingIDs   []string
-	lastCancelPending     *internalCommandCancelPendingRequest
-	dispatched            []internalCommandCreate
-	controlModeUpdates    atomic.Int32
-	commandSeq            atomic.Int32
+	handler                 *handler
+	sessionID               string
+	tenantID                string
+	siteID                  string
+	principalID             string
+	chillerAAssetID         string
+	chillerBAssetID         string
+	chwp1AssetID            string
+	chwp2AssetID            string
+	tower1AssetID           string
+	chillerADevID           string
+	chillerBDevID           string
+	chwp1DevID              string
+	chwp2DevID              string
+	tower1DevID             string
+	emergencyDevID          string
+	chillerARunPointID      string
+	chillerBRunPointID      string
+	chwp1RunPointID         string
+	chwp2RunPointID         string
+	tower1RunPointID        string
+	emergencyRunPointID     string
+	chillerAStopPointID     string
+	chillerBStopPointID     string
+	chwp1StopPointID        string
+	chwp2StopPointID        string
+	tower1StopPointID       string
+	emergencyPointID        string
+	chillerAAbortPointID    string
+	chillerAStartSeqPointID string
+	includeEmergencyPoint   bool
+	includeAbortPoint       bool
+	currentTime             time.Time
+	controlStateUpdatedAt   *string
+	alarmStore              *alarmservice.MemoryStore
+	denyScheduleManage      atomic.Bool
+	siteControlMode         string
+	siteControlRevision     int64
+	assetLocks              map[string]string
+	runStates               map[string]string
+	telemetryMode           map[string]string
+	listedCommands          []commandView
+	reconciledInputs        []internalCommandReconciliation
+	cancelledPendingIDs     []string
+	lastCancelPending       *internalCommandCancelPendingRequest
+	dispatched              []internalCommandCreate
+	controlModeUpdates      atomic.Int32
+	commandSeq              atomic.Int32
 }
 
 func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
@@ -805,37 +969,45 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 	now := time.Date(2026, 11, 15, 16, 0, 0, 0, time.UTC)
 	gatewaySigner := commandTestSigner(t)
 	iamSigner := commandTestSigner(t)
+	alarmStore, err := alarmservice.NewMemoryStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	f := &shutdownPlantFixture{
-		tenantID:            "019a8000-1000-7000-8000-000000000001",
-		siteID:              "019a8000-2000-7000-8000-000000000001",
-		principalID:         "019a8000-5000-7000-8000-000000000001",
-		chillerAAssetID:     "019a8000-6000-7000-8000-000000000001",
-		chillerBAssetID:     "019a8000-6000-7000-8000-000000000002",
-		chwp1AssetID:        "019a8000-6000-7000-8000-000000000003",
-		chwp2AssetID:        "019a8000-6000-7000-8000-000000000004",
-		tower1AssetID:       "019a8000-6000-7000-8000-000000000005",
-		chillerADevID:       "019a8000-3000-7000-8000-000000000001",
-		chillerBDevID:       "019a8000-3000-7000-8000-000000000002",
-		chwp1DevID:          "019a8000-3000-7000-8000-000000000003",
-		chwp2DevID:          "019a8000-3000-7000-8000-000000000004",
-		tower1DevID:         "019a8000-3000-7000-8000-000000000005",
-		emergencyDevID:      "019a8000-3000-7000-8000-000000000006",
-		chillerARunPointID:  "019a8000-7000-7000-8000-000000000001",
-		chillerBRunPointID:  "019a8000-7000-7000-8000-000000000002",
-		chwp1RunPointID:     "019a8000-7000-7000-8000-000000000003",
-		chwp2RunPointID:     "019a8000-7000-7000-8000-000000000004",
-		tower1RunPointID:    "019a8000-7000-7000-8000-000000000005",
-		emergencyRunPointID: "019a8000-7000-7000-8000-000000000006",
-		chillerAStopPointID: "019a8000-7100-7000-8000-000000000001",
-		chillerBStopPointID: "019a8000-7100-7000-8000-000000000002",
-		chwp1StopPointID:    "019a8000-7100-7000-8000-000000000003",
-		chwp2StopPointID:    "019a8000-7100-7000-8000-000000000004",
-		tower1StopPointID:   "019a8000-7100-7000-8000-000000000005",
-		emergencyPointID:    "019a8000-7100-7000-8000-000000000006",
-		siteControlMode:     siteControlModeRemoteAuto,
-		assetLocks:          map[string]string{},
-		telemetryMode:       map[string]string{},
+		tenantID:                "019a8000-1000-7000-8000-000000000001",
+		siteID:                  "019a8000-2000-7000-8000-000000000001",
+		principalID:             "019a8000-5000-7000-8000-000000000001",
+		chillerAAssetID:         "019a8000-6000-7000-8000-000000000001",
+		chillerBAssetID:         "019a8000-6000-7000-8000-000000000002",
+		chwp1AssetID:            "019a8000-6000-7000-8000-000000000003",
+		chwp2AssetID:            "019a8000-6000-7000-8000-000000000004",
+		tower1AssetID:           "019a8000-6000-7000-8000-000000000005",
+		chillerADevID:           "019a8000-3000-7000-8000-000000000001",
+		chillerBDevID:           "019a8000-3000-7000-8000-000000000002",
+		chwp1DevID:              "019a8000-3000-7000-8000-000000000003",
+		chwp2DevID:              "019a8000-3000-7000-8000-000000000004",
+		tower1DevID:             "019a8000-3000-7000-8000-000000000005",
+		emergencyDevID:          "019a8000-3000-7000-8000-000000000006",
+		chillerARunPointID:      "019a8000-7000-7000-8000-000000000001",
+		chillerBRunPointID:      "019a8000-7000-7000-8000-000000000002",
+		chwp1RunPointID:         "019a8000-7000-7000-8000-000000000003",
+		chwp2RunPointID:         "019a8000-7000-7000-8000-000000000004",
+		tower1RunPointID:        "019a8000-7000-7000-8000-000000000005",
+		emergencyRunPointID:     "019a8000-7000-7000-8000-000000000006",
+		chillerAStopPointID:     "019a8000-7100-7000-8000-000000000001",
+		chillerBStopPointID:     "019a8000-7100-7000-8000-000000000002",
+		chwp1StopPointID:        "019a8000-7100-7000-8000-000000000003",
+		chwp2StopPointID:        "019a8000-7100-7000-8000-000000000004",
+		tower1StopPointID:       "019a8000-7100-7000-8000-000000000005",
+		emergencyPointID:        "019a8000-7100-7000-8000-000000000006",
+		chillerAAbortPointID:    "019a8000-7100-7000-8000-000000000007",
+		chillerAStartSeqPointID: "019a8000-7100-7000-8000-000000000008",
+		currentTime:             now,
+		alarmStore:              alarmStore,
+		siteControlMode:         siteControlModeRemoteAuto,
+		assetLocks:              map[string]string{},
+		telemetryMode:           map[string]string{},
 		runStates: map[string]string{
 			"019a8000-3000-7000-8000-000000000001": "RUNNING",
 			"019a8000-3000-7000-8000-000000000002": "RUNNING",
@@ -891,7 +1063,7 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 				Issuer: "spiffe://hvac.local/iam-service", Presenter: "spiffe://hvac.local/platform-gateway", Audience: "platform-core-service",
 				PrincipalID: f.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, TenantID: f.tenantID,
 				AllowedSiteIDs: []string{f.siteID}, Actions: []registryauth.Action{input.Action}, PolicyRevision: "registry-read:1/iam:1",
-				IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(),
+				IssuedAt: f.currentTime.Unix(), ExpiresAt: f.currentTime.Add(30 * time.Second).Unix(),
 			}
 			return telemetryJSONResponse(http.StatusOK, registryauth.DecisionResponse{Decision: decision, DelegationGrant: commandUnsignedRegistryGrant(claims)}), nil
 		case telemetryDecisionPath:
@@ -906,7 +1078,7 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 				Allowed: true, PrincipalID: f.principalID, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
 				TenantID: f.tenantID, Action: input.Action, ScopeDigest: digest,
 				PolicyRevision: "identity-policy-1", ReasonCode: telemetryauth.ReasonAllowExactScope,
-				DecidedAt: now.Format(time.RFC3339Nano), Targets: []telemetryauth.AuthorizedTarget{{
+				DecidedAt: f.currentTime.Format(time.RFC3339Nano), Targets: []telemetryauth.AuthorizedTarget{{
 					TenantID: f.tenantID, SiteID: f.siteID, DeviceID: target.DeviceID, Keys: target.Keys,
 				}},
 			}
@@ -917,7 +1089,7 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 				Action: input.Action, ScopeDigest: digest, TargetCount: 1, KeyCount: len(target.Keys), PolicyRevision: "identity-policy-1",
 				SessionID: parent.SessionID, ParentTokenID: parent.TokenID, RequestID: request.Header.Get("X-Request-ID"),
 				TraceID: traceIDFromTraceparent(request.Header.Get("Traceparent")), Route: telemetryPublicRoute(input.Action),
-				IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(), TokenID: randomURLToken(16),
+				IssuedAt: f.currentTime.Unix(), ExpiresAt: f.currentTime.Add(30 * time.Second).Unix(), TokenID: randomURLToken(16),
 			}
 			return telemetryJSONResponse(http.StatusOK, telemetryauth.DecisionResponse{Decision: decision, DelegationGrant: unsignedTelemetryGrant(claims)}), nil
 		case commandDecisionPath:
@@ -932,7 +1104,7 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 				Capability: input.Capability, CapabilityRevision: profile.Revision,
 				Purpose: input.Purpose, MaximumRisk: commandmodel.RiskHigh,
 				PolicyRevision: "identity-policy-1", EmergencyRevocationRevision: 3,
-				ReasonCode: commandauth.ReasonAllowExactCapability, DecidedAt: now.Format(time.RFC3339Nano),
+				ReasonCode: commandauth.ReasonAllowExactCapability, DecidedAt: f.currentTime.Format(time.RFC3339Nano),
 			}
 			grantID := randomURLToken(16)
 			grant, err := commandauth.SignGrant(iamSigner, commandauth.GrantClaims{
@@ -941,7 +1113,7 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 				TenantID: f.tenantID, SiteID: f.siteID, DeviceID: input.DeviceID,
 				Capability: decision.Capability, MaximumRisk: decision.MaximumRisk, CapabilityRevision: decision.CapabilityRevision,
 				PolicyRevision: decision.PolicyRevision, EmergencyRevocationRevision: 3,
-				IssuedAt: now.Unix(), ExpiresAt: now.Add(25 * time.Second).Unix(), TokenID: grantID,
+				IssuedAt: f.currentTime.Unix(), ExpiresAt: f.currentTime.Add(25 * time.Second).Unix(), TokenID: grantID,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -985,9 +1157,15 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 		case "/internal/v1/registry/sites/" + f.siteID + "/asset-model":
 			return telemetryJSONResponse(http.StatusOK, f.buildAssetModel(ts)), nil
 		default:
-			for _, asset := range f.buildAssetModel(ts).Assets {
+			model := f.buildAssetModel(ts)
+			for _, asset := range model.Assets {
 				if request.URL.Path == "/internal/v1/registry/assets/"+asset.ID {
 					return telemetryJSONResponse(http.StatusOK, asset), nil
+				}
+			}
+			for _, device := range model.Devices {
+				if request.URL.Path == "/internal/v1/registry/devices/"+device.ID {
+					return telemetryJSONResponse(http.StatusOK, device), nil
 				}
 			}
 			t.Fatalf("unexpected Registry request %s", request.URL.Path)
@@ -1008,7 +1186,7 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 		rawVal, _ := json.Marshal(val)
 		state := s2telemetryapi.DevicePresenceStateOnline
 		display := s2telemetryapi.DeviceDisplayStateOnline
-		instant := s2telemetryapi.Instant(now.Add(-time.Second).Format(time.RFC3339Nano))
+		instant := s2telemetryapi.Instant(f.currentTime.Add(-time.Second).Format(time.RFC3339Nano))
 		policy := s2telemetryapi.PolicyRevision(5)
 		readiness := s2telemetryapi.TelemetryReadinessCurrent
 		freshness := "FRESH"
@@ -1018,7 +1196,7 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 		}
 		snapshot := s2telemetryapi.DeviceObservationSnapshot{
 			SchemaVersion: 1, TenantId: s2telemetryapi.UUIDv7(f.tenantID), SiteId: s2telemetryapi.UUIDv7(f.siteID), DeviceId: s2telemetryapi.UUIDv7(deviceID),
-			BusinessRevision: 17, EvaluatedAt: s2telemetryapi.Instant(now.Format(time.RFC3339Nano)),
+			BusinessRevision: 17, EvaluatedAt: s2telemetryapi.Instant(f.currentTime.Format(time.RFC3339Nano)),
 			EvaluationAvailability: s2telemetryapi.EvaluationAvailabilityAvailable, AvailabilityReasons: []s2telemetryapi.AvailabilityReasonCode{},
 			Presence:           s2telemetryapi.PresenceSnapshot{Applicability: s2telemetryapi.PresenceApplicabilityApplicable, CurrentState: &state, LastSeenAt: &instant, PolicyRevision: &policy},
 			TelemetryReadiness: readiness, DisplayState: &display,
@@ -1099,13 +1277,31 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 			}
 			return telemetryJSONResponse(http.StatusOK, map[string][]commandView{"data": listed}), nil
 		}
+		if strings.HasPrefix(request.URL.Path, internalCommandsPath+"/") && request.Method == http.MethodGet {
+			for _, existing := range f.listedCommands {
+				if request.URL.Path == internalCommandsPath+"/"+existing.CommandID {
+					view := existing
+					if f.lastCancelPending != nil && f.lastCancelPending.AbortActiveSequences && slices.Contains(f.cancelledPendingIDs, existing.CommandID) && existing.Status == commandmodel.IntentDispatching {
+						view.Status = commandmodel.IntentFailed
+						view.Version++
+						view.UpdatedAt = f.currentTime
+						view.Transitions = append(append([]commandTransitionView(nil), existing.Transitions...), commandTransitionView{
+							FromStatus: commandStatusPointer(commandmodel.IntentDispatching), ToStatus: commandmodel.IntentFailed,
+							Reason: "ACTIVE_SEQUENCE_ABORTED", ActorType: "PRINCIPAL", OccurredAt: f.currentTime, Version: view.Version,
+						})
+					}
+					return telemetryJSONResponse(http.StatusOK, view), nil
+				}
+			}
+			return telemetryJSONResponse(http.StatusNotFound, map[string]any{"code": "RESOURCE_NOT_FOUND"}), nil
+		}
 		t.Fatalf("unexpected command backend call %s %s", request.Method, request.URL.Path)
 		return nil, io.EOF
 	})}
 
 	store := sessionstore.NewMemoryStore()
 	configured := NewHandler(Config{
-		Now: func() time.Time { return now },
+		Now: func() time.Time { return f.currentTime },
 		Identity: &IdentityConfig{
 			OIDCIssuer: "https://issuer.example.test", OIDCClientID: "client", OIDCRedirectURI: "https://web.example.test/api/v1/auth/callback",
 			PublicOrigin: "https://web.example.test", IAMURL: "https://iam.example.test", IAMAudience: "iam-service",
@@ -1116,6 +1312,7 @@ func newShutdownPlantFixture(t *testing.T) *shutdownPlantFixture {
 		Registry:  &RegistryConfig{CoreBaseURL: "https://registry.example.test", CoreHTTPClient: registryClient, CoreTimeout: time.Second},
 		Telemetry: &TelemetryConfig{RuntimeBaseURL: "https://telemetry.example.test", RuntimeHTTPClient: telemetryClient, RuntimeAudience: "telemetry-runtime-service", Timeout: time.Second},
 		Command:   &CommandConfig{BackendBaseURL: "https://command.example.test", BackendHTTPClient: commandClient, BackendAudience: "command-service", IAMGrantIssuer: "spiffe://hvac.local/iam-service", Timeout: time.Second},
+		Alarm:     &AlarmConfig{Store: alarmStore, BackendAudience: "alarm-service", Timeout: time.Second},
 	}).(*handler)
 	f.handler = configured
 
@@ -1158,6 +1355,7 @@ func (f *shutdownPlantFixture) buildControlStateView(ts string) siteControlState
 		TenantID:    f.tenantID,
 		SiteID:      f.siteID,
 		ControlMode: f.siteControlMode,
+		UpdatedAt:   f.controlStateUpdatedAt,
 		Revision:    f.siteControlRevision,
 		AssetLocks:  locks,
 	}
@@ -1233,6 +1431,18 @@ func (f *shutdownPlantFixture) buildAssetModel(ts string) platformapi.SiteAssetM
 			platformapi.TelemetryPoint{ID: f.emergencyPointID, TenantID: f.tenantID, SiteID: f.siteID, ReportingDeviceID: f.emergencyDevID, PointCode: "emergency_do_release", SourceKey: "emergency_do_release", DisplayName: "Emergency DO Release", PointType: "COMMAND", ValueType: "BOOLEAN", Writable: true, SampleIntervalMS: 60000, PublishIntervalMS: 60000, StaleAfterMS: 180000, SourceMetadata: map[string]any{"capability": "STOP", "capabilityRevision": stopProfile.Revision, "actuationMode": "EMERGENCY_DO_RELEASE", "feedbackPointKey": "run_state"}, Status: "ACTIVE", Revision: 1, CreatedAt: ts, UpdatedAt: ts},
 		)
 		relationships = append(relationships, platformapi.AssetRelationship{ID: "019a8000-9100-7000-8000-000000000006", TenantID: f.tenantID, SiteID: f.siteID, FromType: "POINT", FromID: f.emergencyPointID, ToType: "SITE", ToID: f.siteID, Role: "CONTROLS", Status: "ACTIVE", ValidFrom: ts, Revision: 1, CreatedAt: ts, UpdatedAt: ts})
+	}
+	if f.includeAbortPoint {
+		startSeqProfile, _ := commandmodel.CapabilityProfileFor(commandmodel.CapabilityStartUnitSequence)
+		stopSeqProfile, _ := commandmodel.CapabilityProfileFor(commandmodel.CapabilityStopUnitSequence)
+		points = append(points,
+			platformapi.TelemetryPoint{ID: f.chillerAAbortPointID, TenantID: f.tenantID, SiteID: f.siteID, ReportingDeviceID: f.chillerADevID, PointCode: "abort_unit_sequence", SourceKey: "abort_unit_sequence", DisplayName: "Abort Unit A Sequence", PointType: "COMMAND", ValueType: "BOOLEAN", Writable: true, SampleIntervalMS: 60000, PublishIntervalMS: 60000, StaleAfterMS: 180000, SourceMetadata: map[string]any{"capability": "STOP_UNIT_SEQUENCE", "capabilityRevision": stopSeqProfile.Revision, "actuationMode": "ABORT_UNIT_SEQUENCE", "feedbackPointKey": "run_state"}, Status: "ACTIVE", Revision: 1, CreatedAt: ts, UpdatedAt: ts},
+			platformapi.TelemetryPoint{ID: f.chillerAStartSeqPointID, TenantID: f.tenantID, SiteID: f.siteID, ReportingDeviceID: f.chillerADevID, PointCode: "start_unit_sequence", SourceKey: "start_unit_sequence", DisplayName: "Start Unit A Sequence", PointType: "COMMAND", ValueType: "BOOLEAN", Writable: true, SampleIntervalMS: 60000, PublishIntervalMS: 60000, StaleAfterMS: 180000, SourceMetadata: map[string]any{"capability": "START_UNIT_SEQUENCE", "capabilityRevision": startSeqProfile.Revision, "actuationMode": "UNIT_SEQUENCE", "feedbackPointKey": "run_state"}, Status: "ACTIVE", Revision: 1, CreatedAt: ts, UpdatedAt: ts},
+		)
+		relationships = append(relationships,
+			platformapi.AssetRelationship{ID: "019a8000-9100-7000-8000-000000000007", TenantID: f.tenantID, SiteID: f.siteID, FromType: "POINT", FromID: f.chillerAAbortPointID, ToType: "ASSET", ToID: f.chillerAAssetID, Role: "CONTROLS", Status: "ACTIVE", ValidFrom: ts, Revision: 1, CreatedAt: ts, UpdatedAt: ts},
+			platformapi.AssetRelationship{ID: "019a8000-9100-7000-8000-000000000008", TenantID: f.tenantID, SiteID: f.siteID, FromType: "POINT", FromID: f.chillerAStartSeqPointID, ToType: "ASSET", ToID: f.chillerAAssetID, Role: "CONTROLS", Status: "ACTIVE", ValidFrom: ts, Revision: 1, CreatedAt: ts, UpdatedAt: ts},
+		)
 	}
 	return platformapi.SiteAssetModel{
 		SchemaVersion: 2, TenantID: f.tenantID, SiteID: f.siteID,

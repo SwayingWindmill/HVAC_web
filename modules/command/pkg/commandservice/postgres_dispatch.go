@@ -45,12 +45,15 @@ func (store *PostgresStore) claimDispatchOnce(ctx context.Context, tenantID stri
 	if err := activateTenant(ctx, tx, tenantID); err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
-	if err := store.reconcileExpiredPreparedAttempts(ctx, tx, tenantID, now); err != nil {
+	preparedFailures, err := store.reconcileExpiredPreparedAttempts(ctx, tx, tenantID, now)
+	if err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
-	if err := store.reconcileExpiredAcknowledgedAttempts(ctx, tx, tenantID, now); err != nil {
+	verificationFailures, err := store.reconcileExpiredAcknowledgedAttempts(ctx, tx, tenantID, now)
+	if err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
+	failureEvents := append(preparedFailures, verificationFailures...)
 	if err := store.expireGovernanceInvalidQueued(ctx, tx, tenantID, now); err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
@@ -114,7 +117,7 @@ LIMIT 1
 		&intent.PayloadHash, &intent.DeviceCommandSequence, &intent.Version,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if err := tx.Commit(ctx); err != nil {
+		if err := store.commitAndNotifyFailures(ctx, tx, failureEvents); err != nil {
 			return commandmodel.DispatchEnvelope{}, fmt.Errorf("commit empty dispatch claim: %w", err)
 		}
 		return commandmodel.DispatchEnvelope{}, ErrNoDispatchAvailable
@@ -204,7 +207,7 @@ WHERE tenant_id = $1::uuid AND outbox_id = $2::uuid AND delivered_at IS NULL
 	}, now); err != nil {
 		return commandmodel.DispatchEnvelope{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := store.commitAndNotifyFailures(ctx, tx, failureEvents); err != nil {
 		return commandmodel.DispatchEnvelope{}, fmt.Errorf("commit dispatch claim: %w", err)
 	}
 	return commandmodel.DispatchEnvelope{
@@ -423,16 +426,20 @@ INSERT INTO command_runtime.command_dispatch_outbox (
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit dispatch resolution: %w", err)
 	}
+	if event, notify := controlFailureEventFromDecision(intent, intentFinal, reason, result.FailureCode, now); notify {
+		store.notifyControlFailure(event)
+	}
 	return nil
 }
 
-func (store *PostgresStore) reconcileExpiredPreparedAttempts(ctx context.Context, tx pgx.Tx, tenantID string, now time.Time) error {
+func (store *PostgresStore) reconcileExpiredPreparedAttempts(ctx context.Context, tx postgresQueryExecutor, tenantID string, now time.Time) ([]ControlFailureEvent, error) {
 	type expiredAttempt struct {
-		AttemptID, CommandID, SiteID, DeviceID, PayloadHash, LeaseOwner, OutboxID string
-		Fence, IntentVersion, AttemptVersion                                      uint64
+		AttemptID, CommandID, SiteID, DeviceID, PointID, Capability, PayloadHash, LeaseOwner, OutboxID string
+		Fence, IntentVersion, AttemptVersion                                                           uint64
 	}
 	rows, err := tx.Query(ctx, `
 SELECT a.attempt_id::text, a.command_id::text, a.site_id::text, a.device_id::text,
+       i.point_id::text, i.capability_name,
        a.payload_hash, a.lease_owner, o.outbox_id::text,
        a.execution_fence, i.version, a.version
 FROM command_runtime.command_attempts a
@@ -447,32 +454,34 @@ FOR UPDATE OF a, i, o SKIP LOCKED
 LIMIT 50
 `, tenantID, now)
 	if err != nil {
-		return fmt.Errorf("select expired prepared attempts: %w", err)
+		return nil, fmt.Errorf("select expired prepared attempts: %w", err)
 	}
 	expired := make([]expiredAttempt, 0)
 	for rows.Next() {
 		var item expiredAttempt
 		if err := rows.Scan(&item.AttemptID, &item.CommandID, &item.SiteID, &item.DeviceID,
+			&item.PointID, &item.Capability,
 			&item.PayloadHash, &item.LeaseOwner, &item.OutboxID,
 			&item.Fence, &item.IntentVersion, &item.AttemptVersion); err != nil {
 			rows.Close()
-			return fmt.Errorf("scan expired prepared attempt: %w", err)
+			return nil, fmt.Errorf("scan expired prepared attempt: %w", err)
 		}
 		expired = append(expired, item)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return fmt.Errorf("iterate expired prepared attempts: %w", err)
+		return nil, fmt.Errorf("iterate expired prepared attempts: %w", err)
 	}
 	rows.Close()
+	events := make([]ControlFailureEvent, 0, len(expired))
 	for _, item := range expired {
 		transitionID, err := store.newID(now)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		auditID, err := store.newID(now)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_attempts
@@ -480,21 +489,21 @@ SET status = 'OUTCOME_UNKNOWN', version = $4,
     connector_evidence_id = 'LEASE_EXPIRED_WITHOUT_SEND_PROOF', updated_at = $5
 WHERE tenant_id = $1::uuid AND command_id = $2::uuid AND attempt_id = $3::uuid
 `, tenantID, item.CommandID, item.AttemptID, item.AttemptVersion+1, now); err != nil {
-			return fmt.Errorf("freeze expired command attempt: %w", err)
+			return nil, fmt.Errorf("freeze expired command attempt: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_intents
 SET status = 'OUTCOME_UNKNOWN', version = $3, updated_at = $4
 WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 `, tenantID, item.CommandID, item.IntentVersion+1, now); err != nil {
-			return fmt.Errorf("freeze expired command intent: %w", err)
+			return nil, fmt.Errorf("freeze expired command intent: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.command_dispatch_outbox
 SET delivered_at = $3, lease_until = NULL
 WHERE tenant_id = $1::uuid AND outbox_id = $2::uuid
 `, tenantID, item.OutboxID, now); err != nil {
-			return fmt.Errorf("complete expired dispatch outbox: %w", err)
+			return nil, fmt.Errorf("complete expired dispatch outbox: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.device_control_state
@@ -505,23 +514,35 @@ SET frozen_control_groups = CASE
     updated_at = $4
 WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 `, tenantID, item.DeviceID, setpointControlGroup, now); err != nil {
-			return fmt.Errorf("freeze expired command control group: %w", err)
+			return nil, fmt.Errorf("freeze expired command control group: %w", err)
 		}
-		intent := commandmodel.CommandIntent{ID: item.CommandID, TenantID: tenantID, SiteID: item.SiteID, DeviceID: item.DeviceID, PayloadHash: item.PayloadHash, Version: item.IntentVersion}
+		intent := commandmodel.CommandIntent{
+			ID:          item.CommandID,
+			TenantID:    tenantID,
+			SiteID:      item.SiteID,
+			DeviceID:    item.DeviceID,
+			PointID:     item.PointID,
+			Capability:  commandmodel.Capability(item.Capability),
+			PayloadHash: item.PayloadHash,
+			Version:     item.IntentVersion,
+		}
 		if err := insertDispatchTransition(ctx, tx, transitionID, intent, item.IntentVersion+1,
 			commandmodel.IntentDispatching, commandmodel.IntentOutcomeUnknown,
 			"LEASE_EXPIRED_WITHOUT_SEND_PROOF", item.LeaseOwner, item.AttemptID,
 			"LEASE_EXPIRED_WITHOUT_SEND_PROOF", now); err != nil {
-			return err
+			return nil, err
 		}
 		if err := insertDispatchAudit(ctx, tx, auditID, intent, "COMMAND_DISPATCH_LEASE_EXPIRED", map[string]any{
 			"attemptId": item.AttemptID, "executionFence": item.Fence,
 			"reason": "LEASE_EXPIRED_WITHOUT_SEND_PROOF",
 		}, now); err != nil {
-			return err
+			return nil, err
+		}
+		if event, notify := controlFailureEventFromDecision(intent, commandmodel.IntentOutcomeUnknown, "LEASE_EXPIRED_WITHOUT_SEND_PROOF", "", now); notify {
+			events = append(events, event)
 		}
 	}
-	return nil
+	return events, nil
 }
 
 func (store *PostgresStore) expireGovernanceInvalidQueued(ctx context.Context, tx pgx.Tx, tenantID string, now time.Time) error {
@@ -664,7 +685,7 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 	return nil
 }
 
-func insertDispatchTransition(ctx context.Context, tx pgx.Tx, transitionID string, intent commandmodel.CommandIntent, version uint64, from, to commandmodel.IntentStatus, reason, actor, causationID, evidenceID string, now time.Time) error {
+func insertDispatchTransition(ctx context.Context, tx postgresQueryExecutor, transitionID string, intent commandmodel.CommandIntent, version uint64, from, to commandmodel.IntentStatus, reason, actor, causationID, evidenceID string, now time.Time) error {
 	if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_transitions (
   transition_id, command_id, tenant_id, site_id, device_id, command_version,
@@ -677,7 +698,7 @@ INSERT INTO command_runtime.command_transitions (
 	return nil
 }
 
-func insertDispatchAudit(ctx context.Context, tx pgx.Tx, auditID string, intent commandmodel.CommandIntent, eventKind string, payload map[string]any, now time.Time) error {
+func insertDispatchAudit(ctx context.Context, tx postgresQueryExecutor, auditID string, intent commandmodel.CommandIntent, eventKind string, payload map[string]any, now time.Time) error {
 	redacted, _ := json.Marshal(payload)
 	if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_audit_intents (

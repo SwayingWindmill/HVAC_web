@@ -1,7 +1,15 @@
 package commandservice
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -881,5 +889,367 @@ func TestServiceCancelPendingAbortActiveSequences(t *testing.T) {
 		if got.Status != commandmodel.IntentDispatching {
 			t.Fatalf("command %s must remain DISPATCHING, got %s", untouchedID, got.Status)
 		}
+	}
+}
+
+type stubRuntimeStore struct {
+	dispatchErr error
+	verifyErr   error
+}
+
+func (stub *stubRuntimeStore) ClaimDispatch(context.Context, string, string, time.Duration) (commandmodel.DispatchEnvelope, error) {
+	return commandmodel.DispatchEnvelope{}, ErrNoDispatchAvailable
+}
+
+func (stub *stubRuntimeStore) ResolveDispatch(context.Context, commandmodel.DispatchEnvelope, commandmodel.ConnectorResult) error {
+	return stub.dispatchErr
+}
+
+func (stub *stubRuntimeStore) ClaimVerification(context.Context, string, string, time.Duration) (commandmodel.VerificationEnvelope, error) {
+	return commandmodel.VerificationEnvelope{}, ErrVerificationNotAvailable
+}
+
+func (stub *stubRuntimeStore) ResolveVerification(context.Context, commandmodel.VerificationEnvelope, commandmodel.VerificationResult) error {
+	return stub.verifyErr
+}
+
+func (stub *stubRuntimeStore) PrepareConnectorEvidence(context.Context, commandmodel.PreparedConnectorEvidence) error {
+	return nil
+}
+
+func (stub *stubRuntimeStore) CompleteConnectorEvidence(context.Context, commandmodel.CompletedConnectorEvidence) error {
+	return nil
+}
+
+func TestControlFailureNotifierCoversUnknownOutcomeAndUnconfirmedPowerNonBlocking(t *testing.T) {
+	now := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
+	svc := New(func() time.Time { return now })
+
+	events := make(chan ControlFailureEvent, 4)
+	releaseBlocker := make(chan struct{})
+	svc.SetControlFailureNotifier(func(_ context.Context, event ControlFailureEvent) {
+		<-releaseBlocker
+		events <- event
+	})
+
+	req := validRequest()
+	req.IdempotencyKey = "notify-unknown-1"
+	sub, err := svc.Submit(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := svc.PrepareDispatch(sub.Intent.ID, "disp-1", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ResolveDispatch(env, commandmodel.ConnectorResult{
+		Phase:       commandmodel.ConnectorRequestCommitted,
+		FailureCode: "MQTT_TIMEOUT",
+		EvidenceID:  "ev-commit-timeout",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	reqPulse := validRequest()
+	reqPulse.IdempotencyKey = "notify-pulse-1"
+	reqPulse.DeviceID = "device-pulse"
+	reqPulse.Authorization.DeviceID = "device-pulse"
+	reqPulse.Capability = commandmodel.CapabilityStart
+	reqPulse.Authorization.Capability = commandmodel.CapabilityStart
+	profile, ok := commandmodel.CapabilityProfileFor(commandmodel.CapabilityStart)
+	if !ok {
+		t.Fatal("missing START capability profile")
+	}
+	reqPulse.Authorization.CapabilityRevision = profile.Revision
+	reqPulse.Parameters = commandmodel.CommandParameters{}
+	reqPulse.VerificationPointKey = "chiller.run_state"
+	subPulse, err := svc.Submit(reqPulse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envPulse, err := svc.PrepareDispatch(subPulse.Intent.ID, "disp-1", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulseEdge := &commandmodel.EdgeExecutionEvidence{
+		Requested:          commandmodel.TextScalar("START"),
+		Effective:          func() *commandmodel.ScalarValue { v := commandmodel.TextScalar("ch1:pulse(500ms)->0"); return &v }(),
+		Applied:            func() *commandmodel.ScalarValue { v := commandmodel.TextScalar("ch1:pulse(500ms)->0"); return &v }(),
+		WinnerControllerID: "edge",
+		Cycle:              1,
+	}
+	if err := svc.ResolveDispatch(envPulse, commandmodel.ConnectorResult{
+		Phase:         commandmodel.ConnectorAcknowledged,
+		Acknowledged:  true,
+		EvidenceID:    "ev-pulse-ack",
+		EdgeExecution: pulseEdge,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	vEnv, err := svc.PrepareVerification(subPulse.Intent.ID, "ver-1", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ResolveVerification(vEnv, commandmodel.VerificationResult{
+		Outcome:     commandmodel.VerificationTimedOut,
+		EvidenceID:  "ev-pulse-timeout",
+		FailureCode: "POWER_STILL_BELOW_THRESHOLD",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	close(releaseBlocker)
+	seen := map[string]ControlFailureEvent{}
+	for i := 0; i < 2; i++ {
+		select {
+		case evt := <-events:
+			seen[evt.CommandID] = evt
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for async failure event %d", i+1)
+		}
+	}
+	if got := seen[sub.Intent.ID]; got.Kind != string(commandmodel.IntentOutcomeUnknown) || got.ReasonCode != "REQUEST_COMMITTED_OUTCOME_UNKNOWN" {
+		t.Fatalf("unexpected OUTCOME_UNKNOWN event: %+v", got)
+	}
+	if got := seen[subPulse.Intent.ID]; got.Kind != commandmodel.ReasonPulseDeliveredPowerUnconfirmed || got.ReasonCode != commandmodel.ReasonPulseDeliveredPowerUnconfirmed {
+		t.Fatalf("unexpected unconfirmed-power event: %+v", got)
+	}
+
+	// Verify runtime HTTP handler triggers notifier cleanly on resolveDispatch/resolveVerification.
+	httpEvents := make(chan ControlFailureEvent, 4)
+	runtimeHandler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
+		Store:            &stubRuntimeStore{},
+		DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher",
+		VerifierSPIFFE:   "spiffe://hvac.local/command-verifier",
+		ControlFailureNotifier: func(_ context.Context, event ControlFailureEvent) {
+			httpEvents <- event
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	postRuntime := func(path, body, spiffe string) int {
+		t.Helper()
+		uri, parseErr := url.Parse(spiffe)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{uri}}}}
+		rec := httptest.NewRecorder()
+		runtimeHandler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	dispatchBody, err := json.Marshal(runtimeDispatchResolveRequest{
+		Envelope: commandmodel.DispatchEnvelope{
+			CommandID:  "cmd-http-1",
+			TenantID:   "t1",
+			SiteID:     "s1",
+			DeviceID:   "d1",
+			PointID:    "p1",
+			Capability: commandmodel.CapabilityStart,
+		},
+		Result: commandmodel.ConnectorResult{
+			Phase:       commandmodel.ConnectorRequestCommitted,
+			FailureCode: "MQTT_IO",
+			EvidenceID:  "ev1",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := postRuntime(InternalDispatchResolvePath, string(dispatchBody), "spiffe://hvac.local/command-dispatcher"); code != http.StatusNoContent {
+		t.Fatalf("resolveDispatch HTTP code=%d", code)
+	}
+	select {
+	case evt := <-httpEvents:
+		if evt.CommandID != "cmd-http-1" || evt.Kind != "OUTCOME_UNKNOWN" {
+			t.Fatalf("unexpected HTTP dispatch event: %+v", evt)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runtime HTTP dispatch failure event")
+	}
+
+	verifyBody, err := json.Marshal(runtimeVerificationResolveRequest{
+		Envelope: commandmodel.VerificationEnvelope{
+			CommandID:     "cmd-http-2",
+			TenantID:      "t1",
+			SiteID:        "s1",
+			DeviceID:      "d1",
+			PointID:       "p1",
+			Capability:    commandmodel.CapabilityStart,
+			EdgeExecution: pulseEdge,
+		},
+		Result: commandmodel.VerificationResult{
+			Outcome:     commandmodel.VerificationTimedOut,
+			EvidenceID:  "ev2",
+			FailureCode: "POWER_LOW",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := postRuntime(InternalVerificationResolvePath, string(verifyBody), "spiffe://hvac.local/command-verifier"); code != http.StatusNoContent {
+		t.Fatalf("resolveVerification HTTP code=%d", code)
+	}
+	select {
+	case evt := <-httpEvents:
+		if evt.CommandID != "cmd-http-2" || evt.Kind != commandmodel.ReasonPulseDeliveredPowerUnconfirmed {
+			t.Fatalf("unexpected HTTP verification event: %+v", evt)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runtime HTTP verification failure event")
+	}
+}
+
+func TestRuntimeHTTPVerificationSucceededPastDeadlineEmitsControlFailure(t *testing.T) {
+	httpEvents := make(chan ControlFailureEvent, 4)
+	runtimeHandler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
+		Store:            &stubRuntimeStore{},
+		DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher",
+		VerifierSPIFFE:   "spiffe://hvac.local/command-verifier",
+		ControlFailureNotifier: func(_ context.Context, event ControlFailureEvent) {
+			httpEvents <- event
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	postVerification := func(env commandmodel.VerificationEnvelope, reported commandmodel.ReportedStateEvidence) {
+		t.Helper()
+		body, marshalErr := json.Marshal(runtimeVerificationResolveRequest{
+			Envelope: env,
+			Result: commandmodel.VerificationResult{
+				Outcome:    commandmodel.VerificationSucceeded,
+				EvidenceID: "ev-verify-succeeded",
+				Reported:   reported,
+			},
+		})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		uri, parseErr := url.Parse("spiffe://hvac.local/command-verifier")
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		req := httptest.NewRequest(http.MethodPost, InternalVerificationResolvePath, strings.NewReader(string(body)))
+		req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{uri}}}}
+		rec := httptest.NewRecorder()
+		runtimeHandler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("resolveVerification HTTP code=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+
+	now := time.Now().UTC()
+	setpoint := 24.0
+	setpointScalar := commandmodel.NumberScalar(setpoint)
+	setpointEdge := &commandmodel.EdgeExecutionEvidence{
+		Requested:          setpointScalar,
+		Effective:          &setpointScalar,
+		Applied:            &setpointScalar,
+		WinnerControllerID: "cloud-command-intent",
+		Cycle:              1,
+	}
+	reportedSetpoint := commandmodel.ReportedStateEvidence{
+		TenantID:               "t1",
+		SiteID:                 "s1",
+		DeviceID:               "d1",
+		EvaluationAvailability: "AVAILABLE",
+		Presence:               "ONLINE",
+		Readiness:              "CURRENT",
+		Freshness:              "FRESH",
+		Quality:                "GOOD",
+		BusinessRevision:       11,
+		ReportedValue:          commandmodel.NumberScalar(setpoint),
+		ObservedAt:             now,
+	}
+
+	// 1. On-time VerificationSucceeded with valid reported state must NOT emit failure alarm.
+	postVerification(commandmodel.VerificationEnvelope{
+		CommandID:                "cmd-ontime",
+		TenantID:                 "t1",
+		SiteID:                   "s1",
+		DeviceID:                 "d1",
+		PointID:                  "p1",
+		Capability:               commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters:               commandmodel.CommandParameters{commandmodel.ParameterSetpointC: setpoint},
+		VerificationPointKey:     "temp_setpoint",
+		BaselineBusinessRevision: 10,
+		AcknowledgedAt:           now.Add(-5 * time.Second),
+		VerificationDeadline:     now.Add(time.Minute),
+		EdgeExecution:            setpointEdge,
+	}, reportedSetpoint)
+	select {
+	case unexpected := <-httpEvents:
+		t.Fatalf("unexpected failure notification for on-time verified command: %+v", unexpected)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// 2. Late VerificationSucceeded past VerificationDeadline for setpoint must emit OUTCOME_UNKNOWN.
+	postVerification(commandmodel.VerificationEnvelope{
+		CommandID:                "cmd-late-level",
+		TenantID:                 "t1",
+		SiteID:                   "s1",
+		DeviceID:                 "d1",
+		PointID:                  "p1",
+		Capability:               commandmodel.CapabilitySetTemperatureSetpoint,
+		Parameters:               commandmodel.CommandParameters{commandmodel.ParameterSetpointC: setpoint},
+		VerificationPointKey:     "temp_setpoint",
+		BaselineBusinessRevision: 10,
+		AcknowledgedAt:           now.Add(-2 * time.Minute),
+		VerificationDeadline:     now.Add(-time.Second),
+		EdgeExecution:            setpointEdge,
+	}, reportedSetpoint)
+	select {
+	case evt := <-httpEvents:
+		if evt.CommandID != "cmd-late-level" || evt.Kind != string(commandmodel.IntentOutcomeUnknown) || evt.ReasonCode != "REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED" {
+			t.Fatalf("unexpected late level failure event: %+v", evt)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for late VerificationSucceeded failure event")
+	}
+
+	// 3. Late VerificationSucceeded past VerificationDeadline for pulse START must emit PULSE_DELIVERED_POWER_UNCONFIRMED.
+	pulseText := "u14:pulse(500ms)->0"
+	pulseEdge := &commandmodel.EdgeExecutionEvidence{
+		Requested:          commandmodel.TextScalar("START"),
+		Effective:          &commandmodel.ScalarValue{Text: &pulseText},
+		Applied:            &commandmodel.ScalarValue{Text: &pulseText},
+		WinnerControllerID: "cloud-command-intent",
+		Cycle:              1,
+	}
+	postVerification(commandmodel.VerificationEnvelope{
+		CommandID:                "cmd-late-pulse",
+		TenantID:                 "t1",
+		SiteID:                   "s1",
+		DeviceID:                 "d1",
+		PointID:                  "p1",
+		Capability:               commandmodel.CapabilityStart,
+		VerificationPointKey:     "run_state",
+		BaselineBusinessRevision: 10,
+		AcknowledgedAt:           now.Add(-2 * time.Minute),
+		VerificationDeadline:     now.Add(-time.Second),
+		EdgeExecution:            pulseEdge,
+	}, commandmodel.ReportedStateEvidence{
+		TenantID:               "t1",
+		SiteID:                 "s1",
+		DeviceID:               "d1",
+		EvaluationAvailability: "AVAILABLE",
+		Presence:               "ONLINE",
+		Readiness:              "CURRENT",
+		Freshness:              "FRESH",
+		Quality:                "GOOD",
+		BusinessRevision:       11,
+		ReportedValue:          commandmodel.TextScalar("RUNNING"),
+		ObservedAt:             now,
+	})
+	select {
+	case evt := <-httpEvents:
+		if evt.CommandID != "cmd-late-pulse" || evt.Kind != commandmodel.ReasonPulseDeliveredPowerUnconfirmed || evt.ReasonCode != commandmodel.ReasonPulseDeliveredPowerUnconfirmed {
+			t.Fatalf("unexpected late pulse failure event: %+v", evt)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for late pulse VerificationSucceeded failure event")
 	}
 }

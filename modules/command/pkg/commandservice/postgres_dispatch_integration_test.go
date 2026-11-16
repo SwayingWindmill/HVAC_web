@@ -1,6 +1,7 @@
 package commandservice
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -768,4 +769,118 @@ WHERE command_id = $1::uuid AND delivered_at IS NULL
 	if undelivered != 0 {
 		t.Fatalf("expected all undelivered outbox rows retired on governance expiry, got %d", undelivered)
 	}
+}
+
+func TestPostgresControlFailureNotifierEmitsOnReconciliationAndResolution(t *testing.T) {
+	t.Run("expired_prepared_dispatch_emits_outcome_unknown_via_claim_dispatch", func(t *testing.T) {
+		store, _, now, cleanup := postgresDispatchFixture(t)
+		defer cleanup()
+		ctx := t.Context()
+		events := make(chan ControlFailureEvent, 4)
+		store.SetControlFailureNotifier(func(_ context.Context, evt ControlFailureEvent) {
+			events <- evt
+		})
+
+		created, err := store.Submit(ctx, postgresCommandRequest("pg-notify-prepared-expired", 24))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 2*time.Second); err != nil {
+			t.Fatal(err)
+		}
+		*now = now.Add(3 * time.Second)
+		if _, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-b", 10*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
+			t.Fatalf("expected ErrNoDispatchAvailable, got %v", err)
+		}
+		select {
+		case evt := <-events:
+			if evt.CommandID != created.Intent.ID || evt.Kind != "OUTCOME_UNKNOWN" ||
+				evt.ReasonCode != "LEASE_EXPIRED_WITHOUT_SEND_PROOF" ||
+				evt.PointID != commandPointA || evt.Capability != commandmodel.CapabilitySetTemperatureSetpoint {
+				t.Fatalf("unexpected prepared expiry event: %+v", evt)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for prepared expiry control failure notification")
+		}
+	})
+
+	t.Run("expired_acknowledged_verification_emits_pulse_and_level_failures", func(t *testing.T) {
+		store, _, now, cleanup := postgresDispatchFixture(t)
+		defer cleanup()
+		ctx := t.Context()
+		events := make(chan ControlFailureEvent, 4)
+		store.SetControlFailureNotifier(func(_ context.Context, evt ControlFailureEvent) {
+			events <- evt
+		})
+
+		// 1. Pulse START verification expires -> PULSE_DELIVERED_POWER_UNCONFIRMED (device NOT frozen).
+		pulseCmd, err := store.Submit(ctx, postgresStartStopCommandRequest("pg-notify-pulse-expired", commandmodel.CapabilityStart, *now))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dispatchPulse, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pulseText := "u14:pulse(500ms)->0"
+		pulseEdge := &commandmodel.EdgeExecutionEvidence{
+			Requested: commandmodel.TextScalar("START"),
+			Effective: &commandmodel.ScalarValue{Text: &pulseText}, Applied: &commandmodel.ScalarValue{Text: &pulseText},
+			WinnerControllerID: "cloud-command-intent", Cycle: 1,
+		}
+		if err := store.ResolveDispatch(ctx, dispatchPulse, commandmodel.ConnectorResult{
+			Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "ack-pg-pulse",
+			EdgeExecution: recordAcknowledgedTextConnectorEvidence(t, store, *now, dispatchPulse, pulseEdge),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		*now = now.Add(commandmodel.VerificationWindowFor(commandmodel.CapabilityStart) + time.Second)
+		if _, err := store.ClaimVerification(ctx, commandTenantA, "verifier-a", 15*time.Second); !errors.Is(err, ErrVerificationNotAvailable) {
+			t.Fatalf("expected ErrVerificationNotAvailable, got %v", err)
+		}
+		select {
+		case evt := <-events:
+			if evt.CommandID != pulseCmd.Intent.ID || evt.Kind != commandmodel.ReasonPulseDeliveredPowerUnconfirmed ||
+				evt.ReasonCode != commandmodel.ReasonPulseDeliveredPowerUnconfirmed || evt.PointID != commandPointA {
+				t.Fatalf("unexpected pulse verification expiry event: %+v", evt)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for pulse verification expiry notification")
+		}
+
+		// 2. Level START verification expires -> OUTCOME_UNKNOWN.
+		levelCmd, err := store.Submit(ctx, postgresStartStopCommandRequest("pg-notify-level-expired", commandmodel.CapabilityStart, *now))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dispatchLevel, err := store.ClaimDispatch(ctx, commandTenantA, "dispatcher-a", 10*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		levelText := "u11:1"
+		levelEdge := &commandmodel.EdgeExecutionEvidence{
+			Requested: commandmodel.TextScalar("START"),
+			Effective: &commandmodel.ScalarValue{Text: &levelText}, Applied: &commandmodel.ScalarValue{Text: &levelText},
+			WinnerControllerID: "cloud-command-intent", Cycle: 1,
+		}
+		if err := store.ResolveDispatch(ctx, dispatchLevel, commandmodel.ConnectorResult{
+			Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true, EvidenceID: "ack-pg-level",
+			EdgeExecution: recordAcknowledgedTextConnectorEvidence(t, store, *now, dispatchLevel, levelEdge),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		*now = now.Add(commandmodel.VerificationWindowFor(commandmodel.CapabilityStart) + time.Second)
+		if _, err := store.ClaimVerification(ctx, commandTenantA, "verifier-a", 15*time.Second); !errors.Is(err, ErrVerificationNotAvailable) {
+			t.Fatalf("expected ErrVerificationNotAvailable, got %v", err)
+		}
+		select {
+		case evt := <-events:
+			if evt.CommandID != levelCmd.Intent.ID || evt.Kind != "OUTCOME_UNKNOWN" ||
+				evt.ReasonCode != "REPORTED_STATE_VERIFICATION_DEADLINE_EXPIRED" || evt.PointID != commandPointA {
+				t.Fatalf("unexpected level verification expiry event: %+v", evt)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for level verification expiry notification")
+		}
+	})
 }

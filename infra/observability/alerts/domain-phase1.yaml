@@ -77,7 +77,7 @@ groups:
     interval: 30s
     rules:
       - alert: CommandVerificationFailureRateHigh
-        expr: (sum(rate(hvac_command_verifications_total{outcome!="verified"}[10m])) / sum(rate(hvac_command_verifications_total[10m]))) > 0.05 and sum(increase(hvac_command_verifications_total[10m])) > 20
+        expr: (sum(rate(hvac_command_verifications_total{outcome!="verified"}[10m])) / sum(rate(hvac_command_verifications_total[10m]))) > 0.05 and sum(increase(hvac_command_verifications_total[10m])) >= 1
         for: 10m
         labels:
           severity: page
@@ -87,7 +87,7 @@ groups:
           summary: More than 5 percent of command verifications are not VERIFIED
           runbook: docs/operations/alerts.md#指令核对失败
       - alert: CommandVerificationTimeoutRateHigh
-        expr: (sum(rate(hvac_command_verifications_total{outcome="timed_out"}[10m])) / sum(rate(hvac_command_verifications_total[10m]))) > 0.02 and sum(increase(hvac_command_verifications_total[10m])) > 50
+        expr: (sum(rate(hvac_command_verifications_total{outcome="timed_out"}[10m])) / sum(rate(hvac_command_verifications_total[10m]))) > 0.02 and sum(increase(hvac_command_verifications_total[10m])) >= 1
         for: 10m
         labels:
           severity: page
