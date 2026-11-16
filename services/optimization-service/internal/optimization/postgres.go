@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -28,19 +29,43 @@ type PublishedRecommendation struct {
 
 var ErrOptimizationNotFound = errors.New("optimization recommendation not found")
 
-// PreparationOutcome is how the Site's latest schedule firing went: whether it prepared a run and,
-// when it did not, which input was missing.
-type PreparationOutcome struct {
-	Trigger string `json:"trigger"`
-	// Status is PREPARED, FAILED or PENDING while the firing is still queued or running.
-	Status string `json:"status"`
-	// Reason is one of the PreparationReason codes, or PREPARATION_FAILED; null unless FAILED.
-	Reason      *string    `json:"reason"`
-	FiredAt     time.Time  `json:"firedAt"`
-	CompletedAt *time.Time `json:"completedAt"`
+const (
+	PreparationStatusPrepared     = "PREPARED"
+	PreparationStatusFailed       = "FAILED"
+	PreparationStatusPending      = "PENDING"
+	PreparationStatusNotScheduled = "NOT_SCHEDULED"
+
+	ResponseCoefficientCalibrated    = "CALIBRATED"
+	ResponseCoefficientNotCalibrated = "NOT_CALIBRATED"
+
+	TenantStrategyConfirmed = "CONFIRMED"
+	TenantStrategyPending   = "PENDING"
+)
+
+type PreparationResponseCoefficient struct {
+	Status       string  `json:"status"`
+	CalibratedAt *string `json:"calibratedAt"`
 }
 
-// ErrPreparationNotFound is a Site whose schedule has never fired an Optimization run.
+type PreparationTenantStrategy struct {
+	Status string `json:"status"`
+}
+
+// PreparationOutcome is how the Site's latest schedule firing went, plus readiness reasons
+// explaining why supply-water temperature optimization is not yet enabled on the Site.
+type PreparationOutcome struct {
+	Trigger *string `json:"trigger"`
+	// Status is PREPARED, FAILED, PENDING, or NOT_SCHEDULED when the Site has no scheduled firing yet.
+	Status string `json:"status"`
+	// Reason is one of the PreparationReason codes, or PREPARATION_FAILED; null unless FAILED.
+	Reason              *string                        `json:"reason"`
+	FiredAt             *time.Time                     `json:"firedAt"`
+	CompletedAt         *time.Time                     `json:"completedAt"`
+	ResponseCoefficient PreparationResponseCoefficient `json:"responseCoefficient"`
+	TenantStrategy      PreparationTenantStrategy      `json:"tenantStrategy"`
+}
+
+// ErrPreparationNotFound is returned when the requested Site is not visible to the Tenant.
 var ErrPreparationNotFound = errors.New("optimization preparation not found")
 
 type EvaluationPublicationStore interface {
@@ -387,9 +412,14 @@ func optimizationUUIDv7(at time.Time) (string, error) {
 	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:], nil
 }
 
-// LatestPreparation reads the Site's latest Optimization schedule firing. A firing is the
-// OPTIMIZATION_RUN job a schedule queued; the run it prepares is queued again without the schedule.
+// LatestPreparation reads the Site's latest Optimization schedule firing and readiness status.
+// A visible Site without any scheduled OPTIMIZATION_RUN job returns NOT_SCHEDULED with Postgres-backed
+// responseCoefficient and tenantStrategy status; non-visible Sites return ErrPreparationNotFound.
 func (store *PostgresStore) LatestPreparation(ctx context.Context, tenantID, siteID string) (PreparationOutcome, error) {
+	return store.latestPreparationAt(ctx, tenantID, siteID, time.Now().UTC())
+}
+
+func (store *PostgresStore) latestPreparationAt(ctx context.Context, tenantID, siteID string, at time.Time) (PreparationOutcome, error) {
 	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) {
 		return PreparationOutcome{}, errors.New("optimization preparation scope is invalid")
 	}
@@ -401,38 +431,311 @@ func (store *PostgresStore) LatestPreparation(ctx context.Context, tenantID, sit
 	if err = optimizationScope(ctx, tx, tenantID, siteID); err != nil {
 		return PreparationOutcome{}, err
 	}
-	var state string
-	var errorCode *string
-	var outcome PreparationOutcome
-	err = tx.QueryRow(ctx, `SELECT state,error_code,scheduled_for,completed_at
-FROM core_registry.job_instances
-WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND job_type='OPTIMIZATION_RUN' AND schedule_id IS NOT NULL
-ORDER BY scheduled_for DESC,created_at DESC,job_id DESC
-LIMIT 1`, tenantID, siteID).Scan(&state, &errorCode, &outcome.FiredAt, &outcome.CompletedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return PreparationOutcome{}, ErrPreparationNotFound
-	}
+	outcome, err := resolveLatestPreparation(ctx, txPreparationReader{tx: tx}, tenantID, siteID, at)
 	if err != nil {
 		return PreparationOutcome{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return PreparationOutcome{}, err
 	}
-	return preparationOutcome(state, errorCode, outcome), nil
+	return outcome, nil
+}
+
+type scheduledPreparationJob struct {
+	state       string
+	errorCode   *string
+	firedAt     time.Time
+	completedAt *time.Time
+}
+
+type preparationReadDB interface {
+	checkSiteVisible(ctx context.Context, tenantID, siteID string) (bool, error)
+	readEffectiveHVACPolicy(ctx context.Context, tenantID string, at time.Time) (json.RawMessage, int, error)
+	hasAllActiveTelemetryPoints(ctx context.Context, tenantID, siteID string, keys []string) (bool, error)
+	hasActiveOptimizationDeployment(ctx context.Context, tenantID, siteID string) (bool, error)
+	readLatestScheduledJob(ctx context.Context, tenantID, siteID string) (scheduledPreparationJob, bool, error)
+}
+
+type txPreparationReader struct{ tx pgx.Tx }
+
+func (reader txPreparationReader) checkSiteVisible(ctx context.Context, tenantID, siteID string) (bool, error) {
+	var visible int
+	err := reader.tx.QueryRow(ctx, `SELECT 1 FROM core_registry.sites WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, siteID).Scan(&visible)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (reader txPreparationReader) readEffectiveHVACPolicy(ctx context.Context, tenantID string, at time.Time) (json.RawMessage, int, error) {
+	var constraints json.RawMessage
+	var policyCount int
+	err := reader.tx.QueryRow(ctx, `SELECT pv.constraints, count(*) OVER ()
+FROM core_registry.optimization_policy_versions pv
+JOIN core_registry.optimization_policies p
+  ON p.tenant_id=pv.tenant_id AND p.id=pv.policy_id
+WHERE pv.tenant_id=$1::uuid
+  AND p.status='ACTIVE' AND p.resource_type='HVAC'
+  AND pv.status='RELEASED'
+  AND pv.effective_from <= $2
+  AND (pv.effective_to IS NULL OR pv.effective_to > $2)
+ORDER BY pv.effective_from DESC,pv.version DESC
+LIMIT 1`, tenantID, at.UTC()).Scan(&constraints, &policyCount)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	return constraints, policyCount, nil
+}
+
+func (reader txPreparationReader) hasAllActiveTelemetryPoints(ctx context.Context, tenantID, siteID string, keys []string) (bool, error) {
+	if len(keys) == 0 {
+		return false, nil
+	}
+	rows, err := reader.tx.Query(ctx, `SELECT point_code, source_key
+FROM core_registry.telemetry_points
+WHERE tenant_id=$1::uuid
+  AND site_id=$2::uuid
+  AND status='ACTIVE'
+  AND point_type='TELEMETRY'
+  AND (source_key = ANY($3::text[]) OR point_code = ANY($3::text[]))`, tenantID, siteID, keys)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	present := make(map[string]struct{}, len(keys))
+	for rows.Next() {
+		var pointCode, sourceKey string
+		if scanErr := rows.Scan(&pointCode, &sourceKey); scanErr != nil {
+			return false, scanErr
+		}
+		if pointCode != "" {
+			present[pointCode] = struct{}{}
+		}
+		if sourceKey != "" {
+			present[sourceKey] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	for _, key := range keys {
+		if _, ok := present[key]; !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (reader txPreparationReader) hasActiveOptimizationDeployment(ctx context.Context, tenantID, siteID string) (bool, error) {
+	var exists bool
+	err := reader.tx.QueryRow(ctx, `SELECT EXISTS (
+  SELECT 1
+  FROM core_registry.ai_deployment_bindings binding
+  JOIN core_registry.ai_deployment_revisions revision
+    ON revision.tenant_id=binding.tenant_id AND revision.id=binding.deployment_revision_id
+  WHERE binding.tenant_id=$1::uuid AND binding.site_id=$2::uuid
+    AND binding.use_case='OPTIMIZATION' AND binding.status='ACTIVE'
+    AND revision.use_case='OPTIMIZATION' AND revision.enabled=true
+)`, tenantID, siteID).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func (reader txPreparationReader) readLatestScheduledJob(ctx context.Context, tenantID, siteID string) (scheduledPreparationJob, bool, error) {
+	var job scheduledPreparationJob
+	err := reader.tx.QueryRow(ctx, `SELECT state,error_code,scheduled_for,completed_at
+FROM core_registry.job_instances
+WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND job_type='OPTIMIZATION_RUN' AND schedule_id IS NOT NULL
+ORDER BY scheduled_for DESC,created_at DESC,job_id DESC
+LIMIT 1`, tenantID, siteID).Scan(&job.state, &job.errorCode, &job.firedAt, &job.completedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return scheduledPreparationJob{}, false, nil
+	}
+	if err != nil {
+		return scheduledPreparationJob{}, false, err
+	}
+	return job, true, nil
+}
+
+type preparationPolicyConstraints struct {
+	InputMapping     InputMapping                       `json:"inputMapping"`
+	ResponseModel    HVACResponseModel                  `json:"responseModel"`
+	SiteCalibrations map[string]SiteResponseCalibration `json:"siteCalibrations"`
+}
+
+func resolveLatestPreparation(ctx context.Context, db preparationReadDB, tenantID, siteID string, at time.Time) (PreparationOutcome, error) {
+	visible, err := db.checkSiteVisible(ctx, tenantID, siteID)
+	if err != nil {
+		return PreparationOutcome{}, err
+	}
+	if !visible {
+		return PreparationOutcome{}, ErrPreparationNotFound
+	}
+	responseCoefficient, tenantStrategy, err := resolvePreparationReadiness(ctx, db, tenantID, siteID, at)
+	if err != nil {
+		return PreparationOutcome{}, err
+	}
+	job, found, err := db.readLatestScheduledJob(ctx, tenantID, siteID)
+	if err != nil {
+		return PreparationOutcome{}, err
+	}
+	if !found {
+		return PreparationOutcome{
+			Status:              PreparationStatusNotScheduled,
+			ResponseCoefficient: responseCoefficient,
+			TenantStrategy:      tenantStrategy,
+		}, nil
+	}
+	firedAt := job.firedAt
+	return preparationOutcome(job.state, job.errorCode, PreparationOutcome{
+		FiredAt:             &firedAt,
+		CompletedAt:         job.completedAt,
+		ResponseCoefficient: responseCoefficient,
+		TenantStrategy:      tenantStrategy,
+	}), nil
+}
+
+func resolvePreparationReadiness(ctx context.Context, db preparationReadDB, tenantID, siteID string, at time.Time) (PreparationResponseCoefficient, PreparationTenantStrategy, error) {
+	responseCoefficient := PreparationResponseCoefficient{Status: ResponseCoefficientNotCalibrated}
+	tenantStrategy := PreparationTenantStrategy{Status: TenantStrategyPending}
+
+	constraints, policyCount, err := db.readEffectiveHVACPolicy(ctx, tenantID, at)
+	if err != nil {
+		return responseCoefficient, tenantStrategy, err
+	}
+	if policyCount != 1 {
+		return responseCoefficient, tenantStrategy, nil
+	}
+
+	var parsed preparationPolicyConstraints
+	if err := json.Unmarshal(constraints, &parsed); err != nil {
+		return responseCoefficient, tenantStrategy, nil
+	}
+	responseCoefficient = deriveResponseCoefficient(siteID, parsed)
+
+	requiredKeys := requiredMappingKeys(parsed.InputMapping)
+	if len(requiredKeys) == 0 {
+		return responseCoefficient, tenantStrategy, nil
+	}
+	pointsOK, err := db.hasAllActiveTelemetryPoints(ctx, tenantID, siteID, requiredKeys)
+	if err != nil {
+		return responseCoefficient, tenantStrategy, err
+	}
+	if !pointsOK {
+		return responseCoefficient, tenantStrategy, nil
+	}
+	deploymentOK, err := db.hasActiveOptimizationDeployment(ctx, tenantID, siteID)
+	if err != nil {
+		return responseCoefficient, tenantStrategy, err
+	}
+	if deploymentOK {
+		tenantStrategy.Status = TenantStrategyConfirmed
+	}
+	return responseCoefficient, tenantStrategy, nil
+}
+
+func deriveResponseCoefficient(siteID string, parsed preparationPolicyConstraints) PreparationResponseCoefficient {
+	if entry, ok := lookupSiteCalibration(parsed.SiteCalibrations, siteID); ok {
+		return evaluateCalibration(entry.Status, entry.Source, entry.CalibratedAt)
+	}
+	return evaluateCalibration(parsed.ResponseModel.Status, parsed.ResponseModel.Source, parsed.ResponseModel.CalibratedAt)
+}
+
+func evaluateCalibration(rawStatus, rawSource, rawCalibratedAt string) PreparationResponseCoefficient {
+	status := strings.ToUpper(strings.TrimSpace(rawStatus))
+	if status == ResponseCoefficientNotCalibrated {
+		return PreparationResponseCoefficient{Status: ResponseCoefficientNotCalibrated}
+	}
+	if status == ResponseCoefficientCalibrated || isCalibratedSource(rawSource) {
+		return PreparationResponseCoefficient{
+			Status:       ResponseCoefficientCalibrated,
+			CalibratedAt: cleanStringPtr(rawCalibratedAt),
+		}
+	}
+	return PreparationResponseCoefficient{Status: ResponseCoefficientNotCalibrated}
+}
+
+func isCalibratedSource(rawSource string) bool {
+	switch strings.ToUpper(strings.TrimSpace(rawSource)) {
+	case "SITE_DATA", "CALIBRATED":
+		return true
+	default:
+		return false
+	}
+}
+
+func lookupSiteCalibration(calibrations map[string]SiteResponseCalibration, siteID string) (SiteResponseCalibration, bool) {
+	if len(calibrations) == 0 {
+		return SiteResponseCalibration{}, false
+	}
+	if entry, ok := calibrations[siteID]; ok {
+		return entry, true
+	}
+	for key, entry := range calibrations {
+		if strings.EqualFold(strings.TrimSpace(key), siteID) {
+			return entry, true
+		}
+	}
+	return SiteResponseCalibration{}, false
+}
+
+func cleanStringPtr(raw string) *string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func requiredMappingKeys(mapping InputMapping) []string {
+	supply := strings.TrimSpace(mapping.SupplyTemperatureKey)
+	zoneKeys := mapping.effectiveZoneKeys()
+	if supply == "" || len(zoneKeys) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{supply: {}}
+	keys := make([]string, 0, 1+len(zoneKeys))
+	keys = append(keys, supply)
+	for _, key := range zoneKeys {
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func preparationOutcome(state string, errorCode *string, outcome PreparationOutcome) PreparationOutcome {
-	outcome.Trigger = TriggerSchedule
-	outcome.FiredAt = outcome.FiredAt.UTC()
+	trigger := TriggerSchedule
+	outcome.Trigger = &trigger
+	if outcome.FiredAt != nil {
+		fired := outcome.FiredAt.UTC()
+		outcome.FiredAt = &fired
+	}
 	if outcome.CompletedAt != nil {
 		completed := outcome.CompletedAt.UTC()
 		outcome.CompletedAt = &completed
 	}
+	if outcome.ResponseCoefficient.Status == "" {
+		outcome.ResponseCoefficient.Status = ResponseCoefficientNotCalibrated
+	}
+	if outcome.TenantStrategy.Status == "" {
+		outcome.TenantStrategy.Status = TenantStrategyPending
+	}
 	switch state {
 	case "SUCCEEDED":
-		outcome.Status = "PREPARED"
+		outcome.Status = PreparationStatusPrepared
 	case "FAILED", "DEAD", "CANCELLED", "SKIPPED":
-		outcome.Status = "FAILED"
+		outcome.Status = PreparationStatusFailed
 		// Firings that failed before reasons were recorded say only that they failed.
 		reason := PreparationFailedCode
 		if errorCode != nil && KnownPreparationReason(*errorCode) {
@@ -440,7 +743,7 @@ func preparationOutcome(state string, errorCode *string, outcome PreparationOutc
 		}
 		outcome.Reason = &reason
 	default:
-		outcome.Status = "PENDING"
+		outcome.Status = PreparationStatusPending
 	}
 	return outcome
 }
