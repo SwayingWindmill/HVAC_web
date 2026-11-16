@@ -334,12 +334,12 @@ export class Gateway {
   readonly members: Json[] = [
     {
       principalId: MY_ID, username: 'duty.engineer', displayName: principal.principal.displayName, email: principal.principal.email,
-      enabled: true, locked: false, lastLoginAt: '2026-10-14T01:20:00Z', self: true,
+      enabled: true, locked: false, mfaEnabled: true, lastLoginAt: '2026-10-14T01:20:00Z', self: true,
       assignments: [{ bindingId: '018f3e00-2200-7000-8000-000000000001', roleKey: 'admin' }],
     },
     {
       principalId: '018f3e00-2000-7000-8000-000000000002', username: 'zhou.min', displayName: '周敏', email: 'zhou.min@example.invalid',
-      enabled: true, locked: false, self: false,
+      enabled: true, locked: false, mfaEnabled: false, self: false,
       assignments: [{ bindingId: '018f3e00-2200-7000-8000-000000000002', roleKey: 'operator', siteId: SITE_ID }],
     },
   ];
@@ -855,7 +855,7 @@ export class Gateway {
       if (password(body!.password)) return refuse(400, password(body!.password)!);
       const principalId = this.nextUserAdminId('2000');
       this.members.push({
-        principalId, username: body!.username, displayName: body!.displayName, email: body!.email, enabled: true, locked: false, self: false,
+        principalId, username: body!.username, displayName: body!.displayName, email: body!.email, enabled: true, locked: false, mfaEnabled: false, self: false,
         assignments: body!.assignments.map((assignment: Json) => ({ bindingId: this.nextUserAdminId('2200'), ...assignment })),
       });
       return { status: 201, body: { principalId } };
