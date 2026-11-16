@@ -288,4 +288,30 @@ WHERE s.device_id = $1::uuid`, deviceID).Scan(&applicability, &state, &snapshotS
 	if err != nil || reconciledAgain != 0 {
 		t.Fatalf("reconciledAgain=%d err=%v, want 0", reconciledAgain, err)
 	}
+
+	// Onboarding a new configured point onto a NOT_APPLICABLE device with no incoming readings
+	// must be reconciled into its snapshot so batch snapshot reads do not fail ErrSnapshotIncomplete.
+	if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.freshness_policies (
+  device_id, telemetry_key, policy_revision, fresh_within_seconds, configured,
+  expected_sample_interval_seconds, value_type, expected_unit, quality_checks, updated_at
+) VALUES ($1::uuid, 'banquet_room_temperature', 1, 600, true, 60, 'NUMBER', 'Cel', NULL, $2)`, deviceSilent, base.Add(235*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	reconciledNewKey, err := store.SweepDuePresence(ctx, base.Add(235*time.Second), 64)
+	if err != nil || reconciledNewKey != 1 {
+		t.Fatalf("reconciledNewKey=%d err=%v, want 1", reconciledNewKey, err)
+	}
+	assertDevicePresence(deviceSilent, "NOT_APPLICABLE", "", 1, 4, 4)
+	latestSilent, err := store.LatestSnapshot(ctx, tenantA, deviceSilent)
+	if err != nil {
+		t.Fatalf("LatestSnapshot after new point onboarding: %v", err)
+	}
+	if len(latestSilent.Values) != 2 || latestSilent.Values[1].Missing == nil || latestSilent.Values[1].Missing.Key != "banquet_room_temperature" {
+		t.Fatalf("expected banquet_room_temperature MISSING in reconciled snapshot, got %#v", latestSilent.Values)
+	}
+	reconciledNewKeyAgain, err := store.SweepDuePresence(ctx, base.Add(240*time.Second), 64)
+	if err != nil || reconciledNewKeyAgain != 0 {
+		t.Fatalf("reconciledNewKeyAgain=%d err=%v, want 0", reconciledNewKeyAgain, err)
+	}
 }

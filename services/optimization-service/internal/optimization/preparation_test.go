@@ -484,3 +484,42 @@ func TestOperatingScheduleWindowBlockMessage(t *testing.T) {
 		t.Fatal("expected OVERTIME_COOLING within 30m of 15:00 end to be blocked")
 	}
 }
+
+func TestOptimizationPreparationAcceptsCalibrationMetadataInPolicyContract(t *testing.T) {
+	at := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	def := testPreparationDefinition()
+	def.PolicyConstraints = []byte(`{
+		"comfort":{"zoneTempMinC":21,"zoneTempMaxC":25},
+		"safety":{"supplyTempMinC":6,"supplyTempMaxC":10,"maxSupplyTempStepC":1},
+		"inputMapping":{"supplyTemperatureKey":"btu_meter.supply_water_temperature","zoneTemperatureKey":"zone.temperature"},
+		"maintenanceConstraints":{"outOfService":[]},
+		"manualLocks":{"resources":[]},
+		"responseModel":{"dailyEnergyDeltaKWhPerSupplyTempC":-180,"zoneTempDeltaCPerSupplyTempC":0.4,"energyUncertaintyP90KWh":60,"zoneTempUncertaintyP90C":0.2,"source":"SITE_DATA","calibratedAt":"2026-11-15T08:00:00Z"},
+		"siteCalibrations":{"01990000-5000-7000-8000-000000000001":{"status":"CALIBRATED","source":"SITE_DATA","calibratedAt":"2026-11-15T08:00:00Z"}}
+	}`)
+	store := &preparationStoreStub{
+		definition: def,
+		result: PreparedOptimization{
+			OptimizationRunID: "01990000-1950-7000-8000-000000000102",
+			InputSnapshotID:   "01990000-1930-7000-8000-000000000102",
+			Status:            "PENDING",
+		},
+	}
+	preparer, err := NewPreparer(store, &authoritativeInputStub{state: testAuthoritativeState(at)}, func() time.Time { return at })
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = preparer.Prepare(t.Context(), PreparationRequest{
+		TenantID:    "01990000-3000-7000-8000-000000000001",
+		SiteID:      "01990000-5000-7000-8000-000000000001",
+		SubjectType: "SITE",
+		SubjectID:   "01990000-5000-7000-8000-000000000001",
+		Trigger:     TriggerManual,
+	})
+	if err != nil {
+		t.Fatalf("expected calibrated policy contract to prepare cleanly, got %v", err)
+	}
+	if len(store.created) != 1 || store.created[0].SafetyConstraints.ResponseModel.Source != "SITE_DATA" || store.created[0].SafetyConstraints.ResponseModel.CalibratedAt != "2026-11-15T08:00:00Z" {
+		t.Fatalf("unexpected frozen response model metadata: %#v", store.created)
+	}
+}

@@ -26,6 +26,7 @@ const COPIES = {
     t10: [["ammeter-unit4", "chw_entering_temperature_branch"]],
     t16: METERS.map((m) => [m, "chw_entering_temperature"]),
     t5: METERS.map((m) => [m, "cw_entering_temperature"]),
+    t55: [["cooling-tower", "cooling_tower_leaving_temperature"]],
     t12: [["cooling-tower", "cooling_tower_leaving_temperature"]],
     t13: [["cooling-tower", "cooling_tower_entering_temperature"]],
     t15: [["outdoor", "ambient_temperature"]],
@@ -36,7 +37,7 @@ const COPIES = {
 };
 const COPY_UNITS = { temperature: "Cel", waterflow: "m3/h" };
 
-// 没接探头或停用的通道不上报（如 20 备用、52 离线停用）。
+// 没接探头或停用的通道不上报（如 20/51 备用或空槽、52 离线停用）。
 const SPARE_PREFIX = { temperature: "t", "temperature-voltage": "v", "temperature-rssi": "rssi", "temperature-status": "status" };
 
 const statePoint = (r) => ({ code: "run_state", value: r ? "RUNNING" : "STOPPED", quality: 0 });
@@ -122,20 +123,12 @@ for (const [device, samples] of Object.entries(source)) {
       if (!mapping.codes[key]) continue;
       [code, unit] = mapping.codes[key];
     }
-    if (sparePrefix && (key === `${sparePrefix}20` || key === `${sparePrefix}52`)) continue;
+    if (sparePrefix && /^(?:20|51|52)$/.test(key.slice(sparePrefix.length))) continue;
 
     let { value, quality } = extract(entryVal);
-    if (baseline !== undefined && key === "combinedActiveTotalElectricalEnergy" && isNum(value)) {
-      value -= baseline;
-    }
-    const isNumber = isNum(value);
-    const isString = mapping.allowString && typeof value === "string" && value.length > 0;
-    if (!isNumber && !isString) continue;
-
-    if (quality === null) {
-      // An unconnected temperature input reads 0, and offline probe voltage/RSSI registers are not live readings.
-      quality = (device === "temperature" && value === 0) || isOfflineChannel(device, key) ? 1 : 0;
-    }
+    if (baseline !== undefined && key === "combinedActiveTotalElectricalEnergy" && isNum(value)) value -= baseline;
+    if (!isNum(value) && !(mapping.allowString && typeof value === "string" && value)) continue;
+    if (quality === null) quality = (device === "temperature" && value === 0) || isOfflineChannel(device, key) ? 1 : 0;
     points.push(unit ? { code, value, quality, unit } : { code, value, quality });
   }
   const doVals = device === "et1010"
@@ -169,7 +162,7 @@ for (const [device, samples] of Object.entries(source)) {
     if (device === "temperature" && (parsed.value === 0 || copyQuality !== 0 || isOfflineChannel(device, field))) continue;
     for (const [target, code] of targets) {
       if (!copies[target]) copies[target] = { ts: sample.ts, points: [] };
-      copies[target].points.push({ code, value: parsed.value, quality: 0, unit: COPY_UNITS[device] });
+      if (!copies[target].points.some((p) => p.code === code)) copies[target].points.push({ code, value: parsed.value, quality: 0, unit: COPY_UNITS[device] });
     }
   }
 

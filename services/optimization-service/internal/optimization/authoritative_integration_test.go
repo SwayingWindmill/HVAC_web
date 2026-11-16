@@ -2,6 +2,7 @@ package optimization
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -112,9 +113,30 @@ func TestAuthoritativeOwnersPrepareSealedOptimizationAndPublishRecommendation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preparation.Status != "FAILED" || preparation.Reason == nil || *preparation.Reason != string(ReasonZoneTempMissing) ||
-		!preparation.FiredAt.Equal(time.Date(2026, 8, 28, 11, 20, 0, 0, time.UTC)) {
+	if preparation.Trigger == nil || *preparation.Trigger != TriggerSchedule ||
+		preparation.Status != PreparationStatusFailed || preparation.Reason == nil || *preparation.Reason != string(ReasonZoneTempMissing) ||
+		preparation.FiredAt == nil || !preparation.FiredAt.Equal(time.Date(2026, 8, 28, 11, 20, 0, 0, time.UTC)) ||
+		preparation.ResponseCoefficient.Status != ResponseCoefficientNotCalibrated || preparation.ResponseCoefficient.CalibratedAt != nil ||
+		preparation.TenantStrategy.Status != TenantStrategyPending {
 		t.Fatalf("preparation=%#v", preparation)
+	}
+	// A visible Site of the same Tenant with no scheduled OPTIMIZATION_RUN job returns
+	// NOT_SCHEDULED with its Postgres-derived readiness reasons instead of 404.
+	unscheduled, err := service.LatestPreparation(t.Context(), request.TenantID, "018f1e00-1000-7000-8000-000000000002")
+	if err != nil {
+		t.Fatalf("unscheduled visible site LatestPreparation err=%v", err)
+	}
+	if unscheduled.Status != PreparationStatusNotScheduled || unscheduled.Trigger != nil || unscheduled.Reason != nil ||
+		unscheduled.FiredAt != nil || unscheduled.CompletedAt != nil ||
+		unscheduled.ResponseCoefficient.Status != ResponseCoefficientNotCalibrated || unscheduled.ResponseCoefficient.CalibratedAt != nil ||
+		unscheduled.TenantStrategy.Status != TenantStrategyPending {
+		t.Fatalf("unscheduled=%#v", unscheduled)
+	}
+	// Another Tenant's Site and unknown Sites must still fail with ErrPreparationNotFound (404).
+	for _, hiddenSiteID := range []string{"018f1e00-1000-7000-8000-000000000003", "018f1e00-1000-7000-8000-000000000099"} {
+		if _, hiddenErr := service.LatestPreparation(t.Context(), request.TenantID, hiddenSiteID); !errors.Is(hiddenErr, ErrPreparationNotFound) {
+			t.Fatalf("hidden site %s err=%v, want ErrPreparationNotFound", hiddenSiteID, hiddenErr)
+		}
 	}
 	shadow, err := service.LatestShadowEvaluation(t.Context(), request.TenantID, request.SiteID)
 	if err != nil {

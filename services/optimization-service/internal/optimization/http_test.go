@@ -21,11 +21,13 @@ import (
 )
 
 const (
-	testGatewaySPIFFE = "spiffe://hvac.local/platform-gateway"
-	testTenant        = "01990000-3000-7000-8000-000000000001"
-	testOtherTenant   = "01990000-3000-7000-8000-000000000002"
-	testSite          = "01990000-5000-7000-8000-000000000001"
-	testOtherSite     = "01990000-5000-7000-8000-0000000000ff"
+	testGatewaySPIFFE   = "spiffe://hvac.local/platform-gateway"
+	testTenant          = "01990000-3000-7000-8000-000000000001"
+	testOtherTenant     = "01990000-3000-7000-8000-000000000002"
+	testSite            = "01990000-5000-7000-8000-000000000001"
+	testUnscheduledSite = "01990000-5000-7000-8000-000000000002"
+	testReadySite       = "01990000-5000-7000-8000-000000000003"
+	testOtherSite       = "01990000-5000-7000-8000-0000000000ff"
 )
 
 // oneTenantRecommendations holds a published recommendation for testTenant's testSite only.
@@ -38,15 +40,46 @@ func (store *oneTenantRecommendations) LatestRecommendation(_ context.Context, t
 	return PublishedRecommendation{RunID: "01990000-1950-7000-8000-000000000101"}, nil
 }
 
-// testSite's schedule last fired at 12:20 and found no zone temperature.
+// testSite's schedule last fired at 12:20 and found no zone temperature; testUnscheduledSite models
+// a visible unscheduled site; testReadySite models a calibrated and confirmed site.
 func (store *oneTenantRecommendations) LatestPreparation(_ context.Context, tenantID, siteID string) (PreparationOutcome, error) {
-	if tenantID != testTenant || siteID != testSite {
+	if tenantID != testTenant {
 		return PreparationOutcome{}, ErrPreparationNotFound
 	}
-	reason := string(ReasonZoneTempMissing)
+	trigger := TriggerSchedule
 	fired := time.Date(2026, 10, 30, 12, 20, 0, 0, time.UTC)
 	completed := fired.Add(2 * time.Second)
-	return PreparationOutcome{Trigger: TriggerSchedule, Status: "FAILED", Reason: &reason, FiredAt: fired, CompletedAt: &completed}, nil
+	switch siteID {
+	case testSite:
+		reason := string(ReasonZoneTempMissing)
+		return PreparationOutcome{
+			Trigger:             &trigger,
+			Status:              PreparationStatusFailed,
+			Reason:              &reason,
+			FiredAt:             &fired,
+			CompletedAt:         &completed,
+			ResponseCoefficient: PreparationResponseCoefficient{Status: ResponseCoefficientNotCalibrated},
+			TenantStrategy:      PreparationTenantStrategy{Status: TenantStrategyPending},
+		}, nil
+	case testUnscheduledSite:
+		return PreparationOutcome{
+			Status:              PreparationStatusNotScheduled,
+			ResponseCoefficient: PreparationResponseCoefficient{Status: ResponseCoefficientNotCalibrated},
+			TenantStrategy:      PreparationTenantStrategy{Status: TenantStrategyPending},
+		}, nil
+	case testReadySite:
+		calibratedAt := "2026-10-29T08:30:00Z"
+		return PreparationOutcome{
+			Trigger:             &trigger,
+			Status:              PreparationStatusPrepared,
+			FiredAt:             &fired,
+			CompletedAt:         &completed,
+			ResponseCoefficient: PreparationResponseCoefficient{Status: ResponseCoefficientCalibrated, CalibratedAt: &calibratedAt},
+			TenantStrategy:      PreparationTenantStrategy{Status: TenantStrategyConfirmed},
+		}, nil
+	default:
+		return PreparationOutcome{}, ErrPreparationNotFound
+	}
 }
 
 // optimizationFixture serves Optimization behind the Gateway's contexts and signs them as the
@@ -206,7 +239,7 @@ func TestOptimizationServesTheLatestPreparationWithItsReason(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	want := `{"trigger":"SCHEDULE","status":"FAILED","reason":"ZONE_TEMPERATURE_MISSING","firedAt":"2026-10-30T12:20:00Z","completedAt":"2026-10-30T12:20:02Z"}`
+	want := `{"trigger":"SCHEDULE","status":"FAILED","reason":"ZONE_TEMPERATURE_MISSING","firedAt":"2026-10-30T12:20:00Z","completedAt":"2026-10-30T12:20:02Z","responseCoefficient":{"status":"NOT_CALIBRATED","calibratedAt":null},"tenantStrategy":{"status":"PENDING"}}`
 	if got := strings.TrimSpace(response.Body.String()); got != want {
 		t.Fatalf("body=%s\nwant=%s", got, want)
 	}
@@ -218,6 +251,39 @@ func TestOptimizationServesTheLatestPreparationWithItsReason(t *testing.T) {
 	}
 	if status := fixture.call(t, http.MethodGet, latest, "", testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, testSite).Code; status != http.StatusForbidden {
 		t.Fatalf("a run context read the preparation: %d", status)
+	}
+}
+
+func TestOptimizationServesUnscheduledAndCalibratedPreparationReadiness(t *testing.T) {
+	fixture := newOptimizationFixture(t)
+
+	unscheduledPath := "/v1/sites/" + testUnscheduledSite + "/optimization/preparations/latest"
+	unscheduledResp := fixture.call(t, http.MethodGet, unscheduledPath, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testUnscheduledSite)
+	if unscheduledResp.Code != http.StatusOK {
+		t.Fatalf("unscheduled status=%d body=%s", unscheduledResp.Code, unscheduledResp.Body.String())
+	}
+	wantUnscheduled := `{"trigger":null,"status":"NOT_SCHEDULED","reason":null,"firedAt":null,"completedAt":null,"responseCoefficient":{"status":"NOT_CALIBRATED","calibratedAt":null},"tenantStrategy":{"status":"PENDING"}}`
+	if got := strings.TrimSpace(unscheduledResp.Body.String()); got != wantUnscheduled {
+		t.Fatalf("unscheduled body=%s\nwant=%s", got, wantUnscheduled)
+	}
+	if status := fixture.call(t, http.MethodGet, unscheduledPath, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testOtherTenant, testUnscheduledSite).Code; status != http.StatusNotFound {
+		t.Fatalf("another Tenant read unscheduled Site's preparation: %d", status)
+	}
+	if status := fixture.call(t, http.MethodGet, unscheduledPath, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testOtherSite).Code; status != http.StatusForbidden {
+		t.Fatalf("a context for another Site read unscheduled Site's preparation: %d", status)
+	}
+	if status := fixture.call(t, http.MethodGet, unscheduledPath, "", testGatewaySPIFFE, testGatewaySPIFFE, WriteAction, testTenant, testUnscheduledSite).Code; status != http.StatusForbidden {
+		t.Fatalf("a run context read unscheduled Site's preparation: %d", status)
+	}
+
+	readyPath := "/v1/sites/" + testReadySite + "/optimization/preparations/latest"
+	readyResp := fixture.call(t, http.MethodGet, readyPath, "", testGatewaySPIFFE, testGatewaySPIFFE, ReadAction, testTenant, testReadySite)
+	if readyResp.Code != http.StatusOK {
+		t.Fatalf("ready status=%d body=%s", readyResp.Code, readyResp.Body.String())
+	}
+	wantReady := `{"trigger":"SCHEDULE","status":"PREPARED","reason":null,"firedAt":"2026-10-30T12:20:00Z","completedAt":"2026-10-30T12:20:02Z","responseCoefficient":{"status":"CALIBRATED","calibratedAt":"2026-10-29T08:30:00Z"},"tenantStrategy":{"status":"CONFIRMED"}}`
+	if got := strings.TrimSpace(readyResp.Body.String()); got != wantReady {
+		t.Fatalf("ready body=%s\nwant=%s", got, wantReady)
 	}
 }
 
@@ -239,13 +305,16 @@ func TestOptimizationPreparationOutcomeFromTheFiringJob(t *testing.T) {
 		{"FAILED", code(PreparationFailureCode(errors.New("persist failed"))), "FAILED", PreparationFailedCode},
 	}
 	for _, test := range cases {
-		outcome := preparationOutcome(test.state, test.code, PreparationOutcome{FiredAt: fired})
+		outcome := preparationOutcome(test.state, test.code, PreparationOutcome{FiredAt: &fired})
 		reason := ""
 		if outcome.Reason != nil {
 			reason = *outcome.Reason
 		}
-		if outcome.Trigger != TriggerSchedule || outcome.Status != test.wantStatus || reason != test.wantReason {
+		if outcome.Trigger == nil || *outcome.Trigger != TriggerSchedule || outcome.Status != test.wantStatus || reason != test.wantReason {
 			t.Fatalf("%s/%v: outcome=%#v reason=%q", test.state, test.code, outcome, reason)
+		}
+		if outcome.ResponseCoefficient.Status != ResponseCoefficientNotCalibrated || outcome.TenantStrategy.Status != TenantStrategyPending {
+			t.Fatalf("%s/%v: unexpected default readiness=%#v/%#v", test.state, test.code, outcome.ResponseCoefficient, outcome.TenantStrategy)
 		}
 	}
 }

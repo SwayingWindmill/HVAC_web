@@ -32,6 +32,9 @@ type HVACResponseModel struct {
 	ZoneTempDeltaPerSupplyTempC    float64 `json:"zoneTempDeltaCPerSupplyTempC"`
 	EnergyUncertaintyP90KWh        float64 `json:"energyUncertaintyP90KWh"`
 	ZoneTempUncertaintyP90C        float64 `json:"zoneTempUncertaintyP90C"`
+	Source                         string  `json:"source,omitempty"`
+	Status                         string  `json:"status,omitempty"`
+	CalibratedAt                   string  `json:"calibratedAt,omitempty"`
 }
 
 type Request struct {

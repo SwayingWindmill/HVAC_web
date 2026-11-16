@@ -701,7 +701,7 @@ func validateTelemetrySnapshot(snapshot s2telemetryapi.DeviceObservationSnapshot
 		return false
 	}
 	if !validEvaluationAvailability(snapshot.EvaluationAvailability) || len(snapshot.AvailabilityReasons) > 16 || !uniqueAvailabilityReasons(snapshot.AvailabilityReasons) ||
-		!validTelemetryReadiness(snapshot.TelemetryReadiness) || snapshot.DisplayState == nil || !validDisplayState(*snapshot.DisplayState) || !validPresenceSnapshot(snapshot.Presence) || len(snapshot.Values) != len(requestedKeys) {
+		!validTelemetryReadiness(snapshot.TelemetryReadiness) || !validSnapshotDisplayState(snapshot.Presence.Applicability, snapshot.DisplayState) || !validPresenceSnapshot(snapshot.Presence) || len(snapshot.Values) != len(requestedKeys) {
 		return false
 	}
 	for index, state := range snapshot.Values {
@@ -740,6 +740,13 @@ func validTelemetryReadiness(value s2telemetryapi.TelemetryReadiness) bool {
 	}
 }
 
+func validSnapshotDisplayState(applicability s2telemetryapi.PresenceApplicability, value *s2telemetryapi.DeviceDisplayState) bool {
+	if applicability == s2telemetryapi.PresenceApplicabilityNotApplicable {
+		return value == nil
+	}
+	return value != nil && validDisplayState(*value)
+}
+
 func validDisplayState(value s2telemetryapi.DeviceDisplayState) bool {
 	switch value {
 	case s2telemetryapi.DeviceDisplayStateOnline, s2telemetryapi.DeviceDisplayStateOffline, s2telemetryapi.DeviceDisplayStateStale, s2telemetryapi.DeviceDisplayStateUnknown, s2telemetryapi.DeviceDisplayStateUnavailable:
@@ -751,6 +758,9 @@ func validDisplayState(value s2telemetryapi.DeviceDisplayState) bool {
 
 func validPresenceSnapshot(value s2telemetryapi.PresenceSnapshot) bool {
 	if value.Applicability != s2telemetryapi.PresenceApplicabilityApplicable && value.Applicability != s2telemetryapi.PresenceApplicabilityNotApplicable {
+		return false
+	}
+	if value.Applicability == s2telemetryapi.PresenceApplicabilityNotApplicable && value.CurrentState != nil {
 		return false
 	}
 	if value.CurrentState != nil && *value.CurrentState != s2telemetryapi.DevicePresenceStateOnline && *value.CurrentState != s2telemetryapi.DevicePresenceStateOffline && *value.CurrentState != s2telemetryapi.DevicePresenceStateUnknown {

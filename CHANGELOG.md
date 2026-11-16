@@ -45,6 +45,11 @@
 #### 修复
 
 - 修复 `deploy/platform/phase1/cd/observability-config.sh` 的 `wait_loaded` 在启用 `pipefail` 时用 `grep -Eq` 过滤大体积 `/metrics` 输出提前退出、导致 `wget` 触发 `SIGPIPE`（退出码 `141`）并让监控配置重载误判超时的故障。
+- 同步松雅轩冷却塔出水温度通道（`t55`）并停用无线集中器空槽位 `51`：
+  - 将松雅轩 `cooling-tower/cooling_tower_leaving_temperature`（`cooling_tower.leaving_water_temperature`）主来源切至现场在线的 55 号通道探头（`t55`），并在边缘包络函数 `edge/node-red/songyaxuan-platform-envelope.js` 对同点位共存通道（`t55` 优先、`t12` 回退）按 `(target, code)` 去重，防止双通道同时在线时重复写入或离线通道覆盖有效读数。
+  - 鉴于物理探头 `EID 51` 实测绑定在 11 号槽位、51 号槽位未绑探头，将 `t51`、`v51`、`rssi51`、`status51` 在站点清单标记为 `"status": "INACTIVE"`（保留数组顺序与 `pointIndex`），并在边缘侧将 `SPARE` 扩展为 `{20, 51, 52}`，使空槽位不再计入 `offline_count` 或触发误报警。
+  - 修复 `modules/telemetry` 的 `SweepDuePresence` 巡检逻辑：对无新读数且已标记 `NOT_APPLICABLE` 的设备（如新增 `banquet_room_temperature` 但探头暂离线的 `room`），补齐快照缺失的新增启用点位键，避免批量快照读取因 `ErrSnapshotIncomplete` 返回 `503`。
+  - 修复 `cmd/energy-api` 的 `validateTelemetrySnapshot`：对在离线判断为 `NOT_APPLICABLE` 的纯复制设备放行 `displayState: null` 且同时拒绝无效 `currentState`/非空 `displayState` 组合，解除实时批量观测接口 `503` 阻塞。
 - 系统消除松雅轩机组辅机误判、开机热平衡瞬态误报与异常值连带刷屏：
   - **C/D 总馈线与压缩机专用表解耦**：松雅轩 C（`meter-uid5` / `ammeter-unit1`）、D（`meter-uid2` / `ammeter-unit2`）铭牌配置 `feederAuxiliaryPowerKw: 30`；边缘包络脚本 `edge/node-red/songyaxuan-platform-envelope.js` 在 ET1010 已知辅机线圈（`u31..u33` / `u41..u43`）未吸合时改回退 C/D 总馈线迟滞 `57.75 / 45 kW`，同时将 `ET1010 UID31` 原始线圈键 `u0..u19` 归一为 `u11..u54`（`A/B` 仍用 `12.75 / 5 kW`）；FDD 开机门控、优化减台评估与网页排班偏差检测统一计入 `feederAuxiliaryPowerKw` 并在排班模型中优先采用 `run_state` 判定，消除 C/D 单开水泵和冷却塔（`31–44 kW`）及本地 MCC 手动模式下误报冷机运行与温差倒挂的问题。
   - **开机热惯性稳定窗与同伴新鲜度校验**：`modules/telemetry` 把 `unchanged_since` 连续状态追踪扩充至非数值点位（含 `run_state`），跨点检查与运行状态门控在入库评估时读取 `freshness_policies.fresh_within_seconds` 过滤过期同伴读数；物理规则新增 `stabilizeSeconds`（热力方向、总管方向与能效比设为 `600 秒`，`PHYSICS_POWER` 保持 `0 秒` 瞬时拦截），平线规则新增 `flatlineStabilizeSeconds`（`600 秒`）且统一走 `VALID_ONLY`，A–D 蒸发/冷凝出水通道按点位绑定各自冷机电表 `run_state`。
