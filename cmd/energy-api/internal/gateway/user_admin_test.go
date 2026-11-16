@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -111,6 +112,7 @@ type fakeUserDirectory struct {
 	createErr      error
 	created        []identityadmin.NewUser
 	enabled        map[string]bool
+	mfaEnabled     map[string]bool
 	administrators []string
 }
 
@@ -125,9 +127,14 @@ func (directory *fakeUserDirectory) CreateUser(_ context.Context, user identitya
 }
 
 func (directory *fakeUserDirectory) UsersByID(_ context.Context, ids []string) ([]identityadmin.User, error) {
+	directory.mu.Lock()
+	defer directory.mu.Unlock()
 	users := []identityadmin.User{}
 	for _, id := range ids {
-		users = append(users, identityadmin.User{ID: id, Username: "fixture", DisplayName: "Fixture User", Email: "fixture@example.test", Status: "ACTIVE"})
+		users = append(users, identityadmin.User{
+			ID: id, Username: "fixture", DisplayName: "Fixture User", Email: "fixture@example.test", Status: "ACTIVE",
+			MFAEnabled: directory.mfaEnabled[id],
+		})
 	}
 	return users, nil
 }
@@ -155,7 +162,7 @@ func (directory *fakeUserDirectory) ChangePassword(context.Context, string, stri
 func newUserAdminHarness(t *testing.T) (*authHarness, *fakeIAMAdmin, *fakeUserDirectory) {
 	t.Helper()
 	iam := &fakeIAMAdmin{}
-	directory := &fakeUserDirectory{enabled: map[string]bool{}}
+	directory := &fakeUserDirectory{enabled: map[string]bool{}, mfaEnabled: map[string]bool{}}
 	harness := newAuthHarnessWithIAMFactory(t, func(clientSPIFFEID string) http.Handler {
 		return iam.wrap(iamserver.NewHandler(iamserver.Config{
 			AllowedWorkloadSPIFFE: clientSPIFFEID, Audience: "iam-service", PrincipalCapabilityResolver: readerCapabilityResolver{},
@@ -269,5 +276,54 @@ func TestOwnPasswordChangeReportsAWrongCurrentPassword(t *testing.T) {
 	assertProblemCode(t, response, http.StatusBadRequest, "CURRENT_PASSWORD_INVALID")
 	if strings.Contains(harness.logs.String(), "chiller-night-shift") {
 		t.Fatal("a password reached the Gateway logs")
+	}
+}
+
+func TestUserAdministrationListsMFAActivationWithoutSensitiveFields(t *testing.T) {
+	harness, _, directory := newUserAdminHarness(t)
+	directory.mu.Lock()
+	directory.mfaEnabled["fixture-admin"] = true
+	directory.mfaEnabled["fixture-user"] = false
+	directory.mu.Unlock()
+
+	admin := harness.browserClient(t)
+	loginAndReadPrincipal(t, admin, harness.gatewayURL, "admin")
+	response, err := admin.Get(harness.gatewayURL + "/api/v1/iam/members")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.StatusCode)
+	}
+	rawBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowerRaw := strings.ToLower(string(rawBody))
+	for _, forbidden := range []string{"cipher", "nonce", "secret", "provisioning", "keyid", "recovery", "phc", "password"} {
+		if strings.Contains(lowerRaw, forbidden) {
+			t.Fatalf("member directory response exposed sensitive token %q: %s", forbidden, string(rawBody))
+		}
+	}
+
+	var decoded struct {
+		Members []struct {
+			PrincipalID string `json:"principalId"`
+			MFAEnabled  bool   `json:"mfaEnabled"`
+		} `json:"members"`
+	}
+	if err := json.Unmarshal(rawBody, &decoded); err != nil {
+		t.Fatalf("decode members response: %v", err)
+	}
+	byPrincipal := map[string]bool{}
+	for _, member := range decoded.Members {
+		byPrincipal[member.PrincipalID] = member.MFAEnabled
+	}
+	if got, ok := byPrincipal[userAdminActorID]; !ok || !got {
+		t.Fatalf("expected actor %s mfaEnabled=true, got present=%v value=%v", userAdminActorID, ok, got)
+	}
+	if got, ok := byPrincipal[userAdminMemberID]; !ok || got {
+		t.Fatalf("expected member %s mfaEnabled=false, got present=%v value=%v", userAdminMemberID, ok, got)
 	}
 }
