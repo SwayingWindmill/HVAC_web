@@ -180,3 +180,48 @@ func TestOperatingGatesAreDecodedStrictly(t *testing.T) {
 		}
 	}
 }
+
+func TestFeederAuxiliaryPowerOffsetsChillerRunningThreshold(t *testing.T) {
+	request := validEvaluation()
+	topology := Topology{
+		Chillers: []GateAsset{{
+			AssetID:                "01a14000-3000-7000-8000-000000000003",
+			DeviceIDs:              []string{testChillerMeter},
+			RatedPowerKW:           127.5,
+			RatedCapacityKW:        572,
+			FeederAuxiliaryPowerKW: 30,
+		}},
+	}
+	windowSamples := func(powerKW float64) []Sample {
+		from, _ := WindowMinutes(songyaxuanRule(), request.At)
+		samples := make([]Sample, 0, 15*4)
+		for index := 0; index < 15; index++ {
+			at := from.Add(time.Duration(index) * time.Minute)
+			samples = append(samples,
+				Sample{DeviceID: request.DeviceID, Key: supplyTemperatureKey, Minute: at, ObservationID: "sup-" + string(rune('a'+index)), PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", Quality: "GOOD", Number: 7.0, HasNumber: true},
+				Sample{DeviceID: request.DeviceID, Key: returnTemperatureKey, Minute: at, ObservationID: "ret-" + string(rune('a'+index)), PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", Quality: "GOOD", Number: 9.0, HasNumber: true},
+				Sample{DeviceID: request.DeviceID, Key: coolingLoadKey, Minute: at, ObservationID: "load-" + string(rune('a'+index)), PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "kW", Quality: "GOOD", Number: 200, HasNumber: true},
+				Sample{DeviceID: testChillerMeter, Key: powerTotalKey, Minute: at, ObservationID: "pwr-" + string(rune('a'+index)), PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "kW", Quality: "GOOD", Number: powerKW, HasNumber: true},
+			)
+		}
+		return samples
+	}
+
+	// 40 kW stays below 30 + 0.1*127.5 = 42.75 kW (aux pumps only, chiller stopped).
+	auxOnly, err := AssessWindow(songyaxuanRule(), topology, request.DeviceID, windowSamples(40), request.At)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auxOnly.Status != StatusNotOperating || auxOnly.Gates[0].PassedMinutes != 0 {
+		t.Fatalf("expected 40 kW combined feeder to be NOT_OPERATING with 0 passed minutes, got %+v", auxOnly)
+	}
+
+	// 70 kW exceeds 42.75 kW and enters low-delta-T evaluation as running.
+	running, err := AssessWindow(songyaxuanRule(), topology, request.DeviceID, windowSamples(70), request.At)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running.Status != statusLow || running.Gates[0].PassedMinutes != 15 || running.Gates[0].Bases[0] != runningBasisRatedPower {
+		t.Fatalf("expected 70 kW combined feeder to run and evaluate low delta-T, got %+v", running)
+	}
+}

@@ -1,6 +1,7 @@
 package nameplate
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 )
@@ -208,5 +209,34 @@ func TestPumpRunningWithoutAChillerIsADiagnostic(t *testing.T) {
 		if _, ok := QualityReason(kind); !ok {
 			t.Fatalf("%s has no quality reason", kind)
 		}
+	}
+}
+
+func TestEffectiveFeederRatedPowerKW(t *testing.T) {
+	chiller := hitachi()
+	if got := chiller.EffectiveFeederRatedPowerKW(); got != 127.5 {
+		t.Fatalf("without auxiliary power: got %v, want 127.5", got)
+	}
+
+	var decoded Plate
+	if err := json.Unmarshal([]byte(`{"ratedPowerKw":127.5,"feederAuxiliaryPowerKw":59.5}`), &decoded); err != nil {
+		t.Fatalf("unmarshal plate: %v", err)
+	}
+	if got := decoded.EffectiveFeederRatedPowerKW(); math.Abs(got-187.0) > 1e-9 {
+		t.Fatalf("with auxiliary power: got %v, want 187", got)
+	}
+
+	zeroRated := Plate{FeederAuxiliaryPowerKW: 59.5}
+	if got := zeroRated.EffectiveFeederRatedPowerKW(); got != 0 {
+		t.Fatalf("zero rated power with auxiliary: got %v, want 0", got)
+	}
+
+	unconfirmedAux := Plate{RatedPowerKW: 127.5, FeederAuxiliaryPowerKW: 30, Unconfirmed: []string{"feederAuxiliaryPowerKw"}}
+	if got := unconfirmedAux.EffectiveFeederRatedPowerKW(); got != 127.5 {
+		t.Fatalf("unconfirmed auxiliary power must be ignored: got %v, want 127.5", got)
+	}
+	unconfirmedRated := Plate{RatedPowerKW: 127.5, FeederAuxiliaryPowerKW: 30, Unconfirmed: []string{"ratedPowerKw"}}
+	if got := unconfirmedRated.EffectiveFeederRatedPowerKW(); got != 0 {
+		t.Fatalf("unconfirmed rated power must return 0: got %v, want 0", got)
 	}
 }

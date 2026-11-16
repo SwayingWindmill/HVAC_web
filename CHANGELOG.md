@@ -9,6 +9,10 @@
 
 #### 新增
 
+- 第一性原理重构遥测可信边界、冷机防冻保护与整机根因抑制（#749）：
+  - `deploy/sites/songyaxuan.alarm-rules.json` 与 `modules/alarm/pkg/alarmrules` 新增设备级根因告警规则 `deviceUntrusted`（`device-untrusted/<device>`，`MAJOR`，连续 `180 秒`）：非派生设备的全部 `>= 2` 个监测点位同时出现超量程、通讯异常值 `38.4` 或 `SOURCE_UNTRUSTED` 时，仅发出 1 条整台根因告警，并在条件树内部同步抑制同设备逐点 `suspect`（支持 `durationSeconds: 300`）与 `readings-not-updated` 症状告警，避免 23 路探头同时掉线刷屏；同时排除 `device-untrusted/` 触发无意义的 `rules-unevaluable`。
+  - `deploy/sites/songyaxuan.alarm-rules.json` 新增 `chiller-leaving-low`（`CRITICAL`，`180 秒`）：任意运行中的冷机（A `t1`、B `t2`、C `t3`、D `t4`）冷冻水出水低于 `4.0 °C` 时立即触发防冻保护告警（冷机停机或水温回升过 `4.5 °C` 恢复）。
+  - 资产铭牌（`libs/nameplate` 与 `scripts/site-onboarding.mjs`）新增 `feederAuxiliaryPowerKw` 字段，用于表达合并计量冷机与定频辅机（水泵、冷却塔）的总馈线电表辅机功耗基数（并新增迁移 `042-grant-asset-nameplate-read.sql` 按最小权限授予 `fdd_runtime` 与 `optimization_runtime` 只读 `core_registry.assets.nameplate`）；通知路由新增多条分作用域根因抑制规则 `rootCauseRules`（`scopeSameDevice: true` 让 `device-untrusted/<device>` 只静默同设备的下游告警通知，不误伤站内其它正常设备）。
 - 系统管理「用户与角色」页面（`/system?tab=users`）新增「两步验证」列，并在管理员与运维主管提交高风险指令前提前预警（#831）：
   - `services/identity-service`（`DirectoryUser`）与网关成员接口（`GET /api/v1/iam/members`）仅返回每个成员是否已开通认证器两步验证的布尔状态 `mfaEnabled`（不返回密钥、密文或恢复码等敏感信息），同步更新 OpenAPI 与生成客户端 `UserAdminMember`。
   - 用户列表展示「已开通 / 未开通」，对启用中且拥有管理员或运维主管角色但未开通两步验证的成员标出 `▲ 未开通` 与「提交不了高风险指令」，停用账号时自动撤去提醒。
@@ -25,6 +29,10 @@
 
 #### 修复
 
+- 系统消除松雅轩机组辅机误判、开机热平衡瞬态误报与异常值连带刷屏：
+  - **C/D 总馈线与压缩机专用表解耦**：松雅轩 C（`meter-uid5` / `ammeter-unit1`）、D（`meter-uid2` / `ammeter-unit2`）铭牌配置 `feederAuxiliaryPowerKw: 30`；边缘包络脚本 `edge/node-red/songyaxuan-platform-envelope.js` 改用逐表迟滞 `METER_RUN_KW`（A/B `12.75 / 5 kW`，C/D `57.75 / 45 kW`）；FDD 开机门控、优化减台评估与网页排班偏差检测统一计入 `feederAuxiliaryPowerKw` 并在排班模型中优先采用 `run_state` 判定，消除 C/D 单开水泵和冷却塔（`31–44 kW`）误报冷机运行及温差倒挂的问题。
+  - **开机热惯性稳定窗与同伴新鲜度校验**：`modules/telemetry` 把 `unchanged_since` 连续状态追踪扩充至非数值点位（含 `run_state`），跨点检查与运行状态门控在入库评估时读取 `freshness_policies.fresh_within_seconds` 过滤过期同伴读数；物理规则新增 `stabilizeSeconds`（热力方向、总管方向与能效比设为 `600 秒`，`PHYSICS_POWER` 保持 `0 秒` 瞬时拦截），平线规则新增 `flatlineStabilizeSeconds`（`600 秒`）且统一走 `VALID_ONLY`，A–D 蒸发/冷凝出水通道按点位绑定各自冷机电表 `run_state`。
+  - **放宽物理真实量程与补全异常/冷启动链路**：松雅轩 `qualityProfiles` 放宽至物理极限（冷冻水 `[-2, 40] °C`、冷却水 `[0, 50] °C` 等），`2.8 °C` 过冷低温正常入库并进入 `chiller-leaving-low` 保护而非被拒收；`SENTINEL` 与 `SOURCE_UNTRUSTED` 不再叠加 `FLATLINE`；修复冷启动仅收到拒收读数（`ONLY_REJECTED_CANDIDATES`）时的 `OUT_OF_RANGE` 评估、拒收行 `SOURCE_UNTRUSTED` 健康记录、`site_rules_http.go` 的 `REASONS` 谓词校验缺口、OpenAPI/前后端 `SOURCE_UNTRUSTED` 契约枚举，以及去掉派生设备 `btu-calc` / `meter-total` 冗余的 `suspect` 与 `btu-chw-direction` 告警。
 - 修复 `deploy/platform/phase1/cd/build-release.sh` 的 `collect_migrator_tree` 在读取 `migrations/Dockerfile` 时遇到第二个 `FROM scratch`（`sources-runtime` 阶段）即提前中断、导致发布包遗漏运行时迁移文件的问题，并新增基于 `migration-list.tsv` 的全量校验。
 - 对齐生产域名反向代理与松雅轩现场无线集中器默认值：
   - 为内部工作负载身份清单补充 `host-edge-proxy`，容器 `nginx` 使用 `trusted-client-ca.pem` 与身份主题映射，使宿主机 `nginx` 校验网关客户端证书后通过内部双向 TLS 安全透传 `X-Gateway-Client-Cert` 至 `connectivity`，并更新 `hvac-gateway-nodered-loopback@.service` 容器名为 `hvac-platform-connectivity-1`；`deploy.sh` 迁库前对齐 `roles.sql`、补建 `$R/alarm-delivery` 目录并在上线后向 `mqtt-broker` 发送 `SIGHUP` 重载 ACL。

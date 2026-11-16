@@ -9,6 +9,17 @@
   "quietHours": { "start": "22:00", "end": "07:00", "bypassSeverity": "MAJOR" },
   "rootCauseAlarmType": "reports-interrupted",
   "suppressWhenRootCause": ["reading-gap/", "readings-not-updated/", "readings-flat/", "data-quality/", "rules-unevaluable"],
+  "rootCauseRules": [
+    {
+      "whenActivePrefix": "reports-interrupted",
+      "suppressPrefixes": ["readings-not-updated", "reading-gap/", "rules-unevaluable", "data-quality/"]
+    },
+    {
+      "whenActivePrefix": "device-untrusted/",
+      "scopeSameDevice": true,
+      "suppressPrefixes": ["data-quality/suspect/", "reading-gap/", "readings-not-updated/"]
+    }
+  ],
   "routes": [
     {
       "name": "major",

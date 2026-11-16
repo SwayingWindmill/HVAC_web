@@ -19,6 +19,14 @@ import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { localContainer } from './lib/local-environment.mjs';
 import { buildPointSourceMetadata, validateControlPoints } from './lib/site-onboarding-control.ts';
+import {
+  applyPointRunningAndStabilize,
+  assertQualityChecksSize,
+  enrichPowerPointMetadata,
+  validateAlarmQualityAdditions,
+  validateQualityProfileExtensions,
+  validateSiteQualityAdditions,
+} from './lib/site-onboarding-quality.ts';
 
 const sqlLiteral = (value) => `'${String(value).replaceAll("'", "''")}'`;
 const sqlJson = (value) => `${sqlLiteral(JSON.stringify(value))}::jsonb`;
@@ -31,7 +39,7 @@ const WET_BULB_CONDENSER_MARGIN_K = 1;
 const DIRECTION_EPSILON_K = 0.05;
 const HEAT_BALANCE_FRACTION = 0.25;
 const PHYSICS_KINDS = new Set(['WET_BULB_DRY_BULB', 'WET_BULB_CONDENSER', 'POWER_NAMEPLATE', 'COP_CARNOT', 'CHW_DIRECTION', 'CW_DIRECTION', 'HEAT_BALANCE', 'PUMP_WITHOUT_CHILLER']);
-const NAMEPLATE_FIELDS = new Set(['manufacturer', 'model', 'year', 'refrigerant', 'ratedCapacityKw', 'ratedPowerKw', 'ratedCurrentA', 'startingCurrentA', 'supply', 'highSidePressureMpa', 'lowSidePressureMpa', 'condenserAreaM2', 'efficiency', 'ratedSpeedRpm', 'speed', 'role']);
+const NAMEPLATE_FIELDS = new Set(['manufacturer', 'model', 'year', 'refrigerant', 'ratedCapacityKw', 'ratedPowerKw', 'ratedCurrentA', 'startingCurrentA', 'supply', 'highSidePressureMpa', 'lowSidePressureMpa', 'condenserAreaM2', 'efficiency', 'ratedSpeedRpm', 'speed', 'role', 'feederAuxiliaryPowerKw']);
 
 // A nameplate is an object on the asset, or the name of an entry in nameplateCatalog.
 export function resolveNameplate(asset, profile) {
@@ -59,20 +67,19 @@ export function pointQuality(point, profile, devicesByCode) {
     if (named.sentinels?.length) checks.sentinels = named.sentinels;
     if (named.flatlineSeconds != null) checks.flatlineSeconds = named.flatlineSeconds;
     if (named.flatlineRunningSeconds != null) checks.flatlineRunningSeconds = named.flatlineRunningSeconds;
-    const ref = (item) => {
-      const device = devicesByCode.get(item.device);
-      if (!device) throw new Error(`quality profile ${point.qualityProfile} names unknown device ${item.device}`);
-      return { deviceId: device.id, key: item.point, ...(item.equals != null ? { equals: item.equals } : {}) };
-    };
-    if (named.running?.length) checks.running = named.running.map(ref);
-    if (named.inputs?.length) checks.inputs = named.inputs.map(ref);
+    if (named.inputs?.length) checks.inputs = named.inputs.map((item) => {
+      const device = devicesByCode.get(item?.device);
+      if (!device) throw new Error(`quality profile ${point.qualityProfile} names unknown device ${item?.device}`);
+      return { deviceId: device.id, key: item.point };
+    });
   }
+  applyPointRunningAndStabilize(checks, point, named, devicesByCode);
   const physics = physicsForPoint(point, profile, devicesByCode);
   if (physics.length) checks.physics = physics;
   const uncertainty = uncertaintyForPoint(point, profile, devicesByCode);
   if (uncertainty) checks.uncertainty = uncertainty;
   const encoded = Object.keys(checks).length ? JSON.stringify(checks) : null;
-  if (encoded && Buffer.byteLength(encoded) > 4096) throw new Error(`point ${point.device?.code ?? '?'}/${point.code} quality checks exceed 4096 bytes`);
+  assertQualityChecksSize(point, encoded);
   return {
     staleAfterSeconds: named?.staleAfterSeconds ?? null,
     range: named?.range ?? null,
@@ -127,6 +134,7 @@ function compilePhysics(check, profile, devicesByCode) {
   };
   const rule = { kind: check.kind };
   if (check.running?.length) rule.running = check.running.map((item) => ({ ...deviceRef(item, devicesByCode, label), equals: item.equals }));
+  if (check.stabilizeSeconds != null) rule.stabilizeSeconds = check.stabilizeSeconds;
   switch (check.kind) {
     case 'WET_BULB_DRY_BULB':
       if (!add('dryBulb', check.dryBulb)) return missing();
@@ -296,6 +304,9 @@ function ratedFor(check, profile) {
   if (!asset) return null;
   const plate = resolveNameplate(asset, profile);
   if (!plate || (plate.unconfirmed ?? []).includes(field) || !(plate[field] > 0)) return null;
+  if (basis === 'POWER' && !(plate.unconfirmed ?? []).includes('feederAuxiliaryPowerKw') && Number.isFinite(plate.feederAuxiliaryPowerKw) && plate.feederAuxiliaryPowerKw > 0) {
+    return plate[field] + plate.feederAuxiliaryPowerKw;
+  }
   return plate[field];
 }
 
@@ -382,8 +393,10 @@ export function buildOnboardingSql(profile) {
   const sourceKeyRows = devices.map((device) => `(${sqlLiteral(rowId(site.id, '6100', device.deviceIndex))}, ${tenant}, ${siteId}, ${sqlLiteral(gateway.id)}, ${sqlLiteral(device.sourceKey)}, ${sqlLiteral(device.id)}, 'ACTIVE', 1, clock_timestamp(), clock_timestamp())`).join(',\n');
   const placementRows = devices.map((device) => `(${sqlLiteral(rowId(site.id, '6200', device.deviceIndex))}, ${tenant}, ${siteId}, ${sqlLiteral(device.id)}, ${sqlLiteral(space.id)}, 'INSTALLED_IN', 'ACTIVE', clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`).join(',\n');
   const assets = profile.assets ?? [];
+  const platesByAssetId = new Map();
   const assetRows = assets.map((asset) => {
     const plate = resolveNameplate(asset, profile);
+    if (plate) platesByAssetId.set(asset.id, plate);
     const unconfirmed = new Set(plate?.unconfirmed ?? []);
     const num = (field) => (plate && plate[field] > 0 && !unconfirmed.has(field) ? sqlNumber(plate[field]) : 'NULL');
     const text = (field) => (plate && plate[field] && !unconfirmed.has(field) ? sqlLiteral(plate[field]) : 'NULL');
@@ -396,7 +409,8 @@ export function buildOnboardingSql(profile) {
   const pointRows = points.map((point) => {
     const interval = point.device.sampleSeconds * 1000;
     const writable = point.pointType === 'COMMAND' && point.writable !== false;
-    return `(${sqlLiteral(point.id)}, ${tenant}, ${siteId}, ${sqlLiteral(point.device.id)}, NULL, ${sqlLiteral(point.code)}, ${sqlLiteral(point.sourceKey ?? point.code)}, ${sqlLiteral(point.name)}, ${sqlLiteral(point.pointType)}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, ${writable}, ${interval}, ${interval}, ${interval * 3}, ${sqlJson(buildPointSourceMetadata(point, devicesByCode))}, ${sqlLiteral(pointStatus(point))}, 1, clock_timestamp(), clock_timestamp(), NULL, NULL, ${point.pointType === 'COUNTER' ? "'RESET_TO_ZERO'" : 'NULL'}, NULL)`;
+    const meta = enrichPowerPointMetadata(buildPointSourceMetadata(point, devicesByCode), point, platesByAssetId);
+    return `(${sqlLiteral(point.id)}, ${tenant}, ${siteId}, ${sqlLiteral(point.device.id)}, NULL, ${sqlLiteral(point.code)}, ${sqlLiteral(point.sourceKey ?? point.code)}, ${sqlLiteral(point.name)}, ${sqlLiteral(point.pointType)}, ${sqlLiteral(point.valueType)}, ${point.unit ? sqlLiteral(point.unit) : 'NULL'}, ${writable}, ${interval}, ${interval}, ${interval * 3}, ${sqlJson(meta)}, ${sqlLiteral(pointStatus(point))}, 1, clock_timestamp(), clock_timestamp(), NULL, NULL, ${point.pointType === 'COUNTER' ? "'RESET_TO_ZERO'" : 'NULL'}, NULL)`;
   }).join(',\n');
   // A point describes the machine it measures, else the Site. The binding carries the point's
   // status, so a point the site file marks INACTIVE (no probe wired) is not a current binding.
@@ -918,12 +932,14 @@ export function checkSiteFile(profile, alarmRules = null) {
     for (const seconds of ['staleAfterSeconds', 'flatlineSeconds', 'flatlineRunningSeconds', 'maxStepWindowSeconds']) {
       if (quality[seconds] != null && (!Number.isInteger(quality[seconds]) || quality[seconds] <= 0)) problems.push(`quality profile ${name}: ${seconds} must be a positive integer`);
     }
+    validateQualityProfileExtensions(name, quality, problems);
     for (const item of [...(quality.running ?? []), ...(quality.inputs ?? [])]) {
       const points = activePoints.get(item.device);
       if (!points) problems.push(`quality profile ${name}: no device ${item.device}`);
       else if (!points.has(item.point)) problems.push(`quality profile ${name}: ${item.device} has no active point ${item.point}`);
     }
   }
+  const devicesByCode = new Map(devices.map((device) => [device.code, device]));
   for (const device of devices) {
     for (const point of device.points) {
       if (point.critical != null && typeof point.critical !== 'boolean') {
@@ -932,13 +948,14 @@ export function checkSiteFile(profile, alarmRules = null) {
         if (pointStatus(point) !== 'ACTIVE') problems.push(`${device.code}/${point.code}: critical point must be ACTIVE`);
         if (point.from) problems.push(`${device.code}/${point.code}: critical point cannot copy from another device`);
       }
-      if (!point.qualityProfile || pointStatus(point) !== 'ACTIVE') continue;
-      if (!profile.qualityProfiles?.[point.qualityProfile]) problems.push(`${device.code}/${point.code} names unknown quality profile ${point.qualityProfile}`);
-      const named = profile.qualityProfiles?.[point.qualityProfile];
-      if (named?.staleAfterSeconds != null && named.staleAfterSeconds < device.sampleSeconds) problems.push(`${device.code}/${point.code}: staleAfterSeconds is shorter than the sample interval`);
+      if (point.qualityProfile && pointStatus(point) === 'ACTIVE') {
+        if (!profile.qualityProfiles?.[point.qualityProfile]) problems.push(`${device.code}/${point.code} names unknown quality profile ${point.qualityProfile}`);
+        const named = profile.qualityProfiles?.[point.qualityProfile];
+        if (named?.staleAfterSeconds != null && named.staleAfterSeconds < device.sampleSeconds) problems.push(`${device.code}/${point.code}: staleAfterSeconds is shorter than the sample interval`);
+      }
     }
   }
-  const devicesByCode = new Map(devices.map((device) => [device.code, device]));
+  validateSiteQualityAdditions(profile, devices, activePoints, devicesByCode, pointQuality, problems);
   for (const asset of profile.assets ?? []) {
     if (asset.nameplate == null) continue;
     try {
@@ -999,6 +1016,7 @@ export function checkSiteFile(profile, alarmRules = null) {
         if (!ALARM_SEVERITIES.has(severity)) problems.push(`alarm rules readingGaps.severity ${severity} must be INFO, WARNING, MINOR, MAJOR or CRITICAL`);
       }
     }
+    validateAlarmQualityAdditions(alarmRules, ALARM_SEVERITIES, problems);
     const inputs = [];
     const walk = (node) => {
       if (!node || typeof node !== 'object') return;

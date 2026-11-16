@@ -56,9 +56,17 @@ type SiteRouting struct {
 	RateLimitPerHour int `json:"rateLimitPerHour"`
 	// SuppressWhenRootCause: while an Alarm of RootCauseAlarmType is active at the Site, Alarms whose
 	// type starts with one of these prefixes tell nobody (a gateway offline makes every reading stale).
-	RootCauseAlarmType    string       `json:"rootCauseAlarmType"`
-	SuppressWhenRootCause []string     `json:"suppressWhenRootCause"`
-	Routes                []AlarmRoute `json:"routes"`
+	RootCauseAlarmType    string          `json:"rootCauseAlarmType"`
+	SuppressWhenRootCause []string        `json:"suppressWhenRootCause"`
+	RootCauseRules        []RootCauseRule `json:"rootCauseRules,omitempty"`
+	Routes                []AlarmRoute    `json:"routes"`
+}
+
+// RootCauseRule holds back downstream notifications while a matching root-cause Alarm is active.
+type RootCauseRule struct {
+	WhenActivePrefix string   `json:"whenActivePrefix"`
+	ScopeSameDevice  bool     `json:"scopeSameDevice,omitempty"`
+	SuppressPrefixes []string `json:"suppressPrefixes"`
 }
 
 // QuietHours are a daily window in the Site's time; Alarms below BypassSeverity wait until it ends.
@@ -221,6 +229,22 @@ func ParseSiteRouting(body []byte) (SiteRouting, error) {
 	if len(routing.SuppressWhenRootCause) > 0 && strings.TrimSpace(routing.RootCauseAlarmType) == "" {
 		return SiteRouting{}, errors.New("suppressWhenRootCause needs rootCauseAlarmType")
 	}
+	for index, rule := range routing.RootCauseRules {
+		if strings.TrimSpace(rule.WhenActivePrefix) == "" {
+			return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] needs whenActivePrefix", index)
+		}
+		if rule.ScopeSameDevice && !strings.HasSuffix(rule.WhenActivePrefix, "/") {
+			return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] with scopeSameDevice needs trailing / on whenActivePrefix", index)
+		}
+		if len(rule.SuppressPrefixes) == 0 {
+			return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] needs suppressPrefixes", index)
+		}
+		for _, prefix := range rule.SuppressPrefixes {
+			if strings.TrimSpace(prefix) == "" {
+				return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] has an empty suppressPrefix", index)
+			}
+		}
+	}
 	if len(routing.Routes) == 0 {
 		return SiteRouting{}, errors.New("routing needs at least one route")
 	}
@@ -306,6 +330,48 @@ func hasAnyPrefix(value string, prefixes []string) bool {
 		}
 	}
 	return false
+}
+
+// IsSuppressedByRootCause reports whether an active root-cause Alarm suppresses notifications for alarmType.
+func (routing SiteRouting) IsSuppressedByRootCause(alarmType string, facts DeliveryFacts) bool {
+	if facts.RootCauseActive && alarmType != routing.RootCauseAlarmType && hasAnyPrefix(alarmType, routing.SuppressWhenRootCause) {
+		return true
+	}
+	for _, rule := range routing.RootCauseRules {
+		if !hasAnyPrefix(alarmType, rule.SuppressPrefixes) {
+			continue
+		}
+		for _, activeType := range facts.ActiveAlarmTypes {
+			if activeType == alarmType {
+				continue
+			}
+			suffix, ok := strings.CutPrefix(activeType, rule.WhenActivePrefix)
+			if !ok {
+				continue
+			}
+			if !rule.ScopeSameDevice {
+				return true
+			}
+			device := strings.TrimPrefix(suffix, "/")
+			if slash := strings.IndexByte(device, '/'); slash >= 0 {
+				device = device[:slash]
+			}
+			if alarmBelongsToDevice(alarmType, device) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func alarmBelongsToDevice(alarmType, device string) bool {
+	if device == "" {
+		return false
+	}
+	return alarmType == device ||
+		strings.HasPrefix(alarmType, device+"/") ||
+		strings.HasSuffix(alarmType, "/"+device) ||
+		strings.Contains(alarmType, "/"+device+"/")
 }
 
 func clockMinutes(clock string) (int, error) {

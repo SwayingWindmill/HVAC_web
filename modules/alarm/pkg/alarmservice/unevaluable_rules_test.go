@@ -28,7 +28,7 @@ func TestRulesUnevaluableSummaryListsTheLongestFirstAndCapsTheList(t *testing.T)
 }
 
 func TestRulesThatWatchTheDataThemselvesAreNotWatched(t *testing.T) {
-	for _, alarmType := range []string{"data-quality/suspect/x", "reading-gap/dev/pt", "readings-not-updated/dev", "readings-flat/dev/pt", "reports-interrupted", "rules-unevaluable"} {
+	for _, alarmType := range []string{"data-quality/suspect/x", "device-untrusted/temperature-uid20", "reading-gap/dev/pt", "readings-not-updated/dev", "readings-flat/dev/pt", "reports-interrupted", "rules-unevaluable"} {
 		if watchedForUnevaluable(alarmType) {
 			t.Fatalf("%s should not be watched", alarmType)
 		}

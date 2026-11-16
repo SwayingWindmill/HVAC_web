@@ -498,9 +498,7 @@ func (condition Condition) Validate() error {
 			return errors.New("quality-reason predicate is invalid")
 		}
 		for _, reason := range condition.Reasons {
-			switch reason {
-			case "OUT_OF_RANGE", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT", "LOW_CONFIDENCE", "PHYSICS_WET_BULB_DRY", "PHYSICS_WET_BULB_CONDENSER", "PHYSICS_POWER", "PHYSICS_COP", "PHYSICS_CHW_DIRECTION", "PHYSICS_CW_DIRECTION", "PHYSICS_HEAT_BALANCE", "PROBE_OFFSET":
-			default:
+			if !validConditionReason(reason) {
 				return errors.New("quality-reason predicate names an unknown reason")
 			}
 		}
@@ -719,15 +717,15 @@ func evaluateReasons(condition Condition, snapshot EvaluationSnapshot) predicate
 	if len(reasons) == 0 {
 		reasons = input.QualityReasons
 	}
+	if (!exists || !input.Present) && len(reasons) == 0 {
+		return truthResult(condition.Match == ReasonMatchNone, nil)
+	}
 	hit := false
 	for _, reason := range reasons {
 		if slices.Contains(condition.Reasons, reason) {
 			hit = true
 			break
 		}
-	}
-	if !exists || !input.Present {
-		return truthResult(condition.Match == ReasonMatchNone, nil)
 	}
 	if condition.Match == ReasonMatchNone {
 		return truthResult(!hit, nil)
@@ -1014,6 +1012,15 @@ func validEvaluationSubjectType(value string) bool {
 func validCompareOperator(value CompareOperator) bool {
 	switch value {
 	case CompareEQ, CompareNE, CompareGT, CompareGTE, CompareLT, CompareLTE:
+		return true
+	default:
+		return false
+	}
+}
+
+func validConditionReason(reason string) bool {
+	switch reason {
+	case "OUT_OF_RANGE", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT", "LOW_CONFIDENCE", "SOURCE_UNTRUSTED", "PHYSICS_WET_BULB_DRY", "PHYSICS_WET_BULB_CONDENSER", "PHYSICS_POWER", "PHYSICS_COP", "PHYSICS_CHW_DIRECTION", "PHYSICS_CW_DIRECTION", "PHYSICS_HEAT_BALANCE", "PROBE_OFFSET":
 		return true
 	default:
 		return false

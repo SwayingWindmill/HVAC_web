@@ -389,10 +389,14 @@ func inputFactFromTelemetry(record telemetryEvaluationInputRecord, state telemet
 	if state.Missing != nil && state.Present == nil {
 		key := string(state.Missing.Key)
 		capturedAt := record.EvaluatedAt.UTC().Format(time.RFC3339Nano)
-		return key, InputFact{
+		fact := InputFact{
 			Key: key, Present: false, Revision: revision,
 			Evidence: []alarmmodel.EvidenceReference{{Kind: "telemetry-device-snapshot", Reference: record.EventID + "#" + key, CapturedAt: capturedAt}},
-		}, nil
+		}
+		if state.Missing.MissingReason == "ONLY_REJECTED_CANDIDATES" {
+			fact.HealthReasons = []string{"OUT_OF_RANGE"}
+		}
+		return key, fact, nil
 	}
 	return "", InputFact{}, fmt.Errorf("%w: telemetry key state is ambiguous", ErrTelemetryEvaluationInvalid)
 }

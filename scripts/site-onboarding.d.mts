@@ -1,7 +1,41 @@
+export interface OnboardingRunningExpect {
+  device: string;
+  point: string;
+  equals?: string;
+}
+
+export interface OnboardingNameplate {
+  manufacturer?: string;
+  model?: string;
+  year?: number;
+  refrigerant?: string;
+  ratedCapacityKw?: number;
+  ratedPowerKw?: number;
+  ratedCurrentA?: number;
+  feederAuxiliaryPowerKw?: number;
+  unconfirmed?: string[];
+  [key: string]: unknown;
+}
+
+export interface OnboardingQualityProfile {
+  accuracyK?: number;
+  accuracyFraction?: number;
+  range?: { min: number; max: number };
+  maxStep?: number;
+  maxStepWindowSeconds?: number;
+  sentinels?: number[];
+  staleAfterSeconds?: number;
+  flatlineSeconds?: number;
+  flatlineRunningSeconds?: number;
+  flatlineStabilizeSeconds?: number;
+  running?: OnboardingRunningExpect[];
+  inputs?: Array<{ device: string; point: string }>;
+}
+
 export interface OnboardingAsset {
   id: string;
   code: string;
-  nameplate?: string;
+  nameplate?: string | OnboardingNameplate;
 }
 
 export interface OnboardingPoint {
@@ -18,6 +52,9 @@ export interface OnboardingPoint {
   sourceMetadata?: Record<string, unknown>;
   critical?: boolean | string;
   from?: string[];
+  qualityProfile?: string;
+  running?: OnboardingRunningExpect[];
+  flatlineStabilizeSeconds?: number;
   device?: OnboardingDevice;
 }
 
@@ -26,6 +63,9 @@ export interface OnboardingDevice {
   code: string;
   sourceKey?: string;
   asset?: string;
+  type?: string;
+  sampleSeconds?: number;
+  running?: OnboardingRunningExpect[];
   points: OnboardingPoint[];
   morePoints?: OnboardingPoint[];
 }
@@ -73,7 +113,8 @@ export interface OnboardingProfile {
     checkMeters?: string[];
   };
   physicsChecks?: Array<Record<string, unknown>>;
-  nameplateCatalog?: Record<string, unknown>;
+  qualityProfiles?: Record<string, OnboardingQualityProfile>;
+  nameplateCatalog?: Record<string, OnboardingNameplate>;
   intelligence: {
     diagnosis: { lowDeltaT: OnboardingLowDeltaT };
     optimization?: OnboardingOptimization;
@@ -86,6 +127,19 @@ export interface OnboardingAlarmRules {
     summary: string;
     severity: string;
     ageSeconds: number;
+  };
+  dataQuality?: {
+    suspect?: Record<string, unknown>;
+    flatline?: Record<string, unknown>;
+  };
+  deviceUntrusted?: {
+    enabled?: boolean;
+    title?: string;
+    summary?: string;
+    severity?: string;
+    durationSeconds?: number;
+    minPoints?: number;
+    reasons?: string[];
   };
   rules: Array<{
     raise?: unknown;
@@ -132,7 +186,7 @@ export function pointQuality(
   point: OnboardingPoint,
   profile: OnboardingProfile,
   devicesByCode: Map<string, OnboardingDevice>,
-): { checks: string | null };
+): { staleAfterSeconds: number | null; range: { min: number; max: number } | null; checks: string | null };
 export function updateWhenChanged(
   table: string,
   assignments: ReadonlyArray<readonly [string, string]>,

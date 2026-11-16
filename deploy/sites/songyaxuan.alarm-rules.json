@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "松雅轩的告警规则（#609）。读数写成「设备代码/点位代码」，代码见 songyaxuan.site.json。发布：modules/alarm/cmd/alarm-rules。供水温度看冷量计的总管供水，不看各台机组。2026-11-10 按现场手绘点位表接回四台机组的冷凝出水温度，冷却水出水过高改为看四台；房间没有温度探头（通道 15 测的是室外），去掉了房间温度过高。2026-10-31 按运行策略 v3（供水 5–8 ℃、室温 22–26 ℃）和 7 天数据补了供水偏高、供水过低、房间过热、冷却水出水过高、机组运行无流量五条；门槛是按数据估的，待现场确认。数据质量告警代替原来每条温度 6 小时「提示」的一动不动：超量程、跳变、38.4 和供冷量输入不可信为「警告」（供回水和供冷量为「严重」）；卡住在机组运行时用更短的时限，冷站停着时用更长的时限，严重程度都是「警告」。物理检查的告警不在这份清单里逐条写，站点文件的 physicsChecks 有报警文案的会一并编进来。供回水探头零点的告警同样不在这份清单里逐条写，站点文件的 probePairs 有报警文案的会一并编进来。站点文件标了 critical 的关键点位按 readingGaps 每个点位编一条重要级的「读数中断」，其余设备自己的启用点位按设备合成「读数长时间没有更新」（复制来的点位不重复算，#796）。",
+  "note": "松雅轩的告警规则（#609）。读数写成「设备代码/点位代码」，代码见 songyaxuan.site.json。发布：modules/alarm/cmd/alarm-rules。供水温度看冷量计的总管供水，各台运行机组另有蒸发出水低温防冻保护（chiller-leaving-low）。2026-11-10 按现场手绘点位表接回四台机组的冷凝出水温度，冷却水出水过高改为看四台；房间没有温度探头（通道 15 测的是室外），去掉了房间温度过高。数据质量告警配合连续持续时间防抖（suspect 300 秒）与整台设备不可信聚合（deviceUntrusted 180 秒）：超量程、跳变、异常占位值、采集源不可信和供冷量输入不可信为「警告」（总供回水温度为「严重」）；卡住在对应机组运行时用更短的时限，停机时用更长的时限，严重程度都是「警告」。物理检查的告警由站点文件的 physicsChecks 编译（不再为 btu-chw-direction 单独发告警）。供回水探头零点告警由站点文件的 probePairs 编译。站点文件标了 critical 的关键点位按 readingGaps 每个点位编一条重要级的「读数中断」，其余设备自己的启用点位按设备合成「读数长时间没有更新」（复制来的点位不重复算，#796）。",
   "siteFile": "songyaxuan.site.json",
   "rules": [
     {
@@ -238,29 +238,111 @@
           }
         ]
       }
+    },
+    {
+      "code": "chiller-leaving-low",
+      "title": "运行机组冷冻水出水温度过低",
+      "summary": "有运行中的冷机，其冷冻水出水温度（蒸发出）低于 4 ℃ 已持续 3 分钟，蒸发器存在结冰风险，请立即核查机组冷媒与水流状态。所有运行机组出水升到 4.5 ℃ 以上或停机后自动恢复。",
+      "severity": "CRITICAL",
+      "qualityPolicy": "VALID_ONLY",
+      "freshnessSeconds": 900,
+      "triggerMode": "DURATION",
+      "durationSeconds": 180,
+      "raise": {
+        "kind": "OR",
+        "children": [
+          {
+            "kind": "AND",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "temperature-uid20/t1", "operator": "LT", "value": { "type": "NUMBER", "number": 4 } }
+            ]
+          },
+          {
+            "kind": "AND",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "temperature-uid20/t2", "operator": "LT", "value": { "type": "NUMBER", "number": 4 } }
+            ]
+          },
+          {
+            "kind": "AND",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "temperature-uid20/t3", "operator": "LT", "value": { "type": "NUMBER", "number": 4 } }
+            ]
+          },
+          {
+            "kind": "AND",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "EQ", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "temperature-uid20/t4", "operator": "LT", "value": { "type": "NUMBER", "number": 4 } }
+            ]
+          }
+        ]
+      },
+      "clear": {
+        "kind": "AND",
+        "children": [
+          {
+            "kind": "OR",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid4/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "temperature-uid20/t1", "operator": "GT", "value": { "type": "NUMBER", "number": 4.5 } }
+            ]
+          },
+          {
+            "kind": "OR",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid3/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "temperature-uid20/t2", "operator": "GT", "value": { "type": "NUMBER", "number": 4.5 } }
+            ]
+          },
+          {
+            "kind": "OR",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid5/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "temperature-uid20/t3", "operator": "GT", "value": { "type": "NUMBER", "number": 4.5 } }
+            ]
+          },
+          {
+            "kind": "OR",
+            "children": [
+              { "kind": "COMPARE", "input": "meter-uid2/run_state", "operator": "NE", "value": { "type": "STRING", "string": "RUNNING" } },
+              { "kind": "COMPARE", "input": "temperature-uid20/t4", "operator": "GT", "value": { "type": "NUMBER", "number": 4.5 } }
+            ]
+          }
+        ]
+      }
     }
   ],
   "dataQuality": {
     "suspect": {
       "title": "{point}数据不可信",
-      "summary": "{device}的{point}最近一条读数不可信：超出量程、单次跳变、模块通讯异常值 38.4，或供冷量用的温度不可信。读数恢复可信后自动恢复。页面仍显示上一条可信读数时，这条告警表示新来的读数被丢掉了。",
+      "summary": "{device}的{point}连续 5 分钟不可信：超出物理量程、单次跳变、异常占位值（如 38.4）、采集源不可信或派生输入异常。读数恢复可信后自动恢复。",
       "severity": "WARNING",
       "majorSeverity": "MAJOR",
+      "durationSeconds": 300,
       "majorPoints": [
         "temperature-uid20/t16",
-        "temperature-uid20/t18",
-        "btu-calc/supply_water_temperature",
-        "btu-calc/return_water_temperature",
-        "btu-calc/instant_cooling_capacity",
-        "btu-calc/accumulated_cooling_energy"
+        "temperature-uid20/t18"
       ],
-      "reasons": ["OUT_OF_RANGE", "SPIKE", "SENTINEL", "DERIVED_INPUT"]
+      "reasons": ["OUT_OF_RANGE", "SPIKE", "SENTINEL", "SOURCE_UNTRUSTED", "DERIVED_INPUT"]
     },
     "flatline": {
       "title": "{point}{when}卡住",
       "summary": "{device}的{point}{when}连续 {minutes} 分钟完全没变，可能是测点卡住，或网关在重复上报旧值。读数重新变化后自动恢复。机组运行时的这条，在机组全部停机后也会恢复。",
       "severity": "WARNING"
     }
+  },
+  "deviceUntrusted": {
+    "enabled": true,
+    "title": "{device}整台采集异常",
+    "summary": "{device}全部 {count} 个监测点位同时异常（超量程、通讯异常值 38.4 或采集源不可信），已暂抑该设备逐点告警与下游规则（{rules}）。现场通讯或供电恢复后自动恢复。",
+    "severity": "MAJOR",
+    "durationSeconds": 180,
+    "minPoints": 2,
+    "reasons": ["OUT_OF_RANGE", "SENTINEL", "SOURCE_UNTRUSTED"]
   },
   "reportsInterrupted": {
     "title": "网关上报中断",

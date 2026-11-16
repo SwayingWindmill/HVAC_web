@@ -48,7 +48,9 @@ type QueuedMessage struct {
 type DeliveryFacts struct {
 	// RootCauseActive: another Alarm of the routing's root-cause type is active at the Site.
 	RootCauseActive bool
-	Queued          []QueuedMessage
+	// ActiveAlarmTypes lists open Alarm types at the Site for evaluating rootCauseRules.
+	ActiveAlarmTypes []string
+	Queued           []QueuedMessage
 	// SentLastHour counts first and escalation messages per recipient in the last hour, at the Site.
 	SentLastHour map[string]int
 }
@@ -142,7 +144,7 @@ func DecideDelivery(alarm DeliveryAlarm, routing SiteRouting, facts DeliveryFact
 			return DeliveryDecision{NextDueAt: &holdEnds, Held: "HOLD"}
 		}
 	}
-	if facts.RootCauseActive && alarm.AlarmType != routing.RootCauseAlarmType && hasAnyPrefix(alarm.AlarmType, routing.SuppressWhenRootCause) {
+	if routing.IsSuppressedByRootCause(alarm.AlarmType, facts) {
 		next := now.Add(rootCauseRecheck)
 		return DeliveryDecision{NextDueAt: &next, Held: "ROOT_CAUSE"}
 	}

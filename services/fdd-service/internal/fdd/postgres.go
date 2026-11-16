@@ -87,7 +87,10 @@ func (store *PostgresStore) OperatingTopology(ctx context.Context, tenantID, sit
 	if err = fddScope(ctx, tx, tenantID, siteID); err != nil {
 		return Topology{}, err
 	}
-	rows, err := tx.Query(ctx, `SELECT a.id::text, a.asset_type, COALESCE(a.rated_power, 0), COALESCE(a.rated_capacity, 0), b.device_id::text
+	rows, err := tx.Query(ctx, `SELECT a.id::text, a.asset_type, COALESCE(a.rated_power, 0), COALESCE(a.rated_capacity, 0),
+CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(a.nameplate->'unconfirmed', '[]'::jsonb)) u(f) WHERE u.f = 'feederAuxiliaryPowerKw')
+  THEN 0 ELSE COALESCE((a.nameplate->>'feederAuxiliaryPowerKw')::double precision, 0) END,
+b.device_id::text
 FROM core_registry.assets a
 JOIN core_registry.device_bindings b ON b.tenant_id = a.tenant_id AND b.site_id = a.site_id AND b.asset_id = a.id
 WHERE a.tenant_id = $1::uuid AND a.site_id = $2::uuid AND a.status = 'ACTIVE'
@@ -103,8 +106,8 @@ LIMIT $4`, tenantID, siteID, at.UTC(), maximumGateBindings+1)
 	count := 0
 	for rows.Next() {
 		var assetID, assetType, deviceID string
-		var ratedPower, ratedCapacity float64
-		if err = rows.Scan(&assetID, &assetType, &ratedPower, &ratedCapacity, &deviceID); err != nil {
+		var ratedPower, ratedCapacity, feederAuxiliaryPower float64
+		if err = rows.Scan(&assetID, &assetType, &ratedPower, &ratedCapacity, &feederAuxiliaryPower, &deviceID); err != nil {
 			return Topology{}, err
 		}
 		if count++; count > maximumGateBindings {
@@ -118,7 +121,7 @@ LIMIT $4`, tenantID, siteID, at.UTC(), maximumGateBindings+1)
 			(*assets)[last].DeviceIDs = append((*assets)[last].DeviceIDs, deviceID)
 			continue
 		}
-		*assets = append(*assets, GateAsset{AssetID: assetID, DeviceIDs: []string{deviceID}, RatedPowerKW: ratedPower, RatedCapacityKW: ratedCapacity})
+		*assets = append(*assets, GateAsset{AssetID: assetID, DeviceIDs: []string{deviceID}, RatedPowerKW: ratedPower, RatedCapacityKW: ratedCapacity, FeederAuxiliaryPowerKW: feederAuxiliaryPower})
 	}
 	if err = rows.Err(); err != nil {
 		return Topology{}, err

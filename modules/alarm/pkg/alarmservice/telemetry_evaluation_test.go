@@ -120,3 +120,51 @@ func presentTelemetryState(key, valueType, rawValue, quality, freshness string, 
 		SampledAt: telemetryapi.Instant(sampledAt.Format(time.RFC3339Nano)), ReceivedAt: telemetryapi.Instant(sampledAt.Format(time.RFC3339Nano)), Freshness: freshness, Quality: telemetryapi.TelemetryQuality(quality), PolicyRevision: 1,
 	}}
 }
+
+func TestColdStartRejectedCandidateRaisesReasonsAlarm(t *testing.T) {
+	startedAt := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	missingState := func(key, reason string) telemetryapi.TelemetryKeyState {
+		return telemetryapi.TelemetryKeyState{Missing: &telemetryapi.TelemetryMissingState{
+			Key: telemetryapi.TelemetryKey(key), State: "MISSING", Freshness: "MISSING", MissingReason: reason,
+		}}
+	}
+	record := telemetryEvaluationRecord(telemetryEvaluationTestBTUID, telemetryEvaluationTestEventB, 1, startedAt,
+		missingState("return_water_temperature", "ONLY_REJECTED_CANDIDATES"),
+		missingState("supply_water_temperature", "NEVER_OBSERVED"))
+	snapshot, err := buildSiteEvaluationSnapshot(telemetryEvaluationTestEventB, telemetryEvaluationTestTenantID, telemetryEvaluationTestSiteID, []telemetryEvaluationInputRecord{record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejectedFact := snapshot.Inputs[telemetryEvaluationTestBTUID+"/return_water_temperature"]
+	if rejectedFact.Present || len(rejectedFact.HealthReasons) != 1 || rejectedFact.HealthReasons[0] != "OUT_OF_RANGE" {
+		t.Fatalf("expected cold-start OUT_OF_RANGE health reason, got %#v", rejectedFact)
+	}
+
+	policy := validAlarmPolicy()
+	policy.QualityPolicy = EvaluationQualityUsable
+	policy.Raise = Condition{Kind: ConditionReasons, Input: telemetryEvaluationTestBTUID + "/return_water_temperature", Match: ReasonMatchAny, Reasons: []string{"OUT_OF_RANGE", "SOURCE_UNTRUSTED"}}
+	policy.Clear = Condition{Kind: ConditionReasons, Input: telemetryEvaluationTestBTUID + "/return_water_temperature", Match: ReasonMatchNone, Reasons: []string{"OUT_OF_RANGE", "SOURCE_UNTRUSTED"}}
+	sealAlarmPolicy(&policy)
+
+	decision, err := EvaluatePolicy(policy, snapshot, AlarmEvaluationState{}, startedAt.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Effect != EvaluationEffectPublish || decision.Status != EvaluationMatched {
+		t.Fatalf("cold-start ONLY_REJECTED_CANDIDATES did not fire ConditionReasons(ANY, [OUT_OF_RANGE]): %#v", decision)
+	}
+
+	neverPolicy := validAlarmPolicy()
+	neverPolicy.QualityPolicy = EvaluationQualityUsable
+	neverPolicy.Raise = Condition{Kind: ConditionReasons, Input: telemetryEvaluationTestBTUID + "/supply_water_temperature", Match: ReasonMatchAny, Reasons: []string{"OUT_OF_RANGE"}}
+	neverPolicy.Clear = Condition{Kind: ConditionReasons, Input: telemetryEvaluationTestBTUID + "/supply_water_temperature", Match: ReasonMatchNone, Reasons: []string{"OUT_OF_RANGE"}}
+	sealAlarmPolicy(&neverPolicy)
+
+	neverDecision, err := EvaluatePolicy(neverPolicy, snapshot, AlarmEvaluationState{}, startedAt.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if neverDecision.Effect != EvaluationEffectNone || neverDecision.Status != EvaluationNotMatched {
+		t.Fatalf("NEVER_OBSERVED unexpectedly matched OUT_OF_RANGE: %#v", neverDecision)
+	}
+}
