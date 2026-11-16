@@ -329,7 +329,7 @@ func scanFakeValues(vals []any, dest []any) error {
 			continue
 		}
 		dv := reflect.ValueOf(dest[i])
-		if dv.Kind() != reflect.Ptr {
+		if dv.Kind() != reflect.Pointer {
 			return errors.New("destination must be pointer")
 		}
 		sv := reflect.ValueOf(vals[i])
