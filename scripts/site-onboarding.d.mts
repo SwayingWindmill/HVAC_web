@@ -150,6 +150,7 @@ export interface OnboardingAlarmRules {
 
 export interface OnboardingState {
   site: string;
+  siteRevision?: number | null;
   devices: Record<string, string>;
   points: Record<string, string>;
   assets: Record<string, string>;
@@ -192,7 +193,10 @@ export function updateWhenChanged(
   assignments: ReadonlyArray<readonly [string, string]>,
   options?: { revision?: string | false },
 ): string;
-export function buildOnboardingSql(profile: OnboardingProfile): {
+export function buildOnboardingSql(
+  profile: OnboardingProfile,
+  options?: { expectedSiteRevision?: number | null; principalId?: string },
+): {
   registry: string;
   telemetry: string;
   energy: string;

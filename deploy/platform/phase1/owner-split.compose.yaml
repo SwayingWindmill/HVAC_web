@@ -78,6 +78,20 @@ services:
       CORE_DIAGNOSTICS_ADDR: :19084
       CORE_IAM_ENDPOINT: https://iam-owner:8444
       CORE_IAM_SERVER_NAME: iam-service
+      TELEMETRY_RUNTIME_URL: ${TELEMETRY_RUNTIME_URL:-https://telemetry-worker:8446}
+      TELEMETRY_RUNTIME_SERVER_NAME: ${TELEMETRY_RUNTIME_SERVER_NAME:-telemetry-runtime-service}
+      TELEMETRY_RUNTIME_SERVER_CA: ${TELEMETRY_RUNTIME_SERVER_CA:-/run/hvac/pki/ca.crt}
+      COMMAND_SERVICE_URL: ${COMMAND_SERVICE_URL:-https://command-owner:8447}
+      COMMAND_SERVICE_SERVER_NAME: ${COMMAND_SERVICE_SERVER_NAME:-command-service}
+      COMMAND_SERVICE_SERVER_CA: ${COMMAND_SERVICE_SERVER_CA:-/run/hvac/pki/ca.crt}
+      CONNECTIVITY_SERVICE_URL: ${CONNECTIVITY_SERVICE_URL:-https://connectivity:8448}
+      CONNECTIVITY_SERVICE_SERVER_NAME: ${CONNECTIVITY_SERVICE_SERVER_NAME:-connectivity}
+      CONNECTIVITY_SERVER_CA: ${CONNECTIVITY_SERVER_CA:-/run/hvac/gateway-ca/ca.crt}
+    volumes:
+      - ${INTERNAL_PKI_DIR:-./runtime/internal-pki}:/run/hvac/pki:ro
+      - ${INTERNAL_SECRETS_DIR:-./runtime/secrets}:/run/hvac/secrets:ro
+      - ${PHASE1_CONFIG_DIR:-./runtime/config}:/run/hvac/config:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca/ca.crt:/run/hvac/gateway-ca/ca.crt:ro
     expose: ["18445", "19084"]
     healthcheck:
       test: ["CMD", "/healthcheck", "http://127.0.0.1:19084/health/ready"]

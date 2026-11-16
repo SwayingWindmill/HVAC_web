@@ -220,15 +220,26 @@ func main() {
 	logger.Info("command_service_stopped")
 }
 
-// runtimeHTTPConfig names the dispatcher and verifier workloads; each serves every Tenant.
+// runtimeHTTPConfig names the dispatcher, verifier, and core registry callers; each serves every Tenant.
 func runtimeHTTPConfig(store commandservice.RuntimeStore, metrics *observability.Registry, failureNotifier commandservice.ControlFailureNotifier) commandservice.RuntimeHTTPConfig {
 	return commandservice.RuntimeHTTPConfig{
 		Store:                  store,
 		Metrics:                metrics,
 		DispatcherSPIFFE:       envOr("COMMAND_DISPATCHER_SPIFFE", "spiffe://hvac.local/command-dispatcher"),
 		VerifierSPIFFE:         envOr("COMMAND_VERIFIER_SPIFFE", "spiffe://hvac.local/command-verifier"),
+		CoreRegistrySPIFFEs:    parseSPIFFEAllowlist(envOr("COMMAND_CORE_REGISTRY_SPIFFES", "spiffe://hvac.local/platform-core-service,spiffe://hvac.local/platform-gateway")),
 		ControlFailureNotifier: failureNotifier,
 	}
+}
+
+func parseSPIFFEAllowlist(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 type commandControlEventPayload struct {

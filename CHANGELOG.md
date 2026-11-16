@@ -19,6 +19,10 @@
 
 #### 新增
 
+- 注册表资源退役检查现同步校验仍处于启用状态的设备源键映射（`core_registry.gateway_device_source_keys`），新增 `GATEWAY_SOURCE_KEY` 绑定写入与 `closeOnly` 解绑关停（产出 `registry.binding.closed`），确保绑定先解绑后方可退役。
+- 网关反向运维隧道（`modules/connectivity/pkg/tunnel`）新增持久审计表 `connectivity.gateway_tunnel_audit` 与租户 RLS 策略，记录会话建立（`SESSION_OPENED`）、断开及收发字节数（`SESSION_CLOSED`）、流打开（`STREAM_OPENED`）与端口/建流拒绝（`STREAM_REJECTED`）。
+- 核心注册表新增域事件投递中继（`OutboxRelay`）与投递授权迁移 `registry-outbox-delivery-grants.sql`，在设备/点位变更、导入提交与设备/站点退役时自动向遥测运行时（`/internal/v1/telemetry/registry-sync:apply`）、连接凭证（`/internal/v1/gateways/{gatewayId}:retire`）与指令服务（`/internal/v1/commands:cancelRetiredTarget`）推送权威状态、吊销已退役网关凭证/隧道并取消挂起指令。
+- 现场接入脚本 `scripts/site-onboarding.mjs` 收敛设备在线判定信号白名单（包含 `EXPLICIT_CONNECT` 与 `EXPLICIT_DISCONNECT`），为 `apply` 增加站点 `revision` 乐观并发检查，并仅针对实际新增或修订递增的实体写入 `registry_audit_facts` 与 `domain_outbox_events`（未变化重跑零写入）。
 - `/operations/control` 机组列头显示绑定的 `HVAC_POWER_METER` 实时功率（无有效读数时显示「暂无读数」），控制联锁统一读取点位 `sourceMetadata.interlockChecks`（#862）
 - 站点控制模式与设备锁定接口返回操作人姓名 `updatedByName`（依托 `iam.resolve_tenant_principal_names` 查询同租户在职成员），控制页与实时运行页直接显示人员姓名，不再回退为「其他人员」（#859）
 - 控制下发与整站安全停机动态口令校验按 `ProblemDetails.reason` 区分口令错误（`CODE_INVALID`）、口令已使用（`CODE_REPLAYED`）、验证已锁定（`MFA_LOCKED`）与未开通两步验证（`MFA_NOT_CONFIGURED`），并在未开通时引导跳转 `/system?tab=users`（#860）

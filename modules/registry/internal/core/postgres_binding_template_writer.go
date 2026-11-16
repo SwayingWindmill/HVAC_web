@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -19,24 +21,49 @@ func (store *PostgresStore) Rebind(ctx context.Context, claims registryauth.Gran
 	}
 	result, replayed, err := runRegistryMutation(ctx, store, claims, registryauth.ActionBindingWrite, input.Meta.IdempotencyKey, input.Meta.Reason, input, func(tx pgx.Tx, now time.Time) (mutationRecord[BindingMutationResult], error) {
 		effectiveAt, _ := time.Parse(time.RFC3339Nano, input.EffectiveAt)
-		id, err := newCoreUUIDv7(now)
+		if !input.CloseOnly && input.Kind == BindingGatewaySourceKey {
+			if err := validateGatewaySourceKeyEndpoints(ctx, tx, claims.TenantID, input.SiteID, input.SourceID, input.TargetID); err != nil {
+				return mutationRecord[BindingMutationResult]{}, err
+			}
+		}
+		closed, err := closeCurrentBinding(ctx, tx, claims.TenantID, input, effectiveAt, now)
 		if err != nil {
 			return mutationRecord[BindingMutationResult]{}, err
 		}
-		if err := closeCurrentBinding(ctx, tx, input, effectiveAt, now); err != nil {
-			return mutationRecord[BindingMutationResult]{}, err
+		var (
+			bindingID string
+			revision  int64 = 1
+			validFrom       = effectiveAt
+		)
+		if input.CloseOnly {
+			bindingID = closed.ID
+			revision = closed.Revision
+			if !closed.ValidFrom.IsZero() {
+				validFrom = closed.ValidFrom
+			}
+		} else {
+			bindingID, err = newCoreUUIDv7(now)
+			if err != nil {
+				return mutationRecord[BindingMutationResult]{}, err
+			}
+			if err := insertBinding(ctx, tx, claims.TenantID, bindingID, input, effectiveAt, now); err != nil {
+				return mutationRecord[BindingMutationResult]{}, err
+			}
 		}
-		if err := insertBinding(ctx, tx, claims.TenantID, id, input, effectiveAt, now); err != nil {
-			return mutationRecord[BindingMutationResult]{}, err
+		eventType := "registry.binding.rebound"
+		payload := map[string]any{"siteId": input.SiteID, "kind": input.Kind, "sourceId": input.SourceID, "targetId": input.TargetID, "role": input.Role}
+		if input.CloseOnly {
+			eventType = "registry.binding.closed"
+			payload["closeOnly"] = true
 		}
 		value := BindingMutationResult{
-			BindingID: id, SiteID: input.SiteID, Kind: string(input.Kind), SourceID: input.SourceID,
-			TargetID: input.TargetID, Role: input.Role, Revision: 1, ValidFrom: effectiveAt.UTC().Format(time.RFC3339Nano),
+			BindingID: bindingID, SiteID: input.SiteID, Kind: string(input.Kind), SourceID: input.SourceID,
+			TargetID: input.TargetID, Role: input.Role, Revision: revision, ValidFrom: validFrom.UTC().Format(time.RFC3339Nano),
 		}
 		return mutationRecord[BindingMutationResult]{
-			Result: value, SiteID: &input.SiteID, ResourceType: "BINDING", ResourceID: id,
-			AfterRevision: revisionPointer(1), EventType: "registry.binding.rebound", AggregateVersion: 1,
-			Payload: map[string]any{"siteId": input.SiteID, "kind": input.Kind, "sourceId": input.SourceID, "targetId": input.TargetID, "role": input.Role},
+			Result: value, SiteID: &input.SiteID, ResourceType: "BINDING", ResourceID: bindingID,
+			AfterRevision: revisionPointer(revision), EventType: eventType, AggregateVersion: revision,
+			Payload: payload,
 		}, nil
 	})
 	if err != nil {
@@ -46,34 +73,226 @@ func (store *PostgresStore) Rebind(ctx context.Context, claims registryauth.Gran
 	return result, nil
 }
 
-func closeCurrentBinding(ctx context.Context, tx pgx.Tx, input RebindRequest, effectiveAt, now time.Time) error {
-	var err error
-	switch input.Kind {
-	case BindingDeviceAsset:
-		if input.Role == "GATEWAY" {
-			return nil
+func validateGatewaySourceKeyEndpoints(ctx context.Context, tx pgx.Tx, tenantID, siteID, deviceID, gatewayDeviceID string) error {
+	var gatewayType, gatewayStatus string
+	err := tx.QueryRow(ctx, `SELECT device_type, status FROM core_registry.devices WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid`, tenantID, siteID, gatewayDeviceID).Scan(&gatewayType, &gatewayStatus)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrBindingConflict
 		}
-		_, err = tx.Exec(ctx, `UPDATE core_registry.device_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND device_id = $2::uuid AND binding_role = $3 AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now)
-	case BindingAssetSpace:
-		if input.Role != "INSTALLED_IN" {
-			return nil
-		}
-		_, err = tx.Exec(ctx, `UPDATE core_registry.asset_space_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND asset_id = $2::uuid AND binding_role = $3 AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now)
-	case BindingDeviceSpace:
-		if input.Role != "INSTALLED_IN" {
-			return nil
-		}
-		_, err = tx.Exec(ctx, `UPDATE core_registry.device_space_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND device_id = $2::uuid AND binding_role = $3 AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now)
-	case BindingSensorDevice:
-		_, err = tx.Exec(ctx, `UPDATE core_registry.sensor_device_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND sensor_id = $2::uuid AND binding_role = $3 AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now)
-	case BindingSensorSpace:
-		_, err = tx.Exec(ctx, `UPDATE core_registry.sensor_space_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND sensor_id = $2::uuid AND binding_role = $3 AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now)
-	case BindingPointSubject:
-		_, err = tx.Exec(ctx, `UPDATE core_registry.point_subject_bindings SET valid_to = $4, revision = revision + 1, updated_at = $5 WHERE site_id = $1::uuid AND point_id = $2::uuid AND binding_role = $3 AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $4`, input.SiteID, input.SourceID, input.Role, effectiveAt, now)
-	default:
-		return ErrInvalidMutation
+		return mapRegistryWriteError(err)
 	}
-	return mapRegistryWriteError(err)
+	if gatewayType != "GATEWAY" || gatewayStatus != "ACTIVE" {
+		return ErrBindingConflict
+	}
+	var deviceType, deviceStatus string
+	err = tx.QueryRow(ctx, `SELECT device_type, status FROM core_registry.devices WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid`, tenantID, siteID, deviceID).Scan(&deviceType, &deviceStatus)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrBindingConflict
+		}
+		return mapRegistryWriteError(err)
+	}
+	if deviceType == "GATEWAY" || deviceStatus != "ACTIVE" || deviceID == gatewayDeviceID {
+		return ErrBindingConflict
+	}
+	return nil
+}
+
+type closedBindingInfo struct {
+	ID        string
+	Revision  int64
+	ValidFrom time.Time
+}
+
+type temporalBindingSpec struct {
+	table           string
+	sourceCol       string
+	targetCol       string
+	skipPriorRebind func(role string) bool
+}
+
+var temporalBindingSpecs = map[BindingKind]temporalBindingSpec{
+	BindingDeviceAsset: {
+		table:     "core_registry.device_bindings",
+		sourceCol: "device_id",
+		targetCol: "asset_id",
+		skipPriorRebind: func(role string) bool {
+			return role == "GATEWAY"
+		},
+	},
+	BindingAssetSpace: {
+		table:     "core_registry.asset_space_bindings",
+		sourceCol: "asset_id",
+		targetCol: "space_id",
+		skipPriorRebind: func(role string) bool {
+			return role != "INSTALLED_IN"
+		},
+	},
+	BindingDeviceSpace: {
+		table:     "core_registry.device_space_bindings",
+		sourceCol: "device_id",
+		targetCol: "space_id",
+		skipPriorRebind: func(role string) bool {
+			return role != "INSTALLED_IN"
+		},
+	},
+	BindingSensorDevice: {
+		table:     "core_registry.sensor_device_bindings",
+		sourceCol: "sensor_id",
+		targetCol: "device_id",
+	},
+	BindingSensorSpace: {
+		table:     "core_registry.sensor_space_bindings",
+		sourceCol: "sensor_id",
+		targetCol: "space_id",
+	},
+	BindingPointSubject: {
+		table:     "core_registry.point_subject_bindings",
+		sourceCol: "point_id",
+	},
+}
+
+func closeTemporalBinding(ctx context.Context, tx pgx.Tx, tenantID string, input RebindRequest, spec temporalBindingSpec, effectiveAt, now time.Time) (closedBindingInfo, error) {
+	if !input.CloseOnly && spec.skipPriorRebind != nil && spec.skipPriorRebind(input.Role) {
+		return closedBindingInfo{}, nil
+	}
+	clauses := []string{
+		"tenant_id = $1::uuid",
+		"site_id = $2::uuid",
+		spec.sourceCol + " = $3::uuid",
+		"binding_role = $4",
+	}
+	args := []any{tenantID, input.SiteID, input.SourceID, input.Role}
+	if input.CloseOnly {
+		if input.Kind == BindingPointSubject {
+			args = append(args, input.TargetType)
+			clauses = append(clauses, fmt.Sprintf("subject_type = $%d", len(args)))
+			if input.TargetID != "" {
+				switch input.TargetType {
+				case "SPACE":
+					args = append(args, input.TargetID)
+					clauses = append(clauses, fmt.Sprintf("space_id = $%d::uuid", len(args)))
+				case "ASSET":
+					args = append(args, input.TargetID)
+					clauses = append(clauses, fmt.Sprintf("asset_id = $%d::uuid", len(args)))
+				}
+			}
+		} else if spec.targetCol != "" && input.TargetID != "" {
+			args = append(args, input.TargetID)
+			clauses = append(clauses, fmt.Sprintf("%s = $%d::uuid", spec.targetCol, len(args)))
+		}
+	}
+	predicate := strings.Join(clauses, " AND ")
+
+	selectSQL := fmt.Sprintf(
+		"SELECT id::text, valid_from FROM %s WHERE %s AND status = 'ACTIVE' AND valid_to IS NULL ORDER BY valid_from DESC, id DESC FOR UPDATE",
+		spec.table, predicate,
+	)
+	rows, err := tx.Query(ctx, selectSQL, args...)
+	if err != nil {
+		return closedBindingInfo{}, mapRegistryWriteError(err)
+	}
+	type activeRow struct {
+		id        string
+		validFrom time.Time
+	}
+	var active []activeRow
+	for rows.Next() {
+		var item activeRow
+		if err := rows.Scan(&item.id, &item.validFrom); err != nil {
+			rows.Close()
+			return closedBindingInfo{}, err
+		}
+		active = append(active, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return closedBindingInfo{}, err
+	}
+	rows.Close()
+
+	if len(active) == 0 {
+		if input.CloseOnly {
+			return closedBindingInfo{}, ErrNotFound
+		}
+		return closedBindingInfo{}, nil
+	}
+	for _, item := range active {
+		if !item.validFrom.Before(effectiveAt) {
+			return closedBindingInfo{}, ErrBindingConflict
+		}
+	}
+
+	effIdx := len(args) + 1
+	nowIdx := len(args) + 2
+	updateArgs := append(append([]any(nil), args...), effectiveAt, now)
+	updateSQL := fmt.Sprintf(
+		"UPDATE %s SET valid_to = $%d, revision = revision + 1, updated_at = $%d WHERE %s AND status = 'ACTIVE' AND valid_to IS NULL AND valid_from < $%d RETURNING id::text, revision, valid_from",
+		spec.table, effIdx, nowIdx, predicate, effIdx,
+	)
+	updatedRows, err := tx.Query(ctx, updateSQL, updateArgs...)
+	if err != nil {
+		return closedBindingInfo{}, mapRegistryWriteError(err)
+	}
+	var closed []closedBindingInfo
+	for updatedRows.Next() {
+		var item closedBindingInfo
+		if err := updatedRows.Scan(&item.ID, &item.Revision, &item.ValidFrom); err != nil {
+			updatedRows.Close()
+			return closedBindingInfo{}, err
+		}
+		closed = append(closed, item)
+	}
+	if err := updatedRows.Err(); err != nil {
+		updatedRows.Close()
+		return closedBindingInfo{}, err
+	}
+	updatedRows.Close()
+	if len(closed) == 0 {
+		if input.CloseOnly {
+			return closedBindingInfo{}, ErrNotFound
+		}
+		return closedBindingInfo{}, nil
+	}
+	for _, item := range closed {
+		if item.ID == active[0].id {
+			return item, nil
+		}
+	}
+	return closed[0], nil
+}
+
+func closeCurrentBinding(ctx context.Context, tx pgx.Tx, tenantID string, input RebindRequest, effectiveAt, now time.Time) (closedBindingInfo, error) {
+	if spec, ok := temporalBindingSpecs[input.Kind]; ok {
+		return closeTemporalBinding(ctx, tx, tenantID, input, spec, effectiveAt, now)
+	}
+	if input.Kind != BindingGatewaySourceKey {
+		return closedBindingInfo{}, ErrInvalidMutation
+	}
+	if !input.CloseOnly {
+		_, err := tx.Exec(ctx, `UPDATE core_registry.gateway_device_source_keys SET status = 'RETIRED', revision = revision + 1, updated_at = $4 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid AND status = 'ACTIVE'`, tenantID, input.SiteID, input.SourceID, now)
+		return closedBindingInfo{}, mapRegistryWriteError(err)
+	}
+	var info closedBindingInfo
+	var query string
+	var args []any
+	if input.TargetID != "" {
+		query = `UPDATE core_registry.gateway_device_source_keys SET status = 'RETIRED', revision = revision + 1, updated_at = $6 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid AND source_key = $4 AND gateway_device_id = $5::uuid AND status = 'ACTIVE' RETURNING id::text, revision`
+		args = []any{tenantID, input.SiteID, input.SourceID, input.Role, input.TargetID, now}
+	} else {
+		query = `UPDATE core_registry.gateway_device_source_keys SET status = 'RETIRED', revision = revision + 1, updated_at = $5 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND device_id = $3::uuid AND source_key = $4 AND status = 'ACTIVE' RETURNING id::text, revision`
+		args = []any{tenantID, input.SiteID, input.SourceID, input.Role, now}
+	}
+	err := tx.QueryRow(ctx, query, args...).Scan(&info.ID, &info.Revision)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return closedBindingInfo{}, ErrNotFound
+	}
+	if err != nil {
+		return closedBindingInfo{}, mapRegistryWriteError(err)
+	}
+	info.ValidFrom = effectiveAt
+	return info, nil
 }
 
 func insertBinding(ctx context.Context, tx pgx.Tx, tenantID, id string, input RebindRequest, effectiveAt, now time.Time) error {
@@ -105,6 +324,8 @@ func insertBinding(ctx context.Context, tx pgx.Tx, tenantID, id string, input Re
 			return ErrInvalidMutation
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO core_registry.point_subject_bindings (id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::uuid,$7::uuid,$8,'ACTIVE',$9,NULL,1,$10,$10)`, id, tenantID, input.SiteID, input.SourceID, input.TargetType, spaceID, assetID, input.Role, effectiveAt, now)
+	case BindingGatewaySourceKey:
+		_, err = tx.Exec(ctx, `INSERT INTO core_registry.gateway_device_source_keys (id, tenant_id, site_id, gateway_device_id, source_key, device_id, status, revision, created_at, updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6::uuid,'ACTIVE',1,$7,$7)`, id, tenantID, input.SiteID, input.TargetID, input.Role, input.SourceID, now)
 	default:
 		return ErrInvalidMutation
 	}

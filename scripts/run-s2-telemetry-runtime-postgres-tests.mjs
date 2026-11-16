@@ -11,7 +11,7 @@ const composePath = resolve(root, 'infra/telemetry/compose.yaml');
 const projectName = `hvac-s2-runtime-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
 const reportPath = resolve(root, process.env.S2_RUNTIME_REPORT_PATH ?? 'out/s2-telemetry-runtime-snapshot/telemetry-runtime-postgres.json');
-const testPattern = process.env.S2_RUNTIME_TEST_PATTERN ?? 'TestPostgresSnapshot';
+const testPattern = process.env.S2_RUNTIME_TEST_PATTERN ?? 'TestPostgresSnapshot|TestPostgresApplyRegistrySync';
 const ticketNumber = Number(process.env.S2_RUNTIME_TICKET_NUMBER ?? '62');
 const realtimeMode = testPattern.includes('Realtime');
 const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));

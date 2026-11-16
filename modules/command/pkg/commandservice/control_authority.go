@@ -173,6 +173,10 @@ func (a *ControlAuthority) CompleteConnectorEvidence(ctx context.Context, eviden
 	return a.runtime.CompleteConnectorEvidence(ctx, evidence)
 }
 
+func (a *ControlAuthority) CancelPending(ctx context.Context, request commandmodel.CancelPendingRequest) ([]string, error) {
+	return a.store.CancelPending(ctx, request)
+}
+
 func (a *ControlAuthority) evaluatePreDispatch(
 	ctx context.Context,
 	envelope commandmodel.DispatchEnvelope,

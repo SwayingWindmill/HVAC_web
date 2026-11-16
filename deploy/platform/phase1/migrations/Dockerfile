@@ -101,6 +101,8 @@ COPY infra/connectivity/postgres/init/006-gateway-concentrator-audit.sql /opt/hv
 COPY infra/registry/postgres/init/042-grant-asset-nameplate-read.sql /opt/hvac/repo/infra/registry/postgres/init/042-grant-asset-nameplate-read.sql
 COPY infra/registry/postgres/init/043-auto-control-leases-and-monitors.sql /opt/hvac/repo/infra/registry/postgres/init/043-auto-control-leases-and-monitors.sql
 COPY infra/registry/postgres/init/iam-tenant-principal-names.sql /opt/hvac/repo/infra/registry/postgres/init/iam-tenant-principal-names.sql
+COPY infra/connectivity/postgres/init/gateway-tunnel-audit.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-tunnel-audit.sql
+COPY infra/registry/postgres/init/registry-outbox-delivery-grants.sql /opt/hvac/repo/infra/registry/postgres/init/registry-outbox-delivery-grants.sql
 
 FROM scratch AS sources-runtime
 

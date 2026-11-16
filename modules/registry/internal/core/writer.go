@@ -273,12 +273,13 @@ func (input PointMutation) Validate() error {
 type BindingKind string
 
 const (
-	BindingDeviceAsset  BindingKind = "DEVICE_ASSET"
-	BindingAssetSpace   BindingKind = "ASSET_SPACE"
-	BindingDeviceSpace  BindingKind = "DEVICE_SPACE"
-	BindingSensorDevice BindingKind = "SENSOR_DEVICE"
-	BindingSensorSpace  BindingKind = "SENSOR_SPACE"
-	BindingPointSubject BindingKind = "POINT_SUBJECT"
+	BindingDeviceAsset      BindingKind = "DEVICE_ASSET"
+	BindingAssetSpace       BindingKind = "ASSET_SPACE"
+	BindingDeviceSpace      BindingKind = "DEVICE_SPACE"
+	BindingSensorDevice     BindingKind = "SENSOR_DEVICE"
+	BindingSensorSpace      BindingKind = "SENSOR_SPACE"
+	BindingPointSubject     BindingKind = "POINT_SUBJECT"
+	BindingGatewaySourceKey BindingKind = "GATEWAY_SOURCE_KEY"
 )
 
 type RebindRequest struct {
@@ -289,6 +290,7 @@ type RebindRequest struct {
 	TargetType  string       `json:"targetType,omitempty"`
 	Role        string       `json:"role"`
 	EffectiveAt string       `json:"effectiveAt"`
+	CloseOnly   bool         `json:"closeOnly,omitempty"`
 	Meta        MutationMeta `json:"meta"`
 }
 
@@ -305,7 +307,11 @@ type BindingMutationResult struct {
 }
 
 func (request RebindRequest) Validate() error {
-	if !validUUIDv7(request.SiteID) || !validUUIDv7(request.SourceID) || !validUUIDv7(request.TargetID) || request.Meta.ExpectedRevision != 0 {
+	targetValid := validUUIDv7(request.TargetID)
+	if request.CloseOnly && request.TargetID == "" {
+		targetValid = true
+	}
+	if !validUUIDv7(request.SiteID) || !validUUIDv7(request.SourceID) || !targetValid || request.Meta.ExpectedRevision != 0 {
 		return ErrInvalidMutation
 	}
 	if err := request.Meta.validate(true); err != nil {
@@ -328,9 +334,11 @@ func (request RebindRequest) Validate() error {
 		allowed = request.Role == "MOUNTED_IN"
 	case BindingPointSubject:
 		allowed = (request.TargetType == "SITE" || request.TargetType == "SPACE" || request.TargetType == "ASSET") && (request.Role == "DESCRIBES" || request.Role == "CONTROLS")
-		if request.TargetType == "SITE" && request.TargetID != request.SiteID {
+		if request.TargetType == "SITE" && (!request.CloseOnly || request.TargetID != "") && request.TargetID != request.SiteID {
 			allowed = false
 		}
+	case BindingGatewaySourceKey:
+		allowed = sourceKeyPattern.MatchString(request.Role)
 	}
 	if !allowed {
 		return ErrInvalidMutation

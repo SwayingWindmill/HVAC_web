@@ -90,6 +90,8 @@ hvac_s1|infra/connectivity/postgres/init/006-gateway-concentrator-audit.sql
 hvac_s1|infra/registry/postgres/init/042-grant-asset-nameplate-read.sql
 hvac_s1|infra/registry/postgres/init/043-auto-control-leases-and-monitors.sql
 hvac_s1|infra/registry/postgres/init/iam-tenant-principal-names.sql
+hvac_s1|infra/connectivity/postgres/init/gateway-tunnel-audit.sql
+hvac_s1|infra/registry/postgres/init/registry-outbox-delivery-grants.sql
 hvac_s2|infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 hvac_s2|infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql

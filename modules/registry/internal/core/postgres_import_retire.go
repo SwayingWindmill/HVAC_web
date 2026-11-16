@@ -308,15 +308,38 @@ func (store *PostgresStore) Retire(ctx context.Context, claims registryauth.Gran
 		} else if err := markResourceRetired(ctx, tx, claims.TenantID, input, now); err != nil {
 			return mutationRecord[RetirementResult]{}, err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO core_registry.registry_retirement_sagas (id,tenant_id,site_id,resource_type,resource_id,expected_revision,status,dependency_count,reason,requested_by,created_at,updated_at,completed_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6,$7,$8,$9,$10::uuid,$11,$11,$12)`, sagaID, claims.TenantID, input.SiteID, string(input.ResourceType), input.ResourceID, input.Meta.ExpectedRevision, status, dependencies, input.Meta.Reason, claims.PrincipalID, now, completedAt); err != nil {
+		if err := tx.QueryRow(ctx, `
+INSERT INTO core_registry.registry_retirement_sagas (id,tenant_id,site_id,resource_type,resource_id,expected_revision,status,dependency_count,reason,requested_by,created_at,updated_at,completed_at)
+VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6,$7,$8,$9,$10::uuid,$11,$11,$12)
+ON CONFLICT (tenant_id, site_id, resource_type, resource_id, expected_revision) DO UPDATE
+SET status = EXCLUDED.status,
+    dependency_count = EXCLUDED.dependency_count,
+    reason = EXCLUDED.reason,
+    requested_by = EXCLUDED.requested_by,
+    updated_at = EXCLUDED.updated_at,
+    completed_at = EXCLUDED.completed_at
+WHERE core_registry.registry_retirement_sagas.status = 'BLOCKED'
+RETURNING id::text
+`, sagaID, claims.TenantID, input.SiteID, string(input.ResourceType), input.ResourceID, input.Meta.ExpectedRevision, status, dependencies, input.Meta.Reason, claims.PrincipalID, now, completedAt).Scan(&sagaID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return mutationRecord[RetirementResult]{}, ErrRevisionConflict
+			}
 			return mutationRecord[RetirementResult]{}, err
 		}
-		value := RetirementResult{SagaID: sagaID, ResourceType: input.ResourceType, ResourceID: input.ResourceID, Status: status, DependencyCount: dependencies, Revision: 1}
+		var aggregateVersion int64
+		if err := tx.QueryRow(ctx, `
+SELECT COALESCE(MAX(aggregate_version), 0) + 1
+FROM core_registry.domain_outbox_events
+WHERE tenant_id = $1::uuid AND aggregate_type = 'RETIREMENT' AND aggregate_id = $2::uuid
+`, claims.TenantID, sagaID).Scan(&aggregateVersion); err != nil {
+			return mutationRecord[RetirementResult]{}, err
+		}
+		value := RetirementResult{SagaID: sagaID, ResourceType: input.ResourceType, ResourceID: input.ResourceID, Status: status, DependencyCount: dependencies, Revision: aggregateVersion}
 		eventType := "registry.retirement.completed"
 		if status == "BLOCKED" {
 			eventType = "registry.retirement.blocked"
 		}
-		return mutationRecord[RetirementResult]{Result: value, SiteID: &input.SiteID, ResourceType: "RETIREMENT", ResourceID: sagaID, AfterRevision: revisionPointer(1), Outcome: outcome, EventType: eventType, AggregateVersion: 1, Payload: map[string]any{"siteId": input.SiteID, "resourceType": input.ResourceType, "resourceId": input.ResourceID, "dependencyCount": dependencies, "status": status}}, nil
+		return mutationRecord[RetirementResult]{Result: value, SiteID: &input.SiteID, ResourceType: "RETIREMENT", ResourceID: sagaID, AfterRevision: revisionPointer(aggregateVersion), Outcome: outcome, EventType: eventType, AggregateVersion: aggregateVersion, Payload: map[string]any{"siteId": input.SiteID, "resourceType": input.ResourceType, "resourceId": input.ResourceID, "dependencyCount": dependencies, "status": status}}, nil
 	})
 	if err != nil {
 		return RetirementResult{}, err
@@ -355,10 +378,10 @@ func retirementDependencyCount(ctx context.Context, tx pgx.Tx, tenantID string, 
 		resource ResourceType
 		query    string
 	}{
-		{ResourceSite, `SELECT (SELECT count(*) FROM core_registry.spaces WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status <> 'RETIRED') + (SELECT count(*) FROM core_registry.assets WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status <> 'RETIRED') + (SELECT count(*) FROM core_registry.devices WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status <> 'RETIRED') + (SELECT count(*) FROM core_registry.sensors WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status <> 'RETIRED') + (SELECT count(*) FROM core_registry.telemetry_points WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status <> 'RETIRED')`},
+		{ResourceSite, `SELECT (SELECT count(*) FROM core_registry.spaces WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status <> 'RETIRED') + (SELECT count(*) FROM core_registry.assets WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status <> 'RETIRED') + (SELECT count(*) FROM core_registry.devices WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status <> 'RETIRED') + (SELECT count(*) FROM core_registry.sensors WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status <> 'RETIRED') + (SELECT count(*) FROM core_registry.telemetry_points WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status <> 'RETIRED') + (SELECT count(*) FROM core_registry.gateway_device_source_keys WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status='ACTIVE')`},
 		{ResourceSpace, `SELECT (SELECT count(*) FROM core_registry.spaces WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND parent_space_id=$3::uuid AND status <> 'RETIRED') + (SELECT count(*) FROM core_registry.asset_space_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND space_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL) + (SELECT count(*) FROM core_registry.device_space_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND space_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL) + (SELECT count(*) FROM core_registry.sensor_space_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND space_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL) + (SELECT count(*) FROM core_registry.point_subject_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND subject_type='SPACE' AND space_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL)`},
 		{ResourceAsset, `SELECT (SELECT count(*) FROM core_registry.device_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND asset_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL) + (SELECT count(*) FROM core_registry.asset_space_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND asset_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL) + (SELECT count(*) FROM core_registry.point_subject_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND subject_type='ASSET' AND asset_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL)`},
-		{ResourceDevice, `SELECT (SELECT count(*) FROM core_registry.device_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND device_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL) + (SELECT count(*) FROM core_registry.device_space_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND device_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL) + (SELECT count(*) FROM core_registry.sensor_device_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND device_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL) + (SELECT count(*) FROM core_registry.telemetry_points WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND reporting_device_id=$3::uuid AND status <> 'RETIRED')`},
+		{ResourceDevice, `SELECT (SELECT count(*) FROM core_registry.device_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND device_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL) + (SELECT count(*) FROM core_registry.device_space_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND device_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL) + (SELECT count(*) FROM core_registry.sensor_device_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND device_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL) + (SELECT count(*) FROM core_registry.telemetry_points WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND reporting_device_id=$3::uuid AND status <> 'RETIRED') + (SELECT count(*) FROM core_registry.gateway_device_source_keys WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND status='ACTIVE' AND (gateway_device_id=$3::uuid OR device_id=$3::uuid))`},
 		{ResourceSensor, `SELECT (SELECT count(*) FROM core_registry.sensor_device_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND sensor_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL) + (SELECT count(*) FROM core_registry.sensor_space_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND sensor_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL) + (SELECT count(*) FROM core_registry.telemetry_points WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND sensor_id=$3::uuid AND status <> 'RETIRED')`},
 		{ResourcePoint, `SELECT count(*) FROM core_registry.point_subject_bindings WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND point_id=$3::uuid AND status='ACTIVE' AND valid_to IS NULL`},
 	}

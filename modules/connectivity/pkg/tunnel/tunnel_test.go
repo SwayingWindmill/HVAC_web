@@ -18,9 +18,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func testServerCert(t *testing.T) tls.Certificate {
@@ -440,5 +442,209 @@ func TestRunStdioBridgeRoundTrip(t *testing.T) {
 	}
 	if err := <-bridgeDone; err != nil {
 		t.Fatalf("RunStdioBridge returned error: %v", err)
+	}
+}
+
+type recordingAuditSink struct {
+	mu     sync.Mutex
+	events []AuditEvent
+}
+
+func (s *recordingAuditSink) RecordTunnelAudit(_ context.Context, event AuditEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (s *recordingAuditSink) snapshot() []AuditEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]AuditEvent, len(s.events))
+	copy(out, s.events)
+	return out
+}
+
+func TestTunnelAuditSinkRecordsLifecycleStreamsAndByteCounts(t *testing.T) {
+	sink := &recordingAuditSink{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "tunnel-audit-ok")
+	})
+	addr, hub, edgeErrCh, _ := startTestTunnelHarness(
+		t,
+		handler,
+		5*time.Second,
+		5*time.Second,
+		50*time.Millisecond,
+		WithAuditSink(sink),
+	)
+
+	resp, err := (&http.Client{Timeout: 3 * time.Second}).Get("http://" + addr + "/red/audit-check")
+	if err != nil {
+		t.Fatalf("GET through tunnel failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if string(body) != "tunnel-audit-ok" {
+		t.Fatalf("unexpected tunnel response %q", string(body))
+	}
+
+	if _, err := hub.OpenStream(context.Background(), "", 22); !errors.Is(err, ErrPortForbidden) {
+		t.Fatalf("expected ErrPortForbidden for port 22, got %v", err)
+	}
+
+	hub.CloseGateway("0193f000-2000-7000-8000-000000000001")
+	select {
+	case <-edgeErrCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("expected edge loop to exit after CloseGateway")
+	}
+
+	events := sink.snapshot()
+	var seenOpen, seenStreamOpen, seenStreamReject, seenClosed bool
+	var closedEvent AuditEvent
+	var sessionID string
+	for _, ev := range events {
+		switch ev.EventType {
+		case AuditSessionOpened:
+			seenOpen = true
+			sessionID = ev.SessionID
+		case AuditStreamOpened:
+			seenStreamOpen = true
+			if ev.StreamID == nil || *ev.StreamID <= 0 || ev.TargetPort == nil || *ev.TargetPort != AllowedTargetPort {
+				t.Fatalf("unexpected STREAM_OPENED audit payload: %#v", ev)
+			}
+		case AuditStreamRejected:
+			seenStreamReject = true
+			if ev.TargetPort == nil || *ev.TargetPort != 22 {
+				t.Fatalf("unexpected STREAM_REJECTED audit payload: %#v", ev)
+			}
+		case AuditSessionClosed:
+			seenClosed = true
+			closedEvent = ev
+		}
+	}
+	if !seenOpen || !seenStreamOpen || !seenStreamReject || !seenClosed {
+		t.Fatalf("missing tunnel audit events: open=%v streamOpen=%v streamReject=%v closed=%v all=%#v",
+			seenOpen, seenStreamOpen, seenStreamReject, seenClosed, events)
+	}
+	if sessionID == "" || closedEvent.SessionID != sessionID {
+		t.Fatalf("session ID mismatch between open (%q) and close (%q)", sessionID, closedEvent.SessionID)
+	}
+	if closedEvent.BytesTX <= 0 || closedEvent.BytesRX <= 0 {
+		t.Fatalf("expected non-zero byte counts on SESSION_CLOSED, got tx=%d rx=%d", closedEvent.BytesTX, closedEvent.BytesRX)
+	}
+}
+
+type blockingCloseAuditSink struct {
+	release chan struct{}
+}
+
+func (s *blockingCloseAuditSink) RecordTunnelAudit(_ context.Context, event AuditEvent) error {
+	if event.EventType == AuditSessionClosed {
+		<-s.release
+	}
+	return nil
+}
+
+func TestTunnelUpgradeRecheckRejectsBeforeExposureAndAudit(t *testing.T) {
+	sink := &recordingAuditSink{}
+	hub := NewHub(WithAuditSink(sink))
+	defer hub.Close()
+
+	certTLS := testServerCert(t)
+	leaf, err := x509.ParseCertificate(certTLS.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gwID := "0193f000-2000-7000-8000-000000000011"
+	existingServer, existingClient := net.Pipe()
+	defer func() {
+		_ = existingServer.Close()
+		_ = existingClient.Close()
+	}()
+	existingSess := hub.registerSession(gwID, existingServer)
+	if existingSess == nil {
+		t.Fatal("failed to register initial session")
+	}
+
+	var calls atomic.Int32
+	handler := NewUpgradeHandler(
+		hub,
+		func(*http.Request) (*x509.Certificate, error) { return leaf, nil },
+		func(context.Context, *x509.Certificate) (string, error) {
+			if calls.Add(1) == 1 {
+				return gwID, nil
+			}
+			return "", errors.New("credential revoked during handshake")
+		},
+	)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	conn, err := net.DialTimeout("tcp", ts.Listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatalf("dial upgrade server: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_, err = io.WriteString(conn, "GET /tunnel HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: "+ProtocolName+"\r\n\r\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	raw, _ := io.ReadAll(conn)
+	if !strings.Contains(string(raw), "101 Switching Protocols") {
+		t.Fatalf("expected 101 response before recheck rejection, got %q", string(raw))
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("expected 2 verifyPeer calls, got %d", calls.Load())
+	}
+	resolved, err := hub.resolveSession(gwID)
+	if err != nil || resolved != existingSess {
+		t.Fatalf("expected existing session to stay intact after recheck failure, resolved=%v err=%v", resolved, err)
+	}
+	if events := sink.snapshot(); len(events) != 0 {
+		t.Fatalf("expected zero audit events on rejected recheck upgrade, got %#v", events)
+	}
+}
+
+func TestTunnelHubCloseBoundedWhenAuditSinkBlocks(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	hub := NewHub(WithAuditSink(&blockingCloseAuditSink{release: release}))
+
+	serverConn, clientConn := net.Pipe()
+	defer func() { _ = clientConn.Close() }()
+	sess := hub.registerSession("0193f000-2000-7000-8000-000000000012", serverConn)
+	if sess == nil {
+		t.Fatal("registerSession returned nil")
+	}
+	sess.markOpened(context.Background())
+
+	start := time.Now()
+	hub.Close()
+	elapsed := time.Since(start)
+	if elapsed > 1800*time.Millisecond {
+		t.Fatalf("expected Hub.Close to remain bounded despite blocking audit sink, took %v", elapsed)
+	}
+	_ = clientConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	var buf [1]byte
+	if _, err := clientConn.Read(buf[:]); err == nil {
+		t.Fatal("expected Hub.Close to close session transport immediately")
+	}
+}
+
+func TestTunnelTruncateAuditUTF8Safe(t *testing.T) {
+	input := strings.Repeat("中", 200)
+	got := truncateAuditReason(input)
+	if len(got) > 512 {
+		t.Fatalf("expected <= 512 bytes, got %d", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("expected valid UTF-8 after truncation")
+	}
+	if len(got) != 510 {
+		t.Fatalf("expected rune boundary at 510 bytes (170 runes), got %d", len(got))
 	}
 }

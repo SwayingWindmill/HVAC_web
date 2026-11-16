@@ -14,13 +14,14 @@ import (
 )
 
 const (
-	InternalDispatchClaimPath       = "/internal/v1/dispatches:claim"
-	InternalDispatchResolvePath     = "/internal/v1/dispatches:resolve"
-	InternalVerificationClaimPath   = "/internal/v1/verifications:claim"
-	InternalVerificationResolvePath = "/internal/v1/verifications:resolve"
-	InternalConnectorPreparePath    = "/internal/v1/connector-evidence:prepare"
-	InternalConnectorCompletePath   = "/internal/v1/connector-evidence:complete"
-	maximumRuntimeRequestBody       = int64(256 << 10)
+	InternalDispatchClaimPath        = "/internal/v1/dispatches:claim"
+	InternalDispatchResolvePath      = "/internal/v1/dispatches:resolve"
+	InternalVerificationClaimPath    = "/internal/v1/verifications:claim"
+	InternalVerificationResolvePath  = "/internal/v1/verifications:resolve"
+	InternalConnectorPreparePath     = "/internal/v1/connector-evidence:prepare"
+	InternalConnectorCompletePath    = "/internal/v1/connector-evidence:complete"
+	InternalCommandCancelRetiredPath = "/internal/v1/commands:cancelRetiredTarget"
+	maximumRuntimeRequestBody        = int64(256 << 10)
 )
 
 type RuntimeStore interface {
@@ -30,6 +31,7 @@ type RuntimeStore interface {
 	ResolveVerification(context.Context, commandmodel.VerificationEnvelope, commandmodel.VerificationResult) error
 	PrepareConnectorEvidence(context.Context, commandmodel.PreparedConnectorEvidence) error
 	CompleteConnectorEvidence(context.Context, commandmodel.CompletedConnectorEvidence) error
+	CancelPending(context.Context, commandmodel.CancelPendingRequest) ([]string, error)
 }
 
 // RuntimeHTTPConfig names the one dispatcher and the one verifier workload. Each serves
@@ -40,21 +42,30 @@ type RuntimeHTTPConfig struct {
 	Metrics                *observability.Registry
 	DispatcherSPIFFE       string
 	VerifierSPIFFE         string
+	CoreRegistrySPIFFEs    []string
 	ControlFailureNotifier ControlFailureNotifier
 }
 
 type runtimeHTTPHandler struct {
-	store           RuntimeStore
-	metrics         *observability.Registry
-	dispatcher      string
-	verifier        string
-	failureNotifier ControlFailureNotifier
+	store               RuntimeStore
+	metrics             *observability.Registry
+	dispatcher          string
+	verifier            string
+	coreRegistrySPIFFEs map[string]struct{}
+	failureNotifier     ControlFailureNotifier
 }
 
 type runtimeClaimRequest struct {
 	TenantID     string `json:"tenantId"`
 	LeaseOwner   string `json:"leaseOwner"`
 	LeaseSeconds int64  `json:"leaseSeconds"`
+}
+
+type runtimeCancelRetiredRequest struct {
+	TenantID    string   `json:"tenantId"`
+	SiteID      string   `json:"siteId"`
+	DeviceIDs   []string `json:"deviceIds"`
+	CausationID string   `json:"causationId"`
 }
 
 type runtimeDispatchResolveRequest struct {
@@ -77,12 +88,25 @@ func NewRuntimeHTTPHandler(config RuntimeHTTPConfig) (http.Handler, error) {
 	if config.Store == nil || !validSPIFFE(dispatcher) || !validSPIFFE(verifier) || dispatcher == verifier {
 		return nil, errors.New("command runtime HTTP security configuration is incomplete")
 	}
+	coreCandidates := config.CoreRegistrySPIFFEs
+	if len(coreCandidates) == 0 {
+		coreCandidates = []string{"spiffe://hvac.local/platform-core-service", "spiffe://hvac.local/platform-gateway"}
+	}
+	coreAllowed := make(map[string]struct{}, len(coreCandidates))
+	for _, candidate := range coreCandidates {
+		spiffe := strings.TrimSpace(candidate)
+		if !validSPIFFE(spiffe) {
+			return nil, errors.New("command core registry SPIFFE configuration is invalid")
+		}
+		coreAllowed[spiffe] = struct{}{}
+	}
 	return &runtimeHTTPHandler{
-		store:           config.Store,
-		metrics:         config.Metrics,
-		dispatcher:      dispatcher,
-		verifier:        verifier,
-		failureNotifier: config.ControlFailureNotifier,
+		store:               config.Store,
+		metrics:             config.Metrics,
+		dispatcher:          dispatcher,
+		verifier:            verifier,
+		coreRegistrySPIFFEs: coreAllowed,
+		failureNotifier:     config.ControlFailureNotifier,
 	}, nil
 }
 
@@ -90,6 +114,16 @@ func (handler *runtimeHTTPHandler) ServeHTTP(writer http.ResponseWriter, request
 	if request.Method != http.MethodPost {
 		writer.Header().Set("Allow", http.MethodPost)
 		writeRuntimeProblem(writer, http.StatusMethodNotAllowed, "COMMAND_RUNTIME_METHOD_NOT_ALLOWED", false)
+		return
+	}
+	peer := peerSPIFFE(request)
+	if request.URL.Path == InternalCommandCancelRetiredPath {
+		if _, ok := handler.coreRegistrySPIFFEs[peer]; !ok {
+			writeRuntimeProblem(writer, http.StatusForbidden, "COMMAND_RUNTIME_WORKLOAD_FORBIDDEN", false)
+			return
+		}
+		request.Body = http.MaxBytesReader(writer, request.Body, maximumRuntimeRequestBody)
+		handler.cancelRetiredTarget(writer, request)
 		return
 	}
 	var workload string
@@ -102,7 +136,7 @@ func (handler *runtimeHTTPHandler) ServeHTTP(writer http.ResponseWriter, request
 		writeRuntimeProblem(writer, http.StatusNotFound, "COMMAND_RUNTIME_ROUTE_NOT_FOUND", false)
 		return
 	}
-	if peerSPIFFE(request) != workload {
+	if peer != workload {
 		writeRuntimeProblem(writer, http.StatusForbidden, "COMMAND_RUNTIME_WORKLOAD_FORBIDDEN", false)
 		return
 	}
@@ -121,6 +155,48 @@ func (handler *runtimeHTTPHandler) ServeHTTP(writer http.ResponseWriter, request
 	case InternalConnectorCompletePath:
 		handler.completeConnectorEvidence(writer, request)
 	}
+}
+
+func (handler *runtimeHTTPHandler) cancelRetiredTarget(writer http.ResponseWriter, request *http.Request) {
+	var input runtimeCancelRetiredRequest
+	if !decodeRuntimeJSON(writer, request, &input) {
+		return
+	}
+	tenantID := strings.TrimSpace(input.TenantID)
+	siteID := strings.TrimSpace(input.SiteID)
+	causationID := strings.TrimSpace(input.CausationID)
+	deviceIDs := make([]string, 0, len(input.DeviceIDs))
+	for _, id := range input.DeviceIDs {
+		trimmed := strings.TrimSpace(id)
+		if !commandmodel.IsUUIDv7(trimmed) {
+			writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
+			return
+		}
+		deviceIDs = append(deviceIDs, trimmed)
+	}
+	if !commandmodel.IsUUIDv7(tenantID) || !commandmodel.IsUUIDv7(siteID) || len(deviceIDs) == 0 {
+		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
+		return
+	}
+	if causationID == "" {
+		causationID = "registry-retirement"
+	}
+	cancelledIDs, err := handler.store.CancelPending(request.Context(), commandmodel.CancelPendingRequest{
+		TenantID:    tenantID,
+		SiteID:      siteID,
+		DeviceIDs:   deviceIDs,
+		PrincipalID: tenantID,
+		Reason:      "TARGET_DEVICE_RETIRED",
+		CausationID: causationID,
+	})
+	if err != nil {
+		writeRuntimeStoreError(writer, err)
+		return
+	}
+	if cancelledIDs == nil {
+		cancelledIDs = []string{}
+	}
+	writeRuntimeJSON(writer, http.StatusOK, map[string]any{"cancelledCommandIds": cancelledIDs})
 }
 
 func (handler *runtimeHTTPHandler) claimDispatch(writer http.ResponseWriter, request *http.Request) {

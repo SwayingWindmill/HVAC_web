@@ -76,6 +76,8 @@ services:
       - ./postgres/init/042-grant-asset-nameplate-read.sql:/docker-entrypoint-initdb.d/600.sql:ro
       - ./postgres/init/043-auto-control-leases-and-monitors.sql:/docker-entrypoint-initdb.d/610.sql:ro
       - ./postgres/init/iam-tenant-principal-names.sql:/docker-entrypoint-initdb.d/620.sql:ro
+      - ../connectivity/postgres/init/gateway-tunnel-audit.sql:/docker-entrypoint-initdb.d/630.sql:ro
+      - ./postgres/init/registry-outbox-delivery-grants.sql:/docker-entrypoint-initdb.d/640.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

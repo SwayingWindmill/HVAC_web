@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,6 +34,9 @@ type runtimeStoreStub struct {
 	resolvedVerification bool
 	preparedEvidence     bool
 	completedEvidence    bool
+	cancelReq            commandmodel.CancelPendingRequest
+	cancelledIDs         []string
+	cancelErr            error
 }
 
 func (stub *runtimeStoreStub) ClaimDispatch(_ context.Context, tenantID string, _ string, _ time.Duration) (commandmodel.DispatchEnvelope, error) {
@@ -63,6 +67,11 @@ func (stub *runtimeStoreStub) PrepareConnectorEvidence(context.Context, commandm
 func (stub *runtimeStoreStub) CompleteConnectorEvidence(context.Context, commandmodel.CompletedConnectorEvidence) error {
 	stub.completedEvidence = true
 	return nil
+}
+
+func (stub *runtimeStoreStub) CancelPending(_ context.Context, request commandmodel.CancelPendingRequest) ([]string, error) {
+	stub.cancelReq = request
+	return stub.cancelledIDs, stub.cancelErr
 }
 
 func TestRuntimeHTTPDispatcherClaimsWithinTheNamedTenantAndResolves(t *testing.T) {
@@ -180,6 +189,61 @@ func TestRuntimeHTTPRecordsBoundedVerificationMetrics(t *testing.T) {
 	}
 	if strings.Contains(metricsBody, runtimeTestDevice) {
 		t.Fatalf("command metrics leaked device identity: %s", metricsBody)
+	}
+}
+
+func TestRuntimeHTTPCancelRetiredTargetAuthorizationAndDelegation(t *testing.T) {
+	stub := &runtimeStoreStub{
+		cancelledIDs: []string{"0193f100-9000-7000-8000-000000000001"},
+	}
+	handler := runtimeTestHandler(t, stub)
+	payload := fmt.Sprintf(`{"tenantId":%q,"siteId":%q,"deviceIds":[%q],"causationId":"0193f100-7000-7000-8000-000000000009"}`,
+		runtimeTestOrganization, runtimeTestSite, runtimeTestDevice)
+
+	// Dispatcher and verifier must not be able to invoke cancelRetiredTarget.
+	for _, disallowed := range []string{"spiffe://hvac.local/command-dispatcher", "spiffe://hvac.local/command-verifier", ""} {
+		req := runtimeRequest(t, http.MethodPost, InternalCommandCancelRetiredPath, payload, disallowed)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("spiffe=%q unexpectedly allowed status=%d", disallowed, rec.Code)
+		}
+	}
+
+	req := runtimeRequest(t, http.MethodPost, InternalCommandCancelRetiredPath, payload, "spiffe://hvac.local/platform-core-service")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from cancelRetiredTarget, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if stub.cancelReq.TenantID != runtimeTestOrganization || stub.cancelReq.SiteID != runtimeTestSite ||
+		len(stub.cancelReq.DeviceIDs) != 1 || stub.cancelReq.DeviceIDs[0] != runtimeTestDevice ||
+		stub.cancelReq.Reason != "TARGET_DEVICE_RETIRED" {
+		t.Fatalf("unexpected CancelPending request: %#v", stub.cancelReq)
+	}
+	var resp struct {
+		CancelledCommandIDs []string `json:"cancelledCommandIds"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.CancelledCommandIDs) != 1 || resp.CancelledCommandIDs[0] != stub.cancelledIDs[0] {
+		t.Fatalf("unexpected response payload: %#v", resp)
+	}
+
+	for _, invalidPayload := range []string{
+		fmt.Sprintf(`{"tenantId":"not-a-uuid","siteId":%q,"deviceIds":[%q]}`, runtimeTestSite, runtimeTestDevice),
+		fmt.Sprintf(`{"tenantId":%q,"siteId":"bad-site","deviceIds":[%q]}`, runtimeTestOrganization, runtimeTestDevice),
+		fmt.Sprintf(`{"tenantId":%q,"siteId":%q,"deviceIds":["bad-device"]}`, runtimeTestOrganization, runtimeTestSite),
+		fmt.Sprintf(`{"tenantId":%q,"siteId":%q,"deviceIds":[%q,""]}`, runtimeTestOrganization, runtimeTestSite, runtimeTestDevice),
+		fmt.Sprintf(`{"tenantId":%q,"siteId":%q,"deviceIds":[]}`, runtimeTestOrganization, runtimeTestSite),
+	} {
+		badReq := runtimeRequest(t, http.MethodPost, InternalCommandCancelRetiredPath, invalidPayload, "spiffe://hvac.local/platform-core-service")
+		badRec := httptest.NewRecorder()
+		handler.ServeHTTP(badRec, badReq)
+		if badRec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for payload %s, got %d (%s)", invalidPayload, badRec.Code, badRec.Body.String())
+		}
 	}
 }
 

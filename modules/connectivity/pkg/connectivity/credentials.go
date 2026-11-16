@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -272,16 +273,53 @@ func (service *CredentialService) Revoke(ctx context.Context, claims registryaut
 		return err
 	}
 	defer tx.Rollback(ctx)
+	return service.revokeGatewayInTx(ctx, tx, claims.TenantID, gateway, claims.PrincipalID)
+}
+
+// RevokeRetiredGateway revokes enrollments, active certificates, and tunnel sessions for a gateway
+// that may already be marked RETIRED in Core Registry.
+func (service *CredentialService) RevokeRetiredGateway(ctx context.Context, tenantID, gatewayID string) error {
+	tenant := strings.TrimSpace(tenantID)
+	gateway := strings.TrimSpace(gatewayID)
+	if !tunnelAuditUUIDv7Pattern.MatchString(tenant) || !tunnelAuditUUIDv7Pattern.MatchString(gateway) {
+		return ErrEnrollmentRejected
+	}
+	if service == nil || service.store == nil || service.store.pool == nil {
+		return errors.New("credential service is not configured")
+	}
+	var resolvedTenant string
+	err := service.store.pool.QueryRow(ctx, `SELECT tenant_id::text FROM core_registry.gateway_directory_v1 WHERE gateway_id=$1::uuid LIMIT 1`, gateway).Scan(&resolvedTenant)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if strings.TrimSpace(resolvedTenant) != tenant {
+		return ErrCredentialForbidden
+	}
+	tx, err := service.store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SELECT set_config('app.tenant_id',$1,true)`, tenant); err != nil {
+		return err
+	}
+	return service.revokeGatewayInTx(ctx, tx, tenant, gateway, gateway)
+}
+
+func (service *CredentialService) revokeGatewayInTx(ctx context.Context, tx pgx.Tx, tenantID, gatewayID, actorID string) error {
 	now := service.store.clock().UTC()
-	_, err = tx.Exec(ctx, `INSERT INTO connectivity.gateway_enrollments(tenant_id,gateway_id,revoked_at,created_at,updated_at) VALUES($1,$2,$3,$3,$3) ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET revoked_at=EXCLUDED.revoked_at,code_sha256=NULL,expires_at=NULL,consumed_at=NULL,updated_at=EXCLUDED.updated_at`, claims.TenantID, gateway, now)
+	_, err := tx.Exec(ctx, `INSERT INTO connectivity.gateway_enrollments(tenant_id,gateway_id,revoked_at,created_at,updated_at) VALUES($1,$2,$3,$3,$3) ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET revoked_at=EXCLUDED.revoked_at,code_sha256=NULL,expires_at=NULL,consumed_at=NULL,updated_at=EXCLUDED.updated_at`, tenantID, gatewayID, now)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE connectivity.gateway_credentials SET status='REVOKED',revoked_at=$2,updated_at=$2 WHERE gateway_id=$1::uuid AND status='ACTIVE'`, gateway, now)
+	_, err = tx.Exec(ctx, `UPDATE connectivity.gateway_credentials SET status='REVOKED',revoked_at=$2,updated_at=$2 WHERE gateway_id=$1::uuid AND status='ACTIVE'`, gatewayID, now)
 	if err != nil {
 		return err
 	}
-	if err = credentialAudit(ctx, tx, claims.TenantID, gateway, claims.PrincipalID, "REVOKED", now); err != nil {
+	if err = credentialAudit(ctx, tx, tenantID, gatewayID, actorID, "REVOKED", now); err != nil {
 		return err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -291,7 +329,7 @@ func (service *CredentialService) Revoke(ctx context.Context, claims registryaut
 	hook := service.onRevoke
 	service.revokeMu.RUnlock()
 	if hook != nil {
-		hook(gateway)
+		hook(gatewayID)
 	}
 	return nil
 }

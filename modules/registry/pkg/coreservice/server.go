@@ -13,6 +13,8 @@ type ServerConfig = core.ServerConfig
 type PostgresStore = core.PostgresStore
 type CursorCodec = core.CursorCodec
 type HTTPGrantStatusProvider = core.HTTPGrantStatusProvider
+type OutboxRelayConfig = core.OutboxRelayConfig
+type OutboxRelay = core.OutboxRelay
 
 func NewHandler(config ServerConfig) http.Handler {
 	return core.NewHandler(config)
@@ -28,4 +30,8 @@ func NewCursorCodec(key []byte) (*CursorCodec, error) {
 
 func NewHTTPGrantStatusProvider(endpoint string, client *http.Client) (*HTTPGrantStatusProvider, error) {
 	return core.NewHTTPGrantStatusProvider(endpoint, client)
+}
+
+func NewOutboxRelay(store *PostgresStore, config OutboxRelayConfig) (*OutboxRelay, error) {
+	return core.NewOutboxRelay(store, config)
 }
