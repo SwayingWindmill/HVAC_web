@@ -12,7 +12,7 @@
 - 第一性原理重构遥测可信边界、冷机防冻保护与整机根因抑制（#749）：
   - `deploy/sites/songyaxuan.alarm-rules.json` 与 `modules/alarm/pkg/alarmrules` 新增设备级根因告警规则 `deviceUntrusted`（`device-untrusted/<device>`，`MAJOR`，连续 `180 秒`）：非派生设备的全部 `>= 2` 个监测点位同时出现超量程、通讯异常值 `38.4` 或 `SOURCE_UNTRUSTED` 时，仅发出 1 条整台根因告警，并在条件树内部同步抑制同设备逐点 `suspect`（支持 `durationSeconds: 300`）与 `readings-not-updated` 症状告警，避免 23 路探头同时掉线刷屏；同时排除 `device-untrusted/` 触发无意义的 `rules-unevaluable`。
   - `deploy/sites/songyaxuan.alarm-rules.json` 新增 `chiller-leaving-low`（`CRITICAL`，`180 秒`）：任意运行中的冷机（A `t1`、B `t2`、C `t3`、D `t4`）冷冻水出水低于 `4.0 °C` 时立即触发防冻保护告警（冷机停机或水温回升过 `4.5 °C` 恢复）。
-  - 资产铭牌（`libs/nameplate` 与 `scripts/site-onboarding.mjs`）新增 `feederAuxiliaryPowerKw` 字段，用于表达合并计量冷机与定频辅机（水泵、冷却塔）的总馈线电表辅机功耗基数；通知路由新增多条分作用域根因抑制规则 `rootCauseRules`（`scopeSameDevice: true` 让 `device-untrusted/<device>` 只静默同设备的下游告警通知，不误伤站内其它正常设备）。
+  - 资产铭牌（`libs/nameplate` 与 `scripts/site-onboarding.mjs`）新增 `feederAuxiliaryPowerKw` 字段，用于表达合并计量冷机与定频辅机（水泵、冷却塔）的总馈线电表辅机功耗基数（并新增迁移 `042-grant-asset-nameplate-read.sql` 按最小权限授予 `fdd_runtime` 与 `optimization_runtime` 只读 `core_registry.assets.nameplate`）；通知路由新增多条分作用域根因抑制规则 `rootCauseRules`（`scopeSameDevice: true` 让 `device-untrusted/<device>` 只静默同设备的下游告警通知，不误伤站内其它正常设备）。
 - 系统管理「用户与角色」页面（`/system?tab=users`）新增「两步验证」列，并在管理员与运维主管提交高风险指令前提前预警（#831）：
   - `services/identity-service`（`DirectoryUser`）与网关成员接口（`GET /api/v1/iam/members`）仅返回每个成员是否已开通认证器两步验证的布尔状态 `mfaEnabled`（不返回密钥、密文或恢复码等敏感信息），同步更新 OpenAPI 与生成客户端 `UserAdminMember`。
   - 用户列表展示「已开通 / 未开通」，对启用中且拥有管理员或运维主管角色但未开通两步验证的成员标出 `▲ 未开通` 与「提交不了高风险指令」，停用账号时自动撤去提醒。
