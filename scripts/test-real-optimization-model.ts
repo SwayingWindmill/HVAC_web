@@ -5,11 +5,20 @@ import {
   buildOptimizationWorkOrderDraft,
   buildReadinessSummary,
   findActiveRecommendationWorkOrder,
+  isUnscheduledReady,
   parseRecommendation,
   parseShadowEvaluation,
+  preparationReadinessReasons,
   type PublishedRecommendation,
   type PublishedShadowEvaluation,
 } from '../apps/hvac-web/src/features/optimization/optimization-model.ts';
+import {
+  buildArmLeasePayload,
+  formatAutoControlCapability,
+  formatAutoControlTripReason,
+  initialArmLeaseValues,
+  validateArmLeaseForm,
+} from '../apps/hvac-web/src/features/optimization/auto-control-model.ts';
 import { stagingReason, stagingView } from '../apps/hvac-web/src/features/optimization/staging-model.ts';
 import type { StagingEvaluation } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
 
@@ -28,7 +37,15 @@ test('buildReadinessSummary reports 6/6 ready with remote setpoint dispatch when
 
   const summary = buildReadinessSummary({
     recommendation,
-    preparation: { status: 'PREPARED', reason: null, firedAt: '2026-10-11T16:20:00Z' },
+    preparation: {
+      trigger: 'SCHEDULE',
+      status: 'PREPARED',
+      reason: null,
+      firedAt: '2026-10-11T16:20:00Z',
+      completedAt: '2026-10-11T16:20:02Z',
+      responseCoefficient: { status: 'CALIBRATED', calibratedAt: '2026-10-01' },
+      tenantStrategy: { status: 'CONFIRMED' },
+    },
     hasWritableSetpoint: true,
   });
 
@@ -77,7 +94,15 @@ test('buildReadinessSummary reports 5/6 ready with manual work-order channel whe
 test('buildReadinessSummary surfaces exact missing preparation input without fabricating green checks', () => {
   const summary = buildReadinessSummary({
     recommendation: null,
-    preparation: { status: 'FAILED', reason: 'ZONE_TEMPERATURE_MISSING', firedAt: '2026-10-30T04:20:00Z' },
+    preparation: {
+      trigger: 'SCHEDULE',
+      status: 'FAILED',
+      reason: 'ZONE_TEMPERATURE_MISSING',
+      firedAt: '2026-10-30T04:20:00Z',
+      completedAt: '2026-10-30T04:20:02Z',
+      responseCoefficient: { status: 'NOT_CALIBRATED', calibratedAt: null },
+      tenantStrategy: { status: 'PENDING' },
+    },
     hasWritableSetpoint: false,
   });
 
@@ -261,4 +286,108 @@ test('off-hours whole-chiller stops come first, and the schedule windows read as
   assert.deepEqual(view.cards.map((card) => card.id), ['r-off-a', 'r-off-b', 'r-aux']);
   assert.equal(view.stageDownIdle, '现在是运行计划里的停机时段，改为给整台停机建议');
   assert.deepEqual(view.paused.map((item) => [item.name, item.why]), [['辅机停机', '今天在运行计划的检修窗口内，停机建议已暂停']]);
+});
+
+test('#861 readiness summary handles NOT_SCHEDULED with NOT_CALIBRATED and PENDING reasons as well as CALIBRATED with null firedAt', () => {
+  const unready = {
+    trigger: null,
+    status: 'NOT_SCHEDULED' as const,
+    reason: null,
+    firedAt: null,
+    completedAt: null,
+    responseCoefficient: { status: 'NOT_CALIBRATED' as const, calibratedAt: null },
+    tenantStrategy: { status: 'PENDING' as const },
+  };
+  assert.deepEqual(preparationReadinessReasons(unready), ['响应系数还没标定', '共享租户策略还没确认']);
+  assert.equal(isUnscheduledReady(unready), false);
+
+  const unreadySummary = buildReadinessSummary({
+    recommendation: null,
+    preparation: unready,
+    hasWritableSetpoint: false,
+  });
+  assert.equal(unreadySummary.headline, '前置与安全条件：响应系数还没标定、共享租户策略还没确认 · 仅人工调温工单');
+  assert.equal(unreadySummary.items.find((item) => item.key === 'forecast_and_tariff')?.status, 'blocked');
+  assert.equal(unreadySummary.responseCoefficient?.status, 'NOT_CALIBRATED');
+  assert.equal(unreadySummary.tenantStrategy?.status, 'PENDING');
+
+  const readyUnscheduled = {
+    trigger: null,
+    status: 'NOT_SCHEDULED' as const,
+    reason: null,
+    firedAt: null,
+    completedAt: null,
+    responseCoefficient: { status: 'CALIBRATED' as const, calibratedAt: '2026-10-29T08:30:00Z' },
+    tenantStrategy: { status: 'CONFIRMED' as const },
+  };
+  assert.deepEqual(preparationReadinessReasons(readyUnscheduled), []);
+  assert.equal(isUnscheduledReady(readyUnscheduled), true);
+
+  const readySummary = buildReadinessSummary({
+    recommendation: parseRecommendation(publishedFixture),
+    preparation: readyUnscheduled,
+    hasWritableSetpoint: true,
+    timeZone: 'Asia/Shanghai',
+  });
+  assert.equal(readySummary.responseCoefficient?.detail, '已标定（标定日期 2026-10-29）');
+  assert.equal(readySummary.tenantStrategy?.label, '已确认');
+});
+
+test('formatAutoControlTripReason translates backend trip reasons cleanly without snake_case leaks', () => {
+  assert.equal(formatAutoControlTripReason('telemetry_unhealthy_over_5m'), '关键遥测连续异常超过 5 分钟，已触发保护退出');
+  assert.equal(
+    formatAutoControlTripReason('supply_temperature_exceeded_max (12.40C > 12.00C)'),
+    '冷冻水供水温度超出上限（12.40 °C > 12.00 °C）',
+  );
+  assert.equal(
+    formatAutoControlTripReason('zone_temperature_exceeded_max banquet_room_temperature (26.80C > 26.00C)'),
+    '室内温度超出上限（26.80 °C > 26.00 °C）',
+  );
+  assert.equal(
+    formatAutoControlTripReason('chiller_power_exceeded_90pct chiller-a (385.0kW > 0.90*400.0kW)'),
+    '冷机运行功率超过额定 90%（385.0 kW > 0.90 × 400.0 kW）',
+  );
+  assert.equal(formatAutoControlTripReason('superseded by new operator lease'), '已被操作员重新开通的新租约替换');
+  assert.equal(formatAutoControlTripReason('夜间巡检，暂时撤回自动租约'), '夜间巡检，暂时撤回自动租约');
+  assert.equal(formatAutoControlTripReason('some_unknown_internal_code'), '触发安全边界保护退出');
+  assert.equal(formatAutoControlCapability('SET_CHILLED_WATER_TEMPERATURE_SETPOINT'), '调整冷冻水供水温度设定');
+});
+
+test('arm lease form validation matches auto_control_lease.go bounds', () => {
+  const valid = {
+    ...initialArmLeaseValues(),
+    reason: '白班负荷平稳，开启自动调温',
+    verificationCode: '123456',
+  };
+  const built = buildArmLeasePayload(valid, 0);
+  assert.equal(built.ok, true);
+  if (built.ok) {
+    assert.equal(built.payload.expiresInHours, 8);
+    assert.equal(built.payload.supplyTempMinC, 6);
+    assert.equal(built.payload.supplyTempMaxC, 12);
+    assert.equal(built.payload.maxCommandsPerHour, 2);
+  }
+
+  const invalid = validateArmLeaseForm({
+    ...valid,
+    expiresInHours: '25',
+    supplyTempMinC: '13',
+    supplyTempMaxC: '12',
+    maxSetpointStepC: '2.5',
+    zoneTempMaxC: '33',
+    minRunningChillers: '-1',
+    maxCommandsPerHour: '7',
+    allowedCapabilities: [],
+    reason: '   ',
+    verificationCode: '12ab',
+  }, { includeSubmitOnly: true });
+  assert.ok(invalid.expiresInHours);
+  assert.ok(invalid.supplyTempMaxC);
+  assert.ok(invalid.maxSetpointStepC);
+  assert.ok(invalid.zoneTempMaxC);
+  assert.ok(invalid.minRunningChillers);
+  assert.ok(invalid.maxCommandsPerHour);
+  assert.ok(invalid.allowedCapabilities);
+  assert.ok(invalid.reason);
+  assert.ok(invalid.verificationCode);
 });

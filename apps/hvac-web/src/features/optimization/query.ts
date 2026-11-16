@@ -1,7 +1,12 @@
 import { queryOptions } from '@tanstack/react-query';
 import { z } from 'zod';
 import { gatewayPath, gatewayRequest, publishedValueOf, valueOf, type GatewayProblem } from '@/api/gateway-client';
-import { intelligencePaths, stagingEvaluationSchema, type StagingEvaluation } from '@/api/generated/platformGateway.gen';
+import {
+  intelligencePaths,
+  optimizationPreparationSchema,
+  stagingEvaluationSchema,
+  type StagingEvaluation,
+} from '@/api/generated/platformGateway.gen';
 import { listWorkOrders, type WorkOrderList } from '@/api/work-orders';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import {
@@ -14,12 +19,6 @@ import {
 } from './optimization-model';
 
 const opt = <S extends z.ZodTypeAny>(schema: S) => schema.nullish().transform((value) => value ?? undefined);
-
-const preparationSchema = z.object({
-  status: z.enum(['PREPARED', 'FAILED', 'PENDING']),
-  reason: z.string().nullable().optional(),
-  firedAt: z.string(),
-});
 
 const riskLevelSchema = z.enum(['LOW', 'MEDIUM', 'HIGH']);
 
@@ -166,17 +165,14 @@ export const optimizationKeys = {
 
 const UNAVAILABLE = '优化服务暂时不可用';
 
-/** How the Site's hourly schedule last fired; null when the Site has no Optimization schedule that has fired. */
+/** How the Site's hourly schedule last fired and why supply optimization is ready or blocked. */
 export function latestPreparationQuery(siteId: string) {
   return queryOptions({
     queryKey: optimizationKeys.preparation(siteId),
     queryFn: async ({ signal }): Promise<PreparationOutcome | null> => publishedValueOf(
       await gatewayRequest(gatewayPath(intelligencePaths.latestOptimizationPreparation, { siteId }), {
         signal,
-        parse: (payload) => {
-          const outcome = preparationSchema.parse(payload);
-          return { status: outcome.status, reason: outcome.reason ?? null, firedAt: outcome.firedAt };
-        },
+        parse: (payload) => optimizationPreparationSchema.parse(payload),
       }),
       { unavailable: UNAVAILABLE },
     ),

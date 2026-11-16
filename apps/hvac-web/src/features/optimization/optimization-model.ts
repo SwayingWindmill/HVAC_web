@@ -112,13 +112,58 @@ export function recommendedSetpoint(
 }
 
 /**
- * How the Site's hourly schedule last fired: prepared a run, still preparing, or failed, with the
- * input it found missing.
+ * How the Site's hourly schedule last fired: prepared a run, still preparing, not scheduled yet,
+ * or failed, plus site calibration and shared-tenant strategy readiness reasons.
  */
+export type PreparationStatus = 'PREPARED' | 'FAILED' | 'PENDING' | 'NOT_SCHEDULED';
+export type ResponseCoefficientStatus = 'CALIBRATED' | 'NOT_CALIBRATED';
+export type TenantStrategyStatus = 'CONFIRMED' | 'PENDING';
+
 export interface PreparationOutcome {
-  readonly status: 'PREPARED' | 'FAILED' | 'PENDING';
+  readonly trigger: RecommendationTrigger | null;
+  readonly status: PreparationStatus;
   readonly reason: string | null;
-  readonly firedAt: string;
+  readonly firedAt: string | null;
+  readonly completedAt: string | null;
+  readonly responseCoefficient: {
+    readonly status: ResponseCoefficientStatus;
+    readonly calibratedAt: string | null;
+  };
+  readonly tenantStrategy: {
+    readonly status: TenantStrategyStatus;
+  };
+}
+
+export function formatCalibrationDate(value: string, timeZone = 'Asia/Shanghai'): string {
+  const trimmed = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const parsed = Date.parse(trimmed);
+  if (!Number.isFinite(parsed)) return trimmed;
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(parsed));
+}
+
+export function preparationReadinessReasons(outcome: PreparationOutcome | null): readonly string[] {
+  if (!outcome) return [];
+  const reasons: string[] = [];
+  if (outcome.responseCoefficient.status === 'NOT_CALIBRATED') {
+    reasons.push('响应系数还没标定');
+  }
+  if (outcome.tenantStrategy.status === 'PENDING') {
+    reasons.push('共享租户策略还没确认');
+  }
+  return reasons;
+}
+
+export function isUnscheduledReady(outcome: PreparationOutcome | null): boolean {
+  if (outcome === null) return true;
+  return outcome.status === 'NOT_SCHEDULED'
+    && outcome.responseCoefficient.status === 'CALIBRATED'
+    && outcome.tenantStrategy.status === 'CONFIRMED';
 }
 
 const PREPARATION_REASON: Record<string, string> = {
@@ -166,6 +211,18 @@ export interface ReadinessSummary {
   readonly totalCount: 6;
   readonly headline: string;
   readonly items: readonly ReadinessItem[];
+  readonly readinessReasons: readonly string[];
+  readonly responseCoefficient: {
+    readonly status: ResponseCoefficientStatus;
+    readonly label: string;
+    readonly detail: string;
+    readonly calibratedAt: string | null;
+  } | null;
+  readonly tenantStrategy: {
+    readonly status: TenantStrategyStatus;
+    readonly label: string;
+    readonly detail: string;
+  } | null;
 }
 
 const FORECAST_AND_TARIFF_REASONS = new Set([
@@ -197,18 +254,53 @@ export function buildReadinessSummary({
   recommendation,
   preparation,
   hasWritableSetpoint,
+  timeZone = 'Asia/Shanghai',
 }: {
   readonly recommendation: OptimizationRecommendation | null;
   readonly preparation: PreparationOutcome | null;
   readonly hasWritableSetpoint: boolean | null;
+  readonly timeZone?: string;
 }): ReadinessSummary {
   const activeFailure = preparation?.status === 'FAILED'
-    && (recommendation === null || Date.parse(preparation.firedAt) > Date.parse(recommendation.createdAt))
+    && (recommendation === null || (preparation.firedAt !== null && Date.parse(preparation.firedAt) > Date.parse(recommendation.createdAt)))
     ? preparation
     : null;
   const activeReason = activeFailure?.reason ?? null;
   const problem = activeFailure ? preparationProblem(activeFailure) : null;
   const preparedPass = preparation?.status === 'PREPARED' || (recommendation !== null && activeFailure === null);
+  const readinessReasons = preparationReadinessReasons(preparation);
+
+  const responseCoefficient = preparation
+    ? preparation.responseCoefficient.status === 'CALIBRATED'
+      ? {
+          status: 'CALIBRATED' as const,
+          label: '已标定',
+          calibratedAt: preparation.responseCoefficient.calibratedAt,
+          detail: preparation.responseCoefficient.calibratedAt
+            ? `已标定（标定日期 ${formatCalibrationDate(preparation.responseCoefficient.calibratedAt, timeZone)}）`
+            : '已完成站点响应系数标定',
+        }
+      : {
+          status: 'NOT_CALIBRATED' as const,
+          label: '还没标定',
+          calibratedAt: null,
+          detail: '响应系数还没标定，无法确认供水升温对冷站能耗和室温的影响',
+        }
+    : null;
+
+  const tenantStrategy = preparation
+    ? preparation.tenantStrategy.status === 'CONFIRMED'
+      ? {
+          status: 'CONFIRMED' as const,
+          label: '已确认',
+          detail: '共享租户策略、必填点位映射与模型部署均已确认',
+        }
+      : {
+          status: 'PENDING' as const,
+          label: '还没确认',
+          detail: '共享租户策略还没确认，需先确认适用策略、点位映射和模型部署',
+        }
+    : null;
 
   const supplyItem: ReadinessItem = activeReason === 'SUPPLY_TEMPERATURE_MISSING' || activeReason === 'BASELINE_OUTSIDE_LIMITS'
     ? { key: 'supply_temp', label: '供水温度范围', status: 'blocked', detail: problem! }
@@ -248,7 +340,9 @@ export function buildReadinessSummary({
     ? { key: 'forecast_and_tariff', label: '负荷预测与分时电价', status: 'blocked', detail: problem! }
     : preparedPass
       ? { key: 'forecast_and_tariff', label: '负荷预测与分时电价', status: 'ready', detail: '未来整日负荷预测、生效电价与最近已结算日数据齐全' }
-      : { key: 'forecast_and_tariff', label: '负荷预测与分时电价', status: 'unknown', detail: '待核验负荷预测、分时电价与已结算日用电' };
+      : tenantStrategy?.status === 'PENDING'
+        ? { key: 'forecast_and_tariff', label: '负荷预测与分时电价', status: 'blocked', detail: tenantStrategy.detail }
+        : { key: 'forecast_and_tariff', label: '负荷预测与分时电价', status: 'unknown', detail: '待核验负荷预测、分时电价与已结算日用电' };
 
   const channelLabel = hasWritableSetpoint === null
     ? '执行通道待核验'
@@ -273,10 +367,20 @@ export function buildReadinessSummary({
   const headline = problem
     ? `前置与安全条件：${problem} · ${channelLabel}`
     : recommendation === null && !preparedPass
-      ? `前置与安全条件：待核验 · ${channelLabel}`
+      ? readinessReasons.length > 0
+        ? `前置与安全条件：${readinessReasons.join('、')} · ${channelLabel}`
+        : `前置与安全条件：待核验 · ${channelLabel}`
       : `前置与安全条件：${readyCount}/6 就绪 · ${channelLabel}`;
 
-  return { readyCount, totalCount: 6, headline, items };
+  return {
+    readyCount,
+    totalCount: 6,
+    headline,
+    items,
+    readinessReasons,
+    responseCoefficient,
+    tenantStrategy,
+  };
 }
 
 export const OPTIMIZATION_RECOMMENDATION_SOURCE_PREFIX = 'optimization-recommendation:';

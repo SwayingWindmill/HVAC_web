@@ -48,7 +48,9 @@ import {
   findActiveRecommendationWorkOrder,
   formatCelsius as celsius,
   formatSigned as signed,
+  isUnscheduledReady,
   preparationProblem,
+  preparationReadinessReasons,
   recommendedSetpoint,
   TRIGGER_LABEL,
   type OptimizationRecommendation,
@@ -57,6 +59,8 @@ import {
   type ReadinessSummary,
   type RecommendationRisk,
 } from '../optimization-model';
+import type { AutoControlConfirmationMode } from '@/api/generated/platformGateway.gen';
+import { siteAutoControlLeaseQuery } from '../auto-control-api';
 import {
   latestPreparationQuery,
   latestRecommendationQuery,
@@ -65,6 +69,7 @@ import {
   requestRecommendation,
 } from '../query';
 import { stagingView } from '../staging-model';
+import { AutoControlPanel } from './AutoControlPanel';
 import { OptimizationAnalysisTab } from './OptimizationAnalysisTab';
 import { StagingPanel } from './StagingPanel';
 
@@ -124,8 +129,8 @@ function RangeTrack({ label, axis, band, bandLabel, markers }: {
 
 function ConstraintRow({ title, detail, children }: { readonly title: string; readonly detail: ReactNode; readonly children: ReactNode }) {
   return (
-    <div className="flex items-center gap-8 border-b border-divider px-5 py-4 last:border-b-0">
-      <span className="flex w-72 shrink-0 flex-col gap-0.5">
+    <div className="flex flex-col gap-3 border-b border-divider px-5 py-4 last:border-b-0 sm:flex-row sm:items-center sm:gap-8">
+      <span className="flex shrink-0 flex-col gap-0.5 sm:w-72">
         <span className="text-sm font-semibold">{title}</span>
         <span className="text-xs text-muted-foreground">{detail}</span>
       </span>
@@ -161,6 +166,8 @@ export function OptimizationWorkspace() {
   const queryClient = useQueryClient();
   const activeView = search.view ?? 'proposal';
   const capabilities = principal.authorization.capabilities;
+  const canReadSite = capabilities.includes('site.read');
+  const canManageLease = capabilities.includes('schedule.manage');
   const canListWorkOrders = capabilities.includes('work-order.list');
   const canCreateWorkOrder = capabilities.includes('work-order.create');
   const now = useNow(30_000);
@@ -171,8 +178,13 @@ export function OptimizationWorkspace() {
   const latest = useQuery(latestRecommendationQuery(site.id, waiting?.runId ?? null));
   const commands = useQuery({
     ...siteCommandsQuery(site.id),
-    enabled: capabilities.includes('site.read'),
+    enabled: canReadSite,
   });
+  const autoControlLease = useQuery({
+    ...siteAutoControlLeaseQuery(site.id),
+    enabled: canReadSite,
+  });
+  const confirmationMode: AutoControlConfirmationMode = autoControlLease.data?.confirmationMode ?? 'MANUAL_CONFIRM';
   const { plant, registry } = useRealtimePlant();
   const staging = useQuery(latestStagingQuery(site.id));
   const controlState = useQuery(siteControlStateQuery(site.id));
@@ -180,8 +192,11 @@ export function OptimizationWorkspace() {
   // How the hourly schedule last fired, so a page with no new recommendation says which input was missing.
   const preparation = useQuery(latestPreparationQuery(site.id));
   const scheduleProblem = preparationProblem(preparation.data ?? null);
-  const firedAt = preparation.data ? formatTime(preparation.data.firedAt, site.timezone) : '';
+  const readinessReasons = preparationReadinessReasons(preparation.data ?? null);
+  const unscheduledReady = isUnscheduledReady(preparation.data ?? null);
+  const firedAt = preparation.data?.firedAt ? formatTime(preparation.data.firedAt, site.timezone) : '';
   const staleRecommendation = recommendation !== null && scheduleProblem !== null && preparation.data !== null && preparation.data !== undefined
+    && preparation.data.firedAt !== null
     && Date.parse(preparation.data.firedAt) > Date.parse(recommendation.createdAt);
 
   const request = useMutation({
@@ -235,8 +250,9 @@ export function OptimizationWorkspace() {
       recommendation,
       preparation: preparation.data ?? null,
       hasWritableSetpoint: registry.isSuccess ? supply !== null : null,
+      timeZone: site.timezone,
     }),
-    [recommendation, preparation.data, registry.isSuccess, supply],
+    [recommendation, preparation.data, registry.isSuccess, supply, site.timezone],
   );
   const setpoint = recommendation && supply ? recommendedSetpoint(recommendation, supply.setting) : null;
   const supplyReading = supply?.setting.feedbackSourceKey
@@ -287,7 +303,7 @@ export function OptimizationWorkspace() {
             }),
           });
         }}
-        className="gap-4"
+        className="w-full min-w-0 gap-4"
       >
         <div className="border-b border-divider pb-1">
           <TabsList variant="line">
@@ -296,7 +312,7 @@ export function OptimizationWorkspace() {
           </TabsList>
         </div>
 
-        <TabsContent value="proposal" className="flex flex-col gap-4">
+        <TabsContent value="proposal" className="flex w-full min-w-0 flex-col gap-4">
           <StagingPanel
             siteId={site.id}
             timeZone={site.timezone}
@@ -323,7 +339,15 @@ export function OptimizationWorkspace() {
             <Alert>
               <TriangleAlert />
               <AlertTitle>最近一次定时计算没有生成新建议</AlertTitle>
-              <AlertDescription>{firedAt}：{scheduleProblem}。下面是上一条建议。</AlertDescription>
+              <AlertDescription>{firedAt ? `${firedAt}：` : ''}{scheduleProblem}。下面是上一条建议。</AlertDescription>
+            </Alert>
+          ) : null}
+
+          {recommendation !== null && readinessReasons.length > 0 ? (
+            <Alert>
+              <TriangleAlert />
+              <AlertTitle>当前站点供水温度优化条件尚未完全就绪</AlertTitle>
+              <AlertDescription>{readinessReasons.join('、')}。</AlertDescription>
             </Alert>
           ) : null}
 
@@ -339,13 +363,31 @@ export function OptimizationWorkspace() {
           ) : !recommendation ? (
             <>
               <Panel aria-label="当前建议">
-                <div className="flex flex-col items-center gap-2 px-6 py-14 text-center">
+                <div className="flex flex-col items-center gap-2 px-6 py-12 text-center">
                   <span className="flex size-9 items-center justify-center rounded-xl bg-primary-soft text-primary"><Lightbulb className="size-[18px]" aria-hidden="true" /></span>
                   <p className="text-sm font-semibold">还没有优化建议</p>
                   {scheduleProblem ? (
-                    <p className="max-w-lg text-sm text-secondary-foreground">最近一次定时计算（<span className="font-mono">{firedAt}</span>）没有生成建议：{scheduleProblem}。</p>
-                  ) : preparation.isSuccess && preparation.data === null ? (
+                    <p className="max-w-lg text-sm text-secondary-foreground">
+                      最近一次定时计算{firedAt ? <>（<span className="font-mono">{firedAt}</span>）</> : null}没有生成建议：{scheduleProblem}。
+                    </p>
+                  ) : preparation.isSuccess && unscheduledReady ? (
                     <p className="max-w-lg text-sm text-secondary-foreground">站点还没有配置定时优化，建议只能手动生成。</p>
+                  ) : null}
+                  {readinessReasons.length > 0 ? (
+                    <div className="mt-1 flex max-w-lg flex-col gap-1.5 rounded-lg border border-divider bg-muted px-4 py-3 text-left text-xs text-secondary-foreground">
+                      <span className="font-semibold text-foreground">当前站点暂未启用供水温度优化，原因如下：</span>
+                      <ul className="list-inside list-disc space-y-1">
+                        {preparation.data?.responseCoefficient.status === 'NOT_CALIBRATED' ? (
+                          <li>响应系数还没标定：尚未完成供水温度变化对能耗与室温影响的站点标定</li>
+                        ) : null}
+                        {preparation.data?.tenantStrategy.status === 'PENDING' ? (
+                          <li>共享租户策略还没确认：适用策略、必填点位映射或模型部署尚未确认启用</li>
+                        ) : null}
+                      </ul>
+                      <span className="text-muted-foreground">
+                        {preparation.data?.status === 'NOT_SCHEDULED' ? '站点也还没有配置定时优化任务；' : ''}上方的「减台与辅机停机」不受影响，可独立评估与执行。
+                      </span>
+                    </div>
                   ) : null}
                   <p className="max-w-lg text-xs text-muted-foreground">
                     建议依据最近一天的冷站用电与电费、最新负荷预测和实时供水、室内温度计算；用电与电费每天零点后结算，某天缺数据时不出电费，改用更早一天。
@@ -363,6 +405,7 @@ export function OptimizationWorkspace() {
               siteId={site.id}
               setpoint={setpoint}
               setting={supply?.setting ?? null}
+              confirmationMode={confirmationMode}
               registryState={registry.isPending ? 'pending' : registry.isError ? 'error' : 'ready'}
               workOrdersState={
                 !manualWorkOrderMode || !canListWorkOrders
@@ -381,6 +424,14 @@ export function OptimizationWorkspace() {
               onRetryWorkOrders={() => void recommendationWorkOrders.refetch()}
             />
           )}
+
+          <AutoControlPanel
+            siteId={site.id}
+            timeZone={site.timezone}
+            csrfToken={principal.session.csrfToken}
+            canRead={canReadSite}
+            canManage={canManageLease}
+          />
         </TabsContent>
 
         <TabsContent value="analysis" className="flex flex-col gap-4">
@@ -486,14 +537,67 @@ function ReadinessDisclosure({
 
       {expanded ? (
         <section role="region" aria-label="前置与安全条件" className="flex flex-col gap-4 border-t border-divider px-5 py-4">
-          <ul className="grid grid-cols-2 gap-2.5">
+          <ul className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
             {readiness.items.map((item) => (
               <ReadinessRow key={item.key} item={item} />
             ))}
           </ul>
 
+          {readiness.responseCoefficient || readiness.tenantStrategy ? (
+            <div className="grid grid-cols-1 gap-2.5 border-t border-divider pt-4 sm:grid-cols-2">
+              {readiness.responseCoefficient ? (
+                <div className="flex items-start gap-2.5 rounded-lg border border-divider bg-muted/20 px-3.5 py-2.5">
+                  {readiness.responseCoefficient.status === 'CALIBRATED' ? (
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
+                  ) : (
+                    <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+                  )}
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium">响应系数标定</span>
+                      <span className={cn(
+                        'rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium',
+                        readiness.responseCoefficient.status === 'CALIBRATED'
+                          ? 'bg-success-soft text-success-text'
+                          : 'bg-warning-soft text-warning-text',
+                      )}
+                      >
+                        {readiness.responseCoefficient.label}
+                      </span>
+                    </span>
+                    <span className="text-xs text-muted-foreground">{readiness.responseCoefficient.detail}</span>
+                  </span>
+                </div>
+              ) : null}
+              {readiness.tenantStrategy ? (
+                <div className="flex items-start gap-2.5 rounded-lg border border-divider bg-muted/20 px-3.5 py-2.5">
+                  {readiness.tenantStrategy.status === 'CONFIRMED' ? (
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
+                  ) : (
+                    <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+                  )}
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium">共享租户策略</span>
+                      <span className={cn(
+                        'rounded px-1.5 py-0.5 text-[11px] leading-4 font-medium',
+                        readiness.tenantStrategy.status === 'CONFIRMED'
+                          ? 'bg-success-soft text-success-text'
+                          : 'bg-warning-soft text-warning-text',
+                      )}
+                      >
+                        {readiness.tenantStrategy.label}
+                      </span>
+                    </span>
+                    <span className="text-xs text-muted-foreground">{readiness.tenantStrategy.detail}</span>
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           {recommendation ? (
-            <div className="grid grid-cols-2 items-start gap-6 border-t border-divider pt-4">
+            <div className="grid grid-cols-1 items-start gap-6 border-t border-divider pt-4 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
                   策略响应与基线依据
@@ -541,6 +645,7 @@ function Proposal({
   siteId,
   setpoint,
   setting,
+  confirmationMode,
   registryState,
   workOrdersState,
   sent,
@@ -556,6 +661,7 @@ function Proposal({
   readonly siteId: string;
   readonly setpoint: number | null;
   readonly setting: ControlSetting | null;
+  readonly confirmationMode: AutoControlConfirmationMode;
   readonly registryState: 'pending' | 'error' | 'ready';
   readonly workOrdersState: 'pending' | 'error' | 'ready';
   readonly sent: Command | undefined;
@@ -569,14 +675,17 @@ function Proposal({
   const change = changesSupply(recommendation);
   const risk = RISK[recommendation.risk];
   const share = baseline.dailyEnergyKWh > 0 ? recommendation.saving.energyKWhPerDay / baseline.dailyEnergyKWh : null;
+  const executionNote = confirmationMode === 'AUTO_WITH_LEASE'
+    ? '自动控制租约生效中，满足实时安全复核后将自动下发并观察'
+    : '建议不会自动执行';
   const stepNote = setting && setpoint !== null && Math.abs(setpoint - candidate.supplyTempC) >= 0.05
-    ? `冷机只能按 ${formatDecimal(setting.step, 1)} °C 调整，实际下发 ${celsius(setpoint)}；建议不会自动执行`
-    : `下发为 ${celsius(setpoint ?? candidate.supplyTempC)}；建议不会自动执行`;
+    ? `冷机只能按 ${formatDecimal(setting.step, 1)} °C 调整，实际下发 ${celsius(setpoint)}；${executionNote}`
+    : `下发为 ${celsius(setpoint ?? candidate.supplyTempC)}；${executionNote}`;
 
   return (
     <>
-      <Panel aria-label="当前建议" className="grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
-        <div className="flex flex-col gap-3 border-r border-divider px-6 py-5">
+      <Panel aria-label="当前建议" className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+        <div className="flex flex-col gap-3 border-b border-divider px-6 py-5 lg:border-r lg:border-b-0">
           <span className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-title font-semibold">当前建议</span>
             <span className={cn('rounded-md px-1.5 leading-5 font-medium', risk.className)}>{risk.label}</span>

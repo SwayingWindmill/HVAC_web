@@ -330,3 +330,182 @@ test('under manual control the stop recommendations say they are paused and cann
   await expect(staging.getByLabel('暂停的建议')).toContainText('减台站点不在远程自动控制，停机建议已暂停');
   await expect(page.getByRole('banner').getByRole('link', { name: '人工接管' })).toBeVisible();
 });
+
+test('#861 explains NOT_CALIBRATED and PENDING readiness reasons in supply optimization while staging works independently', async ({ page, gateway }) => {
+  const model = gateway.assetModel;
+  const tower = model.assets.find((candidate: { code: string }) => candidate.code === 'ct-01');
+  const stopPoint = model.telemetryPoints.find((point: { reportingDeviceId: string; pointCode: string }) =>
+    point.pointCode === 'stop' && model.devices.find((device: { id: string }) => device.id === point.reportingDeviceId)?.code === 'ct-01');
+
+  gateway.optimizationPreparation = {
+    trigger: null,
+    status: 'NOT_SCHEDULED',
+    reason: null,
+    firedAt: null,
+    completedAt: null,
+    responseCoefficient: { status: 'NOT_CALIBRATED', calibratedAt: null },
+    tenantStrategy: { status: 'PENDING' },
+  };
+  gateway.staging = {
+    tenantId: principal.context.tenantId,
+    siteId: SITE_ID,
+    evaluatedAt: new Date().toISOString(),
+    confirmationMode: 'MANUAL_CONFIRM',
+    siteControlMode: 'REMOTE_AUTO',
+    recommendations: [{
+      id: '01a19000-0000-7000-8000-000000000009',
+      kind: 'IDLE_AUXILIARY_STOP',
+      confirmationMode: 'MANUAL_CONFIRM',
+      requiresSupervisorReview: true,
+      requiresTotp: true,
+      suggestedCapability: 'STOP',
+      suggestedCommandPointId: stopPoint.id,
+      targetAssetId: tower.id,
+      targetAssetCode: 'ct-01',
+      targetAssetName: 'CT-01',
+      targetAssetType: 'COOLING_TOWER',
+      predictedPowerSavingKW: 6.5,
+      estimatedHourlySavingKWh: 6.5,
+      estimatedShiftSavingKWh: 52,
+      shiftHours: 8,
+      continuousIdleSeconds: 3120,
+      continuousIdleMinutes: 52,
+      rationale: 'IDLE_AUXILIARY_STOP',
+      preconditions: ['MANUAL_CONFIRM'],
+    }],
+    diagnostics: [],
+  };
+
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+
+  const staging = page.getByRole('region', { name: '减台与辅机停机' });
+  await expect(staging).toContainText('停 CT-01');
+  await expect(staging.getByRole('button', { name: '确认停机…' })).toBeEnabled();
+
+  const proposal = page.getByRole('region', { name: '当前建议' });
+  await expect(proposal).toContainText('响应系数还没标定');
+  await expect(proposal).toContainText('共享租户策略还没确认');
+  await expect(proposal).not.toContainText('站点还没有配置定时优化，建议只能手动生成。');
+
+  const readinessToggle = page.getByRole('button', { name: /前置与安全条件：响应系数还没标定、共享租户策略还没确认/ });
+  await readinessToggle.click();
+  const readinessPanel = page.getByRole('region', { name: '前置与安全条件' });
+  await expect(readinessPanel).toContainText('响应系数标定');
+  await expect(readinessPanel).toContainText('还没标定');
+  await expect(readinessPanel).toContainText('共享租户策略');
+  await expect(readinessPanel).toContainText('还没确认');
+});
+
+test('auto-control lease lifecycle validates bounds, handles MFA_NOT_CONFIGURED, renders execution monitors, and revokes', async ({ page, gateway }) => {
+  gateway.optimization = fixture('optimization-latest.json');
+  await page.goto(`/energy-analysis/optimization?site=${SITE_ID}`);
+
+  const leasePanel = page.getByRole('region', { name: '自动控制租约' });
+  await expect(leasePanel).toContainText('人工确认下发');
+  await expect(page.getByRole('region', { name: '当前建议' })).toContainText('建议不会自动执行');
+
+  await leasePanel.getByRole('button', { name: '开启自动控制租约…' }).click();
+  const dialog = page.getByRole('dialog', { name: '开启限时自动控制租约' });
+  await dialog.getByLabel('租约有效期').fill('25');
+  await dialog.getByLabel('租约有效期').blur();
+  await expect(dialog).toContainText('有效期需为 1 至 24 的整数小时');
+  await dialog.getByLabel('租约有效期').fill('8');
+  await dialog.getByLabel('原因').fill('白班冷负荷平稳，开启自动调温');
+  await dialog.getByRole('textbox', { name: '动态口令' }).fill('123456');
+
+  // Verify MFA_NOT_CONFIGURED keeps the dialog open with clickable enrollment link.
+  gateway.stepUpFailureReason = 'MFA_NOT_CONFIGURED';
+  await dialog.getByRole('button', { name: '确认开启租约' }).click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('link', { name: /去开通两步验证/ })).toHaveAttribute('href', /\/system\?tab=users/);
+
+  // Clear synthetic failure and arm the lease.
+  gateway.stepUpFailureReason = null;
+  await dialog.getByRole('textbox', { name: '动态口令' }).fill('654321');
+  await dialog.getByRole('button', { name: '确认开启租约' }).click();
+
+  await expect(page.getByText('已开启限时自动控制租约')).toBeVisible();
+  await expect(leasePanel).toContainText('限时自动控制租约生效中');
+  await expect(leasePanel).toContainText('6.0 至 12.0 °C');
+  await expect(leasePanel).toContainText('调整冷冻水供水温度设定');
+  await expect(page.getByRole('region', { name: '当前建议' })).toContainText('自动控制租约生效中');
+
+  // Seed execution monitors including a TRIPPED window with Chinese translated reason and rollback command link.
+  const now = Date.now();
+  gateway.optimizationExecutionMonitors = [
+    {
+      id: '01990000-8800-7000-8000-000000000101',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      leaseId: gateway.autoControlLeaseState.activeLease.id,
+      recommendationId: '01a12bdc-97d7-7e50-bc97-f14cb86800ba',
+      commandIntentId: '01990000-8800-7000-8000-000000000201',
+      deviceId: '018f3e00-4000-7000-8000-000000000001',
+      targetCapability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+      baselineSupplyTempC: 7.1,
+      appliedSupplyTempC: 8.0,
+      restoreSupplyTempC: 7.1,
+      zoneTempMaxC: 26.0,
+      supplyTempMaxC: 12.0,
+      startedAt: new Date(now - 35 * 60_000).toISOString(),
+      windowEndsAt: new Date(now - 5 * 60_000).toISOString(),
+      status: 'VERIFIED',
+      createdAt: new Date(now - 35 * 60_000).toISOString(),
+      updatedAt: new Date(now - 5 * 60_000).toISOString(),
+    },
+    {
+      id: '01990000-8800-7000-8000-000000000102',
+      tenantId: principal.context.tenantId,
+      siteId: SITE_ID,
+      leaseId: gateway.autoControlLeaseState.activeLease.id,
+      recommendationId: '01a12bdc-97d7-7e50-bc97-f14cb86800bb',
+      commandIntentId: '01990000-8800-7000-8000-000000000202',
+      deviceId: '018f3e00-4000-7000-8000-000000000001',
+      targetCapability: 'SET_CHILLED_WATER_TEMPERATURE_SETPOINT',
+      baselineSupplyTempC: 8.0,
+      appliedSupplyTempC: 9.0,
+      restoreSupplyTempC: 8.0,
+      zoneTempMaxC: 26.0,
+      supplyTempMaxC: 12.0,
+      startedAt: new Date(now - 15 * 60_000).toISOString(),
+      windowEndsAt: new Date(now + 15 * 60_000).toISOString(),
+      status: 'TRIPPED',
+      tripReason: 'zone_temperature_exceeded_max banquet_room_temperature (26.60C > 26.00C)',
+      rollbackCommandIntentId: '01990000-8800-7000-8000-000000000203',
+      createdAt: new Date(now - 15 * 60_000).toISOString(),
+      updatedAt: new Date(now - 2 * 60_000).toISOString(),
+    },
+  ];
+  await page.reload();
+
+  const monitorsTable = page.getByRole('table', { name: '30 分钟执行监护' });
+  await expect(monitorsTable).toContainText('已核验通过');
+  await expect(monitorsTable).toContainText('已触发保护退出');
+  await expect(monitorsTable).toContainText('室内温度超出上限（26.60 °C > 26.00 °C）');
+  await expect(monitorsTable).not.toContainText('zone_temperature_exceeded_max');
+  await expect(monitorsTable.getByRole('link', { name: '查看下发指令 ›' }).first()).toHaveAttribute('href', /\/operations\/control\?.*inspect=01990000-8800-7000-8000-000000000201/);
+  await expect(monitorsTable.getByRole('link', { name: '查看回退指令 ›' })).toHaveAttribute('href', /\/operations\/control\?.*inspect=01990000-8800-7000-8000-000000000203/);
+
+  // Revoke lease returns to MANUAL_CONFIRM.
+  await leasePanel.getByRole('button', { name: '撤回租约' }).click();
+  const revokeDialog = page.getByRole('dialog', { name: '撤回自动控制租约？' });
+  await revokeDialog.getByLabel('原因').fill('夜间人工巡检，暂停自动下发');
+  await revokeDialog.getByRole('button', { name: '确认撤回租约' }).click();
+
+  await expect(page.getByText('已撤回自动控制租约，恢复为人工确认下发')).toBeVisible();
+  await expect(leasePanel).toContainText('人工确认下发');
+  await expect(leasePanel).toContainText('上次租约：已人工撤回');
+  await expect(leasePanel).toContainText('夜间人工巡检，暂停自动下发');
+
+  // Without schedule.manage, arm/revoke controls are hidden.
+  gateway.principalOverride = {
+    ...principal,
+    authorization: {
+      ...principal.authorization,
+      capabilities: principal.authorization.capabilities.filter((cap: string) => cap !== 'schedule.manage'),
+    },
+  };
+  await page.reload();
+  await expect(leasePanel.getByRole('button', { name: '开启自动控制租约…' })).toHaveCount(0);
+  await expect(leasePanel).toContainText('只读，需运行排班管理权限才能授权');
+});

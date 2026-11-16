@@ -22,6 +22,8 @@
 - `/operations/control` 机组列头显示绑定的 `HVAC_POWER_METER` 实时功率（无有效读数时显示「暂无读数」），控制联锁统一读取点位 `sourceMetadata.interlockChecks`（#862）
 - 站点控制模式与设备锁定接口返回操作人姓名 `updatedByName`（依托 `iam.resolve_tenant_principal_names` 查询同租户在职成员），控制页与实时运行页直接显示人员姓名，不再回退为「其他人员」（#859）
 - 控制下发与整站安全停机动态口令校验按 `ProblemDetails.reason` 区分口令错误（`CODE_INVALID`）、口令已使用（`CODE_REPLAYED`）、验证已锁定（`MFA_LOCKED`）与未开通两步验证（`MFA_NOT_CONFIGURED`），并在未开通时引导跳转 `/system?tab=users`（#860）
+- `/energy-analysis/optimization` 供水温度优化在未就绪时按接口 `responseCoefficient` 与 `tenantStrategy` 展示具体缺口说明（「响应系数还没标定」「共享租户策略还没确认」），并保持上方减台与辅机停机独立可用（#861）
+- `/energy-analysis/optimization` 新增限时自动控制租约管理（开启租约含边界校验与两步动态口令确认、手动撤回、`AUTO_WITH_LEASE` 确认模式联动）与「30 分钟执行监护」观察窗口及退出原因展示，并在 `/operations/control` 控制方式栏显示生效中的自动控制租约状态与跳转入口
 
 - 新增免交互接口同步脚本 `scripts/sync-songyaxuan-nodered.ts`（配合平台主机 `/opt/hvac-platform/runtime/secrets/songyaxuan-nodered-admin` 只读密钥与 `--ssh` 服务端回环通道），先校对 `ET1010·机组启停` 和 `平台·常驻隧道` 页签启用，再仅热更新 `平台·形成信封` 并回读 `/flows` 核验。
 - 「运行控制」可以直接从平台停机：控制方式条右侧「停机…」执行安全停机（先停所有没锁定的冷机，主机停稳后再停对应的水泵和冷却塔，站点切到安全退出并撤回没下发的指令）；站点登记了紧急全断点位时还可以选「紧急全断」，立刻断开全部输出通道。机组的一键启停还没结束时，机组列上出现「中止…」，只中止并按顺序停这一组。三种都要填原因、输入动态口令并确认已和现场沟通。松雅轩登记在冷冻水总管上的「紧急全断全部 DO 通道」不再显示成普通的「停止」按钮。

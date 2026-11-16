@@ -1,8 +1,11 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { Lock, LockOpen, Power } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
+import type { SiteAutoControlLeaseState } from '@/api/generated/platformGateway.gen';
 import { Panel } from '@/blocks/panel';
+import { StatusBadge } from '@/components/common/StatusBadge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -62,20 +65,21 @@ export interface WithdrawnSummary {
  * The Site's control mode across the top of the control page: which mode, who set it and why,
  * and the other two as a segmented choice that opens the switch dialog.
  */
-export function ControlModeBar({ state, lockCount, pendingCount, myId, timeZone, canManage, onPick, onShutdown }: {
+export function ControlModeBar({ state, lockCount, pendingCount, myId, timeZone, canManage, autoControlLease, onPick, onShutdown }: {
   readonly state: SiteControlState;
   readonly lockCount: number;
   readonly pendingCount: number;
   readonly myId: string;
   readonly timeZone: string;
   readonly canManage: boolean;
+  readonly autoControlLease?: SiteAutoControlLeaseState;
   readonly onPick: (mode: SiteControlMode) => void;
   /** Opens the site shutdown dialog. */
   readonly onShutdown: () => void;
 }) {
   const presentation = MODE_PRESENTATION[state.controlMode];
   return (
-    <Panel aria-label="控制方式" className={cn('grid grid-cols-[240px_minmax(0,1fr)_auto_auto] items-center gap-x-6 gap-y-3 px-4 py-3.5', BAR_TONE[state.controlMode])}>
+    <Panel aria-label="控制方式" className={cn('grid grid-cols-1 items-start gap-x-6 gap-y-3 px-4 py-3.5 lg:grid-cols-[240px_minmax(0,1fr)_auto_auto] lg:items-center', BAR_TONE[state.controlMode])}>
       <div className="flex flex-col">
         <span className="text-xs text-muted-foreground">控制方式</span>
         <span className="flex items-center gap-2 text-xl leading-7 font-semibold tracking-[-0.02em]">
@@ -99,6 +103,21 @@ export function ControlModeBar({ state, lockCount, pendingCount, myId, timeZone,
         {state.activeMaintenanceWindow ? (
           <span className="truncate text-xs text-warning-text" title={state.activeMaintenanceWindow.reason || undefined}>
             检修窗口「{state.activeMaintenanceWindow.title}」{state.activeMaintenanceWindow.startDate} 至 {state.activeMaintenanceWindow.endDate}，只能停机和复位
+          </span>
+        ) : null}
+        {autoControlLease?.confirmationMode === 'AUTO_WITH_LEASE' && autoControlLease.activeLease ? (
+          <span className="mt-0.5 flex flex-wrap items-center gap-2 text-xs">
+            <StatusBadge tone="info" label="自动控制租约生效中" />
+            <span className="text-secondary-foreground">
+              有效期至 <span className="font-mono">{formatCompactTime(autoControlLease.activeLease.expiresAt, timeZone)}</span>
+            </span>
+            <Link
+              to="/energy-analysis/optimization"
+              search={{ site: autoControlLease.siteId }}
+              className="font-medium text-primary hover:underline"
+            >
+              管理自动租约 ›
+            </Link>
           </span>
         ) : null}
       </div>

@@ -396,3 +396,42 @@ test('TOTP step-up failure reasons show actionable guidance and MFA enroll link'
   await expect(page).toHaveURL(/\/system\?tab=users/);
   await expect(page.getByText(/两步验证|动态口令|认证器/).first()).toBeVisible();
 });
+
+test('control mode bar displays active auto-control lease badge and link when armed', async ({ page, gateway }) => {
+  const now = Date.now();
+  const expiresAt = new Date(now + 8 * 3_600_000).toISOString();
+  const activeLease = {
+    id: '01990000-8800-7000-8000-000000000091',
+    tenantId: gateway.assetModel.tenantId,
+    siteId: SITE_ID,
+    status: 'ACTIVE',
+    armedBy: '018f3e00-2000-7000-8000-000000000001',
+    armedAt: new Date(now - 600_000).toISOString(),
+    expiresAt,
+    allowedCapabilities: ['SET_CHILLED_WATER_TEMPERATURE_SETPOINT'],
+    maxSetpointStepC: 1.0,
+    supplyTempMinC: 6.0,
+    supplyTempMaxC: 12.0,
+    zoneTempMaxC: 26.0,
+    minRunningChillers: 1,
+    maxCommandsPerHour: 2,
+    revision: 1,
+    createdAt: new Date(now - 600_000).toISOString(),
+    updatedAt: new Date(now - 600_000).toISOString(),
+  };
+  gateway.autoControlLeaseState = {
+    tenantId: gateway.assetModel.tenantId,
+    siteId: SITE_ID,
+    confirmationMode: 'AUTO_WITH_LEASE',
+    activeLease,
+    latestLease: activeLease,
+  };
+
+  await page.goto(`/operations/control?site=${SITE_ID}`);
+  const modeBar = page.getByRole('region', { name: '控制方式' });
+  await expect(modeBar).toContainText('自动控制租约生效中');
+  const manageLink = modeBar.getByRole('link', { name: '管理自动租约 ›' });
+  await expect(manageLink).toBeVisible();
+  await manageLink.click();
+  await expect(page).toHaveURL(/\/energy-analysis\/optimization/);
+});

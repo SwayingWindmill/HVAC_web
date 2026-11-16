@@ -160,6 +160,10 @@ const expectedOperations = {
   updateSiteControlMode: ['put', '/api/v1/sites/{siteId}/control-mode'],
   executeSiteControlShutdown: ['post', '/api/v1/sites/{siteId}/control-shutdown'],
   updateAssetControlLock: ['put', '/api/v1/assets/{assetId}/control-lock'],
+  getSiteAutoControlLease: ['get', '/api/v1/sites/{siteId}/optimization/auto-control-lease'],
+  armSiteAutoControlLease: ['put', '/api/v1/sites/{siteId}/optimization/auto-control-lease'],
+  revokeSiteAutoControlLease: ['post', '/api/v1/sites/{siteId}/optimization/auto-control-lease/revoke'],
+  listSiteOptimizationExecutionMonitors: ['get', '/api/v1/sites/{siteId}/optimization/execution-monitors'],
 };
 const operations = {};
 for (const [operationId, [method, path]] of Object.entries(expectedOperations)) {
@@ -208,7 +212,12 @@ const expectedSuccessSchemas = {
   updateSiteControlMode: 'SiteControlModeMutationResponse',
   executeSiteControlShutdown: 'SiteControlShutdownResponse',
   updateAssetControlLock: 'AssetControlLockMutationResponse',
+  getLatestSiteOptimizationPreparationV212: 'OptimizationPreparation',
   getLatestSiteOptimizationStagingRecommendations: 'StagingEvaluation',
+  getSiteAutoControlLease: 'SiteAutoControlLeaseState',
+  armSiteAutoControlLease: 'SiteAutoControlLeaseState',
+  revokeSiteAutoControlLease: 'SiteAutoControlLeaseState',
+  listSiteOptimizationExecutionMonitors: 'OptimizationExecutionMonitorList',
 };
 for (const [operationId, schemaName] of Object.entries(expectedSuccessSchemas)) {
   invariant(schemaRef(operations[operationId].operation, '200') === `#/components/schemas/${schemaName}`, `${operationId} success schema is unsupported`);
@@ -297,6 +306,24 @@ const schemaRequirements = {
     ['tenantId', 'siteId', 'evaluatedAt', 'confirmationMode', 'recommendations', 'diagnostics'],
     ['tenantId', 'siteId', 'evaluatedAt', 'confirmationMode', 'siteControlMode', 'recommendations', 'diagnostics'],
   ],
+  OptimizationPreparationResponseCoefficient: [['status', 'calibratedAt']],
+  OptimizationPreparationTenantStrategy: [['status']],
+  OptimizationPreparation: [['trigger', 'status', 'reason', 'firedAt', 'completedAt', 'responseCoefficient', 'tenantStrategy']],
+  AutoControlLease: [
+    ['id', 'tenantId', 'siteId', 'status', 'armedBy', 'armedAt', 'expiresAt', 'allowedCapabilities', 'maxSetpointStepC', 'supplyTempMinC', 'supplyTempMaxC', 'zoneTempMaxC', 'minRunningChillers', 'maxCommandsPerHour', 'revision', 'createdAt', 'updatedAt'],
+    ['id', 'tenantId', 'siteId', 'status', 'armedBy', 'armedAt', 'expiresAt', 'allowedCapabilities', 'maxSetpointStepC', 'supplyTempMinC', 'supplyTempMaxC', 'zoneTempMaxC', 'minRunningChillers', 'maxCommandsPerHour', 'tripReason', 'revision', 'createdAt', 'updatedAt'],
+  ],
+  SiteAutoControlLeaseState: [['tenantId', 'siteId', 'confirmationMode', 'activeLease', 'latestLease']],
+  ArmAutoControlLeaseRequest: [
+    ['allowedCapabilities', 'supplyTempMinC', 'supplyTempMaxC', 'reason', 'verificationCode'],
+    ['expiresInHours', 'expiresAt', 'allowedCapabilities', 'maxSetpointStepC', 'supplyTempMinC', 'supplyTempMaxC', 'zoneTempMaxC', 'minRunningChillers', 'maxCommandsPerHour', 'reason', 'verificationCode', 'expectedRevision'],
+  ],
+  RevokeAutoControlLeaseRequest: [['reason'], ['reason', 'expectedRevision']],
+  OptimizationExecutionMonitor: [
+    ['id', 'tenantId', 'siteId', 'leaseId', 'recommendationId', 'commandIntentId', 'deviceId', 'targetCapability', 'zoneTempMaxC', 'supplyTempMaxC', 'startedAt', 'windowEndsAt', 'status', 'createdAt', 'updatedAt'],
+    ['id', 'tenantId', 'siteId', 'leaseId', 'recommendationId', 'commandIntentId', 'deviceId', 'targetCapability', 'baselineSupplyTempC', 'appliedSupplyTempC', 'restoreSupplyTempC', 'zoneTempMaxC', 'supplyTempMaxC', 'startedAt', 'windowEndsAt', 'lastCheckedAt', 'telemetryUnhealthySince', 'status', 'tripReason', 'rollbackCommandIntentId', 'createdAt', 'updatedAt'],
+  ],
+  OptimizationExecutionMonitorList: [['tenantId', 'siteId', 'items']],
   FieldError: [['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'reason', 'fieldErrors']],
 };
@@ -460,6 +487,9 @@ const replacements = {
   __SITE_CONTROL_MODE_PATH__: operations.updateSiteControlMode.path,
   __SITE_CONTROL_SHUTDOWN_PATH__: operations.executeSiteControlShutdown.path,
   __ASSET_CONTROL_LOCK_PATH__: operations.updateAssetControlLock.path,
+  __SITE_AUTO_CONTROL_LEASE_PATH__: operations.getSiteAutoControlLease.path,
+  __SITE_AUTO_CONTROL_LEASE_REVOKE_PATH__: operations.revokeSiteAutoControlLease.path,
+  __SITE_OPTIMIZATION_EXECUTION_MONITORS_PATH__: operations.listSiteOptimizationExecutionMonitors.path,
 };
 
 function render(template) {
