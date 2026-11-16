@@ -17,21 +17,15 @@ for (const meter of METERS) {
 }
 const POINT_UNITS = { min_voltage_mv: "mV", min_rssi_dbm: "dBm" };
 const ENERGY_BASELINE = { "ammeter-unit4": 76938 };
+const METER_CONTROLLERS = { "ammeter-unit4": "ctrl-chiller-a", "ammeter-unit3": "ctrl-chiller-b", "ammeter-unit1": "ctrl-chiller-c", "ammeter-unit2": "ctrl-chiller-d" };
 
 // 温度复制映射须与 deploy/sites/songyaxuan.site.json 的 from 一致
 const COPIES = {
   temperature: {
-    t1: [["ammeter-unit4", "chw_leaving_temperature"]],
-    t2: [["ammeter-unit3", "chw_leaving_temperature"]],
-    t3: [["ammeter-unit1", "chw_leaving_temperature"]],
-    t4: [["ammeter-unit2", "chw_leaving_temperature"]],
-    t6: [["ammeter-unit4", "cw_leaving_temperature"]],
-    t7: [["ammeter-unit3", "cw_leaving_temperature"]],
-    t8: [["ammeter-unit1", "cw_leaving_temperature"]],
-    t9: [["ammeter-unit2", "cw_leaving_temperature"]],
+    ...Object.fromEntries([["t1", "t6", "ammeter-unit4"], ["t2", "t7", "ammeter-unit3"], ["t3", "t8", "ammeter-unit1"], ["t4", "t9", "ammeter-unit2"]].flatMap(([chw, cw, m]) => [[chw, [[m, "chw_leaving_temperature"]]], [cw, [[m, "cw_leaving_temperature"]]]])),
     t10: [["ammeter-unit4", "chw_entering_temperature_branch"]],
-    t16: METERS.map((meter) => [meter, "chw_entering_temperature"]),
-    t5: METERS.map((meter) => [meter, "cw_entering_temperature"]),
+    t16: METERS.map((m) => [m, "chw_entering_temperature"]),
+    t5: METERS.map((m) => [m, "cw_entering_temperature"]),
     t12: [["cooling-tower", "cooling_tower_leaving_temperature"]],
     t13: [["cooling-tower", "cooling_tower_entering_temperature"]],
     t15: [["outdoor", "ambient_temperature"]],
@@ -43,17 +37,12 @@ const COPIES = {
 const COPY_UNITS = { temperature: "Cel", waterflow: "m3/h" };
 
 // 没接探头或停用的通道不上报（如 20 备用、52 离线停用）。
-const SPARE = {
-  temperature: ["t20", "t52"],
-  "temperature-voltage": ["v20", "v52"],
-  "temperature-rssi": ["rssi20", "rssi52"],
-  "temperature-status": ["status20", "status52"],
-};
+const SPARE_PREFIX = { temperature: "t", "temperature-voltage": "v", "temperature-rssi": "rssi", "temperature-status": "status" };
 
 const runState = (running) => (running ? "RUNNING" : "STOPPED");
 const statePoint = (running) => ({ code: "run_state", value: runState(running), quality: 0 });
-const DO_CONTROLLERS = { u11: "ctrl-chwp-1", u12: "ctrl-cwp-1", u13: "ctrl-tower-1", u21: "ctrl-chwp-2", u22: "ctrl-cwp-2", u23: "ctrl-tower-2", u31: "ctrl-chwp-3", u32: "ctrl-cwp-3", u33: "ctrl-tower-3", u41: "ctrl-chwp-4", u42: "ctrl-cwp-4", u43: "ctrl-tower-4" };
-const METER_CONTROLLERS = { "ammeter-unit4": "ctrl-chiller-a", "ammeter-unit3": "ctrl-chiller-b", "ammeter-unit1": "ctrl-chiller-c", "ammeter-unit2": "ctrl-chiller-d" };
+const DO_CONTROLLERS = Object.fromEntries([1, 2, 3, 4].flatMap((i) => [[`u${i}1`, `ctrl-chwp-${i}`], [`u${i}2`, `ctrl-cwp-${i}`], [`u${i}3`, `ctrl-tower-${i}`]]));
+const SHARED_AUX_KW = { "ammeter-unit1": { u31: 15, u32: 15, u33: 4 }, "ammeter-unit2": { u41: 15, u42: 15, u43: 4 } };
 const extract = (entryVal) => {
   if (entryVal !== null && typeof entryVal === "object") {
     return {
@@ -103,6 +92,15 @@ const entry = (deviceId, deviceTimestamp, devicePoints) => ({ deviceId, deviceTi
 const entries = [];
 const copies = {};
 const statusValues = source["temperature-status"]?.[0]?.values || null;
+const et1010Coils = { ...(context.get("et1010Coils") || {}) };
+const etValues = source.et1010?.[0]?.values;
+if (etValues) {
+  for (const ch of ["u31", "u32", "u33", "u41", "u42", "u43"]) {
+    const v = numValue(etValues, ch);
+    if (Number.isFinite(v)) et1010Coils[ch] = v > 0 ? 1 : 0;
+  }
+  context.set("et1010Coils", et1010Coils);
+}
 const isOfflineChannel = (device, key) => {
   if (!statusValues || (device !== "temperature" && device !== "temperature-voltage" && device !== "temperature-rssi")) return false;
   const match = /^[a-z]+(\d+)$/.exec(key);
@@ -110,12 +108,17 @@ const isOfflineChannel = (device, key) => {
   return extract(statusValues[`status${match[1]}`]).value === "OFFLINE";
 };
 
+const isFreshMeter = (reading, nowTs, needEnergy) =>
+  Boolean(reading && Number.isFinite(reading.ts) && nowTs - reading.ts <= METER_FRESH_MS && Number.isFinite(reading.power) && (!needEnergy || Number.isFinite(reading.energy)));
+const roundTo = (value, scale) => Math.round(value * scale) / scale;
+
 for (const [device, samples] of Object.entries(source)) {
   const mapping = DEVICES[device];
   if (!mapping || !Array.isArray(samples) || !samples[0] || !samples[0].values) continue;
   const sample = samples[0];
   const baseline = ENERGY_BASELINE[device];
-  const spare = SPARE[device] || [];
+  const sparePrefix = SPARE_PREFIX[device];
+  const isMeter = METERS.includes(device);
   const points = [];
 
   for (const [key, entryVal] of Object.entries(sample.values)) {
@@ -125,7 +128,7 @@ for (const [device, samples] of Object.entries(source)) {
       if (!mapping.codes[key]) continue;
       [code, unit] = mapping.codes[key];
     }
-    if (spare.includes(key)) continue;
+    if (sparePrefix && (key === `${sparePrefix}20` || key === `${sparePrefix}52`)) continue;
 
     let { value, quality } = extract(entryVal);
     if (baseline !== undefined && key === "combinedActiveTotalElectricalEnergy" && typeof value === "number" && Number.isFinite(value)) {
@@ -137,12 +140,9 @@ for (const [device, samples] of Object.entries(source)) {
 
     if (quality === null) {
       // An unconnected temperature input reads 0, and offline probe voltage/RSSI registers are not live readings.
-      if ((device === "temperature" && value === 0) || isOfflineChannel(device, key)) quality = 1;
-      else quality = 0;
+      quality = (device === "temperature" && value === 0) || isOfflineChannel(device, key) ? 1 : 0;
     }
-    const point = { code, value, quality };
-    if (unit) point.unit = unit;
-    points.push(point);
+    points.push(unit ? { code, value, quality, unit } : { code, value, quality });
   }
   const doVals = device === "et1010"
     ? Object.entries(DO_CONTROLLERS).flatMap(([ch, ctrl]) => {
@@ -155,9 +155,11 @@ for (const [device, samples] of Object.entries(source)) {
 
   const powerTotal = numValue(sample.values, "powerTotal");
   let meterRunning = null;
-  if (METERS.includes(device) && Number.isFinite(powerTotal)) {
+  if (isMeter && Number.isFinite(powerTotal)) {
     const meterRunState = { ...(context.get("meterRunState") || {}) };
-    meterRunning = meterRunState[device] ? powerTotal > CHILLER_STOP_KW : powerTotal > CHILLER_START_RUN_KW;
+    const auxKw = Object.entries(SHARED_AUX_KW[device] || {}).reduce((sum, [ch, kw]) => sum + ((et1010Coils[ch] || 0) > 0 ? kw : 0), 0);
+    const chillerKw = Math.max(0, powerTotal - auxKw);
+    meterRunning = meterRunState[device] ? chillerKw > CHILLER_STOP_KW : chillerKw > CHILLER_START_RUN_KW;
     meterRunState[device] = meterRunning;
     context.set("meterRunState", meterRunState);
     points.push(statePoint(meterRunning));
@@ -174,25 +176,16 @@ for (const [device, samples] of Object.entries(source)) {
       copies[target].points.push({ code, value: parsed.value, quality: 0, unit: COPY_UNITS[device] });
     }
   }
-  if (device === "waterflow" && copies["chwp-main"]) {
-    const flowMeter = numValue(sample.values, "flowMeter");
-    if (Number.isFinite(flowMeter)) {
-      copies["chwp-main"].points.push(statePoint(flowMeter > 10));
-    }
-  }
-
-  const isFreshMeter = (reading, nowTs) =>
-    Boolean(reading && Number.isFinite(reading.ts) && nowTs - reading.ts <= METER_FRESH_MS && Number.isFinite(reading.power) && Number.isFinite(reading.energy));
 
   // 4台冷冻机组电表在 15 分钟内都有新鲜读数时合计为总电表（用于对账）
-  if (METERS.includes(device)) {
+  if (isMeter) {
     const energy = numValue(sample.values, "combinedActiveTotalElectricalEnergy") - (baseline || 0);
     const latest = context.get("meterLatest") || {};
     latest[device] = { ts: sample.ts, power: powerTotal, energy };
     context.set("meterLatest", latest);
     const readings = METERS.map((meter) => latest[meter]);
-    if (readings.every((reading) => isFreshMeter(reading, sample.ts))) {
-      const sum = (field) => Math.round(readings.reduce((total, reading) => total + reading[field], 0) * 1000) / 1000;
+    if (readings.every((reading) => isFreshMeter(reading, sample.ts, true))) {
+      const sum = (field) => roundTo(readings.reduce((total, reading) => total + reading[field], 0), 1000);
       entries.push(entry("ammeter-total", sample.ts, [
         { code: "power_total", value: sum("power"), quality: 0, unit: "kW" },
         { code: "active_energy_total", value: sum("energy"), quality: 0, unit: "kWh" },
@@ -203,26 +196,21 @@ for (const [device, samples] of Object.entries(source)) {
   // 制冷量计算：1.163 × 冷水流量(m³/h) × (总管回水 t16 − 总管供水 t18)
   if (device === "waterflow") {
     const flowMeter = numValue(sample.values, "flowMeter");
-    if (Number.isFinite(flowMeter)) context.set("latestFlow", { ts: sample.ts, value: flowMeter });
+    if (Number.isFinite(flowMeter)) {
+      context.set("latestFlow", { ts: sample.ts, value: flowMeter });
+      if (copies["chwp-main"]) copies["chwp-main"].points.push(statePoint(flowMeter > 10));
+    }
   }
   if (device === "temperature") {
     const flow = context.get("latestFlow");
     const meters = context.get("meterLatest") || {};
-    const freshMeters = METERS.map((meter) => meters[meter]).filter(
-      (reading) => reading && Number.isFinite(reading.ts) && sample.ts - reading.ts <= METER_FRESH_MS && Number.isFinite(reading.power),
-    );
-    const plantPower = freshMeters.length > 0
-      ? freshMeters.reduce((total, reading) => total + reading.power, 0) : null;
+    const freshMeters = METERS.map((meter) => meters[meter]).filter((reading) => isFreshMeter(reading, sample.ts, false));
+    const plantPower = freshMeters.length > 0 ? freshMeters.reduce((total, reading) => total + reading.power, 0) : null;
     const t18 = extract(sample.values.t18);
     const t16 = extract(sample.values.t16);
-    const supply = t18.value;
-    const returnTemperature = t16.value;
-    const goodTemps = typeof supply === "number" && typeof returnTemperature === "number"
-      && supply > 0 && returnTemperature > 0
-      && (t18.quality ?? 0) === 0 && (t16.quality ?? 0) === 0
-      && !isOfflineChannel("temperature", "t18") && !isOfflineChannel("temperature", "t16");
-    if (flow && sample.ts - flow.ts <= 180000 && plantPower !== null && goodTemps) {
-      const difference = returnTemperature - supply;
+    const goodTemp = (t, key) => typeof t.value === "number" && t.value > 0 && (t.quality ?? 0) === 0 && !isOfflineChannel("temperature", key);
+    if (flow && sample.ts - flow.ts <= 180000 && plantPower !== null && goodTemp(t18, "t18") && goodTemp(t16, "t16")) {
+      const difference = t16.value - t18.value;
       const capacity = plantPower > 20 ? Math.max(0, 1.163 * flow.value * difference) : 0;
       const cooling = context.get("cooling") || { energy: 0, previous: null };
       if (cooling.previous && sample.ts - cooling.previous.ts <= 600000) {
@@ -231,12 +219,12 @@ for (const [device, samples] of Object.entries(source)) {
       cooling.previous = { ts: sample.ts, capacity };
       context.set("cooling", cooling);
       entries.push(entry("btu-calc", sample.ts, [
-        { code: "supply_water_temperature", value: supply, quality: 0, unit: "Cel" },
-        { code: "return_water_temperature", value: returnTemperature, quality: 0, unit: "Cel" },
-        { code: "temperature_difference", value: Math.round(difference * 100) / 100, quality: 0, unit: "K" },
+        { code: "supply_water_temperature", value: t18.value, quality: 0, unit: "Cel" },
+        { code: "return_water_temperature", value: t16.value, quality: 0, unit: "Cel" },
+        { code: "temperature_difference", value: roundTo(difference, 100), quality: 0, unit: "K" },
         { code: "flow_rate", value: flow.value, quality: 0, unit: "m3/h" },
-        { code: "instant_cooling_capacity", value: Math.round(capacity * 10) / 10, quality: 0, unit: "kW" },
-        { code: "accumulated_cooling_energy", value: Math.round(cooling.energy * 1000) / 1000, quality: 0, unit: "kWh" },
+        { code: "instant_cooling_capacity", value: roundTo(capacity, 10), quality: 0, unit: "kW" },
+        { code: "accumulated_cooling_energy", value: roundTo(cooling.energy, 1000), quality: 0, unit: "kWh" },
       ]));
     }
   }

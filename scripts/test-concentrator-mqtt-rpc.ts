@@ -11,6 +11,7 @@ import {
   type EIDSlot,
   type ModbusBusClient,
 } from '../edge/node-red/concentrator-mqtt-rpc.ts';
+import { BUS_PRIORITY_PULSE_RESET, Rs485BusLock } from '../edge/node-red/rs485-bus-lock.ts';
 
 class FakeModbusConcentrator implements ModbusBusClient {
   holding = new Map<number, Map<number, number>>();
@@ -360,4 +361,75 @@ test('MQTT envelope helper rejects gatewayId mismatch, expires stale RPC, and se
   assert.equal(r1?.reply.status, 'OK');
   assert.equal(r2?.reply.status, 'OK');
   assert.equal(fake.maxConcurrentCalls, 1);
+});
+
+test('Edge RPC rejects NaN/Infinity/missing expireAt, expireAt <= issuedAt, and invalid issuedAt with zero Modbus calls', async () => {
+  const fake = new FakeModbusConcentrator(1);
+  let now = 5000;
+  const exec = new ConcentratorRpcExecutor(fake, { settleMs: 0, now: () => now });
+  const base: ConcentratorRPCRequest = {
+    schemaVersion: '1.0',
+    requestId: REQ_ID,
+    gatewayId: GW_ID,
+    unitId: 1,
+    operation: 'READ_EIDS',
+    issuedAt: 4000,
+    expireAt: 6000,
+  };
+
+  const omittedExpire = { ...base };
+  Reflect.deleteProperty(omittedExpire, 'expireAt');
+  for (const expireAt of [Number.NaN, Number.POSITIVE_INFINITY, 4000, 3999, 5000]) {
+    const res = await exec.execute({ ...base, expireAt });
+    assert.equal(res.status, 'FAILED');
+    assert.equal(res.errorCode, 'CONCENTRATOR_RPC_EXPIRED');
+  }
+  const missingExpireRes = await exec.execute(omittedExpire);
+  assert.equal(missingExpireRes.status, 'FAILED');
+  assert.equal(missingExpireRes.errorCode, 'CONCENTRATOR_RPC_EXPIRED');
+
+  const badIssued = await exec.execute({ ...base, issuedAt: Number.NaN });
+  assert.equal(badIssued.status, 'REJECTED');
+  assert.equal(badIssued.errorCode, 'CONCENTRATOR_REQUEST_INVALID');
+  assert.equal(fake.maxConcurrentCalls, 0);
+});
+
+test('ConcentratorRpcExecutor shares Rs485BusLock with higher-priority callers', async () => {
+  const fake = new FakeModbusConcentrator(1);
+  const busLock = new Rs485BusLock();
+  const sharedExec = new ConcentratorRpcExecutor(fake, { settleMs: 0, now: () => 5000, busLock });
+  const req: ConcentratorRPCRequest = {
+    schemaVersion: '1.0',
+    requestId: REQ_ID,
+    gatewayId: GW_ID,
+    unitId: 1,
+    operation: 'READ_EIDS',
+    issuedAt: 4000,
+    expireAt: 6000,
+  };
+  const events: string[] = [];
+  let blockerEntered!: () => void;
+  const blockerStarted = new Promise<void>((resolve) => {
+    blockerEntered = resolve;
+  });
+  let releaseBlocker!: () => void;
+  const blocker = busLock.runExclusive(0, () => new Promise<void>((resolve) => {
+    events.push('blocker-start');
+    blockerEntered();
+    releaseBlocker = () => {
+      events.push('blocker-end');
+      resolve();
+    };
+  }));
+  await blockerStarted;
+  const queuedRpc = sharedExec.execute(req).then((res) => {
+    events.push(`rpc-${res.status}`);
+    return res;
+  });
+  const urgentTask = busLock.runExclusive(BUS_PRIORITY_PULSE_RESET, async () => {
+    events.push('urgent-pulse-reset');
+  });
+  releaseBlocker();
+  await Promise.all([blocker, queuedRpc, urgentTask]);
+  assert.deepEqual(events, ['blocker-start', 'blocker-end', 'urgent-pulse-reset', 'rpc-OK']);
 });
