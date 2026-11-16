@@ -122,13 +122,20 @@ type FrozenSafetyConstraints struct {
 	ModelDeploymentRevisionID string             `json:"modelDeploymentRevisionId"`
 }
 
+type SiteResponseCalibration struct {
+	Status       string `json:"status,omitempty"`
+	Source       string `json:"source,omitempty"`
+	CalibratedAt string `json:"calibratedAt,omitempty"`
+}
+
 type policyContract struct {
-	Comfort                ComfortConstraints     `json:"comfort"`
-	Safety                 SafetyConstraints      `json:"safety"`
-	InputMapping           InputMapping           `json:"inputMapping"`
-	MaintenanceConstraints MaintenanceConstraints `json:"maintenanceConstraints"`
-	ManualLocks            ManualLocks            `json:"manualLocks"`
-	ResponseModel          HVACResponseModel      `json:"responseModel"`
+	Comfort                ComfortConstraints                 `json:"comfort"`
+	Safety                 SafetyConstraints                  `json:"safety"`
+	InputMapping           InputMapping                       `json:"inputMapping"`
+	MaintenanceConstraints MaintenanceConstraints             `json:"maintenanceConstraints"`
+	ManualLocks            ManualLocks                        `json:"manualLocks"`
+	ResponseModel          HVACResponseModel                  `json:"responseModel"`
+	SiteCalibrations       map[string]SiteResponseCalibration `json:"siteCalibrations,omitempty"`
 }
 
 // EnergyDayEvidence is the Site-local day the baseline is priced at: its electricity and the cost

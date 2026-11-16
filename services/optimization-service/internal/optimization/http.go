@@ -96,8 +96,7 @@ func (handler *HTTPHandler) handleLatestRecommendation(writer http.ResponseWrite
 	_ = json.NewEncoder(writer).Encode(result)
 }
 
-// handleLatestPreparation says how the Site's latest schedule firing went, and which input was
-// missing when it could not prepare a run.
+// handleLatestPreparation returns the Site's latest schedule firing and readiness status.
 func (handler *HTTPHandler) handleLatestPreparation(writer http.ResponseWriter, request *http.Request, site identitycontext.SiteContext) {
 	result, err := handler.service.LatestPreparation(request.Context(), site.TenantID, site.SiteID)
 	if errors.Is(err, ErrPreparationNotFound) {
