@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -44,5 +45,126 @@ WHERE id = $1::uuid AND tenant_id = $2::uuid AND status = 'ACTIVE'
 	}
 	facts.PolicyRevision = adapter.policyRevision
 	result.AuthorizationFacts = facts
+	return result, nil
+}
+
+func (adapter *postgresCommandAuthorizationStore) LookupCommandWorkloadAuthorization(ctx context.Context, lookup CommandWorkloadAuthorizationLookup) (CommandWorkloadAuthorizationFacts, error) {
+	result := CommandWorkloadAuthorizationFacts{
+		PolicyRevision:              adapter.policyRevision,
+		EmergencyRevocationRevision: adapter.emergencyRevocationRevision,
+	}
+	facts, err := adapter.store.lookupAccess(ctx, AuthorizationLookup{
+		SubjectIssuer: lookup.SubjectIssuer,
+		Subject:       lookup.Subject,
+		TenantID:      lookup.TenantID,
+		At:            lookup.Now,
+	}, nil, func(transaction pgx.Tx, authFacts *AuthorizationFacts) error {
+		if err := setRequestedDevices(ctx, transaction, []string{lookup.DeviceID}); err != nil {
+			return err
+		}
+		err := transaction.QueryRow(ctx, `
+SELECT site_id::text
+FROM core_registry.devices
+WHERE id = $1::uuid AND tenant_id = $2::uuid AND status = 'ACTIVE'
+`, lookup.DeviceID, lookup.TenantID).Scan(&result.DeviceSiteID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("read IAM Command workload target Device: %w", err)
+		}
+		if result.DeviceSiteID == "" || result.DeviceSiteID != lookup.SiteID {
+			return nil
+		}
+
+		err = transaction.QueryRow(ctx, `
+SELECT mode
+FROM core_registry.site_control_states
+WHERE tenant_id = $1::uuid AND site_id = $2::uuid
+`, lookup.TenantID, lookup.SiteID).Scan(&result.SiteControlMode)
+		if errors.Is(err, pgx.ErrNoRows) {
+			result.SiteControlMode = "REMOTE_AUTO"
+		} else if err != nil {
+			return fmt.Errorf("read Site control state for Command workload: %w", err)
+		}
+
+		if err := transaction.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM core_registry.device_bindings AS b
+  JOIN core_registry.asset_control_locks AS l
+    ON l.tenant_id = b.tenant_id AND l.site_id = b.site_id AND l.asset_id = b.asset_id
+  WHERE b.tenant_id = $1::uuid
+    AND b.site_id = $2::uuid
+    AND b.device_id = $3::uuid
+    AND b.status = 'ACTIVE'
+    AND b.valid_to IS NULL
+    AND l.lock_mode <> 'UNLOCKED'
+)`, lookup.TenantID, lookup.SiteID, lookup.DeviceID).Scan(&result.HasAssetControlLock); err != nil {
+			return fmt.Errorf("read Asset control locks for Command workload: %w", err)
+		}
+
+		var lease AutoControlLeaseFacts
+		if lookup.IsRollback {
+			err = transaction.QueryRow(ctx, `
+SELECT l.id::text, l.armed_by::text, l.expires_at, l.allowed_capabilities,
+       l.max_setpoint_step_c, l.supply_temp_min_c, l.supply_temp_max_c, l.max_commands_per_hour,
+       EXISTS (
+         SELECT 1
+         FROM core_registry.optimization_execution_monitors m
+         WHERE m.tenant_id = l.tenant_id
+           AND m.site_id = l.site_id
+           AND m.lease_id = l.id
+           AND m.device_id = $3::uuid
+           AND m.status = 'OBSERVING'
+           AND ($4::double precision IS NULL OR abs(m.restore_supply_temp_c - $4::double precision) <= 0.001)
+       )
+FROM core_registry.site_auto_control_leases AS l
+WHERE l.tenant_id = $1::uuid AND l.site_id = $2::uuid AND l.status = 'ACTIVE'
+ORDER BY l.armed_at DESC, l.id DESC
+LIMIT 1
+`, lookup.TenantID, lookup.SiteID, lookup.DeviceID, lookup.RequestedSetpoint).Scan(
+				&lease.ID, &lease.ArmedBy, &lease.ExpiresAt, &lease.AllowedCapabilities,
+				&lease.MaxSetpointStepC, &lease.SupplyTempMinC, &lease.SupplyTempMaxC, &lease.MaxCommandsPerHour,
+				&result.MatchingObservingRollback,
+			)
+		} else {
+			err = transaction.QueryRow(ctx, `
+SELECT id::text, armed_by::text, expires_at, allowed_capabilities,
+       max_setpoint_step_c, supply_temp_min_c, supply_temp_max_c, max_commands_per_hour
+FROM core_registry.site_auto_control_leases
+WHERE tenant_id = $1::uuid AND site_id = $2::uuid
+  AND status = 'ACTIVE' AND expires_at > $3
+ORDER BY armed_at DESC, id DESC
+LIMIT 1
+`, lookup.TenantID, lookup.SiteID, lookup.Now).Scan(
+				&lease.ID, &lease.ArmedBy, &lease.ExpiresAt, &lease.AllowedCapabilities,
+				&lease.MaxSetpointStepC, &lease.SupplyTempMinC, &lease.SupplyTempMaxC, &lease.MaxCommandsPerHour,
+			)
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("read Site auto-control lease for Command workload: %w", err)
+		}
+		if err == nil {
+			result.ActiveLease = &lease
+		}
+
+		windowStart := lookup.WindowStart
+		if windowStart.IsZero() {
+			windowStart = lookup.Now.Add(-time.Hour)
+		}
+		if err := transaction.QueryRow(ctx, `
+SELECT count(*)::int
+FROM core_registry.optimization_execution_monitors
+WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND started_at >= $3
+`, lookup.TenantID, lookup.SiteID, windowStart).Scan(&result.RecentAutoCommandsLastHour); err != nil {
+			return fmt.Errorf("count recent automated Commands: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return CommandWorkloadAuthorizationFacts{}, err
+	}
+	result.PrincipalFound = facts.Found
+	result.PrincipalID = facts.Principal.ID
+	result.PrincipalStatus = facts.Principal.Status
+	result.TenantMemberActive, _ = facts.member(lookup.TenantID, lookup.Now)
 	return result, nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/commandauth"
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
@@ -22,6 +25,7 @@ import (
 
 const (
 	publicOptimizationRunsPath      = "/api/v1/optimization/runs"
+	defaultOptimizationWorkloadID   = "spiffe://hvac.local/optimization-service"
 	defaultIntelligenceTimeout      = 8 * time.Second
 	maximumIntelligenceRequestBytes = int64(256 << 10)
 	maximumIntelligenceResponse     = int64(8 << 20)
@@ -149,6 +153,25 @@ func matchPublicIntelligenceRoute(method, path string) (publicIntelligenceRoute,
 	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/staging-recommendations/latest", "{siteId}"); ok {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, siteID: siteID, target: "optimization-staging", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/staging-recommendations/latest"}, method == http.MethodGet
 	}
+	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/auto-control-lease", "{siteId}"); ok {
+		switch method {
+		case http.MethodGet:
+			return publicIntelligenceRoute{owner: ownershipregistry.OwnerCore, siteID: siteID, target: "auto-control-lease", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/auto-control-lease"}, true
+		case http.MethodPut:
+			return publicIntelligenceRoute{owner: ownershipregistry.OwnerCore, siteID: siteID, target: "auto-control-lease-write", method: http.MethodPut, publicPath: "/api/v1/sites/{siteId}/optimization/auto-control-lease"}, true
+		default:
+			return publicIntelligenceRoute{}, false
+		}
+	}
+	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/auto-control-lease/revoke", "{siteId}"); ok {
+		return publicIntelligenceRoute{owner: ownershipregistry.OwnerCore, siteID: siteID, target: "auto-control-lease-revoke", method: http.MethodPost, publicPath: "/api/v1/sites/{siteId}/optimization/auto-control-lease/revoke"}, method == http.MethodPost
+	}
+	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/execution-monitors", "{siteId}"); ok {
+		return publicIntelligenceRoute{owner: ownershipregistry.OwnerCore, siteID: siteID, target: "optimization-execution-monitors", method: http.MethodGet, publicPath: "/api/v1/sites/{siteId}/optimization/execution-monitors"}, method == http.MethodGet
+	}
+	if siteID, ok := matchSinglePathParameter(path, "/api/v1/sites/{siteId}/optimization/auto-commands", "{siteId}"); ok {
+		return publicIntelligenceRoute{owner: ownershipregistry.OwnerCommand, siteID: siteID, target: "optimization-auto-command", method: http.MethodPost, publicPath: "/api/v1/sites/{siteId}/optimization/auto-commands"}, method == http.MethodPost
+	}
 	if path == publicOptimizationRunsPath {
 		return publicIntelligenceRoute{owner: ownershipregistry.OwnerOptimization, method: http.MethodPost, publicPath: publicOptimizationRunsPath}, method == http.MethodPost
 	}
@@ -177,7 +200,32 @@ func matchFDDLinkPath(path string) (string, string, bool) {
 
 func dispatchIntelligenceRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicIntelligenceRoute) {
 	decision := routeDecisionFromContext(request.Context())
-	if decision.SelectedOwner != route.owner || h.intelligence == nil {
+	if decision.SelectedOwner != route.owner {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "INTELLIGENCE_UNAVAILABLE", "Intelligence unavailable", "The Intelligence route is not active for this Session.", true, nil)
+		return
+	}
+	if route.target == "optimization-auto-command" {
+		h.serveOptimizationAutoCommand(writer, request, route)
+		return
+	}
+	if route.owner == ownershipregistry.OwnerCore {
+		session, ok := h.intelligenceSession(writer, request, route.method != http.MethodGet)
+		if !ok {
+			return
+		}
+		switch route.target {
+		case "auto-control-lease":
+			h.serveAutoControlLeaseRead(writer, request, session, route)
+		case "auto-control-lease-write":
+			h.serveAutoControlLeaseArm(writer, request, session, route)
+		case "auto-control-lease-revoke":
+			h.serveAutoControlLeaseRevoke(writer, request, session, route)
+		case "optimization-execution-monitors":
+			h.serveOptimizationExecutionMonitorsRead(writer, request, session, route)
+		}
+		return
+	}
+	if h.intelligence == nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "INTELLIGENCE_UNAVAILABLE", "Intelligence unavailable", "The Intelligence route is not active for this Session.", true, nil)
 		return
 	}
@@ -627,4 +675,368 @@ func contextWithTimeout(parent context.Context, timeout time.Duration) (context.
 // Site has no result yet" (RESOURCE_NOT_FOUND).
 func writeRouteWithoutOwner(writer http.ResponseWriter, request *http.Request) {
 	writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route has no configured owner.", false, nil)
+}
+
+type armAutoControlLeasePublicRequest struct {
+	ExpiresInHours      int      `json:"expiresInHours,omitempty"`
+	ExpiresAt           string   `json:"expiresAt,omitempty"`
+	AllowedCapabilities []string `json:"allowedCapabilities"`
+	MaxSetpointStepC    *float64 `json:"maxSetpointStepC,omitempty"`
+	SupplyTempMinC      float64  `json:"supplyTempMinC"`
+	SupplyTempMaxC      float64  `json:"supplyTempMaxC"`
+	ZoneTempMaxC        *float64 `json:"zoneTempMaxC,omitempty"`
+	MinRunningChillers  *int     `json:"minRunningChillers,omitempty"`
+	MaxCommandsPerHour  *int     `json:"maxCommandsPerHour,omitempty"`
+	Reason              string   `json:"reason"`
+	VerificationCode    string   `json:"verificationCode"`
+	ExpectedRevision    *int64   `json:"expectedRevision,omitempty"`
+}
+
+type revokeAutoControlLeasePublicRequest struct {
+	Reason           string `json:"reason"`
+	ExpectedRevision *int64 `json:"expectedRevision,omitempty"`
+}
+
+type optimizationAutoCommandRequest struct {
+	TenantID             string                         `json:"tenantId"`
+	DeviceID             string                         `json:"deviceId"`
+	PointID              string                         `json:"pointId"`
+	Capability           commandmodel.Capability        `json:"capability"`
+	Parameters           commandmodel.CommandParameters `json:"parameters,omitempty"`
+	VerificationPointKey string                         `json:"verificationPointKey"`
+	IdempotencyKey       string                         `json:"idempotencyKey"`
+	IsRollback           bool                           `json:"isRollback,omitempty"`
+	CurrentState         commandCurrentState            `json:"currentState"`
+	CommandGrant         string                         `json:"commandGrant"`
+}
+
+func (h *handler) serveAutoControlLeaseRead(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
+	if !isLowerUUIDv7(route.siteID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	auth, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
+	if failure != nil {
+		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
+			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+			return
+		}
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+		return
+	}
+	if _, allowed := auth.allowedSiteIDs[route.siteID]; !allowed {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	status, raw, callFailure := h.callCoreControlRegistry(request.Context(), http.MethodGet, "/internal/v1/registry/sites/"+url.PathEscape(route.siteID)+"/auto-control-lease", auth.coreGrant, nil, routeRevisionFromRequest(request))
+	if callFailure != nil {
+		h.writeCommandFailure(writer, request, *callFailure)
+		return
+	}
+	if status != http.StatusOK {
+		h.writeCoreControlRegistryError(writer, request, status, raw)
+		return
+	}
+	h.writeIntelligenceResult(writer, request, raw, status, nil)
+}
+
+func (h *handler) serveOptimizationExecutionMonitorsRead(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
+	if !isLowerUUIDv7(route.siteID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	auth, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
+	if failure != nil {
+		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
+			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+			return
+		}
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+		return
+	}
+	if _, allowed := auth.allowedSiteIDs[route.siteID]; !allowed {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	status, raw, callFailure := h.callCoreControlRegistry(request.Context(), http.MethodGet, "/internal/v1/registry/sites/"+url.PathEscape(route.siteID)+"/optimization-execution-monitors", auth.coreGrant, nil, routeRevisionFromRequest(request))
+	if callFailure != nil {
+		h.writeCommandFailure(writer, request, *callFailure)
+		return
+	}
+	if status != http.StatusOK {
+		h.writeCoreControlRegistryError(writer, request, status, raw)
+		return
+	}
+	h.writeIntelligenceResult(writer, request, raw, status, nil)
+}
+
+func (h *handler) serveAutoControlLeaseArm(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
+	if !isLowerUUIDv7(route.siteID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	auth, ok := h.authorizeSiteControlExitWrite(writer, request, session, route.siteID, "Schedule manage authorization is required to arm automatic control leases.")
+	if !ok {
+		return
+	}
+	raw, err := readBoundedBody(request.Body, maximumIntelligenceRequestBytes)
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "AUTO_CONTROL_LEASE_REQUEST_INVALID", "Auto control lease request invalid", "The auto control lease request is too large or unreadable.", false, nil)
+		return
+	}
+	var input armAutoControlLeasePublicRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureIntelligenceJSONEOF(decoder) != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "AUTO_CONTROL_LEASE_REQUEST_INVALID", "Auto control lease request invalid", "The auto control lease request payload is invalid.", false, nil)
+		return
+	}
+	if totpFailure := h.verifySubmitStepUpTOTP(request, session, input.VerificationCode); totpFailure != nil {
+		h.writeCommandFailure(writer, request, *totpFailure)
+		return
+	}
+	reason, meta, metaFailure := h.resolveControlExitMeta(request, input.Reason, input.ExpectedRevision, nil, func() (int64, *commandFailure) {
+		readAuth, readFail := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
+		if readFail != nil {
+			f := commandFailure{status: readFail.status, code: readFail.code, title: readFail.title, detail: readFail.detail, retryable: readFail.retryable}
+			return 0, &f
+		}
+		status, currentRaw, callFail := h.callCoreControlRegistry(request.Context(), http.MethodGet, "/internal/v1/registry/sites/"+url.PathEscape(route.siteID)+"/auto-control-lease", readAuth.coreGrant, nil, routeRevisionFromRequest(request))
+		if callFail != nil {
+			return 0, callFail
+		}
+		if status != http.StatusOK {
+			return 0, nil
+		}
+		var state struct {
+			ActiveLease *struct {
+				Revision int64 `json:"revision"`
+			} `json:"activeLease"`
+		}
+		if json.Unmarshal(currentRaw, &state) == nil && state.ActiveLease != nil {
+			return state.ActiveLease.Revision, nil
+		}
+		return 0, nil
+	})
+	if metaFailure != nil {
+		h.writeCommandFailure(writer, request, *metaFailure)
+		return
+	}
+	payload := map[string]any{
+		"expiresInHours":      input.ExpiresInHours,
+		"expiresAt":           input.ExpiresAt,
+		"allowedCapabilities": input.AllowedCapabilities,
+		"maxSetpointStepC":    input.MaxSetpointStepC,
+		"supplyTempMinC":      input.SupplyTempMinC,
+		"supplyTempMaxC":      input.SupplyTempMaxC,
+		"zoneTempMaxC":        input.ZoneTempMaxC,
+		"minRunningChillers":  input.MinRunningChillers,
+		"maxCommandsPerHour":  input.MaxCommandsPerHour,
+		"reason":              reason,
+		"meta":                meta,
+	}
+	status, respRaw, callFailure := h.callCoreControlRegistry(request.Context(), http.MethodPut, "/internal/v1/registry/sites/"+url.PathEscape(route.siteID)+"/auto-control-lease", auth.coreGrant, payload, routeRevisionFromRequest(request))
+	if callFailure != nil {
+		h.writeCommandFailure(writer, request, *callFailure)
+		return
+	}
+	if status != http.StatusOK && status != http.StatusCreated {
+		h.writeCoreControlRegistryError(writer, request, status, respRaw)
+		return
+	}
+	h.writeIntelligenceResult(writer, request, respRaw, http.StatusOK, nil)
+}
+
+func (h *handler) serveAutoControlLeaseRevoke(writer http.ResponseWriter, request *http.Request, session bffSession, route publicIntelligenceRoute) {
+	if !isLowerUUIDv7(route.siteID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	auth, ok := h.authorizeSiteControlExitWrite(writer, request, session, route.siteID, "Schedule manage authorization is required to revoke automatic control leases.")
+	if !ok {
+		return
+	}
+	raw, err := readBoundedBody(request.Body, maximumIntelligenceRequestBytes)
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "AUTO_CONTROL_LEASE_REQUEST_INVALID", "Auto control lease request invalid", "The auto control lease revoke request is too large or unreadable.", false, nil)
+		return
+	}
+	var input revokeAutoControlLeasePublicRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureIntelligenceJSONEOF(decoder) != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "AUTO_CONTROL_LEASE_REQUEST_INVALID", "Auto control lease request invalid", "The auto control lease revoke request payload is invalid.", false, nil)
+		return
+	}
+	reason, meta, metaFailure := h.resolveControlExitMeta(request, input.Reason, input.ExpectedRevision, nil, func() (int64, *commandFailure) {
+		return 0, nil
+	})
+	if metaFailure != nil {
+		h.writeCommandFailure(writer, request, *metaFailure)
+		return
+	}
+	payload := map[string]any{
+		"reason": reason,
+		"meta":   meta,
+	}
+	status, respRaw, callFailure := h.callCoreControlRegistry(request.Context(), http.MethodPost, "/internal/v1/registry/sites/"+url.PathEscape(route.siteID)+"/auto-control-lease/revoke", auth.coreGrant, payload, routeRevisionFromRequest(request))
+	if callFailure != nil {
+		h.writeCommandFailure(writer, request, *callFailure)
+		return
+	}
+	if status != http.StatusOK {
+		h.writeCoreControlRegistryError(writer, request, status, respRaw)
+		return
+	}
+	h.writeIntelligenceResult(writer, request, respRaw, http.StatusOK, nil)
+}
+
+func (h *handler) serveOptimizationAutoCommand(writer http.ResponseWriter, request *http.Request, route publicIntelligenceRoute) {
+	if hasSessionCredential(request) || strings.TrimSpace(request.Header.Get("X-Forwarded-For")) != "" || strings.TrimSpace(request.Header.Get("X-Forwarded-Proto")) != "" {
+		writeProblem(writer, request, http.StatusForbidden, "OPTIMIZATION_WORKLOAD_FORBIDDEN", "Optimization workload forbidden", "Automated optimization commands cannot be invoked through a user session or edge proxy.", false, nil)
+		return
+	}
+	if request.TLS != nil {
+		spiffeID, _, ok := verifiedTelemetryWorkloadIdentity(request)
+		if !ok || spiffeID != defaultOptimizationWorkloadID {
+			writeProblem(writer, request, http.StatusForbidden, "OPTIMIZATION_WORKLOAD_FORBIDDEN", "Optimization workload forbidden", "The calling TLS workload certificate is not authorized.", false, nil)
+			return
+		}
+	}
+	if !isLowerUUIDv7(route.siteID) {
+		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		return
+	}
+	if h.command == nil || h.identity == nil {
+		writeProblem(writer, request, http.StatusServiceUnavailable, "COMMAND_UNAVAILABLE", "Command service unavailable", "Command dispatch is not configured on this Gateway.", true, nil)
+		return
+	}
+	raw, err := readBoundedBody(request.Body, maximumIntelligenceRequestBytes)
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The automated Command request is too large or unreadable.", false, nil)
+		return
+	}
+	var input optimizationAutoCommandRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureIntelligenceJSONEOF(decoder) != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The automated Command request body is invalid.", false, nil)
+		return
+	}
+	profile, supported := commandmodel.CapabilityProfileFor(input.Capability)
+	if !isLowerUUIDv7(input.TenantID) || !isLowerUUIDv7(input.DeviceID) || !isLowerUUIDv7(input.PointID) ||
+		strings.TrimSpace(input.IdempotencyKey) == "" || strings.TrimSpace(input.VerificationPointKey) == "" ||
+		!supported || !commandmodel.ParametersValid(input.Capability, input.Parameters) {
+		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "The automated Command target or parameters are invalid.", false, nil)
+		return
+	}
+	if input.IsRollback && !strings.HasPrefix(input.IdempotencyKey, "auto-rollback:") {
+		writeProblem(writer, request, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", "Command request invalid", "Rollback automated Commands must use an auto-rollback idempotency key.", false, nil)
+		return
+	}
+	if !input.IsRollback {
+		if input.CurrentState.EvaluationAvailability != "AVAILABLE" || input.CurrentState.Presence != "ONLINE" ||
+			input.CurrentState.Readiness != "CURRENT" || input.CurrentState.Quality != "GOOD" {
+			writeProblem(writer, request, http.StatusConflict, "COMMAND_CURRENT_STATE_UNSAFE", "Current state unsafe", "Live telemetry current-state preconditions are incomplete or unhealthy.", false, nil)
+			return
+		}
+	}
+	if input.CurrentState.BusinessRevision == 0 || input.CurrentState.ObservedAt.IsZero() ||
+		(profile.ParameterKey != "" && input.CurrentState.CurrentValue == nil) {
+		writeProblem(writer, request, http.StatusConflict, "COMMAND_CURRENT_STATE_UNSAFE", "Current state unsafe", "Live telemetry current-state evidence is incomplete.", false, nil)
+		return
+	}
+	claims, ok := parseOptimizationWorkloadCommandGrant(
+		input.CommandGrant, h.command.iamGrantIssuer, h.identity.config.ExecutingWorkloadSPIFFE,
+		h.command.backendAudience, defaultOptimizationWorkloadID,
+		input.TenantID, route.siteID, input.DeviceID, input.Capability, profile.Revision, h.now().UTC(),
+	)
+	if !ok {
+		writeProblem(writer, request, http.StatusForbidden, "COMMAND_AUTHORIZATION_DENIED", "Command authorization denied", "A valid IAM-signed optimization workload Command grant is required.", false, nil)
+		return
+	}
+	prepared := preparedCommand{
+		tenantID:             input.TenantID,
+		siteID:               route.siteID,
+		deviceID:             input.DeviceID,
+		pointID:              input.PointID,
+		principalID:          claims.PrincipalID,
+		idempotencyKey:       input.IdempotencyKey,
+		capability:           input.Capability,
+		parameters:           input.Parameters,
+		verificationPointKey: input.VerificationPointKey,
+		currentState:         input.CurrentState,
+		grant:                input.CommandGrant,
+	}
+	view, status, location, cmdFailure := h.executeCommandCreate(request.Context(), prepared)
+	if cmdFailure != nil {
+		h.writeCommandFailure(writer, request, *cmdFailure)
+		return
+	}
+	if location != "" {
+		writer.Header().Set("Location", location)
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, status, view)
+}
+
+func parseOptimizationWorkloadCommandGrant(
+	grant string,
+	issuer string,
+	presenter string,
+	audience string,
+	workloadSPIFFE string,
+	tenantID string,
+	siteID string,
+	deviceID string,
+	capability commandmodel.Capability,
+	capabilityRevision string,
+	now time.Time,
+) (commandauth.GrantClaims, bool) {
+	if grant == "" || len(grant) > commandauth.MaximumEncodedGrantSize {
+		return commandauth.GrantClaims{}, false
+	}
+	parts := strings.Split(grant, ".")
+	if len(parts) != 2 {
+		return commandauth.GrantClaims{}, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return commandauth.GrantClaims{}, false
+	}
+	if sig, err := base64.RawURLEncoding.DecodeString(parts[1]); err != nil || len(sig) == 0 {
+		return commandauth.GrantClaims{}, false
+	}
+	var claims commandauth.GrantClaims
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&claims) != nil || ensureIntelligenceJSONEOF(decoder) != nil {
+		return commandauth.GrantClaims{}, false
+	}
+	valid := claims.Version == commandauth.GrantVersion &&
+		claims.Issuer == issuer &&
+		claims.Presenter == presenter &&
+		claims.Audience == audience &&
+		claims.WorkloadSPIFFE == workloadSPIFFE &&
+		claims.LeaseID != "" &&
+		claims.ArmedBy != "" &&
+		claims.GrantID != "" &&
+		claims.TokenID != "" &&
+		claims.PrincipalID != "" &&
+		claims.Purpose == commandmodel.AuthorizationCommandSubmit &&
+		claims.TenantID == tenantID &&
+		claims.SiteID == siteID &&
+		claims.DeviceID == deviceID &&
+		claims.Capability == capability &&
+		claims.CapabilityRevision == capabilityRevision &&
+		!claims.Transitive &&
+		commandauth.RiskOrdinal(commandmodel.RiskLow) <= commandauth.RiskOrdinal(claims.MaximumRisk) &&
+		claims.IssuedAt <= now.Add(5*time.Second).Unix() &&
+		claims.ExpiresAt > now.Unix() &&
+		claims.ExpiresAt > claims.IssuedAt &&
+		time.Duration(claims.ExpiresAt-claims.IssuedAt)*time.Second <= commandauth.MaximumGrantLifetime
+	if !valid {
+		return commandauth.GrantClaims{}, false
+	}
+	return claims, true
 }

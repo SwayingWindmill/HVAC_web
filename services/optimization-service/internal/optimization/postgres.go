@@ -359,6 +359,10 @@ WHERE r.tenant_id=$1::uuid AND r.site_id=$2::uuid AND r.optimization_run_id=$3::
 	if commandIntentID != nil {
 		result.Recommendation.CommandIntentID = *commandIntentID
 	}
+	if !result.Recommendation.CreatedAt.IsZero() {
+		validUntil := result.Recommendation.CreatedAt.UTC().Add(intelligencemodel.DefaultRecommendationTTL)
+		result.Recommendation.ValidUntil = &validUntil
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return PublishedRecommendation{}, err
 	}

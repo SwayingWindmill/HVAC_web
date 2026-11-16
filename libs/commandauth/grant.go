@@ -35,6 +35,9 @@ type GrantClaims struct {
 	ExpiresAt                   int64                             `json:"expiresAt"`
 	TokenID                     string                            `json:"tokenId"`
 	Transitive                  bool                              `json:"transitive"`
+	WorkloadSPIFFE              string                            `json:"workloadSpiffe,omitempty"`
+	LeaseID                     string                            `json:"leaseId,omitempty"`
+	ArmedBy                     string                            `json:"armedBy,omitempty"`
 }
 
 type UseStatus struct {

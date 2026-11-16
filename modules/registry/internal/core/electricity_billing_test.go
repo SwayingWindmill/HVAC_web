@@ -318,6 +318,12 @@ func (*memoryBillingBackend) SaveSiteControlMode(context.Context, registryauth.G
 func (*memoryBillingBackend) SaveAssetControlLock(context.Context, registryauth.GrantClaims, AssetControlLockMutation) (AssetControlLockState, bool, error) {
 	return AssetControlLockState{}, false, ErrInvalidMutation
 }
+func (*memoryBillingBackend) ArmSiteAutoControlLease(context.Context, registryauth.GrantClaims, ArmAutoControlLeaseMutation) (SiteAutoControlLeaseState, bool, error) {
+	return SiteAutoControlLeaseState{}, false, ErrInvalidMutation
+}
+func (*memoryBillingBackend) RevokeSiteAutoControlLease(context.Context, registryauth.GrantClaims, RevokeAutoControlLeaseMutation) (SiteAutoControlLeaseState, bool, error) {
+	return SiteAutoControlLeaseState{}, false, ErrInvalidMutation
+}
 
 func newBillingHTTPClient(t *testing.T, backend *memoryBillingBackend) scheduleHTTPClient {
 	t.Helper()

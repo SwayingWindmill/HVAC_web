@@ -99,7 +99,7 @@ func (HVACRecommendationSolver) Recommend(_ context.Context, request Request, at
 			"windowMinutes": 30, "requiredSignals": []string{"supply_temperature", "zone_temperature", "site_load"},
 			"successCriteria": []string{"zone_temperature_within_frozen_constraint", "site_load_not_worse_than_baseline"},
 		},
-		Approval: intelligencemodel.RecommendationDraft, CreatedAt: at.UTC(),
+		Approval: intelligencemodel.RecommendationDraft, ValidUntil: timePointer(at.UTC().Add(intelligencemodel.DefaultRecommendationTTL)), CreatedAt: at.UTC(),
 	}
 	if err := recommendation.ValidateForApproval(); err != nil {
 		return Recommendation{}, err
@@ -449,4 +449,9 @@ func deterministicV7(namespace, value string, at time.Time) string {
 	bytes[8] = (bytes[8] & 0x3f) | 0x80
 	hexValue := hex.EncodeToString(bytes)
 	return fmt.Sprintf("%s-%s-%s-%s-%s", hexValue[0:8], hexValue[8:12], hexValue[12:16], hexValue[16:20], hexValue[20:32])
+}
+
+func timePointer(at time.Time) *time.Time {
+	copyAt := at.UTC()
+	return &copyAt
 }

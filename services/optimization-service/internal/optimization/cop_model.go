@@ -582,7 +582,7 @@ func (solver COPModelSolver) Evaluate(ctx context.Context, request Request, at t
 			"windowMinutes": 30, "requiredSignals": []string{"supply_temperature", "zone_temperature", "site_load"},
 			"successCriteria": []string{"zone_temperature_within_frozen_constraint", "site_load_not_worse_than_baseline"},
 		},
-		Approval: intelligencemodel.RecommendationDraft, CreatedAt: at.UTC(),
+		Approval: intelligencemodel.RecommendationDraft, ValidUntil: timePointer(at.UTC().Add(intelligencemodel.DefaultRecommendationTTL)), CreatedAt: at.UTC(),
 	}
 	if err = recommendation.ValidateForApproval(); err != nil {
 		evaluation.Outcome, evaluation.Reason = ShadowInfeasible, err.Error()

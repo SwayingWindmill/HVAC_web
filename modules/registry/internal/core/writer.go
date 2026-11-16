@@ -621,4 +621,6 @@ type RegistryWriter interface {
 	ConfirmUtilityBill(context.Context, registryauth.GrantClaims, ConfirmUtilityBillRequest) (UtilityBill, bool, error)
 	SaveSiteControlMode(context.Context, registryauth.GrantClaims, SiteControlModeMutation) (SiteControlState, bool, error)
 	SaveAssetControlLock(context.Context, registryauth.GrantClaims, AssetControlLockMutation) (AssetControlLockState, bool, error)
+	ArmSiteAutoControlLease(context.Context, registryauth.GrantClaims, ArmAutoControlLeaseMutation) (SiteAutoControlLeaseState, bool, error)
+	RevokeSiteAutoControlLease(context.Context, registryauth.GrantClaims, RevokeAutoControlLeaseMutation) (SiteAutoControlLeaseState, bool, error)
 }
