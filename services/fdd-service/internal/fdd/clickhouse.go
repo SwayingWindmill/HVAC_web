@@ -10,12 +10,16 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
 
 // A day's window of a loop and a dozen gate devices is about 17k rows of ~300 bytes.
 const maximumEvidenceResponseBytes = int64(8 << 20)
+
+var telemetryKeyPattern = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,128}$`)
 
 // ClickHouseEvidence reads a loop's window from the Telemetry history owner tables with FDD's
 // own read-only account (ADR 0020); the query, not the account, scopes it to a Tenant and Site.
@@ -40,10 +44,16 @@ func NewClickHouseEvidence(baseURL, username, password string, client *http.Clie
 	return &ClickHouseEvidence{baseURL: parsed, username: strings.TrimSpace(username), password: password, client: client}, nil
 }
 
-// WindowSamples reads each device's last authoritative observation of each key per minute: the
-// loop's supply, return and cooling load and the gate devices' power and run state.
+// WindowSamples reads each device's last authoritative observation of each key per minute: either
+// the explicit (device_id, telemetry_key) pairs resolved from SiteTwin, or the default loop/gate keys.
 func (evidence *ClickHouseEvidence) WindowSamples(ctx context.Context, query WindowQuery) ([]Sample, error) {
-	for _, value := range append([]string{query.TenantID, query.SiteID, query.LoopDeviceID}, query.GateDeviceIDs...) {
+	if !uuidPattern.MatchString(query.TenantID) || !uuidPattern.MatchString(query.SiteID) {
+		return nil, errors.New("FDD evidence scope must be UUIDs")
+	}
+	if query.LoopDeviceID != "" && !uuidPattern.MatchString(query.LoopDeviceID) {
+		return nil, errors.New("FDD evidence scope must be UUIDs")
+	}
+	for _, value := range query.GateDeviceIDs {
 		if !uuidPattern.MatchString(value) {
 			return nil, errors.New("FDD evidence scope must be UUIDs")
 		}
@@ -51,13 +61,26 @@ func (evidence *ClickHouseEvidence) WindowSamples(ctx context.Context, query Win
 	if !query.To.After(query.From) {
 		return nil, errors.New("FDD evidence window is invalid")
 	}
-	scope := fmt.Sprintf("(device_id=toUUID('%s') AND telemetry_key IN ('%s','%s','%s'))", query.LoopDeviceID, supplyTemperatureKey, returnTemperatureKey, coolingLoadKey)
-	if len(query.GateDeviceIDs) > 0 {
-		devices := make([]string, 0, len(query.GateDeviceIDs))
-		for _, device := range query.GateDeviceIDs {
-			devices = append(devices, "toUUID('"+device+"')")
+
+	var scope string
+	if len(query.Points) > 0 {
+		var err error
+		scope, err = buildPointScope(query.Points)
+		if err != nil {
+			return nil, err
 		}
-		scope += fmt.Sprintf(" OR (device_id IN (%s) AND telemetry_key IN ('%s','%s'))", strings.Join(devices, ","), powerTotalKey, runStateKey)
+	} else {
+		if !uuidPattern.MatchString(query.LoopDeviceID) {
+			return nil, errors.New("FDD evidence scope must be UUIDs")
+		}
+		scope = fmt.Sprintf("(device_id=toUUID('%s') AND telemetry_key IN ('%s','%s','%s'))", query.LoopDeviceID, supplyTemperatureKey, returnTemperatureKey, coolingLoadKey)
+		if len(query.GateDeviceIDs) > 0 {
+			devices := make([]string, 0, len(query.GateDeviceIDs))
+			for _, device := range query.GateDeviceIDs {
+				devices = append(devices, "toUUID('"+device+"')")
+			}
+			scope += fmt.Sprintf(" OR (device_id IN (%s) AND telemetry_key IN ('%s','%s'))", strings.Join(devices, ","), powerTotalKey, runStateKey)
+		}
 	}
 	// Aliases differ from column names so WHERE reads the columns, not the aggregates.
 	latest := "(sampled_at,received_at,source_offset)"
@@ -119,6 +142,48 @@ func decodeSamples(body []byte) ([]Sample, error) {
 		samples = append(samples, sample)
 	}
 	return samples, scanner.Err()
+}
+
+func buildPointScope(points []PointRef) (string, error) {
+	byDevice := make(map[string]map[string]struct{})
+	for _, pt := range points {
+		if !uuidPattern.MatchString(pt.DeviceID) {
+			return "", errors.New("FDD evidence point deviceId must be a UUID")
+		}
+		if !telemetryKeyPattern.MatchString(pt.Key) {
+			return "", fmt.Errorf("FDD evidence telemetry key %q is invalid", pt.Key)
+		}
+		keys := byDevice[pt.DeviceID]
+		if keys == nil {
+			keys = make(map[string]struct{})
+			byDevice[pt.DeviceID] = keys
+		}
+		keys[pt.Key] = struct{}{}
+	}
+	if len(byDevice) == 0 {
+		return "", errors.New("FDD evidence query has no points")
+	}
+	devices := make([]string, 0, len(byDevice))
+	for deviceID := range byDevice {
+		devices = append(devices, deviceID)
+	}
+	sort.Strings(devices)
+
+	clauses := make([]string, 0, len(devices))
+	for _, deviceID := range devices {
+		keySet := byDevice[deviceID]
+		keys := make([]string, 0, len(keySet))
+		for key := range keySet {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		quoted := make([]string, 0, len(keys))
+		for _, key := range keys {
+			quoted = append(quoted, "'"+key+"'")
+		}
+		clauses = append(clauses, fmt.Sprintf("(device_id=toUUID('%s') AND telemetry_key IN (%s))", deviceID, strings.Join(quoted, ",")))
+	}
+	return strings.Join(clauses, " OR "), nil
 }
 
 func (evidence *ClickHouseEvidence) query(ctx context.Context, sql string) ([]byte, error) {

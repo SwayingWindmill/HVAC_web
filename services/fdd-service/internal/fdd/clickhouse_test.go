@@ -65,3 +65,55 @@ func TestClickHouseEvidenceReadsTheWindowPerMinuteForTheLoopAndItsGates(t *testi
 		t.Fatal("a gate device that is not a UUID reached the query")
 	}
 }
+
+func TestClickHouseEvidenceReadsExplicitSplitPointBindings(t *testing.T) {
+	var sql string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		sql = string(body)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	evidence, err := NewClickHouseEvidence(server.URL, "fdd_service_reader", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	to := time.Date(2026, 10, 16, 0, 30, 0, 0, time.UTC)
+	tempDev := "019a0000-4000-7000-8000-000000000001"
+	meterDev := "019a0000-4000-7000-8000-000000000002"
+	ctrlDev := "019a0000-4000-7000-8000-000000000003"
+	query := WindowQuery{
+		TenantID: songyaxuanTenant,
+		SiteID:   songyaxuanSite,
+		Points: []PointRef{
+			{DeviceID: tempDev, Key: "t18"},
+			{DeviceID: tempDev, Key: "t16"},
+			{DeviceID: meterDev, Key: "kw_ch1"},
+			{DeviceID: ctrlDev, Key: "di_run"},
+		},
+		From: to.Add(-25 * time.Minute),
+		To:   to,
+	}
+	if _, err := evidence.WindowSamples(t.Context(), query); err != nil {
+		t.Fatal(err)
+	}
+	for _, wantClause := range []string{
+		"(device_id=toUUID('" + tempDev + "') AND telemetry_key IN ('t16','t18'))",
+		"(device_id=toUUID('" + meterDev + "') AND telemetry_key IN ('kw_ch1'))",
+		"(device_id=toUUID('" + ctrlDev + "') AND telemetry_key IN ('di_run'))",
+	} {
+		if !strings.Contains(sql, wantClause) {
+			t.Fatalf("expected split device scope %s in SQL:\n%s", wantClause, sql)
+		}
+	}
+	for _, forbidden := range []string{supplyTemperatureKey, returnTemperatureKey, powerTotalKey, runStateKey} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("explicit point query unexpectedly fell back to default key %q:\n%s", forbidden, sql)
+		}
+	}
+
+	query.Points = []PointRef{{DeviceID: tempDev, Key: "bad'key"}}
+	if _, err := evidence.WindowSamples(t.Context(), query); err == nil {
+		t.Fatal("invalid telemetry key reached ClickHouse query")
+	}
+}

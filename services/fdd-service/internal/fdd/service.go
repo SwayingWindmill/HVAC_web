@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 )
 
@@ -34,8 +35,6 @@ type FindingFilter struct {
 type Store interface {
 	// CurrentRule is the Tenant's latest low-delta-T rule revision in effect at a time.
 	CurrentRule(ctx context.Context, tenantID, siteID string, at time.Time) (RuleRevision, error)
-	// OperatingTopology is the Site's active chillers and chilled-water pumps and their bound devices at a time.
-	OperatingTopology(ctx context.Context, tenantID, siteID string, at time.Time) (Topology, error)
 	InsertFinding(context.Context, intelligencemodel.FDDFinding) error
 	// RecentFinding is the latest finding of a type for an asset and rule whose window ended at or after since.
 	RecentFinding(ctx context.Context, tenantID, siteID, assetID, findingType, ruleRevisionID string, since time.Time) (intelligencemodel.FDDFinding, bool, error)
@@ -43,13 +42,14 @@ type Store interface {
 	LinkFinding(context.Context, string, string, string, string, string, time.Time) (intelligencemodel.FDDFinding, error)
 }
 
-// WindowQuery asks for the per-minute samples of the loop's meter (supply, return, cooling load)
-// and of the gate devices (power, run state) from From up to, not including, To.
+// WindowQuery asks for the per-minute samples of the loop and gate points from From up to,
+// not including, To.
 type WindowQuery struct {
 	TenantID      string
 	SiteID        string
 	LoopDeviceID  string
 	GateDeviceIDs []string
+	Points        []PointRef
 	From          time.Time
 	To            time.Time
 }
@@ -61,13 +61,17 @@ type EvidenceSource interface {
 
 type Service struct {
 	store    Store
+	twins    planttwin.Loader
 	evidence EvidenceSource
 	now      func() time.Time
 }
 
-func NewService(store Store, evidence EvidenceSource, now func() time.Time) (*Service, error) {
+func NewService(store Store, twins planttwin.Loader, evidence EvidenceSource, now func() time.Time) (*Service, error) {
 	if store == nil {
 		return nil, errors.New("FDD store is required")
+	}
+	if twins == nil {
+		return nil, errors.New("FDD plant twin loader is required")
 	}
 	if evidence == nil {
 		return nil, errors.New("FDD evidence source is required")
@@ -75,7 +79,7 @@ func NewService(store Store, evidence EvidenceSource, now func() time.Time) (*Se
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: store, evidence: evidence, now: now}, nil
+	return &Service{store: store, twins: twins, evidence: evidence, now: now}, nil
 }
 
 // CurrentRule is the low-delta-T rule revision in effect for the Site's Tenant now.
@@ -95,22 +99,53 @@ func (service *Service) EvaluateLowDeltaT(ctx context.Context, request Evaluatio
 	if err != nil {
 		return EvaluationResult{}, fmt.Errorf("read the low-delta-T rule: %w", err)
 	}
-	topology, err := service.store.OperatingTopology(ctx, request.TenantID, request.SiteID, at)
+	twin, err := service.twins.LoadSiteTwin(ctx, planttwin.SiteScope{TenantID: request.TenantID, SiteID: request.SiteID}, at)
 	if err != nil {
-		return EvaluationResult{}, fmt.Errorf("read the Site's operating topology: %w", err)
+		return EvaluationResult{}, fmt.Errorf("read the Site's semantic plant twin: %w", err)
 	}
 	from, to := WindowMinutes(rule, at)
-	hold := max(rule.OperatingGates.TemperatureHoldMinutes, rule.OperatingGates.GateHoldMinutes)
-	samples, err := service.evidence.WindowSamples(ctx, WindowQuery{
-		TenantID: request.TenantID, SiteID: request.SiteID, LoopDeviceID: request.DeviceID, GateDeviceIDs: topology.DeviceIDs(),
-		From: from.Add(-time.Duration(hold) * time.Minute), To: to,
-	})
+	schedEval, err := evaluateTwinSchedule(twin, to)
 	if err != nil {
-		return EvaluationResult{}, fmt.Errorf("read loop evidence: %w", err)
+		return EvaluationResult{}, fmt.Errorf("evaluate operating schedule: %w", err)
+	}
+	if suppressionCode, suppressed := scheduleSuppressionReason(schedEval); suppressed {
+		return EvaluationResult{
+			Status: StatusNotOperating,
+			Rule:   rule,
+			Window: suppressedWindowAssessment(rule, schedEval, suppressionCode),
+		}, nil
+	}
+
+	topology := resolveTopologyFromTwin(twin, request)
+	hold := max(rule.OperatingGates.TemperatureHoldMinutes, rule.OperatingGates.GateHoldMinutes)
+	points := topology.PointRefs()
+	var samples []Sample
+	if len(points) > 0 {
+		samples, err = service.evidence.WindowSamples(ctx, WindowQuery{
+			TenantID:      request.TenantID,
+			SiteID:        request.SiteID,
+			LoopDeviceID:  request.DeviceID,
+			GateDeviceIDs: topology.DeviceIDs(),
+			Points:        points,
+			From:          from.Add(-time.Duration(hold) * time.Minute),
+			To:            to,
+		})
+		if err != nil {
+			return EvaluationResult{}, fmt.Errorf("read loop evidence: %w", err)
+		}
 	}
 	window, err := AssessWindow(rule, topology, request.DeviceID, samples, at)
 	if err != nil {
 		return EvaluationResult{}, err
+	}
+	if schedEval.OperatingState != planttwin.OperatingStateUnconfigured {
+		window.ScheduleState = schedEval.OperatingState
+		window.Gates = append(window.Gates, GateOutcome{
+			Gate:          OperatingScheduleGate,
+			Applied:       true,
+			Bases:         []string{schedEval.OperatingState},
+			PassedMinutes: rule.WindowMinutes,
+		})
 	}
 	result := EvaluationResult{Status: window.Status, DeltaTC: window.MeanDeltaTC, Rule: rule, Window: window}
 	if window.Status != statusLow {

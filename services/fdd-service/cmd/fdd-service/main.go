@@ -31,7 +31,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	service, err := fdd.NewService(store, evidence, time.Now)
+	service, err := fdd.NewService(store, store.TwinLoader(), evidence, time.Now)
 	if err != nil {
 		log.Fatal(err)
 	}
