@@ -742,6 +742,9 @@ func cleanupBatchIntegrationState(t *testing.T, admin *pgxpool.Pool) {
 	t.Helper()
 	ctx := t.Context()
 	statements := []string{
+		`DELETE FROM telemetry_runtime.probe_offset_estimates WHERE pair_code LIKE 'chw-batch-deadlock-%'`,
+		`DELETE FROM telemetry_runtime.probe_pair_windows WHERE pair_code LIKE 'chw-batch-deadlock-%'`,
+		`DELETE FROM telemetry_runtime.probe_pairs WHERE pair_code LIKE 'chw-batch-deadlock-%'`,
 		`DELETE FROM telemetry_runtime.telemetry_history_outbox WHERE payload ->> 'source_partition' LIKE 'tb-batch-test-%'`,
 		`DELETE FROM telemetry_runtime.source_delivery_evidence WHERE source_partition LIKE 'tb-batch-test-%'`,
 		`DELETE FROM telemetry_runtime.ingest_quarantine WHERE evidence ->> 'sourcePartition' LIKE 'tb-batch-test-%' OR device_id::text LIKE '018f2e00-9800-%'`,
@@ -1207,5 +1210,103 @@ func TestPostgresHistoricalObservationBatchPreservesSnapshot(t *testing.T) {
 	}
 	if afterValue != beforeValue || afterSHA != beforeSHA || afterSignals != beforeSignals {
 		t.Fatalf("historical batch mutated current state: value=%s->%s sha=%s->%s signals=%d->%d", beforeValue, afterValue, beforeSHA, afterSHA, beforeSignals, afterSignals)
+	}
+}
+
+func TestPostgresBatchAndProbeOffsetSweepDoNotDeadlock(t *testing.T) {
+	runtimeURL, adminURL := postgresTestURLs(t)
+	ctx := t.Context()
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	cleanupBatchIntegrationState(t, admin)
+	defer cleanupBatchIntegrationState(t, admin)
+
+	base := time.Date(2026, 7, 15, 6, 0, 0, 0, time.UTC)
+	dev1, dev2 := batchDeviceID(8), batchDeviceID(9)
+	cel := "Cel"
+	for _, devID := range []string{dev1, dev2} {
+		seedBatchIntegrationDevice(t, admin, devID, base)
+		seedBatchFreshnessPolicy(t, admin, devID, "chw_supply_temperature", "NUMBER", &cel, nil, nil, nil, base)
+		seedBatchFreshnessPolicy(t, admin, devID, "chw_return_temperature", "NUMBER", &cel, nil, nil, nil, base)
+		seedBatchFreshnessPolicy(t, admin, devID, "pump_running", "BOOLEAN", nil, nil, nil, nil, base)
+		seedBatchFreshnessPolicy(t, admin, devID, "chiller_state", "STRING", nil, nil, nil, nil, base)
+	}
+	for index, pair := range []struct {
+		code, supplyDev, returnDev string
+	}{
+		{"chw-batch-deadlock-fwd", dev1, dev2},
+		{"chw-batch-deadlock-rev", dev2, dev1},
+	} {
+		pairJSON, err := json.Marshal(map[string]any{
+			"supply":         map[string]any{"deviceId": pair.supplyDev, "key": "chw_supply_temperature"},
+			"return":         map[string]any{"deviceId": pair.returnDev, "key": "chw_return_temperature"},
+			"pumps":          []map[string]any{{"deviceId": dev1, "key": "pump_running", "equals": "true"}},
+			"chillers":       []map[string]any{{"deviceId": dev2, "key": "chiller_state", "equals": "IDLE"}},
+			"stableBandK":    0.2,
+			"minimumMinutes": 10,
+			"minimumSamples": 4,
+			"maxGapMinutes":  15,
+			"offsetAlarmK":   0.2,
+			"driftAlarmK":    0.1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := admin.Exec(ctx, `
+INSERT INTO telemetry_runtime.probe_pairs (site_id, pair_code, config, updated_at)
+VALUES ($1::uuid, $2, $3::jsonb, $4)`, siteA, pair.code, pairJSON, base.Add(time.Duration(index)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store, err := OpenPostgresStore(ctx, runtimeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const rounds = 20
+	errs := make(chan error, 2)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for round := range rounds {
+			at := base.Add(time.Duration(round+1) * time.Minute)
+			batch := []ObservationCandidate{
+				batchCandidate(400+round*4, "tb-batch-test-probe-a", int64(round*2+1), dev1, batchPointID(61), "pump_running", json.RawMessage(`true`), "BOOLEAN", nil, "STATE", at, at),
+				batchCandidate(401+round*4, "tb-batch-test-probe-a", int64(round*2+2), dev1, batchPointID(62), "chw_supply_temperature", json.RawMessage(`7.0`), "NUMBER", &cel, "TELEMETRY", at, at),
+				batchCandidate(402+round*4, "tb-batch-test-probe-b", int64(round*2+1), dev2, batchPointID(63), "chiller_state", json.RawMessage(`"IDLE"`), "STRING", nil, "STATE", at, at),
+				batchCandidate(403+round*4, "tb-batch-test-probe-b", int64(round*2+2), dev2, batchPointID(64), "chw_return_temperature", json.RawMessage(`7.3`), "NUMBER", &cel, "TELEMETRY", at, at),
+			}
+			if _, err := store.AcceptObservationBatch(ctx, batch); err != nil {
+				errs <- fmt.Errorf("batch round %d: %w", round, err)
+				return
+			}
+		}
+		errs <- nil
+	}()
+	go func() {
+		step := 0
+		for {
+			select {
+			case <-done:
+				errs <- nil
+				return
+			default:
+			}
+			if _, err := store.SweepProbeOffsets(ctx, base.Add(time.Duration(step+1)*time.Minute)); err != nil {
+				errs <- fmt.Errorf("SweepProbeOffsets step %d: %w", step, err)
+				return
+			}
+			step++
+		}
+	}()
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
 	}
 }

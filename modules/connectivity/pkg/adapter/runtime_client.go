@@ -18,7 +18,9 @@ import (
 
 const (
 	// MaxObservationBatchSize caps a single Telemetry runtime acceptBatch call.
-	MaxObservationBatchSize          = 512
+	MaxObservationBatchSize = 512
+	// MaxObservationBatchBytes keeps encoded acceptBatch requests under Telemetry's 4 MiB limit.
+	MaxObservationBatchBytes         = 3 << 20
 	sourceObservationBatchPath       = "/internal/v1/telemetry/sources/observations:acceptBatch"
 	mqttRuntimeEventPath             = "/internal/v1/telemetry/sources/mqtt/events:accept"
 	maximumTelemetryRuntimeBodyBytes = int64(2 << 20)

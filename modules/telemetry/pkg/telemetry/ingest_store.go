@@ -93,12 +93,12 @@ func (store *PostgresStore) acceptObservationBatch(ctx context.Context, candidat
 	if store == nil || store.pool == nil {
 		return nil, errors.New("telemetry runtime store is closed")
 	}
-	if len(candidates) == 0 || len(candidates) > MaxObservationBatchSize {
-		return nil, errors.New("telemetry observation batch size is invalid")
-	}
 	normalized := make([]ObservationCandidate, len(candidates))
 	payloadSHAs := make([]string, len(candidates))
 	for index, candidate := range candidates {
+		if candidate.SourcePath == SourcePathHistoryReplay {
+			candidate.ExternalID = strings.ToLower(strings.TrimSpace(candidate.ExternalID))
+		}
 		if err := validateObservationCandidate(candidate); err != nil {
 			return nil, err
 		}

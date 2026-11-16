@@ -152,13 +152,12 @@ func (store *PostgresStore) sweepOneProbePairOnce(ctx context.Context, pair conf
 	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s2_telemetry_runtime`); err != nil {
 		return false, fmt.Errorf("activate telemetry runtime database identity: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('telemetry-probe-pair:' || $1 || ':' || $2, 0))`, pair.siteID, pair.code); err != nil {
-		return false, fmt.Errorf("lock probe pair %s: %w", pair.code, err)
-	}
+	lockKeys := []string{"telemetry-probe-pair:" + pair.siteID + ":" + pair.code}
 	for _, deviceID := range orderedProbeDeviceIDs(pair.config.Supply.DeviceID, pair.config.Return.DeviceID) {
-		if err := lockDevice(ctx, tx, deviceID); err != nil {
-			return false, err
-		}
+		lockKeys = append(lockKeys, "telemetry-device:"+deviceID)
+	}
+	if err := acquireBatchAdvisoryLocks(ctx, tx, lockKeys); err != nil {
+		return false, fmt.Errorf("lock probe pair %s: %w", pair.code, err)
 	}
 	created, err := store.foldOnePair(ctx, tx, pair.siteID, pair.code, pair.config, evaluatedAt)
 	if err != nil {

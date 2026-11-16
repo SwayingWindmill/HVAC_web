@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -257,5 +258,66 @@ func TestProcessPrefixChunksSingleEnvelopeOver512Points(t *testing.T) {
 	batches := telemetry.recordedBatches()
 	if len(batches) != 3 || len(batches[0]) != 512 || len(batches[1]) != 512 || len(batches[2]) != 76 {
 		t.Fatalf("chunk sizes=%v, want [512 512 76]", []int{len(batches[0]), len(batches[1]), len(batches[2])})
+	}
+}
+
+func TestProcessorSplitsLargeBytePayloadsBelowBatchByteLimit(t *testing.T) {
+	identities := newFakeIdentities()
+	telemetry := &fakeTelemetry{}
+	processor := newTestProcessor(t, identities, telemetry)
+
+	largeValue := strings.Repeat("a", 40<<10)
+	messages := make([]UplinkMessage, 90)
+	for index := range messages {
+		payload, err := json.Marshal(map[string]any{
+			"schemaVersion": "2.0",
+			"messageId":     messageID(index + 1),
+			"gatewayId":     testGatewayA,
+			"timestamp":     1786352400000 + int64(index),
+			"sequence":      index + 1,
+			"replay":        false,
+			"payload": map[string]any{
+				"devices": []map[string]any{{
+					"deviceId":        "METER-01",
+					"deviceTimestamp": 1786352399000 + int64(index),
+					"points": []map[string]any{{
+						"code":    "status_text",
+						"value":   largeValue,
+						"quality": 0,
+					}},
+				}},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages[index] = UplinkMessage{Topic: telemetryTopic(testGatewayA), Payload: payload}
+	}
+
+	var allOutcomes []ProcessingOutcome
+	remaining := messages
+	for len(remaining) > 0 {
+		outcomes, err := processor.ProcessPrefix(context.Background(), remaining)
+		if err != nil {
+			t.Fatalf("ProcessPrefix error with %d remaining: %v", len(remaining), err)
+		}
+		allOutcomes = append(allOutcomes, outcomes...)
+		remaining = remaining[len(outcomes):]
+	}
+	if len(allOutcomes) != len(messages) {
+		t.Fatalf("processed=%d, want %d", len(allOutcomes), len(messages))
+	}
+	batches := telemetry.recordedBatches()
+	if len(batches) < 2 {
+		t.Fatalf("expected >1 byte-bounded batch for ~3.6MiB payload, got %d", len(batches))
+	}
+	for batchIndex, batch := range batches {
+		encoded, err := json.Marshal(observationBatchRequest{Observations: batch})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(encoded) > MaxObservationBatchBytes {
+			t.Fatalf("batch[%d] serialized length=%d exceeds MaxObservationBatchBytes=%d", batchIndex, len(encoded), MaxObservationBatchBytes)
+		}
 	}
 }

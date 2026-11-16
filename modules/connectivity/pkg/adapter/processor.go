@@ -233,12 +233,15 @@ func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway G
 	return outcomes, nil
 }
 
+const estimatedObservationEnvelopeOverheadBytes = 768
+
 func coalesceTelemetryBatch(gateway Gateway, firstEnvelope TelemetryEnvelope, messages []UplinkMessage) ([]Observation, []telemetryMessageBounds, error) {
 	firstObs, err := buildEnvelopeObservations(gateway.ID, firstEnvelope)
 	if err != nil {
 		return nil, nil, err
 	}
 	observations := firstObs
+	approxBytes := len(messages[0].Payload) + len(firstObs)*estimatedObservationEnvelopeOverheadBytes
 	bounds := []telemetryMessageBounds{{
 		messageID: firstEnvelope.MessageID,
 		replay:    firstEnvelope.Replay,
@@ -246,7 +249,7 @@ func coalesceTelemetryBatch(gateway Gateway, firstEnvelope TelemetryEnvelope, me
 		end:       len(observations),
 	}}
 	for index := 1; index < len(messages); index++ {
-		if len(observations) >= MaxObservationBatchSize {
+		if len(observations) >= MaxObservationBatchSize || approxBytes >= MaxObservationBatchBytes {
 			break
 		}
 		topic, err := ParseMessageTopic(messages[index].Topic)
@@ -257,7 +260,9 @@ func coalesceTelemetryBatch(gateway Gateway, firstEnvelope TelemetryEnvelope, me
 		if err != nil {
 			break
 		}
-		if len(observations)+envelopePointCount(envelope) > MaxObservationBatchSize {
+		msgCount := envelopePointCount(envelope)
+		msgApproxBytes := len(messages[index].Payload) + msgCount*estimatedObservationEnvelopeOverheadBytes
+		if len(observations)+msgCount > MaxObservationBatchSize || approxBytes+msgApproxBytes > MaxObservationBatchBytes {
 			break
 		}
 		msgObs, err := buildEnvelopeObservations(gateway.ID, envelope)
@@ -266,6 +271,7 @@ func coalesceTelemetryBatch(gateway Gateway, firstEnvelope TelemetryEnvelope, me
 		}
 		start := len(observations)
 		observations = append(observations, msgObs...)
+		approxBytes += msgApproxBytes
 		bounds = append(bounds, telemetryMessageBounds{
 			messageID: envelope.MessageID,
 			replay:    envelope.Replay,
@@ -341,16 +347,52 @@ func attachResolvedBindings(observations []Observation, gateway Gateway, binding
 	}
 }
 
+const batchRequestEnvelopeBaseBytes = len(`{"observations":[]}`)
+
+func splitObservationBatchChunks(observations []Observation, maxCount, maxBytes int) ([][]Observation, error) {
+	if len(observations) == 0 {
+		return nil, nil
+	}
+	encodedLengths := make([]int, len(observations))
+	for index, observation := range observations {
+		encoded, err := json.Marshal(observation)
+		if err != nil {
+			return nil, fmt.Errorf("encode observation for batch sizing: %w", err)
+		}
+		encodedLengths[index] = len(encoded)
+	}
+	var chunks [][]Observation
+	start := 0
+	for start < len(observations) {
+		chunkBytes := batchRequestEnvelopeBaseBytes + encodedLengths[start]
+		end := start + 1
+		for end < len(observations) && end-start < maxCount {
+			nextBytes := chunkBytes + 1 + encodedLengths[end]
+			if nextBytes > maxBytes {
+				break
+			}
+			chunkBytes = nextBytes
+			end++
+		}
+		chunks = append(chunks, observations[start:end])
+		start = end
+	}
+	return chunks, nil
+}
+
 func (processor *Processor) sendObservationBatchChunks(ctx context.Context, observations []Observation) ([]ObservationReceipt, error) {
+	chunks, err := splitObservationBatchChunks(observations, MaxObservationBatchSize, MaxObservationBatchBytes)
+	if err != nil {
+		return nil, err
+	}
 	receipts := make([]ObservationReceipt, 0, len(observations))
-	for start := 0; start < len(observations); start += MaxObservationBatchSize {
-		end := min(start+MaxObservationBatchSize, len(observations))
-		chunkReceipts, err := processor.runtime.AcceptObservationBatch(ctx, observations[start:end])
+	for _, chunk := range chunks {
+		chunkReceipts, err := processor.runtime.AcceptObservationBatch(ctx, chunk)
 		if err != nil {
 			return nil, fmt.Errorf("accept MQTT observation batch: %w", err)
 		}
-		if len(chunkReceipts) != end-start {
-			return nil, fmt.Errorf("unexpected Telemetry receipt count %d for batch size %d", len(chunkReceipts), end-start)
+		if len(chunkReceipts) != len(chunk) {
+			return nil, fmt.Errorf("unexpected Telemetry receipt count %d for batch size %d", len(chunkReceipts), len(chunk))
 		}
 		receipts = append(receipts, chunkReceipts...)
 	}
