@@ -156,3 +156,48 @@ FROM (
 ) s
 ON CONFLICT (tenant_id, aggregate_type, aggregate_id, aggregate_version, event_type) DO NOTHING;`;
 }
+
+export function isSynthesizedTotalMeter(totalMeter: unknown): boolean {
+  return Boolean(
+    totalMeter &&
+      typeof totalMeter === 'object' &&
+      !Array.isArray(totalMeter) &&
+      (totalMeter as Record<string, unknown>).kind === 'sum-of-sub-meters',
+  );
+}
+
+export function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(record)
+        .sort()
+        .map((key) => [key, canonical(record[key])]),
+    );
+  }
+  return value;
+}
+
+export function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+}
+
+export function differences(want: unknown, have: unknown, path = ''): string[] {
+  if (want && have && typeof want === 'object' && typeof have === 'object' && !Array.isArray(want)) {
+    const left = want as Record<string, unknown>;
+    const right = have as Record<string, unknown>;
+    return [...new Set([...Object.keys(left), ...Object.keys(right)])].flatMap((key) =>
+      differences(left[key], right[key], path ? `${path}.${key}` : key),
+    );
+  }
+  return sameJson(want, have) ? [] : [`${path}: 清单 ${JSON.stringify(want)}，现在 ${JSON.stringify(have)}`];
+}
+
+export function scheduleCodes(sql: string): Array<{ code: string; jobType: string }> {
+  return [...sql.matchAll(/INSERT INTO core_registry\.schedule_definitions[\s\S]*?ON CONFLICT/g)].flatMap(([block]) =>
+    [...block.matchAll(/^\s*(?:SELECT |\()[^,]+, '([a-z0-9-]+)', '[^']*', [^,]+, [^,]+, '([A-Z_]+)'/gm)].map(
+      ([, code, jobType]) => ({ code, jobType }),
+    ),
+  );
+}

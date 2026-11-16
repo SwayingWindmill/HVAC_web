@@ -128,7 +128,7 @@ func TestPostgresGatewayTunnelAuditAndRLSIsolation(t *testing.T) {
 	}
 	defer runtimePool.Close()
 
-	// Cross-tenant RLS must hide tenantA rows from tenantB (and from empty tenant scope).
+	// Cross-tenant RLS must isolate tenantA, tenantB, and NULL-tenant rows cleanly.
 	txB, err := runtimePool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -138,11 +138,30 @@ func TestPostgresGatewayTunnelAuditAndRLSIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var countForB int
-	if err := txB.QueryRow(ctx, `SELECT count(*) FROM connectivity.gateway_tunnel_audit WHERE gateway_id = $1::uuid`, gatewayA).Scan(&countForB); err != nil {
+	if err := txB.QueryRow(ctx, `SELECT count(*) FROM connectivity.gateway_tunnel_audit WHERE gateway_id IN ($1::uuid, $2::uuid)`, gatewayA, unknownGateway).Scan(&countForB); err != nil {
 		t.Fatal(err)
 	}
 	if countForB != 0 {
-		t.Fatalf("RLS leaked %d tenantA audit rows to tenantB", countForB)
+		t.Fatalf("RLS leaked %d audit rows (tenantA or NULL-tenant) to tenantB", countForB)
+	}
+
+	txUnscoped, err := runtimePool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = txUnscoped.Rollback(ctx) }()
+	var unscopedUnknown, unscopedTenantA int
+	if err := txUnscoped.QueryRow(ctx, `SELECT count(*) FROM connectivity.gateway_tunnel_audit WHERE gateway_id = $1::uuid`, unknownGateway).Scan(&unscopedUnknown); err != nil {
+		t.Fatal(err)
+	}
+	if unscopedUnknown != 1 {
+		t.Fatalf("expected unscoped session to see 1 NULL-tenant unknownGateway row, got %d", unscopedUnknown)
+	}
+	if err := txUnscoped.QueryRow(ctx, `SELECT count(*) FROM connectivity.gateway_tunnel_audit WHERE gateway_id = $1::uuid`, gatewayA).Scan(&unscopedTenantA); err != nil {
+		t.Fatal(err)
+	}
+	if unscopedTenantA != 0 {
+		t.Fatalf("expected unscoped session to see 0 tenantA rows, got %d", unscopedTenantA)
 	}
 
 	txA, err := runtimePool.Begin(ctx)
@@ -153,11 +172,17 @@ func TestPostgresGatewayTunnelAuditAndRLSIsolation(t *testing.T) {
 	if _, err := txA.Exec(ctx, `SELECT set_config('app.tenant_id', $1, true)`, tenantA); err != nil {
 		t.Fatal(err)
 	}
-	var countForA int
+	var countForA, countUnknownForA int
 	if err := txA.QueryRow(ctx, `SELECT count(*) FROM connectivity.gateway_tunnel_audit WHERE gateway_id = $1::uuid`, gatewayA).Scan(&countForA); err != nil {
 		t.Fatal(err)
 	}
 	if countForA != 3 {
 		t.Fatalf("expected 3 tenantA tunnel audit rows (even for RETIRED gateway), got %d", countForA)
+	}
+	if err := txA.QueryRow(ctx, `SELECT count(*) FROM connectivity.gateway_tunnel_audit WHERE gateway_id = $1::uuid`, unknownGateway).Scan(&countUnknownForA); err != nil {
+		t.Fatal(err)
+	}
+	if countUnknownForA != 0 {
+		t.Fatalf("RLS leaked %d NULL-tenant rows to tenantA", countUnknownForA)
 	}
 }

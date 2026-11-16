@@ -230,6 +230,21 @@ func TestRuntimeHTTPCancelRetiredTargetAuthorizationAndDelegation(t *testing.T) 
 	if len(resp.CancelledCommandIDs) != 1 || resp.CancelledCommandIDs[0] != stub.cancelledIDs[0] {
 		t.Fatalf("unexpected response payload: %#v", resp)
 	}
+
+	for _, invalidPayload := range []string{
+		fmt.Sprintf(`{"tenantId":"not-a-uuid","siteId":%q,"deviceIds":[%q]}`, runtimeTestSite, runtimeTestDevice),
+		fmt.Sprintf(`{"tenantId":%q,"siteId":"bad-site","deviceIds":[%q]}`, runtimeTestOrganization, runtimeTestDevice),
+		fmt.Sprintf(`{"tenantId":%q,"siteId":%q,"deviceIds":["bad-device"]}`, runtimeTestOrganization, runtimeTestSite),
+		fmt.Sprintf(`{"tenantId":%q,"siteId":%q,"deviceIds":[%q,""]}`, runtimeTestOrganization, runtimeTestSite, runtimeTestDevice),
+		fmt.Sprintf(`{"tenantId":%q,"siteId":%q,"deviceIds":[]}`, runtimeTestOrganization, runtimeTestSite),
+	} {
+		badReq := runtimeRequest(t, http.MethodPost, InternalCommandCancelRetiredPath, invalidPayload, "spiffe://hvac.local/platform-core-service")
+		badRec := httptest.NewRecorder()
+		handler.ServeHTTP(badRec, badReq)
+		if badRec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for payload %s, got %d (%s)", invalidPayload, badRec.Code, badRec.Body.String())
+		}
+	}
 }
 
 func runtimeTestHandler(t *testing.T, stub RuntimeStore) http.Handler {

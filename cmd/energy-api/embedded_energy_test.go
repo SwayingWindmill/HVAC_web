@@ -2,8 +2,19 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -122,5 +133,75 @@ func TestEmbeddedCommandControlFailureNotifierPublishesIntoAlarmStore(t *testing
 	if emergAlarm == nil || emergAlarm.CurrentSeverity != alarmmodel.SeverityCritical || emergAlarm.AlarmType != "EMERGENCY_DO_RELEASE" ||
 		!strings.Contains(emergAlarm.Summary, "0195b5c0-0000-7000-8000-000000000099") {
 		t.Fatalf("expected CRITICAL EMERGENCY_DO_RELEASE alarm with actor ID, got %#v", emergAlarm)
+	}
+}
+
+func TestEmbeddedCoreOutboxRelayConnectivityCARequiredAndMTLSClientsConfigured(t *testing.T) {
+	iamPool := x509.NewCertPool()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-gateway-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPath := filepath.Join(t.TempDir(), "gateway-ca.crt")
+	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("CORE_OUTBOX_RELAY_ENABLED", "")
+	t.Setenv("CORE_TELEMETRY_RUNTIME_URL", "https://telemetry-runtime-service:8446")
+	t.Setenv("CORE_CONNECTIVITY_SERVICE_URL", "https://connectivity:8448")
+	t.Setenv("CORE_COMMAND_SERVICE_URL", "https://command-service:8447")
+	t.Setenv("CONNECTIVITY_SERVER_CA", filepath.Join(t.TempDir(), "missing.crt"))
+
+	if _, _, err := buildEmbeddedCoreOutboxRelayConfig(tls.Certificate{}, iamPool, nil, nil); err == nil {
+		t.Fatal("expected missing CONNECTIVITY_SERVER_CA to fail closed without falling back to iamPool")
+	}
+
+	t.Setenv("CONNECTIVITY_SERVER_CA", caPath)
+	cfg, enabled, err := buildEmbeddedCoreOutboxRelayConfig(tls.Certificate{}, iamPool, nil, nil)
+	if err != nil || !enabled {
+		t.Fatalf("expected outbox relay config to succeed, enabled=%v err=%v", enabled, err)
+	}
+	for name, tc := range map[string]struct {
+		client     *http.Client
+		serverName string
+		expectIAM  bool
+	}{
+		"telemetry":    {cfg.TelemetryHTTPClient, "telemetry-runtime-service", true},
+		"connectivity": {cfg.ConnectivityHTTPClient, "connectivity", false},
+		"command":      {cfg.CommandHTTPClient, "command-service", true},
+	} {
+		if tc.client == nil || tc.client.CheckRedirect == nil {
+			t.Fatalf("%s client missing CheckRedirect guard", name)
+		}
+		if err := tc.client.CheckRedirect(nil, nil); !errors.Is(err, http.ErrUseLastResponse) {
+			t.Fatalf("%s CheckRedirect returned %v, want http.ErrUseLastResponse", name, err)
+		}
+		tr, ok := tc.client.Transport.(*http.Transport)
+		if !ok || tr.TLSClientConfig == nil {
+			t.Fatalf("%s missing TLSClientConfig", name)
+		}
+		if tr.TLSClientConfig.ServerName != tc.serverName {
+			t.Fatalf("%s ServerName=%q, want %q", name, tr.TLSClientConfig.ServerName, tc.serverName)
+		}
+		if tc.expectIAM && tr.TLSClientConfig.RootCAs != iamPool {
+			t.Fatalf("%s expected default iamPool roots", name)
+		}
+		if !tc.expectIAM && tr.TLSClientConfig.RootCAs == iamPool {
+			t.Fatalf("connectivity client unexpectedly fell back to iamPool")
+		}
 	}
 }

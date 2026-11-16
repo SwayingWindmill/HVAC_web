@@ -526,50 +526,79 @@ func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger) (*http.Serv
 }
 
 func newEmbeddedCoreOutboxRelay(store *coreservice.PostgresStore, cert tls.Certificate, defaultRoots, fallbackRoots *x509.CertPool, logger *slog.Logger) (*coreservice.OutboxRelay, error) {
+	cfg, enabled, err := buildEmbeddedCoreOutboxRelayConfig(cert, defaultRoots, fallbackRoots, logger)
+	if err != nil || !enabled {
+		return nil, err
+	}
+	return coreservice.NewOutboxRelay(store, cfg)
+}
+
+func buildEmbeddedCoreOutboxRelayConfig(cert tls.Certificate, defaultRoots, fallbackRoots *x509.CertPool, logger *slog.Logger) (coreservice.OutboxRelayConfig, bool, error) {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("CORE_OUTBOX_RELAY_ENABLED")), "false") {
-		return nil, nil
+		return coreservice.OutboxRelayConfig{}, false, nil
 	}
 	telemetryURL := envOr("CORE_TELEMETRY_RUNTIME_URL", strings.TrimSpace(os.Getenv("TELEMETRY_RUNTIME_URL")))
 	connectivityURL := envOr("CORE_CONNECTIVITY_SERVICE_URL", strings.TrimSpace(os.Getenv("CONNECTIVITY_SERVICE_URL")))
 	commandURL := envOr("CORE_COMMAND_SERVICE_URL", strings.TrimSpace(os.Getenv("COMMAND_SERVICE_URL")))
 	if telemetryURL == "" && connectivityURL == "" && commandURL == "" {
-		return nil, nil
+		return coreservice.OutboxRelayConfig{}, false, nil
 	}
 	roots := defaultRoots
 	if roots == nil {
 		roots = fallbackRoots
 	}
-	buildClient := func(caEnv string) (*http.Client, error) {
-		pool := roots
-		if customPath := strings.TrimSpace(os.Getenv(caEnv)); customPath != "" {
-			loaded, err := loadCertPool(customPath, caEnv)
+	buildClient := func(caEnv, defaultCA, serverName string, fallback *x509.CertPool) (*http.Client, error) {
+		pool := fallback
+		caPath := strings.TrimSpace(os.Getenv(caEnv))
+		if caPath == "" {
+			caPath = defaultCA
+		}
+		if caPath != "" {
+			loaded, err := loadCertPool(caPath, caEnv)
 			if err != nil {
 				return nil, err
 			}
 			pool = loaded
 		}
+		if pool == nil {
+			return nil, fmt.Errorf("%s root CA is required", caEnv)
+		}
 		return &http.Client{
 			Timeout: 10 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 			Transport: &http.Transport{TLSClientConfig: &tls.Config{
 				MinVersion:   tls.VersionTLS13,
 				RootCAs:      pool,
 				Certificates: []tls.Certificate{cert},
+				ServerName:   serverName,
 			}},
 		}, nil
 	}
-	telClient, err := buildClient("TELEMETRY_RUNTIME_SERVER_CA")
-	if err != nil {
-		return nil, err
+	var telClient, connClient, cmdClient *http.Client
+	if telemetryURL != "" {
+		var err error
+		telClient, err = buildClient("TELEMETRY_RUNTIME_SERVER_CA", "", envOr("TELEMETRY_RUNTIME_SERVER_NAME", "telemetry-runtime-service"), roots)
+		if err != nil {
+			return coreservice.OutboxRelayConfig{}, false, err
+		}
 	}
-	connClient, err := buildClient("CONNECTIVITY_SERVER_CA")
-	if err != nil {
-		return nil, err
+	if connectivityURL != "" {
+		var err error
+		connClient, err = buildClient("CONNECTIVITY_SERVER_CA", "/run/hvac/gateway-ca/ca.crt", envOr("CONNECTIVITY_SERVICE_SERVER_NAME", "connectivity"), nil)
+		if err != nil {
+			return coreservice.OutboxRelayConfig{}, false, err
+		}
 	}
-	cmdClient, err := buildClient("COMMAND_SERVICE_SERVER_CA")
-	if err != nil {
-		return nil, err
+	if commandURL != "" {
+		var err error
+		cmdClient, err = buildClient("COMMAND_SERVICE_SERVER_CA", "", envOr("COMMAND_SERVICE_SERVER_NAME", "command-service"), roots)
+		if err != nil {
+			return coreservice.OutboxRelayConfig{}, false, err
+		}
 	}
-	return coreservice.NewOutboxRelay(store, coreservice.OutboxRelayConfig{
+	return coreservice.OutboxRelayConfig{
 		TelemetryBaseURL:       telemetryURL,
 		TelemetryHTTPClient:    telClient,
 		ConnectivityBaseURL:    connectivityURL,
@@ -577,7 +606,7 @@ func newEmbeddedCoreOutboxRelay(store *coreservice.PostgresStore, cert tls.Certi
 		CommandBaseURL:         commandURL,
 		CommandHTTPClient:      cmdClient,
 		Logger:                 logger,
-	})
+	}, true, nil
 }
 
 func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef) (*http.Server, *observability.Runtime, func(), error) {

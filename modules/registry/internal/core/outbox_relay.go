@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -21,10 +22,29 @@ const (
 	outboxDefaultLeaseDuration  = 30 * time.Second
 	outboxDefaultPollInterval   = 500 * time.Millisecond
 	outboxDefaultBatchSize      = 16
+	outboxMaxDeliveryAttempts   = 10
 	outboxTelemetrySyncPath     = "/internal/v1/telemetry/registry-sync:apply"
 	outboxCommandCancelPath     = "/internal/v1/commands:cancelRetiredTarget"
 	outboxConnectivityRetireFmt = "/internal/v1/gateways/%s:retire"
 )
+
+func truncateRelayUTF8(value string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(value) <= maxBytes {
+		return value
+	}
+	cut := 0
+	for cut < len(value) {
+		_, size := utf8.DecodeRuneInString(value[cut:])
+		if cut+size > maxBytes {
+			break
+		}
+		cut += size
+	}
+	return value[:cut]
+}
 
 var relayedOutboxEventTypes = []string{
 	"registry.device.created",
@@ -217,7 +237,10 @@ func (r *OutboxRelay) Run(ctx context.Context) {
 	for ctx.Err() == nil {
 		processed, err := r.ProcessOnce(ctx)
 		if err != nil && ctx.Err() == nil {
-			r.logger.Warn("core_outbox_relay_cycle_failed", "error", err.Error())
+			r.logger.Warn("core_outbox_relay_cycle_failed",
+				"error_code", "OUTBOX_RELAY_CYCLE_FAILED",
+				"error", err.Error(),
+			)
 		}
 		wait := r.pollInterval
 		if err == nil && processed >= r.batchSize {
@@ -240,29 +263,65 @@ func (r *OutboxRelay) ProcessOnce(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	totalProcessed := 0
+	var errs []error
 	for _, tenantID := range tenants {
 		if ctx.Err() != nil {
-			return totalProcessed, ctx.Err()
+			errs = append(errs, ctx.Err())
+			break
 		}
-		events, err := r.claimTenantBatch(ctx, tenantID)
-		if err != nil {
-			return totalProcessed, err
-		}
-		for _, event := range events {
-			totalProcessed++
-			if deliverErr := r.deliverEvent(ctx, event); deliverErr != nil {
-				backoff := relayRetryBackoff(event.Attempt)
-				if markErr := r.markFailed(ctx, event, deliverErr.Error(), backoff); markErr != nil {
-					return totalProcessed, markErr
-				}
-				continue
-			}
-			if markErr := r.markDelivered(ctx, event); markErr != nil {
-				return totalProcessed, markErr
-			}
+		processed, tenantErr := r.processTenantOnce(ctx, tenantID)
+		totalProcessed += processed
+		if tenantErr != nil {
+			r.logger.Warn("core_outbox_tenant_failed",
+				"tenant_id", tenantID,
+				"error_code", "OUTBOX_TENANT_PROCESS_FAILED",
+				"error", tenantErr.Error(),
+			)
+			errs = append(errs, fmt.Errorf("tenant %s: %w", tenantID, tenantErr))
 		}
 	}
-	return totalProcessed, nil
+	return totalProcessed, errors.Join(errs...)
+}
+
+func (r *OutboxRelay) processTenantOnce(ctx context.Context, tenantID string) (int, error) {
+	events, err := r.claimTenantBatch(ctx, tenantID)
+	if err != nil {
+		return 0, err
+	}
+	processed := 0
+	for _, event := range events {
+		processed++
+		if deliverErr := r.deliverEvent(ctx, event); deliverErr != nil {
+			r.logger.Warn("core_outbox_delivery_failed",
+				"event_id", event.EventID,
+				"event_type", event.EventType,
+				"attempt", event.Attempt,
+				"error_code", "OUTBOX_DELIVERY_FAILED",
+				"error", deliverErr.Error(),
+			)
+			var nextRetry *time.Time
+			if event.Attempt < outboxMaxDeliveryAttempts {
+				t := r.now().UTC().Add(relayRetryBackoff(event.Attempt))
+				nextRetry = &t
+			} else {
+				r.logger.Error("core_outbox_delivery_exhausted",
+					"event_id", event.EventID,
+					"event_type", event.EventType,
+					"attempt", event.Attempt,
+					"error_code", "OUTBOX_DELIVERY_EXHAUSTED",
+					"error", deliverErr.Error(),
+				)
+			}
+			if markErr := r.markFailed(ctx, event, deliverErr.Error(), nextRetry); markErr != nil {
+				return processed, markErr
+			}
+			continue
+		}
+		if markErr := r.markDelivered(ctx, event); markErr != nil {
+			return processed, markErr
+		}
+	}
+	return processed, nil
 }
 
 func (r *OutboxRelay) listTenants(ctx context.Context) ([]string, error) {
@@ -363,9 +422,10 @@ WITH due AS (
   WHERE d.consumer_name = $1
     AND e.tenant_id = $2::uuid
     AND e.event_type = ANY($7::text[])
+    AND d.attempt < $8
     AND (
       d.status = 'PENDING'
-      OR (d.status = 'FAILED' AND (d.next_retry_at IS NULL OR d.next_retry_at <= $3))
+      OR (d.status = 'FAILED' AND d.next_retry_at IS NOT NULL AND d.next_retry_at <= $3)
       OR (d.status = 'LEASED' AND d.lease_until <= $3)
     )
   ORDER BY e.created_at ASC, e.id ASC
@@ -387,7 +447,7 @@ SELECT c.event_id::text, c.attempt, COALESCE(e.site_id::text, ''), e.event_type,
 FROM claimed c
 JOIN core_registry.domain_outbox_events e ON e.id = c.event_id
 ORDER BY e.created_at ASC, e.id ASC
-`, outboxRelayConsumerName, tenantID, now, r.batchSize, r.leaseOwner, leaseUntil, relayedOutboxEventTypes)
+`, outboxRelayConsumerName, tenantID, now, r.batchSize, r.leaseOwner, leaseUntil, relayedOutboxEventTypes, outboxMaxDeliveryAttempts)
 		if err != nil {
 			return fmt.Errorf("claim outbox deliveries: %w", err)
 		}
@@ -435,13 +495,9 @@ WHERE event_id = $1::uuid
 	})
 }
 
-func (r *OutboxRelay) markFailed(ctx context.Context, event claimedOutboxEvent, errMsg string, backoff time.Duration) error {
+func (r *OutboxRelay) markFailed(ctx context.Context, event claimedOutboxEvent, errMsg string, nextRetry *time.Time) error {
 	now := r.now().UTC()
-	nextRetry := now.Add(backoff)
-	reason := strings.TrimSpace(errMsg)
-	if len(reason) > 512 {
-		reason = reason[:512]
-	}
+	reason := truncateRelayUTF8(strings.TrimSpace(errMsg), 512)
 	return r.withTenantWriterTx(ctx, event.TenantID, pgx.ReadWrite, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 UPDATE core_registry.domain_event_deliveries
@@ -463,7 +519,7 @@ WHERE event_id = $1::uuid
 func (r *OutboxRelay) deliverEvent(ctx context.Context, event claimedOutboxEvent) error {
 	switch event.EventType {
 	case "registry.device.created", "registry.device.updated":
-		return r.deliverDeviceSync(ctx, event.TenantID, event.SiteID, event.SubjectID)
+		return r.deliverDeviceSync(ctx, event)
 	case "registry.point.created", "registry.point.updated":
 		deviceID, pointKey, err := r.lookupPointDevice(ctx, event.TenantID, event.SubjectID)
 		if err != nil {
@@ -482,15 +538,23 @@ func (r *OutboxRelay) deliverEvent(ctx context.Context, event claimedOutboxEvent
 	}
 }
 
-func (r *OutboxRelay) deliverDeviceSync(ctx context.Context, tenantID, siteID, deviceID string) error {
-	if r.telemetry == nil || siteID == "" || deviceID == "" {
+func (r *OutboxRelay) deliverDeviceSync(ctx context.Context, event claimedOutboxEvent) error {
+	if event.SiteID == "" || event.SubjectID == "" {
 		return nil
 	}
-	req, found, err := r.loadDeviceSyncRequest(ctx, tenantID, siteID, deviceID)
+	req, found, err := r.loadDeviceSyncRequest(ctx, event.TenantID, event.SiteID, event.SubjectID)
 	if err != nil || !found {
 		return err
 	}
-	return r.telemetry.SyncRegistry(ctx, req)
+	if r.telemetry != nil {
+		if err := r.telemetry.SyncRegistry(ctx, req); err != nil {
+			return err
+		}
+	}
+	if event.EventType == "registry.device.updated" && len(req.Devices) > 0 && strings.ToUpper(strings.TrimSpace(req.Devices[0].Status)) == "RETIRED" {
+		return r.retireDeviceDownstream(ctx, event.TenantID, event.SiteID, event.SubjectID, event.EventID)
+	}
+	return nil
 }
 
 func (r *OutboxRelay) deliverPointSync(ctx context.Context, tenantID, siteID, deviceID, pointID, pointKey string) error {
@@ -501,16 +565,20 @@ func (r *OutboxRelay) deliverPointSync(ctx context.Context, tenantID, siteID, de
 	if err != nil || !found {
 		return err
 	}
-	for _, dev := range req.Devices {
-		for _, pt := range dev.Points {
-			if pt.PointID == pointID && pt.Status == "RETIRED" && strings.ToUpper(pt.PointType) != "COMMAND" {
+	for i := range req.Devices {
+		filtered := make([]RelayTelemetryPoint, 0, len(req.Devices[i].Points))
+		for _, pt := range req.Devices[i].Points {
+			if pt.PointID == pointID && strings.ToUpper(pt.PointType) != "COMMAND" && strings.ToUpper(pt.Status) != "ACTIVE" {
 				req.RetiredPoints = append(req.RetiredPoints, RelayTelemetryRetirePt{
 					DeviceID:     deviceID,
 					PointID:      pointID,
 					TelemetryKey: pointKey,
 				})
+				continue
 			}
+			filtered = append(filtered, pt)
 		}
+		req.Devices[i].Points = filtered
 	}
 	return r.telemetry.SyncRegistry(ctx, req)
 }
@@ -527,6 +595,31 @@ func (r *OutboxRelay) deliverSiteSync(ctx context.Context, tenantID, siteID stri
 		return nil
 	}
 	return r.telemetry.SyncRegistry(ctx, req)
+}
+
+func (r *OutboxRelay) retireDeviceDownstream(ctx context.Context, tenantID, siteID, deviceID, causationID string) error {
+	if r.command != nil {
+		if err := r.command.CancelRetiredTarget(ctx, RelayCommandCancelRequest{
+			TenantID:    tenantID,
+			SiteID:      siteID,
+			DeviceIDs:   []string{deviceID},
+			CausationID: causationID,
+		}); err != nil {
+			return err
+		}
+	}
+	if r.connectivity != nil {
+		deviceType, err := r.lookupDeviceType(ctx, tenantID, siteID, deviceID)
+		if err != nil {
+			return err
+		}
+		if strings.ToUpper(deviceType) == "GATEWAY" {
+			if err := r.connectivity.RetireGateway(ctx, tenantID, deviceID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (r *OutboxRelay) deliverRetirement(ctx context.Context, event claimedOutboxEvent) error {
@@ -565,28 +658,7 @@ func (r *OutboxRelay) deliverRetirement(ctx context.Context, event claimedOutbox
 				return err
 			}
 		}
-		if r.command != nil {
-			if err := r.command.CancelRetiredTarget(ctx, RelayCommandCancelRequest{
-				TenantID:    event.TenantID,
-				SiteID:      siteID,
-				DeviceIDs:   []string{resourceID},
-				CausationID: event.EventID,
-			}); err != nil {
-				return err
-			}
-		}
-		if r.connectivity != nil {
-			deviceType, err := r.lookupDeviceType(ctx, event.TenantID, siteID, resourceID)
-			if err != nil {
-				return err
-			}
-			if strings.ToUpper(deviceType) == "GATEWAY" {
-				if err := r.connectivity.RetireGateway(ctx, event.TenantID, resourceID); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+		return r.retireDeviceDownstream(ctx, event.TenantID, siteID, resourceID, event.EventID)
 
 	case "SITE":
 		if siteID == "" {
@@ -629,6 +701,26 @@ func (r *OutboxRelay) deliverRetirement(ctx context.Context, event claimedOutbox
 	}
 }
 
+func derivePresenceApplicability(deviceStatus string, hasOwnActiveNonCommand bool) string {
+	if strings.ToUpper(strings.TrimSpace(deviceStatus)) != "ACTIVE" || !hasOwnActiveNonCommand {
+		return "NOT_APPLICABLE"
+	}
+	return "APPLICABLE"
+}
+
+func loadDeviceSyncEntryInTx(ctx context.Context, tx pgx.Tx, tenantID, siteID, deviceID, status string) (RelayTelemetryDevice, error) {
+	points, hasOwnActiveNonCommand, err := queryDevicePointsInTx(ctx, tx, tenantID, siteID, deviceID)
+	if err != nil {
+		return RelayTelemetryDevice{}, err
+	}
+	return RelayTelemetryDevice{
+		DeviceID:              deviceID,
+		Status:                status,
+		PresenceApplicability: derivePresenceApplicability(status, hasOwnActiveNonCommand),
+		Points:                points,
+	}, nil
+}
+
 func (r *OutboxRelay) loadDeviceSyncRequest(ctx context.Context, tenantID, siteID, deviceID string) (RelayTelemetrySyncRequest, bool, error) {
 	req := RelayTelemetrySyncRequest{TenantID: tenantID, SiteID: siteID}
 	found := false
@@ -646,20 +738,11 @@ WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid
 			return err
 		}
 		found = true
-		points, err := queryDevicePointsInTx(ctx, tx, tenantID, siteID, deviceID)
+		entry, err := loadDeviceSyncEntryInTx(ctx, tx, tenantID, siteID, deviceID, status)
 		if err != nil {
 			return err
 		}
-		applicability := "APPLICABLE"
-		if strings.ToUpper(status) == "RETIRED" {
-			applicability = "NOT_APPLICABLE"
-		}
-		req.Devices = []RelayTelemetryDevice{{
-			DeviceID:              deviceID,
-			Status:                status,
-			PresenceApplicability: applicability,
-			Points:                points,
-		}}
+		req.Devices = []RelayTelemetryDevice{entry}
 		return nil
 	})
 	return req, found, err
@@ -695,44 +778,41 @@ ORDER BY id
 			return err
 		}
 		for _, d := range devs {
-			points, err := queryDevicePointsInTx(ctx, tx, tenantID, siteID, d.id)
+			entry, err := loadDeviceSyncEntryInTx(ctx, tx, tenantID, siteID, d.id, d.status)
 			if err != nil {
 				return err
 			}
-			applicability := "APPLICABLE"
-			if strings.ToUpper(d.status) == "RETIRED" {
-				applicability = "NOT_APPLICABLE"
-			}
-			req.Devices = append(req.Devices, RelayTelemetryDevice{
-				DeviceID:              d.id,
-				Status:                d.status,
-				PresenceApplicability: applicability,
-				Points:                points,
-			})
+			req.Devices = append(req.Devices, entry)
 		}
 		return nil
 	})
 	return req, err
 }
 
-func queryDevicePointsInTx(ctx context.Context, tx pgx.Tx, tenantID, siteID, deviceID string) ([]RelayTelemetryPoint, error) {
+func queryDevicePointsInTx(ctx context.Context, tx pgx.Tx, tenantID, siteID, deviceID string) ([]RelayTelemetryPoint, bool, error) {
 	rows, err := tx.Query(ctx, `
 SELECT id::text, COALESCE(sensor_id::text, ''), point_code, point_type, value_type,
-       COALESCE(unit, ''), sample_interval_ms, stale_after_ms, status
+       COALESCE(unit, ''), sample_interval_ms, stale_after_ms, status,
+       COALESCE(LOWER(source_metadata->>'copied') = 'true', false)
 FROM core_registry.telemetry_points
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND reporting_device_id = $3::uuid
 ORDER BY point_code ASC, id ASC
 `, tenantID, siteID, deviceID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
 	var points []RelayTelemetryPoint
+	hasOwnActiveNonCommand := false
 	for rows.Next() {
 		var pt RelayTelemetryPoint
 		var sampleMS, staleMS int64
-		if scanErr := rows.Scan(&pt.PointID, &pt.SensorID, &pt.TelemetryKey, &pt.PointType, &pt.ValueType, &pt.Unit, &sampleMS, &staleMS, &pt.Status); scanErr != nil {
-			return nil, scanErr
+		var copied bool
+		if scanErr := rows.Scan(&pt.PointID, &pt.SensorID, &pt.TelemetryKey, &pt.PointType, &pt.ValueType, &pt.Unit, &sampleMS, &staleMS, &pt.Status, &copied); scanErr != nil {
+			return nil, false, scanErr
+		}
+		if strings.ToUpper(strings.TrimSpace(pt.PointType)) != "COMMAND" && strings.ToUpper(strings.TrimSpace(pt.Status)) == "ACTIVE" && !copied {
+			hasOwnActiveNonCommand = true
 		}
 		sampleSec := millisToPositiveSeconds(sampleMS, 60)
 		freshSec := millisToPositiveSeconds(staleMS, max(sampleSec*2, 300))
@@ -744,7 +824,7 @@ ORDER BY point_code ASC, id ASC
 		pt.FreshWithinSeconds = freshSec
 		points = append(points, pt)
 	}
-	return points, rows.Err()
+	return points, hasOwnActiveNonCommand, rows.Err()
 }
 
 func (r *OutboxRelay) lookupPointDevice(ctx context.Context, tenantID, pointID string) (string, string, error) {

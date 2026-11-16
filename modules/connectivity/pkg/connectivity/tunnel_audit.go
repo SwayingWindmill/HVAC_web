@@ -7,12 +7,31 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
 )
 
 var tunnelAuditUUIDv7Pattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+
+func truncateTunnelAuditUTF8(value string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(value) <= maxBytes {
+		return value
+	}
+	cut := 0
+	for cut < len(value) {
+		_, size := utf8.DecodeRuneInString(value[cut:])
+		if cut+size > maxBytes {
+			break
+		}
+		cut += size
+	}
+	return value[:cut]
+}
 
 // RecordTunnelAudit durably records one gateway tunnel session or stream event.
 func (store *Store) RecordTunnelAudit(ctx context.Context, event tunnel.AuditEvent) error {
@@ -63,14 +82,8 @@ LIMIT 1
 	if event.TargetPort != nil && *event.TargetPort >= 1 {
 		targetPort = int32(*event.TargetPort)
 	}
-	remoteAddr := strings.TrimSpace(event.RemoteAddr)
-	if len(remoteAddr) > 256 {
-		remoteAddr = remoteAddr[:256]
-	}
-	reason := strings.TrimSpace(event.Reason)
-	if len(reason) > 512 {
-		reason = reason[:512]
-	}
+	remoteAddr := truncateTunnelAuditUTF8(strings.TrimSpace(event.RemoteAddr), 256)
+	reason := truncateTunnelAuditUTF8(strings.TrimSpace(event.Reason), 512)
 	bytesTX := event.BytesTX
 	if bytesTX < 0 {
 		bytesTX = 0

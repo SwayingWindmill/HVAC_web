@@ -24,6 +24,10 @@ import {
   buildOnboardingAuditBeforeSql,
   buildOnboardingAuditOutboxEmitSql,
   buildOnboardingRevisionCheckSql,
+  differences,
+  isSynthesizedTotalMeter,
+  sameJson,
+  scheduleCodes,
 } from './lib/site-onboarding-convergence.ts';
 import {
   applyPointRunningAndStabilize,
@@ -377,10 +381,6 @@ function siteRows(profile) {
     ...point, device, pointIndex, id: rowId(profile.site.id, '5000', device.deviceIndex * 0x10000 + pointIndex + 1),
   })));
   return { devices, points };
-}
-
-function isSynthesizedTotalMeter(totalMeter) {
-  return Boolean(totalMeter && typeof totalMeter === 'object' && !Array.isArray(totalMeter) && totalMeter.kind === 'sum-of-sub-meters');
 }
 
 export function buildOnboardingSql(profile, options = {}) {
@@ -1097,28 +1097,6 @@ SELECT json_build_object(
     WHERE tenant_id = ${t} AND rule_code = '${LOW_DELTA_T}' AND effective_from <= clock_timestamp() ORDER BY revision DESC LIMIT 1)
 );
 ROLLBACK;`;
-}
-
-// Object keys in a fixed order, so two JSON values compare by content.
-function canonical(value) {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
-  return value;
-}
-const sameJson = (left, right) => JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
-
-// Paths where two JSON objects differ, e.g. inputMapping.zoneTemperatureKey.
-function differences(want, have, path = '') {
-  if (want && have && typeof want === 'object' && typeof have === 'object' && !Array.isArray(want)) {
-    return [...new Set([...Object.keys(want), ...Object.keys(have)])].flatMap((key) => differences(want[key], have[key], path ? `${path}.${key}` : key));
-  }
-  return sameJson(want, have) ? [] : [`${path}: 清单 ${JSON.stringify(want)}，现在 ${JSON.stringify(have)}`];
-}
-
-// The schedule codes a generated script writes, with their job types.
-function scheduleCodes(sql) {
-  return [...sql.matchAll(/INSERT INTO core_registry\.schedule_definitions[\s\S]*?ON CONFLICT/g)]
-    .flatMap(([block]) => [...block.matchAll(/^\s*(?:SELECT |\()[^,]+, '([a-z0-9-]+)', '[^']*', [^,]+, [^,]+, '([A-Z_]+)'/gm)].map(([, code, jobType]) => ({ code, jobType })));
 }
 
 // What the database still lacks against the manifest, as items of four kinds: ok; missing and

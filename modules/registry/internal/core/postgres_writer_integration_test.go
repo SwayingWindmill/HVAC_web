@@ -384,8 +384,20 @@ func TestPostgresRegistryGatewaySourceKeyBlocksAndUnblocksRetire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if blockedDev.Status != "BLOCKED" || blockedDev.DependencyCount < 1 {
-		t.Fatalf("expected device retire BLOCKED with DependencyCount>=1, got %#v", blockedDev)
+	if blockedDev.Status != "BLOCKED" || blockedDev.DependencyCount < 1 || blockedDev.Revision != 1 {
+		t.Fatalf("expected device retire BLOCKED with DependencyCount>=1 and Revision=1, got %#v", blockedDev)
+	}
+
+	// Retry BLOCKED -> BLOCKED with a distinct idempotency key while dependency remains.
+	blockedDevRetry, err := store.Retire(ctx, retireClaims, RetireRequest{
+		SiteID: site.ID, ResourceType: ResourceDevice, ResourceID: device.ID,
+		Meta: MutationMeta{ExpectedRevision: device.Revision, IdempotencyKey: "sk-retire-dev-blocked-02", Reason: "retry blocked device retirement while still blocked"},
+	})
+	if err != nil {
+		t.Fatalf("retry blocked retirement: %v", err)
+	}
+	if blockedDevRetry.SagaID != blockedDev.SagaID || blockedDevRetry.Status != "BLOCKED" || blockedDevRetry.Revision != 2 {
+		t.Fatalf("expected same sagaId %s BLOCKED revision=2, got %#v", blockedDev.SagaID, blockedDevRetry)
 	}
 
 	blockedGW, err := store.Retire(ctx, retireClaims, RetireRequest{
@@ -399,6 +411,24 @@ func TestPostgresRegistryGatewaySourceKeyBlocksAndUnblocksRetire(t *testing.T) {
 		t.Fatalf("expected gateway retire BLOCKED with DependencyCount>=1, got %#v", blockedGW)
 	}
 
+	// Wrong gateway or non-existent sourceKey close must fail with ErrNotFound without retiring the binding.
+	if _, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingGatewaySourceKey, SourceID: device.ID, TargetID: gateway.ID,
+		Role: "wrong-key", EffectiveAt: time.Date(2026, 11, 16, 10, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		CloseOnly: true,
+		Meta:      MutationMeta{IdempotencyKey: "sk-unbind-wrong-key-01", Reason: "wrong key must fail with ErrNotFound"},
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("wrong sourceKey closeOnly err = %v, want ErrNotFound", err)
+	}
+	if _, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingGatewaySourceKey, SourceID: device.ID, TargetID: secondDevice.ID,
+		Role: "chiller-1", EffectiveAt: time.Date(2026, 11, 16, 10, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		CloseOnly: true,
+		Meta:      MutationMeta{IdempotencyKey: "sk-unbind-wrong-gw-01", Reason: "wrong gateway target must fail with ErrNotFound"},
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("wrong gateway closeOnly err = %v, want ErrNotFound", err)
+	}
+
 	closed, err := store.Rebind(ctx, bindClaims, RebindRequest{
 		SiteID: site.ID, Kind: BindingGatewaySourceKey, SourceID: device.ID,
 		Role: "chiller-1", EffectiveAt: time.Date(2026, 11, 16, 10, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
@@ -408,8 +438,18 @@ func TestPostgresRegistryGatewaySourceKeyBlocksAndUnblocksRetire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("close-only source key: %v", err)
 	}
-	if closed.TargetID != "" {
-		t.Fatalf("unexpected non-empty TargetID on closeOnly result: %#v", closed)
+	if closed.TargetID != "" || closed.BindingID != bound.BindingID || closed.Revision != 2 {
+		t.Fatalf("unexpected closeOnly source key result (want BindingID=%s Revision=2 TargetID=''): %#v", bound.BindingID, closed)
+	}
+
+	// Closing already-retired sourceKey must return ErrNotFound.
+	if _, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingGatewaySourceKey, SourceID: device.ID, TargetID: gateway.ID,
+		Role: "chiller-1", EffectiveAt: time.Date(2026, 11, 16, 10, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		CloseOnly: true,
+		Meta:      MutationMeta{IdempotencyKey: "sk-unbind-gw-twice-01", Reason: "second close must report ErrNotFound"},
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("duplicate closeOnly err = %v, want ErrNotFound", err)
 	}
 
 	retiredDev, err := store.Retire(ctx, retireClaims, RetireRequest{
@@ -419,7 +459,81 @@ func TestPostgresRegistryGatewaySourceKeyBlocksAndUnblocksRetire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retiredDev.Status != "COMPLETED" || retiredDev.DependencyCount != 0 {
-		t.Fatalf("expected device retire COMPLETED after unbind, got %#v", retiredDev)
+	if retiredDev.SagaID != blockedDev.SagaID || retiredDev.Status != "COMPLETED" || retiredDev.DependencyCount != 0 || retiredDev.Revision != 3 {
+		t.Fatalf("expected same sagaId %s device retire COMPLETED revision=3, got %#v", blockedDev.SagaID, retiredDev)
+	}
+}
+
+func TestPostgresRegistryTemporalBindingCloseOnlySemantics(t *testing.T) {
+	ctx, store := openRegistryWriterIntegrationStore(t)
+	siteClaims := writerIntegrationClaims(registryauth.ActionSiteWrite)
+	site, _, err := store.SaveSite(ctx, siteClaims, SiteMutation{
+		Code: "close-temp-site", DisplayName: "Temporal Close Site", Timezone: "Asia/Shanghai", Status: "ACTIVE",
+		Meta: MutationMeta{IdempotencyKey: "temp-close-site-01", Reason: "setup temporal binding close test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetClaims := writerIntegrationClaims(registryauth.ActionAssetWrite, site.ID)
+	asset, _, err := store.SaveAsset(ctx, assetClaims, AssetMutation{
+		SiteID: site.ID, Code: "ch-close-01", DisplayName: "Chiller Close 01", AssetType: "CHILLER", Status: "ACTIVE",
+		Meta: MutationMeta{IdempotencyKey: "temp-close-asset-01", Reason: "asset for close test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	devClaims := writerIntegrationClaims(registryauth.ActionDeviceWrite, site.ID)
+	dev, _, err := store.SaveDevice(ctx, devClaims, DeviceMutation{
+		SiteID: site.ID, Code: "plc-close-01", DisplayName: "PLC Close 01", DeviceType: "CHILLER", Status: "ACTIVE",
+		Meta: MutationMeta{IdempotencyKey: "temp-close-dev-01", Reason: "device for close test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindClaims := writerIntegrationClaims(registryauth.ActionBindingWrite, site.ID)
+	validFrom := time.Date(2026, 11, 16, 11, 0, 0, 0, time.UTC)
+
+	if _, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingDeviceAsset, SourceID: dev.ID, TargetID: asset.ID,
+		Role: "CONTROLLER", EffectiveAt: validFrom.Format(time.RFC3339Nano), CloseOnly: true,
+		Meta: MutationMeta{IdempotencyKey: "temp-close-missing-01", Reason: "close before bind must return ErrNotFound"},
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("close before bind err = %v, want ErrNotFound", err)
+	}
+
+	bound, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingDeviceAsset, SourceID: dev.ID, TargetID: asset.ID,
+		Role: "CONTROLLER", EffectiveAt: validFrom.Format(time.RFC3339Nano),
+		Meta: MutationMeta{IdempotencyKey: "temp-bind-01", Reason: "create temporal device binding"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingDeviceAsset, SourceID: dev.ID, TargetID: asset.ID,
+		Role: "CONTROLLER", EffectiveAt: validFrom.Format(time.RFC3339Nano), CloseOnly: true,
+		Meta: MutationMeta{IdempotencyKey: "temp-close-conflict-01", Reason: "effectiveAt == valid_from must conflict"},
+	}); !errors.Is(err, ErrBindingConflict) {
+		t.Fatalf("close at valid_from err = %v, want ErrBindingConflict", err)
+	}
+
+	closed, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingDeviceAsset, SourceID: dev.ID, TargetID: asset.ID,
+		Role: "CONTROLLER", EffectiveAt: validFrom.Add(5 * time.Minute).Format(time.RFC3339Nano), CloseOnly: true,
+		Meta: MutationMeta{IdempotencyKey: "temp-close-ok-01", Reason: "close temporal device binding"},
+	})
+	if err != nil {
+		t.Fatalf("close temporal binding: %v", err)
+	}
+	if closed.BindingID != bound.BindingID || closed.Revision != 2 {
+		t.Fatalf("expected closed BindingID=%s Revision=2, got %#v", bound.BindingID, closed)
+	}
+	if _, err := store.Rebind(ctx, bindClaims, RebindRequest{
+		SiteID: site.ID, Kind: BindingDeviceAsset, SourceID: dev.ID, TargetID: asset.ID,
+		Role: "CONTROLLER", EffectiveAt: validFrom.Add(10 * time.Minute).Format(time.RFC3339Nano), CloseOnly: true,
+		Meta: MutationMeta{IdempotencyKey: "temp-close-again-01", Reason: "second close must report ErrNotFound"},
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second close err = %v, want ErrNotFound", err)
 	}
 }

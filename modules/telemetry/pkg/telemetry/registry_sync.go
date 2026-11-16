@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -134,6 +136,24 @@ func normalizeFreshnessTiming(pt RegistryPointSync) (sampleSec, freshSec int) {
 	return sampleSec, freshSec
 }
 
+func truncateTelemetryUTF8(value string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(value) <= maxBytes {
+		return value
+	}
+	cut := 0
+	for cut < len(value) {
+		_, size := utf8.DecodeRuneInString(value[cut:])
+		if cut+size > maxBytes {
+			break
+		}
+		cut += size
+	}
+	return value[:cut]
+}
+
 // ApplyRegistrySync upserts Telemetry devices, default presence/coverage policies, and freshness policies.
 func (store *PostgresStore) ApplyRegistrySync(ctx context.Context, request RegistrySyncRequest) (RegistrySyncResult, error) {
 	if store == nil || store.pool == nil {
@@ -156,6 +176,28 @@ func (store *PostgresStore) ApplyRegistrySync(ctx context.Context, request Regis
 	tenantID := strings.TrimSpace(request.TenantID)
 	siteID := strings.TrimSpace(request.SiteID)
 
+	deviceSet := make(map[string]struct{}, len(request.Devices)+len(request.RetiredPoints))
+	syncedSet := make(map[string]bool, len(request.Devices))
+	for _, dev := range request.Devices {
+		id := strings.TrimSpace(dev.DeviceID)
+		deviceSet[id] = struct{}{}
+		syncedSet[id] = true
+	}
+	for _, rp := range request.RetiredPoints {
+		deviceSet[strings.TrimSpace(rp.DeviceID)] = struct{}{}
+	}
+	lockedIDs := make([]string, 0, len(deviceSet))
+	for id := range deviceSet {
+		lockedIDs = append(lockedIDs, id)
+	}
+	sort.Strings(lockedIDs)
+	for _, id := range lockedIDs {
+		if err := lockDevice(ctx, tx, id); err != nil {
+			return RegistrySyncResult{}, err
+		}
+	}
+
+	devicesToEvaluate := make(map[string]bool, len(lockedIDs))
 	for _, dev := range request.Devices {
 		deviceID := strings.TrimSpace(dev.DeviceID)
 		status := strings.ToUpper(strings.TrimSpace(dev.Status))
@@ -164,6 +206,17 @@ func (store *PostgresStore) ApplyRegistrySync(ctx context.Context, request Regis
 			applicability = "NOT_APPLICABLE"
 		} else if applicability == "" {
 			applicability = "APPLICABLE"
+		}
+
+		var prevApplicability string
+		prevErr := tx.QueryRow(ctx, `SELECT presence_applicability FROM telemetry_runtime.devices WHERE device_id = $1::uuid`, deviceID).Scan(&prevApplicability)
+		if prevErr != nil {
+			if !errors.Is(prevErr, pgx.ErrNoRows) {
+				return RegistrySyncResult{}, fmt.Errorf("load telemetry device %s: %w", deviceID, prevErr)
+			}
+			devicesToEvaluate[deviceID] = true
+		} else if prevApplicability != applicability {
+			devicesToEvaluate[deviceID] = true
 		}
 
 		if _, err := tx.Exec(ctx, `
@@ -215,14 +268,11 @@ ON CONFLICT (device_id) DO NOTHING
 			sampleSec, freshSec := normalizeFreshnessTiming(pt)
 
 			var expectedUnit any
-			if unit := strings.TrimSpace(pt.Unit); unit != "" {
-				if len(unit) > 64 {
-					unit = unit[:64]
-				}
+			if unit := truncateTelemetryUTF8(strings.TrimSpace(pt.Unit), 64); unit != "" {
 				expectedUnit = unit
 			}
 
-			if _, err := tx.Exec(ctx, `
+			tag, err := tx.Exec(ctx, `
 INSERT INTO telemetry_runtime.freshness_policies (
   device_id, telemetry_key, policy_revision, fresh_within_seconds, configured,
   expected_sample_interval_seconds, value_type, expected_unit, updated_at
@@ -239,28 +289,61 @@ ON CONFLICT (device_id, telemetry_key) DO UPDATE SET
   minimum_number = CASE WHEN EXCLUDED.value_type = 'NUMBER' THEN telemetry_runtime.freshness_policies.minimum_number ELSE NULL END,
   maximum_number = CASE WHEN EXCLUDED.value_type = 'NUMBER' THEN telemetry_runtime.freshness_policies.maximum_number ELSE NULL END,
   updated_at = EXCLUDED.updated_at
-`, deviceID, key, freshSec, configured, sampleSec, valueType, expectedUnit, now); err != nil {
+WHERE (
+  telemetry_runtime.freshness_policies.configured,
+  telemetry_runtime.freshness_policies.expected_sample_interval_seconds,
+  telemetry_runtime.freshness_policies.fresh_within_seconds,
+  telemetry_runtime.freshness_policies.value_type,
+  telemetry_runtime.freshness_policies.expected_unit
+) IS DISTINCT FROM (
+  EXCLUDED.configured,
+  EXCLUDED.expected_sample_interval_seconds,
+  EXCLUDED.fresh_within_seconds,
+  EXCLUDED.value_type,
+  EXCLUDED.expected_unit
+)
+`, deviceID, key, freshSec, configured, sampleSec, valueType, expectedUnit, now)
+			if err != nil {
 				return RegistrySyncResult{}, fmt.Errorf("upsert telemetry freshness policy %s/%s: %w", deviceID, key, err)
+			}
+			if tag.RowsAffected() > 0 {
+				devicesToEvaluate[deviceID] = true
 			}
 		}
 
-		if status == "RETIRED" {
-			if err := lockDevice(ctx, tx, deviceID); err != nil {
-				return RegistrySyncResult{}, err
-			}
-			if _, err := store.evaluateAndPersistDevice(ctx, tx, deviceID, nil, now); err != nil {
-				return RegistrySyncResult{}, fmt.Errorf("re-evaluate retired telemetry device %s: %w", deviceID, err)
-			}
+		if len(dev.Points) > 0 || status == "RETIRED" {
+			devicesToEvaluate[deviceID] = true
 		}
 	}
 
 	for _, rp := range request.RetiredPoints {
+		rpDeviceID := strings.TrimSpace(rp.DeviceID)
+		rpKey := strings.TrimSpace(rp.TelemetryKey)
 		if _, err := tx.Exec(ctx, `
 UPDATE telemetry_runtime.freshness_policies
 SET configured = false, policy_revision = policy_revision + 1, updated_at = $3
-WHERE device_id = $1::uuid AND telemetry_key = $2
-`, strings.TrimSpace(rp.DeviceID), strings.TrimSpace(rp.TelemetryKey), now); err != nil {
+WHERE device_id = $1::uuid AND telemetry_key = $2 AND configured IS DISTINCT FROM false
+`, rpDeviceID, rpKey, now); err != nil {
 			return RegistrySyncResult{}, fmt.Errorf("retire telemetry point %s/%s: %w", rp.DeviceID, rp.TelemetryKey, err)
+		}
+		devicesToEvaluate[rpDeviceID] = true
+	}
+
+	for _, deviceID := range lockedIDs {
+		if !devicesToEvaluate[deviceID] {
+			continue
+		}
+		if !syncedSet[deviceID] {
+			var exists bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM telemetry_runtime.devices WHERE device_id = $1::uuid)`, deviceID).Scan(&exists); err != nil {
+				return RegistrySyncResult{}, fmt.Errorf("check telemetry device existence %s: %w", deviceID, err)
+			}
+			if !exists {
+				continue
+			}
+		}
+		if _, err := store.evaluateAndPersistDevice(ctx, tx, deviceID, nil, now); err != nil {
+			return RegistrySyncResult{}, fmt.Errorf("evaluate telemetry device %s: %w", deviceID, err)
 		}
 	}
 

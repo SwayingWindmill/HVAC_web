@@ -168,11 +168,13 @@ func (handler *runtimeHTTPHandler) cancelRetiredTarget(writer http.ResponseWrite
 	deviceIDs := make([]string, 0, len(input.DeviceIDs))
 	for _, id := range input.DeviceIDs {
 		trimmed := strings.TrimSpace(id)
-		if trimmed != "" {
-			deviceIDs = append(deviceIDs, trimmed)
+		if !commandmodel.IsUUIDv7(trimmed) {
+			writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
+			return
 		}
+		deviceIDs = append(deviceIDs, trimmed)
 	}
-	if tenantID == "" || siteID == "" || len(deviceIDs) == 0 {
+	if !commandmodel.IsUUIDv7(tenantID) || !commandmodel.IsUUIDv7(siteID) || len(deviceIDs) == 0 {
 		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
 		return
 	}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -76,12 +78,27 @@ func newTunnelUUIDv7(now time.Time) string {
 	return string(encoded[:])
 }
 
-func truncateAuditReason(reason string) string {
-	reason = strings.TrimSpace(reason)
-	if len(reason) > 512 {
-		return reason[:512]
+func truncateAuditUTF8(value string, maxBytes int) string {
+	value = strings.TrimSpace(value)
+	if maxBytes <= 0 {
+		return ""
 	}
-	return reason
+	if len(value) <= maxBytes {
+		return value
+	}
+	cut := 0
+	for cut < len(value) {
+		_, size := utf8.DecodeRuneInString(value[cut:])
+		if cut+size > maxBytes {
+			break
+		}
+		cut += size
+	}
+	return value[:cut]
+}
+
+func truncateAuditReason(reason string) string {
+	return truncateAuditUTF8(reason, 512)
 }
 
 const (
@@ -241,12 +258,23 @@ func (h *Hub) recordAudit(ctx context.Context, event AuditEvent) {
 		event.OccurredAt = time.Now().UTC()
 	}
 	event.Reason = truncateAuditReason(event.Reason)
-	if len(event.RemoteAddr) > 256 {
-		event.RemoteAddr = event.RemoteAddr[:256]
+	event.RemoteAddr = truncateAuditUTF8(event.RemoteAddr, 256)
+	auditCtx := ctx
+	if auditCtx == nil {
+		auditCtx = context.Background()
 	}
-	auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = h.auditSink.RecordTunnelAudit(auditCtx, event)
+	var cancel context.CancelFunc
+	if _, hasDeadline := auditCtx.Deadline(); !hasDeadline {
+		auditCtx, cancel = context.WithTimeout(auditCtx, 2*time.Second)
+		defer cancel()
+	}
+	if err := h.auditSink.RecordTunnelAudit(auditCtx, event); err != nil {
+		slog.Warn("tunnel audit record failed",
+			"event_type", event.EventType,
+			"gateway_id", event.GatewayID,
+			"error_code", "TUNNEL_AUDIT_RECORD_FAILED",
+		)
+	}
 }
 
 func (h *Hub) ActiveGateways() []string {
@@ -288,7 +316,32 @@ func (h *Hub) Close() {
 		_ = ln.Close()
 	}
 	for _, s := range sessions {
-		s.closeWithReason("hub_closed")
+		s.closeTransport()
+	}
+	if h.auditSink == nil || len(sessions) == 0 {
+		return
+	}
+	auditCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, s := range sessions {
+		if !s.opened.Load() {
+			continue
+		}
+		wg.Add(1)
+		go func(sess *Session) {
+			defer wg.Done()
+			sess.emitCloseAudit(auditCtx, "hub_closed")
+		}(s)
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-auditCtx.Done():
 	}
 }
 
@@ -373,6 +426,9 @@ func (h *Hub) registerSession(gatewayID string, conn net.Conn) *Session {
 }
 
 func (h *Hub) registerSessionWithAddr(gatewayID string, conn net.Conn, remoteAddr string) *Session {
+	if conn == nil {
+		return nil
+	}
 	s := newSession(h, gatewayID, conn, remoteAddr)
 	h.mu.Lock()
 	if h.closed.Load() {
@@ -460,17 +516,16 @@ func NewUpgradeHandler(hub *Hub, parsePeer PeerParser, verifyPeer PeerVerifier) 
 		if brw.Reader.Buffered() > 0 {
 			tunnelConn = &bufferedConn{Conn: conn, r: brw.Reader}
 		}
+		// Re-check revocation after 101 flush and before exposing the session in hub.sessions.
+		if verifiedID, recheckErr := verifyPeer(r.Context(), peer); recheckErr != nil || verifiedID != gatewayID {
+			_ = tunnelConn.Close()
+			return
+		}
 		session := hub.registerSessionWithAddr(gatewayID, tunnelConn, r.RemoteAddr)
 		if session == nil {
 			return
 		}
-		// Re-check revocation after registration so a concurrent Revoke cannot slip in between pre-hijack auth and registerSession.
-		if verifiedID, recheckErr := verifyPeer(r.Context(), peer); recheckErr != nil || verifiedID != gatewayID {
-			hub.unregisterSession(session)
-			session.closeWithReason("peer_recheck_failed")
-			return
-		}
-		session.markOpened(r.Context())
+		session.markOpened(context.Background())
 		session.run(r.Context())
 	})
 }
@@ -632,24 +687,31 @@ func newSession(hub *Hub, gatewayID string, conn net.Conn, remoteAddr string) *S
 }
 
 func (s *Session) markOpened(ctx context.Context) {
-	if s.opened.CompareAndSwap(false, true) {
-		s.hub.recordAudit(ctx, AuditEvent{
-			GatewayID:  s.gatewayID,
-			SessionID:  s.sessionID,
-			EventType:  AuditSessionOpened,
-			RemoteAddr: s.remoteAddr,
-			OccurredAt: time.Now().UTC(),
-		})
+	s.mu.Lock()
+	if s.closed.Load() || !s.opened.CompareAndSwap(false, true) {
+		s.mu.Unlock()
+		return
 	}
+	s.mu.Unlock()
+	if s.gatewayID == "" {
+		return
+	}
+	s.hub.recordAudit(ctx, AuditEvent{
+		GatewayID:  s.gatewayID,
+		SessionID:  s.sessionID,
+		EventType:  AuditSessionOpened,
+		RemoteAddr: s.remoteAddr,
+		OccurredAt: time.Now().UTC(),
+	})
 }
 
 func (s *Session) sendFrame(frame Frame) error {
-	if s.closed.Load() {
+	if s.closed.Load() || s.conn == nil {
 		return net.ErrClosed
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if s.closed.Load() {
+	if s.closed.Load() || s.conn == nil {
 		return net.ErrClosed
 	}
 	err := WriteFrame(s.conn, frame)
@@ -663,36 +725,51 @@ func (s *Session) Close() {
 	s.closeWithReason("closed")
 }
 
-func (s *Session) closeWithReason(reason string) {
-	if !s.closed.CompareAndSwap(false, true) {
-		return
-	}
-	close(s.done)
-	_ = s.conn.Close()
+func (s *Session) closeTransport() bool {
 	s.mu.Lock()
+	if !s.closed.CompareAndSwap(false, true) {
+		s.mu.Unlock()
+		return false
+	}
 	streams := make([]*Stream, 0, len(s.streams))
 	for id, st := range s.streams {
 		delete(s.streams, id)
 		streams = append(streams, st)
 	}
 	s.mu.Unlock()
+
+	close(s.done)
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
 	for _, st := range streams {
 		st.fail(io.EOF)
 	}
 	s.hub.unregisterSession(s)
-	if s.opened.Load() {
-		s.closeAuditOnce.Do(func() {
-			s.hub.recordAudit(context.Background(), AuditEvent{
-				GatewayID:  s.gatewayID,
-				SessionID:  s.sessionID,
-				EventType:  AuditSessionClosed,
-				RemoteAddr: s.remoteAddr,
-				Reason:     reason,
-				BytesTX:    s.bytesTX.Load(),
-				BytesRX:    s.bytesRX.Load(),
-				OccurredAt: time.Now().UTC(),
-			})
+	return true
+}
+
+func (s *Session) emitCloseAudit(ctx context.Context, reason string) {
+	if !s.opened.Load() || s.gatewayID == "" {
+		return
+	}
+	s.closeAuditOnce.Do(func() {
+		s.hub.recordAudit(ctx, AuditEvent{
+			GatewayID:  s.gatewayID,
+			SessionID:  s.sessionID,
+			EventType:  AuditSessionClosed,
+			RemoteAddr: s.remoteAddr,
+			Reason:     reason,
+			BytesTX:    s.bytesTX.Load(),
+			BytesRX:    s.bytesRX.Load(),
+			OccurredAt: time.Now().UTC(),
 		})
+	})
+}
+
+func (s *Session) closeWithReason(reason string) {
+	if s.closeTransport() {
+		s.emitCloseAudit(context.Background(), reason)
 	}
 }
 
@@ -700,6 +777,9 @@ func (s *Session) openStream(ctx context.Context, targetPort uint16, timeout tim
 	streamID := int64(0)
 	port := targetPort
 	recordRejected := func(err error) {
+		if s.gatewayID == "" {
+			return
+		}
 		var sidPtr *int64
 		if streamID > 0 {
 			sid := streamID

@@ -167,7 +167,30 @@ WHERE device_id = $1::uuid AND telemetry_key = 'chw.supply_temp'
 		t.Fatal(err)
 	}
 
-	// Re-sync verifies COMMAND point skipped and custom quality_checks/min/max preserved.
+	// Identical re-sync must NOT bump policy_revision.
+	if _, err := store.ApplyRegistrySync(ctx, RegistrySyncRequest{
+		TenantID: tenantID,
+		SiteID:   siteID,
+		Devices: []RegistryDeviceSync{{
+			DeviceID: deviceID,
+			Status:   "ACTIVE",
+			Points: []RegistryPointSync{
+				{PointID: "0193f300-4000-7000-8000-000000000001", TelemetryKey: "chw.supply_temp", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", SampleIntervalSeconds: 60, FreshWithinSeconds: 300, Status: "ACTIVE"},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("identical ApplyRegistrySync: %v", err)
+	}
+	var unchangedRev int64
+	if err := admin.QueryRow(ctx, `SELECT policy_revision FROM telemetry_runtime.freshness_policies WHERE device_id = $1::uuid AND telemetry_key = 'chw.supply_temp'`, deviceID).Scan(&unchangedRev); err != nil {
+		t.Fatal(err)
+	}
+	if unchangedRev != 1 {
+		t.Fatalf("expected policy_revision to remain 1 on identical re-sync, got %d", unchangedRev)
+	}
+
+	// Re-sync with changed window and second point verifies COMMAND point skipped, custom bounds preserved,
+	// policy_revision bumped, and device_observation_snapshots updated immediately.
 	if _, err := store.ApplyRegistrySync(ctx, RegistrySyncRequest{
 		TenantID: tenantID,
 		SiteID:   siteID,
@@ -176,6 +199,7 @@ WHERE device_id = $1::uuid AND telemetry_key = 'chw.supply_temp'
 			Status:   "ACTIVE",
 			Points: []RegistryPointSync{
 				{PointID: "0193f300-4000-7000-8000-000000000001", TelemetryKey: "chw.supply_temp", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", SampleIntervalSeconds: 30, FreshWithinSeconds: 180, Status: "ACTIVE"},
+				{PointID: "0193f300-4000-7000-8000-000000000003", TelemetryKey: "chw.return_temp", PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", SampleIntervalSeconds: 30, FreshWithinSeconds: 180, Status: "ACTIVE"},
 			},
 		}},
 	}); err != nil {
@@ -185,18 +209,50 @@ WHERE device_id = $1::uuid AND telemetry_key = 'chw.supply_temp'
 	var minVal, maxVal *float64
 	var qc string
 	var freshSec, cmdCount int
+	var policyRev int64
 	if err := admin.QueryRow(ctx, `
-SELECT fresh_within_seconds, minimum_number, maximum_number, COALESCE(quality_checks::text, '')
+SELECT policy_revision, fresh_within_seconds, minimum_number, maximum_number, COALESCE(quality_checks::text, '')
 FROM telemetry_runtime.freshness_policies
 WHERE device_id = $1::uuid AND telemetry_key = 'chw.supply_temp'
-`, deviceID).Scan(&freshSec, &minVal, &maxVal, &qc); err != nil {
+`, deviceID).Scan(&policyRev, &freshSec, &minVal, &maxVal, &qc); err != nil {
 		t.Fatal(err)
 	}
-	if freshSec != 180 || minVal == nil || *minVal != -10 || maxVal == nil || *maxVal != 60 || qc == "" {
-		t.Fatalf("custom bounds/quality checks lost: fresh=%d min=%v max=%v qc=%q", freshSec, minVal, maxVal, qc)
+	if policyRev != 2 || freshSec != 180 || minVal == nil || *minVal != -10 || maxVal == nil || *maxVal != 60 || qc == "" {
+		t.Fatalf("custom bounds/quality checks or policy_revision mismatch: rev=%d fresh=%d min=%v max=%v qc=%q", policyRev, freshSec, minVal, maxVal, qc)
 	}
 	if err := admin.QueryRow(ctx, `SELECT count(*) FROM telemetry_runtime.freshness_policies WHERE device_id = $1::uuid AND telemetry_key = 'chw.start_cmd'`, deviceID).Scan(&cmdCount); err != nil || cmdCount != 0 {
 		t.Fatalf("COMMAND point unexpectedly synced into freshness_policies (count=%d err=%v)", cmdCount, err)
+	}
+	var hasReturnBefore bool
+	if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM jsonb_array_elements(snapshot->'values') AS item WHERE item->>'key' = 'chw.return_temp') FROM telemetry_runtime.device_observation_snapshots WHERE device_id = $1::uuid`, deviceID).Scan(&hasReturnBefore); err != nil || !hasReturnBefore {
+		t.Fatalf("expected newly synced point chw.return_temp in snapshot immediately (has=%v err=%v)", hasReturnBefore, err)
+	}
+
+	// Retiring a single point removes it from device_observation_snapshots immediately and stops bumping policy_revision on repeat.
+	if _, err := store.ApplyRegistrySync(ctx, RegistrySyncRequest{
+		TenantID:      tenantID,
+		SiteID:        siteID,
+		RetiredPoints: []RegistryRetiredPoint{{DeviceID: deviceID, TelemetryKey: "chw.return_temp"}},
+	}); err != nil {
+		t.Fatalf("retire single point: %v", err)
+	}
+	var hasReturnAfter bool
+	if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM jsonb_array_elements(snapshot->'values') AS item WHERE item->>'key' = 'chw.return_temp') FROM telemetry_runtime.device_observation_snapshots WHERE device_id = $1::uuid`, deviceID).Scan(&hasReturnAfter); err != nil || hasReturnAfter {
+		t.Fatalf("expected retired point chw.return_temp cleared from snapshot immediately (has=%v err=%v)", hasReturnAfter, err)
+	}
+	if _, err := store.ApplyRegistrySync(ctx, RegistrySyncRequest{
+		TenantID:      tenantID,
+		SiteID:        siteID,
+		RetiredPoints: []RegistryRetiredPoint{{DeviceID: deviceID, TelemetryKey: "chw.return_temp"}},
+	}); err != nil {
+		t.Fatalf("repeat retire single point: %v", err)
+	}
+	var retiredRev int64
+	if err := admin.QueryRow(ctx, `SELECT policy_revision FROM telemetry_runtime.freshness_policies WHERE device_id = $1::uuid AND telemetry_key = 'chw.return_temp'`, deviceID).Scan(&retiredRev); err != nil {
+		t.Fatal(err)
+	}
+	if retiredRev != 2 {
+		t.Fatalf("expected retired point policy_revision=2 without churn on repeat, got %d", retiredRev)
 	}
 
 	// Retiring device sets presence_applicability='NOT_APPLICABLE', configured=false, and persists snapshot.

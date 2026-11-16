@@ -326,12 +326,20 @@ RETURNING id::text
 			}
 			return mutationRecord[RetirementResult]{}, err
 		}
-		value := RetirementResult{SagaID: sagaID, ResourceType: input.ResourceType, ResourceID: input.ResourceID, Status: status, DependencyCount: dependencies, Revision: 1}
+		var aggregateVersion int64
+		if err := tx.QueryRow(ctx, `
+SELECT COALESCE(MAX(aggregate_version), 0) + 1
+FROM core_registry.domain_outbox_events
+WHERE tenant_id = $1::uuid AND aggregate_type = 'RETIREMENT' AND aggregate_id = $2::uuid
+`, claims.TenantID, sagaID).Scan(&aggregateVersion); err != nil {
+			return mutationRecord[RetirementResult]{}, err
+		}
+		value := RetirementResult{SagaID: sagaID, ResourceType: input.ResourceType, ResourceID: input.ResourceID, Status: status, DependencyCount: dependencies, Revision: aggregateVersion}
 		eventType := "registry.retirement.completed"
 		if status == "BLOCKED" {
 			eventType = "registry.retirement.blocked"
 		}
-		return mutationRecord[RetirementResult]{Result: value, SiteID: &input.SiteID, ResourceType: "RETIREMENT", ResourceID: sagaID, AfterRevision: revisionPointer(1), Outcome: outcome, EventType: eventType, AggregateVersion: 1, Payload: map[string]any{"siteId": input.SiteID, "resourceType": input.ResourceType, "resourceId": input.ResourceID, "dependencyCount": dependencies, "status": status}}, nil
+		return mutationRecord[RetirementResult]{Result: value, SiteID: &input.SiteID, ResourceType: "RETIREMENT", ResourceID: sagaID, AfterRevision: revisionPointer(aggregateVersion), Outcome: outcome, EventType: eventType, AggregateVersion: aggregateVersion, Payload: map[string]any{"siteId": input.SiteID, "resourceType": input.ResourceType, "resourceId": input.ResourceID, "dependencyCount": dependencies, "status": status}}, nil
 	})
 	if err != nil {
 		return RetirementResult{}, err

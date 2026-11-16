@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -187,35 +188,56 @@ func startOptionalOutboxRelay(ctx context.Context, store *core.PostgresStore, ce
 	if telemetryURL == "" && connectivityURL == "" && commandURL == "" {
 		return nil, nil
 	}
-	buildClient := func(caEnv string) (*http.Client, error) {
-		roots := defaultRoots
-		if caPath := strings.TrimSpace(os.Getenv(caEnv)); caPath != "" {
+	buildClient := func(caEnv, defaultCA, serverName string, fallback *x509.CertPool) (*http.Client, error) {
+		roots := fallback
+		caPath := strings.TrimSpace(os.Getenv(caEnv))
+		if caPath == "" {
+			caPath = defaultCA
+		}
+		if caPath != "" {
 			loaded, err := loadCertPool(caPath)
 			if err != nil {
 				return nil, err
 			}
 			roots = loaded
 		}
+		if roots == nil {
+			return nil, fmt.Errorf("%s root CA is required", caEnv)
+		}
 		return &http.Client{
 			Timeout: 10 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 			Transport: &http.Transport{TLSClientConfig: &tls.Config{
 				MinVersion:   tls.VersionTLS13,
 				RootCAs:      roots,
 				Certificates: []tls.Certificate{cert},
+				ServerName:   serverName,
 			}},
 		}, nil
 	}
-	telClient, err := buildClient("TELEMETRY_RUNTIME_SERVER_CA")
-	if err != nil {
-		return nil, err
+	var telClient, connClient, cmdClient *http.Client
+	if telemetryURL != "" {
+		var err error
+		telClient, err = buildClient("TELEMETRY_RUNTIME_SERVER_CA", "", envOr("TELEMETRY_RUNTIME_SERVER_NAME", "telemetry-runtime-service"), defaultRoots)
+		if err != nil {
+			return nil, err
+		}
 	}
-	connClient, err := buildClient("CONNECTIVITY_SERVER_CA")
-	if err != nil {
-		return nil, err
+	if connectivityURL != "" {
+		var err error
+		connClient, err = buildClient("CONNECTIVITY_SERVER_CA", "/run/hvac/gateway-ca/ca.crt", envOr("CONNECTIVITY_SERVICE_SERVER_NAME", "connectivity"), nil)
+		if err != nil {
+			return nil, err
+		}
 	}
-	cmdClient, err := buildClient("COMMAND_SERVICE_SERVER_CA")
-	if err != nil {
-		return nil, err
+	if commandURL != "" {
+		var err error
+		cmdClient, err = buildClient("COMMAND_SERVICE_SERVER_CA", "", envOr("COMMAND_SERVICE_SERVER_NAME", "command-service"), defaultRoots)
+		if err != nil {
+			return nil, err
+		}
 	}
 	_ = ctx
 	return core.NewOutboxRelay(store, core.OutboxRelayConfig{

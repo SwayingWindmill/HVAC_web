@@ -34,8 +34,8 @@ CREATE POLICY gateway_tunnel_audit_migrator_all ON connectivity.gateway_tunnel_a
 DROP POLICY IF EXISTS gateway_tunnel_audit_tenant_scope ON connectivity.gateway_tunnel_audit;
 CREATE POLICY gateway_tunnel_audit_tenant_scope ON connectivity.gateway_tunnel_audit
   FOR ALL TO connectivity_runtime
-  USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid OR tenant_id IS NULL)
-  WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid OR tenant_id IS NULL);
+  USING (tenant_id IS NOT DISTINCT FROM NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id IS NOT DISTINCT FROM NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 
 GRANT SELECT, INSERT ON connectivity.gateway_tunnel_audit TO connectivity_runtime;
 REVOKE ALL ON connectivity.gateway_tunnel_audit FROM PUBLIC;
