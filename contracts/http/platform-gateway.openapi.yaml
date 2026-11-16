@@ -2363,7 +2363,11 @@
         "x-architecture-status": "ACTIVE",
         "x-owner": "optimization-service",
         "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
-        "responses": { "2XX": { "$ref": "#/components/responses/V212Success" }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+        "responses": {
+          "200": { "description": "Latest optimization preparation outcome and readiness reasons.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptimizationPreparation" } } } },
+          "4XX": { "$ref": "#/components/responses/V212Error" },
+          "5XX": { "$ref": "#/components/responses/V212Error" }
+        }
       }
     },
     "/api/v1/sites/{siteId}/optimization/shadow-evaluations/latest": {
@@ -5230,6 +5234,37 @@
           "cancelledCommandIds": { "type": "array", "items": { "type": "string" } },
           "submittedCommandIds": { "type": "array", "items": { "type": "string" } },
           "deferredHoldingAssetIds": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "OptimizationPreparationResponseCoefficient": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "calibratedAt"],
+        "properties": {
+          "status": { "type": "string", "enum": ["CALIBRATED", "NOT_CALIBRATED"] },
+          "calibratedAt": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] }
+        }
+      },
+      "OptimizationPreparationTenantStrategy": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status"],
+        "properties": {
+          "status": { "type": "string", "enum": ["CONFIRMED", "PENDING"] }
+        }
+      },
+      "OptimizationPreparation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["trigger", "status", "reason", "firedAt", "completedAt", "responseCoefficient", "tenantStrategy"],
+        "properties": {
+          "trigger": { "oneOf": [{ "type": "string", "enum": ["SCHEDULE", "MANUAL"] }, { "type": "null" }] },
+          "status": { "type": "string", "enum": ["PREPARED", "FAILED", "PENDING", "NOT_SCHEDULED"] },
+          "reason": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+          "firedAt": { "oneOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }] },
+          "completedAt": { "oneOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }] },
+          "responseCoefficient": { "$ref": "#/components/schemas/OptimizationPreparationResponseCoefficient" },
+          "tenantStrategy": { "$ref": "#/components/schemas/OptimizationPreparationTenantStrategy" }
         }
       },
       "StagingDiagnostic": {

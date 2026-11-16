@@ -284,8 +284,18 @@ export class Gateway {
   readonly findings = replayFindings(fixture<Json>('fdd-findings.json').items, new Date().toISOString());
   /** The Site's latest published recommendation; null until a run publishes one. */
   optimization: Json | null = null;
-  /** How the Site's Optimization schedule last fired; null while the Site has no schedule that fired. */
+  /** How the Site's Optimization schedule last fired; null defaults to NOT_SCHEDULED with CALIBRATED + CONFIRMED. */
   optimizationPreparation: Json | null = null;
+  /** The Site's automatic optimization control lease state (MANUAL_CONFIRM by default). */
+  autoControlLeaseState: Json = {
+    tenantId: principal.context.tenantId,
+    siteId: SITE_ID,
+    confirmationMode: 'MANUAL_CONFIRM',
+    activeLease: null,
+    latestLease: null,
+  };
+  /** Recent 30-minute automated optimization execution monitors for the Site. */
+  optimizationExecutionMonitors: Json[] = [];
   /** The Chiller COP Model's latest read-only shadow evaluation; null when no SHADOW row exists. */
   optimizationShadow: Json | null = null;
   shadowReads = 0;
@@ -1098,8 +1108,23 @@ export class Gateway {
       return this.optimization ? { body: this.optimization } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
     }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/preparations/latest`) {
-      return this.optimizationPreparation ? { body: this.optimizationPreparation } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
+      const defaults = {
+        trigger: null,
+        status: 'NOT_SCHEDULED',
+        reason: null,
+        firedAt: null,
+        completedAt: null,
+        responseCoefficient: { status: 'CALIBRATED', calibratedAt: '2026-10-01' },
+        tenantStrategy: { status: 'CONFIRMED' },
+      };
+      return {
+        body: this.optimizationPreparation
+          ? { ...defaults, ...this.optimizationPreparation }
+          : defaults,
+      };
     }
+    const autoControlReply = this.autoControl(method, path, body, now);
+    if (autoControlReply) return autoControlReply;
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/optimization/shadow-evaluations/latest`) {
       this.shadowReads += 1;
       return this.optimizationShadow ? { body: this.optimizationShadow } : { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND', title: 'Resource not found' } };
@@ -1286,6 +1311,160 @@ export class Gateway {
       order.status = next;
       return { body: order };
     }
+    return undefined;
+  }
+
+  private autoControl(method: string, path: string, body: Json | null, now: string): { status?: number; body: unknown } | undefined {
+    const leasePath = `/api/v1/sites/${SITE_ID}/optimization/auto-control-lease`;
+    const revokePath = `${leasePath}/revoke`;
+    const monitorsPath = `/api/v1/sites/${SITE_ID}/optimization/execution-monitors`;
+    if (path !== leasePath && path !== revokePath && path !== monitorsPath) return undefined;
+
+    const refuse = (status: number, code: string, detail: string, reason?: string) => ({
+      status,
+      body: {
+        type: 'about:blank',
+        title: code,
+        status,
+        detail,
+        instance: path,
+        code,
+        ...(reason ? { reason } : {}),
+        traceId: '0'.repeat(32),
+        retryable: false,
+      },
+    });
+
+    const activePrincipal = this.principalOverride ?? principal;
+    const caps = new Set<string>(activePrincipal.authorization?.capabilities ?? []);
+
+    if (method === 'GET' && path === leasePath) {
+      if (!caps.has('site.read')) return refuse(403, 'FORBIDDEN', 'site.read required.');
+      const active = this.autoControlLeaseState.activeLease;
+      if (active && Date.parse(active.expiresAt) <= Date.parse(now)) {
+        const expired = { ...active, status: 'EXPIRED', updatedAt: now };
+        this.autoControlLeaseState = {
+          ...this.autoControlLeaseState,
+          confirmationMode: 'MANUAL_CONFIRM',
+          activeLease: null,
+          latestLease: expired,
+        };
+      }
+      return { body: this.autoControlLeaseState };
+    }
+
+    if (method === 'GET' && path === monitorsPath) {
+      if (!caps.has('site.read')) return refuse(403, 'FORBIDDEN', 'site.read required.');
+      return {
+        body: {
+          tenantId: principal.context.tenantId,
+          siteId: SITE_ID,
+          items: this.optimizationExecutionMonitors,
+        },
+      };
+    }
+
+    if (method === 'PUT' && path === leasePath) {
+      if (!caps.has('schedule.manage')) {
+        return refuse(403, 'CONTROL_EXIT_FORBIDDEN', 'Schedule manage authorization is required to arm automatic control leases.');
+      }
+      if (this.stepUpFailureReason) {
+        return refuse(428, 'STEP_UP_REQUIRED', 'Arming an automatic control lease failed step-up verification.', this.stepUpFailureReason);
+      }
+      if (!/^\d{6}$/.test(body?.verificationCode ?? '')) {
+        return refuse(428, 'STEP_UP_REQUIRED', 'Arming an automatic control lease requires a 6-digit verificationCode.');
+      }
+      const expiresInHours = Number(body?.expiresInHours ?? 0);
+      const supplyMin = Number(body?.supplyTempMinC);
+      const supplyMax = Number(body?.supplyTempMaxC);
+      const maxStep = Number(body?.maxSetpointStepC ?? 1.0);
+      const zoneMax = Number(body?.zoneTempMaxC ?? 26.0);
+      const minChillers = Number(body?.minRunningChillers ?? 1);
+      const maxPerHour = Number(body?.maxCommandsPerHour ?? 2);
+      const allowedCaps: string[] = Array.isArray(body?.allowedCapabilities) ? body.allowedCapabilities : [];
+      const reason = String(body?.reason ?? '').trim();
+
+      const valid =
+        Number.isInteger(expiresInHours) && expiresInHours >= 1 && expiresInHours <= 24
+        && allowedCaps.length >= 1
+        && Number.isFinite(supplyMin) && supplyMin >= 4 && supplyMin <= 20
+        && Number.isFinite(supplyMax) && supplyMax >= supplyMin && supplyMax <= 25
+        && Number.isFinite(maxStep) && maxStep > 0 && maxStep <= 2
+        && Number.isFinite(zoneMax) && zoneMax >= 18 && zoneMax <= 32
+        && Number.isInteger(minChillers) && minChillers >= 0
+        && Number.isInteger(maxPerHour) && maxPerHour >= 1 && maxPerHour <= 6
+        && reason.length >= 1 && reason.length <= 1000;
+      if (!valid) {
+        return refuse(400, 'REGISTRY_MUTATION_INVALID', 'The auto control lease payload is invalid.');
+      }
+
+      const currentActive = this.autoControlLeaseState.activeLease;
+      if (currentActive && body?.expectedRevision !== undefined && body.expectedRevision !== currentActive.revision) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'The expected auto control lease revision is stale.');
+      }
+
+      const expiresAt = new Date(Date.parse(now) + expiresInHours * 3_600_000).toISOString();
+      const lease: Json = {
+        id: `01990000-8800-7000-8000-${String(this.writes.length + 1).padStart(12, '0')}`,
+        tenantId: principal.context.tenantId,
+        siteId: SITE_ID,
+        status: 'ACTIVE',
+        armedBy: activePrincipal.principalId,
+        armedAt: now,
+        expiresAt,
+        allowedCapabilities: allowedCaps,
+        maxSetpointStepC: maxStep,
+        supplyTempMinC: supplyMin,
+        supplyTempMaxC: supplyMax,
+        zoneTempMaxC: zoneMax,
+        minRunningChillers: minChillers,
+        maxCommandsPerHour: maxPerHour,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.autoControlLeaseState = {
+        tenantId: principal.context.tenantId,
+        siteId: SITE_ID,
+        confirmationMode: 'AUTO_WITH_LEASE',
+        activeLease: lease,
+        latestLease: lease,
+      };
+      return { body: this.autoControlLeaseState };
+    }
+
+    if (method === 'POST' && path === revokePath) {
+      if (!caps.has('schedule.manage')) {
+        return refuse(403, 'CONTROL_EXIT_FORBIDDEN', 'Schedule manage authorization is required to revoke automatic control leases.');
+      }
+      const reason = String(body?.reason ?? '').trim();
+      if (!reason || reason.length > 1000) {
+        return refuse(400, 'AUTO_CONTROL_LEASE_REQUEST_INVALID', 'reason is required.');
+      }
+      const currentActive = this.autoControlLeaseState.activeLease;
+      if (!currentActive) {
+        return refuse(404, 'RESOURCE_NOT_FOUND', 'No active auto control lease to revoke.');
+      }
+      if (body?.expectedRevision !== undefined && body.expectedRevision !== currentActive.revision) {
+        return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'The expected auto control lease revision is stale.');
+      }
+      const revoked: Json = {
+        ...currentActive,
+        status: 'REVOKED',
+        tripReason: reason,
+        revision: currentActive.revision + 1,
+        updatedAt: now,
+      };
+      this.autoControlLeaseState = {
+        tenantId: principal.context.tenantId,
+        siteId: SITE_ID,
+        confirmationMode: 'MANUAL_CONFIRM',
+        activeLease: null,
+        latestLease: revoked,
+      };
+      return { body: this.autoControlLeaseState };
+    }
+
     return undefined;
   }
 

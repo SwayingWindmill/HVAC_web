@@ -27,6 +27,7 @@ import {
 import { commandSummary, IN_FLIGHT, needsPerson, STATUS_PRESENTATION } from '../command-presentation';
 import { commandLabels, controlTargets, hasEmergencyRelease, plantUnits, type ControlTarget, type PlantUnit } from '../control-model';
 import { activeLocks, siteControlStateQuery, type SiteControlMode } from '../control-state';
+import { siteAutoControlLeaseQuery } from '@/features/optimization/auto-control-api';
 import { CommandLog, CommandSheet, StepUpDialog, type CommandActions } from './CommandLog';
 import { commandFailure, ConfirmCommand, type PendingCommand } from './CommandConfirmation';
 import { AssetLockDialog, ControlModeBar, ControlModeDialog, type LockSubject } from './ControlBoundary';
@@ -58,6 +59,10 @@ export function ControlWorkspace() {
   const { plant, registry, refresh, mode: liveMode } = useRealtimePlant();
   const commands = useQuery(siteCommandsQuery(site.id));
   const controlState = useQuery(siteControlStateQuery(site.id));
+  const autoControlLease = useQuery({
+    ...siteAutoControlLeaseQuery(site.id),
+    enabled: principal.authorization.capabilities.includes('site.read'),
+  });
   const [pending, setPending] = useState<PendingCommand | null>(null);
   const [modeTarget, setModeTarget] = useState<SiteControlMode | null>(null);
   const [lockTarget, setLockTarget] = useState<ControlTarget | null>(null);
@@ -182,6 +187,7 @@ export function ControlWorkspace() {
           myId={myId}
           timeZone={site.timezone}
           canManage={canManage}
+          autoControlLease={autoControlLease.data}
           onPick={setModeTarget}
           onShutdown={() => setShutdown({ kind: 'site', emergencyAvailable: model ? hasEmergencyRelease(model) : false, withdrawCount: list.filter((command) => WITHDRAWABLE.has(command.status)).length })}
         />
