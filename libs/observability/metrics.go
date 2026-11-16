@@ -26,6 +26,7 @@ type Registry struct {
 	counters   map[string]*counterPoint
 	gauges     map[string]*gaugePoint
 	histograms map[string]*histogramPoint
+	children   []*Registry
 }
 
 type counterPoint struct {
@@ -127,42 +128,163 @@ func (registry *Registry) Handler() http.Handler {
 	})
 }
 
-func (registry *Registry) SeriesCardinality() map[string]int {
+// AttachChild links a child Registry whose metrics are federated during
+// Prometheus scrapes and cardinality checks without mutating the parent map.
+func (registry *Registry) AttachChild(child *Registry) {
+	if registry == nil || child == nil || child == registry {
+		return
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	for _, existing := range registry.children {
+		if existing == child {
+			return
+		}
+	}
+	registry.children = append(registry.children, child)
+}
+
+func (registry *Registry) collectPoints(visited map[*Registry]bool) ([]counterPoint, []gaugePoint, []histogramPoint) {
+	if registry == nil || visited[registry] {
+		return nil, nil, nil
+	}
+	visited[registry] = true
+
 	registry.mu.RLock()
-	defer registry.mu.RUnlock()
+	counters := make([]counterPoint, 0, len(registry.counters))
+	for _, key := range sortedKeys(registry.counters) {
+		point := registry.counters[key]
+		counters = append(counters, counterPoint{
+			name: point.name, help: point.help, labels: cloneLabels(point.labels), value: point.value,
+		})
+	}
+	gauges := make([]gaugePoint, 0, len(registry.gauges))
+	for _, key := range sortedKeys(registry.gauges) {
+		point := registry.gauges[key]
+		gauges = append(gauges, gaugePoint{
+			name: point.name, help: point.help, labels: cloneLabels(point.labels), value: point.value,
+		})
+	}
+	histograms := make([]histogramPoint, 0, len(registry.histograms))
+	for _, key := range sortedKeys(registry.histograms) {
+		point := registry.histograms[key]
+		histograms = append(histograms, histogramPoint{
+			name: point.name, help: point.help, labels: cloneLabels(point.labels),
+			buckets: append([]float64(nil), point.buckets...),
+			counts:  append([]uint64(nil), point.counts...),
+			count:   point.count,
+			sum:     point.sum,
+		})
+	}
+	children := append([]*Registry(nil), registry.children...)
+	registry.mu.RUnlock()
+
+	for _, child := range children {
+		cCounters, cGauges, cHistograms := child.collectPoints(visited)
+		counters = append(counters, cCounters...)
+		gauges = append(gauges, cGauges...)
+		histograms = append(histograms, cHistograms...)
+	}
+	return counters, gauges, histograms
+}
+
+func (registry *Registry) SeriesCardinality() map[string]int {
+	counters, gauges, histograms := registry.collectPoints(map[*Registry]bool{})
+	seen := map[string]struct{}{}
 	result := map[string]int{}
-	for _, point := range registry.counters {
+	for _, point := range counters {
+		key := metricKey(point.name, point.labels)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
 		result[point.name]++
 	}
-	for _, point := range registry.gauges {
+	for _, point := range gauges {
+		key := metricKey(point.name, point.labels)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
 		result[point.name]++
 	}
-	for _, point := range registry.histograms {
+	for _, point := range histograms {
+		key := metricKey(point.name, point.labels)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
 		result[point.name]++
 	}
 	return result
 }
 
+type prometheusFamily struct {
+	name    string
+	help    string
+	kind    string
+	samples []string
+}
+
 func (registry *Registry) writePrometheus(writer io.Writer) {
-	registry.mu.RLock()
-	defer registry.mu.RUnlock()
-	for _, key := range sortedKeys(registry.counters) {
-		point := registry.counters[key]
-		fmt.Fprintf(writer, "# HELP %s %s\n# TYPE %s counter\n%s%s %s\n", point.name, escapeHelp(point.help), point.name, point.name, renderLabels(point.labels, "", ""), strconv.FormatFloat(point.value, 'f', -1, 64))
-	}
-	for _, key := range sortedKeys(registry.gauges) {
-		point := registry.gauges[key]
-		fmt.Fprintf(writer, "# HELP %s %s\n# TYPE %s gauge\n%s%s %s\n", point.name, escapeHelp(point.help), point.name, point.name, renderLabels(point.labels, "", ""), strconv.FormatFloat(point.value, 'f', -1, 64))
-	}
-	for _, key := range sortedKeys(registry.histograms) {
-		point := registry.histograms[key]
-		fmt.Fprintf(writer, "# HELP %s %s\n# TYPE %s histogram\n", point.name, escapeHelp(point.help), point.name)
-		for index, upper := range point.buckets {
-			fmt.Fprintf(writer, "%s_bucket%s %d\n", point.name, renderLabels(point.labels, "le", strconv.FormatFloat(upper, 'f', -1, 64)), point.counts[index])
+	counters, gauges, histograms := registry.collectPoints(map[*Registry]bool{})
+	families := map[string]*prometheusFamily{}
+	seenSeries := map[string]struct{}{}
+
+	ensureFamily := func(name, help, kind string) *prometheusFamily {
+		family, exists := families[name]
+		if !exists {
+			family = &prometheusFamily{name: name, help: help, kind: kind}
+			families[name] = family
 		}
-		fmt.Fprintf(writer, "%s_bucket%s %d\n", point.name, renderLabels(point.labels, "le", "+Inf"), point.count)
-		fmt.Fprintf(writer, "%s_sum%s %s\n", point.name, renderLabels(point.labels, "", ""), strconv.FormatFloat(point.sum, 'f', -1, 64))
-		fmt.Fprintf(writer, "%s_count%s %d\n", point.name, renderLabels(point.labels, "", ""), point.count)
+		return family
+	}
+
+	for _, point := range counters {
+		seriesKey := "counter|" + metricKey(point.name, point.labels)
+		if _, duplicate := seenSeries[seriesKey]; duplicate {
+			continue
+		}
+		seenSeries[seriesKey] = struct{}{}
+		family := ensureFamily(point.name, point.help, "counter")
+		family.samples = append(family.samples, fmt.Sprintf("%s%s %s\n", point.name, renderLabels(point.labels, "", ""), strconv.FormatFloat(point.value, 'f', -1, 64)))
+	}
+	for _, point := range gauges {
+		seriesKey := "gauge|" + metricKey(point.name, point.labels)
+		if _, duplicate := seenSeries[seriesKey]; duplicate {
+			continue
+		}
+		seenSeries[seriesKey] = struct{}{}
+		family := ensureFamily(point.name, point.help, "gauge")
+		family.samples = append(family.samples, fmt.Sprintf("%s%s %s\n", point.name, renderLabels(point.labels, "", ""), strconv.FormatFloat(point.value, 'f', -1, 64)))
+	}
+	for _, point := range histograms {
+		seriesKey := "histogram|" + metricKey(point.name, point.labels)
+		if _, duplicate := seenSeries[seriesKey]; duplicate {
+			continue
+		}
+		seenSeries[seriesKey] = struct{}{}
+		family := ensureFamily(point.name, point.help, "histogram")
+		var block strings.Builder
+		for index, upper := range point.buckets {
+			fmt.Fprintf(&block, "%s_bucket%s %d\n", point.name, renderLabels(point.labels, "le", strconv.FormatFloat(upper, 'f', -1, 64)), point.counts[index])
+		}
+		fmt.Fprintf(&block, "%s_bucket%s %d\n", point.name, renderLabels(point.labels, "le", "+Inf"), point.count)
+		fmt.Fprintf(&block, "%s_sum%s %s\n", point.name, renderLabels(point.labels, "", ""), strconv.FormatFloat(point.sum, 'f', -1, 64))
+		fmt.Fprintf(&block, "%s_count%s %d\n", point.name, renderLabels(point.labels, "", ""), point.count)
+		family.samples = append(family.samples, block.String())
+	}
+
+	names := sortedKeys(families)
+	for _, name := range names {
+		family := families[name]
+		if family.kind != "histogram" {
+			sort.Strings(family.samples)
+		}
+		fmt.Fprintf(writer, "# HELP %s %s\n# TYPE %s %s\n", family.name, escapeHelp(family.help), family.name, family.kind)
+		for _, sample := range family.samples {
+			_, _ = io.WriteString(writer, sample)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/tls"
@@ -12,9 +13,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
@@ -72,12 +75,36 @@ func parseEmbeddedOwners(raw string) ([]string, error) {
 	return owners, nil
 }
 
+type embeddedAlarmStoreRef struct {
+	mu    sync.RWMutex
+	store alarmservice.Store
+}
+
+func (ref *embeddedAlarmStoreRef) setStore(store alarmservice.Store) {
+	if ref == nil {
+		return
+	}
+	ref.mu.Lock()
+	ref.store = store
+	ref.mu.Unlock()
+}
+
+func (ref *embeddedAlarmStoreRef) getStore() alarmservice.Store {
+	if ref == nil {
+		return nil
+	}
+	ref.mu.RLock()
+	defer ref.mu.RUnlock()
+	return ref.store
+}
+
 func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*embeddedEnergyServices, error) {
 	owners, err := parseEmbeddedOwners(os.Getenv("ENERGY_API_EMBEDDED_OWNERS"))
 	if err != nil {
 		return nil, err
 	}
 	services := &embeddedEnergyServices{}
+	alarmStoreRef := &embeddedAlarmStoreRef{}
 	fail := func(err error) (*embeddedEnergyServices, error) {
 		services.Close()
 		return nil, err
@@ -117,7 +144,7 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 			services.servers = append(services.servers, server)
 			services.telemetry = append(services.telemetry, telemetry)
 		case "alarm":
-			server, telemetry, closeOwner, configureErr := newEmbeddedAlarmServer(ctx, logger)
+			server, telemetry, closeOwner, configureErr := newEmbeddedAlarmServer(ctx, logger, alarmStoreRef)
 			if configureErr != nil {
 				return fail(fmt.Errorf("configure embedded Alarm: %w", configureErr))
 			}
@@ -140,7 +167,7 @@ func startEmbeddedEnergyServices(ctx context.Context, logger *slog.Logger) (*emb
 			services.servers = append(services.servers, server)
 			services.closeFuncs = append(services.closeFuncs, closeOwner)
 		case "command":
-			server, telemetry, closeOwner, configureErr := newEmbeddedCommandServer(ctx, logger)
+			server, telemetry, closeOwner, configureErr := newEmbeddedCommandServer(ctx, logger, alarmStoreRef)
 			if configureErr != nil {
 				return fail(fmt.Errorf("configure embedded Command: %w", configureErr))
 			}
@@ -488,7 +515,7 @@ func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger) (*http.Serv
 	return server, telemetry, store.Close, nil
 }
 
-func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger) (*http.Server, *observability.Runtime, func(), error) {
+func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef) (*http.Server, *observability.Runtime, func(), error) {
 	certificate, err := tls.LoadX509KeyPair(energyRequiredEnv("COMMAND_TLS_CERT"), energyRequiredEnv("COMMAND_TLS_KEY"))
 	if err != nil {
 		return nil, nil, func() {}, err
@@ -547,7 +574,8 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger) (*http.S
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "energy-api-command", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 2048, ExportTimeout: 500 * time.Millisecond,
 	})
-	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(embeddedCommandRuntimeConfig(store, telemetry.Metrics))
+	alarmNotifier := buildEmbeddedCommandControlFailureNotifier(alarmRef, &certificate, logger)
+	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(embeddedCommandRuntimeConfig(store, telemetry.Metrics, alarmNotifier))
 	if err != nil {
 		store.Close()
 		return nil, nil, func() {}, err
@@ -574,15 +602,91 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger) (*http.S
 	return server, telemetry, store.Close, nil
 }
 
-func embeddedCommandRuntimeConfig(store commandservice.RuntimeStore, metrics *observability.Registry) commandservice.RuntimeHTTPConfig {
+func embeddedCommandRuntimeConfig(store commandservice.RuntimeStore, metrics *observability.Registry, notifier commandservice.ControlFailureNotifier) commandservice.RuntimeHTTPConfig {
 	return commandservice.RuntimeHTTPConfig{
 		Store: store, Metrics: metrics,
-		DispatcherSPIFFE: envOr("COMMAND_DISPATCHER_SPIFFE", "spiffe://hvac.local/command-dispatcher"),
-		VerifierSPIFFE:   envOr("COMMAND_VERIFIER_SPIFFE", "spiffe://hvac.local/command-verifier"),
+		DispatcherSPIFFE:       envOr("COMMAND_DISPATCHER_SPIFFE", "spiffe://hvac.local/command-dispatcher"),
+		VerifierSPIFFE:         envOr("COMMAND_VERIFIER_SPIFFE", "spiffe://hvac.local/command-verifier"),
+		ControlFailureNotifier: notifier,
 	}
 }
 
-func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger) (*http.Server, *observability.Runtime, func(), error) {
+func buildEmbeddedCommandControlFailureNotifier(alarmRef *embeddedAlarmStoreRef, clientCert *tls.Certificate, logger *slog.Logger) commandservice.ControlFailureNotifier {
+	alarmBaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("ALARM_SERVICE_URL")), "/")
+	var remoteClient *http.Client
+	if parsed, err := url.Parse(alarmBaseURL); err == nil && parsed.Scheme == "https" && parsed.Host != "" && clientCert != nil {
+		if caPath := strings.TrimSpace(os.Getenv("ALARM_SERVICE_SERVER_CA")); caPath != "" {
+			if roots, err := loadCertPool(caPath, "Alarm Service server CA"); err == nil {
+				remoteClient = &http.Client{
+					Timeout: 3 * time.Second,
+					Transport: &http.Transport{
+						TLSClientConfig: &tls.Config{
+							MinVersion:   tls.VersionTLS13,
+							RootCAs:      roots,
+							Certificates: []tls.Certificate{*clientCert},
+							ServerName:   envOr("ALARM_SERVICE_SERVER_NAME", "localhost"),
+						},
+					},
+				}
+			}
+		}
+	}
+	return func(ctx context.Context, event commandservice.ControlFailureEvent) {
+		payload := alarmservice.ControlEventRequest{
+			SchemaVersion: 1,
+			TenantID:      event.TenantID,
+			SiteID:        event.SiteID,
+			CommandID:     event.CommandID,
+			EventKind:     event.Kind,
+			Capability:    string(event.Capability),
+			ReasonCode:    event.ReasonCode,
+			Detail:        event.Detail,
+			OccurredAt:    event.OccurredAt.UTC().Format(time.RFC3339Nano),
+			ActorType:     "COMMAND_RUNTIME",
+			ActorID:       "energy-api-command",
+			CorrelationID: event.CommandID,
+		}
+		if event.DeviceID != "" {
+			deviceID := event.DeviceID
+			payload.DeviceID = &deviceID
+		}
+		if event.PointID != "" {
+			pointID := event.PointID
+			payload.PointID = &pointID
+		}
+		if store := alarmRef.getStore(); store != nil {
+			if _, err := alarmservice.PublishControlEvent(ctx, store, payload, event.OccurredAt); err != nil && logger != nil {
+				logger.Warn("embedded_command_control_alarm_failed", "error_code", "CONTROL_ALARM_PUBLISH_FAILED", "command_id", event.CommandID, "event_kind", event.Kind)
+			}
+			return
+		}
+		if remoteClient == nil || alarmBaseURL == "" {
+			return
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, alarmBaseURL+alarmservice.InternalControlEventsPath, bytes.NewReader(raw))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := remoteClient.Do(req)
+		if err != nil {
+			if logger != nil {
+				logger.Warn("embedded_command_control_alarm_failed", "error_code", "CONTROL_ALARM_HTTP_FAILED", "command_id", event.CommandID, "event_kind", event.Kind)
+			}
+			return
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode >= http.StatusMultipleChoices && logger != nil {
+			logger.Warn("embedded_command_control_alarm_rejected", "error_code", "CONTROL_ALARM_HTTP_REJECTED", "status", resp.StatusCode, "command_id", event.CommandID, "event_kind", event.Kind)
+		}
+	}
+}
+
+func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *embeddedAlarmStoreRef) (*http.Server, *observability.Runtime, func(), error) {
 	certificate, err := tls.LoadX509KeyPair(energyRequiredEnv("ALARM_TLS_CERT"), energyRequiredEnv("ALARM_TLS_KEY"))
 	if err != nil {
 		return nil, nil, func() {}, err
@@ -619,14 +723,27 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger) (*http.Ser
 		store.Close()
 		return nil, nil, func() {}, err
 	}
+	controlEventsHandler, err := alarmservice.NewControlFailureHandler(store)
+	if err != nil {
+		store.Close()
+		return nil, nil, func() {}, err
+	}
+	alarmRef.setStore(store)
 	telemetrySPIFFE := envOr("ALARM_TELEMETRY_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service")
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "energy-api-alarm", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
 	router, err := alarmservice.NewOwnerRouter(alarmservice.OwnerRouterConfig{
-		GatewaySPIFFE: gatewaySPIFFE, TelemetrySPIFFE: telemetrySPIFFE,
-		ReaderSPIFFE:   envOr("ALARM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
-		GatewayHandler: handler, TelemetryHandler: telemetryEvaluationHandler,
+		GatewaySPIFFE:   gatewaySPIFFE,
+		TelemetrySPIFFE: telemetrySPIFFE,
+		ReaderSPIFFE:    envOr("ALARM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+		ControlEventsSPIFFEs: []string{
+			envOr("ALARM_COMMAND_SPIFFE", "spiffe://hvac.local/command-service"),
+			envOr("ALARM_CONNECTIVITY_SPIFFE", "spiffe://hvac.local/connectivity-service"),
+		},
+		GatewayHandler:       handler,
+		TelemetryHandler:     telemetryEvaluationHandler,
+		ControlEventsHandler: controlEventsHandler,
 	})
 	if err != nil {
 		store.Close()
