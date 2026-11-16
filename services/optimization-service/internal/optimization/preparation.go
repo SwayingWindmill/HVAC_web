@@ -9,10 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
 var ErrPreparationUnavailable = errors.New("optimization authoritative input is unavailable")
+
+const DefaultPreparationMaxTelemetryAge = 15 * time.Minute
 
 // Why a run is prepared: an operator asked (MANUAL) or the Site's schedule fired (SCHEDULE).
 const (
@@ -59,8 +62,37 @@ type PreparationDefinition struct {
 }
 
 type InputMapping struct {
-	SupplyTemperatureKey string `json:"supplyTemperatureKey"`
-	ZoneTemperatureKey   string `json:"zoneTemperatureKey"`
+	SupplyTemperatureKey string   `json:"supplyTemperatureKey"`
+	ZoneTemperatureKey   string   `json:"zoneTemperatureKey"`
+	ZoneTemperatureKeys  []string `json:"zoneTemperatureKeys,omitempty"`
+}
+
+func resolveZoneTemperatureKeys(single string, many []string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	appendKey := func(raw string) {
+		clean := strings.TrimSpace(raw)
+		if clean == "" {
+			return
+		}
+		if _, ok := seen[clean]; ok {
+			return
+		}
+		seen[clean] = struct{}{}
+		out = append(out, clean)
+	}
+	if len(many) > 0 {
+		for _, k := range many {
+			appendKey(k)
+		}
+		return out
+	}
+	appendKey(single)
+	return out
+}
+
+func (mapping InputMapping) effectiveZoneKeys() []string {
+	return resolveZoneTemperatureKeys(mapping.ZoneTemperatureKey, mapping.ZoneTemperatureKeys)
 }
 
 type ComfortConstraints struct {
@@ -121,6 +153,8 @@ type TelemetryEvidence struct {
 	Value           float64   `json:"value"`
 	Unit            string    `json:"unit"`
 	Quality         string    `json:"quality"`
+	QualityReasons  []string  `json:"qualityReasons,omitempty"`
+	HealthStatus    string    `json:"healthStatus,omitempty"`
 	SourceEventID   string    `json:"sourceEventId"`
 	SourcePartition string    `json:"sourcePartition"`
 	SourceOffset    uint64    `json:"sourceOffset"`
@@ -130,6 +164,7 @@ type AuthoritativeState struct {
 	PricedDay         EnergyDayEvidence
 	SupplyTemperature TelemetryEvidence
 	ZoneTemperature   TelemetryEvidence
+	ZoneTemperatures  []TelemetryEvidence
 }
 
 type OptimizationStateQuery struct {
@@ -139,9 +174,14 @@ type OptimizationStateQuery struct {
 	SubjectID            string
 	SupplyTemperatureKey string
 	ZoneTemperatureKey   string
+	ZoneTemperatureKeys  []string
 	// Timezone is the Site's clock, which days are priced on.
 	Timezone string
 	At       time.Time
+}
+
+func (query OptimizationStateQuery) effectiveZoneKeys() []string {
+	return resolveZoneTemperatureKeys(query.ZoneTemperatureKey, query.ZoneTemperatureKeys)
 }
 
 type FrozenCurrentState struct {
@@ -229,8 +269,10 @@ func (preparer *Preparer) Prepare(ctx context.Context, request PreparationReques
 	}
 	state, err := preparer.inputs.ReadOptimizationState(ctx, OptimizationStateQuery{
 		TenantID: request.TenantID, SiteID: request.SiteID, SubjectType: request.SubjectType, SubjectID: request.SubjectID,
-		SupplyTemperatureKey: policy.InputMapping.SupplyTemperatureKey, ZoneTemperatureKey: policy.InputMapping.ZoneTemperatureKey,
-		Timezone: definition.SiteTimezone, At: capturedAt,
+		SupplyTemperatureKey: policy.InputMapping.SupplyTemperatureKey,
+		ZoneTemperatureKey:   policy.InputMapping.ZoneTemperatureKey,
+		ZoneTemperatureKeys:  policy.InputMapping.ZoneTemperatureKeys,
+		Timezone:             definition.SiteTimezone, At: capturedAt,
 	})
 	if err != nil {
 		if _, named := PreparationReasonOf(err); named {
@@ -287,13 +329,36 @@ func decodePolicyContract(raw json.RawMessage) (policyContract, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return policyContract{}, errors.New("policy constraints contain trailing JSON")
 	}
-	if policy.InputMapping.SupplyTemperatureKey == "" || policy.InputMapping.ZoneTemperatureKey == "" {
+	policy.InputMapping.SupplyTemperatureKey = strings.TrimSpace(policy.InputMapping.SupplyTemperatureKey)
+	policy.InputMapping.ZoneTemperatureKey = strings.TrimSpace(policy.InputMapping.ZoneTemperatureKey)
+	for i, key := range policy.InputMapping.ZoneTemperatureKeys {
+		clean := strings.TrimSpace(key)
+		if clean == "" {
+			return policyContract{}, errors.New("inputMapping.zoneTemperatureKeys cannot contain empty keys")
+		}
+		policy.InputMapping.ZoneTemperatureKeys[i] = clean
+	}
+	if policy.InputMapping.SupplyTemperatureKey == "" || len(policy.InputMapping.effectiveZoneKeys()) == 0 {
 		return policyContract{}, errors.New("inputMapping requires supplyTemperatureKey and zoneTemperatureKey")
 	}
 	if policy.MaintenanceConstraints.OutOfService == nil || policy.ManualLocks.Resources == nil {
 		return policyContract{}, errors.New("maintenanceConstraints.outOfService and manualLocks.resources must be explicit arrays")
 	}
 	return policy, nil
+}
+
+func telemetryHealthBlockReason(healthStatus string, reasons []string) (string, bool) {
+	status := strings.ToUpper(strings.TrimSpace(healthStatus))
+	if status == "UNHEALTHY" || status == "BAD" {
+		return status, true
+	}
+	for _, reason := range reasons {
+		clean := strings.ToUpper(strings.TrimSpace(reason))
+		if clean == "PROBE_OFFSET" || clean == "UNHEALTHY" {
+			return clean, true
+		}
+	}
+	return "", false
 }
 
 func freezeAuthoritativeState(state AuthoritativeState, mapping InputMapping, at time.Time) (FrozenCurrentState, error) {
@@ -304,20 +369,73 @@ func freezeAuthoritativeState(state AuthoritativeState, mapping InputMapping, at
 	if err := validateTelemetryEvidence(state.SupplyTemperature, mapping.SupplyTemperatureKey, at); err != nil {
 		return FrozenCurrentState{}, unavailable(ReasonSupplyTempMissing, "%v", err)
 	}
-	if err := validateTelemetryEvidence(state.ZoneTemperature, mapping.ZoneTemperatureKey, at); err != nil {
-		return FrozenCurrentState{}, unavailable(ReasonZoneTempMissing, "%v", err)
+	if reason, unhealthy := telemetryHealthBlockReason(state.SupplyTemperature.HealthStatus, state.SupplyTemperature.QualityReasons); unhealthy {
+		return FrozenCurrentState{}, unavailable(ReasonInputsInvalid, "authoritative telemetry %s is unhealthy (%s)", mapping.SupplyTemperatureKey, reason)
 	}
-	if state.SupplyTemperature.Unit != "Cel" || state.ZoneTemperature.Unit != "Cel" {
+	if state.SupplyTemperature.Unit != "Cel" {
 		return FrozenCurrentState{}, unavailable(ReasonInputsInvalid, "authoritative Optimization inputs use unsupported units")
 	}
+
+	zoneKeys := mapping.effectiveZoneKeys()
+	var zoneReadings []TelemetryEvidence
+	if len(state.ZoneTemperatures) > 0 {
+		byKey := make(map[string]TelemetryEvidence, len(state.ZoneTemperatures))
+		for _, item := range state.ZoneTemperatures {
+			byKey[item.TelemetryKey] = item
+		}
+		for _, expectedKey := range zoneKeys {
+			item, ok := byKey[expectedKey]
+			if !ok {
+				return FrozenCurrentState{}, unavailable(ReasonZoneTempMissing, "authoritative telemetry %s evidence is missing", expectedKey)
+			}
+			if err := validateTelemetryEvidence(item, expectedKey, at); err != nil {
+				return FrozenCurrentState{}, unavailable(ReasonZoneTempMissing, "%v", err)
+			}
+			if reason, unhealthy := telemetryHealthBlockReason(item.HealthStatus, item.QualityReasons); unhealthy {
+				return FrozenCurrentState{}, unavailable(ReasonInputsInvalid, "authoritative telemetry %s is unhealthy (%s)", expectedKey, reason)
+			}
+			if item.Unit != "Cel" {
+				return FrozenCurrentState{}, unavailable(ReasonInputsInvalid, "authoritative Optimization inputs use unsupported units")
+			}
+			zoneReadings = append(zoneReadings, item)
+		}
+	} else {
+		if len(zoneKeys) != 1 {
+			return FrozenCurrentState{}, unavailable(ReasonZoneTempMissing, "authoritative multi-zone telemetry requires observations for all zone keys")
+		}
+		if err := validateTelemetryEvidence(state.ZoneTemperature, zoneKeys[0], at); err != nil {
+			return FrozenCurrentState{}, unavailable(ReasonZoneTempMissing, "%v", err)
+		}
+		if reason, unhealthy := telemetryHealthBlockReason(state.ZoneTemperature.HealthStatus, state.ZoneTemperature.QualityReasons); unhealthy {
+			return FrozenCurrentState{}, unavailable(ReasonInputsInvalid, "authoritative telemetry %s is unhealthy (%s)", zoneKeys[0], reason)
+		}
+		if state.ZoneTemperature.Unit != "Cel" {
+			return FrozenCurrentState{}, unavailable(ReasonInputsInvalid, "authoritative Optimization inputs use unsupported units")
+		}
+		zoneReadings = []TelemetryEvidence{state.ZoneTemperature}
+	}
+
+	worstZone := zoneReadings[0]
+	for _, item := range zoneReadings[1:] {
+		if item.Value > worstZone.Value {
+			worstZone = item
+		}
+	}
+
+	telemetryEvidence := make([]TelemetryEvidence, 0, 1+len(zoneReadings))
+	telemetryEvidence = append(telemetryEvidence, canonicalTelemetryEvidence(state.SupplyTemperature))
+	for _, item := range zoneReadings {
+		telemetryEvidence = append(telemetryEvidence, canonicalTelemetryEvidence(item))
+	}
+
 	return FrozenCurrentState{
 		SchemaVersion: 1,
 		Baseline: HVACBaseline{
 			DailyEnergyKWh: state.PricedDay.EnergyKWh, DailyCost: state.PricedDay.CostCNY,
-			SupplyTempC: state.SupplyTemperature.Value, ZoneTempC: state.ZoneTemperature.Value,
+			SupplyTempC: state.SupplyTemperature.Value, ZoneTempC: worstZone.Value,
 		},
 		EnergyEvidence:    canonicalEnergyEvidence(state.PricedDay),
-		TelemetryEvidence: []TelemetryEvidence{canonicalTelemetryEvidence(state.SupplyTemperature), canonicalTelemetryEvidence(state.ZoneTemperature)},
+		TelemetryEvidence: telemetryEvidence,
 	}, nil
 }
 
@@ -335,7 +453,7 @@ func validateTelemetryEvidence(evidence TelemetryEvidence, expectedKey string, a
 	if !uuidPattern.MatchString(evidence.ObservationID) || !uuidPattern.MatchString(evidence.DeviceID) || !uuidPattern.MatchString(evidence.PointID) ||
 		!uuidPattern.MatchString(evidence.SourceEventID) || evidence.TelemetryKey != expectedKey || evidence.PointRevision == 0 || evidence.Quality != "GOOD" ||
 		evidence.Unit == "" || evidence.SampledAt.IsZero() || evidence.SampledAt.After(at) || evidence.ReceivedAt.IsZero() || evidence.ReceivedAt.After(at) ||
-		evidence.SourcePartition == "" || !finite(evidence.Value) {
+		evidence.SourcePartition == "" || !finite(evidence.Value) || at.UTC().Sub(evidence.SampledAt.UTC()) > DefaultPreparationMaxTelemetryAge {
 		return fmt.Errorf("authoritative telemetry %s evidence is invalid", expectedKey)
 	}
 	return nil

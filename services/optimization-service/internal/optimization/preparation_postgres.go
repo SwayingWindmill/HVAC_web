@@ -1,10 +1,12 @@
 package optimization
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,30 +51,22 @@ EXISTS (
 		}
 		return PreparationDefinition{}, unavailable(ReasonMaintenanceActive, "%s", lockMessage)
 	}
-	localDate := siteLocalDateString(definition.SiteTimezone, at.UTC())
-	var excTitle, excKind, excStartDate, excEndDate, excReason string
-	err = tx.QueryRow(ctx, `
-SELECT COALESCE(title, ''), kind, to_char(start_date, 'YYYY-MM-DD'), to_char(end_date, 'YYYY-MM-DD'), COALESCE(reason, '')
-FROM core_registry.operating_exceptions
-WHERE tenant_id=$1::uuid
-  AND site_id=$2::uuid
-  AND status='APPROVED'
-  AND kind IN ('MAINTENANCE_WINDOW', 'HOLIDAY_SHUTDOWN')
-  AND start_date <= $3::date
-  AND end_date >= $3::date
-ORDER BY start_date ASC, id ASC
-LIMIT 1`, request.TenantID, request.SiteID, localDate).Scan(&excTitle, &excKind, &excStartDate, &excEndDate, &excReason)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	scheduleCtx, err := loadOperatingScheduleContext(ctx, tx, request.TenantID, request.SiteID, at.UTC())
+	if err != nil {
 		return PreparationDefinition{}, err
 	}
-	if err == nil {
-		if blockMessage, blocked := operatingExceptionBlockMessage(excKind, excTitle, excStartDate, excEndDate, excReason); blocked {
+	localDate := siteLocalDateString(definition.SiteTimezone, at.UTC())
+	if todayExc := findApprovedExceptionForDate(scheduleCtx.ApprovedExceptions, localDate); todayExc != nil {
+		if blockMessage, blocked := operatingExceptionBlockMessage(todayExc.Kind, todayExc.Title, todayExc.StartDate, todayExc.EndDate, todayExc.Reason); blocked {
 			_ = tx.Rollback(ctx)
 			if suppressErr := store.suppressLockedDraftRecommendations(ctx, request.TenantID, request.SiteID, at); suppressErr != nil {
 				return PreparationDefinition{}, suppressErr
 			}
 			return PreparationDefinition{}, unavailable(ReasonMaintenanceActive, "%s", blockMessage)
 		}
+	}
+	if scheduleMessage, blocked := operatingScheduleWindowBlockMessage(scheduleCtx, at.UTC()); blocked {
+		return PreparationDefinition{}, unavailable(ReasonMaintenanceActive, "%s", scheduleMessage)
 	}
 	var policyCount int
 	err = tx.QueryRow(ctx, `SELECT
@@ -98,6 +92,13 @@ LIMIT 1`, request.TenantID, at.UTC()).Scan(
 	}
 	if policyCount != 1 {
 		return PreparationDefinition{}, unavailable(ReasonPolicyMissing, "effective Optimization policy mapping is ambiguous")
+	}
+	telemetryKeys, err := extractConfiguredTelemetryKeys(definition.PolicyConstraints)
+	if err != nil {
+		return PreparationDefinition{}, err
+	}
+	if err = checkTelemetryPointHealth(ctx, tx, request.TenantID, request.SiteID, telemetryKeys); err != nil {
+		return PreparationDefinition{}, err
 	}
 
 	var topologyCount int
@@ -416,4 +417,207 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND approval_state='DRAFT' AND com
 		return fmt.Errorf("suppress locked optimization draft recommendations: %w", err)
 	}
 	return tx.Commit(ctx)
+}
+
+const preparationPreShutdownBuffer = 30 * time.Minute
+
+type scheduleTimeInterval struct {
+	start time.Time
+	end   time.Time
+}
+
+func operatingScheduleWindowBlockMessage(schedule *OperatingScheduleContext, at time.Time) (string, bool) {
+	if schedule == nil {
+		return "", false
+	}
+	loc := loadSiteLocation(schedule.SiteTimezone)
+	atLocal := at.In(loc)
+	day0 := time.Date(atLocal.Year(), atLocal.Month(), atLocal.Day(), 0, 0, 0, 0, loc)
+	todayStr := day0.Format("2006-01-02")
+
+	todayExc := findApprovedExceptionForDate(schedule.ApprovedExceptions, todayStr)
+	if todayExc != nil {
+		if blockMessage, blocked := operatingExceptionBlockMessage(todayExc.Kind, todayExc.Title, todayExc.StartDate, todayExc.EndDate, todayExc.Reason); blocked {
+			return blockMessage, true
+		}
+	}
+
+	hasOvertimeToday := todayExc != nil && strings.EqualFold(strings.TrimSpace(todayExc.Kind), "OVERTIME_COOLING")
+	if !schedule.Configured || (len(schedule.Slots) == 0 && !hasOvertimeToday) {
+		return "", false
+	}
+
+	lead := time.Duration(max(0, schedule.PreCoolLeadMinutes)) * time.Minute
+	var intervals []scheduleTimeInterval
+	addSlot := func(dayStart time.Time, startMinute, endMinute int) {
+		if endMinute <= startMinute {
+			return
+		}
+		intervals = append(intervals, scheduleTimeInterval{
+			start: dayStart.Add(time.Duration(startMinute)*time.Minute - lead),
+			end:   dayStart.Add(time.Duration(endMinute) * time.Minute),
+		})
+	}
+
+	if hasOvertimeToday {
+		for _, slot := range todayExc.ReplacementSlots {
+			addSlot(day0, slot.StartMinute, slot.EndMinute)
+		}
+	} else {
+		for _, d := range []time.Time{day0.AddDate(0, 0, -1), day0, day0.AddDate(0, 0, 1)} {
+			exc := findApprovedExceptionForDate(schedule.ApprovedExceptions, d.Format("2006-01-02"))
+			if exc != nil {
+				kind := strings.ToUpper(strings.TrimSpace(exc.Kind))
+				if kind == "HOLIDAY_SHUTDOWN" || kind == "MAINTENANCE_WINDOW" {
+					continue
+				}
+				if kind == "OVERTIME_COOLING" {
+					for _, slot := range exc.ReplacementSlots {
+						addSlot(d, slot.StartMinute, slot.EndMinute)
+					}
+					continue
+				}
+			}
+			dow := isoWeekdayNumber(d.Weekday())
+			for _, slot := range schedule.Slots {
+				if slot.DayOfWeek == dow {
+					addSlot(d, slot.StartMinute, slot.EndMinute)
+				}
+			}
+		}
+	}
+
+	if len(intervals) == 0 {
+		return fmt.Sprintf("operating schedule %s (%s) is outside active cooling hours", todayStr, loc.String()), true
+	}
+	sort.Slice(intervals, func(i, j int) bool {
+		if !intervals[i].start.Equal(intervals[j].start) {
+			return intervals[i].start.Before(intervals[j].start)
+		}
+		return intervals[i].end.Before(intervals[j].end)
+	})
+	merged := make([]scheduleTimeInterval, 0, len(intervals))
+	for _, iv := range intervals {
+		if len(merged) == 0 || iv.start.After(merged[len(merged)-1].end) {
+			merged = append(merged, iv)
+			continue
+		}
+		if iv.end.After(merged[len(merged)-1].end) {
+			merged[len(merged)-1].end = iv.end
+		}
+	}
+	for _, iv := range merged {
+		cutoffEnd := iv.end.Add(-preparationPreShutdownBuffer)
+		if !atLocal.Before(iv.start) && atLocal.Before(cutoffEnd) {
+			return "", false
+		}
+	}
+	return fmt.Sprintf("operating schedule %s (%s) suppresses setpoint optimization outside active cooling window or within 30m of slot end", todayStr, loc.String()), true
+}
+
+func extractConfiguredTelemetryKeys(raw json.RawMessage) ([]string, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, nil
+	}
+	var parsed struct {
+		InputMapping InputMapping `json:"inputMapping"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, unavailable(ReasonPolicyUnsupported, "invalid optimization policy constraints JSON: %v", err)
+	}
+	keys := make([]string, 0, 1+len(parsed.InputMapping.effectiveZoneKeys()))
+	if supply := strings.TrimSpace(parsed.InputMapping.SupplyTemperatureKey); supply != "" {
+		keys = append(keys, supply)
+	}
+	keys = append(keys, parsed.InputMapping.effectiveZoneKeys()...)
+	return keys, nil
+}
+
+func checkTelemetryPointHealth(ctx context.Context, tx pgx.Tx, tenantID, siteID string, telemetryKeys []string) error {
+	if len(telemetryKeys) == 0 {
+		return nil
+	}
+	var schemaUsable bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'telemetry_runtime')
+   AND has_schema_privilege(current_user, 'telemetry_runtime', 'USAGE')`).Scan(&schemaUsable); err != nil {
+		return err
+	}
+	if !schemaUsable {
+		return nil
+	}
+
+	var latestReadable bool
+	if err := tx.QueryRow(ctx, `
+SELECT CASE
+  WHEN to_regclass('telemetry_runtime.latest_accepted_telemetry') IS NOT NULL
+  THEN has_table_privilege(current_user, 'telemetry_runtime.latest_accepted_telemetry', 'SELECT')
+  ELSE false
+END`).Scan(&latestReadable); err != nil {
+		return err
+	}
+	if latestReadable {
+		rows, err := tx.Query(ctx, `
+SELECT lat.telemetry_key, COALESCE(lat.health_status, ''), COALESCE(lat.health_reasons, '{}')
+FROM telemetry_runtime.latest_accepted_telemetry lat
+JOIN core_registry.devices d
+  ON d.tenant_id = $1::uuid AND d.site_id = $2::uuid AND d.id = lat.device_id
+WHERE lat.telemetry_key = ANY($3::text[])`, tenantID, siteID, telemetryKeys)
+		if err != nil {
+			return err
+		}
+		var blockedKey, blockedReason string
+		for rows.Next() {
+			var key, healthStatus string
+			var healthReasons []string
+			if err := rows.Scan(&key, &healthStatus, &healthReasons); err != nil {
+				rows.Close()
+				return err
+			}
+			if reason, blocked := telemetryHealthBlockReason(healthStatus, healthReasons); blocked {
+				blockedKey, blockedReason = key, reason
+				break
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		if blockedReason != "" {
+			return unavailable(ReasonInputsInvalid, "point %s telemetry health (%s) suppresses optimization", blockedKey, blockedReason)
+		}
+	}
+
+	var probeOffsetsReadable bool
+	if err := tx.QueryRow(ctx, `
+SELECT CASE
+  WHEN to_regclass('telemetry_runtime.probe_offset_estimates') IS NOT NULL
+  THEN has_table_privilege(current_user, 'telemetry_runtime.probe_offset_estimates', 'SELECT')
+  ELSE false
+END`).Scan(&probeOffsetsReadable); err != nil {
+		return err
+	}
+	if probeOffsetsReadable {
+		var alarmedKey, alarmKind string
+		err := tx.QueryRow(ctx, `
+SELECT key, alarm FROM (
+  SELECT DISTINCT ON (pair_code)
+    CASE WHEN supply_key = ANY($2::text[]) THEN supply_key ELSE return_key END AS key,
+    COALESCE(alarm, '') AS alarm
+  FROM telemetry_runtime.probe_offset_estimates
+  WHERE site_id = $1::uuid
+    AND (supply_key = ANY($2::text[]) OR return_key = ANY($2::text[]))
+  ORDER BY pair_code, window_ended_at DESC
+) latest
+WHERE alarm <> ''
+LIMIT 1`, siteID, telemetryKeys).Scan(&alarmedKey, &alarmKind)
+		if err == nil {
+			return unavailable(ReasonInputsInvalid, "active probe offset alarm (%s) on point %s suppresses optimization", alarmKind, alarmedKey)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+	}
+	return nil
 }
