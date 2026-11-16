@@ -41,7 +41,7 @@ All `pstack` skills in `HVAC_web` are already checked into `.agents/skills/` (mi
 
 Note that `HVAC_web`'s subagent tool mapping lives in [`agy-tools.md`](../poteto-mode/references/agy-tools.md): use `invoke_subagent` (`TypeName: "self"` for writable/shell work or `"research"` for read-only reading) instead of Cursor's `poteto-agent`.
 
-## Pick a skill (52 skills installed)
+## Pick a skill (53 skills installed)
 
 The default entry point for non-trivial work is [`poteto-mode`](../poteto-mode/SKILL.md). Name a specific skill directly when you want focused execution:
 
@@ -53,6 +53,7 @@ The default entry point for non-trivial work is [`poteto-mode`](../poteto-mode/S
 | Turn a decision blocked on someone else into an async questionnaire | [`to-questionnaire`](../to-questionnaire/SKILL.md) |
 | Generate an interactive bash wizard for human-only setup/secrets | [`wizard`](../wizard/SKILL.md) |
 | Scan active hot spots for deepening opportunities (visual HTML report) | [`improve-codebase-architecture`](../improve-codebase-architecture/SKILL.md) |
+| Apply deep-module vocabulary, seam rules, and deepening patterns | [`codebase-design`](../codebase-design/SKILL.md) |
 | Make a prompt deeper (raw sources, methods, outside checks) without running it | [`sharpen`](../sharpen/SKILL.md) |
 | Understand how code works or which layer/package owns something | [`how`](../how/SKILL.md) |
 | Research why code or a threshold exists (git, docs, ADRs, specs, PRs) | [`why`](../why/SKILL.md) |
@@ -114,7 +115,8 @@ The default entry point for non-trivial work is [`poteto-mode`](../poteto-mode/S
 - `/recall` mines across past chats and shared records; `/ketchup` summarizes only what changed in this chat since your last message.
 - `/statechart` model-checks ad-hoc TLA+ specs for state flows; `HVAC_web`'s command/MQTT state machine uses [`command-safety`](../command-safety/SKILL.md) (`npm run command:formal`).
 - `/grilling` runs an explicit multi-round interview over an open plan; normal `poteto-mode` coding tasks keep `in-your-own-words` + `Never Block on the Human`.
-- `/improve-codebase-architecture` surveys active `git log` hot spots into an HTML Before/After report, then hands selected interface design/refactoring to [`architect`](../architect/SKILL.md) and [`refactoring.md`](../poteto-mode/playbooks/refactoring.md).
+- `/improve-codebase-architecture` surveys active `git log` hot spots into an HTML Before/After report using [`codebase-design`](../codebase-design/SKILL.md), then hands selected interface design/refactoring to [`architect`](../architect/SKILL.md) and [`refactoring.md`](../poteto-mode/playbooks/refactoring.md).
+- `/codebase-design` supplies deep-module vocabulary, dependency categories, and seam/test rules; `/architect` owns the multi-phase feature sketch and implementation workflow.
 
 ## Phase boundaries (context transitions)
 
