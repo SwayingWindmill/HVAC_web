@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -23,6 +24,28 @@ import (
 type queuedPublish struct {
 	packet *paho.Publish
 	ack    func(*paho.Publish) error
+}
+
+const (
+	defaultCoverageReportInterval = 60 * time.Second
+	MaximumCoverageBatchSize      = 2048
+)
+
+type CoverageDeviceLister interface {
+	ListAllActiveManagedDeviceIDs(ctx context.Context) ([]string, error)
+}
+
+type CoverageReporter interface {
+	ReportSourceCoverage(ctx context.Context, report SourceCoverageReport) error
+}
+
+type RuntimeOption func(*Runtime)
+
+func WithCoverageReporter(lister CoverageDeviceLister, reporter CoverageReporter) RuntimeOption {
+	return func(runtime *Runtime) {
+		runtime.coverageLister = lister
+		runtime.coverageReporter = reporter
+	}
 }
 
 // Runtime consumes every Gateway's uplink. Each Gateway gets its own ordered queue and
@@ -37,6 +60,15 @@ type Runtime struct {
 	retryDelay func(int) time.Duration
 	// reconnectBackoff is how long to wait before reconnection attempt N.
 	reconnectBackoff func(int) time.Duration
+	coverageLister   CoverageDeviceLister
+	coverageReporter CoverageReporter
+	coverageInterval time.Duration
+	now              func() time.Time
+
+	coverageMu  sync.Mutex
+	coverageWG  sync.WaitGroup
+	coverageRev atomic.Int64
+	connGen     atomic.Uint64
 
 	queuesMu sync.Mutex
 	queues   map[string]chan queuedPublish
@@ -52,7 +84,7 @@ type Runtime struct {
 	lastSuccess time.Time
 }
 
-func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metrics *observability.Registry) (*Runtime, error) {
+func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metrics *observability.Registry, options ...RuntimeOption) (*Runtime, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -65,7 +97,23 @@ func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metric
 	if metrics == nil {
 		metrics = observability.NewRegistry()
 	}
-	return &Runtime{config: config, processor: processor, logger: logger, metrics: metrics, retryDelay: mqttRetryDelay, reconnectBackoff: autopaho.DefaultExponentialBackoff(), queues: map[string]chan queuedPublish{}}, nil
+	runtime := &Runtime{
+		config:           config,
+		processor:        processor,
+		logger:           logger,
+		metrics:          metrics,
+		retryDelay:       mqttRetryDelay,
+		reconnectBackoff: autopaho.DefaultExponentialBackoff(),
+		coverageInterval: defaultCoverageReportInterval,
+		now:              time.Now,
+		queues:           map[string]chan queuedPublish{},
+	}
+	for _, option := range options {
+		if option != nil {
+			option(runtime)
+		}
+	}
+	return runtime, nil
 }
 
 func (runtime *Runtime) Ready() bool {
@@ -90,10 +138,20 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		return err
 	}
 	workerContext, workerCancel := context.WithCancel(ctx)
+	var heartbeatWG sync.WaitGroup
 	defer func() {
 		workerCancel()
+		heartbeatWG.Wait()
+		runtime.coverageWG.Wait()
 		runtime.workers.Wait()
 	}()
+	if runtime.coverageLister != nil && runtime.coverageReporter != nil && runtime.coverageInterval > 0 {
+		heartbeatWG.Add(1)
+		go func() {
+			defer heartbeatWG.Done()
+			runtime.runCoverageHeartbeat(workerContext)
+		}()
+	}
 
 	clientConfig := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{brokerURL},
@@ -125,10 +183,11 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		},
 	}
 	clientConfig.OnConnectionUp = func(manager *autopaho.ConnectionManager, _ *paho.Connack) {
+		gen := runtime.connGen.Load()
 		connection := runtime.currentConnectionClosed()
 		runtime.recordConnectionState(connection, true, false, nil)
 		_ = runtime.metrics.AddCounter("hvac_mqtt_connections_total", "MQTT connection attempts by outcome.", map[string]string{"outcome": "success"}, 1)
-		go runtime.subscribe(ctx, manager, connection)
+		go runtime.subscribe(ctx, manager, connection, gen)
 	}
 	manager, err := autopaho.NewConnection(ctx, clientConfig)
 	if err != nil {
@@ -137,12 +196,19 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	if err := manager.AwaitConnection(ctx); err != nil {
 		return fmt.Errorf("await MQTT connection: %w", err)
 	}
+	var stopErr error
 	select {
 	case <-ctx.Done():
 	case <-manager.Done():
 		if ctx.Err() == nil {
-			return errors.New("MQTT connection manager stopped")
+			stopErr = errors.New("MQTT connection manager stopped")
 		}
+	}
+	shutdownCoverageContext, coverageCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	runtime.reportCoverage(shutdownCoverageContext, false, "SOURCE_UNAVAILABLE", 0, true)
+	coverageCancel()
+	if stopErr != nil {
+		return stopErr
 	}
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -150,7 +216,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	return nil
 }
 
-func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.ConnectionManager, connection <-chan struct{}) {
+func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.ConnectionManager, connection <-chan struct{}, gen uint64) {
 	subscribeContext, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	subscriptions := make([]paho.SubscribeOptions, 0, len(UplinkTopicFilters))
@@ -166,6 +232,13 @@ func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.Connect
 	runtime.recordConnectionState(connection, true, true, nil)
 	_ = runtime.metrics.AddCounter("hvac_mqtt_subscriptions_total", "MQTT subscription attempts by outcome.", map[string]string{"outcome": "success"}, 1)
 	runtime.logger.Info("mqtt_uplink_subscribed", "topic_filters", UplinkTopicFilters)
+	if ctx.Err() == nil && runtime.coverageLister != nil && runtime.coverageReporter != nil {
+		runtime.coverageWG.Add(1)
+		go func() {
+			defer runtime.coverageWG.Done()
+			runtime.reportCoverage(ctx, true, "", gen, false)
+		}()
+	}
 }
 
 // dial opens the TLS connection to the broker. Closing it is the first step of paho
@@ -179,10 +252,11 @@ func (runtime *Runtime) dial(ctx context.Context, tlsConfig *tls.Config, server 
 		return nil, err
 	}
 	closed := make(chan struct{})
+	gen := runtime.connGen.Add(1)
 	runtime.connMu.Lock()
 	runtime.connClosed = closed
 	runtime.connMu.Unlock()
-	return packets.NewThreadSafeConn(&brokerConnection{Conn: conn, closed: closed, onClose: func() { runtime.connectionLost(ctx) }}), nil
+	return packets.NewThreadSafeConn(&brokerConnection{Conn: conn, closed: closed, onClose: func() { runtime.connectionLost(ctx, gen) }}), nil
 }
 
 // brokerConnection closes closed and reports the loss the first time the connection closes.
@@ -210,7 +284,7 @@ func (runtime *Runtime) currentConnectionClosed() <-chan struct{} {
 	return runtime.connClosed
 }
 
-func (runtime *Runtime) connectionLost(ctx context.Context) {
+func (runtime *Runtime) connectionLost(ctx context.Context, gen uint64) {
 	runtime.mu.RLock()
 	wasConnected := runtime.connected
 	runtime.mu.RUnlock()
@@ -220,6 +294,86 @@ func (runtime *Runtime) connectionLost(ctx context.Context) {
 	runtime.recordConnectionState(nil, false, false, errors.New("MQTT connection lost"))
 	_ = runtime.metrics.AddCounter("hvac_mqtt_disconnections_total", "MQTT connection-down events.", map[string]string{"reason_family": "transport"}, 1)
 	runtime.logger.Warn("mqtt_uplink_connection_lost")
+	if runtime.coverageLister != nil && runtime.coverageReporter != nil {
+		runtime.coverageWG.Add(1)
+		go func() {
+			defer runtime.coverageWG.Done()
+			reportCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			runtime.reportCoverage(reportCtx, false, "SOURCE_UNAVAILABLE", gen, false)
+		}()
+	}
+}
+
+func (runtime *Runtime) runCoverageHeartbeat(ctx context.Context) {
+	ticker := time.NewTicker(runtime.coverageInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if runtime.Ready() {
+				runtime.reportCoverage(ctx, true, "", runtime.connGen.Load(), false)
+			}
+		}
+	}
+}
+
+func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reasonCode string, expectedGen uint64, force bool) {
+	if runtime.coverageLister == nil || runtime.coverageReporter == nil {
+		return
+	}
+	runtime.coverageMu.Lock()
+	defer runtime.coverageMu.Unlock()
+	if !force {
+		if expectedGen != 0 && expectedGen != runtime.connGen.Load() {
+			return
+		}
+		if !available && runtime.Ready() {
+			return
+		}
+		if available && !runtime.Ready() {
+			return
+		}
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	deviceIDs, err := runtime.coverageLister.ListAllActiveManagedDeviceIDs(callCtx)
+	if err != nil {
+		if runtime.logger != nil {
+			runtime.logger.Warn("mqtt_coverage_device_list_failed", "error", err.Error())
+		}
+		return
+	}
+	if len(deviceIDs) == 0 {
+		return
+	}
+	var reasonPtr *string
+	if !available {
+		reason := reasonCode
+		if reason == "" {
+			reason = "SOURCE_UNAVAILABLE"
+		}
+		reasonPtr = &reason
+	}
+	observedAt := runtime.now().UTC().Format(time.RFC3339Nano)
+	for start := 0; start < len(deviceIDs); start += MaximumCoverageBatchSize {
+		end := min(start+MaximumCoverageBatchSize, len(deviceIDs))
+		rev := runtime.coverageRev.Add(1)
+		report := SourceCoverageReport{
+			SourceID:       runtime.config.MQTT.ClientID,
+			DeviceIDs:      deviceIDs[start:end],
+			Available:      available,
+			ReasonCode:     reasonPtr,
+			ObservedAt:     observedAt,
+			SourceRevision: rev,
+		}
+		if err := runtime.coverageReporter.ReportSourceCoverage(callCtx, report); err != nil && runtime.logger != nil {
+			runtime.logger.Warn("mqtt_coverage_report_failed", "available", available, "error", err.Error())
+		}
+	}
 }
 
 // enqueue hands a message to its Gateway's queue and blocks while that queue is full,

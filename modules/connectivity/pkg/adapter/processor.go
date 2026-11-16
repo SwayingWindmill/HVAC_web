@@ -108,6 +108,12 @@ type IdentityResolver interface {
 	QuarantineUplink(ctx context.Context, quarantine UplinkQuarantine) error
 }
 
+// GatewayChildrenResolver is optionally implemented by IdentityResolver to list
+// downstream Devices belonging to a Gateway for observation coverage updates.
+type GatewayChildrenResolver interface {
+	ListGatewayChildDeviceIDs(ctx context.Context, gatewayID string) ([]string, error)
+}
+
 type Processor struct {
 	identities IdentityResolver
 	runtime    RuntimeClient
@@ -425,38 +431,85 @@ func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, e
 	event := envelope.Payload
 	sourceType := strings.TrimSpace(event.SourceType)
 	sourceID := strings.TrimSpace(event.SourceID)
-	resolved, err := processor.resolveEventDevice(ctx, gateway, sourceType, sourceID)
+	resolvedDevice, coverageDeviceIDs, err := processor.resolveEventScope(ctx, gateway, event)
 	if err != nil {
 		return ProcessingResult{}, err
 	}
 	if err := processor.runtime.AcceptRuntimeEvent(ctx, RuntimeEventEvidence{
 		TenantID: gateway.TenantID, SiteID: gateway.SiteID, GatewayID: gateway.ID,
 		MessageID: envelope.MessageID, Sequence: int64(envelope.Sequence), EventType: strings.TrimSpace(event.EventType),
-		SourceType: sourceType, SourceID: sourceID, Device: resolved, EventTime: unixMillisRFC3339(event.EventTime),
+		SourceType: sourceType, SourceID: sourceID, EventTime: unixMillisRFC3339(event.EventTime),
 		Severity: strings.ToUpper(strings.TrimSpace(event.Severity)), Data: append(json.RawMessage(nil), event.Data...),
+		Device: resolvedDevice, CoverageDeviceIDs: coverageDeviceIDs,
 	}); err != nil {
 		return ProcessingResult{}, fmt.Errorf("accept MQTT runtime event: %w", err)
 	}
 	return ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeEvent}, nil
 }
 
-func (processor *Processor) resolveEventDevice(ctx context.Context, gateway Gateway, sourceType, sourceID string) (*ResolvedDevice, error) {
-	switch strings.ToUpper(sourceType) {
-	case "GATEWAY":
-		if sourceID == gateway.ID {
-			return &ResolvedDevice{TenantID: gateway.TenantID, SiteID: gateway.SiteID, DeviceID: gateway.ID}, nil
-		}
-		return nil, nil
-	case "DEVICE":
+func (processor *Processor) resolveEventScope(ctx context.Context, gateway Gateway, event EventPayload) (*ResolvedDevice, []string, error) {
+	eventType := strings.ToUpper(strings.TrimSpace(event.EventType))
+	sourceType := strings.ToUpper(strings.TrimSpace(event.SourceType))
+	sourceID := strings.TrimSpace(event.SourceID)
+
+	var resolvedDevice *ResolvedDevice
+	if sourceType == "DEVICE" && sourceID != "" {
 		deviceID, err := processor.identities.ResolveDevice(ctx, gateway, sourceID)
 		if err != nil {
-			return nil, fmt.Errorf("resolve MQTT event Device %s: %w", sourceID, err)
+			return nil, nil, fmt.Errorf("resolve MQTT event Device %s: %w", sourceID, err)
 		}
-		if deviceID == "" {
-			return nil, nil
+		if deviceID != "" {
+			resolvedDevice = &ResolvedDevice{TenantID: gateway.TenantID, SiteID: gateway.SiteID, DeviceID: deviceID}
 		}
-		return &ResolvedDevice{TenantID: gateway.TenantID, SiteID: gateway.SiteID, DeviceID: deviceID}, nil
-	default:
-		return nil, nil
+	} else if sourceType == "GATEWAY" {
+		lookupKey := sourceID
+		if lookupKey == "" {
+			lookupKey = gateway.ID
+		}
+		deviceID, err := processor.identities.ResolveDevice(ctx, gateway, lookupKey)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve MQTT event Gateway %s: %w", lookupKey, err)
+		}
+		if deviceID == "" && isUUIDLike(gateway.ID) && (sourceID == "" || strings.EqualFold(sourceID, gateway.ID)) {
+			deviceID = strings.ToLower(strings.TrimSpace(gateway.ID))
+		}
+		if deviceID != "" {
+			resolvedDevice = &ResolvedDevice{TenantID: gateway.TenantID, SiteID: gateway.SiteID, DeviceID: deviceID}
+		}
 	}
+
+	var coverageDeviceIDs []string
+	if isGatewayCoverageEvent(eventType, sourceType) {
+		if childrenResolver, ok := processor.identities.(GatewayChildrenResolver); ok {
+			childIDs, err := childrenResolver.ListGatewayChildDeviceIDs(ctx, gateway.ID)
+			if err != nil {
+				return nil, nil, fmt.Errorf("list gateway child devices: %w", err)
+			}
+			for _, childID := range childIDs {
+				id := strings.ToLower(strings.TrimSpace(childID))
+				if id == "" || (resolvedDevice != nil && strings.EqualFold(id, resolvedDevice.DeviceID)) {
+					continue
+				}
+				coverageDeviceIDs = append(coverageDeviceIDs, id)
+			}
+		}
+	}
+	return resolvedDevice, coverageDeviceIDs, nil
+}
+
+func isGatewayCoverageEvent(eventType, sourceType string) bool {
+	switch eventType {
+	case "GATEWAY_CONNECTED", "GATEWAY_DISCONNECTED", "LWT", "LAST_WILL":
+		return true
+	case "EXPLICIT_CONNECT", "CONNECTED", "CONNECT", "SESSION_CONNECTED", "ONLINE",
+		"EXPLICIT_DISCONNECT", "DISCONNECTED", "DISCONNECT", "SESSION_DISCONNECTED", "OFFLINE":
+		return sourceType == "GATEWAY"
+	default:
+		return false
+	}
+}
+
+func isUUIDLike(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	return len(trimmed) == 36 && trimmed[8] == '-' && trimmed[13] == '-' && trimmed[18] == '-' && trimmed[23] == '-'
 }

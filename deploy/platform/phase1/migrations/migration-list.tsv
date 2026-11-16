@@ -109,6 +109,7 @@ hvac_s2|infra/telemetry/postgres/init/010-runtime-retention.sql
 hvac_s2|infra/telemetry/postgres/init/011-point-quality.sql
 hvac_s2|infra/telemetry/postgres/init/012-measurement-uncertainty.sql
 hvac_s2|infra/telemetry/postgres/init/013-schema-and-table-comments.sql
+hvac_s2|infra/telemetry/postgres/init/mqtt-runtime-events.sql
 hvac_s3|modules/command/migrations/001_s3_command_runtime.sql
 hvac_s3|modules/command/migrations/002_s3_target_runtime.sql
 hvac_s3|modules/command/migrations/003_s3_tenant_scope.sql

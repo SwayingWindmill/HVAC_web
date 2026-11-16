@@ -123,6 +123,7 @@ COPY infra/telemetry/postgres/init/010-runtime-retention.sql /opt/hvac/repo/infr
 COPY infra/telemetry/postgres/init/011-point-quality.sql /opt/hvac/repo/infra/telemetry/postgres/init/011-point-quality.sql
 COPY infra/telemetry/postgres/init/012-measurement-uncertainty.sql /opt/hvac/repo/infra/telemetry/postgres/init/012-measurement-uncertainty.sql
 COPY infra/telemetry/postgres/init/013-schema-and-table-comments.sql /opt/hvac/repo/infra/telemetry/postgres/init/013-schema-and-table-comments.sql
+COPY infra/telemetry/postgres/init/mqtt-runtime-events.sql /opt/hvac/repo/infra/telemetry/postgres/init/mqtt-runtime-events.sql
 
 COPY modules/command/migrations/001_s3_command_runtime.sql /opt/hvac/repo/modules/command/migrations/001_s3_command_runtime.sql
 COPY modules/command/migrations/002_s3_target_runtime.sql /opt/hvac/repo/modules/command/migrations/002_s3_target_runtime.sql

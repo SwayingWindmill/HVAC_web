@@ -85,24 +85,24 @@ func main() {
 		logger.Error("connectivity_concentrator_mqtt_unavailable", "error_code", "CONCENTRATOR_MQTT_UNAVAILABLE", "error", err.Error())
 		os.Exit(1)
 	}
-	concentratorService := concentrator.NewService(connectivityStore, concentratorTransport)
-	credentials, tunnelHub, err := credentialServerWithConcentrator(connectivityStore, concentratorService)
-	if err != nil {
-		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE")
-		os.Exit(1)
-	}
-	defer tunnelHub.Close()
 	telemetryRuntime, err := adapter.NewTelemetryRuntimeClient(config.TelemetryRuntime)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_runtime_client_invalid", "error", err.Error())
 		os.Exit(1)
 	}
+	concentratorService := concentrator.NewService(connectivityStore, concentratorTransport)
+	credentials, tunnelHub, err := credentialServerWithRuntime(connectivityStore, concentratorService, telemetryRuntime)
+	if err != nil {
+		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE")
+		os.Exit(1)
+	}
+	defer tunnelHub.Close()
 	processor, err := adapter.NewProcessor(connectivityStore, telemetryRuntime)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_processor_invalid", "error", err.Error())
 		os.Exit(1)
 	}
-	runtime, err := adapter.NewRuntime(config, processor, logger, telemetry.Metrics)
+	runtime, err := adapter.NewRuntime(config, processor, logger, telemetry.Metrics, adapter.WithCoverageReporter(connectivityStore, telemetryRuntime))
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_runtime_invalid", "error", err.Error())
 		os.Exit(1)
@@ -130,7 +130,9 @@ func main() {
 			diagnosticsErr <- serveErr
 		}
 	}()
+	runtimeDone := make(chan struct{})
 	go func() {
+		defer close(runtimeDone)
 		logger.Info("connectivity_uplink_started", "topic_filters", adapter.UplinkTopicFilters)
 		if runErr := runtime.Run(ctx); runErr != nil && ctx.Err() == nil {
 			// Telemetry ingress is its own fault domain. Command delivery remains
@@ -147,6 +149,10 @@ func main() {
 	case diagnosticsRunErr := <-diagnosticsErr:
 		logger.Error("mqtt_telemetry_adapter_diagnostics_failed", "error", diagnosticsRunErr.Error())
 		cancel()
+	}
+	select {
+	case <-runtimeDone:
+	case <-time.After(10 * time.Second):
 	}
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()

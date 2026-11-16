@@ -264,6 +264,9 @@ func (service *CredentialService) persistIssued(ctx context.Context, tx pgx.Tx, 
 	if err = tx.Commit(ctx); err != nil {
 		return IssuedCredential{}, err
 	}
+	if service.store != nil {
+		service.store.InvalidateGatewayCache(gateway)
+	}
 	return issued, nil
 }
 
@@ -324,6 +327,9 @@ func (service *CredentialService) revokeGatewayInTx(ctx context.Context, tx pgx.
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return err
+	}
+	if service.store != nil {
+		service.store.InvalidateGatewayCache(gatewayID)
 	}
 	service.revokeMu.RLock()
 	hook := service.onRevoke

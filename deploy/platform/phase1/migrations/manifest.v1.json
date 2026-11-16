@@ -138,7 +138,8 @@
         "infra/telemetry/postgres/init/010-runtime-retention.sql",
         "infra/telemetry/postgres/init/011-point-quality.sql",
         "infra/telemetry/postgres/init/012-measurement-uncertainty.sql",
-        "infra/telemetry/postgres/init/013-schema-and-table-comments.sql"
+        "infra/telemetry/postgres/init/013-schema-and-table-comments.sql",
+        "infra/telemetry/postgres/init/mqtt-runtime-events.sql"
       ]
     },
     {

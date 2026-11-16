@@ -186,7 +186,7 @@ func main() {
 			RuntimeAudience:               envOr("TELEMETRY_GRANT_AUDIENCE", "telemetry-runtime-service"),
 			HistoricalObservationAcceptor: store,
 			AllowedHistoricalReplaySPIFFE: envOr("TELEMETRY_ALLOWED_HISTORICAL_REPLAY_SPIFFE", "spiffe://hvac.local/historical-replay-runner"),
-			ObservationAcceptor:           store, MQTTEvidenceAcceptor: store,
+			ObservationAcceptor:           store, CoverageAcceptor: store, MQTTEvidenceAcceptor: store,
 			AllowedSourceSPIFFE:            envOr("TELEMETRY_ALLOWED_SOURCE_SPIFFE", "spiffe://hvac.local/mqtt-telemetry-adapter"),
 			Realtime:                       realtimeService,
 			AllowedCentrifugoSPIFFE:        envOr("TELEMETRY_ALLOWED_CENTRIFUGO_SPIFFE", "spiffe://hvac.local/centrifugo"),

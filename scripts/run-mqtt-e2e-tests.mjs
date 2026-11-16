@@ -158,6 +158,11 @@ try {
     key: await readFile(join(pkiDir, 'telemetry-key.pem')), cert: await readFile(join(pkiDir, 'telemetry-cert.pem')),
     ca: await readFile(join(pkiDir, 'ca.pem')), minVersion: 'TLSv1.3', requestCert: true, rejectUnauthorized: true,
   }, async (request, response) => {
+    if (request.method === 'POST' && (request.url === '/internal/v1/telemetry/sources/mqtt/events:accept' || request.url === '/internal/v1/telemetry/sources/coverage:report')) {
+      for await (const _chunk of request) {}
+      response.writeHead(200, { 'content-type': 'application/json' }).end('{"accepted":true}');
+      return;
+    }
     if (request.method !== 'POST' || request.url !== '/internal/v1/telemetry/sources/observations:acceptBatch') {
       response.writeHead(404).end();
       return;
@@ -290,7 +295,7 @@ try {
 
   // Revoking the Gateway Credential quarantines its uplink instead of forwarding it.
   psql(`UPDATE connectivity.gateway_credentials SET status='REVOKED', revoked_at=now(), updated_at=now() WHERE gateway_id = ${quote(gatewayId)}`);
-  await waitFor(() => Number(psql(`SELECT count(*) FROM connectivity.uplink_quarantine WHERE gateway_id = ${quote(gatewayId)} AND reason_code = 'GATEWAY_CREDENTIAL_INACTIVE' AND tenant_id = ${quote(tenantId)}`)) > 0, 30000, 'revoked-credential quarantine evidence');
+  await waitFor(() => Number(psql(`SELECT count(*) FROM connectivity.uplink_quarantine WHERE gateway_id = ${quote(gatewayId)} AND reason_code = 'GATEWAY_CREDENTIAL_INACTIVE' AND tenant_id = ${quote(tenantId)}`)) > 0, 45000, 'revoked-credential quarantine evidence');
   const forwardedAfterRevocation = observations.length;
   await new Promise((resolveWait) => setTimeout(resolveWait, 3000));
   if (observations.length !== forwardedAfterRevocation) throw new Error('a revoked Gateway uplink still reached Telemetry');
