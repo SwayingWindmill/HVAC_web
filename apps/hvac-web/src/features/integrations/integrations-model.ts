@@ -1880,6 +1880,25 @@ export function mergeConcentratorAudits(
     .slice(0, 20);
 }
 
+const CONCENTRATOR_UID_PATTERN = /(?:^|[^a-z0-9])uid[\s_-]*(\d{1,3})(?:[^0-9]|$)/i;
+
+export function inferDefaultConcentratorUid(
+  devices: readonly Pick<Device, 'deviceType' | 'code' | 'displayName'>[],
+): number {
+  for (const device of devices) {
+    if (device.deviceType !== 'TEMPERATURE_MODULE') continue;
+    for (const candidate of [device.code, device.displayName]) {
+      const match = CONCENTRATOR_UID_PATTERN.exec(candidate);
+      if (!match) continue;
+      const uid = Number(match[1]);
+      if (Number.isInteger(uid) && uid >= 1 && uid <= 247 && !isProtectedConcentratorUid(uid)) {
+        return uid;
+      }
+    }
+  }
+  return 1;
+}
+
 export function describeConcentratorError(
   error: unknown,
   fallback = '集中器状态或配置暂时无法读取，请稍后重试',

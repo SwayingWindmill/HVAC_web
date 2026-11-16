@@ -43,6 +43,7 @@ services:
     volumes:
       - ${PUBLIC_TLS_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/tls}:/run/hvac/tls:ro
       - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca/ca.crt:/run/hvac/gateway-ca/ca.crt:ro
+      - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca/trusted-client-ca.pem:/run/hvac/gateway-ca/trusted-client-ca.pem:ro
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/gateway/tls.crt:/run/hvac/proxy/tls.crt:ro
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/gateway/tls.key:/run/hvac/proxy/tls.key:ro
       - ${INTERNAL_PKI_DIR:-${PHASE1_RUNTIME_DIR:-./runtime}/internal-pki}/ca.crt:/run/hvac/proxy/ca.crt:ro

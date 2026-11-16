@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import {
   createPrivateKey,
   createPublicKey,
@@ -15,6 +16,7 @@ import * as path from 'node:path';
 import type { Duplex } from 'node:stream';
 import { after, test } from 'node:test';
 import * as tls from 'node:tls';
+import { pathToFileURL } from 'node:url';
 import {
   ALLOWED_TARGET_PORT,
   decodeFramesFromBuffer,
@@ -823,5 +825,138 @@ test('deploy guard protects ET1010·机组启停 and 平台·常驻隧道 and bu
     assert.ok(err instanceof ProtectedFlowTabError);
     assert.deepEqual(err.missingLabels, ['平台·常驻隧道']);
     return true;
+  });
+});
+
+test('tunnel and cert autorenew trust system root CAs alongside pinned gateway CA', async (t) => {
+  const gatewayId = '01a14000-4000-7000-8000-000000000100';
+  const gatewayPki = createTestPKI(gatewayId, 5);
+  const publicCaKeys = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const srvKeys = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const now = Date.now();
+  const publicCaPriv = publicCaKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
+  const publicCaPem = issueSignedX509Cert({
+    subjectCN: 'Mock Public Root CA',
+    issuerCN: 'Mock Public Root CA',
+    publicKeyPem: publicCaKeys.publicKey.export({ type: 'spki', format: 'pem' }) as string,
+    signerKeyPem: publicCaPriv,
+    notBefore: new Date(now - 3600_000),
+    notAfter: new Date(now + 365 * 86400_000),
+    isCA: true,
+  });
+  const publicSrvPem = issueSignedX509Cert({
+    subjectCN: 'localhost',
+    issuerCN: 'Mock Public Root CA',
+    publicKeyPem: srvKeys.publicKey.export({ type: 'spki', format: 'pem' }) as string,
+    signerKeyPem: publicCaPriv,
+    notBefore: new Date(now - 3600_000),
+    notAfter: new Date(now + 90 * 86400_000),
+    sanLocalhost: true,
+    extKeyUsageServer: true,
+  });
+  const renewedLeaf = issueSignedX509Cert({
+    subjectCN: gatewayId,
+    issuerCN: 'Test Gateway CA',
+    publicKeyPem: gatewayPki.gwPub,
+    signerKeyPem: gatewayPki.caPriv,
+    notBefore: new Date(now - 60_000),
+    notAfter: new Date(now + 90 * 86400_000),
+    extKeyUsageClient: true,
+  });
+
+  const server = tls.createServer({
+    cert: publicSrvPem,
+    key: srvKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }) as string,
+    ca: gatewayPki.caPem,
+    requestCert: true,
+    rejectUnauthorized: true,
+  });
+  server.on('secureConnection', (sock) => {
+    sock.once('data', (chunk) => {
+      const req = chunk.toString('utf8');
+      if (req.startsWith('POST /gateway/v1/renew ')) {
+        const body = JSON.stringify({
+          certificatePem: renewedLeaf,
+          caPem: gatewayPki.caPem,
+          expiresAt: new Date(now + 90 * 86400_000).toISOString(),
+        });
+        sock.write(
+          `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+        );
+        sock.end();
+        return;
+      }
+      sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const addr = server.address();
+  assert.ok(addr && typeof addr === 'object');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hvac-dual-ca-'));
+  tempDirs.push(dir);
+  const publicCaPath = path.join(dir, 'public-root.crt');
+  const certPath = path.join(dir, 'gateway.crt');
+  const keyPath = path.join(dir, 'gateway.key');
+  const gatewayCaPath = path.join(dir, 'gateway-ca.crt');
+  const scriptPath = path.join(dir, 'probe.ts');
+  fs.writeFileSync(publicCaPath, publicCaPem);
+  fs.writeFileSync(certPath, gatewayPki.gwPem);
+  fs.writeFileSync(keyPath, gatewayPki.gwKey);
+  fs.writeFileSync(gatewayCaPath, gatewayPki.caPem);
+
+  const tunnelModUrl = pathToFileURL(path.resolve(process.cwd(), 'edge/node-red/gateway-nodered-tunnel.ts')).href;
+  const renewModUrl = pathToFileURL(path.resolve(process.cwd(), 'edge/node-red/gateway-cert-autorenew.ts')).href;
+  fs.writeFileSync(
+    scriptPath,
+    [
+      `import assert from 'node:assert/strict';`,
+      `import * as fs from 'node:fs';`,
+      `import { GatewayTunnelClient } from ${JSON.stringify(tunnelModUrl)};`,
+      `import { checkAndRenewGatewayCertificate } from ${JSON.stringify(renewModUrl)};`,
+      `const port = ${addr.port};`,
+      `const renewed = await checkAndRenewGatewayCertificate({`,
+      `  renewUrl: 'https://localhost:' + port + '/gateway/v1/renew',`,
+      `  certPath: ${JSON.stringify(certPath)},`,
+      `  keyPath: ${JSON.stringify(keyPath)},`,
+      `  caPath: ${JSON.stringify(gatewayCaPath)},`,
+      `  rejectUnauthorized: true,`,
+      `});`,
+      `assert.equal(renewed.renewed, true);`,
+      `await new Promise<void>((resolve, reject) => {`,
+      `  const client = new GatewayTunnelClient({`,
+      `    tunnelUrl: 'https://localhost:' + port + '/gateway/v1/tunnel',`,
+      `    loadCredentials: () => ({`,
+      `      certPem: fs.readFileSync(${JSON.stringify(certPath)}, 'utf8'),`,
+      `      keyPem: fs.readFileSync(${JSON.stringify(keyPath)}, 'utf8'),`,
+      `      caPem: fs.readFileSync(${JSON.stringify(gatewayCaPath)}, 'utf8'),`,
+      `    }),`,
+      `    rejectUnauthorized: true,`,
+      `    onConnected: () => { client.stop(); resolve(); },`,
+      `    onDisconnected: (err) => { if (err) { client.stop(); reject(err); } },`,
+      `  });`,
+      `  client.start();`,
+      `});`,
+    ].join('\n'),
+  );
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, ['--experimental-strip-types', scriptPath], {
+      env: { ...process.env, NODE_EXTRA_CA_CERTS: publicCaPath },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`child exited ${code}: ${stderr}`));
+      }
+    });
   });
 });

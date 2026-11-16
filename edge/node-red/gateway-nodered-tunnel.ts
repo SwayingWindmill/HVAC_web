@@ -31,7 +31,15 @@ export interface TunnelFrame {
 export interface TunnelCredentials {
   certPem: string | Buffer;
   keyPem: string | Buffer;
-  caPem: string | Buffer;
+  caPem?: string | Buffer;
+}
+
+export function mergeTransportCaCertificates(caPem?: string | Buffer): Array<string | Buffer> | undefined {
+  if (!caPem) return undefined;
+  const maybeGetCa = Reflect.get(tls, 'getCACertificates');
+  const roots =
+    typeof maybeGetCa === 'function' ? maybeGetCa.call(tls, 'default') : tls.rootCertificates;
+  return Array.isArray(roots) ? [...roots, caPem] : [...tls.rootCertificates, caPem];
 }
 
 export interface GatewayTunnelOptions {
@@ -245,7 +253,7 @@ export class GatewayTunnelClient {
           ...(net.isIP(target.hostname) === 0 ? { servername: target.hostname } : {}),
           cert: creds.certPem,
           key: creds.keyPem,
-          ca: creds.caPem,
+          ...(creds.caPem ? { ca: mergeTransportCaCertificates(creds.caPem) } : {}),
           ALPNProtocols: ['http/1.1'],
           rejectUnauthorized: this.options.rejectUnauthorized,
         });

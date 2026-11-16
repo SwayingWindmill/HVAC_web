@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as https from 'node:https';
 import { isIP as netIsIp } from 'node:net';
 import * as path from 'node:path';
-import type { NodeRedFlowItem } from './gateway-nodered-tunnel.ts';
+import { mergeTransportCaCertificates, type NodeRedFlowItem } from './gateway-nodered-tunnel.ts';
 
 export const DEFAULT_RENEW_THRESHOLD_DAYS = 14;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -155,7 +155,7 @@ function postRenewRequest(
         method: 'POST',
         cert: certPem,
         key: keyPem,
-        ca: caPem,
+        ca: mergeTransportCaCertificates(caPem),
         ...(netIsIp(target.hostname) === 0 ? { servername: target.hostname } : {}),
         rejectUnauthorized,
         headers: {

@@ -30,6 +30,7 @@ import {
   explainQualityReason,
   filterConcentratorChannels,
   findMainElectricityCounterDevices,
+  inferDefaultConcentratorUid,
   formatConcentratorBaudRate,
   formatConcentratorBandwidth,
   formatConcentratorEidDisplay,
@@ -1406,4 +1407,19 @@ test('concentrator 200-slot EID duplicate guard, batch fill, diff, and error mes
     describeConcentratorError(new Error('unknown failure'), '参数写入集中器 Flash 失败'),
     /参数写入集中器 Flash 失败/,
   );
+
+  assert.equal(
+    inferDefaultConcentratorUid([
+      { deviceType: 'GATEWAY', code: 'gw-1', displayName: '网关' },
+      { deviceType: 'TEMPERATURE_MODULE', code: 'temperature-uid20', displayName: '温度采集模块（UID 20）' },
+    ]),
+    20,
+  );
+  assert.equal(
+    inferDefaultConcentratorUid([
+      { deviceType: 'TEMPERATURE_MODULE', code: 'temperature-uid2', displayName: '受保护地址模拟' },
+    ]),
+    1,
+  );
+  assert.equal(inferDefaultConcentratorUid([]), 1);
 });

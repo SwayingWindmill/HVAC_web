@@ -427,7 +427,7 @@ export class ConcentratorRpcExecutor {
         targetUnitId = value;
       }
     }
-    await this.modbus.writeRegister(unitId, REG.COMMIT, REG.COMMIT_WRITE_PARAMS);
+    await this.modbus.writeRegister(targetUnitId, REG.COMMIT, REG.COMMIT_WRITE_PARAMS);
     await this.sleep(this.settleMs);
     const readback = await this.readParams(targetUnitId);
     for (const [key, expected] of entries) {

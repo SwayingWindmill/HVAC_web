@@ -22,6 +22,9 @@
 
 #### 修复
 
+- 对齐生产域名反向代理与松雅轩现场无线集中器默认值：
+  - 为内部工作负载身份清单补充 `host-edge-proxy`，容器 `nginx` 使用 `trusted-client-ca.pem` 与身份主题映射，使宿主机 `nginx` 校验网关客户端证书后通过内部双向 TLS 安全透传 `X-Gateway-Client-Cert` 至 `connectivity`，并更新 `hvac-gateway-nodered-loopback@.service` 容器名为 `hvac-platform-connectivity-1`；`deploy.sh` 迁库前对齐 `roles.sql`、补建 `$R/alarm-delivery` 目录并在上线后向 `mqtt-broker` 发送 `SIGHUP` 重载 ACL。
+  - 修复无线集中器 `WRITE_PARAMS` 在修改 `modbusId` 后改向新从站地址提交 `0x9C41 = 6`；为边缘隧道与证书自动续签补齐系统根证书（`tls.rootCertificates`）与私有网关 CA 的合并校验，确保直连生产 HTTPS 域名时同时验证公网证书与网关 CA 签名；网页端「无线集中器」默认从站点 `TEMPERATURE_MODULE` 推断初始从站地址（松雅轩默认为 `UID 20`）。
 - 修正松雅轩电表启停迟滞、脉冲核验不误冻结与一键顺控硬件时序：
   - 边缘信封脚本（`edge/node-red/songyaxuan-platform-envelope.js`）改用 `12.75 kW` 启动、`5 kW` 停机迟滞判定各机组电表与主机控制器运行状态，按设备持久化避免单泵空转误判为主机启动，同步上报 `et1010/run_state`，并将 `ctrl-chiller-a..d` 的采样周期统一对齐电表的 `300` 秒。
   - 控制执行器（`edge/node-red/songyaxuan-command-executor.ts`）改为 `< 1` 秒先行返回已受理证据并在后台异步按硬件延迟（开机 `0s/30s/30s/60s`、停机 `0s/30s/10s/10s`）执行，`START_UNIT_SEQUENCE` 发冷机启动脉冲前二次读回水泵与冷却塔线圈，单设备 `STOP` 自动中止对应机组异步顺控；紧急停止指令将线圈 `0..19` 全部归零。

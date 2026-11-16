@@ -47,9 +47,12 @@ step permissions
 chmod 700 "$R"
 find "$R" -mindepth 1 -type d -exec chmod 755 {} +
 find "$R" -mindepth 1 -type f -exec chmod 644 {} +
-mkdir -p "$R/backups/postgres/base" "$R/backups/clickhouse"
+mkdir -p "$R/backups/postgres/base" "$R/backups/clickhouse" "$R/alarm-delivery"
 service_dir "$R/identity"
 service_dir "$R/iam"
+
+step roles
+node scripts/local-environment.mjs roles
 
 step migrate
 $L --profile migration run --rm phase1-migrator
@@ -72,6 +75,7 @@ $L run --rm -T identity-reconciler < "$R/identity-reconcile.json"
 
 step up
 $L --integration up -d
+docker kill -s HUP "${HVAC_LOCAL_PROJECT}-mqtt-broker-1" >/dev/null 2>&1 || true
 # Intelligence services, the Operations Agent included (DEEPSEEK_API_KEY in the runtime env, 2026-10-16).
 $L --integration --intelligence up -d --no-deps forecast-service optimization-service fdd-service mv-service report-service operations-agent-service
 

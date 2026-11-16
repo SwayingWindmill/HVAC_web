@@ -121,6 +121,9 @@ if (command === 'administrator') {
   const created = ensureAdministrator({ build: !rest.includes('--no-build') });
   console.log(created ? 'administrator created' : 'administrator already exists');
 }
+else if (command === 'roles') {
+  // ensureRoleCredentials() above already reconciled roles.sql.
+}
 else if (command === 'up') up();
 else if (command === 'down') compose('--simulator-acceptance', '--intelligence', 'stop');
 else if (command === 'reset') {
@@ -128,4 +131,4 @@ else if (command === 'reset') {
   clearSimulatorState();
 }
 else if (command === 'ps') compose('--simulator-acceptance', '--intelligence', 'ps', ...rest);
-else throw new Error('usage: node scripts/local-environment.mjs up | down | reset | ps | administrator [--no-build]');
+else throw new Error('usage: node scripts/local-environment.mjs up | down | reset | ps | roles | administrator [--no-build]');
