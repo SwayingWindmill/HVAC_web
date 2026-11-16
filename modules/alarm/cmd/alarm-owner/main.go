@@ -67,12 +67,7 @@ func main() {
 		logger.Error("alarm_telemetry_evaluation_configuration_invalid", "error_code", "ALARM_TELEMETRY_EVALUATION_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
-	telemetrySPIFFE := envOr("ALARM_TELEMETRY_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service")
-	router, err := alarmservice.NewOwnerRouter(alarmservice.OwnerRouterConfig{
-		GatewaySPIFFE: gatewaySPIFFE, TelemetrySPIFFE: telemetrySPIFFE,
-		ReaderSPIFFE:   envOr("ALARM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
-		GatewayHandler: handler, TelemetryHandler: telemetryEvaluationHandler,
-	})
+	router, err := buildAlarmOwnerRouter(store, gatewaySPIFFE, handler, telemetryEvaluationHandler)
 	if err != nil {
 		logger.Error("alarm_owner_router_configuration_invalid", "error_code", "ALARM_OWNER_ROUTER_CONFIGURATION_INVALID")
 		os.Exit(1)
@@ -125,6 +120,9 @@ func alarmObservabilityRoute(request *http.Request) string {
 	if path == alarmservice.InternalTelemetryEvaluationPath {
 		return "alarms.evaluate_telemetry"
 	}
+	if path == alarmservice.InternalControlEventsPath {
+		return "alarms.publish_control_event"
+	}
 	if !strings.HasPrefix(path, alarmservice.InternalSiteAlarmsPrefix) {
 		return "unknown"
 	}
@@ -148,6 +146,25 @@ func alarmObservabilityRoute(request *http.Request) string {
 		return "alarms.get"
 	}
 	return "unknown"
+}
+
+func buildAlarmOwnerRouter(store alarmservice.Store, gatewaySPIFFE string, gatewayHandler, telemetryHandler http.Handler) (http.Handler, error) {
+	controlEventsHandler, err := alarmservice.NewControlFailureHandler(store)
+	if err != nil {
+		return nil, err
+	}
+	return alarmservice.NewOwnerRouter(alarmservice.OwnerRouterConfig{
+		GatewaySPIFFE:   gatewaySPIFFE,
+		TelemetrySPIFFE: envOr("ALARM_TELEMETRY_SPIFFE", "spiffe://hvac.local/telemetry-runtime-service"),
+		ReaderSPIFFE:    envOr("ALARM_OPERATIONS_AGENT_SPIFFE", "spiffe://hvac.local/operations-agent-service"),
+		ControlEventsSPIFFEs: []string{
+			envOr("ALARM_COMMAND_SPIFFE", "spiffe://hvac.local/command-service"),
+			envOr("ALARM_CONNECTIVITY_SPIFFE", "spiffe://hvac.local/connectivity-service"),
+		},
+		GatewayHandler:       gatewayHandler,
+		TelemetryHandler:     telemetryHandler,
+		ControlEventsHandler: controlEventsHandler,
+	})
 }
 
 func loadCertificatePublicKey(path string) (crypto.PublicKey, error) {

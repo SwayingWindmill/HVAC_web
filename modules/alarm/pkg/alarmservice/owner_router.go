@@ -12,9 +12,11 @@ type OwnerRouterConfig struct {
 	TelemetrySPIFFE string
 	// ReaderSPIFFE may only list a Site's alarms, with a grant the Gateway issued in its name
 	// (the Operations Agent, #594). Empty when no reader is deployed.
-	ReaderSPIFFE     string
-	GatewayHandler   http.Handler
-	TelemetryHandler http.Handler
+	ReaderSPIFFE         string
+	ControlEventsSPIFFEs []string
+	GatewayHandler       http.Handler
+	TelemetryHandler     http.Handler
+	ControlEventsHandler http.Handler
 }
 
 func NewOwnerRouter(config OwnerRouterConfig) (http.Handler, error) {
@@ -27,6 +29,17 @@ func NewOwnerRouter(config OwnerRouterConfig) (http.Handler, error) {
 	if readerSPIFFE != "" && (!strings.HasPrefix(readerSPIFFE, "spiffe://") || readerSPIFFE == gatewaySPIFFE || readerSPIFFE == telemetrySPIFFE) {
 		return nil, errors.New("alarm owner router reader identity is invalid")
 	}
+	controlSPIFFESet := map[string]struct{}{}
+	for _, raw := range config.ControlEventsSPIFFEs {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "spiffe://") || trimmed == telemetrySPIFFE || (readerSPIFFE != "" && trimmed == readerSPIFFE) {
+			return nil, errors.New("alarm owner router control workload identity is invalid")
+		}
+		controlSPIFFESet[trimmed] = struct{}{}
+	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		peer := workloadSPIFFE(request)
 		if request.URL.Path == InternalTelemetryEvaluationPath {
@@ -35,6 +48,19 @@ func NewOwnerRouter(config OwnerRouterConfig) (http.Handler, error) {
 				return
 			}
 			config.TelemetryHandler.ServeHTTP(writer, request)
+			return
+		}
+		if config.ControlEventsHandler != nil && request.URL.Path == InternalControlEventsPath {
+			_, isControlPeer := controlSPIFFESet[peer]
+			if peer != gatewaySPIFFE && !isControlPeer {
+				writeOwnerForbidden(writer, "ALARM_CONTROL_WORKLOAD_FORBIDDEN")
+				return
+			}
+			config.ControlEventsHandler.ServeHTTP(writer, request)
+			return
+		}
+		if _, isControlPeer := controlSPIFFESet[peer]; isControlPeer && peer != gatewaySPIFFE {
+			writeOwnerForbidden(writer, "ALARM_CONTROL_WORKLOAD_FORBIDDEN")
 			return
 		}
 		if readerSPIFFE != "" && peer == readerSPIFFE {

@@ -266,7 +266,7 @@ func evaluatePreDispatchGate(in GateInput, profile CapabilityProfile, precond Pr
 				EvidenceID:       "emergency-precondition-bypass:" + in.CommandID,
 			}, nil
 		}
-		if in.Capability == CapabilityStop && len(in.Interlocks) == 0 && actuation == "PULSE" {
+		if (in.Capability == CapabilityStop || in.Capability == CapabilityStopUnitSequence) && len(in.Interlocks) == 0 && (actuation == "PULSE" || actuation == "ABORT_UNIT_SEQUENCE") {
 			bypassReason := strings.TrimSpace(in.BypassReason)
 			if bypassReason == "" {
 				bypassReason = "pulse shutdown dispatch bypass"

@@ -31,13 +31,15 @@ type RuntimeConfig struct {
 }
 
 type Runtime struct {
-	Service      string
-	Tracer       *Tracer
-	Metrics      *Registry
-	async        *AsyncExporter
-	dependencies []Dependency
-	ready        atomic.Bool
-	started      time.Time
+	Service       string
+	Tracer        *Tracer
+	Metrics       *Registry
+	async         *AsyncExporter
+	dependencies  []Dependency
+	ready         atomic.Bool
+	started       time.Time
+	mu            sync.Mutex
+	childRuntimes []*Runtime
 }
 
 func NewRuntime(config RuntimeConfig) *Runtime {
@@ -153,12 +155,53 @@ func (runtime *Runtime) writeHealth(writer http.ResponseWriter, status string, c
 	_ = json.NewEncoder(writer).Encode(payload)
 }
 
+// AttachChildMetrics exposes a child Registry on this Runtime's /metrics endpoint.
+func (runtime *Runtime) AttachChildMetrics(_ string, child *Registry) {
+	if runtime == nil || runtime.Metrics == nil {
+		return
+	}
+	runtime.Metrics.AttachChild(child)
+}
+
+// AttachChildRuntime exposes a child Runtime's metrics and telemetry gauges on
+// this Runtime's /metrics endpoint.
+func (runtime *Runtime) AttachChildRuntime(child *Runtime) {
+	if runtime == nil || child == nil || child == runtime {
+		return
+	}
+	runtime.mu.Lock()
+	for _, existing := range runtime.childRuntimes {
+		if existing == child {
+			runtime.mu.Unlock()
+			return
+		}
+	}
+	runtime.childRuntimes = append(runtime.childRuntimes, child)
+	runtime.mu.Unlock()
+	if child.Metrics != nil {
+		runtime.AttachChildMetrics(child.Service, child.Metrics)
+	}
+}
+
+func (runtime *Runtime) refreshTelemetryGauges() {
+	if runtime == nil || runtime.Metrics == nil {
+		return
+	}
+	_ = runtime.Metrics.SetGauge("s0_telemetry_dropped_spans", "Spans dropped by the bounded telemetry queue.", map[string]string{"service": runtime.Service}, float64(runtime.DroppedSpans()))
+	_ = runtime.Metrics.SetGauge("s0_telemetry_failed_exports", "Spans rejected by the telemetry exporter.", map[string]string{"service": runtime.Service}, float64(runtime.FailedExports()))
+}
+
 func (runtime *Runtime) DiagnosticsHandler() http.Handler {
 	mux := http.NewServeMux()
 	metricsHandler := runtime.Metrics.Handler()
 	mux.HandleFunc("/metrics", func(writer http.ResponseWriter, request *http.Request) {
-		_ = runtime.Metrics.SetGauge("s0_telemetry_dropped_spans", "Spans dropped by the bounded telemetry queue.", map[string]string{"service": runtime.Service}, float64(runtime.DroppedSpans()))
-		_ = runtime.Metrics.SetGauge("s0_telemetry_failed_exports", "Spans rejected by the telemetry exporter.", map[string]string{"service": runtime.Service}, float64(runtime.FailedExports()))
+		runtime.refreshTelemetryGauges()
+		runtime.mu.Lock()
+		children := append([]*Runtime(nil), runtime.childRuntimes...)
+		runtime.mu.Unlock()
+		for _, child := range children {
+			child.refreshTelemetryGauges()
+		}
 		metricsHandler.ServeHTTP(writer, request)
 	})
 	mux.HandleFunc("/health/startup", func(writer http.ResponseWriter, _ *http.Request) {

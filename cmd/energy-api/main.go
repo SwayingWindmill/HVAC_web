@@ -48,6 +48,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer embeddedServices.Close()
+	attachEmbeddedTelemetry(telemetry, embeddedServices)
 	identity, workloadCertificate, closeIdentity, err := loadIdentityConfig(runContext)
 	if err != nil {
 		logger.Error("gateway_identity_config_invalid", "error_code", "IDENTITY_CONFIG_INVALID")
@@ -782,4 +783,13 @@ func envOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func attachEmbeddedTelemetry(parent *observability.Runtime, services *embeddedEnergyServices) {
+	if parent == nil || services == nil {
+		return
+	}
+	for _, child := range services.telemetry {
+		parent.AttachChildRuntime(child)
+	}
 }

@@ -461,6 +461,42 @@ func (a *HTTPAdapters) GetSiteControlState(ctx context.Context, operator Operato
 	return state, nil
 }
 
+func (a *HTTPAdapters) GetSiteOperatingSchedule(ctx context.Context, operator OperatorIdentity, siteID string) (OperatingScheduleDTO, []OperatingExceptionDTO, error) {
+	decision, err := a.AuthorizeRegistry(ctx, operator, ActionSiteRead)
+	if err != nil {
+		return OperatingScheduleDTO{}, nil, err
+	}
+	if !decision.Allowed || decision.Grant == "" || !containsString(decision.AllowedSiteIDs, siteID) {
+		return OperatingScheduleDTO{}, nil, notFoundControlError("The requested Site was not found.")
+	}
+	if a.coreBaseURL == "" || a.coreHTTPClient == nil {
+		return OperatingScheduleDTO{}, nil, coreUnavailableError("Core Registry is not configured.")
+	}
+	headers := map[string]string{
+		"Accept":             "application/json, application/problem+json",
+		"X-Delegation-Grant": decision.Grant,
+	}
+	status, raw, err := a.doHTTP(ctx, a.coreHTTPClient, http.MethodGet, a.coreBaseURL+"/internal/v1/registry/sites/"+url.PathEscape(siteID)+"/operating-schedule", nil, headers)
+	if err != nil {
+		return OperatingScheduleDTO{}, nil, coreUnavailableError("Core Registry is temporarily unavailable.")
+	}
+	if status != http.StatusOK {
+		return OperatingScheduleDTO{}, nil, coreUnavailableError("Core Registry could not read the Site operating schedule.")
+	}
+	var schedule OperatingScheduleDTO
+	if json.Unmarshal(raw, &schedule) != nil {
+		return OperatingScheduleDTO{}, nil, coreUnavailableError("Core Registry returned an invalid Site operating schedule.")
+	}
+	var exceptions struct {
+		Items []OperatingExceptionDTO `json:"items"`
+	}
+	excStatus, excRaw, excErr := a.doHTTP(ctx, a.coreHTTPClient, http.MethodGet, a.coreBaseURL+"/internal/v1/registry/sites/"+url.PathEscape(siteID)+"/operating-exceptions?status=APPROVED", nil, headers)
+	if excErr == nil && excStatus == http.StatusOK {
+		_ = json.Unmarshal(excRaw, &exceptions)
+	}
+	return schedule, exceptions.Items, nil
+}
+
 func (a *HTTPAdapters) SaveSiteControlMode(
 	ctx context.Context,
 	operator OperatorIdentity,

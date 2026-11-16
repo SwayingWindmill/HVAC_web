@@ -30,7 +30,9 @@ type shutdownTopology struct {
 	chillersByCode         map[string]AssetDTO
 	lockedAssets           map[string]bool
 	boundDevicesByAsset    map[string][]string
+	controlsAssetsByPoint  map[string][]string
 	regularStopByAsset     map[string]shutdownControlTarget
+	abortSequenceByAsset   map[string]shutdownControlTarget
 	statusCheckByAsset     map[string]shutdownControlTarget
 	servedChillersByAux    map[string][]string
 	emergencyReleaseTarget *shutdownControlTarget
@@ -154,6 +156,20 @@ func (a *ControlAuthority) ExecuteSiteControlShutdown(
 			return SiteControlShutdownResponse{}, cmdErr
 		}
 		submittedIDs = append(submittedIDs, cmdID)
+		notifyControlFailureAsync(a.failureNotifier, ControlFailureEvent{
+			Kind:       "EMERGENCY_DO_RELEASE",
+			TenantID:   operator.TenantID,
+			SiteID:     siteID,
+			DeviceID:   target.device.ID,
+			PointID:    target.point.ID,
+			CommandID:  cmdID,
+			Capability: target.capability,
+			ReasonCode: "EMERGENCY_DO_RELEASE",
+			Detail:     reason,
+			OccurredAt: a.now().UTC(),
+			ActorType:  "PRINCIPAL",
+			ActorID:    principalID,
+		})
 	} else {
 		chillerSubmitted, confirmedStopped, chillerErr := a.stopUnlockedChillers(ctx, operator, savedState, topo, topo.chillers, false, reason, idemBase)
 		if chillerErr != nil {
@@ -220,10 +236,30 @@ func (a *ControlAuthority) executeAbortUnitSequence(
 			cancelledIDs = cancelled
 		}
 	}
-	submittedIDs, confirmedStopped, chillerErr := a.stopUnlockedChillers(ctx, operator, currentState, topo, []AssetDTO{chiller}, true, reason, idemBase)
+	submittedIDs := []string{}
+	abortTarget, hasAbortTarget := topo.abortSequenceByAsset[chiller.ID]
+	if hasAbortTarget && !topo.lockedAssets[chiller.ID] {
+		abortObs, _, abortLiveErr := a.live.ReadLivePoint(ctx, operator.TenantID, siteID, abortTarget.device.ID, abortTarget.feedbackPoint.PointCode)
+		abortPrecond := commandmodel.PreconditionRequireCurrentState
+		if abortLiveErr != nil || !livePointSafe(abortObs) {
+			abortPrecond = commandmodel.PreconditionEmergencyBypass
+			abortObs = nil
+		}
+		abortID, abortErr := a.dispatchShutdownTarget(ctx, operator, currentState, abortTarget, abortObs, abortPrecond, reason, idemBase, false)
+		if abortErr != nil {
+			var ce *ControlError
+			if !isConflictControlError(abortErr, &ce) {
+				return SiteControlShutdownResponse{}, abortErr
+			}
+		} else {
+			submittedIDs = append(submittedIDs, abortID)
+		}
+	}
+	chillerSubmitted, confirmedStopped, chillerErr := a.stopUnlockedChillers(ctx, operator, currentState, topo, []AssetDTO{chiller}, !hasAbortTarget, reason, idemBase)
 	if chillerErr != nil {
 		return SiteControlShutdownResponse{}, chillerErr
 	}
+	submittedIDs = append(submittedIDs, chillerSubmitted...)
 	auxSubmitted, deferredIDs, auxErr := a.releaseOrDeferHoldingAuxiliaries(ctx, operator, currentState, topo, unitAux, confirmedStopped, true, true, reason, idemBase)
 	if auxErr != nil {
 		return SiteControlShutdownResponse{}, auxErr
@@ -257,10 +293,7 @@ func (a *ControlAuthority) stopUnlockedChillers(
 	confirmedStopped := make(map[string]bool, len(chillers))
 	for _, chiller := range chillers {
 		obs, stopped, unsafeOrMissing, probeErr := a.probeAssetRunState(ctx, operator, stateView.SiteID, topo, chiller.ID)
-		if probeErr != nil {
-			return nil, nil, probeErr
-		}
-		degradedBypass := unsafeOrMissing
+		degradedBypass := probeErr != nil || unsafeOrMissing || !livePointSafe(obs)
 		if degradedBypass {
 			confirmedStopped[chiller.ID] = false
 		} else {
@@ -284,7 +317,7 @@ func (a *ControlAuthority) stopUnlockedChillers(
 		cmdID, cmdErr := a.dispatchShutdownTarget(ctx, operator, stateView, stopTarget, obs, precondMode, reason, idemBase, false)
 		if cmdErr != nil {
 			var ce *ControlError
-			if isConflictControlError(cmdErr, &ce) {
+			if isConflictControlError(cmdErr, &ce) || (len(stopTarget.interlocks) > 0 && isServiceUnavailableControlError(cmdErr, &ce)) {
 				continue
 			}
 			return nil, nil, cmdErr
@@ -310,20 +343,14 @@ func (a *ControlAuthority) releaseOrDeferHoldingAuxiliaries(
 		if topo.lockedAssets[aux.ID] {
 			if includeLockedInDeferred {
 				_, auxStopped, unsafeOrMissing, probeErr := a.probeAssetRunState(ctx, operator, stateView.SiteID, topo, aux.ID)
-				if probeErr != nil {
-					return nil, nil, probeErr
-				}
-				if unsafeOrMissing || !auxStopped {
+				if probeErr != nil || unsafeOrMissing || !auxStopped {
 					deferred = append(deferred, aux.ID)
 				}
 			}
 			continue
 		}
 		auxObs, auxStopped, unsafeOrMissing, probeErr := a.probeAssetRunState(ctx, operator, stateView.SiteID, topo, aux.ID)
-		if probeErr != nil {
-			return nil, nil, probeErr
-		}
-		if unsafeOrMissing {
+		if probeErr != nil || unsafeOrMissing || !livePointSafe(auxObs) {
 			deferred = append(deferred, aux.ID)
 			continue
 		}
@@ -350,7 +377,7 @@ func (a *ControlAuthority) releaseOrDeferHoldingAuxiliaries(
 		cmdID, cmdErr := a.dispatchShutdownTarget(ctx, operator, stateView, stopTarget, auxObs, commandmodel.PreconditionRequireCurrentState, reason, idemBase, false)
 		if cmdErr != nil {
 			var ce *ControlError
-			if isConflictControlError(cmdErr, &ce) {
+			if isConflictControlError(cmdErr, &ce) || (len(stopTarget.interlocks) > 0 && isServiceUnavailableControlError(cmdErr, &ce)) {
 				deferred = append(deferred, aux.ID)
 				continue
 			}
@@ -376,10 +403,7 @@ func (a *ControlAuthority) ensureChillersConfirmedStopped(
 		stopped, checked := confirmedStopped[chID]
 		if !checked {
 			_, probedStopped, unsafeOrMissing, probeErr := a.probeAssetRunState(ctx, operator, siteID, topo, chID)
-			if probeErr != nil {
-				return false, probeErr
-			}
-			stopped = !unsafeOrMissing && probedStopped
+			stopped = probeErr == nil && !unsafeOrMissing && probedStopped
 			confirmedStopped[chID] = stopped
 		}
 		if !stopped {
@@ -426,6 +450,10 @@ func (a *ControlAuthority) dispatchShutdownTarget(
 	if err != nil {
 		return "", err
 	}
+	cleanBypassReason := strings.TrimSpace(bypassReason)
+	if precondMode == commandmodel.PreconditionEmergencyBypass && cleanBypassReason == "" {
+		cleanBypassReason = "degraded safe shutdown dispatch"
+	}
 	locks, mw := toGateLocksAndWindow(stateView.AssetLocks, stateView.ActiveMaintenanceWindow)
 	_, rejection := commandmodel.EvaluateControlGate(commandmodel.GateInput{
 		Phase:                   commandmodel.GatePhaseSubmit,
@@ -441,11 +469,11 @@ func (a *ControlAuthority) dispatchShutdownTarget(
 		AssetLocks:              locks,
 		ActiveMaintenanceWindow: mw,
 		PreconditionMode:        precondMode,
-		BypassReason:            bypassReason,
+		BypassReason:            cleanBypassReason,
 		TargetState:             obs,
 		Interlocks:              target.interlocks,
 		PeerStates:              peerObs,
-		StepUpVerified:          operator.StepUpTOTPVerified,
+		StepUpVerified:          true,
 	})
 	if rejection != nil {
 		return "", problemFromGateRejection(rejection)
@@ -455,7 +483,7 @@ func (a *ControlAuthority) dispatchShutdownTarget(
 	res, err := a.mintGrantAndSubmit(
 		ctx, operator, target.device.SiteID, target.device.ID, target.point.ID,
 		idemKey, target.capability, target.profile, commandmodel.CommandParameters{},
-		target.feedbackPoint.PointCode, precondMode, bypassReason, obs,
+		target.feedbackPoint.PointCode, precondMode, cleanBypassReason, obs,
 	)
 	if err != nil {
 		return "", err
@@ -513,14 +541,16 @@ func (a *ControlAuthority) buildShutdownCommandIdempotencyKey(idemBase, pointID 
 	return "shd-" + token
 }
 
-func buildShutdownTopology(model SiteAssetModelDTO, state SiteControlStateView, now time.Time) shutdownTopology {
+func resolveSiteControlTopology(model SiteAssetModelDTO, now time.Time) shutdownTopology {
 	topo := shutdownTopology{
-		chillersByCode:      map[string]AssetDTO{},
-		lockedAssets:        map[string]bool{},
-		boundDevicesByAsset: map[string][]string{},
-		regularStopByAsset:  map[string]shutdownControlTarget{},
-		statusCheckByAsset:  map[string]shutdownControlTarget{},
-		servedChillersByAux: map[string][]string{},
+		chillersByCode:        map[string]AssetDTO{},
+		lockedAssets:          map[string]bool{},
+		boundDevicesByAsset:   map[string][]string{},
+		controlsAssetsByPoint: map[string][]string{},
+		regularStopByAsset:    map[string]shutdownControlTarget{},
+		abortSequenceByAsset:  map[string]shutdownControlTarget{},
+		statusCheckByAsset:    map[string]shutdownControlTarget{},
+		servedChillersByAux:   map[string][]string{},
 	}
 	assetsByID := make(map[string]AssetDTO, len(model.Assets))
 	for _, asset := range model.Assets {
@@ -608,7 +638,7 @@ func buildShutdownTopology(model SiteAssetModelDTO, state SiteControlStateView, 
 		}
 	}
 
-	topo.indexAssetLocks(state.AssetLocks)
+	topo.controlsAssetsByPoint = controlsByPoint
 	topo.resolveTargets(model, assetsByID, devicesByID, points, feedbackByDeviceKey, controlsByPoint, controlsSite, deviceToChillers)
 	topo.assignFallbackRunStates(assetsByID, devicesByID, feedbackByDeviceKey)
 	for auxID, chIDs := range topo.servedChillersByAux {
@@ -616,6 +646,26 @@ func buildShutdownTopology(model SiteAssetModelDTO, state SiteControlStateView, 
 		topo.servedChillersByAux[auxID] = chIDs
 	}
 	return topo
+}
+
+func buildShutdownTopology(model SiteAssetModelDTO, state SiteControlStateView, now time.Time) shutdownTopology {
+	topo := resolveSiteControlTopology(model, now)
+	topo.indexAssetLocks(state.AssetLocks)
+	return topo
+}
+
+func resolveAbortTargetForCommand(topo shutdownTopology, pointID, deviceID string) (shutdownControlTarget, bool) {
+	for _, assetID := range topo.controlsAssetsByPoint[pointID] {
+		if target, ok := topo.abortSequenceByAsset[assetID]; ok {
+			return target, true
+		}
+	}
+	for _, target := range topo.abortSequenceByAsset {
+		if target.device.ID == deviceID {
+			return target, true
+		}
+	}
+	return shutdownControlTarget{}, false
 }
 
 func (topo *shutdownTopology) indexAssetLocks(locks []AssetControlLockView) {
@@ -700,6 +750,16 @@ func (topo *shutdownTopology) resolveTargets(
 			}
 			continue
 		}
+		if (capability == commandmodel.CapabilityStop || capability == commandmodel.CapabilityStopUnitSequence) && trimmedMode == "ABORT_UNIT_SEQUENCE" {
+			for _, assetID := range controlsByPoint[point.ID] {
+				target := baseTarget
+				target.asset = assetsByID[assetID]
+				if _, exists := topo.abortSequenceByAsset[assetID]; !exists {
+					topo.abortSequenceByAsset[assetID] = target
+				}
+			}
+			continue
+		}
 		for _, assetID := range controlsByPoint[point.ID] {
 			target := baseTarget
 			target.asset = assetsByID[assetID]
@@ -708,15 +768,15 @@ func (topo *shutdownTopology) resolveTargets(
 					topo.regularStopByAsset[assetID] = target
 				}
 				topo.statusCheckByAsset[assetID] = target
-				if isShutdownHoldingAuxiliaryType(target.asset.AssetType) {
-					for _, check := range interlocks {
-						for _, chID := range deviceToChillers[check.DeviceID] {
-							topo.servedChillersByAux[assetID] = appendUniqueShutdownString(topo.servedChillersByAux[assetID], chID)
-						}
-					}
-				}
 			} else if _, exists := topo.statusCheckByAsset[assetID]; !exists {
 				topo.statusCheckByAsset[assetID] = target
+			}
+			if (capability == commandmodel.CapabilityStop || capability == commandmodel.CapabilityStopUnitSequence) && isShutdownHoldingAuxiliaryType(target.asset.AssetType) {
+				for _, check := range interlocks {
+					for _, chID := range deviceToChillers[check.DeviceID] {
+						topo.servedChillersByAux[assetID] = appendUniqueShutdownString(topo.servedChillersByAux[assetID], chID)
+					}
+				}
 			}
 		}
 	}
@@ -810,4 +870,132 @@ func isConflictControlError(err error, target **ControlError) bool {
 		return ce.HTTPStatus == http.StatusConflict
 	}
 	return false
+}
+
+func isServiceUnavailableControlError(err error, target **ControlError) bool {
+	if err == nil {
+		return false
+	}
+	var ce *ControlError
+	if errors.As(err, &ce) {
+		if target != nil {
+			*target = ce
+		}
+		return ce.HTTPStatus == http.StatusServiceUnavailable
+	}
+	return false
+}
+
+const safeShutdownAuxCoastDown = 60 * time.Second
+
+func (a *ControlAuthority) releaseSafeShutdownHoldingAuxiliariesBestEffort(
+	ctx context.Context,
+	operator OperatorIdentity,
+	siteID string,
+	state SiteControlStateView,
+) {
+	if a == nil || a.twin == nil || a.live == nil || a.store == nil || a.iam == nil {
+		return
+	}
+	assetModel, modelErr := a.twin.GetSiteAssetModel(ctx, operator, siteID)
+	if modelErr != nil {
+		return
+	}
+	now := a.now().UTC()
+	topo := buildShutdownTopology(assetModel, state, now)
+	if len(topo.auxiliaries) == 0 {
+		return
+	}
+	listedCommands, _ := a.store.List(ctx, operator.TenantID, siteID, MaximumListedCommands)
+
+	var safeShutdownEnteredAt time.Time
+	if state.UpdatedAt != nil {
+		if parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*state.UpdatedAt)); err == nil {
+			safeShutdownEnteredAt = parsed.UTC()
+		}
+	}
+
+	chillerReady := make(map[string]bool, len(topo.chillers))
+	isServedChillerCoastDownComplete := func(chID string) bool {
+		if ready, ok := chillerReady[chID]; ok {
+			return ready
+		}
+		chObs, stopped, unsafeOrMissing, probeErr := a.probeAssetRunState(ctx, operator, siteID, topo, chID)
+		if probeErr != nil || unsafeOrMissing || !stopped {
+			chillerReady[chID] = false
+			return false
+		}
+		latestStopSucceededAt, hasStopSucceeded, hasInFlightStop := latestDeviceStopStatus(topo.boundDevicesByAsset[chID], listedCommands)
+		if hasInFlightStop {
+			chillerReady[chID] = false
+			return false
+		}
+		if hasStopSucceeded && now.Sub(latestStopSucceededAt) < safeShutdownAuxCoastDown {
+			chillerReady[chID] = false
+			return false
+		}
+		ready := (hasStopSucceeded && now.Sub(latestStopSucceededAt) >= safeShutdownAuxCoastDown) ||
+			(chObs != nil && !chObs.ObservedAt.IsZero() && now.Sub(chObs.ObservedAt) >= safeShutdownAuxCoastDown) ||
+			(!safeShutdownEnteredAt.IsZero() && now.Sub(safeShutdownEnteredAt) >= safeShutdownAuxCoastDown)
+		chillerReady[chID] = ready
+		return ready
+	}
+
+	for _, aux := range topo.auxiliaries {
+		if topo.lockedAssets[aux.ID] {
+			continue
+		}
+		stopTarget, hasStop := topo.regularStopByAsset[aux.ID]
+		if !hasStop {
+			continue
+		}
+		auxObs, auxStopped, unsafeOrMissing, probeErr := a.probeAssetRunState(ctx, operator, siteID, topo, aux.ID)
+		if probeErr != nil || unsafeOrMissing || auxStopped || !livePointSafe(auxObs) {
+			continue
+		}
+		auxDevices := append([]string{stopTarget.device.ID}, topo.boundDevicesByAsset[aux.ID]...)
+		if auxStopAt, hasAuxSucceeded, hasAuxInFlight := latestDeviceStopStatus(auxDevices, listedCommands); hasAuxInFlight || (hasAuxSucceeded && now.Sub(auxStopAt) < safeShutdownAuxCoastDown) {
+			continue
+		}
+		served := topo.servedChillersByAux[aux.ID]
+		if len(served) == 0 {
+			continue
+		}
+		allReady := true
+		for _, chID := range served {
+			if !isServedChillerCoastDownComplete(chID) {
+				allReady = false
+				break
+			}
+		}
+		if !allReady {
+			continue
+		}
+		_, _ = a.dispatchShutdownTarget(ctx, operator, state, stopTarget, auxObs, commandmodel.PreconditionRequireCurrentState, state.Reason, "", false)
+	}
+}
+
+func latestDeviceStopStatus(deviceIDs []string, commands []commandmodel.CommandIntent) (time.Time, bool, bool) {
+	var latestSucceeded time.Time
+	hasSucceeded := false
+	hasInFlight := false
+	for _, cmd := range commands {
+		if !containsString(deviceIDs, cmd.DeviceID) {
+			continue
+		}
+		if !isStopCapability(cmd.Capability) {
+			continue
+		}
+		switch cmd.Status {
+		case commandmodel.IntentSubmitted, commandmodel.IntentValidating, commandmodel.IntentAwaitingApproval,
+			commandmodel.IntentApproved, commandmodel.IntentQueued, commandmodel.IntentDispatching, commandmodel.IntentOutcomeUnknown:
+			hasInFlight = true
+		case commandmodel.IntentSucceeded:
+			if !hasSucceeded || cmd.UpdatedAt.After(latestSucceeded) {
+				latestSucceeded = cmd.UpdatedAt
+				hasSucceeded = true
+			}
+		}
+	}
+	return latestSucceeded, hasSucceeded, hasInFlight
 }

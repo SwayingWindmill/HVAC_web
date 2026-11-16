@@ -259,6 +259,30 @@ type ControlMutationMeta struct {
 	Reason           string `json:"reason"`
 }
 
+type OperatingScheduleSlotDTO struct {
+	DayOfWeek   int `json:"dayOfWeek"`
+	StartMinute int `json:"startMinute"`
+	EndMinute   int `json:"endMinute"`
+}
+
+type OperatingScheduleDTO struct {
+	Timezone string                     `json:"timezone"`
+	Slots    []OperatingScheduleSlotDTO `json:"slots"`
+}
+
+type OperatingExceptionSlotDTO struct {
+	StartMinute int `json:"startMinute"`
+	EndMinute   int `json:"endMinute"`
+}
+
+type OperatingExceptionDTO struct {
+	Kind             string                      `json:"kind"`
+	StartDate        string                      `json:"startDate"`
+	EndDate          string                      `json:"endDate"`
+	Status           string                      `json:"status"`
+	ReplacementSlots []OperatingExceptionSlotDTO `json:"replacementSlots"`
+}
+
 type SiteControlModeInput struct {
 	ControlMode      string               `json:"controlMode"`
 	Reason           string               `json:"reason,omitempty"`
@@ -340,6 +364,7 @@ type PlantTwinPort interface {
 	GetAsset(ctx context.Context, operator OperatorIdentity, assetID string) (AssetDTO, error)
 	GetSiteAssetModel(ctx context.Context, operator OperatorIdentity, siteID string) (SiteAssetModelDTO, error)
 	GetSiteControlState(ctx context.Context, operator OperatorIdentity, siteID string) (SiteControlStateView, error)
+	GetSiteOperatingSchedule(ctx context.Context, operator OperatorIdentity, siteID string) (OperatingScheduleDTO, []OperatingExceptionDTO, error)
 	SaveSiteControlMode(ctx context.Context, operator OperatorIdentity, siteID, controlMode, reason string, meta ControlMutationMeta) (SiteControlStateView, error)
 	SaveAssetControlLock(ctx context.Context, operator OperatorIdentity, assetID, siteID, lockMode, reason string, meta ControlMutationMeta) (AssetControlLockView, error)
 	GetDispatchContext(ctx context.Context, tenantID, siteID, deviceID, pointID string) (ControlDispatchContext, error)

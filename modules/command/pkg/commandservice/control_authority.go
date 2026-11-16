@@ -36,6 +36,7 @@ type ControlAuthorityConfig struct {
 	CommandGrantPresenter  string
 	CommandGrantAudience   string
 	CommandGrantUseChecker func(commandauth.GrantClaims) (commandauth.UseStatus, error)
+	ControlFailureNotifier ControlFailureNotifier
 	Now                    func() time.Time
 }
 
@@ -50,6 +51,7 @@ type ControlAuthority struct {
 	commandGrantPresenter  string
 	commandGrantAudience   string
 	commandGrantUseChecker func(commandauth.GrantClaims) (commandauth.UseStatus, error)
+	failureNotifier        ControlFailureNotifier
 	now                    func() time.Time
 }
 
@@ -84,6 +86,7 @@ func NewControlAuthority(config ControlAuthorityConfig) (*ControlAuthority, erro
 		commandGrantPresenter:  presenter,
 		commandGrantAudience:   audience,
 		commandGrantUseChecker: config.CommandGrantUseChecker,
+		failureNotifier:        config.ControlFailureNotifier,
 		now:                    now,
 	}, nil
 }
@@ -176,19 +179,28 @@ func (a *ControlAuthority) evaluatePreDispatch(
 	intent commandmodel.CommandIntent,
 	dctx ControlDispatchContext,
 ) (commandmodel.GateDecision, *commandmodel.GateRejection, string, error) {
+	profile, _ := commandmodel.CapabilityProfileFor(intent.Capability)
+	actuation := strings.ToUpper(strings.TrimSpace(dctx.ActuationMode))
 	isEmergencyDo := intent.Capability == commandmodel.CapabilityStop &&
-		strings.EqualFold(strings.TrimSpace(dctx.ActuationMode), "EMERGENCY_DO_RELEASE") &&
+		actuation == "EMERGENCY_DO_RELEASE" &&
 		len(dctx.Interlocks) == 0
+	isStopCap := intent.Capability == commandmodel.CapabilityStop || intent.Capability == commandmodel.CapabilityStopUnitSequence
+	canBypassLiveErr := len(dctx.Interlocks) == 0 &&
+		((intent.PreconditionMode == commandmodel.PreconditionEmergencyBypass && profile.SupportsEmergencyBypass && strings.TrimSpace(intent.BypassReason) != "") ||
+			(isStopCap && (actuation == "PULSE" || actuation == "ABORT_UNIT_SEQUENCE")))
 
 	var targetObs *commandmodel.LivePointObservation
 	var evidenceID string
 	if !isEmergencyDo {
 		obs, evID, err := a.live.ReadLivePoint(ctx, envelope.TenantID, envelope.SiteID, envelope.DeviceID, dispatchSafetyStateKey)
 		if err != nil {
-			return commandmodel.GateDecision{}, nil, "", err
+			if !canBypassLiveErr {
+				return commandmodel.GateDecision{}, nil, "", err
+			}
+		} else {
+			targetObs = obs
+			evidenceID = evID
 		}
-		targetObs = obs
-		evidenceID = evID
 	}
 
 	peerObs, err := a.readGateInterlockPeerStates(ctx, envelope.TenantID, envelope.SiteID, dctx.Interlocks)
@@ -197,7 +209,6 @@ func (a *ControlAuthority) evaluatePreDispatch(
 	}
 
 	locks, mw := toGateLocksAndWindow(dctx.AssetLocks, dctx.ActiveMaintenanceWindow)
-	profile, _ := commandmodel.CapabilityProfileFor(intent.Capability)
 	decision, rejection := commandmodel.EvaluateControlGate(commandmodel.GateInput{
 		CommandID:               envelope.CommandID,
 		Phase:                   commandmodel.GatePhasePreDispatch,
@@ -300,6 +311,9 @@ func (a *ControlAuthority) SubmitOperatorCommand(
 	})
 	if rejection != nil {
 		return SubmitOperatorCommandOutput{}, problemFromGateRejection(rejection)
+	}
+	if err := a.enforcePlantOperationalGuards(ctx, operator, model, target, targetObs); err != nil {
+		return SubmitOperatorCommandOutput{}, err
 	}
 	if decision.StepUpRequired {
 		return SubmitOperatorCommandOutput{}, commandStepUpError("High-risk commands require a 6-digit verificationCode from your authenticator app.")
@@ -500,6 +514,73 @@ func (a *ControlAuthority) CancelOperatorCommand(
 	if err != nil {
 		return CommandView{}, controlErrorFromStore(err, "Command Service could not load the requested Command.")
 	}
+	isUnitSequence := intent.Capability == commandmodel.CapabilityStartUnitSequence || intent.Capability == commandmodel.CapabilityStopUnitSequence
+	if intent.Status == commandmodel.IntentDispatching && isUnitSequence {
+		profile, supported := commandmodel.CapabilityProfileFor(intent.Capability)
+		if !supported {
+			return CommandView{}, &ControlError{
+				HTTPStatus: http.StatusForbidden, Code: "COMMAND_AUTHORIZATION_DENIED",
+				Title: "Command forbidden", Detail: "The Command Capability is not supported.",
+			}
+		}
+		claims, err := a.mintAndValidateCommandGrant(
+			ctx, operator, commandmodel.AuthorizationCommandSubmit,
+			intent.SiteID, intent.DeviceID, intent.Capability, profile.Revision, intent.Risk,
+		)
+		if err != nil {
+			return CommandView{}, err
+		}
+		abortReason := trimmedReason
+		if abortReason == "" {
+			abortReason = "ABORT_UNIT_SEQUENCE"
+		}
+		principalID := resolveControlPrincipalID(nil, claims.PrincipalID, operator.Subject)
+		cancelledIDs, err := a.store.CancelPending(ctx, commandmodel.CancelPendingRequest{
+			TenantID:             operator.TenantID,
+			SiteID:               intent.SiteID,
+			DeviceIDs:            []string{intent.DeviceID},
+			PrincipalID:          principalID,
+			Reason:               abortReason,
+			CausationID:          intent.ID,
+			AbortActiveSequences: true,
+		})
+		if err != nil {
+			return CommandView{}, controlErrorFromStore(err, "Command cancellation failed.")
+		}
+		updated, err := a.store.Get(ctx, operator.TenantID, commandID)
+		if err != nil {
+			return CommandView{}, controlErrorFromStore(err, "Command Service could not reload the cancelled Command.")
+		}
+		if !containsString(cancelledIDs, commandID) && updated.Status == commandmodel.IntentDispatching {
+			return CommandView{}, &ControlError{
+				HTTPStatus: http.StatusConflict, Code: "COMMAND_CANCEL_INVALID",
+				Title: "Command cannot be cancelled", Detail: "Only a pending, queued, or acknowledged unit-sequence Command can be cancelled or aborted.",
+			}
+		}
+		if a.twin != nil && a.live != nil {
+			if model, modelErr := a.twin.GetSiteAssetModel(ctx, operator, intent.SiteID); modelErr == nil {
+				topo := resolveSiteControlTopology(model, a.now().UTC())
+				if abortTarget, hasAbort := resolveAbortTargetForCommand(topo, intent.PointID, intent.DeviceID); hasAbort {
+					controlState, stateErr := a.twin.GetSiteControlState(ctx, operator, intent.SiteID)
+					if stateErr != nil {
+						controlState = SiteControlStateView{
+							TenantID:    operator.TenantID,
+							SiteID:      intent.SiteID,
+							ControlMode: SiteControlModeRemoteAuto,
+						}
+					}
+					obs, _, liveErr := a.live.ReadLivePoint(ctx, operator.TenantID, intent.SiteID, abortTarget.device.ID, abortTarget.feedbackPoint.PointCode)
+					precondMode := commandmodel.PreconditionRequireCurrentState
+					if liveErr != nil || !livePointSafe(obs) {
+						precondMode = commandmodel.PreconditionEmergencyBypass
+						obs = nil
+					}
+					_, _ = a.dispatchShutdownTarget(ctx, operator, controlState, abortTarget, obs, precondMode, abortReason, "abort-"+intent.ID, false)
+				}
+			}
+		}
+		return commandView(updated), nil
+	}
 	if intent.Status != commandmodel.IntentAwaitingApproval && intent.Status != commandmodel.IntentQueued {
 		return CommandView{}, &ControlError{
 			HTTPStatus: http.StatusConflict, Code: "COMMAND_CANCEL_INVALID",
@@ -539,7 +620,14 @@ func (a *ControlAuthority) GetSiteControlState(ctx context.Context, operator Ope
 	if !commandmodel.IsUUIDv7(siteID) {
 		return SiteControlStateView{}, notFoundControlError("The requested Site was not found.")
 	}
-	return a.twin.GetSiteControlState(ctx, operator, siteID)
+	state, err := a.twin.GetSiteControlState(ctx, operator, siteID)
+	if err != nil {
+		return SiteControlStateView{}, err
+	}
+	if state.ControlMode == SiteControlModeSafeShutdownExit {
+		a.releaseSafeShutdownHoldingAuxiliariesBestEffort(ctx, operator, siteID, state)
+	}
+	return state, nil
 }
 
 func (a *ControlAuthority) PutSiteControlMode(

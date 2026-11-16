@@ -25,6 +25,7 @@ type MemoryAuthorityStore struct {
 	now        func() time.Time
 	order      []string
 	usedGrants map[string]struct{}
+	ListErr    error
 }
 
 func NewMemoryAuthorityStore(now func() time.Time) *MemoryAuthorityStore {
@@ -64,8 +65,12 @@ func (m *MemoryAuthorityStore) Get(_ context.Context, tenantID, commandID string
 
 func (m *MemoryAuthorityStore) List(_ context.Context, tenantID, siteID string, limit int) ([]commandmodel.CommandIntent, error) {
 	m.mu.Lock()
+	listErr := m.ListErr
 	ids := append([]string(nil), m.order...)
 	m.mu.Unlock()
+	if listErr != nil {
+		return nil, listErr
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -78,6 +83,22 @@ func (m *MemoryAuthorityStore) List(_ context.Context, tenantID, siteID string, 
 		out = append(out, intent)
 	}
 	return out, nil
+}
+
+func (m *MemoryAuthorityStore) SetControlFailureNotifier(notifier ControlFailureNotifier) {
+	m.svc.SetControlFailureNotifier(notifier)
+}
+
+func (m *MemoryAuthorityStore) SetCommandUpdatedAtForTest(commandID string, updatedAt time.Time) {
+	m.svc.mu.Lock()
+	defer m.svc.mu.Unlock()
+	if intent, ok := m.svc.intents[commandID]; ok {
+		ts := updatedAt.UTC()
+		intent.UpdatedAt = ts
+		if intent.CreatedAt.After(ts) {
+			intent.CreatedAt = ts
+		}
+	}
 }
 
 func (m *MemoryAuthorityStore) Approve(_ context.Context, req commandmodel.ApproveRequest) (commandmodel.CommandIntent, error) {
@@ -234,6 +255,8 @@ type FakePlantTwin struct {
 	Assets            map[string]AssetDTO
 	Models            map[string]SiteAssetModelDTO
 	ControlStates     map[string]SiteControlStateView
+	Schedules         map[string]OperatingScheduleDTO
+	Exceptions        map[string][]OperatingExceptionDTO
 	BoundDevices      map[string][]string
 	DispatchErr       error
 	SiteControlRevSeq int64
@@ -245,8 +268,20 @@ func NewFakePlantTwin() *FakePlantTwin {
 		Assets:        map[string]AssetDTO{},
 		Models:        map[string]SiteAssetModelDTO{},
 		ControlStates: map[string]SiteControlStateView{},
+		Schedules:     map[string]OperatingScheduleDTO{},
+		Exceptions:    map[string][]OperatingExceptionDTO{},
 		BoundDevices:  map[string][]string{},
 	}
+}
+
+func (f *FakePlantTwin) GetSiteOperatingSchedule(_ context.Context, _ OperatorIdentity, siteID string) (OperatingScheduleDTO, []OperatingExceptionDTO, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sched, ok := f.Schedules[siteID]
+	if !ok {
+		return OperatingScheduleDTO{}, nil, notFoundControlError("The requested Site operating schedule was not found.")
+	}
+	return sched, append([]OperatingExceptionDTO(nil), f.Exceptions[siteID]...), nil
 }
 
 func (f *FakePlantTwin) GetAsset(_ context.Context, operator OperatorIdentity, assetID string) (AssetDTO, error) {
@@ -541,6 +576,7 @@ type TestControlHarness struct {
 	IAM             *FakeIAMAuthorizer
 	OperatorHandler http.Handler
 	RuntimeHandler  http.Handler
+	FailureEvents   chan ControlFailureEvent
 	GatewaySigner   crypto.Signer
 	GrantSigner     crypto.Signer
 }
@@ -565,6 +601,14 @@ func NewControlAuthorityForTest(now func() time.Time) (*TestControlHarness, erro
 		Now:         now,
 		PrincipalID: "018f3e00-5000-7000-8000-000000000001",
 	}
+	failureEvents := make(chan ControlFailureEvent, 32)
+	notify := func(_ context.Context, evt ControlFailureEvent) {
+		select {
+		case failureEvents <- evt:
+		default:
+		}
+	}
+	store.SetControlFailureNotifier(notify)
 	authority, err := NewControlAuthority(ControlAuthorityConfig{
 		Store:                 store,
 		Runtime:               store,
@@ -578,7 +622,8 @@ func NewControlAuthorityForTest(now func() time.Time) (*TestControlHarness, erro
 		CommandGrantUseChecker: func(claims commandauth.GrantClaims) (commandauth.UseStatus, error) {
 			return store.ConsumeCommandGrant(claims, "policy-v1", 1)
 		},
-		Now: now,
+		ControlFailureNotifier: notify,
+		Now:                    now,
 	})
 	if err != nil {
 		return nil, err
@@ -594,9 +639,10 @@ func NewControlAuthorityForTest(now func() time.Time) (*TestControlHarness, erro
 		return nil, err
 	}
 	runtimeHandler, err := NewRuntimeHTTPHandler(RuntimeHTTPConfig{
-		Store:            authority,
-		DispatcherSPIFFE: "spiffe://hvac.local/command-dispatcher",
-		VerifierSPIFFE:   "spiffe://hvac.local/command-verifier",
+		Store:                  authority,
+		DispatcherSPIFFE:       "spiffe://hvac.local/command-dispatcher",
+		VerifierSPIFFE:         "spiffe://hvac.local/command-verifier",
+		ControlFailureNotifier: notify,
 	})
 	if err != nil {
 		return nil, err
@@ -609,6 +655,7 @@ func NewControlAuthorityForTest(now func() time.Time) (*TestControlHarness, erro
 		IAM:             iamAuth,
 		OperatorHandler: opHandler,
 		RuntimeHandler:  runtimeHandler,
+		FailureEvents:   failureEvents,
 		GatewaySigner:   gatewayKey,
 		GrantSigner:     grantKey,
 	}, nil

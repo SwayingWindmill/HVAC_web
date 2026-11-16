@@ -36,17 +36,19 @@ type RuntimeStore interface {
 // every Tenant: which Devices may be controlled is decided by the Registry (an active
 // writable command Point), checked by Connectivity before anything is sent.
 type RuntimeHTTPConfig struct {
-	Store            RuntimeStore
-	Metrics          *observability.Registry
-	DispatcherSPIFFE string
-	VerifierSPIFFE   string
+	Store                  RuntimeStore
+	Metrics                *observability.Registry
+	DispatcherSPIFFE       string
+	VerifierSPIFFE         string
+	ControlFailureNotifier ControlFailureNotifier
 }
 
 type runtimeHTTPHandler struct {
-	store      RuntimeStore
-	metrics    *observability.Registry
-	dispatcher string
-	verifier   string
+	store           RuntimeStore
+	metrics         *observability.Registry
+	dispatcher      string
+	verifier        string
+	failureNotifier ControlFailureNotifier
 }
 
 type runtimeClaimRequest struct {
@@ -75,7 +77,13 @@ func NewRuntimeHTTPHandler(config RuntimeHTTPConfig) (http.Handler, error) {
 	if config.Store == nil || !validSPIFFE(dispatcher) || !validSPIFFE(verifier) || dispatcher == verifier {
 		return nil, errors.New("command runtime HTTP security configuration is incomplete")
 	}
-	return &runtimeHTTPHandler{store: config.Store, metrics: config.Metrics, dispatcher: dispatcher, verifier: verifier}, nil
+	return &runtimeHTTPHandler{
+		store:           config.Store,
+		metrics:         config.Metrics,
+		dispatcher:      dispatcher,
+		verifier:        verifier,
+		failureNotifier: config.ControlFailureNotifier,
+	}, nil
 }
 
 func (handler *runtimeHTTPHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -132,6 +140,20 @@ func (handler *runtimeHTTPHandler) claimDispatch(writer http.ResponseWriter, req
 	writeRuntimeJSON(writer, http.StatusOK, envelope)
 }
 
+type controlFailureNotifyingStore interface {
+	hasControlFailureNotifier() bool
+}
+
+func (handler *runtimeHTTPHandler) shouldNotifyFromHTTP() bool {
+	if handler == nil || handler.failureNotifier == nil {
+		return false
+	}
+	if store, ok := handler.store.(controlFailureNotifyingStore); ok && store.hasControlFailureNotifier() {
+		return false
+	}
+	return true
+}
+
 func (handler *runtimeHTTPHandler) resolveDispatch(writer http.ResponseWriter, request *http.Request) {
 	var input runtimeDispatchResolveRequest
 	if !decodeRuntimeJSON(writer, request, &input) {
@@ -140,6 +162,23 @@ func (handler *runtimeHTTPHandler) resolveDispatch(writer http.ResponseWriter, r
 	if err := handler.store.ResolveDispatch(request.Context(), input.Envelope, input.Result); err != nil {
 		writeRuntimeStoreError(writer, err)
 		return
+	}
+	if handler.shouldNotifyFromHTTP() {
+		now := time.Now().UTC()
+		if decision, decErr := DecideDispatchResolution(input.Envelope.Capability, input.Result, now); decErr == nil {
+			intent := commandmodel.CommandIntent{
+				ID:         input.Envelope.CommandID,
+				TenantID:   input.Envelope.TenantID,
+				SiteID:     input.Envelope.SiteID,
+				DeviceID:   input.Envelope.DeviceID,
+				PointID:    input.Envelope.PointID,
+				Capability: input.Envelope.Capability,
+				Parameters: input.Envelope.Parameters,
+			}
+			if event, notify := controlFailureEventFromDecision(intent, decision.IntentFinal, decision.Reason, input.Result.FailureCode, now); notify {
+				notifyControlFailureAsync(handler.failureNotifier, event)
+			}
+		}
 	}
 	if handler.metrics != nil {
 		outcome := strings.ToLower(strings.TrimSpace(string(input.Result.Phase)))
@@ -176,6 +215,23 @@ func (handler *runtimeHTTPHandler) resolveVerification(writer http.ResponseWrite
 	if err := handler.store.ResolveVerification(request.Context(), input.Envelope, input.Result); err != nil {
 		writeRuntimeStoreError(writer, err)
 		return
+	}
+	if handler.shouldNotifyFromHTTP() {
+		now := time.Now().UTC()
+		intent := commandmodel.CommandIntent{
+			ID:         input.Envelope.CommandID,
+			TenantID:   input.Envelope.TenantID,
+			SiteID:     input.Envelope.SiteID,
+			DeviceID:   input.Envelope.DeviceID,
+			PointID:    input.Envelope.PointID,
+			Capability: input.Envelope.Capability,
+			Parameters: input.Envelope.Parameters,
+		}
+		if decision, decErr := DecideVerificationResolutionWithEdge(intent, input.Envelope, input.Envelope.EdgeExecution, input.Result, input.Envelope.VerificationDeadline, now); decErr == nil {
+			if event, notify := controlFailureEventFromDecision(intent, decision.IntentFinal, decision.Reason, input.Result.FailureCode, now); notify {
+				notifyControlFailureAsync(handler.failureNotifier, event)
+			}
+		}
 	}
 	if handler.metrics != nil {
 		outcome := strings.ToLower(strings.TrimSpace(string(input.Result.Outcome)))
