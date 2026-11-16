@@ -18,6 +18,7 @@ WITH candidates AS (
     dp.applicability AS stored_applicability,
     dp.current_state AS stored_state,
     s.evaluation_availability AS stored_availability,
+    s.snapshot AS stored_snapshot,
     CASE
       WHEN d.presence_applicability = 'NOT_APPLICABLE' THEN 'AVAILABLE'
       WHEN oc.device_id IS NULL OR NOT oc.available THEN 'UNAVAILABLE'
@@ -63,6 +64,17 @@ FROM candidates
 WHERE stored_applicability IS DISTINCT FROM presence_applicability
    OR stored_availability IS DISTINCT FROM expected_availability
    OR stored_state IS DISTINCT FROM expected_state
+   OR EXISTS (
+     SELECT 1
+     FROM telemetry_runtime.freshness_policies fp
+     WHERE fp.device_id = candidates.device_id
+       AND fp.configured
+       AND NOT EXISTS (
+         SELECT 1
+         FROM jsonb_array_elements(COALESCE(candidates.stored_snapshot->'values', '[]'::jsonb)) AS elem
+         WHERE elem->>'key' = fp.telemetry_key
+       )
+   )
 ORDER BY device_id
 LIMIT $2
 `
