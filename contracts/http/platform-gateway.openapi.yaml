@@ -3424,6 +3424,7 @@
           "email",
           "enabled",
           "locked",
+          "mfaEnabled",
           "self",
           "assignments"
         ],
@@ -3444,6 +3445,9 @@
             "type": "boolean"
           },
           "locked": {
+            "type": "boolean"
+          },
+          "mfaEnabled": {
             "type": "boolean"
           },
           "lastLoginAt": {

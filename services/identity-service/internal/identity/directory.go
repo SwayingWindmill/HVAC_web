@@ -18,22 +18,23 @@ var (
 )
 
 // DirectoryUser is what user administration shows about an account; it never carries the
-// password hash.
+// password hash or MFA secret material.
 type DirectoryUser struct {
 	ID          string
 	Username    string
 	DisplayName string
 	Email       string
 	Status      string
+	MFAEnabled  bool
 	LockedUntil *time.Time
 	LastLoginAt *time.Time
 }
 
-const directoryColumns = `id::text, username, display_name, email, status, locked_until, last_login_at`
+const directoryColumns = `u.id::text, u.username, u.display_name, u.email, u.status, COALESCE(m.status = 'ACTIVE', false), u.locked_until, u.last_login_at`
 
 func scanDirectoryUser(row pgx.Row) (DirectoryUser, error) {
 	var user DirectoryUser
-	err := row.Scan(&user.ID, &user.Username, &user.DisplayName, &user.Email, &user.Status, &user.LockedUntil, &user.LastLoginAt)
+	err := row.Scan(&user.ID, &user.Username, &user.DisplayName, &user.Email, &user.Status, &user.MFAEnabled, &user.LockedUntil, &user.LastLoginAt)
 	return user, err
 }
 
@@ -42,7 +43,7 @@ func (store *Store) UsersByID(ctx context.Context, ids []string) ([]DirectoryUse
 	if len(ids) == 0 {
 		return []DirectoryUser{}, nil
 	}
-	rows, err := store.pool.Query(ctx, `SELECT `+directoryColumns+` FROM identity.users WHERE id = ANY($1::uuid[])`, ids)
+	rows, err := store.pool.Query(ctx, `SELECT `+directoryColumns+` FROM identity.users u LEFT JOIN identity.user_mfa m ON m.user_id = u.id WHERE u.id = ANY($1::uuid[])`, ids)
 	if err != nil {
 		return nil, fmt.Errorf("read identity users: %w", err)
 	}

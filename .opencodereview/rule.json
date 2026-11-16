@@ -1,0 +1,27 @@
+{
+  "exclude": [
+    "**/*.gen.ts"
+  ],
+  "rules": [
+    {
+      "path": "{modules/command,libs/commandmodel,libs/commandauth}/**",
+      "rule": "Verify command authorization, execution fence, MQTT commit-point ordering, readback verification, device control-group freeze, and reply-recovery queue invariants per docs/adr/ and modules/command/pkg/commandformal. Flag state-machine changes that require rerunning `npm run command:formal`.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "{deploy/platform/phase1/migrations,infra/**/init}/**",
+      "rule": "Registered migrations are frozen: flag any modification to an existing migration instead of adding a new migration. New tables or schemas must include Chinese `COMMENT ON` statements and avoid temporary or backup table names.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "{contracts,modules,cmd}/**",
+      "rule": "Enforce single-owner data ownership per contracts/: only the owning module may mutate its domain tables. Verify OpenAPI/generated contract alignment and gateway authz/tenant-scope checks on added or changed endpoints.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "apps/hvac-web/src/**",
+      "rule": "Verify PRODUCT.md and DESIGN.md invariants that static gates do not check: never render 0 or normal for unknown/disconnected metrics, never fabricate fallback values, keep URL/Query/Form/local state in their owning layers, and compute business dates in site timezone rather than browser local time.",
+      "merge_system_rule": true
+    }
+  ]
+}

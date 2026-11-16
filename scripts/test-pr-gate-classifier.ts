@@ -65,6 +65,7 @@ test('documentation-only changes keep expensive affected gates idle', () => {
     'CLAUDE.md',
     '.agents/skills/correct/SKILL.md',
     '.claude/skills/correct/SKILL.md',
+    '.opencodereview/rule.json',
   ]) {
     const classification = runClassification([file]);
     assert.equal(classification.contracts, false);

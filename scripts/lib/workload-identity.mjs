@@ -50,4 +50,5 @@ export const workloadIdentities = Object.freeze([
   { name: 'forecast', spiffeId: 'spiffe://hvac.local/forecast-service', dns: 'forecast-service' },
   { name: 'optimization', spiffeId: 'spiffe://hvac.local/optimization-service', dns: 'optimization-service' },
   { name: 'mv', spiffeId: 'spiffe://hvac.local/mv-service', dns: 'mv-service' },
+  { name: 'host-edge-proxy', spiffeId: 'spiffe://hvac.local/host-edge-proxy' },
 ]);

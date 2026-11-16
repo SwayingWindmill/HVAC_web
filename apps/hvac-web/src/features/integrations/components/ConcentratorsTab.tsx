@@ -40,6 +40,7 @@ import {
   describeConcentratorError,
   describeProtectedConcentratorUid,
   formatConcentratorEidDisplay,
+  inferDefaultConcentratorUid,
   isProtectedConcentratorUid,
   mergeConcentratorAudits,
   type ConcentratorChannelRow,
@@ -77,10 +78,18 @@ export function ConcentratorsTab({
     () => allDevices.filter((device) => device.deviceType === 'GATEWAY'),
     [allDevices],
   );
+  const defaultUnitId = useMemo(() => inferDefaultConcentratorUid(allDevices), [allDevices]);
 
   const [selectedGatewayId, setSelectedGatewayId] = useState<string>('');
-  const [unitIdRaw, setUnitIdRaw] = useState<string>('1');
+  const [unitIdRaw, setUnitIdRaw] = useState<string>(() => String(defaultUnitId));
+  const [unitIdCustomized, setUnitIdCustomized] = useState<boolean>(false);
   const [inspectedChannelNum, setInspectedChannelNum] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (unitIdCustomized) return;
+    const nextDefault = String(defaultUnitId);
+    setUnitIdRaw((prev) => (prev === nextDefault ? prev : nextDefault));
+  }, [defaultUnitId, unitIdCustomized]);
 
   useEffect(() => {
     if (gateways.length === 0) {
@@ -329,20 +338,22 @@ export function ConcentratorsTab({
                   aria-invalid={parsedUnitId === null || isUnitProtected}
                   onChange={(event) => {
                     setUnitIdRaw(event.currentTarget.value);
+                    setUnitIdCustomized(event.currentTarget.value.trim() !== String(defaultUnitId));
                     setInspectedChannelNum(null);
                   }}
                   className="h-8 w-28 font-mono text-sm tabular-nums"
                 />
-                {unitIdRaw !== '1' ? (
+                {unitIdRaw !== String(defaultUnitId) ? (
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => {
-                      setUnitIdRaw('1');
+                      setUnitIdRaw(String(defaultUnitId));
+                      setUnitIdCustomized(false);
                       setInspectedChannelNum(null);
                     }}
                   >
-                    恢复 UID 1
+                    恢复 UID {defaultUnitId}
                   </Button>
                 ) : null}
               </div>

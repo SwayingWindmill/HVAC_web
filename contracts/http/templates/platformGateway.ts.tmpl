@@ -118,7 +118,7 @@ export const userAdminRoleSchema = z.object({ roleKey: builtInRoleKeySchema, ten
 export const userAdminMemberAssignmentSchema = z.object({ bindingId: userAdminUUIDv7, roleKey: builtInRoleKeySchema, siteId: userAdminUUIDv7.optional() }).strict();
 export const userAdminMemberSchema = z.object({
   principalId: userAdminUUIDv7, username: z.string(), displayName: z.string(), email: z.string(),
-  enabled: z.boolean(), locked: z.boolean(), lastLoginAt: z.string().datetime().optional(), self: z.boolean(),
+  enabled: z.boolean(), locked: z.boolean(), mfaEnabled: z.boolean(), lastLoginAt: z.string().datetime().optional(), self: z.boolean(),
   assignments: z.array(userAdminMemberAssignmentSchema),
 }).strict();
 export const userAdminDirectorySchema = z.object({ roles: z.array(userAdminRoleSchema), members: z.array(userAdminMemberSchema) }).strict();

@@ -1519,3 +1519,22 @@ exit 0
 		}
 	}
 }
+
+func TestBuildReleaseStagesAllMigrationsAcrossScratchStages(t *testing.T) {
+	cmd := exec.Command("bash", "build-release.sh", "--check-migrator-list")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build-release.sh --check-migrator-list failed: %v\n%s", err, output)
+	}
+	match := regexp.MustCompile(`staged (\d+) migrator files`).FindStringSubmatch(string(output))
+	if len(match) != 2 {
+		t.Fatalf("missing staged file count in output:\n%s", output)
+	}
+	count, err := strconv.Atoi(match[1])
+	if err != nil {
+		t.Fatalf("parse staged count %q: %v", match[1], err)
+	}
+	if count < 140 {
+		t.Fatalf("staged only %d migrator files, want >= 140 across all scratch stages:\n%s", count, output)
+	}
+}

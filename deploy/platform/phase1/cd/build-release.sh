@@ -16,11 +16,15 @@ collect_migrator_tree() {
   local line rest src dest
   while IFS= read -r line || [[ -n "$line" ]]; do
     case "$line" in
+      FROM\ scratch*)
+        in_sources=1
+        ;;
       FROM\ *)
         if [[ "$in_sources" == 1 ]]; then
           break
         fi
-        in_sources=1
+        ;;
+      COPY\ --from=*)
         ;;
       COPY\ *)
         [[ "$in_sources" == 1 ]] || continue
@@ -45,6 +49,15 @@ collect_migrator_tree() {
     echo "error: staged migrator tree is missing migration-list.tsv" >&2
     exit 1
   fi
+  local _db relpath
+  while IFS='|' read -r _db relpath || [[ -n "${_db:-}" ]]; do
+    [[ -z "${_db:-}" || "$_db" == \#* ]] && continue
+    relpath="${relpath%$'\r'}"
+    if [[ ! -f "$dest_root/opt/hvac/repo/$relpath" ]]; then
+      echo "error: staged migrator tree is missing migration from migration-list.tsv: $relpath" >&2
+      exit 1
+    fi
+  done < "$dest_root/opt/hvac/migrations/migration-list.tsv"
   echo "staged $copied migrator files"
 }
 

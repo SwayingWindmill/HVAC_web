@@ -22,6 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { PASSWORD_HINT } from '@/features/account/password';
 import { ROLE_SUMMARIES, roleLabel } from '@/lib/role-labels';
 import { userAdminApi, userAdminErrorMessage, userAdminKey, userAdminQuery } from './user-admin-api';
+import { resolveMemberTwoFactorDisplay } from './user-admin-model';
 
 interface SiteOption { readonly id: string; readonly displayName: string }
 interface RoleScope { roleKey: BuiltInRoleKey | ''; siteId: string }
@@ -35,6 +36,30 @@ const scopeOf = (siteId: string) => (siteId === ALL_SITES ? {} : { siteId });
 function MemberState({ member }: { readonly member: UserAdminMember }) {
   const [variant, label] = !member.enabled ? ['default', '已停用'] as const : member.locked ? ['warning', '密码输错锁定中'] as const : ['success', '可登录'] as const;
   return <Status variant={variant}><StatusIndicator />{label}</Status>;
+}
+
+function MemberTwoFactor({ member }: { readonly member: UserAdminMember }) {
+  const display = resolveMemberTwoFactorDisplay(member);
+  switch (display.kind) {
+    case 'enabled':
+      return <span className="text-xs whitespace-nowrap text-secondary-foreground">{display.label}</span>;
+    case 'not_enabled':
+      return <span className="text-xs whitespace-nowrap text-muted-foreground">{display.label}</span>;
+    case 'missing_for_high_risk':
+      return (
+        <div className="flex flex-col gap-0.5 whitespace-nowrap">
+          <span className="inline-flex items-center gap-1 text-xs font-medium text-warning-text">
+            <span aria-hidden="true">▲</span>
+            <span>{display.label}</span>
+          </span>
+          <span className="text-xs text-muted-foreground">{display.warning}</span>
+        </div>
+      );
+    default: {
+      const _exhaustive: never = display;
+      return _exhaustive;
+    }
+  }
 }
 
 /** 系统管理 → 用户与角色 for administrators: who can sign in, with which Roles on which Sites. */
@@ -76,11 +101,12 @@ export function UserAdministration({ csrfToken, sites }: { readonly csrfToken: s
           <Table aria-label="用户与角色">
             <TableHeader>
               <TableRow>
-                <TableHead className="pl-5">用户</TableHead>
-                <TableHead>角色与站点</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>最近登录</TableHead>
-                <TableHead className="w-12 pr-5"><span className="sr-only">操作</span></TableHead>
+                <TableHead scope="col" className="pl-5">用户</TableHead>
+                <TableHead scope="col">角色与站点</TableHead>
+                <TableHead scope="col">两步验证</TableHead>
+                <TableHead scope="col">状态</TableHead>
+                <TableHead scope="col">最近登录</TableHead>
+                <TableHead scope="col" className="w-12 pr-5"><span className="sr-only">操作</span></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -107,6 +133,7 @@ export function UserAdministration({ csrfToken, sites }: { readonly csrfToken: s
                       </span>
                     )}
                   </TableCell>
+                  <TableCell><MemberTwoFactor member={member} /></TableCell>
                   <TableCell><MemberState member={member} /></TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{member.lastLoginAt ? clock(member.lastLoginAt) : '从未登录'}</TableCell>
                   <TableCell className="pr-5 text-right">

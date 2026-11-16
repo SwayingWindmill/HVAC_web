@@ -275,3 +275,79 @@ func TestVerifyTOTPByUserIDUpdatesCounterAndLocksOnFailures(t *testing.T) {
 		t.Fatalf("VerifyTOTPByUserID(valid)=%v", err)
 	}
 }
+
+func TestUsersByIDReportsActiveTOTPMFAState(t *testing.T) {
+	adminURL := os.Getenv("IDENTITY_TEST_ADMIN_DATABASE_URL")
+	if adminURL == "" {
+		t.Skip("IDENTITY_TEST_ADMIN_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	store, err := OpenStore(ctx, adminURL)
+	if err != nil {
+		t.Fatalf("open identity admin store: %v", err)
+	}
+	defer store.Close()
+
+	encodedKey, err := GenerateMFAEncryptionKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(t.TempDir(), "mfa-encryption.key")
+	if err := os.WriteFile(keyPath, []byte(encodedKey+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	protector, err := LoadMFAProtectorFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	username := "mfa-directory-" + strings.ReplaceAll(now.Format("20060102T150405.000000000"), ".", "")
+	user, err := store.CreateUser(ctx, CreateUserInput{
+		Username: username, DisplayName: "MFA Directory", Email: username + "@example.invalid", Password: randomToken(24), Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readMFAEnabled := func(stage string) bool {
+		t.Helper()
+		users, err := store.UsersByID(ctx, []string{user.ID})
+		if err != nil {
+			t.Fatalf("UsersByID(%s): %v", stage, err)
+		}
+		if len(users) != 1 || users[0].ID != user.ID {
+			t.Fatalf("UsersByID(%s) = %#v, want 1 row for %s", stage, users, user.ID)
+		}
+		return users[0].MFAEnabled
+	}
+
+	if readMFAEnabled("before-enrollment") {
+		t.Fatal("expected MFAEnabled=false before TOTP enrollment")
+	}
+	enrollment, err := store.StartTOTPEnrollment(ctx, username, "HVAC", protector, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readMFAEnabled("pending-enrollment") {
+		t.Fatal("expected MFAEnabled=false while TOTP enrollment is PENDING")
+	}
+	code, err := totp.GenerateCode(enrollment.ProvisioningKey, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ActivateTOTP(ctx, username, code, protector, now); err != nil {
+		t.Fatal(err)
+	}
+	if !readMFAEnabled("active-enrollment") {
+		t.Fatal("expected MFAEnabled=true after TOTP activation")
+	}
+	if err := store.DisableTOTP(ctx, username, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if readMFAEnabled("after-disable") {
+		t.Fatal("expected MFAEnabled=false after TOTP disable")
+	}
+}

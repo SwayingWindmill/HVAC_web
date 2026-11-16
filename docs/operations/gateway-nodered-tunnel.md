@@ -7,7 +7,7 @@
 1. 网关侧 `edge/node-red/gateway-nodered-tunnel.ts` 运行在 Node-RED `平台·常驻隧道` 页签中，主动通过双向 TLS（使用 `/root/hvac-platform/gateway.crt`、`gateway.key` 和 `ca.crt`）连接平台域名 `:443/gateway/v1/tunnel`，发送 `Upgrade: hvac-gateway-tunnel/v1`。
 2. 平台 `nginx`（`deploy/platform/phase1/nginx/nginx.conf`）校验证书有效后把原始证书放进 `X-Gateway-Client-Cert` 头，走内部双向 TLS 转发给 `connectivity:8448`。
 3. `connectivity` 进程里的 `CredentialService.VerifyActiveCredential` 检查库里这台网关没有被吊销、证书未过期后，返回 `HTTP/1.1 101 Switching Protocols`，清掉 HTTP 读写超时并转入多路复用二进制帧通道。
-4. 平台主机 `systemd` 套接字单元 `hvac-gateway-nodered-loopback.socket` 只绑定宿主机回环地址 `127.0.0.1:18800`。有人访问宿主机 `127.0.0.1:18800` 时，`systemd` 拉起 `hvac-gateway-nodered-loopback@.service`（执行 `docker exec -i hvac-phase1-connectivity-1 /service -tunnel-stdio 127.0.0.1:18800`），经过隧道打开网关本机 `127.0.0.1:1880`。
+4. 平台主机 `systemd` 套接字单元 `hvac-gateway-nodered-loopback.socket` 只绑定宿主机回环地址 `127.0.0.1:18800`。有人访问宿主机 `127.0.0.1:18800` 时，`systemd` 拉起 `hvac-gateway-nodered-loopback@.service`（执行 `docker exec -i hvac-platform-connectivity-1 /service -tunnel-stdio 127.0.0.1:18800`），经过隧道打开网关本机 `127.0.0.1:1880`。
 5. 长连接默认每 `25` 秒双向发送 `PING`/`PONG` 心跳，超过 `75` 秒无报文才判定断线并按指数退避重连，避免 HTTP 服务器或 NAT 空闲切断。
 
 ## 运维人员怎么连上现场 Node-RED

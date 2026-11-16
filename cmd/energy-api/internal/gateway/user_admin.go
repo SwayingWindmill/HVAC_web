@@ -51,6 +51,7 @@ type memberView struct {
 	Email       string             `json:"email"`
 	Enabled     bool               `json:"enabled"`
 	Locked      bool               `json:"locked"`
+	MFAEnabled  bool               `json:"mfaEnabled"`
 	LastLoginAt *string            `json:"lastLoginAt,omitempty"`
 	Self        bool               `json:"self"`
 	Assignments []memberAssignment `json:"assignments"`
@@ -195,6 +196,7 @@ func (h *handler) listMembers(writer http.ResponseWriter, request *http.Request,
 			PrincipalID: member.PrincipalID, Username: account.Username, DisplayName: account.DisplayName, Email: account.Email,
 			Enabled:     member.MembershipStatus == "ACTIVE" && account.Status == "ACTIVE",
 			Locked:      account.LockedUntil != nil && account.LockedUntil.After(now),
+			MFAEnabled:  account.MFAEnabled,
 			Self:        member.PrincipalID == admin.directory.ActorPrincipalID,
 			Assignments: []memberAssignment{},
 		}
