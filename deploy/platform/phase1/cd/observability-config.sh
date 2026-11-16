@@ -228,8 +228,9 @@ wait_loaded() {
   deadline=$((SECONDS + ready_seconds))
   while :; do
     if docker exec "$cid" wget -q -T 5 -O - "http://127.0.0.1:$port/-/ready" </dev/null >/dev/null 2>&1; then
-      if docker exec "$cid" wget -q -T 5 -O - "http://127.0.0.1:$port/metrics" </dev/null 2>/dev/null \
-        | grep -Eq "^${metric} 1(\\.0+)?\$"; then
+      local metrics_body=""
+      metrics_body="$(docker exec "$cid" wget -q -T 5 -O - "http://127.0.0.1:$port/metrics" </dev/null 2>/dev/null || true)"
+      if grep -Eq "^${metric} 1(\\.0+)?\$" <<< "$metrics_body"; then
         echo "observability: $service is ready and $metric is 1"
         return 0
       fi

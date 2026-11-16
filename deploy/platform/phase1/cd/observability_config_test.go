@@ -33,6 +33,10 @@ case "$1" in
       */metrics*)
         echo "prometheus_config_last_reload_successful ${RELOAD_OK:-1}"
         echo "alertmanager_config_last_reload_successful ${RELOAD_OK:-1}"
+        if [ -n "$LARGE_METRICS" ]; then
+          dd if=/dev/zero bs=1024 count=256 2>/dev/null | tr '\0' 'x'
+          echo
+        fi
         ;;
     esac
     ;;
@@ -170,6 +174,18 @@ func TestObservabilityApplyFailsWhenTheReloadDidNotSucceed(t *testing.T) {
 	state, _ := os.ReadFile(filepath.Join(platform, "observability-applied.tsv"))
 	if strings.Contains(string(state), "prometheus\t") {
 		t.Fatalf("a failed apply was recorded as applied:\n%s", state)
+	}
+}
+
+func TestObservabilityApplyHandlesLargeMetricsWithoutSigpipe(t *testing.T) {
+	platform := t.TempDir()
+	observabilityTree(t, platform, "groups: []\n")
+	output, _, err := runObservability(t, []string{"LARGE_METRICS=1", "HVAC_OBSERVABILITY_READY_SECONDS=0", "NO_ALERTMANAGER=1"}, "apply", platform, "hvac-platform")
+	if err != nil {
+		t.Fatalf("apply failed with SIGPIPE on large /metrics output: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "prometheus is ready and prometheus_config_last_reload_successful is 1") {
+		t.Fatalf("missing ready message:\n%s", output)
 	}
 }
 

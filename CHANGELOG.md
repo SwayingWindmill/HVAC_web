@@ -44,6 +44,7 @@
 
 #### 修复
 
+- 修复 `deploy/platform/phase1/cd/observability-config.sh` 的 `wait_loaded` 在启用 `pipefail` 时用 `grep -Eq` 过滤大体积 `/metrics` 输出提前退出、导致 `wget` 触发 `SIGPIPE`（退出码 `141`）并让监控配置重载误判超时的故障。
 - 系统消除松雅轩机组辅机误判、开机热平衡瞬态误报与异常值连带刷屏：
   - **C/D 总馈线与压缩机专用表解耦**：松雅轩 C（`meter-uid5` / `ammeter-unit1`）、D（`meter-uid2` / `ammeter-unit2`）铭牌配置 `feederAuxiliaryPowerKw: 30`；边缘包络脚本 `edge/node-red/songyaxuan-platform-envelope.js` 在 ET1010 已知辅机线圈（`u31..u33` / `u41..u43`）未吸合时改回退 C/D 总馈线迟滞 `57.75 / 45 kW`，同时将 `ET1010 UID31` 原始线圈键 `u0..u19` 归一为 `u11..u54`（`A/B` 仍用 `12.75 / 5 kW`）；FDD 开机门控、优化减台评估与网页排班偏差检测统一计入 `feederAuxiliaryPowerKw` 并在排班模型中优先采用 `run_state` 判定，消除 C/D 单开水泵和冷却塔（`31–44 kW`）及本地 MCC 手动模式下误报冷机运行与温差倒挂的问题。
   - **开机热惯性稳定窗与同伴新鲜度校验**：`modules/telemetry` 把 `unchanged_since` 连续状态追踪扩充至非数值点位（含 `run_state`），跨点检查与运行状态门控在入库评估时读取 `freshness_policies.fresh_within_seconds` 过滤过期同伴读数；物理规则新增 `stabilizeSeconds`（热力方向、总管方向与能效比设为 `600 秒`，`PHYSICS_POWER` 保持 `0 秒` 瞬时拦截），平线规则新增 `flatlineStabilizeSeconds`（`600 秒`）且统一走 `VALID_ONLY`，A–D 蒸发/冷凝出水通道按点位绑定各自冷机电表 `run_state`。
