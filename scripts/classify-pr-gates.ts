@@ -340,7 +340,7 @@ for (const file of files) {
     addReason(file, 'operations contract or runbook changed');
   });
 
-  match(file.startsWith('docs/') || file.startsWith('.github/') || file.startsWith('.agents/') || file.startsWith('.claude/') || file.startsWith('.scratch/'), () => addReason(file, 'documentation or local tooling changed'));
+  match(file.startsWith('docs/') || file.startsWith('.github/') || file.startsWith('.agents/') || file.startsWith('.claude/') || file.startsWith('.opencodereview/') || file.startsWith('.scratch/'), () => addReason(file, 'documentation or local tooling changed'));
 
   if (!matched) {
     unknown = true;
