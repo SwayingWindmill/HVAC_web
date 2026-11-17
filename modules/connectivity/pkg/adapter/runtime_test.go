@@ -742,7 +742,11 @@ func TestRealBrokerInflightWindowIsolationWithStalledAndSheddingGateway(t *testi
 	first.awaitDisconnect(t, 3*time.Second)
 
 	second := broker.awaitConnection(t)
+	awaitReady(t, runtime, true)
 	close(releaseA)
+	waitCondition(t, 3*time.Second, func() bool {
+		return len(telemetry.accepted()) == 6
+	}, "Gateway A backlog drained before broker redelivers shed packet")
 	second.deliverGateway(t, testGatewayA, 7, 5, true)
 	second.awaitAcks(t, 7)
 

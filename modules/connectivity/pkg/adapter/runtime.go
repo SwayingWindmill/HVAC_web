@@ -187,12 +187,14 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		return err
 	}
 	runContext, runCancel := context.WithCancel(ctx)
+	heartbeatContext, heartbeatCancel := context.WithCancel(context.Background())
 	workerContext, workerCancel := context.WithCancel(context.Background())
 	runtime.startWorkers(workerContext)
 	var heartbeatWG sync.WaitGroup
 	var drained bool
 	defer func() {
 		runCancel()
+		heartbeatCancel()
 		if !drained {
 			workerCancel()
 		}
@@ -210,7 +212,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		go func() {
 			defer heartbeatWG.Done()
 			defer observability.Recover(runtime.logger, runtime.metrics, "connectivity.coverage_heartbeat")
-			runtime.runCoverageHeartbeat(workerContext)
+			runtime.runCoverageHeartbeat(heartbeatContext)
 		}()
 	}
 
@@ -270,20 +272,34 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 			stopErr = errors.New("MQTT connection manager stopped")
 		}
 	}
-	shutdownCoverageContext, coverageCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	runtime.reportCoverage(shutdownCoverageContext, false, "SOURCE_UNAVAILABLE", 0, true)
-	coverageCancel()
+	runCancel()
+	heartbeatCancel()
 	if stopErr != nil {
+		runtime.closeCurrentConnection()
+		workerCancel()
+		heartbeatWG.Wait()
+		runtime.subWG.Wait()
+		runtime.coverageWG.Wait()
+		shutdownCoverageContext, coverageCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		runtime.reportCoverage(shutdownCoverageContext, false, "SOURCE_UNAVAILABLE", 0, true)
+		coverageCancel()
 		return stopErr
 	}
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	_ = manager.Disconnect(shutdownContext)
 	cancel()
+	runtime.closeCurrentConnection()
 	runtime.waitDrainWithTimeout(5 * time.Second)
 	workerCancel()
 	runtime.workers.Wait()
 	runtime.closeMailboxes()
 	drained = true
+	heartbeatWG.Wait()
+	runtime.subWG.Wait()
+	runtime.coverageWG.Wait()
+	shutdownCoverageContext, coverageCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	runtime.reportCoverage(shutdownCoverageContext, false, "SOURCE_UNAVAILABLE", 0, true)
+	coverageCancel()
 	return nil
 }
 
