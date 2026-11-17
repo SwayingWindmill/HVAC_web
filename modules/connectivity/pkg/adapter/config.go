@@ -9,7 +9,11 @@ import (
 	"time"
 )
 
-var uuidV7Pattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var (
+	uuidV7Pattern  = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	traceIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	zeroTraceID    = strings.Repeat("0", 32)
+)
 
 const (
 	mqttKeepAliveSeconds     = 30
@@ -18,6 +22,9 @@ const (
 	// DefaultBatchMaxMessages is the per-Gateway batch drain cap when BatchMaxMessages is 0.
 	DefaultBatchMaxMessages = 200
 	maxBatchFlushWindow     = time.Second
+	// DefaultWorkerCount is the uplink worker pool size when WorkerCount is 0.
+	DefaultWorkerCount = 32
+	maxWorkerCount     = 1024
 )
 
 // Config is Connectivity's uplink configuration. It names no Tenant, Site or Gateway:
@@ -30,6 +37,7 @@ type Config struct {
 	QueueCapacity    int
 	BatchMaxMessages int
 	BatchFlushWindow time.Duration
+	WorkerCount      int
 }
 
 type MQTTConfig struct {
@@ -81,6 +89,9 @@ func (config Config) Validate() error {
 	if config.BatchFlushWindow < 0 || config.BatchFlushWindow > maxBatchFlushWindow {
 		return fmt.Errorf("batch flush window must be between 0 and %s", maxBatchFlushWindow)
 	}
+	if config.WorkerCount < 0 || config.WorkerCount > maxWorkerCount {
+		return fmt.Errorf("worker count must be between 0 and %d", maxWorkerCount)
+	}
 	return nil
 }
 
@@ -89,4 +100,19 @@ func (config Config) effectiveBatchMaxMessages() int {
 		return DefaultBatchMaxMessages
 	}
 	return config.BatchMaxMessages
+}
+
+func (config Config) effectiveWorkerCount() int {
+	if config.WorkerCount <= 0 {
+		return DefaultWorkerCount
+	}
+	return config.WorkerCount
+}
+
+func normalizeTraceID(raw string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	if !traceIDPattern.MatchString(trimmed) || trimmed == zeroTraceID {
+		return ""
+	}
+	return trimmed
 }

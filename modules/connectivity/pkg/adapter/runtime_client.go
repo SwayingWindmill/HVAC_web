@@ -14,6 +14,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const (
@@ -43,6 +45,7 @@ type Observation struct {
 	WireQuality        uint8           `json:"wireQuality"`
 	SampledAt          string          `json:"sampledAt"`
 	SourcePosition     SourcePosition  `json:"sourcePosition"`
+	TraceID            string          `json:"traceId,omitempty"`
 }
 
 type ResolvedDevice struct {
@@ -95,6 +98,7 @@ type RuntimeEventEvidence struct {
 	Data              json.RawMessage `json:"data"`
 	Device            *ResolvedDevice `json:"device,omitempty"`
 	CoverageDeviceIDs []string        `json:"coverageDeviceIds,omitempty"`
+	TraceID           string          `json:"traceId,omitempty"`
 }
 
 type SourceCoverageReport struct {
@@ -115,6 +119,7 @@ type RuntimeClient interface {
 type TelemetryRuntimeClient struct {
 	baseURL    string
 	httpClient *http.Client
+	tracer     *observability.Tracer
 }
 
 func NewTelemetryRuntimeClient(config TelemetryRuntimeConfig) (*TelemetryRuntimeClient, error) {
@@ -125,7 +130,11 @@ func NewTelemetryRuntimeClient(config TelemetryRuntimeConfig) (*TelemetryRuntime
 	if err != nil {
 		return nil, err
 	}
-	return &TelemetryRuntimeClient{baseURL: strings.TrimRight(strings.TrimSpace(config.BaseURL), "/"), httpClient: httpClient}, nil
+	return &TelemetryRuntimeClient{
+		baseURL:    strings.TrimRight(strings.TrimSpace(config.BaseURL), "/"),
+		httpClient: httpClient,
+		tracer:     observability.NewTracer("mqtt-telemetry-adapter", nil),
+	}, nil
 }
 
 func newMTLSHTTPClient(config TelemetryRuntimeConfig) (*http.Client, error) {
@@ -169,9 +178,24 @@ type observationBatchResponse struct {
 	Receipts []ObservationReceipt `json:"receipts"`
 }
 
+func (client *TelemetryRuntimeClient) effectiveTracer() *observability.Tracer {
+	if client != nil && client.tracer != nil {
+		return client.tracer
+	}
+	return observability.NewTracer("mqtt-telemetry-adapter", nil)
+}
+
 func (client *TelemetryRuntimeClient) AcceptObservationBatch(ctx context.Context, observations []Observation) ([]ObservationReceipt, error) {
 	if len(observations) == 0 || len(observations) > MaxObservationBatchSize {
 		return nil, fmt.Errorf("S2 observation batch size %d must be between 1 and %d", len(observations), MaxObservationBatchSize)
+	}
+	if observability.TraceID(ctx) == "" {
+		for _, observation := range observations {
+			if traceID := normalizeTraceID(observation.TraceID); traceID != "" {
+				ctx = observability.ContextWithRemoteParent(ctx, client.effectiveTracer(), "00-"+traceID+"-0000000000000001-01", "")
+				break
+			}
+		}
 	}
 	responseBody, err := client.postJSON(ctx, sourceObservationBatchPath, "S2 observation batch", observationBatchRequest{Observations: observations})
 	if err != nil {
@@ -204,6 +228,11 @@ func validReceiptStatus(status string) bool {
 }
 
 func (client *TelemetryRuntimeClient) AcceptRuntimeEvent(ctx context.Context, evidence RuntimeEventEvidence) error {
+	if observability.TraceID(ctx) == "" {
+		if traceID := normalizeTraceID(evidence.TraceID); traceID != "" {
+			ctx = observability.ContextWithRemoteParent(ctx, client.effectiveTracer(), "00-"+traceID+"-0000000000000001-01", "")
+		}
+	}
 	_, err := client.postJSON(ctx, mqttRuntimeEventPath, "MQTT evidence", evidence)
 	return err
 }
@@ -224,6 +253,7 @@ func (client *TelemetryRuntimeClient) postJSON(ctx context.Context, path, label 
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/json")
+	observability.InjectHTTP(ctx, request.Header)
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("%s request failed", label)

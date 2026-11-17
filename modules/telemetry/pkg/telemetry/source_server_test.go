@@ -455,3 +455,95 @@ func TestLegacyIngestPathDoesNotExist(t *testing.T) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestSourceEndpointsPropagateTraceIDAndTraceparentFallback(t *testing.T) {
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	obsAcceptor := &fakeObservationAcceptor{}
+	eventAcceptor := &fakeMQTTAcceptor{}
+	handler := NewHandler(ServerConfig{
+		ObservationAcceptor:  obsAcceptor,
+		MQTTEvidenceAcceptor: eventAcceptor,
+		AllowedSourceSPIFFE:  mqttSourceSPIFFE,
+		Tracer:               observability.NewTracer("telemetry-runtime-service", nil),
+		Now:                  func() time.Time { return now },
+	})
+
+	itemTrace := "0123456789ABCDEF0123456789ABCDEF"
+	headerTrace := "fedcba9876543210fedcba9876543210"
+	traceparent := "00-" + headerTrace + "-0000000000000001-01"
+
+	item1 := `{"sourceId":"` + sourceA + `","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":23.5,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-11-17T09:59:55Z","sourcePosition":{"partition":"p0","offset":1,"eventId":"018f2e00-8000-7000-8000-000000000001"},"traceId":"` + itemTrace + `"}`
+	item2 := `{"sourceId":"` + sourceA + `","sourcePath":"PUSH","externalEntityType":"DEVICE","externalId":"CHILLER-01",` + resolvedIdentityJSON + `,"telemetryKey":"zone.temperature","value":24.1,"valueType":"NUMBER","unit":"Cel","sampledAt":"2026-11-17T09:59:56Z","sourcePosition":{"partition":"p0","offset":2,"eventId":"018f2e00-8000-7000-8000-000000000002"}}`
+	obsReq := httptest.NewRequest(http.MethodPost, InternalSourceObservationBatchPath, strings.NewReader(`{"observations":[`+item1+`,`+item2+`]}`))
+	obsReq.Header.Set("Content-Type", "application/json")
+	obsReq.Header.Set("traceparent", traceparent)
+	obsReq.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	obsRec := httptest.NewRecorder()
+	handler.ServeHTTP(obsRec, obsReq)
+	if obsRec.Code != http.StatusOK {
+		t.Fatalf("obs status=%d body=%s", obsRec.Code, obsRec.Body.String())
+	}
+	if got := obsRec.Header().Get("traceparent"); got != traceparent {
+		t.Fatalf("response traceparent=%q, want %q", got, traceparent)
+	}
+	if len(obsAcceptor.candidates) != 2 {
+		t.Fatalf("candidates=%d, want 2", len(obsAcceptor.candidates))
+	}
+	if obsAcceptor.candidates[0].TraceID != strings.ToLower(itemTrace) {
+		t.Fatalf("candidate[0].TraceID=%q, want %q", obsAcceptor.candidates[0].TraceID, strings.ToLower(itemTrace))
+	}
+	if obsAcceptor.candidates[1].TraceID != headerTrace {
+		t.Fatalf("candidate[1].TraceID=%q, want fallback %q", obsAcceptor.candidates[1].TraceID, headerTrace)
+	}
+
+	explicitEventBody := `{"tenantId":"` + ingestTenantA + `","siteId":"` + siteA + `","gatewayId":"` + deviceA + `","messageId":"` + eventA + `","sequence":7,"eventType":"GATEWAY_DISCONNECTED","sourceType":"GATEWAY","sourceId":"` + deviceA + `","eventTime":"2026-11-17T09:59:59Z","severity":"WARNING","data":{},"traceId":"` + itemTrace + `"}`
+	evtReq1 := httptest.NewRequest(http.MethodPost, InternalMQTTRuntimeEventPath, strings.NewReader(explicitEventBody))
+	evtReq1.Header.Set("Content-Type", "application/json")
+	evtReq1.Header.Set("traceparent", traceparent)
+	evtReq1.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	evtRec1 := httptest.NewRecorder()
+	handler.ServeHTTP(evtRec1, evtReq1)
+	if evtRec1.Code != http.StatusOK {
+		t.Fatalf("event1 status=%d body=%s", evtRec1.Code, evtRec1.Body.String())
+	}
+	if got := evtRec1.Header().Get("traceparent"); got != traceparent {
+		t.Fatalf("event1 response traceparent=%q, want %q", got, traceparent)
+	}
+
+	fallbackEventBody := `{"tenantId":"` + ingestTenantA + `","siteId":"` + siteA + `","gatewayId":"` + deviceA + `","messageId":"018f2e00-8000-7000-8000-000000000012","sequence":8,"eventType":"GATEWAY_CONNECTED","sourceType":"GATEWAY","sourceId":"` + deviceA + `","eventTime":"2026-11-17T10:00:00Z","severity":"INFO","data":{}}`
+	evtReq2 := httptest.NewRequest(http.MethodPost, InternalMQTTRuntimeEventPath, strings.NewReader(fallbackEventBody))
+	evtReq2.Header.Set("Content-Type", "application/json")
+	evtReq2.Header.Set("traceparent", traceparent)
+	evtReq2.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	evtRec2 := httptest.NewRecorder()
+	handler.ServeHTTP(evtRec2, evtReq2)
+	if evtRec2.Code != http.StatusOK {
+		t.Fatalf("event2 status=%d body=%s", evtRec2.Code, evtRec2.Body.String())
+	}
+
+	evtReq3 := httptest.NewRequest(http.MethodPost, InternalMQTTRuntimeEventPath, strings.NewReader(fallbackEventBody))
+	evtReq3.Header.Set("Content-Type", "application/json")
+	evtReq3.Header.Set("traceparent", "00-00000000000000000000000000000000-0000000000000001-01")
+	evtReq3.TLS = verifiedTLSState(mqttSourceSPIFFE)
+	evtRec3 := httptest.NewRecorder()
+	handler.ServeHTTP(evtRec3, evtReq3)
+	if evtRec3.Code != http.StatusOK {
+		t.Fatalf("event3 status=%d body=%s", evtRec3.Code, evtRec3.Body.String())
+	}
+	if got := evtRec3.Header().Get("traceparent"); got != "" {
+		t.Fatalf("invalid traceparent echoed as %q", got)
+	}
+
+	if len(eventAcceptor.events) != 3 {
+		t.Fatalf("events=%d, want 3", len(eventAcceptor.events))
+	}
+	if eventAcceptor.events[0].TraceID != strings.ToLower(itemTrace) {
+		t.Fatalf("events[0].TraceID=%q, want %q", eventAcceptor.events[0].TraceID, strings.ToLower(itemTrace))
+	}
+	if eventAcceptor.events[1].TraceID != headerTrace {
+		t.Fatalf("events[1].TraceID=%q, want fallback %q", eventAcceptor.events[1].TraceID, headerTrace)
+	}
+	if eventAcceptor.events[2].TraceID != "" {
+		t.Fatalf("events[2].TraceID=%q, want empty", eventAcceptor.events[2].TraceID)
+	}
+}

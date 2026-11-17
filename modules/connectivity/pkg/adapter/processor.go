@@ -297,6 +297,7 @@ func envelopePointCount(envelope TelemetryEnvelope) int {
 }
 
 func buildEnvelopeObservations(gatewayID string, envelope TelemetryEnvelope) ([]Observation, error) {
+	traceID := normalizeTraceID(envelope.TraceID)
 	observations := make([]Observation, 0, envelopePointCount(envelope))
 	for _, device := range envelope.Payload.Devices {
 		sourceKey := strings.TrimSpace(device.DeviceID)
@@ -324,6 +325,7 @@ func buildEnvelopeObservations(gatewayID string, envelope TelemetryEnvelope) ([]
 				WireQuality:        point.Quality,
 				SampledAt:          sampledAt,
 				SourcePosition:     SourcePosition{Partition: partition, Offset: int64(envelope.Sequence), EventID: eventID},
+				TraceID:            traceID,
 			})
 		}
 	}
@@ -441,6 +443,7 @@ func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, e
 		SourceType: sourceType, SourceID: sourceID, EventTime: unixMillisRFC3339(event.EventTime),
 		Severity: strings.ToUpper(strings.TrimSpace(event.Severity)), Data: append(json.RawMessage(nil), event.Data...),
 		Device: resolvedDevice, CoverageDeviceIDs: coverageDeviceIDs,
+		TraceID: normalizeTraceID(envelope.TraceID),
 	}); err != nil {
 		return ProcessingResult{}, fmt.Errorf("accept MQTT runtime event: %w", err)
 	}

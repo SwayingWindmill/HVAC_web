@@ -22,17 +22,18 @@ func TestUplinkBatchConfigFromEnv(t *testing.T) {
 	if err := defaults.Validate(); err != nil {
 		t.Fatalf("default uplinkConfig invalid: %v", err)
 	}
-	if defaults.BatchMaxMessages != adapter.DefaultBatchMaxMessages || defaults.BatchFlushWindow != 0 {
+	if defaults.BatchMaxMessages != adapter.DefaultBatchMaxMessages || defaults.BatchFlushWindow != 0 || defaults.WorkerCount != adapter.DefaultWorkerCount {
 		t.Fatalf("defaults=%#v", defaults)
 	}
 
 	t.Setenv("CONNECTIVITY_BATCH_MAX_MESSAGES", "512")
 	t.Setenv("CONNECTIVITY_BATCH_WINDOW", "250ms")
+	t.Setenv("CONNECTIVITY_UPLINK_WORKERS", "16")
 	valid := uplinkConfig()
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid bounded uplinkConfig failed: %v", err)
 	}
-	if valid.BatchMaxMessages != 512 || valid.BatchFlushWindow != 250*time.Millisecond {
+	if valid.BatchMaxMessages != 512 || valid.BatchFlushWindow != 250*time.Millisecond || valid.WorkerCount != 16 {
 		t.Fatalf("valid=%#v", valid)
 	}
 
@@ -47,6 +48,9 @@ func TestUplinkBatchConfigFromEnv(t *testing.T) {
 		{"negative flush window", "CONNECTIVITY_BATCH_WINDOW", "-1ms"},
 		{"above max flush window", "CONNECTIVITY_BATCH_WINDOW", "1001ms"},
 		{"invalid flush window", "CONNECTIVITY_BATCH_WINDOW", "not-a-duration"},
+		{"zero uplink workers", "CONNECTIVITY_UPLINK_WORKERS", "0"},
+		{"above max uplink workers", "CONNECTIVITY_UPLINK_WORKERS", "1025"},
+		{"non-numeric uplink workers", "CONNECTIVITY_UPLINK_WORKERS", "abc"},
 	} {
 		t.Run(invalid.name, func(t *testing.T) {
 			t.Setenv(invalid.key, invalid.val)

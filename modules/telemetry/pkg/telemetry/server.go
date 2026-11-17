@@ -33,7 +33,16 @@ const (
 var (
 	safeRequestIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 	traceIDPattern       = regexp.MustCompile(`^[a-f0-9]{32}$`)
+	zeroTraceID          = strings.Repeat("0", 32)
 )
+
+func normalizeTraceID(raw string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	if !traceIDPattern.MatchString(trimmed) || trimmed == zeroTraceID {
+		return ""
+	}
+	return trimmed
+}
 
 type ServerConfig struct {
 	Store                          SnapshotStore
@@ -58,6 +67,7 @@ type ServerConfig struct {
 	AllowedRegistrySyncSPIFFEs     []string
 	RegistrySyncer                 RegistrySyncer
 	Metrics                        *observability.Registry
+	Tracer                         *observability.Tracer
 	Now                            func() time.Time
 	RateLimiter                    *limitpolicy.Limiter
 }
@@ -85,6 +95,7 @@ type handler struct {
 	allowedRegistrySyncSPIFFEs     map[string]struct{}
 	registrySyncer                 RegistrySyncer
 	metrics                        *s2Metrics
+	tracer                         *observability.Tracer
 	now                            func() time.Time
 	rateLimiter                    *limitpolicy.Limiter
 }
@@ -129,6 +140,10 @@ func NewHandler(config ServerConfig) http.Handler {
 			coverageAcceptor = fallback
 		}
 	}
+	tracer := config.Tracer
+	if tracer == nil {
+		tracer = observability.NewTracer("telemetry-runtime-service", nil)
+	}
 	return &handler{
 		store: config.Store, latestCache: config.LatestCache, authorizer: config.Authorizer,
 		allowedGatewaySPIFFE:           strings.TrimSpace(config.AllowedGatewaySPIFFE),
@@ -150,6 +165,7 @@ func NewHandler(config ServerConfig) http.Handler {
 		allowedRegistrySyncSPIFFEs:     allowedRegistrySyncSPIFFEs,
 		registrySyncer:                 registrySyncer,
 		metrics:                        newS2Metrics(config.Metrics, now),
+		tracer:                         tracer,
 		now:                            now,
 		rateLimiter:                    config.RateLimiter,
 	}
@@ -157,6 +173,16 @@ func NewHandler(config ServerConfig) http.Handler {
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	startedAt := h.now().UTC()
+	tracer := h.tracer
+	if tracer == nil {
+		tracer = observability.NewTracer("telemetry-runtime-service", nil)
+	}
+	ctx := tracer.ExtractHTTP(request.Context(), request.Header)
+	if traceparent := observability.Traceparent(ctx); traceparent != "" {
+		writer.Header().Set("traceparent", traceparent)
+	}
+	request = request.WithContext(ctx)
+
 	captured := h.metrics.capture(writer)
 	defer func() {
 		status := captured.status

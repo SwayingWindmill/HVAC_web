@@ -40,14 +40,15 @@ func ParseMessageTopic(topic string) (MessageTopic, error) {
 	return MessageTopic{GatewayID: parts[2], MessageType: parts[4]}, nil
 }
 
-// TopicGatewayID returns the Gateway segment of any hvac/v1 topic, so even a message
-// that cannot be parsed is queued and quarantined under the Gateway that sent it.
+// TopicGatewayID returns the Gateway segment of a valid hvac/v1/{uuidv7}/up/... topic,
+// or "invalid" so arbitrary topics collapse into one bounded quarantine bucket.
 func TopicGatewayID(topic string) string {
 	parts := strings.Split(topic, "/")
-	if len(parts) < 3 || len(parts[2]) == 0 || len(parts[2]) > 128 {
-		return "invalid"
+	if len(parts) == 5 && parts[0] == "hvac" && parts[1] == "v1" && parts[3] == "up" &&
+		uuidV7Pattern.MatchString(parts[2]) && parts[2] == strings.ToLower(parts[2]) {
+		return parts[2]
 	}
-	return parts[2]
+	return "invalid"
 }
 
 type EventEnvelope struct {

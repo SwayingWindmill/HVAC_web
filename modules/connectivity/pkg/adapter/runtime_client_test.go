@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 func TestTelemetryRuntimeClientAcceptObservationBatchWireContract(t *testing.T) {
@@ -199,4 +201,91 @@ func newTestTelemetryServer(t *testing.T, handler http.HandlerFunc) (*httptest.S
 		t.Fatal(err)
 	}
 	return server, client
+}
+
+func TestTracePropagationFromEnvelopeToObservationEventAndHTTPTraceparent(t *testing.T) {
+	const rawUpperTrace = "  0123456789ABCDEF0123456789ABCDEF  "
+	const wantTrace = "0123456789abcdef0123456789abcdef"
+	const wantTraceparent = "00-" + wantTrace + "-0000000000000001-01"
+
+	var gotObsTraceparent string
+	var gotObsTraceID string
+	var gotEventTraceparent string
+	var gotEventTraceID string
+
+	server, client := newTestTelemetryServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case sourceObservationBatchPath:
+			gotObsTraceparent = request.Header.Get("traceparent")
+			var payload struct {
+				Observations []Observation `json:"observations"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if len(payload.Observations) > 0 {
+				gotObsTraceID = payload.Observations[0].TraceID
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"receipts": []ObservationReceipt{{Status: "ACCEPTED", DeviceID: testDeviceID}},
+			})
+		case mqttRuntimeEventPath:
+			gotEventTraceparent = request.Header.Get("traceparent")
+			var evidence RuntimeEventEvidence
+			if err := json.NewDecoder(request.Body).Decode(&evidence); err != nil {
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			gotEventTraceID = evidence.TraceID
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"accepted":true}`))
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	})
+	defer server.Close()
+
+	processor, err := NewProcessor(newFakeIdentities(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	telPayload := []byte(`{"schemaVersion":"2.0","messageId":"` + testMessageID + `","gatewayId":"` + testGatewayA + `","timestamp":1786352400000,"sequence":1,"traceId":"` + rawUpperTrace + `","replay":false,"payload":{"devices":[{"deviceId":"METER-01","deviceTimestamp":1786352399000,"points":[{"code":"active_power","value":126.4,"quality":0,"unit":"kW"}]}]}}`)
+	if _, err := processor.Process(context.Background(), telemetryTopic(testGatewayA), telPayload); err != nil {
+		t.Fatalf("Process telemetry failed: %v", err)
+	}
+	if gotObsTraceID != wantTrace || gotObsTraceparent != wantTraceparent {
+		t.Fatalf("telemetry traceId=%q traceparent=%q, want (%q, %q)", gotObsTraceID, gotObsTraceparent, wantTrace, wantTraceparent)
+	}
+
+	evtPayload := []byte(`{"schemaVersion":"2.0","messageId":"` + messageID(2) + `","gatewayId":"` + testGatewayA + `","timestamp":1786352401000,"sequence":2,"traceId":"` + rawUpperTrace + `","payload":{"eventType":"DEVICE_OFFLINE","sourceType":"DEVICE","sourceId":"METER-01","eventTime":1786352400000,"severity":"WARNING","data":{}}}`)
+	if _, err := processor.Process(context.Background(), eventTopic(testGatewayA), evtPayload); err != nil {
+		t.Fatalf("Process event failed: %v", err)
+	}
+	if gotEventTraceID != wantTrace || gotEventTraceparent != wantTraceparent {
+		t.Fatalf("event traceId=%q traceparent=%q, want (%q, %q)", gotEventTraceID, gotEventTraceparent, wantTrace, wantTraceparent)
+	}
+
+	// Zero or invalid traceId must be dropped instead of producing invalid traceparent headers.
+	gotObsTraceparent = ""
+	gotObsTraceID = "non-empty"
+	invalidTelPayload := []byte(`{"schemaVersion":"2.0","messageId":"` + messageID(3) + `","gatewayId":"` + testGatewayA + `","timestamp":1786352402000,"sequence":3,"traceId":"00000000000000000000000000000000","replay":false,"payload":{"devices":[{"deviceId":"METER-01","deviceTimestamp":1786352401000,"points":[{"code":"active_power","value":127.0,"quality":0,"unit":"kW"}]}]}}`)
+	if _, err := processor.Process(context.Background(), telemetryTopic(testGatewayA), invalidTelPayload); err != nil {
+		t.Fatalf("Process telemetry with zero traceId failed: %v", err)
+	}
+	if gotObsTraceID != "" || gotObsTraceparent != "" {
+		t.Fatalf("zero traceId propagated as (%q, %q), want empty", gotObsTraceID, gotObsTraceparent)
+	}
+
+	// Existing caller trace context wins over payload traceId.
+	const callerTraceparent = "00-abcdef0123456789abcdef0123456789-1111111111111111-01"
+	callerCtx := observability.ContextWithRemoteParent(context.Background(), client.tracer, callerTraceparent, "")
+	if _, err := processor.Process(callerCtx, telemetryTopic(testGatewayA), telPayload); err != nil {
+		t.Fatalf("Process telemetry with caller trace failed: %v", err)
+	}
+	if gotObsTraceparent != callerTraceparent {
+		t.Fatalf("caller traceparent=%q, want %q", gotObsTraceparent, callerTraceparent)
+	}
 }
