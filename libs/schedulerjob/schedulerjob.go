@@ -150,7 +150,8 @@ RETURNING cancel_requested`, job.JobID, job.WorkerID, now.UTC().Add(leaseDuratio
 	return cancelRequested, err
 }
 
-func (queue *Queue) Complete(ctx context.Context, job Job, output map[string]any, now time.Time) error {
+// Complete records the job's JSON output summary and marks it SUCCEEDED.
+func (queue *Queue) Complete(ctx context.Context, job Job, output any, now time.Time) error {
 	encoded, err := json.Marshal(output)
 	if err != nil {
 		return err

@@ -234,6 +234,21 @@ func claimAndRunOptimizationJobs(ctx context.Context, queue *schedulerjob.Queue,
 	}
 }
 
+type preparationJobOutput struct {
+	OptimizationRunID string `json:"optimizationRunId"`
+	InputSnapshotID   string `json:"inputSnapshotId"`
+}
+
+type optimizationJobOutput struct {
+	OptimizationRunID      string                                 `json:"optimizationRunId"`
+	RecommendationID       string                                 `json:"recommendationId"`
+	ApprovalState          intelligencemodel.RecommendationApproval `json:"approvalState"`
+	AutoDispatched         bool                                   `json:"autoDispatched"`
+	AutoDispatchSkipReason string                                 `json:"autoDispatchSkipReason,omitempty"`
+	CommandIntentID        string                                 `json:"commandIntentId,omitempty"`
+	MonitorID              string                                 `json:"monitorId,omitempty"`
+}
+
 // prepareScheduledOptimization turns a Site's schedule firing into a prepared run on its current
 // state; the run's own job then executes like an operator's. A firing that cannot prepare fails
 // without retry: the next hour's firing reads the Site again.
@@ -260,7 +275,10 @@ func prepareScheduledOptimization(ctx context.Context, queue *schedulerjob.Queue
 		}
 		return
 	}
-	output := map[string]any{"optimizationRunId": prepared.OptimizationRunID, "inputSnapshotId": prepared.InputSnapshotID}
+	output := preparationJobOutput{
+		OptimizationRunID: prepared.OptimizationRunID,
+		InputSnapshotID:   prepared.InputSnapshotID,
+	}
 	if err = queue.Complete(context.Background(), job, output, time.Now().UTC()); err != nil {
 		log.Printf("optimization schedule firing %s success finalization failed: %v", job.JobID, err)
 	}
@@ -334,20 +352,14 @@ func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, stor
 	if dispatchOutcome.Dispatched {
 		approvalState = intelligencemodel.RecommendationApproved
 	}
-	output := map[string]any{
-		"optimizationRunId": request.OptimizationRunID,
-		"recommendationId":  recommendation.ID,
-		"approvalState":     approvalState,
-		"autoDispatched":    dispatchOutcome.Dispatched,
-	}
-	if dispatchOutcome.SkipReason != "" {
-		output["autoDispatchSkipReason"] = dispatchOutcome.SkipReason
-	}
-	if dispatchOutcome.CommandIntentID != "" {
-		output["commandIntentId"] = dispatchOutcome.CommandIntentID
-	}
-	if dispatchOutcome.MonitorID != "" {
-		output["monitorId"] = dispatchOutcome.MonitorID
+	output := optimizationJobOutput{
+		OptimizationRunID:      request.OptimizationRunID,
+		RecommendationID:       recommendation.ID,
+		ApprovalState:          approvalState,
+		AutoDispatched:         dispatchOutcome.Dispatched,
+		AutoDispatchSkipReason: dispatchOutcome.SkipReason,
+		CommandIntentID:        dispatchOutcome.CommandIntentID,
+		MonitorID:              dispatchOutcome.MonitorID,
 	}
 	if err = queue.Complete(context.Background(), job, output, time.Now().UTC()); err != nil {
 		log.Printf("optimization job %s success finalization failed: %v", job.JobID, err)
