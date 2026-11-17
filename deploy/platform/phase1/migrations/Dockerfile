@@ -167,6 +167,7 @@ COPY modules/workorder/migrations/007_schema_and_table_comments.sql /opt/hvac/re
 COPY services/operations-agent-service/migrations/operations/001_agent_sessions.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/001_agent_sessions.sql
 COPY services/operations-agent-service/migrations/operations/002_finding_without_summary.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/002_finding_without_summary.sql
 COPY services/operations-agent-service/migrations/operations/003_schema_and_table_comments.sql /opt/hvac/repo/services/operations-agent-service/migrations/operations/003_schema_and_table_comments.sql
+COPY infra/connectivity/postgres/init/gateway-config-shadows.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-config-shadows.sql
 
 FROM postgres:16.4-bookworm
 

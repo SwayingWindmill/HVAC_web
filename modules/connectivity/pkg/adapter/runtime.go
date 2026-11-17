@@ -88,10 +88,11 @@ type Runtime struct {
 	idleTimeout      time.Duration
 	now              func() time.Time
 
-	coverageMu  sync.Mutex
-	coverageWG  sync.WaitGroup
-	coverageRev atomic.Int64
-	connGen     atomic.Uint64
+	coverageMu     sync.Mutex
+	coverageClosed bool
+	coverageWG     sync.WaitGroup
+	coverageRev    atomic.Int64
+	connGen        atomic.Uint64
 
 	queuesMu         sync.Mutex
 	queues           map[string]*gatewayMailbox
@@ -178,11 +179,16 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	if err := runtime.prepareOverflowDir(); err != nil {
 		return err
 	}
+	runtime.coverageMu.Lock()
+	runtime.coverageClosed = false
+	runtime.coverageMu.Unlock()
+	heartbeatContext, heartbeatCancel := context.WithCancel(ctx)
 	workerContext, workerCancel := context.WithCancel(context.Background())
 	runtime.startWorkers(workerContext)
 	var heartbeatWG sync.WaitGroup
 	var drained bool
 	defer func() {
+		heartbeatCancel()
 		if !drained {
 			workerCancel()
 		}
@@ -199,7 +205,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		go func() {
 			defer heartbeatWG.Done()
 			defer observability.Recover(runtime.logger, runtime.metrics, "connectivity.coverage_heartbeat")
-			runtime.runCoverageHeartbeat(workerContext)
+			runtime.runCoverageHeartbeat(heartbeatContext)
 		}()
 	}
 
@@ -257,15 +263,21 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 			stopErr = errors.New("MQTT connection manager stopped")
 		}
 	}
+	heartbeatCancel()
+	if stopErr == nil {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = manager.Disconnect(shutdownContext)
+		cancel()
+	}
+	runtime.recordConnectionState(nil, false, false, nil)
+	heartbeatWG.Wait()
+	runtime.coverageWG.Wait()
 	shutdownCoverageContext, coverageCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	runtime.reportCoverage(shutdownCoverageContext, false, "SOURCE_UNAVAILABLE", 0, true)
 	coverageCancel()
 	if stopErr != nil {
 		return stopErr
 	}
-	shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_ = manager.Disconnect(shutdownContext)
-	cancel()
 	runtime.waitDrainWithTimeout(5 * time.Second)
 	workerCancel()
 	runtime.workers.Wait()
@@ -434,6 +446,9 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 	}
 	runtime.coverageMu.Lock()
 	defer runtime.coverageMu.Unlock()
+	if runtime.coverageClosed {
+		return
+	}
 	if !force {
 		if expectedGen != 0 && expectedGen != runtime.connGen.Load() {
 			return
@@ -444,6 +459,8 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 		if available && !runtime.Ready() {
 			return
 		}
+	} else if !available {
+		runtime.coverageClosed = true
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

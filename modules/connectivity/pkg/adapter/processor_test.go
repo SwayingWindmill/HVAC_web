@@ -321,3 +321,80 @@ func TestProcessorSplitsLargeBytePayloadsBelowBatchByteLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestProcessorInvokesGatewayConnectHookOnlyOnConnectEvents(t *testing.T) {
+	telemetry := &fakeTelemetry{}
+	var hooked []string
+	processor, err := NewProcessor(
+		newFakeIdentities(),
+		telemetry,
+		WithGatewayConnectHook(func(_ context.Context, gatewayID string) {
+			hooked = append(hooked, gatewayID)
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	disconnectEvent := []byte(`{"schemaVersion":"2.0","messageId":"` + testMessageID + `","gatewayId":"` + testGatewayB + `","timestamp":1786352400000,"sequence":1,"payload":{"eventType":"GATEWAY_DISCONNECTED","sourceType":"GATEWAY","sourceId":"` + testGatewayB + `","eventTime":1786352399000,"severity":"INFO","data":{}}}`)
+	if _, err := processor.Process(context.Background(), "hvac/v1/"+testGatewayB+"/up/event", disconnectEvent); err != nil {
+		t.Fatal(err)
+	}
+	deviceEvent := []byte(`{"schemaVersion":"2.0","messageId":"` + messageID(2) + `","gatewayId":"` + testGatewayB + `","timestamp":1786352401000,"sequence":2,"payload":{"eventType":"CONNECTED","sourceType":"DEVICE","sourceId":"METER-01","eventTime":1786352400000,"severity":"INFO","data":{}}}`)
+	if _, err := processor.Process(context.Background(), "hvac/v1/"+testGatewayB+"/up/event", deviceEvent); err != nil {
+		t.Fatal(err)
+	}
+	if len(hooked) != 0 {
+		t.Fatalf("unexpected connect hook calls before GATEWAY_CONNECTED: %v", hooked)
+	}
+
+	connectEvent := []byte(`{"schemaVersion":"2.0","messageId":"` + messageID(3) + `","gatewayId":"` + testGatewayB + `","timestamp":1786352402000,"sequence":3,"payload":{"eventType":"GATEWAY_CONNECTED","sourceType":"GATEWAY","sourceId":"` + testGatewayB + `","eventTime":1786352401000,"severity":"INFO","data":{}}}`)
+	if _, err := processor.Process(context.Background(), "hvac/v1/"+testGatewayB+"/up/event", connectEvent); err != nil {
+		t.Fatal(err)
+	}
+	if len(hooked) != 1 || hooked[0] != testGatewayB {
+		t.Fatalf("hooked=%v, want [%s]", hooked, testGatewayB)
+	}
+}
+
+func TestProcessorInvokesGatewayPresenceHook(t *testing.T) {
+	identities := newFakeIdentities()
+	telemetry := &fakeTelemetry{}
+	var states []string
+	processor, err := NewProcessor(
+		identities,
+		telemetry,
+		WithGatewayPresenceHook(func(gatewayID string, online bool) {
+			state := gatewayID + ":offline"
+			if online {
+				state = gatewayID + ":online"
+			}
+			states = append(states, state)
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := processor.Process(context.Background(), telemetryTopic(testGatewayA), telemetryPayload(testGatewayA, messageID(1), 1, "METER-01", "active_power")); err != nil {
+		t.Fatal(err)
+	}
+	disconnectEvent := []byte(`{"schemaVersion":"2.0","messageId":"` + messageID(2) + `","gatewayId":"` + testGatewayA + `","timestamp":1786352401000,"sequence":2,"payload":{"eventType":"LWT","sourceType":"GATEWAY","sourceId":"` + testGatewayA + `","eventTime":1786352400000,"severity":"WARNING","data":{}}}`)
+	if _, err := processor.Process(context.Background(), "hvac/v1/"+testGatewayA+"/up/event", disconnectEvent); err != nil {
+		t.Fatal(err)
+	}
+	connectEvent := []byte(`{"schemaVersion":"2.0","messageId":"` + messageID(3) + `","gatewayId":"` + testGatewayA + `","timestamp":1786352402000,"sequence":3,"payload":{"eventType":"GATEWAY_CONNECTED","sourceType":"GATEWAY","sourceId":"` + testGatewayA + `","eventTime":1786352401000,"severity":"INFO","data":{}}}`)
+	if _, err := processor.Process(context.Background(), "hvac/v1/"+testGatewayA+"/up/event", connectEvent); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{testGatewayA + ":online", testGatewayA + ":offline", testGatewayA + ":online"}
+	if len(states) != len(want) {
+		t.Fatalf("states=%v, want %v", states, want)
+	}
+	for i := range want {
+		if states[i] != want[i] {
+			t.Fatalf("states=%v, want %v", states, want)
+		}
+	}
+}

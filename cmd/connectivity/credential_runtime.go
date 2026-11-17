@@ -23,11 +23,70 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/registry/pkg/coreservice"
 )
 
+type gatewayOnlineTracker struct {
+	mu     sync.RWMutex
+	online map[string]bool
+}
+
+func newGatewayOnlineTracker() *gatewayOnlineTracker {
+	return &gatewayOnlineTracker{online: make(map[string]bool)}
+}
+
+func (t *gatewayOnlineTracker) SetOnline(gatewayID string, online bool) {
+	if t == nil {
+		return
+	}
+	id := strings.ToLower(strings.TrimSpace(gatewayID))
+	if id == "" {
+		return
+	}
+	t.mu.Lock()
+	if online {
+		t.online[id] = true
+	} else {
+		delete(t.online, id)
+	}
+	t.mu.Unlock()
+}
+
+func (t *gatewayOnlineTracker) IsOnline(gatewayID string) bool {
+	if t == nil {
+		return false
+	}
+	id := strings.ToLower(strings.TrimSpace(gatewayID))
+	if id == "" {
+		return false
+	}
+	t.mu.RLock()
+	online := t.online[id]
+	t.mu.RUnlock()
+	return online
+}
+
 func credentialServer(store *connectivity.Store) (*http.Server, *tunnel.Hub, error) {
 	return credentialServerWithRuntime(store, nil, nil)
 }
 
 func credentialServerWithRuntime(store *connectivity.Store, concentratorService *concentrator.Service, coverageReporter adapter.CoverageReporter, tunnelOptions ...tunnel.Option) (*http.Server, *tunnel.Hub, error) {
+	return credentialServerWithContext(context.Background(), slog.Default(), nil, nil, store, concentratorService, coverageReporter, tunnelOptions...)
+}
+
+func credentialServerWithContext(
+	rootCtx context.Context,
+	logger *slog.Logger,
+	metrics *observability.Registry,
+	presence *gatewayOnlineTracker,
+	store *connectivity.Store,
+	concentratorService *concentrator.Service,
+	coverageReporter adapter.CoverageReporter,
+	tunnelOptions ...tunnel.Option,
+) (*http.Server, *tunnel.Hub, error) {
+	if rootCtx == nil {
+		rootCtx = context.Background()
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	loopbackAddr := strings.TrimSpace(envOr("CONNECTIVITY_TUNNEL_LOOPBACK_ADDR", "127.0.0.1:18800"))
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {
 		if err := tunnel.ValidateLoopbackAddr(loopbackAddr); err != nil {
@@ -127,16 +186,22 @@ func credentialServerWithRuntime(store *connectivity.Store, concentratorService 
 		}
 	}
 	service.SetRevokeHook(func(gatewayID string) {
+		if presence != nil {
+			presence.SetOnline(gatewayID, false)
+		}
 		tunnelHub.CloseGateway(gatewayID)
 		reportGatewayRevokedCoverage(store, coverageReporter, gatewayID)
 		refreshCRL()
 	})
 	service.SetCertificateRevokeHook(func(gatewayID, fingerprintSHA256 string, hasRemainingActive bool) {
+		if !hasRemainingActive && presence != nil {
+			presence.SetOnline(gatewayID, false)
+		}
 		applyCertificateRevokeHook(tunnelHub, store, coverageReporter, gatewayID, fingerprintSHA256, hasRemainingActive)
 		refreshCRL()
 	})
 	if crlOutPath != "" && authority != nil && store != nil {
-		observability.GoSafe(slog.Default(), nil, "connectivity.crl_startup_refresh", refreshCRL)
+		observability.GoSafe(logger, metrics, "connectivity.crl_startup_refresh", refreshCRL)
 	}
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {
 		if _, err := tunnelHub.StartLoopbackListener(loopbackAddr); err != nil {
@@ -146,12 +211,31 @@ func credentialServerWithRuntime(store *connectivity.Store, concentratorService 
 	}
 	tunnelHandler := tunnel.NewUpgradeHandler(tunnelHub, connectivity.ParseGatewayPeerCert, service.VerifyActiveCredential)
 	var concentratorHandler http.Handler
+	var onDesiredUpdated func(gatewayID string)
 	if concentratorService != nil {
 		concentratorHandler = concentrator.NewHTTPHandler(concentratorService, authorize)
+		onDesiredUpdated = func(gatewayID string) {
+			if presence != nil && !presence.IsOnline(gatewayID) {
+				return
+			}
+			observability.GoSafe(logger, metrics, "connectivity.concentrator_shadow_reconcile", func() {
+				reconcileConcentratorShadowAsync(rootCtx, concentratorService, logger, gatewayID)
+			})
+		}
+	}
+	var configShadowHandler http.Handler
+	if store != nil {
+		var onGatewaySeen func(string)
+		if presence != nil {
+			onGatewaySeen = func(gatewayID string) {
+				presence.SetOnline(gatewayID, true)
+			}
+		}
+		configShadowHandler = connectivity.NewConfigShadowHandlerWithPresence(store, service, authorize, onDesiredUpdated, onGatewaySeen)
 	}
 	return &http.Server{
 		Addr:    envOr("CONNECTIVITY_CREDENTIAL_ADDR", ":8448"),
-		Handler: connectivity.NewCredentialHandlerWithExtensions(service, authorize, tunnelHandler, concentratorHandler),
+		Handler: connectivity.NewCredentialHandlerWithShadow(service, authorize, tunnelHandler, concentratorHandler, configShadowHandler),
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,
 			Certificates: []tls.Certificate{serverIdentity},

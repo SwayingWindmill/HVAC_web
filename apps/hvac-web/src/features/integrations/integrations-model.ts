@@ -1861,6 +1861,12 @@ export const CONCENTRATOR_AUDIT_OUTCOME_PRESENTATION: Readonly<
     tone: 'danger',
     label: '网关超时',
   },
+  STAGED_SHADOW: {
+    level: 'WARNING',
+    shape: '▲',
+    tone: 'warning',
+    label: '已暂存待同步',
+  },
 };
 
 export function mergeConcentratorAudits(
