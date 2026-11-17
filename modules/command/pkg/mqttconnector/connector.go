@@ -809,7 +809,7 @@ func (connector *Connector) onReply(received paho.PublishReceived) (bool, error)
 	if !ok {
 		ackImmediate()
 		connector.recordReplyMetric("ignored")
-		return false, nil
+		return true, nil
 	}
 	if len(received.Packet.Payload) == 0 || len(received.Packet.Payload) > maxCommandReplyPayloadBytes {
 		ackImmediate()
@@ -880,7 +880,7 @@ func (connector *Connector) onReply(received paho.PublishReceived) (bool, error)
 	if !enqueued {
 		logger.Warn("mqtt_command_reply_backpressure_shed", "gateway_id", gatewayID, "command_id", reply.CommandID, "execution_fence", reply.ExecutionFence)
 		connector.recordReplyMetric("shed")
-		connector.closeCurrentConnection()
+		connector.closeConnection(connectionClosed)
 		return true, nil
 	}
 	return true, nil
