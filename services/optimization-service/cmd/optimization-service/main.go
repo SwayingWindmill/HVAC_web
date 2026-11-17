@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/energyseries"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/optimization-service/internal/optimization"
@@ -56,14 +57,25 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	telemetryHealthClient, err := optimization.NewWorkloadTelemetryHealthClient(optimization.TelemetryHealthClientConfig{
+		CertificatePath: requiredEnv("OPTIMIZATION_TLS_CERT"),
+		PrivateKeyPath:  requiredEnv("OPTIMIZATION_TLS_KEY"),
+		CAPath:          requiredEnv("OPTIMIZATION_TLS_CA"),
+		TelemetryURL:    envOrDefault("OPTIMIZATION_TELEMETRY_URL", "https://telemetry-runtime-service:8446"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 	preparer, err := optimization.NewPreparer(publication, inputs, time.Now)
 	if err != nil {
 		log.Fatal(err)
 	}
+	preparer.WithPointHealth(telemetryHealthClient)
 	service, err := optimization.NewDefaultService(publication, evaluations, time.Now)
 	if err != nil {
 		log.Fatal(err)
 	}
+	service.WithPointHealth(telemetryHealthClient)
 	service.WithShadowReader(inputs)
 	service.WithStaging(&optimization.StagingEvaluator{
 		History:  inputs,
@@ -118,6 +130,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	autoController.WithPointHealth(telemetryHealthClient)
 	workerID := envOrDefault("OPTIMIZATION_WORKER_ID", defaultWorkerID())
 	claimInterval := durationEnv("OPTIMIZATION_CLAIM_INTERVAL", 5*time.Second)
 	leaseDuration := durationEnv("OPTIMIZATION_LEASE_DURATION", 2*time.Minute)
@@ -319,7 +332,7 @@ func executeOptimizationJob(ctx context.Context, queue *schedulerjob.Queue, stor
 	}
 	approvalState := recommendation.Approval
 	if dispatchOutcome.Dispatched {
-		approvalState = "APPROVED"
+		approvalState = intelligencemodel.RecommendationApproved
 	}
 	output := map[string]any{
 		"optimizationRunId": request.OptimizationRunID,

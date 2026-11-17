@@ -25,6 +25,7 @@ const (
 	InternalBatchSnapshotPath             = "/internal/v1/telemetry/observation-snapshots:batchGet"
 	InternalRecoveryCheckpointResolvePath = "/internal/v1/telemetry/recovery-cursors:resolve"
 	InternalCommandReportedStatePath      = "/internal/v1/commands/reported-state"
+	InternalOptimizationPointHealthPath   = "/internal/v1/telemetry/optimization/point-health:check"
 	telemetryContextGrantHeader           = "X-Telemetry-Context-Grant"
 	telemetryCheckpointResolveAction      = "telemetry:checkpoint:resolve"
 	maximumSnapshotRequestSize            = 256 << 10
@@ -45,59 +46,63 @@ func normalizeTraceID(raw string) string {
 }
 
 type ServerConfig struct {
-	Store                          SnapshotStore
-	LatestCache                    LatestCache
-	Authorizer                     GrantAuthorizer
-	AllowedGatewaySPIFFE           string
-	AllowedSnapshotReaderSPIFFEs   []string
-	RuntimeAudience                string
-	ObservationAcceptor            ObservationAcceptor
-	CoverageAcceptor               CoverageAcceptor
-	HistoricalObservationAcceptor  HistoricalObservationAcceptor
-	AllowedHistoricalReplaySPIFFE  string
-	MQTTEvidenceAcceptor           MQTTEvidenceAcceptor
-	AllowedSourceSPIFFE            string
-	Realtime                       *RealtimeService
-	AllowedCentrifugoSPIFFE        string
-	CentrifugoProxySecret          string
-	AllowedIAMSPIFFE               string
-	AllowedCommandVerifierSPIFFE   string
-	AllowedCommandDispatcherSPIFFE string
-	AllowedCommandServiceSPIFFE    string
-	AllowedRegistrySyncSPIFFEs     []string
-	RegistrySyncer                 RegistrySyncer
-	Metrics                        *observability.Registry
-	Tracer                         *observability.Tracer
-	Now                            func() time.Time
-	RateLimiter                    *limitpolicy.Limiter
+	Store                            SnapshotStore
+	LatestCache                      LatestCache
+	Authorizer                       GrantAuthorizer
+	AllowedGatewaySPIFFE             string
+	AllowedSnapshotReaderSPIFFEs     []string
+	RuntimeAudience                  string
+	ObservationAcceptor              ObservationAcceptor
+	CoverageAcceptor                 CoverageAcceptor
+	HistoricalObservationAcceptor    HistoricalObservationAcceptor
+	AllowedHistoricalReplaySPIFFE    string
+	MQTTEvidenceAcceptor             MQTTEvidenceAcceptor
+	AllowedSourceSPIFFE              string
+	Realtime                         *RealtimeService
+	AllowedCentrifugoSPIFFE          string
+	CentrifugoProxySecret            string
+	AllowedIAMSPIFFE                 string
+	AllowedCommandVerifierSPIFFE     string
+	AllowedCommandDispatcherSPIFFE   string
+	AllowedCommandServiceSPIFFE      string
+	AllowedOptimizationServiceSPIFFE string
+	AllowedRegistrySyncSPIFFEs       []string
+	RegistrySyncer                   RegistrySyncer
+	PointHealthInspector             PointHealthInspector
+	Metrics                          *observability.Registry
+	Tracer                           *observability.Tracer
+	Now                              func() time.Time
+	RateLimiter                      *limitpolicy.Limiter
 }
 
 type handler struct {
-	store                          SnapshotStore
-	latestCache                    LatestCache
-	authorizer                     GrantAuthorizer
-	allowedGatewaySPIFFE           string
-	allowedSnapshotReaderSPIFFEs   map[string]struct{}
-	runtimeAudience                string
-	observationAcceptor            ObservationAcceptor
-	coverageAcceptor               CoverageAcceptor
-	historicalObservationAcceptor  HistoricalObservationAcceptor
-	allowedHistoricalReplaySPIFFE  string
-	mqttEvidenceAcceptor           MQTTEvidenceAcceptor
-	allowedSourceSPIFFE            string
-	realtime                       *RealtimeService
-	allowedCentrifugoSPIFFE        string
-	centrifugoProxySecret          string
-	allowedIAMSPIFFE               string
-	allowedCommandVerifierSPIFFE   string
-	allowedCommandDispatcherSPIFFE string
-	allowedCommandServiceSPIFFE    string
-	allowedRegistrySyncSPIFFEs     map[string]struct{}
-	registrySyncer                 RegistrySyncer
-	metrics                        *s2Metrics
-	tracer                         *observability.Tracer
-	now                            func() time.Time
-	rateLimiter                    *limitpolicy.Limiter
+	store                            SnapshotStore
+	latestCache                      LatestCache
+	authorizer                       GrantAuthorizer
+	allowedGatewaySPIFFE             string
+	allowedSnapshotReaderSPIFFEs     map[string]struct{}
+	runtimeAudience                  string
+	observationAcceptor              ObservationAcceptor
+	coverageAcceptor                 CoverageAcceptor
+	historicalObservationAcceptor    HistoricalObservationAcceptor
+	allowedHistoricalReplaySPIFFE    string
+	mqttEvidenceAcceptor             MQTTEvidenceAcceptor
+	allowedSourceSPIFFE              string
+	realtime                         *RealtimeService
+	allowedCentrifugoSPIFFE          string
+	centrifugoProxySecret            string
+	allowedIAMSPIFFE                 string
+	allowedCommandVerifierSPIFFE     string
+	allowedCommandDispatcherSPIFFE   string
+	allowedCommandServiceSPIFFE      string
+	allowedOptimizationServiceSPIFFE string
+	allowedRegistrySyncSPIFFEs       map[string]struct{}
+	registrySyncer                   RegistrySyncer
+	pointHealthInspector             PointHealthInspector
+	metrics                          *s2Metrics
+	tracer                           *observability.Tracer
+	now                              func() time.Time
+	rateLimiter                      *limitpolicy.Limiter
 }
 
 func NewHandler(config ServerConfig) http.Handler {
@@ -134,6 +139,18 @@ func NewHandler(config ServerConfig) http.Handler {
 			registrySyncer = candidate
 		}
 	}
+	pointHealthInspector := config.PointHealthInspector
+	if pointHealthInspector == nil {
+		if candidate, ok := config.Store.(PointHealthInspector); ok {
+			pointHealthInspector = candidate
+		}
+	}
+	allowedOptimizationServiceSPIFFE := strings.TrimSpace(config.AllowedOptimizationServiceSPIFFE)
+	if allowedOptimizationServiceSPIFFE == "" {
+		allowedOptimizationServiceSPIFFE = DefaultOptimizationServiceSPIFFE
+	} else if !strings.HasPrefix(allowedOptimizationServiceSPIFFE, "spiffe://") {
+		panic("Telemetry optimization service SPIFFE identity is invalid")
+	}
 	coverageAcceptor := config.CoverageAcceptor
 	if coverageAcceptor == nil {
 		if fallback, ok := config.ObservationAcceptor.(CoverageAcceptor); ok {
@@ -146,28 +163,30 @@ func NewHandler(config ServerConfig) http.Handler {
 	}
 	return &handler{
 		store: config.Store, latestCache: config.LatestCache, authorizer: config.Authorizer,
-		allowedGatewaySPIFFE:           strings.TrimSpace(config.AllowedGatewaySPIFFE),
-		allowedSnapshotReaderSPIFFEs:   allowedSnapshotReaderSPIFFEs,
-		runtimeAudience:                strings.TrimSpace(config.RuntimeAudience),
-		observationAcceptor:            config.ObservationAcceptor,
-		coverageAcceptor:               coverageAcceptor,
-		historicalObservationAcceptor:  config.HistoricalObservationAcceptor,
-		allowedHistoricalReplaySPIFFE:  strings.TrimSpace(config.AllowedHistoricalReplaySPIFFE),
-		mqttEvidenceAcceptor:           config.MQTTEvidenceAcceptor,
-		allowedSourceSPIFFE:            strings.TrimSpace(config.AllowedSourceSPIFFE),
-		realtime:                       config.Realtime,
-		allowedCentrifugoSPIFFE:        strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
-		centrifugoProxySecret:          strings.TrimSpace(config.CentrifugoProxySecret),
-		allowedIAMSPIFFE:               strings.TrimSpace(config.AllowedIAMSPIFFE),
-		allowedCommandVerifierSPIFFE:   strings.TrimSpace(config.AllowedCommandVerifierSPIFFE),
-		allowedCommandDispatcherSPIFFE: strings.TrimSpace(config.AllowedCommandDispatcherSPIFFE),
-		allowedCommandServiceSPIFFE:    strings.TrimSpace(config.AllowedCommandServiceSPIFFE),
-		allowedRegistrySyncSPIFFEs:     allowedRegistrySyncSPIFFEs,
-		registrySyncer:                 registrySyncer,
-		metrics:                        newS2Metrics(config.Metrics, now),
-		tracer:                         tracer,
-		now:                            now,
-		rateLimiter:                    config.RateLimiter,
+		allowedGatewaySPIFFE:             strings.TrimSpace(config.AllowedGatewaySPIFFE),
+		allowedSnapshotReaderSPIFFEs:     allowedSnapshotReaderSPIFFEs,
+		runtimeAudience:                  strings.TrimSpace(config.RuntimeAudience),
+		observationAcceptor:              config.ObservationAcceptor,
+		coverageAcceptor:                 coverageAcceptor,
+		historicalObservationAcceptor:    config.HistoricalObservationAcceptor,
+		allowedHistoricalReplaySPIFFE:    strings.TrimSpace(config.AllowedHistoricalReplaySPIFFE),
+		mqttEvidenceAcceptor:             config.MQTTEvidenceAcceptor,
+		allowedSourceSPIFFE:              strings.TrimSpace(config.AllowedSourceSPIFFE),
+		realtime:                         config.Realtime,
+		allowedCentrifugoSPIFFE:          strings.TrimSpace(config.AllowedCentrifugoSPIFFE),
+		centrifugoProxySecret:            strings.TrimSpace(config.CentrifugoProxySecret),
+		allowedIAMSPIFFE:                 strings.TrimSpace(config.AllowedIAMSPIFFE),
+		allowedCommandVerifierSPIFFE:     strings.TrimSpace(config.AllowedCommandVerifierSPIFFE),
+		allowedCommandDispatcherSPIFFE:   strings.TrimSpace(config.AllowedCommandDispatcherSPIFFE),
+		allowedCommandServiceSPIFFE:      strings.TrimSpace(config.AllowedCommandServiceSPIFFE),
+		allowedOptimizationServiceSPIFFE: allowedOptimizationServiceSPIFFE,
+		allowedRegistrySyncSPIFFEs:       allowedRegistrySyncSPIFFEs,
+		registrySyncer:                   registrySyncer,
+		pointHealthInspector:             pointHealthInspector,
+		metrics:                          newS2Metrics(config.Metrics, now),
+		tracer:                           tracer,
+		now:                              now,
+		rateLimiter:                      config.RateLimiter,
 	}
 }
 
@@ -234,6 +253,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if request.URL.Path == InternalCommandReportedStatePath {
 		h.handleCommandReportedState(writer, request)
+		return
+	}
+	if request.URL.Path == InternalOptimizationPointHealthPath {
+		h.handleOptimizationPointHealth(writer, request)
 		return
 	}
 	if request.URL.Path == InternalBatchSnapshotPath {

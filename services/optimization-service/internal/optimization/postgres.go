@@ -133,6 +133,19 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND status=$6`, re
 	return tx.Commit(ctx)
 }
 
+type constraintStatusPayload struct {
+	SolverOutcome   string `json:"solverOutcome"`
+	ConstraintCount uint32 `json:"constraintCount"`
+}
+
+type recommendationUpdatedEventPayload struct {
+	EvaluationID      string `json:"evaluationId"`
+	OptimizationRunID string `json:"optimizationRunId"`
+	RecommendationID  string `json:"recommendationId"`
+	SolverOutcome     string `json:"solverOutcome"`
+	Quality           string `json:"quality"`
+}
+
 func (store *PostgresStore) BeginPublication(ctx context.Context, request Request, recommendation Recommendation, evaluation Evaluation, at time.Time) error {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
@@ -142,7 +155,10 @@ func (store *PostgresStore) BeginPublication(ctx context.Context, request Reques
 	if err = optimizationScope(ctx, tx, request.TenantID, request.SiteID); err != nil {
 		return err
 	}
-	constraintStatus := encodeOptimizationJSON(map[string]any{"solverOutcome": evaluation.SolverOutcome, "constraintCount": evaluation.ConstraintCount})
+	constraintStatus := encodeOptimizationJSON(constraintStatusPayload{
+		SolverOutcome:   evaluation.SolverOutcome,
+		ConstraintCount: evaluation.ConstraintCount,
+	})
 	tag, err := tx.Exec(ctx, `UPDATE core_registry.optimization_runs
 SET status='FEASIBLE',quality=$4,constraint_status=$5::jsonb,updated_at=$6,revision=revision+1
 WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND status='SOLVING'`, request.TenantID, request.SiteID, request.OptimizationRunID, evaluation.Quality, constraintStatus, at)
@@ -211,12 +227,12 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND status IN ('PE
 	if err != nil {
 		return err
 	}
-	payload := encodeOptimizationJSON(map[string]any{
-		"evaluationId":      evaluation.EvaluationID,
-		"optimizationRunId": evaluation.OptimizationRunID,
-		"recommendationId":  evaluation.RecommendationID,
-		"solverOutcome":     evaluation.SolverOutcome,
-		"quality":           evaluation.Quality,
+	payload := encodeOptimizationJSON(recommendationUpdatedEventPayload{
+		EvaluationID:      evaluation.EvaluationID,
+		OptimizationRunID: evaluation.OptimizationRunID,
+		RecommendationID:  evaluation.RecommendationID,
+		SolverOutcome:     evaluation.SolverOutcome,
+		Quality:           evaluation.Quality,
 	})
 	_, err = tx.Exec(ctx, `INSERT INTO core_registry.domain_outbox_events(
 id,tenant_id,site_id,event_type,schema_version,subject_type,subject_id,aggregate_type,aggregate_id,aggregate_version,occurred_at,payload,created_at)

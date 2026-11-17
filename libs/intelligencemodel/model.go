@@ -2,6 +2,7 @@ package intelligencemodel
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"time"
 )
@@ -122,26 +123,84 @@ type CurrentStateRevalidation struct {
 	ExpiresAt   time.Time `json:"expiresAt"`
 }
 
+type RecommendationBaseline struct {
+	DailyEnergyKWh float64 `json:"dailyEnergyKWh"`
+	DailyCost      float64 `json:"dailyCost"`
+	SupplyTempC    float64 `json:"supplyTempC"`
+	ZoneTempC      float64 `json:"zoneTempC"`
+}
+
+type RecommendationObjective struct {
+	Kind           string `json:"kind"`
+	Horizon        string `json:"horizon,omitempty"`
+	HorizonMinutes int    `json:"horizonMinutes,omitempty"`
+}
+
+type RecommendationConstraint struct {
+	Kind     string   `json:"kind"`
+	MinC     *float64 `json:"minC,omitempty"`
+	MaxC     *float64 `json:"maxC,omitempty"`
+	MaxStepC *float64 `json:"maxStepC,omitempty"`
+	Required *bool    `json:"required,omitempty"`
+}
+
+type RecommendationCandidate struct {
+	SupplyTempC        float64 `json:"supplyTempC"`
+	ProjectedZoneTempC float64 `json:"projectedZoneTempC"`
+	DailyEnergyKWh     float64 `json:"dailyEnergyKWh"`
+	DailyCost          float64 `json:"dailyCost"`
+}
+
+type RecommendationExpectedImpact struct {
+	EnergySavingKWhPerDay float64 `json:"energySavingKWhPerDay"`
+	CostSavingPerDay      float64 `json:"costSavingPerDay"`
+}
+
+type RecommendationUncertainty struct {
+	EnergyP90KWh    float64  `json:"energyP90KWh"`
+	EnergyP90Source string   `json:"energyP90Source,omitempty"`
+	ZoneTempP90C    float64  `json:"zoneTempP90C"`
+	CVRMSEPower     *float64 `json:"cvRmsePower,omitempty"`
+}
+
+type RecommendationRisk struct {
+	Level                         string  `json:"level"`
+	ComfortMarginC                float64 `json:"comfortMarginC"`
+	Extrapolated                  *bool   `json:"extrapolated,omitempty"`
+	SavingWithinEnergyUncertainty *bool   `json:"savingWithinEnergyUncertainty,omitempty"`
+}
+
+type RecommendationRollbackPlan struct {
+	RestoreSupplyTempC *float64 `json:"restoreSupplyTempC,omitempty"`
+	Conditions         []string `json:"conditions,omitempty"`
+}
+
+type RecommendationVerificationPlan struct {
+	WindowMinutes   int      `json:"windowMinutes"`
+	RequiredSignals []string `json:"requiredSignals,omitempty"`
+	SuccessCriteria []string `json:"successCriteria,omitempty"`
+}
+
 type OptimizationRecommendation struct {
-	ID                 string                    `json:"id"`
-	TenantID           string                    `json:"tenantId"`
-	SiteID             string                    `json:"siteId"`
-	InputSnapshotID    string                    `json:"inputSnapshotId"`
-	DeploymentRevision string                    `json:"deploymentRevisionId"`
-	Baseline           map[string]any            `json:"baseline"`
-	Objective          map[string]any            `json:"objective"`
-	Constraints        []map[string]any          `json:"constraints"`
-	Candidate          map[string]any            `json:"candidate"`
-	ExpectedImpact     map[string]any            `json:"expectedImpact"`
-	Uncertainty        map[string]any            `json:"uncertainty"`
-	Risk               map[string]any            `json:"risk"`
-	RollbackPlan       map[string]any            `json:"rollbackPlan"`
-	VerificationPlan   map[string]any            `json:"verificationPlan"`
-	Approval           RecommendationApproval    `json:"approval"`
-	Revalidation       *CurrentStateRevalidation `json:"currentStateRevalidation,omitempty"`
-	CommandIntentID    string                    `json:"commandIntentId,omitempty"`
-	ValidUntil         *time.Time                `json:"validUntil,omitempty"`
-	CreatedAt          time.Time                 `json:"createdAt"`
+	ID                 string                         `json:"id"`
+	TenantID           string                         `json:"tenantId"`
+	SiteID             string                         `json:"siteId"`
+	InputSnapshotID    string                         `json:"inputSnapshotId"`
+	DeploymentRevision string                         `json:"deploymentRevisionId"`
+	Baseline           RecommendationBaseline         `json:"baseline"`
+	Objective          RecommendationObjective        `json:"objective"`
+	Constraints        []RecommendationConstraint     `json:"constraints"`
+	Candidate          RecommendationCandidate        `json:"candidate"`
+	ExpectedImpact     RecommendationExpectedImpact   `json:"expectedImpact"`
+	Uncertainty        RecommendationUncertainty      `json:"uncertainty"`
+	Risk               RecommendationRisk             `json:"risk"`
+	RollbackPlan       RecommendationRollbackPlan     `json:"rollbackPlan"`
+	VerificationPlan   RecommendationVerificationPlan `json:"verificationPlan"`
+	Approval           RecommendationApproval         `json:"approval"`
+	Revalidation       *CurrentStateRevalidation      `json:"currentStateRevalidation,omitempty"`
+	CommandIntentID    string                         `json:"commandIntentId,omitempty"`
+	ValidUntil         *time.Time                     `json:"validUntil,omitempty"`
+	CreatedAt          time.Time                      `json:"createdAt"`
 }
 
 func (recommendation OptimizationRecommendation) EffectiveValidUntil() time.Time {
@@ -182,12 +241,41 @@ func (deployment DeploymentRevision) Validate() error {
 	}
 }
 
+func finite(value float64) bool            { return !math.IsNaN(value) && !math.IsInf(value, 0) }
+func finitePositive(value float64) bool    { return finite(value) && value > 0 }
+func finiteNonNegative(value float64) bool { return finite(value) && value >= 0 }
+
 func (recommendation OptimizationRecommendation) ValidateForApproval() error {
 	if strings.TrimSpace(recommendation.ID) == "" || strings.TrimSpace(recommendation.TenantID) == "" || strings.TrimSpace(recommendation.SiteID) == "" || strings.TrimSpace(recommendation.InputSnapshotID) == "" || recommendation.CreatedAt.IsZero() {
 		return errors.New("recommendation identity, scope, input snapshot and createdAt are required")
 	}
-	if len(recommendation.Baseline) == 0 || len(recommendation.Objective) == 0 || len(recommendation.Constraints) == 0 || len(recommendation.Candidate) == 0 || len(recommendation.ExpectedImpact) == 0 || len(recommendation.Uncertainty) == 0 || len(recommendation.Risk) == 0 || len(recommendation.RollbackPlan) == 0 || len(recommendation.VerificationPlan) == 0 {
+	if !finitePositive(recommendation.Baseline.DailyEnergyKWh) ||
+		!finiteNonNegative(recommendation.Baseline.DailyCost) ||
+		!finite(recommendation.Baseline.SupplyTempC) ||
+		!finite(recommendation.Baseline.ZoneTempC) ||
+		strings.TrimSpace(recommendation.Objective.Kind) == "" ||
+		len(recommendation.Constraints) == 0 ||
+		!finite(recommendation.Candidate.SupplyTempC) ||
+		!finite(recommendation.Candidate.ProjectedZoneTempC) ||
+		!finiteNonNegative(recommendation.Candidate.DailyEnergyKWh) ||
+		!finiteNonNegative(recommendation.Candidate.DailyCost) ||
+		!finite(recommendation.ExpectedImpact.EnergySavingKWhPerDay) ||
+		!finite(recommendation.ExpectedImpact.CostSavingPerDay) ||
+		!finiteNonNegative(recommendation.Uncertainty.EnergyP90KWh) ||
+		!finiteNonNegative(recommendation.Uncertainty.ZoneTempP90C) ||
+		strings.TrimSpace(recommendation.Risk.Level) == "" ||
+		!finite(recommendation.Risk.ComfortMarginC) ||
+		(recommendation.RollbackPlan.RestoreSupplyTempC == nil && len(recommendation.RollbackPlan.Conditions) == 0) ||
+		recommendation.VerificationPlan.WindowMinutes <= 0 {
 		return errors.New("recommendation approval requires baseline, objective, constraints, candidate, impact, uncertainty, risk, rollback and verification plans")
+	}
+	for _, constraint := range recommendation.Constraints {
+		if strings.TrimSpace(constraint.Kind) == "" {
+			return errors.New("recommendation constraint kind is required")
+		}
+	}
+	if recommendation.RollbackPlan.RestoreSupplyTempC != nil && !finite(*recommendation.RollbackPlan.RestoreSupplyTempC) {
+		return errors.New("recommendation rollback restoreSupplyTempC must be finite")
 	}
 	return nil
 }

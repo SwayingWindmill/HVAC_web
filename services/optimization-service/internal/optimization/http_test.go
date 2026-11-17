@@ -359,10 +359,10 @@ func TestOptimizationServesLatestShadowEvaluationWithoutExecutableRecommendation
 		Mode:           "SHADOW",
 		Outcome:        ShadowFeasible,
 		CVRMSE:         &cv,
-		CondenserReset: map[string]any{"status": "NOT_AVAILABLE", "reason": "NO_CONDENSER_SETPOINT"},
-		EnergyResponse: map[string]any{"source": "FITTED_FROM_HISTORY", "dailyEnergyDeltaKWhPerSupplyTempC": -165.4, "replacesPolicyValue": -180.0},
-		Candidates: []map[string]any{
-			{"supplyTempC": 8.0, "projectedZoneTempC": 23.4, "chillerEnergyDeltaKWh": -165.4, "dailyEnergyKWh": 2234.6, "dailyCost": 335.19, "extrapolated": false, "feasible": true},
+		CondenserReset: &ShadowCondenserReset{Status: "NOT_AVAILABLE", Reason: "NO_CONDENSER_SETPOINT"},
+		EnergyResponse: &ShadowEnergyResponse{Source: "FITTED_FROM_HISTORY", DailyEnergyDeltaKWhPerSupplyTempC: -165.4, ReplacesPolicyValue: -180.0},
+		Candidates: []ShadowCandidate{
+			{SupplyTempC: 8.0, ProjectedZoneTempC: 23.4, ChillerEnergyDeltaKWh: -165.4, DailyEnergyKWh: 2234.6, DailyCost: 335.19, Extrapolated: false, Feasible: true},
 		},
 		Recommendation: &publishedRec,
 	}

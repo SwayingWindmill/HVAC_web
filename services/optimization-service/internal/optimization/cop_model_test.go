@@ -92,13 +92,13 @@ func TestChillerCOPModelFitsEachChillerAndKeepsTheFitInItsEvidence(t *testing.T)
 	}
 	// A warmer supply raises COP, so the solver takes the full step the comfort band allows.
 	recommendation := evaluation.Recommendation
-	if recommendation.Candidate["supplyTempC"].(float64) != 8 || recommendation.ExpectedImpact["energySavingKWhPerDay"].(float64) <= 0 {
+	if recommendation.Candidate.SupplyTempC != 8 || recommendation.ExpectedImpact.EnergySavingKWhPerDay <= 0 {
 		t.Fatalf("recommendation=%+v", recommendation)
 	}
-	if evaluation.EnergyResponse["source"] != "FITTED_FROM_HISTORY" || evaluation.EnergyResponse["dailyEnergyDeltaKWhPerSupplyTempC"].(float64) >= 0 {
+	if evaluation.EnergyResponse == nil || evaluation.EnergyResponse.Source != "FITTED_FROM_HISTORY" || evaluation.EnergyResponse.DailyEnergyDeltaKWhPerSupplyTempC >= 0 {
 		t.Fatalf("energy response=%v", evaluation.EnergyResponse)
 	}
-	if evaluation.ZoneResponse["source"] != "POLICY" || evaluation.CondenserReset["reason"] != "NO_CONDENSER_SETPOINT" {
+	if evaluation.ZoneResponse == nil || evaluation.ZoneResponse.Source != "POLICY" || evaluation.CondenserReset == nil || evaluation.CondenserReset.Reason != "NO_CONDENSER_SETPOINT" {
 		t.Fatalf("zone=%v condenser=%v", evaluation.ZoneResponse, evaluation.CondenserReset)
 	}
 	if err := recommendation.CanCreateCommand(at.Add(time.Minute)); err == nil {

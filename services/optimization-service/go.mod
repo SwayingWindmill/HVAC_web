@@ -11,6 +11,7 @@ require (
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
 	github.com/quanlaihe/hvac-web/libs/intelligencemodel v0.0.0
 	github.com/quanlaihe/hvac-web/libs/nameplate v0.0.0
+	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/planttwin v0.0.0
 	github.com/quanlaihe/hvac-web/libs/schedulerjob v0.0.0
 	github.com/quanlaihe/hvac-web/libs/workloadtls v0.0.0
@@ -23,6 +24,8 @@ replace github.com/quanlaihe/hvac-web/libs/commandmodel => ../../libs/commandmod
 replace github.com/quanlaihe/hvac-web/libs/intelligencemodel => ../../libs/intelligencemodel
 
 replace github.com/quanlaihe/hvac-web/libs/nameplate => ../../libs/nameplate
+
+replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observability
 
 replace github.com/quanlaihe/hvac-web/libs/planttwin => ../../libs/planttwin
 

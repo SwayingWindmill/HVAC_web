@@ -69,42 +69,74 @@ func (HVACRecommendationSolver) Recommend(_ context.Context, request Request, at
 	recommendation := Recommendation{
 		ID: recommendationID, TenantID: request.TenantID, SiteID: request.SiteID, InputSnapshotID: request.InputSnapshotID,
 		DeploymentRevision: request.DeploymentRevisionID,
-		Baseline: map[string]any{
-			"dailyEnergyKWh": baseline.DailyEnergyKWh, "dailyCost": baseline.DailyCost,
-			"supplyTempC": baseline.SupplyTempC, "zoneTempC": baseline.ZoneTempC,
+		Baseline: intelligencemodel.RecommendationBaseline{
+			DailyEnergyKWh: baseline.DailyEnergyKWh, DailyCost: baseline.DailyCost,
+			SupplyTempC: baseline.SupplyTempC, ZoneTempC: baseline.ZoneTempC,
 		},
-		Objective: map[string]any{"kind": request.Objective, "horizon": request.Horizon, "horizonMinutes": request.HorizonMinutes},
-		Constraints: []map[string]any{
-			{"kind": "SUPPLY_TEMP", "minC": constraints.SupplyTempMinC, "maxC": constraints.SupplyTempMaxC, "maxStepC": constraints.MaxSupplyTempStep},
-			{"kind": "ZONE_COMFORT", "minC": constraints.ZoneTempMinC, "maxC": constraints.ZoneTempMaxC},
-			{"kind": "CURRENT_STATE_REVALIDATION", "required": true},
+		Objective: intelligencemodel.RecommendationObjective{
+			Kind: request.Objective, Horizon: request.Horizon, HorizonMinutes: request.HorizonMinutes,
 		},
-		Candidate: map[string]any{
-			"supplyTempC": best.supplyTempC, "projectedZoneTempC": best.projectedZoneTemp,
-			"dailyEnergyKWh": best.dailyEnergyKWh, "dailyCost": best.dailyCost,
+		Constraints: frozenRecommendationConstraints(constraints),
+		Candidate: intelligencemodel.RecommendationCandidate{
+			SupplyTempC: best.supplyTempC, ProjectedZoneTempC: best.projectedZoneTemp,
+			DailyEnergyKWh: best.dailyEnergyKWh, DailyCost: best.dailyCost,
 		},
-		ExpectedImpact: map[string]any{
-			"energySavingKWhPerDay": baseline.DailyEnergyKWh - best.dailyEnergyKWh,
-			"costSavingPerDay":      baseline.DailyCost - best.dailyCost,
+		ExpectedImpact: intelligencemodel.RecommendationExpectedImpact{
+			EnergySavingKWhPerDay: baseline.DailyEnergyKWh - best.dailyEnergyKWh,
+			CostSavingPerDay:      baseline.DailyCost - best.dailyCost,
 		},
-		Uncertainty: map[string]any{
-			"energyP90KWh": model.EnergyUncertaintyP90KWh, "zoneTempP90C": model.ZoneTempUncertaintyP90C,
+		Uncertainty: intelligencemodel.RecommendationUncertainty{
+			EnergyP90KWh: model.EnergyUncertaintyP90KWh, ZoneTempP90C: model.ZoneTempUncertaintyP90C,
 		},
-		Risk: map[string]any{"level": riskLevel, "comfortMarginC": best.zoneMarginC},
-		RollbackPlan: map[string]any{
-			"restoreSupplyTempC": baseline.SupplyTempC,
-			"conditions":         []string{"zone_comfort_violation", "energy_saving_not_observed", "operator_cancelled"},
-		},
-		VerificationPlan: map[string]any{
-			"windowMinutes": 30, "requiredSignals": []string{"supply_temperature", "zone_temperature", "site_load"},
-			"successCriteria": []string{"zone_temperature_within_frozen_constraint", "site_load_not_worse_than_baseline"},
-		},
-		Approval: intelligencemodel.RecommendationDraft, ValidUntil: timePointer(at.UTC().Add(intelligencemodel.DefaultRecommendationTTL)), CreatedAt: at.UTC(),
+		Risk:             intelligencemodel.RecommendationRisk{Level: riskLevel, ComfortMarginC: best.zoneMarginC},
+		RollbackPlan:     standardRollbackPlan(baseline.SupplyTempC),
+		VerificationPlan: standardVerificationPlan(),
+		Approval:         intelligencemodel.RecommendationDraft,
+		ValidUntil:       timePointer(at.UTC().Add(intelligencemodel.DefaultRecommendationTTL)),
+		CreatedAt:        at.UTC(),
 	}
 	if err := recommendation.ValidateForApproval(); err != nil {
 		return Recommendation{}, err
 	}
 	return recommendation, nil
+}
+
+func float64Ptr(value float64) *float64 { return &value }
+func boolPtr(value bool) *bool          { return &value }
+
+func frozenRecommendationConstraints(constraints HVACConstraints) []intelligencemodel.RecommendationConstraint {
+	return []intelligencemodel.RecommendationConstraint{
+		{
+			Kind:     "SUPPLY_TEMP",
+			MinC:     float64Ptr(constraints.SupplyTempMinC),
+			MaxC:     float64Ptr(constraints.SupplyTempMaxC),
+			MaxStepC: float64Ptr(constraints.MaxSupplyTempStep),
+		},
+		{
+			Kind: "ZONE_COMFORT",
+			MinC: float64Ptr(constraints.ZoneTempMinC),
+			MaxC: float64Ptr(constraints.ZoneTempMaxC),
+		},
+		{
+			Kind:     "CURRENT_STATE_REVALIDATION",
+			Required: boolPtr(true),
+		},
+	}
+}
+
+func standardRollbackPlan(restoreSupplyTempC float64) intelligencemodel.RecommendationRollbackPlan {
+	return intelligencemodel.RecommendationRollbackPlan{
+		RestoreSupplyTempC: float64Ptr(restoreSupplyTempC),
+		Conditions:         []string{"zone_comfort_violation", "energy_saving_not_observed", "operator_cancelled"},
+	}
+}
+
+func standardVerificationPlan() intelligencemodel.RecommendationVerificationPlan {
+	return intelligencemodel.RecommendationVerificationPlan{
+		WindowMinutes:   30,
+		RequiredSignals: []string{"supply_temperature", "zone_temperature", "site_load"},
+		SuccessCriteria: []string{"zone_temperature_within_frozen_constraint", "site_load_not_worse_than_baseline"},
+	}
 }
 
 type Clock func() time.Time
@@ -117,6 +149,13 @@ type Service struct {
 	shadow       *shadowSolver
 	shadowReader ShadowEvaluationReader
 	staging      *StagingEvaluator
+	pointHealth  TelemetryPointHealthChecker
+}
+
+// WithPointHealth configures the remote telemetry point-health checker for the service.
+func (service *Service) WithPointHealth(checker TelemetryPointHealthChecker) *Service {
+	service.pointHealth = checker
+	return service
 }
 
 var ErrShadowEvaluationNotFound = errors.New("optimization shadow evaluation not found")
@@ -157,25 +196,56 @@ type ShadowSummary struct {
 	SavingWithinEnergyUncertainty bool    `json:"savingWithinEnergyUncertainty"`
 }
 
+type ShadowCondenserReset struct {
+	Status string `json:"status,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type ShadowEnergyResponse struct {
+	Source                            string  `json:"source,omitempty"`
+	DailyEnergyDeltaKWhPerSupplyTempC float64 `json:"dailyEnergyDeltaKWhPerSupplyTempC"`
+	ReferenceChillerEnergyKWh         float64 `json:"referenceChillerEnergyKWh"`
+	ReferenceSamples                  int     `json:"referenceSamples"`
+	ReferenceHours                    int     `json:"referenceHours"`
+	ReplacesPolicyValue               float64 `json:"replacesPolicyValue"`
+}
+
+type ShadowZoneResponse struct {
+	Source                       string  `json:"source,omitempty"`
+	ZoneTempDeltaCPerSupplyTempC float64 `json:"zoneTempDeltaCPerSupplyTempC"`
+	ZoneTempUncertaintyP90C      float64 `json:"zoneTempUncertaintyP90C"`
+}
+
+type ShadowCandidate struct {
+	SupplyTempC           float64 `json:"supplyTempC"`
+	ProjectedZoneTempC    float64 `json:"projectedZoneTempC"`
+	ChillerEnergyDeltaKWh float64 `json:"chillerEnergyDeltaKWh"`
+	DailyEnergyKWh        float64 `json:"dailyEnergyKWh"`
+	DailyCost             float64 `json:"dailyCost"`
+	Extrapolated          bool    `json:"extrapolated"`
+	Feasible              bool    `json:"feasible"`
+	Reason                string  `json:"reason,omitempty"`
+}
+
 // PublishedShadowEvaluation is the read-only shadow diagnostics envelope for a Site's latest
 // published Optimization run. It never carries an executable Recommendation.
 type PublishedShadowEvaluation struct {
-	EvaluationID              string             `json:"evaluationId"`
-	RunID                     string             `json:"runId"`
-	PublishedRecommendationID string             `json:"publishedRecommendationId"`
-	GeneratedAt               time.Time          `json:"generatedAt"`
-	Solver                    string             `json:"solver"`
-	Mode                      string             `json:"mode"`
-	Outcome                   string             `json:"outcome"`
-	Reason                    string             `json:"reason,omitempty"`
-	Fit                       *PlantFit          `json:"fit,omitempty"`
-	CVRMSE                    *float64           `json:"cvRmse"`
-	CondenserReset            map[string]any     `json:"condenserReset"`
-	EnergyResponse            map[string]any     `json:"energyResponse,omitempty"`
-	ZoneResponse              map[string]any     `json:"zoneResponse,omitempty"`
-	Candidates                []map[string]any   `json:"candidates,omitempty"`
-	Staging                   *StagingEvaluation `json:"staging,omitempty"`
-	Summary                   *ShadowSummary     `json:"summary,omitempty"`
+	EvaluationID              string                `json:"evaluationId"`
+	RunID                     string                `json:"runId"`
+	PublishedRecommendationID string                `json:"publishedRecommendationId"`
+	GeneratedAt               time.Time             `json:"generatedAt"`
+	Solver                    string                `json:"solver"`
+	Mode                      string                `json:"mode"`
+	Outcome                   string                `json:"outcome"`
+	Reason                    string                `json:"reason,omitempty"`
+	Fit                       *PlantFit             `json:"fit,omitempty"`
+	CVRMSE                    *float64              `json:"cvRmse"`
+	CondenserReset            *ShadowCondenserReset `json:"condenserReset"`
+	EnergyResponse            *ShadowEnergyResponse `json:"energyResponse,omitempty"`
+	ZoneResponse              *ShadowZoneResponse   `json:"zoneResponse,omitempty"`
+	Candidates                []ShadowCandidate     `json:"candidates,omitempty"`
+	Staging                   *StagingEvaluation    `json:"staging,omitempty"`
+	Summary                   *ShadowSummary        `json:"summary,omitempty"`
 }
 
 func (service *Service) WithShadowReader(reader ShadowEvaluationReader) *Service {
@@ -393,28 +463,19 @@ func summarizeShadowRecommendation(rec *Recommendation) *ShadowSummary {
 	if rec == nil {
 		return nil
 	}
-	number := func(m map[string]any, key string) float64 {
-		value, _ := m[key].(float64)
-		return value
-	}
-	flag := func(m map[string]any, key string) bool {
-		value, _ := m[key].(bool)
-		return value
-	}
-	level, _ := rec.Risk["level"].(string)
 	return &ShadowSummary{
-		SupplyTempC:                   number(rec.Candidate, "supplyTempC"),
-		ProjectedZoneTempC:            number(rec.Candidate, "projectedZoneTempC"),
-		DailyEnergyKWh:                number(rec.Candidate, "dailyEnergyKWh"),
-		DailyCost:                     number(rec.Candidate, "dailyCost"),
-		EnergySavingKWhPerDay:         number(rec.ExpectedImpact, "energySavingKWhPerDay"),
-		CostSavingPerDay:              number(rec.ExpectedImpact, "costSavingPerDay"),
-		EnergyP90KWh:                  number(rec.Uncertainty, "energyP90KWh"),
-		ZoneTempP90C:                  number(rec.Uncertainty, "zoneTempP90C"),
-		ComfortMarginC:                number(rec.Risk, "comfortMarginC"),
-		RiskLevel:                     level,
-		Extrapolated:                  flag(rec.Risk, "extrapolated"),
-		SavingWithinEnergyUncertainty: flag(rec.Risk, "savingWithinEnergyUncertainty"),
+		SupplyTempC:                   rec.Candidate.SupplyTempC,
+		ProjectedZoneTempC:            rec.Candidate.ProjectedZoneTempC,
+		DailyEnergyKWh:                rec.Candidate.DailyEnergyKWh,
+		DailyCost:                     rec.Candidate.DailyCost,
+		EnergySavingKWhPerDay:         rec.ExpectedImpact.EnergySavingKWhPerDay,
+		CostSavingPerDay:              rec.ExpectedImpact.CostSavingPerDay,
+		EnergyP90KWh:                  rec.Uncertainty.EnergyP90KWh,
+		ZoneTempP90C:                  rec.Uncertainty.ZoneTempP90C,
+		ComfortMarginC:                rec.Risk.ComfortMarginC,
+		RiskLevel:                     rec.Risk.Level,
+		Extrapolated:                  rec.Risk.Extrapolated != nil && *rec.Risk.Extrapolated,
+		SavingWithinEnergyUncertainty: rec.Risk.SavingWithinEnergyUncertainty != nil && *rec.Risk.SavingWithinEnergyUncertainty,
 	}
 }
 

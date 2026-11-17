@@ -10,7 +10,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
-	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
 func (store *PostgresStore) ActiveAutoControlLease(ctx context.Context, tenantID, siteID string, at time.Time) (*AutoControlLeaseRecord, error) {
@@ -68,9 +67,14 @@ func (store *PostgresStore) LoadAutoControlSiteContext(ctx context.Context, tena
 		return AutoControlSiteContext{}, err
 	}
 
+	var deviceIDs []string
+	if topology.Twin != nil {
+		deviceIDs = twinDeviceUUIDs(*topology.Twin)
+	}
 	result := AutoControlSiteContext{
 		SiteControlMode: topology.SiteControlMode,
 		Topology:        topology,
+		DeviceIDs:       deviceIDs,
 	}
 
 	var policyConstraints []byte
@@ -172,28 +176,6 @@ LIMIT 2
 		return AutoControlSiteContext{}, err
 	}
 	return result, nil
-}
-
-func (store *PostgresStore) CheckSiteTelemetryHealth(ctx context.Context, tenantID, siteID string, keys []string) error {
-	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) {
-		return errors.New("telemetry health check scope is invalid")
-	}
-	twin, err := store.LoadSiteTwin(ctx, planttwin.SiteScope{TenantID: tenantID, SiteID: siteID}, time.Now().UTC())
-	if err != nil {
-		return err
-	}
-	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if err = optimizationScope(ctx, tx, tenantID, siteID); err != nil {
-		return err
-	}
-	if err = checkTelemetryPointHealth(ctx, tx, siteID, twinDeviceUUIDs(twin), keys); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
 }
 
 func (store *PostgresStore) RecordAutomatedDispatch(
@@ -412,15 +394,25 @@ WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid AND status =
 	if err != nil {
 		return err
 	}
-	payload := encodeOptimizationJSON(map[string]any{
-		"siteId":                  monitor.SiteID,
-		"leaseId":                 monitor.LeaseID,
-		"monitorId":               monitor.ID,
-		"recommendationId":        monitor.RecommendationID,
-		"commandIntentId":         monitor.CommandIntentID,
-		"status":                  newStatus,
-		"tripReason":              tripReason,
-		"rollbackCommandIntentId": rollbackCommandIntentID,
+	type autoControlTripEventPayload struct {
+		SiteID                  string  `json:"siteId"`
+		LeaseID                 string  `json:"leaseId"`
+		MonitorID               string  `json:"monitorId"`
+		RecommendationID        string  `json:"recommendationId"`
+		CommandIntentID         string  `json:"commandIntentId"`
+		Status                  string  `json:"status"`
+		TripReason              string  `json:"tripReason"`
+		RollbackCommandIntentID *string `json:"rollbackCommandIntentId"`
+	}
+	payload := encodeOptimizationJSON(autoControlTripEventPayload{
+		SiteID:                  monitor.SiteID,
+		LeaseID:                 monitor.LeaseID,
+		MonitorID:               monitor.ID,
+		RecommendationID:        monitor.RecommendationID,
+		CommandIntentID:         monitor.CommandIntentID,
+		Status:                  newStatus,
+		TripReason:              tripReason,
+		RollbackCommandIntentID: rollbackCommandIntentID,
 	})
 	if _, err = tx.Exec(ctx, `
 INSERT INTO core_registry.domain_outbox_events(

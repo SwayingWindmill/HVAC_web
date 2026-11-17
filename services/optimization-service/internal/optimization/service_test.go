@@ -120,14 +120,13 @@ func TestHVACRecommendationCarriesBenefitConstraintsRollbackAndVerification(t *t
 	if recommendation.Approval != intelligencemodel.RecommendationDraft || recommendation.CommandIntentID != "" {
 		t.Fatalf("recommendation must remain non-executable draft: %#v", recommendation)
 	}
-	candidateSupply, ok := recommendation.Candidate["supplyTempC"].(float64)
-	if !ok || candidateSupply != 8 {
+	if recommendation.Candidate.SupplyTempC != 8 {
 		t.Fatalf("candidate=%#v", recommendation.Candidate)
 	}
-	if recommendation.ExpectedImpact["energySavingKWhPerDay"].(float64) <= 0 || recommendation.ExpectedImpact["costSavingPerDay"].(float64) <= 0 {
+	if recommendation.ExpectedImpact.EnergySavingKWhPerDay <= 0 || recommendation.ExpectedImpact.CostSavingPerDay <= 0 {
 		t.Fatalf("expected impact=%#v", recommendation.ExpectedImpact)
 	}
-	if len(recommendation.Constraints) < 3 || len(recommendation.Uncertainty) == 0 || len(recommendation.Risk) == 0 || len(recommendation.RollbackPlan) == 0 || len(recommendation.VerificationPlan) == 0 {
+	if len(recommendation.Constraints) < 3 || recommendation.Uncertainty.EnergyP90KWh == 0 || recommendation.Risk.Level == "" || recommendation.RollbackPlan.RestoreSupplyTempC == nil || recommendation.VerificationPlan.WindowMinutes == 0 {
 		t.Fatalf("recommendation evidence is incomplete: %#v", recommendation)
 	}
 	if err := recommendation.CanCreateCommand(at.Add(time.Minute)); err == nil {
@@ -143,7 +142,7 @@ func TestHVACRecommendationHonorsComfortUncertainty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recommendation.Candidate["supplyTempC"].(float64) != 7 {
+	if recommendation.Candidate.SupplyTempC != 7 {
 		t.Fatalf("solver selected a candidate whose P90 comfort bound should be rejected: %#v", recommendation.Candidate)
 	}
 }

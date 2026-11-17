@@ -81,6 +81,7 @@ type SetpointCommandTarget struct {
 type AutoControlSiteContext struct {
 	SiteControlMode     string
 	InputMapping        InputMapping
+	DeviceIDs           []string
 	SetpointTarget      *SetpointCommandTarget
 	Topology            StagingTopology
 	RecentAutoCountHour int
@@ -126,7 +127,6 @@ type WorkloadCommandDispatcher interface {
 type AutoControlStore interface {
 	ActiveAutoControlLease(ctx context.Context, tenantID, siteID string, at time.Time) (*AutoControlLeaseRecord, error)
 	LoadAutoControlSiteContext(ctx context.Context, tenantID, siteID, inputSnapshotID string, at time.Time) (AutoControlSiteContext, error)
-	CheckSiteTelemetryHealth(ctx context.Context, tenantID, siteID string, keys []string) error
 	RecordAutomatedDispatch(
 		ctx context.Context,
 		recommendation Recommendation,
@@ -162,11 +162,18 @@ type MonitorPassSummary struct {
 }
 
 type AutoController struct {
-	store      AutoControlStore
-	telemetry  AutoControlTelemetryReader
-	dispatcher WorkloadCommandDispatcher
-	clock      Clock
-	logf       func(string, ...any)
+	store       AutoControlStore
+	telemetry   AutoControlTelemetryReader
+	dispatcher  WorkloadCommandDispatcher
+	pointHealth TelemetryPointHealthChecker
+	clock       Clock
+	logf        func(string, ...any)
+}
+
+// WithPointHealth configures the remote telemetry point-health checker for automated dispatch and monitoring.
+func (controller *AutoController) WithPointHealth(checker TelemetryPointHealthChecker) *AutoController {
+	controller.pointHealth = checker
+	return controller
 }
 
 func NewAutoController(
@@ -229,17 +236,17 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 	if !slices.Contains(lease.AllowedCapabilities, string(targetCapability)) {
 		return AutoDispatchOutcome{SkipReason: "CAPABILITY_NOT_LEASED"}, nil
 	}
-	candidateSupplyC, ok := extractNumber(recommendation.Candidate, "supplyTempC")
-	if !ok {
+	candidateSupplyC := recommendation.Candidate.SupplyTempC
+	if !finite(candidateSupplyC) || candidateSupplyC == 0 {
 		return AutoDispatchOutcome{SkipReason: "CANDIDATE_SUPPLY_TEMP_MISSING"}, nil
 	}
-	baselineSupplyC, ok := extractNumber(recommendation.Baseline, "supplyTempC")
-	if !ok {
+	baselineSupplyC := recommendation.Baseline.SupplyTempC
+	if !finite(baselineSupplyC) || baselineSupplyC == 0 {
 		return AutoDispatchOutcome{SkipReason: "BASELINE_SUPPLY_TEMP_MISSING"}, nil
 	}
-	restoreSupplyC, hasRestore := extractNumber(recommendation.RollbackPlan, "restoreSupplyTempC")
-	if !hasRestore {
-		restoreSupplyC = baselineSupplyC
+	restoreSupplyC := baselineSupplyC
+	if recommendation.RollbackPlan.RestoreSupplyTempC != nil && finite(*recommendation.RollbackPlan.RestoreSupplyTempC) {
+		restoreSupplyC = *recommendation.RollbackPlan.RestoreSupplyTempC
 	}
 
 	siteCtx, err := controller.store.LoadAutoControlSiteContext(ctx, recommendation.TenantID, recommendation.SiteID, recommendation.InputSnapshotID, now)
@@ -259,8 +266,11 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 		return AutoDispatchOutcome{SkipReason: "INPUT_MAPPING_INCOMPLETE"}, nil
 	}
 
-	allKeys := append([]string{siteCtx.InputMapping.SupplyTemperatureKey}, siteCtx.InputMapping.effectiveZoneKeys()...)
-	if err := controller.store.CheckSiteTelemetryHealth(ctx, recommendation.TenantID, recommendation.SiteID, allKeys); err != nil {
+	if controller.pointHealth == nil {
+		return AutoDispatchOutcome{SkipReason: "TELEMETRY_UNHEALTHY"}, nil
+	}
+	allKeys := siteCtx.InputMapping.telemetryKeys()
+	if err := controller.pointHealth.CheckTelemetryPointHealth(ctx, recommendation.TenantID, recommendation.SiteID, siteCtx.DeviceIDs, allKeys); err != nil {
 		return AutoDispatchOutcome{SkipReason: "TELEMETRY_UNHEALTHY"}, nil
 	}
 
@@ -405,16 +415,12 @@ func (controller *AutoController) RunMonitorPass(ctx context.Context, now time.T
 		}
 
 		telemetryHealthy := true
-		allKeys := make([]string, 0, 1+len(siteCtx.InputMapping.effectiveZoneKeys()))
-		if strings.TrimSpace(siteCtx.InputMapping.SupplyTemperatureKey) != "" {
-			allKeys = append(allKeys, siteCtx.InputMapping.SupplyTemperatureKey)
-		}
-		allKeys = append(allKeys, siteCtx.InputMapping.effectiveZoneKeys()...)
-		if len(allKeys) == 0 || strings.TrimSpace(siteCtx.InputMapping.SupplyTemperatureKey) == "" || len(siteCtx.InputMapping.effectiveZoneKeys()) == 0 {
+		allKeys := siteCtx.InputMapping.telemetryKeys()
+		if len(allKeys) == 0 || strings.TrimSpace(siteCtx.InputMapping.SupplyTemperatureKey) == "" || len(siteCtx.InputMapping.effectiveZoneKeys()) == 0 || controller.pointHealth == nil {
 			telemetryHealthy = false
 		}
 		if telemetryHealthy {
-			if healthErr := controller.store.CheckSiteTelemetryHealth(ctx, monitor.TenantID, monitor.SiteID, allKeys); healthErr != nil {
+			if healthErr := controller.pointHealth.CheckTelemetryPointHealth(ctx, monitor.TenantID, monitor.SiteID, siteCtx.DeviceIDs, allKeys); healthErr != nil {
 				telemetryHealthy = false
 			}
 		}
@@ -582,29 +588,6 @@ func (controller *AutoController) tripAndRollback(
 		return false, err
 	}
 	return finalStatus == ExecutionMonitorRolledBack, nil
-}
-
-func extractNumber(fields map[string]any, key string) (float64, bool) {
-	if len(fields) == 0 {
-		return 0, false
-	}
-	raw, ok := fields[key]
-	if !ok {
-		return 0, false
-	}
-	switch v := raw.(type) {
-	case float64:
-		return v, !math.IsNaN(v) && !math.IsInf(v, 0)
-	case float32:
-		f := float64(v)
-		return f, !math.IsNaN(f) && !math.IsInf(f, 0)
-	case int:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	default:
-		return 0, false
-	}
 }
 
 func hasAnyAssetLock(locks map[string]AssetControlLockInfo) bool {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
+	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 )
 
@@ -128,28 +129,51 @@ func (client *WorkloadCommandClient) RequestCommandGrant(ctx context.Context, re
 	return out.DelegationGrant, out.Decision, nil
 }
 
+type autoCommandCurrentState struct {
+	EvaluationAvailability string  `json:"evaluationAvailability"`
+	Presence               string  `json:"presence"`
+	Readiness              string  `json:"readiness"`
+	Quality                string  `json:"quality"`
+	BusinessRevision       uint64  `json:"businessRevision"`
+	CurrentValue           float64 `json:"currentValue"`
+	ObservedAt             string  `json:"observedAt"`
+}
+
+type autoCommandPayload struct {
+	TenantID             string                         `json:"tenantId"`
+	DeviceID             string                         `json:"deviceId"`
+	PointID              string                         `json:"pointId"`
+	Capability           commandmodel.Capability        `json:"capability"`
+	Parameters           commandmodel.CommandParameters `json:"parameters"`
+	VerificationPointKey string                         `json:"verificationPointKey"`
+	IdempotencyKey       string                         `json:"idempotencyKey"`
+	IsRollback           bool                           `json:"isRollback"`
+	CommandGrant         string                         `json:"commandGrant"`
+	CurrentState         autoCommandCurrentState        `json:"currentState"`
+}
+
 func (client *WorkloadCommandClient) SubmitAutoCommand(ctx context.Context, grant string, input AutoControlDispatchInput) (string, error) {
-	bodyMap := map[string]any{
-		"tenantId":             input.TenantID,
-		"deviceId":             input.DeviceID,
-		"pointId":              input.PointID,
-		"capability":           input.Capability,
-		"parameters":           input.Parameters,
-		"verificationPointKey": input.VerificationPointKey,
-		"idempotencyKey":       input.IdempotencyKey,
-		"isRollback":           input.IsRollback,
-		"commandGrant":         grant,
-		"currentState": map[string]any{
-			"evaluationAvailability": "AVAILABLE",
-			"presence":               "ONLINE",
-			"readiness":              "CURRENT",
-			"quality":                "GOOD",
-			"businessRevision":       input.BusinessRevision,
-			"currentValue":           input.CurrentValue,
-			"observedAt":             input.ObservedAt.UTC().Format(time.RFC3339Nano),
+	body := autoCommandPayload{
+		TenantID:             input.TenantID,
+		DeviceID:             input.DeviceID,
+		PointID:              input.PointID,
+		Capability:           input.Capability,
+		Parameters:           input.Parameters,
+		VerificationPointKey: input.VerificationPointKey,
+		IdempotencyKey:       input.IdempotencyKey,
+		IsRollback:           input.IsRollback,
+		CommandGrant:         grant,
+		CurrentState: autoCommandCurrentState{
+			EvaluationAvailability: "AVAILABLE",
+			Presence:               "ONLINE",
+			Readiness:              "CURRENT",
+			Quality:                "GOOD",
+			BusinessRevision:       input.BusinessRevision,
+			CurrentValue:           input.CurrentValue,
+			ObservedAt:             input.ObservedAt.UTC().Format(time.RFC3339Nano),
 		},
 	}
-	payload, err := json.Marshal(bodyMap)
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return "", err
 	}

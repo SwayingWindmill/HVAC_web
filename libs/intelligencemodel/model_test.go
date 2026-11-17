@@ -29,12 +29,21 @@ func TestExternalModelDefinitionCarriesCredentialReferenceNotSecret(t *testing.T
 
 func TestRecommendationCannotCreateCommandWithoutFreshIndependentRevalidation(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	minSupply := 6.0
+	maxSupply := 9.0
+	restoreSupply := 7.0
 	recommendation := OptimizationRecommendation{
 		ID: "rec-1", TenantID: "tenant-1", SiteID: "site-1", InputSnapshotID: "input-1", DeploymentRevision: "deployment-1",
-		Baseline: map[string]any{"powerKw": 810.0}, Objective: map[string]any{"kind": "ENERGY"}, Constraints: []map[string]any{{"kind": "SUPPLY_TEMP", "min": 6.0, "max": 9.0}},
-		Candidate: map[string]any{"supplyTempC": 8.0}, ExpectedImpact: map[string]any{"energyKwh": -120.0}, Uncertainty: map[string]any{"p90EnergyKwh": 40.0},
-		Risk: map[string]any{"level": "MEDIUM"}, RollbackPlan: map[string]any{"condition": "comfort_violation"}, VerificationPlan: map[string]any{"windowMinutes": 30},
-		Approval: RecommendationApproved, CreatedAt: now.Add(-10 * time.Minute),
+		Baseline:         RecommendationBaseline{DailyEnergyKWh: 2400, DailyCost: 360, SupplyTempC: restoreSupply, ZoneTempC: 23.0},
+		Objective:        RecommendationObjective{Kind: "ENERGY"},
+		Constraints:      []RecommendationConstraint{{Kind: "SUPPLY_TEMP", MinC: &minSupply, MaxC: &maxSupply}},
+		Candidate:        RecommendationCandidate{SupplyTempC: 8.0, ProjectedZoneTempC: 23.4, DailyEnergyKWh: 2280, DailyCost: 342},
+		ExpectedImpact:   RecommendationExpectedImpact{EnergySavingKWhPerDay: 120.0, CostSavingPerDay: 18.0},
+		Uncertainty:      RecommendationUncertainty{EnergyP90KWh: 40.0, ZoneTempP90C: 0.2},
+		Risk:             RecommendationRisk{Level: "MEDIUM", ComfortMarginC: 1.4},
+		RollbackPlan:     RecommendationRollbackPlan{RestoreSupplyTempC: &restoreSupply, Conditions: []string{"comfort_violation"}},
+		VerificationPlan: RecommendationVerificationPlan{WindowMinutes: 30},
+		Approval:         RecommendationApproved, CreatedAt: now.Add(-10 * time.Minute),
 	}
 	if err := recommendation.ValidateForApproval(); err != nil {
 		t.Fatal(err)
