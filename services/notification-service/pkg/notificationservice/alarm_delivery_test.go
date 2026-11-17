@@ -383,3 +383,167 @@ func TestHTTPDeliverySenderContract(t *testing.T) {
 		t.Fatal("unknown mode accepted")
 	}
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func TestHTTPDeliverySenderReuseTimeoutAndNoRedirect(t *testing.T) {
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "alarm-send-token")
+	if err := os.WriteFile(tokenFile, []byte("test-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	firstDefault := deliveryHTTPClient(nil)
+	secondDefault := deliveryHTTPClient(nil)
+	if firstDefault != secondDefault {
+		t.Fatal("default delivery HTTP client must be reused across requests")
+	}
+	if firstDefault.Timeout != defaultDeliverySendTimeout {
+		t.Fatalf("default client timeout = %v, want %v", firstDefault.Timeout, defaultDeliverySendTimeout)
+	}
+	if err := firstDefault.CheckRedirect(nil, nil); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("default CheckRedirect = %v, want http.ErrUseLastResponse", err)
+	}
+
+	custom := &http.Client{}
+	effective := deliveryHTTPClient(custom)
+	if custom.Timeout != 0 || custom.CheckRedirect != nil {
+		t.Fatal("deliveryHTTPClient mutated caller client")
+	}
+	if effective.Timeout != defaultDeliverySendTimeout {
+		t.Fatalf("effective custom timeout = %v, want %v", effective.Timeout, defaultDeliverySendTimeout)
+	}
+	if err := effective.CheckRedirect(nil, nil); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("effective CheckRedirect = %v, want http.ErrUseLastResponse", err)
+	}
+
+	var seenDeadline time.Time
+	var hasDeadline bool
+	inspectSender := HTTPDeliverySender{
+		URL:       "http://adapter.example.test/send",
+		TokenFile: tokenFile,
+		Client: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				seenDeadline, hasDeadline = req.Context().Deadline()
+				return &http.Response{
+					StatusCode: http.StatusNoContent,
+					Body:       http.NoBody,
+					Header:     make(http.Header),
+				}, nil
+			}),
+		},
+	}
+	message := OutboundMessage{Channel: ChannelSMTP, To: "duty@example.test", Subject: "s", Text: "t", Key: "k"}
+	before := time.Now()
+	if err := inspectSender.SendAlarmMessage(context.Background(), message); err != nil {
+		t.Fatalf("inspect SendAlarmMessage failed: %v", err)
+	}
+	if !hasDeadline || time.Until(seenDeadline) <= 0 || seenDeadline.Sub(before) > defaultDeliverySendTimeout+2*time.Second {
+		t.Fatalf("expected bounded send deadline near %v, got hasDeadline=%v deadline=%v", defaultDeliverySendTimeout, hasDeadline, seenDeadline)
+	}
+
+	redirectTargetHits := 0
+	redirectServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/target" {
+			redirectTargetHits++
+			writer.WriteHeader(http.StatusOK)
+			return
+		}
+		http.Redirect(writer, request, "/target", http.StatusFound)
+	}))
+	defer redirectServer.Close()
+
+	redirectSender := HTTPDeliverySender{
+		URL:       redirectServer.URL + "/send",
+		TokenFile: tokenFile,
+		Client:    &http.Client{},
+	}
+	err := redirectSender.SendAlarmMessage(context.Background(), message)
+	if err == nil || errors.Is(err, ErrDeliveryRejected) || redirectTargetHits != 0 {
+		t.Fatalf("expected redirect refusal without following target: err=%v targetHits=%d", err, redirectTargetHits)
+	}
+}
+
+func TestDecideRateLimitDeduplicatesTargetsAndRespectsHoldWindow(t *testing.T) {
+	routing := testRouting(t)
+	routing.RateLimitPerHour = 2
+	routing.Routes[0].Steps[0] = EscalationStep{
+		AfterMinutes: 0,
+		Recipients:   []string{"duty", "duty"},
+		Channels:     []DeliveryChannel{ChannelSMTP, ChannelSMTP},
+	}
+	routing.Routes[0].Steps[1] = EscalationStep{
+		AfterMinutes: 15,
+		Recipients:   []string{"duty"},
+		Channels:     []DeliveryChannel{ChannelSMTP},
+	}
+
+	alarm := activeAlarm("physics/cop-out-of-range", alarmmodel.SeverityMajor)
+	fireAt := deliveryBase.Add(3 * time.Minute)
+	first := DecideDelivery(alarm, routing, DeliveryFacts{}, fireAt)
+	if len(first.Messages) != 1 || first.Messages[0].Suppressed {
+		t.Fatalf("expected single deduplicated non-suppressed message, got %+v", first.Messages)
+	}
+
+	secondAlarm := activeAlarm("physics/pump-pressure", alarmmodel.SeverityMajor)
+	secondAlarm.AlarmID = "0190f000-0050-7000-8000-0000000000a2"
+	second := DecideDelivery(secondAlarm, routing, DeliveryFacts{SentLastHour: map[string]int{"duty": 1}}, fireAt)
+	if len(second.Messages) != 1 || second.Messages[0].Suppressed {
+		t.Fatalf("deduplicated step should consume only 1 quota slot, got %+v", second.Messages)
+	}
+
+	thirdAlarm := activeAlarm("physics/chiller-trip", alarmmodel.SeverityMajor)
+	thirdAlarm.AlarmID = "0190f000-0050-7000-8000-0000000000a3"
+	third := DecideDelivery(thirdAlarm, routing, DeliveryFacts{SentLastHour: map[string]int{"duty": 2}}, fireAt)
+	if len(third.Messages) != 1 || !third.Messages[0].Suppressed || third.Messages[0].Reason != "RATE_LIMITED" {
+		t.Fatalf("expected RATE_LIMITED after quota reached, got %+v", third.Messages)
+	}
+
+	// Direct struct callers with zero MaxAgeHours or negative HoldMinutes must not drop fresh Alarms.
+	directRouting := SiteRouting{
+		SiteID:           deliveryTestSiteID,
+		SiteName:         "松雅轩",
+		Timezone:         "Asia/Shanghai",
+		HoldMinutes:      -5,
+		RateLimitPerHour: 1,
+		QuietHours:       &QuietHours{Start: "bad", End: "07:00", BypassSeverity: alarmmodel.SeverityCritical},
+		Routes: []AlarmRoute{
+			{Name: "all", MinSeverity: alarmmodel.SeverityWarning, Steps: []EscalationStep{{AfterMinutes: 0, Recipients: []string{"duty"}, Channels: []DeliveryChannel{ChannelSMTP}}}},
+		},
+	}
+	if got := DecideDelivery(alarm, directRouting, DeliveryFacts{}, deliveryBase.Add(time.Minute)); len(got.Messages) != 1 || got.Held != "" {
+		t.Fatalf("expected direct routing defaults to deliver fresh Alarm safely, got %+v", got)
+	}
+}
+
+func TestBoundedAndSettleContextHelpers(t *testing.T) {
+	ctx30, cancel30 := withDefaultTimeout(context.Background(), 30*time.Second)
+	defer cancel30()
+	deadline30, ok := ctx30.Deadline()
+	if !ok || time.Until(deadline30) <= 20*time.Second {
+		t.Fatalf("expected ~30s default deadline, got ok=%v until=%v", ok, time.Until(deadline30))
+	}
+
+	ctx20, cancel20 := withBoundedTimeout(ctx30, 20*time.Second)
+	defer cancel20()
+	deadline20, ok := ctx20.Deadline()
+	if !ok || time.Until(deadline20) > 21*time.Second {
+		t.Fatalf("expected clamped ~20s deadline, got ok=%v until=%v", ok, time.Until(deadline20))
+	}
+
+	expiredCtx, cancelExpired := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancelExpired()
+	<-expiredCtx.Done()
+	settleCtx, cancelSettle := settleContext(expiredCtx, 5*time.Second)
+	defer cancelSettle()
+	if settleCtx.Err() != nil {
+		t.Fatalf("expected live settle context after send timeout, got %v", settleCtx.Err())
+	}
+	if _, hasDeadline := settleCtx.Deadline(); !hasDeadline {
+		t.Fatal("expected bounded deadline on settle context")
+	}
+}

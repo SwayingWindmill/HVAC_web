@@ -23,6 +23,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/energyseries"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/services/notification-service/pkg/notificationservice"
 )
@@ -82,7 +83,11 @@ func newWeChatReminderWorker(logger *slog.Logger, scheduler *notificationservice
 		})},
 		Sites: &registrySites{iamURL: strings.TrimRight(required["IAM_URL"], "/"), iamClient: iamClient, coreURL: strings.TrimRight(required["CORE_URL"], "/"), coreClient: coreClient, grants: map[string]registryGrant{}},
 		Sender: identityWeChatSender{
-			baseURL: strings.TrimRight(required["OIDC_BACKCHANNEL_BASE_URL"], "/"), client: &http.Client{Timeout: 15 * time.Second},
+			baseURL: strings.TrimRight(required["OIDC_BACKCHANNEL_BASE_URL"], "/"),
+			client: &http.Client{
+				Timeout:       15 * time.Second,
+				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+			},
 			signer: signer, workload: workload, policyRevision: envOr("IDENTITY_POLICY_REVISION", "policy-v1"),
 		},
 		AlarmTemplateID: envOr("NOTIFICATION_WECHAT_ALARM_TEMPLATE_ID", defaultAlarmTemplateID),
@@ -91,21 +96,60 @@ func newWeChatReminderWorker(logger *slog.Logger, scheduler *notificationservice
 	}, nil
 }
 
-func runWeChatReminders(ctx context.Context, logger *slog.Logger, worker *notificationservice.WeChatReminderWorker) {
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		worked, err := worker.RunOnce(ctx, time.Now().UTC())
-		if err != nil {
-			logger.Error("wechat_reminder_failed", "error_code", "WECHAT_REMINDER_FAILED", "error", err)
-		}
-		if !worked || err != nil {
-			if !notificationWait(ctx, time.Second) {
+func runWeChatReminders(ctx context.Context, logger *slog.Logger, metrics *observability.Registry, worker *notificationservice.WeChatReminderWorker) {
+	if worker == nil {
+		return
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	consecutiveErrors := 0
+	runSupervisedNotificationLoop(ctx, logger, metrics, "notification.wechat_reminders", func() {
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			idle, err := drainWeChatRemindersBatch(ctx, logger, worker, notificationMaxBatch)
+			if err != nil {
+				consecutiveErrors++
+				if !notificationWait(ctx, notificationRetryBackoff(consecutiveErrors, notificationErrorBaseWait, notificationErrorMaxWait)) {
+					return
+				}
+				continue
+			}
+			consecutiveErrors = 0
+			waitFor := notificationBatchPause
+			if idle {
+				waitFor = time.Second
+			}
+			if !notificationWait(ctx, waitFor) {
 				return
 			}
 		}
+	})
+}
+
+func drainWeChatRemindersBatch(ctx context.Context, logger *slog.Logger, worker *notificationservice.WeChatReminderWorker, maxBatch int) (bool, error) {
+	for range maxBatch {
+		if ctx.Err() != nil {
+			return false, nil
+		}
+		worked, err := runWeChatReminderOnce(ctx, worker)
+		if err != nil {
+			logger.Error("wechat_reminder_failed", "error_code", "WECHAT_REMINDER_FAILED", "error", err)
+			return false, err
+		}
+		if !worked {
+			return true, nil
+		}
 	}
+	return false, nil
+}
+
+func runWeChatReminderOnce(ctx context.Context, worker *notificationservice.WeChatReminderWorker) (bool, error) {
+	runCtx, cancel := context.WithTimeout(ctx, notificationStepTimeout)
+	defer cancel()
+	return worker.RunOnce(runCtx, time.Now().UTC())
 }
 
 // exchangeJSON sends one JSON request and decodes a 200 answer.
