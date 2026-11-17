@@ -797,7 +797,7 @@ func TestExecuteEmitsNormalizedTraceIDInMQTTEnvelope(t *testing.T) {
 				State: commandmodel.CorrelationReplied, ReplyStatus: "EXECUTED", ReplyEventTime: now, RepliedAt: now,
 				EdgeExecution: &commandmodel.EdgeExecutionEvidence{
 					Requested: commandmodel.NumberScalar(24), Effective: func() *commandmodel.ScalarValue { v := commandmodel.NumberScalar(24); return &v }(),
-					Applied: func() *commandmodel.ScalarValue { v := commandmodel.NumberScalar(24); return &v }(),
+					Applied:            func() *commandmodel.ScalarValue { v := commandmodel.NumberScalar(24); return &v }(),
 					WinnerControllerID: "cloud-command-intent", Cycle: 1,
 				},
 			}

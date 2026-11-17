@@ -142,7 +142,6 @@ func controlFailureEventFromDecision(
 	}
 }
 
-
 type idempotencyRecord struct {
 	CommandID   string
 	PayloadHash string
