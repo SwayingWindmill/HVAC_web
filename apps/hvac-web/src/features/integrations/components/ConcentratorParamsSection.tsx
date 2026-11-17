@@ -3,6 +3,7 @@ import { RotateCcw, Save } from 'lucide-react';
 import { Panel, PanelCount, PanelHeader } from '@/blocks/panel';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -49,7 +50,11 @@ export interface ConcentratorParamsSectionProps {
   readonly submitting: boolean;
   readonly submitError: unknown;
   readonly onResetError: () => void;
-  readonly onSubmitParams: (patch: ConcentratorParamsPatch, reason: string) => Promise<void>;
+  readonly onSubmitParams: (
+    patch: ConcentratorParamsPatch,
+    reason: string,
+    stageIfOffline: boolean,
+  ) => Promise<void>;
 }
 
 function updateParamDraftValue(
@@ -100,9 +105,11 @@ export function ConcentratorParamsSection({
 }: ConcentratorParamsSectionProps) {
   const fieldPrefix = useId();
   const reasonId = useId();
+  const stageIfOfflineId = useId();
   const [draft, setDraft] = useState<ConcentratorParams | null>(params);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [reason, setReason] = useState('');
+  const [stageIfOffline, setStageIfOffline] = useState(false);
 
   useEffect(() => {
     setDraft(params);
@@ -208,9 +215,10 @@ export function ConcentratorParamsSection({
     const trimmedReason = reason.trim();
     if (!diff?.patch || !validation?.valid || !trimmedReason || submitting) return;
     try {
-      await onSubmitParams(diff.patch, trimmedReason);
+      await onSubmitParams(diff.patch, trimmedReason, stageIfOffline);
       setConfirmOpen(false);
       setReason('');
+      setStageIfOffline(false);
     } catch {
       // Mutation error stays displayed inside the dialog via submitError without leaking an unhandled rejection
     }
@@ -240,6 +248,7 @@ export function ConcentratorParamsSection({
               disabled={!canOpenConfirm}
               onClick={() => {
                 onResetError();
+                setStageIfOffline(false);
                 setConfirmOpen(true);
               }}
             >
@@ -339,6 +348,22 @@ export function ConcentratorParamsSection({
             />
           </div>
 
+          <div className="flex items-start gap-2.5 rounded-md border bg-muted/30 px-3 py-2.5">
+            <Checkbox
+              id={stageIfOfflineId}
+              checked={stageIfOffline}
+              disabled={submitting}
+              onCheckedChange={(checked) => setStageIfOffline(checked === true)}
+              className="mt-0.5"
+            />
+            <Label htmlFor={stageIfOfflineId} className="flex flex-col items-start gap-0.5 text-xs font-normal leading-relaxed">
+              <span className="font-medium text-foreground">若网关离线，暂存至配置影子（重连后自动同步）</span>
+              <span className="text-muted-foreground">
+                勾选后当网关通信通道不可达时不会直接报错，而是写入网关配置影子并在重连后下发到集中器 Flash。
+              </span>
+            </Label>
+          </div>
+
           {submitError ? (
             <Alert variant="destructive">
               <AlertDescription>
@@ -362,7 +387,7 @@ export function ConcentratorParamsSection({
               disabled={!canWrite || submitting || reason.trim().length === 0 || !diff?.hasChanges}
               onClick={() => void handleConfirmSubmit()}
             >
-              {submitting ? '正在写入 Flash…' : '确认写入 Flash'}
+              {submitting ? '正在提交…' : stageIfOffline ? '确认写入或离线暂存' : '确认写入 Flash'}
             </Button>
           </DialogFooter>
         </DialogContent>

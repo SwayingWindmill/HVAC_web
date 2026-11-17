@@ -1,5 +1,43 @@
+import { mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { SITE_ID, principal } from './gateway';
 import { expect, test } from './test';
+
+const P1_SCREENSHOT_DIR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+  '.scratch',
+  'verify',
+  'p1-web-governance',
+);
+
+function p1Shot(fileName: string): string {
+  mkdirSync(P1_SCREENSHOT_DIR, { recursive: true });
+  return join(P1_SCREENSHOT_DIR, fileName);
+}
+
+function grantRegistryAdminPrincipal() {
+  return {
+    ...principal,
+    authorization: {
+      ...principal.authorization,
+      capabilities: [
+        ...principal.authorization.capabilities,
+        'site.write',
+        'space.write',
+        'asset.write',
+        'device.write',
+        'point.write',
+        'binding.write',
+        'template.manage',
+        'registry.retire',
+      ],
+    },
+  };
+}
 
 test('asset and point registration opens from the system overview', async ({ page }) => {
   await page.goto('/system');
@@ -156,4 +194,134 @@ test('操作记录 renders translated audit facts with zero raw codes, zero over
 
   await search.fill('不存在的词');
   await expect(panel).toContainText('没有匹配的操作记录');
+});
+
+test('模板版本 persists template catalog, structured DEVICE activation builder, and assignment history across reloads at 1440px', async ({
+  page,
+  gateway,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  gateway.principalOverride = grantRegistryAdminPrincipal();
+  await page.goto('/system?tab=registry');
+
+  await page.getByRole('tab', { name: '模板版本', exact: true }).click();
+  await expect(page.getByText('chiller-standard').first()).toBeVisible();
+
+  await page.getByRole('button', { name: '预览' }).first().click();
+  await expect(page.getByText('标准点位 1 项')).toBeVisible();
+
+  // Release a structured DEVICE template with standardPoints + capabilityProfiles.
+  await page.getByLabel('模板名称').fill('chiller-v2-std');
+  await page.getByLabel('适用设备类型（deviceType，可选）').fill('CHILLER');
+  await page.getByRole('button', { name: '新增标准点位' }).click();
+  await page.getByLabel('点位编码 (pointCode)').fill('chw_return_temp');
+  await page.getByLabel('显示名称').fill('冷冻水回水温度');
+  await page.getByLabel('单位（可选）').fill('degC');
+
+  await page.getByRole('button', { name: '新增控制能力' }).click();
+  await page.getByLabel('能力名称').fill('set_chw_return_limit');
+  await page.getByRole('button', { name: '发布新版本' }).click();
+
+  await expect(page.getByText('chiller-v2-std').first()).toBeVisible();
+
+  // Assign the newly released revision to CHILLER-01.
+  await page.getByRole('combobox', { name: '选择应用对象' }).click();
+  await page.getByRole('option', { name: /CHILLER-01/ }).click();
+  await page.getByRole('button', { name: '从现在起应用' }).click();
+
+  const assignmentsTable = page.getByRole('table', { name: '站点已应用模板' });
+  await expect(assignmentsTable).toContainText('CHILLER-01');
+  await expect(assignmentsTable).toContainText('chiller-v2-std · 第 1 版');
+  await page.screenshot({ path: p1Shot('p1-templates-light.png') });
+
+  // Reload page to verify persistent catalog and persistent site assignment history.
+  await page.reload();
+  await page.getByRole('tab', { name: '模板版本', exact: true }).click();
+  await expect(page.getByText('chiller-v2-std').first()).toBeVisible();
+  await expect(page.getByRole('table', { name: '站点已应用模板' })).toContainText('CHILLER-01');
+
+  await page.getByRole('radiogroup', { name: '外观' }).getByRole('radio', { name: '深色' }).click();
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+    .toBe('dark');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: p1Shot('p1-templates-dark.png') });
+});
+
+test('资源与绑定 supports tag CRUD, spatial subtree filter, tag filter, and cross-site search at 1440px', async ({
+  page,
+  gateway,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  gateway.principalOverride = grantRegistryAdminPrincipal();
+  const crossSiteId = '01910000-8000-7000-8000-000000000002';
+  gateway.addCrossSiteSample(
+    {
+      id: crossSiteId,
+      tenantId: '018f3d00-0000-7000-8000-000000000001',
+      code: 'south-wing',
+      displayName: '南区制冷站',
+      timezone: 'Asia/Shanghai',
+      status: 'ACTIVE',
+      floorAreaM2: 18000,
+      climateZone: 'HOT_SUMMER_COLD_WINTER',
+      revision: 1,
+      createdAt: '2026-10-01T00:00:00.000Z',
+      updatedAt: '2026-10-01T00:00:00.000Z',
+    },
+    undefined,
+    {
+      id: '01910000-8000-7000-8000-000000000022',
+      tenantId: '018f3d00-0000-7000-8000-000000000001',
+      siteId: crossSiteId,
+      code: 'south-chiller-01',
+      displayName: '南区 1 号冷机',
+      deviceType: 'CHILLER_CONTROLLER',
+      status: 'ACTIVE',
+      tags: { vendor: 'trane' },
+      revision: 1,
+      createdAt: '2026-10-01T00:00:00.000Z',
+      updatedAt: '2026-10-01T00:00:00.000Z',
+    },
+  );
+
+  await page.goto('/system?tab=registry');
+  await page.getByRole('tab', { name: /设备 / }).click();
+
+  const deviceTable = page.getByRole('table', { name: '设备' });
+  const chillerRow = deviceTable.getByRole('row', { name: /CHILLER-01/ });
+  await chillerRow.getByRole('button', { name: '编辑' }).click();
+
+  const editDialog = page.getByRole('dialog', { name: '编辑设备' });
+  await editDialog.getByRole('button', { name: '添加标签' }).click();
+  await editDialog.getByLabel('标签键 1').fill('vendor');
+  await editDialog.getByLabel('标签值 1').fill('carrier');
+  await editDialog.getByRole('button', { name: '保存' }).click();
+  await expect(editDialog).toHaveCount(0);
+  await expect(chillerRow).toContainText('vendor:carrier');
+
+  // Filter by key:value tag and verify non-matching rows disappear.
+  await page.getByRole('textbox', { name: '按标签筛选' }).fill('vendor:carrier');
+  await page.getByRole('button', { name: '筛选标签' }).click();
+  await expect(deviceTable).toContainText('CHILLER-01');
+  await expect(deviceTable).not.toContainText('WEATHER-STATION');
+  await page.screenshot({ path: p1Shot('p1-registry-tags-light.png') });
+
+  // Reset, filter by parent space subtree, then switch to cross-site scope.
+  await page.getByRole('button', { name: '重置筛选' }).click();
+  await page.getByRole('button', { name: /商业办公楼/ }).click();
+  await expect(page.getByText('当前空间范围：商业办公楼')).toBeVisible();
+  await expect(deviceTable).toContainText('CHILLER-01');
+
+  await page.getByRole('radio', { name: '全部授权站点' }).click();
+  await expect(deviceTable).toContainText('南区制冷站');
+  await expect(deviceTable).toContainText('南区 1 号冷机');
+  await expect(deviceTable).toContainText('vendor:trane');
+
+  await page.getByRole('radiogroup', { name: '外观' }).getByRole('radio', { name: '深色' }).click();
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+    .toBe('dark');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: p1Shot('p1-registry-tags-dark.png') });
 });

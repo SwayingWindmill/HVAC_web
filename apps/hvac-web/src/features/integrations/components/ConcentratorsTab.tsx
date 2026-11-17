@@ -32,6 +32,7 @@ import {
   gatewayConcentratorApi,
   gatewayConcentratorEidsKey,
   gatewayConcentratorStatusKey,
+  gatewayConfigShadowKey,
 } from '@/features/connectivity/gateway-credentials';
 import {
   CONCENTRATOR_BATTERY_WARNING_MV,
@@ -136,6 +137,7 @@ export function ConcentratorsTab({
     mutationFn: async (payload: {
       readonly patch: ConcentratorParamsPatch;
       readonly reason: string;
+      readonly stageIfOffline: boolean;
     }) => {
       if (!selectedGatewayId || parsedUnitId === null) {
         throw new Error('缺少网关或集中器从站地址');
@@ -143,12 +145,35 @@ export function ConcentratorsTab({
       return gatewayConcentratorApi.updateParams(
         selectedGatewayId,
         parsedUnitId,
-        { params: payload.patch, reason: payload.reason },
+        {
+          params: payload.patch,
+          reason: payload.reason,
+          ...(payload.stageIfOffline ? { stageIfOffline: true } : {}),
+        },
         csrfToken,
       );
     },
     onSuccess: (result) => {
       if (!selectedGatewayId || parsedUnitId === null) return;
+      void queryClient.invalidateQueries({
+        queryKey: gatewayConfigShadowKey(selectedGatewayId),
+      });
+      if (result.staged) {
+        queryClient.setQueryData(
+          gatewayConcentratorStatusKey(selectedGatewayId, parsedUnitId),
+          (current: typeof statusQuery.data) =>
+            current
+              ? {
+                  ...current,
+                  recentAudits: [result.audit, ...current.recentAudits],
+                }
+              : current,
+        );
+        toast.success(
+          `网关当前离线，参数变更已暂存至配置影子（期望修订 v${result.desiredRevision ?? '?'}），待重连后自动下发`,
+        );
+        return;
+      }
       const nextUnitId = result.params.modbusId;
       if (nextUnitId !== parsedUnitId) {
         setUnitIdRaw(String(nextUnitId));
@@ -179,6 +204,7 @@ export function ConcentratorsTab({
     mutationFn: async (payload: {
       readonly slots: readonly ConcentratorEidSlot[];
       readonly reason: string;
+      readonly stageIfOffline: boolean;
     }) => {
       if (!selectedGatewayId || parsedUnitId === null) {
         throw new Error('缺少网关或集中器从站地址');
@@ -186,12 +212,35 @@ export function ConcentratorsTab({
       return gatewayConcentratorApi.updateEids(
         selectedGatewayId,
         parsedUnitId,
-        { slots: [...payload.slots], reason: payload.reason },
+        {
+          slots: [...payload.slots],
+          reason: payload.reason,
+          ...(payload.stageIfOffline ? { stageIfOffline: true } : {}),
+        },
         csrfToken,
       );
     },
     onSuccess: (result) => {
       if (!selectedGatewayId || parsedUnitId === null) return;
+      void queryClient.invalidateQueries({
+        queryKey: gatewayConfigShadowKey(selectedGatewayId),
+      });
+      if (result.staged) {
+        queryClient.setQueryData(
+          gatewayConcentratorEidsKey(selectedGatewayId, parsedUnitId),
+          (current: typeof eidsQuery.data) =>
+            current
+              ? {
+                  ...current,
+                  recentAudits: [result.audit, ...current.recentAudits],
+                }
+              : current,
+        );
+        toast.success(
+          `网关当前离线，EID 映射变更已暂存至配置影子（期望修订 v${result.desiredRevision ?? '?'}），待重连后自动下发`,
+        );
+        return;
+      }
       queryClient.setQueryData(
         gatewayConcentratorEidsKey(selectedGatewayId, parsedUnitId),
         (current: typeof eidsQuery.data) =>
@@ -433,8 +482,8 @@ export function ConcentratorsTab({
             submitting={paramsMutation.isPending}
             submitError={paramsMutation.error}
             onResetError={() => paramsMutation.reset()}
-            onSubmitParams={async (patch, reason) => {
-              await paramsMutation.mutateAsync({ patch, reason });
+            onSubmitParams={async (patch, reason, stageIfOffline) => {
+              await paramsMutation.mutateAsync({ patch, reason, stageIfOffline });
             }}
           />
 
@@ -447,8 +496,8 @@ export function ConcentratorsTab({
             submitting={eidsMutation.isPending}
             submitError={eidsMutation.error}
             onResetError={() => eidsMutation.reset()}
-            onSubmitEids={async (slots, reason) => {
-              await eidsMutation.mutateAsync({ slots, reason });
+            onSubmitEids={async (slots, reason, stageIfOffline) => {
+              await eidsMutation.mutateAsync({ slots, reason, stageIfOffline });
             }}
           />
         </>

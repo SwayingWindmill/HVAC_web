@@ -25,7 +25,7 @@ import {
 } from '../../realtime/device-presentation';
 import { EQUIPMENT_CATEGORIES, equipmentStatus, PLANT_CATEGORY_LABELS, type PlantCategory, type PlantDevice } from '../../realtime/plant-model';
 import { useRealtimePlant } from '../../realtime/use-realtime-plant';
-import { boundAssetId, deviceLocation, needsAttention } from '../device-ledger';
+import { boundAssetId, deviceLocation, deviceTagTokens, needsAttention } from '../device-ledger';
 import { DeviceInspector } from './DeviceInspector';
 import { DeviceTile } from './DeviceTile';
 
@@ -86,10 +86,20 @@ export function SystemsDevicesWorkspace() {
     return assetId ? openWorkOrdersByAsset.get(assetId) ?? 0 : 0;
   };
 
+  const availableTags = useMemo(() => {
+    const tokens = new Set<string>();
+    for (const device of plant.devices) {
+      for (const token of deviceTagTokens(device)) tokens.add(token);
+    }
+    if (search.tag) tokens.add(search.tag);
+    return Array.from(tokens).sort((left, right) => left.localeCompare(right));
+  }, [plant.devices, search.tag]);
+
   const query = search.q?.trim().toLowerCase() ?? '';
   const visible = plant.devices.filter((device) =>
     (!search.category || device.category === search.category)
     && matchesStatus(device, search.status)
+    && (!search.tag || deviceTagTokens(device).includes(search.tag))
     && (!query || device.name.toLowerCase().includes(query) || deviceLocation(device).toLowerCase().includes(query)));
   const sections = [
     { key: 'equipment', title: '冷站主设备', equipment: true, devices: visible.filter((device) => EQUIPMENT_CATEGORIES.has(device.category)) },
@@ -104,7 +114,7 @@ export function SystemsDevicesWorkspace() {
   const inspected = plant.devices.find((device) => device.deviceId === search.inspect);
   const equipment = equipmentStatus(plant);
 
-  const setSearch = (patch: { q?: string; category?: PlantCategory; status?: StatusFilter; inspect?: string; layout?: 'cards' | 'table' }) =>
+  const setSearch = (patch: { q?: string; category?: PlantCategory; status?: StatusFilter; tag?: string; inspect?: string; layout?: 'cards' | 'table' }) =>
     void navigate({ search: (previous) => ({ ...previous, ...patch }) });
 
   return (
@@ -190,6 +200,22 @@ export function SystemsDevicesWorkspace() {
                   {plant.groups.map((group) => <SelectItem key={group.category} value={group.category}>{group.label}</SelectItem>)}
                 </SelectContent>
               </Select>
+              {availableTags.length > 0 ? (
+                <Select
+                  value={search.tag ?? 'ALL'}
+                  onValueChange={(value) => setSearch({ tag: value === 'ALL' ? undefined : value })}
+                >
+                  <SelectTrigger className="h-8 w-44 font-mono text-xs" aria-label="设备标签"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">全部标签</SelectItem>
+                    {availableTags.map((token) => (
+                      <SelectItem key={token} value={token} className="font-mono text-xs">
+                        {token}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
               <ToggleGroup
                 type="single"
                 variant="outline"

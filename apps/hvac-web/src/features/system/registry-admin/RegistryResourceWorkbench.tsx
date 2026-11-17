@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Link2, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
+import { Link2, Pencil, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import type {
   Asset,
   Capability,
@@ -16,6 +17,9 @@ import {
   presentRegistryError,
   registryAdminApi,
   useRegistryDevicePoints,
+  useRegistryFilteredAssets,
+  useRegistryFilteredDevices,
+  useRegistryTemplates,
 } from '@/api/registry';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { DataTable, DataTablePagination, type DataTableFeatures } from '@/components/data-table';
@@ -42,18 +46,28 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
 import { CLIMATE_ZONE_LABEL, type ClimateZone } from '@/lib/climate-zone';
 import { isOneOf } from '@/lib/typed';
+import { cn } from '@/lib/utils';
 import { confirmDiscardRegistryDraft } from './confirmDiscard';
 import {
   makeRegistryMutationMeta,
   newRegistryIdempotencyKey,
   type RegistryAdminResourceType,
 } from './model';
+import {
+  formatTagEntries,
+  parseTagFilterInput,
+  tagMapToEntries,
+  validateAndBuildTagMap,
+  type TagEntryDraft,
+} from './tags-model';
 
 interface Props {
   site: Site;
+  sites: readonly Site[];
   model: SiteAssetModel;
   capabilities: ReadonlySet<Capability>;
   onDirtyChange: (dirty: boolean) => void;
@@ -64,11 +78,13 @@ interface Props {
 type ResourceRowBase = {
   key: string;
   id: string;
+  siteId?: string;
   code: string;
   displayName: string;
   subtype: string;
   status: string;
   revision: number;
+  tags?: Record<string, string>;
 };
 
 type ResourceRow =
@@ -123,6 +139,7 @@ type EditDraft = {
   staleAfterMs: number;
   counterDecreaseMode: NonNullable<TelemetryPoint['counterDecreaseMode']> | '';
   counterRolloverModulus: number | null;
+  tagEntries: TagEntryDraft[];
   reason: string;
 };
 
@@ -314,20 +331,55 @@ function pointSubtypeLabel(point: TelemetryPoint): string {
   return `${pointTypeLabel(point.pointType)} · ${valueTypeLabel(point.valueType)}${unit ? `（${unit}）` : ''}`;
 }
 
+function assetRowsToResourceRows(assets: readonly Asset[]): ResourceRow[] {
+  return assets.map((value) => ({
+    key: value.id,
+    id: value.id,
+    siteId: value.siteId,
+    type: 'ASSET',
+    code: value.code,
+    displayName: value.displayName,
+    subtype: value.assetType,
+    status: value.status,
+    revision: value.revision,
+    tags: value.tags,
+    entity: value,
+  }));
+}
+
+function deviceRowsToResourceRows(devices: readonly Device[]): ResourceRow[] {
+  return devices.map((value) => ({
+    key: value.id,
+    id: value.id,
+    siteId: value.siteId,
+    type: 'DEVICE',
+    code: value.code,
+    displayName: value.displayName,
+    subtype: value.deviceType,
+    status: value.status,
+    revision: value.revision,
+    tags: value.tags,
+    entity: value,
+  }));
+}
+
 function entityRows(site: Site, model: SiteAssetModel, type: RegistryAdminResourceType): ResourceRow[] {
   switch (type) {
     case 'SITE':
-      return [{ key: site.id, id: site.id, type, code: site.code, displayName: site.displayName, subtype: site.timezone, status: site.status, revision: site.revision, entity: site }];
+      return [{ key: site.id, id: site.id, siteId: site.id, type, code: site.code, displayName: site.displayName, subtype: site.timezone, status: site.status, revision: site.revision, entity: site }];
     case 'SPACE':
-      return model.spaces.map((value) => ({ key: value.id, id: value.id, type, code: value.code, displayName: value.displayName, subtype: spaceTypeLabel(value.spaceType), status: value.status, revision: value.revision, entity: value }));
+      return model.spaces.map((value) => ({ key: value.id, id: value.id, siteId: value.siteId, type, code: value.code, displayName: value.displayName, subtype: spaceTypeLabel(value.spaceType), status: value.status, revision: value.revision, entity: value }));
     case 'ASSET':
-      return model.assets.map((value) => ({ key: value.id, id: value.id, type, code: value.code, displayName: value.displayName, subtype: value.assetType, status: value.status, revision: value.revision, entity: value }));
+      return assetRowsToResourceRows(model.assets);
     case 'DEVICE':
-      return model.devices.map((value) => ({ key: value.id, id: value.id, type, code: value.code, displayName: value.displayName, subtype: value.deviceType, status: value.status, revision: value.revision, entity: value }));
+      return deviceRowsToResourceRows(model.devices);
     case 'POINT':
-      return model.telemetryPoints.map((value) => ({ key: value.id, id: value.id, type, code: value.pointCode, displayName: value.displayName, subtype: pointSubtypeLabel(value), status: value.status, revision: value.revision, entity: value }));
+      return model.telemetryPoints.map((value) => ({ key: value.id, id: value.id, siteId: value.siteId, type, code: value.pointCode, displayName: value.displayName, subtype: pointSubtypeLabel(value), status: value.status, revision: value.revision, entity: value }));
   }
 }
+
+const RESOURCE_STATUS_FILTERS = ['ALL', 'ACTIVE', 'INACTIVE', 'RETIRED'] as const;
+const SCOPE_OPTIONS = ['SITE', 'ALL_SITES'] as const;
 
 function defaultEditDraft(target: EditTarget): EditDraft {
   const copy = RESOURCE_COPY[target.type];
@@ -335,7 +387,7 @@ function defaultEditDraft(target: EditTarget): EditDraft {
     code: '', displayName: '', timezone: 'Asia/Shanghai', floorAreaM2: '', climateZone: '', status: 'ACTIVE', parentSpaceId: '', spaceType: 'OTHER',
     assetType: '', deviceType: '', reportingDeviceId: '', sensorId: '', pointCode: '', sourceKey: '', pointType: 'TELEMETRY',
     valueType: 'NUMBER', unit: '', writable: false, sampleIntervalMs: 1000, publishIntervalMs: 5000, staleAfterMs: 15000,
-    counterDecreaseMode: 'RESET_TO_ZERO', counterRolloverModulus: null, reason: target.entity ? copy.updateReason : copy.createReason,
+    counterDecreaseMode: 'RESET_TO_ZERO', counterRolloverModulus: null, tagEntries: [], reason: target.entity ? copy.updateReason : copy.createReason,
   };
   if (!target.entity) return base;
   switch (target.type) {
@@ -352,11 +404,11 @@ function defaultEditDraft(target: EditTarget): EditDraft {
     }
     case 'ASSET': {
       const value = target.entity;
-      return { ...base, code: value.code, displayName: value.displayName, assetType: value.assetType, status: value.status };
+      return { ...base, code: value.code, displayName: value.displayName, assetType: value.assetType, status: value.status, tagEntries: tagMapToEntries(value.tags) };
     }
     case 'DEVICE': {
       const value = target.entity;
-      return { ...base, code: value.code, displayName: value.displayName, deviceType: value.deviceType, status: value.status };
+      return { ...base, code: value.code, displayName: value.displayName, deviceType: value.deviceType, status: value.status, tagEntries: tagMapToEntries(value.tags) };
     }
     case 'POINT': {
       const value = target.entity;
@@ -396,8 +448,16 @@ function selectOptionsForBinding(kind: RebindKind, model: SiteAssetModel, site: 
   return { sources: points, targets };
 }
 
-export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyChange, onRefresh, onSiteCreated }: Props) {
+export function RegistryResourceWorkbench({ site, sites, model, capabilities, onDirtyChange, onRefresh, onSiteCreated }: Props) {
+  const queryClient = useQueryClient();
   const [resourceType, setResourceType] = useState<RegistryAdminResourceType>('SPACE');
+  const [allSites, setAllSites] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE' | 'RETIRED'>('ALL');
+  const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null);
+  const [templateKeyFilter, setTemplateKeyFilter] = useState<string>('ALL');
+  const [tagInput, setTagInput] = useState('');
+  const [appliedTagFilter, setAppliedTagFilter] = useState<string | undefined>(undefined);
+  const [tagFilterError, setTagFilterError] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
   const [editDraft, setEditDraft] = useState<EditDraft>(() => defaultEditDraft({ type: 'SPACE' }));
   const [retireTarget, setRetireTarget] = useState<ResourceRow | null>(null);
@@ -416,8 +476,72 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
   const dirty = editDirty || retireDirty || rebindDirty;
 
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
+  useEffect(() => {
+    setSelectedSpaceId(null);
+  }, [site.id]);
 
-  const rows = useMemo(() => entityRows(site, model, resourceType), [site, model, resourceType]);
+  const filterableType = resourceType === 'ASSET' || resourceType === 'DEVICE';
+  const isServerFiltered =
+    filterableType &&
+    (allSites ||
+      statusFilter !== 'ALL' ||
+      Boolean(selectedSpaceId) ||
+      templateKeyFilter !== 'ALL' ||
+      Boolean(appliedTagFilter));
+
+  const serverFilterParams = useMemo(() => ({
+    ...(statusFilter !== 'ALL' ? { status: statusFilter } : {}),
+    ...(selectedSpaceId && !allSites ? { spaceId: selectedSpaceId } : {}),
+    ...(templateKeyFilter !== 'ALL' ? { templateKey: templateKeyFilter } : {}),
+    ...(appliedTagFilter ? { tag: [appliedTagFilter] } : {}),
+  }), [allSites, appliedTagFilter, selectedSpaceId, statusFilter, templateKeyFilter]);
+
+  const canReadTemplatesForFilter =
+    filterableType &&
+    (capabilities.has('template.manage') || capabilities.has('asset.read') || capabilities.has('device.list'));
+  const templatesFilterQuery = useRegistryTemplates(undefined, canReadTemplatesForFilter);
+  const templateKeys = useMemo(() => {
+    const list = flattenRegistryPages(templatesFilterQuery.data);
+    return Array.from(new Set(list.map((item) => item.templateKey))).sort((a, b) => a.localeCompare(b));
+  }, [templatesFilterQuery.data]);
+
+  const filteredAssetsQuery = useRegistryFilteredAssets(
+    site.id,
+    allSites,
+    serverFilterParams,
+    resourceType === 'ASSET' && isServerFiltered && capabilities.has('asset.read'),
+  );
+  const filteredDevicesQuery = useRegistryFilteredDevices(
+    site.id,
+    allSites,
+    serverFilterParams,
+    resourceType === 'DEVICE' && isServerFiltered && capabilities.has('device.list'),
+  );
+  const activeFilteredQuery =
+    resourceType === 'ASSET' && isServerFiltered
+      ? filteredAssetsQuery
+      : resourceType === 'DEVICE' && isServerFiltered
+        ? filteredDevicesQuery
+        : null;
+
+  const siteNameById = useMemo(
+    () => new Map(sites.map((item) => [item.id, item.displayName])),
+    [sites],
+  );
+  const spaceNameById = useMemo(
+    () => new Map(model.spaces.map((item) => [item.id, item.displayName])),
+    [model.spaces],
+  );
+
+  const rows = useMemo(() => {
+    if (resourceType === 'ASSET' && isServerFiltered) {
+      return assetRowsToResourceRows(flattenRegistryPages(filteredAssetsQuery.data));
+    }
+    if (resourceType === 'DEVICE' && isServerFiltered) {
+      return deviceRowsToResourceRows(flattenRegistryPages(filteredDevicesQuery.data));
+    }
+    return entityRows(site, model, resourceType);
+  }, [filteredAssetsQuery.data, filteredDevicesQuery.data, isServerFiltered, model, resourceType, site]);
 
   const resourceTypeOptions = useMemo(() => [
     { key: 'SPACE' as const, label: RESOURCE_COPY.SPACE.tabLabel, count: model.spaces.length },
@@ -507,8 +631,48 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
     );
   }, [editDraft, editTarget]);
 
+  const invalidateFilteredQueries = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['registry', 'filtered-assets'] }),
+      queryClient.invalidateQueries({ queryKey: ['registry', 'filtered-devices'] }),
+    ]);
+  };
+
+  const applyTagFilter = () => {
+    const parsed = parseTagFilterInput(tagInput);
+    if (!parsed.ok) {
+      setTagFilterError(parsed.error);
+      return;
+    }
+    setTagFilterError(null);
+    setAppliedTagFilter(parsed.tag);
+  };
+
+  const resetResourceFilters = () => {
+    setAllSites(false);
+    setStatusFilter('ALL');
+    setSelectedSpaceId(null);
+    setTemplateKeyFilter('ALL');
+    setTagInput('');
+    setAppliedTagFilter(undefined);
+    setTagFilterError(null);
+  };
+
   const runEdit = async () => {
     if (!editTarget || !editValid) return;
+    const targetSiteId =
+      editTarget.entity && 'siteId' in editTarget.entity
+        ? editTarget.entity.siteId
+        : site.id;
+    let validatedTags: Record<string, string> | undefined;
+    if (editTarget.type === 'ASSET' || editTarget.type === 'DEVICE') {
+      const tagRes = validateAndBuildTagMap(editDraft.tagEntries);
+      if (!tagRes.ok) {
+        setError(new Error(tagRes.error));
+        return;
+      }
+      validatedTags = tagRes.tags;
+    }
     const expectedRevision = editTarget.entity?.revision ?? 0;
     const meta = makeRegistryMutationMeta(expectedRevision, editDraft.reason.trim(), newRegistryIdempotencyKey(`${editTarget.type.toLowerCase()}-${editTarget.entity ? 'update' : 'create'}`));
     setWorking(true);
@@ -528,12 +692,26 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
         if (editTarget.entity) await registryAdminApi.updateSpace(site.id, editTarget.entity.id, body);
         else await registryAdminApi.createSpace(site.id, body);
       } else if (editTarget.type === 'ASSET') {
-        const body = { code: editDraft.code.trim(), displayName: editDraft.displayName.trim(), assetType: editDraft.assetType.trim(), status: editDraft.status, meta };
-        if (editTarget.entity) await registryAdminApi.updateAsset(site.id, editTarget.entity.id, body);
+        const body = {
+          code: editDraft.code.trim(),
+          displayName: editDraft.displayName.trim(),
+          assetType: editDraft.assetType.trim(),
+          status: editDraft.status,
+          tags: validatedTags ?? {},
+          meta,
+        };
+        if (editTarget.entity) await registryAdminApi.updateAsset(targetSiteId, editTarget.entity.id, body);
         else await registryAdminApi.createAsset(site.id, body);
       } else if (editTarget.type === 'DEVICE') {
-        const body = { code: editDraft.code.trim(), displayName: editDraft.displayName.trim(), deviceType: editDraft.deviceType.trim(), status: editDraft.status, meta };
-        if (editTarget.entity) await registryAdminApi.updateDevice(site.id, editTarget.entity.id, body);
+        const body = {
+          code: editDraft.code.trim(),
+          displayName: editDraft.displayName.trim(),
+          deviceType: editDraft.deviceType.trim(),
+          status: editDraft.status,
+          tags: validatedTags ?? {},
+          meta,
+        };
+        if (editTarget.entity) await registryAdminApi.updateDevice(targetSiteId, editTarget.entity.id, body);
         else await registryAdminApi.createDevice(site.id, body);
       } else {
         const body = {
@@ -561,7 +739,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
       setResultMessage(editTarget.entity ? RESOURCE_COPY[editTarget.type].updatedMessage : RESOURCE_COPY[editTarget.type].createdMessage);
       setEditTarget(null);
       setEditDirty(false);
-      await onRefresh();
+      await Promise.all([onRefresh(), invalidateFilteredQueries()]);
       if (createdSiteId) onSiteCreated(createdSiteId);
     } catch (reason) {
       setError(reason);
@@ -572,10 +750,11 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
 
   const runRetire = async () => {
     if (!retireTarget || !retireReason.trim()) return;
+    const targetSiteId = retireTarget.siteId ?? site.id;
     setWorking(true);
     setError(null);
     try {
-      const result = await registryAdminApi.retire(site.id, {
+      const result = await registryAdminApi.retire(targetSiteId, {
         resourceType: retireTarget.type,
         resourceId: retireTarget.id,
         meta: makeRegistryMutationMeta(retireTarget.revision, retireReason.trim(), newRegistryIdempotencyKey('registry-retire')),
@@ -586,7 +765,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
       setRetireTarget(null);
       setRetireReason('');
       setRetireDirty(false);
-      await onRefresh();
+      await Promise.all([onRefresh(), invalidateFilteredQueries()]);
     } catch (reason) {
       setError(reason);
     } finally {
@@ -636,7 +815,7 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
       setRebindOpen(false);
       setRebindDirty(false);
       setRebindDraft({ kind: 'DEVICE_ASSET', sourceId: '', targetId: '', targetType: 'ASSET', role: 'CONTROLLER', reason: '调整登记关系' });
-      await onRefresh();
+      await Promise.all([onRefresh(), invalidateFilteredQueries()]);
     } catch (reason) {
       setError(reason);
     } finally {
@@ -644,60 +823,103 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
     }
   };
 
-  const resourceColumns = useMemo<Array<ColumnDef<DataTableFeatures, ResourceRow>>>(() => [
-    {
-      id: 'name',
-      header: '名称',
-      cell: ({ row }) => (
-        <div>
-          <strong className="block text-sm">{row.original.displayName}</strong>
-          <span className="font-mono text-xs text-muted-foreground">{row.original.code}</span>
-        </div>
-      ),
-    },
-    { id: 'subtype', header: '类型', cell: ({ row }) => row.original.subtype },
-    {
-      id: 'status',
-      header: '状态',
-      cell: ({ row }) => <StatusBadge tone={statusTone(row.original.status)}>{statusLabel(row.original.status)}</StatusBadge>,
-    },
-    {
-      id: 'actions',
-      header: '操作',
-      cell: ({ row }) => (
-        <div className="flex flex-wrap gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!capabilities.has(WRITE_CAPABILITY[row.original.type]) || row.original.status === 'RETIRED'}
-            onClick={() => openEditor(editTargetFromRow(row.original))}
-          >
-            <Pencil />编辑
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-destructive hover:text-destructive"
-            disabled={!retireAllowed || row.original.status === 'RETIRED'}
-            onClick={() => {
-              setRetireTarget(row.original);
-              setRetireReason(`${RESOURCE_COPY[row.original.type].retireTitle} ${row.original.displayName}`);
-              setRetireDirty(false);
-            }}
-          >
-            <Trash2 />{RESOURCE_COPY[row.original.type].retireAction}
-          </Button>
-          {row.original.type === 'DEVICE' ? (
-            <Button variant="ghost" size="sm" onClick={() => setSelectedDeviceId(row.original.id)}>
-              查看点位
+  const resourceColumns = useMemo<Array<ColumnDef<DataTableFeatures, ResourceRow>>>(() => {
+    const base: Array<ColumnDef<DataTableFeatures, ResourceRow>> = [
+      {
+        id: 'name',
+        header: '名称',
+        cell: ({ row }) => (
+          <div>
+            <strong className="block text-sm">{row.original.displayName}</strong>
+            <span className="font-mono text-xs text-muted-foreground">{row.original.code}</span>
+          </div>
+        ),
+      },
+      { id: 'subtype', header: '类型', cell: ({ row }) => row.original.subtype },
+    ];
+
+    if (filterableType && allSites) {
+      base.push({
+        id: 'site',
+        header: '所属站点',
+        cell: ({ row }) => (
+          <span className="text-xs text-muted-foreground">
+            {(row.original.siteId && siteNameById.get(row.original.siteId)) ?? row.original.siteId?.slice(0, 8) ?? '-'}
+          </span>
+        ),
+      });
+    }
+
+    if (filterableType) {
+      base.push({
+        id: 'tags',
+        header: '标签',
+        cell: ({ row }) => {
+          const entries = formatTagEntries(row.original.tags);
+          if (entries.length === 0) {
+            return <span className="text-xs text-muted-foreground">未设标签</span>;
+          }
+          return (
+            <div className="flex flex-wrap gap-1">
+              {entries.slice(0, 3).map((token) => (
+                <span key={token} className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-secondary-foreground">
+                  {token}
+                </span>
+              ))}
+              {entries.length > 3 ? (
+                <span className="text-[11px] text-muted-foreground">+{entries.length - 3}</span>
+              ) : null}
+            </div>
+          );
+        },
+      });
+    }
+
+    base.push(
+      {
+        id: 'status',
+        header: '状态',
+        cell: ({ row }) => <StatusBadge tone={statusTone(row.original.status)}>{statusLabel(row.original.status)}</StatusBadge>,
+      },
+      {
+        id: 'actions',
+        header: '操作',
+        cell: ({ row }) => (
+          <div className="flex flex-wrap gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!capabilities.has(WRITE_CAPABILITY[row.original.type]) || row.original.status === 'RETIRED'}
+              onClick={() => openEditor(editTargetFromRow(row.original))}
+            >
+              <Pencil />编辑
             </Button>
-          ) : null}
-        </div>
-      ),
-      enableSorting: false,
-      enableHiding: false,
-    },
-  ], [capabilities, openEditor, retireAllowed]);
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              disabled={!retireAllowed || row.original.status === 'RETIRED'}
+              onClick={() => {
+                setRetireTarget(row.original);
+                setRetireReason(`${RESOURCE_COPY[row.original.type].retireTitle} ${row.original.displayName}`);
+                setRetireDirty(false);
+              }}
+            >
+              <Trash2 />{RESOURCE_COPY[row.original.type].retireAction}
+            </Button>
+            {row.original.type === 'DEVICE' ? (
+              <Button variant="ghost" size="sm" onClick={() => setSelectedDeviceId(row.original.id)}>
+                查看点位
+              </Button>
+            ) : null}
+          </div>
+        ),
+        enableSorting: false,
+        enableHiding: false,
+      },
+    );
+    return base;
+  }, [allSites, capabilities, filterableType, openEditor, retireAllowed, siteNameById]);
 
   const resourceTable = useDataTable({
     key: `registry-resource-${resourceType}`,
@@ -731,20 +953,55 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
     getRowId: (row) => row.id,
   });
 
-  const presentedError = error ? presentRegistryError(error) : null;
+  const selectedDeviceRow = rows.find((item) => item.type === 'DEVICE' && item.id === selectedDeviceId);
+  const selectedDeviceLabel = selectedDeviceRow?.displayName ?? selectedDevice?.displayName ?? '设备';
+
+  const presentedError = (() => {
+    const activeErr = error ?? activeFilteredQuery?.error;
+    if (!activeErr) return null;
+    if (activeErr instanceof Error && !('problem' in activeErr)) {
+      return {
+        kind: 'invalid-request' as const,
+        title: '输入校验未通过',
+        description: activeErr.message,
+        retryable: false,
+      };
+    }
+    return presentRegistryError(activeErr);
+  })();
   const pointListError = pointsQuery.error ? presentRegistryError(pointsQuery.error) : null;
 
   const renderSpaceBranch = (parentId: string, depth = 0): React.ReactNode => {
     const children = spaceChildrenByParent.get(parentId) ?? [];
-    return children.map((space) => (
-      <div key={space.id} style={{ paddingLeft: depth * 14 }}>
-        <div className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/50">
-          <span className="min-w-0 truncate">{space.displayName}</span>
-          <span className="shrink-0 text-xs text-muted-foreground">{spaceTypeLabel(space.spaceType)}</span>
+    return children.map((space) => {
+      const selected = selectedSpaceId === space.id && !allSites;
+      return (
+        <div key={space.id} style={{ paddingLeft: depth * 14 }}>
+          <button
+            type="button"
+            disabled={allSites}
+            aria-pressed={selected}
+            onClick={() => {
+              if (allSites) return;
+              const nextSpaceId = selected ? null : space.id;
+              setSelectedSpaceId(nextSpaceId);
+              if (nextSpaceId && resourceType !== 'ASSET' && resourceType !== 'DEVICE') {
+                setResourceType('DEVICE');
+              }
+              resourceTable.setPageIndex(0);
+            }}
+            className={cn(
+              'flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50',
+              selected ? 'bg-primary-soft font-medium text-primary' : undefined,
+            )}
+          >
+            <span className="min-w-0 truncate">{space.displayName}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{spaceTypeLabel(space.spaceType)}</span>
+          </button>
+          {renderSpaceBranch(space.id, depth + 1)}
         </div>
-        {renderSpaceBranch(space.id, depth + 1)}
-      </div>
-    ));
+      );
+    });
   };
 
   return (
@@ -754,7 +1011,32 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
 
       <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
         <Card>
-          <CardHeader><CardTitle>空间层级</CardTitle><CardDescription>按站点登记关系查看空间结构。</CardDescription></CardHeader>
+          <CardHeader>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <CardTitle>空间层级</CardTitle>
+                <CardDescription>点击空间节点按递归层级筛选资产与设备。</CardDescription>
+              </div>
+              {selectedSpaceId && !allSites ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setSelectedSpaceId(null);
+                    resourceTable.setPageIndex(0);
+                  }}
+                >
+                  清除空间
+                </Button>
+              ) : null}
+            </div>
+            {selectedSpaceId && !allSites ? (
+              <p className="text-xs text-primary">
+                当前空间范围：{spaceNameById.get(selectedSpaceId) ?? selectedSpaceId}
+              </p>
+            ) : null}
+          </CardHeader>
           <CardContent>{model.spaces.length > 0 ? <div className="space-y-1">{renderSpaceBranch('__root__')}</div> : <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">当前站点还没有空间登记</div>}</CardContent>
         </Card>
 
@@ -763,45 +1045,176 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
           title={RESOURCE_COPY[resourceType].tableTitle}
           description="停用或退役的记录会保留历史关联"
           controls={(
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <Tabs
-                value={resourceType}
-                onValueChange={(val) => {
-                  if (!isOneOf(RESOURCE_TYPES, val)) return;
-                  setResourceType(val);
-                  resourceTable.setPageIndex(0);
-                }}
-              >
-                <TabsList className="h-9">
-                  {resourceTypeOptions.map((option) => (
-                    <TabsTrigger key={option.key} value={option.key}>
-                      {option.label} {option.count}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
-              <div className="flex flex-wrap gap-2">
-                <Button size="sm" disabled={!writeAllowed} onClick={() => openEditor(newEditTarget(resourceType))}><Plus />{RESOURCE_COPY[resourceType].createLabel}</Button>
-                <Button size="sm" variant="outline" disabled={!bindingAllowed} onClick={() => { setRebindOpen(true); setRebindDirty(false); }}><Link2 />调整关系</Button>
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Tabs
+                  value={resourceType}
+                  onValueChange={(val) => {
+                    if (!isOneOf(RESOURCE_TYPES, val)) return;
+                    setResourceType(val);
+                    resourceTable.setPageIndex(0);
+                  }}
+                >
+                  <TabsList className="h-9">
+                    {resourceTypeOptions.map((option) => (
+                      <TabsTrigger key={option.key} value={option.key}>
+                        {option.label} {option.count}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" disabled={!writeAllowed} onClick={() => openEditor(newEditTarget(resourceType))}><Plus />{RESOURCE_COPY[resourceType].createLabel}</Button>
+                  <Button size="sm" variant="outline" disabled={!bindingAllowed} onClick={() => { setRebindOpen(true); setRebindDirty(false); }}><Link2 />调整关系</Button>
+                </div>
               </div>
+
+              {filterableType ? (
+                <div className="flex flex-wrap items-center gap-2 border-t border-divider pt-2.5">
+                  <ToggleGroup
+                    type="single"
+                    variant="outline"
+                    size="sm"
+                    value={allSites ? 'ALL_SITES' : 'SITE'}
+                    onValueChange={(value) => {
+                      if (!isOneOf(SCOPE_OPTIONS, value)) return;
+                      const nextAll = value === 'ALL_SITES';
+                      setAllSites(nextAll);
+                      if (nextAll) setSelectedSpaceId(null);
+                      resourceTable.setPageIndex(0);
+                    }}
+                    aria-label="查询站点范围"
+                  >
+                    <ToggleGroupItem value="SITE" className="text-xs">当前站点</ToggleGroupItem>
+                    <ToggleGroupItem value="ALL_SITES" className="text-xs">全部授权站点</ToggleGroupItem>
+                  </ToggleGroup>
+
+                  <Select
+                    value={statusFilter}
+                    onValueChange={(value) => {
+                      if (!isOneOf(RESOURCE_STATUS_FILTERS, value)) return;
+                      setStatusFilter(value);
+                      resourceTable.setPageIndex(0);
+                    }}
+                  >
+                    <SelectTrigger className="h-8 w-28 text-xs" aria-label="状态筛选">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ALL">全部状态</SelectItem>
+                      <SelectItem value="ACTIVE">仅启用</SelectItem>
+                      <SelectItem value="INACTIVE">仅停用</SelectItem>
+                      <SelectItem value="RETIRED">仅已退役</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  <Select
+                    value={templateKeyFilter}
+                    onValueChange={(value) => {
+                      setTemplateKeyFilter(value);
+                      resourceTable.setPageIndex(0);
+                    }}
+                  >
+                    <SelectTrigger className="h-8 w-44 text-xs" aria-label="模板筛选">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ALL">全部模板</SelectItem>
+                      {templateKeys.map((key) => (
+                        <SelectItem key={key} value={key} className="font-mono text-xs">
+                          {key}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      aria-label="按标签筛选"
+                      placeholder="标签 key:value 或 key"
+                      value={tagInput}
+                      onChange={(event) => {
+                        setTagInput(event.currentTarget.value);
+                        if (tagFilterError) setTagFilterError(null);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          applyTagFilter();
+                          resourceTable.setPageIndex(0);
+                        }
+                      }}
+                      className="h-8 w-48 font-mono text-xs"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        applyTagFilter();
+                        resourceTable.setPageIndex(0);
+                      }}
+                    >
+                      <Search className="size-3.5" />
+                      筛选标签
+                    </Button>
+                  </div>
+
+                  {isServerFiltered || tagInput ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        resetResourceFilters();
+                        resourceTable.setPageIndex(0);
+                      }}
+                    >
+                      重置筛选
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {tagFilterError ? (
+                <p className="text-xs text-destructive-text">{tagFilterError}</p>
+              ) : null}
             </div>
           )}
         >
-          <DataTable
-            table={resourceTable}
-            tableAriaLabel={RESOURCE_COPY[resourceType].tableTitle}
-            empty={RESOURCE_COPY[resourceType].emptyLabel}
-            getHeaderCellProps={(header) => ({
-              className: header.id === 'actions' ? 'w-64' : undefined,
-            })}
-            footer={<DataTablePagination table={resourceTable} totalRows={rows.length} />}
-          />
+          {activeFilteredQuery?.isLoading ? (
+            <div className="grid min-h-24 place-items-center rounded-md border text-sm text-muted-foreground">正在按条件查询…</div>
+          ) : (
+            <DataTable
+              table={resourceTable}
+              tableAriaLabel={RESOURCE_COPY[resourceType].tableTitle}
+              empty={RESOURCE_COPY[resourceType].emptyLabel}
+              getHeaderCellProps={(header) => ({
+                className: header.id === 'actions' ? 'w-64' : undefined,
+              })}
+              footer={<DataTablePagination table={resourceTable} totalRows={rows.length} />}
+            />
+          )}
+          {activeFilteredQuery?.hasNextPage ? (
+            <div className="mt-3 flex justify-center">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void activeFilteredQuery.fetchNextPage()}
+                disabled={activeFilteredQuery.isFetchingNextPage}
+              >
+                <RefreshCw className={activeFilteredQuery.isFetchingNextPage ? 'animate-spin' : undefined} />
+                加载更多结果
+              </Button>
+            </div>
+          ) : null}
         </DataTableBlock>
       </div>
 
       {selectedDeviceId ? (
         <DataTableBlock
-          title={`${selectedDevice?.displayName ?? '设备'} · 点位`}
+          title={`${selectedDeviceLabel} · 点位`}
           actions={<Button variant="ghost" size="sm" onClick={() => setSelectedDeviceId(null)}><X />关闭</Button>}
         >
           {pointListError ? <Alert variant="destructive"><AlertTitle>{pointListError.title}</AlertTitle><AlertDescription>{pointListError.description}</AlertDescription></Alert> : null}
@@ -853,6 +1266,76 @@ export function RegistryResourceWorkbench({ site, model, capabilities, onDirtyCh
               </> : null}
               {editTarget.type === 'ASSET' ? <label className="grid gap-1.5 text-sm"><span>资产类型</span><Input value={editDraft.assetType} onChange={(event) => updateEdit('assetType', event.target.value)} /></label> : null}
               {editTarget.type === 'DEVICE' ? <label className="grid gap-1.5 text-sm"><span>设备类型</span><Input value={editDraft.deviceType} onChange={(event) => updateEdit('deviceType', event.target.value)} /></label> : null}
+              {(editTarget.type === 'ASSET' || editTarget.type === 'DEVICE') ? (
+                <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-foreground">标签（Key-Value，可选）</span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => updateEdit('tagEntries', [...editDraft.tagEntries, { key: '', value: '' }])}
+                    >
+                      <Plus data-icon="inline-start" />
+                      添加标签
+                    </Button>
+                  </div>
+                  {editDraft.tagEntries.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">暂无标签；可用于运维与登记筛选（例如 vendor:carrier）。</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {editDraft.tagEntries.map((entry, index) => (
+                        <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
+                          <Input
+                            aria-label={`标签键 ${index + 1}`}
+                            placeholder="vendor"
+                            value={entry.key}
+                            className="h-8 font-mono text-xs"
+                            onChange={(event) => {
+                              const nextVal = event.currentTarget.value;
+                              updateEdit(
+                                'tagEntries',
+                                editDraft.tagEntries.map((item, i) => (i === index ? { ...item, key: nextVal } : item)),
+                              );
+                            }}
+                          />
+                          <Input
+                            aria-label={`标签值 ${index + 1}`}
+                            placeholder="carrier"
+                            value={entry.value}
+                            className="h-8 font-mono text-xs"
+                            onChange={(event) => {
+                              const nextVal = event.currentTarget.value;
+                              updateEdit(
+                                'tagEntries',
+                                editDraft.tagEntries.map((item, i) => (i === index ? { ...item, value: nextVal } : item)),
+                              );
+                            }}
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`删除标签 ${index + 1}`}
+                            onClick={() =>
+                              updateEdit(
+                                'tagEntries',
+                                editDraft.tagEntries.filter((_, i) => i !== index),
+                              )
+                            }
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {(() => {
+                    const check = validateAndBuildTagMap(editDraft.tagEntries);
+                    return !check.ok ? <p className="text-xs text-destructive-text">{check.error}</p> : null;
+                  })()}
+                </div>
+              ) : null}
               {editTarget.type === 'POINT' ? <>
                 <label className="grid gap-1.5 text-sm"><span>上报设备</span><Select value={editDraft.reportingDeviceId || undefined} onValueChange={(value) => updateEdit('reportingDeviceId', value)}><SelectTrigger><SelectValue placeholder="选择设备" /></SelectTrigger><SelectContent><SelectGroup>{model.devices.map((device) => <SelectItem key={device.id} value={device.id}>{device.displayName} · {device.code}</SelectItem>)}</SelectGroup></SelectContent></Select></label>
                 <label className="grid gap-1.5 text-sm"><span>物理传感器（可选）</span><Select value={editDraft.sensorId || '__none__'} onValueChange={(value) => updateEdit('sensorId', value === '__none__' ? '' : value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="__none__">未绑定传感器</SelectItem>{model.sensors.map((sensor) => <SelectItem key={sensor.id} value={sensor.id}>{sensor.displayName} · {sensor.code}</SelectItem>)}</SelectGroup></SelectContent></Select></label>

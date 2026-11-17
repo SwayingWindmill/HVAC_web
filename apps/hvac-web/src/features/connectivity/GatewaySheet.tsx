@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
+import { GatewayConfigShadowSection } from './GatewayConfigShadowSection';
 import { gatewayCredentialApi, gatewayCredentialKey, gatewayCredentialListKey } from './gateway-credentials';
 
 type CredentialState = GatewayCredentialStatus['status'];
@@ -440,6 +441,8 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite }: {
           </div>
         )}
       </section>
+
+      <GatewayConfigShadowSection gateway={gateway} csrfToken={csrfToken} canWrite={canWrite} stopped={stopped} />
 
       <section aria-label="危险操作" className="flex flex-col gap-3 px-6 py-4">
         <h3 className="text-sm font-semibold">危险操作</h3>

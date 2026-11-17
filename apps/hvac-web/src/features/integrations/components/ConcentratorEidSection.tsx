@@ -6,6 +6,7 @@ import { Panel, PanelHeader } from '@/blocks/panel';
 import { DataTable, DataTablePagination, type DataTableFeatures } from '@/components/data-table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -112,6 +113,7 @@ export interface ConcentratorEidSectionProps {
   readonly onSubmitEids: (
     slots: readonly ConcentratorEidSlot[],
     reason: string,
+    stageIfOffline: boolean,
   ) => Promise<void>;
 }
 
@@ -143,6 +145,8 @@ export function ConcentratorEidSection({
   const [batchStep, setBatchStep] = useState('1');
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [reason, setReason] = useState('');
+  const [stageIfOffline, setStageIfOffline] = useState(false);
+  const stageIfOfflineId = useId();
 
   useEffect(() => {
     setDraftSlots(slots ?? []);
@@ -365,9 +369,10 @@ export function ConcentratorEidSection({
     const trimmedReason = reason.trim();
     if (!canCommit || !trimmedReason) return;
     try {
-      await onSubmitEids(draftSlots, trimmedReason);
+      await onSubmitEids(draftSlots, trimmedReason, stageIfOffline);
       setConfirmOpen(false);
       setReason('');
+      setStageIfOffline(false);
     } catch {
       // Mutation error stays displayed inside the dialog via submitError without leaking an unhandled rejection
     }
@@ -414,6 +419,7 @@ export function ConcentratorEidSection({
               disabled={!canCommit}
               onClick={() => {
                 onResetError();
+                setStageIfOffline(false);
                 setConfirmOpen(true);
               }}
             >
@@ -716,6 +722,22 @@ export function ConcentratorEidSection({
             />
           </div>
 
+          <div className="flex items-start gap-2.5 rounded-md border bg-muted/30 px-3 py-2.5">
+            <Checkbox
+              id={stageIfOfflineId}
+              checked={stageIfOffline}
+              disabled={submitting}
+              onCheckedChange={(checked) => setStageIfOffline(checked === true)}
+              className="mt-0.5"
+            />
+            <Label htmlFor={stageIfOfflineId} className="flex flex-col items-start gap-0.5 text-xs font-normal leading-relaxed">
+              <span className="font-medium text-foreground">若网关离线，暂存至配置影子（重连后自动同步）</span>
+              <span className="text-muted-foreground">
+                勾选后当网关通信通道不可达时，EID 映射变更会先写入配置影子并在网关重连后分段写入集中器 Flash。
+              </span>
+            </Label>
+          </div>
+
           {submitError ? (
             <Alert variant="destructive">
               <AlertDescription>
@@ -739,7 +761,7 @@ export function ConcentratorEidSection({
               disabled={!canCommit || reason.trim().length === 0}
               onClick={() => void handleConfirmCommit()}
             >
-              {submitting ? '正在写入 Flash…' : '确认写入 EID 到 Flash'}
+              {submitting ? '正在提交…' : stageIfOffline ? '确认写入或离线暂存' : '确认写入 EID 到 Flash'}
             </Button>
           </DialogFooter>
         </DialogContent>
