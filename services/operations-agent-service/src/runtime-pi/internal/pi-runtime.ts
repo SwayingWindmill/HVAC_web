@@ -26,26 +26,19 @@ import {
   type AgentRunUsage,
   type AgentToolExecution,
 } from '../../agent/index.js';
-import { CODEMODE_TOOL_NAME } from './pi-codemode.js';
 import {
   createPiTools,
   projectToolFailureCodeFromPiResult,
   terminalSchemaRefusal,
 } from './pi-tools.js';
-import type { PiToolExecutionMode } from './system-policy.js';
 
 type PiStreamFn = ConstructorParameters<typeof Agent>[0]['streamFn'];
 
 export interface PiAgentEngineDependencies {
   readonly model: Model<any>;
   readonly streamFn: PiStreamFn;
-  readonly systemPromptFor: (
-    runStartedAt: number,
-    site: AgentRunSite,
-    toolExecutionMode?: PiToolExecutionMode,
-  ) => string;
+  readonly systemPromptFor: (runStartedAt: number, site: AgentRunSite) => string;
   readonly thinkingLevel: ModelThinkingLevel;
-  readonly toolExecutionMode?: PiToolExecutionMode;
   readonly telemetry?: AgentRuntimeTelemetrySink;
 }
 
@@ -60,7 +53,7 @@ interface PendingToolExecution {
 const TERMINAL_REMINDER = '这次回答还没有收尾。不要重复已经写过的回答，直接调用 investigation_complete；不能回答或拒绝的问题，outcome 用 UNABLE_TO_CONCLUDE。回答里已经说过的原因不要写进 limitations，没有补充就留空。';
 
 const digestArguments = (argumentsValue: unknown): string => createHash('sha256')
-  .update(JSON.stringify(argumentsValue) ?? 'null')
+  .update(JSON.stringify(argumentsValue))
   .digest('hex');
 
 const safeRecordTelemetry = (
@@ -179,7 +172,6 @@ export const createPiAgentEngine = ({
   streamFn,
   systemPromptFor,
   thinkingLevel,
-  toolExecutionMode = 'direct',
   telemetry = NOOP_AGENT_RUNTIME_TELEMETRY,
 }: PiAgentEngineDependencies): AgentEngine => async (input) => {
   const artifacts: AgentArtifact[] = [];
@@ -203,7 +195,6 @@ export const createPiAgentEngine = ({
   let budgetFailureCode: string | null = null;
   let activeModelStartedAt: number | null = null;
   let activeModelCall = 0;
-  let runSettled = false;
   const runStartedAt = Date.now();
 
   const usage = (): AgentRunUsage => Object.freeze({
@@ -272,90 +263,6 @@ export const createPiAgentEngine = ({
     sequence += 1;
   };
 
-  const startToolExecution = (toolCallId: string, toolName: string, args: unknown): void => {
-    if (runSettled) return;
-    toolCalls += 1;
-    const pending = Object.freeze({
-      id: toolCallId,
-      toolName,
-      argumentsDigest: digestArguments(args),
-      startedAt: Date.now(),
-    });
-    pendingTools.set(toolCallId, pending);
-    safeRecordTelemetry(telemetry, {
-      type: 'tool.started',
-      sessionId: input.session.id,
-      runId: input.run.id,
-      correlationId: input.context.correlationId,
-      at: pending.startedAt,
-      toolExecutionId: toolCallId,
-      toolName,
-      activeToolCalls: pendingTools.size,
-    });
-    emit('tool.started', {
-      toolExecutionId: toolCallId,
-      toolName,
-    });
-  };
-
-  const endToolExecution = (
-    toolCallId: string,
-    _toolName: string,
-    isError: boolean,
-    result: unknown,
-  ): void => {
-    if (runSettled) return;
-    const pending = pendingTools.get(toolCallId);
-    if (pending === undefined) return;
-    pendingTools.delete(toolCallId);
-    const terminalArtifact = artifacts.find(({ id }) => id === `artifact-${toolCallId}`);
-    const provenance = terminalArtifact?.kind === 'FINDING'
-      ? terminalArtifact.finding.evidenceRefs
-      : [];
-    const finishedAt = Date.now();
-    const failureCode = isError
-      ? refusals.get(toolCallId)
-        ?? terminalSchemaRefusal(pending.toolName, result)
-        ?? projectToolFailureCodeFromPiResult(result)
-        ?? 'TOOL_EXECUTION_FAILED'
-      : null;
-    const execution = Object.freeze({
-      id: pending.id,
-      sessionId: input.session.id,
-      runId: input.run.id,
-      toolName: pending.toolName,
-      argumentsDigest: pending.argumentsDigest,
-      status: isError ? 'FAILED' : 'COMPLETED',
-      startedAt: pending.startedAt,
-      finishedAt,
-      resultSummary: isError ? null : 'Tool completed.',
-      provenance,
-      failureCode,
-    } as const satisfies AgentToolExecution);
-    toolExecutions.push(execution);
-    safeRecordTelemetry(telemetry, {
-      type: 'tool.completed',
-      sessionId: input.session.id,
-      runId: input.run.id,
-      correlationId: input.context.correlationId,
-      at: finishedAt,
-      toolExecutionId: pending.id,
-      toolName: pending.toolName,
-      status: execution.status,
-      durationMs: Math.max(0, finishedAt - pending.startedAt),
-      failureCode,
-      ownerErrorClass: ownerErrorClassFromFailureCode(failureCode),
-    });
-    emit('tool.completed', { toolExecution: execution });
-    if (terminalArtifact !== undefined && !emittedArtifactIds.has(terminalArtifact.id)) {
-      emittedArtifactIds.add(terminalArtifact.id);
-      emit('artifact.created', { artifact: terminalArtifact });
-      if (terminalArtifact.kind === 'INPUT_REQUEST') {
-        emit('input.required', { artifact: terminalArtifact });
-      }
-    }
-  };
-
   const allowedTools = input.tools.filter((tool) => (
     tool.definition.requiredCapabilities.every((capability) => (
       input.context.capabilities.includes(capability)
@@ -368,9 +275,6 @@ export const createPiAgentEngine = ({
     runSignal: input.signal,
     sessionId: input.session.id,
     runId: input.run.id,
-    toolExecutionMode,
-    onNestedToolStart: startToolExecution,
-    onNestedToolEnd: endToolExecution,
     onArtifact: (artifact) => artifacts.push(artifact),
     onBudgetExhausted: (code) => markBudgetFailure(code),
     answers: () => finalizedMessages.map(({ content }) => content),
@@ -403,7 +307,7 @@ export const createPiAgentEngine = ({
         artifacts,
       });
     }
-    systemPrompt = systemPromptFor(input.run.startedAt, site, toolExecutionMode);
+    systemPrompt = systemPromptFor(input.run.startedAt, site);
   } catch {
     const failedRun = terminalRun(input.run, 'FAILED', usage(), 'SITE_CONTEXT_UNAVAILABLE');
     emit('run.failed', { run: failedRun });
@@ -537,13 +441,80 @@ export const createPiAgentEngine = ({
         }
         break;
       case 'tool_execution_start': {
-        if (event.toolName === CODEMODE_TOOL_NAME) break;
-        startToolExecution(event.toolCallId, event.toolName, event.args);
+        toolCalls += 1;
+        const pending = Object.freeze({
+          id: event.toolCallId,
+          toolName: event.toolName,
+          argumentsDigest: digestArguments(event.args),
+          startedAt: Date.now(),
+        });
+        pendingTools.set(event.toolCallId, pending);
+        safeRecordTelemetry(telemetry, {
+          type: 'tool.started',
+          sessionId: input.session.id,
+          runId: input.run.id,
+          correlationId: input.context.correlationId,
+          at: pending.startedAt,
+          toolExecutionId: event.toolCallId,
+          toolName: event.toolName,
+          activeToolCalls: pendingTools.size,
+        });
+        emit('tool.started', {
+          toolExecutionId: event.toolCallId,
+          toolName: event.toolName,
+        });
         break;
       }
       case 'tool_execution_end': {
-        if (event.toolName === CODEMODE_TOOL_NAME) break;
-        endToolExecution(event.toolCallId, event.toolName, event.isError, event.result);
+        const pending = pendingTools.get(event.toolCallId);
+        if (pending === undefined) break;
+        pendingTools.delete(event.toolCallId);
+        const terminalArtifact = artifacts.find(({ id }) => id === `artifact-${event.toolCallId}`);
+        const provenance = terminalArtifact?.kind === 'FINDING'
+          ? terminalArtifact.finding.evidenceRefs
+          : [];
+        const finishedAt = Date.now();
+        const failureCode = event.isError
+          ? refusals.get(event.toolCallId)
+            ?? terminalSchemaRefusal(pending.toolName, event.result)
+            ?? projectToolFailureCodeFromPiResult(event.result)
+            ?? 'TOOL_EXECUTION_FAILED'
+          : null;
+        const execution = Object.freeze({
+          id: pending.id,
+          sessionId: input.session.id,
+          runId: input.run.id,
+          toolName: pending.toolName,
+          argumentsDigest: pending.argumentsDigest,
+          status: event.isError ? 'FAILED' : 'COMPLETED',
+          startedAt: pending.startedAt,
+          finishedAt,
+          resultSummary: event.isError ? null : 'Tool completed.',
+          provenance,
+          failureCode,
+        } as const satisfies AgentToolExecution);
+        toolExecutions.push(execution);
+        safeRecordTelemetry(telemetry, {
+          type: 'tool.completed',
+          sessionId: input.session.id,
+          runId: input.run.id,
+          correlationId: input.context.correlationId,
+          at: finishedAt,
+          toolExecutionId: pending.id,
+          toolName: pending.toolName,
+          status: execution.status,
+          durationMs: Math.max(0, finishedAt - pending.startedAt),
+          failureCode,
+          ownerErrorClass: ownerErrorClassFromFailureCode(failureCode),
+        });
+        emit('tool.completed', { toolExecution: execution });
+        if (terminalArtifact !== undefined && !emittedArtifactIds.has(terminalArtifact.id)) {
+          emittedArtifactIds.add(terminalArtifact.id);
+          emit('artifact.created', { artifact: terminalArtifact });
+          if (terminalArtifact.kind === 'INPUT_REQUEST') {
+            emit('input.required', { artifact: terminalArtifact });
+          }
+        }
         break;
       }
       default:
@@ -598,7 +569,6 @@ export const createPiAgentEngine = ({
       });
     }
   } finally {
-    runSettled = true;
     if (wallClockTimer !== undefined) clearTimeout(wallClockTimer);
     input.signal.removeEventListener('abort', abortAgent);
     unsubscribeAgent();

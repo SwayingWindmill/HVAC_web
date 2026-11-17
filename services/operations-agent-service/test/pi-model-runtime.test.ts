@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  AGENT_TOOL_EXECUTION_MODE_ENV,
   PiModelConfigurationError,
   createProductionPiAgentRuntimeFromEnvironment,
 } from '../dist/runtime-pi/index.js';
@@ -37,7 +36,6 @@ test('production Pi composition validates one exact DeepSeek model and exposes o
     thinkingLevel: 'high',
     timeoutMs: 12000,
     maxOutputTokens: 1024,
-    toolExecutionMode: 'direct',
   });
   assert.equal(JSON.stringify(runtime).includes(validEnvironment.DEEPSEEK_API_KEY), false);
   assert.equal('credential' in runtime, false);
@@ -97,43 +95,13 @@ test('deterministic faux-provider composition keeps the same normalized policy s
     thinkingLevel: 'off',
     timeoutMs: 9000,
     maxOutputTokens: 768,
-    toolExecutionMode: 'direct',
   });
   assert.equal(runtime.modelRef.provider, 'faux');
 });
 
-test('AGENT_TOOL_EXECUTION_MODE accepts direct and codemode and rejects unknown modes', async () => {
-  assert.equal(AGENT_TOOL_EXECUTION_MODE_ENV, 'AGENT_TOOL_EXECUTION_MODE');
-  const directExplicit = await createProductionPiAgentRuntimeFromEnvironment({
-    environment: { ...validEnvironment, AGENT_TOOL_EXECUTION_MODE: 'direct' },
-  });
-  assert.equal(directExplicit.policy.toolExecutionMode, 'direct');
-
-  const emptyMode = await createProductionPiAgentRuntimeFromEnvironment({
-    environment: { ...validEnvironment, AGENT_TOOL_EXECUTION_MODE: '   ' },
-  });
-  assert.equal(emptyMode.policy.toolExecutionMode, 'direct');
-
-  const codemodeRuntime = await createProductionPiAgentRuntimeFromEnvironment({
-    environment: { ...validEnvironment, AGENT_TOOL_EXECUTION_MODE: 'codemode' },
-  });
-  assert.equal(codemodeRuntime.policy.toolExecutionMode, 'codemode');
-
-  await expectConfigurationError(
-    { ...validEnvironment, AGENT_TOOL_EXECUTION_MODE: 'sandbox' },
-    'MODEL_TOOL_MODE_INVALID',
-  );
-});
-
-test('system policy enforces GFM table divider row in direct and codemode prompts (#669)', () => {
+test('system policy enforces GFM table divider row in prompt rules and example (#669)', () => {
   const site = { name: '松雅轩', timezone: 'Asia/Shanghai' };
-  const directPrompt = operationsInvestigationSystemPolicy(Date.parse('2026-10-16T02:30:00.000Z'), site);
-  assert.match(directPrompt, /表头下一行必须写 `\| --- \|` 分隔线/u);
-  assert.ok(directPrompt.includes('| 时段 | 10 月 8 日 kWh | 10 月 15 日 kWh |\n| --- | --- | --- |'));
-  assert.equal(directPrompt.includes('codemode'), false);
-
-  const codemodePrompt = operationsInvestigationSystemPolicy(Date.parse('2026-10-16T02:30:00.000Z'), site, 'codemode');
-  assert.match(codemodePrompt, /表头下一行必须写 `\| --- \|` 分隔线/u);
-  assert.ok(codemodePrompt.includes('| 时段 | 10 月 8 日 kWh | 10 月 15 日 kWh |\n| --- | --- | --- |'));
-  assert.match(codemodePrompt, /codemode.*Promise\.all.*evidenceId.*investigation_complete/u);
+  const prompt = operationsInvestigationSystemPolicy(Date.parse('2026-10-16T02:30:00.000Z'), site);
+  assert.match(prompt, /表头下一行必须写 `\| --- \|` 分隔线/u);
+  assert.ok(prompt.includes('| 时段 | 10 月 8 日 kWh | 10 月 15 日 kWh |\n| --- | --- | --- |'));
 });
