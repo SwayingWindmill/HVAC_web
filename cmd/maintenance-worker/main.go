@@ -51,6 +51,7 @@ func main() {
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
 	go func() {
+		defer observability.Recover(logger, telemetry.Metrics, "maintenance_worker.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("maintenance_diagnostics_failed", "error_code", "MAINTENANCE_DIAGNOSTICS_SERVE_FAILED")
 			cancel()

@@ -5,6 +5,7 @@ go 1.27.4
 require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
+	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
 	github.com/quanlaihe/hvac-web/libs/workloadtls v0.0.0
 	github.com/quanlaihe/hvac-web/libs/workordermodel v0.0.0
 )
@@ -19,6 +20,8 @@ require (
 )
 
 replace github.com/quanlaihe/hvac-web/libs/identitycontext => ../../libs/identitycontext
+
+replace github.com/quanlaihe/hvac-web/libs/observability => ../../libs/observability
 
 replace github.com/quanlaihe/hvac-web/libs/workloadtls => ../../libs/workloadtls
 

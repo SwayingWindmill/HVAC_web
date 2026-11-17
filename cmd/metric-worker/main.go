@@ -87,6 +87,7 @@ func main() {
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
 	go func() {
+		defer observability.Recover(logger, telemetry.Metrics, "metric_worker.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("metric_diagnostics_failed", "error_code", "METRIC_DIAGNOSTICS_SERVE_FAILED")
 			cancel()
@@ -209,6 +210,7 @@ func claimAndRun(ctx context.Context, runtime *runtime, workerID string, claimBa
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
+			defer observability.Recover(logger, runtimeMetrics(telemetry), "metric_worker.job")
 			if job.JobType == "METRIC_BACKFILL" {
 				select {
 				case backfillSemaphore <- struct{}{}:
@@ -252,6 +254,7 @@ func executeMetricJob(ctx context.Context, runtime *runtime, job metric.Schedule
 	cancelRequested := make(chan struct{}, 1)
 	go func() {
 		defer close(leaseDone)
+		defer observability.Recover(logger, runtimeMetrics(telemetry), "metric_worker.lease_renewer")
 		ticker := time.NewTicker(leaseRenew)
 		defer ticker.Stop()
 		for {
@@ -445,6 +448,13 @@ func executeMetricBusiness(ctx context.Context, runtime *runtime, job metric.Sch
 		"periodStart": period.Start,
 		"periodEnd":   period.End,
 	}, "", false, nil
+}
+
+func runtimeMetrics(telemetry *observability.Runtime) *observability.Registry {
+	if telemetry == nil {
+		return nil
+	}
+	return telemetry.Metrics
 }
 
 func recordMetricWorkerResult(telemetry *observability.Runtime, result string) {

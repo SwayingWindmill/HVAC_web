@@ -67,6 +67,7 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
+		defer observability.Recover(logger, observabilityRuntime.Metrics, "telemetry_history_projector.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("telemetry_history_diagnostics_stopped_unexpectedly", "error_code", "TELEMETRY_HISTORY_DIAGNOSTICS_SERVE_FAILED")
 		}

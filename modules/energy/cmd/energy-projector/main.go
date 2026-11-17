@@ -104,6 +104,7 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
+		defer observability.Recover(logger, telemetry.Metrics, "energy_projector.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("analytics_projector_diagnostics_failed", "error_code", "ANALYTICS_PROJECTOR_DIAGNOSTICS_SERVE_FAILED")
 		}
@@ -113,15 +114,11 @@ func main() {
 	defer cancel()
 	logger.Info("analytics_read_model_projector_started", "poll_interval", pollInterval.String())
 	go func() {
+		defer observability.Recover(logger, telemetry.Metrics, "energy_projector.submeter_sync_loop")
 		submeterTicker := time.NewTicker(durationEnv("ANALYTICS_TOTAL_SUBMETER_INTERVAL", 5*time.Minute, 10*time.Second, time.Hour))
 		defer submeterTicker.Stop()
 		for {
-			syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
-			if syncErr := totalSubmeters.SyncOnce(syncCtx); syncErr != nil {
-				_ = telemetry.Metrics.AddCounter("hvac_analytics_projection_failures_total", "Failed analytics read-model projection batches.", map[string]string{"model": "site_total_submeters"}, 1)
-				logger.Warn("analytics_total_submeter_projection_failed", "error_code", "ANALYTICS_TOTAL_SUBMETER_PROJECTION_FAILED")
-			}
-			syncCancel()
+			syncSubmetersOnce(ctx, totalSubmeters, telemetry, logger)
 			select {
 			case <-ctx.Done():
 				return
@@ -169,6 +166,16 @@ func main() {
 				logger.Info("analytics_energy_intervals_projected", "interval_count", projected)
 			}
 		}
+	}
+}
+
+func syncSubmetersOnce(ctx context.Context, totalSubmeters *analyticsprojector.TotalSubmeterProjector, telemetry *observability.Runtime, logger *slog.Logger) {
+	defer observability.Recover(logger, telemetry.Metrics, "energy_projector.submeter_sync")
+	syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer syncCancel()
+	if syncErr := totalSubmeters.SyncOnce(syncCtx); syncErr != nil {
+		_ = telemetry.Metrics.AddCounter("hvac_analytics_projection_failures_total", "Failed analytics read-model projection batches.", map[string]string{"model": "site_total_submeters"}, 1)
+		logger.Warn("analytics_total_submeter_projection_failed", "error_code", "ANALYTICS_TOTAL_SUBMETER_PROJECTION_FAILED")
 	}
 }
 

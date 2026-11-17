@@ -84,6 +84,7 @@ func main() {
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
 	go func() {
+		defer observability.Recover(logger, telemetry.Metrics, "alarm_owner.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("alarm_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
 		}
@@ -94,6 +95,7 @@ func main() {
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
+		defer observability.Recover(logger, telemetry.Metrics, "alarm_owner.shutdown")
 		<-shutdown
 		stopScheduled()
 		telemetry.MarkNotReady()
