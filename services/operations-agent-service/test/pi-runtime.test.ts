@@ -2,9 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createModels,
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxText,
+  fauxToolCall,
+} from '@earendil-works/pi-ai';
+
+import {
+  AgentToolError,
   INVESTIGATION_COMPLETE_TOOL_NAME,
   HVAC_AGENT_EVENT_VERSION,
 } from '../dist/agent/index.js';
+import { composePiAgentRuntime } from '../dist/runtime-pi/internal/model-runtime.js';
 import { createScriptedPiAgentEngine } from '../dist/runtime-pi/testing.js';
 
 const baseSession = Object.freeze({
@@ -326,4 +336,311 @@ test('a later Run reconstructs Pi context from committed finalized project Messa
     { role: 'assistant', text: previousAssistant.content },
     { role: 'user', text: currentOperator.content },
   ]);
+});
+
+const runCodemodeEngine = async ({
+  responses,
+  tools,
+  budget = baseBudget,
+  telemetry,
+  controller = new AbortController(),
+  onEvent,
+}) => {
+  const faux = fauxProvider();
+  faux.setResponses(responses.map((response) => fauxAssistantMessage(
+    response.parts.map((part) => (
+      part.type === 'text'
+        ? fauxText(part.text)
+        : fauxToolCall(part.name, part.arguments, part.id === undefined ? {} : { id: part.id })
+    )),
+    { stopReason: response.stopReason },
+  )));
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const requests = [];
+  const observedModels = new Proxy(models, {
+    get(target, property, receiver) {
+      if (property === 'streamSimple') {
+        return (requestModel, context, options) => {
+          requests.push(context.messages.map((message) => ({
+            role: message.role,
+            text: typeof message.content === 'string'
+              ? message.content
+              : message.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n'),
+          })));
+          return models.streamSimple(requestModel, context, options);
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const runtime = composePiAgentRuntime({
+    models: observedModels,
+    model: faux.getModel(),
+    thinkingLevel: 'off',
+    timeoutMs: 30_000,
+    maxOutputTokens: 2_048,
+    toolExecutionMode: 'codemode',
+    ...(telemetry === undefined ? {} : { telemetry }),
+  });
+  const events = [];
+  const result = await runtime.engine({
+    session: baseSession,
+    run: createRun(runtime.modelRef),
+    messages: [operatorMessage],
+    tools,
+    context: baseContext,
+    site: async () => ({ name: '松雅轩', timezone: 'Asia/Shanghai' }),
+    budget,
+    signal: controller.signal,
+    emit: (event) => {
+      events.push(event);
+      onEvent?.(event, controller);
+    },
+  });
+  return { events, result, requests };
+};
+
+test('codemode executes Promise.all nested HVAC tools, emits real tool events, preserves evidenceRefs and chart, and suppresses process talk', async () => {
+  const telemetryEvents = [];
+  const hourlyChart = Object.freeze({
+    kind: 'LINE',
+    title: '10月15日用电',
+    unit: 'kWh',
+    categories: ['08:00', '09:00'],
+    series: [{ name: '用电', values: [120, 140] }],
+  });
+  const energyTool = Object.freeze({
+    definition: Object.freeze({
+      name: 'energy_query_series',
+      description: 'Read energy series.',
+      inputSchema: Object.freeze({
+        type: 'object',
+        properties: Object.freeze({ startDate: Object.freeze({ type: 'string' }) }),
+        required: Object.freeze(['startDate']),
+        additionalProperties: false,
+      }),
+      executionMode: 'parallel',
+      replayPolicy: 'safe',
+      requiredCapabilities: Object.freeze(['site.read']),
+    }),
+    execute: async () => ({
+      totalKWh: 1634,
+      rawIntermediateDetail: 'should-not-leak-back-to-conversation',
+    }),
+    chart: () => hourlyChart,
+  });
+  const alarmTool = Object.freeze({
+    definition: Object.freeze({
+      name: 'alarm_list',
+      description: 'List active alarms.',
+      inputSchema: Object.freeze({
+        type: 'object',
+        properties: Object.freeze({}),
+        additionalProperties: false,
+      }),
+      executionMode: 'parallel',
+      replayPolicy: 'safe',
+      requiredCapabilities: Object.freeze(['site.read']),
+    }),
+    execute: async () => ({ alarms: [{ title: '1 号冷机回水温度高' }] }),
+  });
+
+  const finalAnswer = '**10 月 15 日用电 1634 kWh，目前有 1 条告警。**';
+  const { events, result, requests } = await runCodemodeEngine({
+    telemetry: { record: (event) => telemetryEvents.push(event) },
+    tools: [energyTool, alarmTool],
+    responses: [
+      {
+        parts: [
+          { type: 'text', text: '先通过 codemode 查一下用电和告警。' },
+          {
+            type: 'tool-call',
+            id: 'cm-call-1',
+            name: 'codemode',
+            arguments: {
+              code: [
+                'const [energy, alarms] = await Promise.all([',
+                '  tools.energy_query_series({ startDate: "2026-10-15" }),',
+                '  tools.alarm_list({}),',
+                ']);',
+                'return {',
+                '  energyId: energy.evidenceId,',
+                '  alarmId: alarms.evidenceId,',
+                '  totalKWh: energy.result.totalKWh,',
+                '  alarmCount: alarms.result.alarms.length,',
+                '};',
+              ].join('\n'),
+            },
+          },
+        ],
+        stopReason: 'toolUse',
+      },
+      {
+        parts: [
+          { type: 'text', text: finalAnswer },
+          {
+            type: 'tool-call',
+            id: 'complete-1',
+            name: INVESTIGATION_COMPLETE_TOOL_NAME,
+            arguments: {
+              outcome: 'SUPPORTED_FINDING',
+              evidenceRefs: [
+                { owner: 'ENERGY', resourceType: 'energy-series', resourceId: 'day-2026-10-15', toolExecutionId: 'E1' },
+                { owner: 'ALARM', resourceType: 'alarm-list', resourceId: 'active', toolExecutionId: 'E2' },
+              ],
+              keyFigures: [{ label: '10月15日用电', value: '1634', unit: 'kWh' }],
+              limitations: [],
+              recommendedNext: ['查看 1 号冷机告警详情。'],
+              chartFrom: 'E1',
+            },
+          },
+        ],
+        stopReason: 'toolUse',
+      },
+    ],
+  });
+
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.match(requests[0][0].text, /codemode/u);
+
+  const codemodeToolResult = requests[1].find((message) => message.role === 'toolResult');
+  assert.ok(codemodeToolResult);
+  assert.deepEqual(JSON.parse(codemodeToolResult.text), {
+    energyId: 'E1',
+    alarmId: 'E2',
+    totalKWh: 1634,
+    alarmCount: 1,
+  });
+  assert.equal(codemodeToolResult.text.includes('should-not-leak-back-to-conversation'), false);
+
+  assert.deepEqual(
+    result.toolExecutions.map(({ toolName, status }) => [toolName, status]),
+    [
+      ['energy_query_series', 'COMPLETED'],
+      ['alarm_list', 'COMPLETED'],
+      [INVESTIGATION_COMPLETE_TOOL_NAME, 'COMPLETED'],
+    ],
+  );
+  assert.equal(result.toolExecutions.some(({ toolName }) => toolName === 'codemode'), false);
+  assert.equal(result.usage.toolCalls, 3);
+
+  const startedTools = events
+    .filter((event) => event.type === 'tool.started')
+    .map((event) => event.payload.toolName);
+  const completedTools = events
+    .filter((event) => event.type === 'tool.completed')
+    .map((event) => event.payload.toolExecution.toolName);
+  assert.deepEqual(startedTools, ['energy_query_series', 'alarm_list', INVESTIGATION_COMPLETE_TOOL_NAME]);
+  assert.deepEqual(completedTools, ['energy_query_series', 'alarm_list', INVESTIGATION_COMPLETE_TOOL_NAME]);
+  assert.equal(telemetryEvents.some((event) => 'toolName' in event && event.toolName === 'codemode'), false);
+
+  const energyExec = result.toolExecutions.find(({ toolName }) => toolName === 'energy_query_series');
+  const alarmExec = result.toolExecutions.find(({ toolName }) => toolName === 'alarm_list');
+  assert.equal(result.artifacts[0].kind, 'FINDING');
+  assert.deepEqual(
+    result.artifacts[0].finding.evidenceRefs.map(({ toolExecutionId }) => toolExecutionId),
+    [energyExec.id, alarmExec.id],
+  );
+  assert.deepEqual(result.artifacts[0].finding.chart, hourlyChart);
+  assert.deepEqual(result.finalizedMessages.map(({ content }) => content), [finalAnswer]);
+});
+
+test('codemode QuickJS syntax or runtime errors feed back cleanly so pi retries and completes without recording a fake codemode execution', async () => {
+  const { result, requests } = await runCodemodeEngine({
+    tools: [siteContextTool(async () => ({ site: '松雅轩' }))],
+    responses: [
+      {
+        parts: [{ type: 'tool-call', id: 'cm-syntax', name: 'codemode', arguments: { code: 'const broken = ;' } }],
+        stopReason: 'toolUse',
+      },
+      {
+        parts: [{
+          type: 'tool-call',
+          id: 'cm-valid',
+          name: 'codemode',
+          arguments: { code: 'const site = await tools.site_get_context({}); return { id: site.evidenceId };' },
+        }],
+        stopReason: 'toolUse',
+      },
+      {
+        parts: [{
+          type: 'tool-call',
+          id: 'complete-retry',
+          name: INVESTIGATION_COMPLETE_TOOL_NAME,
+          arguments: completion,
+        }],
+        stopReason: 'toolUse',
+      },
+    ],
+  });
+
+  assert.equal(result.runStatus, 'COMPLETED');
+  assert.match(requests[1].find((message) => message.role === 'toolResult')?.text ?? '', /SyntaxError/u);
+  assert.deepEqual(
+    result.toolExecutions.map(({ toolName, status }) => [toolName, status]),
+    [
+      ['site_get_context', 'COMPLETED'],
+      [INVESTIGATION_COMPLETE_TOOL_NAME, 'COMPLETED'],
+    ],
+  );
+});
+
+test('codemode surfaces nested tool errors and recovers on retry while keeping failed nested execution recorded', async () => {
+  let attempt = 0;
+  const flakyTool = siteContextTool(async () => {
+    attempt += 1;
+    if (attempt === 1) throw new AgentToolError('TOOL_OWNER_UNAVAILABLE', 'internal host secret');
+    return { ok: true };
+  });
+
+  const { result, requests } = await runCodemodeEngine({
+    tools: [flakyTool],
+    responses: [
+      {
+        parts: [{
+          type: 'tool-call',
+          id: 'cm-fail',
+          name: 'codemode',
+          arguments: { code: 'return await tools.site_get_context({});' },
+        }],
+        stopReason: 'toolUse',
+      },
+      {
+        parts: [{
+          type: 'tool-call',
+          id: 'cm-recover',
+          name: 'codemode',
+          arguments: { code: 'return await tools.site_get_context({});' },
+        }],
+        stopReason: 'toolUse',
+      },
+      {
+        parts: [{
+          type: 'tool-call',
+          id: 'complete-recovered',
+          name: INVESTIGATION_COMPLETE_TOOL_NAME,
+          arguments: {
+            ...completion,
+            evidenceRefs: [{ owner: 'REGISTRY', resourceType: 'site', resourceId: 'site-1', toolExecutionId: 'E2' }],
+          },
+        }],
+        stopReason: 'toolUse',
+      },
+    ],
+  });
+
+  assert.equal(result.runStatus, 'COMPLETED');
+  const firstToolResult = requests[1].find((message) => message.role === 'toolResult')?.text ?? '';
+  assert.match(firstToolResult, /TOOL_OWNER_UNAVAILABLE/u);
+  assert.equal(firstToolResult.includes('internal host secret'), false);
+  assert.deepEqual(
+    result.toolExecutions.map(({ toolName, status, failureCode }) => [toolName, status, failureCode]),
+    [
+      ['site_get_context', 'FAILED', 'TOOL_OWNER_UNAVAILABLE'],
+      ['site_get_context', 'COMPLETED', null],
+      [INVESTIGATION_COMPLETE_TOOL_NAME, 'COMPLETED', null],
+    ],
+  );
 });

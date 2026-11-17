@@ -14,7 +14,12 @@ import type {
   AgentRuntimeTelemetrySink,
 } from '../../agent/index.js';
 import { createPiAgentEngine } from './pi-runtime.js';
-import { operationsInvestigationSystemPolicy } from './system-policy.js';
+import {
+  operationsInvestigationSystemPolicy,
+  type PiToolExecutionMode,
+} from './system-policy.js';
+
+export type { PiToolExecutionMode };
 
 export const AGENT_MODEL_PROVIDER_ENV = 'AGENT_MODEL_PROVIDER' as const;
 export const AGENT_MODEL_ID_ENV = 'AGENT_MODEL_ID' as const;
@@ -22,10 +27,12 @@ export const AGENT_MODEL_ALLOWLIST_ENV = 'AGENT_MODEL_ALLOWLIST' as const;
 export const AGENT_MODEL_THINKING_LEVEL_ENV = 'AGENT_MODEL_THINKING_LEVEL' as const;
 export const AGENT_MODEL_TIMEOUT_MS_ENV = 'AGENT_MODEL_TIMEOUT_MS' as const;
 export const AGENT_MODEL_MAX_OUTPUT_TOKENS_ENV = ['AGENT_MODEL_MAX_OUTPUT', 'TOKENS'].join('_');
+export const AGENT_TOOL_EXECUTION_MODE_ENV = 'AGENT_TOOL_EXECUTION_MODE' as const;
 
 const PRODUCTION_PROVIDER_ID = 'deepseek' as const;
 const PRODUCTION_ACCESS_ENV = ['DEEPSEEK', 'API', 'KEY'].join('_');
 const DEFAULT_THINKING_LEVEL: ModelThinkingLevel = 'off';
+const DEFAULT_TOOL_EXECUTION_MODE: PiToolExecutionMode = 'direct';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 2_048;
 const MIN_TIMEOUT_MS = 100;
@@ -43,6 +50,7 @@ export type PiModelConfigurationErrorCode =
   | 'MODEL_THINKING_UNSUPPORTED'
   | 'MODEL_TIMEOUT_INVALID'
   | 'MODEL_OUTPUT_LIMIT_INVALID'
+  | 'MODEL_TOOL_MODE_INVALID'
   | 'MODEL_PROVIDER_UNAVAILABLE';
 
 export class PiModelConfigurationError extends Error {
@@ -70,6 +78,7 @@ export interface PiAgentModelPolicy {
   readonly thinkingLevel: AgentModelThinkingLevel;
   readonly timeoutMs: number;
   readonly maxOutputTokens: number;
+  readonly toolExecutionMode: PiToolExecutionMode;
 }
 
 export interface PiAgentRuntime {
@@ -89,6 +98,7 @@ interface ParsedModelConfiguration {
   readonly thinkingLevel: ModelThinkingLevel;
   readonly timeoutMs: number;
   readonly maxOutputTokens: number;
+  readonly toolExecutionMode: PiToolExecutionMode;
 }
 
 interface ComposePiAgentRuntimeOptions {
@@ -97,6 +107,7 @@ interface ComposePiAgentRuntimeOptions {
   readonly thinkingLevel: ModelThinkingLevel;
   readonly timeoutMs: number;
   readonly maxOutputTokens: number;
+  readonly toolExecutionMode?: PiToolExecutionMode;
   readonly telemetry?: AgentRuntimeTelemetrySink;
 }
 
@@ -150,6 +161,16 @@ const parseThinkingLevel = (value: string | undefined): ModelThinkingLevel => {
   return normalized as ModelThinkingLevel;
 };
 
+const parseToolExecutionMode = (value: string | undefined): PiToolExecutionMode => {
+  if (value === undefined || value.trim() === '') return DEFAULT_TOOL_EXECUTION_MODE;
+  const normalized = value.trim();
+  if (normalized === 'direct' || normalized === 'codemode') return normalized;
+  throw new PiModelConfigurationError(
+    'MODEL_TOOL_MODE_INVALID',
+    `${AGENT_TOOL_EXECUTION_MODE_ENV} must be direct or codemode.`,
+  );
+};
+
 const parseConfiguration = (environment: PiModelEnvironment): ParsedModelConfiguration => {
   const provider = required(environment, AGENT_MODEL_PROVIDER_ENV, 'MODEL_PROVIDER_REQUIRED');
   if (provider !== PRODUCTION_PROVIDER_ID) {
@@ -198,6 +219,7 @@ const parseConfiguration = (environment: PiModelEnvironment): ParsedModelConfigu
       'MODEL_OUTPUT_LIMIT_INVALID',
       AGENT_MODEL_MAX_OUTPUT_TOKENS_ENV,
     ),
+    toolExecutionMode: parseToolExecutionMode(environment[AGENT_TOOL_EXECUTION_MODE_ENV]),
   });
 };
 
@@ -238,10 +260,17 @@ export const composePiAgentRuntime = ({
   thinkingLevel,
   timeoutMs,
   maxOutputTokens,
+  toolExecutionMode = DEFAULT_TOOL_EXECUTION_MODE,
   telemetry,
 }: ComposePiAgentRuntimeOptions): PiAgentRuntime => {
   const modelRef = Object.freeze({ provider: model.provider, model: model.id });
-  const policy = Object.freeze({ modelRef, thinkingLevel, timeoutMs, maxOutputTokens });
+  const policy = Object.freeze({
+    modelRef,
+    thinkingLevel,
+    timeoutMs,
+    maxOutputTokens,
+    toolExecutionMode,
+  });
 
   return Object.freeze({
     engine: createPiAgentEngine({
@@ -249,6 +278,7 @@ export const composePiAgentRuntime = ({
       streamFn: createPolicyStreamFn(models, policy),
       systemPromptFor: operationsInvestigationSystemPolicy,
       thinkingLevel,
+      toolExecutionMode,
       ...(telemetry === undefined ? {} : { telemetry }),
     }),
     modelRef,
@@ -290,13 +320,14 @@ export const createProductionPiAgentRuntimeFromEnvironment = async ({
       'Configured production model is unavailable to the server runtime.',
     );
   }
-  const { thinkingLevel, timeoutMs, maxOutputTokens } = configuration;
+  const { thinkingLevel, timeoutMs, maxOutputTokens, toolExecutionMode } = configuration;
   return composePiAgentRuntime({
     models,
     model,
     thinkingLevel,
     timeoutMs,
     maxOutputTokens,
+    toolExecutionMode,
     ...(telemetry === undefined ? {} : { telemetry }),
   });
 };

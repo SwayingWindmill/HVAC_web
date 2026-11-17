@@ -16,6 +16,8 @@ import {
   type AgentToolErrorCode,
   type FindingChart,
 } from '../../agent/index.js';
+import { createCodemodeTool } from './pi-codemode.js';
+import type { PiToolExecutionMode } from './system-policy.js';
 
 interface CreatePiToolsInput {
   readonly tools: readonly AgentTool[];
@@ -24,6 +26,9 @@ interface CreatePiToolsInput {
   readonly runSignal: AbortSignal;
   readonly sessionId: string;
   readonly runId: string;
+  readonly toolExecutionMode?: PiToolExecutionMode;
+  readonly onNestedToolStart?: (toolCallId: string, toolName: string, args: unknown) => void;
+  readonly onNestedToolEnd?: (toolCallId: string, toolName: string, isError: boolean, result: unknown) => void;
   readonly onArtifact: (artifact: AgentArtifact) => void;
   readonly onBudgetExhausted: (code: AgentToolErrorCode) => void;
   /** The answer text this Run has shown the operator so far, one entry per message. */
@@ -86,7 +91,7 @@ export const terminalSchemaRefusal = (toolName: string, result: unknown): Termin
   return `FINDING_${field}_${how}` as TerminalRefusalReason;
 };
 
-const toolFailurePrefix = 'HVAC_AGENT_TOOL_ERROR:';
+export const toolFailurePrefix = 'HVAC_AGENT_TOOL_ERROR:';
 const toolFailureCodes = new Set<AgentToolErrorCode>([
   'TOOL_ARGUMENTS_INVALID',
   'TOOL_UNAUTHORIZED',
@@ -109,11 +114,12 @@ interface ReadEvidence {
   readonly chart: () => FindingChart | null;
 }
 
-interface ProjectToolBudgetState {
+export interface ProjectToolBudgetState {
   readonly budget: AgentRunBudget;
   /** Each successful read by the short id the model cites in a card ("E1"). */
   readonly reads: Map<string, ReadEvidence>;
   readonly onBudgetExhausted: (code: AgentToolErrorCode) => void;
+  budgetFailureCode: AgentToolErrorCode | null;
   terminalToolCallId: string | null;
   calls: number;
   active: number;
@@ -122,7 +128,7 @@ interface ProjectToolBudgetState {
 }
 
 // Only the code, and the Tool's own hint when it wrote one, reach the model.
-const safeToolFailure = (error: unknown): Error => {
+export const safeToolFailure = (error: unknown): Error => {
   const code = error instanceof AgentToolError ? error.code : 'TOOL_EXECUTION_FAILED';
   const hint = error instanceof AgentToolError ? error.hint : undefined;
   return new Error(`${toolFailurePrefix}${code}${hint === undefined ? '' : `\n${hint}`}`);
@@ -213,6 +219,68 @@ const investigationRequestInputParameters = Type.Object({
   ]),
 }, { additionalProperties: false });
 
+export interface ExecuteProjectToolCallInput {
+  readonly tool: AgentTool;
+  readonly toolCallId: string;
+  readonly parameters: unknown;
+  readonly signal: AbortSignal | undefined;
+  readonly context: AgentRunContext;
+  readonly runSignal: AbortSignal;
+  readonly state: ProjectToolBudgetState;
+}
+
+export interface ProjectToolCallResult {
+  readonly evidenceId: string;
+  readonly result: unknown;
+}
+
+const recordBudgetFailure = (state: ProjectToolBudgetState, code: AgentToolErrorCode): void => {
+  if (state.budgetFailureCode === null) state.budgetFailureCode = code;
+  state.onBudgetExhausted(code);
+};
+
+export const executeProjectToolCall = async ({
+  tool,
+  toolCallId,
+  parameters,
+  signal,
+  context,
+  runSignal,
+  state,
+}: ExecuteProjectToolCallInput): Promise<ProjectToolCallResult> => {
+  state.calls += 1;
+  // Numbered in call order, so reads started together get their ids in the order they were asked.
+  const evidenceId = `E${state.calls}`;
+  if (state.calls > state.budget.maxToolCalls) {
+    recordBudgetFailure(state, 'TOOL_CALL_LIMIT');
+    throw safeToolFailure(new AgentToolError('TOOL_CALL_LIMIT'));
+  }
+  // A batch wider than the limit waits for slots rather than failing the Run.
+  if (state.active >= state.budget.maxParallelToolCalls) {
+    await new Promise<void>((resolve) => state.waiting.push(resolve));
+  }
+  state.active += 1;
+  try {
+    const result = await tool.execute({
+      context,
+      arguments: parameters,
+      signal: signal ?? runSignal,
+    });
+    const serialized = JSON.stringify(result) ?? '';
+    if (Buffer.byteLength(serialized, 'utf8') > state.budget.maxToolResultBytes) {
+      recordBudgetFailure(state, 'TOOL_RESULT_TOO_LARGE');
+      throw new AgentToolError('TOOL_RESULT_TOO_LARGE');
+    }
+    state.reads.set(evidenceId, { toolCallId, chart: () => tool.chart?.(result) ?? null });
+    return { evidenceId, result };
+  } catch (error) {
+    throw safeToolFailure(error);
+  } finally {
+    state.active -= 1;
+    state.waiting.shift()?.();
+  }
+};
+
 const adaptProjectTool = (
   tool: AgentTool,
   context: AgentRunContext,
@@ -225,41 +293,20 @@ const adaptProjectTool = (
   parameters: tool.definition.inputSchema as TSchema,
   executionMode: tool.definition.executionMode,
   execute: async (toolCallId, parameters, signal) => {
-    state.calls += 1;
-    // Numbered in call order, so reads started together get their ids in the order they were asked.
-    const evidenceId = `E${state.calls}`;
-    if (state.calls > state.budget.maxToolCalls) {
-      state.onBudgetExhausted('TOOL_CALL_LIMIT');
-      throw safeToolFailure(new AgentToolError('TOOL_CALL_LIMIT'));
-    }
-    // A batch wider than the limit waits for slots rather than failing the Run.
-    if (state.active >= state.budget.maxParallelToolCalls) {
-      await new Promise<void>((resolve) => state.waiting.push(resolve));
-    }
-    state.active += 1;
-    try {
-      const result = await tool.execute({
-        context,
-        arguments: parameters,
-        signal: signal ?? runSignal,
-      });
-      const serialized = JSON.stringify(result);
-      if (Buffer.byteLength(serialized, 'utf8') > state.budget.maxToolResultBytes) {
-        state.onBudgetExhausted('TOOL_RESULT_TOO_LARGE');
-        throw new AgentToolError('TOOL_RESULT_TOO_LARGE');
-      }
-      state.reads.set(evidenceId, { toolCallId, chart: () => tool.chart?.(result) ?? null });
-      // The model cites a read in investigation_complete by this id.
-      return {
-        content: [{ type: 'text', text: JSON.stringify({ evidenceId, result }) }],
-        details: { kind: 'project-tool', result },
-      };
-    } catch (error) {
-      throw safeToolFailure(error);
-    } finally {
-      state.active -= 1;
-      state.waiting.shift()?.();
-    }
+    const { evidenceId, result } = await executeProjectToolCall({
+      tool,
+      toolCallId,
+      parameters,
+      signal,
+      context,
+      runSignal,
+      state,
+    });
+    // The model cites a read in investigation_complete by this id.
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ evidenceId, result }) }],
+      details: { kind: 'project-tool', result },
+    };
   },
 });
 
@@ -432,13 +479,28 @@ export const createPiTools = (input: CreatePiToolsInput): PiAgentTool[] => {
     budget: input.budget,
     reads: new Map<string, ReadEvidence>(),
     onBudgetExhausted: input.onBudgetExhausted,
+    budgetFailureCode: null,
     terminalToolCallId: null,
     calls: 0,
     active: 0,
     waiting: [],
   };
+  const mode = input.toolExecutionMode ?? 'direct';
+  const readTools = mode === 'codemode'
+    ? [
+        createCodemodeTool({
+          tools: input.tools,
+          context: input.context,
+          runSignal: input.runSignal,
+          state,
+          onNestedToolStart: input.onNestedToolStart ?? (() => undefined),
+          onNestedToolEnd: input.onNestedToolEnd ?? (() => undefined),
+        }),
+      ]
+    : input.tools.map((tool) => adaptProjectTool(tool, input.context, input.runSignal, state));
+
   return [
-    ...input.tools.map((tool) => adaptProjectTool(tool, input.context, input.runSignal, state)),
+    ...readTools,
     createInvestigationCompleteTool(input, state),
     createInvestigationRequestInputTool(input, state),
   ];

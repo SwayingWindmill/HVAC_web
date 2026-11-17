@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import type { AgentSessionSnapshot } from '../src/agent/index.ts';
-import { gradeTrial } from '../evals/grade.ts';
+import { findUnformattedPipeTables, gradeTrial } from '../evals/grade.ts';
 import { questions, type EvalQuestion } from '../evals/questions.ts';
 
 // Real Sessions answered on 松雅轩 on 2026-10-17, and the Energy Series the 能耗分析 page read for
@@ -237,4 +237,55 @@ test('the bold conclusion stands on its own line and is the only bold text, beca
   // The operator reads the answer first; a correction the platform asked for comes after it.
   const corrected = { ...snapshot, messages: [...snapshot.messages.slice(0, -1), { ...snapshot.messages.at(-1)!, content: '**昨天能效最低的是 7 点，3.52。**\n16 点是 3.75。' }, { ...snapshot.messages.at(-1)!, id: 'correction', content: '更正：我没有操作设备。' }] };
   assert.equal(check(gradeTrial(question('least-efficient-hours'), corrected, series), 'leads-with-conclusion').passed, true);
+});
+
+test('pipe tables without a GFM divider row fail markdown-table (#669), while valid tables and code fences pass', () => {
+  const snapshot = answerOnly(fixture('daily-electricity-cooling-cop'));
+  const tableCheck = (answer: string) => check(
+    gradeTrial(question('daily-electricity-cooling-cop'), withAnswer(snapshot, () => answer), series),
+    'markdown-table',
+  );
+
+  const brokenSongyaxuan = [
+    '**10 月 15 日比 10 月 8 日多用电 262 kWh，多出的电集中在 14–18 点。**',
+    '',
+    '| 时段 | 10 月 8 日 kWh | 10 月 15 日 kWh |',
+    '| 14–16 点 | 210 | 305 |',
+    '| 16–18 点 | 198 | 290 |',
+  ].join('\n');
+  const failed = tableCheck(brokenSongyaxuan);
+  assert.equal(failed.passed, false);
+  assert.match(failed.reason ?? '', /divider/u);
+
+  const fixedSongyaxuan = [
+    '**10 月 15 日比 10 月 8 日多用电 262 kWh，多出的电集中在 14–18 点。**',
+    '',
+    '| 时段 | 10 月 8 日 kWh | 10 月 15 日 kWh |',
+    '| --- | --- | --- |',
+    '| 14–16 点 | 210 | 305 |',
+    '| 16–18 点 | 198 | 290 |',
+  ].join('\n');
+  assert.equal(tableCheck(fixedSongyaxuan).passed, true);
+
+  const insideCodeFence = [
+    '**示例表格放在代码块里时不算漏写分隔线。**',
+    '',
+    '```markdown',
+    '| a | b |',
+    '| 1 | 2 |',
+    '```',
+    '',
+    '~~~',
+    '| x | y |',
+    '| 3 | 4 |',
+    '~~~',
+  ].join('\n');
+  assert.equal(tableCheck(insideCodeFence).passed, true);
+  assert.equal(tableCheck('**昨天用电 1500 kWh。**').passed, true);
+
+  assert.equal(findUnformattedPipeTables('| a | b |\n| :--- | ---: |\n| 1 | 2 |'), null);
+  assert.notEqual(
+    findUnformattedPipeTables('| a | b |\n| --- | --- |\n| 1 | 2 |\n\n| c | d |\n| 3 | 4 |'),
+    null,
+  );
 });
