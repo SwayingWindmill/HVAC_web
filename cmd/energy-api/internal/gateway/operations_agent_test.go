@@ -3,11 +3,13 @@ package gateway
 import (
 	"context"
 	"crypto/ecdsa"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -39,6 +41,8 @@ func (limiter *fakeOperationsRateLimiter) Allow(context.Context, string, time.Du
 
 type operationsGatewayFixture struct {
 	handler              http.Handler
+	now                  time.Time
+	store                *sessionstore.MemoryStore
 	tenantID             string
 	siteID               string
 	deviceID             string
@@ -59,12 +63,14 @@ type operationsGatewayFixture struct {
 
 func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGatewayFixture {
 	t.Helper()
-	now := time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC)
 	counter := &fakeOperationsRateLimiter{max: int32(rateLimit)}
 	limiter := limitpolicy.NewLimiter(counter, &limitpolicy.Policy{Version: 1, Limits: []limitpolicy.Limit{
 		{Dimension: limitpolicy.DimensionOperationsAgent, Window: time.Minute, Burst: 1 << 20, FailClosed: true},
 	}})
+	store := sessionstore.NewMemoryStore()
 	fixture := &operationsGatewayFixture{
+		now:           time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC),
+		store:         store,
 		tenantID:      "018f3d00-0000-7000-8000-000000000001",
 		siteID:        "018f3e00-2000-7000-8000-000000000001",
 		deviceID:      "018f3e00-3000-7000-8000-000000000001",
@@ -72,9 +78,8 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 		counter:       counter,
 		limiter:       limiter,
 	}
-	store := sessionstore.NewMemoryStore()
 	configured := NewHandler(Config{
-		Now: func() time.Time { return now },
+		Now: func() time.Time { return fixture.now },
 		Identity: &IdentityConfig{
 			OIDCIssuer: "https://issuer.example.test", OIDCClientID: "client",
 			OIDCRedirectURI: "https://web.example.test/api/v1/auth/callback",
@@ -83,7 +88,7 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 			PolicyRevision: "identity-policy-1", DelegationSigner: fixture.gatewaySigner,
 			TokenEncryptionKey: make([]byte, 32), SessionStore: store,
 			SessionTTL: time.Hour, DelegationTTL: 30 * time.Second,
-			IAMHTTPClient: fixture.iamClient(t, now),
+			IAMHTTPClient: fixture.iamClient(t),
 		},
 		Analytics: &AnalyticsConfig{QueryAudience: "telemetry-query-service"},
 		// The Agent reads alarms from the owner itself; the Gateway only authorizes.
@@ -99,7 +104,7 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 		Operations: &OperationsAgentConfig{
 			BaseURL: "https://operations.example.test", Audience: "operations-agent-service",
 			WorkloadSPIFFEID: "spiffe://hvac.local/operations-agent-service",
-			HTTPClient:       fixture.operationsClient(t, now), Timeout: time.Second,
+			HTTPClient:       fixture.operationsClient(t, fixture.now), Timeout: time.Second,
 			RateLimiter: fixture.limiter,
 		},
 	})
@@ -117,12 +122,12 @@ func newOperationsGatewayFixture(t *testing.T, rateLimit int) *operationsGateway
 		},
 		TenantID:            fixture.tenantID,
 		CSRFTokenCiphertext: ciphertext,
-		ExpiresAt:           now.Add(time.Hour),
+		ExpiresAt:           fixture.now.Add(time.Hour),
 	}, sessionstore.MutationContext{
 		Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "identity-policy-1",
 		CorrelationID: "operations-fixture", TraceID: strings.Repeat("a", 32),
 		Traceparent:      "00-" + strings.Repeat("a", 32) + "-" + strings.Repeat("b", 16) + "-01",
-		ExecutingService: "platform-gateway", ExecutingSPIFFEID: "spiffe://hvac.local/platform-gateway", OccurredAt: now,
+		ExecutingService: "platform-gateway", ExecutingSPIFFEID: "spiffe://hvac.local/platform-gateway", OccurredAt: fixture.now,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -140,9 +145,10 @@ func (fixture *operationsGatewayFixture) authenticate(request *http.Request, mut
 	}
 }
 
-func (fixture *operationsGatewayFixture) iamClient(t *testing.T, now time.Time) *http.Client {
+func (fixture *operationsGatewayFixture) iamClient(t *testing.T) *http.Client {
 	t.Helper()
 	return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		now := fixture.now
 		fixture.iamCalls.Add(1)
 		parent, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, request.Header.Get("X-Delegation-Grant"))
 		if err != nil {
@@ -764,4 +770,338 @@ func (fixture *operationsGatewayFixture) usageReasons() []map[string]any {
 		count = 2
 	}
 	return []map[string]any{{"code": "TOOL_OWNER_UNAVAILABLE", "count": count}}
+}
+
+func TestOperationsServiceDelegationSurvivesLongRunAndKeepsOwnerGrantsShort(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	serviceGrant := fixture.serviceDelegation(t)
+	serviceClaims, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, serviceGrant)
+	if err != nil {
+		t.Fatalf("invalid service delegation: %v", err)
+	}
+	if ttl := serviceClaims.ExpiresAt - serviceClaims.IssuedAt; ttl != int64((3 * time.Minute).Seconds()) {
+		t.Fatalf("service delegation TTL = %ds, want 180s", ttl)
+	}
+
+	// Advance past the 30s per-tool grant TTL but inside the 180s service delegation window.
+	fixture.now = fixture.now.Add(90 * time.Second)
+	query := analyticsmodel.EnergySeriesQuery{
+		TenantID:      fixture.tenantID,
+		SiteID:        fixture.siteID,
+		EnergyType:    analyticsmodel.EnergyTypeElectricity,
+		Granularity:   analyticsmodel.GranularityHour,
+		Timezone:      "Asia/Tokyo",
+		From:          time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC),
+		To:            time.Date(2026, 7, 29, 21, 0, 0, 0, time.UTC),
+		QualityPolicy: analyticsmodel.QualityPolicyValidOnly,
+	}
+	energyBody, err := json.Marshal(map[string]any{
+		"sessionId": "session-001",
+		"runId":     "run-001",
+		"request": map[string]any{
+			"requestId": "energy-long-run-001",
+			"tool":      "analytics.getEnergySeries",
+			"input":     query,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := fixture.authorizeTool(t, string(energyBody), serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected service delegation to stay valid at +90s, got %d: %s", response.Code, response.Body.String())
+	}
+	var issued operationsToolAuthorizationResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+	ownerClaims, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, issued.DelegationGrant)
+	if err != nil {
+		t.Fatalf("invalid owner grant: %v", err)
+	}
+	if ownerTTL := ownerClaims.ExpiresAt - ownerClaims.IssuedAt; ownerTTL != 30 {
+		t.Fatalf("per-tool owner grant TTL = %ds, want 30s", ownerTTL)
+	}
+
+	// Once past 180s, the service delegation must be rejected before IAM.
+	iamBeforeExpiry := fixture.iamCalls.Load()
+	fixture.now = fixture.now.Add(91 * time.Second)
+	expired := fixture.authorizeTool(t, string(energyBody), serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if expired.Code != http.StatusForbidden || !strings.Contains(expired.Body.String(), `"OPERATIONS_DELEGATION_REJECTED"`) || fixture.iamCalls.Load() != iamBeforeExpiry {
+		t.Fatalf("expected expired service delegation rejection before IAM, got %d: %s", expired.Code, expired.Body.String())
+	}
+
+	// Service delegation expiration remains strictly capped by the session expiry.
+	controller := fixture.handler.(*handler)
+	stored, err := fixture.store.GetSession(context.Background(), fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.now = stored.ExpiresAt.Add(-45 * time.Second)
+	cappedGrant, err := controller.operationsServiceDelegation(bffSession{Session: stored}, fixture.siteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cappedClaims, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, cappedGrant)
+	if err != nil {
+		t.Fatalf("invalid capped delegation: %v", err)
+	}
+	if cappedClaims.ExpiresAt != stored.ExpiresAt.Unix() {
+		t.Fatalf("capped ExpiresAt = %d, want session ExpiresAt %d", cappedClaims.ExpiresAt, stored.ExpiresAt.Unix())
+	}
+
+	// Oversized or invalid ServiceDelegationTTL configs clamp/fallback inside [1s, 5m].
+	if got := newOperationsAgentController(&OperationsAgentConfig{ServiceDelegationTTL: 10 * time.Minute}).serviceDelegationTTL; got != 5*time.Minute {
+		t.Fatalf("oversized ServiceDelegationTTL = %v, want 5m", got)
+	}
+	if got := newOperationsAgentController(&OperationsAgentConfig{ServiceDelegationTTL: 500 * time.Millisecond}).serviceDelegationTTL; got != 3*time.Minute {
+		t.Fatalf("sub-second ServiceDelegationTTL = %v, want 3m", got)
+	}
+}
+
+func TestOperationsToolAuthorizationRejectsRevokedSessionEvenWithValid180sDelegation(t *testing.T) {
+	fixture := newOperationsGatewayFixture(t, 30)
+	serviceGrant := fixture.serviceDelegation(t)
+
+	fixture.now = fixture.now.Add(90 * time.Second)
+	if _, err := fixture.store.RevokeSession(context.Background(), fixture.sessionID, sessionstore.MutationContext{
+		Action: "SESSION_REVOKED", Result: "SUCCEEDED", PolicyRevision: "identity-policy-1",
+		CorrelationID: "operations-revoke", TraceID: strings.Repeat("c", 32),
+		Traceparent:      "00-" + strings.Repeat("c", 32) + "-" + strings.Repeat("d", 16) + "-01",
+		ExecutingService: "platform-gateway", ExecutingSPIFFEID: "spiffe://hvac.local/platform-gateway", OccurredAt: fixture.now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"sessionId":"session-001","runId":"run-001","request":{"requestId":"registry-revoked-001","tool":"registry.getSite","input":{"siteId":"` + fixture.siteID + `"}}}`
+	response := fixture.authorizeTool(t, body, serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"RESOURCE_NOT_FOUND"`) {
+		t.Fatalf("expected 404 RESOURCE_NOT_FOUND for revoked session, got %d: %s", response.Code, response.Body.String())
+	}
+	if fixture.iamCalls.Load() != 0 {
+		t.Fatalf("revoked session reached IAM %d times", fixture.iamCalls.Load())
+	}
+}
+
+func TestOperationsToolAuthorizationOpenAPIContractParity(t *testing.T) {
+	raw := readRepositoryFile(t, "contracts", "http", "operations-tool-authorization-internal.openapi.yaml")
+	if strings.Contains(string(raw), "Organization") {
+		t.Fatal("internal operations OpenAPI contract must not mention Organization")
+	}
+	openAPITools := parseOperationsInternalOpenAPITools(t, raw)
+	if len(openAPITools) != 10 {
+		t.Fatalf("OpenAPI oneOf tool count = %d, want 10: %v", len(openAPITools), openAPITools)
+	}
+	var openAPINames, authorizerNames []string
+	for name := range openAPITools {
+		openAPINames = append(openAPINames, name)
+	}
+	for name := range operationsToolAuthorizers {
+		authorizerNames = append(authorizerNames, name)
+	}
+	slices.Sort(openAPINames)
+	slices.Sort(authorizerNames)
+	if !slices.Equal(openAPINames, authorizerNames) {
+		t.Fatalf("OpenAPI tools %v do not match operationsToolAuthorizers %v", openAPINames, authorizerNames)
+	}
+
+	fixture := newOperationsGatewayFixture(t, 30)
+	serviceGrant := fixture.serviceDelegation(t)
+
+	siteBody := `{"sessionId":"session-001","runId":"run-001","request":{"requestId":"parity-site-001","tool":"registry.getSite","input":{"siteId":"` + fixture.siteID + `"}}}`
+	siteResponse := fixture.authorizeTool(t, siteBody, serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if siteResponse.Code != http.StatusOK {
+		t.Fatalf("registry.getSite failed: %d %s", siteResponse.Code, siteResponse.Body.String())
+	}
+
+	fddBody := `{"sessionId":"session-001","runId":"run-001","request":{"requestId":"parity-fdd-001","tool":"fdd.listFindings","input":{"siteId":"` + fixture.siteID + `","limit":50}}}`
+	fddResponse := fixture.authorizeTool(t, fddBody, serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if fddResponse.Code != http.StatusOK {
+		t.Fatalf("fdd.listFindings failed: %d %s", fddResponse.Code, fddResponse.Body.String())
+	}
+	var fddGrant operationsToolAuthorizationResponse
+	if err := json.Unmarshal(fddResponse.Body.Bytes(), &fddGrant); err != nil {
+		t.Fatal(err)
+	}
+	fddClaims, err := identitycontext.VerifyDelegation(&fixture.gatewaySigner.PublicKey, fddGrant.DelegationGrant)
+	if err != nil || fddClaims.Audience != "fdd-service" || fddClaims.ExecutingService != "spiffe://hvac.local/operations-agent-service" {
+		t.Fatalf("unexpected fdd.listFindings claims: %+v err=%v", fddClaims, err)
+	}
+
+	snapshotBody, err := json.Marshal(map[string]any{
+		"sessionId": "session-001",
+		"runId":     "run-001",
+		"request": map[string]any{
+			"requestId": "parity-snapshot-001",
+			"tool":      "telemetry.current.getDeviceObservationSnapshot",
+			"input": map[string]any{
+				"siteId":    fixture.siteID,
+				"deviceId":  fixture.deviceID,
+				"pointKeys": []string{"condenserPressureKPa", "leavingWaterTempC"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotResponse := fixture.authorizeTool(t, string(snapshotBody), serviceGrant, "spiffe://hvac.local/operations-agent-service")
+	if snapshotResponse.Code != http.StatusOK {
+		t.Fatalf("telemetry.current.getDeviceObservationSnapshot failed: %d %s", snapshotResponse.Code, snapshotResponse.Body.String())
+	}
+	var snapshotGrant operationsToolAuthorizationResponse
+	if err := json.Unmarshal(snapshotResponse.Body.Bytes(), &snapshotGrant); err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(snapshotGrant.DelegationGrant, ".")
+	if len(parts) != 2 {
+		t.Fatalf("unexpected telemetry grant format")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var telemetryClaims telemetryauth.GrantClaims
+	if err := json.Unmarshal(payload, &telemetryClaims); err != nil {
+		t.Fatal(err)
+	}
+	expectedDigest, err := telemetryauth.ScopeDigest(telemetryauth.ActionSnapshotRead, fixture.tenantID, []telemetryauth.Target{{
+		DeviceID: fixture.deviceID,
+		Keys:     []string{"condenserPressureKPa", "leavingWaterTempC"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if telemetryClaims.Presenter != "spiffe://hvac.local/operations-agent-service" ||
+		telemetryClaims.Action != telemetryauth.ActionSnapshotRead ||
+		telemetryClaims.ScopeDigest != expectedDigest {
+		t.Fatalf("telemetry snapshot claims mismatch: %+v want digest=%s", telemetryClaims, expectedDigest)
+	}
+}
+
+func parseOperationsInternalOpenAPITools(t *testing.T, raw []byte) map[string]string {
+	t.Helper()
+	lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
+	schemas := make(map[string][]string)
+	inSchemas := false
+	currentSchema := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent == 0 {
+			inSchemas = false
+			currentSchema = ""
+			continue
+		}
+		if indent == 2 {
+			inSchemas = trimmed == "schemas:"
+			currentSchema = ""
+			continue
+		}
+		if !inSchemas {
+			continue
+		}
+		if indent == 4 && strings.HasSuffix(trimmed, ":") {
+			currentSchema = strings.TrimSuffix(trimmed, ":")
+			schemas[currentSchema] = nil
+			continue
+		}
+		if currentSchema != "" {
+			schemas[currentSchema] = append(schemas[currentSchema], line)
+		}
+	}
+
+	reqLines, ok := schemas["ToolAuthorizationRequest"]
+	if !ok {
+		t.Fatal("ToolAuthorizationRequest schema not found in OpenAPI contract")
+	}
+	var oneOfRefs []string
+	inRequest := false
+	inOneOf := false
+	const refPrefix = "- $ref: '#/components/schemas/"
+	for _, line := range reqLines {
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent <= 8 {
+			inRequest = trimmed == "request:"
+			inOneOf = false
+			continue
+		}
+		if inRequest && indent == 10 {
+			inOneOf = trimmed == "oneOf:"
+			continue
+		}
+		if inOneOf && strings.HasPrefix(trimmed, refPrefix) && strings.HasSuffix(trimmed, "'") {
+			name := strings.TrimSuffix(strings.TrimPrefix(trimmed, refPrefix), "'")
+			oneOfRefs = append(oneOfRefs, name)
+		}
+	}
+	if len(oneOfRefs) == 0 {
+		t.Fatal("no oneOf schema references found under ToolAuthorizationRequest.properties.request")
+	}
+
+	tools := make(map[string]string, len(oneOfRefs))
+	for _, schemaName := range oneOfRefs {
+		body, exists := schemas[schemaName]
+		if !exists {
+			t.Fatalf("oneOf references missing schema %q", schemaName)
+		}
+		joined := strings.Join(body, "\n")
+		if !strings.Contains(joined, "\n      additionalProperties: false") {
+			t.Fatalf("schema %q must set additionalProperties: false", schemaName)
+		}
+		inputStrict := strings.Contains(joined, "\n          additionalProperties: false")
+		if !inputStrict {
+			for _, line := range body {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "$ref: '#/components/schemas/") && strings.HasSuffix(trimmed, "'") {
+					refName := strings.TrimSuffix(strings.TrimPrefix(trimmed, "$ref: '#/components/schemas/"), "'")
+					if refLines, refOK := schemas[refName]; refOK && strings.Contains(strings.Join(refLines, "\n"), "\n      additionalProperties: false") {
+						inputStrict = true
+					}
+				}
+			}
+		}
+		if !inputStrict {
+			t.Fatalf("schema %q input must enforce additionalProperties: false", schemaName)
+		}
+		toolName := extractOpenAPIToolConst(body)
+		if toolName == "" {
+			t.Fatalf("schema %q is missing properties.tool.const", schemaName)
+		}
+		if existing, duplicate := tools[toolName]; duplicate {
+			t.Fatalf("duplicate tool %q in schemas %q and %q", toolName, existing, schemaName)
+		}
+		tools[toolName] = schemaName
+	}
+	return tools
+}
+
+func extractOpenAPIToolConst(schemaLines []string) string {
+	inTool := false
+	for _, line := range schemaLines {
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent == 8 && strings.HasPrefix(trimmed, "tool:") {
+			rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "tool:"))
+			if strings.HasPrefix(rest, "{") && strings.HasSuffix(rest, "}") {
+				inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(rest, "{"), "}"))
+				if strings.HasPrefix(inner, "const:") {
+					return strings.Trim(strings.TrimSpace(strings.TrimPrefix(inner, "const:")), `"'`)
+				}
+			}
+			inTool = rest == ""
+			continue
+		}
+		if indent <= 8 {
+			inTool = false
+			continue
+		}
+		if inTool && strings.HasPrefix(trimmed, "const:") {
+			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "const:")), `"'`)
+		}
+	}
+	return ""
 }

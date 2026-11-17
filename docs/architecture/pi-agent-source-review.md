@@ -1,6 +1,6 @@
 # pi 源码调研
 
-2026-09-03；2026-10-16 升级到 v1.3.0 时补了「升级到 v1.3.0」，2026-10-19 补了「插件和官方包」。决定见 ADR 0014。
+2026-09-03；2026-10-16 升级到 v1.3.0 时补了「升级到 v1.3.0」，2026-10-19 补了「插件和官方包」，2026-11-17 补了 `@earendil-works/pi-codemode` 的 72 轮 A/B 实测结果与取舍（#641）。决定见 ADR 0014。
 
 ## 参照的版本
 
@@ -93,7 +93,10 @@ pi 是现在的助手执行引擎，不是 HVAC 的业务架构。它擅长的�
 想找能省事的 pi 插件，读了上游仓库里插件和官方包的说明：`packages/coding-agent/docs/` 下的 `extensions.md`、`packages.md`、`codemode.md`，以及 `packages/durable`、`packages/mcp`、`packages/evals`、`packages/chord` 的 README。
 
 - **插件（extensions）和插件包（packages）不能用**：它们是给编程助手 `pi-coding-agent` 用的，靠 `pi install` 装进编程助手的进程，挂在它的命令、会话和终端界面上。我们只嵌入 `pi-agent-core` 和 `pi-ai`，没有这个宿主，社区的插件也都是这一种。
-- **`@earendil-works/pi-codemode`：值得试，还没用**。模型写一小段 JavaScript，在 QuickJS 沙箱（编译成 WebAssembly，每次执行一个工作线程）里连续调用我们注入的工具，中间结果不进对话，只把脚本的输出和返回值交回模型。沙箱里没有计时器、`fetch`、`process`、`require` 和模块，只能调注入的工具；有超时（`timeoutMs`）和内存上限（`memoryLimitBytes`）。它不依赖 pi 的其他包，可以单独接在现在的工具上。可能的好处：「解释差异」「数据不全的一天」「设备解释」这类要读好几次数据的问题，少几轮模型调用、少一些令牌。要先用评测前后对比再决定（#641）：令牌、耗时、模型调用次数要降，答对率不能降；还要看我们按工具记的调用记录、权限和预算在脚本里怎么守住。
+- **`@earendil-works/pi-codemode`：评测后不采用（#641）**。在 `runtime-pi` 内临时接入了 `@earendil-works/pi-codemode@1.3.0`（`quickjs-wasi@3.6.2`、`timeoutMs <= 30000`、`32 MiB` 内存上限），把 `await tools.<工具名>(参数)` 全部经 `executeProjectToolCall` 走平台网关逐工具授权、限流并发队列、结果体积上限、`evidenceId`/`chartFrom` 追踪和 `AgentToolExecution` 审计，并在本地用松雅轩 12 题 × 3 轮 × 2 模式 = 72 轮真实 `deepseek-flash` 对照评测验证：
+  - 总体结果：`direct` 整题全对率 `9/12`（单轮 `31/36`）、平均耗时 `7.83 秒`（`7830 ms`）、平均 `2.83` 轮模型调用 / `2.56` 次工具读取 / `2768` 令牌；`codemode` 整题全对率同样 `9/12`（单轮 `32/36`），但平均耗时升至 `8.18 秒`（`8176 ms`，`+4.4%`）、平均工具读取升至 `2.86` 次（`+11.7%`）、平均令牌升至 `2939`（`+6.2%`），且 `device-explain` 从 `3/3` 降到 `2/3`。
+  - 多跳读取题未见收益：`explain-day-over-week` 下 `codemode` 平均读数 `6.33` 次、耗时 `10.51 秒`、`4437` 令牌（`direct` 为 `5.00` 次、`9.98 秒`、`4230` 令牌）；`incomplete-day` 下 `codemode` 达到 `6.00` 轮模型调用、`9.67` 次读取、`11089` 令牌（`direct` 为 `5.33` 轮、`9.00` 次、`8649` 令牌）。同时发现每个 `CodemodeSandbox` 调用都会新建工作线程和 QuickJS 虚拟机，若工作目录变更或句柄失效会触发 `uv_cwd` `ENOENT`。
+  - 取舍：单轮通过率虽多 1 轮，但整题稳定性未提高，平均耗时、工具读取次数和令牌全面增加，多跳调查题也更慢更贵；同分支已靠运行期 `RunSiteSnapshot` 把每次问答的 `registry.getSite` 固定降到 `1.00` 次、`registry.getSiteAssetModel` 降到全站能耗题 `0` 次 / 设备题 `1` 次（总平均 `0.64` 次），因此不引入 `@earendil-works/pi-codemode`，维持 `direct` 直调模式并删掉原型代码。
 - **`@earendil-works/pi-durable`：不用**。说明里自己写着「实验性，接口随时变」。会话已经由我们自己的服务存在 PostgreSQL 里（ADR 0014）。
 - **`@earendil-works/pi-mcp`：不用**。ADR 0014 定了数据直接从各数据负责方的接口读，不经过 MCP。
 - **pi 的 evals：不用**。那是给编程助手做的行为评测（`vitest-evals`，在容器里比较有没有文档时的表现）；我们自己的评测在 `services/operations-agent-service/evals/`。

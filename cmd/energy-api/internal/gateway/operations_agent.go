@@ -13,7 +13,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmauth"
-	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -29,30 +28,34 @@ import (
 const (
 	InternalOperationsToolAuthorizationPath = "/internal/v1/operations/tool-authorization"
 	defaultOperationsTimeout                = 8 * time.Second
+	defaultOperationsServiceDelegationTTL   = 3 * time.Minute
+	maxOperationsServiceDelegationTTL       = 5 * time.Minute
 	defaultOperationsRequestBytes           = int64(8 << 10)
 	defaultOperationsResponseBytes          = int64(1 << 20)
 )
 
 type OperationsAgentConfig struct {
-	BaseURL          string
-	Audience         string
-	WorkloadSPIFFEID string
-	HTTPClient       *http.Client
-	Timeout          time.Duration
-	MaxRequestBytes  int64
-	MaxResponseBytes int64
-	RateLimiter      *limitpolicy.Limiter
+	BaseURL              string
+	Audience             string
+	WorkloadSPIFFEID     string
+	HTTPClient           *http.Client
+	Timeout              time.Duration
+	ServiceDelegationTTL time.Duration
+	MaxRequestBytes      int64
+	MaxResponseBytes     int64
+	RateLimiter          *limitpolicy.Limiter
 }
 
 type operationsAgentController struct {
-	baseURL          string
-	audience         string
-	workloadSPIFFEID string
-	httpClient       *http.Client
-	timeout          time.Duration
-	maxRequestBytes  int64
-	maxResponseBytes int64
-	rateLimiter      *limitpolicy.Limiter
+	baseURL              string
+	audience             string
+	workloadSPIFFEID     string
+	httpClient           *http.Client
+	timeout              time.Duration
+	serviceDelegationTTL time.Duration
+	maxRequestBytes      int64
+	maxResponseBytes     int64
+	rateLimiter          *limitpolicy.Limiter
 }
 
 type operationsToolAuthorizationRequest struct {
@@ -72,9 +75,10 @@ type operationsToolAuthorizationResponse struct {
 
 func newOperationsAgentController(config *OperationsAgentConfig) *operationsAgentController {
 	controller := &operationsAgentController{
-		timeout:          defaultOperationsTimeout,
-		maxRequestBytes:  defaultOperationsRequestBytes,
-		maxResponseBytes: defaultOperationsResponseBytes,
+		timeout:              defaultOperationsTimeout,
+		serviceDelegationTTL: defaultOperationsServiceDelegationTTL,
+		maxRequestBytes:      defaultOperationsRequestBytes,
+		maxResponseBytes:     defaultOperationsResponseBytes,
 	}
 	if config == nil {
 		return controller
@@ -85,6 +89,12 @@ func newOperationsAgentController(config *OperationsAgentConfig) *operationsAgen
 	controller.httpClient = config.HTTPClient
 	if config.Timeout > 0 {
 		controller.timeout = config.Timeout
+	}
+	if ttl := config.ServiceDelegationTTL.Truncate(time.Second); ttl >= time.Second {
+		if ttl > maxOperationsServiceDelegationTTL {
+			ttl = maxOperationsServiceDelegationTTL
+		}
+		controller.serviceDelegationTTL = ttl
 	}
 	if config.MaxRequestBytes > 0 {
 		controller.maxRequestBytes = config.MaxRequestBytes
@@ -101,34 +111,390 @@ func hasOperationsJSONContentType(request *http.Request) bool {
 	return err == nil && mediaType == "application/json"
 }
 
+var operationsForgedHeaders = []string{
+	"Cookie",
+	"Origin",
+	"X-CSRF-Token",
+	"X-Principal",
+	"X-Roles",
+	"X-Tenant-ID",
+	"X-Site-ID",
+	"X-Admin",
+	"X-Command-Grant",
+	"X-Command-Read-Context",
+	"X-Command-Control-Context",
+	"X-Operations-Registry-Site-Grant",
+	"X-Operations-Registry-Asset-Grant",
+	"X-Operations-Energy-Grant",
+}
+
+type problemDetail struct {
+	status    int
+	code      string
+	title     string
+	detail    string
+	retryable bool
+}
+
+func (p *problemDetail) write(writer http.ResponseWriter, request *http.Request) {
+	writeProblem(writer, request, p.status, p.code, p.title, p.detail, p.retryable, nil)
+}
+
+func invalidToolRequestProblem(detail string) *problemDetail {
+	return &problemDetail{
+		status: http.StatusBadRequest,
+		code:   "OPERATIONS_TOOL_REQUEST_INVALID",
+		title:  "Tool request invalid",
+		detail: detail,
+	}
+}
+
+func siteNotFoundProblem() *problemDetail {
+	return &problemDetail{
+		status: http.StatusNotFound,
+		code:   "RESOURCE_NOT_FOUND",
+		title:  "Resource not found",
+		detail: "The requested Site was not found.",
+	}
+}
+
+func unavailableOperationsProblem(detail string) *problemDetail {
+	return &problemDetail{
+		status:    http.StatusServiceUnavailable,
+		code:      "OPERATIONS_AUTHORIZATION_UNAVAILABLE",
+		title:     "Operations authorization unavailable",
+		detail:    detail,
+		retryable: true,
+	}
+}
+
+type operationsToolAuthContext struct {
+	handler *handler
+	request *http.Request
+	session bffSession
+	claims  identitycontext.DelegationClaims
+	siteID  string
+	input   any
+}
+
+type operationsToolSpec struct {
+	parse     func(raw json.RawMessage) (any, string, *problemDetail)
+	authorize func(ctx operationsToolAuthContext) (operationsToolAuthorizationResponse, *problemDetail)
+}
+
+type telemetryToolInput struct {
+	action       telemetryauth.Action
+	target       telemetryauth.Target
+	historyQuery *telemetryhistorymodel.DeviceHistoryAggregateQuery
+}
+
+// Each logical tool maps to a strict input parser and its owner-scoped grant authorizer.
+var operationsToolAuthorizers = map[string]operationsToolSpec{
+	"registry.getSite":           registryToolSpec(registryauth.ActionSiteRead, "The Registry Site request is invalid."),
+	"registry.listSiteAssets":    registryToolSpec(registryauth.ActionAssetList, "The Registry Asset request is invalid."),
+	"registry.getSiteAssetModel": registryToolSpec(registryauth.ActionAssetModelRead, "The Registry asset model request is invalid."),
+	"analytics.getEnergySeries": {
+		parse: func(raw json.RawMessage) (any, string, *problemDetail) {
+			return parseAnalyticsToolInput(raw, energySeriesScope, "The Energy Series request is invalid.")
+		},
+		authorize: authorizeAnalyticsTool,
+	},
+	"analytics.semanticQuery": {
+		parse: func(raw json.RawMessage) (any, string, *problemDetail) {
+			return parseAnalyticsToolInput(raw, semanticQueryScope, "The semantic query asks for members or a range outside the catalog.")
+		},
+		authorize: authorizeAnalyticsTool,
+	},
+	"alarm.listAlarms": {
+		parse:     parseAlarmListToolInput,
+		authorize: authorizeAlarmTool,
+	},
+	"workorder.listWorkOrders": {
+		parse:     parseSiteLimitToolInput("The Work Order list request is invalid."),
+		authorize: authorizeWorkOrderTool,
+	},
+	"fdd.listFindings": {
+		parse:     parseSiteLimitToolInput("The FDD findings request is invalid."),
+		authorize: authorizeFDDTool,
+	},
+	"telemetry.current.getDeviceObservationSnapshot": {
+		parse:     parseTelemetrySnapshotToolInput,
+		authorize: authorizeTelemetryTool,
+	},
+	"telemetry.history.aggregateDeviceHistory": {
+		parse:     parseTelemetryHistoryToolInput,
+		authorize: authorizeTelemetryTool,
+	},
+}
+
+func registryToolSpec(action registryauth.Action, invalidDetail string) operationsToolSpec {
+	return operationsToolSpec{
+		parse: func(raw json.RawMessage) (any, string, *problemDetail) {
+			var input struct {
+				SiteID string `json:"siteId"`
+			}
+			if decodeStrictOperationsJSON(raw, &input) != nil {
+				return nil, "", invalidToolRequestProblem(invalidDetail)
+			}
+			return nil, input.SiteID, nil
+		},
+		authorize: func(ctx operationsToolAuthContext) (operationsToolAuthorizationResponse, *problemDetail) {
+			authorization, failure := ctx.handler.authorizeRegistryForPresenter(
+				ctx.request.Context(),
+				ctx.session,
+				action,
+				ctx.handler.operations.workloadSPIFFEID,
+			)
+			if failure != nil || !registryAuthorizationAllowsSite(authorization, ctx.siteID) {
+				return operationsToolAuthorizationResponse{}, siteNotFoundProblem()
+			}
+			return operationsToolAuthorizationResponse{
+				DelegationGrant: authorization.coreGrant,
+				PolicyRevision:  authorization.policyRevision,
+			}, nil
+		},
+	}
+}
+
+func parseAnalyticsToolInput[Q any](
+	raw json.RawMessage,
+	toScope func(Q) (analyticsScope, error),
+	invalidDetail string,
+) (any, string, *problemDetail) {
+	var query Q
+	if decodeStrictOperationsJSON(raw, &query) != nil {
+		return nil, "", invalidToolRequestProblem(invalidDetail)
+	}
+	scope, err := toScope(query)
+	if err != nil {
+		return nil, "", invalidToolRequestProblem(invalidDetail)
+	}
+	return scope, scope.SiteID, nil
+}
+
+func parseAlarmListToolInput(raw json.RawMessage) (any, string, *problemDetail) {
+	var alarmInput struct {
+		SiteID    string `json:"siteId"`
+		Condition string `json:"condition"`
+		Limit     int    `json:"limit"`
+	}
+	// Condition and size travel with the request the Agent's reader sends; the owner checks them.
+	if decodeStrictOperationsJSON(raw, &alarmInput) != nil {
+		return nil, "", invalidToolRequestProblem("The Alarm list request is invalid.")
+	}
+	return nil, alarmInput.SiteID, nil
+}
+
+func parseSiteLimitToolInput(invalidDetail string) func(json.RawMessage) (any, string, *problemDetail) {
+	return func(raw json.RawMessage) (any, string, *problemDetail) {
+		// Size travels with the request the Agent's reader sends; the owner checks it.
+		var listInput struct {
+			SiteID string `json:"siteId"`
+			Limit  int    `json:"limit"`
+		}
+		if decodeStrictOperationsJSON(raw, &listInput) != nil {
+			return nil, "", invalidToolRequestProblem(invalidDetail)
+		}
+		return nil, listInput.SiteID, nil
+	}
+}
+
+func parseTelemetrySnapshotToolInput(raw json.RawMessage) (any, string, *problemDetail) {
+	var telemetryInput struct {
+		SiteID    string   `json:"siteId"`
+		DeviceID  string   `json:"deviceId"`
+		PointKeys []string `json:"pointKeys"`
+	}
+	if decodeStrictOperationsJSON(raw, &telemetryInput) != nil || !isLowerUUIDv7(telemetryInput.SiteID) || !isLowerUUIDv7(telemetryInput.DeviceID) {
+		return nil, "", invalidToolRequestProblem("The Telemetry Snapshot request is invalid.")
+	}
+	target := telemetryauth.Target{DeviceID: telemetryInput.DeviceID, Keys: telemetryInput.PointKeys}
+	if _, err := telemetryauth.CanonicalTargets([]telemetryauth.Target{target}); err != nil {
+		return nil, "", invalidToolRequestProblem("The Telemetry Snapshot selection is invalid.")
+	}
+	return telemetryToolInput{action: telemetryauth.ActionSnapshotRead, target: target}, telemetryInput.SiteID, nil
+}
+
+func parseTelemetryHistoryToolInput(raw json.RawMessage) (any, string, *problemDetail) {
+	var historyQuery telemetryhistorymodel.DeviceHistoryAggregateQuery
+	if decodeStrictOperationsJSON(raw, &historyQuery) != nil || historyQuery.Validate() != nil {
+		return nil, "", invalidToolRequestProblem("The Device History request is invalid.")
+	}
+	target := telemetryauth.Target{DeviceID: historyQuery.DeviceID, Keys: historyQuery.Keys}
+	return telemetryToolInput{
+		action:       telemetryauth.ActionHistoryRead,
+		target:       target,
+		historyQuery: &historyQuery,
+	}, historyQuery.SiteID, nil
+}
+
+func authorizeWorkOrderTool(ctx operationsToolAuthContext) (operationsToolAuthorizationResponse, *problemDetail) {
+	// The Agent reads the list from the work-order owner itself, with a context naming it (#595).
+	if ctx.handler.workOrder == nil {
+		return operationsToolAuthorizationResponse{}, unavailableOperationsProblem("The Work Order Service is not configured.")
+	}
+	route := publicWorkOrderRoute{kind: publicWorkOrderCollection, template: "/api/v1/sites/{siteId}/work-orders", siteID: ctx.siteID, action: workorderauth.ActionList}
+	decision, failure := ctx.handler.authorizeWorkOrder(ctx.request, ctx.session, route, nil, nil)
+	if failure == nil {
+		var grant string
+		grant, failure = ctx.handler.signWorkOrderReadContext(ctx.session, route, decision, ctx.session.TenantID, ctx.handler.operations.workloadSPIFFEID)
+		if failure == nil {
+			return operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: decision.PolicyRevision}, nil
+		}
+	}
+	if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
+		return operationsToolAuthorizationResponse{}, siteNotFoundProblem()
+	}
+	return operationsToolAuthorizationResponse{}, unavailableOperationsProblem("The Work Order authorization could not be completed.")
+}
+
+func authorizeFDDTool(ctx operationsToolAuthContext) (operationsToolAuthorizationResponse, *problemDetail) {
+	// Findings are read on site.read, as the 诊断 page reads them; the Agent presents the context (#595).
+	if ctx.handler.intelligence == nil || ctx.handler.intelligence.fddBaseURL == "" {
+		return operationsToolAuthorizationResponse{}, unavailableOperationsProblem("FDD is not configured.")
+	}
+	authorization, failure := ctx.handler.authorizeRegistry(ctx.request.Context(), ctx.session, registryauth.ActionSiteRead)
+	if failure != nil || !registryAuthorizationAllowsSite(authorization, ctx.siteID) {
+		if failure == nil || failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
+			return operationsToolAuthorizationResponse{}, siteNotFoundProblem()
+		}
+		return operationsToolAuthorizationResponse{}, unavailableOperationsProblem("The Site authorization could not be completed.")
+	}
+	grant, err := ctx.handler.ownerContext(ctx.session, fddOwner, ctx.siteID, fddReadAction, ctx.handler.operations.workloadSPIFFEID)
+	if err != nil {
+		return operationsToolAuthorizationResponse{}, unavailableOperationsProblem("The FDD context could not be signed.")
+	}
+	return operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: authorization.policyRevision}, nil
+}
+
+func authorizeAlarmTool(ctx operationsToolAuthContext) (operationsToolAuthorizationResponse, *problemDetail) {
+	// The Agent reads the list from the alarm owner itself, with a context naming it (#594).
+	if ctx.handler.alarm == nil {
+		return operationsToolAuthorizationResponse{}, unavailableOperationsProblem("The Alarm Service is not configured.")
+	}
+	route := publicAlarmRoute{template: "/api/v1/alarms", action: alarmauth.ActionRead, siteID: ctx.siteID}
+	caller := ownerCaller{session: ctx.session, presenter: ctx.handler.operations.workloadSPIFFEID}
+	grant, decision, failure := grantOwner(ctx.request.Context(), ctx.handler, caller, ctx.handler.alarmOwner(), string(route.action), route.scope(ctx.session.TenantID))
+	if failure == nil {
+		return operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: decision.policyRevision}, nil
+	}
+	if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
+		return operationsToolAuthorizationResponse{}, siteNotFoundProblem()
+	}
+	return operationsToolAuthorizationResponse{}, unavailableOperationsProblem("The Alarm authorization could not be completed.")
+}
+
+func authorizeTelemetryTool(ctx operationsToolAuthContext) (operationsToolAuthorizationResponse, *problemDetail) {
+	parsed := ctx.input.(telemetryToolInput)
+	caller := telemetryCaller{
+		principal: ctx.session.Principal,
+		tenantID:  ctx.session.TenantID,
+		contextID: ctx.session.ID,
+		expiresAt: ctx.session.ExpiresAt,
+	}
+	authorization, failure := ctx.handler.authorizeTelemetryForPresenter(
+		ctx.request.Context(), ctx.request, caller, parsed.action,
+		[]telemetryauth.Target{parsed.target}, ctx.handler.operations.workloadSPIFFEID,
+	)
+	if failure != nil {
+		if failure.status == http.StatusNotFound || failure.status == http.StatusForbidden {
+			return operationsToolAuthorizationResponse{}, &problemDetail{
+				status: http.StatusNotFound,
+				code:   "RESOURCE_NOT_FOUND",
+				title:  "Resource not found",
+				detail: "The requested telemetry resource was not found.",
+			}
+		}
+		return operationsToolAuthorizationResponse{}, &problemDetail{
+			status:    failure.status,
+			code:      failure.code,
+			title:     failure.title,
+			detail:    failure.detail,
+			retryable: failure.retryable,
+		}
+	}
+	if len(authorization.targets) != 1 || authorization.targets[0].TenantID != ctx.claims.TenantID || authorization.targets[0].SiteID != ctx.siteID || authorization.targets[0].DeviceID != parsed.target.DeviceID {
+		return operationsToolAuthorizationResponse{}, &problemDetail{
+			status: http.StatusNotFound,
+			code:   "RESOURCE_NOT_FOUND",
+			title:  "Resource not found",
+			detail: "The requested telemetry resource was not found.",
+		}
+	}
+	grant := authorization.grant
+	if parsed.action == telemetryauth.ActionHistoryRead {
+		// History is answered by the Telemetry Query Service, which accepts a Gateway-signed
+		// grant bound to the exact aggregate query and presented by the Agent.
+		if parsed.historyQuery.TenantID != ctx.claims.TenantID {
+			return operationsToolAuthorizationResponse{}, &problemDetail{
+				status: http.StatusNotFound,
+				code:   "RESOURCE_NOT_FOUND",
+				title:  "Resource not found",
+				detail: "The requested telemetry resource was not found.",
+			}
+		}
+		signed, failure := ctx.handler.signHistoryQueryGrant(caller, authorization, ctx.claims.TenantID, telemetryhistorymodel.DeviceHistoryAggregateAction, parsed.historyQuery.ScopeDigest, ctx.handler.operations.workloadSPIFFEID)
+		if failure != nil {
+			return operationsToolAuthorizationResponse{}, &problemDetail{
+				status:    failure.status,
+				code:      failure.code,
+				title:     failure.title,
+				detail:    failure.detail,
+				retryable: failure.retryable,
+			}
+		}
+		grant = signed
+	}
+	return operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: authorization.policyRevision}, nil
+}
+
+func authorizeAnalyticsTool(ctx operationsToolAuthContext) (operationsToolAuthorizationResponse, *problemDetail) {
+	scope := ctx.input.(analyticsScope)
+	grant, failure := ctx.handler.authorizeAnalyticsForPresenter(
+		ctx.request.Context(),
+		ctx.request,
+		ctx.session,
+		scope,
+		ctx.handler.operations.workloadSPIFFEID,
+	)
+	if failure != nil {
+		if failure.status == http.StatusForbidden {
+			return operationsToolAuthorizationResponse{}, siteNotFoundProblem()
+		}
+		return operationsToolAuthorizationResponse{}, &problemDetail{
+			status:    failure.status,
+			code:      failure.code,
+			title:     failure.title,
+			detail:    failure.detail,
+			retryable: failure.retryable,
+		}
+	}
+	issuedClaims, err := identitycontext.VerifyDelegation(
+		ctx.handler.identity.config.DelegationSigner.Public(),
+		grant,
+	)
+	if err != nil || strings.TrimSpace(issuedClaims.PolicyRevision) == "" {
+		return operationsToolAuthorizationResponse{}, unavailableOperationsProblem("The Energy authorization grant could not be verified after issuance.")
+	}
+	return operationsToolAuthorizationResponse{
+		DelegationGrant: grant,
+		PolicyRevision:  issuedClaims.PolicyRevision,
+	}, nil
+}
+
 func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		writeMethodNotAllowedFor(writer, request, http.MethodPost)
 		return
 	}
-	for _, header := range []string{
-		"Cookie",
-		"Origin",
-		"X-CSRF-Token",
-		"X-Principal",
-		"X-Roles",
-		"X-Tenant-ID",
-		"X-Site-ID",
-		"X-Admin",
-		"X-Command-Grant",
-		"X-Command-Read-Context",
-		"X-Command-Control-Context",
-		"X-Operations-Registry-Site-Grant",
-		"X-Operations-Registry-Asset-Grant",
-		"X-Operations-Energy-Grant",
-	} {
+	for _, header := range operationsForgedHeaders {
 		if request.Header.Get(header) != "" {
 			writeProblem(writer, request, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Browser Session and caller-supplied identity headers are not accepted on the internal Tool authorization route.", false, nil)
 			return
 		}
 	}
 	if h.operations == nil || h.operations.workloadSPIFFEID == "" || h.identity == nil {
-		writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The Operations authorization boundary is not configured.", true, nil)
+		unavailableOperationsProblem("The Operations authorization boundary is not configured.").write(writer, request)
 		return
 	}
 	if !hasOperationsJSONContentType(request) {
@@ -156,132 +522,21 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		strings.TrimSpace(input.RunID) == "" || len(input.RunID) > 256 ||
 		strings.TrimSpace(input.Request.RequestID) == "" || len(input.Request.RequestID) > 256 ||
 		headerRequestID == "" || len(headerRequestID) > 256 || headerRequestID != input.Request.RequestID {
-		writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Tool authorization request is invalid.", false, nil)
+		invalidToolRequestProblem("The Tool authorization request is invalid.").write(writer, request)
 		return
 	}
-	var siteID string
-	var registryAction registryauth.Action
-	// analytics is the Energy grant's scope for an Energy Series or a semantic query; nil otherwise.
-	var analytics *analyticsScope
-	var telemetryTarget telemetryauth.Target
-	var historyQuery telemetryhistorymodel.DeviceHistoryAggregateQuery
-	alarmList := false
-	fddFindings := false
-	workOrderList := false
-	switch input.Request.Tool {
-	case "registry.getSite":
-		var registryInput struct {
-			SiteID string `json:"siteId"`
-		}
-		if decodeStrictOperationsJSON(input.Request.Input, &registryInput) != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Registry Site request is invalid.", false, nil)
-			return
-		}
-		siteID, registryAction = registryInput.SiteID, registryauth.ActionSiteRead
-	case "registry.listSiteAssets":
-		var registryInput struct {
-			SiteID string `json:"siteId"`
-		}
-		if decodeStrictOperationsJSON(input.Request.Input, &registryInput) != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Registry Asset request is invalid.", false, nil)
-			return
-		}
-		siteID, registryAction = registryInput.SiteID, registryauth.ActionAssetList
-	case "registry.getSiteAssetModel":
-		var registryInput struct {
-			SiteID string `json:"siteId"`
-		}
-		if decodeStrictOperationsJSON(input.Request.Input, &registryInput) != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Registry asset model request is invalid.", false, nil)
-			return
-		}
-		siteID, registryAction = registryInput.SiteID, registryauth.ActionAssetModelRead
-	case "analytics.getEnergySeries":
-		var energyQuery analyticsmodel.EnergySeriesQuery
-		if decodeStrictOperationsJSON(input.Request.Input, &energyQuery) != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Energy Series request is invalid.", false, nil)
-			return
-		}
-		scope, err := energySeriesScope(energyQuery)
-		if err != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Energy Series request is invalid.", false, nil)
-			return
-		}
-		siteID, analytics = scope.SiteID, &scope
-	case "analytics.semanticQuery":
-		var semanticQuery analyticsmodel.SemanticQuery
-		if decodeStrictOperationsJSON(input.Request.Input, &semanticQuery) != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The semantic query asks for members or a range outside the catalog.", false, nil)
-			return
-		}
-		scope, err := semanticQueryScope(semanticQuery)
-		if err != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The semantic query asks for members or a range outside the catalog.", false, nil)
-			return
-		}
-		siteID, analytics = scope.SiteID, &scope
-	case "alarm.listAlarms":
-		var alarmInput struct {
-			SiteID    string `json:"siteId"`
-			Condition string `json:"condition"`
-			Limit     int    `json:"limit"`
-		}
-		// Condition and size travel with the request the Agent's reader sends; the owner checks them.
-		if decodeStrictOperationsJSON(input.Request.Input, &alarmInput) != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Alarm list request is invalid.", false, nil)
-			return
-		}
-		siteID, alarmList = alarmInput.SiteID, true
-	case "workorder.listWorkOrders":
-		// Size travels with the request the Agent's reader sends; the owner checks it.
-		var workOrderInput struct {
-			SiteID string `json:"siteId"`
-			Limit  int    `json:"limit"`
-		}
-		if decodeStrictOperationsJSON(input.Request.Input, &workOrderInput) != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Work Order list request is invalid.", false, nil)
-			return
-		}
-		siteID, workOrderList = workOrderInput.SiteID, true
-	case "fdd.listFindings":
-		var fddInput struct {
-			SiteID string `json:"siteId"`
-			Limit  int    `json:"limit"`
-		}
-		if decodeStrictOperationsJSON(input.Request.Input, &fddInput) != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The FDD findings request is invalid.", false, nil)
-			return
-		}
-		siteID, fddFindings = fddInput.SiteID, true
-	case "telemetry.current.getDeviceObservationSnapshot":
-		var telemetryInput struct {
-			SiteID    string   `json:"siteId"`
-			DeviceID  string   `json:"deviceId"`
-			PointKeys []string `json:"pointKeys"`
-		}
-		if decodeStrictOperationsJSON(input.Request.Input, &telemetryInput) != nil || !isLowerUUIDv7(telemetryInput.SiteID) || !isLowerUUIDv7(telemetryInput.DeviceID) {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Telemetry Snapshot request is invalid.", false, nil)
-			return
-		}
-		telemetryTarget = telemetryauth.Target{DeviceID: telemetryInput.DeviceID, Keys: telemetryInput.PointKeys}
-		if _, err := telemetryauth.CanonicalTargets([]telemetryauth.Target{telemetryTarget}); err != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Telemetry Snapshot selection is invalid.", false, nil)
-			return
-		}
-		siteID = telemetryInput.SiteID
-	case "telemetry.history.aggregateDeviceHistory":
-		if decodeStrictOperationsJSON(input.Request.Input, &historyQuery) != nil || historyQuery.Validate() != nil {
-			writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Device History request is invalid.", false, nil)
-			return
-		}
-		telemetryTarget = telemetryauth.Target{DeviceID: historyQuery.DeviceID, Keys: historyQuery.Keys}
-		siteID = historyQuery.SiteID
-	default:
+	spec, ok := operationsToolAuthorizers[input.Request.Tool]
+	if !ok {
 		writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_UNSUPPORTED", "Tool unsupported", "The requested Tool is not enabled for the Operations Agent.", false, nil)
 		return
 	}
+	parsedInput, siteID, problem := spec.parse(input.Request.Input)
+	if problem != nil {
+		problem.write(writer, request)
+		return
+	}
 	if !isLowerUUIDv7(siteID) {
-		writeProblem(writer, request, http.StatusBadRequest, "OPERATIONS_TOOL_REQUEST_INVALID", "Tool request invalid", "The Tool request Site identity is invalid.", false, nil)
+		invalidToolRequestProblem("The Tool request Site identity is invalid.").write(writer, request)
 		return
 	}
 	claims, err := identitycontext.VerifyDelegation(h.identity.config.DelegationSigner.Public(), request.Header.Get("X-Delegation-Grant"))
@@ -290,168 +545,32 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		return
 	}
 	acceptableScopes := []string{"site:" + siteID, "session:" + claims.SessionID}
-	if identitycontext.ValidateDelegationAnyScope(claims, h.identity.now(), h.identity.config.ExecutingWorkloadSPIFFE, h.operations.audience, "operations:investigate", acceptableScopes) != nil {
+	maxDelegationTTL := h.operations.serviceDelegationTTL
+	if maxDelegationTTL <= 0 {
+		maxDelegationTTL = defaultOperationsServiceDelegationTTL
+	}
+	if identitycontext.ValidateDelegationAnyScopeWithMaxTTL(claims, h.identity.now(), h.identity.config.ExecutingWorkloadSPIFFE, h.operations.audience, "operations:investigate", acceptableScopes, maxDelegationTTL) != nil {
 		writeProblem(writer, request, http.StatusForbidden, "OPERATIONS_DELEGATION_REJECTED", "Operations delegation rejected", "The Operations service delegation does not authorize this Site.", false, nil)
 		return
 	}
 	stored, err := h.identity.store.GetSession(request.Context(), claims.SessionID)
 	if err != nil || stored.RevokedAt != nil || !h.identity.now().Before(stored.ExpiresAt) || stored.TenantID != claims.TenantID || stored.Principal.Subject != claims.Subject || stored.Principal.Issuer != claims.SubjectIssuer {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
+		siteNotFoundProblem().write(writer, request)
 		return
 	}
-	session := bffSession{Session: stored}
-	if workOrderList {
-		// The Agent reads the list from the work-order owner itself, with a context naming it (#595).
-		if h.workOrder == nil {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The Work Order Service is not configured.", true, nil)
-			return
-		}
-		route := publicWorkOrderRoute{kind: publicWorkOrderCollection, template: "/api/v1/sites/{siteId}/work-orders", siteID: siteID, action: workorderauth.ActionList}
-		decision, failure := h.authorizeWorkOrder(request, session, route, nil, nil)
-		if failure == nil {
-			var grant string
-			grant, failure = h.signWorkOrderReadContext(session, route, decision, session.TenantID, h.operations.workloadSPIFFEID)
-			if failure == nil {
-				writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: decision.PolicyRevision})
-				return
-			}
-		}
-		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
-			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
-		} else {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The Work Order authorization could not be completed.", true, nil)
-		}
+	response, problem := spec.authorize(operationsToolAuthContext{
+		handler: h,
+		request: request,
+		session: bffSession{Session: stored},
+		claims:  claims,
+		siteID:  siteID,
+		input:   parsedInput,
+	})
+	if problem != nil {
+		problem.write(writer, request)
 		return
 	}
-	if fddFindings {
-		// Findings are read on site.read, as the 诊断 page reads them; the Agent presents the context (#595).
-		if h.intelligence == nil || h.intelligence.fddBaseURL == "" {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "FDD is not configured.", true, nil)
-			return
-		}
-		authorization, failure := h.authorizeRegistry(request.Context(), session, registryauth.ActionSiteRead)
-		if failure != nil || !registryAuthorizationAllowsSite(authorization, siteID) {
-			if failure == nil || failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
-				writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
-			} else {
-				writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The Site authorization could not be completed.", true, nil)
-			}
-			return
-		}
-		grant, err := h.ownerContext(session, fddOwner, siteID, fddReadAction, h.operations.workloadSPIFFEID)
-		if err != nil {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The FDD context could not be signed.", true, nil)
-			return
-		}
-		writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: authorization.policyRevision})
-		return
-	}
-	if alarmList {
-		// The Agent reads the list from the alarm owner itself, with a context naming it (#594).
-		if h.alarm == nil {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The Alarm Service is not configured.", true, nil)
-			return
-		}
-		route := publicAlarmRoute{template: "/api/v1/alarms", action: alarmauth.ActionRead, siteID: siteID}
-		caller := ownerCaller{session: session, presenter: h.operations.workloadSPIFFEID}
-		grant, decision, failure := grantOwner(request.Context(), h, caller, h.alarmOwner(), string(route.action), route.scope(session.TenantID))
-		if failure == nil {
-			writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: decision.policyRevision})
-			return
-		}
-		if failure.status == http.StatusForbidden || failure.status == http.StatusNotFound {
-			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
-		} else {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The Alarm authorization could not be completed.", true, nil)
-		}
-		return
-	}
-	if input.Request.Tool == "telemetry.current.getDeviceObservationSnapshot" || input.Request.Tool == "telemetry.history.aggregateDeviceHistory" {
-		caller := telemetryCaller{
-			principal: session.Principal,
-			tenantID:  session.TenantID,
-			contextID: session.ID,
-			expiresAt: session.ExpiresAt,
-		}
-		action := telemetryauth.ActionSnapshotRead
-		if input.Request.Tool == "telemetry.history.aggregateDeviceHistory" {
-			action = telemetryauth.ActionHistoryRead
-		}
-		authorization, failure := h.authorizeTelemetryForPresenter(
-			request.Context(), request, caller, action,
-			[]telemetryauth.Target{telemetryTarget}, h.operations.workloadSPIFFEID,
-		)
-		if failure != nil {
-			if failure.status == http.StatusNotFound || failure.status == http.StatusForbidden {
-				writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested telemetry resource was not found.", false, nil)
-			} else {
-				writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
-			}
-			return
-		}
-		if len(authorization.targets) != 1 || authorization.targets[0].TenantID != claims.TenantID || authorization.targets[0].SiteID != siteID || authorization.targets[0].DeviceID != telemetryTarget.DeviceID {
-			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested telemetry resource was not found.", false, nil)
-			return
-		}
-		grant := authorization.grant
-		if action == telemetryauth.ActionHistoryRead {
-			// History is answered by the Telemetry Query Service, which accepts a Gateway-signed
-			// grant bound to the exact aggregate query and presented by the Agent.
-			if historyQuery.TenantID != claims.TenantID {
-				writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested telemetry resource was not found.", false, nil)
-				return
-			}
-			signed, failure := h.signHistoryQueryGrant(caller, authorization, claims.TenantID, telemetryhistorymodel.DeviceHistoryAggregateAction, historyQuery.ScopeDigest, h.operations.workloadSPIFFEID)
-			if failure != nil {
-				writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
-				return
-			}
-			grant = signed
-		}
-		writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{DelegationGrant: grant, PolicyRevision: authorization.policyRevision})
-		return
-	}
-	if analytics != nil {
-		grant, failure := h.authorizeAnalyticsForPresenter(
-			request.Context(),
-			request,
-			session,
-			*analytics,
-			h.operations.workloadSPIFFEID,
-		)
-		if failure != nil {
-			if failure.status == http.StatusForbidden {
-				writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
-			} else {
-				h.writeAnalyticsFailure(writer, request, *failure)
-			}
-			return
-		}
-		issuedClaims, err := identitycontext.VerifyDelegation(
-			h.identity.config.DelegationSigner.Public(),
-			grant,
-		)
-		if err != nil || strings.TrimSpace(issuedClaims.PolicyRevision) == "" {
-			writeProblem(writer, request, http.StatusServiceUnavailable, "OPERATIONS_AUTHORIZATION_UNAVAILABLE", "Operations authorization unavailable", "The Energy authorization grant could not be verified after issuance.", true, nil)
-			return
-		}
-		writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{
-			DelegationGrant: grant,
-			PolicyRevision:  issuedClaims.PolicyRevision,
-		})
-		return
-	}
-	authorization, failure := h.authorizeRegistryForPresenter(
-		request.Context(),
-		session,
-		registryAction,
-		h.operations.workloadSPIFFEID,
-	)
-	if failure != nil || !registryAuthorizationAllowsSite(authorization, siteID) {
-		writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Site was not found.", false, nil)
-		return
-	}
-	writeJSON(writer, http.StatusOK, operationsToolAuthorizationResponse{DelegationGrant: authorization.coreGrant, PolicyRevision: authorization.policyRevision})
+	writeJSON(writer, http.StatusOK, response)
 }
 
 func registryAuthorizationAllowsSite(authorization registryAuthorization, siteID string) bool {
@@ -460,8 +579,12 @@ func registryAuthorizationAllowsSite(authorization registryAuthorization, siteID
 }
 
 func (h *handler) operationsServiceDelegation(session bffSession, siteID string) (string, error) {
+	ttl := defaultOperationsServiceDelegationTTL
+	if h.operations != nil && h.operations.serviceDelegationTTL > 0 {
+		ttl = h.operations.serviceDelegationTTL
+	}
 	now := h.identity.now().UTC()
-	expiresAt := now.Add(h.identity.config.DelegationTTL)
+	expiresAt := now.Add(ttl)
 	if expiresAt.After(session.ExpiresAt) {
 		expiresAt = session.ExpiresAt
 	}

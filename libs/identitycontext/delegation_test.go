@@ -130,6 +130,67 @@ func TestDelegationAnyScopePreservesExactResourceProjection(t *testing.T) {
 	}
 }
 
+func TestValidateDelegationAnyScopeWithMaxTTL(t *testing.T) {
+	issuedAt := time.Date(2026, 7, 31, 8, 0, 0, 0, time.UTC)
+	claims := validClaims(issuedAt)
+	claims.Audience = "operations-agent-service"
+	claims.Actions = []string{"operations:investigate"}
+	claims.Scopes = []string{"site:site-01", "session:session-01"}
+	claims.ExpiresAt = issuedAt.Add(3 * time.Minute).Unix()
+
+	if err := identitycontext.ValidateDelegationAnyScopeWithMaxTTL(
+		claims,
+		issuedAt.Add(90*time.Second),
+		"spiffe://hvac.local/platform-gateway",
+		"operations-agent-service",
+		"operations:investigate",
+		[]string{"site:site-01", "session:session-01"},
+		3*time.Minute,
+	); err != nil {
+		t.Fatalf("180s delegation rejected at +90s: %v", err)
+	}
+
+	// Default ValidateDelegationAnyScope must still enforce the 60s invariant.
+	if err := identitycontext.ValidateDelegationAnyScope(
+		claims,
+		issuedAt,
+		"spiffe://hvac.local/platform-gateway",
+		"operations-agent-service",
+		"operations:investigate",
+		[]string{"site:site-01", "session:session-01"},
+	); err == nil {
+		t.Fatal("default ValidateDelegationAnyScope accepted a 180s delegation")
+	}
+
+	tooLong := claims
+	tooLong.ExpiresAt = issuedAt.Add(181 * time.Second).Unix()
+	if err := identitycontext.ValidateDelegationAnyScopeWithMaxTTL(
+		tooLong,
+		issuedAt,
+		"spiffe://hvac.local/platform-gateway",
+		"operations-agent-service",
+		"operations:investigate",
+		[]string{"site:site-01", "session:session-01"},
+		3*time.Minute,
+	); err == nil {
+		t.Fatal("181s delegation was accepted under 180s maxTTL")
+	}
+
+	for _, invalidTTL := range []time.Duration{0, -time.Second, 500 * time.Millisecond, 1500 * time.Millisecond, 5*time.Minute + time.Second} {
+		if err := identitycontext.ValidateDelegationAnyScopeWithMaxTTL(
+			claims,
+			issuedAt,
+			"spiffe://hvac.local/platform-gateway",
+			"operations-agent-service",
+			"operations:investigate",
+			[]string{"site:site-01", "session:session-01"},
+			invalidTTL,
+		); err == nil {
+			t.Fatalf("invalid maxTTL %v was accepted", invalidTTL)
+		}
+	}
+}
+
 func validClaims(now time.Time) identitycontext.DelegationClaims {
 	return identitycontext.DelegationClaims{
 		Issuer: "spiffe://hvac.local/platform-gateway", Subject: "fixture-user", SubjectIssuer: "https://issuer.example.test",

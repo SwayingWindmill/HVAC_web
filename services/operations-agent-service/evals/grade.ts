@@ -20,7 +20,18 @@ export type SeriesByKey = Readonly<Record<string, {
   readonly devices?: readonly { readonly deviceId: string; readonly points: readonly SeriesPoint[] }[];
 }>>;
 
-export type CheckName = 'completed' | 'figures' | 'leads-with-conclusion' | 'chinese-only' | 'plain-words' | 'no-repetition' | 'efficiency' | 'declines' | 'says' | 'chart';
+export type CheckName =
+  | 'completed'
+  | 'figures'
+  | 'leads-with-conclusion'
+  | 'chinese-only'
+  | 'plain-words'
+  | 'no-repetition'
+  | 'efficiency'
+  | 'declines'
+  | 'says'
+  | 'chart'
+  | 'markdown-table';
 
 export interface Check {
   readonly name: CheckName;
@@ -144,6 +155,60 @@ const overlap = (part: string, whole: Set<string>): number => {
   return [...grams].filter((gram) => whole.has(gram)).length / grams.size;
 };
 
+const FENCE_OPEN = /^\s{0,3}(`{3,}|~{3,})(.*)$/u;
+const GFM_TABLE_DIVIDER = /^\s*\|?(?:\s*:?-+:?\s*\|)+\s*(?::?-+:?\s*)?$/u;
+
+const isPipeTableRow = (line: string): boolean => {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|')) return false;
+  const inner = trimmed.endsWith('|') ? trimmed.slice(1, -1) : trimmed.slice(1);
+  return inner.split('|').length >= 2;
+};
+
+/** Detects raw Markdown pipe tables missing a GFM divider row (#669), ignoring fenced code blocks. */
+export const findUnformattedPipeTables = (text: string): string | null => {
+  let fence: { readonly char: '`' | '~'; readonly length: number } | null = null;
+  let block: string[] = [];
+
+  const checkBlock = (): string | null => {
+    if (block.length >= 2) {
+      const divider = block[1];
+      if (divider === undefined || !GFM_TABLE_DIVIDER.test(divider)) {
+        return `pipe table missing GFM divider row after: ${block[0]!.trim()}`;
+      }
+    }
+    block = [];
+    return null;
+  };
+
+  for (const line of text.split(/\r?\n/u)) {
+    if (fence !== null) {
+      const closePattern = new RegExp(`^\\s{0,3}${fence.char}{${fence.length},}\\s*$`, 'u');
+      if (closePattern.test(line)) fence = null;
+      continue;
+    }
+    const openMatch = FENCE_OPEN.exec(line);
+    if (openMatch !== null) {
+      const marker = openMatch[1]!;
+      const info = openMatch[2] ?? '';
+      if (marker[0] === '~' || !info.includes('`')) {
+        const failure = checkBlock();
+        if (failure !== null) return failure;
+        fence = { char: marker[0] === '`' ? '`' : '~', length: marker.length };
+        continue;
+      }
+    }
+    if (isPipeTableRow(line)) {
+      block.push(line);
+      continue;
+    }
+    const failure = checkBlock();
+    if (failure !== null) return failure;
+  }
+
+  return checkBlock();
+};
+
 export const gradeTrial = (question: EvalQuestion, snapshot: AgentSessionSnapshot, series: SeriesByKey): TrialGrade => {
   const run = snapshot.runs.at(-1);
   const runId = snapshot.messages.findLast((message) => message.role === 'ASSISTANT')?.runId ?? null;
@@ -197,6 +262,9 @@ export const gradeTrial = (question: EvalQuestion, snapshot: AgentSessionSnapsho
 
   const leaks = [...INTERNAL_TERMS.filter((term) => shown.includes(term)), ...(shown.match(IDENTIFIER) ?? [])];
   checks.push(leaks.length === 0 ? pass('plain-words') : fail('plain-words', `internal terms: ${leaks.join(', ')}`));
+
+  const tableFailure = findUnformattedPipeTables(assistant.map((message) => message.content).join('\n\n'));
+  checks.push(tableFailure === null ? pass('markdown-table') : fail('markdown-table', tableFailure));
 
   if (finding !== undefined) {
     // The card under the answer lists what the data could not tell; the answer must not say it again.

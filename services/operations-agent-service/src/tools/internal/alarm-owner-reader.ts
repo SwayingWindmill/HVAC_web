@@ -7,12 +7,11 @@ import {
   type OwnerReadResult,
 } from '../../application/index.js';
 import {
-  createOwnerHeaders,
-  fetchOwnerJson,
   isInstant,
   isNonEmptyString,
   isRecord,
   normalizeOwnerReaderHttpConfig,
+  readAuthorizedOwnerJson,
   type OwnerReaderHttpConfig,
 } from './owner-http.js';
 
@@ -83,17 +82,13 @@ export const createAlarmOwnerReader = (input: AlarmOwnerReaderConfig): AlarmRead
       if (query.siteId !== scope.siteId || scope.assetId !== null || scope.deviceId !== null) {
         throw new OwnerReadError('OWNER_REQUEST_INVALID', 'The alarm list is outside the trusted Site scope.');
       }
-      // createOwnerHeaders refuses a read without its grant, so the grant is always there.
-      const { 'X-Delegation-Grant': grant, ...headers } = createOwnerHeaders(readInput.request.requestId, readInput.context, {
-        logicalTool: readInput.request.tool,
-        includePolicyRevision: false,
-        hasBody: false,
-      }) as Record<string, string> & { readonly 'X-Delegation-Grant': string };
       const search = new URLSearchParams({ condition: query.condition, limit: String(query.limit) });
-      const payload = await fetchOwnerJson(config, {
+      const payload = await readAuthorizedOwnerJson(config, {
+        requestId: readInput.request.requestId,
+        logicalTool: readInput.request.tool,
+        context: readInput.context,
         path: `/internal/v1/sites/${encodeURIComponent(query.siteId)}/alarms?${search.toString()}`,
         method: 'GET',
-        headers: { ...headers, 'X-Alarm-Read-Context': grant },
       });
       // The owner's list envelope is schema 2 (libs/alarmmodel); the Tool reads its own shape.
       if (!isRecord(payload) || payload.schemaVersion !== OWNER_LIST_SCHEMA || !Array.isArray(payload.items)

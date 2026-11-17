@@ -8,13 +8,12 @@ import {
   type RegistryReader,
 } from '../../application/index.js';
 import {
-  createOwnerHeaders,
-  fetchOwnerJson,
   hasExactKeys,
   isInstant,
   isNonEmptyString,
   isRecord,
   normalizeOwnerReaderHttpConfig,
+  readAuthorizedOwnerJson,
   type OwnerReaderHttpConfig,
 } from './owner-http.js';
 
@@ -66,13 +65,16 @@ export interface RegistryAssetModelDto {
     readonly pointType: string;
     readonly unit: string | null;
     readonly status: string;
+    readonly semanticRole?: string;
   }[];
   readonly relationships: readonly {
     readonly fromType: string;
     readonly fromId: string;
     readonly toType: string;
     readonly toId: string;
+    readonly role?: string;
     readonly status: string;
+    readonly semanticRole?: string;
   }[];
 }
 
@@ -218,14 +220,12 @@ const readSite = async (
   config: ReturnType<typeof normalizeOwnerReaderHttpConfig>,
 ): Promise<OwnerReadResult> => {
   const requestedScope = assertSiteScope(input);
-  const payload = await fetchOwnerJson(config, {
+  const payload = await readAuthorizedOwnerJson(config, {
+    requestId: input.request.requestId,
+    logicalTool: input.request.tool,
+    context: input.context,
     path: `/internal/v1/registry/sites/${encodeURIComponent(requestedScope.siteId)}`,
     method: 'GET',
-    headers: createOwnerHeaders(input.request.requestId, input.context, {
-      logicalTool: input.request.tool,
-      includePolicyRevision: true,
-      hasBody: false,
-    }),
   });
   const site = decodeSite(payload);
   if (site.id !== requestedScope.siteId
@@ -281,14 +281,12 @@ const readSiteAssets = async (
     }
     const query = new URLSearchParams({ limit: String(pageLimit) });
     if (cursor !== null) query.set('cursor', cursor);
-    const payload = await fetchOwnerJson(config, {
+    const payload = await readAuthorizedOwnerJson(config, {
+      requestId: page === 1 ? input.request.requestId : `${input.request.requestId}:page:${page}`,
+      logicalTool: input.request.tool,
+      context: input.context,
       path: `/internal/v1/registry/sites/${encodeURIComponent(requestedScope.siteId)}/assets?${query}`,
       method: 'GET',
-      headers: createOwnerHeaders(
-        page === 1 ? input.request.requestId : `${input.request.requestId}:page:${page}`,
-        input.context,
-        { logicalTool: input.request.tool, includePolicyRevision: true, hasBody: false },
-      ),
     });
     const collection = decodeCollection(payload);
     for (const item of collection.items) {
@@ -330,6 +328,9 @@ const readSiteAssets = async (
 };
 
 const isStringField = (value: Record<string, unknown>, key: string): boolean => typeof value[key] === 'string';
+const isOptionalStringField = (value: Record<string, unknown>, key: string): boolean => (
+  value[key] === undefined || typeof value[key] === 'string'
+);
 
 const decodeAssetModel = (value: unknown): RegistryAssetModelDto => {
   const invalid = (): never => {
@@ -343,8 +344,17 @@ const decodeAssetModel = (value: unknown): RegistryAssetModelDto => {
   ));
   if (!records(devices, ['id', 'displayName', 'deviceType', 'status'])
     || !records(telemetryPoints, ['reportingDeviceId', 'pointCode', 'displayName', 'pointType', 'status'])
-    || !telemetryPoints.every((point) => isRecord(point) && (point.unit === null || typeof point.unit === 'string'))
-    || !records(relationships, ['fromType', 'fromId', 'toType', 'toId', 'status'])) {
+    || !telemetryPoints.every((point) => (
+      isRecord(point)
+      && (point.unit === null || typeof point.unit === 'string')
+      && isOptionalStringField(point, 'semanticRole')
+    ))
+    || !records(relationships, ['fromType', 'fromId', 'toType', 'toId', 'status'])
+    || !relationships.every((relationship) => (
+      isRecord(relationship)
+      && isOptionalStringField(relationship, 'role')
+      && isOptionalStringField(relationship, 'semanticRole')
+    ))) {
     return invalid();
   }
   return {
@@ -363,14 +373,12 @@ const readSiteAssetModel = async (
   config: ReturnType<typeof normalizeOwnerReaderHttpConfig>,
 ): Promise<OwnerReadResult> => {
   const requestedScope = assertSiteScope(input);
-  const payload = await fetchOwnerJson(config, {
+  const payload = await readAuthorizedOwnerJson(config, {
+    requestId: input.request.requestId,
+    logicalTool: input.request.tool,
+    context: input.context,
     path: `/internal/v1/registry/sites/${encodeURIComponent(requestedScope.siteId)}/asset-model`,
     method: 'GET',
-    headers: createOwnerHeaders(input.request.requestId, input.context, {
-      logicalTool: input.request.tool,
-      includePolicyRevision: true,
-      hasBody: false,
-    }),
   });
   const model = decodeAssetModel(payload);
   if (model.tenantId !== requestedScope.tenantId || model.siteId !== requestedScope.siteId) {

@@ -11,7 +11,11 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/grant"
 )
 
-const DelegationVersion = 1
+const (
+	DelegationVersion              = 1
+	defaultMaxDelegationTTLSeconds = 60
+	maxAllowedDelegationTTL        = 5 * time.Minute
+)
 
 type UserPrincipal struct {
 	Subject     string   `json:"subject"`
@@ -154,6 +158,32 @@ func ValidateDelegationAnyScope(claims DelegationClaims, now time.Time, executin
 	)
 }
 
+// ValidateDelegationAnyScopeWithMaxTTL validates a user-backed delegation with an explicit
+// lifetime bound up to maxAllowedDelegationTTL (5 minutes), used for long-running agent runs.
+func ValidateDelegationAnyScopeWithMaxTTL(
+	claims DelegationClaims,
+	now time.Time,
+	executingService,
+	audience,
+	action string,
+	acceptableScopes []string,
+	maxTTL time.Duration,
+) error {
+	if claims.SessionID == "" {
+		return errors.New("delegation identity fields are incomplete")
+	}
+	return validateDelegationWithMaxTTL(
+		claims,
+		now,
+		executingService,
+		executingService,
+		audience,
+		action,
+		acceptableScopes,
+		maxTTL,
+	)
+}
+
 func ValidateDelegationFromIssuerAnyScope(
 	claims DelegationClaims,
 	now time.Time,
@@ -166,7 +196,16 @@ func ValidateDelegationFromIssuerAnyScope(
 	if claims.SessionID == "" {
 		return errors.New("delegation identity fields are incomplete")
 	}
-	return validateDelegation(claims, now, issuer, executingService, audience, action, acceptableScopes)
+	return validateDelegationWithMaxTTL(
+		claims,
+		now,
+		issuer,
+		executingService,
+		audience,
+		action,
+		acceptableScopes,
+		time.Duration(defaultMaxDelegationTTLSeconds)*time.Second,
+	)
 }
 
 // ValidateWorkloadDelegation checks a grant a Workload Principal holds for itself (ADR 0017):
@@ -175,10 +214,19 @@ func ValidateWorkloadDelegation(claims DelegationClaims, now time.Time, issuer, 
 	if claims.Subject != workload || claims.SessionID != "" {
 		return errors.New("workload delegation must name the presenting workload and no Session")
 	}
-	return validateDelegation(claims, now, issuer, workload, audience, action, []string{scope})
+	return validateDelegationWithMaxTTL(
+		claims,
+		now,
+		issuer,
+		workload,
+		audience,
+		action,
+		[]string{scope},
+		time.Duration(defaultMaxDelegationTTLSeconds)*time.Second,
+	)
 }
 
-func validateDelegation(
+func validateDelegationWithMaxTTL(
 	claims DelegationClaims,
 	now time.Time,
 	issuer,
@@ -186,7 +234,12 @@ func validateDelegation(
 	audience,
 	action string,
 	acceptableScopes []string,
+	maxTTL time.Duration,
 ) error {
+	if maxTTL < time.Second || maxTTL > maxAllowedDelegationTTL || maxTTL%time.Second != 0 {
+		return errors.New("delegation max ttl is invalid")
+	}
+	maxTTLSeconds := int64(maxTTL / time.Second)
 	if claims.Issuer != issuer {
 		return errors.New("delegation issuer is invalid")
 	}
@@ -199,7 +252,7 @@ func validateDelegation(
 	if claims.IssuedAt > now.Add(5*time.Second).Unix() {
 		return errors.New("delegation is not active")
 	}
-	if claims.ExpiresAt <= now.Unix() || claims.ExpiresAt-claims.IssuedAt > 60 {
+	if claims.ExpiresAt <= now.Unix() || claims.ExpiresAt-claims.IssuedAt > maxTTLSeconds {
 		return errors.New("delegation is expired or too long-lived")
 	}
 	if claims.Subject == "" || claims.SubjectIssuer == "" || claims.TenantID == "" || claims.TokenID == "" || claims.PolicyRevision == "" {

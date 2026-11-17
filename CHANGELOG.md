@@ -23,9 +23,17 @@
   - `libs/observability` 新增 `Recover`、`GoSafe` 与 `(*Runtime).Go`，捕获后台协程 panic、输出脱敏错误日志并累加 `hvac_goroutine_panics_total`；`cmd/*`、`modules/{alarm,energy,iam,maintenance,registry,telemetry,workorder}` 后台循环与连接隧道协程统一接入恢复保护。
   - `modules/connectivity` 将 MQTT 上行接收改为按网关 UUIDv7 分桶的定长协程池（默认 `32` 路、`4096` 个追踪队列上限、空闲队列回收与非阻塞 `time.AfterFunc` 重试），并将上行报文 `traceId` 与 HTTP `traceparent` 透传至 `telemetry-worker` 实时接收及运行事件证据链路。
   - `modules/command` 新增迁移 `command_intent_trace_context.sql` 保存命令意图 `trace_id`，打通平台网关与 `command-service` HTTP `traceparent` 到 `DispatchEnvelope` 及下行 MQTT 命令报文 `traceId`（幂等哈希保持与 `traceId` 无关），并用带 `256` 容量上限、panic 恢复与停机排空的 `controlFailureQueue` 替换裸异步控制失败通知协程。
+- 收口 AI 运维助手（`services/operations-agent-service`）与平台网关（`cmd/energy-api/internal/gateway`）的运行期站点快照与工具授权边界，并完成 `#641` `pi-codemode` 实测取舍：
+  - 引入按单次问答运行期（`RunSiteSnapshot`）单飞复用的站点上下文与懒加载设备点位模型：每次问答至多查询 1 次 `registry.getSite`，仅在读取设备、时序、告警、故障诊断或工单时按需查询至多 1 次 `registry.getSiteAssetModel` 并附上 `SERVES` 上下游关联，全站能耗和拒答类提问不再多余查询资产模型。
+  - 网关 `/internal/v1/operations/tool-authorization` 改用声明式工具授权分发表 `operationsToolAuthorizers` 并与 `contracts/http/operations-tool-authorization-internal.openapi.yaml` 对齐全部 10 个只读工具；将单次分析的 `operations:investigate` 服务代理授权有效期延长至 180 秒（经 `ValidateDelegationAnyScopeWithMaxTTL` 限制不超过 5 分钟，每次工具授权仍实时核验会话未吊销，下游只读服务短期授权维持 30 秒不变），并用 `OWNER_GRANT_WIRE_POLICY` 统一 4 种下游认证头写法。
+  - 基于 12 道松雅轩评测题 × 3 轮 × 2 模式的 72 轮真实 `deepseek-flash` A/B 对照评测，因 `pi-codemode` 未提高整题通过率（同为 `9/12`）且平均耗时（`8.18s` vs `7.83s`）、读取次数（`2.86` vs `2.56`）和令牌（`2939` vs `2768`）均增加，决定保持直调模式不引入 `@earendil-works/pi-codemode`（#641），结果记入 `docs/architecture/pi-agent-source-review.md`。
 - 将运行优化（`services/optimization-service`）、故障诊断（`services/fdd-service`）与控制门禁（`modules/command`）收口到 `libs/planttwin`：
   - 删除 `SongyaxuanChillerMeterBindings()` 硬编码、多键 `run_state` 猜测、按 `deviceId` 强绑定的四信号假设，以及优化与控制侧从 `interlockChecks` 逆推 `SERVES` 的兜底逻辑；改为按 `SemanticRole` 跨拆分设备（电表、温度集中器、热量表）与 `HydraulicGraph` 解析设备与点位。
   - 将优化备选、诊断工况门控与控制时段检查统一收口至 `EvaluateOperatingSchedule`（统一 IANA 时区、预冷/延后缓冲与已批准运行例外）。
+
+#### 修复
+
+- 修复 AI 助手回复里的 Markdown 表格偶发缺少表头分隔线、页面显示成带竖线原文的问题（#669）：提示词（`system-policy.ts`）补全标准 `| --- |` 分隔线示例与约束，网页端与小程序共享解析器（`answer-markdown.ts`）对代码块外的无分隔线管道表格自动补全分隔行，并在 `evals/grade.ts` 加入 `markdown-table` 自动检查。
 
 ### 2026-11-16
 
