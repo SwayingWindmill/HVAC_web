@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 )
 
 type ConcentratorAuditEntry struct {
@@ -53,18 +54,35 @@ WHERE gateway_id = $1::uuid AND status = 'ACTIVE'
 	if tenantID != claims.TenantID || !registryauth.ScopeAllows(claims, siteID) {
 		return "", ErrCredentialForbidden
 	}
-	var revoked bool
+	var revoked, hasActiveCred, hasRevokedCred bool
+	now := store.clock().UTC()
 	if err := store.readAsTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
-SELECT EXISTS (
-  SELECT 1 FROM connectivity.gateway_enrollments
-  WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid AND revoked_at IS NOT NULL
-)`, tenantID, gatewayID).Scan(&revoked)
+SELECT
+  EXISTS (
+    SELECT 1 FROM connectivity.gateway_enrollments
+    WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid AND revoked_at IS NOT NULL
+  ),
+  EXISTS (
+    SELECT 1 FROM connectivity.gateway_credentials
+    WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
+      AND status = 'ACTIVE' AND valid_from <= $3 AND valid_until > $3
+  ),
+  EXISTS (
+    SELECT 1 FROM connectivity.gateway_credentials
+    WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid AND status = 'REVOKED'
+  )`, tenantID, gatewayID, now).Scan(&revoked, &hasActiveCred, &hasRevokedCred)
 	}); err != nil {
-		return "", fmt.Errorf("check Gateway revocation state: %w", err)
+		return "", fmt.Errorf("check Gateway credential state: %w", err)
 	}
 	if revoked {
 		return "", ErrCredentialRevoked
+	}
+	if !hasActiveCred {
+		if hasRevokedCred {
+			return "", ErrCredentialRevoked
+		}
+		return "", adapter.ErrGatewayCredentialInactive
 	}
 	return tenantID, nil
 }

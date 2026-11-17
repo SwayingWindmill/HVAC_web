@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
 )
 
@@ -155,6 +156,8 @@ func MapError(err error) (int, string) {
 		return http.StatusNotFound, "GATEWAY_NOT_FOUND"
 	case errors.Is(err, connectivity.ErrCredentialRevoked):
 		return http.StatusConflict, "GATEWAY_REVOKED"
+	case errors.Is(err, adapter.ErrGatewayCredentialInactive):
+		return http.StatusConflict, "GATEWAY_CREDENTIAL_INACTIVE"
 	case errors.Is(err, ErrRPCTimeout):
 		return http.StatusGatewayTimeout, "CONCENTRATOR_RPC_TIMEOUT"
 	case errors.Is(err, ErrTransportUnavailable):

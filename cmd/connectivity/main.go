@@ -191,7 +191,7 @@ func uplinkConfig() adapter.Config {
 	return adapter.Config{
 		MQTT: adapter.MQTTConfig{
 			BrokerURL:               envOr("CONNECTIVITY_MQTT_URL", "tls://mqtt-broker:8883"),
-			ClientID:                envOr("CONNECTIVITY_MQTT_CLIENT_ID", "connectivity"),
+			ClientID:                envOr("CONNECTIVITY_MQTT_CLIENT_ID", defaultMQTTClientID("connectivity")),
 			SharedSubscriptionGroup: sharedSubscriptionGroup(),
 			CAFile:                  ca, CertFile: identityCert, KeyFile: identityKey,
 			ServerName: envOr("CONNECTIVITY_MQTT_SERVER_NAME", "mqtt-broker"),
@@ -319,4 +319,45 @@ func envOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+const maxDefaultMQTTClientIDLen = 96
+
+func defaultMQTTClientID(prefix string) string {
+	host, err := os.Hostname()
+	if err != nil {
+		host = ""
+	}
+	return defaultMQTTClientIDForHost(prefix, host)
+}
+
+func defaultMQTTClientIDForHost(prefix, host string) string {
+	cleanPrefix := sanitizeMQTTClientID(prefix)
+	if cleanPrefix == "" {
+		cleanPrefix = "connectivity"
+	}
+	cleanHost := sanitizeMQTTClientID(host)
+	if cleanHost == "" {
+		return cleanPrefix
+	}
+	combined := cleanPrefix + "-" + cleanHost
+	if len(combined) > maxDefaultMQTTClientIDLen {
+		return combined[:maxDefaultMQTTClientIDLen]
+	}
+	return combined
+}
+
+func sanitizeMQTTClientID(raw string) string {
+	var builder strings.Builder
+	builder.Grow(min(len(raw), maxDefaultMQTTClientIDLen))
+	for i := 0; i < len(raw); i++ {
+		ch := raw[i]
+		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' {
+			builder.WriteByte(ch)
+			if builder.Len() >= maxDefaultMQTTClientIDLen {
+				break
+			}
+		}
+	}
+	return builder.String()
 }

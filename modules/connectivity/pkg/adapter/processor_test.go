@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestParseMessageTopicAcceptsOnlyGatewayUplinks(t *testing.T) {
@@ -319,5 +320,50 @@ func TestProcessorSplitsLargeBytePayloadsBelowBatchByteLimit(t *testing.T) {
 		if len(encoded) > MaxObservationBatchBytes {
 			t.Fatalf("batch[%d] serialized length=%d exceeds MaxObservationBatchBytes=%d", batchIndex, len(encoded), MaxObservationBatchBytes)
 		}
+	}
+}
+
+func TestProcessorQuarantineTruncatesUTF8OnRuneBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		input  string
+		maxLen int
+		want   int
+	}{
+		{name: "3-byte Chinese crosses 1024 at byte 1022", input: strings.Repeat("a", 1022) + "中文测试信息", maxLen: 1024, want: 1022},
+		{name: "3-byte Chinese crosses 1024 at byte 1023", input: strings.Repeat("a", 1023) + "中文测试信息", maxLen: 1024, want: 1023},
+		{name: "4-byte emoji crosses 1024 at byte 1021", input: strings.Repeat("a", 1021) + "\U0001F600测试", maxLen: 1024, want: 1021},
+		{name: "exact rune fit at 1024", input: strings.Repeat("a", 1021) + "中" + "后面的内容", maxLen: 1024, want: 1024},
+		{name: "invalid UTF-8 bytes sanitized before truncation", input: strings.Repeat("a", 1020) + "\xff\xfe中文", maxLen: 1024, want: 1023},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncateUTF8(tc.input, tc.maxLen)
+			if len(got) > tc.maxLen || len(got) != tc.want {
+				t.Fatalf("len(truncateUTF8)=%d, want %d (<= %d)", len(got), tc.want, tc.maxLen)
+			}
+			if !utf8.ValidString(got) {
+				t.Fatalf("truncateUTF8 produced invalid UTF-8: %x", got)
+			}
+		})
+	}
+
+	identities := newFakeIdentities()
+	processor := newTestProcessor(t, identities, &fakeTelemetry{})
+	longField := strings.Repeat("k", 1003) + strings.Repeat("测", 20)
+	payload := []byte(`{"` + longField + `":1}`)
+	_, err := processor.Process(context.Background(), telemetryTopic(testGatewayA), payload)
+	if !isPermanentMessageError(err) {
+		t.Fatalf("err=%v, want permanent quarantine error", err)
+	}
+	quarantines := identities.snapshotQuarantines()
+	if len(quarantines) != 1 {
+		t.Fatalf("quarantines=%d, want 1", len(quarantines))
+	}
+	detail := quarantines[0].Detail
+	if len(detail) > 1024 || len(detail) < 1000 {
+		t.Fatalf("quarantine Detail length=%d, want within [1000, 1024]", len(detail))
+	}
+	if !utf8.ValidString(detail) {
+		t.Fatalf("quarantine Detail is invalid UTF-8: %x", detail)
 	}
 }

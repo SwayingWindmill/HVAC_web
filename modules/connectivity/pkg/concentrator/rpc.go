@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 )
 
 const (
@@ -26,6 +29,7 @@ const (
 	defaultRPCTimeout   = 18 * time.Second
 	ReplyTopicFilter    = "hvac/v1/+/up/concentrator"
 	maxReplyPayloadSize = 256 << 10
+	mqttConnectTimeout  = 10 * time.Second
 )
 
 var uuidV7Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -62,10 +66,20 @@ type waiterKey struct {
 }
 
 type MQTTTransport struct {
-	rootContext context.Context
-	timeout     time.Duration
-	logger      *slog.Logger
-	manager     *autopaho.ConnectionManager
+	rootContext       context.Context
+	runContext        context.Context
+	stopCancel        context.CancelFunc
+	timeout           time.Duration
+	logger            *slog.Logger
+	manager           *autopaho.ConnectionManager
+	connTracker       adapter.MQTTConnTracker
+	subscribeBackoffs []time.Duration
+
+	subWG      sync.WaitGroup
+	subMu      sync.Mutex
+	subscribed bool
+	subGen     uint64
+	subCancel  context.CancelFunc
 
 	readyMu   sync.Mutex
 	readyOnce bool
@@ -76,6 +90,10 @@ type MQTTTransport struct {
 }
 
 func NewMQTTTransport(ctx context.Context, cfg TransportConfig) (*MQTTTransport, error) {
+	return newMQTTTransport(ctx, cfg, nil, nil)
+}
+
+func newMQTTTransport(ctx context.Context, cfg TransportConfig, reconnectBackoff func(int) time.Duration, subscribeBackoffs []time.Duration) (*MQTTTransport, error) {
 	if err := validateTransportConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -95,13 +113,20 @@ func NewMQTTTransport(ctx context.Context, cfg TransportConfig) (*MQTTTransport,
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if reconnectBackoff == nil {
+		reconnectBackoff = autopaho.DefaultExponentialBackoff()
+	}
+	runContext, stopCancel := context.WithCancel(ctx)
 
 	transport := &MQTTTransport{
-		rootContext: ctx,
-		timeout:     timeout,
-		logger:      logger,
-		readyCh:     make(chan struct{}),
-		waiters:     map[waiterKey]chan RPCResponse{},
+		rootContext:       ctx,
+		runContext:        runContext,
+		stopCancel:        stopCancel,
+		timeout:           timeout,
+		logger:            logger,
+		subscribeBackoffs: subscribeBackoffs,
+		readyCh:           make(chan struct{}),
+		waiters:           map[waiterKey]chan RPCResponse{},
 	}
 
 	clientConfig := autopaho.ClientConfig{
@@ -110,8 +135,11 @@ func NewMQTTTransport(ctx context.Context, cfg TransportConfig) (*MQTTTransport,
 		KeepAlive:                     30,
 		CleanStartOnInitialConnection: true,
 		SessionExpiryInterval:         0,
-		ConnectTimeout:                10 * time.Second,
-		ReconnectBackoff:              autopaho.DefaultExponentialBackoff(),
+		ConnectTimeout:                mqttConnectTimeout,
+		ReconnectBackoff:              reconnectBackoff,
+		AttemptConnection: func(attemptCtx context.Context, _ autopaho.ClientConfig, server *url.URL) (net.Conn, error) {
+			return transport.dial(attemptCtx, tlsConfig, server)
+		},
 		OnConnectError: func(connectErr error) {
 			logger.Warn("concentrator_mqtt_connect_failed", "error", connectErr.Error())
 		},
@@ -123,23 +151,110 @@ func NewMQTTTransport(ctx context.Context, cfg TransportConfig) (*MQTTTransport,
 		},
 	}
 	clientConfig.OnConnectionUp = func(manager *autopaho.ConnectionManager, _ *paho.Connack) {
-		subCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		if _, subErr := manager.Subscribe(subCtx, &paho.Subscribe{
-			Subscriptions: []paho.SubscribeOptions{{Topic: ReplyTopicFilter, QoS: 1}},
-		}); subErr != nil {
-			logger.Warn("concentrator_mqtt_subscribe_failed", "error", subErr.Error())
-			return
+		gen := transport.connTracker.CurrentGen()
+		connection := transport.connTracker.CurrentClosed()
+		transport.subMu.Lock()
+		if transport.subCancel != nil {
+			transport.subCancel()
 		}
-		transport.markReady()
+		subCtx, subCancel := context.WithCancel(transport.runContext)
+		transport.subCancel = subCancel
+		transport.subGen = gen
+		transport.subscribed = false
+		transport.subMu.Unlock()
+
+		transport.subWG.Add(1)
+		go func() {
+			defer transport.subWG.Done()
+			defer subCancel()
+			transport.subscribeWithRetry(subCtx, manager, connection, gen)
+		}()
 	}
 
 	manager, err := autopaho.NewConnection(ctx, clientConfig)
 	if err != nil {
+		stopCancel()
 		return nil, fmt.Errorf("create concentrator MQTT connection: %w", err)
 	}
 	transport.manager = manager
 	return transport, nil
+}
+
+func (t *MQTTTransport) dial(ctx context.Context, tlsConfig *tls.Config, server *url.URL) (net.Conn, error) {
+	conn, gen, _, err := t.connTracker.DialTLS(ctx, tlsConfig, server.Host, mqttConnectTimeout, t.onConnectionClosed)
+	if err != nil {
+		return nil, err
+	}
+	t.subMu.Lock()
+	t.subGen = gen
+	t.subscribed = false
+	t.subMu.Unlock()
+	return conn, nil
+}
+
+func (t *MQTTTransport) onConnectionClosed(gen uint64) {
+	t.subMu.Lock()
+	var cancel context.CancelFunc
+	if t.subGen == gen {
+		t.subscribed = false
+		cancel = t.subCancel
+		t.subCancel = nil
+	}
+	t.subMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (t *MQTTTransport) closeCurrentConnection() {
+	t.subMu.Lock()
+	t.subscribed = false
+	t.subMu.Unlock()
+	t.connTracker.CloseCurrent()
+}
+
+func (t *MQTTTransport) setSubscribedForGen(gen uint64, connection <-chan struct{}, subscribed bool) bool {
+	if adapter.IsClosedSignal(connection) {
+		return false
+	}
+	t.subMu.Lock()
+	defer t.subMu.Unlock()
+	if t.connTracker.CurrentGen() != gen || t.subGen != gen || adapter.IsClosedSignal(t.connTracker.CurrentClosed()) {
+		return false
+	}
+	t.subscribed = subscribed
+	return true
+}
+
+func (t *MQTTTransport) Subscribed() bool {
+	if t == nil {
+		return false
+	}
+	t.subMu.Lock()
+	defer t.subMu.Unlock()
+	return t.subscribed
+}
+
+func (t *MQTTTransport) subscribeWithRetry(ctx context.Context, manager *autopaho.ConnectionManager, connection <-chan struct{}, gen uint64) {
+	subscriptions := []paho.SubscribeOptions{{Topic: ReplyTopicFilter, QoS: 1}}
+	backoffs := t.subscribeBackoffs
+	if backoffs == nil {
+		backoffs = adapter.DefaultSubscribeRetryDelays
+	}
+	if _, err := adapter.SubscribeWithRetry(ctx, manager, connection, subscriptions, mqttConnectTimeout, backoffs); err != nil {
+		if ctx.Err() != nil || adapter.IsClosedSignal(connection) {
+			return
+		}
+		t.setSubscribedForGen(gen, connection, false)
+		t.logger.Warn("concentrator_mqtt_subscribe_failed", "error", err.Error())
+		if t.connTracker.CurrentGen() == gen {
+			t.closeCurrentConnection()
+		}
+		return
+	}
+	if t.setSubscribedForGen(gen, connection, true) {
+		t.markReady()
+	}
 }
 
 func (t *MQTTTransport) markReady() {
@@ -167,11 +282,24 @@ func (t *MQTTTransport) Call(ctx context.Context, req RPCRequest) (RPCResponse, 
 	if t == nil || t.manager == nil {
 		return RPCResponse{}, ErrTransportUnavailable
 	}
+	if ctx.Err() != nil {
+		return RPCResponse{}, ErrRPCTimeout
+	}
 	timeout := t.timeout
+	if timeout <= 0 {
+		timeout = defaultRPCTimeout
+	}
 	if deadline, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(deadline); remaining > 0 && remaining < timeout {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return RPCResponse{}, ErrRPCTimeout
+		}
+		if remaining < timeout {
 			timeout = remaining
 		}
+	}
+	if !t.Subscribed() {
+		return RPCResponse{}, fmt.Errorf("%w: reply subscription inactive", ErrTransportUnavailable)
 	}
 	req.ExpireAt = time.Now().UTC().Add(timeout).UnixMilli()
 	payload, err := json.Marshal(req)
@@ -190,12 +318,14 @@ func (t *MQTTTransport) Call(ctx context.Context, req RPCRequest) (RPCResponse, 
 		t.mu.Unlock()
 	}()
 
+	expirySeconds := concentratorMessageExpirySeconds(timeout)
 	pubCtx, pubCancel := context.WithTimeout(ctx, 5*time.Second)
 	_, pubErr := t.manager.Publish(pubCtx, &paho.Publish{
-		QoS:     1,
-		Retain:  false,
-		Topic:   DownlinkTopic(req.GatewayID),
-		Payload: payload,
+		QoS:        1,
+		Retain:     false,
+		Topic:      DownlinkTopic(req.GatewayID),
+		Payload:    payload,
+		Properties: &paho.PublishProperties{MessageExpiry: &expirySeconds},
 	})
 	pubCancel()
 	if pubErr != nil {
@@ -214,11 +344,30 @@ func (t *MQTTTransport) Call(ctx context.Context, req RPCRequest) (RPCResponse, 
 	}
 }
 
+func concentratorMessageExpirySeconds(timeout time.Duration) uint32 {
+	seconds := math.Ceil(timeout.Seconds())
+	if seconds < 1 {
+		return 1
+	}
+	if seconds > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(seconds)
+}
+
 func (t *MQTTTransport) Close(ctx context.Context) error {
-	if t == nil || t.manager == nil {
+	if t == nil {
 		return nil
 	}
-	return t.manager.Disconnect(ctx)
+	if t.stopCancel != nil {
+		t.stopCancel()
+	}
+	var err error
+	if t.manager != nil {
+		err = t.manager.Disconnect(ctx)
+	}
+	t.subWG.Wait()
+	return err
 }
 
 func (t *MQTTTransport) onReply(received paho.PublishReceived) (bool, error) {

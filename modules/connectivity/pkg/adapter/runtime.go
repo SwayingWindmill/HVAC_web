@@ -27,7 +27,11 @@ const (
 	MaximumCoverageBatchSize      = 2048
 	defaultGatewayIdleTimeout     = 5 * time.Minute
 	maxTrackedGatewayQueues       = 4096
+	defaultRateLimitRetryFloor    = 2 * time.Second
+	subscribeAttemptTimeout       = 15 * time.Second
 )
+
+var DefaultSubscribeRetryDelays = []time.Duration{200 * time.Millisecond, 600 * time.Millisecond}
 
 type gatewayMailboxState struct {
 	mailbox      *gatewayMailbox
@@ -57,6 +61,10 @@ type CoverageDeviceLister interface {
 	ListAllActiveManagedDeviceIDs(ctx context.Context) ([]string, error)
 }
 
+type GatewayScopedCoverageLister interface {
+	ListActiveManagedGatewayScopes(ctx context.Context) ([]GatewayCoverageScope, error)
+}
+
 type CoverageReporter interface {
 	ReportSourceCoverage(ctx context.Context, report SourceCoverageReport) error
 }
@@ -75,23 +83,26 @@ func WithCoverageReporter(lister CoverageDeviceLister, reporter CoverageReporter
 // processed or quarantined; when a Gateway's queue is full, receiving pauses and the
 // broker holds the backlog.
 type Runtime struct {
-	config     Config
-	processor  *Processor
-	logger     *slog.Logger
-	metrics    *observability.Registry
-	retryDelay func(int) time.Duration
+	config         Config
+	processor      *Processor
+	logger         *slog.Logger
+	metrics        *observability.Registry
+	retryDelay     func(int) time.Duration
+	rateLimitFloor time.Duration
 	// reconnectBackoff is how long to wait before reconnection attempt N.
-	reconnectBackoff func(int) time.Duration
-	coverageLister   CoverageDeviceLister
-	coverageReporter CoverageReporter
-	coverageInterval time.Duration
-	idleTimeout      time.Duration
-	now              func() time.Time
+	reconnectBackoff     func(int) time.Duration
+	subscribeRetryDelays []time.Duration
+	coverageLister       CoverageDeviceLister
+	coverageReporter     CoverageReporter
+	coverageInterval     time.Duration
+	idleTimeout          time.Duration
+	now                  func() time.Time
 
 	coverageMu  sync.Mutex
+	subWG       sync.WaitGroup
 	coverageWG  sync.WaitGroup
 	coverageRev atomic.Int64
-	connGen     atomic.Uint64
+	connTracker MQTTConnTracker
 
 	queuesMu         sync.Mutex
 	queues           map[string]*gatewayMailbox
@@ -103,10 +114,6 @@ type Runtime struct {
 	ownedOverflowDir bool
 	poolOnce         sync.Once
 	workers          sync.WaitGroup
-
-	connMu     sync.Mutex
-	connClosed chan struct{}
-	connCloser func()
 
 	mu          sync.RWMutex
 	connected   bool
@@ -136,6 +143,7 @@ func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metric
 		logger:           logger,
 		metrics:          metrics,
 		retryDelay:       mqttRetryDelay,
+		rateLimitFloor:   defaultRateLimitRetryFloor,
 		reconnectBackoff: autopaho.DefaultExponentialBackoff(),
 		coverageInterval: defaultCoverageReportInterval,
 		idleTimeout:      defaultGatewayIdleTimeout,
@@ -178,15 +186,18 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	if err := runtime.prepareOverflowDir(); err != nil {
 		return err
 	}
+	runContext, runCancel := context.WithCancel(ctx)
 	workerContext, workerCancel := context.WithCancel(context.Background())
 	runtime.startWorkers(workerContext)
 	var heartbeatWG sync.WaitGroup
 	var drained bool
 	defer func() {
+		runCancel()
 		if !drained {
 			workerCancel()
 		}
 		heartbeatWG.Wait()
+		runtime.subWG.Wait()
 		runtime.coverageWG.Wait()
 		runtime.workers.Wait()
 		runtime.closeMailboxes()
@@ -233,13 +244,15 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		},
 	}
 	clientConfig.OnConnectionUp = func(manager *autopaho.ConnectionManager, _ *paho.Connack) {
-		gen := runtime.connGen.Load()
+		gen := runtime.connTracker.CurrentGen()
 		connection := runtime.currentConnectionClosed()
 		runtime.recordConnectionState(connection, true, false, nil)
 		_ = runtime.metrics.AddCounter("hvac_mqtt_connections_total", "MQTT connection attempts by outcome.", map[string]string{"outcome": "success"}, 1)
+		runtime.subWG.Add(1)
 		go func() {
+			defer runtime.subWG.Done()
 			defer observability.Recover(runtime.logger, runtime.metrics, "connectivity.mqtt_subscribe")
-			runtime.subscribe(ctx, manager, connection, gen)
+			runtime.subscribe(runContext, manager, connection, gen)
 		}()
 	}
 	manager, err := autopaho.NewConnection(ctx, clientConfig)
@@ -275,17 +288,22 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 }
 
 func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.ConnectionManager, connection <-chan struct{}, gen uint64) {
-	subscribeContext, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
 	filters := runtime.config.SubscriptionTopicFilters()
 	subscriptions := make([]paho.SubscribeOptions, 0, len(filters))
 	for _, topic := range filters {
 		subscriptions = append(subscriptions, paho.SubscribeOptions{Topic: topic, QoS: 1})
 	}
-	if _, err := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: subscriptions}); err != nil {
+	if _, err := SubscribeWithRetry(ctx, manager, connection, subscriptions, subscribeAttemptTimeout, runtime.effectiveSubscribeRetryDelays()); err != nil {
+		if ctx.Err() != nil || IsClosedSignal(connection) {
+			return
+		}
 		runtime.recordConnectionState(connection, true, false, err)
 		_ = runtime.metrics.AddCounter("hvac_mqtt_subscriptions_total", "MQTT subscription attempts by outcome.", map[string]string{"outcome": "failed"}, 1)
 		runtime.logger.Warn("mqtt_uplink_subscribe_failed", "error", err.Error())
+		runtime.connTracker.CloseIfGen(gen)
+		return
+	}
+	if ctx.Err() != nil || IsClosedSignal(connection) {
 		return
 	}
 	runtime.recordConnectionState(connection, true, true, nil)
@@ -301,33 +319,195 @@ func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.Connect
 	}
 }
 
+// SubscribeWithRetry attempts MQTT SUBSCRIBE up to 1+len(retryDelays) times, verifying
+// SUBACK reason codes (< 0x80 per MQTT v5 §3.9.3) and aborting immediately if ctx or
+// connection closes.
+func SubscribeWithRetry(
+	ctx context.Context,
+	manager *autopaho.ConnectionManager,
+	connection <-chan struct{},
+	subscriptions []paho.SubscribeOptions,
+	attemptTimeout time.Duration,
+	retryDelays []time.Duration,
+) (*paho.Suback, error) {
+	var lastErr error
+	for attempt := 0; attempt <= len(retryDelays); attempt++ {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if IsClosedSignal(connection) {
+			return nil, errors.New("MQTT connection closed before subscribe")
+		}
+		subscribeContext, cancel := context.WithTimeout(ctx, attemptTimeout)
+		suback, err := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: subscriptions})
+		cancel()
+		if err == nil {
+			err = CheckSubackReasons(suback, len(subscriptions))
+		}
+		if err == nil {
+			return suback, nil
+		}
+		lastErr = err
+		if attempt == len(retryDelays) {
+			break
+		}
+		if !waitRetryOrSignal(ctx, connection, retryDelays[attempt]) {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, lastErr
+		}
+	}
+	return nil, lastErr
+}
+
+// CheckSubackReasons validates MQTT v5 SUBACK length and reason codes (< 0x80).
+func CheckSubackReasons(suback *paho.Suback, expected int) error {
+	if suback == nil {
+		return errors.New("MQTT SUBACK is missing")
+	}
+	if len(suback.Reasons) != expected {
+		return fmt.Errorf("MQTT SUBACK returned %d reason codes for %d subscriptions", len(suback.Reasons), expected)
+	}
+	for index, reason := range suback.Reasons {
+		if reason >= 0x80 {
+			return fmt.Errorf("MQTT subscription[%d] rejected with reason code 0x%02x", index, reason)
+		}
+	}
+	return nil
+}
+
+func IsClosedSignal(ch <-chan struct{}) bool {
+	if ch == nil {
+		return false
+	}
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+func waitRetryOrSignal(ctx context.Context, closed <-chan struct{}, delay time.Duration) bool {
+	if delay <= 0 {
+		return ctx.Err() == nil && !IsClosedSignal(closed)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-closed:
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (runtime *Runtime) effectiveSubscribeRetryDelays() []time.Duration {
+	if runtime.subscribeRetryDelays != nil {
+		return runtime.subscribeRetryDelays
+	}
+	return DefaultSubscribeRetryDelays
+}
+
+func (runtime *Runtime) effectiveRateLimitFloor() time.Duration {
+	if runtime.rateLimitFloor > 0 {
+		return runtime.rateLimitFloor
+	}
+	return defaultRateLimitRetryFloor
+}
+
+// MQTTConnTracker wraps TLS connections with close-once signaling and generation-guarded
+// teardown so late disconnect or subscribe callbacks cannot close a newer connection.
+type MQTTConnTracker struct {
+	gen       atomic.Uint64
+	mu        sync.Mutex
+	closed    chan struct{}
+	closer    func()
+	closerGen uint64
+}
+
+func (t *MQTTConnTracker) CurrentGen() uint64 {
+	return t.gen.Load()
+}
+
+func (t *MQTTConnTracker) CurrentClosed() <-chan struct{} {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *MQTTConnTracker) CloseCurrent() {
+	t.mu.Lock()
+	closer := t.closer
+	t.closer = nil
+	t.mu.Unlock()
+	if closer != nil {
+		closer()
+	}
+}
+
+func (t *MQTTConnTracker) CloseIfGen(gen uint64) {
+	t.mu.Lock()
+	if t.closerGen != gen || t.closer == nil {
+		t.mu.Unlock()
+		return
+	}
+	closer := t.closer
+	t.closer = nil
+	t.mu.Unlock()
+	closer()
+}
+
+func (t *MQTTConnTracker) clearCloserIfGen(gen uint64) {
+	t.mu.Lock()
+	if t.closerGen == gen {
+		t.closer = nil
+	}
+	t.mu.Unlock()
+}
+
+func (t *MQTTConnTracker) DialTLS(ctx context.Context, tlsConfig *tls.Config, address string, timeout time.Duration, onClose func(gen uint64)) (net.Conn, uint64, <-chan struct{}, error) {
+	dialContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	conn, err := (&tls.Dialer{Config: tlsConfig}).DialContext(dialContext, "tcp", address)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	closed := make(chan struct{})
+	gen := t.gen.Add(1)
+	wrapped := &trackedMQTTConn{
+		Conn:   conn,
+		closed: closed,
+		onClose: func() {
+			t.clearCloserIfGen(gen)
+			if onClose != nil {
+				onClose(gen)
+			}
+		},
+	}
+	t.mu.Lock()
+	t.closed = closed
+	t.closer = func() { _ = wrapped.Close() }
+	t.closerGen = gen
+	t.mu.Unlock()
+	return packets.NewThreadSafeConn(wrapped), gen, closed, nil
+}
+
 // dial opens the TLS connection to the broker. Closing it is the first step of paho
 // tearing a connection down, before paho waits for the publish handler to return, so
 // the close is what releases a handler waiting on a full Gateway queue.
 func (runtime *Runtime) dial(ctx context.Context, tlsConfig *tls.Config, server *url.URL) (net.Conn, error) {
-	dialContext, cancel := context.WithTimeout(ctx, mqttConnectTimeout)
-	defer cancel()
-	conn, err := (&tls.Dialer{Config: tlsConfig}).DialContext(dialContext, "tcp", server.Host)
-	if err != nil {
-		return nil, err
-	}
-	closed := make(chan struct{})
-	gen := runtime.connGen.Add(1)
-	wrapped := &brokerConnection{Conn: conn, closed: closed, onClose: func() { runtime.connectionLost(ctx, gen) }}
-	runtime.connMu.Lock()
-	runtime.connClosed = closed
-	runtime.connCloser = func() { _ = wrapped.Close() }
-	runtime.connMu.Unlock()
-	return packets.NewThreadSafeConn(wrapped), nil
+	conn, _, _, err := runtime.connTracker.DialTLS(ctx, tlsConfig, server.Host, mqttConnectTimeout, func(gen uint64) {
+		runtime.connectionLost(ctx, gen)
+	})
+	return conn, err
 }
 
 func (runtime *Runtime) closeCurrentConnection() {
-	runtime.connMu.Lock()
-	closer := runtime.connCloser
-	runtime.connMu.Unlock()
-	if closer != nil {
-		closer()
-	}
+	runtime.connTracker.CloseCurrent()
 }
 
 func (runtime *Runtime) notifyDrain() {
@@ -366,18 +546,20 @@ func (runtime *Runtime) waitDrainWithTimeout(timeout time.Duration) {
 	}
 }
 
-// brokerConnection closes closed and reports the loss the first time the connection closes.
-type brokerConnection struct {
+// trackedMQTTConn closes closed and reports the loss the first time the connection closes.
+type trackedMQTTConn struct {
 	net.Conn
 	closeOnce sync.Once
 	closed    chan struct{}
 	onClose   func()
 }
 
-func (conn *brokerConnection) Close() error {
+func (conn *trackedMQTTConn) Close() error {
 	conn.closeOnce.Do(func() {
 		close(conn.closed)
-		conn.onClose()
+		if conn.onClose != nil {
+			conn.onClose()
+		}
 	})
 	return conn.Conn.Close()
 }
@@ -386,9 +568,7 @@ func (conn *brokerConnection) Close() error {
 // autopaho dials the next connection only after the previous client has fully stopped,
 // so every message the handler sees came from this connection.
 func (runtime *Runtime) currentConnectionClosed() <-chan struct{} {
-	runtime.connMu.Lock()
-	defer runtime.connMu.Unlock()
-	return runtime.connClosed
+	return runtime.connTracker.CurrentClosed()
 }
 
 func (runtime *Runtime) connectionLost(ctx context.Context, gen uint64) {
@@ -422,7 +602,7 @@ func (runtime *Runtime) runCoverageHeartbeat(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if runtime.Ready() {
-				runtime.reportCoverage(ctx, true, "", runtime.connGen.Load(), false)
+				runtime.reportCoverage(ctx, true, "", runtime.connTracker.CurrentGen(), false)
 			}
 		}
 	}
@@ -435,7 +615,7 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 	runtime.coverageMu.Lock()
 	defer runtime.coverageMu.Unlock()
 	if !force {
-		if expectedGen != 0 && expectedGen != runtime.connGen.Load() {
+		if expectedGen != 0 && expectedGen != runtime.connTracker.CurrentGen() {
 			return
 		}
 		if !available && runtime.Ready() {
@@ -448,7 +628,7 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	deviceIDs, err := runtime.coverageLister.ListAllActiveManagedDeviceIDs(callCtx)
+	deviceIDs, scopes, err := runtime.loadCoverageTargets(callCtx, available)
 	if err != nil {
 		if runtime.logger != nil {
 			runtime.logger.Warn("mqtt_coverage_device_list_failed", "error", err.Error())
@@ -469,10 +649,16 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 	observedAt := runtime.now().UTC().Format(time.RFC3339Nano)
 	for start := 0; start < len(deviceIDs); start += MaximumCoverageBatchSize {
 		end := min(start+MaximumCoverageBatchSize, len(deviceIDs))
+		batchDeviceIDs := deviceIDs[start:end]
+		var batchScopes []GatewayCoverageScope
+		if len(scopes) > 0 {
+			batchScopes = sliceGatewayScopesForBatch(scopes, batchDeviceIDs)
+		}
 		rev := runtime.coverageRev.Add(1)
 		report := SourceCoverageReport{
 			SourceID:       runtime.config.MQTT.ClientID,
-			DeviceIDs:      deviceIDs[start:end],
+			DeviceIDs:      batchDeviceIDs,
+			GatewayScopes:  batchScopes,
 			Available:      available,
 			ReasonCode:     reasonPtr,
 			ObservedAt:     observedAt,
@@ -482,6 +668,99 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 			runtime.logger.Warn("mqtt_coverage_report_failed", "available", available, "error", err.Error())
 		}
 	}
+}
+
+func (runtime *Runtime) loadCoverageTargets(ctx context.Context, available bool) ([]string, []GatewayCoverageScope, error) {
+	if available {
+		if scopedLister, ok := runtime.coverageLister.(GatewayScopedCoverageLister); ok {
+			rawScopes, err := scopedLister.ListActiveManagedGatewayScopes(ctx)
+			if err != nil {
+				return nil, nil, err
+			}
+			devices, scopes := NormalizeGatewayCoverageScopes(rawScopes)
+			return devices, scopes, nil
+		}
+	}
+	devices, err := runtime.coverageLister.ListAllActiveManagedDeviceIDs(ctx)
+	return devices, nil, err
+}
+
+// BuildGatewayCoverageScopes builds sorted, deduplicated GatewayCoverageScopes from a map
+// of gateway IDs to child device IDs, dropping empty entries.
+func BuildGatewayCoverageScopes(devicesByGateway map[string][]string) []GatewayCoverageScope {
+	rawScopes := make([]GatewayCoverageScope, 0, len(devicesByGateway))
+	for gatewayID, deviceIDs := range devicesByGateway {
+		rawScopes = append(rawScopes, GatewayCoverageScope{
+			GatewayID: gatewayID,
+			DeviceIDs: deviceIDs,
+		})
+	}
+	_, scopes := NormalizeGatewayCoverageScopes(rawScopes)
+	return scopes
+}
+
+// NormalizeGatewayCoverageScopes returns sorted unique device IDs alongside sorted,
+// deduplicated per-gateway scopes with empty entries removed.
+func NormalizeGatewayCoverageScopes(rawScopes []GatewayCoverageScope) ([]string, []GatewayCoverageScope) {
+	byGateway := make(map[string][]string, len(rawScopes))
+	for _, scope := range rawScopes {
+		gatewayID := strings.TrimSpace(scope.GatewayID)
+		if gatewayID == "" {
+			continue
+		}
+		for _, deviceID := range scope.DeviceIDs {
+			if trimmed := strings.TrimSpace(deviceID); trimmed != "" {
+				byGateway[gatewayID] = append(byGateway[gatewayID], trimmed)
+			}
+		}
+	}
+	gatewayIDs := make([]string, 0, len(byGateway))
+	for gatewayID := range byGateway {
+		gatewayIDs = append(gatewayIDs, gatewayID)
+	}
+	slices.Sort(gatewayIDs)
+
+	scopes := make([]GatewayCoverageScope, 0, len(gatewayIDs))
+	allDevices := make([]string, 0)
+	for _, gatewayID := range gatewayIDs {
+		devices := byGateway[gatewayID]
+		slices.Sort(devices)
+		devices = slices.Compact(devices)
+		if len(devices) == 0 {
+			continue
+		}
+		scopes = append(scopes, GatewayCoverageScope{
+			GatewayID: gatewayID,
+			DeviceIDs: devices,
+		})
+		allDevices = append(allDevices, devices...)
+	}
+	slices.Sort(allDevices)
+	allDevices = slices.Compact(allDevices)
+	return allDevices, scopes
+}
+
+func sliceGatewayScopesForBatch(scopes []GatewayCoverageScope, batchDeviceIDs []string) []GatewayCoverageScope {
+	inBatch := make(map[string]struct{}, len(batchDeviceIDs))
+	for _, deviceID := range batchDeviceIDs {
+		inBatch[deviceID] = struct{}{}
+	}
+	var batchScopes []GatewayCoverageScope
+	for _, scope := range scopes {
+		var matched []string
+		for _, deviceID := range scope.DeviceIDs {
+			if _, ok := inBatch[deviceID]; ok {
+				matched = append(matched, deviceID)
+			}
+		}
+		if len(matched) > 0 {
+			batchScopes = append(batchScopes, GatewayCoverageScope{
+				GatewayID: scope.GatewayID,
+				DeviceIDs: matched,
+			})
+		}
+	}
+	return batchScopes
 }
 
 func (runtime *Runtime) effectiveIdleTimeout() time.Duration {
@@ -1211,10 +1490,19 @@ func (runtime *Runtime) processPrefix(ctx context.Context, gatewayID string, pen
 	if err == nil {
 		err = errors.New("MQTT uplink processor produced no outcomes")
 	}
-	runtime.recordProcessingFailure(err)
-	_ = runtime.metrics.AddCounter("hvac_mqtt_message_retries_total", "MQTT uplink processing retries after transient failures.", map[string]string{"reason_family": "dependency"}, 1)
 	delay := runtime.retryDelay(attempt)
-	runtime.logger.Warn("mqtt_uplink_message_retrying", "gateway_id", gatewayID, "topic", pending[0].packet.Topic, "attempt", attempt, "retry_in", delay.String(), "error", err.Error())
+	reasonFamily := "dependency"
+	logEvent := "mqtt_uplink_message_retrying"
+	var rateLimited *RateLimitedError
+	if errors.As(err, &rateLimited) {
+		reasonFamily = "rate_limited"
+		logEvent = "mqtt_uplink_message_rate_limited"
+		delay = max(delay, rateLimited.RetryAfter, runtime.effectiveRateLimitFloor())
+	} else {
+		runtime.recordProcessingFailure(err)
+	}
+	_ = runtime.metrics.AddCounter("hvac_mqtt_message_retries_total", "MQTT uplink processing retries after transient failures.", map[string]string{"reason_family": reasonFamily}, 1)
+	runtime.logger.Warn(logEvent, "gateway_id", gatewayID, "topic", pending[0].packet.Topic, "attempt", attempt, "retry_in", delay.String(), "error", err.Error())
 	return 0, delay, err
 }
 

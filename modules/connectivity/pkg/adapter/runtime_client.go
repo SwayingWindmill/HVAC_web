@@ -12,11 +12,35 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
+
+const maxTelemetryRetryAfter = 5 * time.Minute
+
+var ErrTelemetryRateLimited = errors.New("telemetry runtime rate limited")
+
+type RateLimitedError struct {
+	Label      string
+	RetryAfter time.Duration
+}
+
+func (err *RateLimitedError) Error() string {
+	if err == nil {
+		return ErrTelemetryRateLimited.Error()
+	}
+	if err.RetryAfter > 0 {
+		return fmt.Sprintf("%s returned 429 (retry after %s)", err.Label, err.RetryAfter)
+	}
+	return fmt.Sprintf("%s returned 429", err.Label)
+}
+
+func (err *RateLimitedError) Unwrap() error {
+	return ErrTelemetryRateLimited
+}
 
 const (
 	// MaxObservationBatchSize caps a single Telemetry runtime acceptBatch call.
@@ -101,13 +125,19 @@ type RuntimeEventEvidence struct {
 	TraceID           string          `json:"traceId,omitempty"`
 }
 
+type GatewayCoverageScope struct {
+	GatewayID string   `json:"gatewayId"`
+	DeviceIDs []string `json:"deviceIds"`
+}
+
 type SourceCoverageReport struct {
-	SourceID       string   `json:"sourceId"`
-	DeviceIDs      []string `json:"deviceIds"`
-	Available      bool     `json:"available"`
-	ReasonCode     *string  `json:"reasonCode,omitempty"`
-	ObservedAt     string   `json:"observedAt,omitempty"`
-	SourceRevision int64    `json:"sourceRevision,omitempty"`
+	SourceID       string                 `json:"sourceId"`
+	DeviceIDs      []string               `json:"deviceIds"`
+	GatewayScopes  []GatewayCoverageScope `json:"gatewayScopes,omitempty"`
+	Available      bool                   `json:"available"`
+	ReasonCode     *string                `json:"reasonCode,omitempty"`
+	ObservedAt     string                 `json:"observedAt,omitempty"`
+	SourceRevision int64                  `json:"sourceRevision,omitempty"`
 }
 
 type RuntimeClient interface {
@@ -263,10 +293,43 @@ func (client *TelemetryRuntimeClient) postJSON(ctx context.Context, path, label 
 	if err != nil {
 		return nil, fmt.Errorf("read %s response: %w", label, err)
 	}
+	if response.StatusCode == http.StatusTooManyRequests {
+		return nil, &RateLimitedError{
+			Label:      label,
+			RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
+		}
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, fmt.Errorf("%s returned %d", label, response.StatusCode)
 	}
 	return responseBody, nil
+}
+
+func parseRetryAfter(header string, now time.Time) time.Duration {
+	trimmed := strings.TrimSpace(header)
+	if trimmed == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(trimmed); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		if maxSeconds := int(maxTelemetryRetryAfter / time.Second); seconds >= maxSeconds {
+			return maxTelemetryRetryAfter
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if retryAt, err := http.ParseTime(trimmed); err == nil {
+		delay := retryAt.Sub(now)
+		if delay <= 0 {
+			return 0
+		}
+		if delay > maxTelemetryRetryAfter {
+			return maxTelemetryRetryAfter
+		}
+		return delay
+	}
+	return 0
 }
 
 func validateHTTPSOrigin(raw string) error {
