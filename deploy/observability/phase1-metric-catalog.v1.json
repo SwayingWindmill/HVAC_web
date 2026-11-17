@@ -40,6 +40,7 @@
     {"name":"hvac_mqtt_message_retries_total","type":"counter","labels":["reason_family"],"seriesBudget":4},
     {"name":"hvac_mqtt_replay_messages_total","type":"counter","labels":["outcome"],"seriesBudget":4},
     {"name":"hvac_mqtt_values_total","type":"counter","labels":["outcome"],"seriesBudget":8},
+    {"name":"hvac_mqtt_gateway_rate_limited_total","type":"counter","labels":["message_type"],"seriesBudget":8},
     {"name":"hvac_mqtt_processing_queue_depth","type":"gauge","labels":[],"seriesBudget":1},
     {"name":"hvac_mqtt_processing_queue_capacity","type":"gauge","labels":[],"seriesBudget":1},
     {"name":"hvac_mqtt_online_gateways","type":"gauge","labels":[],"seriesBudget":1},
@@ -59,6 +60,7 @@
     {"name":"hvac_edge_mqtt_publishes_total","type":"counter","labels":["outcome"],"seriesBudget":4},
     {"name":"hvac_edge_mqtt_publish_duration_seconds","type":"histogram","labels":["outcome"],"seriesBudget":4},
     {"name":"hvac_edge_mqtt_values_total","type":"counter","labels":["outcome"],"seriesBudget":4},
+    {"name":"hvac_edge_mqtt_replay_batches_total","type":"counter","labels":["priority"],"seriesBudget":8},
     {"name":"hvac_edge_mqtt_metric_refresh_failures_total","type":"counter","labels":[],"seriesBudget":1}
   ],
   "boundedValues": {
@@ -75,6 +77,8 @@
       "success", "failed", "queued", "ack_failed", "dropped", "processed", "accepted", "duplicate", "out_of_order", "quarantined", "rejected",
       "pre_send_rejected", "request_committed", "acknowledged", "verified", "inconclusive", "mismatch", "timed_out", "unknown"
     ],
-    "reason_family": ["transport", "dependency", "authorization", "scope", "capacity", "rate_limited", "unknown"]
+    "reason_family": ["transport", "dependency", "authorization", "scope", "capacity", "rate_limited", "unknown"],
+    "message_type": ["telemetry", "event", "status", "unknown"],
+    "priority": ["VERY_HIGH", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
   }
 }

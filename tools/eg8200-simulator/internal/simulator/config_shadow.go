@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,8 +28,10 @@ const (
 	shadowAppliedStatusPartial  = "PARTIAL"
 	shadowAppliedStatusRejected = "REJECTED"
 
-	shadowDriftSectionConcentrator = "CONCENTRATOR"
-	shadowDriftReasonApplyFailed   = "EDGE_APPLY_FAILED"
+	shadowDriftSectionConcentrator   = "CONCENTRATOR"
+	shadowDriftSectionDriverConfigs  = "DRIVER_CONFIGS"
+	shadowDriftSectionAutonomyPolicy = "AUTONOMY_POLICY"
+	shadowDriftReasonApplyFailed     = "EDGE_APPLY_FAILED"
 )
 
 type PointCopyTarget struct {
@@ -44,10 +47,11 @@ type GatewayPointMapping struct {
 }
 
 type GatewaySamplingPolicy struct {
-	DeviceKey         string `json:"deviceKey"`
-	PointCode         string `json:"pointCode,omitempty"`
-	SampleIntervalMS  int    `json:"sampleIntervalMs"`
-	PublishIntervalMS int    `json:"publishIntervalMs"`
+	DeviceKey         string  `json:"deviceKey"`
+	PointCode         string  `json:"pointCode,omitempty"`
+	SampleIntervalMS  int     `json:"sampleIntervalMs"`
+	PublishIntervalMS int     `json:"publishIntervalMs"`
+	Deadband          float64 `json:"deadband,omitempty"`
 }
 
 type ConcentratorShadowParams struct {
@@ -89,6 +93,8 @@ type GatewayDesiredConfig struct {
 	PointMappings       []GatewayPointMapping             `json:"pointMappings"`
 	SamplingPolicies    []GatewaySamplingPolicy           `json:"samplingPolicies"`
 	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
+	DriverConfigs       []GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
+	AutonomyPolicy      *GatewayAutonomyPolicy            `json:"autonomyPolicy,omitempty"`
 	UpdatedBy           string                            `json:"updatedBy,omitempty"`
 	Reason              string                            `json:"reason,omitempty"`
 	CreatedAt           *time.Time                        `json:"createdAt,omitempty"`
@@ -108,6 +114,8 @@ type GatewayShadowReportRequest struct {
 	PointMappings       []GatewayPointMapping             `json:"pointMappings"`
 	SamplingPolicies    []GatewaySamplingPolicy           `json:"samplingPolicies"`
 	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
+	DriverConfigs       []GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
+	AutonomyPolicy      *GatewayAutonomyPolicy            `json:"autonomyPolicy,omitempty"`
 	DriftDetails        []ShadowDriftDetail               `json:"driftDetails,omitempty"`
 	ErrorMessage        *string                           `json:"errorMessage,omitempty"`
 	ReportedAt          *time.Time                        `json:"reportedAt,omitempty"`
@@ -118,6 +126,8 @@ type persistedEdgeShadowState struct {
 	PointMappings       []GatewayPointMapping             `json:"pointMappings"`
 	SamplingPolicies    []GatewaySamplingPolicy           `json:"samplingPolicies"`
 	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
+	DriverConfigs       []GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
+	AutonomyPolicy      *GatewayAutonomyPolicy            `json:"autonomyPolicy,omitempty"`
 }
 
 type edgeConfigShadowApplyHook func(ctx context.Context, desired GatewayDesiredConfig) ([]ShadowDriftDetail, string, error)
@@ -130,9 +140,14 @@ type edgeConfigShadow struct {
 	pointMappings       []GatewayPointMapping
 	samplingPolicies    []GatewaySamplingPolicy
 	concentratorConfigs map[string]ConcentratorUnitShadow
+	driverConfigs       []GatewayModbusDriverConfig
+	autonomyPolicy      *GatewayAutonomyPolicy
 	lastPublished       map[string]time.Time
 	lastSyncAttempt     time.Time
 	applyHook           edgeConfigShadowApplyHook
+	applyDriverHook     edgeDriverApplyHook
+	removeDriverHook    edgeDriverRemoveHook
+	applyAutonomyHook   edgeAutonomyApplyHook
 }
 
 func newEdgeConfigShadow(statePath string) *edgeConfigShadow {
@@ -141,6 +156,7 @@ func newEdgeConfigShadow(statePath string) *edgeConfigShadow {
 		pointMappings:       []GatewayPointMapping{},
 		samplingPolicies:    []GatewaySamplingPolicy{},
 		concentratorConfigs: map[string]ConcentratorUnitShadow{},
+		driverConfigs:       []GatewayModbusDriverConfig{},
 		lastPublished:       map[string]time.Time{},
 	}
 }
@@ -166,6 +182,8 @@ func (s *edgeConfigShadow) load() error {
 	s.pointMappings = clonePointMappings(state.PointMappings)
 	s.samplingPolicies = cloneSamplingPolicies(state.SamplingPolicies)
 	s.concentratorConfigs = cloneConcentratorConfigs(state.ConcentratorConfigs)
+	s.driverConfigs = cloneDriverConfigs(state.DriverConfigs)
+	s.autonomyPolicy = cloneAutonomyPolicy(state.AutonomyPolicy)
 	return nil
 }
 
@@ -181,6 +199,8 @@ func (s *edgeConfigShadow) persistLocked() error {
 		PointMappings:       s.pointMappings,
 		SamplingPolicies:    s.samplingPolicies,
 		ConcentratorConfigs: s.concentratorConfigs,
+		DriverConfigs:       s.driverConfigs,
+		AutonomyPolicy:      s.autonomyPolicy,
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode edge config shadow state: %w", err)
@@ -202,6 +222,7 @@ func (s *edgeConfigShadow) snapshot() persistedEdgeShadowState {
 			PointMappings:       []GatewayPointMapping{},
 			SamplingPolicies:    []GatewaySamplingPolicy{},
 			ConcentratorConfigs: map[string]ConcentratorUnitShadow{},
+			DriverConfigs:       []GatewayModbusDriverConfig{},
 		}
 	}
 	s.mu.Lock()
@@ -211,6 +232,8 @@ func (s *edgeConfigShadow) snapshot() persistedEdgeShadowState {
 		PointMappings:       clonePointMappings(s.pointMappings),
 		SamplingPolicies:    cloneSamplingPolicies(s.samplingPolicies),
 		ConcentratorConfigs: cloneConcentratorConfigs(s.concentratorConfigs),
+		DriverConfigs:       cloneDriverConfigs(s.driverConfigs),
+		AutonomyPolicy:      cloneAutonomyPolicy(s.autonomyPolicy),
 	}
 }
 
@@ -219,6 +242,8 @@ type preparedEdgeShadow struct {
 	pointMappings       []GatewayPointMapping
 	samplingPolicies    []GatewaySamplingPolicy
 	concentratorConfigs map[string]ConcentratorUnitShadow
+	driverConfigs       []GatewayModbusDriverConfig
+	autonomyPolicy      *GatewayAutonomyPolicy
 	report              GatewayShadowReportRequest
 }
 
@@ -248,6 +273,11 @@ func (s *edgeConfigShadow) prepareDesired(ctx context.Context, desired GatewayDe
 		return preparedEdgeShadow{}, true, nil
 	}
 	hook := s.applyHook
+	driverHook := s.applyDriverHook
+	removeDriverHook := s.removeDriverHook
+	autonomyHook := s.applyAutonomyHook
+	prevDrivers := cloneDriverConfigs(s.driverConfigs)
+	prevPolicy := cloneAutonomyPolicy(s.autonomyPolicy)
 	s.mu.Unlock()
 
 	drift := []ShadowDriftDetail{}
@@ -297,13 +327,23 @@ func (s *edgeConfigShadow) prepareDesired(ctx context.Context, desired GatewayDe
 		}
 	}
 
-	status := shadowAppliedStatusApplied
-	if len(drift) > 0 || len(errorMessages) > 0 {
-		status = shadowAppliedStatusPartial
-	}
+	res := applyDesiredDriversAndAutonomy(
+		ctx,
+		desired,
+		prevDrivers,
+		prevPolicy,
+		driverHook,
+		removeDriverHook,
+		autonomyHook,
+		hook != nil,
+		len(cleanedUnits),
+		drift,
+		errorMessages,
+	)
+
 	var errPtr *string
-	if len(errorMessages) > 0 {
-		joined := clampShadowRunes(strings.Join(errorMessages, "; "), 1024)
+	if len(res.errorMessages) > 0 {
+		joined := clampShadowRunes(strings.Join(res.errorMessages, "; "), 1024)
 		errPtr = &joined
 	}
 
@@ -316,13 +356,17 @@ func (s *edgeConfigShadow) prepareDesired(ctx context.Context, desired GatewayDe
 		pointMappings:       cleanedMappings,
 		samplingPolicies:    cleanedPolicies,
 		concentratorConfigs: cleanedUnits,
+		driverConfigs:       res.committedDrivers,
+		autonomyPolicy:      res.committedPolicy,
 		report: GatewayShadowReportRequest{
 			ReportedRevision:    desired.DesiredRevision,
-			AppliedStatus:       status,
+			AppliedStatus:       res.status,
 			PointMappings:       cleanedMappings,
 			SamplingPolicies:    cleanedPolicies,
 			ConcentratorConfigs: cleanedUnits,
-			DriftDetails:        drift,
+			DriverConfigs:       res.acceptedDrivers,
+			AutonomyPolicy:      res.reportedPolicy,
+			DriftDetails:        res.drift,
 			ErrorMessage:        errPtr,
 			ReportedAt:          &now,
 		},
@@ -342,6 +386,8 @@ func (s *edgeConfigShadow) commitPrepared(prepared preparedEdgeShadow) error {
 	s.pointMappings = clonePointMappings(prepared.pointMappings)
 	s.samplingPolicies = cloneSamplingPolicies(prepared.samplingPolicies)
 	s.concentratorConfigs = cloneConcentratorConfigs(prepared.concentratorConfigs)
+	s.driverConfigs = cloneDriverConfigs(prepared.driverConfigs)
+	s.autonomyPolicy = cloneAutonomyPolicy(prepared.autonomyPolicy)
 	s.lastPublished = map[string]time.Time{}
 	return s.persistLocked()
 }
@@ -383,6 +429,19 @@ func (s *edgeConfigShadow) resolveAndFilterTargets(sourceDeviceID, telemetryKey,
 		}
 	}
 	return emitted
+}
+
+func (s *edgeConfigShadow) resolveTargetsUnthrottled(sourceDeviceID, telemetryKey, defaultPointCode string, observedAt time.Time) []shadowEmitTarget {
+	if s == nil {
+		return []shadowEmitTarget{{DeviceID: sourceDeviceID, PointCode: defaultPointCode}}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	targets := s.matchMappingTargetsLocked(sourceDeviceID, telemetryKey, defaultPointCode)
+	for _, target := range targets {
+		s.lastPublished[target.DeviceID+"\x00"+target.PointCode] = observedAt
+	}
+	return targets
 }
 
 func (s *edgeConfigShadow) matchMappingTargetsLocked(sourceDeviceID, telemetryKey, defaultPointCode string) []shadowEmitTarget {
@@ -452,6 +511,60 @@ func (s *edgeConfigShadow) findPolicyLocked(deviceID, pointCode string) (Gateway
 		return *wildcard, true
 	}
 	return GatewaySamplingPolicy{}, false
+}
+
+func (s *edgeConfigShadow) deadbandFor(deviceID, pointCode string) float64 {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	policy, ok := s.findPolicyLocked(deviceID, pointCode)
+	if !ok || math.IsNaN(policy.Deadband) || math.IsInf(policy.Deadband, 0) || policy.Deadband <= 0 {
+		return 0
+	}
+	return policy.Deadband
+}
+
+func (s *edgeConfigShadow) reapplyPersisted(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	drivers := cloneDriverConfigs(s.driverConfigs)
+	policy := cloneAutonomyPolicy(s.autonomyPolicy)
+	driverHook := s.applyDriverHook
+	autonomyHook := s.applyAutonomyHook
+	s.mu.Unlock()
+
+	var errs []string
+	if driverHook != nil {
+		for _, cfg := range drivers {
+			profile, err := cfg.ToDeclarativeProfile()
+			if err != nil {
+				errs = append(errs, err.Error())
+				continue
+			}
+			if err := driverHook(ctx, cfg, profile); err != nil {
+				errs = append(errs, err.Error())
+			}
+		}
+	}
+	if policy != nil && autonomyHook != nil {
+		if err := policy.Validate(); err != nil {
+			errs = append(errs, err.Error())
+		} else if err := autonomyHook(ctx, policy); err != nil {
+			errs = append(errs, err.Error())
+		}
+	} else if policy == nil && autonomyHook != nil {
+		if err := autonomyHook(ctx, nil); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 func (s *edgeConfigShadow) markAttemptIfDue(minInterval time.Duration, now time.Time) bool {

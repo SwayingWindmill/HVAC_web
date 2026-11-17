@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/concentrator"
@@ -63,6 +65,11 @@ func main() {
 		logger.Error("connectivity_uplink_config_invalid", "cause", err.Error())
 		os.Exit(1)
 	}
+	rateLimitMPS, rateLimitBurst, err := gatewayRateLimitConfig()
+	if err != nil {
+		logger.Error("connectivity_rate_limit_config_invalid", "cause", err.Error())
+		os.Exit(1)
+	}
 
 	sigCtx, sigCancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer sigCancel()
@@ -80,18 +87,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer connectivityStore.Close()
-	concentratorTransport, err := concentrator.NewMQTTTransport(drainRootCtx, concentrator.TransportConfig{
-		BrokerURL:  config.MQTT.BrokerURL,
-		ClientID:   envOr("CONNECTIVITY_CONCENTRATOR_MQTT_CLIENT_ID", config.MQTT.ClientID+"-concentrator"),
-		CAFile:     config.MQTT.CAFile,
-		CertFile:   config.MQTT.CertFile,
-		KeyFile:    config.MQTT.KeyFile,
-		ServerName: config.MQTT.ServerName,
-		RPCTimeout: 18 * time.Second,
-		Logger:     logger,
-		Metrics:    telemetry.Metrics,
-		PacketHook: tap.Record,
-	})
+	mqttSession, concentratorTransport, err := openConcentratorAndSharedSession(drainRootCtx, config.MQTT, logger, telemetry.Metrics, tap)
 	if err != nil {
 		logger.Error("connectivity_concentrator_mqtt_unavailable", "error_code", "CONCENTRATOR_MQTT_UNAVAILABLE", "error", err.Error())
 		os.Exit(1)
@@ -113,10 +109,11 @@ func main() {
 		connectivityStore,
 		telemetryRuntime,
 		adapter.WithProcessorTracer(telemetry.Tracer),
+		adapter.WithProcessorMetrics(telemetry.Metrics),
+		adapter.WithGatewayRateLimit(rateLimitMPS, rateLimitBurst),
 		adapter.WithProcessorPacketHook(tap.Record),
 		adapter.WithGatewayPresenceHook(presence.SetOnline),
 		adapter.WithGatewayConnectHook(func(_ context.Context, gatewayID string) {
-			presence.SetOnline(gatewayID, true)
 			observability.GoSafe(logger, telemetry.Metrics, "connectivity.concentrator_shadow_reconcile", func() {
 				reconcileConcentratorShadowAsync(ingressCtx, concentratorService, logger, gatewayID)
 			})
@@ -126,14 +123,20 @@ func main() {
 		logger.Error("mqtt_telemetry_adapter_processor_invalid", "error", err.Error())
 		os.Exit(1)
 	}
+	runtimeOptions := []adapter.RuntimeOption{
+		adapter.WithCoverageReporter(connectivityStore, telemetryRuntime),
+		adapter.WithPacketHook(tap.Record),
+		adapter.WithOnlineGatewayCount(presence.Count),
+	}
+	if mqttSession != nil {
+		runtimeOptions = append(runtimeOptions, adapter.WithSharedSession(mqttSession))
+	}
 	runtime, err := adapter.NewRuntime(
 		config,
 		processor,
 		logger,
 		telemetry.Metrics,
-		adapter.WithCoverageReporter(connectivityStore, telemetryRuntime),
-		adapter.WithPacketHook(tap.Record),
-		adapter.WithOnlineGatewayCount(presence.Count),
+		runtimeOptions...,
 	)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_runtime_invalid", "error", err.Error())
@@ -225,6 +228,9 @@ func main() {
 	tunnelHub.Close()
 	_ = credentials.Shutdown(shutdownContext)
 	_ = concentratorTransport.Close(shutdownContext)
+	if mqttSession != nil {
+		_ = mqttSession.Close(shutdownContext)
+	}
 	if commands != nil {
 		_ = commands.Close(shutdownContext)
 	}
@@ -504,4 +510,117 @@ func sanitizeMQTTClientID(raw string) string {
 		}
 	}
 	return builder.String()
+}
+
+const (
+	defaultGatewayRateLimitMPS   = 200.0
+	maxGatewayRateLimitMPS       = 100000.0
+	defaultGatewayRateLimitBurst = 400
+	maxGatewayRateLimitBurst     = 1000000
+)
+
+func gatewayRateLimitConfig() (float64, int, error) {
+	mps := defaultGatewayRateLimitMPS
+	if rawMPS, ok := os.LookupEnv("CONNECTIVITY_GATEWAY_RATE_LIMIT_MPS"); ok {
+		trimmed := strings.TrimSpace(rawMPS)
+		if trimmed == "" || strings.EqualFold(trimmed, "off") || strings.EqualFold(trimmed, "none") {
+			mps = 0
+		} else {
+			parsed, err := strconv.ParseFloat(trimmed, 64)
+			if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) || parsed <= 0 || parsed > maxGatewayRateLimitMPS {
+				return 0, 0, fmt.Errorf("CONNECTIVITY_GATEWAY_RATE_LIMIT_MPS must be between (0,%g] or off", maxGatewayRateLimitMPS)
+			}
+			mps = parsed
+		}
+	}
+
+	burst := defaultGatewayRateLimitBurst
+	if mps == 0 {
+		burst = 0
+	}
+	if rawBurst, ok := os.LookupEnv("CONNECTIVITY_GATEWAY_RATE_LIMIT_BURST"); ok {
+		trimmed := strings.TrimSpace(rawBurst)
+		if trimmed != "" {
+			parsed, err := strconv.Atoi(trimmed)
+			if err != nil || parsed < 1 || parsed > maxGatewayRateLimitBurst {
+				return 0, 0, fmt.Errorf("CONNECTIVITY_GATEWAY_RATE_LIMIT_BURST must be an integer in [1,%d]", maxGatewayRateLimitBurst)
+			}
+			if mps > 0 {
+				burst = parsed
+			}
+		}
+	}
+	return mps, burst, nil
+}
+
+func buildSharedUplinkSessionConfig(cfg adapter.MQTTConfig, logger *slog.Logger, metrics *observability.Registry) mqttclient.SharedSessionConfig {
+	return mqttclient.SharedSessionConfig{
+		BrokerURL: cfg.BrokerURL,
+		ClientID:  cfg.ClientID,
+		TLS: &mqttclient.TLSConfig{
+			CACertFile:     cfg.CAFile,
+			ClientCertFile: cfg.CertFile,
+			ClientKeyFile:  cfg.KeyFile,
+			ServerName:     cfg.ServerName,
+		},
+		KeepAlive:                     30,
+		CleanStartOnInitialConnection: false,
+		SessionExpiryInterval:         24 * 60 * 60,
+		DialTimeout:                   10 * time.Second,
+		OnConnectError: func(connectErr error) {
+			if metrics != nil {
+				_ = metrics.AddCounter("hvac_mqtt_connections_total", "MQTT connection attempts by outcome.", map[string]string{"outcome": "failed"}, 1)
+			}
+			if logger != nil && connectErr != nil {
+				logger.Warn("mqtt_uplink_connect_failed", "error_code", "MQTT_UPLINK_CONNECT_FAILED", "error", connectErr.Error())
+			}
+		},
+		OnSubscribeError: func(subErr error) {
+			if metrics != nil {
+				_ = metrics.AddCounter("hvac_mqtt_subscriptions_total", "MQTT subscription attempts by outcome.", map[string]string{"outcome": "failed"}, 1)
+			}
+			if logger != nil && subErr != nil {
+				logger.Warn("mqtt_uplink_subscribe_failed", "error_code", "MQTT_UPLINK_SUBSCRIBE_FAILED", "error", subErr.Error())
+			}
+		},
+	}
+}
+
+func openConcentratorAndSharedSession(
+	ctx context.Context,
+	cfg adapter.MQTTConfig,
+	logger *slog.Logger,
+	metrics *observability.Registry,
+	tap *packettap.Manager,
+) (*mqttclient.SharedSession, *concentrator.MQTTTransport, error) {
+	transportCfg := concentrator.TransportConfig{
+		BrokerURL:  cfg.BrokerURL,
+		ClientID:   cfg.ClientID,
+		CAFile:     cfg.CAFile,
+		CertFile:   cfg.CertFile,
+		KeyFile:    cfg.KeyFile,
+		ServerName: cfg.ServerName,
+		RPCTimeout: 18 * time.Second,
+		Logger:     logger,
+		Metrics:    metrics,
+		PacketHook: tap.Record,
+	}
+	if override := strings.TrimSpace(os.Getenv("CONNECTIVITY_CONCENTRATOR_MQTT_CLIENT_ID")); override != "" && override != cfg.ClientID {
+		transportCfg.ClientID = override
+		transport, err := concentrator.NewMQTTTransport(ctx, transportCfg)
+		return nil, transport, err
+	}
+
+	session, err := mqttclient.NewSharedSession(ctx, buildSharedUplinkSessionConfig(cfg, logger, metrics))
+	if err != nil {
+		return nil, nil, err
+	}
+	transport, err := concentrator.NewSharedMQTTTransport(ctx, session, transportCfg)
+	if err != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = session.Close(shutdownCtx)
+		cancel()
+		return nil, nil, err
+	}
+	return session, transport, nil
 }

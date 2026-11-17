@@ -5,6 +5,16 @@
 
 ## 未发布
 
+### 2026-11-18
+
+#### 新增与架构演进
+
+- 完成设备接入与边缘自治 P2 改造（`libs/mqttclient`、`libs/edgecontrol`、`modules/connectivity`、`modules/registry`、`modules/command`、`cmd/connectivity`、`tools/eg8200-simulator`、`apps/hvac-web` 与迁移 `gateway-shadow-drivers-and-autonomy.sql`）：
+  - **南向传输统一、多版本编解码与会话防呆**：抽出共享包 `libs/mqttclient`（TLS 1.3 双向认证、代数隔离连接跟踪、SUBACK 重试、`$share` 过滤与单连接多路由 `SharedSession`），使接入主服务与集中器通道复用同一长连接；`adapter` 新增可插拔编解码注册表（兼容标准 `2.0` 与紧凑批量 `1.0`）、基于会话 ID / 序号 / 时间戳的网关在线状态防抖器（拦截延迟遗嘱覆写新连接）以及解包前置的每网关令牌桶限流（超限写入 `RATE_LIMITED` 隔离并带 5 秒冷却抑噪，上报指标 `hvac_mqtt_gateway_rate_limited_total`）。
+  - **声明式 Modbus 驱动与影子热加载**：扩展 `connectivity.gateway_desired_configs` / `gateway_reported_configs` 与 OpenAPI / Zod 契约支持 `driverConfigs`（FC3/FC4 相邻合并读取、优先级分频轮询、故障线性退避、FC6/FC16 编码写与字字节序）和 `autonomyPolicy`（局部保留 / 置空清除的三态局部更新与乱序漂移对比），同时支持 `DEVICE` 模板附加可选 `modbusDriver` 描述；边缘运行时与模拟器在收到配置影子变更后无需重启即可热替换驱动与自治参数。
+  - **本地水力互锁、断网自治与分级续传**：`libs/edgecontrol` 新增水力互锁控制器（泵运行/流量联锁与最小启停保护、频率钳位）与断网兜底控制器（失联超过宽限期切入本地安全设定，重连后平滑交还云端）；模拟器支持数值变化触发与周期全量快照混合上报，并基于 `FileTimedata` 与持久化游标在重连后按 `VERY_HIGH -> HIGH -> MEDIUM -> LOW` 优先级断点续传离线积压数据（标记 `replay: true` 并累计 `hvac_edge_mqtt_replay_batches_total`）。
+  - **网页端运维配置与诊断联动**：站点网关抽屉新增「协议驱动点表」与「断网自治策略」结构化展示、校验和局部提交能力，并补齐 `RATE_LIMITED`（「上报速率超限」）隔离展示与 `DEVICE` 模板 Modbus 驱动概览标签。
+
 ### 2026-11-17
 
 #### 修复与加固

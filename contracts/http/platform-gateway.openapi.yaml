@@ -3549,10 +3549,59 @@
         "type": "object", "additionalProperties": false,
         "required": ["section", "target", "reason", "detail"],
         "properties": {
-          "section": {"type": "string", "enum": ["POINT_MAPPINGS", "SAMPLING_POLICIES", "CONCENTRATOR"]},
+          "section": {"type": "string", "enum": ["POINT_MAPPINGS", "SAMPLING_POLICIES", "CONCENTRATOR", "DRIVER_CONFIGS", "AUTONOMY_POLICY"]},
           "target": {"type": "string", "minLength": 1, "maxLength": 256},
           "reason": {"type": "string", "enum": ["VALUE_MISMATCH", "MISSING_ON_EDGE", "UNEXPECTED_ON_EDGE", "EDGE_APPLY_FAILED"]},
           "detail": {"type": "string", "minLength": 1, "maxLength": 512}
+        }
+      },
+      "GatewayModbusRegisterMapping": {
+        "type": "object", "additionalProperties": false,
+        "required": ["pointCode", "functionCode", "address", "registerCount", "rawType", "byteOrder", "wordOrder", "scale", "offset", "pollPriority"],
+        "properties": {
+          "pointCode": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,127}$"},
+          "semanticChannel": {"type": "string", "minLength": 1, "maxLength": 64},
+          "functionCode": {"type": "integer", "enum": [3, 4]},
+          "writeFunctionCode": {"type": "integer", "enum": [6, 16]},
+          "address": {"type": "integer", "minimum": 0, "maximum": 65535},
+          "registerCount": {"type": "integer", "minimum": 1, "maximum": 4},
+          "rawType": {"type": "string", "enum": ["UINT16", "INT16", "UINT32", "INT32", "FLOAT32", "BIT_BOOL", "ENUM16"]},
+          "byteOrder": {"type": "string", "enum": ["BIG_ENDIAN", "LITTLE_ENDIAN"]},
+          "wordOrder": {"type": "string", "enum": ["BIG_ENDIAN", "LITTLE_ENDIAN"]},
+          "bitIndex": {"type": "integer", "minimum": 0, "maximum": 15},
+          "scale": {"type": "number"},
+          "offset": {"type": "number"},
+          "pollPriority": {"type": "string", "enum": ["VERY_HIGH", "HIGH", "MEDIUM", "LOW"]},
+          "enumMap": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 64}}
+        }
+      },
+      "GatewayModbusDriverConfig": {
+        "type": "object", "additionalProperties": false,
+        "required": ["deviceKey", "driverType", "endpoint", "unitId", "timeoutMs", "retries", "registers"],
+        "properties": {
+          "deviceKey": {"type": "string", "minLength": 1, "maxLength": 128},
+          "driverType": {"type": "string", "enum": ["MODBUS_TCP", "MODBUS_RTU"]},
+          "endpoint": {"type": "string", "minLength": 1, "maxLength": 256},
+          "unitId": {"type": "integer", "minimum": 1, "maximum": 247},
+          "capabilityProfile": {"type": "string", "enum": ["VARIABLE_SPEED_PUMP", "CHILLER", "COOLING_TOWER", "ELECTRICITY_METER", "THERMAL_ENERGY_METER", "WEATHER_STATION", "ZONE_TEMPERATURE_SENSOR"]},
+          "timeoutMs": {"type": "integer", "minimum": 100, "maximum": 30000},
+          "retries": {"type": "integer", "minimum": 0, "maximum": 10},
+          "registers": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"$ref": "#/components/schemas/GatewayModbusRegisterMapping"}}
+        }
+      },
+      "GatewayAutonomyPolicy": {
+        "type": "object", "additionalProperties": false,
+        "required": ["enabled", "offlineGraceSeconds", "defaultChilledWaterSupplySetpointC", "defaultPumpFrequencyHz", "minPumpFrequencyHz", "maxPumpFrequencyHz", "minRunSeconds", "minStopSeconds", "snapshotIntervalSeconds"],
+        "properties": {
+          "enabled": {"type": "boolean"},
+          "offlineGraceSeconds": {"type": "integer", "minimum": 10, "maximum": 3600},
+          "defaultChilledWaterSupplySetpointC": {"type": "number", "minimum": 4, "maximum": 18},
+          "defaultPumpFrequencyHz": {"type": "number", "minimum": 15, "maximum": 50},
+          "minPumpFrequencyHz": {"type": "number", "minimum": 15, "maximum": 50},
+          "maxPumpFrequencyHz": {"type": "number", "minimum": 15, "maximum": 50},
+          "minRunSeconds": {"type": "integer", "minimum": 0, "maximum": 3600},
+          "minStopSeconds": {"type": "integer", "minimum": 0, "maximum": 3600},
+          "snapshotIntervalSeconds": {"type": "integer", "minimum": 30, "maximum": 3600}
         }
       },
       "GatewayDesiredConfig": {
@@ -3563,6 +3612,8 @@
           "pointMappings": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayPointMapping"}},
           "samplingPolicies": {"type": "array", "items": {"$ref": "#/components/schemas/GatewaySamplingPolicy"}},
           "concentratorConfigs": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/ConcentratorUnitShadow"}},
+          "driverConfigs": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayModbusDriverConfig"}},
+          "autonomyPolicy": {"oneOf": [{"$ref": "#/components/schemas/GatewayAutonomyPolicy"}, {"type": "null"}]},
           "updatedBy": {"$ref": "#/components/schemas/UUIDv7"},
           "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
           "createdAt": {"type": "string", "format": "date-time"},
@@ -3578,6 +3629,8 @@
           "pointMappings": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayPointMapping"}},
           "samplingPolicies": {"type": "array", "items": {"$ref": "#/components/schemas/GatewaySamplingPolicy"}},
           "concentratorConfigs": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/ConcentratorUnitShadow"}},
+          "driverConfigs": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayModbusDriverConfig"}},
+          "autonomyPolicy": {"oneOf": [{"$ref": "#/components/schemas/GatewayAutonomyPolicy"}, {"type": "null"}]},
           "driftDetails": {"type": "array", "items": {"$ref": "#/components/schemas/ConfigShadowDriftDetail"}},
           "errorMessage": {"type": ["string", "null"], "maxLength": 1024},
           "reportedAt": {"type": "string", "format": "date-time"},
@@ -3604,6 +3657,8 @@
           "pointMappings": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayPointMapping"}},
           "samplingPolicies": {"type": "array", "items": {"$ref": "#/components/schemas/GatewaySamplingPolicy"}},
           "concentratorConfigs": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/ConcentratorUnitShadow"}},
+          "driverConfigs": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayModbusDriverConfig"}},
+          "autonomyPolicy": {"oneOf": [{"$ref": "#/components/schemas/GatewayAutonomyPolicy"}, {"type": "null"}]},
           "reason": {"type": "string", "minLength": 1, "maxLength": 1000}
         }
       },
@@ -3614,7 +3669,7 @@
           "id": {"$ref": "#/components/schemas/UUIDv7"},
           "gatewayId": {"type": "string", "minLength": 1, "maxLength": 128},
           "topic": {"type": "string", "minLength": 1, "maxLength": 512},
-          "reasonCode": {"type": "string", "enum": ["GATEWAY_UNKNOWN", "GATEWAY_CREDENTIAL_INACTIVE", "MESSAGE_INVALID"]},
+          "reasonCode": {"type": "string", "enum": ["GATEWAY_UNKNOWN", "GATEWAY_CREDENTIAL_INACTIVE", "MESSAGE_INVALID", "RATE_LIMITED"]},
           "detail": {"type": "string", "minLength": 1, "maxLength": 1024},
           "payloadSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "payloadBytes": {"type": "integer", "minimum": 0},

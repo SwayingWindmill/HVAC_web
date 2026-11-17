@@ -177,6 +177,7 @@ COPY services/notification-service/migrations/alarm-delivery-suppression-cooldow
 COPY modules/command/migrations/command-priority-and-locks.sql /opt/hvac/repo/modules/command/migrations/command-priority-and-locks.sql
 COPY modules/alarm/migrations/alarm-suppression-notification-events.sql /opt/hvac/repo/modules/alarm/migrations/alarm-suppression-notification-events.sql
 COPY modules/alarm/migrations/alarm-evaluation-slope-window.sql /opt/hvac/repo/modules/alarm/migrations/alarm-evaluation-slope-window.sql
+COPY infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql
 
 FROM postgres:16.4-bookworm
 

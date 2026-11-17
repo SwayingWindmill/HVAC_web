@@ -136,12 +136,14 @@ func NewPlant(config PlantConfig, scenario Scenario, now time.Time) *Plant {
 			running:             config.ChilledWaterPump.InitiallyRunning,
 			frequencySetpointHz: config.ChilledWaterPump.InitialFrequencyHz,
 			frequencyHz:         config.ChilledWaterPump.InitialFrequencyHz,
+			flowM3H:             initialPumpFlowM3H(config.ChilledWaterPump),
 		},
 		coolingWaterPump: pumpState{
 			runRequested:        config.CoolingWaterPump.InitiallyRunning,
 			running:             config.CoolingWaterPump.InitiallyRunning,
 			frequencySetpointHz: config.CoolingWaterPump.InitialFrequencyHz,
 			frequencyHz:         config.CoolingWaterPump.InitialFrequencyHz,
+			flowM3H:             initialPumpFlowM3H(config.CoolingWaterPump),
 		},
 		coolingTower: coolingTowerState{
 			runRequested:        config.CoolingTower.InitiallyRunning,
@@ -159,6 +161,13 @@ func (plant *Plant) Tick(elapsed time.Duration) Snapshot {
 	defer plant.mu.Unlock()
 	plant.tickLocked(elapsed)
 	return plant.snapshotLocked()
+}
+
+func initialPumpFlowM3H(config PumpConfig) float64 {
+	if !config.InitiallyRunning || config.InitialFrequencyHz <= 0.5 {
+		return 0
+	}
+	return config.RatedFlowM3H * clamp(config.InitialFrequencyHz/pumpNominalFrequencyHz, 0, 1)
 }
 
 // TickTo advances the plant to the wall-clock instant now. A clock corrected backwards

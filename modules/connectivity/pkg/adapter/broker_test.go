@@ -30,8 +30,10 @@ type fakeBroker struct {
 type brokerConn struct {
 	conn          net.Conn
 	writeMu       sync.Mutex
+	subOnce       sync.Once
 	subscribed    chan struct{}
 	subscriptions []string
+	unsubscribed  []string
 	acks          chan uint16
 	disconnected  chan struct{}
 	inflightMu    sync.Mutex
@@ -100,9 +102,20 @@ func (broker *fakeBroker) serve(conn net.Conn) {
 				suback.Content.(*packets.Suback).Reasons = append(suback.Content.(*packets.Suback).Reasons, 1)
 			}
 			_ = client.write(suback)
-			close(client.subscribed)
+			client.subOnce.Do(func() { close(client.subscribed) })
+		case packets.UNSUBSCRIBE:
+			unsub := received.Content.(*packets.Unsubscribe)
+			unsuback := packets.NewControlPacket(packets.UNSUBACK)
+			unsuback.Content.(*packets.Unsuback).PacketID = unsub.PacketID
+			for _, topic := range unsub.Topics {
+				client.unsubscribed = append(client.unsubscribed, topic)
+				unsuback.Content.(*packets.Unsuback).Reasons = append(unsuback.Content.(*packets.Unsuback).Reasons, 0)
+			}
+			_ = client.write(unsuback)
 		case packets.PINGREQ:
 			_ = client.write(packets.NewControlPacket(packets.PINGRESP))
+		case packets.DISCONNECT:
+			return
 		case packets.PUBACK:
 			packetID := received.Content.(*packets.Puback).PacketID
 			client.inflightMu.Lock()

@@ -65,7 +65,10 @@ func TestConfigSharedSubscriptionAndOverflowValidation(t *testing.T) {
 
 	plain := base()
 	plainFilters := plain.SubscriptionTopicFilters()
-	if len(plainFilters) != 2 || plainFilters[0] != "hvac/v1/+/up/telemetry" || plainFilters[1] != "hvac/v1/+/up/event" {
+	if len(plainFilters) != 3 ||
+		plainFilters[0] != "hvac/v1/+/up/telemetry" ||
+		plainFilters[1] != "hvac/v1/+/up/event" ||
+		plainFilters[2] != "hvac/v1/+/up/status" {
 		t.Fatalf("plain SubscriptionTopicFilters=%v", plainFilters)
 	}
 	if plain.effectiveOverflowMaxMessages() != 4096 {
@@ -87,9 +90,10 @@ func TestConfigSharedSubscriptionAndOverflowValidation(t *testing.T) {
 		t.Fatalf("valid shared config failed Validate: %v", err)
 	}
 	sharedFilters := shared.SubscriptionTopicFilters()
-	if len(sharedFilters) != 2 ||
+	if len(sharedFilters) != 3 ||
 		sharedFilters[0] != "$share/connectivity-pool_1/hvac/v1/+/up/telemetry" ||
-		sharedFilters[1] != "$share/connectivity-pool_1/hvac/v1/+/up/event" {
+		sharedFilters[1] != "$share/connectivity-pool_1/hvac/v1/+/up/event" ||
+		sharedFilters[2] != "$share/connectivity-pool_1/hvac/v1/+/up/status" {
 		t.Fatalf("shared SubscriptionTopicFilters=%v", sharedFilters)
 	}
 

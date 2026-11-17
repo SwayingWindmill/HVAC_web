@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -62,20 +63,93 @@ func (host *DeviceHost) RegisterAdapter(adapter DeviceAdapter) error {
 	if host == nil || adapter == nil {
 		return errors.New("device host and adapter are required")
 	}
-	descriptor := adapter.Component()
-	if descriptor.Kind != ComponentDeviceDriver && descriptor.Kind != ComponentSimulator {
-		return fmt.Errorf("device adapter %s must use DEVICE_DRIVER or SIMULATOR component kind", descriptor.ID)
+	descriptor, channels, err := validateAdapterBasics(adapter)
+	if err != nil {
+		return err
 	}
 	host.mu.Lock()
 	defer host.mu.Unlock()
 	if _, exists := host.adapters[descriptor.ID]; exists {
 		return fmt.Errorf("device adapter %s is already registered", descriptor.ID)
 	}
+	return host.registerAdapterLocked(adapter, descriptor, channels)
+}
+
+// ReplaceAdapter atomically replaces an existing DeviceAdapter (or registers it if
+// absent) without disturbing unrelated devices. If registering the replacement fails,
+// the previous adapter is restored before returning the error.
+func (host *DeviceHost) ReplaceAdapter(adapter DeviceAdapter) error {
+	if host == nil || adapter == nil {
+		return errors.New("device host and adapter are required")
+	}
+	descriptor, channels, err := validateAdapterBasics(adapter)
+	if err != nil {
+		return err
+	}
+	host.mu.Lock()
+	previous, hadPrevious := host.adapters[descriptor.ID]
+	if hadPrevious {
+		host.removeAdapterLocked(descriptor.ID, previous)
+	}
+	if err := host.registerAdapterLocked(adapter, descriptor, channels); err != nil {
+		if hadPrevious {
+			_ = host.registerAdapterLocked(previous, previous.Component(), previous.Channels())
+		}
+		host.mu.Unlock()
+		return err
+	}
+	host.mu.Unlock()
+	if hadPrevious && previous != adapter {
+		if closer, ok := previous.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	}
+	return nil
+}
+
+func (host *DeviceHost) Adapter(id string) (DeviceAdapter, bool) {
+	if host == nil {
+		return nil, false
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, false
+	}
+	host.mu.RLock()
+	defer host.mu.RUnlock()
+	adapter, ok := host.adapters[id]
+	return adapter, ok
+}
+
+func validateAdapterBasics(adapter DeviceAdapter) (ComponentDescriptor, []ChannelDescriptor, error) {
+	descriptor := adapter.Component()
+	if descriptor.Kind != ComponentDeviceDriver && descriptor.Kind != ComponentSimulator {
+		return ComponentDescriptor{}, nil, fmt.Errorf("device adapter %s must use DEVICE_DRIVER or SIMULATOR component kind", descriptor.ID)
+	}
+	if err := descriptor.validateBasics(); err != nil {
+		return ComponentDescriptor{}, nil, err
+	}
 	channels := adapter.Channels()
 	if len(channels) == 0 {
-		return fmt.Errorf("device adapter %s exposes no channels", descriptor.ID)
+		return ComponentDescriptor{}, nil, fmt.Errorf("device adapter %s exposes no channels", descriptor.ID)
 	}
-	seen := map[string]struct{}{}
+	seen := make(map[string]struct{}, len(channels))
+	for _, channel := range channels {
+		if channel.ComponentID != descriptor.ID {
+			return ComponentDescriptor{}, nil, fmt.Errorf("device adapter %s exposes channel owned by %s", descriptor.ID, channel.ComponentID)
+		}
+		if _, duplicate := seen[channel.Address()]; duplicate {
+			return ComponentDescriptor{}, nil, fmt.Errorf("device adapter %s exposes duplicate channel %s", descriptor.ID, channel.Address())
+		}
+		seen[channel.Address()] = struct{}{}
+		if err := channel.validate(); err != nil {
+			return ComponentDescriptor{}, nil, fmt.Errorf("device adapter %s channel %s: %w", descriptor.ID, channel.Address(), err)
+		}
+	}
+	return descriptor, channels, nil
+}
+
+func (host *DeviceHost) registerAdapterLocked(adapter DeviceAdapter, descriptor ComponentDescriptor, channels []ChannelDescriptor) error {
 	registered := make([]string, 0, len(channels))
 	cleanupChannels := func() {
 		for _, address := range registered {
@@ -83,15 +157,6 @@ func (host *DeviceHost) RegisterAdapter(adapter DeviceAdapter) error {
 		}
 	}
 	for _, channel := range channels {
-		if channel.ComponentID != descriptor.ID {
-			cleanupChannels()
-			return fmt.Errorf("device adapter %s exposes channel owned by %s", descriptor.ID, channel.ComponentID)
-		}
-		if _, duplicate := seen[channel.Address()]; duplicate {
-			cleanupChannels()
-			return fmt.Errorf("device adapter %s exposes duplicate channel %s", descriptor.ID, channel.Address())
-		}
-		seen[channel.Address()] = struct{}{}
 		if err := host.runtime.Register(channel); err != nil {
 			cleanupChannels()
 			return fmt.Errorf("register device adapter %s channel %s: %w", descriptor.ID, channel.Address(), err)
@@ -106,6 +171,14 @@ func (host *DeviceHost) RegisterAdapter(adapter DeviceAdapter) error {
 	return nil
 }
 
+func (host *DeviceHost) removeAdapterLocked(id string, adapter DeviceAdapter) {
+	delete(host.adapters, id)
+	for _, channel := range adapter.Channels() {
+		host.runtime.Unregister(channel.Address())
+	}
+	host.components.Unregister(id)
+}
+
 func (host *DeviceHost) UnregisterAdapter(id string) bool {
 	if host == nil {
 		return false
@@ -115,16 +188,16 @@ func (host *DeviceHost) UnregisterAdapter(id string) bool {
 		return false
 	}
 	host.mu.Lock()
-	defer host.mu.Unlock()
 	adapter, exists := host.adapters[id]
 	if !exists {
+		host.mu.Unlock()
 		return false
 	}
-	delete(host.adapters, id)
-	for _, channel := range adapter.Channels() {
-		host.runtime.Unregister(channel.Address())
+	host.removeAdapterLocked(id, adapter)
+	host.mu.Unlock()
+	if closer, ok := adapter.(io.Closer); ok {
+		_ = closer.Close()
 	}
-	host.components.Unregister(id)
 	return true
 }
 
@@ -148,19 +221,21 @@ func (host *DeviceHost) PollOnce(ctx context.Context, at time.Time) []DevicePoll
 	for _, id := range ids {
 		updates, err := adapters[id].Poll(ctx, at)
 		result := DevicePollResult{AdapterID: id, Error: err}
-		if err == nil {
-			for _, update := range updates {
-				descriptor, exists := host.runtime.Descriptor(update.Address)
-				if !exists || descriptor.ComponentID != id {
+		for _, update := range updates {
+			descriptor, exists := host.runtime.Descriptor(update.Address)
+			if !exists || descriptor.ComponentID != id {
+				if result.Error == nil {
 					result.Error = fmt.Errorf("device adapter %s returned update for unowned channel %s", id, update.Address)
-					break
 				}
-				if publishErr := host.runtime.PublishNext(update.Address, update.Sample); publishErr != nil {
-					result.Error = publishErr
-					break
-				}
-				result.Updates++
+				break
 			}
+			if publishErr := host.runtime.PublishNext(update.Address, update.Sample); publishErr != nil {
+				if result.Error == nil {
+					result.Error = publishErr
+				}
+				break
+			}
+			result.Updates++
 		}
 		results = append(results, result)
 	}
