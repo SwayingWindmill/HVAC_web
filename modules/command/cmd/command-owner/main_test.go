@@ -111,7 +111,9 @@ func TestCommandControlFailureNotifierConfigurationAndHTTPDelivery(t *testing.T)
 		t.Fatalf("unexpected delivered payload: %+v", received)
 	}
 
-	cfg := runtimeHTTPConfig(commandservice.NewPostgresStore(nil, nil, nil), nil, notifier)
+	cfg := runtimeHTTPConfig(commandservice.NewPostgresStore(nil, nil, nil), nil, func(ctx context.Context, event commandservice.ControlFailureEvent) {
+		_ = sender(ctx, event)
+	})
 	if cfg.ControlFailureNotifier == nil {
 		t.Fatal("expected runtimeHTTPConfig to forward ControlFailureNotifier")
 	}
