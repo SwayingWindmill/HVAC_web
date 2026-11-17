@@ -75,7 +75,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	service.WithPointHealth(telemetryHealthClient)
 	service.WithShadowReader(inputs)
 	service.WithStaging(&optimization.StagingEvaluator{
 		History:  inputs,

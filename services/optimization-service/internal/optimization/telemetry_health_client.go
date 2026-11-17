@@ -16,18 +16,12 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 )
 
-// InternalOptimizationPointHealthPath is the internal telemetry-runtime endpoint
-// used to inspect point health and probe-offset alarms for optimization scopes.
 const InternalOptimizationPointHealthPath = "/internal/v1/telemetry/optimization/point-health:check"
 
-// TelemetryPointHealthChecker evaluates whether site telemetry points are healthy
-// enough for optimization preparation or automated control dispatch.
 type TelemetryPointHealthChecker interface {
 	CheckTelemetryPointHealth(ctx context.Context, tenantID, siteID string, deviceIDs, telemetryKeys []string) error
 }
 
-// TelemetryHealthClientConfig configures the mTLS workload client calling
-// telemetry-runtime-service.
 type TelemetryHealthClientConfig struct {
 	CertificatePath string
 	PrivateKeyPath  string
@@ -38,8 +32,6 @@ type TelemetryHealthClientConfig struct {
 	HTTPClient      *http.Client
 }
 
-// WorkloadTelemetryHealthClient calls telemetry-runtime-service over mTLS to verify
-// point health and probe-offset alarm state without reading telemetry tables directly.
 type WorkloadTelemetryHealthClient struct {
 	baseURL    string
 	httpClient *http.Client
@@ -60,8 +52,6 @@ type optimizationPointHealthResponse struct {
 	Detail       string `json:"detail,omitempty"`
 }
 
-// NewWorkloadTelemetryHealthClient constructs an mTLS HTTP client for internal
-// telemetry point-health inspection.
 func NewWorkloadTelemetryHealthClient(config TelemetryHealthClientConfig) (*WorkloadTelemetryHealthClient, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(config.TelemetryURL), "/")
 	if baseURL == "" {
@@ -100,8 +90,7 @@ func NewWorkloadTelemetryHealthClient(config TelemetryHealthClientConfig) (*Work
 	}, nil
 }
 
-// CheckTelemetryPointHealth requests point health inspection from telemetry-runtime-service
-// and returns a named InputsInvalid reason when telemetry health or probe offsets suppress optimization.
+// CheckTelemetryPointHealth returns ReasonInputsInvalid when remote point health or probe offsets suppress optimization.
 func (client *WorkloadTelemetryHealthClient) CheckTelemetryPointHealth(ctx context.Context, tenantID, siteID string, deviceIDs, telemetryKeys []string) error {
 	if client == nil || client.httpClient == nil {
 		return errors.New("telemetry health client is not configured")

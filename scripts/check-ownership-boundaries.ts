@@ -387,7 +387,6 @@ const lexGoSource = (content: string): LexedGoFile => {
     i += 1;
   }
 
-  // Parse Go import declarations from lexed tokens.
   const imports: GoImportEntry[] = [];
   for (let t = 0; t < rawTokens.length; t += 1) {
     const token = rawTokens[t];

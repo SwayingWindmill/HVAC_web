@@ -170,7 +170,6 @@ type AutoController struct {
 	logf        func(string, ...any)
 }
 
-// WithPointHealth configures the remote telemetry point-health checker for automated dispatch and monitoring.
 func (controller *AutoController) WithPointHealth(checker TelemetryPointHealthChecker) *AutoController {
 	controller.pointHealth = checker
 	return controller

@@ -149,13 +149,6 @@ type Service struct {
 	shadow       *shadowSolver
 	shadowReader ShadowEvaluationReader
 	staging      *StagingEvaluator
-	pointHealth  TelemetryPointHealthChecker
-}
-
-// WithPointHealth configures the remote telemetry point-health checker for the service.
-func (service *Service) WithPointHealth(checker TelemetryPointHealthChecker) *Service {
-	service.pointHealth = checker
-	return service
 }
 
 var ErrShadowEvaluationNotFound = errors.New("optimization shadow evaluation not found")

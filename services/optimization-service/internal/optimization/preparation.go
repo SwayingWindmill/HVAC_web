@@ -267,7 +267,6 @@ func NewPreparer(store PreparationStore, inputs AuthoritativeInputReader, clock 
 	return &Preparer{store: store, inputs: inputs, clock: clock}, nil
 }
 
-// WithPointHealth configures the remote telemetry point-health checker called before reading inputs.
 func (preparer *Preparer) WithPointHealth(checker TelemetryPointHealthChecker) *Preparer {
 	preparer.pointHealth = checker
 	return preparer
