@@ -730,10 +730,12 @@ services:
       SSL_CERT_FILE: ${SSL_CERT_FILE:-}
       COMMAND_RUNTIME_IN_PROCESS_ENABLED: "true"
       CONNECTIVITY_DATABASE_URL: ${CONNECTIVITY_DATABASE_URL:-}
+      CONNECTIVITY_OVERFLOW_DIR: ${CONNECTIVITY_OVERFLOW_DIR:-/var/lib/hvac/connectivity-spool}
       GATEWAY_BROKER_URL: ${GATEWAY_BROKER_URL:-tls://localhost:8883}
       CONNECTIVITY_IAM_URL: ${IAM_URL:-https://iam-service:8444}
     volumes:
       - ${PHASE1_RUNTIME_DIR:-./runtime}/gateway-ca:/run/hvac/gateway-ca:ro
+      - connectivity-spool:/var/lib/hvac/connectivity-spool
     depends_on:
       phase1-schema-preflight:
         condition: service_completed_successfully
@@ -1275,3 +1277,4 @@ volumes:
   tempo-data: {}
   grafana-data: {}
   alertmanager-data: {}
+  connectivity-spool: {}

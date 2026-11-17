@@ -19,6 +19,8 @@ func TestMQTTRuntimeMetricsStayLowCardinality(t *testing.T) {
 		Replay:    true, PointCount: 5, Accepted: 2, Duplicate: 1, OutOfOrder: 1, Quarantined: 1,
 	}, 250*time.Millisecond)
 	runtime.recordQueueDepth("018f3e00-4000-7000-8000-000000000100", 3)
+	runtime.recordOverflowDepth("018f3e00-4000-7000-8000-000000000100", 2)
+	_ = registry.AddCounter("hvac_mqtt_gateway_overflow_shed_total", "MQTT uplink messages left unacknowledged because a Gateway filled RAM and disk overflow.", map[string]string{"gateway_id": "018f3e00-4000-7000-8000-000000000100"}, 1)
 
 	recorder := httptest.NewRecorder()
 	registry.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -33,14 +35,19 @@ func TestMQTTRuntimeMetricsStayLowCardinality(t *testing.T) {
 		`hvac_mqtt_values_total{outcome="out_of_order"} 1`,
 		`hvac_mqtt_values_total{outcome="quarantined"} 1`,
 		`hvac_mqtt_gateway_queue_depth{gateway_id="018f3e00-4000-7000-8000-000000000100"} 3`,
+		`hvac_mqtt_gateway_overflow_depth{gateway_id="018f3e00-4000-7000-8000-000000000100"} 2`,
+		`hvac_mqtt_gateway_overflow_shed_total{gateway_id="018f3e00-4000-7000-8000-000000000100"} 1`,
 	} {
 		if !strings.Contains(body, marker) {
 			t.Fatalf("missing %q in metrics:\n%s", marker, body)
 		}
 	}
-	// Gateways are bounded Registry objects, so only the per-Gateway backlog names one.
+	// Gateways are bounded Registry objects, so only the per-Gateway backlog/overflow metrics name one.
 	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(line, "hvac_mqtt_gateway_queue_depth{") || strings.HasPrefix(line, "#") {
+		if strings.HasPrefix(line, "hvac_mqtt_gateway_queue_depth{") ||
+			strings.HasPrefix(line, "hvac_mqtt_gateway_overflow_depth{") ||
+			strings.HasPrefix(line, "hvac_mqtt_gateway_overflow_shed_total{") ||
+			strings.HasPrefix(line, "#") {
 			continue
 		}
 		if strings.Contains(line, "018f3e00") || strings.Contains(line, "message_id") || strings.Contains(line, "gateway") {

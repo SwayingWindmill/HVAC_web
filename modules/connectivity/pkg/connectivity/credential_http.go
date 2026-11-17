@@ -1,6 +1,7 @@
 package connectivity
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -58,12 +59,37 @@ func NewCredentialHandlerWithExtensions(service *CredentialService, authorize Cr
 				status, code = 409, "GATEWAY_REVOKED"
 			case errors.Is(err, ErrNotFound):
 				status, code = 404, "GATEWAY_NOT_FOUND"
+			case errors.Is(err, ErrCRLSignUnsupported):
+				status, code = http.StatusConflict, "CRL_SIGN_UNSUPPORTED"
 			}
 			w.WriteHeader(status)
 			_ = json.NewEncoder(w).Encode(map[string]string{"code": code})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(value)
+	}
+	decodeOptional := func(w http.ResponseWriter, r *http.Request, value any) error {
+		if r.Body == nil {
+			return nil
+		}
+		raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32<<10))
+		if err != nil {
+			return ErrEnrollmentRejected
+		}
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 {
+			return nil
+		}
+		decoder := json.NewDecoder(bytes.NewReader(trimmed))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(value) != nil {
+			return ErrEnrollmentRejected
+		}
+		var extra any
+		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+			return ErrEnrollmentRejected
+		}
+		return nil
 	}
 	decode := func(w http.ResponseWriter, r *http.Request, value any) error {
 		r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
@@ -92,7 +118,8 @@ func NewCredentialHandlerWithExtensions(service *CredentialService, authorize Cr
 	})
 	mux.HandleFunc("POST /gateway/v1/renew", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
-			CSR string `json:"csrPem"`
+			CSR                   string `json:"csrPem"`
+			RevokePeerCertificate bool   `json:"revokePeerCertificate"`
 		}
 		if err := decode(w, r, &input); err != nil {
 			finish(w, nil, err)
@@ -105,7 +132,7 @@ func NewCredentialHandlerWithExtensions(service *CredentialService, authorize Cr
 			finish(w, nil, err)
 			return
 		}
-		value, err := service.Renew(r.Context(), peer, input.CSR)
+		value, err := service.RenewWithOptions(r.Context(), peer, input.CSR, input.RevokePeerCertificate)
 		finish(w, value, err)
 	})
 	if tunnelHandler != nil {
@@ -137,18 +164,49 @@ func NewCredentialHandlerWithExtensions(service *CredentialService, authorize Cr
 		}
 		finish(w, map[string]any{"gatewayId": gatewayID, "revoked": true}, nil)
 	})
+	mux.HandleFunc("GET /internal/v1/gateways/ca.crl", func(w http.ResponseWriter, r *http.Request) {
+		if authorize != nil && strings.TrimSpace(r.Header.Get("X-Delegation-Grant")) != "" {
+			if _, err := authorize(r, registryauth.ActionDeviceRead); err != nil {
+				finish(w, nil, err)
+				return
+			}
+		}
+		if service == nil {
+			finish(w, nil, errors.New("credential service is not configured"))
+			return
+		}
+		crlPEM, err := service.ExportCRL(r.Context())
+		if err != nil {
+			finish(w, nil, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/pkix-crl")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(crlPEM)
+	})
 	for _, route := range []struct {
 		method, path string
 		action       registryauth.Action
 	}{
 		{"GET", "credential", registryauth.ActionDeviceRead},
+		{"GET", "credentials", registryauth.ActionDeviceRead},
 		{"POST", "enrollment-code", registryauth.ActionDeviceWrite},
 		{"POST", "revoke", registryauth.ActionDeviceWrite},
+		{"POST", "rotate", registryauth.ActionDeviceWrite},
 	} {
 		mux.HandleFunc(route.method+" /internal/v1/gateways/{gatewayId}/"+route.path, func(w http.ResponseWriter, r *http.Request) {
+			if authorize == nil {
+				finish(w, nil, ErrCredentialForbidden)
+				return
+			}
 			claims, err := authorize(r, route.action)
 			if err != nil {
 				finish(w, nil, err)
+				return
+			}
+			if service == nil {
+				finish(w, nil, errors.New("credential service is not configured"))
 				return
 			}
 			gateway := r.PathValue("gatewayId")
@@ -156,15 +214,57 @@ func NewCredentialHandlerWithExtensions(service *CredentialService, authorize Cr
 			case "credential":
 				value, err := service.Status(r.Context(), claims, gateway)
 				finish(w, value, err)
+			case "credentials":
+				records, err := service.ListCredentials(r.Context(), claims, gateway)
+				if err != nil {
+					finish(w, nil, err)
+					return
+				}
+				finish(w, map[string]any{"items": records}, nil)
 			case "enrollment-code":
 				value, err := service.GenerateEnrollmentCode(r.Context(), claims, gateway)
 				finish(w, value, err)
 			case "revoke":
 				err := service.Revoke(r.Context(), claims, gateway)
 				finish(w, map[string]string{"status": "REVOKED"}, err)
+			case "rotate":
+				value, err := service.RotateEnrollment(r.Context(), claims, gateway)
+				finish(w, value, err)
 			}
 		})
 	}
+	mux.HandleFunc("POST /internal/v1/gateways/{gatewayId}/credentials/{credentialId}/revoke", func(w http.ResponseWriter, r *http.Request) {
+		if authorize == nil {
+			finish(w, nil, ErrCredentialForbidden)
+			return
+		}
+		claims, err := authorize(r, registryauth.ActionDeviceWrite)
+		if err != nil {
+			finish(w, nil, err)
+			return
+		}
+		if service == nil {
+			finish(w, nil, errors.New("credential service is not configured"))
+			return
+		}
+		var input struct {
+			Reason *string `json:"reason"`
+		}
+		if err := decodeOptional(w, r, &input); err != nil {
+			finish(w, nil, err)
+			return
+		}
+		reason := ""
+		if input.Reason != nil {
+			reason = strings.TrimSpace(*input.Reason)
+			if reason == "" {
+				finish(w, nil, ErrEnrollmentRejected)
+				return
+			}
+		}
+		value, err := service.RevokeCertificate(r.Context(), claims, r.PathValue("gatewayId"), r.PathValue("credentialId"), reason)
+		finish(w, value, err)
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		isRetireRoute := isGatewayRetireRequest(r)
 		trusted := false

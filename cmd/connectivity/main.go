@@ -146,7 +146,7 @@ func main() {
 	go func() {
 		defer close(runtimeDone)
 		defer observability.Recover(logger, telemetry.Metrics, "connectivity.uplink_runtime")
-		logger.Info("connectivity_uplink_started", "topic_filters", adapter.UplinkTopicFilters)
+		logger.Info("connectivity_uplink_started", "topic_filters", config.SubscriptionTopicFilters())
 		if runErr := runtime.Run(ctx); runErr != nil && ctx.Err() == nil {
 			// Telemetry ingress is its own fault domain. Command delivery remains
 			// running; telemetry readiness becomes false until the process is repaired.
@@ -167,7 +167,7 @@ func main() {
 	}
 	select {
 	case <-runtimeDone:
-	case <-time.After(10 * time.Second):
+	case <-time.After(20 * time.Second):
 	}
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
@@ -190,9 +190,10 @@ func uplinkConfig() adapter.Config {
 	ca := envOr("CONNECTIVITY_CA", "/run/hvac/pki/ca.crt")
 	return adapter.Config{
 		MQTT: adapter.MQTTConfig{
-			BrokerURL: envOr("CONNECTIVITY_MQTT_URL", "tls://mqtt-broker:8883"),
-			ClientID:  envOr("CONNECTIVITY_MQTT_CLIENT_ID", "connectivity"),
-			CAFile:    ca, CertFile: identityCert, KeyFile: identityKey,
+			BrokerURL:               envOr("CONNECTIVITY_MQTT_URL", "tls://mqtt-broker:8883"),
+			ClientID:                envOr("CONNECTIVITY_MQTT_CLIENT_ID", "connectivity"),
+			SharedSubscriptionGroup: sharedSubscriptionGroup(),
+			CAFile:                  ca, CertFile: identityCert, KeyFile: identityKey,
 			ServerName: envOr("CONNECTIVITY_MQTT_SERVER_NAME", "mqtt-broker"),
 		},
 		TelemetryRuntime: adapter.TelemetryRuntimeConfig{
@@ -200,11 +201,50 @@ func uplinkConfig() adapter.Config {
 			CAFile:  ca, CertFile: identityCert, KeyFile: identityKey,
 			ServerName: envOr("CONNECTIVITY_TELEMETRY_SERVER_NAME", "telemetry-runtime-service"),
 		},
-		QueueCapacity:    queueCapacity(),
-		BatchMaxMessages: batchMaxMessages(),
-		BatchFlushWindow: batchFlushWindow(),
-		WorkerCount:      uplinkWorkers(),
+		QueueCapacity:       queueCapacity(),
+		OverflowMaxMessages: overflowMaxMessages(),
+		OverflowMaxBytes:    overflowMaxBytes(),
+		OverflowDir:         strings.TrimSpace(os.Getenv("CONNECTIVITY_OVERFLOW_DIR")),
+		BatchMaxMessages:    batchMaxMessages(),
+		BatchFlushWindow:    batchFlushWindow(),
+		WorkerCount:         uplinkWorkers(),
 	}
+}
+
+func sharedSubscriptionGroup() string {
+	raw, ok := os.LookupEnv("CONNECTIVITY_MQTT_SHARE_GROUP")
+	if !ok {
+		return "connectivity"
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || strings.EqualFold(trimmed, "off") || strings.EqualFold(trimmed, "none") {
+		return ""
+	}
+	return trimmed
+}
+
+func overflowMaxMessages() int {
+	raw := strings.TrimSpace(os.Getenv("CONNECTIVITY_OVERFLOW_MAX_MESSAGES"))
+	if raw == "" {
+		return 0
+	}
+	maxMessages, err := strconv.Atoi(raw)
+	if err != nil || maxMessages < 1 {
+		return -1
+	}
+	return maxMessages
+}
+
+func overflowMaxBytes() int64 {
+	raw := strings.TrimSpace(os.Getenv("CONNECTIVITY_OVERFLOW_MAX_BYTES"))
+	if raw == "" {
+		return 0
+	}
+	maxBytes, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || maxBytes < 1 {
+		return -1
+	}
+	return maxBytes
 }
 
 // queueCapacity bounds each Gateway's in-process backlog (CONNECTIVITY_QUEUE_CAPACITY,

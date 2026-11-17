@@ -60,3 +60,61 @@ func TestUplinkBatchConfigFromEnv(t *testing.T) {
 		})
 	}
 }
+
+func TestUplinkSharedSubscriptionAndOverflowConfigFromEnv(t *testing.T) {
+	defaults := uplinkConfig()
+	if err := defaults.Validate(); err != nil {
+		t.Fatalf("default uplinkConfig invalid: %v", err)
+	}
+	if defaults.MQTT.SharedSubscriptionGroup != "connectivity" {
+		t.Fatalf("default SharedSubscriptionGroup = %q, want connectivity", defaults.MQTT.SharedSubscriptionGroup)
+	}
+	if defaults.OverflowMaxMessages != 0 {
+		t.Fatalf("default OverflowMaxMessages = %d, want 0 (defaulting in NewRuntime)", defaults.OverflowMaxMessages)
+	}
+
+	for _, disabled := range []string{"", "off", "OFF", "none", "NONE"} {
+		t.Setenv("CONNECTIVITY_MQTT_SHARE_GROUP", disabled)
+		cfg := uplinkConfig()
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("share group %q invalid: %v", disabled, err)
+		}
+		if cfg.MQTT.SharedSubscriptionGroup != "" {
+			t.Fatalf("share group %q -> %q, want empty", disabled, cfg.MQTT.SharedSubscriptionGroup)
+		}
+	}
+
+	t.Setenv("CONNECTIVITY_MQTT_SHARE_GROUP", "connectivity-pool_1")
+	t.Setenv("CONNECTIVITY_OVERFLOW_MAX_MESSAGES", "8192")
+	t.Setenv("CONNECTIVITY_OVERFLOW_MAX_BYTES", "65536")
+	t.Setenv("CONNECTIVITY_OVERFLOW_DIR", "/tmp/hvac-overflow-test")
+	custom := uplinkConfig()
+	if err := custom.Validate(); err != nil {
+		t.Fatalf("custom config invalid: %v", err)
+	}
+	if custom.MQTT.SharedSubscriptionGroup != "connectivity-pool_1" || custom.OverflowMaxMessages != 8192 || custom.OverflowMaxBytes != 65536 || custom.OverflowDir != "/tmp/hvac-overflow-test" {
+		t.Fatalf("custom=%#v", custom)
+	}
+
+	for _, invalid := range []struct {
+		name string
+		key  string
+		val  string
+	}{
+		{"invalid share group slash", "CONNECTIVITY_MQTT_SHARE_GROUP", "bad/group"},
+		{"invalid share group plus", "CONNECTIVITY_MQTT_SHARE_GROUP", "bad+group"},
+		{"zero overflow max", "CONNECTIVITY_OVERFLOW_MAX_MESSAGES", "0"},
+		{"overflow max above limit", "CONNECTIVITY_OVERFLOW_MAX_MESSAGES", "1048577"},
+		{"non-numeric overflow max", "CONNECTIVITY_OVERFLOW_MAX_MESSAGES", "abc"},
+		{"zero overflow max bytes", "CONNECTIVITY_OVERFLOW_MAX_BYTES", "0"},
+		{"overflow max bytes above limit", "CONNECTIVITY_OVERFLOW_MAX_BYTES", "1073741825"},
+		{"non-numeric overflow max bytes", "CONNECTIVITY_OVERFLOW_MAX_BYTES", "abc"},
+	} {
+		t.Run(invalid.name, func(t *testing.T) {
+			t.Setenv(invalid.key, invalid.val)
+			if err := uplinkConfig().Validate(); err == nil {
+				t.Fatalf("%s (%s=%q) unexpectedly passed Validate", invalid.name, invalid.key, invalid.val)
+			}
+		})
+	}
+}

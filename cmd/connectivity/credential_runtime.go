@@ -6,11 +6,15 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/concentrator"
@@ -101,10 +105,39 @@ func credentialServerWithRuntime(store *connectivity.Store, concentratorService 
 	}, tunnelOptions...)
 	tunnelHub := tunnel.NewHub(tunnelHubOpts...)
 	service := connectivity.NewCredentialService(store, authority)
+	crlOutPath := strings.TrimSpace(os.Getenv("GATEWAY_CRL_OUTPUT_FILE"))
+	var crlMu sync.Mutex
+	refreshCRL := func() {
+		if crlOutPath == "" || authority == nil || store == nil {
+			return
+		}
+		crlMu.Lock()
+		defer crlMu.Unlock()
+		refreshCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		crlPEM, crlErr := service.ExportCRL(refreshCtx)
+		if crlErr != nil {
+			if !errors.Is(crlErr, connectivity.ErrCRLSignUnsupported) {
+				slog.Default().Warn("gateway_crl_export_failed", "error", crlErr.Error())
+			}
+			return
+		}
+		if writeErr := writeAtomicCRLFile(crlOutPath, crlPEM); writeErr != nil {
+			slog.Default().Warn("gateway_crl_write_failed", "path", crlOutPath, "error", writeErr.Error())
+		}
+	}
 	service.SetRevokeHook(func(gatewayID string) {
 		tunnelHub.CloseGateway(gatewayID)
 		reportGatewayRevokedCoverage(store, coverageReporter, gatewayID)
+		refreshCRL()
 	})
+	service.SetCertificateRevokeHook(func(gatewayID, fingerprintSHA256 string, hasRemainingActive bool) {
+		applyCertificateRevokeHook(tunnelHub, store, coverageReporter, gatewayID, fingerprintSHA256, hasRemainingActive)
+		refreshCRL()
+	})
+	if crlOutPath != "" && authority != nil && store != nil {
+		observability.GoSafe(slog.Default(), nil, "connectivity.crl_startup_refresh", refreshCRL)
+	}
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {
 		if _, err := tunnelHub.StartLoopbackListener(loopbackAddr); err != nil {
 			tunnelHub.Close()
@@ -135,6 +168,15 @@ func credentialServerWithRuntime(store *connectivity.Store, concentratorService 
 
 type gatewayChildLister interface {
 	ListGatewayChildDeviceIDs(ctx context.Context, gatewayID string) ([]string, error)
+}
+
+func applyCertificateRevokeHook(hub *tunnel.Hub, lister gatewayChildLister, reporter adapter.CoverageReporter, gatewayID, fingerprintSHA256 string, hasRemainingActive bool) {
+	if hub != nil {
+		hub.CloseGatewayByFingerprint(gatewayID, fingerprintSHA256)
+	}
+	if !hasRemainingActive {
+		reportGatewayRevokedCoverageWithLister(lister, reporter, gatewayID)
+	}
 }
 
 func reportGatewayRevokedCoverage(store *connectivity.Store, reporter adapter.CoverageReporter, gatewayID string) {
@@ -207,4 +249,38 @@ func isUUIDv7(raw string) bool {
 		}
 	}
 	return true
+}
+
+func writeAtomicCRLFile(targetPath string, content []byte) error {
+	dir := filepath.Dir(targetPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".gateway-ca-*.crl.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, targetPath); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }

@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	stdruntime "runtime"
 	"strings"
 	"sync"
@@ -55,40 +59,207 @@ func (log *ackLog) snapshot() []string {
 	return append([]string(nil), log.acked...)
 }
 
-func TestFullGatewayQueuePausesInsteadOfDropping(t *testing.T) {
-	telemetry := &fakeTelemetry{release: make(chan struct{})}
-	runtime := newTestRuntime(t, telemetry, 1)
+func TestGatewayOverflowSpillsToDiskAndShedsWithoutBlocking(t *testing.T) {
+	telemetry := &fakeTelemetry{
+		release: make(chan struct{}),
+		entered: make(chan struct{}, 4),
+	}
+	overflowDir := t.TempDir()
+	runtime, err := NewRuntime(Config{
+		MQTT:                MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+		TelemetryRuntime:    TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+		QueueCapacity:       2,
+		OverflowMaxMessages: 3,
+		OverflowDir:         overflowDir,
+	}, newTestProcessor(t, newFakeIdentities(), telemetry), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.retryDelay = func(int) time.Duration { return 5 * time.Millisecond }
 	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+	t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
 	acks := newAckLog()
 
-	// The worker holds the first message; the second fills the queue; the third waits.
-	for index := 1; index <= 2; index++ {
+	// Message 1 holds the worker; 2..3 fill RAM (2); 4..6 spill to disk (3); 7 sheds without blocking or acking.
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
+		t.Fatal(err)
+	}
+	<-telemetry.entered
+	for index := 2; index <= 6; index++ {
 		if err := runtime.enqueue(ctx, nil, publish(testGatewayA, index), acks.ack(messageID(index))); err != nil {
 			t.Fatal(err)
 		}
 	}
-	thirdQueued := make(chan error, 1)
-	go func() { thirdQueued <- runtime.enqueue(ctx, nil, publish(testGatewayA, 3), acks.ack(messageID(3))) }()
+	// Custody ACKs happen immediately after durable WAL write without waiting on the worker.
+	for index := 1; index <= 6; index++ {
+		acks.await(t, messageID(index))
+	}
+
+	spoolPath := filepath.Join(overflowDir, safeGatewayFileName(testGatewayA))
+	info, err := os.Stat(spoolPath)
+	if err != nil || info.Size() <= walHeaderSize {
+		t.Fatalf("expected non-empty overflow WAL spool at %s, stat=(%v, %v)", spoolPath, info, err)
+	}
+
+	shedDone := make(chan error, 1)
+	go func() {
+		shedDone <- runtime.enqueue(ctx, nil, publish(testGatewayA, 7), acks.ack(messageID(7)))
+	}()
 	select {
-	case err := <-thirdQueued:
-		t.Fatalf("enqueue into a full Gateway queue returned %v instead of waiting", err)
-	case <-time.After(100 * time.Millisecond):
+	case err := <-shedDone:
+		if err == nil {
+			t.Fatal("expected shedding enqueue to return an error for broker redelivery")
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("enqueue blocked instead of shedding when RAM and disk overflow were full")
+	}
+
+	recorder := httptest.NewRecorder()
+	runtime.metrics.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metricsBody := recorder.Body.String()
+	for _, want := range []string{
+		`hvac_mqtt_gateway_queue_depth{gateway_id="` + testGatewayA + `"} 5`,
+		`hvac_mqtt_gateway_overflow_depth{gateway_id="` + testGatewayA + `"} 3`,
+		`hvac_mqtt_gateway_overflow_shed_total{gateway_id="` + testGatewayA + `"} 1`,
+	} {
+		if !strings.Contains(metricsBody, want) {
+			t.Fatalf("expected metric %q in:\n%s", want, metricsBody)
+		}
 	}
 
 	close(telemetry.release)
-	if err := <-thirdQueued; err != nil {
+	awaitQueued(t, runtime, testGatewayA, 0)
+	if got := acks.snapshot(); len(got) != 6 {
+		t.Fatalf("acked=%v, want 6 (shed message 7 must stay unacked)", got)
+	}
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(telemetry.accepted()) == 6
+	}, "all 6 custody-acked messages processed by downstream")
+	accepted := telemetry.accepted()
+	if len(accepted) != 6 {
+		t.Fatalf("accepted=%d, want 6", len(accepted))
+	}
+	for index, obs := range accepted {
+		if obs.SourcePosition.Offset != int64(index+1) {
+			t.Fatalf("observation[%d] offset=%d, want FIFO %d", index, obs.SourcePosition.Offset, index+1)
+		}
+	}
+	waitCondition(t, 2*time.Second, func() bool {
+		stat, err := os.Stat(spoolPath)
+		return err == nil && stat.Size() == walHeaderSize
+	}, "WAL spool truncated back to header size after overflow drains")
+}
+
+func TestRuntimeStalledGatewayDoesNotBlockHealthyGateways(t *testing.T) {
+	releaseA := make(chan struct{})
+	enteredA := make(chan struct{}, 1)
+	telemetry := &fakeTelemetry{
+		failHook: func(_ int, batch []Observation) error {
+			if len(batch) > 0 && batch[0].SourceID == testGatewayA {
+				select {
+				case enteredA <- struct{}{}:
+				default:
+				}
+				<-releaseA
+			}
+			return nil
+		},
+	}
+	overflowDir := t.TempDir()
+	runtime, err := NewRuntime(Config{
+		MQTT:                MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+		TelemetryRuntime:    TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+		QueueCapacity:       2,
+		OverflowMaxMessages: 3,
+		OverflowDir:         overflowDir,
+	}, newTestProcessor(t, newFakeIdentities(), telemetry), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+	if err != nil {
 		t.Fatal(err)
 	}
-	for index := 1; index <= 3; index++ {
+	runtime.retryDelay = func(int) time.Duration { return 5 * time.Millisecond }
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() {
+		select {
+		case <-releaseA:
+		default:
+			close(releaseA)
+		}
+		cancel()
+		runtime.workers.Wait()
+		runtime.closeMailboxes()
+	})
+	acks := newAckLog()
+
+	// Stall Gateway A completely, fill RAM + disk overflow, and trigger shed messages.
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack("a-1")); err != nil {
+		t.Fatal(err)
+	}
+	<-enteredA
+	for index := 2; index <= 8; index++ {
+		done := make(chan error, 1)
+		idx := index
+		go func() {
+			done <- runtime.enqueue(ctx, nil, publish(testGatewayA, idx), acks.ack(messageID(idx)))
+		}()
+		select {
+		case err := <-done:
+			if idx <= 6 && err != nil {
+				t.Fatalf("Gateway A enqueue %d failed: %v", idx, err)
+			}
+			if idx >= 7 && err == nil {
+				t.Fatalf("Gateway A enqueue %d should shed with error", idx)
+			}
+		case <-time.After(150 * time.Millisecond):
+			t.Fatalf("Gateway A enqueue %d blocked reader loop", idx)
+		}
+	}
+
+	// Gateway B must be processed immediately without waiting on stalled Gateway A.
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayB, 100), acks.ack("b-100")); err != nil {
+		t.Fatal(err)
+	}
+	acks.await(t, "a-1")
+	for index := 2; index <= 6; index++ {
 		acks.await(t, messageID(index))
 	}
-	if accepted := len(telemetry.accepted()); accepted != 3 {
-		t.Fatalf("accepted=%d, want all 3", accepted)
+	acks.await(t, "b-100")
+
+	close(releaseA)
+	waitCondition(t, 3*time.Second, func() bool {
+		return len(telemetry.accepted()) == 7
+	}, "Gateway A queued + spooled messages + Gateway B drained after release")
+}
+
+func TestRuntimeSubscribesWithSharedPrefixWhenConfigured(t *testing.T) {
+	broker := newFakeBroker(t)
+	telemetry := &fakeTelemetry{}
+	runtime := newTestRuntime(t, telemetry, 4)
+	runtime.config.MQTT = broker.mqtt
+	runtime.config.MQTT.SharedSubscriptionGroup = "connectivity"
+	ctx, cancel := context.WithCancel(t.Context())
+	stopped := make(chan error, 1)
+	go func() { stopped <- runtime.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(10 * time.Second):
+			t.Error("Run did not stop")
+		}
+	})
+
+	conn := broker.awaitConnection(t)
+	awaitReady(t, runtime, true)
+	want := []string{
+		"$share/connectivity/hvac/v1/+/up/telemetry",
+		"$share/connectivity/hvac/v1/+/up/event",
+	}
+	if len(conn.subscriptions) != len(want) || conn.subscriptions[0] != want[0] || conn.subscriptions[1] != want[1] {
+		t.Fatalf("broker subscriptions=%v, want %v", conn.subscriptions, want)
 	}
 }
 
-func TestTransientFailureIsRetriedInOrderBeforeAck(t *testing.T) {
+func TestTransientFailureIsRetriedInOrderBeforeProcessingCompletes(t *testing.T) {
 	telemetry := &fakeTelemetry{failures: 2}
 	runtime := newTestRuntime(t, telemetry, 8)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -101,6 +272,9 @@ func TestTransientFailureIsRetriedInOrderBeforeAck(t *testing.T) {
 	}
 	acks.await(t, messageID(1))
 	acks.await(t, messageID(2))
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(telemetry.accepted()) == 2
+	}, "transient failures retried and delivered in FIFO order")
 	observations := telemetry.accepted()
 	if len(observations) != 2 || observations[0].SourcePosition.Offset != 1 || observations[1].SourcePosition.Offset != 2 {
 		t.Fatalf("observations=%#v", observations)
@@ -109,19 +283,34 @@ func TestTransientFailureIsRetriedInOrderBeforeAck(t *testing.T) {
 
 func TestGatewaysDoNotWaitForEachOther(t *testing.T) {
 	telemetry := &fakeTelemetry{failures: 1_000_000}
-	runtime := newTestRuntime(t, telemetry, 8)
+	identities := newFakeIdentities()
+	runtime, err := NewRuntime(Config{
+		MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+		TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+		QueueCapacity:    8,
+		OverflowDir:      t.TempDir(),
+	}, newTestProcessor(t, identities, telemetry), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.retryDelay = func(int) time.Duration { return 5 * time.Millisecond }
+	t.Cleanup(runtime.closeMailboxes)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
 	acks := newAckLog()
 	unknownGateway := "018f3e00-4000-7000-8000-000000000999"
-	// Gateway A keeps failing; a message from an unknown Gateway is still quarantined and acked.
+	// Gateway A keeps failing; a message from an unknown Gateway is still quarantined and processed immediately.
 	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
 		t.Fatal(err)
 	}
 	if err := runtime.enqueue(ctx, nil, publish(unknownGateway, 2), acks.ack(messageID(2))); err != nil {
 		t.Fatal(err)
 	}
+	acks.await(t, messageID(1))
 	acks.await(t, messageID(2))
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(identities.snapshotQuarantines()) == 1
+	}, "unknown gateway quarantined while Gateway A keeps retrying")
 }
 
 func newTestRuntime(t *testing.T, telemetry RuntimeClient, capacity int) *Runtime {
@@ -130,11 +319,13 @@ func newTestRuntime(t *testing.T, telemetry RuntimeClient, capacity int) *Runtim
 		MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
 		TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
 		QueueCapacity:    capacity,
+		OverflowDir:      t.TempDir(),
 	}, newTestProcessor(t, newFakeIdentities(), telemetry), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
 	runtime.retryDelay = func(int) time.Duration { return 5 * time.Millisecond }
+	t.Cleanup(runtime.closeMailboxes)
 	return runtime
 }
 
@@ -230,10 +421,13 @@ func awaitQueued(t *testing.T, runtime *Runtime, gatewayID string, depth int) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		runtime.queuesMu.Lock()
-		queue, ok := runtime.queues[gatewayID]
+		mailbox, ok := runtime.queues[gatewayID]
 		runtime.queuesMu.Unlock()
-		if ok && len(queue) == depth {
-			return
+		if ok {
+			memD, ovfD := mailbox.depth()
+			if memD+ovfD == depth {
+				return
+			}
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -266,26 +460,33 @@ func TestCoalescedBacklogBatchDeliversAndAcksInStrictFIFOOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(acks.snapshot()) != 0 {
-		t.Fatalf("messages acked before persistence: %v", acks.snapshot())
-	}
-
-	close(telemetry.release)
+	// Custody ACKs arrive in strict enqueue order before downstream persistence finishes.
 	for index := 1; index <= 4; index++ {
 		acks.await(t, messageID(index))
 	}
+
+	close(telemetry.release)
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(telemetry.accepted()) == 10
+	}, "coalesced backlog batches persisted in FIFO order")
 	batches := telemetry.recordedBatches()
 	if len(batches) != 2 || len(batches[0]) != 1 || len(batches[1]) != 9 {
 		t.Fatalf("batches=%v, want [1 9] points across 2 AcceptObservationBatch calls", batchSizes(batches))
 	}
+	spoolPath := filepath.Join(runtime.overflowDir, safeGatewayFileName(testGatewayA))
+	waitCondition(t, 2*time.Second, func() bool {
+		stat, err := os.Stat(spoolPath)
+		return err == nil && stat.Size() == walHeaderSize
+	}, "coalesced WAL spool truncated back to header after drain")
 }
 
 func TestMixedBatchPreservesFIFOOrderAndDoesNotReprocessAckedPrefixOnLaterRetry(t *testing.T) {
 	identities := newFakeIdentities()
 	acks := newAckLog()
 	var sawM4Failure int
-	var acksAtM4Failure []string
 	m4Failed := make(chan struct{}, 1)
+	var runtime *Runtime
+	spoolSizeAtFailure := int64(0)
 
 	telemetry := &fakeTelemetry{
 		release: make(chan struct{}),
@@ -293,7 +494,9 @@ func TestMixedBatchPreservesFIFOOrderAndDoesNotReprocessAckedPrefixOnLaterRetry(
 		failHook: func(call int, batch []Observation) error {
 			if len(batch) > 0 && batch[0].SourcePosition.Offset == 5 && sawM4Failure == 0 {
 				sawM4Failure++
-				acksAtM4Failure = acks.snapshot()
+				if stat, statErr := os.Stat(filepath.Join(runtime.overflowDir, safeGatewayFileName(testGatewayA))); statErr == nil {
+					spoolSizeAtFailure = stat.Size()
+				}
 				select {
 				case m4Failed <- struct{}{}:
 				default:
@@ -303,10 +506,12 @@ func TestMixedBatchPreservesFIFOOrderAndDoesNotReprocessAckedPrefixOnLaterRetry(
 			return nil
 		},
 	}
-	runtime, err := NewRuntime(Config{
+	var err error
+	runtime, err = NewRuntime(Config{
 		MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
 		TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
 		QueueCapacity:    16,
+		OverflowDir:      t.TempDir(),
 	}, newTestProcessor(t, identities, telemetry), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
 	if err != nil {
 		t.Fatal(err)
@@ -314,7 +519,7 @@ func TestMixedBatchPreservesFIFOOrderAndDoesNotReprocessAckedPrefixOnLaterRetry(
 	runtime.retryDelay = func(int) time.Duration { return 5 * time.Millisecond }
 
 	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+	t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
 
 	// M0 holds the worker while mixed batch [M1(telemetry), M2(invalid JSON), M3(event), M4(telemetry)] queues.
 	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
@@ -343,15 +548,14 @@ func TestMixedBatchPreservesFIFOOrderAndDoesNotReprocessAckedPrefixOnLaterRetry(
 		acks.await(t, messageID(index))
 	}
 
-	wantAckedBeforeRetry := []string{messageID(1), messageID(2), messageID(3), messageID(4)}
-	if len(acksAtM4Failure) != len(wantAckedBeforeRetry) {
-		t.Fatalf("acks at M4 failure=%v, want %v", acksAtM4Failure, wantAckedBeforeRetry)
+	if spoolSizeAtFailure <= walHeaderSize {
+		t.Fatalf("expected WAL spool to hold pending M4 frame on failure (size=%d)", spoolSizeAtFailure)
 	}
-	for index, want := range wantAckedBeforeRetry {
-		if acksAtM4Failure[index] != want {
-			t.Fatalf("acksAtM4Failure[%d]=%s, want %s", index, acksAtM4Failure[index], want)
-		}
-	}
+	spoolPath := filepath.Join(runtime.overflowDir, safeGatewayFileName(testGatewayA))
+	waitCondition(t, 2*time.Second, func() bool {
+		stat, err := os.Stat(spoolPath)
+		return err == nil && stat.Size() == walHeaderSize
+	}, "mixed batch WAL spool truncated after M4 retry succeeded")
 	if quarantines := identities.snapshotQuarantines(); len(quarantines) != 1 {
 		t.Fatalf("quarantines=%d, want 1 (M2 must not be re-quarantined)", len(quarantines))
 	}
@@ -361,20 +565,26 @@ func TestMixedBatchPreservesFIFOOrderAndDoesNotReprocessAckedPrefixOnLaterRetry(
 	if got := acks.snapshot(); len(got) != 5 {
 		t.Fatalf("final acks=%v, want 5", got)
 	}
+	if accepted := telemetry.accepted(); len(accepted) != 3 {
+		t.Fatalf("accepted telemetry points=%d, want 3 (M0, M1, M4)", len(accepted))
+	}
 }
 
-func TestOversizedEnvelopeChunksAcrossBatchCallsBeforeAck(t *testing.T) {
+func TestOversizedEnvelopeChunksAcrossBatchCallsBeforeSpoolCommit(t *testing.T) {
 	acks := newAckLog()
-	var acksBeforeSecondChunk []string
+	var runtime *Runtime
+	var spoolSizeBeforeSecondChunk atomic.Int64
 	telemetry := &fakeTelemetry{
 		failHook: func(call int, batch []Observation) error {
 			if call == 2 {
-				acksBeforeSecondChunk = acks.snapshot()
+				if stat, err := os.Stat(filepath.Join(runtime.overflowDir, safeGatewayFileName(testGatewayA))); err == nil {
+					spoolSizeBeforeSecondChunk.Store(stat.Size())
+				}
 			}
 			return nil
 		},
 	}
-	runtime := newTestRuntime(t, telemetry, 8)
+	runtime = newTestRuntime(t, telemetry, 8)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
 
@@ -387,8 +597,13 @@ func TestOversizedEnvelopeChunksAcrossBatchCallsBeforeAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	acks.await(t, messageID(1))
-	if len(acksBeforeSecondChunk) != 0 {
-		t.Fatalf("message acked before second chunk completed: %v", acksBeforeSecondChunk)
+	spoolPath := filepath.Join(runtime.overflowDir, safeGatewayFileName(testGatewayA))
+	waitCondition(t, 2*time.Second, func() bool {
+		stat, err := os.Stat(spoolPath)
+		return err == nil && stat.Size() == walHeaderSize
+	}, "oversized WAL spool truncated after both chunks completed")
+	if size := spoolSizeBeforeSecondChunk.Load(); size <= walHeaderSize {
+		t.Fatalf("spool truncated before second chunk completed: size=%d", size)
 	}
 	batches := telemetry.recordedBatches()
 	if len(batches) != 2 || len(batches[0]) != 512 || len(batches[1]) != 88 {
@@ -396,21 +611,27 @@ func TestOversizedEnvelopeChunksAcrossBatchCallsBeforeAck(t *testing.T) {
 	}
 }
 
-func TestTransientBatchFailureRetriesInPlaceWithoutAckingSlice(t *testing.T) {
+func TestTransientBatchFailureRetriesInPlaceWithoutAdvancingWAL(t *testing.T) {
 	acks := newAckLog()
-	var acksOnFailure [][]string
+	var runtime *Runtime
+	var spoolSizesMu sync.Mutex
+	var spoolSizesOnFailure []int64
 	telemetry := &fakeTelemetry{
 		release: make(chan struct{}),
 		entered: make(chan struct{}, 4),
 		failHook: func(call int, batch []Observation) error {
 			if call == 2 || call == 3 {
-				acksOnFailure = append(acksOnFailure, acks.snapshot())
+				if stat, err := os.Stat(filepath.Join(runtime.overflowDir, safeGatewayFileName(testGatewayA))); err == nil {
+					spoolSizesMu.Lock()
+					spoolSizesOnFailure = append(spoolSizesOnFailure, stat.Size())
+					spoolSizesMu.Unlock()
+				}
 				return context.DeadlineExceeded
 			}
 			return nil
 		},
 	}
-	runtime := newTestRuntime(t, telemetry, 8)
+	runtime = newTestRuntime(t, telemetry, 8)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
 
@@ -427,18 +648,143 @@ func TestTransientBatchFailureRetriesInPlaceWithoutAckingSlice(t *testing.T) {
 	for index := 1; index <= 4; index++ {
 		acks.await(t, messageID(index))
 	}
-	if len(acksOnFailure) != 2 {
-		t.Fatalf("observed %d transient batch failures, want 2", len(acksOnFailure))
+	spoolPath := filepath.Join(runtime.overflowDir, safeGatewayFileName(testGatewayA))
+	waitCondition(t, 2*time.Second, func() bool {
+		stat, err := os.Stat(spoolPath)
+		return err == nil && stat.Size() == walHeaderSize
+	}, "WAL spool truncated only after transient batch retries succeeded")
+	spoolSizesMu.Lock()
+	sizes := append([]int64(nil), spoolSizesOnFailure...)
+	spoolSizesMu.Unlock()
+	if len(sizes) != 2 {
+		t.Fatalf("observed %d transient batch failures, want 2", len(sizes))
 	}
-	for attempt, seen := range acksOnFailure {
-		if len(seen) != 1 || seen[0] != messageID(1) {
-			t.Fatalf("attempt %d acks=%v, want only [%s]", attempt, seen, messageID(1))
+	for attempt, sz := range sizes {
+		if sz <= walHeaderSize {
+			t.Fatalf("attempt %d WAL size=%d, want > %d while batch uncommitted", attempt, sz, walHeaderSize)
 		}
 	}
 	batches := telemetry.recordedBatches()
 	if len(batches) != 2 || len(batches[0]) != 1 || len(batches[1]) != 3 {
 		t.Fatalf("batches=%v, want [1 3]", batchSizes(batches))
 	}
+}
+
+func TestRealBrokerInflightWindowIsolationWithStalledAndSheddingGateway(t *testing.T) {
+	broker := newFakeBroker(t)
+	releaseA := make(chan struct{})
+	enteredA := make(chan struct{}, 1)
+	telemetry := &fakeTelemetry{
+		failHook: func(_ int, batch []Observation) error {
+			if len(batch) > 0 && batch[0].SourceID == testGatewayA {
+				select {
+				case enteredA <- struct{}{}:
+				default:
+				}
+				<-releaseA
+			}
+			return nil
+		},
+	}
+	t.Cleanup(func() {
+		select {
+		case <-releaseA:
+		default:
+			close(releaseA)
+		}
+	})
+
+	runtime := newTestRuntime(t, telemetry, 1)
+	runtime.config.MQTT = broker.mqtt
+	runtime.config.OverflowMaxMessages = 2
+	runtime.reconnectBackoff = func(int) time.Duration { return 50 * time.Millisecond }
+	ctx, cancel := context.WithCancel(t.Context())
+	stopped := make(chan error, 1)
+	go func() { stopped <- runtime.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(15 * time.Second):
+			t.Error("Run did not return after cancel")
+		}
+	})
+
+	first := broker.awaitConnection(t)
+	awaitReady(t, runtime, true)
+
+	// Gateway A holds its worker (1) and leaves capacity for RAM (1) + overflow (2) = 4 messages total
+	// while a strict broker window (maxInflight=2) would deadlock without WAL custody ACK.
+	first.deliverWithinWindow(t, 2, 2*time.Second, testGatewayA, 1, 1)
+	<-enteredA
+	first.deliverWithinWindow(t, 2, 2*time.Second, testGatewayA, 2, 2)
+	first.deliverWithinWindow(t, 2, 2*time.Second, testGatewayB, 3, 100)
+	first.deliverWithinWindow(t, 2, 2*time.Second, testGatewayA, 4, 3)
+	first.deliverWithinWindow(t, 2, 2*time.Second, testGatewayB, 5, 101)
+	first.deliverWithinWindow(t, 2, 2*time.Second, testGatewayA, 6, 4)
+
+	first.awaitAcks(t, 1, 2, 3, 4, 5, 6)
+	waitCondition(t, 2*time.Second, func() bool {
+		countB := 0
+		for _, obs := range telemetry.accepted() {
+			if obs.SourceID == testGatewayB {
+				countB++
+			}
+		}
+		return countB == 2
+	}, "Gateway B processed cleanly across shared broker window while Gateway A stalled")
+
+	// Next Gateway A message exceeds QueueCapacity(1) + OverflowMaxMessages(2) -> shed & reconnect without ACK.
+	first.deliverGateway(t, testGatewayA, 7, 5, false)
+	first.awaitDisconnect(t, 3*time.Second)
+
+	second := broker.awaitConnection(t)
+	close(releaseA)
+	second.deliverGateway(t, testGatewayA, 7, 5, true)
+	second.awaitAcks(t, 7)
+
+	waitCondition(t, 3*time.Second, func() bool {
+		return len(telemetry.accepted()) == 7
+	}, "all 5 Gateway A + 2 Gateway B messages processed after reconnect")
+}
+
+func TestRealBrokerClosesConnectionOnNonShedSpoolWriteError(t *testing.T) {
+	broker := newFakeBroker(t)
+	telemetry := &fakeTelemetry{}
+	runtime := newTestRuntime(t, telemetry, 4)
+	runtime.config.MQTT = broker.mqtt
+	runtime.reconnectBackoff = func(int) time.Duration { return 50 * time.Millisecond }
+	ctx, cancel := context.WithCancel(t.Context())
+	stopped := make(chan error, 1)
+	go func() { stopped <- runtime.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(15 * time.Second):
+			t.Error("Run did not return after cancel")
+		}
+	})
+
+	first := broker.awaitConnection(t)
+	awaitReady(t, runtime, true)
+
+	// Force Gateway B's spool open to fail (path is a directory, simulating disk/permission fault).
+	blockedPath := filepath.Join(runtime.overflowDir, safeGatewayFileName(testGatewayB))
+	if err := os.MkdirAll(blockedPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	first.deliverGateway(t, testGatewayB, 1, 100, false)
+	first.awaitDisconnect(t, 3*time.Second)
+
+	// Clear the fault so the reconnected session processes redelivered packet without a wedged acksTracker.
+	if err := os.Remove(blockedPath); err != nil {
+		t.Fatal(err)
+	}
+	second := broker.awaitConnection(t)
+	second.deliverGateway(t, testGatewayB, 1, 100, true)
+	second.deliverGateway(t, testGatewayA, 2, 1, false)
+	second.awaitAcks(t, 1, 2)
 }
 
 func TestBatchFlushWindowFlushesImmediatelyAtLimitAndOnTimer(t *testing.T) {
@@ -515,6 +861,7 @@ func TestTopicGatewayIDBucketsOnlyValidLowercaseUUIDv7(t *testing.T) {
 		"hvac/v1/" + testGatewayA + "/up/telemetry",
 		"hvac/v1/" + testGatewayA + "/up/event",
 		"hvac/v1/" + testGatewayA + "/up/state",
+		"$share/connectivity/hvac/v1/" + testGatewayA + "/up/telemetry",
 	} {
 		if got := TopicGatewayID(valid); got != testGatewayA {
 			t.Fatalf("TopicGatewayID(%q) = %q, want %q", valid, got, testGatewayA)
@@ -569,7 +916,7 @@ func TestWorkerPoolServesOverHundredGatewaysWithBoundedGoroutines(t *testing.T) 
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+	t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
 
 	beforeGoroutines := stdruntime.NumGoroutine()
 	acked := make(chan string, numGateways)
@@ -600,6 +947,9 @@ func TestWorkerPoolServesOverHundredGatewaysWithBoundedGoroutines(t *testing.T) 
 		}
 	}
 
+	waitCondition(t, 5*time.Second, func() bool {
+		return len(telemetry.accepted()) == numGateways
+	}, "bounded worker pool processed all 120 gateways")
 	if peak := maxActive.Load(); peak < 2 || peak > poolSize {
 		t.Fatalf("max concurrent workers=%d, want within [2, %d]", peak, poolSize)
 	}
@@ -638,7 +988,7 @@ func TestSingleWorkerDoesNotHeadOfLineBlockHealthyGatewaysDuringRetries(t *testi
 	runtime.retryDelay = func(int) time.Duration { return 30 * time.Millisecond }
 
 	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+	t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
 	acks := newAckLog()
 
 	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
@@ -653,10 +1003,21 @@ func TestSingleWorkerDoesNotHeadOfLineBlockHealthyGatewaysDuringRetries(t *testi
 	if err := runtime.enqueue(ctx, nil, publish(testGatewayB, 2), acks.ack(messageID(2))); err != nil {
 		t.Fatal(err)
 	}
+	acks.await(t, messageID(1))
 	acks.await(t, messageID(2))
+	waitCondition(t, 2*time.Second, func() bool {
+		for _, obs := range telemetry.accepted() {
+			if obs.SourceID == testGatewayB {
+				return true
+			}
+		}
+		return false
+	}, "gateway B processed while single worker awaits gateway A retry timer")
 
 	allowGatewayA.Store(true)
-	acks.await(t, messageID(1))
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(telemetry.accepted()) == 2
+	}, "gateway A retried and delivered after unblock")
 }
 
 type syncLogBuffer struct {
@@ -700,7 +1061,7 @@ func TestUplinkWorkerRecoversFromPanicWithoutLosingSubsequentBatches(t *testing.
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+	t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
 	acks := newAckLog()
 
 	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
@@ -716,8 +1077,12 @@ func TestUplinkWorkerRecoversFromPanicWithoutLosingSubsequentBatches(t *testing.
 	if err := runtime.enqueue(ctx, nil, publish(testGatewayB, 3), acks.ack(messageID(3))); err != nil {
 		t.Fatal(err)
 	}
+	acks.await(t, messageID(1))
 	acks.await(t, messageID(2))
 	acks.await(t, messageID(3))
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(telemetry.accepted()) == 2
+	}, "subsequent batches processed after worker panic recovery")
 
 	if strings.Contains(logBuf.String(), "secret-uplink-panic-payload") {
 		t.Fatalf("panic payload leaked into log: %s", logBuf.String())
@@ -733,7 +1098,7 @@ func TestIdleGatewayMailboxesAreReapedAfterTimeout(t *testing.T) {
 	runtime.idleTimeout = 25 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+	t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
 	acksA := newAckLog()
 	acksB := newAckLog()
 
@@ -745,6 +1110,9 @@ func TestIdleGatewayMailboxesAreReapedAfterTimeout(t *testing.T) {
 	}
 	acksA.await(t, messageID(1))
 	acksB.await(t, messageID(2))
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(telemetry.accepted()) == 2
+	}, "idle gateway initial batch processed before reap")
 
 	waitCondition(t, 2*time.Second, func() bool {
 		runtime.queuesMu.Lock()
@@ -756,6 +1124,9 @@ func TestIdleGatewayMailboxesAreReapedAfterTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	acksA.await(t, messageID(3))
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(telemetry.accepted()) == 3
+	}, "re-enqueued message processed after idle reap")
 }
 
 func TestTrackedGatewayQueuesCapEvictsIdleEntriesFirst(t *testing.T) {
@@ -763,21 +1134,22 @@ func TestTrackedGatewayQueuesCapEvictsIdleEntriesFirst(t *testing.T) {
 	runtime := newTestRuntime(t, telemetry, 4)
 
 	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+	t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
 	acks := newAckLog()
 
 	oldestIdleID := "018f3e00-9999-7000-8000-000000000000"
 	now := time.Now()
+	dir := t.TempDir()
 	runtime.queuesMu.Lock()
 	for index := 0; index < maxTrackedGatewayQueues; index++ {
 		id := fmt.Sprintf("018f3e00-9999-7000-8000-%012d", index)
-		ch := make(chan queuedPublish, 4)
+		mb := newGatewayMailbox(id, 4, 16, 1<<20, dir)
 		state := &gatewayMailboxState{
-			queue:      ch,
+			mailbox:    mb,
 			lastActive: now.Add(time.Duration(index) * time.Millisecond),
 			inFlight:   index != 0,
 		}
-		runtime.queues[id] = ch
+		runtime.queues[id] = mb
 		runtime.states[id] = state
 	}
 	runtime.queuesMu.Unlock()

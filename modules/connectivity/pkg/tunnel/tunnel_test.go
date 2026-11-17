@@ -648,3 +648,77 @@ func TestTunnelTruncateAuditUTF8Safe(t *testing.T) {
 		t.Fatalf("expected rune boundary at 510 bytes (170 runes), got %d", len(got))
 	}
 }
+
+func TestTunnelHubCloseGatewayByFingerprint(t *testing.T) {
+	hub := NewHub()
+	t.Cleanup(hub.Close)
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const gwID = "0193f000-2000-7000-8000-000000000099"
+	makeCert := func(serial int64) *x509.Certificate {
+		der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+			SerialNumber: big.NewInt(serial),
+			Subject:      pkix.Name{CommonName: gwID},
+			NotBefore:    time.Now().Add(-time.Minute),
+			NotAfter:     time.Now().Add(time.Hour),
+		}, &x509.Certificate{
+			SerialNumber: big.NewInt(serial),
+			Subject:      pkix.Name{CommonName: gwID},
+		}, &key.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cert
+	}
+
+	certOld := makeCert(101)
+	certNew := makeCert(102)
+	oldFP := peerCertificateFingerprint(certOld)
+	newFP := peerCertificateFingerprint(certNew)
+
+	s1Conn, c1Conn := net.Pipe()
+	defer func() { _ = c1Conn.Close() }()
+	sessOld := hub.registerSessionWithFingerprint(gwID, s1Conn, "127.0.0.1:41001", oldFP)
+	if sessOld == nil {
+		t.Fatal("registerSessionWithFingerprint returned nil")
+	}
+
+	// Mismatched fingerprint does not close active session.
+	if hub.CloseGatewayByFingerprint(gwID, newFP) {
+		t.Fatal("expected CloseGatewayByFingerprint to return false for mismatched fingerprint")
+	}
+	if got, err := hub.resolveSession(gwID); err != nil || got != sessOld {
+		t.Fatalf("expected sessOld to remain active, got=(%v, %v)", got, err)
+	}
+
+	// Matching fingerprint closes sessOld and removes it from hub.
+	if !hub.CloseGatewayByFingerprint(gwID, oldFP) {
+		t.Fatal("expected CloseGatewayByFingerprint to return true for matching fingerprint")
+	}
+	_ = c1Conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	var buf [1]byte
+	if _, err := c1Conn.Read(buf[:]); err == nil {
+		t.Fatal("expected c1Conn to be closed after fingerprint kick")
+	}
+	if _, err := hub.resolveSession(gwID); err == nil {
+		t.Fatal("expected gateway session removed after fingerprint kick")
+	}
+
+	// Rotating to a new cert session protects it from a stale kick of the old fingerprint.
+	s2Conn, c2Conn := net.Pipe()
+	defer func() { _ = c2Conn.Close() }()
+	sessNew := hub.registerSessionWithFingerprint(gwID, s2Conn, "127.0.0.1:41002", newFP)
+	if hub.CloseGatewayByFingerprint(gwID, oldFP) {
+		t.Fatal("expected stale oldFP kick to leave rotated sessNew connected")
+	}
+	if got, err := hub.resolveSession(gwID); err != nil || got != sessNew {
+		t.Fatalf("expected sessNew to stay active after stale kick, got=(%v, %v)", got, err)
+	}
+}

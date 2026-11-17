@@ -28,10 +28,15 @@ type fakeBroker struct {
 }
 
 type brokerConn struct {
-	conn       net.Conn
-	writeMu    sync.Mutex
-	subscribed chan struct{}
-	acks       chan uint16
+	conn          net.Conn
+	writeMu       sync.Mutex
+	subscribed    chan struct{}
+	subscriptions []string
+	acks          chan uint16
+	disconnected  chan struct{}
+	inflightMu    sync.Mutex
+	inflight      map[uint16]struct{}
+	ackWake       chan struct{}
 }
 
 func newFakeBroker(t *testing.T) *fakeBroker {
@@ -65,7 +70,15 @@ func (broker *fakeBroker) serve(conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
-	client := &brokerConn{conn: conn, subscribed: make(chan struct{}), acks: make(chan uint16, 64)}
+	client := &brokerConn{
+		conn:         conn,
+		subscribed:   make(chan struct{}),
+		acks:         make(chan uint16, 128),
+		disconnected: make(chan struct{}),
+		inflight:     make(map[uint16]struct{}),
+		ackWake:      make(chan struct{}, 128),
+	}
+	defer close(client.disconnected)
 	connack := packets.NewControlPacket(packets.CONNACK)
 	connack.Content.(*packets.Connack).SessionPresent = true
 	if err := client.write(connack); err != nil {
@@ -82,7 +95,8 @@ func (broker *fakeBroker) serve(conn net.Conn) {
 			subscribe := received.Content.(*packets.Subscribe)
 			suback := packets.NewControlPacket(packets.SUBACK)
 			suback.Content.(*packets.Suback).PacketID = subscribe.PacketID
-			for range subscribe.Subscriptions {
+			for _, sub := range subscribe.Subscriptions {
+				client.subscriptions = append(client.subscriptions, sub.Topic)
 				suback.Content.(*packets.Suback).Reasons = append(suback.Content.(*packets.Suback).Reasons, 1)
 			}
 			_ = client.write(suback)
@@ -90,7 +104,15 @@ func (broker *fakeBroker) serve(conn net.Conn) {
 		case packets.PINGREQ:
 			_ = client.write(packets.NewControlPacket(packets.PINGRESP))
 		case packets.PUBACK:
-			client.acks <- received.Content.(*packets.Puback).PacketID
+			packetID := received.Content.(*packets.Puback).PacketID
+			client.inflightMu.Lock()
+			delete(client.inflight, packetID)
+			client.inflightMu.Unlock()
+			select {
+			case client.ackWake <- struct{}{}:
+			default:
+			}
+			client.acks <- packetID
 		}
 	}
 }
@@ -123,15 +145,64 @@ func (client *brokerConn) write(packet *packets.ControlPacket) error {
 // again on a new connection because the first one was never acknowledged.
 func (client *brokerConn) deliver(t *testing.T, packetID uint16, index int, redelivered bool) {
 	t.Helper()
+	client.deliverGateway(t, testGatewayA, packetID, index, redelivered)
+}
+
+func (client *brokerConn) deliverGateway(t *testing.T, gatewayID string, packetID uint16, index int, redelivered bool) {
+	t.Helper()
+	client.inflightMu.Lock()
+	client.inflight[packetID] = struct{}{}
+	client.inflightMu.Unlock()
 	packet := packets.NewControlPacket(packets.PUBLISH)
 	publish := packet.Content.(*packets.Publish)
-	publish.Topic = telemetryTopic(testGatewayA)
-	publish.Payload = telemetryPayload(testGatewayA, messageID(index), index, "METER-01", "active_power")
+	publish.Topic = telemetryTopic(gatewayID)
+	publish.Payload = telemetryPayload(gatewayID, messageID(index), index, "METER-01", "active_power")
 	publish.QoS = 1
 	publish.PacketID = packetID
 	publish.Duplicate = redelivered
 	if err := client.write(packet); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func (client *brokerConn) deliverWithinWindow(t *testing.T, maxInflight int, timeout time.Duration, gatewayID string, packetID uint16, index int) {
+	t.Helper()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for {
+		client.inflightMu.Lock()
+		inFlight := len(client.inflight)
+		if inFlight < maxInflight {
+			client.inflight[packetID] = struct{}{}
+			client.inflightMu.Unlock()
+			break
+		}
+		client.inflightMu.Unlock()
+		select {
+		case <-client.ackWake:
+		case <-client.disconnected:
+			t.Fatalf("connection closed while waiting for inflight window before packet %d", packetID)
+		case <-deadline.C:
+			t.Fatalf("broker inflight window saturated (%d/%d) before packet %d for gateway %s", inFlight, maxInflight, packetID, gatewayID)
+		}
+	}
+	packet := packets.NewControlPacket(packets.PUBLISH)
+	publish := packet.Content.(*packets.Publish)
+	publish.Topic = telemetryTopic(gatewayID)
+	publish.Payload = telemetryPayload(gatewayID, messageID(index), index, "METER-01", "active_power")
+	publish.QoS = 1
+	publish.PacketID = packetID
+	if err := client.write(packet); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (client *brokerConn) awaitDisconnect(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	select {
+	case <-client.disconnected:
+	case <-time.After(timeout):
+		t.Fatal("broker connection stayed open instead of disconnecting after shed")
 	}
 }
 

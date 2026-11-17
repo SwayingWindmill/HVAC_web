@@ -14,9 +14,11 @@
 - 主题只带网关编号：上行 `hvac/v1/{gatewayId}/up/{telemetry|event|reply}`，下行 `hvac/v1/{gatewayId}/down/command`。
 - MQTT 服务器仍用 Mosquitto，用证书认证，权限是固定的模式规则（`infra/telemetry/mqtt/acl`：`pattern write hvac/v1/%u/up/#`、`pattern read hvac/v1/%u/down/#`），每个网关只能读写自己的主题。加网关不用改 MQTT 服务器的任何配置。
 - 一个设备接入服务（Connectivity）服务所有租户和网关。它先把网关对应到租户，再做任何按租户的事。
-- 设备接入服务持有网关的签发 CA。运维人员给一个已登记的网关生成一个接入码；网关用接入码和证书申请（CSR）换一张 90 天的证书，之后用现有证书续期。
-- 吊销由设备接入服务执行：没有有效证书的网关发来的消息会被隔离，也不再给它发指令。MQTT 服务器不维护吊销列表。
-- 吊销对这个网关是永久的：它所有还有效的证书和没用掉的接入码一起作废，之后不能再生成接入码或续期。网关被盗或被攻破，就重新登记一个新网关，重新绑定数据来源。原因是 MQTT 的订阅方看到的是网关的主题，看不到证书的指纹；如果允许同一个网关「恢复」，一张被盗的旧证书也会跟着恢复。这是把网关整个隔离，不是让 MQTT 服务器断开某一张证书（调研：`docs/architecture/gateway-credentials-source-review-2026-10-05.md`）。
+- 设备接入服务持有网关的签发 CA（新生成的 CA 证书同时携带签发证书与签发吊销列表用途）。运维人员给一个已登记的网关生成一个接入码；网关用接入码和证书申请（CSR）换一张 90 天的证书，之后可用现有证书无损轮换：支持通过轮换接口重发接入码并保留既有有效证书并行过渡，也可在 `/gateway/v1/renew` 提交 `revokePeerCertificate: true` 原子签发新证并立即吊销旧证。
+- 吊销由设备接入服务以单张证书指纹（`gateway_credentials.status = 'ACTIVE'`）为核心事实源执行，并在需要时导出由网关 CA 签名的 X.509 CRL（`/internal/v1/gateways/ca.crl`；配置 `GATEWAY_CRL_OUTPUT_FILE` 且 CA 支持 CRL 签名时在启动与每次吊销后原子落盘）。由于部署环境下 MQTT 与内部服务共享静态受信根文件且存量 CA 可能无 CRL 签名权限，Mosquitto 默认不配置可能静默失效的 `crlfile`，而由接入服务在上行解析（按网关身份）、续期和隧道握手入口（按证书 SHA-256 指纹）直接拦截。
+- 支持两条吊销路径：
+  - **单证吊销**（`POST /api/v1/gateways/{gatewayId}/credentials/{credentialId}/revoke`）：只把指定证书标为 `REVOKED` 并记入 `CERTIFICATE_REVOKED` 审计，不封禁 `gateway_enrollments.revoked_at` 也不影响同一网关下其余仍在有效期内的轮换证书；设备接入服务按被吊销证书的 SHA-256 指纹精准踢下线仍使用该旧证书的反向运维隧道并在续期与隧道握手入口立即拒绝该旧证（新证书上的活跃隧道保持不断线），同时更新签名的 X.509 CRL 供 TLS 终止点吊销校验（在未配置 CRL 的 MQTT broker 端口上，若同网关仍持有另一张未过期有效证书，旧证书连接 MQTT 仍由 broker 仅校验 CA 与 `CN={gatewayId}`）。
+  - **整台网关吊销**（`POST /api/v1/gateways/{gatewayId}/revoke`）：把该网关所有活跃证书和未使用的接入码一起作废并写入 `gateway_enrollments.revoked_at`，使该网关上行遥测与指令路由立即全部隔离；之后普通接入码接口（`enrollment-code`）与续期接口继续拒绝（`409 GATEWAY_REVOKED`）。只有在管理员显式调用轮换重启用接口（`POST /api/v1/gateways/{gatewayId}/rotate`）时，才会在记入 `IDENTITY_REENABLED` 审计后清零 `revoked_at` 并签发新接入码，所有历史已吊销证书仍保持 `REVOKED`。
 - 直接删掉、不做替代的：集成实例和传输配置、接入会话、指令发送的归属租约、按网关的静态绑定文件和环境变量列表、边缘设备管理（版本发布、远程升级、快照）。下发边缘配置以后和边缘运行时一起重新设计。
 
 ## 考虑过的做法
@@ -29,4 +31,4 @@
 
 - `contracts/mqtt/*`、模拟器和遥测的数据来源约定一起改；旧的 `energy/v1` 主题直接删掉，不和新主题并存。
 - 遥测只信任设备接入服务这一个 MQTT 来源，由它把查好的租户、站点、设备和点位一起交过来（遥测在自己的数据库里，读不到设备登记的视图，见 ADR 0016）。所以按集成的数据来源绑定和遥测里的设备登记副本都没有了。
-- 被盗的网关证书在到期前仍能连上 MQTT 服务器，但它发的任何东西都不会被接受，而且只能碰到它自己的主题。
+- 被盗或已单证吊销的网关证书在未于 TLS 接入端启用 CRL 且同网关仍持有效轮换证书时，在到期前仍能连上 MQTT 服务器（因为 MQTT broker 只传出 `CN={gatewayId}`）；接入层通过单证 SHA-256 校验与 CRL 导出收敛，整台网关吊销则会立刻隔离其全部上行消息。

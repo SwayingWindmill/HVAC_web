@@ -348,3 +348,216 @@ func credentialTestCSR(t *testing.T, gateway string) string {
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}))
 }
+
+func TestSingleCertificateRevocationLosslessRotationAndCRL(t *testing.T) {
+	adminDSN, runtimeDSN := os.Getenv("CONNECTIVITY_ADMIN_DSN"), os.Getenv("CONNECTIVITY_POSTGRES_DSN")
+	if adminDSN == "" {
+		adminDSN = os.Getenv("S1_ADMIN_DATABASE_URL")
+	}
+	if runtimeDSN == "" {
+		runtimeDSN = os.Getenv("CONNECTIVITY_DATABASE_URL")
+	}
+	if adminDSN == "" || runtimeDSN == "" {
+		t.Skip("CONNECTIVITY_ADMIN_DSN and CONNECTIVITY_POSTGRES_DSN are required")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	admin, err := pgxpool.New(ctx, adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	const tenant = "0193f100-0000-7000-8000-000000000001"
+	const site = "0193f100-1000-7000-8000-000000000001"
+	const gateway = "0193f100-2000-7000-8000-000000000001"
+	cleanup := func() {
+		for _, table := range []string{"gateway_concentrator_audit", "gateway_credential_audit", "gateway_enrollments", "gateway_credentials"} {
+			_, _ = admin.Exec(ctx, "DELETE FROM connectivity."+table+" WHERE gateway_id=$1::uuid", gateway)
+		}
+		_, _ = admin.Exec(ctx, "DELETE FROM core_registry.devices WHERE id=$1::uuid", gateway)
+		_, _ = admin.Exec(ctx, "DELETE FROM core_registry.sites WHERE id=$1::uuid", site)
+		_, _ = admin.Exec(ctx, "DELETE FROM iam.tenants WHERE id=$1::uuid", tenant)
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	for _, fixture := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO iam.tenants(id,code,display_name,timezone,currency,country,status,revision,created_at,updated_at) VALUES($1,'rot-test','Rotation test','UTC','USD','US','ACTIVE',1,now(),now())`, []any{tenant}},
+		{`INSERT INTO core_registry.sites(id,tenant_id,code,display_name,timezone,status,revision,created_at,updated_at) VALUES($2,$1,'rot-site','Rotation site','UTC','ACTIVE',1,now(),now())`, []any{tenant, site}},
+		{`INSERT INTO core_registry.devices(id,tenant_id,site_id,code,display_name,device_type,status,revision,created_at,updated_at) VALUES($3,$1,$2,'rot-gw','Rotation GW','GATEWAY','ACTIVE',1,now(),now())`, []any{tenant, site, gateway}},
+	} {
+		if _, err := admin.Exec(ctx, fixture.sql, fixture.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store, err := Open(ctx, runtimeDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	store.now = func() time.Time { return now }
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Gateway CRL CA"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(365 * 24 * time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTpl, caTpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPriv, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := NewCertificateAuthority(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: caPriv}),
+		"tls://mqtt-broker:8883",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewCredentialService(store, authority)
+	type certRevokeEvent struct {
+		gw, fp string
+		remain bool
+	}
+	var certEvents []certRevokeEvent
+	var eventsMu sync.Mutex
+	service.SetCertificateRevokeHook(func(gw, fp string, remain bool) {
+		eventsMu.Lock()
+		certEvents = append(certEvents, certRevokeEvent{gw, fp, remain})
+		eventsMu.Unlock()
+	})
+
+	claims := registryauth.GrantClaims{TenantID: tenant, PrincipalID: gateway, AllowedSiteIDs: []string{site}}
+	codeA, err := service.GenerateEnrollmentCode(ctx, claims, gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuedA, err := service.Enroll(ctx, codeA.EnrollmentCode, credentialTestCSR(t, gateway))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+
+	// RotateEnrollment keeps Cert A active while issuing a new code for Cert B.
+	codeB, err := service.RotateEnrollment(ctx, claims, gateway)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuedB, err := service.Enroll(ctx, codeB.EnrollmentCode, credentialTestCSR(t, gateway))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parseCert := func(pemStr string) *x509.Certificate {
+		blk, _ := pem.Decode([]byte(pemStr))
+		cert, err := x509.ParseCertificate(blk.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cert
+	}
+	certA := parseCert(issuedA.CertificatePEM)
+	certB := parseCert(issuedB.CertificatePEM)
+
+	// Revoke ONLY Cert A; Cert B and gateway identity stay active.
+	revokedA, err := service.RevokeCertificate(ctx, claims, gateway, issuedA.CredentialID, "compromised key A")
+	if err != nil || revokedA.Status != "REVOKED" || revokedA.RevocationReason == nil || *revokedA.RevocationReason != "compromised key A" {
+		t.Fatalf("RevokeCertificate=%+v err=%v", revokedA, err)
+	}
+	if _, err := service.VerifyActiveCredential(ctx, certA); !errors.Is(err, ErrEnrollmentRejected) {
+		t.Fatalf("expected revoked Cert A rejected, got %v", err)
+	}
+	if _, err := service.VerifyActiveCredential(ctx, certB); err != nil {
+		t.Fatalf("expected sibling Cert B to stay active, got %v", err)
+	}
+	if _, err := store.ResolveGateway(ctx, gateway); err != nil {
+		t.Fatalf("expected gateway active with Cert B remaining, got %v", err)
+	}
+
+	// Atomic lossless renewal revoking Cert B while issuing Cert C.
+	now = now.Add(time.Second)
+	issuedC, err := service.RenewWithOptions(ctx, certB, credentialTestCSR(t, gateway), true)
+	if err != nil {
+		t.Fatalf("RenewWithOptions revokePeer=true failed: %v", err)
+	}
+	certC := parseCert(issuedC.CertificatePEM)
+	if _, err := service.VerifyActiveCredential(ctx, certB); !errors.Is(err, ErrEnrollmentRejected) {
+		t.Fatalf("expected old Cert B revoked after RenewWithOptions, got %v", err)
+	}
+	if _, err := service.VerifyActiveCredential(ctx, certC); err != nil {
+		t.Fatalf("expected new Cert C active, got %v", err)
+	}
+
+	// Export CRL contains revoked Cert A and Cert B serials without active Cert C.
+	crlPEM, err := service.ExportCRL(ctx)
+	if err != nil {
+		t.Fatalf("ExportCRL: %v", err)
+	}
+	blk, _ := pem.Decode(crlPEM)
+	crl, err := x509.ParseRevocationList(blk.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokedSerials := make(map[string]bool, len(crl.RevokedCertificateEntries))
+	for _, entry := range crl.RevokedCertificateEntries {
+		revokedSerials[entry.SerialNumber.Text(16)] = true
+	}
+	if !revokedSerials[certA.SerialNumber.Text(16)] || !revokedSerials[certB.SerialNumber.Text(16)] || revokedSerials[certC.SerialNumber.Text(16)] {
+		t.Fatalf("CRL serials=%v missing revoked A/B or unexpectedly containing C (A=%s B=%s C=%s)",
+			revokedSerials, certA.SerialNumber.Text(16), certB.SerialNumber.Text(16), certC.SerialNumber.Text(16))
+	}
+
+	// ListCredentials returns 3 records newest first with UTC timestamps for HTTP contract compliance.
+	list, err := service.ListCredentials(ctx, claims, gateway)
+	if err != nil || len(list) != 3 || list[0].ID != issuedC.CredentialID {
+		t.Fatalf("ListCredentials=%+v err=%v", list, err)
+	}
+	for idx, rec := range list {
+		if rec.ValidFrom.Location() != time.UTC || rec.ValidUntil.Location() != time.UTC || rec.CreatedAt.Location() != time.UTC {
+			t.Fatalf("credential[%d] timestamps must be UTC, got %+v", idx, rec)
+		}
+	}
+
+	// Terminal Revoke followed by RotateEnrollment re-enables identity while keeping old revoked certs rejected.
+	if err := service.Revoke(ctx, claims, gateway); err != nil {
+		t.Fatal(err)
+	}
+	codeReenable, err := service.RotateEnrollment(ctx, claims, gateway)
+	if err != nil {
+		t.Fatalf("RotateEnrollment after Revoke failed: %v", err)
+	}
+	if _, err := service.VerifyActiveCredential(ctx, certC); !errors.Is(err, ErrEnrollmentRejected) {
+		t.Fatalf("old revoked Cert C must stay rejected after re-enable, got %v", err)
+	}
+	if _, err := service.Enroll(ctx, codeReenable.EnrollmentCode, credentialTestCSR(t, gateway)); err != nil {
+		t.Fatalf("Enroll after RotateEnrollment failed: %v", err)
+	}
+
+	var reenabledCount int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM connectivity.gateway_credential_audit WHERE gateway_id=$1::uuid AND action='IDENTITY_REENABLED'`, gateway).Scan(&reenabledCount); err != nil || reenabledCount != 1 {
+		t.Fatalf("expected IDENTITY_REENABLED audit count=1, got %d err=%v", reenabledCount, err)
+	}
+	eventsMu.Lock()
+	eventCount := len(certEvents)
+	eventsMu.Unlock()
+	if eventCount != 2 || !certEvents[0].remain || !certEvents[1].remain {
+		t.Fatalf("expected 2 certificate revoke hook calls with remain=true, got %+v", certEvents)
+	}
+}

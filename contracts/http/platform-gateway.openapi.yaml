@@ -22,6 +22,27 @@
         "responses": {"200": {"description": "Credential status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayCredentialStatus"}}}}}
       }
     },
+    "/api/v1/gateways/{gatewayId}/credentials": {
+      "get": {
+        "operationId": "listGatewayCredentials", "summary": "List certificates issued for this Gateway",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [{"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}}],
+        "responses": {"200": {"description": "Issued certificates ordered newest first", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayCredentialList"}}}}}
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/credentials/{credentialId}/revoke": {
+      "post": {
+        "operationId": "revokeGatewayCertificate", "summary": "Revoke one Gateway client certificate without revoking sibling certificates",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}},
+          {"name": "credentialId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}},
+          {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": false, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayCertificateRevokeRequest"}}}},
+        "responses": {"200": {"description": "Revoked certificate record", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayCredentialRecord"}}}}}
+      }
+    },
     "/api/v1/gateways/{gatewayId}/enrollment-code": {
       "post": {
         "operationId": "generateGatewayEnrollmentCode", "summary": "Generate one-time 24-hour Gateway enrollment code",
@@ -36,6 +57,14 @@
         "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
         "parameters": [{"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}}, {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}],
         "responses": {"200": {"description": "All credentials and outstanding enrollment codes revoked", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayCredentialStatus"}}}}}
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/rotate": {
+      "post": {
+        "operationId": "rotateGatewayEnrollment", "summary": "Generate a one-time enrollment code for lossless Gateway key rotation",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [{"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}}, {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}],
+        "responses": {"200": {"description": "One-time code shown once while keeping existing active certificates valid", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayEnrollmentCode"}}}}}
       }
     },
     "/api/v1/gateways/{gatewayId}/concentrators/{unitId}/status": {
@@ -3088,6 +3117,30 @@
       "GatewayEnrollmentCode": {
         "type": "object", "additionalProperties": false, "required": ["enrollmentCode", "expiresAt"],
         "properties": {"enrollmentCode": {"type": "string", "minLength": 43, "maxLength": 43}, "expiresAt": {"type": "string", "format": "date-time"}}
+      },
+      "GatewayCredentialRecord": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "gatewayId", "fingerprintSha256", "status", "validFrom", "validUntil", "createdAt"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/UUIDv7"},
+          "gatewayId": {"$ref": "#/components/schemas/UUIDv7"},
+          "fingerprintSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "serialNumber": {"type": ["string", "null"], "pattern": "^[0-9a-f]{1,64}$"},
+          "status": {"type": "string", "enum": ["ACTIVE", "REVOKED"]},
+          "validFrom": {"type": "string", "format": "date-time"},
+          "validUntil": {"type": "string", "format": "date-time"},
+          "revokedAt": {"type": ["string", "null"], "format": "date-time"},
+          "revocationReason": {"type": ["string", "null"], "maxLength": 512},
+          "createdAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "GatewayCredentialList": {
+        "type": "object", "additionalProperties": false, "required": ["items"],
+        "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayCredentialRecord"}}}
+      },
+      "GatewayCertificateRevokeRequest": {
+        "type": "object", "additionalProperties": false, "required": [],
+        "properties": {"reason": {"type": "string", "minLength": 1, "maxLength": 512}}
       },
       "ConcentratorParams": {
         "type": "object", "additionalProperties": false,
