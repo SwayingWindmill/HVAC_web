@@ -290,7 +290,7 @@ func (store *PostgresStore) ListTenantsWithPendingControlAlarms(ctx context.Cont
 	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s3_command_runtime`); err != nil {
 		return nil, fmt.Errorf("activate command runtime database identity: %w", err)
 	}
-	rows, err := tx.Query(ctx, `SELECT tenant_id::text FROM command_runtime.tenants_with_pending_control_alarms($1)`, readyAt.UTC())
+	rows, err := tx.Query(ctx, `SELECT t.tenant_id::text FROM command_runtime.tenants_with_pending_control_alarms($1) AS t(tenant_id)`, readyAt.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("list pending control alarm tenants: %w", err)
 	}
