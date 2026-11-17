@@ -1,5 +1,9 @@
-import type { TemplateKind } from '../../../api/generated/platformGateway.gen.ts';
+import type { GatewayModbusDriverConfig, TemplateKind } from '../../../api/generated/platformGateway.gen.ts';
 import { isOneOf, isPlainRecord } from '../../../lib/typed.ts';
+import {
+  MODBUS_DRIVER_TYPES,
+  MODBUS_DRIVER_TYPE_LABELS,
+} from '../../connectivity/gateway-config-shadow-model.ts';
 
 const POINT_CODE_PATTERN = /^[a-z][a-z0-9_]{0,127}$/;
 const SOURCE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/;
@@ -64,21 +68,12 @@ export interface StructuredDeviceTemplateDraft {
   readonly capabilityProfiles: readonly CapabilityProfileDraft[];
 }
 
-export type TemplateModbusDriverType = 'MODBUS_TCP' | 'MODBUS_RTU';
-
-const TEMPLATE_MODBUS_DRIVER_TYPES = ['MODBUS_TCP', 'MODBUS_RTU'] as const;
-
-const TEMPLATE_MODBUS_DRIVER_LABELS: Readonly<Record<TemplateModbusDriverType, string>> = {
-  MODBUS_TCP: 'Modbus TCP',
-  MODBUS_RTU: 'Modbus RTU',
-};
+export type TemplateModbusDriverType = GatewayModbusDriverConfig['driverType'];
 
 export interface TemplateModbusDriverSummary {
   readonly driverType: TemplateModbusDriverType;
   readonly driverTypeLabel: string;
   readonly registerCount: number;
-  readonly unitId?: number;
-  readonly endpoint?: string;
 }
 
 export interface TemplatePayloadSummary {
@@ -490,30 +485,17 @@ export function parseDeviceTemplateModbusDriverSummary(
     return null;
   }
   const driver = payload.modbusDriver;
-  if (!isOneOf(TEMPLATE_MODBUS_DRIVER_TYPES, driver.driverType)) {
+  if (!isOneOf(MODBUS_DRIVER_TYPES, driver.driverType)) {
     return null;
   }
   if (!Array.isArray(driver.registers)) {
     return null;
   }
-  const unitId =
-    typeof driver.unitId === 'number' &&
-    Number.isInteger(driver.unitId) &&
-    driver.unitId >= 1 &&
-    driver.unitId <= 247
-      ? driver.unitId
-      : undefined;
-  const endpoint =
-    typeof driver.endpoint === 'string' && driver.endpoint.trim().length > 0
-      ? driver.endpoint.trim()
-      : undefined;
 
   return {
     driverType: driver.driverType,
-    driverTypeLabel: TEMPLATE_MODBUS_DRIVER_LABELS[driver.driverType],
+    driverTypeLabel: MODBUS_DRIVER_TYPE_LABELS[driver.driverType],
     registerCount: driver.registers.length,
-    ...(unitId !== undefined ? { unitId } : {}),
-    ...(endpoint !== undefined ? { endpoint } : {}),
   };
 }
 

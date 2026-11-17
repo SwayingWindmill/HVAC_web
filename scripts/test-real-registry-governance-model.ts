@@ -175,8 +175,6 @@ test('DEVICE template summary parses optional modbusDriver metadata and preserve
     driverType: 'MODBUS_TCP',
     driverTypeLabel: 'Modbus TCP',
     registerCount: 2,
-    unitId: 1,
-    endpoint: '192.168.10.21:502',
   });
 
   const parsedFallback = parseStructuredDevicePayload(withTcpDriver);
