@@ -1,12 +1,16 @@
 package simulator
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -56,8 +60,12 @@ type mqttCommandReply struct {
 }
 
 const (
-	edgeCommandMayExecute = "MAY_EXECUTE"
-	edgeCommandTerminal   = "TERMINAL"
+	edgeCommandMayExecute             = "MAY_EXECUTE"
+	edgeCommandTerminal               = "TERMINAL"
+	edgeCommandWALRecordTypeFence     = "fence"
+	edgeCommandWALRecordTypeRecord    = "record"
+	maxRetainedTerminalCommandRecords = 1024
+	edgeCommandWALCompactThreshold    = 2048
 )
 
 type edgeCommandRecord struct {
@@ -72,16 +80,36 @@ type edgeCommandLedger struct {
 	Records map[string]edgeCommandRecord `json:"records"`
 }
 
+type edgeCommandWALEntry struct {
+	Type           string             `json:"type"`
+	DeviceID       string             `json:"deviceId,omitempty"`
+	ExecutionFence uint64             `json:"executionFence,omitempty"`
+	CommandID      string             `json:"commandId,omitempty"`
+	Record         *edgeCommandRecord `json:"record,omitempty"`
+}
+
+type seqCommand struct {
+	commandID string
+	seq       uint64
+}
+
 type edgeCommandHandler struct {
 	edgeRuntime    *EdgeControlRuntime
 	deviceByWireID map[string]string
 	replyTopic     string
 	now            func() time.Time
 	ledgerPath     string
+	walPath        string
 	spool          *mqttEvidenceSpool
 
 	mu               sync.Mutex
 	results          map[string]edgeCommandRecord
+	recordSeq        map[string]uint64
+	terminalQueue    []seqCommand
+	terminalCount    int
+	nextSeq          uint64
+	walLines         int
+	compactThreshold int
 	maxFenceByDevice map[string]uint64
 }
 
@@ -96,36 +124,129 @@ func newEdgeCommandHandler(edgeRuntime *EdgeControlRuntime, config MQTTGatewayCo
 		deviceByWireID[deviceID] = deviceID
 	}
 	ledgerPath := filepath.Join(config.QueueDirectory, "command-execution-records.json")
-	results, err := loadEdgeCommandLedger(ledgerPath)
-	if err != nil {
-		return nil, err
-	}
-	maxFenceByDevice := make(map[string]uint64)
-	for _, record := range results {
-		if strings.TrimSpace(record.DeviceID) == "" || record.ExecutionFence == 0 ||
-			(record.State != edgeCommandMayExecute && record.State != edgeCommandTerminal) {
-			return nil, errors.New("edge command execution ledger contains an invalid record")
-		}
-		if record.State == edgeCommandTerminal && record.Reply == nil {
-			return nil, errors.New("edge command execution ledger terminal record has no reply")
-		}
-		if record.ExecutionFence > maxFenceByDevice[record.DeviceID] {
-			maxFenceByDevice[record.DeviceID] = record.ExecutionFence
-		}
-	}
-	return &edgeCommandHandler{
+	walPath := filepath.Join(config.QueueDirectory, "command-execution-records.wal")
+	handler := &edgeCommandHandler{
 		edgeRuntime:      edgeRuntime,
 		deviceByWireID:   deviceByWireID,
 		replyTopic:       mqttReplyTopic(config),
 		now:              time.Now,
 		ledgerPath:       ledgerPath,
+		walPath:          walPath,
 		spool:            spool,
-		results:          results,
-		maxFenceByDevice: maxFenceByDevice,
-	}, nil
+		results:          make(map[string]edgeCommandRecord),
+		recordSeq:        make(map[string]uint64),
+		compactThreshold: edgeCommandWALCompactThreshold,
+		maxFenceByDevice: make(map[string]uint64),
+	}
+	if err := handler.loadEdgeCommandLedger(); err != nil {
+		return nil, err
+	}
+	return handler, nil
 }
 
-func loadEdgeCommandLedger(path string) (map[string]edgeCommandRecord, error) {
+func validateEdgeCommandRecord(record edgeCommandRecord) error {
+	if strings.TrimSpace(record.DeviceID) == "" || record.ExecutionFence == 0 ||
+		(record.State != edgeCommandMayExecute && record.State != edgeCommandTerminal) {
+		return errors.New("edge command execution ledger contains an invalid record")
+	}
+	if record.State == edgeCommandTerminal && record.Reply == nil {
+		return errors.New("edge command execution ledger terminal record has no reply")
+	}
+	if record.State == edgeCommandMayExecute && record.Reply != nil {
+		return errors.New("edge command execution ledger non-terminal record must not have a reply")
+	}
+	return nil
+}
+
+func (handler *edgeCommandHandler) loadEdgeCommandLedger() error {
+	_, statErr := os.Stat(handler.walPath)
+	if statErr == nil {
+		return handler.replayEdgeCommandWAL()
+	}
+	if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("stat Edge command WAL: %w", statErr)
+	}
+	legacyRecords, err := loadLegacyEdgeCommandLedger(handler.ledgerPath)
+	if err != nil {
+		return err
+	}
+	if len(legacyRecords) == 0 {
+		return nil
+	}
+	commandIDs := make([]string, 0, len(legacyRecords))
+	for commandID, record := range legacyRecords {
+		if strings.TrimSpace(commandID) == "" {
+			return errors.New("edge command execution ledger contains an empty commandId")
+		}
+		if err := validateEdgeCommandRecord(record); err != nil {
+			return err
+		}
+		commandIDs = append(commandIDs, commandID)
+	}
+	sort.Strings(commandIDs)
+	for _, commandID := range commandIDs {
+		handler.recordEntryLocked(commandID, legacyRecords[commandID])
+	}
+	return handler.compactWALLocked()
+}
+
+func (handler *edgeCommandHandler) replayEdgeCommandWAL() error {
+	file, err := os.Open(handler.walPath)
+	if err != nil {
+		return fmt.Errorf("open Edge command WAL: %w", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64<<10), 4<<20)
+	lineCount := 0
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var entry edgeCommandWALEntry
+		decoder := json.NewDecoder(strings.NewReader(line))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&entry); err != nil {
+			return fmt.Errorf("edge command WAL is corrupt: %w", err)
+		}
+		var extra any
+		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+			return errors.New("edge command WAL line contains trailing data")
+		}
+		switch entry.Type {
+		case edgeCommandWALRecordTypeFence:
+			if strings.TrimSpace(entry.DeviceID) == "" || entry.ExecutionFence == 0 || entry.CommandID != "" || entry.Record != nil {
+				return errors.New("edge command WAL contains an invalid fence entry")
+			}
+			if entry.ExecutionFence > handler.maxFenceByDevice[entry.DeviceID] {
+				handler.maxFenceByDevice[entry.DeviceID] = entry.ExecutionFence
+			}
+		case edgeCommandWALRecordTypeRecord:
+			if strings.TrimSpace(entry.CommandID) == "" || entry.Record == nil || entry.DeviceID != "" || entry.ExecutionFence != 0 {
+				return errors.New("edge command WAL contains an invalid record entry")
+			}
+			if err := validateEdgeCommandRecord(*entry.Record); err != nil {
+				return err
+			}
+			handler.recordEntryLocked(entry.CommandID, *entry.Record)
+		default:
+			return errors.New("edge command WAL contains an unknown entry type")
+		}
+		lineCount++
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read Edge command WAL: %w", err)
+	}
+	handler.walLines = lineCount
+	if handler.walLines >= handler.compactThreshold {
+		handler.compactThreshold = handler.walLines + edgeCommandWALCompactThreshold
+	}
+	return nil
+}
+
+func loadLegacyEdgeCommandLedger(path string) (map[string]edgeCommandRecord, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return make(map[string]edgeCommandRecord), nil
@@ -138,6 +259,10 @@ func loadEdgeCommandLedger(path string) (map[string]edgeCommandRecord, error) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&ledger); err != nil || ledger.Records == nil {
 		return nil, errors.New("edge command execution ledger is invalid")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, errors.New("edge command execution ledger contains trailing data")
 	}
 	return ledger.Records, nil
 }
@@ -154,6 +279,172 @@ func persistEdgeCommandLedger(path string, records map[string]edgeCommandRecord)
 	if err := os.Rename(temporary, path); err != nil {
 		_ = os.Remove(temporary)
 		return fmt.Errorf("commit Edge command execution ledger: %w", err)
+	}
+	return nil
+}
+
+func appendEdgeCommandWALEntry(walPath string, entry edgeCommandWALEntry) error {
+	line, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	line = append(line, '\n')
+	file, err := os.OpenFile(walPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("open Edge command WAL: %w", err)
+	}
+	_, writeErr := file.Write(line)
+	syncErr := writeErr
+	if syncErr == nil {
+		syncErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if writeErr != nil {
+		return fmt.Errorf("append Edge command WAL: %w", writeErr)
+	}
+	if syncErr != nil {
+		return fmt.Errorf("sync Edge command WAL: %w", syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close Edge command WAL: %w", closeErr)
+	}
+	return nil
+}
+
+func (handler *edgeCommandHandler) recordEntryLocked(commandID string, record edgeCommandRecord) {
+	prev, hadPrev := handler.results[commandID]
+	if hadPrev && prev.State == edgeCommandTerminal {
+		handler.terminalCount -= 1
+	}
+	handler.results[commandID] = record
+	handler.nextSeq++
+	handler.recordSeq[commandID] = handler.nextSeq
+	if record.ExecutionFence > handler.maxFenceByDevice[record.DeviceID] {
+		handler.maxFenceByDevice[record.DeviceID] = record.ExecutionFence
+	}
+	if record.State == edgeCommandTerminal {
+		handler.terminalCount++
+		handler.terminalQueue = append(handler.terminalQueue, seqCommand{commandID: commandID, seq: handler.nextSeq})
+		handler.pruneTerminalRecordsLocked()
+	}
+}
+
+func (handler *edgeCommandHandler) pruneTerminalRecordsLocked() {
+	for handler.terminalCount > maxRetainedTerminalCommandRecords && len(handler.terminalQueue) > 0 {
+		oldest := handler.terminalQueue[0]
+		handler.terminalQueue = handler.terminalQueue[1:]
+		cur, ok := handler.results[oldest.commandID]
+		if ok && cur.State == edgeCommandTerminal && handler.recordSeq[oldest.commandID] == oldest.seq {
+			delete(handler.results, oldest.commandID)
+			delete(handler.recordSeq, oldest.commandID)
+			handler.terminalCount -= 1
+		}
+	}
+	if cap(handler.terminalQueue) > 2*maxRetainedTerminalCommandRecords && len(handler.terminalQueue) <= maxRetainedTerminalCommandRecords {
+		compacted := make([]seqCommand, len(handler.terminalQueue))
+		copy(compacted, handler.terminalQueue)
+		handler.terminalQueue = compacted
+	}
+}
+
+func (handler *edgeCommandHandler) appendRecordLocked(commandID string, record edgeCommandRecord) error {
+	if err := appendEdgeCommandWALEntry(handler.walPath, edgeCommandWALEntry{
+		Type:      edgeCommandWALRecordTypeRecord,
+		CommandID: commandID,
+		Record:    &record,
+	}); err != nil {
+		return err
+	}
+	handler.recordEntryLocked(commandID, record)
+	handler.walLines++
+	if handler.walLines >= handler.compactThreshold {
+		_ = handler.compactWALLocked()
+	}
+	return nil
+}
+
+func (handler *edgeCommandHandler) compactWALLocked() error {
+	deviceIDs := make([]string, 0, len(handler.maxFenceByDevice))
+	for deviceID, fence := range handler.maxFenceByDevice {
+		if strings.TrimSpace(deviceID) != "" && fence > 0 {
+			deviceIDs = append(deviceIDs, deviceID)
+		}
+	}
+	sort.Strings(deviceIDs)
+
+	commandIDs := make([]string, 0, len(handler.results))
+	for commandID := range handler.results {
+		commandIDs = append(commandIDs, commandID)
+	}
+	sort.Slice(commandIDs, func(i, j int) bool {
+		seqI, seqJ := handler.recordSeq[commandIDs[i]], handler.recordSeq[commandIDs[j]]
+		if seqI != seqJ {
+			return seqI < seqJ
+		}
+		return commandIDs[i] < commandIDs[j]
+	})
+
+	var buf bytes.Buffer
+	lineCount := 0
+	for _, deviceID := range deviceIDs {
+		encoded, err := json.Marshal(edgeCommandWALEntry{
+			Type:           edgeCommandWALRecordTypeFence,
+			DeviceID:       deviceID,
+			ExecutionFence: handler.maxFenceByDevice[deviceID],
+		})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoded)
+		buf.WriteByte('\n')
+		lineCount++
+	}
+	for _, commandID := range commandIDs {
+		record := handler.results[commandID]
+		encoded, err := json.Marshal(edgeCommandWALEntry{
+			Type:      edgeCommandWALRecordTypeRecord,
+			CommandID: commandID,
+			Record:    &record,
+		})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoded)
+		buf.WriteByte('\n')
+		lineCount++
+	}
+
+	tmpPath := handler.walPath + ".tmp"
+	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("create compacted Edge command WAL: %w", err)
+	}
+	_, writeErr := file.Write(buf.Bytes())
+	syncErr := writeErr
+	if syncErr == nil {
+		syncErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write compacted Edge command WAL: %w", writeErr)
+	}
+	if syncErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("sync compacted Edge command WAL: %w", syncErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close compacted Edge command WAL: %w", closeErr)
+	}
+	if err := os.Rename(tmpPath, handler.walPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("commit compacted Edge command WAL: %w", err)
+	}
+	handler.walLines = lineCount
+	handler.compactThreshold = edgeCommandWALCompactThreshold
+	if handler.walLines >= handler.compactThreshold {
+		handler.compactThreshold = handler.walLines + edgeCommandWALCompactThreshold
 	}
 	return nil
 }
@@ -243,15 +534,13 @@ func (handler *edgeCommandHandler) evaluate(request mqttCommandEnvelope) mqttCom
 		handler.mu.Unlock()
 		return edgeRejected(base, "STALE_FENCE")
 	}
-	handler.results[base.CommandID] = edgeCommandRecord{
+	record := edgeCommandRecord{
 		DeviceID: deviceID, PayloadHash: request.PayloadHash, ExecutionFence: request.ExecutionFence, State: edgeCommandMayExecute,
 	}
-	if err := persistEdgeCommandLedger(handler.ledgerPath, handler.results); err != nil {
-		delete(handler.results, base.CommandID)
+	if err := handler.appendRecordLocked(base.CommandID, record); err != nil {
 		handler.mu.Unlock()
 		return edgeRejected(base, "EDGE_LEDGER_UNAVAILABLE")
 	}
-	handler.maxFenceByDevice[deviceID] = request.ExecutionFence
 	handler.mu.Unlock()
 
 	outcomeCh, err := handler.edgeRuntime.SubmitCommand(EdgeCommandIntentRequest{
@@ -329,11 +618,13 @@ func (handler *edgeCommandHandler) finish(deviceID, payloadHash string, reply mq
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
 	replyCopy := reply
-	handler.results[reply.CommandID] = edgeCommandRecord{
+	record := edgeCommandRecord{
 		DeviceID: deviceID, PayloadHash: payloadHash, ExecutionFence: reply.ExecutionFence,
 		State: edgeCommandTerminal, Reply: &replyCopy,
 	}
-	_ = persistEdgeCommandLedger(handler.ledgerPath, handler.results)
+	if err := handler.appendRecordLocked(reply.CommandID, record); err != nil {
+		handler.recordEntryLocked(reply.CommandID, record)
+	}
 	return reply
 }
 

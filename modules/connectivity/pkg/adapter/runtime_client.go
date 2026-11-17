@@ -153,6 +153,10 @@ type TelemetryRuntimeClient struct {
 }
 
 func NewTelemetryRuntimeClient(config TelemetryRuntimeConfig) (*TelemetryRuntimeClient, error) {
+	return NewTelemetryRuntimeClientWithTracer(config, nil)
+}
+
+func NewTelemetryRuntimeClientWithTracer(config TelemetryRuntimeConfig, tracer *observability.Tracer) (*TelemetryRuntimeClient, error) {
 	if err := validateHTTPSOrigin(config.BaseURL); err != nil {
 		return nil, fmt.Errorf("telemetry runtime base URL: %w", err)
 	}
@@ -160,10 +164,13 @@ func NewTelemetryRuntimeClient(config TelemetryRuntimeConfig) (*TelemetryRuntime
 	if err != nil {
 		return nil, err
 	}
+	if tracer == nil {
+		tracer = observability.NewTracer("mqtt-telemetry-adapter", nil)
+	}
 	return &TelemetryRuntimeClient{
 		baseURL:    strings.TrimRight(strings.TrimSpace(config.BaseURL), "/"),
 		httpClient: httpClient,
-		tracer:     observability.NewTracer("mqtt-telemetry-adapter", nil),
+		tracer:     tracer,
 	}, nil
 }
 

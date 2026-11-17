@@ -26,6 +26,7 @@ const (
 	defaultCoverageReportInterval = 60 * time.Second
 	MaximumCoverageBatchSize      = 2048
 	defaultGatewayIdleTimeout     = 5 * time.Minute
+	defaultDrainTimeout           = 10 * time.Second
 	maxTrackedGatewayQueues       = 4096
 	defaultRateLimitRetryFloor    = 2 * time.Second
 	subscribeAttemptTimeout       = 15 * time.Second
@@ -78,6 +79,18 @@ func WithCoverageReporter(lister CoverageDeviceLister, reporter CoverageReporter
 	}
 }
 
+func WithPacketHook(hook func(direction, channel, gatewayID, topic, traceID string, payload []byte)) RuntimeOption {
+	return func(runtime *Runtime) {
+		runtime.packetHook = hook
+	}
+}
+
+func WithOnlineGatewayCount(fn func() int) RuntimeOption {
+	return func(runtime *Runtime) {
+		runtime.onlineGatewayCount = fn
+	}
+}
+
 // Runtime consumes every Gateway's uplink. Each Gateway gets an ordered mailbox
 // serviced by a bounded pool of workers. A message is acknowledged only after it is
 // processed or quarantined; when a Gateway's queue is full, receiving pauses and the
@@ -96,6 +109,9 @@ type Runtime struct {
 	coverageReporter     CoverageReporter
 	coverageInterval     time.Duration
 	idleTimeout          time.Duration
+	drainTimeout         time.Duration
+	packetHook           func(direction, channel, gatewayID, topic, traceID string, payload []byte)
+	onlineGatewayCount   func() int
 	now                  func() time.Time
 
 	coverageMu     sync.Mutex
@@ -148,6 +164,7 @@ func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metric
 		reconnectBackoff: autopaho.DefaultExponentialBackoff(),
 		coverageInterval: defaultCoverageReportInterval,
 		idleTimeout:      defaultGatewayIdleTimeout,
+		drainTimeout:     defaultDrainTimeout,
 		now:              time.Now,
 		queues:           map[string]*gatewayMailbox{},
 		states:           map[string]*gatewayMailboxState{},
@@ -160,6 +177,21 @@ func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metric
 			option(runtime)
 		}
 	}
+	if runtime.packetHook != nil && runtime.processor != nil {
+		if runtime.processor.packetHook == nil {
+			runtime.processor.packetHook = runtime.packetHook
+		} else {
+			prevHook := runtime.processor.packetHook
+			nextHook := runtime.packetHook
+			runtime.processor.packetHook = func(direction, channel, gatewayID, topic, traceID string, payload []byte) {
+				prevHook(direction, channel, gatewayID, topic, traceID, payload)
+				nextHook(direction, channel, gatewayID, topic, traceID, payload)
+			}
+		}
+	}
+	runtime.refreshQueueCapacityMetric()
+	runtime.recordProcessingQueueDepth(0)
+	runtime.refreshOnlineGateways()
 	return runtime, nil
 }
 
@@ -187,6 +219,8 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	if err := runtime.prepareOverflowDir(); err != nil {
 		return err
 	}
+	runtime.refreshQueueCapacityMetric()
+	runtime.refreshOnlineGateways()
 	runtime.coverageMu.Lock()
 	runtime.coverageClosed = false
 	runtime.coverageMu.Unlock()
@@ -234,7 +268,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		OnConnectError: func(connectErr error) {
 			runtime.recordConnectionState(nil, false, false, connectErr)
 			_ = runtime.metrics.AddCounter("hvac_mqtt_connections_total", "MQTT connection attempts by outcome.", map[string]string{"outcome": "failed"}, 1)
-			runtime.logger.Warn("mqtt_uplink_connect_failed", "error", connectErr.Error())
+			runtime.logger.Warn("mqtt_uplink_connect_failed", "error_code", "MQTT_UPLINK_CONNECT_FAILED", "error", connectErr.Error())
 		},
 		ClientConfig: paho.ClientConfig{
 			ClientID:                   runtime.config.MQTT.ClientID,
@@ -284,24 +318,30 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		workerCancel()
 		heartbeatWG.Wait()
 		runtime.subWG.Wait()
+		runtime.workers.Wait()
+		runtime.closeMailboxes()
+		drained = true
 		runtime.coverageWG.Wait()
 		shutdownCoverageContext, coverageCancel := context.WithTimeout(context.Background(), 3*time.Second)
 		runtime.reportCoverage(shutdownCoverageContext, false, "SOURCE_UNAVAILABLE", 0, true)
 		coverageCancel()
 		return stopErr
 	}
-	shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_ = manager.Disconnect(shutdownContext)
-	cancel()
+	disconnectContext, disconnectCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	_ = manager.Disconnect(disconnectContext)
+	disconnectCancel()
 	runtime.closeCurrentConnection()
 	runtime.recordConnectionState(nil, false, false, nil)
-	runtime.waitDrainWithTimeout(5 * time.Second)
+	runtime.subWG.Wait()
+
+	drainContext, drainCancel := context.WithTimeout(context.Background(), runtime.effectiveDrainTimeout())
+	runtime.waitDrainWithContext(drainContext)
+	drainCancel()
 	workerCancel()
 	runtime.workers.Wait()
 	runtime.closeMailboxes()
 	drained = true
 	heartbeatWG.Wait()
-	runtime.subWG.Wait()
 	runtime.coverageWG.Wait()
 	shutdownCoverageContext, coverageCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	runtime.reportCoverage(shutdownCoverageContext, false, "SOURCE_UNAVAILABLE", 0, true)
@@ -321,7 +361,7 @@ func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.Connect
 		}
 		runtime.recordConnectionState(connection, true, false, err)
 		_ = runtime.metrics.AddCounter("hvac_mqtt_subscriptions_total", "MQTT subscription attempts by outcome.", map[string]string{"outcome": "failed"}, 1)
-		runtime.logger.Warn("mqtt_uplink_subscribe_failed", "error", err.Error())
+		runtime.logger.Warn("mqtt_uplink_subscribe_failed", "error_code", "MQTT_UPLINK_SUBSCRIBE_FAILED", "error", err.Error())
 		runtime.connTracker.CloseIfGen(gen)
 		return
 	}
@@ -553,16 +593,21 @@ func (runtime *Runtime) hasPendingWork() bool {
 	return false
 }
 
-func (runtime *Runtime) waitDrainWithTimeout(timeout time.Duration) {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+func (runtime *Runtime) effectiveDrainTimeout() time.Duration {
+	if runtime.drainTimeout > 0 {
+		return runtime.drainTimeout
+	}
+	return defaultDrainTimeout
+}
+
+func (runtime *Runtime) waitDrainWithContext(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for runtime.hasPendingWork() {
 		select {
 		case <-runtime.drainSignal:
 		case <-ticker.C:
-		case <-timer.C:
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -602,7 +647,7 @@ func (runtime *Runtime) connectionLost(ctx context.Context, gen uint64) {
 	}
 	runtime.recordConnectionState(nil, false, false, errors.New("MQTT connection lost"))
 	_ = runtime.metrics.AddCounter("hvac_mqtt_disconnections_total", "MQTT connection-down events.", map[string]string{"reason_family": "transport"}, 1)
-	runtime.logger.Warn("mqtt_uplink_connection_lost")
+	runtime.logger.Warn("mqtt_uplink_connection_lost", "reason_code", "TRANSPORT_DISCONNECTED")
 	if runtime.coverageLister != nil && runtime.coverageReporter != nil {
 		runtime.coverageWG.Add(1)
 		go func() {
@@ -623,6 +668,7 @@ func (runtime *Runtime) runCoverageHeartbeat(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			runtime.refreshOnlineGateways()
 			if runtime.Ready() {
 				runtime.reportCoverage(ctx, true, "", runtime.connTracker.CurrentGen(), false)
 			}
@@ -658,7 +704,7 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 	deviceIDs, scopes, err := runtime.loadCoverageTargets(callCtx, available)
 	if err != nil {
 		if runtime.logger != nil {
-			runtime.logger.Warn("mqtt_coverage_device_list_failed", "error", err.Error())
+			runtime.logger.Warn("mqtt_coverage_device_list_failed", "error_code", "MQTT_COVERAGE_DEVICE_LIST_FAILED", "error", err.Error())
 		}
 		return
 	}
@@ -692,7 +738,7 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 			SourceRevision: rev,
 		}
 		if err := runtime.coverageReporter.ReportSourceCoverage(callCtx, report); err != nil && runtime.logger != nil {
-			runtime.logger.Warn("mqtt_coverage_report_failed", "available", available, "error", err.Error())
+			runtime.logger.Warn("mqtt_coverage_report_failed", "available", available, "error_code", "MQTT_COVERAGE_REPORT_FAILED", "error", err.Error())
 		}
 	}
 }
@@ -950,7 +996,7 @@ func (runtime *Runtime) enqueue(ctx context.Context, connectionClosed <-chan str
 	mailbox, state, err := runtime.acquireGatewayMailbox(gatewayID)
 	if err != nil {
 		if runtime.logger != nil {
-			runtime.logger.Warn("mqtt_uplink_mailbox_open_failed", "gateway_id", gatewayID, "topic", received.Topic, "error", err.Error())
+			runtime.logger.Warn("mqtt_uplink_mailbox_open_failed", "gateway_id", gatewayID, "topic", received.Topic, "error_code", "MQTT_UPLINK_MAILBOX_OPEN_FAILED", "error", err.Error())
 		}
 		runtime.closeCurrentConnection()
 		return err
@@ -965,23 +1011,27 @@ func (runtime *Runtime) enqueue(ctx context.Context, connectionClosed <-chan str
 	} else {
 		runtime.maybeScheduleIdleLocked(ctx, gatewayID, state)
 	}
+	maxDepth := runtime.maxQueueDepthLocked()
 	runtime.queuesMu.Unlock()
 
 	if enqueueErr != nil {
 		if runtime.logger != nil {
-			runtime.logger.Warn("mqtt_uplink_spool_write_failed", "gateway_id", gatewayID, "topic", received.Topic, "error", enqueueErr.Error())
+			runtime.logger.Warn("mqtt_uplink_spool_write_failed", "gateway_id", gatewayID, "topic", received.Topic, "error_code", "MQTT_UPLINK_SPOOL_WRITE_FAILED", "error", enqueueErr.Error())
 		}
 		runtime.closeCurrentConnection()
 		return enqueueErr
 	}
 	runtime.recordQueueDepth(gatewayID, result.memDepth+result.overflowDepth)
 	runtime.recordOverflowDepth(gatewayID, result.overflowDepth)
+	runtime.recordProcessingQueueDepth(maxDepth)
 	if result.shed {
+		_ = runtime.metrics.AddCounter("hvac_mqtt_messages_received_total", "MQTT uplink messages received by ingress outcome.", map[string]string{"outcome": "dropped"}, 1)
 		_ = runtime.metrics.AddCounter("hvac_mqtt_gateway_overflow_shed_total", "MQTT uplink messages left unacknowledged because a Gateway filled RAM and disk overflow.", map[string]string{"gateway_id": gatewayID}, 1)
-		runtime.logger.Warn("mqtt_uplink_gateway_overflow_shed", "gateway_id", gatewayID, "topic", received.Topic, "mem_depth", result.memDepth, "overflow_depth", result.overflowDepth)
+		runtime.logger.Warn("mqtt_uplink_gateway_overflow_shed", "gateway_id", gatewayID, "topic", received.Topic, "reason_code", "GATEWAY_OVERFLOW_SHED", "mem_depth", result.memDepth, "overflow_depth", result.overflowDepth)
 		runtime.closeCurrentConnection()
 		return errors.New("MQTT gateway mailbox overflow shed")
 	}
+	_ = runtime.metrics.AddCounter("hvac_mqtt_messages_received_total", "MQTT uplink messages received by ingress outcome.", map[string]string{"outcome": "queued"}, 1)
 	runtime.ack(gatewayID, received, ack)
 	return nil
 }
@@ -995,8 +1045,8 @@ func (runtime *Runtime) prepareOverflowDir() error {
 func (runtime *Runtime) recoverOverflowMailboxes(workerCtx context.Context) error {
 	runtime.startWorkers(workerCtx)
 	runtime.queuesMu.Lock()
-	defer runtime.queuesMu.Unlock()
 	if runtime.overflowDir == "" {
+		runtime.queuesMu.Unlock()
 		return nil
 	}
 	recovered, count, err := recoverSpoolMailboxes(
@@ -1006,6 +1056,7 @@ func (runtime *Runtime) recoverOverflowMailboxes(workerCtx context.Context) erro
 		runtime.config.effectiveOverflowMaxBytes(),
 	)
 	if err != nil {
+		runtime.queuesMu.Unlock()
 		return fmt.Errorf("recover MQTT overflow spools: %w", err)
 	}
 	now := runtime.now()
@@ -1025,6 +1076,9 @@ func (runtime *Runtime) recoverOverflowMailboxes(workerCtx context.Context) erro
 		runtime.recordOverflowDepth(gatewayID, overflowDepth)
 		runtime.scheduleGatewayLocked(workerCtx, gatewayID, state)
 	}
+	maxDepth := runtime.maxQueueDepthLocked()
+	runtime.queuesMu.Unlock()
+	runtime.recordProcessingQueueDepth(maxDepth)
 	if count > 0 && runtime.logger != nil {
 		runtime.logger.Info("mqtt_uplink_spool_recovered", "gateways", len(recovered), "messages", count)
 	}
@@ -1046,12 +1100,20 @@ func (runtime *Runtime) ensureOverflowDirLocked() error {
 
 func (runtime *Runtime) closeMailboxes() {
 	runtime.queuesMu.Lock()
+	removedIDs := make([]string, 0, len(runtime.queues))
+	seenRemoved := make(map[string]struct{}, len(runtime.queues)+len(runtime.states))
 	mailboxes := make([]*gatewayMailbox, 0, len(runtime.queues))
 	for gatewayID, mailbox := range runtime.queues {
+		seenRemoved[gatewayID] = struct{}{}
+		removedIDs = append(removedIDs, gatewayID)
 		mailboxes = append(mailboxes, mailbox)
 		delete(runtime.queues, gatewayID)
 	}
 	for gatewayID, state := range runtime.states {
+		if _, ok := seenRemoved[gatewayID]; !ok {
+			seenRemoved[gatewayID] = struct{}{}
+			removedIDs = append(removedIDs, gatewayID)
+		}
 		if state.idleTimer != nil {
 			state.idleTimer.Stop()
 			state.idleTimer = nil
@@ -1072,6 +1134,10 @@ func (runtime *Runtime) closeMailboxes() {
 	}
 	runtime.queuesMu.Unlock()
 
+	for _, gatewayID := range removedIDs {
+		runtime.deleteGatewayGauges(gatewayID)
+	}
+	runtime.recordProcessingQueueDepth(0)
 	for _, mailbox := range mailboxes {
 		if mailbox != nil {
 			mailbox.close(removeFiles)
@@ -1083,6 +1149,7 @@ func (runtime *Runtime) closeMailboxes() {
 }
 
 func (runtime *Runtime) acquireGatewayMailbox(gatewayID string) (*gatewayMailbox, *gatewayMailboxState, error) {
+	var evictedIDs []string
 	var evicted []*gatewayMailbox
 	runtime.queuesMu.Lock()
 	if runtime.queues == nil {
@@ -1107,12 +1174,13 @@ func (runtime *Runtime) acquireGatewayMailbox(gatewayID string) (*gatewayMailbox
 		return state.mailbox, state, nil
 	}
 	if len(runtime.queues) >= maxTrackedGatewayQueues {
-		evictedMailbox := runtime.evictIdleGatewayLocked()
+		evictedID, evictedMailbox := runtime.evictIdleGatewayLocked()
 		if evictedMailbox == nil && len(runtime.queues) >= maxTrackedGatewayQueues {
 			runtime.queuesMu.Unlock()
 			return nil, nil, fmt.Errorf("tracked gateway queue limit (%d) reached", maxTrackedGatewayQueues)
 		}
 		if evictedMailbox != nil {
+			evictedIDs = append(evictedIDs, evictedID)
 			evicted = append(evicted, evictedMailbox)
 		}
 	}
@@ -1130,7 +1198,17 @@ func (runtime *Runtime) acquireGatewayMailbox(gatewayID string) (*gatewayMailbox
 	}
 	runtime.queues[gatewayID] = mailbox
 	runtime.states[gatewayID] = state
+	var maxDepth int
+	if len(evictedIDs) > 0 {
+		maxDepth = runtime.maxQueueDepthLocked()
+	}
 	runtime.queuesMu.Unlock()
+	for _, evictedID := range evictedIDs {
+		runtime.deleteGatewayGauges(evictedID)
+	}
+	if len(evictedIDs) > 0 {
+		runtime.recordProcessingQueueDepth(maxDepth)
+	}
 	for _, mb := range evicted {
 		mb.close(true)
 	}
@@ -1160,7 +1238,7 @@ func (runtime *Runtime) isIdleLocked(state *gatewayMailboxState) bool {
 		!runtime.hasGatewayWorkLocked(state)
 }
 
-func (runtime *Runtime) evictIdleGatewayLocked() *gatewayMailbox {
+func (runtime *Runtime) evictIdleGatewayLocked() (string, *gatewayMailbox) {
 	var oldestID string
 	var oldestTime time.Time
 	for gatewayID, state := range runtime.states {
@@ -1173,7 +1251,7 @@ func (runtime *Runtime) evictIdleGatewayLocked() *gatewayMailbox {
 		}
 	}
 	if oldestID == "" {
-		return nil
+		return "", nil
 	}
 	state := runtime.states[oldestID]
 	if state.idleTimer != nil {
@@ -1183,7 +1261,7 @@ func (runtime *Runtime) evictIdleGatewayLocked() *gatewayMailbox {
 	state.idleGen++
 	delete(runtime.states, oldestID)
 	delete(runtime.queues, oldestID)
-	return state.mailbox
+	return oldestID, state.mailbox
 }
 
 func (runtime *Runtime) notifyReadyLocked() {
@@ -1247,7 +1325,10 @@ func (runtime *Runtime) reapIdleGateway(ctx context.Context, gatewayID string, g
 	mb := state.mailbox
 	delete(runtime.states, gatewayID)
 	delete(runtime.queues, gatewayID)
+	maxDepth := runtime.maxQueueDepthLocked()
 	runtime.queuesMu.Unlock()
+	runtime.deleteGatewayGauges(gatewayID)
+	runtime.recordProcessingQueueDepth(maxDepth)
 	if mb != nil {
 		mb.close(true)
 	}
@@ -1291,9 +1372,11 @@ func (runtime *Runtime) runGatewayTurn(ctx context.Context, turn gatewayTurn, ac
 		batch, memDepth, overflowDepth, readErrors = turn.mailbox.popBatch(limit)
 		runtime.recordQueueDepth(turn.gatewayID, memDepth+overflowDepth)
 		runtime.recordOverflowDepth(turn.gatewayID, overflowDepth)
+		runtime.refreshProcessingQueueDepth()
 		if readErrors > 0 {
 			_ = runtime.metrics.AddCounter("hvac_mqtt_spool_read_errors_total", "MQTT uplink messages dropped due to overflow spool corruption or read failures.", nil, float64(readErrors))
-			runtime.logger.Warn("mqtt_uplink_overflow_read_failed", "gateway_id", turn.gatewayID, "count", readErrors)
+			_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT uplink messages by processing outcome.", map[string]string{"outcome": "dropped"}, float64(readErrors))
+			runtime.logger.Warn("mqtt_uplink_overflow_read_failed", "gateway_id", turn.gatewayID, "error_code", "MQTT_UPLINK_OVERFLOW_READ_FAILED", "count", readErrors)
 		}
 		if len(batch) > 0 && runtime.config.BatchFlushWindow > 0 && len(batch) < limit {
 			batch = runtime.finishBatchWindow(ctx, turn.gatewayID, turn.mailbox, batch, limit)
@@ -1325,6 +1408,7 @@ func (runtime *Runtime) runGatewayTurn(ctx context.Context, turn gatewayTurn, ac
 			memDepth, overflowDepth := turn.mailbox.depth()
 			runtime.recordQueueDepth(turn.gatewayID, memDepth+overflowDepth)
 			runtime.recordOverflowDepth(turn.gatewayID, overflowDepth)
+			runtime.refreshProcessingQueueDepth()
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -1383,6 +1467,7 @@ func (runtime *Runtime) finishGatewayPanic(ctx context.Context, gatewayID string
 		memDepth, overflowDepth := mailbox.depth()
 		runtime.recordQueueDepth(gatewayID, memDepth+overflowDepth)
 		runtime.recordOverflowDepth(gatewayID, overflowDepth)
+		runtime.refreshProcessingQueueDepth()
 	}
 	runtime.queuesMu.Lock()
 	state, ok := runtime.states[gatewayID]
@@ -1469,9 +1554,11 @@ func (runtime *Runtime) finishBatchWindow(ctx context.Context, gatewayID string,
 		more, memDepth, overflowDepth, readErrors := mailbox.popBatch(limit - len(batch))
 		runtime.recordQueueDepth(gatewayID, memDepth+overflowDepth)
 		runtime.recordOverflowDepth(gatewayID, overflowDepth)
+		runtime.refreshProcessingQueueDepth()
 		if readErrors > 0 {
 			_ = runtime.metrics.AddCounter("hvac_mqtt_spool_read_errors_total", "MQTT uplink messages dropped due to overflow spool corruption or read failures.", nil, float64(readErrors))
-			runtime.logger.Warn("mqtt_uplink_overflow_read_failed", "gateway_id", gatewayID, "count", readErrors)
+			_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT uplink messages by processing outcome.", map[string]string{"outcome": "dropped"}, float64(readErrors))
+			runtime.logger.Warn("mqtt_uplink_overflow_read_failed", "gateway_id", gatewayID, "error_code", "MQTT_UPLINK_OVERFLOW_READ_FAILED", "count", readErrors)
 		}
 		if len(more) > 0 {
 			batch = append(batch, more...)
@@ -1497,19 +1584,21 @@ func (runtime *Runtime) processPrefix(ctx context.Context, gatewayID string, pen
 	outcomes, err := runtime.processor.ProcessPrefix(processContext, messages)
 	cancel()
 	if err == nil && len(outcomes) > 0 {
+		runtime.refreshOnlineGateways()
 		elapsed := time.Since(started)
 		for index, outcome := range outcomes {
 			item := pending[index]
 			if isPermanentMessageError(outcome.Err) {
 				_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT uplink messages by processing outcome.", map[string]string{"outcome": "quarantined"}, 1)
-				runtime.logger.Warn("mqtt_uplink_message_quarantined", "gateway_id", gatewayID, "topic", item.packet.Topic, "error", outcome.Err.Error())
+				_ = runtime.metrics.ObserveHistogram("hvac_mqtt_message_processing_duration_seconds", "MQTT uplink message processing duration.", map[string]string{"outcome": "quarantined"}, elapsed.Seconds(), nil)
+				runtime.logger.Warn("mqtt_uplink_message_quarantined", "gateway_id", gatewayID, "topic", item.packet.Topic, "error_code", "MQTT_UPLINK_MESSAGE_QUARANTINED", "error", outcome.Err.Error())
 				continue
 			}
 			result := outcome.Result
 			runtime.recordProcessingSuccess()
 			runtime.recordProcessingResult(result, elapsed)
 			runtime.logger.Info("mqtt_uplink_message_processed", "gateway_id", gatewayID, "message_id", result.MessageID, "message_type", result.MessageType,
-				"point_count", result.PointCount, "accepted", result.Accepted, "duplicate", result.Duplicate, "out_of_order", result.OutOfOrder,
+				"trace_id", result.TraceID, "point_count", result.PointCount, "accepted", result.Accepted, "duplicate", result.Duplicate, "out_of_order", result.OutOfOrder,
 				"quarantined", result.Quarantined, "rejected", result.Rejected)
 		}
 		return len(outcomes), 0, nil
@@ -1520,16 +1609,18 @@ func (runtime *Runtime) processPrefix(ctx context.Context, gatewayID string, pen
 	delay := runtime.retryDelay(attempt)
 	reasonFamily := "dependency"
 	logEvent := "mqtt_uplink_message_retrying"
+	errorCode := "MQTT_UPLINK_MESSAGE_RETRYING"
 	var rateLimited *RateLimitedError
 	if errors.As(err, &rateLimited) {
 		reasonFamily = "rate_limited"
 		logEvent = "mqtt_uplink_message_rate_limited"
+		errorCode = "MQTT_UPLINK_MESSAGE_RATE_LIMITED"
 		delay = max(delay, rateLimited.RetryAfter, runtime.effectiveRateLimitFloor())
 	} else {
 		runtime.recordProcessingFailure(err)
 	}
 	_ = runtime.metrics.AddCounter("hvac_mqtt_message_retries_total", "MQTT uplink processing retries after transient failures.", map[string]string{"reason_family": reasonFamily}, 1)
-	runtime.logger.Warn(logEvent, "gateway_id", gatewayID, "topic", pending[0].packet.Topic, "attempt", attempt, "retry_in", delay.String(), "error", err.Error())
+	runtime.logger.Warn(logEvent, "gateway_id", gatewayID, "topic", pending[0].packet.Topic, "attempt", attempt, "retry_in", delay.String(), "reason_code", reasonFamily, "error_code", errorCode, "error", err.Error())
 	return 0, delay, err
 }
 
@@ -1540,7 +1631,7 @@ func (runtime *Runtime) ack(gatewayID string, packet *paho.Publish, ackFn func(*
 	}
 	if err := ackFn(packet); err != nil {
 		_ = runtime.metrics.AddCounter("hvac_mqtt_ack_failures_total", "MQTT uplink acknowledgements that failed and leave the message to broker redelivery.", nil, 1)
-		runtime.logger.Warn("mqtt_uplink_ack_failed", "gateway_id", gatewayID, "topic", packet.Topic, "error", err.Error())
+		runtime.logger.Warn("mqtt_uplink_ack_failed", "gateway_id", gatewayID, "topic", packet.Topic, "error_code", "MQTT_UPLINK_ACK_FAILED", "error", err.Error())
 	}
 }
 
@@ -1564,6 +1655,65 @@ func (runtime *Runtime) recordQueueDepth(gatewayID string, depth int) {
 
 func (runtime *Runtime) recordOverflowDepth(gatewayID string, depth int) {
 	_ = runtime.metrics.SetGauge("hvac_mqtt_gateway_overflow_depth", "Messages spilled to disk overflow in a Gateway's uplink queue.", map[string]string{"gateway_id": gatewayID}, float64(depth))
+}
+
+func (runtime *Runtime) deleteGatewayGauges(gatewayID string) {
+	if runtime == nil || runtime.metrics == nil || gatewayID == "" {
+		return
+	}
+	labels := map[string]string{"gateway_id": gatewayID}
+	runtime.metrics.DeleteGauge("hvac_mqtt_gateway_queue_depth", labels)
+	runtime.metrics.DeleteGauge("hvac_mqtt_gateway_overflow_depth", labels)
+}
+
+func (runtime *Runtime) refreshQueueCapacityMetric() {
+	if runtime == nil || runtime.metrics == nil {
+		return
+	}
+	capacity := runtime.config.QueueCapacity + runtime.config.effectiveOverflowMaxMessages()
+	_ = runtime.metrics.SetGauge("hvac_mqtt_processing_queue_capacity", "Configured per-gateway MQTT uplink queue and overflow capacity.", nil, float64(capacity))
+}
+
+func (runtime *Runtime) recordProcessingQueueDepth(depth int) {
+	if runtime == nil || runtime.metrics == nil {
+		return
+	}
+	_ = runtime.metrics.SetGauge("hvac_mqtt_processing_queue_depth", "Maximum MQTT uplink queue depth across active gateways.", nil, float64(depth))
+}
+
+func (runtime *Runtime) maxQueueDepthLocked() int {
+	maxDepth := 0
+	for _, mb := range runtime.queues {
+		if mb == nil {
+			continue
+		}
+		memDepth, overflowDepth := mb.depth()
+		if total := memDepth + overflowDepth; total > maxDepth {
+			maxDepth = total
+		}
+	}
+	return maxDepth
+}
+
+func (runtime *Runtime) refreshProcessingQueueDepth() {
+	if runtime == nil || runtime.metrics == nil {
+		return
+	}
+	runtime.queuesMu.Lock()
+	maxDepth := runtime.maxQueueDepthLocked()
+	runtime.queuesMu.Unlock()
+	runtime.recordProcessingQueueDepth(maxDepth)
+}
+
+func (runtime *Runtime) refreshOnlineGateways() {
+	if runtime == nil || runtime.metrics == nil || runtime.onlineGatewayCount == nil {
+		return
+	}
+	count := runtime.onlineGatewayCount()
+	if count < 0 {
+		count = 0
+	}
+	_ = runtime.metrics.SetGauge("hvac_mqtt_online_gateways", "Number of gateways currently tracked as online by Connectivity.", nil, float64(count))
 }
 
 // recordConnectionState records the MQTT connection state. An update about a connection
@@ -1595,6 +1745,7 @@ func (runtime *Runtime) recordConnectionState(connection <-chan struct{}, connec
 	}
 	_ = runtime.metrics.SetGauge("hvac_mqtt_connected", "Whether Connectivity is connected to its MQTT broker.", nil, connectedValue)
 	_ = runtime.metrics.SetGauge("hvac_mqtt_subscribed", "Whether Connectivity's uplink subscription is active.", nil, subscribedValue)
+	runtime.refreshOnlineGateways()
 }
 
 func (runtime *Runtime) recordProcessingResult(result ProcessingResult, elapsed time.Duration) {
