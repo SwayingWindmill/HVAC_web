@@ -659,8 +659,25 @@ func TestSingleWorkerDoesNotHeadOfLineBlockHealthyGatewaysDuringRetries(t *testi
 	acks.await(t, messageID(1))
 }
 
+type syncLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func TestUplinkWorkerRecoversFromPanicWithoutLosingSubsequentBatches(t *testing.T) {
-	var logBuf bytes.Buffer
+	var logBuf syncLogBuffer
 	logger := observability.NewJSONLogger(&logBuf, slog.LevelInfo)
 	metrics := observability.NewRegistry()
 
@@ -769,6 +786,13 @@ func TestTrackedGatewayQueuesCapEvictsIdleEntriesFirst(t *testing.T) {
 		t.Fatalf("expected idle entry eviction to admit new gateway, got err=%v", err)
 	}
 	acks.await(t, messageID(1))
+
+	waitCondition(t, 2*time.Second, func() bool {
+		runtime.queuesMu.Lock()
+		defer runtime.queuesMu.Unlock()
+		state, ok := runtime.states[testGatewayA]
+		return ok && !state.inFlight
+	}, "gateway A turn completion")
 
 	runtime.queuesMu.Lock()
 	_, oldestStillPresent := runtime.queues[oldestIdleID]
