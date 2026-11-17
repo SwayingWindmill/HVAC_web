@@ -115,6 +115,7 @@ func seedPlantHarness(t *testing.T, now time.Time) (*TestControlHarness, Operato
 			{ID: "rel-3", TenantID: caTenantID, SiteID: caSiteID, FromType: "POINT", FromID: caSetpointPt, ToType: "ASSET", ToID: caChillerID, Role: "CONTROLS", Status: "ACTIVE", ValidFrom: ts},
 			{ID: "rel-4", TenantID: caTenantID, SiteID: caSiteID, FromType: "POINT", FromID: caPumpStopPt, ToType: "ASSET", ToID: caPumpID, Role: "CONTROLS", Status: "ACTIVE", ValidFrom: ts},
 			{ID: "rel-5", TenantID: caTenantID, SiteID: caSiteID, FromType: "POINT", FromID: caEmergPt, ToType: "SITE", ToID: caSiteID, Role: "CONTROLS", Status: "ACTIVE", ValidFrom: ts},
+			{ID: "rel-6", TenantID: caTenantID, SiteID: caSiteID, FromType: "ASSET", FromID: caPumpID, ToType: "ASSET", ToID: caChillerID, Role: "SERVES", Status: "ACTIVE", ValidFrom: ts},
 		},
 	}
 

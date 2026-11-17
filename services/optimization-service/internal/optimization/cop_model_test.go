@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
 type fixedPlantHistory struct {
@@ -344,4 +346,94 @@ func (sink *shadowFailingSink) InsertEvaluation(ctx context.Context, evaluation 
 		return errors.New("clickhouse unavailable")
 	}
 	return sink.captureEvaluationSink.InsertEvaluation(ctx, evaluation)
+}
+
+func TestPlantBucketsResolvesSplitSensorsViaStaticTwin(t *testing.T) {
+	tenantID := "33333333-1000-7000-8000-000000000001"
+	siteID := "33333333-2000-7000-8000-000000000001"
+	chillerID := "33333333-3000-7000-8000-000000000001"
+	ampID := "33333333-4000-7000-8000-000000000001"
+	hubID := "33333333-4000-7000-8000-000000000002"
+	btuID := "33333333-4000-7000-8000-000000000003"
+	ratedPower := 125.0
+
+	twin := planttwin.SiteTwin{
+		Scope:    planttwin.SiteScope{TenantID: tenantID, SiteID: siteID},
+		Timezone: "Asia/Shanghai",
+		Units: []planttwin.PlantUnit{
+			{AssetID: chillerID, AssetCode: "ch-1", AssetName: "Chiller 1", AssetType: planttwin.AssetTypeChiller, RatedPowerKW: &ratedPower},
+		},
+		PointBindings: []planttwin.PointBinding{
+			{PointID: "p-kw", DeviceID: ampID, PointCode: "p_kw", WireSourceKey: "p_kw", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: chillerID, BindingRole: planttwin.BindingMeters, SemanticRole: planttwin.RoleActivePower},
+			{PointID: "t-l", DeviceID: hubID, PointCode: "probe_t1", WireSourceKey: "probe_t1", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: chillerID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCHWLeavingTemp},
+			{PointID: "t-e", DeviceID: hubID, PointCode: "probe_t2", WireSourceKey: "probe_t2", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: chillerID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCHWEnteringTemp},
+			{PointID: "t-cw", DeviceID: hubID, PointCode: "probe_t3", WireSourceKey: "probe_t3", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeAsset, AssetID: chillerID, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCWLeavingTemp},
+			{PointID: "l-kw", DeviceID: btuID, PointCode: "chw_load", WireSourceKey: "chw_load", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeSite, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCoolingLoad},
+			{PointID: "l-kw-copy", DeviceID: hubID, PointCode: "copied_load", WireSourceKey: "copied_load", PointType: "TELEMETRY", SubjectType: planttwin.SubjectTypeSite, BindingRole: planttwin.BindingDescribes, SemanticRole: planttwin.RoleCoolingLoad, SourceMetadata: []byte(`{"copied":true}`)},
+		},
+	}
+	loader, err := planttwin.NewStaticLoader(twin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedTwin, err := loader.LoadSiteTwin(t.Context(), twin.Scope, time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var capturedSQL string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload, _ := io.ReadAll(request.Body)
+		capturedSQL = string(payload)
+		rows := strings.Join([]string{
+			`{"bucket":"2026-11-14T23:45:00Z","deviceId":"` + ampID + `","telemetryKey":"p_kw","meanValue":88.5}`,
+			`{"bucket":"2026-11-14T23:45:00Z","deviceId":"` + hubID + `","telemetryKey":"probe_t1","meanValue":6.8}`,
+			`{"bucket":"2026-11-14T23:45:00Z","deviceId":"` + hubID + `","telemetryKey":"probe_t2","meanValue":11.2}`,
+			`{"bucket":"2026-11-14T23:45:00Z","deviceId":"` + hubID + `","telemetryKey":"probe_t3","meanValue":29.4}`,
+			`{"bucket":"2026-11-14T23:45:00Z","deviceId":"` + btuID + `","telemetryKey":"chw_load","meanValue":410.0}`,
+		}, "\n") + "\n"
+		_, _ = writer.Write([]byte(rows))
+	}))
+	defer server.Close()
+
+	reader, err := NewClickHouseInputReader(InputReaderConfig{BaseURL: server.URL, Energy: &energySeriesStub{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	to := time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)
+	buckets, err := reader.PlantBuckets(t.Context(), PlantHistoryQuery{
+		TenantID: tenantID,
+		SiteID:   siteID,
+		From:     to.AddDate(0, 0, -14),
+		To:       to,
+		Twin:     &loadedTwin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(capturedSQL, "copied_load") || !strings.Contains(capturedSQL, "'probe_t1'") || !strings.Contains(capturedSQL, "'chw_load'") {
+		t.Fatalf("unexpected split-sensor history SQL: %s", capturedSQL)
+	}
+	if len(buckets) != 2 {
+		t.Fatalf("expected 1 aggregated chiller bucket + 1 cooling load bucket, got %+v", buckets)
+	}
+	var chBucket, loadBucket *PlantBucket
+	for i := range buckets {
+		switch buckets[i].DeviceID {
+		case chillerID:
+			chBucket = &buckets[i]
+		default:
+			loadBucket = &buckets[i]
+		}
+	}
+	if chBucket == nil || chBucket.PowerKW == nil || *chBucket.PowerKW != 88.5 ||
+		chBucket.ChwLeavingC == nil || *chBucket.ChwLeavingC != 6.8 ||
+		chBucket.ChwEnteringC == nil || *chBucket.ChwEnteringC != 11.2 ||
+		chBucket.CwLeavingC == nil || *chBucket.CwLeavingC != 29.4 ||
+		chBucket.RatedPowerKW == nil || *chBucket.RatedPowerKW != 125.0 {
+		t.Fatalf("split chiller bucket not aggregated cleanly: %+v", chBucket)
+	}
+	if loadBucket == nil || loadBucket.CoolingKW == nil || *loadBucket.CoolingKW != 410.0 {
+		t.Fatalf("cooling load bucket mismatch: %+v", loadBucket)
+	}
 }

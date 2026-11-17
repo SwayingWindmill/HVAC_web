@@ -26,6 +26,7 @@ use (
 	./libs/oidctest
 	./libs/operationsauditevent
 	./libs/ownershipregistry
+	./libs/planttwin
 	./libs/registryauth
 	./libs/schedulerjob
 	./libs/schemagate

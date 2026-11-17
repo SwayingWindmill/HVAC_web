@@ -225,3 +225,65 @@ func TestFeederAuxiliaryPowerOffsetsChillerRunningThreshold(t *testing.T) {
 		t.Fatalf("expected 70 kW combined feeder to run and evaluate low delta-T, got %+v", running)
 	}
 }
+
+func TestAssessWindowEvaluatesSplitPointBindingsAndPumpPower(t *testing.T) {
+	request := validEvaluation()
+	tempDev := "019a0000-4000-7000-8000-000000000011"
+	btuDev := "019a0000-4000-7000-8000-000000000012"
+	chillerMeter := "019a0000-4000-7000-8000-000000000013"
+	pumpMeter := "019a0000-4000-7000-8000-000000000014"
+
+	topology := Topology{
+		ResolvedByTwin: true,
+		Loop: LoopSignals{
+			SupplyTemp:  []PointRef{{DeviceID: tempDev, Key: "t18"}},
+			ReturnTemp:  []PointRef{{DeviceID: tempDev, Key: "t16"}},
+			CoolingLoad: []PointRef{{DeviceID: btuDev, Key: "q_cool"}},
+		},
+		Chillers: []GateAsset{{
+			AssetID:         "019a0000-3000-7000-8000-000000000001",
+			DeviceIDs:       []string{chillerMeter},
+			PowerPoints:     []PointRef{{DeviceID: chillerMeter, Key: "ch1_kw"}},
+			RatedPowerKW:    200,
+			RatedCapacityKW: 1000,
+		}},
+		Pumps: []GateAsset{{
+			AssetID:      "019a0000-3000-7000-8000-000000000002",
+			DeviceIDs:    []string{pumpMeter},
+			PowerPoints:  []PointRef{{DeviceID: pumpMeter, Key: "pump_kw"}},
+			RatedPowerKW: 22,
+		}},
+	}
+
+	buildSamples := func(pumpKW float64) []Sample {
+		from, _ := WindowMinutes(testRule, request.At)
+		samples := make([]Sample, 0, 15*5)
+		for index := 0; index < 15; index++ {
+			at := from.Add(time.Duration(index) * time.Minute)
+			samples = append(samples,
+				Sample{DeviceID: tempDev, Key: "t18", Minute: at, ObservationID: "sup-" + string(rune('a'+index)), PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", Quality: "GOOD", Number: 7.0, HasNumber: true},
+				Sample{DeviceID: tempDev, Key: "t16", Minute: at, ObservationID: "ret-" + string(rune('a'+index)), PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "Cel", Quality: "GOOD", Number: 9.0, HasNumber: true},
+				Sample{DeviceID: btuDev, Key: "q_cool", Minute: at, ObservationID: "load-" + string(rune('a'+index)), PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "kW", Quality: "GOOD", Number: 300, HasNumber: true},
+				Sample{DeviceID: chillerMeter, Key: "ch1_kw", Minute: at, ObservationID: "cpwr-" + string(rune('a'+index)), PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "kW", Quality: "GOOD", Number: 80, HasNumber: true},
+				Sample{DeviceID: pumpMeter, Key: "pump_kw", Minute: at, ObservationID: "ppwr-" + string(rune('a'+index)), PointType: "TELEMETRY", ValueType: "NUMBER", Unit: "kW", Quality: "GOOD", Number: pumpKW, HasNumber: true},
+			)
+		}
+		return samples
+	}
+
+	stoppedPump, err := AssessWindow(testRule, topology, request.DeviceID, buildSamples(0.5), request.At)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stoppedPump.Status != StatusNotOperating || !stoppedPump.Gates[2].Applied || stoppedPump.Gates[2].PassedMinutes != 0 {
+		t.Fatalf("expected stopped pump below rated fraction to block operating minutes, got %+v", stoppedPump)
+	}
+
+	runningPump, err := AssessWindow(testRule, topology, request.DeviceID, buildSamples(18.5), request.At)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runningPump.Status != statusLow || runningPump.OperatingMinutes != 15 || runningPump.Gates[0].PassedMinutes != 15 || runningPump.Gates[1].PassedMinutes != 15 || runningPump.Gates[2].PassedMinutes != 15 {
+		t.Fatalf("expected all split-sensor gates to pass and diagnose low delta-T, got %+v", runningPump)
+	}
+}

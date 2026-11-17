@@ -4,7 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 import {
-  SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, checkSiteFile, expandPoints, planOnboarding, pointQuality, pointStatus, presenceApplicability, siteStateQuery, updateWhenChanged,
+  ASSET_RELATIONSHIP_ROLES, SEMANTIC_ROLES, SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, checkSiteFile, expandPoints, planOnboarding, pointQuality, pointStatus, presenceApplicability, siteStateQuery, updateWhenChanged,
 } from './site-onboarding.mjs';
 
 import type { OnboardingAsset, OnboardingDevice, OnboardingPoint, OnboardingProfile, OnboardingState, PlanItem } from './site-onboarding.mjs';
@@ -222,13 +222,34 @@ test('point status defaults to ACTIVE and rejects unknown values', () => {
 // A database that already holds everything the songyaxuan manifest describes.
 function completeState(profile: OnboardingProfile): OnboardingState {
   const synthesizedTotal = Boolean(profile.energy?.totalMeter && typeof profile.energy.totalMeter === 'object' && profile.energy.totalMeter.kind === 'sum-of-sub-meters');
-  const state: OnboardingState = { site: 'ACTIVE', devices: {}, points: {}, assets: {}, schedules: {}, topology: true, synthesizedTotal, tariff: true, forecast: true };
+  const state: OnboardingState = { site: 'ACTIVE', devices: {}, points: {}, assets: {}, pointSemanticRoles: {}, assetRelationships: [], schedules: {}, topology: true, synthesizedTotal, tariff: true, forecast: true };
   for (const match of buildOnboardingSql(profile).registry.matchAll(/'(01a14000-4000-7000-8000-[0-9a-f]{12})'/g)) state.devices[match[1]] = 'ACTIVE';
   for (const row of pointRows(buildOnboardingSql(profile).registry)) {
     const [, id] = row.match(/^\('([0-9a-f-]{36})'/) ?? [];
     if (id) state.points[id] = row.includes("'INACTIVE'") ? 'INACTIVE' : 'ACTIVE';
   }
-  for (const asset of profile.assets) state.assets[asset.id] = 'ACTIVE';
+  const assetIdByRef = new Map<string, string>();
+  for (const asset of profile.assets) {
+    state.assets[asset.id] = 'ACTIVE';
+    assetIdByRef.set(asset.id, asset.id);
+    assetIdByRef.set(asset.code, asset.id);
+  }
+  for (const [deviceOffset, device] of profile.devices.entries()) {
+    for (const [pointIndex, point] of expandPoints(device, profile.meterPoints).entries()) {
+      if (pointStatus(point) === 'ACTIVE' && point.semanticRole) {
+        const pointId = profile.site.id.replace(
+          /^([0-9a-f]{8})-[0-9a-f]{4}-7000-8000-[0-9a-f]{12}$/,
+          (_, head) => `${head}-5000-7000-8000-${((deviceOffset + 1) * 0x10000 + pointIndex + 1).toString(16).padStart(12, '0')}`,
+        );
+        if (state.pointSemanticRoles) state.pointSemanticRoles[pointId] = point.semanticRole;
+      }
+    }
+  }
+  state.assetRelationships = (profile.assetRelationships ?? []).map((rel) => ({
+    fromAssetId: assetIdByRef.get(rel.from) ?? rel.from,
+    toAssetId: assetIdByRef.get(rel.to) ?? rel.to,
+    role: rel.role,
+  }));
   for (const { item } of planOnboarding(profile, { ...state, schedules: {}, policy: null, modelRevision: null, optimizationBinding: null, lowDeltaTRule: null })) {
     const code = item.match(/^调度定义 (.+)$/)?.[1];
     if (code) state.schedules[code] = { jobType: '', cron: '', enabled: true, payload: {} };
@@ -816,4 +837,72 @@ test('onboarding converges presence signal types, optimistic siteRevision lock, 
   assert.match(guardedNew.registry, /USING ERRCODE = '40001'/);
 
   assert.throws(() => buildOnboardingSql(songyaxuan, { expectedSiteRevision: 0 }), /expectedSiteRevision/);
+});
+
+test('semanticRole and assetRelationships validate, compile idempotently, and detect drift', () => {
+  assert.deepEqual(checkSiteFile(songyaxuan, songyaxuanAlarmRules), []);
+  assert.equal(songyaxuan.assetRelationships?.length, 16);
+
+  const annotatedRoles = new Set<string>();
+  for (const device of songyaxuan.devices) {
+    for (const point of expandPoints(device, songyaxuan.meterPoints)) {
+      if (point.semanticRole) {
+        assert.notEqual(point.pointType, 'COMMAND', `${device.code}/${point.code} COMMAND must not carry semanticRole`);
+        annotatedRoles.add(point.semanticRole);
+      }
+    }
+  }
+  for (const role of SEMANTIC_ROLES) {
+    assert.ok(annotatedRoles.has(role), `songyaxuan.site.json missing semanticRole ${role}`);
+  }
+  assert.deepEqual([...ASSET_RELATIONSHIP_ROLES], ['SERVES']);
+
+  const { registry } = buildOnboardingSql(songyaxuan);
+  assert.match(registry, /UPDATE core_registry\.asset_relationships\nSET status = 'RETIRED'/);
+  assert.doesNotMatch(registry, /DELETE FROM core_registry\.asset_relationships/);
+  assert.match(registry, /INSERT INTO core_registry\.asset_relationships \([^)]*from_asset_id, to_asset_id, relationship_role/);
+  const relationshipRows = registry
+    .slice(registry.indexOf('INSERT INTO core_registry.asset_relationships'))
+    .split('\n')
+    .filter((line) => line.includes("'SERVES'"));
+  assert.equal(relationshipRows.length, 16);
+  assert.match(bindingSection(registry), /semantic_role\)/);
+  assert.match(bindingSection(registry), /'ACTIVE_POWER'\)/);
+  assert.match(bindingSection(registry), /NULL\)$|NULL\),$/m);
+
+  const query = siteStateQuery(songyaxuan);
+  assert.match(query, /'pointSemanticRoles'/);
+  assert.match(query, /'assetRelationships'/);
+
+  const invalid = copy(songyaxuan);
+  const powerPoint = invalid.meterPoints?.find((point) => point.code === 'power_total');
+  if (!powerPoint) throw new Error('meterPoints.power_total missing');
+  powerPoint.semanticRole = 'BOGUS_ROLE';
+  const ctrlStart = invalid.devices.find((device) => device.code === 'ctrl-chiller-a')?.points.find((point) => point.code === 'start');
+  if (!ctrlStart) throw new Error('ctrl-chiller-a/start missing');
+  ctrlStart.semanticRole = 'RUN_STATE';
+  invalid.assetRelationships = [
+    ...(invalid.assetRelationships ?? []),
+    { from: 'chiller-a', to: 'chiller-a', role: 'SERVES' },
+    { from: 'chwp-1', to: 'chiller-a', role: 'SERVES' },
+    { from: 'chiller-a', to: 'chwp-1', role: 'SERVES' },
+    { from: 'missing-asset', to: 'chiller-a', role: 'BAD_ROLE' },
+  ];
+  const problems = checkSiteFile(invalid, songyaxuanAlarmRules).join('\n');
+  assert.match(problems, /unknown semanticRole BOGUS_ROLE/);
+  assert.match(problems, /ctrl-chiller-a\/start: COMMAND point cannot declare semanticRole/);
+  assert.match(problems, /cannot serve itself/);
+  assert.match(problems, /duplicate edge chwp-1 -> chiller-a/);
+  assert.match(problems, /hydraulic SERVES graph contains a cycle/);
+  assert.match(problems, /unknown from asset missing-asset/);
+  assert.match(problems, /unsupported role BAD_ROLE/);
+
+  const driftedState = completeState(songyaxuan);
+  const firstPointId = Object.keys(driftedState.pointSemanticRoles ?? {})[0];
+  if (!firstPointId || !driftedState.pointSemanticRoles) throw new Error('expected semantic role in completeState');
+  driftedState.pointSemanticRoles[firstPointId] = 'ZONE_TEMP';
+  driftedState.assetRelationships = (driftedState.assetRelationships ?? []).slice(1);
+  const driftPlan = planOnboarding(songyaxuan, driftedState);
+  assert.equal(driftPlan.find((item) => item.item.startsWith('语义角色 '))?.status, 'differs');
+  assert.equal(driftPlan.find((item) => item.item.startsWith('资产水力关系 '))?.status, 'missing');
 });

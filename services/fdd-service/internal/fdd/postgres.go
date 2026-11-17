@@ -9,11 +9,15 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
 var ErrFindingNotFound = errors.New("FDD finding not found")
 
-type PostgresStore struct{ pool *pgxpool.Pool }
+type PostgresStore struct {
+	pool  *pgxpool.Pool
+	twins *planttwin.PostgresLoader
+}
 
 func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
 	config, err := pgxpool.ParseConfig(dsn)
@@ -28,7 +32,20 @@ func OpenPostgres(ctx context.Context, dsn string) (*PostgresStore, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &PostgresStore{pool: pool}, nil
+	twins, err := planttwin.NewPostgresLoader(pool)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return &PostgresStore{pool: pool, twins: twins}, nil
+}
+
+// TwinLoader returns the store's PostgreSQL-backed semantic plant twin loader.
+func (store *PostgresStore) TwinLoader() planttwin.Loader {
+	if store == nil || store.twins == nil {
+		return nil
+	}
+	return store.twins
 }
 
 func (store *PostgresStore) Close() {
@@ -75,58 +92,15 @@ ORDER BY revision DESC LIMIT 1`, tenantID, LowDeltaTRuleCode, at.UTC()).Scan(&ru
 	return rule, tx.Commit(ctx)
 }
 
-// maximumGateBindings bounds what a Site's chillers and pumps can bind; a plant has a handful.
-const maximumGateBindings = 200
-
 func (store *PostgresStore) OperatingTopology(ctx context.Context, tenantID, siteID string, at time.Time) (Topology, error) {
-	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return Topology{}, err
+	if store == nil || store.twins == nil {
+		return Topology{}, errors.New("FDD postgres store is unavailable")
 	}
-	defer tx.Rollback(ctx)
-	if err = fddScope(ctx, tx, tenantID, siteID); err != nil {
-		return Topology{}, err
-	}
-	rows, err := tx.Query(ctx, `SELECT a.id::text, a.asset_type, COALESCE(a.rated_power, 0), COALESCE(a.rated_capacity, 0),
-CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(a.nameplate->'unconfirmed', '[]'::jsonb)) u(f) WHERE u.f = 'feederAuxiliaryPowerKw')
-  THEN 0 ELSE COALESCE((a.nameplate->>'feederAuxiliaryPowerKw')::double precision, 0) END,
-b.device_id::text
-FROM core_registry.assets a
-JOIN core_registry.device_bindings b ON b.tenant_id = a.tenant_id AND b.site_id = a.site_id AND b.asset_id = a.id
-WHERE a.tenant_id = $1::uuid AND a.site_id = $2::uuid AND a.status = 'ACTIVE'
-  AND a.asset_type IN ('CHILLER', 'CHILLED_WATER_PUMP')
-  AND b.status = 'ACTIVE' AND b.valid_from <= $3 AND (b.valid_to IS NULL OR b.valid_to > $3)
-ORDER BY a.asset_type, a.id, b.device_id
-LIMIT $4`, tenantID, siteID, at.UTC(), maximumGateBindings+1)
+	twin, err := store.twins.LoadSiteTwin(ctx, planttwin.SiteScope{TenantID: tenantID, SiteID: siteID}, at.UTC())
 	if err != nil {
 		return Topology{}, fmt.Errorf("read FDD operating topology: %w", err)
 	}
-	defer rows.Close()
-	var topology Topology
-	count := 0
-	for rows.Next() {
-		var assetID, assetType, deviceID string
-		var ratedPower, ratedCapacity, feederAuxiliaryPower float64
-		if err = rows.Scan(&assetID, &assetType, &ratedPower, &ratedCapacity, &feederAuxiliaryPower, &deviceID); err != nil {
-			return Topology{}, err
-		}
-		if count++; count > maximumGateBindings {
-			return Topology{}, errors.New("FDD operating topology has too many bindings")
-		}
-		assets := &topology.Chillers
-		if assetType == "CHILLED_WATER_PUMP" {
-			assets = &topology.Pumps
-		}
-		if last := len(*assets) - 1; last >= 0 && (*assets)[last].AssetID == assetID {
-			(*assets)[last].DeviceIDs = append((*assets)[last].DeviceIDs, deviceID)
-			continue
-		}
-		*assets = append(*assets, GateAsset{AssetID: assetID, DeviceIDs: []string{deviceID}, RatedPowerKW: ratedPower, RatedCapacityKW: ratedCapacity, FeederAuxiliaryPowerKW: feederAuxiliaryPower})
-	}
-	if err = rows.Err(); err != nil {
-		return Topology{}, err
-	}
-	return topology, tx.Commit(ctx)
+	return topologyFromSite(twin), nil
 }
 
 func (store *PostgresStore) InsertFinding(ctx context.Context, finding intelligencemodel.FDDFinding) error {

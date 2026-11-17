@@ -50,6 +50,14 @@ func RunScheduledEvaluations(ctx context.Context, queue *schedulerjob.Queue, ser
 			finish(queue.Fail(context.Background(), job, "FDD_EVALUATION_FAILED", evaluationErr, true, time.Now().UTC()), job)
 		default:
 			output := map[string]any{"status": result.Status, "deltaTC": result.DeltaTC, "operatingShare": result.Window.OperatingShare, "lowShare": result.Window.LowShare}
+			if result.Window.Suppressed {
+				output["suppressed"] = true
+				output["suppressionReason"] = result.Window.SuppressionReason
+				output["scheduleState"] = result.Window.ScheduleState
+				if result.Window.SuppressionDetail != "" {
+					output["suppressionDetail"] = result.Window.SuppressionDetail
+				}
+			}
 			if result.Finding != nil {
 				output["findingId"] = result.Finding.ID
 			}

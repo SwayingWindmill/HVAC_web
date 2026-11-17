@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
 type PublishedRecommendation struct {
@@ -78,13 +79,27 @@ type EvaluationPublicationStore interface {
 	LatestPreparation(context.Context, string, string) (PreparationOutcome, error)
 }
 
-type PostgresStore struct{ pool *pgxpool.Pool }
+type PostgresStore struct {
+	pool       *pgxpool.Pool
+	twinLoader planttwin.Loader
+}
 
 func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
 	if pool == nil {
 		return nil, errors.New("optimization postgres pool is required")
 	}
-	return &PostgresStore{pool: pool}, nil
+	twinLoader, err := planttwin.NewPostgresLoader(pool)
+	if err != nil {
+		return nil, err
+	}
+	return &PostgresStore{pool: pool, twinLoader: twinLoader}, nil
+}
+
+func (store *PostgresStore) LoadSiteTwin(ctx context.Context, scope planttwin.SiteScope, at time.Time) (planttwin.SiteTwin, error) {
+	if store == nil || store.twinLoader == nil {
+		return planttwin.SiteTwin{}, errors.New("optimization plant twin loader is unavailable")
+	}
+	return store.twinLoader.LoadSiteTwin(ctx, scope, at)
 }
 
 func optimizationScope(ctx context.Context, tx pgx.Tx, tenantID, siteID string) error {

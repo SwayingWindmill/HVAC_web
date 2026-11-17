@@ -47,6 +47,7 @@ export interface OnboardingPoint {
   status?: string;
   writable?: boolean;
   asset?: string;
+  semanticRole?: string;
   address?: string;
   protocol?: string;
   sourceMetadata?: Record<string, unknown>;
@@ -103,9 +104,16 @@ export interface OnboardingOptimization {
   policy: OnboardingOptimizationPolicy;
 }
 
+export interface OnboardingAssetRelationship {
+  from: string;
+  to: string;
+  role: string;
+}
+
 export interface OnboardingProfile {
   site: { id: string; code: string };
   assets: OnboardingAsset[];
+  assetRelationships?: OnboardingAssetRelationship[];
   devices: OnboardingDevice[];
   meterPoints?: OnboardingPoint[];
   energy?: {
@@ -154,6 +162,8 @@ export interface OnboardingState {
   devices: Record<string, string>;
   points: Record<string, string>;
   assets: Record<string, string>;
+  pointSemanticRoles?: Record<string, string>;
+  assetRelationships?: Array<{ fromAssetId: string; toAssetId: string; role: string }>;
   schedules: Record<string, { jobType?: string; cron: string; enabled: boolean; payload: Record<string, unknown> }>;
   topology: boolean;
   synthesizedTotal: boolean;
@@ -180,6 +190,8 @@ export interface PlanItem {
 }
 
 export const SUBJECT_BINDING_LIFECYCLE: ReadonlyArray<readonly [string, string]>;
+export const SEMANTIC_ROLES: readonly string[];
+export const ASSET_RELATIONSHIP_ROLES: readonly string[];
 export function pointStatus(point: Pick<OnboardingPoint, 'code' | 'status'>): 'ACTIVE' | 'INACTIVE' | 'RETIRED';
 export function expandPoints(device: OnboardingDevice | undefined, meterPoints?: OnboardingPoint[]): OnboardingPoint[];
 export function presenceApplicability(points: readonly OnboardingPoint[]): 'APPLICABLE' | 'NOT_APPLICABLE';

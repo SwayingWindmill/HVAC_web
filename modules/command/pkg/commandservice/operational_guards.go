@@ -2,6 +2,7 @@ package commandservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
 const (
@@ -21,7 +23,7 @@ const (
 
 func isStartupBlindWindowAuxType(assetType string) bool {
 	switch strings.ToUpper(strings.TrimSpace(assetType)) {
-	case "CHILLED_WATER_PUMP", "COOLING_WATER_PUMP", "COOLING_TOWER":
+	case planttwin.AssetTypeChilledWaterPump, planttwin.AssetTypeCoolingWaterPump, planttwin.AssetTypeCoolingTower:
 		return true
 	default:
 		return false
@@ -56,8 +58,8 @@ func (a *ControlAuthority) enforcePlantOperationalGuards(
 ) error {
 	assetType := strings.ToUpper(strings.TrimSpace(target.asset.AssetType))
 	isAuxStop := isStartupBlindWindowAuxType(assetType) && isStopCapability(target.capability)
-	isChillerStart := assetType == "CHILLER" && isStartCapability(target.capability)
-	isChillerStop := assetType == "CHILLER" && isStopCapability(target.capability)
+	isChillerStart := assetType == planttwin.AssetTypeChiller && isStartCapability(target.capability)
+	isChillerStop := assetType == planttwin.AssetTypeChiller && isStopCapability(target.capability)
 	if !isAuxStop && !isChillerStart && !isChillerStop {
 		return nil
 	}
@@ -71,16 +73,7 @@ func (a *ControlAuthority) enforcePlantOperationalGuards(
 	topo := resolveSiteControlTopology(model, now)
 
 	if isAuxStop {
-		servedChillers := append([]string(nil), topo.servedChillersByAux[target.asset.ID]...)
-		for _, check := range target.interlocks {
-			for _, chiller := range topo.chillers {
-				if containsString(topo.boundDevicesByAsset[chiller.ID], check.DeviceID) {
-					servedChillers = appendUniqueShutdownString(servedChillers, chiller.ID)
-				}
-			}
-		}
-		sort.Strings(servedChillers)
-		if err := checkAuxStopStartupBlindWindow(topo, target.asset, servedChillers, commands, now); err != nil {
+		if err := checkAuxStopStartupBlindWindow(topo, target.asset, topo.servedChillersByAux[target.asset.ID], commands, now); err != nil {
 			return err
 		}
 	}
@@ -309,7 +302,11 @@ func (a *ControlAuthority) enforceLastActiveChillerGuard(
 	currentObs *commandmodel.LivePointObservation,
 	now time.Time,
 ) error {
-	if !a.isSiteInActiveCoolingSlot(ctx, operator, target.asset.SiteID, now) {
+	inSlot, err := a.isSiteInActiveCoolingSlot(ctx, operator, target.asset.SiteID, now)
+	if err != nil {
+		return err
+	}
+	if !inSlot {
 		return nil
 	}
 	runningChillerIDs := make([]string, 0, len(topo.chillers))
@@ -341,61 +338,64 @@ func (a *ControlAuthority) enforceLastActiveChillerGuard(
 	return nil
 }
 
-func (a *ControlAuthority) isSiteInActiveCoolingSlot(ctx context.Context, operator OperatorIdentity, siteID string, now time.Time) bool {
+func (a *ControlAuthority) isSiteInActiveCoolingSlot(ctx context.Context, operator OperatorIdentity, siteID string, now time.Time) (bool, error) {
 	if a == nil || a.twin == nil {
-		return false
+		return false, nil
 	}
 	schedule, exceptions, err := a.twin.GetSiteOperatingSchedule(ctx, operator, siteID)
 	if err != nil {
-		return false
+		var ce *ControlError
+		if errors.As(err, &ce) && ce.HTTPStatus == http.StatusNotFound {
+			return false, nil
+		}
+		return false, err
 	}
-	return evaluateActiveCoolingSlot(schedule, exceptions, now)
+	inSlot, evalErr := evaluateActiveCoolingSlot(schedule, exceptions, now)
+	if evalErr != nil {
+		return false, unavailableControlError("Command Service could not evaluate the Site operating schedule.")
+	}
+	return inSlot, nil
 }
 
-func evaluateActiveCoolingSlot(schedule OperatingScheduleDTO, exceptions []OperatingExceptionDTO, now time.Time) bool {
-	loc := time.UTC
-	if tz := strings.TrimSpace(schedule.Timezone); tz != "" {
-		if loaded, err := time.LoadLocation(tz); err == nil {
-			loc = loaded
-		}
+func evaluateActiveCoolingSlot(schedule OperatingScheduleDTO, exceptions []OperatingExceptionDTO, now time.Time) (bool, error) {
+	eval, err := planttwin.EvaluateOperatingSchedule(now, toPlantTwinOperatingSchedule(schedule, exceptions))
+	if err != nil {
+		return false, err
 	}
-	localNow := now.In(loc)
-	localDate := localNow.Format("2006-01-02")
-	minuteOfDay := localNow.Hour()*60 + localNow.Minute()
-	dayOfWeek := int(localNow.Weekday())
-	if dayOfWeek == 0 {
-		dayOfWeek = 7
-	}
+	return eval.InBaseSlot, nil
+}
 
-	hasOvertime := false
-	overtimeSlots := []OperatingExceptionSlotDTO(nil)
+func toPlantTwinOperatingSchedule(schedule OperatingScheduleDTO, exceptions []OperatingExceptionDTO) planttwin.OperatingSchedule {
+	slots := make([]planttwin.ScheduleSlot, 0, len(schedule.Slots))
+	for _, slot := range schedule.Slots {
+		slots = append(slots, planttwin.ScheduleSlot{
+			DayOfWeek:   slot.DayOfWeek,
+			StartMinute: slot.StartMinute,
+			EndMinute:   slot.EndMinute,
+		})
+	}
+	approvedExceptions := make([]planttwin.ScheduleException, 0, len(exceptions))
 	for _, exc := range exceptions {
 		if !strings.EqualFold(strings.TrimSpace(exc.Status), "APPROVED") {
 			continue
 		}
-		if exc.StartDate == "" || exc.EndDate == "" || localDate < exc.StartDate || localDate > exc.EndDate {
-			continue
+		repSlots := make([]planttwin.ScheduleSlot, 0, len(exc.ReplacementSlots))
+		for _, slot := range exc.ReplacementSlots {
+			repSlots = append(repSlots, planttwin.ScheduleSlot{
+				StartMinute: slot.StartMinute,
+				EndMinute:   slot.EndMinute,
+			})
 		}
-		switch strings.ToUpper(strings.TrimSpace(exc.Kind)) {
-		case "MAINTENANCE_WINDOW", "HOLIDAY_SHUTDOWN":
-			return false
-		case "OVERTIME_COOLING":
-			hasOvertime = true
-			overtimeSlots = append(overtimeSlots, exc.ReplacementSlots...)
-		}
+		approvedExceptions = append(approvedExceptions, planttwin.ScheduleException{
+			Kind:             exc.Kind,
+			StartDate:        exc.StartDate,
+			EndDate:          exc.EndDate,
+			ReplacementSlots: repSlots,
+		})
 	}
-	if hasOvertime {
-		for _, slot := range overtimeSlots {
-			if slot.StartMinute <= minuteOfDay && minuteOfDay < slot.EndMinute {
-				return true
-			}
-		}
-		return false
+	return planttwin.OperatingSchedule{
+		Timezone:   schedule.Timezone,
+		Slots:      slots,
+		Exceptions: approvedExceptions,
 	}
-	for _, slot := range schedule.Slots {
-		if slot.DayOfWeek == dayOfWeek && slot.StartMinute <= minuteOfDay && minuteOfDay < slot.EndMinute {
-			return true
-		}
-	}
-	return false
 }

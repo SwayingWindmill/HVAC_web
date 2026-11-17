@@ -6,14 +6,47 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
 
 func (store *PostgresStore) ResolveOptimizationPreparation(ctx context.Context, request PreparationRequest, at time.Time) (PreparationDefinition, error) {
+	evalAt := at.UTC()
+	twin, err := store.LoadSiteTwin(ctx, planttwin.SiteScope{TenantID: request.TenantID, SiteID: request.SiteID}, evalAt)
+	if errors.Is(err, planttwin.ErrSiteNotFound) {
+		return PreparationDefinition{}, unavailable(ReasonSiteNotVisible, "the Site is not visible")
+	}
+	if err != nil {
+		return PreparationDefinition{}, err
+	}
+
+	hasAssetLock := false
+	for _, unit := range twin.Units {
+		mode := strings.ToUpper(strings.TrimSpace(unit.LockMode))
+		if mode != "" && mode != AssetControlLockUnlocked {
+			hasAssetLock = true
+			break
+		}
+	}
+	if lockMessage, locked := controlLockBlockMessage(twin.SiteControlMode, hasAssetLock); locked {
+		if suppressErr := store.suppressLockedDraftRecommendations(ctx, request.TenantID, request.SiteID, at); suppressErr != nil {
+			return PreparationDefinition{}, suppressErr
+		}
+		return PreparationDefinition{}, unavailable(ReasonMaintenanceActive, "%s", lockMessage)
+	}
+
+	if scheduleMessage, blocked, suppressedByExc := preparationScheduleBlockMessage(twin, evalAt); blocked {
+		if suppressedByExc {
+			if suppressErr := store.suppressLockedDraftRecommendations(ctx, request.TenantID, request.SiteID, at); suppressErr != nil {
+				return PreparationDefinition{}, suppressErr
+			}
+		}
+		return PreparationDefinition{}, unavailable(ReasonMaintenanceActive, "%s", scheduleMessage)
+	}
+
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return PreparationDefinition{}, err
@@ -23,50 +56,8 @@ func (store *PostgresStore) ResolveOptimizationPreparation(ctx context.Context, 
 		return PreparationDefinition{}, err
 	}
 
-	var definition PreparationDefinition
-	err = tx.QueryRow(ctx, `SELECT timezone FROM core_registry.sites WHERE tenant_id=$1::uuid AND id=$2::uuid`, request.TenantID, request.SiteID).Scan(&definition.SiteTimezone)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return PreparationDefinition{}, unavailable(ReasonSiteNotVisible, "the Site is not visible")
-	}
-	if err != nil {
-		return PreparationDefinition{}, err
-	}
-	var siteControlMode string
-	var hasAssetLock bool
-	if err = tx.QueryRow(ctx, `
-SELECT COALESCE((
-  SELECT mode FROM core_registry.site_control_states
-  WHERE tenant_id=$1::uuid AND site_id=$2::uuid
-), 'REMOTE_AUTO'),
-EXISTS (
-  SELECT 1 FROM core_registry.asset_control_locks
-  WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND lock_mode <> 'UNLOCKED'
-)`, request.TenantID, request.SiteID).Scan(&siteControlMode, &hasAssetLock); err != nil {
-		return PreparationDefinition{}, err
-	}
-	if lockMessage, locked := controlLockBlockMessage(siteControlMode, hasAssetLock); locked {
-		_ = tx.Rollback(ctx)
-		if suppressErr := store.suppressLockedDraftRecommendations(ctx, request.TenantID, request.SiteID, at); suppressErr != nil {
-			return PreparationDefinition{}, suppressErr
-		}
-		return PreparationDefinition{}, unavailable(ReasonMaintenanceActive, "%s", lockMessage)
-	}
-	scheduleCtx, err := loadOperatingScheduleContext(ctx, tx, request.TenantID, request.SiteID, at.UTC())
-	if err != nil {
-		return PreparationDefinition{}, err
-	}
-	localDate := siteLocalDateString(definition.SiteTimezone, at.UTC())
-	if todayExc := findApprovedExceptionForDate(scheduleCtx.ApprovedExceptions, localDate); todayExc != nil {
-		if blockMessage, blocked := operatingExceptionBlockMessage(todayExc.Kind, todayExc.Title, todayExc.StartDate, todayExc.EndDate, todayExc.Reason); blocked {
-			_ = tx.Rollback(ctx)
-			if suppressErr := store.suppressLockedDraftRecommendations(ctx, request.TenantID, request.SiteID, at); suppressErr != nil {
-				return PreparationDefinition{}, suppressErr
-			}
-			return PreparationDefinition{}, unavailable(ReasonMaintenanceActive, "%s", blockMessage)
-		}
-	}
-	if scheduleMessage, blocked := operatingScheduleWindowBlockMessage(scheduleCtx, at.UTC()); blocked {
-		return PreparationDefinition{}, unavailable(ReasonMaintenanceActive, "%s", scheduleMessage)
+	definition := PreparationDefinition{
+		SiteTimezone: twin.Timezone,
 	}
 	var policyCount int
 	err = tx.QueryRow(ctx, `SELECT
@@ -80,7 +71,7 @@ WHERE pv.tenant_id=$1::uuid
   AND pv.effective_from <= $2
   AND (pv.effective_to IS NULL OR pv.effective_to > $2)
 ORDER BY pv.effective_from DESC,pv.version DESC
-LIMIT 1`, request.TenantID, at.UTC()).Scan(
+LIMIT 1`, request.TenantID, evalAt).Scan(
 		&definition.PolicyVersionID, &definition.Objective, &definition.Horizon, &definition.HorizonMinutes,
 		&definition.Granularity, &definition.PolicyConstraints, &policyCount,
 	)
@@ -93,11 +84,14 @@ LIMIT 1`, request.TenantID, at.UTC()).Scan(
 	if policyCount != 1 {
 		return PreparationDefinition{}, unavailable(ReasonPolicyMissing, "effective Optimization policy mapping is ambiguous")
 	}
-	telemetryKeys, err := extractConfiguredTelemetryKeys(definition.PolicyConstraints)
+	mapping, telemetryKeys, err := resolvePreparationTelemetryKeys(definition.PolicyConstraints, twin)
 	if err != nil {
 		return PreparationDefinition{}, err
 	}
-	if err = checkTelemetryPointHealth(ctx, tx, request.TenantID, request.SiteID, telemetryKeys); err != nil {
+	if mapping != nil {
+		definition.ResolvedInputMapping = mapping
+	}
+	if err = checkTelemetryPointHealth(ctx, tx, request.SiteID, twinDeviceUUIDs(twin), telemetryKeys); err != nil {
 		return PreparationDefinition{}, err
 	}
 
@@ -421,119 +415,123 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND approval_state='DRAFT' AND com
 
 const preparationPreShutdownBuffer = 30 * time.Minute
 
-type scheduleTimeInterval struct {
-	start time.Time
-	end   time.Time
+func evaluateTwinScheduleAt(twin planttwin.SiteTwin, at time.Time) (planttwin.ScheduleEvaluation, error) {
+	sched := twin.Schedule
+	if strings.TrimSpace(sched.Timezone) == "" {
+		sched.Timezone = firstNonEmptyString(twin.Timezone, "UTC")
+	}
+	return planttwin.EvaluateOperatingSchedule(at.UTC(), sched)
 }
 
-func operatingScheduleWindowBlockMessage(schedule *OperatingScheduleContext, at time.Time) (string, bool) {
-	if schedule == nil {
-		return "", false
+func preparationScheduleBlockMessage(twin planttwin.SiteTwin, at time.Time) (string, bool, bool) {
+	evalNow, err := evaluateTwinScheduleAt(twin, at)
+	if err != nil {
+		return fmt.Sprintf("operating schedule evaluation failed: %v", err), true, false
 	}
-	loc := loadSiteLocation(schedule.SiteTimezone)
-	atLocal := at.In(loc)
-	day0 := time.Date(atLocal.Year(), atLocal.Month(), atLocal.Day(), 0, 0, 0, 0, loc)
-	todayStr := day0.Format("2006-01-02")
-
-	todayExc := findApprovedExceptionForDate(schedule.ApprovedExceptions, todayStr)
-	if todayExc != nil {
-		if blockMessage, blocked := operatingExceptionBlockMessage(todayExc.Kind, todayExc.Title, todayExc.StartDate, todayExc.EndDate, todayExc.Reason); blocked {
-			return blockMessage, true
-		}
-	}
-
-	hasOvertimeToday := todayExc != nil && strings.EqualFold(strings.TrimSpace(todayExc.Kind), "OVERTIME_COOLING")
-	if !schedule.Configured || (len(schedule.Slots) == 0 && !hasOvertimeToday) {
-		return "", false
-	}
-
-	lead := time.Duration(max(0, schedule.PreCoolLeadMinutes)) * time.Minute
-	var intervals []scheduleTimeInterval
-	addSlot := func(dayStart time.Time, startMinute, endMinute int) {
-		if endMinute <= startMinute {
-			return
-		}
-		intervals = append(intervals, scheduleTimeInterval{
-			start: dayStart.Add(time.Duration(startMinute)*time.Minute - lead),
-			end:   dayStart.Add(time.Duration(endMinute) * time.Minute),
-		})
-	}
-
-	if hasOvertimeToday {
-		for _, slot := range todayExc.ReplacementSlots {
-			addSlot(day0, slot.StartMinute, slot.EndMinute)
-		}
-	} else {
-		for _, d := range []time.Time{day0.AddDate(0, 0, -1), day0, day0.AddDate(0, 0, 1)} {
-			exc := findApprovedExceptionForDate(schedule.ApprovedExceptions, d.Format("2006-01-02"))
-			if exc != nil {
-				kind := strings.ToUpper(strings.TrimSpace(exc.Kind))
-				if kind == "HOLIDAY_SHUTDOWN" || kind == "MAINTENANCE_WINDOW" {
-					continue
-				}
-				if kind == "OVERTIME_COOLING" {
-					for _, slot := range exc.ReplacementSlots {
-						addSlot(d, slot.StartMinute, slot.EndMinute)
-					}
-					continue
-				}
-			}
-			dow := isoWeekdayNumber(d.Weekday())
-			for _, slot := range schedule.Slots {
-				if slot.DayOfWeek == dow {
-					addSlot(d, slot.StartMinute, slot.EndMinute)
-				}
+	if evalNow.Suppressed {
+		if evalNow.ActiveException != nil {
+			exc := *evalNow.ActiveException
+			if msg, blocked := operatingExceptionBlockMessage(exc.Kind, exc.Title, exc.StartDate, exc.EndDate, exc.Reason); blocked {
+				return msg, true, true
 			}
 		}
+		return fmt.Sprintf("operating schedule %s (%s) suppresses automated optimization", evalNow.LocalDate, evalNow.Reason), true, true
 	}
-
-	if len(intervals) == 0 {
-		return fmt.Sprintf("operating schedule %s (%s) is outside active cooling hours", todayStr, loc.String()), true
+	if evalNow.OperatingState == planttwin.OperatingStateUnconfigured {
+		return "", false, false
 	}
-	sort.Slice(intervals, func(i, j int) bool {
-		if !intervals[i].start.Equal(intervals[j].start) {
-			return intervals[i].start.Before(intervals[j].start)
-		}
-		return intervals[i].end.Before(intervals[j].end)
-	})
-	merged := make([]scheduleTimeInterval, 0, len(intervals))
-	for _, iv := range intervals {
-		if len(merged) == 0 || iv.start.After(merged[len(merged)-1].end) {
-			merged = append(merged, iv)
-			continue
-		}
-		if iv.end.After(merged[len(merged)-1].end) {
-			merged[len(merged)-1].end = iv.end
-		}
+	locName := "UTC"
+	if evalNow.LocalTime.Location() != nil {
+		locName = evalNow.LocalTime.Location().String()
 	}
-	for _, iv := range merged {
-		cutoffEnd := iv.end.Add(-preparationPreShutdownBuffer)
-		if !atLocal.Before(iv.start) && atLocal.Before(cutoffEnd) {
-			return "", false
-		}
+	if !evalNow.InBaseSlot && !evalNow.InPreCool {
+		return fmt.Sprintf("operating schedule %s (%s) is outside active cooling hours", evalNow.LocalDate, locName), true, false
 	}
-	return fmt.Sprintf("operating schedule %s (%s) suppresses setpoint optimization outside active cooling window or within 30m of slot end", todayStr, loc.String()), true
+	evalFuture, err := evaluateTwinScheduleAt(twin, at.UTC().Add(preparationPreShutdownBuffer))
+	if err != nil {
+		return fmt.Sprintf("operating schedule lookahead evaluation failed: %v", err), true, false
+	}
+	if evalFuture.Suppressed || (!evalFuture.InBaseSlot && !evalFuture.InPreCool) {
+		return fmt.Sprintf("operating schedule %s (%s) suppresses setpoint optimization outside active cooling window or within 30m of slot end", evalNow.LocalDate, locName), true, false
+	}
+	return "", false, false
 }
 
-func extractConfiguredTelemetryKeys(raw json.RawMessage) ([]string, error) {
+func resolvePreparationTelemetryKeys(raw json.RawMessage, twin planttwin.SiteTwin) (*InputMapping, []string, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var parsed struct {
 		InputMapping InputMapping `json:"inputMapping"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, unavailable(ReasonPolicyUnsupported, "invalid optimization policy constraints JSON: %v", err)
+		return nil, nil, unavailable(ReasonPolicyUnsupported, "invalid optimization policy constraints JSON: %v", err)
 	}
-	keys := make([]string, 0, 1+len(parsed.InputMapping.effectiveZoneKeys()))
-	if supply := strings.TrimSpace(parsed.InputMapping.SupplyTemperatureKey); supply != "" {
+	resolved := resolveInputMappingWithTwin(parsed.InputMapping, &twin)
+	keys := make([]string, 0, 1+len(resolved.effectiveZoneKeys()))
+	if supply := strings.TrimSpace(resolved.SupplyTemperatureKey); supply != "" {
 		keys = append(keys, supply)
 	}
-	keys = append(keys, parsed.InputMapping.effectiveZoneKeys()...)
-	return keys, nil
+	keys = append(keys, resolved.effectiveZoneKeys()...)
+	return &resolved, keys, nil
 }
 
-func checkTelemetryPointHealth(ctx context.Context, tx pgx.Tx, tenantID, siteID string, telemetryKeys []string) error {
+func resolveInputMappingWithTwin(mapping InputMapping, twin *planttwin.SiteTwin) InputMapping {
+	if twin == nil {
+		return mapping
+	}
+	if supplyPts := resolvePrimaryPlantRolePoints(*twin, planttwin.RoleSupplyWaterTemp); len(supplyPts) > 0 {
+		if strings.TrimSpace(mapping.SupplyTemperatureKey) == "" || !twinHasTelemetryKey(*twin, mapping.SupplyTemperatureKey) {
+			mapping.SupplyTemperatureKey = firstNonEmptyString(supplyPts[0].WireSourceKey, supplyPts[0].PointCode)
+		}
+	}
+	if zonePts := resolvePrimaryPlantRolePoints(*twin, planttwin.RoleZoneTemp); len(zonePts) > 0 {
+		configuredZones := mapping.effectiveZoneKeys()
+		matchedAny := false
+		for _, k := range configuredZones {
+			if twinHasTelemetryKey(*twin, k) {
+				matchedAny = true
+				break
+			}
+		}
+		if len(configuredZones) == 0 || !matchedAny {
+			resolvedZones := make([]string, 0, len(zonePts))
+			for _, pb := range zonePts {
+				appendUniqueString(&resolvedZones, firstNonEmptyString(pb.WireSourceKey, pb.PointCode))
+			}
+			if len(resolvedZones) > 0 {
+				mapping.ZoneTemperatureKey = resolvedZones[0]
+				mapping.ZoneTemperatureKeys = resolvedZones
+			}
+		}
+	}
+	return mapping
+}
+
+func twinHasTelemetryKey(twin planttwin.SiteTwin, key string) bool {
+	target := strings.TrimSpace(key)
+	if target == "" {
+		return false
+	}
+	for _, pb := range twin.PointBindings {
+		if strings.TrimSpace(pb.WireSourceKey) == target || strings.TrimSpace(pb.PointCode) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func twinDeviceUUIDs(twin planttwin.SiteTwin) []string {
+	ids := make([]string, 0, len(twin.Devices))
+	for _, dev := range twin.Devices {
+		if uuidPattern.MatchString(strings.TrimSpace(dev.DeviceID)) {
+			ids = append(ids, dev.DeviceID)
+		}
+	}
+	return ids
+}
+
+func checkTelemetryPointHealth(ctx context.Context, tx pgx.Tx, siteID string, twinDeviceIDs, telemetryKeys []string) error {
 	if len(telemetryKeys) == 0 {
 		return nil
 	}
@@ -556,13 +554,12 @@ SELECT CASE
 END`).Scan(&latestReadable); err != nil {
 		return err
 	}
-	if latestReadable {
+	if latestReadable && len(twinDeviceIDs) > 0 {
 		rows, err := tx.Query(ctx, `
 SELECT lat.telemetry_key, COALESCE(lat.health_status, ''), COALESCE(lat.health_reasons, '{}')
 FROM telemetry_runtime.latest_accepted_telemetry lat
-JOIN core_registry.devices d
-  ON d.tenant_id = $1::uuid AND d.site_id = $2::uuid AND d.id = lat.device_id
-WHERE lat.telemetry_key = ANY($3::text[])`, tenantID, siteID, telemetryKeys)
+WHERE lat.device_id = ANY($1::uuid[])
+  AND lat.telemetry_key = ANY($2::text[])`, twinDeviceIDs, telemetryKeys)
 		if err != nil {
 			return err
 		}

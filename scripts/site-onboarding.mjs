@@ -37,6 +37,18 @@ import {
   validateQualityProfileExtensions,
   validateSiteQualityAdditions,
 } from './lib/site-onboarding-quality.ts';
+import {
+  ASSET_RELATIONSHIP_ROLES,
+  SEMANTIC_ROLES,
+  SUBJECT_BINDING_LIFECYCLE,
+  buildAssetRelationshipsSql,
+  buildPointSubjectBindingsSql,
+  planPlantTwinOnboarding,
+  plantTwinStateSqlFields,
+  validatePlantTwinFields,
+} from './lib/site-onboarding-twin.ts';
+
+export { ASSET_RELATIONSHIP_ROLES, SEMANTIC_ROLES, SUBJECT_BINDING_LIFECYCLE };
 
 const sqlLiteral = (value) => `'${String(value).replaceAll("'", "''")}'`;
 const sqlJson = (value) => `${sqlLiteral(JSON.stringify(value))}::jsonb`;
@@ -330,17 +342,6 @@ export function pointStatus(point) {
   return status;
 }
 
-// How a rerun moves an existing point_subject_bindings row to the point's status (EXCLUDED.status).
-// Active: valid_to is cleared, and a binding that was closed starts a new validity period now.
-// Inactive or retired: a current binding is closed now; one that was already closed keeps its end.
-// A row first inserted inactive has valid_to NULL; its status alone keeps it out of current reads.
-// valid_to stays after valid_from (CHECK valid_to > valid_from).
-export const SUBJECT_BINDING_LIFECYCLE = [
-  ['status', `EXCLUDED.status`],
-  ['valid_from', `CASE WHEN EXCLUDED.status = 'ACTIVE' AND (point_subject_bindings.status <> 'ACTIVE' OR point_subject_bindings.valid_to IS NOT NULL) THEN clock_timestamp() ELSE point_subject_bindings.valid_from END`],
-  ['valid_to', `CASE WHEN EXCLUDED.status = 'ACTIVE' THEN NULL WHEN point_subject_bindings.status = 'ACTIVE' AND point_subject_bindings.valid_to IS NULL THEN GREATEST(clock_timestamp(), point_subject_bindings.valid_from + interval '1 millisecond') ELSE point_subject_bindings.valid_to END`],
-];
-
 // The ON CONFLICT action of a rerun: each [column, value] pair is written only when some value
 // differs from the row, so a rerun with an unchanged site file leaves the row, its updated_at and
 // its revision as they are. A Registry row that does change gets revision + 1, as every Registry
@@ -423,12 +424,15 @@ export function buildOnboardingSql(profile, options = {}) {
   // status, so a point the site file marks INACTIVE (no probe wired) is not a current binding.
   // Existing rows keep their id; new points get a device-scoped fallback id so adding a point to
   // an earlier device never shifts later devices' binding ids.
-  const subjectRows = points.map((point) => {
-    const asset = point.asset ?? point.device.asset;
-    const fallbackId = rowId(site.id, '6300', point.device.deviceIndex * 0x10000 + point.pointIndex + 1);
-    const bindingRole = point.pointType === 'COMMAND' ? "'CONTROLS'" : "'DESCRIBES'";
-    return `  (${sqlLiteral(fallbackId)}, ${tenant}, ${siteId}, ${sqlLiteral(point.id)}, ${asset ? "'ASSET'" : "'SITE'"}, NULL, ${asset ? sqlLiteral(asset) : 'NULL'}, ${bindingRole}, ${sqlLiteral(pointStatus(point))}, clock_timestamp(), NULL, 1, clock_timestamp(), clock_timestamp())`;
-  }).join(',\n');
+  const assetRelationshipsSql = buildAssetRelationshipsSql(profile, {
+    rowId,
+    updateWhenChanged,
+  });
+  const pointSubjectBindingsSql = buildPointSubjectBindingsSql(profile, points, {
+    rowId,
+    pointStatus,
+    updateWhenChanged,
+  });
 
   const revisionCheckSql = buildOnboardingRevisionCheckSql(siteId, options?.expectedSiteRevision);
 
@@ -450,8 +454,7 @@ ON CONFLICT (id) ${updateWhenChanged('assets', [...fromFile('code', 'display_nam
 INSERT INTO core_registry.asset_space_bindings (id, tenant_id, site_id, asset_id, space_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at) VALUES
 ${assetPlacementRows}
 ON CONFLICT (id) ${updateWhenChanged('asset_space_bindings', [...fromFile('asset_id', 'space_id'), ...CURRENT])};
-` : ''}
-INSERT INTO core_registry.devices (id, site_id, code, display_name, device_type, status, revision, created_at, updated_at, tenant_id, product_id, template_version_id) VALUES
+` : ''}${assetRelationshipsSql}INSERT INTO core_registry.devices (id, site_id, code, display_name, device_type, status, revision, created_at, updated_at, tenant_id, product_id, template_version_id) VALUES
 ${deviceRows}
 ON CONFLICT (id) ${updateWhenChanged('devices', [...fromFile('code', 'display_name', 'device_type'), ...ACTIVE])};
 
@@ -471,13 +474,7 @@ INSERT INTO core_registry.telemetry_points (id, tenant_id, site_id, reporting_de
 ${pointRows}
 ON CONFLICT (id) ${updateWhenChanged('telemetry_points', fromFile('point_code', 'source_key', 'display_name', 'point_type', 'value_type', 'unit', 'writable', 'sample_interval_ms', 'publish_interval_ms', 'stale_after_ms', 'source_metadata', 'counter_decrease_mode', 'status'))};
 
-INSERT INTO core_registry.point_subject_bindings (id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at)
-SELECT COALESCE((SELECT existing.id FROM core_registry.point_subject_bindings existing WHERE existing.tenant_id = v.tenant_id::uuid AND existing.site_id = v.site_id::uuid AND existing.point_id = v.point_id::uuid AND existing.binding_role = v.binding_role ORDER BY existing.created_at LIMIT 1), v.id::uuid),
-  v.tenant_id::uuid, v.site_id::uuid, v.point_id::uuid, v.subject_type, v.space_id::uuid, v.asset_id::uuid, v.binding_role, v.status, v.valid_from, v.valid_to::timestamptz, v.revision::bigint, v.created_at, v.updated_at
-FROM (VALUES
-${subjectRows}
-) AS v(id, tenant_id, site_id, point_id, subject_type, space_id, asset_id, binding_role, status, valid_from, valid_to, revision, created_at, updated_at)
-ON CONFLICT (id) ${updateWhenChanged('point_subject_bindings', [...fromFile('point_id', 'subject_type', 'space_id', 'asset_id'), ...SUBJECT_BINDING_LIFECYCLE])};
+${pointSubjectBindingsSql}
 
 ${buildOnboardingAuditOutboxEmitSql(tenant, siteId, principal)}
 COMMIT;`;
@@ -968,6 +965,7 @@ export function checkSiteFile(profile, alarmRules = null) {
       }
     }
   }
+  validatePlantTwinFields(profile, devices, problems);
   validateSiteQualityAdditions(profile, devices, activePoints, devicesByCode, pointQuality, problems);
   for (const asset of profile.assets ?? []) {
     if (asset.nameplate == null) continue;
@@ -1083,6 +1081,7 @@ SELECT json_build_object(
   'devices', (SELECT coalesce(json_object_agg(id, status), '{}') FROM core_registry.devices WHERE site_id = ${st}),
   'points', (SELECT coalesce(json_object_agg(id, status), '{}') FROM core_registry.telemetry_points WHERE site_id = ${st}),
   'assets', (SELECT coalesce(json_object_agg(id, status), '{}') FROM core_registry.assets WHERE site_id = ${st}),
+${plantTwinStateSqlFields(t, st)}
   'schedules', (SELECT coalesce(json_object_agg(schedule_code, json_build_object('jobType', job_type, 'cron', cron_expression, 'enabled', enabled, 'payload', payload_template)), '{}') FROM core_registry.schedule_definitions WHERE tenant_id = ${t} AND site_id = ${st}),
   'topology', EXISTS (SELECT 1 FROM core_registry.energy_topology_versions WHERE site_id = ${st} AND status = 'ACTIVE'),
   'synthesizedTotal', EXISTS (SELECT 1 FROM core_registry.virtual_meters WHERE site_id = ${st} AND virtual_meter_code = 'site_total_electricity' AND status IN ('RELEASED', 'ACTIVE')),
@@ -1118,6 +1117,7 @@ export function planOnboarding(profile, state) {
   const missingPoints = points.filter((point) => !state.points[point.id]);
   const statusPoints = points.filter((point) => state.points[point.id] && state.points[point.id] !== pointStatus(point));
   add('点位', missingPoints.length ? 'missing' : statusPoints.length ? 'differs' : 'ok', `点位 ${points.length} 个`, [...missingPoints.map((point) => `缺 ${point.device.code}/${point.code}`), ...statusPoints.map((point) => `${point.device.code}/${point.code} 应为 ${pointStatus(point)}`)].join('；'));
+  planPlantTwinOnboarding(profile, points, state, rowId, pointStatus, add);
 
   if (profile.energy) {
     add('能耗和负荷预测', state.topology ? 'ok' : 'missing', '能耗拓扑（已发布）');
