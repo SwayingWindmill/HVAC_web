@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
+import { GatewayPacketCaptureSection, GatewayQuarantineSection } from './GatewayDiagnosticsSections';
 import { gatewayCredentialApi, gatewayCredentialKey, gatewayCredentialListKey } from './gateway-credentials';
 
 type CredentialState = GatewayCredentialStatus['status'];
@@ -84,7 +85,7 @@ export function GatewaySheet({ gateway, siteName, csrfToken, canWrite, onClose }
 }) {
   return (
     <Sheet open={Boolean(gateway)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent className="overflow-y-auto data-[side=right]:sm:max-w-[480px]">
+      <SheetContent className="overflow-y-auto data-[side=right]:sm:max-w-[640px]">
         {gateway ? <GatewayDetail key={gateway.id} gateway={gateway} siteName={siteName} csrfToken={csrfToken} canWrite={canWrite} /> : null}
       </SheetContent>
     </Sheet>
@@ -440,6 +441,10 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite }: {
           </div>
         )}
       </section>
+
+      <GatewayPacketCaptureSection gatewayId={gateway.id} csrfToken={csrfToken} canWrite={canWrite} />
+
+      <GatewayQuarantineSection gatewayId={gateway.id} />
 
       <section aria-label="危险操作" className="flex flex-col gap-3 px-6 py-4">
         <h3 className="text-sm font-semibold">危险操作</h3>
