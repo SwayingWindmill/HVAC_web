@@ -115,10 +115,6 @@ type RuleReading struct {
 	PointCode string `json:"pointCode"`
 }
 
-func siteRuleView(rule SiteRule) (SiteRuleView, error) {
-	return siteRuleViewWithHopDepth(rule, 0)
-}
-
 func siteRuleViewWithHopDepth(rule SiteRule, hopDepth int) (SiteRuleView, error) {
 	raise, err := ruleCondition(rule.Policy.Raise)
 	if err != nil {
@@ -263,7 +259,7 @@ func (handler *httpHandler) simulateSiteRule(writer http.ResponseWriter, request
 	}
 	report, err := ValidateSiteRuleGraph(rules)
 	if err != nil {
-		handler.writeProblem(writer, http.StatusBadRequest, "RULE_GRAPH_INVALID", "Rule dependency graph invalid", fmt.Sprintf("Site rule causal DAG validation failed: %v", err), false)
+		handler.writeProblem(writer, http.StatusBadGateway, "ALARM_RESPONSE_INVALID", "Alarm response invalid", "Site rules contain an invalid dependency graph.", false)
 		return
 	}
 	policy, err := simulationPolicyForRule(*target)
@@ -281,6 +277,10 @@ func (handler *httpHandler) simulateSiteRule(writer http.ResponseWriter, request
 	}
 	stepsOut := make([]SiteRuleSimulationStep, 0, len(input.Steps))
 	for idx, stepIn := range input.Steps {
+		if stepIn.Readings == nil {
+			handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "Each simulation step must provide a readings array.", false)
+			return
+		}
 		if len(stepIn.Readings) > maxSimulateStepReadings {
 			handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "Each simulation step accepts at most 64 readings.", false)
 			return
@@ -302,7 +302,7 @@ func (handler *httpHandler) simulateSiteRule(writer http.ResponseWriter, request
 
 		inputs := make(map[string]InputFact, len(stepIn.Readings))
 		for _, sample := range stepIn.Readings {
-			if !alarmmodel.IsUUIDv7(sample.DeviceID) || !boundedText(sample.PointCode, 128) {
+			if !alarmmodel.IsUUIDv7(sample.DeviceID) || !validRulePointCode(sample.PointCode) {
 				handler.writeProblem(writer, http.StatusBadRequest, "ALARM_REQUEST_INVALID", "Alarm request invalid", "Simulation reading deviceId or pointCode is invalid.", false)
 				return
 			}
@@ -449,9 +449,13 @@ func simulationTypedValue(raw any) (TypedValue, bool) {
 	}
 }
 
+func validRulePointCode(pointCode string) bool {
+	return pointCode != "" && strings.TrimSpace(pointCode) == pointCode && len(pointCode) <= 128
+}
+
 func validSimulationQuality(quality string) bool {
 	switch quality {
-	case "GOOD", "UNCERTAIN", "SUSPECT", "STALE", "BAD", "INVALID":
+	case "GOOD", "PARTIAL", "ESTIMATED", "MANUAL", "STALE", "INVALID":
 		return true
 	default:
 		return false
@@ -495,19 +499,9 @@ func simulationStepReasons(policy AlarmPolicyRevision, decision EvaluationDecisi
 	return reasons
 }
 
-// matchSiteRulesPath matches /internal/v1/sites/{siteId}/alarm-rules.
-func matchSiteRulesPath(path string) (string, bool) {
+func matchSiteRuleSubpath(path, leaf string) (string, bool) {
 	segments := strings.Split(strings.Trim(path, "/"), "/")
-	if len(segments) != 5 || segments[0] != "internal" || segments[1] != "v1" || segments[2] != "sites" || segments[4] != "alarm-rules" {
-		return "", false
-	}
-	return segments[3], true
-}
-
-// matchSiteRulesSimulatePath matches /internal/v1/sites/{siteId}/alarm-rules:simulate.
-func matchSiteRulesSimulatePath(path string) (string, bool) {
-	segments := strings.Split(strings.Trim(path, "/"), "/")
-	if len(segments) != 5 || segments[0] != "internal" || segments[1] != "v1" || segments[2] != "sites" || segments[4] != "alarm-rules:simulate" {
+	if len(segments) != 5 || segments[0] != "internal" || segments[1] != "v1" || segments[2] != "sites" || segments[4] != leaf {
 		return "", false
 	}
 	return segments[3], true
@@ -537,18 +531,8 @@ func (list SiteRuleList) Validate() error {
 				return errors.New("site rule overridden field is invalid")
 			}
 		}
-		if len(rule.DependsOnRuleIDs) > 16 {
-			return errors.New("site rule dependsOnRuleIds exceed maximum")
-		}
-		seenDeps := make(map[string]struct{}, len(rule.DependsOnRuleIDs))
-		for _, depID := range rule.DependsOnRuleIDs {
-			if !alarmmodel.IsUUIDv7(depID) || depID == rule.RuleID {
-				return errors.New("site rule dependency ruleId is invalid")
-			}
-			if _, duplicate := seenDeps[depID]; duplicate {
-				return errors.New("site rule dependency ruleId is duplicated")
-			}
-			seenDeps[depID] = struct{}{}
+		if err := validateRuleDependencies(rule.RuleID, rule.DependsOnRuleIDs); err != nil {
+			return err
 		}
 		if rule.HopDepth < 0 || rule.HopDepth > rulegraph.MaxLinkageHops {
 			return errors.New("site rule hopDepth is invalid")
@@ -577,13 +561,8 @@ func (result SiteRuleSimulationResult) Validate(expectedRuleID string) error {
 	if result.HopDepth < 0 || result.HopDepth > rulegraph.MaxLinkageHops {
 		return errors.New("site rule simulation hopDepth is invalid")
 	}
-	if len(result.DependsOnRuleIDs) > 16 {
-		return errors.New("site rule simulation dependencies exceed maximum")
-	}
-	for _, depID := range result.DependsOnRuleIDs {
-		if !alarmmodel.IsUUIDv7(depID) || depID == result.RuleID {
-			return errors.New("site rule simulation dependency is invalid")
-		}
+	if err := validateRuleDependencies(result.RuleID, result.DependsOnRuleIDs); err != nil {
+		return err
 	}
 	if len(result.Steps) == 0 || len(result.Steps) > maxSimulateSteps {
 		return errors.New("site rule simulation steps out of bounds")
@@ -627,7 +606,7 @@ func (condition RuleCondition) validate() error {
 		}
 		exprInputs := make(map[string]string, len(condition.Inputs))
 		for alias, reading := range condition.Inputs {
-			if !alarmmodel.IsUUIDv7(reading.DeviceID) || !boundedText(reading.PointCode, 128) {
+			if !alarmmodel.IsUUIDv7(reading.DeviceID) || !validRulePointCode(reading.PointCode) {
 				return errors.New("site rule condition reading is invalid")
 			}
 			exprInputs[alias] = reading.DeviceID + "/" + reading.PointCode
@@ -637,7 +616,7 @@ func (condition RuleCondition) validate() error {
 		}
 		return nil
 	}
-	if condition.Reading == nil || !alarmmodel.IsUUIDv7(condition.Reading.DeviceID) || !boundedText(condition.Reading.PointCode, 128) || len(condition.Children) != 0 {
+	if condition.Reading == nil || !alarmmodel.IsUUIDv7(condition.Reading.DeviceID) || !validRulePointCode(condition.Reading.PointCode) || len(condition.Children) != 0 {
 		return errors.New("site rule condition reading is invalid")
 	}
 	valid := false

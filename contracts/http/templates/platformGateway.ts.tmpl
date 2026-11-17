@@ -689,7 +689,7 @@ export const alarmRuleSimulationReadingSchema = z.object({
   deviceId: uuidV7Schema,
   pointCode: z.string().min(1).max(128),
   value: z.union([z.number(), z.string(), z.boolean()]),
-  quality: z.enum(['GOOD', 'UNCERTAIN', 'SUSPECT', 'STALE', 'BAD', 'INVALID']).optional(),
+  quality: z.enum(['GOOD', 'PARTIAL', 'ESTIMATED', 'MANUAL', 'STALE', 'INVALID']).optional(),
   observedAt: z.string().min(1).max(64).optional(),
 }).strict();
 export const alarmRuleSimulationStepInputSchema = z.object({

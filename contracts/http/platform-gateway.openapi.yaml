@@ -4495,7 +4495,7 @@
           "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
           "pointCode": { "type": "string", "minLength": 1, "maxLength": 128 },
           "value": { "type": ["number", "string", "boolean"] },
-          "quality": { "type": "string", "enum": ["GOOD", "UNCERTAIN", "SUSPECT", "STALE", "BAD", "INVALID"] },
+          "quality": { "type": "string", "enum": ["GOOD", "PARTIAL", "ESTIMATED", "MANUAL", "STALE", "INVALID"] },
           "observedAt": { "type": "string", "minLength": 1, "maxLength": 64 }
         }
       },

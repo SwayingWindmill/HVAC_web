@@ -192,7 +192,7 @@ export function AlarmRuleSimulateSheet({
 
   return (
     <Sheet open={rule !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-[560px]">
+      <SheetContent side="right" className="w-full overflow-y-auto data-[side=right]:sm:max-w-[640px]">
         <SheetHeader className="border-b border-divider">
           <SheetTitle>{rule ? `规则模拟试算：${rule.title}` : '规则模拟试算'}</SheetTitle>
           <SheetDescription>
@@ -232,11 +232,11 @@ export function AlarmRuleSimulateSheet({
                   key={`sim-step-${stepIndex}`}
                   className="flex flex-col gap-3 rounded-lg border border-divider bg-background/60 p-3"
                 >
-                  <div className="flex items-center justify-between">
-                    <legend className="text-xs font-semibold text-foreground">
-                      第 {stepIndex + 1} 步采样
-                    </legend>
-                    {steps.length > 1 ? (
+                  <legend className="px-1 text-xs font-semibold text-foreground">
+                    第 {stepIndex + 1} 步采样
+                  </legend>
+                  {steps.length > 1 ? (
+                    <div className="flex justify-end">
                       <Button
                         type="button"
                         variant="ghost"
@@ -248,8 +248,8 @@ export function AlarmRuleSimulateSheet({
                         <Trash2 className="size-3.5" aria-hidden="true" />
                         移除
                       </Button>
-                    ) : null}
-                  </div>
+                    </div>
+                  ) : null}
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     {readings.map((reading) => {
                       const key = readingKey(reading);
@@ -264,8 +264,8 @@ export function AlarmRuleSimulateSheet({
                         ? `${devName} · ${point.name}（${displayUnit}）`
                         : `${devName} · ${point.name}`;
                       return (
-                        <div key={key} className="flex flex-col justify-between gap-1.5">
-                          <Label htmlFor={inputId} className="text-xs leading-snug text-foreground">
+                        <div key={key} className="flex flex-col gap-1.5">
+                          <Label htmlFor={inputId} className="min-h-8 items-end text-xs leading-snug text-foreground">
                             {labelText}
                           </Label>
                           <Input
@@ -275,7 +275,9 @@ export function AlarmRuleSimulateSheet({
                             aria-describedby={errMsg ? errId : undefined}
                             onChange={(e) => handleFieldChange(stepIndex, key, e.target.value)}
                             onKeyDown={(e) => {
-                              if (e.nativeEvent.isComposing) return;
+                              if (e.key === 'Enter' && (e.nativeEvent.isComposing || e.keyCode === 229)) {
+                                e.preventDefault();
+                              }
                             }}
                           />
                           {errMsg ? (
@@ -306,7 +308,7 @@ export function AlarmRuleSimulateSheet({
               <section className="flex flex-col gap-2" aria-label="试算结果明细区">
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-medium text-foreground">逐步推演结果</span>
-                  <span className={cn(result.finalActive ? 'font-medium text-warning' : 'text-muted-foreground')}>
+                  <span className={cn(result.finalActive ? 'font-medium text-warning-text' : 'text-muted-foreground')}>
                     最终状态：{result.finalActive ? '告警保持活动' : '未触发 / 已恢复'}
                   </span>
                 </div>

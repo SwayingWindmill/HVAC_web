@@ -1352,7 +1352,7 @@ export class Gateway {
         return { status: 403, body: { type: 'about:blank', title: 'Forbidden', status: 403, detail: 'CSRF token required.', instance: path, code: 'CSRF_INVALID', traceId: '0'.repeat(32), retryable: false } };
       }
       if (query.get('siteId') !== SITE_ID) {
-        return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Site not found.', instance: path, code: 'RESOURCE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
+        return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Site not found.', instance: path, code: 'SITE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
       }
       const rule = this.alarmRules.find((candidate) => candidate.ruleId === body?.ruleId);
       if (!rule) {
@@ -1406,6 +1406,7 @@ export class Gateway {
             active = false;
             matchedReasons.push('满足恢复条件');
           } else {
+            status = active ? 'MATCHED' : 'NOT_MATCHED';
             matchedReasons.push(active ? '告警保持活动' : '未触发告警条件');
           }
         }

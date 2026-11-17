@@ -299,6 +299,7 @@ const RULE_KIND_LABELS: Readonly<Record<NonNullable<AlarmRule['ruleKind']>, stri
 };
 
 const OVERRIDDEN_FIELD_LABELS: Readonly<Record<string, string>> = {
+  ruleKind: '规则类型',
   title: '名称',
   summary: '说明',
   severity: '严重程度',

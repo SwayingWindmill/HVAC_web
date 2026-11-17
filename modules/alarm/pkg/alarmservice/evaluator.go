@@ -558,18 +558,8 @@ func (policy AlarmPolicyRevision) Validate() error {
 			return errors.New("alarm policy overridden field is invalid")
 		}
 	}
-	if len(policy.DependsOnRuleIDs) > 16 {
-		return errors.New("alarm policy dependencies exceed maximum")
-	}
-	seenDeps := make(map[string]struct{}, len(policy.DependsOnRuleIDs))
-	for _, depID := range policy.DependsOnRuleIDs {
-		if !alarmmodel.IsUUIDv7(depID) || depID == policy.PolicyID {
-			return errors.New("alarm policy dependency rule id is invalid")
-		}
-		if _, duplicate := seenDeps[depID]; duplicate {
-			return errors.New("alarm policy dependency rule id is duplicated")
-		}
-		seenDeps[depID] = struct{}{}
+	if err := validateRuleDependencies(policy.PolicyID, policy.DependsOnRuleIDs); err != nil {
+		return err
 	}
 	if policy.QualityPolicy != EvaluationQualityValidOnly && policy.QualityPolicy != EvaluationQualityUsable || policy.FreshnessSeconds <= 0 {
 		return errors.New("alarm policy quality gate is invalid")
@@ -607,18 +597,18 @@ func (policy AlarmPolicyRevision) Validate() error {
 func (condition Condition) Validate() error {
 	switch condition.Kind {
 	case ConditionCompare:
-		if !boundedText(condition.Input, 128) || !validCompareOperator(condition.Operator) || !condition.Value.Valid() {
+		if !boundedText(condition.Input, maxSnapshotInputKeyBytes) || !validCompareOperator(condition.Operator) || !condition.Value.Valid() {
 			return errors.New("compare predicate is invalid")
 		}
 		if condition.Operator != CompareEQ && condition.Operator != CompareNE && condition.Value.Type != EvaluationValueNumber {
 			return errors.New("ordered compare predicate requires a numeric value")
 		}
 	case ConditionRange:
-		if !boundedText(condition.Input, 128) || condition.Minimum == nil || condition.Maximum == nil || *condition.Minimum > *condition.Maximum {
+		if !boundedText(condition.Input, maxSnapshotInputKeyBytes) || condition.Minimum == nil || condition.Maximum == nil || *condition.Minimum > *condition.Maximum {
 			return errors.New("range predicate is invalid")
 		}
 	case ConditionHysteresis:
-		if !boundedText(condition.Input, 128) {
+		if !boundedText(condition.Input, maxSnapshotInputKeyBytes) {
 			return errors.New("hysteresis input is invalid")
 		}
 		if condition.Direction == DirectionAbove && condition.Reset >= condition.Trigger || condition.Direction == DirectionBelow && condition.Reset <= condition.Trigger {
@@ -628,11 +618,11 @@ func (condition Condition) Validate() error {
 			return errors.New("hysteresis direction is invalid")
 		}
 	case ConditionNoData, ConditionStale, ConditionUnchanged, ConditionChanged:
-		if !boundedText(condition.Input, 128) || condition.AgeSeconds <= 0 {
+		if !boundedText(condition.Input, maxSnapshotInputKeyBytes) || condition.AgeSeconds <= 0 {
 			return errors.New("time predicate is invalid")
 		}
 	case ConditionReasons:
-		if !boundedText(condition.Input, 128) || (condition.Match != ReasonMatchAny && condition.Match != ReasonMatchNone) || len(condition.Reasons) < 1 || len(condition.Reasons) > 8 {
+		if !boundedText(condition.Input, maxSnapshotInputKeyBytes) || (condition.Match != ReasonMatchAny && condition.Match != ReasonMatchNone) || len(condition.Reasons) < 1 || len(condition.Reasons) > 8 {
 			return errors.New("quality-reason predicate is invalid")
 		}
 		for _, reason := range condition.Reasons {
@@ -641,7 +631,7 @@ func (condition Condition) Validate() error {
 			}
 		}
 	case ConditionSlope:
-		if !boundedText(condition.Input, 128) || !validSlopeOperator(condition.Operator) || condition.Delta == nil || math.IsNaN(*condition.Delta) || math.IsInf(*condition.Delta, 0) || condition.WindowSeconds < 1 || condition.WindowSeconds > 86400 {
+		if !boundedText(condition.Input, maxSnapshotInputKeyBytes) || !validSlopeOperator(condition.Operator) || condition.Delta == nil || math.IsNaN(*condition.Delta) || math.IsInf(*condition.Delta, 0) || condition.WindowSeconds < 1 || condition.WindowSeconds > 86400 {
 			return errors.New("slope predicate is invalid")
 		}
 	case ConditionExpression:
@@ -649,7 +639,7 @@ func (condition Condition) Validate() error {
 			return errors.New("expression predicate input count exceeds maximum")
 		}
 		for _, inputKey := range condition.ExprInputs {
-			if !boundedText(inputKey, 128) {
+			if !boundedText(inputKey, maxSnapshotInputKeyBytes) {
 				return errors.New("expression predicate input key is invalid")
 			}
 		}
@@ -677,6 +667,26 @@ func (value TypedValue) Valid() bool {
 
 // MaxEvaluationSnapshotInputs bounds the number of Site-level Point inputs carried in a single evaluation snapshot.
 const MaxEvaluationSnapshotInputs = 512
+
+// maxSnapshotInputKeyBytes bounds canonical "<uuidv7>/<pointCode>" keys (36 + 1 + 128).
+const maxSnapshotInputKeyBytes = 165
+
+func validateRuleDependencies(ownerID string, deps []string) error {
+	if len(deps) > 16 {
+		return errors.New("alarm policy dependencies exceed maximum")
+	}
+	seen := make(map[string]struct{}, len(deps))
+	for _, depID := range deps {
+		if !alarmmodel.IsUUIDv7(depID) || (ownerID != "" && depID == ownerID) {
+			return errors.New("alarm policy dependency rule id is invalid")
+		}
+		if _, duplicate := seen[depID]; duplicate {
+			return errors.New("alarm policy dependency rule id is duplicated")
+		}
+		seen[depID] = struct{}{}
+	}
+	return nil
+}
 
 func (snapshot EvaluationSnapshot) Validate() error {
 	if !alarmmodel.IsUUIDv7(snapshot.TenantID) || !alarmmodel.IsUUIDv7(snapshot.SiteID) || !validEvaluationSubjectType(snapshot.SubjectType) || !alarmmodel.IsUUIDv7(snapshot.SubjectID) || !boundedText(snapshot.InputRevision, 256) || !boundedText(snapshot.CorrelationID, 256) {
@@ -706,7 +716,7 @@ func (snapshot EvaluationSnapshot) Validate() error {
 		return errors.New("alarm evaluation snapshot inputs are invalid")
 	}
 	for key, input := range snapshot.Inputs {
-		if key != input.Key || !boundedText(key, 128) {
+		if key != input.Key || !boundedText(key, maxSnapshotInputKeyBytes) {
 			return errors.New("alarm evaluation input key is invalid")
 		}
 		if input.Present {

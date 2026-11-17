@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/nameplate"
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
+	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/rulegraph"
 )
 
 type Compiled struct {
@@ -476,6 +478,9 @@ func Load(rulesPath string) (Compiled, error) {
 		return Compiled{}, err
 	}
 	if _, err := alarmservice.ValidateSiteRuleGraph(compiled.Policies); err != nil {
+		if errors.Is(err, rulegraph.ErrRuleCycleDetected) {
+			return Compiled{}, fmt.Errorf("cyclic rule dependency graph: %w", err)
+		}
 		return Compiled{}, err
 	}
 	return compiled, nil
@@ -603,6 +608,7 @@ func compileRuleEntry(entry rule, templates map[string]ruleTemplate, devices map
 	}
 	if entry.RuleKind != "" {
 		policy.RuleKind = entry.RuleKind
+		overridden = append(overridden, "ruleKind")
 	}
 	if merged.Title != nil {
 		policy.Title = *merged.Title
@@ -659,6 +665,10 @@ func compileRuleEntry(entry rule, templates map[string]ruleTemplate, devices map
 	if entry.TriggerMode != nil {
 		policy.TriggerMode = *entry.TriggerMode
 		overridden = append(overridden, "triggerMode")
+		if *entry.TriggerMode == alarmservice.TriggerSimple {
+			policy.DurationSeconds = 0
+			policy.RepeatCount = 0
+		}
 	}
 	if entry.DurationSeconds != nil {
 		policy.DurationSeconds = *entry.DurationSeconds
@@ -730,7 +740,6 @@ func resolveRuleDependencies(compiled *Compiled, entries []rule, ruleIndices map
 		assignmentByCode[siteRule.Policy.AlarmType] = siteRule.AssignmentID
 	}
 
-	depsByCode := make(map[string][]string, len(entries))
 	for _, entry := range entries {
 		if len(entry.DependsOn) == 0 {
 			continue
@@ -740,7 +749,6 @@ func resolveRuleDependencies(compiled *Compiled, entries []rule, ruleIndices map
 		}
 		seen := make(map[string]bool, len(entry.DependsOn))
 		depIDs := make([]string, 0, len(entry.DependsOn))
-		resolvedCodes := make([]string, 0, len(entry.DependsOn))
 		for _, depCode := range entry.DependsOn {
 			if entry.Device != "" {
 				depCode = strings.ReplaceAll(depCode, "{device}", entry.Device)
@@ -759,38 +767,9 @@ func resolveRuleDependencies(compiled *Compiled, entries []rule, ruleIndices map
 				return fmt.Errorf("rule %s: dependsOn unknown rule %s", entry.Code, depCode)
 			}
 			depIDs = append(depIDs, upstreamID)
-			resolvedCodes = append(resolvedCodes, depCode)
 		}
-		depsByCode[entry.Code] = resolvedCodes
 		idx := ruleIndices[entry.Code]
 		compiled.Policies[idx].Policy.DependsOnRuleIDs = depIDs
-	}
-
-	// Detect cycles in dependsOn graph.
-	state := make(map[string]int, len(depsByCode))
-	var visit func(code string) error
-	visit = func(code string) error {
-		switch state[code] {
-		case 1:
-			return fmt.Errorf("rule %s: cyclic dependsOn dependency", code)
-		case 2:
-			return nil
-		}
-		state[code] = 1
-		for _, dep := range depsByCode[code] {
-			if err := visit(dep); err != nil {
-				return err
-			}
-		}
-		state[code] = 2
-		return nil
-	}
-	for _, entry := range entries {
-		if len(entry.DependsOn) > 0 {
-			if err := visit(entry.Code); err != nil {
-				return err
-			}
-		}
 	}
 	return nil
 }

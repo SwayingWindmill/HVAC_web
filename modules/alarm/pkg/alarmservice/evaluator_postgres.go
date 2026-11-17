@@ -596,7 +596,7 @@ func decodeSampleWindow(body []byte) ([]TimedSample, error) {
 		return nil, errors.New("stored Alarm evaluation sample window is invalid")
 	}
 	for _, sample := range samples {
-		if !boundedText(sample.Input, 128) || math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+		if !boundedText(sample.Input, maxSnapshotInputKeyBytes) || math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
 			return nil, errors.New("stored Alarm evaluation sample window entry is invalid")
 		}
 		if _, err := time.Parse(time.RFC3339Nano, sample.ObservedAt); err != nil {

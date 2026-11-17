@@ -691,51 +691,77 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 	}
 }
 
-// dispatchSiteRulesRoute lists the Site's rules in effect. It answers with Problem Details, as the
-// generated client expects, where the older Alarm routes keep their own error envelope.
-func dispatchSiteRulesRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+func executeSiteRulesGatewayCall(
+	h *handler,
+	writer http.ResponseWriter,
+	request *http.Request,
+	route publicAlarmRoute,
+	expectedMethod string,
+	queryErrorDetail string,
+	checkCSRF bool,
+) (ownerResponse, bool) {
 	fail := func(failure ownerFailure) {
 		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
 	}
-	if request.Method != http.MethodGet {
-		writeMethodNotAllowedFor(writer, request, http.MethodGet)
-		return
+	if request.Method != expectedMethod {
+		writeMethodNotAllowedFor(writer, request, expectedMethod)
+		return ownerResponse{}, false
 	}
 	if h.alarm == nil || h.alarm.operations == nil {
 		fail(alarmUnavailable("The Alarm service is not configured."))
-		return
+		return ownerResponse{}, false
 	}
 	query := request.URL.Query()
 	if len(query) != 1 || len(query["siteId"]) != 1 || !alarmmodel.IsUUIDv7(query.Get("siteId")) {
-		fail(alarmInvalid("The Site rules query takes exactly one siteId."))
-		return
+		fail(alarmInvalid(queryErrorDetail))
+		return ownerResponse{}, false
 	}
 	route.siteID = query.Get("siteId")
 	session, ok := h.alarmSession(writer, request)
 	if !ok {
-		return
+		return ownerResponse{}, false
+	}
+	if checkCSRF {
+		if h.identity == nil {
+			fail(alarmUnavailable("Session validation is unavailable."))
+			return ownerResponse{}, false
+		}
+		if failure := h.identity.validateStateChange(request, session, request.Header.Get("X-CSRF-Token")); failure != nil {
+			writeIdentityFailure(writer, request, *failure)
+			return ownerResponse{}, false
+		}
 	}
 	if failure := h.checkAlarmSiteVisibility(request, session, route.siteID, true); failure != nil {
 		fail(*failure)
-		return
+		return ownerResponse{}, false
 	}
 	response, failure := CallOwner(request.Context(), h, h.alarmCaller(session), h.alarmOwner(), string(route.action), route.scope(session.TenantID), alarmCall{public: request, route: route})
 	if failure != nil {
 		fail(*failure)
+		return ownerResponse{}, false
+	}
+	return response, true
+}
+
+// dispatchSiteRulesRoute lists the Site's rules in effect. It answers with Problem Details, as the
+// generated client expects, where the older Alarm routes keep their own error envelope.
+func dispatchSiteRulesRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+	response, ok := executeSiteRulesGatewayCall(h, writer, request, route, http.MethodGet, "The Site rules query takes exactly one siteId.", false)
+	if !ok {
 		return
 	}
 	switch response.status {
 	case http.StatusOK:
 	case http.StatusForbidden:
-		fail(alarmDenied())
+		writeProblem(writer, request, http.StatusForbidden, "FORBIDDEN", "Forbidden", "The caller lacks the required Alarm permission for this visible Site.", false, nil)
 		return
 	default:
-		fail(alarmUnavailable("Alarm Service could not list the Site rules."))
+		writeProblem(writer, request, http.StatusServiceUnavailable, "INTERNAL_ERROR", "Internal error", "Alarm Service could not list the Site rules.", true, nil)
 		return
 	}
 	list, ok := response.value.(alarmservice.SiteRuleList)
 	if !ok {
-		fail(alarmUnavailable("Alarm Service returned an invalid Site rule list."))
+		writeProblem(writer, request, http.StatusServiceUnavailable, "INTERNAL_ERROR", "Internal error", "Alarm Service returned an invalid Site rule list.", true, nil)
 		return
 	}
 	writer.Header().Set("Cache-Control", "private, no-store")
@@ -746,51 +772,19 @@ func dispatchSiteRulesRoute(h *handler, writer http.ResponseWriter, request *htt
 }
 
 func dispatchSiteRulesSimulateRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
-	fail := func(failure ownerFailure) {
-		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
-	}
-	if request.Method != http.MethodPost {
-		writeMethodNotAllowedFor(writer, request, http.MethodPost)
-		return
-	}
-	if h.alarm == nil || h.alarm.operations == nil {
-		fail(alarmUnavailable("The Alarm service is not configured."))
-		return
-	}
-	query := request.URL.Query()
-	if len(query) != 1 || len(query["siteId"]) != 1 || !alarmmodel.IsUUIDv7(query.Get("siteId")) {
-		fail(alarmInvalid("The Site rule simulation query takes exactly one siteId."))
-		return
-	}
-	route.siteID = query.Get("siteId")
-	session, ok := h.alarmSession(writer, request)
+	response, ok := executeSiteRulesGatewayCall(h, writer, request, route, http.MethodPost, "The Site rule simulation query takes exactly one siteId.", true)
 	if !ok {
 		return
 	}
-	if h.identity == nil {
-		fail(alarmUnavailable("Session validation is unavailable."))
-		return
-	}
-	if failure := h.identity.validateStateChange(request, session, request.Header.Get("X-CSRF-Token")); failure != nil {
-		writeIdentityFailure(writer, request, *failure)
-		return
-	}
-	if failure := h.checkAlarmSiteVisibility(request, session, route.siteID, true); failure != nil {
-		fail(*failure)
-		return
-	}
-	response, failure := CallOwner(request.Context(), h, h.alarmCaller(session), h.alarmOwner(), string(route.action), route.scope(session.TenantID), alarmCall{public: request, route: route})
-	if failure != nil {
-		fail(*failure)
-		return
-	}
 	if response.status != http.StatusOK {
-		fail(alarmProblemFromUpstream(response.status, response.body, "Alarm Service could not simulate the Site rule."))
+		failure := alarmProblemFromUpstream(response.status, response.body, "Alarm Service could not simulate the Site rule.")
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
 		return
 	}
 	result, ok := response.value.(alarmservice.SiteRuleSimulationResult)
 	if !ok {
-		fail(alarmUnavailable("Alarm Service returned an invalid Site rule simulation."))
+		failure := alarmUnavailable("Alarm Service returned an invalid Site rule simulation.")
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
 		return
 	}
 	writer.Header().Set("Cache-Control", "private, no-store")

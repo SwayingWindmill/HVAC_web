@@ -3,6 +3,7 @@ package alarmservice
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -122,7 +123,7 @@ func TestAlarmHTTPSiteRulesNeedAnAlarmReadGrantForThatSite(t *testing.T) {
 }
 
 func TestSiteRuleListValidatesReasonsConditions(t *testing.T) {
-	rule, err := siteRuleView(SiteRule{
+	rule, err := siteRuleViewWithHopDepth(SiteRule{
 		AssignmentID: "018f3e00-7a02-7000-8000-000000000002",
 		Policy: AlarmPolicyRevision{
 			Title:       "数据不可信",
@@ -131,7 +132,7 @@ func TestSiteRuleListValidatesReasonsConditions(t *testing.T) {
 			Raise:       Condition{Kind: ConditionReasons, Input: testDeviceID + "/t18", Match: ReasonMatchAny, Reasons: []string{"OUT_OF_RANGE", "SOURCE_UNTRUSTED"}},
 			Clear:       Condition{Kind: ConditionReasons, Input: testDeviceID + "/t18", Match: ReasonMatchNone, Reasons: []string{"OUT_OF_RANGE", "SOURCE_UNTRUSTED"}},
 		},
-	})
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,6 +317,53 @@ func TestAlarmHTTPSimulateSiteRuleEvaluatesStepsInMemory(t *testing.T) {
 	handler.ServeHTTP(rec404, req404)
 	if rec404.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for unknown rule, got %d body=%s", rec404.Code, rec404.Body.String())
+	}
+
+	// Supports canonical 128-char pointCode, canonical USABLE quality ("PARTIAL"), and rejects null readings / untrimmed pointCode / unsupported quality.
+	longPoint := strings.Repeat("p", 128)
+	usableRuleID := "018f3e00-7a02-7000-8000-000000000005"
+	usableHandler, err := NewHTTPHandler(HTTPConfig{
+		Store: memory,
+		Rules: siteRules{siteID: testSiteID, rules: []SiteRule{{
+			AssignmentID: usableRuleID,
+			Policy: AlarmPolicyRevision{
+				AlarmType: "LONG_POINT_RULE", Title: "长点位编码规则", Severity: alarmmodel.SeverityWarning,
+				QualityPolicy: EvaluationQualityUsable, FreshnessSeconds: 900, TriggerMode: TriggerSimple,
+				Raise: Condition{Kind: ConditionCompare, Input: testDeviceID + "/" + longPoint, Operator: CompareGTE, Value: NumberValue(10)},
+				Clear: Condition{Kind: ConditionCompare, Input: testDeviceID + "/" + longPoint, Operator: CompareLT, Value: NumberValue(5)},
+			},
+		}}},
+		GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	partialReq := httptest.NewRequest(http.MethodPost, InternalSiteAlarmsPrefix+testSiteID+"/alarm-rules:simulate", strings.NewReader(mustJSON(t, SimulateSiteRuleRequest{
+		RuleID: usableRuleID,
+		Steps: []SimulateRuleStepInput{{
+			Readings: []SimulateRuleReadingSample{{DeviceID: testDeviceID, PointCode: longPoint, Value: 12.0, Quality: "PARTIAL"}},
+		}},
+	})))
+	partialReq.Header.Set("Content-Type", "application/json")
+	partialReq.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmReadAction, testTenantID, testSiteID, ""))
+	partialRec := httptest.NewRecorder()
+	usableHandler.ServeHTTP(partialRec, partialReq)
+	if partialRec.Code != http.StatusOK {
+		t.Fatalf("long point / PARTIAL quality expected 200, got %d body=%s", partialRec.Code, partialRec.Body.String())
+	}
+	for name, badBody := range map[string]string{
+		"nil readings":        fmt.Sprintf(`{"ruleId":%q,"steps":[{}]}`, slopeRuleID),
+		"untrimmed pointCode": mustJSON(t, SimulateSiteRuleRequest{RuleID: slopeRuleID, Steps: []SimulateRuleStepInput{{Readings: []SimulateRuleReadingSample{{DeviceID: testDeviceID, PointCode: " temp", Value: 1}}}}}),
+		"legacy quality enum": mustJSON(t, SimulateSiteRuleRequest{RuleID: slopeRuleID, Steps: []SimulateRuleStepInput{{Readings: []SimulateRuleReadingSample{{DeviceID: testDeviceID, PointCode: "temp", Value: 1, Quality: "UNCERTAIN"}}}}}),
+	} {
+		badReq := httptest.NewRequest(http.MethodPost, InternalSiteAlarmsPrefix+testSiteID+"/alarm-rules:simulate", strings.NewReader(badBody))
+		badReq.Header.Set("Content-Type", "application/json")
+		badReq.Header.Set(AlarmReadContextHeader, signedReadContext(t, signer, now, AlarmReadAction, testTenantID, testSiteID, ""))
+		badRec := httptest.NewRecorder()
+		handler.ServeHTTP(badRec, badReq)
+		if badRec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: expected 400, got %d body=%s", name, badRec.Code, badRec.Body.String())
+		}
 	}
 }
 

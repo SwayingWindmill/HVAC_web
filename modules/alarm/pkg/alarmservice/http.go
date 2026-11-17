@@ -136,43 +136,16 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 		writeJSON(writer, http.StatusOK, scope)
 		return
 	}
-	if siteID, matches := matchSiteRulesPath(request.URL.Path); matches {
-		if request.Method != http.MethodGet {
-			writer.Header().Set("Allow", http.MethodGet)
-			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Site rules only support GET.", false)
-			return
+	if siteID, matches := matchSiteRuleSubpath(request.URL.Path, "alarm-rules"); matches {
+		if claims, ok := handler.authorizeSiteRuleRoute(writer, request, siteID, http.MethodGet, "Site rules only support GET.", "The Site rules are outside the authorized read scope."); ok {
+			handler.siteRules(writer, request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID)), claims.TenantID, siteID)
 		}
-		if !alarmmodel.IsUUIDv7(siteID) {
-			handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm resource is not visible.", false)
-			return
-		}
-		// Whoever may list the Site's alarms may see the rules that raise them.
-		claims, authorized := handler.authorize(request, AlarmReadContextHeader, AlarmListAction, []string{"site:" + siteID})
-		if !authorized {
-			handler.writeProblem(writer, http.StatusForbidden, "ALARM_ACCESS_DENIED", "Alarm access denied", "The Site rules are outside the authorized read scope.", false)
-			return
-		}
-		request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
-		handler.siteRules(writer, request, claims.TenantID, siteID)
 		return
 	}
-	if siteID, matches := matchSiteRulesSimulatePath(request.URL.Path); matches {
-		if request.Method != http.MethodPost {
-			writer.Header().Set("Allow", http.MethodPost)
-			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Site rule simulation only supports POST.", false)
-			return
+	if siteID, matches := matchSiteRuleSubpath(request.URL.Path, "alarm-rules:simulate"); matches {
+		if claims, ok := handler.authorizeSiteRuleRoute(writer, request, siteID, http.MethodPost, "Site rule simulation only supports POST.", "The Site rule simulation is outside the authorized read scope."); ok {
+			handler.simulateSiteRule(writer, request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID)), claims.TenantID, siteID)
 		}
-		if !alarmmodel.IsUUIDv7(siteID) {
-			handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm resource is not visible.", false)
-			return
-		}
-		claims, authorized := handler.authorize(request, AlarmReadContextHeader, AlarmListAction, []string{"site:" + siteID})
-		if !authorized {
-			handler.writeProblem(writer, http.StatusForbidden, "ALARM_ACCESS_DENIED", "Alarm access denied", "The Site rule simulation is outside the authorized read scope.", false)
-			return
-		}
-		request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
-		handler.simulateSiteRule(writer, request, claims.TenantID, siteID)
 		return
 	}
 	route, ok := matchAlarmPath(request.URL.Path)
@@ -219,6 +192,32 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 		return
 	}
 	handler.get(writer, request, claims.TenantID, route.siteID, route.alarmID)
+}
+
+func (handler *httpHandler) authorizeSiteRuleRoute(
+	writer http.ResponseWriter,
+	request *http.Request,
+	siteID string,
+	expectedMethod string,
+	methodDetail string,
+	deniedDetail string,
+) (identitycontext.DelegationClaims, bool) {
+	if request.Method != expectedMethod {
+		writer.Header().Set("Allow", expectedMethod)
+		handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", methodDetail, false)
+		return identitycontext.DelegationClaims{}, false
+	}
+	if !alarmmodel.IsUUIDv7(siteID) {
+		handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm resource is not visible.", false)
+		return identitycontext.DelegationClaims{}, false
+	}
+	// Whoever may list the Site's alarms may view and simulate its active rules.
+	claims, authorized := handler.authorize(request, AlarmReadContextHeader, AlarmListAction, []string{"site:" + siteID})
+	if !authorized {
+		handler.writeProblem(writer, http.StatusForbidden, "ALARM_ACCESS_DENIED", "Alarm access denied", deniedDetail, false)
+		return identitycontext.DelegationClaims{}, false
+	}
+	return claims, true
 }
 
 func (handler *httpHandler) authorize(request *http.Request, header, action string, resourceScopes []string) (identitycontext.DelegationClaims, bool) {
