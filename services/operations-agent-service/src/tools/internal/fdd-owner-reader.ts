@@ -7,12 +7,11 @@ import {
   type OwnerReadResult,
 } from '../../application/index.js';
 import {
-  createOwnerHeaders,
-  fetchOwnerJson,
   isInstant,
   isNonEmptyString,
   isRecord,
   normalizeOwnerReaderHttpConfig,
+  readAuthorizedOwnerJson,
   type OwnerReaderHttpConfig,
 } from './owner-http.js';
 
@@ -58,16 +57,12 @@ export const createFddOwnerReader = (input: FddOwnerReaderConfig): FddReader => 
       if (query.siteId !== scope.siteId || scope.assetId !== null || scope.deviceId !== null) {
         throw new OwnerReadError('OWNER_REQUEST_INVALID', 'The FDD findings read is outside the trusted Site scope.');
       }
-      // createOwnerHeaders refuses a read without its grant, so the grant is always there.
-      const { 'X-Delegation-Grant': grant, ...headers } = createOwnerHeaders(readInput.request.requestId, readInput.context, {
+      const payload = await readAuthorizedOwnerJson(config, {
+        requestId: readInput.request.requestId,
         logicalTool: readInput.request.tool,
-        includePolicyRevision: false,
-        hasBody: false,
-      }) as Record<string, string> & { readonly 'X-Delegation-Grant': string };
-      const payload = await fetchOwnerJson(config, {
+        context: readInput.context,
         path: `/v1/sites/${encodeURIComponent(query.siteId)}/fdd/findings?limit=${query.limit}`,
         method: 'GET',
-        headers: { ...headers, 'X-FDD-Context': grant },
       });
       if (!isRecord(payload) || !Array.isArray(payload.items) || payload.items.length > query.limit) {
         invalid('FDD returned an invalid findings list.');

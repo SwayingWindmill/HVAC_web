@@ -455,3 +455,58 @@ test('a Session is listed, opened and continued only by the person who started i
   await assert.rejects(service.get(context, theirs.session.id), { code: 'SESSION_NOT_FOUND' });
   await assert.rejects(service.start(context, { sessionId: theirs.session.id, expectedRevision: 2, message: '那 C 机组呢？' }), { code: 'SESSION_NOT_FOUND' });
 });
+
+test('createTools and describeSite receive the same runContext identity per Run and isolate distinct Runs', async () => {
+  const store = new MemoryAgentSessionStateStore();
+  const lifecycle = createAgentSessionLifecycle({ store });
+  let clock = 5_000;
+  const seenToolRunContexts = [];
+  const seenSiteRunContexts = [];
+  const seenEngineRunContexts = [];
+
+  const service = createAgentSessionService({
+    lifecycle,
+    engine: async (input) => {
+      seenEngineRunContexts.push(input.context);
+      await input.site();
+      return completedResult(input);
+    },
+    modelRef,
+    createTools: (_accessContext, runContext) => {
+      seenToolRunContexts.push(runContext);
+      return Object.freeze([]);
+    },
+    describeSite: async (_accessContext, runContext) => {
+      seenSiteRunContexts.push(runContext);
+      return { name: 'Plant', timezone: 'Asia/Shanghai' };
+    },
+    budget,
+    now: () => ++clock,
+    nextId: createIds(),
+  });
+
+  const first = await service.create(context, { message: 'Run 1' });
+  const settledFirst = await waitFor(async () => {
+    const state = await service.get(context, first.session.id);
+    return state.session.status === 'COMPLETED' ? state : null;
+  });
+
+  await service.start(context, {
+    sessionId: settledFirst.session.id,
+    expectedRevision: settledFirst.session.revision,
+    message: 'Run 2',
+  });
+  await waitFor(async () => {
+    const state = await service.get(context, first.session.id);
+    return state.runs.length === 2 && state.session.status === 'COMPLETED' ? state : null;
+  });
+
+  assert.equal(seenToolRunContexts.length, 2);
+  assert.equal(seenSiteRunContexts.length, 2);
+  assert.equal(seenEngineRunContexts.length, 2);
+  assert.equal(seenToolRunContexts[0], seenSiteRunContexts[0]);
+  assert.equal(seenToolRunContexts[0], seenEngineRunContexts[0]);
+  assert.equal(seenToolRunContexts[1], seenSiteRunContexts[1]);
+  assert.equal(seenToolRunContexts[1], seenEngineRunContexts[1]);
+  assert.notEqual(seenToolRunContexts[0].runId, seenToolRunContexts[1].runId);
+});

@@ -86,7 +86,7 @@ export interface CreateAgentSessionServiceInput {
   readonly lifecycle: AgentSessionLifecycle;
   readonly engine: AgentEngine;
   readonly modelRef: AgentModelRef;
-  readonly createTools: (context: AgentSessionAccessContext) => readonly AgentTool[];
+  readonly createTools: (context: AgentSessionAccessContext, runContext: AgentRunContext) => readonly AgentTool[];
   /** The Site the prompt names, read under the asker's authorization when each Run starts. */
   readonly describeSite: (context: AgentSessionAccessContext, runContext: AgentRunContext) => Promise<AgentRunSite>;
   readonly budget: AgentRunBudget;
@@ -219,7 +219,7 @@ export const createAgentSessionService = ({
       session: started.session,
       run,
       messages: started.messages,
-      tools: createTools(context),
+      tools: createTools(context, runContext),
       context: runContext,
       site: () => describeSite(context, runContext),
       budget,

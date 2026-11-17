@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
-import type { AgentRunBudget } from '../../agent/index.js';
+import type { AgentRunBudget, AgentRunContext } from '../../agent/index.js';
 import {
   createAgentSessionLifecycle,
   createAgentSessionService,
+  type AgentSessionAccessContext,
   type AgentSessionService,
 } from '../../application/index.js';
 import {
@@ -26,8 +27,10 @@ import {
   createTelemetryHistoryOwnerReader,
   createGatewayToolAuthorizationReader,
   createHvacReadTools,
+  createRunSiteSnapshot,
   createSiteDescriber,
   createRegistryOwnerReader,
+  type RunSiteSnapshot,
   type AlarmOwnerReaderConfig,
   type FddOwnerReaderConfig,
   type WorkOrderOwnerReaderConfig,
@@ -102,7 +105,21 @@ export const createProductionAgentSessionRuntime = async (
     const toolAuthorizationReader = createGatewayToolAuthorizationReader(
       options.owners.gatewayToolAuthorization,
     );
-    const describeSite = createSiteDescriber({ toolAuthorizationReader, registryReader });
+    const runSnapshots = new WeakMap<AgentRunContext, RunSiteSnapshot>();
+    const snapshotForRun = (
+      context: AgentSessionAccessContext,
+      runContext: AgentRunContext,
+    ): RunSiteSnapshot => {
+      const existing = runSnapshots.get(runContext);
+      if (existing !== undefined) return existing;
+      const created = createRunSiteSnapshot({
+        authorization: context.authorization,
+        toolAuthorizationReader,
+        registryReader,
+      });
+      runSnapshots.set(runContext, created);
+      return created;
+    };
     const budget = requireBudget(options.budget);
     const lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
     const service = createAgentSessionService({
@@ -112,7 +129,7 @@ export const createProductionAgentSessionRuntime = async (
       budget,
       now: options.now ?? Date.now,
       nextId: options.nextId ?? (() => randomUUID()),
-      createTools: (context) => createHvacReadTools({
+      createTools: (context, runContext) => createHvacReadTools({
         capabilities: context.capabilities,
         authorization: context.authorization,
         toolAuthorizationReader,
@@ -124,9 +141,14 @@ export const createProductionAgentSessionRuntime = async (
         alarmReader,
         fddReader,
         workOrderReader,
+        siteSnapshot: snapshotForRun(context, runContext),
         limits: { maxEnergyRangeMs: budget.maxQueryRangeMs, maxResultRecords: budget.maxToolResultRecords },
       }),
-      describeSite: (context, runContext) => describeSite(context.authorization, runContext),
+      describeSite: (context, runContext) => createSiteDescriber({
+        toolAuthorizationReader,
+        registryReader,
+        siteSnapshot: snapshotForRun(context, runContext),
+      })(context.authorization, runContext),
     });
     const handler = createAgentSessionHttpHandler({
       usage: persistence.agentUsageReader,

@@ -2,17 +2,16 @@ import {
   OwnerReadError,
   type DeviceTelemetryReadRequest,
   type DeviceTelemetryReader,
-  type OwnerReadContext,
   type OwnerReadInput,
   type OwnerReadResult,
 } from '../../application/index.js';
 import {
-  fetchOwnerJson,
   hasExactKeys,
   isInstant,
   isNonEmptyString,
   isRecord,
   normalizeOwnerReaderHttpConfig,
+  readAuthorizedOwnerJson,
   type OwnerReaderHttpConfig,
 } from './owner-http.js';
 
@@ -197,26 +196,6 @@ const requireRequest = (input: OwnerReadInput<DeviceTelemetryReadRequest>): {
   return { tenantId: scope.tenantId, siteId, deviceId, pointKeys };
 };
 
-const authorizationHeaders = (
-  context: OwnerReadContext,
-  request: DeviceTelemetryReadRequest,
-): Readonly<Record<string, string>> => {
-  const grant = context.authorization.toolDelegationGrants?.[request.tool]
-    ?? context.authorization.delegationGrant;
-  if (context.authorization.decision !== 'ALLOW'
-    || !isNonEmptyString(context.authorization.decisionId)
-    || !isNonEmptyString(grant)) {
-    throw new OwnerReadError('OWNER_REQUEST_INVALID', 'The Device Telemetry authorization context is incomplete.');
-  }
-  return {
-    Accept: 'application/json, application/problem+json',
-    Authorization: `Bearer ${grant}`,
-    'X-Request-ID': request.requestId,
-    ...(context.authorization.traceparent === undefined ? {} : { traceparent: context.authorization.traceparent }),
-    ...(context.authorization.tracestate === undefined ? {} : { tracestate: context.authorization.tracestate }),
-  };
-};
-
 const resultQuality = (snapshot: DeviceObservationSnapshotDto): OwnerReadResult['quality'] => {
   if (snapshot.evaluationAvailability !== 'AVAILABLE' || snapshot.displayState === 'UNAVAILABLE') return 'BAD';
   if (snapshot.displayState === 'STALE'
@@ -237,10 +216,12 @@ export const createDeviceTelemetryOwnerReader = (
       const requested = requireRequest(ownerInput);
       const query = new URLSearchParams();
       for (const key of requested.pointKeys) query.append('key', key);
-      const payload = await fetchOwnerJson(config, {
+      const payload = await readAuthorizedOwnerJson(config, {
+        requestId: ownerInput.request.requestId,
+        logicalTool: ownerInput.request.tool,
+        context: ownerInput.context,
         path: `/internal/v1/devices/${encodeURIComponent(requested.deviceId)}/observation-snapshot?${query}`,
         method: 'GET',
-        headers: authorizationHeaders(ownerInput.context, ownerInput.request),
       });
       const snapshot = decodeSnapshot(payload);
       if (snapshot.tenantId !== requested.tenantId

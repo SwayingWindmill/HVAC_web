@@ -7,13 +7,12 @@ import {
   type SemanticQueryResult,
 } from '../../application/index.js';
 import {
-  createOwnerHeaders,
-  fetchOwnerJson,
   hasExactKeys,
   isInstant,
   isNonEmptyString,
   isRecord,
   normalizeOwnerReaderHttpConfig,
+  readAuthorizedOwnerJson,
   type OwnerReaderHttpConfig,
 } from './owner-http.js';
 
@@ -81,14 +80,12 @@ export const createSemanticQueryOwnerReader = (input: SemanticQueryOwnerReaderCo
       if (query.tenantId !== scope.tenantId || query.siteId !== scope.siteId || scope.assetId !== null || scope.deviceId !== null) {
         throw new OwnerReadError('OWNER_REQUEST_INVALID', 'The semantic query is outside the trusted Site scope.');
       }
-      const payload = await fetchOwnerJson(config, {
+      const payload = await readAuthorizedOwnerJson(config, {
+        requestId: readInput.request.requestId,
+        logicalTool: readInput.request.tool,
+        context: readInput.context,
         path: '/internal/v1/analytics/semantic-query',
         method: 'POST',
-        headers: createOwnerHeaders(readInput.request.requestId, readInput.context, {
-          logicalTool: readInput.request.tool,
-          includePolicyRevision: false,
-          hasBody: true,
-        }),
         body: JSON.stringify(query),
       });
       const result = decodeResult(payload);
