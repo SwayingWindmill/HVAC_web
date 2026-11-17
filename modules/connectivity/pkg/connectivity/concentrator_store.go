@@ -32,7 +32,10 @@ func NewUUIDv7At(now time.Time) (string, error) {
 	return newUUIDv7(now)
 }
 
-func (store *Store) ResolveGatewayForOperator(ctx context.Context, claims registryauth.GrantClaims, gatewayID string) (string, error) {
+// ResolveGatewayScopeForOperator validates tenant/site access and non-revoked
+// gateway enrollment without requiring an active mTLS certificate, enabling
+// pre-enrollment cloud config shadow staging.
+func (store *Store) ResolveGatewayScopeForOperator(ctx context.Context, claims registryauth.GrantClaims, gatewayID string) (string, error) {
 	if store == nil || store.pool == nil {
 		return "", errors.New("connectivity store is closed")
 	}
@@ -54,15 +57,34 @@ WHERE gateway_id = $1::uuid AND status = 'ACTIVE'
 	if tenantID != claims.TenantID || !registryauth.ScopeAllows(claims, siteID) {
 		return "", ErrCredentialForbidden
 	}
-	var revoked, hasActiveCred, hasRevokedCred bool
+	var revoked bool
+	if err := store.readAsTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM connectivity.gateway_enrollments
+  WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid AND revoked_at IS NOT NULL
+)`, tenantID, gatewayID).Scan(&revoked)
+	}); err != nil {
+		return "", fmt.Errorf("check Gateway enrollment state: %w", err)
+	}
+	if revoked {
+		return "", ErrCredentialRevoked
+	}
+	return tenantID, nil
+}
+
+// ResolveGatewayForOperator additionally requires the gateway to hold an active,
+// unexpired mTLS certificate before permitting live concentrator RPC operations.
+func (store *Store) ResolveGatewayForOperator(ctx context.Context, claims registryauth.GrantClaims, gatewayID string) (string, error) {
+	tenantID, err := store.ResolveGatewayScopeForOperator(ctx, claims, gatewayID)
+	if err != nil {
+		return "", err
+	}
+	var hasActiveCred, hasRevokedCred bool
 	now := store.clock().UTC()
 	if err := store.readAsTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
 SELECT
-  EXISTS (
-    SELECT 1 FROM connectivity.gateway_enrollments
-    WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid AND revoked_at IS NOT NULL
-  ),
   EXISTS (
     SELECT 1 FROM connectivity.gateway_credentials
     WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
@@ -71,12 +93,9 @@ SELECT
   EXISTS (
     SELECT 1 FROM connectivity.gateway_credentials
     WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid AND status = 'REVOKED'
-  )`, tenantID, gatewayID, now).Scan(&revoked, &hasActiveCred, &hasRevokedCred)
+  )`, tenantID, gatewayID, now).Scan(&hasActiveCred, &hasRevokedCred)
 	}); err != nil {
 		return "", fmt.Errorf("check Gateway credential state: %w", err)
-	}
-	if revoked {
-		return "", ErrCredentialRevoked
 	}
 	if !hasActiveCred {
 		if hasRevokedCred {

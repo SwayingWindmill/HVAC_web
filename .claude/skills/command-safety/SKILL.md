@@ -7,7 +7,7 @@ description: Exhaustively model-check command intent, execution fence, MQTT comm
 
 Run the exhaustive explicit-state model checker (`modules/command/pkg/commandformal`) against real production transition decisions in `commandservice`, `mqttconnector`, and aligned SQL predicates in `postgres_*.go` / `connectivity/store.go`.
 
-- **Base syncCommit**: `ed29f342ad0a915555c63c888c329a15d6126c26`
+- **Base syncCommit**: `1fddb82d0ceee4f5e0f1b473ffb5d487e758eea2`
 
 ## Quick Run
 

@@ -91,13 +91,24 @@ func main() {
 		os.Exit(1)
 	}
 	concentratorService := concentrator.NewService(connectivityStore, concentratorTransport)
-	credentials, tunnelHub, err := credentialServerWithRuntime(connectivityStore, concentratorService, telemetryRuntime, tunnel.WithObservability(logger, telemetry.Metrics))
+	presence := newGatewayOnlineTracker()
+	credentials, tunnelHub, err := credentialServerWithContext(ctx, logger, telemetry.Metrics, presence, connectivityStore, concentratorService, telemetryRuntime, tunnel.WithObservability(logger, telemetry.Metrics))
 	if err != nil {
 		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE")
 		os.Exit(1)
 	}
 	defer tunnelHub.Close()
-	processor, err := adapter.NewProcessor(connectivityStore, telemetryRuntime)
+	processor, err := adapter.NewProcessor(
+		connectivityStore,
+		telemetryRuntime,
+		adapter.WithGatewayPresenceHook(presence.SetOnline),
+		adapter.WithGatewayConnectHook(func(_ context.Context, gatewayID string) {
+			presence.SetOnline(gatewayID, true)
+			observability.GoSafe(logger, telemetry.Metrics, "connectivity.concentrator_shadow_reconcile", func() {
+				reconcileConcentratorShadowAsync(ctx, concentratorService, logger, gatewayID)
+			})
+		}),
+	)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_processor_invalid", "error", err.Error())
 		os.Exit(1)
@@ -311,6 +322,17 @@ func getHealthHandler(ready func() bool) http.HandlerFunc {
 		}
 		writer.WriteHeader(http.StatusOK)
 		_, _ = writer.Write([]byte("ready\n"))
+	}
+}
+
+func reconcileConcentratorShadowAsync(rootCtx context.Context, service *concentrator.Service, logger *slog.Logger, gatewayID string) {
+	if service == nil || strings.TrimSpace(gatewayID) == "" {
+		return
+	}
+	reconcileCtx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
+	defer cancel()
+	if err := service.ReconcileConcentratorShadow(reconcileCtx, gatewayID); err != nil && logger != nil {
+		logger.Warn("concentrator_shadow_reconcile_failed", "gateway_id", gatewayID, "error", err.Error())
 	}
 }
 

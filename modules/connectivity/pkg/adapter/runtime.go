@@ -98,11 +98,12 @@ type Runtime struct {
 	idleTimeout          time.Duration
 	now                  func() time.Time
 
-	coverageMu  sync.Mutex
-	subWG       sync.WaitGroup
-	coverageWG  sync.WaitGroup
-	coverageRev atomic.Int64
-	connTracker MQTTConnTracker
+	coverageMu     sync.Mutex
+	coverageClosed bool
+	subWG          sync.WaitGroup
+	coverageWG     sync.WaitGroup
+	coverageRev    atomic.Int64
+	connTracker    MQTTConnTracker
 
 	queuesMu         sync.Mutex
 	queues           map[string]*gatewayMailbox
@@ -186,6 +187,9 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	if err := runtime.prepareOverflowDir(); err != nil {
 		return err
 	}
+	runtime.coverageMu.Lock()
+	runtime.coverageClosed = false
+	runtime.coverageMu.Unlock()
 	runContext, runCancel := context.WithCancel(ctx)
 	heartbeatContext, heartbeatCancel := context.WithCancel(context.Background())
 	workerContext, workerCancel := context.WithCancel(context.Background())
@@ -276,6 +280,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	heartbeatCancel()
 	if stopErr != nil {
 		runtime.closeCurrentConnection()
+		runtime.recordConnectionState(nil, false, false, nil)
 		workerCancel()
 		heartbeatWG.Wait()
 		runtime.subWG.Wait()
@@ -289,6 +294,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	_ = manager.Disconnect(shutdownContext)
 	cancel()
 	runtime.closeCurrentConnection()
+	runtime.recordConnectionState(nil, false, false, nil)
 	runtime.waitDrainWithTimeout(5 * time.Second)
 	workerCancel()
 	runtime.workers.Wait()
@@ -630,6 +636,9 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 	}
 	runtime.coverageMu.Lock()
 	defer runtime.coverageMu.Unlock()
+	if runtime.coverageClosed {
+		return
+	}
 	if !force {
 		if expectedGen != 0 && expectedGen != runtime.connTracker.CurrentGen() {
 			return
@@ -640,6 +649,8 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 		if available && !runtime.Ready() {
 			return
 		}
+	} else if !available {
+		runtime.coverageClosed = true
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

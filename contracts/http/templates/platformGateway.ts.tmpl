@@ -71,7 +71,7 @@ export const concentratorAuditItemSchema = z.object({
   actorId: concentratorUUIDv7,
   operation: z.enum(['WRITE_PARAMS', 'WRITE_EIDS']),
   requestId: concentratorUUIDv7,
-  outcome: z.enum(['APPLIED', 'REJECTED', 'FAILED', 'TIMEOUT']),
+  outcome: z.enum(['APPLIED', 'REJECTED', 'FAILED', 'TIMEOUT', 'STAGED_SHADOW']),
   reason: z.string().max(512),
   diff: z.record(z.string(), z.unknown()),
   occurredAt: z.string().datetime({ offset: true }),
@@ -87,6 +87,7 @@ export const concentratorStatusSchema = z.object({
 export const concentratorParamsUpdateRequestSchema = z.object({
   params: concentratorParamsPatchSchema,
   reason: z.string().trim().min(1).max(512),
+  stageIfOffline: z.boolean().optional(),
 }).strict();
 export const concentratorParamsWriteResultSchema = z.object({
   gatewayId: concentratorUUIDv7,
@@ -95,6 +96,8 @@ export const concentratorParamsWriteResultSchema = z.object({
   writtenCount: z.number().int().min(0).max(14),
   params: concentratorParamsSchema,
   audit: concentratorAuditItemSchema,
+  staged: z.boolean().optional(),
+  desiredRevision: z.number().int().min(1).optional(),
 }).strict();
 export const concentratorEidSlotSchema = z.object({
   slot: z.number().int().min(1).max(200),
@@ -110,6 +113,7 @@ export const concentratorEidTableSchema = z.object({
 export const concentratorEidUpdateRequestSchema = z.object({
   slots: z.array(concentratorEidSlotSchema).length(200),
   reason: z.string().trim().min(1).max(512),
+  stageIfOffline: z.boolean().optional(),
 }).strict();
 export const concentratorEidWriteResultSchema = z.object({
   gatewayId: concentratorUUIDv7,
@@ -119,7 +123,80 @@ export const concentratorEidWriteResultSchema = z.object({
   chunkCount: z.number().int().min(0).max(200),
   slots: z.array(concentratorEidSlotSchema).length(200),
   audit: concentratorAuditItemSchema,
+  staged: z.boolean().optional(),
+  desiredRevision: z.number().int().min(1).optional(),
 }).strict();
+export const pointCopyTargetSchema = z.object({
+  deviceKey: z.string().min(1).max(128),
+  pointCode: z.string().regex(/^[a-z][a-z0-9_]{0,127}$/),
+}).strict();
+export const gatewayPointMappingSchema = z.object({
+  sourceChannel: z.string().min(1).max(128),
+  primaryDeviceKey: z.string().min(1).max(128),
+  primaryPointCode: z.string().regex(/^[a-z][a-z0-9_]{0,127}$/),
+  copyTargets: z.array(pointCopyTargetSchema).optional(),
+}).strict();
+export const gatewaySamplingPolicySchema = z.object({
+  deviceKey: z.string().min(1).max(128),
+  pointCode: z.string().max(128).optional(),
+  sampleIntervalMs: z.number().int().min(100).max(86400000),
+  publishIntervalMs: z.number().int().min(100).max(86400000),
+}).strict();
+export const concentratorUnitShadowSchema = z.object({
+  params: concentratorParamsSchema.optional(),
+  eids: z.array(concentratorEidSlotSchema).max(200).optional(),
+}).strict();
+export const configShadowDriftDetailSchema = z.object({
+  section: z.enum(['POINT_MAPPINGS', 'SAMPLING_POLICIES', 'CONCENTRATOR']),
+  target: z.string().min(1).max(256),
+  reason: z.enum(['VALUE_MISMATCH', 'MISSING_ON_EDGE', 'UNEXPECTED_ON_EDGE', 'EDGE_APPLY_FAILED']),
+  detail: z.string().min(1).max(512),
+}).strict();
+export const gatewayDesiredConfigSchema = z.object({
+  desiredRevision: z.number().int().min(1),
+  pointMappings: z.array(gatewayPointMappingSchema),
+  samplingPolicies: z.array(gatewaySamplingPolicySchema),
+  concentratorConfigs: z.record(z.string(), concentratorUnitShadowSchema),
+  updatedBy: concentratorUUIDv7,
+  reason: z.string().min(1).max(1000),
+  createdAt: z.string().datetime({ offset: true }),
+  updatedAt: z.string().datetime({ offset: true }),
+}).strict();
+export const gatewayReportedConfigSchema = z.object({
+  reportedRevision: z.number().int().min(0),
+  appliedStatus: z.enum(['APPLIED', 'PARTIAL', 'REJECTED']),
+  pointMappings: z.array(gatewayPointMappingSchema),
+  samplingPolicies: z.array(gatewaySamplingPolicySchema),
+  concentratorConfigs: z.record(z.string(), concentratorUnitShadowSchema),
+  driftDetails: z.array(configShadowDriftDetailSchema),
+  errorMessage: z.string().max(1024).nullable().optional(),
+  reportedAt: z.string().datetime({ offset: true }),
+  updatedAt: z.string().datetime({ offset: true }),
+}).strict();
+export const gatewayConfigShadowSchema = z.object({
+  tenantId: concentratorUUIDv7,
+  gatewayId: concentratorUUIDv7,
+  syncStatus: z.enum(['UNCONFIGURED', 'PENDING_SYNC', 'SYNCED', 'DRIFTED']),
+  desired: gatewayDesiredConfigSchema.optional(),
+  reported: gatewayReportedConfigSchema.optional(),
+  drift: z.array(configShadowDriftDetailSchema),
+}).strict();
+export const gatewayConfigShadowUpdateRequestSchema = z.object({
+  expectedDesiredRevision: z.number().int().min(0).optional(),
+  pointMappings: z.array(gatewayPointMappingSchema).optional(),
+  samplingPolicies: z.array(gatewaySamplingPolicySchema).optional(),
+  concentratorConfigs: z.record(z.string(), concentratorUnitShadowSchema).optional(),
+  reason: z.string().trim().min(1).max(1000),
+}).strict();
+export type PointCopyTarget = z.infer<typeof pointCopyTargetSchema>;
+export type GatewayPointMapping = z.infer<typeof gatewayPointMappingSchema>;
+export type GatewaySamplingPolicy = z.infer<typeof gatewaySamplingPolicySchema>;
+export type ConcentratorUnitShadow = z.infer<typeof concentratorUnitShadowSchema>;
+export type ConfigShadowDriftDetail = z.infer<typeof configShadowDriftDetailSchema>;
+export type GatewayDesiredConfig = z.infer<typeof gatewayDesiredConfigSchema>;
+export type GatewayReportedConfig = z.infer<typeof gatewayReportedConfigSchema>;
+export type GatewayConfigShadow = z.infer<typeof gatewayConfigShadowSchema>;
+export type GatewayConfigShadowUpdateRequest = z.infer<typeof gatewayConfigShadowUpdateRequestSchema>;
 export type ConcentratorParams = z.infer<typeof concentratorParamsSchema>;
 export type ConcentratorParamsPatch = z.infer<typeof concentratorParamsPatchSchema>;
 export type ConcentratorChannelReading = z.infer<typeof concentratorChannelReadingSchema>;
@@ -1473,6 +1550,13 @@ export function createPlatformGatewayClient(baseUrl = '') {
     ),
     updateGatewayConcentratorEids: (gatewayId: string, unitId: number, body: ConcentratorEidUpdateRequest, csrfToken: string, init?: RequestInit) => mutation(
       `/api/v1/gateways/${encodeURIComponent(gatewayId)}/concentrators/${encodeURIComponent(String(unitId))}/eids`, 'PUT', body, concentratorEidUpdateRequestSchema, concentratorEidWriteResultSchema,
+      { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
+    ),
+    getGatewayConfigShadow: (gatewayId: string, init?: RequestInit) => request(
+      `/api/v1/gateways/${encodeURIComponent(gatewayId)}/config-shadow`, gatewayConfigShadowSchema, { ...init, method: 'GET' },
+    ),
+    updateGatewayConfigShadow: (gatewayId: string, body: GatewayConfigShadowUpdateRequest, csrfToken: string, init?: RequestInit) => mutation(
+      `/api/v1/gateways/${encodeURIComponent(gatewayId)}/config-shadow`, 'PUT', body, gatewayConfigShadowUpdateRequestSchema, gatewayConfigShadowSchema,
       { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), 'X-CSRF-Token': csrfToken } },
     ),
     getHealth: (params: { includeBuild?: boolean } = {}, init?: RequestInit) => {

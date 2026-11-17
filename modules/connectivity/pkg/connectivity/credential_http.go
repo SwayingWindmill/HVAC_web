@@ -44,7 +44,14 @@ func NewCredentialHandlerWithTunnel(service *CredentialService, authorize Creden
 }
 
 func NewCredentialHandlerWithExtensions(service *CredentialService, authorize CredentialAuthorizer, tunnelHandler, concentratorHandler http.Handler) http.Handler {
+	return NewCredentialHandlerWithShadow(service, authorize, tunnelHandler, concentratorHandler, nil)
+}
+
+func NewCredentialHandlerWithShadow(service *CredentialService, authorize CredentialAuthorizer, tunnelHandler, concentratorHandler, configShadowHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	if configShadowHandler == nil && service != nil && service.store != nil {
+		configShadowHandler = NewConfigShadowHandler(service.store, service, authorize, nil)
+	}
 	finish := func(w http.ResponseWriter, value any, err error) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/json")
@@ -140,6 +147,12 @@ func NewCredentialHandlerWithExtensions(service *CredentialService, authorize Cr
 	}
 	if concentratorHandler != nil {
 		mux.Handle("/internal/v1/gateways/{gatewayId}/concentrators/", concentratorHandler)
+	}
+	if configShadowHandler != nil {
+		mux.Handle("GET /gateway/v1/config-shadow", configShadowHandler)
+		mux.Handle("POST /gateway/v1/config-shadow/report", configShadowHandler)
+		mux.Handle("GET /internal/v1/gateways/{gatewayId}/config-shadow", configShadowHandler)
+		mux.Handle("PUT /internal/v1/gateways/{gatewayId}/config-shadow", configShadowHandler)
 	}
 	mux.HandleFunc("POST /internal/v1/gateways/{target}", func(w http.ResponseWriter, r *http.Request) {
 		gatewayID, ok := strings.CutSuffix(r.PathValue("target"), ":retire")

@@ -115,17 +115,39 @@ type GatewayChildrenResolver interface {
 	ListGatewayChildDeviceIDs(ctx context.Context, gatewayID string) ([]string, error)
 }
 
-type Processor struct {
-	identities IdentityResolver
-	runtime    RuntimeClient
-	now        func() time.Time
+type ProcessorOption func(*Processor)
+
+func WithGatewayConnectHook(hook func(context.Context, string)) ProcessorOption {
+	return func(processor *Processor) {
+		processor.onGatewayConnected = hook
+	}
 }
 
-func NewProcessor(identities IdentityResolver, runtime RuntimeClient) (*Processor, error) {
+func WithGatewayPresenceHook(hook func(string, bool)) ProcessorOption {
+	return func(processor *Processor) {
+		processor.onGatewayPresence = hook
+	}
+}
+
+type Processor struct {
+	identities         IdentityResolver
+	runtime            RuntimeClient
+	now                func() time.Time
+	onGatewayConnected func(context.Context, string)
+	onGatewayPresence  func(string, bool)
+}
+
+func NewProcessor(identities IdentityResolver, runtime RuntimeClient, options ...ProcessorOption) (*Processor, error) {
 	if identities == nil || runtime == nil {
 		return nil, errors.New("MQTT uplink processor dependencies are invalid")
 	}
-	return &Processor{identities: identities, runtime: runtime, now: time.Now}, nil
+	processor := &Processor{identities: identities, runtime: runtime, now: time.Now}
+	for _, option := range options {
+		if option != nil {
+			option(processor)
+		}
+	}
+	return processor, nil
 }
 
 // Process handles one Gateway message. A message Connectivity will never accept is
@@ -173,7 +195,14 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 		if err != nil {
 			return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
 		}
-		return processor.processTelemetryBatch(ctx, gateway, quarantine, envelope, messages)
+		outcomes, err := processor.processTelemetryBatch(ctx, gateway, quarantine, envelope, messages)
+		if err != nil {
+			return nil, err
+		}
+		if processor.onGatewayPresence != nil {
+			processor.onGatewayPresence(gateway.ID, true)
+		}
+		return outcomes, nil
 	default:
 		envelope, err := DecodeEventEnvelope(first.Payload, gateway.ID)
 		if err != nil {
@@ -462,7 +491,39 @@ func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, e
 	}); err != nil {
 		return ProcessingResult{}, fmt.Errorf("accept MQTT runtime event: %w", err)
 	}
+	if processor.onGatewayPresence != nil {
+		processor.onGatewayPresence(gateway.ID, !isGatewayDisconnectEvent(event.EventType, event.SourceType))
+	}
+	if processor.onGatewayConnected != nil && isGatewayConnectEvent(event.EventType, event.SourceType) {
+		processor.onGatewayConnected(ctx, gateway.ID)
+	}
 	return ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeEvent}, nil
+}
+
+func isGatewayDisconnectEvent(rawEventType, rawSourceType string) bool {
+	eventType := strings.ToUpper(strings.TrimSpace(rawEventType))
+	sourceType := strings.ToUpper(strings.TrimSpace(rawSourceType))
+	switch eventType {
+	case "GATEWAY_DISCONNECTED", "LWT", "LAST_WILL":
+		return true
+	case "EXPLICIT_DISCONNECT", "DISCONNECTED", "DISCONNECT", "SESSION_DISCONNECTED", "OFFLINE":
+		return sourceType == "GATEWAY"
+	default:
+		return false
+	}
+}
+
+func isGatewayConnectEvent(rawEventType, rawSourceType string) bool {
+	eventType := strings.ToUpper(strings.TrimSpace(rawEventType))
+	sourceType := strings.ToUpper(strings.TrimSpace(rawSourceType))
+	switch eventType {
+	case "GATEWAY_CONNECTED":
+		return true
+	case "EXPLICIT_CONNECT", "CONNECTED", "CONNECT", "SESSION_CONNECTED", "ONLINE":
+		return sourceType == "GATEWAY"
+	default:
+		return false
+	}
 }
 
 func (processor *Processor) resolveEventScope(ctx context.Context, gateway Gateway, event EventPayload) (*ResolvedDevice, []string, error) {
