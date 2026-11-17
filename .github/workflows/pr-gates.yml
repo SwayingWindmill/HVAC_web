@@ -112,8 +112,12 @@ jobs:
         with:
           go-version: "1.27.4"
           cache-dependency-path: |
+            go.mod
+            go.sum
+            go.work.sum
+            cmd/*/go.mod
             libs/*/go.mod
-            services/*/go.mod
+            tools/*/go.mod
       - uses: actions/setup-node@v7
         with:
           node-version: "22.22.0"
@@ -152,8 +156,12 @@ jobs:
         with:
           go-version: "1.27.4"
           cache-dependency-path: |
+            go.mod
+            go.sum
+            go.work.sum
+            cmd/*/go.mod
             libs/*/go.mod
-            services/*/go.mod
+            tools/*/go.mod
       - uses: actions/setup-node@v7
         with:
           node-version: "22.22.0"

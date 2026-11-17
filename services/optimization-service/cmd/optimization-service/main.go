@@ -240,13 +240,13 @@ type preparationJobOutput struct {
 }
 
 type optimizationJobOutput struct {
-	OptimizationRunID      string                                 `json:"optimizationRunId"`
-	RecommendationID       string                                 `json:"recommendationId"`
+	OptimizationRunID      string                                   `json:"optimizationRunId"`
+	RecommendationID       string                                   `json:"recommendationId"`
 	ApprovalState          intelligencemodel.RecommendationApproval `json:"approvalState"`
-	AutoDispatched         bool                                   `json:"autoDispatched"`
-	AutoDispatchSkipReason string                                 `json:"autoDispatchSkipReason,omitempty"`
-	CommandIntentID        string                                 `json:"commandIntentId,omitempty"`
-	MonitorID              string                                 `json:"monitorId,omitempty"`
+	AutoDispatched         bool                                     `json:"autoDispatched"`
+	AutoDispatchSkipReason string                                   `json:"autoDispatchSkipReason,omitempty"`
+	CommandIntentID        string                                   `json:"commandIntentId,omitempty"`
+	MonitorID              string                                   `json:"monitorId,omitempty"`
 }
 
 // prepareScheduledOptimization turns a Site's schedule firing into a prepared run on its current

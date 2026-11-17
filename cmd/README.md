@@ -9,4 +9,4 @@
 - `scheduler`：扫描定时任务、分派给对应的服务。
 - `maintenance-worker`：证书到期检查、失败任务处理、退租户这类运维作业。
 
-每个入口有自己的 `go.mod`（模块路径 `github.com/quanlaihe/hvac-web/cmd/<名字>`）。哪些进程在第一阶段默认运行，以 `deploy/platform/phase1/runtime-inventory.v1.json` 为准。
+除 `wecom-alert-adapter` 外，其余进程与共享业务模块共用仓库根目录 `go.mod`（`github.com/quanlaihe/hvac-web`），`go.work` 仅保留根目录及少数独立底层契约/边缘模块。哪些进程在第一阶段默认运行，以 `deploy/platform/phase1/runtime-inventory.v1.json` 为准。

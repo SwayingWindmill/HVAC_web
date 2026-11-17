@@ -6,7 +6,7 @@ ARG GO_PROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GO_PROXY}
 WORKDIR /src
 
-COPY go.work go.work.sum ./
+COPY go.mod go.sum go.work go.work.sum ./
 COPY cmd ./cmd
 COPY libs ./libs
 COPY modules ./modules
