@@ -83,6 +83,10 @@ components:
             - $ref: '#/components/schemas/EnergySeriesRequest'
             - $ref: '#/components/schemas/SemanticQueryRequest'
             - $ref: '#/components/schemas/DeviceHistoryAggregateRequest'
+            - $ref: '#/components/schemas/TelemetrySnapshotRequest'
+            - $ref: '#/components/schemas/AlarmListRequest'
+            - $ref: '#/components/schemas/FddFindingsRequest'
+            - $ref: '#/components/schemas/WorkOrderListRequest'
     DeviceHistoryAggregateRequest:
       type: object
       additionalProperties: false
@@ -190,6 +194,71 @@ components:
             timezone: { type: string, minLength: 1 }
             from: { type: string, format: date-time }
             to: { type: string, format: date-time }
+    TelemetrySnapshotRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, tool, input]
+      properties:
+        requestId: { type: string, minLength: 1, maxLength: 256 }
+        tool: { const: telemetry.current.getDeviceObservationSnapshot }
+        input:
+          type: object
+          additionalProperties: false
+          required: [siteId, deviceId, pointKeys]
+          properties:
+            siteId: { type: string, format: uuid }
+            deviceId: { type: string, format: uuid }
+            pointKeys:
+              type: array
+              minItems: 1
+              maxItems: 16
+              uniqueItems: true
+              items:
+                type: string
+                pattern: '^[A-Za-z][A-Za-z0-9_.:-]{0,127}$'
+    AlarmListRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, tool, input]
+      properties:
+        requestId: { type: string, minLength: 1, maxLength: 256 }
+        tool: { const: alarm.listAlarms }
+        input:
+          type: object
+          additionalProperties: false
+          required: [siteId, condition, limit]
+          properties:
+            siteId: { type: string, format: uuid }
+            condition: { type: string, enum: [ACTIVE, CLEARED] }
+            limit: { type: integer, minimum: 1, maximum: 500 }
+    FddFindingsRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, tool, input]
+      properties:
+        requestId: { type: string, minLength: 1, maxLength: 256 }
+        tool: { const: fdd.listFindings }
+        input:
+          type: object
+          additionalProperties: false
+          required: [siteId, limit]
+          properties:
+            siteId: { type: string, format: uuid }
+            limit: { type: integer, minimum: 1, maximum: 500 }
+    WorkOrderListRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, tool, input]
+      properties:
+        requestId: { type: string, minLength: 1, maxLength: 256 }
+        tool: { const: workorder.listWorkOrders }
+        input:
+          type: object
+          additionalProperties: false
+          required: [siteId, limit]
+          properties:
+            siteId: { type: string, format: uuid }
+            limit: { type: integer, minimum: 1, maximum: 500 }
     ToolAuthorizationResponse:
       type: object
       additionalProperties: false
