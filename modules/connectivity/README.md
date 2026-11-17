@@ -41,9 +41,9 @@ hvac/v1/{网关 id}/up/event
 
 ## 顺序和积压
 
-每台网关有自己的队列和处理线程，第一条消息到达时创建。一条消息处理完或隔离之后才确认收到；临时失败原地重试，所以同一台网关的消息不会乱序。某台网关的队列满了，接入服务就暂停收它的消息，积压留在 MQTT 服务器上，一条都不丢。`hvac_mqtt_gateway_queue_depth{gateway_id}` 显示每台网关的积压。
+每台网关有自己的内存队列与处理线程，第一条消息到达时创建。接入服务默认通过 MQTT v5 共享订阅（`$share/connectivity/hvac/v1/+/up/telemetry` 与 `$share/connectivity/hvac/v1/+/up/event`，由 `CONNECTIVITY_MQTT_SHARE_GROUP` 配置）读取上行消息；每条接收到的消息先按到达顺序追加写入该网关独立的 WAL 磁盘缓冲区（`CONNECTIVITY_OVERFLOW_DIR`，受 `CONNECTIVITY_OVERFLOW_MAX_MESSAGES` 与 `CONNECTIVITY_OVERFLOW_MAX_BYTES` 双上限控制），写盘落袋后立即向 MQTT 发送 PUBACK，同时保持最多 `CONNECTIVITY_QUEUE_CAPACITY` 条热数据在内存中供处理线程零磁盘读取消费，确保单台网关卡死既不阻塞共享读循环，也不会因 broker inflight 窗口堵死其他健康网关。内存与磁盘缓冲区都装满时拒绝新消息、不发 ACK 并主动断开重连（由 MQTT 服务器在持久会话内保留并重传），同时递增 `hvac_mqtt_gateway_overflow_shed_total{gateway_id}`。`hvac_mqtt_gateway_queue_depth{gateway_id}` 显示内存与磁盘待处理总条数，`hvac_mqtt_gateway_overflow_depth{gateway_id}` 显示磁盘溢出条数。处理线程在每批消息成功下发遥测或隔离后推进 WAL 消费游标并在空闲或达阈值时截断回收磁盘空间；临时失败原地重试，所以同一台网关的消息不会乱序。
 
-断线和重连：没确认的消息都由 MQTT 服务器在下次连接时重发，所以连接一断，接入服务就放弃这条连接上还没放进队列的消息，马上重连，哪怕数据库这时还写不进去。一条消息写完时它来的那条连接已经断了，确认会失败（日志 `mqtt_uplink_ack_failed`，计数 `hvac_mqtt_ack_failures_total`），处理线程接着处理下一条，重发的那份会按重复读数处理。断线时日志记 `mqtt_uplink_connection_lost`，`/health/ready` 立刻变成 503，重新订阅成功后恢复。
+断线和重连：尚未落盘确认的消息都由 MQTT 服务器在下次连接时重发；已落盘 WAL 的消息在进程带持久 `CONNECTIVITY_OVERFLOW_DIR` 重启后会自动从消费游标恢复并继续按严格先进先出顺序投递。断线时日志记 `mqtt_uplink_connection_lost`，`/health/ready` 立刻变成 503，重新订阅成功后恢复。
 
 ## MQTT 服务器
 
@@ -57,6 +57,10 @@ hvac/v1/{网关 id}/up/event
 | --- | --- |
 | `CONNECTIVITY_MQTT_URL` | `tls://mqtt-broker:8883` |
 | `CONNECTIVITY_MQTT_CLIENT_ID` | `connectivity` |
+| `CONNECTIVITY_MQTT_SHARE_GROUP` | `connectivity`（设为 `off`/`none` 或空串则关闭共享订阅前缀） |
+| `CONNECTIVITY_OVERFLOW_MAX_MESSAGES` | `max(QueueCapacity*16, 4096)`（上限 `1048576`） |
+| `CONNECTIVITY_OVERFLOW_MAX_BYTES` | `33554432`（32 MiB/网关未消费 WAL 上限，最大 1 GiB） |
+| `CONNECTIVITY_OVERFLOW_DIR` | 空（本地默认建并在退出清理临时目录；Phase 1 Compose 挂载 `/var/lib/hvac/connectivity-spool` 持久卷） |
 | `CONNECTIVITY_TELEMETRY_URL` | `https://telemetry-runtime-service:8446` |
 | `CONNECTIVITY_TLS_CERT` / `CONNECTIVITY_TLS_KEY` | `/run/hvac/pki/mqtt-telemetry-adapter/tls.*` |
 | `CONNECTIVITY_CA` | `/run/hvac/pki/ca.crt` |

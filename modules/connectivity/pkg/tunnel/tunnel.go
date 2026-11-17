@@ -3,6 +3,7 @@ package tunnel
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
@@ -325,6 +326,25 @@ func (h *Hub) CloseGateway(gatewayID string) {
 	}
 }
 
+// CloseGatewayByFingerprint closes the active tunnel session for gatewayID only if its
+// presenting client certificate matches fingerprint, preserving newer rotated sessions.
+func (h *Hub) CloseGatewayByFingerprint(gatewayID, fingerprint string) bool {
+	target := strings.ToLower(strings.TrimSpace(fingerprint))
+	if target == "" {
+		return false
+	}
+	h.mu.Lock()
+	session := h.sessions[gatewayID]
+	if session == nil || session.peerFingerprint != target {
+		h.mu.Unlock()
+		return false
+	}
+	delete(h.sessions, gatewayID)
+	h.mu.Unlock()
+	session.closeWithReason("certificate_revoked")
+	return true
+}
+
 func (h *Hub) Close() {
 	if !h.closed.CompareAndSwap(false, true) {
 		return
@@ -454,10 +474,14 @@ func (h *Hub) registerSession(gatewayID string, conn net.Conn) *Session {
 }
 
 func (h *Hub) registerSessionWithAddr(gatewayID string, conn net.Conn, remoteAddr string) *Session {
+	return h.registerSessionWithFingerprint(gatewayID, conn, remoteAddr, "")
+}
+
+func (h *Hub) registerSessionWithFingerprint(gatewayID string, conn net.Conn, remoteAddr, peerFingerprint string) *Session {
 	if conn == nil {
 		return nil
 	}
-	s := newSession(h, gatewayID, conn, remoteAddr)
+	s := newSessionWithFingerprint(h, gatewayID, conn, remoteAddr, peerFingerprint)
 	h.mu.Lock()
 	if h.closed.Load() {
 		h.mu.Unlock()
@@ -471,6 +495,14 @@ func (h *Hub) registerSessionWithAddr(gatewayID string, conn net.Conn, remoteAdd
 		previous.closeWithReason("session_replaced")
 	}
 	return s
+}
+
+func peerCertificateFingerprint(cert *x509.Certificate) string {
+	if cert == nil || len(cert.Raw) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(cert.Raw)
+	return hex.EncodeToString(sum[:])
 }
 
 func (h *Hub) unregisterSession(s *Session) {
@@ -549,8 +581,18 @@ func NewUpgradeHandler(hub *Hub, parsePeer PeerParser, verifyPeer PeerVerifier) 
 			_ = tunnelConn.Close()
 			return
 		}
-		session := hub.registerSessionWithAddr(gatewayID, tunnelConn, r.RemoteAddr)
+		fingerprint := peerCertificateFingerprint(peer)
+		session := hub.registerSessionWithFingerprint(gatewayID, tunnelConn, r.RemoteAddr, fingerprint)
 		if session == nil {
+			return
+		}
+		// Re-check after registering in hub.sessions to close any revocation race window.
+		if verifiedID, recheckErr := verifyPeer(r.Context(), peer); recheckErr != nil || verifiedID != gatewayID {
+			if fingerprint != "" {
+				hub.CloseGatewayByFingerprint(gatewayID, fingerprint)
+			} else {
+				session.Close()
+			}
 			return
 		}
 		session.markOpened(context.Background())
@@ -698,37 +740,39 @@ func spliceNetConn(localConn net.Conn, stream *Stream) {
 }
 
 type Session struct {
-	hub            *Hub
-	gatewayID      string
-	sessionID      string
-	remoteAddr     string
-	conn           net.Conn
-	writeMu        sync.Mutex
-	mu             sync.Mutex
-	streams        map[uint32]*Stream
-	nextStream     uint32
-	bytesTX        atomic.Int64
-	bytesRX        atomic.Int64
-	opened         atomic.Bool
-	closeAuditOnce sync.Once
-	closed         atomic.Bool
-	done           chan struct{}
+	hub             *Hub
+	gatewayID       string
+	sessionID       string
+	peerFingerprint string
+	remoteAddr      string
+	conn            net.Conn
+	writeMu         sync.Mutex
+	mu              sync.Mutex
+	streams         map[uint32]*Stream
+	nextStream      uint32
+	bytesTX         atomic.Int64
+	bytesRX         atomic.Int64
+	opened          atomic.Bool
+	closeAuditOnce  sync.Once
+	closed          atomic.Bool
+	done            chan struct{}
 }
 
-func newSession(hub *Hub, gatewayID string, conn net.Conn, remoteAddr string) *Session {
+func newSessionWithFingerprint(hub *Hub, gatewayID string, conn net.Conn, remoteAddr, peerFingerprint string) *Session {
 	addr := strings.TrimSpace(remoteAddr)
 	if addr == "" && conn != nil && conn.RemoteAddr() != nil {
 		addr = conn.RemoteAddr().String()
 	}
 	return &Session{
-		hub:        hub,
-		gatewayID:  gatewayID,
-		sessionID:  newTunnelUUIDv7(time.Now().UTC()),
-		remoteAddr: addr,
-		conn:       conn,
-		streams:    make(map[uint32]*Stream),
-		nextStream: 1,
-		done:       make(chan struct{}),
+		hub:             hub,
+		gatewayID:       gatewayID,
+		sessionID:       newTunnelUUIDv7(time.Now().UTC()),
+		peerFingerprint: strings.ToLower(strings.TrimSpace(peerFingerprint)),
+		remoteAddr:      addr,
+		conn:            conn,
+		streams:         make(map[uint32]*Stream),
+		nextStream:      1,
+		done:            make(chan struct{}),
 	}
 }
 

@@ -10,9 +10,10 @@ import (
 )
 
 var (
-	uuidV7Pattern  = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	traceIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	zeroTraceID    = strings.Repeat("0", 32)
+	uuidV7Pattern     = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	traceIDPattern    = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	zeroTraceID       = strings.Repeat("0", 32)
+	shareGroupPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 )
 
 const (
@@ -23,8 +24,11 @@ const (
 	DefaultBatchMaxMessages = 200
 	maxBatchFlushWindow     = time.Second
 	// DefaultWorkerCount is the uplink worker pool size when WorkerCount is 0.
-	DefaultWorkerCount = 32
-	maxWorkerCount     = 1024
+	DefaultWorkerCount      = 32
+	maxWorkerCount          = 1024
+	maxOverflowMessages     = 1048576
+	defaultOverflowMaxBytes = int64(32 << 20)
+	maxOverflowBytes        = int64(1 << 30)
 )
 
 // Config is Connectivity's uplink configuration. It names no Tenant, Site or Gateway:
@@ -32,21 +36,29 @@ const (
 type Config struct {
 	MQTT             MQTTConfig
 	TelemetryRuntime TelemetryRuntimeConfig
-	// QueueCapacity bounds each Gateway's in-process backlog; beyond it the broker holds
-	// the Gateway's messages until Connectivity catches up.
-	QueueCapacity    int
+	// QueueCapacity bounds each Gateway's in-RAM mailbox before spilling to disk overflow.
+	QueueCapacity int
+	// OverflowMaxMessages bounds each Gateway's disk overflow spool (<= 0 defaults to
+	// max(QueueCapacity*16, 4096) in NewRuntime).
+	OverflowMaxMessages int
+	// OverflowMaxBytes bounds unconsumed WAL bytes per Gateway (<= 0 defaults to 32 MiB).
+	OverflowMaxBytes int64
+	// OverflowDir stores per-Gateway disk overflow spools; when empty, Runtime.Run
+	// creates a private temporary directory and removes it on shutdown.
+	OverflowDir      string
 	BatchMaxMessages int
 	BatchFlushWindow time.Duration
 	WorkerCount      int
 }
 
 type MQTTConfig struct {
-	BrokerURL  string
-	ClientID   string
-	CAFile     string
-	CertFile   string
-	KeyFile    string
-	ServerName string
+	BrokerURL               string
+	ClientID                string
+	SharedSubscriptionGroup string
+	CAFile                  string
+	CertFile                string
+	KeyFile                 string
+	ServerName              string
 }
 
 type TelemetryRuntimeConfig struct {
@@ -80,8 +92,17 @@ func (config Config) Validate() error {
 			return fmt.Errorf("%s is required", name)
 		}
 	}
+	if config.MQTT.SharedSubscriptionGroup != "" && !shareGroupPattern.MatchString(config.MQTT.SharedSubscriptionGroup) {
+		return errors.New("MQTT shared subscription group must match ^[A-Za-z0-9_-]{1,64}$")
+	}
 	if config.QueueCapacity < 1 || config.QueueCapacity > 65536 {
 		return errors.New("queue capacity must be between 1 and 65536")
+	}
+	if config.OverflowMaxMessages < 0 || config.OverflowMaxMessages > maxOverflowMessages {
+		return fmt.Errorf("overflow max messages must be between 0 and %d", maxOverflowMessages)
+	}
+	if config.OverflowMaxBytes < 0 || config.OverflowMaxBytes > maxOverflowBytes {
+		return fmt.Errorf("overflow max bytes must be between 0 and %d", maxOverflowBytes)
 	}
 	if config.BatchMaxMessages < 0 || config.BatchMaxMessages > MaxObservationBatchSize {
 		return fmt.Errorf("batch max messages must be between 0 and %d", MaxObservationBatchSize)
@@ -93,6 +114,34 @@ func (config Config) Validate() error {
 		return fmt.Errorf("worker count must be between 0 and %d", maxWorkerCount)
 	}
 	return nil
+}
+
+// SubscriptionTopicFilters returns the MQTT v5 subscription filters, adding the
+// $share/<group>/ prefix when SharedSubscriptionGroup is configured.
+func (config Config) SubscriptionTopicFilters() []string {
+	if config.MQTT.SharedSubscriptionGroup == "" {
+		return append([]string(nil), UplinkTopicFilters...)
+	}
+	filters := make([]string, len(UplinkTopicFilters))
+	prefix := "$share/" + config.MQTT.SharedSubscriptionGroup + "/"
+	for index, topic := range UplinkTopicFilters {
+		filters[index] = prefix + topic
+	}
+	return filters
+}
+
+func (config Config) effectiveOverflowMaxMessages() int {
+	if config.OverflowMaxMessages <= 0 {
+		return max(config.QueueCapacity*16, 4096)
+	}
+	return config.OverflowMaxMessages
+}
+
+func (config Config) effectiveOverflowMaxBytes() int64 {
+	if config.OverflowMaxBytes <= 0 {
+		return defaultOverflowMaxBytes
+	}
+	return config.OverflowMaxBytes
 }
 
 func (config Config) effectiveBatchMaxMessages() int {

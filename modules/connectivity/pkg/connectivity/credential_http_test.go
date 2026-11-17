@@ -9,14 +9,20 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
 func TestCredentialHTTPRejectsUnverifiedForwardedGatewayIdentity(t *testing.T) {
@@ -153,5 +159,171 @@ func TestCredentialHTTPRetireRouteAuthorizationAndValidation(t *testing.T) {
 	handler.ServeHTTP(concRec, concReq)
 	if concRec.Code != http.StatusOK {
 		t.Fatalf("expected concentrator route 200, got %d", concRec.Code)
+	}
+}
+
+func TestCertificateAuthorityCreateCRLAndSerialHex(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// New Gateway CA created by InitializeGatewayCA includes KeyUsageCRLSign.
+	caDir := t.TempDir()
+	if err := InitializeGatewayCA(caDir, []byte(""), now); err != nil {
+		t.Fatalf("InitializeGatewayCA: %v", err)
+	}
+	caPEM, err := os.ReadFile(filepath.Join(caDir, "ca.crt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM, err := os.ReadFile(filepath.Join(caDir, "ca.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := NewCertificateAuthority(caPEM, keyPEM, "tls://mqtt-broker:8883")
+	if err != nil {
+		t.Fatalf("NewCertificateAuthority: %v", err)
+	}
+
+	gatewayID := "0193f000-2000-7000-8000-000000000001"
+	csrKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: gatewayID}}, csrKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, err := parseGatewayCSR(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	issued, cert, err := authority.issue(gatewayID, csr, now)
+	if err != nil {
+		t.Fatalf("authority.issue: %v", err)
+	}
+	wantSerial := strings.ToLower(cert.SerialNumber.Text(16))
+	if issued.SerialNumber != wantSerial || issued.SerialNumber == "" {
+		t.Fatalf("issued.SerialNumber=%q, want %q", issued.SerialNumber, wantSerial)
+	}
+
+	crlPEM, err := authority.CreateCRL([]pkix.RevokedCertificate{{
+		SerialNumber:   cert.SerialNumber,
+		RevocationTime: now,
+	}}, now)
+	if err != nil {
+		t.Fatalf("CreateCRL: %v", err)
+	}
+	block, rest := pem.Decode(crlPEM)
+	if block == nil || block.Type != "X509 CRL" || len(rest) != 0 {
+		t.Fatalf("unexpected CRL PEM block=%v restLen=%d", block, len(rest))
+	}
+	crl, err := x509.ParseRevocationList(block.Bytes)
+	if err != nil {
+		t.Fatalf("x509.ParseRevocationList: %v", err)
+	}
+	if err := crl.CheckSignatureFrom(authority.certificate); err != nil {
+		t.Fatalf("CRL signature check failed: %v", err)
+	}
+	if len(crl.RevokedCertificateEntries) != 1 || crl.RevokedCertificateEntries[0].SerialNumber.Cmp(cert.SerialNumber) != 0 {
+		t.Fatalf("unexpected CRL entries: %+v", crl.RevokedCertificateEntries)
+	}
+
+	// Legacy CA without KeyUsageCRLSign fails explicitly with ErrCRLSignUnsupported.
+	legacyKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyTpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Legacy CA"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	legacyDER, err := x509.CreateCertificate(rand.Reader, legacyTpl, legacyTpl, &legacyKey.PublicKey, legacyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPriv, err := x509.MarshalPKCS8PrivateKey(legacyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyAuth, err := NewCertificateAuthority(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: legacyDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: legacyPriv}),
+		"tls://mqtt-broker:8883",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacyAuth.CreateCRL(nil, now); !errors.Is(err, ErrCRLSignUnsupported) {
+		t.Fatalf("expected ErrCRLSignUnsupported for legacy CA, got %v", err)
+	}
+}
+
+func TestCredentialHTTPNewRoutesAndValidation(t *testing.T) {
+	handler := NewCredentialHandler(&CredentialService{}, nil)
+	gwURI, _ := url.Parse("spiffe://hvac.local/platform-gateway")
+	gwPeer := &x509.Certificate{URIs: []*url.URL{gwURI}}
+	coreURI, _ := url.Parse("spiffe://hvac.local/platform-core-service")
+	corePeer := &x509.Certificate{URIs: []*url.URL{coreURI}}
+
+	// Unverified workload rejected on ca.crl.
+	unverifiedCRL := httptest.NewRequest(http.MethodGet, "/internal/v1/gateways/ca.crl", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, unverifiedCRL)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unverified ca.crl status=%d, want 401", rec.Code)
+	}
+
+	// platform-core-service is not authorized for /internal/v1/gateways/{id}/rotate or ca.crl.
+	for _, tc := range []struct {
+		method, path string
+	}{
+		{http.MethodGet, "/internal/v1/gateways/ca.crl"},
+		{http.MethodGet, "/internal/v1/gateways/0193f000-2000-7000-8000-000000000001/credentials"},
+		{http.MethodPost, "/internal/v1/gateways/0193f000-2000-7000-8000-000000000001/rotate"},
+		{http.MethodPost, "/internal/v1/gateways/0193f000-2000-7000-8000-000000000001/credentials/0193f000-3000-7000-8000-000000000001/revoke"},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		req.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{corePeer}}}
+		r := httptest.NewRecorder()
+		handler.ServeHTTP(r, req)
+		if r.Code != http.StatusUnauthorized {
+			t.Fatalf("core-service authorized on %s %s: %d", tc.method, tc.path, r.Code)
+		}
+	}
+
+	// Forged X-Gateway-Client-Cert on ca.crl is rejected.
+	forgedCRL := httptest.NewRequest(http.MethodGet, "/internal/v1/gateways/ca.crl", nil)
+	forgedCRL.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
+	forgedCRL.Header.Set("X-Gateway-Client-Cert", "forged")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, forgedCRL)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("forged X-Gateway-Client-Cert on ca.crl status=%d, want 403", rec.Code)
+	}
+
+	// /gateway/v1/renew parses revokePeerCertificate field strictly and reaches peer cert check cleanly.
+	renewReq := httptest.NewRequest(http.MethodPost, "/gateway/v1/renew", bytes.NewBufferString(`{"csrPem":"invalid","revokePeerCertificate":true}`))
+	renewReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, renewReq)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("renew with revokePeerCertificate missing peer cert returned %d, want 400", rec.Code)
+	}
+	var errResp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil || errResp["code"] != "ENROLLMENT_REJECTED" {
+		t.Fatalf("unexpected renew error body: %s (%v)", rec.Body.String(), err)
+	}
+
+	// Blank reason on certificate revoke violates minLength=1 OpenAPI constraint and is rejected before DB.
+	authHandler := NewCredentialHandler(&CredentialService{}, func(*http.Request, registryauth.Action) (registryauth.GrantClaims, error) {
+		return registryauth.GrantClaims{TenantID: "0193f000-0000-7000-8000-000000000001", PrincipalID: "0193f000-1000-7000-8000-000000000001"}, nil
+	})
+	blankReasonReq := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/0193f000-2000-7000-8000-000000000001/credentials/0193f000-3000-7000-8000-000000000001/revoke", bytes.NewBufferString(`{"reason":"   "}`))
+	blankReasonReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
+	blankRec := httptest.NewRecorder()
+	authHandler.ServeHTTP(blankRec, blankReasonReq)
+	if blankRec.Code != http.StatusBadRequest {
+		t.Fatalf("blank revoke reason status=%d, want 400", blankRec.Code)
 	}
 }

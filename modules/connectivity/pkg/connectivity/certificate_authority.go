@@ -14,10 +14,14 @@ import (
 	"math/big"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 )
 
-var gatewayIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var (
+	gatewayIDPattern      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	ErrCRLSignUnsupported = errors.New("gateway CA lacks CRLSign key usage")
+)
 
 type CertificateAuthority struct {
 	certificate    *x509.Certificate
@@ -85,5 +89,46 @@ func (authority *CertificateAuthority) issue(gatewayID string, csr *x509.Certifi
 	if err != nil {
 		return IssuedCredential{}, nil, err
 	}
-	return IssuedCredential{CertificatePEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), CAPEM: authority.certificatePEM, BrokerURL: authority.brokerURL, ExpiresAt: cert.NotAfter}, cert, nil
+	return IssuedCredential{
+		SerialNumber:   strings.ToLower(cert.SerialNumber.Text(16)),
+		CertificatePEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+		CAPEM:          authority.certificatePEM,
+		BrokerURL:      authority.brokerURL,
+		ExpiresAt:      cert.NotAfter,
+	}, cert, nil
+}
+
+// CreateCRL signs an RFC 5280 CRL (PEM-encoded) containing the supplied revoked serials.
+func (authority *CertificateAuthority) CreateCRL(entries []pkix.RevokedCertificate, now time.Time) ([]byte, error) {
+	if authority == nil || authority.certificate == nil || authority.signer == nil {
+		return nil, errors.New("gateway CA is not initialized")
+	}
+	if authority.certificate.KeyUsage&x509.KeyUsageCRLSign == 0 {
+		return nil, ErrCRLSignUnsupported
+	}
+	issuedAt := now.UTC()
+	revoked := make([]x509.RevocationListEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.SerialNumber == nil || entry.SerialNumber.Sign() <= 0 {
+			continue
+		}
+		revokedAt := entry.RevocationTime.UTC()
+		if revokedAt.IsZero() {
+			revokedAt = issuedAt
+		}
+		revoked = append(revoked, x509.RevocationListEntry{
+			SerialNumber:   entry.SerialNumber,
+			RevocationTime: revokedAt,
+		})
+	}
+	der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:                    big.NewInt(max(1, issuedAt.UnixMilli())),
+		ThisUpdate:                issuedAt,
+		NextUpdate:                issuedAt.Add(24 * time.Hour),
+		RevokedCertificateEntries: revoked,
+	}, authority.certificate, authority.signer)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der}), nil
 }

@@ -53,3 +53,72 @@ func TestConfigValidateBatchOptions(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigSharedSubscriptionAndOverflowValidation(t *testing.T) {
+	base := func() Config {
+		return Config{
+			MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+			TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+			QueueCapacity:    8,
+		}
+	}
+
+	plain := base()
+	plainFilters := plain.SubscriptionTopicFilters()
+	if len(plainFilters) != 2 || plainFilters[0] != "hvac/v1/+/up/telemetry" || plainFilters[1] != "hvac/v1/+/up/event" {
+		t.Fatalf("plain SubscriptionTopicFilters=%v", plainFilters)
+	}
+	if plain.effectiveOverflowMaxMessages() != 4096 {
+		t.Fatalf("effectiveOverflowMaxMessages(q=8)=%d, want 4096", plain.effectiveOverflowMaxMessages())
+	}
+	if plain.effectiveOverflowMaxBytes() != 32<<20 {
+		t.Fatalf("effectiveOverflowMaxBytes()=%d, want %d", plain.effectiveOverflowMaxBytes(), 32<<20)
+	}
+
+	largeQueue := base()
+	largeQueue.QueueCapacity = 512
+	if largeQueue.effectiveOverflowMaxMessages() != 8192 {
+		t.Fatalf("effectiveOverflowMaxMessages(q=512)=%d, want 8192", largeQueue.effectiveOverflowMaxMessages())
+	}
+
+	shared := base()
+	shared.MQTT.SharedSubscriptionGroup = "connectivity-pool_1"
+	if err := shared.Validate(); err != nil {
+		t.Fatalf("valid shared config failed Validate: %v", err)
+	}
+	sharedFilters := shared.SubscriptionTopicFilters()
+	if len(sharedFilters) != 2 ||
+		sharedFilters[0] != "$share/connectivity-pool_1/hvac/v1/+/up/telemetry" ||
+		sharedFilters[1] != "$share/connectivity-pool_1/hvac/v1/+/up/event" {
+		t.Fatalf("shared SubscriptionTopicFilters=%v", sharedFilters)
+	}
+
+	if got := TopicGatewayID("$share/connectivity/hvac/v1/" + testGatewayA + "/up/telemetry"); got != testGatewayA {
+		t.Fatalf("TopicGatewayID with $share prefix = %q, want %q", got, testGatewayA)
+	}
+	if got := TopicGatewayID("hvac/v1/" + testGatewayA + "/up/event"); got != testGatewayA {
+		t.Fatalf("TopicGatewayID without $share = %q, want %q", got, testGatewayA)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{"invalid share group char", func(c *Config) { c.MQTT.SharedSubscriptionGroup = "pool/1" }},
+		{"too long share group", func(c *Config) {
+			c.MQTT.SharedSubscriptionGroup = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		}},
+		{"negative overflow max", func(c *Config) { c.OverflowMaxMessages = -1 }},
+		{"overflow max above limit", func(c *Config) { c.OverflowMaxMessages = 1048577 }},
+		{"negative overflow max bytes", func(c *Config) { c.OverflowMaxBytes = -1 }},
+		{"overflow max bytes above limit", func(c *Config) { c.OverflowMaxBytes = (1 << 30) + 1 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := base()
+			test.mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("%s unexpectedly passed Validate", test.name)
+			}
+		})
+	}
+}

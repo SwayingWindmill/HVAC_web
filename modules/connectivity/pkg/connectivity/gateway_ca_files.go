@@ -30,7 +30,7 @@ func InitializeGatewayCA(directory string, workloadCA []byte, now time.Time) err
 	if err != nil {
 		return err
 	}
-	template := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "HVAC Gateway CA"}, NotBefore: now.Add(-time.Hour), NotAfter: now.AddDate(10, 0, 0), IsCA: true, BasicConstraintsValid: true, MaxPathLenZero: true, KeyUsage: x509.KeyUsageCertSign}
+	template := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "HVAC Gateway CA"}, NotBefore: now.Add(-time.Hour), NotAfter: now.AddDate(10, 0, 0), IsCA: true, BasicConstraintsValid: true, MaxPathLenZero: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
 		return err

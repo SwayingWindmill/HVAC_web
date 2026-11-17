@@ -70,8 +70,11 @@ invariant(spec.openapi === '3.1.0', 'OpenAPI version must be 3.1.0');
 
 const expectedOperations = {
   getGatewayCredential: ['get', '/api/v1/gateways/{gatewayId}/credential'],
+  listGatewayCredentials: ['get', '/api/v1/gateways/{gatewayId}/credentials'],
+  revokeGatewayCertificate: ['post', '/api/v1/gateways/{gatewayId}/credentials/{credentialId}/revoke'],
   generateGatewayEnrollmentCode: ['post', '/api/v1/gateways/{gatewayId}/enrollment-code'],
   revokeGatewayCredential: ['post', '/api/v1/gateways/{gatewayId}/revoke'],
+  rotateGatewayEnrollment: ['post', '/api/v1/gateways/{gatewayId}/rotate'],
   getGatewayConcentratorStatus: ['get', '/api/v1/gateways/{gatewayId}/concentrators/{unitId}/status'],
   updateGatewayConcentratorParams: ['put', '/api/v1/gateways/{gatewayId}/concentrators/{unitId}/params'],
   getGatewayConcentratorEids: ['get', '/api/v1/gateways/{gatewayId}/concentrators/{unitId}/eids'],
@@ -179,8 +182,11 @@ for (const [operationId, [method, path]] of Object.entries(expectedOperations)) 
 
 const expectedSuccessSchemas = {
   getGatewayCredential: 'GatewayCredentialStatus',
+  listGatewayCredentials: 'GatewayCredentialList',
+  revokeGatewayCertificate: 'GatewayCredentialRecord',
   generateGatewayEnrollmentCode: 'GatewayEnrollmentCode',
   revokeGatewayCredential: 'GatewayCredentialStatus',
+  rotateGatewayEnrollment: 'GatewayEnrollmentCode',
   getGatewayConcentratorStatus: 'ConcentratorStatus',
   updateGatewayConcentratorParams: 'ConcentratorParamsWriteResult',
   getGatewayConcentratorEids: 'ConcentratorEidTable',
@@ -337,6 +343,12 @@ const schemaRequirements = {
     ['id', 'tenantId', 'siteId', 'leaseId', 'recommendationId', 'commandIntentId', 'deviceId', 'targetCapability', 'baselineSupplyTempC', 'appliedSupplyTempC', 'restoreSupplyTempC', 'zoneTempMaxC', 'supplyTempMaxC', 'startedAt', 'windowEndsAt', 'lastCheckedAt', 'telemetryUnhealthySince', 'status', 'tripReason', 'rollbackCommandIntentId', 'createdAt', 'updatedAt'],
   ],
   OptimizationExecutionMonitorList: [['tenantId', 'siteId', 'items']],
+  GatewayCredentialRecord: [
+    ['id', 'gatewayId', 'fingerprintSha256', 'status', 'validFrom', 'validUntil', 'createdAt'],
+    ['id', 'gatewayId', 'fingerprintSha256', 'serialNumber', 'status', 'validFrom', 'validUntil', 'revokedAt', 'revocationReason', 'createdAt'],
+  ],
+  GatewayCredentialList: [['items']],
+  GatewayCertificateRevokeRequest: [[], ['reason']],
   FieldError: [['field', 'message']],
   ProblemDetails: [['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable'], ['type', 'title', 'status', 'detail', 'instance', 'code', 'traceId', 'retryable', 'reason', 'fieldErrors']],
 };

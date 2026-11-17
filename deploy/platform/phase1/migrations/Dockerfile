@@ -107,6 +107,7 @@ COPY infra/registry/postgres/init/plant-twin-relationships-and-roles.sql /opt/hv
 
 FROM scratch AS sources-runtime
 
+COPY infra/connectivity/postgres/init/gateway-certificate-revocation.sql /opt/hvac/repo/infra/connectivity/postgres/init/gateway-certificate-revocation.sql
 COPY infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql /opt/hvac/repo/infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 COPY infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql /opt/hvac/repo/infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 COPY infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql /opt/hvac/repo/infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql

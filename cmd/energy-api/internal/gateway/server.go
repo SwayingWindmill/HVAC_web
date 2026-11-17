@@ -744,6 +744,9 @@ func safeLogPath(path string) string {
 		if telemetryRoute, _, matches := matchPublicTelemetryRoute(path); matches {
 			return telemetryRoute.template
 		}
+		if template, matches := matchGatewayCredentialPathTemplate(path); matches {
+			return template
+		}
 		if template, matches := matchConcentratorPathTemplate(path); matches {
 			return template
 		}

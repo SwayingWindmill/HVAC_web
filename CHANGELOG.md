@@ -16,6 +16,9 @@
 - 引入共享语义设备群孪生库 `libs/planttwin`（`SiteTwin`、`HydraulicGraph`、`EvaluateOperatingSchedule` 及单事务只读视图适配器 `PostgresLoader` / 测试桩 `StaticLoader`），并新建增量迁移 `plant-twin-relationships-and-roles.sql` 与 `ADR 0033`：
   - 新增 `core_registry.asset_relationships`（`SERVES` 水力服务有向无环连接）与 `core_registry.point_subject_bindings.semantic_role`（11 类物理语义角色闭合枚举），配套 10 个按租户与授权站点行级隔离的只读视图 `core_registry.plant_twin_*_v1`。
   - `deploy/sites/songyaxuan.site.json` 补全 16 条水力连接与点位语义角色，`scripts/site-onboarding.mjs` 与 `scripts/phase1-central-plant-simulator.mjs` 同步校验、幂等下发并检测漂移。
+- 增强 `modules/connectivity`、`cmd/connectivity` 与 `cmd/energy-api` 的 MQTT 上行队头隔离、单证吊销与无损密钥轮换能力（新增迁移 `gateway-certificate-revocation.sql` 与 `route-ownership.v1.json` 修订 `52`）：
+  - 上行订阅支持 MQTT v5 `$share/<group>/...` 共享订阅（`CONNECTIVITY_MQTT_SHARE_GROUP`，默认 `connectivity`），并用非阻塞每网关内存环形队列加磁盘溢出缓存（`gatewayMailbox`、`CONNECTIVITY_OVERFLOW_DIR`、`CONNECTIVITY_OVERFLOW_MAX_MESSAGES`）替代阻塞通道，消除慢网关对共享 MQTT 读循环的跨网关队头阻塞，溢出装满时留由 Broker 重传并输出 `hvac_mqtt_gateway_overflow_depth` 与 `hvac_mqtt_gateway_overflow_shed_total`。
+  - 新增网关证书列表、单证按 ID 吊销、按证书指纹精准踢下线反向运维隧道会话（`CloseGatewayByFingerprint`）、无损重放轮换（`POST /api/v1/gateways/{gatewayId}/rotate` 及续期参数 `revokePeerCertificate`）与已吊销序列号签名 CRL 导出（`/internal/v1/gateways/ca.crl`）。
 
 #### 变更
 
