@@ -1053,6 +1053,82 @@ export class Gateway {
     this.configShadows.set(gatewayId, shadow);
   }
 
+  reportGatewayShadow(gatewayId: string, reportedInput: Json, now = new Date().toISOString()) {
+    const shadow = this.getOrInitConfigShadow(gatewayId);
+    const desired = shadow.desired as Json | undefined;
+    const reported: Json = {
+      reportedRevision: Number(reportedInput.reportedRevision ?? 0),
+      appliedStatus: reportedInput.appliedStatus ?? 'APPLIED',
+      pointMappings: reportedInput.pointMappings ?? [],
+      samplingPolicies: reportedInput.samplingPolicies ?? [],
+      concentratorConfigs: reportedInput.concentratorConfigs ?? {},
+      ...(reportedInput.driverConfigs !== undefined ? { driverConfigs: reportedInput.driverConfigs } : {}),
+      ...(Object.prototype.hasOwnProperty.call(reportedInput, 'autonomyPolicy')
+        ? { autonomyPolicy: reportedInput.autonomyPolicy }
+        : {}),
+      driftDetails: Array.isArray(reportedInput.driftDetails) ? reportedInput.driftDetails : [],
+      ...(reportedInput.errorMessage !== undefined ? { errorMessage: reportedInput.errorMessage } : {}),
+      reportedAt: reportedInput.reportedAt ?? now,
+      updatedAt: now,
+    };
+
+    const drift: Json[] = [];
+    const desiredRev = Number(desired?.desiredRevision ?? 0);
+    if (!desired || reported.reportedRevision >= desiredRev) {
+      const dDrivers = new Map<string, Json>(
+        (Array.isArray(desired?.driverConfigs) ? desired.driverConfigs : []).map((d: Json) => [d.deviceKey, d]),
+      );
+      const rDrivers = new Map<string, Json>(
+        (Array.isArray(reported.driverConfigs) ? reported.driverConfigs : []).map((d: Json) => [d.deviceKey, d]),
+      );
+      for (const [key, dVal] of dDrivers) {
+        const rVal = rDrivers.get(key);
+        if (!rVal) {
+          drift.push({ section: 'DRIVER_CONFIGS', target: key, reason: 'MISSING_ON_EDGE', detail: `协议驱动 ${key} 在边缘端缺失` });
+        } else if (JSON.stringify(dVal) !== JSON.stringify(rVal)) {
+          drift.push({ section: 'DRIVER_CONFIGS', target: key, reason: 'VALUE_MISMATCH', detail: `协议驱动 ${key} 寄存器或地址配置与云端不一致` });
+        }
+      }
+      for (const [key] of rDrivers) {
+        if (!dDrivers.has(key)) {
+          drift.push({ section: 'DRIVER_CONFIGS', target: key, reason: 'UNEXPECTED_ON_EDGE', detail: `边缘端存在未登记的协议驱动 ${key}` });
+        }
+      }
+
+      const dAuto = desired?.autonomyPolicy ?? null;
+      const rAuto = reported.autonomyPolicy ?? null;
+      if (dAuto !== null && rAuto === null) {
+        drift.push({ section: 'AUTONOMY_POLICY', target: 'autonomyPolicy', reason: 'MISSING_ON_EDGE', detail: '边缘端尚未加载断网自治策略' });
+      } else if (dAuto === null && rAuto !== null) {
+        drift.push({ section: 'AUTONOMY_POLICY', target: 'autonomyPolicy', reason: 'UNEXPECTED_ON_EDGE', detail: '边缘端存在云端已清除的断网自治策略' });
+      } else if (dAuto !== null && rAuto !== null && JSON.stringify(dAuto) !== JSON.stringify(rAuto)) {
+        drift.push({ section: 'AUTONOMY_POLICY', target: 'autonomyPolicy', reason: 'VALUE_MISMATCH', detail: '边缘端断网自治参数与云端不一致' });
+      }
+
+      for (const item of reported.driftDetails as Json[]) {
+        drift.push(item);
+      }
+    }
+
+    let syncStatus = 'UNCONFIGURED';
+    if (desired && reported.reportedRevision < desiredRev) {
+      syncStatus = 'PENDING_SYNC';
+    } else if (desired && reported.reportedRevision === desiredRev && reported.appliedStatus === 'APPLIED' && drift.length === 0) {
+      syncStatus = 'SYNCED';
+    } else if (reported.appliedStatus !== 'APPLIED' || drift.length > 0 || (desired && reported.reportedRevision !== desiredRev)) {
+      syncStatus = 'DRIFTED';
+    }
+
+    const updated: Json = {
+      ...shadow,
+      syncStatus,
+      reported,
+      drift,
+    };
+    this.configShadows.set(gatewayId, updated);
+    return updated;
+  }
+
   setDeviceTags(deviceId: string, tags: Record<string, string>) {
     this.assetModel.devices = (this.assetModel.devices as Json[]).map((device) =>
       device.id === deviceId ? { ...device, tags } : device,
@@ -2024,12 +2100,35 @@ export class Gateway {
         return refuse(409, 'CONFIG_SHADOW_REVISION_CONFLICT', 'Config shadow desiredRevision conflict.');
       }
 
+      const hasDriverConfigs = Boolean(body && Object.prototype.hasOwnProperty.call(body, 'driverConfigs') && body.driverConfigs !== undefined);
+      if (hasDriverConfigs) {
+        const err = this.validateShadowDriverConfigs(body?.driverConfigs);
+        if (err) return refuse(422, 'CONFIG_SHADOW_INVALID', err);
+      }
+
+      const hasAutonomyPolicy = Boolean(body && Object.prototype.hasOwnProperty.call(body, 'autonomyPolicy') && body.autonomyPolicy !== undefined);
+      if (hasAutonomyPolicy && body?.autonomyPolicy !== null) {
+        const err = this.validateShadowAutonomyPolicy(body?.autonomyPolicy);
+        if (err) return refuse(422, 'CONFIG_SHADOW_INVALID', err);
+      }
+
       const nextRev = currentRev + 1;
+      const nextDriverConfigs = hasDriverConfigs
+        ? body!.driverConfigs
+        : shadow.desired?.driverConfigs;
+      const nextAutonomyPolicy = hasAutonomyPolicy
+        ? body!.autonomyPolicy
+        : shadow.desired && Object.prototype.hasOwnProperty.call(shadow.desired, 'autonomyPolicy')
+          ? shadow.desired.autonomyPolicy
+          : undefined;
+
       const desired: Json = {
         desiredRevision: nextRev,
         pointMappings: body?.pointMappings ?? shadow.desired?.pointMappings ?? [],
         samplingPolicies: body?.samplingPolicies ?? shadow.desired?.samplingPolicies ?? [],
         concentratorConfigs: body?.concentratorConfigs ?? shadow.desired?.concentratorConfigs ?? {},
+        ...(nextDriverConfigs !== undefined ? { driverConfigs: nextDriverConfigs } : {}),
+        ...(nextAutonomyPolicy !== undefined ? { autonomyPolicy: nextAutonomyPolicy } : {}),
         updatedBy: activePrincipal.principalId,
         reason,
         createdAt: shadow.desired?.createdAt ?? now,
@@ -2045,6 +2144,98 @@ export class Gateway {
       return { body: updatedShadow };
     }
     return undefined;
+  }
+
+  private validateShadowDriverConfigs(raw: unknown): string | null {
+    if (!Array.isArray(raw)) return 'driverConfigs must be an array';
+    const pointPattern = /^[a-z][a-z0-9_]{0,127}$/;
+    const rawTypes = new Set(['UINT16', 'INT16', 'UINT32', 'INT32', 'FLOAT32', 'BIT_BOOL', 'ENUM16']);
+    const endians = new Set(['BIG_ENDIAN', 'LITTLE_ENDIAN']);
+    const priorities = new Set(['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW']);
+    for (let i = 0; i < raw.length; i += 1) {
+      const drv = raw[i] as Json | null;
+      if (!drv || typeof drv !== 'object') return `driverConfigs[${i}] must be an object`;
+      if (typeof drv.deviceKey !== 'string' || drv.deviceKey.length < 1 || drv.deviceKey.length > 128) {
+        return `driverConfigs[${i}].deviceKey invalid`;
+      }
+      if (drv.driverType !== 'MODBUS_TCP' && drv.driverType !== 'MODBUS_RTU') {
+        return `driverConfigs[${i}].driverType invalid`;
+      }
+      if (typeof drv.endpoint !== 'string' || drv.endpoint.length < 1 || drv.endpoint.length > 256) {
+        return `driverConfigs[${i}].endpoint invalid`;
+      }
+      if (!Number.isInteger(drv.unitId) || drv.unitId < 1 || drv.unitId > 247) {
+        return `driverConfigs[${i}].unitId out of range`;
+      }
+      if (!Number.isInteger(drv.timeoutMs) || drv.timeoutMs < 100 || drv.timeoutMs > 30000) {
+        return `driverConfigs[${i}].timeoutMs out of range`;
+      }
+      if (!Number.isInteger(drv.retries) || drv.retries < 0 || drv.retries > 10) {
+        return `driverConfigs[${i}].retries out of range`;
+      }
+      if (!Array.isArray(drv.registers) || drv.registers.length < 1 || drv.registers.length > 256) {
+        return `driverConfigs[${i}].registers must have 1..256 entries`;
+      }
+      for (let j = 0; j < drv.registers.length; j += 1) {
+        const reg = drv.registers[j] as Json | null;
+        if (!reg || typeof reg !== 'object') return `driverConfigs[${i}].registers[${j}] must be an object`;
+        if (typeof reg.pointCode !== 'string' || !pointPattern.test(reg.pointCode)) {
+          return `driverConfigs[${i}].registers[${j}].pointCode invalid`;
+        }
+        if (reg.functionCode !== 3 && reg.functionCode !== 4) {
+          return `driverConfigs[${i}].registers[${j}].functionCode invalid`;
+        }
+        if (reg.writeFunctionCode !== undefined && reg.writeFunctionCode !== 6 && reg.writeFunctionCode !== 16) {
+          return `driverConfigs[${i}].registers[${j}].writeFunctionCode invalid`;
+        }
+        if (!Number.isInteger(reg.address) || reg.address < 0 || reg.address > 65535) {
+          return `driverConfigs[${i}].registers[${j}].address out of range`;
+        }
+        if (!Number.isInteger(reg.registerCount) || reg.registerCount < 1 || reg.registerCount > 4) {
+          return `driverConfigs[${i}].registers[${j}].registerCount out of range`;
+        }
+        if (!rawTypes.has(reg.rawType) || !endians.has(reg.byteOrder) || !endians.has(reg.wordOrder) || !priorities.has(reg.pollPriority)) {
+          return `driverConfigs[${i}].registers[${j}] enum invalid`;
+        }
+        if (reg.bitIndex !== undefined && (!Number.isInteger(reg.bitIndex) || reg.bitIndex < 0 || reg.bitIndex > 15)) {
+          return `driverConfigs[${i}].registers[${j}].bitIndex out of range`;
+        }
+        if (typeof reg.scale !== 'number' || !Number.isFinite(reg.scale) || typeof reg.offset !== 'number' || !Number.isFinite(reg.offset)) {
+          return `driverConfigs[${i}].registers[${j}] scale/offset invalid`;
+        }
+      }
+    }
+    return null;
+  }
+
+  private validateShadowAutonomyPolicy(raw: unknown): string | null {
+    if (!raw || typeof raw !== 'object') return 'autonomyPolicy must be an object or null';
+    const policy = raw as Json;
+    if (typeof policy.enabled !== 'boolean') return 'autonomyPolicy.enabled must be boolean';
+    if (!Number.isInteger(policy.offlineGraceSeconds) || policy.offlineGraceSeconds < 10 || policy.offlineGraceSeconds > 3600) {
+      return 'autonomyPolicy.offlineGraceSeconds out of range';
+    }
+    if (typeof policy.defaultChilledWaterSupplySetpointC !== 'number' || policy.defaultChilledWaterSupplySetpointC < 4 || policy.defaultChilledWaterSupplySetpointC > 18) {
+      return 'autonomyPolicy.defaultChilledWaterSupplySetpointC out of range';
+    }
+    for (const key of ['minPumpFrequencyHz', 'defaultPumpFrequencyHz', 'maxPumpFrequencyHz'] as const) {
+      if (typeof policy[key] !== 'number' || policy[key] < 15 || policy[key] > 50) {
+        return `autonomyPolicy.${key} out of range`;
+      }
+    }
+    if (policy.minPumpFrequencyHz > policy.defaultPumpFrequencyHz || policy.defaultPumpFrequencyHz > policy.maxPumpFrequencyHz) {
+      return 'autonomyPolicy pump frequency bounds invalid';
+    }
+    if (!Number.isInteger(policy.minRunSeconds) || policy.minRunSeconds < 0 || policy.minRunSeconds > 3600) {
+      return 'autonomyPolicy.minRunSeconds out of range';
+    }
+    if (!Number.isInteger(policy.minStopSeconds) || policy.minStopSeconds < 0 || policy.minStopSeconds > 3600) {
+      return 'autonomyPolicy.minStopSeconds out of range';
+    }
+    if (!Number.isInteger(policy.snapshotIntervalSeconds) || policy.snapshotIntervalSeconds < 30 || policy.snapshotIntervalSeconds > 3600) {
+      return 'autonomyPolicy.snapshotIntervalSeconds out of range';
+    }
+    return null;
   }
 
   private filterRegistryItems(
