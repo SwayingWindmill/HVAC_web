@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"sort"
@@ -58,6 +59,14 @@ const (
 	TriggerRepeating TriggerMode = "REPEATING"
 )
 
+type RuleKind string
+
+const (
+	RuleKindThreshold  RuleKind = "THRESHOLD"
+	RuleKindSlope      RuleKind = "SLOPE"
+	RuleKindExpression RuleKind = "EXPRESSION"
+)
+
 type ConditionKind string
 
 const (
@@ -75,9 +84,11 @@ const (
 	// listed codes is present, NONE when none of them are. It does not require the
 	// displayed value to be trusted, so a range rejection (the last good number
 	// stays on screen, health is BAD) can still raise.
-	ConditionReasons ConditionKind = "REASONS"
-	ConditionAnd     ConditionKind = "AND"
-	ConditionOr      ConditionKind = "OR"
+	ConditionReasons    ConditionKind = "REASONS"
+	ConditionSlope      ConditionKind = "SLOPE"
+	ConditionExpression ConditionKind = "EXPRESSION"
+	ConditionAnd        ConditionKind = "AND"
+	ConditionOr         ConditionKind = "OR"
 )
 
 const (
@@ -131,19 +142,23 @@ func BooleanValue(value bool) TypedValue {
 }
 
 type Condition struct {
-	Kind       ConditionKind       `json:"kind"`
-	Input      string              `json:"input,omitempty"`
-	Operator   CompareOperator     `json:"operator,omitempty"`
-	Value      TypedValue          `json:"value,omitempty"`
-	Minimum    *float64            `json:"minimum,omitempty"`
-	Maximum    *float64            `json:"maximum,omitempty"`
-	Direction  HysteresisDirection `json:"direction,omitempty"`
-	Trigger    float64             `json:"trigger,omitempty"`
-	Reset      float64             `json:"reset,omitempty"`
-	AgeSeconds int64               `json:"ageSeconds,omitempty"`
-	Children   []Condition         `json:"children,omitempty"`
-	Reasons    []string            `json:"reasons,omitempty"`
-	Match      string              `json:"match,omitempty"`
+	Kind          ConditionKind       `json:"kind"`
+	Input         string              `json:"input,omitempty"`
+	Operator      CompareOperator     `json:"operator,omitempty"`
+	Value         TypedValue          `json:"value,omitempty"`
+	Minimum       *float64            `json:"minimum,omitempty"`
+	Maximum       *float64            `json:"maximum,omitempty"`
+	Direction     HysteresisDirection `json:"direction,omitempty"`
+	Trigger       float64             `json:"trigger,omitempty"`
+	Reset         float64             `json:"reset,omitempty"`
+	AgeSeconds    int64               `json:"ageSeconds,omitempty"`
+	Delta         *float64            `json:"delta,omitempty"`
+	WindowSeconds int64               `json:"windowSeconds,omitempty"`
+	Expression    string              `json:"expression,omitempty"`
+	ExprInputs    map[string]string   `json:"inputs,omitempty"`
+	Children      []Condition         `json:"children,omitempty"`
+	Reasons       []string            `json:"reasons,omitempty"`
+	Match         string              `json:"match,omitempty"`
 }
 
 type ScheduleWindow struct {
@@ -169,6 +184,10 @@ type AlarmPolicyRevision struct {
 	Title            string                  `json:"title"`
 	Summary          string                  `json:"summary"`
 	Severity         alarmmodel.Severity     `json:"severity"`
+	RuleKind         RuleKind                `json:"ruleKind,omitempty"`
+	TemplateKey      string                  `json:"templateKey,omitempty"`
+	OverriddenFields []string                `json:"overriddenFields,omitempty"`
+	DependsOnRuleIDs []string                `json:"dependsOnRuleIds,omitempty"`
 	QualityPolicy    EvaluationQualityPolicy `json:"qualityPolicy"`
 	FreshnessSeconds int64                   `json:"freshnessSeconds"`
 	TriggerMode      TriggerMode             `json:"triggerMode"`
@@ -177,6 +196,14 @@ type AlarmPolicyRevision struct {
 	Raise            Condition               `json:"raise"`
 	Clear            Condition               `json:"clear"`
 	Schedule         *SiteSchedule           `json:"schedule,omitempty"`
+}
+
+const MaxSlopeSamplesPerRule = 32
+
+type TimedSample struct {
+	Input      string  `json:"input"`
+	ObservedAt string  `json:"observedAt"`
+	Value      float64 `json:"value"`
 }
 
 type InputFact struct {
@@ -232,6 +259,7 @@ type AlarmEvaluationState struct {
 	NextEvaluationAt            *string          `json:"nextEvaluationAt,omitempty"`
 	ActiveAlarmID               string           `json:"activeAlarmId,omitempty"`
 	ActiveIncidentCorrelationID string           `json:"activeIncidentCorrelationId,omitempty"`
+	SampleWindow                []TimedSample    `json:"sampleWindow,omitempty"`
 	LastEvaluatedAt             string           `json:"lastEvaluatedAt,omitempty"`
 	Version                     uint64           `json:"version"`
 }
@@ -281,6 +309,9 @@ func EvaluatePolicy(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, pre
 	if !newInput && !evaluationIsDue(state.NextEvaluationAt, now) {
 		return EvaluationDecision{Status: state.Status, Effect: EvaluationEffectNone, Fingerprint: fingerprint, State: state}, nil
 	}
+	if newInput {
+		state.SampleWindow = updateSlopeSampleWindow(policy, snapshot, state.SampleWindow, now)
+	}
 
 	active, nextScheduleBoundary, err := scheduleState(policy.Schedule, now)
 	if err != nil {
@@ -297,7 +328,7 @@ func EvaluatePolicy(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, pre
 	}
 
 	if state.ActiveIncidentCorrelationID != "" {
-		clearResult := evaluateCondition(policy, policy.Clear, snapshot, true, now)
+		clearResult := evaluateCondition(policy, policy.Clear, snapshot, state.SampleWindow, true, now)
 		if clearResult.status == EvaluationIndeterminate {
 			state.Status = EvaluationIndeterminate
 			state.QualityBlocker = clearResult.blocker
@@ -311,14 +342,14 @@ func EvaluatePolicy(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, pre
 			state.CandidateSince = nil
 			state.RepeatCount = 0
 			// A time-based raise (no data for a while) can come true again with no new reading (#615).
-			raiseResult := evaluateCondition(policy, policy.Raise, snapshot, false, now)
+			raiseResult := evaluateCondition(policy, policy.Raise, snapshot, state.SampleWindow, false, now)
 			state.NextEvaluationAt = formatOptionalTime(minTime(raiseResult.nextDue, nextScheduleBoundary))
 			finishEvaluationState(&state, snapshot, now)
 			recovery := recoveryForDecision(policy, snapshot, state.ActiveIncidentCorrelationID, fingerprint, now)
 			return EvaluationDecision{Status: state.Status, Effect: EvaluationEffectClear, Fingerprint: fingerprint, State: state, Recovery: &recovery}, nil
 		}
 
-		raiseResult := evaluateCondition(policy, policy.Raise, snapshot, true, now)
+		raiseResult := evaluateCondition(policy, policy.Raise, snapshot, state.SampleWindow, true, now)
 		state.NextEvaluationAt = formatOptionalTime(minTime(raiseResult.nextDue, nextScheduleBoundary))
 		state.CandidateSince = nil
 		state.RepeatCount = 0
@@ -338,7 +369,7 @@ func EvaluatePolicy(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, pre
 		return EvaluationDecision{Status: state.Status, Effect: EvaluationEffectNone, Fingerprint: fingerprint, State: state}, nil
 	}
 
-	raiseResult := evaluateCondition(policy, policy.Raise, snapshot, false, now)
+	raiseResult := evaluateCondition(policy, policy.Raise, snapshot, state.SampleWindow, false, now)
 	if raiseResult.status == EvaluationIndeterminate {
 		state.Status = EvaluationIndeterminate
 		state.QualityBlocker = raiseResult.blocker
@@ -422,6 +453,86 @@ func AlarmPolicyDigest(policy AlarmPolicyRevision) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
+func (policy AlarmPolicyRevision) EffectiveRuleKind() RuleKind {
+	if policy.RuleKind != "" {
+		return policy.RuleKind
+	}
+	if conditionHasKind(policy.Raise, ConditionExpression) || conditionHasKind(policy.Clear, ConditionExpression) {
+		return RuleKindExpression
+	}
+	if conditionHasKind(policy.Raise, ConditionSlope) || conditionHasKind(policy.Clear, ConditionSlope) {
+		return RuleKindSlope
+	}
+	return RuleKindThreshold
+}
+
+func conditionHasKind(condition Condition, target ConditionKind) bool {
+	if condition.Kind == target {
+		return true
+	}
+	for _, child := range condition.Children {
+		if conditionHasKind(child, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// ReferencedInputs returns the sorted, deduplicated snapshot input keys read by policy.
+func (policy AlarmPolicyRevision) ReferencedInputs() []string {
+	seen := map[string]struct{}{}
+	collectConditionInputs(policy.Raise, seen)
+	collectConditionInputs(policy.Clear, seen)
+	if len(seen) == 0 {
+		return nil
+	}
+	inputs := make([]string, 0, len(seen))
+	for key := range seen {
+		inputs = append(inputs, key)
+	}
+	sort.Strings(inputs)
+	return inputs
+}
+
+func collectConditionInputs(condition Condition, inputs map[string]struct{}) {
+	if len(condition.Children) > 0 {
+		for _, child := range condition.Children {
+			collectConditionInputs(child, inputs)
+		}
+		return
+	}
+	if condition.Kind == ConditionExpression {
+		for _, key := range condition.ExprInputs {
+			if key != "" {
+				inputs[key] = struct{}{}
+			}
+		}
+		return
+	}
+	if condition.Input != "" {
+		inputs[condition.Input] = struct{}{}
+	}
+}
+
+func slopeInputWindows(policy AlarmPolicyRevision) map[string]int64 {
+	windows := map[string]int64{}
+	collectSlopeWindows(policy.Raise, windows)
+	collectSlopeWindows(policy.Clear, windows)
+	return windows
+}
+
+func collectSlopeWindows(condition Condition, windows map[string]int64) {
+	if condition.Kind == ConditionSlope && condition.Input != "" {
+		if condition.WindowSeconds > windows[condition.Input] {
+			windows[condition.Input] = condition.WindowSeconds
+		}
+		return
+	}
+	for _, child := range condition.Children {
+		collectSlopeWindows(child, windows)
+	}
+}
+
 func (policy AlarmPolicyRevision) Validate() error {
 	if policy.SchemaVersion != AlarmPolicySchemaVersion || !alarmmodel.IsUUIDv7(policy.PolicyID) || !alarmmodel.IsUUIDv7(policy.PolicyRevisionID) || policy.Revision == 0 || !policyDigestPattern.MatchString(policy.Digest) {
 		return errors.New("alarm policy revision identity is invalid")
@@ -432,6 +543,33 @@ func (policy AlarmPolicyRevision) Validate() error {
 	}
 	if !boundedText(policy.AlarmType, 128) || !boundedText(policy.SourceReference, 512) || !boundedText(policy.Title, 256) || !boundedText(policy.Summary, 2048) || !validAlarmSource(policy.SourceType) || !validAlarmSeverity(policy.Severity) {
 		return errors.New("alarm policy projection is invalid")
+	}
+	if policy.RuleKind != "" && !validRuleKind(policy.RuleKind) {
+		return errors.New("alarm policy rule kind is invalid")
+	}
+	if policy.TemplateKey != "" && (len(policy.TemplateKey) > 128 || !boundedText(policy.TemplateKey, 128)) {
+		return errors.New("alarm policy template key is invalid")
+	}
+	if len(policy.OverriddenFields) > 32 {
+		return errors.New("alarm policy overridden fields exceed maximum")
+	}
+	for _, field := range policy.OverriddenFields {
+		if len(field) > 128 || !boundedText(field, 128) {
+			return errors.New("alarm policy overridden field is invalid")
+		}
+	}
+	if len(policy.DependsOnRuleIDs) > 16 {
+		return errors.New("alarm policy dependencies exceed maximum")
+	}
+	seenDeps := make(map[string]struct{}, len(policy.DependsOnRuleIDs))
+	for _, depID := range policy.DependsOnRuleIDs {
+		if !alarmmodel.IsUUIDv7(depID) || depID == policy.PolicyID {
+			return errors.New("alarm policy dependency rule id is invalid")
+		}
+		if _, duplicate := seenDeps[depID]; duplicate {
+			return errors.New("alarm policy dependency rule id is duplicated")
+		}
+		seenDeps[depID] = struct{}{}
 	}
 	if policy.QualityPolicy != EvaluationQualityValidOnly && policy.QualityPolicy != EvaluationQualityUsable || policy.FreshnessSeconds <= 0 {
 		return errors.New("alarm policy quality gate is invalid")
@@ -501,6 +639,22 @@ func (condition Condition) Validate() error {
 			if !validConditionReason(reason) {
 				return errors.New("quality-reason predicate names an unknown reason")
 			}
+		}
+	case ConditionSlope:
+		if !boundedText(condition.Input, 128) || !validSlopeOperator(condition.Operator) || condition.Delta == nil || math.IsNaN(*condition.Delta) || math.IsInf(*condition.Delta, 0) || condition.WindowSeconds < 1 || condition.WindowSeconds > 86400 {
+			return errors.New("slope predicate is invalid")
+		}
+	case ConditionExpression:
+		if len(condition.ExprInputs) > MaxExpressionInputs {
+			return errors.New("expression predicate input count exceeds maximum")
+		}
+		for _, inputKey := range condition.ExprInputs {
+			if !boundedText(inputKey, 128) {
+				return errors.New("expression predicate input key is invalid")
+			}
+		}
+		if err := ValidateExpression(condition.Expression, condition.ExprInputs); err != nil {
+			return fmt.Errorf("expression predicate is invalid: %w", err)
 		}
 	case ConditionAnd, ConditionOr:
 		if len(condition.Children) < 2 || len(condition.Children) > 32 {
@@ -592,12 +746,12 @@ func (schedule SiteSchedule) Validate() error {
 	return nil
 }
 
-func evaluateCondition(policy AlarmPolicyRevision, condition Condition, snapshot EvaluationSnapshot, active bool, now time.Time) predicateResult {
+func evaluateCondition(policy AlarmPolicyRevision, condition Condition, snapshot EvaluationSnapshot, sampleWindow []TimedSample, active bool, now time.Time) predicateResult {
 	switch condition.Kind {
 	case ConditionAnd:
-		return evaluateAnd(policy, condition.Children, snapshot, active, now)
+		return evaluateAnd(policy, condition.Children, snapshot, sampleWindow, active, now)
 	case ConditionOr:
-		return evaluateOr(policy, condition.Children, snapshot, active, now)
+		return evaluateOr(policy, condition.Children, snapshot, sampleWindow, active, now)
 	case ConditionNoData:
 		return evaluateNoData(condition, snapshot, now)
 	case ConditionStale:
@@ -606,6 +760,10 @@ func evaluateCondition(policy AlarmPolicyRevision, condition Condition, snapshot
 		return evaluateChanged(condition, snapshot, now)
 	case ConditionReasons:
 		return evaluateReasons(condition, snapshot)
+	case ConditionExpression:
+		return evaluateExpression(policy, condition, snapshot, now)
+	case ConditionSlope:
+		return evaluateSlope(policy, condition, snapshot, sampleWindow, now)
 	}
 
 	input, exists := snapshot.Inputs[condition.Input]
@@ -651,10 +809,152 @@ func evaluateCondition(policy AlarmPolicyRevision, condition Condition, snapshot
 	}
 }
 
-func evaluateAnd(policy AlarmPolicyRevision, children []Condition, snapshot EvaluationSnapshot, active bool, now time.Time) predicateResult {
+func updateSlopeSampleWindow(policy AlarmPolicyRevision, snapshot EvaluationSnapshot, previous []TimedSample, now time.Time) []TimedSample {
+	windows := slopeInputWindows(policy)
+	if len(windows) == 0 {
+		return nil
+	}
+	type indexedSample struct {
+		sample TimedSample
+		at     time.Time
+	}
+	kept := make([]indexedSample, 0, len(previous)+len(windows))
+	latestByInput := make(map[string]time.Time, len(windows))
+	for _, sample := range previous {
+		windowSeconds, ok := windows[sample.Input]
+		if !ok || math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, sample.ObservedAt)
+		if err != nil {
+			continue
+		}
+		at = at.UTC()
+		if at.Before(now.Add(-time.Duration(windowSeconds) * time.Second)) {
+			continue
+		}
+		sample.ObservedAt = at.Format(time.RFC3339Nano)
+		kept = append(kept, indexedSample{sample: sample, at: at})
+		if prev, exists := latestByInput[sample.Input]; !exists || at.After(prev) {
+			latestByInput[sample.Input] = at
+		}
+	}
+
+	keys := make([]string, 0, len(windows))
+	for key := range windows {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		fact, exists := snapshot.Inputs[key]
+		trusted, _, _ := trustedInput(policy, key, fact, exists, now)
+		if !trusted || fact.Value.Type != EvaluationValueNumber || math.IsNaN(fact.Value.Number) || math.IsInf(fact.Value.Number, 0) {
+			continue
+		}
+		observedAt, err := time.Parse(time.RFC3339Nano, fact.ObservedAt)
+		if err != nil {
+			continue
+		}
+		observedAt = observedAt.UTC()
+		if observedAt.Before(now.Add(-time.Duration(windows[key]) * time.Second)) {
+			continue
+		}
+		if prev, exists := latestByInput[key]; exists && !observedAt.After(prev) {
+			continue
+		}
+		kept = append(kept, indexedSample{
+			sample: TimedSample{
+				Input:      key,
+				ObservedAt: observedAt.Format(time.RFC3339Nano),
+				Value:      fact.Value.Number,
+			},
+			at: observedAt,
+		})
+		latestByInput[key] = observedAt
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	sort.Slice(kept, func(left, right int) bool {
+		if !kept[left].at.Equal(kept[right].at) {
+			return kept[left].at.Before(kept[right].at)
+		}
+		return kept[left].sample.Input < kept[right].sample.Input
+	})
+	if len(kept) > MaxSlopeSamplesPerRule {
+		kept = kept[len(kept)-MaxSlopeSamplesPerRule:]
+	}
+	result := make([]TimedSample, len(kept))
+	for index, item := range kept {
+		result[index] = item.sample
+	}
+	return result
+}
+
+func evaluateSlope(policy AlarmPolicyRevision, condition Condition, snapshot EvaluationSnapshot, sampleWindow []TimedSample, now time.Time) predicateResult {
+	input, exists := snapshot.Inputs[condition.Input]
+	trusted, blocker, nextDue := trustedInput(policy, condition.Input, input, exists, now)
+	if !trusted {
+		return predicateResult{status: EvaluationIndeterminate, blocker: blocker, nextDue: nextDue}
+	}
+	if input.Value.Type != EvaluationValueNumber || math.IsNaN(input.Value.Number) || math.IsInf(input.Value.Number, 0) {
+		return predicateResult{status: EvaluationIndeterminate, blocker: qualityBlockerInvalidPrefix + condition.Input, nextDue: nextDue}
+	}
+	asOfTime, err := time.Parse(time.RFC3339Nano, snapshot.AsOf)
+	if err != nil {
+		return predicateResult{status: EvaluationIndeterminate, blocker: qualityBlockerInvalidPrefix + condition.Input, nextDue: nextDue}
+	}
+	currentObservedAt, err := time.Parse(time.RFC3339Nano, input.ObservedAt)
+	if err != nil {
+		return predicateResult{status: EvaluationIndeterminate, blocker: qualityBlockerInvalidPrefix + condition.Input, nextDue: nextDue}
+	}
+	windowStart := asOfTime.Add(-time.Duration(condition.WindowSeconds) * time.Second)
+	var earliestTime time.Time
+	var earliestValue float64
+	found := false
+	for _, sample := range sampleWindow {
+		if sample.Input != condition.Input || math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+			continue
+		}
+		sampleTime, err := time.Parse(time.RFC3339Nano, sample.ObservedAt)
+		if err != nil {
+			continue
+		}
+		if sampleTime.Before(windowStart) || sampleTime.After(asOfTime) || !sampleTime.Before(currentObservedAt) {
+			continue
+		}
+		if !found || sampleTime.Before(earliestTime) {
+			earliestTime = sampleTime
+			earliestValue = sample.Value
+			found = true
+		}
+	}
+	if !found {
+		return predicateResult{status: EvaluationNotMatched, nextDue: nextDue}
+	}
+	change := input.Value.Number - earliestValue
+	return truthResult(compareSlope(change, condition.Operator, *condition.Delta), nextDue)
+}
+
+func compareSlope(change float64, operator CompareOperator, delta float64) bool {
+	switch operator {
+	case CompareGT:
+		return change > delta
+	case CompareGTE:
+		return change >= delta
+	case CompareLT:
+		return change < delta
+	case CompareLTE:
+		return change <= delta
+	default:
+		return false
+	}
+}
+
+func evaluateAnd(policy AlarmPolicyRevision, children []Condition, snapshot EvaluationSnapshot, sampleWindow []TimedSample, active bool, now time.Time) predicateResult {
 	result := predicateResult{status: EvaluationMatched}
 	for _, child := range children {
-		childResult := evaluateCondition(policy, child, snapshot, active, now)
+		childResult := evaluateCondition(policy, child, snapshot, sampleWindow, active, now)
 		result.nextDue = minTime(result.nextDue, childResult.nextDue)
 		if childResult.status == EvaluationNotMatched {
 			return predicateResult{status: EvaluationNotMatched, nextDue: result.nextDue}
@@ -667,10 +967,10 @@ func evaluateAnd(policy AlarmPolicyRevision, children []Condition, snapshot Eval
 	return result
 }
 
-func evaluateOr(policy AlarmPolicyRevision, children []Condition, snapshot EvaluationSnapshot, active bool, now time.Time) predicateResult {
+func evaluateOr(policy AlarmPolicyRevision, children []Condition, snapshot EvaluationSnapshot, sampleWindow []TimedSample, active bool, now time.Time) predicateResult {
 	result := predicateResult{status: EvaluationNotMatched}
 	for _, child := range children {
-		childResult := evaluateCondition(policy, child, snapshot, active, now)
+		childResult := evaluateCondition(policy, child, snapshot, sampleWindow, active, now)
 		result.nextDue = minTime(result.nextDue, childResult.nextDue)
 		if childResult.status == EvaluationMatched {
 			return predicateResult{status: EvaluationMatched, nextDue: result.nextDue}
@@ -1003,6 +1303,24 @@ func validAlarmSeverity(value alarmmodel.Severity) bool {
 func validEvaluationSubjectType(value string) bool {
 	switch value {
 	case "SITE", "DEVICE", "POINT", "METRIC", "EXTERNAL":
+		return true
+	default:
+		return false
+	}
+}
+
+func validRuleKind(value RuleKind) bool {
+	switch value {
+	case RuleKindThreshold, RuleKindSlope, RuleKindExpression:
+		return true
+	default:
+		return false
+	}
+}
+
+func validSlopeOperator(value CompareOperator) bool {
+	switch value {
+	case CompareGT, CompareGTE, CompareLT, CompareLTE:
 		return true
 	default:
 		return false

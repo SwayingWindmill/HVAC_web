@@ -234,6 +234,11 @@ func conditionReadsDevice(condition Condition, prefix string) bool {
 	if strings.HasPrefix(condition.Input, prefix) {
 		return true
 	}
+	for _, inputKey := range condition.ExprInputs {
+		if strings.HasPrefix(inputKey, prefix) {
+			return true
+		}
+	}
 	for _, child := range condition.Children {
 		if conditionReadsDevice(child, prefix) {
 			return true

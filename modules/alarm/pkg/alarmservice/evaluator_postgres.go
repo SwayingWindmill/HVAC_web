@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -419,7 +420,7 @@ func loadPersistedEvaluation(ctx context.Context, tx pgx.Tx, tenantID, siteID, a
 	query := `
 		SELECT assignment_revision, policy_revision_id::text, subject_type, subject_id::text, fingerprint, status,
 		       candidate_since, repeat_count, last_input_revision, quality_blocker, next_evaluation_at,
-		       active_alarm_id::text, active_incident_correlation_id::text, last_snapshot, last_evaluated_at,
+		       active_alarm_id::text, active_incident_correlation_id::text, last_snapshot, sample_window, last_evaluated_at,
 		       version, lease_owner, lease_until, lease_fence
 		FROM alarm_runtime.alarm_evaluation_state
 		WHERE tenant_id = $1 AND site_id = $2 AND assignment_id = $3`
@@ -431,12 +432,12 @@ func loadPersistedEvaluation(ctx context.Context, tx pgx.Tx, tenantID, siteID, a
 	var status string
 	var candidateSince, nextEvaluationAt, leaseUntil *time.Time
 	var activeAlarmID, activeCorrelationID, qualityBlocker, leaseOwner *string
-	var lastSnapshot []byte
+	var lastSnapshot, sampleWindowJSON []byte
 	var lastEvaluatedAt time.Time
 	err := tx.QueryRow(ctx, query, tenantID, siteID, assignmentID).Scan(
 		&result.AssignmentRevision, &policyRevisionID, &result.SubjectType, &result.SubjectID, &result.Fingerprint, &status,
 		&candidateSince, &result.State.RepeatCount, &result.State.LastInputRevision, &qualityBlocker, &nextEvaluationAt,
-		&activeAlarmID, &activeCorrelationID, &lastSnapshot, &lastEvaluatedAt, &result.State.Version, &leaseOwner, &leaseUntil, &result.LeaseFence,
+		&activeAlarmID, &activeCorrelationID, &lastSnapshot, &sampleWindowJSON, &lastEvaluatedAt, &result.State.Version, &leaseOwner, &leaseUntil, &result.LeaseFence,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return persistedEvaluation{}, false, nil
@@ -465,6 +466,11 @@ func loadPersistedEvaluation(ctx context.Context, tx pgx.Tx, tenantID, siteID, a
 	if err := decodeEvaluationSnapshot(lastSnapshot, &result.Snapshot); err != nil {
 		return persistedEvaluation{}, false, err
 	}
+	samples, err := decodeSampleWindow(sampleWindowJSON)
+	if err != nil {
+		return persistedEvaluation{}, false, err
+	}
+	result.State.SampleWindow = samples
 	return result, true, nil
 }
 
@@ -473,6 +479,10 @@ func persistEvaluation(ctx context.Context, tx pgx.Tx, assigned assignedAlarmPol
 	snapshotJSON, err := json.Marshal(snapshot)
 	if err != nil {
 		return fmt.Errorf("encode Alarm evaluation snapshot: %w", err)
+	}
+	sampleWindowJSON, err := encodeSampleWindow(decision.State.SampleWindow)
+	if err != nil {
+		return fmt.Errorf("encode Alarm evaluation sample window: %w", err)
 	}
 	candidateSince, err := parseOptionalInstant(decision.State.CandidateSince)
 	if err != nil {
@@ -500,11 +510,11 @@ func persistEvaluation(ctx context.Context, tx pgx.Tx, assigned assignedAlarmPol
 			INSERT INTO alarm_runtime.alarm_evaluation_state (
 				tenant_id, site_id, assignment_id, assignment_revision, policy_revision_id, subject_type, subject_id,
 				fingerprint, status, candidate_since, repeat_count, last_input_revision, quality_blocker, next_evaluation_at,
-				active_alarm_id, active_incident_correlation_id, last_snapshot, last_evaluated_at, version, lease_owner, lease_until, lease_fence
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NULL,NULL,0)`,
+				active_alarm_id, active_incident_correlation_id, last_snapshot, sample_window, last_evaluated_at, version, lease_owner, lease_until, lease_fence
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NULL,NULL,0)`,
 			snapshot.TenantID, snapshot.SiteID, assigned.AssignmentID, assigned.AssignmentRevision, assigned.Policy.PolicyRevisionID,
 			assigned.SubjectType, assigned.SubjectID, decision.Fingerprint, decision.State.Status, candidateSince, decision.State.RepeatCount,
-			decision.State.LastInputRevision, qualityBlocker, nextEvaluationAt, activeAlarmID, activeCorrelationID, snapshotJSON, lastEvaluatedAt, decision.State.Version)
+			decision.State.LastInputRevision, qualityBlocker, nextEvaluationAt, activeAlarmID, activeCorrelationID, snapshotJSON, sampleWindowJSON, lastEvaluatedAt, decision.State.Version)
 		if err != nil {
 			return fmt.Errorf("insert Alarm evaluation state: %w", err)
 		}
@@ -513,12 +523,12 @@ func persistEvaluation(ctx context.Context, tx pgx.Tx, assigned assignedAlarmPol
 			UPDATE alarm_runtime.alarm_evaluation_state
 			SET assignment_revision=$4, policy_revision_id=$5, subject_type=$6, subject_id=$7, fingerprint=$8, status=$9,
 			    candidate_since=$10, repeat_count=$11, last_input_revision=$12, quality_blocker=$13, next_evaluation_at=$14,
-			    active_alarm_id=$15, active_incident_correlation_id=$16, last_snapshot=$17, last_evaluated_at=$18, version=$19,
+			    active_alarm_id=$15, active_incident_correlation_id=$16, last_snapshot=$17, sample_window=$18, last_evaluated_at=$19, version=$20,
 			    lease_owner=NULL, lease_until=NULL
-			WHERE tenant_id=$1 AND site_id=$2 AND assignment_id=$3 AND version=$20`,
+			WHERE tenant_id=$1 AND site_id=$2 AND assignment_id=$3 AND version=$21`,
 			snapshot.TenantID, snapshot.SiteID, assigned.AssignmentID, assigned.AssignmentRevision, assigned.Policy.PolicyRevisionID,
 			assigned.SubjectType, assigned.SubjectID, decision.Fingerprint, decision.State.Status, candidateSince, decision.State.RepeatCount,
-			decision.State.LastInputRevision, qualityBlocker, nextEvaluationAt, activeAlarmID, activeCorrelationID, snapshotJSON, lastEvaluatedAt,
+			decision.State.LastInputRevision, qualityBlocker, nextEvaluationAt, activeAlarmID, activeCorrelationID, snapshotJSON, sampleWindowJSON, lastEvaluatedAt,
 			decision.State.Version, previousVersion)
 		if err != nil {
 			return fmt.Errorf("update Alarm evaluation state: %w", err)
@@ -573,6 +583,37 @@ func decodeEvaluationSnapshot(body []byte, snapshot *EvaluationSnapshot) error {
 		return errors.New("stored Alarm evaluation snapshot is invalid")
 	}
 	return nil
+}
+
+func decodeSampleWindow(body []byte) ([]TimedSample, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, nil
+	}
+	var samples []TimedSample
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&samples) != nil || ensureJSONEOF(decoder) != nil || len(samples) > MaxSlopeSamplesPerRule {
+		return nil, errors.New("stored Alarm evaluation sample window is invalid")
+	}
+	for _, sample := range samples {
+		if !boundedText(sample.Input, 128) || math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+			return nil, errors.New("stored Alarm evaluation sample window entry is invalid")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, sample.ObservedAt); err != nil {
+			return nil, errors.New("stored Alarm evaluation sample window timestamp is invalid")
+		}
+	}
+	if len(samples) == 0 {
+		return nil, nil
+	}
+	return samples, nil
+}
+
+func encodeSampleWindow(samples []TimedSample) ([]byte, error) {
+	if samples == nil {
+		samples = []TimedSample{}
+	}
+	return json.Marshal(samples)
 }
 
 func parseOptionalInstant(value *string) (any, error) {

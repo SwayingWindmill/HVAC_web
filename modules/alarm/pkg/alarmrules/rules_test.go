@@ -888,4 +888,351 @@ func TestSongyaxuanHistoricalIncidentsFirstPrinciples(t *testing.T) {
 	if flatRunning.QualityPolicy != alarmservice.EvaluationQualityValidOnly || flatRunning.DurationSeconds != 600 {
 		t.Fatalf("flat-running policy must use VALID_ONLY and 600s stabilization: %#v", flatRunning)
 	}
+	for _, policy := range byAlarmType {
+		if policy.RuleKind != "" || policy.TemplateKey != "" || len(policy.OverriddenFields) != 0 || len(policy.DependsOnRuleIDs) != 0 {
+			t.Fatalf("legacy Songyaxuan rule %s unexpectedly gained template/override metadata: %#v", policy.AlarmType, policy)
+		}
+	}
+}
+
+func TestTemplateInheritanceOverridesSlopeExpressionAndDependsOn(t *testing.T) {
+	dir := t.TempDir()
+	const (
+		chillerAID = "01a14000-4000-7000-8000-000000000101"
+		chillerBID = "01a14000-4000-7000-8000-000000000102"
+		plantID    = "01a14000-4000-7000-8000-000000000103"
+	)
+	sitePayload := map[string]any{
+		"tenantId": "018f3d00-0000-7000-8000-000000000001",
+		"site":     map[string]any{"id": "01a14000-1000-7000-8000-000000000009", "code": "tpl-site"},
+		"devices": []any{
+			map[string]any{
+				"id": chillerAID, "code": "chiller-a", "name": "1 号冷机（定频）",
+				"points": []any{
+					map[string]any{"code": "leaving_temp", "name": "出水温度", "valueType": "NUMBER"},
+					map[string]any{"code": "run_state", "name": "运行状态", "valueType": "STRING"},
+				},
+			},
+			map[string]any{
+				"id": chillerBID, "code": "chiller-b", "name": "2 号冷机（变频）",
+				"points": []any{
+					map[string]any{"code": "leaving_temp", "name": "出水温度", "valueType": "NUMBER"},
+					map[string]any{"code": "run_state", "name": "运行状态", "valueType": "STRING"},
+				},
+			},
+			map[string]any{
+				"id": plantID, "code": "plant-header", "name": "总管",
+				"points": []any{
+					map[string]any{"code": "chw_supply_temp", "name": "冷冻总供水温度", "valueType": "NUMBER"},
+				},
+			},
+		},
+	}
+	siteBytes, _ := json.Marshal(sitePayload)
+	if err := os.WriteFile(filepath.Join(dir, "site.json"), siteBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rulesPayload := map[string]any{
+		"schemaVersion": 1,
+		"siteFile":      "site.json",
+		"templates": []any{
+			map[string]any{
+				"key":              "base-chiller-warning",
+				"severity":         "WARNING",
+				"qualityPolicy":    "VALID_ONLY",
+				"freshnessSeconds": 900,
+				"triggerMode":      "DURATION",
+				"durationSeconds":  300,
+			},
+			map[string]any{
+				"key":             "chiller-slope-rise",
+				"extends":         "base-chiller-warning",
+				"ruleKind":        "SLOPE",
+				"title":           "{device} 出水温度快速上升",
+				"summary":         "{device} 5 分钟内出水温度上升超过阈值",
+				"durationSeconds": 120,
+				"raise": map[string]any{
+					"kind": "SLOPE", "input": "{device}/leaving_temp", "operator": "GT", "delta": 2.5, "windowSeconds": 300,
+				},
+				"clear": map[string]any{
+					"kind": "SLOPE", "input": "{device}/leaving_temp", "operator": "LTE", "delta": 0.5, "windowSeconds": 300,
+				},
+			},
+			map[string]any{
+				"key":     "chiller-expr-delta",
+				"extends": "base-chiller-warning",
+				"title":   "{device} 供水温差异常",
+				"summary": "{device} 运行时与总管供水温差过大",
+				"raise": map[string]any{
+					"kind":       "EXPRESSION",
+					"expression": `running == "RUNNING" && abs(local_t - header_t) > 3.0`,
+					"inputs":     map[string]any{"running": "{device}/run_state", "local_t": "{device}/leaving_temp", "header_t": "plant-header/chw_supply_temp"},
+				},
+				"clear": map[string]any{
+					"kind":       "EXPRESSION",
+					"expression": `running != "RUNNING" || abs(local_t - header_t) <= 1.5`,
+					"inputs":     map[string]any{"running": "{device}/run_state", "local_t": "{device}/leaving_temp", "header_t": "plant-header/chw_supply_temp"},
+				},
+			},
+		},
+		"rules": []any{
+			map[string]any{
+				"code":             "chiller-a-trip",
+				"title":            "1 号冷机停机",
+				"summary":          "1 号冷机停机",
+				"severity":         "INFO",
+				"qualityPolicy":    "USABLE",
+				"freshnessSeconds": 600,
+				"triggerMode":      "SIMPLE",
+				"raise":            map[string]any{"kind": "COMPARE", "input": "chiller-a/run_state", "operator": "NE", "value": map[string]any{"type": "STRING", "string": "RUNNING"}},
+				"clear":            map[string]any{"kind": "COMPARE", "input": "chiller-a/run_state", "operator": "EQ", "value": map[string]any{"type": "STRING", "string": "RUNNING"}},
+			},
+			// Device rule inheriting multi-level template + overriding severity & switching DURATION->SIMPLE with durationSeconds=0.
+			map[string]any{
+				"code":             "chiller-a-slope",
+				"template":         "chiller-slope-rise",
+				"device":           "chiller-a",
+				"dependsOn":        []string{"{device}-trip"},
+				"severity":         "MAJOR",
+				"triggerMode":      "SIMPLE",
+				"durationSeconds":  0,
+				"freshnessSeconds": 600,
+			},
+			// Device rule inheriting multi-level expression template + overriding qualityPolicy, repeatCount, triggerMode, title, summary, and raise.
+			map[string]any{
+				"code":            "chiller-b-expr",
+				"template":        "chiller-expr-delta",
+				"device":          "chiller-b",
+				"dependsOn":       []string{"chiller-a-slope", "chiller-a-trip"},
+				"qualityPolicy":   "USABLE",
+				"triggerMode":     "REPEATING",
+				"durationSeconds": 0,
+				"repeatCount":     3,
+				"title":           "{device} 自定义温差告警",
+				"summary":         "{device} 温差超过 4.0 ℃",
+				"raise": map[string]any{
+					"kind":       "EXPRESSION",
+					"expression": `running == "RUNNING" && abs(local_t - header_t) > 4.0`,
+					"inputs":     map[string]any{"running": "{device}/run_state", "local_t": "{device}/leaving_temp", "header_t": "plant-header/chw_supply_temp"},
+				},
+			},
+		},
+	}
+	rulesPath := filepath.Join(dir, "rules.json")
+	rulesBytes, _ := json.Marshal(rulesPayload)
+	if err := os.WriteFile(rulesPath, rulesBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	compiled, err := Load(rulesPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	byCode := map[string]alarmservice.SiteRule{}
+	for _, item := range compiled.Policies {
+		p := item.Policy
+		p.PolicyRevisionID, p.Revision = "01a14000-7a00-7000-8000-000000000001", 1
+		p.Digest, err = alarmservice.AlarmPolicyDigest(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Validate(); err != nil {
+			t.Fatalf("compiled policy %s invalid: %v", p.AlarmType, err)
+		}
+		item.Policy = p
+		byCode[p.AlarmType] = item
+	}
+
+	slopeRule := byCode["chiller-a-slope"]
+	if slopeRule.Policy.Title != "1 号冷机 出水温度快速上升" || strings.Contains(slopeRule.Policy.Summary, "{device}") {
+		t.Fatalf("slope wording did not substitute device plain name: %#v", slopeRule.Policy)
+	}
+	if slopeRule.Policy.RuleKind != alarmservice.RuleKindSlope || slopeRule.Policy.EffectiveRuleKind() != alarmservice.RuleKindSlope {
+		t.Fatalf("slope ruleKind mismatch: %s / %s", slopeRule.Policy.RuleKind, slopeRule.Policy.EffectiveRuleKind())
+	}
+	if slopeRule.Policy.TemplateKey != "chiller-slope-rise" {
+		t.Fatalf("templateKey = %q, want chiller-slope-rise", slopeRule.Policy.TemplateKey)
+	}
+	wantSlopeOverrides := []string{"durationSeconds", "freshnessSeconds", "severity", "triggerMode"}
+	if !reflect.DeepEqual(slopeRule.Policy.OverriddenFields, wantSlopeOverrides) {
+		t.Fatalf("slope overriddenFields = %v, want %v", slopeRule.Policy.OverriddenFields, wantSlopeOverrides)
+	}
+	if slopeRule.Policy.Raise.Input != chillerAID+"/leaving_temp" || slopeRule.Policy.Clear.Input != chillerAID+"/leaving_temp" {
+		t.Fatalf("slope input not resolved to UUID: raise=%q clear=%q", slopeRule.Policy.Raise.Input, slopeRule.Policy.Clear.Input)
+	}
+	if !reflect.DeepEqual(slopeRule.Policy.DependsOnRuleIDs, []string{byCode["chiller-a-trip"].AssignmentID}) {
+		t.Fatalf("slope dependsOnRuleIds = %v, want [%s]", slopeRule.Policy.DependsOnRuleIDs, byCode["chiller-a-trip"].AssignmentID)
+	}
+
+	exprRule := byCode["chiller-b-expr"]
+	if exprRule.Policy.EffectiveRuleKind() != alarmservice.RuleKindExpression {
+		t.Fatalf("expr EffectiveRuleKind = %s, want EXPRESSION", exprRule.Policy.EffectiveRuleKind())
+	}
+	if exprRule.Policy.Title != "2 号冷机 自定义温差告警" || exprRule.Policy.TemplateKey != "chiller-expr-delta" {
+		t.Fatalf("expr metadata/wording mismatch: %#v", exprRule.Policy)
+	}
+	wantExprOverrides := []string{"durationSeconds", "qualityPolicy", "raise", "repeatCount", "summary", "title", "triggerMode"}
+	if !reflect.DeepEqual(exprRule.Policy.OverriddenFields, wantExprOverrides) {
+		t.Fatalf("expr overriddenFields = %v, want %v", exprRule.Policy.OverriddenFields, wantExprOverrides)
+	}
+	wantExprInputs := map[string]string{
+		"running":  chillerBID + "/run_state",
+		"local_t":  chillerBID + "/leaving_temp",
+		"header_t": plantID + "/chw_supply_temp",
+	}
+	if !reflect.DeepEqual(exprRule.Policy.Raise.ExprInputs, wantExprInputs) || !reflect.DeepEqual(exprRule.Policy.Clear.ExprInputs, wantExprInputs) {
+		t.Fatalf("expr inputs mismatch: raise=%v clear=%v", exprRule.Policy.Raise.ExprInputs, exprRule.Policy.Clear.ExprInputs)
+	}
+	wantExprDeps := []string{slopeRule.AssignmentID, byCode["chiller-a-trip"].AssignmentID}
+	if !reflect.DeepEqual(exprRule.Policy.DependsOnRuleIDs, wantExprDeps) {
+		t.Fatalf("expr dependsOnRuleIds = %v, want %v", exprRule.Policy.DependsOnRuleIDs, wantExprDeps)
+	}
+
+	// Verify compiled SLOPE and EXPRESSION policies evaluate cleanly end-to-end.
+	t0 := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	evalAt := func(p alarmservice.AlarmPolicyRevision, rev string, at time.Time, facts map[string]alarmservice.InputFact, prev alarmservice.AlarmEvaluationState) alarmservice.EvaluationDecision {
+		d, err := alarmservice.EvaluatePolicy(p, alarmservice.EvaluationSnapshot{
+			TenantID: compiled.TenantID, SiteID: compiled.SiteID, SubjectType: "SITE", SubjectID: compiled.SiteID,
+			InputRevision: rev, AsOf: at.Format(time.RFC3339Nano), Inputs: facts, CorrelationID: rev,
+		}, prev, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	s1 := evalAt(slopeRule.Policy, "s1", t0, map[string]alarmservice.InputFact{
+		chillerAID + "/leaving_temp": alarmservice.NumberInput(chillerAID+"/leaving_temp", 7.0, "GOOD", t0.Format(time.RFC3339Nano)),
+	}, alarmservice.AlarmEvaluationState{})
+	if s1.Effect != alarmservice.EvaluationEffectNone {
+		t.Fatalf("slope raised on single sample: %#v", s1)
+	}
+	t1 := t0.Add(2 * time.Minute)
+	s2 := evalAt(slopeRule.Policy, "s2", t1, map[string]alarmservice.InputFact{
+		chillerAID + "/leaving_temp": alarmservice.NumberInput(chillerAID+"/leaving_temp", 10.0, "GOOD", t1.Format(time.RFC3339Nano)),
+	}, s1.State)
+	if s2.Effect != alarmservice.EvaluationEffectPublish {
+		t.Fatalf("compiled slope policy did not publish: %#v", s2)
+	}
+
+	exprFacts := func(at time.Time, localTemp float64) map[string]alarmservice.InputFact {
+		obs := at.Format(time.RFC3339Nano)
+		return map[string]alarmservice.InputFact{
+			chillerBID + "/run_state":    alarmservice.StringInput(chillerBID+"/run_state", "RUNNING", "GOOD", obs),
+			chillerBID + "/leaving_temp": alarmservice.NumberInput(chillerBID+"/leaving_temp", localTemp, "GOOD", obs),
+			plantID + "/chw_supply_temp": alarmservice.NumberInput(plantID+"/chw_supply_temp", 7.0, "GOOD", obs),
+		}
+	}
+	var eState alarmservice.AlarmEvaluationState
+	for step := 1; step <= 3; step++ {
+		at := t0.Add(time.Duration(step) * time.Minute)
+		dec := evalAt(exprRule.Policy, fmt.Sprintf("e%d", step), at, exprFacts(at, 12.0), eState)
+		eState = dec.State
+		if step < 3 && dec.Effect != alarmservice.EvaluationEffectNone {
+			t.Fatalf("repeating expr raised early at step %d: %#v", step, dec)
+		}
+		if step == 3 && dec.Effect != alarmservice.EvaluationEffectPublish {
+			t.Fatalf("compiled expr policy did not publish on 3rd repeat: %#v", dec)
+		}
+	}
+}
+
+func TestTemplateAndDependencyValidationErrors(t *testing.T) {
+	dir := t.TempDir()
+	siteBytes, _ := json.Marshal(map[string]any{
+		"tenantId": "018f3d00-0000-7000-8000-000000000001",
+		"site":     map[string]any{"id": "01a14000-1000-7000-8000-000000000009", "code": "err-site"},
+		"devices": []any{
+			map[string]any{
+				"id": "01a14000-4000-7000-8000-000000000101", "code": "dev-a", "name": "设备 A",
+				"points": []any{map[string]any{"code": "t1", "name": "温度", "valueType": "NUMBER"}},
+			},
+		},
+	})
+	if err := os.WriteFile(filepath.Join(dir, "site.json"), siteBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	writeAndLoad := func(name string, payload map[string]any) error {
+		t.Helper()
+		payload["schemaVersion"] = 1
+		payload["siteFile"] = "site.json"
+		raw, _ := json.Marshal(payload)
+		path := filepath.Join(dir, name+".json")
+		if err := os.WriteFile(path, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(path)
+		return err
+	}
+
+	baseRule := func(code string, extra map[string]any) map[string]any {
+		r := map[string]any{
+			"code": code, "title": "t", "summary": "s", "severity": "WARNING",
+			"qualityPolicy": "VALID_ONLY", "freshnessSeconds": 300, "triggerMode": "SIMPLE",
+			"raise": map[string]any{"kind": "COMPARE", "input": "dev-a/t1", "operator": "GT", "value": map[string]any{"type": "NUMBER", "number": 10}},
+			"clear": map[string]any{"kind": "COMPARE", "input": "dev-a/t1", "operator": "LT", "value": map[string]any{"type": "NUMBER", "number": 8}},
+		}
+		for k, v := range extra {
+			r[k] = v
+		}
+		return r
+	}
+
+	if err := writeAndLoad("cyclic-tpl", map[string]any{
+		"templates": []any{
+			map[string]any{"key": "a", "extends": "b"},
+			map[string]any{"key": "b", "extends": "a"},
+		},
+		"rules": []any{},
+	}); err == nil || !strings.Contains(err.Error(), "cyclic") {
+		t.Fatalf("expected cyclic template error, got %v", err)
+	}
+
+	if err := writeAndLoad("missing-tpl", map[string]any{
+		"rules": []any{baseRule("r1", map[string]any{"template": "nope"})},
+	}); err == nil || !strings.Contains(err.Error(), "unknown template") {
+		t.Fatalf("expected unknown template error, got %v", err)
+	}
+
+	if err := writeAndLoad("missing-device", map[string]any{
+		"rules": []any{baseRule("r1", map[string]any{"device": "no-such-dev"})},
+	}); err == nil || !strings.Contains(err.Error(), "unknown device") {
+		t.Fatalf("expected unknown device error, got %v", err)
+	}
+
+	if err := writeAndLoad("placeholder-without-device", map[string]any{
+		"rules": []any{baseRule("r1", map[string]any{"title": "{device} 告警"})},
+	}); err == nil || !strings.Contains(err.Error(), "{device}") {
+		t.Fatalf("expected missing device for {device} placeholder, got %v", err)
+	}
+
+	if err := writeAndLoad("unknown-expr-point", map[string]any{
+		"rules": []any{baseRule("r1", map[string]any{
+			"raise": map[string]any{"kind": "EXPRESSION", "expression": "x > 1", "inputs": map[string]any{"x": "dev-a/missing_pt"}},
+		})},
+	}); err == nil || !strings.Contains(err.Error(), "missing_pt") {
+		t.Fatalf("expected unknown expression point error, got %v", err)
+	}
+
+	if err := writeAndLoad("self-dep", map[string]any{
+		"rules": []any{baseRule("r1", map[string]any{"dependsOn": []string{"r1"}})},
+	}); err == nil || !strings.Contains(err.Error(), "itself") {
+		t.Fatalf("expected self dependency error, got %v", err)
+	}
+
+	if err := writeAndLoad("cyclic-dep", map[string]any{
+		"rules": []any{
+			baseRule("r1", map[string]any{"dependsOn": []string{"r2"}}),
+			baseRule("r2", map[string]any{"dependsOn": []string{"r1"}}),
+		},
+	}); err == nil || !strings.Contains(err.Error(), "cyclic") {
+		t.Fatalf("expected cyclic dependency error, got %v", err)
+	}
+
+	if err := writeAndLoad("unknown-dep", map[string]any{
+		"rules": []any{baseRule("r1", map[string]any{"dependsOn": []string{"nope"}})},
+	}); err == nil || !strings.Contains(err.Error(), "unknown rule") {
+		t.Fatalf("expected unknown dependency error, got %v", err)
+	}
 }
