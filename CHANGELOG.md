@@ -9,6 +9,10 @@
 
 #### 新增
 
+- 网页端补齐网关配置影子、模板目录激活、多维过滤与标签运维界面（对应 P1-2 与 P1-3）：
+  - 「集成管理」网关详情抽屉（`GatewaySheet`）新增「配置影子」分区，支持查看云边同步状态（未配置 / 待同步下发 / 云边已一致 / 配置存在漂移）、期望与边缘已上报修订号、漂移明细与集中器暂存单元汇总，并可通过结构化弹窗编辑点位映射与采集周期（保留集中器离线配置并处理并发修订冲突刷新）；「无线集中器」参数及 200 槽 EID 提交确认框新增「若网关离线，暂存至配置影子（重连后自动同步）」勾选框与 `STAGED_SHADOW` 状态联动。
+  - 「系统管理 → 设备与点位登记」的「模板版本」新增持久化租户模板目录、`DEVICE` 模板结构化配置器（适用设备类型、标准点位与质量检查规则、控制能力档位及键值化发布引用）、版本内容预览、载入重编以及带筛选分页的「站点已应用模板」记录表；「资源与绑定」新增资产/设备键值对标签（`tags`）管理、可点击递归「空间层级」筛选，以及状态、模板、标签与「全部授权站点」跨站点组合检索。
+  - 运维「设备」页面新增基于设备与绑定资产标签的 URL `?tag=` 筛选下拉框，设备详情抽屉新增「标签」徽章展示。
 - 新增网关与无线集中器配置影子同步链路（`infra/connectivity/postgres/init/gateway-config-shadows.sql`、`modules/connectivity`、`cmd/energy-api` 与 `tools/eg8200-simulator`；网关路由注册表 `route-ownership.v1.json` 升级至第 `53` 版）：
   - 新增租户行级隔离表 `connectivity.gateway_desired_configs` 与 `connectivity.gateway_reported_configs`，提供运维读写接口 `GET/PUT /api/v1/gateways/{gatewayId}/config-shadow`（支持 `expectedDesiredRevision` 乐观并发锁、部分字段 `PUT` 局部更新、集中器 RS485 保护地址与重复 EID 校验、归一化顺序无关漂移对比 `UNCONFIGURED` / `PENDING_SYNC` / `SYNCED` / `DRIFTED`）及网关 mTLS 增量拉取与回执接口 `GET /gateway/v1/config-shadow`、`POST /gateway/v1/config-shadow/report`。
   - 无线集中器参数与 EID 槽位写入新增 `stageIfOffline` 离线暂存能力与 `STAGED_SHADOW` 审计结果；写影子成功（针对在线网关）或收到网关 `GATEWAY_CONNECTED` 上线事件时按单网关串行异步对账并将集中器差异重放至边缘设备，离线换址保留当前总线地址待上电写入后再重键，未建基线的局部离线参数写入拒绝兜底默认值，失败时在影子中保留部分成功状态与漂移明细。

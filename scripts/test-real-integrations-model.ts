@@ -12,6 +12,17 @@ import {
 import type { WorkOrder } from '../apps/hvac-web/src/api/work-orders.ts';
 import type { AssetsSnapshotResult } from '../apps/hvac-web/src/features/assets/operational-projection.ts';
 import {
+  buildValidatedShadowUpdateRequest,
+  createShadowEditorDraft,
+  formatPointCopyTargets,
+  parsePointCopyTargets,
+  summarizeConcentratorShadowUnits,
+} from '../apps/hvac-web/src/features/connectivity/gateway-config-shadow-model.ts';
+import {
+  CONFIG_SHADOW_APPLIED_LABELS,
+  CONFIG_SHADOW_REASON_LABELS,
+  CONFIG_SHADOW_SECTION_LABELS,
+  CONFIG_SHADOW_SYNC_PRESENTATION,
   CONCENTRATOR_AUDIT_OPERATION_LABELS,
   CONCENTRATOR_AUDIT_OUTCOME_PRESENTATION,
   PROTECTED_RS485_UIDS,
@@ -25,6 +36,7 @@ import {
   buildSensorCalibrationModel,
   classifyConcentratorBattery,
   describeConcentratorError,
+  describeGatewayConfigShadowError,
   describeIntegrationsError,
   detectDuplicateNonZeroEids,
   explainQualityReason,
@@ -1422,4 +1434,113 @@ test('concentrator 200-slot EID duplicate guard, batch fill, diff, and error mes
     1,
   );
   assert.equal(inferDefaultConcentratorUid([]), 1);
+});
+
+test('gateway config shadow helpers validate copy targets, preserve concentrator units, and surface revision conflicts', () => {
+  assert.equal(CONFIG_SHADOW_SYNC_PRESENTATION.PENDING_SYNC.label, '待同步下发');
+  assert.equal(CONFIG_SHADOW_APPLIED_LABELS.PARTIAL, '部分生效');
+  assert.equal(CONFIG_SHADOW_SECTION_LABELS.POINT_MAPPINGS, '点位映射');
+  assert.equal(CONFIG_SHADOW_REASON_LABELS.EDGE_APPLY_FAILED, '边缘端应用失败');
+
+  const parsedCopy = parsePointCopyTargets('chiller-02:supply_temp\nchiller-03:supply_temp');
+  assert.equal(parsedCopy.ok, true);
+  if (parsedCopy.ok) {
+    assert.deepEqual(parsedCopy.targets, [
+      { deviceKey: 'chiller-02', pointCode: 'supply_temp' },
+      { deviceKey: 'chiller-03', pointCode: 'supply_temp' },
+    ]);
+    assert.equal(formatPointCopyTargets(parsedCopy.targets), 'chiller-02:supply_temp, chiller-03:supply_temp');
+  }
+
+  const badCopy = parsePointCopyTargets('chiller-02:BadCode');
+  assert.equal(badCopy.ok, false);
+
+  const sampleShadow = {
+    tenantId: TENANT_ID,
+    gatewayId: '01910000-0000-7000-8000-000000000901',
+    syncStatus: 'DRIFTED' as const,
+    desired: {
+      desiredRevision: 4,
+      pointMappings: [
+        {
+          sourceChannel: 'rs485-u1:r1',
+          primaryDeviceKey: 'chiller-01',
+          primaryPointCode: 'supply_temp',
+          copyTargets: [{ deviceKey: 'chiller-02', pointCode: 'supply_temp' }],
+        },
+      ],
+      samplingPolicies: [
+        { deviceKey: 'chiller-01', pointCode: 'supply_temp', sampleIntervalMs: 2000, publishIntervalMs: 5000 },
+      ],
+      concentratorConfigs: {
+        '20': { params: undefined, eids: [{ slot: 1, eid: 101 }, { slot: 2, eid: 0 }] },
+        '1': {
+          params: {
+            modbusId: 1,
+            baudRateCode: 3,
+            offLineTime: 10,
+            dataUplinkCycle: 10,
+            localNet: 1,
+            timeMark: 1,
+            rfTxPower: 20,
+            rfFrequency: 433,
+            rfBandWidth: 0,
+            rfSf: 9,
+            rfLeadCode: 8,
+            txTimeout: 5,
+            rxTimeout: 5,
+            rssiOut: 1,
+          },
+          eids: [],
+        },
+      },
+      updatedBy: TENANT_ID,
+      reason: 'init shadow',
+      createdAt: '2026-11-16T00:00:00Z',
+      updatedAt: '2026-11-16T01:00:00Z',
+    },
+    drift: [],
+  };
+
+  const unitSummaries = summarizeConcentratorShadowUnits(sampleShadow.desired.concentratorConfigs);
+  assert.deepEqual(unitSummaries, [
+    { unitId: '1', hasParams: true, boundEidCount: 0 },
+    { unitId: '20', hasParams: false, boundEidCount: 1 },
+  ]);
+
+  const draft = createShadowEditorDraft(sampleShadow);
+  assert.equal(draft.pointMappings[0]?.copyTargetsText, 'chiller-02:supply_temp');
+
+  const missingReason = buildValidatedShadowUpdateRequest(draft, sampleShadow);
+  assert.equal(missingReason.ok, false);
+
+  const built = buildValidatedShadowUpdateRequest({ ...draft, reason: '调整复用映射' }, sampleShadow);
+  assert.equal(built.ok, true);
+  if (built.ok) {
+    assert.equal(built.request.expectedDesiredRevision, 4);
+    assert.equal('concentratorConfigs' in built.request, false);
+    assert.equal(built.request.pointMappings?.[0]?.copyTargets?.length, 1);
+  }
+
+  const badSampling = buildValidatedShadowUpdateRequest(
+    {
+      ...draft,
+      reason: 'invalid period',
+      samplingPolicies: [{ deviceKey: 'chiller-01', pointCode: '', sampleIntervalMs: '10000', publishIntervalMs: '2000' }],
+    },
+    sampleShadow,
+  );
+  assert.equal(badSampling.ok, false);
+
+  const conflictErr = new PlatformApiError({
+    type: 'about:blank',
+    title: 'Conflict',
+    status: 409,
+    detail: 'revision conflict',
+    instance: '/api/v1/gateways/g/config-shadow',
+    code: 'CONFIG_SHADOW_REVISION_CONFLICT',
+    traceId: '0'.repeat(32),
+    retryable: false,
+  });
+  assert.match(describeGatewayConfigShadowError(conflictErr), /期望修订/);
 });

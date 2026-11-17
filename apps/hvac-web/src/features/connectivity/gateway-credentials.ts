@@ -2,6 +2,7 @@ import {
   createPlatformGatewayClient,
   type ConcentratorEidUpdateRequest,
   type ConcentratorParamsUpdateRequest,
+  type GatewayConfigShadowUpdateRequest,
 } from '@/api/generated/platformGateway.gen';
 
 const client = createPlatformGatewayClient();
@@ -56,4 +57,17 @@ export const gatewayConcentratorApi = {
     body: ConcentratorEidUpdateRequest,
     csrfToken: string,
   ) => (await client.updateGatewayConcentratorEids(gatewayId, unitId, body, csrfToken)).data,
+};
+
+export const gatewayConfigShadowKey = (gatewayId: string) =>
+  ['gateway-config-shadow', gatewayId] as const;
+
+export const gatewayConfigShadowApi = {
+  get: async (gatewayId: string, signal?: AbortSignal) =>
+    (await client.getGatewayConfigShadow(gatewayId, { signal })).data,
+  update: async (
+    gatewayId: string,
+    body: GatewayConfigShadowUpdateRequest,
+    csrfToken: string,
+  ) => (await client.updateGatewayConfigShadow(gatewayId, body, csrfToken)).data,
 };
