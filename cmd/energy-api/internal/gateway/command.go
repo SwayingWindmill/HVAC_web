@@ -121,6 +121,8 @@ type commandView struct {
 	CapabilityRevision    string                         `json:"capabilityRevision"`
 	Status                commandmodel.IntentStatus      `json:"status"`
 	Risk                  commandmodel.RiskLevel         `json:"risk"`
+	PriorityTier          commandmodel.PriorityTier      `json:"priorityTier,omitempty"`
+	CommandSource         commandmodel.CommandSource     `json:"commandSource,omitempty"`
 	ApprovalPolicy        commandmodel.ApprovalPolicy    `json:"approvalPolicy"`
 	ApprovalCount         int                            `json:"approvalCount"`
 	RequiredApprovalCount int                            `json:"requiredApprovalCount"`
@@ -793,6 +795,8 @@ func validCommandView(view commandView) bool {
 		!isLowerUUID(view.CommandID) || !isLowerUUIDv7(view.TenantID) || !isLowerUUIDv7(view.SiteID) ||
 		!isLowerUUIDv7(view.DeviceID) || !isLowerUUIDv7(view.PointID) || view.CapabilityRevision != profile.Revision ||
 		!validCommandIntentStatus(view.Status) || !validCommandRisk(view.Risk) ||
+		(view.PriorityTier != "" && !view.PriorityTier.Valid()) ||
+		(view.CommandSource != "" && !view.CommandSource.Valid()) ||
 		!validCommandApprovalPolicy(view.ApprovalPolicy, view.ApprovalCount, view.RequiredApprovalCount) ||
 		view.DeviceCommandSequence == 0 || view.Version == 0 ||
 		view.CreatedAt.IsZero() || view.UpdatedAt.IsZero() || view.UpdatedAt.Before(view.CreatedAt) ||

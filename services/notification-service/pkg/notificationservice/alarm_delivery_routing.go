@@ -54,6 +54,9 @@ type SiteRouting struct {
 	QuietHours  *QuietHours `json:"quietHours,omitempty"`
 	// RateLimitPerHour caps first and escalation messages per recipient per hour; CRITICAL is never capped.
 	RateLimitPerHour int `json:"rateLimitPerHour"`
+	// CooldownMinutes suppresses repeated FIRE messages for the same alarmType per recipient within
+	// the site default window; CRITICAL is never suppressed.
+	CooldownMinutes int `json:"cooldownMinutes,omitempty"`
 	// SuppressWhenRootCause: while an Alarm of RootCauseAlarmType is active at the Site, Alarms whose
 	// type starts with one of these prefixes tell nobody (a gateway offline makes every reading stale).
 	RootCauseAlarmType    string          `json:"rootCauseAlarmType"`
@@ -64,9 +67,11 @@ type SiteRouting struct {
 
 // RootCauseRule holds back downstream notifications while a matching root-cause Alarm is active.
 type RootCauseRule struct {
-	WhenActivePrefix string   `json:"whenActivePrefix"`
-	ScopeSameDevice  bool     `json:"scopeSameDevice,omitempty"`
-	SuppressPrefixes []string `json:"suppressPrefixes"`
+	WhenActivePrefix  string   `json:"whenActivePrefix"`
+	WhenDeviceID      string   `json:"whenDeviceId,omitempty"`
+	ScopeSameDevice   bool     `json:"scopeSameDevice,omitempty"`
+	SuppressPrefixes  []string `json:"suppressPrefixes"`
+	SuppressDeviceIDs []string `json:"suppressDeviceIds,omitempty"`
 }
 
 // QuietHours are a daily window in the Site's time; Alarms below BypassSeverity wait until it ends.
@@ -82,6 +87,7 @@ type AlarmRoute struct {
 	Name              string              `json:"name"`
 	MinSeverity       alarmmodel.Severity `json:"minSeverity"`
 	AlarmTypePrefixes []string            `json:"alarmTypePrefixes,omitempty"`
+	CooldownMinutes   int                 `json:"cooldownMinutes,omitempty"`
 	// Steps: the first is sent when the hold ends; each later one AfterMinutes after the first,
 	// only while nobody acknowledged and the Alarm is still active.
 	Steps          []EscalationStep `json:"steps"`
@@ -212,6 +218,9 @@ func ParseSiteRouting(body []byte) (SiteRouting, error) {
 	if routing.RateLimitPerHour < 0 {
 		return SiteRouting{}, errors.New("rateLimitPerHour must not be negative")
 	}
+	if routing.CooldownMinutes < 0 || routing.CooldownMinutes > 10080 {
+		return SiteRouting{}, errors.New("cooldownMinutes must be 0 to 10080")
+	}
 	if quiet := routing.QuietHours; quiet != nil {
 		if _, err := clockMinutes(quiet.Start); err != nil {
 			return SiteRouting{}, err
@@ -233,6 +242,9 @@ func ParseSiteRouting(body []byte) (SiteRouting, error) {
 		if strings.TrimSpace(rule.WhenActivePrefix) == "" {
 			return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] needs whenActivePrefix", index)
 		}
+		if rule.WhenDeviceID != "" && strings.TrimSpace(rule.WhenDeviceID) == "" {
+			return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] has a blank whenDeviceId", index)
+		}
 		if rule.ScopeSameDevice && !strings.HasSuffix(rule.WhenActivePrefix, "/") {
 			return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] with scopeSameDevice needs trailing / on whenActivePrefix", index)
 		}
@@ -244,6 +256,11 @@ func ParseSiteRouting(body []byte) (SiteRouting, error) {
 				return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] has an empty suppressPrefix", index)
 			}
 		}
+		for _, deviceID := range rule.SuppressDeviceIDs {
+			if strings.TrimSpace(deviceID) == "" {
+				return SiteRouting{}, fmt.Errorf("rootCauseRules[%d] has an empty suppressDeviceId", index)
+			}
+		}
 	}
 	if len(routing.Routes) == 0 {
 		return SiteRouting{}, errors.New("routing needs at least one route")
@@ -251,6 +268,9 @@ func ParseSiteRouting(body []byte) (SiteRouting, error) {
 	for index, route := range routing.Routes {
 		if strings.TrimSpace(route.Name) == "" || severityRank[route.MinSeverity] == 0 {
 			return SiteRouting{}, fmt.Errorf("route %d needs a name and a valid minSeverity", index)
+		}
+		if route.CooldownMinutes < 0 || route.CooldownMinutes > 10080 {
+			return SiteRouting{}, fmt.Errorf("route %s cooldownMinutes must be 0 to 10080", route.Name)
 		}
 		if len(route.Steps) == 0 || len(route.Steps) > 5 {
 			return SiteRouting{}, fmt.Errorf("route %s needs 1 to 5 steps", route.Name)
@@ -332,21 +352,40 @@ func hasAnyPrefix(value string, prefixes []string) bool {
 	return false
 }
 
-// IsSuppressedByRootCause reports whether an active root-cause Alarm suppresses notifications for alarmType.
-func (routing SiteRouting) IsSuppressedByRootCause(alarmType string, facts DeliveryFacts) bool {
-	if facts.RootCauseActive && alarmType != routing.RootCauseAlarmType && hasAnyPrefix(alarmType, routing.SuppressWhenRootCause) {
+func effectiveCooldownMinutes(routing SiteRouting, route AlarmRoute) int {
+	if route.CooldownMinutes > 0 {
+		return route.CooldownMinutes
+	}
+	return max(0, routing.CooldownMinutes)
+}
+
+// IsSuppressedByRootCauseForAlarm reports whether an active root-cause Alarm suppresses notifications for alarm.
+func (routing SiteRouting) IsSuppressedByRootCauseForAlarm(alarm DeliveryAlarm, facts DeliveryFacts) bool {
+	if facts.RootCauseActive && alarm.AlarmType != routing.RootCauseAlarmType && hasAnyPrefix(alarm.AlarmType, routing.SuppressWhenRootCause) {
 		return true
 	}
+	activeAlarms := activeAlarmsFromFacts(facts)
 	for _, rule := range routing.RootCauseRules {
-		if !hasAnyPrefix(alarmType, rule.SuppressPrefixes) {
+		if !hasAnyPrefix(alarm.AlarmType, rule.SuppressPrefixes) {
 			continue
 		}
-		for _, activeType := range facts.ActiveAlarmTypes {
-			if activeType == alarmType {
+		if len(rule.SuppressDeviceIDs) > 0 && !alarmMatchesAnyDevice(alarm, rule.SuppressDeviceIDs) {
+			continue
+		}
+		whenDevice := strings.TrimSpace(rule.WhenDeviceID)
+		for _, active := range activeAlarms {
+			if whenDevice == "" {
+				if active.AlarmType == alarm.AlarmType {
+					continue
+				}
+			} else if active.AlarmType == alarm.AlarmType && strings.EqualFold(strings.TrimSpace(alarm.DeviceID), strings.TrimSpace(active.DeviceID)) {
 				continue
 			}
-			suffix, ok := strings.CutPrefix(activeType, rule.WhenActivePrefix)
+			suffix, ok := strings.CutPrefix(active.AlarmType, rule.WhenActivePrefix)
 			if !ok {
+				continue
+			}
+			if whenDevice != "" && !alarmMatchesDevice(DeliveryAlarm{AlarmType: active.AlarmType, DeviceID: active.DeviceID}, whenDevice) {
 				continue
 			}
 			if !rule.ScopeSameDevice {
@@ -356,12 +395,60 @@ func (routing SiteRouting) IsSuppressedByRootCause(alarmType string, facts Deliv
 			if slash := strings.IndexByte(device, '/'); slash >= 0 {
 				device = device[:slash]
 			}
-			if alarmBelongsToDevice(alarmType, device) {
+			if alarmMatchesDevice(alarm, device) {
+				return true
+			}
+			if activeDev := strings.TrimSpace(active.DeviceID); activeDev != "" && strings.TrimSpace(alarm.DeviceID) != "" && strings.EqualFold(activeDev, strings.TrimSpace(alarm.DeviceID)) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func activeAlarmsFromFacts(facts DeliveryFacts) []ActiveAlarmFact {
+	if len(facts.ActiveAlarmTypes) == 0 {
+		return facts.ActiveAlarms
+	}
+	alarms := make([]ActiveAlarmFact, 0, len(facts.ActiveAlarms)+len(facts.ActiveAlarmTypes))
+	seenTypes := map[string]bool{}
+	for _, active := range facts.ActiveAlarms {
+		alarms = append(alarms, active)
+		seenTypes[active.AlarmType] = true
+	}
+	for _, alarmType := range facts.ActiveAlarmTypes {
+		if !seenTypes[alarmType] {
+			alarms = append(alarms, ActiveAlarmFact{AlarmType: alarmType})
+		}
+	}
+	return alarms
+}
+
+func alarmMatchesAnyDevice(alarm DeliveryAlarm, deviceIDs []string) bool {
+	for _, deviceID := range deviceIDs {
+		if alarmMatchesDevice(alarm, deviceID) {
+			return true
+		}
+	}
+	return false
+}
+
+func alarmMatchesDevice(alarm DeliveryAlarm, deviceID string) bool {
+	target := strings.TrimSpace(deviceID)
+	if target == "" {
+		return false
+	}
+	if dev := strings.TrimSpace(alarm.DeviceID); dev != "" {
+		if strings.EqualFold(dev, target) {
+			return true
+		}
+		// Only fall back to alarmType matching when deviceId is a UUID and target is a device code.
+		if alarmmodel.IsUUIDv7(strings.ToLower(dev)) && !alarmmodel.IsUUIDv7(strings.ToLower(target)) {
+			return alarmBelongsToDevice(alarm.AlarmType, target)
+		}
+		return false
+	}
+	return alarmBelongsToDevice(alarm.AlarmType, target)
 }
 
 func alarmBelongsToDevice(alarmType, device string) bool {

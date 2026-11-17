@@ -343,7 +343,7 @@ func (a *ControlAuthority) SubmitOperatorCommand(
 		ctx, operator, asset.SiteID, target.device.ID, target.point.ID,
 		strings.TrimSpace(input.IdempotencyKey), traceID, target.capability, target.profile,
 		input.Parameters, target.feedbackPoint.PointCode,
-		commandmodel.PreconditionRequireCurrentState, "", targetObs,
+		commandmodel.PreconditionRequireCurrentState, "", "", "", targetObs,
 	)
 	if err != nil {
 		return SubmitOperatorCommandOutput{}, err
@@ -828,6 +828,8 @@ func (a *ControlAuthority) mintGrantAndSubmit(
 	verificationPointKey string,
 	precondMode commandmodel.PreconditionMode,
 	bypassReason string,
+	priorityTier commandmodel.PriorityTier,
+	commandSource commandmodel.CommandSource,
 	obs *commandmodel.LivePointObservation,
 ) (SubmitResult, error) {
 	riskLevel, _, ok := commandmodel.EvaluateRiskLevel(capability, parameters, liveObservationCurrentValue(obs))
@@ -870,6 +872,8 @@ func (a *ControlAuthority) mintGrantAndSubmit(
 		VerificationPointKey: verificationPointKey,
 		PreconditionMode:     precondMode,
 		BypassReason:         bypassReason,
+		PriorityTier:         priorityTier,
+		CommandSource:        commandSource,
 		CurrentState:         currentState,
 		Authorization:        commandauth.Snapshot(claims),
 	})

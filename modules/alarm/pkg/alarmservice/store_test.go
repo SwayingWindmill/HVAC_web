@@ -2,6 +2,7 @@ package alarmservice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -167,5 +168,75 @@ func validMutation(operation alarmmodel.Operation, expectedVersion uint64, idemp
 		Operation: operation, ExpectedVersion: expectedVersion, Reason: "operator supplied reason",
 		ActorType: "PRINCIPAL", ActorID: "principal:operator-1", PolicyRevision: "alarm-policy-9",
 		CorrelationID: idempotencyKey, IdempotencyKey: idempotencyKey, OccurredAt: occurredAt,
+	}
+}
+
+func TestMemoryStoreListAlarmEvaluationsFiltersAndOrders(t *testing.T) {
+	store, err := NewMemoryStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alarm, err := store.Publish(context.Background(), testTenantID, testSiteID, validPublication("2026-07-31T12:00:00Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyRev := "01910000-2000-7000-8000-000000000001"
+	assignmentID := "01910000-2000-7000-8000-000000000002"
+	corr := alarm.IncidentCorrelationID
+	otherFingerprint := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	// Too old before the 10 minute pre-incident window and no active_alarm_id match.
+	if err := store.RecordEvaluation(testTenantID, testSiteID, alarm.Fingerprint, "", 1, AlarmEvaluationRecord{
+		EvaluatedAt: "2026-07-31T11:49:59Z", PolicyRevisionID: policyRev, AssignmentID: assignmentID,
+		InputRevision: "too-old", Status: EvaluationNotMatched, Effect: EvaluationEffectNone, Snapshot: json.RawMessage(`{"v":1}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Inside 10 minute pre-incident window.
+	if err := store.RecordEvaluation(testTenantID, testSiteID, alarm.Fingerprint, "", 2, AlarmEvaluationRecord{
+		EvaluatedAt: "2026-07-31T11:50:00Z", PolicyRevisionID: policyRev, AssignmentID: assignmentID,
+		InputRevision: "in-window", Status: EvaluationMatched, Effect: EvaluationEffectNone, Snapshot: json.RawMessage(`{"v":2}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Matched by active_alarm_id even with same timestamp and higher state_version.
+	if err := store.RecordEvaluation(testTenantID, testSiteID, alarm.Fingerprint, alarm.AlarmID, 3, AlarmEvaluationRecord{
+		EvaluatedAt: "2026-07-31T12:00:00Z", PolicyRevisionID: policyRev, AssignmentID: assignmentID,
+		InputRevision: "published", Status: EvaluationMatched, Effect: EvaluationEffectPublish, Snapshot: json.RawMessage(`{"v":3}`),
+		ActiveIncidentCorrelationID: &corr,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Unrelated post-fire snapshot under the same fingerprint with empty active_alarm_id or earlier alarm must not contaminate.
+	if err := store.RecordEvaluation(testTenantID, testSiteID, alarm.Fingerprint, "", 99, AlarmEvaluationRecord{
+		EvaluatedAt: "2026-07-31T12:05:00Z", PolicyRevisionID: policyRev, AssignmentID: assignmentID,
+		InputRevision: "later-unlinked", Status: EvaluationNotMatched, Effect: EvaluationEffectNone, Snapshot: json.RawMessage(`{"v":5}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Earlier alarm record inside 10m window must stay scoped to that alarm.
+	if err := store.RecordEvaluation(testTenantID, testSiteID, alarm.Fingerprint, "01910000-2000-7000-8000-000000000088", 1, AlarmEvaluationRecord{
+		EvaluatedAt: "2026-07-31T11:55:00Z", PolicyRevisionID: policyRev, AssignmentID: assignmentID,
+		InputRevision: "earlier-alarm", Status: EvaluationMatched, Effect: EvaluationEffectPublish, Snapshot: json.RawMessage(`{"v":6}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Unrelated fingerprint ignored.
+	if err := store.RecordEvaluation(testTenantID, testSiteID, otherFingerprint, "", 1, AlarmEvaluationRecord{
+		EvaluatedAt: "2026-07-31T12:00:00Z", PolicyRevisionID: policyRev, AssignmentID: assignmentID,
+		InputRevision: "other", Status: EvaluationNotMatched, Effect: EvaluationEffectNone, Snapshot: json.RawMessage(`{"v":4}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := store.ListAlarmEvaluations(context.Background(), testTenantID, testSiteID, alarm.AlarmID, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 2 || list.Items[0].InputRevision != "published" || list.Items[1].InputRevision != "in-window" {
+		t.Fatalf("unexpected evaluation history items: %#v", list.Items)
+	}
+	if _, err := store.ListAlarmEvaluations(context.Background(), testTenantID, "01910000-0000-7000-8000-000000009999", alarm.AlarmID, 25); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-site lookup err = %v, want ErrNotFound", err)
 	}
 }

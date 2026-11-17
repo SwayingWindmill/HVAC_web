@@ -85,20 +85,10 @@ func run(rulesPath string, printOnly bool) error {
 
 	publishedBy := "alarm-rules:" + filepath.Base(rulesPath)
 	now := time.Now().UTC()
-	for _, sitePolicy := range compiled.Policies {
-		published, changed, err := store.PublishSitePolicy(ctx, compiled.TenantID, compiled.SiteID, sitePolicy.Policy, sitePolicy.AssignmentID, now, publishedBy)
-		if err != nil {
-			return fmt.Errorf("%s: %w", sitePolicy.Policy.Title, err)
-		}
-		if changed {
-			fmt.Println("已发布第", published.Revision, "版：", published.Title)
-		}
+	summary, err := store.SyncSiteRules(ctx, compiled.TenantID, compiled.SiteID, compiled.Policies, now, publishedBy)
+	if err != nil {
+		return err
 	}
-	for _, rule := range plan.Retired {
-		if err := store.RetireSiteRule(ctx, compiled.TenantID, compiled.SiteID, rule.AssignmentID, now, publishedBy); err != nil {
-			return fmt.Errorf("撤销 %s: %w", rule.Policy.Title, err)
-		}
-		fmt.Println("已撤销：" + rule.Policy.Title)
-	}
+	fmt.Printf("已同步站点规则：新增 %d，更新 %d，未变 %d，撤销 %d\n", summary.Added, summary.Changed, summary.Unchanged, summary.Retired)
 	return nil
 }

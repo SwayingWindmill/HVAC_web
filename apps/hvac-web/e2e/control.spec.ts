@@ -435,3 +435,33 @@ test('control mode bar displays active auto-control lease badge and link when ar
   await manageLink.click();
   await expect(page).toHaveURL(/\/energy-analysis\/optimization/);
 });
+
+test('command log and drawer show Chinese priority tier and translate DEVICE_PRIORITY_LOCKED refusals', async ({ page, gateway }) => {
+  await page.goto(`/operations/control?site=${SITE_ID}`);
+
+  await page.getByRole('button', { name: '调整 CHILLER-01 的设定值' }).click();
+  const settings = page.getByRole('dialog', { name: '调整 CHILLER-01 的设定值' });
+  const setpointInput = settings.getByRole('textbox', { name: '冷冻水出水设定温度目标值' });
+  await setpointInput.fill('8.0');
+  await setpointInput.press('Enter');
+  await page.getByRole('alertdialog').getByRole('button', { name: '确认下发' }).click();
+
+  const logItem = page.getByRole('list', { name: '指令记录' }).getByRole('listitem').first();
+  await expect(logItem).toContainText('人工干预');
+  await expect(logItem).not.toContainText(/MANUAL_OVERRIDE/);
+  await logItem.getByRole('button', { name: /冷冻水出水设定温度/ }).click();
+  const sheet = page.getByRole('dialog');
+  await expect(sheet).toContainText('控制优先级');
+  await expect(sheet).toContainText('人工干预');
+  await expect(sheet).toContainText('值班人员操作');
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+
+  const chillerPoint = gateway.assetModel.telemetryPoints.find((candidate: { reportingDeviceId: string; pointType: string }) => candidate.pointType === 'COMMAND');
+  gateway.priorityLockedDeviceIds.add(chillerPoint.reportingDeviceId);
+  await page.getByRole('button', { name: '调整 CHILLER-01 的设定值' }).click();
+  await page.getByRole('dialog', { name: '调整 CHILLER-01 的设定值' }).getByRole('textbox', { name: '冷冻水出水设定温度目标值' }).fill('8.5');
+  await page.getByRole('dialog', { name: '调整 CHILLER-01 的设定值' }).getByRole('textbox', { name: '冷冻水出水设定温度目标值' }).press('Enter');
+  await page.getByRole('alertdialog').getByRole('button', { name: '确认下发' }).click();
+  await expect(page.getByText('这台设备正由更高优先级的安全联锁或人工指令锁定，当前指令不能下发。').first()).toBeVisible();
+});

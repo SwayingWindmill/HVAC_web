@@ -921,13 +921,14 @@ func TestSubmitEmergencyBypassPrecondition(t *testing.T) {
 		t.Fatalf("expected SnapshotRevision 0 on bypass, got %d", submitted.Intent.SnapshotRevision)
 	}
 
+	normalService := New(fixedClock())
 	normalReq := req
 	normalReq.IdempotencyKey = "normal-stop-1"
 	normalReq.PreconditionMode = commandmodel.PreconditionRequireCurrentState
 	normalReq.BypassReason = ""
 	normalReq.CurrentState = validRequest().CurrentState
 	normalReq.CurrentState.CurrentValue = nil
-	normalSubmitted, err := service.Submit(normalReq)
+	normalSubmitted, err := normalService.Submit(normalReq)
 	if err != nil {
 		t.Fatalf("expected normal STOP submit to succeed: %v", err)
 	}

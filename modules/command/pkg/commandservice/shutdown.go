@@ -497,10 +497,16 @@ func (a *ControlAuthority) dispatchShutdownTarget(
 	}
 
 	idemKey := a.buildShutdownCommandIdempotencyKey(idemBase, target.point.ID)
+	var priorityTier commandmodel.PriorityTier
+	var commandSource commandmodel.CommandSource
+	if allowEmergencyDo || precondMode == commandmodel.PreconditionEmergencyBypass {
+		priorityTier = commandmodel.PrioritySafetyInterlock
+		commandSource = commandmodel.SourceSafetyInterlock
+	}
 	res, err := a.mintGrantAndSubmit(
 		ctx, operator, target.device.SiteID, target.device.ID, target.point.ID,
 		idemKey, "", target.capability, target.profile, commandmodel.CommandParameters{},
-		target.feedbackPoint.PointCode, precondMode, cleanBypassReason, obs,
+		target.feedbackPoint.PointCode, precondMode, cleanBypassReason, priorityTier, commandSource, obs,
 	)
 	if err != nil {
 		return "", err

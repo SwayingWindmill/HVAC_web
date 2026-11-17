@@ -11,6 +11,8 @@ export type CommandStatus =
   | 'SUCCEEDED' | 'FAILED' | 'REJECTED' | 'CANCELLED' | 'EXPIRED' | 'OUTCOME_UNKNOWN';
 export type CommandRisk = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type CommandApprovalPolicy = 'NONE' | 'SINGLE_APPROVER' | 'TWO_PERSON';
+export type CommandPriorityTier = 'SAFETY_INTERLOCK' | 'MANUAL_OVERRIDE' | 'PROTECTION_RULE' | 'AI_OPTIMIZATION' | 'SCHEDULE';
+export type CommandSource = 'SAFETY_INTERLOCK' | 'OPERATOR' | 'PROTECTION_RULE' | 'OPTIMIZATION' | 'SCHEDULE';
 export type ReconciledOutcome = 'APPLIED' | 'NOT_APPLIED';
 
 export interface CommandTransition {
@@ -30,6 +32,8 @@ export interface Command {
   readonly capability: string;
   readonly status: CommandStatus;
   readonly risk: CommandRisk;
+  readonly priorityTier?: CommandPriorityTier;
+  readonly commandSource?: CommandSource;
   readonly approvalPolicy: CommandApprovalPolicy;
   readonly approvalCount: number;
   readonly requiredApprovalCount: number;

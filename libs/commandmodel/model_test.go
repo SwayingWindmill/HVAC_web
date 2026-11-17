@@ -1,6 +1,7 @@
 package commandmodel
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -367,5 +368,190 @@ func TestNormalizeTraceID(t *testing.T) {
 		if got := NormalizeTraceID(tc.raw); got != tc.want {
 			t.Fatalf("%s: NormalizeTraceID(%q) = %q, want %q", tc.name, tc.raw, got, tc.want)
 		}
+	}
+}
+
+func TestPriorityHierarchyAndDerivation(t *testing.T) {
+	if PriorityRank(PrioritySafetyInterlock) <= PriorityRank(PriorityManualOverride) ||
+		PriorityRank(PriorityManualOverride) <= PriorityRank(PriorityProtectionRule) ||
+		PriorityRank(PriorityProtectionRule) <= PriorityRank(PriorityAIOptimization) ||
+		PriorityRank(PriorityAIOptimization) <= PriorityRank(PrioritySchedule) ||
+		PriorityRank(PrioritySchedule) <= PriorityRank("UNKNOWN") {
+		t.Fatalf("unexpected priority rank ordering: %d %d %d %d %d",
+			PriorityRank(PrioritySafetyInterlock),
+			PriorityRank(PriorityManualOverride),
+			PriorityRank(PriorityProtectionRule),
+			PriorityRank(PriorityAIOptimization),
+			PriorityRank(PrioritySchedule),
+		)
+	}
+	if PriorityRank(PrioritySafetyInterlock) != 500 ||
+		PriorityRank(PriorityManualOverride) != 400 ||
+		PriorityRank(PriorityProtectionRule) != 300 ||
+		PriorityRank(PriorityAIOptimization) != 200 ||
+		PriorityRank(PrioritySchedule) != 100 {
+		t.Fatalf("unexpected exact priority ranks")
+	}
+
+	if !PrioritySafetyInterlock.Valid() || !PrioritySchedule.Valid() || PriorityTier("INVALID").Valid() {
+		t.Fatalf("unexpected PriorityTier.Valid results")
+	}
+	if !SourceSafetyInterlock.Valid() || !SourceOperator.Valid() || !SourceSchedule.Valid() || CommandSource("INVALID").Valid() {
+		t.Fatalf("unexpected CommandSource.Valid results")
+	}
+
+	cases := []struct {
+		name       string
+		req        SubmitRequest
+		wantTier   PriorityTier
+		wantSource CommandSource
+		wantErr    bool
+	}{
+		{
+			name:       "default human operator",
+			req:        SubmitRequest{Capability: CapabilitySetTemperatureSetpoint},
+			wantTier:   PriorityManualOverride,
+			wantSource: SourceOperator,
+		},
+		{
+			name: "emergency bypass defaults to safety interlock",
+			req: SubmitRequest{
+				Capability:       CapabilityStop,
+				PreconditionMode: PreconditionEmergencyBypass,
+			},
+			wantTier:   PrioritySafetyInterlock,
+			wantSource: SourceSafetyInterlock,
+		},
+		{
+			name: "automated lease defaults to ai optimization",
+			req: SubmitRequest{
+				Capability: CapabilitySetTemperatureSetpoint,
+				Authorization: AuthorizationSnapshot{
+					WorkloadSPIFFE: "spiffe://hvac/ns/prod/sa/optimizer",
+					LeaseID:        "lease-1",
+				},
+			},
+			wantTier:   PriorityAIOptimization,
+			wantSource: SourceOptimization,
+		},
+		{
+			name: "automated lease can run schedule or protection rule",
+			req: SubmitRequest{
+				Capability:    CapabilitySetTemperatureSetpoint,
+				PriorityTier:  PriorityProtectionRule,
+				CommandSource: SourceProtectionRule,
+				Authorization: AuthorizationSnapshot{
+					WorkloadSPIFFE: "spiffe://hvac/ns/prod/sa/optimizer",
+					LeaseID:        "lease-1",
+				},
+			},
+			wantTier:   PriorityProtectionRule,
+			wantSource: SourceProtectionRule,
+		},
+		{
+			name: "automated lease can run emergency stop bypass when supported",
+			req: SubmitRequest{
+				Capability:       CapabilityStop,
+				PreconditionMode: PreconditionEmergencyBypass,
+				Authorization: AuthorizationSnapshot{
+					WorkloadSPIFFE: "spiffe://hvac/ns/prod/sa/optimizer",
+					LeaseID:        "lease-1",
+				},
+			},
+			wantTier:   PrioritySafetyInterlock,
+			wantSource: SourceSafetyInterlock,
+		},
+		{
+			name: "automated lease cannot elevate to manual override",
+			req: SubmitRequest{
+				Capability:    CapabilitySetTemperatureSetpoint,
+				PriorityTier:  PriorityManualOverride,
+				CommandSource: SourceOperator,
+				Authorization: AuthorizationSnapshot{
+					WorkloadSPIFFE: "spiffe://hvac/ns/prod/sa/optimizer",
+					LeaseID:        "lease-1",
+				},
+			},
+			wantTier:   PriorityAIOptimization,
+			wantSource: SourceOptimization,
+			wantErr:    true,
+		},
+		{
+			name: "automated lease cannot elevate to safety interlock without emergency bypass capability",
+			req: SubmitRequest{
+				Capability:   CapabilitySetTemperatureSetpoint,
+				PriorityTier: PrioritySafetyInterlock,
+				Authorization: AuthorizationSnapshot{
+					WorkloadSPIFFE: "spiffe://hvac/ns/prod/sa/optimizer",
+					LeaseID:        "lease-1",
+				},
+			},
+			wantTier:   PriorityAIOptimization,
+			wantSource: SourceOptimization,
+			wantErr:    true,
+		},
+		{
+			name: "automated lease cannot elevate stop to safety interlock without emergency bypass precondition",
+			req: SubmitRequest{
+				Capability:    CapabilityStop,
+				PriorityTier:  PrioritySafetyInterlock,
+				CommandSource: SourceSafetyInterlock,
+				Authorization: AuthorizationSnapshot{
+					WorkloadSPIFFE: "spiffe://hvac/ns/prod/sa/optimizer",
+					LeaseID:        "lease-1",
+				},
+			},
+			wantTier:   PriorityAIOptimization,
+			wantSource: SourceOptimization,
+			wantErr:    true,
+		},
+		{
+			name: "mismatched priority tier and source rejected",
+			req: SubmitRequest{
+				Capability:    CapabilitySetTemperatureSetpoint,
+				PriorityTier:  PriorityManualOverride,
+				CommandSource: SourceOptimization,
+			},
+			wantTier:   PriorityManualOverride,
+			wantSource: SourceOperator,
+			wantErr:    true,
+		},
+		{
+			name: "invalid priority tier rejected",
+			req: SubmitRequest{
+				Capability:   CapabilitySetTemperatureSetpoint,
+				PriorityTier: PriorityTier("BOGUS"),
+			},
+			wantTier:   PriorityManualOverride,
+			wantSource: SourceOperator,
+			wantErr:    true,
+		},
+	}
+
+	for _, tc := range cases {
+		tier, source, err := ResolveCommandPriority(tc.req)
+		if tc.wantErr {
+			if !errors.Is(err, ErrInvalidCommandPriority) {
+				t.Fatalf("%s: expected ErrInvalidCommandPriority, got %v", tc.name, err)
+			}
+		} else {
+			if err != nil {
+				t.Fatalf("%s: ResolveCommandPriority failed: %v", tc.name, err)
+			}
+			if tier != tc.wantTier || source != tc.wantSource {
+				t.Fatalf("%s: got (%s, %s), want (%s, %s)", tc.name, tier, source, tc.wantTier, tc.wantSource)
+			}
+		}
+		derivedTier, derivedSource := DeriveCommandPriority(tc.req)
+		if derivedTier != tc.wantTier || derivedSource != tc.wantSource {
+			t.Fatalf("%s: DeriveCommandPriority got (%s, %s), want (%s, %s)", tc.name, derivedTier, derivedSource, tc.wantTier, tc.wantSource)
+		}
+	}
+
+	if !TerminalPreSendRejection("DEVICE_PRIORITY_LOCKED") {
+		t.Fatalf("expected DEVICE_PRIORITY_LOCKED to be terminal pre-send rejection")
+	}
+	if !TerminalPreSendRejection("PRIORITY_PREEMPTED") {
+		t.Fatalf("expected PRIORITY_PREEMPTED to be terminal pre-send rejection")
 	}
 }

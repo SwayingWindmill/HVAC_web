@@ -326,6 +326,8 @@ type SubmitRequest struct {
 	VerificationPointKey string
 	PreconditionMode     PreconditionMode
 	BypassReason         string
+	PriorityTier         PriorityTier  `json:"priorityTier,omitempty"`
+	CommandSource        CommandSource `json:"commandSource,omitempty"`
 	CurrentState         CurrentStateEvidence
 	Authorization        AuthorizationSnapshot
 }
@@ -480,6 +482,8 @@ type CommandIntent struct {
 	VerificationPointKey  string
 	PreconditionMode      PreconditionMode
 	BypassReason          string
+	PriorityTier          PriorityTier  `json:"priorityTier,omitempty"`
+	CommandSource         CommandSource `json:"commandSource,omitempty"`
 	PayloadHash           string
 	SnapshotRevision      uint64
 	DeviceCommandSequence uint64
@@ -700,7 +704,8 @@ func TerminalPreSendRejection(failureCode string) bool {
 	code := strings.TrimSpace(failureCode)
 	switch code {
 	case "COMMAND_ROUTE_NOT_FOUND", "COMMAND_CONTROL_DISABLED", "COMMAND_GATEWAY_CREDENTIAL_INACTIVE",
-		"DISPATCH_SAFETY_CONTROL_LOCKED", "DISPATCH_SAFETY_MAINTENANCE_WINDOW":
+		"DISPATCH_SAFETY_CONTROL_LOCKED", "DISPATCH_SAFETY_MAINTENANCE_WINDOW",
+		"DEVICE_PRIORITY_LOCKED", "PRIORITY_PREEMPTED":
 		return true
 	case "DISPATCH_SAFETY_EVALUATION_FAILED":
 		return false
@@ -772,4 +777,192 @@ func NormalizeTraceID(raw string) string {
 		return ""
 	}
 	return string(normalized[:])
+}
+
+type PriorityTier string
+
+const (
+	PrioritySafetyInterlock PriorityTier = "SAFETY_INTERLOCK"
+	PriorityManualOverride  PriorityTier = "MANUAL_OVERRIDE"
+	PriorityProtectionRule  PriorityTier = "PROTECTION_RULE"
+	PriorityAIOptimization  PriorityTier = "AI_OPTIMIZATION"
+	PrioritySchedule        PriorityTier = "SCHEDULE"
+)
+
+func (p PriorityTier) Valid() bool {
+	switch p {
+	case PrioritySafetyInterlock, PriorityManualOverride, PriorityProtectionRule, PriorityAIOptimization, PrioritySchedule:
+		return true
+	default:
+		return false
+	}
+}
+
+// PriorityRank maps each priority tier to a deterministic numeric precedence rank.
+func PriorityRank(tier PriorityTier) int {
+	switch tier {
+	case PrioritySafetyInterlock:
+		return 500
+	case PriorityManualOverride:
+		return 400
+	case PriorityProtectionRule:
+		return 300
+	case PriorityAIOptimization:
+		return 200
+	case PrioritySchedule:
+		return 100
+	default:
+		return 0
+	}
+}
+
+type CommandSource string
+
+const (
+	SourceSafetyInterlock CommandSource = "SAFETY_INTERLOCK"
+	SourceOperator        CommandSource = "OPERATOR"
+	SourceProtectionRule  CommandSource = "PROTECTION_RULE"
+	SourceOptimization    CommandSource = "OPTIMIZATION"
+	SourceSchedule        CommandSource = "SCHEDULE"
+)
+
+func (s CommandSource) Valid() bool {
+	switch s {
+	case SourceSafetyInterlock, SourceOperator, SourceProtectionRule, SourceOptimization, SourceSchedule:
+		return true
+	default:
+		return false
+	}
+}
+
+type IntentPriorityState struct {
+	Status       IntentStatus
+	PriorityTier PriorityTier
+}
+
+type DevicePriorityLock struct {
+	TenantID       string        `json:"tenantId"`
+	SiteID         string        `json:"siteId"`
+	DeviceID       string        `json:"deviceId"`
+	LockedPriority PriorityTier  `json:"lockedPriority"`
+	CommandSource  CommandSource `json:"commandSource"`
+	LockedBy       string        `json:"lockedBy"`
+	LockedUntil    time.Time     `json:"lockedUntil"`
+	Reason         string        `json:"reason"`
+	CreatedAt      time.Time     `json:"createdAt"`
+	UpdatedAt      time.Time     `json:"updatedAt"`
+}
+
+var ErrInvalidCommandPriority = errors.New("invalid or incompatible command priority")
+
+func defaultSourceForPriority(tier PriorityTier) CommandSource {
+	return DefaultCommandSourceForPriority(tier)
+}
+
+// DefaultCommandSourceForPriority returns the canonical CommandSource for a valid PriorityTier.
+func DefaultCommandSourceForPriority(tier PriorityTier) CommandSource {
+	switch tier {
+	case PrioritySafetyInterlock:
+		return SourceSafetyInterlock
+	case PriorityManualOverride:
+		return SourceOperator
+	case PriorityProtectionRule:
+		return SourceProtectionRule
+	case PriorityAIOptimization:
+		return SourceOptimization
+	case PrioritySchedule:
+		return SourceSchedule
+	default:
+		return ""
+	}
+}
+
+func defaultPriorityForSource(source CommandSource) PriorityTier {
+	switch source {
+	case SourceSafetyInterlock:
+		return PrioritySafetyInterlock
+	case SourceOperator:
+		return PriorityManualOverride
+	case SourceProtectionRule:
+		return PriorityProtectionRule
+	case SourceOptimization:
+		return PriorityAIOptimization
+	case SourceSchedule:
+		return PrioritySchedule
+	default:
+		return ""
+	}
+}
+
+func PrioritySourceCompatible(tier PriorityTier, source CommandSource) bool {
+	return tier.Valid() && source.Valid() && defaultSourceForPriority(tier) == source
+}
+
+func hasWorkloadLease(auth AuthorizationSnapshot) bool {
+	return strings.TrimSpace(auth.WorkloadSPIFFE) != "" || strings.TrimSpace(auth.LeaseID) != ""
+}
+
+func hasCompleteWorkloadLease(auth AuthorizationSnapshot) bool {
+	return strings.TrimSpace(auth.WorkloadSPIFFE) != "" && strings.TrimSpace(auth.LeaseID) != ""
+}
+
+func deriveDefaultPriority(request SubmitRequest) (PriorityTier, CommandSource) {
+	if request.PreconditionMode == PreconditionEmergencyBypass {
+		return PrioritySafetyInterlock, SourceSafetyInterlock
+	}
+	if hasCompleteWorkloadLease(request.Authorization) {
+		return PriorityAIOptimization, SourceOptimization
+	}
+	return PriorityManualOverride, SourceOperator
+}
+
+// ResolveCommandPriority resolves explicit or derived command priority and source, rejecting
+// unknown values, tier/source mismatches, or unauthorized elevation by automated leases.
+func ResolveCommandPriority(request SubmitRequest) (PriorityTier, CommandSource, error) {
+	rawTier := PriorityTier(strings.TrimSpace(string(request.PriorityTier)))
+	rawSource := CommandSource(strings.TrimSpace(string(request.CommandSource)))
+	if rawTier != "" && !rawTier.Valid() {
+		return "", "", ErrInvalidCommandPriority
+	}
+	if rawSource != "" && !rawSource.Valid() {
+		return "", "", ErrInvalidCommandPriority
+	}
+
+	var tier PriorityTier
+	var source CommandSource
+	switch {
+	case rawTier != "" && rawSource != "":
+		if !PrioritySourceCompatible(rawTier, rawSource) {
+			return "", "", ErrInvalidCommandPriority
+		}
+		tier, source = rawTier, rawSource
+	case rawTier != "":
+		tier = rawTier
+		source = defaultSourceForPriority(rawTier)
+	case rawSource != "":
+		tier = defaultPriorityForSource(rawSource)
+		source = rawSource
+	default:
+		tier, source = deriveDefaultPriority(request)
+	}
+
+	if hasWorkloadLease(request.Authorization) && PriorityRank(tier) > PriorityRank(PriorityProtectionRule) {
+		profile, ok := CapabilityProfileFor(request.Capability)
+		if tier != PrioritySafetyInterlock || !ok || !profile.SupportsEmergencyBypass || request.PreconditionMode != PreconditionEmergencyBypass {
+			return "", "", ErrInvalidCommandPriority
+		}
+	}
+	return tier, source, nil
+}
+
+// DeriveCommandPriority returns the deterministic priority tier and command source for a submit request.
+func DeriveCommandPriority(request SubmitRequest) (PriorityTier, CommandSource) {
+	tier, source, err := ResolveCommandPriority(request)
+	if err == nil {
+		return tier, source
+	}
+	if hasCompleteWorkloadLease(request.Authorization) {
+		return PriorityAIOptimization, SourceOptimization
+	}
+	return PriorityManualOverride, SourceOperator
 }

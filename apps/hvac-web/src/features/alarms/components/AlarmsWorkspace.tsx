@@ -56,11 +56,12 @@ import { AlarmRulesTable } from './AlarmRulesTable';
 const siteRoute = getRouteApi('/_app/_site');
 const pageRoute = getRouteApi('/_app/_site/operations/alarms');
 
-export type AlarmView = 'active' | 'unack' | 'cleared' | 'all';
+export type AlarmView = 'active' | 'unack' | 'suppressed' | 'cleared' | 'all';
 
 const VIEWS: readonly { readonly value: AlarmView; readonly label: string; readonly filter: AlarmListFilter }[] = [
   { value: 'active', label: '活动', filter: { condition: 'ACTIVE' } },
   { value: 'unack', label: '未确认', filter: { condition: 'ACTIVE', acknowledged: false } },
+  { value: 'suppressed', label: '已抑制', filter: { condition: 'ACTIVE', suppressed: true } },
   { value: 'cleared', label: '已恢复', filter: { condition: 'CLEARED' } },
   { value: 'all', label: '全部', filter: {} },
 ];
@@ -199,6 +200,7 @@ export function AlarmsWorkspace() {
 
   const activeItems = active.data?.items ?? [];
   const unacknowledged = activeItems.filter((alarm) => !alarm.acknowledgement);
+  const suppressedItems = activeItems.filter((alarm) => Boolean(alarm.suppression));
   const days = history.data?.days ?? 14;
   const windowed = useMemo(() => (history.data ? alarmsInWindow(history.data.alarms, site.timezone, days, now) : undefined), [history.data, site.timezone, days, now]);
   const filtered = severities.length > 0 || Boolean(search.device) || Boolean(query);
@@ -235,7 +237,9 @@ export function AlarmsWorkspace() {
   });
 
   const readingMore = filtered && list.hasNextPage;
-  const counts: Partial<Record<AlarmView, number>> = active.data ? { active: activeItems.length, unack: unacknowledged.length } : {};
+  const counts: Partial<Record<AlarmView, number>> = active.data
+    ? { active: activeItems.length, unack: unacknowledged.length, suppressed: suppressedItems.length }
+    : {};
 
   return (
     <Main fixed={!showingRules}>
@@ -382,6 +386,7 @@ export function AlarmsWorkspace() {
                               {alarm.occurrenceCount > 1 ? ` · 发生 ${alarm.occurrenceCount} 次` : ''}
                               {' · '}{alarm.assigneeId ? personLabel(alarm.assigneeId, myId) : '未分配'}
                               {' · '}{alarm.condition === 'CLEARED' ? '已恢复' : alarm.acknowledgement ? '已确认' : '未确认'}
+                              {alarm.condition === 'ACTIVE' && alarm.suppression ? ' · 已抑制' : ''}
                             </>}
                           />
                         ))}

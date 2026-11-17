@@ -45,16 +45,19 @@ const (
 // FaultHooks allows negative tests to inject single-guard regressions and prove every invariant
 // P1-P6 is capable of failing with an explicit counterexample trace.
 type FaultHooks struct {
-	BypassExpiredGrantOnClaim         bool
-	AllowPostArmRepublish             bool
-	UnfreezeWithoutReconcile          bool
-	AllowAckWithoutEdgeExecution      bool
-	IgnoreVerificationDeadline        bool
-	DropStaleReplyRecoveryAsError     bool
-	AllowDispatchCancelledIntent      bool
-	TreatSafetyEvalFailureAsTerminal  bool
-	AllowAbortNonSequenceCommand      bool
-	FailDrainedRecoveryPastBatchLimit bool
+	BypassExpiredGrantOnClaim          bool
+	AllowPostArmRepublish              bool
+	UnfreezeWithoutReconcile           bool
+	AllowAckWithoutEdgeExecution       bool
+	IgnoreVerificationDeadline         bool
+	DropStaleReplyRecoveryAsError      bool
+	AllowDispatchCancelledIntent       bool
+	TreatSafetyEvalFailureAsTerminal   bool
+	AllowAbortNonSequenceCommand       bool
+	FailDrainedRecoveryPastBatchLimit  bool
+	AllowSubmitUnderHigherPriorityLock bool
+	BypassPriorityLockOnClaim          bool
+	SkipSafetyInterlockPreemption      bool
 }
 
 // Counterexample captures the failing invariant, suite name, and shortest BFS trace from initial state.

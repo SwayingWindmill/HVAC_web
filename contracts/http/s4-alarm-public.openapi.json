@@ -116,10 +116,130 @@
           "default": { "$ref": "#/components/responses/Error" }
         }
       }
+    },
+    "/api/v1/alarms/{alarmId}/unassign": {
+      "post": {
+        "operationId": "unassignAlarm",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "description": "Clears handling responsibility assignment on an ACTIVE Alarm Incident.",
+        "parameters": [
+          { "$ref": "#/components/parameters/AlarmId" },
+          { "$ref": "#/components/parameters/RequiredIdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmLifecycleReasonRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Current canonical Alarm Incident after unassignment.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmEnvelope" } } }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/alarms/{alarmId}/suppress": {
+      "post": {
+        "operationId": "suppressAlarm",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "description": "Suppresses alert notifications for an ACTIVE Alarm Incident until a future UTC timestamp.",
+        "parameters": [
+          { "$ref": "#/components/parameters/AlarmId" },
+          { "$ref": "#/components/parameters/RequiredIdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuppressAlarmRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Current canonical Alarm Incident after suppression.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmEnvelope" } } }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/alarms/{alarmId}/unsuppress": {
+      "post": {
+        "operationId": "unsuppressAlarm",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "description": "Ends an active suppression window on an ACTIVE Alarm Incident.",
+        "parameters": [
+          { "$ref": "#/components/parameters/AlarmId" },
+          { "$ref": "#/components/parameters/RequiredIdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmLifecycleReasonRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Current canonical Alarm Incident after unsuppression.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmEnvelope" } } }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "422": { "$ref": "#/components/responses/Error" },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/v1/alarms/{alarmId}/evaluations": {
+      "get": {
+        "operationId": "listAlarmEvaluations",
+        "x-owner": "alarm-service",
+        "x-public-ingress": "platform-gateway",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-status": "READY",
+        "description": "Lists recent rule evaluation snapshots recorded for an Alarm Incident.",
+        "parameters": [
+          { "$ref": "#/components/parameters/AlarmId" },
+          { "$ref": "#/components/parameters/EvaluationsLimit" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent evaluation snapshots ordered newest first.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmEvaluationListEnvelope" } } }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
     }
   },
   "components": {
     "parameters": {
+      "EvaluationsLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 }
+      },
       "AlarmId": {
         "name": "alarmId",
         "in": "path",
@@ -343,6 +463,68 @@
           "expectedVersion": { "type": "integer", "minimum": 1 },
           "reason": { "type": "string", "minLength": 1, "maxLength": 256 },
           "assigneeId": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      },
+      "AlarmLifecycleReasonRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedVersion", "reason"],
+        "properties": {
+          "expectedVersion": { "type": "integer", "minimum": 1 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      },
+      "SuppressAlarmRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedVersion", "reason", "suppressedUntil"],
+        "properties": {
+          "expectedVersion": { "type": "integer", "minimum": 1 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "suppressedUntil": { "type": "string", "format": "date-time" }
+        }
+      },
+      "AlarmEvaluationStatus": {
+        "type": "string",
+        "enum": ["MATCHED", "NOT_MATCHED", "INDETERMINATE"]
+      },
+      "AlarmEvaluationEffect": {
+        "type": "string",
+        "enum": ["NONE", "PUBLISH", "CLEAR"]
+      },
+      "AlarmEvaluationRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evaluatedAt", "policyRevisionId", "assignmentId", "inputRevision", "status", "effect", "snapshot"],
+        "properties": {
+          "evaluatedAt": { "type": "string", "format": "date-time" },
+          "policyRevisionId": { "$ref": "#/components/schemas/UUIDv7" },
+          "assignmentId": { "$ref": "#/components/schemas/UUIDv7" },
+          "inputRevision": { "type": "string", "minLength": 1 },
+          "status": { "$ref": "#/components/schemas/AlarmEvaluationStatus" },
+          "effect": { "$ref": "#/components/schemas/AlarmEvaluationEffect" },
+          "qualityBlocker": { "type": "string" },
+          "snapshot": { "type": "object", "additionalProperties": true },
+          "activeIncidentCorrelationId": { "$ref": "#/components/schemas/UUIDv7" }
+        }
+      },
+      "AlarmEvaluationList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "alarmId", "items"],
+        "properties": {
+          "schemaVersion": { "type": "integer", "const": 1 },
+          "alarmId": { "$ref": "#/components/schemas/UUIDv7" },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/AlarmEvaluationRecord" } }
+        }
+      },
+      "AlarmEvaluationListEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/AlarmEvaluationList" },
+          "meta": { "$ref": "#/components/schemas/Meta" }
         }
       },
       "CursorMeta": {

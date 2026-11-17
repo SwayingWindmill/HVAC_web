@@ -15,8 +15,13 @@ func TestDecisionRequestRequiresReadAndAckShape(t *testing.T) {
 	if err := (DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, AlarmID: testAlarmID, Action: ActionRead}).Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if err := (DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, AlarmID: testAlarmID, Action: ActionAck}).Validate(); err != nil {
-		t.Fatal(err)
+	for _, action := range []Action{ActionAck, ActionAssign, ActionUnassign, ActionSuppress, ActionUnsuppress} {
+		if err := (DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, AlarmID: testAlarmID, Action: action}).Validate(); err != nil {
+			t.Fatalf("valid mutation action %q rejected: %v", action, err)
+		}
+		if err := (DecisionRequest{TenantID: testTenantID, SiteID: testSiteID, Action: action}).Validate(); err == nil {
+			t.Fatalf("mutation action %q without alarmId was accepted", action)
+		}
 	}
 	for _, invalid := range []DecisionRequest{
 		{TenantID: testTenantID, SiteID: testSiteID, Action: ActionAck},

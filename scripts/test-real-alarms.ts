@@ -7,6 +7,7 @@ import {
   alarmSchema,
   validateAlarmListScope,
   validateAlarmScope,
+  type AlarmSuppression,
 } from '../apps/hvac-web/src/api/alarm-contract.ts';
 
 const tenantId = '018f3e00-1000-7000-8000-000000000001';
@@ -14,7 +15,27 @@ const siteId = '018f3e00-2000-7000-8000-000000000001';
 const alarmId = '018f3e00-4000-7000-8000-000000000001';
 const incidentCorrelationId = '018f3e00-4000-7000-8000-000000000002';
 
-function timelineEntry({ operation = 'PUBLISH', condition = 'ACTIVE', occurredAt = '2026-07-31T09:00:00Z', version = 1, reason = `ALARM_${operation}`, assigneeId, suppression, currentSeverity = 'MAJOR' } = {}) {
+interface TimelineEntryOverrides {
+  readonly operation?: string;
+  readonly condition?: 'ACTIVE' | 'CLEARED';
+  readonly occurredAt?: string;
+  readonly version?: number;
+  readonly reason?: string;
+  readonly assigneeId?: string;
+  readonly suppression?: AlarmSuppression;
+  readonly currentSeverity?: 'INFO' | 'WARNING' | 'MINOR' | 'MAJOR' | 'CRITICAL';
+}
+
+function timelineEntry({
+  operation = 'PUBLISH',
+  condition = 'ACTIVE',
+  occurredAt = '2026-07-31T09:00:00Z',
+  version = 1,
+  reason = `ALARM_${operation}`,
+  assigneeId,
+  suppression,
+  currentSeverity = 'MAJOR',
+}: TimelineEntryOverrides = {}) {
   return {
     operation,
     condition,
@@ -31,7 +52,7 @@ function timelineEntry({ operation = 'PUBLISH', condition = 'ACTIVE', occurredAt
   };
 }
 
-function alarm(overrides = {}) {
+function alarm(overrides: Record<string, unknown> = {}) {
   return {
     schemaVersion: 2,
     alarmId,
@@ -61,11 +82,7 @@ function alarm(overrides = {}) {
   };
 }
 
-function acknowledgement(at = '2026-07-31T09:06:00Z') {
-  return { acknowledgedAt: at, acknowledgedBy: 'principal:operator-1', comment: 'known' };
-}
-
-function suppression(startsAt = '2026-07-31T09:07:00Z') {
+function suppression(startsAt = '2026-07-31T09:07:00Z'): AlarmSuppression {
   return {
     startsAt,
     expiresAt: '2026-07-31T13:07:00Z',
@@ -139,5 +156,30 @@ test('Alarm contract rejects timeline tampering and non-convergent condition/sev
   assert.throws(() => alarmSchema.parse(alarm({
     currentSeverity: 'MINOR',
     timeline: [timelineEntry({ currentSeverity: 'MAJOR' })],
+  })));
+});
+
+test('Alarm suppression validation accepts valid ACTIVE suppression window and rejects cleared suppression', () => {
+  const suppressed = alarmSchema.parse(alarm({
+    suppression: suppression(),
+    timeline: [
+      timelineEntry(),
+      timelineEntry({ operation: 'SUPPRESS', occurredAt: '2026-07-31T09:07:00Z', version: 2, suppression: suppression() }),
+    ],
+    version: 2,
+    updatedAt: '2026-07-31T09:07:00Z',
+  }));
+  assert.equal(suppressed.suppression?.reason, 'maintenance window');
+
+  assert.throws(() => alarmSchema.parse(alarm({
+    condition: 'CLEARED',
+    clearedAt: '2026-07-31T09:08:00Z',
+    suppression: suppression(),
+    timeline: [
+      timelineEntry(),
+      timelineEntry({ operation: 'CLEAR', condition: 'CLEARED', occurredAt: '2026-07-31T09:08:00Z', version: 2 }),
+    ],
+    version: 2,
+    updatedAt: '2026-07-31T09:08:00Z',
   })));
 });

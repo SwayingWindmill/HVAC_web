@@ -173,7 +173,7 @@ export const gatewayModbusDriverConfigSchema = z.object({
   driverType: z.enum(['MODBUS_TCP', 'MODBUS_RTU']),
   endpoint: z.string().min(1).max(256),
   unitId: z.number().int().min(1).max(247),
-  capabilityProfile: z.string().min(1).max(64).optional(),
+  capabilityProfile: z.enum(['VARIABLE_SPEED_PUMP', 'CHILLER', 'COOLING_TOWER', 'ELECTRICITY_METER', 'THERMAL_ENERGY_METER', 'WEATHER_STATION', 'ZONE_TEMPERATURE_SENSOR']).optional(),
   timeoutMs: z.number().int().min(100).max(30000),
   retries: z.number().int().min(0).max(10),
   registers: z.array(gatewayModbusRegisterMappingSchema).min(1).max(256),
@@ -340,6 +340,10 @@ export const alarmPaths = {
   detail: '__ALARM_PATH__',
   acknowledge: '__ALARM_ACK_PATH__',
   assign: '__ALARM_ASSIGN_PATH__',
+  unassign: '__ALARM_UNASSIGN_PATH__',
+  suppress: '__ALARM_SUPPRESS_PATH__',
+  unsuppress: '__ALARM_UNSUPPRESS_PATH__',
+  evaluations: '__ALARM_EVALUATIONS_PATH__',
   rules: '__ALARM_RULES_PATH__',
 } as const;
 

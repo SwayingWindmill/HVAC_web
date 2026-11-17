@@ -145,7 +145,7 @@ func (store *PostgresStore) Close() {
 }
 
 func (store *PostgresStore) Submit(ctx context.Context, request commandmodel.SubmitRequest) (SubmitResult, error) {
-	payloadHash, err := validateAndHash(request)
+	payloadHash, _, _, err := validateAndHash(request)
 	if err != nil {
 		return SubmitResult{}, err
 	}
@@ -174,7 +174,7 @@ func (store *PostgresStore) submitOnce(ctx context.Context, request commandmodel
 	if store == nil || store.pool == nil {
 		return SubmitResult{}, errors.New("command store is closed")
 	}
-	payloadHash, err := validateAndHash(request)
+	payloadHash, priorityTier, commandSource, err := validateAndHash(request)
 	if err != nil {
 		return SubmitResult{}, err
 	}
@@ -238,6 +238,39 @@ FOR UPDATE
 `, request.TenantID, request.DeviceID).Scan(&sequence); err != nil {
 		return SubmitResult{}, fmt.Errorf("lock device command sequence: %w", err)
 	}
+
+	activeLock, err := loadActiveDevicePriorityLock(ctx, tx, request.TenantID, request.DeviceID, now, true)
+	if err != nil {
+		return SubmitResult{}, err
+	}
+	if PriorityLockBlocking(priorityTier, activeLock, now) {
+		return SubmitResult{}, ErrDevicePriorityLocked
+	}
+	activeIntents, err := loadDeviceActiveIntentsForSubmit(ctx, tx, request.TenantID, request.DeviceID)
+	if err != nil {
+		return SubmitResult{}, err
+	}
+	activeStatuses := make([]commandmodel.IntentPriorityState, 0, len(activeIntents))
+	for _, existing := range activeIntents {
+		activeStatuses = append(activeStatuses, commandmodel.IntentPriorityState{
+			Status:       existing.Status,
+			PriorityTier: existing.PriorityTier,
+		})
+	}
+	if ActiveHigherPriorityBlocking(priorityTier, activeStatuses) {
+		return SubmitResult{}, ErrDevicePriorityLocked
+	}
+	if priorityTier == commandmodel.PrioritySafetyInterlock {
+		for _, existing := range activeIntents {
+			if !ShouldPreemptOnSafetyInterlock(priorityTier, existing.Status, existing.PriorityTier) {
+				continue
+			}
+			if err := store.applyCancelledIntent(ctx, tx, existing, "PRIORITY_PREEMPTED", request.PrincipalID, request.Authorization.GrantID, existing.Status == commandmodel.IntentQueued, now); err != nil {
+				return SubmitResult{}, err
+			}
+		}
+	}
+
 	if _, err := tx.Exec(ctx, `
 UPDATE command_runtime.device_control_state
 SET next_command_sequence = next_command_sequence + 1, site_id = $3::uuid, updated_at = $4
@@ -271,6 +304,8 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 		PayloadHash:           payloadHash,
 		PreconditionMode:      preconditionMode,
 		BypassReason:          bypassReason,
+		PriorityTier:          priorityTier,
+		CommandSource:         commandSource,
 		SnapshotRevision:      request.CurrentState.BusinessRevision,
 		DeviceCommandSequence: sequence,
 		Status:                finalStatus,
@@ -284,19 +319,19 @@ INSERT INTO command_runtime.command_intents (
   command_id, tenant_id, site_id, device_id, principal_id, idempotency_key,
   capability_name, capability_revision, risk_level, risk_rule_revision, approval_policy,
   retry_policy, canonical_parameters, verification_point_key, payload_hash, precondition_mode, bypass_reason, snapshot_revision, device_command_sequence,
-  status, version, active_execution_fence, created_at, updated_at, point_id, trace_id
+  status, version, active_execution_fence, created_at, updated_at, point_id, trace_id, priority_tier, command_source
 ) VALUES (
   $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6,
   $7, $8, $9, $10, $11,
   $12, $13::jsonb, $14, $15, $16, $17,
-  $18, $19, $20, $21, 0, $22, $22, $23::uuid, $24
+  $18, $19, $20, $21, 0, $22, $22, $23::uuid, $24, $25, $26
 )
 `, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID, intent.PrincipalID,
 		intent.IdempotencyKey, intent.Capability, intent.CapabilityRevision, intent.Risk,
 		intent.RiskSnapshot.RuleRevision, intent.ApprovalPolicy, intent.RetryPolicy, parameters,
 		intent.VerificationPointKey, intent.PayloadHash, string(intent.PreconditionMode), intent.BypassReason,
 		intent.SnapshotRevision, intent.DeviceCommandSequence,
-		intent.Status, intent.Version, now, intent.PointID, intent.TraceID); err != nil {
+		intent.Status, intent.Version, now, intent.PointID, intent.TraceID, string(intent.PriorityTier), string(intent.CommandSource)); err != nil {
 		return SubmitResult{}, classifyCommandWriteError("insert command intent", err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -373,6 +408,8 @@ INSERT INTO command_runtime.command_transitions (
 		"parameters":       intent.Parameters,
 		"risk":             intent.Risk,
 		"preconditionMode": intent.PreconditionMode,
+		"priorityTier":     intent.PriorityTier,
+		"commandSource":    intent.CommandSource,
 	}
 	if intent.BypassReason != "" {
 		auditMap["bypassReason"] = intent.BypassReason
@@ -399,6 +436,8 @@ INSERT INTO command_runtime.command_audit_intents (
 			"capabilityRevision":    intent.CapabilityRevision,
 			"deviceCommandSequence": intent.DeviceCommandSequence,
 			"payloadHash":           intent.PayloadHash,
+			"priorityTier":          intent.PriorityTier,
+			"commandSource":         intent.CommandSource,
 		})
 		if _, err := tx.Exec(ctx, `
 INSERT INTO command_runtime.command_dispatch_outbox (
@@ -601,14 +640,14 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid AND idempotency_key = $3
 
 func loadIntent(ctx context.Context, tx pgx.Tx, tenantID, commandID string) (commandmodel.CommandIntent, error) {
 	var intent commandmodel.CommandIntent
-	var capability, risk, retry, status, approvalPolicy, preconditionMode string
+	var capability, risk, retry, status, approvalPolicy, preconditionMode, priorityTier, commandSource string
 	var parameters []byte
 	err := tx.QueryRow(ctx, `
 SELECT command_id::text, tenant_id::text, site_id::text, device_id::text, principal_id::text,
        idempotency_key, trace_id, capability_name, capability_revision, risk_level, risk_rule_revision,
        approval_policy, retry_policy, canonical_parameters, verification_point_key,
        payload_hash, precondition_mode, bypass_reason, snapshot_revision, device_command_sequence, status, version,
-       active_execution_fence, created_at, updated_at, point_id::text
+       active_execution_fence, created_at, updated_at, point_id::text, priority_tier, command_source
 FROM command_runtime.command_intents
 WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 `, tenantID, commandID).Scan(
@@ -617,6 +656,7 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 		&intent.RiskSnapshot.RuleRevision, &approvalPolicy, &retry, &parameters, &intent.VerificationPointKey,
 		&intent.PayloadHash, &preconditionMode, &intent.BypassReason, &intent.SnapshotRevision, &intent.DeviceCommandSequence,
 		&status, &intent.Version, &intent.ActiveFence, &intent.CreatedAt, &intent.UpdatedAt, &intent.PointID,
+		&priorityTier, &commandSource,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return commandmodel.CommandIntent{}, ErrCommandNotFound
@@ -633,6 +673,8 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 	intent.ApprovalPolicy = commandmodel.ApprovalPolicy(approvalPolicy)
 	intent.RetryPolicy = commandmodel.RetryPolicy(retry)
 	intent.PreconditionMode = commandmodel.PreconditionMode(preconditionMode)
+	intent.PriorityTier = commandmodel.PriorityTier(priorityTier)
+	intent.CommandSource = commandmodel.CommandSource(commandSource)
 	intent.Status = commandmodel.IntentStatus(status)
 	intent.TraceID = commandmodel.NormalizeTraceID(intent.TraceID)
 
@@ -891,4 +933,205 @@ WHERE capability_name = $1 AND capability_revision = $2
 		return 0, fmt.Errorf("commit capability profile sync: %w", err)
 	}
 	return synced, nil
+}
+
+// AcquireDevicePriorityLock installs or refreshes a persistent device priority lock in Postgres.
+func (store *PostgresStore) AcquireDevicePriorityLock(ctx context.Context, lock commandmodel.DevicePriorityLock) (commandmodel.DevicePriorityLock, error) {
+	if store == nil || store.pool == nil {
+		return commandmodel.DevicePriorityLock{}, errors.New("command store is closed")
+	}
+	now := store.now().UTC()
+	normalized, err := normalizeAndValidatePriorityLock(lock, now)
+	if err != nil {
+		return commandmodel.DevicePriorityLock{}, err
+	}
+	for attempt := 0; attempt < 4; attempt++ {
+		stored, lockErr := store.acquireDevicePriorityLockOnce(ctx, normalized, now)
+		if lockErr == nil || errors.Is(lockErr, ErrDevicePriorityLocked) {
+			return stored, lockErr
+		}
+		if !isRetryablePostgresTransaction(lockErr) {
+			return commandmodel.DevicePriorityLock{}, lockErr
+		}
+	}
+	return commandmodel.DevicePriorityLock{}, errors.New("device priority lock transaction retry limit exceeded")
+}
+
+func (store *PostgresStore) acquireDevicePriorityLockOnce(ctx context.Context, lock commandmodel.DevicePriorityLock, now time.Time) (commandmodel.DevicePriorityLock, error) {
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return commandmodel.DevicePriorityLock{}, fmt.Errorf("begin priority lock transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := activateTenant(ctx, tx, lock.TenantID); err != nil {
+		return commandmodel.DevicePriorityLock{}, err
+	}
+	existing, err := loadActiveDevicePriorityLock(ctx, tx, lock.TenantID, lock.DeviceID, now, true)
+	if err != nil {
+		return commandmodel.DevicePriorityLock{}, err
+	}
+	if existing != nil && commandmodel.PriorityRank(existing.LockedPriority) > commandmodel.PriorityRank(lock.LockedPriority) {
+		return commandmodel.DevicePriorityLock{}, ErrDevicePriorityLocked
+	}
+	if err := tx.QueryRow(ctx, `
+INSERT INTO command_runtime.device_priority_locks (
+  tenant_id, site_id, device_id, locked_priority, command_source,
+  locked_by, locked_until, reason, created_at, updated_at
+) VALUES (
+  $1::uuid, $2::uuid, $3::uuid, $4, $5,
+  $6, $7, $8, $9, $9
+)
+ON CONFLICT (tenant_id, device_id) DO UPDATE SET
+  site_id = EXCLUDED.site_id,
+  locked_priority = EXCLUDED.locked_priority,
+  command_source = EXCLUDED.command_source,
+  locked_by = EXCLUDED.locked_by,
+  locked_until = EXCLUDED.locked_until,
+  reason = EXCLUDED.reason,
+  updated_at = EXCLUDED.updated_at
+RETURNING created_at, updated_at
+`, lock.TenantID, lock.SiteID, lock.DeviceID, string(lock.LockedPriority), string(lock.CommandSource),
+		lock.LockedBy, lock.LockedUntil, lock.Reason, now).Scan(&lock.CreatedAt, &lock.UpdatedAt); err != nil {
+		return commandmodel.DevicePriorityLock{}, classifyCommandWriteError("upsert device priority lock", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return commandmodel.DevicePriorityLock{}, fmt.Errorf("commit device priority lock: %w", err)
+	}
+	return lock, nil
+}
+
+// ReleaseDevicePriorityLock deletes any priority lock row held on (tenantID, deviceID).
+func (store *PostgresStore) ReleaseDevicePriorityLock(ctx context.Context, tenantID, deviceID string) error {
+	if store == nil || store.pool == nil {
+		return errors.New("command store is closed")
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	deviceID = strings.TrimSpace(deviceID)
+	if tenantID == "" || deviceID == "" {
+		return ErrInvalidRequest
+	}
+	for attempt := 0; attempt < 4; attempt++ {
+		err := store.releaseDevicePriorityLockOnce(ctx, tenantID, deviceID)
+		if err == nil {
+			return nil
+		}
+		if !isRetryablePostgresTransaction(err) {
+			return err
+		}
+	}
+	return errors.New("release device priority lock transaction retry limit exceeded")
+}
+
+func (store *PostgresStore) releaseDevicePriorityLockOnce(ctx context.Context, tenantID, deviceID string) error {
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return fmt.Errorf("begin release priority lock transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := activateTenant(ctx, tx, tenantID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+DELETE FROM command_runtime.device_priority_locks
+WHERE tenant_id = $1::uuid AND device_id = $2::uuid
+`, tenantID, deviceID); err != nil {
+		return classifyCommandWriteError("delete device priority lock", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit release priority lock: %w", err)
+	}
+	return nil
+}
+
+// GetDevicePriorityLock returns the active device priority lock at store clock now, or nil if absent or expired.
+func (store *PostgresStore) GetDevicePriorityLock(ctx context.Context, tenantID, deviceID string) (*commandmodel.DevicePriorityLock, error) {
+	if store == nil || store.pool == nil {
+		return nil, errors.New("command store is closed")
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	deviceID = strings.TrimSpace(deviceID)
+	if tenantID == "" || deviceID == "" {
+		return nil, ErrInvalidRequest
+	}
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("begin read priority lock transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := activateTenant(ctx, tx, tenantID); err != nil {
+		return nil, err
+	}
+	lock, err := loadActiveDevicePriorityLock(ctx, tx, tenantID, deviceID, store.now().UTC(), false)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit read priority lock: %w", err)
+	}
+	return lock, nil
+}
+
+func loadActiveDevicePriorityLock(ctx context.Context, tx pgx.Tx, tenantID, deviceID string, now time.Time, forUpdate bool) (*commandmodel.DevicePriorityLock, error) {
+	lockClause := ""
+	if forUpdate {
+		lockClause = "\nFOR UPDATE"
+	}
+	query := fmt.Sprintf(`
+SELECT tenant_id::text, site_id::text, device_id::text, locked_priority, command_source,
+       locked_by, locked_until, reason, created_at, updated_at
+FROM command_runtime.device_priority_locks
+WHERE tenant_id = $1::uuid AND device_id = $2::uuid AND locked_until > $3%s
+`, lockClause)
+	var lock commandmodel.DevicePriorityLock
+	var priority, source string
+	err := tx.QueryRow(ctx, query, tenantID, deviceID, now).Scan(
+		&lock.TenantID, &lock.SiteID, &lock.DeviceID, &priority, &source,
+		&lock.LockedBy, &lock.LockedUntil, &lock.Reason, &lock.CreatedAt, &lock.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read device priority lock: %w", err)
+	}
+	lock.LockedPriority = commandmodel.PriorityTier(priority)
+	lock.CommandSource = commandmodel.CommandSource(source)
+	return &lock, nil
+}
+
+func loadDeviceActiveIntentsForSubmit(ctx context.Context, tx pgx.Tx, tenantID, deviceID string) ([]commandmodel.CommandIntent, error) {
+	rows, err := tx.Query(ctx, `
+SELECT command_id::text, tenant_id::text, site_id::text, device_id::text,
+       payload_hash, status, version, priority_tier
+FROM command_runtime.command_intents
+WHERE tenant_id = $1::uuid
+  AND device_id = $2::uuid
+  AND status IN ('SUBMITTED', 'VALIDATING', 'AWAITING_APPROVAL', 'APPROVED', 'QUEUED', 'DISPATCHING', 'OUTCOME_UNKNOWN')
+ORDER BY device_command_sequence ASC, command_id ASC
+FOR UPDATE
+`, tenantID, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("load active device commands: %w", err)
+	}
+	var intents []commandmodel.CommandIntent
+	for rows.Next() {
+		var item commandmodel.CommandIntent
+		var status, priority string
+		if err := rows.Scan(
+			&item.ID, &item.TenantID, &item.SiteID, &item.DeviceID,
+			&item.PayloadHash, &status, &item.Version, &priority,
+		); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan active device command: %w", err)
+		}
+		item.Status = commandmodel.IntentStatus(status)
+		item.PriorityTier = commandmodel.PriorityTier(priority)
+		intents = append(intents, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("iterate active device commands: %w", err)
+	}
+	rows.Close()
+	return intents, nil
 }

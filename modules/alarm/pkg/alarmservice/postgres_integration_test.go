@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
@@ -219,5 +220,81 @@ func postgresMutation(operation alarmmodel.Operation, expectedVersion uint64, id
 		Operation: operation, ExpectedVersion: expectedVersion, Reason: "postgres integration lifecycle operation",
 		ActorType: "PRINCIPAL", ActorID: "principal:postgres-operator", PolicyRevision: "alarm-policy-postgres-1",
 		CorrelationID: idempotencyKey, IdempotencyKey: idempotencyKey, OccurredAt: occurredAt,
+	}
+}
+
+func TestPostgresListAlarmEvaluationsMatchesAlarmAndPreIncidentWindow(t *testing.T) {
+	databaseURL := os.Getenv("S4_ALARM_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
+	}
+	evalTenantID := "0190f000-0000-7000-8000-000000000098"
+	ctx := identitycontext.WithTenantID(context.Background(), evalTenantID)
+	store, err := OpenPostgresStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	base := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+	assignmentID := "01910000-7700-7000-8000-000000000001"
+	policy := validAlarmPolicy()
+	policy.PolicyID = "01910000-7700-7000-8000-000000000003"
+	policy.PolicyRevisionID = "01910000-7700-7000-8000-000000000002"
+	policy.Revision = 1
+	policy.AlarmType = "S4_EVAL_AUDIT"
+	policy.SourceReference = "alarm-policy:postgres-eval-audit"
+	policy.Title = "Evaluation history audit rule"
+	policy.Summary = "Tests pre-incident evaluation history lookup."
+	policy.TriggerMode = TriggerDuration
+	policy.DurationSeconds = 120
+	policy.Raise = Condition{Kind: ConditionCompare, Input: "supplyTemp", Operator: CompareGT, Value: NumberValue(30)}
+	policy.Clear = Condition{Kind: ConditionCompare, Input: "supplyTemp", Operator: CompareLTE, Value: NumberValue(28)}
+	sealAlarmPolicy(&policy)
+
+	if _, _, err := store.PublishSitePolicy(ctx, evalTenantID, postgresTestSiteID, policy, assignmentID, base, "principal:eval-test"); err != nil {
+		t.Fatal(err)
+	}
+	snapshotAt := func(rev string, at time.Time, temp float64, quality string) EvaluationSnapshot {
+		return EvaluationSnapshot{
+			TenantID: evalTenantID, SiteID: postgresTestSiteID, SubjectType: "SITE", SubjectID: postgresTestSiteID,
+			InputRevision: rev, AsOf: at.UTC().Format(time.RFC3339Nano),
+			Inputs:        map[string]InputFact{"supplyTemp": NumberInput("supplyTemp", temp, quality, at.UTC().Format(time.RFC3339Nano))},
+			CorrelationID: rev,
+		}
+	}
+
+	// 15 minutes before alarm fires: excluded from the 10 minute pre-incident window.
+	if _, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshotAt("eval-early", base, 25, "BAD"), base); err != nil {
+		t.Fatal(err)
+	}
+	// 3 minutes before alarm fires: candidate starts inside the 10 minute window.
+	if _, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshotAt("eval-candidate", base.Add(16*time.Minute), 31, "GOOD"), base.Add(16*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	published, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshotAt("eval-publish", base.Add(19*time.Minute), 32, "GOOD"), base.Add(19*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published.Effect != EvaluationEffectPublish || published.State.ActiveAlarmID == "" {
+		t.Fatalf("expected PUBLISH effect, got %#v", published)
+	}
+
+	list, err := store.ListAlarmEvaluations(ctx, evalTenantID, postgresTestSiteID, published.State.ActiveAlarmID, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := list.Validate(published.State.ActiveAlarmID, 25); err != nil {
+		t.Fatalf("invalid evaluation list: %v", err)
+	}
+	if len(list.Items) != 2 || list.Items[0].InputRevision != "eval-publish" || list.Items[1].InputRevision != "eval-candidate" {
+		t.Fatalf("unexpected postgres evaluation items: %#v", list.Items)
+	}
+	limited, err := store.ListAlarmEvaluations(ctx, evalTenantID, postgresTestSiteID, published.State.ActiveAlarmID, 1)
+	if err != nil || len(limited.Items) != 1 || limited.Items[0].InputRevision != "eval-publish" {
+		t.Fatalf("limited query got (%#v, %v)", limited, err)
+	}
+	if _, err := store.ListAlarmEvaluations(ctx, evalTenantID, postgresTestSiteID, "01910000-7700-7000-8000-000000000999", 25); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing alarm err = %v, want ErrNotFound", err)
 	}
 }

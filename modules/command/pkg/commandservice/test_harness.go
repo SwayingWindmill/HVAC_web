@@ -149,7 +149,21 @@ func (m *MemoryAuthorityStore) CancelPending(_ context.Context, req commandmodel
 	return m.svc.CancelPending(req)
 }
 
+func (m *MemoryAuthorityStore) AcquireDevicePriorityLock(_ context.Context, lock commandmodel.DevicePriorityLock) (commandmodel.DevicePriorityLock, error) {
+	return m.svc.AcquireDevicePriorityLock(lock)
+}
+
+func (m *MemoryAuthorityStore) ReleaseDevicePriorityLock(_ context.Context, tenantID, deviceID string) error {
+	return m.svc.ReleaseDevicePriorityLock(tenantID, deviceID)
+}
+
+func (m *MemoryAuthorityStore) GetDevicePriorityLock(_ context.Context, tenantID, deviceID string) (*commandmodel.DevicePriorityLock, error) {
+	return m.svc.GetDevicePriorityLock(tenantID, deviceID)
+}
+
 func (m *MemoryAuthorityStore) ClaimDispatch(_ context.Context, tenantID, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
+	_, _ = m.svc.RejectPriorityLockedQueued(tenantID)
+
 	m.mu.Lock()
 	ids := append([]string(nil), m.order...)
 	m.mu.Unlock()
@@ -157,40 +171,43 @@ func (m *MemoryAuthorityStore) ClaimDispatch(_ context.Context, tenantID, leaseO
 	if leaseFor <= 0 {
 		leaseFor = 30 * time.Second
 	}
-	leaseUntil := m.now().UTC().Add(leaseFor)
-	for _, id := range ids {
+	type queuedCandidate struct {
+		id    string
+		order int
+		rank  int
+	}
+	var candidates []queuedCandidate
+	for idx, id := range ids {
 		intent, err := m.svc.Get(id)
 		if err != nil || intent.TenantID != tenantID || intent.Status != commandmodel.IntentQueued {
 			continue
 		}
-		if m.earlierDeviceCommandActive(tenantID, intent.DeviceID, intent.DeviceCommandSequence) {
+		candidates = append(candidates, queuedCandidate{
+			id:    id,
+			order: idx,
+			rank:  commandmodel.PriorityRank(intent.PriorityTier),
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].rank != candidates[j].rank {
+			return candidates[i].rank > candidates[j].rank
+		}
+		return candidates[i].order < candidates[j].order
+	})
+
+	now := m.now().UTC()
+	leaseUntil := now.Add(leaseFor)
+	for _, candidate := range candidates {
+		if !m.svc.canClaimQueuedIntent(candidate.id, now) {
 			continue
 		}
-		env, prepErr := m.svc.PrepareDispatch(id, leaseOwner, leaseUntil)
+		env, prepErr := m.svc.PrepareDispatch(candidate.id, leaseOwner, leaseUntil)
 		if prepErr != nil {
 			continue
 		}
 		return env, nil
 	}
 	return commandmodel.DispatchEnvelope{}, ErrNoDispatchAvailable
-}
-
-func (m *MemoryAuthorityStore) earlierDeviceCommandActive(tenantID, deviceID string, seq uint64) bool {
-	m.mu.Lock()
-	ids := append([]string(nil), m.order...)
-	m.mu.Unlock()
-	for _, id := range ids {
-		other, err := m.svc.Get(id)
-		if err != nil || other.TenantID != tenantID || other.DeviceID != deviceID || other.DeviceCommandSequence >= seq {
-			continue
-		}
-		switch other.Status {
-		case commandmodel.IntentSubmitted, commandmodel.IntentValidating, commandmodel.IntentAwaitingApproval,
-			commandmodel.IntentApproved, commandmodel.IntentQueued, commandmodel.IntentDispatching, commandmodel.IntentOutcomeUnknown:
-			return true
-		}
-	}
-	return false
 }
 
 func (m *MemoryAuthorityStore) ResolveDispatch(_ context.Context, env commandmodel.DispatchEnvelope, res commandmodel.ConnectorResult) error {

@@ -136,3 +136,113 @@ func TestPostgresAlarmNotificationOutboxEmitsOnlyBusinessStateChangesAndRelayIsF
 		t.Fatalf("current Alarm notification relay owner could not complete work: %v", err)
 	}
 }
+
+func TestPostgresAlarmNotificationOutboxEmitsSuppressionEventsWithAttributes(t *testing.T) {
+	databaseURL := os.Getenv("S4_ALARM_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
+	}
+	suppressTenantID := "0190f000-0000-7000-8000-000000000099"
+	ctx := identitycontext.WithTenantID(context.Background(), suppressTenantID)
+	store, err := OpenPostgresStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	deviceID := "01910000-0000-7000-8000-000000000222"
+	created, err := store.Publish(ctx, suppressTenantID, postgresTestSiteID, Publication{
+		DeviceID:        &deviceID,
+		SourceType:      alarmmodel.SourceDeviceRule,
+		SourceReference: "device-rule-s16-suppress-test",
+		AlarmType:       "CHILLER_LOCKOUT",
+		Title:           "Chiller Lockout",
+		Summary:         "Suppression outbox test",
+		Severity:        alarmmodel.SeverityWarning,
+		OccurredAt:      "2026-08-23T09:00:00Z",
+		RuleRevision:    "alarm-policy-s16-suppress-1",
+		ActorType:       "WORKLOAD",
+		ActorID:         "alarm-evaluator",
+		CorrelationID:   "s16-suppress-publish",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	suppressExpires := "2026-08-23T11:00:00Z"
+	suppressedResult, err := store.Apply(ctx, suppressTenantID, postgresTestSiteID, created.AlarmID, Mutation{
+		Operation:       alarmmodel.OperationSuppress,
+		ExpectedVersion: created.Version,
+		OccurredAt:      "2026-08-23T09:01:00Z",
+		Reason:          "Maintenance window",
+		SuppressedUntil: &suppressExpires,
+		ActorType:       "PRINCIPAL",
+		ActorID:         "principal:operator-1",
+		PolicyRevision:  "alarm-policy-postgres-1",
+		IdempotencyKey:  "s16-suppress-event-1",
+		CorrelationID:   "s16-suppress-corr-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Apply(ctx, suppressTenantID, postgresTestSiteID, created.AlarmID, Mutation{
+		Operation:       alarmmodel.OperationUnsuppress,
+		ExpectedVersion: suppressedResult.Alarm.Version,
+		OccurredAt:      "2026-08-23T09:02:00Z",
+		Reason:          "Maintenance finished early",
+		ActorType:       "PRINCIPAL",
+		ActorID:         "principal:operator-1",
+		PolicyRevision:  "alarm-policy-postgres-1",
+		IdempotencyKey:  "s16-unsuppress-event-1",
+		CorrelationID:   "s16-unsuppress-corr-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := store.beginTenantTransaction(ctx, suppressTenantID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	rows, err := tx.Query(ctx, `SELECT source_event_id::text, action FROM alarm_runtime.notification_outbox WHERE tenant_id=$1 AND alarm_id=$2 ORDER BY alarm_version, action`, suppressTenantID, created.AlarmID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type rowItem struct {
+		id     string
+		action NotificationAction
+	}
+	var items []rowItem
+	for rows.Next() {
+		var item rowItem
+		if err := rows.Scan(&item.id, &item.action); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, item)
+	}
+	rows.Close()
+
+	want := []NotificationAction{NotificationCreated, NotificationSuppressed, NotificationUnsuppressed}
+	if len(items) != len(want) {
+		t.Fatalf("got %d outbox events %#v, want %v", len(items), items, want)
+	}
+	for i, wantAction := range want {
+		if items[i].action != wantAction {
+			t.Fatalf("outbox[%d].action = %q, want %q", i, items[i].action, wantAction)
+		}
+		event, err := loadNotificationOutboxEvent(ctx, tx, items[i].id, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Attributes["deviceId"] != deviceID {
+			t.Fatalf("outbox[%d] deviceId = %q, want %q", i, event.Attributes["deviceId"], deviceID)
+		}
+		if wantAction == NotificationSuppressed && event.Attributes["suppressedUntil"] != suppressExpires {
+			t.Fatalf("outbox[%d] suppressedUntil = %q, want %q", i, event.Attributes["suppressedUntil"], suppressExpires)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

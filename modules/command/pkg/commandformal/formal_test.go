@@ -47,6 +47,19 @@ func TestReplyRecoveryQueueDrainInvariants(t *testing.T) {
 	}
 }
 
+func TestPriorityArbitrationAndLocksInvariants(t *testing.T) {
+	report, err := CheckPriorityArbitrationAndLocks(FaultHooks{})
+	if err != nil {
+		t.Fatalf("CheckPriorityArbitrationAndLocks errored: %v", err)
+	}
+	if !report.Passed {
+		t.Fatalf("CheckPriorityArbitrationAndLocks failed: %s", report.Counterexample.Error())
+	}
+	if report.VisitedStates == 0 || report.Transitions == 0 {
+		t.Fatalf("expected non-empty priority arbitration exploration: states=%d transitions=%d", report.VisitedStates, report.Transitions)
+	}
+}
+
 func TestFormalPropertiesCanFailOnBrokenTransitions(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -102,6 +115,21 @@ func TestFormalPropertiesCanFailOnBrokenTransitions(t *testing.T) {
 			name:     "P6 single-batch recovery stopping at LIMIT 50 must fail",
 			wantProp: PropertyP6,
 			hooks:    FaultHooks{FailDrainedRecoveryPastBatchLimit: true},
+		},
+		{
+			name:     "P1 submit under higher priority lock must fail",
+			wantProp: PropertyP1,
+			hooks:    FaultHooks{AllowSubmitUnderHigherPriorityLock: true},
+		},
+		{
+			name:     "P1 claim bypassing priority lock must fail",
+			wantProp: PropertyP1,
+			hooks:    FaultHooks{BypassPriorityLockOnClaim: true},
+		},
+		{
+			name:     "P3 SAFETY_INTERLOCK leaving lower-priority queued intent unpreempted must fail",
+			wantProp: PropertyP3,
+			hooks:    FaultHooks{SkipSafetyInterlockPreemption: true},
 		},
 	}
 

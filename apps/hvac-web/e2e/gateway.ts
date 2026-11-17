@@ -260,11 +260,13 @@ export class Gateway {
   principalOverride: Json | null = null;
   assetModel: Json = fixture<Json>('asset-model.json');
   readonly alarms = fixture<Json[]>('alarms.json');
+  readonly alarmEvaluations: Record<string, Json[]> = {};
   // The Site's rules in effect, as the Alarm owner lists them; publishing the rules file changes them, not the page.
   readonly alarmRules = fixture<Json[]>('alarm-rules.json');
   readonly workOrders = fixture<Json[]>('work-orders.json');
   readonly snapshots = fixture<Json>('snapshots.json');
   readonly commands: Json[] = [];
+  readonly priorityLockedDeviceIds = new Set<string>();
   /** The Site's control mode and asset locks, as the Registry owner keeps them. */
   controlState: Json = {
     tenantId: principal.context.tenantId, siteId: SITE_ID, controlMode: 'REMOTE_AUTO', reason: '', updatedBy: null, updatedByName: null, updatedAt: null, revision: 1, assetLocks: [],
@@ -530,7 +532,8 @@ export class Gateway {
     const risk = HIGH_RISK.includes(capability) ? 'HIGH' : 'LOW';
     const command: Json = {
       schemaVersion: 1, commandId: `ec61c2dc-2d2c-4933-8fb7-${String(this.commands.length + 1).padStart(12, '0')}`, siteId: SITE_ID, deviceId: point.reportingDeviceId, pointId: point.id,
-      capability, status: 'SUBMITTED', risk, approvalPolicy: risk === 'LOW' ? 'NONE' : 'SINGLE_APPROVER',
+      capability, status: 'SUBMITTED', risk, priorityTier: input.priorityTier ?? 'MANUAL_OVERRIDE', commandSource: input.commandSource ?? 'OPERATOR',
+      approvalPolicy: risk === 'LOW' ? 'NONE' : 'SINGLE_APPROVER',
       approvalCount: 0, requiredApprovalCount: risk === 'LOW' ? 0 : 1, parameters: input.parameters, transitions: [],
       createdAt: now, updatedAt: now,
     };
@@ -1411,6 +1414,7 @@ export class Gateway {
       const items = this.alarms.filter((alarm) =>
         (!query.get('condition') || alarm.condition === query.get('condition'))
         && (!query.has('acknowledged') || Boolean(alarm.acknowledgement) === (query.get('acknowledged') === 'true'))
+        && (!query.has('suppressed') || Boolean(alarm.suppression) === (query.get('suppressed') === 'true'))
         && (!query.get('severity') || alarm.currentSeverity === query.get('severity'))
         && (!activeTo || Date.parse(alarm.firstOccurredAt) <= Date.parse(activeTo))
         && (!activeFrom || alarm.condition === 'ACTIVE' || !alarm.clearedAt || Date.parse(alarm.clearedAt) >= Date.parse(activeFrom)));
@@ -1419,17 +1423,58 @@ export class Gateway {
     if (method === 'GET' && path === '/api/v1/alarm-rules') {
       return { body: { data: query.get('siteId') === SITE_ID ? this.alarmRules : [], meta: { requestId: 'e2e' } } };
     }
-    const alarmMatch = path.match(/^\/api\/v1\/alarms\/([^/]+)(?:\/(ack|assign))?$/);
+    const alarmMatch = path.match(/^\/api\/v1\/alarms\/([^/]+)(?:\/(ack|assign|unassign|suppress|unsuppress|evaluations))?$/);
     if (alarmMatch) {
       const alarm = this.alarms.find((candidate) => candidate.alarmId === alarmMatch[1]);
       if (!alarm) return { status: 404, body: { status: 404, code: 'RESOURCE_NOT_FOUND' } };
+      if (method === 'GET' && alarmMatch[2] === 'evaluations') {
+        const limit = Math.min(100, Math.max(1, Number(query.get('limit') ?? 25)));
+        const items = (this.alarmEvaluations[alarm.alarmId] ?? [{
+          evaluatedAt: alarm.firstOccurredAt,
+          policyRevisionId: alarm.ruleRevision,
+          assignmentId: '01910000-b000-7000-8000-00000000000b',
+          inputRevision: 'eval-rev-1',
+          status: 'MATCHED',
+          effect: 'PUBLISH',
+          snapshot: {
+            asOf: alarm.firstOccurredAt,
+            siteId: alarm.siteId,
+            tenantId: alarm.tenantId,
+            subjectType: 'SITE',
+            subjectId: alarm.siteId,
+            correlationId: alarm.incidentCorrelationId,
+            inputRevision: 'eval-rev-1',
+            inputs: {
+              '01910000-0000-7000-8000-000000000005/return_water_temperature': { key: '01910000-0000-7000-8000-000000000005/return_water_temperature', present: true, value: { type: 'NUMBER', number: 10.2 }, quality: 'GOOD' },
+              '01910000-0000-7000-8000-000000000002/power_total': { key: '01910000-0000-7000-8000-000000000002/power_total', present: true, value: { type: 'NUMBER', number: 372.5 }, quality: 'GOOD' },
+            },
+          },
+          activeIncidentCorrelationId: alarm.incidentCorrelationId,
+        }]).slice(0, limit);
+        return { body: { data: { schemaVersion: 1, alarmId: alarm.alarmId, items }, meta: { requestId: 'e2e' } } };
+      }
       if (method === 'POST' && alarmMatch[2] === 'ack') {
         alarm.acknowledgement = { acknowledgedAt: now, acknowledgedBy: MY_ID, ...(body?.comment ? { comment: body.comment } : {}) };
         this.appendAlarmEntry(alarm, 'ACKNOWLEDGE', body?.comment ?? '', now);
       } else if (method === 'POST' && alarmMatch[2] === 'assign') {
         alarm.assigneeId = body?.assigneeId;
         this.appendAlarmEntry(alarm, 'ASSIGN', body?.reason ?? '', now);
-      } else if (method !== 'GET') {
+      } else if (method === 'POST' && alarmMatch[2] === 'unassign') {
+        delete alarm.assigneeId;
+        this.appendAlarmEntry(alarm, 'UNASSIGN', body?.reason ?? '', now);
+      } else if (method === 'POST' && alarmMatch[2] === 'suppress') {
+        alarm.suppression = {
+          startsAt: now,
+          expiresAt: body?.suppressedUntil,
+          reason: body?.reason ?? '',
+          actorId: MY_ID,
+          policyRevision: '1',
+        };
+        this.appendAlarmEntry(alarm, 'SUPPRESS', body?.reason ?? '', now);
+      } else if (method === 'POST' && alarmMatch[2] === 'unsuppress') {
+        delete alarm.suppression;
+        this.appendAlarmEntry(alarm, 'UNSUPPRESS', body?.reason ?? '', now);
+      } else if (method !== 'GET' || alarmMatch[2] !== undefined) {
         return undefined;
       }
       return { body: { data: alarm } };
@@ -1452,6 +1497,9 @@ export class Gateway {
       }
       if (this.controlState.activeMaintenanceWindow && !['STOP', 'STOP_UNIT_SEQUENCE', 'RESET_FAULT'].includes(point?.sourceMetadata?.capability)) {
         return { status: 409, body: { status: 409, code: 'COMMAND_CONTROL_LOCKED', detail: 'Only stop and reset commands are permitted during the maintenance window.' } };
+      }
+      if (point && this.priorityLockedDeviceIds.has(point.reportingDeviceId)) {
+        return { status: 409, body: { status: 409, code: 'DEVICE_PRIORITY_LOCKED', detail: 'Device is locked at a higher priority.' } };
       }
       if (HIGH_RISK.includes(point?.sourceMetadata?.capability)) {
         if (this.stepUpFailureReason) {

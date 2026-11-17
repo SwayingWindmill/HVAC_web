@@ -99,6 +99,8 @@ hvac_s1|infra/connectivity/postgres/init/gateway-certificate-revocation.sql
 hvac_s1|infra/connectivity/postgres/init/gateway-config-shadows.sql
 hvac_s1|infra/registry/postgres/init/optimization-monitor-lease.sql
 hvac_s1|infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql
+hvac_s1|infra/registry/postgres/init/alarm-suppress-unassign-capabilities.sql
+hvac_s1|services/notification-service/migrations/alarm-delivery-suppression-cooldown.sql
 hvac_s1|infra/connectivity/postgres/init/gateway-shadow-drivers-and-autonomy.sql
 hvac_s2|infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
@@ -130,6 +132,7 @@ hvac_s3|modules/command/migrations/008_command_precondition_mode.sql
 hvac_s3|modules/command/migrations/command-template-capability-sync.sql
 hvac_s3|modules/command/migrations/command_intent_trace_context.sql
 hvac_s3|modules/command/migrations/control-alarm-outbox.sql
+hvac_s3|modules/command/migrations/command-priority-and-locks.sql
 hvac_s4|modules/alarm/migrations/001_s4_alarm_runtime.sql
 hvac_s4|modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 hvac_s4|modules/alarm/migrations/003_s4_tenant_scope.sql
@@ -147,6 +150,7 @@ hvac_s4|modules/alarm/migrations/014_s31_retired_site_rules.sql
 hvac_s4|modules/alarm/migrations/015_s32_reading_gap_escalation.sql
 hvac_s4|modules/alarm/migrations/016_s32_rules_unevaluable.sql
 hvac_s4|modules/alarm/migrations/017_drop_legacy_migration_backups_and_comment_tables.sql
+hvac_s4|modules/alarm/migrations/alarm-suppression-notification-events.sql
 hvac_s5|modules/workorder/migrations/001_s5_work_order_runtime.sql
 hvac_s5|modules/workorder/migrations/002_s5_work_order_create_assignment.sql
 hvac_s5|modules/workorder/migrations/003_s5_work_order_lifecycle.sql
