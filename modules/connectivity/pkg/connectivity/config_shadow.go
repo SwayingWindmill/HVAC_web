@@ -1,6 +1,7 @@
 package connectivity
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -115,6 +116,8 @@ type GatewayDesiredConfig struct {
 	PointMappings       []GatewayPointMapping             `json:"pointMappings"`
 	SamplingPolicies    []GatewaySamplingPolicy           `json:"samplingPolicies"`
 	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
+	DriverConfigs       []GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
+	AutonomyPolicy      *GatewayAutonomyPolicy            `json:"autonomyPolicy,omitempty"`
 	UpdatedBy           string                            `json:"updatedBy"`
 	Reason              string                            `json:"reason"`
 	CreatedAt           time.Time                         `json:"createdAt"`
@@ -127,6 +130,8 @@ type GatewayReportedConfig struct {
 	PointMappings       []GatewayPointMapping             `json:"pointMappings"`
 	SamplingPolicies    []GatewaySamplingPolicy           `json:"samplingPolicies"`
 	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
+	DriverConfigs       []GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
+	AutonomyPolicy      *GatewayAutonomyPolicy            `json:"autonomyPolicy,omitempty"`
 	DriftDetails        []DriftDetail                     `json:"driftDetails"`
 	ErrorMessage        *string                           `json:"errorMessage,omitempty"`
 	ReportedAt          time.Time                         `json:"reportedAt"`
@@ -147,6 +152,8 @@ type UpdateDesiredConfigInput struct {
 	PointMappings           *[]GatewayPointMapping             `json:"pointMappings,omitempty"`
 	SamplingPolicies        *[]GatewaySamplingPolicy           `json:"samplingPolicies,omitempty"`
 	ConcentratorConfigs     *map[string]ConcentratorUnitShadow `json:"concentratorConfigs,omitempty"`
+	DriverConfigs           *[]GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
+	AutonomyPolicy          OptionalAutonomyPolicy             `json:"autonomyPolicy,omitzero"`
 	Reason                  string                             `json:"reason"`
 }
 
@@ -163,6 +170,8 @@ type GatewayShadowReportInput struct {
 	PointMappings       []GatewayPointMapping             `json:"pointMappings"`
 	SamplingPolicies    []GatewaySamplingPolicy           `json:"samplingPolicies"`
 	ConcentratorConfigs map[string]ConcentratorUnitShadow `json:"concentratorConfigs"`
+	DriverConfigs       []GatewayModbusDriverConfig       `json:"driverConfigs,omitempty"`
+	AutonomyPolicy      *GatewayAutonomyPolicy            `json:"autonomyPolicy,omitempty"`
 	DriftDetails        []DriftDetail                     `json:"driftDetails,omitempty"`
 	ErrorMessage        *string                           `json:"errorMessage,omitempty"`
 	ReportedAt          *time.Time                        `json:"reportedAt,omitempty"`
@@ -236,28 +245,54 @@ func ValidateConcentratorShadowEIDSlots(slots []ConcentratorShadowEIDSlot) ([]Co
 	return cleaned, nil
 }
 
+type validatedShadowSections struct {
+	mappings []GatewayPointMapping
+	policies []GatewaySamplingPolicy
+	units    map[string]ConcentratorUnitShadow
+	drivers  []GatewayModbusDriverConfig
+	autonomy *GatewayAutonomyPolicy
+	encoded  encodedShadowSections
+}
+
 func normalizeAndValidateDesiredShadow(
 	pointMappings []GatewayPointMapping,
 	samplingPolicies []GatewaySamplingPolicy,
 	concentratorConfigs map[string]ConcentratorUnitShadow,
-) ([]GatewayPointMapping, []GatewaySamplingPolicy, map[string]ConcentratorUnitShadow, []byte, []byte, []byte, error) {
+	driverConfigs []GatewayModbusDriverConfig,
+	autonomyPolicy *GatewayAutonomyPolicy,
+) (validatedShadowSections, error) {
 	cleanedMappings, err := validatePointMappings(pointMappings)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return validatedShadowSections{}, err
 	}
 	cleanedPolicies, err := validateSamplingPolicies(samplingPolicies)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return validatedShadowSections{}, err
 	}
 	cleanedUnits, err := validateConcentratorConfigs(concentratorConfigs)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return validatedShadowSections{}, err
 	}
-	mappingsJSON, policiesJSON, unitsJSON, err := marshalShadowSections(cleanedMappings, cleanedPolicies, cleanedUnits)
+	cleanedDrivers, err := validateDriverConfigs(driverConfigs)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return validatedShadowSections{}, err
 	}
-	return cleanedMappings, cleanedPolicies, cleanedUnits, mappingsJSON, policiesJSON, unitsJSON, nil
+	cleanedAutonomy, err := validateAutonomyPolicy(autonomyPolicy)
+	if err != nil {
+		return validatedShadowSections{}, err
+	}
+	encoded, err := marshalShadowSections(cleanedMappings, cleanedPolicies, cleanedUnits, cleanedDrivers, cleanedAutonomy)
+	if err != nil {
+		return validatedShadowSections{}, err
+	}
+	return validatedShadowSections{
+		mappings: cleanedMappings,
+		policies: cleanedPolicies,
+		units:    cleanedUnits,
+		drivers:  cleanedDrivers,
+		autonomy: cleanedAutonomy,
+		encoded:  encoded,
+	}, nil
 }
 
 func validatePointMappings(input []GatewayPointMapping) ([]GatewayPointMapping, error) {
@@ -527,11 +562,21 @@ func marshalDriftDetailsChecked(details []DriftDetail) ([]byte, error) {
 	return encoded, nil
 }
 
+type encodedShadowSections struct {
+	mappingsJSON []byte
+	policiesJSON []byte
+	unitsJSON    []byte
+	driversJSON  []byte
+	autonomyArg  *string
+}
+
 func marshalShadowSections(
 	mappings []GatewayPointMapping,
 	policies []GatewaySamplingPolicy,
 	units map[string]ConcentratorUnitShadow,
-) ([]byte, []byte, []byte, error) {
+	drivers []GatewayModbusDriverConfig,
+	autonomy *GatewayAutonomyPolicy,
+) (encodedShadowSections, error) {
 	if mappings == nil {
 		mappings = []GatewayPointMapping{}
 	}
@@ -541,28 +586,56 @@ func marshalShadowSections(
 	if units == nil {
 		units = map[string]ConcentratorUnitShadow{}
 	}
+	if drivers == nil {
+		drivers = []GatewayModbusDriverConfig{}
+	}
 	mappingsBytes, err := json.Marshal(mappings)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("%w: encode pointMappings: %v", ErrConfigShadowInvalid, err)
+		return encodedShadowSections{}, fmt.Errorf("%w: encode pointMappings: %v", ErrConfigShadowInvalid, err)
 	}
 	if estimatedPostgresJSONBTextBytes(mappingsBytes) > maxPointMappingsJSONBytes {
-		return nil, nil, nil, fmt.Errorf("%w: pointMappings exceeds %d bytes", ErrConfigShadowInvalid, maxPointMappingsJSONBytes)
+		return encodedShadowSections{}, fmt.Errorf("%w: pointMappings exceeds %d bytes", ErrConfigShadowInvalid, maxPointMappingsJSONBytes)
 	}
 	policiesBytes, err := json.Marshal(policies)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("%w: encode samplingPolicies: %v", ErrConfigShadowInvalid, err)
+		return encodedShadowSections{}, fmt.Errorf("%w: encode samplingPolicies: %v", ErrConfigShadowInvalid, err)
 	}
 	if estimatedPostgresJSONBTextBytes(policiesBytes) > maxSamplingPoliciesJSONBytes {
-		return nil, nil, nil, fmt.Errorf("%w: samplingPolicies exceeds %d bytes", ErrConfigShadowInvalid, maxSamplingPoliciesJSONBytes)
+		return encodedShadowSections{}, fmt.Errorf("%w: samplingPolicies exceeds %d bytes", ErrConfigShadowInvalid, maxSamplingPoliciesJSONBytes)
 	}
 	unitsBytes, err := json.Marshal(units)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("%w: encode concentratorConfigs: %v", ErrConfigShadowInvalid, err)
+		return encodedShadowSections{}, fmt.Errorf("%w: encode concentratorConfigs: %v", ErrConfigShadowInvalid, err)
 	}
 	if estimatedPostgresJSONBTextBytes(unitsBytes) > maxConcentratorConfigsJSONBytes {
-		return nil, nil, nil, fmt.Errorf("%w: concentratorConfigs exceeds %d bytes", ErrConfigShadowInvalid, maxConcentratorConfigsJSONBytes)
+		return encodedShadowSections{}, fmt.Errorf("%w: concentratorConfigs exceeds %d bytes", ErrConfigShadowInvalid, maxConcentratorConfigsJSONBytes)
 	}
-	return mappingsBytes, policiesBytes, unitsBytes, nil
+	driversBytes, err := json.Marshal(drivers)
+	if err != nil {
+		return encodedShadowSections{}, fmt.Errorf("%w: encode driverConfigs: %v", ErrConfigShadowInvalid, err)
+	}
+	if estimatedPostgresJSONBTextBytes(driversBytes) > maxDriverConfigsJSONBytes {
+		return encodedShadowSections{}, fmt.Errorf("%w: driverConfigs exceeds %d bytes", ErrConfigShadowInvalid, maxDriverConfigsJSONBytes)
+	}
+	var autonomyArg *string
+	if autonomy != nil {
+		autonomyBytes, err := json.Marshal(autonomy)
+		if err != nil {
+			return encodedShadowSections{}, fmt.Errorf("%w: encode autonomyPolicy: %v", ErrConfigShadowInvalid, err)
+		}
+		if estimatedPostgresJSONBTextBytes(autonomyBytes) > maxAutonomyPolicyJSONBytes {
+			return encodedShadowSections{}, fmt.Errorf("%w: autonomyPolicy exceeds %d bytes", ErrConfigShadowInvalid, maxAutonomyPolicyJSONBytes)
+		}
+		encoded := string(autonomyBytes)
+		autonomyArg = &encoded
+	}
+	return encodedShadowSections{
+		mappingsJSON: mappingsBytes,
+		policiesJSON: policiesBytes,
+		unitsJSON:    unitsBytes,
+		driversJSON:  driversBytes,
+		autonomyArg:  autonomyArg,
+	}, nil
 }
 
 func validateShadowReason(reason string) (string, error) {
@@ -586,19 +659,27 @@ func computeConfigShadowDrift(desired *GatewayDesiredConfig, reported *GatewayRe
 	var desiredMappings, reportedMappings []GatewayPointMapping
 	var desiredPolicies, reportedPolicies []GatewaySamplingPolicy
 	var desiredUnits, reportedUnits map[string]ConcentratorUnitShadow
+	var desiredDrivers, reportedDrivers []GatewayModbusDriverConfig
+	var desiredAutonomy, reportedAutonomy *GatewayAutonomyPolicy
 	if desired != nil {
 		desiredMappings = desired.PointMappings
 		desiredPolicies = desired.SamplingPolicies
 		desiredUnits = desired.ConcentratorConfigs
+		desiredDrivers = desired.DriverConfigs
+		desiredAutonomy = desired.AutonomyPolicy
 	}
 	if reported != nil {
 		reportedMappings = reported.PointMappings
 		reportedPolicies = reported.SamplingPolicies
 		reportedUnits = reported.ConcentratorConfigs
+		reportedDrivers = reported.DriverConfigs
+		reportedAutonomy = reported.AutonomyPolicy
 	}
 	drift = append(drift, diffPointMappings(desiredMappings, reportedMappings)...)
 	drift = append(drift, diffSamplingPolicies(desiredPolicies, reportedPolicies)...)
 	drift = append(drift, diffConcentratorConfigs(desiredUnits, reportedUnits)...)
+	drift = append(drift, diffDriverConfigs(desiredDrivers, reportedDrivers)...)
+	drift = append(drift, diffAutonomyPolicy(desiredAutonomy, reportedAutonomy)...)
 	return drift
 }
 
@@ -888,7 +969,9 @@ WHERE gateway_id = $1::uuid AND status = 'ACTIVE'
 
 func loadDesiredConfigInTx(ctx context.Context, tx pgx.Tx, tenantID, gatewayID string, forUpdate bool) (*GatewayDesiredConfig, error) {
 	query := `
-SELECT desired_revision, point_mappings, sampling_policies, concentrator_configs, updated_by::text, reason, created_at, updated_at
+SELECT desired_revision, point_mappings, sampling_policies, concentrator_configs,
+       COALESCE(driver_configs, '[]'::jsonb), autonomy_policy,
+       updated_by::text, reason, created_at, updated_at
 FROM connectivity.gateway_desired_configs
 WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 `
@@ -896,9 +979,10 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 		query += "FOR UPDATE\n"
 	}
 	var cfg GatewayDesiredConfig
-	var mappingsJSON, policiesJSON, unitsJSON []byte
+	var mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON []byte
 	err := tx.QueryRow(ctx, query, tenantID, gatewayID).Scan(
 		&cfg.DesiredRevision, &mappingsJSON, &policiesJSON, &unitsJSON,
+		&driversJSON, &autonomyJSON,
 		&cfg.UpdatedBy, &cfg.Reason, &cfg.CreatedAt, &cfg.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -909,7 +993,10 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 	}
 	cfg.CreatedAt = cfg.CreatedAt.UTC()
 	cfg.UpdatedAt = cfg.UpdatedAt.UTC()
-	if err := decodeShadowConfigPayload(mappingsJSON, policiesJSON, unitsJSON, &cfg.PointMappings, &cfg.SamplingPolicies, &cfg.ConcentratorConfigs); err != nil {
+	if err := decodeShadowConfigPayload(
+		mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON,
+		&cfg.PointMappings, &cfg.SamplingPolicies, &cfg.ConcentratorConfigs, &cfg.DriverConfigs, &cfg.AutonomyPolicy,
+	); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -917,7 +1004,9 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 
 func loadReportedConfigInTx(ctx context.Context, tx pgx.Tx, tenantID, gatewayID string, forUpdate bool) (*GatewayReportedConfig, error) {
 	query := `
-SELECT reported_revision, applied_status, point_mappings, sampling_policies, concentrator_configs, drift_details, error_message, reported_at, updated_at
+SELECT reported_revision, applied_status, point_mappings, sampling_policies, concentrator_configs,
+       COALESCE(driver_configs, '[]'::jsonb), autonomy_policy,
+       drift_details, error_message, reported_at, updated_at
 FROM connectivity.gateway_reported_configs
 WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 `
@@ -925,9 +1014,10 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 		query += "FOR UPDATE\n"
 	}
 	var cfg GatewayReportedConfig
-	var mappingsJSON, policiesJSON, unitsJSON, driftJSON []byte
+	var mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON, driftJSON []byte
 	err := tx.QueryRow(ctx, query, tenantID, gatewayID).Scan(
 		&cfg.ReportedRevision, &cfg.AppliedStatus, &mappingsJSON, &policiesJSON, &unitsJSON,
+		&driversJSON, &autonomyJSON,
 		&driftJSON, &cfg.ErrorMessage, &cfg.ReportedAt, &cfg.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -938,7 +1028,10 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 	}
 	cfg.ReportedAt = cfg.ReportedAt.UTC()
 	cfg.UpdatedAt = cfg.UpdatedAt.UTC()
-	if err := decodeShadowConfigPayload(mappingsJSON, policiesJSON, unitsJSON, &cfg.PointMappings, &cfg.SamplingPolicies, &cfg.ConcentratorConfigs); err != nil {
+	if err := decodeShadowConfigPayload(
+		mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON,
+		&cfg.PointMappings, &cfg.SamplingPolicies, &cfg.ConcentratorConfigs, &cfg.DriverConfigs, &cfg.AutonomyPolicy,
+	); err != nil {
 		return nil, err
 	}
 	cfg.DriftDetails = []DriftDetail{}
@@ -954,10 +1047,12 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 }
 
 func decodeShadowConfigPayload(
-	mappingsJSON, policiesJSON, unitsJSON []byte,
+	mappingsJSON, policiesJSON, unitsJSON, driversJSON, autonomyJSON []byte,
 	mappingsOut *[]GatewayPointMapping,
 	policiesOut *[]GatewaySamplingPolicy,
 	unitsOut *map[string]ConcentratorUnitShadow,
+	driversOut *[]GatewayModbusDriverConfig,
+	autonomyOut **GatewayAutonomyPolicy,
 ) error {
 	*mappingsOut = []GatewayPointMapping{}
 	if len(mappingsJSON) > 0 {
@@ -985,6 +1080,23 @@ func decodeShadowConfigPayload(
 		if *unitsOut == nil {
 			*unitsOut = map[string]ConcentratorUnitShadow{}
 		}
+	}
+	*driversOut = []GatewayModbusDriverConfig{}
+	if len(driversJSON) > 0 {
+		if err := json.Unmarshal(driversJSON, driversOut); err != nil {
+			return fmt.Errorf("decode driverConfigs: %w", err)
+		}
+		if *driversOut == nil {
+			*driversOut = []GatewayModbusDriverConfig{}
+		}
+	}
+	*autonomyOut = nil
+	if trimmed := bytes.TrimSpace(autonomyJSON); len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
+		var parsed GatewayAutonomyPolicy
+		if err := json.Unmarshal(trimmed, &parsed); err != nil {
+			return fmt.Errorf("decode autonomyPolicy: %w", err)
+		}
+		*autonomyOut = &parsed
 	}
 	return nil
 }
@@ -1031,6 +1143,85 @@ func (store *Store) LoadGatewayConfigShadowByGatewayID(ctx context.Context, gate
 	return buildGatewayConfigShadow(tenantID, gatewayID, desired, reported), nil
 }
 
+func persistDesiredConfigInTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID, gatewayID string,
+	desired GatewayDesiredConfig,
+	encoded encodedShadowSections,
+	isInsert bool,
+) error {
+	if isInsert {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO connectivity.gateway_desired_configs (
+  tenant_id, gateway_id, desired_revision, point_mappings, sampling_policies, concentrator_configs,
+  driver_configs, autonomy_policy, updated_by, reason, created_at, updated_at
+) VALUES (
+  $1::uuid, $2::uuid, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::uuid, $10, $11, $11
+)`, tenantID, gatewayID, desired.DesiredRevision,
+			string(encoded.mappingsJSON), string(encoded.policiesJSON), string(encoded.unitsJSON),
+			string(encoded.driversJSON), encoded.autonomyArg, desired.UpdatedBy, desired.Reason, desired.UpdatedAt); err != nil {
+			return fmt.Errorf("insert gateway desired config: %w", err)
+		}
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE connectivity.gateway_desired_configs
+SET desired_revision = $3,
+    point_mappings = $4::jsonb,
+    sampling_policies = $5::jsonb,
+    concentrator_configs = $6::jsonb,
+    driver_configs = $7::jsonb,
+    autonomy_policy = $8::jsonb,
+    updated_by = $9::uuid,
+    reason = $10,
+    updated_at = $11
+WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
+`, tenantID, gatewayID, desired.DesiredRevision,
+		string(encoded.mappingsJSON), string(encoded.policiesJSON), string(encoded.unitsJSON),
+		string(encoded.driversJSON), encoded.autonomyArg, desired.UpdatedBy, desired.Reason, desired.UpdatedAt); err != nil {
+		return fmt.Errorf("update gateway desired config: %w", err)
+	}
+	return nil
+}
+
+func upsertReportedConfigInTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID, gatewayID string,
+	reported GatewayReportedConfig,
+	encoded encodedShadowSections,
+	driftJSON []byte,
+) error {
+	if _, err := tx.Exec(ctx, `
+INSERT INTO connectivity.gateway_reported_configs (
+  tenant_id, gateway_id, reported_revision, applied_status,
+  point_mappings, sampling_policies, concentrator_configs, driver_configs, autonomy_policy, drift_details,
+  error_message, reported_at, updated_at
+) VALUES (
+  $1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12, $13
+)
+ON CONFLICT (tenant_id, gateway_id) DO UPDATE SET
+  reported_revision = EXCLUDED.reported_revision,
+  applied_status = EXCLUDED.applied_status,
+  point_mappings = EXCLUDED.point_mappings,
+  sampling_policies = EXCLUDED.sampling_policies,
+  concentrator_configs = EXCLUDED.concentrator_configs,
+  driver_configs = EXCLUDED.driver_configs,
+  autonomy_policy = EXCLUDED.autonomy_policy,
+  drift_details = EXCLUDED.drift_details,
+  error_message = EXCLUDED.error_message,
+  reported_at = EXCLUDED.reported_at,
+  updated_at = EXCLUDED.updated_at
+`, tenantID, gatewayID, reported.ReportedRevision, reported.AppliedStatus,
+		string(encoded.mappingsJSON), string(encoded.policiesJSON), string(encoded.unitsJSON),
+		string(encoded.driversJSON), encoded.autonomyArg, string(driftJSON),
+		reported.ErrorMessage, reported.ReportedAt, reported.UpdatedAt); err != nil {
+		return fmt.Errorf("upsert gateway reported config: %w", err)
+	}
+	return nil
+}
+
 func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims registryauth.GrantClaims, gatewayID string, input UpdateDesiredConfigInput) (GatewayConfigShadow, error) {
 	if input.ExpectedDesiredRevision != nil && *input.ExpectedDesiredRevision < 0 {
 		return GatewayConfigShadow{}, fmt.Errorf("%w: expectedDesiredRevision must be non-negative", ErrConfigShadowInvalid)
@@ -1059,6 +1250,20 @@ func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims regis
 	var cleanedUnits map[string]ConcentratorUnitShadow
 	if input.ConcentratorConfigs != nil {
 		cleanedUnits, err = validateConcentratorConfigs(*input.ConcentratorConfigs)
+		if err != nil {
+			return GatewayConfigShadow{}, err
+		}
+	}
+	var cleanedDrivers []GatewayModbusDriverConfig
+	if input.DriverConfigs != nil {
+		cleanedDrivers, err = validateDriverConfigs(*input.DriverConfigs)
+		if err != nil {
+			return GatewayConfigShadow{}, err
+		}
+	}
+	var cleanedAutonomy *GatewayAutonomyPolicy
+	if input.AutonomyPolicy.Value != nil {
+		cleanedAutonomy, err = validateAutonomyPolicy(input.AutonomyPolicy.Value)
 		if err != nil {
 			return GatewayConfigShadow{}, err
 		}
@@ -1102,7 +1307,21 @@ func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims regis
 		effectiveUnits = cloneConcentratorUnits(existing.ConcentratorConfigs)
 	}
 
-	mappingsJSON, policiesJSON, unitsJSON, err := marshalShadowSections(effectiveMappings, effectivePolicies, effectiveUnits)
+	effectiveDrivers := []GatewayModbusDriverConfig{}
+	if input.DriverConfigs != nil {
+		effectiveDrivers = cleanedDrivers
+	} else if existing != nil {
+		effectiveDrivers = cloneDriverConfigsList(existing.DriverConfigs)
+	}
+
+	var effectiveAutonomy *GatewayAutonomyPolicy
+	if input.AutonomyPolicy.IsSet() {
+		effectiveAutonomy = cleanedAutonomy
+	} else if existing != nil {
+		effectiveAutonomy = cloneAutonomyPolicy(existing.AutonomyPolicy)
+	}
+
+	encoded, err := marshalShadowSections(effectiveMappings, effectivePolicies, effectiveUnits, effectiveDrivers, effectiveAutonomy)
 	if err != nil {
 		return GatewayConfigShadow{}, err
 	}
@@ -1118,19 +1337,15 @@ func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims regis
 			PointMappings:       effectiveMappings,
 			SamplingPolicies:    effectivePolicies,
 			ConcentratorConfigs: effectiveUnits,
+			DriverConfigs:       effectiveDrivers,
+			AutonomyPolicy:      effectiveAutonomy,
 			UpdatedBy:           claims.PrincipalID,
 			Reason:              reason,
 			CreatedAt:           now,
 			UpdatedAt:           now,
 		}
-		if _, err := tx.Exec(ctx, `
-INSERT INTO connectivity.gateway_desired_configs (
-  tenant_id, gateway_id, desired_revision, point_mappings, sampling_policies, concentrator_configs,
-  updated_by, reason, created_at, updated_at
-) VALUES (
-  $1::uuid, $2::uuid, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::uuid, $8, $9, $9
-)`, tenantID, gatewayID, desired.DesiredRevision, string(mappingsJSON), string(policiesJSON), string(unitsJSON), claims.PrincipalID, reason, now); err != nil {
-			return GatewayConfigShadow{}, fmt.Errorf("insert gateway desired config: %w", err)
+		if err := persistDesiredConfigInTx(ctx, tx, tenantID, gatewayID, desired, encoded, true); err != nil {
+			return GatewayConfigShadow{}, err
 		}
 	} else {
 		if input.ExpectedDesiredRevision != nil && *input.ExpectedDesiredRevision != existing.DesiredRevision {
@@ -1141,23 +1356,15 @@ INSERT INTO connectivity.gateway_desired_configs (
 			PointMappings:       effectiveMappings,
 			SamplingPolicies:    effectivePolicies,
 			ConcentratorConfigs: effectiveUnits,
+			DriverConfigs:       effectiveDrivers,
+			AutonomyPolicy:      effectiveAutonomy,
 			UpdatedBy:           claims.PrincipalID,
 			Reason:              reason,
 			CreatedAt:           existing.CreatedAt,
 			UpdatedAt:           now,
 		}
-		if _, err := tx.Exec(ctx, `
-UPDATE connectivity.gateway_desired_configs
-SET desired_revision = $3,
-    point_mappings = $4::jsonb,
-    sampling_policies = $5::jsonb,
-    concentrator_configs = $6::jsonb,
-    updated_by = $7::uuid,
-    reason = $8,
-    updated_at = $9
-WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
-`, tenantID, gatewayID, desired.DesiredRevision, string(mappingsJSON), string(policiesJSON), string(unitsJSON), claims.PrincipalID, reason, now); err != nil {
-			return GatewayConfigShadow{}, fmt.Errorf("update gateway desired config: %w", err)
+		if err := persistDesiredConfigInTx(ctx, tx, tenantID, gatewayID, desired, encoded, false); err != nil {
+			return GatewayConfigShadow{}, err
 		}
 	}
 
@@ -1227,7 +1434,7 @@ func validateReportDriftDetails(details []DriftDetail) ([]DriftDetail, []byte, e
 		target := strings.TrimSpace(item.Target)
 		detail := strings.TrimSpace(item.Detail)
 		switch section {
-		case DriftSectionPointMappings, DriftSectionSamplingPolicies, DriftSectionConcentrator:
+		case DriftSectionPointMappings, DriftSectionSamplingPolicies, DriftSectionConcentrator, DriftSectionDriverConfigs, DriftSectionAutonomyPolicy:
 		default:
 			return nil, nil, fmt.Errorf("%w: driftDetails[%d].section %q is invalid", ErrConfigShadowInvalid, i, item.Section)
 		}
@@ -1316,6 +1523,14 @@ func (store *Store) ReportGatewayAppliedConfig(ctx context.Context, gatewayID st
 			return GatewayConfigShadow{}, err
 		}
 	}
+	drivers, err := validateDriverConfigs(input.DriverConfigs)
+	if err != nil {
+		return GatewayConfigShadow{}, err
+	}
+	autonomy, err := validateAutonomyPolicy(input.AutonomyPolicy)
+	if err != nil {
+		return GatewayConfigShadow{}, err
+	}
 	inputDrifts, _, err := validateReportDriftDetails(input.DriftDetails)
 	if err != nil {
 		return GatewayConfigShadow{}, err
@@ -1358,7 +1573,7 @@ func (store *Store) ReportGatewayAppliedConfig(ctx context.Context, gatewayID st
 	if existingReported != nil {
 		preservedUnits = cloneConcentratorUnits(existingReported.ConcentratorConfigs)
 	}
-	mappingsJSON, policiesJSON, unitsJSON, err := marshalShadowSections(mappings, policies, preservedUnits)
+	encoded, err := marshalShadowSections(mappings, policies, preservedUnits, drivers, autonomy)
 	if err != nil {
 		return GatewayConfigShadow{}, err
 	}
@@ -1369,6 +1584,8 @@ func (store *Store) ReportGatewayAppliedConfig(ctx context.Context, gatewayID st
 		PointMappings:       mappings,
 		SamplingPolicies:    policies,
 		ConcentratorConfigs: preservedUnits,
+		DriverConfigs:       drivers,
+		AutonomyPolicy:      autonomy,
 		ErrorMessage:        errMsg,
 		ReportedAt:          reportedAt,
 		UpdatedAt:           now,
@@ -1414,28 +1631,8 @@ func (store *Store) ReportGatewayAppliedConfig(ctx context.Context, gatewayID st
 		return GatewayConfigShadow{}, err
 	}
 
-	if _, err := tx.Exec(ctx, `
-INSERT INTO connectivity.gateway_reported_configs (
-  tenant_id, gateway_id, reported_revision, applied_status,
-  point_mappings, sampling_policies, concentrator_configs, drift_details,
-  error_message, reported_at, updated_at
-) VALUES (
-  $1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11
-)
-ON CONFLICT (tenant_id, gateway_id) DO UPDATE SET
-  reported_revision = EXCLUDED.reported_revision,
-  applied_status = EXCLUDED.applied_status,
-  point_mappings = EXCLUDED.point_mappings,
-  sampling_policies = EXCLUDED.sampling_policies,
-  concentrator_configs = EXCLUDED.concentrator_configs,
-  drift_details = EXCLUDED.drift_details,
-  error_message = EXCLUDED.error_message,
-  reported_at = EXCLUDED.reported_at,
-  updated_at = EXCLUDED.updated_at
-`, tenantID, gatewayID, reported.ReportedRevision, reported.AppliedStatus,
-		string(mappingsJSON), string(policiesJSON), string(unitsJSON), string(driftJSON),
-		reported.ErrorMessage, reported.ReportedAt, reported.UpdatedAt); err != nil {
-		return GatewayConfigShadow{}, fmt.Errorf("upsert gateway reported config: %w", err)
+	if err := upsertReportedConfigInTx(ctx, tx, tenantID, gatewayID, reported, encoded, driftJSON); err != nil {
+		return GatewayConfigShadow{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -1515,6 +1712,7 @@ func (store *Store) UpsertConcentratorShadowState(
 			PointMappings:       []GatewayPointMapping{},
 			SamplingPolicies:    []GatewaySamplingPolicy{},
 			ConcentratorConfigs: map[string]ConcentratorUnitShadow{},
+			DriverConfigs:       []GatewayModbusDriverConfig{},
 			UpdatedBy:           actorID,
 			Reason:              validatedReason,
 			CreatedAt:           now,
@@ -1528,6 +1726,8 @@ func (store *Store) UpsertConcentratorShadowState(
 		desired.Reason = validatedReason
 		desired.UpdatedAt = now
 		desired.ConcentratorConfigs = cloneConcentratorUnits(desired.ConcentratorConfigs)
+		desired.DriverConfigs = cloneDriverConfigsList(desired.DriverConfigs)
+		desired.AutonomyPolicy = cloneAutonomyPolicy(desired.AutonomyPolicy)
 	}
 
 	if !appliedToEdge && cleanedParams != nil && cleanedParams.ModbusID > 0 && cleanedParams.ModbusID != unitID {
@@ -1552,35 +1752,12 @@ func (store *Store) UpsertConcentratorShadowState(
 	}
 	desired.ConcentratorConfigs[targetUnitKey] = unitDesired
 
-	dMappingsJSON, dPoliciesJSON, dUnitsJSON, err := marshalShadowSections(desired.PointMappings, desired.SamplingPolicies, desired.ConcentratorConfigs)
+	dEncoded, err := marshalShadowSections(desired.PointMappings, desired.SamplingPolicies, desired.ConcentratorConfigs, desired.DriverConfigs, desired.AutonomyPolicy)
 	if err != nil {
 		return 0, err
 	}
-
-	if existingDesired == nil {
-		if _, err := tx.Exec(ctx, `
-INSERT INTO connectivity.gateway_desired_configs (
-  tenant_id, gateway_id, desired_revision, point_mappings, sampling_policies, concentrator_configs,
-  updated_by, reason, created_at, updated_at
-) VALUES (
-  $1::uuid, $2::uuid, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::uuid, $8, $9, $9
-)`, tenantID, gatewayID, desired.DesiredRevision, string(dMappingsJSON), string(dPoliciesJSON), string(dUnitsJSON), actorID, validatedReason, now); err != nil {
-			return 0, fmt.Errorf("insert concentrator desired shadow: %w", err)
-		}
-	} else {
-		if _, err := tx.Exec(ctx, `
-UPDATE connectivity.gateway_desired_configs
-SET desired_revision = $3,
-    point_mappings = $4::jsonb,
-    sampling_policies = $5::jsonb,
-    concentrator_configs = $6::jsonb,
-    updated_by = $7::uuid,
-    reason = $8,
-    updated_at = $9
-WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
-`, tenantID, gatewayID, desired.DesiredRevision, string(dMappingsJSON), string(dPoliciesJSON), string(dUnitsJSON), actorID, validatedReason, now); err != nil {
-			return 0, fmt.Errorf("update concentrator desired shadow: %w", err)
-		}
+	if err := persistDesiredConfigInTx(ctx, tx, tenantID, gatewayID, desired, dEncoded, existingDesired == nil); err != nil {
+		return 0, err
 	}
 
 	if appliedToEdge {
@@ -1592,11 +1769,12 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 				PointMappings:       []GatewayPointMapping{},
 				SamplingPolicies:    []GatewaySamplingPolicy{},
 				ConcentratorConfigs: map[string]ConcentratorUnitShadow{},
+				DriverConfigs:       []GatewayModbusDriverConfig{},
 				DriftDetails:        []DriftDetail{},
 				ReportedAt:          now,
 				UpdatedAt:           now,
 			}
-			if len(desired.PointMappings) > 0 || len(desired.SamplingPolicies) > 0 {
+			if len(desired.PointMappings) > 0 || len(desired.SamplingPolicies) > 0 || len(desired.DriverConfigs) > 0 || desired.AutonomyPolicy != nil {
 				reported.ReportedRevision = 0
 			}
 		} else {
@@ -1606,6 +1784,8 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 			if reported.ConcentratorConfigs == nil {
 				reported.ConcentratorConfigs = map[string]ConcentratorUnitShadow{}
 			}
+			reported.DriverConfigs = cloneDriverConfigsList(existingReported.DriverConfigs)
+			reported.AutonomyPolicy = cloneAutonomyPolicy(existingReported.AutonomyPolicy)
 			if oldDesiredRev > 0 && existingReported.ReportedRevision == oldDesiredRev && existingReported.AppliedStatus == AppliedStatusApplied {
 				reported.ReportedRevision = desired.DesiredRevision
 			}
@@ -1636,7 +1816,7 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 			reported.ErrorMessage = nil
 		}
 
-		rMappingsJSON, rPoliciesJSON, rUnitsJSON, err := marshalShadowSections(reported.PointMappings, reported.SamplingPolicies, reported.ConcentratorConfigs)
+		rEncoded, err := marshalShadowSections(reported.PointMappings, reported.SamplingPolicies, reported.ConcentratorConfigs, reported.DriverConfigs, reported.AutonomyPolicy)
 		if err != nil {
 			return 0, err
 		}
@@ -1644,28 +1824,8 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 		if err != nil {
 			return 0, err
 		}
-		if _, err := tx.Exec(ctx, `
-INSERT INTO connectivity.gateway_reported_configs (
-  tenant_id, gateway_id, reported_revision, applied_status,
-  point_mappings, sampling_policies, concentrator_configs, drift_details,
-  error_message, reported_at, updated_at
-) VALUES (
-  $1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11
-)
-ON CONFLICT (tenant_id, gateway_id) DO UPDATE SET
-  reported_revision = EXCLUDED.reported_revision,
-  applied_status = EXCLUDED.applied_status,
-  point_mappings = EXCLUDED.point_mappings,
-  sampling_policies = EXCLUDED.sampling_policies,
-  concentrator_configs = EXCLUDED.concentrator_configs,
-  drift_details = EXCLUDED.drift_details,
-  error_message = EXCLUDED.error_message,
-  reported_at = EXCLUDED.reported_at,
-  updated_at = EXCLUDED.updated_at
-`, tenantID, gatewayID, reported.ReportedRevision, reported.AppliedStatus,
-			string(rMappingsJSON), string(rPoliciesJSON), string(rUnitsJSON), string(rDriftJSON),
-			reported.ErrorMessage, reported.ReportedAt, reported.UpdatedAt); err != nil {
-			return 0, fmt.Errorf("upsert concentrator reported shadow: %w", err)
+		if err := upsertReportedConfigInTx(ctx, tx, tenantID, gatewayID, reported, rEncoded, rDriftJSON); err != nil {
+			return 0, err
 		}
 	}
 
@@ -1715,6 +1875,7 @@ func (store *Store) RecordConcentratorReconcileResult(
 			PointMappings:       []GatewayPointMapping{},
 			SamplingPolicies:    []GatewaySamplingPolicy{},
 			ConcentratorConfigs: map[string]ConcentratorUnitShadow{},
+			DriverConfigs:       []GatewayModbusDriverConfig{},
 			DriftDetails:        []DriftDetail{},
 			ReportedAt:          now,
 			UpdatedAt:           now,
@@ -1726,6 +1887,8 @@ func (store *Store) RecordConcentratorReconcileResult(
 		reported.PointMappings = clonePointMappingsList(existingReported.PointMappings)
 		reported.SamplingPolicies = cloneSamplingPoliciesList(existingReported.SamplingPolicies)
 		reported.ConcentratorConfigs = cloneConcentratorUnits(existingReported.ConcentratorConfigs)
+		reported.DriverConfigs = cloneDriverConfigsList(existingReported.DriverConfigs)
+		reported.AutonomyPolicy = cloneAutonomyPolicy(existingReported.AutonomyPolicy)
 		reported.DriftDetails = slices.Clone(existingReported.DriftDetails)
 	}
 
@@ -1772,7 +1935,7 @@ func (store *Store) RecordConcentratorReconcileResult(
 		}
 		if desiredChanged {
 			desired.ConcentratorConfigs = rekeyedDesired
-			_, _, desiredUnitsJSON, err := marshalShadowSections(desired.PointMappings, desired.SamplingPolicies, desired.ConcentratorConfigs)
+			dEncoded, err := marshalShadowSections(desired.PointMappings, desired.SamplingPolicies, desired.ConcentratorConfigs, desired.DriverConfigs, desired.AutonomyPolicy)
 			if err != nil {
 				return err
 			}
@@ -1781,7 +1944,7 @@ UPDATE connectivity.gateway_desired_configs
 SET concentrator_configs = $3::jsonb,
     updated_at = $4
 WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
-`, tenantID, gatewayID, string(desiredUnitsJSON), now); err != nil {
+`, tenantID, gatewayID, string(dEncoded.unitsJSON), now); err != nil {
 				return fmt.Errorf("rekey desired concentrator unit: %w", err)
 			}
 		}
@@ -1809,7 +1972,8 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 
 	if sameDesiredRev {
 		edgeCaughtUp := (existingReported != nil && existingReported.ReportedRevision == desiredRevision) ||
-			(len(desired.PointMappings) == 0 && len(desired.SamplingPolicies) == 0 && len(reported.PointMappings) == 0 && len(reported.SamplingPolicies) == 0)
+			(len(desired.PointMappings) == 0 && len(desired.SamplingPolicies) == 0 && len(desired.DriverConfigs) == 0 && desired.AutonomyPolicy == nil &&
+				len(reported.PointMappings) == 0 && len(reported.SamplingPolicies) == 0 && len(reported.DriverConfigs) == 0 && reported.AutonomyPolicy == nil)
 
 		if len(failedDrifts) == 0 {
 			if edgeCaughtUp {
@@ -1875,7 +2039,7 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 		}
 	}
 
-	rMappingsJSON, rPoliciesJSON, rUnitsJSON, err := marshalShadowSections(reported.PointMappings, reported.SamplingPolicies, reported.ConcentratorConfigs)
+	rEncoded, err := marshalShadowSections(reported.PointMappings, reported.SamplingPolicies, reported.ConcentratorConfigs, reported.DriverConfigs, reported.AutonomyPolicy)
 	if err != nil {
 		return err
 	}
@@ -1883,28 +2047,8 @@ WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
-INSERT INTO connectivity.gateway_reported_configs (
-  tenant_id, gateway_id, reported_revision, applied_status,
-  point_mappings, sampling_policies, concentrator_configs, drift_details,
-  error_message, reported_at, updated_at
-) VALUES (
-  $1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11
-)
-ON CONFLICT (tenant_id, gateway_id) DO UPDATE SET
-  reported_revision = EXCLUDED.reported_revision,
-  applied_status = EXCLUDED.applied_status,
-  point_mappings = EXCLUDED.point_mappings,
-  sampling_policies = EXCLUDED.sampling_policies,
-  concentrator_configs = EXCLUDED.concentrator_configs,
-  drift_details = EXCLUDED.drift_details,
-  error_message = EXCLUDED.error_message,
-  reported_at = EXCLUDED.reported_at,
-  updated_at = EXCLUDED.updated_at
-`, tenantID, gatewayID, reported.ReportedRevision, reported.AppliedStatus,
-		string(rMappingsJSON), string(rPoliciesJSON), string(rUnitsJSON), string(rDriftJSON),
-		reported.ErrorMessage, reported.ReportedAt, reported.UpdatedAt); err != nil {
-		return fmt.Errorf("upsert concentrator reconcile result: %w", err)
+	if err := upsertReportedConfigInTx(ctx, tx, tenantID, gatewayID, reported, rEncoded, rDriftJSON); err != nil {
+		return err
 	}
 
 	return tx.Commit(ctx)

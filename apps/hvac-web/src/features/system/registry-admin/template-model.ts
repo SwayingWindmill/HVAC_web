@@ -1,5 +1,9 @@
-import type { TemplateKind } from '../../../api/generated/platformGateway.gen.ts';
+import type { GatewayModbusDriverConfig, TemplateKind } from '../../../api/generated/platformGateway.gen.ts';
 import { isOneOf, isPlainRecord } from '../../../lib/typed.ts';
+import {
+  MODBUS_DRIVER_TYPES,
+  MODBUS_DRIVER_TYPE_LABELS,
+} from '../../connectivity/gateway-config-shadow-model.ts';
 
 const POINT_CODE_PATTERN = /^[a-z][a-z0-9_]{0,127}$/;
 const SOURCE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/;
@@ -64,11 +68,20 @@ export interface StructuredDeviceTemplateDraft {
   readonly capabilityProfiles: readonly CapabilityProfileDraft[];
 }
 
+export type TemplateModbusDriverType = GatewayModbusDriverConfig['driverType'];
+
+export interface TemplateModbusDriverSummary {
+  readonly driverType: TemplateModbusDriverType;
+  readonly driverTypeLabel: string;
+  readonly registerCount: number;
+}
+
 export interface TemplatePayloadSummary {
   readonly deviceType: string | null;
   readonly standardPointCount: number;
   readonly capabilityCount: number;
   readonly hasQualityChecks: boolean;
+  readonly modbusDriverSummary: TemplateModbusDriverSummary | null;
   readonly topKeys: readonly string[];
   readonly kind: TemplateKind;
 }
@@ -464,6 +477,28 @@ export function parseStructuredDevicePayload(payload: Record<string, unknown>): 
   };
 }
 
+export function parseDeviceTemplateModbusDriverSummary(
+  kind: TemplateKind,
+  payload: Record<string, unknown>,
+): TemplateModbusDriverSummary | null {
+  if (kind !== 'DEVICE' || !isPlainRecord(payload.modbusDriver)) {
+    return null;
+  }
+  const driver = payload.modbusDriver;
+  if (!isOneOf(MODBUS_DRIVER_TYPES, driver.driverType)) {
+    return null;
+  }
+  if (!Array.isArray(driver.registers)) {
+    return null;
+  }
+
+  return {
+    driverType: driver.driverType,
+    driverTypeLabel: MODBUS_DRIVER_TYPE_LABELS[driver.driverType],
+    registerCount: driver.registers.length,
+  };
+}
+
 export function summarizeTemplatePayload(
   kind: TemplateKind,
   payload: Record<string, unknown>,
@@ -476,6 +511,7 @@ export function summarizeTemplatePayload(
     standardPointCount: standardPoints,
     capabilityCount: capabilityProfiles,
     hasQualityChecks: payload.qualityChecks !== undefined,
+    modbusDriverSummary: parseDeviceTemplateModbusDriverSummary(kind, payload),
     topKeys: Object.keys(payload).sort(),
   };
 }

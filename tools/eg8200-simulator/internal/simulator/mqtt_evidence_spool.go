@@ -45,24 +45,32 @@ func (spool *mqttEvidenceSpool) Enqueue(id string, class EvidenceClass, topic st
 }
 
 func (spool *mqttEvidenceSpool) Flush(ctx context.Context, publisher mqttQoSPublisher) error {
+	_, err := spool.FlushIDs(ctx, publisher)
+	return err
+}
+
+func (spool *mqttEvidenceSpool) FlushIDs(ctx context.Context, publisher mqttQoSPublisher) ([]string, error) {
 	if spool == nil || spool.buffer == nil || publisher == nil {
-		return errors.New("MQTT evidence spool is unavailable")
+		return nil, errors.New("MQTT evidence spool is unavailable")
 	}
 	spool.flush.Lock()
 	defer spool.flush.Unlock()
-	for _, item := range spool.buffer.Pending() {
+	pending := spool.buffer.Pending()
+	flushedIDs := make([]string, 0, len(pending))
+	for _, item := range pending {
 		var record mqttEvidenceRecord
 		if err := json.Unmarshal(item.Payload, &record); err != nil || strings.TrimSpace(record.Topic) == "" || len(record.Payload) == 0 {
-			return errors.New("MQTT evidence spool contains an invalid record")
+			return flushedIDs, errors.New("MQTT evidence spool contains an invalid record")
 		}
 		if _, err := publisher.Publish(ctx, &paho.Publish{QoS: 1, Retain: false, Topic: record.Topic, Payload: record.Payload}); err != nil {
-			return err
+			return flushedIDs, err
 		}
 		if _, err := spool.buffer.Remove(item.ID); err != nil {
-			return fmt.Errorf("remove delivered MQTT evidence: %w", err)
+			return flushedIDs, fmt.Errorf("remove delivered MQTT evidence: %w", err)
 		}
+		flushedIDs = append(flushedIDs, item.ID)
 	}
-	return nil
+	return flushedIDs, nil
 }
 
 func (spool *mqttEvidenceSpool) State() CapacityState {

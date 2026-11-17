@@ -19,6 +19,15 @@ const SHADOW_SHOT_DIR = join(
   'verify',
   'p1-web-governance',
 );
+const P2_AUTONOMY_SHOT_DIR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+  '.scratch',
+  'verify',
+  'connectivity-p2-edge-autonomy',
+);
 
 function screenshotPath(fileName: string): string {
   mkdirSync(SCREENSHOT_DIR, { recursive: true });
@@ -28,6 +37,11 @@ function screenshotPath(fileName: string): string {
 function shadowShot(fileName: string): string {
   mkdirSync(SHADOW_SHOT_DIR, { recursive: true });
   return join(SHADOW_SHOT_DIR, fileName);
+}
+
+function p2AutonomyShot(fileName: string): string {
+  mkdirSync(P2_AUTONOMY_SHOT_DIR, { recursive: true });
+  return join(P2_AUTONOMY_SHOT_DIR, fileName);
 }
 
 function grantDeviceWritePrincipal() {
@@ -442,4 +456,215 @@ test('gateway config shadow initializes mappings, recovers from 409 conflicts, a
   await expect(sheet.getByRole('region', { name: '配置影子' })).toContainText('配置存在漂移');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: shadowShot('p1-shadow-dark.png') });
+});
+
+test('gateway config shadow edits Modbus driver table and autonomy policy, renders RATE_LIMITED quarantine, and supports partial clearing across themes at 1440px', async ({
+  page,
+  gateway,
+}) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => {
+    pageErrors.push(error.message);
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  gateway.principalOverride = grantDeviceWritePrincipal();
+  gateway.seedGatewayQuarantine(GATEWAY_ID, [
+    {
+      id: '0193f200-0000-7000-8000-000000000003',
+      gatewayId: GATEWAY_ID,
+      topic: 'devices/eg8200-commercial-001/telemetry/chiller-01',
+      reasonCode: 'RATE_LIMITED',
+      detail: '上行消息频率超过每分钟限额，已触发接收隔离',
+      payloadSha256: 'c1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
+      payloadBytes: 42,
+      payloadPreview: '{"pointCode":"chw_supply_temp","value":7.2}',
+      payloadEncoding: 'utf8',
+      payloadTruncated: false,
+      occurrenceCount: 7,
+      receivedAt: '2026-10-10T01:00:00.000Z',
+      lastSeenAt: '2026-10-10T01:05:00.000Z',
+    },
+  ]);
+
+  await page.goto(`/settings/integrations?site=${SITE_ID}`);
+  await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
+
+  const sheet = page.getByRole('dialog');
+  const quarantineSection = sheet.locator('section[aria-label="接收隔离"]');
+  await expect(quarantineSection).toContainText('上报速率超限');
+
+  const shadowSection = sheet.getByRole('region', { name: '配置影子' });
+  await expect(shadowSection).toContainText('未配置');
+
+  await shadowSection.getByRole('button', { name: '初始化配置影子' }).click();
+  const editor = page.getByRole('dialog', { name: '编辑网关配置影子' });
+
+  await editor.getByRole('button', { name: '新增协议驱动' }).click();
+  const driverGroup = editor.getByRole('group', { name: '协议驱动 1' });
+  await driverGroup.getByLabel('本地设备标识').fill('chiller-01');
+  await driverGroup.getByLabel('采集地址').fill('192.168.10.21:502');
+  await driverGroup.getByLabel('从站地址 (UID)').fill('2');
+  await driverGroup.getByLabel('超时时间 (ms)').fill('1500');
+  await driverGroup.getByLabel('重试次数').fill('3');
+  await driverGroup.getByLabel('能力档位（可选）').click();
+  await page.getByRole('option', { name: '冷机', exact: true }).click();
+
+  const reg1 = driverGroup.getByRole('group', { name: '寄存器 1' });
+  await reg1.getByLabel('点位编码').fill('chw_supply_temp_sp');
+  await reg1.getByLabel('原始类型').click();
+  await page.getByRole('option', { name: '32 位浮点数', exact: true }).click();
+  await expect(reg1.getByLabel('寄存器数量')).toHaveValue('2');
+  await reg1.getByLabel('写功能码（可选）').click();
+  await expect(page.getByRole('option', { name: '单写 FC6', exact: true })).toHaveCount(0);
+  await page.getByRole('option', { name: '多写 FC16', exact: true }).click();
+  await reg1.getByLabel('轮询优先级').click();
+  await page.getByRole('option', { name: '极高', exact: true }).click();
+  await reg1.getByLabel('寄存器地址').fill('40001');
+  await reg1.getByLabel('倍率').fill('0.1');
+
+  await driverGroup.getByRole('button', { name: '新增寄存器' }).click();
+  const reg2 = driverGroup.getByRole('group', { name: '寄存器 2' });
+  await reg2.getByLabel('点位编码').fill('compressor_running');
+  await reg2.getByLabel('读功能码').click();
+  await page.getByRole('option', { name: '输入寄存器 FC4', exact: true }).click();
+  await expect(reg2.getByLabel('写功能码（可选）')).toBeDisabled();
+  await reg2.getByLabel('轮询优先级').click();
+  await page.getByRole('option', { name: '高', exact: true }).click();
+  await reg2.getByLabel('寄存器地址').fill('100');
+  await reg2.getByLabel('原始类型').click();
+  await page.getByRole('option', { name: '位布尔', exact: true }).click();
+  await reg2.getByLabel('位索引 (0 至 15)').fill('3');
+
+  await driverGroup.getByRole('button', { name: '新增寄存器' }).click();
+  const reg3 = driverGroup.getByRole('group', { name: '寄存器 3' });
+  await reg3.getByLabel('点位编码').fill('run_mode');
+  await reg3.getByLabel('原始类型').click();
+  await page.getByRole('option', { name: '16 位枚举', exact: true }).click();
+  await expect(reg3.getByLabel('寄存器数量')).toHaveValue('1');
+  await reg3.getByLabel('寄存器地址').fill('200');
+  await reg3.getByLabel('枚举映射（格式：数值=标签，逗号分隔）').fill('0=停机, 1=运行, 2=故障');
+
+  await editor.getByRole('button', { name: '配置断网自治策略' }).click();
+  const autonomyGroup = editor.locator('section[aria-label="断网自治策略设置"]');
+  await autonomyGroup.getByLabel(/断网宽限/).fill('180');
+  await autonomyGroup.getByLabel(/冷冻水供水设定值/).fill('7.5');
+  await autonomyGroup.getByLabel(/水泵最小频率/).fill('42');
+  await autonomyGroup.getByLabel(/水泵默认频率/).fill('35');
+  await autonomyGroup.getByLabel(/水泵最大频率/).fill('48');
+  await editor.getByLabel('变更原因（必填）').fill('下发冷机协议驱动点表与断网自治策略');
+  await editor.getByRole('button', { name: '保存期望配置' }).click();
+  await expect(editor.getByRole('alert')).toContainText('最小频率 <= 默认频率 <= 最大频率');
+
+  await autonomyGroup.getByLabel(/水泵最小频率/).fill('28');
+  await autonomyGroup.getByLabel(/水泵默认频率/).fill('38');
+  await editor.getByRole('button', { name: '保存期望配置' }).click();
+  await expect(editor).toHaveCount(0);
+
+  await expect(shadowSection).toContainText('待同步下发');
+  await expect(shadowSection).toContainText('协议驱动 1 台 · 3 寄存器');
+  await expect(shadowSection).toContainText('断网自治 · 已启用本地自治');
+  await expect(shadowSection).toContainText('192.168.10.21:502');
+  await expect(shadowSection).toContainText('Modbus TCP');
+  await expect(shadowSection).toContainText('冷机');
+  await expect(shadowSection).not.toContainText('CHILLER');
+
+  const regTableRegion = shadowSection.getByRole('region', { name: 'chiller-01 协议驱动寄存器表' });
+  await expect(regTableRegion).toHaveAttribute('tabindex', '0');
+  await expect(regTableRegion).toContainText('chw_supply_temp_sp');
+  await expect(regTableRegion).toContainText('保持寄存器 FC3');
+  await expect(regTableRegion).toContainText('多写 FC16');
+  await expect(regTableRegion).toContainText('32 位浮点数');
+  await expect(regTableRegion).toContainText('极高');
+  await expect(regTableRegion).toContainText('compressor_running');
+  await expect(regTableRegion).toContainText('输入寄存器 FC4');
+  await expect(regTableRegion).toContainText('位布尔');
+  await expect(regTableRegion).toContainText('第 3 位');
+  await expect(regTableRegion).toContainText('run_mode');
+  await expect(regTableRegion).toContainText('16 位枚举');
+  await expect(regTableRegion).toContainText('0=停机, 1=运行, 2=故障');
+  await expect(shadowSection).toContainText('180 秒');
+  await expect(shadowSection).toContainText('7.5 °C');
+  await expect(shadowSection).toContainText('38 Hz（28 至 48 Hz）');
+
+  await shadowSection.scrollIntoViewIfNeeded();
+  expect(await regTableRegion.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await expect(page.getByText(/配置影子已保存/)).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: p2AutonomyShot('shadow-driver-autonomy-light.png') });
+
+  gateway.reportGatewayShadow(GATEWAY_ID, {
+    reportedRevision: 1,
+    appliedStatus: 'PARTIAL',
+    pointMappings: [],
+    samplingPolicies: [],
+    concentratorConfigs: {},
+    driverConfigs: [],
+    autonomyPolicy: null,
+  });
+  await shadowSection.getByRole('button', { name: '刷新影子' }).click();
+  await expect(shadowSection).toContainText('配置存在漂移');
+  await expect(shadowSection).toContainText('协议驱动点表 · chiller-01');
+  await expect(shadowSection).toContainText('断网自治策略 · autonomyPolicy');
+
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  await page.getByRole('radiogroup', { name: '外观' }).getByRole('radio', { name: '深色' }).click();
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+    .toBe('dark');
+  await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
+  const darkShadow = sheet.getByRole('region', { name: '配置影子' });
+  await expect(darkShadow).toContainText('配置存在漂移');
+  await darkShadow.scrollIntoViewIfNeeded();
+  await expect(page.getByText(/配置影子已保存/)).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: p2AutonomyShot('shadow-driver-autonomy-dark.png') });
+
+  await darkShadow.getByRole('button', { name: '编辑配置影子' }).click();
+  const editModal = page.getByRole('dialog', { name: '编辑网关配置影子' });
+  await editModal.getByRole('switch', { name: '启用断网本地自治' }).click();
+  await editModal.getByLabel('变更原因（必填）').fill('切换为仅云端受控');
+  await editModal.getByRole('button', { name: '保存期望配置' }).click();
+  await expect(editModal).toHaveCount(0);
+  await expect(darkShadow).toContainText('断网自治 · 仅云端受控');
+  await expect(darkShadow).toContainText('协议驱动 1 台 · 3 寄存器');
+
+  await darkShadow.getByRole('button', { name: '编辑配置影子' }).click();
+  const clearModal = page.getByRole('dialog', { name: '编辑网关配置影子' });
+  await clearModal.getByRole('button', { name: '清空驱动点表' }).click();
+  await clearModal.getByRole('button', { name: '清除自治策略' }).click();
+  await clearModal.getByLabel('变更原因（必填）').fill('清空协议驱动与断网自治策略');
+  await clearModal.getByRole('button', { name: '保存期望配置' }).click();
+  await expect(clearModal).toHaveCount(0);
+  await expect(darkShadow).toContainText('协议驱动 0 台');
+  await expect(darkShadow).toContainText('断网自治 · 未配置');
+
+  const shadowWrites = gateway.writes.filter(
+    (entry) => entry.method === 'PUT' && entry.path === `/api/v1/gateways/${GATEWAY_ID}/config-shadow`,
+  );
+  expect(shadowWrites).toHaveLength(3);
+  expect('concentratorConfigs' in (shadowWrites[0]?.body ?? {})).toBe(false);
+  expect(shadowWrites[0]?.body?.driverConfigs).toHaveLength(1);
+  expect(shadowWrites[0]?.body?.driverConfigs?.[0]?.capabilityProfile).toBe('CHILLER');
+  const writtenSpReg = shadowWrites[0]?.body?.driverConfigs?.[0]?.registers?.find(
+    (item: Record<string, unknown>) => item.pointCode === 'chw_supply_temp_sp',
+  );
+  expect(writtenSpReg?.writeFunctionCode).toBe(16);
+  const writtenEnumReg = shadowWrites[0]?.body?.driverConfigs?.[0]?.registers?.find(
+    (item: Record<string, unknown>) => item.pointCode === 'run_mode',
+  );
+  expect(writtenEnumReg?.enumMap).toEqual({ '0': '停机', '1': '运行', '2': '故障' });
+  expect(shadowWrites[0]?.body?.autonomyPolicy?.enabled).toBe(true);
+  expect('driverConfigs' in (shadowWrites[1]?.body ?? {})).toBe(false);
+  expect(shadowWrites[1]?.body?.autonomyPolicy?.enabled).toBe(false);
+  expect(shadowWrites[2]?.body?.driverConfigs).toEqual([]);
+  expect(shadowWrites[2]?.body?.autonomyPolicy).toBeNull();
+
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
 });

@@ -230,8 +230,8 @@ func TestRuntimeGenerationGuardSuppressesStaleCoverageReports(t *testing.T) {
 		t.Fatalf("NewRuntime: %v", err)
 	}
 
-	gen1 := runtime.connTracker.gen.Add(1)
-	gen2 := runtime.connTracker.gen.Add(1)
+	gen1 := runtime.connTracker.NextGen()
+	gen2 := runtime.connTracker.NextGen()
 	runtime.recordConnectionState(nil, true, true, nil)
 
 	// Stale generation 1 disconnect must be suppressed while generation 2 is active and Ready().

@@ -27,6 +27,12 @@ type ModbusTCPBridgeConfig struct {
 	Retries  int
 }
 
+type ModbusRTUBridgeConfig struct {
+	Endpoint string
+	Timeout  time.Duration
+	Retries  int
+}
+
 type ModbusReadTask struct {
 	Name         string
 	UnitID       uint8
@@ -49,6 +55,8 @@ type ModbusWriteTask struct {
 // bounded request retries and reconnects after failed transactions.
 type ModbusTCPBridge struct {
 	mu       sync.Mutex
+	scheme   string
+	label    string
 	endpoint string
 	timeout  time.Duration
 	retries  int
@@ -70,7 +78,21 @@ func NewModbusTCPBridge(config ModbusTCPBridgeConfig) (*ModbusTCPBridge, error) 
 	if config.Retries < 0 {
 		return nil, errors.New("modbus TCP retries cannot be negative")
 	}
-	return &ModbusTCPBridge{endpoint: endpoint, timeout: config.Timeout, retries: config.Retries}, nil
+	return &ModbusTCPBridge{scheme: "tcp://", label: "modbus TCP", endpoint: endpoint, timeout: config.Timeout, retries: config.Retries}, nil
+}
+
+func NewModbusRTUBridge(config ModbusRTUBridgeConfig) (*ModbusTCPBridge, error) {
+	endpoint := strings.TrimSpace(config.Endpoint)
+	if endpoint == "" {
+		return nil, errors.New("modbus RTU endpoint is required")
+	}
+	if config.Timeout <= 0 {
+		return nil, errors.New("modbus RTU request timeout must be positive")
+	}
+	if config.Retries < 0 {
+		return nil, errors.New("modbus RTU retries cannot be negative")
+	}
+	return &ModbusTCPBridge{scheme: "rtu://", label: "modbus RTU", endpoint: endpoint, timeout: config.Timeout, retries: config.Retries}, nil
 }
 
 func (bridge *ModbusTCPBridge) Close() error {
@@ -98,8 +120,8 @@ func (bridge *ModbusTCPBridge) Read(ctx context.Context, task ModbusReadTask) ([
 	})
 	if err != nil {
 		return nil, fmt.Errorf(
-			"modbus TCP read endpoint=%s task=%s unit=%d function=%d address=%d quantity=%d attempts=%d: %w",
-			bridge.endpoint, task.Name, task.UnitID, task.FunctionCode, task.Address, task.Quantity, bridge.retries+1, err,
+			"%s read endpoint=%s task=%s unit=%d function=%d address=%d quantity=%d attempts=%d: %w",
+			bridge.bridgeLabel(), bridge.endpoint, task.Name, task.UnitID, task.FunctionCode, task.Address, task.Quantity, bridge.retries+1, err,
 		)
 	}
 	return registers, nil
@@ -123,11 +145,25 @@ func (bridge *ModbusTCPBridge) Write(ctx context.Context, task ModbusWriteTask) 
 	err := bridge.runLocked(ctx, task.UnitID, operation)
 	if err != nil {
 		return fmt.Errorf(
-			"modbus TCP write endpoint=%s task=%s unit=%d function=%d address=%d quantity=%d attempts=%d: %w",
-			bridge.endpoint, task.Name, task.UnitID, task.FunctionCode, task.Address, len(task.Values), bridge.retries+1, err,
+			"%s write endpoint=%s task=%s unit=%d function=%d address=%d quantity=%d attempts=%d: %w",
+			bridge.bridgeLabel(), bridge.endpoint, task.Name, task.UnitID, task.FunctionCode, task.Address, len(task.Values), bridge.retries+1, err,
 		)
 	}
 	return nil
+}
+
+func (bridge *ModbusTCPBridge) bridgeLabel() string {
+	if bridge.label == "" {
+		return "modbus TCP"
+	}
+	return bridge.label
+}
+
+func (bridge *ModbusTCPBridge) bridgeScheme() string {
+	if bridge.scheme == "" {
+		return "tcp://"
+	}
+	return bridge.scheme
 }
 
 func (bridge *ModbusTCPBridge) runLocked(ctx context.Context, unitID uint8, operation func(*modbus.ModbusClient) error) error {
@@ -160,7 +196,7 @@ func (bridge *ModbusTCPBridge) openLocked() error {
 		return nil
 	}
 	client, err := modbus.NewClient(&modbus.ClientConfiguration{
-		URL:     "tcp://" + bridge.endpoint,
+		URL:     bridge.bridgeScheme() + bridge.endpoint,
 		Timeout: bridge.timeout,
 	})
 	if err != nil {

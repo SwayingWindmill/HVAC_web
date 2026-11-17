@@ -99,6 +99,7 @@ const QUARANTINE_REASONS: Readonly<
   GATEWAY_CREDENTIAL_INACTIVE: { label: '证书未生效或已吊销', tone: 'danger' },
   MESSAGE_INVALID: { label: '报文格式或字段不合法', tone: 'warning' },
   GATEWAY_UNKNOWN: { label: '网关未登记', tone: 'neutral' },
+  RATE_LIMITED: { label: '上报速率超限', tone: 'warning' },
 };
 
 const shortTimeFormatter = new Intl.DateTimeFormat('zh-CN', {

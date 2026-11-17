@@ -11,7 +11,8 @@ import (
 // provide device and protocol behavior; the Host owns their shared registration,
 // Process Image, controller schedule, governed output, and Cycle causality.
 type Host struct {
-	mu sync.RWMutex
+	mu   sync.RWMutex
+	opMu sync.Mutex
 
 	runtime    *Runtime
 	components *ComponentRegistry
@@ -94,11 +95,47 @@ func (host *Host) RegisterAdapter(adapter DeviceAdapter) error {
 	if host == nil {
 		return errors.New("edge host is nil")
 	}
+	host.opMu.Lock()
+	defer host.opMu.Unlock()
 	return host.devices.RegisterAdapter(adapter)
 }
 
+func (host *Host) ReplaceOrRegisterDevice(adapter DeviceAdapter) error {
+	if host == nil {
+		return errors.New("edge host is nil")
+	}
+	host.opMu.Lock()
+	defer host.opMu.Unlock()
+	return host.devices.ReplaceAdapter(adapter)
+}
+
+func (host *Host) Adapter(id string) (DeviceAdapter, bool) {
+	if host == nil {
+		return nil, false
+	}
+	return host.devices.Adapter(id)
+}
+
+// ChannelDescriptor returns the descriptor for a registered channel address.
+func (host *Host) ChannelDescriptor(address string) (ChannelDescriptor, bool) {
+	if host == nil || host.runtime == nil {
+		return ChannelDescriptor{}, false
+	}
+	return host.runtime.Descriptor(address)
+}
+
 func (host *Host) UnregisterAdapter(id string) bool {
-	return host != nil && host.devices.UnregisterAdapter(id)
+	if host == nil {
+		return false
+	}
+	host.opMu.Lock()
+	defer host.opMu.Unlock()
+	return host.devices.UnregisterAdapter(id)
+}
+
+// UnregisterDevice unregisters a DeviceAdapter by ID and closes it if it implements io.Closer.
+func (host *Host) UnregisterDevice(id string) bool {
+	return host.UnregisterAdapter(id)
 }
 
 func (host *Host) AddCycleHook(binding CycleHookBinding) error {
@@ -141,6 +178,8 @@ func (host *Host) RunCycle(ctx context.Context, at time.Time) (HostCycleResult, 
 	if host == nil {
 		return HostCycleResult{}, errors.New("edge host is nil")
 	}
+	host.opMu.Lock()
+	defer host.opMu.Unlock()
 	host.mu.RLock()
 	cycle := host.cycle
 	timedata := host.timedata

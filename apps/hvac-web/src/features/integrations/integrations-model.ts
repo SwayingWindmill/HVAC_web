@@ -1964,7 +1964,12 @@ export function describeConcentratorError(
 
 export type GatewayConfigShadowSyncStatus = 'UNCONFIGURED' | 'PENDING_SYNC' | 'SYNCED' | 'DRIFTED';
 export type GatewayConfigShadowAppliedStatus = 'APPLIED' | 'PARTIAL' | 'REJECTED';
-export type GatewayConfigShadowDriftSection = 'POINT_MAPPINGS' | 'SAMPLING_POLICIES' | 'CONCENTRATOR';
+export type GatewayConfigShadowDriftSection =
+  | 'POINT_MAPPINGS'
+  | 'SAMPLING_POLICIES'
+  | 'CONCENTRATOR'
+  | 'DRIVER_CONFIGS'
+  | 'AUTONOMY_POLICY';
 export type GatewayConfigShadowDriftReason =
   | 'VALUE_MISMATCH'
   | 'MISSING_ON_EDGE'
@@ -1996,6 +2001,8 @@ export const CONFIG_SHADOW_SECTION_LABELS: Readonly<Record<GatewayConfigShadowDr
   POINT_MAPPINGS: '点位映射',
   SAMPLING_POLICIES: '采集周期',
   CONCENTRATOR: '集中器配置',
+  DRIVER_CONFIGS: '协议驱动点表',
+  AUTONOMY_POLICY: '断网自治策略',
 };
 
 export const CONFIG_SHADOW_REASON_LABELS: Readonly<Record<GatewayConfigShadowDriftReason, string>> = {

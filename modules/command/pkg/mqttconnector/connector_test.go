@@ -927,6 +927,13 @@ func TestSharedSubscriptionConfigAndReplyGatewayID(t *testing.T) {
 			t.Fatalf("replyGatewayID(%q) = (%q, true), want false", invalidTopic, got)
 		}
 	}
+
+	if err := checkSubackReasons(&paho.Suback{Reasons: []byte{0x01}}); err != nil {
+		t.Fatalf("checkSubackReasons valid failed: %v", err)
+	}
+	if err := checkSubackReasons(&paho.Suback{Reasons: []byte{0x87}}); err == nil {
+		t.Fatal("checkSubackReasons rejected code expected error")
+	}
 }
 
 type fakeCommandBroker struct {

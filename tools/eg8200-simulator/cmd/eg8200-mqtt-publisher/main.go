@@ -155,13 +155,15 @@ func main() {
 			cancel()
 			return
 		}
-		if len(measurements) == 0 {
+		if len(measurements) == 0 && !edgeRuntime.HasDynamicChannels() && publisher.IsResendSynced() {
 			return
 		}
-		if stateErr := simulator.SaveMeasurementSequences(sequenceStatePath, scheduler.Sequences()); stateErr != nil {
-			logger.Error("eg8200_mqtt_sequence_state_persist_failed", "error", stateErr.Error())
-			cancel()
-			return
+		if len(measurements) > 0 {
+			if stateErr := simulator.SaveMeasurementSequences(sequenceStatePath, scheduler.Sequences()); stateErr != nil {
+				logger.Error("eg8200_mqtt_sequence_state_persist_failed", "error", stateErr.Error())
+				cancel()
+				return
+			}
 		}
 		publishContext, publishCancel := context.WithTimeout(ctx, 5*time.Second)
 		publishErr := publisher.PublishMeasurements(publishContext, measurements)

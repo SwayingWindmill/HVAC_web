@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 // TemplatePayloadActivation captures validated optional business-activation sections
@@ -120,7 +121,8 @@ func parseAndValidateTemplatePayload(kind TemplateKind, payload map[string]any) 
 	_, hasPoints := payload["standardPoints"]
 	_, hasQuality := payload["qualityChecks"]
 	_, hasCapabilities := payload["capabilityProfiles"]
-	if !hasDeviceType && !hasPoints && !hasQuality && !hasCapabilities {
+	_, hasModbusDriver := payload["modbusDriver"]
+	if !hasDeviceType && !hasPoints && !hasQuality && !hasCapabilities && !hasModbusDriver {
 		return nil, nil
 	}
 
@@ -205,6 +207,15 @@ func parseAndValidateTemplatePayload(kind TemplateKind, payload map[string]any) 
 			}
 			seen[pairKey] = struct{}{}
 			out.CapabilityProfiles = append(out.CapabilityProfiles, profile)
+		}
+	}
+
+	if rawModbusDriver, exists := payload["modbusDriver"]; exists {
+		if kind != TemplateDevice {
+			return nil, fmt.Errorf("%w: modbusDriver is only valid on DEVICE templates", ErrInvalidMutation)
+		}
+		if err := validateTemplateModbusDriver(rawModbusDriver); err != nil {
+			return nil, fmt.Errorf("%w: modbusDriver: %v", ErrInvalidMutation, err)
 		}
 	}
 
@@ -455,6 +466,53 @@ func validateTemplateCapabilityProfile(profile TemplateCapabilityProfile) error 
 		return errors.New("invalid connectorKind")
 	}
 	return nil
+}
+
+type templateModbusDriverJSON struct {
+	DriverType        string                            `json:"driverType"`
+	Endpoint          *string                           `json:"endpoint,omitempty"`
+	UnitID            *int                              `json:"unitId,omitempty"`
+	CapabilityProfile string                            `json:"capabilityProfile,omitempty"`
+	TimeoutMS         *int                              `json:"timeoutMs,omitempty"`
+	Retries           *int                              `json:"retries,omitempty"`
+	Registers         []edgecontrol.ModbusRegisterInput `json:"registers"`
+}
+
+func validateTemplateModbusDriver(raw any) error {
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return errors.New("must be an object")
+	}
+	var parsed templateModbusDriverJSON
+	if err := decodeStrictJSONValue(obj, &parsed); err != nil {
+		return err
+	}
+	if regSlice, ok := obj["registers"].([]any); ok {
+		for i, item := range regSlice {
+			regMap, ok := item.(map[string]any)
+			if !ok {
+				return fmt.Errorf("registers[%d] must be an object", i)
+			}
+			for _, req := range []string{"address", "offset"} {
+				if val, exists := regMap[req]; !exists || val == nil {
+					return fmt.Errorf("registers[%d].%s is required", i, req)
+				}
+			}
+		}
+	}
+	_, err := edgecontrol.ValidateModbusDriverInput(edgecontrol.ModbusDriverInput{
+		DriverType:        parsed.DriverType,
+		Endpoint:          parsed.Endpoint,
+		UnitID:            parsed.UnitID,
+		CapabilityProfile: parsed.CapabilityProfile,
+		TimeoutMS:         parsed.TimeoutMS,
+		Retries:           parsed.Retries,
+		Registers:         parsed.Registers,
+	}, edgecontrol.ModbusDriverValidationOptions{
+		RequireDeviceKey:       false,
+		RequireGatewayBindings: false,
+	})
+	return err
 }
 
 func validIdentifierToken(value string, maxBytes int) bool {

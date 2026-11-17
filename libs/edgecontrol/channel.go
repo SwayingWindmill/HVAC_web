@@ -60,6 +60,7 @@ const (
 	QualityGood        Quality = "GOOD"
 	QualitySuspect     Quality = "SUSPECT"
 	QualityUnavailable Quality = "UNAVAILABLE"
+	QualityBad         Quality = QualityUnavailable
 )
 
 type ChannelDescriptor struct {
@@ -199,10 +200,11 @@ func (value Value) validate(expected DataType) error {
 }
 
 type Sample struct {
-	Value      Value
-	Quality    Quality
-	ObservedAt time.Time
-	Sequence   uint64
+	Value         Value
+	Quality       Quality
+	QualityReason string `json:"qualityReason,omitempty"`
+	ObservedAt    time.Time
+	Sequence      uint64
 }
 
 func (sample Sample) validate(expected DataType) error {
@@ -576,5 +578,5 @@ func (runtime *Runtime) SwitchProcessImage(at time.Time) ProcessImage {
 }
 
 func sameChannelValue(left, right Sample) bool {
-	return left.Value == right.Value
+	return left.Value == right.Value && left.Quality == right.Quality && left.QualityReason == right.QualityReason
 }

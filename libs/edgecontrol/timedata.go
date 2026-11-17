@@ -2,9 +2,11 @@ package edgecontrol
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,6 +36,7 @@ type FileTimedata struct {
 	directory            string
 	minimumLocalPriority DataPriority
 	latest               map[string]TimedataRecord
+	records              []TimedataRecord
 	nextSequence         uint64
 }
 
@@ -93,33 +96,117 @@ func (store *FileTimedata) recoverHistory() error {
 	if err != nil {
 		return fmt.Errorf("open Edge Timedata history: %w", err)
 	}
-	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	buffer := make([]byte, 64*1024)
-	scanner.Buffer(buffer, 2*1024*1024)
-	var previous uint64
-	for scanner.Scan() {
-		var record TimedataRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			return fmt.Errorf("decode Edge Timedata history: %w", err)
+	reader := bufio.NewReaderSize(file, 64*1024)
+	var (
+		offset         int64
+		validEndOffset int64
+		previous       uint64
+		needsTruncate  bool
+		needsNewline   bool
+	)
+	for {
+		lineBytes, readErr := reader.ReadBytes('\n')
+		if len(lineBytes) > 0 {
+			hasNewline := lineBytes[len(lineBytes)-1] == '\n'
+			trimmed := bytes.TrimSpace(lineBytes)
+			atEOF, peekErr := atTimedataReaderEOF(reader, readErr)
+			if peekErr != nil {
+				_ = file.Close()
+				return fmt.Errorf("read Edge Timedata history: %w", peekErr)
+			}
+
+			if len(trimmed) == 0 {
+				if atEOF {
+					needsTruncate = true
+					break
+				}
+				_ = file.Close()
+				return errors.New("edge timedata history contains blank line before EOF")
+			}
+
+			record, err := parseTimedataRecord(trimmed, previous)
+			if err != nil {
+				if atEOF {
+					needsTruncate = true
+					break
+				}
+				_ = file.Close()
+				return err
+			}
+
+			previous = record.Sequence
+			store.nextSequence = record.Sequence
+			store.records = append(store.records, record)
+			if current, exists := store.latest[record.Address]; !exists || sampleIsNewer(record.Sample, current.Sample) {
+				store.latest[record.Address] = record
+			}
+			offset += int64(len(lineBytes))
+			validEndOffset = offset
+			if !hasNewline {
+				needsNewline = true
+			}
 		}
-		if record.Sequence == 0 || record.Sequence <= previous || strings.TrimSpace(record.Address) == "" || strings.TrimSpace(record.PointID) == "" {
-			return errors.New("edge timedata history is not monotonic or is malformed")
+		if errors.Is(readErr, io.EOF) {
+			break
 		}
-		if record.Sample.ObservedAt.IsZero() {
-			return errors.New("edge timedata history contains sample without observed time")
-		}
-		previous = record.Sequence
-		store.nextSequence = record.Sequence
-		if current, exists := store.latest[record.Address]; !exists || sampleIsNewer(record.Sample, current.Sample) {
-			store.latest[record.Address] = record
+		if readErr != nil {
+			_ = file.Close()
+			return fmt.Errorf("read Edge Timedata history: %w", readErr)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("scan Edge Timedata history: %w", err)
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close Edge Timedata history: %w", err)
+	}
+
+	if needsTruncate {
+		if err := os.Truncate(store.historyPath(), validEndOffset); err != nil {
+			return fmt.Errorf("truncate partial Edge Timedata history line: %w", err)
+		}
+	} else if needsNewline {
+		appendFile, err := os.OpenFile(store.historyPath(), os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return fmt.Errorf("open Edge Timedata history trailing newline: %w", err)
+		}
+		_, writeErr := appendFile.Write([]byte{'\n'})
+		syncErr := appendFile.Sync()
+		closeErr := appendFile.Close()
+		if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+			return fmt.Errorf("terminate Edge Timedata history trailing line: %w", err)
+		}
 	}
 	return nil
+}
+
+func atTimedataReaderEOF(reader *bufio.Reader, readErr error) (bool, error) {
+	if errors.Is(readErr, io.EOF) {
+		return true, nil
+	}
+	if readErr != nil {
+		return false, readErr
+	}
+	_, err := reader.Peek(1)
+	if errors.Is(err, io.EOF) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func parseTimedataRecord(raw []byte, previousSequence uint64) (TimedataRecord, error) {
+	var record TimedataRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return TimedataRecord{}, fmt.Errorf("decode Edge Timedata history: %w", err)
+	}
+	if record.Sequence == 0 || record.Sequence <= previousSequence || strings.TrimSpace(record.Address) == "" || strings.TrimSpace(record.PointID) == "" {
+		return TimedataRecord{}, errors.New("edge timedata history is not monotonic or is malformed")
+	}
+	if record.Sample.ObservedAt.IsZero() {
+		return TimedataRecord{}, errors.New("edge timedata history contains sample without observed time")
+	}
+	return record, nil
 }
 
 func sampleIsNewer(next, current Sample) bool {
@@ -193,6 +280,7 @@ func (store *FileTimedata) RecordImage(image ProcessImage) (int, error) {
 			return written, fmt.Errorf("append Edge Timedata history: %w", err)
 		}
 		store.latest[record.Address] = record
+		store.records = append(store.records, record)
 		written++
 	}
 	if err := file.Sync(); err != nil {
@@ -218,6 +306,36 @@ func (store *FileTimedata) Latest(address string) (TimedataRecord, bool) {
 	return record, ok
 }
 
+// LookupSequence finds the Sequence for an observation at address observedAt
+// strictly after afterSequence without scanning the history file.
+func (store *FileTimedata) LookupSequence(address string, observedAt time.Time, afterSequence uint64) (uint64, bool) {
+	if store == nil {
+		return 0, false
+	}
+	address = strings.TrimSpace(address)
+	if address == "" || observedAt.IsZero() {
+		return 0, false
+	}
+	targetMillis := observedAt.UTC().UnixMilli()
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	if latest, ok := store.latest[address]; ok && latest.Sequence > afterSequence && latest.Sample.ObservedAt.UTC().UnixMilli() == targetMillis {
+		return latest.Sequence, true
+	}
+	for i := len(store.records) - 1; i >= 0; i-- {
+		rec := store.records[i]
+		if rec.Sequence <= afterSequence {
+			break
+		}
+		if rec.Address == address && rec.Sample.ObservedAt.UTC().UnixMilli() == targetMillis {
+			return rec.Sequence, true
+		}
+	}
+	return 0, false
+}
+
 func (store *FileTimedata) History(address string, limit int) ([]TimedataRecord, error) {
 	if store == nil {
 		return nil, errors.New("edge timedata is nil")
@@ -231,9 +349,11 @@ func (store *FileTimedata) History(address string, limit int) ([]TimedataRecord,
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	records, err := store.readHistoryLocked(func(record TimedataRecord) bool { return record.Address == address })
-	if err != nil {
-		return nil, err
+	var records []TimedataRecord
+	for _, record := range store.records {
+		if record.Address == address {
+			records = append(records, record)
+		}
 	}
 	if len(records) > limit {
 		records = append([]TimedataRecord(nil), records[len(records)-limit:]...)
@@ -263,49 +383,60 @@ func (store *FileTimedata) QueryRange(from, to time.Time, addresses []string, li
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	records, err := store.readHistoryLocked(func(record TimedataRecord) bool {
+	records := make([]TimedataRecord, 0, min(limit, len(store.records)))
+	for _, record := range store.records {
 		if len(selected) > 0 {
 			if _, ok := selected[record.Address]; !ok {
-				return false
+				continue
 			}
 		}
 		observed := record.Sample.ObservedAt
-		return !observed.Before(from) && observed.Before(to)
-	})
-	if err != nil {
-		return nil, err
-	}
-	if len(records) > limit {
-		records = records[:limit]
+		if !observed.Before(from) && observed.Before(to) {
+			records = append(records, record)
+			if len(records) >= limit {
+				break
+			}
+		}
 	}
 	return records, nil
 }
 
-func (store *FileTimedata) readHistoryLocked(include func(TimedataRecord) bool) ([]TimedataRecord, error) {
-	file, err := os.Open(store.historyPath())
-	if errors.Is(err, os.ErrNotExist) {
+func (store *FileTimedata) LatestSequence() uint64 {
+	if store == nil {
+		return 0
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.nextSequence
+}
+
+// QueryAfterSequence returns up to limit ordered records with Sequence > afterSequence
+// matching include, using binary search over the retained in-memory index.
+func (store *FileTimedata) QueryAfterSequence(afterSequence uint64, limit int, include func(TimedataRecord) bool) ([]TimedataRecord, error) {
+	if store == nil {
+		return nil, errors.New("edge timedata is nil")
+	}
+	if limit <= 0 {
+		return nil, errors.New("sequence query limit must be positive")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	startIdx := sort.Search(len(store.records), func(i int) bool {
+		return store.records[i].Sequence > afterSequence
+	})
+	if startIdx >= len(store.records) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	records := make([]TimedataRecord, 0)
-	scanner := bufio.NewScanner(file)
-	buffer := make([]byte, 64*1024)
-	scanner.Buffer(buffer, 2*1024*1024)
-	for scanner.Scan() {
-		var record TimedataRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			return nil, err
-		}
+	records := make([]TimedataRecord, 0, min(limit, len(store.records)-startIdx))
+	for i := startIdx; i < len(store.records); i++ {
+		record := store.records[i]
 		if include == nil || include(record) {
 			records = append(records, record)
+			if len(records) >= limit {
+				break
+			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
 	}
 	return records, nil
 }

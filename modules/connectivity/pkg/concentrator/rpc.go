@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,16 +12,16 @@ import (
 	"math"
 	"net"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 	"github.com/quanlaihe/hvac-web/libs/observability"
-	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 )
 
 const (
@@ -68,6 +67,8 @@ type waiterKey struct {
 	requestID string
 }
 
+var sharedRouteCounter atomic.Uint64
+
 type MQTTTransport struct {
 	rootContext       context.Context
 	runContext        context.Context
@@ -77,12 +78,16 @@ type MQTTTransport struct {
 	metrics           *observability.Registry
 	packetHook        func(direction, channel, gatewayID, topic, traceID string, payload []byte)
 	manager           *autopaho.ConnectionManager
-	connTracker       adapter.MQTTConnTracker
+	sharedSession     *mqttclient.SharedSession
+	unregisterRoute   func(context.Context) error
+	removeObserver    func()
+	connTracker       *mqttclient.ConnTracker
 	subscribeBackoffs []time.Duration
 
 	subWG      sync.WaitGroup
 	subMu      sync.Mutex
 	subscribed bool
+	closed     bool
 	subGen     uint64
 	subCancel  context.CancelFunc
 
@@ -95,8 +100,65 @@ type MQTTTransport struct {
 	waiterTraces map[waiterKey]string
 }
 
+func newBaseTransport(ctx context.Context, cfg TransportConfig, subscribeBackoffs []time.Duration) *MQTTTransport {
+	timeout := cfg.RPCTimeout
+	if timeout <= 0 {
+		timeout = defaultRPCTimeout
+	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	runContext, stopCancel := context.WithCancel(ctx)
+	return &MQTTTransport{
+		rootContext:       ctx,
+		runContext:        runContext,
+		stopCancel:        stopCancel,
+		timeout:           timeout,
+		logger:            logger,
+		metrics:           cfg.Metrics,
+		packetHook:        cfg.PacketHook,
+		connTracker:       mqttclient.NewConnTracker(),
+		subscribeBackoffs: subscribeBackoffs,
+		readyCh:           make(chan struct{}),
+		waiters:           map[waiterKey]chan RPCResponse{},
+		waiterTraces:      map[waiterKey]string{},
+	}
+}
+
 func NewMQTTTransport(ctx context.Context, cfg TransportConfig) (*MQTTTransport, error) {
 	return newMQTTTransport(ctx, cfg, nil, nil)
+}
+
+// NewSharedMQTTTransport builds a concentrator RPC transport over an existing
+// mqttclient.SharedSession. Close unregisters the reply route without closing session.
+func NewSharedMQTTTransport(_ context.Context, session *mqttclient.SharedSession, cfg TransportConfig) (*MQTTTransport, error) {
+	if session == nil {
+		return nil, errors.New("concentrator shared MQTT session is required")
+	}
+	transport := newBaseTransport(context.Background(), cfg, nil)
+	transport.sharedSession = session
+
+	routeID := fmt.Sprintf("concentrator-rpc-%d", sharedRouteCounter.Add(1))
+	unregister, err := session.RegisterRoute(routeID, []string{ReplyTopicFilter}, func(pkt *paho.Publish) {
+		_ = transport.handleReplyPacket(pkt)
+	})
+	if err != nil {
+		transport.stopCancel()
+		return nil, err
+	}
+	transport.unregisterRoute = unregister
+
+	transport.removeObserver = session.AddObserver(func(state mqttclient.SessionState) {
+		transport.subMu.Lock()
+		active := !transport.closed && state.Healthy()
+		transport.subscribed = active
+		transport.subMu.Unlock()
+		if active {
+			transport.markReady()
+		}
+	})
+	return transport, nil
 }
 
 func newMQTTTransport(ctx context.Context, cfg TransportConfig, reconnectBackoff func(int) time.Duration, subscribeBackoffs []time.Duration) (*MQTTTransport, error) {
@@ -107,36 +169,20 @@ func newMQTTTransport(ctx context.Context, cfg TransportConfig, reconnectBackoff
 	if err != nil {
 		return nil, fmt.Errorf("parse MQTT broker URL: %w", err)
 	}
-	tlsConfig, err := buildTLSConfig(cfg)
+	tlsConfig, err := mqttclient.NewMTLSConfig(mqttclient.TLSConfig{
+		CACertFile:     cfg.CAFile,
+		ClientCertFile: cfg.CertFile,
+		ClientKeyFile:  cfg.KeyFile,
+		ServerName:     cfg.ServerName,
+	})
 	if err != nil {
 		return nil, err
-	}
-	timeout := cfg.RPCTimeout
-	if timeout <= 0 {
-		timeout = defaultRPCTimeout
-	}
-	logger := cfg.Logger
-	if logger == nil {
-		logger = slog.Default()
 	}
 	if reconnectBackoff == nil {
 		reconnectBackoff = autopaho.DefaultExponentialBackoff()
 	}
-	runContext, stopCancel := context.WithCancel(ctx)
 
-	transport := &MQTTTransport{
-		rootContext:       ctx,
-		runContext:        runContext,
-		stopCancel:        stopCancel,
-		timeout:           timeout,
-		logger:            logger,
-		metrics:           cfg.Metrics,
-		packetHook:        cfg.PacketHook,
-		subscribeBackoffs: subscribeBackoffs,
-		readyCh:           make(chan struct{}),
-		waiters:           map[waiterKey]chan RPCResponse{},
-		waiterTraces:      map[waiterKey]string{},
-	}
+	transport := newBaseTransport(ctx, cfg, subscribeBackoffs)
 
 	clientConfig := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{brokerURL},
@@ -150,7 +196,7 @@ func newMQTTTransport(ctx context.Context, cfg TransportConfig, reconnectBackoff
 			return transport.dial(attemptCtx, tlsConfig, server)
 		},
 		OnConnectError: func(connectErr error) {
-			logger.Warn("concentrator_mqtt_connect_failed", "error", connectErr.Error())
+			transport.logger.Warn("concentrator_mqtt_connect_failed", "error", connectErr.Error())
 		},
 		ClientConfig: paho.ClientConfig{
 			ClientID: strings.TrimSpace(cfg.ClientID),
@@ -182,7 +228,7 @@ func newMQTTTransport(ctx context.Context, cfg TransportConfig, reconnectBackoff
 
 	manager, err := autopaho.NewConnection(ctx, clientConfig)
 	if err != nil {
-		stopCancel()
+		transport.stopCancel()
 		return nil, fmt.Errorf("create concentrator MQTT connection: %w", err)
 	}
 	transport.manager = manager
@@ -219,16 +265,16 @@ func (t *MQTTTransport) closeCurrentConnection() {
 	t.subMu.Lock()
 	t.subscribed = false
 	t.subMu.Unlock()
-	t.connTracker.CloseCurrent()
+	_ = t.connTracker.CloseCurrent()
 }
 
 func (t *MQTTTransport) setSubscribedForGen(gen uint64, connection <-chan struct{}, subscribed bool) bool {
-	if adapter.IsClosedSignal(connection) {
+	if mqttclient.IsClosedSignal(connection) {
 		return false
 	}
 	t.subMu.Lock()
 	defer t.subMu.Unlock()
-	if t.connTracker.CurrentGen() != gen || t.subGen != gen || adapter.IsClosedSignal(t.connTracker.CurrentClosed()) {
+	if t.connTracker.CurrentGen() != gen || t.subGen != gen || mqttclient.IsClosedSignal(t.connTracker.CurrentClosed()) {
 		return false
 	}
 	t.subscribed = subscribed
@@ -245,13 +291,22 @@ func (t *MQTTTransport) Subscribed() bool {
 }
 
 func (t *MQTTTransport) subscribeWithRetry(ctx context.Context, manager *autopaho.ConnectionManager, connection <-chan struct{}, gen uint64) {
-	subscriptions := []paho.SubscribeOptions{{Topic: ReplyTopicFilter, QoS: 1}}
 	backoffs := t.subscribeBackoffs
 	if backoffs == nil {
-		backoffs = adapter.DefaultSubscribeRetryDelays
+		backoffs = mqttclient.DefaultSubscribeRetryDelays
 	}
-	if _, err := adapter.SubscribeWithRetry(ctx, manager, connection, subscriptions, mqttConnectTimeout, backoffs); err != nil {
-		if ctx.Err() != nil || adapter.IsClosedSignal(connection) {
+	sub := &paho.Subscribe{
+		Subscriptions: []paho.SubscribeOptions{{Topic: ReplyTopicFilter, QoS: 1}},
+	}
+	if err := mqttclient.SubscribeWithRetry(
+		ctx,
+		manager,
+		sub,
+		mqttConnectTimeout,
+		backoffs,
+		func() bool { return mqttclient.IsClosedSignal(connection) },
+	); err != nil {
+		if ctx.Err() != nil || mqttclient.IsClosedSignal(connection) {
 			return
 		}
 		t.setSubscribedForGen(gen, connection, false)
@@ -303,9 +358,16 @@ func (t *MQTTTransport) recordRPCOutcome(outcome string, started time.Time) {
 	_ = t.metrics.ObserveHistogram("hvac_mqtt_concentrator_rpc_duration_seconds", "Concentrator MQTT RPC duration.", labels, time.Since(started).Seconds(), nil)
 }
 
+func (t *MQTTTransport) publish(ctx context.Context, pub *paho.Publish) (*paho.PublishResponse, error) {
+	if t.sharedSession != nil {
+		return t.sharedSession.Publish(ctx, pub)
+	}
+	return t.manager.Publish(ctx, pub)
+}
+
 func (t *MQTTTransport) Call(ctx context.Context, req RPCRequest) (RPCResponse, error) {
 	started := time.Now()
-	if t == nil || t.manager == nil {
+	if t == nil || (t.manager == nil && t.sharedSession == nil) {
 		t.recordRPCOutcome("failed", started)
 		return RPCResponse{}, ErrTransportUnavailable
 	}
@@ -364,7 +426,7 @@ func (t *MQTTTransport) Call(ctx context.Context, req RPCRequest) (RPCResponse, 
 	expirySeconds := concentratorMessageExpirySeconds(timeout)
 	t.recordPacket("DOWNLINK", "CONCENTRATOR", req.GatewayID, topic, traceID, payload)
 	pubCtx, pubCancel := context.WithTimeout(ctx, 5*time.Second)
-	_, pubErr := t.manager.Publish(pubCtx, &paho.Publish{
+	_, pubErr := t.publish(pubCtx, &paho.Publish{
 		QoS:        1,
 		Retain:     false,
 		Topic:      topic,
@@ -407,29 +469,47 @@ func (t *MQTTTransport) Close(ctx context.Context) error {
 	if t == nil {
 		return nil
 	}
+	t.subMu.Lock()
+	t.closed = true
+	t.subscribed = false
+	t.subMu.Unlock()
+
+	if t.removeObserver != nil {
+		t.removeObserver()
+	}
 	if t.stopCancel != nil {
 		t.stopCancel()
 	}
 	var err error
+	if t.unregisterRoute != nil {
+		err = t.unregisterRoute(ctx)
+	}
 	if t.manager != nil {
-		err = t.manager.Disconnect(ctx)
+		disconnectErr := t.manager.Disconnect(ctx)
+		if err == nil {
+			err = disconnectErr
+		}
 	}
 	t.subWG.Wait()
 	return err
 }
 
 func (t *MQTTTransport) onReply(received paho.PublishReceived) (bool, error) {
-	if received.Packet == nil {
-		return false, nil
-	}
-	if gatewayID, ok := ParseReplyTopic(received.Packet.Topic); ok {
-		traceID := t.lookupReplyTraceID(gatewayID, received.Packet.Payload)
-		t.recordPacket("UPLINK", "CONCENTRATOR", gatewayID, received.Packet.Topic, traceID, received.Packet.Payload)
-	}
-	if !t.DeliverReply(received.Packet.Topic, received.Packet.Payload) {
+	if !t.handleReplyPacket(received.Packet) {
 		return false, nil
 	}
 	return true, nil
+}
+
+func (t *MQTTTransport) handleReplyPacket(pkt *paho.Publish) bool {
+	if pkt == nil {
+		return false
+	}
+	if gatewayID, ok := ParseReplyTopic(pkt.Topic); ok {
+		traceID := t.lookupReplyTraceID(gatewayID, pkt.Payload)
+		t.recordPacket("UPLINK", "CONCENTRATOR", gatewayID, pkt.Topic, traceID, pkt.Payload)
+	}
+	return t.DeliverReply(pkt.Topic, pkt.Payload)
 }
 
 func (t *MQTTTransport) lookupReplyTraceID(gatewayID string, payload []byte) string {
@@ -501,25 +581,4 @@ func validateTransportConfig(cfg TransportConfig) error {
 		}
 	}
 	return nil
-}
-
-func buildTLSConfig(cfg TransportConfig) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load concentrator MQTT client cert: %w", err)
-	}
-	caBytes, err := os.ReadFile(cfg.CAFile)
-	if err != nil {
-		return nil, fmt.Errorf("read concentrator MQTT CA: %w", err)
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(caBytes) {
-		return nil, errors.New("invalid concentrator MQTT CA")
-	}
-	return &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		RootCAs:      roots,
-		Certificates: []tls.Certificate{cert},
-		ServerName:   strings.TrimSpace(cfg.ServerName),
-	}, nil
 }

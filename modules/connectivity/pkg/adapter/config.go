@@ -7,13 +7,14 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 )
 
 var (
-	uuidV7Pattern     = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	traceIDPattern    = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	zeroTraceID       = strings.Repeat("0", 32)
-	shareGroupPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	uuidV7Pattern  = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	traceIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	zeroTraceID    = strings.Repeat("0", 32)
 )
 
 const (
@@ -70,19 +71,31 @@ type TelemetryRuntimeConfig struct {
 }
 
 func (config Config) Validate() error {
-	broker, err := url.Parse(strings.TrimSpace(config.MQTT.BrokerURL))
-	if err != nil || broker.Scheme != "tls" || broker.Host == "" || broker.User != nil || broker.RawQuery != "" || broker.Fragment != "" || (broker.Path != "" && broker.Path != "/") {
-		return errors.New("MQTT broker URL must be a tls:// origin")
+	return config.validate(true)
+}
+
+func (config Config) validate(requireMQTT bool) error {
+	if requireMQTT {
+		broker, err := url.Parse(strings.TrimSpace(config.MQTT.BrokerURL))
+		if err != nil || broker.Scheme != "tls" || broker.Host == "" || broker.User != nil || broker.RawQuery != "" || broker.Fragment != "" || (broker.Path != "" && broker.Path != "/") {
+			return errors.New("MQTT broker URL must be a tls:// origin")
+		}
+		for name, value := range map[string]string{
+			"MQTT client id":        config.MQTT.ClientID,
+			"MQTT CA file":          config.MQTT.CAFile,
+			"MQTT certificate file": config.MQTT.CertFile,
+			"MQTT key file":         config.MQTT.KeyFile,
+			"MQTT server name":      config.MQTT.ServerName,
+		} {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("%s is required", name)
+			}
+		}
 	}
 	if err := validateHTTPSOrigin(config.TelemetryRuntime.BaseURL); err != nil {
 		return fmt.Errorf("telemetry runtime base URL: %w", err)
 	}
 	for name, value := range map[string]string{
-		"MQTT client id":                config.MQTT.ClientID,
-		"MQTT CA file":                  config.MQTT.CAFile,
-		"MQTT certificate file":         config.MQTT.CertFile,
-		"MQTT key file":                 config.MQTT.KeyFile,
-		"MQTT server name":              config.MQTT.ServerName,
 		"telemetry runtime CA file":     config.TelemetryRuntime.CAFile,
 		"telemetry runtime certificate": config.TelemetryRuntime.CertFile,
 		"telemetry runtime key file":    config.TelemetryRuntime.KeyFile,
@@ -92,7 +105,7 @@ func (config Config) Validate() error {
 			return fmt.Errorf("%s is required", name)
 		}
 	}
-	if config.MQTT.SharedSubscriptionGroup != "" && !shareGroupPattern.MatchString(config.MQTT.SharedSubscriptionGroup) {
+	if err := mqttclient.ValidateShareGroup(config.MQTT.SharedSubscriptionGroup); err != nil {
 		return errors.New("MQTT shared subscription group must match ^[A-Za-z0-9_-]{1,64}$")
 	}
 	if config.QueueCapacity < 1 || config.QueueCapacity > 65536 {
@@ -119,15 +132,7 @@ func (config Config) Validate() error {
 // SubscriptionTopicFilters returns the MQTT v5 subscription filters, adding the
 // $share/<group>/ prefix when SharedSubscriptionGroup is configured.
 func (config Config) SubscriptionTopicFilters() []string {
-	if config.MQTT.SharedSubscriptionGroup == "" {
-		return append([]string(nil), UplinkTopicFilters...)
-	}
-	filters := make([]string, len(UplinkTopicFilters))
-	prefix := "$share/" + config.MQTT.SharedSubscriptionGroup + "/"
-	for index, topic := range UplinkTopicFilters {
-		filters[index] = prefix + topic
-	}
-	return filters
+	return mqttclient.SharedTopicFilters(config.MQTT.SharedSubscriptionGroup, UplinkTopicFilters)
 }
 
 func (config Config) effectiveOverflowMaxMessages() int {

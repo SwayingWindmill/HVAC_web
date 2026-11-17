@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 func runEdgeCommand(t *testing.T, runtime *EdgeControlRuntime, at time.Time, commandID, deviceID, capability string, params map[string]float64) EdgeCommandOutcome {
@@ -216,5 +218,67 @@ func TestACycleHaltedByAClockRegressionIsNotPublished(t *testing.T) {
 	resumed := runtime.RunCycle(context.Background(), at.Add(3*time.Second))
 	if !resumed.Publishable() || resumed.TelemetrySnapshot.Devices[config.Plant.Chiller.ID] == nil {
 		t.Fatal("cycles resume publishing once the clock passes the last cycle")
+	}
+}
+
+func TestEdgeControlRuntimeAutonomyPolicyAndOfflineYield(t *testing.T) {
+	t.Parallel()
+
+	config := loadGeneratedCentralPlantConfig(t)
+	at := time.Unix(4500, 0).UTC()
+	plant := NewPlant(config.Plant, config.Scenario, at)
+	runtime, err := NewEdgeControlRuntime(config, plant)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	policy := edgecontrol.DefaultAutonomyPolicyConfig()
+	policy.Enabled = true
+	policy.OfflineGraceSeconds = 20
+	policy.DefaultChilledWaterSupplySetpointC = 6.5
+	policy.DefaultPumpFrequencyHz = 33.0
+	policy.MinPumpFrequencyHz = 25.0
+	policy.MaxPumpFrequencyHz = 45.0
+	if err := runtime.ApplyAutonomyPolicy(policy); err != nil {
+		t.Fatalf("ApplyAutonomyPolicy() error = %v", err)
+	}
+
+	// Connected online: pump freq setpoint clamped by updated policy [25, 45].
+	runtime.NotifyCloudContact(true, at)
+	res := runEdgeCommand(t, runtime, at.Add(time.Second), "cmd-clamped-max", config.Plant.ChilledWaterPump.ID, "SET_FREQUENCY", map[string]float64{"frequencyHz": 49})
+	if !res.Accepted || res.Effective == nil || res.Effective.Double != 45.0 {
+		t.Fatalf("expected pump frequency clamped to 45.0 by hot-updated autonomy policy, got %+v", res)
+	}
+
+	// Disconnect cloud and advance past OfflineGraceSeconds (20s): fallback takes over.
+	disconnectAt := at.Add(2 * time.Second)
+	runtime.NotifyCloudContact(false, disconnectAt)
+	runtime.RunCycle(context.Background(), disconnectAt.Add(10*time.Second))
+	if st, ok := runtime.AutonomousFallbackStatus(disconnectAt.Add(10 * time.Second)); !ok || st.FallbackActive {
+		t.Fatalf("fallback should stay inactive within OfflineGraceSeconds: %+v", st)
+	}
+
+	fallbackAt := disconnectAt.Add(25 * time.Second)
+	runtime.RunCycle(context.Background(), fallbackAt)
+	if st, ok := runtime.AutonomousFallbackStatus(fallbackAt); !ok || !st.FallbackActive {
+		t.Fatalf("expected FallbackActive=true after OfflineGraceSeconds: %+v", st)
+	}
+	plant.Tick(15 * time.Second)
+	if got := plant.Snapshot().Devices[config.Plant.Chiller.ID]["chilledWaterTemperatureSetpointC"]; got != 6.5 {
+		t.Fatalf("expected chiller setpoint driven to fallback 6.5C, got %v", got)
+	}
+
+	// Cloud reconnects: yields cleanly so new cloud command at 9.5C takes effect.
+	reconnectAt := fallbackAt.Add(2 * time.Second)
+	runtime.NotifyCloudContact(true, reconnectAt)
+	cloudCmd := runEdgeCommand(t, runtime, reconnectAt, "cmd-cloud-restore", config.Plant.Chiller.ID, "SET_CHILLED_WATER_TEMPERATURE_SETPOINT", map[string]float64{"setpointC": 9.5})
+	if !cloudCmd.Accepted || cloudCmd.Code != "APPLIED" {
+		t.Fatalf("expected cloud command applied immediately on reconnect yield, got %+v", cloudCmd)
+	}
+	if st, ok := runtime.AutonomousFallbackStatus(reconnectAt); !ok || st.FallbackActive {
+		t.Fatalf("expected FallbackActive=false after reconnect: %+v", st)
+	}
+	if got := plant.Snapshot().Devices[config.Plant.Chiller.ID]["chilledWaterTemperatureSetpointC"]; got != 9.5 {
+		t.Fatalf("expected cloud setpoint 9.5C after reconnect yield, got %v", got)
 	}
 }
