@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
@@ -25,6 +26,34 @@ type TemplatePayloadActivation struct {
 	QualityChecksByPoint map[string]*TemplateQualityCheck
 	DefaultQualityCheck  *TemplateQualityCheck
 	CapabilityProfiles   []TemplateCapabilityProfile
+	ModbusDriver         *TemplateModbusDriver
+}
+
+type TemplateModbusRegisterMapping struct {
+	PointCode         string            `json:"pointCode"`
+	SemanticChannel   string            `json:"semanticChannel,omitempty"`
+	FunctionCode      int               `json:"functionCode"`
+	WriteFunctionCode *int              `json:"writeFunctionCode,omitempty"`
+	Address           int               `json:"address"`
+	RegisterCount     int               `json:"registerCount"`
+	RawType           string            `json:"rawType"`
+	ByteOrder         string            `json:"byteOrder"`
+	WordOrder         string            `json:"wordOrder"`
+	BitIndex          *int              `json:"bitIndex,omitempty"`
+	Scale             float64           `json:"scale"`
+	Offset            float64           `json:"offset"`
+	PollPriority      string            `json:"pollPriority"`
+	EnumMap           map[string]string `json:"enumMap,omitempty"`
+}
+
+type TemplateModbusDriver struct {
+	DriverType        string                          `json:"driverType"`
+	Endpoint          string                          `json:"endpoint,omitempty"`
+	UnitID            *int                            `json:"unitId,omitempty"`
+	CapabilityProfile string                          `json:"capabilityProfile,omitempty"`
+	TimeoutMS         *int                            `json:"timeoutMs,omitempty"`
+	Retries           *int                            `json:"retries,omitempty"`
+	Registers         []TemplateModbusRegisterMapping `json:"registers"`
 }
 
 type TemplateStandardPoint struct {
@@ -120,7 +149,8 @@ func parseAndValidateTemplatePayload(kind TemplateKind, payload map[string]any) 
 	_, hasPoints := payload["standardPoints"]
 	_, hasQuality := payload["qualityChecks"]
 	_, hasCapabilities := payload["capabilityProfiles"]
-	if !hasDeviceType && !hasPoints && !hasQuality && !hasCapabilities {
+	_, hasModbusDriver := payload["modbusDriver"]
+	if !hasDeviceType && !hasPoints && !hasQuality && !hasCapabilities && !hasModbusDriver {
 		return nil, nil
 	}
 
@@ -206,6 +236,17 @@ func parseAndValidateTemplatePayload(kind TemplateKind, payload map[string]any) 
 			seen[pairKey] = struct{}{}
 			out.CapabilityProfiles = append(out.CapabilityProfiles, profile)
 		}
+	}
+
+	if rawModbusDriver, exists := payload["modbusDriver"]; exists {
+		if kind != TemplateDevice {
+			return nil, fmt.Errorf("%w: modbusDriver is only valid on DEVICE templates", ErrInvalidMutation)
+		}
+		driver, err := parseAndValidateTemplateModbusDriver(rawModbusDriver)
+		if err != nil {
+			return nil, fmt.Errorf("%w: modbusDriver: %v", ErrInvalidMutation, err)
+		}
+		out.ModbusDriver = driver
 	}
 
 	return out, nil
@@ -455,6 +496,177 @@ func validateTemplateCapabilityProfile(profile TemplateCapabilityProfile) error 
 		return errors.New("invalid connectorKind")
 	}
 	return nil
+}
+
+func parseAndValidateTemplateModbusDriver(raw any) (*TemplateModbusDriver, error) {
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return nil, errors.New("must be an object")
+	}
+	encoded, err := json.Marshal(obj)
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(encoded))
+	dec.DisallowUnknownFields()
+	var parsed TemplateModbusDriver
+	if err := dec.Decode(&parsed); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, errors.New("unexpected trailing tokens")
+	}
+	if len(parsed.Registers) < 1 || len(parsed.Registers) > 256 {
+		return nil, errors.New("registers must contain 1..256 items")
+	}
+	var rawEnvelope struct {
+		Registers []map[string]json.RawMessage `json:"registers"`
+	}
+	if err := json.Unmarshal(encoded, &rawEnvelope); err != nil {
+		return nil, err
+	}
+	for i, regObj := range rawEnvelope.Registers {
+		if regObj == nil {
+			return nil, fmt.Errorf("registers[%d] must be an object", i)
+		}
+		if rawAddr, hasAddr := regObj["address"]; !hasAddr || bytes.Equal(bytes.TrimSpace(rawAddr), []byte("null")) {
+			return nil, fmt.Errorf("registers[%d].address is required", i)
+		}
+		if rawOffset, hasOffset := regObj["offset"]; !hasOffset || bytes.Equal(bytes.TrimSpace(rawOffset), []byte("null")) {
+			return nil, fmt.Errorf("registers[%d].offset is required", i)
+		}
+	}
+	switch parsed.DriverType {
+	case "MODBUS_TCP", "MODBUS_RTU":
+	default:
+		return nil, fmt.Errorf("driverType must be MODBUS_TCP or MODBUS_RTU, got %q", parsed.DriverType)
+	}
+	if parsed.Endpoint != "" {
+		trimmed := strings.TrimSpace(parsed.Endpoint)
+		if trimmed == "" || utf8.RuneCountInString(trimmed) > 256 || containsControlChar(trimmed) {
+			return nil, errors.New("invalid endpoint")
+		}
+		parsed.Endpoint = trimmed
+	}
+	if parsed.UnitID != nil && (*parsed.UnitID < 1 || *parsed.UnitID > 247) {
+		return nil, fmt.Errorf("unitId=%d out of range [1,247]", *parsed.UnitID)
+	}
+	if parsed.CapabilityProfile != "" {
+		trimmed := strings.TrimSpace(parsed.CapabilityProfile)
+		if trimmed == "" || utf8.RuneCountInString(trimmed) > 64 || containsControlChar(trimmed) {
+			return nil, errors.New("invalid capabilityProfile")
+		}
+		parsed.CapabilityProfile = trimmed
+	}
+	if parsed.TimeoutMS != nil && (*parsed.TimeoutMS < 100 || *parsed.TimeoutMS > 30000) {
+		return nil, fmt.Errorf("timeoutMs=%d out of range [100,30000]", *parsed.TimeoutMS)
+	}
+	if parsed.Retries != nil && (*parsed.Retries < 0 || *parsed.Retries > 10) {
+		return nil, fmt.Errorf("retries=%d out of range [0,10]", *parsed.Retries)
+	}
+
+	seenPoints := make(map[string]struct{}, len(parsed.Registers))
+	cleanedRegs := make([]TemplateModbusRegisterMapping, 0, len(parsed.Registers))
+	for i, reg := range parsed.Registers {
+		cleanedReg, err := validateTemplateModbusRegisterMapping(reg)
+		if err != nil {
+			return nil, fmt.Errorf("registers[%d]: %w", i, err)
+		}
+		if _, dup := seenPoints[cleanedReg.PointCode]; dup {
+			return nil, fmt.Errorf("duplicate register pointCode %q", cleanedReg.PointCode)
+		}
+		seenPoints[cleanedReg.PointCode] = struct{}{}
+		cleanedRegs = append(cleanedRegs, cleanedReg)
+	}
+	parsed.Registers = cleanedRegs
+	return &parsed, nil
+}
+
+func validateTemplateModbusRegisterMapping(reg TemplateModbusRegisterMapping) (TemplateModbusRegisterMapping, error) {
+	if !pointCodePattern.MatchString(reg.PointCode) {
+		return TemplateModbusRegisterMapping{}, fmt.Errorf("invalid pointCode %q", reg.PointCode)
+	}
+	if reg.SemanticChannel != "" {
+		trimmed := strings.TrimSpace(reg.SemanticChannel)
+		if trimmed == "" || utf8.RuneCountInString(trimmed) > 64 || containsControlChar(trimmed) {
+			return TemplateModbusRegisterMapping{}, errors.New("invalid semanticChannel")
+		}
+		reg.SemanticChannel = trimmed
+	}
+	if reg.FunctionCode != 3 && reg.FunctionCode != 4 {
+		return TemplateModbusRegisterMapping{}, fmt.Errorf("functionCode=%d must be 3 or 4", reg.FunctionCode)
+	}
+	if reg.WriteFunctionCode != nil && *reg.WriteFunctionCode != 6 && *reg.WriteFunctionCode != 16 {
+		return TemplateModbusRegisterMapping{}, fmt.Errorf("writeFunctionCode=%d must be 6 or 16", *reg.WriteFunctionCode)
+	}
+	if reg.Address < 0 || reg.Address > 65535 {
+		return TemplateModbusRegisterMapping{}, fmt.Errorf("address=%d out of range [0,65535]", reg.Address)
+	}
+
+	var expectedCount int
+	switch reg.RawType {
+	case "UINT16", "INT16", "BIT_BOOL", "ENUM16":
+		expectedCount = 1
+	case "UINT32", "INT32", "FLOAT32":
+		expectedCount = 2
+	default:
+		return TemplateModbusRegisterMapping{}, fmt.Errorf("unsupported rawType %q", reg.RawType)
+	}
+	if reg.RegisterCount < 1 || reg.RegisterCount > 4 || reg.RegisterCount != expectedCount {
+		return TemplateModbusRegisterMapping{}, fmt.Errorf("registerCount=%d must equal %d for %s", reg.RegisterCount, expectedCount, reg.RawType)
+	}
+	if reg.ByteOrder != "BIG_ENDIAN" && reg.ByteOrder != "LITTLE_ENDIAN" {
+		return TemplateModbusRegisterMapping{}, fmt.Errorf("unsupported byteOrder %q", reg.ByteOrder)
+	}
+	if reg.WordOrder != "BIG_ENDIAN" && reg.WordOrder != "LITTLE_ENDIAN" {
+		return TemplateModbusRegisterMapping{}, fmt.Errorf("unsupported wordOrder %q", reg.WordOrder)
+	}
+	if reg.RawType == "BIT_BOOL" {
+		if reg.BitIndex == nil || *reg.BitIndex < 0 || *reg.BitIndex > 15 {
+			return TemplateModbusRegisterMapping{}, errors.New("bitIndex must be in [0,15] for BIT_BOOL")
+		}
+	} else if reg.BitIndex != nil {
+		return TemplateModbusRegisterMapping{}, errors.New("bitIndex is only valid for BIT_BOOL")
+	}
+	if !isFiniteFloat(reg.Scale) || reg.Scale == 0 {
+		return TemplateModbusRegisterMapping{}, errors.New("scale must be finite and non-zero")
+	}
+	if !isFiniteFloat(reg.Offset) {
+		return TemplateModbusRegisterMapping{}, errors.New("offset must be finite")
+	}
+	if reg.Offset == 0 {
+		reg.Offset = 0
+	}
+	switch reg.PollPriority {
+	case "VERY_HIGH", "HIGH", "MEDIUM", "LOW":
+	default:
+		return TemplateModbusRegisterMapping{}, fmt.Errorf("unsupported pollPriority %q", reg.PollPriority)
+	}
+	if reg.RawType == "ENUM16" {
+		if len(reg.EnumMap) == 0 {
+			return TemplateModbusRegisterMapping{}, errors.New("enumMap must be non-empty for ENUM16")
+		}
+		cleanedEnum := make(map[string]string, len(reg.EnumMap))
+		for rawK, rawV := range reg.EnumMap {
+			k := strings.TrimSpace(rawK)
+			v := strings.TrimSpace(rawV)
+			if k == "" || containsControlChar(k) {
+				return TemplateModbusRegisterMapping{}, errors.New("enumMap key must be non-empty")
+			}
+			if _, dup := cleanedEnum[k]; dup {
+				return TemplateModbusRegisterMapping{}, fmt.Errorf("duplicate enumMap key %q", k)
+			}
+			if v == "" || utf8.RuneCountInString(v) > 64 || containsControlChar(v) {
+				return TemplateModbusRegisterMapping{}, fmt.Errorf("enumMap[%q] value must be 1..64 characters", k)
+			}
+			cleanedEnum[k] = v
+		}
+		reg.EnumMap = cleanedEnum
+	} else if len(reg.EnumMap) > 0 {
+		return TemplateModbusRegisterMapping{}, errors.New("enumMap is only valid for ENUM16")
+	}
+	return reg, nil
 }
 
 func validIdentifierToken(value string, maxBytes int) bool {
