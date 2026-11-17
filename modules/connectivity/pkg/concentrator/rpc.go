@@ -21,6 +21,7 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 )
 
@@ -43,6 +44,8 @@ type TransportConfig struct {
 	ServerName string
 	RPCTimeout time.Duration
 	Logger     *slog.Logger
+	Metrics    *observability.Registry
+	PacketHook func(direction, channel, gatewayID, topic, traceID string, payload []byte)
 }
 
 func DownlinkTopic(gatewayID string) string {
@@ -71,6 +74,8 @@ type MQTTTransport struct {
 	stopCancel        context.CancelFunc
 	timeout           time.Duration
 	logger            *slog.Logger
+	metrics           *observability.Registry
+	packetHook        func(direction, channel, gatewayID, topic, traceID string, payload []byte)
 	manager           *autopaho.ConnectionManager
 	connTracker       adapter.MQTTConnTracker
 	subscribeBackoffs []time.Duration
@@ -85,8 +90,9 @@ type MQTTTransport struct {
 	readyOnce bool
 	readyCh   chan struct{}
 
-	mu      sync.Mutex
-	waiters map[waiterKey]chan RPCResponse
+	mu           sync.Mutex
+	waiters      map[waiterKey]chan RPCResponse
+	waiterTraces map[waiterKey]string
 }
 
 func NewMQTTTransport(ctx context.Context, cfg TransportConfig) (*MQTTTransport, error) {
@@ -124,9 +130,12 @@ func newMQTTTransport(ctx context.Context, cfg TransportConfig, reconnectBackoff
 		stopCancel:        stopCancel,
 		timeout:           timeout,
 		logger:            logger,
+		metrics:           cfg.Metrics,
+		packetHook:        cfg.PacketHook,
 		subscribeBackoffs: subscribeBackoffs,
 		readyCh:           make(chan struct{}),
 		waiters:           map[waiterKey]chan RPCResponse{},
+		waiterTraces:      map[waiterKey]string{},
 	}
 
 	clientConfig := autopaho.ClientConfig{
@@ -278,11 +287,30 @@ func (t *MQTTTransport) WaitReady(ctx context.Context) error {
 	}
 }
 
+func (t *MQTTTransport) recordPacket(direction, channel, gatewayID, topic, traceID string, payload []byte) {
+	if t == nil || t.packetHook == nil {
+		return
+	}
+	t.packetHook(direction, channel, gatewayID, topic, traceID, payload)
+}
+
+func (t *MQTTTransport) recordRPCOutcome(outcome string, started time.Time) {
+	if t == nil || t.metrics == nil {
+		return
+	}
+	labels := map[string]string{"outcome": outcome}
+	_ = t.metrics.AddCounter("hvac_mqtt_concentrator_rpc_total", "Concentrator MQTT RPC calls by outcome.", labels, 1)
+	_ = t.metrics.ObserveHistogram("hvac_mqtt_concentrator_rpc_duration_seconds", "Concentrator MQTT RPC duration.", labels, time.Since(started).Seconds(), nil)
+}
+
 func (t *MQTTTransport) Call(ctx context.Context, req RPCRequest) (RPCResponse, error) {
+	started := time.Now()
 	if t == nil || t.manager == nil {
+		t.recordRPCOutcome("failed", started)
 		return RPCResponse{}, ErrTransportUnavailable
 	}
 	if ctx.Err() != nil {
+		t.recordRPCOutcome("timed_out", started)
 		return RPCResponse{}, ErrRPCTimeout
 	}
 	timeout := t.timeout
@@ -292,6 +320,7 @@ func (t *MQTTTransport) Call(ctx context.Context, req RPCRequest) (RPCResponse, 
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
+			t.recordRPCOutcome("timed_out", started)
 			return RPCResponse{}, ErrRPCTimeout
 		}
 		if remaining < timeout {
@@ -299,47 +328,66 @@ func (t *MQTTTransport) Call(ctx context.Context, req RPCRequest) (RPCResponse, 
 		}
 	}
 	if !t.Subscribed() {
+		t.recordRPCOutcome("failed", started)
 		return RPCResponse{}, fmt.Errorf("%w: reply subscription inactive", ErrTransportUnavailable)
 	}
 	req.ExpireAt = time.Now().UTC().Add(timeout).UnixMilli()
 	payload, err := json.Marshal(req)
 	if err != nil {
+		t.recordRPCOutcome("failed", started)
 		return RPCResponse{}, fmt.Errorf("encode concentrator RPC request: %w", err)
 	}
 
+	traceID := observability.TraceID(ctx)
 	key := waiterKey{gatewayID: req.GatewayID, requestID: req.RequestID}
 	ch := make(chan RPCResponse, 1)
 	t.mu.Lock()
+	if t.waiters == nil {
+		t.waiters = map[waiterKey]chan RPCResponse{}
+	}
+	if t.waiterTraces == nil {
+		t.waiterTraces = map[waiterKey]string{}
+	}
 	t.waiters[key] = ch
+	if traceID != "" {
+		t.waiterTraces[key] = traceID
+	}
 	t.mu.Unlock()
 	defer func() {
 		t.mu.Lock()
 		delete(t.waiters, key)
+		delete(t.waiterTraces, key)
 		t.mu.Unlock()
 	}()
 
+	topic := DownlinkTopic(req.GatewayID)
 	expirySeconds := concentratorMessageExpirySeconds(timeout)
 	pubCtx, pubCancel := context.WithTimeout(ctx, 5*time.Second)
 	_, pubErr := t.manager.Publish(pubCtx, &paho.Publish{
 		QoS:        1,
 		Retain:     false,
-		Topic:      DownlinkTopic(req.GatewayID),
+		Topic:      topic,
 		Payload:    payload,
 		Properties: &paho.PublishProperties{MessageExpiry: &expirySeconds},
 	})
 	pubCancel()
 	if pubErr != nil {
+		t.recordRPCOutcome("failed", started)
 		return RPCResponse{}, fmt.Errorf("%w: %v", ErrTransportUnavailable, pubErr)
 	}
+	t.recordPacket("DOWNLINK", "CONCENTRATOR", req.GatewayID, topic, traceID, payload)
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case resp := <-ch:
+		t.recordRPCOutcome("success", started)
 		return resp, nil
 	case <-timer.C:
+		t.recordRPCOutcome("timed_out", started)
 		return RPCResponse{}, ErrRPCTimeout
 	case <-ctx.Done():
+		t.recordRPCOutcome("timed_out", started)
 		return RPCResponse{}, ErrRPCTimeout
 	}
 }
@@ -374,10 +422,34 @@ func (t *MQTTTransport) onReply(received paho.PublishReceived) (bool, error) {
 	if received.Packet == nil {
 		return false, nil
 	}
+	if gatewayID, ok := ParseReplyTopic(received.Packet.Topic); ok {
+		traceID := t.lookupReplyTraceID(gatewayID, received.Packet.Payload)
+		t.recordPacket("UPLINK", "CONCENTRATOR", gatewayID, received.Packet.Topic, traceID, received.Packet.Payload)
+	}
 	if !t.DeliverReply(received.Packet.Topic, received.Packet.Payload) {
 		return false, nil
 	}
 	return true, nil
+}
+
+func (t *MQTTTransport) lookupReplyTraceID(gatewayID string, payload []byte) string {
+	if t == nil || t.packetHook == nil || len(payload) == 0 || len(payload) > maxReplyPayloadSize {
+		return ""
+	}
+	var header struct {
+		GatewayID string `json:"gatewayId"`
+		RequestID string `json:"requestId"`
+	}
+	if err := json.Unmarshal(payload, &header); err != nil {
+		return ""
+	}
+	if header.GatewayID != gatewayID || !uuidV7Pattern.MatchString(header.RequestID) {
+		return ""
+	}
+	t.mu.Lock()
+	traceID := t.waiterTraces[waiterKey{gatewayID: gatewayID, requestID: header.RequestID}]
+	t.mu.Unlock()
+	return traceID
 }
 
 func (t *MQTTTransport) DeliverReply(topic string, payload []byte) bool {

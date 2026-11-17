@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/packets"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
@@ -1149,4 +1150,193 @@ func TestServiceOfflineStagingBaselineTimeoutModbusRenameEIDClearAndSerializatio
 				shadow.Desired.ConcentratorConfigs["1"].Params.RfTxPower, shadow.Reported.ConcentratorConfigs["1"].Params.RfTxPower)
 		}
 	})
+}
+
+func TestMQTTTransportMetricsAndPacketHook(t *testing.T) {
+	cfg, serverTLS := writeConcentratorTestPKI(t)
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", serverTLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	cfg.BrokerURL = "tls://" + listener.Addr().String()
+
+	var dropReply atomic.Bool
+	go func() {
+		for {
+			c, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func(sc net.Conn) {
+				defer sc.Close()
+				pkt, err := packets.ReadPacket(sc)
+				if err != nil || pkt.Type != packets.CONNECT {
+					return
+				}
+				connack := packets.NewControlPacket(packets.CONNACK)
+				connack.Content.(*packets.Connack).SessionPresent = false
+				if _, err := connack.WriteTo(sc); err != nil {
+					return
+				}
+				for {
+					p, err := packets.ReadPacket(sc)
+					if err != nil {
+						return
+					}
+					switch p.Type {
+					case packets.SUBSCRIBE:
+						sub := p.Content.(*packets.Subscribe)
+						suback := packets.NewControlPacket(packets.SUBACK)
+						sa := suback.Content.(*packets.Suback)
+						sa.PacketID = sub.PacketID
+						for range sub.Subscriptions {
+							sa.Reasons = append(sa.Reasons, 1)
+						}
+						_, _ = suback.WriteTo(sc)
+					case packets.PUBLISH:
+						pub := p.Content.(*packets.Publish)
+						puback := packets.NewControlPacket(packets.PUBACK)
+						puback.Content.(*packets.Puback).PacketID = pub.PacketID
+						_, _ = puback.WriteTo(sc)
+						if dropReply.Load() {
+							continue
+						}
+						var req RPCRequest
+						if err := json.Unmarshal(pub.Payload, &req); err == nil {
+							replyBytes, _ := json.Marshal(RPCResponse{
+								SchemaVersion: rpcSchemaVersion,
+								RequestID:     req.RequestID,
+								GatewayID:     req.GatewayID,
+								UnitID:        req.UnitID,
+								Operation:     req.Operation,
+								Status:        "OK",
+							})
+							replyPkt := packets.NewControlPacket(packets.PUBLISH)
+							rp := replyPkt.Content.(*packets.Publish)
+							rp.Topic = "hvac/v1/" + req.GatewayID + "/up/concentrator"
+							rp.Payload = replyBytes
+							rp.QoS = 1
+							rp.PacketID = 77
+							_, _ = replyPkt.WriteTo(sc)
+						}
+					case packets.PINGREQ:
+						_, _ = packets.NewControlPacket(packets.PINGRESP).WriteTo(sc)
+					}
+				}
+			}(c)
+		}
+	}()
+
+	type tappedPacket struct {
+		direction string
+		channel   string
+		gatewayID string
+		topic     string
+		traceID   string
+		payload   string
+	}
+	var tappedMu sync.Mutex
+	var tapped []tappedPacket
+
+	registry := observability.NewRegistry()
+	cfg.Metrics = registry
+	cfg.RPCTimeout = 100 * time.Millisecond
+	cfg.PacketHook = func(direction, channel, gatewayID, topic, traceID string, payload []byte) {
+		tappedMu.Lock()
+		tapped = append(tapped, tappedPacket{
+			direction: direction,
+			channel:   channel,
+			gatewayID: gatewayID,
+			topic:     topic,
+			traceID:   traceID,
+			payload:   string(payload),
+		})
+		tappedMu.Unlock()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tr, err := NewMQTTTransport(ctx, cfg)
+	if err != nil {
+		t.Fatalf("NewMQTTTransport: %v", err)
+	}
+	defer func() {
+		shutCtx, shutCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer shutCancel()
+		_ = tr.Close(shutCtx)
+	}()
+
+	// Before subscription ready -> failed outcome.
+	if _, err := tr.Call(context.Background(), RPCRequest{
+		SchemaVersion: rpcSchemaVersion,
+		RequestID:     "018f3d00-3000-7000-8000-000000000010",
+		GatewayID:     testGatewayID(),
+		UnitID:        1,
+		Operation:     OperationReadStatus,
+	}); !errors.Is(err, ErrTransportUnavailable) {
+		t.Fatalf("unsubscribed Call err=%v, want ErrTransportUnavailable", err)
+	}
+
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer waitCancel()
+	if err := tr.WaitReady(waitCtx); err != nil {
+		t.Fatalf("WaitReady: %v", err)
+	}
+
+	tracer := observability.NewTracer("concentrator-test", nil)
+	const wantTrace = "0123456789abcdef0123456789abcdef"
+	callCtx := observability.ContextWithRemoteParent(context.Background(), tracer, "00-"+wantTrace+"-0000000000000001-01", "")
+	resp, err := tr.Call(callCtx, RPCRequest{
+		SchemaVersion: rpcSchemaVersion,
+		RequestID:     "018f3d00-3000-7000-8000-000000000011",
+		GatewayID:     testGatewayID(),
+		UnitID:        1,
+		Operation:     OperationReadStatus,
+	})
+	if err != nil || resp.Status != "OK" {
+		t.Fatalf("success Call=(%+v, %v)", resp, err)
+	}
+
+	dropReply.Store(true)
+	if _, err := tr.Call(context.Background(), RPCRequest{
+		SchemaVersion: rpcSchemaVersion,
+		RequestID:     "018f3d00-3000-7000-8000-000000000012",
+		GatewayID:     testGatewayID(),
+		UnitID:        1,
+		Operation:     OperationReadStatus,
+	}); !errors.Is(err, ErrRPCTimeout) {
+		t.Fatalf("timed-out Call err=%v, want ErrRPCTimeout", err)
+	}
+
+	tappedMu.Lock()
+	packetsCopy := append([]tappedPacket(nil), tapped...)
+	tappedMu.Unlock()
+	if len(packetsCopy) < 3 {
+		t.Fatalf("expected >= 3 tapped packets (downlink+uplink for success, downlink for timeout), got %#v", packetsCopy)
+	}
+	if packetsCopy[0].direction != "DOWNLINK" || packetsCopy[0].channel != "CONCENTRATOR" || packetsCopy[0].gatewayID != testGatewayID() ||
+		packetsCopy[0].topic != DownlinkTopic(testGatewayID()) || packetsCopy[0].traceID != wantTrace {
+		t.Fatalf("unexpected downlink packet[0]: %#v", packetsCopy[0])
+	}
+	if packetsCopy[1].direction != "UPLINK" || packetsCopy[1].channel != "CONCENTRATOR" || packetsCopy[1].gatewayID != testGatewayID() ||
+		packetsCopy[1].topic != "hvac/v1/"+testGatewayID()+"/up/concentrator" || packetsCopy[1].traceID != wantTrace {
+		t.Fatalf("unexpected uplink packet[1]: %#v", packetsCopy[1])
+	}
+
+	rec := httptest.NewRecorder()
+	registry.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, want := range []string{
+		`hvac_mqtt_concentrator_rpc_total{outcome="success"} 1`,
+		`hvac_mqtt_concentrator_rpc_total{outcome="failed"} 1`,
+		`hvac_mqtt_concentrator_rpc_total{outcome="timed_out"} 1`,
+		`hvac_mqtt_concentrator_rpc_duration_seconds_count{outcome="success"} 1`,
+		`hvac_mqtt_concentrator_rpc_duration_seconds_count{outcome="failed"} 1`,
+		`hvac_mqtt_concentrator_rpc_duration_seconds_count{outcome="timed_out"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q in concentrator metrics:\n%s", want, body)
+		}
+	}
 }
