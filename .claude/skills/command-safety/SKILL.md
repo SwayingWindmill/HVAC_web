@@ -7,7 +7,7 @@ description: Exhaustively model-check command intent, execution fence, MQTT comm
 
 Run the exhaustive explicit-state model checker (`modules/command/pkg/commandformal`) against real production transition decisions in `commandservice`, `mqttconnector`, and aligned SQL predicates in `postgres_*.go` / `connectivity/store.go`.
 
-- **Base syncCommit**: `039c42e5fd85637cd00d13a39961bc3fa8992c15`
+- **Base syncCommit**: `d4fc21c546e450b8ad8d8ac827dd05151cc0056e`
 
 ## Quick Run
 
@@ -62,7 +62,7 @@ If any invariant or mutation test fails, the runner prints the shortest failing 
 When modifying any covered file, inspect changes since `syncCommit`:
 
 ```bash
-git diff 039c42e5fd85637cd00d13a39961bc3fa8992c15 -- libs/commandmodel/ modules/command/pkg/commandservice/ modules/command/pkg/mqttconnector/connector.go modules/connectivity/pkg/connectivity/store.go
+git diff d4fc21c546e450b8ad8d8ac827dd05151cc0056e -- libs/commandmodel/ modules/command/pkg/commandservice/ modules/command/pkg/mqttconnector/connector.go modules/connectivity/pkg/connectivity/store.go
 ```
 
 If transitions, SQL guards, or recovery batch limits change:
