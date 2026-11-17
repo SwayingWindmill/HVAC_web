@@ -670,3 +670,233 @@ SELECT available FROM telemetry_runtime.observation_coverage WHERE device_id = $
 		t.Fatal("child coverage regressed after stale session 1 LWT")
 	}
 }
+
+func TestPostgresCoverageHeartbeatDoesNotOverwriteDisconnectedGateway(t *testing.T) {
+	store, adminPool, _ := openP0TelemetryPostgresFixture(t)
+	ctx := context.Background()
+
+	const gw2 = "0199a000-2000-7000-8000-000000000002"
+	sourceIDs := []string{p0TestGateway, gw2}
+	cleanupExtra := func() {
+		statements := []struct {
+			sql  string
+			args []any
+		}{
+			{`DELETE FROM telemetry_runtime.telemetry_publication_outbox WHERE device_id = $1::uuid`, []any{gw2}},
+			{`DELETE FROM telemetry_runtime.telemetry_history_outbox WHERE payload ->> 'source_id' = ANY($1::text[])`, []any{sourceIDs}},
+			{`DELETE FROM telemetry_runtime.source_delivery_evidence WHERE source_id = ANY($1::text[])`, []any{sourceIDs}},
+			{`DELETE FROM telemetry_runtime.ingest_quarantine WHERE source_id = ANY($1::text[])`, []any{sourceIDs}},
+			{`DELETE FROM telemetry_runtime.presence_signals WHERE device_id = $1::uuid`, []any{gw2}},
+			{`DELETE FROM telemetry_runtime.source_observations WHERE source_id = ANY($1::text[])`, []any{sourceIDs}},
+			{`DELETE FROM telemetry_runtime.source_positions WHERE source_id = ANY($1::text[])`, []any{sourceIDs}},
+			{`DELETE FROM telemetry_runtime.latest_accepted_telemetry WHERE device_id = $1::uuid`, []any{gw2}},
+			{`DELETE FROM telemetry_runtime.observation_coverage WHERE device_id = $1::uuid`, []any{gw2}},
+			{`DELETE FROM telemetry_runtime.device_presence WHERE device_id = $1::uuid`, []any{gw2}},
+			{`DELETE FROM telemetry_runtime.device_observation_snapshots WHERE device_id = $1::uuid`, []any{gw2}},
+			{`DELETE FROM telemetry_runtime.mqtt_runtime_events WHERE gateway_id = ANY($1::text[])`, []any{sourceIDs}},
+			{`DELETE FROM telemetry_runtime.freshness_policies WHERE device_id = $1::uuid`, []any{gw2}},
+			{`DELETE FROM telemetry_runtime.presence_policies WHERE device_id = $1::uuid`, []any{gw2}},
+			{`DELETE FROM telemetry_runtime.devices WHERE device_id = $1::uuid`, []any{gw2}},
+		}
+		for _, stmt := range statements {
+			if _, execErr := adminPool.Exec(ctx, stmt.sql, stmt.args...); execErr != nil {
+				t.Logf("extra cleanup warning (%s): %v", stmt.sql, execErr)
+			}
+		}
+	}
+	cleanupExtra()
+	t.Cleanup(cleanupExtra)
+
+	seedTime := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
+	if _, err := adminPool.Exec(ctx, `
+INSERT INTO telemetry_runtime.devices (device_id, tenant_id, site_id, updated_at)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4)`,
+		gw2, p0TestTenantID, p0TestSiteID, seedTime); err != nil {
+		t.Fatalf("seed gw2 device: %v", err)
+	}
+	if _, err := adminPool.Exec(ctx, `
+INSERT INTO telemetry_runtime.presence_policies (
+  device_id, policy_revision, online_within_seconds, offline_after_seconds,
+  coverage_required, accepted_signal_types, max_future_clock_skew_seconds,
+  max_source_lag_seconds, updated_at
+) VALUES ($1::uuid, 1, 60, 180, true, ARRAY['SOURCE_ACTIVITY', 'EXPLICIT_CONNECT', 'EXPLICIT_DISCONNECT']::text[], 30, 600, $2)`,
+		gw2, seedTime); err != nil {
+		t.Fatalf("seed gw2 presence policy: %v", err)
+	}
+
+	assertCoverageAndSnapshot := func(label, deviceID string, wantAvailable bool, wantReason string) {
+		t.Helper()
+		var available bool
+		var reason *string
+		if err := adminPool.QueryRow(ctx, `
+SELECT available, reason_code
+FROM telemetry_runtime.observation_coverage
+WHERE device_id = $1::uuid`,
+			deviceID).Scan(&available, &reason); err != nil {
+			t.Fatalf("%s: read observation_coverage(%s): %v", label, deviceID, err)
+		}
+		gotReason := ""
+		if reason != nil {
+			gotReason = *reason
+		}
+		if available != wantAvailable || gotReason != wantReason {
+			t.Fatalf("%s: coverage(%s) = (available=%v, reason=%q), want (available=%v, reason=%q)",
+				label, deviceID, available, gotReason, wantAvailable, wantReason)
+		}
+
+		var snapAvailability string
+		var snapReason *string
+		if err := adminPool.QueryRow(ctx, `
+SELECT evaluation_availability, availability_reasons[1]
+FROM telemetry_runtime.device_observation_snapshots
+WHERE device_id = $1::uuid`,
+			deviceID).Scan(&snapAvailability, &snapReason); err != nil {
+			t.Fatalf("%s: read snapshot(%s): %v", label, deviceID, err)
+		}
+		wantSnapAvailability := "UNAVAILABLE"
+		if wantAvailable {
+			wantSnapAvailability = "AVAILABLE"
+		}
+		gotSnapReason := ""
+		if snapReason != nil {
+			gotSnapReason = *snapReason
+		}
+		if snapAvailability != wantSnapAvailability || gotSnapReason != wantReason {
+			t.Fatalf("%s: snapshot(%s) = (%q, %q), want (%q, %q)",
+				label, deviceID, snapAvailability, gotSnapReason, wantSnapAvailability, wantReason)
+		}
+	}
+
+	t0 := time.Date(2026, 11, 16, 13, 0, 0, 0, time.UTC)
+	s1GW1 := "0199a000-9000-7000-8000-000000000001"
+	s1GW2 := "0199a000-9000-7000-8000-000000000002"
+	s2GW1 := "0199a000-9000-7000-8000-000000000003"
+	s3GW1 := "0199a000-9000-7000-8000-000000000004"
+
+	emitGatewayEvent := func(gw, msgID string, seq int64, eventType string, eventTime, receivedAt time.Time, severity, data string, coverageIDs []string) {
+		t.Helper()
+		if err := store.AcceptRuntimeEvent(ctx, RuntimeEventEvidence{
+			TenantID: p0TestTenantID, SiteID: p0TestSiteID, GatewayID: gw,
+			MessageID: msgID, Sequence: seq,
+			EventType: eventType, SourceType: "GATEWAY", SourceID: gw,
+			EventTime: eventTime, Severity: severity,
+			Data: json.RawMessage(data), ReceivedAt: receivedAt,
+			Device:            &ResolvedDevice{TenantID: p0TestTenantID, SiteID: p0TestSiteID, DeviceID: gw},
+			CoverageDeviceIDs: coverageIDs,
+		}); err != nil {
+			t.Fatalf("%s (%s): %v", eventType, gw, err)
+		}
+	}
+
+	emitGatewayEvent(p0TestGateway, "0199a000-9100-7000-8000-000000000001", 1, "GATEWAY_CONNECTED", t0.Add(time.Millisecond), t0.Add(time.Second), "INFO", `{"sessionId":"`+s1GW1+`"}`, []string{p0TestDevice1})
+	emitGatewayEvent(gw2, "0199a000-9100-7000-8000-000000000002", 1, "GATEWAY_CONNECTED", t0.Add(time.Millisecond), t0.Add(time.Second), "INFO", `{"sessionId":"`+s1GW2+`"}`, []string{p0TestDevice2})
+	assertCoverageAndSnapshot("initial-child1", p0TestDevice1, true, "")
+	assertCoverageAndSnapshot("initial-child2", p0TestDevice2, true, "")
+
+	gapReason := "OBSERVATION_COVERAGE_GAP"
+	if err := store.ReportSourceCoverage(ctx, SourceCoverageReport{
+		SourceID: "connectivity-1", DeviceIDs: []string{p0TestDevice2},
+		GatewayScopes: []GatewayCoverageScope{{GatewayID: gw2, DeviceIDs: []string{p0TestDevice2}}},
+		Available:     false, ReasonCode: &gapReason, ObservedAt: t0.Add(10 * time.Second), SourceRevision: 2,
+	}); err != nil {
+		t.Fatalf("set child2 gap: %v", err)
+	}
+	assertCoverageAndSnapshot("child2-gap", p0TestDevice2, false, "OBSERVATION_COVERAGE_GAP")
+
+	emitGatewayEvent(p0TestGateway, "0199a000-9100-7000-8000-000000000003", 2, "LWT", t0, t0.Add(30*time.Second), "WARNING", `{"reason":"broker_connection_lost","sessionId":"`+s1GW1+`"}`, []string{p0TestDevice1})
+	assertCoverageAndSnapshot("child1-after-lwt", p0TestDevice1, false, "SOURCE_UNAVAILABLE")
+
+	if err := store.ReportSourceCoverage(ctx, SourceCoverageReport{
+		SourceID:  "connectivity-1",
+		DeviceIDs: []string{p0TestDevice1, p0TestDevice2},
+		GatewayScopes: []GatewayCoverageScope{
+			{GatewayID: p0TestGateway, DeviceIDs: []string{p0TestDevice1}},
+			{GatewayID: gw2, DeviceIDs: []string{p0TestDevice2}},
+		},
+		Available: true, ObservedAt: t0.Add(60 * time.Second), SourceRevision: 10,
+	}); err != nil {
+		t.Fatalf("mixed heartbeat ReportSourceCoverage: %v", err)
+	}
+	assertCoverageAndSnapshot("child1-spared-by-heartbeat", p0TestDevice1, false, "SOURCE_UNAVAILABLE")
+	assertCoverageAndSnapshot("child2-restored-by-heartbeat", p0TestDevice2, true, "")
+
+	if err := store.ReportSourceCoverage(ctx, SourceCoverageReport{
+		SourceID:      "connectivity-1",
+		DeviceIDs:     []string{p0TestDevice1},
+		GatewayScopes: []GatewayCoverageScope{{GatewayID: p0TestGateway, DeviceIDs: []string{p0TestDevice1}}},
+		Available:     true, ObservedAt: t0.Add(65 * time.Second), SourceRevision: 11,
+	}); err != nil {
+		t.Fatalf("disconnected-only heartbeat: %v", err)
+	}
+	assertCoverageAndSnapshot("child1-still-unavailable", p0TestDevice1, false, "SOURCE_UNAVAILABLE")
+
+	emitGatewayEvent(p0TestGateway, "0199a000-9100-7000-8000-000000000004", 3, "GATEWAY_CONNECTED", t0.Add(90*time.Second), t0.Add(91*time.Second), "INFO", `{"sessionId":"`+s2GW1+`"}`, nil)
+	if err := store.ReportSourceCoverage(ctx, SourceCoverageReport{
+		SourceID:  "connectivity-1",
+		DeviceIDs: []string{p0TestDevice1, p0TestDevice2},
+		GatewayScopes: []GatewayCoverageScope{
+			{GatewayID: p0TestGateway, DeviceIDs: []string{p0TestDevice1}},
+			{GatewayID: gw2, DeviceIDs: []string{p0TestDevice2}},
+		},
+		Available: true, ObservedAt: t0.Add(95 * time.Second), SourceRevision: 12,
+	}); err != nil {
+		t.Fatalf("reconnect recovery heartbeat: %v", err)
+	}
+	assertCoverageAndSnapshot("child1-recovered-after-reconnect", p0TestDevice1, true, "")
+
+	emitGatewayEvent(p0TestGateway, "0199a000-9100-7000-8000-000000000005", 4, "LWT", t0.Add(90*time.Second), t0.Add(110*time.Second), "WARNING", `{"reason":"broker_connection_lost","sessionId":"`+s2GW1+`"}`, []string{p0TestDevice1})
+	assertCoverageAndSnapshot("child1-after-second-lwt", p0TestDevice1, false, "SOURCE_UNAVAILABLE")
+
+	cel := "Cel"
+	receipts, err := store.AcceptObservationBatch(ctx, []ObservationCandidate{{
+		SourceID: p0TestGateway, SourcePath: SourcePathPush,
+		Device:             &ResolvedDevice{TenantID: p0TestTenantID, SiteID: p0TestSiteID, DeviceID: p0TestDevice1},
+		Point:              &ResolvedPoint{PointID: p0TestPoint1A, PointType: "TELEMETRY", ValueType: "NUMBER", Unit: &cel, PointRevision: 1},
+		ExternalEntityType: "DEVICE", ExternalID: "DEV-1", TelemetryKey: "zone.temperature",
+		Value: json.RawMessage(`21.5`), ValueType: "NUMBER", Unit: &cel,
+		SampledAt: t0.Add(120 * time.Second), ReceivedAt: t0.Add(121 * time.Second),
+		Position: SourcePosition{Partition: "p0-cov-live-uplink", Offset: 1, EventID: "0199a000-9200-7000-8000-000000000001"},
+	}})
+	if err != nil || len(receipts) != 1 || receipts[0].Status != ObservationAccepted {
+		t.Fatalf("live uplink receipts=(%+v, err=%v), want 1 ACCEPTED", receipts, err)
+	}
+	if err := store.ReportSourceCoverage(ctx, SourceCoverageReport{
+		SourceID:  "connectivity-1",
+		DeviceIDs: []string{p0TestDevice1, p0TestDevice2},
+		GatewayScopes: []GatewayCoverageScope{
+			{GatewayID: p0TestGateway, DeviceIDs: []string{p0TestDevice1}},
+			{GatewayID: gw2, DeviceIDs: []string{p0TestDevice2}},
+		},
+		Available: true, ObservedAt: t0.Add(125 * time.Second), SourceRevision: 15,
+	}); err != nil {
+		t.Fatalf("uplink recovery heartbeat: %v", err)
+	}
+	assertCoverageAndSnapshot("child1-recovered-after-uplink", p0TestDevice1, true, "")
+
+	if err := store.AcceptRuntimeEvent(ctx, RuntimeEventEvidence{
+		TenantID: p0TestTenantID, SiteID: p0TestSiteID, GatewayID: gw2,
+		MessageID: "0199a000-9100-7000-8000-000000000006", Sequence: 2,
+		EventType: "DEVICE_DISCONNECTED", SourceType: "DEVICE", SourceID: p0TestDevice2,
+		EventTime: t0.Add(130 * time.Second), Severity: "WARNING",
+		Data: json.RawMessage(`{"sessionId":"` + s3GW1 + `"}`), ReceivedAt: t0.Add(131 * time.Second),
+	}); err != nil {
+		t.Fatalf("child DEVICE_DISCONNECTED: %v", err)
+	}
+	if err := store.ReportSourceCoverage(ctx, SourceCoverageReport{
+		SourceID:      "connectivity-1",
+		DeviceIDs:     []string{p0TestDevice2},
+		GatewayScopes: []GatewayCoverageScope{{GatewayID: gw2, DeviceIDs: []string{p0TestDevice2}}},
+		Available:     false, ReasonCode: &gapReason, ObservedAt: t0.Add(132 * time.Second), SourceRevision: 16,
+	}); err != nil {
+		t.Fatalf("set child2 gap after child disconnect: %v", err)
+	}
+	if err := store.ReportSourceCoverage(ctx, SourceCoverageReport{
+		SourceID:      "connectivity-1",
+		DeviceIDs:     []string{p0TestDevice2},
+		GatewayScopes: []GatewayCoverageScope{{GatewayID: gw2, DeviceIDs: []string{p0TestDevice2}}},
+		Available:     true, ObservedAt: t0.Add(135 * time.Second), SourceRevision: 17,
+	}); err != nil {
+		t.Fatalf("recover child2 with child disconnect present: %v", err)
+	}
+	assertCoverageAndSnapshot("child2-unaffected-by-device-disconnect", p0TestDevice2, true, "")
+}

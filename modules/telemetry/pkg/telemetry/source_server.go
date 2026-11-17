@@ -26,12 +26,13 @@ const (
 )
 
 type sourceCoverageReportRequest struct {
-	SourceID       string   `json:"sourceId"`
-	DeviceIDs      []string `json:"deviceIds"`
-	Available      bool     `json:"available"`
-	ReasonCode     *string  `json:"reasonCode,omitempty"`
-	ObservedAt     string   `json:"observedAt,omitempty"`
-	SourceRevision int64    `json:"sourceRevision,omitempty"`
+	SourceID       string                 `json:"sourceId"`
+	DeviceIDs      []string               `json:"deviceIds"`
+	GatewayScopes  []GatewayCoverageScope `json:"gatewayScopes,omitempty"`
+	Available      bool                   `json:"available"`
+	ReasonCode     *string                `json:"reasonCode,omitempty"`
+	ObservedAt     string                 `json:"observedAt,omitempty"`
+	SourceRevision int64                  `json:"sourceRevision,omitempty"`
 }
 
 type sourceObservationBatchRequest struct {
@@ -212,6 +213,7 @@ func (h *handler) handleSourceCoverageReport(writer http.ResponseWriter, request
 	report := SourceCoverageReport{
 		SourceID:       input.SourceID,
 		DeviceIDs:      input.DeviceIDs,
+		GatewayScopes:  input.GatewayScopes,
 		Available:      input.Available,
 		ReasonCode:     cloneString(input.ReasonCode),
 		ObservedAt:     observedAt,

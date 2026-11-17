@@ -1,103 +1,120 @@
-import { spawn, spawnSync } from 'node:child_process';
-import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-
+import { spawnSync } from 'node:child_process';
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import tls from 'node:tls';
 import { runDockerCompose } from './lib/docker-cli.mjs';
 
-const root = resolve(process.cwd());
-const outputDir = resolve(root, process.env.MQTT_ACL_REPORT_DIR ?? 'out/mqtt-broker-acl');
-const pkiDir = join(outputDir, 'pki');
-const reportPath = join(outputDir, 'acl.json');
-const composePath = resolve(root, 'infra/telemetry/mqtt/compose.yaml');
-const projectName = `hvac-mqtt-acl-${process.pid}`;
-const gatewayA = '018f3e00-4000-7000-8000-000000000100';
-const gatewayB = '018f3e00-4000-7000-8000-000000000200';
-const composeEnvironment = { ...process.env, MQTT_PKI_DIR: pkiDir, MQTT_HOST_PORT: '0' };
+const { concat, from } = Buffer;
+const outDir = resolve(process.env.MQTT_ACL_REPORT_DIR ?? 'out/mqtt-broker-acl');
+const pkiDir = join(outDir, 'pki');
+const rpt = join(outDir, 'acl.json');
+const cf = ['-p', `hvac-mqtt-acl-${process.pid}`, '-f', resolve('infra/telemetry/mqtt/compose.yaml')];
+const [GW, ADP, CMD] = ['mqtt-gateway', 'mqtt-adapter', 'command-dispatcher'], GWB = `${GW}-b`;
+const [UT, UC, UR, DC, DN] = ['up/telemetry', 'up/concentrator', 'up/reply', 'down/command', 'down/concentrator'];
+const tp = (n, s) => `hvac/v1/018f3e00-4000-7000-8000-000000000${n}00/${s}`;
+const env = { ...process.env, MQTT_PKI_DIR: pkiDir, MQTT_HOST_PORT: '0' };
+const now = () => new Date().toISOString();
+const eq = (x, y, m) => { if (x.length !== y.length || x.some((v, i) => v !== y[i])) throw new Error(`${m}: ${x}`); };
+const run = (c, a) => {
+  const r = spawnSync(c, a, { env, encoding: 'utf8', windowsHide: true });
+  if (r.error || r.status) throw new Error(`${c}: ${r.error?.message ?? r.stderr?.trim() ?? r.status}`);
+  return (r.stdout ?? '').trim();
+};
+const compose = (args) => runDockerCompose(run, [...cf, ...args]);
+const down = () => { try { compose(['down', '-v', '--remove-orphans']); } catch {} };
+const rd = (f) => readFile(join(pkiDir, f));
+const u8 = (s) => [0, s.length, ...from(s)];
+const pkt = (t, b) => from([t, b.length, ...b]);
+const socks = new Set(), creds = {};
+let port, ca;
 
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
-  if (result.error || result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} failed: ${result.error?.message ?? result.stderr?.trim() ?? result.status}`);
-  }
-  return String(result.stdout ?? '').trim();
+async function mqtt(id, initPkt, onPkt) {
+  const c = creds[id] ??= { cert: await rd(`${id}-cert.pem`), key: await rd(`${id}-key.pem`) };
+  let buf = Buffer.alloc(0);
+  const s = tls.connect({ host: '127.0.0.1', port, ca, ...c, servername: 'localhost' }, () =>
+    s.write(pkt(16, [...u8('MQTT'), 5, 2, 0, 60, 0, ...u8(id + Math.random())])),
+  );
+  socks.add(s);
+  s.on('error', (e) => onPkt(0, 0, e, s));
+  s.on('data', (d) => {
+    for (buf = concat([buf, d]); buf.length >= 2;) {
+      let i = 1, m = 1, l = 0, b;
+      do { if (i >= buf.length) return; b = buf[i++]; l += (b & 127) * m; m *= 128; } while (b & 128);
+      if (buf.length < i + l) return;
+      const [h, p] = [buf[0], buf.subarray(i, i + l)];
+      buf = buf.subarray(i + l);
+      if (h === 32) s.write(initPkt); else onPkt(h >> 4, h & 15, p, s);
+    }
+  });
 }
 
-function compose(args) {
-  return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
+const pub = (id, t) => new Promise((res, rej) => mqtt(id, pkt(0x32, [...u8(t), 0, 1, 0, 123, 125]),
+  (tp, _f, p, s) => !tp ? rej(p) : tp === 4 && (s.end(), res(p[2] ?? 0)),
+).catch(rej));
+
+async function sub(id, filter, n, ms) {
+  let ok, rej, fin, tm;
+  const got = [], subacked = new Promise((r, j) => { ok = r; rej = j; }), done = new Promise((r) => { fin = r; });
+  await mqtt(id, pkt(0x82, [0, 1, 0, ...u8(filter), 1]), (t, fl, p, s) => {
+    const end = () => { clearTimeout(tm); s.end(); fin(got.sort()); };
+    if (!t) { rej(p); end(); }
+    else if (t === 9) { tm = setTimeout(end, ms); ok(); }
+    else if (t === 3) {
+      const tl = p.readUInt16BE(0);
+      got.push(p.toString('utf8', 2, 2 + tl));
+      if (fl & 6) s.write(from([64, 2, p[2 + tl], p[3 + tl]]));
+      if (got.length >= n) end();
+    }
+  });
+  await subacked;
+  return [done];
 }
 
-function clientArgs(identity) {
-  return [
-    '-h', 'localhost', '-p', '8883', '-V', 'mqttv5', '-q', '1',
-    '--cafile', '/mosquitto/config/pki/ca.pem',
-    '--cert', `/mosquitto/config/pki/${identity}-cert.pem`,
-    '--key', `/mosquitto/config/pki/${identity}-key.pem`,
-  ];
-}
-
-function publish(identity, topic) {
-  const result = spawnSync('docker', ['compose', '-p', projectName, '-f', composePath, 'exec', '-T', 'mqtt-broker',
-    'mosquitto_pub', '-d', ...clientArgs(identity), '-t', topic, '-m', '{}'], { cwd: root, env: composeEnvironment, encoding: 'utf8', windowsHide: true });
-  const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-  const reason = /PUBACK[^\n]*?\(?RC:?\s*(\d+)/i.exec(output) ?? /Received PUBACK \(Mid: \d+, RC:(\d+)\)/.exec(output);
-  if (!reason) throw new Error(`no PUBACK from ${identity} publishing ${topic}:\n${output}`);
-  return Number(reason[1]);
-}
-
-const report = { schemaVersion: 1, status: 'failed', startedAt: new Date().toISOString(), assertions: {} };
-let subscriber;
+const report = { schemaVersion: 1, status: 'failed', startedAt: now(), assertions: {} };
 try {
-  await rm(outputDir, { recursive: true, force: true });
+  await rm(outDir, { recursive: true, force: true });
   await mkdir(pkiDir, { recursive: true });
   run(process.execPath, ['scripts/run-go.mjs', 'run', './tools/s0-auth-fixture/cmd/generate-central-plant-pki', pkiDir]);
+  ca = await rd('ca.pem');
   await chmod(join(pkiDir, 'mqtt-broker-key.pem'), 0o644);
-  try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
+  down();
   compose(['up', '-d', '--wait', 'mqtt-broker']);
+  port = +compose(['port', 'mqtt-broker', '8883']).split(':').pop();
 
-  subscriber = spawn('docker', ['compose', '-p', projectName, '-f', composePath, 'exec', '-T', 'mqtt-broker',
-    'mosquitto_sub', ...clientArgs('mqtt-adapter'), '-t', 'hvac/v1/+/up/#', '-v', '-C', '3', '-W', '20'], { cwd: root, env: composeEnvironment, windowsHide: true });
-  let received = '';
-  subscriber.stdout.on('data', (chunk) => { received += chunk.toString(); });
-  const subscriberDone = new Promise((resolveDone) => subscriber.on('exit', resolveDone));
-  await new Promise((resolveWait) => setTimeout(resolveWait, 1500));
+  const a = report.assertions, base = 'hvac/v1/+/up', [sUp, sRep] = [`$share/connectivity/${base}/#`, `$share/command-dispatcher/${base}/reply`];
+  const uplinks = [[GW, tp(1, UT)], [GW, tp(1, UC)], [GWB, tp(2, 'up/event')]], expected = uplinks.map(([, t]) => t).sort();
+  const [s0] = await sub(ADP, `${base}/#`, 3, 15000);
+  for (const [k, id, t, want] of [
+    ['gatewayAOwnTopic', ...uplinks[0], 0], ['gatewayAOwnConcentrator', ...uplinks[1], 0], ['gatewayBOwnTopic', ...uplinks[2], 0],
+    ['gatewayAIntoGatewayB', GW, tp(2, UT), 135], ['gatewayAConcIntoB', GW, tp(2, UC), 135], ['gatewayAIntoDownlink', GW, tp(1, DC), 135],
+    ['gatewayAIntoConcDown', GW, tp(1, DN), 135], ['adapterConcToGatewayB', ADP, tp(2, DN), 16], ['commandsToGatewayB', CMD, tp(2, DC), 16],
+    ['commandsIntoUplink', CMD, tp(1, UT), 135],
+  ]) if ((a[k] = await pub(id, t)) !== want) throw new Error(`${k}: ${a[k]}`);
+  eq(a.connectivityReceived = await s0, expected, 'uplinks');
 
-  report.assertions.gatewayAOwnTopic = publish('mqtt-gateway', `hvac/v1/${gatewayA}/up/telemetry`);
-  report.assertions.gatewayAOwnConcentrator = publish('mqtt-gateway', `hvac/v1/${gatewayA}/up/concentrator`);
-  report.assertions.gatewayBOwnTopic = publish('mqtt-gateway-b', `hvac/v1/${gatewayB}/up/event`);
-  report.assertions.gatewayAIntoGatewayB = publish('mqtt-gateway', `hvac/v1/${gatewayB}/up/telemetry`);
-  report.assertions.gatewayAConcIntoB = publish('mqtt-gateway', `hvac/v1/${gatewayB}/up/concentrator`);
-  report.assertions.gatewayAIntoDownlink = publish('mqtt-gateway', `hvac/v1/${gatewayA}/down/command`);
-  report.assertions.gatewayAIntoConcDown = publish('mqtt-gateway', `hvac/v1/${gatewayA}/down/concentrator`);
-  report.assertions.adapterConcToGatewayB = publish('mqtt-adapter', `hvac/v1/${gatewayB}/down/concentrator`);
-  report.assertions.commandsToGatewayB = publish('command-dispatcher', `hvac/v1/${gatewayB}/down/command`);
-  report.assertions.commandsIntoUplink = publish('command-dispatcher', `hvac/v1/${gatewayA}/up/telemetry`);
-  await subscriberDone;
-  report.assertions.connectivityReceived = received.trim().split('\n').map((line) => line.split(' ')[0]).sort();
+  for (const [k, id, f, pubs, want] of [
+    ['sharedConnectivityReceived', ADP, sUp, uplinks, expected],
+    ['sharedDispatcherReceived', CMD, sRep, [[GWB, tp(2, UR)]], [tp(2, UR)]],
+  ]) {
+    const [done] = await sub(id, f, want.length, 15000);
+    for (const [pId, t] of pubs) if ((await pub(pId, t)) !== 0) throw new Error(`${k}: ${t}`);
+    eq(a[k] = await done, want, k);
+  }
 
-  const a = report.assertions;
-  if (a.gatewayAOwnTopic !== 0 || a.gatewayAOwnConcentrator !== 0 || a.gatewayBOwnTopic !== 0) {
-    throw new Error(`gateway uplink denied: ${JSON.stringify(a)}`);
-  }
-  if (a.gatewayAIntoGatewayB !== 135 || a.gatewayAConcIntoB !== 135 || a.gatewayAIntoDownlink !== 135 || a.gatewayAIntoConcDown !== 135) {
-    throw new Error(`gateway escaped confinement: ${JSON.stringify(a)}`);
-  }
-  if (a.adapterConcToGatewayB !== 16 || a.commandsToGatewayB !== 16 || a.commandsIntoUplink !== 135) {
-    throw new Error(`connectivity downlink ACL broken: ${JSON.stringify(a)}`);
-  }
-  const expected = [`hvac/v1/${gatewayA}/up/concentrator`, `hvac/v1/${gatewayA}/up/telemetry`, `hvac/v1/${gatewayB}/up/event`];
-  if (JSON.stringify(a.connectivityReceived) !== JSON.stringify(expected)) {
-    throw new Error(`adapter missed expected uplinks: ${received}`);
-  }
+  const steals = await Promise.all([sUp, sRep, `$share/steal/${tp(2, 'down/#')}`].map((f) => sub(GW, f, 1, 1500)));
+  for (const [id, t] of [...uplinks, [GWB, tp(2, UR)], [CMD, tp(2, DC)]]) await pub(id, t);
+  eq(a.gatewaySharedStealReceived = (await Promise.all(steals.map(([d]) => d))).flat(), [], 'steal');
+
   report.status = 'passed';
-  console.log(`MQTT broker ACL evidence passed: ${reportPath}`);
+  console.log(`MQTT ACL passed: ${rpt}`);
 } catch (error) {
-  report.error = error instanceof Error ? error.message : String(error);
-  try { report.brokerLogs = compose(['logs', '--no-color', 'mqtt-broker']); } catch {}
+  report.error = String(error);
+  try { report.brokerLogs = compose(['logs']); } catch {}
   throw error;
 } finally {
-  subscriber?.kill();
-  try { compose(['down', '--volumes', '--remove-orphans']); } catch {}
-  report.finishedAt = new Date().toISOString();
-  await mkdir(dirname(reportPath), { recursive: true });
-  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  for (const s of socks) s.destroy();
+  down();
+  report.finishedAt = now();
+  await mkdir(outDir, { recursive: true });
+  await writeFile(rpt, `${JSON.stringify(report, null, 2)}\n`);
 }
