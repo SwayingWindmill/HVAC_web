@@ -112,3 +112,67 @@ test('历史 lists my conversations newest first, and an older one opens with it
   expect(continued?.path).toContain(`/${first!.sessionId}:run`);
   expect(continued?.body).toEqual({ expectedRevision: 2, message: '那 C 机组呢？' });
 });
+
+// #669: an assistant answer containing a pipe table without its GFM divider row still renders as a <table>.
+test('pipe table without a GFM divider row still renders as a table in the assistant panel', async ({ page, gateway }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => {
+    pageErrors.push(error.message);
+  });
+
+  gateway.assistant.reply = {
+    tools: ['energy_compare_periods'],
+    text: [
+      '**今天（10 月 21 日）到 10:41 为止的电费是 230.09 元，比昨天全天的 1423.48 元少，不过今天还没过完，不能直接和昨天比。**\n\n',
+      '| 日期 | 用电量 | 估算电费 |\n',
+      '| 10 月 20 日（全天） | 1691 kWh | 1423.48 元 |\n',
+      '| 10 月 21 日（到 10:41） | 403 kWh | 230.09 元 |',
+    ],
+    finding: {
+      outcome: 'SUPPORTED_FINDING',
+      keyFigures: [
+        { label: '今日电费', value: '230.09', unit: '元' },
+        { label: '昨日全天', value: '1423.48', unit: '元' },
+      ],
+      evidenceRefs: [],
+      limitations: ['今天尚未过完，仅统计到 10:41。'],
+      recommendedNext: [],
+    },
+  };
+
+  await page.goto(`/energy-analysis/consumption?site=${SITE_ID}`);
+  await page.getByRole('button', { name: 'AI 助手' }).click();
+  const panel = page.getByRole('complementary', { name: 'AI 助手' });
+  const composer = panel.getByRole('textbox', { name: '向助手提问' });
+  await composer.fill('今天电费比昨天多还是少？');
+  await panel.getByRole('button', { name: '发送' }).click();
+
+  await expect(panel.getByTestId('assistant-finding')).toHaveCount(1);
+  const answer = panel.locator('[data-role="assistant"]').last();
+  await expect(answer).toContainText('今天（10 月 21 日）到 10:41 为止的电费是 230.09 元');
+
+  const tables = answer.locator('table');
+  await expect(tables).toHaveCount(1);
+  const headers = tables.locator('thead tr th');
+  await expect(headers).toHaveCount(3);
+  await expect(headers).toHaveText(['日期', '用电量', '估算电费']);
+  const rows = tables.locator('tbody tr');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText('10 月 20 日（全天）');
+  await expect(rows.nth(0)).toContainText('1691 kWh');
+  await expect(rows.nth(0)).toContainText('1423.48 元');
+  await expect(rows.nth(1)).toContainText('10 月 21 日（到 10:41）');
+  await expect(rows.nth(1)).toContainText('403 kWh');
+  await expect(rows.nth(1)).toContainText('230.09 元');
+
+  if (process.env.ISSUE_669_SCREENSHOT) {
+    await page.screenshot({ path: process.env.ISSUE_669_SCREENSHOT });
+  }
+
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});

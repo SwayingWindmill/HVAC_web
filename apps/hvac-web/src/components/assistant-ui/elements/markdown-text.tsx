@@ -13,7 +13,7 @@ import type { TextMessagePartProps } from "@assistant-ui/react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button";
-import { withBoldLeadOnItsOwnLine } from "@/features/assistant/answer-markdown";
+import { normalizeAssistantMarkdown } from "@/features/assistant/answer-markdown";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { cn } from "@/lib/utils";
 
@@ -55,7 +55,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({
   return (
     <MarkdownTextPrimitive
       remarkPlugins={[remarkGfm]}
-      preprocess={withBoldLeadOnItsOwnLine}
+      preprocess={normalizeAssistantMarkdown}
       className="aui-md"
       components={markdownComponents}
       componentsByLanguage={stableComponentsByLanguage}
