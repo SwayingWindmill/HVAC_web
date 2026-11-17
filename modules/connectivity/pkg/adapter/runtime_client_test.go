@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
@@ -285,5 +286,62 @@ func TestTracePropagationFromEnvelopeToObservationEventAndHTTPTraceparent(t *tes
 	}
 	if gotObsTraceparent != callerTraceparent {
 		t.Fatalf("caller traceparent=%q, want %q", gotObsTraceparent, callerTraceparent)
+	}
+}
+
+func TestTelemetryRuntimeClientMaps429AndParsesRetryAfter(t *testing.T) {
+	var statusCode int
+	var retryAfterHeader string
+	server, client := newTestTelemetryServer(t, func(writer http.ResponseWriter, _ *http.Request) {
+		if retryAfterHeader != "" {
+			writer.Header().Set("Retry-After", retryAfterHeader)
+		}
+		writer.WriteHeader(statusCode)
+		_, _ = writer.Write([]byte(`{"error":"rate_limited"}`))
+	})
+	defer server.Close()
+
+	obs := []Observation{{
+		SourceID: testGatewayA, SourcePath: "PUSH", ExternalEntityType: "DEVICE", ExternalID: "METER-01",
+		TelemetryKey: "active_power", Value: 12.5, ValueType: "NUMBER", SampledAt: "2026-08-10T10:20:00Z",
+		SourcePosition: SourcePosition{Partition: "mqtt:" + testGatewayA + ":METER-01:active_power", Offset: 1, EventID: testMessageID},
+	}}
+
+	statusCode = http.StatusTooManyRequests
+	retryAfterHeader = "3"
+	_, err := client.AcceptObservationBatch(context.Background(), obs)
+	if !errors.Is(err, ErrTelemetryRateLimited) {
+		t.Fatalf("err=%v, want ErrTelemetryRateLimited", err)
+	}
+	var rateLimited *RateLimitedError
+	if !errors.As(err, &rateLimited) || rateLimited.RetryAfter != 3*time.Second || rateLimited.Label != "S2 observation batch" {
+		t.Fatalf("rateLimited=%#v, want Label='S2 observation batch' RetryAfter=3s", rateLimited)
+	}
+
+	retryAfterHeader = "9999"
+	_, err = client.AcceptObservationBatch(context.Background(), obs)
+	if !errors.As(err, &rateLimited) || rateLimited.RetryAfter != maxTelemetryRetryAfter {
+		t.Fatalf("oversized Retry-After=%v, want clamped to %s", rateLimited, maxTelemetryRetryAfter)
+	}
+
+	retryAfterHeader = time.Now().Add(10 * time.Second).UTC().Format(http.TimeFormat)
+	_, err = client.AcceptObservationBatch(context.Background(), obs)
+	if !errors.As(err, &rateLimited) || rateLimited.RetryAfter <= 0 || rateLimited.RetryAfter > 10*time.Second {
+		t.Fatalf("HTTP-date Retry-After=%v, want within (0, 10s]", rateLimited)
+	}
+
+	for _, raw := range []string{"", "-5", "not-a-date", time.Now().Add(-10 * time.Second).UTC().Format(http.TimeFormat)} {
+		retryAfterHeader = raw
+		_, err = client.AcceptObservationBatch(context.Background(), obs)
+		if !errors.Is(err, ErrTelemetryRateLimited) || !errors.As(err, &rateLimited) || rateLimited.RetryAfter != 0 {
+			t.Fatalf("Retry-After=%q -> (%v, %#v), want RetryAfter=0", raw, err, rateLimited)
+		}
+	}
+
+	statusCode = http.StatusServiceUnavailable
+	retryAfterHeader = "3"
+	_, err = client.AcceptObservationBatch(context.Background(), obs)
+	if errors.Is(err, ErrTelemetryRateLimited) || err == nil {
+		t.Fatalf("503 should not map to ErrTelemetryRateLimited, got %v", err)
 	}
 }

@@ -23,6 +23,7 @@
 - 增强 `modules/connectivity`、`cmd/connectivity` 与 `cmd/energy-api` 的 MQTT 上行队头隔离、单证吊销与无损密钥轮换能力（新增迁移 `gateway-certificate-revocation.sql` 与 `route-ownership.v1.json` 修订 `52`）：
   - 上行订阅支持 MQTT v5 `$share/<group>/...` 共享订阅（`CONNECTIVITY_MQTT_SHARE_GROUP`，默认 `connectivity`），并用非阻塞每网关内存环形队列加磁盘溢出缓存（`gatewayMailbox`、`CONNECTIVITY_OVERFLOW_DIR`、`CONNECTIVITY_OVERFLOW_MAX_MESSAGES`）替代阻塞通道，消除慢网关对共享 MQTT 读循环的跨网关队头阻塞，溢出装满时留由 Broker 重传并输出 `hvac_mqtt_gateway_overflow_depth` 与 `hvac_mqtt_gateway_overflow_shed_total`。
   - 新增网关证书列表、单证按 ID 吊销、按证书指纹精准踢下线反向运维隧道会话（`CloseGatewayByFingerprint`）、无损重放轮换（`POST /api/v1/gateways/{gatewayId}/rotate` 及续期参数 `revokePeerCertificate`）与已吊销序列号签名 CRL 导出（`/internal/v1/gateways/ca.crl`）。
+- 完善网关详情抽屉（`GatewaySheet`）证书生命周期管理界面：新增「已签发证书」列表与有效、已过期、已吊销状态展示，支持按单张证书弹窗确认吊销并填写可选原因，支持保留当前有效证书的「轮换密钥」，并在网关停用后支持通过「重新启用并生成接入码」恢复接入。
 
 #### 变更
 
@@ -45,6 +46,10 @@
 
 #### 修复
 
+- 修复南向 MQTT 设备接入、控制指令回执与遥测覆盖度的P0可靠性与安全问题：
+  - 命令连接器（`modules/command/pkg/mqttconnector` 与 `cmd/connectivity`）：回执订阅默认启用 MQTT v5 共享订阅（`$share/command-dispatcher/...`）与按实例生成的唯一 `ClientID`，避免多副本重复消费；改为手动 `PUBACK` 配合按网关哈希分片的 16 路工作池（先将 `REPLIED` 持久化进数据库再向 Broker 确认，持久化瞬时失败主动断连触发重投，畸形、超限或无匹配载荷直接确认避免阻塞），`SUBACK` 拒绝时有限重试并断连重订阅；为可序列化事务补充 `40001`/`40P01` 指数退避重试，`GatewayTenant` 优先命中正缓存。
+  - 上行适配与运维通道（`modules/connectivity` 与 `cmd/connectivity`）：`adapter`、`concentrator` 统一经由带 `SUBACK >= 0x80` 校验的重试与失败断连路径完成订阅恢复，`cmd/connectivity` 主连接默认按主机名派生唯一 `ClientID`；遥测上行 `429` 限流退避改为按单台网关隔离处理，不再把整实例就绪状态标为失败；集中器 RPC 请求增加 MQTT v5 `MessageExpiry` 防止断网陈旧参数指令延迟重发，并在操作网关前校验证书确处于未过期、未吊销状态；隔离入库详情按 UTF-8 字符边界截断。
+  - 遥测覆盖度（`modules/telemetry` 与 `contracts/mqtt`）：60 秒覆盖度心跳携带 `gatewayScopes` 按网关过滤已断连且无更新实时读数的下属子设备，防止已断电网关的子设备被误标为在线；在 `gateway-uplink.v2.schema.json` 补充 `sessionId` 与 `reason` 字段定义，并在 Broker ACL 集成测试改用直连 MQTT v5 报文校验 `$share/` 权限隔离。
 - 修复 AI 助手回复里的 Markdown 表格偶发缺少表头分隔线、页面显示成带竖线原文的问题（#669）：提示词（`system-policy.ts`）补全标准 `| --- |` 分隔线示例与约束，网页端与小程序共享解析器（`answer-markdown.ts`）对代码块外的无分隔线管道表格自动补全分隔行，并在 `evals/grade.ts` 加入 `markdown-table` 自动检查。
 
 ### 2026-11-16

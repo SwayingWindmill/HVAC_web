@@ -14,13 +14,19 @@ import (
 
 var ErrInvalidCoverageReport = errors.New("telemetry source coverage report is invalid")
 
+type GatewayCoverageScope struct {
+	GatewayID string   `json:"gatewayId"`
+	DeviceIDs []string `json:"deviceIds"`
+}
+
 type SourceCoverageReport struct {
-	SourceID       string    `json:"sourceId"`
-	DeviceIDs      []string  `json:"deviceIds"`
-	Available      bool      `json:"available"`
-	ReasonCode     *string   `json:"reasonCode,omitempty"`
-	ObservedAt     time.Time `json:"observedAt"`
-	SourceRevision int64     `json:"sourceRevision"`
+	SourceID       string                 `json:"sourceId"`
+	DeviceIDs      []string               `json:"deviceIds"`
+	GatewayScopes  []GatewayCoverageScope `json:"gatewayScopes,omitempty"`
+	Available      bool                   `json:"available"`
+	ReasonCode     *string                `json:"reasonCode,omitempty"`
+	ObservedAt     time.Time              `json:"observedAt"`
+	SourceRevision int64                  `json:"sourceRevision"`
 }
 
 type CoverageAcceptor interface {
@@ -55,7 +61,24 @@ func (store *PostgresStore) reportSourceCoverageOnce(ctx context.Context, report
 	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s2_telemetry_runtime`); err != nil {
 		return fmt.Errorf("activate telemetry runtime database identity: %w", err)
 	}
-	existingIDs, err := findExistingTelemetryDevices(ctx, tx, report.DeviceIDs)
+	targetDeviceIDs := report.DeviceIDs
+	if report.Available && len(report.GatewayScopes) > 0 {
+		gatewayIDs := make([]string, len(report.GatewayScopes))
+		for index, scope := range report.GatewayScopes {
+			gatewayIDs[index] = scope.GatewayID
+		}
+		disconnectedGateways, err := findDisconnectedMQTTGateways(ctx, tx, gatewayIDs)
+		if err != nil {
+			return err
+		}
+		if len(disconnectedGateways) > 0 {
+			targetDeviceIDs = filterAvailableDevicesByGatewayScopes(report.DeviceIDs, report.GatewayScopes, disconnectedGateways)
+			if len(targetDeviceIDs) == 0 {
+				return tx.Commit(ctx)
+			}
+		}
+	}
+	existingIDs, err := findExistingTelemetryDevices(ctx, tx, targetDeviceIDs)
 	if err != nil {
 		return err
 	}
@@ -96,9 +119,16 @@ func validateAndNormalizeCoverageReport(report SourceCoverageReport) (SourceCove
 	if report.SourceRevision < 1 {
 		return SourceCoverageReport{}, fmt.Errorf("%w: sourceRevision must be positive", ErrInvalidCoverageReport)
 	}
+	if len(report.GatewayScopes) > maximumCoverageDeviceIDs {
+		return SourceCoverageReport{}, fmt.Errorf("%w: gatewayScopes length is out of bounds", ErrInvalidCoverageReport)
+	}
 	deviceIDs, err := canonicalDeviceIDs(report.DeviceIDs)
 	if err != nil {
 		return SourceCoverageReport{}, fmt.Errorf("%w: %v", ErrInvalidCoverageReport, err)
+	}
+	gatewayScopes, err := canonicalGatewayScopes(report.GatewayScopes, deviceIDs)
+	if err != nil {
+		return SourceCoverageReport{}, err
 	}
 	var reasonCode *string
 	if report.Available {
@@ -118,11 +148,154 @@ func validateAndNormalizeCoverageReport(report SourceCoverageReport) (SourceCove
 	return SourceCoverageReport{
 		SourceID:       sourceID,
 		DeviceIDs:      deviceIDs,
+		GatewayScopes:  gatewayScopes,
 		Available:      report.Available,
 		ReasonCode:     reasonCode,
 		ObservedAt:     report.ObservedAt.UTC(),
 		SourceRevision: report.SourceRevision,
 	}, nil
+}
+
+func canonicalGatewayScopes(raw []GatewayCoverageScope, reportDeviceIDs []string) ([]GatewayCoverageScope, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	deviceSet := make(map[string]struct{}, len(reportDeviceIDs))
+	for _, id := range reportDeviceIDs {
+		deviceSet[id] = struct{}{}
+	}
+	byGateway := make(map[string][]string, len(raw))
+	gatewayOrder := make([]string, 0, len(raw))
+	for _, scope := range raw {
+		gatewayID := strings.TrimSpace(scope.GatewayID)
+		if len(gatewayID) < 1 || len(gatewayID) > 256 {
+			return nil, fmt.Errorf("%w: gatewayScope gatewayId is invalid", ErrInvalidCoverageReport)
+		}
+		if len(scope.DeviceIDs) < 1 || len(scope.DeviceIDs) > maximumCoverageDeviceIDs {
+			return nil, fmt.Errorf("%w: gatewayScope deviceIds length is out of bounds", ErrInvalidCoverageReport)
+		}
+		scopeDeviceIDs, err := canonicalDeviceIDs(scope.DeviceIDs)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidCoverageReport, err)
+		}
+		for _, id := range scopeDeviceIDs {
+			if _, ok := deviceSet[id]; !ok {
+				return nil, fmt.Errorf("%w: gatewayScope deviceId %q is absent from deviceIds", ErrInvalidCoverageReport, id)
+			}
+		}
+		if _, seen := byGateway[gatewayID]; !seen {
+			gatewayOrder = append(gatewayOrder, gatewayID)
+		}
+		byGateway[gatewayID] = append(byGateway[gatewayID], scopeDeviceIDs...)
+	}
+	slices.Sort(gatewayOrder)
+	scopes := make([]GatewayCoverageScope, 0, len(gatewayOrder))
+	for _, gatewayID := range gatewayOrder {
+		merged, err := canonicalDeviceIDs(byGateway[gatewayID])
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidCoverageReport, err)
+		}
+		scopes = append(scopes, GatewayCoverageScope{
+			GatewayID: gatewayID,
+			DeviceIDs: merged,
+		})
+	}
+	return scopes, nil
+}
+
+func filterAvailableDevicesByGatewayScopes(
+	deviceIDs []string,
+	gatewayScopes []GatewayCoverageScope,
+	disconnectedGateways map[string]bool,
+) []string {
+	scoped := make(map[string]struct{}, len(deviceIDs))
+	connected := make(map[string]struct{}, len(deviceIDs))
+	for _, scope := range gatewayScopes {
+		isDisconnected := disconnectedGateways[scope.GatewayID]
+		for _, id := range scope.DeviceIDs {
+			scoped[id] = struct{}{}
+			if !isDisconnected {
+				connected[id] = struct{}{}
+			}
+		}
+	}
+	filtered := make([]string, 0, len(deviceIDs))
+	for _, id := range deviceIDs {
+		if _, isScoped := scoped[id]; !isScoped {
+			filtered = append(filtered, id)
+			continue
+		}
+		if _, isConnected := connected[id]; isConnected {
+			filtered = append(filtered, id)
+		}
+	}
+	return filtered
+}
+
+func findDisconnectedMQTTGateways(ctx context.Context, tx pgx.Tx, gatewayIDs []string) (map[string]bool, error) {
+	if len(gatewayIDs) == 0 {
+		return nil, nil
+	}
+	futureSkewSeconds := int64(maximumRuntimeEventFutureSkew / time.Second)
+	rows, err := tx.Query(ctx, `
+SELECT DISTINCT d.gateway_id
+FROM telemetry_runtime.mqtt_runtime_events d
+WHERE d.gateway_id = ANY($1::text[])
+  AND UPPER(TRIM(d.event_type)) = ANY($2::text[])
+  AND (UPPER(TRIM(d.source_type)) = 'GATEWAY' OR UPPER(TRIM(d.event_type)) IN ('GATEWAY_DISCONNECTED', 'LWT', 'LAST_WILL'))
+  AND d.event_time <= d.received_at + ($4::bigint * interval '1 second')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM telemetry_runtime.mqtt_runtime_events c
+    WHERE c.tenant_id = d.tenant_id
+      AND c.site_id = d.site_id
+      AND c.gateway_id = d.gateway_id
+      AND UPPER(TRIM(c.source_type)) = UPPER(TRIM(d.source_type))
+      AND TRIM(c.source_id) = TRIM(d.source_id)
+      AND c.message_id <> d.message_id
+      AND UPPER(TRIM(c.event_type)) = ANY($3::text[])
+      AND c.event_time <= c.received_at + ($4::bigint * interval '1 second')
+      AND (
+        (
+          c.event_time > d.event_time
+          AND (
+            COALESCE(d.data ->> 'sessionId', '') = ''
+            OR COALESCE(c.data ->> 'sessionId', '') <> COALESCE(d.data ->> 'sessionId', '')
+          )
+        )
+        OR (
+          UPPER(TRIM(d.event_type)) IN ('LWT', 'LAST_WILL')
+          AND COALESCE(d.data ->> 'sessionId', '') <> ''
+          AND COALESCE(c.data ->> 'sessionId', '') <> ''
+          AND COALESCE(c.data ->> 'sessionId', '') <> COALESCE(d.data ->> 'sessionId', '')
+          AND c.event_time >= d.event_time
+        )
+      )
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM telemetry_runtime.source_observations so
+    WHERE so.source_id = d.gateway_id
+      AND so.acceptance_status = 'ACCEPTED'
+      AND so.received_at > d.received_at
+  )
+`, gatewayIDs, lifecycleDisconnectEventTypes, lifecycleConnectEventTypes, futureSkewSeconds)
+	if err != nil {
+		return nil, fmt.Errorf("query disconnected MQTT gateways: %w", err)
+	}
+	defer rows.Close()
+	disconnected := make(map[string]bool)
+	for rows.Next() {
+		var gatewayID string
+		if err := rows.Scan(&gatewayID); err != nil {
+			return nil, fmt.Errorf("scan disconnected MQTT gateway: %w", err)
+		}
+		disconnected[gatewayID] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate disconnected MQTT gateways: %w", err)
+	}
+	return disconnected, nil
 }
 
 // normalizeCoverageReasonCode maps gateway connectivity loss reasons onto the four

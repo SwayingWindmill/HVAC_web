@@ -103,12 +103,22 @@ func normalizeActuationMode(mode string) string {
 // GatewayTenant returns the Tenant of a Gateway in the Registry gateway directory, so a
 // reply on hvac/v1/{gatewayId}/up/reply is recorded in that Tenant.
 func (store *Store) GatewayTenant(ctx context.Context, gatewayID string) (string, error) {
+	if store == nil {
+		return "", errors.New("connectivity store is closed")
+	}
+	now := store.clock().UTC()
+	if cached, ok, _ := cacheGetOrEpoch(&store.cache, store.cache.gateways, gatewayID, now, gatewayID); ok && cached.err == nil && cached.gateway.TenantID != "" {
+		return cached.gateway.TenantID, nil
+	}
+	if store.pool == nil {
+		return "", errors.New("connectivity store is closed")
+	}
 	var tenantID string
 	err := store.pool.QueryRow(ctx, `
 SELECT tenant_id::text FROM core_registry.gateway_directory_v1 WHERE gateway_id = $1::uuid
 `, gatewayID).Scan(&tenantID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrNotFound
+		return "", fmt.Errorf("%w: %w", ErrNotFound, commandmodel.ErrCommandCorrelationNotFound)
 	}
 	if err != nil {
 		return "", fmt.Errorf("read Registry gateway directory: %w", err)

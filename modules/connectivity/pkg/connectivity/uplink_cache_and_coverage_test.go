@@ -280,6 +280,23 @@ func TestPostgresUplinkCacheRevocationAndCoverageQueries(t *testing.T) {
 		t.Fatalf("ListAllActiveManagedDeviceIDs sawActive=%v sawRevoked=%v, managed=%v", sawActive, sawRevoked, managed)
 	}
 
+	scopes, err := store.ListActiveManagedGatewayScopes(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveManagedGatewayScopes: %v", err)
+	}
+	var sawActiveScope, sawRevokedOrRetiredScope bool
+	for _, scope := range scopes {
+		switch scope.GatewayID {
+		case gwActive:
+			sawActiveScope = len(scope.DeviceIDs) == 1 && scope.DeviceIDs[0] == devActive
+		case gwRevoked, gwRetired:
+			sawRevokedOrRetiredScope = true
+		}
+	}
+	if !sawActiveScope || sawRevokedOrRetiredScope {
+		t.Fatalf("ListActiveManagedGatewayScopes unexpected scopes=%+v", scopes)
+	}
+
 	// Warm ResolveGateway and ResolveBindings caches on gwActive, then verify
 	// Revoke and RevokeRetiredGateway immediately evict caches and invoke onRevoke.
 	gwObj, err := store.ResolveGateway(ctx, gwActive)
@@ -330,5 +347,22 @@ func TestPostgresUplinkCacheRevocationAndCoverageQueries(t *testing.T) {
 	}
 	if len(revokedIDs) != 2 || revokedIDs[0] != gwActive || revokedIDs[1] != gwRetired {
 		t.Fatalf("onRevoke hook invocations = %v, want [%s %s]", revokedIDs, gwActive, gwRetired)
+	}
+}
+
+func TestBuildGatewayCoverageScopesSortsDeduplicatesAndDropsEmptyGateways(t *testing.T) {
+	scopes := adapter.BuildGatewayCoverageScopes(map[string][]string{
+		"gw-b":     {" dev-2 ", "dev-1", "dev-2", ""},
+		"gw-a":     {"dev-3"},
+		"gw-empty": {"   "},
+	})
+	if len(scopes) != 2 {
+		t.Fatalf("scopes=%+v, want 2 non-empty sorted gateways", scopes)
+	}
+	if scopes[0].GatewayID != "gw-a" || len(scopes[0].DeviceIDs) != 1 || scopes[0].DeviceIDs[0] != "dev-3" {
+		t.Fatalf("scopes[0]=%+v", scopes[0])
+	}
+	if scopes[1].GatewayID != "gw-b" || len(scopes[1].DeviceIDs) != 2 || scopes[1].DeviceIDs[0] != "dev-1" || scopes[1].DeviceIDs[1] != "dev-2" {
+		t.Fatalf("scopes[1]=%+v", scopes[1])
 	}
 }

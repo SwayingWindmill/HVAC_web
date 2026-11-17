@@ -430,3 +430,145 @@ func TestClassifyPresenceSignalTypeAndCoverageReasonNormalization(t *testing.T) 
 		t.Fatalf("unsupported reason err = %v, want ErrInvalidCoverageReport", err)
 	}
 }
+
+type validatingCoverageAcceptor struct {
+	mu      sync.Mutex
+	reports []SourceCoverageReport
+}
+
+func (a *validatingCoverageAcceptor) ReportSourceCoverage(_ context.Context, report SourceCoverageReport) error {
+	normalized, err := validateAndNormalizeCoverageReport(report)
+	if err != nil {
+		return err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.reports = append(a.reports, normalized)
+	return nil
+}
+
+func TestSourceCoverageGatewayScopesHTTPContract(t *testing.T) {
+	sink := &validatingCoverageAcceptor{}
+	h := NewHandler(ServerConfig{
+		CoverageAcceptor:    sink,
+		AllowedSourceSPIFFE: testBatchSourceSPIFFE,
+		Metrics:             observability.NewRegistry(),
+		Now:                 func() time.Time { return time.Date(2026, 11, 16, 10, 0, 5, 0, time.UTC) },
+	})
+
+	dev1 := "018f2e00-3000-7000-8000-000000000001"
+	dev2 := "018f2e00-3000-7000-8000-000000000002"
+	dev3 := "018f2e00-3000-7000-8000-000000000003"
+	gw1 := "018f3e00-4000-7000-8000-000000000100"
+	gw2 := "018f3e00-4000-7000-8000-000000000200"
+
+	validRec := performSPIFFEPost(t, h, InternalSourceCoveragePath, map[string]any{
+		"sourceId":  "connectivity-1",
+		"deviceIds": []string{dev2, dev1},
+		"gatewayScopes": []map[string]any{
+			{"gatewayId": " " + gw2 + " ", "deviceIds": []string{dev2}},
+			{"gatewayId": gw1, "deviceIds": []string{dev1}},
+		},
+		"available":      true,
+		"sourceRevision": 4,
+	})
+	if validRec.Code != http.StatusOK {
+		t.Fatalf("valid gatewayScopes status = %d (%s), want 200", validRec.Code, validRec.Body.String())
+	}
+	if len(sink.reports) != 1 || len(sink.reports[0].GatewayScopes) != 2 {
+		t.Fatalf("captured reports = %+v, want 1 report with 2 scopes", sink.reports)
+	}
+	if sink.reports[0].GatewayScopes[0].GatewayID != gw1 || !slices.Equal(sink.reports[0].GatewayScopes[0].DeviceIDs, []string{dev1}) {
+		t.Fatalf("unexpected first scope: %+v", sink.reports[0].GatewayScopes[0])
+	}
+	if sink.reports[0].GatewayScopes[1].GatewayID != gw2 || !slices.Equal(sink.reports[0].GatewayScopes[1].DeviceIDs, []string{dev2}) {
+		t.Fatalf("unexpected second scope: %+v", sink.reports[0].GatewayScopes[1])
+	}
+
+	tooLongGateway := ""
+	for range 257 {
+		tooLongGateway += "a"
+	}
+	tooManyScopes := make([]map[string]any, maximumCoverageDeviceIDs+1)
+	for i := range tooManyScopes {
+		tooManyScopes[i] = map[string]any{"gatewayId": gw1, "deviceIds": []string{dev1}}
+	}
+
+	invalidPayloads := []struct {
+		name string
+		body map[string]any
+	}{
+		{
+			name: "empty_gateway_id",
+			body: map[string]any{
+				"sourceId":      "connectivity-1",
+				"deviceIds":     []string{dev1},
+				"gatewayScopes": []map[string]any{{"gatewayId": "   ", "deviceIds": []string{dev1}}},
+				"available":     true,
+			},
+		},
+		{
+			name: "oversized_gateway_id",
+			body: map[string]any{
+				"sourceId":      "connectivity-1",
+				"deviceIds":     []string{dev1},
+				"gatewayScopes": []map[string]any{{"gatewayId": tooLongGateway, "deviceIds": []string{dev1}}},
+				"available":     true,
+			},
+		},
+		{
+			name: "empty_scope_device_ids",
+			body: map[string]any{
+				"sourceId":      "connectivity-1",
+				"deviceIds":     []string{dev1},
+				"gatewayScopes": []map[string]any{{"gatewayId": gw1, "deviceIds": []string{}}},
+				"available":     true,
+			},
+		},
+		{
+			name: "invalid_scope_device_uuid",
+			body: map[string]any{
+				"sourceId":      "connectivity-1",
+				"deviceIds":     []string{dev1},
+				"gatewayScopes": []map[string]any{{"gatewayId": gw1, "deviceIds": []string{"not-a-uuid"}}},
+				"available":     true,
+			},
+		},
+		{
+			name: "contradictory_scope_device_absent_from_device_ids",
+			body: map[string]any{
+				"sourceId":      "connectivity-1",
+				"deviceIds":     []string{dev1, dev2},
+				"gatewayScopes": []map[string]any{{"gatewayId": gw1, "deviceIds": []string{dev1, dev3}}},
+				"available":     true,
+			},
+		},
+		{
+			name: "unknown_field_in_scope",
+			body: map[string]any{
+				"sourceId":      "connectivity-1",
+				"deviceIds":     []string{dev1},
+				"gatewayScopes": []map[string]any{{"gatewayId": gw1, "deviceIds": []string{dev1}, "unknown": true}},
+				"available":     true,
+			},
+		},
+		{
+			name: "too_many_scopes",
+			body: map[string]any{
+				"sourceId":      "connectivity-1",
+				"deviceIds":     []string{dev1},
+				"gatewayScopes": tooManyScopes,
+				"available":     true,
+			},
+		},
+	}
+
+	for _, tc := range invalidPayloads {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := performSPIFFEPost(t, h, InternalSourceCoveragePath, tc.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s status = %d (%s), want 400", tc.name, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}

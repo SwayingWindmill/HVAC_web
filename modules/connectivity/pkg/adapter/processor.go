@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type ProcessingResult struct {
@@ -225,14 +226,28 @@ func (processor *Processor) quarantinedOutcome(ctx context.Context, quarantine U
 
 func (processor *Processor) quarantine(ctx context.Context, quarantine UplinkQuarantine, reasonCode string, cause error) error {
 	quarantine.ReasonCode = reasonCode
-	quarantine.Detail = cause.Error()
-	if len(quarantine.Detail) > 1024 {
-		quarantine.Detail = quarantine.Detail[:1024]
-	}
+	quarantine.Detail = truncateUTF8(cause.Error(), 1024)
 	if err := processor.identities.QuarantineUplink(ctx, quarantine); err != nil {
 		return fmt.Errorf("keep MQTT uplink quarantine evidence: %w", err)
 	}
 	return permanentMessage(cause)
+}
+
+func truncateUTF8(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, "\ufffd")
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	end := maxBytes
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end]
 }
 
 type telemetryMessageBounds struct {

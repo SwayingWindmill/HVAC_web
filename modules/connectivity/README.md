@@ -56,7 +56,7 @@ hvac/v1/{网关 id}/up/event
 | 变量 | 默认值 |
 | --- | --- |
 | `CONNECTIVITY_MQTT_URL` | `tls://mqtt-broker:8883` |
-| `CONNECTIVITY_MQTT_CLIENT_ID` | `connectivity` |
+| `CONNECTIVITY_MQTT_CLIENT_ID` | 未设置或为空时按主机名生成 `connectivity-<主机名>`（仅保留字母、数字、`_` 和 `-`，总长不超过 96；取不到主机名时退回 `connectivity`） |
 | `CONNECTIVITY_MQTT_SHARE_GROUP` | `connectivity`（设为 `off`/`none` 或空串则关闭共享订阅前缀） |
 | `CONNECTIVITY_OVERFLOW_MAX_MESSAGES` | `max(QueueCapacity*16, 4096)`（上限 `1048576`） |
 | `CONNECTIVITY_OVERFLOW_MAX_BYTES` | `33554432`（32 MiB/网关未消费 WAL 上限，最大 1 GiB） |

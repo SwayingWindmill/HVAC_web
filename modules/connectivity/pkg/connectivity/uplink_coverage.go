@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 )
 
 // ListGatewayChildDeviceIDs returns distinct Device IDs registered under one
@@ -73,6 +73,18 @@ ORDER BY device_id::text
 // revoked or expired credentials are excluded so coverage heartbeats never mark
 // their devices available.
 func (store *Store) ListAllActiveManagedDeviceIDs(ctx context.Context) ([]string, error) {
+	scopes, err := store.ListActiveManagedGatewayScopes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	deviceIDs, _ := adapter.NormalizeGatewayCoverageScopes(scopes)
+	return deviceIDs, nil
+}
+
+// ListActiveManagedGatewayScopes returns ACTIVE Gateways holding an active,
+// unexpired credential along with their sorted, deduplicated child Device IDs.
+// Gateways with zero registered child devices are excluded.
+func (store *Store) ListActiveManagedGatewayScopes(ctx context.Context) ([]adapter.GatewayCoverageScope, error) {
 	if store == nil || store.pool == nil {
 		return nil, nil
 	}
@@ -112,13 +124,12 @@ ORDER BY tenant_id::text, gateway_id::text
 	}
 
 	now := store.clock().UTC()
-	seen := make(map[string]struct{})
-	deviceIDs := make([]string, 0)
+	devicesByGateway := make(map[string][]string)
 	for _, tenantID := range tenantOrder {
 		gatewayIDs := tenantGateways[tenantID]
 		err := store.readAsTenant(ctx, tenantID, func(tenantTx pgx.Tx) error {
 			devRows, err := tenantTx.Query(ctx, `
-SELECT DISTINCT k.device_id::text
+SELECT DISTINCT k.gateway_id::text, k.device_id::text
 FROM core_registry.gateway_device_source_keys_v1 k
 WHERE k.gateway_id = ANY($1::uuid[])
   AND EXISTS (
@@ -129,22 +140,18 @@ WHERE k.gateway_id = ANY($1::uuid[])
       AND c.valid_from <= $3
       AND c.valid_until > $3
   )
-ORDER BY k.device_id::text
+ORDER BY k.gateway_id::text, k.device_id::text
 `, gatewayIDs, tenantID, now)
 			if err != nil {
-				return fmt.Errorf("list active managed devices for tenant %s: %w", tenantID, err)
+				return fmt.Errorf("list active managed gateway scopes for tenant %s: %w", tenantID, err)
 			}
 			defer devRows.Close()
 			for devRows.Next() {
-				var id string
-				if err := devRows.Scan(&id); err != nil {
-					return fmt.Errorf("scan active managed device: %w", err)
+				var gatewayID, deviceID string
+				if err := devRows.Scan(&gatewayID, &deviceID); err != nil {
+					return fmt.Errorf("scan active managed gateway device: %w", err)
 				}
-				if _, dup := seen[id]; dup {
-					continue
-				}
-				seen[id] = struct{}{}
-				deviceIDs = append(deviceIDs, id)
+				devicesByGateway[gatewayID] = append(devicesByGateway[gatewayID], deviceID)
 			}
 			return devRows.Err()
 		})
@@ -152,6 +159,5 @@ ORDER BY k.device_id::text
 			return nil, err
 		}
 	}
-	slices.Sort(deviceIDs)
-	return deviceIDs, nil
+	return adapter.BuildGatewayCoverageScopes(devicesByGateway), nil
 }

@@ -81,7 +81,20 @@
             "sourceId": { "type": "string", "minLength": 1, "maxLength": 256 },
             "eventTime": { "$ref": "#/$defs/epochMillis" },
             "severity": { "enum": ["INFO", "WARNING", "CRITICAL"] },
-            "data": { "type": "object" }
+            "data": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "sessionId": {
+                  "$ref": "#/$defs/uuidV7",
+                  "description": "Gateway MQTT connection session identifier used to pair GATEWAY_CONNECTED and LWT events."
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 256
+                }
+              }
+            }
           }
         }
       }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
 )
 
@@ -68,9 +69,43 @@ func TestConcentratorAuditPostgresRLSAndConstraints(t *testing.T) {
 	defer store.Close()
 
 	allowedClaims := registryauth.GrantClaims{TenantID: tenantA, AllowedSiteIDs: []string{siteA}}
+	if _, err := store.ResolveGatewayForOperator(ctx, allowedClaims, gatewayA); !errors.Is(err, adapter.ErrGatewayCredentialInactive) {
+		t.Fatalf("missing credential got %v, want ErrGatewayCredentialInactive", err)
+	}
+
+	const expiredCredID = "0194f000-6000-7000-8000-000000000001"
+	const activeCredID = "0194f000-6000-7000-8000-000000000002"
+	const revokedCredID = "0194f000-6000-7000-8000-000000000003"
+	if _, err := admin.Exec(ctx, `
+INSERT INTO connectivity.gateway_credentials(id,tenant_id,gateway_id,certificate_fingerprint_sha256,status,valid_from,valid_until,revoked_at,created_at,updated_at)
+VALUES($1,$2,$3,repeat('1',64),'ACTIVE',$4,$5,NULL,$4,$4)`,
+		expiredCredID, tenantA, gatewayA, now.Add(-2*time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatalf("seed expired credential: %v", err)
+	}
+	if _, err := store.ResolveGatewayForOperator(ctx, allowedClaims, gatewayA); !errors.Is(err, adapter.ErrGatewayCredentialInactive) {
+		t.Fatalf("expired credential got %v, want ErrGatewayCredentialInactive", err)
+	}
+
+	if _, err := admin.Exec(ctx, `
+INSERT INTO connectivity.gateway_credentials(id,tenant_id,gateway_id,certificate_fingerprint_sha256,status,valid_from,valid_until,revoked_at,created_at,updated_at)
+VALUES($1,$2,$3,repeat('2',64),'ACTIVE',$4,$5,NULL,$4,$4)`,
+		activeCredID, tenantA, gatewayA, now.Add(-time.Hour), now.Add(24*time.Hour)); err != nil {
+		t.Fatalf("seed active credential: %v", err)
+	}
+
 	gotTenant, err := store.ResolveGatewayForOperator(ctx, allowedClaims, gatewayA)
 	if err != nil || gotTenant != tenantA {
 		t.Fatalf("ResolveGatewayForOperator got (%q, %v), want (%q, nil)", gotTenant, err, tenantA)
+	}
+
+	if _, err := admin.Exec(ctx, `
+INSERT INTO connectivity.gateway_credentials(id,tenant_id,gateway_id,certificate_fingerprint_sha256,status,valid_from,valid_until,revoked_at,created_at,updated_at)
+VALUES($1,$2,$3,repeat('3',64),'REVOKED',$4,$5,$6,$4,$6)`,
+		revokedCredID, tenantA, gatewayA, now.Add(-2*time.Hour), now.Add(24*time.Hour), now.Add(-time.Minute)); err != nil {
+		t.Fatalf("seed rotated revoked credential: %v", err)
+	}
+	if gotTenant, err := store.ResolveGatewayForOperator(ctx, allowedClaims, gatewayA); err != nil || gotTenant != tenantA {
+		t.Fatalf("rotated credential ResolveGatewayForOperator got (%q, %v), want (%q, nil)", gotTenant, err, tenantA)
 	}
 
 	if _, err := store.ResolveGatewayForOperator(ctx, registryauth.GrantClaims{TenantID: tenantA, AllowedSiteIDs: []string{siteOther}}, gatewayA); !errors.Is(err, connectivity.ErrCredentialForbidden) {
@@ -129,5 +164,24 @@ func TestConcentratorAuditPostgresRLSAndConstraints(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("expected 0 visible rows without app.tenant_id RLS session setting, got %d", count)
+	}
+
+	if _, err := admin.Exec(ctx, `UPDATE connectivity.gateway_credentials SET status='REVOKED', revoked_at=$2, updated_at=$2 WHERE id=$1::uuid`, activeCredID, now); err != nil {
+		t.Fatalf("revoke active credential: %v", err)
+	}
+	if _, err := store.ResolveGatewayForOperator(ctx, allowedClaims, gatewayA); !errors.Is(err, connectivity.ErrCredentialRevoked) {
+		t.Fatalf("revoked credential only got %v, want ErrCredentialRevoked", err)
+	}
+
+	if _, err := admin.Exec(ctx, `UPDATE connectivity.gateway_credentials SET status='ACTIVE', revoked_at=NULL, updated_at=$2 WHERE id=$1::uuid`, activeCredID, now); err != nil {
+		t.Fatalf("reactivate credential for enrollment test: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `
+INSERT INTO connectivity.gateway_enrollments(tenant_id,gateway_id,revoked_at,created_at,updated_at)
+VALUES($1,$2,$3,$3,$3)`, tenantA, gatewayA, now); err != nil {
+		t.Fatalf("seed revoked enrollment: %v", err)
+	}
+	if _, err := store.ResolveGatewayForOperator(ctx, allowedClaims, gatewayA); !errors.Is(err, connectivity.ErrCredentialRevoked) {
+		t.Fatalf("revoked enrollment got %v, want ErrCredentialRevoked", err)
 	}
 }

@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,5 +118,44 @@ func TestUplinkSharedSubscriptionAndOverflowConfigFromEnv(t *testing.T) {
 				t.Fatalf("%s (%s=%q) unexpectedly passed Validate", invalid.name, invalid.key, invalid.val)
 			}
 		})
+	}
+}
+
+func TestUplinkDefaultMQTTClientIDUsesHostnameAndRespectsExplicitOverride(t *testing.T) {
+	for _, blank := range []string{"", "   "} {
+		t.Setenv("CONNECTIVITY_MQTT_CLIENT_ID", blank)
+		cfg := uplinkConfig()
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("blank CONNECTIVITY_MQTT_CLIENT_ID (%q) invalid: %v", blank, err)
+		}
+		host, hostErr := os.Hostname()
+		cleanHost := sanitizeMQTTClientID(host)
+		if hostErr == nil && cleanHost != "" {
+			wantPrefix := "connectivity-"
+			if !strings.HasPrefix(cfg.MQTT.ClientID, wantPrefix) {
+				t.Fatalf("ClientID=%q, want prefix %q", cfg.MQTT.ClientID, wantPrefix)
+			}
+		} else if cfg.MQTT.ClientID != "connectivity" {
+			t.Fatalf("ClientID=%q, want fallback connectivity", cfg.MQTT.ClientID)
+		}
+		if len(cfg.MQTT.ClientID) > maxDefaultMQTTClientIDLen {
+			t.Fatalf("ClientID length=%d exceeds %d", len(cfg.MQTT.ClientID), maxDefaultMQTTClientIDLen)
+		}
+	}
+
+	t.Setenv("CONNECTIVITY_MQTT_CLIENT_ID", "connectivity-replica-01")
+	override := uplinkConfig()
+	if override.MQTT.ClientID != "connectivity-replica-01" {
+		t.Fatalf("explicit override ClientID=%q, want connectivity-replica-01", override.MQTT.ClientID)
+	}
+
+	if got := sanitizeMQTTClientID("pod.01/edge@node_a-1"); got != "pod01edgenode_a-1" {
+		t.Fatalf("sanitizeMQTTClientID=%q, want pod01edgenode_a-1", got)
+	}
+	if got := defaultMQTTClientIDForHost("connectivity", "..."); got != "connectivity" {
+		t.Fatalf("invalid-only hostname fallback=%q, want connectivity", got)
+	}
+	if got := defaultMQTTClientIDForHost("connectivity", strings.Repeat("x", 120)); len(got) != maxDefaultMQTTClientIDLen || !strings.HasPrefix(got, "connectivity-") {
+		t.Fatalf("long hostname ClientID=(%q, len=%d), want prefix connectivity- and len %d", got, len(got), maxDefaultMQTTClientIDLen)
 	}
 }

@@ -3,10 +3,12 @@ package adapter
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
@@ -739,8 +742,9 @@ func TestRealBrokerInflightWindowIsolationWithStalledAndSheddingGateway(t *testi
 	first.awaitDisconnect(t, 3*time.Second)
 
 	second := broker.awaitConnection(t)
+	awaitReady(t, runtime, true)
 	close(releaseA)
-	waitCondition(t, 2*time.Second, func() bool {
+	waitCondition(t, 3*time.Second, func() bool {
 		return runtime.Ready() && len(telemetry.accepted()) == 6
 	}, "stalled Gateway A queue drained and second session ready after release")
 	second.deliverGateway(t, testGatewayA, 7, 5, true)
@@ -1191,5 +1195,232 @@ func TestTrackedGatewayQueuesCapEvictsIdleEntriesFirst(t *testing.T) {
 
 	if err := runtime.enqueue(ctx, nil, publish(testGatewayB, 2), acks.ack(messageID(2))); err == nil {
 		t.Fatal("expected error when all 4096 tracked gateway queues are active")
+	}
+}
+
+func TestRuntimeRateLimited429IsolatesGatewayAndPreservesReadiness(t *testing.T) {
+	var allowGatewayA atomic.Bool
+	var attemptsA atomic.Int32
+	gatewayARateLimited := make(chan struct{}, 1)
+
+	telemetry := &fakeTelemetry{
+		failHook: func(_ int, batch []Observation) error {
+			if len(batch) > 0 && batch[0].SourceID == testGatewayA && !allowGatewayA.Load() {
+				attemptsA.Add(1)
+				select {
+				case gatewayARateLimited <- struct{}{}:
+				default:
+				}
+				return &RateLimitedError{Label: "S2 observation batch", RetryAfter: 50 * time.Millisecond}
+			}
+			return nil
+		},
+	}
+	runtime := newTestRuntime(t, telemetry, 8)
+	runtime.rateLimitFloor = 10 * time.Millisecond
+	runtime.recordConnectionState(nil, true, true, nil)
+
+	defaultRuntime, err := NewRuntime(Config{
+		MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-floor-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+		TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+		QueueCapacity:    4,
+		OverflowDir:      t.TempDir(),
+	}, newTestProcessor(t, newFakeIdentities(), &fakeTelemetry{
+		failHook: func(int, []Observation) error {
+			return &RateLimitedError{Label: "S2 observation batch"}
+		},
+	}), slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(defaultRuntime.closeMailboxes)
+	defaultRuntime.recordConnectionState(nil, true, true, nil)
+	pubA := publish(testGatewayA, 1)
+	_, defaultDelay, prefixErr := defaultRuntime.processPrefix(context.Background(), testGatewayA, []queuedPublish{{packet: pubA}}, []UplinkMessage{{Topic: pubA.Topic, Payload: pubA.Payload}}, 1)
+	if !errors.Is(prefixErr, ErrTelemetryRateLimited) || defaultDelay != defaultRateLimitRetryFloor || !defaultRuntime.Ready() {
+		t.Fatalf("default rate-limit processPrefix=(%s, %v, ready=%v), want delay=%s ready=true", defaultDelay, prefixErr, defaultRuntime.Ready(), defaultRateLimitRetryFloor)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); runtime.workers.Wait() })
+	acks := newAckLog()
+
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-gatewayARateLimited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("gateway A never hit 429")
+	}
+
+	if !runtime.Ready() {
+		t.Fatal("runtime.Ready() turned false after per-gateway 429 rate limit")
+	}
+
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayB, 2), acks.ack(messageID(2))); err != nil {
+		t.Fatal(err)
+	}
+	acks.await(t, messageID(1))
+	acks.await(t, messageID(2))
+
+	waitCondition(t, 2*time.Second, func() bool {
+		for _, obs := range telemetry.accepted() {
+			if obs.SourceID == testGatewayB {
+				return true
+			}
+		}
+		return false
+	}, "gateway B succeeded while gateway A backed off on 429")
+	if !runtime.Ready() {
+		t.Fatal("runtime.Ready() turned false during gateway A 429 backoff")
+	}
+
+	allowGatewayA.Store(true)
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(telemetry.accepted()) == 2
+	}, "gateway A succeeded after 429 cleared")
+	if attemptsA.Load() < 1 {
+		t.Fatalf("expected at least 1 429 attempt on gateway A, got %d", attemptsA.Load())
+	}
+
+	rec := httptest.NewRecorder()
+	runtime.metrics.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), `hvac_mqtt_message_retries_total{reason_family="rate_limited"}`) {
+		t.Fatalf("expected rate_limited retry counter in metrics:\n%s", rec.Body.String())
+	}
+}
+
+func TestCheckSubackReasons(t *testing.T) {
+	if err := CheckSubackReasons(nil, 2); err == nil {
+		t.Fatal("expected nil SUBACK to fail")
+	}
+	if err := CheckSubackReasons(&paho.Suback{Reasons: []byte{1}}, 2); err == nil {
+		t.Fatal("expected mismatched SUBACK reason count to fail")
+	}
+	if err := CheckSubackReasons(&paho.Suback{Reasons: []byte{1, 0x87}}, 2); err == nil {
+		t.Fatal("expected SUBACK reason >= 0x80 to fail")
+	}
+	if err := CheckSubackReasons(&paho.Suback{Reasons: []byte{0, 1}}, 2); err != nil {
+		t.Fatalf("expected valid SUBACK [0, 1] to succeed, got %v", err)
+	}
+}
+
+func TestRuntimeSubscribeRetriesAndSelfHealsOnSubackFailure(t *testing.T) {
+	mqttCfg, serverTLS := writeTestPKI(t)
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", serverTLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	mqttCfg.BrokerURL = "tls://" + listener.Addr().String()
+	mqttCfg.ClientID = "connectivity-suback-heal"
+
+	var connSeq atomic.Int32
+	var conn1Subscribes atomic.Int32
+	conn1Closed := make(chan struct{})
+	conn2Subscribed := make(chan struct{})
+
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			seq := connSeq.Add(1)
+			go func(c net.Conn, s int32) {
+				defer c.Close()
+				connectPkt, readErr := packets.ReadPacket(c)
+				if readErr != nil || connectPkt.Type != packets.CONNECT {
+					return
+				}
+				connack := packets.NewControlPacket(packets.CONNACK)
+				connack.Content.(*packets.Connack).SessionPresent = true
+				if _, writeErr := connack.WriteTo(c); writeErr != nil {
+					return
+				}
+				for {
+					pkt, pktErr := packets.ReadPacket(c)
+					if pktErr != nil {
+						if s == 1 {
+							close(conn1Closed)
+						}
+						return
+					}
+					switch pkt.Type {
+					case packets.SUBSCRIBE:
+						sub := pkt.Content.(*packets.Subscribe)
+						suback := packets.NewControlPacket(packets.SUBACK)
+						sa := suback.Content.(*packets.Suback)
+						sa.PacketID = sub.PacketID
+						for range sub.Subscriptions {
+							if s == 1 {
+								sa.Reasons = append(sa.Reasons, 0x87)
+							} else {
+								sa.Reasons = append(sa.Reasons, 1)
+							}
+						}
+						if s == 1 {
+							conn1Subscribes.Add(1)
+						}
+						_, _ = suback.WriteTo(c)
+						if s >= 2 {
+							select {
+							case <-conn2Subscribed:
+							default:
+								close(conn2Subscribed)
+							}
+						}
+					case packets.PINGREQ:
+						_, _ = packets.NewControlPacket(packets.PINGRESP).WriteTo(c)
+					}
+				}
+			}(conn, seq)
+		}
+	}()
+
+	runtime := newTestRuntime(t, &fakeTelemetry{}, 4)
+	runtime.config.MQTT = mqttCfg
+	runtime.reconnectBackoff = func(int) time.Duration { return 15 * time.Millisecond }
+	runtime.subscribeRetryDelays = []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	stopped := make(chan error, 1)
+	go func() { stopped <- runtime.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(10 * time.Second):
+			t.Error("Run did not stop")
+		}
+	})
+
+	select {
+	case <-conn1Closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first connection did not close after repeated SUBACK failures")
+	}
+	if got := conn1Subscribes.Load(); got != 3 {
+		t.Fatalf("conn1 subscribe attempts=%d, want 3", got)
+	}
+
+	select {
+	case <-conn2Subscribed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("runtime did not reconnect and subscribe on second connection")
+	}
+	waitCondition(t, 2*time.Second, runtime.Ready, "runtime Ready() after subscribe self-heal")
+
+	rec := httptest.NewRecorder()
+	runtime.metrics.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metricsBody := rec.Body.String()
+	for _, want := range []string{
+		`hvac_mqtt_subscriptions_total{outcome="failed"} 1`,
+		`hvac_mqtt_subscriptions_total{outcome="success"} 1`,
+	} {
+		if !strings.Contains(metricsBody, want) {
+			t.Fatalf("missing %q in metrics:\n%s", want, metricsBody)
+		}
 	}
 }

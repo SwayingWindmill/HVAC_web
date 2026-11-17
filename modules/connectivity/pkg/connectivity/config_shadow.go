@@ -990,7 +990,7 @@ func decodeShadowConfigPayload(
 }
 
 func (store *Store) GetGatewayConfigShadowForOperator(ctx context.Context, claims registryauth.GrantClaims, gatewayID string) (GatewayConfigShadow, error) {
-	tenantID, err := store.ResolveGatewayForOperator(ctx, claims, gatewayID)
+	tenantID, err := store.ResolveGatewayScopeForOperator(ctx, claims, gatewayID)
 	if err != nil {
 		return GatewayConfigShadow{}, err
 	}
@@ -1063,7 +1063,7 @@ func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims regis
 			return GatewayConfigShadow{}, err
 		}
 	}
-	tenantID, err := store.ResolveGatewayForOperator(ctx, claims, gatewayID)
+	tenantID, err := store.ResolveGatewayScopeForOperator(ctx, claims, gatewayID)
 	if err != nil {
 		return GatewayConfigShadow{}, err
 	}
