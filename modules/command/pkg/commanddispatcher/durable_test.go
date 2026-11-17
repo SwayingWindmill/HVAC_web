@@ -2,6 +2,7 @@ package commanddispatcher
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -197,4 +198,135 @@ func (s syntheticDurableStore) ResolveDispatch(_ context.Context, envelope comma
 
 func newSyntheticDurableDispatcher(service *commandservice.Service, commandID string, connector Connector, workerID string, now func() time.Time) *DurableDispatcher {
 	return NewDurable(syntheticDurableStore{service, commandID, now}, connector, workerID, 30*time.Second)
+}
+
+type stubDurableStore struct {
+	envelope   commandmodel.DispatchEnvelope
+	resolveErr error
+}
+
+func (s stubDurableStore) ClaimDispatch(context.Context, string, string, time.Duration) (commandmodel.DispatchEnvelope, error) {
+	return s.envelope, nil
+}
+
+func (s stubDurableStore) ResolveDispatch(context.Context, commandmodel.DispatchEnvelope, commandmodel.ConnectorResult) error {
+	return s.resolveErr
+}
+
+type finalizingConnector struct {
+	result        commandmodel.ConnectorResult
+	finalizeCalls int
+	finalizeErr   error
+}
+
+func (c *finalizingConnector) Execute(context.Context, commandmodel.DispatchEnvelope) (commandmodel.ConnectorResult, error) {
+	return c.result, nil
+}
+
+func (c *finalizingConnector) FinalizeDispatch(context.Context, commandmodel.DispatchEnvelope, commandmodel.ConnectorResult) error {
+	c.finalizeCalls++
+	return c.finalizeErr
+}
+
+type nonFinalizingConnector struct {
+	result commandmodel.ConnectorResult
+}
+
+func (c nonFinalizingConnector) Execute(context.Context, commandmodel.DispatchEnvelope) (commandmodel.ConnectorResult, error) {
+	return c.result, nil
+}
+
+func TestDurableDispatcherStaleFenceFinalizesOnlyReplyBackedResults(t *testing.T) {
+	env := commandmodel.DispatchEnvelope{TenantID: "org-1", CommandID: "cmd-1", AttemptID: "att-1", ExecutionFence: 4}
+	store := stubDurableStore{envelope: env, resolveErr: commandservice.ErrStaleFence}
+
+	replyBackedCases := []struct {
+		name   string
+		result commandmodel.ConnectorResult
+	}{
+		{
+			name:   "acknowledged",
+			result: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true},
+		},
+		{
+			name:   "execution rejected",
+			result: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorExecutionRejected, FailureCode: "MQTT_EDGE_INTERLOCK_OPEN"},
+		},
+		{
+			name:   "edge failure committed",
+			result: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorRequestCommitted, FailureCode: "MQTT_EDGE_TIMEOUT"},
+		},
+		{
+			name:   "reply invalid committed",
+			result: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorRequestCommitted, FailureCode: "MQTT_COMMAND_REPLY_INVALID"},
+		},
+	}
+
+	for _, tc := range replyBackedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := &finalizingConnector{result: tc.result}
+			d := NewDurable(store, conn, "replica-a", 30*time.Second)
+			if err := d.RunOnce(context.Background(), "org-1"); err != nil {
+				t.Fatalf("expected nil on stale fence with reply-backed result, got %v", err)
+			}
+			if conn.finalizeCalls != 1 {
+				t.Fatalf("FinalizeDispatch calls=%d, want 1", conn.finalizeCalls)
+			}
+		})
+	}
+
+	t.Run("finalizer error is propagated on stale fence", func(t *testing.T) {
+		wantErr := errors.New("mark correlation resolved failed")
+		conn := &finalizingConnector{
+			result:      commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true},
+			finalizeErr: wantErr,
+		}
+		d := NewDurable(store, conn, "replica-a", 30*time.Second)
+		if err := d.RunOnce(context.Background(), "org-1"); !errors.Is(err, wantErr) {
+			t.Fatalf("err=%v want=%v", err, wantErr)
+		}
+		if conn.finalizeCalls != 1 {
+			t.Fatalf("FinalizeDispatch calls=%d, want 1", conn.finalizeCalls)
+		}
+	})
+
+	nonReplyCases := []struct {
+		name   string
+		result commandmodel.ConnectorResult
+	}{
+		{
+			name:   "reply timeout",
+			result: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorRequestCommitted, FailureCode: "MQTT_COMMAND_REPLY_TIMEOUT"},
+		},
+		{
+			name:   "publish outcome unknown",
+			result: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorRequestCommitted, FailureCode: "MQTT_COMMAND_PUBLISH_OUTCOME_UNKNOWN"},
+		},
+		{
+			name:   "pre-send rejected",
+			result: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorPreSendRejected, FailureCode: "MQTT_ROUTE_UNAVAILABLE"},
+		},
+	}
+
+	for _, tc := range nonReplyCases {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := &finalizingConnector{result: tc.result}
+			d := NewDurable(store, conn, "replica-a", 30*time.Second)
+			if err := d.RunOnce(context.Background(), "org-1"); !errors.Is(err, commandservice.ErrStaleFence) {
+				t.Fatalf("expected ErrStaleFence for %s, got %v", tc.name, err)
+			}
+			if conn.finalizeCalls != 0 {
+				t.Fatalf("FinalizeDispatch must not be called for %s, got %d", tc.name, conn.finalizeCalls)
+			}
+		})
+	}
+
+	t.Run("non-finalizing connector preserves ErrStaleFence", func(t *testing.T) {
+		d := NewDurable(store, nonFinalizingConnector{
+			result: commandmodel.ConnectorResult{Phase: commandmodel.ConnectorAcknowledged, Acknowledged: true},
+		}, "replica-a", 30*time.Second)
+		if err := d.RunOnce(context.Background(), "org-1"); !errors.Is(err, commandservice.ErrStaleFence) {
+			t.Fatalf("expected ErrStaleFence without finalizer, got %v", err)
+		}
+	})
 }

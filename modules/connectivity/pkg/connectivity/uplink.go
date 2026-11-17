@@ -4,10 +4,103 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/packettap"
 )
+
+const (
+	quarantineDedupWindow      = 5 * time.Minute
+	quarantineCooldownDuration = 5 * time.Second
+	quarantineCooldownCap      = 1024
+	maxQuarantineGatewayRunes  = 128
+	maxQuarantineTopicRunes    = 512
+	maxQuarantineDetailRunes   = 1024
+)
+
+type quarantineDedupKey struct {
+	tenantID      string
+	gatewayID     string
+	reasonCode    string
+	topic         string
+	payloadSHA256 string
+}
+
+type quarantineCooldownEntry struct {
+	cooldownUntil    time.Time
+	pendingDelta     int64
+	lastSeenAt       time.Time
+	detail           string
+	payloadBytes     int
+	payloadPreview   string
+	payloadEncoding  string
+	payloadTruncated bool
+	seq              uint64
+	inFlight         chan struct{}
+}
+
+type quarantineBurstCache struct {
+	mu      sync.Mutex
+	seq     uint64
+	entries map[quarantineDedupKey]*quarantineCooldownEntry
+}
+
+type quarantinePersistInput struct {
+	tenantID         string
+	gatewayID        string
+	topic            string
+	reasonCode       string
+	detail           string
+	payloadSHA256    string
+	payloadBytes     int
+	payloadPreview   string
+	payloadEncoding  string
+	payloadTruncated bool
+	delta            int64
+	receivedAt       time.Time
+}
+
+type quarantinePersistFn func(ctx context.Context, input quarantinePersistInput) error
+
+func (cache *quarantineBurstCache) evictIfNeededLocked() {
+	if len(cache.entries) < quarantineCooldownCap {
+		return
+	}
+	var victimZero quarantineDedupKey
+	var victimZeroSeq uint64
+	hasZero := false
+
+	var victimAny quarantineDedupKey
+	var victimAnySeq uint64
+	hasAny := false
+
+	for k, entry := range cache.entries {
+		if entry.inFlight != nil {
+			continue
+		}
+		if entry.pendingDelta == 0 {
+			if !hasZero || entry.seq < victimZeroSeq {
+				victimZero = k
+				victimZeroSeq = entry.seq
+				hasZero = true
+			}
+		}
+		if !hasAny || entry.seq < victimAnySeq {
+			victimAny = k
+			victimAnySeq = entry.seq
+			hasAny = true
+		}
+	}
+	if hasZero {
+		delete(cache.entries, victimZero)
+	} else if hasAny {
+		delete(cache.entries, victimAny)
+	}
+}
 
 // ResolveGateway finds a Gateway in the Registry gateway directory, which every Tenant
 // can read, and checks that it holds an active credential. The Gateway is returned with
@@ -167,31 +260,314 @@ WHERE device_id = ANY($1::uuid[]) AND point_code = ANY($2::text[])
 	return nil
 }
 
+func sanitizeQuarantineFields(quarantine adapter.UplinkQuarantine, now time.Time) (tenantID, gatewayID, topic, reasonCode, detail string, receivedAt time.Time) {
+	tenantID = strings.TrimSpace(quarantine.TenantID)
+	gatewayID = clampUTF8Runes(quarantine.GatewayID, maxQuarantineGatewayRunes)
+	if gatewayID == "" {
+		gatewayID = "invalid"
+	}
+	topic = clampUTF8Runes(quarantine.Topic, maxQuarantineTopicRunes)
+	if topic == "" {
+		topic = "(empty)"
+	}
+	reasonCode = strings.TrimSpace(quarantine.ReasonCode)
+	detail = clampUTF8Runes(quarantine.Detail, maxQuarantineDetailRunes)
+	if detail == "" {
+		if reasonCode != "" {
+			detail = reasonCode
+		} else {
+			detail = "quarantined"
+		}
+	}
+	receivedAt = quarantine.ReceivedAt.UTC()
+	if receivedAt.IsZero() {
+		receivedAt = now.UTC()
+	}
+	return tenantID, gatewayID, topic, reasonCode, detail, receivedAt
+}
+
 func (store *Store) QuarantineUplink(ctx context.Context, quarantine adapter.UplinkQuarantine) error {
-	id, err := newUUIDv7(quarantine.ReceivedAt)
-	if err != nil {
+	if store == nil || store.pool == nil {
+		return errors.New("connectivity store is closed")
+	}
+	return store.quarantineUplinkWith(ctx, quarantine, store.persistQuarantineDB)
+}
+
+func (store *Store) quarantineUplinkWith(ctx context.Context, quarantine adapter.UplinkQuarantine, persist quarantinePersistFn) error {
+	now := store.clock().UTC()
+	tenantID, gatewayID, topic, reasonCode, detail, receivedAt := sanitizeQuarantineFields(quarantine, now)
+	preview, encoding, truncated, shaHex := packettap.FormatPayloadPreview(quarantine.Payload, packettap.MaxPayloadPreviewBytes)
+	key := quarantineDedupKey{
+		tenantID:      tenantID,
+		gatewayID:     gatewayID,
+		reasonCode:    reasonCode,
+		topic:         topic,
+		payloadSHA256: shaHex,
+	}
+
+	cache := &store.cache.quarantine
+	for {
+		cache.mu.Lock()
+		if cache.entries == nil {
+			cache.entries = make(map[quarantineDedupKey]*quarantineCooldownEntry)
+		}
+		entry, exists := cache.entries[key]
+		if exists && receivedAt.Before(entry.cooldownUntil) {
+			entry.pendingDelta++
+			if receivedAt.After(entry.lastSeenAt) {
+				entry.lastSeenAt = receivedAt
+			}
+			entry.detail = detail
+			entry.payloadBytes = len(quarantine.Payload)
+			entry.payloadPreview = preview
+			entry.payloadEncoding = encoding
+			entry.payloadTruncated = truncated
+			cache.seq++
+			entry.seq = cache.seq
+			cache.mu.Unlock()
+			return nil
+		}
+		if exists && entry.inFlight != nil {
+			waitCh := entry.inFlight
+			cache.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-waitCh:
+				continue
+			}
+		}
+
+		var carriedPending int64
+		done := make(chan struct{})
+		if exists {
+			carriedPending = entry.pendingDelta
+			entry.pendingDelta = 0
+			entry.cooldownUntil = receivedAt.Add(quarantineCooldownDuration)
+			if receivedAt.After(entry.lastSeenAt) {
+				entry.lastSeenAt = receivedAt
+			}
+			entry.detail = detail
+			entry.payloadBytes = len(quarantine.Payload)
+			entry.payloadPreview = preview
+			entry.payloadEncoding = encoding
+			entry.payloadTruncated = truncated
+			entry.inFlight = done
+			cache.seq++
+			entry.seq = cache.seq
+		} else {
+			cache.evictIfNeededLocked()
+			cache.seq++
+			entry = &quarantineCooldownEntry{
+				cooldownUntil:    receivedAt.Add(quarantineCooldownDuration),
+				lastSeenAt:       receivedAt,
+				detail:           detail,
+				payloadBytes:     len(quarantine.Payload),
+				payloadPreview:   preview,
+				payloadEncoding:  encoding,
+				payloadTruncated: truncated,
+				seq:              cache.seq,
+				inFlight:         done,
+			}
+			cache.entries[key] = entry
+		}
+		cache.mu.Unlock()
+
+		err := persist(ctx, quarantinePersistInput{
+			tenantID:         tenantID,
+			gatewayID:        gatewayID,
+			topic:            topic,
+			reasonCode:       reasonCode,
+			detail:           detail,
+			payloadSHA256:    shaHex,
+			payloadBytes:     len(quarantine.Payload),
+			payloadPreview:   preview,
+			payloadEncoding:  encoding,
+			payloadTruncated: truncated,
+			delta:            1 + carriedPending,
+			receivedAt:       receivedAt,
+		})
+
+		cache.mu.Lock()
+		if current, ok := cache.entries[key]; ok && current == entry {
+			if err != nil {
+				current.pendingDelta += carriedPending
+				current.cooldownUntil = time.Time{}
+			}
+			current.inFlight = nil
+		}
+		close(done)
+		cache.mu.Unlock()
 		return err
+	}
+}
+
+func (store *Store) FlushQuarantineBursts(ctx context.Context) error {
+	if store == nil || store.pool == nil {
+		return errors.New("connectivity store is closed")
+	}
+	return store.flushQuarantineBurstsWith(ctx, "", store.persistQuarantineDB)
+}
+
+func (store *Store) flushQuarantineBurstsForGateway(ctx context.Context, gatewayID string) error {
+	if store == nil || store.pool == nil {
+		return errors.New("connectivity store is closed")
+	}
+	return store.flushQuarantineBurstsWith(ctx, strings.TrimSpace(gatewayID), store.persistQuarantineDB)
+}
+
+func (store *Store) flushQuarantineBurstsWith(ctx context.Context, gatewayFilter string, persist quarantinePersistFn) error {
+	cache := &store.cache.quarantine
+	for {
+		cache.mu.Lock()
+		if len(cache.entries) == 0 {
+			cache.mu.Unlock()
+			return nil
+		}
+		var targetKey quarantineDedupKey
+		var targetEntry *quarantineCooldownEntry
+		var waitCh chan struct{}
+		for k, entry := range cache.entries {
+			if gatewayFilter != "" && !strings.EqualFold(k.gatewayID, gatewayFilter) {
+				continue
+			}
+			if entry.inFlight != nil {
+				waitCh = entry.inFlight
+				break
+			}
+			if entry.pendingDelta > 0 {
+				targetKey = k
+				targetEntry = entry
+				break
+			}
+		}
+		if waitCh != nil {
+			cache.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-waitCh:
+				continue
+			}
+		}
+		if targetEntry == nil {
+			cache.mu.Unlock()
+			return nil
+		}
+
+		delta := targetEntry.pendingDelta
+		targetEntry.pendingDelta = 0
+		done := make(chan struct{})
+		targetEntry.inFlight = done
+		input := quarantinePersistInput{
+			tenantID:         targetKey.tenantID,
+			gatewayID:        targetKey.gatewayID,
+			topic:            targetKey.topic,
+			reasonCode:       targetKey.reasonCode,
+			detail:           targetEntry.detail,
+			payloadSHA256:    targetKey.payloadSHA256,
+			payloadBytes:     targetEntry.payloadBytes,
+			payloadPreview:   targetEntry.payloadPreview,
+			payloadEncoding:  targetEntry.payloadEncoding,
+			payloadTruncated: targetEntry.payloadTruncated,
+			delta:            delta,
+			receivedAt:       targetEntry.lastSeenAt,
+		}
+		cache.mu.Unlock()
+
+		err := persist(ctx, input)
+
+		cache.mu.Lock()
+		if current, ok := cache.entries[targetKey]; ok && current == targetEntry {
+			if err != nil {
+				current.pendingDelta += delta
+			}
+			current.inFlight = nil
+		}
+		close(done)
+		cache.mu.Unlock()
+
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func (store *Store) persistQuarantineDB(ctx context.Context, input quarantinePersistInput) error {
+	if store == nil || store.pool == nil {
+		return errors.New("connectivity store is closed")
 	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+
 	var tenantID any
-	if quarantine.TenantID != "" {
-		tenantID = quarantine.TenantID
-		if err := setTenant(ctx, tx, quarantine.TenantID); err != nil {
+	if input.tenantID != "" {
+		tenantID = input.tenantID
+		if err := setTenant(ctx, tx, input.tenantID); err != nil {
 			return err
 		}
+	} else {
+		if _, err := tx.Exec(ctx, `SELECT set_config('app.tenant_id', '', true)`); err != nil {
+			return fmt.Errorf("clear Tenant context: %w", err)
+		}
 	}
-	if _, err := tx.Exec(ctx, `
+
+	windowStart := input.receivedAt.Add(-quarantineDedupWindow)
+	var existingID string
+	err = tx.QueryRow(ctx, `
+SELECT id::text
+FROM connectivity.uplink_quarantine
+WHERE tenant_id IS NOT DISTINCT FROM $1::uuid
+  AND gateway_id = $2
+  AND reason_code = $3
+  AND topic = $4
+  AND payload_sha256 = $5
+  AND last_seen_at >= $6
+ORDER BY last_seen_at DESC, id DESC
+LIMIT 1
+FOR UPDATE
+`, tenantID, input.gatewayID, input.reasonCode, input.topic, input.payloadSHA256, windowStart).Scan(&existingID)
+	switch {
+	case err == nil:
+		if _, err := tx.Exec(ctx, `
+UPDATE connectivity.uplink_quarantine
+SET occurrence_count = occurrence_count + $1,
+    last_seen_at = GREATEST(last_seen_at, $2),
+    detail = $3,
+    payload_preview = $4,
+    payload_encoding = $5,
+    payload_truncated = $6
+WHERE id = $7::uuid
+`, input.delta, input.receivedAt, input.detail, input.payloadPreview, input.payloadEncoding, input.payloadTruncated, existingID); err != nil {
+			return fmt.Errorf("update uplink quarantine dedup row: %w", err)
+		}
+	case errors.Is(err, pgx.ErrNoRows):
+		id, idErr := newUUIDv7(input.receivedAt)
+		if idErr != nil {
+			return idErr
+		}
+		if _, err := tx.Exec(ctx, `
 INSERT INTO connectivity.uplink_quarantine (
-  id, tenant_id, gateway_id, topic, reason_code, detail, payload_sha256, payload_bytes, received_at
-) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9)
-`, id, tenantID, quarantine.GatewayID, quarantine.Topic, quarantine.ReasonCode, quarantine.Detail,
-		quarantine.PayloadSHA256(), len(quarantine.Payload), quarantine.ReceivedAt); err != nil {
-		return fmt.Errorf("persist uplink quarantine: %w", err)
+  id, tenant_id, gateway_id, topic, reason_code, detail,
+  payload_sha256, payload_bytes, payload_preview, payload_encoding, payload_truncated,
+  occurrence_count, received_at, last_seen_at
+) VALUES (
+  $1::uuid, $2::uuid, $3, $4, $5, $6,
+  $7, $8, $9, $10, $11,
+  $12, $13, $13
+)
+`, id, tenantID, input.gatewayID, input.topic, input.reasonCode, input.detail,
+			input.payloadSHA256, input.payloadBytes, input.payloadPreview, input.payloadEncoding, input.payloadTruncated,
+			input.delta, input.receivedAt); err != nil {
+			return fmt.Errorf("persist uplink quarantine: %w", err)
+		}
+	default:
+		return fmt.Errorf("lookup uplink quarantine dedup row: %w", err)
 	}
+
 	return tx.Commit(ctx)
 }
 

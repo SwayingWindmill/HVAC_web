@@ -35,6 +35,7 @@ const (
 	commandSchemaVersion         = "2.0"
 	replyRecoveryBatchLimit      = 50
 	defaultReplyRecoveryInterval = 15 * time.Second
+	defaultCrossReplicaPoll      = 500 * time.Millisecond
 	maxCommandReplyPayloadBytes  = 256 << 10
 	replyWorkerShards            = 16
 	replyShardQueueCapacity      = 256
@@ -56,20 +57,22 @@ type EvidenceStore interface {
 // Config is one command connection for every Gateway: commands go to
 // hvac/v1/{gatewayId}/down/command and replies come back on hvac/v1/{gatewayId}/up/reply.
 type Config struct {
-	BrokerURL               string
-	ClientID                string
-	SharedSubscriptionGroup string
-	CAFile                  string
-	CertFile                string
-	KeyFile                 string
-	ServerName              string
-	TransportState          TransportState
-	EvidenceStore           EvidenceStore
-	LateResultSink          LateResultSink
-	ReplyTimeout            time.Duration
-	Now                     func() time.Time
-	Logger                  *slog.Logger
-	Metrics                 *observability.Registry
+	BrokerURL                string
+	ClientID                 string
+	SharedSubscriptionGroup  string
+	CrossReplicaPollInterval time.Duration
+	CAFile                   string
+	CertFile                 string
+	KeyFile                  string
+	ServerName               string
+	TransportState           TransportState
+	EvidenceStore            EvidenceStore
+	LateResultSink           LateResultSink
+	ReplyTimeout             time.Duration
+	Now                      func() time.Time
+	Logger                   *slog.Logger
+	Metrics                  *observability.Registry
+	PacketHook               func(direction, channel, gatewayID, topic, traceID string, payload []byte)
 }
 
 // ReplyTopicFilter is every Gateway's command reply topic.
@@ -222,6 +225,9 @@ func New(ctx context.Context, config Config) (*Connector, error) {
 	if config.ReplyTimeout == 0 {
 		config.ReplyTimeout = 15 * time.Second
 	}
+	if config.CrossReplicaPollInterval <= 0 && config.SharedSubscriptionGroup != "" {
+		config.CrossReplicaPollInterval = defaultCrossReplicaPoll
+	}
 	if config.Now == nil {
 		config.Now = time.Now
 	}
@@ -281,6 +287,9 @@ func NewOffline(config Config) (*Connector, error) {
 	}
 	if config.ReplyTimeout == 0 {
 		config.ReplyTimeout = 15 * time.Second
+	}
+	if config.CrossReplicaPollInterval <= 0 && config.SharedSubscriptionGroup != "" {
+		config.CrossReplicaPollInterval = defaultCrossReplicaPoll
 	}
 	if config.Now == nil {
 		config.Now = time.Now
@@ -380,6 +389,7 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 
 	remainingBeforePublish := expireAt.Sub(connector.config.Now().UTC())
 	expirySeconds := messageExpirySeconds(remainingBeforePublish)
+	connector.emitPacketHook("DOWNLINK", "COMMAND", route.GatewayID, commandTopic, request.TraceID, body)
 	publishContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 	_, publishErr := connector.publishCommand(publishContext, &paho.Publish{
 		QoS:        1,
@@ -390,13 +400,20 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 	})
 	cancel()
 	if publishErr != nil {
+		publishOutcome := "failed"
+		if errors.Is(publishErr, context.DeadlineExceeded) {
+			publishOutcome = "timed_out"
+		}
+		connector.addCounter("hvac_mqtt_command_publishes_total", "MQTT command publish attempts by outcome.", map[string]string{"outcome": publishOutcome}, 1)
 		// The durable correlation is armed before calling the MQTT client. A process
 		// crash or publish error after this point is not provably unsent, so retrying
 		// the physical write would be unsafe.
 		return connector.completeOutcomeUnknown(ctx, prepared, "MQTT_COMMAND_PUBLISH_OUTCOME_UNKNOWN")
 	}
+	connector.addCounter("hvac_mqtt_command_publishes_total", "MQTT command publish attempts by outcome.", map[string]string{"outcome": "success"}, 1)
 
-	wait := expireAt.Sub(connector.config.Now().UTC())
+	waitStartedAt := connector.config.Now().UTC()
+	wait := expireAt.Sub(waitStartedAt)
 	if connector.config.ReplyTimeout > 0 && connector.config.ReplyTimeout < wait {
 		wait = connector.config.ReplyTimeout
 	}
@@ -405,13 +422,59 @@ func (connector *Connector) Execute(ctx context.Context, envelope commandmodel.D
 	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
-	select {
-	case <-ctx.Done():
+
+	var pollTicker *time.Ticker
+	var pollCh <-chan time.Time
+	loader, hasLoader := connector.config.TransportState.(CommandCorrelationLoader)
+	if connector.config.SharedSubscriptionGroup != "" && hasLoader {
+		pollInterval := connector.config.CrossReplicaPollInterval
+		if pollInterval <= 0 {
+			pollInterval = defaultCrossReplicaPoll
+		}
+		pollTicker = time.NewTicker(pollInterval)
+		defer pollTicker.Stop()
+		pollCh = pollTicker.C
+	}
+
+	finishContextDone := func() (commandmodel.ConnectorResult, error) {
+		outcome := "failed"
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			outcome = "timed_out"
+		}
+		connector.recordReplyWaitMetric(outcome, waitStartedAt)
 		return connector.completeOutcomeUnknown(ctx, prepared, "MQTT_COMMAND_CONTEXT_DONE")
-	case <-timer.C:
-		return connector.completeOutcomeUnknown(ctx, prepared, "MQTT_COMMAND_REPLY_TIMEOUT")
-	case replyCorrelation := <-waiter:
-		return connector.completeRecoveredReply(ctx, replyCorrelation)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return finishContextDone()
+		case <-timer.C:
+			connector.recordReplyWaitMetric("timed_out", waitStartedAt)
+			return connector.completeOutcomeUnknown(ctx, prepared, "MQTT_COMMAND_REPLY_TIMEOUT")
+		case replyCorrelation := <-waiter:
+			if pollTicker != nil {
+				pollTicker.Stop()
+			}
+			timer.Stop()
+			result, err := connector.completeRecoveredReply(ctx, replyCorrelation)
+			connector.recordReplyWaitMetric(replyWaitOutcome(result, err), waitStartedAt)
+			return result, err
+		case <-pollCh:
+			if ctx.Err() != nil {
+				return finishContextDone()
+			}
+			pollCtx, pollCancel := context.WithTimeout(ctx, 2*time.Second)
+			loaded, loadErr := loader.LoadCommandCorrelation(pollCtx, envelope.TenantID, envelope.AttemptID, envelope.ExecutionFence)
+			pollCancel()
+			if loadErr == nil && (loaded.State == commandmodel.CorrelationReplied || loaded.State == commandmodel.CorrelationResolved) {
+				pollTicker.Stop()
+				timer.Stop()
+				result, err := connector.completeRecoveredReply(ctx, loaded)
+				connector.recordReplyWaitMetric(replyWaitOutcome(result, err), waitStartedAt)
+				return result, err
+			}
+		}
 	}
 }
 
@@ -695,6 +758,44 @@ func (connector *Connector) recordReplyMetric(outcome string) {
 	connector.addCounter("hvac_mqtt_command_replies_total", "MQTT command reply deliveries by outcome.", map[string]string{"outcome": outcome}, 1)
 }
 
+func (connector *Connector) emitPacketHook(direction, channel, gatewayID, topic, traceID string, payload []byte) {
+	if connector == nil || connector.config.PacketHook == nil {
+		return
+	}
+	connector.config.PacketHook(direction, channel, gatewayID, topic, traceID, bytes.Clone(payload))
+}
+
+func (connector *Connector) recordReplyWaitMetric(outcome string, startedAt time.Time) {
+	if connector == nil || connector.config.Metrics == nil {
+		return
+	}
+	elapsed := connector.config.Now().UTC().Sub(startedAt).Seconds()
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	_ = connector.config.Metrics.ObserveHistogram(
+		"hvac_mqtt_command_reply_wait_seconds",
+		"MQTT command reply wait duration by outcome.",
+		map[string]string{"outcome": outcome},
+		elapsed,
+		nil,
+	)
+}
+
+func replyWaitOutcome(result commandmodel.ConnectorResult, err error) string {
+	if err != nil {
+		return "failed"
+	}
+	switch result.Phase {
+	case commandmodel.ConnectorAcknowledged:
+		return "acknowledged"
+	case commandmodel.ConnectorExecutionRejected:
+		return "rejected"
+	default:
+		return "failed"
+	}
+}
+
 func isPermanentCorrelationError(err error) bool {
 	return errors.Is(err, commandmodel.ErrCommandCorrelationNotFound) ||
 		errors.Is(err, commandmodel.ErrCommandCorrelationMismatch)
@@ -826,6 +927,7 @@ func (connector *Connector) onReply(received paho.PublishReceived) (bool, error)
 		connector.recordReplyMetric("invalid")
 		return true, nil
 	}
+	connector.emitPacketHook("UPLINK", "COMMAND_REPLY", gatewayID, received.Packet.Topic, strings.TrimSpace(reply.TraceID), received.Packet.Payload)
 	status := strings.ToUpper(strings.TrimSpace(reply.EdgeStatus))
 	if status == "RECEIVED" || status == "VALIDATING" || status == "WRITING" {
 		ackImmediate()

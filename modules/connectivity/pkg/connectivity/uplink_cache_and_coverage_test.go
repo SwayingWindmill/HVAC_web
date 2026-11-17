@@ -49,9 +49,11 @@ func TestUplinkCacheRespectsTTLValidUntilDeepCopyBoundsAndInvalidation(t *testin
 		t.Fatal("negative cache entry must expire after 5s")
 	}
 
-	// InvalidateGatewayCache removes target gateway and its device keys, sparing unrelated gateways.
+	// InvalidateGatewayCache removes target gateway, credential verification, and device keys, sparing unrelated gateways.
 	cacheSetIfEpoch(&store.cache, &store.cache.devices, deviceCacheKey{tenantID: "t-1", gatewayID: gwB.ID, sourceKey: "CH-1"}, "dev-1", now.Add(uplinkPositiveTTL), now, gwB.ID, 0)
 	cacheSetIfEpoch(&store.cache, &store.cache.devices, deviceCacheKey{tenantID: "t-1", gatewayID: "gw-other", sourceKey: "CH-1"}, "dev-2", now.Add(uplinkPositiveTTL), now, "gw-other", 0)
+	cacheSetIfEpoch(&store.cache, &store.cache.credVerify, credVerifyCacheKey{gatewayID: gwB.ID, fingerprint: "fp-b"}, credVerifyCacheResult{gatewayID: gwB.ID}, now.Add(credVerifyPositiveTTL), now, gwB.ID, 0)
+	cacheSetIfEpoch(&store.cache, &store.cache.credVerify, credVerifyCacheKey{gatewayID: "gw-other", fingerprint: "fp-other"}, credVerifyCacheResult{gatewayID: "gw-other"}, now.Add(credVerifyPositiveTTL), now, "gw-other", 0)
 	store.InvalidateGatewayCache(gwB.ID)
 	if _, ok, _ := cacheGetOrEpoch(&store.cache, store.cache.gateways, gwB.ID, now, gwB.ID); ok {
 		t.Fatal("InvalidateGatewayCache did not evict target gateway")
@@ -59,8 +61,14 @@ func TestUplinkCacheRespectsTTLValidUntilDeepCopyBoundsAndInvalidation(t *testin
 	if _, ok, _ := cacheGetOrEpoch(&store.cache, store.cache.devices, deviceCacheKey{tenantID: "t-1", gatewayID: gwB.ID, sourceKey: "CH-1"}, now, gwB.ID); ok {
 		t.Fatal("InvalidateGatewayCache did not evict target gateway device key")
 	}
+	if _, ok, _ := cacheGetOrEpoch(&store.cache, store.cache.credVerify, credVerifyCacheKey{gatewayID: gwB.ID, fingerprint: "fp-b"}, now, gwB.ID); ok {
+		t.Fatal("InvalidateGatewayCache did not evict target gateway credential verification")
+	}
 	if _, ok, _ := cacheGetOrEpoch(&store.cache, store.cache.devices, deviceCacheKey{tenantID: "t-1", gatewayID: "gw-other", sourceKey: "CH-1"}, now, "gw-other"); !ok {
 		t.Fatal("InvalidateGatewayCache evicted unrelated gateway")
+	}
+	if _, ok, _ := cacheGetOrEpoch(&store.cache, store.cache.credVerify, credVerifyCacheKey{gatewayID: "gw-other", fingerprint: "fp-other"}, now, "gw-other"); !ok {
+		t.Fatal("InvalidateGatewayCache evicted unrelated gateway credential verification")
 	}
 
 	// ResolveBindings caches device/point misses, isolates caller mutations,

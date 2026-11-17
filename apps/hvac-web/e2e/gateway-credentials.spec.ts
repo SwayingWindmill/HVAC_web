@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SITE_ID, principal } from './gateway';
@@ -6,6 +6,10 @@ import { expect, test } from './test';
 
 const GATEWAY_ID = '018f3e00-4000-7000-8000-000000000100';
 const INITIAL_CERT_ID = '0193f100-0000-7000-8000-000000000001';
+const ROOT_REPO_VERIFY_DIR = '/mnt/e/Code/HVAC_web/.scratch/verify/connectivity-p1-gateway-diagnostics';
+const SCREENSHOT_DIR = existsSync('/mnt/e/Code/HVAC_web/.git')
+  ? ROOT_REPO_VERIFY_DIR
+  : join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '.scratch', 'verify', 'connectivity-p1-gateway-diagnostics');
 const SHADOW_SHOT_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -15,6 +19,11 @@ const SHADOW_SHOT_DIR = join(
   'verify',
   'p1-web-governance',
 );
+
+function screenshotPath(fileName: string): string {
+  mkdirSync(SCREENSHOT_DIR, { recursive: true });
+  return join(SCREENSHOT_DIR, fileName);
+}
 
 function shadowShot(fileName: string): string {
   mkdirSync(SHADOW_SHOT_DIR, { recursive: true });
@@ -212,6 +221,125 @@ test('gateway credential sheet handles empty certificate list, fingerprint fallb
   await sheet.getByRole('button', { name: '刷新状态', exact: true }).click();
   await expect(sheet).toContainText('指纹末 8 位 deadbeef');
   await expect(sheet.getByRole('button', { name: '吊销证书…', exact: true })).toBeDisabled();
+  await expect(sheet.getByRole('button', { name: '开启抓包', exact: true })).toBeDisabled();
+  await expect(sheet).toContainText('当前账号仅有查看权限，不可启停抓包。');
+});
+
+test('gateway diagnostics support packet capture lifecycle, direction filtering, quarantine inspection, and light/dark screenshots at 1440px', async ({
+  page,
+  gateway,
+}) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => {
+    pageErrors.push(error.message);
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  gateway.principalOverride = grantDeviceWritePrincipal();
+
+  await page.goto(`/settings/integrations?site=${SITE_ID}`);
+  await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
+
+  const sheet = page.getByRole('dialog');
+  const captureSection = sheet.locator('section[aria-label="通信抓包"]');
+  const quarantineSection = sheet.locator('section[aria-label="接收隔离"]');
+
+  await expect(quarantineSection).toBeVisible();
+  await expect(quarantineSection).toContainText('报文格式或字段不合法');
+  await expect(quarantineSection).toContainText('证书未生效或已吊销');
+  await expect(quarantineSection).toContainText('累计 4 次');
+  await expect(quarantineSection).toContainText('累计 12 次');
+
+  const quarantineList = quarantineSection.getByRole('list', { name: '接收隔离记录' });
+  const invalidItem = quarantineList.getByRole('listitem').filter({ hasText: '报文格式或字段不合法' });
+  await invalidItem.locator('summary', { hasText: '查看原始报文片段' }).click();
+  await expect(invalidItem.getByRole('region', { name: '隔离报文 0193f200-0000-7000-8000-000000000001 原始内容' })).toContainText('"deviceCode":"CHILLER-01"');
+
+  await expect(captureSection).toContainText('未开启');
+  await expect(captureSection).toContainText('暂无抓包记录');
+
+  await captureSection.getByRole('combobox', { name: '抓包时长' }).click();
+  await page.getByRole('option', { name: '1 分钟', exact: true }).click();
+  await captureSection.getByRole('button', { name: '开启抓包', exact: true }).click();
+
+  await expect(captureSection).toContainText('抓包中');
+  await expect(captureSection).toContainText('剩余 0');
+
+  const packetList = captureSection.getByRole('list', { name: '抓包记录' });
+  await expect(packetList.getByRole('listitem')).toHaveCount(3);
+  await expect(packetList).toContainText('上行读数');
+  await expect(packetList).toContainText('下行指令');
+  await expect(packetList).toContainText('接收隔离');
+
+  const firstPacket = packetList.getByRole('listitem').first();
+  await firstPacket.locator('summary').click();
+  await expect(firstPacket.getByRole('region', { name: '报文 1 原始内容' })).toContainText('"chw_supply_temp":7.1');
+  await expect(firstPacket.getByRole('button', { name: '复制报文 1', exact: true })).toBeVisible();
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await captureSection.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: screenshotPath('gateway-diagnostics-light.png') });
+
+  const filterGroup = captureSection.getByRole('radiogroup', { name: '报文方向筛选' });
+  await filterGroup.getByRole('radio', { name: '下行', exact: true }).click();
+  await expect(packetList.getByRole('listitem')).toHaveCount(1);
+  await expect(packetList).toContainText('下行指令');
+
+  await filterGroup.getByRole('radio', { name: '接收隔离', exact: true }).click();
+  await expect(packetList.getByRole('listitem')).toHaveCount(1);
+  await expect(packetList).toContainText('devices/eg8200-commercial-001/telemetry/unknown-point');
+
+  await filterGroup.getByRole('radio', { name: '全部', exact: true }).click();
+  await expect(packetList.getByRole('listitem')).toHaveCount(3);
+
+  await captureSection.getByRole('button', { name: '停止抓包', exact: true }).click();
+  await expect(captureSection).toContainText('未开启');
+  await expect(packetList.getByRole('listitem')).toHaveCount(3);
+
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+
+  await page.getByRole('radiogroup', { name: '外观' }).getByRole('radio', { name: '深色' }).click();
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+    .toBe('dark');
+
+  await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
+  await expect(quarantineSection).toContainText('报文格式或字段不合法');
+  await expect(packetList.getByRole('listitem')).toHaveCount(3);
+  await quarantineSection
+    .getByRole('listitem')
+    .filter({ hasText: '报文格式或字段不合法' })
+    .locator('summary', { hasText: '查看原始报文片段' })
+    .click();
+  await expect(
+    quarantineSection.getByRole('region', { name: '隔离报文 0193f200-0000-7000-8000-000000000001 原始内容' }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await quarantineSection.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: screenshotPath('gateway-diagnostics-dark.png') });
+
+  const captureWrites = gateway.writes.filter((entry) => entry.path.startsWith(`/api/v1/gateways/${GATEWAY_ID}/packet-capture/`));
+  expect(captureWrites).toEqual([
+    {
+      method: 'POST',
+      path: `/api/v1/gateways/${GATEWAY_ID}/packet-capture/start`,
+      body: { durationSeconds: 60 },
+      csrfToken: 'e2e-csrf-token',
+    },
+    {
+      method: 'POST',
+      path: `/api/v1/gateways/${GATEWAY_ID}/packet-capture/stop`,
+      body: null,
+      csrfToken: 'e2e-csrf-token',
+    },
+  ]);
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
 });
 
 test('gateway config shadow initializes mappings, recovers from 409 conflicts, and shows drift in light and dark themes', async ({

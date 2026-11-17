@@ -171,6 +171,7 @@ COPY infra/connectivity/postgres/init/gateway-config-shadows.sql /opt/hvac/repo/
 COPY infra/registry/postgres/init/optimization-monitor-lease.sql /opt/hvac/repo/infra/registry/postgres/init/optimization-monitor-lease.sql
 COPY infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql /opt/hvac/repo/infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql
 COPY modules/command/migrations/control-alarm-outbox.sql /opt/hvac/repo/modules/command/migrations/control-alarm-outbox.sql
+COPY infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql /opt/hvac/repo/infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql
 
 FROM postgres:16.4-bookworm
 

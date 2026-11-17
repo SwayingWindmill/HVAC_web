@@ -98,6 +98,7 @@ hvac_s1|infra/registry/postgres/init/iam-registry-read-views.sql
 hvac_s1|infra/connectivity/postgres/init/gateway-certificate-revocation.sql
 hvac_s1|infra/connectivity/postgres/init/gateway-config-shadows.sql
 hvac_s1|infra/registry/postgres/init/optimization-monitor-lease.sql
+hvac_s1|infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql
 hvac_s2|infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 hvac_s2|infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql

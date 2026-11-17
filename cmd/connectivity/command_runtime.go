@@ -16,23 +16,33 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/mqttconnector"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/packettap"
 )
+
+type commandTenantLister interface {
+	Tenants(ctx context.Context) ([]string, error)
+}
 
 // commandRuntime dispatches and verifies commands for every Tenant with a Gateway. Which
 // Devices may be controlled and where their commands go both come from the Registry.
 type commandRuntime struct {
 	store            *connectivity.Store
+	tenantLister     commandTenantLister
 	dispatcher       *commanddispatcher.DurableDispatcher
 	dispatcherWorker string
 	verifier         *commanddispatcher.DurableVerificationWorker
 	verifierWorker   string
+	dispatchFn       func(context.Context, string) error
+	verifyFn         func(context.Context, string) error
 	connector        *mqttconnector.Connector
 	metrics          *observability.Registry
+	doneMu           sync.Mutex
+	done             chan struct{}
 }
 
 // loadCommandRuntime builds the command runtime from defaults for the Phase 1 compose
 // network; every value can be overridden by its environment variable.
-func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *slog.Logger, metrics *observability.Registry) (*commandRuntime, error) {
+func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *slog.Logger, metrics *observability.Registry, tap *packettap.Manager) (*commandRuntime, error) {
 	ca := envOr("COMMAND_RUNTIME_CA", "/run/hvac/pki/ca.crt")
 	dispatcherIdentity := workloadtls.CertificateFiles{
 		CertificatePath: envOr("COMMAND_DISPATCHER_CERT", "/run/hvac/pki/command-dispatcher/tls.crt"),
@@ -65,6 +75,10 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *
 	if err != nil {
 		return nil, err
 	}
+	var packetHook func(direction, channel, gatewayID, topic, traceID string, payload []byte)
+	if tap != nil {
+		packetHook = tap.Record
+	}
 	// The broker ACL grants command topics to the command-dispatcher certificate CN.
 	connector, err := mqttconnector.New(ctx, mqttconnector.Config{
 		BrokerURL:               envOr("CONNECTIVITY_MQTT_URL", "tls://mqtt-broker:8883"),
@@ -80,6 +94,7 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *
 		ReplyTimeout:            25 * time.Second,
 		Logger:                  logger,
 		Metrics:                 metrics,
+		PacketHook:              packetHook,
 	})
 	if err != nil {
 		return nil, err
@@ -89,6 +104,7 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *
 	verifierWorkerID := envOr("COMMAND_VERIFIER_WORKER_ID", hostnameOr("connectivity-command-verifier"))
 	return &commandRuntime{
 		store:            store,
+		tenantLister:     store,
 		dispatcher:       commanddispatcher.NewDurable(dispatcherRuntimeClient, connector, dispatcherWorkerID, 45*time.Second),
 		dispatcherWorker: dispatcherWorkerID,
 		verifier:         commanddispatcher.NewDurableVerificationWorker(verifierRuntimeClient, commanddispatcher.NewAuthoritativeReportedStateVerifier(verificationReader), verifierWorkerID, 5*time.Second),
@@ -98,32 +114,124 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *
 	}, nil
 }
 
-func (runtime *commandRuntime) Run(ctx context.Context, logger *slog.Logger) {
-	logger.Info("connectivity_command_runtime_started", "dispatcher_worker_id", runtime.dispatcherWorker, "verifier_worker_id", runtime.verifierWorker)
-	observability.GoSafe(logger, runtime.metrics, "connectivity.command_dispatch", func() {
-		runtime.runForEveryTenantLoop(ctx, logger, "dispatch", 40*time.Second, runtime.dispatcher.RunOnce, commandservice.ErrNoDispatchAvailable)
-	})
-	observability.GoSafe(logger, runtime.metrics, "connectivity.command_verification", func() {
-		runtime.runForEveryTenantLoop(ctx, logger, "verification", 12*time.Second, runtime.verifier.RunOnce, commandservice.ErrVerificationNotAvailable)
-	})
-	<-ctx.Done()
+func (runtime *commandRuntime) dispatchOnce() func(context.Context, string) error {
+	if runtime.dispatchFn != nil {
+		return runtime.dispatchFn
+	}
+	if runtime.dispatcher != nil {
+		return runtime.dispatcher.RunOnce
+	}
+	return nil
 }
 
-func (runtime *commandRuntime) runForEveryTenantLoop(ctx context.Context, logger *slog.Logger, work string, timeout time.Duration, runOnce func(context.Context, string) error, noWork error) {
-	for ctx.Err() == nil {
+func (runtime *commandRuntime) verifyOnce() func(context.Context, string) error {
+	if runtime.verifyFn != nil {
+		return runtime.verifyFn
+	}
+	if runtime.verifier != nil {
+		return runtime.verifier.RunOnce
+	}
+	return nil
+}
+
+func (runtime *commandRuntime) listTenants(ctx context.Context) ([]string, error) {
+	if runtime.tenantLister != nil {
+		return runtime.tenantLister.Tenants(ctx)
+	}
+	if runtime.store != nil {
+		return runtime.store.Tenants(ctx)
+	}
+	return nil, errors.New("command tenant lister unavailable")
+}
+
+func (runtime *commandRuntime) resetDone() chan struct{} {
+	done := make(chan struct{})
+	runtime.doneMu.Lock()
+	runtime.done = done
+	runtime.doneMu.Unlock()
+	return done
+}
+
+func (runtime *commandRuntime) Wait(ctx context.Context) error {
+	if runtime == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runtime.doneMu.Lock()
+	done := runtime.done
+	runtime.doneMu.Unlock()
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (runtime *commandRuntime) Run(ctx context.Context, logger *slog.Logger) {
+	runtime.RunWithDrain(ctx, ctx, logger)
+}
+
+// RunWithDrain stops claiming new command work once claimCtx closes while letting
+// in-flight dispatch and verification turns complete within execCtx.
+func (runtime *commandRuntime) RunWithDrain(claimCtx, execCtx context.Context, logger *slog.Logger) {
+	if runtime == nil {
+		return
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if claimCtx == nil {
+		claimCtx = context.Background()
+	}
+	if execCtx == nil {
+		execCtx = claimCtx
+	}
+	done := runtime.resetDone()
+	defer close(done)
+
+	dispatchFn := runtime.dispatchOnce()
+	verifyFn := runtime.verifyOnce()
+	logger.Info("connectivity_command_runtime_started", "dispatcher_worker_id", runtime.dispatcherWorker, "verifier_worker_id", runtime.verifierWorker)
+	var workers sync.WaitGroup
+	if dispatchFn != nil {
+		workers.Add(1)
+		observability.GoSafe(logger, runtime.metrics, "connectivity.command_dispatch", func() {
+			defer workers.Done()
+			runtime.runForEveryTenantLoop(claimCtx, execCtx, logger, "dispatch", 40*time.Second, dispatchFn, commandservice.ErrNoDispatchAvailable)
+		})
+	}
+	if verifyFn != nil {
+		workers.Add(1)
+		observability.GoSafe(logger, runtime.metrics, "connectivity.command_verification", func() {
+			defer workers.Done()
+			runtime.runForEveryTenantLoop(claimCtx, execCtx, logger, "verification", 12*time.Second, verifyFn, commandservice.ErrVerificationNotAvailable)
+		})
+	}
+	<-claimCtx.Done()
+	workers.Wait()
+}
+
+func (runtime *commandRuntime) runForEveryTenantLoop(claimCtx, execCtx context.Context, logger *slog.Logger, work string, timeout time.Duration, runOnce func(context.Context, string) error, noWork error) {
+	for claimCtx.Err() == nil {
 		panicked := false
 		func() {
 			defer observability.Recover(logger, runtime.metrics, "connectivity.command_"+work, func(any) {
 				panicked = true
 			})
-			runtime.runForEveryTenant(ctx, logger, work, timeout, runOnce, noWork)
+			runtime.runForEveryTenant(claimCtx, execCtx, logger, work, timeout, runOnce, noWork)
 		}()
-		if !panicked || ctx.Err() != nil {
+		if !panicked || claimCtx.Err() != nil {
 			return
 		}
 		timer := time.NewTimer(time.Second)
 		select {
-		case <-ctx.Done():
+		case <-claimCtx.Done():
 			timer.Stop()
 			return
 		case <-timer.C:
@@ -132,14 +240,18 @@ func (runtime *commandRuntime) runForEveryTenantLoop(ctx context.Context, logger
 }
 
 func (runtime *commandRuntime) Close(ctx context.Context) error {
+	if runtime == nil || runtime.connector == nil {
+		return nil
+	}
 	return runtime.connector.Disconnect(ctx)
 }
 
 const (
 	maxConcurrentCommandTenants = 4
 	commandTenantBaseBackoff    = 100 * time.Millisecond
+	commandIdleMaxBackoff       = 1500 * time.Millisecond
 	commandTenantMaxBackoff     = 5 * time.Second
-	commandTenantsRefreshWindow = 500 * time.Millisecond
+	commandTenantsRefreshWindow = 5 * time.Second
 )
 
 type tenantRunOutcome struct {
@@ -148,10 +260,11 @@ type tenantRunOutcome struct {
 }
 
 // runForEveryTenant schedules each Tenant's work concurrently up to maxConcurrentCommandTenants.
-func (runtime *commandRuntime) runForEveryTenant(ctx context.Context, logger *slog.Logger, work string, timeout time.Duration, runOnce func(context.Context, string) error, noWork error) {
+func (runtime *commandRuntime) runForEveryTenant(claimCtx, execCtx context.Context, logger *slog.Logger, work string, timeout time.Duration, runOnce func(context.Context, string) error, noWork error) {
 	inFlight := make(map[string]bool)
 	readyAt := make(map[string]time.Time)
 	backoffByTenant := make(map[string]time.Duration)
+	idleBackoffByTenant := make(map[string]time.Duration)
 	doneCh := make(chan tenantRunOutcome, maxConcurrentCommandTenants)
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -168,14 +281,18 @@ func (runtime *commandRuntime) runForEveryTenant(ctx context.Context, logger *sl
 		case outcome.err == nil:
 			delete(readyAt, outcome.tenantID)
 			backoffByTenant[outcome.tenantID] = commandTenantBaseBackoff
+			idleBackoffByTenant[outcome.tenantID] = commandTenantBaseBackoff
 		case errors.Is(outcome.err, noWork):
-			readyAt[outcome.tenantID] = time.Now().Add(commandTenantBaseBackoff)
 			backoffByTenant[outcome.tenantID] = commandTenantBaseBackoff
+			idle := nextIdleBackoff(idleBackoffByTenant[outcome.tenantID])
+			readyAt[outcome.tenantID] = time.Now().Add(idle)
+			idleBackoffByTenant[outcome.tenantID] = min(idle*2, commandIdleMaxBackoff)
 		case errors.Is(outcome.err, commandservice.ErrStaleFence), errors.Is(outcome.err, commandservice.ErrCommandNotFound):
 			logger.Warn("connectivity_command_stale_work_discarded", "work", work, "tenant_id", outcome.tenantID)
 			readyAt[outcome.tenantID] = time.Now().Add(commandTenantBaseBackoff)
 			backoffByTenant[outcome.tenantID] = commandTenantBaseBackoff
-		case ctx.Err() != nil:
+			idleBackoffByTenant[outcome.tenantID] = commandTenantBaseBackoff
+		case execCtx.Err() != nil:
 		default:
 			backoff := backoffByTenant[outcome.tenantID]
 			if backoff <= 0 {
@@ -184,6 +301,7 @@ func (runtime *commandRuntime) runForEveryTenant(ctx context.Context, logger *sl
 			logger.Error("connectivity_command_failed", "work", work, "tenant_id", outcome.tenantID, "error", outcome.err.Error())
 			readyAt[outcome.tenantID] = time.Now().Add(backoff)
 			backoffByTenant[outcome.tenantID] = min(backoff*2, commandTenantMaxBackoff)
+			idleBackoffByTenant[outcome.tenantID] = commandTenantBaseBackoff
 		}
 	}
 
@@ -198,13 +316,13 @@ func (runtime *commandRuntime) runForEveryTenant(ctx context.Context, logger *sl
 		}
 	}
 
-	for ctx.Err() == nil {
+	for claimCtx.Err() == nil {
 		drainDone()
 		now := time.Now()
 		if !now.Before(tenantsReadyAt) && (tenantsFetchedAt.IsZero() || !now.Before(tenantsFetchedAt.Add(commandTenantsRefreshWindow))) {
-			tenants, err := runtime.store.Tenants(ctx)
+			tenants, err := runtime.listTenants(claimCtx)
 			if err != nil {
-				if ctx.Err() != nil {
+				if claimCtx.Err() != nil {
 					return
 				}
 				logger.Error("connectivity_command_tenants_unavailable", "work", work, "error", err.Error())
@@ -215,7 +333,7 @@ func (runtime *commandRuntime) runForEveryTenant(ctx context.Context, logger *sl
 				tenantsFetchedAt = time.Now()
 				tenantsReadyAt = time.Time{}
 				tenantsBackoff = commandTenantBaseBackoff
-				pruneTenantMaps(cachedTenants, readyAt, backoffByTenant)
+				pruneTenantMaps(cachedTenants, readyAt, backoffByTenant, idleBackoffByTenant)
 			}
 		}
 
@@ -239,7 +357,7 @@ func (runtime *commandRuntime) runForEveryTenant(ctx context.Context, logger *sl
 					panicked = true
 					doneCh <- tenantRunOutcome{tenantID: tid, err: errors.New("command worker panic recovered")}
 				})
-				runContext, cancel := context.WithTimeout(ctx, timeout)
+				runContext, cancel := context.WithTimeout(execCtx, timeout)
 				err := runOnce(runContext, tid)
 				cancel()
 				if !panicked {
@@ -250,7 +368,7 @@ func (runtime *commandRuntime) runForEveryTenant(ctx context.Context, logger *sl
 
 		if len(inFlight) >= maxConcurrentCommandTenants {
 			select {
-			case <-ctx.Done():
+			case <-claimCtx.Done():
 				return
 			case outcome := <-doneCh:
 				applyOutcome(outcome)
@@ -258,10 +376,10 @@ func (runtime *commandRuntime) runForEveryTenant(ctx context.Context, logger *sl
 			continue
 		}
 
-		waitFor := nextTenantWakeDelay(now, cachedTenants, inFlight, readyAt, tenantsReadyAt)
+		waitFor := nextTenantWakeDelay(now, cachedTenants, inFlight, readyAt, tenantsReadyAt, tenantsFetchedAt)
 		timer := time.NewTimer(waitFor)
 		select {
-		case <-ctx.Done():
+		case <-claimCtx.Done():
 			timer.Stop()
 			return
 		case outcome := <-doneCh:
@@ -272,14 +390,34 @@ func (runtime *commandRuntime) runForEveryTenant(ctx context.Context, logger *sl
 	}
 }
 
-func nextTenantWakeDelay(now time.Time, tenants []string, inFlight map[string]bool, readyAt map[string]time.Time, tenantsReadyAt time.Time) time.Duration {
-	if len(tenants) == 0 {
-		if tenantsReadyAt.After(now) {
-			return tenantsReadyAt.Sub(now)
-		}
+func nextIdleBackoff(current time.Duration) time.Duration {
+	if current <= 0 {
 		return commandTenantBaseBackoff
 	}
-	waitFor := commandTenantBaseBackoff
+	if current > commandIdleMaxBackoff {
+		return commandIdleMaxBackoff
+	}
+	return current
+}
+
+func nextTenantWakeDelay(now time.Time, tenants []string, inFlight map[string]bool, readyAt map[string]time.Time, tenantsReadyAt, tenantsFetchedAt time.Time) time.Duration {
+	waitFor := commandTenantMaxBackoff
+	if !tenantsReadyAt.IsZero() && tenantsReadyAt.After(now) {
+		waitFor = min(waitFor, tenantsReadyAt.Sub(now))
+	} else if !tenantsFetchedAt.IsZero() {
+		refreshAt := tenantsFetchedAt.Add(commandTenantsRefreshWindow)
+		if !refreshAt.After(now) {
+			return time.Millisecond
+		}
+		waitFor = min(waitFor, refreshAt.Sub(now))
+	}
+	if len(tenants) == 0 {
+		if waitFor < time.Millisecond {
+			return time.Millisecond
+		}
+		return waitFor
+	}
+	hasIdleCandidate := false
 	for _, tenantID := range tenants {
 		if inFlight[tenantID] {
 			continue
@@ -288,9 +426,13 @@ func nextTenantWakeDelay(now time.Time, tenants []string, inFlight map[string]bo
 		if !ok {
 			return time.Millisecond
 		}
+		hasIdleCandidate = true
 		if d := nextAt.Sub(now); d < waitFor {
 			waitFor = d
 		}
+	}
+	if !hasIdleCandidate {
+		waitFor = min(waitFor, commandTenantBaseBackoff)
 	}
 	if waitFor < time.Millisecond {
 		return time.Millisecond
@@ -298,7 +440,7 @@ func nextTenantWakeDelay(now time.Time, tenants []string, inFlight map[string]bo
 	return waitFor
 }
 
-func pruneTenantMaps(tenants []string, readyAt map[string]time.Time, backoffByTenant map[string]time.Duration) {
+func pruneTenantMaps(tenants []string, readyAt map[string]time.Time, backoffByTenant, idleBackoffByTenant map[string]time.Duration) {
 	active := make(map[string]bool, len(tenants))
 	for _, tenantID := range tenants {
 		active[tenantID] = true
@@ -311,6 +453,11 @@ func pruneTenantMaps(tenants []string, readyAt map[string]time.Time, backoffByTe
 	for tenantID := range backoffByTenant {
 		if !active[tenantID] {
 			delete(backoffByTenant, tenantID)
+		}
+	}
+	for tenantID := range idleBackoffByTenant {
+		if !active[tenantID] {
+			delete(idleBackoffByTenant, tenantID)
 		}
 	}
 }

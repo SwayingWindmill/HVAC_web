@@ -96,6 +96,16 @@ func (registry *Registry) SetGauge(name, help string, labels map[string]string, 
 	return nil
 }
 
+// DeleteGauge removes a specific labeled gauge series so reaped dynamic entities do not leak cardinality.
+func (registry *Registry) DeleteGauge(name string, labels map[string]string) {
+	if registry == nil {
+		return
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	delete(registry.gauges, metricKey(name, labels))
+}
+
 func (registry *Registry) ObserveHistogram(name, help string, labels map[string]string, value float64, buckets []float64) error {
 	if err := ValidateMetricLabels(labels); err != nil {
 		return err

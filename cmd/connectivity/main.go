@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/concentrator"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/packettap"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
 )
 
@@ -62,16 +64,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+	sigCtx, sigCancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer sigCancel()
+	ingressCtx, ingressCancel := context.WithCancel(sigCtx)
+	defer ingressCancel()
+	drainRootCtx, drainRootCancel := context.WithCancel(context.Background())
+	defer drainRootCancel()
+	var shuttingDown atomic.Bool
+	tap := packettap.NewManager()
+
 	connectivityDatabaseURL := strings.TrimSpace(os.Getenv("CONNECTIVITY_DATABASE_URL"))
-	connectivityStore, err := connectivity.Open(ctx, connectivityDatabaseURL)
+	connectivityStore, err := connectivity.Open(sigCtx, connectivityDatabaseURL)
 	if err != nil {
 		logger.Error("iot_connectivity_store_unavailable", "error", err.Error())
 		os.Exit(1)
 	}
 	defer connectivityStore.Close()
-	concentratorTransport, err := concentrator.NewMQTTTransport(ctx, concentrator.TransportConfig{
+	concentratorTransport, err := concentrator.NewMQTTTransport(drainRootCtx, concentrator.TransportConfig{
 		BrokerURL:  config.MQTT.BrokerURL,
 		ClientID:   envOr("CONNECTIVITY_CONCENTRATOR_MQTT_CLIENT_ID", config.MQTT.ClientID+"-concentrator"),
 		CAFile:     config.MQTT.CAFile,
@@ -80,19 +89,21 @@ func main() {
 		ServerName: config.MQTT.ServerName,
 		RPCTimeout: 18 * time.Second,
 		Logger:     logger,
+		Metrics:    telemetry.Metrics,
+		PacketHook: tap.Record,
 	})
 	if err != nil {
 		logger.Error("connectivity_concentrator_mqtt_unavailable", "error_code", "CONCENTRATOR_MQTT_UNAVAILABLE", "error", err.Error())
 		os.Exit(1)
 	}
-	telemetryRuntime, err := adapter.NewTelemetryRuntimeClient(config.TelemetryRuntime)
+	telemetryRuntime, err := adapter.NewTelemetryRuntimeClientWithTracer(config.TelemetryRuntime, telemetry.Tracer)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_runtime_client_invalid", "error", err.Error())
 		os.Exit(1)
 	}
 	concentratorService := concentrator.NewService(connectivityStore, concentratorTransport)
-	presence := newGatewayOnlineTracker()
-	credentials, tunnelHub, err := credentialServerWithContext(ctx, logger, telemetry.Metrics, presence, connectivityStore, concentratorService, telemetryRuntime, tunnel.WithObservability(logger, telemetry.Metrics))
+	presence := newGatewayOnlineTrackerWithMetrics(telemetry.Metrics)
+	credentials, tunnelHub, err := credentialServerWithDiagnostics(drainRootCtx, logger, telemetry.Metrics, presence, connectivityStore, concentratorService, telemetryRuntime, tap, tunnel.WithObservability(logger, telemetry.Metrics))
 	if err != nil {
 		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE")
 		os.Exit(1)
@@ -101,11 +112,13 @@ func main() {
 	processor, err := adapter.NewProcessor(
 		connectivityStore,
 		telemetryRuntime,
+		adapter.WithProcessorTracer(telemetry.Tracer),
+		adapter.WithProcessorPacketHook(tap.Record),
 		adapter.WithGatewayPresenceHook(presence.SetOnline),
 		adapter.WithGatewayConnectHook(func(_ context.Context, gatewayID string) {
 			presence.SetOnline(gatewayID, true)
 			observability.GoSafe(logger, telemetry.Metrics, "connectivity.concentrator_shadow_reconcile", func() {
-				reconcileConcentratorShadowAsync(ctx, concentratorService, logger, gatewayID)
+				reconcileConcentratorShadowAsync(ingressCtx, concentratorService, logger, gatewayID)
 			})
 		}),
 	)
@@ -113,7 +126,15 @@ func main() {
 		logger.Error("mqtt_telemetry_adapter_processor_invalid", "error", err.Error())
 		os.Exit(1)
 	}
-	runtime, err := adapter.NewRuntime(config, processor, logger, telemetry.Metrics, adapter.WithCoverageReporter(connectivityStore, telemetryRuntime))
+	runtime, err := adapter.NewRuntime(
+		config,
+		processor,
+		logger,
+		telemetry.Metrics,
+		adapter.WithCoverageReporter(connectivityStore, telemetryRuntime),
+		adapter.WithPacketHook(tap.Record),
+		adapter.WithOnlineGatewayCount(presence.Count),
+	)
 	if err != nil {
 		logger.Error("mqtt_telemetry_adapter_runtime_invalid", "error", err.Error())
 		os.Exit(1)
@@ -123,12 +144,13 @@ func main() {
 	// fails instead of reporting healthy without a command channel.
 	var commands *commandRuntime
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("COMMAND_RUNTIME_IN_PROCESS_ENABLED")), "true") {
-		if commands, err = loadCommandRuntime(ctx, connectivityStore, logger, telemetry.Metrics); err != nil {
+		if commands, err = loadCommandRuntime(drainRootCtx, connectivityStore, logger, telemetry.Metrics, tap); err != nil {
 			logger.Error("connectivity_command_runtime_unavailable", "error_code", "COMMAND_MODULE_UNAVAILABLE", "error", err.Error())
 			os.Exit(1)
 		}
 	}
-	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, telemetry)
+	telemetry.MarkReady()
+	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, telemetry, &shuttingDown)
 	diagnosticsErr := make(chan error, 1)
 	go func() {
 		defer observability.Recover(logger, telemetry.Metrics, "connectivity.credential_server", func(any) {
@@ -158,28 +180,45 @@ func main() {
 		defer close(runtimeDone)
 		defer observability.Recover(logger, telemetry.Metrics, "connectivity.uplink_runtime")
 		logger.Info("connectivity_uplink_started", "topic_filters", config.SubscriptionTopicFilters())
-		if runErr := runtime.Run(ctx); runErr != nil && ctx.Err() == nil {
+		if runErr := runtime.Run(ingressCtx); runErr != nil && ingressCtx.Err() == nil {
 			// Telemetry ingress is its own fault domain. Command delivery remains
 			// running; telemetry readiness becomes false until the process is repaired.
 			logger.Error("mqtt_telemetry_module_stopped", "error_code", "TELEMETRY_MODULE_STOPPED", "error", runErr.Error())
 		}
 	}()
+	retentionDone := startQuarantineRetentionLoop(ingressCtx, connectivityStore, logger, telemetry.Metrics, time.Hour, connectivity.DefaultQuarantineRetention)
+	commandsDone := make(chan struct{})
 	if commands != nil {
 		observability.GoSafe(logger, telemetry.Metrics, "connectivity.command_runtime", func() {
-			commands.Run(ctx, logger)
+			defer close(commandsDone)
+			commands.RunWithDrain(ingressCtx, drainRootCtx, logger)
 		})
+	} else {
+		close(commandsDone)
 	}
 
 	select {
-	case <-ctx.Done():
+	case <-sigCtx.Done():
 	case diagnosticsRunErr := <-diagnosticsErr:
 		logger.Error("mqtt_telemetry_adapter_diagnostics_failed", "error", diagnosticsRunErr.Error())
-		cancel()
 	}
-	select {
-	case <-runtimeDone:
-	case <-time.After(20 * time.Second):
+	shuttingDown.Store(true)
+	telemetry.MarkNotReady()
+	ingressCancel()
+
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	stopDrain := context.AfterFunc(drainCtx, drainRootCancel)
+	awaitSignal(drainCtx, runtimeDone)
+	awaitSignal(drainCtx, commandsDone)
+	if commands != nil {
+		_ = commands.Wait(drainCtx)
 	}
+	awaitSignal(drainCtx, retentionDone)
+	_ = connectivityStore.FlushQuarantineBursts(drainCtx)
+	stopDrain()
+	drainRootCancel()
+	drainCancel()
+
 	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	_ = diagnostics.Shutdown(shutdownContext)
@@ -190,6 +229,7 @@ func main() {
 		_ = commands.Close(shutdownContext)
 	}
 	_ = telemetry.Shutdown(shutdownContext)
+	connectivityStore.Close()
 	logger.Info("mqtt_telemetry_adapter_stopped")
 }
 
@@ -292,12 +332,94 @@ func uplinkWorkers() int {
 	return workers
 }
 
-func diagnosticsServer(address string, runtime *adapter.Runtime, telemetry *observability.Runtime) *http.Server {
+type quarantinePruner interface {
+	PruneExpiredQuarantine(ctx context.Context, retention time.Duration) (int64, error)
+}
+
+func startQuarantineRetentionLoop(
+	ctx context.Context,
+	store quarantinePruner,
+	logger *slog.Logger,
+	metrics *observability.Registry,
+	interval, retention time.Duration,
+) <-chan struct{} {
+	done := make(chan struct{})
+	if store == nil {
+		close(done)
+		return done
+	}
+	if interval <= 0 {
+		interval = time.Hour
+	}
+	if retention <= 0 {
+		retention = connectivity.DefaultQuarantineRetention
+	}
+	runOnce := func() {
+		if ctx.Err() != nil {
+			return
+		}
+		pruneCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		deleted, err := store.PruneExpiredQuarantine(pruneCtx, retention)
+		cancel()
+		if err != nil {
+			if ctx.Err() == nil && logger != nil {
+				logger.Warn("connectivity_quarantine_prune_failed", "cause", err.Error())
+			}
+			return
+		}
+		if deleted > 0 && logger != nil {
+			logger.Info("connectivity_quarantine_pruned", "deleted", deleted)
+		}
+	}
+	observability.GoSafe(logger, metrics, "connectivity.quarantine_retention", func() {
+		defer close(done)
+		runOnce()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				runOnce()
+			}
+		}
+	})
+	return done
+}
+
+func awaitSignal(ctx context.Context, ch <-chan struct{}) {
+	if ch == nil {
+		return
+	}
+	select {
+	case <-ch:
+	case <-ctx.Done():
+	}
+}
+
+func diagnosticsServer(address string, runtime *adapter.Runtime, telemetry *observability.Runtime, shuttingDown *atomic.Bool) *http.Server {
+	return diagnosticsServerWithReady(address, func() bool {
+		return runtime != nil && runtime.Ready()
+	}, telemetry, shuttingDown)
+}
+
+func diagnosticsServerWithReady(address string, runtimeReady func() bool, telemetry *observability.Runtime, shuttingDown *atomic.Bool) *http.Server {
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", telemetry.Metrics.Handler())
+	if telemetry != nil {
+		obsHandler := telemetry.DiagnosticsHandler()
+		mux.Handle("/metrics", obsHandler)
+		mux.Handle("/diagnostics", obsHandler)
+	}
+	ready := func() bool {
+		if shuttingDown != nil && shuttingDown.Load() {
+			return false
+		}
+		return runtimeReady != nil && runtimeReady()
+	}
 	mux.HandleFunc("/health/live", getHealthHandler(func() bool { return true }))
-	mux.HandleFunc("/health/ready", getHealthHandler(runtime.Ready))
-	mux.HandleFunc("/health/telemetry/ready", getHealthHandler(runtime.Ready))
+	mux.HandleFunc("/health/ready", getHealthHandler(ready))
+	mux.HandleFunc("/health/telemetry/ready", getHealthHandler(ready))
 	return &http.Server{
 		Addr:              address,
 		Handler:           mux,

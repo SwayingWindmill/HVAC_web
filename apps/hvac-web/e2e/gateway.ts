@@ -408,6 +408,8 @@ export class Gateway {
   readonly assignedTemplateKeyByTargetId = new Map<string, { templateKey: string; templateRevisionId: string }>();
   readonly concentratorStates = new Map<string, Json>();
   readonly gatewayCredentialsState = new Map<string, { revoked: boolean; enrollmentSeq: number; certSeq: number; records: Json[] }>();
+  readonly gatewayQuarantineState = new Map<string, Json[]>();
+  readonly gatewayPacketCaptureState = new Map<string, Json>();
   readonly writes: RecordedRequest[] = [];
   readonly unexpected: string[] = [];
 
@@ -1178,6 +1180,8 @@ export class Gateway {
     if (shadowReply) return shadowReply;
     const gatewayCredentialReply = this.gatewayCredentials(method, path, body, csrfToken, now);
     if (gatewayCredentialReply) return gatewayCredentialReply;
+    const gatewayDiagnosticsReply = this.gatewayDiagnostics(method, path, query, body, csrfToken, now);
+    if (gatewayDiagnosticsReply) return gatewayDiagnosticsReply;
     const concentratorReply = this.concentrators(method, path, body, csrfToken, now);
     if (concentratorReply) return concentratorReply;
     const assetModelMatch = method === 'GET' ? path.match(/^\/api\/v1\/sites\/([^/]+)\/asset-model$/) : null;
@@ -1801,6 +1805,183 @@ export class Gateway {
       return { body: { status: 'REVOKED' } };
     }
 
+    return undefined;
+  }
+
+  seedGatewayQuarantine(gatewayId: string, records: Json[]) {
+    this.gatewayQuarantineState.set(gatewayId, records.map((record) => ({ ...record })));
+  }
+
+  seedGatewayPacketCapture(gatewayId: string, snapshot: Json) {
+    this.gatewayPacketCaptureState.set(gatewayId, {
+      ...snapshot,
+      items: Array.isArray(snapshot.items) ? snapshot.items.map((item: Json) => ({ ...item })) : [],
+    });
+  }
+
+  private getOrInitGatewayQuarantine(gatewayId: string, now: string): Json[] {
+    const existing = this.gatewayQuarantineState.get(gatewayId);
+    if (existing) return existing;
+    const created: Json[] = [
+      {
+        id: '0193f200-0000-7000-8000-000000000001',
+        gatewayId,
+        topic: 'devices/eg8200-commercial-001/telemetry/chiller-01',
+        reasonCode: 'MESSAGE_INVALID',
+        detail: '报文载荷缺少必填字段 sampledAt',
+        payloadSha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
+        payloadBytes: 86,
+        payloadPreview: '{"deviceCode":"CHILLER-01","points":{"chw_supply_temp":7.4,"active_power":198.6}}',
+        payloadEncoding: 'utf8',
+        payloadTruncated: false,
+        occurrenceCount: 4,
+        receivedAt: new Date(Date.parse(now) - 18 * 60_000).toISOString(),
+        lastSeenAt: new Date(Date.parse(now) - 2 * 60_000).toISOString(),
+      },
+      {
+        id: '0193f200-0000-7000-8000-000000000002',
+        gatewayId,
+        topic: 'devices/eg8200-commercial-001/telemetry/meter-total',
+        reasonCode: 'GATEWAY_CREDENTIAL_INACTIVE',
+        detail: '网关客户端证书已吊销，当前上行报文已拒绝入库',
+        payloadSha256: 'b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90ab',
+        payloadBytes: 34,
+        payloadPreview: '7b22746f706963223a2274656c656d65747279222c2276616c7565223a3431322e357d',
+        payloadEncoding: 'hex',
+        payloadTruncated: false,
+        occurrenceCount: 12,
+        receivedAt: new Date(Date.parse(now) - 45 * 60_000).toISOString(),
+        lastSeenAt: new Date(Date.parse(now) - 8 * 60_000).toISOString(),
+      },
+    ];
+    this.gatewayQuarantineState.set(gatewayId, created);
+    return created;
+  }
+
+  private getOrInitGatewayPacketCapture(gatewayId: string): Json {
+    const existing = this.gatewayPacketCaptureState.get(gatewayId);
+    if (existing) return existing;
+    const created: Json = {
+      gatewayId,
+      active: false,
+      maxPackets: 200,
+      droppedCount: 0,
+      items: [],
+    };
+    this.gatewayPacketCaptureState.set(gatewayId, created);
+    return created;
+  }
+
+  private gatewayDiagnostics(
+    method: string,
+    path: string,
+    query: URLSearchParams,
+    body: Json | null,
+    csrfToken: string | undefined,
+    now: string,
+  ): { status?: number; body: unknown } | undefined {
+    const match = path.match(/^\/api\/v1\/gateways\/([^/]+)\/(quarantine|packet-capture|packet-capture\/start|packet-capture\/stop)$/);
+    if (!match) return undefined;
+
+    const gatewayId = decodeURIComponent(match[1]!);
+    const action = match[2]!;
+    const refuse = (status: number, code: string, detail: string) => ({
+      status,
+      body: { type: 'about:blank', title: detail, status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
+    });
+
+    const gatewayDevice = (this.assetModel.devices as Json[]).find((d) => d.id === gatewayId && d.deviceType === 'GATEWAY');
+    if (!gatewayDevice) return refuse(404, 'GATEWAY_NOT_FOUND', 'Gateway not found');
+
+    const activePrincipal = this.principalOverride ?? principal;
+    const caps = new Set<string>(activePrincipal.authorization?.capabilities ?? []);
+    if (method === 'GET' && !caps.has('device.read')) {
+      return refuse(403, 'CREDENTIAL_FORBIDDEN', 'device.read required');
+    }
+    if (method === 'POST') {
+      if (!caps.has('device.write')) {
+        return refuse(403, 'CREDENTIAL_FORBIDDEN', 'device.write required');
+      }
+      if (!csrfToken) {
+        return refuse(403, 'CSRF_INVALID', 'CSRF token required');
+      }
+    }
+
+    if (method === 'GET' && action === 'quarantine') {
+      const requestedLimit = Number(query.get('limit') ?? '20');
+      const limit = Number.isInteger(requestedLimit) && requestedLimit >= 1 && requestedLimit <= 50 ? requestedLimit : 20;
+      const items = this.getOrInitGatewayQuarantine(gatewayId, now).slice(0, limit);
+      return { body: { items } };
+    }
+
+    if (method === 'GET' && action === 'packet-capture') {
+      return { body: this.getOrInitGatewayPacketCapture(gatewayId) };
+    }
+
+    if (method === 'POST' && action === 'packet-capture/start') {
+      const durationSeconds = body?.durationSeconds === undefined ? 300 : Number(body.durationSeconds);
+      if (!Number.isInteger(durationSeconds) || durationSeconds < 30 || durationSeconds > 900) {
+        return refuse(400, 'PACKET_CAPTURE_REQUEST_INVALID', 'durationSeconds must be an integer between 30 and 900');
+      }
+      const nextState: Json = {
+        gatewayId,
+        active: true,
+        startedAt: now,
+        expiresAt: new Date(Date.parse(now) + durationSeconds * 1000).toISOString(),
+        durationSeconds,
+        maxPackets: 200,
+        droppedCount: 0,
+        items: [
+          {
+            sequence: 1,
+            capturedAt: new Date(Date.parse(now) - 3_000).toISOString(),
+            direction: 'UPLINK',
+            channel: 'TELEMETRY',
+            topic: 'devices/eg8200-commercial-001/telemetry/chiller-01',
+            traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
+            payloadBytes: 128,
+            payloadSha256: 'c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90abcd',
+            payloadPreview: '{"schemaVersion":2,"points":{"chw_supply_temp":7.1,"active_power":184.2}}',
+            payloadEncoding: 'utf8',
+            payloadTruncated: false,
+          },
+          {
+            sequence: 2,
+            capturedAt: new Date(Date.parse(now) - 2_000).toISOString(),
+            direction: 'DOWNLINK',
+            channel: 'COMMAND',
+            topic: 'devices/eg8200-commercial-001/commands/request',
+            traceId: '8a1f2c3d4e5f60718293a4b5c6d7e8f9',
+            payloadBytes: 112,
+            payloadSha256: 'd4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90abcdef',
+            payloadPreview: '{"capability":"SET_CHW_TEMP","parameters":{"targetTempC":7.5}}',
+            payloadEncoding: 'utf8',
+            payloadTruncated: false,
+          },
+          {
+            sequence: 3,
+            capturedAt: new Date(Date.parse(now) - 1_000).toISOString(),
+            direction: 'UPLINK',
+            channel: 'QUARANTINE',
+            topic: 'devices/eg8200-commercial-001/telemetry/unknown-point',
+            payloadBytes: 54,
+            payloadSha256: 'e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90abcdef01',
+            payloadPreview: '{"pointCode":"legacy_aux_pressure","value":0.42}',
+            payloadEncoding: 'utf8',
+            payloadTruncated: false,
+          },
+        ],
+      };
+      this.gatewayPacketCaptureState.set(gatewayId, nextState);
+      return { body: nextState };
+    }
+
+    if (method === 'POST' && action === 'packet-capture/stop') {
+      const current = this.getOrInitGatewayPacketCapture(gatewayId);
+      const stoppedState: Json = { ...current, active: false };
+      this.gatewayPacketCaptureState.set(gatewayId, stoppedState);
+      return { body: stoppedState };
+    }
     return undefined;
   }
 

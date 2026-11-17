@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 func testServerCert(t *testing.T) tls.Certificate {
@@ -720,5 +722,60 @@ func TestTunnelHubCloseGatewayByFingerprint(t *testing.T) {
 	}
 	if got, err := hub.resolveSession(gwID); err != nil || got != sessNew {
 		t.Fatalf("expected sessNew to stay active after stale kick, got=(%v, %v)", got, err)
+	}
+}
+
+func TestTunnelActiveTunnelsMetricTracksSessions(t *testing.T) {
+	registry := observability.NewRegistry()
+	hub := NewHub(WithObservability(nil, registry))
+	t.Cleanup(hub.Close)
+
+	scrape := func() string {
+		rec := httptest.NewRecorder()
+		registry.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		return rec.Body.String()
+	}
+
+	if body := scrape(); !strings.Contains(body, "hvac_mqtt_active_tunnels 0\n") {
+		t.Fatalf("expected initial hvac_mqtt_active_tunnels 0, got:\n%s", body)
+	}
+
+	s1, c1 := net.Pipe()
+	defer func() { _ = c1.Close() }()
+	gw1 := "0193f000-2000-7000-8000-000000000101"
+	if hub.registerSession(gw1, s1) == nil {
+		t.Fatal("failed to register gw1 session")
+	}
+	if body := scrape(); !strings.Contains(body, "hvac_mqtt_active_tunnels 1\n") {
+		t.Fatalf("expected hvac_mqtt_active_tunnels 1 after register, got:\n%s", body)
+	}
+
+	s2, c2 := net.Pipe()
+	defer func() { _ = c2.Close() }()
+	gw2 := "0193f000-2000-7000-8000-000000000102"
+	if hub.registerSession(gw2, s2) == nil {
+		t.Fatal("failed to register gw2 session")
+	}
+	if body := scrape(); !strings.Contains(body, "hvac_mqtt_active_tunnels 2\n") {
+		t.Fatalf("expected hvac_mqtt_active_tunnels 2 after second register, got:\n%s", body)
+	}
+
+	s1Replacement, c1Replacement := net.Pipe()
+	defer func() { _ = c1Replacement.Close() }()
+	if hub.registerSession(gw1, s1Replacement) == nil {
+		t.Fatal("failed to replace gw1 session")
+	}
+	if body := scrape(); !strings.Contains(body, "hvac_mqtt_active_tunnels 2\n") {
+		t.Fatalf("expected hvac_mqtt_active_tunnels 2 after replace, got:\n%s", body)
+	}
+
+	hub.CloseGateway(gw1)
+	if body := scrape(); !strings.Contains(body, "hvac_mqtt_active_tunnels 1\n") {
+		t.Fatalf("expected hvac_mqtt_active_tunnels 1 after CloseGateway, got:\n%s", body)
+	}
+
+	hub.Close()
+	if body := scrape(); !strings.Contains(body, "hvac_mqtt_active_tunnels 0\n") {
+		t.Fatalf("expected hvac_mqtt_active_tunnels 0 after Close, got:\n%s", body)
 	}
 }
