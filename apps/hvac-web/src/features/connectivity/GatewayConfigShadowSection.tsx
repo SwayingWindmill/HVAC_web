@@ -1,8 +1,8 @@
 import { useId, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Plus, RefreshCw, Settings2, Trash2 } from 'lucide-react';
+import { RefreshCw, Settings2 } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Device, GatewayConfigShadow } from '@/api/generated/platformGateway.gen';
+import type { Device, GatewayDesiredConfig } from '@/api/generated/platformGateway.gen';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -13,34 +13,27 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import {
-  CONFIG_SHADOW_APPLIED_LABELS,
-  CONFIG_SHADOW_REASON_LABELS,
-  CONFIG_SHADOW_SECTION_LABELS,
   CONFIG_SHADOW_SYNC_PRESENTATION,
   describeGatewayConfigShadowError,
 } from '@/features/integrations/integrations-model';
 import {
-  AUTONOMY_POLICY_STATE_PRESENTATION,
-  buildValidatedShadowUpdateRequest,
-  countDriverRegisters,
+  buildValidatedShadowUpdateRequestFromDesired,
   createShadowEditorDraft,
-  formatPointCopyTargets,
-  summarizeAutonomyPolicyState,
   summarizeConcentratorShadowUnits,
   type GatewayConfigShadowEditorDraft,
 } from './gateway-config-shadow-model';
+import { AutonomyPolicyEditorSection } from './GatewayAutonomyEditorSection';
+import { DriverConfigsEditorSection } from './GatewayDriverEditorSection';
 import {
-  AutonomyPolicyEditorSection,
-  AutonomyPolicySummaryBlock,
-  DriverConfigsEditorSection,
-  DriverConfigsSummaryBlock,
-} from './GatewayDriverAutonomyFields';
+  PointMappingsEditorSection,
+  SamplingPoliciesEditorSection,
+} from './GatewayShadowMappingSections';
+import { GatewayShadowSummaryCard } from './GatewayShadowSummaryCard';
 import { gatewayConfigShadowApi, gatewayConfigShadowKey } from './gateway-credentials';
 
 const SHADOW_TONE_CLASSES = {
@@ -50,18 +43,10 @@ const SHADOW_TONE_CLASSES = {
   danger: { chip: 'bg-destructive-soft text-destructive-text', dot: 'bg-destructive' },
 } as const;
 
-const SHADOW_DATETIME = new Intl.DateTimeFormat('zh-CN', {
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  hour12: false,
-});
-
-function formatShadowTimestamp(value: string): string {
-  const parsed = Date.parse(value);
-  if (Number.isNaN(parsed)) return value;
-  return SHADOW_DATETIME.format(parsed);
+interface ShadowSavePayload {
+  readonly expectedRevision: number;
+  readonly currentDesired: GatewayDesiredConfig | undefined;
+  readonly draft: GatewayConfigShadowEditorDraft;
 }
 
 export function GatewayConfigShadowSection({
@@ -90,9 +75,13 @@ export function GatewayConfigShadowSection({
     retry: false,
   });
 
-  const updateMutation = useMutation({
-    mutationFn: async (currentDraft: GatewayConfigShadowEditorDraft) => {
-      const built = buildValidatedShadowUpdateRequest(currentDraft, shadowQuery.data);
+  const saveMutation = useMutation({
+    mutationFn: async ({ expectedRevision, currentDesired, draft: capturedDraft }: ShadowSavePayload) => {
+      const built = buildValidatedShadowUpdateRequestFromDesired(
+        capturedDraft,
+        expectedRevision,
+        currentDesired,
+      );
       if (!built.ok) {
         throw new Error(built.error);
       }
@@ -119,27 +108,31 @@ export function GatewayConfigShadowSection({
   const openEditor = () => {
     setDraft(createShadowEditorDraft(shadow));
     setValidationError(null);
-    updateMutation.reset();
+    saveMutation.reset();
     setEditorOpen(true);
   };
 
   const handleSave = async () => {
-    const built = buildValidatedShadowUpdateRequest(draft, shadow);
+    const currentDesired = shadow?.desired;
+    const expectedRevision = currentDesired?.desiredRevision ?? 0;
+    const built = buildValidatedShadowUpdateRequestFromDesired(
+      draft,
+      expectedRevision,
+      currentDesired,
+    );
     if (!built.ok) {
       setValidationError(built.error);
       return;
     }
     setValidationError(null);
     try {
-      await updateMutation.mutateAsync(draft);
+      await saveMutation.mutateAsync({ expectedRevision, currentDesired, draft });
     } catch {
-      // Displayed inside the dialog Alert via updateMutation.error
+      // Displayed inside the dialog Alert via saveMutation.error
     }
   };
 
-  const syncPresentation = shadow
-    ? CONFIG_SHADOW_SYNC_PRESENTATION[shadow.syncStatus]
-    : null;
+  const syncPresentation = shadow ? CONFIG_SHADOW_SYNC_PRESENTATION[shadow.syncStatus] : null;
   const toneClass = syncPresentation ? SHADOW_TONE_CLASSES[syncPresentation.tone] : null;
   const editDisabled = !canWrite || stopped || shadowQuery.isPending;
 
@@ -194,7 +187,7 @@ export function GatewayConfigShadowSection({
           </AlertDescription>
         </Alert>
       ) : shadow ? (
-        <ShadowSummaryCard
+        <GatewayShadowSummaryCard
           shadow={shadow}
           concentratorUnits={concentratorUnits}
           stopped={stopped}
@@ -204,7 +197,7 @@ export function GatewayConfigShadowSection({
       <Dialog
         open={editorOpen}
         onOpenChange={(nextOpen) => {
-          if (!updateMutation.isPending) setEditorOpen(nextOpen);
+          if (!saveMutation.isPending) setEditorOpen(nextOpen);
         }}
       >
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[780px]">
@@ -218,7 +211,7 @@ export function GatewayConfigShadowSection({
           <div className="flex flex-col gap-5 py-2 text-sm">
             <DriverConfigsEditorSection
               driverConfigs={draft.driverConfigs}
-              disabled={updateMutation.isPending}
+              disabled={saveMutation.isPending}
               onChange={(nextDrivers) =>
                 setDraft((current) => ({ ...current, driverConfigs: nextDrivers }))
               }
@@ -226,325 +219,27 @@ export function GatewayConfigShadowSection({
 
             <AutonomyPolicyEditorSection
               autonomyPolicy={draft.autonomyPolicy}
-              disabled={updateMutation.isPending}
+              disabled={saveMutation.isPending}
               onChange={(nextAutonomy) =>
                 setDraft((current) => ({ ...current, autonomyPolicy: nextAutonomy }))
               }
             />
 
-            <section aria-label="点位映射设置" className="flex flex-col gap-2.5">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-semibold text-foreground">
-                  点位映射（{draft.pointMappings.length} 条）
-                </h4>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={updateMutation.isPending}
-                  onClick={() =>
-                    setDraft((current) => ({
-                      ...current,
-                      pointMappings: [
-                        ...current.pointMappings,
-                        {
-                          sourceChannel: '',
-                          primaryDeviceKey: '',
-                          primaryPointCode: '',
-                          copyTargetsText: '',
-                        },
-                      ],
-                    }))
-                  }
-                >
-                  <Plus data-icon="inline-start" aria-hidden="true" />
-                  新增点位映射
-                </Button>
-              </div>
-              {draft.pointMappings.length === 0 ? (
-                <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-                  暂无点位映射条目；点击「新增点位映射」添加边缘通道到标准设备点位的映射。
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2.5">
-                  {draft.pointMappings.map((row, index) => {
-                    const rowPrefix = `${baseId}-map-${index}`;
-                    return (
-                      <div
-                        key={index}
-                        className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-medium text-muted-foreground">
-                            映射 #{index + 1}
-                          </span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            aria-label={`删除点位映射 ${index + 1}`}
-                            disabled={updateMutation.isPending}
-                            onClick={() =>
-                              setDraft((current) => ({
-                                ...current,
-                                pointMappings: current.pointMappings.filter((_, i) => i !== index),
-                              }))
-                            }
-                          >
-                            <Trash2 className="size-3.5" aria-hidden="true" />
-                          </Button>
-                        </div>
-                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                          <div className="grid gap-1">
-                            <Label htmlFor={`${rowPrefix}-src`} className="text-xs text-muted-foreground">
-                              源通道
-                            </Label>
-                            <Input
-                              id={`${rowPrefix}-src`}
-                              value={row.sourceChannel}
-                              placeholder="rs485-u1:reg1"
-                              disabled={updateMutation.isPending}
-                              className="h-8 font-mono text-xs"
-                              onChange={(event) => {
-                                const value = event.currentTarget.value;
-                                setDraft((current) => ({
-                                  ...current,
-                                  pointMappings: current.pointMappings.map((item, i) =>
-                                    i === index ? { ...item, sourceChannel: value } : item,
-                                  ),
-                                }));
-                              }}
-                            />
-                          </div>
-                          <div className="grid gap-1">
-                            <Label htmlFor={`${rowPrefix}-dev`} className="text-xs text-muted-foreground">
-                              主设备标识
-                            </Label>
-                            <Input
-                              id={`${rowPrefix}-dev`}
-                              value={row.primaryDeviceKey}
-                              placeholder="chiller-01"
-                              disabled={updateMutation.isPending}
-                              className="h-8 font-mono text-xs"
-                              onChange={(event) => {
-                                const value = event.currentTarget.value;
-                                setDraft((current) => ({
-                                  ...current,
-                                  pointMappings: current.pointMappings.map((item, i) =>
-                                    i === index ? { ...item, primaryDeviceKey: value } : item,
-                                  ),
-                                }));
-                              }}
-                            />
-                          </div>
-                          <div className="grid gap-1">
-                            <Label htmlFor={`${rowPrefix}-pt`} className="text-xs text-muted-foreground">
-                              主点位编码
-                            </Label>
-                            <Input
-                              id={`${rowPrefix}-pt`}
-                              value={row.primaryPointCode}
-                              placeholder="supply_temp"
-                              disabled={updateMutation.isPending}
-                              className="h-8 font-mono text-xs"
-                              onChange={(event) => {
-                                const value = event.currentTarget.value;
-                                setDraft((current) => ({
-                                  ...current,
-                                  pointMappings: current.pointMappings.map((item, i) =>
-                                    i === index ? { ...item, primaryPointCode: value } : item,
-                                  ),
-                                }));
-                              }}
-                            />
-                          </div>
-                        </div>
-                        <div className="grid gap-1">
-                          <Label htmlFor={`${rowPrefix}-copy`} className="text-xs text-muted-foreground">
-                            复用目标（可选，逗号分隔，格式 deviceKey:pointCode）
-                          </Label>
-                          <Input
-                            id={`${rowPrefix}-copy`}
-                            value={row.copyTargetsText}
-                            placeholder="chiller-02:supply_temp"
-                            disabled={updateMutation.isPending}
-                            className="h-8 font-mono text-xs"
-                            onChange={(event) => {
-                              const value = event.currentTarget.value;
-                              setDraft((current) => ({
-                                ...current,
-                                pointMappings: current.pointMappings.map((item, i) =>
-                                  i === index ? { ...item, copyTargetsText: value } : item,
-                                ),
-                              }));
-                            }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
+            <PointMappingsEditorSection
+              pointMappings={draft.pointMappings}
+              disabled={saveMutation.isPending}
+              onChange={(nextMappings) =>
+                setDraft((current) => ({ ...current, pointMappings: nextMappings }))
+              }
+            />
 
-            <section aria-label="采集周期设置" className="flex flex-col gap-2.5">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-semibold text-foreground">
-                  采集周期（{draft.samplingPolicies.length} 条）
-                </h4>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={updateMutation.isPending}
-                  onClick={() =>
-                    setDraft((current) => ({
-                      ...current,
-                      samplingPolicies: [
-                        ...current.samplingPolicies,
-                        {
-                          deviceKey: '',
-                          pointCode: '',
-                          sampleIntervalMs: '5000',
-                          publishIntervalMs: '5000',
-                        },
-                      ],
-                    }))
-                  }
-                >
-                  <Plus data-icon="inline-start" aria-hidden="true" />
-                  新增采集周期
-                </Button>
-              </div>
-              {draft.samplingPolicies.length === 0 ? (
-                <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-                  暂无采集周期规则；点击「新增采集周期」设置设备或点位的采样与上报频率。
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2.5">
-                  {draft.samplingPolicies.map((row, index) => {
-                    const rowPrefix = `${baseId}-samp-${index}`;
-                    return (
-                      <div
-                        key={index}
-                        className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-medium text-muted-foreground">
-                            采集规则 #{index + 1}
-                          </span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            aria-label={`删除采集周期 ${index + 1}`}
-                            disabled={updateMutation.isPending}
-                            onClick={() =>
-                              setDraft((current) => ({
-                                ...current,
-                                samplingPolicies: current.samplingPolicies.filter((_, i) => i !== index),
-                              }))
-                            }
-                          >
-                            <Trash2 className="size-3.5" aria-hidden="true" />
-                          </Button>
-                        </div>
-                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
-                          <div className="grid gap-1">
-                            <Label htmlFor={`${rowPrefix}-dev`} className="text-xs text-muted-foreground">
-                              设备标识
-                            </Label>
-                            <Input
-                              id={`${rowPrefix}-dev`}
-                              value={row.deviceKey}
-                              placeholder="chiller-01"
-                              disabled={updateMutation.isPending}
-                              className="h-8 font-mono text-xs"
-                              onChange={(event) => {
-                                const value = event.currentTarget.value;
-                                setDraft((current) => ({
-                                  ...current,
-                                  samplingPolicies: current.samplingPolicies.map((item, i) =>
-                                    i === index ? { ...item, deviceKey: value } : item,
-                                  ),
-                                }));
-                              }}
-                            />
-                          </div>
-                          <div className="grid gap-1">
-                            <Label htmlFor={`${rowPrefix}-pt`} className="text-xs text-muted-foreground">
-                              点位编码（可选）
-                            </Label>
-                            <Input
-                              id={`${rowPrefix}-pt`}
-                              value={row.pointCode}
-                              placeholder="全部点位"
-                              disabled={updateMutation.isPending}
-                              className="h-8 font-mono text-xs"
-                              onChange={(event) => {
-                                const value = event.currentTarget.value;
-                                setDraft((current) => ({
-                                  ...current,
-                                  samplingPolicies: current.samplingPolicies.map((item, i) =>
-                                    i === index ? { ...item, pointCode: value } : item,
-                                  ),
-                                }));
-                              }}
-                            />
-                          </div>
-                          <div className="grid gap-1">
-                            <Label htmlFor={`${rowPrefix}-sample`} className="text-xs text-muted-foreground">
-                              采样间隔 (ms)
-                            </Label>
-                            <Input
-                              id={`${rowPrefix}-sample`}
-                              type="number"
-                              min={100}
-                              max={86400000}
-                              value={row.sampleIntervalMs}
-                              disabled={updateMutation.isPending}
-                              className="h-8 font-mono text-xs tabular-nums"
-                              onChange={(event) => {
-                                const value = event.currentTarget.value;
-                                setDraft((current) => ({
-                                  ...current,
-                                  samplingPolicies: current.samplingPolicies.map((item, i) =>
-                                    i === index ? { ...item, sampleIntervalMs: value } : item,
-                                  ),
-                                }));
-                              }}
-                            />
-                          </div>
-                          <div className="grid gap-1">
-                            <Label htmlFor={`${rowPrefix}-pub`} className="text-xs text-muted-foreground">
-                              上报间隔 (ms)
-                            </Label>
-                            <Input
-                              id={`${rowPrefix}-pub`}
-                              type="number"
-                              min={100}
-                              max={86400000}
-                              value={row.publishIntervalMs}
-                              disabled={updateMutation.isPending}
-                              className="h-8 font-mono text-xs tabular-nums"
-                              onChange={(event) => {
-                                const value = event.currentTarget.value;
-                                setDraft((current) => ({
-                                  ...current,
-                                  samplingPolicies: current.samplingPolicies.map((item, i) =>
-                                    i === index ? { ...item, publishIntervalMs: value } : item,
-                                  ),
-                                }));
-                              }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
+            <SamplingPoliciesEditorSection
+              samplingPolicies={draft.samplingPolicies}
+              disabled={saveMutation.isPending}
+              onChange={(nextPolicies) =>
+                setDraft((current) => ({ ...current, samplingPolicies: nextPolicies }))
+              }
+            />
 
             {concentratorUnits.length > 0 ? (
               <p className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
@@ -560,7 +255,7 @@ export function GatewayConfigShadowSection({
               <Textarea
                 id={reasonId}
                 value={draft.reason}
-                disabled={updateMutation.isPending}
+                disabled={saveMutation.isPending}
                 maxLength={1000}
                 onChange={(event) => {
                   const value = event.currentTarget.value;
@@ -570,13 +265,13 @@ export function GatewayConfigShadowSection({
               />
             </div>
 
-            {validationError || updateMutation.error ? (
+            {validationError || saveMutation.error ? (
               <Alert variant="destructive">
                 <AlertDescription className="flex flex-col gap-2">
                   <span>
-                    {validationError ?? describeGatewayConfigShadowError(updateMutation.error)}
+                    {validationError ?? describeGatewayConfigShadowError(saveMutation.error)}
                   </span>
-                  {updateMutation.error ? (
+                  {saveMutation.error ? (
                     <Button
                       type="button"
                       variant="outline"
@@ -589,7 +284,7 @@ export function GatewayConfigShadowSection({
                               ...createShadowEditorDraft(refetched.data),
                               reason: current.reason,
                             }));
-                            updateMutation.reset();
+                            saveMutation.reset();
                             setValidationError(null);
                           }
                         });
@@ -606,172 +301,20 @@ export function GatewayConfigShadowSection({
           <DialogFooter>
             <Button
               variant="outline"
-              disabled={updateMutation.isPending}
+              disabled={saveMutation.isPending}
               onClick={() => setEditorOpen(false)}
             >
               取消
             </Button>
             <Button
-              disabled={updateMutation.isPending || !canWrite || stopped}
+              disabled={saveMutation.isPending || !canWrite || stopped}
               onClick={() => void handleSave()}
             >
-              {updateMutation.isPending ? '正在保存…' : '保存期望配置'}
+              {saveMutation.isPending ? '正在保存…' : '保存期望配置'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </section>
-  );
-}
-
-function ShadowSummaryCard({
-  shadow,
-  concentratorUnits,
-  stopped,
-}: {
-  readonly shadow: GatewayConfigShadow;
-  readonly concentratorUnits: ReturnType<typeof summarizeConcentratorShadowUnits>;
-  readonly stopped: boolean;
-}) {
-  const desired = shadow.desired;
-  const reported = shadow.reported;
-  const driverCount = desired?.driverConfigs?.length ?? 0;
-  const registerCount = countDriverRegisters(desired?.driverConfigs);
-  const autonomyState = summarizeAutonomyPolicyState(desired?.autonomyPolicy);
-  const autonomyLabel = AUTONOMY_POLICY_STATE_PRESENTATION[autonomyState].label;
-
-  if (shadow.syncStatus === 'UNCONFIGURED' && !desired && !reported) {
-    return (
-      <div className="rounded-lg border border-dashed px-3.5 py-3 text-xs text-muted-foreground">
-        该网关尚未配置云边配置影子；可点击「初始化配置影子」下发协议驱动点表、断网自治策略、点位映射与采集周期，或在「无线测温集中器」页面离线暂存参数与 EID。
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3.5 text-xs">
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
-        <div>
-          <dt className="text-muted-foreground">期望修订</dt>
-          <dd className="mt-0.5 font-mono font-semibold text-foreground tabular-nums">
-            {desired ? `v${desired.desiredRevision}` : '未设置'}
-          </dd>
-          {desired ? (
-            <dd className="mt-0.5 text-[11px] text-muted-foreground">
-              更新于 <span className="font-mono tabular-nums">{formatShadowTimestamp(desired.updatedAt)}</span>
-            </dd>
-          ) : null}
-        </div>
-        <div>
-          <dt className="text-muted-foreground">边缘已上报修订</dt>
-          <dd className="mt-0.5 font-mono font-semibold text-foreground tabular-nums">
-            {reported
-              ? `v${reported.reportedRevision} · ${CONFIG_SHADOW_APPLIED_LABELS[reported.appliedStatus]}`
-              : '等待网关上报'}
-          </dd>
-          {reported ? (
-            <dd className="mt-0.5 text-[11px] text-muted-foreground">
-              上报于 <span className="font-mono tabular-nums">{formatShadowTimestamp(reported.reportedAt)}</span>
-            </dd>
-          ) : null}
-        </div>
-      </dl>
-
-      <div className="flex flex-wrap gap-2 border-t border-divider pt-2.5 text-[11px]">
-        <span className="rounded border bg-background px-2 py-0.5 font-mono tabular-nums">
-          点位映射 {desired?.pointMappings.length ?? 0} 条
-        </span>
-        <span className="rounded border bg-background px-2 py-0.5 font-mono tabular-nums">
-          采集周期 {desired?.samplingPolicies.length ?? 0} 条
-        </span>
-        <span className="rounded border bg-background px-2 py-0.5 font-mono tabular-nums">
-          协议驱动 {driverCount} 台{driverCount > 0 ? ` · ${registerCount} 寄存器` : ''}
-        </span>
-        <span className="rounded border bg-background px-2 py-0.5">
-          断网自治 · {autonomyLabel}
-        </span>
-        <span className="rounded border bg-background px-2 py-0.5 font-mono tabular-nums">
-          集中器暂存 {concentratorUnits.length} 个单元
-        </span>
-      </div>
-
-      {desired && desired.pointMappings.length > 0 ? (
-        <ul className="flex flex-col gap-1 border-t border-divider pt-2 text-[11px]">
-          {desired.pointMappings.slice(0, 3).map((item, idx) => (
-            <li key={`${item.sourceChannel}-${idx}`} className="flex items-center justify-between gap-2">
-              <span className="shrink-0 font-mono text-foreground">{item.sourceChannel}</span>
-              <span className="min-w-0 truncate font-mono text-muted-foreground">
-                {item.primaryDeviceKey}:{item.primaryPointCode}
-                {item.copyTargets?.length
-                  ? ` (+ ${formatPointCopyTargets(item.copyTargets)})`
-                  : ''}
-              </span>
-            </li>
-          ))}
-          {desired.pointMappings.length > 3 ? (
-            <li className="text-muted-foreground">其余 {desired.pointMappings.length - 3} 条可在「编辑配置影子」中查看</li>
-          ) : null}
-        </ul>
-      ) : null}
-
-      <DriverConfigsSummaryBlock driverConfigs={desired?.driverConfigs} />
-
-      <AutonomyPolicySummaryBlock autonomyPolicy={desired?.autonomyPolicy} />
-
-      {concentratorUnits.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5 border-t border-divider pt-2 text-[11px]">
-          {concentratorUnits.map((unit) => (
-            <span
-              key={unit.unitId}
-              className="rounded bg-secondary px-2 py-0.5 font-mono text-secondary-foreground tabular-nums"
-            >
-              UID {unit.unitId}
-              {unit.hasParams ? ' · 参数' : ''}
-              {unit.boundEidCount > 0 ? ` · ${unit.boundEidCount} 槽 EID` : ''}
-            </span>
-          ))}
-        </div>
-      ) : null}
-
-      {reported?.errorMessage ? (
-        <Alert variant="destructive">
-          <AlertTriangle className="size-4" aria-hidden="true" />
-          <AlertDescription>{reported.errorMessage}</AlertDescription>
-        </Alert>
-      ) : null}
-
-      {shadow.drift.length > 0 ? (
-        <div className="flex flex-col gap-1.5 border-t border-divider pt-2.5">
-          <span className="font-medium text-destructive-text">
-            漂移明细（{shadow.drift.length} 项）
-          </span>
-          <ul className="flex flex-col gap-1.5">
-            {shadow.drift.map((item, index) => (
-              <li
-                key={`${item.section}-${item.target}-${index}`}
-                className="rounded border border-destructive/30 bg-destructive-soft/50 px-2.5 py-2"
-              >
-                <div className="flex items-center justify-between gap-2 font-medium text-destructive-text">
-                  <span>
-                    {CONFIG_SHADOW_SECTION_LABELS[item.section]} ·{' '}
-                    <span className="font-mono">{item.target}</span>
-                  </span>
-                  <span className="shrink-0 text-[11px]">
-                    {CONFIG_SHADOW_REASON_LABELS[item.reason]}
-                  </span>
-                </div>
-                <p className="mt-0.5 text-[11px] text-foreground">{item.detail}</p>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {stopped ? (
-        <p className="text-[11px] text-muted-foreground">
-          该网关当前已停用，配置影子暂不可编辑或下发。
-        </p>
-      ) : null}
-    </div>
   );
 }

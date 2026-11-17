@@ -15,21 +15,29 @@ import type { WorkOrder } from '../apps/hvac-web/src/api/work-orders.ts';
 import type { AssetsSnapshotResult } from '../apps/hvac-web/src/features/assets/operational-projection.ts';
 import {
   AUTONOMY_POLICY_STATE_PRESENTATION,
+  MODBUS_CAPABILITY_PROFILES,
+  MODBUS_CAPABILITY_PROFILE_LABELS,
   MODBUS_DRIVER_TYPE_LABELS,
   MODBUS_FUNCTION_CODE_LABELS,
   MODBUS_POLL_PRIORITY_PRESENTATION,
   MODBUS_RAW_TYPE_LABELS,
   MODBUS_WRITE_FUNCTION_CODE_LABELS,
   buildValidatedShadowUpdateRequest,
+  buildValidatedShadowUpdateRequestFromDesired,
   countDriverRegisters,
   createDefaultAutonomyPolicyDraft,
   createEmptyModbusDriverDraft,
   createEmptyModbusRegisterDraft,
+  createEmptySamplingPolicyDraft,
   createShadowEditorDraft,
+  formatModbusEnumMap,
   formatPointCopyTargets,
+  parseModbusEnumMap,
   parsePointCopyTargets,
   summarizeAutonomyPolicyState,
   summarizeConcentratorShadowUnits,
+  type GatewayConfigShadowEditorDraft,
+  type GatewayModbusRegisterDraft,
 } from '../apps/hvac-web/src/features/connectivity/gateway-config-shadow-model.ts';
 import {
   CONFIG_SHADOW_APPLIED_LABELS,
@@ -1539,7 +1547,15 @@ test('gateway config shadow helpers validate copy targets, preserve concentrator
     {
       ...draft,
       reason: 'invalid period',
-      samplingPolicies: [{ deviceKey: 'chiller-01', pointCode: '', sampleIntervalMs: '10000', publishIntervalMs: '2000' }],
+      samplingPolicies: [
+        {
+          ...createEmptySamplingPolicyDraft(),
+          deviceKey: 'chiller-01',
+          pointCode: '',
+          sampleIntervalMs: '10000',
+          publishIntervalMs: '2000',
+        },
+      ],
     },
     sampleShadow,
   );
@@ -1563,7 +1579,10 @@ test('gateway config shadow supports declarative driverConfigs, autonomyPolicy b
   assert.equal(CONFIG_SHADOW_SECTION_LABELS.AUTONOMY_POLICY, '断网自治策略');
   assert.equal(MODBUS_DRIVER_TYPE_LABELS.MODBUS_TCP, 'Modbus TCP');
   assert.equal(MODBUS_DRIVER_TYPE_LABELS.MODBUS_RTU, 'Modbus RTU');
+  assert.equal(MODBUS_CAPABILITY_PROFILES.length, 7);
+  assert.equal(MODBUS_CAPABILITY_PROFILE_LABELS.CHILLER, '冷机');
   assert.equal(MODBUS_RAW_TYPE_LABELS.BIT_BOOL, '位布尔');
+  assert.equal(MODBUS_RAW_TYPE_LABELS.ENUM16, '16 位枚举');
   assert.equal(MODBUS_FUNCTION_CODE_LABELS[3], '保持寄存器 FC3');
   assert.equal(MODBUS_FUNCTION_CODE_LABELS[4], '输入寄存器 FC4');
   assert.equal(MODBUS_WRITE_FUNCTION_CODE_LABELS['6'], '单写 FC6');
@@ -1574,6 +1593,21 @@ test('gateway config shadow supports declarative driverConfigs, autonomyPolicy b
   assert.equal(AUTONOMY_POLICY_STATE_PRESENTATION.UNCONFIGURED.label, '未配置');
   assert.ok(gatewayQuarantineRecordSchema.shape.reasonCode.options.includes('RATE_LIMITED'));
 
+  const parsedEnum = parseModbusEnumMap('1=运行, 0=停机');
+  assert.equal(parsedEnum.ok, true);
+  if (parsedEnum.ok) {
+    assert.deepEqual(parsedEnum.enumMap, { '0': '停机', '1': '运行' });
+    assert.equal(formatModbusEnumMap(parsedEnum.enumMap), '0=停机, 1=运行');
+  }
+  assert.equal(parseModbusEnumMap('').ok, false);
+  assert.equal(parseModbusEnumMap('-1=异常').ok, false);
+  assert.equal(parseModbusEnumMap('65536=超限').ok, false);
+  assert.equal(parseModbusEnumMap('0x1=十六进制').ok, false);
+  assert.equal(parseModbusEnumMap('01=前导零').ok, false);
+  assert.equal(parseModbusEnumMap('0=').ok, false);
+  assert.equal(parseModbusEnumMap(`0=${'a'.repeat(65)}`).ok, false);
+  assert.equal(parseModbusEnumMap('0=停机, 0=运行').ok, false);
+
   const initialShadow: GatewayConfigShadow = {
     tenantId: TENANT_ID,
     gatewayId: '01910000-0000-7000-8000-000000000902',
@@ -1582,41 +1616,55 @@ test('gateway config shadow supports declarative driverConfigs, autonomyPolicy b
   };
 
   const baseDriver = createEmptyModbusDriverDraft();
-  const regFloat = {
+  const regFloat: GatewayModbusRegisterDraft = {
     ...createEmptyModbusRegisterDraft(),
     pointCode: 'chw_supply_temp',
-    functionCode: '3' as const,
-    writeFunctionCode: '6' as const,
+    functionCode: '3',
+    writeFunctionCode: '16',
     address: '40001',
     registerCount: '2',
-    rawType: 'FLOAT32' as const,
+    rawType: 'FLOAT32',
     scale: '1',
     offset: '0',
-    pollPriority: 'VERY_HIGH' as const,
+    pollPriority: 'VERY_HIGH',
   };
-  const regBit = {
+  const regBit: GatewayModbusRegisterDraft = {
     ...createEmptyModbusRegisterDraft(),
     pointCode: 'compressor_running',
-    functionCode: '4' as const,
+    functionCode: '4',
     address: '100',
     registerCount: '1',
-    rawType: 'BIT_BOOL' as const,
+    rawType: 'BIT_BOOL',
     bitIndex: '3',
     scale: '1',
     offset: '0',
-    pollPriority: 'HIGH' as const,
+    pollPriority: 'HIGH',
+  };
+  const regEnum: GatewayModbusRegisterDraft = {
+    ...createEmptyModbusRegisterDraft(),
+    pointCode: 'run_mode',
+    functionCode: '3',
+    writeFunctionCode: '6',
+    address: '200',
+    registerCount: '1',
+    rawType: 'ENUM16',
+    enumMapText: '0=停机, 1=运行',
+    scale: '1',
+    offset: '0',
+    pollPriority: 'MEDIUM',
   };
 
-  const initDraft = {
+  const initDraft: GatewayConfigShadowEditorDraft = {
     ...createShadowEditorDraft(initialShadow),
     driverConfigs: [
       {
         ...baseDriver,
         deviceKey: 'chiller-01',
-        driverType: 'MODBUS_TCP' as const,
+        driverType: 'MODBUS_TCP',
         endpoint: '192.168.10.21:502',
         unitId: '2',
-        registers: [regFloat, regBit],
+        capabilityProfile: 'CHILLER',
+        registers: [regFloat, regBit, regEnum],
       },
     ],
     autonomyPolicy: {
@@ -1639,8 +1687,13 @@ test('gateway config shadow supports declarative driverConfigs, autonomyPolicy b
     assert.equal('samplingPolicies' in initReq.request, false);
     assert.equal('concentratorConfigs' in initReq.request, false);
     assert.equal(initReq.request.driverConfigs?.length, 1);
-    assert.equal(countDriverRegisters(initReq.request.driverConfigs), 2);
+    assert.equal(initReq.request.driverConfigs?.[0]?.capabilityProfile, 'CHILLER');
+    assert.equal(countDriverRegisters(initReq.request.driverConfigs), 3);
     assert.equal(initReq.request.driverConfigs?.[0]?.registers[1]?.bitIndex, 3);
+    assert.deepEqual(initReq.request.driverConfigs?.[0]?.registers[2]?.enumMap, {
+      '0': '停机',
+      '1': '运行',
+    });
     assert.equal(initReq.request.autonomyPolicy?.enabled, true);
     assert.equal(summarizeAutonomyPolicyState(initReq.request.autonomyPolicy), 'ENABLED');
     assert.equal(summarizeAutonomyPolicyState(null), 'UNCONFIGURED');
@@ -1650,20 +1703,99 @@ test('gateway config shadow supports declarative driverConfigs, autonomyPolicy b
     );
   }
 
-  // Validation guards: BIT_BOOL requires bitIndex 0..15; pump frequencies enforce min <= default <= max.
-  const missingBitIndex = buildValidatedShadowUpdateRequest(
+  // Canonical Modbus validation guards matching backend & edgecontrol invariants.
+  const expectDriverInvalid = (
+    patchDriver: Partial<typeof initDraft.driverConfigs[0]>,
+    msg: string,
+  ) => {
+    const res = buildValidatedShadowUpdateRequest(
+      {
+        ...initDraft,
+        driverConfigs: [{ ...initDraft.driverConfigs[0]!, ...patchDriver }],
+      },
+      initialShadow,
+    );
+    assert.equal(res.ok, false, msg);
+  };
+
+  expectDriverInvalid({ registers: [{ ...regBit, bitIndex: '' }] }, 'BIT_BOOL requires bitIndex');
+  expectDriverInvalid(
+    { registers: [{ ...regFloat, bitIndex: '0' }] },
+    'non-BIT_BOOL rejects bitIndex',
+  );
+  expectDriverInvalid(
+    {
+      registers: [
+        regBit,
+        { ...regBit, pointCode: 'compressor_fault' },
+      ],
+    },
+    'duplicate BIT_BOOL (FC, address, bitIndex) rejected',
+  );
+  expectDriverInvalid(
+    { registers: [{ ...regBit, writeFunctionCode: '6' }] },
+    'FC4 read-only forbids writeFunctionCode',
+  );
+  expectDriverInvalid(
+    { registers: [{ ...regFloat, writeFunctionCode: '6' }] },
+    'FC6 on 2-register FLOAT32 rejected',
+  );
+  expectDriverInvalid(
+    { registers: [{ ...regFloat, registerCount: '1' }] },
+    'registerCount mismatch rejected',
+  );
+  expectDriverInvalid(
+    { registers: [{ ...regFloat, address: '65535' }] },
+    'address + registerCount > 65536 rejected',
+  );
+  expectDriverInvalid(
+    { registers: [{ ...regFloat, scale: '0' }] },
+    'scale === 0 rejected',
+  );
+  expectDriverInvalid(
+    { registers: [{ ...regEnum, enumMapText: '' }] },
+    'ENUM16 empty enumMap rejected',
+  );
+  expectDriverInvalid(
+    { registers: [{ ...regEnum, enumMapText: '65536=超限' }] },
+    'ENUM16 non-uint16 key rejected',
+  );
+  expectDriverInvalid(
+    { registers: [{ ...regFloat, enumMapText: '0=停机' }] },
+    'non-ENUM16 with enumMap rejected',
+  );
+  expectDriverInvalid({ capabilityProfile: 'chiller_v1' }, 'non-standard capabilityProfile rejected');
+  expectDriverInvalid({ deviceKey: 'chiller/01' }, 'deviceKey with slash rejected');
+  expectDriverInvalid({ endpoint: '192.168.10.21' }, 'MODBUS_TCP without port rejected');
+  expectDriverInvalid({ endpoint: ':502' }, 'MODBUS_TCP without host rejected');
+  expectDriverInvalid({ endpoint: '192.168.10.21:65536' }, 'MODBUS_TCP port > 65535 rejected');
+
+  const duplicateDeviceKeyRes = buildValidatedShadowUpdateRequest(
+    {
+      ...initDraft,
+      driverConfigs: [
+        initDraft.driverConfigs[0]!,
+        { ...initDraft.driverConfigs[0]!, endpoint: '192.168.10.22:502' },
+      ],
+    },
+    initialShadow,
+  );
+  assert.equal(duplicateDeviceKeyRes.ok, false);
+
+  const validIpv6BoundaryRes = buildValidatedShadowUpdateRequest(
     {
       ...initDraft,
       driverConfigs: [
         {
           ...initDraft.driverConfigs[0]!,
-          registers: [{ ...regBit, bitIndex: '' }],
+          endpoint: '[::1]:502',
+          registers: [{ ...regFloat, address: '65534' }],
         },
       ],
     },
     initialShadow,
   );
-  assert.equal(missingBitIndex.ok, false);
+  assert.equal(validIpv6BoundaryRes.ok, true);
 
   const badPumpOrder = buildValidatedShadowUpdateRequest(
     {
@@ -1680,7 +1812,7 @@ test('gateway config shadow supports declarative driverConfigs, autonomyPolicy b
   assert.equal(badPumpOrder.ok, false);
 
   // Partial update when shadow already has driverConfigs + autonomyPolicy:
-  // modifying only autonomyPolicy omits unchanged driverConfigs; clearing sends [] / null.
+  // modifying only autonomyPolicy omits unchanged driverConfigs (even across register reordering); clearing sends [] / null.
   assert.equal(initReq.ok, true);
   if (initReq.ok) {
     const activeShadow: GatewayConfigShadow = {
@@ -1702,19 +1834,29 @@ test('gateway config shadow supports declarative driverConfigs, autonomyPolicy b
       drift: [],
     };
     const hydrated = createShadowEditorDraft(activeShadow);
+    assert.equal(hydrated.driverConfigs[0]?.capabilityProfile, 'CHILLER');
     assert.equal(hydrated.driverConfigs[0]?.registers[1]?.bitIndex, '3');
+    assert.equal(hydrated.driverConfigs[0]?.registers[2]?.enumMapText, '0=停机, 1=运行');
     assert.equal(hydrated.autonomyPolicy?.defaultChilledWaterSupplySetpointC, '7.5');
 
-    const toggleOffOnly = buildValidatedShadowUpdateRequest(
+    const toggleOffOnly = buildValidatedShadowUpdateRequestFromDesired(
       {
         ...hydrated,
+        driverConfigs: [
+          {
+            ...hydrated.driverConfigs[0]!,
+            registers: [...hydrated.driverConfigs[0]!.registers].reverse(),
+          },
+        ],
         autonomyPolicy: { ...hydrated.autonomyPolicy!, enabled: false },
         reason: '切换为仅云端受控',
       },
-      activeShadow,
+      activeShadow.desired!.desiredRevision,
+      activeShadow.desired,
     );
     assert.equal(toggleOffOnly.ok, true);
     if (toggleOffOnly.ok) {
+      assert.equal(toggleOffOnly.request.expectedDesiredRevision, 5);
       assert.equal('driverConfigs' in toggleOffOnly.request, false);
       assert.equal(toggleOffOnly.request.autonomyPolicy?.enabled, false);
     }

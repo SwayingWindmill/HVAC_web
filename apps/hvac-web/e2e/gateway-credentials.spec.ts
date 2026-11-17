@@ -504,7 +504,6 @@ test('gateway config shadow edits Modbus driver table and autonomy policy, rende
   await shadowSection.getByRole('button', { name: '初始化配置影子' }).click();
   const editor = page.getByRole('dialog', { name: '编辑网关配置影子' });
 
-  // 1. Add Modbus TCP driver config with FLOAT32 writable setpoint + BIT_BOOL running flag.
   await editor.getByRole('button', { name: '新增协议驱动' }).click();
   const driverGroup = editor.getByRole('group', { name: '协议驱动 1' });
   await driverGroup.getByLabel('本地设备标识').fill('chiller-01');
@@ -512,18 +511,20 @@ test('gateway config shadow edits Modbus driver table and autonomy policy, rende
   await driverGroup.getByLabel('从站地址 (UID)').fill('2');
   await driverGroup.getByLabel('超时时间 (ms)').fill('1500');
   await driverGroup.getByLabel('重试次数').fill('3');
-  await driverGroup.getByLabel('能力规格（可选）').fill('chiller_v1');
+  await driverGroup.getByLabel('能力档位（可选）').click();
+  await page.getByRole('option', { name: '冷机', exact: true }).click();
 
   const reg1 = driverGroup.getByRole('group', { name: '寄存器 1' });
   await reg1.getByLabel('点位编码').fill('chw_supply_temp_sp');
-  await reg1.getByLabel('写功能码（可选）').click();
-  await page.getByRole('option', { name: '单写 FC6', exact: true }).click();
-  await reg1.getByLabel('轮询优先级').click();
-  await page.getByRole('option', { name: '极高', exact: true }).click();
-  await reg1.getByLabel('寄存器地址').fill('40001');
   await reg1.getByLabel('原始类型').click();
   await page.getByRole('option', { name: '32 位浮点数', exact: true }).click();
   await expect(reg1.getByLabel('寄存器数量')).toHaveValue('2');
+  await reg1.getByLabel('写功能码（可选）').click();
+  await expect(page.getByRole('option', { name: '单写 FC6', exact: true })).toHaveCount(0);
+  await page.getByRole('option', { name: '多写 FC16', exact: true }).click();
+  await reg1.getByLabel('轮询优先级').click();
+  await page.getByRole('option', { name: '极高', exact: true }).click();
+  await reg1.getByLabel('寄存器地址').fill('40001');
   await reg1.getByLabel('倍率').fill('0.1');
 
   await driverGroup.getByRole('button', { name: '新增寄存器' }).click();
@@ -531,6 +532,7 @@ test('gateway config shadow edits Modbus driver table and autonomy policy, rende
   await reg2.getByLabel('点位编码').fill('compressor_running');
   await reg2.getByLabel('读功能码').click();
   await page.getByRole('option', { name: '输入寄存器 FC4', exact: true }).click();
+  await expect(reg2.getByLabel('写功能码（可选）')).toBeDisabled();
   await reg2.getByLabel('轮询优先级').click();
   await page.getByRole('option', { name: '高', exact: true }).click();
   await reg2.getByLabel('寄存器地址').fill('100');
@@ -538,7 +540,15 @@ test('gateway config shadow edits Modbus driver table and autonomy policy, rende
   await page.getByRole('option', { name: '位布尔', exact: true }).click();
   await reg2.getByLabel('位索引 (0 至 15)').fill('3');
 
-  // 2. Enable autonomy policy and verify cross-field validation guard before fixing pump frequencies.
+  await driverGroup.getByRole('button', { name: '新增寄存器' }).click();
+  const reg3 = driverGroup.getByRole('group', { name: '寄存器 3' });
+  await reg3.getByLabel('点位编码').fill('run_mode');
+  await reg3.getByLabel('原始类型').click();
+  await page.getByRole('option', { name: '16 位枚举', exact: true }).click();
+  await expect(reg3.getByLabel('寄存器数量')).toHaveValue('1');
+  await reg3.getByLabel('寄存器地址').fill('200');
+  await reg3.getByLabel('枚举映射（格式：数值=标签，逗号分隔）').fill('0=停机, 1=运行, 2=故障');
+
   await editor.getByRole('button', { name: '配置断网自治策略' }).click();
   const autonomyGroup = editor.locator('section[aria-label="断网自治策略设置"]');
   await autonomyGroup.getByLabel(/断网宽限/).fill('180');
@@ -555,24 +565,28 @@ test('gateway config shadow edits Modbus driver table and autonomy policy, rende
   await editor.getByRole('button', { name: '保存期望配置' }).click();
   await expect(editor).toHaveCount(0);
 
-  // 3. Verify read-only summary view, responsive register table semantics, and light 1440px screenshot.
   await expect(shadowSection).toContainText('待同步下发');
-  await expect(shadowSection).toContainText('协议驱动 1 台 · 2 寄存器');
+  await expect(shadowSection).toContainText('协议驱动 1 台 · 3 寄存器');
   await expect(shadowSection).toContainText('断网自治 · 已启用本地自治');
   await expect(shadowSection).toContainText('192.168.10.21:502');
   await expect(shadowSection).toContainText('Modbus TCP');
+  await expect(shadowSection).toContainText('冷机');
+  await expect(shadowSection).not.toContainText('CHILLER');
 
   const regTableRegion = shadowSection.getByRole('region', { name: 'chiller-01 协议驱动寄存器表' });
   await expect(regTableRegion).toHaveAttribute('tabindex', '0');
   await expect(regTableRegion).toContainText('chw_supply_temp_sp');
   await expect(regTableRegion).toContainText('保持寄存器 FC3');
-  await expect(regTableRegion).toContainText('单写 FC6');
+  await expect(regTableRegion).toContainText('多写 FC16');
   await expect(regTableRegion).toContainText('32 位浮点数');
   await expect(regTableRegion).toContainText('极高');
   await expect(regTableRegion).toContainText('compressor_running');
   await expect(regTableRegion).toContainText('输入寄存器 FC4');
   await expect(regTableRegion).toContainText('位布尔');
   await expect(regTableRegion).toContainText('第 3 位');
+  await expect(regTableRegion).toContainText('run_mode');
+  await expect(regTableRegion).toContainText('16 位枚举');
+  await expect(regTableRegion).toContainText('0=停机, 1=运行, 2=故障');
   await expect(shadowSection).toContainText('180 秒');
   await expect(shadowSection).toContainText('7.5 °C');
   await expect(shadowSection).toContainText('38 Hz（28 至 48 Hz）');
@@ -583,7 +597,6 @@ test('gateway config shadow edits Modbus driver table and autonomy policy, rende
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: p2AutonomyShot('shadow-driver-autonomy-light.png') });
 
-  // 4. Simulate edge drift on DRIVER_CONFIGS + AUTONOMY_POLICY, refresh, and capture dark 1440px screenshot.
   gateway.reportGatewayShadow(GATEWAY_ID, {
     reportedRevision: 1,
     appliedStatus: 'PARTIAL',
@@ -612,7 +625,6 @@ test('gateway config shadow edits Modbus driver table and autonomy policy, rende
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: p2AutonomyShot('shadow-driver-autonomy-dark.png') });
 
-  // 5. Partial update: disable autonomy (keep driverConfigs omitted), then clear both to [] / null.
   await darkShadow.getByRole('button', { name: '编辑配置影子' }).click();
   const editModal = page.getByRole('dialog', { name: '编辑网关配置影子' });
   await editModal.getByRole('switch', { name: '启用断网本地自治' }).click();
@@ -620,7 +632,7 @@ test('gateway config shadow edits Modbus driver table and autonomy policy, rende
   await editModal.getByRole('button', { name: '保存期望配置' }).click();
   await expect(editModal).toHaveCount(0);
   await expect(darkShadow).toContainText('断网自治 · 仅云端受控');
-  await expect(darkShadow).toContainText('协议驱动 1 台 · 2 寄存器');
+  await expect(darkShadow).toContainText('协议驱动 1 台 · 3 寄存器');
 
   await darkShadow.getByRole('button', { name: '编辑配置影子' }).click();
   const clearModal = page.getByRole('dialog', { name: '编辑网关配置影子' });
@@ -638,6 +650,15 @@ test('gateway config shadow edits Modbus driver table and autonomy policy, rende
   expect(shadowWrites).toHaveLength(3);
   expect('concentratorConfigs' in (shadowWrites[0]?.body ?? {})).toBe(false);
   expect(shadowWrites[0]?.body?.driverConfigs).toHaveLength(1);
+  expect(shadowWrites[0]?.body?.driverConfigs?.[0]?.capabilityProfile).toBe('CHILLER');
+  const writtenSpReg = shadowWrites[0]?.body?.driverConfigs?.[0]?.registers?.find(
+    (item: Record<string, unknown>) => item.pointCode === 'chw_supply_temp_sp',
+  );
+  expect(writtenSpReg?.writeFunctionCode).toBe(16);
+  const writtenEnumReg = shadowWrites[0]?.body?.driverConfigs?.[0]?.registers?.find(
+    (item: Record<string, unknown>) => item.pointCode === 'run_mode',
+  );
+  expect(writtenEnumReg?.enumMap).toEqual({ '0': '停机', '1': '运行', '2': '故障' });
   expect(shadowWrites[0]?.body?.autonomyPolicy?.enabled).toBe(true);
   expect('driverConfigs' in (shadowWrites[1]?.body ?? {})).toBe(false);
   expect(shadowWrites[1]?.body?.autonomyPolicy?.enabled).toBe(false);
