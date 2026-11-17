@@ -129,6 +129,10 @@ func (runtime *Runtime) probeDependencies(parent context.Context) []dependencySt
 		go func() {
 			defer group.Done()
 			statuses[index] = dependencyStatus{Name: dependency.Name, Required: dependency.Required, Status: "up"}
+			defer Recover(nil, runtime.Metrics, "observability.probe_dependency", func(any) {
+				statuses[index].Status = "down"
+				statuses[index].Error = "[REDACTED]"
+			})
 			ctx, cancel := context.WithTimeout(parent, time.Second)
 			defer cancel()
 			if err := dependency.Check(ctx); err != nil {
