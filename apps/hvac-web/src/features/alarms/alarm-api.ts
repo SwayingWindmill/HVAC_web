@@ -9,6 +9,34 @@ import { alarmPaths } from '@/api/generated/platformGateway.gen';
 export type AlarmSeverity = 'CRITICAL' | 'MAJOR' | 'MINOR' | 'WARNING' | 'INFO';
 export type AlarmCondition = 'ACTIVE' | 'CLEARED';
 export type AlarmOperation = 'PUBLISH' | 'ACKNOWLEDGE' | 'ASSIGN' | 'UNASSIGN' | 'SUPPRESS' | 'UNSUPPRESS' | 'CLEAR';
+export type AlarmEvaluationStatus = 'MATCHED' | 'NOT_MATCHED' | 'INDETERMINATE';
+export type AlarmEvaluationEffect = 'NONE' | 'PUBLISH' | 'CLEAR';
+
+export interface AlarmSuppression {
+  readonly startsAt: string;
+  readonly expiresAt: string;
+  readonly reason: string;
+  readonly actorId: string;
+  readonly policyRevision: string;
+}
+
+export interface AlarmEvaluationRecord {
+  readonly evaluatedAt: string;
+  readonly policyRevisionId: string;
+  readonly assignmentId: string;
+  readonly inputRevision: string;
+  readonly status: AlarmEvaluationStatus;
+  readonly effect: AlarmEvaluationEffect;
+  readonly qualityBlocker?: string;
+  readonly snapshot: Readonly<Record<string, unknown>>;
+  readonly activeIncidentCorrelationId?: string;
+}
+
+export interface AlarmEvaluationList {
+  readonly schemaVersion: 1;
+  readonly alarmId: string;
+  readonly items: readonly AlarmEvaluationRecord[];
+}
 
 export interface AlarmTimelineEntry {
   operation: AlarmOperation;
@@ -17,6 +45,7 @@ export interface AlarmTimelineEntry {
   actorType: string;
   actorId?: string;
   assigneeId?: string;
+  suppression?: AlarmSuppression;
   currentSeverity: AlarmSeverity;
   occurredAt: string;
   version: number;
@@ -34,6 +63,7 @@ export interface Alarm {
   peakSeverity: AlarmSeverity;
   acknowledgement?: { acknowledgedAt: string; acknowledgedBy: string; comment?: string };
   assigneeId?: string;
+  suppression?: AlarmSuppression;
   occurrenceCount: number;
   firstOccurredAt: string;
   lastOccurredAt: string;
@@ -51,6 +81,7 @@ export interface AlarmPage {
 export interface AlarmListFilter {
   condition?: AlarmCondition;
   acknowledged?: boolean;
+  suppressed?: boolean;
   activeFrom?: string;
   activeTo?: string;
 }
@@ -75,6 +106,7 @@ export async function listAlarms(siteId: string, filter: AlarmListFilter, cursor
   const query = new URLSearchParams({ siteId, limit: '100' });
   if (filter.condition) query.set('condition', filter.condition);
   if (filter.acknowledged !== undefined) query.set('acknowledged', String(filter.acknowledged));
+  if (filter.suppressed !== undefined) query.set('suppressed', String(filter.suppressed));
   if (filter.activeFrom) query.set('activeFrom', filter.activeFrom);
   if (filter.activeTo) query.set('activeTo', filter.activeTo);
   if (cursor) query.set('cursor', cursor);
@@ -110,11 +142,51 @@ export async function assignAlarm(alarm: Alarm, assigneeId: string, csrfToken: s
   return body.data;
 }
 
+export async function unassignAlarm(alarm: Alarm, reason: string, csrfToken: string): Promise<Alarm> {
+  const body = await send<{ data: Alarm }>(gatewayPath(alarmPaths.unassign, { alarmId: alarm.alarmId }), {
+    method: 'POST',
+    csrfToken,
+    idempotencyKey: `alarm-${crypto.randomUUID()}`,
+    body: { expectedVersion: alarm.version, reason: reason.trim() || '交回班组待分配' },
+  });
+  return body.data;
+}
+
+export async function suppressAlarm(alarm: Alarm, suppressedUntil: string, reason: string, csrfToken: string): Promise<Alarm> {
+  const body = await send<{ data: Alarm }>(gatewayPath(alarmPaths.suppress, { alarmId: alarm.alarmId }), {
+    method: 'POST',
+    csrfToken,
+    idempotencyKey: `alarm-${crypto.randomUUID()}`,
+    body: { expectedVersion: alarm.version, suppressedUntil, reason: reason.trim() },
+  });
+  return body.data;
+}
+
+export async function unsuppressAlarm(alarm: Alarm, reason: string, csrfToken: string): Promise<Alarm> {
+  const body = await send<{ data: Alarm }>(gatewayPath(alarmPaths.unsuppress, { alarmId: alarm.alarmId }), {
+    method: 'POST',
+    csrfToken,
+    idempotencyKey: `alarm-${crypto.randomUUID()}`,
+    body: { expectedVersion: alarm.version, reason: reason.trim() || '恢复告警通知' },
+  });
+  return body.data;
+}
+
+export async function listAlarmEvaluations(alarmId: string, limit = 10, signal?: AbortSignal): Promise<AlarmEvaluationList> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  const body = await send<{ data: AlarmEvaluationList }>(
+    `${gatewayPath(alarmPaths.evaluations, { alarmId })}?${query.toString()}`,
+    { signal },
+  );
+  return body.data;
+}
+
 export const alarmKeys = {
   all: (siteId: string) => ['alarms', siteId] as const,
   list: (siteId: string, filter: AlarmListFilter) => ['alarms', siteId, 'list', filter] as const,
   activeSummary: (siteId: string) => ['alarms', siteId, 'active-summary'] as const,
   detail: (siteId: string, alarmId: string) => ['alarms', siteId, 'detail', alarmId] as const,
+  evaluations: (siteId: string, alarmId: string, limit: number) => ['alarms', siteId, 'evaluations', alarmId, limit] as const,
 };
 
 const PAGE_LIMIT = 10;
@@ -156,6 +228,13 @@ export function alarmDetailQuery(siteId: string, alarmId: string) {
   return queryOptions({
     queryKey: alarmKeys.detail(siteId, alarmId),
     queryFn: ({ signal }) => getAlarm(alarmId, signal),
+  });
+}
+
+export function alarmEvaluationsQuery(siteId: string, alarmId: string, limit = 10) {
+  return queryOptions({
+    queryKey: alarmKeys.evaluations(siteId, alarmId, limit),
+    queryFn: ({ signal }) => listAlarmEvaluations(alarmId, limit, signal),
   });
 }
 

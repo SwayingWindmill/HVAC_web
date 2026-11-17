@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { Asset, AssetRelationship, Device, TelemetryPoint } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
 import type { PlantReading } from '../apps/hvac-web/src/features/operations/realtime/plant-model.ts';
 import { blockingInterlocks, controlTargets, plantUnits, unitActivePower } from '../apps/hvac-web/src/features/control/control-model.ts';
-import { stepUpErrorPresentation } from '../apps/hvac-web/src/features/control/control-errors.ts';
+import { controlErrorMessage, stepUpErrorPresentation } from '../apps/hvac-web/src/features/control/control-errors.ts';
 
 const at = '2026-10-01T00:00:00.000Z';
 const site = { tenantId: 't', siteId: 's' };
@@ -197,4 +197,9 @@ test('stepUpErrorPresentation distinguishes all four TOTP reasons and flags enro
   const promptFirst = stepUpErrorPresentation(undefined, false);
   assert.equal(promptFirst.showEnrollLink, false);
   assert.match(promptFirst.message, /高风险/);
+});
+
+test('controlErrorMessage translates DEVICE_PRIORITY_LOCKED and COMMAND_PRIORITY_INVALID', () => {
+  assert.match(controlErrorMessage('DEVICE_PRIORITY_LOCKED', 'fallback'), /更高优先级的安全联锁或人工指令锁定/);
+  assert.match(controlErrorMessage('COMMAND_PRIORITY_INVALID', 'fallback'), /指令优先级与控制来源不匹配/);
 });

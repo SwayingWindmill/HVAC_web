@@ -18,6 +18,11 @@
 
 #### 新增
 
+- 完善告警全生命周期治理、规则热更新、控制指令优先级仲裁与告警通知根因降噪能力（对应 P1 规则告警域演进）：
+  - 告警全生命周期与评估追踪（`modules/alarm`、`libs/alarmmodel`、`libs/alarmauth`、`cmd/energy-api`、`apps/hvac-web`）：新增取消认领（`UNASSIGN`）、检修静默与到期自动解静默（`SUPPRESS` / `UNSUPPRESS` / `SweepExpiredSuppressions`），补全规则评估历史持久化（`alarm_runtime.alarm_evaluation_event`）与预触发评估追溯接口 `GET /api/v1/alarms/{alarmId}/evaluations`，支持按站点热更新告警规则并保留未修改规则的在途评估状态与自动消警已下线规则；网页端「告警管理」补全「已静默」筛选视图、取消认领、检修静默弹窗及评估历程明细区。
+  - 控制指令优先级分级仲裁与设备优先级锁（`libs/commandmodel`、`modules/command`、`cmd/energy-api`、`apps/hvac-web`）：定义从安全联锁（`SAFETY_INTERLOCK`）、手动干预（`MANUAL_OVERRIDE`）、本地保护（`LOCAL_PROTECTION`）、AI 优化（`AI_OPTIMIZATION`）到定时场景（`SCHEDULED_SCENE`）的五档优先级与指令来源分类，支持高优先级自动抢占或拒绝低优先级指令与 `device_priority_locks` 独占锁，并将新不变量 `P7` 纳入 `command-safety` 形式化检验；控制日志与设备指令抽屉同步展示优先级与来源标签并提示抢占锁定报错。
+  - 告警通知根因抑制、静默期降噪与频次控制（`services/notification-service`）：发件箱投递联动同步告警静默窗与退避抑制，引入按路由级冷却间隔及 `DEVICE_ROOT_CAUSE` 父子设备根因抑制关系过滤网关断网等次生离线告警风暴。
+
 - 网页端补齐网关配置影子、模板目录激活、多维过滤与标签运维界面（对应 P1-2 与 P1-3）：
   - 「集成管理」网关详情抽屉（`GatewaySheet`）新增「配置影子」分区，支持查看云边同步状态（未配置 / 待同步下发 / 云边已一致 / 配置存在漂移）、期望与边缘已上报修订号、漂移明细与集中器暂存单元汇总，并可通过结构化弹窗编辑点位映射与采集周期（保留集中器离线配置并处理并发修订冲突刷新）；「无线集中器」参数及 200 槽 EID 提交确认框新增「若网关离线，暂存至配置影子（重连后自动同步）」勾选框与 `STAGED_SHADOW` 状态联动。
   - 「系统管理 → 设备与点位登记」的「模板版本」新增持久化租户模板目录、`DEVICE` 模板结构化配置器（适用设备类型、标准点位与质量检查规则、控制能力档位及键值化发布引用）、版本内容预览、载入重编以及带筛选分页的「站点已应用模板」记录表；「资源与绑定」新增资产/设备键值对标签（`tags`）管理、可点击递归「空间层级」筛选，以及状态、模板、标签与「全部授权站点」跨站点组合检索。

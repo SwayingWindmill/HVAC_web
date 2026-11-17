@@ -28,7 +28,7 @@ import { formatClock } from '@/features/operations/realtime/device-presentation'
 import { formatCompactTime, formatTime } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { WITHDRAWABLE, type Command, type ReconciledOutcome } from '../command-api';
-import { APPROVAL_LABEL, commandSummary, RISK_LABEL, STATUS_PRESENTATION } from '../command-presentation';
+import { APPROVAL_LABEL, COMMAND_SOURCE_LABEL, commandSummary, PRIORITY_LABEL, RISK_LABEL, STATUS_PRESENTATION, transitionReasonNote } from '../command-presentation';
 import type { CommandLabel } from '../control-model';
 import { CommandMark } from './CommandMark';
 
@@ -115,7 +115,7 @@ export function CommandLog({ commands, labels, timeZone, selectedId, filtered, a
             </button>
             <span className="font-mono text-xs whitespace-nowrap text-muted-foreground">{formatCompactTime(command.createdAt, timeZone)}</span>
             <span className="col-start-2 col-end-4 text-xs text-muted-foreground">
-              {STATUS_PRESENTATION[command.status].label} · {RISK_LABEL[command.risk]}{command.status === 'AWAITING_APPROVAL' ? ` · ${approvalText(command)}` : ''}
+              {STATUS_PRESENTATION[command.status].label} · {RISK_LABEL[command.risk]}{command.status === 'AWAITING_APPROVAL' ? ` · ${approvalText(command)}` : ''}{command.priorityTier ? ` · ${PRIORITY_LABEL[command.priorityTier]}` : ''}
             </span>
             {note ? <span className="col-start-2 col-end-4 text-xs text-secondary-foreground">{note}</span> : null}
             <div className="col-start-2 col-end-4 empty:hidden"><Actions command={command} actions={actions} /></div>
@@ -146,6 +146,9 @@ export function CommandSheet({ command, labels, timeZone, actions, onClose }: {
               <div className="flex items-center gap-2 pr-8 text-xs">
                 <span className="inline-flex items-center gap-1.5 font-medium"><CommandMark status={command.status} />{STATUS_PRESENTATION[command.status].label}</span>
                 <span className="rounded-md bg-secondary px-1.5 leading-5 text-secondary-foreground">{RISK_LABEL[command.risk]}</span>
+                {command.priorityTier ? (
+                  <span className="rounded-md bg-muted px-1.5 leading-5 text-secondary-foreground">{PRIORITY_LABEL[command.priorityTier]}</span>
+                ) : null}
                 <Button variant="ghost" size="icon-sm" className="ml-auto text-muted-foreground" aria-label="复制链接" onClick={copyLink}><Link2 className="size-3.5" /></Button>
               </div>
               <SheetTitle className="text-lg">{summary.title}</SheetTitle>
@@ -155,6 +158,18 @@ export function CommandSheet({ command, labels, timeZone, actions, onClose }: {
               <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
                 <div className="flex flex-col gap-0.5"><dt className="text-xs text-muted-foreground">审批</dt><dd className="font-medium">{approvalText(command)}</dd></div>
                 <div className="flex flex-col gap-0.5"><dt className="text-xs text-muted-foreground">最后更新</dt><dd className="font-mono font-medium">{formatTime(command.updatedAt, timeZone)}</dd></div>
+                {command.priorityTier ? (
+                  <div className="flex flex-col gap-0.5">
+                    <dt className="text-xs text-muted-foreground">控制优先级</dt>
+                    <dd className="font-medium">{PRIORITY_LABEL[command.priorityTier]}</dd>
+                  </div>
+                ) : null}
+                {command.commandSource ? (
+                  <div className="flex flex-col gap-0.5">
+                    <dt className="text-xs text-muted-foreground">控制来源</dt>
+                    <dd className="font-medium">{COMMAND_SOURCE_LABEL[command.commandSource]}</dd>
+                  </div>
+                ) : null}
               </dl>
               {outcomeNote(command) ? <p className="text-sm text-secondary-foreground">{outcomeNote(command)}</p> : null}
               <Actions command={command} actions={actions} />
@@ -173,7 +188,10 @@ export function CommandSheet({ command, labels, timeZone, actions, onClose }: {
                         <TimelineTitle>{STATUS_PRESENTATION[transition.toStatus].label}</TimelineTitle>
                         <TimelineTime dateTime={transition.occurredAt} className="font-mono">{formatClock(transition.occurredAt, timeZone)}</TimelineTime>
                       </TimelineHeader>
-                      <TimelineDescription>{transition.actorType === 'PRINCIPAL' ? '人员操作' : '系统处理'}</TimelineDescription>
+                      <TimelineDescription>
+                        {transition.actorType === 'PRINCIPAL' ? '人员操作' : '系统处理'}
+                        {transitionReasonNote(transition.reason) ? ` · ${transitionReasonNote(transition.reason)}` : ''}
+                      </TimelineDescription>
                     </TimelineContent>
                   </TimelineItem>
                 ))}

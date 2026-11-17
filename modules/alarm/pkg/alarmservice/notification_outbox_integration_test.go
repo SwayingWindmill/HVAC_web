@@ -142,7 +142,8 @@ func TestPostgresAlarmNotificationOutboxEmitsSuppressionEventsWithAttributes(t *
 	if databaseURL == "" {
 		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
 	}
-	ctx := identitycontext.WithTenantID(context.Background(), postgresTestTenantID)
+	suppressTenantID := "0190f000-0000-7000-8000-000000000099"
+	ctx := identitycontext.WithTenantID(context.Background(), suppressTenantID)
 	store, err := OpenPostgresStore(ctx, databaseURL)
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +151,7 @@ func TestPostgresAlarmNotificationOutboxEmitsSuppressionEventsWithAttributes(t *
 	defer store.Close()
 
 	deviceID := "01910000-0000-7000-8000-000000000222"
-	created, err := store.Publish(ctx, postgresTestTenantID, postgresTestSiteID, Publication{
+	created, err := store.Publish(ctx, suppressTenantID, postgresTestSiteID, Publication{
 		DeviceID:        &deviceID,
 		SourceType:      alarmmodel.SourceDeviceRule,
 		SourceReference: "device-rule-s16-suppress-test",
@@ -169,7 +170,7 @@ func TestPostgresAlarmNotificationOutboxEmitsSuppressionEventsWithAttributes(t *
 	}
 
 	suppressExpires := "2026-08-23T11:00:00Z"
-	suppressedResult, err := store.Apply(ctx, postgresTestTenantID, postgresTestSiteID, created.AlarmID, Mutation{
+	suppressedResult, err := store.Apply(ctx, suppressTenantID, postgresTestSiteID, created.AlarmID, Mutation{
 		Operation:       alarmmodel.OperationSuppress,
 		ExpectedVersion: created.Version,
 		OccurredAt:      "2026-08-23T09:01:00Z",
@@ -185,25 +186,26 @@ func TestPostgresAlarmNotificationOutboxEmitsSuppressionEventsWithAttributes(t *
 		t.Fatal(err)
 	}
 
-	if _, err := store.Apply(ctx, postgresTestTenantID, postgresTestSiteID, created.AlarmID, Mutation{
+	if _, err := store.Apply(ctx, suppressTenantID, postgresTestSiteID, created.AlarmID, Mutation{
 		Operation:       alarmmodel.OperationUnsuppress,
 		ExpectedVersion: suppressedResult.Alarm.Version,
 		OccurredAt:      "2026-08-23T09:02:00Z",
 		Reason:          "Maintenance finished early",
-		ActorType:       "USER",
-		ActorID:         "operator-1",
+		ActorType:       "PRINCIPAL",
+		ActorID:         "principal:operator-1",
+		PolicyRevision:  "alarm-policy-postgres-1",
 		IdempotencyKey:  "s16-unsuppress-event-1",
 		CorrelationID:   "s16-unsuppress-corr-1",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	tx, err := store.beginTenantTransaction(ctx, postgresTestTenantID, true)
+	tx, err := store.beginTenantTransaction(ctx, suppressTenantID, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	rows, err := tx.Query(ctx, `SELECT source_event_id::text, action FROM alarm_runtime.notification_outbox WHERE tenant_id=$1 AND alarm_id=$2 ORDER BY alarm_version, action`, postgresTestTenantID, created.AlarmID)
+	rows, err := tx.Query(ctx, `SELECT source_event_id::text, action FROM alarm_runtime.notification_outbox WHERE tenant_id=$1 AND alarm_id=$2 ORDER BY alarm_version, action`, suppressTenantID, created.AlarmID)
 	if err != nil {
 		t.Fatal(err)
 	}

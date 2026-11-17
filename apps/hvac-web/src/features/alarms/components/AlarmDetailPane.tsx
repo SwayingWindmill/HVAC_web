@@ -1,11 +1,14 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { BellRing, CheckCheck, CircleCheck, EyeOff, LineChart, Link2, Plus, Sparkles, UserCheck, UserMinus, type LucideIcon } from 'lucide-react';
+import { Bell, BellOff, BellRing, CheckCheck, CircleCheck, EyeOff, LineChart, Link2, Plus, Sparkles, UserCheck, UserMinus, type LucideIcon } from 'lucide-react';
 import { InfoTip } from '@/components/info-tip';
 import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Timeline,
@@ -28,11 +31,28 @@ import { STATUS_LABELS } from '@/features/work-orders/work-order-presentation';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { formatTime, personLabel } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
-import { alarmDetailQuery, type AlarmOperation, type AlarmSeverity } from '../alarm-api';
-import { alarmStatusLabel, formatDuration, operationLabel, recoveryReason, SEVERITY_LABELS, SeverityBadge } from '../alarm-presentation';
+import { alarmDetailQuery, alarmEvaluationsQuery, type AlarmOperation, type AlarmSeverity } from '../alarm-api';
+import {
+  alarmStatusLabel,
+  EVALUATION_EFFECT_LABELS,
+  EVALUATION_STATUS_LABELS,
+  formatDuration,
+  formatEvaluationSnapshot,
+  formatQualityBlocker,
+  operationLabel,
+  recoveryReason,
+  SEVERITY_LABELS,
+  SeverityBadge,
+} from '../alarm-presentation';
 import { useAlarmActions } from '../use-alarm-actions';
 
 const siteRoute = getRouteApi('/_app/_site');
+
+const SUPPRESS_PRESETS = [
+  { hours: '1', label: '1 小时' },
+  { hours: '4', label: '4 小时' },
+  { hours: '24', label: '24 小时' },
+] as const;
 
 const OPERATION_ICONS: Partial<Record<AlarmOperation, LucideIcon>> = {
   PUBLISH: BellRing,
@@ -40,6 +60,7 @@ const OPERATION_ICONS: Partial<Record<AlarmOperation, LucideIcon>> = {
   ASSIGN: UserCheck,
   UNASSIGN: UserMinus,
   SUPPRESS: EyeOff,
+  UNSUPPRESS: Bell,
   CLEAR: CircleCheck,
 };
 
@@ -85,11 +106,19 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
   const queryClient = useQueryClient();
   const [comment, setComment] = useState('');
   const [ackOpen, setAckOpen] = useState(false);
+  const [suppressOpen, setSuppressOpen] = useState(false);
+  const [suppressHours, setSuppressHours] = useState<string>('4');
+  const [suppressReason, setSuppressReason] = useState('');
   const [copied, setCopied] = useState(false);
+  const suppressionNoteId = useId();
+  const suppressPresetPrefix = useId();
+  const suppressReasonId = useId();
+  const evalRegionId = useId();
   const myId = principal.principalId;
   const capabilities = principal.authorization.capabilities;
 
   const detail = useQuery({ ...alarmDetailQuery(site.id, alarmId ?? ''), enabled: Boolean(alarmId) });
+  const evaluations = useQuery({ ...alarmEvaluationsQuery(site.id, alarmId ?? '', 10), enabled: Boolean(alarmId) });
   const canReadTrends = capabilities.includes('telemetry.history.read');
   const assetModel = useQuery({ ...siteAssetModelQuery(site.id), enabled: canReadTrends });
   const trendCatalog = useMemo(
@@ -101,7 +130,7 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
     queryFn: ({ signal }) => listWorkOrders({ sourceDomain: 'ALARM', sourceRef: alarmId, limit: 20 }, { siteId: site.id, signal }),
     enabled: Boolean(alarmId) && capabilities.includes('work-order.list'),
   });
-  const { acknowledge, claim, canClaim, canCreateWorkOrder } = useAlarmActions();
+  const { acknowledge, claim, unassign, suppress, unsuppress, canClaim, canCreateWorkOrder } = useAlarmActions();
   const explain = useAssistantPanel((state) => state.explain);
 
   if (!alarmId) {
@@ -119,7 +148,7 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
   }
 
   const deviceName = alarm.deviceId ? deviceNames.get(alarm.deviceId) : undefined;
-  const actionError = acknowledge.error ?? claim.error;
+  const actionError = acknowledge.error ?? claim.error ?? unassign.error ?? suppress.error ?? unsuppress.error;
   const conditionTone = alarm.condition === 'CLEARED' ? 'bg-success' : alarm.acknowledgement ? 'bg-warning' : 'bg-destructive';
 
   return (
@@ -176,8 +205,83 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
             </Popover>
           ) : null}
           {!alarm.acknowledgement ? <InfoTip>确认只表示已有人跟进，不代表故障已解除；运行恢复正常后由系统自动恢复</InfoTip> : null}
-          {canClaim && alarm.assigneeId !== myId ? (
+          {canClaim && alarm.condition === 'ACTIVE' && alarm.assigneeId !== myId ? (
             <Button variant="outline" disabled={claim.isPending} onClick={() => claim.mutate(alarm)}><UserCheck data-icon="inline-start" />由我处理</Button>
+          ) : null}
+          {canClaim && alarm.condition === 'ACTIVE' && alarm.assigneeId ? (
+            <Button
+              variant="outline"
+              disabled={unassign.isPending}
+              onClick={() => unassign.mutate({ alarm, reason: '交回班组待分配' })}
+            >
+              <UserMinus data-icon="inline-start" />
+              {unassign.isPending ? '正在取消…' : '取消分配'}
+            </Button>
+          ) : null}
+          {canClaim && alarm.condition === 'ACTIVE' && !alarm.suppression ? (
+            <Popover open={suppressOpen} onOpenChange={setSuppressOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" disabled={suppress.isPending}>
+                  <BellOff data-icon="inline-start" />
+                  抑制通知
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="flex w-80 flex-col gap-3">
+                <p className="text-sm font-semibold">暂时抑制这条告警的通知？</p>
+                <fieldset className="flex flex-col gap-2">
+                  <legend className="text-xs font-medium text-muted-foreground">抑制时长</legend>
+                  <RadioGroup value={suppressHours} onValueChange={setSuppressHours} className="grid grid-cols-3 gap-2">
+                    {SUPPRESS_PRESETS.map((preset) => {
+                      const itemId = `${suppressPresetPrefix}-${preset.hours}`;
+                      return (
+                        <div key={preset.hours} className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5">
+                          <RadioGroupItem value={preset.hours} id={itemId} />
+                          <Label htmlFor={itemId} className="cursor-pointer text-xs font-normal">{preset.label}</Label>
+                        </div>
+                      );
+                    })}
+                  </RadioGroup>
+                </fieldset>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor={suppressReasonId} className="text-xs font-medium text-muted-foreground">抑制原因</Label>
+                  <Textarea
+                    id={suppressReasonId}
+                    rows={2}
+                    placeholder="例如：正在清洗冷却塔，预计 4 小时后恢复"
+                    value={suppressReason}
+                    onChange={(event) => setSuppressReason(event.target.value)}
+                  />
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => setSuppressOpen(false)}>取消</Button>
+                  <Button
+                    size="sm"
+                    disabled={suppress.isPending || suppressReason.trim().length === 0}
+                    onClick={() => {
+                      const hours = Number(suppressHours) || 4;
+                      const until = new Date(Date.now() + hours * 3_600_000).toISOString();
+                      suppress.mutate(
+                        { alarm, suppressedUntil: until, reason: suppressReason },
+                        { onSuccess: () => { setSuppressReason(''); setSuppressOpen(false); } },
+                      );
+                    }}
+                  >
+                    {suppress.isPending ? '正在抑制…' : '确认抑制'}
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+          ) : null}
+          {canClaim && alarm.condition === 'ACTIVE' && alarm.suppression ? (
+            <Button
+              variant="outline"
+              aria-describedby={suppressionNoteId}
+              disabled={unsuppress.isPending}
+              onClick={() => unsuppress.mutate({ alarm, reason: '恢复告警通知' })}
+            >
+              <Bell data-icon="inline-start" />
+              {unsuppress.isPending ? '正在解除…' : '解除抑制'}
+            </Button>
           ) : null}
           {canCreateWorkOrder ? (
             <Button variant="outline" onClick={() => onCreatingWorkOrderChange(true)}><Plus data-icon="inline-start" />创建工单</Button>
@@ -201,6 +305,11 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
             <Sparkles data-icon="inline-start" className="text-primary" />分析原因
           </Button>
         </div>
+        {alarm.condition === 'ACTIVE' && alarm.suppression ? (
+          <div id={suppressionNoteId} className="rounded-lg border bg-muted/50 px-3 py-2 text-xs text-secondary-foreground">
+            已抑制通知至 <span className="font-mono font-medium">{formatTime(alarm.suppression.expiresAt, site.timezone)}</span> · 原因：{alarm.suppression.reason}
+          </div>
+        ) : null}
         {actionError ? <p className="text-sm text-destructive-text">{actionError.message}</p> : null}
       </header>
 
@@ -285,6 +394,48 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
           </section>
         ) : null}
       </div>
+
+      <section className="flex flex-col gap-3 border-t border-divider px-6 py-4">
+        <h3 id={evalRegionId} className="text-sm font-semibold">触发评估记录</h3>
+        {evaluations.isError ? (
+          <p className="text-xs text-muted-foreground">评估快照暂时读不到，不影响处理当前告警。</p>
+        ) : evaluations.isPending ? (
+          <Skeleton className="h-20" />
+        ) : !evaluations.data || evaluations.data.items.length === 0 ? (
+          <p className="text-xs text-muted-foreground">暂无评估快照记录</p>
+        ) : (
+          <div role="region" aria-labelledby={evalRegionId} tabIndex={0}>
+            <Table aria-label="规则评估明细表">
+              <TableHeader>
+                <TableRow>
+                  <TableHead scope="col" className="w-40">评估时间</TableHead>
+                  <TableHead scope="col" className="w-20">判定</TableHead>
+                  <TableHead scope="col" className="w-28">动作</TableHead>
+                  <TableHead scope="col">当时读数与说明</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {evaluations.data.items.map((record) => {
+                  const blocker = formatQualityBlocker(record.qualityBlocker);
+                  return (
+                    <TableRow key={`${record.evaluatedAt}-${record.inputRevision}`}>
+                      <TableCell className="font-mono text-xs whitespace-nowrap text-muted-foreground">
+                        {formatTime(record.evaluatedAt, site.timezone)}
+                      </TableCell>
+                      <TableCell className="text-xs font-medium">{EVALUATION_STATUS_LABELS[record.status]}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{EVALUATION_EFFECT_LABELS[record.effect]}</TableCell>
+                      <TableCell className="text-xs whitespace-normal text-secondary-foreground">
+                        {formatEvaluationSnapshot(record.snapshot)}
+                        {blocker ? ` · ${blocker}` : ''}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </section>
 
       <CreateWorkOrderDialog
         open={creatingWorkOrder}

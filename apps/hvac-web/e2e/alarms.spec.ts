@@ -1,5 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { SITE_ID } from './gateway';
 import { expect, test } from './test';
+
+const principalFixture = JSON.parse(
+  readFileSync(new URL('./fixtures/principal.json', import.meta.url), 'utf8'),
+);
 
 const ACTIVE_ALARM = '01a0ec45-7ab5-7e9c-aa96-927ee5e050f2';
 
@@ -121,4 +126,52 @@ test('查看当时趋势 opens 历史趋势 with the alarm fault window, overlay
   await expect(page).toHaveURL(/overlays=alarms%2Ccommands|overlays=alarms,commands/);
   await expect(page.getByRole('region', { name: '历史趋势工作台' }).getByRole('status')).toContainText('来自告警：冷冻水回水温度过低');
   await expect(page.getByRole('link', { name: /返回告警/ })).toBeVisible();
+});
+
+test('operators can unassign, suppress and unsuppress alarms, and review evaluation snapshots without UUID or raw enum leakage', async ({ page, gateway }) => {
+  gateway.principalOverride = {
+    ...principalFixture,
+    authorization: {
+      ...principalFixture.authorization,
+      capabilities: [...principalFixture.authorization.capabilities, 'alarm.assign'],
+    },
+  };
+  await page.goto(`/operations/alarms?site=${SITE_ID}&inspect=${ACTIVE_ALARM}`);
+  const detail = page.getByRole('region', { name: '告警详情' });
+
+  const evalTable = detail.getByRole('table', { name: '规则评估明细表' });
+  await expect(evalTable).toContainText('已命中');
+  await expect(evalTable).toContainText('触发告警');
+  await expect(evalTable).toContainText('回水温度 10.2 · 功率 372.5');
+  await expect(evalTable).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|MATCHED|PUBLISH/);
+
+  await detail.getByRole('button', { name: '由我处理' }).click();
+  await expect(detail).toContainText('我');
+  await detail.getByRole('button', { name: '取消分配' }).click();
+  await expect(detail).toContainText('未分配');
+
+  await detail.getByRole('button', { name: '抑制通知' }).click();
+  await page.getByRole('radio', { name: '4 小时', exact: true }).click();
+  await page.getByRole('textbox', { name: '抑制原因' }).fill('冷水机组计划保养');
+  await page.getByRole('button', { name: '确认抑制' }).click();
+
+  await expect(detail).toContainText('活动 · 未确认 · 已抑制');
+  await expect(detail).toContainText('已抑制通知至');
+  await expect(detail).toContainText('原因：冷水机组计划保养');
+
+  await page.getByRole('radio', { name: /已抑制/ }).click();
+  await expect(page).toHaveURL(/view=suppressed/);
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page).first()).toContainText('已抑制');
+
+  await detail.getByRole('button', { name: '解除抑制' }).click();
+  await expect(rows(page)).toHaveCount(0);
+  await page.getByRole('radio', { name: /^活动/ }).click();
+  await expect(detail).toContainText('活动 · 未确认');
+  await expect(detail).not.toContainText('已抑制通知至');
+
+  const suppressWrite = gateway.writes.find((write) => write.path === `/api/v1/alarms/${ACTIVE_ALARM}/suppress`);
+  expect(suppressWrite?.body).toMatchObject({ reason: '冷水机组计划保养' });
+  const unsuppressWrite = gateway.writes.find((write) => write.path === `/api/v1/alarms/${ACTIVE_ALARM}/unsuppress`);
+  expect(unsuppressWrite?.body).toMatchObject({ reason: '恢复告警通知' });
 });

@@ -48,7 +48,16 @@ func TestAlarmRoutesMatchThePublicContract(t *testing.T) {
 		served[operation.method+" "+operation.path] = true
 	}
 	// Every Alarm route the Gateway serves outside the Site rules (platform contract) is in the contract.
-	for _, path := range []string{"/api/v1/alarms", "/api/v1/alarms/" + gatewayAlarmID, "/api/v1/alarms/" + gatewayAlarmID + "/ack", "/api/v1/alarms/" + gatewayAlarmID + "/assign"} {
+	for _, path := range []string{
+		"/api/v1/alarms",
+		"/api/v1/alarms/" + gatewayAlarmID,
+		"/api/v1/alarms/" + gatewayAlarmID + "/ack",
+		"/api/v1/alarms/" + gatewayAlarmID + "/assign",
+		"/api/v1/alarms/" + gatewayAlarmID + "/unassign",
+		"/api/v1/alarms/" + gatewayAlarmID + "/suppress",
+		"/api/v1/alarms/" + gatewayAlarmID + "/unsuppress",
+		"/api/v1/alarms/" + gatewayAlarmID + "/evaluations",
+	} {
 		route, _ := matchPublicAlarmRoute(path)
 		if !served[alarmRouteMethod(route)+" "+route.template] {
 			t.Fatalf("Gateway serves %s %s, which the contract does not publish", alarmRouteMethod(route), route.template)
@@ -79,6 +88,10 @@ func TestAlarmAnswersConformToThePublicContract(t *testing.T) {
 		{name: "detail", method: http.MethodGet, path: detail, template: "/api/v1/alarms/{alarmId}", status: http.StatusOK},
 		{name: "acknowledge", method: http.MethodPost, path: detail + "/ack", template: "/api/v1/alarms/{alarmId}/ack", idempotency: "contract-ack-0001", status: http.StatusOK},
 		{name: "assign", method: http.MethodPost, path: detail + "/assign", template: "/api/v1/alarms/{alarmId}/assign", body: `{"expectedVersion":2,"reason":"Contract check","assigneeId":"technician-1"}`, idempotency: "contract-assign-0001", status: http.StatusOK},
+		{name: "unassign", method: http.MethodPost, path: detail + "/unassign", template: "/api/v1/alarms/{alarmId}/unassign", body: `{"expectedVersion":3,"reason":"Handoff"}`, idempotency: "contract-unassign-0001", status: http.StatusOK},
+		{name: "suppress", method: http.MethodPost, path: detail + "/suppress", template: "/api/v1/alarms/{alarmId}/suppress", body: `{"expectedVersion":4,"reason":"Planned maintenance","suppressedUntil":"2026-08-24T06:00:00Z"}`, idempotency: "contract-suppress-0001", status: http.StatusOK},
+		{name: "unsuppress", method: http.MethodPost, path: detail + "/unsuppress", template: "/api/v1/alarms/{alarmId}/unsuppress", body: `{"expectedVersion":5,"reason":"Maintenance finished"}`, idempotency: "contract-unsuppress-0001", status: http.StatusOK},
+		{name: "evaluations", method: http.MethodGet, path: detail + "/evaluations?limit=10", template: "/api/v1/alarms/{alarmId}/evaluations", status: http.StatusOK},
 		{name: "stale assignment", method: http.MethodPost, path: detail + "/assign", template: "/api/v1/alarms/{alarmId}/assign", body: `{"expectedVersion":1,"reason":"Contract check","assigneeId":"technician-2"}`, idempotency: "contract-assign-0002", status: http.StatusConflict, code: "ALARM_VERSION_CONFLICT"},
 		{name: "invalid list query", method: http.MethodGet, path: "/api/v1/alarms?siteId=" + fixture.siteID + "&limit=0", template: "/api/v1/alarms", status: http.StatusBadRequest, code: "INVALID_ARGUMENT"},
 		{name: "unknown alarm", method: http.MethodGet, path: unknown, template: "/api/v1/alarms/{alarmId}", status: http.StatusNotFound, code: "ALARM_NOT_FOUND"},
@@ -666,33 +679,7 @@ func TestAlarmSuppressionUnassignAndEvaluationsEndToEnd(t *testing.T) {
 			owner = signedAlarmOwner{t: t, signer: &signer.PublicKey, store: &directAlarmAdapter{store: store, now: func() time.Time { return now }}}
 		}
 
-		// Extend the route ownership catalog in memory without modifying contracts/ownership/route-ownership.v1.json.
-		var ownershipDoc map[string]any
-		if err := json.Unmarshal(readRepositoryFile(t, "contracts", "ownership", "route-ownership.v1.json"), &ownershipDoc); err != nil {
-			t.Fatal(err)
-		}
-		existingRoutes, _ := ownershipDoc["routes"].([]any)
-		for _, spec := range []struct {
-			method string
-			path   string
-		}{
-			{http.MethodGet, "/api/v1/alarms/{alarmId}/evaluations"},
-			{http.MethodPost, "/api/v1/alarms/{alarmId}/suppress"},
-			{http.MethodPost, "/api/v1/alarms/{alarmId}/unsuppress"},
-			{http.MethodPost, "/api/v1/alarms/{alarmId}/unassign"},
-		} {
-			existingRoutes = append(existingRoutes, map[string]any{
-				"method": spec.method, "path": spec.path, "owner": "alarm-service",
-				"publicIngress": "platform-gateway", "revision": 1, "rollout": map[string]any{"mode": "all"},
-				"compatibilityMode": "native", "allowedScopeDimensions": []string{"tenant", "site", "alarm", "principal", "key"},
-			})
-		}
-		ownershipDoc["routes"] = existingRoutes
-		rawOwnership, err := json.Marshal(ownershipDoc)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ownership, err := ownershipregistry.Parse(rawOwnership)
+		ownership, err := ownershipregistry.Parse(readRepositoryFile(t, "contracts", "ownership", "route-ownership.v1.json"))
 		if err != nil {
 			t.Fatal(err)
 		}

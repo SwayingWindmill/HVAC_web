@@ -256,10 +256,27 @@ func TestPostgresSyncSiteRulesHotSyncsAtomicallyAndPreservesUnchangedEvaluationS
 		postgresTestTenantID, syncSiteID, keptAssign).Scan(&candidateSince, &repeatCount); err != nil {
 		t.Fatal(err)
 	}
-	if !candidateSince.UTC().Equal(t0.Add(time.Minute)) || repeatCount != 1 {
-		t.Fatalf("unchanged rule evaluation state mutated: candidateSince=%v repeatCount=%d", candidateSince, repeatCount)
+	_ = tx.Rollback(ctx)
+	if !candidateSince.UTC().Equal(t0.Add(time.Minute)) || repeatCount != keptDecision.State.RepeatCount {
+		t.Fatalf("unchanged rule evaluation state mutated: candidateSince=%v repeatCount=%d wantRepeat=%d", candidateSince, repeatCount, keptDecision.State.RepeatCount)
 	}
-	cleared := siteAlarms(t, ctx, store, syncSiteID, alarmmodel.ConditionCleared)
+	evalFollowUp := postgresEvaluatorSnapshot("sync-eval-2", t0.Add(6*time.Minute), 31, "GOOD")
+	evalFollowUp.SiteID = syncSiteID
+	evalFollowUp.SubjectID = syncSiteID
+	keptPublished, err := store.EvaluateAssignedSnapshot(ctx, keptAssign, evalFollowUp, t0.Add(6*time.Minute))
+	if err != nil || keptPublished.Effect != EvaluationEffectPublish {
+		t.Fatalf("preserved candidate_since should fire after hold period without reset: decision=%#v err=%v", keptPublished, err)
+	}
+	listed, err := store.List(ctx, postgresTestTenantID, syncSiteID, Filter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleared := []alarmmodel.Alarm{}
+	for _, candidate := range listed.Items {
+		if candidate.Condition == alarmmodel.ConditionCleared {
+			cleared = append(cleared, candidate)
+		}
+	}
 	if len(cleared) != 1 || cleared[0].Timeline[len(cleared[0].Timeline)-1].Reason != RuleRetiredReason {
 		t.Fatalf("retired rule alarm was not cleared on hot-sync: %#v", cleared)
 	}

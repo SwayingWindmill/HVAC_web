@@ -1,5 +1,5 @@
 import { formatDecimal } from '../../lib/operator-format.ts';
-import type { Command, CommandApprovalPolicy, CommandRisk, CommandStatus } from './command-api';
+import type { Command, CommandApprovalPolicy, CommandPriorityTier, CommandRisk, CommandSource, CommandStatus } from './command-api';
 import type { ActionCapability, CommandLabel } from './control-model';
 
 type StatusVariant = 'default' | 'success' | 'error' | 'warning' | 'info';
@@ -26,6 +26,33 @@ export const APPROVAL_LABEL: Readonly<Record<CommandApprovalPolicy, string>> = {
   SINGLE_APPROVER: '需一人审批',
   TWO_PERSON: '需两人审批',
 };
+
+export const PRIORITY_LABEL: Readonly<Record<CommandPriorityTier, string>> = {
+  SAFETY_INTERLOCK: '安全联锁',
+  MANUAL_OVERRIDE: '人工干预',
+  PROTECTION_RULE: '保护规则',
+  AI_OPTIMIZATION: 'AI 优化',
+  SCHEDULE: '定时日程',
+};
+
+export const COMMAND_SOURCE_LABEL: Readonly<Record<CommandSource, string>> = {
+  SAFETY_INTERLOCK: '安全联锁保护',
+  OPERATOR: '值班人员操作',
+  PROTECTION_RULE: '本地保护规则',
+  OPTIMIZATION: '自动节能策略',
+  SCHEDULE: '运行日程控制',
+};
+
+export function transitionReasonNote(reason: string): string | null {
+  switch (reason) {
+    case 'DEVICE_PRIORITY_LOCKED':
+      return '设备正由更高优先级指令锁定';
+    case 'PRIORITY_PREEMPTED':
+      return '已被更高优先级指令抢占撤回';
+    default:
+      return null;
+  }
+}
 
 /** The verb on a button and in a command's title, e.g. 一键停机. */
 export const ACTION_VERB: Readonly<Record<ActionCapability, string>> = {

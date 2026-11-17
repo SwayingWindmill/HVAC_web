@@ -228,7 +228,8 @@ func TestPostgresListAlarmEvaluationsMatchesAlarmAndPreIncidentWindow(t *testing
 	if databaseURL == "" {
 		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
 	}
-	ctx := identitycontext.WithTenantID(context.Background(), postgresTestTenantID)
+	evalTenantID := "0190f000-0000-7000-8000-000000000098"
+	ctx := identitycontext.WithTenantID(context.Background(), evalTenantID)
 	store, err := OpenPostgresStore(ctx, databaseURL)
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +239,7 @@ func TestPostgresListAlarmEvaluationsMatchesAlarmAndPreIncidentWindow(t *testing
 	base := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
 	assignmentID := "01910000-7700-7000-8000-000000000001"
 	policy := validAlarmPolicy()
-	policy.PolicyID = "postgres-eval-audit-policy"
+	policy.PolicyID = "01910000-7700-7000-8000-000000000003"
 	policy.PolicyRevisionID = "01910000-7700-7000-8000-000000000002"
 	policy.Revision = 1
 	policy.AlarmType = "S4_EVAL_AUDIT"
@@ -251,27 +252,27 @@ func TestPostgresListAlarmEvaluationsMatchesAlarmAndPreIncidentWindow(t *testing
 	policy.Clear = Condition{Kind: ConditionCompare, Input: "supplyTemp", Operator: CompareLTE, Value: NumberValue(28)}
 	sealAlarmPolicy(&policy)
 
-	if _, _, err := store.PublishSitePolicy(ctx, postgresTestTenantID, postgresTestSiteID, policy, assignmentID, base, "principal:eval-test"); err != nil {
+	if _, _, err := store.PublishSitePolicy(ctx, evalTenantID, postgresTestSiteID, policy, assignmentID, base, "principal:eval-test"); err != nil {
 		t.Fatal(err)
 	}
-	snapshotAt := func(rev string, at time.Time, temp float64) EvaluationSnapshot {
+	snapshotAt := func(rev string, at time.Time, temp float64, quality string) EvaluationSnapshot {
 		return EvaluationSnapshot{
-			TenantID: postgresTestTenantID, SiteID: postgresTestSiteID, SubjectType: "SITE", SubjectID: postgresTestSiteID,
+			TenantID: evalTenantID, SiteID: postgresTestSiteID, SubjectType: "SITE", SubjectID: postgresTestSiteID,
 			InputRevision: rev, AsOf: at.UTC().Format(time.RFC3339Nano),
-			Inputs:        map[string]InputFact{"supplyTemp": NumberInput("supplyTemp", temp, "GOOD", at.UTC().Format(time.RFC3339Nano))},
+			Inputs:        map[string]InputFact{"supplyTemp": NumberInput("supplyTemp", temp, quality, at.UTC().Format(time.RFC3339Nano))},
 			CorrelationID: rev,
 		}
 	}
 
 	// 15 minutes before alarm fires: excluded from the 10 minute pre-incident window.
-	if _, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshotAt("eval-early", base, 25), base); err != nil {
+	if _, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshotAt("eval-early", base, 25, "BAD"), base); err != nil {
 		t.Fatal(err)
 	}
 	// 3 minutes before alarm fires: candidate starts inside the 10 minute window.
-	if _, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshotAt("eval-candidate", base.Add(16*time.Minute), 31), base.Add(16*time.Minute)); err != nil {
+	if _, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshotAt("eval-candidate", base.Add(16*time.Minute), 31, "GOOD"), base.Add(16*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	published, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshotAt("eval-publish", base.Add(19*time.Minute), 32), base.Add(19*time.Minute))
+	published, err := store.EvaluateAssignedSnapshot(ctx, assignmentID, snapshotAt("eval-publish", base.Add(19*time.Minute), 32, "GOOD"), base.Add(19*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +280,7 @@ func TestPostgresListAlarmEvaluationsMatchesAlarmAndPreIncidentWindow(t *testing
 		t.Fatalf("expected PUBLISH effect, got %#v", published)
 	}
 
-	list, err := store.ListAlarmEvaluations(ctx, postgresTestTenantID, postgresTestSiteID, published.State.ActiveAlarmID, 25)
+	list, err := store.ListAlarmEvaluations(ctx, evalTenantID, postgresTestSiteID, published.State.ActiveAlarmID, 25)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,11 +290,11 @@ func TestPostgresListAlarmEvaluationsMatchesAlarmAndPreIncidentWindow(t *testing
 	if len(list.Items) != 2 || list.Items[0].InputRevision != "eval-publish" || list.Items[1].InputRevision != "eval-candidate" {
 		t.Fatalf("unexpected postgres evaluation items: %#v", list.Items)
 	}
-	limited, err := store.ListAlarmEvaluations(ctx, postgresTestTenantID, postgresTestSiteID, published.State.ActiveAlarmID, 1)
+	limited, err := store.ListAlarmEvaluations(ctx, evalTenantID, postgresTestSiteID, published.State.ActiveAlarmID, 1)
 	if err != nil || len(limited.Items) != 1 || limited.Items[0].InputRevision != "eval-publish" {
 		t.Fatalf("limited query got (%#v, %v)", limited, err)
 	}
-	if _, err := store.ListAlarmEvaluations(ctx, postgresTestTenantID, postgresTestSiteID, "01910000-7700-7000-8000-000000000999", 25); !errors.Is(err, ErrNotFound) {
+	if _, err := store.ListAlarmEvaluations(ctx, evalTenantID, postgresTestSiteID, "01910000-7700-7000-8000-000000000999", 25); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing alarm err = %v, want ErrNotFound", err)
 	}
 }
