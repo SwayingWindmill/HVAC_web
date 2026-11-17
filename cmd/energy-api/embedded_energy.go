@@ -708,6 +708,7 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 		CommandGrantUseChecker:     useChecker,
 	})
 	if err != nil {
+		authority.Close()
 		store.Close()
 		return nil, nil, func() {}, err
 	}
@@ -718,6 +719,7 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 		GatewayAudience:            gatewayReadAudience,
 	})
 	if err != nil {
+		authority.Close()
 		store.Close()
 		return nil, nil, func() {}, err
 	}
@@ -726,9 +728,36 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 	})
 	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(embeddedCommandRuntimeConfig(authority, telemetry.Metrics, alarmNotifier))
 	if err != nil {
+		authority.Close()
 		store.Close()
 		return nil, nil, func() {}, err
 	}
+	handler := newEmbeddedCommandHandler(gatewaySPIFFE, operatorHandler, commandHandler, runtimeHandler, telemetry)
+	server := &http.Server{
+		Addr: envOr("COMMAND_SERVICE_ADDR", ":8447"), Handler: handler,
+		TLSConfig: &tls.Config{
+			MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}, ClientCAs: clientCAs, ClientAuth: tls.RequireAndVerifyClientCert,
+		},
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
+	}
+	closeOwner := func() {
+		if closer, ok := runtimeHandler.(interface{ Close() }); ok {
+			closer.Close()
+		}
+		authority.Close()
+		store.Close()
+	}
+	logger.Info("energy_api_command_configured", "address", server.Addr, "policy_revision", policyRevision)
+	return server, telemetry, closeOwner, nil
+}
+
+func newEmbeddedCommandHandler(
+	gatewaySPIFFE string,
+	operatorHandler http.Handler,
+	commandHandler http.Handler,
+	runtimeHandler http.Handler,
+	telemetry *observability.Runtime,
+) http.Handler {
 	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == commandservice.InternalOperatorPrefix || strings.HasPrefix(request.URL.Path, commandservice.InternalOperatorPrefix+"/") {
 			if embeddedPeerSPIFFE(request) != gatewaySPIFFE {
@@ -748,15 +777,12 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 		}
 		runtimeHandler.ServeHTTP(writer, request)
 	})
-	server := &http.Server{
-		Addr: envOr("COMMAND_SERVICE_ADDR", ":8447"), Handler: router,
-		TLSConfig: &tls.Config{
-			MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}, ClientCAs: clientCAs, ClientAuth: tls.RequireAndVerifyClientCert,
-		},
-		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
-	}
-	logger.Info("energy_api_command_configured", "address", server.Addr, "policy_revision", policyRevision)
-	return server, telemetry, store.Close, nil
+	return observability.InstrumentHTTP(router, telemetry, observability.HTTPInstrumentationConfig{
+		Namespace: "hvac_command",
+		Service:   "command-service",
+		SpanName:  "http.command.request",
+		Route:     commandservice.ObservabilityRoute,
+	})
 }
 
 func embeddedCommandRuntimeConfig(store commandservice.RuntimeStore, metrics *observability.Registry, notifier commandservice.ControlFailureNotifier) commandservice.RuntimeHTTPConfig {

@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const (
@@ -225,6 +227,14 @@ func WithDefaultGateway(gatewayID string) Option {
 	}
 }
 
+// WithObservability attaches a logger and metrics registry to a tunnel Hub for panic recovery.
+func WithObservability(logger *slog.Logger, metrics *observability.Registry) Option {
+	return func(h *Hub) {
+		h.logger = logger
+		h.metrics = metrics
+	}
+}
+
 type Hub struct {
 	mu               sync.RWMutex
 	sessions         map[string]*Session
@@ -234,7 +244,23 @@ type Hub struct {
 	readTimeout      time.Duration
 	openTimeout      time.Duration
 	auditSink        AuditSink
+	logger           *slog.Logger
+	metrics          *observability.Registry
 	closed           atomic.Bool
+}
+
+func (h *Hub) log() *slog.Logger {
+	if h != nil && h.logger != nil {
+		return h.logger
+	}
+	return slog.Default()
+}
+
+func (h *Hub) metricRegistry() *observability.Registry {
+	if h == nil {
+		return nil
+	}
+	return h.metrics
 }
 
 func NewHub(options ...Option) *Hub {
@@ -331,13 +357,15 @@ func (h *Hub) Close() {
 		wg.Add(1)
 		go func(sess *Session) {
 			defer wg.Done()
+			defer observability.Recover(h.log(), h.metricRegistry(), "connectivity.tunnel_close_audit")
 			sess.emitCloseAudit(auditCtx, "hub_closed")
 		}(s)
 	}
 	done := make(chan struct{})
 	go func() {
+		defer close(done)
+		defer observability.Recover(h.log(), h.metricRegistry(), "connectivity.tunnel_close_wait")
 		wg.Wait()
-		close(done)
 	}()
 	select {
 	case <-done:
@@ -551,6 +579,7 @@ func (h *Hub) StartLoopbackListener(addr string) (net.Listener, error) {
 }
 
 func (h *Hub) acceptLoop(ln net.Listener) {
+	defer observability.Recover(h.log(), h.metricRegistry(), "connectivity.tunnel_loopback_accept")
 	for {
 		localConn, err := ln.Accept()
 		if err != nil {
@@ -562,6 +591,7 @@ func (h *Hub) acceptLoop(ln net.Listener) {
 
 func (h *Hub) serveLoopbackConn(localConn net.Conn) {
 	defer func() { _ = localConn.Close() }()
+	defer observability.Recover(h.log(), h.metricRegistry(), "connectivity.tunnel_loopback_conn")
 	openCtx, cancel := context.WithTimeout(context.Background(), h.openTimeout)
 	stream, err := h.OpenStream(openCtx, "", AllowedTargetPort)
 	cancel()
@@ -585,6 +615,10 @@ func RunStdioBridge(ctx context.Context, targetAddr string, in io.Reader, out io
 	inDone := make(chan error, 1)
 	outDone := make(chan error, 1)
 	go func() {
+		defer observability.Recover(slog.Default(), nil, "connectivity.tunnel_stdio_in", func(any) {
+			_ = conn.Close()
+			inDone <- errors.New("tunnel stdio input bridge panicked")
+		})
 		_, copyErr := io.Copy(conn, in)
 		if tcp, ok := conn.(*net.TCPConn); ok {
 			_ = tcp.CloseWrite()
@@ -594,6 +628,10 @@ func RunStdioBridge(ctx context.Context, targetAddr string, in io.Reader, out io
 		inDone <- copyErr
 	}()
 	go func() {
+		defer observability.Recover(slog.Default(), nil, "connectivity.tunnel_stdio_out", func(any) {
+			_ = conn.Close()
+			outDone <- errors.New("tunnel stdio output bridge panicked")
+		})
 		_, copyErr := io.Copy(out, conn)
 		outDone <- copyErr
 	}()
@@ -625,11 +663,19 @@ func spliceConns(a, b interface {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		defer observability.Recover(slog.Default(), nil, "connectivity.tunnel_splice", func(any) {
+			_ = a.Close()
+			_ = b.Close()
+		})
 		_, _ = io.Copy(b, a)
 		_ = b.CloseWrite()
 	}()
 	go func() {
 		defer wg.Done()
+		defer observability.Recover(slog.Default(), nil, "connectivity.tunnel_splice", func(any) {
+			_ = a.Close()
+			_ = b.Close()
+		})
 		_, _ = io.Copy(a, b)
 		_ = a.CloseWrite()
 	}()
@@ -871,6 +917,9 @@ func (s *Session) run(ctx context.Context) {
 		s.closeWithReason(closeReason)
 	}()
 	go func() {
+		defer observability.Recover(s.hub.log(), s.hub.metricRegistry(), "connectivity.tunnel_session_ping", func(any) {
+			s.closeWithReason("ping_panicked")
+		})
 		ticker := time.NewTicker(s.hub.pingInterval)
 		defer ticker.Stop()
 		for {
@@ -1129,6 +1178,9 @@ func RunEdgeConn(ctx context.Context, conn net.Conn, dialTarget func(context.Con
 
 	if pingInterval > 0 {
 		go func() {
+			defer observability.Recover(slog.Default(), nil, "connectivity.tunnel_edge_ping", func(any) {
+				_ = conn.Close()
+			})
 			ticker := time.NewTicker(pingInterval)
 			defer ticker.Stop()
 			for {
@@ -1164,6 +1216,9 @@ func RunEdgeConn(ctx context.Context, conn net.Conn, dialTarget func(context.Con
 			}
 			streamID := frame.StreamID
 			go func() {
+				defer observability.Recover(slog.Default(), nil, "connectivity.tunnel_edge_stream", func(any) {
+					_ = send(Frame{Type: FrameRST, StreamID: streamID})
+				})
 				dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 				targetConn, dialErr := dialTarget(dialCtx, port)
 				cancel()

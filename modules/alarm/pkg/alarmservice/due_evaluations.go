@@ -9,7 +9,14 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
+
+type dueEvaluationRunner interface {
+	RunDueEvaluations(ctx context.Context, workerID string, now time.Time) (DueEvaluationResult, error)
+	WatchUnevaluableRules(ctx context.Context, now time.Time) (raised, cleared int, err error)
+	PruneExpiredEvaluationEvidence(ctx context.Context) (int64, error)
+}
 
 // A pass runs every minute and claims at most this many due evaluations per Tenant, each for one
 // lease; the next pass takes the rest.
@@ -24,13 +31,18 @@ const (
 // alone or inside energy-api. Each pass also raises or recovers the "rules-unevaluable" Alarm
 // (#749) and deletes evaluation evidence past its 30 days.
 func RunScheduledEvaluations(ctx context.Context, store *PostgresStore, logger *slog.Logger) {
+	runScheduledEvaluations(ctx, store, logger, dueEvaluationInterval)
+}
+
+func runScheduledEvaluations(ctx context.Context, runner dueEvaluationRunner, logger *slog.Logger, interval time.Duration) {
 	host, err := os.Hostname()
 	if err != nil {
 		host = "alarm-owner"
 	}
 	workerID := "alarm-due-evaluations:" + host
 	go func() {
-		ticker := time.NewTicker(dueEvaluationInterval)
+		defer observability.Recover(logger, nil, "alarm.due_evaluations_loop")
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -38,29 +50,34 @@ func RunScheduledEvaluations(ctx context.Context, store *PostgresStore, logger *
 				return
 			case <-ticker.C:
 			}
-			result, err := store.RunDueEvaluations(ctx, workerID, time.Now())
-			if err != nil {
-				logger.Error("alarm_due_evaluations_failed", "error_code", "ALARM_DUE_EVALUATIONS_FAILED", "error", err, "failed", result.Failed)
-			}
-			if result.Raised+result.Cleared+result.Escalated > 0 {
-				logger.Info("alarm_due_evaluations", "evaluated", result.Evaluated, "raised", result.Raised, "cleared", result.Cleared, "escalated", result.Escalated)
-			}
-			raised, cleared, err := store.WatchUnevaluableRules(ctx, time.Now())
-			if err != nil {
-				logger.Error("alarm_rules_unevaluable_watch_failed", "error_code", "ALARM_RULES_UNEVALUABLE_WATCH_FAILED", "error", err)
-			}
-			if raised+cleared > 0 {
-				logger.Info("alarm_rules_unevaluable_watch", "raised", raised, "cleared", cleared)
-			}
-			pruned, err := store.PruneExpiredEvaluationEvidence(ctx)
-			if err != nil {
-				logger.Error("alarm_evaluation_evidence_prune_failed", "error_code", "ALARM_EVALUATION_EVIDENCE_PRUNE_FAILED", "error", err)
-			}
-			if pruned > 0 {
-				logger.Info("alarm_evaluation_evidence_pruned", "deleted", pruned)
-			}
+			runDueEvaluationPass(ctx, runner, workerID, logger)
 		}
 	}()
+}
+
+func runDueEvaluationPass(ctx context.Context, runner dueEvaluationRunner, workerID string, logger *slog.Logger) {
+	defer observability.Recover(logger, nil, "alarm.due_evaluations")
+	result, err := runner.RunDueEvaluations(ctx, workerID, time.Now())
+	if err != nil && logger != nil {
+		logger.Error("alarm_due_evaluations_failed", "error_code", "ALARM_DUE_EVALUATIONS_FAILED", "error", err, "failed", result.Failed)
+	}
+	if result.Raised+result.Cleared+result.Escalated > 0 && logger != nil {
+		logger.Info("alarm_due_evaluations", "evaluated", result.Evaluated, "raised", result.Raised, "cleared", result.Cleared, "escalated", result.Escalated)
+	}
+	raised, cleared, err := runner.WatchUnevaluableRules(ctx, time.Now())
+	if err != nil && logger != nil {
+		logger.Error("alarm_rules_unevaluable_watch_failed", "error_code", "ALARM_RULES_UNEVALUABLE_WATCH_FAILED", "error", err)
+	}
+	if raised+cleared > 0 && logger != nil {
+		logger.Info("alarm_rules_unevaluable_watch", "raised", raised, "cleared", cleared)
+	}
+	pruned, err := runner.PruneExpiredEvaluationEvidence(ctx)
+	if err != nil && logger != nil {
+		logger.Error("alarm_evaluation_evidence_prune_failed", "error_code", "ALARM_EVALUATION_EVIDENCE_PRUNE_FAILED", "error", err)
+	}
+	if pruned > 0 && logger != nil {
+		logger.Info("alarm_evaluation_evidence_pruned", "deleted", pruned)
+	}
 }
 
 // DueEvaluationResult counts what one scheduled pass did.

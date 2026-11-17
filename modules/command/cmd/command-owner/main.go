@@ -127,6 +127,7 @@ func main() {
 		logger.Error("command_authority_configuration_invalid", "error_code", "COMMAND_AUTHORITY_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
+	defer authority.Close()
 
 	commandHandler, err := commandservice.NewHTTPHandler(commandservice.HTTPConfig{
 		Authority:                  store,
@@ -157,6 +158,9 @@ func main() {
 		logger.Error("command_runtime_configuration_invalid", "error_code", "COMMAND_RUNTIME_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
+	if closer, ok := runtimeHandler.(interface{ Close() }); ok {
+		defer closer.Close()
+	}
 
 	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == commandservice.InternalOperatorPrefix || strings.HasPrefix(request.URL.Path, commandservice.InternalOperatorPrefix+"/") {
@@ -178,7 +182,7 @@ func main() {
 		runtimeHandler.ServeHTTP(writer, request)
 	})
 	instrumentedRouter := observability.InstrumentHTTP(router, telemetry, observability.HTTPInstrumentationConfig{
-		Namespace: "hvac_command", Service: "command-service", SpanName: "http.command.request", Route: commandObservabilityRoute,
+		Namespace: "hvac_command", Service: "command-service", SpanName: "http.command.request", Route: commandservice.ObservabilityRoute,
 	})
 	server := &http.Server{
 		Addr:              envOr("COMMAND_SERVICE_ADDR", ":8447"),
@@ -374,69 +378,6 @@ func newHTTPControlFailureNotifier(endpoint string, client *http.Client, logger 
 			logger.Warn("command_control_alarm_rejected", "error_code", "CONTROL_ALARM_HTTP_REJECTED", "status", resp.StatusCode, "command_id", event.CommandID, "event_kind", event.Kind)
 		}
 	}
-}
-
-func commandObservabilityRoute(request *http.Request) string {
-	if request == nil {
-		return "unknown"
-	}
-	path := request.URL.Path
-	switch path {
-	case commandservice.InternalCommandsPath:
-		return "commands.create"
-	case commandservice.InternalOperatorCommandsPath:
-		if request.Method == http.MethodGet {
-			return "commands.get"
-		}
-		if request.Method == http.MethodPost {
-			return "commands.create"
-		}
-		return "unknown"
-	case commandservice.InternalDispatchClaimPath:
-		return "dispatch.claim"
-	case commandservice.InternalDispatchResolvePath:
-		return "dispatch.resolve"
-	case commandservice.InternalVerificationClaimPath:
-		return "verification.claim"
-	case commandservice.InternalVerificationResolvePath:
-		return "verification.resolve"
-	case commandservice.InternalConnectorPreparePath:
-		return "connector.prepare"
-	case commandservice.InternalConnectorCompletePath:
-		return "connector.complete"
-	}
-	if strings.HasPrefix(path, commandservice.InternalCommandsPath+"/") {
-		if strings.HasSuffix(path, "/approve") {
-			return "commands.approve"
-		}
-		return "commands.get"
-	}
-	if strings.HasPrefix(path, commandservice.InternalOperatorCommandsPath+"/") {
-		switch {
-		case strings.HasSuffix(path, "/approve"):
-			return "commands.approve"
-		case strings.HasSuffix(path, "/reconcile"):
-			return "commands.reconcile"
-		case strings.HasSuffix(path, "/cancel"):
-			return "commands.cancel"
-		default:
-			return "commands.get"
-		}
-	}
-	if strings.HasPrefix(path, commandservice.InternalOperatorPrefix+"/sites/") {
-		switch {
-		case strings.HasSuffix(path, "/control-state"):
-			return "control.state"
-		case strings.HasSuffix(path, "/control-mode"):
-			return "control.mode"
-		case strings.HasSuffix(path, "/control-shutdown"):
-			return "control.shutdown"
-		}
-	}
-	if strings.HasPrefix(path, commandservice.InternalOperatorPrefix+"/assets/") && strings.HasSuffix(path, "/control-lock") {
-		return "control.lock"
-	}
-	return "unknown"
 }
 
 func loadRequiredValueFile(path string, maximumBytes int64) (string, error) {

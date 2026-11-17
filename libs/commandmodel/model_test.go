@@ -320,3 +320,52 @@ func TestTerminalPreSendRejection(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeTraceID(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "lowercase valid trace id",
+			raw:  "4bf92f3577b34da6a3ce929d0e0e4736",
+			want: "4bf92f3577b34da6a3ce929d0e0e4736",
+		},
+		{
+			name: "uppercase and padded whitespace normalized",
+			raw:  "  4BF92F3577B34DA6A3CE929D0E0E4736\n",
+			want: "4bf92f3577b34da6a3ce929d0e0e4736",
+		},
+		{
+			name: "all zero trace id rejected",
+			raw:  "00000000000000000000000000000000",
+			want: "",
+		},
+		{
+			name: "short trace id rejected",
+			raw:  "4bf92f3577b34da6a3ce929d0e0e473",
+			want: "",
+		},
+		{
+			name: "long trace id rejected",
+			raw:  "4bf92f3577b34da6a3ce929d0e0e47360",
+			want: "",
+		},
+		{
+			name: "non hex characters rejected",
+			raw:  "4bf92f35-77b3-4da6-a3ce-929d0e0e",
+			want: "",
+		},
+		{
+			name: "empty rejected",
+			raw:  "   ",
+			want: "",
+		},
+	}
+	for _, tc := range tests {
+		if got := NormalizeTraceID(tc.raw); got != tc.want {
+			t.Fatalf("%s: NormalizeTraceID(%q) = %q, want %q", tc.name, tc.raw, got, tc.want)
+		}
+	}
+}

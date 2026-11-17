@@ -5,10 +5,23 @@ import (
 	"errors"
 	"log/slog"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
+// JobStore abstracts the maintenance persistence operations needed by Worker.
+type JobStore interface {
+	ClaimJobs(ctx context.Context, workerID string, batch int, leaseDuration time.Duration, now time.Time) ([]Job, error)
+	StartJob(ctx context.Context, job Job, leaseDuration time.Duration, now time.Time) (bool, error)
+	ExecuteJob(ctx context.Context, job Job, now time.Time) (map[string]any, error)
+	RenewJobLease(ctx context.Context, job Job, leaseDuration time.Duration, now time.Time) (bool, error)
+	CancelJob(ctx context.Context, job Job, now time.Time) error
+	CompleteJob(ctx context.Context, job Job, output map[string]any, now time.Time) error
+	FailJob(ctx context.Context, job Job, code string, executionErr error, retryable bool, now time.Time) error
+}
+
 type Worker struct {
-	Store         *Store
+	Store         JobStore
 	WorkerID      string
 	Batch         int
 	LeaseDuration time.Duration
@@ -44,6 +57,9 @@ func (w *Worker) process(ctx context.Context, job Job) {
 	}
 	done := make(chan result, 1)
 	go func() {
+		defer observability.Recover(w.Logger, nil, "maintenance.execute_job", func(any) {
+			done <- result{err: &ExecutionError{Code: "MAINTENANCE_JOB_PANIC", Retryable: false, Err: errors.New("maintenance job panicked")}}
+		})
 		output, executeErr := w.Store.ExecuteJob(execCtx, job, time.Now().UTC())
 		done <- result{output: output, err: executeErr}
 	}()

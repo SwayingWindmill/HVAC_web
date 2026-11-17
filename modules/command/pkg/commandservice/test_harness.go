@@ -39,6 +39,12 @@ func NewMemoryAuthorityStore(now func() time.Time) *MemoryAuthorityStore {
 	}
 }
 
+func (m *MemoryAuthorityStore) Close() {
+	if m != nil && m.svc != nil {
+		m.svc.Close()
+	}
+}
+
 func (m *MemoryAuthorityStore) Submit(_ context.Context, req commandmodel.SubmitRequest) (SubmitResult, error) {
 	res, err := m.svc.Submit(req)
 	if err != nil {

@@ -91,7 +91,7 @@ func main() {
 		os.Exit(1)
 	}
 	concentratorService := concentrator.NewService(connectivityStore, concentratorTransport)
-	credentials, tunnelHub, err := credentialServerWithRuntime(connectivityStore, concentratorService, telemetryRuntime)
+	credentials, tunnelHub, err := credentialServerWithRuntime(connectivityStore, concentratorService, telemetryRuntime, tunnel.WithObservability(logger, telemetry.Metrics))
 	if err != nil {
 		logger.Error("connectivity_credentials_unavailable", "error_code", "CREDENTIAL_MODULE_UNAVAILABLE")
 		os.Exit(1)
@@ -112,7 +112,7 @@ func main() {
 	// fails instead of reporting healthy without a command channel.
 	var commands *commandRuntime
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("COMMAND_RUNTIME_IN_PROCESS_ENABLED")), "true") {
-		if commands, err = loadCommandRuntime(ctx, connectivityStore); err != nil {
+		if commands, err = loadCommandRuntime(ctx, connectivityStore, logger, telemetry.Metrics); err != nil {
 			logger.Error("connectivity_command_runtime_unavailable", "error_code", "COMMAND_MODULE_UNAVAILABLE", "error", err.Error())
 			os.Exit(1)
 		}
@@ -120,11 +120,23 @@ func main() {
 	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, telemetry)
 	diagnosticsErr := make(chan error, 1)
 	go func() {
+		defer observability.Recover(logger, telemetry.Metrics, "connectivity.credential_server", func(any) {
+			select {
+			case diagnosticsErr <- errors.New("credential server panicked"):
+			default:
+			}
+		})
 		if err := credentials.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			diagnosticsErr <- err
 		}
 	}()
 	go func() {
+		defer observability.Recover(logger, telemetry.Metrics, "connectivity.diagnostics_server", func(any) {
+			select {
+			case diagnosticsErr <- errors.New("diagnostics server panicked"):
+			default:
+			}
+		})
 		logger.Info("mqtt_telemetry_adapter_diagnostics_started", "address", *diagnosticsAddress)
 		if serveErr := diagnostics.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			diagnosticsErr <- serveErr
@@ -133,6 +145,7 @@ func main() {
 	runtimeDone := make(chan struct{})
 	go func() {
 		defer close(runtimeDone)
+		defer observability.Recover(logger, telemetry.Metrics, "connectivity.uplink_runtime")
 		logger.Info("connectivity_uplink_started", "topic_filters", adapter.UplinkTopicFilters)
 		if runErr := runtime.Run(ctx); runErr != nil && ctx.Err() == nil {
 			// Telemetry ingress is its own fault domain. Command delivery remains
@@ -141,7 +154,9 @@ func main() {
 		}
 	}()
 	if commands != nil {
-		go commands.Run(ctx, logger)
+		observability.GoSafe(logger, telemetry.Metrics, "connectivity.command_runtime", func() {
+			commands.Run(ctx, logger)
+		})
 	}
 
 	select {
@@ -188,6 +203,7 @@ func uplinkConfig() adapter.Config {
 		QueueCapacity:    queueCapacity(),
 		BatchMaxMessages: batchMaxMessages(),
 		BatchFlushWindow: batchFlushWindow(),
+		WorkerCount:      uplinkWorkers(),
 	}
 }
 
@@ -215,6 +231,14 @@ func batchFlushWindow() time.Duration {
 		return -1
 	}
 	return window
+}
+
+func uplinkWorkers() int {
+	workers, err := strconv.Atoi(envOr("CONNECTIVITY_UPLINK_WORKERS", strconv.Itoa(adapter.DefaultWorkerCount)))
+	if err != nil || workers < 1 {
+		return -1
+	}
+	return workers
 }
 
 func diagnosticsServer(address string, runtime *adapter.Runtime, telemetry *observability.Runtime) *http.Server {

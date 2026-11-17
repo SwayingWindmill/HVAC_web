@@ -35,6 +35,7 @@ type PostgresStore struct {
 	newID           IDGenerator
 	mu              sync.RWMutex
 	failureNotifier ControlFailureNotifier
+	failureQueue    controlFailureQueue
 }
 
 func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
@@ -99,7 +100,7 @@ func (store *PostgresStore) notifyControlFailure(event ControlFailureEvent) {
 	store.mu.RLock()
 	notifier := store.failureNotifier
 	store.mu.RUnlock()
-	notifyControlFailureAsync(notifier, event)
+	store.failureQueue.enqueue(notifier, event)
 }
 
 func (store *PostgresStore) notifyControlFailures(events []ControlFailureEvent) {
@@ -110,7 +111,7 @@ func (store *PostgresStore) notifyControlFailures(events []ControlFailureEvent) 
 	notifier := store.failureNotifier
 	store.mu.RUnlock()
 	for _, event := range events {
-		notifyControlFailureAsync(notifier, event)
+		store.failureQueue.enqueue(notifier, event)
 	}
 }
 
@@ -123,7 +124,13 @@ func (store *PostgresStore) commitAndNotifyFailures(ctx context.Context, tx post
 }
 
 func (store *PostgresStore) Close() {
-	if store != nil && store.pool != nil {
+	if store == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), controlFailureCloseTimeout)
+	defer cancel()
+	_ = store.failureQueue.Close(ctx)
+	if store.pool != nil {
 		store.pool.Close()
 	}
 }
@@ -242,6 +249,7 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 		PointID:               request.PointID,
 		PrincipalID:           request.PrincipalID,
 		IdempotencyKey:        request.IdempotencyKey,
+		TraceID:               commandmodel.NormalizeTraceID(request.TraceID),
 		Capability:            request.Capability,
 		CapabilityRevision:    capabilityRevision,
 		Risk:                  risk.Level,
@@ -267,19 +275,19 @@ INSERT INTO command_runtime.command_intents (
   command_id, tenant_id, site_id, device_id, principal_id, idempotency_key,
   capability_name, capability_revision, risk_level, risk_rule_revision, approval_policy,
   retry_policy, canonical_parameters, verification_point_key, payload_hash, precondition_mode, bypass_reason, snapshot_revision, device_command_sequence,
-  status, version, active_execution_fence, created_at, updated_at, point_id
+  status, version, active_execution_fence, created_at, updated_at, point_id, trace_id
 ) VALUES (
   $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6,
   $7, $8, $9, $10, $11,
   $12, $13::jsonb, $14, $15, $16, $17,
-  $18, $19, $20, $21, 0, $22, $22, $23::uuid
+  $18, $19, $20, $21, 0, $22, $22, $23::uuid, $24
 )
 `, intent.ID, intent.TenantID, intent.SiteID, intent.DeviceID, intent.PrincipalID,
 		intent.IdempotencyKey, intent.Capability, intent.CapabilityRevision, intent.Risk,
 		intent.RiskSnapshot.RuleRevision, intent.ApprovalPolicy, intent.RetryPolicy, parameters,
 		intent.VerificationPointKey, intent.PayloadHash, string(intent.PreconditionMode), intent.BypassReason,
 		intent.SnapshotRevision, intent.DeviceCommandSequence,
-		intent.Status, intent.Version, now, intent.PointID); err != nil {
+		intent.Status, intent.Version, now, intent.PointID, intent.TraceID); err != nil {
 		return SubmitResult{}, classifyCommandWriteError("insert command intent", err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -588,7 +596,7 @@ func loadIntent(ctx context.Context, tx pgx.Tx, tenantID, commandID string) (com
 	var parameters []byte
 	err := tx.QueryRow(ctx, `
 SELECT command_id::text, tenant_id::text, site_id::text, device_id::text, principal_id::text,
-       idempotency_key, capability_name, capability_revision, risk_level, risk_rule_revision,
+       idempotency_key, trace_id, capability_name, capability_revision, risk_level, risk_rule_revision,
        approval_policy, retry_policy, canonical_parameters, verification_point_key,
        payload_hash, precondition_mode, bypass_reason, snapshot_revision, device_command_sequence, status, version,
        active_execution_fence, created_at, updated_at, point_id::text
@@ -596,7 +604,7 @@ FROM command_runtime.command_intents
 WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 `, tenantID, commandID).Scan(
 		&intent.ID, &intent.TenantID, &intent.SiteID, &intent.DeviceID, &intent.PrincipalID,
-		&intent.IdempotencyKey, &capability, &intent.CapabilityRevision, &risk,
+		&intent.IdempotencyKey, &intent.TraceID, &capability, &intent.CapabilityRevision, &risk,
 		&intent.RiskSnapshot.RuleRevision, &approvalPolicy, &retry, &parameters, &intent.VerificationPointKey,
 		&intent.PayloadHash, &preconditionMode, &intent.BypassReason, &intent.SnapshotRevision, &intent.DeviceCommandSequence,
 		&status, &intent.Version, &intent.ActiveFence, &intent.CreatedAt, &intent.UpdatedAt, &intent.PointID,
@@ -617,6 +625,7 @@ WHERE tenant_id = $1::uuid AND command_id = $2::uuid
 	intent.RetryPolicy = commandmodel.RetryPolicy(retry)
 	intent.PreconditionMode = commandmodel.PreconditionMode(preconditionMode)
 	intent.Status = commandmodel.IntentStatus(status)
+	intent.TraceID = commandmodel.NormalizeTraceID(intent.TraceID)
 
 	var authorizationCapability, maximumRisk string
 	if err := tx.QueryRow(ctx, `

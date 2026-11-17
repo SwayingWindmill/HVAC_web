@@ -10,10 +10,12 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
 const setpointCapabilityRevision = "capability:set-temperature-setpoint:v1"
@@ -1312,5 +1314,187 @@ func TestRuntimeHTTPVerificationSucceededPastDeadlineEmitsControlFailure(t *test
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for late pulse VerificationSucceeded failure event")
+	}
+}
+
+func TestSubmitIdempotentReplayIgnoresTraceID(t *testing.T) {
+	clock := fixedClock()
+	service := New(clock)
+	defer service.Close()
+
+	req1 := validRequest()
+	req1.TraceID = " 4BF92F3577B34DA6A3CE929D0E0E4736 "
+	first, err := service.Submit(req1)
+	if err != nil {
+		t.Fatalf("first submit failed: %v", err)
+	}
+	wantTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+	if first.Intent.TraceID != wantTraceID {
+		t.Fatalf("first.Intent.TraceID=%q, want %q", first.Intent.TraceID, wantTraceID)
+	}
+
+	req2 := validRequest()
+	req2.TraceID = "fedcba9876543210fedcba9876543210"
+	second, err := service.Submit(req2)
+	if err != nil {
+		t.Fatalf("idempotent retry with new TraceID failed: %v", err)
+	}
+	if !second.Replayed || second.Intent.ID != first.Intent.ID || second.Intent.TraceID != wantTraceID {
+		t.Fatalf("unexpected replay result: replayed=%v id=%q trace=%q", second.Replayed, second.Intent.ID, second.Intent.TraceID)
+	}
+
+	env, err := service.PrepareDispatch(first.Intent.ID, "dispatcher-a", clock().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("PrepareDispatch failed: %v", err)
+	}
+	if env.TraceID != wantTraceID {
+		t.Fatalf("DispatchEnvelope.TraceID=%q, want %q", env.TraceID, wantTraceID)
+	}
+}
+
+func TestOperatorHTTPHandlerPropagatesTraceparentToDispatchEnvelope(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	h, _ := seedPlantHarness(t, now)
+	defer h.Authority.Close()
+	defer h.Store.Close()
+
+	claims := identitycontext.DelegationClaims{
+		Issuer: "spiffe://hvac.local/platform-gateway", Subject: "op-trace", SubjectIssuer: "https://issuer.test",
+		ExecutingService: "spiffe://hvac.local/platform-gateway", Audience: "command-service",
+		TenantID: caTenantID, Actions: []string{OperatorControlContextAction},
+		Scopes: []string{"tenant:" + caTenantID, "session:sess-trace"}, PolicyRevision: "policy-v1",
+		SessionID: "sess-trace", IssuedAt: now.Unix(), ExpiresAt: now.Add(30 * time.Second).Unix(),
+		TokenID: "ctx-trace-1",
+	}
+	signedCtx, err := identitycontext.SignDelegation(h.GatewaySigner, claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const wantTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	body := `{"assetId":"` + caChillerID + `","commandPointId":"` + caSetpointPt + `","parameters":{"setpointC":23.5}}`
+	req := httptest.NewRequest(http.MethodPost, InternalOperatorCommandsPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "http-trace-1")
+	req.Header.Set("X-Command-Control-Context", signedCtx)
+	req.Header.Set("traceparent", "00-"+wantTraceID+"-00f067aa0ba902b7-01")
+	rec := httptest.NewRecorder()
+	h.OperatorHandler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("operator create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	env, err := h.Authority.ClaimDispatch(context.Background(), caTenantID, "dispatcher-trace", 30*time.Second)
+	if err != nil {
+		t.Fatalf("ClaimDispatch failed: %v", err)
+	}
+	if env.TraceID != wantTraceID {
+		t.Fatalf("DispatchEnvelope.TraceID=%q, want %q", env.TraceID, wantTraceID)
+	}
+}
+
+func TestControlFailureQueueRecoversPanicsAndDrainsOnClose(t *testing.T) {
+	var queue controlFailureQueue
+	workerStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+
+	var mu sync.Mutex
+	delivered := make([]string, 0, controlFailureQueueCapacity+1)
+	panicked := false
+
+	blockingNotifier := func(_ context.Context, event ControlFailureEvent) {
+		switch event.CommandID {
+		case "cmd-gate":
+			close(workerStarted)
+			<-releaseFirst
+			mu.Lock()
+			delivered = append(delivered, event.CommandID)
+			mu.Unlock()
+		case "cmd-panic":
+			mu.Lock()
+			panicked = true
+			mu.Unlock()
+			panic("simulated notifier panic")
+		default:
+			mu.Lock()
+			delivered = append(delivered, event.CommandID)
+			mu.Unlock()
+		}
+	}
+
+	queue.enqueue(blockingNotifier, ControlFailureEvent{CommandID: "cmd-gate"})
+	<-workerStarted
+
+	queue.enqueue(blockingNotifier, ControlFailureEvent{CommandID: "cmd-panic"})
+	for i := 1; i < controlFailureQueueCapacity+10; i++ {
+		queue.enqueue(blockingNotifier, ControlFailureEvent{CommandID: "cmd-buf"})
+	}
+	close(releaseFirst)
+
+	if err := queue.Close(context.Background()); err != nil {
+		t.Fatalf("queue.Close returned error: %v", err)
+	}
+	mu.Lock()
+	gotPanicked := panicked
+	gotDelivered := len(delivered)
+	mu.Unlock()
+	if !gotPanicked {
+		t.Fatal("expected panicking notifier to execute and recover")
+	}
+	if wantDelivered := controlFailureQueueCapacity; gotDelivered != wantDelivered {
+		t.Fatalf("delivered=%d want=%d (gate + 255 buffered non-panicking items; overflow dropped)", gotDelivered, wantDelivered)
+	}
+
+	clock := fixedClock()
+	service := New(clock)
+	var svcMu sync.Mutex
+	var svcSeen []string
+	var svcCalls int
+	svcGate := make(chan struct{})
+	service.SetControlFailureNotifier(func(_ context.Context, event ControlFailureEvent) {
+		svcMu.Lock()
+		svcCalls++
+		call := svcCalls
+		svcMu.Unlock()
+		if call == 1 {
+			<-svcGate
+			panic("first service failure notifier panicked")
+		}
+		time.Sleep(15 * time.Millisecond)
+		svcMu.Lock()
+		svcSeen = append(svcSeen, event.CommandID)
+		svcMu.Unlock()
+	})
+
+	submitAndCommit := func(key, device string) string {
+		req := validRequest()
+		req.IdempotencyKey = key
+		req.DeviceID = device
+		req.Authorization.DeviceID = device
+		sub, err := service.Submit(req)
+		if err != nil {
+			t.Fatalf("submit %s: %v", key, err)
+		}
+		env, err := service.PrepareDispatch(sub.Intent.ID, "dispatcher-a", clock().Add(time.Minute))
+		if err != nil {
+			t.Fatalf("prepare %s: %v", key, err)
+		}
+		if err := service.ResolveDispatch(env, commandmodel.ConnectorResult{
+			Phase: commandmodel.ConnectorRequestCommitted, FailureCode: "MQTT_TIMEOUT", EvidenceID: "ev-" + key,
+		}); err != nil {
+			t.Fatalf("resolve %s: %v", key, err)
+		}
+		return sub.Intent.ID
+	}
+
+	_ = submitAndCommit("q-1", "dev-q-1")
+	secondID := submitAndCommit("q-2", "dev-q-2")
+	close(svcGate)
+	service.Close()
+
+	svcMu.Lock()
+	defer svcMu.Unlock()
+	if len(svcSeen) != 1 || svcSeen[0] != secondID {
+		t.Fatalf("expected Service.Close to drain %q after panic recovery, got %v", secondID, svcSeen)
 	}
 }

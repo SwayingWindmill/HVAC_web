@@ -21,10 +21,14 @@ func TestConfigValidateBatchOptions(t *testing.T) {
 	if defaultCfg.effectiveBatchMaxMessages() != DefaultBatchMaxMessages {
 		t.Fatalf("effectiveBatchMaxMessages=%d, want %d", defaultCfg.effectiveBatchMaxMessages(), DefaultBatchMaxMessages)
 	}
+	if defaultCfg.effectiveWorkerCount() != DefaultWorkerCount {
+		t.Fatalf("effectiveWorkerCount=%d, want %d", defaultCfg.effectiveWorkerCount(), DefaultWorkerCount)
+	}
 
 	maxValid := base()
 	maxValid.BatchMaxMessages = MaxObservationBatchSize
 	maxValid.BatchFlushWindow = time.Second
+	maxValid.WorkerCount = maxWorkerCount
 	if err := maxValid.Validate(); err != nil {
 		t.Fatalf("max valid config failed Validate: %v", err)
 	}
@@ -37,6 +41,8 @@ func TestConfigValidateBatchOptions(t *testing.T) {
 		{"batch max above 512", func(c *Config) { c.BatchMaxMessages = MaxObservationBatchSize + 1 }},
 		{"negative flush window", func(c *Config) { c.BatchFlushWindow = -time.Millisecond }},
 		{"flush window above 1s", func(c *Config) { c.BatchFlushWindow = time.Second + time.Millisecond }},
+		{"negative worker count", func(c *Config) { c.WorkerCount = -1 }},
+		{"worker count above 1024", func(c *Config) { c.WorkerCount = maxWorkerCount + 1 }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := base()

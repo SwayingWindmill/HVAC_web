@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,7 +30,33 @@ type queuedPublish struct {
 const (
 	defaultCoverageReportInterval = 60 * time.Second
 	MaximumCoverageBatchSize      = 2048
+	defaultGatewayIdleTimeout     = 5 * time.Minute
+	maxTrackedGatewayQueues       = 4096
 )
+
+type gatewayMailboxState struct {
+	queue        chan queuedPublish
+	pendingBatch []queuedPublish
+	pendingMsgs  []UplinkMessage
+	attempt      int
+	inFlight     bool
+	retrying     bool
+	queued       bool
+	enqueuers    int
+	idleTimer    *time.Timer
+	retryTimer   *time.Timer
+	idleGen      uint64
+	retryGen     uint64
+	lastActive   time.Time
+}
+
+type gatewayTurn struct {
+	gatewayID    string
+	queue        chan queuedPublish
+	pendingBatch []queuedPublish
+	pendingMsgs  []UplinkMessage
+	attempt      int
+}
 
 type CoverageDeviceLister interface {
 	ListAllActiveManagedDeviceIDs(ctx context.Context) ([]string, error)
@@ -48,10 +75,10 @@ func WithCoverageReporter(lister CoverageDeviceLister, reporter CoverageReporter
 	}
 }
 
-// Runtime consumes every Gateway's uplink. Each Gateway gets its own ordered queue and
-// worker, created when its first message arrives. A message is acknowledged only after
-// it is processed or quarantined; when a Gateway's queue is full, receiving pauses and
-// the broker holds the backlog.
+// Runtime consumes every Gateway's uplink. Each Gateway gets an ordered mailbox
+// serviced by a bounded pool of workers. A message is acknowledged only after it is
+// processed or quarantined; when a Gateway's queue is full, receiving pauses and the
+// broker holds the backlog.
 type Runtime struct {
 	config     Config
 	processor  *Processor
@@ -63,6 +90,7 @@ type Runtime struct {
 	coverageLister   CoverageDeviceLister
 	coverageReporter CoverageReporter
 	coverageInterval time.Duration
+	idleTimeout      time.Duration
 	now              func() time.Time
 
 	coverageMu  sync.Mutex
@@ -70,9 +98,13 @@ type Runtime struct {
 	coverageRev atomic.Int64
 	connGen     atomic.Uint64
 
-	queuesMu sync.Mutex
-	queues   map[string]chan queuedPublish
-	workers  sync.WaitGroup
+	queuesMu    sync.Mutex
+	queues      map[string]chan queuedPublish
+	states      map[string]*gatewayMailboxState
+	readyQueue  []string
+	readySignal chan struct{}
+	poolOnce    sync.Once
+	workers     sync.WaitGroup
 
 	connMu     sync.Mutex
 	connClosed chan struct{}
@@ -105,8 +137,11 @@ func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metric
 		retryDelay:       mqttRetryDelay,
 		reconnectBackoff: autopaho.DefaultExponentialBackoff(),
 		coverageInterval: defaultCoverageReportInterval,
+		idleTimeout:      defaultGatewayIdleTimeout,
 		now:              time.Now,
 		queues:           map[string]chan queuedPublish{},
+		states:           map[string]*gatewayMailboxState{},
+		readySignal:      make(chan struct{}, 1),
 	}
 	for _, option := range options {
 		if option != nil {
@@ -138,6 +173,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		return err
 	}
 	workerContext, workerCancel := context.WithCancel(ctx)
+	runtime.startWorkers(workerContext)
 	var heartbeatWG sync.WaitGroup
 	defer func() {
 		workerCancel()
@@ -149,6 +185,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		heartbeatWG.Add(1)
 		go func() {
 			defer heartbeatWG.Done()
+			defer observability.Recover(runtime.logger, runtime.metrics, "connectivity.coverage_heartbeat")
 			runtime.runCoverageHeartbeat(workerContext)
 		}()
 	}
@@ -187,7 +224,10 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		connection := runtime.currentConnectionClosed()
 		runtime.recordConnectionState(connection, true, false, nil)
 		_ = runtime.metrics.AddCounter("hvac_mqtt_connections_total", "MQTT connection attempts by outcome.", map[string]string{"outcome": "success"}, 1)
-		go runtime.subscribe(ctx, manager, connection, gen)
+		go func() {
+			defer observability.Recover(runtime.logger, runtime.metrics, "connectivity.mqtt_subscribe")
+			runtime.subscribe(ctx, manager, connection, gen)
+		}()
 	}
 	manager, err := autopaho.NewConnection(ctx, clientConfig)
 	if err != nil {
@@ -236,6 +276,7 @@ func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.Connect
 		runtime.coverageWG.Add(1)
 		go func() {
 			defer runtime.coverageWG.Done()
+			defer observability.Recover(runtime.logger, runtime.metrics, "connectivity.coverage_report")
 			runtime.reportCoverage(ctx, true, "", gen, false)
 		}()
 	}
@@ -298,6 +339,7 @@ func (runtime *Runtime) connectionLost(ctx context.Context, gen uint64) {
 		runtime.coverageWG.Add(1)
 		go func() {
 			defer runtime.coverageWG.Done()
+			defer observability.Recover(runtime.logger, runtime.metrics, "connectivity.coverage_disconnect_report")
 			reportCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			runtime.reportCoverage(reportCtx, false, "SOURCE_UNAVAILABLE", gen, false)
@@ -376,59 +418,470 @@ func (runtime *Runtime) reportCoverage(ctx context.Context, available bool, reas
 	}
 }
 
+func (runtime *Runtime) effectiveIdleTimeout() time.Duration {
+	if runtime.idleTimeout > 0 {
+		return runtime.idleTimeout
+	}
+	return defaultGatewayIdleTimeout
+}
+
+func (runtime *Runtime) startWorkers(ctx context.Context) {
+	runtime.poolOnce.Do(func() {
+		runtime.queuesMu.Lock()
+		if runtime.queues == nil {
+			runtime.queues = map[string]chan queuedPublish{}
+		}
+		if runtime.states == nil {
+			runtime.states = map[string]*gatewayMailboxState{}
+		}
+		if runtime.readySignal == nil {
+			runtime.readySignal = make(chan struct{}, 1)
+		}
+		runtime.queuesMu.Unlock()
+
+		workerCount := runtime.config.effectiveWorkerCount()
+		runtime.workers.Add(workerCount + 1)
+		for range workerCount {
+			go func() {
+				defer runtime.workers.Done()
+				runtime.runWorkerLoop(ctx)
+			}()
+		}
+		go func() {
+			defer runtime.workers.Done()
+			defer observability.Recover(runtime.logger, runtime.metrics, "connectivity.uplink_pool_shutdown")
+			<-ctx.Done()
+			runtime.stopAllGatewayTimers()
+		}()
+	})
+}
+
+func (runtime *Runtime) runWorkerLoop(ctx context.Context) {
+	for ctx.Err() == nil {
+		panicked := false
+		func() {
+			var currentGateway string
+			defer observability.Recover(runtime.logger, runtime.metrics, "connectivity.uplink_worker", func(any) {
+				panicked = true
+				if currentGateway != "" {
+					runtime.finishGatewayPanic(ctx, currentGateway)
+				}
+			})
+			for ctx.Err() == nil {
+				turn, ok := runtime.awaitReadyGateway(ctx)
+				if !ok {
+					return
+				}
+				currentGateway = turn.gatewayID
+				runtime.runGatewayTurn(ctx, turn)
+				currentGateway = ""
+			}
+		}()
+		if !panicked {
+			return
+		}
+	}
+}
+
+func (runtime *Runtime) awaitReadyGateway(ctx context.Context) (gatewayTurn, bool) {
+	for {
+		if turn, ok := runtime.tryClaimReadyGateway(ctx); ok {
+			return turn, true
+		}
+		select {
+		case <-ctx.Done():
+			return gatewayTurn{}, false
+		case <-runtime.readySignal:
+		}
+	}
+}
+
+func (runtime *Runtime) tryClaimReadyGateway(ctx context.Context) (gatewayTurn, bool) {
+	runtime.queuesMu.Lock()
+	defer runtime.queuesMu.Unlock()
+	for len(runtime.readyQueue) > 0 {
+		gatewayID := runtime.readyQueue[0]
+		runtime.readyQueue[0] = ""
+		runtime.readyQueue = runtime.readyQueue[1:]
+		if len(runtime.readyQueue) == 0 {
+			runtime.readyQueue = runtime.readyQueue[:0]
+		} else if cap(runtime.readyQueue) > 64 && len(runtime.readyQueue)*2 <= cap(runtime.readyQueue) {
+			compacted := make([]string, len(runtime.readyQueue))
+			copy(compacted, runtime.readyQueue)
+			runtime.readyQueue = compacted
+		}
+		state, ok := runtime.states[gatewayID]
+		if !ok {
+			continue
+		}
+		state.queued = false
+		if state.inFlight || state.retrying {
+			continue
+		}
+		if len(state.pendingBatch) == 0 && len(state.queue) == 0 {
+			runtime.maybeScheduleIdleLocked(ctx, gatewayID, state)
+			continue
+		}
+		if state.idleTimer != nil {
+			state.idleTimer.Stop()
+			state.idleTimer = nil
+			state.idleGen++
+		}
+		state.inFlight = true
+		state.lastActive = runtime.now()
+		turn := gatewayTurn{
+			gatewayID:    gatewayID,
+			queue:        state.queue,
+			pendingBatch: state.pendingBatch,
+			pendingMsgs:  state.pendingMsgs,
+			attempt:      state.attempt,
+		}
+		state.pendingBatch = nil
+		state.pendingMsgs = nil
+		state.attempt = 0
+		if len(runtime.readyQueue) > 0 {
+			runtime.notifyReadyLocked()
+		}
+		return turn, true
+	}
+	return gatewayTurn{}, false
+}
+
 // enqueue hands a message to its Gateway's queue and blocks while that queue is full,
 // which stops reading from the broker instead of dropping the message. It gives up when
 // the connection that delivered the message closes: the message was not acknowledged, so
 // the broker redelivers it on the next connection.
 func (runtime *Runtime) enqueue(ctx context.Context, connectionClosed <-chan struct{}, received *paho.Publish, ack func(*paho.Publish) error) error {
+	runtime.startWorkers(ctx)
 	packet := *received
 	packet.Payload = append([]byte(nil), received.Payload...)
 	gatewayID := TopicGatewayID(packet.Topic)
-	queue := runtime.queueFor(ctx, gatewayID)
+	queue, state, err := runtime.acquireGatewayQueue(gatewayID)
+	if err != nil {
+		return err
+	}
+	var sendErr error
 	select {
 	case queue <- queuedPublish{packet: &packet, ack: ack}:
-		runtime.recordQueueDepth(gatewayID, len(queue))
-		return nil
 	case <-connectionClosed:
-		return errors.New("MQTT connection closed before the message was queued")
+		sendErr = errors.New("MQTT connection closed before the message was queued")
 	case <-ctx.Done():
-		return ctx.Err()
+		sendErr = ctx.Err()
 	}
+
+	runtime.queuesMu.Lock()
+	state.enqueuers--
+	state.lastActive = runtime.now()
+	depth := len(queue)
+	if sendErr == nil {
+		runtime.scheduleGatewayLocked(ctx, gatewayID, state)
+	} else {
+		runtime.maybeScheduleIdleLocked(ctx, gatewayID, state)
+	}
+	runtime.queuesMu.Unlock()
+
+	if sendErr == nil {
+		runtime.recordQueueDepth(gatewayID, depth)
+	}
+	return sendErr
 }
 
-func (runtime *Runtime) queueFor(ctx context.Context, gatewayID string) chan queuedPublish {
+func (runtime *Runtime) acquireGatewayQueue(gatewayID string) (chan queuedPublish, *gatewayMailboxState, error) {
 	runtime.queuesMu.Lock()
 	defer runtime.queuesMu.Unlock()
-	if queue, ok := runtime.queues[gatewayID]; ok {
-		return queue
+	if runtime.queues == nil {
+		runtime.queues = map[string]chan queuedPublish{}
+	}
+	if runtime.states == nil {
+		runtime.states = map[string]*gatewayMailboxState{}
+	}
+	if state, ok := runtime.states[gatewayID]; ok {
+		if state.idleTimer != nil {
+			state.idleTimer.Stop()
+			state.idleTimer = nil
+			state.idleGen++
+		}
+		state.enqueuers++
+		state.lastActive = runtime.now()
+		return state.queue, state, nil
+	}
+	if len(runtime.queues) >= maxTrackedGatewayQueues && !runtime.evictIdleGatewayLocked() {
+		return nil, nil, fmt.Errorf("tracked gateway queue limit (%d) reached", maxTrackedGatewayQueues)
 	}
 	queue := make(chan queuedPublish, runtime.config.QueueCapacity)
+	state := &gatewayMailboxState{
+		queue:      queue,
+		enqueuers:  1,
+		lastActive: runtime.now(),
+	}
 	runtime.queues[gatewayID] = queue
-	runtime.workers.Add(1)
-	go func() {
-		defer runtime.workers.Done()
-		runtime.processQueue(ctx, gatewayID, queue)
-	}()
-	return queue
+	runtime.states[gatewayID] = state
+	return queue, state, nil
 }
 
-func (runtime *Runtime) processQueue(ctx context.Context, gatewayID string, queue chan queuedPublish) {
-	limit := min(runtime.config.effectiveBatchMaxMessages(), max(1, runtime.config.QueueCapacity))
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case first := <-queue:
-			runtime.recordQueueDepth(gatewayID, len(queue))
-			batch := runtime.drainBatch(ctx, gatewayID, queue, first, limit)
-			if len(batch) == 0 {
-				return
-			}
-			if !runtime.processBatch(ctx, gatewayID, batch) {
-				return
-			}
+func (runtime *Runtime) isIdleLocked(state *gatewayMailboxState) bool {
+	return state != nil &&
+		!state.inFlight &&
+		!state.retrying &&
+		!state.queued &&
+		state.enqueuers == 0 &&
+		len(state.pendingBatch) == 0 &&
+		len(state.queue) == 0
+}
+
+func (runtime *Runtime) evictIdleGatewayLocked() bool {
+	var oldestID string
+	var oldestTime time.Time
+	for gatewayID, state := range runtime.states {
+		if !runtime.isIdleLocked(state) {
+			continue
+		}
+		if oldestID == "" || state.lastActive.Before(oldestTime) {
+			oldestID = gatewayID
+			oldestTime = state.lastActive
 		}
 	}
+	if oldestID == "" {
+		return false
+	}
+	state := runtime.states[oldestID]
+	if state.idleTimer != nil {
+		state.idleTimer.Stop()
+		state.idleTimer = nil
+	}
+	state.idleGen++
+	delete(runtime.states, oldestID)
+	delete(runtime.queues, oldestID)
+	return true
+}
+
+func (runtime *Runtime) notifyReadyLocked() {
+	select {
+	case runtime.readySignal <- struct{}{}:
+	default:
+	}
+}
+
+func (runtime *Runtime) scheduleGatewayLocked(ctx context.Context, gatewayID string, state *gatewayMailboxState) {
+	if ctx.Err() != nil {
+		return
+	}
+	if state.idleTimer != nil {
+		state.idleTimer.Stop()
+		state.idleTimer = nil
+		state.idleGen++
+	}
+	if state.inFlight || state.retrying || state.queued {
+		return
+	}
+	if len(state.pendingBatch) == 0 && len(state.queue) == 0 {
+		runtime.maybeScheduleIdleLocked(ctx, gatewayID, state)
+		return
+	}
+	state.queued = true
+	runtime.readyQueue = append(runtime.readyQueue, gatewayID)
+	runtime.notifyReadyLocked()
+}
+
+func (runtime *Runtime) maybeScheduleIdleLocked(ctx context.Context, gatewayID string, state *gatewayMailboxState) {
+	if ctx.Err() != nil || !runtime.isIdleLocked(state) {
+		return
+	}
+	if state.idleTimer != nil {
+		state.idleTimer.Stop()
+	}
+	state.idleGen++
+	gen := state.idleGen
+	timeout := runtime.effectiveIdleTimeout()
+	state.idleTimer = time.AfterFunc(timeout, func() {
+		runtime.reapIdleGateway(ctx, gatewayID, gen)
+	})
+}
+
+func (runtime *Runtime) reapIdleGateway(ctx context.Context, gatewayID string, gen uint64) {
+	if ctx.Err() != nil {
+		return
+	}
+	runtime.queuesMu.Lock()
+	defer runtime.queuesMu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
+	state, ok := runtime.states[gatewayID]
+	if !ok || state.idleGen != gen || !runtime.isIdleLocked(state) {
+		return
+	}
+	state.idleTimer = nil
+	delete(runtime.states, gatewayID)
+	delete(runtime.queues, gatewayID)
+}
+
+func (runtime *Runtime) stopAllGatewayTimers() {
+	runtime.queuesMu.Lock()
+	defer runtime.queuesMu.Unlock()
+	for _, state := range runtime.states {
+		if state.idleTimer != nil {
+			state.idleTimer.Stop()
+			state.idleTimer = nil
+		}
+		state.idleGen++
+		if state.retryTimer != nil {
+			state.retryTimer.Stop()
+			state.retryTimer = nil
+		}
+		state.retryGen++
+		state.retrying = false
+		state.queued = false
+		state.pendingBatch = nil
+		state.pendingMsgs = nil
+		state.attempt = 0
+	}
+	runtime.readyQueue = nil
+}
+
+func (runtime *Runtime) runGatewayTurn(ctx context.Context, turn gatewayTurn) {
+	batch := turn.pendingBatch
+	messages := turn.pendingMsgs
+	attempt := turn.attempt
+	if len(batch) == 0 {
+		select {
+		case first := <-turn.queue:
+			runtime.recordQueueDepth(turn.gatewayID, len(turn.queue))
+			limit := min(runtime.config.effectiveBatchMaxMessages(), max(1, runtime.config.QueueCapacity))
+			batch = runtime.drainBatch(ctx, turn.gatewayID, turn.queue, first, limit)
+			if len(batch) == 0 {
+				runtime.finishGatewayCancelled(turn.gatewayID)
+				return
+			}
+			messages = make([]UplinkMessage, len(batch))
+			for index, item := range batch {
+				messages[index] = UplinkMessage{Topic: item.packet.Topic, Payload: item.packet.Payload}
+			}
+		default:
+			runtime.finishGatewaySuccess(ctx, turn.gatewayID)
+			return
+		}
+	}
+
+	for len(batch) > 0 {
+		currentAttempt := attempt + 1
+		consumed, delay, err := runtime.processPrefix(ctx, turn.gatewayID, batch, messages, currentAttempt)
+		if err != nil {
+			if ctx.Err() != nil {
+				runtime.finishGatewayCancelled(turn.gatewayID)
+				return
+			}
+			runtime.scheduleGatewayRetry(ctx, turn.gatewayID, batch, messages, currentAttempt, delay)
+			return
+		}
+		batch = batch[consumed:]
+		messages = messages[consumed:]
+		attempt = 0
+	}
+	runtime.finishGatewaySuccess(ctx, turn.gatewayID)
+}
+
+func (runtime *Runtime) finishGatewaySuccess(ctx context.Context, gatewayID string) {
+	runtime.queuesMu.Lock()
+	defer runtime.queuesMu.Unlock()
+	state, ok := runtime.states[gatewayID]
+	if !ok {
+		return
+	}
+	state.inFlight = false
+	state.lastActive = runtime.now()
+	if len(state.queue) > 0 {
+		runtime.scheduleGatewayLocked(ctx, gatewayID, state)
+		return
+	}
+	runtime.maybeScheduleIdleLocked(ctx, gatewayID, state)
+}
+
+func (runtime *Runtime) finishGatewayCancelled(gatewayID string) {
+	runtime.queuesMu.Lock()
+	defer runtime.queuesMu.Unlock()
+	state, ok := runtime.states[gatewayID]
+	if !ok {
+		return
+	}
+	state.inFlight = false
+	state.retrying = false
+	state.pendingBatch = nil
+	state.pendingMsgs = nil
+	state.attempt = 0
+}
+
+func (runtime *Runtime) finishGatewayPanic(ctx context.Context, gatewayID string) {
+	runtime.recordProcessingFailure(errors.New("MQTT uplink worker panicked"))
+	runtime.queuesMu.Lock()
+	defer runtime.queuesMu.Unlock()
+	state, ok := runtime.states[gatewayID]
+	if !ok {
+		return
+	}
+	state.inFlight = false
+	state.retrying = false
+	state.pendingBatch = nil
+	state.pendingMsgs = nil
+	state.attempt = 0
+	state.lastActive = runtime.now()
+	if ctx.Err() != nil {
+		return
+	}
+	if len(state.queue) > 0 {
+		runtime.scheduleGatewayLocked(ctx, gatewayID, state)
+		return
+	}
+	runtime.maybeScheduleIdleLocked(ctx, gatewayID, state)
+}
+
+func (runtime *Runtime) scheduleGatewayRetry(ctx context.Context, gatewayID string, batch []queuedPublish, messages []UplinkMessage, attempt int, delay time.Duration) {
+	runtime.queuesMu.Lock()
+	defer runtime.queuesMu.Unlock()
+	state, ok := runtime.states[gatewayID]
+	if !ok {
+		return
+	}
+	state.inFlight = false
+	if ctx.Err() != nil {
+		state.retrying = false
+		state.pendingBatch = nil
+		state.pendingMsgs = nil
+		state.attempt = 0
+		return
+	}
+	state.retrying = true
+	state.pendingBatch = slices.Clone(batch)
+	state.pendingMsgs = slices.Clone(messages)
+	state.attempt = attempt
+	state.lastActive = runtime.now()
+	if state.retryTimer != nil {
+		state.retryTimer.Stop()
+	}
+	state.retryGen++
+	gen := state.retryGen
+	state.retryTimer = time.AfterFunc(delay, func() {
+		runtime.triggerGatewayRetry(ctx, gatewayID, gen)
+	})
+}
+
+func (runtime *Runtime) triggerGatewayRetry(ctx context.Context, gatewayID string, gen uint64) {
+	if ctx.Err() != nil {
+		return
+	}
+	runtime.queuesMu.Lock()
+	defer runtime.queuesMu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
+	state, ok := runtime.states[gatewayID]
+	if !ok || !state.retrying || state.retryGen != gen {
+		return
+	}
+	state.retrying = false
+	state.retryTimer = nil
+	state.lastActive = runtime.now()
+	runtime.scheduleGatewayLocked(ctx, gatewayID, state)
 }
 
 func (runtime *Runtime) drainBatch(ctx context.Context, gatewayID string, queue chan queuedPublish, first queuedPublish, limit int) []queuedPublish {
@@ -463,66 +916,42 @@ drainLoop:
 	return batch
 }
 
-func (runtime *Runtime) processBatch(ctx context.Context, gatewayID string, batch []queuedPublish) bool {
-	messages := make([]UplinkMessage, len(batch))
-	for index, item := range batch {
-		messages[index] = UplinkMessage{Topic: item.packet.Topic, Payload: item.packet.Payload}
-	}
-	for len(batch) > 0 {
-		consumed, ok := runtime.processPrefix(ctx, gatewayID, batch, messages)
-		if !ok {
-			return false
-		}
-		batch = batch[consumed:]
-		messages = messages[consumed:]
-	}
-	return true
-}
-
-// processPrefix retries a transient failure in place, keeping the Gateway's messages in
-// order, until the contiguous prefix is processed, quarantined or Connectivity stops.
-// Messages left unacknowledged at shutdown are redelivered by the broker.
-func (runtime *Runtime) processPrefix(ctx context.Context, gatewayID string, pending []queuedPublish, messages []UplinkMessage) (int, bool) {
-	for attempt := 1; ; attempt++ {
-		started := time.Now()
-		processContext, cancel := context.WithTimeout(ctx, 30*time.Second)
-		outcomes, err := runtime.processor.ProcessPrefix(processContext, messages)
-		cancel()
-		if err == nil && len(outcomes) > 0 {
-			elapsed := time.Since(started)
-			for index, outcome := range outcomes {
-				item := pending[index]
-				if isPermanentMessageError(outcome.Err) {
-					runtime.ack(gatewayID, outcome.Result.MessageID, item)
-					_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT uplink messages by processing outcome.", map[string]string{"outcome": "quarantined"}, 1)
-					runtime.logger.Warn("mqtt_uplink_message_quarantined", "gateway_id", gatewayID, "topic", item.packet.Topic, "error", outcome.Err.Error())
-					continue
-				}
-				result := outcome.Result
-				runtime.ack(gatewayID, result.MessageID, item)
-				runtime.recordProcessingSuccess()
-				runtime.recordProcessingResult(result, elapsed)
-				runtime.logger.Info("mqtt_uplink_message_processed", "gateway_id", gatewayID, "message_id", result.MessageID, "message_type", result.MessageType,
-					"point_count", result.PointCount, "accepted", result.Accepted, "duplicate", result.Duplicate, "out_of_order", result.OutOfOrder,
-					"quarantined", result.Quarantined, "rejected", result.Rejected)
+// processPrefix runs one attempt over the contiguous prefix of pending messages, acking
+// committed or quarantined prefixes immediately. Any returned error is transient and leaves
+// pending unacknowledged for non-blocking retry scheduling.
+func (runtime *Runtime) processPrefix(ctx context.Context, gatewayID string, pending []queuedPublish, messages []UplinkMessage, attempt int) (int, time.Duration, error) {
+	started := time.Now()
+	processContext, cancel := context.WithTimeout(ctx, 30*time.Second)
+	outcomes, err := runtime.processor.ProcessPrefix(processContext, messages)
+	cancel()
+	if err == nil && len(outcomes) > 0 {
+		elapsed := time.Since(started)
+		for index, outcome := range outcomes {
+			item := pending[index]
+			if isPermanentMessageError(outcome.Err) {
+				runtime.ack(gatewayID, outcome.Result.MessageID, item)
+				_ = runtime.metrics.AddCounter("hvac_mqtt_messages_processed_total", "MQTT uplink messages by processing outcome.", map[string]string{"outcome": "quarantined"}, 1)
+				runtime.logger.Warn("mqtt_uplink_message_quarantined", "gateway_id", gatewayID, "topic", item.packet.Topic, "error", outcome.Err.Error())
+				continue
 			}
-			return len(outcomes), true
+			result := outcome.Result
+			runtime.ack(gatewayID, result.MessageID, item)
+			runtime.recordProcessingSuccess()
+			runtime.recordProcessingResult(result, elapsed)
+			runtime.logger.Info("mqtt_uplink_message_processed", "gateway_id", gatewayID, "message_id", result.MessageID, "message_type", result.MessageType,
+				"point_count", result.PointCount, "accepted", result.Accepted, "duplicate", result.Duplicate, "out_of_order", result.OutOfOrder,
+				"quarantined", result.Quarantined, "rejected", result.Rejected)
 		}
-		if err == nil {
-			err = errors.New("MQTT uplink processor produced no outcomes")
-		}
-		runtime.recordProcessingFailure(err)
-		_ = runtime.metrics.AddCounter("hvac_mqtt_message_retries_total", "MQTT uplink processing retries after transient failures.", map[string]string{"reason_family": "dependency"}, 1)
-		delay := runtime.retryDelay(attempt)
-		runtime.logger.Warn("mqtt_uplink_message_retrying", "gateway_id", gatewayID, "topic", pending[0].packet.Topic, "attempt", attempt, "retry_in", delay.String(), "error", err.Error())
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return 0, false
-		case <-timer.C:
-		}
+		return len(outcomes), 0, nil
 	}
+	if err == nil {
+		err = errors.New("MQTT uplink processor produced no outcomes")
+	}
+	runtime.recordProcessingFailure(err)
+	_ = runtime.metrics.AddCounter("hvac_mqtt_message_retries_total", "MQTT uplink processing retries after transient failures.", map[string]string{"reason_family": "dependency"}, 1)
+	delay := runtime.retryDelay(attempt)
+	runtime.logger.Warn("mqtt_uplink_message_retrying", "gateway_id", gatewayID, "topic", pending[0].packet.Topic, "attempt", attempt, "retry_in", delay.String(), "error", err.Error())
+	return 0, delay, err
 }
 
 // ack acknowledges a handled message on the connection that delivered it. When that

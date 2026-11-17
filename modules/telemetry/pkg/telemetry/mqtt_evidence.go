@@ -34,6 +34,7 @@ type RuntimeEventEvidence struct {
 	ReceivedAt        time.Time       `json:"receivedAt"`
 	Device            *ResolvedDevice `json:"device,omitempty"`
 	CoverageDeviceIDs []string        `json:"coverageDeviceIds,omitempty"`
+	TraceID           string          `json:"traceId,omitempty"`
 }
 
 type MQTTEvidenceAcceptor interface {
@@ -472,5 +473,6 @@ func validateAndNormalizeRuntimeEventEvidence(evidence RuntimeEventEvidence) (Ru
 		ReceivedAt:        evidence.ReceivedAt.UTC(),
 		Device:            normalizedDevice,
 		CoverageDeviceIDs: coverageIDs,
+		TraceID:           normalizeTraceID(evidence.TraceID),
 	}, nil
 }

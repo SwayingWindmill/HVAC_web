@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commanddispatcher"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
@@ -26,11 +27,12 @@ type commandRuntime struct {
 	verifier         *commanddispatcher.DurableVerificationWorker
 	verifierWorker   string
 	connector        *mqttconnector.Connector
+	metrics          *observability.Registry
 }
 
 // loadCommandRuntime builds the command runtime from defaults for the Phase 1 compose
 // network; every value can be overridden by its environment variable.
-func loadCommandRuntime(ctx context.Context, store *connectivity.Store) (*commandRuntime, error) {
+func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *slog.Logger, metrics *observability.Registry) (*commandRuntime, error) {
 	ca := envOr("COMMAND_RUNTIME_CA", "/run/hvac/pki/ca.crt")
 	dispatcherIdentity := workloadtls.CertificateFiles{
 		CertificatePath: envOr("COMMAND_DISPATCHER_CERT", "/run/hvac/pki/command-dispatcher/tls.crt"),
@@ -75,6 +77,8 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store) (*comman
 		EvidenceStore:  dispatcherRuntimeClient,
 		LateResultSink: dispatcherRuntimeClient,
 		ReplyTimeout:   25 * time.Second,
+		Logger:         logger,
+		Metrics:        metrics,
 	})
 	if err != nil {
 		return nil, err
@@ -89,14 +93,41 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store) (*comman
 		verifier:         commanddispatcher.NewDurableVerificationWorker(verifierRuntimeClient, commanddispatcher.NewAuthoritativeReportedStateVerifier(verificationReader), verifierWorkerID, 5*time.Second),
 		verifierWorker:   verifierWorkerID,
 		connector:        connector,
+		metrics:          metrics,
 	}, nil
 }
 
 func (runtime *commandRuntime) Run(ctx context.Context, logger *slog.Logger) {
 	logger.Info("connectivity_command_runtime_started", "dispatcher_worker_id", runtime.dispatcherWorker, "verifier_worker_id", runtime.verifierWorker)
-	go runtime.runForEveryTenant(ctx, logger, "dispatch", 40*time.Second, runtime.dispatcher.RunOnce, commandservice.ErrNoDispatchAvailable)
-	go runtime.runForEveryTenant(ctx, logger, "verification", 12*time.Second, runtime.verifier.RunOnce, commandservice.ErrVerificationNotAvailable)
+	observability.GoSafe(logger, runtime.metrics, "connectivity.command_dispatch", func() {
+		runtime.runForEveryTenantLoop(ctx, logger, "dispatch", 40*time.Second, runtime.dispatcher.RunOnce, commandservice.ErrNoDispatchAvailable)
+	})
+	observability.GoSafe(logger, runtime.metrics, "connectivity.command_verification", func() {
+		runtime.runForEveryTenantLoop(ctx, logger, "verification", 12*time.Second, runtime.verifier.RunOnce, commandservice.ErrVerificationNotAvailable)
+	})
 	<-ctx.Done()
+}
+
+func (runtime *commandRuntime) runForEveryTenantLoop(ctx context.Context, logger *slog.Logger, work string, timeout time.Duration, runOnce func(context.Context, string) error, noWork error) {
+	for ctx.Err() == nil {
+		panicked := false
+		func() {
+			defer observability.Recover(logger, runtime.metrics, "connectivity.command_"+work, func(any) {
+				panicked = true
+			})
+			runtime.runForEveryTenant(ctx, logger, work, timeout, runOnce, noWork)
+		}()
+		if !panicked || ctx.Err() != nil {
+			return
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
 }
 
 func (runtime *commandRuntime) Close(ctx context.Context) error {
@@ -202,10 +233,17 @@ func (runtime *commandRuntime) runForEveryTenant(ctx context.Context, logger *sl
 			wg.Add(1)
 			go func(tid string) {
 				defer wg.Done()
+				panicked := false
+				defer observability.Recover(logger, runtime.metrics, "connectivity.command_tenant_worker", func(any) {
+					panicked = true
+					doneCh <- tenantRunOutcome{tenantID: tid, err: errors.New("command worker panic recovered")}
+				})
 				runContext, cancel := context.WithTimeout(ctx, timeout)
 				err := runOnce(runContext, tid)
 				cancel()
-				doneCh <- tenantRunOutcome{tenantID: tid, err: err}
+				if !panicked {
+					doneCh <- tenantRunOutcome{tenantID: tid, err: err}
+				}
 			}(tenantID)
 		}
 

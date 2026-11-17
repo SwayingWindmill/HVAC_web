@@ -16,9 +16,22 @@ func TestPostgresConcurrentDispatchClaimHasOneWinner(t *testing.T) {
 	store, admin, now, cleanup := postgresDispatchFixture(t)
 	defer cleanup()
 	ctx := t.Context()
-	created, err := store.Submit(ctx, postgresCommandRequest("dispatch-race", 24))
+	const wantTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	req := postgresCommandRequest("dispatch-race", 24)
+	req.TraceID = " 4BF92F3577B34DA6A3CE929D0E0E4736 "
+	created, err := store.Submit(ctx, req)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if created.Intent.TraceID != wantTraceID {
+		t.Fatalf("created.Intent.TraceID=%q, want %q", created.Intent.TraceID, wantTraceID)
+	}
+	loaded, err := store.Get(ctx, commandTenantA, created.Intent.ID)
+	if err != nil {
+		t.Fatalf("store.Get failed: %v", err)
+	}
+	if loaded.TraceID != wantTraceID {
+		t.Fatalf("loaded.TraceID=%q, want %q", loaded.TraceID, wantTraceID)
 	}
 
 	results := make(chan commandmodel.DispatchEnvelope, 2)
@@ -55,7 +68,7 @@ func TestPostgresConcurrentDispatchClaimHasOneWinner(t *testing.T) {
 		}
 		t.Fatalf("unexpected concurrent claim error: %v", claimErr)
 	}
-	if wins != 1 || noWork != 1 || winner.CommandID != created.Intent.ID || winner.ExecutionFence != 1 {
+	if wins != 1 || noWork != 1 || winner.CommandID != created.Intent.ID || winner.ExecutionFence != 1 || winner.TraceID != wantTraceID {
 		t.Fatalf("claim race wins=%d noWork=%d winner=%#v", wins, noWork, winner)
 	}
 	acknowledgeAndVerifyPostgres(t, store, admin, now, winner, "synthetic-race", 1)

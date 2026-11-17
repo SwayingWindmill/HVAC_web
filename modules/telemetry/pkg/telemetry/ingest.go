@@ -110,6 +110,7 @@ type ObservationCandidate struct {
 	SampledAt          time.Time
 	ReceivedAt         time.Time
 	Position           SourcePosition
+	TraceID            string
 }
 
 type ResolvedDevice struct {

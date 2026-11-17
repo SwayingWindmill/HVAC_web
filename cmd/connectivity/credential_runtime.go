@@ -23,7 +23,7 @@ func credentialServer(store *connectivity.Store) (*http.Server, *tunnel.Hub, err
 	return credentialServerWithRuntime(store, nil, nil)
 }
 
-func credentialServerWithRuntime(store *connectivity.Store, concentratorService *concentrator.Service, coverageReporter adapter.CoverageReporter) (*http.Server, *tunnel.Hub, error) {
+func credentialServerWithRuntime(store *connectivity.Store, concentratorService *concentrator.Service, coverageReporter adapter.CoverageReporter, tunnelOptions ...tunnel.Option) (*http.Server, *tunnel.Hub, error) {
 	loopbackAddr := strings.TrimSpace(envOr("CONNECTIVITY_TUNNEL_LOOPBACK_ADDR", "127.0.0.1:18800"))
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {
 		if err := tunnel.ValidateLoopbackAddr(loopbackAddr); err != nil {
@@ -95,10 +95,11 @@ func credentialServerWithRuntime(store *connectivity.Store, concentratorService 
 		}
 		return claims, nil
 	}
-	tunnelHub := tunnel.NewHub(
+	tunnelHubOpts := append([]tunnel.Option{
 		tunnel.WithDefaultGateway(envOr("CONNECTIVITY_TUNNEL_GATEWAY_ID", "")),
 		tunnel.WithAuditSink(store),
-	)
+	}, tunnelOptions...)
+	tunnelHub := tunnel.NewHub(tunnelHubOpts...)
 	service := connectivity.NewCredentialService(store, authority)
 	service.SetRevokeHook(func(gatewayID string) {
 		tunnelHub.CloseGateway(gatewayID)

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const (
@@ -63,6 +64,7 @@ type sourceObservationRequest struct {
 	WireQuality        uint8                  `json:"wireQuality"`
 	SampledAt          string                 `json:"sampledAt"`
 	SourcePosition     sourcePositionRequest  `json:"sourcePosition"`
+	TraceID            string                 `json:"traceId,omitempty"`
 }
 
 type resolvedDeviceRequest struct {
@@ -116,9 +118,10 @@ func (h *handler) handleSourceObservationBatch(writer http.ResponseWriter, reque
 		return
 	}
 	receivedAt := h.now().UTC()
+	fallbackTraceID := observability.TraceID(request.Context())
 	candidates := make([]ObservationCandidate, len(input.Observations))
 	for index, item := range input.Observations {
-		candidate, err := normalizeSourceObservation(item, receivedAt)
+		candidate, err := normalizeSourceObservation(item, receivedAt, fallbackTraceID)
 		if err != nil {
 			writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The telemetry source request is invalid.", false)
 			return
@@ -262,7 +265,7 @@ func (h *handler) handleHistoricalReplayObservation(writer http.ResponseWriter, 
 	writeJSON(writer, http.StatusOK, receipt)
 }
 
-func normalizeSourceObservation(input sourceObservationRequest, receivedAt time.Time) (ObservationCandidate, error) {
+func normalizeSourceObservation(input sourceObservationRequest, receivedAt time.Time, fallbackTraceID string) (ObservationCandidate, error) {
 	sampledAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.SampledAt))
 	if err != nil || receivedAt.IsZero() {
 		return ObservationCandidate{}, errors.New("telemetry sampledAt is invalid")
@@ -270,6 +273,10 @@ func normalizeSourceObservation(input sourceObservationRequest, receivedAt time.
 	sourcePath := safeSourcePath(input.SourcePath)
 	if sourcePath == SourcePathHistoryReplay {
 		return ObservationCandidate{}, errors.New("HISTORY_REPLAY requires the dedicated admission path")
+	}
+	traceID := normalizeTraceID(input.TraceID)
+	if traceID == "" {
+		traceID = normalizeTraceID(fallbackTraceID)
 	}
 	candidate := ObservationCandidate{
 		SourceID:           strings.TrimSpace(input.SourceID),
@@ -288,6 +295,7 @@ func normalizeSourceObservation(input sourceObservationRequest, receivedAt time.
 			Offset:    input.SourcePosition.Offset,
 			EventID:   strings.TrimSpace(input.SourcePosition.EventID),
 		},
+		TraceID: traceID,
 	}
 	if device := input.Device; device != nil {
 		candidate.Device = &ResolvedDevice{
@@ -375,6 +383,7 @@ type mqttRuntimeEventRequest struct {
 	Data              json.RawMessage        `json:"data"`
 	Device            *resolvedDeviceRequest `json:"device,omitempty"`
 	CoverageDeviceIDs []string               `json:"coverageDeviceIds,omitempty"`
+	TraceID           string                 `json:"traceId,omitempty"`
 }
 
 func (h *handler) handleMQTTRuntimeEvent(writer http.ResponseWriter, request *http.Request) {
@@ -394,11 +403,16 @@ func (h *handler) handleMQTTRuntimeEvent(writer http.ResponseWriter, request *ht
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_SOURCE_REQUEST_INVALID", "The MQTT runtime event request is invalid.", false)
 		return
 	}
+	traceID := normalizeTraceID(input.TraceID)
+	if traceID == "" {
+		traceID = normalizeTraceID(observability.TraceID(request.Context()))
+	}
 	evidence := RuntimeEventEvidence{
 		TenantID: strings.TrimSpace(input.TenantID), SiteID: strings.TrimSpace(input.SiteID), GatewayID: strings.TrimSpace(input.GatewayID),
 		MessageID: strings.TrimSpace(input.MessageID), Sequence: input.Sequence, EventType: strings.TrimSpace(input.EventType), SourceType: strings.TrimSpace(input.SourceType), SourceID: strings.TrimSpace(input.SourceID),
 		EventTime: eventTime.UTC(), Severity: strings.ToUpper(strings.TrimSpace(input.Severity)), Data: append(json.RawMessage(nil), input.Data...), ReceivedAt: h.now().UTC(),
 		CoverageDeviceIDs: append([]string(nil), input.CoverageDeviceIDs...),
+		TraceID:           traceID,
 	}
 	if device := input.Device; device != nil {
 		evidence.Device = &ResolvedDevice{

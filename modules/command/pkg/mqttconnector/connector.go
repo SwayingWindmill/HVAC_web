@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/url"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
@@ -53,6 +55,8 @@ type Config struct {
 	LateResultSink LateResultSink
 	ReplyTimeout   time.Duration
 	Now            func() time.Time
+	Logger         *slog.Logger
+	Metrics        *observability.Registry
 }
 
 // ReplyTopicFilter is every Gateway's command reply topic.
@@ -95,6 +99,7 @@ func buildCommandEnvelope(
 		SchemaVersion:  commandSchemaVersion,
 		MessageID:      envelope.AttemptID,
 		CommandID:      envelope.CommandID,
+		TraceID:        commandmodel.NormalizeTraceID(envelope.TraceID),
 		IssuedAt:       now.UnixMilli(),
 		ExpireAt:       expireAt.UnixMilli(),
 		DeviceID:       externalDeviceID,
@@ -471,10 +476,23 @@ func (connector *Connector) onReply(received paho.PublishReceived) (bool, error)
 	return true, nil
 }
 
+func (connector *Connector) recoveryDeps() (*slog.Logger, *observability.Registry) {
+	if connector == nil {
+		return slog.Default(), nil
+	}
+	logger := connector.config.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return logger, connector.config.Metrics
+}
+
 func (connector *Connector) runReplyRecoveryLoop(ctx context.Context, interval time.Duration) {
 	if connector.recoveryDone != nil {
 		defer close(connector.recoveryDone)
 	}
+	logger, metrics := connector.recoveryDeps()
+	defer observability.Recover(logger, metrics, "command.mqtt_reply_recovery_loop")
 	if interval <= 0 {
 		interval = defaultReplyRecoveryInterval
 	}
@@ -491,6 +509,8 @@ func (connector *Connector) runReplyRecoveryLoop(ctx context.Context, interval t
 }
 
 func (connector *Connector) recoverReplies(ctx context.Context) {
+	logger, metrics := connector.recoveryDeps()
+	defer observability.Recover(logger, metrics, "command.mqtt_reply_recovery")
 	if connector.config.LateResultSink == nil {
 		return
 	}

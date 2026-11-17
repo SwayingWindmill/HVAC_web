@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/modules/workorder/pkg/workorderservice"
 )
@@ -84,6 +85,7 @@ func main() {
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
+		defer observability.Recover(logger, nil, "work_order_owner.shutdown")
 		<-shutdown
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()

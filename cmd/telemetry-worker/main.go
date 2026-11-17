@@ -64,9 +64,15 @@ func main() {
 	defer store.Close()
 	retentionContext, retentionCancel := context.WithCancel(context.Background())
 	defer retentionCancel()
-	go runRuntimeRetention(retentionContext, store, logger)
-	go runPresenceSweep(retentionContext, store, time.Minute, logger)
-	go runProbeOffsetSweep(retentionContext, store, 5*time.Second, logger)
+	runSupervised(retentionContext, observabilityRuntime, logger, "telemetry.runtime_retention", func() {
+		runRuntimeRetention(retentionContext, store, logger)
+	})
+	runSupervised(retentionContext, observabilityRuntime, logger, "telemetry.presence_sweep", func() {
+		runPresenceSweep(retentionContext, store, time.Minute, logger)
+	})
+	runSupervised(retentionContext, observabilityRuntime, logger, "telemetry.probe_offset_sweep", func() {
+		runProbeOffsetSweep(retentionContext, store, 5*time.Second, logger)
+	})
 
 	latestCache, latestRelay, latestContext, latestCancel, err := loadLatestCache(store)
 	if err != nil {
@@ -86,7 +92,9 @@ func main() {
 	}
 	if latestCancel != nil {
 		defer latestCancel()
-		go runLatestCacheRelay(latestContext, latestRelay, logger)
+		runSupervised(latestContext, observabilityRuntime, logger, "telemetry.latest_cache_relay", func() {
+			runLatestCacheRelay(latestContext, latestRelay, logger)
+		})
 	}
 
 	historyRepository, historyRelay, historyContext, historyCancel, err := loadHistoryProjection()
@@ -99,7 +107,9 @@ func main() {
 	}
 	if historyCancel != nil {
 		defer historyCancel()
-		go runHistoryProjection(historyContext, historyRelay, logger)
+		runSupervised(historyContext, observabilityRuntime, logger, "telemetry.history_projection", func() {
+			runHistoryProjection(historyContext, historyRelay, logger)
+		})
 	}
 
 	analyticsProjector, priceWindows, totalSubmeters, analyticsContext, analyticsCancel, err := loadAnalyticsProjection(certificate)
@@ -109,9 +119,15 @@ func main() {
 	}
 	if analyticsCancel != nil {
 		defer analyticsCancel()
-		go runAnalyticsProjection(analyticsContext, analyticsProjector, observabilityRuntime, logger)
-		go runPriceWindowProjection(analyticsContext, priceWindows, observabilityRuntime, logger)
-		go runTotalSubmeterProjection(analyticsContext, totalSubmeters, observabilityRuntime, logger)
+		runSupervised(analyticsContext, observabilityRuntime, logger, "telemetry.analytics_projection", func() {
+			runAnalyticsProjection(analyticsContext, analyticsProjector, observabilityRuntime, logger)
+		})
+		runSupervised(analyticsContext, observabilityRuntime, logger, "telemetry.price_window_projection", func() {
+			runPriceWindowProjection(analyticsContext, priceWindows, observabilityRuntime, logger)
+		})
+		runSupervised(analyticsContext, observabilityRuntime, logger, "telemetry.total_submeter_projection", func() {
+			runTotalSubmeterProjection(analyticsContext, totalSubmeters, observabilityRuntime, logger)
+		})
 	}
 
 	iamClient := &http.Client{
@@ -143,7 +159,9 @@ func main() {
 	}
 	if realtimeCancel != nil {
 		defer realtimeCancel()
-		go runRealtimeRelay(realtimeContext, realtimeService, logger)
+		runSupervised(realtimeContext, observabilityRuntime, logger, "telemetry.realtime_relay", func() {
+			runRealtimeRelay(realtimeContext, realtimeService, logger)
+		})
 		revocationSource, err := telemetry.NewHTTPRevocationSource(requiredEnv("TELEMETRY_IAM_ENDPOINT"), iamClient)
 		if err != nil {
 			logger.Error("telemetry_revocation_source_invalid", "error_code", "TELEMETRY_REVOCATION_SOURCE_INVALID")
@@ -154,7 +172,9 @@ func main() {
 			logger.Error("telemetry_revocation_relay_invalid", "error_code", "TELEMETRY_REVOCATION_RELAY_INVALID")
 			os.Exit(1)
 		}
-		go runRevocationRelay(realtimeContext, revocationRelay, logger)
+		runSupervised(realtimeContext, observabilityRuntime, logger, "telemetry.revocation_relay", func() {
+			runRevocationRelay(realtimeContext, revocationRelay, logger)
+		})
 	}
 
 	alarmRelay, alarmContext, alarmCancel, err := loadAlarmEvaluationRelay(store, certificate)
@@ -164,7 +184,9 @@ func main() {
 	}
 	if alarmCancel != nil {
 		defer alarmCancel()
-		go runAlarmEvaluationRelay(alarmContext, alarmRelay, logger)
+		runSupervised(alarmContext, observabilityRuntime, logger, "telemetry.alarm_evaluation_relay", func() {
+			runAlarmEvaluationRelay(alarmContext, alarmRelay, logger)
+		})
 	}
 
 	rateLimiter, closeRateLimiter, err := loadTelemetryRateLimiter()
@@ -198,6 +220,7 @@ func main() {
 			RegistrySyncer:                 store,
 			AllowedCommandServiceSPIFFE:    envOr("TELEMETRY_ALLOWED_COMMAND_SERVICE_SPIFFE", "spiffe://hvac.local/command-service"),
 			Metrics:                        observabilityRuntime.Metrics,
+			Tracer:                         observabilityRuntime.Tracer,
 			RateLimiter:                    rateLimiter,
 		}),
 		TLSConfig: &tls.Config{
@@ -215,23 +238,23 @@ func main() {
 		Handler:           observabilityRuntime.DiagnosticsHandler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	go func() {
+	observabilityRuntime.Go(logger, "telemetry.diagnostics", func() {
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("telemetry_diagnostics_stopped_unexpectedly", "error_code", "TELEMETRY_DIAGNOSTICS_SERVE_FAILED")
 		}
-	}()
+	})
 	observabilityRuntime.MarkReady()
 
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
+	observabilityRuntime.Go(logger, "telemetry.shutdown", func() {
 		<-shutdown
 		observabilityRuntime.MarkNotReady()
 		context, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = diagnostics.Shutdown(context)
 		_ = server.Shutdown(context)
-	}()
+	})
 
 	logger.Info("telemetry_runtime_started", "service", "telemetry-runtime-service", "address", server.Addr)
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -239,6 +262,30 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("telemetry_runtime_stopped", "service", "telemetry-runtime-service")
+}
+
+func runSupervised(ctx context.Context, runtime *observability.Runtime, logger *slog.Logger, component string, fn func()) {
+	runtime.Go(logger, component, func() {
+		for ctx.Err() == nil {
+			panicked := false
+			func() {
+				defer observability.Recover(logger, runtime.Metrics, component, func(any) {
+					panicked = true
+				})
+				fn()
+			}()
+			if !panicked || ctx.Err() != nil {
+				return
+			}
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+	})
 }
 
 func loadLatestCache(store *telemetry.PostgresStore) (telemetry.LatestCache, *telemetry.LatestCacheRelay, context.Context, context.CancelFunc, error) {

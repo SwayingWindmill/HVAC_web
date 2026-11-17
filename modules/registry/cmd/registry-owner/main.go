@@ -114,6 +114,7 @@ func main() {
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
 	go func() {
+		defer observability.Recover(logger, telemetry.Metrics, "registry_owner.diagnostics")
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("core_diagnostics_failed", "error_code", "DIAGNOSTICS_SERVE_FAILED")
 		}
@@ -125,12 +126,16 @@ func main() {
 		logger.Error("core_outbox_relay_config_invalid", "error", relayErr.Error())
 		os.Exit(1)
 	} else if relay != nil {
-		go relay.Run(relayCtx)
+		go func() {
+			defer observability.Recover(logger, telemetry.Metrics, "registry_owner.outbox_relay")
+			relay.Run(relayCtx)
+		}()
 	}
 
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
+		defer observability.Recover(logger, telemetry.Metrics, "registry_owner.shutdown")
 		<-shutdown
 		cancelRelay()
 		telemetry.MarkNotReady()

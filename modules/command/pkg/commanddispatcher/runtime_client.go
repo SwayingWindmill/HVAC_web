@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
@@ -123,6 +124,7 @@ func (client *RuntimeClient) post(ctx context.Context, path string, input, outpu
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
+	observability.InjectHTTP(ctx, request.Header)
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		return 0, fmt.Errorf("command runtime request failed: %w", err)
