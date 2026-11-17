@@ -8,13 +8,12 @@ import {
   type TelemetryHistoryReader,
 } from '../../application/index.js';
 import {
-  createOwnerHeaders,
-  fetchOwnerJson,
   hasExactKeys,
   isInstant,
   isNonEmptyString,
   isRecord,
   normalizeOwnerReaderHttpConfig,
+  readAuthorizedOwnerJson,
   type OwnerReaderHttpConfig,
 } from './owner-http.js';
 
@@ -169,14 +168,12 @@ export const createTelemetryHistoryOwnerReader = (
   return Object.freeze({
     async read(readInput: OwnerReadInput<TelemetryHistoryReadRequest>): Promise<OwnerReadResult> {
       assertHistoryRequest(readInput);
-      const payload = await fetchOwnerJson(config, {
+      const payload = await readAuthorizedOwnerJson(config, {
+        requestId: readInput.request.requestId,
+        logicalTool: readInput.request.tool,
+        context: readInput.context,
         path: '/internal/v1/telemetry/device-history:aggregate',
         method: 'POST',
-        headers: createOwnerHeaders(readInput.request.requestId, readInput.context, {
-          logicalTool: readInput.request.tool,
-          includePolicyRevision: false,
-          hasBody: true,
-        }),
         body: JSON.stringify(readInput.request.input),
       });
       const history = decodeHistory(payload, readInput.request.input);

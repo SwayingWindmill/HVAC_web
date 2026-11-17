@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { AgentToolError } from '../dist/agent/index.js';
-import { createHvacReadTools, createSiteDescriber } from '../dist/tools/index.js';
+import { OwnerReadError } from '../dist/application/index.js';
+import { createHvacReadTools, createRunSiteSnapshot, createSiteDescriber } from '../dist/tools/index.js';
 
 const tenantId = 'tenant-1';
 const siteId = 'site-1';
@@ -102,7 +103,7 @@ const historyPayload = (query) => ({
   metadata: { requestedFrom: query.from, requestedTo: query.to, granularity: query.granularity, timezone: query.timezone, qualityPolicy: query.qualityPolicy, projectionWatermark: query.to, returnedBuckets: 2 },
 });
 
-const createHarness = ({ energyFor, registryFailure, semanticFor, alarmsFor, findingsFor, workOrdersFor, timezone = 'America/Phoenix', capabilities = context.capabilities } = {}) => {
+const createHarness = ({ energyFor, registryFailure, semanticFor, alarmsFor, findingsFor, workOrdersFor, assetModelOverride, timezone = 'America/Phoenix', capabilities = context.capabilities, shareSnapshot = true } = {}) => {
   const authorizationInputs = [];
   const registryInputs = [];
   const telemetryInputs = [];
@@ -124,12 +125,13 @@ const createHarness = ({ energyFor, registryFailure, semanticFor, alarmsFor, fin
   const registryReader = {
     read: async (input) => {
       registryInputs.push(input);
-      if (registryFailure) throw registryFailure;
+      const failure = typeof registryFailure === 'function' ? registryFailure(input) : registryFailure;
+      if (failure) throw failure;
       if (input.request.tool === 'registry.getSite') {
         return ownerResult(input.request, 'registry', 'registry-site:7', 'GOOD', 'registry:site/v1', { kind: 'SITE', site: { ...site, timezone } });
       }
       if (input.request.tool === 'registry.getSiteAssetModel') {
-        return ownerResult(input.request, 'registry', 'registry-asset-model:11', 'GOOD', 'registry:asset-model/v2', { kind: 'SITE_ASSET_MODEL', model: assetModel });
+        return ownerResult(input.request, 'registry', 'registry-asset-model:11', 'GOOD', 'registry:asset-model/v2', { kind: 'SITE_ASSET_MODEL', model: assetModelOverride ?? assetModel });
       }
       return ownerResult(input.request, 'registry', 'registry-assets:9', 'GOOD', 'registry:assets/v1', { kind: 'SITE_ASSETS', siteId, assets });
     },
@@ -214,6 +216,10 @@ const createHarness = ({ energyFor, registryFailure, semanticFor, alarmsFor, fin
     },
   };
 
+  const siteSnapshot = shareSnapshot
+    ? createRunSiteSnapshot({ authorization, toolAuthorizationReader, registryReader })
+    : undefined;
+
   const tools = createHvacReadTools({
     capabilities,
     authorization,
@@ -226,10 +232,15 @@ const createHarness = ({ energyFor, registryFailure, semanticFor, alarmsFor, fin
     alarmReader,
     fddReader,
     workOrderReader,
+    ...(siteSnapshot === undefined ? {} : { siteSnapshot }),
     limits: { maxAssets: 2, maxEnergyPoints: 48, maxEnergyRangeMs: 31 * 24 * 60 * 60 * 1000, maxResultBytes: 32_768, timeoutMs: 2_000 },
   });
 
-  const describer = createSiteDescriber({ toolAuthorizationReader, registryReader });
+  const describer = createSiteDescriber({
+    toolAuthorizationReader,
+    registryReader,
+    ...(siteSnapshot === undefined ? {} : { siteSnapshot }),
+  });
   const describeSite = (runContext) => describer(authorization, runContext);
 
   return { tools, describeSite, authorizationInputs, registryInputs, telemetryInputs, historyInputs, energyInputs, semanticInputs, alarmInputs, fddInputs, workOrderInputs, maxActiveEnergyReads: () => maxActiveEnergyReads };
@@ -834,6 +845,189 @@ test('a comparison says whether the data was incomplete or its readings were dou
   const args = { baselineStartDate: '2026-10-08', baselineEndDate: '2026-10-08', currentStartDate: '2026-10-15', currentEndDate: '2026-10-15' };
   assert.equal((await execute(byName(incomplete.tools, 'energy_compare_periods'), args)).comparison.status, '数据不完整，不能比较');
   assert.equal((await execute(byName(doubtful.tools, 'energy_compare_periods'), args)).comparison.status, '有读数可疑，不能比较');
+});
+
+test('RunSiteSnapshot shares getSite across describeSite and tools, keeps getAssetModel lazy, singleflights concurrent reads, and isolates runs', async () => {
+  const harness = createHarness({
+    semanticFor: () => ({
+      schemaVersion: 1,
+      columns: [
+        { name: 'period_end', title: '时段', kind: 'time' },
+        { name: 'electricity_valid_kwh', title: '用电量', kind: 'measure' },
+      ],
+      rows: [['2026-10-15T07:00:00Z', 100]],
+      metadata: { datasetRevision: 'semantic:1', partial: false },
+    }),
+    alarmsFor: () => ({ items: [alarmItem()], hasMore: false }),
+    findingsFor: () => ({
+      items: [{
+        assetId: 'asset-1',
+        findingType: 'CHILLED_WATER_LOW_DELTA_T',
+        evaluationFrom: '2026-10-17T11:00:00.000Z',
+        evaluationTo: '2026-10-17T12:00:00.000Z',
+        observedValue: 3.2,
+        thresholdValue: 5,
+        valueUnit: 'K',
+        linkedToAlarm: false,
+        linkedToWorkOrder: false,
+        createdAt: '2026-10-17T12:01:00.000Z',
+      }],
+    }),
+    workOrdersFor: () => ({
+      items: [{
+        title: '检查机组',
+        description: '排查温差',
+        priority: 'HIGH',
+        status: 'OPEN',
+        assigned: false,
+        fromAlarm: false,
+        assetId: 'asset-1',
+        createdAt: '2026-10-17T12:00:00.000Z',
+        updatedAt: '2026-10-17T12:30:00.000Z',
+      }],
+      hasMore: false,
+    }),
+  });
+  const countReads = (tool) => harness.registryInputs.filter(({ request }) => request.tool === tool).length;
+
+  await harness.describeSite(context);
+  assert.equal(countReads('registry.getSite'), 1);
+  assert.equal(countReads('registry.getSiteAssetModel'), 0);
+
+  await execute(byName(harness.tools, 'energy_query_series'), { startDate: '2026-10-15', endDate: '2026-10-15' });
+  await execute(byName(harness.tools, 'energy_compare_periods'), {
+    baselineStartDate: '2026-10-08',
+    baselineEndDate: '2026-10-08',
+    currentStartDate: '2026-10-15',
+    currentEndDate: '2026-10-15',
+  });
+  await execute(byName(harness.tools, 'energy_semantic_query'), {
+    measures: ['site_energy.electricity_valid_kwh'],
+    granularity: 'day',
+    startDate: '2026-10-15',
+    endDate: '2026-10-15',
+  });
+  await execute(byName(harness.tools, 'telemetry_get_current'), {
+    deviceId,
+    pointKeys: ['condenserPressureKPa'],
+  });
+  assert.equal(countReads('registry.getSite'), 1);
+  assert.equal(countReads('registry.getSiteAssetModel'), 0);
+
+  await Promise.all([
+    execute(byName(harness.tools, 'equipment_list'), {}),
+    execute(byName(harness.tools, 'energy_by_equipment'), { startDate: '2026-10-15', endDate: '2026-10-15' }),
+    execute(byName(harness.tools, 'alarm_list'), {}),
+    execute(byName(harness.tools, 'fdd_findings'), {}),
+    execute(byName(harness.tools, 'work_order_list'), {}),
+  ]);
+  assert.equal(countReads('registry.getSite'), 1);
+  assert.equal(countReads('registry.getSiteAssetModel'), 1);
+
+  const run2 = Object.freeze({ ...context, runId: 'run-2' });
+  await harness.describeSite(run2);
+  await execute(byName(harness.tools, 'equipment_list'), {}, run2);
+  assert.equal(countReads('registry.getSite'), 2);
+  assert.equal(countReads('registry.getSiteAssetModel'), 2);
+
+  const standalone = createHarness({ shareSnapshot: false });
+  await execute(byName(standalone.tools, 'energy_query_series'), { startDate: '2026-10-15', endDate: '2026-10-15' });
+  await execute(byName(standalone.tools, 'telemetry_get_current'), { deviceId, pointKeys: ['condenserPressureKPa'] });
+  await Promise.all([
+    execute(byName(standalone.tools, 'equipment_list'), {}),
+    execute(byName(standalone.tools, 'energy_by_equipment'), { startDate: '2026-10-15', endDate: '2026-10-15' }),
+  ]);
+  assert.equal(standalone.registryInputs.filter(({ request }) => request.tool === 'registry.getSite').length, 1);
+  assert.equal(standalone.registryInputs.filter(({ request }) => request.tool === 'registry.getSiteAssetModel').length, 1);
+});
+
+test('transient getSiteAssetModel failure does not poison retry within the same run', async () => {
+  let assetModelAttempts = 0;
+  const harness = createHarness({
+    registryFailure: (input) => {
+      if (input.request.tool === 'registry.getSiteAssetModel') {
+        assetModelAttempts += 1;
+        if (assetModelAttempts === 1) {
+          return new OwnerReadError('OWNER_READ_UNAVAILABLE', 'transient registry failure');
+        }
+      }
+      return null;
+    },
+  });
+
+  await assert.rejects(
+    () => execute(byName(harness.tools, 'equipment_list'), {}),
+    (error) => error instanceof AgentToolError && error.code === 'TOOL_OWNER_UNAVAILABLE',
+  );
+  const retried = await execute(byName(harness.tools, 'equipment_list'), {});
+  assert.equal(retried.devices.length, 2);
+  const cached = await execute(byName(harness.tools, 'equipment_list'), {});
+  assert.equal(cached.devices.length, 2);
+  assert.equal(assetModelAttempts, 2);
+});
+
+test('active ASSET -> ASSET SERVES relationships appear as serves on equipment_list while others are omitted', async () => {
+  const pumpAsset = { ...assets[1], id: 'asset-pump-1', code: 'CHWP-1', displayName: '1 号冷冻水泵', assetType: 'PUMP' };
+  const pumpDeviceId = '0198a36e-4c9d-7b5a-8f2d-4c5e6f708198';
+  const harness = createHarness({
+    assetModelOverride: {
+      ...assetModel,
+      assets: [assets[0], pumpAsset, assets[2]],
+      devices: [
+        ...assetModel.devices,
+        { id: pumpDeviceId, tenantId, siteId, code: 'pump-1-meter', displayName: '1 号水泵电表', deviceType: 'HVAC_POWER_METER', status: 'ACTIVE', revision: 1, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
+      ],
+      relationships: [
+        ...assetModel.relationships,
+        { id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708302', tenantId, siteId, fromType: 'DEVICE', fromId: pumpDeviceId, toType: 'ASSET', toId: pumpAsset.id, role: 'METERS', status: 'ACTIVE' },
+        { id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708303', tenantId, siteId, fromType: 'ASSET', fromId: pumpAsset.id, toType: 'ASSET', toId: 'asset-1', role: 'SERVES', status: 'ACTIVE' },
+        { id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708304', tenantId, siteId, fromType: 'ASSET', fromId: pumpAsset.id, toType: 'ASSET', toId: 'asset-3', role: 'SERVES', status: 'INACTIVE' },
+        { id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708305', tenantId, siteId, fromType: 'ASSET', fromId: 'asset-1', toType: 'ASSET', toId: 'asset-3', role: 'INSTALLED_IN', status: 'ACTIVE' },
+      ],
+    },
+  });
+  const unthrottled = createHvacReadTools({
+    capabilities: context.capabilities,
+    authorization,
+    toolAuthorizationReader: { authorize: async ({ request }) => ({ delegationGrant: `grant:${request.tool}`, policyRevision: 'tool-policy-1' }) },
+    registryReader: {
+      read: async (input) => ownerResult(input.request, 'registry', 'r:1', 'GOOD', 'registry:asset-model/v2', {
+        kind: 'SITE_ASSET_MODEL',
+        model: {
+          ...assetModel,
+          assets: [assets[0], pumpAsset, assets[2]],
+          devices: [
+            ...assetModel.devices,
+            { id: pumpDeviceId, tenantId, siteId, code: 'pump-1-meter', displayName: '1 号水泵电表', deviceType: 'HVAC_POWER_METER', status: 'ACTIVE', revision: 1, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
+          ],
+          relationships: [
+            ...assetModel.relationships,
+            { id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708302', tenantId, siteId, fromType: 'DEVICE', fromId: pumpDeviceId, toType: 'ASSET', toId: pumpAsset.id, role: 'METERS', status: 'ACTIVE' },
+            { id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708303', tenantId, siteId, fromType: 'ASSET', fromId: pumpAsset.id, toType: 'ASSET', toId: 'asset-1', role: 'SERVES', status: 'ACTIVE' },
+            { id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708304', tenantId, siteId, fromType: 'ASSET', fromId: pumpAsset.id, toType: 'ASSET', toId: 'asset-3', role: 'SERVES', status: 'INACTIVE' },
+            { id: '0198a36e-4c9d-7b5a-8f2d-4c5e6f708305', tenantId, siteId, fromType: 'ASSET', fromId: 'asset-1', toType: 'ASSET', toId: 'asset-3', role: 'INSTALLED_IN', status: 'ACTIVE' },
+          ],
+        },
+      }),
+    },
+    deviceTelemetryReader: { read: async () => { throw new Error('unused'); } },
+    telemetryHistoryReader: { read: async () => { throw new Error('unused'); } },
+    energyAnalyticsReader: { read: async () => { throw new Error('unused'); } },
+    semanticQueryReader: { read: async () => { throw new Error('unused'); } },
+    alarmReader: { read: async () => { throw new Error('unused'); } },
+    fddReader: { read: async () => { throw new Error('unused'); } },
+    workOrderReader: { read: async () => { throw new Error('unused'); } },
+    limits: { maxAssets: 10 },
+  });
+
+  assert.ok(harness.tools.length > 0);
+  const result = await execute(byName(unthrottled, 'equipment_list'), {});
+  const pumpEntry = result.devices.find((device) => device.deviceId === pumpDeviceId);
+  const chillerMeterEntry = result.devices.find((device) => device.deviceId === meterDeviceId);
+  const chillerControllerEntry = result.devices.find((device) => device.deviceId === chillerDeviceId);
+  assert.deepEqual(pumpEntry?.serves, ['Chiller 1']);
+  assert.equal('serves' in chillerMeterEntry, false);
+  assert.equal('serves' in chillerControllerEntry, false);
 });
 
 test('a result too large for one answer tells the model how to narrow it', async () => {

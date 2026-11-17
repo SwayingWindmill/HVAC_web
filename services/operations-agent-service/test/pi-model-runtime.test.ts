@@ -5,6 +5,7 @@ import {
   PiModelConfigurationError,
   createProductionPiAgentRuntimeFromEnvironment,
 } from '../dist/runtime-pi/index.js';
+import { operationsInvestigationSystemPolicy } from '../dist/runtime-pi/internal/system-policy.js';
 import { createScriptedPiAgentEngine } from '../dist/runtime-pi/testing.js';
 
 const validEnvironment = Object.freeze({
@@ -96,4 +97,11 @@ test('deterministic faux-provider composition keeps the same normalized policy s
     maxOutputTokens: 768,
   });
   assert.equal(runtime.modelRef.provider, 'faux');
+});
+
+test('system policy enforces GFM table divider row in prompt rules and example (#669)', () => {
+  const site = { name: '松雅轩', timezone: 'Asia/Shanghai' };
+  const prompt = operationsInvestigationSystemPolicy(Date.parse('2026-10-16T02:30:00.000Z'), site);
+  assert.match(prompt, /表头下一行必须写 `\| --- \|` 分隔线/u);
+  assert.ok(prompt.includes('| 时段 | 10 月 8 日 kWh | 10 月 15 日 kWh |\n| --- | --- | --- |'));
 });

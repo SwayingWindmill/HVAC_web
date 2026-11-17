@@ -12,13 +12,12 @@ import {
   type OwnerReadResult,
 } from '../../application/index.js';
 import {
-  createOwnerHeaders,
-  fetchOwnerJson,
   hasExactKeys,
   isInstant,
   isNonEmptyString,
   isRecord,
   normalizeOwnerReaderHttpConfig,
+  readAuthorizedOwnerJson,
   type OwnerReaderHttpConfig,
 } from './owner-http.js';
 
@@ -311,14 +310,12 @@ export const createEnergyAnalyticsOwnerReader = (
       readInput: OwnerReadInput<EnergyAnalyticsReadRequest>,
     ): Promise<OwnerReadResult> {
       assertEnergyRequest(readInput);
-      const payload = await fetchOwnerJson(config, {
+      const payload = await readAuthorizedOwnerJson(config, {
+        requestId: readInput.request.requestId,
+        logicalTool: readInput.request.tool,
+        context: readInput.context,
         path: '/internal/v1/analytics/energy-series',
         method: 'POST',
-        headers: createOwnerHeaders(readInput.request.requestId, readInput.context, {
-          logicalTool: readInput.request.tool,
-          includePolicyRevision: false,
-          hasBody: true,
-        }),
         body: JSON.stringify(readInput.request.input),
       });
       const response = decodeEnergySeries(payload, readInput.request.input);

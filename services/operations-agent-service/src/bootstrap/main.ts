@@ -29,6 +29,7 @@ const required = (name: string): string => {
 const GATEWAY_SPIFFE_ID = process.env.AGENT_GATEWAY_SPIFFE_ID ?? 'spiffe://hvac.local/platform-gateway';
 const AUDIENCE = 'operations-agent-service';
 const ACTION = 'operations:investigate';
+const MAX_SERVICE_DELEGATION_TTL_SECONDS = 180;
 
 // What one question may cost. Tools read at most a month of history.
 const BUDGET: AgentRunBudget = Object.freeze({
@@ -102,7 +103,7 @@ const createGrantAuthorizer = (publicKey: KeyObject): AgentSessionHttpAuthorizer
       || claims.tenantId !== input.tenantId
       || claims.actions.length !== 1 || claims.actions[0] !== ACTION
       || !claims.scopes.includes(`site:${input.siteId}`)
-      || claims.issuedAt > now + 5 || claims.expiresAt <= now || claims.expiresAt - claims.issuedAt > 60
+      || claims.issuedAt > now + 5 || claims.expiresAt <= now || claims.expiresAt - claims.issuedAt > MAX_SERVICE_DELEGATION_TTL_SECONDS
       || !claims.subject || !claims.subjectIssuer || !claims.sessionId || !claims.tokenId) {
       return deny('grant-rejected');
     }

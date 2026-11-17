@@ -10,6 +10,7 @@ import {
   createEnergyAnalyticsOwnerReader,
   createGatewayToolAuthorizationReader,
   createRegistryOwnerReader,
+  createSemanticQueryOwnerReader,
   createTelemetryHistoryOwnerReader,
 } from '../dist/tools/index.js';
 
@@ -783,4 +784,177 @@ test('FDD and work-order readers send the context in the owner’s own header an
     title: '检查水泵', description: '', priority: 'HIGH', status: 'OPEN', assigned: true, fromAlarm: true, assetId: 'asset-1',
     createdAt: '2026-10-17T12:00:00Z', updatedAt: '2026-10-17T12:30:00Z',
   }]);
+});
+
+test('OwnerReadTransport header policy routes every logical tool to its exact auth header and policy revision rule', async () => {
+  const captured = [];
+  const captureFetch = (bodyFactory) => async (url, init) => {
+    captured.push({ url: String(url), headers: init.headers });
+    return jsonResponse(bodyFactory());
+  };
+  const withToolGrant = (tool) => ({
+    ...context,
+    scope: tool.startsWith('telemetry.') ? { ...scope, deviceId } : scope,
+    authorization: {
+      ...context.authorization,
+      toolDelegationGrants: { [tool]: `${tool}:grant` },
+    },
+  });
+
+  const registry = createRegistryOwnerReader({
+    baseUrl: 'https://platform-core.internal',
+    fetchImplementation: captureFetch(() => siteDto),
+  });
+  await registry.read({ request: { requestId: 'req-site', tool: 'registry.getSite', input: { siteId } }, context: withToolGrant('registry.getSite') });
+
+  const registryAssets = createRegistryOwnerReader({
+    baseUrl: 'https://platform-core.internal',
+    fetchImplementation: captureFetch(() => ({ items: [assetDto], nextCursor: null, hasMore: false })),
+  });
+  await registryAssets.read({ request: { requestId: 'req-assets', tool: 'registry.listSiteAssets', input: { siteId } }, context: withToolGrant('registry.listSiteAssets') });
+
+  const registryModel = createRegistryOwnerReader({
+    baseUrl: 'https://platform-core.internal',
+    fetchImplementation: captureFetch(() => assetModelDto),
+  });
+  await registryModel.read({ request: { requestId: 'req-model', tool: 'registry.getSiteAssetModel', input: { siteId } }, context: withToolGrant('registry.getSiteAssetModel') });
+
+  const energy = createEnergyAnalyticsOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: captureFetch(() => energyResponse),
+  });
+  await energy.read({ request: energyRequest, context: withToolGrant('analytics.getEnergySeries') });
+
+  const semantic = createSemanticQueryOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: captureFetch(() => ({
+      schemaVersion: 1,
+      columns: [
+        { name: 'period_end', title: '时段', kind: 'time' },
+        { name: 'electricity_valid_kwh', title: '用电量', kind: 'measure' },
+      ],
+      rows: [['2026-07-28T15:00:00.000Z', 120]],
+      metadata: { datasetRevision: 'semantic:1', partial: false },
+    })),
+  });
+  await semantic.read({
+    request: {
+      requestId: 'req-semantic',
+      tool: 'analytics.semanticQuery',
+      input: {
+        tenantId,
+        siteId,
+        view: 'site_energy',
+        measures: ['electricity_valid_kwh'],
+        granularity: 'hour',
+        timezone: 'Asia/Tokyo',
+        from: '2026-07-28T15:00:00.000Z',
+        to: '2026-07-29T15:00:00.000Z',
+      },
+    },
+    context: withToolGrant('analytics.semanticQuery'),
+  });
+
+  const history = createTelemetryHistoryOwnerReader({
+    baseUrl: 'https://telemetry-query.internal',
+    fetchImplementation: captureFetch(() => historyResponse),
+  });
+  await history.read({ request: historyRequest, context: withToolGrant('telemetry.history.aggregateDeviceHistory') });
+
+  const current = createDeviceTelemetryOwnerReader({
+    baseUrl: 'https://telemetry-runtime.internal',
+    fetchImplementation: captureFetch(() => telemetryResponse),
+  });
+  await current.read({ request: telemetryRequest, context: withToolGrant('telemetry.current.getDeviceObservationSnapshot') });
+
+  const alarm = createAlarmOwnerReader({
+    baseUrl: 'https://alarm-service.internal',
+    fetchImplementation: captureFetch(() => ({ schemaVersion: 2, items: [], hasMore: false })),
+  });
+  await alarm.read({ request: { requestId: 'req-alarm', tool: 'alarm.listAlarms', input: { siteId, condition: 'ACTIVE', limit: 50 } }, context: withToolGrant('alarm.listAlarms') });
+
+  const fdd = createFddOwnerReader({
+    baseUrl: 'https://fdd-service.internal',
+    fetchImplementation: captureFetch(() => ({ items: [] })),
+  });
+  await fdd.read({ request: { requestId: 'req-fdd', tool: 'fdd.listFindings', input: { siteId, limit: 50 } }, context: withToolGrant('fdd.listFindings') });
+
+  const workOrder = createWorkOrderOwnerReader({
+    baseUrl: 'https://work-order-service.internal',
+    fetchImplementation: captureFetch(() => ({ schemaVersion: 1, items: [], nextCursor: null, hasMore: false })),
+  });
+  await workOrder.read({ request: { requestId: 'req-wo', tool: 'workorder.listWorkOrders', input: { siteId, limit: 100 } }, context: withToolGrant('workorder.listWorkOrders') });
+
+  const expected = [
+    { header: 'X-Delegation-Grant', value: 'registry.getSite:grant', policy: true },
+    { header: 'X-Delegation-Grant', value: 'registry.listSiteAssets:grant', policy: true },
+    { header: 'X-Delegation-Grant', value: 'registry.getSiteAssetModel:grant', policy: true },
+    { header: 'X-Delegation-Grant', value: 'analytics.getEnergySeries:grant', policy: false },
+    { header: 'X-Delegation-Grant', value: 'analytics.semanticQuery:grant', policy: false },
+    { header: 'X-Delegation-Grant', value: 'telemetry.history.aggregateDeviceHistory:grant', policy: false },
+    { header: 'Authorization', value: 'Bearer telemetry.current.getDeviceObservationSnapshot:grant', policy: false },
+    { header: 'X-Alarm-Read-Context', value: 'alarm.listAlarms:grant', policy: false },
+    { header: 'X-FDD-Context', value: 'fdd.listFindings:grant', policy: false },
+    { header: 'X-Work-Order-Read-Context', value: 'workorder.listWorkOrders:grant', policy: false },
+  ];
+  assert.equal(captured.length, expected.length);
+  for (let index = 0; index < expected.length; index += 1) {
+    const headers = captured[index].headers;
+    const rule = expected[index];
+    assert.equal(headers[rule.header], rule.value);
+    assert.equal('X-Route-Policy-Revision' in headers, rule.policy);
+    if (rule.header !== 'X-Delegation-Grant') {
+      assert.equal('X-Delegation-Grant' in headers, false);
+    }
+  }
+});
+
+test('Registry asset model reader accepts optional relationship role and semanticRole while rejecting malformed values', async () => {
+  const withRoles = {
+    ...assetModelDto,
+    telemetryPoints: [{ ...assetModelDto.telemetryPoints[0], semanticRole: 'ACTIVE_POWER' }],
+    relationships: [{
+      fromType: 'ASSET',
+      fromId: assetId,
+      toType: 'ASSET',
+      toId: assetId,
+      role: 'SERVES',
+      status: 'ACTIVE',
+      semanticRole: 'HYDRAULIC_SERVES',
+    }],
+  };
+  const reader = createRegistryOwnerReader({
+    baseUrl: 'https://platform-core.internal',
+    fetchImplementation: async () => jsonResponse(withRoles),
+  });
+  const result = await reader.read({
+    request: { requestId: 'read-asset-model-roles', tool: 'registry.getSiteAssetModel', input: { siteId } },
+    context,
+  });
+  assert.equal(result.payload.model.relationships[0].role, 'SERVES');
+  assert.equal(result.payload.model.telemetryPoints[0].semanticRole, 'ACTIVE_POWER');
+
+  const badRole = createRegistryOwnerReader({
+    baseUrl: 'https://platform-core.internal',
+    fetchImplementation: async () => jsonResponse({
+      ...assetModelDto,
+      relationships: [{ fromType: 'ASSET', fromId: assetId, toType: 'ASSET', toId: assetId, role: 42, status: 'ACTIVE' }],
+    }),
+  });
+  await expectOwnerError(() => badRole.read({
+    request: { requestId: 'read-asset-model-bad-role', tool: 'registry.getSiteAssetModel', input: { siteId } },
+    context,
+  }), 'OWNER_RESPONSE_INVALID');
+
+  const badSemanticRole = createRegistryOwnerReader({
+    baseUrl: 'https://platform-core.internal',
+    fetchImplementation: async () => jsonResponse({
+      ...assetModelDto,
+      telemetryPoints: [{ ...assetModelDto.telemetryPoints[0], semanticRole: 42 }],
+    }),
+  });
+  await expectOwnerError(() => badSemanticRole.read({
+    request: { requestId: 'read-asset-model-bad-semantic-role', tool: 'registry.getSiteAssetModel', input: { siteId } },
+    context,
+  }), 'OWNER_RESPONSE_INVALID');
 });

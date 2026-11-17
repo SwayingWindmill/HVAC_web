@@ -1,7 +1,65 @@
 import {
   OwnerReadError,
   type OwnerReadContext,
+  type ToolAuthorizableReadRequest,
 } from '../../application/index.js';
+
+export type OwnerGrantLogicalTool = ToolAuthorizableReadRequest['tool'];
+
+export interface OwnerGrantWirePolicy {
+  readonly grantHeader:
+    | 'X-Delegation-Grant'
+    | 'Authorization'
+    | 'X-Alarm-Read-Context'
+    | 'X-FDD-Context'
+    | 'X-Work-Order-Read-Context';
+  readonly grantPrefix?: string;
+  readonly includePolicyRevision: boolean;
+}
+
+export const OWNER_GRANT_WIRE_POLICY: Readonly<Record<OwnerGrantLogicalTool, OwnerGrantWirePolicy>> = Object.freeze({
+  'registry.getSite': Object.freeze({
+    grantHeader: 'X-Delegation-Grant',
+    includePolicyRevision: true,
+  }),
+  'registry.listSiteAssets': Object.freeze({
+    grantHeader: 'X-Delegation-Grant',
+    includePolicyRevision: true,
+  }),
+  'registry.getSiteAssetModel': Object.freeze({
+    grantHeader: 'X-Delegation-Grant',
+    includePolicyRevision: true,
+  }),
+  'analytics.getEnergySeries': Object.freeze({
+    grantHeader: 'X-Delegation-Grant',
+    includePolicyRevision: false,
+  }),
+  'analytics.semanticQuery': Object.freeze({
+    grantHeader: 'X-Delegation-Grant',
+    includePolicyRevision: false,
+  }),
+  'telemetry.history.aggregateDeviceHistory': Object.freeze({
+    grantHeader: 'X-Delegation-Grant',
+    includePolicyRevision: false,
+  }),
+  'telemetry.current.getDeviceObservationSnapshot': Object.freeze({
+    grantHeader: 'Authorization',
+    grantPrefix: 'Bearer ',
+    includePolicyRevision: false,
+  }),
+  'alarm.listAlarms': Object.freeze({
+    grantHeader: 'X-Alarm-Read-Context',
+    includePolicyRevision: false,
+  }),
+  'fdd.listFindings': Object.freeze({
+    grantHeader: 'X-FDD-Context',
+    includePolicyRevision: false,
+  }),
+  'workorder.listWorkOrders': Object.freeze({
+    grantHeader: 'X-Work-Order-Read-Context',
+    includePolicyRevision: false,
+  }),
+});
 
 export interface OwnerReaderHttpConfig {
   readonly baseUrl: string;
@@ -62,16 +120,15 @@ export const normalizeOwnerReaderHttpConfig = (
 
 const requireAuthorizationContext = (
   context: OwnerReadContext,
-  logicalTool: string,
+  logicalTool: OwnerGrantLogicalTool,
   includePolicyRevision: boolean,
 ): {
   readonly delegationGrant: string;
   readonly policyRevision: string | undefined;
 } => {
   const { authorization } = context;
-  const delegationGrant = authorization.toolDelegationGrants?.[
-    logicalTool as keyof NonNullable<typeof authorization.toolDelegationGrants>
-  ] ?? authorization.delegationGrant;
+  const delegationGrant = authorization.toolDelegationGrants?.[logicalTool]
+    ?? authorization.delegationGrant;
   const policyRevision = authorization.policyRevision;
   const traceparent = authorization.traceparent;
   const tracestate = authorization.tracestate;
@@ -101,28 +158,30 @@ export const createOwnerHeaders = (
   requestId: string,
   context: OwnerReadContext,
   options: {
-    readonly logicalTool: string;
-    readonly includePolicyRevision: boolean;
+    readonly logicalTool: OwnerGrantLogicalTool;
     readonly hasBody: boolean;
+    readonly includePolicyRevision?: boolean;
   },
 ): Record<string, string> => {
+  const policy = OWNER_GRANT_WIRE_POLICY[options.logicalTool];
+  const includePolicyRevision = policy.includePolicyRevision && (options.includePolicyRevision ?? true);
   const authorization = requireAuthorizationContext(
     context,
     options.logicalTool,
-    options.includePolicyRevision,
+    includePolicyRevision,
   );
   if (requestId.trim().length === 0) {
     throw new OwnerReadError('OWNER_REQUEST_INVALID', 'The Owner READ request identity is invalid.');
   }
   const headers: Record<string, string> = {
     Accept: 'application/json, application/problem+json',
-    'X-Delegation-Grant': authorization.delegationGrant,
+    [policy.grantHeader]: `${policy.grantPrefix ?? ''}${authorization.delegationGrant}`,
     'X-Request-ID': requestId,
     'X-Operations-Agent-Run-ID': context.runId,
     'X-Operations-Correlation-ID': context.correlationId,
   };
   if (options.hasBody) headers['Content-Type'] = 'application/json';
-  if (options.includePolicyRevision) {
+  if (includePolicyRevision) {
     const policyRevision = authorization.policyRevision;
     if (policyRevision === undefined) {
       throw new OwnerReadError(
@@ -140,6 +199,26 @@ export const createOwnerHeaders = (
   }
   return headers;
 };
+
+export const readAuthorizedOwnerJson = async (
+  config: NormalizedOwnerReaderHttpConfig,
+  input: {
+    readonly requestId: string;
+    readonly logicalTool: OwnerGrantLogicalTool;
+    readonly context: OwnerReadContext;
+    readonly path: string;
+    readonly method: 'GET' | 'POST';
+    readonly body?: string;
+  },
+): Promise<unknown> => fetchOwnerJson(config, {
+  path: input.path,
+  method: input.method,
+  headers: createOwnerHeaders(input.requestId, input.context, {
+    logicalTool: input.logicalTool,
+    hasBody: input.body !== undefined,
+  }),
+  ...(input.body === undefined ? {} : { body: input.body }),
+});
 
 const mapStatusToError = (status: number): OwnerReadError => {
   if (status === 401 || status === 403 || status === 404) {

@@ -1,23 +1,17 @@
-import { createHash } from 'node:crypto';
-
 import {
   AgentToolError,
   type AgentRunContext,
   type AgentRunSite,
   type AgentTool,
-  type AgentToolErrorCode,
   type AgentToolExecutionRequest,
 } from '../../agent/index.js';
 import {
-  OwnerReadError,
   type AuthorizationDecision,
   type DeviceTelemetryReadRequest,
   type DeviceTelemetryReader,
   type EnergyAnalyticsReadRequest,
   type EnergyAnalyticsReader,
   type EnergyCost,
-  type OwnerReadContext,
-  type OwnerReadErrorCode,
   type OwnerReadResult,
   type RegistryReadRequest,
   type SemanticQueryReadRequest,
@@ -43,6 +37,16 @@ import type { DeviceObservationSnapshotDto } from './device-telemetry-owner-read
 import type { EnergySeriesResponseDto } from './energy-analytics-owner-reader.js';
 import type { RegistryOwnerPayload } from './registry-owner-reader.js';
 import { energyComparisonChart, energySeriesChart, equipmentEnergyChart, historyChart, semanticChart } from './read-tool-charts.js';
+import {
+  authorizeOwnerRead,
+  createRunSiteSnapshot,
+  fail,
+  normalizeToolFailure,
+  ownerReadRequestId,
+  pointKind,
+  unitWords,
+  type RunSiteSnapshot,
+} from './run-site-snapshot.js';
 import { semanticCatalog } from './semantic-catalog.gen.js';
 
 export const HVAC_READ_TOOL_NAMES = Object.freeze([
@@ -83,6 +87,7 @@ export interface CreateHvacReadToolsInput {
   readonly alarmReader: AlarmReader;
   readonly fddReader: FddReader;
   readonly workOrderReader: WorkOrderReader;
+  readonly siteSnapshot?: RunSiteSnapshot;
   readonly limits?: Partial<HvacReadToolLimits>;
 }
 
@@ -241,11 +246,6 @@ const hasOnlyKeys = (value: Record<string, unknown>, allowed: readonly string[])
   Object.keys(value).every((key) => allowed.includes(key))
 );
 
-// A refused argument or a result too large to hand over is the Tool's own wording, so the model is
-// told what to change; every other failure reaches it as a bare code.
-const fail = (code: AgentToolErrorCode, message: string = code): never => {
-  throw new AgentToolError(code, message, code === 'TOOL_ARGUMENTS_INVALID' || code === 'TOOL_RESULT_TOO_LARGE' ? message : undefined);
-};
 const RESULT_TOO_LARGE = '结果太大：缩短日期范围或改用更粗的粒度。';
 
 const requireRecord = (value: unknown, message: string): Record<string, unknown> => {
@@ -532,32 +532,6 @@ const parseEnergyComparison = (
   });
 };
 
-const ownerErrorCode = (code: OwnerReadErrorCode): AgentToolErrorCode => {
-  switch (code) {
-    case 'OWNER_REQUEST_INVALID':
-      return 'TOOL_OWNER_REQUEST_REJECTED';
-    case 'OWNER_RESOURCE_NOT_FOUND':
-      return 'TOOL_OWNER_RESOURCE_NOT_FOUND';
-    case 'OWNER_READ_TIMEOUT':
-      return 'TOOL_OWNER_TIMEOUT';
-    case 'OWNER_READ_UNAVAILABLE':
-      return 'TOOL_OWNER_UNAVAILABLE';
-    case 'OWNER_RESPONSE_TOO_LARGE':
-      return 'TOOL_RESULT_TOO_LARGE';
-    case 'OWNER_RESPONSE_INVALID':
-      return 'TOOL_OWNER_RESPONSE_INVALID';
-  }
-};
-
-const normalizeToolFailure = (error: unknown): AgentToolError => {
-  if (error instanceof AgentToolError) return error;
-  if (error instanceof OwnerReadError) {
-    const code = ownerErrorCode(error.code);
-    return new AgentToolError(code, code);
-  }
-  return new AgentToolError('TOOL_EXECUTION_FAILED');
-};
-
 const runBounded = async <T>(
   signal: AbortSignal,
   timeoutMs: number,
@@ -585,68 +559,9 @@ const runBounded = async <T>(
 
 const requestIdFor = (
   context: AgentRunContext,
-  reader: HvacReadToolName | 'site',
+  reader: HvacReadToolName,
   ownerRequest: Omit<ToolAuthorizableReadRequest, 'requestId'>,
-): string => {
-  const digest = createHash('sha256')
-    .update(JSON.stringify([context.runId, reader, ownerRequest]))
-    .digest('hex');
-  return `agent-tool:${digest}`;
-};
-
-const baseOwnerContext = (
-  context: AgentRunContext,
-  authorization: AuthorizationDecision,
-): OwnerReadContext => {
-  if (authorization.decision !== 'ALLOW'
-    || authorization.delegationGrant === undefined
-    || authorization.delegationGrant.trim().length === 0) {
-    fail('TOOL_UNAUTHORIZED', 'The server authorization context is incomplete.');
-  }
-  return {
-    sessionId: context.sessionId,
-    runId: context.runId,
-    scope: {
-      tenantId: context.tenantId,
-      siteId: context.siteId,
-      assetId: null,
-      deviceId: null,
-    },
-    authorization,
-    correlationId: context.correlationId,
-  };
-};
-
-const authorizeOwnerRead = async (
-  context: AgentRunContext,
-  authorization: AuthorizationDecision,
-  reader: ToolAuthorizationReader,
-  request: ToolAuthorizableReadRequest,
-): Promise<OwnerReadContext> => {
-  const base = baseOwnerContext(context, authorization);
-  const scoped = request.tool === 'telemetry.current.getDeviceObservationSnapshot' || request.tool === 'telemetry.history.aggregateDeviceHistory'
-    ? {
-      ...base,
-      scope: { ...base.scope, deviceId: request.input.deviceId },
-    }
-    : base;
-  const grant = await reader.authorize({ request, context: scoped });
-  if (grant.delegationGrant.trim().length === 0) {
-    fail('TOOL_UNAUTHORIZED', 'Owner authorization returned an empty grant.');
-  }
-  return {
-    ...scoped,
-    authorization: {
-      ...authorization,
-      delegationGrant: grant.delegationGrant,
-      toolDelegationGrants: {
-        ...authorization.toolDelegationGrants,
-        [request.tool]: grant.delegationGrant,
-      },
-      ...(grant.policyRevision === undefined ? {} : { policyRevision: grant.policyRevision }),
-    },
-  };
-};
+): string => ownerReadRequestId(context, reader, ownerRequest);
 
 const assertResultBytes = <T>(result: T, limits: HvacReadToolLimits): T => {
   if (Buffer.byteLength(JSON.stringify(result), 'utf8') > limits.maxResultBytes) {
@@ -655,26 +570,12 @@ const assertResultBytes = <T>(result: T, limits: HvacReadToolLimits): T => {
   return result;
 };
 
-const sitePayloadFrom = (result: OwnerReadResult): Extract<RegistryOwnerPayload, { kind: 'SITE' }> => {
-  const payload = result.payload as RegistryOwnerPayload;
-  if (payload.kind !== 'SITE') fail('TOOL_OWNER_RESPONSE_INVALID');
-  return payload as Extract<RegistryOwnerPayload, { kind: 'SITE' }>;
-};
-
 const assetsPayloadFrom = (
   result: OwnerReadResult,
 ): Extract<RegistryOwnerPayload, { kind: 'SITE_ASSETS' }> => {
   const payload = result.payload as RegistryOwnerPayload;
   if (payload.kind !== 'SITE_ASSETS') fail('TOOL_OWNER_RESPONSE_INVALID');
   return payload as Extract<RegistryOwnerPayload, { kind: 'SITE_ASSETS' }>;
-};
-
-const assetModelPayloadFrom = (
-  result: OwnerReadResult,
-): Extract<RegistryOwnerPayload, { kind: 'SITE_ASSET_MODEL' }> => {
-  const payload = result.payload as RegistryOwnerPayload;
-  if (payload.kind !== 'SITE_ASSET_MODEL') fail('TOOL_OWNER_RESPONSE_INVALID');
-  return payload as Extract<RegistryOwnerPayload, { kind: 'SITE_ASSET_MODEL' }>;
 };
 
 const telemetryPayloadFrom = (result: OwnerReadResult): DeviceObservationSnapshotDto => {
@@ -711,11 +612,6 @@ const ENERGY_WORDS = Object.freeze({ electricity: '用电', cooling: '供冷' } 
 const ENERGY_GRANULARITY_WORDS = Object.freeze({ hour: '按小时', day: '按日', month: '按月' } as const);
 const HISTORY_GRANULARITY_WORDS = Object.freeze({ QUARTER_HOUR: '按15分钟', HOUR: '按小时', DAY: '按日' } as const);
 const QUALITY_POLICY_WORDS = Object.freeze({ VALID_ONLY: '只算有效读数', VALID_AND_SUSPECT: '含可疑读数' } as const);
-const POINT_KIND_WORDS: Readonly<Record<string, string>> = Object.freeze({ TELEMETRY: '读数', COUNTER: '累计量', STATE: '状态' });
-const pointKind = (pointType: string): string => POINT_KIND_WORDS[pointType] ?? '读数';
-// Units as the device page writes them (formatTelemetryUnit in the Web): Registry stores UCUM codes.
-const UNIT_WORDS: Readonly<Record<string, string>> = Object.freeze({ Cel: '°C', 'm3/h': 'm³/h' });
-const unitWords = <T extends string | null | undefined>(unit: T): T | string => (unit ? UNIT_WORDS[unit] ?? unit : unit);
 
 /** 「完整」, or that it is not and how far the data reaches. */
 const dataStatus = (partial: boolean, watermark: string | null | undefined, timezone: string): string => {
@@ -812,25 +708,6 @@ const readHistory = async (
   };
 };
 
-const readSite = async (
-  context: AgentRunContext,
-  authorization: AuthorizationDecision,
-  authorizer: ToolAuthorizationReader,
-  registry: RegistryReader,
-): Promise<{ readonly result: OwnerReadResult; readonly payload: Extract<RegistryOwnerPayload, { kind: 'SITE' }> }> => {
-  const draft = {
-    tool: 'registry.getSite' as const,
-    input: { siteId: context.siteId },
-  };
-  const request: RegistryReadRequest = {
-    ...draft,
-    requestId: requestIdFor(context, 'site', draft),
-  };
-  const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
-  const result = await registry.read({ request, context: ownerContext });
-  return { result, payload: sitePayloadFrom(result) };
-};
-
 const readAssets = async (
   context: AgentRunContext,
   authorization: AuthorizationDecision,
@@ -848,43 +725,6 @@ const readAssets = async (
   const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
   const result = await registry.read({ request, context: ownerContext });
   return { result, payload: assetsPayloadFrom(result) };
-};
-
-const readAssetModel = async (
-  context: AgentRunContext,
-  authorization: AuthorizationDecision,
-  authorizer: ToolAuthorizationReader,
-  registry: RegistryReader,
-): Promise<{ readonly result: OwnerReadResult; readonly model: Extract<RegistryOwnerPayload, { kind: 'SITE_ASSET_MODEL' }>['model'] }> => {
-  const draft = {
-    tool: 'registry.getSiteAssetModel' as const,
-    input: { siteId: context.siteId },
-  };
-  const request: RegistryReadRequest = {
-    ...draft,
-    requestId: requestIdFor(context, 'equipment_list', draft),
-  };
-  const ownerContext = await authorizeOwnerRead(context, authorization, authorizer, request);
-  const result = await registry.read({ request, context: ownerContext });
-  return { result, model: assetModelPayloadFrom(result).model };
-};
-
-/** Each device with the machine it belongs to and its active points, the keys other Tools read by. */
-const describeEquipment = (model: Extract<RegistryOwnerPayload, { kind: 'SITE_ASSET_MODEL' }>['model']) => {
-  const assetsById = new Map(model.assets.map((asset) => [asset.id, asset]));
-  return model.devices.map((device) => {
-    const link = model.relationships.find((relationship) => relationship.status === 'ACTIVE'
-      && relationship.fromType === 'DEVICE' && relationship.fromId === device.id && relationship.toType === 'ASSET');
-    const asset = link === undefined ? undefined : assetsById.get(link.toId);
-    return {
-      deviceId: device.id,
-      name: device.displayName,
-      machine: asset === undefined ? null : asset.displayName,
-      points: model.telemetryPoints
-        .filter((point) => point.reportingDeviceId === device.id && point.status === 'ACTIVE')
-        .map((point) => ({ key: point.pointCode, name: point.displayName, unit: unitWords(point.unit), kind: pointKind(point.pointType) })),
-    };
-  });
 };
 
 const DEVICE_STATE_WORDS: Readonly<Record<string, string>> = Object.freeze({
@@ -1049,7 +889,7 @@ const readSemantic = async (
   timezone: string,
   query: SemanticQueryArguments,
   limits: HvacReadToolLimits,
-  devices: ReadonlyMap<string, string>,
+  devices?: ReadonlyMap<string, string>,
 ) => {
   const payloads = await Promise.all(query.parts.map((part) => (
     readSemanticView(context, authorization, authorizer, reader, timezone, query, part, limits)
@@ -1085,11 +925,15 @@ const readSemantic = async (
 };
 
 // A grouping value as the pages show it; equipment by its device's name.
-const dimensionWords = (name: string, value: string | number | null, devices: ReadonlyMap<string, string>): string | null => {
+const dimensionWords = (
+  name: string,
+  value: string | number | null,
+  devices?: ReadonlyMap<string, string>,
+): string | null => {
   if (name === 'tariff_period' && (value === null || value === '')) return '未计价';
   if (value === null) return null;
   const text = String(value);
-  if (name === 'equipment_id') return devices.get(text) ?? '未登记的设备';
+  if (name === 'equipment_id') return devices?.get(text) ?? '未登记的设备';
   return DIMENSION_WORDS[name]?.[text] ?? text;
 };
 
@@ -1180,7 +1024,7 @@ const readEquipmentEnergy = async (
   authorization: AuthorizationDecision,
   authorizer: ToolAuthorizationReader,
   energy: EnergyAnalyticsReader,
-  registry: RegistryReader,
+  snapshot: RunSiteSnapshot,
   timezone: string,
   query: EnergyArguments,
   limits: HvacReadToolLimits,
@@ -1199,8 +1043,8 @@ const readEquipmentEnergy = async (
     },
   };
   const request: EnergyAnalyticsReadRequest = { ...draft, requestId: requestIdFor(context, 'energy_by_equipment', draft) };
-  const [{ model }, result] = await Promise.all([
-    readAssetModel(context, authorization, authorizer, registry),
+  const [{ equipment: equipmentList }, result] = await Promise.all([
+    snapshot.getAssetModel(context),
     authorizeOwnerRead(context, authorization, authorizer, request).then((ownerContext) => energy.read({ request, context: ownerContext })),
   ]);
   const payload = energyPayloadFrom(result);
@@ -1208,7 +1052,7 @@ const readEquipmentEnergy = async (
   if (deviceSeries.reduce((count, device) => count + device.points.length, payload.points.length) > limits.maxEnergyPoints) {
     fail('TOOL_RESULT_TOO_LARGE', RESULT_TOO_LARGE);
   }
-  const equipment = new Map(describeEquipment(model).map((device) => [device.deviceId, device]));
+  const equipment = new Map(equipmentList.map((device) => [device.deviceId, device]));
   const siteTotalKWh = payload.points.length === 0 ? null : sumKWh(payload.points);
   const devices = deviceSeries
     .map((device) => {
@@ -1271,14 +1115,24 @@ const toolDefinition = (
 export interface CreateSiteDescriberInput {
   readonly toolAuthorizationReader: ToolAuthorizationReader;
   readonly registryReader: RegistryReader;
+  readonly siteSnapshot?: RunSiteSnapshot;
 }
 
 /** The Site's name and time zone for the prompt, read from Registry under the Run's own authorization. */
-export const createSiteDescriber = ({ toolAuthorizationReader, registryReader }: CreateSiteDescriberInput) => (
+export const createSiteDescriber = ({
+  toolAuthorizationReader,
+  registryReader,
+  siteSnapshot,
+}: CreateSiteDescriberInput) => (
   async (authorization: AuthorizationDecision, context: AgentRunContext): Promise<AgentRunSite> => {
     assertExecutionCapability(context, SITE_CAPABILITIES);
-    const { payload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
-    return Object.freeze({ name: payload.site.displayName, timezone: payload.site.timezone });
+    const snapshot = siteSnapshot ?? createRunSiteSnapshot({
+      authorization,
+      toolAuthorizationReader,
+      registryReader,
+    });
+    const { agentSite } = await snapshot.getSite(context);
+    return agentSite;
   }
 );
 
@@ -1294,9 +1148,15 @@ export const createHvacReadTools = ({
   alarmReader,
   fddReader,
   workOrderReader,
+  siteSnapshot,
   limits: inputLimits,
 }: CreateHvacReadToolsInput): readonly AgentTool[] => {
   const limits = normalizeLimits(inputLimits);
+  const snapshot = siteSnapshot ?? createRunSiteSnapshot({
+    authorization,
+    toolAuthorizationReader,
+    registryReader,
+  });
 
   const assetsTool: AgentTool = Object.freeze({
     definition: toolDefinition(
@@ -1330,8 +1190,7 @@ export const createHvacReadTools = ({
       exactEmptyArguments(argumentsValue);
       assertExecutionCapability(context, EQUIPMENT_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
-        const { model } = await readAssetModel(context, authorization, toolAuthorizationReader, registryReader);
-        const devices = describeEquipment(model);
+        const { equipment: devices } = await snapshot.getAssetModel(context);
         const bounded = devices.slice(0, limits.maxAssets);
         return assertResultBytes({
           devices: bounded,
@@ -1352,9 +1211,9 @@ export const createHvacReadTools = ({
       const query = parseTelemetryArguments(argumentsValue);
       assertExecutionCapability(context, TELEMETRY_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
-        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        const { site } = await snapshot.getSite(context);
         return assertResultBytes(
-          await readTelemetry(context, authorization, toolAuthorizationReader, deviceTelemetryReader, sitePayload.site.timezone, query),
+          await readTelemetry(context, authorization, toolAuthorizationReader, deviceTelemetryReader, site.timezone, query),
           limits,
         );
       });
@@ -1373,19 +1232,19 @@ export const createHvacReadTools = ({
       assertExecutionCapability(context, HISTORY_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
         // Each reading by its point's name, for the model and a card's chart (#640), when the asker may read the asset model.
-        const [{ payload: sitePayload }, model] = await Promise.all([
-          readSite(context, authorization, toolAuthorizationReader, registryReader),
+        const [{ site }, assetModel] = await Promise.all([
+          snapshot.getSite(context),
           hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)
-            ? readAssetModel(context, authorization, toolAuthorizationReader, registryReader).then((read) => read.model)
+            ? snapshot.getAssetModel(context)
             : Promise.resolve(null),
         ]);
-        const device = model === null ? undefined : describeEquipment(model).find((candidate) => candidate.deviceId === query.deviceId);
+        const device = assetModel?.equipment.find((candidate) => candidate.deviceId === query.deviceId);
         return assertResultBytes(await readHistory(
           context,
           authorization,
           toolAuthorizationReader,
           telemetryHistoryReader,
-          sitePayload.site.timezone,
+          site.timezone,
           query,
           new Map(device?.points.map((point) => [point.key, point.name]) ?? []),
         ), limits);
@@ -1405,14 +1264,14 @@ export const createHvacReadTools = ({
       const query = parseEnergyWindow(argumentsValue, limits, ALL_ENERGY_TYPES);
       assertExecutionCapability(context, ENERGY_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
-        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        const { site } = await snapshot.getSite(context);
         const result = await readEnergy(
           'energy_query_series',
           context,
           authorization,
           toolAuthorizationReader,
           energyAnalyticsReader,
-          sitePayload.site.timezone,
+          site.timezone,
           query,
           limits,
         );
@@ -1433,7 +1292,7 @@ export const createHvacReadTools = ({
       const query = parseEnergyComparison(argumentsValue, limits);
       assertExecutionCapability(context, ENERGY_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
-        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        const { site } = await snapshot.getSite(context);
         const [baselineSeries, currentSeries] = await Promise.all([
           readEnergy(
             'energy_compare_periods',
@@ -1441,7 +1300,7 @@ export const createHvacReadTools = ({
             authorization,
             toolAuthorizationReader,
             energyAnalyticsReader,
-            sitePayload.site.timezone,
+            site.timezone,
             query.baseline,
             limits,
           ),
@@ -1451,7 +1310,7 @@ export const createHvacReadTools = ({
             authorization,
             toolAuthorizationReader,
             energyAnalyticsReader,
-            sitePayload.site.timezone,
+            site.timezone,
             query.current,
             limits,
           ),
@@ -1477,14 +1336,14 @@ export const createHvacReadTools = ({
       const query = parseEnergyWindow(argumentsValue, limits);
       assertExecutionCapability(context, EQUIPMENT_ENERGY_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
-        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        const { site } = await snapshot.getSite(context);
         return assertResultBytes(await readEquipmentEnergy(
           context,
           authorization,
           toolAuthorizationReader,
           energyAnalyticsReader,
-          registryReader,
-          sitePayload.site.timezone,
+          snapshot,
+          site.timezone,
           query,
           limits,
         ), limits);
@@ -1504,16 +1363,14 @@ export const createHvacReadTools = ({
       const status = ALARM_STATUS[parseAlarmArguments(argumentsValue)];
       assertExecutionCapability(context, ALARM_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
-        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
-        const timezone = sitePayload.site.timezone;
+        const { site } = await snapshot.getSite(context);
+        const timezone = site.timezone;
         const list = await readAlarms(context, authorization, toolAuthorizationReader, alarmReader, status.condition);
         // Each machine by the name the pages use, when the operator may read the device list.
-        const devices = new Map<string, string>(
-          list.items.some((alarm) => alarm.deviceId !== undefined) && hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)
-            ? describeEquipment((await readAssetModel(context, authorization, toolAuthorizationReader, registryReader)).model)
-              .map((device) => [device.deviceId, device.name])
-            : [],
-        );
+        const devices = list.items.some((alarm) => alarm.deviceId !== undefined)
+          && hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)
+          ? (await snapshot.getAssetModel(context)).deviceNamesById
+          : undefined;
         const note = list.items.length === 0 ? status.none : list.hasMore ? `只列出最近 ${ALARM_LIST_LIMIT} 条，还有更多` : undefined;
         return assertResultBytes({
           status: status.words,
@@ -1521,7 +1378,7 @@ export const createHvacReadTools = ({
             title: alarm.title,
             summary: alarm.summary,
             severity: SEVERITY_WORDS[alarm.currentSeverity],
-            ...(alarm.deviceId === undefined ? {} : { device: devices.get(alarm.deviceId) ?? '未登记的设备' }),
+            ...(alarm.deviceId === undefined ? {} : { device: devices?.get(alarm.deviceId) ?? '未登记的设备' }),
             since: siteTime(alarm.firstOccurredAt, timezone),
             latest: siteTime(alarm.lastOccurredAt, timezone),
             ...(alarm.clearedAt === undefined ? {} : { clearedAt: siteTime(alarm.clearedAt, timezone) }),
@@ -1548,21 +1405,19 @@ export const createHvacReadTools = ({
       exactEmptyArguments(argumentsValue);
       assertExecutionCapability(context, FDD_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
-        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
-        const timezone = sitePayload.site.timezone;
+        const { site } = await snapshot.getSite(context);
+        const timezone = site.timezone;
         const findings = await readFddFindings(context, authorization, toolAuthorizationReader, fddReader);
         // Each finding names the equipment it diagnoses, when the operator may read the asset model.
-        const assets = new Map<string, string>(
-          findings.items.length > 0 && hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)
-            ? (await readAssetModel(context, authorization, toolAuthorizationReader, registryReader)).model.assets.map((asset) => [asset.id, asset.displayName])
-            : [],
-        );
+        const assets = findings.items.length > 0 && hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)
+          ? (await snapshot.getAssetModel(context)).assetsById
+          : undefined;
         return assertResultBytes({
           findings: findings.items.map((finding) => {
             const rule = FINDING_RULES[finding.findingType];
             return {
               rule: rule?.rule ?? '其他诊断',
-              equipment: assets.get(finding.assetId) ?? '未登记的设备',
+              equipment: assets?.get(finding.assetId)?.displayName ?? '未登记的设备',
               period: `${siteTime(finding.evaluationFrom, timezone)} 至 ${siteTime(finding.evaluationTo, timezone)}`,
               measured: `${rule?.measures ?? '测量值'} ${finding.observedValue} ${finding.valueUnit}，阈值 ${finding.thresholdValue} ${finding.valueUnit}`,
               deviation: deviation(finding.observedValue, finding.thresholdValue),
@@ -1588,8 +1443,8 @@ export const createHvacReadTools = ({
       exactEmptyArguments(argumentsValue);
       assertExecutionCapability(context, WORK_ORDER_CAPABILITIES);
       return runBounded(signal, limits.timeoutMs, async () => {
-        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
-        const timezone = sitePayload.site.timezone;
+        const { site } = await snapshot.getSite(context);
+        const timezone = site.timezone;
         const list = await readWorkOrders(context, authorization, toolAuthorizationReader, workOrderReader);
         const unfinished = list.items.filter((workOrder) => UNFINISHED_WORK_ORDER.has(workOrder.status));
         const note = !list.hasMore
@@ -1598,11 +1453,10 @@ export const createHvacReadTools = ({
             ? `最近更新的 ${WORK_ORDER_LIST_LIMIT} 张工单都已处理完，更早的没有看`
             : `只看了最近更新的 ${WORK_ORDER_LIST_LIMIT} 张工单，可能还有更早的`;
         // A work order raised from a device names it, when the operator may read the asset model.
-        const assets = new Map<string, string>(
-          unfinished.some((workOrder) => workOrder.assetId !== undefined) && hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)
-            ? (await readAssetModel(context, authorization, toolAuthorizationReader, registryReader)).model.assets.map((asset) => [asset.id, asset.displayName])
-            : [],
-        );
+        const assets = unfinished.some((workOrder) => workOrder.assetId !== undefined)
+          && hasCapabilities(context.capabilities, EQUIPMENT_CAPABILITIES)
+          ? (await snapshot.getAssetModel(context)).assetsById
+          : undefined;
         return assertResultBytes({
           workOrders: unfinished.map((workOrder) => ({
             title: workOrder.title,
@@ -1611,7 +1465,7 @@ export const createHvacReadTools = ({
             status: WORK_ORDER_STATUS_WORDS[workOrder.status],
             assigned: workOrder.assigned ? '已指派' : '未指派',
             ...(workOrder.dueAt === undefined ? {} : { dueAt: siteTime(workOrder.dueAt, timezone) }),
-            from: workOrder.fromAlarm ? '来自告警' : workOrder.assetId !== undefined ? `来自设备 ${assets.get(workOrder.assetId) ?? '未登记的设备'}` : '人工创建',
+            from: workOrder.fromAlarm ? '来自告警' : workOrder.assetId !== undefined ? `来自设备 ${assets?.get(workOrder.assetId)?.displayName ?? '未登记的设备'}` : '人工创建',
             createdAt: siteTime(workOrder.createdAt, timezone),
             updatedAt: siteTime(workOrder.updatedAt, timezone),
           })),
@@ -1638,18 +1492,18 @@ export const createHvacReadTools = ({
         fail('TOOL_ARGUMENTS_INVALID', '按设备分组需要查看设备清单的权限，这次只能不按设备分组。');
       }
       return runBounded(signal, limits.timeoutMs, async () => {
-        const { payload: sitePayload } = await readSite(context, authorization, toolAuthorizationReader, registryReader);
+        const [{ site }, assetModel] = await Promise.all([
+          snapshot.getSite(context),
+          byDevice ? snapshot.getAssetModel(context) : Promise.resolve(null),
+        ]);
         // Equipment is grouped by device id; the model reads each device's name instead.
-        const devices = new Map<string, string>(byDevice
-          ? describeEquipment((await readAssetModel(context, authorization, toolAuthorizationReader, registryReader)).model)
-            .map((device) => [device.deviceId, device.name])
-          : []);
+        const devices = assetModel?.deviceNamesById;
         return assertResultBytes(await readSemantic(
           context,
           authorization,
           toolAuthorizationReader,
           semanticQueryReader,
-          sitePayload.site.timezone,
+          site.timezone,
           query,
           limits,
           devices,
