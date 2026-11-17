@@ -79,6 +79,7 @@ services:
       - ../connectivity/postgres/init/gateway-tunnel-audit.sql:/docker-entrypoint-initdb.d/630.sql:ro
       - ./postgres/init/registry-outbox-delivery-grants.sql:/docker-entrypoint-initdb.d/640.sql:ro
       - ./postgres/init/plant-twin-relationships-and-roles.sql:/docker-entrypoint-initdb.d/650.sql:ro
+      - ./postgres/init/registry-tags-and-template-read.sql:/docker-entrypoint-initdb.d/660.sql:ro
     ports:
       - "127.0.0.1:${S1_POSTGRES_HOST_PORT:-55432}:5432"
     healthcheck:

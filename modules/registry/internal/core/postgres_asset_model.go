@@ -80,8 +80,7 @@ ORDER BY display_name COLLATE "C", id
 		}
 
 		if err := queryAssetRows(ctx, transaction, `
-SELECT id::text, tenant_id::text, site_id::text, code, display_name,
-       device_type, status, revision, created_at, updated_at
+SELECT `+deviceColumns+`
 FROM core_registry.devices
 WHERE site_id = $1::uuid
 ORDER BY display_name COLLATE "C", id

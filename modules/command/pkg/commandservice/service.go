@@ -16,16 +16,17 @@ import (
 )
 
 var (
-	ErrInvalidRequest           = errors.New("invalid command request")
-	ErrCapabilityDenied         = errors.New("capability is not permitted")
-	ErrCurrentStateUnsafe       = errors.New("current telemetry state is unsafe for control")
-	ErrIdempotencyConflict      = errors.New("idempotency key was reused with a different payload")
-	ErrCommandNotFound          = errors.New("command not found")
-	ErrCommandNotDispatchable   = errors.New("command is not dispatchable")
-	ErrAttemptNotFound          = errors.New("command attempt not found")
-	ErrStaleFence               = errors.New("execution fence is stale")
-	ErrUnsupportedResult        = errors.New("unsupported connector result")
-	ErrVerificationNotAvailable = errors.New("no acknowledged command is available for verification")
+	ErrInvalidRequest            = errors.New("invalid command request")
+	ErrCapabilityDenied          = errors.New("capability is not permitted")
+	ErrCurrentStateUnsafe        = errors.New("current telemetry state is unsafe for control")
+	ErrIdempotencyConflict       = errors.New("idempotency key was reused with a different payload")
+	ErrCommandNotFound           = errors.New("command not found")
+	ErrCommandNotDispatchable    = errors.New("command is not dispatchable")
+	ErrAttemptNotFound           = errors.New("command attempt not found")
+	ErrStaleFence                = errors.New("execution fence is stale")
+	ErrUnsupportedResult         = errors.New("unsupported connector result")
+	ErrVerificationNotAvailable  = errors.New("no acknowledged command is available for verification")
+	ErrCapabilityProfileConflict = errors.New("capability profile belongs to another owner")
 )
 
 func commandCapabilityProfile(capability commandmodel.Capability) (revision string, minimum, maximum float64, ok bool) {

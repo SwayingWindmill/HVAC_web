@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
@@ -61,6 +62,7 @@ type publicRegistryRoute struct {
 	internalPath string
 	resource     string
 	action       registryauth.Action
+	altActions   []registryauth.Action
 	scopeID      string
 	list         bool
 	write        bool
@@ -202,6 +204,10 @@ func (h *handler) GetDevice(writer http.ResponseWriter, request *http.Request, d
 }
 
 func (h *handler) serveRegistry(writer http.ResponseWriter, request *http.Request, route publicRegistryRoute, params platformapi.ListRegistryParams) {
+	h.serveRegistryWithQuery(writer, request, route, params, nil)
+}
+
+func (h *handler) serveRegistryWithQuery(writer http.ResponseWriter, request *http.Request, route publicRegistryRoute, params platformapi.ListRegistryParams, extraQuery url.Values) {
 	decision := routeDecisionFromContext(request.Context())
 	if decision.RegistryRevision == 0 || h.registry == nil {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Registry route is not configured.", true, nil)
@@ -216,7 +222,7 @@ func (h *handler) serveRegistry(writer http.ResponseWriter, request *http.Reques
 		}
 		session = resolved
 	}
-	authorization, authorizationFailure := h.authorizeRegistry(request.Context(), session, route.action)
+	authorization, authorizationFailure := h.authorizeRegistryCandidates(request.Context(), session, route.action, route.altActions...)
 	if authorizationFailure != nil {
 		if authorizationFailure.status == http.StatusForbidden || authorizationFailure.status == http.StatusNotFound {
 			writeProblem(writer, request, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The requested Registry resource was not found.", false, nil)
@@ -226,15 +232,18 @@ func (h *handler) serveRegistry(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 
-	query := encodeRegistryQuery(params)
-	if route.resource == "space-children" {
-		parentSpaceID := request.URL.Query().Get("parentSpaceId")
-		if parentSpaceID != "" {
-			values, _ := url.ParseQuery(query)
-			values.Set("parentSpaceId", parentSpaceID)
-			query = values.Encode()
+	values, _ := url.ParseQuery(encodeRegistryQuery(params))
+	for name, list := range extraQuery {
+		for _, item := range list {
+			values.Add(name, item)
 		}
 	}
+	if route.resource == "space-children" && !values.Has("parentSpaceId") {
+		if parentSpaceID := request.URL.Query().Get("parentSpaceId"); parentSpaceID != "" {
+			values.Set("parentSpaceId", parentSpaceID)
+		}
+	}
+	query := values.Encode()
 	if decision.SelectedOwner != ownershipregistry.OwnerCore {
 		writeProblem(writer, request, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE", "Registry unavailable", "The Registry route decision is outside the V2 Core-only boundary.", true, nil)
 		return
@@ -250,6 +259,30 @@ func (h *handler) authorizeRegistry(ctx context.Context, session bffSession, act
 		presenterSPIFFE = h.identity.config.ExecutingWorkloadSPIFFE
 	}
 	return h.authorizeRegistryForPresenter(ctx, session, action, presenterSPIFFE)
+}
+
+func (h *handler) authorizeRegistryCandidates(ctx context.Context, session bffSession, primary registryauth.Action, alts ...registryauth.Action) (registryAuthorization, *registryAuthorizationFailure) {
+	auth, failure := h.authorizeRegistry(ctx, session, primary)
+	if failure == nil {
+		return auth, nil
+	}
+	if failure.status != http.StatusForbidden {
+		return auth, failure
+	}
+	for _, candidate := range alts {
+		if candidate == "" || candidate == primary {
+			continue
+		}
+		altAuth, altFailure := h.authorizeRegistry(ctx, session, candidate)
+		if altFailure == nil {
+			return altAuth, nil
+		}
+		if altFailure.status != http.StatusForbidden {
+			return altAuth, altFailure
+		}
+		failure = altFailure
+	}
+	return registryAuthorization{}, failure
 }
 
 func (h *handler) authorizeRegistryForPresenter(
@@ -433,7 +466,7 @@ func (h *handler) decodeRegistryBackendResponse(owner string, response *http.Res
 		if route.write || route.resource == "space-children" || route.resource == "device-points" || route.resource == "total-electricity-sources" {
 			canonical, err = canonicalRegistryDocument(raw)
 		} else {
-			canonical, err = canonicalRegistrySuccess(route.action, route.scopeID, raw)
+			canonical, err = canonicalRegistrySuccessForRoute(route, raw)
 		}
 		if err != nil {
 			return invalidRegistryResult(owner, result.bodySHA256)
@@ -547,12 +580,30 @@ func matchPublicRegistryRoute(method, path string) (publicRegistryRoute, string,
 		if method == http.MethodPatch {
 			return publicRegistryRoute{template: "/api/v1/sites/{siteId}", internalPath: "/internal/v1/registry/sites/" + siteID, resource: "site-write", action: registryauth.ActionSiteWrite, write: true}, siteID, true
 		}
+	case len(segments) == 1 && segments[0] == "assets" && method == http.MethodGet:
+		return publicRegistryRoute{template: platformapi.ListAssetsPath, internalPath: "/internal/v1/registry/assets", resource: "assets", action: registryauth.ActionAssetList, list: true}, "", true
 	case len(segments) == 2 && segments[0] == "assets" && method == http.MethodGet:
 		id := segments[1]
 		return publicRegistryRoute{template: "/api/v1/assets/{assetId}", internalPath: "/internal/v1/registry/assets/" + id, resource: "assets", action: registryauth.ActionAssetRead}, id, true
+	case len(segments) == 1 && segments[0] == "devices" && method == http.MethodGet:
+		return publicRegistryRoute{template: platformapi.ListDevicesPath, internalPath: "/internal/v1/registry/devices", resource: "devices", action: registryauth.ActionDeviceList, list: true}, "", true
 	case len(segments) == 2 && segments[0] == "devices" && method == http.MethodGet:
 		id := segments[1]
 		return publicRegistryRoute{template: "/api/v1/devices/{deviceId}", internalPath: "/internal/v1/registry/devices/" + id, resource: "devices", action: registryauth.ActionDeviceRead}, id, true
+	case len(segments) == 1 && segments[0] == "templates" && method == http.MethodGet:
+		return publicRegistryRoute{
+			template: platformapi.ListTemplatesPath, internalPath: "/internal/v1/registry/templates", resource: "templates",
+			action:     registryauth.ActionDeviceList,
+			altActions: []registryauth.Action{registryauth.ActionTemplateManage, registryauth.ActionAssetModelRead},
+			list:       true,
+		}, "", true
+	case len(segments) == 3 && segments[0] == "templates" && segments[1] == "revisions" && method == http.MethodGet:
+		id := segments[2]
+		return publicRegistryRoute{
+			template: platformapi.GetTemplateRevisionPathTemplate, internalPath: "/internal/v1/registry/templates/revisions/" + id, resource: "template-revision",
+			action:     registryauth.ActionDeviceList,
+			altActions: []registryauth.Action{registryauth.ActionTemplateManage, registryauth.ActionAssetModelRead},
+		}, id, true
 	case len(segments) == 3 && segments[0] == "devices" && segments[2] == "points" && method == http.MethodGet:
 		id := segments[1]
 		return publicRegistryRoute{template: "/api/v1/devices/{deviceId}/points", internalPath: "/internal/v1/registry/devices/" + id + "/points", resource: "device-points", action: registryauth.ActionDeviceRead, list: true}, id, true
@@ -596,6 +647,15 @@ func matchPublicRegistryRoute(method, path string) (publicRegistryRoute, string,
 		case "tariff":
 			if method == http.MethodGet {
 				return publicRegistryRoute{template: "/api/v1/sites/{siteId}/tariff", internalPath: "/internal/v1/registry/sites/" + siteID + "/tariff", resource: "tariff", action: registryauth.ActionTariffRead, scopeID: siteID}, siteID, true
+			}
+		case "template-assignments":
+			if method == http.MethodGet {
+				return publicRegistryRoute{
+					template: platformapi.ListSiteTemplateAssignmentsPathTemplate, internalPath: "/internal/v1/registry/sites/" + siteID + "/template-assignments", resource: "site-template-assignments",
+					action:     registryauth.ActionAssetModelRead,
+					altActions: []registryauth.Action{registryauth.ActionTemplateManage, registryauth.ActionDeviceList},
+					scopeID:    siteID, list: true,
+				}, siteID, true
 			}
 		case "retire":
 			if method == http.MethodPost {
@@ -646,36 +706,12 @@ func dispatchRegistryRoute(h *handler, writer http.ResponseWriter, request *http
 		return
 	}
 	params := platformapi.ListRegistryParams{}
+	var extraQuery url.Values
 	if route.list {
-		if route.resource == "space-children" {
-			query := request.URL.Query()
-			parentSpaceID := query.Get("parentSpaceId")
-			if parentSpaceID != "" && !isLowerUUIDv7(parentSpaceID) {
-				writeProblem(writer, request, http.StatusBadRequest, "CURSOR_INVALID", "Registry query invalid", "parentSpaceId must be a UUIDv7.", false, nil)
-				return
-			}
-			for name, values := range query {
-				if (name != "limit" && name != "cursor" && name != "parentSpaceId") || len(values) != 1 {
-					writeProblem(writer, request, http.StatusBadRequest, "CURSOR_INVALID", "Registry query invalid", "Space tree accepts only limit, cursor, and parentSpaceId.", false, nil)
-					return
-				}
-			}
-			queryCopy := request.URL.Query()
-			queryCopy.Del("parentSpaceId")
-			original := request.URL.RawQuery
-			request.URL.RawQuery = queryCopy.Encode()
-			var ok bool
-			params, ok = parseRegistryListParams(writer, request)
-			request.URL.RawQuery = original
-			if !ok {
-				return
-			}
-		} else {
-			var ok bool
-			params, ok = parseRegistryListParams(writer, request)
-			if !ok {
-				return
-			}
+		var ok bool
+		params, extraQuery, ok = parseRegistryRouteListQuery(writer, request, route)
+		if !ok {
+			return
 		}
 	} else if request.URL.RawQuery != "" {
 		writeProblem(writer, request, http.StatusBadRequest, "CURSOR_INVALID", "Registry query invalid", "Detail Registry routes do not accept query parameters.", false, nil)
@@ -690,13 +726,13 @@ func dispatchRegistryRoute(h *handler, writer http.ResponseWriter, request *http
 		}
 	case "assets":
 		if route.list {
-			h.ListSiteAssets(writer, request, id, params)
+			h.serveRegistryWithQuery(writer, request, route, params, extraQuery)
 		} else {
 			h.GetAsset(writer, request, id)
 		}
 	case "devices":
 		if route.list {
-			h.ListSiteDevices(writer, request, id, params)
+			h.serveRegistryWithQuery(writer, request, route, params, extraQuery)
 		} else {
 			h.GetDevice(writer, request, id)
 		}
@@ -706,8 +742,8 @@ func dispatchRegistryRoute(h *handler, writer http.ResponseWriter, request *http
 		h.GetSiteAssetModel(writer, request, id)
 	case "tariff":
 		h.GetSiteTariff(writer, request, id)
-	case "space-children", "device-points":
-		h.serveRegistry(writer, request, route, params)
+	case "space-children", "device-points", "templates", "template-revision", "site-template-assignments":
+		h.serveRegistryWithQuery(writer, request, route, params, extraQuery)
 	default:
 		writeProblem(writer, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested public API route does not exist.", false, nil)
 	}
@@ -721,6 +757,21 @@ func canonicalRegistryDocument(raw []byte) ([]byte, error) {
 		return nil, errors.New("registry response is not a canonical JSON object")
 	}
 	return json.Marshal(value)
+}
+
+func canonicalRegistrySuccessForRoute(route publicRegistryRoute, raw []byte) ([]byte, error) {
+	switch route.resource {
+	case "templates":
+		return decodeCanonical[platformapi.TemplateCollection](raw, validateTemplateCollection)
+	case "template-revision":
+		return decodeCanonical[platformapi.TemplateRevision](raw, validateTemplateRevision)
+	case "site-template-assignments":
+		return decodeCanonical[platformapi.TemplateAssignmentCollection](raw, func(value platformapi.TemplateAssignmentCollection) error {
+			return validateTemplateAssignmentCollection(value, route.scopeID)
+		})
+	default:
+		return canonicalRegistrySuccess(route.action, route.scopeID, raw)
+	}
 }
 
 func canonicalRegistrySuccess(action registryauth.Action, scopeID string, raw []byte) ([]byte, error) {
@@ -1046,15 +1097,210 @@ func validateSite(value platformapi.Site) error {
 	return nil
 }
 
+var (
+	registryTagKeyPattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,63}\z`)
+	registryTemplateKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}\z`)
+)
+
+func parseRegistryRouteListQuery(writer http.ResponseWriter, request *http.Request, route publicRegistryRoute) (platformapi.ListRegistryParams, url.Values, bool) {
+	query, err := url.ParseQuery(request.URL.RawQuery)
+	if err != nil {
+		writeProblem(writer, request, http.StatusBadRequest, "CURSOR_INVALID", "Registry query invalid", "The Registry query string is malformed.", false, nil)
+		return platformapi.ListRegistryParams{}, nil, false
+	}
+	extra := url.Values{}
+	baseQuery := url.Values{}
+	for name, values := range query {
+		if name == "limit" || name == "cursor" {
+			baseQuery[name] = values
+			continue
+		}
+		allowed := isAllowedGatewayListParam(route, name)
+		if !allowed || (name != "tag" && len(values) != 1) {
+			writeProblem(writer, request, http.StatusBadRequest, "CURSOR_INVALID", "Registry query invalid", "The Registry query parameters are invalid.", false, []platformapi.FieldError{{Field: name, Message: "unsupported or duplicate query parameter"}})
+			return platformapi.ListRegistryParams{}, nil, false
+		}
+		for _, v := range values {
+			extra.Add(name, v)
+		}
+	}
+	if !validateGatewayExtraQuery(writer, request, route, extra) {
+		return platformapi.ListRegistryParams{}, nil, false
+	}
+	original := request.URL.RawQuery
+	request.URL.RawQuery = baseQuery.Encode()
+	params, ok := parseRegistryListParams(writer, request)
+	request.URL.RawQuery = original
+	if !ok {
+		return platformapi.ListRegistryParams{}, nil, false
+	}
+	return params, extra, true
+}
+
+func isAllowedGatewayListParam(route publicRegistryRoute, name string) bool {
+	switch route.resource {
+	case "space-children":
+		return name == "parentSpaceId"
+	case "assets":
+		switch name {
+		case "status", "assetType", "spaceId", "templateKey", "templateRevisionId", "tag":
+			return true
+		case "siteId":
+			return route.scopeID == ""
+		}
+	case "devices":
+		switch name {
+		case "status", "deviceType", "spaceId", "templateKey", "templateRevisionId", "tag":
+			return true
+		case "siteId":
+			return route.scopeID == ""
+		}
+	case "templates":
+		return name == "templateKind"
+	case "site-template-assignments":
+		return name == "targetType" || name == "targetId"
+	}
+	return false
+}
+
+func validateGatewayExtraQuery(writer http.ResponseWriter, request *http.Request, route publicRegistryRoute, extra url.Values) bool {
+	invalidField := func(field, msg string) bool {
+		writeProblem(writer, request, http.StatusBadRequest, "CURSOR_INVALID", "Registry query invalid", "The Registry query parameters are invalid.", false, []platformapi.FieldError{{Field: field, Message: msg}})
+		return false
+	}
+	switch route.resource {
+	case "space-children":
+		if parentSpaceID := extra.Get("parentSpaceId"); parentSpaceID != "" && !isLowerUUIDv7(parentSpaceID) {
+			return invalidField("parentSpaceId", "parentSpaceId must be a UUIDv7")
+		}
+	case "assets", "devices":
+		if siteID := extra.Get("siteId"); siteID != "" && !isLowerUUIDv7(siteID) {
+			return invalidField("siteId", "siteId must be a UUIDv7")
+		}
+		if status := extra.Get("status"); status != "" && !oneOf(status, "ACTIVE", "INACTIVE", "RETIRED") {
+			return invalidField("status", "status must be ACTIVE, INACTIVE, or RETIRED")
+		}
+		typeField := "assetType"
+		if route.resource == "devices" {
+			typeField = "deviceType"
+		}
+		if tval := extra.Get(typeField); extra.Has(typeField) && (strings.TrimSpace(tval) == "" || strings.TrimSpace(tval) != tval || len(tval) > 128 || hasControlRune(tval)) {
+			return invalidField(typeField, "type filter is invalid")
+		}
+		if spaceID := extra.Get("spaceId"); spaceID != "" && !isLowerUUIDv7(spaceID) {
+			return invalidField("spaceId", "spaceId must be a UUIDv7")
+		}
+		if templateRevID := extra.Get("templateRevisionId"); templateRevID != "" && !isLowerUUIDv7(templateRevID) {
+			return invalidField("templateRevisionId", "templateRevisionId must be a UUIDv7")
+		}
+		if templateKey := extra.Get("templateKey"); templateKey != "" && !registryTemplateKeyPattern.MatchString(templateKey) {
+			return invalidField("templateKey", "templateKey is invalid")
+		}
+		rawTags := extra["tag"]
+		if len(rawTags) > 64 {
+			return invalidField("tag", "at most 64 tag filters are allowed")
+		}
+		seenTagValues := map[string]string{}
+		for _, rawTag := range rawTags {
+			if key, val, hasValue := strings.Cut(rawTag, ":"); hasValue {
+				if !registryTagKeyPattern.MatchString(key) || !validTagValueString(val) {
+					return invalidField("tag", "invalid tag key:value filter")
+				}
+				if prev, exists := seenTagValues[key]; exists && prev != val {
+					return invalidField("tag", "conflicting tag filters for key")
+				}
+				seenTagValues[key] = val
+			} else if !registryTagKeyPattern.MatchString(rawTag) {
+				return invalidField("tag", "invalid tag key filter")
+			}
+		}
+	case "templates":
+		if kind := extra.Get("templateKind"); kind != "" && !oneOf(kind, "ASSET", "DEVICE", "POINT") {
+			return invalidField("templateKind", "templateKind must be ASSET, DEVICE, or POINT")
+		}
+	case "site-template-assignments":
+		if tt := extra.Get("targetType"); tt != "" && !oneOf(tt, "ASSET", "DEVICE", "POINT") {
+			return invalidField("targetType", "targetType must be ASSET, DEVICE, or POINT")
+		}
+		if tid := extra.Get("targetId"); tid != "" && !isLowerUUIDv7(tid) {
+			return invalidField("targetId", "targetId must be a UUIDv7")
+		}
+	}
+	return true
+}
+
+func validateRegistryTags(tags map[string]string) error {
+	if len(tags) > 64 {
+		return errors.New("registry tags exceed maximum cardinality")
+	}
+	for key, val := range tags {
+		if !registryTagKeyPattern.MatchString(key) || !validTagValueString(val) {
+			return errors.New("invalid registry tag entry")
+		}
+	}
+	return nil
+}
+
+func validTagValueString(value string) bool {
+	if !utf8.ValidString(value) || len(value) > 256 {
+		return false
+	}
+	trimmed := strings.TrimSpace(value)
+	return trimmed != "" && trimmed == value && !hasControlRune(value)
+}
+
+func hasControlRune(value string) bool {
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+func validateTemplateCollection(value platformapi.TemplateCollection) error {
+	for _, item := range value.Items {
+		if !isLowerUUIDv7(item.ID) || !isLowerUUIDv7(item.TenantID) || !registryTemplateKeyPattern.MatchString(item.TemplateKey) || !oneOf(item.TemplateKind, "ASSET", "DEVICE", "POINT") || !validRegistryInstant(item.CreatedAt) {
+			return errors.New("invalid Template response")
+		}
+		if item.LatestRevisionID != "" && !isLowerUUIDv7(item.LatestRevisionID) {
+			return errors.New("invalid Template revision identifier")
+		}
+		if item.ReleasedAt != "" && !validRegistryInstant(item.ReleasedAt) {
+			return errors.New("invalid Template release timestamp")
+		}
+	}
+	return validateNextCursor(value.NextCursor)
+}
+
+func validateTemplateRevision(value platformapi.TemplateRevision) error {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.TemplateID) || !registryTemplateKeyPattern.MatchString(value.TemplateKey) || !oneOf(value.TemplateKind, "ASSET", "DEVICE", "POINT") || value.RevisionNumber < 1 || value.Status != "RELEASED" || value.Payload == nil || value.ReleaseReferences == nil || !validRegistryInstant(value.ReleasedAt) {
+		return errors.New("invalid TemplateRevision response")
+	}
+	return nil
+}
+
+func validateTemplateAssignmentCollection(value platformapi.TemplateAssignmentCollection, expectedSiteID string) error {
+	if !isLowerUUIDv7(expectedSiteID) {
+		return errors.New("invalid TemplateAssignment scope")
+	}
+	for _, item := range value.Items {
+		if !isLowerUUIDv7(item.ID) || !isLowerUUIDv7(item.TenantID) || item.SiteID != expectedSiteID || !oneOf(item.TargetType, "ASSET", "DEVICE", "POINT") || !isLowerUUIDv7(item.TargetID) || !isLowerUUIDv7(item.TemplateRevisionID) || !validRegistryInstant(item.ValidFrom) || (item.ValidTo != nil && !validRegistryInstant(*item.ValidTo)) || item.Revision < 1 {
+			return errors.New("invalid TemplateAssignment response")
+		}
+	}
+	return validateNextCursor(value.NextCursor)
+}
+
 func validateAsset(value platformapi.Asset) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.AssetType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.AssetType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) || validateRegistryTags(value.Tags) != nil {
 		return errors.New("invalid Asset response")
 	}
 	return nil
 }
 
 func validateDevice(value platformapi.Device) error {
-	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.DeviceType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) {
+	if !isLowerUUIDv7(value.ID) || !isLowerUUIDv7(value.TenantID) || !isLowerUUIDv7(value.SiteID) || !validRegistryString(value.Code, 128) || !validRegistryString(value.DisplayName, 256) || !validRegistryString(value.DeviceType, 128) || !oneOf(value.Status, "ACTIVE", "INACTIVE", "RETIRED") || value.Revision < 1 || !validRegistryInstant(value.CreatedAt) || !validRegistryInstant(value.UpdatedAt) || validateRegistryTags(value.Tags) != nil {
 		return errors.New("invalid Device response")
 	}
 	return nil

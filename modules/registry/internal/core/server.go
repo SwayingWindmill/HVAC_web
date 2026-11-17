@@ -195,10 +195,7 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		writeProblem(writer, request, statusCode, "CORE_REGISTRY_GRANT_REJECTED", "The Registry delegation grant is not authorized for this query.", false)
 		return
 	}
-	requiredAction := route.action
-	if route.resource == "total-electricity-sources" && len(claims.Actions) == 1 && claims.Actions[0] == registryauth.ActionAssetModelRead {
-		requiredAction = registryauth.ActionAssetModelRead
-	}
+	requiredAction := requiredCoreActionForRoute(route, claims)
 	if err := registryauth.ValidateGrant(claims, registryauth.GrantValidation{
 		Now:                   server.now(),
 		Issuer:                server.grantIssuer,
@@ -390,11 +387,12 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 	if route.write {
 		return server.handleAuthorizedWrite(writer, request, route, claims)
 	}
-	page, err := server.pageRequest(request, route, claims)
+	queryParams, err := server.parseRegistryListQuery(request, route, claims)
 	if err != nil {
 		writeProblem(writer, request, http.StatusBadRequest, "CURSOR_INVALID", "The Registry page cursor or limit is invalid.", false)
 		return http.StatusBadRequest
 	}
+	page := queryParams.page
 
 	switch route.resource {
 	case "sites":
@@ -418,11 +416,13 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		return http.StatusOK
 	case "assets":
 		if route.list {
-			result, err := server.store.ListAssets(request.Context(), claims, route.parentID, page)
+			result, err := server.store.ListAssetsFiltered(request.Context(), claims, queryParams.siteID, queryParams.assetFilter, page)
 			if err != nil {
 				return server.writeStoreError(writer, request, err)
 			}
-			collection, err := server.assetCollection(route, claims, result)
+			collection, err := collectionWithCursor(server.cursorCodec, route.resource, queryParams.cursorParent, route.action, claims, result, func(item Asset) (string, string) {
+				return item.DisplayName, item.ID
+			})
 			if err != nil {
 				return server.writeStoreError(writer, request, err)
 			}
@@ -437,11 +437,13 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 		return http.StatusOK
 	case "devices":
 		if route.list {
-			result, err := server.store.ListDevices(request.Context(), claims, route.parentID, page)
+			result, err := server.store.ListDevicesFiltered(request.Context(), claims, queryParams.siteID, queryParams.deviceFilter, page)
 			if err != nil {
 				return server.writeStoreError(writer, request, err)
 			}
-			collection, err := server.deviceCollection(route, claims, result)
+			collection, err := collectionWithCursor(server.cursorCodec, route.resource, queryParams.cursorParent, route.action, claims, result, func(item Device) (string, string) {
+				return item.DisplayName, item.ID
+			})
 			if err != nil {
 				return server.writeStoreError(writer, request, err)
 			}
@@ -453,6 +455,39 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 			return server.writeStoreError(writer, request, err)
 		}
 		writeJSON(writer, http.StatusOK, item)
+		return http.StatusOK
+	case "templates":
+		result, err := server.store.ListTemplates(request.Context(), claims, queryParams.templateKind, page)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		collection, err := collectionWithCursor(server.cursorCodec, route.resource, queryParams.cursorParent, route.action, claims, result, func(item Template) (string, string) {
+			return item.TemplateKey, item.ID
+		})
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, collection)
+		return http.StatusOK
+	case "template-revision":
+		item, err := server.store.GetTemplateRevision(request.Context(), claims, route.id)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, item)
+		return http.StatusOK
+	case "site-template-assignments":
+		result, err := server.store.ListSiteTemplateAssignments(request.Context(), claims, route.parentID, queryParams.targetType, queryParams.targetID, page)
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		collection, err := collectionWithCursor(server.cursorCodec, route.resource, queryParams.cursorParent, route.action, claims, result, func(item TemplateAssignment) (string, string) {
+			return string(item.TargetType), item.ID
+		})
+		if err != nil {
+			return server.writeStoreError(writer, request, err)
+		}
+		writeJSON(writer, http.StatusOK, collection)
 		return http.StatusOK
 	case "device-bindings":
 		result, err := server.store.ListDeviceBindings(request.Context(), claims, route.parentID, page)
@@ -515,48 +550,247 @@ func (server *server) handleAuthorized(writer http.ResponseWriter, request *http
 	}
 }
 
-func (server *server) pageRequest(request *http.Request, route registryRoute, claims registryauth.GrantClaims) (PageRequest, error) {
+type registryListQuery struct {
+	page         PageRequest
+	cursorParent string
+	siteID       string
+	assetFilter  AssetFilter
+	deviceFilter DeviceFilter
+	templateKind TemplateKind
+	targetType   TemplateKind
+	targetID     string
+}
+
+func requiredCoreActionForRoute(route registryRoute, claims registryauth.GrantClaims) registryauth.Action {
+	if route.resource == "total-electricity-sources" && len(claims.Actions) == 1 && claims.Actions[0] == registryauth.ActionAssetModelRead {
+		return registryauth.ActionAssetModelRead
+	}
+	switch route.resource {
+	case "templates", "template-revision", "site-template-assignments":
+		for _, candidate := range []registryauth.Action{
+			registryauth.ActionTemplateManage,
+			registryauth.ActionAssetModelRead,
+			registryauth.ActionDeviceList,
+		} {
+			for _, granted := range claims.Actions {
+				if registryauth.ActionAllows(granted, candidate) {
+					return candidate
+				}
+			}
+		}
+	}
+	return route.action
+}
+
+func (server *server) parseRegistryListQuery(request *http.Request, route registryRoute, claims registryauth.GrantClaims) (registryListQuery, error) {
 	if !route.list {
 		if request.URL.RawQuery != "" {
-			return PageRequest{}, ErrInvalidPage
+			return registryListQuery{}, ErrInvalidPage
 		}
-		return PageRequest{}, nil
+		return registryListQuery{}, nil
 	}
 	query := request.URL.Query()
 	for name, values := range query {
-		allowed := name == "limit" || name == "cursor" || (route.resource == "space-children" && name == "parentSpaceId")
-		if !allowed || len(values) != 1 {
-			return PageRequest{}, ErrInvalidPage
+		if !isAllowedListQueryParam(route, name) {
+			return registryListQuery{}, ErrInvalidPage
+		}
+		if name != "tag" && len(values) != 1 {
+			return registryListQuery{}, ErrInvalidPage
 		}
 	}
-	if route.resource == "space-children" {
+
+	parsed := registryListQuery{siteID: route.parentID}
+	cursorParent := route.parentID
+
+	switch route.resource {
+	case "space-children":
 		parentSpaceID := query.Get("parentSpaceId")
 		if parentSpaceID != "" && !validUUIDv7(parentSpaceID) {
-			return PageRequest{}, ErrInvalidPage
+			return registryListQuery{}, ErrInvalidPage
 		}
+		cursorParent += "|" + parentSpaceID
+	case "assets", "devices":
+		if route.parentID == "" {
+			siteID := query.Get("siteId")
+			if siteID != "" && !validUUIDv7(siteID) {
+				return registryListQuery{}, ErrInvalidPage
+			}
+			parsed.siteID = siteID
+		}
+		common, tags, tagKeys, err := parseCommonResourceFilterParams(query)
+		if err != nil {
+			return registryListQuery{}, err
+		}
+		if route.resource == "assets" {
+			filter := AssetFilter{
+				Status:             common.status,
+				AssetType:          query.Get("assetType"),
+				SpaceID:            common.spaceID,
+				TemplateKey:        common.templateKey,
+				TemplateRevisionID: common.templateRevisionID,
+				Tags:               tags,
+				TagKeys:            tagKeys,
+			}
+			if err := filter.Validate(); err != nil {
+				return registryListQuery{}, ErrInvalidPage
+			}
+			parsed.assetFilter = filter
+			cursorParent = cursorParentWithFilter(parsed.siteID, filter.CanonicalKey())
+		} else {
+			filter := DeviceFilter{
+				Status:             common.status,
+				DeviceType:         query.Get("deviceType"),
+				SpaceID:            common.spaceID,
+				TemplateKey:        common.templateKey,
+				TemplateRevisionID: common.templateRevisionID,
+				Tags:               tags,
+				TagKeys:            tagKeys,
+			}
+			if err := filter.Validate(); err != nil {
+				return registryListQuery{}, ErrInvalidPage
+			}
+			parsed.deviceFilter = filter
+			cursorParent = cursorParentWithFilter(parsed.siteID, filter.CanonicalKey())
+		}
+	case "templates":
+		kind := TemplateKind(query.Get("templateKind"))
+		switch kind {
+		case "", TemplateAsset, TemplateDevice, TemplatePoint:
+		default:
+			return registryListQuery{}, ErrInvalidPage
+		}
+		parsed.templateKind = kind
+		cursorParent = cursorParentWithFilter("", string(kind))
+	case "site-template-assignments":
+		targetType := TemplateKind(query.Get("targetType"))
+		switch targetType {
+		case "", TemplateAsset, TemplateDevice, TemplatePoint:
+		default:
+			return registryListQuery{}, ErrInvalidPage
+		}
+		targetID := query.Get("targetId")
+		if targetID != "" && !validUUIDv7(targetID) {
+			return registryListQuery{}, ErrInvalidPage
+		}
+		parsed.targetType = targetType
+		parsed.targetID = targetID
+		filterSuffix := ""
+		if targetType != "" || targetID != "" {
+			filterSuffix = string(targetType) + ":" + targetID
+		}
+		cursorParent = cursorParentWithFilter(route.parentID, filterSuffix)
 	}
+
 	limit := 0
 	if raw := query.Get("limit"); raw != "" {
-		parsed, err := strconv.Atoi(raw)
+		value, err := strconv.Atoi(raw)
 		if err != nil {
-			return PageRequest{}, ErrInvalidPage
+			return registryListQuery{}, ErrInvalidPage
 		}
-		limit = parsed
+		limit = value
 	}
 	limit, err := normalizedLimit(limit)
 	if err != nil {
-		return PageRequest{}, err
+		return registryListQuery{}, err
 	}
-	cursorParentID := route.parentID
-	if route.resource == "space-children" {
-		cursorParentID += "|" + query.Get("parentSpaceId")
-	}
-	page, err := server.cursorCodec.Decode(query.Get("cursor"), route.resource, cursorParentID, route.action, claims)
+	page, err := server.cursorCodec.Decode(query.Get("cursor"), route.resource, cursorParent, route.action, claims)
 	if err != nil {
-		return PageRequest{}, err
+		return registryListQuery{}, err
 	}
 	page.Limit = limit
-	return page, nil
+	parsed.page = page
+	parsed.cursorParent = cursorParent
+	return parsed, nil
+}
+
+func isAllowedListQueryParam(route registryRoute, name string) bool {
+	if name == "limit" || name == "cursor" {
+		return true
+	}
+	switch route.resource {
+	case "space-children":
+		return name == "parentSpaceId"
+	case "assets":
+		switch name {
+		case "status", "assetType", "spaceId", "templateKey", "templateRevisionId", "tag":
+			return true
+		case "siteId":
+			return route.parentID == ""
+		}
+	case "devices":
+		switch name {
+		case "status", "deviceType", "spaceId", "templateKey", "templateRevisionId", "tag":
+			return true
+		case "siteId":
+			return route.parentID == ""
+		}
+	case "templates":
+		return name == "templateKind"
+	case "site-template-assignments":
+		return name == "targetType" || name == "targetId"
+	}
+	return false
+}
+
+type commonFilterValues struct {
+	status             string
+	spaceID            string
+	templateKey        string
+	templateRevisionID string
+}
+
+func parseCommonResourceFilterParams(query map[string][]string) (commonFilterValues, map[string]string, []string, error) {
+	first := func(key string) string {
+		if values := query[key]; len(values) > 0 {
+			return values[0]
+		}
+		return ""
+	}
+	common := commonFilterValues{
+		status:             first("status"),
+		spaceID:            first("spaceId"),
+		templateKey:        first("templateKey"),
+		templateRevisionID: first("templateRevisionId"),
+	}
+	rawTags := query["tag"]
+	if len(rawTags) == 0 {
+		return common, nil, nil, nil
+	}
+	tags := map[string]string{}
+	var tagKeys []string
+	for _, raw := range rawTags {
+		if key, val, hasValue := strings.Cut(raw, ":"); hasValue {
+			if prev, exists := tags[key]; exists && prev != val {
+				return commonFilterValues{}, nil, nil, ErrInvalidPage
+			}
+			tags[key] = val
+		} else {
+			tagKeys = append(tagKeys, raw)
+		}
+	}
+	return common, tags, tagKeys, nil
+}
+
+func collectionWithCursor[T any](
+	codec *CursorCodec,
+	resource string,
+	parentID string,
+	action registryauth.Action,
+	claims registryauth.GrantClaims,
+	result PageResult[T],
+	keyFn func(T) (string, string),
+) (Collection[T], error) {
+	collection := Collection[T]{Items: result.Items, HasMore: result.HasMore}
+	if result.HasMore && len(result.Items) > 0 {
+		last := result.Items[len(result.Items)-1]
+		cursorName, cursorID := keyFn(last)
+		cursor, err := codec.Encode(resource, parentID, action, claims, cursorName, cursorID)
+		if err != nil {
+			return Collection[T]{}, err
+		}
+		collection.NextCursor = &cursor
+	}
+	return collection, nil
 }
 
 func (server *server) siteCollection(route registryRoute, claims registryauth.GrantClaims, result PageResult[Site]) (Collection[Site], error) {
@@ -566,32 +800,6 @@ func (server *server) siteCollection(route registryRoute, claims registryauth.Gr
 		cursor, err := server.cursorCodec.Encode(route.resource, route.parentID, route.action, claims, last.DisplayName, last.ID)
 		if err != nil {
 			return Collection[Site]{}, err
-		}
-		collection.NextCursor = &cursor
-	}
-	return collection, nil
-}
-
-func (server *server) assetCollection(route registryRoute, claims registryauth.GrantClaims, result PageResult[Asset]) (Collection[Asset], error) {
-	collection := Collection[Asset]{Items: result.Items, HasMore: result.HasMore}
-	if result.HasMore && len(result.Items) > 0 {
-		last := result.Items[len(result.Items)-1]
-		cursor, err := server.cursorCodec.Encode(route.resource, route.parentID, route.action, claims, last.DisplayName, last.ID)
-		if err != nil {
-			return Collection[Asset]{}, err
-		}
-		collection.NextCursor = &cursor
-	}
-	return collection, nil
-}
-
-func (server *server) deviceCollection(route registryRoute, claims registryauth.GrantClaims, result PageResult[Device]) (Collection[Device], error) {
-	collection := Collection[Device]{Items: result.Items, HasMore: result.HasMore}
-	if result.HasMore && len(result.Items) > 0 {
-		last := result.Items[len(result.Items)-1]
-		cursor, err := server.cursorCodec.Encode(route.resource, route.parentID, route.action, claims, last.DisplayName, last.ID)
-		if err != nil {
-			return Collection[Device]{}, err
 		}
 		collection.NextCursor = &cursor
 	}
@@ -680,8 +888,12 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/assets", resource: "asset-write", parentID: segments[1], action: registryauth.ActionAssetWrite, write: true}, true
 	case method == http.MethodPatch && len(segments) == 4 && segments[0] == "sites" && segments[2] == "assets":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/assets/{assetId}", resource: "asset-write", parentID: segments[1], id: segments[3], action: registryauth.ActionAssetWrite, write: true}, true
+	case method == http.MethodGet && len(segments) == 1 && segments[0] == "assets":
+		return registryRoute{template: RegistryPathPrefix + "assets", resource: "assets", action: registryauth.ActionAssetList, list: true}, true
 	case method == http.MethodGet && len(segments) == 2 && segments[0] == "assets":
 		return registryRoute{template: RegistryPathPrefix + "assets/{assetId}", resource: "assets", id: segments[1], action: registryauth.ActionAssetRead}, true
+	case method == http.MethodGet && len(segments) == 1 && segments[0] == "devices":
+		return registryRoute{template: RegistryPathPrefix + "devices", resource: "devices", action: registryauth.ActionDeviceList, list: true}, true
 	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "devices":
 		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/devices", resource: "devices", parentID: segments[1], action: registryauth.ActionDeviceList, list: true}, true
 	case method == http.MethodPost && len(segments) == 3 && segments[0] == "sites" && segments[2] == "devices":
@@ -720,6 +932,12 @@ func parseRegistryRoute(method, path string) (registryRoute, bool) {
 		return registryRoute{template: RegistryPathPrefix + "devices/{deviceId}", resource: "devices", id: segments[1], action: registryauth.ActionDeviceRead}, true
 	case method == http.MethodGet && len(segments) == 3 && segments[0] == "devices" && segments[2] == "points":
 		return registryRoute{template: RegistryPathPrefix + "devices/{deviceId}/points", resource: "device-points", parentID: segments[1], action: registryauth.ActionDeviceRead, list: true}, true
+	case method == http.MethodGet && len(segments) == 1 && segments[0] == "templates":
+		return registryRoute{template: RegistryPathPrefix + "templates", resource: "templates", action: registryauth.ActionDeviceList, list: true}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "templates" && segments[1] == "revisions":
+		return registryRoute{template: RegistryPathPrefix + "templates/revisions/{revisionId}", resource: "template-revision", id: segments[2], action: registryauth.ActionDeviceList}, true
+	case method == http.MethodGet && len(segments) == 3 && segments[0] == "sites" && segments[2] == "template-assignments":
+		return registryRoute{template: RegistryPathPrefix + "sites/{siteId}/template-assignments", resource: "site-template-assignments", parentID: segments[1], action: registryauth.ActionAssetModelRead, list: true}, true
 	case method == http.MethodPost && len(segments) == 2 && segments[0] == "templates" && segments[1] == "revisions":
 		return registryRoute{template: RegistryPathPrefix + "templates/revisions", resource: "template-release", action: registryauth.ActionTemplateManage, write: true}, true
 	case method == http.MethodPost && len(segments) == 2 && segments[0] == "templates" && segments[1] == "assignments":

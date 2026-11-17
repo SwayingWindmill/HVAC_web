@@ -722,6 +722,8 @@ func ObservabilityRoute(request *http.Request) string {
 		return "connector.prepare"
 	case InternalConnectorCompletePath:
 		return "connector.complete"
+	case InternalCapabilityProfilesSyncPath:
+		return "capability.sync"
 	}
 	if remainder, ok := strings.CutPrefix(path, InternalCommandsPath+"/"); ok && remainder != "" {
 		return commandItemObservabilityRoute(remainder)

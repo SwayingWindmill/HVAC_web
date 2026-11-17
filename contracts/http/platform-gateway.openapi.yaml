@@ -1495,6 +1495,42 @@
         "responses": { "200": { "description": "Updated Site.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Site" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
       }
     },
+    "/api/v1/assets": {
+      "get": {
+        "operationId": "listAssets",
+        "summary": "Search visible Assets across authorized Sites",
+        "parameters": [
+          { "name": "siteId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/PageLimit" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] } },
+          { "name": "assetType", "in": "query", "required": false, "schema": { "type": "string", "minLength": 1, "maxLength": 128 } },
+          { "name": "spaceId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "templateKey", "in": "query", "required": false, "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" } },
+          { "name": "templateRevisionId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "tag", "in": "query", "required": false, "schema": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 321 } } },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized Asset page.",
+            "headers": {
+              "X-Request-ID": { "$ref": "#/components/headers/RequestId" },
+              "traceparent": { "$ref": "#/components/headers/Traceparent" },
+              "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" }
+            },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AssetCollection" } } }
+          },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "504": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/sites/{siteId}/assets": {
       "get": {
         "operationId": "listSiteAssets",
@@ -1509,6 +1545,12 @@
           {
             "$ref": "#/components/parameters/Cursor"
           },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] } },
+          { "name": "assetType", "in": "query", "required": false, "schema": { "type": "string", "minLength": 1, "maxLength": 128 } },
+          { "name": "spaceId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "templateKey", "in": "query", "required": false, "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" } },
+          { "name": "templateRevisionId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "tag", "in": "query", "required": false, "schema": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 321 } } },
           {
             "$ref": "#/components/parameters/RequestId"
           },
@@ -1623,6 +1665,42 @@
         }
       }
     },
+    "/api/v1/devices": {
+      "get": {
+        "operationId": "listDevices",
+        "summary": "Search visible Devices across authorized Sites",
+        "parameters": [
+          { "name": "siteId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/PageLimit" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] } },
+          { "name": "deviceType", "in": "query", "required": false, "schema": { "type": "string", "minLength": 1, "maxLength": 128 } },
+          { "name": "spaceId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "templateKey", "in": "query", "required": false, "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" } },
+          { "name": "templateRevisionId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "tag", "in": "query", "required": false, "schema": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 321 } } },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized Device page.",
+            "headers": {
+              "X-Request-ID": { "$ref": "#/components/headers/RequestId" },
+              "traceparent": { "$ref": "#/components/headers/Traceparent" },
+              "X-Route-Policy-Revision": { "$ref": "#/components/headers/RoutePolicyRevision" }
+            },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeviceCollection" } } }
+          },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "504": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/sites/{siteId}/devices": {
       "get": {
         "operationId": "listSiteDevices",
@@ -1637,6 +1715,12 @@
           {
             "$ref": "#/components/parameters/Cursor"
           },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "RETIRED"] } },
+          { "name": "deviceType", "in": "query", "required": false, "schema": { "type": "string", "minLength": 1, "maxLength": 128 } },
+          { "name": "spaceId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "templateKey", "in": "query", "required": false, "schema": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" } },
+          { "name": "templateRevisionId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "name": "tag", "in": "query", "required": false, "schema": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 321 } } },
           {
             "$ref": "#/components/parameters/RequestId"
           },
@@ -1954,6 +2038,71 @@
         "parameters": [{ "$ref": "#/components/parameters/SiteId" }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/RebindRequest" } } } },
         "responses": { "201": { "description": "New binding interval.", "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/BindingMutationResult" } } } }, "4XX": { "$ref": "#/components/responses/V212Error" }, "5XX": { "$ref": "#/components/responses/V212Error" } }
+      }
+    },
+    "/api/v1/templates": {
+      "get": {
+        "operationId": "listTemplates",
+        "summary": "List Registry Templates visible in the Tenant",
+        "x-architecture-status": "ACTIVE",
+        "parameters": [
+          { "$ref": "#/components/parameters/PageLimit" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "name": "templateKind", "in": "query", "required": false, "schema": { "type": "string", "enum": ["ASSET", "DEVICE", "POINT"] } },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "responses": {
+          "200": { "description": "Authorized Template page.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TemplateCollection" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/templates/revisions/{revisionId}": {
+      "get": {
+        "operationId": "getTemplateRevision",
+        "summary": "Read one released TemplateRevision",
+        "x-architecture-status": "ACTIVE",
+        "x-shape-source": "contracts/http/s05-registry-writer.openapi.json",
+        "parameters": [
+          { "name": "revisionId", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "responses": {
+          "200": { "description": "Released TemplateRevision.", "content": { "application/json": { "schema": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/TemplateRevision" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/template-assignments": {
+      "get": {
+        "operationId": "listSiteTemplateAssignments",
+        "summary": "List TemplateAssignments scoped to one Site",
+        "x-architecture-status": "ACTIVE",
+        "parameters": [
+          { "$ref": "#/components/parameters/SiteId" },
+          { "$ref": "#/components/parameters/PageLimit" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "name": "targetType", "in": "query", "required": false, "schema": { "type": "string", "enum": ["ASSET", "DEVICE", "POINT"] } },
+          { "name": "targetId", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/UUIDv7" } },
+          { "$ref": "#/components/parameters/RequestId" },
+          { "$ref": "#/components/parameters/Traceparent" }
+        ],
+        "responses": {
+          "200": { "description": "Authorized TemplateAssignment page.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TemplateAssignmentCollection" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" },
+          "default": { "$ref": "#/components/responses/Problem" }
+        }
       }
     },
     "/api/v1/templates/revisions": {
@@ -4323,6 +4472,9 @@
           "ratedCapacity": {
             "type": "number",
             "minimum": 0
+          },
+          "tags": {
+            "$ref": "#/components/schemas/TagMap"
           }
         }
       },
@@ -4382,6 +4534,9 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Instant"
+          },
+          "tags": {
+            "$ref": "#/components/schemas/TagMap"
           }
         }
       },
@@ -4619,6 +4774,75 @@
           "hasMore": {
             "type": "boolean"
           }
+        }
+      },
+      "TagMap": {
+        "type": "object",
+        "maxProperties": 64,
+        "propertyNames": {
+          "pattern": "^[a-z0-9][a-z0-9._/-]{0,63}$"
+        },
+        "additionalProperties": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "Template": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "tenantId",
+          "templateKey",
+          "templateKind",
+          "createdAt"
+        ],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/UUIDv7" },
+          "tenantId": { "$ref": "#/components/schemas/UUIDv7" },
+          "templateKey": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "templateKind": { "type": "string", "enum": ["ASSET", "DEVICE", "POINT"] },
+          "latestRevisionId": { "$ref": "#/components/schemas/UUIDv7" },
+          "latestRevisionNumber": { "$ref": "#/components/schemas/Revision" },
+          "releasedAt": { "$ref": "#/components/schemas/Instant" },
+          "createdAt": { "$ref": "#/components/schemas/Instant" }
+        }
+      },
+      "TemplateCollection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "nextCursor", "hasMore"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Template" }
+          },
+          "nextCursor": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/OpaqueCursor" },
+              { "type": "null" }
+            ]
+          },
+          "hasMore": { "type": "boolean" }
+        }
+      },
+      "TemplateAssignmentCollection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items", "nextCursor", "hasMore"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "./s05-registry-writer.openapi.json#/components/schemas/TemplateAssignment" }
+          },
+          "nextCursor": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/OpaqueCursor" },
+              { "type": "null" }
+            ]
+          },
+          "hasMore": { "type": "boolean" }
         }
       },
       "DeviceBindingCollection": {
