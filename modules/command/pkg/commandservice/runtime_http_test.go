@@ -37,6 +37,9 @@ type runtimeStoreStub struct {
 	cancelReq            commandmodel.CancelPendingRequest
 	cancelledIDs         []string
 	cancelErr            error
+	syncTenantID         string
+	syncedProfiles       []CapabilityProfileSyncItem
+	syncErr              error
 }
 
 func (stub *runtimeStoreStub) ClaimDispatch(_ context.Context, tenantID string, _ string, _ time.Duration) (commandmodel.DispatchEnvelope, error) {
@@ -72,6 +75,15 @@ func (stub *runtimeStoreStub) CompleteConnectorEvidence(context.Context, command
 func (stub *runtimeStoreStub) CancelPending(_ context.Context, request commandmodel.CancelPendingRequest) ([]string, error) {
 	stub.cancelReq = request
 	return stub.cancelledIDs, stub.cancelErr
+}
+
+func (stub *runtimeStoreStub) SyncCapabilityProfiles(_ context.Context, tenantID string, _ time.Time, profiles []CapabilityProfileSyncItem) (int, error) {
+	if stub.syncErr != nil {
+		return 0, stub.syncErr
+	}
+	stub.syncTenantID = tenantID
+	stub.syncedProfiles = append([]CapabilityProfileSyncItem(nil), profiles...)
+	return len(profiles), nil
 }
 
 func TestRuntimeHTTPDispatcherClaimsWithinTheNamedTenantAndResolves(t *testing.T) {

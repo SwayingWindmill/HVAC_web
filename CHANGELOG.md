@@ -9,6 +9,10 @@
 
 #### 新增
 
+- 为资产与设备补充标签（`tags` jsonb + GIN 索引）、多维度/跨站点检索、模板只读接口与模板版本业务激活闭环（P1-3）：
+  - 新增迁移 `registry-tags-and-template-read.sql`（`hvac_s1`）与 `command-template-capability-sync.sql`（`hvac_s3`）：为 `core_registry.assets` 与 `core_registry.devices` 增加最多 64 个键值对、序列化不超过 8192 字节的 `tags` 列与 GIN 索引；向运行时只读角色 `s1_core_runtime` 授予模板表（`registry_templates`、`registry_template_revisions`、`registry_template_assignments`）租户及站点行级隔离的只读权限；向 `s3_command_runtime` 授予 `command_runtime.capability_profiles` 写入权限。
+  - 平台网关与契约新增跨站点检索接口 `GET /api/v1/assets`、`GET /api/v1/devices` 与站点内/跨站点多维过滤参数（`siteId`、`status`、`assetType`/`deviceType`、基于空间树递归查询的 `spaceId`、`templateKey`、`templateRevisionId` 与可重复的 `tag=key:value`/`tag=key`），并将过滤条件规范编码绑定到分页游标 `cursor` 防跨条件串页；同时新增模板只读接口 `GET /api/v1/templates`、`GET /api/v1/templates/revisions/{revisionId}` 与 `GET /api/v1/sites/{siteId}/template-assignments`，网关路由注册表 `route-ownership.v1.json` 升级至第 51 版。
+  - `TemplateRevision` 发布新增对可选 `deviceType`、`standardPoints`、`qualityChecks` 与 `capabilityProfiles` 段的严格校验（保持原有参数模板兼容）；`AssignTemplate` 校验目标资源存在且未退役、设备型号匹配，并在同一可序列化事务内把 `standardPoints` 与质量检查规则物化写入 `core_registry.telemetry_points`；`OutboxRelay` 中继 `registry.template-revision.released` 与 `registry.template-assignment.changed`，向遥测服务 `ApplyRegistrySync` 传入模板上下限与 `qualityChecks`（非模板同步留空时保留运维手工配置，不递增 `policy_revision`），并通过新增的 `POST /internal/v1/capability-profiles:sync` 把模板控制能力档位同步到 `command_runtime.capability_profiles`。
 - 引入共享语义设备群孪生库 `libs/planttwin`（`SiteTwin`、`HydraulicGraph`、`EvaluateOperatingSchedule` 及单事务只读视图适配器 `PostgresLoader` / 测试桩 `StaticLoader`），并新建增量迁移 `plant-twin-relationships-and-roles.sql` 与 `ADR 0033`：
   - 新增 `core_registry.asset_relationships`（`SERVES` 水力服务有向无环连接）与 `core_registry.point_subject_bindings.semantic_role`（11 类物理语义角色闭合枚举），配套 10 个按租户与授权站点行级隔离的只读视图 `core_registry.plant_twin_*_v1`。
   - `deploy/sites/songyaxuan.site.json` 补全 16 条水力连接与点位语义角色，`scripts/site-onboarding.mjs` 与 `scripts/phase1-central-plant-simulator.mjs` 同步校验、幂等下发并检测漂移。

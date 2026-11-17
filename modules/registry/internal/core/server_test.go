@@ -48,23 +48,31 @@ func (provider *countingGrantStatusProvider) Lookup(_ context.Context, _ registr
 }
 
 type fakeRegistryStore struct {
-	sites         PageResult[Site]
-	site          Site
-	assets        PageResult[Asset]
-	assetItem     Asset
-	devices       PageResult[Device]
-	device        Device
-	bindings      PageResult[DeviceBinding]
-	siteBindings  SiteMeterBindings
-	totalSources  SiteTotalElectricitySources
-	spaceChildren PageResult[Space]
-	devicePoints  PageResult[TelemetryPoint]
-	assetModel    SiteAssetModel
-	tariff        SiteTariff
-	err           error
-	lastClaims    registryauth.GrantClaims
-	lastPage      PageRequest
-	lastID        string
+	sites            PageResult[Site]
+	site             Site
+	assets           PageResult[Asset]
+	assetItem        Asset
+	devices          PageResult[Device]
+	device           Device
+	bindings         PageResult[DeviceBinding]
+	siteBindings     SiteMeterBindings
+	totalSources     SiteTotalElectricitySources
+	spaceChildren    PageResult[Space]
+	devicePoints     PageResult[TelemetryPoint]
+	assetModel       SiteAssetModel
+	tariff           SiteTariff
+	templates        PageResult[Template]
+	templateRevision TemplateRevision
+	templateAssigns  PageResult[TemplateAssignment]
+	err              error
+	lastClaims       registryauth.GrantClaims
+	lastPage         PageRequest
+	lastID           string
+	lastAssetFilter  AssetFilter
+	lastDeviceFilter DeviceFilter
+	lastTemplateKind TemplateKind
+	lastTargetType   TemplateKind
+	lastTargetID     string
 }
 
 func (store *fakeRegistryStore) ListSites(_ context.Context, claims registryauth.GrantClaims, page PageRequest) (PageResult[Site], error) {
@@ -76,7 +84,10 @@ func (store *fakeRegistryStore) GetSite(_ context.Context, claims registryauth.G
 	return store.site, store.err
 }
 func (store *fakeRegistryStore) ListAssets(_ context.Context, claims registryauth.GrantClaims, id string, page PageRequest) (PageResult[Asset], error) {
-	store.lastClaims, store.lastID, store.lastPage = claims, id, page
+	return store.ListAssetsFiltered(context.Background(), claims, id, AssetFilter{}, page)
+}
+func (store *fakeRegistryStore) ListAssetsFiltered(_ context.Context, claims registryauth.GrantClaims, id string, filter AssetFilter, page PageRequest) (PageResult[Asset], error) {
+	store.lastClaims, store.lastID, store.lastAssetFilter, store.lastPage = claims, id, filter, page
 	return store.assets, store.err
 }
 func (store *fakeRegistryStore) GetAsset(_ context.Context, claims registryauth.GrantClaims, id string) (Asset, error) {
@@ -84,8 +95,23 @@ func (store *fakeRegistryStore) GetAsset(_ context.Context, claims registryauth.
 	return store.assetItem, store.err
 }
 func (store *fakeRegistryStore) ListDevices(_ context.Context, claims registryauth.GrantClaims, id string, page PageRequest) (PageResult[Device], error) {
-	store.lastClaims, store.lastID, store.lastPage = claims, id, page
+	return store.ListDevicesFiltered(context.Background(), claims, id, DeviceFilter{}, page)
+}
+func (store *fakeRegistryStore) ListDevicesFiltered(_ context.Context, claims registryauth.GrantClaims, id string, filter DeviceFilter, page PageRequest) (PageResult[Device], error) {
+	store.lastClaims, store.lastID, store.lastDeviceFilter, store.lastPage = claims, id, filter, page
 	return store.devices, store.err
+}
+func (store *fakeRegistryStore) ListTemplates(_ context.Context, claims registryauth.GrantClaims, kind TemplateKind, page PageRequest) (PageResult[Template], error) {
+	store.lastClaims, store.lastTemplateKind, store.lastPage = claims, kind, page
+	return store.templates, store.err
+}
+func (store *fakeRegistryStore) GetTemplateRevision(_ context.Context, claims registryauth.GrantClaims, id string) (TemplateRevision, error) {
+	store.lastClaims, store.lastID = claims, id
+	return store.templateRevision, store.err
+}
+func (store *fakeRegistryStore) ListSiteTemplateAssignments(_ context.Context, claims registryauth.GrantClaims, siteID string, targetType TemplateKind, targetID string, page PageRequest) (PageResult[TemplateAssignment], error) {
+	store.lastClaims, store.lastID, store.lastTargetType, store.lastTargetID, store.lastPage = claims, siteID, targetType, targetID, page
+	return store.templateAssigns, store.err
 }
 func (store *fakeRegistryStore) GetDevice(_ context.Context, claims registryauth.GrantClaims, id string) (Device, error) {
 	store.lastClaims, store.lastID = claims, id

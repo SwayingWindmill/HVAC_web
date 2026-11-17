@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"regexp"
 	"sort"
@@ -37,16 +38,19 @@ type RegistryDeviceSync struct {
 
 // RegistryPointSync describes a telemetry point policy derived from Registry metadata.
 type RegistryPointSync struct {
-	PointID                       string `json:"pointId"`
-	SensorID                      string `json:"sensorId,omitempty"`
-	TelemetryKey                  string `json:"telemetryKey"`
-	PointType                     string `json:"pointType"`
-	ValueType                     string `json:"valueType"`
-	Unit                          string `json:"unit,omitempty"`
-	SampleIntervalSeconds         int    `json:"sampleIntervalSeconds,omitempty"`
-	FreshWithinSeconds            int    `json:"freshWithinSeconds,omitempty"`
-	ExpectedSampleIntervalSeconds int    `json:"expectedSampleIntervalSeconds,omitempty"`
-	Status                        string `json:"status"`
+	PointID                       string         `json:"pointId"`
+	SensorID                      string         `json:"sensorId,omitempty"`
+	TelemetryKey                  string         `json:"telemetryKey"`
+	PointType                     string         `json:"pointType"`
+	ValueType                     string         `json:"valueType"`
+	Unit                          string         `json:"unit,omitempty"`
+	SampleIntervalSeconds         int            `json:"sampleIntervalSeconds,omitempty"`
+	FreshWithinSeconds            int            `json:"freshWithinSeconds,omitempty"`
+	ExpectedSampleIntervalSeconds int            `json:"expectedSampleIntervalSeconds,omitempty"`
+	Status                        string         `json:"status"`
+	MinimumNumber                 *float64       `json:"minimumNumber,omitempty"`
+	MaximumNumber                 *float64       `json:"maximumNumber,omitempty"`
+	QualityChecks                 map[string]any `json:"qualityChecks,omitempty"`
 }
 
 // RegistryRetiredPoint identifies a point that must be marked unconfigured in Telemetry.
@@ -97,10 +101,14 @@ func (request RegistrySyncRequest) validate() error {
 			if strings.ToUpper(strings.TrimSpace(pt.PointType)) == "COMMAND" {
 				continue
 			}
-			switch strings.ToUpper(strings.TrimSpace(pt.ValueType)) {
+			valueType := strings.ToUpper(strings.TrimSpace(pt.ValueType))
+			switch valueType {
 			case "NUMBER", "STRING", "BOOLEAN", "JSON":
 			default:
 				return ErrRegistrySyncInvalid
+			}
+			if _, _, _, err := extractRegistryPointQuality(pt, valueType); err != nil {
+				return err
 			}
 		}
 	}
@@ -110,6 +118,44 @@ func (request RegistrySyncRequest) validate() error {
 		}
 	}
 	return nil
+}
+
+func extractRegistryPointQuality(pt RegistryPointSync, valueType string) (any, any, any, error) {
+	var minNum, maxNum any
+	if valueType == "NUMBER" {
+		if pt.MinimumNumber != nil {
+			if math.IsNaN(*pt.MinimumNumber) || math.IsInf(*pt.MinimumNumber, 0) {
+				return nil, nil, nil, fmt.Errorf("%w: invalid minimumNumber", ErrRegistrySyncInvalid)
+			}
+			v := *pt.MinimumNumber
+			minNum = v
+		}
+		if pt.MaximumNumber != nil {
+			if math.IsNaN(*pt.MaximumNumber) || math.IsInf(*pt.MaximumNumber, 0) {
+				return nil, nil, nil, fmt.Errorf("%w: invalid maximumNumber", ErrRegistrySyncInvalid)
+			}
+			v := *pt.MaximumNumber
+			maxNum = v
+		}
+		if pt.MinimumNumber != nil && pt.MaximumNumber != nil && *pt.MaximumNumber < *pt.MinimumNumber {
+			return nil, nil, nil, fmt.Errorf("%w: maximumNumber < minimumNumber", ErrRegistrySyncInvalid)
+		}
+	}
+	var qualityChecksParam any
+	if len(pt.QualityChecks) > 0 {
+		qcRaw, err := json.Marshal(pt.QualityChecks)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("%w: marshal qualityChecks: %v", ErrRegistrySyncInvalid, err)
+		}
+		if len(qcRaw) > 4096 {
+			return nil, nil, nil, fmt.Errorf("%w: qualityChecks exceeds 4096 bytes", ErrRegistrySyncInvalid)
+		}
+		if _, err := parseQualityChecks(qcRaw); err != nil {
+			return nil, nil, nil, fmt.Errorf("%w: invalid qualityChecks: %v", ErrRegistrySyncInvalid, err)
+		}
+		qualityChecksParam = string(qcRaw)
+	}
+	return minNum, maxNum, qualityChecksParam, nil
 }
 
 func normalizeFreshnessTiming(pt RegistryPointSync) (sampleSec, freshSec int) {
@@ -272,12 +318,18 @@ ON CONFLICT (device_id) DO NOTHING
 				expectedUnit = unit
 			}
 
+			minNum, maxNum, qualityChecksParam, err := extractRegistryPointQuality(pt, valueType)
+			if err != nil {
+				return RegistrySyncResult{}, fmt.Errorf("telemetry point %s/%s: %w", deviceID, key, err)
+			}
+
 			tag, err := tx.Exec(ctx, `
 INSERT INTO telemetry_runtime.freshness_policies (
   device_id, telemetry_key, policy_revision, fresh_within_seconds, configured,
-  expected_sample_interval_seconds, value_type, expected_unit, updated_at
+  expected_sample_interval_seconds, value_type, expected_unit,
+  minimum_number, maximum_number, quality_checks, updated_at
 ) VALUES (
-  $1::uuid, $2, 1, $3, $4, $5, $6, $7, $8
+  $1::uuid, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11
 )
 ON CONFLICT (device_id, telemetry_key) DO UPDATE SET
   policy_revision = telemetry_runtime.freshness_policies.policy_revision + 1,
@@ -286,23 +338,50 @@ ON CONFLICT (device_id, telemetry_key) DO UPDATE SET
   expected_sample_interval_seconds = EXCLUDED.expected_sample_interval_seconds,
   value_type = EXCLUDED.value_type,
   expected_unit = EXCLUDED.expected_unit,
-  minimum_number = CASE WHEN EXCLUDED.value_type = 'NUMBER' THEN telemetry_runtime.freshness_policies.minimum_number ELSE NULL END,
-  maximum_number = CASE WHEN EXCLUDED.value_type = 'NUMBER' THEN telemetry_runtime.freshness_policies.maximum_number ELSE NULL END,
+  minimum_number = CASE
+    WHEN EXCLUDED.value_type <> 'NUMBER' THEN NULL
+    WHEN EXCLUDED.minimum_number IS NOT NULL THEN EXCLUDED.minimum_number
+    WHEN EXCLUDED.maximum_number IS NOT NULL AND telemetry_runtime.freshness_policies.minimum_number > EXCLUDED.maximum_number THEN NULL
+    ELSE telemetry_runtime.freshness_policies.minimum_number
+  END,
+  maximum_number = CASE
+    WHEN EXCLUDED.value_type <> 'NUMBER' THEN NULL
+    WHEN EXCLUDED.maximum_number IS NOT NULL THEN EXCLUDED.maximum_number
+    WHEN EXCLUDED.minimum_number IS NOT NULL AND telemetry_runtime.freshness_policies.maximum_number < EXCLUDED.minimum_number THEN NULL
+    ELSE telemetry_runtime.freshness_policies.maximum_number
+  END,
+  quality_checks = COALESCE(EXCLUDED.quality_checks, telemetry_runtime.freshness_policies.quality_checks),
   updated_at = EXCLUDED.updated_at
 WHERE (
   telemetry_runtime.freshness_policies.configured,
   telemetry_runtime.freshness_policies.expected_sample_interval_seconds,
   telemetry_runtime.freshness_policies.fresh_within_seconds,
   telemetry_runtime.freshness_policies.value_type,
-  telemetry_runtime.freshness_policies.expected_unit
+  telemetry_runtime.freshness_policies.expected_unit,
+  telemetry_runtime.freshness_policies.minimum_number,
+  telemetry_runtime.freshness_policies.maximum_number,
+  telemetry_runtime.freshness_policies.quality_checks
 ) IS DISTINCT FROM (
   EXCLUDED.configured,
   EXCLUDED.expected_sample_interval_seconds,
   EXCLUDED.fresh_within_seconds,
   EXCLUDED.value_type,
-  EXCLUDED.expected_unit
+  EXCLUDED.expected_unit,
+  CASE
+    WHEN EXCLUDED.value_type <> 'NUMBER' THEN NULL
+    WHEN EXCLUDED.minimum_number IS NOT NULL THEN EXCLUDED.minimum_number
+    WHEN EXCLUDED.maximum_number IS NOT NULL AND telemetry_runtime.freshness_policies.minimum_number > EXCLUDED.maximum_number THEN NULL
+    ELSE telemetry_runtime.freshness_policies.minimum_number
+  END,
+  CASE
+    WHEN EXCLUDED.value_type <> 'NUMBER' THEN NULL
+    WHEN EXCLUDED.maximum_number IS NOT NULL THEN EXCLUDED.maximum_number
+    WHEN EXCLUDED.minimum_number IS NOT NULL AND telemetry_runtime.freshness_policies.maximum_number < EXCLUDED.minimum_number THEN NULL
+    ELSE telemetry_runtime.freshness_policies.maximum_number
+  END,
+  COALESCE(EXCLUDED.quality_checks, telemetry_runtime.freshness_policies.quality_checks)
 )
-`, deviceID, key, freshSec, configured, sampleSec, valueType, expectedUnit, now)
+`, deviceID, key, freshSec, configured, sampleSec, valueType, expectedUnit, minNum, maxNum, qualityChecksParam, now)
 			if err != nil {
 				return RegistrySyncResult{}, fmt.Errorf("upsert telemetry freshness policy %s/%s: %w", deviceID, key, err)
 			}

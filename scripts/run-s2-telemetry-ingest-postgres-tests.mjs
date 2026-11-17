@@ -86,7 +86,7 @@ try {
   report.assertions.goIntegration = run(process.execPath, [
     'scripts/run-isolated-go.mjs',
     '--module=modules/telemetry',
-    'test', '-count=1', '-run', '^(TestPostgresConcurrentDevicesDoNotConflict|TestPostgresIngestEndToEnd|TestPostgresPruneRemovesOnlyFinishedHistory|TestPostgresPresenceSweepAndCopiedReadings|TestPostgresBatchMultiPointSingleDeviceAdvancesRevisionOnce|TestPostgresBatchInBatchDuplicateReplayedAndOutOfOrder|TestPostgresBatchSamePointHealthAndCrossPointQualityVisibility|TestPostgresBatchMixedValidAndQuarantined|TestPostgresBatchOverlappingConcurrentDevicesAndReadsDoNotDeadlock|TestPostgresHistoricalObservationBatchPreservesSnapshot|TestPostgresBatchAndProbeOffsetSweepDoNotDeadlock)$', '-v', './pkg/telemetry/...',
+    'test', '-count=1', '-run', '^(TestPostgresConcurrentDevicesDoNotConflict|TestPostgresIngestEndToEnd|TestPostgresPruneRemovesOnlyFinishedHistory|TestPostgresPresenceSweepAndCopiedReadings|TestPostgresBatchMultiPointSingleDeviceAdvancesRevisionOnce|TestPostgresBatchInBatchDuplicateReplayedAndOutOfOrder|TestPostgresBatchSamePointHealthAndCrossPointQualityVisibility|TestPostgresBatchMixedValidAndQuarantined|TestPostgresBatchOverlappingConcurrentDevicesAndReadsDoNotDeadlock|TestPostgresHistoricalObservationBatchPreservesSnapshot|TestPostgresBatchAndProbeOffsetSweepDoNotDeadlock|TestPostgresApplyRegistrySyncTemplateQualityAndOperatorPreservation)$', '-v', './pkg/telemetry/...',
   ], {
     env: {
       ...process.env,

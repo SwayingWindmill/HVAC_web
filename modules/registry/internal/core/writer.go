@@ -73,23 +73,25 @@ type SpaceMutation struct {
 }
 
 type AssetMutation struct {
-	ID          string       `json:"id,omitempty"`
-	SiteID      string       `json:"siteId"`
-	Code        string       `json:"code"`
-	DisplayName string       `json:"displayName"`
-	AssetType   string       `json:"assetType"`
-	Status      string       `json:"status"`
-	Meta        MutationMeta `json:"meta"`
+	ID          string            `json:"id,omitempty"`
+	SiteID      string            `json:"siteId"`
+	Code        string            `json:"code"`
+	DisplayName string            `json:"displayName"`
+	AssetType   string            `json:"assetType"`
+	Status      string            `json:"status"`
+	Tags        map[string]string `json:"tags,omitempty"`
+	Meta        MutationMeta      `json:"meta"`
 }
 
 type DeviceMutation struct {
-	ID          string       `json:"id,omitempty"`
-	SiteID      string       `json:"siteId"`
-	Code        string       `json:"code"`
-	DisplayName string       `json:"displayName"`
-	DeviceType  string       `json:"deviceType"`
-	Status      string       `json:"status"`
-	Meta        MutationMeta `json:"meta"`
+	ID          string            `json:"id,omitempty"`
+	SiteID      string            `json:"siteId"`
+	Code        string            `json:"code"`
+	DisplayName string            `json:"displayName"`
+	DeviceType  string            `json:"deviceType"`
+	Status      string            `json:"status"`
+	Tags        map[string]string `json:"tags,omitempty"`
+	Meta        MutationMeta      `json:"meta"`
 }
 
 type SensorMutation struct {
@@ -191,7 +193,7 @@ func (input AssetMutation) Validate() error {
 	if strings.TrimSpace(input.AssetType) == "" || len(input.AssetType) > 64 {
 		return ErrInvalidMutation
 	}
-	return nil
+	return ValidateTags(input.Tags)
 }
 
 func (input DeviceMutation) Validate() error {
@@ -201,7 +203,7 @@ func (input DeviceMutation) Validate() error {
 	if strings.TrimSpace(input.DeviceType) == "" || len(input.DeviceType) > 64 {
 		return ErrInvalidMutation
 	}
-	return nil
+	return ValidateTags(input.Tags)
 }
 
 func (input SensorMutation) Validate() error {
@@ -390,7 +392,7 @@ func (request ReleaseTemplateRequest) Validate() error {
 			return ErrInvalidMutation
 		}
 	}
-	return nil
+	return validateTemplateReleasePayload(request.TemplateKind, request.Payload)
 }
 
 type TemplateAssignment struct {

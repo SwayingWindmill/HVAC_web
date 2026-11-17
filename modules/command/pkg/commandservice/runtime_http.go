@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -14,15 +15,36 @@ import (
 )
 
 const (
-	InternalDispatchClaimPath        = "/internal/v1/dispatches:claim"
-	InternalDispatchResolvePath      = "/internal/v1/dispatches:resolve"
-	InternalVerificationClaimPath    = "/internal/v1/verifications:claim"
-	InternalVerificationResolvePath  = "/internal/v1/verifications:resolve"
-	InternalConnectorPreparePath     = "/internal/v1/connector-evidence:prepare"
-	InternalConnectorCompletePath    = "/internal/v1/connector-evidence:complete"
-	InternalCommandCancelRetiredPath = "/internal/v1/commands:cancelRetiredTarget"
-	maximumRuntimeRequestBody        = int64(256 << 10)
+	InternalDispatchClaimPath          = "/internal/v1/dispatches:claim"
+	InternalDispatchResolvePath        = "/internal/v1/dispatches:resolve"
+	InternalVerificationClaimPath      = "/internal/v1/verifications:claim"
+	InternalVerificationResolvePath    = "/internal/v1/verifications:resolve"
+	InternalConnectorPreparePath       = "/internal/v1/connector-evidence:prepare"
+	InternalConnectorCompletePath      = "/internal/v1/connector-evidence:complete"
+	InternalCommandCancelRetiredPath   = "/internal/v1/commands:cancelRetiredTarget"
+	InternalCapabilityProfilesSyncPath = "/internal/v1/capability-profiles:sync"
+	maximumRuntimeRequestBody          = int64(256 << 10)
 )
+
+// CapabilityProfileSyncItem represents a template-derived capability profile catalog entry.
+type CapabilityProfileSyncItem struct {
+	CapabilityName     string  `json:"capabilityName"`
+	CapabilityRevision string  `json:"capabilityRevision"`
+	Status             string  `json:"status"`
+	CanonicalUnit      string  `json:"canonicalUnit"`
+	MinimumValue       float64 `json:"minimumValue"`
+	MaximumValue       float64 `json:"maximumValue"`
+	MaximumDelta       float64 `json:"maximumDelta"`
+	RiskLevel          string  `json:"riskLevel"`
+	ApprovalPolicy     string  `json:"approvalPolicy"`
+	RetryPolicy        string  `json:"retryPolicy"`
+	ConnectorKind      string  `json:"connectorKind"`
+}
+
+// CapabilityProfileSyncStore persists template-derived capability profiles in command runtime.
+type CapabilityProfileSyncStore interface {
+	SyncCapabilityProfiles(context.Context, string, time.Time, []CapabilityProfileSyncItem) (int, error)
+}
 
 type RuntimeStore interface {
 	ClaimDispatch(context.Context, string, string, time.Duration) (commandmodel.DispatchEnvelope, error)
@@ -117,12 +139,20 @@ func (handler *runtimeHTTPHandler) ServeHTTP(writer http.ResponseWriter, request
 		return
 	}
 	peer := peerSPIFFE(request)
-	if request.URL.Path == InternalCommandCancelRetiredPath {
+	if request.URL.Path == InternalCommandCancelRetiredPath || request.URL.Path == InternalCapabilityProfilesSyncPath {
 		if _, ok := handler.coreRegistrySPIFFEs[peer]; !ok {
 			writeRuntimeProblem(writer, http.StatusForbidden, "COMMAND_RUNTIME_WORKLOAD_FORBIDDEN", false)
 			return
 		}
+		if request.Method != http.MethodPost {
+			writeRuntimeProblem(writer, http.StatusMethodNotAllowed, "COMMAND_RUNTIME_METHOD_NOT_ALLOWED", false)
+			return
+		}
 		request.Body = http.MaxBytesReader(writer, request.Body, maximumRuntimeRequestBody)
+		if request.URL.Path == InternalCapabilityProfilesSyncPath {
+			handler.syncCapabilityProfiles(writer, request)
+			return
+		}
 		handler.cancelRetiredTarget(writer, request)
 		return
 	}
@@ -197,6 +227,85 @@ func (handler *runtimeHTTPHandler) cancelRetiredTarget(writer http.ResponseWrite
 		cancelledIDs = []string{}
 	}
 	writeRuntimeJSON(writer, http.StatusOK, map[string]any{"cancelledCommandIds": cancelledIDs})
+}
+
+type runtimeSyncCapabilityProfilesRequest struct {
+	TenantID       string                      `json:"tenantId"`
+	SourceSyncedAt *time.Time                  `json:"sourceSyncedAt,omitempty"`
+	Profiles       []CapabilityProfileSyncItem `json:"profiles"`
+}
+
+func (handler *runtimeHTTPHandler) syncCapabilityProfiles(writer http.ResponseWriter, request *http.Request) {
+	var input runtimeSyncCapabilityProfilesRequest
+	if !decodeRuntimeJSON(writer, request, &input) {
+		return
+	}
+	tenantID := strings.TrimSpace(input.TenantID)
+	if !commandmodel.IsUUIDv7(tenantID) || len(input.Profiles) == 0 {
+		writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
+		return
+	}
+	for _, profile := range input.Profiles {
+		if !validCapabilityProfileSyncItem(profile) {
+			writeRuntimeProblem(writer, http.StatusBadRequest, "COMMAND_RUNTIME_REQUEST_INVALID", false)
+			return
+		}
+	}
+	syncer, ok := handler.store.(CapabilityProfileSyncStore)
+	if !ok {
+		writeRuntimeProblem(writer, http.StatusNotImplemented, "COMMAND_CAPABILITY_SYNC_UNSUPPORTED", false)
+		return
+	}
+	var sourceSyncedAt time.Time
+	if input.SourceSyncedAt != nil && !input.SourceSyncedAt.IsZero() {
+		sourceSyncedAt = input.SourceSyncedAt.UTC()
+	}
+	syncedCount, err := syncer.SyncCapabilityProfiles(request.Context(), tenantID, sourceSyncedAt, input.Profiles)
+	if err != nil {
+		writeRuntimeStoreError(writer, err)
+		return
+	}
+	writeRuntimeJSON(writer, http.StatusOK, map[string]any{"syncedCount": syncedCount})
+}
+
+func validCapabilityProfileSyncItem(profile CapabilityProfileSyncItem) bool {
+	if strings.TrimSpace(profile.CapabilityName) == "" || strings.TrimSpace(profile.CapabilityName) != profile.CapabilityName || len(profile.CapabilityName) > 128 {
+		return false
+	}
+	if strings.TrimSpace(profile.CapabilityRevision) == "" || strings.TrimSpace(profile.CapabilityRevision) != profile.CapabilityRevision || len(profile.CapabilityRevision) > 128 {
+		return false
+	}
+	switch profile.Status {
+	case "DRAFT", "VERIFIED":
+	default:
+		return false
+	}
+	if strings.TrimSpace(profile.CanonicalUnit) == "" || strings.TrimSpace(profile.CanonicalUnit) != profile.CanonicalUnit || len(profile.CanonicalUnit) > 64 {
+		return false
+	}
+	if math.IsNaN(profile.MinimumValue) || math.IsInf(profile.MinimumValue, 0) ||
+		math.IsNaN(profile.MaximumValue) || math.IsInf(profile.MaximumValue, 0) ||
+		profile.MaximumValue < profile.MinimumValue ||
+		math.IsNaN(profile.MaximumDelta) || math.IsInf(profile.MaximumDelta, 0) || profile.MaximumDelta < 0 {
+		return false
+	}
+	switch commandmodel.RiskLevel(profile.RiskLevel) {
+	case commandmodel.RiskLow, commandmodel.RiskMedium, commandmodel.RiskHigh, commandmodel.RiskCritical:
+	default:
+		return false
+	}
+	switch commandmodel.ApprovalPolicy(profile.ApprovalPolicy) {
+	case commandmodel.ApprovalNone, commandmodel.ApprovalSingleApprover, commandmodel.ApprovalTwoPerson:
+	default:
+		return false
+	}
+	if profile.RetryPolicy != string(commandmodel.RetryPreSendOnly) {
+		return false
+	}
+	if strings.TrimSpace(profile.ConnectorKind) == "" || strings.TrimSpace(profile.ConnectorKind) != profile.ConnectorKind || len(profile.ConnectorKind) > 64 {
+		return false
+	}
+	return true
 }
 
 func (handler *runtimeHTTPHandler) claimDispatch(writer http.ResponseWriter, request *http.Request) {
@@ -411,6 +520,8 @@ func writeRuntimeStoreError(writer http.ResponseWriter, err error) {
 		writeRuntimeProblem(writer, http.StatusNotFound, "COMMAND_RUNTIME_COMMAND_NOT_FOUND", false)
 	case errors.Is(err, ErrStaleFence):
 		writeRuntimeProblem(writer, http.StatusConflict, "COMMAND_RUNTIME_STALE_FENCE", false)
+	case errors.Is(err, ErrCapabilityProfileConflict):
+		writeRuntimeProblem(writer, http.StatusConflict, "COMMAND_RUNTIME_CAPABILITY_CONFLICT", false)
 	default:
 		writeRuntimeProblem(writer, http.StatusServiceUnavailable, "COMMAND_RUNTIME_UNAVAILABLE", true)
 	}

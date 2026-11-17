@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -781,4 +782,95 @@ func newUUID(_ time.Time) (string, error) {
 	value[8] = (value[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16]), nil
+}
+
+// SyncCapabilityProfiles upserts tenant-owned template capability profiles without overwriting platform or other tenants' profiles.
+func (store *PostgresStore) SyncCapabilityProfiles(ctx context.Context, tenantID string, sourceSyncedAt time.Time, profiles []CapabilityProfileSyncItem) (int, error) {
+	if store == nil || store.pool == nil {
+		return 0, errors.New("command store is closed")
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	if !commandmodel.IsUUIDv7(tenantID) {
+		return 0, ErrInvalidRequest
+	}
+	if len(profiles) == 0 {
+		return 0, nil
+	}
+	for _, profile := range profiles {
+		if !validCapabilityProfileSyncItem(profile) {
+			return 0, ErrInvalidRequest
+		}
+	}
+	if sourceSyncedAt.IsZero() {
+		sourceSyncedAt = store.now().UTC()
+	} else {
+		sourceSyncedAt = sourceSyncedAt.UTC()
+	}
+	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return 0, fmt.Errorf("begin capability profile sync transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE s3_command_runtime`); err != nil {
+		return 0, fmt.Errorf("activate command runtime database identity: %w", err)
+	}
+	now := store.now().UTC()
+	synced := 0
+	for _, profile := range profiles {
+		var updatedName string
+		err := tx.QueryRow(ctx, `
+INSERT INTO command_runtime.capability_profiles (
+  capability_name, capability_revision, owner_tenant_id, status, canonical_unit,
+  minimum_value, maximum_value, maximum_delta,
+  risk_level, approval_policy, retry_policy, connector_kind, created_at, source_synced_at
+) VALUES (
+  $1, $2, $12::uuid, $3, $4,
+  $5, $6, $7,
+  $8, $9, $10, $11, $13, $14
+)
+ON CONFLICT (capability_name, capability_revision) DO UPDATE SET
+  status = EXCLUDED.status,
+  canonical_unit = EXCLUDED.canonical_unit,
+  minimum_value = EXCLUDED.minimum_value,
+  maximum_value = EXCLUDED.maximum_value,
+  maximum_delta = EXCLUDED.maximum_delta,
+  risk_level = EXCLUDED.risk_level,
+  approval_policy = EXCLUDED.approval_policy,
+  retry_policy = EXCLUDED.retry_policy,
+  connector_kind = EXCLUDED.connector_kind,
+  source_synced_at = EXCLUDED.source_synced_at
+WHERE command_runtime.capability_profiles.owner_tenant_id = $12::uuid
+  AND (
+    command_runtime.capability_profiles.source_synced_at IS NULL
+    OR command_runtime.capability_profiles.source_synced_at <= $14
+  )
+RETURNING capability_name
+`, profile.CapabilityName, profile.CapabilityRevision, profile.Status, profile.CanonicalUnit,
+			profile.MinimumValue, profile.MaximumValue, profile.MaximumDelta,
+			profile.RiskLevel, profile.ApprovalPolicy, profile.RetryPolicy, profile.ConnectorKind,
+			tenantID, now, sourceSyncedAt).Scan(&updatedName)
+		if errors.Is(err, pgx.ErrNoRows) {
+			var existingOwner *string
+			if ownerErr := tx.QueryRow(ctx, `
+SELECT owner_tenant_id::text
+FROM command_runtime.capability_profiles
+WHERE capability_name = $1 AND capability_revision = $2
+`, profile.CapabilityName, profile.CapabilityRevision).Scan(&existingOwner); ownerErr != nil {
+				return 0, fmt.Errorf("inspect capability profile owner %s@%s: %w", profile.CapabilityName, profile.CapabilityRevision, ownerErr)
+			}
+			if existingOwner == nil || *existingOwner != tenantID {
+				return 0, fmt.Errorf("%w: %s@%s", ErrCapabilityProfileConflict, profile.CapabilityName, profile.CapabilityRevision)
+			}
+			// Stale out-of-order retry for the same tenant: skip overwriting newer state.
+			continue
+		}
+		if err != nil {
+			return 0, fmt.Errorf("upsert capability profile %s@%s: %w", profile.CapabilityName, profile.CapabilityRevision, err)
+		}
+		synced++
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit capability profile sync: %w", err)
+	}
+	return synced, nil
 }

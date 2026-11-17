@@ -37,31 +37,44 @@ type Site struct {
 }
 
 type Asset struct {
-	ID            string   `json:"id"`
-	TenantID      string   `json:"tenantId"`
-	SiteID        string   `json:"siteId"`
-	Code          string   `json:"code"`
-	DisplayName   string   `json:"displayName"`
-	AssetType     string   `json:"assetType"`
-	Status        string   `json:"status"`
-	Revision      int64    `json:"revision"`
-	CreatedAt     string   `json:"createdAt"`
-	UpdatedAt     string   `json:"updatedAt"`
-	RatedPower    *float64 `json:"ratedPower,omitempty"`
-	RatedCapacity *float64 `json:"ratedCapacity,omitempty"`
+	ID            string            `json:"id"`
+	TenantID      string            `json:"tenantId"`
+	SiteID        string            `json:"siteId"`
+	Code          string            `json:"code"`
+	DisplayName   string            `json:"displayName"`
+	AssetType     string            `json:"assetType"`
+	Status        string            `json:"status"`
+	Revision      int64             `json:"revision"`
+	CreatedAt     string            `json:"createdAt"`
+	UpdatedAt     string            `json:"updatedAt"`
+	RatedPower    *float64          `json:"ratedPower,omitempty"`
+	RatedCapacity *float64          `json:"ratedCapacity,omitempty"`
+	Tags          map[string]string `json:"tags,omitempty"`
 }
 
 type Device struct {
-	ID          string `json:"id"`
-	TenantID    string `json:"tenantId"`
-	SiteID      string `json:"siteId"`
-	Code        string `json:"code"`
-	DisplayName string `json:"displayName"`
-	DeviceType  string `json:"deviceType"`
-	Status      string `json:"status"`
-	Revision    int64  `json:"revision"`
-	CreatedAt   string `json:"createdAt"`
-	UpdatedAt   string `json:"updatedAt"`
+	ID          string            `json:"id"`
+	TenantID    string            `json:"tenantId"`
+	SiteID      string            `json:"siteId"`
+	Code        string            `json:"code"`
+	DisplayName string            `json:"displayName"`
+	DeviceType  string            `json:"deviceType"`
+	Status      string            `json:"status"`
+	Revision    int64             `json:"revision"`
+	CreatedAt   string            `json:"createdAt"`
+	UpdatedAt   string            `json:"updatedAt"`
+	Tags        map[string]string `json:"tags,omitempty"`
+}
+
+type Template struct {
+	ID                   string       `json:"id"`
+	TenantID             string       `json:"tenantId"`
+	TemplateKey          string       `json:"templateKey"`
+	TemplateKind         TemplateKind `json:"templateKind"`
+	LatestRevisionID     string       `json:"latestRevisionId,omitempty"`
+	LatestRevisionNumber int64        `json:"latestRevisionNumber,omitempty"`
+	ReleasedAt           string       `json:"releasedAt,omitempty"`
+	CreatedAt            string       `json:"createdAt"`
 }
 
 type DeviceBinding struct {
