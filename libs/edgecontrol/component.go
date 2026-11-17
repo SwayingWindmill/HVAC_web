@@ -18,6 +18,10 @@ const (
 	ComponentController     ComponentKind = "CONTROLLER"
 	ComponentService        ComponentKind = "SERVICE"
 	ComponentSimulator      ComponentKind = "SIMULATOR"
+
+	// DeclarativeModbusFactoryID identifies profile-driven Modbus adapters whose
+	// CapabilityProfile is optional or partial relative to full device profiles.
+	DeclarativeModbusFactoryID = "DECLARATIVE_MODBUS"
 )
 
 type ComponentDescriptor struct {
@@ -45,7 +49,7 @@ func (descriptor ComponentDescriptor) validateBasics() error {
 	default:
 		return fmt.Errorf("unsupported component kind %q", descriptor.Kind)
 	}
-	if (descriptor.Kind == ComponentDeviceDriver || descriptor.Kind == ComponentSimulator) && len(descriptor.Profiles) == 0 {
+	if (descriptor.Kind == ComponentDeviceDriver || descriptor.Kind == ComponentSimulator) && len(descriptor.Profiles) == 0 && descriptor.FactoryID != DeclarativeModbusFactoryID {
 		return errors.New("device driver or simulator must implement at least one capability profile")
 	}
 	return nil
@@ -126,6 +130,7 @@ func (registry *ComponentRegistry) Register(descriptor ComponentDescriptor) erro
 		}
 	}
 
+	isDeclarative := descriptor.FactoryID == DeclarativeModbusFactoryID
 	for semantic := range descriptor.ChannelBindings {
 		if _, exists := requirements[semantic]; !exists && len(descriptor.Profiles) > 0 {
 			return fmt.Errorf("component %s binds semantic channel %s not declared by its capability profiles", descriptor.ID, semantic)
@@ -134,7 +139,7 @@ func (registry *ComponentRegistry) Register(descriptor ComponentDescriptor) erro
 	for semantic, requirement := range requirements {
 		address, bound := descriptor.ChannelBindings[semantic]
 		if !bound || strings.TrimSpace(address) == "" {
-			if requirement.Required {
+			if requirement.Required && !isDeclarative {
 				return fmt.Errorf("component %s is missing required semantic channel %s", descriptor.ID, semantic)
 			}
 			continue
@@ -149,10 +154,10 @@ func (registry *ComponentRegistry) Register(descriptor ComponentDescriptor) erro
 		if channel.DataType != requirement.DataType {
 			return fmt.Errorf("component %s semantic channel %s expects %s but %s is %s", descriptor.ID, semantic, requirement.DataType, address, channel.DataType)
 		}
-		if requirement.Unit != "" && channel.Unit != requirement.Unit {
+		if requirement.Unit != "" && (!isDeclarative || channel.Unit != "") && channel.Unit != requirement.Unit {
 			return fmt.Errorf("component %s semantic channel %s expects unit %s but %s uses %s", descriptor.ID, semantic, requirement.Unit, address, channel.Unit)
 		}
-		if channel.Access != requirement.Access {
+		if !accessSatisfies(channel.Access, requirement.Access, isDeclarative) {
 			return fmt.Errorf("component %s semantic channel %s expects access %s but %s uses %s", descriptor.ID, semantic, requirement.Access, address, channel.Access)
 		}
 	}
@@ -164,6 +169,13 @@ func (registry *ComponentRegistry) Register(descriptor ComponentDescriptor) erro
 	}
 	registry.components[descriptor.ID] = cloneComponent(descriptor)
 	return nil
+}
+
+func accessSatisfies(actual, required AccessMode, allowReadWrite bool) bool {
+	if actual == required {
+		return true
+	}
+	return allowReadWrite && actual == AccessReadWrite && (required == AccessReadOnly || required == AccessWriteOnly)
 }
 
 func (registry *ComponentRegistry) Unregister(id string) bool {
