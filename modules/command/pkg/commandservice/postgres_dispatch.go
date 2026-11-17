@@ -70,7 +70,7 @@ SELECT o.outbox_id::text,
        i.command_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
        i.capability_name, i.capability_revision,
        i.canonical_parameters,
-       i.payload_hash, i.device_command_sequence, i.version, i.trace_id, i.trace_id
+       i.payload_hash, i.device_command_sequence, i.version, i.trace_id
 FROM command_runtime.command_dispatch_outbox o
 JOIN command_runtime.command_intents i ON i.command_id = o.command_id
 JOIN command_runtime.device_control_state d
