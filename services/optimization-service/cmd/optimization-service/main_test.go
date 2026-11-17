@@ -61,7 +61,7 @@ func TestRunMonitorLoopAndReconcileLoopRespectContextCancellation(t *testing.T) 
 	doneMonitor := make(chan struct{})
 	go func() {
 		defer close(doneMonitor)
-		runMonitorLoop(monitorCtx, 5*time.Millisecond, monitor)
+		runMonitorLoop(monitorCtx, 5*time.Millisecond, monitor, nil)
 	}()
 	select {
 	case <-doneMonitor:
@@ -95,7 +95,7 @@ func TestRunMonitorLoopAndReconcileLoopRespectContextCancellation(t *testing.T) 
 	doneReconcile := make(chan struct{})
 	go func() {
 		defer close(doneReconcile)
-		runReconcileLoop(reconcileCtx, 5*time.Millisecond, reconciler)
+		runReconcileLoop(reconcileCtx, 5*time.Millisecond, reconciler, nil)
 	}()
 	select {
 	case <-doneReconcile:
@@ -153,7 +153,7 @@ func TestShutdownServersAndWaitBackground(t *testing.T) {
 	if err := shutdownServers(2*time.Second, srv, nil); err != nil {
 		t.Fatalf("shutdownServers err=%v", err)
 	}
-	waitBackground(&wg, 2*time.Second)
+	waitBackground(&wg, 2*time.Second, nil)
 	select {
 	case err := <-serveErr:
 		t.Fatalf("unexpected server error: %v", err)

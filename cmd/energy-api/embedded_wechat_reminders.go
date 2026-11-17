@@ -101,7 +101,7 @@ func runWeChatReminders(ctx context.Context, logger *slog.Logger, metrics *obser
 		return
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	}
 	consecutiveErrors := 0
 	runSupervisedNotificationLoop(ctx, logger, metrics, "notification.wechat_reminders", func() {

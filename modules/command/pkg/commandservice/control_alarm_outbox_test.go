@@ -100,13 +100,13 @@ func (s *memoryControlAlarmOutboxStore) ClaimControlAlarmOutbox(_ context.Contex
 	return out, nil
 }
 
-func (s *memoryControlAlarmOutboxStore) MarkControlAlarmDelivered(_ context.Context, tenantID, outboxID, leaseOwner string) error {
+func (s *memoryControlAlarmOutboxStore) MarkControlAlarmDelivered(_ context.Context, tenantID, outboxID, leaseOwner string, attempts int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
 	for _, row := range s.rows {
 		r := &row.rec
-		if r.TenantID == tenantID && r.OutboxID == outboxID && r.Status == ControlAlarmStatusPending && r.LeaseOwner == leaseOwner {
+		if r.TenantID == tenantID && r.OutboxID == outboxID && r.Status == ControlAlarmStatusPending && r.LeaseOwner == leaseOwner && r.Attempts == attempts {
 			r.Status = ControlAlarmStatusDelivered
 			r.DeliveredAt = &now
 			r.LeaseOwner = ""
@@ -119,7 +119,7 @@ func (s *memoryControlAlarmOutboxStore) MarkControlAlarmDelivered(_ context.Cont
 	return ErrControlAlarmLeaseLost
 }
 
-func (s *memoryControlAlarmOutboxStore) FailControlAlarmOutbox(_ context.Context, tenantID, outboxID, leaseOwner, errorCode string, maxAttempts int, backoff time.Duration) error {
+func (s *memoryControlAlarmOutboxStore) FailControlAlarmOutbox(_ context.Context, tenantID, outboxID, leaseOwner string, attempts int, errorCode string, maxAttempts int, backoff time.Duration) error {
 	if s.failErr != nil {
 		return s.failErr
 	}
@@ -128,7 +128,7 @@ func (s *memoryControlAlarmOutboxStore) FailControlAlarmOutbox(_ context.Context
 	now := s.now().UTC()
 	for _, row := range s.rows {
 		r := &row.rec
-		if r.TenantID == tenantID && r.OutboxID == outboxID && r.Status == ControlAlarmStatusPending && r.LeaseOwner == leaseOwner {
+		if r.TenantID == tenantID && r.OutboxID == outboxID && r.Status == ControlAlarmStatusPending && r.LeaseOwner == leaseOwner && r.Attempts == attempts {
 			row.lastFailError = errorCode
 			row.lastBackoff = backoff
 			r.LastErrorCode = sanitizeControlAlarmErrorCode(errorCode)
@@ -493,12 +493,19 @@ func TestPostgresControlAlarmOutboxPersistenceLeaseAndDeadLetter(t *testing.T) {
 	wakeups := 0
 	store.SetControlAlarmOutboxWakeup(func() { wakeups++ })
 
-	// Create two commands and resolve them into OUTCOME_UNKNOWN.
-	sub1, err := store.Submit(ctx, postgresCommandRequest("outbox-pg-1", 24))
+	// Create two commands on independent devices and resolve both into OUTCOME_UNKNOWN.
+	req1 := postgresCommandRequest("outbox-pg-1", 24)
+	sub1, err := store.Submit(ctx, req1)
 	if err != nil {
 		t.Fatalf("submit 1: %v", err)
 	}
-	sub2, err := store.Submit(ctx, postgresCommandRequest("outbox-pg-2", 25))
+	commandDeviceB := "018f3e00-3000-7000-8000-000000000002"
+	req2 := postgresCommandRequest("outbox-pg-2", 23.5)
+	req2.DeviceID = commandDeviceB
+	req2.PointID = "018f3e00-4000-7000-8000-000000000002"
+	req2.Authorization.DeviceID = commandDeviceB
+	req2.Authorization.GrantID = "018f3e00-9000-7000-8000-000000000002"
+	sub2, err := store.Submit(ctx, req2)
 	if err != nil {
 		t.Fatalf("submit 2: %v", err)
 	}
@@ -584,11 +591,14 @@ func TestPostgresControlAlarmOutboxPersistenceLeaseAndDeadLetter(t *testing.T) {
 		t.Fatalf("unexpected claimed record 1: %+v", r1)
 	}
 
-	// Mark r1 delivered, fail r2 once then reclaim and transition r2 to DEAD_LETTER.
-	if err := store.MarkControlAlarmDelivered(ctx, commandTenantA, r1.OutboxID, "relay-1"); err != nil {
+	if err := store.MarkControlAlarmDelivered(ctx, commandTenantA, r1.OutboxID, "relay-1", r1.Attempts); err != nil {
 		t.Fatalf("MarkControlAlarmDelivered: %v", err)
 	}
-	if err := store.FailControlAlarmOutbox(ctx, commandTenantA, r2.OutboxID, "relay-1", "CONTROL_ALARM_HTTP_FAILED", 2, 5*time.Second); err != nil {
+	// Stale attempt count must be rejected even with matching lease owner.
+	if err := store.FailControlAlarmOutbox(ctx, commandTenantA, r2.OutboxID, "relay-1", r2.Attempts+1, "CONTROL_ALARM_HTTP_FAILED", 2, 5*time.Second); !errors.Is(err, ErrControlAlarmLeaseLost) {
+		t.Fatalf("expected ErrControlAlarmLeaseLost on mismatched attempts, got %v", err)
+	}
+	if err := store.FailControlAlarmOutbox(ctx, commandTenantA, r2.OutboxID, "relay-1", r2.Attempts, "CONTROL_ALARM_HTTP_FAILED", 2, 5*time.Second); err != nil {
 		t.Fatalf("FailControlAlarmOutbox attempt 1: %v", err)
 	}
 
@@ -597,7 +607,7 @@ func TestPostgresControlAlarmOutboxPersistenceLeaseAndDeadLetter(t *testing.T) {
 	if err != nil || len(claimed2) != 1 || claimed2[0].OutboxID != r2.OutboxID || claimed2[0].Attempts != 2 {
 		t.Fatalf("reclaim after backoff=%+v err=%v", claimed2, err)
 	}
-	if err := store.FailControlAlarmOutbox(ctx, commandTenantA, r2.OutboxID, "relay-2", "CONTROL_ALARM_HTTP_REJECTED", 2, 5*time.Second); err != nil {
+	if err := store.FailControlAlarmOutbox(ctx, commandTenantA, r2.OutboxID, "relay-2", claimed2[0].Attempts, "CONTROL_ALARM_HTTP_REJECTED", 2, 5*time.Second); err != nil {
 		t.Fatalf("FailControlAlarmOutbox dead letter: %v", err)
 	}
 

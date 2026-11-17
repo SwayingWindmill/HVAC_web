@@ -111,21 +111,6 @@ func (store *fakeAutoControlStore) RecordAutomatedDispatch(
 	return mon, nil
 }
 
-func (store *fakeAutoControlStore) ListObservingExecutionMonitors(_ context.Context, limit int) ([]OptimizationExecutionMonitorRecord, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	out := make([]OptimizationExecutionMonitorRecord, 0, len(store.monitors))
-	for _, mon := range store.monitors {
-		if mon.Status == ExecutionMonitorObserving {
-			out = append(out, mon)
-			if limit > 0 && len(out) >= limit {
-				break
-			}
-		}
-	}
-	return out, nil
-}
-
 func (store *fakeAutoControlStore) ClaimObservingExecutionMonitors(_ context.Context, claimOwner string, leaseDuration time.Duration, now time.Time, limit int) ([]OptimizationExecutionMonitorRecord, error) {
 	owner := strings.TrimSpace(claimOwner)
 	if owner == "" || leaseDuration <= 0 {
@@ -162,13 +147,11 @@ func (store *fakeAutoControlStore) ClaimObservingExecutionMonitors(_ context.Con
 }
 
 func matchesClaimOwnership(mon OptimizationExecutionMonitorRecord, claimOwner string) bool {
-	if mon.Status != ExecutionMonitorObserving {
+	owner := strings.TrimSpace(claimOwner)
+	if mon.Status != ExecutionMonitorObserving || mon.ClaimOwner == nil || owner == "" {
 		return false
 	}
-	if mon.ClaimOwner == nil {
-		return true
-	}
-	return *mon.ClaimOwner == strings.TrimSpace(claimOwner)
+	return *mon.ClaimOwner == owner
 }
 
 func (store *fakeAutoControlStore) ReleaseMonitorClaim(_ context.Context, monitorID, _, _, claimOwner string, _ time.Time) error {
@@ -994,7 +977,6 @@ func TestAutoControllerLeaseExpiryTakeoverFencesStaleReplicaAndReleasesOnError(t
 		t.Fatalf("replica-b takeover failed: claimed=%+v err=%v", claimedB, err)
 	}
 
-	// Stale replica-a is fenced out from every state transition and claim release.
 	if err := store.RecordMonitorHealthyHeartbeat(context.Background(), monID, tenantID, siteID, "replica-a", base.Add(2*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
 		t.Fatalf("expected ErrExecutionMonitorClaimLost on stale heartbeat, got %v", err)
 	}
@@ -1014,12 +996,18 @@ func TestAutoControllerLeaseExpiryTakeoverFencesStaleReplicaAndReleasesOnError(t
 		t.Fatalf("stale replica mutated active state: lease=%+v monitor=%+v", store.lease, store.monitors[0])
 	}
 
-	// Current owner replica-b records healthy heartbeat and releases the claim.
 	if err := store.RecordMonitorHealthyHeartbeat(context.Background(), monID, tenantID, siteID, "replica-b", base.Add(2*time.Minute)); err != nil {
 		t.Fatalf("replica-b heartbeat failed: %v", err)
 	}
 	if store.monitors[0].ClaimOwner != nil || store.monitors[0].ClaimUntil != nil {
 		t.Fatalf("expected claim cleared after healthy heartbeat, got %+v", store.monitors[0])
+	}
+	// Stale replica-a remains fenced out even after replica-b clears ClaimOwner back to NULL.
+	if err := store.TripMonitorAndLease(context.Background(), claimedA[0], "replica-a", ExecutionMonitorTripped, "late_slow_replica_trip", nil, base.Add(2*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
+		t.Fatalf("expected ErrExecutionMonitorClaimLost after claim cleared, got %v", err)
+	}
+	if err := store.CompleteMonitorVerified(context.Background(), monID, tenantID, siteID, "replica-a", base.Add(30*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
+		t.Fatalf("expected ErrExecutionMonitorClaimLost on stale verify after claim cleared, got %v", err)
 	}
 
 	// Early exit on site context load error releases claim immediately for next pass.

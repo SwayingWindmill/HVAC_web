@@ -351,6 +351,7 @@ export class SongyaxuanCommandExecutor {
   private readonly activeSequenceAborts = new Map<UnitCoilPlan['unitCode'], AbortController>();
   private readonly activeSequenceTasks = new Map<UnitCoilPlan['unitCode'], Promise<void>>();
   private readonly allSequenceTasks = new Set<Promise<void>>();
+  private readonly allDirectTasks = new Set<Promise<void>>();
   private initialized = false;
   private initPromise: Promise<void> | null = null;
   private admissionChain: Promise<void> = Promise.resolve();
@@ -401,8 +402,8 @@ export class SongyaxuanCommandExecutor {
   }
 
   async waitForActiveSequences(): Promise<void> {
-    while (this.allSequenceTasks.size > 0) {
-      await Promise.allSettled([...this.allSequenceTasks]);
+    while (this.allSequenceTasks.size > 0 || this.allDirectTasks.size > 0) {
+      await Promise.allSettled([...this.allSequenceTasks, ...this.allDirectTasks]);
     }
   }
 
@@ -469,11 +470,16 @@ export class SongyaxuanCommandExecutor {
 
     await this.initialize();
 
+    type SequenceLifecycleHandle = {
+      controller: AbortController;
+      tracked: Promise<void>;
+      resolveDone: () => void;
+    };
     type AdmissionOutcome =
       | { kind: 'reply'; reply: CommandReplyEnvelope }
       | { kind: 'emergency' }
-      | { kind: 'unit_sequence'; unitCode: UnitCoilPlan['unitCode']; controller: AbortController; previousTask: Promise<void> | null }
-      | { kind: 'direct'; route: DirectDeviceRoute };
+      | { kind: 'unit_sequence'; unitCode: UnitCoilPlan['unitCode']; lifecycle: SequenceLifecycleHandle; previousTask: Promise<void> | null }
+      | { kind: 'direct'; route: DirectDeviceRoute; directTask: Promise<void>; resolveDirect: () => void };
 
     const admitted = await this.withSerializedAdmission<AdmissionOutcome>(async () => {
       if (this.executedCommandIds.has(command.commandId)) {
@@ -507,20 +513,9 @@ export class SongyaxuanCommandExecutor {
         }
       }
 
-      const priorCommandIds = [...this.executedCommandIds];
-      this.commitCommandAccepted(command);
       try {
-        await this.persistState();
+        await this.persistState(this.snapshotWithAcceptedCommand(command));
       } catch (err) {
-        if (previousFence === undefined) {
-          this.lastFenceByDevice.delete(command.deviceId);
-        } else {
-          this.lastFenceByDevice.set(command.deviceId, previousFence);
-        }
-        this.executedCommandIds.clear();
-        for (const id of priorCommandIds) {
-          this.executedCommandIds.add(id);
-        }
         this.reportDiagnostic({
           level: 'error',
           code: 'STATE_PERSIST_FAILED',
@@ -529,6 +524,7 @@ export class SongyaxuanCommandExecutor {
         });
         return { kind: 'reply', reply: await this.emitReply(command, 'FAILED', 'STATE_PERSIST_FAILED', command.commandCode, 'NOT_APPLIED') };
       }
+      this.commitCommandAccepted(command);
 
       if (isEmergency) {
         for (const plan of Object.values(UNIT_PLANS)) {
@@ -546,14 +542,30 @@ export class SongyaxuanCommandExecutor {
         this.abortUnitSequence(unitCode);
         const previousTask = this.activeSequenceTasks.get(unitCode) ?? null;
         const controller = new AbortController();
+        let resolveDone: () => void = () => {};
+        const tracked = new Promise<void>((resolve) => {
+          resolveDone = resolve;
+        });
         this.activeSequenceAborts.set(unitCode, controller);
-        return { kind: 'unit_sequence', unitCode, controller, previousTask };
+        this.activeSequenceTasks.set(unitCode, tracked);
+        this.allSequenceTasks.add(tracked);
+        return {
+          kind: 'unit_sequence',
+          unitCode,
+          lifecycle: { controller, tracked, resolveDone },
+          previousTask,
+        };
       }
 
       if (command.commandCode === 'STOP' && directRoute) {
         this.abortUnitSequence(directRoute.unitCode);
       }
-      return { kind: 'direct', route: directRoute! };
+      let resolveDirect: () => void = () => {};
+      const directTask = new Promise<void>((resolve) => {
+        resolveDirect = resolve;
+      });
+      this.allDirectTasks.add(directTask);
+      return { kind: 'direct', route: directRoute!, directTask, resolveDirect };
     });
 
     if (admitted.kind === 'reply') {
@@ -563,37 +575,42 @@ export class SongyaxuanCommandExecutor {
       return this.executeEmergencyDoRelease(command);
     }
     if (admitted.kind === 'unit_sequence') {
-      return this.executeUnitSequence(command, UNIT_PLANS[admitted.unitCode], admitted.controller, admitted.previousTask);
+      return this.executeUnitSequence(command, UNIT_PLANS[admitted.unitCode], admitted.lifecycle, admitted.previousTask);
     }
 
-    const { route } = admitted;
-    if (route.mode === 'LEVEL') {
-      try {
-        await this.writeCoil(route.coil, route.value);
-      } catch {
-        return this.emitReply(command, 'FAILED', 'MODBUS_WRITE_FAILED', `${route.channel}=${route.value}`, 'NOT_APPLIED');
-      }
-      await this.emitTelemetryEntries([
-        { deviceId: 'et1010', deviceTimestamp: this.nowMs(), points: [{ code: route.channel, value: route.value, quality: 0 }] },
-        { deviceId: command.deviceId, deviceTimestamp: this.nowMs(), points: [{ code: 'run_state', value: route.value === 1 ? 'RUNNING' : 'STOPPED', quality: 0 }] },
-      ]);
-      return this.emitReply(command, 'EXECUTED', null, `${route.channel}=${route.value}`, `${route.channel}=${route.value}`);
-    }
-
-    const duration = typeof command.pulseDurationMs === 'number' && Number.isFinite(command.pulseDurationMs) && command.pulseDurationMs > 0
-      ? command.pulseDurationMs
-      : this.pulseDurationMs;
+    const { route, directTask, resolveDirect } = admitted;
     try {
-      await this.executePulse(route.coil, route.channel, duration, undefined, { unitCode: route.unitCode, commandId: command.commandId });
-    } catch (error) {
-      const reason = error instanceof PulseResetError
-        ? 'PULSE_RESET_FAILED'
-        : error instanceof StatePersistError
-          ? 'STATE_PERSIST_FAILED'
-          : 'MODBUS_WRITE_FAILED';
-      return this.emitReply(command, 'FAILED', reason, `${route.channel}:pulse(${duration}ms)`, 'NOT_APPLIED');
+      if (route.mode === 'LEVEL') {
+        try {
+          await this.writeCoil(route.coil, route.value);
+        } catch {
+          return this.emitReply(command, 'FAILED', 'MODBUS_WRITE_FAILED', `${route.channel}=${route.value}`, 'NOT_APPLIED');
+        }
+        await this.emitTelemetryEntries([
+          { deviceId: 'et1010', deviceTimestamp: this.nowMs(), points: [{ code: route.channel, value: route.value, quality: 0 }] },
+          { deviceId: command.deviceId, deviceTimestamp: this.nowMs(), points: [{ code: 'run_state', value: route.value === 1 ? 'RUNNING' : 'STOPPED', quality: 0 }] },
+        ]);
+        return this.emitReply(command, 'EXECUTED', null, `${route.channel}=${route.value}`, `${route.channel}=${route.value}`);
+      }
+
+      const duration = typeof command.pulseDurationMs === 'number' && Number.isFinite(command.pulseDurationMs) && command.pulseDurationMs > 0
+        ? command.pulseDurationMs
+        : this.pulseDurationMs;
+      try {
+        await this.executePulse(route.coil, route.channel, duration, undefined, { unitCode: route.unitCode, commandId: command.commandId });
+      } catch (error) {
+        const reason = error instanceof PulseResetError
+          ? 'PULSE_RESET_FAILED'
+          : error instanceof StatePersistError
+            ? 'STATE_PERSIST_FAILED'
+            : 'MODBUS_WRITE_FAILED';
+        return this.emitReply(command, 'FAILED', reason, `${route.channel}:pulse(${duration}ms)`, 'NOT_APPLIED');
+      }
+      return this.emitReply(command, 'EXECUTED', null, `${route.channel}:pulse(${duration}ms)`, `${route.channel}:pulse(${duration}ms)->0`);
+    } finally {
+      this.allDirectTasks.delete(directTask);
+      resolveDirect();
     }
-    return this.emitReply(command, 'EXECUTED', null, `${route.channel}:pulse(${duration}ms)`, `${route.channel}:pulse(${duration}ms)->0`);
   }
 
   private async runInitialize(): Promise<void> {
@@ -694,10 +711,28 @@ export class SongyaxuanCommandExecutor {
     };
   }
 
-  private persistState(): Promise<void> {
+  private snapshotWithAcceptedCommand(command: DownlinkCommandEnvelope): ExecutorPersistedState {
+    const nextFences = new Map(this.lastFenceByDevice);
+    nextFences.set(command.deviceId, command.executionFence);
+    const nextIds = new Set(this.executedCommandIds);
+    nextIds.add(command.commandId);
+    while (nextIds.size > MAX_EXECUTED_COMMAND_IDS) {
+      const oldest = nextIds.values().next().value;
+      if (oldest === undefined) break;
+      nextIds.delete(oldest);
+    }
+    return {
+      lastSequence: this.uplinkSeq,
+      lastFenceByDevice: Object.fromEntries(nextFences.entries()),
+      executedCommandIds: [...nextIds],
+      pendingPulseCoils: [...this.pendingPulseCoils].sort((a, b) => a - b),
+    };
+  }
+
+  private persistState(snapshot: ExecutorPersistedState = this.snapshotState()): Promise<void> {
     const store = this.options.stateStore;
     if (!store) return Promise.resolve();
-    const writeTask = this.persistChain.then(() => store.save(this.snapshotState()));
+    const writeTask = this.persistChain.then(() => store.save(snapshot));
     this.persistChain = writeTask.catch(() => undefined);
     return writeTask;
   }
@@ -929,12 +964,29 @@ export class SongyaxuanCommandExecutor {
     return this.emitReply(command, 'EXECUTED', null, 'all-do:0', 'all-do:0');
   }
 
+  private releaseSequenceLifecycle(
+    unitCode: UnitCoilPlan['unitCode'],
+    controller: AbortController,
+    tracked: Promise<void>,
+    resolveDone: () => void,
+  ): void {
+    if (this.activeSequenceAborts.get(unitCode) === controller) {
+      this.activeSequenceAborts.delete(unitCode);
+    }
+    if (this.activeSequenceTasks.get(unitCode) === tracked) {
+      this.activeSequenceTasks.delete(unitCode);
+    }
+    this.allSequenceTasks.delete(tracked);
+    resolveDone();
+  }
+
   private async executeUnitSequence(
     command: DownlinkCommandEnvelope,
     plan: UnitCoilPlan,
-    controller: AbortController,
+    lifecycle: { controller: AbortController; tracked: Promise<void>; resolveDone: () => void },
     previousTask: Promise<void> | null,
   ): Promise<CommandReplyEnvelope> {
+    const { controller, tracked, resolveDone } = lifecycle;
     const pulseMs = typeof command.pulseDurationMs === 'number' && Number.isFinite(command.pulseDurationMs) && command.pulseDurationMs > 0
       ? command.pulseDurationMs
       : this.pulseDurationMs;
@@ -956,6 +1008,7 @@ export class SongyaxuanCommandExecutor {
       checkAborted();
     };
 
+    let tailLaunched = false;
     try {
       if (previousTask) {
         await previousTask.catch(() => undefined);
@@ -964,7 +1017,8 @@ export class SongyaxuanCommandExecutor {
       if (isStart) {
         await writeStep(plan.chwp, 1);
         checkAborted();
-        this.launchSequenceTask(plan.unitCode, command.commandId, controller, async () => {
+        tailLaunched = true;
+        this.launchSequenceTask(plan.unitCode, command.commandId, lifecycle, async () => {
           await waitStep(this.sequenceTimings.pumpToCoolingPumpMs);
           await writeStep(plan.cwp, 1);
           await waitStep(this.sequenceTimings.coolingPumpToTowerMs);
@@ -993,7 +1047,8 @@ export class SongyaxuanCommandExecutor {
         { unitCode: plan.unitCode, commandId: command.commandId },
       );
       checkAborted();
-      this.launchSequenceTask(plan.unitCode, command.commandId, controller, async () => {
+      tailLaunched = true;
+      this.launchSequenceTask(plan.unitCode, command.commandId, lifecycle, async () => {
         await waitStep(this.sequenceTimings.chillerStopCoastDownMs);
         const stopConfirmed = await this.confirmChillerStoppedBeforeAuxShutdown(plan, command.commandId, controller.signal);
         if (!stopConfirmed) return;
@@ -1005,9 +1060,6 @@ export class SongyaxuanCommandExecutor {
       });
       return this.emitReply(command, 'EXECUTED', null, command.commandCode, `${plan.unitCode}:sequence-accepted`);
     } catch (error) {
-      if (this.activeSequenceAborts.get(plan.unitCode) === controller) {
-        this.activeSequenceAborts.delete(plan.unitCode);
-      }
       if (error instanceof SequenceAbortError) {
         return this.emitReply(command, 'REJECTED', error.reasonCode, command.commandCode, 'ABORTED');
       }
@@ -1018,6 +1070,10 @@ export class SongyaxuanCommandExecutor {
         return this.emitReply(command, 'FAILED', 'STATE_PERSIST_FAILED', command.commandCode, 'NOT_APPLIED');
       }
       return this.emitReply(command, 'FAILED', 'MODBUS_WRITE_FAILED', command.commandCode, 'NOT_APPLIED');
+    } finally {
+      if (!tailLaunched) {
+        this.releaseSequenceLifecycle(plan.unitCode, controller, tracked, resolveDone);
+      }
     }
   }
 
@@ -1097,15 +1153,10 @@ export class SongyaxuanCommandExecutor {
   private launchSequenceTask(
     unitCode: UnitCoilPlan['unitCode'],
     commandId: string,
-    controller: AbortController,
+    lifecycle: { controller: AbortController; tracked: Promise<void>; resolveDone: () => void },
     runTail: () => Promise<void>,
   ): void {
-    let resolveDone: () => void = () => {};
-    const tracked = new Promise<void>((resolve) => {
-      resolveDone = resolve;
-    });
-    this.activeSequenceTasks.set(unitCode, tracked);
-    this.allSequenceTasks.add(tracked);
+    const { controller, tracked, resolveDone } = lifecycle;
     void (async (): Promise<void> => {
       try {
         await waitNextTurn(controller.signal);
@@ -1123,14 +1174,7 @@ export class SongyaxuanCommandExecutor {
           });
         }
       } finally {
-        if (this.activeSequenceAborts.get(unitCode) === controller) {
-          this.activeSequenceAborts.delete(unitCode);
-        }
-        if (this.activeSequenceTasks.get(unitCode) === tracked) {
-          this.activeSequenceTasks.delete(unitCode);
-        }
-        this.allSequenceTasks.delete(tracked);
-        resolveDone();
+        this.releaseSequenceLifecycle(unitCode, controller, tracked, resolveDone);
       }
     })();
   }

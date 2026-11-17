@@ -73,14 +73,14 @@ func TestEmbeddedCommandControlFailureNotifierPublishesIntoAlarmStore(t *testing
 	ref := &embeddedAlarmStoreRef{}
 	ref.setStore(store)
 
-	notifier := buildEmbeddedCommandControlFailureNotifier(ref, nil, nil)
+	sender := buildEmbeddedCommandControlFailureSender(ref, nil, nil)
 	tenantID := "0195b5c0-0000-7000-8000-000000000010"
 	siteID := "0195b5c0-0000-7000-8000-000000000011"
 	deviceID := "0195b5c0-0000-7000-8000-000000000012"
 	pointID := "0195b5c0-0000-7000-8000-000000000013"
 	commandID := "0195b5c0-0000-7000-8000-000000000014"
 
-	notifier(context.Background(), commandservice.ControlFailureEvent{
+	if err := sender(context.Background(), commandservice.ControlFailureEvent{
 		Kind:       commandmodel.ReasonPulseDeliveredPowerUnconfirmed,
 		TenantID:   tenantID,
 		SiteID:     siteID,
@@ -91,7 +91,9 @@ func TestEmbeddedCommandControlFailureNotifierPublishesIntoAlarmStore(t *testing
 		ReasonCode: commandmodel.ReasonPulseDeliveredPowerUnconfirmed,
 		Detail:     "chiller power remained below threshold after pulse",
 		OccurredAt: time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC),
-	})
+	}); err != nil {
+		t.Fatalf("control alarm sender failed: %v", err)
+	}
 
 	list, err := store.List(context.Background(), tenantID, siteID, alarmservice.Filter{Limit: 10})
 	if err != nil {
@@ -109,7 +111,7 @@ func TestEmbeddedCommandControlFailureNotifierPublishesIntoAlarmStore(t *testing
 	}
 
 	emergCmdID := "0195b5c0-0000-7000-8000-000000000015"
-	notifier(context.Background(), commandservice.ControlFailureEvent{
+	if err := sender(context.Background(), commandservice.ControlFailureEvent{
 		Kind:       alarmservice.ControlEventEmergencyDORelease,
 		TenantID:   tenantID,
 		SiteID:     siteID,
@@ -122,7 +124,9 @@ func TestEmbeddedCommandControlFailureNotifierPublishesIntoAlarmStore(t *testing
 		OccurredAt: time.Date(2026, 11, 16, 4, 5, 0, 0, time.UTC),
 		ActorType:  "PRINCIPAL",
 		ActorID:    "0195b5c0-0000-7000-8000-000000000099",
-	})
+	}); err != nil {
+		t.Fatalf("emergency control alarm sender failed: %v", err)
+	}
 	listEmerg, err := store.List(context.Background(), tenantID, siteID, alarmservice.Filter{Limit: 10})
 	if err != nil || len(listEmerg.Items) != 2 {
 		t.Fatalf("expected 2 operational alarms after EMERGENCY_DO_RELEASE, items=%d err=%v", len(listEmerg.Items), err)

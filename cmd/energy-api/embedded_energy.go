@@ -731,11 +731,12 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 		return nil, nil, func() {}, err
 	}
 	relayCtx, cancelRelay := context.WithCancel(ctx)
+	var relayWG sync.WaitGroup
 	if alarmSender != nil {
 		alarmRelay, relayErr := commandservice.NewControlAlarmRelay(commandservice.ControlAlarmRelayConfig{
 			Store:      store,
 			Sender:     alarmSender,
-			LeaseOwner: "energy-api-command",
+			LeaseOwner: commandservice.UniqueControlAlarmLeaseOwner("energy-api-command"),
 			Logger:     logger,
 			Metrics:    telemetry.Metrics,
 		})
@@ -749,7 +750,11 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 			return nil, nil, func() {}, relayErr
 		}
 		store.SetControlAlarmOutboxWakeup(alarmRelay.Notify)
-		go alarmRelay.Run(relayCtx)
+		relayWG.Add(1)
+		go func() {
+			defer relayWG.Done()
+			alarmRelay.Run(relayCtx)
+		}()
 	}
 	handler := newEmbeddedCommandHandler(gatewaySPIFFE, operatorHandler, commandHandler, runtimeHandler, telemetry)
 	server := &http.Server{
@@ -761,6 +766,7 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 	}
 	closeOwner := func() {
 		cancelRelay()
+		relayWG.Wait()
 		if closer, ok := runtimeHandler.(interface{ Close() }); ok {
 			closer.Close()
 		}
@@ -823,16 +829,6 @@ func splitNonEmptyCSV(raw string) []string {
 		}
 	}
 	return out
-}
-
-func buildEmbeddedCommandControlFailureNotifier(alarmRef *embeddedAlarmStoreRef, clientCert *tls.Certificate, logger *slog.Logger) commandservice.ControlFailureNotifier {
-	sender := buildEmbeddedCommandControlFailureSender(alarmRef, clientCert, logger)
-	if sender == nil {
-		return nil
-	}
-	return func(ctx context.Context, event commandservice.ControlFailureEvent) {
-		_ = sender(ctx, event)
-	}
 }
 
 func buildEmbeddedCommandControlFailureSender(alarmRef *embeddedAlarmStoreRef, clientCert *tls.Certificate, logger *slog.Logger) commandservice.ControlAlarmSender {

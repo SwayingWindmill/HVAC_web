@@ -2,11 +2,14 @@ package commandservice
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -432,12 +435,12 @@ RETURNING
 }
 
 // MarkControlAlarmDelivered marks an active leased control alarm outbox entry as delivered.
-func (store *PostgresStore) MarkControlAlarmDelivered(ctx context.Context, tenantID, outboxID, leaseOwner string) error {
+func (store *PostgresStore) MarkControlAlarmDelivered(ctx context.Context, tenantID, outboxID, leaseOwner string, attempts int) error {
 	if store == nil || store.pool == nil {
 		return ErrCommandStoreClosed
 	}
 	leaseOwner = strings.TrimSpace(leaseOwner)
-	if !commandmodel.IsUUIDv7(tenantID) || strings.TrimSpace(outboxID) == "" || leaseOwner == "" {
+	if !commandmodel.IsUUIDv7(tenantID) || strings.TrimSpace(outboxID) == "" || leaseOwner == "" || attempts <= 0 {
 		return ErrInvalidRequest
 	}
 	return store.runRetryableTenantTx(ctx, tenantID, pgx.ReadCommitted, func(tx pgx.Tx) error {
@@ -445,16 +448,17 @@ func (store *PostgresStore) MarkControlAlarmDelivered(ctx context.Context, tenan
 		tag, err := tx.Exec(ctx, `
 UPDATE command_runtime.control_alarm_outbox
 SET status = 'DELIVERED',
-    delivered_at = $4,
+    delivered_at = $5,
     lease_owner = NULL,
     lease_until = NULL,
     last_error_code = '',
-    updated_at = $4
+    updated_at = $5
 WHERE tenant_id = $1::uuid
   AND outbox_id = $2::uuid
   AND status = 'PENDING'
   AND lease_owner = $3
-`, tenantID, outboxID, leaseOwner, now)
+  AND attempts = $4
+`, tenantID, outboxID, leaseOwner, attempts, now)
 		if err != nil {
 			return fmt.Errorf("mark control alarm delivered: %w", err)
 		}
@@ -471,6 +475,7 @@ func (store *PostgresStore) FailControlAlarmOutbox(
 	tenantID string,
 	outboxID string,
 	leaseOwner string,
+	attempts int,
 	errorCode string,
 	maxAttempts int,
 	backoff time.Duration,
@@ -479,7 +484,7 @@ func (store *PostgresStore) FailControlAlarmOutbox(
 		return ErrCommandStoreClosed
 	}
 	leaseOwner = strings.TrimSpace(leaseOwner)
-	if !commandmodel.IsUUIDv7(tenantID) || strings.TrimSpace(outboxID) == "" || leaseOwner == "" || maxAttempts <= 0 {
+	if !commandmodel.IsUUIDv7(tenantID) || strings.TrimSpace(outboxID) == "" || leaseOwner == "" || attempts <= 0 || maxAttempts <= 0 {
 		return ErrInvalidRequest
 	}
 	if backoff < 0 {
@@ -491,17 +496,18 @@ func (store *PostgresStore) FailControlAlarmOutbox(
 		nextAvailable := now.Add(backoff)
 		tag, err := tx.Exec(ctx, `
 UPDATE command_runtime.control_alarm_outbox
-SET status = CASE WHEN attempts >= $4 THEN 'DEAD_LETTER' ELSE 'PENDING' END,
-    available_at = CASE WHEN attempts >= $4 THEN available_at ELSE $5 END,
+SET status = CASE WHEN attempts >= $5 THEN 'DEAD_LETTER' ELSE 'PENDING' END,
+    available_at = CASE WHEN attempts >= $5 THEN available_at ELSE $6 END,
     lease_owner = NULL,
     lease_until = NULL,
-    last_error_code = $6,
-    updated_at = $7
+    last_error_code = $7,
+    updated_at = $8
 WHERE tenant_id = $1::uuid
   AND outbox_id = $2::uuid
   AND status = 'PENDING'
   AND lease_owner = $3
-`, tenantID, outboxID, leaseOwner, maxAttempts, nextAvailable, sanitizedCode, now)
+  AND attempts = $4
+`, tenantID, outboxID, leaseOwner, attempts, maxAttempts, nextAvailable, sanitizedCode, now)
 		if err != nil {
 			return fmt.Errorf("fail control alarm outbox: %w", err)
 		}
@@ -547,11 +553,28 @@ func (store *PostgresStore) runRetryableTenantTx(
 	return nil
 }
 
+// UniqueControlAlarmLeaseOwner returns a collision-resistant lease owner identifier for multi-replica relays.
+func UniqueControlAlarmLeaseOwner(prefix string) string {
+	trimmed := strings.TrimSpace(prefix)
+	if trimmed == "" {
+		trimmed = "command-alarm-relay"
+	}
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		hostname = "host"
+	}
+	suffix := make([]byte, 4)
+	if _, randErr := rand.Read(suffix); randErr != nil {
+		return fmt.Sprintf("%s:%s:%d", trimmed, strings.TrimSpace(hostname), os.Getpid())
+	}
+	return fmt.Sprintf("%s:%s:%d:%s", trimmed, strings.TrimSpace(hostname), os.Getpid(), hex.EncodeToString(suffix))
+}
+
 type ControlAlarmOutboxStore interface {
 	ListTenantsWithPendingControlAlarms(ctx context.Context, readyAt time.Time) ([]string, error)
 	ClaimControlAlarmOutbox(ctx context.Context, tenantID, leaseOwner string, leaseFor time.Duration, limit int) ([]ControlAlarmOutboxRecord, error)
-	MarkControlAlarmDelivered(ctx context.Context, tenantID, outboxID, leaseOwner string) error
-	FailControlAlarmOutbox(ctx context.Context, tenantID, outboxID, leaseOwner, errorCode string, maxAttempts int, backoff time.Duration) error
+	MarkControlAlarmDelivered(ctx context.Context, tenantID, outboxID, leaseOwner string, attempts int) error
+	FailControlAlarmOutbox(ctx context.Context, tenantID, outboxID, leaseOwner string, attempts int, errorCode string, maxAttempts int, backoff time.Duration) error
 }
 
 type ControlAlarmSender func(context.Context, ControlFailureEvent) error
@@ -598,7 +621,7 @@ func NewControlAlarmRelay(cfg ControlAlarmRelayConfig) (*ControlAlarmRelay, erro
 	}
 	leaseOwner := strings.TrimSpace(cfg.LeaseOwner)
 	if leaseOwner == "" {
-		leaseOwner = "command-alarm-relay"
+		leaseOwner = UniqueControlAlarmLeaseOwner("command-alarm-relay")
 	}
 	pollInterval := cfg.PollInterval
 	if pollInterval <= 0 {
@@ -726,19 +749,30 @@ func (r *ControlAlarmRelay) ProcessOnce(ctx context.Context) (int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tenants, err := r.store.ListTenantsWithPendingControlAlarms(ctx, r.now().UTC())
+	scanCtx, cancelScan := context.WithTimeout(ctx, 10*time.Second)
+	tenants, err := r.store.ListTenantsWithPendingControlAlarms(scanCtx, r.now().UTC())
+	cancelScan()
 	if err != nil {
 		return 0, err
 	}
 	deliveredCount := 0
+	var firstErr error
 	for _, tenantID := range tenants {
 		if ctx.Err() != nil {
 			return deliveredCount, ctx.Err()
 		}
 		for batch := 0; batch < maxControlAlarmBatchesPerTenant; batch++ {
-			records, err := r.store.ClaimControlAlarmOutbox(ctx, tenantID, r.leaseOwner, r.leaseDuration, r.batchSize)
-			if err != nil {
-				return deliveredCount, err
+			claimCtx, cancelClaim := context.WithTimeout(ctx, 10*time.Second)
+			records, claimErr := r.store.ClaimControlAlarmOutbox(claimCtx, tenantID, r.leaseOwner, r.leaseDuration, r.batchSize)
+			cancelClaim()
+			if claimErr != nil {
+				if firstErr == nil {
+					firstErr = claimErr
+				}
+				if r.logger != nil && !errors.Is(claimErr, context.Canceled) {
+					r.logger.Warn("command_control_alarm_claim_failed", "error_code", ControlAlarmErrorCode(claimErr), "tenant_id", tenantID)
+				}
+				break
 			}
 			if len(records) == 0 {
 				break
@@ -756,7 +790,7 @@ func (r *ControlAlarmRelay) ProcessOnce(ctx context.Context) (int, error) {
 			}
 		}
 	}
-	return deliveredCount, nil
+	return deliveredCount, firstErr
 }
 
 func (r *ControlAlarmRelay) processRecord(ctx context.Context, rec ControlAlarmOutboxRecord) bool {
@@ -770,7 +804,9 @@ func (r *ControlAlarmRelay) processRecord(ctx context.Context, rec ControlAlarmO
 		r.recordFailure(ctx, rec, ControlAlarmErrorCode(err))
 		return false
 	}
-	if err := r.store.MarkControlAlarmDelivered(ctx, rec.TenantID, rec.OutboxID, r.leaseOwner); err != nil {
+	settleCtx, cancelSettle := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelSettle()
+	if err := r.store.MarkControlAlarmDelivered(settleCtx, rec.TenantID, rec.OutboxID, r.leaseOwner, rec.Attempts); err != nil {
 		if r.logger != nil {
 			r.logger.Warn(
 				"command_control_alarm_mark_delivered_failed",
@@ -799,7 +835,9 @@ func (r *ControlAlarmRelay) invokeSenderSafely(ctx context.Context, event Contro
 func (r *ControlAlarmRelay) recordFailure(ctx context.Context, rec ControlAlarmOutboxRecord, errCode string) {
 	backoff := r.NextRetryDelay(rec.Attempts)
 	deadLetter := rec.Attempts >= r.maxAttempts
-	if err := r.store.FailControlAlarmOutbox(ctx, rec.TenantID, rec.OutboxID, r.leaseOwner, errCode, r.maxAttempts, backoff); err != nil {
+	settleCtx, cancelSettle := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancelSettle()
+	if err := r.store.FailControlAlarmOutbox(settleCtx, rec.TenantID, rec.OutboxID, r.leaseOwner, rec.Attempts, errCode, r.maxAttempts, backoff); err != nil {
 		if r.logger != nil {
 			r.logger.Warn(
 				"command_control_alarm_fail_update_failed",

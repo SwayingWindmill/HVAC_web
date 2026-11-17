@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Rs485BusLock } from './rs485-bus-lock.ts';
 import {
   SongyaxuanCommandExecutor,
   type CommandReplyEnvelope,
@@ -26,6 +27,7 @@ function createCommand(overrides: Partial<DownlinkCommandEnvelope>): DownlinkCom
 
 function createHarness(options: {
   stateStore?: ExecutorStateStore;
+  busLock?: Rs485BusLock;
   sleepMs?: (durationMs: number, signal?: AbortSignal) => Promise<void>;
   onWriteCoil?: (coil: number, value: 0 | 1) => Promise<void> | void;
   sequenceTimings?: Partial<{
@@ -64,6 +66,7 @@ function createHarness(options: {
       diagnostics.push(event);
     },
     stateStore: options.stateStore,
+    busLock: options.busLock,
     sleepMs: options.sleepMs,
     sequenceTimings: options.sequenceTimings,
     nowMs: () => 1_763_120_001_000,
@@ -324,7 +327,7 @@ test('initialize preserves newest MAX_EXECUTED_COMMAND_IDS on oversized persiste
   const stateStore: ExecutorStateStore = {
     async load() {
       return {
-        lastSequence: -5 as unknown as number,
+        lastSequence: -5,
         lastFenceByDevice: { 'ctrl-chwp-1': 9, bad: -1 },
         executedCommandIds: oversizedIds,
         pendingPulseCoils: [999, 3],
@@ -355,4 +358,155 @@ test('initialize preserves newest MAX_EXECUTED_COMMAND_IDS on oversized persiste
   assert.equal(staleReply.edgeStatus, 'REJECTED');
   assert.equal(staleReply.reasonCode, 'STALE_EXECUTION_FENCE');
   assert.ok(writes.some((w) => w.coil === 3 && w.value === 0));
+});
+
+test('EMERGENCY_DO_RELEASE racing in-flight START_UNIT_SEQUENCE foreground writeCoil blocked on Rs485BusLock leaves coil 0 at 0', async () => {
+  const busLock = new Rs485BusLock();
+  let holderAcquired!: () => void;
+  const acquired = new Promise<void>((resolve) => {
+    holderAcquired = resolve;
+  });
+  let releaseBus!: () => void;
+  const busGate = new Promise<void>((resolve) => {
+    releaseBus = resolve;
+  });
+  const holder = busLock.runExclusive(0, async () => {
+    holderAcquired();
+    await busGate;
+  });
+  await acquired;
+
+  const { executor, writes } = createHarness({
+    busLock,
+    sleepMs: (_ms, signal) => new Promise((resolve) => {
+      if (signal?.aborted) {
+        resolve();
+        return;
+      }
+      signal?.addEventListener('abort', () => resolve(), { once: true });
+    }),
+  });
+
+  const startPromise = executor.handleCommand(createCommand({
+    commandId: 'race-fg-start',
+    deviceId: 'ctrl-chiller-a',
+    commandCode: 'START_UNIT_SEQUENCE',
+    actuationMode: 'UNIT_SEQUENCE',
+    channel: 'unit-a',
+    executionFence: 1,
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const emergencyPromise = executor.handleCommand(createCommand({
+    commandId: 'race-emergency-release',
+    deviceId: 'et1010',
+    commandCode: 'STOP',
+    actuationMode: 'EMERGENCY_DO_RELEASE',
+    channel: 'all-do',
+    executionFence: 1,
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  releaseBus();
+  await holder;
+  const [startReply, emergencyReply] = await Promise.all([startPromise, emergencyPromise]);
+  await executor.waitForActiveSequences();
+
+  assert.equal(startReply.edgeStatus, 'REJECTED');
+  assert.equal(startReply.reasonCode, 'EMERGENCY_DO_RELEASE');
+  assert.equal(emergencyReply.edgeStatus, 'EXECUTED');
+  assert.equal(emergencyReply.executionEvidence.applied.text, 'all-do:0');
+  const coilZeroWrites = writes.filter((w) => w.coil === 0);
+  assert.ok(coilZeroWrites.some((w) => w.value === 1));
+  assert.equal(coilZeroWrites.at(-1)?.value, 0);
+  assert.ok(writes.length >= 20);
+  assert.ok(writes.slice(-20).every((w) => w.value === 0));
+});
+
+test('queued emitTelemetryEntries persistState during a failing admission save never persists unaccepted fence or commandId', async () => {
+  const savedStates: ExecutorPersistedState[] = [];
+  let failConsumed = false;
+  let admissionSaveStarted!: () => void;
+  const inAdmissionSave = new Promise<void>((resolve) => {
+    admissionSaveStarted = resolve;
+  });
+  let failAdmissionSave!: (err: Error) => void;
+  const admissionGate = new Promise<void>((_resolve, reject) => {
+    failAdmissionSave = reject;
+  });
+  let releaseSeqSleep!: () => void;
+  const seqSleepGate = new Promise<void>((resolve) => {
+    releaseSeqSleep = resolve;
+  });
+  let seqSleeping!: () => void;
+  const atSeqSleep = new Promise<void>((resolve) => {
+    seqSleeping = resolve;
+  });
+
+  const stateStore: ExecutorStateStore = {
+    async load() {
+      return null;
+    },
+    async save(state) {
+      if (!failConsumed && state.executedCommandIds.includes('cmd-admit-fail')) {
+        failConsumed = true;
+        admissionSaveStarted();
+        await admissionGate;
+        return;
+      }
+      savedStates.push(structuredClone(state));
+    },
+  };
+
+  const { executor, telemetries } = createHarness({
+    stateStore,
+    sleepMs: async () => {
+      seqSleeping();
+      await seqSleepGate;
+    },
+  });
+
+  const seqReply = await executor.handleCommand(createCommand({
+    commandId: 'cmd-seq-bg',
+    deviceId: 'ctrl-chiller-a',
+    commandCode: 'START_UNIT_SEQUENCE',
+    actuationMode: 'UNIT_SEQUENCE',
+    channel: 'unit-a',
+    executionFence: 1,
+  }));
+  assert.equal(seqReply.edgeStatus, 'EXECUTED');
+  await atSeqSleep;
+  const savesBeforeFail = savedStates.length;
+
+  const failPromise = executor.handleCommand(createCommand({
+    commandId: 'cmd-admit-fail',
+    deviceId: 'ctrl-chwp-1',
+    commandCode: 'STOP',
+    executionFence: 42,
+  }));
+  await inAdmissionSave;
+
+  releaseSeqSleep();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  failAdmissionSave(new Error('disk full'));
+
+  const failReply = await failPromise;
+  await executor.waitForActiveSequences();
+
+  assert.equal(failReply.edgeStatus, 'FAILED');
+  assert.equal(failReply.reasonCode, 'STATE_PERSIST_FAILED');
+  assert.ok(savedStates.length > savesBeforeFail);
+  assert.ok(telemetries.length > 1);
+  for (const persisted of savedStates) {
+    assert.equal(persisted.lastFenceByDevice['ctrl-chwp-1'], undefined);
+    assert.equal(persisted.executedCommandIds.includes('cmd-admit-fail'), false);
+  }
+
+  const retryReply = await executor.handleCommand(createCommand({
+    commandId: 'cmd-admit-fail',
+    deviceId: 'ctrl-chwp-1',
+    commandCode: 'STOP',
+    executionFence: 42,
+  }));
+  assert.equal(retryReply.edgeStatus, 'EXECUTED');
 });

@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -114,7 +115,7 @@ func main() {
 		alarmRelay, err = commandservice.NewControlAlarmRelay(commandservice.ControlAlarmRelayConfig{
 			Store:      store,
 			Sender:     alarmSender,
-			LeaseOwner: "command-owner",
+			LeaseOwner: commandservice.UniqueControlAlarmLeaseOwner("command-owner"),
 			Logger:     logger,
 			Metrics:    telemetry.Metrics,
 		})
@@ -217,9 +218,17 @@ func main() {
 	}()
 
 	relayCtx, cancelRelay := context.WithCancel(context.Background())
-	defer cancelRelay()
+	var relayWg sync.WaitGroup
+	defer func() {
+		cancelRelay()
+		relayWg.Wait()
+	}()
 	if alarmRelay != nil {
-		go alarmRelay.Run(relayCtx)
+		relayWg.Add(1)
+		go func() {
+			defer relayWg.Done()
+			alarmRelay.Run(relayCtx)
+		}()
 	}
 
 	shutdown := make(chan os.Signal, 1)
@@ -239,8 +248,13 @@ func main() {
 	logger.Info("command_service_started", "address", server.Addr, "policy_revision", policyRevision)
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("command_service_stopped_unexpectedly", "error_code", "COMMAND_SERVE_FAILED")
+		cancelRelay()
+		relayWg.Wait()
+		store.Close()
 		os.Exit(1)
 	}
+	cancelRelay()
+	relayWg.Wait()
 	logger.Info("command_service_stopped")
 }
 
@@ -299,16 +313,6 @@ func resolveCommandControlEventsEndpoint() string {
 	return ""
 }
 
-func buildCommandControlFailureNotifier(logger *slog.Logger) commandservice.ControlFailureNotifier {
-	sender := buildCommandControlFailureSender(logger)
-	if sender == nil {
-		return nil
-	}
-	return func(ctx context.Context, event commandservice.ControlFailureEvent) {
-		_ = sender(ctx, event)
-	}
-}
-
 func buildCommandControlFailureSender(logger *slog.Logger) commandservice.ControlAlarmSender {
 	endpoint := resolveCommandControlEventsEndpoint()
 	if endpoint == "" {
@@ -353,16 +357,6 @@ func buildCommandControlFailureSender(logger *slog.Logger) commandservice.Contro
 		return http.ErrUseLastResponse
 	}
 	return newHTTPControlFailureSender(endpoint, client, logger)
-}
-
-func newHTTPControlFailureNotifier(endpoint string, client *http.Client, logger *slog.Logger) commandservice.ControlFailureNotifier {
-	sender := newHTTPControlFailureSender(endpoint, client, logger)
-	if sender == nil {
-		return nil
-	}
-	return func(ctx context.Context, event commandservice.ControlFailureEvent) {
-		_ = sender(ctx, event)
-	}
 }
 
 func newHTTPControlFailureSender(endpoint string, client *http.Client, logger *slog.Logger) commandservice.ControlAlarmSender {

@@ -132,7 +132,7 @@ func runAlarmNotificationRelay(ctx context.Context, logger *slog.Logger, metrics
 		return
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	}
 	workerID := replicaWorkerID("NOTIFICATION_ALARM_RELAY_WORKER_ID", "notification-alarm-relay")
 	consecutiveErrors := 0
@@ -213,7 +213,7 @@ func completeRelayNotificationEvent(ctx context.Context, relay *alarmservice.Not
 // bounded backoff until ctx is canceled.
 func runSupervisedNotificationLoop(ctx context.Context, logger *slog.Logger, metrics *observability.Registry, component string, fn func()) {
 	if logger == nil {
-		logger = slog.Default()
+		logger = observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
 	}
 	consecutivePanics := 0
 	for {

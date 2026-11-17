@@ -58,8 +58,8 @@ func TestCommandControlFailureNotifierConfigurationAndHTTPDelivery(t *testing.T)
 	t.Setenv("ALARM_CONTROL_EVENTS_URL", "")
 	t.Setenv("ALARM_SERVICE_URL", "")
 	t.Setenv("ALARM_SERVICE_SERVER_CA", "")
-	if notifier := buildCommandControlFailureNotifier(slog.New(slog.NewTextHandler(io.Discard, nil))); notifier != nil {
-		t.Fatal("expected nil notifier when no alarm endpoint env var is set")
+	if sender := buildCommandControlFailureSender(slog.New(slog.NewTextHandler(io.Discard, nil))); sender != nil {
+		t.Fatal("expected nil sender when no alarm endpoint env var is set")
 	}
 
 	t.Setenv("ALARM_SERVICE_URL", "https://alarm-owner:8448/")
@@ -70,8 +70,8 @@ func TestCommandControlFailureNotifierConfigurationAndHTTPDelivery(t *testing.T)
 	if got := resolveCommandControlEventsEndpoint(); got != "https://alarm-owner:8448/custom/control-events" {
 		t.Fatalf("resolved explicit endpoint=%q", got)
 	}
-	if notifier := buildCommandControlFailureNotifier(slog.New(slog.NewTextHandler(io.Discard, nil))); notifier != nil {
-		t.Fatal("expected nil notifier when ALARM_SERVICE_SERVER_CA is missing")
+	if sender := buildCommandControlFailureSender(slog.New(slog.NewTextHandler(io.Discard, nil))); sender != nil {
+		t.Fatal("expected nil sender when ALARM_SERVICE_SERVER_CA is missing")
 	}
 
 	var received commandControlEventPayload
@@ -88,11 +88,11 @@ func TestCommandControlFailureNotifierConfigurationAndHTTPDelivery(t *testing.T)
 	}))
 	defer server.Close()
 
-	notifier := newHTTPControlFailureNotifier(server.URL+"/internal/v1/alarms/control-events", server.Client(), nil)
-	if notifier == nil {
-		t.Fatal("expected HTTP notifier")
+	sender := newHTTPControlFailureSender(server.URL+"/internal/v1/alarms/control-events", server.Client(), nil)
+	if sender == nil {
+		t.Fatal("expected HTTP sender")
 	}
-	notifier(context.Background(), commandservice.ControlFailureEvent{
+	if err := sender(context.Background(), commandservice.ControlFailureEvent{
 		Kind:       "OUTCOME_UNKNOWN",
 		TenantID:   "018f3d00-0000-7000-8000-000000000001",
 		SiteID:     "018f3e00-1000-7000-8000-000000000001",
@@ -102,7 +102,9 @@ func TestCommandControlFailureNotifierConfigurationAndHTTPDelivery(t *testing.T)
 		Capability: commandmodel.CapabilityStart,
 		ReasonCode: "LEASE_EXPIRED_WITHOUT_SEND_PROOF",
 		OccurredAt: time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC),
-	})
+	}); err != nil {
+		t.Fatalf("HTTP sender err=%v", err)
+	}
 	if received.SchemaVersion != 1 || received.EventKind != "OUTCOME_UNKNOWN" || received.ActorID != "command-owner" ||
 		received.DeviceID == nil || *received.DeviceID != "018f3e00-3000-7000-8000-000000000001" ||
 		received.PointID == nil || *received.PointID != "018f3e00-4000-7000-8000-000000000001" {

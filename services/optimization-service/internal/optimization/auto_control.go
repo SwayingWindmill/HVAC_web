@@ -2,6 +2,8 @@ package optimization
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -143,7 +145,6 @@ type AutoControlStore interface {
 		baselineSupplyC, appliedSupplyC, restoreSupplyC, zoneMaxC, supplyMaxC float64,
 		at time.Time,
 	) (OptimizationExecutionMonitorRecord, error)
-	ListObservingExecutionMonitors(ctx context.Context, limit int) ([]OptimizationExecutionMonitorRecord, error)
 	ClaimObservingExecutionMonitors(ctx context.Context, claimOwner string, leaseDuration time.Duration, now time.Time, limit int) ([]OptimizationExecutionMonitorRecord, error)
 	ReleaseMonitorClaim(ctx context.Context, monitorID, tenantID, siteID, claimOwner string, releasedAt time.Time) error
 	RecordMonitorHealthyHeartbeat(ctx context.Context, monitorID, tenantID, siteID, claimOwner string, checkedAt time.Time) error
@@ -205,7 +206,11 @@ func defaultAutoControlWorkerID() string {
 	if err != nil || strings.TrimSpace(hostname) == "" {
 		hostname = "optimization"
 	}
-	return fmt.Sprintf("%s:%d", strings.TrimSpace(hostname), os.Getpid())
+	suffix := make([]byte, 4)
+	if _, randErr := rand.Read(suffix); randErr != nil {
+		return fmt.Sprintf("%s:%d", strings.TrimSpace(hostname), os.Getpid())
+	}
+	return fmt.Sprintf("%s:%d:%s", strings.TrimSpace(hostname), os.Getpid(), hex.EncodeToString(suffix))
 }
 
 func (controller *AutoController) effectiveWorkerID() string {
