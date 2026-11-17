@@ -121,7 +121,8 @@
         "infra/registry/postgres/init/registry-tags-and-template-read.sql",
         "infra/registry/postgres/init/iam-registry-read-views.sql",
         "infra/connectivity/postgres/init/gateway-certificate-revocation.sql",
-        "infra/connectivity/postgres/init/gateway-config-shadows.sql"
+        "infra/connectivity/postgres/init/gateway-config-shadows.sql",
+        "infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql"
       ]
     },
     {

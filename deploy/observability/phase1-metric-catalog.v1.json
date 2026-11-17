@@ -42,6 +42,12 @@
     {"name":"hvac_mqtt_values_total","type":"counter","labels":["outcome"],"seriesBudget":8},
     {"name":"hvac_mqtt_processing_queue_depth","type":"gauge","labels":[],"seriesBudget":1},
     {"name":"hvac_mqtt_processing_queue_capacity","type":"gauge","labels":[],"seriesBudget":1},
+    {"name":"hvac_mqtt_online_gateways","type":"gauge","labels":[],"seriesBudget":1},
+    {"name":"hvac_mqtt_active_tunnels","type":"gauge","labels":[],"seriesBudget":1},
+    {"name":"hvac_mqtt_concentrator_rpc_total","type":"counter","labels":["outcome"],"seriesBudget":8},
+    {"name":"hvac_mqtt_concentrator_rpc_duration_seconds","type":"histogram","labels":["outcome"],"seriesBudget":8},
+    {"name":"hvac_mqtt_command_publishes_total","type":"counter","labels":["outcome"],"seriesBudget":8},
+    {"name":"hvac_mqtt_command_reply_wait_seconds","type":"histogram","labels":["outcome"],"seriesBudget":8},
 
     {"name":"hvac_edge_mqtt_connected","type":"gauge","labels":[],"seriesBudget":1},
     {"name":"hvac_edge_mqtt_connections_total","type":"counter","labels":["outcome"],"seriesBudget":4},
@@ -69,6 +75,6 @@
       "success", "failed", "queued", "ack_failed", "dropped", "processed", "accepted", "duplicate", "out_of_order", "quarantined", "rejected",
       "pre_send_rejected", "request_committed", "acknowledged", "verified", "inconclusive", "mismatch", "timed_out", "unknown"
     ],
-    "reason_family": ["transport", "dependency", "authorization", "scope", "capacity", "unknown"]
+    "reason_family": ["transport", "dependency", "authorization", "scope", "capacity", "rate_limited", "unknown"]
   }
 }
