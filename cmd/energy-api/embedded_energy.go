@@ -678,8 +678,7 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 		store.Close()
 		return nil, nil, func() {}, err
 	}
-	alarmNotifier := buildEmbeddedCommandControlFailureNotifier(alarmRef, &certificate, logger)
-	store.SetControlFailureNotifier(alarmNotifier)
+	alarmSender := buildEmbeddedCommandControlFailureSender(alarmRef, &certificate, logger)
 	authority, err := commandservice.NewControlAuthority(commandservice.ControlAuthorityConfig{
 		Store:                  store,
 		Runtime:                store,
@@ -691,7 +690,6 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 		CommandGrantPresenter:  commandServiceSPIFFE,
 		CommandGrantAudience:   grantAudience,
 		CommandGrantUseChecker: useChecker,
-		ControlFailureNotifier: alarmNotifier,
 	})
 	if err != nil {
 		store.Close()
@@ -726,11 +724,37 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "energy-api-command", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), QueueSize: 2048, ExportTimeout: 500 * time.Millisecond,
 	})
-	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(embeddedCommandRuntimeConfig(authority, telemetry.Metrics, alarmNotifier))
+	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(embeddedCommandRuntimeConfig(authority, telemetry.Metrics, nil))
 	if err != nil {
 		authority.Close()
 		store.Close()
 		return nil, nil, func() {}, err
+	}
+	relayCtx, cancelRelay := context.WithCancel(ctx)
+	var relayWG sync.WaitGroup
+	if alarmSender != nil {
+		alarmRelay, relayErr := commandservice.NewControlAlarmRelay(commandservice.ControlAlarmRelayConfig{
+			Store:      store,
+			Sender:     alarmSender,
+			LeaseOwner: commandservice.UniqueControlAlarmLeaseOwner("energy-api-command"),
+			Logger:     logger,
+			Metrics:    telemetry.Metrics,
+		})
+		if relayErr != nil {
+			cancelRelay()
+			if closer, ok := runtimeHandler.(interface{ Close() }); ok {
+				closer.Close()
+			}
+			authority.Close()
+			store.Close()
+			return nil, nil, func() {}, relayErr
+		}
+		store.SetControlAlarmOutboxWakeup(alarmRelay.Notify)
+		relayWG.Add(1)
+		go func() {
+			defer relayWG.Done()
+			alarmRelay.Run(relayCtx)
+		}()
 	}
 	handler := newEmbeddedCommandHandler(gatewaySPIFFE, operatorHandler, commandHandler, runtimeHandler, telemetry)
 	server := &http.Server{
@@ -741,6 +765,8 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
 	}
 	closeOwner := func() {
+		cancelRelay()
+		relayWG.Wait()
 		if closer, ok := runtimeHandler.(interface{ Close() }); ok {
 			closer.Close()
 		}
@@ -805,7 +831,7 @@ func splitNonEmptyCSV(raw string) []string {
 	return out
 }
 
-func buildEmbeddedCommandControlFailureNotifier(alarmRef *embeddedAlarmStoreRef, clientCert *tls.Certificate, logger *slog.Logger) commandservice.ControlFailureNotifier {
+func buildEmbeddedCommandControlFailureSender(alarmRef *embeddedAlarmStoreRef, clientCert *tls.Certificate, logger *slog.Logger) commandservice.ControlAlarmSender {
 	alarmBaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("ALARM_SERVICE_URL")), "/")
 	var remoteClient *http.Client
 	if parsed, err := url.Parse(alarmBaseURL); err == nil && parsed.Scheme == "https" && parsed.Host != "" && clientCert != nil {
@@ -813,6 +839,9 @@ func buildEmbeddedCommandControlFailureNotifier(alarmRef *embeddedAlarmStoreRef,
 			if roots, err := loadCertPool(caPath, "Alarm Service server CA"); err == nil {
 				remoteClient = &http.Client{
 					Timeout: 3 * time.Second,
+					CheckRedirect: func(*http.Request, []*http.Request) error {
+						return http.ErrUseLastResponse
+					},
 					Transport: &http.Transport{
 						TLSClientConfig: &tls.Config{
 							MinVersion:   tls.VersionTLS13,
@@ -825,7 +854,10 @@ func buildEmbeddedCommandControlFailureNotifier(alarmRef *embeddedAlarmStoreRef,
 			}
 		}
 	}
-	return func(ctx context.Context, event commandservice.ControlFailureEvent) {
+	if alarmRef == nil && (remoteClient == nil || alarmBaseURL == "") {
+		return nil
+	}
+	return func(ctx context.Context, event commandservice.ControlFailureEvent) error {
 		actorType := strings.TrimSpace(event.ActorType)
 		if actorType == "" {
 			actorType = "COMMAND_RUNTIME"
@@ -857,21 +889,24 @@ func buildEmbeddedCommandControlFailureNotifier(alarmRef *embeddedAlarmStoreRef,
 			payload.PointID = &pointID
 		}
 		if store := alarmRef.getStore(); store != nil {
-			if _, err := alarmservice.PublishControlEvent(ctx, store, payload, event.OccurredAt); err != nil && logger != nil {
-				logger.Warn("embedded_command_control_alarm_failed", "error_code", "CONTROL_ALARM_PUBLISH_FAILED", "command_id", event.CommandID, "event_kind", event.Kind)
+			if _, err := alarmservice.PublishControlEvent(ctx, store, payload, event.OccurredAt); err != nil {
+				if logger != nil {
+					logger.Warn("embedded_command_control_alarm_failed", "error_code", "CONTROL_ALARM_PUBLISH_FAILED", "command_id", event.CommandID, "event_kind", event.Kind)
+				}
+				return &commandservice.ControlAlarmDeliveryError{Code: "CONTROL_ALARM_PUBLISH_FAILED"}
 			}
-			return
+			return nil
 		}
 		if remoteClient == nil || alarmBaseURL == "" {
-			return
+			return &commandservice.ControlAlarmDeliveryError{Code: "CONTROL_ALARM_TARGET_UNAVAILABLE"}
 		}
 		raw, err := json.Marshal(payload)
 		if err != nil {
-			return
+			return &commandservice.ControlAlarmDeliveryError{Code: "CONTROL_ALARM_PAYLOAD_INVALID"}
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, alarmBaseURL+alarmservice.InternalControlEventsPath, bytes.NewReader(raw))
 		if err != nil {
-			return
+			return &commandservice.ControlAlarmDeliveryError{Code: "CONTROL_ALARM_REQUEST_INVALID"}
 		}
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := remoteClient.Do(req)
@@ -879,12 +914,16 @@ func buildEmbeddedCommandControlFailureNotifier(alarmRef *embeddedAlarmStoreRef,
 			if logger != nil {
 				logger.Warn("embedded_command_control_alarm_failed", "error_code", "CONTROL_ALARM_HTTP_FAILED", "command_id", event.CommandID, "event_kind", event.Kind)
 			}
-			return
+			return &commandservice.ControlAlarmDeliveryError{Code: "CONTROL_ALARM_HTTP_FAILED"}
 		}
 		_ = resp.Body.Close()
-		if resp.StatusCode >= http.StatusMultipleChoices && logger != nil {
-			logger.Warn("embedded_command_control_alarm_rejected", "error_code", "CONTROL_ALARM_HTTP_REJECTED", "status", resp.StatusCode, "command_id", event.CommandID, "event_kind", event.Kind)
+		if resp.StatusCode >= http.StatusMultipleChoices {
+			if logger != nil {
+				logger.Warn("embedded_command_control_alarm_rejected", "error_code", "CONTROL_ALARM_HTTP_REJECTED", "status", resp.StatusCode, "command_id", event.CommandID, "event_kind", event.Kind)
+			}
+			return &commandservice.ControlAlarmDeliveryError{Code: "CONTROL_ALARM_HTTP_REJECTED"}
 		}
+		return nil
 	}
 }
 

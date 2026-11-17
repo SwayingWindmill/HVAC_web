@@ -23,7 +23,7 @@ func (store *PostgresStore) ClaimPendingAlarmEvaluations(ctx context.Context, wo
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	rows, err := tx.Query(ctx, `
-SELECT event_id::text, device_id::text, business_revision, payload
+SELECT event_id::text, device_id::text, business_revision, alarm_attempts, payload
 FROM telemetry_runtime.telemetry_publication_outbox
 WHERE subscription_id IS NULL
   AND alarm_delivery_state = 'PENDING'
@@ -38,18 +38,21 @@ LIMIT $3
 	}
 	publications := make([]PendingPublication, 0, limit)
 	eventIDs := make([]string, 0, limit)
+	var corruptIDs []string
 	for rows.Next() {
 		var eventID, deviceID string
 		var revision int64
+		var alarmAttempts int
 		var payloadJSON []byte
-		if err := rows.Scan(&eventID, &deviceID, &revision, &payloadJSON); err != nil {
+		if err := rows.Scan(&eventID, &deviceID, &revision, &alarmAttempts, &payloadJSON); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("scan pending Alarm evaluation publication: %w", err)
 		}
-		publication, err := decodeAlarmEvaluationPublication(eventID, deviceID, revision, payloadJSON)
+		publication, err := decodeAlarmEvaluationPublication(eventID, deviceID, revision, alarmAttempts, payloadJSON)
 		if err != nil {
-			rows.Close()
-			return nil, err
+			// Isolate malformed outbox rows in DEAD_LETTER so one bad payload cannot stall the queue.
+			corruptIDs = append(corruptIDs, eventID)
+			continue
 		}
 		publications = append(publications, publication)
 		eventIDs = append(eventIDs, eventID)
@@ -59,6 +62,17 @@ LIMIT $3
 		return nil, fmt.Errorf("iterate pending Alarm evaluation publications: %w", err)
 	}
 	rows.Close()
+	for _, corruptID := range corruptIDs {
+		if _, err := tx.Exec(ctx, `
+UPDATE telemetry_runtime.telemetry_publication_outbox
+SET alarm_delivery_state='DEAD_LETTER', alarm_dead_lettered_at=$2, alarm_published_at=NULL,
+    alarm_attempts=alarm_attempts+1, alarm_last_error_code='ALARM_EVALUATION_PAYLOAD_INVALID',
+    alarm_claim_owner=NULL, alarm_claim_until=NULL
+WHERE event_id=$1::uuid AND subscription_id IS NULL AND alarm_delivery_state='PENDING'
+`, corruptID, now.UTC()); err != nil {
+			return nil, fmt.Errorf("dead-letter invalid Alarm evaluation publication: %w", err)
+		}
+	}
 	claimUntil := now.UTC().Add(leaseDuration)
 	for _, eventID := range eventIDs {
 		if _, err := tx.Exec(ctx, `
@@ -113,7 +127,27 @@ WHERE event_id=$1::uuid AND subscription_id IS NULL AND alarm_delivery_state='PE
 	return nil
 }
 
-func decodeAlarmEvaluationPublication(eventID, deviceID string, revision int64, payloadJSON []byte) (PendingPublication, error) {
+func (store *PostgresStore) MarkAlarmEvaluationDeadLetter(ctx context.Context, eventID, workerID string, deadLetteredAt time.Time, errorCode string) error {
+	if store == nil || store.pool == nil || workerID == "" || errorCode == "" {
+		return ErrAlarmEvaluationRelayUnavailable
+	}
+	command, err := store.pool.Exec(ctx, `
+UPDATE telemetry_runtime.telemetry_publication_outbox
+SET alarm_delivery_state='DEAD_LETTER', alarm_dead_lettered_at=$3, alarm_published_at=NULL,
+    alarm_attempts=alarm_attempts+1, alarm_last_error_code=$4,
+    alarm_claim_owner=NULL, alarm_claim_until=NULL
+WHERE event_id=$1::uuid AND subscription_id IS NULL AND alarm_delivery_state='PENDING' AND alarm_claim_owner=$2
+`, eventID, workerID, deadLetteredAt.UTC(), errorCode)
+	if err != nil {
+		return fmt.Errorf("dead-letter Alarm evaluation publication: %w", err)
+	}
+	if command.RowsAffected() != 1 {
+		return ErrAlarmEvaluationRelayUnavailable
+	}
+	return nil
+}
+
+func decodeAlarmEvaluationPublication(eventID, deviceID string, revision int64, alarmAttempts int, payloadJSON []byte) (PendingPublication, error) {
 	var payload struct {
 		EventID          string                                 `json:"eventId"`
 		DeviceID         string                                 `json:"deviceId"`
@@ -135,7 +169,7 @@ func decodeAlarmEvaluationPublication(eventID, deviceID string, revision int64, 
 	}
 	return PendingPublication{
 		EventID: eventID, DeviceID: deviceID, PreviousRevision: payload.PreviousRevision,
-		Revision: payload.Revision, EvaluatedAt: evaluatedAt.UTC(), Snapshot: payload.Snapshot,
+		Revision: payload.Revision, AlarmAttempts: alarmAttempts, EvaluatedAt: evaluatedAt.UTC(), Snapshot: payload.Snapshot,
 		ChangedKeys: append([]string(nil), payload.ChangedKeys...),
 	}, nil
 }

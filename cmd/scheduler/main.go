@@ -26,6 +26,21 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	scanInterval, err := durationEnv("SCHEDULER_SCAN_INTERVAL", 2*time.Second, time.Second, time.Minute)
+	if err != nil {
+		logger.Error("scheduler_configuration_invalid", "error_code", "SCHEDULER_CONFIGURATION_INVALID", "variable", "SCHEDULER_SCAN_INTERVAL")
+		os.Exit(1)
+	}
+	scanBatch, err := integerEnv("SCHEDULER_SCAN_BATCH", 100, 1, 1000)
+	if err != nil {
+		logger.Error("scheduler_configuration_invalid", "error_code", "SCHEDULER_CONFIGURATION_INVALID", "variable", "SCHEDULER_SCAN_BATCH")
+		os.Exit(1)
+	}
+	fireTolerance := 2 * scanInterval
+	if fireTolerance < time.Minute {
+		fireTolerance = time.Minute
+	}
+
 	store, err := openStore(ctx)
 	if err != nil {
 		logger.Error("scheduler_configuration_invalid", "error_code", "SCHEDULER_CONFIGURATION_INVALID")
@@ -33,13 +48,6 @@ func main() {
 	}
 	defer store.Close()
 	telemetry.SetDependencies(observability.Dependency{Name: "postgres", Required: true, Check: store.Ping})
-
-	scanInterval := durationEnv("SCHEDULER_SCAN_INTERVAL", 2*time.Second, time.Second, time.Minute)
-	scanBatch := integerEnv("SCHEDULER_SCAN_BATCH", 100, 1, 1000)
-	fireTolerance := 2 * scanInterval
-	if fireTolerance < time.Minute {
-		fireTolerance = time.Minute
-	}
 
 	diagnostics := &http.Server{
 		Addr: envOr("SCHEDULER_DIAGNOSTICS_ADDR", ":19092"), Handler: telemetry.DiagnosticsHandler(),
@@ -160,26 +168,26 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-func durationEnv(name string, fallback, minimum, maximum time.Duration) time.Duration {
+func durationEnv(name string, fallback, minimum, maximum time.Duration) (time.Duration, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil || parsed < minimum || parsed > maximum {
-		panic("invalid duration environment variable: " + name)
+		return 0, fmt.Errorf("invalid duration environment variable: %s", name)
 	}
-	return parsed
+	return parsed, nil
 }
 
-func integerEnv(name string, fallback, minimum, maximum int) int {
+func integerEnv(name string, fallback, minimum, maximum int) (int, error) {
 	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < minimum || parsed > maximum {
-		panic("invalid integer environment variable: " + name)
+		return 0, fmt.Errorf("invalid integer environment variable: %s", name)
 	}
-	return parsed
+	return parsed, nil
 }

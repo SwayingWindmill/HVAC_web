@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -264,45 +265,103 @@ INSERT INTO core_registry.optimization_execution_monitors (
 	}, nil
 }
 
-func (store *PostgresStore) ListObservingExecutionMonitors(ctx context.Context, limit int) ([]OptimizationExecutionMonitorRecord, error) {
+func scanExecutionMonitorRow(row pgx.Row) (OptimizationExecutionMonitorRecord, error) {
+	var item OptimizationExecutionMonitorRecord
+	err := row.Scan(
+		&item.ID, &item.TenantID, &item.SiteID, &item.LeaseID, &item.RecommendationID,
+		&item.CommandIntentID, &item.DeviceID, &item.TargetCapability,
+		&item.BaselineSupplyTempC, &item.AppliedSupplyTempC, &item.RestoreSupplyTempC,
+		&item.ZoneTempMaxC, &item.SupplyTempMaxC, &item.StartedAt, &item.WindowEndsAt,
+		&item.LastCheckedAt, &item.TelemetryUnhealthySince, &item.Status, &item.TripReason,
+		&item.RollbackCommandIntentID, &item.ClaimOwner, &item.ClaimUntil,
+	)
+	return item, err
+}
+
+// ClaimObservingExecutionMonitors atomically leases up to limit OBSERVING monitors using SKIP LOCKED
+// so multiple replicas never process or roll back the same monitor concurrently.
+func (store *PostgresStore) ClaimObservingExecutionMonitors(ctx context.Context, claimOwner string, leaseDuration time.Duration, now time.Time, limit int) ([]OptimizationExecutionMonitorRecord, error) {
+	if store == nil || store.pool == nil {
+		return nil, errors.New("optimization postgres store is unavailable")
+	}
+	owner := strings.TrimSpace(claimOwner)
+	if owner == "" || leaseDuration <= 0 {
+		return nil, errors.New("execution monitor claim owner and positive lease duration are required")
+	}
 	if limit <= 0 || limit > 500 {
-		limit = 100
+		limit = DefaultExecutionMonitorClaimLimit
 	}
-	rows, err := store.pool.Query(ctx, `
-SELECT id::text, tenant_id::text, site_id::text, lease_id::text, recommendation_id::text,
-       command_intent_id::text, device_id::text, target_capability,
-       baseline_supply_temp_c, applied_supply_temp_c, restore_supply_temp_c,
-       zone_temp_max_c, supply_temp_max_c, started_at, window_ends_at,
-       last_checked_at, telemetry_unhealthy_since, status, trip_reason,
-       CASE WHEN rollback_command_intent_id IS NULL THEN NULL ELSE rollback_command_intent_id::text END
-FROM core_registry.optimization_execution_monitors
-WHERE status = 'OBSERVING'
-ORDER BY window_ends_at ASC, started_at ASC, id ASC
-LIMIT $1
-`, limit)
+	nowUTC := now.UTC()
+	claimUntil := nowUTC.Add(leaseDuration)
+
+	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list observing execution monitors: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `
+SELECT m.id::text, m.tenant_id::text, m.site_id::text, m.lease_id::text, m.recommendation_id::text,
+       m.command_intent_id::text, m.device_id::text, m.target_capability,
+       m.baseline_supply_temp_c, m.applied_supply_temp_c, m.restore_supply_temp_c,
+       m.zone_temp_max_c, m.supply_temp_max_c, m.started_at, m.window_ends_at,
+       m.last_checked_at, m.telemetry_unhealthy_since, m.status, m.trip_reason,
+       CASE WHEN m.rollback_command_intent_id IS NULL THEN NULL ELSE m.rollback_command_intent_id::text END,
+       m.claim_owner, m.claim_until
+FROM core_registry.claim_observing_execution_monitors($1, $2, $3, $4) AS m
+`, owner, claimUntil, nowUTC, limit)
+	if err != nil {
+		return nil, fmt.Errorf("claim observing execution monitors: %w", err)
+	}
 	items := []OptimizationExecutionMonitorRecord{}
 	for rows.Next() {
-		var item OptimizationExecutionMonitorRecord
-		if scanErr := rows.Scan(
-			&item.ID, &item.TenantID, &item.SiteID, &item.LeaseID, &item.RecommendationID,
-			&item.CommandIntentID, &item.DeviceID, &item.TargetCapability,
-			&item.BaselineSupplyTempC, &item.AppliedSupplyTempC, &item.RestoreSupplyTempC,
-			&item.ZoneTempMaxC, &item.SupplyTempMaxC, &item.StartedAt, &item.WindowEndsAt,
-			&item.LastCheckedAt, &item.TelemetryUnhealthySince, &item.Status, &item.TripReason,
-			&item.RollbackCommandIntentID,
-		); scanErr != nil {
+		item, scanErr := scanExecutionMonitorRow(rows)
+		if scanErr != nil {
+			rows.Close()
 			return nil, scanErr
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if rowsErr := rows.Err(); rowsErr != nil {
+		rows.Close()
+		return nil, rowsErr
+	}
+	rows.Close()
+
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(items, func(a, b OptimizationExecutionMonitorRecord) int {
+		if cmp := a.WindowEndsAt.Compare(b.WindowEndsAt); cmp != 0 {
+			return cmp
+		}
+		if cmp := a.StartedAt.Compare(b.StartedAt); cmp != 0 {
+			return cmp
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	return items, nil
 }
 
-func (store *PostgresStore) RecordMonitorHealthyHeartbeat(ctx context.Context, monitorID, tenantID, siteID string, checkedAt time.Time) error {
+func validateMonitorClaimScope(store *PostgresStore, monitorID, tenantID, siteID, claimOwner string) (string, error) {
+	if store == nil || store.pool == nil {
+		return "", errors.New("optimization postgres store is unavailable")
+	}
+	if !uuidPattern.MatchString(tenantID) || !uuidPattern.MatchString(siteID) || !uuidPattern.MatchString(monitorID) {
+		return "", errors.New("execution monitor scope is invalid")
+	}
+	owner := strings.TrimSpace(claimOwner)
+	if owner == "" {
+		return "", errors.New("execution monitor claim owner is required")
+	}
+	return owner, nil
+}
+
+func (store *PostgresStore) ReleaseMonitorClaim(ctx context.Context, monitorID, tenantID, siteID, claimOwner string, releasedAt time.Time) error {
+	owner, err := validateMonitorClaimScope(store, monitorID, tenantID, siteID, claimOwner)
+	if err != nil {
+		return err
+	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -311,17 +370,31 @@ func (store *PostgresStore) RecordMonitorHealthyHeartbeat(ctx context.Context, m
 	if err = optimizationScope(ctx, tx, tenantID, siteID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 UPDATE core_registry.optimization_execution_monitors
-SET telemetry_unhealthy_since = NULL, last_checked_at = $4, updated_at = $4
-WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid AND status = 'OBSERVING'
-`, tenantID, siteID, monitorID, checkedAt.UTC()); err != nil {
+SET claim_owner = NULL,
+    claim_until = NULL,
+    updated_at = GREATEST(updated_at, $4)
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND id = $3::uuid
+  AND status = 'OBSERVING'
+  AND claim_owner = $5
+`, tenantID, siteID, monitorID, releasedAt.UTC(), owner)
+	if err != nil {
 		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrExecutionMonitorClaimLost
 	}
 	return tx.Commit(ctx)
 }
 
-func (store *PostgresStore) RecordMonitorTelemetryUnhealthy(ctx context.Context, monitorID, tenantID, siteID string, unhealthySince, checkedAt time.Time) error {
+func (store *PostgresStore) RecordMonitorHealthyHeartbeat(ctx context.Context, monitorID, tenantID, siteID, claimOwner string, checkedAt time.Time) error {
+	owner, err := validateMonitorClaimScope(store, monitorID, tenantID, siteID, claimOwner)
+	if err != nil {
+		return err
+	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -330,19 +403,68 @@ func (store *PostgresStore) RecordMonitorTelemetryUnhealthy(ctx context.Context,
 	if err = optimizationScope(ctx, tx, tenantID, siteID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
+UPDATE core_registry.optimization_execution_monitors
+SET telemetry_unhealthy_since = NULL,
+    last_checked_at = $4,
+    claim_owner = NULL,
+    claim_until = NULL,
+    updated_at = GREATEST(updated_at, $4)
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND id = $3::uuid
+  AND status = 'OBSERVING'
+  AND claim_owner = $5
+`, tenantID, siteID, monitorID, checkedAt.UTC(), owner)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrExecutionMonitorClaimLost
+	}
+	return tx.Commit(ctx)
+}
+
+func (store *PostgresStore) RecordMonitorTelemetryUnhealthy(ctx context.Context, monitorID, tenantID, siteID, claimOwner string, unhealthySince, checkedAt time.Time) error {
+	owner, err := validateMonitorClaimScope(store, monitorID, tenantID, siteID, claimOwner)
+	if err != nil {
+		return err
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = optimizationScope(ctx, tx, tenantID, siteID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `
 UPDATE core_registry.optimization_execution_monitors
 SET telemetry_unhealthy_since = COALESCE(telemetry_unhealthy_since, $4),
     last_checked_at = $5,
-    updated_at = $5
-WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid AND status = 'OBSERVING'
-`, tenantID, siteID, monitorID, unhealthySince.UTC(), checkedAt.UTC()); err != nil {
+    claim_owner = NULL,
+    claim_until = NULL,
+    updated_at = GREATEST(updated_at, $5)
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND id = $3::uuid
+  AND status = 'OBSERVING'
+  AND claim_owner = $6
+`, tenantID, siteID, monitorID, unhealthySince.UTC(), checkedAt.UTC(), owner)
+	if err != nil {
 		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrExecutionMonitorClaimLost
 	}
 	return tx.Commit(ctx)
 }
 
-func (store *PostgresStore) CompleteMonitorVerified(ctx context.Context, monitorID, tenantID, siteID string, checkedAt time.Time) error {
+func (store *PostgresStore) CompleteMonitorVerified(ctx context.Context, monitorID, tenantID, siteID, claimOwner string, checkedAt time.Time) error {
+	owner, err := validateMonitorClaimScope(store, monitorID, tenantID, siteID, claimOwner)
+	if err != nil {
+		return err
+	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -351,17 +473,34 @@ func (store *PostgresStore) CompleteMonitorVerified(ctx context.Context, monitor
 	if err = optimizationScope(ctx, tx, tenantID, siteID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 UPDATE core_registry.optimization_execution_monitors
-SET status = 'VERIFIED', telemetry_unhealthy_since = NULL, last_checked_at = $4, updated_at = $4
-WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid AND status = 'OBSERVING'
-`, tenantID, siteID, monitorID, checkedAt.UTC()); err != nil {
+SET status = 'VERIFIED',
+    telemetry_unhealthy_since = NULL,
+    last_checked_at = $4,
+    claim_owner = NULL,
+    claim_until = NULL,
+    updated_at = GREATEST(updated_at, $4)
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND id = $3::uuid
+  AND status = 'OBSERVING'
+  AND claim_owner = $5
+`, tenantID, siteID, monitorID, checkedAt.UTC(), owner)
+	if err != nil {
 		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrExecutionMonitorClaimLost
 	}
 	return tx.Commit(ctx)
 }
 
-func (store *PostgresStore) TripMonitorAndLease(ctx context.Context, monitor OptimizationExecutionMonitorRecord, newStatus, tripReason string, rollbackCommandIntentID *string, trippedAt time.Time) error {
+func (store *PostgresStore) TripMonitorAndLease(ctx context.Context, monitor OptimizationExecutionMonitorRecord, claimOwner, newStatus, tripReason string, rollbackCommandIntentID *string, trippedAt time.Time) error {
+	owner, err := validateMonitorClaimScope(store, monitor.ID, monitor.TenantID, monitor.SiteID, claimOwner)
+	if err != nil {
+		return err
+	}
 	nowUTC := trippedAt.UTC()
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
@@ -372,6 +511,29 @@ func (store *PostgresStore) TripMonitorAndLease(ctx context.Context, monitor Opt
 		return err
 	}
 
+	// Fence the monitor row first so a slow replica whose lease expired cannot trip the lease or emit a duplicate outbox event.
+	tag, err := tx.Exec(ctx, `
+UPDATE core_registry.optimization_execution_monitors
+SET status = $4,
+    trip_reason = $5,
+    rollback_command_intent_id = $6::uuid,
+    last_checked_at = $7,
+    claim_owner = NULL,
+    claim_until = NULL,
+    updated_at = GREATEST(updated_at, $7)
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND id = $3::uuid
+  AND status = 'OBSERVING'
+  AND claim_owner = $8
+`, monitor.TenantID, monitor.SiteID, monitor.ID, newStatus, tripReason, rollbackCommandIntentID, nowUTC, owner)
+	if err != nil {
+		return fmt.Errorf("update tripped execution monitor: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrExecutionMonitorClaimLost
+	}
+
 	var nextLeaseRevision int64 = 2
 	if err = tx.QueryRow(ctx, `
 UPDATE core_registry.site_auto_control_leases
@@ -380,14 +542,6 @@ WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid AND status =
 RETURNING revision
 `, monitor.TenantID, monitor.SiteID, monitor.LeaseID, tripReason, nowUTC).Scan(&nextLeaseRevision); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("trip site auto control lease: %w", err)
-	}
-
-	if _, err = tx.Exec(ctx, `
-UPDATE core_registry.optimization_execution_monitors
-SET status = $4, trip_reason = $5, rollback_command_intent_id = $6::uuid, last_checked_at = $7, updated_at = $7
-WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid AND status = 'OBSERVING'
-`, monitor.TenantID, monitor.SiteID, monitor.ID, newStatus, tripReason, rollbackCommandIntentID, nowUTC); err != nil {
-		return fmt.Errorf("update tripped execution monitor: %w", err)
 	}
 
 	eventID, err := optimizationUUIDv7(nowUTC)

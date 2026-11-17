@@ -2,9 +2,12 @@ package optimization
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -18,6 +21,8 @@ const (
 	DefaultExecutionMonitorWindow      = 30 * time.Minute
 	DefaultMonitorTickInterval         = time.Minute
 	DefaultMonitorTelemetryUnhealthy   = 5 * time.Minute
+	DefaultExecutionMonitorClaimLease  = 45 * time.Second
+	DefaultExecutionMonitorClaimLimit  = 100
 	DefaultSupplyRevalidationDriftMaxC = 0.5
 	DefaultChillerPowerRatioLimit      = 0.90
 
@@ -26,6 +31,8 @@ const (
 	ExecutionMonitorRolledBack = "ROLLED_BACK"
 	ExecutionMonitorTripped    = "TRIPPED"
 )
+
+var ErrExecutionMonitorClaimLost = errors.New("optimization execution monitor claim lost")
 
 type AutoControlLeaseRecord struct {
 	ID                  string
@@ -66,6 +73,8 @@ type OptimizationExecutionMonitorRecord struct {
 	Status                  string
 	TripReason              *string
 	RollbackCommandIntentID *string
+	ClaimOwner              *string
+	ClaimUntil              *time.Time
 }
 
 type SetpointCommandTarget struct {
@@ -136,11 +145,12 @@ type AutoControlStore interface {
 		baselineSupplyC, appliedSupplyC, restoreSupplyC, zoneMaxC, supplyMaxC float64,
 		at time.Time,
 	) (OptimizationExecutionMonitorRecord, error)
-	ListObservingExecutionMonitors(ctx context.Context, limit int) ([]OptimizationExecutionMonitorRecord, error)
-	RecordMonitorHealthyHeartbeat(ctx context.Context, monitorID, tenantID, siteID string, checkedAt time.Time) error
-	RecordMonitorTelemetryUnhealthy(ctx context.Context, monitorID, tenantID, siteID string, unhealthySince, checkedAt time.Time) error
-	CompleteMonitorVerified(ctx context.Context, monitorID, tenantID, siteID string, checkedAt time.Time) error
-	TripMonitorAndLease(ctx context.Context, monitor OptimizationExecutionMonitorRecord, newStatus, tripReason string, rollbackCommandIntentID *string, trippedAt time.Time) error
+	ClaimObservingExecutionMonitors(ctx context.Context, claimOwner string, leaseDuration time.Duration, now time.Time, limit int) ([]OptimizationExecutionMonitorRecord, error)
+	ReleaseMonitorClaim(ctx context.Context, monitorID, tenantID, siteID, claimOwner string, releasedAt time.Time) error
+	RecordMonitorHealthyHeartbeat(ctx context.Context, monitorID, tenantID, siteID, claimOwner string, checkedAt time.Time) error
+	RecordMonitorTelemetryUnhealthy(ctx context.Context, monitorID, tenantID, siteID, claimOwner string, unhealthySince, checkedAt time.Time) error
+	CompleteMonitorVerified(ctx context.Context, monitorID, tenantID, siteID, claimOwner string, checkedAt time.Time) error
+	TripMonitorAndLease(ctx context.Context, monitor OptimizationExecutionMonitorRecord, claimOwner, newStatus, tripReason string, rollbackCommandIntentID *string, trippedAt time.Time) error
 }
 
 type AutoControlTelemetryReader interface {
@@ -162,17 +172,59 @@ type MonitorPassSummary struct {
 }
 
 type AutoController struct {
-	store       AutoControlStore
-	telemetry   AutoControlTelemetryReader
-	dispatcher  WorkloadCommandDispatcher
-	pointHealth TelemetryPointHealthChecker
-	clock       Clock
-	logf        func(string, ...any)
+	store         AutoControlStore
+	telemetry     AutoControlTelemetryReader
+	dispatcher    WorkloadCommandDispatcher
+	pointHealth   TelemetryPointHealthChecker
+	clock         Clock
+	logf          func(string, ...any)
+	workerID      string
+	leaseDuration time.Duration
 }
 
 func (controller *AutoController) WithPointHealth(checker TelemetryPointHealthChecker) *AutoController {
 	controller.pointHealth = checker
 	return controller
+}
+
+func (controller *AutoController) WithWorkerID(workerID string) *AutoController {
+	if trimmed := strings.TrimSpace(workerID); trimmed != "" {
+		controller.workerID = trimmed
+	}
+	return controller
+}
+
+func (controller *AutoController) WithLeaseDuration(duration time.Duration) *AutoController {
+	if duration > 0 {
+		controller.leaseDuration = duration
+	}
+	return controller
+}
+
+func defaultAutoControlWorkerID() string {
+	hostname, err := os.Hostname()
+	if err != nil || strings.TrimSpace(hostname) == "" {
+		hostname = "optimization"
+	}
+	suffix := make([]byte, 4)
+	if _, randErr := rand.Read(suffix); randErr != nil {
+		return fmt.Sprintf("%s:%d", strings.TrimSpace(hostname), os.Getpid())
+	}
+	return fmt.Sprintf("%s:%d:%s", strings.TrimSpace(hostname), os.Getpid(), hex.EncodeToString(suffix))
+}
+
+func (controller *AutoController) effectiveWorkerID() string {
+	if controller != nil && strings.TrimSpace(controller.workerID) != "" {
+		return strings.TrimSpace(controller.workerID)
+	}
+	return defaultAutoControlWorkerID()
+}
+
+func (controller *AutoController) effectiveLeaseDuration() time.Duration {
+	if controller != nil && controller.leaseDuration > 0 {
+		return controller.leaseDuration
+	}
+	return DefaultExecutionMonitorClaimLease
 }
 
 func NewAutoController(
@@ -192,11 +244,13 @@ func NewAutoController(
 		logf = func(string, ...any) {}
 	}
 	return &AutoController{
-		store:      store,
-		telemetry:  telemetry,
-		dispatcher: dispatcher,
-		clock:      clock,
-		logf:       logf,
+		store:         store,
+		telemetry:     telemetry,
+		dispatcher:    dispatcher,
+		clock:         clock,
+		logf:          logf,
+		workerID:      defaultAutoControlWorkerID(),
+		leaseDuration: DefaultExecutionMonitorClaimLease,
 	}, nil
 }
 
@@ -389,8 +443,9 @@ func (controller *AutoController) TryDispatch(ctx context.Context, recommendatio
 	}, nil
 }
 
-// RunMonitorPass checks every OBSERVING execution monitor against live zone/supply temperatures,
-// chiller rated power ratios, and telemetry health, issuing rollback and tripping the lease on violation.
+// RunMonitorPass claims due OBSERVING execution monitors under a worker lease, checks live
+// zone/supply temperatures, chiller rated power ratios, and telemetry health, and issues
+// rollback and lease trip on violation.
 func (controller *AutoController) RunMonitorPass(ctx context.Context, now time.Time) (MonitorPassSummary, error) {
 	if controller == nil {
 		return MonitorPassSummary{}, nil
@@ -400,113 +455,172 @@ func (controller *AutoController) RunMonitorPass(ctx context.Context, now time.T
 	} else {
 		now = now.UTC()
 	}
-	monitors, err := controller.store.ListObservingExecutionMonitors(ctx, 100)
+	workerID := controller.effectiveWorkerID()
+	leaseDuration := controller.effectiveLeaseDuration()
+	monitors, err := controller.store.ClaimObservingExecutionMonitors(ctx, workerID, leaseDuration, now, DefaultExecutionMonitorClaimLimit)
 	if err != nil {
 		return MonitorPassSummary{}, err
 	}
 	var summary MonitorPassSummary
-	for _, monitor := range monitors {
-		summary.Checked++
-		siteCtx, ctxErr := controller.store.LoadAutoControlSiteContext(ctx, monitor.TenantID, monitor.SiteID, "", now)
-		if ctxErr != nil {
-			controller.logf("monitor %s site context error: %v", monitor.ID, ctxErr)
-			continue
+	for idx, monitor := range monitors {
+		if ctx.Err() != nil {
+			controller.releaseRemainingMonitorClaims(ctx, monitors[idx:], workerID, now)
+			return summary, ctx.Err()
 		}
+		summary.Checked++
+		controller.processClaimedMonitor(ctx, monitor, workerID, now, &summary)
+	}
+	return summary, nil
+}
 
-		telemetryHealthy := true
-		allKeys := siteCtx.InputMapping.telemetryKeys()
-		if len(allKeys) == 0 || strings.TrimSpace(siteCtx.InputMapping.SupplyTemperatureKey) == "" || len(siteCtx.InputMapping.effectiveZoneKeys()) == 0 || controller.pointHealth == nil {
+func (controller *AutoController) releaseRemainingMonitorClaims(ctx context.Context, monitors []OptimizationExecutionMonitorRecord, workerID string, at time.Time) {
+	for _, monitor := range monitors {
+		controller.releaseMonitorClaim(ctx, monitor, workerID, at)
+	}
+}
+
+func (controller *AutoController) releaseMonitorClaim(ctx context.Context, monitor OptimizationExecutionMonitorRecord, workerID string, at time.Time) {
+	releaseCtx := ctx
+	var cancel context.CancelFunc
+	if ctx.Err() != nil {
+		releaseCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+	}
+	if err := controller.store.ReleaseMonitorClaim(releaseCtx, monitor.ID, monitor.TenantID, monitor.SiteID, workerID, at); err != nil && !errors.Is(err, ErrExecutionMonitorClaimLost) {
+		controller.logf("monitor %s claim release failed: %v", monitor.ID, err)
+	}
+}
+
+func (controller *AutoController) processClaimedMonitor(
+	ctx context.Context,
+	monitor OptimizationExecutionMonitorRecord,
+	workerID string,
+	now time.Time,
+	summary *MonitorPassSummary,
+) {
+	siteCtx, ctxErr := controller.store.LoadAutoControlSiteContext(ctx, monitor.TenantID, monitor.SiteID, "", now)
+	if ctxErr != nil {
+		controller.logf("monitor %s site context error: %v", monitor.ID, ctxErr)
+		controller.releaseMonitorClaim(ctx, monitor, workerID, now)
+		return
+	}
+
+	telemetryHealthy := true
+	allKeys := siteCtx.InputMapping.telemetryKeys()
+	if len(allKeys) == 0 || strings.TrimSpace(siteCtx.InputMapping.SupplyTemperatureKey) == "" || len(siteCtx.InputMapping.effectiveZoneKeys()) == 0 || controller.pointHealth == nil {
+		telemetryHealthy = false
+	}
+	if telemetryHealthy {
+		if healthErr := controller.pointHealth.CheckTelemetryPointHealth(ctx, monitor.TenantID, monitor.SiteID, siteCtx.DeviceIDs, allKeys); healthErr != nil {
+			if ctx.Err() != nil {
+				controller.releaseMonitorClaim(ctx, monitor, workerID, now)
+				return
+			}
 			telemetryHealthy = false
 		}
-		if telemetryHealthy {
-			if healthErr := controller.pointHealth.CheckTelemetryPointHealth(ctx, monitor.TenantID, monitor.SiteID, siteCtx.DeviceIDs, allKeys); healthErr != nil {
-				telemetryHealthy = false
-			}
-		}
+	}
 
-		var live AutoControlLiveObservation
-		if telemetryHealthy {
-			var obsErr error
-			live, obsErr = controller.telemetry.ReadLiveAutoControlObservation(ctx, monitor.TenantID, monitor.SiteID, siteCtx.InputMapping, siteCtx.Topology, now)
-			if obsErr != nil || live.SupplyErr != nil || live.SupplyTemp == nil || live.ZoneErr != nil || len(live.ZoneTemps) == 0 || !live.ChillersHealthy {
-				telemetryHealthy = false
-			}
+	var live AutoControlLiveObservation
+	if telemetryHealthy {
+		var obsErr error
+		live, obsErr = controller.telemetry.ReadLiveAutoControlObservation(ctx, monitor.TenantID, monitor.SiteID, siteCtx.InputMapping, siteCtx.Topology, now)
+		if obsErr != nil && ctx.Err() != nil {
+			controller.releaseMonitorClaim(ctx, monitor, workerID, now)
+			return
 		}
+		if obsErr != nil || live.SupplyErr != nil || live.SupplyTemp == nil || live.ZoneErr != nil || len(live.ZoneTemps) == 0 || !live.ChillersHealthy {
+			telemetryHealthy = false
+		}
+	}
 
-		if !telemetryHealthy {
-			unhealthySince := now
-			if monitor.TelemetryUnhealthySince != nil {
-				unhealthySince = monitor.TelemetryUnhealthySince.UTC()
-			}
-			if monitor.TelemetryUnhealthySince != nil && now.Sub(unhealthySince) > DefaultMonitorTelemetryUnhealthy {
-				rolledBack, tripErr := controller.tripAndRollback(ctx, monitor, siteCtx, live, "telemetry_unhealthy_over_5m", now)
-				if tripErr != nil {
-					controller.logf("monitor %s trip on telemetry failure error: %v", monitor.ID, tripErr)
-					continue
-				}
-				if rolledBack {
-					summary.RolledBack++
-				} else {
-					summary.Tripped++
-				}
-				continue
-			}
-			if err := controller.store.RecordMonitorTelemetryUnhealthy(ctx, monitor.ID, monitor.TenantID, monitor.SiteID, unhealthySince, now); err != nil {
-				controller.logf("monitor %s unhealthy timestamp update failed: %v", monitor.ID, err)
-			}
-			continue
+	if !telemetryHealthy {
+		unhealthySince := now
+		if monitor.TelemetryUnhealthySince != nil {
+			unhealthySince = monitor.TelemetryUnhealthySince.UTC()
 		}
-
-		tripReason := ""
-		if live.SupplyTemp.Value > monitor.SupplyTempMaxC {
-			tripReason = fmt.Sprintf("supply_temperature_exceeded_max (%.2fC > %.2fC)", live.SupplyTemp.Value, monitor.SupplyTempMaxC)
-		}
-		if tripReason == "" {
-			for key, zone := range live.ZoneTemps {
-				if zone.Value > monitor.ZoneTempMaxC {
-					tripReason = fmt.Sprintf("zone_temperature_exceeded_max %s (%.2fC > %.2fC)", key, zone.Value, monitor.ZoneTempMaxC)
-					break
-				}
-			}
-		}
-		if tripReason == "" && live.ChillerPowerTrip != nil {
-			tripReason = fmt.Sprintf("chiller_power_exceeded_90pct %s (%.1fkW > 0.90*%.1fkW)",
-				live.ChillerPowerTrip.AssetCode, live.ChillerPowerTrip.PowerKW, live.ChillerPowerTrip.RatedPowerKW)
-		}
-
-		if tripReason != "" {
-			rolledBack, tripErr := controller.tripAndRollback(ctx, monitor, siteCtx, live, tripReason, now)
+		if monitor.TelemetryUnhealthySince != nil && now.Sub(unhealthySince) > DefaultMonitorTelemetryUnhealthy {
+			rolledBack, tripErr := controller.tripAndRollback(ctx, monitor, workerID, siteCtx, live, "telemetry_unhealthy_over_5m", now)
 			if tripErr != nil {
-				controller.logf("monitor %s trip on boundary violation failed: %v", monitor.ID, tripErr)
-				continue
+				if !errors.Is(tripErr, ErrExecutionMonitorClaimLost) {
+					controller.logf("monitor %s trip on telemetry failure error: %v", monitor.ID, tripErr)
+					controller.releaseMonitorClaim(ctx, monitor, workerID, now)
+				}
+				return
 			}
 			if rolledBack {
 				summary.RolledBack++
 			} else {
 				summary.Tripped++
 			}
-			continue
+			return
 		}
-
-		if !now.Before(monitor.WindowEndsAt) {
-			if err := controller.store.CompleteMonitorVerified(ctx, monitor.ID, monitor.TenantID, monitor.SiteID, now); err != nil {
-				controller.logf("monitor %s verify completion failed: %v", monitor.ID, err)
-				continue
+		if err := controller.store.RecordMonitorTelemetryUnhealthy(ctx, monitor.ID, monitor.TenantID, monitor.SiteID, workerID, unhealthySince, now); err != nil {
+			if !errors.Is(err, ErrExecutionMonitorClaimLost) {
+				controller.logf("monitor %s unhealthy timestamp update failed: %v", monitor.ID, err)
+				controller.releaseMonitorClaim(ctx, monitor, workerID, now)
 			}
-			summary.Verified++
-			continue
 		}
+		return
+	}
 
-		if err := controller.store.RecordMonitorHealthyHeartbeat(ctx, monitor.ID, monitor.TenantID, monitor.SiteID, now); err != nil {
+	tripReason := monitorViolationReason(monitor, live)
+	if tripReason != "" {
+		rolledBack, tripErr := controller.tripAndRollback(ctx, monitor, workerID, siteCtx, live, tripReason, now)
+		if tripErr != nil {
+			if !errors.Is(tripErr, ErrExecutionMonitorClaimLost) {
+				controller.logf("monitor %s trip on boundary violation failed: %v", monitor.ID, tripErr)
+				controller.releaseMonitorClaim(ctx, monitor, workerID, now)
+			}
+			return
+		}
+		if rolledBack {
+			summary.RolledBack++
+		} else {
+			summary.Tripped++
+		}
+		return
+	}
+
+	if !now.Before(monitor.WindowEndsAt) {
+		if err := controller.store.CompleteMonitorVerified(ctx, monitor.ID, monitor.TenantID, monitor.SiteID, workerID, now); err != nil {
+			if !errors.Is(err, ErrExecutionMonitorClaimLost) {
+				controller.logf("monitor %s verify completion failed: %v", monitor.ID, err)
+				controller.releaseMonitorClaim(ctx, monitor, workerID, now)
+			}
+			return
+		}
+		summary.Verified++
+		return
+	}
+
+	if err := controller.store.RecordMonitorHealthyHeartbeat(ctx, monitor.ID, monitor.TenantID, monitor.SiteID, workerID, now); err != nil {
+		if !errors.Is(err, ErrExecutionMonitorClaimLost) {
 			controller.logf("monitor %s heartbeat update failed: %v", monitor.ID, err)
+			controller.releaseMonitorClaim(ctx, monitor, workerID, now)
 		}
 	}
-	return summary, nil
+}
+
+func monitorViolationReason(monitor OptimizationExecutionMonitorRecord, live AutoControlLiveObservation) string {
+	if live.SupplyTemp.Value > monitor.SupplyTempMaxC {
+		return fmt.Sprintf("supply_temperature_exceeded_max (%.2fC > %.2fC)", live.SupplyTemp.Value, monitor.SupplyTempMaxC)
+	}
+	for key, zone := range live.ZoneTemps {
+		if zone.Value > monitor.ZoneTempMaxC {
+			return fmt.Sprintf("zone_temperature_exceeded_max %s (%.2fC > %.2fC)", key, zone.Value, monitor.ZoneTempMaxC)
+		}
+	}
+	if live.ChillerPowerTrip != nil {
+		return fmt.Sprintf("chiller_power_exceeded_90pct %s (%.1fkW > 0.90*%.1fkW)",
+			live.ChillerPowerTrip.AssetCode, live.ChillerPowerTrip.PowerKW, live.ChillerPowerTrip.RatedPowerKW)
+	}
+	return ""
 }
 
 func (controller *AutoController) tripAndRollback(
 	ctx context.Context,
 	monitor OptimizationExecutionMonitorRecord,
+	claimOwner string,
 	siteCtx AutoControlSiteContext,
 	live AutoControlLiveObservation,
 	tripReason string,
@@ -583,7 +697,7 @@ func (controller *AutoController) tripAndRollback(
 		}
 	}
 
-	if err := controller.store.TripMonitorAndLease(ctx, monitor, finalStatus, tripReason, rollbackID, now); err != nil {
+	if err := controller.store.TripMonitorAndLease(ctx, monitor, claimOwner, finalStatus, tripReason, rollbackID, now); err != nil {
 		return false, err
 	}
 	return finalStatus == ExecutionMonitorRolledBack, nil

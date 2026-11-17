@@ -164,4 +164,16 @@ func TestConnectivityReplyRecoveryQueryMatchesModel(t *testing.T) {
 	if strings.Contains(completeBody, "ConnectorRequestCommitted") {
 		t.Fatalf("completeRecoveredReply must propagate EvidenceStore.Complete errors instead of fabricating ConnectorRequestCommitted")
 	}
+
+	outboxSrc := readRepoSource(t, filepath.Join("..", "commandservice", "control_alarm_outbox.go"))
+	for _, snippet := range []string{
+		"ON CONFLICT (command_id, event_kind) DO NOTHING",
+		"AND lease_owner = $3",
+		"AND attempts = $4",
+		"context.WithoutCancel(ctx)",
+	} {
+		if !strings.Contains(outboxSrc, snippet) {
+			t.Fatalf("control_alarm_outbox.go missing expected durability/fencing guard %q", snippet)
+		}
+	}
 }

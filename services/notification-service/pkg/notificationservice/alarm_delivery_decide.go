@@ -136,10 +136,15 @@ func DecideDelivery(alarm DeliveryAlarm, routing SiteRouting, facts DeliveryFact
 	}
 
 	if !stepsQueued[0] {
-		if now.Sub(alarm.BeganAt) > time.Duration(routing.MaxAgeHours)*time.Hour {
+		maxAgeHours := routing.MaxAgeHours
+		if maxAgeHours <= 0 {
+			maxAgeHours = 12
+		}
+		if now.Sub(alarm.BeganAt) > time.Duration(maxAgeHours)*time.Hour {
 			return DeliveryDecision{Held: "TOO_OLD"}
 		}
-		holdEnds := alarm.BeganAt.Add(time.Duration(routing.HoldMinutes) * time.Minute)
+		holdMinutes := max(0, routing.HoldMinutes)
+		holdEnds := alarm.BeganAt.Add(time.Duration(holdMinutes) * time.Minute)
 		if now.Before(holdEnds) {
 			return DeliveryDecision{NextDueAt: &holdEnds, Held: "HOLD"}
 		}
@@ -172,9 +177,11 @@ func DecideDelivery(alarm DeliveryAlarm, routing SiteRouting, facts DeliveryFact
 		}
 		for _, target := range stepTargets(step) {
 			message := PlannedMessage{Kind: kind, Step: index, Channel: target.channel, Recipient: target.recipient}
-			if queued[DedupKey(alarm.AlarmID, message)] {
+			key := DedupKey(alarm.AlarmID, message)
+			if queued[key] {
 				continue
 			}
+			queued[key] = true
 			if routing.RateLimitPerHour > 0 && alarm.Severity != alarmmodel.SeverityCritical && counts[target.recipient] >= routing.RateLimitPerHour {
 				message.Suppressed, message.Reason = true, "RATE_LIMITED"
 			} else {
@@ -193,13 +200,21 @@ type stepTarget struct {
 
 func stepTargets(step EscalationStep) []stepTarget {
 	var targets []stepTarget
+	seen := map[stepTarget]bool{}
+	add := func(target stepTarget) {
+		if seen[target] {
+			return
+		}
+		seen[target] = true
+		targets = append(targets, target)
+	}
 	for _, channel := range step.Channels {
 		if channel == ChannelWeComBot {
-			targets = append(targets, stepTarget{channel, wecomBotRecipient})
+			add(stepTarget{channel, wecomBotRecipient})
 			continue
 		}
 		for _, recipient := range step.Recipients {
-			targets = append(targets, stepTarget{channel, recipient})
+			add(stepTarget{channel, recipient})
 		}
 	}
 	sort.SliceStable(targets, func(i, j int) bool { return targets[i].recipient < targets[j].recipient })
@@ -215,8 +230,14 @@ func (routing SiteRouting) quietUntil(now time.Time) *time.Time {
 	if err != nil {
 		return nil
 	}
-	start, _ := clockMinutes(routing.QuietHours.Start)
-	end, _ := clockMinutes(routing.QuietHours.End)
+	start, err := clockMinutes(routing.QuietHours.Start)
+	if err != nil {
+		return nil
+	}
+	end, err := clockMinutes(routing.QuietHours.End)
+	if err != nil {
+		return nil
+	}
 	local := now.In(location)
 	minute := local.Hour()*60 + local.Minute()
 	inside := (start < end && minute >= start && minute < end) || (start > end && (minute >= start || minute < end))

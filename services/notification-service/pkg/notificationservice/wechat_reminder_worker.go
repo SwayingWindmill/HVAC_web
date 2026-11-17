@@ -127,6 +127,12 @@ func (worker *WeChatReminderWorker) log() *slog.Logger {
 // RunOnce does one piece of due work: who gets a pending Alarm reminder, whose daily summaries
 // are due, or one person's send. False when nothing is due.
 func (worker *WeChatReminderWorker) RunOnce(ctx context.Context, now time.Time) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	var cancel context.CancelFunc
+	ctx, cancel = withDefaultTimeout(ctx, defaultDeliveryRunTimeout)
+	defer cancel()
 	if worked, err := worker.expandAlarm(ctx, now); worked || err != nil {
 		return worked, err
 	}
@@ -185,21 +191,25 @@ func (worker *WeChatReminderWorker) deliverOne(ctx context.Context, now time.Tim
 	message, err := worker.message(ctx, *claim, now)
 	if err == nil {
 		stage = "send"
-		err = worker.Sender.SendWeChatMessage(ctx, claim.person, message)
+		sendCtx, cancelSend := withBoundedTimeout(ctx, defaultDeliverySendTimeout)
+		err = worker.Sender.SendWeChatMessage(sendCtx, claim.person, message)
+		cancelSend()
 	}
+	settleCtx, cancelSettle := settleContext(ctx, defaultDeliverySettleTimeout)
+	defer cancelSettle()
 	switch {
 	case err == nil:
-		return true, worker.settle(ctx, *claim, now, "SENT", false)
+		return true, worker.settle(settleCtx, *claim, now, "SENT", false)
 	case errors.Is(err, ErrWeChatRefused):
-		return true, worker.settle(ctx, *claim, now, "REFUSED", true)
+		return true, worker.settle(settleCtx, *claim, now, "REFUSED", true)
 	case errors.Is(err, ErrWeChatNotBound):
-		return true, worker.settle(ctx, *claim, now, "NOT_BOUND", true)
+		return true, worker.settle(settleCtx, *claim, now, "NOT_BOUND", true)
 	case errors.Is(err, ErrWeChatOutcomeUnknown):
 		worker.log().Warn("wechat_reminder_outcome_unknown", "error_code", "WECHAT_REMINDER_OUTCOME_UNKNOWN", "kind", string(claim.kind), "reference", claim.reference)
-		return true, worker.settle(ctx, *claim, now, "FAILED", false)
+		return true, worker.settle(settleCtx, *claim, now, "FAILED", false)
 	default:
 		worker.log().Warn("wechat_reminder_not_sent", "error_code", "WECHAT_REMINDER_NOT_SENT", "kind", string(claim.kind), "reference", claim.reference, "stage", stage, "attempt", claim.attempts)
-		return true, worker.retry(ctx, *claim, now)
+		return true, worker.retry(settleCtx, *claim, now)
 	}
 }
 
@@ -224,8 +234,9 @@ func (worker *WeChatReminderWorker) claimDelivery(ctx context.Context, now time.
 	err = tx.QueryRow(ctx, `
 SELECT tenant_id::text, kind, reference, subject_issuer, subject, site_id::text, state, attempts, expires_at
 FROM notification_runtime.wechat_reminder_delivery
-WHERE (state = 'PENDING' AND next_attempt_at <= $1) OR (state = 'SENDING' AND lease_until <= $1)
-ORDER BY next_attempt_at LIMIT 1 FOR UPDATE SKIP LOCKED`, now.UTC()).Scan(
+WHERE (state = 'PENDING' AND next_attempt_at <= $1) OR (state = 'SENDING' AND (lease_until IS NULL OR lease_until <= $1))
+ORDER BY CASE WHEN state = 'SENDING' THEN COALESCE(lease_until, next_attempt_at) ELSE next_attempt_at END, next_attempt_at
+LIMIT 1 FOR UPDATE SKIP LOCKED`, now.UTC()).Scan(
 		&claim.person.TenantID, &claim.kind, &claim.reference, &claim.person.SubjectIssuer, &claim.person.Subject, &claim.siteID, &state, &claim.attempts, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, nil
@@ -257,7 +268,7 @@ WHERE tenant_id = $1::uuid AND subject_issuer = $2 AND subject = $3 AND kind = $
 	}
 	claim.attempts++
 	claim.leaseUntil = now.Add(reminderLease).UTC()
-	if err := setDeliveryState(ctx, tx, claim, "SENDING", now, now, &claim.leaseUntil); err != nil {
+	if err := setDeliveryState(ctx, tx, claim, "SENDING", claim.leaseUntil, now, &claim.leaseUntil); err != nil {
 		return nil, true, err
 	}
 	return &claim, true, tx.Commit(ctx)

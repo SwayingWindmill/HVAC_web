@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -47,9 +48,12 @@ func ParseDeliveryMode(value string) (DeliveryMode, error) {
 
 const (
 	// One send and three retries, 1, 4 and 9 minutes apart, as for WeChat reminders.
-	deliveryAttempts = 4
-	deliveryLease    = 2 * time.Minute
-	planLease        = time.Minute
+	deliveryAttempts             = 4
+	deliveryLease                = 2 * time.Minute
+	planLease                    = time.Minute
+	defaultDeliveryRunTimeout    = 30 * time.Second
+	defaultDeliverySendTimeout   = 20 * time.Second
+	defaultDeliverySettleTimeout = 5 * time.Second
 )
 
 var (
@@ -117,7 +121,13 @@ ON CONFLICT (tenant_id, alarm_id) DO UPDATE SET
   acknowledged_at = COALESCE(d.acknowledged_at, EXCLUDED.acknowledged_at),
   acknowledged_by = COALESCE(d.acknowledged_by, EXCLUDED.acknowledged_by),
   cleared_at = COALESCE(d.cleared_at, EXCLUDED.cleared_at),
-  next_due_at = EXCLUDED.next_due_at,
+  next_due_at = CASE
+    WHEN EXCLUDED.alarm_version > d.alarm_version
+      OR (d.acknowledged_at IS NULL AND EXCLUDED.acknowledged_at IS NOT NULL)
+      OR (d.cleared_at IS NULL AND EXCLUDED.cleared_at IS NOT NULL)
+    THEN EXCLUDED.next_due_at
+    ELSE d.next_due_at
+  END,
   updated_at = EXCLUDED.updated_at`,
 		event.TenantID, event.AlarmID, event.SiteID, clip(alarmType, 256), clip(title, 512), clip(event.Attributes["summary"], 2048),
 		string(event.CurrentSeverity), version, began, acknowledgedAt, acknowledgedBy, clearedAt, recordedAt.UTC())
@@ -148,6 +158,12 @@ func (dispatcher *AlarmDeliveryDispatcher) RunOnce(ctx context.Context, now time
 	if dispatcher.Mode != DeliveryDryRun && dispatcher.Mode != DeliveryLive {
 		return false, errors.New("alarm delivery is off")
 	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	var cancel context.CancelFunc
+	ctx, cancel = withDefaultTimeout(ctx, defaultDeliveryRunTimeout)
+	defer cancel()
 	if worked, err := dispatcher.planOne(ctx, now); worked || err != nil {
 		return worked, err
 	}
@@ -305,60 +321,94 @@ type claimedAttempt struct {
 }
 
 func (dispatcher *AlarmDeliveryDispatcher) sendOne(ctx context.Context, now time.Time) (bool, error) {
-	claim, err := dispatcher.claimAttempt(ctx, now)
+	claim, worked, err := dispatcher.claimAttempt(ctx, now)
 	if err != nil || claim == nil {
-		return false, err
+		return worked, err
+	}
+	settle := func(state, reason string, retry bool) error {
+		settleCtx, cancelSettle := settleContext(ctx, defaultDeliverySettleTimeout)
+		defer cancelSettle()
+		return dispatcher.settle(settleCtx, *claim, now, state, reason, retry)
 	}
 	message, err := dispatcher.outbound(ctx, *claim)
 	if err != nil {
 		dispatcher.log().Error("alarm_delivery_message_failed", "error_code", "ALARM_DELIVERY_MESSAGE_FAILED", "alarm_id", claim.alarmID, "key", claim.dedupKey, "reason", err.Error())
-		return true, dispatcher.settle(ctx, *claim, now, "FAILED", "NO_CONTACT", false)
+		return true, settle("FAILED", "NO_CONTACT", false)
 	}
 	message.DryRun = dispatcher.Mode != DeliveryLive
-	err = dispatcher.Sender.SendAlarmMessage(ctx, message)
+	sendCtx, cancelSend := withBoundedTimeout(ctx, defaultDeliverySendTimeout)
+	err = dispatcher.Sender.SendAlarmMessage(sendCtx, message)
+	cancelSend()
 	switch {
 	case err == nil && message.DryRun:
 		dispatcher.log().Info("alarm_delivery_dry_run", "alarm_id", claim.alarmID, "kind", string(claim.kind), "step", claim.step, "channel", string(claim.channel), "recipient", claim.recipient)
-		return true, dispatcher.settle(ctx, *claim, now, "DRY_RUN", "", false)
+		return true, settle("DRY_RUN", "", false)
 	case err == nil:
 		dispatcher.log().Info("alarm_delivery_sent", "alarm_id", claim.alarmID, "kind", string(claim.kind), "step", claim.step, "channel", string(claim.channel), "recipient", claim.recipient)
-		return true, dispatcher.settle(ctx, *claim, now, "SENT", "", false)
+		return true, settle("SENT", "", false)
 	case errors.Is(err, ErrDeliveryRejected):
 		dispatcher.log().Error("alarm_delivery_rejected", "error_code", "ALARM_DELIVERY_REJECTED", "alarm_id", claim.alarmID, "key", claim.dedupKey)
-		return true, dispatcher.settle(ctx, *claim, now, "FAILED", "REJECTED", false)
+		return true, settle("FAILED", "REJECTED", false)
 	default:
 		dispatcher.log().Warn("alarm_delivery_send_failed", "error_code", "ALARM_DELIVERY_SEND_FAILED", "alarm_id", claim.alarmID, "key", claim.dedupKey, "attempt", claim.attempts)
-		return true, dispatcher.settle(ctx, *claim, now, "PENDING", "", true)
+		return true, settle("PENDING", "", true)
 	}
 }
 
-func (dispatcher *AlarmDeliveryDispatcher) claimAttempt(ctx context.Context, now time.Time) (*claimedAttempt, error) {
+func (dispatcher *AlarmDeliveryDispatcher) claimAttempt(ctx context.Context, now time.Time) (*claimedAttempt, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	tx, err := dispatcher.Scheduler.pool.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer tx.Rollback(ctx)
 	claim := claimedAttempt{}
-	var kind, channel string
+	var kind, channel, state string
 	err = tx.QueryRow(ctx, `
-SELECT tenant_id::text, alarm_id::text, dedup_key, kind, step, channel, recipient, attempts
+SELECT tenant_id::text, alarm_id::text, dedup_key, kind, step, channel, recipient, state, attempts
 FROM notification_runtime.alarm_delivery_attempt
-WHERE next_attempt_at <= $1 AND (state = 'PENDING' OR (state = 'SENDING' AND lease_until <= $1))
-ORDER BY next_attempt_at LIMIT 1 FOR UPDATE SKIP LOCKED`, now.UTC()).Scan(&claim.tenantID, &claim.alarmID, &claim.dedupKey, &kind, &claim.step, &channel, &claim.recipient, &claim.attempts)
+WHERE (state = 'PENDING' AND next_attempt_at <= $1)
+   OR (state = 'SENDING' AND (lease_until IS NULL OR lease_until <= $1))
+ORDER BY CASE WHEN state = 'SENDING' THEN COALESCE(lease_until, next_attempt_at) ELSE next_attempt_at END,
+         next_attempt_at
+LIMIT 1 FOR UPDATE SKIP LOCKED`, now.UTC()).Scan(&claim.tenantID, &claim.alarmID, &claim.dedupKey, &kind, &claim.step, &channel, &claim.recipient, &state, &claim.attempts)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("claim Alarm message: %w", err)
+		return nil, false, fmt.Errorf("claim Alarm message: %w", err)
 	}
 	claim.kind, claim.channel = DeliveryKind(kind), DeliveryChannel(channel)
+	if state == "SENDING" && claim.attempts >= deliveryAttempts {
+		if _, err := tx.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt
+SET state = 'FAILED', reason = 'GAVE_UP', next_attempt_at = $3, lease_until = NULL, updated_at = $3
+WHERE tenant_id = $1::uuid AND dedup_key = $2`,
+			claim.tenantID, claim.dedupKey, now.UTC()); err != nil {
+			return nil, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, false, err
+		}
+		dispatcher.log().Error("alarm_delivery_gave_up", "error_code", "ALARM_DELIVERY_GAVE_UP", "alarm_id", claim.alarmID, "key", claim.dedupKey, "reason", "LEASE_EXPIRED", "attempts", claim.attempts)
+		return nil, true, nil
+	}
 	claim.attempts++
 	claim.leaseUntil = now.Add(deliveryLease).UTC()
-	if _, err := tx.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt SET state = 'SENDING', attempts = $3, lease_until = $4, updated_at = $5
-WHERE tenant_id = $1::uuid AND dedup_key = $2`, claim.tenantID, claim.dedupKey, claim.attempts, claim.leaseUntil, now.UTC()); err != nil {
-		return nil, err
+	if _, err := tx.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt
+SET state = 'SENDING', attempts = $3, next_attempt_at = $4, lease_until = $4, updated_at = $5
+WHERE tenant_id = $1::uuid AND dedup_key = $2`,
+		claim.tenantID, claim.dedupKey, claim.attempts, claim.leaseUntil, now.UTC()); err != nil {
+		return nil, false, err
 	}
-	return &claim, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	if state == "SENDING" {
+		dispatcher.log().Warn("alarm_delivery_lease_reclaimed", "alarm_id", claim.alarmID, "key", claim.dedupKey, "attempt", claim.attempts)
+	}
+	return &claim, true, nil
 }
 
 // settle records how a claimed message ended; a retry waits attempts² minutes, until the last.
@@ -376,11 +426,32 @@ func (dispatcher *AlarmDeliveryDispatcher) settle(ctx context.Context, claim cla
 	if reason != "" {
 		reasonValue = reason
 	}
-	_, err := dispatcher.Scheduler.pool.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt
+	tag, err := dispatcher.Scheduler.pool.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt
 SET state = $3, reason = $4, next_attempt_at = $5, lease_until = NULL, updated_at = $6
 WHERE tenant_id = $1::uuid AND dedup_key = $2 AND state = 'SENDING' AND lease_until = $7`,
 		claim.tenantID, claim.dedupKey, state, reasonValue, next.UTC(), now.UTC(), claim.leaseUntil)
+	if err == nil && tag.RowsAffected() == 0 {
+		dispatcher.log().Warn("alarm_delivery_lease_lost", "alarm_id", claim.alarmID, "key", claim.dedupKey, "target_state", state)
+	}
 	return err
+}
+
+func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func withBoundedTimeout(ctx context.Context, maxDuration time.Duration) (context.Context, context.CancelFunc) {
+	if deadline, hasDeadline := ctx.Deadline(); hasDeadline && time.Until(deadline) <= maxDuration {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, maxDuration)
+}
+
+func settleContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
 }
 
 // outbound renders the claimed message for its channel and recipient.
@@ -474,6 +545,46 @@ func RenderDeliveryMessage(alarm DeliveryAlarm, routing SiteRouting, kind Delive
 	return subject, strings.TrimRight(body.String(), "\n")
 }
 
+var defaultDeliveryHTTPClient = newDefaultDeliveryHTTPClient()
+
+func newDefaultDeliveryHTTPClient() *http.Client {
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          32,
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	return &http.Client{
+		Timeout:       defaultDeliverySendTimeout,
+		Transport:     transport,
+		CheckRedirect: refuseDeliveryRedirect,
+	}
+}
+
+func refuseDeliveryRedirect(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
+func deliveryHTTPClient(custom *http.Client) *http.Client {
+	if custom == nil {
+		return defaultDeliveryHTTPClient
+	}
+	client := *custom
+	if client.Timeout <= 0 {
+		client.Timeout = defaultDeliverySendTimeout
+	}
+	client.CheckRedirect = refuseDeliveryRedirect
+	return &client
+}
+
 // HTTPDeliverySender posts messages to the alert adapter's POST /send with a bearer token read
 // from a file at each send (rotating the token needs no restart).
 type HTTPDeliverySender struct {
@@ -483,6 +594,12 @@ type HTTPDeliverySender struct {
 }
 
 func (sender HTTPDeliverySender) SendAlarmMessage(ctx context.Context, message OutboundMessage) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var cancel context.CancelFunc
+	ctx, cancel = withDefaultTimeout(ctx, defaultDeliverySendTimeout)
+	defer cancel()
 	token, err := os.ReadFile(sender.TokenFile)
 	if err != nil || strings.TrimSpace(string(token)) == "" {
 		return errors.New("alarm send token file is unreadable or empty")
@@ -497,11 +614,7 @@ func (sender HTTPDeliverySender) SendAlarmMessage(ctx context.Context, message O
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
-	client := sender.Client
-	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
-	}
-	response, err := client.Do(request)
+	response, err := deliveryHTTPClient(sender.Client).Do(request)
 	if err != nil {
 		return fmt.Errorf("alert adapter unreachable: %w", err)
 	}

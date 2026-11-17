@@ -13,12 +13,22 @@ import (
 	"time"
 )
 
-var ErrAlarmEvaluationRelayUnavailable = errors.New("alarm evaluation relay unavailable")
+const (
+	DefaultAlarmEvaluationMaxAttempts     = 10
+	DefaultAlarmEvaluationDeliveryTimeout = 10 * time.Second
+	MaxAlarmEvaluationRetryDelay          = 15 * time.Minute
+)
+
+var (
+	ErrAlarmEvaluationRelayUnavailable = errors.New("alarm evaluation relay unavailable")
+	ErrPermanentAlarmEvaluationFailure = errors.New("alarm evaluation permanent failure")
+)
 
 type AlarmEvaluationRepository interface {
 	ClaimPendingAlarmEvaluations(context.Context, string, int, time.Time, time.Duration) ([]PendingPublication, error)
 	MarkAlarmEvaluationDelivered(context.Context, string, string, time.Time) error
 	MarkAlarmEvaluationRetry(context.Context, string, string, time.Time, string) error
+	MarkAlarmEvaluationDeadLetter(context.Context, string, string, time.Time, string) error
 }
 
 type AlarmEvaluationTransport interface {
@@ -26,33 +36,51 @@ type AlarmEvaluationTransport interface {
 }
 
 type AlarmEvaluationRelayConfig struct {
-	Repository    AlarmEvaluationRepository
-	Transport     AlarmEvaluationTransport
-	WorkerID      string
-	LeaseDuration time.Duration
-	RetryDelay    time.Duration
-	Now           func() time.Time
+	Repository      AlarmEvaluationRepository
+	Transport       AlarmEvaluationTransport
+	WorkerID        string
+	LeaseDuration   time.Duration
+	RetryDelay      time.Duration
+	MaxAttempts     int
+	DeliveryTimeout time.Duration
+	Now             func() time.Time
 }
 
 type AlarmEvaluationRelay struct {
-	repository    AlarmEvaluationRepository
-	transport     AlarmEvaluationTransport
-	workerID      string
-	leaseDuration time.Duration
-	retryDelay    time.Duration
-	now           func() time.Time
+	repository      AlarmEvaluationRepository
+	transport       AlarmEvaluationTransport
+	workerID        string
+	leaseDuration   time.Duration
+	retryDelay      time.Duration
+	maxAttempts     int
+	deliveryTimeout time.Duration
+	now             func() time.Time
 }
 
 func NewAlarmEvaluationRelay(config AlarmEvaluationRelayConfig) (*AlarmEvaluationRelay, error) {
-	if config.Repository == nil || config.Transport == nil || strings.TrimSpace(config.WorkerID) == "" || config.LeaseDuration <= 0 || config.RetryDelay <= 0 {
+	if config.Repository == nil || config.Transport == nil || strings.TrimSpace(config.WorkerID) == "" || config.LeaseDuration <= 0 || config.RetryDelay <= 0 || config.MaxAttempts < 0 || config.DeliveryTimeout < 0 {
 		return nil, errors.New("alarm evaluation relay configuration is invalid")
+	}
+	maxAttempts := config.MaxAttempts
+	if maxAttempts == 0 {
+		maxAttempts = DefaultAlarmEvaluationMaxAttempts
+	}
+	deliveryTimeout := config.DeliveryTimeout
+	if deliveryTimeout == 0 {
+		deliveryTimeout = DefaultAlarmEvaluationDeliveryTimeout
 	}
 	if config.Now == nil {
 		config.Now = time.Now
 	}
 	return &AlarmEvaluationRelay{
-		repository: config.Repository, transport: config.Transport, workerID: strings.TrimSpace(config.WorkerID),
-		leaseDuration: config.LeaseDuration, retryDelay: config.RetryDelay, now: config.Now,
+		repository:      config.Repository,
+		transport:       config.Transport,
+		workerID:        strings.TrimSpace(config.WorkerID),
+		leaseDuration:   config.LeaseDuration,
+		retryDelay:      config.RetryDelay,
+		maxAttempts:     maxAttempts,
+		deliveryTimeout: deliveryTimeout,
+		now:             config.Now,
 	}, nil
 }
 
@@ -69,12 +97,40 @@ func (relay *AlarmEvaluationRelay) RelayOnce(ctx context.Context, limit int) (in
 		return 0, fmt.Errorf("claim Alarm evaluation publications: %w", err)
 	}
 	delivered := 0
+	var deadLetterErrs []error
 	for _, publication := range pending {
-		if publication.Revision < 1 || publication.Revision != publication.PreviousRevision+1 || string(publication.Snapshot.DeviceId) != publication.DeviceID || int64(publication.Snapshot.BusinessRevision) != publication.Revision {
-			return delivered, ErrAlarmEvaluationRelayUnavailable
+		if !validAlarmEvaluationPublication(publication) {
+			if dlErr := relay.repository.MarkAlarmEvaluationDeadLetter(ctx, publication.EventID, relay.workerID, now, "ALARM_EVALUATION_PAYLOAD_INVALID"); dlErr != nil {
+				return delivered, fmt.Errorf("dead-letter invalid Alarm evaluation publication: %w", dlErr)
+			}
+			deadLetterErrs = append(deadLetterErrs, fmt.Errorf("%w: publication %s payload is inconsistent", ErrPermanentAlarmEvaluationFailure, publication.EventID))
+			continue
 		}
-		if err := relay.transport.EvaluateSnapshot(ctx, publication); err != nil {
-			if retryErr := relay.repository.MarkAlarmEvaluationRetry(ctx, publication.EventID, relay.workerID, now.Add(relay.retryDelay), "ALARM_EVALUATION_UNAVAILABLE"); retryErr != nil {
+		if publication.AlarmAttempts >= relay.maxAttempts {
+			if dlErr := relay.repository.MarkAlarmEvaluationDeadLetter(ctx, publication.EventID, relay.workerID, now, "ALARM_EVALUATION_MAX_ATTEMPTS_EXCEEDED"); dlErr != nil {
+				return delivered, fmt.Errorf("dead-letter exhausted Alarm evaluation publication: %w", dlErr)
+			}
+			deadLetterErrs = append(deadLetterErrs, fmt.Errorf("%w: publication %s reached max attempts (%d)", ErrPermanentAlarmEvaluationFailure, publication.EventID, relay.maxAttempts))
+			continue
+		}
+		if err := relay.evaluateWithTimeout(ctx, publication); err != nil {
+			if errors.Is(err, ErrPermanentAlarmEvaluationFailure) {
+				if dlErr := relay.repository.MarkAlarmEvaluationDeadLetter(ctx, publication.EventID, relay.workerID, now, "ALARM_EVALUATION_PERMANENT_FAILURE"); dlErr != nil {
+					return delivered, fmt.Errorf("dead-letter permanently failed Alarm evaluation after %v: %w", err, dlErr)
+				}
+				deadLetterErrs = append(deadLetterErrs, err)
+				continue
+			}
+			nextAttempt := publication.AlarmAttempts + 1
+			if nextAttempt >= relay.maxAttempts {
+				if dlErr := relay.repository.MarkAlarmEvaluationDeadLetter(ctx, publication.EventID, relay.workerID, now, "ALARM_EVALUATION_MAX_ATTEMPTS_EXCEEDED"); dlErr != nil {
+					return delivered, fmt.Errorf("dead-letter Alarm evaluation after max attempts (%v): %w", err, dlErr)
+				}
+				deadLetterErrs = append(deadLetterErrs, fmt.Errorf("%w: %w", ErrPermanentAlarmEvaluationFailure, err))
+				continue
+			}
+			delay := alarmEvaluationRetryDelay(relay.retryDelay, nextAttempt)
+			if retryErr := relay.repository.MarkAlarmEvaluationRetry(ctx, publication.EventID, relay.workerID, now.Add(delay), "ALARM_EVALUATION_UNAVAILABLE"); retryErr != nil {
 				return delivered, fmt.Errorf("record Alarm evaluation retry after %v: %w", err, retryErr)
 			}
 			return delivered, err
@@ -84,7 +140,43 @@ func (relay *AlarmEvaluationRelay) RelayOnce(ctx context.Context, limit int) (in
 		}
 		delivered++
 	}
-	return delivered, nil
+	return delivered, errors.Join(deadLetterErrs...)
+}
+
+func (relay *AlarmEvaluationRelay) evaluateWithTimeout(ctx context.Context, publication PendingPublication) error {
+	deliveryCtx, cancel := context.WithTimeout(ctx, relay.deliveryTimeout)
+	defer cancel()
+	return relay.transport.EvaluateSnapshot(deliveryCtx, publication)
+}
+
+func validAlarmEvaluationPublication(publication PendingPublication) bool {
+	return publication.Revision >= 1 &&
+		publication.Revision == publication.PreviousRevision+1 &&
+		string(publication.Snapshot.DeviceId) == publication.DeviceID &&
+		int64(publication.Snapshot.BusinessRevision) == publication.Revision
+}
+
+func alarmEvaluationRetryDelay(base time.Duration, attempt int) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	if attempt <= 1 {
+		if base > MaxAlarmEvaluationRetryDelay {
+			return MaxAlarmEvaluationRetryDelay
+		}
+		return base
+	}
+	delay := base
+	for i := 1; i < attempt; i++ {
+		if delay >= MaxAlarmEvaluationRetryDelay/2 {
+			return MaxAlarmEvaluationRetryDelay
+		}
+		delay *= 2
+	}
+	if delay > MaxAlarmEvaluationRetryDelay {
+		return MaxAlarmEvaluationRetryDelay
+	}
+	return delay
 }
 
 type HTTPAlarmEvaluationTransportConfig struct {
@@ -129,6 +221,10 @@ func (transport *HTTPAlarmEvaluationTransport) EvaluateSnapshot(ctx context.Cont
 	}
 	defer response.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
+	if response.StatusCode >= http.StatusBadRequest && response.StatusCode < http.StatusInternalServerError &&
+		response.StatusCode != http.StatusRequestTimeout && response.StatusCode != http.StatusTooManyRequests {
+		return fmt.Errorf("%w: HTTP %d", ErrPermanentAlarmEvaluationFailure, response.StatusCode)
+	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("alarm evaluation endpoint returned HTTP %d", response.StatusCode)
 	}
