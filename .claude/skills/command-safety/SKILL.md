@@ -7,7 +7,7 @@ description: Exhaustively model-check command intent, execution fence, MQTT comm
 
 Run the exhaustive explicit-state model checker (`modules/command/pkg/commandformal`) against real production transition decisions in `commandservice`, `mqttconnector`, and aligned SQL predicates in `postgres_*.go` / `connectivity/store.go`.
 
-- **Base syncCommit**: `71424b6c3a96a1feb95eede9eb20e4525b11d129`
+- **Base syncCommit**: `9698baa40f26c755338745b6c6bd879cde2ad373`
 
 ## Quick Run
 
@@ -59,8 +59,8 @@ If any invariant or mutation test fails, the runner prints the shortest failing 
 | `modules/command/pkg/commandservice/postgres.go` | `PostgresStore`, `Submit`, `Close`, `commitAndNotifyFailures`, `replayIdempotentCommand`, `SyncCapabilityProfiles` |
 | `modules/command/pkg/commandservice/shutdown.go` | `ControlAuthority.ExecuteSiteControlShutdown`, `executeAbortUnitSequence`, `releaseOrDeferHoldingAuxiliaries`, `dispatchShutdownTarget`, `reconcileOutcomeUnknownDeviceCommands` |
 | `modules/command/pkg/commandservice/postgres_reconcile.go` | `reconcileOnce` delegation to `DecideOperatorReconcile` |
-| `modules/command/pkg/mqttconnector/connector.go` | `EnableManualAcknowledgment`, `SubscriptionTopicFilter`, `checkSubackReasons`, sharded `onReply` custody worker pool, `ResumeActionForCorrelation`, `DrainTenantReplies`, `RecoverTenantReplies`, `ResolveCorrelationReply`, `ReplyBackedResult`, `completeRecoveredReply`, `buildCommandEnvelope` `traceId`, `recoverReplies` panic guard |
-| `modules/connectivity/pkg/connectivity/store.go` | `RecoverCommandReplies` (`state = 'REPLIED'`, `ORDER BY replied_at, attempt_id LIMIT $2`), `runSerializableTenantOp` (`40001`/`40P01` retry) |
+| `modules/command/pkg/mqttconnector/connector.go` | `EnableManualAcknowledgment`, `SubscriptionTopicFilter`, `checkSubackReasons`, `CrossReplicaPollInterval`, sharded `onReply` custody worker pool, `ResumeActionForCorrelation`, `DrainTenantReplies`, `RecoverTenantReplies`, `ResolveCorrelationReply`, `ReplyBackedResult`, `completeRecoveredReply`, `buildCommandEnvelope` `traceId`, `recoverReplies` panic guard |
+| `modules/connectivity/pkg/connectivity/store.go` | `RecoverCommandReplies` (`state = 'REPLIED'`, `ORDER BY replied_at, attempt_id LIMIT $2`), `LoadCommandCorrelation`, `runSerializableTenantOp` (`40001`/`40P01` retry) |
 
 ## Keeping the Verifier Synchronized
 
