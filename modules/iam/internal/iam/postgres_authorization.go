@@ -80,7 +80,7 @@ SELECT set_config('app.principal_id', $1, true),
 func loadTenantSiteIDs(ctx context.Context, transaction pgx.Tx, tenantID string) ([]string, error) {
 	rows, err := transaction.Query(ctx, `
 SELECT id::text
-FROM core_registry.sites
+FROM core_registry.sites_v1
 WHERE tenant_id = $1
   AND status <> 'RETIRED'
 ORDER BY id

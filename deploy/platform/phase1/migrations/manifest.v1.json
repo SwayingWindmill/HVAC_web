@@ -118,7 +118,8 @@
         "infra/connectivity/postgres/init/gateway-tunnel-audit.sql",
         "infra/registry/postgres/init/registry-outbox-delivery-grants.sql",
         "infra/registry/postgres/init/plant-twin-relationships-and-roles.sql",
-        "infra/registry/postgres/init/registry-tags-and-template-read.sql"
+        "infra/registry/postgres/init/registry-tags-and-template-read.sql",
+        "infra/registry/postgres/init/iam-registry-read-views.sql"
       ]
     },
     {

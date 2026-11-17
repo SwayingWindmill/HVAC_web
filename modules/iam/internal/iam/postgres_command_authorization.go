@@ -29,7 +29,7 @@ func (adapter *postgresCommandAuthorizationStore) LookupCommandAuthorization(ctx
 		}
 		err := transaction.QueryRow(ctx, `
 SELECT site_id::text
-FROM core_registry.devices
+FROM core_registry.iam_requested_devices_v1
 WHERE id = $1::uuid AND tenant_id = $2::uuid AND status = 'ACTIVE'
 `, lookup.DeviceID, lookup.TenantID).Scan(&result.DeviceSiteID)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -64,7 +64,7 @@ func (adapter *postgresCommandAuthorizationStore) LookupCommandWorkloadAuthoriza
 		}
 		err := transaction.QueryRow(ctx, `
 SELECT site_id::text
-FROM core_registry.devices
+FROM core_registry.iam_requested_devices_v1
 WHERE id = $1::uuid AND tenant_id = $2::uuid AND status = 'ACTIVE'
 `, lookup.DeviceID, lookup.TenantID).Scan(&result.DeviceSiteID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -76,7 +76,7 @@ WHERE id = $1::uuid AND tenant_id = $2::uuid AND status = 'ACTIVE'
 
 		err = transaction.QueryRow(ctx, `
 SELECT mode
-FROM core_registry.site_control_states
+FROM core_registry.site_control_states_v1
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid
 `, lookup.TenantID, lookup.SiteID).Scan(&result.SiteControlMode)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -88,15 +88,10 @@ WHERE tenant_id = $1::uuid AND site_id = $2::uuid
 		if err := transaction.QueryRow(ctx, `
 SELECT EXISTS (
   SELECT 1
-  FROM core_registry.device_bindings AS b
-  JOIN core_registry.asset_control_locks AS l
-    ON l.tenant_id = b.tenant_id AND l.site_id = b.site_id AND l.asset_id = b.asset_id
-  WHERE b.tenant_id = $1::uuid
-    AND b.site_id = $2::uuid
-    AND b.device_id = $3::uuid
-    AND b.status = 'ACTIVE'
-    AND b.valid_to IS NULL
-    AND l.lock_mode <> 'UNLOCKED'
+  FROM core_registry.device_control_locks_v1
+  WHERE tenant_id = $1::uuid
+    AND site_id = $2::uuid
+    AND device_id = $3::uuid
 )`, lookup.TenantID, lookup.SiteID, lookup.DeviceID).Scan(&result.HasAssetControlLock); err != nil {
 			return fmt.Errorf("read Asset control locks for Command workload: %w", err)
 		}
@@ -106,8 +101,8 @@ SELECT EXISTS (
 			err = transaction.QueryRow(ctx, `
 SELECT l.id::text, l.armed_by::text, l.expires_at, l.allowed_capabilities,
        l.max_setpoint_step_c, l.supply_temp_min_c, l.supply_temp_max_c, l.max_commands_per_hour
-FROM core_registry.optimization_execution_monitors AS m
-JOIN core_registry.site_auto_control_leases AS l
+FROM core_registry.optimization_execution_monitors_v1 AS m
+JOIN core_registry.site_auto_control_leases_v1 AS l
   ON l.tenant_id = m.tenant_id AND l.site_id = m.site_id AND l.id = m.lease_id
 WHERE m.tenant_id = $1::uuid
   AND m.site_id = $2::uuid
@@ -127,7 +122,7 @@ LIMIT 1
 			err = transaction.QueryRow(ctx, `
 SELECT id::text, armed_by::text, expires_at, allowed_capabilities,
        max_setpoint_step_c, supply_temp_min_c, supply_temp_max_c, max_commands_per_hour
-FROM core_registry.site_auto_control_leases
+FROM core_registry.site_auto_control_leases_v1
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid
   AND status = 'ACTIVE' AND expires_at > $3
 ORDER BY armed_at DESC, id DESC
@@ -150,7 +145,7 @@ LIMIT 1
 		}
 		if err := transaction.QueryRow(ctx, `
 SELECT count(*)::int
-FROM core_registry.optimization_execution_monitors
+FROM core_registry.optimization_execution_monitors_v1
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND started_at >= $3
 `, lookup.TenantID, lookup.SiteID, windowStart).Scan(&result.RecentAutoCommandsLastHour); err != nil {
 			return fmt.Errorf("count recent automated Commands: %w", err)
