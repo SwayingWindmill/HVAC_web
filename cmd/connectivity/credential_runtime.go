@@ -19,17 +19,30 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/concentrator"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/packettap"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
 	"github.com/quanlaihe/hvac-web/modules/registry/pkg/coreservice"
 )
 
+const onlineGatewayMetricHelp = "Number of gateways currently tracked as online by Connectivity."
+
 type gatewayOnlineTracker struct {
-	mu     sync.RWMutex
-	online map[string]bool
+	mu      sync.RWMutex
+	online  map[string]bool
+	metrics *observability.Registry
 }
 
 func newGatewayOnlineTracker() *gatewayOnlineTracker {
 	return &gatewayOnlineTracker{online: make(map[string]bool)}
+}
+
+func newGatewayOnlineTrackerWithMetrics(metrics *observability.Registry) *gatewayOnlineTracker {
+	tracker := &gatewayOnlineTracker{
+		online:  make(map[string]bool),
+		metrics: metrics,
+	}
+	tracker.publishCount(0)
+	return tracker
 }
 
 func (t *gatewayOnlineTracker) SetOnline(gatewayID string, online bool) {
@@ -46,7 +59,9 @@ func (t *gatewayOnlineTracker) SetOnline(gatewayID string, online bool) {
 	} else {
 		delete(t.online, id)
 	}
+	count := len(t.online)
 	t.mu.Unlock()
+	t.publishCount(count)
 }
 
 func (t *gatewayOnlineTracker) IsOnline(gatewayID string) bool {
@@ -61,6 +76,23 @@ func (t *gatewayOnlineTracker) IsOnline(gatewayID string) bool {
 	online := t.online[id]
 	t.mu.RUnlock()
 	return online
+}
+
+func (t *gatewayOnlineTracker) Count() int {
+	if t == nil {
+		return 0
+	}
+	t.mu.RLock()
+	count := len(t.online)
+	t.mu.RUnlock()
+	return count
+}
+
+func (t *gatewayOnlineTracker) publishCount(count int) {
+	if t == nil || t.metrics == nil {
+		return
+	}
+	_ = t.metrics.SetGauge("hvac_mqtt_online_gateways", onlineGatewayMetricHelp, nil, float64(count))
 }
 
 func credentialServer(store *connectivity.Store) (*http.Server, *tunnel.Hub, error) {
@@ -79,6 +111,20 @@ func credentialServerWithContext(
 	store *connectivity.Store,
 	concentratorService *concentrator.Service,
 	coverageReporter adapter.CoverageReporter,
+	tunnelOptions ...tunnel.Option,
+) (*http.Server, *tunnel.Hub, error) {
+	return credentialServerWithDiagnostics(rootCtx, logger, metrics, presence, store, concentratorService, coverageReporter, nil, tunnelOptions...)
+}
+
+func credentialServerWithDiagnostics(
+	rootCtx context.Context,
+	logger *slog.Logger,
+	metrics *observability.Registry,
+	presence *gatewayOnlineTracker,
+	store *connectivity.Store,
+	concentratorService *concentrator.Service,
+	coverageReporter adapter.CoverageReporter,
+	tap *packettap.Manager,
 	tunnelOptions ...tunnel.Option,
 ) (*http.Server, *tunnel.Hub, error) {
 	if rootCtx == nil {
@@ -224,6 +270,7 @@ func credentialServerWithContext(
 		}
 	}
 	var configShadowHandler http.Handler
+	var diagnosticsHandler http.Handler
 	if store != nil {
 		var onGatewaySeen func(string)
 		if presence != nil {
@@ -232,10 +279,11 @@ func credentialServerWithContext(
 			}
 		}
 		configShadowHandler = connectivity.NewConfigShadowHandlerWithPresence(store, service, authorize, onDesiredUpdated, onGatewaySeen)
+		diagnosticsHandler = connectivity.NewDiagnosticsHandler(store, tap, authorize)
 	}
 	return &http.Server{
 		Addr:    envOr("CONNECTIVITY_CREDENTIAL_ADDR", ":8448"),
-		Handler: connectivity.NewCredentialHandlerWithShadow(service, authorize, tunnelHandler, concentratorHandler, configShadowHandler),
+		Handler: connectivity.NewCredentialHandlerWithDiagnostics(service, authorize, tunnelHandler, concentratorHandler, configShadowHandler, diagnosticsHandler),
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,
 			Certificates: []tls.Certificate{serverIdentity},

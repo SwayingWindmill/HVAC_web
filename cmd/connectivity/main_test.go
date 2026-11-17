@@ -1,12 +1,20 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
 )
@@ -157,5 +165,97 @@ func TestUplinkDefaultMQTTClientIDUsesHostnameAndRespectsExplicitOverride(t *tes
 	}
 	if got := defaultMQTTClientIDForHost("connectivity", strings.Repeat("x", 120)); len(got) != maxDefaultMQTTClientIDLen || !strings.HasPrefix(got, "connectivity-") {
 		t.Fatalf("long hostname ClientID=(%q, len=%d), want prefix connectivity- and len %d", got, len(got), maxDefaultMQTTClientIDLen)
+	}
+}
+
+type fakeQuarantinePruner struct {
+	called   chan time.Duration
+	deleted  int64
+	pruneErr error
+}
+
+func (f *fakeQuarantinePruner) PruneExpiredQuarantine(_ context.Context, retention time.Duration) (int64, error) {
+	if f.called != nil {
+		select {
+		case f.called <- retention:
+		default:
+		}
+	}
+	return f.deleted, f.pruneErr
+}
+
+func TestDiagnosticsServerRoutesAndShutdownReadiness(t *testing.T) {
+	telemetry := observability.NewRuntime(observability.RuntimeConfig{Service: "mqtt-telemetry-adapter"})
+	defer telemetry.Shutdown(context.Background())
+	telemetry.MarkReady()
+
+	var runtimeReady atomic.Bool
+	runtimeReady.Store(true)
+	var shuttingDown atomic.Bool
+	srv := diagnosticsServerWithReady(":0", runtimeReady.Load, telemetry, &shuttingDown)
+
+	get := func(method, path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(method, path, nil)
+		srv.Handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := get(http.MethodPost, "/health/live"); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /health/live status = %d, want 405", rec.Code)
+	}
+	for _, path := range []string{"/health/live", "/health/ready", "/health/telemetry/ready", "/metrics"} {
+		if rec := get(http.MethodGet, path); rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200", path, rec.Code)
+		}
+	}
+	diagRec := get(http.MethodGet, "/diagnostics")
+	if diagRec.Code != http.StatusOK {
+		t.Fatalf("GET /diagnostics status = %d, want 200", diagRec.Code)
+	}
+	var diagPayload map[string]any
+	if err := json.Unmarshal(diagRec.Body.Bytes(), &diagPayload); err != nil {
+		t.Fatalf("decode /diagnostics JSON: %v", err)
+	}
+	if diagPayload["service"] != "mqtt-telemetry-adapter" || diagPayload["ready"] != true {
+		t.Fatalf("unexpected /diagnostics payload: %+v", diagPayload)
+	}
+
+	shuttingDown.Store(true)
+	if rec := get(http.MethodGet, "/health/live"); rec.Code != http.StatusOK {
+		t.Fatalf("GET /health/live during shutdown = %d, want 200", rec.Code)
+	}
+	for _, path := range []string{"/health/ready", "/health/telemetry/ready"} {
+		if rec := get(http.MethodGet, path); rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("GET %s during shutdown = %d, want 503", path, rec.Code)
+		}
+	}
+}
+
+func TestStartQuarantineRetentionLoopPrunesOnStartupAndStopsOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pruner := &fakeQuarantinePruner{
+		called:  make(chan time.Duration, 1),
+		deleted: 3,
+	}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	done := startQuarantineRetentionLoop(ctx, pruner, logger, nil, time.Hour, 0)
+
+	select {
+	case retention := <-pruner.called:
+		if retention <= 0 {
+			t.Fatalf("retention = %s, want positive default", retention)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected startup prune execution")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retention loop did not exit on cancel")
 	}
 }

@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 )
 
@@ -112,5 +115,39 @@ func TestGatewayOnlineTrackerTracksNormalizedPresence(t *testing.T) {
 	tracker.SetOnline(gwLower, false)
 	if tracker.IsOnline(gwLower) {
 		t.Fatal("expected gateway offline after SetOnline(false)")
+	}
+}
+
+func TestGatewayOnlineTrackerPublishesOnlineCountGauge(t *testing.T) {
+	metrics := observability.NewRegistry()
+	tracker := newGatewayOnlineTrackerWithMetrics(metrics)
+	scrape := func() string {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		metrics.Handler().ServeHTTP(rec, req)
+		return rec.Body.String()
+	}
+	if tracker.Count() != 0 {
+		t.Fatalf("initial Count() = %d, want 0", tracker.Count())
+	}
+	if body := scrape(); !strings.Contains(body, "hvac_mqtt_online_gateways 0\n") {
+		t.Fatalf("expected initial gauge 0 in /metrics, got:\n%s", body)
+	}
+
+	const gw = "018f3e00-4000-7000-8000-000000000101"
+	tracker.SetOnline(gw, true)
+	if tracker.Count() != 1 {
+		t.Fatalf("Count() = %d, want 1", tracker.Count())
+	}
+	if body := scrape(); !strings.Contains(body, "hvac_mqtt_online_gateways 1\n") {
+		t.Fatalf("expected gauge 1 in /metrics, got:\n%s", body)
+	}
+
+	tracker.SetOnline(gw, false)
+	if tracker.Count() != 0 {
+		t.Fatalf("Count() = %d, want 0 after offline", tracker.Count())
+	}
+	if body := scrape(); !strings.Contains(body, "hvac_mqtt_online_gateways 0\n") {
+		t.Fatalf("expected gauge 0 in /metrics after offline, got:\n%s", body)
 	}
 }
