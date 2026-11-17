@@ -81,9 +81,9 @@ async function waitForPostgres() {
   let stableChecks = 0;
   for (let attempt = 0; attempt < 300; attempt += 1) {
     try {
-      const state = psql("SELECT pg_postmaster_start_time()::text || '|' || (to_regclass('telemetry_runtime.device_observation_snapshots') IS NOT NULL)::text || '|' || (to_regclass('telemetry_runtime.telemetry_publication_outbox') IS NOT NULL)::text || '|' || (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'telemetry_runtime' AND table_name = 'telemetry_publication_outbox' AND column_name = 'latest_cache_state'))::text");
-      const [startedAt, snapshotReady, outboxReady, latestCacheReady] = state.split('|');
-      if (snapshotReady === 'true' && outboxReady === 'true' && latestCacheReady === 'true') {
+      const state = psql("SELECT pg_postmaster_start_time()::text || '|' || (to_regclass('telemetry_runtime.device_observation_snapshots') IS NOT NULL)::text || '|' || (to_regclass('telemetry_runtime.telemetry_publication_outbox') IS NOT NULL)::text || '|' || (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'telemetry_runtime' AND table_name = 'telemetry_publication_outbox' AND column_name = 'latest_cache_state'))::text || '|' || (EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'telemetry_runtime' AND table_name = 'telemetry_publication_outbox' AND column_name = 'alarm_dead_lettered_at'))::text");
+      const [startedAt, snapshotReady, outboxReady, latestCacheReady, alarmDeadLetterReady] = state.split('|');
+      if (snapshotReady === 'true' && outboxReady === 'true' && latestCacheReady === 'true' && alarmDeadLetterReady === 'true') {
         if (startedAt === stableStart) stableChecks += 1;
         else {
           stableStart = startedAt;
@@ -223,68 +223,18 @@ try {
   }
   report.assertions.pointTenantMatchesDevice = true;
 
-  const validCounterBinding = psql(`
-    BEGIN;
-    SET LOCAL ROLE s2_telemetry_migrator;
-    INSERT INTO telemetry_runtime.points (
-      device_id, telemetry_key, tenant_id, site_id, point_id, sensor_id,
-      point_type, value_type, unit, counter_decrease_mode, counter_rollover_modulus, point_revision, updated_at
-    ) VALUES (
-      '018f2e00-3000-7000-8000-000000000001', 'meter.energy_total',
-      '018f2d00-0000-7000-8000-000000000001', '018f2e00-1000-7000-8000-000000000001',
-      '01990000-1210-7000-8000-000000000001', NULL,
-      'COUNTER', 'NUMBER', 'kWh', 'ROLLOVER', 1000000, 1, now()
-    );
-    SELECT point_type || '|' || counter_decrease_mode || '|' || counter_rollover_modulus::text
-    FROM telemetry_runtime.points
-    WHERE device_id = '018f2e00-3000-7000-8000-000000000001' AND telemetry_key = 'meter.energy_total';
-    ROLLBACK;
-  `);
-  expectEqual(validCounterBinding, 'COUNTER|ROLLOVER|1000000', 'valid runtime Counter binding semantics');
-  const counterBindingMissingMode = psql(`
-    BEGIN;
-    SET LOCAL ROLE s2_telemetry_migrator;
-    INSERT INTO telemetry_runtime.points (
-      device_id, telemetry_key, tenant_id, site_id, point_id,
-      point_type, value_type, unit, point_revision, updated_at
-    ) VALUES (
-      '018f2e00-3000-7000-8000-000000000001', 'meter.energy_total_missing_mode',
-      '018f2d00-0000-7000-8000-000000000001', '018f2e00-1000-7000-8000-000000000001',
-      '01990000-1210-7000-8000-000000000002',
-      'COUNTER', 'NUMBER', 'kWh', 1, now()
-    );
-  `, { expectFailure: true });
-  if (!counterBindingMissingMode.includes('points_counter_semantics_check')) throw new Error(`runtime Counter without mode was accepted: ${counterBindingMissingMode}`);
-  const counterBindingRolloverMissingModulus = psql(`
-    BEGIN;
-    SET LOCAL ROLE s2_telemetry_migrator;
-    INSERT INTO telemetry_runtime.points (
-      device_id, telemetry_key, tenant_id, site_id, point_id,
-      point_type, value_type, unit, counter_decrease_mode, point_revision, updated_at
-    ) VALUES (
-      '018f2e00-3000-7000-8000-000000000001', 'meter.water_total_rollover',
-      '018f2d00-0000-7000-8000-000000000001', '018f2e00-1000-7000-8000-000000000001',
-      '01990000-1210-7000-8000-000000000003',
-      'COUNTER', 'NUMBER', 'm3', 'ROLLOVER', 1, now()
-    );
-  `, { expectFailure: true });
-  if (!counterBindingRolloverMissingModulus.includes('points_counter_semantics_check')) throw new Error(`runtime rollover Counter without modulus was accepted: ${counterBindingRolloverMissingModulus}`);
-  const nonCounterRuntimeMode = psql(`
-    BEGIN;
-    SET LOCAL ROLE s2_telemetry_migrator;
-    INSERT INTO telemetry_runtime.points (
-      device_id, telemetry_key, tenant_id, site_id, point_id,
-      point_type, value_type, unit, counter_decrease_mode, point_revision, updated_at
-    ) VALUES (
-      '018f2e00-3000-7000-8000-000000000001', 'meter.active_power_with_counter_mode',
-      '018f2d00-0000-7000-8000-000000000001', '018f2e00-1000-7000-8000-000000000001',
-      '01990000-1210-7000-8000-000000000004',
-      'TELEMETRY', 'NUMBER', 'kW', 'RESET_TO_ZERO', 1, now()
-    );
-  `, { expectFailure: true });
-  if (!nonCounterRuntimeMode.includes('points_counter_semantics_check')) throw new Error(`non-Counter runtime binding accepted Counter mode: ${nonCounterRuntimeMode}`);
+  const cbm = psql("BEGIN;SET LOCAL ROLE s2_telemetry_migrator;INSERT INTO telemetry_runtime.points(device_id,telemetry_key,tenant_id,site_id,point_id,sensor_id,point_type,value_type,unit,counter_decrease_mode,counter_rollover_modulus,point_revision,updated_at)VALUES('018f2e00-3000-7000-8000-000000000001','meter.energy_total','018f2d00-0000-7000-8000-000000000001','018f2e00-1000-7000-8000-000000000001','01990000-1210-7000-8000-000000000001',NULL,'COUNTER','NUMBER','kWh','ROLLOVER',1000000,1,now());SELECT point_type||'|'||counter_decrease_mode||'|'||counter_rollover_modulus::text FROM telemetry_runtime.points WHERE device_id='018f2e00-3000-7000-8000-000000000001' AND telemetry_key='meter.energy_total';ROLLBACK;");
+  expectEqual(cbm, 'COUNTER|ROLLOVER|1000000', 'valid runtime Counter binding semantics');
+  for (const [label, key, mode] of [
+    ['missingMode', 'meter.energy_total_missing_mode', "'COUNTER','NUMBER','kWh',NULL,1"],
+    ['rolloverNoMod', 'meter.water_total_rollover', "'COUNTER','NUMBER','m3','ROLLOVER',1"],
+    ['nonCounterMode', 'meter.active_power_with_counter_mode', "'TELEMETRY','NUMBER','kW','RESET_TO_ZERO',1"],
+  ]) {
+    const out = psql(`BEGIN;SET LOCAL ROLE s2_telemetry_migrator;INSERT INTO telemetry_runtime.points(device_id,telemetry_key,tenant_id,site_id,point_id,point_type,value_type,unit,counter_decrease_mode,point_revision,updated_at)VALUES('018f2e00-3000-7000-8000-000000000001','${key}','018f2d00-0000-7000-8000-000000000001','018f2e00-1000-7000-8000-000000000001','01990000-1210-7000-8000-000000000002',${mode},now());`, { expectFailure: true });
+    if (!out.includes('points_counter_semantics_check')) throw new Error(`${label} accepted: ${out}`);
+  }
   report.assertions.counterBindingSemantics = {
-    valid: validCounterBinding,
+    valid: cbm,
     missingModeRejected: true,
     rolloverWithoutModulusRejected: true,
     nonCounterModeRejected: true,
@@ -443,15 +393,20 @@ try {
     relayMetadataUpdate: relayLatestCacheUpdate,
   };
 
-  report.assertions.redisLatestCAS = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
-    '--module=modules/telemetry',
-    'test', '-count=1', '-run', 'TestRedisLatestCacheNeverRegressesBusinessRevision', '-v', './pkg/telemetry/...',
-  ], {
-    env: {
-      ...process.env,
-      S2_TELEMETRY_LATEST_REDIS_TEST_URL: `redis://127.0.0.1:${latestRedisHostPort}/0`,
-    },
+  const dlqMeta = psql(`SELECT (SELECT string_agg(pg_get_constraintdef(oid),'|') FROM pg_constraint WHERE conrelid='telemetry_runtime.telemetry_publication_outbox'::regclass AND conname IN ('telemetry_publication_outbox_alarm_delivery_state_check','telemetry_publication_outbox_alarm_published_check'))||'|'||(to_regclass('telemetry_runtime.telemetry_publication_outbox_alarm_dead_letter_idx') IS NOT NULL)::text||'|'||has_column_privilege('s2_telemetry_relay','telemetry_runtime.telemetry_publication_outbox','alarm_dead_lettered_at','UPDATE')::text||'|'||(SELECT coalesce(col_description('telemetry_runtime.telemetry_publication_outbox'::regclass,attnum),'') FROM pg_attribute WHERE attrelid='telemetry_runtime.telemetry_publication_outbox'::regclass AND attname='alarm_dead_lettered_at')`);
+  if (!dlqMeta.includes('DEAD_LETTER') || !dlqMeta.includes('alarm_dead_lettered_at') || !dlqMeta.includes('|true|true|') || !/[\u4e00-\u9fff]/.test(dlqMeta)) {
+    throw new Error(`Alarm DLQ schema/grant/comment check failed: ${dlqMeta}`);
+  }
+  const runTelemetryGo = (pattern, extraEnv) => run(process.execPath, [
+    'scripts/run-isolated-go.mjs', '--module=modules/telemetry', 'test', '-count=1', '-run', pattern, '-v', './pkg/telemetry/...',
+  ], { env: { ...process.env, ...extraEnv } });
+  report.assertions.alarmEvaluationDeadLetter = { schemaAndGrantReady: true };
+  report.assertions.redisLatestCAS = runTelemetryGo('TestRedisLatestCacheNeverRegressesBusinessRevision', {
+    S2_TELEMETRY_LATEST_REDIS_TEST_URL: `redis://127.0.0.1:${latestRedisHostPort}/0`,
+  });
+  report.assertions.alarmEvaluationPostgres = runTelemetryGo('TestPostgresAlarmEvaluation', {
+    S2_TELEMETRY_TEST_DATABASE_URL: `postgres://s2_telemetry_service:s2-telemetry-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s2?sslmode=disable`,
+    S2_TELEMETRY_ADMIN_DATABASE_URL: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s2?sslmode=disable`,
   });
 
   const migratorActivation = psql(`

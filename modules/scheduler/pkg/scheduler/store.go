@@ -47,8 +47,15 @@ type ScanResult struct {
 	Promoted  int
 }
 
+type schedulerDB interface {
+	Begin(context.Context) (pgx.Tx, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Ping(context.Context) error
+	Close()
+}
+
 type Store struct {
-	pool *pgxpool.Pool
+	pool schedulerDB
 }
 
 func NewStore(pool *pgxpool.Pool) (*Store, error) {
@@ -58,6 +65,13 @@ func NewStore(pool *pgxpool.Pool) (*Store, error) {
 	return &Store{pool: pool}, nil
 }
 
+func newStoreWithDB(db schedulerDB) (*Store, error) {
+	if db == nil {
+		return nil, errors.New("scheduler database is required")
+	}
+	return &Store{pool: db}, nil
+}
+
 func (s *Store) Close() {
 	if s != nil && s.pool != nil {
 		s.pool.Close()
@@ -65,6 +79,9 @@ func (s *Store) Close() {
 }
 
 func (s *Store) Ping(ctx context.Context) error {
+	if s == nil || s.pool == nil {
+		return errors.New("scheduler store is closed")
+	}
 	return s.pool.Ping(ctx)
 }
 
@@ -132,17 +149,20 @@ LIMIT $1`, batch)
 		return 0, err
 	}
 	rows.Close()
+	cancelled := 0
 	for _, id := range ids {
-		if _, err = tx.Exec(ctx, `UPDATE core_registry.job_instances
+		tag, err := tx.Exec(ctx, `UPDATE core_registry.job_instances
 SET state='CANCELLED',next_retry_at=NULL,lease_owner=NULL,lease_until=NULL,completed_at=$2,error_code='CANCEL_REQUESTED',error_message='CANCEL_REQUESTED',updated_at=$2
-WHERE job_id=$1::uuid AND cancel_requested=true AND state IN ('PENDING','READY','RETRY_WAIT')`, id, now.UTC()); err != nil {
+WHERE job_id=$1::uuid AND cancel_requested=true AND state IN ('PENDING','READY','RETRY_WAIT')`, id, now.UTC())
+		if err != nil {
 			return 0, err
 		}
+		cancelled += int(tag.RowsAffected())
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return 0, err
 	}
-	return len(ids), nil
+	return cancelled, nil
 }
 
 func (s *Store) promoteRetries(ctx context.Context, now time.Time, batch int) (int, error) {
@@ -153,7 +173,7 @@ func (s *Store) promoteRetries(ctx context.Context, now time.Time, batch int) (i
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, `SELECT job_id::text
 FROM core_registry.job_instances
-WHERE state='RETRY_WAIT' AND next_retry_at <= $1
+WHERE state='RETRY_WAIT' AND cancel_requested=false AND next_retry_at <= $1
 ORDER BY priority DESC, scheduled_for ASC
 FOR UPDATE SKIP LOCKED
 LIMIT $2`, now.UTC(), batch)
@@ -174,17 +194,20 @@ LIMIT $2`, now.UTC(), batch)
 		return 0, err
 	}
 	rows.Close()
+	promoted := 0
 	for _, id := range ids {
-		if _, err = tx.Exec(ctx, `UPDATE core_registry.job_instances
+		tag, err := tx.Exec(ctx, `UPDATE core_registry.job_instances
 SET state='READY',next_retry_at=NULL,updated_at=$2
-WHERE job_id=$1::uuid AND state='RETRY_WAIT'`, id, now.UTC()); err != nil {
+WHERE job_id=$1::uuid AND state='RETRY_WAIT' AND cancel_requested=false`, id, now.UTC())
+		if err != nil {
 			return 0, err
 		}
+		promoted += int(tag.RowsAffected())
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return 0, err
 	}
-	return len(ids), nil
+	return promoted, nil
 }
 
 func (s *Store) recoverExpiredLeases(ctx context.Context, now time.Time, batch int) (int, error) {
@@ -193,12 +216,13 @@ func (s *Store) recoverExpiredLeases(ctx context.Context, now time.Time, batch i
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
+	nowUTC := now.UTC()
 	rows, err := tx.Query(ctx, `SELECT job_id::text,job_type,attempt_count,max_attempts,cancel_requested
 FROM core_registry.job_instances
 WHERE state IN ('CLAIMED','RUNNING') AND lease_until < $1
 ORDER BY lease_until ASC
 FOR UPDATE SKIP LOCKED
-LIMIT $2`, now.UTC(), batch)
+LIMIT $2`, nowUTC, batch)
 	if err != nil {
 		return 0, err
 	}
@@ -224,28 +248,34 @@ LIMIT $2`, now.UTC(), batch)
 	}
 	rows.Close()
 
+	recovered := 0
 	for _, job := range jobs {
 		state, resultStatus, errorCode := "FAILED", "FAILED", "LEASE_RECOVERY_REQUIRES_RECONCILIATION"
 		var nextRetry any
-		var completed any = now.UTC()
+		var completed any = nowUTC
 		if job.cancelRequested {
 			state, resultStatus, errorCode = "CANCELLED", "CANCELLED", "CANCEL_REQUESTED"
 		} else if isLeaseRetrySafeJob(job.jobType) && job.attempts < job.max {
 			state, resultStatus, errorCode = "RETRY_WAIT", "RETRY_WAIT", "LEASE_EXPIRED"
-			nextRetry = now.UTC().Add(retryDelay(job.attempts))
+			nextRetry = nowUTC.Add(retryDelay(job.attempts))
 			completed = nil
 		} else if job.attempts >= job.max {
 			state, resultStatus, errorCode = "DEAD", "DEAD", "LEASE_EXPIRED_ATTEMPTS_EXHAUSTED"
 		}
-		if _, err = tx.Exec(ctx, `UPDATE core_registry.job_instances
+		tag, err := tx.Exec(ctx, `UPDATE core_registry.job_instances
 SET state=$2,next_retry_at=$3,lease_owner=NULL,lease_until=NULL,completed_at=$4,error_code=$5,error_message=$5,updated_at=$6
-WHERE job_id=$1::uuid AND state IN ('CLAIMED','RUNNING')`, job.id, state, nextRetry, completed, errorCode, now.UTC()); err != nil {
+WHERE job_id=$1::uuid AND state IN ('CLAIMED','RUNNING') AND lease_until < $6`, job.id, state, nextRetry, completed, errorCode, nowUTC)
+		if err != nil {
 			return 0, err
 		}
+		if tag.RowsAffected() == 0 {
+			continue
+		}
+		recovered += int(tag.RowsAffected())
 		if job.attempts > 0 {
 			if _, err = tx.Exec(ctx, `UPDATE core_registry.job_attempts
 SET completed_at=COALESCE(completed_at,$4),result_status=COALESCE(result_status,$3),error_code=COALESCE(error_code,$5),error_message=COALESCE(error_message,$5),duration_ms=COALESCE(duration_ms,GREATEST(0,EXTRACT(EPOCH FROM ($4-started_at))*1000)::bigint)
-WHERE job_id=$1::uuid AND attempt_no=$2 AND completed_at IS NULL`, job.id, job.attempts, resultStatus, now.UTC(), errorCode); err != nil {
+WHERE job_id=$1::uuid AND attempt_no=$2 AND completed_at IS NULL`, job.id, job.attempts, resultStatus, nowUTC, errorCode); err != nil {
 				return 0, err
 			}
 		}
@@ -253,7 +283,7 @@ WHERE job_id=$1::uuid AND attempt_no=$2 AND completed_at IS NULL`, job.id, job.a
 	if err = tx.Commit(ctx); err != nil {
 		return 0, err
 	}
-	return len(jobs), nil
+	return recovered, nil
 }
 
 func (s *Store) promotePendingJobs(ctx context.Context, now time.Time, batch int) (int, error) {
@@ -280,7 +310,7 @@ WHERE j.state='PENDING' AND j.cancel_requested=false AND s.concurrency_policy='F
       AND (earlier.scheduled_for < j.scheduled_for OR (earlier.scheduled_for=j.scheduled_for AND earlier.job_id < j.job_id))
   )
 ORDER BY j.priority DESC,j.scheduled_for ASC
-FOR UPDATE OF j SKIP LOCKED
+FOR UPDATE OF j, s SKIP LOCKED
 LIMIT $1`, batch)
 	if err != nil {
 		return 0, err
@@ -299,15 +329,18 @@ LIMIT $1`, batch)
 		return 0, err
 	}
 	rows.Close()
+	promoted := 0
 	for _, id := range ids {
-		if _, err = tx.Exec(ctx, `UPDATE core_registry.job_instances SET state='READY',updated_at=$2 WHERE job_id=$1::uuid AND state='PENDING'`, id, now.UTC()); err != nil {
+		tag, err := tx.Exec(ctx, `UPDATE core_registry.job_instances SET state='READY',updated_at=$2 WHERE job_id=$1::uuid AND state='PENDING' AND cancel_requested=false`, id, now.UTC())
+		if err != nil {
 			return 0, err
 		}
+		promoted += int(tag.RowsAffected())
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return 0, err
 	}
-	return len(ids), nil
+	return promoted, nil
 }
 
 func (s *Store) scanDueSchedules(ctx context.Context, now time.Time, batch int, normalFireTolerance time.Duration) (ScanResult, error) {
@@ -350,20 +383,21 @@ LIMIT $2`, now.UTC(), batch)
 	rows.Close()
 
 	result := ScanResult{Schedules: len(schedules)}
+	nowUTC := now.UTC().Truncate(time.Microsecond)
 	for _, schedule := range schedules {
-		fires, nextFire, disable, err := planSchedule(schedule, now.UTC(), normalFireTolerance)
+		fires, nextFire, disable, err := planSchedule(schedule, nowUTC, normalFireTolerance)
 		if err != nil {
 			return result, fmt.Errorf("schedule %s: %w", schedule.Code, err)
 		}
 		var lastTriggered any
 		for _, scheduledFor := range fires {
-			created, skipped, err := createScheduledJob(ctx, tx, schedule, scheduledFor, now.UTC())
+			created, skipped, err := createScheduledJob(ctx, tx, schedule, scheduledFor, nowUTC)
 			if err != nil {
 				return result, fmt.Errorf("schedule %s create job: %w", schedule.Code, err)
 			}
 			if created {
 				result.Created++
-				lastTriggered = scheduledFor.UTC()
+				lastTriggered = scheduledFor.UTC().Truncate(time.Microsecond)
 			}
 			if skipped {
 				result.Skipped++
@@ -372,7 +406,7 @@ LIMIT $2`, now.UTC(), batch)
 		if disable {
 			if _, err = tx.Exec(ctx, `UPDATE core_registry.schedule_definitions
 SET enabled=false,next_fire_at=NULL,last_fire_at=COALESCE($2,last_fire_at),version=version+1,updated_at=$3
-WHERE schedule_id=$1::uuid`, schedule.ID, lastTriggered, now.UTC()); err != nil {
+WHERE schedule_id=$1::uuid AND enabled=true`, schedule.ID, lastTriggered, nowUTC); err != nil {
 				return result, err
 			}
 			continue
@@ -382,7 +416,7 @@ WHERE schedule_id=$1::uuid`, schedule.ID, lastTriggered, now.UTC()); err != nil 
 		}
 		if _, err = tx.Exec(ctx, `UPDATE core_registry.schedule_definitions
 SET next_fire_at=$2,last_fire_at=COALESCE($3,last_fire_at),version=version+1,updated_at=$4
-WHERE schedule_id=$1::uuid`, schedule.ID, nextFire.UTC(), lastTriggered, now.UTC()); err != nil {
+WHERE schedule_id=$1::uuid AND enabled=true`, schedule.ID, nextFire.UTC().Truncate(time.Microsecond), lastTriggered, nowUTC); err != nil {
 			return result, err
 		}
 	}
@@ -481,6 +515,22 @@ func selectMisfires(schedule Schedule, due []time.Time, now time.Time, tolerance
 }
 
 func createScheduledJob(ctx context.Context, tx pgx.Tx, schedule Schedule, scheduledFor, now time.Time) (created bool, skipped bool, err error) {
+	scheduledForUTC := scheduledFor.UTC().Truncate(time.Microsecond)
+	nowUTC := now.UTC().Truncate(time.Microsecond)
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('scheduler-schedule:' || $1, 0))`, schedule.ID); err != nil {
+		return false, false, err
+	}
+	var alreadyScheduled bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS (
+SELECT 1 FROM core_registry.job_instances
+WHERE schedule_id=$1::uuid AND scheduled_for=$2
+)`, schedule.ID, scheduledForUTC).Scan(&alreadyScheduled); err != nil {
+		return false, false, err
+	}
+	if alreadyScheduled {
+		return false, false, nil
+	}
+
 	active := false
 	if schedule.ConcurrencyPolicy != "ALLOW" {
 		if err = tx.QueryRow(ctx, `SELECT EXISTS (
@@ -493,13 +543,13 @@ WHERE schedule_id=$1::uuid AND state IN ('PENDING','READY','CLAIMED','RUNNING','
 	if active && schedule.ConcurrencyPolicy == "REPLACE" {
 		if _, err = tx.Exec(ctx, `UPDATE core_registry.job_instances
 SET cancel_requested=true,updated_at=$2
-WHERE schedule_id=$1::uuid AND state IN ('PENDING','READY','CLAIMED','RUNNING','RETRY_WAIT')`, schedule.ID, now.UTC()); err != nil {
+WHERE schedule_id=$1::uuid AND state IN ('PENDING','READY','CLAIMED','RUNNING','RETRY_WAIT')`, schedule.ID, nowUTC); err != nil {
 			return false, false, err
 		}
 		active = false
 	}
 
-	jobID, err := uuidv7(now)
+	jobID, err := uuidv7(nowUTC)
 	if err != nil {
 		return false, false, err
 	}
@@ -507,12 +557,16 @@ WHERE schedule_id=$1::uuid AND state IN ('PENDING','READY','CLAIMED','RUNNING','
 	if err != nil {
 		return false, false, err
 	}
-	dedupKey := fmt.Sprintf("schedule:%s:%s", schedule.ID, scheduledFor.UTC().Format(time.RFC3339Nano))
+	dedupKey := fmt.Sprintf("schedule:%s:%s", schedule.ID, scheduledForUTC.Format(time.RFC3339Nano))
 	priority := priorityForJobType(schedule.JobType)
 	tag, err := tx.Exec(ctx, `INSERT INTO core_registry.job_instances(
 job_id,schedule_id,trigger_type,job_type,tenant_id,site_id,scheduled_for,schedule_timezone,priority,dedup_key,payload,state,max_attempts,timeout_seconds,trace_id,created_at,updated_at)
-VALUES($1::uuid,$2::uuid,'SCHEDULE',$3,$4::uuid,$5::uuid,$6,$7,$8,$9,$10::jsonb,'PENDING',$11,$12,$13,$14,$14)
-ON CONFLICT (dedup_key) DO NOTHING`, jobID, schedule.ID, schedule.JobType, nullableUUID(schedule.TenantID), nullableUUID(schedule.SiteID), scheduledFor.UTC(), schedule.Timezone, priority, dedupKey, string(schedule.PayloadTemplate), schedule.MaxAttempts, schedule.TimeoutSeconds, traceID, now.UTC())
+SELECT $1::uuid,$2::uuid,'SCHEDULE',$3,$4::uuid,$5::uuid,$6,$7,$8,$9,$10::jsonb,'PENDING',$11,$12,$13,$14,$14
+WHERE NOT EXISTS (
+SELECT 1 FROM core_registry.job_instances
+WHERE schedule_id=$2::uuid AND scheduled_for=$6
+)
+ON CONFLICT (dedup_key) DO NOTHING`, jobID, schedule.ID, schedule.JobType, nullableUUID(schedule.TenantID), nullableUUID(schedule.SiteID), scheduledForUTC, schedule.Timezone, priority, dedupKey, string(schedule.PayloadTemplate), schedule.MaxAttempts, schedule.TimeoutSeconds, traceID, nowUTC)
 	if err != nil {
 		return false, false, err
 	}
@@ -522,7 +576,7 @@ ON CONFLICT (dedup_key) DO NOTHING`, jobID, schedule.ID, schedule.JobType, nulla
 	if active && schedule.ConcurrencyPolicy == "FORBID" {
 		return true, false, nil
 	}
-	_, err = tx.Exec(ctx, `UPDATE core_registry.job_instances SET state='READY',updated_at=$2 WHERE job_id=$1::uuid AND state='PENDING'`, jobID, now.UTC())
+	_, err = tx.Exec(ctx, `UPDATE core_registry.job_instances SET state='READY',updated_at=$2 WHERE job_id=$1::uuid AND state='PENDING'`, jobID, nowUTC)
 	return true, false, err
 }
 
