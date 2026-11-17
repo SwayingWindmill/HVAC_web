@@ -557,3 +557,165 @@ func TestOutboxRelayCapabilityHTTPClient(t *testing.T) {
 		t.Fatalf("unexpected sync HTTP payload: %+v", captured)
 	}
 }
+
+func TestTemplatePayloadModbusDriverValidation(t *testing.T) {
+	validRegister := func(pointCode string) map[string]any {
+		return map[string]any{
+			"pointCode":     pointCode,
+			"functionCode":  3,
+			"address":       100,
+			"registerCount": 1,
+			"rawType":       "UINT16",
+			"byteOrder":     "BIG_ENDIAN",
+			"wordOrder":     "BIG_ENDIAN",
+			"scale":         1.0,
+			"offset":        0.0,
+			"pollPriority":  "HIGH",
+		}
+	}
+
+	// DEVICE template with ONLY modbusDriver (full fields + BIT_BOOL bitIndex=0 + ENUM16) succeeds.
+	fullModbusOnly := map[string]any{
+		"modbusDriver": map[string]any{
+			"driverType":        "MODBUS_TCP",
+			"endpoint":          "192.168.1.10:502",
+			"unitId":            1,
+			"capabilityProfile": "chiller.york.v1",
+			"timeoutMs":         2000,
+			"retries":           2,
+			"registers": []any{
+				map[string]any{
+					"pointCode":         "chw_supply_temp",
+					"semanticChannel":   "chw_supply_temp",
+					"functionCode":      4,
+					"writeFunctionCode": 16,
+					"address":           0,
+					"registerCount":     2,
+					"rawType":           "FLOAT32",
+					"byteOrder":         "BIG_ENDIAN",
+					"wordOrder":         "LITTLE_ENDIAN",
+					"scale":             0.1,
+					"offset":            0.0,
+					"pollPriority":      "VERY_HIGH",
+				},
+				map[string]any{
+					"pointCode":     "run_cmd",
+					"functionCode":  3,
+					"address":       10,
+					"registerCount": 1,
+					"rawType":       "BIT_BOOL",
+					"byteOrder":     "BIG_ENDIAN",
+					"wordOrder":     "BIG_ENDIAN",
+					"bitIndex":      0,
+					"scale":         1.0,
+					"offset":        0.0,
+					"pollPriority":  "HIGH",
+				},
+				map[string]any{
+					"pointCode":     "operating_mode",
+					"functionCode":  3,
+					"address":       20,
+					"registerCount": 1,
+					"rawType":       "ENUM16",
+					"byteOrder":     "BIG_ENDIAN",
+					"wordOrder":     "BIG_ENDIAN",
+					"scale":         1.0,
+					"offset":        0.0,
+					"pollPriority":  "MEDIUM",
+					"enumMap":       map[string]any{"0": "OFF", "1": "COOL"},
+				},
+			},
+		},
+	}
+	act, err := parseAndValidateTemplatePayload(TemplateDevice, fullModbusOnly)
+	if err != nil || act == nil || act.ModbusDriver == nil {
+		t.Fatalf("expected valid full DEVICE modbusDriver, got (%+v, %v)", act, err)
+	}
+	if act.ModbusDriver.DriverType != "MODBUS_TCP" || len(act.ModbusDriver.Registers) != 3 || act.ModbusDriver.Registers[1].BitIndex == nil || *act.ModbusDriver.Registers[1].BitIndex != 0 {
+		t.Fatalf("unexpected parsed modbusDriver: %+v", act.ModbusDriver)
+	}
+
+	// Minimal DEVICE modbusDriver omitting optional endpoint/unitId/capabilityProfile/timeoutMs/retries succeeds.
+	minimalModbus := map[string]any{
+		"modbusDriver": map[string]any{
+			"driverType": "MODBUS_RTU",
+			"registers":  []any{validRegister("freq_hz")},
+		},
+	}
+	actMin, err := parseAndValidateTemplatePayload(TemplateDevice, minimalModbus)
+	if err != nil || actMin == nil || actMin.ModbusDriver == nil || actMin.ModbusDriver.UnitID != nil || actMin.ModbusDriver.TimeoutMS != nil || actMin.ModbusDriver.Retries != nil {
+		t.Fatalf("expected valid minimal DEVICE modbusDriver with nil optionals, got (%+v, %v)", actMin, err)
+	}
+
+	// Non-DEVICE templates must reject modbusDriver.
+	for _, nonDeviceKind := range []TemplateKind{TemplateAsset, TemplatePoint} {
+		if _, err := parseAndValidateTemplatePayload(nonDeviceKind, minimalModbus); !errors.Is(err, ErrInvalidMutation) {
+			t.Fatalf("expected ErrInvalidMutation for modbusDriver on %s, got %v", nonDeviceKind, err)
+		}
+	}
+
+	// Invalid DEVICE modbusDriver payloads must fail with ErrInvalidMutation.
+	over256Regs := make([]any, 257)
+	for i := range over256Regs {
+		over256Regs[i] = validRegister("p_" + string(rune('a'+i/26)) + string(rune('a'+i%26)))
+	}
+	missingAddressReg := validRegister("no_addr")
+	delete(missingAddressReg, "address")
+	missingOffsetReg := validRegister("no_offset")
+	delete(missingOffsetReg, "offset")
+
+	badPayloads := []struct {
+		name    string
+		payload map[string]any
+	}{
+		{"null modbusDriver", map[string]any{"modbusDriver": nil}},
+		{"invalid driverType", map[string]any{"modbusDriver": map[string]any{"driverType": "BACNET", "registers": []any{validRegister("p1")}}}},
+		{"unknown field", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "extra": 1, "registers": []any{validRegister("p1")}}}},
+		{"unitId 0", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "unitId": 0, "registers": []any{validRegister("p1")}}}},
+		{"unitId 248", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "unitId": 248, "registers": []any{validRegister("p1")}}}},
+		{"timeoutMs 50", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "timeoutMs": 50, "registers": []any{validRegister("p1")}}}},
+		{"retries 11", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "retries": 11, "registers": []any{validRegister("p1")}}}},
+		{"endpoint too long", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "endpoint": strings.Repeat("e", 257), "registers": []any{validRegister("p1")}}}},
+		{"capabilityProfile too long", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "capabilityProfile": strings.Repeat("c", 65), "registers": []any{validRegister("p1")}}}},
+		{"empty registers", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{}}}},
+		{"over 256 registers", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": over256Regs}}},
+		{"duplicate pointCode", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{validRegister("p1"), validRegister("p1")}}}},
+		{"missing address", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{missingAddressReg}}}},
+		{"missing offset", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{missingOffsetReg}}}},
+		{
+			"registerCount mismatch FLOAT32",
+			map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{map[string]any{
+				"pointCode": "p1", "functionCode": 3, "address": 1, "registerCount": 1, "rawType": "FLOAT32",
+				"byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN", "scale": 1.0, "offset": 0.0, "pollPriority": "HIGH",
+			}}}},
+		},
+		{
+			"BIT_BOOL without bitIndex",
+			map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{map[string]any{
+				"pointCode": "p1", "functionCode": 3, "address": 1, "registerCount": 1, "rawType": "BIT_BOOL",
+				"byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN", "scale": 1.0, "offset": 0.0, "pollPriority": "HIGH",
+			}}}},
+		},
+		{
+			"ENUM16 without enumMap",
+			map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{map[string]any{
+				"pointCode": "p1", "functionCode": 3, "address": 1, "registerCount": 1, "rawType": "ENUM16",
+				"byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN", "scale": 1.0, "offset": 0.0, "pollPriority": "HIGH",
+			}}}},
+		},
+		{
+			"zero scale",
+			map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{map[string]any{
+				"pointCode": "p1", "functionCode": 3, "address": 1, "registerCount": 1, "rawType": "UINT16",
+				"byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN", "scale": 0.0, "offset": 0.0, "pollPriority": "HIGH",
+			}}}},
+		},
+	}
+	for _, tc := range badPayloads {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := parseAndValidateTemplatePayload(TemplateDevice, tc.payload); !errors.Is(err, ErrInvalidMutation) {
+				t.Fatalf("%s: expected ErrInvalidMutation, got %v", tc.name, err)
+			}
+		})
+	}
+}

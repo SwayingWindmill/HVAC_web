@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -334,6 +335,139 @@ func TestConfigShadowPostgresRLSConcurrencyAndDrift(t *testing.T) {
 	recoveredRetry, err := store.GetGatewayConfigShadowForOperator(ctx, claimsA, gatewayA)
 	if err != nil || recoveredRetry.Reported == nil || recoveredRetry.Reported.AppliedStatus != connectivity.AppliedStatusApplied || recoveredRetry.Reported.ErrorMessage != nil || recoveredRetry.SyncStatus != connectivity.ShadowSyncStatusSynced || len(recoveredRetry.Drift) != 0 {
 		t.Fatalf("expected retry completion to clear PARTIAL and ErrorMessage -> APPLIED/SYNCED, got %+v err=%v", recoveredRetry, err)
+	}
+
+	// DriverConfigs + AutonomyPolicy: persist, canonicalize, tri-state PUT, pull/report round-trip, and concentrator preservation.
+	rev7 := int64(7)
+	writeFC16 := 16
+	bitZero := 0
+	driversRev8 := []connectivity.GatewayModbusDriverConfig{
+		{
+			DeviceKey: "vfd-b", DriverType: "MODBUS_RTU", Endpoint: "/dev/ttyS1", UnitID: 4, CapabilityProfile: "vfd.atv630", TimeoutMS: 1200, Retries: 2,
+			Registers: []connectivity.GatewayModbusRegisterMapping{
+				{PointCode: "run_cmd", SemanticChannel: "run", FunctionCode: 3, WriteFunctionCode: &writeFC16, Address: 8501, RegisterCount: 1, RawType: "BIT_BOOL", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", BitIndex: &bitZero, Scale: 1, Offset: 0, PollPriority: "VERY_HIGH"},
+				{PointCode: "drive_state", FunctionCode: 3, Address: 8500, RegisterCount: 1, RawType: "ENUM16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, Offset: 0, PollPriority: "HIGH", EnumMap: map[string]string{"0": "OFF", "1": "RUN"}},
+			},
+		},
+		{
+			DeviceKey: "chiller-a", DriverType: "MODBUS_TCP", Endpoint: "10.1.1.10:502", UnitID: 1, TimeoutMS: 2000, Retries: 1,
+			Registers: []connectivity.GatewayModbusRegisterMapping{
+				{PointCode: "chw_temp", FunctionCode: 4, Address: 10, RegisterCount: 2, RawType: "FLOAT32", ByteOrder: "BIG_ENDIAN", WordOrder: "LITTLE_ENDIAN", Scale: 0.1, Offset: 0, PollPriority: "MEDIUM"},
+			},
+		},
+	}
+	autonomyRev8 := connectivity.GatewayAutonomyPolicy{
+		Enabled:                            true,
+		OfflineGraceSeconds:                120,
+		DefaultChilledWaterSupplySetpointC: 7.0,
+		DefaultPumpFrequencyHz:             35.0,
+		MinPumpFrequencyHz:                 20.0,
+		MaxPumpFrequencyHz:                 48.0,
+		MinRunSeconds:                      300,
+		MinStopSeconds:                     180,
+		SnapshotIntervalSeconds:            60,
+	}
+	shadowRev8, err := store.UpdateGatewayDesiredConfig(ctx, claimsA, gatewayA, connectivity.UpdateDesiredConfigInput{
+		ExpectedDesiredRevision: &rev7,
+		DriverConfigs:           &driversRev8,
+		AutonomyPolicy:          connectivity.OptionalAutonomyPolicy{Set: true, Value: &autonomyRev8},
+		Reason:                  "set driverConfigs and autonomyPolicy",
+	})
+	if err != nil || shadowRev8.Desired == nil || shadowRev8.Desired.DesiredRevision != 8 || len(shadowRev8.Desired.DriverConfigs) != 2 || shadowRev8.Desired.AutonomyPolicy == nil {
+		t.Fatalf("rev 8 update = %+v, err=%v", shadowRev8, err)
+	}
+	if shadowRev8.Desired.DriverConfigs[0].DeviceKey != "chiller-a" || shadowRev8.Desired.DriverConfigs[1].Registers[0].PointCode != "drive_state" {
+		t.Fatalf("expected canonicalized driver/register sorting, got %+v", shadowRev8.Desired.DriverConfigs)
+	}
+
+	// Pull returns driverConfigs and autonomyPolicy; LoadGatewayConfigShadowByGatewayID matches.
+	pulledRev8, err := store.PullGatewayDesiredConfig(ctx, gatewayA, 7)
+	if err != nil || !pulledRev8.HasDelta || pulledRev8.Desired == nil || len(pulledRev8.Desired.DriverConfigs) != 2 || pulledRev8.Desired.AutonomyPolicy == nil || pulledRev8.Desired.AutonomyPolicy.OfflineGraceSeconds != 120 {
+		t.Fatalf("PullGatewayDesiredConfig rev 8 = %+v, err=%v", pulledRev8, err)
+	}
+	loadedByGW, err := store.LoadGatewayConfigShadowByGatewayID(ctx, gatewayA)
+	if err != nil || loadedByGW.Desired == nil || len(loadedByGW.Desired.DriverConfigs) != 2 || loadedByGW.Desired.AutonomyPolicy == nil {
+		t.Fatalf("LoadGatewayConfigShadowByGatewayID = %+v, err=%v", loadedByGW, err)
+	}
+
+	// Edge report with unsorted driverConfigs & matching autonomyPolicy -> SYNCED.
+	unsortedReportDrivers := slices.Clone(driversRev8)
+	syncedRev8, err := store.ReportGatewayAppliedConfig(ctx, gatewayA, connectivity.GatewayShadowReportInput{
+		ReportedRevision: 8,
+		AppliedStatus:    connectivity.AppliedStatusApplied,
+		PointMappings:    mappings,
+		SamplingPolicies: policies,
+		DriverConfigs:    unsortedReportDrivers,
+		AutonomyPolicy:   &autonomyRev8,
+	})
+	if err != nil || syncedRev8.SyncStatus != connectivity.ShadowSyncStatusSynced || len(syncedRev8.Drift) != 0 {
+		t.Fatalf("expected SYNCED with unsorted driverConfigs, got %+v err=%v", syncedRev8, err)
+	}
+
+	// Edge report with PARTIAL + EDGE_APPLY_FAILED on DRIVER_CONFIGS and mismatched autonomyPolicy -> DRIFTED preserving EDGE_APPLY_FAILED.
+	driftedAutonomy := autonomyRev8
+	driftedAutonomy.OfflineGraceSeconds = 300
+	partialDriversErr := "driver vfd-b timeout"
+	partialRev8, err := store.ReportGatewayAppliedConfig(ctx, gatewayA, connectivity.GatewayShadowReportInput{
+		ReportedRevision: 8,
+		AppliedStatus:    connectivity.AppliedStatusPartial,
+		PointMappings:    mappings,
+		SamplingPolicies: policies,
+		DriverConfigs:    unsortedReportDrivers[:1], // omit chiller-a -> MISSING_ON_EDGE
+		AutonomyPolicy:   &driftedAutonomy,
+		DriftDetails: []connectivity.DriftDetail{{
+			Section: connectivity.DriftSectionDriverConfigs,
+			Target:  "vfd-b",
+			Reason:  connectivity.DriftReasonEdgeApplyFailed,
+			Detail:  "modbus rtu poll timeout",
+		}},
+		ErrorMessage: &partialDriversErr,
+	})
+	if err != nil || partialRev8.SyncStatus != connectivity.ShadowSyncStatusDrifted || len(partialRev8.Drift) < 3 {
+		t.Fatalf("expected DRIFTED with computed + EDGE_APPLY_FAILED drifts, got %+v err=%v", partialRev8, err)
+	}
+
+	// Partial PUT omitting driverConfigs & autonomyPolicy preserves both.
+	rev8 := int64(8)
+	preservedRev9, err := store.UpdateGatewayDesiredConfig(ctx, claimsA, gatewayA, connectivity.UpdateDesiredConfigInput{
+		ExpectedDesiredRevision: &rev8,
+		Reason:                  "preserve driverConfigs and autonomyPolicy",
+	})
+	if err != nil || preservedRev9.Desired == nil || len(preservedRev9.Desired.DriverConfigs) != 2 || preservedRev9.Desired.AutonomyPolicy == nil || preservedRev9.Desired.AutonomyPolicy.OfflineGraceSeconds != 120 {
+		t.Fatalf("partial PUT omitting drivers/autonomy should preserve both, got %+v err=%v", preservedRev9, err)
+	}
+
+	// Concentrator shadow upsert preserves driverConfigs & autonomyPolicy too.
+	paramsRev10 := paramsRename
+	paramsRev10.RfTxPower = 25
+	concRev10, err := store.UpsertConcentratorShadowState(ctx, tenantA, gatewayA, 7, &paramsRev10, nil, actorA, "keep drivers and autonomy", false)
+	if err != nil || concRev10 != 10 {
+		t.Fatalf("UpsertConcentratorShadowState rev=%d err=%v", concRev10, err)
+	}
+	afterConcShadow, err := store.GetGatewayConfigShadowForOperator(ctx, claimsA, gatewayA)
+	if err != nil || len(afterConcShadow.Desired.DriverConfigs) != 2 || afterConcShadow.Desired.AutonomyPolicy == nil {
+		t.Fatalf("expected UpsertConcentratorShadowState to preserve driverConfigs & autonomyPolicy, got %+v err=%v", afterConcShadow, err)
+	}
+
+	// Tri-state clear: explicit autonomyPolicy=null clears DB column to NULL while preserving driverConfigs; empty driverConfigs=[] clears driver_configs to [].
+	rev10 := int64(10)
+	clearedAutonomyShadow, err := store.UpdateGatewayDesiredConfig(ctx, claimsA, gatewayA, connectivity.UpdateDesiredConfigInput{
+		ExpectedDesiredRevision: &rev10,
+		AutonomyPolicy:          connectivity.OptionalAutonomyPolicy{Set: true, Value: nil},
+		Reason:                  "clear autonomyPolicy only",
+	})
+	if err != nil || clearedAutonomyShadow.Desired == nil || clearedAutonomyShadow.Desired.AutonomyPolicy != nil || len(clearedAutonomyShadow.Desired.DriverConfigs) != 2 {
+		t.Fatalf("expected autonomyPolicy cleared and driverConfigs preserved, got %+v err=%v", clearedAutonomyShadow, err)
+	}
+	rev11 := int64(11)
+	emptyDrivers := []connectivity.GatewayModbusDriverConfig{}
+	clearedDriversShadow, err := store.UpdateGatewayDesiredConfig(ctx, claimsA, gatewayA, connectivity.UpdateDesiredConfigInput{
+		ExpectedDesiredRevision: &rev11,
+		DriverConfigs:           &emptyDrivers,
+		Reason:                  "clear driverConfigs",
+	})
+	if err != nil || clearedDriversShadow.Desired == nil || len(clearedDriversShadow.Desired.DriverConfigs) != 0 || clearedDriversShadow.Desired.AutonomyPolicy != nil {
+		t.Fatalf("expected driverConfigs cleared to empty slice, got %+v err=%v", clearedDriversShadow, err)
 	}
 
 	// Query without app.tenant_id returns 0 rows under FORCE ROW LEVEL SECURITY.
