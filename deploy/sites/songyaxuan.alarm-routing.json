@@ -24,6 +24,7 @@
     {
       "name": "major",
       "minSeverity": "MAJOR",
+      "cooldownMinutes": 10,
       "notifyAck": true,
       "notifyRecovery": true,
       "steps": [
@@ -34,6 +35,7 @@
     {
       "name": "warning",
       "minSeverity": "WARNING",
+      "cooldownMinutes": 30,
       "notifyAck": false,
       "notifyRecovery": false,
       "steps": [

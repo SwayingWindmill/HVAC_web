@@ -93,8 +93,8 @@ func recordAlarmDelivery(ctx context.Context, tx pgx.Tx, event AlarmEvent, recor
 	if version < 1 {
 		version = 1
 	}
-	var acknowledgedAt, clearedAt *time.Time
-	var acknowledgedBy *string
+	var acknowledgedAt, clearedAt, suppressedUntil *time.Time
+	var acknowledgedBy, deviceID *string
 	occurred := event.OccurredAt.UTC()
 	began := occurred
 	switch event.Action {
@@ -106,16 +106,42 @@ func recordAlarmDelivery(ctx context.Context, tx pgx.Tx, event AlarmEvent, recor
 	case AlarmCleared:
 		clearedAt = &occurred
 	}
+	if trimmed := strings.TrimSpace(event.Attributes["deviceId"]); trimmed != "" {
+		clipped := clip(trimmed, 256)
+		deviceID = &clipped
+	}
+	switch event.Action {
+	case AlarmSuppressed, AlarmCreated, AlarmSeverityChanged, AlarmAcknowledged:
+		if raw := strings.TrimSpace(event.Attributes["suppressedUntil"]); raw != "" {
+			if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+				utc := parsed.UTC()
+				suppressedUntil = &utc
+			}
+		}
+	}
+	clearSuppression := event.Action == AlarmUnsuppressed || event.Action == AlarmCleared
 	_, err := tx.Exec(ctx, `
 INSERT INTO notification_runtime.alarm_delivery AS d
   (tenant_id, alarm_id, site_id, alarm_type, title, summary, severity, alarm_version, began_at,
-   acknowledged_at, acknowledged_by, cleared_at, next_due_at, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13, $13)
+   acknowledged_at, acknowledged_by, cleared_at, device_id, suppressed_until, next_due_at, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $15)
 ON CONFLICT (tenant_id, alarm_id) DO UPDATE SET
   alarm_type = CASE WHEN EXCLUDED.alarm_version > d.alarm_version THEN EXCLUDED.alarm_type ELSE d.alarm_type END,
   title = CASE WHEN EXCLUDED.alarm_version > d.alarm_version THEN EXCLUDED.title ELSE d.title END,
   summary = CASE WHEN EXCLUDED.alarm_version > d.alarm_version THEN EXCLUDED.summary ELSE d.summary END,
   severity = CASE WHEN EXCLUDED.alarm_version > d.alarm_version THEN EXCLUDED.severity ELSE d.severity END,
+  device_id = CASE
+    WHEN EXCLUDED.alarm_version > d.alarm_version THEN COALESCE(EXCLUDED.device_id, d.device_id)
+    ELSE COALESCE(d.device_id, EXCLUDED.device_id)
+  END,
+  suppressed_until = CASE
+    WHEN EXCLUDED.alarm_version > d.alarm_version THEN
+      CASE
+        WHEN $16 THEN NULL
+        ELSE COALESCE(EXCLUDED.suppressed_until, d.suppressed_until)
+      END
+    ELSE d.suppressed_until
+  END,
   alarm_version = GREATEST(d.alarm_version, EXCLUDED.alarm_version),
   began_at = LEAST(d.began_at, EXCLUDED.began_at),
   acknowledged_at = COALESCE(d.acknowledged_at, EXCLUDED.acknowledged_at),
@@ -130,7 +156,7 @@ ON CONFLICT (tenant_id, alarm_id) DO UPDATE SET
   END,
   updated_at = EXCLUDED.updated_at`,
 		event.TenantID, event.AlarmID, event.SiteID, clip(alarmType, 256), clip(title, 512), clip(event.Attributes["summary"], 2048),
-		string(event.CurrentSeverity), version, began, acknowledgedAt, acknowledgedBy, clearedAt, recordedAt.UTC())
+		string(event.CurrentSeverity), version, began, acknowledgedAt, acknowledgedBy, clearedAt, deviceID, suppressedUntil, recordedAt.UTC(), clearSuppression)
 	return err
 }
 
@@ -181,12 +207,12 @@ func (dispatcher *AlarmDeliveryDispatcher) planOne(ctx context.Context, now time
 	var acknowledgedBy *string
 	err = tx.QueryRow(ctx, `
 SELECT tenant_id::text, alarm_id::text, site_id::text, alarm_type, title, summary, severity, alarm_version, began_at,
-       acknowledged_at, acknowledged_by, cleared_at
+       acknowledged_at, acknowledged_by, cleared_at, COALESCE(device_id, ''), suppressed_until
 FROM notification_runtime.alarm_delivery
 WHERE next_due_at <= $1 AND (lease_until IS NULL OR lease_until <= $1)
 ORDER BY next_due_at LIMIT 1 FOR UPDATE SKIP LOCKED`, now.UTC()).Scan(
 		&alarm.TenantID, &alarm.AlarmID, &alarm.SiteID, &alarm.AlarmType, &alarm.Title, &alarm.Summary, &severity, &alarm.Version, &alarm.BeganAt,
-		&alarm.AcknowledgedAt, &acknowledgedBy, &alarm.ClearedAt)
+		&alarm.AcknowledgedAt, &acknowledgedBy, &alarm.ClearedAt, &alarm.DeviceID, &alarm.SuppressedUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -249,19 +275,26 @@ ON CONFLICT (tenant_id, dedup_key) DO NOTHING`,
 func deliveryFacts(ctx context.Context, tx pgx.Tx, alarm DeliveryAlarm, routing SiteRouting, now time.Time) (DeliveryFacts, error) {
 	var facts DeliveryFacts
 	if len(routing.RootCauseRules) > 0 {
-		rows, err := tx.Query(ctx, `SELECT DISTINCT alarm_type FROM notification_runtime.alarm_delivery
+		rows, err := tx.Query(ctx, `SELECT DISTINCT alarm_type, COALESCE(device_id, '') FROM notification_runtime.alarm_delivery
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND cleared_at IS NULL AND alarm_id <> $3::uuid`,
 			alarm.TenantID, alarm.SiteID, alarm.AlarmID)
 		if err != nil {
 			return facts, err
 		}
-		facts.ActiveAlarmTypes, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (string, error) {
-			var alarmType string
-			err := row.Scan(&alarmType)
-			return alarmType, err
+		facts.ActiveAlarms, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (ActiveAlarmFact, error) {
+			var active ActiveAlarmFact
+			err := row.Scan(&active.AlarmType, &active.DeviceID)
+			return active, err
 		})
 		if err != nil {
 			return facts, err
+		}
+		seenTypes := map[string]bool{}
+		for _, active := range facts.ActiveAlarms {
+			if !seenTypes[active.AlarmType] {
+				seenTypes[active.AlarmType] = true
+				facts.ActiveAlarmTypes = append(facts.ActiveAlarmTypes, active.AlarmType)
+			}
 		}
 		if routing.RootCauseAlarmType != "" && alarm.AlarmType != routing.RootCauseAlarmType {
 			for _, activeType := range facts.ActiveAlarmTypes {
@@ -307,7 +340,43 @@ GROUP BY recipient`, alarm.TenantID, alarm.SiteID, now.Add(-time.Hour).UTC())
 		facts.SentLastHour[recipient] = count
 		return struct{}{}, err
 	})
-	return facts, err
+	if err != nil {
+		return facts, err
+	}
+	if route, ok := routing.Route(alarm.AlarmType, alarm.Severity); ok {
+		if cooldown := effectiveCooldownMinutes(routing, route); cooldown > 0 && alarm.Severity != alarmmodel.SeverityCritical {
+			since := now.Add(-time.Duration(cooldown) * time.Minute).UTC()
+			rows, err := tx.Query(ctx, `
+SELECT a.recipient, MAX(a.created_at)
+FROM notification_runtime.alarm_delivery_attempt a
+JOIN notification_runtime.alarm_delivery d
+  ON d.tenant_id = a.tenant_id AND d.alarm_id = a.alarm_id
+WHERE a.tenant_id = $1::uuid
+  AND a.site_id = $2::uuid
+  AND d.alarm_type = $3
+  AND a.alarm_id <> $4::uuid
+  AND a.kind = 'FIRE'
+  AND a.state IN ('PENDING','SENDING','SENT','DRY_RUN')
+  AND a.created_at >= $5
+GROUP BY a.recipient`,
+				alarm.TenantID, alarm.SiteID, alarm.AlarmType, alarm.AlarmID, since)
+			if err != nil {
+				return facts, err
+			}
+			facts.LastSameTypeNotifiedAt = map[string]time.Time{}
+			_, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (struct{}, error) {
+				var recipient string
+				var lastAt time.Time
+				err := row.Scan(&recipient, &lastAt)
+				facts.LastSameTypeNotifiedAt[recipient] = lastAt.UTC()
+				return struct{}{}, err
+			})
+			if err != nil {
+				return facts, err
+			}
+		}
+	}
+	return facts, nil
 }
 
 type claimedAttempt struct {
@@ -460,9 +529,9 @@ func (dispatcher *AlarmDeliveryDispatcher) outbound(ctx context.Context, claim c
 	var severity string
 	var acknowledgedBy *string
 	if err := dispatcher.Scheduler.pool.QueryRow(ctx, `SELECT tenant_id::text, alarm_id::text, site_id::text, alarm_type, title, summary, severity, alarm_version, began_at,
-       acknowledged_at, acknowledged_by, cleared_at FROM notification_runtime.alarm_delivery WHERE tenant_id = $1::uuid AND alarm_id = $2::uuid`,
+       acknowledged_at, acknowledged_by, cleared_at, COALESCE(device_id, ''), suppressed_until FROM notification_runtime.alarm_delivery WHERE tenant_id = $1::uuid AND alarm_id = $2::uuid`,
 		claim.tenantID, claim.alarmID).Scan(&alarm.TenantID, &alarm.AlarmID, &alarm.SiteID, &alarm.AlarmType, &alarm.Title, &alarm.Summary, &severity, &alarm.Version,
-		&alarm.BeganAt, &alarm.AcknowledgedAt, &acknowledgedBy, &alarm.ClearedAt); err != nil {
+		&alarm.BeganAt, &alarm.AcknowledgedAt, &acknowledgedBy, &alarm.ClearedAt, &alarm.DeviceID, &alarm.SuppressedUntil); err != nil {
 		return OutboundMessage{}, fmt.Errorf("read the Alarm: %w", err)
 	}
 	alarm.Severity = alarmmodel.Severity(severity)

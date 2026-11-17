@@ -25,12 +25,14 @@ const rootCauseRecheck = time.Minute
 type DeliveryAlarm struct {
 	TenantID, AlarmID, SiteID string
 	AlarmType, Title, Summary string
+	DeviceID                  string
 	Severity                  alarmmodel.Severity
 	Version                   int64
 	BeganAt                   time.Time
 	AcknowledgedAt            *time.Time
 	AcknowledgedBy            string
 	ClearedAt                 *time.Time
+	SuppressedUntil           *time.Time
 }
 
 // QueuedMessage is a message already queued for the Alarm (sent, being sent, or suppressed).
@@ -44,15 +46,25 @@ type QueuedMessage struct {
 	Reached bool
 }
 
+// ActiveAlarmFact describes one open Alarm at the Site for evaluating rootCauseRules.
+type ActiveAlarmFact struct {
+	AlarmType string
+	DeviceID  string
+}
+
 // DeliveryFacts are what the decision needs besides the Alarm and its routing.
 type DeliveryFacts struct {
 	// RootCauseActive: another Alarm of the routing's root-cause type is active at the Site.
 	RootCauseActive bool
 	// ActiveAlarmTypes lists open Alarm types at the Site for evaluating rootCauseRules.
 	ActiveAlarmTypes []string
-	Queued           []QueuedMessage
+	// ActiveAlarms lists open Alarms (type and optional device id) at the Site for rootCauseRules.
+	ActiveAlarms []ActiveAlarmFact
+	Queued       []QueuedMessage
 	// SentLastHour counts first and escalation messages per recipient in the last hour, at the Site.
 	SentLastHour map[string]int
+	// LastSameTypeNotifiedAt maps recipient to the most recent FIRE delivery attempt time for the same (site_id, alarm_type).
+	LastSameTypeNotifiedAt map[string]time.Time
 }
 
 // PlannedMessage is one message to queue; Suppressed ones are recorded and never sent.
@@ -69,7 +81,7 @@ type PlannedMessage struct {
 type DeliveryDecision struct {
 	Messages  []PlannedMessage
 	NextDueAt *time.Time
-	// Held explains why nothing is sent yet: HOLD, ROOT_CAUSE, QUIET_HOURS, TOO_OLD, NO_ROUTE.
+	// Held explains why nothing is sent yet: HOLD, SUPPRESSED, ROOT_CAUSE, QUIET_HOURS, TOO_OLD, NO_ROUTE.
 	Held string
 }
 
@@ -129,10 +141,22 @@ func DecideDelivery(alarm DeliveryAlarm, routing SiteRouting, facts DeliveryFact
 		return follow(DeliveryRecovery)
 	}
 	if alarm.AcknowledgedAt != nil {
-		if !route.NotifyAck {
+		if !route.NotifyAck || len(reachedOrder) == 0 {
 			return DeliveryDecision{}
 		}
+		if alarm.SuppressedUntil != nil && now.Before(*alarm.SuppressedUntil) {
+			ackDecision := follow(DeliveryAck)
+			if len(ackDecision.Messages) == 0 && ackDecision.Held == "" {
+				return DeliveryDecision{}
+			}
+			until := alarm.SuppressedUntil.UTC()
+			return DeliveryDecision{Held: "SUPPRESSED", NextDueAt: &until}
+		}
 		return follow(DeliveryAck)
+	}
+	if alarm.SuppressedUntil != nil && now.Before(*alarm.SuppressedUntil) {
+		until := alarm.SuppressedUntil.UTC()
+		return DeliveryDecision{Held: "SUPPRESSED", NextDueAt: &until}
 	}
 
 	if !stepsQueued[0] {
@@ -149,7 +173,7 @@ func DecideDelivery(alarm DeliveryAlarm, routing SiteRouting, facts DeliveryFact
 			return DeliveryDecision{NextDueAt: &holdEnds, Held: "HOLD"}
 		}
 	}
-	if routing.IsSuppressedByRootCause(alarm.AlarmType, facts) {
+	if routing.IsSuppressedByRootCauseForAlarm(alarm, facts) {
 		next := now.Add(rootCauseRecheck)
 		return DeliveryDecision{NextDueAt: &next, Held: "ROOT_CAUSE"}
 	}
@@ -165,6 +189,7 @@ func DecideDelivery(alarm DeliveryAlarm, routing SiteRouting, facts DeliveryFact
 	for recipient, count := range facts.SentLastHour {
 		counts[recipient] = count
 	}
+	cooldown := effectiveCooldownMinutes(routing, route)
 	for index, step := range route.Steps {
 		due := start.Add(time.Duration(step.AfterMinutes) * time.Minute)
 		if due.After(now) {
@@ -182,6 +207,13 @@ func DecideDelivery(alarm DeliveryAlarm, routing SiteRouting, facts DeliveryFact
 				continue
 			}
 			queued[key] = true
+			if kind == DeliveryFire && cooldown > 0 && alarm.Severity != alarmmodel.SeverityCritical {
+				if lastAt, ok := facts.LastSameTypeNotifiedAt[target.recipient]; ok && !lastAt.IsZero() && now.Sub(lastAt) >= 0 && now.Sub(lastAt) < time.Duration(cooldown)*time.Minute {
+					message.Suppressed, message.Reason = true, "COOLDOWN"
+					decision.Messages = append(decision.Messages, message)
+					continue
+				}
+			}
 			if routing.RateLimitPerHour > 0 && alarm.Severity != alarmmodel.SeverityCritical && counts[target.recipient] >= routing.RateLimitPerHour {
 				message.Suppressed, message.Reason = true, "RATE_LIMITED"
 			} else {

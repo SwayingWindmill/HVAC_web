@@ -547,3 +547,281 @@ func TestBoundedAndSettleContextHelpers(t *testing.T) {
 		t.Fatal("expected bounded deadline on settle context")
 	}
 }
+
+func TestAlarmEventValidateSupportsSuppressedAndUnsuppressed(t *testing.T) {
+	base := AlarmEvent{
+		TenantID:              alarmReminderTenantID,
+		SiteID:                deliveryTestSiteID,
+		SourceEventID:         "0190f000-0050-7000-8000-0000000000b1",
+		AlarmID:               "0190f000-0050-7000-8000-0000000000b2",
+		IncidentCorrelationID: "0190f000-0050-7000-8000-0000000000b2",
+		CurrentSeverity:       alarmmodel.SeverityMajor,
+		PeakSeverity:          alarmmodel.SeverityMajor,
+		OccurredAt:            deliveryBase,
+	}
+	for _, tc := range []struct {
+		name      string
+		action    AlarmAction
+		condition alarmmodel.Condition
+		wantErr   bool
+	}{
+		{name: "suppressed active", action: AlarmSuppressed, condition: alarmmodel.ConditionActive},
+		{name: "suppressed cleared", action: AlarmSuppressed, condition: alarmmodel.ConditionCleared},
+		{name: "unsuppressed active", action: AlarmUnsuppressed, condition: alarmmodel.ConditionActive},
+		{name: "unsuppressed cleared", action: AlarmUnsuppressed, condition: alarmmodel.ConditionCleared},
+		{name: "created cleared invalid", action: AlarmCreated, condition: alarmmodel.ConditionCleared, wantErr: true},
+		{name: "severity changed cleared invalid", action: AlarmSeverityChanged, condition: alarmmodel.ConditionCleared, wantErr: true},
+		{name: "cleared active invalid", action: AlarmCleared, condition: alarmmodel.ConditionActive, wantErr: true},
+		{name: "unknown action invalid", action: AlarmAction("REOPENED"), condition: alarmmodel.ConditionActive, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := base
+			ev.Action = tc.action
+			ev.Condition = tc.condition
+			err := ev.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Validate() err = %v, wantErr = %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestDecideMaintenanceSuppressionWindow(t *testing.T) {
+	routing := testRouting(t)
+	until := deliveryBase.Add(2 * time.Hour)
+	alarm := activeAlarm("physics/cop-out-of-range", alarmmodel.SeverityCritical)
+	alarm.SuppressedUntil = &until
+
+	held := DecideDelivery(alarm, routing, DeliveryFacts{}, deliveryBase.Add(10*time.Minute))
+	if len(held.Messages) != 0 || held.Held != "SUPPRESSED" || held.NextDueAt == nil || !held.NextDueAt.Equal(until) {
+		t.Fatalf("expected SUPPRESSED hold until %v, got %+v", until, held)
+	}
+
+	resumed := DecideDelivery(alarm, routing, DeliveryFacts{}, until)
+	if len(resumed.Messages) != 2 || resumed.Held != "" || resumed.Messages[0].Kind != DeliveryFire {
+		t.Fatalf("expected FIRE once suppression window elapsed, got %+v", resumed)
+	}
+
+	// Step 0 already fired, then maintenance window holds step 1 escalation until window expires.
+	step0At := deliveryBase.Add(3 * time.Minute)
+	fire := DecideDelivery(activeAlarm("physics/cop-out-of-range", alarmmodel.SeverityMajor), routing, DeliveryFacts{}, step0At)
+	facts := DeliveryFacts{Queued: queuedFrom(fire.Messages, step0At)}
+	escalateSuppressUntil := step0At.Add(30 * time.Minute)
+	alarmForStep1 := activeAlarm("physics/cop-out-of-range", alarmmodel.SeverityMajor)
+	alarmForStep1.SuppressedUntil = &escalateSuppressUntil
+	heldEscalate := DecideDelivery(alarmForStep1, routing, facts, step0At.Add(15*time.Minute))
+	if len(heldEscalate.Messages) != 0 || heldEscalate.Held != "SUPPRESSED" || !heldEscalate.NextDueAt.Equal(escalateSuppressUntil) {
+		t.Fatalf("expected step 1 escalation held during suppression, got %+v", heldEscalate)
+	}
+	resumedEscalate := DecideDelivery(alarmForStep1, routing, facts, escalateSuppressUntil)
+	if len(resumedEscalate.Messages) != 2 || resumedEscalate.Messages[0].Kind != DeliveryEscalate {
+		t.Fatalf("expected step 1 escalation after suppression window, got %+v", resumedEscalate)
+	}
+
+	// Acknowledged while suppressed: if nobody was reached, returns empty; if reached, waits until SuppressedUntil.
+	ackAt := step0At.Add(5 * time.Minute)
+	ackedNeverReached := alarmForStep1
+	ackedNeverReached.AcknowledgedAt = &ackAt
+	if got := DecideDelivery(ackedNeverReached, routing, DeliveryFacts{}, ackAt); len(got.Messages) != 0 || got.Held != "" || got.NextDueAt != nil {
+		t.Fatalf("unreached acknowledged alarm should not hold for ACK: %+v", got)
+	}
+	heldAck := DecideDelivery(ackedNeverReached, routing, facts, ackAt)
+	if len(heldAck.Messages) != 0 || heldAck.Held != "SUPPRESSED" || !heldAck.NextDueAt.Equal(escalateSuppressUntil) {
+		t.Fatalf("reached acknowledged alarm should wait out suppression: %+v", heldAck)
+	}
+	resumedAck := DecideDelivery(ackedNeverReached, routing, facts, escalateSuppressUntil)
+	if len(resumedAck.Messages) != 2 || resumedAck.Messages[0].Kind != DeliveryAck {
+		t.Fatalf("expected ACK after suppression ends, got %+v", resumedAck)
+	}
+
+	// Cleared while suppressed still sends RECOVERY to already-reached recipients.
+	cleared := alarmForStep1
+	clearAt := step0At.Add(10 * time.Minute)
+	cleared.ClearedAt = &clearAt
+	recovery := DecideDelivery(cleared, routing, facts, clearAt)
+	if len(recovery.Messages) != 2 || recovery.Messages[0].Kind != DeliveryRecovery {
+		t.Fatalf("expected immediate RECOVERY for already-reached recipients, got %+v", recovery)
+	}
+
+	// If suppression exceeds maxAgeHours before step 0 ever fires, TOO_OLD drops it on expiry.
+	longUntil := deliveryBase.Add(14 * time.Hour)
+	longAlarm := activeAlarm("physics/cop-out-of-range", alarmmodel.SeverityMajor)
+	longAlarm.SuppressedUntil = &longUntil
+	if old := DecideDelivery(longAlarm, routing, DeliveryFacts{}, longUntil); len(old.Messages) != 0 || old.Held != "TOO_OLD" {
+		t.Fatalf("expected TOO_OLD after 14h suppression, got %+v", old)
+	}
+}
+
+func TestDecideCooldownDeduplicatesNonCriticalFireOnly(t *testing.T) {
+	routing := testRouting(t)
+	routing.CooldownMinutes = 30
+	routing.Routes[0].CooldownMinutes = 10 // major route overrides site default
+	routing.RateLimitPerHour = 3
+
+	at := deliveryBase.Add(5 * time.Minute)
+	facts := DeliveryFacts{
+		SentLastHour:           map[string]int{"duty": 1},
+		LastSameTypeNotifiedAt: map[string]time.Time{"duty": at.Add(-9 * time.Minute)},
+	}
+
+	major := activeAlarm("physics/cop-out-of-range", alarmmodel.SeverityMajor)
+	suppressed := DecideDelivery(major, routing, facts, at)
+	if len(suppressed.Messages) != 2 {
+		t.Fatalf("expected 2 planned messages, got %+v", suppressed.Messages)
+	}
+	for _, msg := range suppressed.Messages {
+		if !msg.Suppressed || msg.Reason != "COOLDOWN" {
+			t.Fatalf("expected COOLDOWN suppression, got %+v", msg)
+		}
+	}
+
+	// Boundary: exactly 10 minutes elapsed -> cooldown expired -> delivers normally.
+	facts.LastSameTypeNotifiedAt["duty"] = at.Add(-10 * time.Minute)
+	expired := DecideDelivery(major, routing, facts, at)
+	for _, msg := range expired.Messages {
+		if msg.Suppressed {
+			t.Fatalf("expected FIRE at exact cooldown boundary, got %+v", msg)
+		}
+	}
+
+	// CRITICAL bypasses cooldown.
+	facts.LastSameTypeNotifiedAt["duty"] = at.Add(-time.Minute)
+	critical := activeAlarm("physics/cop-out-of-range", alarmmodel.SeverityCritical)
+	critDecision := DecideDelivery(critical, routing, facts, at)
+	for _, msg := range critDecision.Messages {
+		if msg.Suppressed {
+			t.Fatalf("CRITICAL must bypass cooldown, got %+v", msg)
+		}
+	}
+
+	// Warning route inherits site default 30m cooldown.
+	warning := activeAlarm("physics/cop-out-of-range", alarmmodel.SeverityWarning)
+	facts.LastSameTypeNotifiedAt["duty"] = at.Add(-20 * time.Minute)
+	warnDecision := DecideDelivery(warning, routing, facts, at)
+	if len(warnDecision.Messages) != 1 || !warnDecision.Messages[0].Suppressed || warnDecision.Messages[0].Reason != "COOLDOWN" {
+		t.Fatalf("expected warning route to inherit site 30m cooldown, got %+v", warnDecision)
+	}
+
+	// Escalation and recovery stay unaffected by cooldown.
+	fireAt := deliveryBase.Add(3 * time.Minute)
+	initialFire := DecideDelivery(major, routing, DeliveryFacts{}, fireAt)
+	escalateFacts := DeliveryFacts{
+		Queued:                 queuedFrom(initialFire.Messages, fireAt),
+		LastSameTypeNotifiedAt: map[string]time.Time{"lead": fireAt.Add(14 * time.Minute), "group": fireAt.Add(14 * time.Minute), "duty": fireAt.Add(14 * time.Minute)},
+	}
+	escalate := DecideDelivery(major, routing, escalateFacts, fireAt.Add(15*time.Minute))
+	if len(escalate.Messages) != 2 || escalate.Messages[0].Suppressed || escalate.Messages[1].Suppressed {
+		t.Fatalf("escalation must not be suppressed by cooldown: %+v", escalate.Messages)
+	}
+	clearAt := fireAt.Add(20 * time.Minute)
+	cleared := major
+	cleared.ClearedAt = &clearAt
+	recovery := DecideDelivery(cleared, routing, escalateFacts, clearAt)
+	if len(recovery.Messages) != 2 || recovery.Messages[0].Suppressed || recovery.Messages[1].Suppressed {
+		t.Fatalf("recovery must not be suppressed by cooldown: %+v", recovery.Messages)
+	}
+}
+
+func TestParseSiteRoutingValidatesCooldownTopologyAndSongyaxuanConfig(t *testing.T) {
+	for name, body := range map[string]string{
+		"negative site cooldown":  `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","cooldownMinutes":-1,"routes":[{"name":"a","minSeverity":"MAJOR","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"huge site cooldown":      `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","cooldownMinutes":10081,"routes":[{"name":"a","minSeverity":"MAJOR","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"negative route cooldown": `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","routes":[{"name":"a","minSeverity":"MAJOR","cooldownMinutes":-2,"steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"huge route cooldown":     `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","routes":[{"name":"a","minSeverity":"MAJOR","cooldownMinutes":10081,"steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"blank whenDeviceId":      `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","rootCauseRules":[{"whenActivePrefix":"power-outage","whenDeviceId":" ","suppressPrefixes":["reading-gap/"]}],"routes":[{"name":"a","minSeverity":"MAJOR","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+		"blank suppressDeviceId":  `{"schemaVersion":1,"siteId":"` + deliveryTestSiteID + `","siteName":"x","timezone":"Asia/Shanghai","rootCauseRules":[{"whenActivePrefix":"power-outage","whenDeviceId":"panel-1","suppressPrefixes":["reading-gap/"],"suppressDeviceIds":["chiller-a",""]}],"routes":[{"name":"a","minSeverity":"MAJOR","steps":[{"afterMinutes":0,"recipients":["duty"],"channels":["smtp"]}]}]}`,
+	} {
+		if _, err := ParseSiteRouting([]byte(body)); err == nil {
+			t.Errorf("%s: unexpectedly accepted", name)
+		}
+	}
+
+	recipients, err := LoadRecipientDirectory(filepath.Join("..", "..", "..", "..", "deploy", "platform", "phase1", "alarm-delivery.example", "recipients.json.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	table, err := LoadAlarmRouting(filepath.Join("..", "..", "..", "..", "deploy", "sites"), recipients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	songyaxuan, ok := table.Site("01a14000-1000-7000-8000-000000000001")
+	if !ok {
+		t.Fatal("songyaxuan routing missing")
+	}
+	if len(songyaxuan.Routes) < 2 || songyaxuan.Routes[0].CooldownMinutes != 10 || songyaxuan.Routes[1].CooldownMinutes != 30 {
+		t.Fatalf("unexpected songyaxuan cooldown config: %+v", songyaxuan.Routes)
+	}
+}
+
+func TestDecideRootCauseParentDeviceAndGatewayTopology(t *testing.T) {
+	routing, err := ParseSiteRouting([]byte(`{
+  "schemaVersion": 1, "siteId": "` + deliveryTestSiteID + `", "siteName": "松雅轩", "timezone": "Asia/Shanghai",
+  "holdMinutes": 3, "maxAgeHours": 12, "rateLimitPerHour": 5,
+  "rootCauseRules": [
+    {
+      "whenActivePrefix": "power-outage",
+      "whenDeviceId": "main-panel",
+      "suppressPrefixes": ["reading-gap/", "power-outage"],
+      "suppressDeviceIds": ["chiller-a", "pump-1"]
+    },
+    {
+      "whenActivePrefix": "gateway-offline",
+      "whenDeviceId": "gw-1",
+      "suppressPrefixes": ["readings-not-updated/"]
+    }
+  ],
+  "routes": [
+    {"name": "all", "minSeverity": "WARNING", "steps": [{"afterMinutes": 0, "recipients": ["duty"], "channels": ["smtp"]}]}
+  ]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := deliveryBase.Add(10 * time.Minute)
+	facts := DeliveryFacts{
+		ActiveAlarms: []ActiveAlarmFact{
+			{AlarmType: "power-outage", DeviceID: "main-panel"},
+			{AlarmType: "gateway-offline", DeviceID: "gw-2"},
+		},
+	}
+
+	// Downstream devices in suppressDeviceIds are suppressed.
+	chillerGap := activeAlarm("reading-gap/chiller-a/temp", alarmmodel.SeverityMajor)
+	chillerGap.DeviceID = "chiller-a"
+	if got := DecideDelivery(chillerGap, routing, facts, at); got.Held != "ROOT_CAUSE" || len(got.Messages) != 0 {
+		t.Fatalf("expected chiller-a gap suppressed by main-panel power-outage, got %+v", got)
+	}
+
+	// UUID deviceId on downstream alarm still matches device code in suppressDeviceIds via alarmType.
+	pumpGap := activeAlarm("reading-gap/pump-1/flow", alarmmodel.SeverityMajor)
+	pumpGap.DeviceID = "01a14000-4000-7000-8000-000000000099"
+	if got := DecideDelivery(pumpGap, routing, facts, at); got.Held != "ROOT_CAUSE" || len(got.Messages) != 0 {
+		t.Fatalf("expected pump-1 gap with UUID deviceId suppressed, got %+v", got)
+	}
+
+	// Same alarmType on child device suppressed by parent device rule.
+	childOutage := activeAlarm("power-outage", alarmmodel.SeverityMajor)
+	childOutage.DeviceID = "chiller-a"
+	if got := DecideDelivery(childOutage, routing, facts, at); got.Held != "ROOT_CAUSE" || len(got.Messages) != 0 {
+		t.Fatalf("expected child device power-outage suppressed by main-panel, got %+v", got)
+	}
+
+	// Unlisted downstream device chiller-b is NOT suppressed by panel rule.
+	otherGap := activeAlarm("reading-gap/chiller-b/temp", alarmmodel.SeverityMajor)
+	otherGap.DeviceID = "chiller-b"
+	if got := DecideDelivery(otherGap, routing, facts, at); got.Held != "" || len(got.Messages) != 1 {
+		t.Fatalf("expected chiller-b gap NOT suppressed, got %+v", got)
+	}
+
+	// gateway-offline on gw-2 must NOT trigger rule scoped to whenDeviceId=gw-1.
+	stale := activeAlarm("readings-not-updated/chiller-b", alarmmodel.SeverityWarning)
+	stale.DeviceID = "chiller-b"
+	if got := DecideDelivery(stale, routing, facts, at); got.Held != "" || len(got.Messages) != 1 {
+		t.Fatalf("expected gw-2 not to match whenDeviceId=gw-1, got %+v", got)
+	}
+
+	// Adding gateway-offline on gw-1 suppresses site-wide when suppressDeviceIds is empty.
+	facts.ActiveAlarms = append(facts.ActiveAlarms, ActiveAlarmFact{AlarmType: "gateway-offline", DeviceID: "gw-1"})
+	if got := DecideDelivery(stale, routing, facts, at); got.Held != "ROOT_CAUSE" || len(got.Messages) != 0 {
+		t.Fatalf("expected gw-1 site-wide rule to suppress readings-not-updated, got %+v", got)
+	}
+}
