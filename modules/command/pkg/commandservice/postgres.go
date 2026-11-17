@@ -30,12 +30,13 @@ type postgresCommitter interface {
 }
 
 type PostgresStore struct {
-	pool            *pgxpool.Pool
-	now             func() time.Time
-	newID           IDGenerator
-	mu              sync.RWMutex
-	failureNotifier ControlFailureNotifier
-	failureQueue    controlFailureQueue
+	pool              *pgxpool.Pool
+	now               func() time.Time
+	newID             IDGenerator
+	mu                sync.RWMutex
+	failureNotifier   ControlFailureNotifier
+	failureQueue      controlFailureQueue
+	alarmOutboxWakeup func()
 }
 
 func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
@@ -90,7 +91,7 @@ func (store *PostgresStore) hasControlFailureNotifier() bool {
 	}
 	store.mu.RLock()
 	defer store.mu.RUnlock()
-	return store.failureNotifier != nil
+	return store.failureNotifier != nil || store.alarmOutboxWakeup != nil
 }
 
 func (store *PostgresStore) notifyControlFailure(event ControlFailureEvent) {
@@ -99,8 +100,12 @@ func (store *PostgresStore) notifyControlFailure(event ControlFailureEvent) {
 	}
 	store.mu.RLock()
 	notifier := store.failureNotifier
+	wakeup := store.alarmOutboxWakeup
 	store.mu.RUnlock()
 	store.failureQueue.enqueue(notifier, event)
+	if wakeup != nil {
+		wakeup()
+	}
 }
 
 func (store *PostgresStore) notifyControlFailures(events []ControlFailureEvent) {
@@ -109,9 +114,13 @@ func (store *PostgresStore) notifyControlFailures(events []ControlFailureEvent) 
 	}
 	store.mu.RLock()
 	notifier := store.failureNotifier
+	wakeup := store.alarmOutboxWakeup
 	store.mu.RUnlock()
 	for _, event := range events {
 		store.failureQueue.enqueue(notifier, event)
+	}
+	if wakeup != nil {
+		wakeup()
 	}
 }
 

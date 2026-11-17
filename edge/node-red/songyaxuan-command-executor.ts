@@ -265,15 +265,22 @@ export function defaultUuidv7(nowMs = Date.now()): string {
 
 function defaultSleepMs(durationMs: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.resolve();
+  const waitMs = Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 0;
+  if (waitMs === 0) return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, Math.max(0, durationMs));
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const onAbort = () => {
-      clearTimeout(timer);
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
       resolve();
     };
+    timer = setTimeout(() => {
+      timer = undefined;
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, waitMs);
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
@@ -281,11 +288,16 @@ function defaultSleepMs(durationMs: number, signal?: AbortSignal): Promise<void>
 function waitNextTurn(signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
   return new Promise((resolve) => {
+    let timer: ReturnType<typeof setImmediate> | undefined;
     const onAbort = () => {
-      clearImmediate(timer);
+      if (timer !== undefined) {
+        clearImmediate(timer);
+        timer = undefined;
+      }
       resolve();
     };
-    const timer = setImmediate(() => {
+    timer = setImmediate(() => {
+      timer = undefined;
       signal.removeEventListener('abort', onAbort);
       resolve();
     });
@@ -299,6 +311,12 @@ class SequenceAbortError extends Error {
   constructor(reasonCode: string) {
     super(reasonCode);
     this.reasonCode = reasonCode;
+  }
+}
+
+class StatePersistError extends Error {
+  constructor(cause: unknown) {
+    super(errorText(cause));
   }
 }
 
@@ -335,6 +353,7 @@ export class SongyaxuanCommandExecutor {
   private readonly allSequenceTasks = new Set<Promise<void>>();
   private initialized = false;
   private initPromise: Promise<void> | null = null;
+  private admissionChain: Promise<void> = Promise.resolve();
   private persistChain: Promise<void> = Promise.resolve();
   private cycle = 0;
   private uplinkSeq = 0;
@@ -387,6 +406,46 @@ export class SongyaxuanCommandExecutor {
     }
   }
 
+  private withSerializedAdmission<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.admissionChain.then(fn, fn);
+    this.admissionChain = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async sleepAbortable(durationMs: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      throw new SequenceAbortError(abortReasonText(signal));
+    }
+    const sleepPromise = this.sleepMs(durationMs, signal);
+    if (!signal) {
+      await sleepPromise;
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        reject(new SequenceAbortError(abortReasonText(signal)));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      sleepPromise.then(
+        () => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener('abort', onAbort);
+          resolve();
+        },
+        (err) => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener('abort', onAbort);
+          reject(err);
+        },
+      );
+    });
+  }
+
   async handleCommand(command: DownlinkCommandEnvelope): Promise<CommandReplyEnvelope> {
     if (
       !command ||
@@ -410,59 +469,104 @@ export class SongyaxuanCommandExecutor {
 
     await this.initialize();
 
-    if (this.executedCommandIds.has(command.commandId)) {
-      return this.emitReply(command, 'REJECTED', 'DUPLICATE_COMMAND', command.commandCode, 'NOT_APPLIED');
-    }
+    type AdmissionOutcome =
+      | { kind: 'reply'; reply: CommandReplyEnvelope }
+      | { kind: 'emergency' }
+      | { kind: 'unit_sequence'; unitCode: UnitCoilPlan['unitCode']; controller: AbortController; previousTask: Promise<void> | null }
+      | { kind: 'direct'; route: DirectDeviceRoute };
 
-    const previousFence = this.lastFenceByDevice.get(command.deviceId) ?? 0;
-    if (command.executionFence <= previousFence) {
-      return this.emitReply(command, 'REJECTED', 'STALE_EXECUTION_FENCE', command.commandCode, 'NOT_APPLIED');
-    }
+    const admitted = await this.withSerializedAdmission<AdmissionOutcome>(async () => {
+      if (this.executedCommandIds.has(command.commandId)) {
+        return { kind: 'reply', reply: await this.emitReply(command, 'REJECTED', 'DUPLICATE_COMMAND', command.commandCode, 'NOT_APPLIED') };
+      }
 
-    if (this.nowMs() >= command.expireAt) {
-      return this.emitReply(command, 'EXPIRED', 'COMMAND_EXPIRED', command.commandCode, 'NOT_APPLIED');
-    }
+      const previousFence = this.lastFenceByDevice.get(command.deviceId);
+      if (command.executionFence <= (previousFence ?? 0)) {
+        return { kind: 'reply', reply: await this.emitReply(command, 'REJECTED', 'STALE_EXECUTION_FENCE', command.commandCode, 'NOT_APPLIED') };
+      }
 
-    if (this.isEmergencyDoRelease(command)) {
+      if (this.nowMs() >= command.expireAt) {
+        return { kind: 'reply', reply: await this.emitReply(command, 'EXPIRED', 'COMMAND_EXPIRED', command.commandCode, 'NOT_APPLIED') };
+      }
+
+      const isEmergency = this.isEmergencyDoRelease(command);
+      const isAbort = !isEmergency && this.isAbortUnitSequence(command);
+      const isUnitSequence = !isEmergency && !isAbort && (command.commandCode === 'START_UNIT_SEQUENCE' || command.commandCode === 'STOP_UNIT_SEQUENCE');
+      let unitCode: UnitCoilPlan['unitCode'] | null = null;
+      let directRoute: DirectDeviceRoute | undefined;
+
+      if (isAbort || isUnitSequence) {
+        unitCode = this.resolveUnitCode(command, isAbort);
+        if (!unitCode) {
+          return { kind: 'reply', reply: await this.emitReply(command, 'REJECTED', 'UNKNOWN_ACTUATION_ROUTE', command.commandCode, 'NOT_APPLIED') };
+        }
+      } else if (!isEmergency) {
+        directRoute = DIRECT_ROUTES.get(`${command.deviceId}|${command.commandCode}`);
+        if (!directRoute || !this.matchesExplicitRoute(command, directRoute)) {
+          return { kind: 'reply', reply: await this.emitReply(command, 'REJECTED', 'UNKNOWN_ACTUATION_ROUTE', command.commandCode, 'NOT_APPLIED') };
+        }
+      }
+
+      const priorCommandIds = [...this.executedCommandIds];
       this.commitCommandAccepted(command);
-      await this.persistState();
+      try {
+        await this.persistState();
+      } catch (err) {
+        if (previousFence === undefined) {
+          this.lastFenceByDevice.delete(command.deviceId);
+        } else {
+          this.lastFenceByDevice.set(command.deviceId, previousFence);
+        }
+        this.executedCommandIds.clear();
+        for (const id of priorCommandIds) {
+          this.executedCommandIds.add(id);
+        }
+        this.reportDiagnostic({
+          level: 'error',
+          code: 'STATE_PERSIST_FAILED',
+          commandId: command.commandId,
+          message: `failed to persist accepted command ${command.commandId}: ${errorText(err)}`,
+        });
+        return { kind: 'reply', reply: await this.emitReply(command, 'FAILED', 'STATE_PERSIST_FAILED', command.commandCode, 'NOT_APPLIED') };
+      }
+
+      if (isEmergency) {
+        for (const plan of Object.values(UNIT_PLANS)) {
+          this.abortUnitSequence(plan.unitCode, 'EMERGENCY_DO_RELEASE');
+        }
+        return { kind: 'emergency' };
+      }
+
+      if (isAbort && unitCode) {
+        this.abortUnitSequence(unitCode, 'SEQUENCE_ABORTED_BY_OPERATOR');
+        return { kind: 'reply', reply: await this.emitReply(command, 'EXECUTED', null, command.commandCode, `${unitCode}:sequence-aborted`) };
+      }
+
+      if (isUnitSequence && unitCode) {
+        this.abortUnitSequence(unitCode);
+        const previousTask = this.activeSequenceTasks.get(unitCode) ?? null;
+        const controller = new AbortController();
+        this.activeSequenceAborts.set(unitCode, controller);
+        return { kind: 'unit_sequence', unitCode, controller, previousTask };
+      }
+
+      if (command.commandCode === 'STOP' && directRoute) {
+        this.abortUnitSequence(directRoute.unitCode);
+      }
+      return { kind: 'direct', route: directRoute! };
+    });
+
+    if (admitted.kind === 'reply') {
+      return admitted.reply;
+    }
+    if (admitted.kind === 'emergency') {
       return this.executeEmergencyDoRelease(command);
     }
-
-    if (this.isAbortUnitSequence(command)) {
-      const unitCode = this.resolveUnitCode(command, true);
-      if (!unitCode) {
-        return this.emitReply(command, 'REJECTED', 'UNKNOWN_ACTUATION_ROUTE', command.commandCode, 'NOT_APPLIED');
-      }
-      this.commitCommandAccepted(command);
-      await this.persistState();
-      this.abortUnitSequence(unitCode, 'SEQUENCE_ABORTED_BY_OPERATOR');
-      return this.emitReply(command, 'EXECUTED', null, command.commandCode, `${unitCode}:sequence-aborted`);
+    if (admitted.kind === 'unit_sequence') {
+      return this.executeUnitSequence(command, UNIT_PLANS[admitted.unitCode], admitted.controller, admitted.previousTask);
     }
 
-    if (command.commandCode === 'START_UNIT_SEQUENCE' || command.commandCode === 'STOP_UNIT_SEQUENCE') {
-      const unitCode = this.resolveUnitCode(command, false);
-      if (!unitCode) {
-        return this.emitReply(command, 'REJECTED', 'UNKNOWN_ACTUATION_ROUTE', command.commandCode, 'NOT_APPLIED');
-      }
-      this.commitCommandAccepted(command);
-      await this.persistState();
-      this.abortUnitSequence(unitCode);
-      return this.executeUnitSequence(command, UNIT_PLANS[unitCode]);
-    }
-
-    const route = DIRECT_ROUTES.get(`${command.deviceId}|${command.commandCode}`);
-    if (!route || !this.matchesExplicitRoute(command, route)) {
-      return this.emitReply(command, 'REJECTED', 'UNKNOWN_ACTUATION_ROUTE', command.commandCode, 'NOT_APPLIED');
-    }
-
-    this.commitCommandAccepted(command);
-    await this.persistState();
-
-    if (command.commandCode === 'STOP') {
-      this.abortUnitSequence(route.unitCode);
-    }
-
+    const { route } = admitted;
     if (route.mode === 'LEVEL') {
       try {
         await this.writeCoil(route.coil, route.value);
@@ -482,7 +586,11 @@ export class SongyaxuanCommandExecutor {
     try {
       await this.executePulse(route.coil, route.channel, duration, undefined, { unitCode: route.unitCode, commandId: command.commandId });
     } catch (error) {
-      const reason = error instanceof PulseResetError ? 'PULSE_RESET_FAILED' : 'MODBUS_WRITE_FAILED';
+      const reason = error instanceof PulseResetError
+        ? 'PULSE_RESET_FAILED'
+        : error instanceof StatePersistError
+          ? 'STATE_PERSIST_FAILED'
+          : 'MODBUS_WRITE_FAILED';
       return this.emitReply(command, 'FAILED', reason, `${route.channel}:pulse(${duration}ms)`, 'NOT_APPLIED');
     }
     return this.emitReply(command, 'EXECUTED', null, `${route.channel}:pulse(${duration}ms)`, `${route.channel}:pulse(${duration}ms)->0`);
@@ -490,24 +598,35 @@ export class SongyaxuanCommandExecutor {
 
   private async runInitialize(): Promise<void> {
     const loaded = await this.options.stateStore?.load();
-    if (loaded) {
-      if (typeof loaded.lastSequence === 'number' && Number.isSafeInteger(loaded.lastSequence) && loaded.lastSequence > this.uplinkSeq) {
+    this.lastFenceByDevice.clear();
+    this.executedCommandIds.clear();
+    this.pendingPulseCoils.clear();
+    if (loaded && typeof loaded === 'object') {
+      if (typeof loaded.lastSequence === 'number' && Number.isSafeInteger(loaded.lastSequence) && loaded.lastSequence >= 0 && loaded.lastSequence > this.uplinkSeq) {
         this.uplinkSeq = loaded.lastSequence;
       }
-      for (const [deviceId, fence] of Object.entries(loaded.lastFenceByDevice ?? {})) {
-        if (typeof fence === 'number' && Number.isInteger(fence) && fence >= 1) {
-          const existing = this.lastFenceByDevice.get(deviceId) ?? 0;
-          if (fence > existing) this.lastFenceByDevice.set(deviceId, fence);
+      if (loaded.lastFenceByDevice && typeof loaded.lastFenceByDevice === 'object' && !Array.isArray(loaded.lastFenceByDevice)) {
+        for (const [deviceId, fence] of Object.entries(loaded.lastFenceByDevice)) {
+          if (typeof deviceId === 'string' && deviceId.length > 0 && typeof fence === 'number' && Number.isSafeInteger(fence) && fence >= 1) {
+            const existing = this.lastFenceByDevice.get(deviceId) ?? 0;
+            if (fence > existing) this.lastFenceByDevice.set(deviceId, fence);
+          }
         }
       }
-      for (const commandId of loaded.executedCommandIds ?? []) {
-        if (typeof commandId === 'string' && commandId.length > 0) {
-          this.recordExecutedCommandId(commandId);
+      if (Array.isArray(loaded.executedCommandIds)) {
+        const startIdx = Math.max(0, loaded.executedCommandIds.length - MAX_EXECUTED_COMMAND_IDS);
+        for (let i = startIdx; i < loaded.executedCommandIds.length; i += 1) {
+          const commandId = loaded.executedCommandIds[i];
+          if (typeof commandId === 'string' && commandId.length > 0) {
+            this.recordExecutedCommandId(commandId);
+          }
         }
       }
-      for (const coil of loaded.pendingPulseCoils ?? []) {
-        if (typeof coil === 'number' && PULSE_COIL_SET.has(coil)) {
-          this.pendingPulseCoils.add(coil);
+      if (Array.isArray(loaded.pendingPulseCoils)) {
+        for (const coil of loaded.pendingPulseCoils) {
+          if (typeof coil === 'number' && Number.isInteger(coil) && PULSE_COIL_SET.has(coil)) {
+            this.pendingPulseCoils.add(coil);
+          }
         }
       }
     }
@@ -668,11 +787,32 @@ export class SongyaxuanCommandExecutor {
     context?: { unitCode?: UnitCoilPlan['unitCode']; commandId?: string },
   ): Promise<void> {
     this.pendingPulseCoils.add(coil);
-    await this.persistState();
-    await this.writeCoil(coil, 1);
-    let resetError: unknown = null;
     try {
-      await this.sleepMs(durationMs, signal);
+      await this.persistState();
+    } catch (err) {
+      this.pendingPulseCoils.delete(coil);
+      this.reportDiagnostic({
+        level: 'error',
+        code: 'STATE_PERSIST_FAILED',
+        unitCode: context?.unitCode,
+        commandId: context?.commandId,
+        message: `failed to persist pending pulse coil ${channel}(coil=${coil}) before pulse start: ${errorText(err)}`,
+      });
+      throw new StatePersistError(err);
+    }
+
+    let writeStartError: unknown = null;
+    let resetError: unknown = null;
+    let sleepError: unknown = null;
+    try {
+      await this.writeCoil(coil, 1);
+      await this.sleepAbortable(durationMs, signal);
+    } catch (err) {
+      if (err instanceof SequenceAbortError) {
+        sleepError = err;
+      } else {
+        writeStartError = err;
+      }
     } finally {
       try {
         await this.resetPulseCoilWithRetry(coil);
@@ -702,16 +842,40 @@ export class SongyaxuanCommandExecutor {
       });
       throw new PulseResetError(resetError);
     }
-    await this.persistState();
+
+    try {
+      await this.persistState();
+    } catch (persistErr) {
+      this.reportDiagnostic({
+        level: 'error',
+        code: 'STATE_PERSIST_FAILED',
+        unitCode: context?.unitCode,
+        commandId: context?.commandId,
+        message: `failed to clear pending pulse coil ${channel}(coil=${coil}) after reset: ${errorText(persistErr)}`,
+      });
+      if (writeStartError === null && sleepError === null) {
+        throw new StatePersistError(persistErr);
+      }
+    }
+
+    if (writeStartError !== null) {
+      throw writeStartError;
+    }
+
     await this.emitTelemetryEntries([
       { deviceId: 'et1010', deviceTimestamp: this.nowMs(), points: [{ code: channel, value: 0, quality: 0 }] },
     ]);
+
+    if (sleepError !== null) {
+      throw sleepError;
+    }
   }
 
   private async executeEmergencyDoRelease(command: DownlinkCommandEnvelope): Promise<CommandReplyEnvelope> {
     for (const plan of Object.values(UNIT_PLANS)) {
       this.abortUnitSequence(plan.unitCode, 'EMERGENCY_DO_RELEASE');
     }
+    await this.waitForActiveSequences();
 
     let writeFailures = 0;
     for (const { coil } of ALL_DO_COIL_ENTRIES) {
@@ -722,7 +886,18 @@ export class SongyaxuanCommandExecutor {
         writeFailures += 1;
       }
     }
-    await this.persistState();
+    let persistFailed = false;
+    try {
+      await this.persistState();
+    } catch (err) {
+      persistFailed = true;
+      this.reportDiagnostic({
+        level: 'error',
+        code: 'STATE_PERSIST_FAILED',
+        commandId: command.commandId,
+        message: `failed to persist emergency DO release state: ${errorText(err)}`,
+      });
+    }
 
     const now = this.nowMs();
     const controllerEntries: UplinkDeviceEntry[] = ALL_AUX_CONTROLLERS
@@ -748,12 +923,18 @@ export class SongyaxuanCommandExecutor {
     if (writeFailures > 0) {
       return this.emitReply(command, 'FAILED', 'MODBUS_WRITE_FAILED', 'all-do:0', 'NOT_APPLIED');
     }
+    if (persistFailed) {
+      return this.emitReply(command, 'FAILED', 'STATE_PERSIST_FAILED', 'all-do:0', 'NOT_APPLIED');
+    }
     return this.emitReply(command, 'EXECUTED', null, 'all-do:0', 'all-do:0');
   }
 
-  private async executeUnitSequence(command: DownlinkCommandEnvelope, plan: UnitCoilPlan): Promise<CommandReplyEnvelope> {
-    const controller = new AbortController();
-    this.activeSequenceAborts.set(plan.unitCode, controller);
+  private async executeUnitSequence(
+    command: DownlinkCommandEnvelope,
+    plan: UnitCoilPlan,
+    controller: AbortController,
+    previousTask: Promise<void> | null,
+  ): Promise<CommandReplyEnvelope> {
     const pulseMs = typeof command.pulseDurationMs === 'number' && Number.isFinite(command.pulseDurationMs) && command.pulseDurationMs > 0
       ? command.pulseDurationMs
       : this.pulseDurationMs;
@@ -771,11 +952,15 @@ export class SongyaxuanCommandExecutor {
     };
     const waitStep = async (ms: number) => {
       checkAborted();
-      await this.sleepMs(ms, controller.signal);
+      await this.sleepAbortable(ms, controller.signal);
       checkAborted();
     };
 
     try {
+      if (previousTask) {
+        await previousTask.catch(() => undefined);
+        checkAborted();
+      }
       if (isStart) {
         await writeStep(plan.chwp, 1);
         checkAborted();
@@ -829,6 +1014,9 @@ export class SongyaxuanCommandExecutor {
       if (error instanceof PulseResetError) {
         return this.emitReply(command, 'FAILED', 'PULSE_RESET_FAILED', command.commandCode, 'NOT_APPLIED');
       }
+      if (error instanceof StatePersistError) {
+        return this.emitReply(command, 'FAILED', 'STATE_PERSIST_FAILED', command.commandCode, 'NOT_APPLIED');
+      }
       return this.emitReply(command, 'FAILED', 'MODBUS_WRITE_FAILED', command.commandCode, 'NOT_APPLIED');
     }
   }
@@ -852,7 +1040,7 @@ export class SongyaxuanCommandExecutor {
     if (power === null || power <= this.chillerStopPowerKw) return true;
 
     for (let recheck = 0; recheck < CHILLER_STOP_RECHECK_LIMIT; recheck += 1) {
-      await this.sleepMs(this.sequenceTimings.auxiliaryStopStepMs, signal);
+      await this.sleepAbortable(this.sequenceTimings.auxiliaryStopStepMs, signal);
       if (signal.aborted) throw new SequenceAbortError(abortReasonText(signal));
       const nextPower = await readPower();
       if (nextPower !== null) {
@@ -960,7 +1148,15 @@ export class SongyaxuanCommandExecutor {
     const now = this.nowMs();
     const nextSequence = Math.max(now * 1000, this.uplinkSeq + 1);
     this.uplinkSeq = nextSequence;
-    await this.persistState();
+    try {
+      await this.persistState();
+    } catch (err) {
+      this.reportDiagnostic({
+        level: 'error',
+        code: 'STATE_PERSIST_FAILED',
+        message: `failed to persist telemetry sequence state: ${errorText(err)}`,
+      });
+    }
     await this.options.publishTelemetry({
       topic: TELEMETRY_TOPIC,
       payload: {

@@ -424,11 +424,17 @@ INSERT INTO command_runtime.command_dispatch_outbox (
 	}, now); err != nil {
 		return err
 	}
+	failureEvent, notifyFailure := controlFailureEventFromDecision(intent, intentFinal, reason, result.FailureCode, now)
+	if notifyFailure {
+		if err := store.insertControlAlarmOutbox(ctx, tx, failureEvent, now); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit dispatch resolution: %w", err)
 	}
-	if event, notify := controlFailureEventFromDecision(intent, intentFinal, reason, result.FailureCode, now); notify {
-		store.notifyControlFailure(event)
+	if notifyFailure {
+		store.notifyControlFailure(failureEvent)
 	}
 	return nil
 }
@@ -540,6 +546,9 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 			return nil, err
 		}
 		if event, notify := controlFailureEventFromDecision(intent, commandmodel.IntentOutcomeUnknown, "LEASE_EXPIRED_WITHOUT_SEND_PROOF", "", now); notify {
+			if err := store.insertControlAlarmOutbox(ctx, tx, event, now); err != nil {
+				return nil, err
+			}
 			events = append(events, event)
 		}
 	}
