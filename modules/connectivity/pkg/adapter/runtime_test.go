@@ -24,6 +24,7 @@ import (
 
 	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
@@ -1832,4 +1833,109 @@ func TestRuntimeGracefulDrainTimeoutPreservesPersistentWAL(t *testing.T) {
 	waitCondition(t, 2*time.Second, func() bool {
 		return len(recoveredTelemetry.accepted()) == 2
 	}, "preserved WAL entries recovered and drained on restart")
+}
+
+func TestRuntimeWithSharedSessionRegistersRoutesMirrorsReadyAndLeavesSessionOpenOnCancel(t *testing.T) {
+	broker := newFakeBroker(t)
+	telemetry := &fakeTelemetry{}
+
+	sessionCtx, sessionCancel := context.WithCancel(t.Context())
+	defer sessionCancel()
+
+	session, err := mqttclient.NewSharedSession(sessionCtx, mqttclient.SharedSessionConfig{
+		BrokerURL: broker.mqtt.BrokerURL,
+		ClientID:  broker.mqtt.ClientID,
+		TLS: &mqttclient.TLSConfig{
+			CACertFile:     broker.mqtt.CAFile,
+			ClientCertFile: broker.mqtt.CertFile,
+			ClientKeyFile:  broker.mqtt.KeyFile,
+			ServerName:     broker.mqtt.ServerName,
+		},
+		ConnectRetryDelay:    50 * time.Millisecond,
+		SubscribeRetryDelays: []time.Duration{25 * time.Millisecond},
+	})
+	if err != nil {
+		t.Fatalf("NewSharedSession failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = session.Close(context.Background())
+	})
+
+	// Another in-process consumer shares the exact same MQTT session.
+	otherMsgs := make(chan string, 4)
+	unregOther, err := session.RegisterRoute("rpc-reply-consumer", []string{"hvac/v1/+/down/reply"}, func(pkt *paho.Publish) {
+		otherMsgs <- string(pkt.Payload)
+	})
+	if err != nil {
+		t.Fatalf("RegisterRoute failed: %v", err)
+	}
+	defer func() { _ = unregOther(context.Background()) }()
+
+	runtime, err := NewRuntime(
+		Config{
+			MQTT:             broker.mqtt,
+			TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: broker.mqtt.CAFile, CertFile: broker.mqtt.CertFile, KeyFile: broker.mqtt.KeyFile, ServerName: "telemetry.local"},
+			QueueCapacity:    4,
+		},
+		newTestProcessor(t, newFakeIdentities(), telemetry),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		observability.NewRegistry(),
+		WithSharedSession(session),
+	)
+	if err != nil {
+		t.Fatalf("NewRuntime(WithSharedSession) failed: %v", err)
+	}
+
+	ingressCtx, ingressCancel := context.WithCancel(t.Context())
+	stopped := make(chan error, 1)
+	go func() { stopped <- runtime.Run(ingressCtx) }()
+
+	conn := broker.awaitConnection(t)
+	awaitReady(t, runtime, true)
+
+	// Deliver telemetry through shared session -> adapter processes and ACKs it.
+	conn.deliver(t, 1, 1, false)
+	conn.awaitAcks(t, 1)
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(telemetry.accepted()) == 1
+	}, "telemetry processed via shared session")
+
+	// Cancel ONLY adapter's ingressCtx: adapter must unregister its uplink route and drain,
+	// marking runtime.Ready() false WITHOUT closing the shared session for other consumers.
+	ingressCancel()
+	select {
+	case runErr := <-stopped:
+		if runErr != nil {
+			t.Fatalf("Runtime.Run(ingressCtx canceled) returned unexpected error: %v", runErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Runtime.Run did not drain and exit on ingressCtx cancel")
+	}
+
+	if runtime.Ready() {
+		t.Fatal("expected runtime.Ready() == false after ingressCtx cancellation")
+	}
+	sessionState := session.State()
+	if sessionState.Closed || !sessionState.Connected {
+		t.Fatalf("expected SharedSession to remain open & connected after adapter cancel, got %+v", sessionState)
+	}
+
+	// Verify the other route still works on the shared session after adapter stopped.
+	replyPkt := packets.NewControlPacket(packets.PUBLISH)
+	rep := replyPkt.Content.(*packets.Publish)
+	rep.Topic = "hvac/v1/" + testGatewayA + "/down/reply"
+	rep.Payload = []byte(`{"ok":true}`)
+	rep.QoS = 1
+	rep.PacketID = 2
+	if err := conn.write(replyPkt); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case msg := <-otherMsgs:
+		if msg != `{"ok":true}` {
+			t.Fatalf("unexpected reply payload on sibling route: %q", msg)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("sibling route on SharedSession stopped receiving after adapter shutdown")
+	}
 }

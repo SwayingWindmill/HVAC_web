@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math"
 	"math/big"
 	"net"
@@ -28,6 +29,8 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/packets"
+	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
@@ -1337,5 +1340,216 @@ func TestMQTTTransportMetricsAndPacketHook(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q in concentrator metrics:\n%s", want, body)
 		}
+	}
+}
+
+func TestSharedMQTTTransportRPCAndCloseLeavesSessionOpen(t *testing.T) {
+	cfg, serverTLS := writeConcentratorTestPKI(t)
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", serverTLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	cfg.BrokerURL = "tls://" + listener.Addr().String()
+	cfg.RPCTimeout = 2 * time.Second
+
+	var unsubMu sync.Mutex
+	var unsubTopics []string
+	var serverWriteMu sync.Mutex
+	var activeServerConn net.Conn
+	var nextServerID atomic.Uint32
+
+	go func() {
+		for {
+			c, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func(sc net.Conn) {
+				defer sc.Close()
+				pkt, err := packets.ReadPacket(sc)
+				if err != nil || pkt.Type != packets.CONNECT {
+					return
+				}
+				connack := packets.NewControlPacket(packets.CONNACK)
+				connack.Content.(*packets.Connack).SessionPresent = false
+				serverWriteMu.Lock()
+				_, writeErr := connack.WriteTo(sc)
+				activeServerConn = sc
+				serverWriteMu.Unlock()
+				if writeErr != nil {
+					return
+				}
+				for {
+					p, err := packets.ReadPacket(sc)
+					if err != nil {
+						return
+					}
+					switch p.Type {
+					case packets.SUBSCRIBE:
+						sub := p.Content.(*packets.Subscribe)
+						suback := packets.NewControlPacket(packets.SUBACK)
+						sa := suback.Content.(*packets.Suback)
+						sa.PacketID = sub.PacketID
+						for range sub.Subscriptions {
+							sa.Reasons = append(sa.Reasons, 1)
+						}
+						serverWriteMu.Lock()
+						_, _ = suback.WriteTo(sc)
+						serverWriteMu.Unlock()
+					case packets.UNSUBSCRIBE:
+						unsub := p.Content.(*packets.Unsubscribe)
+						unsubMu.Lock()
+						unsubTopics = append(unsubTopics, unsub.Topics...)
+						unsubMu.Unlock()
+						unsuback := packets.NewControlPacket(packets.UNSUBACK)
+						ua := unsuback.Content.(*packets.Unsuback)
+						ua.PacketID = unsub.PacketID
+						for range unsub.Topics {
+							ua.Reasons = append(ua.Reasons, 0)
+						}
+						serverWriteMu.Lock()
+						_, _ = unsuback.WriteTo(sc)
+						serverWriteMu.Unlock()
+					case packets.PUBLISH:
+						pub := p.Content.(*packets.Publish)
+						puback := packets.NewControlPacket(packets.PUBACK)
+						puback.Content.(*packets.Puback).PacketID = pub.PacketID
+						serverWriteMu.Lock()
+						_, _ = puback.WriteTo(sc)
+						serverWriteMu.Unlock()
+
+						var req RPCRequest
+						if err := json.Unmarshal(pub.Payload, &req); err == nil {
+							replyBytes, _ := json.Marshal(RPCResponse{
+								SchemaVersion: rpcSchemaVersion,
+								RequestID:     req.RequestID,
+								GatewayID:     req.GatewayID,
+								UnitID:        req.UnitID,
+								Operation:     req.Operation,
+								Status:        "OK",
+							})
+							replyPkt := packets.NewControlPacket(packets.PUBLISH)
+							rp := replyPkt.Content.(*packets.Publish)
+							rp.Topic = "hvac/v1/" + req.GatewayID + "/up/concentrator"
+							rp.Payload = replyBytes
+							rp.QoS = 1
+							rp.PacketID = uint16(nextServerID.Add(1))
+							serverWriteMu.Lock()
+							_, _ = replyPkt.WriteTo(sc)
+							serverWriteMu.Unlock()
+						}
+					case packets.PINGREQ:
+						serverWriteMu.Lock()
+						_, _ = packets.NewControlPacket(packets.PINGRESP).WriteTo(sc)
+						serverWriteMu.Unlock()
+					case packets.DISCONNECT:
+						return
+					}
+				}
+			}(c)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	session, err := mqttclient.NewSharedSession(ctx, mqttclient.SharedSessionConfig{
+		BrokerURL: cfg.BrokerURL,
+		ClientID:  cfg.ClientID,
+		TLS: &mqttclient.TLSConfig{
+			CACertFile:     cfg.CAFile,
+			ClientCertFile: cfg.CertFile,
+			ClientKeyFile:  cfg.KeyFile,
+			ServerName:     cfg.ServerName,
+		},
+		ConnectRetryDelay:    50 * time.Millisecond,
+		SubscribeRetryDelays: []time.Duration{20 * time.Millisecond},
+	})
+	if err != nil {
+		t.Fatalf("NewSharedSession: %v", err)
+	}
+	defer func() { _ = session.Close(context.Background()) }()
+
+	siblingCh := make(chan string, 4)
+	unregSibling, err := session.RegisterRoute("sibling-uplink", []string{"hvac/v1/+/up/telemetry"}, func(pkt *paho.Publish) {
+		siblingCh <- string(pkt.Payload)
+	})
+	if err != nil {
+		t.Fatalf("RegisterRoute sibling: %v", err)
+	}
+	defer func() { _ = unregSibling(context.Background()) }()
+
+	tr, err := NewSharedMQTTTransport(ctx, session, cfg)
+	if err != nil {
+		t.Fatalf("NewSharedMQTTTransport: %v", err)
+	}
+	if err := tr.WaitReady(ctx); err != nil {
+		t.Fatalf("WaitReady(shared): %v", err)
+	}
+
+	var callWG sync.WaitGroup
+	errs := make(chan error, 5)
+	for i := 0; i < 5; i++ {
+		callWG.Add(1)
+		go func(idx int) {
+			defer callWG.Done()
+			reqID := "018f3d00-4000-7000-8000-00000000000" + strconv.Itoa(idx)
+			resp, err := tr.Call(ctx, RPCRequest{
+				SchemaVersion: rpcSchemaVersion,
+				RequestID:     reqID,
+				GatewayID:     testGatewayID(),
+				UnitID:        1,
+				Operation:     OperationReadStatus,
+			})
+			if err != nil || resp.Status != "OK" || resp.RequestID != reqID {
+				errs <- fmt.Errorf("call %d failed: resp=%+v err=%v", idx, resp, err)
+			}
+		}(i)
+	}
+	callWG.Wait()
+	close(errs)
+	for callErr := range errs {
+		t.Fatal(callErr)
+	}
+
+	// Closing shared transport unregisters its reply route without closing the shared session.
+	if err := tr.Close(ctx); err != nil {
+		t.Fatalf("tr.Close(shared): %v", err)
+	}
+	if tr.Subscribed() {
+		t.Fatal("expected tr.Subscribed() == false after Close")
+	}
+	unsubMu.Lock()
+	unsubscribedReply := slices.Contains(unsubTopics, ReplyTopicFilter)
+	unsubMu.Unlock()
+	if !unsubscribedReply {
+		t.Fatalf("expected Close to UNSUBSCRIBE %q, got %v", ReplyTopicFilter, unsubTopics)
+	}
+	if st := session.State(); st.Closed || !st.Connected {
+		t.Fatalf("shared session must stay open and connected after transport.Close, got %+v", st)
+	}
+
+	// Verify sibling route still receives traffic on the shared session.
+	telePkt := packets.NewControlPacket(packets.PUBLISH)
+	tp := telePkt.Content.(*packets.Publish)
+	tp.Topic = "hvac/v1/" + testGatewayID() + "/up/telemetry"
+	tp.Payload = []byte("still-alive")
+	tp.QoS = 1
+	tp.PacketID = uint16(nextServerID.Add(1))
+	serverWriteMu.Lock()
+	sc := activeServerConn
+	if sc != nil {
+		_, _ = telePkt.WriteTo(sc)
+	}
+	serverWriteMu.Unlock()
+
+	select {
+	case got := <-siblingCh:
+		if got != "still-alive" {
+			t.Fatalf("unexpected sibling payload: %q", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("sibling route failed after shared concentrator transport Close")
 	}
 }

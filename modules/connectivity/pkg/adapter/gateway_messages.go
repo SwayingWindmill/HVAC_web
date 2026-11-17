@@ -8,11 +8,14 @@ import (
 	"io"
 	"math"
 	"strings"
+
+	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 )
 
 const (
 	MessageTypeTelemetry = "telemetry"
 	MessageTypeEvent     = "event"
+	MessageTypeStatus    = "status"
 )
 
 // UplinkTopicFilters are the Gateway uplinks Connectivity consumes (ADR 0015). The broker
@@ -33,7 +36,7 @@ func ParseMessageTopic(topic string) (MessageTopic, error) {
 		return MessageTopic{}, errors.New("MQTT topic Gateway id is invalid")
 	}
 	switch parts[4] {
-	case MessageTypeTelemetry, MessageTypeEvent:
+	case MessageTypeTelemetry, MessageTypeEvent, MessageTypeStatus:
 	default:
 		return MessageTopic{}, errors.New("MQTT uplink message type is not accepted")
 	}
@@ -44,10 +47,7 @@ func ParseMessageTopic(topic string) (MessageTopic, error) {
 // (stripping any optional MQTT v5 $share/<group>/ prefix), or "invalid" so arbitrary topics
 // collapse into one bounded quarantine bucket.
 func TopicGatewayID(topic string) string {
-	parts := strings.Split(topic, "/")
-	if len(parts) >= 3 && parts[0] == "$share" && parts[1] != "" {
-		parts = parts[2:]
-	}
+	parts := strings.Split(mqttclient.StripSharePrefix(topic), "/")
 	if len(parts) == 5 && parts[0] == "hvac" && parts[1] == "v1" && parts[3] == "up" &&
 		uuidV7Pattern.MatchString(parts[2]) && parts[2] == strings.ToLower(parts[2]) {
 		return parts[2]

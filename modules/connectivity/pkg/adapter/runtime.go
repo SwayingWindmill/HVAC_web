@@ -3,7 +3,6 @@ package adapter
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,8 +16,8 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
-	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
@@ -29,10 +28,12 @@ const (
 	defaultDrainTimeout           = 10 * time.Second
 	maxTrackedGatewayQueues       = 4096
 	defaultRateLimitRetryFloor    = 2 * time.Second
-	subscribeAttemptTimeout       = 15 * time.Second
+	subscribeAttemptTimeout       = mqttclient.DefaultSubscribeAttemptTimeout
 )
 
-var DefaultSubscribeRetryDelays = []time.Duration{200 * time.Millisecond, 600 * time.Millisecond}
+var DefaultSubscribeRetryDelays = mqttclient.DefaultSubscribeRetryDelays
+
+var sharedRouteCounter atomic.Uint64
 
 type gatewayMailboxState struct {
 	mailbox      *gatewayMailbox
@@ -91,6 +92,14 @@ func WithOnlineGatewayCount(fn func() int) RuntimeOption {
 	}
 }
 
+// WithSharedSession shares an externally owned mqttclient.SharedSession instead
+// of dialing a standalone MQTT connection inside Runtime.Run.
+func WithSharedSession(session *mqttclient.SharedSession) RuntimeOption {
+	return func(runtime *Runtime) {
+		runtime.sharedSession = session
+	}
+}
+
 // Runtime consumes every Gateway's uplink. Each Gateway gets an ordered mailbox
 // serviced by a bounded pool of workers. A message is acknowledged only after it is
 // processed or quarantined; when a Gateway's queue is full, receiving pauses and the
@@ -100,6 +109,7 @@ type Runtime struct {
 	processor      *Processor
 	logger         *slog.Logger
 	metrics        *observability.Registry
+	sharedSession  *mqttclient.SharedSession
 	retryDelay     func(int) time.Duration
 	rateLimitFloor time.Duration
 	// reconnectBackoff is how long to wait before reconnection attempt N.
@@ -140,9 +150,6 @@ type Runtime struct {
 }
 
 func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metrics *observability.Registry, options ...RuntimeOption) (*Runtime, error) {
-	if err := config.Validate(); err != nil {
-		return nil, err
-	}
 	if processor == nil {
 		return nil, errors.New("MQTT uplink runtime requires a processor")
 	}
@@ -152,8 +159,6 @@ func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metric
 	if metrics == nil {
 		metrics = observability.NewRegistry()
 	}
-	config.OverflowMaxMessages = config.effectiveOverflowMaxMessages()
-	config.OverflowMaxBytes = config.effectiveOverflowMaxBytes()
 	runtime := &Runtime{
 		config:           config,
 		processor:        processor,
@@ -177,6 +182,12 @@ func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metric
 			option(runtime)
 		}
 	}
+	if err := config.validate(runtime.sharedSession == nil); err != nil {
+		return nil, err
+	}
+	config.OverflowMaxMessages = config.effectiveOverflowMaxMessages()
+	config.OverflowMaxBytes = config.effectiveOverflowMaxBytes()
+	runtime.config = config
 	if runtime.packetHook != nil && runtime.processor != nil {
 		if runtime.processor.packetHook == nil {
 			runtime.processor.packetHook = runtime.packetHook
@@ -188,6 +199,9 @@ func NewRuntime(config Config, processor *Processor, logger *slog.Logger, metric
 				nextHook(direction, channel, gatewayID, topic, traceID, payload)
 			}
 		}
+	}
+	if runtime.processor != nil && runtime.processor.metrics == nil {
+		runtime.processor.metrics = runtime.metrics
 	}
 	runtime.refreshQueueCapacityMetric()
 	runtime.recordProcessingQueueDepth(0)
@@ -208,13 +222,20 @@ func (runtime *Runtime) LastSuccess() time.Time {
 }
 
 func (runtime *Runtime) Run(ctx context.Context) error {
-	brokerURL, err := url.Parse(strings.TrimSpace(runtime.config.MQTT.BrokerURL))
-	if err != nil {
-		return fmt.Errorf("parse MQTT broker URL: %w", err)
-	}
-	tlsConfig, err := newMQTTTLSConfig(runtime.config.MQTT)
-	if err != nil {
-		return err
+	var (
+		brokerURL *url.URL
+		tlsConfig *tls.Config
+		err       error
+	)
+	if runtime.sharedSession == nil {
+		brokerURL, err = url.Parse(strings.TrimSpace(runtime.config.MQTT.BrokerURL))
+		if err != nil {
+			return fmt.Errorf("parse MQTT broker URL: %w", err)
+		}
+		tlsConfig, err = newMQTTTLSConfig(runtime.config.MQTT)
+		if err != nil {
+			return err
+		}
 	}
 	if err := runtime.prepareOverflowDir(); err != nil {
 		return err
@@ -252,6 +273,10 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 			defer observability.Recover(runtime.logger, runtime.metrics, "connectivity.coverage_heartbeat")
 			runtime.runCoverageHeartbeat(heartbeatContext)
 		}()
+	}
+
+	if runtime.sharedSession != nil {
+		return runtime.runWithSharedSession(ctx, runContext, runCancel, workerContext, workerCancel, heartbeatCancel, &heartbeatWG, &drained)
 	}
 
 	clientConfig := autopaho.ClientConfig{
@@ -315,16 +340,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	if stopErr != nil {
 		runtime.closeCurrentConnection()
 		runtime.recordConnectionState(nil, false, false, nil)
-		workerCancel()
-		heartbeatWG.Wait()
-		runtime.subWG.Wait()
-		runtime.workers.Wait()
-		runtime.closeMailboxes()
-		drained = true
-		runtime.coverageWG.Wait()
-		shutdownCoverageContext, coverageCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		runtime.reportCoverage(shutdownCoverageContext, false, "SOURCE_UNAVAILABLE", 0, true)
-		coverageCancel()
+		runtime.finishShutdown(false, workerCancel, &heartbeatWG, &drained)
 		return stopErr
 	}
 	disconnectContext, disconnectCancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -332,21 +348,143 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	disconnectCancel()
 	runtime.closeCurrentConnection()
 	runtime.recordConnectionState(nil, false, false, nil)
-	runtime.subWG.Wait()
+	runtime.finishShutdown(true, workerCancel, &heartbeatWG, &drained)
+	return nil
+}
 
-	drainContext, drainCancel := context.WithTimeout(context.Background(), runtime.effectiveDrainTimeout())
-	runtime.waitDrainWithContext(drainContext)
-	drainCancel()
+func (runtime *Runtime) runWithSharedSession(
+	ingressCtx context.Context,
+	runContext context.Context,
+	runCancel context.CancelFunc,
+	workerContext context.Context,
+	workerCancel context.CancelFunc,
+	heartbeatCancel context.CancelFunc,
+	heartbeatWG *sync.WaitGroup,
+	drained *bool,
+) error {
+	filters := runtime.config.SubscriptionTopicFilters()
+	routeID := fmt.Sprintf("adapter-uplink-%d", sharedRouteCounter.Add(1))
+	var routeActive atomic.Bool
+
+	unregister, err := runtime.sharedSession.RegisterManagedRoute(routeID, filters, func(ev mqttclient.PublishEvent) error {
+		if ev.Packet == nil || ev.Ack == nil {
+			return errors.New("MQTT publish callback is incomplete")
+		}
+		return runtime.enqueue(workerContext, ev.ConnectionClosed, ev.Packet, ev.Ack)
+	})
+	if err != nil {
+		runtime.recordConnectionState(nil, false, false, err)
+		return err
+	}
+	routeActive.Store(true)
+
+	var (
+		obsMu          sync.Mutex
+		prevConnected  bool
+		prevSubscribed bool
+	)
+	removeObserver := runtime.sharedSession.AddObserver(func(state mqttclient.SessionState) {
+		obsMu.Lock()
+		defer obsMu.Unlock()
+		if !routeActive.Load() {
+			return
+		}
+		connected := state.Connected && !state.Closed
+		subscribed := connected && state.Subscribed
+		var stateErr error
+		if state.LastError != "" {
+			stateErr = errors.New(state.LastError)
+		}
+
+		if !connected && prevConnected && runContext.Err() == nil {
+			runtime.connectionLost(runContext, 0)
+			if stateErr != nil {
+				runtime.recordConnectionState(nil, false, false, stateErr)
+			}
+		} else {
+			runtime.recordConnectionState(nil, connected, subscribed, stateErr)
+		}
+		if !state.LastSuccess.IsZero() {
+			runtime.mu.Lock()
+			if state.LastSuccess.After(runtime.lastSuccess) {
+				runtime.lastSuccess = state.LastSuccess
+			}
+			runtime.mu.Unlock()
+		}
+		if connected && !prevConnected {
+			_ = runtime.metrics.AddCounter("hvac_mqtt_connections_total", "MQTT connection attempts by outcome.", map[string]string{"outcome": "success"}, 1)
+		}
+		if subscribed && !prevSubscribed && stateErr == nil {
+			_ = runtime.metrics.AddCounter("hvac_mqtt_subscriptions_total", "MQTT subscription attempts by outcome.", map[string]string{"outcome": "success"}, 1)
+			runtime.logger.Info("mqtt_uplink_subscribed", "topic_filters", filters)
+			if runContext.Err() == nil && runtime.coverageLister != nil && runtime.coverageReporter != nil {
+				runtime.coverageWG.Add(1)
+				go func() {
+					defer runtime.coverageWG.Done()
+					defer observability.Recover(runtime.logger, runtime.metrics, "connectivity.coverage_report")
+					runtime.reportCoverage(runContext, true, "", 0, false)
+				}()
+			}
+		}
+		prevConnected = connected
+		prevSubscribed = subscribed
+	})
+
+	cleanupRoute := func() {
+		routeActive.Store(false)
+		removeObserver()
+		unsubCtx, unsubCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = unregister(unsubCtx)
+		unsubCancel()
+		runtime.recordConnectionState(nil, false, false, nil)
+	}
+
+	if err := runtime.sharedSession.AwaitConnection(ingressCtx); err != nil {
+		cleanupRoute()
+		runCancel()
+		heartbeatCancel()
+		runtime.finishShutdown(ingressCtx.Err() != nil, workerCancel, heartbeatWG, drained)
+		return fmt.Errorf("await MQTT connection: %w", err)
+	}
+
+	var stopErr error
+	select {
+	case <-ingressCtx.Done():
+	case <-runtime.sharedSession.Done():
+		if ingressCtx.Err() == nil {
+			stopErr = errors.New("MQTT shared session stopped")
+		}
+	}
+	runCancel()
+	heartbeatCancel()
+	cleanupRoute()
+	if stopErr != nil {
+		runtime.finishShutdown(false, workerCancel, heartbeatWG, drained)
+		return stopErr
+	}
+	runtime.finishShutdown(true, workerCancel, heartbeatWG, drained)
+	return nil
+}
+
+func (runtime *Runtime) finishShutdown(drainFirst bool, workerCancel context.CancelFunc, heartbeatWG *sync.WaitGroup, drained *bool) {
+	if drainFirst {
+		runtime.subWG.Wait()
+		drainContext, drainCancel := context.WithTimeout(context.Background(), runtime.effectiveDrainTimeout())
+		runtime.waitDrainWithContext(drainContext)
+		drainCancel()
+	}
 	workerCancel()
+	heartbeatWG.Wait()
+	if !drainFirst {
+		runtime.subWG.Wait()
+	}
 	runtime.workers.Wait()
 	runtime.closeMailboxes()
-	drained = true
-	heartbeatWG.Wait()
+	*drained = true
 	runtime.coverageWG.Wait()
 	shutdownCoverageContext, coverageCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	runtime.reportCoverage(shutdownCoverageContext, false, "SOURCE_UNAVAILABLE", 0, true)
 	coverageCancel()
-	return nil
 }
 
 func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.ConnectionManager, connection <-chan struct{}, gen uint64) {
@@ -381,6 +519,19 @@ func (runtime *Runtime) subscribe(ctx context.Context, manager *autopaho.Connect
 	}
 }
 
+type subackCaptureSubscriber struct {
+	manager *autopaho.ConnectionManager
+	suback  *paho.Suback
+}
+
+func (s *subackCaptureSubscriber) Subscribe(ctx context.Context, sub *paho.Subscribe) (*paho.Suback, error) {
+	suback, err := s.manager.Subscribe(ctx, sub)
+	if suback != nil {
+		s.suback = suback
+	}
+	return suback, err
+}
+
 // SubscribeWithRetry attempts MQTT SUBSCRIBE up to 1+len(retryDelays) times, verifying
 // SUBACK reason codes (< 0x80 per MQTT v5 §3.9.3) and aborting immediately if ctx or
 // connection closes.
@@ -392,79 +543,31 @@ func SubscribeWithRetry(
 	attemptTimeout time.Duration,
 	retryDelays []time.Duration,
 ) (*paho.Suback, error) {
-	var lastErr error
-	for attempt := 0; attempt <= len(retryDelays); attempt++ {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if IsClosedSignal(connection) {
-			return nil, errors.New("MQTT connection closed before subscribe")
-		}
-		subscribeContext, cancel := context.WithTimeout(ctx, attemptTimeout)
-		suback, err := manager.Subscribe(subscribeContext, &paho.Subscribe{Subscriptions: subscriptions})
-		cancel()
-		if err == nil {
-			err = CheckSubackReasons(suback, len(subscriptions))
-		}
-		if err == nil {
-			return suback, nil
-		}
-		lastErr = err
-		if attempt == len(retryDelays) {
-			break
-		}
-		if !waitRetryOrSignal(ctx, connection, retryDelays[attempt]) {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return nil, lastErr
-		}
+	if retryDelays == nil {
+		retryDelays = []time.Duration{}
 	}
-	return nil, lastErr
+	capture := &subackCaptureSubscriber{manager: manager}
+	err := mqttclient.SubscribeWithRetry(
+		ctx,
+		capture,
+		&paho.Subscribe{Subscriptions: subscriptions},
+		attemptTimeout,
+		retryDelays,
+		func() bool { return mqttclient.IsClosedSignal(connection) },
+	)
+	if err != nil {
+		return nil, err
+	}
+	return capture.suback, nil
 }
 
 // CheckSubackReasons validates MQTT v5 SUBACK length and reason codes (< 0x80).
 func CheckSubackReasons(suback *paho.Suback, expected int) error {
-	if suback == nil {
-		return errors.New("MQTT SUBACK is missing")
-	}
-	if len(suback.Reasons) != expected {
-		return fmt.Errorf("MQTT SUBACK returned %d reason codes for %d subscriptions", len(suback.Reasons), expected)
-	}
-	for index, reason := range suback.Reasons {
-		if reason >= 0x80 {
-			return fmt.Errorf("MQTT subscription[%d] rejected with reason code 0x%02x", index, reason)
-		}
-	}
-	return nil
+	return mqttclient.CheckSubackReasons(suback, expected)
 }
 
 func IsClosedSignal(ch <-chan struct{}) bool {
-	if ch == nil {
-		return false
-	}
-	select {
-	case <-ch:
-		return true
-	default:
-		return false
-	}
-}
-
-func waitRetryOrSignal(ctx context.Context, closed <-chan struct{}, delay time.Duration) bool {
-	if delay <= 0 {
-		return ctx.Err() == nil && !IsClosedSignal(closed)
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-closed:
-		return false
-	case <-timer.C:
-		return true
-	}
+	return mqttclient.IsClosedSignal(ch)
 }
 
 func (runtime *Runtime) effectiveSubscribeRetryDelays() []time.Duration {
@@ -484,78 +587,39 @@ func (runtime *Runtime) effectiveRateLimitFloor() time.Duration {
 // MQTTConnTracker wraps TLS connections with close-once signaling and generation-guarded
 // teardown so late disconnect or subscribe callbacks cannot close a newer connection.
 type MQTTConnTracker struct {
-	gen       atomic.Uint64
-	mu        sync.Mutex
-	closed    chan struct{}
-	closer    func()
-	closerGen uint64
+	once sync.Once
+	core *mqttclient.ConnTracker
+}
+
+func (t *MQTTConnTracker) tracker() *mqttclient.ConnTracker {
+	t.once.Do(func() {
+		t.core = mqttclient.NewConnTracker()
+	})
+	return t.core
+}
+
+func (t *MQTTConnTracker) NextGen() uint64 {
+	return t.tracker().NextGen()
 }
 
 func (t *MQTTConnTracker) CurrentGen() uint64 {
-	return t.gen.Load()
+	return t.tracker().CurrentGen()
 }
 
 func (t *MQTTConnTracker) CurrentClosed() <-chan struct{} {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.closed
+	return t.tracker().CurrentClosed()
 }
 
 func (t *MQTTConnTracker) CloseCurrent() {
-	t.mu.Lock()
-	closer := t.closer
-	t.closer = nil
-	t.mu.Unlock()
-	if closer != nil {
-		closer()
-	}
+	_ = t.tracker().CloseCurrent()
 }
 
 func (t *MQTTConnTracker) CloseIfGen(gen uint64) {
-	t.mu.Lock()
-	if t.closerGen != gen || t.closer == nil {
-		t.mu.Unlock()
-		return
-	}
-	closer := t.closer
-	t.closer = nil
-	t.mu.Unlock()
-	closer()
-}
-
-func (t *MQTTConnTracker) clearCloserIfGen(gen uint64) {
-	t.mu.Lock()
-	if t.closerGen == gen {
-		t.closer = nil
-	}
-	t.mu.Unlock()
+	_ = t.tracker().CloseIfGen(gen)
 }
 
 func (t *MQTTConnTracker) DialTLS(ctx context.Context, tlsConfig *tls.Config, address string, timeout time.Duration, onClose func(gen uint64)) (net.Conn, uint64, <-chan struct{}, error) {
-	dialContext, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	conn, err := (&tls.Dialer{Config: tlsConfig}).DialContext(dialContext, "tcp", address)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	closed := make(chan struct{})
-	gen := t.gen.Add(1)
-	wrapped := &trackedMQTTConn{
-		Conn:   conn,
-		closed: closed,
-		onClose: func() {
-			t.clearCloserIfGen(gen)
-			if onClose != nil {
-				onClose(gen)
-			}
-		},
-	}
-	t.mu.Lock()
-	t.closed = closed
-	t.closer = func() { _ = wrapped.Close() }
-	t.closerGen = gen
-	t.mu.Unlock()
-	return packets.NewThreadSafeConn(wrapped), gen, closed, nil
+	return t.tracker().DialTLS(ctx, tlsConfig, address, timeout, onClose)
 }
 
 // dial opens the TLS connection to the broker. Closing it is the first step of paho
@@ -569,6 +633,10 @@ func (runtime *Runtime) dial(ctx context.Context, tlsConfig *tls.Config, server 
 }
 
 func (runtime *Runtime) closeCurrentConnection() {
+	if runtime.sharedSession != nil {
+		_ = runtime.sharedSession.CloseCurrentConnection()
+		return
+	}
 	runtime.connTracker.CloseCurrent()
 }
 
@@ -613,28 +681,13 @@ func (runtime *Runtime) waitDrainWithContext(ctx context.Context) {
 	}
 }
 
-// trackedMQTTConn closes closed and reports the loss the first time the connection closes.
-type trackedMQTTConn struct {
-	net.Conn
-	closeOnce sync.Once
-	closed    chan struct{}
-	onClose   func()
-}
-
-func (conn *trackedMQTTConn) Close() error {
-	conn.closeOnce.Do(func() {
-		close(conn.closed)
-		if conn.onClose != nil {
-			conn.onClose()
-		}
-	})
-	return conn.Conn.Close()
-}
-
 // currentConnectionClosed is closed when the connection now delivering messages closes.
 // autopaho dials the next connection only after the previous client has fully stopped,
 // so every message the handler sees came from this connection.
 func (runtime *Runtime) currentConnectionClosed() <-chan struct{} {
+	if runtime.sharedSession != nil {
+		return runtime.sharedSession.CurrentClosed()
+	}
 	return runtime.connTracker.CurrentClosed()
 }
 
@@ -670,7 +723,11 @@ func (runtime *Runtime) runCoverageHeartbeat(ctx context.Context) {
 		case <-ticker.C:
 			runtime.refreshOnlineGateways()
 			if runtime.Ready() {
-				runtime.reportCoverage(ctx, true, "", runtime.connTracker.CurrentGen(), false)
+				expectedGen := uint64(0)
+				if runtime.sharedSession == nil {
+					expectedGen = runtime.connTracker.CurrentGen()
+				}
+				runtime.reportCoverage(ctx, true, "", expectedGen, false)
 			}
 		}
 	}
@@ -1781,22 +1838,10 @@ func (runtime *Runtime) recordProcessingSuccess() {
 }
 
 func newMQTTTLSConfig(config MQTTConfig) (*tls.Config, error) {
-	certificate, err := tls.LoadX509KeyPair(config.CertFile, config.KeyFile)
-	if err != nil {
-		return nil, errors.New("load MQTT client identity failed")
-	}
-	caContent, err := os.ReadFile(config.CAFile)
-	if err != nil {
-		return nil, errors.New("read MQTT CA failed")
-	}
-	rootCAs := x509.NewCertPool()
-	if !rootCAs.AppendCertsFromPEM(caContent) {
-		return nil, errors.New("MQTT CA is invalid")
-	}
-	return &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		RootCAs:      rootCAs,
-		Certificates: []tls.Certificate{certificate},
-		ServerName:   strings.TrimSpace(config.ServerName),
-	}, nil
+	return mqttclient.NewMTLSConfig(mqttclient.TLSConfig{
+		CACertFile:     config.CAFile,
+		ClientCertFile: config.CertFile,
+		ClientKeyFile:  config.KeyFile,
+		ServerName:     strings.TrimSpace(config.ServerName),
+	})
 }

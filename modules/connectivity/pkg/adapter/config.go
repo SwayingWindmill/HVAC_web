@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 )
 
 var (
@@ -70,19 +72,31 @@ type TelemetryRuntimeConfig struct {
 }
 
 func (config Config) Validate() error {
-	broker, err := url.Parse(strings.TrimSpace(config.MQTT.BrokerURL))
-	if err != nil || broker.Scheme != "tls" || broker.Host == "" || broker.User != nil || broker.RawQuery != "" || broker.Fragment != "" || (broker.Path != "" && broker.Path != "/") {
-		return errors.New("MQTT broker URL must be a tls:// origin")
+	return config.validate(true)
+}
+
+func (config Config) validate(requireMQTT bool) error {
+	if requireMQTT {
+		broker, err := url.Parse(strings.TrimSpace(config.MQTT.BrokerURL))
+		if err != nil || broker.Scheme != "tls" || broker.Host == "" || broker.User != nil || broker.RawQuery != "" || broker.Fragment != "" || (broker.Path != "" && broker.Path != "/") {
+			return errors.New("MQTT broker URL must be a tls:// origin")
+		}
+		for name, value := range map[string]string{
+			"MQTT client id":        config.MQTT.ClientID,
+			"MQTT CA file":          config.MQTT.CAFile,
+			"MQTT certificate file": config.MQTT.CertFile,
+			"MQTT key file":         config.MQTT.KeyFile,
+			"MQTT server name":      config.MQTT.ServerName,
+		} {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("%s is required", name)
+			}
+		}
 	}
 	if err := validateHTTPSOrigin(config.TelemetryRuntime.BaseURL); err != nil {
 		return fmt.Errorf("telemetry runtime base URL: %w", err)
 	}
 	for name, value := range map[string]string{
-		"MQTT client id":                config.MQTT.ClientID,
-		"MQTT CA file":                  config.MQTT.CAFile,
-		"MQTT certificate file":         config.MQTT.CertFile,
-		"MQTT key file":                 config.MQTT.KeyFile,
-		"MQTT server name":              config.MQTT.ServerName,
 		"telemetry runtime CA file":     config.TelemetryRuntime.CAFile,
 		"telemetry runtime certificate": config.TelemetryRuntime.CertFile,
 		"telemetry runtime key file":    config.TelemetryRuntime.KeyFile,
@@ -91,6 +105,9 @@ func (config Config) Validate() error {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s is required", name)
 		}
+	}
+	if err := mqttclient.ValidateShareGroup(config.MQTT.SharedSubscriptionGroup); err != nil {
+		return errors.New("MQTT shared subscription group must match ^[A-Za-z0-9_-]{1,64}$")
 	}
 	if config.MQTT.SharedSubscriptionGroup != "" && !shareGroupPattern.MatchString(config.MQTT.SharedSubscriptionGroup) {
 		return errors.New("MQTT shared subscription group must match ^[A-Za-z0-9_-]{1,64}$")
@@ -119,15 +136,7 @@ func (config Config) Validate() error {
 // SubscriptionTopicFilters returns the MQTT v5 subscription filters, adding the
 // $share/<group>/ prefix when SharedSubscriptionGroup is configured.
 func (config Config) SubscriptionTopicFilters() []string {
-	if config.MQTT.SharedSubscriptionGroup == "" {
-		return append([]string(nil), UplinkTopicFilters...)
-	}
-	filters := make([]string, len(UplinkTopicFilters))
-	prefix := "$share/" + config.MQTT.SharedSubscriptionGroup + "/"
-	for index, topic := range UplinkTopicFilters {
-		filters[index] = prefix + topic
-	}
-	return filters
+	return mqttclient.SharedTopicFilters(config.MQTT.SharedSubscriptionGroup, UplinkTopicFilters)
 }
 
 func (config Config) effectiveOverflowMaxMessages() int {

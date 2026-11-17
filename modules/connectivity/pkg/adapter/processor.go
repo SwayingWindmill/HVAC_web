@@ -144,10 +144,43 @@ func WithProcessorPacketHook(hook func(direction, channel, gatewayID, topic, tra
 	}
 }
 
+// WithCodecRegistry overrides the default UplinkCodec registry (JSON v2.0 + Compact JSON v1.0).
+func WithCodecRegistry(registry *CodecRegistry) ProcessorOption {
+	return func(processor *Processor) {
+		processor.codecs = registry
+	}
+}
+
+// WithSessionTracker overrides the default per-gateway LWT/session transition fence tracker.
+func WithSessionTracker(tracker *GatewaySessionTracker) ProcessorOption {
+	return func(processor *Processor) {
+		processor.sessionTracker = tracker
+	}
+}
+
+// WithGatewayRateLimit configures a per-gateway token-bucket rate limiter enforced
+// before full payload decoding.
+func WithGatewayRateLimit(messagesPerSec float64, burst int) ProcessorOption {
+	return func(processor *Processor) {
+		processor.rateLimiter = NewGatewayRateLimiter(messagesPerSec, burst)
+	}
+}
+
+// WithProcessorMetrics attaches an observability.Registry used for rate-limit metrics.
+func WithProcessorMetrics(metrics *observability.Registry) ProcessorOption {
+	return func(processor *Processor) {
+		processor.metrics = metrics
+	}
+}
+
 type Processor struct {
 	identities         IdentityResolver
 	runtime            RuntimeClient
 	tracer             *observability.Tracer
+	metrics            *observability.Registry
+	codecs             *CodecRegistry
+	sessionTracker     *GatewaySessionTracker
+	rateLimiter        *GatewayRateLimiter
 	now                func() time.Time
 	onGatewayConnected func(context.Context, string)
 	onGatewayPresence  func(string, bool)
@@ -183,13 +216,37 @@ func NewProcessor(identities IdentityResolver, runtime RuntimeClient, options ..
 	if identities == nil || runtime == nil {
 		return nil, errors.New("MQTT uplink processor dependencies are invalid")
 	}
-	processor := &Processor{identities: identities, runtime: runtime, now: time.Now}
+	processor := &Processor{
+		identities: identities,
+		runtime:    runtime,
+		now:        time.Now,
+	}
 	for _, option := range options {
 		if option != nil {
 			option(processor)
 		}
 	}
+	if processor.codecs == nil {
+		processor.codecs = DefaultCodecRegistry()
+	}
+	if processor.sessionTracker == nil {
+		processor.sessionTracker = NewGatewaySessionTracker()
+	}
 	return processor, nil
+}
+
+func (processor *Processor) codecRegistry() *CodecRegistry {
+	if processor != nil && processor.codecs != nil {
+		return processor.codecs
+	}
+	return DefaultCodecRegistry()
+}
+
+func (processor *Processor) sessions() *GatewaySessionTracker {
+	if processor != nil {
+		return processor.sessionTracker
+	}
+	return nil
 }
 
 // Process handles one Gateway message. A message Connectivity will never accept is
@@ -215,15 +272,29 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 		return nil, nil
 	}
 	first := messages[0]
-	quarantine := UplinkQuarantine{GatewayID: TopicGatewayID(first.Topic), Topic: first.Topic, Payload: first.Payload, ReceivedAt: processor.now().UTC()}
-	messageTopic, err := ParseMessageTopic(first.Topic)
-	if err != nil {
+	now := processor.now().UTC()
+	quarantine := UplinkQuarantine{GatewayID: TopicGatewayID(first.Topic), Topic: first.Topic, Payload: first.Payload, ReceivedAt: now}
+	messageTopic, topicErr := ParseMessageTopic(first.Topic)
+
+	// Enforce per-gateway rate limits before full payload decoding or DB resolution
+	// once a valid gatewayId segment has been extracted from the MQTT topic.
+	if processor.rateLimiter != nil && processor.rateLimiter.Enabled() && quarantine.GatewayID != "invalid" {
+		messageType := "unknown"
+		if topicErr == nil {
+			messageType = messageTopic.MessageType
+		}
+		if !processor.rateLimiter.Allow(quarantine.GatewayID, now) {
+			return processor.handleRateLimited(ctx, quarantine, messageType, now)
+		}
+	}
+
+	if topicErr != nil {
 		if quarantine.GatewayID != "invalid" {
 			if gw, gwErr := processor.identities.ResolveGateway(ctx, quarantine.GatewayID); gwErr == nil || gw.TenantID != "" {
 				quarantine.TenantID = gw.TenantID
 			}
 		}
-		return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
+		return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, topicErr)
 	}
 	gateway, err := processor.identities.ResolveGateway(ctx, messageTopic.GatewayID)
 	switch {
@@ -238,11 +309,11 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 	quarantine.TenantID = gateway.TenantID
 	switch messageTopic.MessageType {
 	case MessageTypeTelemetry:
-		envelope, err := DecodeTelemetryEnvelope(first.Payload, gateway.ID)
+		decoded, err := processor.codecRegistry().DecodeTelemetry(first.Payload, gateway.ID)
 		if err != nil {
 			return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
 		}
-		outcomes, err := processor.processTelemetryBatch(ctx, gateway, quarantine, envelope, messages)
+		outcomes, err := processor.processTelemetryBatch(ctx, gateway, quarantine, decoded, messages)
 		if err != nil {
 			return nil, err
 		}
@@ -250,8 +321,18 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 			processor.onGatewayPresence(gateway.ID, true)
 		}
 		return outcomes, nil
+	case MessageTypeStatus:
+		status, err := processor.codecRegistry().DecodeStatus(first.Payload, gateway.ID)
+		if err != nil {
+			return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
+		}
+		result, err := processor.processStatus(ctx, gateway, first.Topic, first.Payload, status)
+		if err != nil {
+			return nil, err
+		}
+		return []ProcessingOutcome{{Result: result}}, nil
 	default:
-		envelope, err := DecodeEventEnvelope(first.Payload, gateway.ID)
+		envelope, err := processor.codecRegistry().DecodeEvent(first.Payload, gateway.ID)
 		if err != nil {
 			return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
 		}
@@ -261,6 +342,28 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 		}
 		return []ProcessingOutcome{{Result: result}}, nil
 	}
+}
+
+func (processor *Processor) handleRateLimited(ctx context.Context, quarantine UplinkQuarantine, messageType string, now time.Time) ([]ProcessingOutcome, error) {
+	msgTypeLabel := normalizeRateLimitMessageType(messageType)
+	if processor.metrics != nil {
+		_ = processor.metrics.AddCounter(
+			"hvac_mqtt_gateway_rate_limited_total",
+			"Rate-limited MQTT uplink messages dropped per gateway.",
+			map[string]string{"message_type": msgTypeLabel},
+			1,
+		)
+	}
+	rateErr := fmt.Errorf("MQTT gateway %s rate limit exceeded", quarantine.GatewayID)
+	if !processor.rateLimiter.ShouldQuarantine(quarantine.GatewayID, msgTypeLabel, now) {
+		return []ProcessingOutcome{{Err: permanentMessage(rateErr)}}, nil
+	}
+	if quarantine.GatewayID != "invalid" {
+		if gw, gwErr := processor.identities.ResolveGateway(ctx, quarantine.GatewayID); gwErr == nil || gw.TenantID != "" {
+			quarantine.TenantID = gw.TenantID
+		}
+	}
+	return processor.quarantinedOutcome(ctx, quarantine, QuarantineReasonRateLimited, rateErr)
 }
 
 func (processor *Processor) quarantinedOutcome(ctx context.Context, quarantine UplinkQuarantine, reasonCode string, cause error) ([]ProcessingOutcome, error) {
@@ -306,13 +409,15 @@ type telemetryMessageBounds struct {
 	end       int
 }
 
-func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway Gateway, firstQuarantine UplinkQuarantine, firstEnvelope TelemetryEnvelope, messages []UplinkMessage) ([]ProcessingOutcome, error) {
+func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway Gateway, firstQuarantine UplinkQuarantine, firstDecoded DecodedTelemetry, messages []UplinkMessage) ([]ProcessingOutcome, error) {
+	firstEnvelope := firstDecoded.Envelope
 	ctx, rootTraceID, span := processor.ensureUplinkTrace(ctx, "mqtt.uplink.telemetry", gateway.ID, firstEnvelope.MessageID, firstEnvelope.TraceID)
 	if span != nil {
 		defer span.End()
 	}
 	firstEnvelope.TraceID = rootTraceID
-	observations, bounds, err := coalesceTelemetryBatch(gateway, firstEnvelope, messages)
+	firstDecoded.Envelope = firstEnvelope
+	observations, bounds, decodedFrames, err := processor.coalesceTelemetryBatch(gateway, firstDecoded, messages)
 	if err != nil {
 		if span != nil {
 			span.SetStatus("error", "telemetry envelope invalid")
@@ -349,6 +454,11 @@ func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway G
 	if span != nil {
 		span.SetStatus("ok", "")
 	}
+	if sessions := processor.sessions(); sessions != nil {
+		for _, frame := range decodedFrames {
+			sessions.ObserveTelemetry(gateway.ID, frame.SessionID, frame.Envelope.Timestamp)
+		}
+	}
 	for index, bound := range bounds {
 		processor.recordPacket("UPLINK", "TELEMETRY", gateway.ID, messages[index].Topic, bound.traceID, messages[index].Payload)
 	}
@@ -357,11 +467,12 @@ func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway G
 
 const estimatedObservationEnvelopeOverheadBytes = 768
 
-func coalesceTelemetryBatch(gateway Gateway, firstEnvelope TelemetryEnvelope, messages []UplinkMessage) ([]Observation, []telemetryMessageBounds, error) {
+func (processor *Processor) coalesceTelemetryBatch(gateway Gateway, firstDecoded DecodedTelemetry, messages []UplinkMessage) ([]Observation, []telemetryMessageBounds, []DecodedTelemetry, error) {
+	firstEnvelope := firstDecoded.Envelope
 	rootTraceID := normalizeTraceID(firstEnvelope.TraceID)
 	firstObs, err := buildEnvelopeObservations(gateway.ID, firstEnvelope, rootTraceID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	observations := firstObs
 	approxBytes := len(messages[0].Payload) + len(firstObs)*estimatedObservationEnvelopeOverheadBytes
@@ -372,6 +483,8 @@ func coalesceTelemetryBatch(gateway Gateway, firstEnvelope TelemetryEnvelope, me
 		start:     0,
 		end:       len(observations),
 	}}
+	decodedFrames := []DecodedTelemetry{firstDecoded}
+	codecs := processor.codecRegistry()
 	for index := 1; index < len(messages); index++ {
 		if len(observations) >= MaxObservationBatchSize || approxBytes >= MaxObservationBatchBytes {
 			break
@@ -380,10 +493,16 @@ func coalesceTelemetryBatch(gateway Gateway, firstEnvelope TelemetryEnvelope, me
 		if err != nil || topic.MessageType != MessageTypeTelemetry || topic.GatewayID != gateway.ID {
 			break
 		}
-		envelope, err := DecodeTelemetryEnvelope(messages[index].Payload, gateway.ID)
+		if processor.rateLimiter != nil && processor.rateLimiter.Enabled() {
+			if !processor.rateLimiter.Allow(gateway.ID, processor.now().UTC()) {
+				break
+			}
+		}
+		decoded, err := codecs.DecodeTelemetry(messages[index].Payload, gateway.ID)
 		if err != nil {
 			break
 		}
+		envelope := decoded.Envelope
 		msgCount := envelopePointCount(envelope)
 		msgApproxBytes := len(messages[index].Payload) + msgCount*estimatedObservationEnvelopeOverheadBytes
 		if len(observations)+msgCount > MaxObservationBatchSize || approxBytes+msgApproxBytes > MaxObservationBatchBytes {
@@ -407,8 +526,9 @@ func coalesceTelemetryBatch(gateway Gateway, firstEnvelope TelemetryEnvelope, me
 			start:     start,
 			end:       len(observations),
 		})
+		decodedFrames = append(decodedFrames, decoded)
 	}
-	return observations, bounds, nil
+	return observations, bounds, decodedFrames, nil
 }
 
 func envelopePointCount(envelope TelemetryEnvelope) int {
@@ -585,13 +705,57 @@ func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, t
 		span.SetStatus("ok", "")
 	}
 	processor.recordPacket("UPLINK", "EVENT", gateway.ID, topic, eventTraceID, rawPayload)
-	if processor.onGatewayPresence != nil {
-		processor.onGatewayPresence(gateway.ID, !isGatewayDisconnectEvent(event.EventType, event.SourceType))
-	}
-	if processor.onGatewayConnected != nil && isGatewayConnectEvent(event.EventType, event.SourceType) {
-		processor.onGatewayConnected(ctx, gateway.ID)
+	isDisconnect := isGatewayDisconnectEvent(event.EventType, event.SourceType)
+	isConnect := isGatewayConnectEvent(event.EventType, event.SourceType)
+	if isDisconnect || isConnect {
+		accepted := true
+		if sessions := processor.sessions(); sessions != nil {
+			accepted = sessions.ApplyTransition(SessionTransition{
+				GatewayID:    gateway.ID,
+				SessionID:    extractEventSessionID(event.Data),
+				Sequence:     int64(envelope.Sequence),
+				HasSequence:  true,
+				EventTime:    event.EventTime,
+				HasEventTime: true,
+				Online:       isConnect,
+			})
+		}
+		if accepted {
+			if processor.onGatewayPresence != nil {
+				processor.onGatewayPresence(gateway.ID, isConnect)
+			}
+			if isConnect && processor.onGatewayConnected != nil {
+				processor.onGatewayConnected(ctx, gateway.ID)
+			}
+		}
+	} else if processor.onGatewayPresence != nil {
+		processor.onGatewayPresence(gateway.ID, true)
 	}
 	return ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeEvent, TraceID: eventTraceID}, nil
+}
+
+func (processor *Processor) processStatus(ctx context.Context, gateway Gateway, topic string, rawPayload []byte, status StatusEnvelope) (ProcessingResult, error) {
+	_, statusTraceID, span := processor.ensureUplinkTrace(ctx, "mqtt.uplink.status", gateway.ID, status.MessageID, status.TraceID)
+	if span != nil {
+		defer span.End()
+	}
+	accepted := true
+	if sessions := processor.sessions(); sessions != nil {
+		accepted = sessions.ApplyStatus(status)
+	}
+	if span != nil {
+		span.SetStatus("ok", "")
+	}
+	processor.recordPacket("UPLINK", "STATUS", gateway.ID, topic, statusTraceID, rawPayload)
+	if accepted {
+		if processor.onGatewayPresence != nil {
+			processor.onGatewayPresence(gateway.ID, status.Online)
+		}
+		if status.Online && processor.onGatewayConnected != nil {
+			processor.onGatewayConnected(ctx, gateway.ID)
+		}
+	}
+	return ProcessingResult{MessageID: status.MessageID, MessageType: MessageTypeStatus, TraceID: statusTraceID}, nil
 }
 
 func isGatewayDisconnectEvent(rawEventType, rawSourceType string) bool {
