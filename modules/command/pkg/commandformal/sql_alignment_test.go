@@ -128,12 +128,32 @@ func TestConnectivityReplyRecoveryQueryMatchesModel(t *testing.T) {
 		}
 	}
 
+	for _, snippet := range []string{
+		"isRetryableSerializableError(",
+		"runSerializableTenantOp(",
+		`"40001"`,
+		`"40P01"`,
+	} {
+		if !strings.Contains(storeSrc, snippet) {
+			t.Fatalf("connectivity/store.go missing serializable retry guard %q", snippet)
+		}
+	}
+
 	connectorSrc := readRepoSource(t, filepath.Join("..", "mqttconnector", "connector.go"))
 	if !strings.Contains(connectorSrc, "replyRecoveryBatchLimit      = 50") {
 		t.Fatalf("mqttconnector/connector.go must define replyRecoveryBatchLimit = 50")
 	}
 	if !strings.Contains(connectorSrc, "DrainTenantReplies(recoveryContext, tenantID, replyRecoveryBatchLimit)") {
 		t.Fatalf("mqttconnector/connector.go recoverReplies must drain all batches via DrainTenantReplies with batch limit 50")
+	}
+	for _, snippet := range []string{
+		"EnableManualAcknowledgment: true",
+		"checkSubackReasons(",
+		"maxCommandReplyPayloadBytes",
+	} {
+		if !strings.Contains(connectorSrc, snippet) {
+			t.Fatalf("mqttconnector/connector.go missing custody guard %q", snippet)
+		}
 	}
 	completeStart := strings.Index(connectorSrc, "func (connector *Connector) completeRecoveredReply(")
 	completeEnd := strings.Index(connectorSrc, "func (connector *Connector) completeOutcomeUnknown(")

@@ -11,14 +11,57 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 )
 
 var (
 	ErrNotFound            = errors.New("connectivity record not found")
-	ErrCorrelationMismatch = errors.New("command correlation does not match durable state")
+	ErrCorrelationMismatch = commandmodel.ErrCommandCorrelationMismatch
 )
+
+var serializableRetryBackoffs = []time.Duration{
+	5 * time.Millisecond,
+	15 * time.Millisecond,
+	35 * time.Millisecond,
+}
+
+func isRetryableSerializableError(err error) bool {
+	if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrCorrelationMismatch) {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && (pgErr.Code == "40001" || pgErr.Code == "40P01")
+}
+
+func runSerializableTenantOp[T any](ctx context.Context, op func() (T, error)) (T, error) {
+	var zero T
+	const maxAttempts = 4
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return zero, ctxErr
+		}
+		res, err := op()
+		if err == nil {
+			return res, nil
+		}
+		if !isRetryableSerializableError(err) || attempt == maxAttempts-1 {
+			return zero, err
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return zero, ctxErr
+		}
+		timer := time.NewTimer(serializableRetryBackoffs[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return zero, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return zero, errors.New("serializable tenant operation retry limit exceeded")
+}
 
 // Store is Connectivity's database access for every Tenant. Each call works inside
 // the Tenant it is given, resolved from the Registry gateway directory.
@@ -55,13 +98,14 @@ func (store *Store) PrepareCommandCorrelation(ctx context.Context, correlation c
 	if correlation.State != commandmodel.CorrelationPrepared {
 		return commandmodel.CommandCorrelation{}, ErrCorrelationMismatch
 	}
-	tenantID := correlation.Envelope.TenantID
-	tx, err := store.beginTenant(ctx, tenantID)
-	if err != nil {
-		return commandmodel.CommandCorrelation{}, err
-	}
-	defer tx.Rollback(ctx)
-	_, err = tx.Exec(ctx, `
+	return runSerializableTenantOp(ctx, func() (commandmodel.CommandCorrelation, error) {
+		tenantID := correlation.Envelope.TenantID
+		tx, err := store.beginTenant(ctx, tenantID)
+		if err != nil {
+			return commandmodel.CommandCorrelation{}, err
+		}
+		defer tx.Rollback(ctx)
+		_, err = tx.Exec(ctx, `
 INSERT INTO connectivity.command_reply_correlations (
   attempt_id, execution_fence, command_id, tenant_id, site_id, gateway_id,
   device_id, point_id, capability, external_device_id, payload_hash, lease_owner, lease_until,
@@ -74,50 +118,60 @@ INSERT INTO connectivity.command_reply_correlations (
 )
 ON CONFLICT (attempt_id, execution_fence) DO NOTHING
 `, correlation.Envelope.AttemptID, correlation.Envelope.ExecutionFence, correlation.Envelope.CommandID,
-		tenantID, correlation.Envelope.SiteID, correlation.GatewayID,
-		correlation.Envelope.DeviceID, correlation.Envelope.PointID, string(correlation.Envelope.Capability), correlation.ExternalDeviceID,
-		correlation.Envelope.PayloadHash, correlation.Envelope.LeaseOwner, correlation.Envelope.LeaseUntil.UTC(),
-		correlation.MappingRevision, correlation.BindingRevision,
-		correlation.ProviderEndpoint, correlation.ProviderMethod, correlation.RequestSHA256, correlation.PreparedAt.UTC())
-	if err != nil {
-		return commandmodel.CommandCorrelation{}, fmt.Errorf("prepare durable command correlation: %w", err)
-	}
-	existing, err := loadCorrelation(ctx, tx, tenantID, correlation.Envelope.AttemptID, correlation.Envelope.ExecutionFence)
-	if err != nil {
-		return commandmodel.CommandCorrelation{}, err
-	}
-	if !sameCorrelationIdentity(existing, correlation) {
-		return commandmodel.CommandCorrelation{}, ErrCorrelationMismatch
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return commandmodel.CommandCorrelation{}, err
-	}
-	return existing, nil
+			tenantID, correlation.Envelope.SiteID, correlation.GatewayID,
+			correlation.Envelope.DeviceID, correlation.Envelope.PointID, string(correlation.Envelope.Capability), correlation.ExternalDeviceID,
+			correlation.Envelope.PayloadHash, correlation.Envelope.LeaseOwner, correlation.Envelope.LeaseUntil.UTC(),
+			correlation.MappingRevision, correlation.BindingRevision,
+			correlation.ProviderEndpoint, correlation.ProviderMethod, correlation.RequestSHA256, correlation.PreparedAt.UTC())
+		if err != nil {
+			return commandmodel.CommandCorrelation{}, fmt.Errorf("prepare durable command correlation: %w", err)
+		}
+		existing, err := loadCorrelation(ctx, tx, tenantID, correlation.Envelope.AttemptID, correlation.Envelope.ExecutionFence)
+		if err != nil {
+			return commandmodel.CommandCorrelation{}, err
+		}
+		if !sameCorrelationIdentity(existing, correlation) {
+			return commandmodel.CommandCorrelation{}, ErrCorrelationMismatch
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return commandmodel.CommandCorrelation{}, err
+		}
+		return existing, nil
+	})
 }
 
 // ArmCommandCorrelation records the commit point just before the MQTT publish: from
 // here on the attempt may have reached the Gateway.
 func (store *Store) ArmCommandCorrelation(ctx context.Context, tenantID, attemptID string, executionFence uint64, armedAt time.Time) error {
-	tx, err := store.beginTenant(ctx, tenantID)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `
+	_, err := runSerializableTenantOp(ctx, func() (struct{}, error) {
+		tx, err := store.beginTenant(ctx, tenantID)
+		if err != nil {
+			return struct{}{}, err
+		}
+		defer tx.Rollback(ctx)
+		tag, err := tx.Exec(ctx, `
 UPDATE connectivity.command_reply_correlations
 SET state = 'MAY_COMMIT', commit_armed_at = $4, updated_at = $4
 WHERE tenant_id = $1::uuid AND attempt_id = $2::uuid AND execution_fence = $3 AND state = 'PREPARED'
 `, tenantID, attemptID, executionFence, armedAt.UTC())
-	if err != nil {
-		return fmt.Errorf("arm durable command correlation: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		correlation, loadErr := loadCorrelation(ctx, tx, tenantID, attemptID, executionFence)
-		if loadErr != nil || correlation.State == commandmodel.CorrelationPrepared {
-			return ErrCorrelationMismatch
+		if err != nil {
+			return struct{}{}, fmt.Errorf("arm durable command correlation: %w", err)
 		}
-	}
-	return tx.Commit(ctx)
+		if tag.RowsAffected() == 0 {
+			correlation, loadErr := loadCorrelation(ctx, tx, tenantID, attemptID, executionFence)
+			if loadErr != nil {
+				if errors.Is(loadErr, ErrNotFound) {
+					return struct{}{}, fmt.Errorf("%w: %w", ErrCorrelationMismatch, loadErr)
+				}
+				return struct{}{}, loadErr
+			}
+			if correlation.State == commandmodel.CorrelationPrepared {
+				return struct{}{}, ErrCorrelationMismatch
+			}
+		}
+		return struct{}{}, tx.Commit(ctx)
+	})
+	return err
 }
 
 func (store *Store) RecordCommandReply(ctx context.Context, tenantID, gatewayID, commandID string, executionFence uint64, replySHA256, replyStatus string, replyEventTime time.Time, replyReasonCode string, edgeExecution *commandmodel.EdgeExecutionEvidence, repliedAt time.Time) (commandmodel.CommandCorrelation, error) {
@@ -132,12 +186,13 @@ func (store *Store) RecordCommandReply(ctx context.Context, tenantID, gatewayID,
 			return commandmodel.CommandCorrelation{}, ErrCorrelationMismatch
 		}
 	}
-	tx, err := store.beginTenant(ctx, tenantID)
-	if err != nil {
-		return commandmodel.CommandCorrelation{}, err
-	}
-	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `
+	return runSerializableTenantOp(ctx, func() (commandmodel.CommandCorrelation, error) {
+		tx, err := store.beginTenant(ctx, tenantID)
+		if err != nil {
+			return commandmodel.CommandCorrelation{}, err
+		}
+		defer tx.Rollback(ctx)
+		tag, err := tx.Exec(ctx, `
 UPDATE connectivity.command_reply_correlations
 SET state = 'REPLIED', reply_sha256 = $5, reply_status = $6,
     reply_event_time = $7,
@@ -146,26 +201,27 @@ SET state = 'REPLIED', reply_sha256 = $5, reply_status = $6,
 WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid
   AND command_id = $3::uuid AND execution_fence = $4 AND state = 'MAY_COMMIT'
 `, tenantID, gatewayID, commandID, executionFence, replySHA256, strings.TrimSpace(replyStatus), nullableTime(replyEventTime), strings.TrimSpace(replyReasonCode), nullableJSON(edgeExecutionJSON), repliedAt.UTC())
-	if err != nil {
-		return commandmodel.CommandCorrelation{}, fmt.Errorf("record durable command reply: %w", err)
-	}
-	correlation, err := scanCorrelation(tx.QueryRow(ctx, correlationSelect+`
+		if err != nil {
+			return commandmodel.CommandCorrelation{}, fmt.Errorf("record durable command reply: %w", err)
+		}
+		correlation, err := scanCorrelation(tx.QueryRow(ctx, correlationSelect+`
 WHERE tenant_id = $1::uuid AND gateway_id = $2::uuid AND command_id = $3::uuid AND execution_fence = $4
 `, tenantID, gatewayID, commandID, executionFence))
-	if err != nil {
-		return commandmodel.CommandCorrelation{}, err
-	}
-	if tag.RowsAffected() == 0 && correlation.State != commandmodel.CorrelationReplied && correlation.State != commandmodel.CorrelationResolved {
-		return commandmodel.CommandCorrelation{}, ErrCorrelationMismatch
-	}
-	if correlation.ReplySHA256 != replySHA256 || correlation.ReplyStatus != strings.TrimSpace(replyStatus) ||
-		!sameEdgeExecution(correlation.EdgeExecution, edgeExecution) {
-		return commandmodel.CommandCorrelation{}, ErrCorrelationMismatch
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return commandmodel.CommandCorrelation{}, err
-	}
-	return correlation, nil
+		if err != nil {
+			return commandmodel.CommandCorrelation{}, err
+		}
+		if tag.RowsAffected() == 0 && correlation.State != commandmodel.CorrelationReplied && correlation.State != commandmodel.CorrelationResolved {
+			return commandmodel.CommandCorrelation{}, ErrCorrelationMismatch
+		}
+		if correlation.ReplySHA256 != replySHA256 || correlation.ReplyStatus != strings.TrimSpace(replyStatus) ||
+			!sameEdgeExecution(correlation.EdgeExecution, edgeExecution) {
+			return commandmodel.CommandCorrelation{}, ErrCorrelationMismatch
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return commandmodel.CommandCorrelation{}, err
+		}
+		return correlation, nil
+	})
 }
 
 // RecoverCommandReplies returns a Tenant's replies that arrived but were not yet
@@ -174,52 +230,66 @@ func (store *Store) RecoverCommandReplies(ctx context.Context, tenantID string, 
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	tx, err := store.beginTenant(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, correlationSelect+`
+	return runSerializableTenantOp(ctx, func() ([]commandmodel.CommandCorrelation, error) {
+		tx, err := store.beginTenant(ctx, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback(ctx)
+		rows, err := tx.Query(ctx, correlationSelect+`
 WHERE tenant_id = $1::uuid AND state = 'REPLIED'
 ORDER BY replied_at, attempt_id
 LIMIT $2
 `, tenantID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("load recoverable command replies: %w", err)
-	}
-	defer rows.Close()
-	var out []commandmodel.CommandCorrelation
-	for rows.Next() {
-		correlation, scanErr := scanCorrelation(rows)
-		if scanErr != nil {
-			return nil, scanErr
+		if err != nil {
+			return nil, fmt.Errorf("load recoverable command replies: %w", err)
 		}
-		out = append(out, correlation)
-	}
-	return out, rows.Err()
+		defer rows.Close()
+		var out []commandmodel.CommandCorrelation
+		for rows.Next() {
+			correlation, scanErr := scanCorrelation(rows)
+			if scanErr != nil {
+				return nil, scanErr
+			}
+			out = append(out, correlation)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return out, nil
+	})
 }
 
 func (store *Store) MarkCommandCorrelationResolved(ctx context.Context, tenantID, attemptID string, executionFence uint64, resolvedAt time.Time) error {
-	tx, err := store.beginTenant(ctx, tenantID)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `
+	_, err := runSerializableTenantOp(ctx, func() (struct{}, error) {
+		tx, err := store.beginTenant(ctx, tenantID)
+		if err != nil {
+			return struct{}{}, err
+		}
+		defer tx.Rollback(ctx)
+		tag, err := tx.Exec(ctx, `
 UPDATE connectivity.command_reply_correlations
 SET state = 'RESOLVED', resolved_at = $4, updated_at = $4
 WHERE tenant_id = $1::uuid AND attempt_id = $2::uuid AND execution_fence = $3 AND state = 'REPLIED'
 `, tenantID, attemptID, executionFence, resolvedAt.UTC())
-	if err != nil {
-		return fmt.Errorf("resolve durable command correlation: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		correlation, loadErr := loadCorrelation(ctx, tx, tenantID, attemptID, executionFence)
-		if loadErr != nil || correlation.State != commandmodel.CorrelationResolved {
-			return ErrCorrelationMismatch
+		if err != nil {
+			return struct{}{}, fmt.Errorf("resolve durable command correlation: %w", err)
 		}
-	}
-	return tx.Commit(ctx)
+		if tag.RowsAffected() == 0 {
+			correlation, loadErr := loadCorrelation(ctx, tx, tenantID, attemptID, executionFence)
+			if loadErr != nil {
+				if errors.Is(loadErr, ErrNotFound) {
+					return struct{}{}, fmt.Errorf("%w: %w", ErrCorrelationMismatch, loadErr)
+				}
+				return struct{}{}, loadErr
+			}
+			if correlation.State != commandmodel.CorrelationResolved {
+				return struct{}{}, ErrCorrelationMismatch
+			}
+		}
+		return struct{}{}, tx.Commit(ctx)
+	})
+	return err
 }
 
 func (store *Store) beginTenant(ctx context.Context, tenantID string) (pgx.Tx, error) {
@@ -272,7 +342,7 @@ func scanCorrelation(row rowScanner) (commandmodel.CommandCorrelation, error) {
 		&state, &correlation.ReplySHA256, &correlation.ReplyStatus, &replyEventTime, &correlation.ReplyReasonCode, &edgeExecutionJSON, &repliedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return commandmodel.CommandCorrelation{}, ErrNotFound
+		return commandmodel.CommandCorrelation{}, fmt.Errorf("%w: %w", ErrNotFound, commandmodel.ErrCommandCorrelationNotFound)
 	}
 	if err != nil {
 		return commandmodel.CommandCorrelation{}, fmt.Errorf("scan command correlation: %w", err)

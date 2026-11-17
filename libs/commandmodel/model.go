@@ -717,6 +717,11 @@ const (
 	CorrelationResolved  CorrelationState = "RESOLVED"
 )
 
+var (
+	ErrCommandCorrelationNotFound = errors.New("command correlation record not found")
+	ErrCommandCorrelationMismatch = errors.New("command correlation does not match durable state")
+)
+
 type CommandCorrelation struct {
 	Envelope         DispatchEnvelope
 	GatewayID        string

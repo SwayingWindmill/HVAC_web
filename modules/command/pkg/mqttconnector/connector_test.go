@@ -3,16 +3,35 @@ package mqttconnector
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
@@ -847,4 +866,775 @@ func TestRecoverRepliesRecoversFromPanic(t *testing.T) {
 		t.Fatal("expected recoverMu to be unlocked after panic recovery")
 	}
 	connector.recoverMu.Unlock()
+}
+
+func TestSharedSubscriptionConfigAndReplyGatewayID(t *testing.T) {
+	const validGW = "01900000-0000-7000-8000-000000000101"
+
+	base := Config{
+		BrokerURL:      "tls://mqtt-broker:8883",
+		ClientID:       "connectivity-commands-pod-1",
+		CAFile:         "/tmp/ca.crt",
+		CertFile:       "/tmp/client.crt",
+		KeyFile:        "/tmp/client.key",
+		ServerName:     "mqtt-broker",
+		TransportState: &fakeTransportState{correlations: map[string]commandmodel.CommandCorrelation{}},
+		EvidenceStore:  fakeEvidenceStore{},
+		ReplyTimeout:   15 * time.Second,
+	}
+	if err := validateConfig(base); err != nil {
+		t.Fatalf("plain config invalid: %v", err)
+	}
+	if got := base.SubscriptionTopicFilter(); got != ReplyTopicFilter {
+		t.Fatalf("SubscriptionTopicFilter() = %q, want %q", got, ReplyTopicFilter)
+	}
+
+	shared := base
+	shared.SharedSubscriptionGroup = "command-dispatcher_1"
+	if err := validateConfig(shared); err != nil {
+		t.Fatalf("shared config invalid: %v", err)
+	}
+	wantFilter := "$share/command-dispatcher_1/" + ReplyTopicFilter
+	if got := shared.SubscriptionTopicFilter(); got != wantFilter {
+		t.Fatalf("shared SubscriptionTopicFilter() = %q, want %q", got, wantFilter)
+	}
+
+	for _, badGroup := range []string{"bad/group", "bad+group", " has-space", strings.Repeat("a", 65)} {
+		cfg := base
+		cfg.SharedSubscriptionGroup = badGroup
+		if err := validateConfig(cfg); err == nil {
+			t.Fatalf("expected invalid SharedSubscriptionGroup %q to fail validation", badGroup)
+		}
+	}
+
+	for _, validTopic := range []string{
+		"hvac/v1/" + validGW + "/up/reply",
+		"$share/command-dispatcher/hvac/v1/" + validGW + "/up/reply",
+	} {
+		got, ok := replyGatewayID(validTopic)
+		if !ok || got != validGW {
+			t.Fatalf("replyGatewayID(%q) = (%q, %v), want (%q, true)", validTopic, got, ok, validGW)
+		}
+	}
+
+	for _, invalidTopic := range []string{
+		"hvac/v1/" + validGW + "/up/telemetry",
+		"$share//hvac/v1/" + validGW + "/up/reply",
+		"$share/group/hvac/v1/not-a-uuid/up/reply",
+		"hvac/v1/ " + validGW + "/up/reply",
+	} {
+		if got, ok := replyGatewayID(invalidTopic); ok {
+			t.Fatalf("replyGatewayID(%q) = (%q, true), want false", invalidTopic, got)
+		}
+	}
+}
+
+type fakeCommandBroker struct {
+	listener    net.Listener
+	conns       chan *fakeBrokerConn
+	baseConfig  Config
+	connCounter atomic.Int32
+	onSubscribe func(connIndex int, sub *packets.Subscribe) []byte
+}
+
+type fakeBrokerConn struct {
+	conn          net.Conn
+	writeMu       sync.Mutex
+	subOnce       sync.Once
+	subscribed    chan struct{}
+	subscriptions []string
+	acks          chan uint16
+	disconnected  chan struct{}
+}
+
+func newFakeCommandBroker(t *testing.T, onSubscribe func(connIndex int, sub *packets.Subscribe) []byte) *fakeCommandBroker {
+	t.Helper()
+	cfg, serverTLS := writeCommandTestPKI(t)
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", serverTLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.BrokerURL = "tls://" + listener.Addr().String()
+	cfg.ClientID = "connectivity-commands-test"
+	broker := &fakeCommandBroker{
+		listener:    listener,
+		conns:       make(chan *fakeBrokerConn, 16),
+		baseConfig:  cfg,
+		onSubscribe: onSubscribe,
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go broker.accept()
+	return broker
+}
+
+func (broker *fakeCommandBroker) accept() {
+	for {
+		conn, err := broker.listener.Accept()
+		if err != nil {
+			return
+		}
+		idx := int(broker.connCounter.Add(1))
+		go broker.serve(conn, idx)
+	}
+}
+
+func (broker *fakeCommandBroker) serve(conn net.Conn, connIndex int) {
+	connect, err := packets.ReadPacket(conn)
+	if err != nil || connect.Type != packets.CONNECT {
+		_ = conn.Close()
+		return
+	}
+	client := &fakeBrokerConn{
+		conn:         conn,
+		subscribed:   make(chan struct{}),
+		acks:         make(chan uint16, 128),
+		disconnected: make(chan struct{}),
+	}
+	defer close(client.disconnected)
+	connack := packets.NewControlPacket(packets.CONNACK)
+	connack.Content.(*packets.Connack).SessionPresent = true
+	if err := client.write(connack); err != nil {
+		return
+	}
+	broker.conns <- client
+	for {
+		received, err := packets.ReadPacket(conn)
+		if err != nil {
+			return
+		}
+		switch received.Type {
+		case packets.SUBSCRIBE:
+			subscribe := received.Content.(*packets.Subscribe)
+			var reasons []byte
+			if broker.onSubscribe != nil {
+				reasons = broker.onSubscribe(connIndex, subscribe)
+			} else {
+				reasons = make([]byte, len(subscribe.Subscriptions))
+				for i := range reasons {
+					reasons[i] = 1
+				}
+			}
+			suback := packets.NewControlPacket(packets.SUBACK)
+			suback.Content.(*packets.Suback).PacketID = subscribe.PacketID
+			suback.Content.(*packets.Suback).Reasons = reasons
+			for _, sub := range subscribe.Subscriptions {
+				client.subscriptions = append(client.subscriptions, sub.Topic)
+			}
+			_ = client.write(suback)
+			client.subOnce.Do(func() { close(client.subscribed) })
+		case packets.PINGREQ:
+			_ = client.write(packets.NewControlPacket(packets.PINGRESP))
+		case packets.PUBACK:
+			packetID := received.Content.(*packets.Puback).PacketID
+			client.acks <- packetID
+		}
+	}
+}
+
+func (broker *fakeCommandBroker) awaitConnection(t *testing.T) *fakeBrokerConn {
+	t.Helper()
+	select {
+	case client := <-broker.conns:
+		select {
+		case <-client.subscribed:
+			return client
+		case <-time.After(3 * time.Second):
+			t.Fatal("command connector connected but never subscribed")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("command connector never connected to broker")
+	}
+	return nil
+}
+
+func (client *fakeBrokerConn) write(packet *packets.ControlPacket) error {
+	client.writeMu.Lock()
+	defer client.writeMu.Unlock()
+	_, err := packet.WriteTo(client.conn)
+	return err
+}
+
+func (client *fakeBrokerConn) deliver(t *testing.T, packetID uint16, topic string, payload []byte, redelivered bool) {
+	t.Helper()
+	pkt := packets.NewControlPacket(packets.PUBLISH)
+	pub := pkt.Content.(*packets.Publish)
+	pub.Topic = topic
+	pub.Payload = payload
+	pub.QoS = 1
+	pub.PacketID = packetID
+	pub.Duplicate = redelivered
+	if err := client.write(pkt); err != nil {
+		t.Fatalf("broker write publish packet %d: %v", packetID, err)
+	}
+}
+
+func (client *fakeBrokerConn) awaitAcks(t *testing.T, timeout time.Duration, packetIDs ...uint16) {
+	t.Helper()
+	pending := make(map[uint16]bool, len(packetIDs))
+	for _, id := range packetIDs {
+		pending[id] = true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for len(pending) > 0 {
+		select {
+		case id := <-client.acks:
+			delete(pending, id)
+		case <-timer.C:
+			t.Fatalf("broker timed out waiting for PUBACK for packets %v", pending)
+		}
+	}
+}
+
+func (client *fakeBrokerConn) ensureNoAck(t *testing.T, wait time.Duration) {
+	t.Helper()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case id := <-client.acks:
+		t.Fatalf("unexpected PUBACK received for packet %d", id)
+	case <-timer.C:
+	}
+}
+
+func (client *fakeBrokerConn) awaitDisconnect(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	select {
+	case <-client.disconnected:
+	case <-time.After(timeout):
+		t.Fatal("broker connection stayed open instead of disconnecting")
+	}
+}
+
+func writeCommandTestPKI(t *testing.T) (Config, *tls.Config) {
+	t.Helper()
+	dir := t.TempDir()
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test CA"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, _ := x509.ParseCertificate(caDER)
+	issue := func(serial int64, name string, usage x509.ExtKeyUsage) tls.Certificate {
+		key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		template := &x509.Certificate{
+			SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name}, DNSNames: []string{name},
+			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+			KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage},
+		}
+		der, err := x509.CreateCertificate(rand.Reader, template, caCert, &key.PublicKey, caKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+	}
+	writePEM := func(name, kind string, der []byte) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: kind, Bytes: der}), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	client := issue(2, "connectivity-test", x509.ExtKeyUsageClientAuth)
+	clientKey, _ := x509.MarshalECPrivateKey(client.PrivateKey.(*ecdsa.PrivateKey))
+	roots := x509.NewCertPool()
+	roots.AddCert(caCert)
+	return Config{
+			CAFile:     writePEM("ca.pem", "CERTIFICATE", caDER),
+			CertFile:   writePEM("client.pem", "CERTIFICATE", client.Certificate[0]),
+			KeyFile:    writePEM("client.key", "EC PRIVATE KEY", clientKey),
+			ServerName: "mqtt.local",
+		}, &tls.Config{
+			MinVersion:   tls.VersionTLS13,
+			Certificates: []tls.Certificate{issue(3, "mqtt.local", x509.ExtKeyUsageServerAuth)},
+			ClientCAs:    roots,
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+		}
+}
+
+type hookTransportState struct {
+	fakeTransportState
+	gatewayTenantCalls atomic.Int32
+	recordCalls        atomic.Int32
+	onGatewayTenant    func(ctx context.Context, gatewayID string) (string, error)
+	onRecordReply      func(ctx context.Context, call int32, tenantID, gatewayID, commandID string, executionFence uint64) (commandmodel.CommandCorrelation, error)
+}
+
+func (s *hookTransportState) GatewayTenant(ctx context.Context, gatewayID string) (string, error) {
+	s.gatewayTenantCalls.Add(1)
+	if s.onGatewayTenant != nil {
+		return s.onGatewayTenant(ctx, gatewayID)
+	}
+	return "tenant-1", nil
+}
+
+func (s *hookTransportState) RecordCommandReply(
+	ctx context.Context,
+	tenantID, gatewayID, commandID string,
+	executionFence uint64,
+	replySHA256, replyStatus string,
+	replyEventTime time.Time,
+	replyReasonCode string,
+	edgeExecution *commandmodel.EdgeExecutionEvidence,
+	repliedAt time.Time,
+) (commandmodel.CommandCorrelation, error) {
+	call := s.recordCalls.Add(1)
+	if s.onRecordReply != nil {
+		return s.onRecordReply(ctx, call, tenantID, gatewayID, commandID, executionFence)
+	}
+	return commandmodel.CommandCorrelation{
+		Envelope: commandmodel.DispatchEnvelope{
+			TenantID: tenantID, CommandID: commandID, AttemptID: "attempt-" + commandID, ExecutionFence: executionFence,
+		},
+		GatewayID:       gatewayID,
+		State:           commandmodel.CorrelationReplied,
+		ReplySHA256:     replySHA256,
+		ReplyStatus:     replyStatus,
+		ReplyEventTime:  replyEventTime,
+		ReplyReasonCode: replyReasonCode,
+		EdgeExecution:   edgeExecution,
+		RepliedAt:       repliedAt,
+	}, nil
+}
+
+type hookLateResultSink struct {
+	onResolve func(ctx context.Context, envelope commandmodel.DispatchEnvelope, result commandmodel.ConnectorResult) error
+}
+
+func (s hookLateResultSink) ResolveDispatch(ctx context.Context, envelope commandmodel.DispatchEnvelope, result commandmodel.ConnectorResult) error {
+	if s.onResolve != nil {
+		return s.onResolve(ctx, envelope, result)
+	}
+	return nil
+}
+
+func validTerminalReplyJSON(t *testing.T, commandID string, fence uint64, eventTimeMs int64) []byte {
+	t.Helper()
+	val := commandmodel.NumberScalar(24)
+	body, err := json.Marshal(commandReply{
+		SchemaVersion:  commandSchemaVersion,
+		MessageID:      "msg-" + commandID,
+		CommandID:      commandID,
+		EventTime:      eventTimeMs,
+		EdgeStatus:     "EXECUTED",
+		ExecutionFence: fence,
+		ExecutionEvidence: &commandmodel.EdgeExecutionEvidence{
+			Requested:          val,
+			Effective:          &val,
+			Applied:            &val,
+			WinnerControllerID: "cloud-command-intent",
+			Cycle:              1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func scrapeMetricsText(t *testing.T, reg *observability.Registry) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	reg.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	return rec.Body.String()
+}
+
+func TestConnectorTransientRecordReplyFailureDoesNotPubackAndClosesThenRecovers(t *testing.T) {
+	const gwID = "01900000-0000-7000-8000-000000000201"
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	metrics := observability.NewRegistry()
+	transport := &hookTransportState{
+		fakeTransportState: fakeTransportState{correlations: map[string]commandmodel.CommandCorrelation{}},
+		onRecordReply: func(_ context.Context, call int32, tenantID, gatewayID, commandID string, executionFence uint64) (commandmodel.CommandCorrelation, error) {
+			if call <= 3 {
+				return commandmodel.CommandCorrelation{}, errors.New("transient database timeout")
+			}
+			return commandmodel.CommandCorrelation{
+				Envelope: commandmodel.DispatchEnvelope{
+					TenantID: tenantID, CommandID: commandID, AttemptID: "att-1", ExecutionFence: executionFence,
+				},
+				GatewayID: gatewayID, State: commandmodel.CorrelationReplied, ReplyStatus: "EXECUTED", ReplyEventTime: now, RepliedAt: now,
+			}, nil
+		},
+	}
+
+	broker := newFakeCommandBroker(t, nil)
+	cfg := broker.baseConfig
+	cfg.TransportState = transport
+	cfg.EvidenceStore = fakeEvidenceStore{}
+	cfg.SharedSubscriptionGroup = "command-dispatcher"
+	cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg.Metrics = metrics
+	cfg.Now = func() time.Time { return now }
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	connector, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer shutdownCancel()
+		_ = connector.Disconnect(shutdownCtx)
+	})
+
+	conn1 := broker.awaitConnection(t)
+	if len(conn1.subscriptions) != 1 || conn1.subscriptions[0] != "$share/command-dispatcher/"+ReplyTopicFilter {
+		t.Fatalf("conn1 subscriptions=%v", conn1.subscriptions)
+	}
+	payload := validTerminalReplyJSON(t, "cmd-transient-1", 1, now.UnixMilli())
+	conn1.deliver(t, 1, "hvac/v1/"+gwID+"/up/reply", payload, false)
+	conn1.awaitDisconnect(t, 3*time.Second)
+	conn1.ensureNoAck(t, 50*time.Millisecond)
+
+	conn2 := broker.awaitConnection(t)
+	conn2.deliver(t, 2, "hvac/v1/"+gwID+"/up/reply", payload, true)
+	conn2.awaitAcks(t, 3*time.Second, 2)
+
+	body := scrapeMetricsText(t, metrics)
+	for _, want := range []string{
+		`hvac_mqtt_command_replies_total{outcome="transient_error"} 1`,
+		`hvac_mqtt_command_replies_total{outcome="persisted"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing metric %q in:\n%s", want, body)
+		}
+	}
+}
+
+func TestConnectorPermanentUnmatchedReplyPubacksWithoutClosingConnection(t *testing.T) {
+	const gwID = "01900000-0000-7000-8000-000000000202"
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	metrics := observability.NewRegistry()
+	transport := &hookTransportState{
+		fakeTransportState: fakeTransportState{correlations: map[string]commandmodel.CommandCorrelation{}},
+		onRecordReply: func(_ context.Context, call int32, _, _, _ string, _ uint64) (commandmodel.CommandCorrelation, error) {
+			if call == 1 {
+				return commandmodel.CommandCorrelation{}, fmt.Errorf("lookup failed: %w", commandmodel.ErrCommandCorrelationNotFound)
+			}
+			return commandmodel.CommandCorrelation{}, commandmodel.ErrCommandCorrelationMismatch
+		},
+	}
+
+	broker := newFakeCommandBroker(t, nil)
+	cfg := broker.baseConfig
+	cfg.TransportState = transport
+	cfg.EvidenceStore = fakeEvidenceStore{}
+	cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg.Metrics = metrics
+	cfg.Now = func() time.Time { return now }
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	connector, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer shutdownCancel()
+		_ = connector.Disconnect(shutdownCtx)
+	})
+
+	conn := broker.awaitConnection(t)
+	conn.deliver(t, 10, "hvac/v1/"+gwID+"/up/reply", validTerminalReplyJSON(t, "cmd-missing", 1, now.UnixMilli()), false)
+	conn.deliver(t, 11, "hvac/v1/"+gwID+"/up/reply", validTerminalReplyJSON(t, "cmd-mismatch", 2, now.UnixMilli()), false)
+	conn.awaitAcks(t, 3*time.Second, 10, 11)
+
+	select {
+	case <-conn.disconnected:
+		t.Fatal("permanent domain rejection must not close MQTT connection")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if calls := transport.recordCalls.Load(); calls != 2 {
+		t.Fatalf("RecordCommandReply calls=%d, want 2 (no transient retries on permanent errors)", calls)
+	}
+	body := scrapeMetricsText(t, metrics)
+	if !strings.Contains(body, `hvac_mqtt_command_replies_total{outcome="unmatched"} 2`) {
+		t.Fatalf("missing unmatched metric in:\n%s", body)
+	}
+}
+
+func TestConnectorOversizedTrailingAndNonReplyPacketsPubackWithoutDBOrWedge(t *testing.T) {
+	const gwID = "01900000-0000-7000-8000-000000000203"
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	metrics := observability.NewRegistry()
+	transport := &hookTransportState{
+		fakeTransportState: fakeTransportState{correlations: map[string]commandmodel.CommandCorrelation{}},
+	}
+
+	broker := newFakeCommandBroker(t, nil)
+	cfg := broker.baseConfig
+	cfg.TransportState = transport
+	cfg.EvidenceStore = fakeEvidenceStore{}
+	cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg.Metrics = metrics
+	cfg.Now = func() time.Time { return now }
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	connector, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer shutdownCancel()
+		_ = connector.Disconnect(shutdownCtx)
+	})
+
+	conn := broker.awaitConnection(t)
+	oversized := bytes.Repeat([]byte("x"), maxCommandReplyPayloadBytes+1)
+	valid := validTerminalReplyJSON(t, "cmd-trailing", 1, now.UnixMilli())
+	trailingJSON := append(append([]byte(nil), valid...), []byte(`{"extra":1}`)...)
+	writingProgress, _ := json.Marshal(commandReply{
+		SchemaVersion: commandSchemaVersion, MessageID: "msg-prog", CommandID: "cmd-prog",
+		EventTime: now.UnixMilli(), EdgeStatus: "WRITING", ExecutionFence: 1,
+	})
+	emptyCmdID, _ := json.Marshal(commandReply{
+		SchemaVersion: commandSchemaVersion, MessageID: "msg-empty", CommandID: "",
+		EventTime: now.UnixMilli(), EdgeStatus: "FAILED", ExecutionFence: 1,
+	})
+
+	conn.deliver(t, 20, "hvac/v1/"+gwID+"/up/reply", oversized, false)
+	conn.deliver(t, 21, "hvac/v1/"+gwID+"/up/reply", trailingJSON, false)
+	conn.deliver(t, 22, "hvac/v1/"+gwID+"/up/telemetry", []byte(`{"ignored":true}`), false)
+	conn.deliver(t, 23, "hvac/v1/"+gwID+"/up/reply", writingProgress, false)
+	conn.deliver(t, 24, "hvac/v1/"+gwID+"/up/reply", emptyCmdID, false)
+	conn.deliver(t, 25, "hvac/v1/"+gwID+"/up/reply", validTerminalReplyJSON(t, "cmd-after-bad", 5, now.UnixMilli()), false)
+
+	conn.awaitAcks(t, 3*time.Second, 20, 21, 22, 23, 24, 25)
+	if calls := transport.gatewayTenantCalls.Load(); calls != 1 {
+		t.Fatalf("GatewayTenant calls=%d, want 1 (packets 20-24 must bypass DB)", calls)
+	}
+	if calls := transport.recordCalls.Load(); calls != 1 {
+		t.Fatalf("RecordCommandReply calls=%d, want 1", calls)
+	}
+	body := scrapeMetricsText(t, metrics)
+	for _, want := range []string{
+		`hvac_mqtt_command_replies_total{outcome="invalid"} 3`,
+		`hvac_mqtt_command_replies_total{outcome="ignored"} 2`,
+		`hvac_mqtt_command_replies_total{outcome="persisted"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing metric %q in:\n%s", want, body)
+		}
+	}
+}
+
+func TestConnectorSlowResolveOnGatewayADoesNotBlockGatewayBWaiter(t *testing.T) {
+	const gwA = "01900000-0000-7000-8000-000000000301"
+	var gwB string
+	for i := 2; i < 100; i++ {
+		candidate := fmt.Sprintf("01900000-0000-7000-8000-%012d", i+300)
+		if replyShardIndex(candidate) != replyShardIndex(gwA) {
+			gwB = candidate
+			break
+		}
+	}
+	if gwB == "" {
+		t.Fatal("failed to pick distinct shard gateway B")
+	}
+
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	enteredA := make(chan struct{})
+	releaseA := make(chan struct{})
+	var closeAOnce sync.Once
+	unlockA := func() {
+		closeAOnce.Do(func() { close(releaseA) })
+	}
+	t.Cleanup(unlockA)
+
+	transport := &hookTransportState{
+		fakeTransportState: fakeTransportState{correlations: map[string]commandmodel.CommandCorrelation{}},
+	}
+	sink := hookLateResultSink{
+		onResolve: func(_ context.Context, envelope commandmodel.DispatchEnvelope, _ commandmodel.ConnectorResult) error {
+			if envelope.CommandID == "cmd-slow-a" {
+				close(enteredA)
+				<-releaseA
+			}
+			return nil
+		},
+	}
+
+	broker := newFakeCommandBroker(t, nil)
+	cfg := broker.baseConfig
+	cfg.TransportState = transport
+	cfg.EvidenceStore = fakeEvidenceStore{}
+	cfg.LateResultSink = sink
+	cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg.Metrics = observability.NewRegistry()
+	cfg.Now = func() time.Time { return now }
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	connector, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		unlockA()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer shutdownCancel()
+		_ = connector.Disconnect(shutdownCtx)
+	})
+
+	conn := broker.awaitConnection(t)
+	waiterB := make(chan commandmodel.CommandCorrelation, 1)
+	keyB := replyKey("cmd-fast-b", 2)
+	connector.mu.Lock()
+	connector.waiters[keyB] = waiterB
+	connector.mu.Unlock()
+	defer func() {
+		connector.mu.Lock()
+		delete(connector.waiters, keyB)
+		connector.mu.Unlock()
+	}()
+
+	conn.deliver(t, 30, "hvac/v1/"+gwA+"/up/reply", validTerminalReplyJSON(t, "cmd-slow-a", 1, now.UnixMilli()), false)
+	select {
+	case <-enteredA:
+	case <-time.After(3 * time.Second):
+		t.Fatal("gateway A never reached slow ResolveDispatch")
+	}
+	// PUBACK for gateway A must happen right after REPLIED custody, before slow ResolveDispatch finishes.
+	conn.awaitAcks(t, 2*time.Second, 30)
+
+	conn.deliver(t, 31, "hvac/v1/"+gwB+"/up/reply", validTerminalReplyJSON(t, "cmd-fast-b", 2, now.UnixMilli()), false)
+	select {
+	case corr := <-waiterB:
+		if corr.Envelope.CommandID != "cmd-fast-b" {
+			t.Fatalf("unexpected waiter correlation: %+v", corr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("gateway B waiter was blocked by slow ResolveCorrelationReply on gateway A")
+	}
+	conn.awaitAcks(t, 2*time.Second, 31)
+}
+
+func TestConnectorSuback0x87ClosesConnectionAndRecoversOnReconnect(t *testing.T) {
+	metrics := observability.NewRegistry()
+	broker := newFakeCommandBroker(t, func(connIndex int, sub *packets.Subscribe) []byte {
+		reasons := make([]byte, len(sub.Subscriptions))
+		for i := range reasons {
+			if connIndex == 1 {
+				reasons[i] = 0x87
+			} else {
+				reasons[i] = 1
+			}
+		}
+		return reasons
+	})
+
+	cfg := broker.baseConfig
+	cfg.TransportState = &hookTransportState{fakeTransportState: fakeTransportState{correlations: map[string]commandmodel.CommandCorrelation{}}}
+	cfg.EvidenceStore = fakeEvidenceStore{}
+	cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg.Metrics = metrics
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	connector, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer shutdownCancel()
+		_ = connector.Disconnect(shutdownCtx)
+	})
+
+	conn1 := broker.awaitConnection(t)
+	conn1.awaitDisconnect(t, 3*time.Second)
+
+	_ = broker.awaitConnection(t)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		body := scrapeMetricsText(t, metrics)
+		if strings.Contains(body, `hvac_mqtt_command_subscriptions_total{outcome="failed"} 1`) &&
+			strings.Contains(body, `hvac_mqtt_command_subscriptions_total{outcome="success"} 1`) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("expected failed=1 and success=1 subscription metrics, got:\n%s", scrapeMetricsText(t, metrics))
+}
+
+func TestConnectorBackpressureShedClosesConnectionWithoutAck(t *testing.T) {
+	const gwID = "01900000-0000-7000-8000-000000000401"
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unlock := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+	t.Cleanup(unlock)
+
+	metrics := observability.NewRegistry()
+	var firstOnce sync.Once
+	transport := &hookTransportState{
+		fakeTransportState: fakeTransportState{correlations: map[string]commandmodel.CommandCorrelation{}},
+		onGatewayTenant: func(_ context.Context, _ string) (string, error) {
+			firstOnce.Do(func() {
+				close(entered)
+				<-release
+			})
+			return "tenant-1", nil
+		},
+	}
+
+	broker := newFakeCommandBroker(t, nil)
+	cfg := broker.baseConfig
+	cfg.TransportState = transport
+	cfg.EvidenceStore = fakeEvidenceStore{}
+	cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg.Metrics = metrics
+	cfg.Now = func() time.Time { return now }
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	connector, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		unlock()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer shutdownCancel()
+		_ = connector.Disconnect(shutdownCtx)
+	})
+
+	conn := broker.awaitConnection(t)
+	conn.deliver(t, 1, "hvac/v1/"+gwID+"/up/reply", validTerminalReplyJSON(t, "cmd-hold", 1, now.UnixMilli()), false)
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not enter GatewayTenant")
+	}
+
+	for i := 0; i < replyShardQueueCapacity+1; i++ {
+		handled, onErr := connector.onReply(paho.PublishReceived{
+			Packet: &paho.Publish{
+				Topic:   "hvac/v1/" + gwID + "/up/reply",
+				Payload: validTerminalReplyJSON(t, fmt.Sprintf("cmd-fill-%03d", i), uint64(i+2), now.UnixMilli()),
+			},
+		})
+		if !handled || onErr != nil {
+			t.Fatalf("onReply(%d) = (%v, %v), want (true, nil)", i, handled, onErr)
+		}
+	}
+
+	conn.awaitDisconnect(t, 3*time.Second)
+	body := scrapeMetricsText(t, metrics)
+	if !strings.Contains(body, `hvac_mqtt_command_replies_total{outcome="shed"} 1`) {
+		t.Fatalf("missing shed metric in:\n%s", body)
+	}
 }

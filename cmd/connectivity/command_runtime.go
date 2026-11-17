@@ -67,18 +67,19 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *
 	}
 	// The broker ACL grants command topics to the command-dispatcher certificate CN.
 	connector, err := mqttconnector.New(ctx, mqttconnector.Config{
-		BrokerURL:      envOr("CONNECTIVITY_MQTT_URL", "tls://mqtt-broker:8883"),
-		ClientID:       envOr("COMMAND_MQTT_CLIENT_ID", "connectivity-commands"),
-		CAFile:         ca,
-		CertFile:       dispatcherIdentity.CertificatePath,
-		KeyFile:        dispatcherIdentity.PrivateKeyPath,
-		ServerName:     envOr("CONNECTIVITY_MQTT_SERVER_NAME", "mqtt-broker"),
-		TransportState: store,
-		EvidenceStore:  dispatcherRuntimeClient,
-		LateResultSink: dispatcherRuntimeClient,
-		ReplyTimeout:   25 * time.Second,
-		Logger:         logger,
-		Metrics:        metrics,
+		BrokerURL:               envOr("CONNECTIVITY_MQTT_URL", "tls://mqtt-broker:8883"),
+		ClientID:                defaultCommandMQTTClientID(),
+		SharedSubscriptionGroup: commandSharedSubscriptionGroup(),
+		CAFile:                  ca,
+		CertFile:                dispatcherIdentity.CertificatePath,
+		KeyFile:                 dispatcherIdentity.PrivateKeyPath,
+		ServerName:              envOr("CONNECTIVITY_MQTT_SERVER_NAME", "mqtt-broker"),
+		TransportState:          store,
+		EvidenceStore:           dispatcherRuntimeClient,
+		LateResultSink:          dispatcherRuntimeClient,
+		ReplyTimeout:            25 * time.Second,
+		Logger:                  logger,
+		Metrics:                 metrics,
 	})
 	if err != nil {
 		return nil, err
@@ -337,4 +338,57 @@ func hostnameOr(fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func defaultCommandMQTTClientID() string {
+	if explicit := strings.TrimSpace(os.Getenv("COMMAND_MQTT_CLIENT_ID")); explicit != "" {
+		return explicit
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "connectivity-commands"
+	}
+	return defaultCommandMQTTClientIDForHost(hostname)
+}
+
+func defaultCommandMQTTClientIDForHost(hostname string) string {
+	suffix := sanitizeClientID(hostname)
+	if suffix == "" {
+		return "connectivity-commands"
+	}
+	return "connectivity-commands-" + suffix
+}
+
+func sanitizeClientID(raw string) string {
+	var builder strings.Builder
+	builder.Grow(len(raw))
+	lastDash := false
+	for _, ch := range strings.TrimSpace(raw) {
+		switch {
+		case (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_':
+			builder.WriteRune(ch)
+			lastDash = false
+		default:
+			if builder.Len() > 0 && !lastDash {
+				builder.WriteRune('-')
+				lastDash = true
+			}
+		}
+		if builder.Len() >= 64 {
+			break
+		}
+	}
+	return strings.Trim(builder.String(), "-_")
+}
+
+func commandSharedSubscriptionGroup() string {
+	raw, ok := os.LookupEnv("COMMAND_MQTT_SHARE_GROUP")
+	if !ok {
+		return "command-dispatcher"
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || strings.EqualFold(trimmed, "off") || strings.EqualFold(trimmed, "none") {
+		return ""
+	}
+	return trimmed
 }

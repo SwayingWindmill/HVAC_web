@@ -7,7 +7,7 @@ description: Exhaustively model-check command intent, execution fence, MQTT comm
 
 Run the exhaustive explicit-state model checker (`modules/command/pkg/commandformal`) against real production transition decisions in `commandservice`, `mqttconnector`, and aligned SQL predicates in `postgres_*.go` / `connectivity/store.go`.
 
-- **Base syncCommit**: `f0fe8b62d6944e821ad4082e0fec80fc49c2dbee`
+- **Base syncCommit**: `ed29f342ad0a915555c63c888c329a15d6126c26`
 
 ## Quick Run
 
@@ -46,7 +46,7 @@ If any invariant or mutation test fails, the runner prints the shortest failing 
 
 | File | Verified symbols & invariants |
 | --- | --- |
-| `libs/commandmodel/model.go` | Command enums, `CapabilityProfileFor`, `EvaluateRiskLevel`, `EdgeExecutionEvidence.ValidExecuted`, `CorrelationState`, `TerminalPreSendRejection`, `NormalizeTraceID` |
+| `libs/commandmodel/model.go` | Command enums, `CapabilityProfileFor`, `EvaluateRiskLevel`, `EdgeExecutionEvidence.ValidExecuted`, `CorrelationState`, `ErrCommandCorrelationNotFound`, `ErrCommandCorrelationMismatch`, `TerminalPreSendRejection`, `NormalizeTraceID` |
 | `modules/command/pkg/commandservice/service.go` | `Submit`, `Approve`, `Cancel`, `CancelPending`, `PrepareDispatch`, `ResolveDispatch`, `PrepareVerification`, `ResolveVerification`, `Close` (`controlFailureQueue` drain) |
 | `modules/command/pkg/commandservice/governance.go` | `evaluateGovernance`, `approvalPolicyForRisk`, `validateApproval`, `validateExecutionGovernance` |
 | `modules/command/pkg/commandservice/transitions.go` | `BlockingEarlierIntentStatuses`, `CanClaimQueuedIntent`, `DecideCommandCancel`, `DecideDispatchResolution`, `DecideVerificationResolution`, `DecideOperatorReconcile`, `IsActiveAbortableSequence` |
@@ -54,15 +54,15 @@ If any invariant or mutation test fails, the runner prints the shortest failing 
 | `modules/command/pkg/commandservice/postgres_cancel.go` | `Cancel` (`cancelOnce`) & `CancelPending` delegation to `DecideCommandCancel` and `IsActiveAbortableSequence`, outbox retirement (`delivered_at = $3, lease_until = NULL`) |
 | `modules/command/pkg/commandservice/postgres_verification.go` | `ResolveVerification` delegation to `DecideVerificationResolutionWithEdge` |
 | `modules/command/pkg/commandservice/postgres_reconcile.go` | `reconcileOnce` delegation to `DecideOperatorReconcile` |
-| `modules/command/pkg/mqttconnector/connector.go` | `ResumeActionForCorrelation`, `DrainTenantReplies`, `RecoverTenantReplies`, `ResolveCorrelationReply`, `ReplyBackedResult`, `completeRecoveredReply`, `buildCommandEnvelope` `traceId`, `recoverReplies` panic guard |
-| `modules/connectivity/pkg/connectivity/store.go` | `RecoverCommandReplies` (`state = 'REPLIED'`, `ORDER BY replied_at, attempt_id LIMIT $2`) |
+| `modules/command/pkg/mqttconnector/connector.go` | `EnableManualAcknowledgment`, `SubscriptionTopicFilter`, `checkSubackReasons`, sharded `onReply` custody worker pool, `ResumeActionForCorrelation`, `DrainTenantReplies`, `RecoverTenantReplies`, `ResolveCorrelationReply`, `ReplyBackedResult`, `completeRecoveredReply`, `buildCommandEnvelope` `traceId`, `recoverReplies` panic guard |
+| `modules/connectivity/pkg/connectivity/store.go` | `RecoverCommandReplies` (`state = 'REPLIED'`, `ORDER BY replied_at, attempt_id LIMIT $2`), `runSerializableTenantOp` (`40001`/`40P01` retry) |
 
 ## Keeping the Verifier Synchronized
 
 When modifying any covered file, inspect changes since `syncCommit`:
 
 ```bash
-git diff f0fe8b62d6944e821ad4082e0fec80fc49c2dbee -- libs/commandmodel/ modules/command/pkg/commandservice/ modules/command/pkg/mqttconnector/connector.go modules/connectivity/pkg/connectivity/store.go
+git diff ed29f342ad0a915555c63c888c329a15d6126c26 -- libs/commandmodel/ modules/command/pkg/commandservice/ modules/command/pkg/mqttconnector/connector.go modules/connectivity/pkg/connectivity/store.go
 ```
 
 If transitions, SQL guards, or recovery batch limits change:
