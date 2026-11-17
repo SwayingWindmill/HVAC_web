@@ -760,7 +760,6 @@ func TestTunnelActiveTunnelsMetricTracksSessions(t *testing.T) {
 		t.Fatalf("expected hvac_mqtt_active_tunnels 2 after second register, got:\n%s", body)
 	}
 
-	// Replacing gw1 session keeps count at 2.
 	s1Replacement, c1Replacement := net.Pipe()
 	defer func() { _ = c1Replacement.Close() }()
 	if hub.registerSession(gw1, s1Replacement) == nil {

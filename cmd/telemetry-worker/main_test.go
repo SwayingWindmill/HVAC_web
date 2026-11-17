@@ -159,7 +159,6 @@ func TestShutdownTelemetryWorkerOrder(t *testing.T) {
 		})
 	}()
 
-	// Wait briefly to confirm readiness flips immediately and workers are not cancelled while HTTP is active.
 	deadline := time.Now().Add(time.Second)
 	for obsRuntime.Ready() && time.Now().Before(deadline) {
 		time.Sleep(2 * time.Millisecond)

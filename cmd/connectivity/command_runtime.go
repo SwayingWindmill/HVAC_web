@@ -42,11 +42,7 @@ type commandRuntime struct {
 
 // loadCommandRuntime builds the command runtime from defaults for the Phase 1 compose
 // network; every value can be overridden by its environment variable.
-func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *slog.Logger, metrics *observability.Registry) (*commandRuntime, error) {
-	return loadCommandRuntimeWithTap(ctx, store, logger, metrics, nil)
-}
-
-func loadCommandRuntimeWithTap(ctx context.Context, store *connectivity.Store, logger *slog.Logger, metrics *observability.Registry, tap *packettap.Manager) (*commandRuntime, error) {
+func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *slog.Logger, metrics *observability.Registry, tap *packettap.Manager) (*commandRuntime, error) {
 	ca := envOr("COMMAND_RUNTIME_CA", "/run/hvac/pki/ca.crt")
 	dispatcherIdentity := workloadtls.CertificateFiles{
 		CertificatePath: envOr("COMMAND_DISPATCHER_CERT", "/run/hvac/pki/command-dispatcher/tls.crt"),

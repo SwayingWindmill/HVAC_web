@@ -318,7 +318,6 @@ func TestEdgeMQTTCommandWALAppendLegacyImportCrashAndCorruptFailClosed(t *testin
 			t.Fatalf("expected MAY_EXECUTE and TERMINAL WAL lines, got:\n%s", string(walRaw))
 		}
 
-		// Simulate crash right after MAY_EXECUTE append for cmd-wal-crash.
 		if err := appendEdgeCommandWALEntry(filepath.Join(queueDir, "command-execution-records.wal"), edgeCommandWALEntry{
 			Type:      edgeCommandWALRecordTypeRecord,
 			CommandID: "cmd-wal-crash",
@@ -491,7 +490,6 @@ func TestEdgeMQTTCommandWALCompactionPreservesNonTerminalAndMaxFences(t *testing
 	}
 	handler.now = func() time.Time { return now }
 
-	// 1. Record an early terminal command on oldDevice with high fence 99 (will be evicted from terminal window).
 	oldReply := mqttCommandReply{
 		SchemaVersion: mqttCommandSchemaVersion, MessageID: "msg-old", CommandID: "cmd-old-evicted",
 		EventTime: now.UnixMilli(), EdgeStatus: "EXECUTED", ExecutionFence: 99,
@@ -506,7 +504,6 @@ func TestEdgeMQTTCommandWALCompactionPreservesNonTerminalAndMaxFences(t *testing
 	handler.mu.Unlock()
 	handler.finish(oldDevice, "hash-old", oldReply)
 
-	// 2. Record a non-terminal MAY_EXECUTE command on inflightDevice (must survive compaction!).
 	handler.mu.Lock()
 	if err := handler.appendRecordLocked("cmd-inflight-keep", edgeCommandRecord{
 		DeviceID: inflightDevice, PayloadHash: "hash-inflight", ExecutionFence: 50, State: edgeCommandMayExecute,
@@ -516,7 +513,6 @@ func TestEdgeMQTTCommandWALCompactionPreservesNonTerminalAndMaxFences(t *testing
 	}
 	handler.mu.Unlock()
 
-	// 3. Append 1100 commands (2200 WAL lines, crossing compactThreshold=2048) on churnDevice.
 	const totalChurn = 1100
 	for i := 1; i <= totalChurn; i++ {
 		cmdID := "cmd-churn-" + jsonNumber(int64(i))
@@ -536,7 +532,6 @@ func TestEdgeMQTTCommandWALCompactionPreservesNonTerminalAndMaxFences(t *testing
 		})
 	}
 
-	// Inspect compacted WAL and in-memory state.
 	walRaw, err := os.ReadFile(filepath.Join(queueDir, "command-execution-records.wal"))
 	if err != nil {
 		t.Fatal(err)
@@ -569,7 +564,6 @@ func TestEdgeMQTTCommandWALCompactionPreservesNonTerminalAndMaxFences(t *testing
 		t.Fatalf("maxFenceByDevice[%s]=%d, want 99", oldDevice, oldMaxFence)
 	}
 
-	// Restart from compacted WAL and confirm invariants hold across restart.
 	restarted, err := newEdgeCommandHandler(edgeRuntime, MQTTGatewayConfig{QueueDirectory: queueDir}, deviceIDs, testMQTTEvidenceSpool(t))
 	if err != nil {
 		t.Fatal(err)
@@ -588,7 +582,6 @@ func TestEdgeMQTTCommandWALCompactionPreservesNonTerminalAndMaxFences(t *testing
 		t.Fatalf("restarted terminal count=%d > %d", restartedTerminal, maxRetainedTerminalCommandRecords)
 	}
 
-	// Non-terminal record still returns EDGE_OUTCOME_UNKNOWN after restart.
 	inflightResp := restarted.evaluate(mqttCommandEnvelope{
 		SchemaVersion: mqttCommandSchemaVersion, MessageID: "msg-inflight-retry", CommandID: "cmd-inflight-keep",
 		IssuedAt: now.Add(-time.Second).UnixMilli(), ExpireAt: now.Add(time.Minute).UnixMilli(),
@@ -598,7 +591,6 @@ func TestEdgeMQTTCommandWALCompactionPreservesNonTerminalAndMaxFences(t *testing
 		t.Fatalf("expected EDGE_OUTCOME_UNKNOWN for retained MAY_EXECUTE record, got %+v", inflightResp)
 	}
 
-	// Old evicted device still rejects fence <= 99 with STALE_FENCE after restart.
 	staleResp := restarted.evaluate(mqttCommandEnvelope{
 		SchemaVersion: mqttCommandSchemaVersion, MessageID: "msg-stale-after-compact", CommandID: "cmd-old-new-attempt",
 		IssuedAt: now.Add(-time.Second).UnixMilli(), ExpireAt: now.Add(time.Minute).UnixMilli(),

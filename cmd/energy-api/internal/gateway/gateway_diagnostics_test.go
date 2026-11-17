@@ -116,7 +116,6 @@ func newDiagnosticsGatewayFixture(t *testing.T) *diagnosticsGatewayFixture {
 func TestGatewayDiagnosticsProxyEndpoints(t *testing.T) {
 	fix := newDiagnosticsGatewayFixture(t)
 
-	// GET quarantine forwards raw query limit.
 	qReq := httptest.NewRequest(http.MethodGet, "/api/v1/gateways/"+fix.gatewayID+"/quarantine?limit=15", nil)
 	fix.authenticate(qReq, false)
 	qRec := httptest.NewRecorder()
@@ -131,7 +130,6 @@ func TestGatewayDiagnosticsProxyEndpoints(t *testing.T) {
 		t.Fatalf("expected Cache-Control: no-store, got %q", qRec.Header().Get("Cache-Control"))
 	}
 
-	// GET packet-capture.
 	fix.upstreamBody = `{"gatewayId":"` + fix.gatewayID + `","active":false,"maxPackets":200,"droppedCount":0,"items":[]}`
 	pcReq := httptest.NewRequest(http.MethodGet, "/api/v1/gateways/"+fix.gatewayID+"/packet-capture", nil)
 	fix.authenticate(pcReq, false)
@@ -144,7 +142,6 @@ func TestGatewayDiagnosticsProxyEndpoints(t *testing.T) {
 			pcRec.Code, fix.lastUpstreamMethod, fix.lastUpstreamPath, pcRec.Body.String())
 	}
 
-	// POST packet-capture/start with optional JSON body.
 	startReq := httptest.NewRequest(http.MethodPost, "/api/v1/gateways/"+fix.gatewayID+"/packet-capture/start", strings.NewReader(`{"durationSeconds":120}`))
 	fix.authenticate(startReq, true)
 	startRec := httptest.NewRecorder()
@@ -158,7 +155,6 @@ func TestGatewayDiagnosticsProxyEndpoints(t *testing.T) {
 			startRec.Code, fix.lastUpstreamMethod, fix.lastUpstreamPath, fix.lastUpstreamContentType, fix.lastUpstreamBody, startRec.Body.String())
 	}
 
-	// POST packet-capture/start without body succeeds cleanly.
 	startEmptyReq := httptest.NewRequest(http.MethodPost, "/api/v1/gateways/"+fix.gatewayID+"/packet-capture/start", nil)
 	fix.authenticate(startEmptyReq, true)
 	startEmptyRec := httptest.NewRecorder()
@@ -168,7 +164,6 @@ func TestGatewayDiagnosticsProxyEndpoints(t *testing.T) {
 			startEmptyRec.Code, fix.lastUpstreamBody, startEmptyRec.Body.String())
 	}
 
-	// POST packet-capture/stop.
 	stopReq := httptest.NewRequest(http.MethodPost, "/api/v1/gateways/"+fix.gatewayID+"/packet-capture/stop", nil)
 	fix.authenticate(stopReq, true)
 	stopRec := httptest.NewRecorder()
@@ -184,7 +179,6 @@ func TestGatewayDiagnosticsProxyEndpoints(t *testing.T) {
 func TestGatewayDiagnosticsCSRFBodyBoundsAndUpstreamErrors(t *testing.T) {
 	fix := newDiagnosticsGatewayFixture(t)
 
-	// POST start/stop without CSRF are rejected before IAM and Connectivity.
 	for _, suffix := range []string{"/packet-capture/start", "/packet-capture/stop"} {
 		fix.iamCalls.Store(0)
 		fix.upstreamCalls.Store(0)
@@ -197,7 +191,6 @@ func TestGatewayDiagnosticsCSRFBodyBoundsAndUpstreamErrors(t *testing.T) {
 		}
 	}
 
-	// Oversized body on start returns 413 PAYLOAD_TOO_LARGE before upstream.
 	fix.upstreamCalls.Store(0)
 	oversized := bytes.Repeat([]byte("a"), (64<<10)+16)
 	overReq := httptest.NewRequest(http.MethodPost, "/api/v1/gateways/"+fix.gatewayID+"/packet-capture/start", bytes.NewReader(oversized))
@@ -208,7 +201,6 @@ func TestGatewayDiagnosticsCSRFBodyBoundsAndUpstreamErrors(t *testing.T) {
 		t.Fatalf("oversized status=%d calls=%d body=%s", overRec.Code, fix.upstreamCalls.Load(), overRec.Body.String())
 	}
 
-	// Upstream 403/429 pass through as ProblemDetails preserving code & detail.
 	for _, tc := range []struct {
 		status  int
 		code    string
@@ -232,7 +224,6 @@ func TestGatewayDiagnosticsCSRFBodyBoundsAndUpstreamErrors(t *testing.T) {
 		}
 	}
 
-	// Upstream 5xx must mask raw internal message.
 	for _, status5xx := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable} {
 		fix.upstreamStatus = status5xx
 		fix.upstreamBody = `{"code":"DIAGNOSTICS_INTERNAL","message":"pq: leaked table connectivity.uplink_quarantine"}`
@@ -245,7 +236,6 @@ func TestGatewayDiagnosticsCSRFBodyBoundsAndUpstreamErrors(t *testing.T) {
 		}
 	}
 
-	// Upstream timeout maps to 504 CONNECTIVITY_TIMEOUT.
 	fix.upstreamErr = context.DeadlineExceeded
 	timeoutReq := httptest.NewRequest(http.MethodGet, "/api/v1/gateways/"+fix.gatewayID+"/quarantine", nil)
 	fix.authenticate(timeoutReq, false)
@@ -255,7 +245,6 @@ func TestGatewayDiagnosticsCSRFBodyBoundsAndUpstreamErrors(t *testing.T) {
 		t.Fatalf("expected 504 CONNECTIVITY_TIMEOUT, got %d body=%s", timeoutRec.Code, timeoutRec.Body.String())
 	}
 
-	// Invalid dot segment fails closed before IAM and upstream.
 	fix.upstreamErr = nil
 	fix.iamCalls.Store(0)
 	fix.upstreamCalls.Store(0)

@@ -221,7 +221,6 @@ func TestQuarantineBurstCooldownAndBoundedCache(t *testing.T) {
 		t.Fatalf("expected 1 synchronous write with delta=1, got %+v", writes)
 	}
 
-	// Next 10 hits inside 5s cooldown must incur zero DB writes.
 	for i := 1; i <= 10; i++ {
 		msg := base
 		msg.ReceivedAt = now.Add(time.Duration(i*400) * time.Millisecond)
@@ -233,7 +232,6 @@ func TestQuarantineBurstCooldownAndBoundedCache(t *testing.T) {
 		t.Fatalf("cooldown leaked DB writes: count=%d", len(writes))
 	}
 
-	// Flushing bursts pushes pendingDelta=10 in 1 write.
 	if err := store.flushQuarantineBurstsWith(context.Background(), gw, persist); err != nil {
 		t.Fatalf("flushQuarantineBurstsWith failed: %v", err)
 	}
@@ -241,7 +239,6 @@ func TestQuarantineBurstCooldownAndBoundedCache(t *testing.T) {
 		t.Fatalf("expected flush delta=10, got writes=%+v", writes)
 	}
 
-	// Buffer 3 more in cooldown, simulate failure after cooldown expires, verify pending preserved.
 	for i := 1; i <= 3; i++ {
 		msg := base
 		msg.ReceivedAt = now.Add(4500 * time.Millisecond)
@@ -264,7 +261,6 @@ func TestQuarantineBurstCooldownAndBoundedCache(t *testing.T) {
 		t.Fatalf("expected retry to carry 3 buffered + 1 retry = 4, got writes=%+v", writes)
 	}
 
-	// Verify bounded map cap of 1024 entries.
 	for i := 0; i < quarantineCooldownCap+200; i++ {
 		entry := base
 		entry.Topic = fmt.Sprintf("hvac/v1/%s/up/telemetry/%d", gw, i)

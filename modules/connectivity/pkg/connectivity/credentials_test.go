@@ -57,7 +57,6 @@ func TestVerifyActiveCredentialCacheSingleflightAndInvalidation(t *testing.T) {
 		t.Fatalf("invalid CN err=%v, want ErrEnrollmentRejected", err)
 	}
 
-	// 32 concurrent callers coalesce to 1 underlying DB lookup.
 	var lookups atomic.Int32
 	gate := make(chan struct{})
 	const workers = 32
@@ -83,7 +82,6 @@ func TestVerifyActiveCredentialCacheSingleflightAndInvalidation(t *testing.T) {
 		t.Fatalf("concurrent VerifyActiveCredential lookups=%d, want 1", lookups.Load())
 	}
 
-	// Warm cache hits 0 lookups for 14s, expires at 15s.
 	now = now.Add(14 * time.Second)
 	id, err := svc.verifyActiveCredentialWith(context.Background(), certA, func(context.Context, *x509.Certificate, time.Time) (string, error) {
 		t.Fatal("expected 15s cache hit at +14s")
@@ -103,7 +101,6 @@ func TestVerifyActiveCredentialCacheSingleflightAndInvalidation(t *testing.T) {
 		t.Fatalf("expired verify got=(%q,%v) calls=%d", id, err, afterExpireCalls.Load())
 	}
 
-	// Warm gwB, then InvalidateGatewayCache(gwA) busts only gwA immediately.
 	if _, err := svc.verifyActiveCredentialWith(context.Background(), certB, func(_ context.Context, p *x509.Certificate, _ time.Time) (string, error) {
 		return p.Subject.CommonName, nil
 	}); err != nil {
@@ -124,7 +121,6 @@ func TestVerifyActiveCredentialCacheSingleflightAndInvalidation(t *testing.T) {
 		t.Fatalf("gwB cache check failed: %v", err)
 	}
 
-	// Negative errors are never cached so re-enable / retry hits DB immediately.
 	store.InvalidateGatewayCache(gwA)
 	var negCalls atomic.Int32
 	if _, err := svc.verifyActiveCredentialWith(context.Background(), certA, func(context.Context, *x509.Certificate, time.Time) (string, error) {
@@ -144,7 +140,6 @@ func TestVerifyActiveCredentialCacheSingleflightAndInvalidation(t *testing.T) {
 		t.Fatalf("negative result was cached: calls=%d, want 2", negCalls.Load())
 	}
 
-	// Certificate NotAfter shorter than 15s caps TTL at peer.NotAfter.
 	store.InvalidateGatewayCache(gwA)
 	now = time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
 	var shortCalls atomic.Int32
@@ -169,7 +164,6 @@ func TestVerifyActiveCredentialCacheSingleflightAndInvalidation(t *testing.T) {
 		t.Fatalf("short cert did not expire at peer.NotAfter: err=%v calls=%d", err, shortCalls.Load())
 	}
 
-	// Caller 1 cancellation does not break waiting peer.
 	store.InvalidateGatewayCache(gwA)
 	started := make(chan struct{})
 	release := make(chan struct{})

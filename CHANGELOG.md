@@ -9,6 +9,10 @@
 
 #### 新增
 
+- 新增网关通信抓包、上行接收隔离排查接口与网关详情抽屉诊断视图（`infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql`、`modules/connectivity/pkg/packettap`、`cmd/connectivity`、`cmd/energy-api` 与 `apps/hvac-web`；网关路由注册表 `route-ownership.v1.json` 升级至第 `54` 版）：
+  - 新增平台网关与连接服务诊断接口 `GET /api/v1/gateways/{gatewayId}/quarantine`、`GET /api/v1/gateways/{gatewayId}/packet-capture`、`POST /api/v1/gateways/{gatewayId}/packet-capture/start`（支持 `30` 至 `900` 秒抓包时长与最多 `32` 路活跃抓包上限）与 `POST /api/v1/gateways/{gatewayId}/packet-capture/stop`。
+  - 迁移 `uplink-quarantine-diagnostics.sql` 为 `connectivity.uplink_quarantine` 补充 `occurrence_count`、`last_seen_at`、`payload_preview`（`<= 4096` 字节）、`payload_encoding`（`utf8`/`hex`/`empty`）与 `payload_truncated` 字段及清理函数 `connectivity.prune_expired_uplink_quarantine`；高频突发异常报文按冷却窗口合并累计次数，连接服务启动时及每小时自动清理超过 `7` 天的旧记录，并在优雅停机阶段刷写未落盘计数。
+  - 站点网关详情抽屉（`GatewaySheet`，宽度由 `480px` 调整为 `640px`）新增「通信抓包」与「接收隔离」折叠面板，运维人员可在页面按网关启停抓包、按通道或方向筛选报文、复制原始载荷摘要并查看上行隔离记录及累计次数。
 - 新增网关与无线集中器配置影子同步链路（`infra/connectivity/postgres/init/gateway-config-shadows.sql`、`modules/connectivity`、`cmd/energy-api` 与 `tools/eg8200-simulator`；网关路由注册表 `route-ownership.v1.json` 升级至第 `53` 版）：
   - 新增租户行级隔离表 `connectivity.gateway_desired_configs` 与 `connectivity.gateway_reported_configs`，提供运维读写接口 `GET/PUT /api/v1/gateways/{gatewayId}/config-shadow`（支持 `expectedDesiredRevision` 乐观并发锁、部分字段 `PUT` 局部更新、集中器 RS485 保护地址与重复 EID 校验、归一化顺序无关漂移对比 `UNCONFIGURED` / `PENDING_SYNC` / `SYNCED` / `DRIFTED`）及网关 mTLS 增量拉取与回执接口 `GET /gateway/v1/config-shadow`、`POST /gateway/v1/config-shadow/report`。
   - 无线集中器参数与 EID 槽位写入新增 `stageIfOffline` 离线暂存能力与 `STAGED_SHADOW` 审计结果；写影子成功（针对在线网关）或收到网关 `GATEWAY_CONNECTED` 上线事件时按单网关串行异步对账并将集中器差异重放至边缘设备，离线换址保留当前总线地址待上电写入后再重键，未建基线的局部离线参数写入拒绝兜底默认值，失败时在影子中保留部分成功状态与漂移明细。
@@ -27,6 +31,10 @@
 
 #### 变更
 
+- 完成南向 MQTT 设备接入、指令调度与可观测性 P1 扩展改造：
+  - 连接池、单飞缓存与凭证短缓存：`modules/connectivity` 支持通过 `CONNECTIVITY_DB_MAX_CONNS` 配置数据库连接池上限（默认 `32`，范围 `1` 至 `256`）；`ResolveGateway`、`ResolveDevice` 与 `ResolveBindings` 引入基于 `singleflight` 的并发请求合并，凭证校验引入 `15` 秒活跃凭证短缓存并在吊销、签发或退役时实时清除对应缓存。
+  - 多副本快速感知、自适应退避与分阶段优雅停机：`mqttconnector` 在启用共享订阅组（`$share/command-dispatcher/...`）时通过 `LoadCommandCorrelation` 每 `500` 毫秒感知同组其他副本落盘的控制结果；`cmd/connectivity` 将空闲租户轮询退避从固定 `100` 毫秒调整为 `100` 至 `1500` 毫秒指数退避（租户列表 `5` 秒刷新），并在停机信号到来时先将 `/health/ready` 与 `/health/telemetry/ready` 置为 `503`、停止拉取新任务，再保留最长 `30` 秒窗口完成在途指令与上行队列排空。
+  - 全链路追踪、指标治理与边缘断点日志：`adapter`、`cmd/telemetry-worker`、`concentrator` 与 `mqttconnector` 完整接入 `Observability` OTLP Tracer、自动 W3C `traceId` 生成与 `packettap` 抓包回调，`deploy/observability/phase1-metric-catalog.v1.json` 补齐对应 MQTT 与集中器指标，并在网关或通道空闲移除时调用 `DeleteGauge` 回收过时指标序列；`eg8200-simulator` 控制执行记录改为追加式 JSONL 预写日志（`command-execution-records.wal`，达 `1024` 条自动压缩并保留各设备最大 `executionFence`）。
 - 完成内部架构边界收敛与 Go Workspace 模块整合，消除跨库表直读并收紧构建与静态检查门槛：
   - `optimization-service` 与 `telemetry-worker` 新增内部 mTLS 工作负载点位健康核验接口 `POST /internal/v1/telemetry/optimization/point-health:check`，移除优化服务对 `telemetry_runtime` 表的跨模块直读；`libs/intelligencemodel` 与 `services/optimization-service` 将运行优化建议、影子评估与作业输出全部收敛为强类型结构体。
   - 新增 `hvac_s1` 迁移 `iam-registry-read-views.sql`，补齐 `core_registry` 只读合约视图（`sites_v1`、`iam_requested_devices_v1`、`site_auto_control_leases_v1`、`optimization_execution_monitors_v1`）并回收 `s1_iam_runtime` 对 `core_registry` 基表的直读权限，`modules/iam` 全面切换至 `*_v1` 合约视图。

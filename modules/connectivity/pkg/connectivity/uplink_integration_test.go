@@ -300,7 +300,6 @@ func TestPostgresQuarantineDedupOperatorReadAndPrune(t *testing.T) {
 	currentNow := baseNow
 	store.now = func() time.Time { return currentNow }
 
-	// Burst of identical invalid payloads within 5s cooldown deduplicates into 1 row with occurrence_count=4.
 	topicA := "hvac/v1/" + gatewayA + "/up/telemetry"
 	longPayload := bytes.Repeat([]byte("X"), packettap.MaxPayloadPreviewBytes+128)
 	for i := range 4 {
@@ -318,7 +317,6 @@ func TestPostgresQuarantineDedupOperatorReadAndPrune(t *testing.T) {
 		}
 	}
 
-	// Binary payload for gatewayB.
 	binPayload := []byte{0x00, 0xfe, 0xff, 0x10}
 	if err := store.QuarantineUplink(ctx, adapter.UplinkQuarantine{
 		TenantID:   tenantB,
@@ -332,7 +330,6 @@ func TestPostgresQuarantineDedupOperatorReadAndPrune(t *testing.T) {
 		t.Fatalf("QuarantineUplink binary: %v", err)
 	}
 
-	// Tenant isolation and site scope enforcement.
 	claimsA := registryauth.GrantClaims{TenantID: tenantA, PrincipalID: gatewayA, AllowedSiteIDs: []string{siteA}}
 	claimsB := registryauth.GrantClaims{TenantID: tenantB, PrincipalID: gatewayB, AllowedSiteIDs: []string{siteB}}
 	claimsWrongSite := registryauth.GrantClaims{TenantID: tenantA, PrincipalID: gatewayA, AllowedSiteIDs: []string{siteB}}
@@ -350,7 +347,6 @@ func TestPostgresQuarantineDedupOperatorReadAndPrune(t *testing.T) {
 		t.Fatalf("unknown gateway CheckGatewayOperatorScope err=%v, want ErrNotFound", err)
 	}
 
-	// Operator read flushes bursts and exposes 4096-byte truncated preview + occurrenceCount=4.
 	recordsA, err := store.ListGatewayQuarantineForOperator(ctx, claimsA, gatewayA, 20)
 	if err != nil {
 		t.Fatalf("ListGatewayQuarantineForOperator A: %v", err)
@@ -370,7 +366,6 @@ func TestPostgresQuarantineDedupOperatorReadAndPrune(t *testing.T) {
 		t.Fatalf("unexpected gatewayB binary quarantine record: %+v", recordsB)
 	}
 
-	// Post-5m window opens a new row.
 	if err := store.QuarantineUplink(ctx, adapter.UplinkQuarantine{
 		TenantID:   tenantA,
 		GatewayID:  gatewayA,
@@ -387,7 +382,6 @@ func TestPostgresQuarantineDedupOperatorReadAndPrune(t *testing.T) {
 		t.Fatalf("expected 2 rows after 5m window, got len=%d err=%v", len(recordsAfterWindow), err)
 	}
 
-	// Retention prune: 8-day-old tenant & null-tenant rows are deleted; 6-day-old row survives.
 	expiredAt := baseNow.Add(-8 * 24 * time.Hour)
 	recentAt := baseNow.Add(-6 * 24 * time.Hour)
 	if err := store.QuarantineUplink(ctx, adapter.UplinkQuarantine{

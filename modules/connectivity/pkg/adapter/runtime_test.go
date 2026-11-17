@@ -1593,7 +1593,6 @@ func TestRuntimeCatalogMetricsOnlineGatewaysTraceLogsAndPacketHook(t *testing.T)
 	}
 
 	acks := newAckLog()
-	// M1 holds worker; M2 queues in RAM; M3 spills to disk; M4 sheds.
 	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
 		t.Fatal(err)
 	}
@@ -1607,7 +1606,6 @@ func TestRuntimeCatalogMetricsOnlineGatewaysTraceLogsAndPacketHook(t *testing.T)
 	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 4), acks.ack(messageID(4))); err == nil {
 		t.Fatal("expected M4 to shed")
 	}
-	// Quarantined message on Gateway B so quarantined duration histogram is observed.
 	if err := runtime.enqueue(ctx, nil, &paho.Publish{Topic: "hvac/v1/" + testGatewayB + "/up/state", Payload: []byte(`{}`), QoS: 1}, acks.ack("q-1")); err != nil {
 		t.Fatal(err)
 	}
@@ -1634,7 +1632,6 @@ func TestRuntimeCatalogMetricsOnlineGatewaysTraceLogsAndPacketHook(t *testing.T)
 			strings.Contains(body, "hvac_mqtt_processing_queue_depth 0\n")
 	}, "quarantined duration, online gateways, and drained queue depth recorded")
 
-	// Also verify corrupt WAL frame increments both spool read errors and dropped processed counter.
 	corruptMB := newGatewayMailbox(testGatewayB, 1, 4, 1<<20, t.TempDir())
 	t.Cleanup(func() { corruptMB.close(true) })
 	for i := 1; i <= 3; i++ {
@@ -1720,14 +1717,12 @@ func TestRuntimeGracefulDrainFinishesInFlightAndBufferedMessagesOnCancel(t *test
 	conn := broker.awaitConnection(t)
 	awaitReady(t, runtime, true)
 
-	// M1 enters ProcessPrefix and blocks on telemetry.release; M2 and M3 buffer in WAL and get custody-acked.
 	conn.deliverGateway(t, testGatewayA, 1, 1, false)
 	<-telemetry.entered
 	conn.deliverGateway(t, testGatewayA, 2, 2, false)
 	conn.deliverGateway(t, testGatewayA, 3, 3, false)
 	conn.awaitAcks(t, 1, 2, 3)
 
-	// Cancel Run(ctx), then release downstream after a short delay to prove workers drain M1, M2, M3 cleanly.
 	cancel()
 	go func() {
 		time.Sleep(40 * time.Millisecond)

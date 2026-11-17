@@ -1267,7 +1267,6 @@ func TestMQTTTransportMetricsAndPacketHook(t *testing.T) {
 		_ = tr.Close(shutCtx)
 	}()
 
-	// Before subscription ready -> failed outcome.
 	if _, err := tr.Call(context.Background(), RPCRequest{
 		SchemaVersion: rpcSchemaVersion,
 		RequestID:     "018f3d00-3000-7000-8000-000000000010",

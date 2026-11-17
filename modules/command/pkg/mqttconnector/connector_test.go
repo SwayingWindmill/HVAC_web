@@ -1860,7 +1860,6 @@ func TestExecuteEmitsPublishMetricsWaitHistogramAndPacketHook(t *testing.T) {
 		}
 	}
 
-	// 1. Publish failure (non-deadline error) -> publishes_total{outcome="failed"}
 	connector.publish = func(_ context.Context, _ *paho.Publish) (*paho.PublishResponse, error) {
 		return nil, errors.New("broker disconnected")
 	}
@@ -1869,7 +1868,6 @@ func TestExecuteEmitsPublishMetricsWaitHistogramAndPacketHook(t *testing.T) {
 		t.Fatalf("pubfail got res=%+v err=%v", res, err)
 	}
 
-	// 2. Publish timeout (context.DeadlineExceeded) -> publishes_total{outcome="timed_out"}
 	connector.publish = func(_ context.Context, _ *paho.Publish) (*paho.PublishResponse, error) {
 		return nil, fmt.Errorf("publish: %w", context.DeadlineExceeded)
 	}
@@ -1878,7 +1876,6 @@ func TestExecuteEmitsPublishMetricsWaitHistogramAndPacketHook(t *testing.T) {
 		t.Fatalf("pubtimeout got res=%+v err=%v", res, err)
 	}
 
-	// 3. Publish success + edge FAILED reply via onReply -> publishes_total{outcome="success"} + reply_wait{outcome="failed"} + PacketHook UPLINK/DOWNLINK
 	connector.publish = func(_ context.Context, _ *paho.Publish) (*paho.PublishResponse, error) {
 		env := baseEnv("edgefail", 3)
 		replyBody, _ := json.Marshal(commandReply{
@@ -1915,7 +1912,6 @@ func TestExecuteEmitsPublishMetricsWaitHistogramAndPacketHook(t *testing.T) {
 		t.Fatalf("edgefail got res=%+v err=%v", res, err)
 	}
 
-	// 4. Publish success + EXECUTED ack -> reply_wait{outcome="acknowledged"}
 	connector.publish = func(_ context.Context, _ *paho.Publish) (*paho.PublishResponse, error) {
 		env := baseEnv("ack", 4)
 		waiterKey := replyKey(env.CommandID, env.ExecutionFence)

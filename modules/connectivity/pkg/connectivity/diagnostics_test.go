@@ -83,7 +83,6 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 	gwURI, _ := url.Parse("spiffe://hvac.local/platform-gateway")
 	gwPeer := &x509.Certificate{URIs: []*url.URL{gwURI}}
 
-	// Without SPIFFE TLS -> 401.
 	unauthReq := httptest.NewRequest(http.MethodGet, "/internal/v1/gateways/"+gwID+"/quarantine", nil)
 	unauthRec := httptest.NewRecorder()
 	wrapped.ServeHTTP(unauthRec, unauthReq)
@@ -91,7 +90,6 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 		t.Fatalf("expected 401 without SPIFFE TLS, got %d", unauthRec.Code)
 	}
 
-	// Forged X-Gateway-Client-Cert on internal diagnostics route -> 403.
 	forgedReq := httptest.NewRequest(http.MethodGet, "/internal/v1/gateways/"+gwID+"/packet-capture", nil)
 	forgedReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
 	forgedReq.Header.Set("X-Gateway-Client-Cert", "forged")
@@ -101,7 +99,6 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 		t.Fatalf("expected 403 on forged X-Gateway-Client-Cert, got %d", forgedRec.Code)
 	}
 
-	// Nil diagnosticsHandler in NewCredentialHandlerWithShadow does not mount diagnostics routes.
 	shadowOnly := NewCredentialHandlerWithShadow(nil, authorize, nil, nil, nil)
 	missingReq := httptest.NewRequest(http.MethodGet, "/internal/v1/gateways/"+gwID+"/quarantine", nil)
 	missingReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
@@ -111,7 +108,6 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 		t.Fatalf("expected 404 when diagnosticsHandler is nil, got %d", missingRec.Code)
 	}
 
-	// GET quarantine with default limit=20 and strict JSON contract check.
 	qReq := httptest.NewRequest(http.MethodGet, "/internal/v1/gateways/"+gwID+"/quarantine", nil)
 	qReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
 	qRec := httptest.NewRecorder()
@@ -137,7 +133,6 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 		}
 	}
 
-	// Invalid query limit bounds -> 400.
 	for _, badLimit := range []string{"", "0", "-5", "51", "abc"} {
 		req := httptest.NewRequest(http.MethodGet, "/internal/v1/gateways/"+gwID+"/quarantine?limit="+badLimit, nil)
 		req.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
@@ -148,7 +143,6 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 		}
 	}
 
-	// Valid limit=50 passes through and nil slice serializes as [].
 	store.quarantineItems = nil
 	limReq := httptest.NewRequest(http.MethodGet, "/internal/v1/gateways/"+gwID+"/quarantine?limit=50", nil)
 	limReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
@@ -158,7 +152,6 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 		t.Fatalf("limit=50 empty result status=%d limit=%d body=%s", limRec.Code, store.lastLimit, limRec.Body.String())
 	}
 
-	// Scope 403 / 404 and masked 500 on quarantine.
 	for _, tc := range []struct {
 		err      error
 		wantCode int
@@ -180,7 +173,6 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 	}
 	store.quarantineErr = nil
 
-	// Packet capture start (empty body defaults to 300s), record, get, stop.
 	startReq := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/"+gwID+"/packet-capture/start", nil)
 	startReq.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
 	startRec := httptest.NewRecorder()
@@ -217,7 +209,6 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 		t.Fatalf("unexpected stop snapshot: %+v err=%v", snap, err)
 	}
 
-	// Start with invalid durationSeconds or unknown fields -> 400.
 	for _, badBody := range []string{`{"durationSeconds":0}`, `{"durationSeconds":29}`, `{"durationSeconds":901}`, `{"unknown":true}`, `{`, `{"durationSeconds":60}{}`} {
 		req := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/"+gwID+"/packet-capture/start", bytes.NewBufferString(badBody))
 		req.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{gwPeer}}}
@@ -228,7 +219,6 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 		}
 	}
 
-	// Scope 403 and 404 on packet-capture GET/start/stop.
 	for _, tc := range []struct {
 		err      error
 		wantCode int
@@ -255,7 +245,6 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 	}
 	store.scopeErr = nil
 
-	// 429 PACKET_CAPTURE_CAPACITY_EXCEEDED when 32 gateways already active.
 	for i := 1; i <= packettap.MaxActiveCaptureSessions; i++ {
 		id := fmt.Sprintf("0194f000-2000-7000-8000-%012x", 100+i)
 		req := httptest.NewRequest(http.MethodPost, "/internal/v1/gateways/"+id+"/packet-capture/start", bytes.NewBufferString(`{"durationSeconds":60}`))
@@ -274,7 +263,6 @@ func TestDiagnosticsHTTPHandlersAndContract(t *testing.T) {
 		t.Fatalf("expected 429 PACKET_CAPTURE_CAPACITY_EXCEEDED, got %d body=%s", overRec.Code, overRec.Body.String())
 	}
 
-	// Nil authorizer -> 403.
 	noAuthHandler := NewDiagnosticsHandler(store, tap, nil)
 	noAuthRec := httptest.NewRecorder()
 	noAuthHandler.ServeHTTP(noAuthRec, httptest.NewRequest(http.MethodGet, "/internal/v1/gateways/"+gwID+"/quarantine", nil))

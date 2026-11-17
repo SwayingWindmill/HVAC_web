@@ -143,6 +143,17 @@ func TestTelemetryRuntimeClientAcceptObservationBatchWireContract(t *testing.T) 
 
 func newTestTelemetryServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *TelemetryRuntimeClient) {
 	t.Helper()
+	server, cfg := newTestTelemetryServerWithConfig(t, handler)
+	client, err := NewTelemetryRuntimeClient(cfg)
+	if err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	return server, client
+}
+
+func newTestTelemetryServerWithConfig(t *testing.T, handler http.HandlerFunc) (*httptest.Server, TelemetryRuntimeConfig) {
+	t.Helper()
 	dir := t.TempDir()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
@@ -190,18 +201,14 @@ func newTestTelemetryServer(t *testing.T, handler http.HandlerFunc) (*httptest.S
 	}
 	server.StartTLS()
 
-	client, err := NewTelemetryRuntimeClient(TelemetryRuntimeConfig{
+	cfg := TelemetryRuntimeConfig{
 		BaseURL:    server.URL,
 		CAFile:     writePEM("ca.pem", "CERTIFICATE", caDER),
 		CertFile:   writePEM("client.pem", "CERTIFICATE", clientCert.Certificate[0]),
 		KeyFile:    writePEM("client.key", "EC PRIVATE KEY", clientKey),
 		ServerName: "telemetry.local",
-	})
-	if err != nil {
-		server.Close()
-		t.Fatal(err)
 	}
-	return server, client
+	return server, cfg
 }
 
 func TestTracePropagationFromEnvelopeToObservationEventAndHTTPTraceparent(t *testing.T) {
@@ -350,52 +357,12 @@ func TestNewTelemetryRuntimeClientWithTracer(t *testing.T) {
 	exporter := &observability.MemoryExporter{}
 	customTracer := observability.NewTracer("custom-adapter", exporter)
 
-	server, baseClient := newTestTelemetryServer(t, func(writer http.ResponseWriter, request *http.Request) {
+	server, cfg := newTestTelemetryServerWithConfig(t, func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"accepted":true}`))
 	})
 	defer server.Close()
 
-	// Reuse the generated test server TLS PKI files via a temporary config extracted from baseClient is indirect;
-	// instead write PKI files alongside test server or construct config directly.
-	dir := t.TempDir()
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test CA"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caCert, _ := x509.ParseCertificate(caDER)
-	clientKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	clientDER, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
-		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "connectivity"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}, caCert, &clientKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientKeyDER, _ := x509.MarshalECPrivateKey(clientKey)
-	writePEM := func(name, kind string, der []byte) string {
-		path := filepath.Join(dir, name)
-		if writeErr := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: kind, Bytes: der}), 0o600); writeErr != nil {
-			t.Fatal(writeErr)
-		}
-		return path
-	}
-	cfg := TelemetryRuntimeConfig{
-		BaseURL:    server.URL,
-		CAFile:     writePEM("ca.pem", "CERTIFICATE", caDER),
-		CertFile:   writePEM("client.pem", "CERTIFICATE", clientDER),
-		KeyFile:    writePEM("client.key", "EC PRIVATE KEY", clientKeyDER),
-		ServerName: "telemetry.local",
-	}
-
-	_ = baseClient
 	withTracer, err := NewTelemetryRuntimeClientWithTracer(cfg, customTracer)
 	if err != nil {
 		t.Fatalf("NewTelemetryRuntimeClientWithTracer(custom) failed: %v", err)

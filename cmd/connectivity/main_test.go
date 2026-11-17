@@ -186,7 +186,7 @@ func (f *fakeQuarantinePruner) PruneExpiredQuarantine(_ context.Context, retenti
 
 func TestDiagnosticsServerRoutesAndShutdownReadiness(t *testing.T) {
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{Service: "mqtt-telemetry-adapter"})
-	defer telemetry.Shutdown(context.Background())
+	defer func() { _ = telemetry.Shutdown(context.Background()) }()
 	telemetry.MarkReady()
 
 	var runtimeReady atomic.Bool

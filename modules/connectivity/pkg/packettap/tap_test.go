@@ -110,7 +110,6 @@ func TestManagerRingBufferTTLStopAndCapacity(t *testing.T) {
 		t.Fatalf("too long duration err=%v, want ErrInvalidCaptureDuration", err)
 	}
 
-	// Default duration (0 -> 300s) and ring buffer overflow past 100 packets.
 	snap, err := mgr.Start(strings.ToUpper(" "+gw1+" "), 0)
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
@@ -131,14 +130,12 @@ func TestManagerRingBufferTTLStopAndCapacity(t *testing.T) {
 	if snap.Items[0].Sequence != 26 || snap.Items[len(snap.Items)-1].Sequence != DefaultMaxPackets+25 {
 		t.Fatalf("unexpected sequence bounds: first=%d last=%d", snap.Items[0].Sequence, snap.Items[len(snap.Items)-1].Sequence)
 	}
-	// Mutating returned snapshot slice must not affect manager state.
 	snap.Items[0].Topic = "mutated"
 	snap2 := mgr.Snapshot(gw1)
 	if snap2.Items[0].Topic == "mutated" {
 		t.Fatal("Snapshot did not deep copy items")
 	}
 
-	// Stop keeps snapshot readable for 5m, then drops after 5m.
 	stopped := mgr.Stop(gw1)
 	if stopped.Active || len(stopped.Items) != DefaultMaxPackets || stopped.DroppedCount != 25 {
 		t.Fatalf("stopped snapshot mismatch: %+v", stopped)
@@ -153,7 +150,6 @@ func TestManagerRingBufferTTLStopAndCapacity(t *testing.T) {
 		t.Fatalf("stopped snapshot not dropped after 5m: %+v", pruned)
 	}
 
-	// TTL expiration transitions Active -> false and preserves items for 5m.
 	gwTTL := testGatewayUUIDv7(2)
 	if _, err := mgr.Start(gwTTL, 30); err != nil {
 		t.Fatalf("Start ttl session: %v", err)
@@ -169,7 +165,6 @@ func TestManagerRingBufferTTLStopAndCapacity(t *testing.T) {
 		t.Fatalf("expired snapshot not pruned after 5m retention: %+v", afterRetention)
 	}
 
-	// 32 active session cap allows restarting an already-active gateway, rejects 33rd.
 	for i := 10; i < 10+MaxActiveCaptureSessions; i++ {
 		if _, err := mgr.Start(testGatewayUUIDv7(i), 60); err != nil {
 			t.Fatalf("Start session %d failed: %v", i, err)
@@ -181,7 +176,6 @@ func TestManagerRingBufferTTLStopAndCapacity(t *testing.T) {
 	if _, err := mgr.Start(testGatewayUUIDv7(999), 60); !errors.Is(err, ErrCaptureCapacityExceeded) {
 		t.Fatalf("33rd active gateway err=%v, want ErrCaptureCapacityExceeded", err)
 	}
-	// Stopping one active session frees capacity.
 	mgr.Stop(testGatewayUUIDv7(10))
 	if _, err := mgr.Start(testGatewayUUIDv7(999), 60); err != nil {
 		t.Fatalf("Start after freeing slot failed: %v", err)

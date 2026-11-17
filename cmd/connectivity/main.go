@@ -144,7 +144,7 @@ func main() {
 	// fails instead of reporting healthy without a command channel.
 	var commands *commandRuntime
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("COMMAND_RUNTIME_IN_PROCESS_ENABLED")), "true") {
-		if commands, err = loadCommandRuntimeWithTap(drainRootCtx, connectivityStore, logger, telemetry.Metrics, tap); err != nil {
+		if commands, err = loadCommandRuntime(drainRootCtx, connectivityStore, logger, telemetry.Metrics, tap); err != nil {
 			logger.Error("connectivity_command_runtime_unavailable", "error_code", "COMMAND_MODULE_UNAVAILABLE", "error", err.Error())
 			os.Exit(1)
 		}
