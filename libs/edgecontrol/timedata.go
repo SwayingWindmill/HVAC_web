@@ -281,7 +281,33 @@ func (store *FileTimedata) QueryRange(from, to time.Time, addresses []string, li
 	return records, nil
 }
 
-func (store *FileTimedata) readHistoryLocked(include func(TimedataRecord) bool) ([]TimedataRecord, error) {
+func (store *FileTimedata) LatestSequence() uint64 {
+	if store == nil {
+		return 0
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.nextSequence
+}
+
+func (store *FileTimedata) QueryAfterSequence(afterSequence uint64, limit int, include func(TimedataRecord) bool) ([]TimedataRecord, error) {
+	if store == nil {
+		return nil, errors.New("edge timedata is nil")
+	}
+	if limit <= 0 {
+		return nil, errors.New("sequence query limit must be positive")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.readHistoryLimitLocked(limit, func(record TimedataRecord) bool {
+		if record.Sequence <= afterSequence {
+			return false
+		}
+		return include == nil || include(record)
+	})
+}
+
+func (store *FileTimedata) readHistoryLimitLocked(limit int, include func(TimedataRecord) bool) ([]TimedataRecord, error) {
 	file, err := os.Open(store.historyPath())
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -302,12 +328,19 @@ func (store *FileTimedata) readHistoryLocked(include func(TimedataRecord) bool) 
 		}
 		if include == nil || include(record) {
 			records = append(records, record)
+			if limit > 0 && len(records) >= limit {
+				break
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	return records, nil
+}
+
+func (store *FileTimedata) readHistoryLocked(include func(TimedataRecord) bool) ([]TimedataRecord, error) {
+	return store.readHistoryLimitLocked(0, include)
 }
 
 func (store *FileTimedata) persistLatestLocked() error {

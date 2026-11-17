@@ -10,9 +10,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -21,10 +23,14 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
-const mqttTelemetryEnvelopeSchemaVersion = "2.0"
+const (
+	mqttTelemetryEnvelopeSchemaVersion = "2.0"
+	defaultMQTTFullSnapshotInterval    = 300 * time.Second
+)
 
 type mqttTelemetryEnvelope struct {
 	SchemaVersion string               `json:"schemaVersion"`
@@ -100,19 +106,31 @@ func (s *mqttSessionState) current() (string, time.Time) {
 	return s.sessionID, s.sessionTime
 }
 
+type lastEmittedPointState struct {
+	value   any
+	quality uint8
+}
+
 type MQTTPublisher struct {
-	gatewayID      string
-	config         MQTTGatewayConfig
-	pointByKey     map[string]PointConfig
-	manager        *autopaho.ConnectionManager
-	commandHandler *edgeCommandHandler
-	evidenceSpool  *mqttEvidenceSpool
-	commandTopic   string
-	metrics        *observability.Registry
-	connected      *atomic.Bool
-	eventSequence  *atomic.Uint64
-	session        *mqttSessionState
-	configShadow   *edgeConfigShadow
+	gatewayID          string
+	config             MQTTGatewayConfig
+	pointMu            sync.RWMutex
+	pointByKey         map[string]PointConfig
+	edgeRuntime        *EdgeControlRuntime
+	manager            *autopaho.ConnectionManager
+	commandHandler     *edgeCommandHandler
+	evidenceSpool      *mqttEvidenceSpool
+	resendQueue        *TimedataResendQueue
+	commandTopic       string
+	metrics            *observability.Registry
+	connected          *atomic.Bool
+	eventSequence      *atomic.Uint64
+	session            *mqttSessionState
+	configShadow       *edgeConfigShadow
+	snapshotMu         sync.Mutex
+	snapshotInterval   time.Duration
+	lastFullSnapshotAt time.Time
+	lastPointStates    map[string]lastEmittedPointState
 }
 
 func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewayConfig, edgeRuntime *EdgeControlRuntime, metrics *observability.Registry) (*MQTTPublisher, error) {
@@ -151,6 +169,48 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 	if err := configShadow.load(); err != nil {
 		return nil, err
 	}
+	pointByKey := make(map[string]PointConfig, len(plantConfig.Points))
+	for _, point := range plantConfig.Points {
+		pointByKey[pointReference(point.DeviceID, point.TelemetryKey)] = point
+	}
+	publisher := &MQTTPublisher{
+		gatewayID:        config.GatewayID,
+		config:           config,
+		pointByKey:       pointByKey,
+		edgeRuntime:      edgeRuntime,
+		commandHandler:   commandHandler,
+		evidenceSpool:    evidenceSpool,
+		commandTopic:     mqttCommandTopic(config),
+		metrics:          metrics,
+		connected:        connected,
+		eventSequence:    eventSequence,
+		session:          session,
+		configShadow:     configShadow,
+		snapshotInterval: defaultMQTTFullSnapshotInterval,
+		lastPointStates:  map[string]lastEmittedPointState{},
+	}
+	configShadow.applyDriverHook = func(_ context.Context, cfg GatewayModbusDriverConfig, profile edgecontrol.DeclarativeModbusProfile) error {
+		if edgeRuntime != nil {
+			if err := edgeRuntime.ApplyDriverProfile(profile); err != nil {
+				return err
+			}
+		}
+		publisher.registerShadowDriverPoints(cfg)
+		return nil
+	}
+	configShadow.applyAutonomyHook = func(_ context.Context, policy GatewayAutonomyPolicy) error {
+		if edgeRuntime != nil {
+			if err := edgeRuntime.ApplyAutonomyPolicy(policy); err != nil {
+				return err
+			}
+		}
+		publisher.SetSnapshotInterval(policy.SnapshotInterval())
+		return nil
+	}
+	if err := configShadow.reapplyPersisted(ctx); err != nil {
+		return nil, fmt.Errorf("reapply persisted edge config shadow: %w", err)
+	}
+
 	_ = metrics.SetGauge("hvac_edge_mqtt_connected", "Whether the Edge publisher is connected to the MQTT broker.", nil, 0)
 	_ = metrics.SetGauge("hvac_edge_mqtt_queue_capacity_bytes", "Configured persistent MQTT queue capacity in bytes.", nil, float64(config.MaximumQueueBytes))
 	initialSessionID, initialSessionTime, err := session.next(time.Now().UTC())
@@ -195,11 +255,23 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		},
 		OnConnectError: func(error) {
 			connected.Store(false)
+			if publisher.resendQueue != nil {
+				publisher.resendQueue.SetOnlineSynced(false)
+			}
+			if edgeRuntime != nil {
+				edgeRuntime.NotifyCloudContact(false, time.Now().UTC())
+			}
 			_ = metrics.SetGauge("hvac_edge_mqtt_connected", "Whether the Edge publisher is connected to the MQTT broker.", nil, 0)
 			_ = metrics.AddCounter("hvac_edge_mqtt_connections_total", "Edge MQTT connection attempts by outcome.", map[string]string{"outcome": "failed"}, 1)
 		},
 		OnConnectionDown: func() bool {
 			connected.Store(false)
+			if publisher.resendQueue != nil {
+				publisher.resendQueue.SetOnlineSynced(false)
+			}
+			if edgeRuntime != nil {
+				edgeRuntime.NotifyCloudContact(false, time.Now().UTC())
+			}
 			_ = metrics.SetGauge("hvac_edge_mqtt_connected", "Whether the Edge publisher is connected to the MQTT broker.", nil, 0)
 			_ = metrics.AddCounter("hvac_edge_mqtt_disconnections_total", "Edge MQTT disconnections.", map[string]string{"reason_family": "transport"}, 1)
 			return true
@@ -207,6 +279,9 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 		OnConnectionUp: func(manager *autopaho.ConnectionManager, _ *paho.Connack) {
 			sessionID, sessionTime := session.current()
 			connected.Store(true)
+			if edgeRuntime != nil {
+				edgeRuntime.NotifyCloudContact(true, sessionTime)
+			}
 			_ = metrics.SetGauge("hvac_edge_mqtt_connected", "Whether the Edge publisher is connected to the MQTT broker.", nil, 1)
 			_ = metrics.AddCounter("hvac_edge_mqtt_connections_total", "Edge MQTT connection attempts by outcome.", map[string]string{"outcome": "success"}, 1)
 			commandTopic := mqttCommandTopic(config)
@@ -230,6 +305,9 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 				flushContext, flushCancel := context.WithTimeout(ctx, 30*time.Second)
 				defer flushCancel()
 				_ = evidenceSpool.Flush(flushContext, manager)
+				if publisher.resendQueue != nil {
+					_, _ = publisher.resendQueue.Drain(flushContext)
+				}
 				if strings.TrimSpace(config.EnrollmentURL) != "" {
 					shadowContext, shadowCancel := context.WithTimeout(ctx, 15*time.Second)
 					defer shadowCancel()
@@ -238,31 +316,43 @@ func NewMQTTPublisher(ctx context.Context, plantConfig Config, config MQTTGatewa
 			}()
 		},
 		ClientConfig: paho.ClientConfig{
-			ClientID:          config.GatewayID,
-			OnPublishReceived: []func(paho.PublishReceived) (bool, error){commandHandler.Handle},
+			ClientID: config.GatewayID,
+			OnPublishReceived: []func(paho.PublishReceived) (bool, error){func(recv paho.PublishReceived) (bool, error) {
+				if edgeRuntime != nil {
+					edgeRuntime.NotifyCloudContact(true, time.Now().UTC())
+				}
+				return commandHandler.Handle(recv)
+			}},
 		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create MQTT publisher connection: %w", err)
 	}
-	pointByKey := make(map[string]PointConfig, len(plantConfig.Points))
-	for _, point := range plantConfig.Points {
-		pointByKey[pointReference(point.DeviceID, point.TelemetryKey)] = point
+	publisher.manager = manager
+	if edgeRuntime != nil && edgeRuntime.Timedata() != nil {
+		resendQueue, resendErr := NewTimedataResendQueue(TimedataResendConfig{
+			GatewayID:  config.GatewayID,
+			Timedata:   edgeRuntime.Timedata(),
+			CursorPath: filepath.Join(config.QueueDirectory, "resend-cursor.json"),
+			Metrics:    metrics,
+			PointMetadata: func(address string) TimedataResendPointMeta {
+				return publisher.timedataPointMetadata(address)
+			},
+			Publish: func(pubCtx context.Context, topic string, payload []byte) error {
+				_, pubErr := manager.Publish(pubCtx, &paho.Publish{
+					Topic:   topic,
+					QoS:     1,
+					Payload: payload,
+				})
+				return pubErr
+			},
+		})
+		if resendErr != nil {
+			return nil, resendErr
+		}
+		publisher.resendQueue = resendQueue
 	}
-	return &MQTTPublisher{
-		gatewayID:      config.GatewayID,
-		config:         config,
-		pointByKey:     pointByKey,
-		manager:        manager,
-		commandHandler: commandHandler,
-		evidenceSpool:  evidenceSpool,
-		commandTopic:   mqttCommandTopic(config),
-		metrics:        metrics,
-		connected:      connected,
-		eventSequence:  eventSequence,
-		session:        session,
-		configShadow:   configShadow,
-	}, nil
+	return publisher, nil
 }
 
 func (publisher *MQTTPublisher) AwaitConnection(ctx context.Context) error {
@@ -338,10 +428,12 @@ func (publisher *MQTTPublisher) PublishMeasurements(ctx context.Context, measure
 		}
 	}
 	outcome = "queued"
-	if publisher.connected.Load() {
+	if publisher.connected != nil && publisher.connected.Load() {
 		flushContext, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		_ = publisher.evidenceSpool.Flush(flushContext, publisher.manager)
+		if flushErr := publisher.evidenceSpool.Flush(flushContext, publisher.manager); flushErr == nil && publisher.resendQueue != nil {
+			_ = publisher.resendQueue.SyncOnlineBaseline()
+		}
 	}
 	return nil
 }
@@ -440,6 +532,90 @@ func mqttEventTopic(gatewayID string) string {
 	return "hvac/v1/" + gatewayID + "/up/event"
 }
 
+// SetSnapshotInterval updates the forced full-snapshot emission interval.
+func (publisher *MQTTPublisher) SetSnapshotInterval(interval time.Duration) {
+	if publisher == nil || interval <= 0 {
+		return
+	}
+	publisher.snapshotMu.Lock()
+	publisher.snapshotInterval = interval
+	publisher.snapshotMu.Unlock()
+}
+
+// SnapshotInterval returns the configured full-snapshot interval.
+func (publisher *MQTTPublisher) SnapshotInterval() time.Duration {
+	if publisher == nil {
+		return defaultMQTTFullSnapshotInterval
+	}
+	publisher.snapshotMu.Lock()
+	defer publisher.snapshotMu.Unlock()
+	if publisher.snapshotInterval <= 0 {
+		return defaultMQTTFullSnapshotInterval
+	}
+	return publisher.snapshotInterval
+}
+
+func (publisher *MQTTPublisher) registerShadowDriverPoints(cfg GatewayModbusDriverConfig) {
+	if publisher == nil {
+		return
+	}
+	publisher.pointMu.Lock()
+	defer publisher.pointMu.Unlock()
+	if publisher.pointByKey == nil {
+		publisher.pointByKey = make(map[string]PointConfig, len(cfg.Registers))
+	}
+	for _, reg := range cfg.Registers {
+		key := pointReference(cfg.DeviceKey, reg.PointCode)
+		if _, exists := publisher.pointByKey[key]; exists {
+			continue
+		}
+		publisher.pointByKey[key] = PointConfig{
+			PointID:      cfg.DeviceKey + ":" + reg.PointCode,
+			DeviceID:     cfg.DeviceKey,
+			SourceKey:    reg.PointCode,
+			TelemetryKey: reg.PointCode,
+			PointCode:    reg.PointCode,
+		}
+	}
+}
+
+func (publisher *MQTTPublisher) lookupPoint(deviceID, telemetryKey string) (PointConfig, bool) {
+	publisher.pointMu.RLock()
+	point, ok := publisher.pointByKey[pointReference(deviceID, telemetryKey)]
+	publisher.pointMu.RUnlock()
+	return point, ok
+}
+
+func (publisher *MQTTPublisher) timedataPointMetadata(address string) TimedataResendPointMeta {
+	var meta TimedataResendPointMeta
+	if dev, ch, ok := strings.Cut(address, "/"); ok {
+		meta.DeviceID = dev
+		meta.PointCode = ch
+	}
+	if publisher != nil {
+		if pt, ok := publisher.lookupPoint(meta.DeviceID, meta.PointCode); ok {
+			if strings.TrimSpace(pt.PointCode) != "" {
+				meta.PointCode = strings.TrimSpace(pt.PointCode)
+			}
+			meta.Unit = strings.TrimSpace(pt.Unit)
+		}
+		if publisher.edgeRuntime != nil {
+			if desc, ok := publisher.edgeRuntime.ChannelDescriptor(address); ok {
+				if meta.Unit == "" {
+					meta.Unit = strings.TrimSpace(desc.Unit)
+				}
+				if desc.ResendPriority != "" {
+					meta.Priority = desc.ResendPriority
+				} else if desc.PollPriority != "" {
+					meta.Priority = desc.PollPriority
+				}
+			}
+		}
+	}
+	meta.Priority = normalizeResendPriority(meta.Priority)
+	return meta
+}
+
 func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttTelemetryEnvelope, error) {
 	type deviceBatch struct {
 		timestamp time.Time
@@ -448,8 +624,36 @@ func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttT
 	byDevice := make(map[string]deviceBatch)
 	publishedAt := time.Time{}
 	var gatewaySequence uint64
+
+	batchObservedAt := time.Time{}
 	for _, measurement := range measurements {
-		point, ok := publisher.pointByKey[pointReference(measurement.DeviceID, measurement.TelemetryKey)]
+		if measurement.ObservedAt.After(batchObservedAt) {
+			batchObservedAt = measurement.ObservedAt
+		}
+	}
+	if batchObservedAt.IsZero() {
+		batchObservedAt = time.Now().UTC()
+	}
+
+	publisher.snapshotMu.Lock()
+	interval := publisher.snapshotInterval
+	if interval <= 0 {
+		interval = defaultMQTTFullSnapshotInterval
+	}
+	fullSnapshotDue := publisher.lastFullSnapshotAt.IsZero() || batchObservedAt.Sub(publisher.lastFullSnapshotAt) >= interval
+	if publisher.lastPointStates == nil {
+		publisher.lastPointStates = map[string]lastEmittedPointState{}
+	}
+	snapshotCopy := make(map[string]lastEmittedPointState, len(publisher.lastPointStates))
+	for k, v := range publisher.lastPointStates {
+		snapshotCopy[k] = v
+	}
+	publisher.snapshotMu.Unlock()
+
+	updatedPointStates := make(map[string]lastEmittedPointState, len(measurements))
+	for _, measurement := range measurements {
+		refKey := pointReference(measurement.DeviceID, measurement.TelemetryKey)
+		point, ok := publisher.lookupPoint(measurement.DeviceID, measurement.TelemetryKey)
 		if !ok {
 			return mqttTelemetryEnvelope{}, fmt.Errorf("MQTT point metadata is missing for %s/%s", measurement.DeviceID, measurement.TelemetryKey)
 		}
@@ -462,12 +666,30 @@ func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttT
 		if !strings.EqualFold(strings.TrimSpace(measurement.Quality), "GOOD") {
 			quality = 1
 		}
-		targets := publisher.configShadow.resolveAndFilterTargets(
-			measurement.DeviceID,
-			measurement.TelemetryKey,
-			strings.TrimSpace(point.PointCode),
-			measurement.ObservedAt,
-		)
+
+		deadband := telemetryDeadband(point, publisher.configShadow.deadbandFor(measurement.DeviceID, strings.TrimSpace(point.PointCode)))
+		prevState, hasPrev := snapshotCopy[refKey]
+		changed := !hasPrev || prevState.quality != quality || telemetryValueChanged(prevState.value, measurement.Value, deadband)
+		if !fullSnapshotDue && !changed {
+			continue
+		}
+
+		var targets []shadowEmitTarget
+		if fullSnapshotDue {
+			targets = publisher.configShadow.resolveTargetsUnthrottled(
+				measurement.DeviceID,
+				measurement.TelemetryKey,
+				strings.TrimSpace(point.PointCode),
+				measurement.ObservedAt,
+			)
+		} else {
+			targets = publisher.configShadow.resolveAndFilterTargets(
+				measurement.DeviceID,
+				measurement.TelemetryKey,
+				strings.TrimSpace(point.PointCode),
+				measurement.ObservedAt,
+			)
+		}
 		for _, target := range targets {
 			batch := byDevice[target.DeviceID]
 			batch.points = append(batch.points, mqttEnvelopePoint{
@@ -482,6 +704,7 @@ func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttT
 			byDevice[target.DeviceID] = batch
 		}
 		if len(targets) > 0 {
+			updatedPointStates[refKey] = lastEmittedPointState{value: measurement.Value, quality: quality}
 			if measurement.ObservedAt.After(publishedAt) {
 				publishedAt = measurement.ObservedAt
 			}
@@ -493,6 +716,18 @@ func (publisher *MQTTPublisher) buildEnvelope(measurements []Measurement) (mqttT
 	if len(byDevice) == 0 {
 		return mqttTelemetryEnvelope{}, nil
 	}
+
+	publisher.snapshotMu.Lock()
+	if publisher.lastPointStates == nil {
+		publisher.lastPointStates = map[string]lastEmittedPointState{}
+	}
+	for k, v := range updatedPointStates {
+		publisher.lastPointStates[k] = v
+	}
+	if fullSnapshotDue {
+		publisher.lastFullSnapshotAt = batchObservedAt
+	}
+	publisher.snapshotMu.Unlock()
 	deviceIDs := make([]string, 0, len(byDevice))
 	for deviceID := range byDevice {
 		deviceIDs = append(deviceIDs, deviceID)
@@ -570,4 +805,58 @@ func newUUIDV7(at time.Time) (string, error) {
 	encoded := make([]byte, 32)
 	hex.Encode(encoded, raw[:])
 	return string(encoded[0:8]) + "-" + string(encoded[8:12]) + "-" + string(encoded[12:16]) + "-" + string(encoded[16:20]) + "-" + string(encoded[20:32]), nil
+}
+
+func telemetryDeadband(point PointConfig, policyDeadband float64) float64 {
+	best := policyDeadband
+	if point.SourceMetadata != nil {
+		if raw, ok := point.SourceMetadata["deadband"]; ok {
+			if val, numOK := toFloat64(raw); numOK && !math.IsNaN(val) && !math.IsInf(val, 0) && val > best {
+				best = val
+			}
+		}
+	}
+	return best
+}
+
+func telemetryValueChanged(prev, curr any, deadband float64) bool {
+	pNum, pOK := toFloat64(prev)
+	cNum, cOK := toFloat64(curr)
+	if pOK && cOK {
+		if math.IsNaN(pNum) != math.IsNaN(cNum) {
+			return true
+		}
+		if math.IsNaN(pNum) && math.IsNaN(cNum) {
+			return false
+		}
+		return math.Abs(cNum-pNum) > deadband
+	}
+	return !reflect.DeepEqual(prev, curr)
+}
+
+func toFloat64(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case float32:
+		return float64(x), true
+	case int:
+		return float64(x), true
+	case int64:
+		return float64(x), true
+	case int32:
+		return float64(x), true
+	case uint:
+		return float64(x), true
+	case uint64:
+		return float64(x), true
+	case uint32:
+		return float64(x), true
+	case uint16:
+		return float64(x), true
+	case int16:
+		return float64(x), true
+	default:
+		return 0, false
+	}
 }
