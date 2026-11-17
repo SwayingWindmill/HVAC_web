@@ -897,3 +897,124 @@ func TestPostgresControlFailureNotifierEmitsOnReconciliationAndResolution(t *tes
 		}
 	})
 }
+
+func TestPostgresPriorityArbitrationLocksAndPreemption(t *testing.T) {
+	store, admin, now, cleanup := postgresDispatchFixture(t)
+	defer cleanup()
+	ctx := t.Context()
+
+	// 1. Submit SCHEDULE (seq 1) then MANUAL_OVERRIDE (seq 2); ClaimDispatch chooses MANUAL_OVERRIDE first.
+	schedReq := postgresCommandRequest("pg-prio-sched", 24)
+	schedReq.CurrentState.ObservedAt = *now
+	schedReq.Authorization.IssuedAt = now.Add(-5 * time.Second)
+	schedReq.Authorization.ExpiresAt = now.Add(25 * time.Second)
+	schedReq.PriorityTier = commandmodel.PrioritySchedule
+	schedReq.CommandSource = commandmodel.SourceSchedule
+	schedCmd, err := store.Submit(ctx, schedReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	manualReq := postgresCommandRequest("pg-prio-manual", 24)
+	manualReq.CurrentState.ObservedAt = *now
+	manualReq.Authorization.IssuedAt = now.Add(-5 * time.Second)
+	manualReq.Authorization.ExpiresAt = now.Add(25 * time.Second)
+	manualCmd, err := store.Submit(ctx, manualReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claimedFirst, err := store.ClaimDispatch(ctx, commandTenantA, "disp-prio-1", 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimedFirst.CommandID != manualCmd.Intent.ID {
+		t.Fatalf("ClaimDispatch selected %s (schedule=%s), want manual=%s", claimedFirst.CommandID, schedCmd.Intent.ID, manualCmd.Intent.ID)
+	}
+
+	// Lower-priority submit fails closed while MANUAL_OVERRIDE is DISPATCHING.
+	blockedLow := postgresCommandRequest("pg-prio-blocked-active", 24)
+	blockedLow.CurrentState.ObservedAt = *now
+	blockedLow.Authorization.IssuedAt = now.Add(-5 * time.Second)
+	blockedLow.Authorization.ExpiresAt = now.Add(25 * time.Second)
+	blockedLow.PriorityTier = commandmodel.PriorityAIOptimization
+	blockedLow.CommandSource = commandmodel.SourceOptimization
+	if _, err := store.Submit(ctx, blockedLow); !errors.Is(err, ErrDevicePriorityLocked) {
+		t.Fatalf("expected ErrDevicePriorityLocked under higher active command, got %v", err)
+	}
+
+	// Acquire MANUAL_OVERRIDE lock and verify GetDevicePriorityLock returns it, then ClaimDispatch retires QUEUED schedule command after manual finishes.
+	if _, err := store.AcquireDevicePriorityLock(ctx, commandmodel.DevicePriorityLock{
+		TenantID:       commandTenantA,
+		SiteID:         commandSiteA,
+		DeviceID:       commandDeviceA,
+		LockedPriority: commandmodel.PriorityManualOverride,
+		CommandSource:  commandmodel.SourceOperator,
+		LockedBy:       commandPrincipalA,
+		LockedUntil:    now.Add(15 * time.Minute),
+		Reason:         "operator manual lock",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lockView, err := store.GetDevicePriorityLock(ctx, commandTenantA, commandDeviceA)
+	if err != nil || lockView == nil || lockView.LockedPriority != commandmodel.PriorityManualOverride {
+		t.Fatalf("GetDevicePriorityLock = %+v err=%v", lockView, err)
+	}
+
+	if _, err := store.ClaimDispatch(ctx, commandTenantA, "disp-prio-2", 10*time.Second); !errors.Is(err, ErrNoDispatchAvailable) {
+		t.Fatalf("expected ErrNoDispatchAvailable while lock active, got %v", err)
+	}
+	retiredSched, err := store.Get(ctx, commandTenantA, schedCmd.Intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retiredSched.Status != commandmodel.IntentRejected {
+		t.Fatalf("expected queued schedule intent retired to REJECTED, got %s", retiredSched.Status)
+	}
+	var undelivered int
+	if err := admin.QueryRow(ctx, `
+SELECT count(*) FROM command_runtime.command_dispatch_outbox
+WHERE command_id = $1::uuid AND delivered_at IS NULL
+`, schedCmd.Intent.ID).Scan(&undelivered); err != nil {
+		t.Fatal(err)
+	}
+	if undelivered != 0 {
+		t.Fatalf("expected outbox retired on priority lock rejection, got %d", undelivered)
+	}
+
+	// Cleanly cancel pending/queued commands or finish manual, then verify SAFETY_INTERLOCK preempts queued MANUAL_OVERRIDE.
+	stopProfile, _ := commandmodel.CapabilityProfileFor(commandmodel.CapabilityStop)
+	if err := store.ReleaseDevicePriorityLock(ctx, commandTenantA, commandDeviceA); err != nil {
+		t.Fatal(err)
+	}
+	manualQueuedReq := postgresCommandRequest("pg-prio-manual-preempt", 24)
+	manualQueuedReq.CurrentState.ObservedAt = *now
+	manualQueuedReq.Authorization.IssuedAt = now.Add(-5 * time.Second)
+	manualQueuedReq.Authorization.ExpiresAt = now.Add(25 * time.Second)
+	manualQueued, err := store.Submit(ctx, manualQueuedReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	safetyReq := postgresStartStopCommandRequest("pg-prio-safety-preempt", commandmodel.CapabilityStop, *now)
+	safetyReq.PreconditionMode = commandmodel.PreconditionEmergencyBypass
+	safetyReq.BypassReason = "emergency chill water trip"
+	safetyReq.CurrentState = commandmodel.CurrentStateEvidence{}
+	safetyReq.Authorization.CapabilityRevision = stopProfile.Revision
+	safetyReq.Authorization.MaximumRisk = commandmodel.RiskCritical
+	if _, err := store.Submit(ctx, safetyReq); err != nil {
+		t.Fatal(err)
+	}
+
+	preempted, err := store.Get(ctx, commandTenantA, manualQueued.Intent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preempted.Status != commandmodel.IntentCancelled {
+		t.Fatalf("expected MANUAL_OVERRIDE preempted to CANCELLED, got %s", preempted.Status)
+	}
+	lastTransition := preempted.Transitions[len(preempted.Transitions)-1]
+	if lastTransition.Reason != "PRIORITY_PREEMPTED" {
+		t.Fatalf("expected PRIORITY_PREEMPTED reason, got %s", lastTransition.Reason)
+	}
+}

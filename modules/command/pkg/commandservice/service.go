@@ -52,6 +52,7 @@ type Service struct {
 	idempotency     map[string]idempotencyRecord
 	deviceSequence  map[string]uint64
 	deviceFence     map[string]uint64
+	priorityLocks   map[string]*commandmodel.DevicePriorityLock
 	failureNotifier ControlFailureNotifier
 	failureQueue    controlFailureQueue
 }
@@ -158,6 +159,7 @@ func New(now func() time.Time) *Service {
 		idempotency:    make(map[string]idempotencyRecord),
 		deviceSequence: make(map[string]uint64),
 		deviceFence:    make(map[string]uint64),
+		priorityLocks:  make(map[string]*commandmodel.DevicePriorityLock),
 	}
 }
 
@@ -165,7 +167,7 @@ func (s *Service) Submit(request commandmodel.SubmitRequest) (SubmitResult, erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	payloadHash, err := validateAndHash(request)
+	payloadHash, priorityTier, commandSource, err := validateAndHash(request)
 	if err != nil {
 		return SubmitResult{}, err
 	}
@@ -183,6 +185,29 @@ func (s *Service) Submit(request commandmodel.SubmitRequest) (SubmitResult, erro
 	if err != nil {
 		return SubmitResult{}, err
 	}
+
+	deviceIntents := s.deviceIntentsLocked(request.TenantID, request.DeviceID)
+	activeStatuses := make([]commandmodel.IntentPriorityState, 0, len(deviceIntents))
+	for _, existing := range deviceIntents {
+		if IsBlockingEarlierIntentStatus(existing.Status) {
+			activeStatuses = append(activeStatuses, commandmodel.IntentPriorityState{
+				Status:       existing.Status,
+				PriorityTier: existing.PriorityTier,
+			})
+		}
+	}
+	activeLock := s.activePriorityLockLocked(request.TenantID, request.DeviceID, now)
+	if PriorityLockBlocking(priorityTier, activeLock, now) || ActiveHigherPriorityBlocking(priorityTier, activeStatuses) {
+		return SubmitResult{}, ErrDevicePriorityLocked
+	}
+	if priorityTier == commandmodel.PrioritySafetyInterlock {
+		for _, existing := range deviceIntents {
+			if ShouldPreemptOnSafetyInterlock(priorityTier, existing.Status, existing.PriorityTier) {
+				transition(existing, commandmodel.IntentCancelled, "PRIORITY_PREEMPTED", request.PrincipalID, now, request.Authorization.GrantID, request.Authorization.GrantID)
+			}
+		}
+	}
+
 	s.nextCommandID++
 	commandID := fmt.Sprintf("018f3e00-0000-7000-8000-%012d", s.nextCommandID)
 	s.deviceSequence[request.DeviceID]++
@@ -211,6 +236,8 @@ func (s *Service) Submit(request commandmodel.SubmitRequest) (SubmitResult, erro
 		PayloadHash:           payloadHash,
 		PreconditionMode:      preconditionMode,
 		BypassReason:          bypassReason,
+		PriorityTier:          priorityTier,
+		CommandSource:         commandSource,
 		SnapshotRevision:      request.CurrentState.BusinessRevision,
 		DeviceCommandSequence: s.deviceSequence[request.DeviceID],
 		Status:                commandmodel.IntentSubmitted,
@@ -380,6 +407,21 @@ func (s *Service) PrepareDispatch(commandID, leaseOwner string, leaseUntil time.
 	now := s.now().UTC()
 	if err := validateExecutionGovernance(*intent, now); err != nil {
 		return commandmodel.DispatchEnvelope{}, err
+	}
+	activeLock := s.activePriorityLockLocked(intent.TenantID, intent.DeviceID, now)
+	if PriorityLockBlocking(intent.PriorityTier, activeLock, now) {
+		return commandmodel.DispatchEnvelope{}, ErrDevicePriorityLocked
+	}
+	peers := s.queuedPeerStatesLocked(intent.TenantID, intent.DeviceID, intent.ID)
+	activeStatuses := make([]commandmodel.IntentPriorityState, 0, len(peers))
+	for _, peer := range peers {
+		activeStatuses = append(activeStatuses, commandmodel.IntentPriorityState{
+			Status:       peer.Status,
+			PriorityTier: peer.PriorityTier,
+		})
+	}
+	if ActiveHigherPriorityBlocking(intent.PriorityTier, activeStatuses) {
+		return commandmodel.DispatchEnvelope{}, ErrDevicePriorityLocked
 	}
 	if strings.TrimSpace(leaseOwner) == "" || !leaseUntil.After(now) {
 		return commandmodel.DispatchEnvelope{}, ErrInvalidRequest
@@ -611,19 +653,23 @@ func validReportedState(intent commandmodel.CommandIntent, envelope commandmodel
 		commandmodel.ScalarMatches(reported.ReportedValue, expected, profile.VerificationTolerance)
 }
 
-func validateAndHash(request commandmodel.SubmitRequest) (string, error) {
+func validateAndHash(request commandmodel.SubmitRequest) (string, commandmodel.PriorityTier, commandmodel.CommandSource, error) {
 	if strings.TrimSpace(request.TenantID) == "" || strings.TrimSpace(request.SiteID) == "" ||
 		strings.TrimSpace(request.DeviceID) == "" || strings.TrimSpace(request.PointID) == "" || strings.TrimSpace(request.PrincipalID) == "" ||
 		strings.TrimSpace(request.IdempotencyKey) == "" || strings.TrimSpace(request.VerificationPointKey) == "" {
-		return "", ErrInvalidRequest
+		return "", "", "", ErrInvalidRequest
+	}
+	priorityTier, commandSource, err := commandmodel.ResolveCommandPriority(request)
+	if err != nil {
+		return "", "", "", ErrInvalidRequest
 	}
 	profile, ok := commandmodel.CapabilityProfileFor(request.Capability)
 	if !ok || !commandmodel.ParametersValid(request.Capability, request.Parameters) {
-		return "", ErrCapabilityDenied
+		return "", "", "", ErrCapabilityDenied
 	}
 	preconditionMode, bypassReason, err := validatePrecondition(request, profile)
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
 	parameterCanonical := ""
 	if profile.ParameterKey != "" {
@@ -635,12 +681,12 @@ func validateAndHash(request commandmodel.SubmitRequest) (string, error) {
 		if state.EvaluationAvailability != "AVAILABLE" || state.Presence != "ONLINE" ||
 			state.Readiness != "CURRENT" || state.Quality != "GOOD" || state.BusinessRevision == 0 ||
 			state.ObservedAt.IsZero() {
-			return "", ErrCurrentStateUnsafe
+			return "", "", "", ErrCurrentStateUnsafe
 		}
 		if profile.ParameterKey != "" {
 			value, _ := commandmodel.ParameterValue(request.Capability, request.Parameters)
 			if state.CurrentValue == nil || absolute(value-*state.CurrentValue) > profile.MaximumDelta {
-				return "", ErrCapabilityDenied
+				return "", "", "", ErrCapabilityDenied
 			}
 		}
 	}
@@ -654,13 +700,15 @@ func validateAndHash(request commandmodel.SubmitRequest) (string, error) {
 		parameterCanonical,
 		request.VerificationPointKey,
 		profile.Revision,
+		string(priorityTier),
+		string(commandSource),
 	}
 	if preconditionMode == commandmodel.PreconditionEmergencyBypass {
 		canonicalParts = append(canonicalParts, string(preconditionMode), bypassReason)
 	}
 	canonical := strings.Join(canonicalParts, "|")
 	digest := sha256.Sum256([]byte(canonical))
-	return hex.EncodeToString(digest[:]), nil
+	return hex.EncodeToString(digest[:]), priorityTier, commandSource, nil
 }
 
 func validatePrecondition(request commandmodel.SubmitRequest, profile commandmodel.CapabilityProfile) (commandmodel.PreconditionMode, string, error) {
@@ -777,4 +825,165 @@ func absolute(value float64) float64 {
 		return -value
 	}
 	return value
+}
+
+func priorityLockKey(tenantID, deviceID string) string {
+	return tenantID + "\x00" + deviceID
+}
+
+func normalizeAndValidatePriorityLock(lock commandmodel.DevicePriorityLock, now time.Time) (commandmodel.DevicePriorityLock, error) {
+	lock.TenantID = strings.TrimSpace(lock.TenantID)
+	lock.SiteID = strings.TrimSpace(lock.SiteID)
+	lock.DeviceID = strings.TrimSpace(lock.DeviceID)
+	lock.LockedBy = strings.TrimSpace(lock.LockedBy)
+	lock.Reason = strings.TrimSpace(lock.Reason)
+	lock.LockedPriority = commandmodel.PriorityTier(strings.TrimSpace(string(lock.LockedPriority)))
+	lock.CommandSource = commandmodel.CommandSource(strings.TrimSpace(string(lock.CommandSource)))
+	if lock.TenantID == "" || lock.SiteID == "" || lock.DeviceID == "" ||
+		lock.LockedBy == "" || lock.Reason == "" || !lock.LockedPriority.Valid() || !lock.LockedUntil.After(now) {
+		return commandmodel.DevicePriorityLock{}, ErrInvalidRequest
+	}
+	if lock.CommandSource == "" {
+		lock.CommandSource = commandmodel.DefaultCommandSourceForPriority(lock.LockedPriority)
+	}
+	if !commandmodel.PrioritySourceCompatible(lock.LockedPriority, lock.CommandSource) {
+		return commandmodel.DevicePriorityLock{}, ErrInvalidRequest
+	}
+	lock.LockedUntil = lock.LockedUntil.UTC()
+	return lock, nil
+}
+
+// AcquireDevicePriorityLock installs or refreshes a device-level priority lock at now.
+func (s *Service) AcquireDevicePriorityLock(lock commandmodel.DevicePriorityLock) (commandmodel.DevicePriorityLock, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := s.now().UTC()
+	normalized, err := normalizeAndValidatePriorityLock(lock, now)
+	if err != nil {
+		return commandmodel.DevicePriorityLock{}, err
+	}
+	existing := s.activePriorityLockLocked(normalized.TenantID, normalized.DeviceID, now)
+	if existing != nil && commandmodel.PriorityRank(existing.LockedPriority) > commandmodel.PriorityRank(normalized.LockedPriority) {
+		return commandmodel.DevicePriorityLock{}, ErrDevicePriorityLocked
+	}
+	key := priorityLockKey(normalized.TenantID, normalized.DeviceID)
+	if raw, ok := s.priorityLocks[key]; ok && !raw.CreatedAt.IsZero() {
+		normalized.CreatedAt = raw.CreatedAt
+	} else {
+		normalized.CreatedAt = now
+	}
+	normalized.UpdatedAt = now
+	stored := normalized
+	s.priorityLocks[key] = &stored
+	return normalized, nil
+}
+
+// ReleaseDevicePriorityLock clears any priority lock held on (tenantID, deviceID).
+func (s *Service) ReleaseDevicePriorityLock(tenantID, deviceID string) error {
+	tenantID = strings.TrimSpace(tenantID)
+	deviceID = strings.TrimSpace(deviceID)
+	if tenantID == "" || deviceID == "" {
+		return ErrInvalidRequest
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.priorityLocks, priorityLockKey(tenantID, deviceID))
+	return nil
+}
+
+// GetDevicePriorityLock returns the active priority lock on (tenantID, deviceID), or nil when none or expired.
+func (s *Service) GetDevicePriorityLock(tenantID, deviceID string) (*commandmodel.DevicePriorityLock, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	deviceID = strings.TrimSpace(deviceID)
+	if tenantID == "" || deviceID == "" {
+		return nil, ErrInvalidRequest
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activePriorityLockLocked(tenantID, deviceID, s.now().UTC()), nil
+}
+
+// RejectPriorityLockedQueued transitions QUEUED commands invalidated by a higher-priority device lock to REJECTED.
+func (s *Service) RejectPriorityLockedQueued(tenantID string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := s.now().UTC()
+	var queued []*commandmodel.CommandIntent
+	for _, intent := range s.intents {
+		if intent.TenantID == tenantID && intent.Status == commandmodel.IntentQueued {
+			queued = append(queued, intent)
+		}
+	}
+	sort.Slice(queued, func(i, j int) bool {
+		if queued[i].DeviceCommandSequence != queued[j].DeviceCommandSequence {
+			return queued[i].DeviceCommandSequence < queued[j].DeviceCommandSequence
+		}
+		return queued[i].ID < queued[j].ID
+	})
+	var rejected []string
+	for _, intent := range queued {
+		lock := s.activePriorityLockLocked(intent.TenantID, intent.DeviceID, now)
+		if !PriorityLockBlocking(intent.PriorityTier, lock, now) {
+			continue
+		}
+		transition(intent, commandmodel.IntentRejected, "DEVICE_PRIORITY_LOCKED", "command-service", now, lock.LockedBy, lock.LockedBy)
+		rejected = append(rejected, intent.ID)
+	}
+	return rejected, nil
+}
+
+func (s *Service) activePriorityLockLocked(tenantID, deviceID string, now time.Time) *commandmodel.DevicePriorityLock {
+	lock, ok := s.priorityLocks[priorityLockKey(tenantID, deviceID)]
+	if !ok || lock == nil || !lock.LockedUntil.After(now) {
+		return nil
+	}
+	cloned := *lock
+	return &cloned
+}
+
+func (s *Service) deviceIntentsLocked(tenantID, deviceID string) []*commandmodel.CommandIntent {
+	var matching []*commandmodel.CommandIntent
+	for _, intent := range s.intents {
+		if intent.TenantID == tenantID && intent.DeviceID == deviceID {
+			matching = append(matching, intent)
+		}
+	}
+	sort.Slice(matching, func(i, j int) bool {
+		if matching[i].DeviceCommandSequence != matching[j].DeviceCommandSequence {
+			return matching[i].DeviceCommandSequence < matching[j].DeviceCommandSequence
+		}
+		return matching[i].ID < matching[j].ID
+	})
+	return matching
+}
+
+func (s *Service) queuedPeerStatesLocked(tenantID, deviceID, excludeCommandID string) []QueuedPeerState {
+	intents := s.deviceIntentsLocked(tenantID, deviceID)
+	peers := make([]QueuedPeerState, 0, len(intents))
+	for _, intent := range intents {
+		if intent.ID == excludeCommandID {
+			continue
+		}
+		peers = append(peers, QueuedPeerState{
+			Status:                intent.Status,
+			PriorityTier:          intent.PriorityTier,
+			DeviceCommandSequence: intent.DeviceCommandSequence,
+		})
+	}
+	return peers
+}
+
+func (s *Service) canClaimQueuedIntent(commandID string, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	intent, ok := s.intents[commandID]
+	if !ok {
+		return false
+	}
+	activeLock := s.activePriorityLockLocked(intent.TenantID, intent.DeviceID, now.UTC())
+	peers := s.queuedPeerStatesLocked(intent.TenantID, intent.DeviceID, intent.ID)
+	return CanClaimQueuedIntentWithPriority(*intent, false, activeLock, peers, now.UTC())
 }

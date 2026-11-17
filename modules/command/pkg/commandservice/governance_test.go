@@ -285,6 +285,8 @@ func TestLeasedMediumRiskEntersQueuedDirectlyWhileHumanRequiresApproval(t *testi
 	}
 
 	leasedReq := humanReq
+	leasedReq.DeviceID = "device-leased"
+	leasedReq.Authorization.DeviceID = "device-leased"
 	leasedReq.IdempotencyKey = "auto-opt:leased-medium-step"
 	leasedReq.Authorization.WorkloadSPIFFE = "spiffe://hvac.local/optimization-service"
 	leasedReq.Authorization.LeaseID = "01990000-8800-7000-8000-000000000011"
