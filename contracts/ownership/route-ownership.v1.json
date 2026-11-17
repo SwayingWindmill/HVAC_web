@@ -1,6 +1,6 @@
 {
   "registryVersion": 1,
-  "registryRevision": 54,
+  "registryRevision": 55,
   "routes": [
     {"method": "GET", "path": "/api/v1/sites/{siteId}/data-gaps", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "GET", "path": "/api/v1/iam/members", "owner": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "principal"]},
@@ -28,6 +28,10 @@
     {"method": "PUT", "path": "/api/v1/gateways/{gatewayId}/concentrators/{unitId}/eids", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "GET", "path": "/api/v1/gateways/{gatewayId}/config-shadow", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {"method": "PUT", "path": "/api/v1/gateways/{gatewayId}/config-shadow", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "GET", "path": "/api/v1/gateways/{gatewayId}/quarantine", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "GET", "path": "/api/v1/gateways/{gatewayId}/packet-capture", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "POST", "path": "/api/v1/gateways/{gatewayId}/packet-capture/start", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
+    {"method": "POST", "path": "/api/v1/gateways/{gatewayId}/packet-capture/stop", "owner": "connectivity", "publicIngress": "platform-gateway", "revision": 1, "rollout": {"mode": "all"}, "compatibilityMode": "native", "allowedScopeDimensions": ["tenant", "site", "principal"]},
     {
       "method": "GET",
       "path": "/api/v1/health",

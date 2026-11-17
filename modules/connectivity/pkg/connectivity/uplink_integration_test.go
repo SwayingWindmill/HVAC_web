@@ -1,6 +1,7 @@
 package connectivity
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
+	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/packettap"
 )
 
 // TestUplinkResolvesEveryGatewayThroughTheRegistryReadPort runs as connectivity_runtime
@@ -236,4 +238,196 @@ func containsAll(values []string, wanted ...string) bool {
 		}
 	}
 	return true
+}
+
+func TestPostgresQuarantineDedupOperatorReadAndPrune(t *testing.T) {
+	adminDSN, runtimeDSN := os.Getenv("CONNECTIVITY_ADMIN_DSN"), os.Getenv("CONNECTIVITY_POSTGRES_DSN")
+	if adminDSN == "" || runtimeDSN == "" {
+		t.Skip("CONNECTIVITY_ADMIN_DSN and CONNECTIVITY_POSTGRES_DSN are not set")
+	}
+	ctx := context.Background()
+	admin, err := pgxpool.New(ctx, adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	const (
+		tenantA  = "0192f400-0000-7000-8000-00000000000a"
+		tenantB  = "0192f400-0000-7000-8000-00000000000b"
+		siteA    = "0192f400-1000-7000-8000-00000000000a"
+		siteB    = "0192f400-1000-7000-8000-00000000000b"
+		gatewayA = "0192f400-2000-7000-8000-00000000000a"
+		gatewayB = "0192f400-2000-7000-8000-00000000000b"
+		unknown  = "0192f400-2000-7000-8000-0000000000ff"
+	)
+	cleanup := func() {
+		_, _ = admin.Exec(ctx, `DELETE FROM connectivity.uplink_quarantine WHERE gateway_id IN ($1, $2, $3)`, gatewayA, gatewayB, unknown)
+		for _, tenant := range []string{tenantA, tenantB} {
+			_, _ = admin.Exec(ctx, `DELETE FROM core_registry.devices WHERE tenant_id=$1::uuid`, tenant)
+			_, _ = admin.Exec(ctx, `DELETE FROM core_registry.sites WHERE tenant_id=$1::uuid`, tenant)
+			_, _ = admin.Exec(ctx, `DELETE FROM iam.tenants WHERE id=$1::uuid`, tenant)
+		}
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	baseNow := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO iam.tenants (id,code,display_name,timezone,currency,country,status,revision,created_at,updated_at) VALUES
+		  ($1::uuid,'quar-a','Quarantine A','UTC','USD','US','ACTIVE',1,$3,$3),
+		  ($2::uuid,'quar-b','Quarantine B','UTC','USD','US','ACTIVE',1,$3,$3)`, []any{tenantA, tenantB, baseNow}},
+		{`INSERT INTO core_registry.sites (id,code,display_name,timezone,status,revision,created_at,updated_at,tenant_id) VALUES
+		  ($1::uuid,'quar-site-a','Site A','UTC','ACTIVE',1,$5,$5,$3::uuid),
+		  ($2::uuid,'quar-site-b','Site B','UTC','ACTIVE',1,$5,$5,$4::uuid)`, []any{siteA, siteB, tenantA, tenantB, baseNow}},
+		{`INSERT INTO core_registry.devices (id,tenant_id,site_id,code,display_name,device_type,status,revision,created_at,updated_at) VALUES
+		  ($1::uuid,$3::uuid,$5::uuid,'quar-gw-a','Quarantine GW A','GATEWAY','ACTIVE',1,$7,$7),
+		  ($2::uuid,$4::uuid,$6::uuid,'quar-gw-b','Quarantine GW B','GATEWAY','ACTIVE',1,$7,$7)`, []any{gatewayA, gatewayB, tenantA, tenantB, siteA, siteB, baseNow}},
+	} {
+		if _, err := admin.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store, err := Open(ctx, runtimeDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	currentNow := baseNow
+	store.now = func() time.Time { return currentNow }
+
+	topicA := "hvac/v1/" + gatewayA + "/up/telemetry"
+	longPayload := bytes.Repeat([]byte("X"), packettap.MaxPayloadPreviewBytes+128)
+	for i := range 4 {
+		q := adapter.UplinkQuarantine{
+			TenantID:   tenantA,
+			GatewayID:  gatewayA,
+			Topic:      topicA,
+			ReasonCode: adapter.QuarantineMessageInvalid,
+			Detail:     "invalid json envelope",
+			Payload:    longPayload,
+			ReceivedAt: baseNow.Add(time.Duration(i) * time.Second),
+		}
+		if err := store.QuarantineUplink(ctx, q); err != nil {
+			t.Fatalf("QuarantineUplink burst %d: %v", i, err)
+		}
+	}
+
+	binPayload := []byte{0x00, 0xfe, 0xff, 0x10}
+	if err := store.QuarantineUplink(ctx, adapter.UplinkQuarantine{
+		TenantID:   tenantB,
+		GatewayID:  gatewayB,
+		Topic:      "hvac/v1/" + gatewayB + "/up/event",
+		ReasonCode: adapter.QuarantineGatewayCredentialInactive,
+		Detail:     "inactive credential",
+		Payload:    binPayload,
+		ReceivedAt: baseNow.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatalf("QuarantineUplink binary: %v", err)
+	}
+
+	claimsA := registryauth.GrantClaims{TenantID: tenantA, PrincipalID: gatewayA, AllowedSiteIDs: []string{siteA}}
+	claimsB := registryauth.GrantClaims{TenantID: tenantB, PrincipalID: gatewayB, AllowedSiteIDs: []string{siteB}}
+	claimsWrongSite := registryauth.GrantClaims{TenantID: tenantA, PrincipalID: gatewayA, AllowedSiteIDs: []string{siteB}}
+
+	if _, err := store.ListGatewayQuarantineForOperator(ctx, claimsB, gatewayA, 20); !errors.Is(err, ErrCredentialForbidden) {
+		t.Fatalf("cross-tenant ListGatewayQuarantineForOperator err=%v, want ErrCredentialForbidden", err)
+	}
+	if _, err := store.ListGatewayQuarantineForOperator(ctx, claimsWrongSite, gatewayA, 20); !errors.Is(err, ErrCredentialForbidden) {
+		t.Fatalf("wrong-site ListGatewayQuarantineForOperator err=%v, want ErrCredentialForbidden", err)
+	}
+	if err := store.CheckGatewayOperatorScope(ctx, claimsB, gatewayA); !errors.Is(err, ErrCredentialForbidden) {
+		t.Fatalf("cross-tenant CheckGatewayOperatorScope err=%v, want ErrCredentialForbidden", err)
+	}
+	if err := store.CheckGatewayOperatorScope(ctx, claimsA, unknown); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown gateway CheckGatewayOperatorScope err=%v, want ErrNotFound", err)
+	}
+
+	recordsA, err := store.ListGatewayQuarantineForOperator(ctx, claimsA, gatewayA, 20)
+	if err != nil {
+		t.Fatalf("ListGatewayQuarantineForOperator A: %v", err)
+	}
+	if len(recordsA) != 1 {
+		t.Fatalf("expected 1 deduped row for gatewayA, got %d (%+v)", len(recordsA), recordsA)
+	}
+	if recordsA[0].OccurrenceCount != 4 || recordsA[0].PayloadEncoding != "utf8" || !recordsA[0].PayloadTruncated || len(recordsA[0].PayloadPreview) != packettap.MaxPayloadPreviewBytes {
+		t.Fatalf("unexpected gatewayA quarantine record: %+v", recordsA[0])
+	}
+
+	recordsB, err := store.ListGatewayQuarantineForOperator(ctx, claimsB, gatewayB, 20)
+	if err != nil {
+		t.Fatalf("ListGatewayQuarantineForOperator B: %v", err)
+	}
+	if len(recordsB) != 1 || recordsB[0].PayloadEncoding != "hex" || recordsB[0].PayloadPreview != "00feff10" || recordsB[0].PayloadTruncated {
+		t.Fatalf("unexpected gatewayB binary quarantine record: %+v", recordsB)
+	}
+
+	if err := store.QuarantineUplink(ctx, adapter.UplinkQuarantine{
+		TenantID:   tenantA,
+		GatewayID:  gatewayA,
+		Topic:      topicA,
+		ReasonCode: adapter.QuarantineMessageInvalid,
+		Detail:     "invalid json envelope",
+		Payload:    longPayload,
+		ReceivedAt: baseNow.Add(6 * time.Minute),
+	}); err != nil {
+		t.Fatalf("post-5m QuarantineUplink: %v", err)
+	}
+	recordsAfterWindow, err := store.ListGatewayQuarantineForOperator(ctx, claimsA, gatewayA, 20)
+	if err != nil || len(recordsAfterWindow) != 2 {
+		t.Fatalf("expected 2 rows after 5m window, got len=%d err=%v", len(recordsAfterWindow), err)
+	}
+
+	expiredAt := baseNow.Add(-8 * 24 * time.Hour)
+	recentAt := baseNow.Add(-6 * 24 * time.Hour)
+	if err := store.QuarantineUplink(ctx, adapter.UplinkQuarantine{
+		GatewayID:  unknown,
+		Topic:      "hvac/v1/" + unknown + "/up/telemetry",
+		ReasonCode: adapter.QuarantineGatewayUnknown,
+		Detail:     "expired unknown gateway",
+		Payload:    []byte("x"),
+		ReceivedAt: expiredAt,
+	}); err != nil {
+		t.Fatalf("insert expired unknown quarantine: %v", err)
+	}
+	if err := store.QuarantineUplink(ctx, adapter.UplinkQuarantine{
+		TenantID:   tenantA,
+		GatewayID:  gatewayA,
+		Topic:      topicA,
+		ReasonCode: adapter.QuarantineMessageInvalid,
+		Detail:     "expired tenant row",
+		Payload:    []byte("old"),
+		ReceivedAt: expiredAt,
+	}); err != nil {
+		t.Fatalf("insert expired tenant quarantine: %v", err)
+	}
+	if err := store.QuarantineUplink(ctx, adapter.UplinkQuarantine{
+		GatewayID:  unknown,
+		Topic:      "hvac/v1/" + unknown + "/up/event",
+		ReasonCode: adapter.QuarantineGatewayUnknown,
+		Detail:     "recent unknown gateway",
+		Payload:    []byte("keep"),
+		ReceivedAt: recentAt,
+	}); err != nil {
+		t.Fatalf("insert recent unknown quarantine: %v", err)
+	}
+
+	deleted, err := store.PruneExpiredQuarantine(ctx, 0)
+	if err != nil {
+		t.Fatalf("PruneExpiredQuarantine: %v", err)
+	}
+	if deleted < 2 {
+		t.Fatalf("expected at least 2 expired rows pruned, got %d", deleted)
+	}
+	var remainingUnknown int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM connectivity.uplink_quarantine WHERE gateway_id = $1`, unknown).Scan(&remainingUnknown); err != nil {
+		t.Fatal(err)
+	}
+	if remainingUnknown != 1 {
+		t.Fatalf("expected 1 non-expired unknown quarantine row remaining, got %d", remainingUnknown)
+	}
 }

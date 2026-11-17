@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 func TestParseMessageTopicAcceptsOnlyGatewayUplinks(t *testing.T) {
@@ -442,5 +445,197 @@ func TestProcessorInvokesGatewayPresenceHook(t *testing.T) {
 		if states[i] != want[i] {
 			t.Fatalf("states=%v, want %v", states, want)
 		}
+	}
+}
+
+func TestProcessorGeneratesRootTraceIDAndPropagatesToTelemetryClient(t *testing.T) {
+	exporter := &observability.MemoryExporter{}
+	tracer := observability.NewTracer("mqtt-telemetry-adapter", exporter)
+
+	var obsTraceparent string
+	var obsTraceIDs []string
+	var eventTraceparent string
+	var eventTraceID string
+
+	server, defaultClient := newTestTelemetryServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case sourceObservationBatchPath:
+			obsTraceparent = request.Header.Get("traceparent")
+			var payload observationBatchRequest
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			receipts := make([]ObservationReceipt, len(payload.Observations))
+			for i, obs := range payload.Observations {
+				obsTraceIDs = append(obsTraceIDs, obs.TraceID)
+				receipts[i] = ObservationReceipt{Status: "ACCEPTED", DeviceID: testDeviceID}
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(writer).Encode(observationBatchResponse{Receipts: receipts})
+		case mqttRuntimeEventPath:
+			eventTraceparent = request.Header.Get("traceparent")
+			var evidence RuntimeEventEvidence
+			if err := json.NewDecoder(request.Body).Decode(&evidence); err != nil {
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			eventTraceID = evidence.TraceID
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"accepted":true}`))
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	})
+	defer server.Close()
+	defaultClient.tracer = tracer
+
+	processor, err := NewProcessor(newFakeIdentities(), defaultClient, WithProcessorTracer(tracer))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outcomes, err := processor.ProcessPrefix(context.Background(), []UplinkMessage{
+		{Topic: telemetryTopic(testGatewayA), Payload: telemetryPayload(testGatewayA, messageID(1), 1, "METER-01", "active_power")},
+		{Topic: telemetryTopic(testGatewayA), Payload: telemetryPayload(testGatewayA, messageID(2), 2, "METER-01", "reactive_power")},
+	})
+	if err != nil {
+		t.Fatalf("ProcessPrefix telemetry failed: %v", err)
+	}
+	if len(outcomes) != 2 {
+		t.Fatalf("outcomes=%d, want 2", len(outcomes))
+	}
+	rootTraceID := outcomes[0].Result.TraceID
+	if !traceIDPattern.MatchString(rootTraceID) || rootTraceID == zeroTraceID {
+		t.Fatalf("expected valid 32-hex generated traceId, got %q", rootTraceID)
+	}
+	if outcomes[1].Result.TraceID != rootTraceID {
+		t.Fatalf("coalesced message[1] TraceID=%q, want inherited root %q", outcomes[1].Result.TraceID, rootTraceID)
+	}
+	if len(obsTraceIDs) != 2 || obsTraceIDs[0] != rootTraceID || obsTraceIDs[1] != rootTraceID {
+		t.Fatalf("observation traceIds=%v, want [%s %s]", obsTraceIDs, rootTraceID, rootTraceID)
+	}
+	if !strings.HasPrefix(obsTraceparent, "00-"+rootTraceID+"-") {
+		t.Fatalf("HTTP traceparent=%q does not carry root traceId %q", obsTraceparent, rootTraceID)
+	}
+
+	evtRes, err := processor.Process(context.Background(), eventTopic(testGatewayA), eventPayload(testGatewayA, messageID(3), 3))
+	if err != nil {
+		t.Fatalf("Process event failed: %v", err)
+	}
+	if !traceIDPattern.MatchString(evtRes.TraceID) || evtRes.TraceID == zeroTraceID {
+		t.Fatalf("expected valid 32-hex event traceId, got %q", evtRes.TraceID)
+	}
+	if eventTraceID != evtRes.TraceID {
+		t.Fatalf("RuntimeEventEvidence.TraceID=%q, want %q", eventTraceID, evtRes.TraceID)
+	}
+	if !strings.HasPrefix(eventTraceparent, "00-"+evtRes.TraceID+"-") {
+		t.Fatalf("event HTTP traceparent=%q does not carry event traceId %q", eventTraceparent, evtRes.TraceID)
+	}
+
+	spans := exporter.Spans()
+	if len(spans) != 2 {
+		t.Fatalf("recorded spans=%d, want 2", len(spans))
+	}
+}
+
+func TestProcessorQuarantineAttributesTenantOnRegisteredGatewayInvalidSubtopic(t *testing.T) {
+	unknownGateway := "018f3e00-4000-7000-8000-000000000999"
+	for _, tc := range []struct {
+		name       string
+		gatewayID  string
+		inactive   bool
+		wantTenant string
+	}{
+		{name: "active registered gateway", gatewayID: testGatewayA, wantTenant: testTenantID},
+		{name: "inactive registered gateway", gatewayID: testGatewayA, inactive: true, wantTenant: testTenantID},
+		{name: "unknown gateway", gatewayID: unknownGateway, wantTenant: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			identities := newFakeIdentities()
+			identities.inactiveCredential[testGatewayA] = tc.inactive
+			processor := newTestProcessor(t, identities, &fakeTelemetry{})
+			topic := "hvac/v1/" + tc.gatewayID + "/up/state"
+			_, err := processor.Process(context.Background(), topic, []byte(`{"raw":"state"}`))
+			if !isPermanentMessageError(err) {
+				t.Fatalf("err=%v, want permanent quarantine error", err)
+			}
+			quarantines := identities.snapshotQuarantines()
+			if len(quarantines) != 1 {
+				t.Fatalf("quarantines=%d, want 1", len(quarantines))
+			}
+			q := quarantines[0]
+			if q.ReasonCode != QuarantineMessageInvalid || q.GatewayID != tc.gatewayID || q.TenantID != tc.wantTenant {
+				t.Fatalf("quarantine=%#v, want reason=%s gateway=%s tenant=%q", q, QuarantineMessageInvalid, tc.gatewayID, tc.wantTenant)
+			}
+		})
+	}
+}
+
+func TestProcessorPacketHookCapturesTelemetryEventAndQuarantine(t *testing.T) {
+	type capturedPacket struct {
+		direction string
+		channel   string
+		gatewayID string
+		topic     string
+		traceID   string
+		payload   string
+	}
+	var captured []capturedPacket
+
+	tracer := observability.NewTracer("mqtt-telemetry-adapter", nil)
+	processor, err := NewProcessor(
+		newFakeIdentities(),
+		&fakeTelemetry{},
+		WithProcessorTracer(tracer),
+		WithProcessorPacketHook(func(direction, channel, gatewayID, topic, traceID string, payload []byte) {
+			captured = append(captured, capturedPacket{
+				direction: direction,
+				channel:   channel,
+				gatewayID: gatewayID,
+				topic:     topic,
+				traceID:   traceID,
+				payload:   string(payload),
+			})
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const explicitTrace = "abcdef0123456789abcdef0123456789"
+	m2Payload := []byte(`{"schemaVersion":"2.0","messageId":"` + messageID(2) + `","gatewayId":"` + testGatewayA + `","timestamp":1786352400001,"sequence":2,"traceId":"` + explicitTrace + `","replay":false,"payload":{"devices":[{"deviceId":"METER-01","deviceTimestamp":1786352399001,"points":[{"code":"reactive_power","value":10.5,"quality":0,"unit":"kvar"}]}]}}`)
+
+	outcomes, err := processor.ProcessPrefix(context.Background(), []UplinkMessage{
+		{Topic: telemetryTopic(testGatewayA), Payload: telemetryPayload(testGatewayA, messageID(1), 1, "METER-01", "active_power")},
+		{Topic: telemetryTopic(testGatewayA), Payload: m2Payload},
+	})
+	if err != nil || len(outcomes) != 2 {
+		t.Fatalf("ProcessPrefix telemetry outcomes=%#v err=%v", outcomes, err)
+	}
+
+	evtOutcome, err := processor.Process(context.Background(), eventTopic(testGatewayA), eventPayload(testGatewayA, messageID(3), 3))
+	if err != nil {
+		t.Fatalf("Process event failed: %v", err)
+	}
+
+	if _, err := processor.Process(context.Background(), "hvac/v1/"+testGatewayA+"/up/state", []byte(`{"bogus":1}`)); !isPermanentMessageError(err) {
+		t.Fatalf("expected quarantine error for invalid subtopic, got %v", err)
+	}
+
+	if len(captured) != 4 {
+		t.Fatalf("captured packets=%d, want 4: %#v", len(captured), captured)
+	}
+	if captured[0].direction != "UPLINK" || captured[0].channel != "TELEMETRY" || captured[0].gatewayID != testGatewayA || captured[0].traceID != outcomes[0].Result.TraceID || captured[0].traceID == "" {
+		t.Fatalf("captured[0]=%#v, want TELEMETRY with generated traceId %q", captured[0], outcomes[0].Result.TraceID)
+	}
+	if captured[1].direction != "UPLINK" || captured[1].channel != "TELEMETRY" || captured[1].gatewayID != testGatewayA || captured[1].traceID != explicitTrace {
+		t.Fatalf("captured[1]=%#v, want TELEMETRY with explicit traceId %q", captured[1], explicitTrace)
+	}
+	if captured[2].direction != "UPLINK" || captured[2].channel != "EVENT" || captured[2].gatewayID != testGatewayA || captured[2].topic != eventTopic(testGatewayA) || captured[2].traceID != evtOutcome.TraceID || captured[2].traceID == "" {
+		t.Fatalf("captured[2]=%#v, want EVENT with traceId %q", captured[2], evtOutcome.TraceID)
+	}
+	if captured[3].direction != "UPLINK" || captured[3].channel != "QUARANTINE" || captured[3].gatewayID != testGatewayA || captured[3].topic != "hvac/v1/"+testGatewayA+"/up/state" || captured[3].traceID != "" || captured[3].payload != `{"bogus":1}` {
+		t.Fatalf("captured[3]=%#v, want QUARANTINE", captured[3])
 	}
 }

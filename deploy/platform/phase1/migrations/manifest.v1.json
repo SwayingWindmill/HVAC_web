@@ -123,6 +123,7 @@
         "infra/connectivity/postgres/init/gateway-certificate-revocation.sql",
         "infra/connectivity/postgres/init/gateway-config-shadows.sql",
         "infra/registry/postgres/init/optimization-monitor-lease.sql",
+        "infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql",
         "infra/registry/postgres/init/alarm-suppress-unassign-capabilities.sql",
         "services/notification-service/migrations/alarm-delivery-suppression-cooldown.sql"
       ]

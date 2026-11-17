@@ -23,3 +23,9 @@ type TransportState interface {
 type LateResultSink interface {
 	ResolveDispatch(ctx context.Context, envelope commandmodel.DispatchEnvelope, result commandmodel.ConnectorResult) error
 }
+
+// CommandCorrelationLoader optionally loads one correlation row so multi-replica
+// dispatchers sharing reply subscriptions can observe replies persisted by peers.
+type CommandCorrelationLoader interface {
+	LoadCommandCorrelation(ctx context.Context, tenantID, attemptID string, executionFence uint64) (commandmodel.CommandCorrelation, error)
+}

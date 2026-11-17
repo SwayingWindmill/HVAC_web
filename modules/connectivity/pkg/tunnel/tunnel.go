@@ -264,6 +264,13 @@ func (h *Hub) metricRegistry() *observability.Registry {
 	return h.metrics
 }
 
+func (h *Hub) recordActiveTunnelsLocked() {
+	if h == nil || h.metrics == nil {
+		return
+	}
+	_ = h.metrics.SetGauge("hvac_mqtt_active_tunnels", "Active gateway reverse tunnel sessions.", nil, float64(len(h.sessions)))
+}
+
 func NewHub(options ...Option) *Hub {
 	h := &Hub{
 		sessions:     make(map[string]*Session),
@@ -274,6 +281,9 @@ func NewHub(options ...Option) *Hub {
 	for _, option := range options {
 		option(h)
 	}
+	h.mu.Lock()
+	h.recordActiveTunnelsLocked()
+	h.mu.Unlock()
 	return h
 }
 
@@ -319,6 +329,7 @@ func (h *Hub) CloseGateway(gatewayID string) {
 	session := h.sessions[gatewayID]
 	if session != nil {
 		delete(h.sessions, gatewayID)
+		h.recordActiveTunnelsLocked()
 	}
 	h.mu.Unlock()
 	if session != nil {
@@ -340,6 +351,7 @@ func (h *Hub) CloseGatewayByFingerprint(gatewayID, fingerprint string) bool {
 		return false
 	}
 	delete(h.sessions, gatewayID)
+	h.recordActiveTunnelsLocked()
 	h.mu.Unlock()
 	session.closeWithReason("certificate_revoked")
 	return true
@@ -357,6 +369,7 @@ func (h *Hub) Close() {
 		delete(h.sessions, id)
 		sessions = append(sessions, s)
 	}
+	h.recordActiveTunnelsLocked()
 	h.mu.Unlock()
 	for _, ln := range listeners {
 		_ = ln.Close()
@@ -490,6 +503,7 @@ func (h *Hub) registerSessionWithFingerprint(gatewayID string, conn net.Conn, re
 	}
 	previous := h.sessions[gatewayID]
 	h.sessions[gatewayID] = s
+	h.recordActiveTunnelsLocked()
 	h.mu.Unlock()
 	if previous != nil && previous != s {
 		previous.closeWithReason("session_replaced")
@@ -509,6 +523,7 @@ func (h *Hub) unregisterSession(s *Session) {
 	h.mu.Lock()
 	if h.sessions[s.gatewayID] == s {
 		delete(h.sessions, s.gatewayID)
+		h.recordActiveTunnelsLocked()
 	}
 	h.mu.Unlock()
 }

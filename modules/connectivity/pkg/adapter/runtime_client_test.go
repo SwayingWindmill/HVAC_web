@@ -143,6 +143,17 @@ func TestTelemetryRuntimeClientAcceptObservationBatchWireContract(t *testing.T) 
 
 func newTestTelemetryServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *TelemetryRuntimeClient) {
 	t.Helper()
+	server, cfg := newTestTelemetryServerWithConfig(t, handler)
+	client, err := NewTelemetryRuntimeClient(cfg)
+	if err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	return server, client
+}
+
+func newTestTelemetryServerWithConfig(t *testing.T, handler http.HandlerFunc) (*httptest.Server, TelemetryRuntimeConfig) {
+	t.Helper()
 	dir := t.TempDir()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
@@ -190,18 +201,14 @@ func newTestTelemetryServer(t *testing.T, handler http.HandlerFunc) (*httptest.S
 	}
 	server.StartTLS()
 
-	client, err := NewTelemetryRuntimeClient(TelemetryRuntimeConfig{
+	cfg := TelemetryRuntimeConfig{
 		BaseURL:    server.URL,
 		CAFile:     writePEM("ca.pem", "CERTIFICATE", caDER),
 		CertFile:   writePEM("client.pem", "CERTIFICATE", clientCert.Certificate[0]),
 		KeyFile:    writePEM("client.key", "EC PRIVATE KEY", clientKey),
 		ServerName: "telemetry.local",
-	})
-	if err != nil {
-		server.Close()
-		t.Fatal(err)
 	}
-	return server, client
+	return server, cfg
 }
 
 func TestTracePropagationFromEnvelopeToObservationEventAndHTTPTraceparent(t *testing.T) {
@@ -343,5 +350,31 @@ func TestTelemetryRuntimeClientMaps429AndParsesRetryAfter(t *testing.T) {
 	_, err = client.AcceptObservationBatch(context.Background(), obs)
 	if errors.Is(err, ErrTelemetryRateLimited) || err == nil {
 		t.Fatalf("503 should not map to ErrTelemetryRateLimited, got %v", err)
+	}
+}
+
+func TestNewTelemetryRuntimeClientWithTracer(t *testing.T) {
+	exporter := &observability.MemoryExporter{}
+	customTracer := observability.NewTracer("custom-adapter", exporter)
+
+	server, cfg := newTestTelemetryServerWithConfig(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"accepted":true}`))
+	})
+	defer server.Close()
+
+	withTracer, err := NewTelemetryRuntimeClientWithTracer(cfg, customTracer)
+	if err != nil {
+		t.Fatalf("NewTelemetryRuntimeClientWithTracer(custom) failed: %v", err)
+	}
+	if withTracer.tracer != customTracer {
+		t.Fatalf("expected custom tracer to be injected, got %v", withTracer.tracer)
+	}
+	withNilTracer, err := NewTelemetryRuntimeClientWithTracer(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewTelemetryRuntimeClientWithTracer(nil) failed: %v", err)
+	}
+	if withNilTracer.tracer == nil {
+		t.Fatal("expected default tracer when nil is passed")
 	}
 }

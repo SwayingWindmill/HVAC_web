@@ -286,13 +286,81 @@ func (service *CredentialService) verifyPeerCertificate(ctx context.Context, tx 
 }
 
 func (service *CredentialService) VerifyActiveCredential(ctx context.Context, peer *x509.Certificate) (string, error) {
+	return service.verifyActiveCredentialWith(ctx, peer, service.verifyActiveCredentialUncached)
+}
+
+func (service *CredentialService) verifyActiveCredentialWith(
+	ctx context.Context,
+	peer *x509.Certificate,
+	uncached func(context.Context, *x509.Certificate, time.Time) (string, error),
+) (string, error) {
 	if peer == nil {
 		return "", ErrEnrollmentRejected
 	}
 	gatewayID := peer.Subject.CommonName
+	if !gatewayIDPattern.MatchString(gatewayID) {
+		return "", ErrEnrollmentRejected
+	}
+	if service == nil || service.store == nil {
+		return "", errors.New("credential service is not configured")
+	}
+
+	fingerprint := hashCredential(peer.Raw)
+	key := credVerifyCacheKey{gatewayID: gatewayID, fingerprint: fingerprint}
+	now := service.store.clock().UTC()
+	if cached, ok, _ := cacheGetOrEpoch(&service.store.cache, service.store.cache.credVerify, key, now, gatewayID); ok {
+		return cached.gatewayID, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	sfKey := credFlightKey(gatewayID, fingerprint)
+	ch := service.store.cache.sfGroup.DoChan(sfKey, func() (any, error) {
+		service.store.cache.registerFlight(gatewayID, sfKey)
+		defer service.store.cache.unregisterFlight(gatewayID, sfKey)
+
+		flightNow := service.store.clock().UTC()
+		if cached, ok, epoch := cacheGetOrEpoch(&service.store.cache, service.store.cache.credVerify, key, flightNow, gatewayID); ok {
+			return cached.gatewayID, nil
+		} else {
+			queryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), uplinkFlightQueryTimeout)
+			defer cancel()
+			verifiedID, err := uncached(queryCtx, peer, flightNow)
+			if err != nil {
+				return "", err
+			}
+			expiresAt := flightNow.Add(credVerifyPositiveTTL)
+			if !peer.NotAfter.IsZero() && peer.NotAfter.UTC().Before(expiresAt) {
+				expiresAt = peer.NotAfter.UTC()
+			}
+			cacheSetIfEpoch(&service.store.cache, &service.store.cache.credVerify, key, credVerifyCacheResult{gatewayID: verifiedID}, expiresAt, flightNow, gatewayID, epoch)
+			return verifiedID, nil
+		}
+	})
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return "", res.Err
+		}
+		return res.Val.(string), nil
+	}
+}
+
+func (service *CredentialService) verifyActiveCredentialUncached(ctx context.Context, peer *x509.Certificate, now time.Time) (string, error) {
+	if service == nil || service.authority == nil || service.store == nil || service.store.pool == nil {
+		return "", errors.New("credential service is not configured")
+	}
+	gatewayID := peer.Subject.CommonName
 	tenant, _, err := service.gateway(ctx, gatewayID)
 	if err != nil {
-		return "", ErrEnrollmentRejected
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrEnrollmentRejected) {
+			return "", ErrEnrollmentRejected
+		}
+		return "", err
 	}
 	tx, err := service.beginTenant(ctx, tenant)
 	if err != nil {
@@ -310,7 +378,6 @@ func (service *CredentialService) VerifyActiveCredential(ctx context.Context, pe
 	if revoked != nil {
 		return "", ErrCredentialRevoked
 	}
-	now := service.store.clock().UTC()
 	if err := service.verifyPeerCertificate(ctx, tx, peer, now); err != nil {
 		return "", err
 	}

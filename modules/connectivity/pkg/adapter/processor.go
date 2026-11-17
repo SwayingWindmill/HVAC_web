@@ -10,11 +10,14 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 type ProcessingResult struct {
 	MessageID   string
 	MessageType string
+	TraceID     string
 	Replay      bool
 	PointCount  int
 	Accepted    int
@@ -129,12 +132,51 @@ func WithGatewayPresenceHook(hook func(string, bool)) ProcessorOption {
 	}
 }
 
+func WithProcessorTracer(tracer *observability.Tracer) ProcessorOption {
+	return func(processor *Processor) {
+		processor.tracer = tracer
+	}
+}
+
+func WithProcessorPacketHook(hook func(direction, channel, gatewayID, topic, traceID string, payload []byte)) ProcessorOption {
+	return func(processor *Processor) {
+		processor.packetHook = hook
+	}
+}
+
 type Processor struct {
 	identities         IdentityResolver
 	runtime            RuntimeClient
+	tracer             *observability.Tracer
 	now                func() time.Time
 	onGatewayConnected func(context.Context, string)
 	onGatewayPresence  func(string, bool)
+	packetHook         func(direction, channel, gatewayID, topic, traceID string, payload []byte)
+}
+
+func (processor *Processor) recordPacket(direction, channel, gatewayID, topic, traceID string, payload []byte) {
+	if processor == nil || processor.packetHook == nil {
+		return
+	}
+	processor.packetHook(direction, channel, gatewayID, topic, traceID, payload)
+}
+
+func (processor *Processor) ensureUplinkTrace(ctx context.Context, operation, gatewayID, messageID, rawTraceID string) (context.Context, string, *observability.Span) {
+	traceID := normalizeTraceID(rawTraceID)
+	if traceID != "" {
+		return ctx, traceID, nil
+	}
+	attrs := map[string]any{
+		"mqtt.gateway_id": gatewayID,
+		"mqtt.message_id": messageID,
+	}
+	var span *observability.Span
+	if processor.tracer != nil {
+		ctx, span = processor.tracer.Start(ctx, operation, observability.SpanKindConsumer, attrs)
+	} else {
+		ctx, span = observability.Start(ctx, operation, observability.SpanKindConsumer, attrs)
+	}
+	return ctx, normalizeTraceID(observability.TraceID(ctx)), span
 }
 
 func NewProcessor(identities IdentityResolver, runtime RuntimeClient, options ...ProcessorOption) (*Processor, error) {
@@ -176,6 +218,11 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 	quarantine := UplinkQuarantine{GatewayID: TopicGatewayID(first.Topic), Topic: first.Topic, Payload: first.Payload, ReceivedAt: processor.now().UTC()}
 	messageTopic, err := ParseMessageTopic(first.Topic)
 	if err != nil {
+		if quarantine.GatewayID != "invalid" {
+			if gw, gwErr := processor.identities.ResolveGateway(ctx, quarantine.GatewayID); gwErr == nil || gw.TenantID != "" {
+				quarantine.TenantID = gw.TenantID
+			}
+		}
 		return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
 	}
 	gateway, err := processor.identities.ResolveGateway(ctx, messageTopic.GatewayID)
@@ -208,7 +255,7 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 		if err != nil {
 			return processor.quarantinedOutcome(ctx, quarantine, QuarantineMessageInvalid, err)
 		}
-		result, err := processor.processEvent(ctx, gateway, envelope)
+		result, err := processor.processEvent(ctx, gateway, first.Topic, first.Payload, envelope)
 		if err != nil {
 			return nil, err
 		}
@@ -230,6 +277,7 @@ func (processor *Processor) quarantine(ctx context.Context, quarantine UplinkQua
 	if err := processor.identities.QuarantineUplink(ctx, quarantine); err != nil {
 		return fmt.Errorf("keep MQTT uplink quarantine evidence: %w", err)
 	}
+	processor.recordPacket("UPLINK", "QUARANTINE", quarantine.GatewayID, quarantine.Topic, "", quarantine.Payload)
 	return permanentMessage(cause)
 }
 
@@ -252,33 +300,57 @@ func truncateUTF8(s string, maxBytes int) string {
 
 type telemetryMessageBounds struct {
 	messageID string
+	traceID   string
 	replay    bool
 	start     int
 	end       int
 }
 
 func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway Gateway, firstQuarantine UplinkQuarantine, firstEnvelope TelemetryEnvelope, messages []UplinkMessage) ([]ProcessingOutcome, error) {
+	ctx, rootTraceID, span := processor.ensureUplinkTrace(ctx, "mqtt.uplink.telemetry", gateway.ID, firstEnvelope.MessageID, firstEnvelope.TraceID)
+	if span != nil {
+		defer span.End()
+	}
+	firstEnvelope.TraceID = rootTraceID
 	observations, bounds, err := coalesceTelemetryBatch(gateway, firstEnvelope, messages)
 	if err != nil {
+		if span != nil {
+			span.SetStatus("error", "telemetry envelope invalid")
+		}
 		return processor.quarantinedOutcome(ctx, firstQuarantine, QuarantineMessageInvalid, err)
 	}
 	queries := uniqueDevicePointQueries(observations)
 	bindings, err := processor.identities.ResolveBindings(ctx, gateway, queries)
 	if err != nil {
+		if span != nil {
+			span.SetStatus("error", "resolve bindings failed")
+		}
 		return nil, fmt.Errorf("resolve MQTT bindings: %w", err)
 	}
 	attachResolvedBindings(observations, gateway, bindings)
 	receipts, err := processor.sendObservationBatchChunks(ctx, observations)
 	if err != nil {
+		if span != nil {
+			span.SetStatus("error", "accept observation batch failed")
+		}
 		return nil, err
 	}
 	outcomes := make([]ProcessingOutcome, len(bounds))
 	for index, bound := range bounds {
-		result, err := buildProcessingResult(bound.messageID, bound.replay, receipts[bound.start:bound.end])
+		result, err := buildProcessingResult(bound.messageID, bound.traceID, bound.replay, receipts[bound.start:bound.end])
 		if err != nil {
+			if span != nil {
+				span.SetStatus("error", "build processing result failed")
+			}
 			return nil, err
 		}
 		outcomes[index] = ProcessingOutcome{Result: result}
+	}
+	if span != nil {
+		span.SetStatus("ok", "")
+	}
+	for index, bound := range bounds {
+		processor.recordPacket("UPLINK", "TELEMETRY", gateway.ID, messages[index].Topic, bound.traceID, messages[index].Payload)
 	}
 	return outcomes, nil
 }
@@ -286,7 +358,8 @@ func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway G
 const estimatedObservationEnvelopeOverheadBytes = 768
 
 func coalesceTelemetryBatch(gateway Gateway, firstEnvelope TelemetryEnvelope, messages []UplinkMessage) ([]Observation, []telemetryMessageBounds, error) {
-	firstObs, err := buildEnvelopeObservations(gateway.ID, firstEnvelope)
+	rootTraceID := normalizeTraceID(firstEnvelope.TraceID)
+	firstObs, err := buildEnvelopeObservations(gateway.ID, firstEnvelope, rootTraceID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -294,6 +367,7 @@ func coalesceTelemetryBatch(gateway Gateway, firstEnvelope TelemetryEnvelope, me
 	approxBytes := len(messages[0].Payload) + len(firstObs)*estimatedObservationEnvelopeOverheadBytes
 	bounds := []telemetryMessageBounds{{
 		messageID: firstEnvelope.MessageID,
+		traceID:   rootTraceID,
 		replay:    firstEnvelope.Replay,
 		start:     0,
 		end:       len(observations),
@@ -315,7 +389,11 @@ func coalesceTelemetryBatch(gateway Gateway, firstEnvelope TelemetryEnvelope, me
 		if len(observations)+msgCount > MaxObservationBatchSize || approxBytes+msgApproxBytes > MaxObservationBatchBytes {
 			break
 		}
-		msgObs, err := buildEnvelopeObservations(gateway.ID, envelope)
+		msgTraceID := normalizeTraceID(envelope.TraceID)
+		if msgTraceID == "" {
+			msgTraceID = rootTraceID
+		}
+		msgObs, err := buildEnvelopeObservations(gateway.ID, envelope, msgTraceID)
 		if err != nil {
 			break
 		}
@@ -324,6 +402,7 @@ func coalesceTelemetryBatch(gateway Gateway, firstEnvelope TelemetryEnvelope, me
 		approxBytes += msgApproxBytes
 		bounds = append(bounds, telemetryMessageBounds{
 			messageID: envelope.MessageID,
+			traceID:   msgTraceID,
 			replay:    envelope.Replay,
 			start:     start,
 			end:       len(observations),
@@ -340,8 +419,8 @@ func envelopePointCount(envelope TelemetryEnvelope) int {
 	return total
 }
 
-func buildEnvelopeObservations(gatewayID string, envelope TelemetryEnvelope) ([]Observation, error) {
-	traceID := normalizeTraceID(envelope.TraceID)
+func buildEnvelopeObservations(gatewayID string, envelope TelemetryEnvelope, traceID string) ([]Observation, error) {
+	traceID = normalizeTraceID(traceID)
 	observations := make([]Observation, 0, envelopePointCount(envelope))
 	for _, device := range envelope.Payload.Devices {
 		sourceKey := strings.TrimSpace(device.DeviceID)
@@ -451,8 +530,8 @@ func (processor *Processor) sendObservationBatchChunks(ctx context.Context, obse
 	return receipts, nil
 }
 
-func buildProcessingResult(messageID string, replay bool, receipts []ObservationReceipt) (ProcessingResult, error) {
-	result := ProcessingResult{MessageID: messageID, MessageType: MessageTypeTelemetry, Replay: replay}
+func buildProcessingResult(messageID, traceID string, replay bool, receipts []ObservationReceipt) (ProcessingResult, error) {
+	result := ProcessingResult{MessageID: messageID, MessageType: MessageTypeTelemetry, TraceID: traceID, Replay: replay}
 	for _, receipt := range receipts {
 		result.PointCount++
 		switch receipt.Status {
@@ -473,12 +552,20 @@ func buildProcessingResult(messageID string, replay bool, receipts []Observation
 	return result, nil
 }
 
-func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, envelope EventEnvelope) (ProcessingResult, error) {
+func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, topic string, rawPayload []byte, envelope EventEnvelope) (ProcessingResult, error) {
+	ctx, eventTraceID, span := processor.ensureUplinkTrace(ctx, "mqtt.uplink.event", gateway.ID, envelope.MessageID, envelope.TraceID)
+	if span != nil {
+		defer span.End()
+	}
+	envelope.TraceID = eventTraceID
 	event := envelope.Payload
 	sourceType := strings.TrimSpace(event.SourceType)
 	sourceID := strings.TrimSpace(event.SourceID)
 	resolvedDevice, coverageDeviceIDs, err := processor.resolveEventScope(ctx, gateway, event)
 	if err != nil {
+		if span != nil {
+			span.SetStatus("error", "resolve event scope failed")
+		}
 		return ProcessingResult{}, err
 	}
 	if err := processor.runtime.AcceptRuntimeEvent(ctx, RuntimeEventEvidence{
@@ -487,17 +574,24 @@ func (processor *Processor) processEvent(ctx context.Context, gateway Gateway, e
 		SourceType: sourceType, SourceID: sourceID, EventTime: unixMillisRFC3339(event.EventTime),
 		Severity: strings.ToUpper(strings.TrimSpace(event.Severity)), Data: append(json.RawMessage(nil), event.Data...),
 		Device: resolvedDevice, CoverageDeviceIDs: coverageDeviceIDs,
-		TraceID: normalizeTraceID(envelope.TraceID),
+		TraceID: eventTraceID,
 	}); err != nil {
+		if span != nil {
+			span.SetStatus("error", "accept runtime event failed")
+		}
 		return ProcessingResult{}, fmt.Errorf("accept MQTT runtime event: %w", err)
 	}
+	if span != nil {
+		span.SetStatus("ok", "")
+	}
+	processor.recordPacket("UPLINK", "EVENT", gateway.ID, topic, eventTraceID, rawPayload)
 	if processor.onGatewayPresence != nil {
 		processor.onGatewayPresence(gateway.ID, !isGatewayDisconnectEvent(event.EventType, event.SourceType))
 	}
 	if processor.onGatewayConnected != nil && isGatewayConnectEvent(event.EventType, event.SourceType) {
 		processor.onGatewayConnected(ctx, gateway.ID)
 	}
-	return ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeEvent}, nil
+	return ProcessingResult{MessageID: envelope.MessageID, MessageType: MessageTypeEvent, TraceID: eventTraceID}, nil
 }
 
 func isGatewayDisconnectEvent(rawEventType, rawSourceType string) bool {

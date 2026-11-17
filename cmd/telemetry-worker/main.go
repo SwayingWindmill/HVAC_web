@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,35 +24,157 @@ import (
 )
 
 func main() {
+	if code := runTelemetryWorker(); code != 0 {
+		os.Exit(code)
+	}
+}
+
+type telemetryWorkerShutdown struct {
+	Observability    *observability.Runtime
+	Logger           *slog.Logger
+	Diagnostics      *http.Server
+	Server           *http.Server
+	CancelWorkers    func()
+	WorkersWG        *sync.WaitGroup
+	HTTPTimeout      time.Duration
+	WorkerTimeout    time.Duration
+	TelemetryTimeout time.Duration
+	CloseHistory     func()
+	CloseLatestCache func()
+	CloseRateLimiter func()
+	CloseStore       func()
+}
+
+func shutdownTelemetryWorker(cfg telemetryWorkerShutdown) {
+	if cfg.Observability != nil {
+		cfg.Observability.MarkNotReady()
+	}
+	httpTimeout := cfg.HTTPTimeout
+	if httpTimeout <= 0 {
+		httpTimeout = 10 * time.Second
+	}
+	if cfg.Diagnostics != nil || cfg.Server != nil {
+		httpCtx, cancelHTTP := context.WithTimeout(context.Background(), httpTimeout)
+		var httpWG sync.WaitGroup
+		for _, srv := range []*http.Server{cfg.Diagnostics, cfg.Server} {
+			if srv == nil {
+				continue
+			}
+			httpWG.Add(1)
+			go func(s *http.Server) {
+				defer httpWG.Done()
+				_ = s.Shutdown(httpCtx)
+			}(srv)
+		}
+		httpWG.Wait()
+		cancelHTTP()
+	}
+	if cfg.CancelWorkers != nil {
+		cfg.CancelWorkers()
+	}
+	workerTimeout := cfg.WorkerTimeout
+	if workerTimeout <= 0 {
+		workerTimeout = 10 * time.Second
+	}
+	if !waitWorkersBounded(cfg.WorkersWG, workerTimeout) && cfg.Logger != nil {
+		cfg.Logger.Warn("telemetry_worker_shutdown_timed_out", "error_code", "TELEMETRY_WORKER_SHUTDOWN_TIMEOUT")
+	}
+	if cfg.CloseHistory != nil {
+		cfg.CloseHistory()
+	}
+	if cfg.CloseLatestCache != nil {
+		cfg.CloseLatestCache()
+	}
+	if cfg.CloseRateLimiter != nil {
+		cfg.CloseRateLimiter()
+	}
+	if cfg.CloseStore != nil {
+		cfg.CloseStore()
+	}
+	if cfg.Observability != nil {
+		telemetryTimeout := cfg.TelemetryTimeout
+		if telemetryTimeout <= 0 {
+			telemetryTimeout = 2 * time.Second
+		}
+		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), telemetryTimeout)
+		_ = cfg.Observability.Shutdown(shutdownContext)
+		cancelShutdown()
+	}
+}
+
+func waitWorkersBounded(wg *sync.WaitGroup, timeout time.Duration) bool {
+	if wg == nil {
+		return true
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wg.Wait()
+	}()
+	if timeout <= 0 {
+		<-done
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func runTelemetryWorker() int {
 	observabilityRuntime := observability.NewRuntime(observability.RuntimeConfig{
 		Service: "telemetry-runtime-service", OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		QueueSize: 1024, ExportTimeout: 500 * time.Millisecond,
 	})
-	defer func() {
-		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancelShutdown()
-		_ = observabilityRuntime.Shutdown(shutdownContext)
-	}()
 	logger := observability.NewJSONLogger(os.Stdout, slog.LevelInfo)
+	var workersWG sync.WaitGroup
+	var workerCancels []context.CancelFunc
+	shutdownCfg := telemetryWorkerShutdown{
+		Observability: observabilityRuntime,
+		Logger:        logger,
+		WorkersWG:     &workersWG,
+		CancelWorkers: func() {
+			for _, cancel := range workerCancels {
+				if cancel != nil {
+					cancel()
+				}
+			}
+		},
+		HTTPTimeout:      10 * time.Second,
+		WorkerTimeout:    10 * time.Second,
+		TelemetryTimeout: 2 * time.Second,
+	}
+	var shutdownOnce sync.Once
+	runShutdown := func() {
+		shutdownOnce.Do(func() {
+			shutdownTelemetryWorker(shutdownCfg)
+		})
+	}
+	defer runShutdown()
+
 	certificate, err := tls.LoadX509KeyPair(requiredEnv("TELEMETRY_TLS_CERT"), requiredEnv("TELEMETRY_TLS_KEY"))
 	if err != nil {
 		logger.Error("telemetry_tls_identity_load_failed", "error_code", "TELEMETRY_TLS_IDENTITY_LOAD_FAILED")
-		os.Exit(1)
+		return 1
 	}
 	clientCAs, err := loadCertPool(requiredEnv("TELEMETRY_CLIENT_CA"))
 	if err != nil {
 		logger.Error("telemetry_client_ca_invalid", "error_code", "TELEMETRY_CLIENT_CA_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	iamCAs, err := loadCertPool(requiredEnv("TELEMETRY_IAM_CA"))
 	if err != nil {
 		logger.Error("telemetry_iam_ca_invalid", "error_code", "TELEMETRY_IAM_CA_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	iamGrantPublicKey, err := loadCertificatePublicKey(requiredEnv("TELEMETRY_IAM_GRANT_CERT"))
 	if err != nil {
 		logger.Error("telemetry_iam_grant_certificate_invalid", "error_code", "TELEMETRY_IAM_GRANT_CERTIFICATE_INVALID")
-		os.Exit(1)
+		return 1
 	}
 
 	openContext, cancelOpen := context.WithTimeout(context.Background(), 5*time.Second)
@@ -59,18 +182,18 @@ func main() {
 	cancelOpen()
 	if err != nil {
 		logger.Error("telemetry_store_open_failed", "error_code", "TELEMETRY_STORE_OPEN_FAILED")
-		os.Exit(1)
+		return 1
 	}
-	defer store.Close()
+	shutdownCfg.CloseStore = store.Close
 	retentionContext, retentionCancel := context.WithCancel(context.Background())
-	defer retentionCancel()
-	runSupervised(retentionContext, observabilityRuntime, logger, "telemetry.runtime_retention", func() {
+	workerCancels = append(workerCancels, retentionCancel)
+	runSupervised(retentionContext, &workersWG, observabilityRuntime, logger, "telemetry.runtime_retention", func() {
 		runRuntimeRetention(retentionContext, store, logger)
 	})
-	runSupervised(retentionContext, observabilityRuntime, logger, "telemetry.presence_sweep", func() {
+	runSupervised(retentionContext, &workersWG, observabilityRuntime, logger, "telemetry.presence_sweep", func() {
 		runPresenceSweep(retentionContext, store, time.Minute, logger)
 	})
-	runSupervised(retentionContext, observabilityRuntime, logger, "telemetry.probe_offset_sweep", func() {
+	runSupervised(retentionContext, &workersWG, observabilityRuntime, logger, "telemetry.probe_offset_sweep", func() {
 		runProbeOffsetSweep(retentionContext, store, 5*time.Second, logger)
 	})
 
@@ -85,14 +208,12 @@ func main() {
 	if latestCache != nil {
 		// Redis 只承载可重建的 Latest 投影：不可用时降级，不影响真值与就绪判定。
 		dependencies = append(dependencies, observability.Dependency{Name: "redis-latest-cache", Required: false, Check: latestCache.Ping})
+		shutdownCfg.CloseLatestCache = func() { _ = latestCache.Close() }
 	}
 	observabilityRuntime.SetDependencies(dependencies...)
-	if latestCache != nil {
-		defer func() { _ = latestCache.Close() }()
-	}
 	if latestCancel != nil {
-		defer latestCancel()
-		runSupervised(latestContext, observabilityRuntime, logger, "telemetry.latest_cache_relay", func() {
+		workerCancels = append(workerCancels, latestCancel)
+		runSupervised(latestContext, &workersWG, observabilityRuntime, logger, "telemetry.latest_cache_relay", func() {
 			runLatestCacheRelay(latestContext, latestRelay, logger)
 		})
 	}
@@ -100,14 +221,14 @@ func main() {
 	historyRepository, historyRelay, historyContext, historyCancel, err := loadHistoryProjection()
 	if err != nil {
 		logger.Error("telemetry_history_projection_configuration_invalid", "error_code", "TELEMETRY_HISTORY_PROJECTION_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	if historyRepository != nil {
-		defer historyRepository.Close()
+		shutdownCfg.CloseHistory = historyRepository.Close
 	}
 	if historyCancel != nil {
-		defer historyCancel()
-		runSupervised(historyContext, observabilityRuntime, logger, "telemetry.history_projection", func() {
+		workerCancels = append(workerCancels, historyCancel)
+		runSupervised(historyContext, &workersWG, observabilityRuntime, logger, "telemetry.history_projection", func() {
 			runHistoryProjection(historyContext, historyRelay, logger)
 		})
 	}
@@ -115,17 +236,17 @@ func main() {
 	analyticsProjector, priceWindows, totalSubmeters, analyticsContext, analyticsCancel, err := loadAnalyticsProjection(certificate)
 	if err != nil {
 		logger.Error("analytics_projection_configuration_invalid", "error_code", "ANALYTICS_PROJECTION_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	if analyticsCancel != nil {
-		defer analyticsCancel()
-		runSupervised(analyticsContext, observabilityRuntime, logger, "telemetry.analytics_projection", func() {
+		workerCancels = append(workerCancels, analyticsCancel)
+		runSupervised(analyticsContext, &workersWG, observabilityRuntime, logger, "telemetry.analytics_projection", func() {
 			runAnalyticsProjection(analyticsContext, analyticsProjector, observabilityRuntime, logger)
 		})
-		runSupervised(analyticsContext, observabilityRuntime, logger, "telemetry.price_window_projection", func() {
+		runSupervised(analyticsContext, &workersWG, observabilityRuntime, logger, "telemetry.price_window_projection", func() {
 			runPriceWindowProjection(analyticsContext, priceWindows, observabilityRuntime, logger)
 		})
-		runSupervised(analyticsContext, observabilityRuntime, logger, "telemetry.total_submeter_projection", func() {
+		runSupervised(analyticsContext, &workersWG, observabilityRuntime, logger, "telemetry.total_submeter_projection", func() {
 			runTotalSubmeterProjection(analyticsContext, totalSubmeters, observabilityRuntime, logger)
 		})
 	}
@@ -149,30 +270,30 @@ func main() {
 	)
 	if err != nil {
 		logger.Error("telemetry_iam_authorizer_invalid", "error_code", "TELEMETRY_IAM_AUTHORIZER_INVALID")
-		os.Exit(1)
+		return 1
 	}
 
 	realtimeService, realtimeContext, realtimeCancel, err := loadRealtimeService(store, certificate, observabilityRuntime.Metrics)
 	if err != nil {
 		logger.Error("telemetry_realtime_configuration_invalid", "error_code", "TELEMETRY_REALTIME_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	if realtimeCancel != nil {
-		defer realtimeCancel()
-		runSupervised(realtimeContext, observabilityRuntime, logger, "telemetry.realtime_relay", func() {
+		workerCancels = append(workerCancels, realtimeCancel)
+		runSupervised(realtimeContext, &workersWG, observabilityRuntime, logger, "telemetry.realtime_relay", func() {
 			runRealtimeRelay(realtimeContext, realtimeService, logger)
 		})
 		revocationSource, err := telemetry.NewHTTPRevocationSource(requiredEnv("TELEMETRY_IAM_ENDPOINT"), iamClient)
 		if err != nil {
 			logger.Error("telemetry_revocation_source_invalid", "error_code", "TELEMETRY_REVOCATION_SOURCE_INVALID")
-			os.Exit(1)
+			return 1
 		}
 		revocationRelay, err := telemetry.NewRevocationRelay(revocationSource, store, realtimeService, time.Now)
 		if err != nil {
 			logger.Error("telemetry_revocation_relay_invalid", "error_code", "TELEMETRY_REVOCATION_RELAY_INVALID")
-			os.Exit(1)
+			return 1
 		}
-		runSupervised(realtimeContext, observabilityRuntime, logger, "telemetry.revocation_relay", func() {
+		runSupervised(realtimeContext, &workersWG, observabilityRuntime, logger, "telemetry.revocation_relay", func() {
 			runRevocationRelay(realtimeContext, revocationRelay, logger)
 		})
 	}
@@ -180,11 +301,11 @@ func main() {
 	alarmRelay, alarmContext, alarmCancel, err := loadAlarmEvaluationRelay(store, certificate)
 	if err != nil {
 		logger.Error("telemetry_alarm_evaluation_configuration_invalid", "error_code", "TELEMETRY_ALARM_EVALUATION_CONFIGURATION_INVALID")
-		os.Exit(1)
+		return 1
 	}
 	if alarmCancel != nil {
-		defer alarmCancel()
-		runSupervised(alarmContext, observabilityRuntime, logger, "telemetry.alarm_evaluation_relay", func() {
+		workerCancels = append(workerCancels, alarmCancel)
+		runSupervised(alarmContext, &workersWG, observabilityRuntime, logger, "telemetry.alarm_evaluation_relay", func() {
 			runAlarmEvaluationRelay(alarmContext, alarmRelay, logger)
 		})
 	}
@@ -192,9 +313,9 @@ func main() {
 	rateLimiter, closeRateLimiter, err := loadTelemetryRateLimiter()
 	if err != nil {
 		logger.Error("telemetry_limit_policy_config_invalid", "error_code", "TELEMETRY_LIMIT_POLICY_CONFIG_INVALID")
-		os.Exit(1)
+		return 1
 	}
-	defer closeRateLimiter()
+	shutdownCfg.CloseRateLimiter = closeRateLimiter
 
 	server := &http.Server{
 		Addr: envOr("TELEMETRY_SERVICE_ADDR", "127.0.0.1:18446"),
@@ -240,38 +361,63 @@ func main() {
 		Handler:           observabilityRuntime.DiagnosticsHandler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	shutdownCfg.Diagnostics = diagnostics
+	shutdownCfg.Server = server
 	observabilityRuntime.Go(logger, "telemetry.diagnostics", func() {
 		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("telemetry_diagnostics_stopped_unexpectedly", "error_code", "TELEMETRY_DIAGNOSTICS_SERVE_FAILED")
 		}
 	})
+	serverErr := make(chan error, 1)
+	observabilityRuntime.Go(logger, "telemetry.http", func() {
+		logger.Info("telemetry_runtime_started", "service", "telemetry-runtime-service", "address", server.Addr)
+		if serveErr := server.ListenAndServeTLS("", ""); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			serverErr <- serveErr
+			return
+		}
+		serverErr <- nil
+	})
 	observabilityRuntime.MarkReady()
 
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
-	observabilityRuntime.Go(logger, "telemetry.shutdown", func() {
-		<-shutdown
-		observabilityRuntime.MarkNotReady()
-		context, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = diagnostics.Shutdown(context)
-		_ = server.Shutdown(context)
-	})
+	defer signal.Stop(shutdown)
 
-	logger.Info("telemetry_runtime_started", "service", "telemetry-runtime-service", "address", server.Addr)
-	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error("telemetry_runtime_stopped_unexpectedly", "error_code", "TELEMETRY_RUNTIME_SERVE_FAILED")
-		os.Exit(1)
+	exitCode := 0
+	select {
+	case <-shutdown:
+	case serveErr := <-serverErr:
+		if serveErr != nil {
+			logger.Error("telemetry_runtime_stopped_unexpectedly", "error_code", "TELEMETRY_RUNTIME_SERVE_FAILED")
+			exitCode = 1
+		}
 	}
-	logger.Info("telemetry_runtime_stopped", "service", "telemetry-runtime-service")
+	runShutdown()
+	if exitCode == 0 {
+		logger.Info("telemetry_runtime_stopped", "service", "telemetry-runtime-service")
+	}
+	return exitCode
 }
 
-func runSupervised(ctx context.Context, runtime *observability.Runtime, logger *slog.Logger, component string, fn func()) {
+func runSupervised(ctx context.Context, wg *sync.WaitGroup, runtime *observability.Runtime, logger *slog.Logger, component string, fn func()) {
+	if fn == nil {
+		return
+	}
+	var metrics *observability.Registry
+	if runtime != nil {
+		metrics = runtime.Metrics
+	}
+	if wg != nil {
+		wg.Add(1)
+	}
 	runtime.Go(logger, component, func() {
+		if wg != nil {
+			defer wg.Done()
+		}
 		for ctx.Err() == nil {
 			panicked := false
 			func() {
-				defer observability.Recover(logger, runtime.Metrics, component, func(any) {
+				defer observability.Recover(logger, metrics, component, func(any) {
 					panicked = true
 				})
 				fn()

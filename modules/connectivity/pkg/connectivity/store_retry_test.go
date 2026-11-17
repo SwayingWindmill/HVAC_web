@@ -155,3 +155,38 @@ func TestCorrelationErrorsAndGatewayTenantCacheLookup(t *testing.T) {
 		t.Fatal("expected empty TenantID cache entry not to bypass DB lookup")
 	}
 }
+
+func TestOpenConfigDBMaxConns(t *testing.T) {
+	t.Setenv("CONNECTIVITY_DB_MAX_CONNS", "")
+	defaultCfg, err := openConfig("postgres://user:pass@localhost:5432/hvac_s1?sslmode=disable")
+	if err != nil {
+		t.Fatalf("default openConfig err=%v", err)
+	}
+	if defaultCfg.MaxConns != 32 {
+		t.Fatalf("default MaxConns=%d, want 32", defaultCfg.MaxConns)
+	}
+
+	urlCfg, err := openConfig("postgres://user:pass@localhost:5432/hvac_s1?pool_max_conns=18")
+	if err != nil {
+		t.Fatalf("url openConfig err=%v", err)
+	}
+	if urlCfg.MaxConns != 18 {
+		t.Fatalf("url MaxConns=%d, want 18", urlCfg.MaxConns)
+	}
+
+	t.Setenv("CONNECTIVITY_DB_MAX_CONNS", "64")
+	envCfg, err := openConfig("postgres://user:pass@localhost:5432/hvac_s1?pool_max_conns=18")
+	if err != nil {
+		t.Fatalf("env openConfig err=%v", err)
+	}
+	if envCfg.MaxConns != 64 {
+		t.Fatalf("env override MaxConns=%d, want 64", envCfg.MaxConns)
+	}
+
+	for _, invalid := range []string{"0", "-1", "257", "abc"} {
+		t.Setenv("CONNECTIVITY_DB_MAX_CONNS", invalid)
+		if _, err := openConfig("postgres://user:pass@localhost:5432/hvac_s1"); err == nil {
+			t.Fatalf("expected invalid CONNECTIVITY_DB_MAX_CONNS=%q to fail", invalid)
+		}
+	}
+}

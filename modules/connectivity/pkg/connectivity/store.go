@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,6 +66,11 @@ func runSerializableTenantOp[T any](ctx context.Context, op func() (T, error)) (
 	return zero, errors.New("serializable tenant operation retry limit exceeded")
 }
 
+const (
+	defaultConnectivityDBMaxConns = int32(32)
+	maxAllowedConnectivityDBConns = 256
+)
+
 // Store is Connectivity's database access for every Tenant. Each call works inside
 // the Tenant it is given, resolved from the Registry gateway directory.
 type Store struct {
@@ -71,12 +79,50 @@ type Store struct {
 	cache uplinkCache
 }
 
-func Open(ctx context.Context, databaseURL string) (*Store, error) {
-	config, err := pgxpool.ParseConfig(strings.TrimSpace(databaseURL))
+func openConfig(databaseURL string) (*pgxpool.Config, error) {
+	trimmedURL := strings.TrimSpace(databaseURL)
+	config, err := pgxpool.ParseConfig(trimmedURL)
 	if err != nil {
 		return nil, errors.New("parse connectivity database URL")
 	}
-	config.MaxConns = 8
+	maxConns, err := resolveConnectivityDBMaxConns(os.Getenv("CONNECTIVITY_DB_MAX_CONNS"), urlHasPoolMaxConns(trimmedURL), config.MaxConns)
+	if err != nil {
+		return nil, err
+	}
+	config.MaxConns = maxConns
+	return config, nil
+}
+
+func urlHasPoolMaxConns(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err == nil && parsed != nil {
+		if _, ok := parsed.Query()["pool_max_conns"]; ok {
+			return true
+		}
+	}
+	return strings.Contains(rawURL, "pool_max_conns=")
+}
+
+func resolveConnectivityDBMaxConns(rawEnv string, urlExplicit bool, current int32) (int32, error) {
+	trimmed := strings.TrimSpace(rawEnv)
+	if trimmed == "" {
+		if urlExplicit && current > 0 {
+			return current, nil
+		}
+		return defaultConnectivityDBMaxConns, nil
+	}
+	parsed, err := strconv.Atoi(trimmed)
+	if err != nil || parsed < 1 || parsed > maxAllowedConnectivityDBConns {
+		return 0, fmt.Errorf("invalid CONNECTIVITY_DB_MAX_CONNS %q: must be between 1 and %d", trimmed, maxAllowedConnectivityDBConns)
+	}
+	return int32(parsed), nil
+}
+
+func Open(ctx context.Context, databaseURL string) (*Store, error) {
+	config, err := openConfig(databaseURL)
+	if err != nil {
+		return nil, err
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, errors.New("open connectivity database")
@@ -258,6 +304,24 @@ LIMIT $2
 		}
 		return out, nil
 	})
+}
+
+// LoadCommandCorrelation reads one correlation row for a Tenant so multi-replica command
+// dispatchers can observe replies persisted by peer replicas without waiting for ack timeout.
+func (store *Store) LoadCommandCorrelation(ctx context.Context, tenantID, attemptID string, executionFence uint64) (commandmodel.CommandCorrelation, error) {
+	var correlation commandmodel.CommandCorrelation
+	err := store.readAsTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		loaded, loadErr := loadCorrelation(ctx, tx, tenantID, attemptID, executionFence)
+		if loadErr != nil {
+			return loadErr
+		}
+		correlation = loaded
+		return nil
+	})
+	if err != nil {
+		return commandmodel.CommandCorrelation{}, err
+	}
+	return correlation, nil
 }
 
 func (store *Store) MarkCommandCorrelationResolved(ctx context.Context, tenantID, attemptID string, executionFence uint64, resolvedAt time.Time) error {

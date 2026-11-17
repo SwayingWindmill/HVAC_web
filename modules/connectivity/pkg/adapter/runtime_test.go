@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"log/slog"
 	"net"
@@ -1423,4 +1425,411 @@ func TestRuntimeSubscribeRetriesAndSelfHealsOnSubackFailure(t *testing.T) {
 			t.Fatalf("missing %q in metrics:\n%s", want, metricsBody)
 		}
 	}
+}
+
+func scrapeMetricsText(registry *observability.Registry) string {
+	rec := httptest.NewRecorder()
+	registry.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	return rec.Body.String()
+}
+
+func TestGatewayGaugeLeakFixedOnReapEvictAndClose(t *testing.T) {
+	t.Run("idle reap deletes gateway queue and overflow gauges", func(t *testing.T) {
+		telemetry := &fakeTelemetry{}
+		runtime := newTestRuntime(t, telemetry, 8)
+		runtime.idleTimeout = 25 * time.Millisecond
+
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
+		acks := newAckLog()
+
+		if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
+			t.Fatal(err)
+		}
+		acks.await(t, messageID(1))
+		waitCondition(t, 2*time.Second, func() bool {
+			return len(telemetry.accepted()) == 1
+		}, "gateway A message processed")
+
+		waitCondition(t, 2*time.Second, func() bool {
+			card := runtime.metrics.SeriesCardinality()
+			return card["hvac_mqtt_gateway_queue_depth"] == 0 && card["hvac_mqtt_gateway_overflow_depth"] == 0
+		}, "reaped gateway gauges deleted from cardinality")
+
+		body := scrapeMetricsText(runtime.metrics)
+		if strings.Contains(body, `gateway_id="`+testGatewayA+`"`) {
+			t.Fatalf("expected reaped gateway %s removed from /metrics, got:\n%s", testGatewayA, body)
+		}
+	})
+
+	t.Run("cap eviction and closeMailboxes delete gateway gauges", func(t *testing.T) {
+		telemetry := &fakeTelemetry{}
+		runtime := newTestRuntime(t, telemetry, 4)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
+		acks := newAckLog()
+
+		oldestIdleID := "018f3e00-9999-7000-8000-000000000000"
+		now := time.Now()
+		dir := t.TempDir()
+		runtime.queuesMu.Lock()
+		for index := 0; index < maxTrackedGatewayQueues; index++ {
+			id := fmt.Sprintf("018f3e00-9999-7000-8000-%012d", index)
+			mb := newGatewayMailbox(id, 4, 16, 1<<20, dir)
+			state := &gatewayMailboxState{
+				mailbox:    mb,
+				lastActive: now.Add(time.Duration(index) * time.Millisecond),
+				inFlight:   index != 0,
+			}
+			runtime.queues[id] = mb
+			runtime.states[id] = state
+		}
+		runtime.queuesMu.Unlock()
+		runtime.recordQueueDepth(oldestIdleID, 0)
+		runtime.recordOverflowDepth(oldestIdleID, 0)
+
+		if card := runtime.metrics.SeriesCardinality(); card["hvac_mqtt_gateway_queue_depth"] != 1 || card["hvac_mqtt_gateway_overflow_depth"] != 1 {
+			t.Fatalf("unexpected pre-eviction gauge cardinality: %#v", card)
+		}
+
+		if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
+			t.Fatalf("expected idle eviction to admit gateway A: %v", err)
+		}
+		acks.await(t, messageID(1))
+
+		bodyAfterEvict := scrapeMetricsText(runtime.metrics)
+		if strings.Contains(bodyAfterEvict, `gateway_id="`+oldestIdleID+`"`) {
+			t.Fatalf("evicted gateway %s leaked in /metrics:\n%s", oldestIdleID, bodyAfterEvict)
+		}
+		if !strings.Contains(bodyAfterEvict, `gateway_id="`+testGatewayA+`"`) {
+			t.Fatalf("expected admitted gateway %s gauge in /metrics:\n%s", testGatewayA, bodyAfterEvict)
+		}
+
+		cancel()
+		runtime.workers.Wait()
+		runtime.closeMailboxes()
+
+		cardAfterClose := runtime.metrics.SeriesCardinality()
+		if cardAfterClose["hvac_mqtt_gateway_queue_depth"] != 0 || cardAfterClose["hvac_mqtt_gateway_overflow_depth"] != 0 {
+			t.Fatalf("expected all gateway gauges deleted on closeMailboxes, got %#v", cardAfterClose)
+		}
+		bodyAfterClose := scrapeMetricsText(runtime.metrics)
+		if strings.Contains(bodyAfterClose, `gateway_id="`+testGatewayA+`"`) {
+			t.Fatalf("closed gateway %s still present in /metrics:\n%s", testGatewayA, bodyAfterClose)
+		}
+		if !strings.Contains(bodyAfterClose, "hvac_mqtt_processing_queue_depth 0\n") {
+			t.Fatalf("expected hvac_mqtt_processing_queue_depth 0 after closeMailboxes:\n%s", bodyAfterClose)
+		}
+	})
+}
+
+func TestRuntimeCatalogMetricsOnlineGatewaysTraceLogsAndPacketHook(t *testing.T) {
+	var logBuf syncLogBuffer
+	logger := observability.NewJSONLogger(&logBuf, slog.LevelInfo)
+	registry := observability.NewRegistry()
+	tracer := observability.NewTracer("mqtt-telemetry-adapter", nil)
+
+	var online atomic.Int32
+	var tappedMu sync.Mutex
+	var tapped []string
+
+	telemetry := &fakeTelemetry{
+		release: make(chan struct{}),
+		entered: make(chan struct{}, 4),
+	}
+	processor, err := NewProcessor(
+		newFakeIdentities(),
+		telemetry,
+		WithProcessorTracer(tracer),
+		WithGatewayPresenceHook(func(_ string, isOnline bool) {
+			if isOnline {
+				online.Store(1)
+			} else {
+				online.Store(0)
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overflowDir := t.TempDir()
+	runtime, err := NewRuntime(
+		Config{
+			MQTT:                MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-catalog", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+			TelemetryRuntime:    TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+			QueueCapacity:       1,
+			OverflowMaxMessages: 1,
+			OverflowDir:         overflowDir,
+		},
+		processor,
+		logger,
+		registry,
+		WithPacketHook(func(direction, channel, gatewayID, topic, traceID string, _ []byte) {
+			tappedMu.Lock()
+			tapped = append(tapped, fmt.Sprintf("%s:%s:%s:%s", direction, channel, gatewayID, traceID))
+			tappedMu.Unlock()
+		}),
+		WithOnlineGatewayCount(func() int {
+			return int(online.Load())
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.retryDelay = func(int) time.Duration { return 5 * time.Millisecond }
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { cancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
+
+	initialBody := scrapeMetricsText(registry)
+	for _, want := range []string{
+		"hvac_mqtt_processing_queue_capacity 2\n",
+		"hvac_mqtt_processing_queue_depth 0\n",
+		"hvac_mqtt_online_gateways 0\n",
+	} {
+		if !strings.Contains(initialBody, want) {
+			t.Fatalf("missing initial metric %q in:\n%s", want, initialBody)
+		}
+	}
+
+	acks := newAckLog()
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 1), acks.ack(messageID(1))); err != nil {
+		t.Fatal(err)
+	}
+	<-telemetry.entered
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 2), acks.ack(messageID(2))); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 3), acks.ack(messageID(3))); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.enqueue(ctx, nil, publish(testGatewayA, 4), acks.ack(messageID(4))); err == nil {
+		t.Fatal("expected M4 to shed")
+	}
+	if err := runtime.enqueue(ctx, nil, &paho.Publish{Topic: "hvac/v1/" + testGatewayB + "/up/state", Payload: []byte(`{}`), QoS: 1}, acks.ack("q-1")); err != nil {
+		t.Fatal(err)
+	}
+
+	queuedBody := scrapeMetricsText(registry)
+	for _, want := range []string{
+		`hvac_mqtt_messages_received_total{outcome="queued"} 4`,
+		`hvac_mqtt_messages_received_total{outcome="dropped"} 1`,
+		"hvac_mqtt_processing_queue_depth 2\n",
+	} {
+		if !strings.Contains(queuedBody, want) {
+			t.Fatalf("missing queued metric %q in:\n%s", want, queuedBody)
+		}
+	}
+
+	close(telemetry.release)
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(telemetry.accepted()) == 3
+	}, "all queued telemetry processed")
+	waitCondition(t, 2*time.Second, func() bool {
+		body := scrapeMetricsText(registry)
+		return strings.Contains(body, `hvac_mqtt_message_processing_duration_seconds_count{outcome="quarantined"} 1`) &&
+			strings.Contains(body, "hvac_mqtt_online_gateways 1\n") &&
+			strings.Contains(body, "hvac_mqtt_processing_queue_depth 0\n")
+	}, "quarantined duration, online gateways, and drained queue depth recorded")
+
+	corruptMB := newGatewayMailbox(testGatewayB, 1, 4, 1<<20, t.TempDir())
+	t.Cleanup(func() { corruptMB.close(true) })
+	for i := 1; i <= 3; i++ {
+		if _, enqErr := corruptMB.enqueue(publish(testGatewayB, i)); enqErr != nil {
+			t.Fatal(enqErr)
+		}
+	}
+	b1, _, _, _ := corruptMB.popBatch(1)
+	corruptMB.markConsumed(b1[0].endSeq)
+	var badCRC [4]byte
+	binary.BigEndian.PutUint32(badCRC[:], crc32.ChecksumIEEE([]byte("corrupt")))
+	if _, writeErr := corruptMB.spoolFile.WriteAt(badCRC[:], walHeaderSize+2*b1[0].endSeq+4); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	b2, _, _, _ := corruptMB.popBatch(1)
+	corruptMB.markConsumed(b2[0].endSeq)
+	var endSeq int64
+	runtime.runGatewayTurn(ctx, gatewayTurn{gatewayID: testGatewayB, mailbox: corruptMB}, &endSeq)
+
+	finalBody := scrapeMetricsText(registry)
+	for _, want := range []string{
+		"hvac_mqtt_spool_read_errors_total 1\n",
+		`hvac_mqtt_messages_processed_total{outcome="dropped"} 1`,
+		`hvac_mqtt_messages_processed_total{outcome="quarantined"} 1`,
+	} {
+		if !strings.Contains(finalBody, want) {
+			t.Fatalf("missing final metric %q in:\n%s", want, finalBody)
+		}
+	}
+
+	logs := logBuf.String()
+	if !strings.Contains(logs, `"msg":"mqtt_uplink_message_processed"`) || !strings.Contains(logs, `"trace_id":"`) {
+		t.Fatalf("expected trace_id on mqtt_uplink_message_processed log: %s", logs)
+	}
+	if !strings.Contains(logs, `"error_code":"MQTT_UPLINK_MESSAGE_QUARANTINED"`) {
+		t.Fatalf("expected error_code on quarantine log: %s", logs)
+	}
+	if !strings.Contains(logs, `"reason_code":"GATEWAY_OVERFLOW_SHED"`) {
+		t.Fatalf("expected reason_code on overflow shed log: %s", logs)
+	}
+	if !strings.Contains(logs, `"error_code":"MQTT_UPLINK_OVERFLOW_READ_FAILED"`) {
+		t.Fatalf("expected error_code on spool read failure log: %s", logs)
+	}
+
+	tappedMu.Lock()
+	tappedCount := len(tapped)
+	tappedMu.Unlock()
+	if tappedCount < 4 {
+		t.Fatalf("expected WithPacketHook to capture telemetry and quarantine packets, got %d", tappedCount)
+	}
+}
+
+func TestRuntimeGracefulDrainFinishesInFlightAndBufferedMessagesOnCancel(t *testing.T) {
+	broker := newFakeBroker(t)
+	telemetry := &fakeTelemetry{
+		release: make(chan struct{}),
+		entered: make(chan struct{}, 4),
+	}
+	lister := &fakeCoverageLister{deviceIDs: []string{testDeviceID}}
+	runtime, err := NewRuntime(
+		Config{
+			MQTT:             broker.mqtt,
+			TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: broker.mqtt.CAFile, CertFile: broker.mqtt.CertFile, KeyFile: broker.mqtt.KeyFile, ServerName: "telemetry.local"},
+			QueueCapacity:    8,
+			OverflowDir:      t.TempDir(),
+		},
+		newTestProcessor(t, newFakeIdentities(), telemetry),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		observability.NewRegistry(),
+		WithCoverageReporter(lister, telemetry),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.coverageInterval = time.Hour
+
+	ctx, cancel := context.WithCancel(t.Context())
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- runtime.Run(ctx)
+	}()
+
+	conn := broker.awaitConnection(t)
+	awaitReady(t, runtime, true)
+
+	conn.deliverGateway(t, testGatewayA, 1, 1, false)
+	<-telemetry.entered
+	conn.deliverGateway(t, testGatewayA, 2, 2, false)
+	conn.deliverGateway(t, testGatewayA, 3, 3, false)
+	conn.awaitAcks(t, 1, 2, 3)
+
+	cancel()
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		close(telemetry.release)
+	}()
+
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run returned unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not finish graceful drain within 5s")
+	}
+
+	accepted := telemetry.accepted()
+	if len(accepted) != 3 {
+		t.Fatalf("accepted=%d during graceful drain, want 3", len(accepted))
+	}
+	for i, obs := range accepted {
+		if obs.SourcePosition.Offset != int64(i+1) {
+			t.Fatalf("accepted[%d] offset=%d, want %d", i, obs.SourcePosition.Offset, i+1)
+		}
+	}
+
+	telemetry.mu.Lock()
+	reports := append([]SourceCoverageReport(nil), telemetry.coverageReports...)
+	telemetry.mu.Unlock()
+	if len(reports) == 0 {
+		t.Fatal("expected coverage reports including shutdown SOURCE_UNAVAILABLE")
+	}
+	last := reports[len(reports)-1]
+	if last.Available || last.ReasonCode == nil || *last.ReasonCode != "SOURCE_UNAVAILABLE" {
+		t.Fatalf("last coverage report=%+v, want SOURCE_UNAVAILABLE", last)
+	}
+}
+
+func TestRuntimeGracefulDrainTimeoutPreservesPersistentWAL(t *testing.T) {
+	broker := newFakeBroker(t)
+	entered := make(chan struct{}, 2)
+	telemetry := &fakeTelemetry{
+		release: make(chan struct{}),
+		entered: entered,
+	}
+	overflowDir := t.TempDir()
+	runtime, err := NewRuntime(
+		Config{
+			MQTT:             broker.mqtt,
+			TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: broker.mqtt.CAFile, CertFile: broker.mqtt.CertFile, KeyFile: broker.mqtt.KeyFile, ServerName: "telemetry.local"},
+			QueueCapacity:    4,
+			OverflowDir:      overflowDir,
+		},
+		newTestProcessor(t, newFakeIdentities(), telemetry),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		observability.NewRegistry(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.drainTimeout = 80 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(t.Context())
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- runtime.Run(ctx)
+	}()
+
+	conn := broker.awaitConnection(t)
+	awaitReady(t, runtime, true)
+
+	conn.deliverGateway(t, testGatewayA, 1, 1, false)
+	<-entered
+	conn.deliverGateway(t, testGatewayA, 2, 2, false)
+	conn.awaitAcks(t, 1, 2)
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run returned error after bounded drain timeout: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run exceeded bounded drain timeout")
+	}
+
+	// Persistent OverflowDir (ownedOverflowDir == false) must retain unconsumed WAL frames for recovery.
+	recoveredTelemetry := &fakeTelemetry{}
+	recoveredRuntime, err := NewRuntime(
+		Config{
+			MQTT:             broker.mqtt,
+			TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: broker.mqtt.CAFile, CertFile: broker.mqtt.CertFile, KeyFile: broker.mqtt.KeyFile, ServerName: "telemetry.local"},
+			QueueCapacity:    4,
+			OverflowDir:      overflowDir,
+		},
+		newTestProcessor(t, newFakeIdentities(), recoveredTelemetry),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		observability.NewRegistry(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recCtx, recCancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { recCancel(); recoveredRuntime.workers.Wait(); recoveredRuntime.closeMailboxes() })
+	if err := recoveredRuntime.recoverOverflowMailboxes(recCtx); err != nil {
+		t.Fatalf("recoverOverflowMailboxes failed: %v", err)
+	}
+	waitCondition(t, 2*time.Second, func() bool {
+		return len(recoveredTelemetry.accepted()) == 2
+	}, "preserved WAL entries recovered and drained on restart")
 }

@@ -2,9 +2,12 @@ package commanddispatcher
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"
 )
 
 type Connector interface {
@@ -36,6 +39,14 @@ func NewDurable(store DurableCommandStore, connector Connector, workerID string,
 	return &DurableDispatcher{store: store, connector: connector, workerID: workerID, leaseFor: leaseFor}
 }
 
+func replyBackedResult(result commandmodel.ConnectorResult) bool {
+	return result.Acknowledged ||
+		result.Phase == commandmodel.ConnectorAcknowledged ||
+		result.Phase == commandmodel.ConnectorExecutionRejected ||
+		strings.HasPrefix(result.FailureCode, "MQTT_EDGE_") ||
+		result.FailureCode == "MQTT_COMMAND_REPLY_INVALID"
+}
+
 // RunOnce claims and executes one pre-dispatch gated Command. Command Service
 // enforces the 3-phase Twin + Live gate inside ClaimDispatch before issuing
 // a DispatchEnvelope, so only pre-dispatch approved intents reach Connector.Execute.
@@ -49,6 +60,9 @@ func (d *DurableDispatcher) RunOnce(ctx context.Context, tenantID string) error 
 		return err
 	}
 	if err := d.store.ResolveDispatch(ctx, envelope, result); err != nil {
+		if finalizer, ok := d.connector.(DispatchResolutionFinalizer); ok && errors.Is(err, commandservice.ErrStaleFence) && replyBackedResult(result) {
+			return finalizer.FinalizeDispatch(ctx, envelope, result)
+		}
 		return err
 	}
 	if finalizer, ok := d.connector.(DispatchResolutionFinalizer); ok {

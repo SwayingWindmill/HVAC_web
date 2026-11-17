@@ -201,6 +201,86 @@
         }
       }
     },
+    "/api/v1/gateways/{gatewayId}/quarantine": {
+      "get": {
+        "operationId": "listGatewayQuarantine", "summary": "List recent quarantined uplink messages for a Gateway with safe payload preview",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}},
+          {"name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}}
+        ],
+        "responses": {
+          "200": {"description": "Recent quarantined uplink records", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayQuarantineList"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/packet-capture": {
+      "get": {
+        "operationId": "getGatewayPacketCapture", "summary": "Read active state and buffered packet capture samples for a Gateway",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}}
+        ],
+        "responses": {
+          "200": {"description": "Gateway packet capture snapshot", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayPacketCaptureSnapshot"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/packet-capture/start": {
+      "post": {
+        "operationId": "startGatewayPacketCapture", "summary": "Start a bounded TTL raw packet capture session for a Gateway",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}},
+          {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": false, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayPacketCaptureStartRequest"}}}},
+        "responses": {
+          "200": {"description": "Started packet capture snapshot", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayPacketCaptureSnapshot"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/api/v1/gateways/{gatewayId}/packet-capture/stop": {
+      "post": {
+        "operationId": "stopGatewayPacketCapture", "summary": "Stop an active Gateway packet capture session while keeping its ring buffer snapshot",
+        "x-owner": "connectivity", "x-public-ingress": "platform-gateway", "x-architecture-status": "ACTIVE", "x-shape-status": "READY",
+        "parameters": [
+          {"name": "gatewayId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/UUIDv7"}},
+          {"name": "X-CSRF-Token", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Stopped packet capture snapshot", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GatewayPacketCaptureSnapshot"}}}},
+          "400": {"$ref": "#/components/responses/Problem"},
+          "401": {"$ref": "#/components/responses/Problem"},
+          "403": {"$ref": "#/components/responses/Problem"},
+          "404": {"$ref": "#/components/responses/Problem"},
+          "429": {"$ref": "#/components/responses/Problem"},
+          "502": {"$ref": "#/components/responses/Problem"},
+          "503": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "operationId": "getHealth",
@@ -3506,6 +3586,70 @@
           "samplingPolicies": {"type": "array", "items": {"$ref": "#/components/schemas/GatewaySamplingPolicy"}},
           "concentratorConfigs": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/ConcentratorUnitShadow"}},
           "reason": {"type": "string", "minLength": 1, "maxLength": 1000}
+        }
+      },
+      "GatewayQuarantineRecord": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "gatewayId", "topic", "reasonCode", "detail", "payloadSha256", "payloadBytes", "payloadPreview", "payloadEncoding", "payloadTruncated", "occurrenceCount", "receivedAt", "lastSeenAt"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/UUIDv7"},
+          "gatewayId": {"type": "string", "minLength": 1, "maxLength": 128},
+          "topic": {"type": "string", "minLength": 1, "maxLength": 512},
+          "reasonCode": {"type": "string", "enum": ["GATEWAY_UNKNOWN", "GATEWAY_CREDENTIAL_INACTIVE", "MESSAGE_INVALID"]},
+          "detail": {"type": "string", "minLength": 1, "maxLength": 1024},
+          "payloadSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "payloadBytes": {"type": "integer", "minimum": 0},
+          "payloadPreview": {"type": "string", "maxLength": 4096},
+          "payloadEncoding": {"type": "string", "enum": ["utf8", "hex", "empty"]},
+          "payloadTruncated": {"type": "boolean"},
+          "occurrenceCount": {"type": "integer", "minimum": 1},
+          "receivedAt": {"type": "string", "format": "date-time"},
+          "lastSeenAt": {"type": "string", "format": "date-time"}
+        }
+      },
+      "GatewayQuarantineList": {
+        "type": "object", "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayQuarantineRecord"}}
+        }
+      },
+      "GatewayCapturedPacket": {
+        "type": "object", "additionalProperties": false,
+        "required": ["sequence", "capturedAt", "direction", "channel", "topic", "payloadBytes", "payloadSha256", "payloadPreview", "payloadEncoding", "payloadTruncated"],
+        "properties": {
+          "sequence": {"type": "integer", "minimum": 1},
+          "capturedAt": {"type": "string", "format": "date-time"},
+          "direction": {"type": "string", "enum": ["UPLINK", "DOWNLINK"]},
+          "channel": {"type": "string", "enum": ["TELEMETRY", "EVENT", "COMMAND", "COMMAND_REPLY", "CONCENTRATOR", "QUARANTINE"]},
+          "topic": {"type": "string", "minLength": 1, "maxLength": 512},
+          "traceId": {"type": "string", "maxLength": 64},
+          "payloadBytes": {"type": "integer", "minimum": 0},
+          "payloadSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "payloadPreview": {"type": "string", "maxLength": 4096},
+          "payloadEncoding": {"type": "string", "enum": ["utf8", "hex", "empty"]},
+          "payloadTruncated": {"type": "boolean"}
+        }
+      },
+      "GatewayPacketCaptureSnapshot": {
+        "type": "object", "additionalProperties": false,
+        "required": ["gatewayId", "active", "maxPackets", "droppedCount", "items"],
+        "properties": {
+          "gatewayId": {"$ref": "#/components/schemas/UUIDv7"},
+          "active": {"type": "boolean"},
+          "startedAt": {"type": "string", "format": "date-time"},
+          "expiresAt": {"type": "string", "format": "date-time"},
+          "durationSeconds": {"type": "integer", "minimum": 30, "maximum": 900},
+          "maxPackets": {"type": "integer", "minimum": 1},
+          "droppedCount": {"type": "integer", "minimum": 0},
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/GatewayCapturedPacket"}}
+        }
+      },
+      "GatewayPacketCaptureStartRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "durationSeconds": {"type": "integer", "minimum": 30, "maximum": 900}
         }
       },
       "V212Meta": {

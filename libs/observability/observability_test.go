@@ -71,6 +71,31 @@ func TestMetricsRejectHighCardinalityLabelsAndExposeSafeSeries(t *testing.T) {
 	}
 }
 
+func TestMetricsDeleteGaugeRemovesSeries(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.SetGauge("hvac_mqtt_gateway_queue_depth", "Queue depth.", map[string]string{"gateway_id": "gw-1"}, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetGauge("hvac_mqtt_gateway_queue_depth", "Queue depth.", map[string]string{"gateway_id": "gw-2"}, 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := registry.SeriesCardinality()["hvac_mqtt_gateway_queue_depth"]; got != 2 {
+		t.Fatalf("initial cardinality = %d, want 2", got)
+	}
+	registry.DeleteGauge("hvac_mqtt_gateway_queue_depth", map[string]string{"gateway_id": "gw-1"})
+	if got := registry.SeriesCardinality()["hvac_mqtt_gateway_queue_depth"]; got != 1 {
+		t.Fatalf("post-delete cardinality = %d, want 1", got)
+	}
+	buffer := &bytes.Buffer{}
+	registry.writePrometheus(buffer)
+	output := buffer.String()
+	if strings.Contains(output, `gateway_id="gw-1"`) || !strings.Contains(output, `gateway_id="gw-2"`) {
+		t.Fatalf("unexpected metrics output after DeleteGauge: %s", output)
+	}
+	var nilRegistry *Registry
+	nilRegistry.DeleteGauge("hvac_mqtt_gateway_queue_depth", map[string]string{"gateway_id": "gw-1"})
+}
+
 func TestLoggerRedactsCredentialFields(t *testing.T) {
 	buffer := &bytes.Buffer{}
 	logger := NewJSONLogger(buffer, 0)
