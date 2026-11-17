@@ -7,7 +7,7 @@ description: Exhaustively model-check command intent, execution fence, MQTT comm
 
 Run the exhaustive explicit-state model checker (`modules/command/pkg/commandformal`) against real production transition decisions in `commandservice`, `mqttconnector`, and aligned SQL predicates in `postgres_*.go` / `connectivity/store.go`.
 
-- **Base syncCommit**: `1fddb82d0ceee4f5e0f1b473ffb5d487e758eea2`
+- **Base syncCommit**: `71f718abccef219196b5d1ce596c4b8678988012`
 
 ## Quick Run
 
@@ -50,9 +50,10 @@ If any invariant or mutation test fails, the runner prints the shortest failing 
 | `modules/command/pkg/commandservice/service.go` | `Submit`, `Approve`, `Cancel`, `CancelPending`, `PrepareDispatch`, `ResolveDispatch`, `PrepareVerification`, `ResolveVerification`, `Close` (`controlFailureQueue` drain) |
 | `modules/command/pkg/commandservice/governance.go` | `evaluateGovernance`, `approvalPolicyForRisk`, `validateApproval`, `validateExecutionGovernance` |
 | `modules/command/pkg/commandservice/transitions.go` | `BlockingEarlierIntentStatuses`, `CanClaimQueuedIntent`, `DecideCommandCancel`, `DecideDispatchResolution`, `DecideVerificationResolution`, `DecideOperatorReconcile`, `IsActiveAbortableSequence` |
-| `modules/command/pkg/commandservice/postgres_dispatch.go` | `ClaimDispatch` (`claimDispatchOnce`) SQL blocking statuses & device freeze check, `ResolveDispatch` (`resolveDispatchOnce` `AND o.delivered_at IS NULL`), `expireGovernanceInvalidQueued`, `DispatchEnvelope.TraceID` projection |
+| `modules/command/pkg/commandservice/postgres_dispatch.go` | `ClaimDispatch` (`claimDispatchOnce`) SQL blocking statuses & device freeze check, `ResolveDispatch` (`resolveDispatchOnce` `AND o.delivered_at IS NULL`), `expireGovernanceInvalidQueued`, `DispatchEnvelope.TraceID` projection, transactional `insertControlAlarmOutbox` |
 | `modules/command/pkg/commandservice/postgres_cancel.go` | `Cancel` (`cancelOnce`) & `CancelPending` delegation to `DecideCommandCancel` and `IsActiveAbortableSequence`, outbox retirement (`delivered_at = $3, lease_until = NULL`) |
-| `modules/command/pkg/commandservice/postgres_verification.go` | `ResolveVerification` delegation to `DecideVerificationResolutionWithEdge` |
+| `modules/command/pkg/commandservice/postgres_verification.go` | `ResolveVerification` delegation to `DecideVerificationResolutionWithEdge`, transactional `insertControlAlarmOutbox` |
+| `modules/command/pkg/commandservice/control_alarm_outbox.go` | Durable `command_runtime.control_alarm_outbox` enqueue/claim/deliver/fail/dead-letter transitions & `ControlAlarmRelay` |
 | `modules/command/pkg/commandservice/postgres_reconcile.go` | `reconcileOnce` delegation to `DecideOperatorReconcile` |
 | `modules/command/pkg/mqttconnector/connector.go` | `EnableManualAcknowledgment`, `SubscriptionTopicFilter`, `checkSubackReasons`, sharded `onReply` custody worker pool, `ResumeActionForCorrelation`, `DrainTenantReplies`, `RecoverTenantReplies`, `ResolveCorrelationReply`, `ReplyBackedResult`, `completeRecoveredReply`, `buildCommandEnvelope` `traceId`, `recoverReplies` panic guard |
 | `modules/connectivity/pkg/connectivity/store.go` | `RecoverCommandReplies` (`state = 'REPLIED'`, `ORDER BY replied_at, attempt_id LIMIT $2`), `runSerializableTenantOp` (`40001`/`40P01` retry) |
