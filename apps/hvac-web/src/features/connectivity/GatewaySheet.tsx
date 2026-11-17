@@ -193,11 +193,12 @@ function RevokeCertificateDialog({ certificate, reason, pending, working, error,
   );
 }
 
-function StopGatewayDialog({ open, gatewayName, pending, working, onOpenChange, onConfirm }: {
+function StopGatewayDialog({ open, gatewayName, pending, working, error, onOpenChange, onConfirm }: {
   readonly open: boolean;
   readonly gatewayName: string;
   readonly pending: boolean;
   readonly working: boolean;
+  readonly error: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly onConfirm: () => void;
 }) {
@@ -210,6 +211,11 @@ function StopGatewayDialog({ open, gatewayName, pending, working, onOpenChange, 
             将作废 {gatewayName} 的全部有效证书和未使用的接入码。它发来的数据会被拒收，也不能再向它发送指令；若需恢复接入，可在上方重新启用并生成接入码。
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {error ? (
+          <Alert variant="destructive">
+            <AlertDescription>停用没有完成，请确认权限后重试。</AlertDescription>
+          </Alert>
+        ) : null}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={working}>取消</AlertDialogCancel>
           <AlertDialogAction
@@ -457,11 +463,6 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite }: {
             停用网关…
           </Button>
         </div>
-        {stop.isError ? (
-          <Alert variant="destructive">
-            <AlertDescription>停用没有完成，请确认权限后重试。</AlertDescription>
-          </Alert>
-        ) : null}
       </section>
 
       <StopGatewayDialog
@@ -469,6 +470,7 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite }: {
         gatewayName={gateway.displayName}
         pending={stop.isPending}
         working={working}
+        error={stop.isError}
         onOpenChange={setConfirmingStop}
         onConfirm={() => stop.mutate()}
       />
