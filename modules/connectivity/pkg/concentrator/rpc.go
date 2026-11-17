@@ -362,6 +362,7 @@ func (t *MQTTTransport) Call(ctx context.Context, req RPCRequest) (RPCResponse, 
 
 	topic := DownlinkTopic(req.GatewayID)
 	expirySeconds := concentratorMessageExpirySeconds(timeout)
+	t.recordPacket("DOWNLINK", "CONCENTRATOR", req.GatewayID, topic, traceID, payload)
 	pubCtx, pubCancel := context.WithTimeout(ctx, 5*time.Second)
 	_, pubErr := t.manager.Publish(pubCtx, &paho.Publish{
 		QoS:        1,
@@ -375,7 +376,6 @@ func (t *MQTTTransport) Call(ctx context.Context, req RPCRequest) (RPCResponse, 
 		t.recordRPCOutcome("failed", started)
 		return RPCResponse{}, fmt.Errorf("%w: %v", ErrTransportUnavailable, pubErr)
 	}
-	t.recordPacket("DOWNLINK", "CONCENTRATOR", req.GatewayID, topic, traceID, payload)
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
