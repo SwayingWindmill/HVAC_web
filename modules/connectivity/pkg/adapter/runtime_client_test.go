@@ -268,7 +268,6 @@ func TestTracePropagationFromEnvelopeToObservationEventAndHTTPTraceparent(t *tes
 		t.Fatalf("event traceId=%q traceparent=%q, want (%q, %q)", gotEventTraceID, gotEventTraceparent, wantTrace, wantTraceparent)
 	}
 
-	// Zero or invalid traceId must be dropped instead of producing invalid traceparent headers.
 	gotObsTraceparent = ""
 	gotObsTraceID = "non-empty"
 	invalidTelPayload := []byte(`{"schemaVersion":"2.0","messageId":"` + messageID(3) + `","gatewayId":"` + testGatewayA + `","timestamp":1786352402000,"sequence":3,"traceId":"00000000000000000000000000000000","replay":false,"payload":{"devices":[{"deviceId":"METER-01","deviceTimestamp":1786352401000,"points":[{"code":"active_power","value":127.0,"quality":0,"unit":"kW"}]}]}}`)
@@ -279,7 +278,6 @@ func TestTracePropagationFromEnvelopeToObservationEventAndHTTPTraceparent(t *tes
 		t.Fatalf("zero traceId propagated as (%q, %q), want empty", gotObsTraceID, gotObsTraceparent)
 	}
 
-	// Existing caller trace context wins over payload traceId.
 	const callerTraceparent = "00-abcdef0123456789abcdef0123456789-1111111111111111-01"
 	callerCtx := observability.ContextWithRemoteParent(context.Background(), client.tracer, callerTraceparent, "")
 	if _, err := processor.Process(callerCtx, telemetryTopic(testGatewayA), telPayload); err != nil {

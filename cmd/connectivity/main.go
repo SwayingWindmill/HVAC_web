@@ -112,11 +112,10 @@ func main() {
 	// fails instead of reporting healthy without a command channel.
 	var commands *commandRuntime
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("COMMAND_RUNTIME_IN_PROCESS_ENABLED")), "true") {
-		if commands, err = loadCommandRuntime(ctx, connectivityStore); err != nil {
+		if commands, err = loadCommandRuntime(ctx, connectivityStore, logger, telemetry.Metrics); err != nil {
 			logger.Error("connectivity_command_runtime_unavailable", "error_code", "COMMAND_MODULE_UNAVAILABLE", "error", err.Error())
 			os.Exit(1)
 		}
-		commands.metrics = telemetry.Metrics
 	}
 	diagnostics := diagnosticsServer(*diagnosticsAddress, runtime, telemetry)
 	diagnosticsErr := make(chan error, 1)
@@ -234,7 +233,6 @@ func batchFlushWindow() time.Duration {
 	return window
 }
 
-// uplinkWorkers bounds the fixed uplink worker pool (CONNECTIVITY_UPLINK_WORKERS, default 32).
 func uplinkWorkers() int {
 	workers, err := strconv.Atoi(envOr("CONNECTIVITY_UPLINK_WORKERS", strconv.Itoa(adapter.DefaultWorkerCount)))
 	if err != nil || workers < 1 {

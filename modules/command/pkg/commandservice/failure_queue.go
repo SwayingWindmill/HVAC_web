@@ -2,6 +2,7 @@ package commandservice
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -20,11 +21,24 @@ type controlFailureDelivery struct {
 }
 
 type controlFailureQueue struct {
+	logger  *slog.Logger
+	metrics *observability.Registry
 	mu      sync.Mutex
 	started bool
 	closed  bool
 	items   chan controlFailureDelivery
 	done    chan struct{}
+}
+
+func (q *controlFailureQueue) recoveryDeps() (*slog.Logger, *observability.Registry) {
+	if q == nil {
+		return slog.Default(), nil
+	}
+	logger := q.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return logger, q.metrics
 }
 
 func (q *controlFailureQueue) enqueue(notifier ControlFailureNotifier, event ControlFailureEvent) {
@@ -51,7 +65,8 @@ func (q *controlFailureQueue) enqueue(notifier ControlFailureNotifier, event Con
 
 func (q *controlFailureQueue) run() {
 	defer close(q.done)
-	defer observability.Recover(nil, nil, "command.control_failure_notifier")
+	logger, metrics := q.recoveryDeps()
+	defer observability.Recover(logger, metrics, "command.control_failure_notifier")
 	for item := range q.items {
 		q.deliver(item)
 	}
@@ -61,7 +76,8 @@ func (q *controlFailureQueue) deliver(item controlFailureDelivery) {
 	if item.notifier == nil {
 		return
 	}
-	defer observability.Recover(nil, nil, "command.control_failure_notifier")
+	logger, metrics := q.recoveryDeps()
+	defer observability.Recover(logger, metrics, "command.control_failure_notifier")
 	ctx, cancel := context.WithTimeout(context.Background(), controlFailureNotifyTimeout)
 	defer cancel()
 	item.notifier(ctx, item.event)

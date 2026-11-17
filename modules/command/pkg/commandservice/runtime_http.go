@@ -118,6 +118,7 @@ func NewRuntimeHTTPHandler(config RuntimeHTTPConfig) (http.Handler, error) {
 		verifier:            verifier,
 		coreRegistrySPIFFEs: coreAllowed,
 		failureNotifier:     config.ControlFailureNotifier,
+		failureQueue:        controlFailureQueue{metrics: config.Metrics},
 	}, nil
 }
 

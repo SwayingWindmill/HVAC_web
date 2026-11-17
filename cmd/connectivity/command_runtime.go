@@ -32,7 +32,7 @@ type commandRuntime struct {
 
 // loadCommandRuntime builds the command runtime from defaults for the Phase 1 compose
 // network; every value can be overridden by its environment variable.
-func loadCommandRuntime(ctx context.Context, store *connectivity.Store) (*commandRuntime, error) {
+func loadCommandRuntime(ctx context.Context, store *connectivity.Store, logger *slog.Logger, metrics *observability.Registry) (*commandRuntime, error) {
 	ca := envOr("COMMAND_RUNTIME_CA", "/run/hvac/pki/ca.crt")
 	dispatcherIdentity := workloadtls.CertificateFiles{
 		CertificatePath: envOr("COMMAND_DISPATCHER_CERT", "/run/hvac/pki/command-dispatcher/tls.crt"),
@@ -77,6 +77,8 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store) (*comman
 		EvidenceStore:  dispatcherRuntimeClient,
 		LateResultSink: dispatcherRuntimeClient,
 		ReplyTimeout:   25 * time.Second,
+		Logger:         logger,
+		Metrics:        metrics,
 	})
 	if err != nil {
 		return nil, err
@@ -91,6 +93,7 @@ func loadCommandRuntime(ctx context.Context, store *connectivity.Store) (*comman
 		verifier:         commanddispatcher.NewDurableVerificationWorker(verifierRuntimeClient, commanddispatcher.NewAuthoritativeReportedStateVerifier(verificationReader), verifierWorkerID, 5*time.Second),
 		verifierWorker:   verifierWorkerID,
 		connector:        connector,
+		metrics:          metrics,
 	}, nil
 }
 

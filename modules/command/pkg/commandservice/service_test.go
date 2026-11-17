@@ -1425,7 +1425,6 @@ func TestControlFailureQueueRecoversPanicsAndDrainsOnClose(t *testing.T) {
 	queue.enqueue(blockingNotifier, ControlFailureEvent{CommandID: "cmd-gate"})
 	<-workerStarted
 
-	// Fill all 256 buffer slots (including a panicking item) plus overflow to verify bounded drop.
 	queue.enqueue(blockingNotifier, ControlFailureEvent{CommandID: "cmd-panic"})
 	for i := 1; i < controlFailureQueueCapacity+10; i++ {
 		queue.enqueue(blockingNotifier, ControlFailureEvent{CommandID: "cmd-buf"})
@@ -1446,7 +1445,6 @@ func TestControlFailureQueueRecoversPanicsAndDrainsOnClose(t *testing.T) {
 		t.Fatalf("delivered=%d want=%d (gate + 255 buffered non-panicking items; overflow dropped)", gotDelivered, wantDelivered)
 	}
 
-	// Verify Service.Close drains queued events after panic recovery cleanly.
 	clock := fixedClock()
 	service := New(clock)
 	var svcMu sync.Mutex
