@@ -201,6 +201,9 @@ func (owner signedAlarmOwner) Execute(ctx context.Context, request *http.Request
 }
 
 func alarmRouteMethod(route publicAlarmRoute) string {
+	if route.siteRulesSimulate {
+		return http.MethodPost
+	}
 	if route.action == alarmauth.ActionRead {
 		return http.MethodGet
 	}
@@ -642,10 +645,49 @@ func number(value any) (float64, bool) {
 	return float, err == nil
 }
 
+const (
+	contractRuleBaseID    = "01910000-7a02-7000-8000-000000000008"
+	contractRuleSlopeID   = "01910000-7a02-7000-8000-000000000009"
+	contractRuleDeviceID  = "01910000-3000-7000-8000-000000000009"
+	contractRuleMissingID = "01910000-7a02-7000-8000-0000000000ff"
+)
+
 type contractSiteRules struct{}
 
 func (contractSiteRules) SiteRules(context.Context, string, string) ([]alarmservice.SiteRule, error) {
-	return nil, nil
+	delta := 2.0
+	return []alarmservice.SiteRule{
+		{
+			AssignmentID: contractRuleBaseID,
+			Policy: alarmservice.AlarmPolicyRevision{
+				AlarmType:        "CHILLER_HIGH_TEMP",
+				Title:            "供水温度过高",
+				Severity:         alarmmodel.SeverityMajor,
+				QualityPolicy:    alarmservice.EvaluationQualityValidOnly,
+				FreshnessSeconds: 900,
+				TriggerMode:      alarmservice.TriggerSimple,
+				Raise:            alarmservice.Condition{Kind: alarmservice.ConditionCompare, Input: contractRuleDeviceID + "/supply_water_temperature", Operator: alarmservice.CompareGT, Value: alarmservice.NumberValue(10)},
+				Clear:            alarmservice.Condition{Kind: alarmservice.ConditionCompare, Input: contractRuleDeviceID + "/supply_water_temperature", Operator: alarmservice.CompareLT, Value: alarmservice.NumberValue(8)},
+			},
+		},
+		{
+			AssignmentID: contractRuleSlopeID,
+			Policy: alarmservice.AlarmPolicyRevision{
+				AlarmType:        "CHILLER_SLOPE_RISE",
+				Title:            "供水温度骤升",
+				Severity:         alarmmodel.SeverityWarning,
+				RuleKind:         alarmservice.RuleKindSlope,
+				TemplateKey:      "chiller-slope-rise",
+				OverriddenFields: []string{"raise.delta"},
+				DependsOnRuleIDs: []string{contractRuleBaseID},
+				QualityPolicy:    alarmservice.EvaluationQualityValidOnly,
+				FreshnessSeconds: 900,
+				TriggerMode:      alarmservice.TriggerSimple,
+				Raise:            alarmservice.Condition{Kind: alarmservice.ConditionSlope, Input: contractRuleDeviceID + "/supply_water_temperature", Operator: alarmservice.CompareGTE, Delta: &delta, WindowSeconds: 300},
+				Clear:            alarmservice.Condition{Kind: alarmservice.ConditionExpression, Expression: "supply <= 7.0", ExprInputs: map[string]string{"supply": contractRuleDeviceID + "/supply_water_temperature"}},
+			},
+		},
+	}, nil
 }
 
 func TestAlarmSuppressionUnassignAndEvaluationsEndToEnd(t *testing.T) {
@@ -791,6 +833,54 @@ func TestAlarmSuppressionUnassignAndEvaluationsEndToEnd(t *testing.T) {
 		}
 		if json.Unmarshal(evalRec.Body.Bytes(), &evalEnv) != nil || evalEnv.Meta.RequestID == "" || len(evalEnv.Data.Items) != 1 || evalEnv.Data.Items[0].InputRevision != "eval-rev-2" {
 			t.Fatalf("unexpected evaluations body: %s", evalRec.Body.String())
+		}
+
+		if useHTTPAdapter {
+			rulesRec := fixture.serve(http.MethodGet, "/api/v1/alarm-rules?siteId="+fixture.siteID, "", "")
+			if rulesRec.Code != http.StatusOK {
+				t.Fatalf("rules list status=%d body=%s", rulesRec.Code, rulesRec.Body.String())
+			}
+			var rulesEnv struct {
+				Data []alarmservice.SiteRuleView `json:"data"`
+			}
+			if err := json.Unmarshal(rulesRec.Body.Bytes(), &rulesEnv); err != nil || len(rulesEnv.Data) != 2 || rulesEnv.Data[1].HopDepth != 1 {
+				t.Fatalf("unexpected rules list response: err=%v body=%s", err, rulesRec.Body.String())
+			}
+
+			simReq := fmt.Sprintf(`{"ruleId":%q,"steps":[{"readings":[{"deviceId":%q,"pointCode":"supply_water_temperature","value":7.0}]},{"readings":[{"deviceId":%q,"pointCode":"supply_water_temperature","value":10.0}]},{"readings":[{"deviceId":%q,"pointCode":"supply_water_temperature","value":6.5}]}]}`, contractRuleSlopeID, contractRuleDeviceID, contractRuleDeviceID, contractRuleDeviceID)
+			simRec := fixture.serve(http.MethodPost, "/api/v1/alarm-rules/simulate?siteId="+fixture.siteID, simReq, "")
+			if simRec.Code != http.StatusOK {
+				t.Fatalf("simulate status=%d body=%s", simRec.Code, simRec.Body.String())
+			}
+			var simEnv struct {
+				Data alarmservice.SiteRuleSimulationResult `json:"data"`
+				Meta struct {
+					RequestID string `json:"requestId"`
+				} `json:"meta"`
+			}
+			if err := json.Unmarshal(simRec.Body.Bytes(), &simEnv); err != nil || simEnv.Meta.RequestID == "" || len(simEnv.Data.Steps) != 3 ||
+				simEnv.Data.Steps[1].Effect != alarmservice.EvaluationEffectPublish || !simEnv.Data.Steps[1].Active ||
+				simEnv.Data.Steps[2].Effect != alarmservice.EvaluationEffectClear || simEnv.Data.FinalActive {
+				t.Fatalf("unexpected simulate body: err=%v body=%s", err, simRec.Body.String())
+			}
+
+			badSim := fixture.serve(http.MethodPost, "/api/v1/alarm-rules/simulate?siteId="+fixture.siteID, `{"ruleId":"not-a-uuid","steps":[]}`, "")
+			if badSim.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400 on invalid simulation payload, got %d body=%s", badSim.Code, badSim.Body.String())
+			}
+			missingSim := fixture.serve(http.MethodPost, "/api/v1/alarm-rules/simulate?siteId="+fixture.siteID, fmt.Sprintf(`{"ruleId":%q,"steps":[{"readings":[]}]}`, contractRuleMissingID), "")
+			if missingSim.Code != http.StatusNotFound {
+				t.Fatalf("expected 404 on unknown simulated rule, got %d body=%s", missingSim.Code, missingSim.Body.String())
+			}
+			missingCSRFSim := httptest.NewRequest(http.MethodPost, "https://web.example.test/api/v1/alarm-rules/simulate?siteId="+fixture.siteID, strings.NewReader(simReq))
+			missingCSRFSim.AddCookie(&http.Cookie{Name: sessionCookieName, Value: fixture.sessionID})
+			missingCSRFSim.Header.Set("Content-Type", "application/json")
+			missingCSRFSim.Header.Set("Origin", "https://web.example.test")
+			csrfRec := httptest.NewRecorder()
+			fixture.handler.ServeHTTP(csrfRec, missingCSRFSim)
+			if csrfRec.Code != http.StatusForbidden {
+				t.Fatalf("expected 403 when simulate omits CSRF token, got %d body=%s", csrfRec.Code, csrfRec.Body.String())
+			}
 		}
 
 		// BOLA: other site alarm hidden as 404 ALARM_NOT_FOUND; IAM deny yields 403 FORBIDDEN.

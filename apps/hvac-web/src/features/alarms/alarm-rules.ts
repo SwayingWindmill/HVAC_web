@@ -1,15 +1,26 @@
 import { queryOptions } from '@tanstack/react-query';
 import {
   createPlatformGatewayClient,
+  PlatformApiError,
   type AlarmRule,
   type AlarmRuleCondition,
   type AlarmRuleReading,
+  type AlarmRuleSimulationRequest,
+  type AlarmRuleSimulationResult,
+  type AlarmRuleSimulationStep,
 } from '@/api/generated/platformGateway.gen';
 import { formatTelemetryDisplayValue, formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
 
 const client = createPlatformGatewayClient();
 
-export type { AlarmRule };
+export type {
+  AlarmRule,
+  AlarmRuleCondition,
+  AlarmRuleReading,
+  AlarmRuleSimulationRequest,
+  AlarmRuleSimulationResult,
+  AlarmRuleSimulationStep,
+};
 
 /** The rules the Site evaluates now. They change only when someone publishes the rules file. */
 export function siteAlarmRulesQuery(siteId: string) {
@@ -81,6 +92,19 @@ function predicate(condition: AlarmRuleCondition, unit: string | null | undefine
       const list = (condition.reasons ?? []).map((code) => names[code] ?? code).join('、');
       return condition.match === 'NONE' ? `没有这些数据质量问题（${list}）` : `数据质量问题：${list}`;
     }
+    case 'SLOPE': {
+      const span = formatSeconds(condition.windowSeconds!);
+      const delta = condition.delta ?? 0;
+      const op = condition.operator ?? 'GTE';
+      if (delta >= 0 && (op === 'GT' || op === 'GTE')) {
+        return `在 ${span}内升高${op === 'GTE' ? '达到' : '超过'} ${formatValue(delta, unit)}`;
+      }
+      if (delta < 0 && (op === 'LT' || op === 'LTE')) {
+        return `在 ${span}内降低${op === 'LTE' ? '达到' : '超过'} ${formatValue(Math.abs(delta), unit)}`;
+      }
+      const phrases = { EQ: '等于', NE: '不等于', GT: '大于', GTE: '不低于', LT: '低于', LTE: '不高于' } as const;
+      return `在 ${span}内变化${phrases[op]} ${formatValue(delta, unit)}`;
+    }
     default:
       return '';
   }
@@ -133,9 +157,88 @@ function describeLeaves(leaves: readonly Leaf[], all: boolean, names: ReadingNam
   return spaced(`${devices.length} 台设备`, '的', `${leaves.length} 个读数`, each, phrase);
 }
 
+function describeExpression(condition: AlarmRuleCondition, names: ReadingNames): string {
+  const expr = condition.expression ?? '';
+  const inputs = condition.inputs ?? {};
+  const parts: string[] = [];
+  let index = 0;
+  while (index < expr.length) {
+    const ch = expr[index];
+    if (ch === ' ' || ch === '\t' || ch === '\n') {
+      index += 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      const quote = ch;
+      let end = index + 1;
+      while (end < expr.length && expr[end] !== quote) {
+        if (expr[end] === '\\' && end + 1 < expr.length) end += 2;
+        else end += 1;
+      }
+      const raw = expr.slice(index + 1, end);
+      parts.push(`「${formatTelemetryDisplayValue(raw)}」`);
+      index = Math.min(end + 1, expr.length);
+      continue;
+    }
+    const twoChar = expr.slice(index, index + 2);
+    if (twoChar === '&&') { parts.push(' 并且 '); index += 2; continue; }
+    if (twoChar === '||') { parts.push(' 或者 '); index += 2; continue; }
+    if (twoChar === '==') { parts.push(' 为 '); index += 2; continue; }
+    if (twoChar === '!=') { parts.push(' 不为 '); index += 2; continue; }
+    if (twoChar === '>=') { parts.push(' 不低于 '); index += 2; continue; }
+    if (twoChar === '<=') { parts.push(' 不高于 '); index += 2; continue; }
+    if (ch === '>') { parts.push(' 高于 '); index += 1; continue; }
+    if (ch === '<') { parts.push(' 低于 '); index += 1; continue; }
+    if (ch === '!') { parts.push('非 '); index += 1; continue; }
+    if (/[+\-*/(),]/.test(ch)) {
+      parts.push(ch === ',' ? '、' : ch === '(' || ch === ')' ? ch : ` ${ch} `);
+      index += 1;
+      continue;
+    }
+    if (/[A-Za-z_]/.test(ch)) {
+      let end = index + 1;
+      while (end < expr.length && /[A-Za-z0-9_]/.test(expr[end])) end += 1;
+      const token = expr.slice(index, end);
+      const reading = inputs[token];
+      if (reading) {
+        const dev = plainName(names.device(reading.deviceId));
+        const pt = plainName(names.point(reading).name);
+        parts.push(spaced(dev, '的', pt));
+      } else if (token === 'true') {
+        parts.push('是');
+      } else if (token === 'false') {
+        parts.push('否');
+      } else if (token === 'abs') {
+        parts.push('绝对值');
+      } else if (token === 'min') {
+        parts.push('最小值');
+      } else if (token === 'max') {
+        parts.push('最大值');
+      } else {
+        parts.push(token);
+      }
+      index = end;
+      continue;
+    }
+    if (/[0-9.]/.test(ch)) {
+      let end = index + 1;
+      while (end < expr.length && /[0-9.]/.test(expr[end])) end += 1;
+      parts.push(expr.slice(index, end));
+      index = end;
+      continue;
+    }
+    parts.push(ch);
+    index += 1;
+  }
+  return parts.join('').replace(/\s+/g, ' ').trim();
+}
+
 function describeNormalized(condition: AlarmRuleCondition, names: ReadingNames): string {
   if (condition.reading) {
     return describeLeaves([{ reading: condition.reading, predicate: predicate(condition, names.point(condition.reading).unit) }], true, names);
+  }
+  if (condition.kind === 'EXPRESSION') {
+    return describeExpression(condition, names);
   }
   const all = condition.kind === 'AND';
   const leaves: Leaf[] = [];
@@ -164,15 +267,118 @@ export function describeRaise(rule: AlarmRule, names: ReadingNames): string {
   return condition;
 }
 
-/** Every device a rule reads, by name in the order it first reads them; past LISTED they are counted. */
-export function describeDevices(rule: AlarmRule, names: ReadingNames): string {
-  const devices = new Set<string>();
+/** Deduplicated readings referenced by a rule (raise first, then clear) in traversal order. */
+export function collectRuleReadings(rule: AlarmRule): AlarmRuleReading[] {
+  const seen = new Set<string>();
+  const readings: AlarmRuleReading[] = [];
+  const addReading = (reading: AlarmRuleReading | undefined) => {
+    if (!reading) return;
+    const key = `${reading.deviceId}/${reading.pointCode}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    readings.push(reading);
+  };
   const visit = (condition: AlarmRuleCondition) => {
-    if (condition.reading) devices.add(condition.reading.deviceId);
+    addReading(condition.reading);
+    if (condition.inputs) {
+      for (const reading of Object.values(condition.inputs)) {
+        addReading(reading);
+      }
+    }
     condition.children?.forEach(visit);
   };
   visit(rule.raise);
   visit(rule.clear);
+  return readings;
+}
+
+const RULE_KIND_LABELS: Readonly<Record<NonNullable<AlarmRule['ruleKind']>, string>> = {
+  THRESHOLD: '阈值规则',
+  SLOPE: '斜率趋势',
+  EXPRESSION: '多点表达式',
+};
+
+const OVERRIDDEN_FIELD_LABELS: Readonly<Record<string, string>> = {
+  title: '名称',
+  summary: '说明',
+  severity: '严重程度',
+  qualityPolicy: '质量门控',
+  freshnessSeconds: '有效时长',
+  triggerMode: '触发方式',
+  durationSeconds: '持续时长',
+  repeatCount: '连续次数',
+  raise: '报警条件',
+  'raise.delta': '变化幅度',
+  'raise.windowSeconds': '斜率窗口',
+  'raise.value': '报警阈值',
+  'raise.trigger': '触发阈值',
+  clear: '恢复条件',
+  'clear.value': '恢复阈值',
+  'clear.reset': '恢复回差',
+};
+
+function formatOverriddenField(field: string): string {
+  if (OVERRIDDEN_FIELD_LABELS[field]) return OVERRIDDEN_FIELD_LABELS[field];
+  if (field.startsWith('raise.')) return '报警参数';
+  if (field.startsWith('clear.')) return '恢复参数';
+  return '自定义参数';
+}
+
+export function describeRuleOrigin(rule: AlarmRule): string {
+  const origin = rule.templateKey
+    ? rule.overriddenFields && rule.overriddenFields.length > 0
+      ? `模板派生（覆盖${[...new Set(rule.overriddenFields.map(formatOverriddenField))].join('、')}）`
+      : '模板派生'
+    : '场站规则';
+  const kind = rule.ruleKind ? RULE_KIND_LABELS[rule.ruleKind] : null;
+  return kind ? `${origin} · ${kind}` : origin;
+}
+
+export function describeRuleLinkage(rule: AlarmRule, titleByRuleId: ReadonlyMap<string, string>): string {
+  const deps = rule.dependsOnRuleIds ?? [];
+  if (deps.length === 0) return '独立评估';
+  const hop = rule.hopDepth ?? 1;
+  const titles = deps.map((id) => titleByRuleId.get(id) ?? '前置规则').map((title) => `「${title}」`);
+  return `第 ${hop} 跳 · 依赖${titles.join('、')}`;
+}
+
+const SIMULATION_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  ORIGIN_NOT_ALLOWED: '页面来源校验未通过，请刷新页面后重试',
+  CSRF_TOKEN_INVALID: '会话安全凭证失效，请刷新页面后重试',
+  CSRF_REQUIRED: '缺少会话安全凭证，请刷新页面后重试',
+  CSRF_INVALID: '会话安全凭证无效，请刷新页面后重试',
+  ALARM_ACCESS_DENIED: '你没有执行规则模拟试算的权限',
+  FORBIDDEN: '你没有执行规则模拟试算的权限',
+  RESOURCE_NOT_FOUND: '未找到对应的站内规则，请刷新规则列表',
+  RULE_GRAPH_INVALID: '规则因果依赖图校验未通过，无法试算',
+};
+
+export async function simulateSiteAlarmRule(
+  siteId: string,
+  body: AlarmRuleSimulationRequest,
+  csrfToken: string,
+): Promise<AlarmRuleSimulationResult> {
+  try {
+    const response = await client.simulateSiteAlarmRule(siteId, body, csrfToken);
+    return response.data.data;
+  } catch (error) {
+    if (error instanceof PlatformApiError) {
+      const code = error.problem.code ?? '';
+      if (code in SIMULATION_ERROR_MESSAGES) {
+        throw new Error(SIMULATION_ERROR_MESSAGES[code]);
+      }
+      if (/[\u4e00-\u9fff]/.test(error.problem.detail)) {
+        throw new Error(error.problem.detail);
+      }
+      throw new Error('模拟试算未能完成，请检查输入值后重试');
+    }
+    throw error instanceof Error ? error : new Error('模拟试算未能完成，请稍后重试');
+  }
+}
+
+/** Every device a rule reads, by name in the order it first reads them; past LISTED they are counted. */
+export function describeDevices(rule: AlarmRule, names: ReadingNames): string {
+  const devices = new Set(collectRuleReadings(rule).map((reading) => reading.deviceId));
   const named = [...devices].map((id) => plainName(names.device(id)));
   return named.length > LISTED ? `${named.slice(0, LISTED).join('、')} 等 ${named.length} 台` : named.join('、');
 }

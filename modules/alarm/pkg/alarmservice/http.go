@@ -156,6 +156,25 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 		handler.siteRules(writer, request, claims.TenantID, siteID)
 		return
 	}
+	if siteID, matches := matchSiteRulesSimulatePath(request.URL.Path); matches {
+		if request.Method != http.MethodPost {
+			writer.Header().Set("Allow", http.MethodPost)
+			handler.writeProblem(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", "Site rule simulation only supports POST.", false)
+			return
+		}
+		if !alarmmodel.IsUUIDv7(siteID) {
+			handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm resource is not visible.", false)
+			return
+		}
+		claims, authorized := handler.authorize(request, AlarmReadContextHeader, AlarmListAction, []string{"site:" + siteID})
+		if !authorized {
+			handler.writeProblem(writer, http.StatusForbidden, "ALARM_ACCESS_DENIED", "Alarm access denied", "The Site rule simulation is outside the authorized read scope.", false)
+			return
+		}
+		request = request.WithContext(identitycontext.WithTenantID(request.Context(), claims.TenantID))
+		handler.simulateSiteRule(writer, request, claims.TenantID, siteID)
+		return
+	}
 	route, ok := matchAlarmPath(request.URL.Path)
 	if !ok {
 		handler.writeProblem(writer, http.StatusNotFound, "ROUTE_NOT_FOUND", "Route not found", "The requested Alarm route does not exist.", false)

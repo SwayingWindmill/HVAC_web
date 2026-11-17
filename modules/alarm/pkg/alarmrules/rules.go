@@ -475,6 +475,9 @@ func Load(rulesPath string) (Compiled, error) {
 	if err := resolveRuleDependencies(&compiled, ruleEntries, ruleIndices); err != nil {
 		return Compiled{}, err
 	}
+	if _, err := alarmservice.ValidateSiteRuleGraph(compiled.Policies); err != nil {
+		return Compiled{}, err
+	}
 	return compiled, nil
 }
 

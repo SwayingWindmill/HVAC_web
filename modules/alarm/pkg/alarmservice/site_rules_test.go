@@ -1,8 +1,11 @@
 package alarmservice
 
 import (
+	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/rulegraph"
 )
 
 func ruleOnSite(assignmentID, title string) SiteRule {
@@ -64,5 +67,34 @@ func TestSummarizeSiteRulePlanAndDuplicateRejection(t *testing.T) {
 
 	if _, err := PlanSiteRules([]SiteRule{ruleOnSite("dup", "A"), ruleOnSite("dup", "B")}, nil); err == nil {
 		t.Fatal("expected duplicate assignment error from PlanSiteRules")
+	}
+}
+
+func TestPlanSiteRulesEnforcesDAGAndMaxLinkageHops(t *testing.T) {
+	linked := func(id string, deps ...string) SiteRule {
+		rule := ruleOnSite(id, "规则-"+id)
+		rule.Policy.AlarmType = "CODE_" + id
+		rule.Policy.DependsOnRuleIDs = deps
+		return rule
+	}
+
+	cycle := []SiteRule{linked("r1", "r2"), linked("r2", "r1")}
+	if _, err := PlanSiteRules(cycle, nil); !errors.Is(err, rulegraph.ErrRuleCycleDetected) {
+		t.Fatalf("expected ErrRuleCycleDetected, got %v", err)
+	}
+
+	depthThree := []SiteRule{
+		linked("r0"),
+		linked("r1", "r0"),
+		linked("r2", "r1"),
+		linked("r3", "r2"),
+	}
+	if _, err := PlanSiteRules(depthThree, nil); err != nil {
+		t.Fatalf("expected depth-3 chain to pass, got %v", err)
+	}
+
+	depthFour := append(depthThree, linked("r4", "r3"))
+	if _, err := PlanSiteRules(depthFour, nil); !errors.Is(err, rulegraph.ErrMaxLinkageHopsExceeded) {
+		t.Fatalf("expected ErrMaxLinkageHopsExceeded, got %v", err)
 	}
 }

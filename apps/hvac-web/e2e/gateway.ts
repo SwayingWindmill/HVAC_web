@@ -1347,6 +1347,91 @@ export class Gateway {
     if (method === 'GET' && path === '/api/v1/alarm-rules') {
       return { body: { data: query.get('siteId') === SITE_ID ? this.alarmRules : [], meta: { requestId: 'e2e' } } };
     }
+    if (method === 'POST' && path === '/api/v1/alarm-rules/simulate') {
+      if (!csrfToken) {
+        return { status: 403, body: { type: 'about:blank', title: 'Forbidden', status: 403, detail: 'CSRF token required.', instance: path, code: 'CSRF_INVALID', traceId: '0'.repeat(32), retryable: false } };
+      }
+      if (query.get('siteId') !== SITE_ID) {
+        return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Site not found.', instance: path, code: 'RESOURCE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
+      }
+      const rule = this.alarmRules.find((candidate) => candidate.ruleId === body?.ruleId);
+      if (!rule) {
+        return { status: 404, body: { type: 'about:blank', title: 'Not Found', status: 404, detail: 'Alarm rule not found.', instance: path, code: 'RESOURCE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
+      }
+      const rawSteps = Array.isArray(body?.steps) ? body.steps : [];
+      if (rawSteps.length === 0 || rawSteps.length > 32) {
+        return { status: 400, body: { type: 'about:blank', title: 'Bad Request', status: 400, detail: 'Steps out of range.', instance: path, code: 'INVALID_ARGUMENT', traceId: '0'.repeat(32), retryable: false } };
+      }
+      const baseMs = Date.parse('2026-11-17T10:00:00Z');
+      let active = false;
+      let firstNumeric: number | undefined;
+      const stepsOut = rawSteps.map((stepIn: Json, idx: number) => {
+        const readingsList = Array.isArray(stepIn?.readings) ? stepIn.readings : [];
+        const byPoint = new Map<string, unknown>(readingsList.map((r: Json) => [r.pointCode, r.value]));
+        const tempVal = byPoint.get('supply_water_temperature') ?? byPoint.get('return_water_temperature');
+        const numTemp = typeof tempVal === 'number' ? tempVal : Number.NaN;
+        if (firstNumeric === undefined && Number.isFinite(numTemp)) firstNumeric = numTemp;
+        let status: 'MATCHED' | 'NOT_MATCHED' | 'INDETERMINATE' = 'NOT_MATCHED';
+        let effect: 'NONE' | 'PUBLISH' | 'CLEAR' = 'NONE';
+        const matchedReasons: string[] = [];
+        if (rule.raise?.kind === 'SLOPE') {
+          const delta = typeof rule.raise?.delta === 'number' ? rule.raise.delta : 2;
+          if (!active) {
+            if (Number.isFinite(numTemp) && firstNumeric !== undefined && numTemp - firstNumeric >= delta) {
+              status = 'MATCHED';
+              effect = 'PUBLISH';
+              active = true;
+              matchedReasons.push('达到触发条件', '斜率变化达标');
+            } else {
+              matchedReasons.push('未触发告警条件');
+            }
+          } else if (Number.isFinite(numTemp) && numTemp <= 8 && byPoint.get('run_state') === 'RUNNING') {
+            status = 'MATCHED';
+            effect = 'CLEAR';
+            active = false;
+            matchedReasons.push('满足恢复条件');
+          } else {
+            status = 'MATCHED';
+            matchedReasons.push('告警保持活动');
+          }
+        } else {
+          if (!active && Number.isFinite(numTemp) && numTemp <= 10.5) {
+            status = 'MATCHED';
+            effect = 'PUBLISH';
+            active = true;
+            matchedReasons.push('达到触发条件');
+          } else if (active && Number.isFinite(numTemp) && numTemp >= 11.5) {
+            status = 'MATCHED';
+            effect = 'CLEAR';
+            active = false;
+            matchedReasons.push('满足恢复条件');
+          } else {
+            matchedReasons.push(active ? '告警保持活动' : '未触发告警条件');
+          }
+        }
+        return {
+          step: idx + 1,
+          evaluatedAt: new Date(baseMs + idx * 60_000).toISOString(),
+          status,
+          effect,
+          active,
+          matchedReasons,
+        };
+      });
+      return {
+        body: {
+          data: {
+            ruleId: rule.ruleId,
+            title: rule.title,
+            hopDepth: typeof rule.hopDepth === 'number' ? rule.hopDepth : 0,
+            ...(Array.isArray(rule.dependsOnRuleIds) && rule.dependsOnRuleIds.length > 0 ? { dependsOnRuleIds: rule.dependsOnRuleIds } : {}),
+            finalActive: active,
+            steps: stepsOut,
+          },
+          meta: { requestId: 'e2e' },
+        },
+      };
+    }
     const alarmMatch = path.match(/^\/api\/v1\/alarms\/([^/]+)(?:\/(ack|assign|unassign|suppress|unsuppress|evaluations))?$/);
     if (alarmMatch) {
       const alarm = this.alarms.find((candidate) => candidate.alarmId === alarmMatch[1]);

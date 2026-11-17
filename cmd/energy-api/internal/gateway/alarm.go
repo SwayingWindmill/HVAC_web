@@ -37,9 +37,10 @@ type publicAlarmRoute struct {
 	alarmID  string
 	action   alarmauth.Action
 	// siteRules is the Site's rules in effect (#693), read with the same grant as its alarm list.
-	siteRules   bool
-	evaluations bool
-	now         time.Time
+	siteRules         bool
+	siteRulesSimulate bool
+	evaluations       bool
+	now               time.Time
 }
 
 type alarmScope struct {
@@ -113,7 +114,7 @@ func (a *directAlarmAdapter) ResolveScope(ctx context.Context, tenantID, alarmID
 }
 
 func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Request, route publicAlarmRoute, _ string) ([]byte, int, *ownerFailure) {
-	if route.siteRules {
+	if route.siteRules || route.siteRulesSimulate {
 		failure := alarmUnavailable("Site rules are only served by the Alarm Service.")
 		return nil, http.StatusServiceUnavailable, &failure
 	}
@@ -378,6 +379,8 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 	path := internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarms"
 	if route.siteRules {
 		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules"
+	} else if route.siteRulesSimulate {
+		path = internalSiteAlarmsPrefix + url.PathEscape(route.siteID) + "/alarm-rules:simulate"
 	}
 	method := http.MethodGet
 	var requestBody io.Reader
@@ -388,7 +391,19 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 		}
 	}
 	upstreamURL := a.baseURL + path
-	if route.alarmID == "" {
+	if route.siteRulesSimulate {
+		method = http.MethodPost
+		if publicRequest.Body == nil {
+			failure := alarmInvalid("The Alarm rule simulation request body is required.")
+			return nil, 0, &failure
+		}
+		rawBody, err := readBoundedBody(publicRequest.Body, 64<<10)
+		if err != nil || len(bytes.TrimSpace(rawBody)) == 0 {
+			failure := alarmInvalid("The Alarm rule simulation request body is invalid.")
+			return nil, 0, &failure
+		}
+		requestBody = bytes.NewReader(rawBody)
+	} else if route.alarmID == "" {
 		query := publicRequest.URL.Query()
 		query.Del("siteId")
 		if encoded := query.Encode(); encoded != "" {
@@ -429,7 +444,14 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 		return nil, 0, &failure
 	}
 	request.Header.Set("Accept", "application/json, application/problem+json")
-	if route.action == alarmauth.ActionAck || isMutation {
+	if route.siteRulesSimulate {
+		request.Header.Set(alarmReadContextHeader, serviceContext)
+		if ct := strings.TrimSpace(publicRequest.Header.Get("Content-Type")); ct != "" {
+			request.Header.Set("Content-Type", ct)
+		} else {
+			request.Header.Set("Content-Type", "application/json")
+		}
+	} else if route.action == alarmauth.ActionAck || isMutation {
 		request.Header.Set(alarmWriteContextHeader, serviceContext)
 		if ct := publicRequest.Header.Get("Content-Type"); strings.TrimSpace(ct) != "" {
 			request.Header.Set("Content-Type", ct)
@@ -507,6 +529,9 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 	if path == "/api/v1/alarm-rules" {
 		return publicAlarmRoute{template: "/api/v1/alarm-rules", action: alarmauth.ActionRead, siteRules: true}, true
 	}
+	if path == "/api/v1/alarm-rules/simulate" {
+		return publicAlarmRoute{template: "/api/v1/alarm-rules/simulate", action: alarmauth.ActionRead, siteRulesSimulate: true}, true
+	}
 	prefix := "/api/v1/alarms/"
 	if !strings.HasPrefix(path, prefix) {
 		return publicAlarmRoute{}, false
@@ -557,6 +582,10 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
 	if route.siteRules {
 		dispatchSiteRulesRoute(h, writer, request, route)
+		return
+	}
+	if route.siteRulesSimulate {
+		dispatchSiteRulesSimulateRoute(h, writer, request, route)
 		return
 	}
 	expectedMethod := http.MethodGet
@@ -712,6 +741,61 @@ func dispatchSiteRulesRoute(h *handler, writer http.ResponseWriter, request *htt
 	writer.Header().Set("Cache-Control", "private, no-store")
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"data": list.Items,
+		"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
+	})
+}
+
+func dispatchSiteRulesSimulateRoute(h *handler, writer http.ResponseWriter, request *http.Request, route publicAlarmRoute) {
+	fail := func(failure ownerFailure) {
+		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
+	}
+	if request.Method != http.MethodPost {
+		writeMethodNotAllowedFor(writer, request, http.MethodPost)
+		return
+	}
+	if h.alarm == nil || h.alarm.operations == nil {
+		fail(alarmUnavailable("The Alarm service is not configured."))
+		return
+	}
+	query := request.URL.Query()
+	if len(query) != 1 || len(query["siteId"]) != 1 || !alarmmodel.IsUUIDv7(query.Get("siteId")) {
+		fail(alarmInvalid("The Site rule simulation query takes exactly one siteId."))
+		return
+	}
+	route.siteID = query.Get("siteId")
+	session, ok := h.alarmSession(writer, request)
+	if !ok {
+		return
+	}
+	if h.identity == nil {
+		fail(alarmUnavailable("Session validation is unavailable."))
+		return
+	}
+	if failure := h.identity.validateStateChange(request, session, request.Header.Get("X-CSRF-Token")); failure != nil {
+		writeIdentityFailure(writer, request, *failure)
+		return
+	}
+	if failure := h.checkAlarmSiteVisibility(request, session, route.siteID, true); failure != nil {
+		fail(*failure)
+		return
+	}
+	response, failure := CallOwner(request.Context(), h, h.alarmCaller(session), h.alarmOwner(), string(route.action), route.scope(session.TenantID), alarmCall{public: request, route: route})
+	if failure != nil {
+		fail(*failure)
+		return
+	}
+	if response.status != http.StatusOK {
+		fail(alarmProblemFromUpstream(response.status, response.body, "Alarm Service could not simulate the Site rule."))
+		return
+	}
+	result, ok := response.value.(alarmservice.SiteRuleSimulationResult)
+	if !ok {
+		fail(alarmUnavailable("Alarm Service returned an invalid Site rule simulation."))
+		return
+	}
+	writer.Header().Set("Cache-Control", "private, no-store")
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"data": result,
 		"meta": map[string]any{"requestId": requestIDFromContext(request.Context())},
 	})
 }
@@ -909,6 +993,12 @@ func validateAlarmResponse(scope ownerScope, call alarmCall, response ownerRespo
 			return nil, err
 		}
 		return list, list.Validate()
+	case call.route.siteRulesSimulate:
+		var sim alarmservice.SiteRuleSimulationResult
+		if err := decodeStrictAlarmJSON(response.body, &sim); err != nil {
+			return nil, err
+		}
+		return sim, sim.Validate("")
 	case call.route.evaluations:
 		var list alarmservice.AlarmEvaluationList
 		if err := decodeStrictAlarmJSON(response.body, &list); err != nil {
@@ -1021,16 +1111,59 @@ func (h *handler) decideAlarm(ctx context.Context, caller ownerCaller, action st
 	return ownerDecision{principalID: decision.PrincipalID, policyRevision: decision.PolicyRevision}, nil
 }
 
-func (h *handler) forwardAlarmProblem(writer http.ResponseWriter, request *http.Request, status int, body []byte, route publicAlarmRoute) {
-	var value struct {
-		Type      string `json:"type"`
-		Title     string `json:"title"`
-		Status    int    `json:"status"`
-		Detail    string `json:"detail"`
-		Code      string `json:"code"`
-		Retryable bool   `json:"retryable"`
-	}
+type upstreamAlarmProblem struct {
+	Type      string `json:"type"`
+	Title     string `json:"title"`
+	Status    int    `json:"status"`
+	Detail    string `json:"detail"`
+	Code      string `json:"code"`
+	Retryable bool   `json:"retryable"`
+}
+
+func decodeUpstreamAlarmProblem(body []byte) (upstreamAlarmProblem, bool) {
+	var value upstreamAlarmProblem
 	if decodeStrictAlarmJSON(body, &value) != nil || value.Code == "" {
+		return upstreamAlarmProblem{}, false
+	}
+	return value, true
+}
+
+func alarmProblemFromUpstream(status int, body []byte, fallbackDetail string) ownerFailure {
+	value, ok := decodeUpstreamAlarmProblem(body)
+	if !ok {
+		return alarmUnavailable("Alarm Service returned an invalid error response.")
+	}
+	switch status {
+	case http.StatusForbidden:
+		return alarmDenied()
+	case http.StatusNotFound:
+		title := value.Title
+		if strings.TrimSpace(title) == "" {
+			title = "Resource not found"
+		}
+		detail := value.Detail
+		if strings.TrimSpace(detail) == "" {
+			detail = "The requested Alarm resource was not found."
+		}
+		return ownerFailure{status: http.StatusNotFound, code: value.Code, title: title, detail: detail}
+	case http.StatusBadRequest, http.StatusUnprocessableEntity, http.StatusUnsupportedMediaType:
+		title := value.Title
+		if strings.TrimSpace(title) == "" {
+			title = "Invalid argument"
+		}
+		detail := value.Detail
+		if strings.TrimSpace(detail) == "" {
+			detail = "The Alarm request is invalid."
+		}
+		return ownerFailure{status: status, code: value.Code, title: title, detail: detail}
+	default:
+		return alarmUnavailable(fallbackDetail)
+	}
+}
+
+func (h *handler) forwardAlarmProblem(writer http.ResponseWriter, request *http.Request, status int, body []byte, route publicAlarmRoute) {
+	value, ok := decodeUpstreamAlarmProblem(body)
+	if !ok {
 		h.writeAlarmFailure(writer, request, alarmUnavailable("Alarm Service returned an invalid error response."))
 		return
 	}

@@ -265,5 +265,40 @@
         }
       ]
     }
+  },
+  {
+    "ruleId": "01910000-b100-7000-8000-00000000000d",
+    "title": "1 号冷机供水温度骤升",
+    "severity": "WARNING",
+    "ruleKind": "SLOPE",
+    "templateKey": "chiller-slope-rise",
+    "overriddenFields": ["raise.delta"],
+    "dependsOnRuleIds": ["01910000-b100-7000-8000-00000000000a"],
+    "hopDepth": 1,
+    "triggerMode": "SIMPLE",
+    "raise": {
+      "kind": "SLOPE",
+      "reading": {
+        "deviceId": "018f3e00-4000-7000-8000-000000000006",
+        "pointCode": "supply_water_temperature"
+      },
+      "operator": "GTE",
+      "delta": 2,
+      "windowSeconds": 300
+    },
+    "clear": {
+      "kind": "EXPRESSION",
+      "expression": "supply <= 8 && state == \"RUNNING\"",
+      "inputs": {
+        "supply": {
+          "deviceId": "018f3e00-4000-7000-8000-000000000006",
+          "pointCode": "supply_water_temperature"
+        },
+        "state": {
+          "deviceId": "018f3e00-4000-7000-8000-000000000001",
+          "pointCode": "run_state"
+        }
+      }
+    }
   }
 ]

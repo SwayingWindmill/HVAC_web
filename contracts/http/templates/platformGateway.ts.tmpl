@@ -627,7 +627,7 @@ export const siteTariffSchema = z.object({
 export const alarmRuleReadingSchema = z.object({ deviceId: uuidV7Schema, pointCode: z.string().min(1).max(128) }).strict();
 export type AlarmRuleReading = z.infer<typeof alarmRuleReadingSchema>;
 export type AlarmRuleCondition = {
-  kind: 'COMPARE' | 'RANGE' | 'HYSTERESIS' | 'NO_DATA' | 'STALE' | 'UNCHANGED' | 'CHANGED' | 'REASONS' | 'AND' | 'OR';
+  kind: 'COMPARE' | 'RANGE' | 'HYSTERESIS' | 'NO_DATA' | 'STALE' | 'UNCHANGED' | 'CHANGED' | 'REASONS' | 'SLOPE' | 'EXPRESSION' | 'AND' | 'OR';
   reading?: AlarmRuleReading;
   operator?: 'EQ' | 'NE' | 'GT' | 'GTE' | 'LT' | 'LTE';
   value?: number | string | boolean;
@@ -637,12 +637,16 @@ export type AlarmRuleCondition = {
   trigger?: number;
   reset?: number;
   ageSeconds?: number;
+  delta?: number;
+  windowSeconds?: number;
+  expression?: string;
+  inputs?: Record<string, AlarmRuleReading>;
   reasons?: Array<'OUT_OF_RANGE' | 'SPIKE' | 'SENTINEL' | 'FLATLINE' | 'DERIVED_INPUT' | 'LOW_CONFIDENCE' | 'SOURCE_UNTRUSTED' | 'PHYSICS_WET_BULB_DRY' | 'PHYSICS_WET_BULB_CONDENSER' | 'PHYSICS_POWER' | 'PHYSICS_COP' | 'PHYSICS_CHW_DIRECTION' | 'PHYSICS_CW_DIRECTION' | 'PHYSICS_HEAT_BALANCE' | 'PROBE_OFFSET'>;
   match?: 'ANY' | 'NONE';
   children?: AlarmRuleCondition[];
 };
 export const alarmRuleConditionSchema: z.ZodType<AlarmRuleCondition> = z.lazy(() => z.object({
-  kind: z.enum(['COMPARE', 'RANGE', 'HYSTERESIS', 'NO_DATA', 'STALE', 'UNCHANGED', 'CHANGED', 'REASONS', 'AND', 'OR']),
+  kind: z.enum(['COMPARE', 'RANGE', 'HYSTERESIS', 'NO_DATA', 'STALE', 'UNCHANGED', 'CHANGED', 'REASONS', 'SLOPE', 'EXPRESSION', 'AND', 'OR']),
   reading: alarmRuleReadingSchema.optional(),
   operator: z.enum(['EQ', 'NE', 'GT', 'GTE', 'LT', 'LTE']).optional(),
   value: z.union([z.number(), z.string(), z.boolean()]).optional(),
@@ -652,6 +656,10 @@ export const alarmRuleConditionSchema: z.ZodType<AlarmRuleCondition> = z.lazy(()
   trigger: z.number().optional(),
   reset: z.number().optional(),
   ageSeconds: z.number().int().positive().optional(),
+  delta: z.number().optional(),
+  windowSeconds: z.number().int().min(1).max(86400).optional(),
+  expression: z.string().min(1).max(512).optional(),
+  inputs: z.record(z.string(), alarmRuleReadingSchema).optional(),
   reasons: z.array(z.enum(['OUT_OF_RANGE', 'SPIKE', 'SENTINEL', 'FLATLINE', 'DERIVED_INPUT', 'LOW_CONFIDENCE', 'SOURCE_UNTRUSTED', 'PHYSICS_WET_BULB_DRY', 'PHYSICS_WET_BULB_CONDENSER', 'PHYSICS_POWER', 'PHYSICS_COP', 'PHYSICS_CHW_DIRECTION', 'PHYSICS_CW_DIRECTION', 'PHYSICS_HEAT_BALANCE', 'PROBE_OFFSET'])).min(1).max(8).optional(),
   match: z.enum(['ANY', 'NONE']).optional(),
   children: z.array(alarmRuleConditionSchema).min(2).max(32).optional(),
@@ -660,6 +668,11 @@ export const alarmRuleSchema = z.object({
   ruleId: uuidV7Schema,
   title: z.string().min(1).max(256),
   severity: z.enum(['INFO', 'WARNING', 'MINOR', 'MAJOR', 'CRITICAL']),
+  ruleKind: z.enum(['THRESHOLD', 'SLOPE', 'EXPRESSION']).optional(),
+  templateKey: z.string().min(1).max(128).optional(),
+  overriddenFields: z.array(z.string().min(1).max(128)).max(32).optional(),
+  dependsOnRuleIds: z.array(uuidV7Schema).max(16).optional(),
+  hopDepth: z.number().int().min(0).max(3).optional(),
   triggerMode: z.enum(['SIMPLE', 'DURATION', 'REPEATING']),
   durationSeconds: z.number().int().positive().optional(),
   repeatCount: z.number().int().positive().optional(),
@@ -671,6 +684,46 @@ export const alarmRuleListSchema = z.object({
   meta: z.object({ requestId: z.string() }).strict(),
 }).strict();
 export type AlarmRule = z.infer<typeof alarmRuleSchema>;
+
+export const alarmRuleSimulationReadingSchema = z.object({
+  deviceId: uuidV7Schema,
+  pointCode: z.string().min(1).max(128),
+  value: z.union([z.number(), z.string(), z.boolean()]),
+  quality: z.enum(['GOOD', 'UNCERTAIN', 'SUSPECT', 'STALE', 'BAD', 'INVALID']).optional(),
+  observedAt: z.string().min(1).max(64).optional(),
+}).strict();
+export const alarmRuleSimulationStepInputSchema = z.object({
+  evaluatedAt: z.string().min(1).max(64).optional(),
+  readings: z.array(alarmRuleSimulationReadingSchema).max(64),
+}).strict();
+export const alarmRuleSimulationRequestSchema = z.object({
+  ruleId: uuidV7Schema,
+  steps: z.array(alarmRuleSimulationStepInputSchema).min(1).max(32),
+}).strict();
+export const alarmRuleSimulationStepSchema = z.object({
+  step: z.number().int().min(1).max(32),
+  evaluatedAt: z.string().min(1).max(64),
+  status: z.enum(['MATCHED', 'NOT_MATCHED', 'INDETERMINATE']),
+  effect: z.enum(['NONE', 'PUBLISH', 'CLEAR']),
+  active: z.boolean(),
+  qualityBlocker: z.string().optional(),
+  matchedReasons: z.array(z.string()).optional(),
+}).strict();
+export const alarmRuleSimulationResultSchema = z.object({
+  ruleId: uuidV7Schema,
+  title: z.string().min(1).max(256),
+  hopDepth: z.number().int().min(0).max(3),
+  dependsOnRuleIds: z.array(uuidV7Schema).max(16).optional(),
+  finalActive: z.boolean(),
+  steps: z.array(alarmRuleSimulationStepSchema).min(1).max(32),
+}).strict();
+export const alarmRuleSimulationEnvelopeSchema = z.object({
+  data: alarmRuleSimulationResultSchema,
+  meta: z.object({ requestId: z.string() }).strict(),
+}).strict();
+export type AlarmRuleSimulationRequest = z.infer<typeof alarmRuleSimulationRequestSchema>;
+export type AlarmRuleSimulationStep = z.infer<typeof alarmRuleSimulationStepSchema>;
+export type AlarmRuleSimulationResult = z.infer<typeof alarmRuleSimulationResultSchema>;
 
 export const mutationMetaSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
@@ -1718,6 +1771,16 @@ export function createPlatformGatewayClient(baseUrl = '') {
     ),
     listSiteAlarmRules: (siteId: string, init?: RequestInit) => request(
       `__ALARM_RULES_PATH__?${new URLSearchParams({ siteId }).toString()}`, alarmRuleListSchema, { ...init, method: 'GET' },
+    ),
+    simulateSiteAlarmRule: (siteId: string, body: AlarmRuleSimulationRequest, csrfToken: string, init?: RequestInit) => request(
+      `__ALARM_RULES_SIMULATE_PATH__?${new URLSearchParams({ siteId }).toString()}`,
+      alarmRuleSimulationEnvelopeSchema,
+      {
+        ...init,
+        method: 'POST',
+        body: JSON.stringify(alarmRuleSimulationRequestSchema.parse(body)),
+        headers: { ...Object.fromEntries(new Headers(init?.headers)), 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+      },
     ),
     getDevice: (deviceId: string, init?: RequestInit) => request(
       '__DEVICE_PATH__'.replace('{deviceId}', encodeURIComponent(deviceId)), deviceSchema, { ...init, method: 'GET' },

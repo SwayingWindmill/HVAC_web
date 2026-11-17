@@ -2331,6 +2331,25 @@
         }
       }
     },
+    "/api/v1/alarm-rules/simulate": {
+      "post": {
+        "operationId": "simulateSiteAlarmRule",
+        "summary": "Dry-run a Site alarm rule against multi-step telemetry samples",
+        "description": "Side-effect-free simulation against the Site's rules in effect. Evaluates 1 to 32 sequential snapshots without persisting state or firing alarms.",
+        "parameters": [
+          { "name": "siteId", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UUIDv7" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmRuleSimulationRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Step-by-step evaluation result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AlarmRuleSimulationEnvelope" } } } },
+          "4XX": { "$ref": "#/components/responses/Problem" },
+          "5XX": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/api/v1/alarms/{alarmId}": {
       "get": {
         "operationId": "getAlarmV212",
@@ -4422,6 +4441,11 @@
           "ruleId": { "$ref": "#/components/schemas/UUIDv7" },
           "title": { "type": "string", "minLength": 1, "maxLength": 256 },
           "severity": { "type": "string", "enum": ["INFO", "WARNING", "MINOR", "MAJOR", "CRITICAL"] },
+          "ruleKind": { "type": "string", "enum": ["THRESHOLD", "SLOPE", "EXPRESSION"] },
+          "templateKey": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "overriddenFields": { "type": "array", "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+          "dependsOnRuleIds": { "type": "array", "maxItems": 16, "items": { "$ref": "#/components/schemas/UUIDv7" } },
+          "hopDepth": { "type": "integer", "minimum": 0, "maximum": 3 },
           "triggerMode": { "type": "string", "enum": ["SIMPLE", "DURATION", "REPEATING"], "description": "SIMPLE raises at once; DURATION once the raise condition has held durationSeconds; REPEATING once it has held repeatCount readings in a row." },
           "durationSeconds": { "type": "integer", "minimum": 1 },
           "repeatCount": { "type": "integer", "minimum": 1 },
@@ -4433,9 +4457,9 @@
         "type": "object",
         "additionalProperties": false,
         "required": ["kind"],
-        "description": "AND and OR hold two to 32 children; every other kind reads one reading. NO_DATA: no reading for ageSeconds. STALE: the reading is older than ageSeconds. UNCHANGED: a fresh reading has kept its value ageSeconds. CHANGED: it took its value less than ageSeconds ago. REASONS: the point's health reasons. match ANY means one of reasons is present; NONE means none of them are. REASONS does not require the displayed value to be trusted.",
+        "description": "AND and OR hold two to 32 children; EXPRESSION binds up to 16 named inputs; every other kind reads one reading. NO_DATA: no reading for ageSeconds. STALE: the reading is older than ageSeconds. UNCHANGED: a fresh reading has kept its value ageSeconds. CHANGED: it took its value less than ageSeconds ago. SLOPE: reading change delta over windowSeconds. REASONS: the point's health reasons.",
         "properties": {
-          "kind": { "type": "string", "enum": ["COMPARE", "RANGE", "HYSTERESIS", "NO_DATA", "STALE", "UNCHANGED", "CHANGED", "REASONS", "AND", "OR"] },
+          "kind": { "type": "string", "enum": ["COMPARE", "RANGE", "HYSTERESIS", "NO_DATA", "STALE", "UNCHANGED", "CHANGED", "REASONS", "SLOPE", "EXPRESSION", "AND", "OR"] },
           "reading": { "$ref": "#/components/schemas/AlarmRuleReading" },
           "operator": { "type": "string", "enum": ["EQ", "NE", "GT", "GTE", "LT", "LTE"] },
           "value": { "type": ["number", "string", "boolean"] },
@@ -4445,6 +4469,10 @@
           "trigger": { "type": "number" },
           "reset": { "type": "number" },
           "ageSeconds": { "type": "integer", "minimum": 1 },
+          "delta": { "type": "number" },
+          "windowSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+          "expression": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "inputs": { "type": "object", "maxProperties": 16, "additionalProperties": { "$ref": "#/components/schemas/AlarmRuleReading" } },
           "reasons": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "enum": ["OUT_OF_RANGE", "SPIKE", "SENTINEL", "FLATLINE", "DERIVED_INPUT", "LOW_CONFIDENCE", "SOURCE_UNTRUSTED", "PHYSICS_WET_BULB_DRY", "PHYSICS_WET_BULB_CONDENSER", "PHYSICS_POWER", "PHYSICS_COP", "PHYSICS_CHW_DIRECTION", "PHYSICS_CW_DIRECTION", "PHYSICS_HEAT_BALANCE", "PROBE_OFFSET"] } },
           "match": { "type": "string", "enum": ["ANY", "NONE"] },
           "children": { "type": "array", "minItems": 2, "maxItems": 32, "items": { "$ref": "#/components/schemas/AlarmRuleCondition" } }
@@ -4457,6 +4485,77 @@
         "properties": {
           "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
           "pointCode": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      },
+      "AlarmRuleSimulationReading": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["deviceId", "pointCode", "value"],
+        "properties": {
+          "deviceId": { "$ref": "#/components/schemas/UUIDv7" },
+          "pointCode": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "value": { "type": ["number", "string", "boolean"] },
+          "quality": { "type": "string", "enum": ["GOOD", "UNCERTAIN", "SUSPECT", "STALE", "BAD", "INVALID"] },
+          "observedAt": { "type": "string", "minLength": 1, "maxLength": 64 }
+        }
+      },
+      "AlarmRuleSimulationStepInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["readings"],
+        "properties": {
+          "evaluatedAt": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "readings": { "type": "array", "maxItems": 64, "items": { "$ref": "#/components/schemas/AlarmRuleSimulationReading" } }
+        }
+      },
+      "AlarmRuleSimulationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ruleId", "steps"],
+        "properties": {
+          "ruleId": { "$ref": "#/components/schemas/UUIDv7" },
+          "steps": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/components/schemas/AlarmRuleSimulationStepInput" } }
+        }
+      },
+      "AlarmRuleSimulationStep": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step", "evaluatedAt", "status", "effect", "active"],
+        "properties": {
+          "step": { "type": "integer", "minimum": 1, "maximum": 32 },
+          "evaluatedAt": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "status": { "type": "string", "enum": ["MATCHED", "NOT_MATCHED", "INDETERMINATE"] },
+          "effect": { "type": "string", "enum": ["NONE", "PUBLISH", "CLEAR"] },
+          "active": { "type": "boolean" },
+          "qualityBlocker": { "type": "string" },
+          "matchedReasons": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "AlarmRuleSimulationResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ruleId", "title", "hopDepth", "finalActive", "steps"],
+        "properties": {
+          "ruleId": { "$ref": "#/components/schemas/UUIDv7" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "hopDepth": { "type": "integer", "minimum": 0, "maximum": 3 },
+          "dependsOnRuleIds": { "type": "array", "maxItems": 16, "items": { "$ref": "#/components/schemas/UUIDv7" } },
+          "finalActive": { "type": "boolean" },
+          "steps": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/components/schemas/AlarmRuleSimulationStep" } }
+        }
+      },
+      "AlarmRuleSimulationEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/AlarmRuleSimulationResult" },
+          "meta": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requestId"],
+            "properties": { "requestId": { "type": "string" } }
+          }
         }
       },
       "WeChatReminders": {

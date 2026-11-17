@@ -1235,4 +1235,16 @@ func TestTemplateAndDependencyValidationErrors(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "unknown rule") {
 		t.Fatalf("expected unknown dependency error, got %v", err)
 	}
+
+	if err := writeAndLoad("max-hops-exceeded", map[string]any{
+		"rules": []any{
+			baseRule("r0", nil),
+			baseRule("r1", map[string]any{"dependsOn": []string{"r0"}}),
+			baseRule("r2", map[string]any{"dependsOn": []string{"r1"}}),
+			baseRule("r3", map[string]any{"dependsOn": []string{"r2"}}),
+			baseRule("r4", map[string]any{"dependsOn": []string{"r3"}}),
+		},
+	}); err == nil || !strings.Contains(err.Error(), "linkage depth") {
+		t.Fatalf("expected max linkage hops error, got %v", err)
+	}
 }

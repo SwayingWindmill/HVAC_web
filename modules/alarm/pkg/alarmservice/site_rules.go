@@ -1,6 +1,11 @@
 package alarmservice
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/rulegraph"
+)
 
 // SiteRule is one rule on a Site: the policy family and the Site assignment that evaluates it.
 // A rule from the rules file carries no revision identity yet; publishing gives it one.
@@ -77,10 +82,42 @@ func PlanSiteRules(file, active []SiteRule) (SiteRulePlan, error) {
 			plan.Changed = append(plan.Changed, rule)
 		}
 	}
+	if _, err := ValidateSiteRuleGraph(file); err != nil {
+		return SiteRulePlan{}, err
+	}
 	for _, rule := range active {
 		if !inFile[rule.AssignmentID] {
 			plan.Retired = append(plan.Retired, rule)
 		}
 	}
 	return plan, nil
+}
+
+// ValidateSiteRuleGraph builds a causal dependency graph over Site rules and verifies there are no
+// dependency cycles, dangling rule references, or linkage chains deeper than rulegraph.MaxLinkageHops.
+func ValidateSiteRuleGraph(rules []SiteRule) (rulegraph.GraphReport, error) {
+	nodes := make([]rulegraph.Node, 0, len(rules))
+	for _, rule := range rules {
+		nodes = append(nodes, rulegraph.Node{
+			ID:          rule.AssignmentID,
+			Code:        rule.Policy.AlarmType,
+			DependsOn:   append([]string(nil), rule.Policy.DependsOnRuleIDs...),
+			ReadDevices: readDevicesForPolicy(rule.Policy),
+		})
+	}
+	return rulegraph.ValidateDAG(nodes)
+}
+
+func readDevicesForPolicy(policy AlarmPolicyRevision) []string {
+	inputs := policy.ReferencedInputs()
+	if len(inputs) == 0 {
+		return nil
+	}
+	devices := make([]string, 0, len(inputs))
+	for _, key := range inputs {
+		if deviceID, _, ok := strings.Cut(key, "/"); ok && deviceID != "" {
+			devices = append(devices, deviceID)
+		}
+	}
+	return devices
 }

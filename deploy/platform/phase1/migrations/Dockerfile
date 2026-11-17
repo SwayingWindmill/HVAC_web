@@ -176,6 +176,7 @@ COPY infra/registry/postgres/init/alarm-suppress-unassign-capabilities.sql /opt/
 COPY services/notification-service/migrations/alarm-delivery-suppression-cooldown.sql /opt/hvac/repo/services/notification-service/migrations/alarm-delivery-suppression-cooldown.sql
 COPY modules/command/migrations/command-priority-and-locks.sql /opt/hvac/repo/modules/command/migrations/command-priority-and-locks.sql
 COPY modules/alarm/migrations/alarm-suppression-notification-events.sql /opt/hvac/repo/modules/alarm/migrations/alarm-suppression-notification-events.sql
+COPY modules/alarm/migrations/alarm-evaluation-slope-window.sql /opt/hvac/repo/modules/alarm/migrations/alarm-evaluation-slope-window.sql
 
 FROM postgres:16.4-bookworm
 
