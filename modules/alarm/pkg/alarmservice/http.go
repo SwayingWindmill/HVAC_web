@@ -76,9 +76,10 @@ type acknowledgeRequest struct {
 }
 
 type alarmRoute struct {
-	siteID    string
-	alarmID   string
-	operation alarmmodel.Operation
+	siteID      string
+	alarmID     string
+	operation   alarmmodel.Operation
+	evaluations bool
 }
 
 func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
@@ -194,6 +195,10 @@ func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.
 		handler.list(writer, request, claims.TenantID, route.siteID)
 		return
 	}
+	if route.evaluations {
+		handler.evaluations(writer, request, claims.TenantID, route.siteID, route.alarmID)
+		return
+	}
 	handler.get(writer, request, claims.TenantID, route.siteID, route.alarmID)
 }
 
@@ -248,6 +253,24 @@ func (handler *httpHandler) get(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	writeJSON(writer, http.StatusOK, alarm)
+}
+
+func (handler *httpHandler) evaluations(writer http.ResponseWriter, request *http.Request, organizationID, siteID, alarmID string) {
+	limit, ok := parseEvaluationLimit(request)
+	if !ok {
+		handler.writeProblem(writer, http.StatusBadRequest, "ALARM_FILTER_INVALID", "Alarm filter invalid", "The Alarm evaluation query exceeds the supported read boundary.", false)
+		return
+	}
+	response, err := handler.store.ListAlarmEvaluations(request.Context(), organizationID, siteID, alarmID, limit)
+	if err != nil {
+		handler.writeStoreFailure(writer, err)
+		return
+	}
+	if err := response.Validate(alarmID, limit); err != nil {
+		handler.writeProblem(writer, http.StatusBadGateway, "ALARM_RESPONSE_INVALID", "Alarm response invalid", "Alarm Store returned evaluation history outside the requested scope.", true)
+		return
+	}
+	writeJSON(writer, http.StatusOK, response)
 }
 
 func (handler *httpHandler) acknowledge(writer http.ResponseWriter, request *http.Request, route alarmRoute, claims identitycontext.DelegationClaims) {
@@ -447,6 +470,24 @@ func (handler *httpHandler) parseFilter(request *http.Request) (Filter, bool) {
 	return filter, true
 }
 
+func parseEvaluationLimit(request *http.Request) (int, bool) {
+	query := request.URL.Query()
+	for key, values := range query {
+		if key != "limit" || len(values) != 1 {
+			return 0, false
+		}
+	}
+	raw := query.Get("limit")
+	if raw == "" {
+		return DefaultAlarmEvaluationsLimit, true
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 || value > MaxAlarmEvaluationsLimit {
+		return 0, false
+	}
+	return value, true
+}
+
 func (handler *httpHandler) writeStoreFailure(writer http.ResponseWriter, err error) {
 	if errors.Is(err, ErrNotFound) {
 		handler.writeProblem(writer, http.StatusNotFound, "RESOURCE_NOT_FOUND", "Resource not found", "The Alarm resource is not visible.", false)
@@ -504,6 +545,9 @@ func matchAlarmPath(path string) (alarmRoute, bool) {
 	segments := strings.Split(strings.Trim(path, "/"), "/")
 	if len(segments) == 5 && segments[0] == "internal" && segments[1] == "v1" && segments[2] == "sites" && segments[4] == "alarms" {
 		return alarmRoute{siteID: segments[3]}, true
+	}
+	if len(segments) == 7 && segments[0] == "internal" && segments[1] == "v1" && segments[2] == "sites" && segments[4] == "alarms" && segments[6] == "evaluations" && !strings.Contains(segments[5], ":") {
+		return alarmRoute{siteID: segments[3], alarmID: segments[5], evaluations: true}, true
 	}
 	if len(segments) != 6 || segments[0] != "internal" || segments[1] != "v1" || segments[2] != "sites" || segments[4] != "alarms" {
 		return alarmRoute{}, false

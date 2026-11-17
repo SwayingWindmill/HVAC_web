@@ -165,3 +165,102 @@ func TestPostgresRetiredSiteRuleStopsAndRecoversItsAlarm(t *testing.T) {
 		t.Fatalf("the scheduled pass did not judge the rule brought back: %#v %v", pass, err)
 	}
 }
+
+func TestPostgresSyncSiteRulesHotSyncsAtomicallyAndPreservesUnchangedEvaluationState(t *testing.T) {
+	databaseURL := os.Getenv("S4_ALARM_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("S4_ALARM_TEST_DATABASE_URL is not configured")
+	}
+	ctx := identitycontext.WithTenantID(context.Background(), postgresTestTenantID)
+	store, err := OpenPostgresStore(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	syncSiteID := "01910000-d200-7000-8000-000000000001"
+	keptAssign := "01910000-d200-7000-8000-000000000011"
+	changedAssign := "01910000-d200-7000-8000-000000000012"
+	retiredAssign := "01910000-d200-7000-8000-000000000013"
+	addedAssign := "01910000-d200-7000-8000-000000000014"
+
+	makeRule := func(assignID, policyID, alarmType, sourceRef string, trigger float64, holdSeconds int64) SiteRule {
+		p := unpublishedSitePolicy(trigger)
+		p.PolicyID = policyID
+		p.AlarmType = alarmType
+		p.SourceReference = sourceRef
+		p.Title = alarmType
+		if holdSeconds > 0 {
+			p.TriggerMode = TriggerDuration
+			p.DurationSeconds = holdSeconds
+		} else {
+			p.TriggerMode = TriggerSimple
+			p.DurationSeconds = 0
+		}
+		return SiteRule{AssignmentID: assignID, Policy: p}
+	}
+
+	t0 := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	keptRule := makeRule(keptAssign, "01910000-d200-7000-8000-000000000101", "SYNC_KEPT", "alarm-rules:sync/kept", 30, 300)
+	changedRule := makeRule(changedAssign, "01910000-d200-7000-8000-000000000102", "SYNC_CHANGED", "alarm-rules:sync/changed", 30, 0)
+	retiredRule := makeRule(retiredAssign, "01910000-d200-7000-8000-000000000103", "SYNC_RETIRED", "alarm-rules:sync/retired", 30, 0)
+
+	initial, err := store.SyncSiteRules(ctx, postgresTestTenantID, syncSiteID, []SiteRule{keptRule, changedRule, retiredRule}, t0, "alarm-rules:sync-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial.Added != 3 || initial.Changed != 0 || initial.Unchanged != 0 || initial.Retired != 0 {
+		t.Fatalf("unexpected initial sync summary: %#v", initial)
+	}
+
+	// Start in-flight candidate state on the rule that will remain unchanged, and raise an Alarm on the rule that will be retired.
+	evalSnapshot := postgresEvaluatorSnapshot("sync-eval-1", t0.Add(time.Minute), 31, "GOOD")
+	evalSnapshot.SiteID = syncSiteID
+	evalSnapshot.SubjectID = syncSiteID
+	keptDecision, err := store.EvaluateAssignedSnapshot(ctx, keptAssign, evalSnapshot, t0.Add(time.Minute))
+	if err != nil || keptDecision.State.CandidateSince == nil {
+		t.Fatalf("kept rule did not start candidate state: %#v %v", keptDecision, err)
+	}
+	if retiredDecision, err := store.EvaluateAssignedSnapshot(ctx, retiredAssign, evalSnapshot, t0.Add(time.Minute)); err != nil || retiredDecision.Effect != EvaluationEffectPublish {
+		t.Fatalf("retired rule did not raise initial Alarm: %#v %v", retiredDecision, err)
+	}
+
+	// Hot-sync updated desired set: 1 unchanged, 1 changed, 1 retired, 1 added.
+	changedRuleV2 := makeRule(changedAssign, "01910000-d200-7000-8000-000000000102", "SYNC_CHANGED", "alarm-rules:sync/changed", 35, 0)
+	addedRule := makeRule(addedAssign, "01910000-d200-7000-8000-000000000104", "SYNC_ADDED", "alarm-rules:sync/added", 29, 0)
+	summary, err := store.SyncSiteRules(ctx, postgresTestTenantID, syncSiteID, []SiteRule{keptRule, changedRuleV2, addedRule}, t0.Add(2*time.Minute), "alarm-rules:sync-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Added != 1 || summary.Changed != 1 || summary.Unchanged != 1 || summary.Retired != 1 {
+		t.Fatalf("unexpected hot-sync summary: %#v", summary)
+	}
+
+	rules, err := store.SiteRules(ctx, postgresTestTenantID, syncSiteID)
+	if err != nil || len(rules) != 3 {
+		t.Fatalf("active site rules after hot-sync = %#v err=%v", rules, err)
+	}
+
+	// Verify unchanged rule's in-flight candidate_since was NOT touched or reset.
+	tx, err := store.beginTenantTransaction(ctx, postgresTestTenantID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var candidateSince time.Time
+	var repeatCount uint64
+	if err := tx.QueryRow(ctx, `
+		SELECT candidate_since, repeat_count
+		FROM alarm_runtime.alarm_evaluation_state
+		WHERE tenant_id=$1 AND site_id=$2 AND assignment_id=$3`,
+		postgresTestTenantID, syncSiteID, keptAssign).Scan(&candidateSince, &repeatCount); err != nil {
+		t.Fatal(err)
+	}
+	if !candidateSince.UTC().Equal(t0.Add(time.Minute)) || repeatCount != 1 {
+		t.Fatalf("unchanged rule evaluation state mutated: candidateSince=%v repeatCount=%d", candidateSince, repeatCount)
+	}
+	cleared := siteAlarms(t, ctx, store, syncSiteID, alarmmodel.ConditionCleared)
+	if len(cleared) != 1 || cleared[0].Timeline[len(cleared[0].Timeline)-1].Reason != RuleRetiredReason {
+		t.Fatalf("retired rule alarm was not cleared on hot-sync: %#v", cleared)
+	}
+}

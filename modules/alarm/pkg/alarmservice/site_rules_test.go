@@ -40,3 +40,29 @@ func TestPlanSiteRulesTreatsTheFileAsTheWholeSet(t *testing.T) {
 		t.Fatalf("plan=%v", got)
 	}
 }
+
+func TestSummarizeSiteRulePlanAndDuplicateRejection(t *testing.T) {
+	active := []SiteRule{ruleOnSite("kept", "Keep"), ruleOnSite("edited", "Edit"), ruleOnSite("gone", "Gone")}
+	changed := ruleOnSite("edited", "Edit")
+	changed.Policy.Summary = "Updated threshold"
+	desired := []SiteRule{ruleOnSite("kept", "Keep"), changed, ruleOnSite("new", "New")}
+
+	plan, err := PlanSiteRules(desired, active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := SummarizeSiteRulePlan(plan)
+	if summary.Added != 1 || summary.Changed != 1 || summary.Unchanged != 1 || summary.Retired != 1 {
+		t.Fatalf("unexpected counts: %#v", summary)
+	}
+	if !reflect.DeepEqual(summary.AddedRuleIDs, []string{"new"}) ||
+		!reflect.DeepEqual(summary.ChangedRuleIDs, []string{"edited"}) ||
+		!reflect.DeepEqual(summary.UnchangedRuleIDs, []string{"kept"}) ||
+		!reflect.DeepEqual(summary.RetiredRuleIDs, []string{"gone"}) {
+		t.Fatalf("unexpected rule IDs: %#v", summary)
+	}
+
+	if _, err := PlanSiteRules([]SiteRule{ruleOnSite("dup", "A"), ruleOnSite("dup", "B")}, nil); err == nil {
+		t.Fatal("expected duplicate assignment error from PlanSiteRules")
+	}
+}

@@ -628,3 +628,193 @@ func number(value any) (float64, bool) {
 	float, err := parsed.Float64()
 	return float, err == nil
 }
+
+type contractSiteRules struct{}
+
+func (contractSiteRules) SiteRules(context.Context, string, string) ([]alarmservice.SiteRule, error) {
+	return nil, nil
+}
+
+func TestAlarmSuppressionUnassignAndEvaluationsEndToEnd(t *testing.T) {
+	now := time.Date(2026, 8, 24, 2, 0, 0, 0, time.UTC)
+	runEndToEnd := func(t *testing.T, useHTTPAdapter bool) {
+		t.Helper()
+		store, err := alarmservice.NewMemoryStore(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture := &alarmContractFixture{store: store, tenantID: "01910000-0000-7000-8000-000000000001", siteID: gatewayAlarmSiteID}
+		signer := commandTestSigner(t)
+
+		var owner AlarmOperations
+		var internalServer *httptest.Server
+		if useHTTPAdapter {
+			internalHandler, err := alarmservice.NewHTTPHandler(alarmservice.HTTPConfig{
+				Store: store, Rules: contractSiteRules{}, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now },
+				GatewaySPIFFEID: "spiffe://hvac.local/platform-gateway", Audience: "alarm-service", MaxListLimit: 200,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			internalServer = httptest.NewServer(internalHandler)
+			defer internalServer.Close()
+			owner = newHTTPAlarmAdapter(AlarmConfig{
+				BackendBaseURL: internalServer.URL, BackendHTTPClient: internalServer.Client(),
+				Timeout: time.Second, MaxResponseBytes: 1 << 20, Now: func() time.Time { return now },
+			})
+		} else {
+			owner = signedAlarmOwner{t: t, signer: &signer.PublicKey, store: &directAlarmAdapter{store: store, now: func() time.Time { return now }}}
+		}
+
+		// Extend the route ownership catalog in memory without modifying contracts/ownership/route-ownership.v1.json.
+		var ownershipDoc map[string]any
+		if err := json.Unmarshal(readRepositoryFile(t, "contracts", "ownership", "route-ownership.v1.json"), &ownershipDoc); err != nil {
+			t.Fatal(err)
+		}
+		existingRoutes, _ := ownershipDoc["routes"].([]any)
+		for _, spec := range []struct {
+			method string
+			path   string
+		}{
+			{http.MethodGet, "/api/v1/alarms/{alarmId}/evaluations"},
+			{http.MethodPost, "/api/v1/alarms/{alarmId}/suppress"},
+			{http.MethodPost, "/api/v1/alarms/{alarmId}/unsuppress"},
+			{http.MethodPost, "/api/v1/alarms/{alarmId}/unassign"},
+		} {
+			existingRoutes = append(existingRoutes, map[string]any{
+				"method": spec.method, "path": spec.path, "owner": "alarm-service",
+				"publicIngress": "platform-gateway", "revision": 1, "rollout": map[string]any{"mode": "all"},
+				"compatibilityMode": "native", "allowedScopeDimensions": []string{"tenant", "site", "alarm", "principal", "key"},
+			})
+		}
+		ownershipDoc["routes"] = existingRoutes
+		rawOwnership, err := json.Marshal(ownershipDoc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ownership, err := ownershipregistry.Parse(rawOwnership)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		sessions := sessionstore.NewMemoryStore()
+		configured := NewHandler(Config{
+			Now:          func() time.Time { return now },
+			RouteManager: ownershipregistry.NewManager(ownership, ownershipregistry.NewMemoryAuditSink(), func() time.Time { return now }),
+			Identity: &IdentityConfig{
+				OIDCIssuer: "https://issuer.example.test", OIDCClientID: "client", OIDCRedirectURI: "https://web.example.test/api/v1/auth/callback",
+				PublicOrigin: "https://web.example.test", IAMURL: "https://iam.example.test", IAMAudience: "iam-service",
+				ExecutingWorkloadSPIFFE: "spiffe://hvac.local/platform-gateway", PolicyRevision: "identity-policy-1", DelegationSigner: signer,
+				TokenEncryptionKey: make([]byte, 32), SessionStore: sessions, SessionTTL: time.Hour, DelegationTTL: 30 * time.Second,
+				IAMHTTPClient: fixture.iamClient(t, signer, now),
+			},
+			Registry: &RegistryConfig{CoreBaseURL: "https://registry.example.test", CoreHTTPClient: fixture.registryClient(now), CoreTimeout: time.Second},
+			Alarm:    &AlarmConfig{Operations: owner, BackendAudience: "alarm-service", Timeout: time.Second, Now: func() time.Time { return now }},
+		}).(*handler)
+		fixture.handler = configured
+		ciphertext, err := configured.identity.encryptBytes([]byte("alarm-contract-csrf"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		created, err := sessions.CreateSession(context.Background(), sessionstore.Session{
+			Client: sessionstore.ClientBrowser, ID: "alarm-p1-session",
+			Principal: identitycontext.UserPrincipal{Subject: "alarm-operator", Issuer: "https://issuer.example.test", Roles: []string{"operator"}},
+			TenantID:  fixture.tenantID, CSRFTokenCiphertext: ciphertext, ExpiresAt: now.Add(time.Hour),
+		}, sessionstore.MutationContext{
+			Action: "SESSION_CREATED", Result: "SUCCEEDED", PolicyRevision: "identity-policy-1", CorrelationID: "alarm-p1",
+			TraceID: strings.Repeat("a", 32), Traceparent: "00-" + strings.Repeat("a", 32) + "-" + strings.Repeat("b", 16) + "-01",
+			ExecutingService: "platform-gateway", ExecutingSPIFFEID: "spiffe://hvac.local/platform-gateway", OccurredAt: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.sessionID = created.ID
+
+		alarm := fixture.publish(t)
+		if err := store.RecordEvaluation(fixture.tenantID, fixture.siteID, alarm.Fingerprint, alarm.AlarmID, 1, alarmservice.AlarmEvaluationRecord{
+			EvaluatedAt: now.Format(time.RFC3339Nano), PolicyRevisionID: "01910000-2000-7000-8000-000000000001",
+			AssignmentID: "01910000-2000-7000-8000-000000000002", InputRevision: "eval-rev-1",
+			Status: alarmservice.EvaluationMatched, Effect: alarmservice.EvaluationEffectPublish,
+			Snapshot: json.RawMessage(`{"supplyTemp":32.0}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.RecordEvaluation(fixture.tenantID, fixture.siteID, alarm.Fingerprint, alarm.AlarmID, 2, alarmservice.AlarmEvaluationRecord{
+			EvaluatedAt: now.Add(time.Minute).Format(time.RFC3339Nano), PolicyRevisionID: "01910000-2000-7000-8000-000000000001",
+			AssignmentID: "01910000-2000-7000-8000-000000000002", InputRevision: "eval-rev-2",
+			Status: alarmservice.EvaluationMatched, Effect: alarmservice.EvaluationEffectNone,
+			Snapshot: json.RawMessage(`{"supplyTemp":33.0}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Assign -> Unassign -> Suppress -> Unsuppress -> Evaluations.
+		assignRec := fixture.serve(http.MethodPost, "/api/v1/alarms/"+alarm.AlarmID+"/assign", `{"expectedVersion":1,"reason":"Dispatch operator","assigneeId":"user:op-1"}`, "p1-assign-1")
+		if assignRec.Code != http.StatusOK {
+			t.Fatalf("assign status=%d body=%s", assignRec.Code, assignRec.Body.String())
+		}
+		unassignRec := fixture.serve(http.MethodPost, "/api/v1/alarms/"+alarm.AlarmID+"/unassign", `{"expectedVersion":2,"reason":"Shift handoff"}`, "p1-unassign-1")
+		if unassignRec.Code != http.StatusOK {
+			t.Fatalf("unassign status=%d body=%s", unassignRec.Code, unassignRec.Body.String())
+		}
+		var unassignedEnv struct {
+			Data alarmmodel.Alarm `json:"data"`
+		}
+		if json.Unmarshal(unassignRec.Body.Bytes(), &unassignedEnv) != nil || unassignedEnv.Data.AssigneeID != nil || unassignedEnv.Data.Version != 3 {
+			t.Fatalf("unexpected unassign body: %s", unassignRec.Body.String())
+		}
+
+		badSuppress := fixture.serve(http.MethodPost, "/api/v1/alarms/"+alarm.AlarmID+"/suppress", `{"expectedVersion":3,"reason":"Hold","suppressedUntil":"2026-08-24T01:00:00Z"}`, "p1-supp-bad")
+		assertAlarmErrorCode(t, "past suppressedUntil", badSuppress, "INVALID_ARGUMENT")
+
+		suppressRec := fixture.serve(http.MethodPost, "/api/v1/alarms/"+alarm.AlarmID+"/suppress", `{"expectedVersion":3,"reason":"Maintenance window","suppressedUntil":"2026-08-24T05:00:00Z"}`, "p1-supp-1")
+		if suppressRec.Code != http.StatusOK {
+			t.Fatalf("suppress status=%d body=%s", suppressRec.Code, suppressRec.Body.String())
+		}
+		var suppressedEnv struct {
+			Data alarmmodel.Alarm `json:"data"`
+		}
+		if json.Unmarshal(suppressRec.Body.Bytes(), &suppressedEnv) != nil || suppressedEnv.Data.Suppression == nil || suppressedEnv.Data.Version != 4 {
+			t.Fatalf("unexpected suppress body: %s", suppressRec.Body.String())
+		}
+
+		conflictRec := fixture.serve(http.MethodPost, "/api/v1/alarms/"+alarm.AlarmID+"/unsuppress", `{"expectedVersion":3,"reason":"Stale version"}`, "p1-unsupp-stale")
+		assertAlarmErrorCode(t, "stale version conflict", conflictRec, "ALARM_VERSION_CONFLICT")
+
+		unsuppressRec := fixture.serve(http.MethodPost, "/api/v1/alarms/"+alarm.AlarmID+"/unsuppress", `{"expectedVersion":4,"reason":"Maintenance done"}`, "p1-unsupp-1")
+		if unsuppressRec.Code != http.StatusOK {
+			t.Fatalf("unsuppress status=%d body=%s", unsuppressRec.Code, unsuppressRec.Body.String())
+		}
+		var unsuppressedEnv struct {
+			Data alarmmodel.Alarm `json:"data"`
+		}
+		if json.Unmarshal(unsuppressRec.Body.Bytes(), &unsuppressedEnv) != nil || unsuppressedEnv.Data.Suppression != nil || unsuppressedEnv.Data.Version != 5 {
+			t.Fatalf("unexpected unsuppress body: %s", unsuppressRec.Body.String())
+		}
+
+		evalRec := fixture.serve(http.MethodGet, "/api/v1/alarms/"+alarm.AlarmID+"/evaluations?limit=1", "", "")
+		if evalRec.Code != http.StatusOK {
+			t.Fatalf("evaluations status=%d body=%s", evalRec.Code, evalRec.Body.String())
+		}
+		var evalEnv struct {
+			Data alarmservice.AlarmEvaluationList `json:"data"`
+			Meta struct {
+				RequestID string `json:"requestId"`
+			} `json:"meta"`
+		}
+		if json.Unmarshal(evalRec.Body.Bytes(), &evalEnv) != nil || evalEnv.Meta.RequestID == "" || len(evalEnv.Data.Items) != 1 || evalEnv.Data.Items[0].InputRevision != "eval-rev-2" {
+			t.Fatalf("unexpected evaluations body: %s", evalRec.Body.String())
+		}
+
+		// BOLA: other site alarm hidden as 404 ALARM_NOT_FOUND; IAM deny yields 403 FORBIDDEN.
+		otherAlarm := fixture.publishAt(t, "01910000-0001-7000-8000-000000000099")
+		assertAlarmErrorCode(t, "bola evaluations", fixture.serve(http.MethodGet, "/api/v1/alarms/"+otherAlarm.AlarmID+"/evaluations", "", ""), "ALARM_NOT_FOUND")
+		assertAlarmErrorCode(t, "bad evaluation query", fixture.serve(http.MethodGet, "/api/v1/alarms/"+alarm.AlarmID+"/evaluations?limit=101", "", ""), "INVALID_ARGUMENT")
+
+		fixture.deny.Store(true)
+		assertAlarmErrorCode(t, "iam denied suppress", fixture.serve(http.MethodPost, "/api/v1/alarms/"+alarm.AlarmID+"/suppress", `{"expectedVersion":5,"reason":"Denied","suppressedUntil":"2026-08-24T05:00:00Z"}`, "p1-supp-deny"), "FORBIDDEN")
+	}
+
+	t.Run("direct", func(t *testing.T) { runEndToEnd(t, false) })
+	t.Run("http", func(t *testing.T) { runEndToEnd(t, true) })
+}

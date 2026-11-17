@@ -163,6 +163,89 @@ func (store *PostgresStore) ResolveScope(ctx context.Context, tenantID, alarmID 
 	return scope, nil
 }
 
+func (store *PostgresStore) ListAlarmEvaluations(ctx context.Context, tenantID, siteID, alarmID string, limit int) (AlarmEvaluationList, error) {
+	if store == nil || store.pool == nil {
+		return AlarmEvaluationList{}, ErrUnavailable
+	}
+	if !alarmmodel.IsUUIDv7(siteID) || !alarmmodel.IsUUIDv7(alarmID) {
+		return AlarmEvaluationList{}, ErrNotFound
+	}
+	limit = normalizeEvaluationLimit(limit)
+	tx, err := store.beginTenantTransaction(ctx, tenantID, true)
+	if err != nil {
+		return AlarmEvaluationList{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var fingerprint string
+	var firstOccurredAt time.Time
+	err = tx.QueryRow(ctx, `
+		SELECT fingerprint, first_occurred_at
+		FROM alarm_runtime.alarm_current
+		WHERE tenant_id = $1 AND site_id = $2 AND alarm_id = $3`,
+		tenantID, siteID, alarmID,
+	).Scan(&fingerprint, &firstOccurredAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AlarmEvaluationList{}, ErrNotFound
+	}
+	if err != nil {
+		return AlarmEvaluationList{}, fmt.Errorf("lookup Alarm for evaluations: %w", err)
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT evaluated_at, policy_revision_id::text, assignment_id::text, input_revision,
+		       status, effect, quality_blocker, snapshot, active_incident_correlation_id::text
+		FROM alarm_runtime.alarm_evaluation_event
+		WHERE tenant_id = $1
+		  AND site_id = $2
+		  AND (
+		    active_alarm_id = $3
+		    OR (fingerprint = $4 AND evaluated_at >= ($5::timestamptz - interval '10 minutes'))
+		  )
+		ORDER BY evaluated_at DESC, state_version DESC
+		LIMIT $6`,
+		tenantID, siteID, alarmID, fingerprint, firstOccurredAt.UTC(), limit,
+	)
+	if err != nil {
+		return AlarmEvaluationList{}, fmt.Errorf("query Alarm evaluation history: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]AlarmEvaluationRecord, 0)
+	for rows.Next() {
+		var record AlarmEvaluationRecord
+		var evaluatedAt time.Time
+		var snapshot []byte
+		if err := rows.Scan(
+			&evaluatedAt,
+			&record.PolicyRevisionID,
+			&record.AssignmentID,
+			&record.InputRevision,
+			&record.Status,
+			&record.Effect,
+			&record.QualityBlocker,
+			&snapshot,
+			&record.ActiveIncidentCorrelationID,
+		); err != nil {
+			return AlarmEvaluationList{}, fmt.Errorf("scan Alarm evaluation history row: %w", err)
+		}
+		record.EvaluatedAt = evaluatedAt.UTC().Format(time.RFC3339Nano)
+		record.Snapshot = append(json.RawMessage(nil), snapshot...)
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return AlarmEvaluationList{}, fmt.Errorf("iterate Alarm evaluation history: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return AlarmEvaluationList{}, fmt.Errorf("commit Alarm evaluation history read: %w", err)
+	}
+	return AlarmEvaluationList{
+		SchemaVersion: AlarmEvaluationsSchemaVersion,
+		AlarmID:       alarmID,
+		Items:         items,
+	}, nil
+}
+
 func (store *PostgresStore) Publish(ctx context.Context, tenantID, siteID string, publication Publication) (alarmmodel.Alarm, error) {
 	if store == nil || store.pool == nil {
 		return alarmmodel.Alarm{}, ErrUnavailable
@@ -278,13 +361,17 @@ func (publication Publication) incidentInput(alarmID, incidentCorrelationID, ten
 }
 
 func (store *PostgresStore) beginTenantTransaction(ctx context.Context, tenantID string, readOnly bool) (pgx.Tx, error) {
-	contextTenantID, ok := identitycontext.TenantIDFromContext(ctx)
-	if !ok || !alarmmodel.IsUUIDv7(tenantID) || contextTenantID != tenantID {
-		return nil, ErrUnavailable
-	}
 	options := pgx.TxOptions{}
 	if readOnly {
 		options.AccessMode = pgx.ReadOnly
+	}
+	return store.beginTenantTransactionWithOptions(ctx, tenantID, options)
+}
+
+func (store *PostgresStore) beginTenantTransactionWithOptions(ctx context.Context, tenantID string, options pgx.TxOptions) (pgx.Tx, error) {
+	contextTenantID, ok := identitycontext.TenantIDFromContext(ctx)
+	if !ok || !alarmmodel.IsUUIDv7(tenantID) || contextTenantID != tenantID {
+		return nil, ErrUnavailable
 	}
 	tx, err := store.pool.BeginTx(ctx, options)
 	if err != nil {
