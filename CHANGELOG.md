@@ -19,6 +19,11 @@
 
 #### 变更
 
+- 完成内部架构边界收敛与 Go Workspace 模块整合，消除跨库表直读并收紧构建与静态检查门槛：
+  - `optimization-service` 与 `telemetry-worker` 新增内部 mTLS 工作负载点位健康核验接口 `POST /internal/v1/telemetry/optimization/point-health:check`，移除优化服务对 `telemetry_runtime` 表的跨模块直读；`libs/intelligencemodel` 与 `services/optimization-service` 将运行优化建议、影子评估与作业输出全部收敛为强类型结构体。
+  - 新增 `hvac_s1` 迁移 `iam-registry-read-views.sql`，补齐 `core_registry` 只读合约视图（`sites_v1`、`iam_requested_devices_v1`、`site_auto_control_leases_v1`、`optimization_execution_monitors_v1`）并回收 `s1_iam_runtime` 对 `core_registry` 基表的直读权限，`modules/iam` 全面切换至 `*_v1` 合约视图。
+  - `npm run ownership:check` 新增静态边界检查（`scripts/check-ownership-boundaries.ts`），拦截跨模块非 `*_v1` SQL 读写、平级模块互引与优化核心包非测试代码的 `map[string]any`。
+  - 引入仓库根级 `go.mod` 并将 `go.work` 由 61 个子模块收敛为 9 个（主仓根模块与独立契约/边缘模块），同步更新构建脚本、PR 门禁分类与容器镜像构建定义。
 - 为后台常驻协程补齐统一的 panic 恢复与全链路南向分布式追踪透传：
   - `libs/observability` 新增 `Recover`、`GoSafe` 与 `(*Runtime).Go`，捕获后台协程 panic、输出脱敏错误日志并累加 `hvac_goroutine_panics_total`；`cmd/*`、`modules/{alarm,energy,iam,maintenance,registry,telemetry,workorder}` 后台循环与连接隧道协程统一接入恢复保护。
   - `modules/connectivity` 将 MQTT 上行接收改为按网关 UUIDv7 分桶的定长协程池（默认 `32` 路、`4096` 个追踪队列上限、空闲队列回收与非阻塞 `time.AfterFunc` 重试），并将上行报文 `traceId` 与 HTTP `traceparent` 透传至 `telemetry-worker` 实时接收及运行事件证据链路。

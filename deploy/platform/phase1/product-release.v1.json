@@ -26,7 +26,7 @@
   },
   "schemaContract": {
     "migrationManifest": "deploy/platform/phase1/migrations/manifest.v1.json",
-    "migrationManifestSha256": "438936797f2902e1a1fad3345a793637d3c2c094c4b6138d9b053db85b457347",
+    "migrationManifestSha256": "7268a484df9893fb289a63d9818a8d5a483f8fae3a7d26dfe87bd50313eea24b",
     "compatibilityMode": "exact-product-and-manifest",
     "skipAllowed": false,
     "requiredDatabases": [

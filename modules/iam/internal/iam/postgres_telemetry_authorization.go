@@ -50,7 +50,7 @@ func setRequestedDevices(ctx context.Context, transaction pgx.Tx, deviceIDs []st
 func loadTelemetryDevices(ctx context.Context, transaction pgx.Tx) ([]TelemetryDevice, error) {
 	rows, err := transaction.Query(ctx, `
 SELECT id::text, tenant_id::text, site_id::text, status
-FROM core_registry.devices
+FROM core_registry.iam_requested_devices_v1
 ORDER BY id
 `)
 	if err != nil {

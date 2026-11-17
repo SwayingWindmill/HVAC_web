@@ -40,31 +40,36 @@ async function runGo(commandArgs, cwd) {
   return code ?? 1;
 }
 
+const baseArgs = [];
+const rootPackages = [];
 const workspaceModules = [];
-const rootArgs = [];
-const addModule = (modulePath) => {
-  if (!workspaceModules.includes(modulePath)) workspaceModules.push(modulePath);
-};
+const addUnique = (list, item) => { if (!list.includes(item)) list.push(item); };
 for (const argument of args) {
   const moduleMatch = modulePattern.exec(argument);
   if (moduleMatch) {
-    addModule(moduleMatch[1]);
+    if (configuredModules.includes(moduleMatch[1])) addUnique(workspaceModules, moduleMatch[1]);
+    else addUnique(rootPackages, argument);
     continue;
   }
   const categoryMatch = categoryPattern.exec(argument);
   if (categoryMatch) {
-    for (const modulePath of configuredModules.filter((entry) => entry.startsWith(`${categoryMatch[1]}/`))) addModule(modulePath);
+    addUnique(rootPackages, argument);
+    for (const modulePath of configuredModules.filter((entry) => entry.startsWith(`${categoryMatch[1]}/`))) addUnique(workspaceModules, modulePath);
     continue;
   }
-  rootArgs.push(argument);
+  baseArgs.push(argument);
 }
 
-if (workspaceModules.length === 0) {
+if (rootPackages.length === 0 && workspaceModules.length === 0) {
   process.exitCode = await runGo(args, root);
 } else {
+  if (rootPackages.length > 0) {
+    const code = await runGo([...baseArgs, ...rootPackages], root);
+    if (code !== 0) process.exit(code);
+  }
   for (const modulePath of workspaceModules) {
-    console.log(`=== go ${rootArgs.join(' ')} ./... (${modulePath}) ===`);
-    const code = await runGo([...rootArgs, './...'], resolve(root, modulePath));
+    console.log(`=== go ${baseArgs.join(' ')} ./... (${modulePath}) ===`);
+    const code = await runGo([...baseArgs, './...'], resolve(root, modulePath));
     if (code !== 0) {
       process.exitCode = code;
       break;

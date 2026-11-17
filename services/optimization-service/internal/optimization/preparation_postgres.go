@@ -58,6 +58,7 @@ func (store *PostgresStore) ResolveOptimizationPreparation(ctx context.Context, 
 
 	definition := PreparationDefinition{
 		SiteTimezone: twin.Timezone,
+		DeviceIDs:    twinDeviceUUIDs(twin),
 	}
 	var policyCount int
 	err = tx.QueryRow(ctx, `SELECT
@@ -84,15 +85,12 @@ LIMIT 1`, request.TenantID, evalAt).Scan(
 	if policyCount != 1 {
 		return PreparationDefinition{}, unavailable(ReasonPolicyMissing, "effective Optimization policy mapping is ambiguous")
 	}
-	mapping, telemetryKeys, err := resolvePreparationTelemetryKeys(definition.PolicyConstraints, twin)
+	mapping, err := resolvePreparationInputMapping(definition.PolicyConstraints, twin)
 	if err != nil {
 		return PreparationDefinition{}, err
 	}
 	if mapping != nil {
 		definition.ResolvedInputMapping = mapping
-	}
-	if err = checkTelemetryPointHealth(ctx, tx, request.SiteID, twinDeviceUUIDs(twin), telemetryKeys); err != nil {
-		return PreparationDefinition{}, err
 	}
 
 	var topologyCount int
@@ -457,23 +455,18 @@ func preparationScheduleBlockMessage(twin planttwin.SiteTwin, at time.Time) (str
 	return "", false, false
 }
 
-func resolvePreparationTelemetryKeys(raw json.RawMessage, twin planttwin.SiteTwin) (*InputMapping, []string, error) {
+func resolvePreparationInputMapping(raw json.RawMessage, twin planttwin.SiteTwin) (*InputMapping, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 	var parsed struct {
 		InputMapping InputMapping `json:"inputMapping"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, nil, unavailable(ReasonPolicyUnsupported, "invalid optimization policy constraints JSON: %v", err)
+		return nil, unavailable(ReasonPolicyUnsupported, "invalid optimization policy constraints JSON: %v", err)
 	}
 	resolved := resolveInputMappingWithTwin(parsed.InputMapping, &twin)
-	keys := make([]string, 0, 1+len(resolved.effectiveZoneKeys()))
-	if supply := strings.TrimSpace(resolved.SupplyTemperatureKey); supply != "" {
-		keys = append(keys, supply)
-	}
-	keys = append(keys, resolved.effectiveZoneKeys()...)
-	return &resolved, keys, nil
+	return &resolved, nil
 }
 
 func resolveInputMappingWithTwin(mapping InputMapping, twin *planttwin.SiteTwin) InputMapping {
@@ -529,92 +522,4 @@ func twinDeviceUUIDs(twin planttwin.SiteTwin) []string {
 		}
 	}
 	return ids
-}
-
-func checkTelemetryPointHealth(ctx context.Context, tx pgx.Tx, siteID string, twinDeviceIDs, telemetryKeys []string) error {
-	if len(telemetryKeys) == 0 {
-		return nil
-	}
-	var schemaUsable bool
-	if err := tx.QueryRow(ctx, `
-SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'telemetry_runtime')
-   AND has_schema_privilege(current_user, 'telemetry_runtime', 'USAGE')`).Scan(&schemaUsable); err != nil {
-		return err
-	}
-	if !schemaUsable {
-		return nil
-	}
-
-	var latestReadable bool
-	if err := tx.QueryRow(ctx, `
-SELECT CASE
-  WHEN to_regclass('telemetry_runtime.latest_accepted_telemetry') IS NOT NULL
-  THEN has_table_privilege(current_user, 'telemetry_runtime.latest_accepted_telemetry', 'SELECT')
-  ELSE false
-END`).Scan(&latestReadable); err != nil {
-		return err
-	}
-	if latestReadable && len(twinDeviceIDs) > 0 {
-		rows, err := tx.Query(ctx, `
-SELECT lat.telemetry_key, COALESCE(lat.health_status, ''), COALESCE(lat.health_reasons, '{}')
-FROM telemetry_runtime.latest_accepted_telemetry lat
-WHERE lat.device_id = ANY($1::uuid[])
-  AND lat.telemetry_key = ANY($2::text[])`, twinDeviceIDs, telemetryKeys)
-		if err != nil {
-			return err
-		}
-		var blockedKey, blockedReason string
-		for rows.Next() {
-			var key, healthStatus string
-			var healthReasons []string
-			if err := rows.Scan(&key, &healthStatus, &healthReasons); err != nil {
-				rows.Close()
-				return err
-			}
-			if reason, blocked := telemetryHealthBlockReason(healthStatus, healthReasons); blocked {
-				blockedKey, blockedReason = key, reason
-				break
-			}
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return err
-		}
-		rows.Close()
-		if blockedReason != "" {
-			return unavailable(ReasonInputsInvalid, "point %s telemetry health (%s) suppresses optimization", blockedKey, blockedReason)
-		}
-	}
-
-	var probeOffsetsReadable bool
-	if err := tx.QueryRow(ctx, `
-SELECT CASE
-  WHEN to_regclass('telemetry_runtime.probe_offset_estimates') IS NOT NULL
-  THEN has_table_privilege(current_user, 'telemetry_runtime.probe_offset_estimates', 'SELECT')
-  ELSE false
-END`).Scan(&probeOffsetsReadable); err != nil {
-		return err
-	}
-	if probeOffsetsReadable {
-		var alarmedKey, alarmKind string
-		err := tx.QueryRow(ctx, `
-SELECT key, alarm FROM (
-  SELECT DISTINCT ON (pair_code)
-    CASE WHEN supply_key = ANY($2::text[]) THEN supply_key ELSE return_key END AS key,
-    COALESCE(alarm, '') AS alarm
-  FROM telemetry_runtime.probe_offset_estimates
-  WHERE site_id = $1::uuid
-    AND (supply_key = ANY($2::text[]) OR return_key = ANY($2::text[]))
-  ORDER BY pair_code, window_ended_at DESC
-) latest
-WHERE alarm <> ''
-LIMIT 1`, siteID, telemetryKeys).Scan(&alarmedKey, &alarmKind)
-		if err == nil {
-			return unavailable(ReasonInputsInvalid, "active probe offset alarm (%s) on point %s suppresses optimization", alarmKind, alarmedKey)
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-	}
-	return nil
 }

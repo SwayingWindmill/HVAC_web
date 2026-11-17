@@ -59,6 +59,7 @@ type PreparationDefinition struct {
 	Granularity            string
 	PolicyConstraints      json.RawMessage
 	SiteTimezone           string
+	DeviceIDs              []string
 	ResolvedInputMapping   *InputMapping
 }
 
@@ -66,6 +67,16 @@ type InputMapping struct {
 	SupplyTemperatureKey string   `json:"supplyTemperatureKey"`
 	ZoneTemperatureKey   string   `json:"zoneTemperatureKey"`
 	ZoneTemperatureKeys  []string `json:"zoneTemperatureKeys,omitempty"`
+}
+
+func (mapping InputMapping) telemetryKeys() []string {
+	zones := mapping.effectiveZoneKeys()
+	keys := make([]string, 0, 1+len(zones))
+	if supply := strings.TrimSpace(mapping.SupplyTemperatureKey); supply != "" {
+		keys = append(keys, supply)
+	}
+	keys = append(keys, zones...)
+	return keys
 }
 
 func resolveZoneTemperatureKeys(single string, many []string) []string {
@@ -240,9 +251,10 @@ type AuthoritativeInputReader interface {
 }
 
 type Preparer struct {
-	store  PreparationStore
-	inputs AuthoritativeInputReader
-	clock  Clock
+	store       PreparationStore
+	inputs      AuthoritativeInputReader
+	pointHealth TelemetryPointHealthChecker
+	clock       Clock
 }
 
 func NewPreparer(store PreparationStore, inputs AuthoritativeInputReader, clock Clock) (*Preparer, error) {
@@ -253,6 +265,11 @@ func NewPreparer(store PreparationStore, inputs AuthoritativeInputReader, clock 
 		clock = time.Now
 	}
 	return &Preparer{store: store, inputs: inputs, clock: clock}, nil
+}
+
+func (preparer *Preparer) WithPointHealth(checker TelemetryPointHealthChecker) *Preparer {
+	preparer.pointHealth = checker
+	return preparer
 }
 
 func (preparer *Preparer) Prepare(ctx context.Context, request PreparationRequest) (PreparedOptimization, error) {
@@ -278,6 +295,14 @@ func (preparer *Preparer) Prepare(ctx context.Context, request PreparationReques
 	effectiveMapping := policy.InputMapping
 	if definition.ResolvedInputMapping != nil {
 		effectiveMapping = *definition.ResolvedInputMapping
+	}
+	if preparer.pointHealth != nil {
+		if err = preparer.pointHealth.CheckTelemetryPointHealth(ctx, request.TenantID, request.SiteID, definition.DeviceIDs, effectiveMapping.telemetryKeys()); err != nil {
+			if _, named := PreparationReasonOf(err); named {
+				return PreparedOptimization{}, err
+			}
+			return PreparedOptimization{}, unavailable(ReasonInputsUnreadable, "check telemetry point health: %v", err)
+		}
 	}
 	state, err := preparer.inputs.ReadOptimizationState(ctx, OptimizationStateQuery{
 		TenantID: request.TenantID, SiteID: request.SiteID, SubjectType: request.SubjectType, SubjectID: request.SubjectID,

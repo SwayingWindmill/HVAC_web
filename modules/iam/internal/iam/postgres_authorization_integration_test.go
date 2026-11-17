@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
@@ -21,9 +22,11 @@ const (
 	postgresOwnerAPrincipalID    = "018f1e00-2000-7000-8000-000000000001"
 	postgresDelegatedPrincipalID = "018f1e00-2000-7000-8000-000000000002"
 	postgresOwnerASite1ID        = "018f1e00-1000-7000-8000-000000000001"
+	postgresSite1AssetID         = "018f1e00-3000-7000-8000-000000000001"
 	postgresSite1DeviceID        = "018f1e00-4000-7000-8000-000000000001"
 	// The S1 runner seeds Owner A as site-operator on Site 1 with this binding.
-	postgresOwnerASiteOperatorBindingID = "018f1e00-2200-7000-8000-000000000011"
+	postgresOwnerASiteOperatorBindingID  = "018f1e00-2200-7000-8000-000000000011"
+	postgresOptimizationRecommendationID = "01990000-1960-7000-8000-000000000001"
 )
 
 func openPostgresAuthorizationStore(t *testing.T, ctx context.Context) *iam.PostgresAuthorizationStore {
@@ -315,11 +318,222 @@ func TestPostgresAuthorizationRuntimeIsRLSBoundAndRoleChecked(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, `SELECT count(*) FROM core_registry.assets`); err == nil || !strings.Contains(strings.ToLower(err.Error()), "permission denied") {
-		t.Fatalf("IAM runtime accessed Core Asset data: %v", err)
+	for _, table := range []string{
+		"core_registry.sites",
+		"core_registry.assets",
+		"core_registry.devices",
+		"core_registry.device_bindings",
+		"core_registry.site_control_states",
+		"core_registry.asset_control_locks",
+		"core_registry.site_auto_control_leases",
+		"core_registry.optimization_execution_monitors",
+	} {
+		if _, err := pool.Exec(ctx, "SELECT count(*) FROM "+table); err == nil || !strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+			t.Fatalf("IAM runtime accessed %s directly: %v", table, err)
+		}
 	}
 	if _, err := pool.Exec(ctx, `UPDATE iam.principals SET display_name = display_name`); err == nil || !strings.Contains(strings.ToLower(err.Error()), "permission denied") {
 		t.Fatalf("IAM runtime mutated IAM facts: %v", err)
+	}
+
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	for _, view := range []string{
+		"core_registry.sites_v1",
+		"core_registry.iam_requested_devices_v1",
+		"core_registry.site_control_states_v1",
+		"core_registry.device_control_locks_v1",
+		"core_registry.site_auto_control_leases_v1",
+		"core_registry.optimization_execution_monitors_v1",
+	} {
+		var count int
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM "+view).Scan(&count); err != nil {
+			t.Fatalf("IAM runtime failed to query %s without tenant scope: %v", view, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s returned %d rows without RLS tenant context", view, count)
+		}
+	}
+
+	var configured string
+	if err := tx.QueryRow(ctx, `SELECT set_config('app.tenant_id', $1, true)`, postgresTenantAID).Scan(&configured); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT set_config('app.requested_device_ids', $1, true)`, "{"+postgresSite1DeviceID+"}").Scan(&configured); err != nil {
+		t.Fatal(err)
+	}
+	var siteCount, deviceCount int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM core_registry.sites_v1`).Scan(&siteCount); err != nil {
+		t.Fatal(err)
+	}
+	if siteCount != 2 {
+		t.Fatalf("sites_v1 count = %d, want 2", siteCount)
+	}
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM core_registry.iam_requested_devices_v1`).Scan(&deviceCount); err != nil {
+		t.Fatal(err)
+	}
+	if deviceCount != 1 {
+		t.Fatalf("iam_requested_devices_v1 count = %d, want 1", deviceCount)
+	}
+}
+
+func TestPostgresCommandWorkloadAuthorizationUsesContractViews(t *testing.T) {
+	adminURL := requiredIAMPostgresEnv(t, "S1_ADMIN_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	admin, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	const (
+		leaseID        = "0199f100-1000-7000-8000-000000000001"
+		monitorID      = "0199f100-2000-7000-8000-000000000001"
+		commandIntent  = "0199f100-3000-7000-8000-000000000001"
+		controlStateID = "0199f100-4000-7000-8000-000000000001"
+		assetLockID    = "0199f100-5000-7000-8000-000000000001"
+	)
+
+	now := time.Now().UTC()
+	if _, err := admin.Exec(ctx, `
+INSERT INTO core_registry.site_auto_control_leases (
+  id, tenant_id, site_id, status, armed_by, armed_at, expires_at,
+  allowed_capabilities, max_setpoint_step_c, supply_temp_min_c, supply_temp_max_c,
+  max_commands_per_hour, revision, created_at, updated_at
+) VALUES (
+  $1::uuid, $2::uuid, $3::uuid, 'ACTIVE', $4::uuid, $5, $6,
+  ARRAY['SET_CHILLED_WATER_TEMPERATURE_SETPOINT'], 1.5, 6.0, 12.0,
+  3, 1, $5, $5
+)
+`, leaseID, postgresTenantAID, postgresOwnerASite1ID, postgresOwnerAPrincipalID, now.Add(-10*time.Minute), now.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = admin.Exec(context.Background(), `DELETE FROM core_registry.site_auto_control_leases WHERE id = $1::uuid`, leaseID)
+	}()
+
+	if _, err := admin.Exec(ctx, `
+INSERT INTO core_registry.site_control_states (
+  id, tenant_id, site_id, mode, reason, updated_by, revision, created_at, updated_at
+) VALUES (
+  $1::uuid, $2::uuid, $3::uuid, 'MANUAL_OVERRIDE', 'test lock', $4::uuid, 1, $5, $5
+)
+`, controlStateID, postgresTenantAID, postgresOwnerASite1ID, postgresOwnerAPrincipalID, now); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = admin.Exec(context.Background(), `DELETE FROM core_registry.site_control_states WHERE id = $1::uuid`, controlStateID)
+	}()
+
+	if _, err := admin.Exec(ctx, `
+INSERT INTO core_registry.asset_control_locks (
+  id, tenant_id, site_id, asset_id, lock_mode, reason, updated_by, revision, created_at, updated_at
+) VALUES (
+  $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'MANUAL_LOCK', 'test asset lock', $5::uuid, 1, $6, $6
+)
+`, assetLockID, postgresTenantAID, postgresOwnerASite1ID, postgresSite1AssetID, postgresOwnerAPrincipalID, now); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = admin.Exec(context.Background(), `DELETE FROM core_registry.asset_control_locks WHERE id = $1::uuid`, assetLockID)
+	}()
+
+	if _, err := admin.Exec(ctx, `
+INSERT INTO core_registry.optimization_execution_monitors (
+  id, tenant_id, site_id, lease_id, recommendation_id, command_intent_id, device_id,
+  target_capability, baseline_supply_temp_c, applied_supply_temp_c, restore_supply_temp_c,
+  zone_temp_max_c, supply_temp_max_c, started_at, window_ends_at, status, created_at, updated_at
+) VALUES (
+  $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
+  'SET_CHILLED_WATER_TEMPERATURE_SETPOINT', 7.5, 8.5, 7.5,
+  26.0, 12.0, $8, $9, 'OBSERVING', $8, $8
+)
+`, monitorID, postgresTenantAID, postgresOwnerASite1ID, leaseID, postgresOptimizationRecommendationID, commandIntent, postgresSite1DeviceID, now.Add(-5*time.Minute), now.Add(25*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = admin.Exec(context.Background(), `DELETE FROM core_registry.optimization_execution_monitors WHERE id = $1::uuid`, monitorID)
+	}()
+
+	store := openPostgresAuthorizationStore(t, ctx)
+	workloadStore, ok := store.CommandAuthorization("command-policy-7", 3).(iam.CommandWorkloadAuthorizationStore)
+	if !ok {
+		t.Fatal("CommandAuthorization store does not implement CommandWorkloadAuthorizationStore")
+	}
+
+	lookup := iam.CommandWorkloadAuthorizationLookup{
+		SubjectIssuer: postgresFixtureIssuer,
+		Subject:       "owner-a",
+		TenantID:      postgresTenantAID,
+		SiteID:        postgresOwnerASite1ID,
+		DeviceID:      postgresSite1DeviceID,
+		WindowStart:   now.Add(-time.Hour),
+		Now:           now,
+	}
+	facts, err := workloadStore.LookupCommandWorkloadAuthorization(ctx, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !facts.PrincipalFound || facts.PrincipalID != postgresOwnerAPrincipalID || !facts.TenantMemberActive {
+		t.Fatalf("unexpected workload principal facts: %#v", facts)
+	}
+	if facts.DeviceSiteID != postgresOwnerASite1ID || facts.SiteControlMode != "MANUAL_OVERRIDE" || !facts.HasAssetControlLock {
+		t.Fatalf("unexpected site/lock facts: %#v", facts)
+	}
+	if facts.ActiveLease == nil || facts.ActiveLease.ID != leaseID || facts.ActiveLease.MaxCommandsPerHour != 3 || facts.RecentAutoCommandsLastHour != 1 {
+		t.Fatalf("unexpected lease/monitor facts: %#v", facts)
+	}
+
+	if _, err := admin.Exec(ctx, `UPDATE core_registry.site_control_states SET mode = 'REMOTE_AUTO', revision = 2 WHERE id = $1::uuid`, controlStateID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE core_registry.asset_control_locks SET lock_mode = 'UNLOCKED', revision = 2 WHERE id = $1::uuid`, assetLockID); err != nil {
+		t.Fatal(err)
+	}
+	unlockedFacts, err := workloadStore.LookupCommandWorkloadAuthorization(ctx, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unlockedFacts.SiteControlMode != "REMOTE_AUTO" || unlockedFacts.HasAssetControlLock {
+		t.Fatalf("expected REMOTE_AUTO and no asset lock, got %#v", unlockedFacts)
+	}
+
+	restoreSetpoint := 7.5
+	rollbackLookup := lookup
+	rollbackLookup.IsRollback = true
+	rollbackLookup.RequestedSetpoint = &restoreSetpoint
+	rollbackFacts, err := workloadStore.LookupCommandWorkloadAuthorization(ctx, rollbackLookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rollbackFacts.MatchingObservingRollback || rollbackFacts.ActiveLease == nil || rollbackFacts.ActiveLease.ID != leaseID {
+		t.Fatalf("expected matching observing rollback, got %#v", rollbackFacts)
+	}
+
+	mismatchSetpoint := 8.0
+	rollbackLookup.RequestedSetpoint = &mismatchSetpoint
+	mismatchFacts, err := workloadStore.LookupCommandWorkloadAuthorization(ctx, rollbackLookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mismatchFacts.MatchingObservingRollback || mismatchFacts.ActiveLease != nil {
+		t.Fatalf("unexpected rollback match on mismatched setpoint: %#v", mismatchFacts)
+	}
+
+	crossTenant := lookup
+	crossTenant.TenantID = postgresTenantBID
+	crossFacts, err := workloadStore.LookupCommandWorkloadAuthorization(ctx, crossTenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if crossFacts.DeviceSiteID != "" || crossFacts.ActiveLease != nil || crossFacts.HasAssetControlLock || crossFacts.RecentAutoCommandsLastHour != 0 {
+		t.Fatalf("command workload facts leaked across tenants: %#v", crossFacts)
 	}
 }
 

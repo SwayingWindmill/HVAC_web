@@ -12,8 +12,6 @@ const [
   domain,
   clickHouseClient,
   projector,
-  projectorModule,
-  queryModule,
   cubeModel,
   cubeViews,
   queryClient,
@@ -31,8 +29,6 @@ const [
   read('modules/energy/internal/energy/projector.go'),
   read('modules/energy/internal/clickhouse/client.go'),
   read('modules/energy/cmd/energy-projector/main.go'),
-  read('modules/energy/go.mod'),
-  read('modules/telemetry/go.mod'),
   read('semantic/cube/model/cubes/energy_facts.yml'),
   read('semantic/cube/model/views/energy.yml'),
   read('modules/telemetry/internal/cube/client.go'),
@@ -125,8 +121,8 @@ for (const marker of [
 ]) {
   assert(projector.includes(marker), `missing analytics projector runtime marker ${marker}`);
 }
-assert(!projectorModule.includes('telemetry-runtime-service'), 'analytics projector must not import Telemetry Runtime implementation');
-assert(!queryModule.includes('analytics-read-model-projector'), 'Query Service must not import Analytics Projector implementation');
+assert(!projector.includes('modules/telemetry/pkg/telemetry'), 'analytics projector must not import Telemetry Runtime implementation');
+assert(!queryClient.includes('modules/energy'), 'Query Service must not import Analytics Projector implementation');
 
 for (const marker of ['max_data_watermark', 'max_dataset_revision', 'period_end', 'access_policy']) {
   assert(cubeModel.includes(marker), `missing Cube semantic marker ${marker}`);

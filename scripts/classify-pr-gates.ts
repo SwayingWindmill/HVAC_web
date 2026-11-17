@@ -65,7 +65,7 @@ async function changedFiles(): Promise<string[]> {
 const files = [...new Set(await changedFiles())];
 const isGoCheckInput = (file: string): boolean => file.endsWith('.go')
   || /(?:^|\/)go\.(?:mod|sum)$/u.test(file)
-  || ['go.work', 'go.work.sum', '.golangci.yml', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs', 'scripts/lib/go-workspace.mjs'].includes(file);
+  || ['go.work', 'go.work.sum', '.golangci.yml', 'scripts/run-go.mjs', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs', 'scripts/lib/go-workspace.mjs', 'scripts/lib/go-workspace.d.mts'].includes(file);
 
 // Every Phase 1 migration is listed here; a change to one reruns the migration integration test.
 const phase1Migrations = new Set(
@@ -170,9 +170,9 @@ for (const file of files) {
     add(unitProfiles, ['web']);
     addReason(file, 'dependency lock changed; compile and unit checks run, database and browser gates stay selective');
   });
-  match(file === 'go.work' || file === 'go.work.sum', () => {
+  match(file === 'go.mod' || file === 'go.sum' || file === 'go.work' || file === 'go.work.sum', () => {
     add(unitProfiles, ['platform', 'registry', 'telemetry', 'command', 'alarm', 'workorder', 'analytics']);
-    addReason(file, 'Go workspace graph changed');
+    addReason(file, 'Go workspace or root module graph changed');
   });
   if (isGoCheckInput(file)) {
     add(unitProfiles, ['go']);
@@ -293,7 +293,7 @@ for (const file of files) {
       'scripts/test-pr-gate-classifier.ts',
       'scripts/update-package-script-long-chain-baseline.mjs',
     ].includes(file), () => {});
-    scriptMatch(['scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs', 'scripts/lib/go-workspace.mjs'].includes(file), () => {});
+    scriptMatch(['scripts/run-go.mjs', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs', 'scripts/lib/go-workspace.mjs', 'scripts/lib/go-workspace.d.mts'].includes(file), () => {});
     scriptMatch([
       'scripts/coverage-baseline.json',
       'scripts/check-coverage-regression.ts',

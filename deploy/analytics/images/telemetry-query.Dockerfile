@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 FROM golang:1.27.4-bookworm AS build
 WORKDIR /src
-COPY go.work go.work.sum ./
+COPY go.mod go.sum go.work go.work.sum ./
 COPY libs ./libs
 COPY modules ./modules
 COPY services ./services

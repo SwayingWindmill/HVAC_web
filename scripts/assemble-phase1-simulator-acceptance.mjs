@@ -1,5 +1,6 @@
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { readGoWorkspace } from './lib/go-workspace.mjs';
 
 const root = resolve(process.cwd());
 const matrix = JSON.parse(await readFile(resolve(root, 'deploy/acceptance/phase1-simulator-acceptance.v1.json'), 'utf8'));
@@ -19,10 +20,7 @@ for (const gate of matrix.gates) {
   }
 }
 
-const goWork = await readFile(resolve(root, 'go.work'), 'utf8');
-const workspaceModules = [...goWork.matchAll(/^\s*(\.\/(?:libs|services|tools)\/[^\s)]+)\s*$/gm)]
-  .map((match) => match[1].replace(/^\.\//, ''))
-  .sort();
+const workspaceModules = [...readGoWorkspace(root).modules].sort();
 const goVulnReports = await Promise.all([1, 2, 3, 4].map(async (index) => {
   const path = resolve(root, `out/security/go-vuln-shard-${index}-of-4.json`);
   try {
@@ -40,7 +38,7 @@ const duplicateModules = [...scanCounts.entries()].filter(([, count]) => count !
 const unexpectedModules = [...scanCounts.keys()].filter((modulePath) => !workspaceModules.includes(modulePath));
 const goVulnCoverageComplete = goVulnReports.every((item) => item.report?.schemaVersion === 1
   && item.report?.status === 'passed'
-  && item.report?.govulncheckVersion === 'v1.1.4'
+  && item.report?.govulncheckVersion === 'v1.9.0'
   && item.report?.shard?.index === item.index
   && item.report?.shard?.count === 4
   && item.report?.workspaceModuleCount === workspaceModules.length)

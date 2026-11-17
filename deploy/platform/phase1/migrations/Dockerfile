@@ -137,6 +137,7 @@ COPY modules/command/migrations/008_command_precondition_mode.sql /opt/hvac/repo
 COPY modules/command/migrations/command-template-capability-sync.sql /opt/hvac/repo/modules/command/migrations/command-template-capability-sync.sql
 COPY modules/command/migrations/command_intent_trace_context.sql /opt/hvac/repo/modules/command/migrations/command_intent_trace_context.sql
 COPY infra/registry/postgres/init/registry-tags-and-template-read.sql /opt/hvac/repo/infra/registry/postgres/init/registry-tags-and-template-read.sql
+COPY infra/registry/postgres/init/iam-registry-read-views.sql /opt/hvac/repo/infra/registry/postgres/init/iam-registry-read-views.sql
 COPY modules/alarm/migrations/001_s4_alarm_runtime.sql /opt/hvac/repo/modules/alarm/migrations/001_s4_alarm_runtime.sql
 COPY modules/alarm/migrations/002_s4_alarm_lifecycle.sql /opt/hvac/repo/modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 COPY modules/alarm/migrations/003_s4_tenant_scope.sql /opt/hvac/repo/modules/alarm/migrations/003_s4_tenant_scope.sql

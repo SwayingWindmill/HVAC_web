@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,12 +16,28 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
 )
 
+type fakePointHealthChecker struct {
+	mu  sync.Mutex
+	err error
+}
+
+func (checker *fakePointHealthChecker) setErr(err error) {
+	checker.mu.Lock()
+	defer checker.mu.Unlock()
+	checker.err = err
+}
+
+func (checker *fakePointHealthChecker) CheckTelemetryPointHealth(context.Context, string, string, []string, []string) error {
+	checker.mu.Lock()
+	defer checker.mu.Unlock()
+	return checker.err
+}
+
 type fakeAutoControlStore struct {
 	lease            *AutoControlLeaseRecord
 	leaseErr         error
 	siteCtx          AutoControlSiteContext
 	siteCtxErr       error
-	healthErr        error
 	dispatchedRecs   []Recommendation
 	monitors         []OptimizationExecutionMonitorRecord
 	heartbeatCalls   int
@@ -44,10 +61,6 @@ func (store *fakeAutoControlStore) ActiveAutoControlLease(context.Context, strin
 
 func (store *fakeAutoControlStore) LoadAutoControlSiteContext(context.Context, string, string, string, time.Time) (AutoControlSiteContext, error) {
 	return store.siteCtx, store.siteCtxErr
-}
-
-func (store *fakeAutoControlStore) CheckSiteTelemetryHealth(context.Context, string, string, []string) error {
-	return store.healthErr
 }
 
 func (store *fakeAutoControlStore) RecordAutomatedDispatch(
@@ -257,17 +270,23 @@ func testAutoRecommendation(createdAt time.Time) Recommendation {
 		InputSnapshotID:    "01990000-1930-7000-8000-000000000001",
 		DeploymentRevision: "01990000-1960-7000-8000-000000000001",
 		Approval:           intelligencemodel.RecommendationDraft,
-		Baseline:           map[string]any{"supplyTempC": 7.0},
-		Objective:          map[string]any{"objective": "COST"},
-		Constraints:        []map[string]any{{"supplyTempMinC": 6.0}},
-		Candidate:          map[string]any{"supplyTempC": 8.0},
-		ExpectedImpact:     map[string]any{"dailyEnergyDeltaKWh": -180.0},
-		Uncertainty:        map[string]any{"energyP90KWh": 60.0},
-		Risk:               map[string]any{"comfortRisk": "LOW"},
-		RollbackPlan:       map[string]any{"restoreSupplyTempC": 7.0},
-		VerificationPlan:   map[string]any{"windowMinutes": 30},
-		CreatedAt:          createdAt,
-		ValidUntil:         &validUntil,
+		Baseline: intelligencemodel.RecommendationBaseline{
+			DailyEnergyKWh: 2400, DailyCost: 360, SupplyTempC: 7.0, ZoneTempC: 23.0,
+		},
+		Objective: intelligencemodel.RecommendationObjective{Kind: "COST"},
+		Constraints: []intelligencemodel.RecommendationConstraint{
+			{Kind: "SUPPLY_TEMP", MinC: float64Ptr(6.0)},
+		},
+		Candidate: intelligencemodel.RecommendationCandidate{
+			SupplyTempC: 8.0, ProjectedZoneTempC: 23.3, DailyEnergyKWh: 2220, DailyCost: 333,
+		},
+		ExpectedImpact:   intelligencemodel.RecommendationExpectedImpact{EnergySavingKWhPerDay: 180.0, CostSavingPerDay: 27.0},
+		Uncertainty:      intelligencemodel.RecommendationUncertainty{EnergyP90KWh: 60.0, ZoneTempP90C: 0.2},
+		Risk:             intelligencemodel.RecommendationRisk{Level: "LOW", ComfortMarginC: 1.5},
+		RollbackPlan:     intelligencemodel.RecommendationRollbackPlan{RestoreSupplyTempC: float64Ptr(7.0)},
+		VerificationPlan: intelligencemodel.RecommendationVerificationPlan{WindowMinutes: 30},
+		CreatedAt:        createdAt,
+		ValidUntil:       &validUntil,
 	}
 }
 
@@ -281,6 +300,7 @@ func TestAutoControllerTryDispatchPreconditionsAndHappyPath(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{})
 		out, err := ctrl.TryDispatch(context.Background(), testAutoRecommendation(now.Add(-5*time.Minute)), now)
 		if err != nil {
 			t.Fatal(err)
@@ -363,15 +383,15 @@ func TestAutoControllerTryDispatchPreconditionsAndHappyPath(t *testing.T) {
 				tc.mutateObs(&obs)
 			}
 			store := &fakeAutoControlStore{
-				lease:     testAutoLease(now),
-				siteCtx:   siteCtx,
-				healthErr: tc.healthErr,
+				lease:   testAutoLease(now),
+				siteCtx: siteCtx,
 			}
 			disp := &fakeDispatcher{}
 			ctrl, err := NewAutoController(store, &fakeTelemetryReader{obs: obs}, disp, func() time.Time { return now }, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
+			ctrl.WithPointHealth(&fakePointHealthChecker{err: tc.healthErr})
 			out, err := ctrl.TryDispatch(context.Background(), rec, now)
 			if err != nil {
 				t.Fatal(err)
@@ -400,6 +420,7 @@ func TestAutoControllerTryDispatchPreconditionsAndHappyPath(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{})
 		rec := testAutoRecommendation(now.Add(-5 * time.Minute))
 		out, err := ctrl.TryDispatch(context.Background(), rec, now)
 		if err != nil {
@@ -454,6 +475,7 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{})
 		summary, err := ctrl.RunMonitorPass(context.Background(), base.Add(30*time.Minute))
 		if err != nil {
 			t.Fatal(err)
@@ -510,6 +532,7 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			ctrl.WithPointHealth(&fakePointHealthChecker{})
 			summary, err := ctrl.RunMonitorPass(context.Background(), base.Add(10*time.Minute))
 			if err != nil {
 				t.Fatal(err)
@@ -534,9 +557,8 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 		restore := 7.0
 		monID := "01990000-9900-7000-8000-000000000010"
 		store := &fakeAutoControlStore{
-			lease:     testAutoLease(base),
-			siteCtx:   testAutoSiteCtx(),
-			healthErr: errors.New("OFFLINE"),
+			lease:   testAutoLease(base),
+			siteCtx: testAutoSiteCtx(),
 			monitors: []OptimizationExecutionMonitorRecord{{
 				ID:                 monID,
 				TenantID:           "01990000-3000-7000-8000-000000000001",
@@ -553,6 +575,7 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 				Status:             ExecutionMonitorObserving,
 			}},
 		}
+		healthChecker := &fakePointHealthChecker{err: errors.New("OFFLINE")}
 		reader := &fakeTelemetryReader{obs: testLiveObservation(base, 8.0, 24.0)}
 		disp := &fakeDispatcher{
 			decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
@@ -563,6 +586,7 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		ctrl.WithPointHealth(healthChecker)
 
 		// T+2m: first unhealthy sample sets TelemetryUnhealthySince, no trip yet.
 		if _, err := ctrl.RunMonitorPass(context.Background(), base.Add(2*time.Minute)); err != nil {
@@ -573,7 +597,7 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 		}
 
 		// T+4m: telemetry recovers -> clears TelemetryUnhealthySince.
-		store.healthErr = nil
+		healthChecker.setErr(nil)
 		if _, err := ctrl.RunMonitorPass(context.Background(), base.Add(4*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
@@ -582,7 +606,7 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 		}
 
 		// T+5m then T+11m: unhealthy for >5m triggers rollback + trip.
-		store.healthErr = errors.New("OFFLINE")
+		healthChecker.setErr(errors.New("OFFLINE"))
 		if _, err := ctrl.RunMonitorPass(context.Background(), base.Add(5*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
@@ -629,6 +653,7 @@ func TestAutoControllerRunMonitorPass(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		ctrl.WithPointHealth(&fakePointHealthChecker{})
 		summary, err := ctrl.RunMonitorPass(context.Background(), base.Add(8*time.Minute))
 		if err != nil {
 			t.Fatal(err)

@@ -3,12 +3,12 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// The Go version and module directories (e.g. "cmd/energy-api") listed in go.work.
+// The Go version and module directories ('.' or "cmd/energy-api") listed in go.work.
 export function readGoWorkspace(root) {
   const workspace = readFileSync(join(root, 'go.work'), 'utf8');
   const goVersion = /^go (\S+)$/m.exec(workspace)?.[1];
   if (!goVersion) throw new Error('go.work has no go directive');
-  const modules = [...workspace.matchAll(/^\s*\.\/((?:cmd|libs|modules|services|tools)\/[^\s)]+|deploy\/platform\/phase1\/cd)\s*$/gm)].map((match) => match[1]);
+  const modules = [...workspace.matchAll(/^\s*(\.|\.\/(?:cmd|libs|modules|services|tools)\/[^\s)]+|\.\/deploy\/platform\/phase1\/cd)\s*$/gm)].map((m) => m[1].replace(/^\.\//, ''));
   if (modules.length === 0) throw new Error('go.work lists no modules');
   return { goVersion, modules };
 }

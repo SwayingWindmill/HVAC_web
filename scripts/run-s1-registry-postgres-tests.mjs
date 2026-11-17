@@ -1802,16 +1802,6 @@ try {
   expectEqual(iamDenied, '1', 'explicit deny fixture');
   report.assertions.iamFixtures = { delegated: iamDelegated, denied: iamDenied };
 
-  await runIAMGoTests();
-  report.assertions.iamAuthorizationStore = 'passed';
-  await runCoreGoTests();
-  report.assertions.coreRegistryStore = 'passed';
-  await runGatewayRoutingGoTests();
-  await runConnectivityGoTests();
-  report.assertions.gatewayRegistryRouting = 'passed';
-  await runPlantTwinGoTests();
-  report.assertions.plantTwinViews = 'passed';
-
   const optimizationPolicyId = '01990000-1910-7000-8000-000000000001';
   const optimizationPolicyVersionId = '01990000-1920-7000-8000-000000000001';
   const optimizationInputSnapshotId = '01990000-1930-7000-8000-000000000001';
@@ -2117,6 +2107,15 @@ try {
     obsoleteDispatchPrivileges,
     runtimeRls: optimizationRls,
   };
+  await runIAMGoTests();
+  report.assertions.iamAuthorizationStore = 'passed';
+  await runCoreGoTests();
+  report.assertions.coreRegistryStore = 'passed';
+  await runGatewayRoutingGoTests();
+  await runConnectivityGoTests();
+  report.assertions.gatewayRegistryRouting = 'passed';
+  await runPlantTwinGoTests();
+  report.assertions.plantTwinViews = 'passed';
 
   const invalidTimezone = psql(`
     INSERT INTO core_registry.sites (id, tenant_id, code, display_name, timezone, status, revision, created_at, updated_at)

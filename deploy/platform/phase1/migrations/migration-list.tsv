@@ -94,6 +94,7 @@ hvac_s1|infra/connectivity/postgres/init/gateway-tunnel-audit.sql
 hvac_s1|infra/registry/postgres/init/registry-outbox-delivery-grants.sql
 hvac_s1|infra/registry/postgres/init/plant-twin-relationships-and-roles.sql
 hvac_s1|infra/registry/postgres/init/registry-tags-and-template-read.sql
+hvac_s1|infra/registry/postgres/init/iam-registry-read-views.sql
 hvac_s2|infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
 hvac_s2|infra/telemetry/postgres/init/003-s2-telemetry-ingest.sql

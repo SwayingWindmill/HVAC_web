@@ -439,18 +439,18 @@ type COPModelSolver struct {
 
 // ShadowEvaluation is what a shadow solver made of one Optimization run.
 type ShadowEvaluation struct {
-	Solver         string             `json:"solver"`
-	Mode           string             `json:"mode"`
-	Outcome        string             `json:"outcome"`
-	Reason         string             `json:"reason,omitempty"`
-	Fit            *PlantFit          `json:"fit,omitempty"`
-	CVRMSE         *float64           `json:"cvRmse"`
-	CondenserReset map[string]any     `json:"condenserReset"`
-	EnergyResponse map[string]any     `json:"energyResponse,omitempty"`
-	ZoneResponse   map[string]any     `json:"zoneResponse,omitempty"`
-	Candidates     []map[string]any   `json:"candidates,omitempty"`
-	Staging        *StagingEvaluation `json:"staging,omitempty"`
-	Recommendation *Recommendation    `json:"recommendation"`
+	Solver         string                `json:"solver"`
+	Mode           string                `json:"mode"`
+	Outcome        string                `json:"outcome"`
+	Reason         string                `json:"reason,omitempty"`
+	Fit            *PlantFit             `json:"fit,omitempty"`
+	CVRMSE         *float64              `json:"cvRmse"`
+	CondenserReset *ShadowCondenserReset `json:"condenserReset"`
+	EnergyResponse *ShadowEnergyResponse `json:"energyResponse,omitempty"`
+	ZoneResponse   *ShadowZoneResponse   `json:"zoneResponse,omitempty"`
+	Candidates     []ShadowCandidate     `json:"candidates,omitempty"`
+	Staging        *StagingEvaluation    `json:"staging,omitempty"`
+	Recommendation *Recommendation       `json:"recommendation"`
 }
 
 const (
@@ -476,8 +476,9 @@ func (solver COPModelSolver) Recommend(ctx context.Context, request Request, at 
 // searches. The zone response stays the policy's; the energy response is the fit's.
 func (solver COPModelSolver) Evaluate(ctx context.Context, request Request, at time.Time) ShadowEvaluation {
 	evaluation := ShadowEvaluation{
-		Solver: ChillerCOPSolverName, Mode: "SHADOW",
-		CondenserReset: map[string]any{"status": "NOT_AVAILABLE", "reason": "NO_CONDENSER_SETPOINT"},
+		Solver:         ChillerCOPSolverName,
+		Mode:           "SHADOW",
+		CondenserReset: &ShadowCondenserReset{Status: "NOT_AVAILABLE", Reason: "NO_CONDENSER_SETPOINT"},
 	}
 	if err := request.Validate(); err != nil {
 		evaluation.Outcome, evaluation.Reason = ShadowInvalidRequest, err.Error()
@@ -517,36 +518,49 @@ func (solver COPModelSolver) Evaluate(ctx context.Context, request Request, at t
 	step := constraints.MaxSupplyTempStep
 	up, _, _ := plantEnergy(step)
 	down, _, _ := plantEnergy(-step)
-	evaluation.EnergyResponse = map[string]any{
-		"source": "FITTED_FROM_HISTORY", "dailyEnergyDeltaKWhPerSupplyTempC": round((up-down)/(2*step), 2),
-		"referenceChillerEnergyKWh": round(reference, 1), "referenceSamples": referenceSamples, "referenceHours": copReferenceHours,
-		"replacesPolicyValue": policy.DailyEnergyDeltaPerSupplyTempC,
+	evaluation.EnergyResponse = &ShadowEnergyResponse{
+		Source:                            "FITTED_FROM_HISTORY",
+		DailyEnergyDeltaKWhPerSupplyTempC: round((up-down)/(2*step), 2),
+		ReferenceChillerEnergyKWh:         round(reference, 1),
+		ReferenceSamples:                  referenceSamples,
+		ReferenceHours:                    copReferenceHours,
+		ReplacesPolicyValue:               policy.DailyEnergyDeltaPerSupplyTempC,
 	}
-	evaluation.ZoneResponse = map[string]any{"source": "POLICY", "zoneTempDeltaCPerSupplyTempC": policy.ZoneTempDeltaPerSupplyTempC, "zoneTempUncertaintyP90C": policy.ZoneTempUncertaintyP90C}
+	evaluation.ZoneResponse = &ShadowZoneResponse{
+		Source:                       "POLICY",
+		ZoneTempDeltaCPerSupplyTempC: policy.ZoneTempDeltaPerSupplyTempC,
+		ZoneTempUncertaintyP90C:      policy.ZoneTempUncertaintyP90C,
+	}
 	costPerKWh := baseline.DailyCost / baseline.DailyEnergyKWh
 	energyP90 := 1.2816 * *fit.CVRMSEPower * reference
-	var best map[string]any
+	var best *ShadowCandidate
 	var bestCost, bestMargin float64
 	for _, delta := range []float64{-step, 0, step} {
 		supply := baseline.SupplyTempC + delta
 		energy, _, extrapolated := plantEnergy(delta)
 		zone := baseline.ZoneTempC + policy.ZoneTempDeltaPerSupplyTempC*delta
-		candidate := map[string]any{
-			"supplyTempC": supply, "projectedZoneTempC": zone, "chillerEnergyDeltaKWh": round(energy-reference, 2),
-			"dailyEnergyKWh": math.Max(0, baseline.DailyEnergyKWh+energy-reference), "extrapolated": extrapolated,
+		dailyEnergy := math.Max(0, baseline.DailyEnergyKWh+energy-reference)
+		candidate := ShadowCandidate{
+			SupplyTempC:           supply,
+			ProjectedZoneTempC:    zone,
+			ChillerEnergyDeltaKWh: round(energy-reference, 2),
+			DailyEnergyKWh:        dailyEnergy,
+			DailyCost:             dailyEnergy * costPerKWh,
+			Extrapolated:          extrapolated,
 		}
-		candidate["dailyCost"] = candidate["dailyEnergyKWh"].(float64) * costPerKWh
 		zoneLower, zoneUpper := zone-policy.ZoneTempUncertaintyP90C, zone+policy.ZoneTempUncertaintyP90C
 		switch {
 		case supply < constraints.SupplyTempMinC || supply > constraints.SupplyTempMaxC:
-			candidate["feasible"], candidate["reason"] = false, "SUPPLY_TEMP"
+			candidate.Feasible, candidate.Reason = false, "SUPPLY_TEMP"
 		case zoneLower < constraints.ZoneTempMinC || zoneUpper > constraints.ZoneTempMaxC:
-			candidate["feasible"], candidate["reason"] = false, "ZONE_COMFORT"
+			candidate.Feasible, candidate.Reason = false, "ZONE_COMFORT"
 		default:
-			candidate["feasible"] = true
-			cost := candidate["dailyCost"].(float64)
-			if best == nil || cost < bestCost-1e-9 {
-				best, bestCost, bestMargin = candidate, cost, math.Min(zoneLower-constraints.ZoneTempMinC, constraints.ZoneTempMaxC-zoneUpper)
+			candidate.Feasible = true
+			if best == nil || candidate.DailyCost < bestCost-1e-9 {
+				copyCandidate := candidate
+				best = &copyCandidate
+				bestCost = candidate.DailyCost
+				bestMargin = math.Min(zoneLower-constraints.ZoneTempMinC, constraints.ZoneTempMaxC-zoneUpper)
 			}
 		}
 		evaluation.Candidates = append(evaluation.Candidates, candidate)
@@ -556,37 +570,37 @@ func (solver COPModelSolver) Evaluate(ctx context.Context, request Request, at t
 		return evaluation
 	}
 	riskLevel := "LOW"
-	if bestMargin <= math.Max(0.5, 2*policy.ZoneTempUncertaintyP90C) || best["extrapolated"].(bool) {
+	if bestMargin <= math.Max(0.5, 2*policy.ZoneTempUncertaintyP90C) || best.Extrapolated {
 		riskLevel = "MEDIUM"
 	}
+	cvRmsePower := *fit.CVRMSEPower
+	extrapolated := best.Extrapolated
+	savingWithinEnergyUncertainty := math.Abs(baseline.DailyEnergyKWh-best.DailyEnergyKWh) <= energyP90
 	recommendation := Recommendation{
 		ID: deterministicV7(request.OptimizationRunID, "recommendation:"+ChillerCOPSolverName, request.ValidFrom.UTC()), TenantID: request.TenantID, SiteID: request.SiteID,
 		InputSnapshotID: request.InputSnapshotID, DeploymentRevision: request.DeploymentRevisionID,
-		Baseline:  map[string]any{"dailyEnergyKWh": baseline.DailyEnergyKWh, "dailyCost": baseline.DailyCost, "supplyTempC": baseline.SupplyTempC, "zoneTempC": baseline.ZoneTempC},
-		Objective: map[string]any{"kind": request.Objective, "horizon": request.Horizon, "horizonMinutes": request.HorizonMinutes},
-		Constraints: []map[string]any{
-			{"kind": "SUPPLY_TEMP", "minC": constraints.SupplyTempMinC, "maxC": constraints.SupplyTempMaxC, "maxStepC": constraints.MaxSupplyTempStep},
-			{"kind": "ZONE_COMFORT", "minC": constraints.ZoneTempMinC, "maxC": constraints.ZoneTempMaxC},
-			{"kind": "CURRENT_STATE_REVALIDATION", "required": true},
+		Baseline: intelligencemodel.RecommendationBaseline{
+			DailyEnergyKWh: baseline.DailyEnergyKWh, DailyCost: baseline.DailyCost, SupplyTempC: baseline.SupplyTempC, ZoneTempC: baseline.ZoneTempC,
 		},
-		Candidate: map[string]any{"supplyTempC": best["supplyTempC"], "projectedZoneTempC": best["projectedZoneTempC"], "dailyEnergyKWh": best["dailyEnergyKWh"], "dailyCost": best["dailyCost"]},
-		ExpectedImpact: map[string]any{
-			"energySavingKWhPerDay": baseline.DailyEnergyKWh - best["dailyEnergyKWh"].(float64), "costSavingPerDay": baseline.DailyCost - bestCost,
+		Objective:   intelligencemodel.RecommendationObjective{Kind: request.Objective, Horizon: request.Horizon, HorizonMinutes: request.HorizonMinutes},
+		Constraints: frozenRecommendationConstraints(constraints),
+		Candidate: intelligencemodel.RecommendationCandidate{
+			SupplyTempC: best.SupplyTempC, ProjectedZoneTempC: best.ProjectedZoneTempC, DailyEnergyKWh: best.DailyEnergyKWh, DailyCost: best.DailyCost,
 		},
-		Uncertainty: map[string]any{"energyP90KWh": round(energyP90, 1), "energyP90Source": "FITTED_CV_RMSE", "zoneTempP90C": policy.ZoneTempUncertaintyP90C, "cvRmsePower": *fit.CVRMSEPower},
-		Risk: map[string]any{
-			"level": riskLevel, "comfortMarginC": bestMargin, "extrapolated": best["extrapolated"],
-			"savingWithinEnergyUncertainty": math.Abs(baseline.DailyEnergyKWh-best["dailyEnergyKWh"].(float64)) <= energyP90,
+		ExpectedImpact: intelligencemodel.RecommendationExpectedImpact{
+			EnergySavingKWhPerDay: baseline.DailyEnergyKWh - best.DailyEnergyKWh, CostSavingPerDay: baseline.DailyCost - bestCost,
 		},
-		RollbackPlan: map[string]any{
-			"restoreSupplyTempC": baseline.SupplyTempC,
-			"conditions":         []string{"zone_comfort_violation", "energy_saving_not_observed", "operator_cancelled"},
+		Uncertainty: intelligencemodel.RecommendationUncertainty{
+			EnergyP90KWh: round(energyP90, 1), EnergyP90Source: "FITTED_CV_RMSE", ZoneTempP90C: policy.ZoneTempUncertaintyP90C, CVRMSEPower: &cvRmsePower,
 		},
-		VerificationPlan: map[string]any{
-			"windowMinutes": 30, "requiredSignals": []string{"supply_temperature", "zone_temperature", "site_load"},
-			"successCriteria": []string{"zone_temperature_within_frozen_constraint", "site_load_not_worse_than_baseline"},
+		Risk: intelligencemodel.RecommendationRisk{
+			Level: riskLevel, ComfortMarginC: bestMargin, Extrapolated: &extrapolated, SavingWithinEnergyUncertainty: &savingWithinEnergyUncertainty,
 		},
-		Approval: intelligencemodel.RecommendationDraft, ValidUntil: timePointer(at.UTC().Add(intelligencemodel.DefaultRecommendationTTL)), CreatedAt: at.UTC(),
+		RollbackPlan:     standardRollbackPlan(baseline.SupplyTempC),
+		VerificationPlan: standardVerificationPlan(),
+		Approval:         intelligencemodel.RecommendationDraft,
+		ValidUntil:       timePointer(at.UTC().Add(intelligencemodel.DefaultRecommendationTTL)),
+		CreatedAt:        at.UTC(),
 	}
 	if err = recommendation.ValidateForApproval(); err != nil {
 		evaluation.Outcome, evaluation.Reason = ShadowInfeasible, err.Error()

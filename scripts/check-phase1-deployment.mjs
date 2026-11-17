@@ -309,7 +309,7 @@ assert(JSON.stringify([...classifiedServiceNames].sort()) === JSON.stringify(com
 for (const [service, entrypoint] of Object.entries(canonicalSourceEntrypoints)) {
   const block = serviceBlocksEarly.find(([, name]) => name === service)?.[2] ?? '';
   assert(block.includes(`SERVICE_PACKAGE: ./${entrypoint}`), `${service} must build from canonical source entrypoint ${entrypoint}`);
-  assert(goWork.includes(`./${entrypoint}`), `go.work must register canonical source entrypoint ${entrypoint}`);
+  assert(/^\s*\.$/m.test(goWork) || goWork.includes(`./${entrypoint}`), `go.work must register ${entrypoint}`);
 }
 for (const service of [
   ...(runtimeInventory.classes?.defaultPublic ?? []),

@@ -1,65 +1,13 @@
 go 1.27.4
 
 use (
-	./cmd/connectivity
-	./cmd/energy-api
-	./cmd/maintenance-worker
-	./cmd/metric-worker
-	./cmd/scheduler
-	./cmd/telemetry-worker
+	.
 	./cmd/wecom-alert-adapter
-	./deploy/platform/phase1/cd
-	./libs/alarmauth
-	./libs/alarmmodel
-	./libs/analyticsmodel
-	./libs/commandauth
 	./libs/commandmodel
 	./libs/edgecontrol
-	./libs/energyseries
 	./libs/grant
 	./libs/identitycontext
-	./libs/intelligencemodel
-	./libs/limitpolicy
-	./libs/measurement
-	./libs/nameplate
 	./libs/observability
-	./libs/oidctest
-	./libs/operationsauditevent
-	./libs/ownershipregistry
-	./libs/planttwin
-	./libs/registryauth
-	./libs/schedulerjob
-	./libs/schemagate
-	./libs/sessionevent
-	./libs/sessionstore
-	./libs/tariffmodel
-	./libs/telemetryauth
 	./libs/telemetryhistorymodel
-	./libs/testpki
-	./libs/workloadtls
-	./libs/workorderauth
-	./libs/workordermodel
-	./modules/alarm
-	./modules/audit
-	./modules/command
-	./modules/connectivity
-	./modules/energy
-	./modules/iam
-	./modules/maintenance
-	./modules/metric
-	./modules/registry
-	./modules/scheduler
-	./modules/telemetry
-	./modules/workorder
-	./services/fdd-service
-	./services/forecast-service
-	./services/identity-service
-	./services/mv-service
-	./services/notification-service
-	./services/optimization-service
-	./services/report-service
-	./services/settlement-service
 	./tools/eg8200-simulator
-	./tools/oidc-test-provider
-	./tools/s0-auth-fixture
 )
