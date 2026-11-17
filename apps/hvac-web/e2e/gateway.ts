@@ -368,6 +368,44 @@ export class Gateway {
   ];
   /** The Operations Agent's Agent Sessions for the Site. */
   readonly assistant = new AssistantOwner();
+  sites: Json[] = fixture<Json>('sites.json').items;
+  readonly offlineGateways = new Set<string>();
+  readonly configShadows = new Map<string, Json>();
+  readonly extraCrossSiteAssets: Json[] = [];
+  readonly extraCrossSiteDevices: Json[] = [];
+  private p1Seq = 100;
+  readonly templateRevisions: Json[] = [
+    {
+      id: '01910000-7100-7000-8000-000000000001',
+      tenantId: principal.context.tenantId,
+      templateId: '01910000-7000-7000-8000-000000000001',
+      templateKey: 'chiller-standard',
+      templateKind: 'DEVICE',
+      revisionNumber: 1,
+      status: 'RELEASED',
+      payload: {
+        deviceType: 'CHILLER',
+        standardPoints: [
+          {
+            pointCode: 'chw_supply_temp',
+            sourceKey: 'chw_supply_temp',
+            displayName: '冷冻水供水温度',
+            pointType: 'TELEMETRY',
+            valueType: 'NUMBER',
+            unit: 'degC',
+            writable: false,
+            sampleIntervalMs: 5000,
+            publishIntervalMs: 5000,
+            staleAfterMs: 15000,
+          },
+        ],
+      },
+      releaseReferences: { registrySchema: 'v1' },
+      releasedAt: '2026-10-01T00:00:00.000Z',
+    },
+  ];
+  readonly templateAssignments: Json[] = [];
+  readonly assignedTemplateKeyByTargetId = new Map<string, { templateKey: string; templateRevisionId: string }>();
   readonly concentratorStates = new Map<string, Json>();
   readonly gatewayCredentialsState = new Map<string, { revoked: boolean; enrollmentSeq: number; certSeq: number; records: Json[] }>();
   readonly gatewayQuarantineState = new Map<string, Json[]>();
@@ -998,11 +1036,93 @@ export class Gateway {
     return { status: 204, body: undefined };
   }
 
+  private nextUuidV7(segment = '9100'): string {
+    this.p1Seq += 1;
+    return `01910000-${segment}-7000-8000-${String(this.p1Seq).padStart(12, '0')}`;
+  }
+
+  setGatewayOffline(gatewayId: string, offline: boolean) {
+    if (offline) {
+      this.offlineGateways.add(gatewayId);
+    } else {
+      this.offlineGateways.delete(gatewayId);
+    }
+  }
+
+  setGatewayShadowState(gatewayId: string, shadow: Json) {
+    this.configShadows.set(gatewayId, shadow);
+  }
+
+  setDeviceTags(deviceId: string, tags: Record<string, string>) {
+    this.assetModel.devices = (this.assetModel.devices as Json[]).map((device) =>
+      device.id === deviceId ? { ...device, tags } : device,
+    );
+  }
+
+  setAssetTags(assetId: string, tags: Record<string, string>) {
+    this.assetModel.assets = (this.assetModel.assets as Json[]).map((asset) =>
+      asset.id === assetId ? { ...asset, tags } : asset,
+    );
+  }
+
+  addCrossSiteSample(site: Json, asset?: Json, device?: Json) {
+    if (!this.sites.some((item) => item.id === site.id)) {
+      this.sites = [...this.sites, site];
+    }
+    if (asset) this.extraCrossSiteAssets.push(asset);
+    if (device) this.extraCrossSiteDevices.push(device);
+  }
+
+  private getOrInitConfigShadow(gatewayId: string): Json {
+    const existing = this.configShadows.get(gatewayId);
+    if (existing) return existing;
+    const initial: Json = {
+      tenantId: this.assetModel.tenantId,
+      gatewayId,
+      syncStatus: 'UNCONFIGURED',
+      drift: [],
+    };
+    this.configShadows.set(gatewayId, initial);
+    return initial;
+  }
+
   // The page names each request by its position in the batch, so recorded items answer by Device.
   private snapshotBatch(body: Json): Json {
     const items = body.requests.map((request: Json) => {
       const recorded = this.snapshots.items.find((item: Json) => item.deviceId === request.deviceId);
-      if (!recorded) throw new Error(`no recorded Snapshot for Device ${request.deviceId}`);
+      if (!recorded) {
+        const snapNow = new Date().toISOString();
+        const values = (Array.isArray(request.keys) ? request.keys : []).map((key: string) => ({
+          key,
+          state: 'MISSING',
+          freshness: 'MISSING',
+          missingReason: 'NEVER_OBSERVED',
+          policyRevision: 1,
+        }));
+        return {
+          requestId: request.requestId,
+          deviceId: request.deviceId,
+          status: 'OK',
+          snapshot: {
+            schemaVersion: 1,
+            deviceId: request.deviceId,
+            tenantId: this.assetModel.tenantId,
+            siteId: SITE_ID,
+            businessRevision: 1,
+            evaluatedAt: snapNow,
+            evaluationAvailability: 'AVAILABLE',
+            availabilityReasons: [],
+            presence: {
+              applicability: 'APPLICABLE',
+              currentState: 'UNKNOWN',
+              policyRevision: 1,
+            },
+            telemetryReadiness: 'MISSING',
+            displayState: 'UNKNOWN',
+            values,
+          },
+        };
+      }
       if (recorded.status === 'OK' && Array.isArray(request.keys) && Array.isArray(recorded.snapshot?.values)) {
         const byKey = new Map<string, Json>(
           recorded.snapshot.values.map((entry: Json) => [entry.key, entry] as const),
@@ -1052,18 +1172,48 @@ export class Gateway {
     }
     const userAdmin = this.userAdmin(method, path, body);
     if (userAdmin) return userAdmin;
-    if (method === 'GET' && path === '/api/v1/sites') return { body: fixture('sites.json') };
-    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}`) return { body: fixture<Json>('sites.json').items[0] };
-    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/devices`) {
-      return { body: { items: this.assetModel.devices, hasMore: false, nextCursor: null } };
-    }
+    if (method === 'GET' && path === '/api/v1/sites') return { body: { items: this.sites, hasMore: false, nextCursor: null } };
+    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}`) return { body: this.sites.find((item) => item.id === SITE_ID) ?? this.sites[0] };
+    const registryP1Reply = this.registryP1(method, path, query, body, now);
+    if (registryP1Reply) return registryP1Reply;
+    const shadowReply = this.gatewayConfigShadow(method, path, body, csrfToken, now);
+    if (shadowReply) return shadowReply;
     const gatewayCredentialReply = this.gatewayCredentials(method, path, body, csrfToken, now);
     if (gatewayCredentialReply) return gatewayCredentialReply;
     const gatewayDiagnosticsReply = this.gatewayDiagnostics(method, path, query, body, csrfToken, now);
     if (gatewayDiagnosticsReply) return gatewayDiagnosticsReply;
     const concentratorReply = this.concentrators(method, path, body, csrfToken, now);
     if (concentratorReply) return concentratorReply;
-    if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: this.assetModel };
+    const assetModelMatch = method === 'GET' ? path.match(/^\/api\/v1\/sites\/([^/]+)\/asset-model$/) : null;
+    if (assetModelMatch) {
+      const targetSiteId = decodeURIComponent(assetModelMatch[1]!);
+      if (targetSiteId === SITE_ID) return { body: this.assetModel };
+      if (this.sites.some((item) => item.id === targetSiteId)) {
+        const siteAssets = this.extraCrossSiteAssets.filter((item) => item.siteId === targetSiteId);
+        const siteDevices = this.extraCrossSiteDevices.filter((item) => item.siteId === targetSiteId);
+        return {
+          body: {
+            schemaVersion: 2,
+            tenantId: this.assetModel.tenantId,
+            siteId: targetSiteId,
+            spaces: [],
+            assets: siteAssets,
+            devices: siteDevices,
+            sensors: [],
+            telemetryPoints: [],
+            relationships: [],
+            counts: {
+              spaces: 0,
+              assets: siteAssets.length,
+              deviceEndpoints: siteDevices.length,
+              physicalSensors: 0,
+              points: 0,
+            },
+          },
+        };
+      }
+      return { status: 404, body: { type: 'about:blank', title: 'Resource not found', status: 404, detail: 'Site not found.', instance: path, code: 'RESOURCE_NOT_FOUND', traceId: '0'.repeat(32), retryable: false } };
+    }
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/data-gaps`) return { body: { items: this.dataGaps } };
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/tariff`) {
       return this.tariff ? { body: this.tariff } : {
@@ -1832,6 +1982,425 @@ export class Gateway {
       this.gatewayPacketCaptureState.set(gatewayId, stoppedState);
       return { body: stoppedState };
     }
+    return undefined;
+  }
+
+  private gatewayConfigShadow(
+    method: string,
+    path: string,
+    body: Json | null,
+    csrfToken: string | undefined,
+    now: string,
+  ): { status?: number; body: unknown } | undefined {
+    const match = path.match(/^\/api\/v1\/gateways\/([^/]+)\/config-shadow$/);
+    if (!match) return undefined;
+    const gatewayId = decodeURIComponent(match[1]!);
+    const refuse = (status: number, code: string, detail: string) => ({
+      status,
+      body: { type: 'about:blank', title: detail, status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
+    });
+
+    const gatewayDevice = (this.assetModel.devices as Json[]).find((d) => d.id === gatewayId && d.deviceType === 'GATEWAY');
+    if (!gatewayDevice) return refuse(404, 'GATEWAY_NOT_FOUND', 'Gateway not found');
+
+    const activePrincipal = this.principalOverride ?? principal;
+    const caps = new Set<string>(activePrincipal.authorization?.capabilities ?? []);
+    if (method === 'GET') {
+      if (!caps.has('device.read')) return refuse(403, 'CREDENTIAL_FORBIDDEN', 'device.read required');
+      return { body: this.getOrInitConfigShadow(gatewayId) };
+    }
+    if (method === 'PUT') {
+      if (!caps.has('device.write')) return refuse(403, 'CREDENTIAL_FORBIDDEN', 'device.write required');
+      if (!csrfToken) return refuse(403, 'CSRF_INVALID', 'CSRF token required');
+      const credState = this.gatewayCredentialsState.get(gatewayId);
+      if (credState?.revoked) return refuse(409, 'GATEWAY_REVOKED', 'Gateway identity has been revoked.');
+
+      const reason = String(body?.reason ?? '').trim();
+      if (!reason) return refuse(400, 'ENROLLMENT_REJECTED', 'reason is required');
+
+      const shadow = this.getOrInitConfigShadow(gatewayId);
+      const currentRev = Number(shadow.desired?.desiredRevision ?? 0);
+      if (body?.expectedDesiredRevision !== undefined && Number(body.expectedDesiredRevision) !== currentRev) {
+        return refuse(409, 'CONFIG_SHADOW_REVISION_CONFLICT', 'Config shadow desiredRevision conflict.');
+      }
+
+      const nextRev = currentRev + 1;
+      const desired: Json = {
+        desiredRevision: nextRev,
+        pointMappings: body?.pointMappings ?? shadow.desired?.pointMappings ?? [],
+        samplingPolicies: body?.samplingPolicies ?? shadow.desired?.samplingPolicies ?? [],
+        concentratorConfigs: body?.concentratorConfigs ?? shadow.desired?.concentratorConfigs ?? {},
+        updatedBy: activePrincipal.principalId,
+        reason,
+        createdAt: shadow.desired?.createdAt ?? now,
+        updatedAt: now,
+      };
+      const updatedShadow: Json = {
+        ...shadow,
+        desired,
+        syncStatus: 'PENDING_SYNC',
+        drift: [],
+      };
+      this.configShadows.set(gatewayId, updatedShadow);
+      return { body: updatedShadow };
+    }
+    return undefined;
+  }
+
+  private filterRegistryItems(
+    items: Json[],
+    query: URLSearchParams,
+    kind: 'ASSET' | 'DEVICE',
+  ): Json[] {
+    const status = query.get('status');
+    const assetType = query.get('assetType');
+    const deviceType = query.get('deviceType');
+    const spaceId = query.get('spaceId');
+    const templateKey = query.get('templateKey');
+    const templateRevisionId = query.get('templateRevisionId');
+    const rawTags = query.getAll('tag');
+
+    let spaceScope: Set<string> | null = null;
+    if (spaceId) {
+      spaceScope = new Set<string>([spaceId]);
+      let expanded = true;
+      while (expanded) {
+        expanded = false;
+        for (const sp of this.assetModel.spaces as Json[]) {
+          if (sp.parentSpaceId && spaceScope.has(sp.parentSpaceId) && !spaceScope.has(sp.id)) {
+            spaceScope.add(sp.id);
+            expanded = true;
+          }
+        }
+      }
+    }
+
+    return items.filter((item) => {
+      if (status && item.status !== status) return false;
+      if (kind === 'ASSET' && assetType && item.assetType !== assetType) return false;
+      if (kind === 'DEVICE' && deviceType && item.deviceType !== deviceType) return false;
+      if (spaceScope) {
+        const rels = this.assetModel.relationships as Json[];
+        const directSpace = rels.some(
+          (r) => !r.validTo && r.fromId === item.id && (r.role === 'INSTALLED_IN' || r.role === 'SERVES') && spaceScope!.has(r.toId),
+        );
+        const viaAsset = kind === 'DEVICE' && rels.some(
+          (devAsset) =>
+            !devAsset.validTo &&
+            devAsset.fromId === item.id &&
+            devAsset.toType === 'ASSET' &&
+            rels.some(
+              (assetSpace) =>
+                !assetSpace.validTo &&
+                assetSpace.fromId === devAsset.toId &&
+                (assetSpace.role === 'INSTALLED_IN' || assetSpace.role === 'SERVES') &&
+                spaceScope!.has(assetSpace.toId),
+            ),
+        );
+        if (!directSpace && !viaAsset) return false;
+      }
+      if (templateKey) {
+        const assigned = this.assignedTemplateKeyByTargetId.get(item.id);
+        if (!assigned || assigned.templateKey !== templateKey) return false;
+      }
+      if (templateRevisionId) {
+        const assigned = this.assignedTemplateKeyByTargetId.get(item.id);
+        if (!assigned || assigned.templateRevisionId !== templateRevisionId) return false;
+      }
+      for (const rawTag of rawTags) {
+        const itemTags: Record<string, string> = item.tags ?? {};
+        const sepIdx = rawTag.indexOf(':');
+        if (sepIdx >= 0) {
+          const key = rawTag.slice(0, sepIdx);
+          const val = rawTag.slice(sepIdx + 1);
+          if (itemTags[key] !== val) return false;
+        } else if (!Object.prototype.hasOwnProperty.call(itemTags, rawTag)) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+
+  private registryP1(
+    method: string,
+    path: string,
+    query: URLSearchParams,
+    body: Json | null,
+    now: string,
+  ): { status?: number; body: unknown } | undefined {
+    const refuse = (status: number, code: string, detail: string) => ({
+      status,
+      body: { type: 'about:blank', title: detail, status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
+    });
+
+    if (method === 'GET' && path === '/api/v1/templates') {
+      const kind = query.get('templateKind');
+      const byTemplateId = new Map<string, Json>();
+      for (const rev of this.templateRevisions) {
+        if (kind && rev.templateKind !== kind) continue;
+        const prev = byTemplateId.get(rev.templateId);
+        if (!prev || rev.revisionNumber > prev.revisionNumber) {
+          byTemplateId.set(rev.templateId, rev);
+        }
+      }
+      const items = Array.from(byTemplateId.values()).map((rev) => ({
+        id: rev.templateId,
+        tenantId: rev.tenantId,
+        templateKey: rev.templateKey,
+        templateKind: rev.templateKind,
+        latestRevisionId: rev.id,
+        latestRevisionNumber: rev.revisionNumber,
+        releasedAt: rev.releasedAt,
+        createdAt: rev.releasedAt,
+      }));
+      return { body: { items, hasMore: false, nextCursor: null } };
+    }
+
+    const revMatch = path.match(/^\/api\/v1\/templates\/revisions\/([^/]+)$/);
+    if (method === 'GET' && revMatch) {
+      const rev = this.templateRevisions.find((item) => item.id === decodeURIComponent(revMatch[1]!));
+      return rev ? { body: rev } : refuse(404, 'RESOURCE_NOT_FOUND', 'Template revision not found');
+    }
+
+    if (method === 'POST' && path === '/api/v1/templates/revisions') {
+      const existing = this.templateRevisions.filter((item) => item.templateKey === body?.templateKey);
+      const templateId = existing[0]?.templateId ?? this.nextUuidV7('7000');
+      const revisionNumber = existing.reduce((max, item) => Math.max(max, item.revisionNumber), 0) + 1;
+      const rev: Json = {
+        id: this.nextUuidV7('7100'),
+        tenantId: this.assetModel.tenantId,
+        templateId,
+        templateKey: body!.templateKey,
+        templateKind: body!.templateKind,
+        revisionNumber,
+        status: 'RELEASED',
+        payload: body!.payload ?? {},
+        releaseReferences: body!.releaseReferences ?? {},
+        releasedAt: now,
+      };
+      this.templateRevisions.unshift(rev);
+      return { status: 201, body: rev };
+    }
+
+    const assignMatch = path.match(/^\/api\/v1\/sites\/([^/]+)\/template-assignments$/);
+    if (method === 'GET' && assignMatch) {
+      const targetSiteId = decodeURIComponent(assignMatch[1]!);
+      const targetType = query.get('targetType');
+      const targetId = query.get('targetId');
+      const items = this.templateAssignments.filter(
+        (item) =>
+          item.siteId === targetSiteId &&
+          (!targetType || item.targetType === targetType) &&
+          (!targetId || item.targetId === targetId),
+      );
+      return { body: { items, hasMore: false, nextCursor: null } };
+    }
+
+    if (method === 'POST' && path === '/api/v1/templates/assignments') {
+      const rev = this.templateRevisions.find((item) => item.id === body?.templateRevisionId);
+      if (!rev) return refuse(404, 'RESOURCE_NOT_FOUND', 'Template revision not found');
+      for (const prev of this.templateAssignments) {
+        if (!prev.validTo && prev.targetType === body?.targetType && prev.targetId === body?.targetId) {
+          prev.validTo = now;
+        }
+      }
+      const created: Json = {
+        id: this.nextUuidV7('7200'),
+        tenantId: this.assetModel.tenantId,
+        siteId: body!.siteId,
+        targetType: body!.targetType,
+        targetId: body!.targetId,
+        templateRevisionId: body!.templateRevisionId,
+        validFrom: body!.effectiveAt ?? now,
+        revision: 1,
+      };
+      this.templateAssignments.unshift(created);
+      this.assignedTemplateKeyByTargetId.set(body!.targetId, {
+        templateKey: rev.templateKey,
+        templateRevisionId: rev.id,
+      });
+      if (body!.targetType === 'DEVICE' && Array.isArray(rev.payload?.standardPoints)) {
+        for (const pt of rev.payload.standardPoints as Json[]) {
+          const exists = (this.assetModel.telemetryPoints as Json[]).some(
+            (existing) => existing.reportingDeviceId === body!.targetId && existing.pointCode === pt.pointCode,
+          );
+          if (!exists) {
+            (this.assetModel.telemetryPoints as Json[]).push({
+              id: this.nextUuidV7('7300'),
+              tenantId: this.assetModel.tenantId,
+              siteId: body!.siteId,
+              reportingDeviceId: body!.targetId,
+              sensorId: null,
+              pointCode: pt.pointCode,
+              sourceKey: pt.sourceKey || pt.pointCode,
+              displayName: pt.displayName,
+              pointType: pt.pointType,
+              valueType: pt.valueType,
+              unit: pt.unit ?? null,
+              writable: Boolean(pt.writable),
+              sampleIntervalMs: pt.sampleIntervalMs ?? 5000,
+              publishIntervalMs: pt.publishIntervalMs ?? 5000,
+              staleAfterMs: pt.staleAfterMs ?? 15000,
+              counterDecreaseMode: pt.counterDecreaseMode ?? null,
+              counterRolloverModulus: pt.counterRolloverModulus ?? null,
+              sourceMetadata: { materializedByTemplateKey: rev.templateKey },
+              status: 'ACTIVE',
+              revision: 1,
+              createdAt: now,
+              updatedAt: now,
+            });
+          }
+        }
+        this.assetModel.counts = {
+          ...this.assetModel.counts,
+          points: (this.assetModel.telemetryPoints as Json[]).length,
+        };
+      }
+      return { status: 201, body: created };
+    }
+
+    if (method === 'GET' && path === '/api/v1/assets') {
+      const combined = [...(this.assetModel.assets as Json[]), ...this.extraCrossSiteAssets];
+      return { body: { items: this.filterRegistryItems(combined, query, 'ASSET'), hasMore: false, nextCursor: null } };
+    }
+    if (method === 'GET' && path === '/api/v1/devices') {
+      const combined = [...(this.assetModel.devices as Json[]), ...this.extraCrossSiteDevices];
+      return { body: { items: this.filterRegistryItems(combined, query, 'DEVICE'), hasMore: false, nextCursor: null } };
+    }
+
+    const siteAssetsMatch = path.match(/^\/api\/v1\/sites\/([^/]+)\/assets(?:\/([^/]+))?$/);
+    if (siteAssetsMatch) {
+      const siteId = decodeURIComponent(siteAssetsMatch[1]!);
+      const assetId = siteAssetsMatch[2] ? decodeURIComponent(siteAssetsMatch[2]) : null;
+      if (method === 'GET' && !assetId) {
+        const list = siteId === SITE_ID
+          ? (this.assetModel.assets as Json[])
+          : this.extraCrossSiteAssets.filter((item) => item.siteId === siteId);
+        return { body: { items: this.filterRegistryItems(list, query, 'ASSET'), hasMore: false, nextCursor: null } };
+      }
+      if (method === 'POST' && !assetId) {
+        const created: Json = {
+          id: this.nextUuidV7('7400'),
+          tenantId: this.assetModel.tenantId,
+          siteId,
+          code: body!.code,
+          displayName: body!.displayName,
+          assetType: body!.assetType,
+          status: body!.status ?? 'ACTIVE',
+          revision: 1,
+          createdAt: now,
+          updatedAt: now,
+          ...(body!.tags ? { tags: body!.tags } : {}),
+        };
+        if (siteId === SITE_ID) {
+          this.assetModel.assets = [...(this.assetModel.assets as Json[]), created];
+          this.assetModel.counts = { ...this.assetModel.counts, assets: this.assetModel.assets.length };
+        } else {
+          this.extraCrossSiteAssets.push(created);
+        }
+        return { status: 201, body: created };
+      }
+      if (method === 'PATCH' && assetId) {
+        const updateTarget = (list: Json[]) => {
+          const idx = list.findIndex((item) => item.id === assetId);
+          if (idx < 0) return null;
+          const prev = list[idx]!;
+          if (body?.meta?.expectedRevision !== undefined && body.meta.expectedRevision !== prev.revision) {
+            return 'CONFLICT' as const;
+          }
+          const next = {
+            ...prev,
+            code: body!.code ?? prev.code,
+            displayName: body!.displayName ?? prev.displayName,
+            assetType: body!.assetType ?? prev.assetType,
+            status: body!.status ?? prev.status,
+            tags: body!.tags ?? prev.tags ?? {},
+            revision: prev.revision + 1,
+            updatedAt: now,
+          };
+          list[idx] = next;
+          return next;
+        };
+        const updated =
+          updateTarget(this.assetModel.assets as Json[]) ??
+          updateTarget(this.extraCrossSiteAssets);
+        if (updated === 'CONFLICT') return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'Asset revision conflict');
+        if (!updated) return refuse(404, 'RESOURCE_NOT_FOUND', 'Asset not found');
+        return { body: updated };
+      }
+    }
+
+    const siteDevicesMatch = path.match(/^\/api\/v1\/sites\/([^/]+)\/devices(?:\/([^/]+))?$/);
+    if (siteDevicesMatch) {
+      const siteId = decodeURIComponent(siteDevicesMatch[1]!);
+      const deviceId = siteDevicesMatch[2] ? decodeURIComponent(siteDevicesMatch[2]) : null;
+      if (method === 'GET' && !deviceId) {
+        const list = siteId === SITE_ID
+          ? (this.assetModel.devices as Json[])
+          : this.extraCrossSiteDevices.filter((item) => item.siteId === siteId);
+        return { body: { items: this.filterRegistryItems(list, query, 'DEVICE'), hasMore: false, nextCursor: null } };
+      }
+      if (method === 'POST' && !deviceId) {
+        const created: Json = {
+          id: this.nextUuidV7('7500'),
+          tenantId: this.assetModel.tenantId,
+          siteId,
+          code: body!.code,
+          displayName: body!.displayName,
+          deviceType: body!.deviceType,
+          status: body!.status ?? 'ACTIVE',
+          revision: 1,
+          createdAt: now,
+          updatedAt: now,
+          ...(body!.tags ? { tags: body!.tags } : {}),
+        };
+        if (siteId === SITE_ID) {
+          this.assetModel.devices = [...(this.assetModel.devices as Json[]), created];
+          this.assetModel.counts = { ...this.assetModel.counts, deviceEndpoints: this.assetModel.devices.length };
+        } else {
+          this.extraCrossSiteDevices.push(created);
+        }
+        return { status: 201, body: created };
+      }
+      if (method === 'PATCH' && deviceId) {
+        const updateTarget = (list: Json[]) => {
+          const idx = list.findIndex((item) => item.id === deviceId);
+          if (idx < 0) return null;
+          const prev = list[idx]!;
+          if (body?.meta?.expectedRevision !== undefined && body.meta.expectedRevision !== prev.revision) {
+            return 'CONFLICT' as const;
+          }
+          const next = {
+            ...prev,
+            code: body!.code ?? prev.code,
+            displayName: body!.displayName ?? prev.displayName,
+            deviceType: body!.deviceType ?? prev.deviceType,
+            status: body!.status ?? prev.status,
+            tags: body!.tags ?? prev.tags ?? {},
+            revision: prev.revision + 1,
+            updatedAt: now,
+          };
+          list[idx] = next;
+          return next;
+        };
+        const updated =
+          updateTarget(this.assetModel.devices as Json[]) ??
+          updateTarget(this.extraCrossSiteDevices);
+        if (updated === 'CONFLICT') return refuse(409, 'REGISTRY_REVISION_CONFLICT', 'Device revision conflict');
+        if (!updated) return refuse(404, 'RESOURCE_NOT_FOUND', 'Device not found');
+        return { body: updated };
+      }
+    }
+
+    const devicePointsMatch = path.match(/^\/api\/v1\/devices\/([^/]+)\/points$/);
+    if (method === 'GET' && devicePointsMatch) {
+      const targetDeviceId = decodeURIComponent(devicePointsMatch[1]!);
+      const items = (this.assetModel.telemetryPoints as Json[]).filter(
+        (pt) => pt.reportingDeviceId === targetDeviceId,
+      );
+      return { body: { items, hasMore: false, nextCursor: null } };
+    }
 
     return undefined;
   }
@@ -1984,6 +2553,65 @@ export class Gateway {
       if (patch.modbusId !== undefined && new Set([2, 3, 4, 5, 10, 31]).has(Number(patch.modbusId))) {
         return refuse(409, 'CONCENTRATOR_UID_PROTECTED', 'Protected RS485 modbusId');
       }
+      if (this.offlineGateways.has(gatewayId)) {
+        if (body?.stageIfOffline !== true) {
+          return refuse(503, 'CONCENTRATOR_TRANSPORT_UNAVAILABLE', 'Gateway remote transport is offline');
+        }
+        const shadow = this.getOrInitConfigShadow(gatewayId);
+        const currentDesired = shadow.desired ?? {
+          desiredRevision: 0,
+          pointMappings: [],
+          samplingPolicies: [],
+          concentratorConfigs: {},
+          updatedBy: MY_ID,
+          reason: 'initial stage',
+          createdAt: now,
+          updatedAt: now,
+        };
+        const unitKey = String(unitId);
+        const existingUnit = currentDesired.concentratorConfigs?.[unitKey] ?? {};
+        const stagedParams = { ...state.params, ...patch };
+        const nextDesiredRev = Number(currentDesired.desiredRevision) + 1;
+        this.configShadows.set(gatewayId, {
+          ...shadow,
+          syncStatus: 'PENDING_SYNC',
+          desired: {
+            ...currentDesired,
+            desiredRevision: nextDesiredRev,
+            concentratorConfigs: {
+              ...currentDesired.concentratorConfigs,
+              [unitKey]: { ...existingUnit, params: stagedParams },
+            },
+            updatedBy: MY_ID,
+            reason,
+            updatedAt: now,
+          },
+        });
+        const audit = {
+          id: `01910000-1000-7000-8000-${reqSuffix}`,
+          unitId,
+          actorId: MY_ID,
+          operation: 'WRITE_PARAMS',
+          requestId,
+          outcome: 'STAGED_SHADOW',
+          reason,
+          diff: patch,
+          occurredAt: now,
+        };
+        state.recentAudits = [audit, ...state.recentAudits].slice(0, 20);
+        return {
+          body: {
+            gatewayId,
+            unitId,
+            requestId,
+            writtenCount: Object.keys(patch).length,
+            params: state.params,
+            audit,
+            staged: true,
+            desiredRevision: nextDesiredRev,
+          },
+        };
+      }
       const writtenCount = Object.keys(patch).length;
       state.params = { ...state.params, ...patch };
       const nextUnitId = Number(state.params.modbusId ?? unitId);
@@ -2030,6 +2658,66 @@ export class Gateway {
           }
           seen.add(eid);
         }
+      }
+      if (this.offlineGateways.has(gatewayId)) {
+        if (body?.stageIfOffline !== true) {
+          return refuse(503, 'CONCENTRATOR_TRANSPORT_UNAVAILABLE', 'Gateway remote transport is offline');
+        }
+        const shadow = this.getOrInitConfigShadow(gatewayId);
+        const currentDesired = shadow.desired ?? {
+          desiredRevision: 0,
+          pointMappings: [],
+          samplingPolicies: [],
+          concentratorConfigs: {},
+          updatedBy: MY_ID,
+          reason: 'initial stage',
+          createdAt: now,
+          updatedAt: now,
+        };
+        const unitKey = String(unitId);
+        const existingUnit = currentDesired.concentratorConfigs?.[unitKey] ?? {};
+        const stagedSlots = nextSlots.map((entry: Json) => ({ slot: Number(entry.slot), eid: Number(entry.eid) }));
+        const nextDesiredRev = Number(currentDesired.desiredRevision) + 1;
+        this.configShadows.set(gatewayId, {
+          ...shadow,
+          syncStatus: 'PENDING_SYNC',
+          desired: {
+            ...currentDesired,
+            desiredRevision: nextDesiredRev,
+            concentratorConfigs: {
+              ...currentDesired.concentratorConfigs,
+              [unitKey]: { ...existingUnit, eids: stagedSlots },
+            },
+            updatedBy: MY_ID,
+            reason,
+            updatedAt: now,
+          },
+        });
+        const audit = {
+          id: `01910000-2000-7000-8000-${reqSuffix}`,
+          unitId,
+          actorId: MY_ID,
+          operation: 'WRITE_EIDS',
+          requestId,
+          outcome: 'STAGED_SHADOW',
+          reason,
+          diff: { staged: true },
+          occurredAt: now,
+        };
+        state.recentAudits = [audit, ...state.recentAudits].slice(0, 20);
+        return {
+          body: {
+            gatewayId,
+            unitId,
+            requestId,
+            updatedSlots: 0,
+            chunkCount: 0,
+            slots: state.slots,
+            audit,
+            staged: true,
+            desiredRevision: nextDesiredRev,
+          },
+        };
       }
       let updatedSlots = 0;
       let chunkCount = 0;

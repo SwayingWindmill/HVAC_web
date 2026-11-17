@@ -22,7 +22,7 @@ import { pointIsTrusted } from '@/features/assets/operational-projection';
 import { deviceStatus, KEY_READINGS, POWER_KEY } from '../../realtime/device-presentation';
 import type { PlantDevice } from '../../realtime/plant-model';
 import { dayHistoryWindow, deviceDayHistoryQuery, MAX_HISTORY_KEYS } from '../device-history';
-import { boundAssetId, deviceLocation } from '../device-ledger';
+import { boundAssetId, deviceLocation, deviceTagTokens } from '../device-ledger';
 import { buildTimeSlots, fillGaugeSlots } from '../../trends/timeline';
 
 const siteRoute = getRouteApi('/_app/_site');
@@ -88,6 +88,7 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
   const capabilities = principal.authorization.capabilities;
   const status = deviceStatus(device);
   const assetId = boundAssetId(device);
+  const tags = deviceTagTokens(device);
   const points = device.row.operational.points;
 
   const workOrders = useQuery({
@@ -125,6 +126,20 @@ function DeviceDetail({ device, categoryLabel }: { readonly device: PlantDevice;
             </div>
           ))}
         </dl>
+
+        {tags.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-1.5" aria-label="设备标签">
+            <span className="text-xs text-muted-foreground">标签</span>
+            {tags.map((token) => (
+              <span
+                key={token}
+                className="rounded bg-secondary px-2 py-0.5 font-mono text-xs text-secondary-foreground"
+              >
+                {token}
+              </span>
+            ))}
+          </div>
+        ) : null}
 
         {assetId ? <ControlLockSummary siteId={site.id} assetId={assetId} myId={principal.principalId} timeZone={site.timezone} /> : null}
 

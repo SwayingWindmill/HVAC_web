@@ -13,3 +13,23 @@ export function deviceLocation(device: PlantDevice): string {
 export function boundAssetId(device: PlantDevice): string | null {
   return device.row.binding.state === 'bound' ? device.row.binding.asset.id : null;
 }
+
+/** Merged `key:value` tag tokens from the Device and its bound Asset(s). */
+export function deviceTagTokens(device: PlantDevice): string[] {
+  const tokens = new Set<string>();
+  const addTags = (tags?: Readonly<Record<string, string>>) => {
+    if (!tags) return;
+    for (const [key, value] of Object.entries(tags)) {
+      tokens.add(`${key}:${value}`);
+    }
+  };
+  addTags(device.row.device.tags);
+  if (device.row.binding.state === 'bound') {
+    addTags(device.row.binding.asset.tags);
+  } else if (device.row.binding.state === 'multi-bound') {
+    for (const item of device.row.binding.bindings) {
+      addTags(item.asset.tags);
+    }
+  }
+  return Array.from(tokens).sort((left, right) => left.localeCompare(right));
+}

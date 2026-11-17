@@ -10,10 +10,24 @@ const ROOT_REPO_VERIFY_DIR = '/mnt/e/Code/HVAC_web/.scratch/verify/connectivity-
 const SCREENSHOT_DIR = existsSync('/mnt/e/Code/HVAC_web/.git')
   ? ROOT_REPO_VERIFY_DIR
   : join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '.scratch', 'verify', 'connectivity-p1-gateway-diagnostics');
+const SHADOW_SHOT_DIR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+  '.scratch',
+  'verify',
+  'p1-web-governance',
+);
 
 function screenshotPath(fileName: string): string {
   mkdirSync(SCREENSHOT_DIR, { recursive: true });
   return join(SCREENSHOT_DIR, fileName);
+}
+
+function shadowShot(fileName: string): string {
+  mkdirSync(SHADOW_SHOT_DIR, { recursive: true });
+  return join(SHADOW_SHOT_DIR, fileName);
 }
 
 function grantDeviceWritePrincipal() {
@@ -326,4 +340,106 @@ test('gateway diagnostics support packet capture lifecycle, direction filtering,
   ]);
   expect(consoleErrors).toEqual([]);
   expect(pageErrors).toEqual([]);
+});
+
+test('gateway config shadow initializes mappings, recovers from 409 conflicts, and shows drift in light and dark themes', async ({
+  page,
+  gateway,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  gateway.principalOverride = grantDeviceWritePrincipal();
+
+  await page.goto(`/settings/integrations?site=${SITE_ID}`);
+  await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
+
+  const sheet = page.getByRole('dialog');
+  const shadowSection = sheet.getByRole('region', { name: '配置影子' });
+  await expect(shadowSection).toContainText('未配置');
+
+  await shadowSection.getByRole('button', { name: '初始化配置影子' }).click();
+  const editor = page.getByRole('dialog', { name: '编辑网关配置影子' });
+  await editor.getByRole('button', { name: '新增点位映射' }).click();
+  await editor.getByPlaceholder('rs485-u1:reg1').fill('rs485-u1:r1');
+  await editor.getByPlaceholder('chiller-01').first().fill('chiller-01');
+  await editor.getByLabel('主点位编码').fill('chw_supply_temp');
+  await editor.getByPlaceholder('chiller-02:supply_temp').fill('chiller-02:chw_supply_temp');
+
+  await editor.getByRole('button', { name: '新增采集周期' }).click();
+  await editor.getByPlaceholder('chiller-01').last().fill('chiller-01');
+  await editor.getByPlaceholder('全部点位').fill('chw_supply_temp');
+  await editor.getByLabel('变更原因（必填）').fill('初始化 1 号冷机回水复用映射与采样周期');
+  await editor.getByRole('button', { name: '保存期望配置' }).click();
+
+  await expect(editor).toHaveCount(0);
+  await expect(shadowSection).toContainText('待同步下发');
+  await expect(shadowSection).toContainText('v1');
+  await expect(shadowSection).toContainText('点位映射 1 条');
+  await expect(shadowSection).toContainText('采集周期 1 条');
+  await page.screenshot({ path: shadowShot('p1-shadow-light.png') });
+
+  // Simulate concurrent revision advance to verify 409 conflict & reload button inside editor.
+  await shadowSection.getByRole('button', { name: '编辑配置影子' }).click();
+  const staleEditor = page.getByRole('dialog', { name: '编辑网关配置影子' });
+  gateway.setGatewayShadowState(GATEWAY_ID, {
+    tenantId: '018f3d00-0000-7000-8000-000000000001',
+    gatewayId: GATEWAY_ID,
+    syncStatus: 'DRIFTED',
+    desired: {
+      desiredRevision: 2,
+      pointMappings: [
+        {
+          sourceChannel: 'rs485-u1:r1',
+          primaryDeviceKey: 'chiller-01',
+          primaryPointCode: 'chw_supply_temp',
+        },
+      ],
+      samplingPolicies: [],
+      concentratorConfigs: {},
+      updatedBy: '018f3e00-2000-7000-8000-000000000001',
+      reason: '其他管理员已调整配置',
+      createdAt: '2026-10-10T00:00:00.000Z',
+      updatedAt: '2026-10-10T01:00:00.000Z',
+    },
+    reported: {
+      reportedRevision: 2,
+      appliedStatus: 'PARTIAL',
+      pointMappings: [],
+      samplingPolicies: [],
+      concentratorConfigs: {},
+      driftDetails: [],
+      errorMessage: '边缘节点串口通道 rs485-u1 应用失败',
+      reportedAt: '2026-10-10T01:05:00.000Z',
+      updatedAt: '2026-10-10T01:05:00.000Z',
+    },
+    drift: [
+      {
+        section: 'POINT_MAPPINGS',
+        target: 'rs485-u1:r1',
+        reason: 'EDGE_APPLY_FAILED',
+        detail: '寄存器偏移未响应',
+      },
+    ],
+  });
+
+  await staleEditor.getByLabel('变更原因（必填）').fill('尝试覆盖保存');
+  await staleEditor.getByRole('button', { name: '保存期望配置' }).click();
+  await expect(staleEditor.getByRole('alert')).toContainText('配置影子的期望修订已被其他操作更新');
+  await staleEditor.getByRole('button', { name: '加载最新影子修订' }).click();
+  await staleEditor.getByRole('button', { name: '取消' }).click();
+
+  await shadowSection.getByRole('button', { name: '刷新影子' }).click();
+  await expect(shadowSection).toContainText('配置存在漂移');
+  await expect(shadowSection).toContainText('部分生效');
+  await expect(shadowSection).toContainText('寄存器偏移未响应');
+  await expect(shadowSection).toContainText('边缘节点串口通道 rs485-u1 应用失败');
+
+  await page.keyboard.press('Escape');
+  await page.getByRole('radiogroup', { name: '外观' }).getByRole('radio', { name: '深色' }).click();
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+    .toBe('dark');
+  await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
+  await expect(sheet.getByRole('region', { name: '配置影子' })).toContainText('配置存在漂移');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: shadowShot('p1-shadow-dark.png') });
 });

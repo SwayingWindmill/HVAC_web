@@ -4,8 +4,8 @@ The `/operations/systems-devices` route provides card-wall and ledger-table view
 
 ## Sub-features
 
-- `devices-wall-and-table` lists chillers, pumps, cooling towers, meters, and `WEATHER-STATION-01` while counting only observed telemetry points (`点位 11/11`, excluding command-only write points) and toggles between card wall and `表格` (`layout=table`).
-- `devices-inspector-drawer` opens `[role="dialog"]` (`?inspect=<DEVICE_ID>`), translates raw state enums (`RUNNING`) into Chinese labels (`运行状态`), and renders a 24-hour `.recharts-surface` trend chart.
+- `devices-wall-and-table` lists chillers, pumps, cooling towers, meters, and `WEATHER-STATION-01` while counting only observed telemetry points (`点位 11/11`, excluding command-only write points), filters by equipment/asset `?tag=` (`设备标签`), and toggles between card wall and `表格` (`layout=table`).
+- `devices-inspector-drawer` opens `[role="dialog"]` (`?inspect=<DEVICE_ID>`), renders bound/device `标签` chips when present, translates raw state enums (`RUNNING`) into Chinese labels (`运行状态`), and renders a 24-hour `.recharts-surface` trend chart.
 - `devices-work-order-and-explain` creates equipment-origin work orders (`domain: 'ASSET'`) and sends device questions to `AI 助手` via `分析原因`.
 
 ## How to get to it (user POV)
@@ -19,7 +19,7 @@ Preconditions:
 - Tier 1: run `CI=1 PLAYWRIGHT_PORT=5194 npm run web:e2e -- --workers=1 e2e/systems-devices.spec.ts`.
 
 - **Inspect ledger and table views.** Navigate to `/operations/systems-devices`, verify URL adopts default `site=`, confirm `CHILLER-01` displays `运行` and `点位 11/11`, and toggle `表格` (`layout=table`).
-- **Drive device inspector and work order.** Click `CHILLER-01`, confirm dialog shows `运行状态` (never `RUNNING`), `.recharts-surface` chart, `创建工单` (`sourceReferences` `ASSET`), and `分析原因` handoff to `AI 助手`.
+- **Drive device inspector, tag filter, and work order.** Select a `设备标签` option to verify URL `?tag=` filtering, click `CHILLER-01`, confirm dialog shows `标签` chips (when present), `运行状态` (never `RUNNING`), `.recharts-surface` chart, `创建工单` (`sourceReferences` `ASSET`), and `分析原因` handoff to `AI 助手`.
 - **Proof.** Save stdout and `1440×900` card/drawer PNGs under `.scratch/verify/<slug>/`.
 
 ## Gotchas

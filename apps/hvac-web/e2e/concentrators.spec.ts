@@ -339,3 +339,46 @@ test('Lane 9 & 10: read-only / no-read operator guard and full-page visual audit
   expect(fullOverflow).toBe(false);
   await page.screenshot({ path: screenshotPath('lane10-visual-audit.png'), fullPage: true });
 });
+
+test('Lane 11: offline gateway stages concentrator params into config shadow when stageIfOffline is checked', async ({
+  page,
+  gateway,
+}) => {
+  const p1Dir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '.scratch', 'verify', 'p1-web-governance');
+  mkdirSync(p1Dir, { recursive: true });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  gateway.principalOverride = grantDeviceWritePrincipal();
+  gateway.setGatewayOffline(GATEWAY_ID, true);
+
+  await page.goto(`/settings/integrations?site=${SITE_ID}&view=concentrators`);
+  await expect(page.getByLabel('无线集中器概览')).toContainText('433 MHz · SF9 · 20 dBm');
+
+  await page.getByLabel(/射频发射功率/).fill('22');
+  await page.getByRole('button', { name: '预览参数变更' }).click();
+  const dialog = page.getByRole('dialog', { name: '确认下发串口与射频参数到集中器 Flash？' });
+
+  // Without stageIfOffline checked, offline transport reports error clearly.
+  await dialog.getByLabel('变更原因（必填）').fill('尝试离线直接写参数');
+  await dialog.getByRole('button', { name: '确认写入 Flash' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('现场网关远程连接通道暂未就绪');
+
+  // Checking stageIfOffline stages the delta into the gateway Config Shadow instead.
+  await dialog.getByRole('checkbox', { name: /若网关离线，暂存至配置影子/ }).check();
+  await dialog.getByRole('button', { name: '确认写入或离线暂存' }).click();
+  await expect(dialog).toHaveCount(0);
+
+  await expect(page.getByRole('table', { name: '近期集中器变更记录' })).toContainText('已暂存待同步');
+  await page.screenshot({ path: join(p1Dir, 'p1-concentrator-staged-light.png') });
+
+  await page.getByRole('radiogroup', { name: '外观' }).getByRole('radio', { name: '深色' }).click();
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+    .toBe('dark');
+  await page.getByRole('tab', { name: '现场网关' }).click();
+  await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
+  const sheet = page.getByRole('dialog');
+  await expect(sheet.getByRole('region', { name: '配置影子' })).toContainText('待同步下发');
+  await expect(sheet.getByRole('region', { name: '配置影子' })).toContainText('UID 1 · 参数');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: join(p1Dir, 'p1-concentrator-staged-shadow-dark.png') });
+});

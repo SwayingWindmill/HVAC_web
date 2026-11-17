@@ -17,6 +17,7 @@ import {
   type PointMutation,
   type RebindRequest,
   type RegistryListParams,
+  type RegistrySearchParams,
   type ReleaseTemplateRequest,
   type RetireRequest,
   type Site,
@@ -26,6 +27,14 @@ import {
   type Space,
   type SpaceMutation,
   type TelemetryPoint,
+  type Template,
+  type TemplateAssignment,
+  type TemplateAssignmentCollection,
+  type TemplateAssignmentListParams,
+  type TemplateCollection,
+  type TemplateKind,
+  type TemplateListParams,
+  type TemplateRevision,
   uuidV7Schema,
 } from './generated/platformGateway.gen';
 
@@ -255,9 +264,122 @@ export type RegistrySiteAssetModel = SiteAssetModel;
 export type RegistryAssetCollection = AssetCollection;
 export type RegistryDeviceCollection = DeviceCollection;
 export type RegistryDeviceBindingCollection = DeviceBindingCollection;
+export type RegistryTemplateCollection = TemplateCollection;
+export type RegistryTemplateAssignmentCollection = TemplateAssignmentCollection;
 export type RegistryAsset = Asset;
 export type RegistryDevice = Device;
 export type RegistryDeviceBinding = DeviceBinding;
+export type RegistryTemplate = Template;
+export type RegistryTemplateRevision = TemplateRevision;
+export type RegistryTemplateAssignment = TemplateAssignment;
+export type RegistrySearchFilterParams = RegistrySearchParams;
+
+export const registryTemplateKeys = {
+  all: () => ['registry', 'templates'] as const,
+  list: (templateKind?: TemplateKind) => ['registry', 'templates', templateKind ?? 'ALL'] as const,
+  revision: (revisionId: string | null) => ['registry', 'template-revision', revisionId] as const,
+  siteAssignments: (siteId: string | null, targetType?: TemplateKind, targetId?: string | null) =>
+    ['registry', 'sites', siteId, 'template-assignments', targetType ?? 'ALL', targetId ?? 'ALL'] as const,
+};
+
+export const registryResourceFilterKeys = {
+  assets: (scope: 'all-sites' | string | null, params: Omit<RegistrySearchParams, 'limit' | 'cursor'>) =>
+    ['registry', 'filtered-assets', scope, params] as const,
+  devices: (scope: 'all-sites' | string | null, params: Omit<RegistrySearchParams, 'limit' | 'cursor'>) =>
+    ['registry', 'filtered-devices', scope, params] as const,
+};
+
+export function useRegistryTemplates(templateKind?: TemplateKind, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: registryTemplateKeys.list(templateKind),
+    queryFn: async ({ pageParam, signal }) => {
+      const params: TemplateListParams = { limit: DEFAULT_PAGE_SIZE };
+      if (templateKind) params.templateKind = templateKind;
+      if (typeof pageParam === 'string') params.cursor = pageParam;
+      return (await client.listTemplates(params, { signal })).data;
+    },
+    initialPageParam: INITIAL_CURSOR,
+    getNextPageParam: nextCursor,
+    enabled: registryQueryEnabled(enabled),
+    retry: retryRegistryQuery,
+  });
+}
+
+export function useRegistryTemplateRevision(revisionId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: registryTemplateKeys.revision(revisionId),
+    queryFn: async ({ signal }) => (await client.getTemplateRevision(registryId(revisionId!), { signal })).data,
+    enabled: registryQueryEnabled(enabled && Boolean(revisionId)),
+    retry: retryRegistryQuery,
+  });
+}
+
+export function useRegistrySiteTemplateAssignments(
+  siteId: string | null,
+  params: { targetType?: TemplateKind; targetId?: string } = {},
+  enabled = true,
+) {
+  return useInfiniteQuery({
+    queryKey: registryTemplateKeys.siteAssignments(siteId, params.targetType, params.targetId),
+    queryFn: async ({ pageParam, signal }) => {
+      const query: TemplateAssignmentListParams = { limit: DEFAULT_PAGE_SIZE };
+      if (params.targetType) query.targetType = params.targetType;
+      if (params.targetId) query.targetId = params.targetId;
+      if (typeof pageParam === 'string') query.cursor = pageParam;
+      return (await client.listSiteTemplateAssignments(registryId(siteId!), query, { signal })).data;
+    },
+    initialPageParam: INITIAL_CURSOR,
+    getNextPageParam: nextCursor,
+    enabled: registryQueryEnabled(enabled && Boolean(siteId)),
+    retry: retryRegistryQuery,
+  });
+}
+
+export function useRegistryFilteredAssets(
+  siteId: string | null,
+  allSites: boolean,
+  filters: Omit<RegistrySearchParams, 'limit' | 'cursor' | 'siteId'>,
+  enabled = true,
+) {
+  return useInfiniteQuery({
+    queryKey: registryResourceFilterKeys.assets(allSites ? 'all-sites' : siteId, filters),
+    queryFn: async ({ pageParam, signal }) => {
+      const params: RegistrySearchParams = { ...filters, limit: DEFAULT_PAGE_SIZE };
+      if (typeof pageParam === 'string') params.cursor = pageParam;
+      if (allSites) {
+        return (await client.listAssets(params, { signal })).data;
+      }
+      return (await client.listSiteAssets(registryId(siteId!), params, { signal })).data;
+    },
+    initialPageParam: INITIAL_CURSOR,
+    getNextPageParam: nextCursor,
+    enabled: registryQueryEnabled(enabled && (allSites || Boolean(siteId))),
+    retry: retryRegistryQuery,
+  });
+}
+
+export function useRegistryFilteredDevices(
+  siteId: string | null,
+  allSites: boolean,
+  filters: Omit<RegistrySearchParams, 'limit' | 'cursor' | 'siteId'>,
+  enabled = true,
+) {
+  return useInfiniteQuery({
+    queryKey: registryResourceFilterKeys.devices(allSites ? 'all-sites' : siteId, filters),
+    queryFn: async ({ pageParam, signal }) => {
+      const params: RegistrySearchParams = { ...filters, limit: DEFAULT_PAGE_SIZE };
+      if (typeof pageParam === 'string') params.cursor = pageParam;
+      if (allSites) {
+        return (await client.listDevices(params, { signal })).data;
+      }
+      return (await client.listSiteDevices(registryId(siteId!), params, { signal })).data;
+    },
+    initialPageParam: INITIAL_CURSOR,
+    getNextPageParam: nextCursor,
+    enabled: registryQueryEnabled(enabled && (allSites || Boolean(siteId))),
+    retry: retryRegistryQuery,
+  });
+}
 
 export async function getRegistrySpaceChildren(siteId: string, parentSpaceId: string | null, signal: AbortSignal): Promise<Space[]> {
   return collectCollection<Space>(

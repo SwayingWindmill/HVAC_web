@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
+import { GatewayConfigShadowSection } from './GatewayConfigShadowSection';
 import { GatewayPacketCaptureSection, GatewayQuarantineSection } from './GatewayDiagnosticsSections';
 import { gatewayCredentialApi, gatewayCredentialKey, gatewayCredentialListKey } from './gateway-credentials';
 
@@ -441,6 +442,8 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite }: {
           </div>
         )}
       </section>
+
+      <GatewayConfigShadowSection gateway={gateway} csrfToken={csrfToken} canWrite={canWrite} stopped={stopped} />
 
       <GatewayPacketCaptureSection gatewayId={gateway.id} csrfToken={csrfToken} canWrite={canWrite} />
 
