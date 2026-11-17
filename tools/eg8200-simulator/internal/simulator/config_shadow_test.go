@@ -643,11 +643,22 @@ func TestConfigShadowHotReloadDriverConfigsAndAutonomyPolicy(t *testing.T) {
 		publisher.registerShadowDriverPoints(cfg)
 		return nil
 	}
-	shadow.applyAutonomyHook = func(_ context.Context, policy GatewayAutonomyPolicy) error {
-		if err := runtime.ApplyAutonomyPolicy(policy); err != nil {
+	shadow.removeDriverHook = func(_ context.Context, deviceKey string) error {
+		if err := runtime.RemoveDriverProfile(deviceKey); err != nil {
 			return err
 		}
-		publisher.SetSnapshotInterval(policy.SnapshotInterval())
+		publisher.unregisterShadowDriverPoints(deviceKey)
+		return nil
+	}
+	shadow.applyAutonomyHook = func(_ context.Context, policy *GatewayAutonomyPolicy) error {
+		effective := edgecontrol.DefaultAutonomyPolicyConfig()
+		if policy != nil {
+			effective = *policy
+		}
+		if err := runtime.ApplyAutonomyPolicy(effective); err != nil {
+			return err
+		}
+		publisher.SetSnapshotInterval(effective.SnapshotInterval())
 		return nil
 	}
 
@@ -744,5 +755,210 @@ func TestConfigShadowHotReloadDriverConfigsAndAutonomyPolicy(t *testing.T) {
 	// Previous valid autonomyPolicy remains active after rejected revision.
 	if got := shadow.snapshot().AutonomyPolicy; got == nil || got.OfflineGraceSeconds != 45 {
 		t.Fatalf("expected previous valid autonomyPolicy retained after REJECTED revision, got %+v", got)
+	}
+}
+
+type closableShadowStubTransport struct {
+	*shadowStubTransport
+	onClose func()
+}
+
+func (c *closableShadowStubTransport) Close() error {
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return nil
+}
+
+func TestConfigShadowDriverDeleteRenamePolicyClearAndPartialPreservation(t *testing.T) {
+	t.Parallel()
+
+	config := loadGeneratedCentralPlantConfig(t)
+	at := time.Date(2026, 11, 17, 17, 30, 0, 0, time.UTC)
+	plant := NewPlant(config.Plant, config.Scenario, at)
+	runtime, err := NewEdgeControlRuntime(config, plant)
+	if err != nil {
+		t.Fatalf("NewEdgeControlRuntime() error = %v", err)
+	}
+
+	var closeMu sync.Mutex
+	closedByKey := map[string]int{}
+	runtime.SetDriverTransportFactory(func(profile edgecontrol.DeclarativeModbusProfile) (edgecontrol.ModbusRegisterTransport, error) {
+		return &closableShadowStubTransport{
+			shadowStubTransport: &shadowStubTransport{
+				holding: map[uint16]uint16{100: 75, 101: 0, 102: 120},
+			},
+			onClose: func() {
+				closeMu.Lock()
+				closedByKey[profile.ComponentID]++
+				closeMu.Unlock()
+			},
+		}, nil
+	})
+
+	dir := t.TempDir()
+	shadow := newEdgeConfigShadow(filepath.Join(dir, "config-shadow.v1.json"))
+	publisher := &MQTTPublisher{
+		gatewayID:               "0193f000-2000-7000-8000-000000000091",
+		pointByKey:              map[string]PointConfig{},
+		shadowPointKeysByDevice: map[string]map[string]struct{}{},
+		edgeRuntime:             runtime,
+		configShadow:            shadow,
+		snapshotInterval:        defaultMQTTFullSnapshotInterval,
+		lastPointStates:         map[string]lastEmittedPointState{},
+	}
+	shadow.applyDriverHook = func(_ context.Context, cfg GatewayModbusDriverConfig, profile edgecontrol.DeclarativeModbusProfile) error {
+		if err := runtime.ApplyDriverProfile(profile); err != nil {
+			return err
+		}
+		publisher.registerShadowDriverPoints(cfg)
+		return nil
+	}
+	shadow.removeDriverHook = func(_ context.Context, deviceKey string) error {
+		if err := runtime.RemoveDriverProfile(deviceKey); err != nil {
+			return err
+		}
+		publisher.unregisterShadowDriverPoints(deviceKey)
+		return nil
+	}
+	shadow.applyAutonomyHook = func(_ context.Context, policy *GatewayAutonomyPolicy) error {
+		effective := edgecontrol.DefaultAutonomyPolicyConfig()
+		if policy != nil {
+			effective = *policy
+		}
+		if err := runtime.ApplyAutonomyPolicy(effective); err != nil {
+			return err
+		}
+		publisher.SetSnapshotInterval(effective.SnapshotInterval())
+		return nil
+	}
+
+	validPolicy := &GatewayAutonomyPolicy{
+		Enabled:                            true,
+		OfflineGraceSeconds:                45,
+		DefaultChilledWaterSupplySetpointC: 8.0,
+		DefaultPumpFrequencyHz:             34.0,
+		MinPumpFrequencyHz:                 22.0,
+		MaxPumpFrequencyHz:                 46.0,
+		MinRunSeconds:                      90,
+		MinStopSeconds:                     60,
+		SnapshotIntervalSeconds:            60,
+	}
+	drvAux1 := GatewayModbusDriverConfig{
+		DeviceKey:         "PLC-AUX-01",
+		DriverType:        "MODBUS_TCP",
+		Endpoint:          "127.0.0.1:5502",
+		UnitID:            3,
+		CapabilityProfile: "THERMAL_ENERGY_METER",
+		TimeoutMS:         500,
+		Retries:           1,
+		Registers: []GatewayModbusRegisterMapping{
+			{PointCode: "aux_supply_temp_c", SemanticChannel: "SupplyTemperature", FunctionCode: 3, Address: 100, RegisterCount: 1, RawType: "INT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 0.1, PollPriority: "HIGH"},
+			{PointCode: "old_fault_pt", SemanticChannel: "Flow", FunctionCode: 3, Address: 101, RegisterCount: 1, RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, PollPriority: "HIGH"},
+		},
+	}
+
+	if rep, err := shadow.applyDesired(context.Background(), GatewayDesiredConfig{
+		DesiredRevision: 1,
+		DriverConfigs:   []GatewayModbusDriverConfig{drvAux1},
+		AutonomyPolicy:  validPolicy,
+	}); err != nil || rep.AppliedStatus != shadowAppliedStatusApplied {
+		t.Fatalf("rev 1 applyDesired failed: (%+v, %v)", rep, err)
+	}
+	if _, ok := publisher.lookupPoint("PLC-AUX-01", "old_fault_pt"); !ok {
+		t.Fatal("expected old_fault_pt registered after rev 1")
+	}
+
+	// Update PLC-AUX-01 removing old_fault_pt and changing scale/unit propagation + adding new_pt.
+	drvAux1Updated := drvAux1
+	drvAux1Updated.Registers = []GatewayModbusRegisterMapping{
+		{PointCode: "aux_supply_temp_c", SemanticChannel: "SupplyTemperature", FunctionCode: 3, Address: 100, RegisterCount: 1, RawType: "INT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 0.01, PollPriority: "HIGH"},
+		{PointCode: "new_return_pt", SemanticChannel: "ReturnTemperature", FunctionCode: 3, Address: 102, RegisterCount: 1, RawType: "INT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 0.1, PollPriority: "HIGH"},
+	}
+	if rep, err := shadow.applyDesired(context.Background(), GatewayDesiredConfig{
+		DesiredRevision: 2,
+		DriverConfigs:   []GatewayModbusDriverConfig{drvAux1Updated},
+		AutonomyPolicy:  validPolicy,
+	}); err != nil || rep.AppliedStatus != shadowAppliedStatusApplied {
+		t.Fatalf("rev 2 applyDesired failed: (%+v, %v)", rep, err)
+	}
+	if _, ok := publisher.lookupPoint("PLC-AUX-01", "old_fault_pt"); ok {
+		t.Fatal("expected removed register old_fault_pt purged from pointByKey")
+	}
+	if pt, ok := publisher.lookupPoint("PLC-AUX-01", "aux_supply_temp_c"); !ok || pt.Unit == "" {
+		t.Fatalf("expected updated pointByKey metadata overwritten with Unit, got (%+v, ok=%v)", pt, ok)
+	}
+	if _, ok := publisher.lookupPoint("PLC-AUX-01", "new_return_pt"); !ok {
+		t.Fatal("expected new_return_pt registered after rev 2")
+	}
+
+	// Partial failure: rename PLC-AUX-01 -> PLC-AUX-02 (succeeds) while invalid non-nil autonomyPolicy fails ->
+	// PLC-AUX-01 must be removed & closed, PLC-AUX-02 added, AND prevPolicy must be preserved!
+	drvAux2 := drvAux1Updated
+	drvAux2.DeviceKey = "PLC-AUX-02"
+	invalidPolicy := *validPolicy
+	invalidPolicy.OfflineGraceSeconds = 2
+	repPartial, err := shadow.applyDesired(context.Background(), GatewayDesiredConfig{
+		DesiredRevision: 3,
+		DriverConfigs:   []GatewayModbusDriverConfig{drvAux2},
+		AutonomyPolicy:  &invalidPolicy,
+	})
+	if err != nil || repPartial.AppliedStatus != shadowAppliedStatusPartial {
+		t.Fatalf("rev 3 expected PARTIAL, got (%+v, %v)", repPartial, err)
+	}
+	if _, ok := runtime.Host().Adapter("PLC-AUX-01"); ok {
+		t.Fatal("expected deleted/renamed PLC-AUX-01 unregistered from Host")
+	}
+	if _, ok := publisher.lookupPoint("PLC-AUX-01", "aux_supply_temp_c"); ok {
+		t.Fatal("expected PLC-AUX-01 purged from publisher.pointByKey")
+	}
+	if _, ok := runtime.Host().Adapter("PLC-AUX-02"); !ok {
+		t.Fatal("expected renamed PLC-AUX-02 active on Host")
+	}
+	if got := shadow.snapshot().AutonomyPolicy; got == nil || got.OfflineGraceSeconds != 45 {
+		t.Fatalf("expected prevPolicy preserved on PARTIAL autonomy failure, got %+v", got)
+	}
+	if !runtime.AutonomyPolicy().Enabled || publisher.SnapshotInterval() != 60*time.Second {
+		t.Fatalf("expected active runtime autonomy policy & 60s interval preserved on PARTIAL, got policy=%+v interval=%s", runtime.AutonomyPolicy(), publisher.SnapshotInterval())
+	}
+	closeMu.Lock()
+	aux1Closes := closedByKey["PLC-AUX-01"]
+	closeMu.Unlock()
+	if aux1Closes < 2 {
+		t.Fatalf("expected PLC-AUX-01 adapter closed on replace and delete (>=2), got %d", aux1Closes)
+	}
+
+	// Clearing autonomyPolicy (nil) must disable fallback and reset snapshotInterval to 300s.
+	repClearedPolicy, err := shadow.applyDesired(context.Background(), GatewayDesiredConfig{
+		DesiredRevision: 4,
+		DriverConfigs:   []GatewayModbusDriverConfig{drvAux2},
+		AutonomyPolicy:  nil,
+	})
+	if err != nil || repClearedPolicy.AppliedStatus != shadowAppliedStatusApplied {
+		t.Fatalf("rev 4 clear policy failed: (%+v, %v)", repClearedPolicy, err)
+	}
+	if got := shadow.snapshot().AutonomyPolicy; got != nil {
+		t.Fatalf("expected committed autonomyPolicy cleared to nil, got %+v", got)
+	}
+	if runtime.AutonomyPolicy().Enabled || publisher.SnapshotInterval() != 300*time.Second {
+		t.Fatalf("expected fallback disabled & 300s snapshotInterval when autonomyPolicy=nil, got policy=%+v interval=%s", runtime.AutonomyPolicy(), publisher.SnapshotInterval())
+	}
+
+	// Clearing all drivers (empty slice) removes PLC-AUX-02 and clears dynamic channels.
+	repClearedDrivers, err := shadow.applyDesired(context.Background(), GatewayDesiredConfig{
+		DesiredRevision: 5,
+		DriverConfigs:   []GatewayModbusDriverConfig{},
+	})
+	if err != nil || repClearedDrivers.AppliedStatus != shadowAppliedStatusApplied {
+		t.Fatalf("rev 5 clear drivers failed: (%+v, %v)", repClearedDrivers, err)
+	}
+	if _, ok := runtime.Host().Adapter("PLC-AUX-02"); ok || runtime.HasDynamicChannels() {
+		t.Fatal("expected PLC-AUX-02 removed and HasDynamicChannels()==false after empty driverConfigs")
+	}
+	closeMu.Lock()
+	aux2Closes := closedByKey["PLC-AUX-02"]
+	closeMu.Unlock()
+	if aux2Closes < 1 {
+		t.Fatalf("expected PLC-AUX-02 adapter closed on removal, got %d", aux2Closes)
 	}
 }

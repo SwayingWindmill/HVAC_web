@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -75,12 +76,16 @@ type EdgeControlRuntime struct {
 	autonomyFallback *edgecontrol.AutonomousFallbackController
 
 	driverTransportFactory func(edgecontrol.DeclarativeModbusProfile) (edgecontrol.ModbusRegisterTransport, error)
+	factoryClosersByDevice map[string]io.Closer
 
-	bindingsByDevice map[string]map[edgecontrol.SemanticChannel]string
-	commandByKey     map[string]edgeCommandBinding
-	addressByPointID map[string]string
-	leaseByAddress   map[string]bool
-	pendingByAddress map[string]pendingEdgeCommand
+	bindingsByDevice        map[string]map[edgecontrol.SemanticChannel]string
+	commandByKey            map[string]edgeCommandBinding
+	addressByPointID        map[string]string
+	staticPointAddresses    map[string]struct{}
+	dynamicChannelsByDevice map[string][]edgecontrol.ChannelDescriptor
+	latestShadowSamples     []Measurement
+	leaseByAddress          map[string]bool
+	pendingByAddress        map[string]pendingEdgeCommand
 }
 
 func NewEdgeControlRuntime(config Config, plant *Plant) (*EdgeControlRuntime, error) {
@@ -144,13 +149,17 @@ func newEdgeControlRuntime(config Config, adapters []edgecontrol.DeviceAdapter, 
 
 	commandByKey := map[string]edgeCommandBinding{}
 	leaseByAddress := map[string]bool{}
+	staticPointAddresses := make(map[string]struct{}, len(config.Points))
 	staleAfterByAddress := make(map[string]time.Duration, len(config.Points))
 	limits := make([]edgeNumericLimit, 0)
 	for _, point := range config.Points {
-		address := point.DeviceID + "/" + point.PointCode
+		defaultAddress := point.DeviceID + "/" + point.PointCode
+		address := defaultAddress
 		if mapped, ok := addressByPointID[point.PointID]; ok {
 			address = mapped
 		}
+		staticPointAddresses[defaultAddress] = struct{}{}
+		staticPointAddresses[address] = struct{}{}
 		staleAfter, _ := time.ParseDuration(point.StaleAfter) // config.Validate already owns interval validation.
 		staleAfterByAddress[address] = staleAfter
 		if point.PointType != "COMMAND" {
@@ -223,18 +232,20 @@ func newEdgeControlRuntime(config Config, adapters []edgecontrol.DeviceAdapter, 
 		return nil, err
 	}
 	return &EdgeControlRuntime{
-		config:           config,
-		host:             host,
-		intentStore:      intentStore,
-		autonomyPolicy:   autonomyPolicy,
-		safetyController: safetyController,
-		hydInterlock:     hydInterlock,
-		autonomyFallback: autonomyFallback,
-		bindingsByDevice: bindingsByDevice,
-		commandByKey:     commandByKey,
-		addressByPointID: addressByPointID,
-		leaseByAddress:   leaseByAddress,
-		pendingByAddress: map[string]pendingEdgeCommand{},
+		config:                  config,
+		host:                    host,
+		intentStore:             intentStore,
+		autonomyPolicy:          autonomyPolicy,
+		safetyController:        safetyController,
+		hydInterlock:            hydInterlock,
+		autonomyFallback:        autonomyFallback,
+		bindingsByDevice:        bindingsByDevice,
+		commandByKey:            commandByKey,
+		addressByPointID:        addressByPointID,
+		staticPointAddresses:    staticPointAddresses,
+		dynamicChannelsByDevice: map[string][]edgecontrol.ChannelDescriptor{},
+		leaseByAddress:          leaseByAddress,
+		pendingByAddress:        map[string]pendingEdgeCommand{},
 	}, nil
 }
 
@@ -364,14 +375,6 @@ func (runtime *EdgeControlRuntime) AutonomyPolicy() edgecontrol.AutonomyPolicyCo
 	return runtime.autonomyPolicy
 }
 
-// HydraulicInterlockStatus returns the latest hydraulic safety interlock snapshot.
-func (runtime *EdgeControlRuntime) HydraulicInterlockStatus() (edgecontrol.HydraulicInterlockStatus, bool) {
-	if runtime == nil || runtime.hydInterlock == nil {
-		return edgecontrol.HydraulicInterlockStatus{}, false
-	}
-	return runtime.hydInterlock.Status(), true
-}
-
 // AutonomousFallbackStatus returns the autonomous fallback status evaluated at at.
 func (runtime *EdgeControlRuntime) AutonomousFallbackStatus(at time.Time) (edgecontrol.AutonomousFallbackStatus, bool) {
 	if runtime == nil || runtime.autonomyFallback == nil {
@@ -408,17 +411,6 @@ func (runtime *EdgeControlRuntime) ApplyAutonomyPolicy(policy edgecontrol.Autono
 	return nil
 }
 
-// ReplaceOrRegisterDevice hot-replaces or registers a DeviceAdapter and refreshes
-// runtime channel mappings and controller bindings without dropping unrelated devices.
-func (runtime *EdgeControlRuntime) ReplaceOrRegisterDevice(adapter edgecontrol.DeviceAdapter) error {
-	if runtime == nil || adapter == nil {
-		return errors.New("edge control runtime and adapter are required")
-	}
-	runtime.configMu.Lock()
-	defer runtime.configMu.Unlock()
-	return runtime.replaceOrRegisterDeviceLocked(adapter)
-}
-
 func (runtime *EdgeControlRuntime) replaceOrRegisterDeviceLocked(adapter edgecontrol.DeviceAdapter) error {
 	if err := runtime.host.ReplaceOrRegisterDevice(adapter); err != nil {
 		return err
@@ -430,12 +422,37 @@ func (runtime *EdgeControlRuntime) replaceOrRegisterDeviceLocked(adapter edgecon
 	if runtime.bindingsByDevice == nil {
 		runtime.bindingsByDevice = map[string]map[edgecontrol.SemanticChannel]string{}
 	}
+	if runtime.dynamicChannelsByDevice == nil {
+		runtime.dynamicChannelsByDevice = map[string][]edgecontrol.ChannelDescriptor{}
+	}
 	runtime.bindingsByDevice[descriptor.ID] = cloneSemanticBindings(descriptor.ChannelBindings)
+	devicePrefix := descriptor.ID + "/"
+	for pointID, addr := range runtime.addressByPointID {
+		if strings.HasPrefix(addr, devicePrefix) {
+			delete(runtime.addressByPointID, pointID)
+		}
+	}
+	dynamicChannels := make([]edgecontrol.ChannelDescriptor, 0, len(channels))
 	channelByID := make(map[string]edgecontrol.ChannelDescriptor, len(channels))
 	for _, ch := range channels {
-		runtime.addressByPointID[ch.PointID] = ch.Address()
+		addr := ch.Address()
+		runtime.addressByPointID[ch.PointID] = addr
 		channelByID[ch.ChannelID] = ch
+		if ch.Access != edgecontrol.AccessWriteOnly {
+			if _, isStatic := runtime.staticPointAddresses[addr]; !isStatic {
+				dynamicChannels = append(dynamicChannels, ch)
+			}
+		}
 	}
+	sort.Slice(dynamicChannels, func(i, j int) bool {
+		return dynamicChannels[i].ChannelID < dynamicChannels[j].ChannelID
+	})
+	if len(dynamicChannels) > 0 {
+		runtime.dynamicChannelsByDevice[descriptor.ID] = dynamicChannels
+	} else {
+		delete(runtime.dynamicChannelsByDevice, descriptor.ID)
+	}
+	runtime.filterLatestShadowSamplesLocked(descriptor.ID)
 	for _, pt := range runtime.config.Points {
 		if pt.DeviceID != descriptor.ID {
 			continue
@@ -458,6 +475,97 @@ func (runtime *EdgeControlRuntime) replaceOrRegisterDeviceLocked(adapter edgecon
 	fallback := runtime.autonomyFallback
 	runtime.mu.Unlock()
 
+	refreshControllerBindings(plant, bindingsCopy, safety, hyd, fallback)
+	return nil
+}
+
+// RemoveDriverProfile unregisters a shadow-managed Modbus adapter and prunes its
+// runtime bindings and telemetry channels without affecting other devices.
+func (runtime *EdgeControlRuntime) RemoveDriverProfile(deviceKey string) error {
+	if runtime == nil {
+		return errors.New("edge control runtime is unavailable")
+	}
+	key := strings.TrimSpace(deviceKey)
+	if key == "" {
+		return nil
+	}
+	runtime.configMu.Lock()
+	defer runtime.configMu.Unlock()
+
+	runtime.host.UnregisterDevice(key)
+
+	devicePrefix := key + "/"
+	runtime.mu.Lock()
+	delete(runtime.bindingsByDevice, key)
+	delete(runtime.dynamicChannelsByDevice, key)
+	runtime.filterLatestShadowSamplesLocked(key)
+	for pointID, addr := range runtime.addressByPointID {
+		if strings.HasPrefix(addr, devicePrefix) {
+			delete(runtime.addressByPointID, pointID)
+		}
+	}
+	for cmdKey, binding := range runtime.commandByKey {
+		if strings.HasPrefix(binding.address, devicePrefix) {
+			if _, isStatic := runtime.staticPointAddresses[binding.address]; !isStatic {
+				delete(runtime.commandByKey, cmdKey)
+			}
+		}
+	}
+	for addr := range runtime.leaseByAddress {
+		if strings.HasPrefix(addr, devicePrefix) {
+			if _, isStatic := runtime.staticPointAddresses[addr]; !isStatic {
+				delete(runtime.leaseByAddress, addr)
+			}
+		}
+	}
+	for addr, pending := range runtime.pendingByAddress {
+		if strings.HasPrefix(addr, devicePrefix) {
+			if _, isStatic := runtime.staticPointAddresses[addr]; !isStatic {
+				runtime.finishPendingLocked(pending, EdgeCommandOutcome{
+					CommandID: pending.intentID,
+					Address:   addr,
+					Accepted:  false,
+					Code:      "DRIVER_REMOVED",
+				}, true)
+			}
+		}
+	}
+	oldCloser := runtime.factoryClosersByDevice[key]
+	delete(runtime.factoryClosersByDevice, key)
+	bindingsCopy := cloneAllSemanticBindings(runtime.bindingsByDevice)
+	plant := runtime.config.Plant
+	safety := runtime.safetyController
+	hyd := runtime.hydInterlock
+	fallback := runtime.autonomyFallback
+	runtime.mu.Unlock()
+
+	if oldCloser != nil {
+		_ = oldCloser.Close()
+	}
+	refreshControllerBindings(plant, bindingsCopy, safety, hyd, fallback)
+	return nil
+}
+
+func (runtime *EdgeControlRuntime) filterLatestShadowSamplesLocked(excludeDeviceID string) {
+	if len(runtime.latestShadowSamples) == 0 {
+		return
+	}
+	filtered := runtime.latestShadowSamples[:0]
+	for _, sample := range runtime.latestShadowSamples {
+		if sample.DeviceID != excludeDeviceID {
+			filtered = append(filtered, sample)
+		}
+	}
+	runtime.latestShadowSamples = filtered
+}
+
+func refreshControllerBindings(
+	plant PlantConfig,
+	bindingsCopy map[string]map[edgecontrol.SemanticChannel]string,
+	safety *edgePlantSafetyController,
+	hyd *edgecontrol.HydraulicInterlockController,
+	fallback *edgecontrol.AutonomousFallbackController,
+) {
 	if safety != nil {
 		safety.UpdateBindings(bindingsCopy)
 	}
@@ -470,32 +578,70 @@ func (runtime *EdgeControlRuntime) replaceOrRegisterDeviceLocked(adapter edgecon
 			fallback.UpdateTargets(fallbackChillers, fallbackPumps)
 		}
 	}
-	return nil
 }
 
-func (runtime *EdgeControlRuntime) buildDeclarativeAdapter(profile edgecontrol.DeclarativeModbusProfile) (*edgecontrol.DeclarativeModbusAdapter, error) {
+// ChannelAddressForPoint returns the canonical Host/Timedata channel address for a point.
+func (runtime *EdgeControlRuntime) ChannelAddressForPoint(pointID, deviceID, pointCode string) string {
+	addr := deviceID + "/" + pointCode
+	if runtime == nil {
+		return addr
+	}
+	runtime.mu.Lock()
+	if mapped, ok := runtime.addressByPointID[pointID]; ok && strings.TrimSpace(mapped) != "" {
+		addr = mapped
+	}
+	runtime.mu.Unlock()
+	return addr
+}
+
+// HasDynamicChannels reports whether any shadow-managed driver channels are active.
+func (runtime *EdgeControlRuntime) HasDynamicChannels() bool {
+	if runtime == nil {
+		return false
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return len(runtime.dynamicChannelsByDevice) > 0
+}
+
+// LatestShadowMeasurements returns the latest cycle observations captured from active shadow drivers.
+func (runtime *EdgeControlRuntime) LatestShadowMeasurements() []Measurement {
+	if runtime == nil {
+		return nil
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if len(runtime.latestShadowSamples) == 0 {
+		return nil
+	}
+	return append([]Measurement(nil), runtime.latestShadowSamples...)
+}
+
+func (runtime *EdgeControlRuntime) buildDeclarativeAdapter(profile edgecontrol.DeclarativeModbusProfile) (*edgecontrol.DeclarativeModbusAdapter, io.Closer, error) {
 	runtime.mu.Lock()
 	factory := runtime.driverTransportFactory
 	runtime.mu.Unlock()
 
 	var transport edgecontrol.ModbusRegisterTransport
+	var ownedCloser io.Closer
 	if factory != nil {
 		var err error
 		transport, err = factory(profile)
 		if err != nil {
-			return nil, fmt.Errorf("driver %s transport: %w", profile.ComponentID, err)
+			return nil, nil, fmt.Errorf("driver %s transport: %w", profile.ComponentID, err)
+		}
+		if closer, ok := transport.(io.Closer); ok {
+			ownedCloser = closer
 		}
 	}
 	adapter, err := edgecontrol.NewDeclarativeModbusAdapter(profile, transport)
 	if err != nil {
-		if transport != nil && factory != nil {
-			if closer, ok := transport.(interface{ Close() error }); ok {
-				_ = closer.Close()
-			}
+		if ownedCloser != nil {
+			_ = ownedCloser.Close()
 		}
-		return nil, fmt.Errorf("driver %s: %w", profile.ComponentID, err)
+		return nil, nil, fmt.Errorf("driver %s: %w", profile.ComponentID, err)
 	}
-	return adapter, nil
+	return adapter, ownedCloser, nil
 }
 
 // ApplyDriverProfile validates and hot-replaces a single declarative Modbus adapter
@@ -507,58 +653,33 @@ func (runtime *EdgeControlRuntime) ApplyDriverProfile(profile edgecontrol.Declar
 	runtime.configMu.Lock()
 	defer runtime.configMu.Unlock()
 
-	adapter, err := runtime.buildDeclarativeAdapter(profile)
+	adapter, ownedCloser, err := runtime.buildDeclarativeAdapter(profile)
 	if err != nil {
 		return err
 	}
 	if err := runtime.replaceOrRegisterDeviceLocked(adapter); err != nil {
 		_ = adapter.Close()
+		if ownedCloser != nil {
+			_ = ownedCloser.Close()
+		}
 		return err
 	}
+	runtime.mu.Lock()
+	if runtime.factoryClosersByDevice == nil {
+		runtime.factoryClosersByDevice = map[string]io.Closer{}
+	}
+	oldCloser := runtime.factoryClosersByDevice[profile.ComponentID]
+	if ownedCloser != nil {
+		runtime.factoryClosersByDevice[profile.ComponentID] = ownedCloser
+	} else {
+		delete(runtime.factoryClosersByDevice, profile.ComponentID)
+	}
+	runtime.mu.Unlock()
+
+	if oldCloser != nil && oldCloser != ownedCloser {
+		_ = oldCloser.Close()
+	}
 	return nil
-}
-
-// ApplyDriverConfigs validates and hot-reloads declarative Modbus adapters for all
-// given profiles without restarting the edge runtime.
-func (runtime *EdgeControlRuntime) ApplyDriverConfigs(profiles []edgecontrol.DeclarativeModbusProfile) error {
-	if runtime == nil {
-		return errors.New("edge control runtime is unavailable")
-	}
-	runtime.configMu.Lock()
-	defer runtime.configMu.Unlock()
-
-	seenDevices := make(map[string]struct{}, len(profiles))
-	adapters := make([]*edgecontrol.DeclarativeModbusAdapter, 0, len(profiles))
-	closeAdapters := func() {
-		for _, a := range adapters {
-			_ = a.Close()
-		}
-	}
-
-	for _, profile := range profiles {
-		if _, dup := seenDevices[profile.ComponentID]; dup {
-			closeAdapters()
-			return fmt.Errorf("duplicate driver config deviceKey %q", profile.ComponentID)
-		}
-		seenDevices[profile.ComponentID] = struct{}{}
-		adapter, err := runtime.buildDeclarativeAdapter(profile)
-		if err != nil {
-			closeAdapters()
-			return err
-		}
-		adapters = append(adapters, adapter)
-	}
-
-	var firstErr error
-	for _, adapter := range adapters {
-		if err := runtime.replaceOrRegisterDeviceLocked(adapter); err != nil {
-			_ = adapter.Close()
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
-	}
-	return firstErr
 }
 
 func (runtime *EdgeControlRuntime) SubmitCommand(request EdgeCommandIntentRequest) (<-chan EdgeCommandOutcome, error) {
@@ -665,7 +786,14 @@ func (runtime *EdgeControlRuntime) snapshotFromProcessImage(image edgecontrol.Pr
 	for k, v := range runtime.addressByPointID {
 		addressMap[k] = v
 	}
+	dynamicDevices := make([]string, 0, len(runtime.dynamicChannelsByDevice))
+	dynamicCopy := make(map[string][]edgecontrol.ChannelDescriptor, len(runtime.dynamicChannelsByDevice))
+	for devID, channels := range runtime.dynamicChannelsByDevice {
+		dynamicDevices = append(dynamicDevices, devID)
+		dynamicCopy[devID] = append([]edgecontrol.ChannelDescriptor(nil), channels...)
+	}
 	runtime.mu.Unlock()
+	sort.Strings(dynamicDevices)
 
 	snapshot := Snapshot{ObservedAt: image.At(), Devices: map[string]DeviceTelemetry{}}
 	for _, point := range runtime.config.Points {
@@ -691,6 +819,51 @@ func (runtime *EdgeControlRuntime) snapshotFromProcessImage(image edgecontrol.Pr
 		}
 		device[point.SourceKey] = value
 	}
+
+	shadowSamples := make([]Measurement, 0)
+	for _, devID := range dynamicDevices {
+		for _, ch := range dynamicCopy[devID] {
+			addr := ch.Address()
+			channel, ok := image.Get(addr)
+			if !ok || !channel.HasValue {
+				continue
+			}
+			value, ok := edgeTelemetryValue(channel.Sample.Value)
+			if !ok {
+				continue
+			}
+			device := snapshot.Devices[devID]
+			if device == nil {
+				device = DeviceTelemetry{}
+				snapshot.Devices[devID] = device
+			}
+			device[ch.ChannelID] = value
+
+			observedAt := channel.Sample.ObservedAt
+			if observedAt.IsZero() {
+				observedAt = image.At()
+			}
+			quality := "BAD"
+			if channel.Sample.Quality == edgecontrol.QualityGood {
+				quality = "GOOD"
+			}
+			shadowSamples = append(shadowSamples, Measurement{
+				DeviceID:       devID,
+				SourceKey:      ch.ChannelID,
+				TelemetryKey:   ch.ChannelID,
+				SourceProtocol: "MODBUS",
+				SourceAddress:  addr,
+				ObservedAt:     observedAt,
+				Value:          value,
+				Quality:        quality,
+				Sequence:       image.Cycle(),
+			})
+		}
+	}
+
+	runtime.mu.Lock()
+	runtime.latestShadowSamples = shadowSamples
+	runtime.mu.Unlock()
 	return snapshot
 }
 

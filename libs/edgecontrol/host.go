@@ -133,6 +133,11 @@ func (host *Host) UnregisterAdapter(id string) bool {
 	return host.devices.UnregisterAdapter(id)
 }
 
+// UnregisterDevice unregisters a DeviceAdapter by ID and closes it if it implements io.Closer.
+func (host *Host) UnregisterDevice(id string) bool {
+	return host.UnregisterAdapter(id)
+}
+
 func (host *Host) AddCycleHook(binding CycleHookBinding) error {
 	if host == nil {
 		return errors.New("edge host is nil")

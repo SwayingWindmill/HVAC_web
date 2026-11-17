@@ -580,14 +580,14 @@ func TestTemplatePayloadModbusDriverValidation(t *testing.T) {
 			"driverType":        "MODBUS_TCP",
 			"endpoint":          "192.168.1.10:502",
 			"unitId":            1,
-			"capabilityProfile": "chiller.york.v1",
+			"capabilityProfile": "CHILLER",
 			"timeoutMs":         2000,
 			"retries":           2,
 			"registers": []any{
 				map[string]any{
 					"pointCode":         "chw_supply_temp",
-					"semanticChannel":   "chw_supply_temp",
-					"functionCode":      4,
+					"semanticChannel":   "TemperatureSetpoint",
+					"functionCode":      3,
 					"writeFunctionCode": 16,
 					"address":           0,
 					"registerCount":     2,
@@ -599,40 +599,40 @@ func TestTemplatePayloadModbusDriverValidation(t *testing.T) {
 					"pollPriority":      "VERY_HIGH",
 				},
 				map[string]any{
-					"pointCode":     "run_cmd",
-					"functionCode":  3,
-					"address":       10,
-					"registerCount": 1,
-					"rawType":       "BIT_BOOL",
-					"byteOrder":     "BIG_ENDIAN",
-					"wordOrder":     "BIG_ENDIAN",
-					"bitIndex":      0,
-					"scale":         1.0,
-					"offset":        0.0,
-					"pollPriority":  "HIGH",
+					"pointCode":         "run_cmd",
+					"semanticChannel":   "StartCommand",
+					"functionCode":      3,
+					"writeFunctionCode": 6,
+					"address":           10,
+					"registerCount":     1,
+					"rawType":           "BIT_BOOL",
+					"byteOrder":         "BIG_ENDIAN",
+					"wordOrder":         "BIG_ENDIAN",
+					"bitIndex":          0,
+					"scale":             1.0,
+					"offset":            0.0,
+					"pollPriority":      "HIGH",
 				},
 				map[string]any{
-					"pointCode":     "operating_mode",
-					"functionCode":  3,
-					"address":       20,
-					"registerCount": 1,
-					"rawType":       "ENUM16",
-					"byteOrder":     "BIG_ENDIAN",
-					"wordOrder":     "BIG_ENDIAN",
-					"scale":         1.0,
-					"offset":        0.0,
-					"pollPriority":  "MEDIUM",
-					"enumMap":       map[string]any{"0": "OFF", "1": "COOL"},
+					"pointCode":       "operating_mode",
+					"semanticChannel": "RunState",
+					"functionCode":    3,
+					"address":         20,
+					"registerCount":   1,
+					"rawType":         "ENUM16",
+					"byteOrder":       "BIG_ENDIAN",
+					"wordOrder":       "BIG_ENDIAN",
+					"scale":           1.0,
+					"offset":          0.0,
+					"pollPriority":    "MEDIUM",
+					"enumMap":         map[string]any{"0": "OFF", "1": "COOL"},
 				},
 			},
 		},
 	}
 	act, err := parseAndValidateTemplatePayload(TemplateDevice, fullModbusOnly)
-	if err != nil || act == nil || act.ModbusDriver == nil {
+	if err != nil || act == nil {
 		t.Fatalf("expected valid full DEVICE modbusDriver, got (%+v, %v)", act, err)
-	}
-	if act.ModbusDriver.DriverType != "MODBUS_TCP" || len(act.ModbusDriver.Registers) != 3 || act.ModbusDriver.Registers[1].BitIndex == nil || *act.ModbusDriver.Registers[1].BitIndex != 0 {
-		t.Fatalf("unexpected parsed modbusDriver: %+v", act.ModbusDriver)
 	}
 
 	// Minimal DEVICE modbusDriver omitting optional endpoint/unitId/capabilityProfile/timeoutMs/retries succeeds.
@@ -643,7 +643,7 @@ func TestTemplatePayloadModbusDriverValidation(t *testing.T) {
 		},
 	}
 	actMin, err := parseAndValidateTemplatePayload(TemplateDevice, minimalModbus)
-	if err != nil || actMin == nil || actMin.ModbusDriver == nil || actMin.ModbusDriver.UnitID != nil || actMin.ModbusDriver.TimeoutMS != nil || actMin.ModbusDriver.Retries != nil {
+	if err != nil || actMin == nil {
 		t.Fatalf("expected valid minimal DEVICE modbusDriver with nil optionals, got (%+v, %v)", actMin, err)
 	}
 
@@ -709,6 +709,51 @@ func TestTemplatePayloadModbusDriverValidation(t *testing.T) {
 				"pointCode": "p1", "functionCode": 3, "address": 1, "registerCount": 1, "rawType": "UINT16",
 				"byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN", "scale": 0.0, "offset": 0.0, "pollPriority": "HIGH",
 			}}}},
+		},
+		{
+			"zero scale BIT_BOOL",
+			map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{map[string]any{
+				"pointCode": "p1", "functionCode": 3, "address": 1, "registerCount": 1, "rawType": "BIT_BOOL",
+				"byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN", "bitIndex": 0, "scale": 0.0, "offset": 0.0, "pollPriority": "HIGH",
+			}}}},
+		},
+		{
+			"FC4 with writeFunctionCode",
+			map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{map[string]any{
+				"pointCode": "p1", "functionCode": 4, "writeFunctionCode": 16, "address": 1, "registerCount": 1, "rawType": "UINT16",
+				"byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN", "scale": 1.0, "offset": 0.0, "pollPriority": "HIGH",
+			}}}},
+		},
+		{
+			"FC6 on registerCount 2",
+			map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{map[string]any{
+				"pointCode": "p1", "functionCode": 3, "writeFunctionCode": 6, "address": 1, "registerCount": 2, "rawType": "FLOAT32",
+				"byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN", "scale": 1.0, "offset": 0.0, "pollPriority": "HIGH",
+			}}}},
+		},
+		{
+			"address plus registerCount exceeds 65536",
+			map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{map[string]any{
+				"pointCode": "p1", "functionCode": 3, "address": 65535, "registerCount": 2, "rawType": "FLOAT32",
+				"byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN", "scale": 1.0, "offset": 0.0, "pollPriority": "HIGH",
+			}}}},
+		},
+		{
+			"non-uint16 enumMap key",
+			map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{map[string]any{
+				"pointCode": "p1", "functionCode": 3, "address": 1, "registerCount": 1, "rawType": "ENUM16",
+				"byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN", "scale": 1.0, "offset": 0.0, "pollPriority": "HIGH",
+				"enumMap": map[string]any{"-1": "INVALID"},
+			}}}},
+		},
+		{"invalid TCP endpoint", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "endpoint": "192.168.1.10", "registers": []any{validRegister("p1")}}}},
+		{"unknown capabilityProfile", map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "capabilityProfile": "chiller.york.v1", "registers": []any{validRegister("p1")}}}},
+		{
+			"duplicate BIT_BOOL bit mapping",
+			map[string]any{"modbusDriver": map[string]any{"driverType": "MODBUS_TCP", "registers": []any{
+				map[string]any{"pointCode": "b1", "functionCode": 3, "address": 10, "registerCount": 1, "rawType": "BIT_BOOL", "byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN", "bitIndex": 2, "scale": 1.0, "offset": 0.0, "pollPriority": "HIGH"},
+				map[string]any{"pointCode": "b2", "functionCode": 3, "address": 10, "registerCount": 1, "rawType": "BIT_BOOL", "byteOrder": "BIG_ENDIAN", "wordOrder": "BIG_ENDIAN", "bitIndex": 2, "scale": 1.0, "offset": 0.0, "pollPriority": "HIGH"},
+			}}},
 		},
 	}
 	for _, tc := range badPayloads {

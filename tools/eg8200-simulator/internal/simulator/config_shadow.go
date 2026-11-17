@@ -19,8 +19,6 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
-
-	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 const (
@@ -83,36 +81,6 @@ type ConcentratorUnitShadow struct {
 	EIDs   []ConcentratorShadowEIDSlot `json:"eids,omitempty"`
 }
 
-type GatewayModbusRegisterMapping struct {
-	PointCode         string            `json:"pointCode"`
-	SemanticChannel   string            `json:"semanticChannel,omitempty"`
-	FunctionCode      int               `json:"functionCode"`
-	WriteFunctionCode *int              `json:"writeFunctionCode,omitempty"`
-	Address           int               `json:"address"`
-	RegisterCount     int               `json:"registerCount"`
-	RawType           string            `json:"rawType"`
-	ByteOrder         string            `json:"byteOrder"`
-	WordOrder         string            `json:"wordOrder"`
-	BitIndex          *int              `json:"bitIndex,omitempty"`
-	Scale             float64           `json:"scale"`
-	Offset            float64           `json:"offset"`
-	PollPriority      string            `json:"pollPriority"`
-	EnumMap           map[string]string `json:"enumMap,omitempty"`
-}
-
-type GatewayModbusDriverConfig struct {
-	DeviceKey         string                         `json:"deviceKey"`
-	DriverType        string                         `json:"driverType"`
-	Endpoint          string                         `json:"endpoint"`
-	UnitID            int                            `json:"unitId"`
-	CapabilityProfile string                         `json:"capabilityProfile,omitempty"`
-	TimeoutMS         int                            `json:"timeoutMs"`
-	Retries           int                            `json:"retries"`
-	Registers         []GatewayModbusRegisterMapping `json:"registers"`
-}
-
-type GatewayAutonomyPolicy = edgecontrol.AutonomyPolicyConfig
-
 type ShadowDriftDetail struct {
 	Section string `json:"section"`
 	Target  string `json:"target"`
@@ -163,8 +131,6 @@ type persistedEdgeShadowState struct {
 }
 
 type edgeConfigShadowApplyHook func(ctx context.Context, desired GatewayDesiredConfig) ([]ShadowDriftDetail, string, error)
-type edgeDriverApplyHook func(ctx context.Context, cfg GatewayModbusDriverConfig, profile edgecontrol.DeclarativeModbusProfile) error
-type edgeAutonomyApplyHook func(ctx context.Context, policy GatewayAutonomyPolicy) error
 
 type edgeConfigShadow struct {
 	syncMu              sync.Mutex
@@ -180,6 +146,7 @@ type edgeConfigShadow struct {
 	lastSyncAttempt     time.Time
 	applyHook           edgeConfigShadowApplyHook
 	applyDriverHook     edgeDriverApplyHook
+	removeDriverHook    edgeDriverRemoveHook
 	applyAutonomyHook   edgeAutonomyApplyHook
 }
 
@@ -307,6 +274,7 @@ func (s *edgeConfigShadow) prepareDesired(ctx context.Context, desired GatewayDe
 	}
 	hook := s.applyHook
 	driverHook := s.applyDriverHook
+	removeDriverHook := s.removeDriverHook
 	autonomyHook := s.applyAutonomyHook
 	prevDrivers := cloneDriverConfigs(s.driverConfigs)
 	prevPolicy := cloneAutonomyPolicy(s.autonomyPolicy)
@@ -359,120 +327,23 @@ func (s *edgeConfigShadow) prepareDesired(ctx context.Context, desired GatewayDe
 		}
 	}
 
-	acceptedDrivers := make([]GatewayModbusDriverConfig, 0, len(desired.DriverConfigs))
-	seenDeviceKeys := make(map[string]struct{}, len(desired.DriverConfigs))
-	for _, cfg := range desired.DriverConfigs {
-		targetKey := clampShadowRunes("driver:"+strings.TrimSpace(cfg.DeviceKey), 256)
-		if _, dup := seenDeviceKeys[cfg.DeviceKey]; dup {
-			msg := fmt.Sprintf("duplicate driverConfig deviceKey %q", cfg.DeviceKey)
-			drift = append(drift, ShadowDriftDetail{
-				Section: shadowDriftSectionDriverConfigs,
-				Target:  targetKey,
-				Reason:  shadowDriftReasonApplyFailed,
-				Detail:  clampShadowRunes(msg, 512),
-			})
-			errorMessages = append(errorMessages, msg)
-			continue
-		}
-		seenDeviceKeys[cfg.DeviceKey] = struct{}{}
-
-		profile, err := cfg.ToDeclarativeProfile()
-		if err != nil {
-			msg := fmt.Sprintf("driver %s validation failed: %v", cfg.DeviceKey, err)
-			drift = append(drift, ShadowDriftDetail{
-				Section: shadowDriftSectionDriverConfigs,
-				Target:  targetKey,
-				Reason:  shadowDriftReasonApplyFailed,
-				Detail:  clampShadowRunes(msg, 512),
-			})
-			errorMessages = append(errorMessages, msg)
-			continue
-		}
-		if driverHook != nil {
-			if err := driverHook(ctx, cfg, profile); err != nil {
-				msg := fmt.Sprintf("driver %s apply failed: %v", cfg.DeviceKey, err)
-				drift = append(drift, ShadowDriftDetail{
-					Section: shadowDriftSectionDriverConfigs,
-					Target:  targetKey,
-					Reason:  shadowDriftReasonApplyFailed,
-					Detail:  clampShadowRunes(msg, 512),
-				})
-				errorMessages = append(errorMessages, msg)
-				continue
-			}
-		}
-		acceptedDrivers = append(acceptedDrivers, cloneDriverConfig(cfg))
-	}
-
-	var reportedPolicy *GatewayAutonomyPolicy
-	autonomyApplied := false
-	if desired.AutonomyPolicy != nil {
-		if err := desired.AutonomyPolicy.Validate(); err != nil {
-			msg := fmt.Sprintf("autonomyPolicy validation failed: %v", err)
-			drift = append(drift, ShadowDriftDetail{
-				Section: shadowDriftSectionAutonomyPolicy,
-				Target:  "autonomyPolicy",
-				Reason:  shadowDriftReasonApplyFailed,
-				Detail:  clampShadowRunes(msg, 512),
-			})
-			errorMessages = append(errorMessages, msg)
-		} else if autonomyHook != nil {
-			if err := autonomyHook(ctx, *desired.AutonomyPolicy); err != nil {
-				msg := fmt.Sprintf("autonomyPolicy apply failed: %v", err)
-				drift = append(drift, ShadowDriftDetail{
-					Section: shadowDriftSectionAutonomyPolicy,
-					Target:  "autonomyPolicy",
-					Reason:  shadowDriftReasonApplyFailed,
-					Detail:  clampShadowRunes(msg, 512),
-				})
-				errorMessages = append(errorMessages, msg)
-			} else {
-				reportedPolicy = cloneAutonomyPolicy(desired.AutonomyPolicy)
-				autonomyApplied = true
-			}
-		} else {
-			reportedPolicy = cloneAutonomyPolicy(desired.AutonomyPolicy)
-			autonomyApplied = true
-		}
-	}
-
-	status := shadowAppliedStatusApplied
-	if len(drift) > 0 || len(errorMessages) > 0 {
-		requestedItems := len(desired.DriverConfigs)
-		if hook != nil {
-			requestedItems += len(desired.ConcentratorConfigs)
-		}
-		if desired.AutonomyPolicy != nil {
-			requestedItems++
-		}
-		succeededItems := len(acceptedDrivers) + len(cleanedUnits)
-		if autonomyApplied {
-			succeededItems++
-		}
-		if requestedItems > 0 && succeededItems == 0 && len(desired.PointMappings) == 0 && len(desired.SamplingPolicies) == 0 {
-			status = shadowAppliedStatusRejected
-		} else {
-			status = shadowAppliedStatusPartial
-		}
-	}
-
-	committedDrivers := acceptedDrivers
-	committedPolicy := reportedPolicy
-	if status == shadowAppliedStatusRejected {
-		committedDrivers = prevDrivers
-		committedPolicy = prevPolicy
-	} else {
-		if len(desired.DriverConfigs) == 0 && len(prevDrivers) > 0 && len(acceptedDrivers) == 0 {
-			// Retain explicit empty slice when cleared cleanly unless rejected; prevDrivers replaced by acceptedDrivers.
-		}
-		if desired.AutonomyPolicy == nil && status == shadowAppliedStatusPartial && prevPolicy != nil {
-			committedPolicy = prevPolicy
-		}
-	}
+	res := applyDesiredDriversAndAutonomy(
+		ctx,
+		desired,
+		prevDrivers,
+		prevPolicy,
+		driverHook,
+		removeDriverHook,
+		autonomyHook,
+		hook != nil,
+		len(cleanedUnits),
+		drift,
+		errorMessages,
+	)
 
 	var errPtr *string
-	if len(errorMessages) > 0 {
-		joined := clampShadowRunes(strings.Join(errorMessages, "; "), 1024)
+	if len(res.errorMessages) > 0 {
+		joined := clampShadowRunes(strings.Join(res.errorMessages, "; "), 1024)
 		errPtr = &joined
 	}
 
@@ -485,17 +356,17 @@ func (s *edgeConfigShadow) prepareDesired(ctx context.Context, desired GatewayDe
 		pointMappings:       cleanedMappings,
 		samplingPolicies:    cleanedPolicies,
 		concentratorConfigs: cleanedUnits,
-		driverConfigs:       committedDrivers,
-		autonomyPolicy:      committedPolicy,
+		driverConfigs:       res.committedDrivers,
+		autonomyPolicy:      res.committedPolicy,
 		report: GatewayShadowReportRequest{
 			ReportedRevision:    desired.DesiredRevision,
-			AppliedStatus:       status,
+			AppliedStatus:       res.status,
 			PointMappings:       cleanedMappings,
 			SamplingPolicies:    cleanedPolicies,
 			ConcentratorConfigs: cleanedUnits,
-			DriverConfigs:       acceptedDrivers,
-			AutonomyPolicy:      reportedPolicy,
-			DriftDetails:        drift,
+			DriverConfigs:       res.acceptedDrivers,
+			AutonomyPolicy:      res.reportedPolicy,
+			DriftDetails:        res.drift,
 			ErrorMessage:        errPtr,
 			ReportedAt:          &now,
 		},
@@ -682,7 +553,11 @@ func (s *edgeConfigShadow) reapplyPersisted(ctx context.Context) error {
 	if policy != nil && autonomyHook != nil {
 		if err := policy.Validate(); err != nil {
 			errs = append(errs, err.Error())
-		} else if err := autonomyHook(ctx, *policy); err != nil {
+		} else if err := autonomyHook(ctx, policy); err != nil {
+			errs = append(errs, err.Error())
+		}
+	} else if policy == nil && autonomyHook != nil {
+		if err := autonomyHook(ctx, nil); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
@@ -711,20 +586,6 @@ func (publisher *MQTTPublisher) ConfigShadowState() (appliedRevision int64, poin
 	}
 	snap := publisher.configShadow.snapshot()
 	return snap.AppliedRevision, snap.PointMappings, snap.SamplingPolicies, snap.ConcentratorConfigs
-}
-
-// ConfigShadowSnapshot returns the full persisted edge config shadow state including
-// driverConfigs and autonomyPolicy.
-func (publisher *MQTTPublisher) ConfigShadowSnapshot() persistedEdgeShadowState {
-	if publisher == nil || publisher.configShadow == nil {
-		return persistedEdgeShadowState{
-			PointMappings:       []GatewayPointMapping{},
-			SamplingPolicies:    []GatewaySamplingPolicy{},
-			ConcentratorConfigs: map[string]ConcentratorUnitShadow{},
-			DriverConfigs:       []GatewayModbusDriverConfig{},
-		}
-	}
-	return publisher.configShadow.snapshot()
 }
 
 func (publisher *MQTTPublisher) SyncConfigShadow(ctx context.Context) error {
@@ -912,135 +773,4 @@ func cloneConcentratorConfigs(src map[string]ConcentratorUnitShadow) map[string]
 		out[key] = copiedUnit
 	}
 	return out
-}
-
-// ToDeclarativeProfile converts a shadow Modbus driver configuration into a validated
-// DeclarativeModbusProfile.
-func (d GatewayModbusDriverConfig) ToDeclarativeProfile() (edgecontrol.DeclarativeModbusProfile, error) {
-	deviceKey := strings.TrimSpace(d.DeviceKey)
-	if len(deviceKey) < 1 || len(deviceKey) > 128 {
-		return edgecontrol.DeclarativeModbusProfile{}, fmt.Errorf("deviceKey length %d must be in [1,128]", len(deviceKey))
-	}
-	endpoint := strings.TrimSpace(d.Endpoint)
-	if len(endpoint) < 1 || len(endpoint) > 256 {
-		return edgecontrol.DeclarativeModbusProfile{}, fmt.Errorf("endpoint length %d must be in [1,256]", len(endpoint))
-	}
-	if d.UnitID < 1 || d.UnitID > 247 {
-		return edgecontrol.DeclarativeModbusProfile{}, fmt.Errorf("unitId %d must be in [1,247]", d.UnitID)
-	}
-	if d.TimeoutMS < 100 || d.TimeoutMS > 30000 {
-		return edgecontrol.DeclarativeModbusProfile{}, fmt.Errorf("timeoutMs %d must be in [100,30000]", d.TimeoutMS)
-	}
-	if d.Retries < 0 || d.Retries > 10 {
-		return edgecontrol.DeclarativeModbusProfile{}, fmt.Errorf("retries %d must be in [0,10]", d.Retries)
-	}
-	if len(d.Registers) < 1 || len(d.Registers) > 256 {
-		return edgecontrol.DeclarativeModbusProfile{}, fmt.Errorf("registers count %d must be in [1,256]", len(d.Registers))
-	}
-
-	regs := make([]edgecontrol.ModbusRegisterSpec, len(d.Registers))
-	for i, r := range d.Registers {
-		if r.Address < 0 || r.Address > 65535 {
-			return edgecontrol.DeclarativeModbusProfile{}, fmt.Errorf("register[%d] address %d must be in [0,65535]", i, r.Address)
-		}
-		if r.RegisterCount < 1 || r.RegisterCount > 4 {
-			return edgecontrol.DeclarativeModbusProfile{}, fmt.Errorf("register[%d] registerCount %d must be in [1,4]", i, r.RegisterCount)
-		}
-		var writeFC edgecontrol.ModbusFunctionCode
-		if r.WriteFunctionCode != nil {
-			if *r.WriteFunctionCode != 6 && *r.WriteFunctionCode != 16 {
-				return edgecontrol.DeclarativeModbusProfile{}, fmt.Errorf("register[%d] writeFunctionCode %d must be 6 or 16", i, *r.WriteFunctionCode)
-			}
-			writeFC = edgecontrol.ModbusFunctionCode(*r.WriteFunctionCode)
-		}
-		bitIdx := 0
-		if r.BitIndex != nil {
-			if *r.BitIndex < 0 || *r.BitIndex > 15 {
-				return edgecontrol.DeclarativeModbusProfile{}, fmt.Errorf("register[%d] bitIndex %d must be in [0,15]", i, *r.BitIndex)
-			}
-			bitIdx = *r.BitIndex
-		}
-		var enumCopy map[string]string
-		if len(r.EnumMap) > 0 {
-			enumCopy = make(map[string]string, len(r.EnumMap))
-			for k, v := range r.EnumMap {
-				enumCopy[k] = v
-			}
-		}
-		regs[i] = edgecontrol.ModbusRegisterSpec{
-			PointCode:         r.PointCode,
-			SemanticChannel:   edgecontrol.SemanticChannel(strings.TrimSpace(r.SemanticChannel)),
-			FunctionCode:      edgecontrol.ModbusFunctionCode(r.FunctionCode),
-			WriteFunctionCode: writeFC,
-			Address:           uint16(r.Address),
-			RegisterCount:     uint16(r.RegisterCount),
-			RawType:           edgecontrol.ModbusRawType(r.RawType),
-			ByteOrder:         edgecontrol.ModbusByteOrder(r.ByteOrder),
-			WordOrder:         edgecontrol.ModbusWordOrder(r.WordOrder),
-			BitIndex:          bitIdx,
-			Scale:             r.Scale,
-			Offset:            r.Offset,
-			PollPriority:      edgecontrol.DataPriority(r.PollPriority),
-			EnumMap:           enumCopy,
-		}
-	}
-
-	profile := edgecontrol.DeclarativeModbusProfile{
-		ComponentID:       deviceKey,
-		DriverType:        edgecontrol.ModbusDriverType(strings.TrimSpace(d.DriverType)),
-		Endpoint:          endpoint,
-		UnitID:            uint8(d.UnitID),
-		CapabilityProfile: edgecontrol.CapabilityProfileID(strings.TrimSpace(d.CapabilityProfile)),
-		TimeoutMS:         d.TimeoutMS,
-		Retries:           d.Retries,
-		Registers:         regs,
-	}
-	if err := profile.Validate(); err != nil {
-		return edgecontrol.DeclarativeModbusProfile{}, err
-	}
-	return profile, nil
-}
-
-func cloneDriverConfig(src GatewayModbusDriverConfig) GatewayModbusDriverConfig {
-	cp := src
-	cp.Registers = make([]GatewayModbusRegisterMapping, len(src.Registers))
-	for i, r := range src.Registers {
-		rcp := r
-		if r.WriteFunctionCode != nil {
-			v := *r.WriteFunctionCode
-			rcp.WriteFunctionCode = &v
-		}
-		if r.BitIndex != nil {
-			v := *r.BitIndex
-			rcp.BitIndex = &v
-		}
-		if len(r.EnumMap) > 0 {
-			em := make(map[string]string, len(r.EnumMap))
-			for k, v := range r.EnumMap {
-				em[k] = v
-			}
-			rcp.EnumMap = em
-		}
-		cp.Registers[i] = rcp
-	}
-	return cp
-}
-
-func cloneDriverConfigs(src []GatewayModbusDriverConfig) []GatewayModbusDriverConfig {
-	if len(src) == 0 {
-		return []GatewayModbusDriverConfig{}
-	}
-	out := make([]GatewayModbusDriverConfig, len(src))
-	for i, cfg := range src {
-		out[i] = cloneDriverConfig(cfg)
-	}
-	return out
-}
-
-func cloneAutonomyPolicy(src *GatewayAutonomyPolicy) *GatewayAutonomyPolicy {
-	if src == nil {
-		return nil
-	}
-	cp := *src
-	return &cp
 }

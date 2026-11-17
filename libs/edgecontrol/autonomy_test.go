@@ -248,7 +248,6 @@ func TestHydraulicInterlockSafetyShortCycleAndFrequencyClamp(t *testing.T) {
 
 	t0 := time.Date(2026, 11, 17, 14, 0, 0, 0, time.UTC)
 
-	// Step 1: CHWP off & zero flow -> chiller start MUST be blocked, low freq clamped to 22Hz
 	chiller.SetValue("CH-01/run_state", BooleanValue(false), QualityGood, t0)
 	chiller.SetValue("CH-01/start_command", BooleanValue(false), QualityGood, t0)
 	chiller.SetValue("CH-01/stop_command", BooleanValue(false), QualityGood, t0)
@@ -271,7 +270,6 @@ func TestHydraulicInterlockSafetyShortCycleAndFrequencyClamp(t *testing.T) {
 		t.Fatalf("expected frequency clamped to min 22Hz, got %+v", freqVal)
 	}
 
-	// Step 2: Pump running + flow proven, high freq intent 55Hz clamped to 48Hz, chiller start allowed
 	t1 := t0.Add(2 * time.Second)
 	pump.SetValue("CHWP-01/run_state", BooleanValue(true), QualityGood, t1)
 	pump.SetValue("CHWP-01/flow_m3h", DoubleValue(45), QualityGood, t1)
@@ -286,7 +284,6 @@ func TestHydraulicInterlockSafetyShortCycleAndFrequencyClamp(t *testing.T) {
 		t.Fatalf("expected frequency clamped to max 48Hz, got %v", freqVal.Double)
 	}
 
-	// Step 3: Chiller becomes running at t2 -> try stopping at t2+10s (< MinRunSeconds 60s) -> denied
 	t2 := t1.Add(time.Second)
 	chiller.SetValue("CH-01/run_state", BooleanValue(true), QualityGood, t2)
 	delete(intents.reqs, "CH-01/start_command")
@@ -303,10 +300,9 @@ func TestHydraulicInterlockSafetyShortCycleAndFrequencyClamp(t *testing.T) {
 		t.Fatalf("expected stop_command denied inside MinRunSeconds window")
 	}
 
-	// Step 4: Emergency pump flow drop at t3+5s (still < MinRunSeconds!) -> MUST override MinRunSeconds and stop chiller immediately
 	t4 := t3.Add(5 * time.Second)
 	delete(intents.reqs, "CH-01/stop_command")
-	pump.SetValue("CHWP-01/flow_m3h", DoubleValue(2.0), QualityGood, t4) // below MinFlowRate 10
+	pump.SetValue("CHWP-01/flow_m3h", DoubleValue(2.0), QualityGood, t4)
 	if _, err := host.RunCycle(context.Background(), t4); err != nil {
 		t.Fatalf("cycle 5 emergency RunCycle error = %v", err)
 	}
@@ -314,7 +310,6 @@ func TestHydraulicInterlockSafetyShortCycleAndFrequencyClamp(t *testing.T) {
 		t.Fatalf("expected emergency stop_command=true overriding MinRunSeconds on CHW flow loss")
 	}
 
-	// Step 5: Chiller stops at t5; pump recovers, verify MinStopSeconds (45s) blocks premature restart
 	t5 := t4.Add(time.Second)
 	chiller.SetValue("CH-01/run_state", BooleanValue(false), QualityGood, t5)
 	chiller.SetValue("CH-01/start_command", BooleanValue(false), QualityGood, t5)
@@ -328,7 +323,6 @@ func TestHydraulicInterlockSafetyShortCycleAndFrequencyClamp(t *testing.T) {
 		t.Fatalf("expected start_command blocked by MinStopSeconds immediately after stop")
 	}
 
-	// After MinStopSeconds (t5+46s), restart succeeds cleanly
 	t6 := t5.Add(46 * time.Second)
 	if _, err := host.RunCycle(context.Background(), t6); err != nil {
 		t.Fatalf("cycle 7 post-MinStop RunCycle error = %v", err)
@@ -337,7 +331,6 @@ func TestHydraulicInterlockSafetyShortCycleAndFrequencyClamp(t *testing.T) {
 		t.Fatalf("expected start_command allowed after MinStopSeconds expired")
 	}
 
-	// Verify UpdatePolicy hot-updates timers without clearing history
 	updatedPolicy := policy
 	updatedPolicy.MinRunSeconds = 120
 	if err := interlock.UpdatePolicy(updatedPolicy); err != nil {
@@ -398,8 +391,8 @@ func TestAutonomousFallbackControllerGraceFaultAndReconnectYield(t *testing.T) {
 		Policy:                     policy,
 		CloudConnected:             true,
 		LastCloudContactAt:         t0,
-		SetpointRampRateCPerSecond: 1.0, // smooth 1 C/sec ramp
-		FrequencyRampRateHzPerSec:  5.0, // smooth 5 Hz/sec ramp
+		SetpointRampRateCPerSecond: 1.0,
+		FrequencyRampRateHzPerSec:  5.0,
 	})
 	if err != nil {
 		t.Fatalf("NewAutonomousFallbackController() error = %v", err)
@@ -426,7 +419,6 @@ func TestAutonomousFallbackControllerGraceFaultAndReconnectYield(t *testing.T) {
 	pump.SetValue("CHWP-01/fault_active", BooleanValue(false), QualityGood, t0)
 	pump.SetValue("CHWP-01/frequency_setpoint_hz", DoubleValue(26.0), QualityGood, t0)
 
-	// Online: cloud setpoints govern
 	if _, err := host.RunCycle(context.Background(), t0); err != nil {
 		t.Fatalf("online RunCycle error = %v", err)
 	}
@@ -434,7 +426,6 @@ func TestAutonomousFallbackControllerGraceFaultAndReconnectYield(t *testing.T) {
 		t.Fatalf("expected cloud setpoint 11.5 while online, got %v", sp.Double)
 	}
 
-	// Disconnect at tDisconnect = t0+10s, check within grace (t0+35s => 25s < 30s grace): still cloud setpoint
 	tDisconnect := t0.Add(10 * time.Second)
 	fallback.SetCloudConnected(false, tDisconnect)
 	if _, err := host.RunCycle(context.Background(), tDisconnect.Add(25*time.Second)); err != nil {
@@ -447,7 +438,6 @@ func TestAutonomousFallbackControllerGraceFaultAndReconnectYield(t *testing.T) {
 		t.Fatalf("expected cloud setpoint 11.5 during grace, got %v", sp.Double)
 	}
 
-	// Cross grace boundary at tGrace1 = tDisconnect+30s (seeded bumplessly at 11.5 / 26.0, then step 1s at tGrace1+1s)
 	tGrace0 := tDisconnect.Add(30 * time.Second)
 	if _, err := host.RunCycle(context.Background(), tGrace0); err != nil {
 		t.Fatalf("grace entry RunCycle error = %v", err)
@@ -456,7 +446,6 @@ func TestAutonomousFallbackControllerGraceFaultAndReconnectYield(t *testing.T) {
 		t.Fatalf("expected FallbackActive=true at grace expiry")
 	}
 
-	// Advance 1s -> 11.5 -> 10.5 (dt=1s, rate=1 C/s), 26 -> 31 (dt=1s, rate=5 Hz/s)
 	tStep1 := tGrace0.Add(time.Second)
 	if _, err := host.RunCycle(context.Background(), tStep1); err != nil {
 		t.Fatalf("ramp step 1 RunCycle error = %v", err)
@@ -468,7 +457,6 @@ func TestAutonomousFallbackControllerGraceFaultAndReconnectYield(t *testing.T) {
 		t.Fatalf("expected smooth ramp to 31.0Hz after 1s, got %v", fr.Double)
 	}
 
-	// Advance 10s -> converges to fallback defaults 7.5C and 36.0Hz
 	tConverged := tStep1.Add(10 * time.Second)
 	if _, err := host.RunCycle(context.Background(), tConverged); err != nil {
 		t.Fatalf("converged RunCycle error = %v", err)
@@ -480,7 +468,6 @@ func TestAutonomousFallbackControllerGraceFaultAndReconnectYield(t *testing.T) {
 		t.Fatalf("expected converged freq 36.0Hz, got %v", fr.Double)
 	}
 
-	// Simulate chiller fault trip while in fallback: fallback must NOT overwrite faulted chiller setpoint
 	tFault := tConverged.Add(2 * time.Second)
 	chiller.SetValue("CH-01/fault_active", BooleanValue(true), QualityGood, tFault)
 	chiller.SetValue("CH-01/chw_supply_setpoint_c", DoubleValue(12.0), QualityGood, tFault)
@@ -492,7 +479,6 @@ func TestAutonomousFallbackControllerGraceFaultAndReconnectYield(t *testing.T) {
 		t.Fatalf("fallback must skip faulted chiller rather than driving setpoints, got %v", sp.Double)
 	}
 
-	// Reconnect cloud supervision: yields cleanly back to cloud intent immediately
 	tReconnect := tFault.Add(2 * time.Second)
 	chiller.SetValue("CH-01/fault_active", BooleanValue(false), QualityGood, tReconnect)
 	intents.reqs["CH-01/chw_supply_setpoint_c"] = DoubleValue(9.5)
@@ -510,5 +496,83 @@ func TestAutonomousFallbackControllerGraceFaultAndReconnectYield(t *testing.T) {
 	}
 	if fr, _ := pump.ReadValue("CHWP-01/frequency_setpoint_hz"); fr.Double != 42.0 {
 		t.Fatalf("expected cloud freq 42.0Hz immediately after reconnect yield, got %v", fr.Double)
+	}
+}
+
+func TestAutonomousFallbackIgnoresBadQualityZeroSetpoint(t *testing.T) {
+	t.Parallel()
+
+	host, chiller, pump := newAutonomyTestHost(t)
+
+	policy := DefaultAutonomyPolicyConfig()
+	policy.Enabled = true
+	policy.OfflineGraceSeconds = 10
+	policy.DefaultChilledWaterSupplySetpointC = 7.5
+	policy.DefaultPumpFrequencyHz = 36.0
+
+	t0 := time.Date(2026, 11, 17, 16, 0, 0, 0, time.UTC)
+	fallback, err := NewAutonomousFallbackController(AutonomousFallbackConfig{
+		Chillers: []ChillerFallbackTarget{{
+			ComponentID:        "CH-01",
+			SupplySetpointAddr: "CH-01/chw_supply_setpoint_c",
+			RunStateAddr:       "CH-01/run_state",
+			FaultAddr:          "CH-01/fault_active",
+		}},
+		Pumps: []PumpFallbackTarget{{
+			ComponentID:   "CHWP-01",
+			FrequencyAddr: "CHWP-01/frequency_setpoint_hz",
+			RunStateAddr:  "CHWP-01/run_state",
+			FaultAddr:     "CHWP-01/fault_active",
+		}},
+		Policy:                     policy,
+		CloudConnected:             false,
+		LastCloudContactAt:         t0.Add(-20 * time.Second),
+		SetpointRampRateCPerSecond: 1.0,
+		FrequencyRampRateHzPerSec:  5.0,
+	})
+	if err != nil {
+		t.Fatalf("NewAutonomousFallbackController() error = %v", err)
+	}
+	if err := host.Start([]ControllerBinding{{Priority: 50, Controller: fallback}}); err != nil {
+		t.Fatalf("host.Start() error = %v", err)
+	}
+
+	chiller.SetValue("CH-01/run_state", BooleanValue(true), QualityGood, t0)
+	chiller.SetValue("CH-01/fault_active", BooleanValue(false), QualityGood, t0)
+	chiller.SetValue("CH-01/chw_supply_setpoint_c", DoubleValue(0), QualityBad, t0)
+	pump.SetValue("CHWP-01/run_state", BooleanValue(true), QualityGood, t0)
+	pump.SetValue("CHWP-01/fault_active", BooleanValue(false), QualityGood, t0)
+	pump.SetValue("CHWP-01/frequency_setpoint_hz", DoubleValue(0), QualityBad, t0)
+
+	for step := 0; step < 3; step++ {
+		at := t0.Add(time.Duration(step) * time.Second)
+		res, err := host.RunCycle(context.Background(), at)
+		if err != nil {
+			t.Fatalf("step %d RunCycle error = %v", step, err)
+		}
+		for _, d := range res.Cycle.Decisions {
+			if d.Address == "CH-01/chw_supply_setpoint_c" && d.Effective != nil && d.Effective.Double != 7.5 {
+				t.Fatalf("step %d must not ramp chilled-water setpoint from QualityBad 0C, got %v", step, d.Effective.Double)
+			}
+			if d.Address == "CHWP-01/frequency_setpoint_hz" && d.Effective != nil && d.Effective.Double != 36.0 {
+				t.Fatalf("step %d must not ramp pump frequency from QualityBad 0Hz, got %v", step, d.Effective.Double)
+			}
+		}
+	}
+
+	tGood := t0.Add(3 * time.Second)
+	chiller.SetValue("CH-01/chw_supply_setpoint_c", DoubleValue(10.5), QualityGood, tGood)
+	res, err := host.RunCycle(context.Background(), tGood)
+	if err != nil {
+		t.Fatalf("QualityGood RunCycle error = %v", err)
+	}
+	var gotSP float64
+	for _, d := range res.Cycle.Decisions {
+		if d.Address == "CH-01/chw_supply_setpoint_c" && d.Effective != nil {
+			gotSP = d.Effective.Double
+		}
+	}
+	if gotSP != 10.5 {
+		t.Fatalf("expected bumpless seed 10.5 once QualityGood arrives, got %v", gotSP)
 	}
 }

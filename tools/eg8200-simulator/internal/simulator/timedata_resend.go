@@ -35,9 +35,16 @@ var ResendPriorityOrder = []edgecontrol.DataPriority{
 // ResendCursorState persists the highest committed Timedata sequence per priority
 // so mid-replay crashes resume without advancing past unacknowledged lower-priority records.
 type ResendCursorState struct {
-	SchemaVersion int                                 `json:"schemaVersion"`
-	ByPriority    map[edgecontrol.DataPriority]uint64 `json:"byPriority"`
-	UpdatedAt     time.Time                           `json:"updatedAt,omitempty"`
+	SchemaVersion   int                                   `json:"schemaVersion"`
+	ByPriority      map[edgecontrol.DataPriority]uint64   `json:"byPriority"`
+	AckedByPriority map[edgecontrol.DataPriority][]uint64 `json:"ackedByPriority,omitempty"`
+	UpdatedAt       time.Time                             `json:"updatedAt,omitempty"`
+}
+
+// PublishedObservation identifies a Timedata sample confirmed flushed live over MQTT.
+type PublishedObservation struct {
+	Address    string
+	ObservedAt time.Time
 }
 
 // TimedataResendPointMeta resolves envelope routing and priority for a channel address.
@@ -79,6 +86,7 @@ type TimedataResendQueue struct {
 	pointMetadata func(address string) TimedataResendPointMeta
 	publish       func(ctx context.Context, topic string, payload []byte) error
 	cursor        ResendCursorState
+	ackedSeqs     map[uint64]edgecontrol.DataPriority
 	onlineSynced  bool
 }
 
@@ -104,6 +112,7 @@ func NewTimedataResendQueue(cfg TimedataResendConfig) (*TimedataResendQueue, err
 		pointMetadata: cfg.PointMetadata,
 		publish:       cfg.Publish,
 		cursor:        defaultResendCursorState(),
+		ackedSeqs:     make(map[uint64]edgecontrol.DataPriority),
 	}
 	if err := q.loadCursor(); err != nil {
 		return nil, err
@@ -143,11 +152,32 @@ func (q *TimedataResendQueue) loadCursor() error {
 			normalized.ByPriority[p] = seq
 		}
 	}
+	acked := make(map[uint64]edgecontrol.DataPriority)
+	for _, p := range ResendPriorityOrder {
+		for _, seq := range state.AckedByPriority[p] {
+			if seq > normalized.ByPriority[p] {
+				acked[seq] = p
+			}
+		}
+	}
+	normalized.AckedByPriority = encodeAckedByPriority(acked)
 	normalized.UpdatedAt = state.UpdatedAt
 	q.mu.Lock()
 	q.cursor = normalized
+	q.ackedSeqs = acked
 	q.mu.Unlock()
 	return nil
+}
+
+// IsSynced reports whether the queue completed its reconnect replay drain and is
+// caught up with the live session.
+func (q *TimedataResendQueue) IsSynced() bool {
+	if q == nil {
+		return true
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.onlineSynced
 }
 
 // CursorSnapshot returns a thread-safe copy of the persisted per-priority sequence cursors.
@@ -193,6 +223,115 @@ func (q *TimedataResendQueue) SyncOnlineBaseline() error {
 	if !changed {
 		return nil
 	}
+	q.pruneAckedLocked()
+	q.cursor.UpdatedAt = time.Now().UTC()
+	return q.persistCursorLocked()
+}
+
+// MarkPublishedObservations records sequences whose live MQTT envelopes were flushed
+// and advances each priority cursor contiguously without skipping unsent records.
+func (q *TimedataResendQueue) MarkPublishedObservations(obs []PublishedObservation) error {
+	if q == nil || q.timedata == nil || len(obs) == 0 {
+		return nil
+	}
+
+	q.drainMu.Lock()
+	defer q.drainMu.Unlock()
+
+	q.mu.Lock()
+	curSnapshot := make(map[edgecontrol.DataPriority]uint64, len(ResendPriorityOrder))
+	for _, p := range ResendPriorityOrder {
+		curSnapshot[p] = q.cursor.ByPriority[p]
+	}
+	q.mu.Unlock()
+
+	touchedPriorities := make(map[edgecontrol.DataPriority]struct{})
+	newlyAcked := make(map[uint64]edgecontrol.DataPriority, len(obs))
+	for _, item := range obs {
+		addr := strings.TrimSpace(item.Address)
+		if addr == "" || item.ObservedAt.IsZero() {
+			continue
+		}
+		priority := q.resolveMeta(addr).Priority
+		afterSeq := curSnapshot[priority]
+		seq, ok := q.timedata.LookupSequence(addr, item.ObservedAt, afterSeq)
+		if !ok || seq <= afterSeq {
+			continue
+		}
+		newlyAcked[seq] = priority
+		touchedPriorities[priority] = struct{}{}
+	}
+	if len(newlyAcked) == 0 {
+		return nil
+	}
+
+	q.mu.Lock()
+	addedAck := false
+	for seq, prio := range newlyAcked {
+		if seq > q.cursor.ByPriority[prio] {
+			if _, exists := q.ackedSeqs[seq]; !exists {
+				q.ackedSeqs[seq] = prio
+				addedAck = true
+			}
+		}
+	}
+	ackedSnapshot := make(map[uint64]struct{}, len(q.ackedSeqs))
+	for seq := range q.ackedSeqs {
+		ackedSnapshot[seq] = struct{}{}
+	}
+	for p := range touchedPriorities {
+		curSnapshot[p] = q.cursor.ByPriority[p]
+	}
+	q.mu.Unlock()
+
+	advanced := make(map[edgecontrol.DataPriority]uint64)
+	for _, p := range ResendPriorityOrder {
+		if _, touched := touchedPriorities[p]; !touched {
+			continue
+		}
+		cur := curSnapshot[p]
+		for {
+			recs, err := q.timedata.QueryAfterSequence(cur, q.batchSize, func(rec edgecontrol.TimedataRecord) bool {
+				return q.resolveMeta(rec.Address).Priority == p
+			})
+			if err != nil {
+				return err
+			}
+			if len(recs) == 0 {
+				break
+			}
+			progressed := false
+			stoppedOnUnacked := false
+			for _, rec := range recs {
+				if _, ok := ackedSnapshot[rec.Sequence]; !ok {
+					stoppedOnUnacked = true
+					break
+				}
+				cur = rec.Sequence
+				progressed = true
+			}
+			if stoppedOnUnacked || !progressed {
+				break
+			}
+		}
+		if cur > curSnapshot[p] {
+			advanced[p] = cur
+		}
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	cursorChanged := false
+	for p, seq := range advanced {
+		if seq > q.cursor.ByPriority[p] {
+			q.cursor.ByPriority[p] = seq
+			cursorChanged = true
+		}
+	}
+	if !addedAck && !cursorChanged {
+		return nil
+	}
+	q.pruneAckedLocked()
 	q.cursor.UpdatedAt = time.Now().UTC()
 	return q.persistCursorLocked()
 }
@@ -231,7 +370,24 @@ func (q *TimedataResendQueue) Drain(ctx context.Context) (TimedataDrainResult, e
 				break
 			}
 
-			batches := q.buildReplayBatches(records)
+			var pageMaxSeq uint64
+			unacked := make([]edgecontrol.TimedataRecord, 0, len(records))
+			for _, rec := range records {
+				if rec.Sequence > pageMaxSeq {
+					pageMaxSeq = rec.Sequence
+				}
+				if !q.isSequenceAcked(rec.Sequence) {
+					unacked = append(unacked, rec)
+				}
+			}
+			if len(unacked) == 0 {
+				if err := q.commitCursor(priority, pageMaxSeq); err != nil {
+					return result, err
+				}
+				continue
+			}
+
+			batches := q.buildReplayBatches(unacked)
 			for _, batch := range batches {
 				if len(batch.devices) > 0 {
 					envelope, err := q.buildReplayEnvelope(batch)
@@ -260,6 +416,9 @@ func (q *TimedataResendQueue) Drain(ctx context.Context) (TimedataDrainResult, e
 				if err := q.commitCursor(priority, batch.maxSequence); err != nil {
 					return result, err
 				}
+			}
+			if err := q.commitCursor(priority, pageMaxSeq); err != nil {
+				return result, err
 			}
 		}
 	}
@@ -407,6 +566,37 @@ func normalizeResendPriority(p edgecontrol.DataPriority) edgecontrol.DataPriorit
 	}
 }
 
+func (q *TimedataResendQueue) isSequenceAcked(seq uint64) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	_, ok := q.ackedSeqs[seq]
+	return ok
+}
+
+func (q *TimedataResendQueue) pruneAckedLocked() {
+	for seq, prio := range q.ackedSeqs {
+		if seq <= q.cursor.ByPriority[prio] {
+			delete(q.ackedSeqs, seq)
+		}
+	}
+	q.cursor.AckedByPriority = encodeAckedByPriority(q.ackedSeqs)
+}
+
+func encodeAckedByPriority(acked map[uint64]edgecontrol.DataPriority) map[edgecontrol.DataPriority][]uint64 {
+	if len(acked) == 0 {
+		return nil
+	}
+	out := make(map[edgecontrol.DataPriority][]uint64)
+	for seq, prio := range acked {
+		out[prio] = append(out[prio], seq)
+	}
+	for prio, seqs := range out {
+		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+		out[prio] = seqs
+	}
+	return out
+}
+
 func (q *TimedataResendQueue) cursorForPriority(priority edgecontrol.DataPriority) uint64 {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -420,6 +610,7 @@ func (q *TimedataResendQueue) commitCursor(priority edgecontrol.DataPriority, se
 		return nil
 	}
 	q.cursor.ByPriority[priority] = sequence
+	q.pruneAckedLocked()
 	q.cursor.UpdatedAt = time.Now().UTC()
 	return q.persistCursorLocked()
 }
@@ -473,6 +664,12 @@ func cloneResendCursorState(src ResendCursorState) ResendCursorState {
 	}
 	for _, p := range ResendPriorityOrder {
 		out.ByPriority[p] = src.ByPriority[p]
+		if len(src.AckedByPriority[p]) > 0 {
+			if out.AckedByPriority == nil {
+				out.AckedByPriority = make(map[edgecontrol.DataPriority][]uint64, len(src.AckedByPriority))
+			}
+			out.AckedByPriority[p] = append([]uint64(nil), src.AckedByPriority[p]...)
+		}
 	}
 	return out
 }
