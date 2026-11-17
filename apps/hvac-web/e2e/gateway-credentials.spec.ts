@@ -1,42 +1,198 @@
 import { SITE_ID, principal } from './gateway';
 import { expect, test } from './test';
 
-test('enrollment code disappears on close and stopping a gateway requires explicit permanent confirmation', async ({ page }) => {
-  const gatewayId = '018f3e00-4000-7000-8000-000000000100';
-  const now = new Date().toISOString();
-  const enrollmentCode = 'A'.repeat(43);
-  let revoked = false;
-  const revocations: string[] = [];
-  await page.route('**/api/v1/principal', (route) => route.fulfill({ json: {
-    ...principal, authorization: { ...principal.authorization, capabilities: [...principal.authorization.capabilities, 'device.write'] },
-  } }));
-  await page.route(`**/api/v1/sites/${SITE_ID}/devices*`, (route) => route.fulfill({ json: {
-    items: [{ id: gatewayId, tenantId: '018f3d00-0000-7000-8000-000000000001', siteId: SITE_ID, code: 'test-gateway', displayName: '测试现场网关', deviceType: 'GATEWAY', status: 'ACTIVE', revision: 1, createdAt: now, updatedAt: now }],
-    hasMore: false, nextCursor: null,
-  } }));
-  await page.route('**/api/v1/gateways/**', async (route) => {
-    const request = route.request();
-    if (request.url().endsWith('/revoke')) { revoked = true; revocations.push(request.headers()['x-csrf-token']); }
-    const body = request.url().endsWith('/enrollment-code')
-      ? { enrollmentCode, expiresAt: now }
-      : { status: revoked ? 'REVOKED' : 'ACTIVE', expiresAt: revoked ? undefined : now };
-    await route.fulfill({ json: body });
+const GATEWAY_ID = '018f3e00-4000-7000-8000-000000000100';
+const INITIAL_CERT_ID = '0193f100-0000-7000-8000-000000000001';
+
+function grantDeviceWritePrincipal() {
+  return {
+    ...principal,
+    authorization: {
+      ...principal.authorization,
+      capabilities: [...principal.authorization.capabilities, 'device.write'],
+    },
+  };
+}
+
+test('gateway credential lifecycle supports code disposal, lossless rotation, single-cert revocation, gateway stop, and re-enable across themes at 1440px', async ({
+  page,
+  gateway,
+}) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
   });
+  page.on('pageerror', (error) => {
+    pageErrors.push(error.message);
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  gateway.principalOverride = grantDeviceWritePrincipal();
+
   await page.goto(`/settings/integrations?site=${SITE_ID}`);
-  await page.getByRole('button', { name: '测试现场网关' }).click();
-  await page.getByRole('button', { name: '生成接入码', exact: true }).click();
-  await expect(page.getByRole('textbox', { name: '一次性接入码', exact: true })).toHaveValue(enrollmentCode);
+  await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
+
+  const sheet = page.getByRole('dialog');
+  const certList = sheet.getByRole('list', { name: '已签发证书' });
+  const initialCertItem = certList.getByRole('listitem').filter({ hasText: '序列号 1a2b3c4d5e6f7a8b' });
+  await expect(initialCertItem).toBeVisible();
+  await expect(initialCertItem).toContainText('有效');
+
+  // 1. Generate one-time enrollment code and verify disposal on Escape close.
+  await sheet.getByRole('button', { name: '生成接入码', exact: true }).click();
+  const codeInput = sheet.getByRole('textbox', { name: '一次性接入码', exact: true });
+  await expect(codeInput).toHaveValue('0001' + 'A'.repeat(39));
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: '测试现场网关' }).click();
-  await expect(page.getByRole('textbox', { name: '一次性接入码', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: '停用网关…', exact: true }).click();
-  await expect(page.getByRole('alertdialog')).toContainText('该身份不能恢复');
-  expect(revocations).toEqual([]);
-  await page.getByRole('button', { name: '取消', exact: true }).click();
-  expect(revocations).toEqual([]);
-  await page.getByRole('button', { name: '停用网关…', exact: true }).click();
-  await page.getByRole('button', { name: '永久停用此网关', exact: true }).click();
-  await expect(page.getByRole('dialog')).toContainText('已停用');
-  await expect(page.getByRole('button', { name: '生成接入码', exact: true })).toBeDisabled();
-  expect(revocations).toEqual(['e2e-csrf-token']);
+  await expect(sheet).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
+  await expect(sheet.getByRole('textbox', { name: '一次性接入码', exact: true })).toHaveCount(0);
+
+  // 2. Rotate key cleanly without invalidating the existing active certificate.
+  await sheet.getByRole('button', { name: '轮换密钥', exact: true }).click();
+  await expect(sheet.getByRole('textbox', { name: '一次性接入码', exact: true })).toHaveValue(
+    '0002' + 'R'.repeat(39),
+  );
+  await expect(initialCertItem).toContainText('有效');
+
+  // Simulate field gateway enrolling with the rotated code and refresh status.
+  gateway.issueGatewayCertificate(GATEWAY_ID, { serialNumber: '2b3c4d5e6f7a8b9c' });
+  await sheet.getByRole('button', { name: '刷新状态', exact: true }).click();
+  const newerCertItem = certList.getByRole('listitem').filter({ hasText: '序列号 2b3c4d5e6f7a8b9c' });
+  await expect(newerCertItem).toContainText('有效');
+  await expect(initialCertItem).toContainText('有效');
+
+  // 3. Revoke only the older active certificate with a reason while keeping the newer one valid.
+  await initialCertItem.getByRole('button', { name: '吊销证书…', exact: true }).click();
+  const certAlert = page.getByRole('alertdialog');
+  await expect(certAlert).toContainText('同网关上其他仍在有效期内的轮换证书会继续工作');
+  await certAlert.getByLabel('吊销原因（可选）').fill('证书私钥疑似泄露');
+  await certAlert.getByRole('button', { name: '确认吊销', exact: true }).click();
+
+  await expect(certAlert).toHaveCount(0);
+  await expect(initialCertItem).toContainText('已吊销');
+  await expect(initialCertItem).toContainText('原因：证书私钥疑似泄露');
+  await expect(initialCertItem.getByRole('button', { name: '吊销证书…', exact: true })).toHaveCount(0);
+  await expect(newerCertItem).toContainText('有效');
+  await expect(sheet).toContainText('证书有效');
+
+  // 4. Verify zero horizontal overflow in light and dark themes at 1440x900.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+
+  await page.getByRole('radiogroup', { name: '外观' }).getByRole('radio', { name: '深色' }).click();
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+    .toBe('dark');
+  await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
+  await expect(sheet).toContainText('证书有效');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+
+  // 5. Stop the gateway with explicit confirmation, then cancel once, then confirm.
+  const stopWrites = () => gateway.writes.filter((entry) => entry.path === `/api/v1/gateways/${GATEWAY_ID}/revoke`);
+  await sheet.getByRole('button', { name: '停用网关…', exact: true }).click();
+  const stopAlert = page.getByRole('alertdialog');
+  await expect(stopAlert).toContainText('将作废 EG8200-COMMERCIAL-001 的全部有效证书和未使用的接入码');
+  await expect(stopAlert).toContainText('重新启用并生成接入码');
+  expect(stopWrites()).toHaveLength(0);
+  await stopAlert.getByRole('button', { name: '取消', exact: true }).click();
+  expect(stopWrites()).toHaveLength(0);
+
+  await sheet.getByRole('button', { name: '停用网关…', exact: true }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: '停用此网关', exact: true }).click();
+  await expect(sheet).toContainText('已停用');
+  await expect(newerCertItem).toContainText('已吊销');
+  await expect(sheet.getByRole('button', { name: '生成接入码', exact: true })).toHaveCount(0);
+
+  // 6. Re-enable the stopped gateway via rotation while historical certificates stay revoked.
+  const reenableButton = sheet.getByRole('button', { name: '重新启用并生成接入码', exact: true });
+  await expect(reenableButton).toBeEnabled();
+  await reenableButton.click();
+  await expect(sheet.getByRole('textbox', { name: '一次性接入码', exact: true })).toHaveValue(
+    '0003' + 'R'.repeat(39),
+  );
+  await expect(sheet).toContainText('等待接入');
+  await expect(initialCertItem).toContainText('已吊销');
+  await expect(newerCertItem).toContainText('已吊销');
+
+  const gatewayWrites = gateway.writes.filter((entry) => entry.path.startsWith(`/api/v1/gateways/${GATEWAY_ID}/`));
+  expect(gatewayWrites).toEqual([
+    { method: 'POST', path: `/api/v1/gateways/${GATEWAY_ID}/enrollment-code`, body: null, csrfToken: 'e2e-csrf-token' },
+    { method: 'POST', path: `/api/v1/gateways/${GATEWAY_ID}/rotate`, body: null, csrfToken: 'e2e-csrf-token' },
+    {
+      method: 'POST',
+      path: `/api/v1/gateways/${GATEWAY_ID}/credentials/${INITIAL_CERT_ID}/revoke`,
+      body: { reason: '证书私钥疑似泄露' },
+      csrfToken: 'e2e-csrf-token',
+    },
+    { method: 'POST', path: `/api/v1/gateways/${GATEWAY_ID}/revoke`, body: null, csrfToken: 'e2e-csrf-token' },
+    { method: 'POST', path: `/api/v1/gateways/${GATEWAY_ID}/rotate`, body: null, csrfToken: 'e2e-csrf-token' },
+  ]);
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('gateway credential sheet handles empty certificate list, fingerprint fallback, read-only gating, and error retry', async ({
+  page,
+  gateway,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  gateway.seedGatewayCredentials(GATEWAY_ID, { revoked: false, records: [] });
+
+  let failCredentials = true;
+  await page.route(`**/api/v1/gateways/${GATEWAY_ID}/credentials`, async (route) => {
+    if (failCredentials) {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'CREDENTIAL_SERVICE_UNAVAILABLE' }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto(`/settings/integrations?site=${SITE_ID}`);
+  await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
+
+  const sheet = page.getByRole('dialog');
+  await expect(sheet).toContainText('等待接入');
+  await expect(sheet.getByRole('alert')).toContainText('已签发证书列表暂时读不到');
+
+  failCredentials = false;
+  await sheet.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(sheet).toContainText('暂无已签发的网关证书');
+
+  // Verify read-only principal cannot trigger enrollment, rotation, or stop actions.
+  await expect(sheet.getByRole('button', { name: '生成接入码', exact: true })).toBeDisabled();
+  await expect(sheet.getByRole('button', { name: '轮换密钥', exact: true })).toBeDisabled();
+  await expect(sheet.getByRole('button', { name: '停用网关…', exact: true })).toBeDisabled();
+
+  // Verify fingerprint fallback when a certificate record omits serialNumber.
+  gateway.seedGatewayCredentials(GATEWAY_ID, {
+    revoked: false,
+    records: [
+      {
+        id: INITIAL_CERT_ID,
+        gatewayId: GATEWAY_ID,
+        fingerprintSha256: '00000001a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718deadbeef',
+        serialNumber: null,
+        status: 'ACTIVE',
+        validFrom: '2026-10-01T00:00:00.000Z',
+        validUntil: '2099-01-01T00:00:00.000Z',
+        revokedAt: null,
+        revocationReason: null,
+        createdAt: '2026-10-01T00:00:00.000Z',
+      },
+    ],
+  });
+  await sheet.getByRole('button', { name: '刷新状态', exact: true }).click();
+  await expect(sheet).toContainText('指纹末 8 位 deadbeef');
+  await expect(sheet.getByRole('button', { name: '吊销证书…', exact: true })).toBeDisabled();
 });

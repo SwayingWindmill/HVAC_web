@@ -369,6 +369,7 @@ export class Gateway {
   /** The Operations Agent's Agent Sessions for the Site. */
   readonly assistant = new AssistantOwner();
   readonly concentratorStates = new Map<string, Json>();
+  readonly gatewayCredentialsState = new Map<string, { revoked: boolean; enrollmentSeq: number; certSeq: number; records: Json[] }>();
   readonly writes: RecordedRequest[] = [];
   readonly unexpected: string[] = [];
 
@@ -1054,10 +1055,8 @@ export class Gateway {
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/devices`) {
       return { body: { items: this.assetModel.devices, hasMore: false, nextCursor: null } };
     }
-    const gatewayCredMatch = path.match(/^\/api\/v1\/gateways\/([^/]+)\/credential$/);
-    if (method === 'GET' && gatewayCredMatch) {
-      return { body: { status: 'ACTIVE', expiresAt: new Date(Date.now() + 90 * 86_400_000).toISOString() } };
-    }
+    const gatewayCredentialReply = this.gatewayCredentials(method, path, body, csrfToken, now);
+    if (gatewayCredentialReply) return gatewayCredentialReply;
     const concentratorReply = this.concentrators(method, path, body, csrfToken, now);
     if (concentratorReply) return concentratorReply;
     if (method === 'GET' && path === `/api/v1/sites/${SITE_ID}/asset-model`) return { body: this.assetModel };
@@ -1477,6 +1476,182 @@ export class Gateway {
     order.version += 1;
     order.updatedAt = now;
     order.timeline.push({ operation, toStatus, reason: reason ?? '', actorType: 'PRINCIPAL', actorId: MY_ID, occurredAt: now, version: order.version });
+  }
+
+  seedGatewayCredentials(gatewayId: string, options: { revoked?: boolean; records: Json[] }) {
+    this.gatewayCredentialsState.set(gatewayId, {
+      revoked: Boolean(options.revoked),
+      enrollmentSeq: 0,
+      certSeq: options.records.length,
+      records: options.records.map((record) => ({ ...record })),
+    });
+  }
+
+  issueGatewayCertificate(
+    gatewayId: string,
+    options?: { serialNumber?: string; fingerprintSha256?: string; validDays?: number },
+  ): Json {
+    const now = new Date().toISOString();
+    const state = this.getOrInitGatewayCredentialState(gatewayId, now);
+    state.certSeq += 1;
+    const seqHex = String(state.certSeq).padStart(12, '0');
+    const validDays = options?.validDays ?? 90;
+    const record: Json = {
+      id: `0193f100-0000-7000-8000-${seqHex}`,
+      gatewayId,
+      fingerprintSha256: options?.fingerprintSha256
+        ?? `${String(state.certSeq).padStart(8, '0')}a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c`,
+      serialNumber: options?.serialNumber ?? `1a2b3c4d5e6f${state.certSeq.toString(16).padStart(4, '0')}`,
+      status: 'ACTIVE',
+      validFrom: now,
+      validUntil: new Date(Date.parse(now) + validDays * DAY_MS).toISOString(),
+      revokedAt: null,
+      revocationReason: null,
+      createdAt: now,
+    };
+    state.records.unshift(record);
+    return record;
+  }
+
+  private getOrInitGatewayCredentialState(
+    gatewayId: string,
+    now: string,
+  ): { revoked: boolean; enrollmentSeq: number; certSeq: number; records: Json[] } {
+    const existing = this.gatewayCredentialsState.get(gatewayId);
+    if (existing) return existing;
+    const created: { revoked: boolean; enrollmentSeq: number; certSeq: number; records: Json[] } = {
+      revoked: false,
+      enrollmentSeq: 0,
+      certSeq: 1,
+      records: [
+        {
+          id: '0193f100-0000-7000-8000-000000000001',
+          gatewayId,
+          fingerprintSha256: '00000001a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c',
+          serialNumber: '1a2b3c4d5e6f7a8b',
+          status: 'ACTIVE',
+          validFrom: new Date(Date.parse(now) - 7 * DAY_MS).toISOString(),
+          validUntil: new Date(Date.parse(now) + 83 * DAY_MS).toISOString(),
+          revokedAt: null,
+          revocationReason: null,
+          createdAt: new Date(Date.parse(now) - 7 * DAY_MS).toISOString(),
+        },
+      ],
+    };
+    this.gatewayCredentialsState.set(gatewayId, created);
+    return created;
+  }
+
+  private gatewayCredentials(
+    method: string,
+    path: string,
+    body: Json | null,
+    csrfToken: string | undefined,
+    now: string,
+  ): { status?: number; body: unknown } | undefined {
+    const certRevokeMatch = path.match(/^\/api\/v1\/gateways\/([^/]+)\/credentials\/([^/]+)\/revoke$/);
+    const match = certRevokeMatch
+      ? null
+      : path.match(/^\/api\/v1\/gateways\/([^/]+)\/(credential|credentials|enrollment-code|rotate|revoke)$/);
+    if (!certRevokeMatch && !match) return undefined;
+
+    const gatewayId = decodeURIComponent((certRevokeMatch ? certRevokeMatch[1] : match![1])!);
+    const refuse = (status: number, code: string, detail: string) => ({
+      status,
+      body: { type: 'about:blank', title: detail, status, detail, instance: path, code, traceId: '0'.repeat(32), retryable: false },
+    });
+
+    const gatewayDevice = (this.assetModel.devices as Json[]).find((d) => d.id === gatewayId && d.deviceType === 'GATEWAY');
+    if (!gatewayDevice) return refuse(404, 'GATEWAY_NOT_FOUND', 'Gateway not found');
+
+    const activePrincipal = this.principalOverride ?? principal;
+    const caps = new Set<string>(activePrincipal.authorization?.capabilities ?? []);
+    if (method === 'GET' && !caps.has('device.read')) {
+      return refuse(403, 'CREDENTIAL_FORBIDDEN', 'device.read required');
+    }
+    if (method === 'POST') {
+      if (!caps.has('device.write')) {
+        return refuse(403, 'CREDENTIAL_FORBIDDEN', 'device.write required');
+      }
+      if (!csrfToken) {
+        return refuse(403, 'CSRF_INVALID', 'CSRF token required');
+      }
+    }
+
+    const state = this.getOrInitGatewayCredentialState(gatewayId, now);
+
+    if (certRevokeMatch && method === 'POST') {
+      const credentialId = decodeURIComponent(certRevokeMatch[2]!);
+      const targetIndex = state.records.findIndex((record) => record.id === credentialId);
+      if (targetIndex < 0) return refuse(404, 'GATEWAY_NOT_FOUND', 'Gateway certificate not found');
+      let trimmedReason: string | null = null;
+      if (body?.reason !== undefined && body.reason !== null) {
+        if (typeof body.reason !== 'string') {
+          return refuse(400, 'ENROLLMENT_REJECTED', 'Invalid revocation reason');
+        }
+        const candidate = body.reason.trim();
+        if (!candidate || candidate.length > 512) {
+          return refuse(400, 'ENROLLMENT_REJECTED', 'Revocation reason must be 1..512 characters');
+        }
+        trimmedReason = candidate;
+      }
+      const current = state.records[targetIndex]!;
+      if (current.status === 'ACTIVE') {
+        state.records[targetIndex] = {
+          ...current,
+          status: 'REVOKED',
+          revokedAt: now,
+          revocationReason: trimmedReason,
+        };
+      }
+      return { body: state.records[targetIndex] };
+    }
+
+    const action = match?.[2];
+    if (method === 'GET' && action === 'credential') {
+      if (state.revoked) return { body: { status: 'REVOKED' } };
+      const activeRecords = state.records.filter((record) => record.status === 'ACTIVE');
+      if (activeRecords.length === 0) return { body: { status: 'NOT_ENROLLED' } };
+      const maxExpiryMs = Math.max(...activeRecords.map((record) => Date.parse(record.validUntil)));
+      const expiresAt = new Date(maxExpiryMs).toISOString();
+      const nowMs = Date.parse(now);
+      const status = maxExpiryMs <= nowMs
+        ? 'EXPIRED'
+        : maxExpiryMs < nowMs + 14 * DAY_MS
+          ? 'EXPIRING'
+          : 'ACTIVE';
+      return { body: { status, expiresAt } };
+    }
+
+    if (method === 'GET' && action === 'credentials') {
+      return { body: { items: state.records } };
+    }
+
+    if (method === 'POST' && action === 'enrollment-code') {
+      if (state.revoked) return refuse(409, 'GATEWAY_REVOKED', 'Gateway identity has been revoked.');
+      state.enrollmentSeq += 1;
+      const enrollmentCode = `${String(state.enrollmentSeq).padStart(4, '0')}${'A'.repeat(39)}`;
+      return { body: { enrollmentCode, expiresAt: new Date(Date.parse(now) + DAY_MS).toISOString() } };
+    }
+
+    if (method === 'POST' && action === 'rotate') {
+      state.revoked = false;
+      state.enrollmentSeq += 1;
+      const enrollmentCode = `${String(state.enrollmentSeq).padStart(4, '0')}${'R'.repeat(39)}`;
+      return { body: { enrollmentCode, expiresAt: new Date(Date.parse(now) + DAY_MS).toISOString() } };
+    }
+
+    if (method === 'POST' && action === 'revoke') {
+      state.revoked = true;
+      state.records = state.records.map((record) => (
+        record.status === 'ACTIVE'
+          ? { ...record, status: 'REVOKED', revokedAt: now }
+          : record
+      ));
+      return { body: { status: 'REVOKED' } };
+    }
+
+    return undefined;
   }
 
   private getOrInitConcentratorState(gatewayId: string, unitId: number, now: string): Json {
