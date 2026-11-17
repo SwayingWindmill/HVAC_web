@@ -15,6 +15,10 @@
 
 #### 变更
 
+- 为后台常驻协程补齐统一的 panic 恢复与全链路南向分布式追踪透传：
+  - `libs/observability` 新增 `Recover`、`GoSafe` 与 `(*Runtime).Go`，捕获后台协程 panic、输出脱敏错误日志并累加 `hvac_goroutine_panics_total`；`cmd/*`、`modules/{alarm,energy,iam,maintenance,registry,telemetry,workorder}` 后台循环与连接隧道协程统一接入恢复保护。
+  - `modules/connectivity` 将 MQTT 上行接收改为按网关 UUIDv7 分桶的定长协程池（默认 `32` 路、`4096` 个追踪队列上限、空闲队列回收与非阻塞 `time.AfterFunc` 重试），并将上行报文 `traceId` 与 HTTP `traceparent` 透传至 `telemetry-worker` 实时接收及运行事件证据链路。
+  - `modules/command` 新增迁移 `command_intent_trace_context.sql` 保存命令意图 `trace_id`，打通平台网关与 `command-service` HTTP `traceparent` 到 `DispatchEnvelope` 及下行 MQTT 命令报文 `traceId`（幂等哈希保持与 `traceId` 无关），并用带 `256` 容量上限、panic 恢复与停机排空的 `controlFailureQueue` 替换裸异步控制失败通知协程。
 - 将运行优化（`services/optimization-service`）、故障诊断（`services/fdd-service`）与控制门禁（`modules/command`）收口到 `libs/planttwin`：
   - 删除 `SongyaxuanChillerMeterBindings()` 硬编码、多键 `run_state` 猜测、按 `deviceId` 强绑定的四信号假设，以及优化与控制侧从 `interlockChecks` 逆推 `SERVES` 的兜底逻辑；改为按 `SemanticRole` 跨拆分设备（电表、温度集中器、热量表）与 `HydraulicGraph` 解析设备与点位。
   - 将优化备选、诊断工况门控与控制时段检查统一收口至 `EvaluateOperatingSchedule`（统一 IANA 时区、预冷/延后缓冲与已批准运行例外）。

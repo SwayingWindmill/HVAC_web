@@ -7,7 +7,7 @@ description: Exhaustively model-check command intent, execution fence, MQTT comm
 
 Run the exhaustive explicit-state model checker (`modules/command/pkg/commandformal`) against real production transition decisions in `commandservice`, `mqttconnector`, and aligned SQL predicates in `postgres_*.go` / `connectivity/store.go`.
 
-- **Base syncCommit**: `899c9f16e8dd1492bc13337c78eba13852a6ecab`
+- **Base syncCommit**: `039c42e5fd85637cd00d13a39961bc3fa8992c15`
 
 ## Quick Run
 
@@ -46,15 +46,15 @@ If any invariant or mutation test fails, the runner prints the shortest failing 
 
 | File | Verified symbols & invariants |
 | --- | --- |
-| `libs/commandmodel/model.go` | Command enums, `CapabilityProfileFor`, `EvaluateRiskLevel`, `EdgeExecutionEvidence.ValidExecuted`, `CorrelationState`, `TerminalPreSendRejection` |
-| `modules/command/pkg/commandservice/service.go` | `Submit`, `Approve`, `Cancel`, `CancelPending`, `PrepareDispatch`, `ResolveDispatch`, `PrepareVerification`, `ResolveVerification` |
+| `libs/commandmodel/model.go` | Command enums, `CapabilityProfileFor`, `EvaluateRiskLevel`, `EdgeExecutionEvidence.ValidExecuted`, `CorrelationState`, `TerminalPreSendRejection`, `NormalizeTraceID` |
+| `modules/command/pkg/commandservice/service.go` | `Submit`, `Approve`, `Cancel`, `CancelPending`, `PrepareDispatch`, `ResolveDispatch`, `PrepareVerification`, `ResolveVerification`, `Close` (`controlFailureQueue` drain) |
 | `modules/command/pkg/commandservice/governance.go` | `evaluateGovernance`, `approvalPolicyForRisk`, `validateApproval`, `validateExecutionGovernance` |
 | `modules/command/pkg/commandservice/transitions.go` | `BlockingEarlierIntentStatuses`, `CanClaimQueuedIntent`, `DecideCommandCancel`, `DecideDispatchResolution`, `DecideVerificationResolution`, `DecideOperatorReconcile`, `IsActiveAbortableSequence` |
-| `modules/command/pkg/commandservice/postgres_dispatch.go` | `ClaimDispatch` (`claimDispatchOnce`) SQL blocking statuses & device freeze check, `ResolveDispatch` (`resolveDispatchOnce` `AND o.delivered_at IS NULL`), `expireGovernanceInvalidQueued` |
+| `modules/command/pkg/commandservice/postgres_dispatch.go` | `ClaimDispatch` (`claimDispatchOnce`) SQL blocking statuses & device freeze check, `ResolveDispatch` (`resolveDispatchOnce` `AND o.delivered_at IS NULL`), `expireGovernanceInvalidQueued`, `DispatchEnvelope.TraceID` projection |
 | `modules/command/pkg/commandservice/postgres_cancel.go` | `Cancel` (`cancelOnce`) & `CancelPending` delegation to `DecideCommandCancel` and `IsActiveAbortableSequence`, outbox retirement (`delivered_at = $3, lease_until = NULL`) |
 | `modules/command/pkg/commandservice/postgres_verification.go` | `ResolveVerification` delegation to `DecideVerificationResolutionWithEdge` |
 | `modules/command/pkg/commandservice/postgres_reconcile.go` | `reconcileOnce` delegation to `DecideOperatorReconcile` |
-| `modules/command/pkg/mqttconnector/connector.go` | `ResumeActionForCorrelation`, `DrainTenantReplies`, `RecoverTenantReplies`, `ResolveCorrelationReply`, `ReplyBackedResult`, `completeRecoveredReply` |
+| `modules/command/pkg/mqttconnector/connector.go` | `ResumeActionForCorrelation`, `DrainTenantReplies`, `RecoverTenantReplies`, `ResolveCorrelationReply`, `ReplyBackedResult`, `completeRecoveredReply`, `buildCommandEnvelope` `traceId`, `recoverReplies` panic guard |
 | `modules/connectivity/pkg/connectivity/store.go` | `RecoverCommandReplies` (`state = 'REPLIED'`, `ORDER BY replied_at, attempt_id LIMIT $2`) |
 
 ## Keeping the Verifier Synchronized
@@ -62,7 +62,7 @@ If any invariant or mutation test fails, the runner prints the shortest failing 
 When modifying any covered file, inspect changes since `syncCommit`:
 
 ```bash
-git diff 899c9f16e8dd1492bc13337c78eba13852a6ecab -- libs/commandmodel/ modules/command/pkg/commandservice/ modules/command/pkg/mqttconnector/connector.go modules/connectivity/pkg/connectivity/store.go
+git diff 039c42e5fd85637cd00d13a39961bc3fa8992c15 -- libs/commandmodel/ modules/command/pkg/commandservice/ modules/command/pkg/mqttconnector/connector.go modules/connectivity/pkg/connectivity/store.go
 ```
 
 If transitions, SQL guards, or recovery batch limits change:
