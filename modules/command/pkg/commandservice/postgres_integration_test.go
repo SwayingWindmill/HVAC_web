@@ -322,6 +322,7 @@ func resetCommandFixture(t *testing.T, admin *pgxpool.Pool) {
 		`DELETE FROM command_runtime.connector_evidence`,
 		`DELETE FROM command_runtime.command_grant_uses`,
 		`DELETE FROM command_runtime.command_audit_intents`,
+		`DELETE FROM command_runtime.control_alarm_outbox`,
 		`DELETE FROM command_runtime.command_dispatch_outbox`,
 		`DELETE FROM command_runtime.command_transitions`,
 		`DELETE FROM command_runtime.command_attempts`,

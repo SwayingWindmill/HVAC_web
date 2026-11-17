@@ -103,6 +103,7 @@ type PendingPublication struct {
 	DeviceID         string
 	PreviousRevision int64
 	Revision         int64
+	AlarmAttempts    int
 	EvaluatedAt      time.Time
 	Snapshot         telemetryapi.DeviceObservationSnapshot
 	ChangedKeys      []string

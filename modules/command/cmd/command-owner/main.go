@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -108,8 +109,22 @@ func main() {
 		logger.Error("command_adapters_configuration_invalid", "error_code", "COMMAND_ADAPTERS_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
-	failureNotifier := buildCommandControlFailureNotifier(logger)
-	store.SetControlFailureNotifier(failureNotifier)
+	alarmSender := buildCommandControlFailureSender(logger)
+	var alarmRelay *commandservice.ControlAlarmRelay
+	if alarmSender != nil {
+		alarmRelay, err = commandservice.NewControlAlarmRelay(commandservice.ControlAlarmRelayConfig{
+			Store:      store,
+			Sender:     alarmSender,
+			LeaseOwner: commandservice.UniqueControlAlarmLeaseOwner("command-owner"),
+			Logger:     logger,
+			Metrics:    telemetry.Metrics,
+		})
+		if err != nil {
+			logger.Error("command_alarm_relay_configuration_invalid", "error_code", "COMMAND_ALARM_RELAY_CONFIGURATION_INVALID")
+			os.Exit(1)
+		}
+		store.SetControlAlarmOutboxWakeup(alarmRelay.Notify)
+	}
 	authority, err := commandservice.NewControlAuthority(commandservice.ControlAuthorityConfig{
 		Store:                  store,
 		Runtime:                store,
@@ -121,7 +136,6 @@ func main() {
 		CommandGrantPresenter:  commandServiceSPIFFE,
 		CommandGrantAudience:   grantAudience,
 		CommandGrantUseChecker: useChecker,
-		ControlFailureNotifier: failureNotifier,
 	})
 	if err != nil {
 		logger.Error("command_authority_configuration_invalid", "error_code", "COMMAND_AUTHORITY_CONFIGURATION_INVALID")
@@ -153,7 +167,7 @@ func main() {
 		logger.Error("command_operator_http_configuration_invalid", "error_code", "COMMAND_OPERATOR_HTTP_CONFIGURATION_INVALID")
 		os.Exit(1)
 	}
-	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(runtimeHTTPConfig(authority, telemetry.Metrics, failureNotifier))
+	runtimeHandler, err := commandservice.NewRuntimeHTTPHandler(runtimeHTTPConfig(authority, telemetry.Metrics, nil))
 	if err != nil {
 		logger.Error("command_runtime_configuration_invalid", "error_code", "COMMAND_RUNTIME_CONFIGURATION_INVALID")
 		os.Exit(1)
@@ -203,10 +217,25 @@ func main() {
 		}
 	}()
 
+	relayCtx, cancelRelay := context.WithCancel(context.Background())
+	var relayWg sync.WaitGroup
+	defer func() {
+		cancelRelay()
+		relayWg.Wait()
+	}()
+	if alarmRelay != nil {
+		relayWg.Add(1)
+		go func() {
+			defer relayWg.Done()
+			alarmRelay.Run(relayCtx)
+		}()
+	}
+
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-shutdown
+		cancelRelay()
 		telemetry.MarkNotReady()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -219,8 +248,13 @@ func main() {
 	logger.Info("command_service_started", "address", server.Addr, "policy_revision", policyRevision)
 	if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("command_service_stopped_unexpectedly", "error_code", "COMMAND_SERVE_FAILED")
+		cancelRelay()
+		relayWg.Wait()
+		store.Close()
 		os.Exit(1)
 	}
+	cancelRelay()
+	relayWg.Wait()
 	logger.Info("command_service_stopped")
 }
 
@@ -279,7 +313,7 @@ func resolveCommandControlEventsEndpoint() string {
 	return ""
 }
 
-func buildCommandControlFailureNotifier(logger *slog.Logger) commandservice.ControlFailureNotifier {
+func buildCommandControlFailureSender(logger *slog.Logger) commandservice.ControlAlarmSender {
 	endpoint := resolveCommandControlEventsEndpoint()
 	if endpoint == "" {
 		return nil
@@ -319,14 +353,17 @@ func buildCommandControlFailureNotifier(logger *slog.Logger) commandservice.Cont
 		}
 		return nil
 	}
-	return newHTTPControlFailureNotifier(endpoint, client, logger)
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return newHTTPControlFailureSender(endpoint, client, logger)
 }
 
-func newHTTPControlFailureNotifier(endpoint string, client *http.Client, logger *slog.Logger) commandservice.ControlFailureNotifier {
+func newHTTPControlFailureSender(endpoint string, client *http.Client, logger *slog.Logger) commandservice.ControlAlarmSender {
 	if strings.TrimSpace(endpoint) == "" || client == nil {
 		return nil
 	}
-	return func(ctx context.Context, event commandservice.ControlFailureEvent) {
+	return func(ctx context.Context, event commandservice.ControlFailureEvent) error {
 		actorType := strings.TrimSpace(event.ActorType)
 		if actorType == "" {
 			actorType = "COMMAND_RUNTIME"
@@ -359,11 +396,11 @@ func newHTTPControlFailureNotifier(endpoint string, client *http.Client, logger 
 		}
 		raw, err := json.Marshal(payload)
 		if err != nil {
-			return
+			return &commandservice.ControlAlarmDeliveryError{Code: "CONTROL_ALARM_PAYLOAD_INVALID"}
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
 		if err != nil {
-			return
+			return &commandservice.ControlAlarmDeliveryError{Code: "CONTROL_ALARM_REQUEST_INVALID"}
 		}
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := client.Do(req)
@@ -371,12 +408,16 @@ func newHTTPControlFailureNotifier(endpoint string, client *http.Client, logger 
 			if logger != nil {
 				logger.Warn("command_control_alarm_failed", "error_code", "CONTROL_ALARM_HTTP_FAILED", "command_id", event.CommandID, "event_kind", event.Kind)
 			}
-			return
+			return &commandservice.ControlAlarmDeliveryError{Code: "CONTROL_ALARM_HTTP_FAILED"}
 		}
 		_ = resp.Body.Close()
-		if resp.StatusCode >= http.StatusMultipleChoices && logger != nil {
-			logger.Warn("command_control_alarm_rejected", "error_code", "CONTROL_ALARM_HTTP_REJECTED", "status", resp.StatusCode, "command_id", event.CommandID, "event_kind", event.Kind)
+		if resp.StatusCode >= http.StatusMultipleChoices {
+			if logger != nil {
+				logger.Warn("command_control_alarm_rejected", "error_code", "CONTROL_ALARM_HTTP_REJECTED", "status", resp.StatusCode, "command_id", event.CommandID, "event_kind", event.Kind)
+			}
+			return &commandservice.ControlAlarmDeliveryError{Code: "CONTROL_ALARM_HTTP_REJECTED"}
 		}
+		return nil
 	}
 }
 

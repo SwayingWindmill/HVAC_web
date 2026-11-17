@@ -7,6 +7,15 @@
 
 ### 2026-11-17
 
+#### 修复与加固
+
+- 修复规则触发、通知投递、优化监护、定时调度与控制链路中的生产级阻塞隐患：
+  - 遥测评估中继（`modules/telemetry`、`cmd/telemetry-worker` 与迁移 `alarm-evaluation-dead-letter.sql`）增加单次投递超时上限、指数退避与永久错误哨兵，连续失败超限或不可重试错误转入死信队列并清空租约，消除毒丸事件无限重放；
+  - 定时调度（`cmd/scheduler`、`modules/scheduler`）消除环境变量配置解析时的直接 panic，并对周期作业写入补全按调度定义串行互斥的幂等去重；
+  - 告警通知与微信提醒（`cmd/energy-api`、`services/notification-service`）为后台消费协程补全 panic 恢复与退避、有界批次排空与外部请求超时隔离，回收中断在 `SENDING` 状态的过期或空租约、钳制重复目标与边界配置，并保护重放事件不覆盖原调度位点；
+  - 运行优化自动控制监护（`services/optimization-service` 与迁移 `optimization-monitor-lease.sql`）引入分布式原子租约认领与过期接管校验防止多副本重复回滚，并为优化服务主进程补全优雅信号关闭与协程恢复保护；
+  - 设备控制失败告警（`modules/command` 与迁移 `control-alarm-outbox.sql`）改为与状态变更同事务落库发件箱并由持久化中继器投递，消除队列打满或进程重启丢失安全告警的隐患；边缘命令执行器（`edge/node-red/songyaxuan-command-executor.ts`）修复序列表延迟中止时的定时器泄漏，并串行化受理准入、持久化回滚与序列中止清理。
+
 #### 新增
 
 - 新增网关通信抓包、上行接收隔离排查接口与网关详情抽屉诊断视图（`infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql`、`modules/connectivity/pkg/packettap`、`cmd/connectivity`、`cmd/energy-api` 与 `apps/hvac-web`；网关路由注册表 `route-ownership.v1.json` 升级至第 `54` 版）：

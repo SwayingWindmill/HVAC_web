@@ -97,6 +97,7 @@ hvac_s1|infra/registry/postgres/init/registry-tags-and-template-read.sql
 hvac_s1|infra/registry/postgres/init/iam-registry-read-views.sql
 hvac_s1|infra/connectivity/postgres/init/gateway-certificate-revocation.sql
 hvac_s1|infra/connectivity/postgres/init/gateway-config-shadows.sql
+hvac_s1|infra/registry/postgres/init/optimization-monitor-lease.sql
 hvac_s1|infra/connectivity/postgres/init/uplink-quarantine-diagnostics.sql
 hvac_s2|infra/telemetry/postgres/init/001-s2-telemetry-baseline.sql
 hvac_s2|infra/telemetry/postgres/init/002-s2-telemetry-runtime-snapshot.sql
@@ -116,6 +117,7 @@ hvac_s2|infra/telemetry/postgres/init/011-point-quality.sql
 hvac_s2|infra/telemetry/postgres/init/012-measurement-uncertainty.sql
 hvac_s2|infra/telemetry/postgres/init/013-schema-and-table-comments.sql
 hvac_s2|infra/telemetry/postgres/init/mqtt-runtime-events.sql
+hvac_s2|infra/telemetry/postgres/init/alarm-evaluation-dead-letter.sql
 hvac_s3|modules/command/migrations/001_s3_command_runtime.sql
 hvac_s3|modules/command/migrations/002_s3_target_runtime.sql
 hvac_s3|modules/command/migrations/003_s3_tenant_scope.sql
@@ -126,6 +128,7 @@ hvac_s3|modules/command/migrations/007_schema_and_table_comments.sql
 hvac_s3|modules/command/migrations/008_command_precondition_mode.sql
 hvac_s3|modules/command/migrations/command-template-capability-sync.sql
 hvac_s3|modules/command/migrations/command_intent_trace_context.sql
+hvac_s3|modules/command/migrations/control-alarm-outbox.sql
 hvac_s4|modules/alarm/migrations/001_s4_alarm_runtime.sql
 hvac_s4|modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 hvac_s4|modules/alarm/migrations/003_s4_tenant_scope.sql

@@ -34,12 +34,16 @@ func (checker *fakePointHealthChecker) CheckTelemetryPointHealth(context.Context
 }
 
 type fakeAutoControlStore struct {
+	mu               sync.Mutex
 	lease            *AutoControlLeaseRecord
 	leaseErr         error
 	siteCtx          AutoControlSiteContext
 	siteCtxErr       error
+	claimHook        func(claimOwner string)
 	dispatchedRecs   []Recommendation
 	monitors         []OptimizationExecutionMonitorRecord
+	claimCalls       int
+	releaseCalls     int
 	heartbeatCalls   int
 	unhealthyCalls   int
 	verifiedCalls    int
@@ -49,6 +53,7 @@ type fakeAutoControlStore struct {
 
 type tripRecordCall struct {
 	MonitorID               string
+	ClaimOwner              string
 	NewStatus               string
 	TripReason              string
 	RollbackCommandIntentID *string
@@ -56,10 +61,14 @@ type tripRecordCall struct {
 }
 
 func (store *fakeAutoControlStore) ActiveAutoControlLease(context.Context, string, string, time.Time) (*AutoControlLeaseRecord, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	return store.lease, store.leaseErr
 }
 
 func (store *fakeAutoControlStore) LoadAutoControlSiteContext(context.Context, string, string, string, time.Time) (AutoControlSiteContext, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	return store.siteCtx, store.siteCtxErr
 }
 
@@ -72,6 +81,8 @@ func (store *fakeAutoControlStore) RecordAutomatedDispatch(
 	baselineSupplyC, appliedSupplyC, restoreSupplyC, zoneMaxC, supplyMaxC float64,
 	at time.Time,
 ) (OptimizationExecutionMonitorRecord, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	store.dispatchedRecs = append(store.dispatchedRecs, recommendation)
 	store.recordMonitorSeq++
 	monitorID := "01990000-9900-7000-8000-000000000001"
@@ -100,76 +111,166 @@ func (store *fakeAutoControlStore) RecordAutomatedDispatch(
 	return mon, nil
 }
 
-func (store *fakeAutoControlStore) ListObservingExecutionMonitors(context.Context, int) ([]OptimizationExecutionMonitorRecord, error) {
+func (store *fakeAutoControlStore) ClaimObservingExecutionMonitors(_ context.Context, claimOwner string, leaseDuration time.Duration, now time.Time, limit int) ([]OptimizationExecutionMonitorRecord, error) {
+	owner := strings.TrimSpace(claimOwner)
+	if owner == "" || leaseDuration <= 0 {
+		return nil, errors.New("execution monitor claim owner and positive lease duration are required")
+	}
+	nowUTC := now.UTC()
+	until := nowUTC.Add(leaseDuration)
+	store.mu.Lock()
+	store.claimCalls++
+	hook := store.claimHook
 	out := make([]OptimizationExecutionMonitorRecord, 0, len(store.monitors))
-	for _, mon := range store.monitors {
-		if mon.Status == ExecutionMonitorObserving {
-			out = append(out, mon)
+	for idx := range store.monitors {
+		mon := &store.monitors[idx]
+		if mon.Status != ExecutionMonitorObserving {
+			continue
 		}
+		if mon.ClaimUntil != nil && mon.ClaimUntil.After(nowUTC) {
+			continue
+		}
+		ownerCopy := owner
+		untilCopy := until
+		mon.ClaimOwner = &ownerCopy
+		mon.ClaimUntil = &untilCopy
+		out = append(out, *mon)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	store.mu.Unlock()
+	if hook != nil {
+		hook(owner)
 	}
 	return out, nil
 }
 
-func (store *fakeAutoControlStore) RecordMonitorHealthyHeartbeat(_ context.Context, monitorID, _, _ string, checkedAt time.Time) error {
+func matchesClaimOwnership(mon OptimizationExecutionMonitorRecord, claimOwner string) bool {
+	owner := strings.TrimSpace(claimOwner)
+	if mon.Status != ExecutionMonitorObserving || mon.ClaimOwner == nil || owner == "" {
+		return false
+	}
+	return *mon.ClaimOwner == owner
+}
+
+func (store *fakeAutoControlStore) ReleaseMonitorClaim(_ context.Context, monitorID, _, _, claimOwner string, _ time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.releaseCalls++
+	for idx := range store.monitors {
+		if store.monitors[idx].ID != monitorID {
+			continue
+		}
+		if !matchesClaimOwnership(store.monitors[idx], claimOwner) {
+			return ErrExecutionMonitorClaimLost
+		}
+		store.monitors[idx].ClaimOwner = nil
+		store.monitors[idx].ClaimUntil = nil
+		return nil
+	}
+	return ErrExecutionMonitorClaimLost
+}
+
+func (store *fakeAutoControlStore) RecordMonitorHealthyHeartbeat(_ context.Context, monitorID, _, _, claimOwner string, checkedAt time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	store.heartbeatCalls++
 	for idx := range store.monitors {
-		if store.monitors[idx].ID == monitorID {
-			t := checkedAt.UTC()
-			store.monitors[idx].TelemetryUnhealthySince = nil
-			store.monitors[idx].LastCheckedAt = &t
+		if store.monitors[idx].ID != monitorID {
+			continue
 		}
+		if !matchesClaimOwnership(store.monitors[idx], claimOwner) {
+			return ErrExecutionMonitorClaimLost
+		}
+		t := checkedAt.UTC()
+		store.monitors[idx].TelemetryUnhealthySince = nil
+		store.monitors[idx].LastCheckedAt = &t
+		store.monitors[idx].ClaimOwner = nil
+		store.monitors[idx].ClaimUntil = nil
+		return nil
 	}
-	return nil
+	return ErrExecutionMonitorClaimLost
 }
 
-func (store *fakeAutoControlStore) RecordMonitorTelemetryUnhealthy(_ context.Context, monitorID, _, _ string, unhealthySince, checkedAt time.Time) error {
+func (store *fakeAutoControlStore) RecordMonitorTelemetryUnhealthy(_ context.Context, monitorID, _, _, claimOwner string, unhealthySince, checkedAt time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	store.unhealthyCalls++
 	for idx := range store.monitors {
-		if store.monitors[idx].ID == monitorID {
-			if store.monitors[idx].TelemetryUnhealthySince == nil {
-				u := unhealthySince.UTC()
-				store.monitors[idx].TelemetryUnhealthySince = &u
-			}
-			c := checkedAt.UTC()
-			store.monitors[idx].LastCheckedAt = &c
+		if store.monitors[idx].ID != monitorID {
+			continue
 		}
+		if !matchesClaimOwnership(store.monitors[idx], claimOwner) {
+			return ErrExecutionMonitorClaimLost
+		}
+		if store.monitors[idx].TelemetryUnhealthySince == nil {
+			u := unhealthySince.UTC()
+			store.monitors[idx].TelemetryUnhealthySince = &u
+		}
+		c := checkedAt.UTC()
+		store.monitors[idx].LastCheckedAt = &c
+		store.monitors[idx].ClaimOwner = nil
+		store.monitors[idx].ClaimUntil = nil
+		return nil
 	}
-	return nil
+	return ErrExecutionMonitorClaimLost
 }
 
-func (store *fakeAutoControlStore) CompleteMonitorVerified(_ context.Context, monitorID, _, _ string, checkedAt time.Time) error {
+func (store *fakeAutoControlStore) CompleteMonitorVerified(_ context.Context, monitorID, _, _, claimOwner string, checkedAt time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	store.verifiedCalls++
 	for idx := range store.monitors {
-		if store.monitors[idx].ID == monitorID {
-			c := checkedAt.UTC()
-			store.monitors[idx].Status = "VERIFIED"
-			store.monitors[idx].TelemetryUnhealthySince = nil
-			store.monitors[idx].LastCheckedAt = &c
+		if store.monitors[idx].ID != monitorID {
+			continue
 		}
+		if !matchesClaimOwnership(store.monitors[idx], claimOwner) {
+			return ErrExecutionMonitorClaimLost
+		}
+		c := checkedAt.UTC()
+		store.monitors[idx].Status = ExecutionMonitorVerified
+		store.monitors[idx].TelemetryUnhealthySince = nil
+		store.monitors[idx].LastCheckedAt = &c
+		store.monitors[idx].ClaimOwner = nil
+		store.monitors[idx].ClaimUntil = nil
+		return nil
 	}
-	return nil
+	return ErrExecutionMonitorClaimLost
 }
 
-func (store *fakeAutoControlStore) TripMonitorAndLease(_ context.Context, monitor OptimizationExecutionMonitorRecord, newStatus, tripReason string, rollbackCommandIntentID *string, trippedAt time.Time) error {
-	store.trippedRecords = append(store.trippedRecords, tripRecordCall{
-		MonitorID:               monitor.ID,
-		NewStatus:               newStatus,
-		TripReason:              tripReason,
-		RollbackCommandIntentID: rollbackCommandIntentID,
-		TrippedAt:               trippedAt.UTC(),
-	})
-	if store.lease != nil {
-		store.lease.Status = "TRIPPED"
-	}
+func (store *fakeAutoControlStore) TripMonitorAndLease(_ context.Context, monitor OptimizationExecutionMonitorRecord, claimOwner, newStatus, tripReason string, rollbackCommandIntentID *string, trippedAt time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	for idx := range store.monitors {
-		if store.monitors[idx].ID == monitor.ID {
-			store.monitors[idx].Status = newStatus
-			r := tripReason
-			store.monitors[idx].TripReason = &r
-			store.monitors[idx].RollbackCommandIntentID = rollbackCommandIntentID
+		if store.monitors[idx].ID != monitor.ID {
+			continue
 		}
+		if !matchesClaimOwnership(store.monitors[idx], claimOwner) {
+			return ErrExecutionMonitorClaimLost
+		}
+		store.trippedRecords = append(store.trippedRecords, tripRecordCall{
+			MonitorID:               monitor.ID,
+			ClaimOwner:              claimOwner,
+			NewStatus:               newStatus,
+			TripReason:              tripReason,
+			RollbackCommandIntentID: rollbackCommandIntentID,
+			TrippedAt:               trippedAt.UTC(),
+		})
+		if store.lease != nil {
+			store.lease.Status = "TRIPPED"
+		}
+		store.monitors[idx].Status = newStatus
+		r := tripReason
+		store.monitors[idx].TripReason = &r
+		store.monitors[idx].RollbackCommandIntentID = rollbackCommandIntentID
+		t := trippedAt.UTC()
+		store.monitors[idx].LastCheckedAt = &t
+		store.monitors[idx].ClaimOwner = nil
+		store.monitors[idx].ClaimUntil = nil
+		return nil
 	}
-	return nil
+	return ErrExecutionMonitorClaimLost
 }
 
 type fakeTelemetryReader struct {
@@ -182,6 +283,7 @@ func (reader *fakeTelemetryReader) ReadLiveAutoControlObservation(context.Contex
 }
 
 type fakeDispatcher struct {
+	mu           sync.Mutex
 	grantReqs    []commandauth.WorkloadDecisionRequest
 	submitInputs []AutoControlDispatchInput
 	decision     commandauth.Decision
@@ -192,11 +294,15 @@ type fakeDispatcher struct {
 }
 
 func (disp *fakeDispatcher) RequestCommandGrant(_ context.Context, req commandauth.WorkloadDecisionRequest) (string, commandauth.Decision, error) {
+	disp.mu.Lock()
+	defer disp.mu.Unlock()
 	disp.grantReqs = append(disp.grantReqs, req)
 	return disp.grant, disp.decision, disp.grantErr
 }
 
 func (disp *fakeDispatcher) SubmitAutoCommand(_ context.Context, _ string, input AutoControlDispatchInput) (string, error) {
+	disp.mu.Lock()
+	defer disp.mu.Unlock()
 	disp.submitInputs = append(disp.submitInputs, input)
 	return disp.commandID, disp.submitErr
 }
@@ -727,4 +833,243 @@ func TestWorkloadCommandClientHTTP(t *testing.T) {
 	if err != nil || cmdID != "01990000-7700-7000-8000-000000000333" {
 		t.Fatalf("SubmitAutoCommand failed: cmdID=%q err=%v", cmdID, err)
 	}
+}
+
+func TestAutoControllerWorkerDefaultsAndOverrides(t *testing.T) {
+	ctrl, err := NewAutoController(&fakeAutoControlStore{}, &fakeTelemetryReader{}, &fakeDispatcher{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ctrl.effectiveWorkerID(), ":") {
+		t.Fatalf("default workerID=%q, want hostname:pid", ctrl.effectiveWorkerID())
+	}
+	if ctrl.effectiveLeaseDuration() != DefaultExecutionMonitorClaimLease {
+		t.Fatalf("default leaseDuration=%v, want %v", ctrl.effectiveLeaseDuration(), DefaultExecutionMonitorClaimLease)
+	}
+	ctrl.WithWorkerID("  replica-7  ").WithLeaseDuration(90 * time.Second)
+	if ctrl.effectiveWorkerID() != "replica-7" {
+		t.Fatalf("overridden workerID=%q, want replica-7", ctrl.effectiveWorkerID())
+	}
+	if ctrl.effectiveLeaseDuration() != 90*time.Second {
+		t.Fatalf("overridden leaseDuration=%v, want 90s", ctrl.effectiveLeaseDuration())
+	}
+	ctrl.WithWorkerID("   ").WithLeaseDuration(0)
+	if ctrl.effectiveWorkerID() != "replica-7" || ctrl.effectiveLeaseDuration() != 90*time.Second {
+		t.Fatalf("blank/zero overrides should be ignored: workerID=%q lease=%v", ctrl.effectiveWorkerID(), ctrl.effectiveLeaseDuration())
+	}
+}
+
+func TestAutoControllerMultiReplicaMonitorClaimPreventsDuplicateRollback(t *testing.T) {
+	base := time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC)
+	applied := 8.0
+	restore := 7.0
+	monID := "01990000-9900-7000-8000-000000000021"
+	store := &fakeAutoControlStore{
+		lease:   testAutoLease(base),
+		siteCtx: testAutoSiteCtx(),
+		monitors: []OptimizationExecutionMonitorRecord{{
+			ID:                 monID,
+			TenantID:           "01990000-3000-7000-8000-000000000001",
+			SiteID:             "01990000-5000-7000-8000-000000000001",
+			LeaseID:            "01990000-8800-7000-8000-000000000011",
+			DeviceID:           "01990000-6000-7000-8000-000000000001",
+			TargetCapability:   string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+			AppliedSupplyTempC: &applied,
+			RestoreSupplyTempC: &restore,
+			ZoneTempMaxC:       26.0,
+			SupplyTempMaxC:     12.0,
+			StartedAt:          base,
+			WindowEndsAt:       base.Add(30 * time.Minute),
+			Status:             ExecutionMonitorObserving,
+		}},
+	}
+	obs := testLiveObservation(base.Add(10*time.Minute), 8.0, 26.8)
+	disp := &fakeDispatcher{
+		decision:  commandauth.Decision{Allowed: true, ReasonCode: commandauth.ReasonAllowAutoLease},
+		grant:     "rollback.sig",
+		commandID: "01990000-7700-7000-8000-000000000555",
+	}
+
+	ctrlA, err := NewAutoController(store, &fakeTelemetryReader{obs: obs}, disp, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrlA.WithPointHealth(&fakePointHealthChecker{}).WithWorkerID("replica-a").WithLeaseDuration(45 * time.Second)
+
+	ctrlB, err := NewAutoController(store, &fakeTelemetryReader{obs: obs}, disp, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrlB.WithPointHealth(&fakePointHealthChecker{}).WithWorkerID("replica-b").WithLeaseDuration(45 * time.Second)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	summaries := make([]MonitorPassSummary, 2)
+	errs := make([]error, 2)
+	for idx, ctrl := range []*AutoController{ctrlA, ctrlB} {
+		wg.Add(1)
+		go func(i int, c *AutoController) {
+			defer wg.Done()
+			<-start
+			summaries[i], errs[i] = c.RunMonitorPass(context.Background(), base.Add(10*time.Minute))
+		}(idx, ctrl)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, runErr := range errs {
+		if runErr != nil {
+			t.Fatalf("replica %d RunMonitorPass err=%v", i, runErr)
+		}
+	}
+	totalRolledBack := summaries[0].RolledBack + summaries[1].RolledBack
+	totalChecked := summaries[0].Checked + summaries[1].Checked
+	if totalChecked != 1 || totalRolledBack != 1 {
+		t.Fatalf("expected exactly one replica to claim and roll back monitor, summaries=%+v", summaries)
+	}
+	if len(disp.submitInputs) != 1 || len(store.trippedRecords) != 1 {
+		t.Fatalf("expected single rollback and single trip event, submits=%d trips=%d", len(disp.submitInputs), len(store.trippedRecords))
+	}
+	if store.monitors[0].ClaimOwner != nil || store.monitors[0].ClaimUntil != nil {
+		t.Fatalf("expected monitor claim released after trip, got owner=%v until=%v", store.monitors[0].ClaimOwner, store.monitors[0].ClaimUntil)
+	}
+}
+
+func TestAutoControllerLeaseExpiryTakeoverFencesStaleReplicaAndReleasesOnError(t *testing.T) {
+	base := time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC)
+	monID := "01990000-9900-7000-8000-000000000022"
+	tenantID := "01990000-3000-7000-8000-000000000001"
+	siteID := "01990000-5000-7000-8000-000000000001"
+	applied := 8.0
+	restore := 7.0
+	store := &fakeAutoControlStore{
+		lease:   testAutoLease(base),
+		siteCtx: testAutoSiteCtx(),
+		monitors: []OptimizationExecutionMonitorRecord{{
+			ID:                 monID,
+			TenantID:           tenantID,
+			SiteID:             siteID,
+			LeaseID:            "01990000-8800-7000-8000-000000000011",
+			DeviceID:           "01990000-6000-7000-8000-000000000001",
+			TargetCapability:   string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+			AppliedSupplyTempC: &applied,
+			RestoreSupplyTempC: &restore,
+			ZoneTempMaxC:       26.0,
+			SupplyTempMaxC:     12.0,
+			StartedAt:          base,
+			WindowEndsAt:       base.Add(30 * time.Minute),
+			Status:             ExecutionMonitorObserving,
+		}},
+	}
+
+	claimedA, err := store.ClaimObservingExecutionMonitors(context.Background(), "replica-a", 45*time.Second, base.Add(time.Minute), 10)
+	if err != nil || len(claimedA) != 1 {
+		t.Fatalf("replica-a claim failed: len=%d err=%v", len(claimedA), err)
+	}
+	// Before 45s lease expires, replica-b cannot claim the monitor.
+	claimedB, err := store.ClaimObservingExecutionMonitors(context.Background(), "replica-b", 45*time.Second, base.Add(90*time.Second), 10)
+	if err != nil || len(claimedB) != 0 {
+		t.Fatalf("replica-b claimed active lease unexpectedly: len=%d err=%v", len(claimedB), err)
+	}
+	// Once lease expires at base+1m45s, replica-b takes over.
+	claimedB, err = store.ClaimObservingExecutionMonitors(context.Background(), "replica-b", 45*time.Second, base.Add(2*time.Minute), 10)
+	if err != nil || len(claimedB) != 1 || claimedB[0].ClaimOwner == nil || *claimedB[0].ClaimOwner != "replica-b" {
+		t.Fatalf("replica-b takeover failed: claimed=%+v err=%v", claimedB, err)
+	}
+
+	if err := store.RecordMonitorHealthyHeartbeat(context.Background(), monID, tenantID, siteID, "replica-a", base.Add(2*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
+		t.Fatalf("expected ErrExecutionMonitorClaimLost on stale heartbeat, got %v", err)
+	}
+	if err := store.RecordMonitorTelemetryUnhealthy(context.Background(), monID, tenantID, siteID, "replica-a", base.Add(2*time.Minute), base.Add(2*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
+		t.Fatalf("expected ErrExecutionMonitorClaimLost on stale unhealthy update, got %v", err)
+	}
+	if err := store.CompleteMonitorVerified(context.Background(), monID, tenantID, siteID, "replica-a", base.Add(30*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
+		t.Fatalf("expected ErrExecutionMonitorClaimLost on stale verify, got %v", err)
+	}
+	if err := store.TripMonitorAndLease(context.Background(), claimedA[0], "replica-a", ExecutionMonitorTripped, "stale_trip", nil, base.Add(2*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
+		t.Fatalf("expected ErrExecutionMonitorClaimLost on stale trip, got %v", err)
+	}
+	if err := store.ReleaseMonitorClaim(context.Background(), monID, tenantID, siteID, "replica-a", base.Add(2*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
+		t.Fatalf("expected ErrExecutionMonitorClaimLost on stale release, got %v", err)
+	}
+	if store.lease.Status != "ACTIVE" || store.monitors[0].Status != ExecutionMonitorObserving || *store.monitors[0].ClaimOwner != "replica-b" {
+		t.Fatalf("stale replica mutated active state: lease=%+v monitor=%+v", store.lease, store.monitors[0])
+	}
+
+	if err := store.RecordMonitorHealthyHeartbeat(context.Background(), monID, tenantID, siteID, "replica-b", base.Add(2*time.Minute)); err != nil {
+		t.Fatalf("replica-b heartbeat failed: %v", err)
+	}
+	if store.monitors[0].ClaimOwner != nil || store.monitors[0].ClaimUntil != nil {
+		t.Fatalf("expected claim cleared after healthy heartbeat, got %+v", store.monitors[0])
+	}
+	// Stale replica-a remains fenced out even after replica-b clears ClaimOwner back to NULL.
+	if err := store.TripMonitorAndLease(context.Background(), claimedA[0], "replica-a", ExecutionMonitorTripped, "late_slow_replica_trip", nil, base.Add(2*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
+		t.Fatalf("expected ErrExecutionMonitorClaimLost after claim cleared, got %v", err)
+	}
+	if err := store.CompleteMonitorVerified(context.Background(), monID, tenantID, siteID, "replica-a", base.Add(30*time.Minute)); !errors.Is(err, ErrExecutionMonitorClaimLost) {
+		t.Fatalf("expected ErrExecutionMonitorClaimLost on stale verify after claim cleared, got %v", err)
+	}
+
+	// Early exit on site context load error releases claim immediately for next pass.
+	store.siteCtxErr = errors.New("db hiccup")
+	beforeReleases := store.releaseCalls
+	ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, &fakeDispatcher{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrl.WithPointHealth(&fakePointHealthChecker{}).WithWorkerID("replica-c")
+	summary, err := ctrl.RunMonitorPass(context.Background(), base.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("RunMonitorPass returned unexpected error: %v", err)
+	}
+	if summary.Checked != 1 || store.releaseCalls != beforeReleases+1 || store.monitors[0].ClaimOwner != nil || store.monitors[0].ClaimUntil != nil {
+		t.Fatalf("expected claim released on early error exit: summary=%+v releases=%d before=%d monitor=%+v", summary, store.releaseCalls, beforeReleases, store.monitors[0])
+	}
+}
+
+func TestAutoControllerContextCancelReleasesClaimWithoutMarkingUnhealthy(t *testing.T) {
+	base := time.Date(2026, 11, 16, 4, 0, 0, 0, time.UTC)
+	monID := "01990000-9900-7000-8000-000000000023"
+	unhealthySince := base.Add(-10 * time.Minute)
+	store := &fakeAutoControlStore{
+		lease:   testAutoLease(base),
+		siteCtx: testAutoSiteCtx(),
+		monitors: []OptimizationExecutionMonitorRecord{{
+			ID:                      monID,
+			TenantID:                "01990000-3000-7000-8000-000000000001",
+			SiteID:                  "01990000-5000-7000-8000-000000000001",
+			LeaseID:                 "01990000-8800-7000-8000-000000000011",
+			DeviceID:                "01990000-6000-7000-8000-000000000001",
+			TargetCapability:        string(commandmodel.CapabilitySetChilledWaterTemperatureSetpoint),
+			ZoneTempMaxC:            26.0,
+			SupplyTempMaxC:          12.0,
+			StartedAt:               base.Add(-15 * time.Minute),
+			WindowEndsAt:            base.Add(15 * time.Minute),
+			TelemetryUnhealthySince: &unhealthySince,
+			Status:                  ExecutionMonitorObserving,
+		}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	checker := &cancellingPointHealthChecker{cancel: cancel}
+	ctrl, err := NewAutoController(store, &fakeTelemetryReader{}, &fakeDispatcher{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrl.WithPointHealth(checker).WithWorkerID("replica-cancel")
+
+	if _, err := ctrl.RunMonitorPass(ctx, base); err != nil {
+		t.Fatalf("RunMonitorPass err=%v", err)
+	}
+	if store.releaseCalls != 1 || len(store.trippedRecords) != 0 || store.monitors[0].Status != ExecutionMonitorObserving || store.monitors[0].ClaimOwner != nil {
+		t.Fatalf("expected claim released without tripping on context cancel: releases=%d trips=%d mon=%+v", store.releaseCalls, len(store.trippedRecords), store.monitors[0])
+	}
+}
+
+type cancellingPointHealthChecker struct {
+	cancel context.CancelFunc
+}
+
+func (checker *cancellingPointHealthChecker) CheckTelemetryPointHealth(context.Context, string, string, []string, []string) error {
+	checker.cancel()
+	return context.Canceled
 }

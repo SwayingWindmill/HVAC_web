@@ -280,11 +280,17 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 	}, now); err != nil {
 		return err
 	}
+	failureEvent, notifyFailure := controlFailureEventFromDecision(intent, intentFinal, reason, result.FailureCode, now)
+	if notifyFailure {
+		if err := store.insertControlAlarmOutbox(ctx, tx, failureEvent, now); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit verification resolution: %w", err)
 	}
-	if event, notify := controlFailureEventFromDecision(intent, intentFinal, reason, result.FailureCode, now); notify {
-		store.notifyControlFailure(event)
+	if notifyFailure {
+		store.notifyControlFailure(failureEvent)
 	}
 	return nil
 }
@@ -453,6 +459,9 @@ WHERE tenant_id = $1::uuid AND device_id = $2::uuid
 			return nil, err
 		}
 		if event, notify := controlFailureEventFromDecision(intent, decision.IntentFinal, decision.Reason, "", now); notify {
+			if err := store.insertControlAlarmOutbox(ctx, tx, event, now); err != nil {
+				return nil, err
+			}
 			events = append(events, event)
 		}
 	}

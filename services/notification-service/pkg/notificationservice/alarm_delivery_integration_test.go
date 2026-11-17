@@ -243,3 +243,79 @@ WHERE n.nspname = 'notification_runtime' AND c.relname IN ('alarm_delivery','ala
 		t.Fatal("the dispatcher may not acknowledge an Alarm")
 	}
 }
+
+func TestPostgresSendingLeaseReclaimsOrGivesUpAfterAttemptsExhausted(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("reclaims expired or null lease under retry cap", func(t *testing.T) {
+		fixture := newDeliveryFixture(t, DeliveryLive)
+		alarmID := fixture.reminders.uuid()
+		fixture.event(alarmID, "physics/cop-out-of-range", AlarmCreated, alarmmodel.SeverityCritical, deliveryBase)
+		fixture.sender.outcomes["wecom_app:duty-wecom"] = []error{ErrDeliveryRejected}
+		fixture.sender.outcomes["smtp:duty@example.test"] = []error{errors.New("simulated pre-crash error")}
+		fixture.run(deliveryBase.Add(3 * time.Minute))
+
+		smtpKey := alarmID + ":FIRE:0:smtp:duty"
+		expiredAt := deliveryBase.Add(5 * time.Minute)
+		if _, err := fixture.dispatcher.Scheduler.pool.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt
+SET state = 'SENDING', attempts = 1, next_attempt_at = $2, lease_until = $2
+WHERE tenant_id = $1::uuid AND dedup_key = $3`, alarmReminderTenantID, expiredAt.UTC(), smtpKey); err != nil {
+			t.Fatal(err)
+		}
+		equal(t, "expired SENDING lease under retry cap is reclaimed and sent",
+			fixture.run(deliveryBase.Add(6*time.Minute)), "FIRE smtp duty@example.test")
+		if states := fixture.states(alarmID); !strings.Contains(states, "FIRE smtp duty SENT") {
+			t.Fatalf("expected reclaimed attempt to be SENT, got %s", states)
+		}
+
+		// Also verify a SENDING row with NULL lease_until cannot stay stranded.
+		nullLeaseAlarmID := fixture.reminders.uuid()
+		fixture.event(nullLeaseAlarmID, "physics/cop-out-of-range", AlarmCreated, alarmmodel.SeverityCritical, deliveryBase.Add(time.Hour))
+		fixture.sender.outcomes["wecom_app:duty-wecom"] = []error{ErrDeliveryRejected}
+		fixture.sender.outcomes["smtp:duty@example.test"] = []error{errors.New("simulated pre-crash error")}
+		fixture.run(deliveryBase.Add(time.Hour + 3*time.Minute))
+		nullKey := nullLeaseAlarmID + ":FIRE:0:smtp:duty"
+		if _, err := fixture.dispatcher.Scheduler.pool.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt
+SET state = 'SENDING', attempts = 1, lease_until = NULL
+WHERE tenant_id = $1::uuid AND dedup_key = $2`, alarmReminderTenantID, nullKey); err != nil {
+			t.Fatal(err)
+		}
+		equal(t, "null SENDING lease is reclaimed and sent",
+			fixture.run(deliveryBase.Add(time.Hour+4*time.Minute)), "FIRE smtp duty@example.test")
+	})
+
+	t.Run("gives up on expired lease when attempts already exhausted", func(t *testing.T) {
+		fixture := newDeliveryFixture(t, DeliveryLive)
+		alarmID := fixture.reminders.uuid()
+		fixture.event(alarmID, "physics/cop-out-of-range", AlarmCreated, alarmmodel.SeverityCritical, deliveryBase)
+		fixture.sender.outcomes["wecom_app:duty-wecom"] = []error{ErrDeliveryRejected}
+		fixture.sender.outcomes["smtp:duty@example.test"] = []error{errors.New("simulated pre-crash error")}
+		fixture.run(deliveryBase.Add(3 * time.Minute))
+
+		smtpKey := alarmID + ":FIRE:0:smtp:duty"
+		if _, err := fixture.dispatcher.Scheduler.pool.Exec(ctx, `UPDATE notification_runtime.alarm_delivery_attempt
+SET state = 'SENDING', attempts = $3, next_attempt_at = $2, lease_until = $2
+WHERE tenant_id = $1::uuid AND dedup_key = $4`, alarmReminderTenantID, deliveryBase.Add(5*time.Minute).UTC(), deliveryAttempts, smtpKey); err != nil {
+			t.Fatal(err)
+		}
+		equal(t, "exhausted SENDING lease must not send past deliveryAttempts", fixture.run(deliveryBase.Add(6*time.Minute)))
+		if states := fixture.states(alarmID); !strings.Contains(states, "FIRE smtp duty FAILED GAVE_UP") {
+			t.Fatalf("expected exhausted SENDING lease to become FAILED GAVE_UP, got %s", states)
+		}
+	})
+
+	t.Run("stale replay during hold preserves next_due_at", func(t *testing.T) {
+		fixture := newDeliveryFixture(t, DeliveryDryRun)
+		holdAlarmID := fixture.reminders.uuid()
+		fixture.record(holdAlarmID, "reports-interrupted", AlarmCreated, alarmmodel.SeverityMajor, deliveryBase, 1)
+		equal(t, "held before hold window ends", fixture.run(deliveryBase.Add(time.Minute)))
+		fixture.record(holdAlarmID, "reports-interrupted", AlarmCreated, alarmmodel.SeverityMajor, deliveryBase.Add(2*time.Minute), 1)
+		var nextDue time.Time
+		if err := fixture.dispatcher.Scheduler.pool.QueryRow(ctx, `SELECT next_due_at FROM notification_runtime.alarm_delivery WHERE tenant_id = $1::uuid AND alarm_id = $2::uuid`, alarmReminderTenantID, holdAlarmID).Scan(&nextDue); err != nil {
+			t.Fatal(err)
+		}
+		if !nextDue.Equal(deliveryBase.Add(3 * time.Minute)) {
+			t.Fatalf("stale replay overwrote hold next_due_at: got %v, want %v", nextDue, deliveryBase.Add(3*time.Minute))
+		}
+	})
+}

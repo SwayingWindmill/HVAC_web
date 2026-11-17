@@ -928,8 +928,9 @@ func loadAlarmEvaluationRelay(store *telemetry.PostgresStore, certificate tls.Ce
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	deliveryTimeout := durationEnv("TELEMETRY_ALARM_RELAY_DELIVERY_TIMEOUT", telemetry.DefaultAlarmEvaluationDeliveryTimeout, 100*time.Millisecond, time.Minute)
 	client := &http.Client{
-		Timeout:       10 * time.Second,
+		Timeout:       deliveryTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Transport: &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
@@ -953,9 +954,13 @@ func loadAlarmEvaluationRelay(store *telemetry.PostgresStore, certificate tls.Ce
 		workerID = "telemetry-alarm:" + hostname
 	}
 	relay, err := telemetry.NewAlarmEvaluationRelay(telemetry.AlarmEvaluationRelayConfig{
-		Repository: store, Transport: transport, WorkerID: workerID,
-		LeaseDuration: durationEnv("TELEMETRY_ALARM_RELAY_LEASE_DURATION", 30*time.Second, 5*time.Second, 5*time.Minute),
-		RetryDelay:    durationEnv("TELEMETRY_ALARM_RELAY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour),
+		Repository:      store,
+		Transport:       transport,
+		WorkerID:        workerID,
+		LeaseDuration:   durationEnv("TELEMETRY_ALARM_RELAY_LEASE_DURATION", 30*time.Second, 5*time.Second, 5*time.Minute),
+		RetryDelay:      durationEnv("TELEMETRY_ALARM_RELAY_RETRY_DELAY", 5*time.Second, time.Second, time.Hour),
+		MaxAttempts:     integerEnv("TELEMETRY_ALARM_RELAY_MAX_ATTEMPTS", telemetry.DefaultAlarmEvaluationMaxAttempts, 1, 1000),
+		DeliveryTimeout: deliveryTimeout,
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -978,7 +983,7 @@ func runAlarmEvaluationRelay(ctx context.Context, relay *telemetry.AlarmEvaluati
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			relayContext, cancel := context.WithTimeout(ctx, 15*time.Second)
+			relayContext, cancel := context.WithTimeout(ctx, 30*time.Second)
 			delivered, err := relay.RelayOnce(relayContext, 64)
 			cancel()
 			if err != nil {

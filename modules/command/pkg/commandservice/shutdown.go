@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -13,6 +14,10 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/planttwin"
 )
+
+type controlAlarmOutboxEnqueuer interface {
+	EnqueueControlAlarm(context.Context, ControlFailureEvent) error
+}
 
 type shutdownControlTarget struct {
 	asset         AssetDTO
@@ -157,7 +162,7 @@ func (a *ControlAuthority) ExecuteSiteControlShutdown(
 			return SiteControlShutdownResponse{}, cmdErr
 		}
 		submittedIDs = append(submittedIDs, cmdID)
-		a.failureQueue.enqueue(a.failureNotifier, ControlFailureEvent{
+		emergencyEvent := ControlFailureEvent{
 			Kind:       "EMERGENCY_DO_RELEASE",
 			TenantID:   operator.TenantID,
 			SiteID:     siteID,
@@ -170,7 +175,18 @@ func (a *ControlAuthority) ExecuteSiteControlShutdown(
 			OccurredAt: a.now().UTC(),
 			ActorType:  "PRINCIPAL",
 			ActorID:    principalID,
-		})
+		}
+		persistedOutbox := false
+		if enqueuer, ok := a.store.(controlAlarmOutboxEnqueuer); ok {
+			if err := enqueuer.EnqueueControlAlarm(ctx, emergencyEvent); err != nil {
+				slog.Error("command_emergency_do_release_alarm_outbox_failed", "error_code", ControlAlarmErrorCode(err), "command_id", cmdID)
+			} else {
+				persistedOutbox = true
+			}
+		}
+		if !persistedOutbox || a.failureNotifier != nil {
+			a.failureQueue.enqueue(a.failureNotifier, emergencyEvent)
+		}
 	} else {
 		chillerSubmitted, confirmedStopped, chillerErr := a.stopUnlockedChillers(ctx, operator, savedState, topo, topo.chillers, false, reason, idemBase)
 		if chillerErr != nil {

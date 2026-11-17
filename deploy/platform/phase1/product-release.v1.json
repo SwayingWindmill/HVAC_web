@@ -26,7 +26,7 @@
   },
   "schemaContract": {
     "migrationManifest": "deploy/platform/phase1/migrations/manifest.v1.json",
-    "migrationManifestSha256": "bd3b0e45bc5ff5f0b21b3ebc5c7358ec90440c74f9eb62d122937e87cfb90549bb1",
+    "migrationManifestSha256": "d3e85abd10a3259ed654dc056a649e816a04bc40876794f765d461564dd867f6",
     "compatibilityMode": "exact-product-and-manifest",
     "skipAllowed": false,
     "requiredDatabases": [
@@ -67,7 +67,11 @@
     "scripts/run-s25-redis-rebuild-test.mjs"
   ],
   "migrationState": {
-    "states": ["APPLYING", "APPLIED", "FAILED"],
+    "states": [
+      "APPLYING",
+      "APPLIED",
+      "FAILED"
+    ],
     "incompleteRequiresOperatorRecovery": true
   },
   "deploymentTiers": "deploy/platform/phase1/deployment-tiers.v1.json",
