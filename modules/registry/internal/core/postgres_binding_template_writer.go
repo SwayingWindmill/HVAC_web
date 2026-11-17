@@ -376,7 +376,7 @@ func (store *PostgresStore) ReleaseTemplate(ctx context.Context, claims registry
 			return mutationRecord[TemplateRevision]{}, err
 		}
 		result := TemplateRevision{ID: revisionID, TenantID: claims.TenantID, TemplateID: templateID, TemplateKey: input.TemplateKey, TemplateKind: input.TemplateKind, RevisionNumber: revisionNumber, Status: "RELEASED", Payload: input.Payload, ReleaseReferences: input.ReleaseReferences, ReleasedAt: now.Format(time.RFC3339Nano)}
-		return mutationRecord[TemplateRevision]{Result: result, ResourceType: "TEMPLATE_REVISION", ResourceID: revisionID, AfterRevision: revisionPointer(revisionNumber), EventType: "registry.template-revision.released", AggregateVersion: revisionNumber, Payload: map[string]any{"templateId": templateID, "templateKey": input.TemplateKey, "templateKind": input.TemplateKind, "releaseReferences": input.ReleaseReferences}}, nil
+		return mutationRecord[TemplateRevision]{Result: result, ResourceType: "TEMPLATE_REVISION", ResourceID: revisionID, AfterRevision: revisionPointer(revisionNumber), EventType: "registry.template-revision.released", AggregateVersion: revisionNumber, Payload: map[string]any{"templateId": templateID, "templateKey": input.TemplateKey, "templateKind": input.TemplateKind, "templateRevisionId": revisionID, "revisionNumber": revisionNumber, "releaseReferences": input.ReleaseReferences}}, nil
 	})
 }
 
@@ -385,6 +385,67 @@ func (store *PostgresStore) AssignTemplate(ctx context.Context, claims registrya
 		return TemplateAssignment{}, false, err
 	}
 	return runRegistryMutation(ctx, store, claims, registryauth.ActionTemplateManage, input.Meta.IdempotencyKey, input.Meta.Reason, input, func(tx pgx.Tx, now time.Time) (mutationRecord[TemplateAssignment], error) {
+		var (
+			templateKey  string
+			templateKind string
+			revStatus    string
+			payloadBytes []byte
+		)
+		err := tx.QueryRow(ctx, `
+SELECT t.template_key, t.template_kind, tr.status, tr.payload
+FROM core_registry.registry_template_revisions AS tr
+JOIN core_registry.registry_templates AS t
+  ON t.id = tr.template_id AND t.tenant_id = tr.tenant_id
+WHERE tr.tenant_id = $1::uuid AND tr.id = $2::uuid
+`, claims.TenantID, input.TemplateRevisionID).Scan(&templateKey, &templateKind, &revStatus, &payloadBytes)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return mutationRecord[TemplateAssignment]{}, ErrNotFound
+		}
+		if err != nil {
+			return mutationRecord[TemplateAssignment]{}, err
+		}
+		if revStatus != "RELEASED" || templateKind != string(input.TargetType) {
+			return mutationRecord[TemplateAssignment]{}, ErrInvalidMutation
+		}
+		var payloadMap map[string]any
+		if len(payloadBytes) > 0 {
+			if err := json.Unmarshal(payloadBytes, &payloadMap); err != nil {
+				return mutationRecord[TemplateAssignment]{}, err
+			}
+		}
+		activation, err := parseAndValidateTemplatePayload(input.TargetType, payloadMap)
+		if err != nil {
+			return mutationRecord[TemplateAssignment]{}, err
+		}
+
+		var (
+			targetStatus string
+			deviceCode   string
+			deviceType   string
+		)
+		switch input.TargetType {
+		case TemplateAsset:
+			err = tx.QueryRow(ctx, `SELECT status FROM core_registry.assets WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid FOR UPDATE`, claims.TenantID, input.SiteID, input.TargetID).Scan(&targetStatus)
+		case TemplateDevice:
+			err = tx.QueryRow(ctx, `SELECT status, code, device_type FROM core_registry.devices WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid FOR UPDATE`, claims.TenantID, input.SiteID, input.TargetID).Scan(&targetStatus, &deviceCode, &deviceType)
+		case TemplatePoint:
+			err = tx.QueryRow(ctx, `SELECT status FROM core_registry.telemetry_points WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid FOR UPDATE`, claims.TenantID, input.SiteID, input.TargetID).Scan(&targetStatus)
+		default:
+			return mutationRecord[TemplateAssignment]{}, ErrInvalidMutation
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return mutationRecord[TemplateAssignment]{}, ErrNotFound
+		}
+		if err != nil {
+			return mutationRecord[TemplateAssignment]{}, err
+		}
+		if targetStatus == "RETIRED" {
+			return mutationRecord[TemplateAssignment]{}, fmt.Errorf("%w: retired target cannot accept template assignment", ErrInvalidMutation)
+		}
+		if input.TargetType == TemplateDevice && activation != nil && activation.DeviceType != "" && deviceType != activation.DeviceType {
+			return mutationRecord[TemplateAssignment]{}, fmt.Errorf("%w: deviceType %q does not match template deviceType %q", ErrBindingConflict, deviceType, activation.DeviceType)
+		}
+
 		effectiveAt, _ := time.Parse(time.RFC3339Nano, input.EffectiveAt)
 		if _, err := tx.Exec(ctx, `UPDATE core_registry.registry_template_assignments SET valid_to=$5, revision=revision+1, updated_at=$6 WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND target_type=$3 AND target_id=$4::uuid AND status='ACTIVE' AND valid_to IS NULL AND valid_from < $5`, claims.TenantID, input.SiteID, string(input.TargetType), input.TargetID, effectiveAt, now); err != nil {
 			return mutationRecord[TemplateAssignment]{}, err
@@ -396,7 +457,16 @@ func (store *PostgresStore) AssignTemplate(ctx context.Context, claims registrya
 		if _, err := tx.Exec(ctx, `INSERT INTO core_registry.registry_template_assignments (id,tenant_id,site_id,target_type,target_id,template_revision_id,valid_from,valid_to,status,revision,created_at,updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7,NULL,'ACTIVE',1,$8,$8)`, id, claims.TenantID, input.SiteID, string(input.TargetType), input.TargetID, input.TemplateRevisionID, effectiveAt, now); err != nil {
 			return mutationRecord[TemplateAssignment]{}, err
 		}
+
+		materializedPointCount := 0
+		if input.TargetType == TemplateDevice && activation != nil && len(activation.StandardPoints) > 0 {
+			materializedPointCount, err = materializeTemplatePointsInTx(ctx, tx, claims.TenantID, input.SiteID, input.TargetID, deviceCode, templateKey, input.TemplateRevisionID, id, activation, now)
+			if err != nil {
+				return mutationRecord[TemplateAssignment]{}, err
+			}
+		}
+
 		result := TemplateAssignment{ID: id, TenantID: claims.TenantID, SiteID: input.SiteID, TargetType: input.TargetType, TargetID: input.TargetID, TemplateRevisionID: input.TemplateRevisionID, ValidFrom: effectiveAt.UTC().Format(time.RFC3339Nano), Revision: 1}
-		return mutationRecord[TemplateAssignment]{Result: result, SiteID: &input.SiteID, ResourceType: "TEMPLATE_ASSIGNMENT", ResourceID: id, AfterRevision: revisionPointer(1), EventType: "registry.template-assignment.changed", AggregateVersion: 1, Payload: map[string]any{"siteId": input.SiteID, "targetType": input.TargetType, "targetId": input.TargetID, "templateRevisionId": input.TemplateRevisionID}}, nil
+		return mutationRecord[TemplateAssignment]{Result: result, SiteID: &input.SiteID, ResourceType: "TEMPLATE_ASSIGNMENT", ResourceID: id, AfterRevision: revisionPointer(1), EventType: "registry.template-assignment.changed", AggregateVersion: 1, Payload: map[string]any{"siteId": input.SiteID, "targetType": input.TargetType, "targetId": input.TargetID, "templateRevisionId": input.TemplateRevisionID, "templateKey": templateKey, "materializedPointCount": materializedPointCount}}, nil
 	})
 }

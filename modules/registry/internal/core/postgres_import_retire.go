@@ -225,10 +225,18 @@ func applySpaceImport(ctx context.Context, tx pgx.Tx, tenantID, siteID string, r
 
 func applyAssetImport(ctx context.Context, tx pgx.Tx, tenantID, siteID string, row ImportRow, input AssetMutation, now time.Time) error {
 	if row.ExpectedRevision == 0 {
-		_, err := tx.Exec(ctx, `INSERT INTO core_registry.assets (id,tenant_id,site_id,code,display_name,asset_type,status,revision,created_at,updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,1,$8,$8)`, row.TargetID, tenantID, siteID, input.Code, input.DisplayName, input.AssetType, input.Status, now)
+		tagsJSON, err := marshalTagsOrEmpty(input.Tags)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO core_registry.assets (id,tenant_id,site_id,code,display_name,asset_type,status,tags,revision,created_at,updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$9::jsonb,1,$8,$8)`, row.TargetID, tenantID, siteID, input.Code, input.DisplayName, input.AssetType, input.Status, now, string(tagsJSON))
 		return err
 	}
-	command, err := tx.Exec(ctx, `UPDATE core_registry.assets SET code=$5,display_name=$6,asset_type=$7,status=$8,revision=revision+1,updated_at=$9 WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND revision=$4`, tenantID, siteID, row.TargetID, row.ExpectedRevision, input.Code, input.DisplayName, input.AssetType, input.Status, now)
+	tagsParam, err := marshalOptionalTagsParam(input.Tags)
+	if err != nil {
+		return err
+	}
+	command, err := tx.Exec(ctx, `UPDATE core_registry.assets SET code=$5,display_name=$6,asset_type=$7,status=$8,tags=COALESCE($10::jsonb,core_registry.assets.tags),revision=revision+1,updated_at=$9 WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND revision=$4`, tenantID, siteID, row.TargetID, row.ExpectedRevision, input.Code, input.DisplayName, input.AssetType, input.Status, now, tagsParam)
 	if err == nil && command.RowsAffected() != 1 {
 		return ErrRevisionConflict
 	}
@@ -237,10 +245,18 @@ func applyAssetImport(ctx context.Context, tx pgx.Tx, tenantID, siteID string, r
 
 func applyDeviceImport(ctx context.Context, tx pgx.Tx, tenantID, siteID string, row ImportRow, input DeviceMutation, now time.Time) error {
 	if row.ExpectedRevision == 0 {
-		_, err := tx.Exec(ctx, `INSERT INTO core_registry.devices (id,tenant_id,site_id,code,display_name,device_type,status,revision,created_at,updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,1,$8,$8)`, row.TargetID, tenantID, siteID, input.Code, input.DisplayName, input.DeviceType, input.Status, now)
+		tagsJSON, err := marshalTagsOrEmpty(input.Tags)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO core_registry.devices (id,tenant_id,site_id,code,display_name,device_type,status,tags,revision,created_at,updated_at) VALUES ($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$9::jsonb,1,$8,$8)`, row.TargetID, tenantID, siteID, input.Code, input.DisplayName, input.DeviceType, input.Status, now, string(tagsJSON))
 		return err
 	}
-	command, err := tx.Exec(ctx, `UPDATE core_registry.devices SET code=$5,display_name=$6,device_type=$7,status=$8,revision=revision+1,updated_at=$9 WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND revision=$4`, tenantID, siteID, row.TargetID, row.ExpectedRevision, input.Code, input.DisplayName, input.DeviceType, input.Status, now)
+	tagsParam, err := marshalOptionalTagsParam(input.Tags)
+	if err != nil {
+		return err
+	}
+	command, err := tx.Exec(ctx, `UPDATE core_registry.devices SET code=$5,display_name=$6,device_type=$7,status=$8,tags=COALESCE($10::jsonb,core_registry.devices.tags),revision=revision+1,updated_at=$9 WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND id=$3::uuid AND revision=$4`, tenantID, siteID, row.TargetID, row.ExpectedRevision, input.Code, input.DisplayName, input.DeviceType, input.Status, now, tagsParam)
 	if err == nil && command.RowsAffected() != 1 {
 		return ErrRevisionConflict
 	}

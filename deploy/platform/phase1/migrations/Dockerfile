@@ -134,6 +134,8 @@ COPY modules/command/migrations/005_s11_edge_execution_evidence.sql /opt/hvac/re
 COPY modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql /opt/hvac/repo/modules/command/migrations/006_command_control_locks_and_sequence_capabilities.sql
 COPY modules/command/migrations/007_schema_and_table_comments.sql /opt/hvac/repo/modules/command/migrations/007_schema_and_table_comments.sql
 COPY modules/command/migrations/008_command_precondition_mode.sql /opt/hvac/repo/modules/command/migrations/008_command_precondition_mode.sql
+COPY modules/command/migrations/command-template-capability-sync.sql /opt/hvac/repo/modules/command/migrations/command-template-capability-sync.sql
+COPY infra/registry/postgres/init/registry-tags-and-template-read.sql /opt/hvac/repo/infra/registry/postgres/init/registry-tags-and-template-read.sql
 COPY modules/alarm/migrations/001_s4_alarm_runtime.sql /opt/hvac/repo/modules/alarm/migrations/001_s4_alarm_runtime.sql
 COPY modules/alarm/migrations/002_s4_alarm_lifecycle.sql /opt/hvac/repo/modules/alarm/migrations/002_s4_alarm_lifecycle.sql
 COPY modules/alarm/migrations/003_s4_tenant_scope.sql /opt/hvac/repo/modules/alarm/migrations/003_s4_tenant_scope.sql

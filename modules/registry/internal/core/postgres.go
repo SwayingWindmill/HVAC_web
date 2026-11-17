@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,9 +19,14 @@ type RegistryStore interface {
 	ListSites(context.Context, registryauth.GrantClaims, PageRequest) (PageResult[Site], error)
 	GetSite(context.Context, registryauth.GrantClaims, string) (Site, error)
 	ListAssets(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[Asset], error)
+	ListAssetsFiltered(context.Context, registryauth.GrantClaims, string, AssetFilter, PageRequest) (PageResult[Asset], error)
 	GetAsset(context.Context, registryauth.GrantClaims, string) (Asset, error)
 	ListDevices(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[Device], error)
+	ListDevicesFiltered(context.Context, registryauth.GrantClaims, string, DeviceFilter, PageRequest) (PageResult[Device], error)
 	GetDevice(context.Context, registryauth.GrantClaims, string) (Device, error)
+	ListTemplates(context.Context, registryauth.GrantClaims, TemplateKind, PageRequest) (PageResult[Template], error)
+	GetTemplateRevision(context.Context, registryauth.GrantClaims, string) (TemplateRevision, error)
+	ListSiteTemplateAssignments(context.Context, registryauth.GrantClaims, string, TemplateKind, string, PageRequest) (PageResult[TemplateAssignment], error)
 	ListDeviceBindings(context.Context, registryauth.GrantClaims, string, PageRequest) (PageResult[DeviceBinding], error)
 	ListSiteMeterBindings(context.Context, registryauth.GrantClaims, string) (SiteMeterBindings, error)
 	GetSiteTotalElectricitySources(context.Context, registryauth.GrantClaims, string) (SiteTotalElectricitySources, error)
@@ -182,22 +188,28 @@ func (store *PostgresStore) ListAssets(ctx context.Context, claims registryauth.
 	if !validUUIDv7(siteID) {
 		return PageResult[Asset]{}, ErrNotFound
 	}
+	return store.ListAssetsFiltered(ctx, claims, siteID, AssetFilter{}, page)
+}
+
+func (store *PostgresStore) ListAssetsFiltered(ctx context.Context, claims registryauth.GrantClaims, siteID string, filter AssetFilter, page PageRequest) (PageResult[Asset], error) {
+	if siteID != "" && !validUUIDv7(siteID) {
+		return PageResult[Asset]{}, ErrNotFound
+	}
+	if err := filter.Validate(); err != nil {
+		return PageResult[Asset]{}, err
+	}
 	page, err := normalizedPageRequest(page)
 	if err != nil {
 		return PageResult[Asset]{}, err
 	}
 	limit := page.Limit
+	query, args, err := buildFilteredEntityListSQL(TemplateAsset, assetColumns, claims, siteID, filter.asResourceFilter(), page, limit)
+	if err != nil {
+		return PageResult[Asset]{}, err
+	}
 	result := PageResult[Asset]{Items: []Asset{}}
 	err = store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
-		rows, err := transaction.Query(ctx, `
-SELECT `+assetColumns+`
-FROM core_registry.assets
-WHERE site_id = $1::uuid
-  AND NOT (site_id = ANY($2::uuid[]))
-  AND ($3 = '' OR (display_name COLLATE "C", id) > ($3 COLLATE "C", $4::uuid))
-ORDER BY display_name COLLATE "C", id
-LIMIT $5
-`, siteID, postgresUUIDArray(claims.DeniedSiteIDs), page.DisplayName, nullableCursorID(page.ID), limit+1)
+		rows, err := transaction.Query(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("query Registry asset: %w", err)
 		}
@@ -249,22 +261,28 @@ func (store *PostgresStore) ListDevices(ctx context.Context, claims registryauth
 	if !validUUIDv7(siteID) {
 		return PageResult[Device]{}, ErrNotFound
 	}
+	return store.ListDevicesFiltered(ctx, claims, siteID, DeviceFilter{}, page)
+}
+
+func (store *PostgresStore) ListDevicesFiltered(ctx context.Context, claims registryauth.GrantClaims, siteID string, filter DeviceFilter, page PageRequest) (PageResult[Device], error) {
+	if siteID != "" && !validUUIDv7(siteID) {
+		return PageResult[Device]{}, ErrNotFound
+	}
+	if err := filter.Validate(); err != nil {
+		return PageResult[Device]{}, err
+	}
 	page, err := normalizedPageRequest(page)
 	if err != nil {
 		return PageResult[Device]{}, err
 	}
 	limit := page.Limit
+	query, args, err := buildFilteredEntityListSQL(TemplateDevice, deviceColumns, claims, siteID, filter.asResourceFilter(), page, limit)
+	if err != nil {
+		return PageResult[Device]{}, err
+	}
 	result := PageResult[Device]{Items: []Device{}}
 	err = store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
-		rows, err := transaction.Query(ctx, `
-SELECT id::text, tenant_id::text, site_id::text, code, display_name, device_type, status, revision, created_at, updated_at
-FROM core_registry.devices
-WHERE site_id = $1::uuid
-  AND NOT (site_id = ANY($2::uuid[]))
-  AND ($3 = '' OR (display_name COLLATE "C", id) > ($3 COLLATE "C", $4::uuid))
-ORDER BY display_name COLLATE "C", id
-LIMIT $5
-`, siteID, postgresUUIDArray(claims.DeniedSiteIDs), page.DisplayName, nullableCursorID(page.ID), limit+1)
+		rows, err := transaction.Query(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("query Registry devices: %w", err)
 		}
@@ -295,7 +313,7 @@ func (store *PostgresStore) GetDevice(ctx context.Context, claims registryauth.G
 	var result Device
 	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
 		item, err := scanDevice(transaction.QueryRow(ctx, `
-SELECT id::text, tenant_id::text, site_id::text, code, display_name, device_type, status, revision, created_at, updated_at
+SELECT `+deviceColumns+`
 FROM core_registry.devices
 WHERE id = $1::uuid
   AND NOT (site_id = ANY($2::uuid[]))
@@ -310,6 +328,183 @@ WHERE id = $1::uuid
 		return nil
 	})
 	return result, err
+}
+
+func (store *PostgresStore) ListTemplates(ctx context.Context, claims registryauth.GrantClaims, templateKind TemplateKind, page PageRequest) (PageResult[Template], error) {
+	switch templateKind {
+	case "", TemplateAsset, TemplateDevice, TemplatePoint:
+	default:
+		return PageResult[Template]{}, ErrInvalidPage
+	}
+	page, err := normalizedPageRequest(page)
+	if err != nil {
+		return PageResult[Template]{}, err
+	}
+	limit := page.Limit
+	result := PageResult[Template]{Items: []Template{}}
+	err = store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
+		rows, err := transaction.Query(ctx, `
+SELECT t.id::text, t.tenant_id::text, t.template_key, t.template_kind,
+       COALESCE(lr.id::text, ''), COALESCE(lr.revision_number, 0), lr.released_at, t.created_at
+FROM core_registry.registry_templates AS t
+LEFT JOIN LATERAL (
+  SELECT r.id, r.revision_number, r.released_at
+  FROM core_registry.registry_template_revisions AS r
+  WHERE r.tenant_id = t.tenant_id
+    AND r.template_id = t.id
+    AND r.status = 'RELEASED'
+  ORDER BY r.revision_number DESC
+  LIMIT 1
+) AS lr ON true
+WHERE t.tenant_id = $1::uuid
+  AND ($2 = '' OR t.template_kind = $2)
+  AND ($3 = '' OR (t.template_key COLLATE "C", t.id) > ($3 COLLATE "C", $4::uuid))
+ORDER BY t.template_key COLLATE "C", t.id
+LIMIT $5
+`, claims.TenantID, string(templateKind), page.DisplayName, nullableCursorID(page.ID), limit+1)
+		if err != nil {
+			return fmt.Errorf("query Registry templates: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var (
+				item       Template
+				releasedAt *time.Time
+				createdAt  time.Time
+			)
+			if err := rows.Scan(&item.ID, &item.TenantID, &item.TemplateKey, &item.TemplateKind, &item.LatestRevisionID, &item.LatestRevisionNumber, &releasedAt, &createdAt); err != nil {
+				return err
+			}
+			if releasedAt != nil {
+				item.ReleasedAt = formatInstant(*releasedAt)
+			}
+			item.CreatedAt = formatInstant(createdAt)
+			result.Items = append(result.Items, item)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate Registry templates: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return PageResult[Template]{}, err
+	}
+	result.Items, result.HasMore = trimPage(result.Items, limit)
+	return result, nil
+}
+
+func (store *PostgresStore) GetTemplateRevision(ctx context.Context, claims registryauth.GrantClaims, revisionID string) (TemplateRevision, error) {
+	if !validUUIDv7(revisionID) {
+		return TemplateRevision{}, ErrNotFound
+	}
+	var result TemplateRevision
+	err := store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
+		var (
+			payloadRaw    []byte
+			referencesRaw []byte
+			releasedAt    *time.Time
+		)
+		err := transaction.QueryRow(ctx, `
+SELECT tr.id::text, tr.tenant_id::text, tr.template_id::text, t.template_key, t.template_kind,
+       tr.revision_number, tr.status, tr.payload, tr.release_references, tr.released_at
+FROM core_registry.registry_template_revisions AS tr
+JOIN core_registry.registry_templates AS t
+  ON t.id = tr.template_id AND t.tenant_id = tr.tenant_id
+WHERE tr.tenant_id = $1::uuid
+  AND tr.id = $2::uuid
+  AND tr.status = 'RELEASED'
+`, claims.TenantID, revisionID).Scan(
+			&result.ID,
+			&result.TenantID,
+			&result.TemplateID,
+			&result.TemplateKey,
+			&result.TemplateKind,
+			&result.RevisionNumber,
+			&result.Status,
+			&payloadRaw,
+			&referencesRaw,
+			&releasedAt,
+		)
+		if errors.Is(err, pgx.ErrNoRows) || releasedAt == nil {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(payloadRaw, &result.Payload); err != nil {
+			return fmt.Errorf("decode template revision payload: %w", err)
+		}
+		if err := json.Unmarshal(referencesRaw, &result.ReleaseReferences); err != nil {
+			return fmt.Errorf("decode template release references: %w", err)
+		}
+		result.ReleasedAt = formatInstant(*releasedAt)
+		return nil
+	})
+	return result, err
+}
+
+func (store *PostgresStore) ListSiteTemplateAssignments(ctx context.Context, claims registryauth.GrantClaims, siteID string, targetType TemplateKind, targetID string, page PageRequest) (PageResult[TemplateAssignment], error) {
+	if !validUUIDv7(siteID) {
+		return PageResult[TemplateAssignment]{}, ErrNotFound
+	}
+	switch targetType {
+	case "", TemplateAsset, TemplateDevice, TemplatePoint:
+	default:
+		return PageResult[TemplateAssignment]{}, ErrInvalidPage
+	}
+	if targetID != "" && !validUUIDv7(targetID) {
+		return PageResult[TemplateAssignment]{}, ErrInvalidPage
+	}
+	page, err := normalizedPageRequest(page)
+	if err != nil {
+		return PageResult[TemplateAssignment]{}, err
+	}
+	limit := page.Limit
+	result := PageResult[TemplateAssignment]{Items: []TemplateAssignment{}}
+	err = store.withReadTransaction(ctx, claims, func(transaction pgx.Tx) error {
+		rows, err := transaction.Query(ctx, `
+SELECT id::text, tenant_id::text, site_id::text, target_type, target_id::text,
+       template_revision_id::text, valid_from, valid_to, revision
+FROM core_registry.registry_template_assignments
+WHERE tenant_id = $1::uuid
+  AND site_id = $2::uuid
+  AND NOT (site_id = ANY($3::uuid[]))
+  AND ($4 = '' OR target_type = $4)
+  AND ($5::uuid IS NULL OR target_id = $5::uuid)
+  AND ($6 = '' OR (target_type COLLATE "C", id) > ($6 COLLATE "C", $7::uuid))
+ORDER BY target_type COLLATE "C", id
+LIMIT $8
+`, claims.TenantID, siteID, postgresUUIDArray(claims.DeniedSiteIDs), string(targetType), nullableCursorID(targetID), page.DisplayName, nullableCursorID(page.ID), limit+1)
+		if err != nil {
+			return fmt.Errorf("query Registry template assignments: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var (
+				item      TemplateAssignment
+				validFrom time.Time
+				validTo   *time.Time
+			)
+			if err := rows.Scan(&item.ID, &item.TenantID, &item.SiteID, &item.TargetType, &item.TargetID, &item.TemplateRevisionID, &validFrom, &validTo, &item.Revision); err != nil {
+				return err
+			}
+			item.ValidFrom = formatInstant(validFrom)
+			if validTo != nil {
+				formatted := formatInstant(*validTo)
+				item.ValidTo = &formatted
+			}
+			result.Items = append(result.Items, item)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate Registry template assignments: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return PageResult[TemplateAssignment]{}, err
+	}
+	result.Items, result.HasMore = trimPage(result.Items, limit)
+	return result, nil
 }
 
 func (store *PostgresStore) ListDeviceBindings(ctx context.Context, claims registryauth.GrantClaims, siteID string, page PageRequest) (PageResult[DeviceBinding], error) {
@@ -466,15 +661,24 @@ func scanSite(row rowScanner) (Site, error) {
 }
 
 // assetColumns are what scanAsset reads, in its order.
-const assetColumns = `id::text, tenant_id::text, site_id::text, code, display_name, asset_type, status, revision, created_at, updated_at, rated_power, rated_capacity`
+const assetColumns = `id::text, tenant_id::text, site_id::text, code, display_name, asset_type, status, revision, created_at, updated_at, rated_power, rated_capacity, tags`
+
+// deviceColumns are what scanDevice reads, in its order.
+const deviceColumns = `id::text, tenant_id::text, site_id::text, code, display_name, device_type, status, revision, created_at, updated_at, tags`
 
 func scanAsset(row rowScanner) (Asset, error) {
 	var item Asset
 	var createdAt time.Time
 	var updatedAt time.Time
-	if err := row.Scan(&item.ID, &item.TenantID, &item.SiteID, &item.Code, &item.DisplayName, &item.AssetType, &item.Status, &item.Revision, &createdAt, &updatedAt, &item.RatedPower, &item.RatedCapacity); err != nil {
+	var tagsRaw []byte
+	if err := row.Scan(&item.ID, &item.TenantID, &item.SiteID, &item.Code, &item.DisplayName, &item.AssetType, &item.Status, &item.Revision, &createdAt, &updatedAt, &item.RatedPower, &item.RatedCapacity, &tagsRaw); err != nil {
 		return Asset{}, err
 	}
+	tags, err := unmarshalTags(tagsRaw)
+	if err != nil {
+		return Asset{}, err
+	}
+	item.Tags = tags
 	item.CreatedAt = formatInstant(createdAt)
 	item.UpdatedAt = formatInstant(updatedAt)
 	return item, nil
@@ -484,9 +688,15 @@ func scanDevice(row rowScanner) (Device, error) {
 	var item Device
 	var createdAt time.Time
 	var updatedAt time.Time
-	if err := row.Scan(&item.ID, &item.TenantID, &item.SiteID, &item.Code, &item.DisplayName, &item.DeviceType, &item.Status, &item.Revision, &createdAt, &updatedAt); err != nil {
+	var tagsRaw []byte
+	if err := row.Scan(&item.ID, &item.TenantID, &item.SiteID, &item.Code, &item.DisplayName, &item.DeviceType, &item.Status, &item.Revision, &createdAt, &updatedAt, &tagsRaw); err != nil {
 		return Device{}, err
 	}
+	tags, err := unmarshalTags(tagsRaw)
+	if err != nil {
+		return Device{}, err
+	}
+	item.Tags = tags
 	item.CreatedAt = formatInstant(createdAt)
 	item.UpdatedAt = formatInstant(updatedAt)
 	return item, nil

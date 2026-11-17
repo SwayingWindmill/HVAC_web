@@ -101,7 +101,7 @@ func (store *PostgresStore) SaveAsset(ctx context.Context, claims registryauth.G
 	if err := ensureSiteScope(claims, input.SiteID); err != nil {
 		return Asset{}, false, err
 	}
-	return runRegistryMutation(ctx, store, claims, registryauth.ActionAssetWrite, input.Meta.IdempotencyKey, input.Meta.Reason, input, func(tx pgx.Tx, now time.Time) (mutationRecord[Asset], error) {
+	return runRegistryMutation(ctx, store, claims, registryauth.ActionAssetWrite, input.Meta.IdempotencyKey, input.Meta.Reason, assetMutationDigest(input), func(tx pgx.Tx, now time.Time) (mutationRecord[Asset], error) {
 		before := input.Meta.ExpectedRevision
 		id := input.ID
 		if id == "" {
@@ -110,23 +110,31 @@ func (store *PostgresStore) SaveAsset(ctx context.Context, claims registryauth.G
 			if err != nil {
 				return mutationRecord[Asset]{}, err
 			}
+			tagsJSON, err := marshalTagsOrEmpty(input.Tags)
+			if err != nil {
+				return mutationRecord[Asset]{}, err
+			}
 			row := tx.QueryRow(ctx, `
-INSERT INTO core_registry.assets (id, tenant_id, site_id, code, display_name, asset_type, status, revision, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, 1, $8, $8)
+INSERT INTO core_registry.assets (id, tenant_id, site_id, code, display_name, asset_type, status, tags, revision, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $9::jsonb, 1, $8, $8)
 RETURNING `+assetColumns+`
-`, id, claims.TenantID, input.SiteID, input.Code, input.DisplayName, input.AssetType, input.Status, now)
+`, id, claims.TenantID, input.SiteID, input.Code, input.DisplayName, input.AssetType, input.Status, now, string(tagsJSON))
 			created, err := scanAsset(row)
 			if err != nil {
 				return mutationRecord[Asset]{}, fmt.Errorf("insert Registry Asset: %w", err)
 			}
 			return entityMutationRecord(created, nil, "ASSET", created.ID, 1, "registry.asset.created", map[string]any{"siteId": input.SiteID}), nil
 		}
+		tagsParam, err := marshalOptionalTagsParam(input.Tags)
+		if err != nil {
+			return mutationRecord[Asset]{}, err
+		}
 		row := tx.QueryRow(ctx, `
 UPDATE core_registry.assets
-SET code = $5, display_name = $6, asset_type = $7, status = $8, revision = revision + 1, updated_at = $9
+SET code = $5, display_name = $6, asset_type = $7, status = $8, tags = COALESCE($10::jsonb, core_registry.assets.tags), revision = revision + 1, updated_at = $9
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid AND revision = $4
 RETURNING `+assetColumns+`
-`, claims.TenantID, input.SiteID, input.ID, input.Meta.ExpectedRevision, input.Code, input.DisplayName, input.AssetType, input.Status, now)
+`, claims.TenantID, input.SiteID, input.ID, input.Meta.ExpectedRevision, input.Code, input.DisplayName, input.AssetType, input.Status, now, tagsParam)
 		updated, err := scanAsset(row)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return mutationRecord[Asset]{}, classifyRevisionMiss(ctx, tx, "ASSET", input.ID)
@@ -145,7 +153,7 @@ func (store *PostgresStore) SaveDevice(ctx context.Context, claims registryauth.
 	if err := ensureSiteScope(claims, input.SiteID); err != nil {
 		return Device{}, false, err
 	}
-	return runRegistryMutation(ctx, store, claims, registryauth.ActionDeviceWrite, input.Meta.IdempotencyKey, input.Meta.Reason, input, func(tx pgx.Tx, now time.Time) (mutationRecord[Device], error) {
+	return runRegistryMutation(ctx, store, claims, registryauth.ActionDeviceWrite, input.Meta.IdempotencyKey, input.Meta.Reason, deviceMutationDigest(input), func(tx pgx.Tx, now time.Time) (mutationRecord[Device], error) {
 		before := input.Meta.ExpectedRevision
 		id := input.ID
 		if id == "" {
@@ -154,23 +162,31 @@ func (store *PostgresStore) SaveDevice(ctx context.Context, claims registryauth.
 			if err != nil {
 				return mutationRecord[Device]{}, err
 			}
+			tagsJSON, err := marshalTagsOrEmpty(input.Tags)
+			if err != nil {
+				return mutationRecord[Device]{}, err
+			}
 			row := tx.QueryRow(ctx, `
-INSERT INTO core_registry.devices (id, tenant_id, site_id, code, display_name, device_type, status, revision, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, 1, $8, $8)
-RETURNING id::text, tenant_id::text, site_id::text, code, display_name, device_type, status, revision, created_at, updated_at
-`, id, claims.TenantID, input.SiteID, input.Code, input.DisplayName, input.DeviceType, input.Status, now)
+INSERT INTO core_registry.devices (id, tenant_id, site_id, code, display_name, device_type, status, tags, revision, created_at, updated_at)
+VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $9::jsonb, 1, $8, $8)
+RETURNING `+deviceColumns+`
+`, id, claims.TenantID, input.SiteID, input.Code, input.DisplayName, input.DeviceType, input.Status, now, string(tagsJSON))
 			created, err := scanDevice(row)
 			if err != nil {
 				return mutationRecord[Device]{}, fmt.Errorf("insert Registry Device: %w", err)
 			}
 			return entityMutationRecord(created, nil, "DEVICE", created.ID, 1, "registry.device.created", map[string]any{"siteId": input.SiteID}), nil
 		}
+		tagsParam, err := marshalOptionalTagsParam(input.Tags)
+		if err != nil {
+			return mutationRecord[Device]{}, err
+		}
 		row := tx.QueryRow(ctx, `
 UPDATE core_registry.devices
-SET code = $5, display_name = $6, device_type = $7, status = $8, revision = revision + 1, updated_at = $9
+SET code = $5, display_name = $6, device_type = $7, status = $8, tags = COALESCE($10::jsonb, core_registry.devices.tags), revision = revision + 1, updated_at = $9
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND id = $3::uuid AND revision = $4
-RETURNING id::text, tenant_id::text, site_id::text, code, display_name, device_type, status, revision, created_at, updated_at
-`, claims.TenantID, input.SiteID, input.ID, input.Meta.ExpectedRevision, input.Code, input.DisplayName, input.DeviceType, input.Status, now)
+RETURNING `+deviceColumns+`
+`, claims.TenantID, input.SiteID, input.ID, input.Meta.ExpectedRevision, input.Code, input.DisplayName, input.DeviceType, input.Status, now, tagsParam)
 		updated, err := scanDevice(row)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return mutationRecord[Device]{}, classifyRevisionMiss(ctx, tx, "DEVICE", input.ID)
@@ -334,4 +350,24 @@ func classifyRevisionMiss(ctx context.Context, tx pgx.Tx, resourceType, id strin
 		return err
 	}
 	return ErrRevisionConflict
+}
+
+func assetMutationDigest(input AssetMutation) any {
+	return struct {
+		AssetMutation
+		ClearTags bool `json:"clearTags,omitempty"`
+	}{
+		AssetMutation: input,
+		ClearTags:     input.Tags != nil && len(input.Tags) == 0,
+	}
+}
+
+func deviceMutationDigest(input DeviceMutation) any {
+	return struct {
+		DeviceMutation
+		ClearTags bool `json:"clearTags,omitempty"`
+	}{
+		DeviceMutation: input,
+		ClearTags:      input.Tags != nil && len(input.Tags) == 0,
+	}
 }

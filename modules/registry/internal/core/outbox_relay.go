@@ -53,6 +53,8 @@ var relayedOutboxEventTypes = []string{
 	"registry.point.updated",
 	"registry.import.committed",
 	"registry.retirement.completed",
+	"registry.template-revision.released",
+	"registry.template-assignment.changed",
 }
 
 // TelemetrySyncClient delivers authoritative device and point updates to Telemetry runtime.
@@ -86,16 +88,19 @@ type RelayTelemetryDevice struct {
 }
 
 type RelayTelemetryPoint struct {
-	PointID                       string `json:"pointId"`
-	SensorID                      string `json:"sensorId,omitempty"`
-	TelemetryKey                  string `json:"telemetryKey"`
-	PointType                     string `json:"pointType"`
-	ValueType                     string `json:"valueType"`
-	Unit                          string `json:"unit,omitempty"`
-	SampleIntervalSeconds         int    `json:"sampleIntervalSeconds,omitempty"`
-	FreshWithinSeconds            int    `json:"freshWithinSeconds,omitempty"`
-	ExpectedSampleIntervalSeconds int    `json:"expectedSampleIntervalSeconds,omitempty"`
-	Status                        string `json:"status"`
+	PointID                       string         `json:"pointId"`
+	SensorID                      string         `json:"sensorId,omitempty"`
+	TelemetryKey                  string         `json:"telemetryKey"`
+	PointType                     string         `json:"pointType"`
+	ValueType                     string         `json:"valueType"`
+	Unit                          string         `json:"unit,omitempty"`
+	SampleIntervalSeconds         int            `json:"sampleIntervalSeconds,omitempty"`
+	FreshWithinSeconds            int            `json:"freshWithinSeconds,omitempty"`
+	ExpectedSampleIntervalSeconds int            `json:"expectedSampleIntervalSeconds,omitempty"`
+	Status                        string         `json:"status"`
+	MinimumNumber                 *float64       `json:"minimumNumber,omitempty"`
+	MaximumNumber                 *float64       `json:"maximumNumber,omitempty"`
+	QualityChecks                 map[string]any `json:"qualityChecks,omitempty"`
 }
 
 type RelayTelemetryRetirePt struct {
@@ -121,9 +126,10 @@ type OutboxRelayConfig struct {
 	ConnectivityHTTPClient *http.Client
 	ConnectivityClient     ConnectivityRetireClient
 
-	CommandBaseURL    string
-	CommandHTTPClient *http.Client
-	CommandClient     CommandCancelClient
+	CommandBaseURL          string
+	CommandHTTPClient       *http.Client
+	CommandClient           CommandCancelClient
+	CommandCapabilityClient CommandCapabilitySyncClient
 
 	LeaseOwner   string
 	LeaseFor     time.Duration
@@ -136,16 +142,17 @@ type OutboxRelayConfig struct {
 // OutboxRelay claims undelivered core_registry.domain_outbox_events rows and pushes
 // authoritative downstream updates via mTLS endpoints.
 type OutboxRelay struct {
-	store        *PostgresStore
-	telemetry    TelemetrySyncClient
-	connectivity ConnectivityRetireClient
-	command      CommandCancelClient
-	leaseOwner   string
-	leaseFor     time.Duration
-	pollInterval time.Duration
-	batchSize    int
-	now          func() time.Time
-	logger       *slog.Logger
+	store             *PostgresStore
+	telemetry         TelemetrySyncClient
+	connectivity      ConnectivityRetireClient
+	command           CommandCancelClient
+	commandCapability CommandCapabilitySyncClient
+	leaseOwner        string
+	leaseFor          time.Duration
+	pollInterval      time.Duration
+	batchSize         int
+	now               func() time.Time
+	logger            *slog.Logger
 }
 
 type claimedOutboxEvent struct {
@@ -157,6 +164,7 @@ type claimedOutboxEvent struct {
 	AggregateType string
 	AggregateID   string
 	Attempt       int
+	CreatedAt     time.Time
 	Payload       map[string]any
 }
 
@@ -190,6 +198,13 @@ func NewOutboxRelay(store *PostgresStore, config OutboxRelayConfig) (*OutboxRela
 		commandClient = &httpDownstreamClient{baseURL: strings.TrimRight(strings.TrimSpace(config.CommandBaseURL), "/"), client: httpClient}
 	}
 
+	commandCapabilityClient := config.CommandCapabilityClient
+	if commandCapabilityClient == nil {
+		if syncer, ok := commandClient.(CommandCapabilitySyncClient); ok {
+			commandCapabilityClient = syncer
+		}
+	}
+
 	leaseOwner := strings.TrimSpace(config.LeaseOwner)
 	if leaseOwner == "" {
 		hostname, _ := os.Hostname()
@@ -219,16 +234,17 @@ func NewOutboxRelay(store *PostgresStore, config OutboxRelayConfig) (*OutboxRela
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &OutboxRelay{
-		store:        store,
-		telemetry:    telemetryClient,
-		connectivity: connectivityClient,
-		command:      commandClient,
-		leaseOwner:   leaseOwner,
-		leaseFor:     leaseFor,
-		pollInterval: pollInterval,
-		batchSize:    batchSize,
-		now:          now,
-		logger:       logger,
+		store:             store,
+		telemetry:         telemetryClient,
+		connectivity:      connectivityClient,
+		command:           commandClient,
+		commandCapability: commandCapabilityClient,
+		leaseOwner:        leaseOwner,
+		leaseFor:          leaseFor,
+		pollInterval:      pollInterval,
+		batchSize:         batchSize,
+		now:               now,
+		logger:            logger,
 	}, nil
 }
 
@@ -443,7 +459,7 @@ claimed AS (
   WHERE d.event_id = due.event_id AND d.consumer_name = $1
   RETURNING d.event_id, d.attempt
 )
-SELECT c.event_id::text, c.attempt, COALESCE(e.site_id::text, ''), e.event_type, e.subject_id::text, e.aggregate_type, e.aggregate_id::text, e.payload
+SELECT c.event_id::text, c.attempt, COALESCE(e.site_id::text, ''), e.event_type, e.subject_id::text, e.aggregate_type, e.aggregate_id::text, e.created_at, e.payload
 FROM claimed c
 JOIN core_registry.domain_outbox_events e ON e.id = c.event_id
 ORDER BY e.created_at ASC, e.id ASC
@@ -456,7 +472,7 @@ ORDER BY e.created_at ASC, e.id ASC
 		for rows.Next() {
 			var ev claimedOutboxEvent
 			var rawPayload []byte
-			if scanErr := rows.Scan(&ev.EventID, &ev.Attempt, &ev.SiteID, &ev.EventType, &ev.SubjectID, &ev.AggregateType, &ev.AggregateID, &rawPayload); scanErr != nil {
+			if scanErr := rows.Scan(&ev.EventID, &ev.Attempt, &ev.SiteID, &ev.EventType, &ev.SubjectID, &ev.AggregateType, &ev.AggregateID, &ev.CreatedAt, &rawPayload); scanErr != nil {
 				return scanErr
 			}
 			ev.TenantID = tenantID
@@ -533,9 +549,101 @@ func (r *OutboxRelay) deliverEvent(ctx context.Context, event claimedOutboxEvent
 		return r.deliverSiteSync(ctx, event.TenantID, event.SiteID)
 	case "registry.retirement.completed":
 		return r.deliverRetirement(ctx, event)
+	case "registry.template-revision.released":
+		return r.deliverTemplateRevisionReleased(ctx, event)
+	case "registry.template-assignment.changed":
+		return r.deliverTemplateAssignmentChanged(ctx, event)
 	default:
 		return nil
 	}
+}
+
+func (r *OutboxRelay) deliverTemplateRevisionReleased(ctx context.Context, event claimedOutboxEvent) error {
+	revisionID := strings.TrimSpace(event.SubjectID)
+	if revisionID == "" {
+		revisionID = payloadStringField(event.Payload, "templateRevisionId")
+	}
+	return r.syncTemplateRevisionCapabilities(ctx, event.TenantID, revisionID, event.CreatedAt)
+}
+
+func (r *OutboxRelay) deliverTemplateAssignmentChanged(ctx context.Context, event claimedOutboxEvent) error {
+	if revisionID := payloadStringField(event.Payload, "templateRevisionId"); revisionID != "" {
+		if err := r.syncTemplateRevisionCapabilities(ctx, event.TenantID, revisionID, event.CreatedAt); err != nil {
+			return err
+		}
+	}
+	siteID := payloadStringField(event.Payload, "siteId")
+	if siteID == "" {
+		siteID = strings.TrimSpace(event.SiteID)
+	}
+	targetType := payloadStringField(event.Payload, "targetType")
+	targetID := payloadStringField(event.Payload, "targetId")
+	if strings.EqualFold(targetType, "DEVICE") && siteID != "" && targetID != "" && r.telemetry != nil {
+		req, found, err := r.loadDeviceSyncRequest(ctx, event.TenantID, siteID, targetID)
+		if err != nil || !found {
+			return err
+		}
+		if err := r.telemetry.SyncRegistry(ctx, req); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func payloadStringField(payload map[string]any, key string) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	value, ok := payload[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func (r *OutboxRelay) syncTemplateRevisionCapabilities(ctx context.Context, tenantID, revisionID string, syncedAt time.Time) error {
+	if r.commandCapability == nil || revisionID == "" {
+		return nil
+	}
+	var profiles []TemplateCapabilityProfile
+	err := r.withTenantWriterTx(ctx, tenantID, pgx.ReadOnly, func(tx pgx.Tx) error {
+		var (
+			templateKind string
+			payloadRaw   []byte
+		)
+		err := tx.QueryRow(ctx, `
+SELECT t.template_kind, tr.payload
+FROM core_registry.registry_template_revisions AS tr
+JOIN core_registry.registry_templates AS t
+  ON t.id = tr.template_id AND t.tenant_id = tr.tenant_id
+WHERE tr.tenant_id = $1::uuid AND tr.id = $2::uuid
+`, tenantID, revisionID).Scan(&templateKind, &payloadRaw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var payloadMap map[string]any
+		if len(payloadRaw) == 0 {
+			return nil
+		}
+		if err := json.Unmarshal(payloadRaw, &payloadMap); err != nil {
+			return err
+		}
+		activation, err := parseAndValidateTemplatePayload(TemplateKind(templateKind), payloadMap)
+		if err != nil {
+			return err
+		}
+		if activation != nil && len(activation.CapabilityProfiles) > 0 {
+			profiles = activation.CapabilityProfiles
+		}
+		return nil
+	})
+	if err != nil || len(profiles) == 0 {
+		return err
+	}
+	return r.commandCapability.SyncCapabilityProfiles(ctx, tenantID, syncedAt, profiles)
 }
 
 func (r *OutboxRelay) deliverDeviceSync(ctx context.Context, event claimedOutboxEvent) error {
@@ -793,7 +901,8 @@ func queryDevicePointsInTx(ctx context.Context, tx pgx.Tx, tenantID, siteID, dev
 	rows, err := tx.Query(ctx, `
 SELECT id::text, COALESCE(sensor_id::text, ''), point_code, point_type, value_type,
        COALESCE(unit, ''), sample_interval_ms, stale_after_ms, status,
-       COALESCE(LOWER(source_metadata->>'copied') = 'true', false)
+       COALESCE(LOWER(source_metadata->>'copied') = 'true', false),
+       source_metadata
 FROM core_registry.telemetry_points
 WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND reporting_device_id = $3::uuid
 ORDER BY point_code ASC, id ASC
@@ -808,9 +917,11 @@ ORDER BY point_code ASC, id ASC
 		var pt RelayTelemetryPoint
 		var sampleMS, staleMS int64
 		var copied bool
-		if scanErr := rows.Scan(&pt.PointID, &pt.SensorID, &pt.TelemetryKey, &pt.PointType, &pt.ValueType, &pt.Unit, &sampleMS, &staleMS, &pt.Status, &copied); scanErr != nil {
+		var sourceMetaRaw []byte
+		if scanErr := rows.Scan(&pt.PointID, &pt.SensorID, &pt.TelemetryKey, &pt.PointType, &pt.ValueType, &pt.Unit, &sampleMS, &staleMS, &pt.Status, &copied, &sourceMetaRaw); scanErr != nil {
 			return nil, false, scanErr
 		}
+		pt.MinimumNumber, pt.MaximumNumber, pt.QualityChecks = extractPointQualityFromSourceMetadata(sourceMetaRaw, pt.ValueType)
 		if strings.ToUpper(strings.TrimSpace(pt.PointType)) != "COMMAND" && strings.ToUpper(strings.TrimSpace(pt.Status)) == "ACTIVE" && !copied {
 			hasOwnActiveNonCommand = true
 		}
