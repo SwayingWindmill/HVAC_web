@@ -114,7 +114,6 @@ func main() {
 		adapter.WithProcessorPacketHook(tap.Record),
 		adapter.WithGatewayPresenceHook(presence.SetOnline),
 		adapter.WithGatewayConnectHook(func(_ context.Context, gatewayID string) {
-			presence.SetOnline(gatewayID, true)
 			observability.GoSafe(logger, telemetry.Metrics, "connectivity.concentrator_shadow_reconcile", func() {
 				reconcileConcentratorShadowAsync(ingressCtx, concentratorService, logger, gatewayID)
 			})

@@ -15,7 +15,6 @@ import (
 	"math"
 	"net"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,8 +41,6 @@ const (
 var (
 	ErrPayloadMismatch        = errors.New("MQTT command attempt payload mismatch")
 	ErrOldFence               = errors.New("MQTT command execution fence is stale")
-	shareGroupPattern         = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-	subscribeRetryBackoffs    = []time.Duration{200 * time.Millisecond, 600 * time.Millisecond}
 	replyPersistRetryBackoffs = []time.Duration{20 * time.Millisecond, 60 * time.Millisecond}
 )
 
@@ -206,7 +203,12 @@ func New(ctx context.Context, config Config) (*Connector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse MQTT broker URL: %w", err)
 	}
-	tlsConfig, err := newTLSConfig(config)
+	tlsConfig, err := mqttclient.NewMTLSConfig(mqttclient.TLSConfig{
+		CACertFile:     config.CAFile,
+		ClientCertFile: config.CertFile,
+		ClientKeyFile:  config.KeyFile,
+		ServerName:     config.ServerName,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -551,27 +553,8 @@ func (connector *Connector) closeConnection(expected <-chan struct{}) {
 	_ = connector.tracker().CloseIfClosed(expected)
 }
 
-func isConnectionClosed(closed <-chan struct{}) bool {
-	return mqttclient.IsClosedSignal(closed)
-}
-
 func checkSubackReasons(suback *paho.Suback) error {
 	return mqttclient.CheckSubackReasons(suback, 1)
-}
-
-type subackGateSubscriber struct {
-	manager *autopaho.ConnectionManager
-}
-
-func (s subackGateSubscriber) Subscribe(ctx context.Context, sub *paho.Subscribe) (*paho.Suback, error) {
-	suback, err := s.manager.Subscribe(ctx, sub)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkSubackReasons(suback); err != nil {
-		return suback, err
-	}
-	return suback, nil
 }
 
 func (connector *Connector) subscribeAndRecover(ctx context.Context, manager *autopaho.ConnectionManager, connection <-chan struct{}) {
@@ -582,18 +565,18 @@ func (connector *Connector) subscribeAndRecover(ctx context.Context, manager *au
 	}
 	lastErr := mqttclient.SubscribeWithRetry(
 		ctx,
-		subackGateSubscriber{manager: manager},
+		manager,
 		sub,
 		10*time.Second,
-		subscribeRetryBackoffs,
-		func() bool { return isConnectionClosed(connection) },
+		mqttclient.DefaultSubscribeRetryDelays,
+		func() bool { return mqttclient.IsClosedSignal(connection) },
 	)
 	if lastErr == nil {
 		connector.addCounter("hvac_mqtt_command_subscriptions_total", "MQTT command reply subscription attempts by outcome.", map[string]string{"outcome": "success"}, 1)
 		go connector.recoverReplies(ctx)
 		return
 	}
-	if ctx.Err() != nil || isConnectionClosed(connection) {
+	if ctx.Err() != nil || mqttclient.IsClosedSignal(connection) {
 		return
 	}
 	connector.addCounter("hvac_mqtt_command_subscriptions_total", "MQTT command reply subscription attempts by outcome.", map[string]string{"outcome": "failed"}, 1)
@@ -749,7 +732,7 @@ func isPermanentCorrelationError(err error) bool {
 }
 
 func (connector *Connector) ackReply(item queuedReply) {
-	if item.ackFn == nil || item.packet == nil || isConnectionClosed(item.connectionClosed) {
+	if item.ackFn == nil || item.packet == nil || mqttclient.IsClosedSignal(item.connectionClosed) {
 		return
 	}
 	if err := item.ackFn(item.packet); err != nil {
@@ -764,7 +747,7 @@ func (connector *Connector) processReply(item queuedReply) {
 	var correlation commandmodel.CommandCorrelation
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
-		if baseCtx.Err() != nil || isConnectionClosed(item.connectionClosed) {
+		if baseCtx.Err() != nil || mqttclient.IsClosedSignal(item.connectionClosed) {
 			return
 		}
 		attemptCtx, cancel := context.WithTimeout(baseCtx, 5*time.Second)
@@ -795,7 +778,7 @@ func (connector *Connector) processReply(item queuedReply) {
 			connector.ackReply(item)
 			return
 		}
-		if attempt < len(replyPersistRetryBackoffs) && !isConnectionClosed(item.connectionClosed) {
+		if attempt < len(replyPersistRetryBackoffs) && !mqttclient.IsClosedSignal(item.connectionClosed) {
 			timer := time.NewTimer(replyPersistRetryBackoffs[attempt])
 			select {
 			case <-baseCtx.Done():
@@ -842,7 +825,7 @@ func (connector *Connector) onReply(received paho.PublishReceived) (bool, error)
 	logger, _ := connector.recoveryDeps()
 	connectionClosed := connector.currentConnectionClosed()
 	ackImmediate := func() {
-		if received.Client == nil || isConnectionClosed(connectionClosed) {
+		if received.Client == nil || mqttclient.IsClosedSignal(connectionClosed) {
 			return
 		}
 		if err := received.Client.Ack(received.Packet); err != nil {
@@ -1153,7 +1136,7 @@ func validateConfig(config Config) error {
 	if strings.TrimSpace(config.ClientID) == "" {
 		return errors.New("MQTT command identity is incomplete")
 	}
-	if config.SharedSubscriptionGroup != "" && !shareGroupPattern.MatchString(config.SharedSubscriptionGroup) {
+	if err := mqttclient.ValidateShareGroup(config.SharedSubscriptionGroup); err != nil {
 		return errors.New("MQTT command shared subscription group must match ^[A-Za-z0-9_-]{1,64}$")
 	}
 	if strings.TrimSpace(config.CAFile) == "" || strings.TrimSpace(config.CertFile) == "" || strings.TrimSpace(config.KeyFile) == "" || strings.TrimSpace(config.ServerName) == "" {
@@ -1166,15 +1149,6 @@ func validateConfig(config Config) error {
 		return errors.New("MQTT command reply timeout is invalid")
 	}
 	return nil
-}
-
-func newTLSConfig(config Config) (*tls.Config, error) {
-	return mqttclient.NewMTLSConfig(mqttclient.TLSConfig{
-		CACertFile:     config.CAFile,
-		ClientCertFile: config.CertFile,
-		ClientKeyFile:  config.KeyFile,
-		ServerName:     strings.TrimSpace(config.ServerName),
-	})
 }
 
 func capabilityMethod(capability commandmodel.Capability) (string, error) {
@@ -1209,10 +1183,7 @@ func capabilityMethod(capability commandmodel.Capability) (string, error) {
 // replyGatewayID returns the Gateway of an hvac/v1/{gatewayId}/up/reply topic,
 // stripping an optional MQTT v5 $share/<group>/ prefix.
 func replyGatewayID(topic string) (string, bool) {
-	parts := strings.Split(topic, "/")
-	if len(parts) >= 3 && parts[0] == "$share" && parts[1] != "" {
-		parts = parts[2:]
-	}
+	parts := strings.Split(mqttclient.StripSharePrefix(topic), "/")
 	if len(parts) != 5 || parts[0] != "hvac" || parts[1] != "v1" || parts[3] != "up" || parts[4] != "reply" ||
 		parts[2] != strings.TrimSpace(parts[2]) || !commandmodel.IsUUIDv7(parts[2]) {
 		return "", false

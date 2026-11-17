@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
+
+var shareGroupPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // TLSConfig configures mutual TLS (TLS 1.3 minimum) for MQTT broker connections.
 type TLSConfig struct {
@@ -60,11 +63,8 @@ func ValidateShareGroup(group string) error {
 	if group == "" {
 		return nil
 	}
-	if strings.TrimSpace(group) != group {
-		return errors.New("mqtt shared subscription group must not have leading or trailing whitespace")
-	}
-	if strings.ContainsAny(group, "/+#\x00") {
-		return errors.New("mqtt shared subscription group must not contain '/', '+', '#', or NUL")
+	if !shareGroupPattern.MatchString(group) {
+		return errors.New("mqtt shared subscription group must match ^[A-Za-z0-9_-]{1,64}$")
 	}
 	return nil
 }
@@ -96,7 +96,7 @@ func StripSharePrefix(filter string) string {
 	}
 	rest := strings.TrimPrefix(filter, prefix)
 	slash := strings.IndexByte(rest, '/')
-	if slash < 0 {
+	if slash <= 0 {
 		return filter
 	}
 	return rest[slash+1:]

@@ -259,8 +259,12 @@ func TestRuntimeSubscribesWithSharedPrefixWhenConfigured(t *testing.T) {
 	want := []string{
 		"$share/connectivity/hvac/v1/+/up/telemetry",
 		"$share/connectivity/hvac/v1/+/up/event",
+		"$share/connectivity/hvac/v1/+/up/status",
 	}
-	if len(conn.subscriptions) != len(want) || conn.subscriptions[0] != want[0] || conn.subscriptions[1] != want[1] {
+	if len(conn.subscriptions) != len(want) ||
+		conn.subscriptions[0] != want[0] ||
+		conn.subscriptions[1] != want[1] ||
+		conn.subscriptions[2] != want[2] {
 		t.Fatalf("broker subscriptions=%v, want %v", conn.subscriptions, want)
 	}
 }
@@ -1294,21 +1298,6 @@ func TestRuntimeRateLimited429IsolatesGatewayAndPreservesReadiness(t *testing.T)
 	}
 }
 
-func TestCheckSubackReasons(t *testing.T) {
-	if err := CheckSubackReasons(nil, 2); err == nil {
-		t.Fatal("expected nil SUBACK to fail")
-	}
-	if err := CheckSubackReasons(&paho.Suback{Reasons: []byte{1}}, 2); err == nil {
-		t.Fatal("expected mismatched SUBACK reason count to fail")
-	}
-	if err := CheckSubackReasons(&paho.Suback{Reasons: []byte{1, 0x87}}, 2); err == nil {
-		t.Fatal("expected SUBACK reason >= 0x80 to fail")
-	}
-	if err := CheckSubackReasons(&paho.Suback{Reasons: []byte{0, 1}}, 2); err != nil {
-		t.Fatalf("expected valid SUBACK [0, 1] to succeed, got %v", err)
-	}
-}
-
 func TestRuntimeSubscribeRetriesAndSelfHealsOnSubackFailure(t *testing.T) {
 	mqttCfg, serverTLS := writeTestPKI(t)
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", serverTLS)
@@ -1937,5 +1926,188 @@ func TestRuntimeWithSharedSessionRegistersRoutesMirrorsReadyAndLeavesSessionOpen
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("sibling route on SharedSession stopped receiving after adapter shutdown")
+	}
+}
+
+func TestRuntimeRecoveredWALBacklogDrainsWithoutRateLimitDrop(t *testing.T) {
+	overflowDir := t.TempDir()
+	const backlogCount = 500
+
+	spool := newGatewayMailbox(testGatewayA, 2, 1000, 32<<20, overflowDir)
+	for i := 1; i <= backlogCount; i++ {
+		res, err := spool.enqueue(publish(testGatewayA, i))
+		if err != nil {
+			t.Fatalf("pre-populate WAL message %d failed: %v", i, err)
+		}
+		if res.shed {
+			t.Fatalf("unexpected shed pre-populating WAL message %d", i)
+		}
+	}
+	spool.close(false)
+
+	identities := newFakeIdentities()
+	telemetry := &fakeTelemetry{}
+	processor, err := NewProcessor(identities, telemetry, WithGatewayRateLimit(5, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewRuntime(Config{
+		MQTT:             MQTTConfig{BrokerURL: "tls://localhost:8883", ClientID: "connectivity-wal-ratelimit-test", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "mqtt.local"},
+		TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: "ca.pem", CertFile: "client.pem", KeyFile: "client.key", ServerName: "telemetry.local"},
+		QueueCapacity:    4,
+		OverflowDir:      overflowDir,
+	}, processor, slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recCtx, recCancel := context.WithCancel(t.Context())
+	t.Cleanup(func() { recCancel(); runtime.workers.Wait(); runtime.closeMailboxes() })
+
+	if err := runtime.recoverOverflowMailboxes(recCtx); err != nil {
+		t.Fatalf("recoverOverflowMailboxes failed: %v", err)
+	}
+
+	waitCondition(t, 10*time.Second, func() bool {
+		return len(telemetry.accepted()) == backlogCount
+	}, "recovered 500-message WAL backlog drained despite tight ingress rate limit")
+
+	accepted := telemetry.accepted()
+	for i, obs := range accepted {
+		wantOffset := int64(i + 1)
+		if obs.SourceID != testGatewayA || obs.SourcePosition.Offset != wantOffset {
+			t.Fatalf("observation[%d]=(source=%s, offset=%d), want (source=%s, offset=%d)", i, obs.SourceID, obs.SourcePosition.Offset, testGatewayA, wantOffset)
+		}
+	}
+	if quarantines := identities.snapshotQuarantines(); len(quarantines) != 0 {
+		t.Fatalf("expected zero RATE_LIMITED quarantines for recovered WAL backlog, got %+v", quarantines)
+	}
+	metricsText := scrapeMetricsText(runtime.metrics)
+	if strings.Contains(metricsText, "hvac_mqtt_gateway_rate_limited_total") {
+		t.Fatalf("unexpected rate-limit metric during recovered WAL drain:\n%s", metricsText)
+	}
+}
+
+type blockingQuarantineIdentities struct {
+	*fakeIdentities
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingQuarantineIdentities) QuarantineUplink(ctx context.Context, quarantine UplinkQuarantine) error {
+	select {
+	case b.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return b.fakeIdentities.QuarantineUplink(ctx, quarantine)
+}
+
+func TestRuntimeIngressRateLimitDropsExcessAcksWithoutBlockingOrDisconnectingHealthyGateway(t *testing.T) {
+	broker := newFakeBroker(t)
+	identities := &blockingQuarantineIdentities{
+		fakeIdentities: newFakeIdentities(),
+		started:        make(chan struct{}, 4),
+		release:        make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	unblockQuarantine := func() {
+		releaseOnce.Do(func() { close(identities.release) })
+	}
+
+	telemetry := &fakeTelemetry{}
+	frozenNow := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	processor, err := NewProcessor(identities, telemetry, WithGatewayRateLimit(1, 3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor.now = func() time.Time { return frozenNow }
+
+	runtime, err := NewRuntime(Config{
+		MQTT:             broker.mqtt,
+		TelemetryRuntime: TelemetryRuntimeConfig{BaseURL: "https://telemetry.local", CAFile: broker.mqtt.CAFile, CertFile: broker.mqtt.CertFile, KeyFile: broker.mqtt.KeyFile, ServerName: "telemetry.local"},
+		QueueCapacity:    8,
+		OverflowDir:      t.TempDir(),
+	}, processor, slog.New(slog.NewTextHandler(io.Discard, nil)), observability.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(runtime.closeMailboxes)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	stopped := make(chan error, 1)
+	go func() { stopped <- runtime.Run(ctx) }()
+	t.Cleanup(func() {
+		unblockQuarantine()
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(15 * time.Second):
+			t.Error("Run did not return after cancel")
+		}
+	})
+
+	conn := broker.awaitConnection(t)
+	awaitReady(t, runtime, true)
+
+	for i := 1; i <= 10; i++ {
+		conn.deliverGateway(t, testGatewayA, uint16(i), i, false)
+	}
+	conn.awaitAcks(t, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+
+	select {
+	case <-identities.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("async rate-limit quarantine never started")
+	}
+
+	// While Postgres quarantine write for Gateway A is blocked, Gateway B packets
+	// must be ACK'd and persisted on the same intact broker connection.
+	for i := 1; i <= 3; i++ {
+		conn.deliverGateway(t, testGatewayB, uint16(10+i), 100+i, false)
+	}
+	conn.awaitAcks(t, 11, 12, 13)
+
+	waitCondition(t, 3*time.Second, func() bool {
+		return len(telemetry.accepted()) == 6
+	}, "3 burst Gateway A + 3 healthy Gateway B messages persisted while quarantine blocked")
+
+	select {
+	case <-conn.disconnected:
+		t.Fatal("broker connection closed during gateway A rate-limit flood")
+	default:
+	}
+	select {
+	case <-broker.conns:
+		t.Fatal("runtime opened unexpected reconnect during gateway A rate-limit flood")
+	default:
+	}
+	if !runtime.Ready() {
+		t.Fatal("runtime.Ready() turned false during gateway A rate-limit flood")
+	}
+
+	unblockQuarantine()
+	waitCondition(t, 3*time.Second, func() bool {
+		return len(identities.snapshotQuarantines()) == 1
+	}, "rate-limit quarantine sample persisted after unblock")
+
+	q := identities.snapshotQuarantines()[0]
+	if q.GatewayID != testGatewayA || q.ReasonCode != QuarantineReasonRateLimited {
+		t.Fatalf("unexpected quarantine record: %+v", q)
+	}
+
+	metricsText := scrapeMetricsText(runtime.metrics)
+	for _, want := range []string{
+		`hvac_mqtt_messages_received_total{outcome="queued"} 6`,
+		`hvac_mqtt_messages_received_total{outcome="dropped"} 7`,
+		`hvac_mqtt_gateway_rate_limited_total{message_type="telemetry"} 7`,
+	} {
+		if !strings.Contains(metricsText, want) {
+			t.Fatalf("missing metric %q in:\n%s", want, metricsText)
+		}
 	}
 }

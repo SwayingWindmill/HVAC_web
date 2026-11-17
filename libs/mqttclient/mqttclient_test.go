@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -80,10 +81,13 @@ func TestSharedTopicFilterAndMatch(t *testing.T) {
 	if err := ValidateShareGroup("workers-1"); err != nil {
 		t.Fatalf("valid share group rejected: %v", err)
 	}
-	for _, bad := range []string{"bad/group", "bad+group", "bad#group", " leading", "trailing "} {
+	for _, bad := range []string{"bad/group", "bad+group", "bad#group", " leading", "trailing ", strings.Repeat("a", 65)} {
 		if err := ValidateShareGroup(bad); err == nil {
 			t.Fatalf("expected error for invalid share group %q", bad)
 		}
+	}
+	if got := StripSharePrefix("$share//hvac/v1/gw/up/reply"); got != "$share//hvac/v1/gw/up/reply" {
+		t.Fatalf("empty $share group prefix must not be stripped, got %q", got)
 	}
 
 	if !MatchTopicFilter("$share/workers/hvac/v1/+/up/telemetry", "hvac/v1/gw-1/up/telemetry") {
@@ -521,6 +525,251 @@ func TestSharedSessionManagedRouteErrorTriggersReconnectRedelivery(t *testing.T)
 	}
 	if acked.Load() != 1 {
 		t.Fatalf("expected 1 manual ack, got %d", acked.Load())
+	}
+}
+
+func TestConnTrackerRecordSuccessClearsLastErrorAndRestoresHealth(t *testing.T) {
+	t.Parallel()
+
+	tracker := NewConnTracker()
+	var (
+		mu     sync.Mutex
+		states []ConnState
+	)
+	unsub := tracker.AddObserver(func(s ConnState) {
+		mu.Lock()
+		states = append(states, s)
+		mu.Unlock()
+	})
+	defer unsub()
+
+	gen := tracker.OnConnectUp()
+	if !tracker.MarkSubscribed(gen) {
+		t.Fatal("MarkSubscribed failed")
+	}
+	if !tracker.State().Healthy() {
+		t.Fatalf("expected healthy state before error, got %+v", tracker.State())
+	}
+
+	tracker.RecordError(errors.New("transient client error"))
+	st := tracker.State()
+	if st.Healthy() || st.LastError != "transient client error" {
+		t.Fatalf("expected unhealthy state with LastError set, got %+v", st)
+	}
+
+	tracker.RecordSuccess()
+	st = tracker.State()
+	if !st.Healthy() || st.LastError != "" || st.LastSuccess.IsZero() {
+		t.Fatalf("expected RecordSuccess to clear LastError and restore Healthy(), got %+v", st)
+	}
+
+	mu.Lock()
+	lastObserved := states[len(states)-1]
+	mu.Unlock()
+	if !lastObserved.Healthy() || lastObserved.LastError != "" {
+		t.Fatalf("expected observer to receive healed healthy state, got %+v", lastObserved)
+	}
+}
+
+func TestSharedSessionRegisterRouteDoesNotMarkSubscribedBeforeResubscribeAll(t *testing.T) {
+	t.Parallel()
+
+	certs := writeTestPKI(t)
+	broker := startTestMTLSBroker(t, certs.serverTLS)
+	defer broker.close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	session, err := NewSharedSession(ctx, SharedSessionConfig{
+		BrokerURL:                     "tls://" + broker.addr,
+		ClientID:                      "resubscribe-fence-test",
+		TLSConfig:                     certs.clientTLS,
+		CleanStartOnInitialConnection: true,
+		DialTimeout:                   2 * time.Second,
+		ConnectRetryDelay:             50 * time.Millisecond,
+		SubscribeAttemptTimeout:       2 * time.Second,
+		SubscribeRetryDelays:          []time.Duration{20 * time.Millisecond},
+	})
+	if err != nil {
+		t.Fatalf("NewSharedSession failed: %v", err)
+	}
+	defer func() {
+		_ = session.Close(context.Background())
+	}()
+
+	if _, err := session.RegisterRoute("r1", []string{"hvac/v1/+/up/telemetry"}, func(*paho.Publish) {}); err != nil {
+		t.Fatalf("RegisterRoute r1 failed: %v", err)
+	}
+	if err := session.AwaitSubscribed(ctx); err != nil {
+		t.Fatalf("AwaitSubscribed failed: %v", err)
+	}
+
+	// Simulate reconnect advancing generation before resubscribeAll runs for gen2.
+	gen2 := session.tracker.OnConnectUp()
+	if session.State().Subscribed {
+		t.Fatal("expected Subscribed=false immediately after OnConnectUp")
+	}
+
+	if _, err := session.RegisterRoute("r2", []string{"hvac/v1/+/down/reply"}, func(*paho.Publish) {}); err != nil {
+		t.Fatalf("RegisterRoute r2 failed: %v", err)
+	}
+	if session.State().Subscribed {
+		t.Fatal("registerRoute must NOT mark Subscribed=true before resubscribeAll completes for gen2")
+	}
+
+	session.resubscribeAll(ctx, session.manager, gen2)
+	if !session.State().Healthy() {
+		t.Fatalf("expected session Healthy() after resubscribeAll for gen2, got %+v", session.State())
+	}
+
+	// Registering another route after resubscribeAll completed for gen2 keeps Subscribed=true.
+	if _, err := session.RegisterRoute("r3", []string{"hvac/v1/+/up/event"}, func(*paho.Publish) {}); err != nil {
+		t.Fatalf("RegisterRoute r3 failed: %v", err)
+	}
+	if !session.State().Healthy() {
+		t.Fatalf("expected session Healthy() when registering route after resubscribeAll, got %+v", session.State())
+	}
+}
+
+func TestSharedSessionManagedRouteStaleErrorDoesNotCloseNewConnection(t *testing.T) {
+	t.Parallel()
+
+	certs := writeTestPKI(t)
+	broker := startTestMTLSBroker(t, certs.serverTLS)
+	defer broker.close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	session, err := NewSharedSession(ctx, SharedSessionConfig{
+		BrokerURL:                     "tls://" + broker.addr,
+		ClientID:                      "stale-managed-err-test",
+		TLSConfig:                     certs.clientTLS,
+		CleanStartOnInitialConnection: true,
+		DialTimeout:                   2 * time.Second,
+		ConnectRetryDelay:             30 * time.Millisecond,
+		SubscribeAttemptTimeout:       2 * time.Second,
+		SubscribeRetryDelays:          []time.Duration{20 * time.Millisecond},
+	})
+	if err != nil {
+		t.Fatalf("NewSharedSession failed: %v", err)
+	}
+	defer func() {
+		_ = session.Close(context.Background())
+	}()
+
+	enteredFirst := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var releaseOnce sync.Once
+	unlock := func() {
+		releaseOnce.Do(func() { close(releaseFirst) })
+	}
+	t.Cleanup(unlock)
+
+	var firstOnce sync.Once
+	deliveredSecond := make(chan string, 1)
+
+	_, err = session.RegisterManagedRoute("custody", []string{"hvac/v1/+/up/telemetry"}, func(ev PublishEvent) error {
+		if string(ev.Packet.Payload) == "stale-msg" {
+			firstOnce.Do(func() { close(enteredFirst) })
+			<-releaseFirst
+			return errors.New("stale connection write failed")
+		}
+		if ackErr := ev.Ack(ev.Packet); ackErr != nil {
+			return ackErr
+		}
+		deliveredSecond <- string(ev.Packet.Payload)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RegisterManagedRoute failed: %v", err)
+	}
+	if err := session.AwaitSubscribed(ctx); err != nil {
+		t.Fatalf("AwaitSubscribed failed: %v", err)
+	}
+
+	subsBefore := broker.subscribeCalls()
+	// Invoke onPublishReceived outside paho's per-connection WaitGroup so autopaho can
+	// finish tearing down conn1 and dial conn2 while this stale handler is still in flight.
+	staleDone := make(chan error, 1)
+	go func() {
+		_, callErr := session.onPublishReceived(paho.PublishReceived{
+			Packet: &paho.Publish{
+				Topic:   "hvac/v1/gw-1/up/telemetry",
+				Payload: []byte("stale-msg"),
+				QoS:     1,
+			},
+			Client: &paho.Client{},
+		})
+		staleDone <- callErr
+	}()
+	select {
+	case <-enteredFirst:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for stale handler entry")
+	}
+
+	// Drop conn1 and wait until conn2 connects and subscribes.
+	broker.dropActiveConn()
+	broker.waitSubscribeCallsAtLeast(t, subsBefore+1)
+	if err := session.AwaitSubscribed(ctx); err != nil {
+		t.Fatalf("AwaitSubscribed on conn2 failed: %v", err)
+	}
+	subsOnConn2 := broker.subscribeCalls()
+	genOnConn2 := session.State().Generation
+
+	// Release stale conn1 handler so it returns an error after conn2 is live.
+	unlock()
+	if staleErr := <-staleDone; staleErr == nil {
+		t.Fatal("expected stale managed handler to return error")
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if session.State().Generation != genOnConn2 || !session.State().Healthy() {
+		t.Fatalf("stale managed route error disturbed conn2: state=%+v wantGen=%d", session.State(), genOnConn2)
+	}
+	if got := broker.subscribeCalls(); got != subsOnConn2 {
+		t.Fatalf("stale managed route error triggered unexpected reconnect (subs %d -> %d)", subsOnConn2, got)
+	}
+
+	broker.pushPublish("hvac/v1/gw-1/up/telemetry", []byte("fresh-msg"), 1)
+	if got := recvString(t, deliveredSecond); got != "fresh-msg" {
+		t.Fatalf("unexpected fresh payload on conn2: %q", got)
+	}
+}
+
+func TestSharedSessionHandleConnectionUpConcurrentWithClose(t *testing.T) {
+	t.Parallel()
+
+	for range 25 {
+		ctx, cancel := context.WithCancel(context.Background())
+		s := &SharedSession{
+			cfg:           SharedSessionConfig{SubscribeAttemptTimeout: time.Second},
+			tracker:       NewConnTracker(),
+			sessionCtx:    ctx,
+			sessionCancel: cancel,
+			routes:        make(map[string]*sessionRoute),
+		}
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				s.handleConnectionUp(nil)
+			}()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = s.Close(context.Background())
+		}()
+		close(start)
+		wg.Wait()
 	}
 }
 

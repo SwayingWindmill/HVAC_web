@@ -12,7 +12,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -55,7 +54,6 @@ type UplinkCodec interface {
 
 // CodecRegistry selects an UplinkCodec for incoming MQTT uplink frames.
 type CodecRegistry struct {
-	mu     sync.RWMutex
 	codecs []UplinkCodec
 }
 
@@ -76,25 +74,20 @@ func DefaultCodecRegistry() *CodecRegistry {
 	return NewCodecRegistry(JSONV2Codec{}, CompactJSONV1Codec{})
 }
 
-// Register appends a codec to the registry.
-func (r *CodecRegistry) Register(codec UplinkCodec) {
-	if r == nil || codec == nil {
-		return
-	}
-	r.mu.Lock()
-	r.codecs = append(r.codecs, codec)
-	r.mu.Unlock()
-}
-
 func (r *CodecRegistry) selectCodec(messageType string, payload []byte) (UplinkCodec, error) {
-	if err := validateJSONObjectEnvelope(payload); err != nil {
+	probe, err := decodeEnvelopeVersion(payload)
+	if err != nil {
 		return nil, err
 	}
-	r.mu.RLock()
-	codecs := slices.Clone(r.codecs)
-	r.mu.RUnlock()
-
-	for _, codec := range codecs {
+	for _, codec := range r.codecs {
+		if fast, ok := codec.(interface {
+			canDecodeProbe(messageType string, probe versionProbe) bool
+		}); ok {
+			if fast.canDecodeProbe(messageType, probe) {
+				return codec, nil
+			}
+			continue
+		}
 		if codec.CanDecode(messageType, payload) {
 			return codec, nil
 		}
@@ -145,17 +138,17 @@ func validateJSONObjectEnvelope(payload []byte) error {
 	return nil
 }
 
-func probeEnvelopeVersion(payload []byte) (versionProbe, bool) {
-	if validateJSONObjectEnvelope(payload) != nil {
-		return versionProbe{}, false
+func decodeEnvelopeVersion(payload []byte) (versionProbe, error) {
+	if err := validateJSONObjectEnvelope(payload); err != nil {
+		return versionProbe{}, err
 	}
 	var probe versionProbe
 	if err := json.Unmarshal(payload, &probe); err != nil {
-		return versionProbe{}, false
+		return versionProbe{}, fmt.Errorf("decode MQTT envelope: %w", err)
 	}
 	probe.SchemaVersion = strings.TrimSpace(probe.SchemaVersion)
 	probe.V = strings.TrimSpace(probe.V)
-	return probe, true
+	return probe, nil
 }
 
 // JSONV2Codec decodes canonical schemaVersion "2.0" telemetry/event/status envelopes.
@@ -163,11 +156,15 @@ type JSONV2Codec struct{}
 
 func (JSONV2Codec) Name() string { return "json-v2" }
 
-func (JSONV2Codec) CanDecode(messageType string, payload []byte) bool {
-	probe, ok := probeEnvelopeVersion(payload)
-	if !ok {
+func (c JSONV2Codec) CanDecode(messageType string, payload []byte) bool {
+	probe, err := decodeEnvelopeVersion(payload)
+	if err != nil {
 		return false
 	}
+	return c.canDecodeProbe(messageType, probe)
+}
+
+func (JSONV2Codec) canDecodeProbe(messageType string, probe versionProbe) bool {
 	if probe.V == CompactSchemaVersionV1 || probe.SchemaVersion == CompactSchemaVersionV1 {
 		return false
 	}
@@ -258,11 +255,15 @@ type CompactJSONV1Codec struct{}
 
 func (CompactJSONV1Codec) Name() string { return "compact-json-v1" }
 
-func (CompactJSONV1Codec) CanDecode(messageType string, payload []byte) bool {
-	probe, ok := probeEnvelopeVersion(payload)
-	if !ok {
+func (c CompactJSONV1Codec) CanDecode(messageType string, payload []byte) bool {
+	probe, err := decodeEnvelopeVersion(payload)
+	if err != nil {
 		return false
 	}
+	return c.canDecodeProbe(messageType, probe)
+}
+
+func (CompactJSONV1Codec) canDecodeProbe(messageType string, probe versionProbe) bool {
 	if probe.V == CompactSchemaVersionV1 || probe.SchemaVersion == CompactSchemaVersionV1 {
 		return messageType == MessageTypeTelemetry || messageType == MessageTypeStatus
 	}
@@ -591,20 +592,14 @@ func decodeFlexibleTimestamp(raw json.RawMessage) (int64, error) {
 }
 
 func validateCompactPointValue(value any) error {
-	switch typed := value.(type) {
-	case json.Number:
-		number, err := typed.Float64()
-		if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
-			return errors.New("numeric value is not finite")
-		}
-		return nil
-	case string, bool:
-		return nil
-	case nil:
-		return errors.New("null is not a telemetry value")
-	default:
+	valueType, err := wireValueType(value)
+	if err != nil {
+		return err
+	}
+	if valueType == "JSON" {
 		return errors.New("point value must be a finite number, string, or boolean")
 	}
+	return nil
 }
 
 func mapCompactQuality(raw string) (uint8, error) {

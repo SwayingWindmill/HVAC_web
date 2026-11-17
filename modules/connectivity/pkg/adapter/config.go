@@ -12,10 +12,9 @@ import (
 )
 
 var (
-	uuidV7Pattern     = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	traceIDPattern    = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	zeroTraceID       = strings.Repeat("0", 32)
-	shareGroupPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	uuidV7Pattern  = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	traceIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	zeroTraceID    = strings.Repeat("0", 32)
 )
 
 const (
@@ -107,9 +106,6 @@ func (config Config) validate(requireMQTT bool) error {
 		}
 	}
 	if err := mqttclient.ValidateShareGroup(config.MQTT.SharedSubscriptionGroup); err != nil {
-		return errors.New("MQTT shared subscription group must match ^[A-Za-z0-9_-]{1,64}$")
-	}
-	if config.MQTT.SharedSubscriptionGroup != "" && !shareGroupPattern.MatchString(config.MQTT.SharedSubscriptionGroup) {
 		return errors.New("MQTT shared subscription group must match ^[A-Za-z0-9_-]{1,64}$")
 	}
 	if config.QueueCapacity < 1 || config.QueueCapacity > 65536 {

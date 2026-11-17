@@ -20,7 +20,11 @@ const (
 
 // UplinkTopicFilters are the Gateway uplinks Connectivity consumes (ADR 0015). The broker
 // ACL confines each Gateway to hvac/v1/{its certificate CN}/up/#.
-var UplinkTopicFilters = []string{"hvac/v1/+/up/" + MessageTypeTelemetry, "hvac/v1/+/up/" + MessageTypeEvent}
+var UplinkTopicFilters = []string{
+	"hvac/v1/+/up/" + MessageTypeTelemetry,
+	"hvac/v1/+/up/" + MessageTypeEvent,
+	"hvac/v1/+/up/" + MessageTypeStatus,
+}
 
 type MessageTopic struct {
 	GatewayID   string

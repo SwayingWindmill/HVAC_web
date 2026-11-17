@@ -46,7 +46,6 @@ type gatewaySessionState struct {
 	online               bool
 	hasTransition        bool
 	superseded           []string
-	lastTouchedSeq       uint64
 }
 
 func (s *gatewaySessionState) markSuperseded(sessionID string) {
@@ -72,10 +71,8 @@ func (s *gatewaySessionState) isSuperseded(sessionID string) bool {
 // (sessionId, sequence, eventTime) so delayed LWT messages from dead TCP sockets or
 // replayed lifecycle events never corrupt newer active gateway sessions.
 type GatewaySessionTracker struct {
-	mu          sync.Mutex
-	maxGateways int
-	touchSeq    uint64
-	gateways    map[string]*gatewaySessionState
+	mu       sync.Mutex
+	gateways boundedTouchMap[*gatewaySessionState]
 }
 
 // SessionTrackerOption configures a GatewaySessionTracker.
@@ -85,7 +82,7 @@ type SessionTrackerOption func(*GatewaySessionTracker)
 func WithSessionTrackerCapacity(maxGateways int) SessionTrackerOption {
 	return func(t *GatewaySessionTracker) {
 		if maxGateways > 0 {
-			t.maxGateways = maxGateways
+			t.gateways.maxEntries = maxGateways
 		}
 	}
 }
@@ -93,8 +90,7 @@ func WithSessionTrackerCapacity(maxGateways int) SessionTrackerOption {
 // NewGatewaySessionTracker initializes a thread-safe GatewaySessionTracker.
 func NewGatewaySessionTracker(opts ...SessionTrackerOption) *GatewaySessionTracker {
 	tracker := &GatewaySessionTracker{
-		maxGateways: defaultMaxTrackedSessions,
-		gateways:    make(map[string]*gatewaySessionState),
+		gateways: newBoundedTouchMap[*gatewaySessionState](defaultMaxTrackedSessions),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -152,20 +148,11 @@ func (t *GatewaySessionTracker) ApplyTransition(tx SessionTransition) bool {
 				return false
 			}
 		}
-		cur.hasTransition = true
-		cur.sessionID = sid
-		if cur.sessionID == "" && cur.lastTelemetrySession != "" && tx.Online {
-			cur.sessionID = cur.lastTelemetrySession
+		targetSID := sid
+		if targetSID == "" && tx.Online {
+			targetSID = cur.lastTelemetrySession
 		}
-		cur.online = tx.Online
-		if tx.HasSequence {
-			cur.hasSequence = true
-			cur.lastSequence = tx.Sequence
-		}
-		if tx.HasEventTime && tx.EventTime > cur.lastEventTime {
-			cur.lastEventTime = tx.EventTime
-		}
-		return true
+		return applyAcceptedTransitionLocked(cur, tx, targetSID, true)
 	}
 
 	switch {
@@ -177,24 +164,10 @@ func (t *GatewaySessionTracker) ApplyTransition(tx SessionTransition) bool {
 			if !tx.HasSequence && tx.HasEventTime && cur.lastEventTime > 0 && tx.EventTime < cur.lastEventTime {
 				return false
 			}
-			cur.online = tx.Online
-			if tx.HasSequence {
-				cur.hasSequence = true
-				cur.lastSequence = tx.Sequence
-			}
-			if tx.HasEventTime && tx.EventTime > cur.lastEventTime {
-				cur.lastEventTime = tx.EventTime
-			}
-			return true
+			return applyAcceptedTransitionLocked(cur, tx, sid, false)
 		}
 
-		// Incoming belongs to another sessionID.
-		if cur.isSuperseded(sid) {
-			return false
-		}
-		if !tx.Online {
-			// A stale/unseen offline or LWT from a different session must never take an
-			// active or already-switched session offline.
+		if cur.isSuperseded(sid) || !tx.Online {
 			return false
 		}
 		if tx.HasEventTime && cur.lastEventTime > 0 && tx.EventTime < cur.lastEventTime {
@@ -204,18 +177,7 @@ func (t *GatewaySessionTracker) ApplyTransition(tx SessionTransition) bool {
 			tx.HasEventTime && cur.lastTelemetryTime > 0 && tx.EventTime < cur.lastTelemetryTime {
 			return false
 		}
-		cur.markSuperseded(cur.sessionID)
-		cur.sessionID = sid
-		cur.online = true
-		cur.hasSequence = tx.HasSequence
-		cur.lastSequence = tx.Sequence
-		if !tx.HasSequence {
-			cur.lastSequence = 0
-		}
-		if tx.HasEventTime && tx.EventTime > cur.lastEventTime {
-			cur.lastEventTime = tx.EventTime
-		}
-		return true
+		return applyAcceptedTransitionLocked(cur, tx, sid, true)
 
 	case sid != "" && cur.sessionID == "":
 		if cur.isSuperseded(sid) {
@@ -229,17 +191,7 @@ func (t *GatewaySessionTracker) ApplyTransition(tx SessionTransition) bool {
 				return false
 			}
 		}
-		cur.sessionID = sid
-		cur.online = tx.Online
-		cur.hasSequence = tx.HasSequence
-		cur.lastSequence = tx.Sequence
-		if !tx.HasSequence {
-			cur.lastSequence = 0
-		}
-		if tx.HasEventTime && tx.EventTime > cur.lastEventTime {
-			cur.lastEventTime = tx.EventTime
-		}
-		return true
+		return applyAcceptedTransitionLocked(cur, tx, sid, true)
 
 	case sid == "" && cur.sessionID != "":
 		if !tx.Online && cur.online {
@@ -253,19 +205,7 @@ func (t *GatewaySessionTracker) ApplyTransition(tx SessionTransition) bool {
 		if tx.HasEventTime && cur.lastEventTime > 0 && tx.EventTime < cur.lastEventTime {
 			return false
 		}
-		if !tx.Online {
-			cur.markSuperseded(cur.sessionID)
-			cur.sessionID = ""
-		}
-		cur.online = tx.Online
-		if tx.HasSequence {
-			cur.hasSequence = true
-			cur.lastSequence = tx.Sequence
-		}
-		if tx.HasEventTime && tx.EventTime > cur.lastEventTime {
-			cur.lastEventTime = tx.EventTime
-		}
-		return true
+		return applyAcceptedTransitionLocked(cur, tx, "", false)
 
 	default:
 		// Legacy path: both incoming and active session omit sessionId.
@@ -278,16 +218,37 @@ func (t *GatewaySessionTracker) ApplyTransition(tx SessionTransition) bool {
 		if !tx.Online && tx.HasEventTime && cur.lastTelemetryTime > 0 && tx.EventTime < cur.lastTelemetryTime {
 			return false
 		}
-		cur.online = tx.Online
-		if tx.HasSequence {
-			cur.hasSequence = true
-			cur.lastSequence = tx.Sequence
-		}
-		if tx.HasEventTime && tx.EventTime > cur.lastEventTime {
-			cur.lastEventTime = tx.EventTime
-		}
-		return true
+		return applyAcceptedTransitionLocked(cur, tx, "", false)
 	}
+}
+
+func applyAcceptedTransitionLocked(cur *gatewaySessionState, tx SessionTransition, newSessionID string, resetSeq bool) bool {
+	cur.hasTransition = true
+	if newSessionID != "" {
+		if cur.sessionID != "" && cur.sessionID != newSessionID {
+			cur.markSuperseded(cur.sessionID)
+		}
+		cur.sessionID = newSessionID
+	} else if !tx.Online && cur.sessionID != "" {
+		cur.markSuperseded(cur.sessionID)
+		cur.sessionID = ""
+	}
+	cur.online = tx.Online
+	if resetSeq {
+		cur.hasSequence = tx.HasSequence
+		if tx.HasSequence {
+			cur.lastSequence = tx.Sequence
+		} else {
+			cur.lastSequence = 0
+		}
+	} else if tx.HasSequence {
+		cur.hasSequence = true
+		cur.lastSequence = tx.Sequence
+	}
+	if tx.HasEventTime && tx.EventTime > cur.lastEventTime {
+		cur.lastEventTime = tx.EventTime
+	}
+	return true
 }
 
 // ObserveTelemetry advances gateway telemetry recency and optional sessionId awareness
@@ -341,7 +302,7 @@ func (t *GatewaySessionTracker) Snapshot(gatewayID string) (GatewaySessionSnapsh
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	cur, ok := t.gateways[gw]
+	cur, ok := t.gateways.get(gw)
 	if !ok {
 		return GatewaySessionSnapshot{}, false
 	}
@@ -358,30 +319,9 @@ func (t *GatewaySessionTracker) Snapshot(gatewayID string) (GatewaySessionSnapsh
 }
 
 func (t *GatewaySessionTracker) getOrCreateLocked(gatewayID string) *gatewaySessionState {
-	t.touchSeq++
-	if cur, ok := t.gateways[gatewayID]; ok {
-		cur.lastTouchedSeq = t.touchSeq
-		return cur
-	}
-	if t.maxGateways > 0 && len(t.gateways) >= t.maxGateways {
-		var oldestKey string
-		var oldestSeq uint64
-		for key, entry := range t.gateways {
-			if oldestKey == "" || entry.lastTouchedSeq < oldestSeq {
-				oldestKey = key
-				oldestSeq = entry.lastTouchedSeq
-			}
-		}
-		if oldestKey != "" {
-			delete(t.gateways, oldestKey)
-		}
-	}
-	cur := &gatewaySessionState{
-		gatewayID:      gatewayID,
-		lastTouchedSeq: t.touchSeq,
-	}
-	t.gateways[gatewayID] = cur
-	return cur
+	return t.gateways.getOrCreate(gatewayID, func() *gatewaySessionState {
+		return &gatewaySessionState{gatewayID: gatewayID}
+	})
 }
 
 func extractEventSessionID(data json.RawMessage) string {

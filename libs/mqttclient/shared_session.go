@@ -93,10 +93,11 @@ type SharedSession struct {
 	sessionCancel context.CancelFunc
 	manager       *autopaho.ConnectionManager
 
-	subMu       sync.Mutex
-	subCancelMu sync.Mutex
-	subCancel   context.CancelFunc
-	subWG       sync.WaitGroup
+	subMu                  sync.Mutex
+	initialResubscribedGen uint64
+	subCancelMu            sync.Mutex
+	subCancel              context.CancelFunc
+	subWG                  sync.WaitGroup
 
 	routesMu sync.RWMutex
 	routes   map[string]*sessionRoute
@@ -389,7 +390,9 @@ func (s *SharedSession) registerRoute(
 			}
 			return nil, err
 		}
-		s.tracker.MarkSubscribed(gen)
+		if s.initialResubscribedGen == gen {
+			s.tracker.MarkSubscribed(gen)
+		}
 	}
 
 	var unregOnce sync.Once
@@ -569,7 +572,7 @@ func (s *SharedSession) toSessionState(cs ConnState) SessionState {
 }
 
 func (s *SharedSession) handleConnectionUp(manager *autopaho.ConnectionManager) {
-	if s.isClosed() || s.sessionCtx.Err() != nil {
+	if s.isClosed() {
 		return
 	}
 	gen := s.tracker.OnConnectUp()
@@ -585,9 +588,18 @@ func (s *SharedSession) handleConnectionUp(manager *autopaho.ConnectionManager) 
 	s.subCancel = subCancel
 	s.subCancelMu.Unlock()
 
+	s.closeMu.Lock()
+	if s.closed || (s.sessionCtx != nil && s.sessionCtx.Err() != nil) {
+		s.closeMu.Unlock()
+		subCancel()
+		return
+	}
 	s.subWG.Add(1)
+	s.closeMu.Unlock()
+
 	go func() {
 		defer s.subWG.Done()
+		defer subCancel()
 		s.resubscribeAll(subCtx, manager, gen)
 	}()
 }
@@ -630,7 +642,9 @@ func (s *SharedSession) resubscribeAll(ctx context.Context, manager *autopaho.Co
 		}
 	}
 
-	s.tracker.MarkSubscribed(gen)
+	if s.tracker.MarkSubscribed(gen) {
+		s.initialResubscribedGen = gen
+	}
 }
 
 func (s *SharedSession) snapshotAllFilters() ([]string, map[string]byte) {
@@ -693,7 +707,7 @@ func (s *SharedSession) onPublishReceived(received paho.PublishReceived) (bool, 
 			ConnectionClosed: closedCh,
 			Ack:              received.Client.Ack,
 		}); err != nil {
-			_ = s.tracker.CloseCurrent()
+			_ = s.tracker.CloseIfClosed(closedCh)
 			return true, err
 		}
 	}

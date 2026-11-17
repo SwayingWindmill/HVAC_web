@@ -711,7 +711,6 @@ func TestProcessorCompactV1BatchAndStatusLifecycleFencing(t *testing.T) {
 	if len(connectedCalls) != 1 || connectedCalls[0] != testGatewayA {
 		t.Fatalf("expected exactly 1 connect hook call (stale replay suppressed), got %v", connectedCalls)
 	}
-	// Expected presence sequence: [true (telemetry), true (connect s2), false (valid offline s2)].
 	wantPresence := []bool{true, true, false}
 	if len(presenceEvents) != len(wantPresence) {
 		t.Fatalf("presence=%v, want %v (stale LWT must be suppressed)", presenceEvents, wantPresence)

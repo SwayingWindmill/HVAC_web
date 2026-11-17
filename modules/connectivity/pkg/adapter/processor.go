@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -144,20 +145,6 @@ func WithProcessorPacketHook(hook func(direction, channel, gatewayID, topic, tra
 	}
 }
 
-// WithCodecRegistry overrides the default UplinkCodec registry (JSON v2.0 + Compact JSON v1.0).
-func WithCodecRegistry(registry *CodecRegistry) ProcessorOption {
-	return func(processor *Processor) {
-		processor.codecs = registry
-	}
-}
-
-// WithSessionTracker overrides the default per-gateway LWT/session transition fence tracker.
-func WithSessionTracker(tracker *GatewaySessionTracker) ProcessorOption {
-	return func(processor *Processor) {
-		processor.sessionTracker = tracker
-	}
-}
-
 // WithGatewayRateLimit configures a per-gateway token-bucket rate limiter enforced
 // before full payload decoding.
 func WithGatewayRateLimit(messagesPerSec float64, burst int) ProcessorOption {
@@ -263,6 +250,82 @@ func (processor *Processor) Process(ctx context.Context, topic string, payload [
 	return outcomes[0].Result, outcomes[0].Err
 }
 
+type ingressRateCheckedKey struct{}
+
+func withIngressRateChecked(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, ingressRateCheckedKey{}, true)
+}
+
+func isIngressRateChecked(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	checked, _ := ctx.Value(ingressRateCheckedKey{}).(bool)
+	return checked
+}
+
+// CheckIngressRateLimit enforces the per-gateway ingress token bucket before WAL custody.
+// When rejected, it records the rate-limit metric and returns a non-nil UplinkQuarantine
+// if the 5-second per-(gateway, messageType) quarantine cooldown allows persistence.
+func (processor *Processor) CheckIngressRateLimit(topic string, payload []byte) (allowed bool, messageType string, quarantine *UplinkQuarantine) {
+	if processor == nil || processor.rateLimiter == nil || !processor.rateLimiter.Enabled() {
+		return true, "", nil
+	}
+	gatewayID := TopicGatewayID(topic)
+	if gatewayID == "invalid" {
+		return true, "", nil
+	}
+	rawType := "unknown"
+	if parsedTopic, err := ParseMessageTopic(topic); err == nil {
+		rawType = parsedTopic.MessageType
+	}
+	msgTypeLabel := normalizeRateLimitMessageType(rawType)
+	now := processor.now().UTC()
+	if processor.rateLimiter.Allow(gatewayID, now) {
+		return true, msgTypeLabel, nil
+	}
+	if processor.metrics != nil {
+		_ = processor.metrics.AddCounter(
+			"hvac_mqtt_gateway_rate_limited_total",
+			"Rate-limited MQTT uplink messages dropped per gateway.",
+			map[string]string{"message_type": msgTypeLabel},
+			1,
+		)
+	}
+	if !processor.rateLimiter.ShouldQuarantine(gatewayID, msgTypeLabel, now) {
+		return false, msgTypeLabel, nil
+	}
+	return false, msgTypeLabel, &UplinkQuarantine{
+		GatewayID:  gatewayID,
+		Topic:      topic,
+		ReasonCode: QuarantineReasonRateLimited,
+		Detail:     fmt.Sprintf("MQTT gateway %s rate limit exceeded", gatewayID),
+		Payload:    slices.Clone(payload),
+		ReceivedAt: now,
+	}
+}
+
+// WriteRateLimitQuarantine resolves gateway tenant ownership when available and persists
+// a RATE_LIMITED quarantine record.
+func (processor *Processor) WriteRateLimitQuarantine(ctx context.Context, quarantine UplinkQuarantine) error {
+	if processor == nil || processor.identities == nil {
+		return nil
+	}
+	if quarantine.GatewayID != "" && quarantine.GatewayID != "invalid" && quarantine.TenantID == "" {
+		if gw, gwErr := processor.identities.ResolveGateway(ctx, quarantine.GatewayID); gwErr == nil || gw.TenantID != "" {
+			quarantine.TenantID = gw.TenantID
+		}
+	}
+	detail := quarantine.Detail
+	if detail == "" {
+		detail = fmt.Sprintf("MQTT gateway %s rate limit exceeded", quarantine.GatewayID)
+	}
+	return processor.quarantine(ctx, quarantine, QuarantineReasonRateLimited, errors.New(detail))
+}
+
 // ProcessPrefix processes the longest contiguous prefix of messages that can share one
 // batch execution, or returns a single outcome when messages[0] must be quarantined or
 // handled as a runtime event. A non-nil returned error is transient and no message in
@@ -276,15 +339,16 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 	quarantine := UplinkQuarantine{GatewayID: TopicGatewayID(first.Topic), Topic: first.Topic, Payload: first.Payload, ReceivedAt: now}
 	messageTopic, topicErr := ParseMessageTopic(first.Topic)
 
-	// Enforce per-gateway rate limits before full payload decoding or DB resolution
-	// once a valid gatewayId segment has been extracted from the MQTT topic.
-	if processor.rateLimiter != nil && processor.rateLimiter.Enabled() && quarantine.GatewayID != "invalid" {
-		messageType := "unknown"
-		if topicErr == nil {
-			messageType = messageTopic.MessageType
-		}
-		if !processor.rateLimiter.Allow(quarantine.GatewayID, now) {
-			return processor.handleRateLimited(ctx, quarantine, messageType, now)
+	if !isIngressRateChecked(ctx) {
+		if allowed, _, rateLimitedQ := processor.CheckIngressRateLimit(first.Topic, first.Payload); !allowed {
+			if rateLimitedQ == nil {
+				return []ProcessingOutcome{{Err: permanentMessage(fmt.Errorf("MQTT gateway %s rate limit exceeded", quarantine.GatewayID))}}, nil
+			}
+			err := processor.WriteRateLimitQuarantine(ctx, *rateLimitedQ)
+			if !isPermanentMessageError(err) {
+				return nil, err
+			}
+			return []ProcessingOutcome{{Err: err}}, nil
 		}
 	}
 
@@ -344,28 +408,6 @@ func (processor *Processor) ProcessPrefix(ctx context.Context, messages []Uplink
 	}
 }
 
-func (processor *Processor) handleRateLimited(ctx context.Context, quarantine UplinkQuarantine, messageType string, now time.Time) ([]ProcessingOutcome, error) {
-	msgTypeLabel := normalizeRateLimitMessageType(messageType)
-	if processor.metrics != nil {
-		_ = processor.metrics.AddCounter(
-			"hvac_mqtt_gateway_rate_limited_total",
-			"Rate-limited MQTT uplink messages dropped per gateway.",
-			map[string]string{"message_type": msgTypeLabel},
-			1,
-		)
-	}
-	rateErr := fmt.Errorf("MQTT gateway %s rate limit exceeded", quarantine.GatewayID)
-	if !processor.rateLimiter.ShouldQuarantine(quarantine.GatewayID, msgTypeLabel, now) {
-		return []ProcessingOutcome{{Err: permanentMessage(rateErr)}}, nil
-	}
-	if quarantine.GatewayID != "invalid" {
-		if gw, gwErr := processor.identities.ResolveGateway(ctx, quarantine.GatewayID); gwErr == nil || gw.TenantID != "" {
-			quarantine.TenantID = gw.TenantID
-		}
-	}
-	return processor.quarantinedOutcome(ctx, quarantine, QuarantineReasonRateLimited, rateErr)
-}
-
 func (processor *Processor) quarantinedOutcome(ctx context.Context, quarantine UplinkQuarantine, reasonCode string, cause error) ([]ProcessingOutcome, error) {
 	err := processor.quarantine(ctx, quarantine, reasonCode, cause)
 	if !isPermanentMessageError(err) {
@@ -417,7 +459,7 @@ func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway G
 	}
 	firstEnvelope.TraceID = rootTraceID
 	firstDecoded.Envelope = firstEnvelope
-	observations, bounds, decodedFrames, err := processor.coalesceTelemetryBatch(gateway, firstDecoded, messages)
+	observations, bounds, decodedFrames, err := processor.coalesceTelemetryBatch(ctx, gateway, firstDecoded, messages)
 	if err != nil {
 		if span != nil {
 			span.SetStatus("error", "telemetry envelope invalid")
@@ -467,7 +509,7 @@ func (processor *Processor) processTelemetryBatch(ctx context.Context, gateway G
 
 const estimatedObservationEnvelopeOverheadBytes = 768
 
-func (processor *Processor) coalesceTelemetryBatch(gateway Gateway, firstDecoded DecodedTelemetry, messages []UplinkMessage) ([]Observation, []telemetryMessageBounds, []DecodedTelemetry, error) {
+func (processor *Processor) coalesceTelemetryBatch(ctx context.Context, gateway Gateway, firstDecoded DecodedTelemetry, messages []UplinkMessage) ([]Observation, []telemetryMessageBounds, []DecodedTelemetry, error) {
 	firstEnvelope := firstDecoded.Envelope
 	rootTraceID := normalizeTraceID(firstEnvelope.TraceID)
 	firstObs, err := buildEnvelopeObservations(gateway.ID, firstEnvelope, rootTraceID)
@@ -485,6 +527,7 @@ func (processor *Processor) coalesceTelemetryBatch(gateway Gateway, firstDecoded
 	}}
 	decodedFrames := []DecodedTelemetry{firstDecoded}
 	codecs := processor.codecRegistry()
+	enforceRateLimit := !isIngressRateChecked(ctx) && processor.rateLimiter != nil && processor.rateLimiter.Enabled()
 	for index := 1; index < len(messages); index++ {
 		if len(observations) >= MaxObservationBatchSize || approxBytes >= MaxObservationBatchBytes {
 			break
@@ -493,10 +536,8 @@ func (processor *Processor) coalesceTelemetryBatch(gateway Gateway, firstDecoded
 		if err != nil || topic.MessageType != MessageTypeTelemetry || topic.GatewayID != gateway.ID {
 			break
 		}
-		if processor.rateLimiter != nil && processor.rateLimiter.Enabled() {
-			if !processor.rateLimiter.Allow(gateway.ID, processor.now().UTC()) {
-				break
-			}
+		if enforceRateLimit && !processor.rateLimiter.Allow(gateway.ID, processor.now().UTC()) {
+			break
 		}
 		decoded, err := codecs.DecodeTelemetry(messages[index].Payload, gateway.ID)
 		if err != nil {

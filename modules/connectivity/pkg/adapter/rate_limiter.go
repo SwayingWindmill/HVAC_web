@@ -19,7 +19,6 @@ type gatewayRateEntry struct {
 	tokens         float64
 	lastRefill     time.Time
 	lastQuarantine map[string]time.Time
-	lastTouchedSeq uint64
 }
 
 // GatewayRateLimiter enforces per-gateway token-bucket rate limiting and throttles
@@ -29,52 +28,22 @@ type GatewayRateLimiter struct {
 	rate               float64
 	burst              int
 	quarantineCooldown time.Duration
-	maxGateways        int
-	touchSeq           uint64
-	gateways           map[string]*gatewayRateEntry
-}
-
-// RateLimiterOption configures optional parameters of GatewayRateLimiter.
-type RateLimiterOption func(*GatewayRateLimiter)
-
-// WithQuarantineCooldown overrides the per-(gatewayID, messageType) quarantine write cooldown.
-func WithQuarantineCooldown(d time.Duration) RateLimiterOption {
-	return func(l *GatewayRateLimiter) {
-		if d > 0 {
-			l.quarantineCooldown = d
-		}
-	}
-}
-
-// WithRateLimiterCapacity caps the number of per-gateway buckets retained in memory.
-func WithRateLimiterCapacity(maxGateways int) RateLimiterOption {
-	return func(l *GatewayRateLimiter) {
-		if maxGateways > 0 {
-			l.maxGateways = maxGateways
-		}
-	}
+	gateways           boundedTouchMap[*gatewayRateEntry]
 }
 
 // NewGatewayRateLimiter creates a per-gateway token-bucket limiter allowing messagesPerSec
 // steady throughput and up to burst tokens immediately. Passing messagesPerSec <= 0 disables
 // rate limiting.
-func NewGatewayRateLimiter(messagesPerSec float64, burst int, opts ...RateLimiterOption) *GatewayRateLimiter {
+func NewGatewayRateLimiter(messagesPerSec float64, burst int) *GatewayRateLimiter {
 	if messagesPerSec > 0 && burst <= 0 {
 		burst = max(1, int(math.Ceil(messagesPerSec)))
 	}
-	limiter := &GatewayRateLimiter{
+	return &GatewayRateLimiter{
 		rate:               messagesPerSec,
 		burst:              burst,
 		quarantineCooldown: defaultQuarantineCooldown,
-		maxGateways:        defaultRateLimiterGateways,
-		gateways:           make(map[string]*gatewayRateEntry),
+		gateways:           newBoundedTouchMap[*gatewayRateEntry](defaultRateLimiterGateways),
 	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(limiter)
-		}
-	}
-	return limiter
 }
 
 // Enabled reports whether rate limiting is active.
@@ -132,31 +101,12 @@ func (l *GatewayRateLimiter) ShouldQuarantine(gatewayID, messageType string, now
 }
 
 func (l *GatewayRateLimiter) getOrCreateLocked(gatewayID string, now time.Time) *gatewayRateEntry {
-	l.touchSeq++
-	if entry, ok := l.gateways[gatewayID]; ok {
-		entry.lastTouchedSeq = l.touchSeq
-		return entry
-	}
-	if l.maxGateways > 0 && len(l.gateways) >= l.maxGateways {
-		var oldestKey string
-		var oldestSeq uint64
-		for key, item := range l.gateways {
-			if oldestKey == "" || item.lastTouchedSeq < oldestSeq {
-				oldestKey = key
-				oldestSeq = item.lastTouchedSeq
-			}
+	return l.gateways.getOrCreate(gatewayID, func() *gatewayRateEntry {
+		return &gatewayRateEntry{
+			tokens:     float64(l.burst),
+			lastRefill: now,
 		}
-		if oldestKey != "" {
-			delete(l.gateways, oldestKey)
-		}
-	}
-	entry := &gatewayRateEntry{
-		tokens:         float64(l.burst),
-		lastRefill:     now,
-		lastTouchedSeq: l.touchSeq,
-	}
-	l.gateways[gatewayID] = entry
-	return entry
+	})
 }
 
 func normalizeRateLimitMessageType(raw string) string {

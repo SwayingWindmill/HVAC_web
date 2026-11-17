@@ -38,7 +38,6 @@ func (s ConnState) Healthy() bool {
 // corrupt state belonging to a newer connection.
 type ConnTracker struct {
 	mu              sync.Mutex
-	now             func() time.Time
 	gen             uint64
 	dialedGenActive bool
 	connected       bool
@@ -54,36 +53,9 @@ type ConnTracker struct {
 	observers map[uint64]func(ConnState)
 }
 
-// ConnTrackerOption configures a ConnTracker.
-type ConnTrackerOption func(*ConnTracker)
-
-// WithClock overrides the time source used for ConnState.LastSuccess.
-func WithClock(now func() time.Time) ConnTrackerOption {
-	return func(t *ConnTracker) {
-		if now != nil {
-			t.now = now
-		}
-	}
-}
-
 // NewConnTracker initializes a generation-fenced MQTT connection tracker.
-func NewConnTracker(opts ...ConnTrackerOption) *ConnTracker {
-	tracker := &ConnTracker{
-		now: time.Now,
-	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(tracker)
-		}
-	}
-	return tracker
-}
-
-func (t *ConnTracker) clock() time.Time {
-	if t != nil && t.now != nil {
-		return t.now()
-	}
-	return time.Now()
+func NewConnTracker() *ConnTracker {
+	return &ConnTracker{}
 }
 
 // DialTLS establishes a tracked TCP or TLS connection (wrapped for thread-safe MQTT
@@ -287,19 +259,13 @@ func (t *ConnTracker) OnConnectUp() uint64 {
 // OnConnectionDown marks the connection down, advances the generation so in-flight
 // subscribe work for earlier generations cannot commit, and closes the current socket.
 func (t *ConnTracker) OnConnectionDown(err error) uint64 {
-	t.mu.Lock()
-	t.gen++
-	gen := t.gen
-	t.dialedGenActive = false
-	t.connected = false
-	t.subscribed = false
+	errMsg := ""
 	if err != nil {
-		t.lastError = err.Error()
+		errMsg = err.Error()
 	}
-	prev := t.curConn
-	t.curConn = nil
-	state := t.stateLocked()
-	observers := t.snapshotObserversLocked()
+	t.mu.Lock()
+	prev, state, observers := t.resetConnectionLocked(true, errMsg)
+	gen := state.Generation
 	t.mu.Unlock()
 
 	if prev != nil {
@@ -309,55 +275,16 @@ func (t *ConnTracker) OnConnectionDown(err error) uint64 {
 	return gen
 }
 
-// OnConnectionDownForGen applies OnConnectionDown only if gen is still the active
-// generation, returning true if applied.
-func (t *ConnTracker) OnConnectionDownForGen(gen uint64, err error) bool {
-	if gen == 0 {
-		return false
-	}
-	t.mu.Lock()
-	if t.gen != gen {
-		t.mu.Unlock()
-		return false
-	}
-	t.gen++
-	t.dialedGenActive = false
-	t.connected = false
-	t.subscribed = false
-	if err != nil {
-		t.lastError = err.Error()
-	}
-	prev := t.curConn
-	t.curConn = nil
-	state := t.stateLocked()
-	observers := t.snapshotObserversLocked()
-	t.mu.Unlock()
-
-	if prev != nil {
-		_ = prev.Close()
-	}
-	notifyObservers(observers, state)
-	return true
-}
-
 // MarkConnectError records a connection establishment error, advances generation,
 // clears connected/subscribed flags, and closes any tracked socket.
 func (t *ConnTracker) MarkConnectError(err error) uint64 {
-	t.mu.Lock()
-	t.gen++
-	gen := t.gen
-	t.dialedGenActive = false
-	t.connected = false
-	t.subscribed = false
+	errMsg := "mqtt connect failed"
 	if err != nil {
-		t.lastError = err.Error()
-	} else {
-		t.lastError = "mqtt connect failed"
+		errMsg = err.Error()
 	}
-	prev := t.curConn
-	t.curConn = nil
-	state := t.stateLocked()
-	observers := t.snapshotObserversLocked()
+	t.mu.Lock()
+	prev, state, observers := t.resetConnectionLocked(true, errMsg)
+	gen := state.Generation
 	t.mu.Unlock()
 
 	if prev != nil {
@@ -380,7 +307,7 @@ func (t *ConnTracker) MarkSubscribed(gen uint64) bool {
 	}
 	t.subscribed = true
 	t.lastError = ""
-	t.lastSuccess = t.clock()
+	t.lastSuccess = time.Now()
 	state := t.stateLocked()
 	observers := t.snapshotObserversLocked()
 	t.mu.Unlock()
@@ -414,10 +341,11 @@ func (t *ConnTracker) MarkSubscribeError(gen uint64, err error) bool {
 	return true
 }
 
-// RecordSuccess updates LastSuccess when a runtime operation succeeds.
+// RecordSuccess clears LastError, updates LastSuccess, and notifies observers.
 func (t *ConnTracker) RecordSuccess() {
 	t.mu.Lock()
-	t.lastSuccess = t.clock()
+	t.lastError = ""
+	t.lastSuccess = time.Now()
 	state := t.stateLocked()
 	observers := t.snapshotObserversLocked()
 	t.mu.Unlock()
@@ -439,16 +367,25 @@ func (t *ConnTracker) RecordError(err error) {
 	notifyObservers(observers, state)
 }
 
-// CloseCurrent closes the currently tracked socket if present.
-func (t *ConnTracker) CloseCurrent() error {
-	t.mu.Lock()
-	prev := t.curConn
-	t.curConn = nil
+func (t *ConnTracker) resetConnectionLocked(advanceGen bool, errMsg string) (*trackedConn, ConnState, []func(ConnState)) {
+	if advanceGen {
+		t.gen++
+	}
 	t.dialedGenActive = false
 	t.connected = false
 	t.subscribed = false
-	state := t.stateLocked()
-	observers := t.snapshotObserversLocked()
+	if errMsg != "" {
+		t.lastError = errMsg
+	}
+	prev := t.curConn
+	t.curConn = nil
+	return prev, t.stateLocked(), t.snapshotObserversLocked()
+}
+
+// CloseCurrent closes the currently tracked socket if present.
+func (t *ConnTracker) CloseCurrent() error {
+	t.mu.Lock()
+	prev, state, observers := t.resetConnectionLocked(false, "")
 	t.mu.Unlock()
 
 	var closeErr error
@@ -472,15 +409,15 @@ func (t *ConnTracker) CloseIfGen(gen uint64) error {
 		t.mu.Unlock()
 		return nil
 	}
-	t.curConn = nil
+	var state ConnState
+	var observers []func(ConnState)
 	if t.gen == gen {
-		t.gen++
-		t.dialedGenActive = false
-		t.connected = false
-		t.subscribed = false
+		prev, state, observers = t.resetConnectionLocked(true, "")
+	} else {
+		t.curConn = nil
+		state = t.stateLocked()
+		observers = t.snapshotObserversLocked()
 	}
-	state := t.stateLocked()
-	observers := t.snapshotObserversLocked()
 	t.mu.Unlock()
 
 	closeErr := prev.Close()
@@ -493,33 +430,16 @@ func (t *ConnTracker) CloseIfGen(gen uint64) error {
 // tearing down a newer connection.
 func (t *ConnTracker) CloseIfClosed(expected <-chan struct{}) error {
 	t.mu.Lock()
-	prev := t.curConn
-	if prev == nil || (expected != nil && t.curClosed != expected) {
+	if t.curConn == nil || (expected != nil && t.curClosed != expected) {
 		t.mu.Unlock()
 		return nil
 	}
-	t.curConn = nil
-	t.dialedGenActive = false
-	t.connected = false
-	t.subscribed = false
-	state := t.stateLocked()
-	observers := t.snapshotObserversLocked()
+	prev, state, observers := t.resetConnectionLocked(false, "")
 	t.mu.Unlock()
 
 	closeErr := prev.Close()
 	notifyObservers(observers, state)
 	return closeErr
-}
-
-// CloseCurrentIfClosed closes the tracked socket if its closed channel is already signaled.
-func (t *ConnTracker) CloseCurrentIfClosed() {
-	t.mu.Lock()
-	prev := t.curConn
-	closed := t.curClosed
-	t.mu.Unlock()
-	if prev != nil && IsClosedSignal(closed) {
-		_ = prev.Close()
-	}
 }
 
 // State returns a consistent snapshot of the tracker's connection state.

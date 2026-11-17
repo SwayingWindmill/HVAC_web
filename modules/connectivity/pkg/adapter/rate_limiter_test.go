@@ -14,7 +14,7 @@ import (
 func TestGatewayRateLimiterBucketRefillAndQuarantineCooldown(t *testing.T) {
 	t.Parallel()
 
-	limiter := NewGatewayRateLimiter(2, 3) // 2 msg/s, burst 3
+	limiter := NewGatewayRateLimiter(2, 3)
 	t0 := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 3; i++ {
@@ -101,7 +101,6 @@ func TestProcessorRateLimitPreDecodeQuarantineCooldownAndMetrics(t *testing.T) {
 		t.Fatalf("expected gateway B to succeed while gateway A is rate limited: %v", err)
 	}
 
-	// Advance clock by 5s -> rate limit stays exhausted unless time triggers token > 1 (at 1/sec, +5s grants 5 -> consume 2 burst? Actually after 5s, refill grants max(burst=2) tokens; exhaust them again and verify quarantine writes again!).
 	now = now.Add(5 * time.Second)
 	for i := 0; i < 2; i++ {
 		if _, err := processor.Process(context.Background(), telemetryTopic(testGatewayA), telemetryPayload(testGatewayA, messageID(60+i), 60+i, "METER-01", "active_power")); err != nil {

@@ -169,7 +169,12 @@ func newMQTTTransport(ctx context.Context, cfg TransportConfig, reconnectBackoff
 	if err != nil {
 		return nil, fmt.Errorf("parse MQTT broker URL: %w", err)
 	}
-	tlsConfig, err := buildTLSConfig(cfg)
+	tlsConfig, err := mqttclient.NewMTLSConfig(mqttclient.TLSConfig{
+		CACertFile:     cfg.CAFile,
+		ClientCertFile: cfg.CertFile,
+		ClientKeyFile:  cfg.KeyFile,
+		ServerName:     cfg.ServerName,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -576,13 +581,4 @@ func validateTransportConfig(cfg TransportConfig) error {
 		}
 	}
 	return nil
-}
-
-func buildTLSConfig(cfg TransportConfig) (*tls.Config, error) {
-	return mqttclient.NewMTLSConfig(mqttclient.TLSConfig{
-		CACertFile:     cfg.CAFile,
-		ClientCertFile: cfg.CertFile,
-		ClientKeyFile:  cfg.KeyFile,
-		ServerName:     strings.TrimSpace(cfg.ServerName),
-	})
 }
