@@ -295,7 +295,7 @@ func (store *MemoryStore) ListAlarmEvaluations(_ context.Context, tenantID, site
 		if entry.tenantID != tenantID || entry.siteID != siteID {
 			continue
 		}
-		if entry.activeAlarmID == alarmID || (entry.fingerprint == alarm.Fingerprint && !entry.evaluatedAt.Before(windowStart)) {
+		if entry.activeAlarmID == alarmID || (entry.activeAlarmID == "" && entry.fingerprint == alarm.Fingerprint && !entry.evaluatedAt.Before(windowStart) && !entry.evaluatedAt.After(firstOccurredAt)) {
 			matched = append(matched, entry)
 		}
 	}

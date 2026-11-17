@@ -359,11 +359,6 @@ func effectiveCooldownMinutes(routing SiteRouting, route AlarmRoute) int {
 	return max(0, routing.CooldownMinutes)
 }
 
-// IsSuppressedByRootCause reports whether an active root-cause Alarm suppresses notifications for alarmType.
-func (routing SiteRouting) IsSuppressedByRootCause(alarmType string, facts DeliveryFacts) bool {
-	return routing.IsSuppressedByRootCauseForAlarm(DeliveryAlarm{AlarmType: alarmType}, facts)
-}
-
 // IsSuppressedByRootCauseForAlarm reports whether an active root-cause Alarm suppresses notifications for alarm.
 func (routing SiteRouting) IsSuppressedByRootCauseForAlarm(alarm DeliveryAlarm, facts DeliveryFacts) bool {
 	if facts.RootCauseActive && alarm.AlarmType != routing.RootCauseAlarmType && hasAnyPrefix(alarm.AlarmType, routing.SuppressWhenRootCause) {

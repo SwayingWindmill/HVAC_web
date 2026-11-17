@@ -948,7 +948,7 @@ func ResolveCommandPriority(request SubmitRequest) (PriorityTier, CommandSource,
 
 	if hasWorkloadLease(request.Authorization) && PriorityRank(tier) > PriorityRank(PriorityProtectionRule) {
 		profile, ok := CapabilityProfileFor(request.Capability)
-		if tier != PrioritySafetyInterlock || !ok || !profile.SupportsEmergencyBypass {
+		if tier != PrioritySafetyInterlock || !ok || !profile.SupportsEmergencyBypass || request.PreconditionMode != PreconditionEmergencyBypass {
 			return "", "", ErrInvalidCommandPriority
 		}
 	}

@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { Bell, BellOff, BellRing, CheckCheck, CircleCheck, EyeOff, LineChart, Link2, Plus, Sparkles, UserCheck, UserMinus, type LucideIcon } from 'lucide-react';
@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/timeline';
 import { listWorkOrders, type WorkOrderPriority } from '@/api/work-orders';
 import { useAssistantPanel } from '@/features/assistant/assistant-panel-store';
+import { useSiteEquipment } from '@/features/assets/use-device-names';
 import { siteAssetModelQuery } from '@/features/operations/trends/query';
 import { buildTrendCatalog } from '@/features/operations/trends/trends-model';
 import { buildAlarmTrendSearch } from '@/features/operations/trends/trends-overlays';
@@ -130,8 +131,13 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
     queryFn: ({ signal }) => listWorkOrders({ sourceDomain: 'ALARM', sourceRef: alarmId, limit: 20 }, { siteId: site.id, signal }),
     enabled: Boolean(alarmId) && capabilities.includes('work-order.list'),
   });
-  const { acknowledge, claim, unassign, suppress, unsuppress, canClaim, canCreateWorkOrder } = useAlarmActions();
+  const { acknowledge, claim, unassign, suppress, unsuppress, resetErrors, canClaim, canCreateWorkOrder } = useAlarmActions();
+  const equipment = useSiteEquipment(site.id);
   const explain = useAssistantPanel((state) => state.explain);
+
+  useEffect(() => {
+    resetErrors();
+  }, [alarmId, resetErrors]);
 
   if (!alarmId) {
     return (
@@ -149,6 +155,9 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
 
   const deviceName = alarm.deviceId ? deviceNames.get(alarm.deviceId) : undefined;
   const actionError = acknowledge.error ?? claim.error ?? unassign.error ?? suppress.error ?? unsuppress.error;
+  const suppressReasonBytes = new TextEncoder().encode(suppressReason.trim()).length;
+  const suppressReasonTooLong = suppressReasonBytes > 256;
+  const evaluationContext = { deviceNames: equipment.nameByDevice, pointByReading: equipment.pointByReading };
   const conditionTone = alarm.condition === 'CLEARED' ? 'bg-success' : alarm.acknowledgement ? 'bg-warning' : 'bg-destructive';
 
   return (
@@ -219,7 +228,13 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
             </Button>
           ) : null}
           {canClaim && alarm.condition === 'ACTIVE' && !alarm.suppression ? (
-            <Popover open={suppressOpen} onOpenChange={setSuppressOpen}>
+            <Popover
+              open={suppressOpen}
+              onOpenChange={(nextOpen) => {
+                if (nextOpen) resetErrors();
+                setSuppressOpen(nextOpen);
+              }}
+            >
               <PopoverTrigger asChild>
                 <Button variant="outline" disabled={suppress.isPending}>
                   <BellOff data-icon="inline-start" />
@@ -243,7 +258,12 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
                   </RadioGroup>
                 </fieldset>
                 <div className="flex flex-col gap-1.5">
-                  <Label htmlFor={suppressReasonId} className="text-xs font-medium text-muted-foreground">抑制原因</Label>
+                  <div className="flex items-center justify-between gap-2">
+                    <Label htmlFor={suppressReasonId} className="text-xs font-medium text-muted-foreground">抑制原因</Label>
+                    <span className={cn('font-mono text-[11px]', suppressReasonTooLong ? 'text-destructive-text' : 'text-muted-foreground')}>
+                      {suppressReasonBytes}/256 字节
+                    </span>
+                  </div>
                   <Textarea
                     id={suppressReasonId}
                     rows={2}
@@ -251,12 +271,14 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
                     value={suppressReason}
                     onChange={(event) => setSuppressReason(event.target.value)}
                   />
+                  {suppressReasonTooLong ? <p className="text-xs text-destructive-text">抑制原因过长，最多 256 字节（约 85 个汉字）。</p> : null}
+                  {suppress.error ? <p className="text-xs text-destructive-text">{suppress.error.message}</p> : null}
                 </div>
                 <div className="flex justify-end gap-2">
                   <Button variant="ghost" size="sm" onClick={() => setSuppressOpen(false)}>取消</Button>
                   <Button
                     size="sm"
-                    disabled={suppress.isPending || suppressReason.trim().length === 0}
+                    disabled={suppress.isPending || suppressReason.trim().length === 0 || suppressReasonTooLong}
                     onClick={() => {
                       const hours = Number(suppressHours) || 4;
                       const until = new Date(Date.now() + hours * 3_600_000).toISOString();
@@ -395,7 +417,7 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
         ) : null}
       </div>
 
-      <section className="flex flex-col gap-3 border-t border-divider px-6 py-4">
+      <section role="region" aria-labelledby={evalRegionId} className="flex flex-col gap-3 border-t border-divider px-6 py-4">
         <h3 id={evalRegionId} className="text-sm font-semibold">触发评估记录</h3>
         {evaluations.isError ? (
           <p className="text-xs text-muted-foreground">评估快照暂时读不到，不影响处理当前告警。</p>
@@ -404,36 +426,34 @@ export function AlarmDetailPane({ alarmId, empty, deviceNames, creatingWorkOrder
         ) : !evaluations.data || evaluations.data.items.length === 0 ? (
           <p className="text-xs text-muted-foreground">暂无评估快照记录</p>
         ) : (
-          <div role="region" aria-labelledby={evalRegionId} tabIndex={0}>
-            <Table aria-label="规则评估明细表">
-              <TableHeader>
-                <TableRow>
-                  <TableHead scope="col" className="w-40">评估时间</TableHead>
-                  <TableHead scope="col" className="w-20">判定</TableHead>
-                  <TableHead scope="col" className="w-28">动作</TableHead>
-                  <TableHead scope="col">当时读数与说明</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {evaluations.data.items.map((record) => {
-                  const blocker = formatQualityBlocker(record.qualityBlocker);
-                  return (
-                    <TableRow key={`${record.evaluatedAt}-${record.inputRevision}`}>
-                      <TableCell className="font-mono text-xs whitespace-nowrap text-muted-foreground">
-                        {formatTime(record.evaluatedAt, site.timezone)}
-                      </TableCell>
-                      <TableCell className="text-xs font-medium">{EVALUATION_STATUS_LABELS[record.status]}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{EVALUATION_EFFECT_LABELS[record.effect]}</TableCell>
-                      <TableCell className="text-xs whitespace-normal text-secondary-foreground">
-                        {formatEvaluationSnapshot(record.snapshot)}
-                        {blocker ? ` · ${blocker}` : ''}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
+          <Table aria-label="规则评估明细表">
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col" className="w-40">评估时间</TableHead>
+                <TableHead scope="col" className="w-20">判定</TableHead>
+                <TableHead scope="col" className="w-28">动作</TableHead>
+                <TableHead scope="col">当时读数与说明</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {evaluations.data.items.map((record) => {
+                const blocker = formatQualityBlocker(record.qualityBlocker, evaluationContext);
+                return (
+                  <TableRow key={`${record.evaluatedAt}-${record.inputRevision}`}>
+                    <TableCell className="font-mono text-xs whitespace-nowrap text-muted-foreground">
+                      {formatTime(record.evaluatedAt, site.timezone)}
+                    </TableCell>
+                    <TableCell className="text-xs font-medium">{EVALUATION_STATUS_LABELS[record.status]}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{EVALUATION_EFFECT_LABELS[record.effect]}</TableCell>
+                    <TableCell className="text-xs whitespace-normal text-secondary-foreground">
+                      {formatEvaluationSnapshot(record.snapshot, evaluationContext)}
+                      {blocker ? ` · ${blocker}` : ''}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
         )}
       </section>
 

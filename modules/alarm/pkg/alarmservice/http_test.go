@@ -511,7 +511,7 @@ func TestAlarmHTTPListsEvaluationsAndEnforcesLimitsAndScope(t *testing.T) {
 	corrID := alarm.IncidentCorrelationID
 	blocker := "OUTSIDE_SCHEDULE"
 	if err := memory.RecordEvaluation(testTenantID, testSiteID, alarm.Fingerprint, "", 1, AlarmEvaluationRecord{
-		EvaluatedAt:      "2026-07-31T11:55:00Z",
+		EvaluatedAt:      "2026-07-31T08:55:00Z",
 		PolicyRevisionID: policyRev,
 		AssignmentID:     assignmentID,
 		InputRevision:    "in-1",
@@ -523,7 +523,7 @@ func TestAlarmHTTPListsEvaluationsAndEnforcesLimitsAndScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := memory.RecordEvaluation(testTenantID, testSiteID, alarm.Fingerprint, alarm.AlarmID, 2, AlarmEvaluationRecord{
-		EvaluatedAt:                 "2026-07-31T12:00:00Z",
+		EvaluatedAt:                 "2026-07-31T09:00:00Z",
 		PolicyRevisionID:            policyRev,
 		AssignmentID:                assignmentID,
 		InputRevision:               "in-2",

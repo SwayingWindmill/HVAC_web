@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import {
@@ -43,12 +44,25 @@ export function useAlarmActions() {
     onSuccess: applyUpdate,
   });
   const capabilities = principal.authorization.capabilities;
+  const { reset: resetAck } = acknowledge;
+  const { reset: resetClaim } = claim;
+  const { reset: resetUnassign } = unassign;
+  const { reset: resetSuppress } = suppress;
+  const { reset: resetUnsuppress } = unsuppress;
+  const resetErrors = useCallback(() => {
+    resetAck();
+    resetClaim();
+    resetUnassign();
+    resetSuppress();
+    resetUnsuppress();
+  }, [resetAck, resetClaim, resetUnassign, resetSuppress, resetUnsuppress]);
   return {
     acknowledge,
     claim,
     unassign,
     suppress,
     unsuppress,
+    resetErrors,
     canClaim: capabilities.includes('alarm.assign'),
     canCreateWorkOrder: capabilities.includes('work-order.create'),
     myId: principal.principalId,

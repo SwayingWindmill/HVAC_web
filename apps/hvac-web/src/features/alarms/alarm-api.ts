@@ -92,13 +92,44 @@ export class AlarmRequestError extends Error {
   }
 }
 
+const ALARM_PROBLEM_MESSAGES: Readonly<Record<string, string>> = {
+  ALARM_VERSION_CONFLICT: '告警状态刚刚已被其他人更新，请刷新后再试',
+  ALARM_TRANSITION_INVALID: '当前告警状态不支持这个操作',
+  ALARM_IDEMPOTENCY_CONFLICT: '重复请求与此前提交内容不一致，请刷新重试',
+  ALARM_ACCESS_DENIED: '你没有执行这项告警操作的权限',
+  FORBIDDEN: '你没有执行这项告警操作的权限',
+  RESOURCE_NOT_FOUND: '未找到这条告警，或已无权限查看',
+  ALARM_NOT_FOUND: '未找到这条告警，或已无权限查看',
+  ORIGIN_NOT_ALLOWED: '页面来源校验未通过，请刷新页面后重试',
+  CSRF_TOKEN_INVALID: '会话安全凭证失效，请刷新页面后重试',
+  CSRF_REQUIRED: '缺少会话安全凭证，请刷新页面后重试',
+  CSRF_INVALID: '会话安全凭证无效，请刷新页面后重试',
+};
+
+function formatAlarmProblemMessage(problem: { code?: string; detail?: string; title?: string }): string {
+  const code = problem.code ?? '';
+  if (code in ALARM_PROBLEM_MESSAGES) {
+    return ALARM_PROBLEM_MESSAGES[code];
+  }
+  const raw = problem.detail ?? problem.title ?? '';
+  if (code === 'INVALID_ARGUMENT') {
+    if (raw.includes('suppressedUntil')) return '抑制截止时间必须在当前时间之后';
+    if (raw.includes('reason')) return '原因说明格式或长度不符合要求（最多 256 字节）';
+    return '提交参数无效，请检查后重试';
+  }
+  if (/[\u4e00-\u9fff]/.test(raw)) {
+    return raw;
+  }
+  return '告警操作未能完成，请稍后重试';
+}
+
 async function send<T>(path: string, request: GatewayRequest<T> = {}): Promise<T> {
   const result = await gatewayRequest<T>(path, request);
   if (result.kind === 'ok') return result.value;
   if (result.kind === 'routeMissing') throw new AlarmRequestError(result.status, ROUTE_MISSING_MESSAGE);
   const message = result.kind === 'unavailable'
     ? '告警服务暂时不可用'
-    : (result.problem.detail ?? result.problem.title ?? '告警服务暂时不可用');
+    : formatAlarmProblemMessage(result.problem);
   throw new AlarmRequestError(failureStatus(result), message);
 }
 

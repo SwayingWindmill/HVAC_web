@@ -800,6 +800,30 @@ func TestAlarmSuppressionUnassignAndEvaluationsEndToEnd(t *testing.T) {
 
 		fixture.deny.Store(true)
 		assertAlarmErrorCode(t, "iam denied suppress", fixture.serve(http.MethodPost, "/api/v1/alarms/"+alarm.AlarmID+"/suppress", `{"expectedVersion":5,"reason":"Denied","suppressedUntil":"2026-08-24T05:00:00Z"}`, "p1-supp-deny"), "FORBIDDEN")
+
+		for _, missing := range []struct {
+			name   string
+			origin string
+			csrf   string
+			path   string
+		}{
+			{name: "missing csrf on ack", origin: "https://web.example.test", csrf: "", path: "/api/v1/alarms/" + alarm.AlarmID + "/ack"},
+			{name: "bad origin on suppress", origin: "https://evil.example.test", csrf: "alarm-contract-csrf", path: "/api/v1/alarms/" + alarm.AlarmID + "/suppress"},
+			{name: "missing csrf on suppress", origin: "https://web.example.test", csrf: "", path: "/api/v1/alarms/" + alarm.AlarmID + "/suppress"},
+		} {
+			req := httptest.NewRequest(http.MethodPost, "https://web.example.test"+missing.path, strings.NewReader(`{}`))
+			req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: fixture.sessionID})
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Origin", missing.origin)
+			if missing.csrf != "" {
+				req.Header.Set("X-CSRF-Token", missing.csrf)
+			}
+			rec := httptest.NewRecorder()
+			fixture.handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("%s: status = %d, want 403 (%s)", missing.name, rec.Code, rec.Body.String())
+			}
+		}
 	}
 
 	t.Run("direct", func(t *testing.T) { runEndToEnd(t, false) })

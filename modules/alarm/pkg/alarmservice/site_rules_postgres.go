@@ -90,7 +90,7 @@ func (store *PostgresStore) SyncSiteRules(ctx context.Context, tenantID, siteID 
 		return SiteRuleSyncSummary{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('alarm_site_rules:' || $1 || ':' || $2))`, tenantID, siteID); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('alarm_site_rules:' || $1 || ':' || $2, 0))`, tenantID, siteID); err != nil {
 		return SiteRuleSyncSummary{}, fmt.Errorf("lock Site Alarm rules sync: %w", err)
 	}
 

@@ -491,6 +491,21 @@ func TestPriorityHierarchyAndDerivation(t *testing.T) {
 			wantErr:    true,
 		},
 		{
+			name: "automated lease cannot elevate stop to safety interlock without emergency bypass precondition",
+			req: SubmitRequest{
+				Capability:    CapabilityStop,
+				PriorityTier:  PrioritySafetyInterlock,
+				CommandSource: SourceSafetyInterlock,
+				Authorization: AuthorizationSnapshot{
+					WorkloadSPIFFE: "spiffe://hvac/ns/prod/sa/optimizer",
+					LeaseID:        "lease-1",
+				},
+			},
+			wantTier:   PriorityAIOptimization,
+			wantSource: SourceOptimization,
+			wantErr:    true,
+		},
+		{
 			name: "mismatched priority tier and source rejected",
 			req: SubmitRequest{
 				Capability:    CapabilitySetTemperatureSetpoint,

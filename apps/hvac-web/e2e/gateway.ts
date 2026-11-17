@@ -1365,8 +1365,8 @@ export class Gateway {
             correlationId: alarm.incidentCorrelationId,
             inputRevision: 'eval-rev-1',
             inputs: {
-              returnTemp: { key: 'returnTemp', present: true, value: { type: 'NUMBER', number: 10.2 }, quality: 'GOOD' },
-              power: { key: 'power', present: true, value: { type: 'NUMBER', number: 372.5 }, quality: 'GOOD' },
+              '01910000-0000-7000-8000-000000000005/return_water_temperature': { key: '01910000-0000-7000-8000-000000000005/return_water_temperature', present: true, value: { type: 'NUMBER', number: 10.2 }, quality: 'GOOD' },
+              '01910000-0000-7000-8000-000000000002/power_total': { key: '01910000-0000-7000-8000-000000000002/power_total', present: true, value: { type: 'NUMBER', number: 372.5 }, quality: 'GOOD' },
             },
           },
           activeIncidentCorrelationId: alarm.incidentCorrelationId,

@@ -62,7 +62,7 @@ func keys(alarmID string, messages []PlannedMessage) []string {
 func queuedFrom(messages []PlannedMessage, at time.Time) []QueuedMessage {
 	var queued []QueuedMessage
 	for _, message := range messages {
-		queued = append(queued, QueuedMessage{Kind: message.Kind, Step: message.Step, Channel: message.Channel, Recipient: message.Recipient, QueuedAt: at, Reached: !message.Suppressed})
+		queued = append(queued, QueuedMessage{Kind: message.Kind, Step: message.Step, Channel: message.Channel, Recipient: message.Recipient, QueuedAt: at, Reason: message.Reason, Reached: !message.Suppressed})
 	}
 	return queued
 }
@@ -700,6 +700,23 @@ func TestDecideCooldownDeduplicatesNonCriticalFireOnly(t *testing.T) {
 	warnDecision := DecideDelivery(warning, routing, facts, at)
 	if len(warnDecision.Messages) != 1 || !warnDecision.Messages[0].Suppressed || warnDecision.Messages[0].Reason != "COOLDOWN" {
 		t.Fatalf("expected warning route to inherit site 30m cooldown, got %+v", warnDecision)
+	}
+	if warnDecision.NextDueAt != nil {
+		t.Fatalf("cooldown-suppressed step 0 must not schedule follow-up escalation, got %v", *warnDecision.NextDueAt)
+	}
+
+	// An alarm whose own FIRE was suppressed on COOLDOWN must NOT escalate on later evaluation either.
+	suppressedMajor := DecideDelivery(major, routing, DeliveryFacts{
+		LastSameTypeNotifiedAt: map[string]time.Time{"duty": at.Add(-2 * time.Minute)},
+	}, at)
+	if suppressedMajor.NextDueAt != nil {
+		t.Fatalf("cooldown-suppressed major alarm must not schedule ESCALATE, got %v", *suppressedMajor.NextDueAt)
+	}
+	suppressedEscalateCheck := DecideDelivery(major, routing, DeliveryFacts{
+		Queued: queuedFrom(suppressedMajor.Messages, at),
+	}, at.Add(20*time.Minute))
+	if len(suppressedEscalateCheck.Messages) != 0 {
+		t.Fatalf("cooldown-suppressed step 0 alarm must not emit ESCALATE at +20m, got %+v", suppressedEscalateCheck.Messages)
 	}
 
 	// Escalation and recovery stay unaffected by cooldown.

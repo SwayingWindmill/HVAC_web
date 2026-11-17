@@ -35,6 +35,17 @@ func (store *PostgresStore) ClaimDispatch(ctx context.Context, tenantID, leaseOw
 	return commandmodel.DispatchEnvelope{}, errors.New("dispatch claim transaction retry limit exceeded")
 }
 
+func priorityRankSQLExpr(column string) string {
+	return `CASE ` + column + `
+		WHEN 'SAFETY_INTERLOCK' THEN 500
+		WHEN 'MANUAL_OVERRIDE' THEN 400
+		WHEN 'PROTECTION_RULE' THEN 300
+		WHEN 'AI_OPTIMIZATION' THEN 200
+		WHEN 'SCHEDULE' THEN 100
+		ELSE 0
+	END`
+}
+
 func (store *PostgresStore) claimDispatchOnce(ctx context.Context, tenantID string, leaseOwner string, leaseFor time.Duration) (commandmodel.DispatchEnvelope, error) {
 	now := store.now().UTC()
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
@@ -68,7 +79,7 @@ func (store *PostgresStore) claimDispatchOnce(ctx context.Context, tenantID stri
 	var intent commandmodel.CommandIntent
 	var capability string
 	var parameters []byte
-	err = tx.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, fmt.Sprintf(`
 SELECT o.outbox_id::text,
        i.command_id::text, i.tenant_id::text, i.site_id::text, i.device_id::text, i.point_id::text,
        i.capability_name, i.capability_revision,
@@ -90,25 +101,7 @@ WHERE o.tenant_id = $1::uuid
         WHERE l.tenant_id = i.tenant_id
           AND l.device_id = i.device_id
           AND l.locked_until > $2
-          AND (
-            CASE i.priority_tier
-              WHEN 'SAFETY_INTERLOCK' THEN 500
-              WHEN 'MANUAL_OVERRIDE' THEN 400
-              WHEN 'PROTECTION_RULE' THEN 300
-              WHEN 'AI_OPTIMIZATION' THEN 200
-              WHEN 'SCHEDULE' THEN 100
-              ELSE 0
-            END
-          ) < (
-            CASE l.locked_priority
-              WHEN 'SAFETY_INTERLOCK' THEN 500
-              WHEN 'MANUAL_OVERRIDE' THEN 400
-              WHEN 'PROTECTION_RULE' THEN 300
-              WHEN 'AI_OPTIMIZATION' THEN 200
-              WHEN 'SCHEDULE' THEN 100
-              ELSE 0
-            END
-          )
+          AND (%[1]s) < (%[2]s)
       )
   AND (
         (
@@ -138,62 +131,17 @@ WHERE o.tenant_id = $1::uuid
           AND earlier.status IN ('SUBMITTED','VALIDATING','AWAITING_APPROVAL','APPROVED','QUEUED','DISPATCHING','OUTCOME_UNKNOWN')
           AND (
             (earlier.status = 'DISPATCHING' OR earlier.status = 'OUTCOME_UNKNOWN')
-            OR (
-              CASE earlier.priority_tier
-                WHEN 'SAFETY_INTERLOCK' THEN 500
-                WHEN 'MANUAL_OVERRIDE' THEN 400
-                WHEN 'PROTECTION_RULE' THEN 300
-                WHEN 'AI_OPTIMIZATION' THEN 200
-                WHEN 'SCHEDULE' THEN 100
-                ELSE 0
-              END
-            ) > (
-              CASE i.priority_tier
-                WHEN 'SAFETY_INTERLOCK' THEN 500
-                WHEN 'MANUAL_OVERRIDE' THEN 400
-                WHEN 'PROTECTION_RULE' THEN 300
-                WHEN 'AI_OPTIMIZATION' THEN 200
-                WHEN 'SCHEDULE' THEN 100
-                ELSE 0
-              END
-            )
+            OR (%[3]s) > (%[1]s)
             OR (
               earlier.device_command_sequence < i.device_command_sequence
-              AND (
-                CASE earlier.priority_tier
-                  WHEN 'SAFETY_INTERLOCK' THEN 500
-                  WHEN 'MANUAL_OVERRIDE' THEN 400
-                  WHEN 'PROTECTION_RULE' THEN 300
-                  WHEN 'AI_OPTIMIZATION' THEN 200
-                  WHEN 'SCHEDULE' THEN 100
-                  ELSE 0
-                END
-              ) >= (
-                CASE i.priority_tier
-                  WHEN 'SAFETY_INTERLOCK' THEN 500
-                  WHEN 'MANUAL_OVERRIDE' THEN 400
-                  WHEN 'PROTECTION_RULE' THEN 300
-                  WHEN 'AI_OPTIMIZATION' THEN 200
-                  WHEN 'SCHEDULE' THEN 100
-                  ELSE 0
-                END
-              )
+              AND (%[3]s) >= (%[1]s)
             )
           )
       )
-ORDER BY (
-  CASE i.priority_tier
-    WHEN 'SAFETY_INTERLOCK' THEN 500
-    WHEN 'MANUAL_OVERRIDE' THEN 400
-    WHEN 'PROTECTION_RULE' THEN 300
-    WHEN 'AI_OPTIMIZATION' THEN 200
-    WHEN 'SCHEDULE' THEN 100
-    ELSE 0
-  END
-) DESC, o.created_at, o.outbox_id
+ORDER BY (%[1]s) DESC, o.created_at, o.outbox_id
 FOR UPDATE OF o SKIP LOCKED
 LIMIT 1
-`, tenantID, now, setpointControlGroup).Scan(
+`, priorityRankSQLExpr("i.priority_tier"), priorityRankSQLExpr("l.locked_priority"), priorityRankSQLExpr("earlier.priority_tier")), tenantID, now, setpointControlGroup).Scan(
 		&outboxID, &intent.ID, &intent.TenantID, &intent.SiteID, &intent.DeviceID, &intent.PointID,
 		&capability, &intent.CapabilityRevision, &parameters,
 		&intent.PayloadHash, &intent.DeviceCommandSequence, &intent.Version, &intent.TraceID,
@@ -782,7 +730,7 @@ func (store *PostgresStore) rejectPriorityLockedQueued(ctx context.Context, tx p
 		CommandID, SiteID, DeviceID, PayloadHash, LockedBy string
 		Version                                            uint64
 	}
-	rows, err := tx.Query(ctx, `
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
 SELECT i.command_id::text, i.site_id::text, i.device_id::text, i.payload_hash, i.version, l.locked_by
 FROM command_runtime.command_intents i
 JOIN command_runtime.device_priority_locks l
@@ -790,28 +738,10 @@ JOIN command_runtime.device_priority_locks l
 WHERE i.tenant_id = $1::uuid
   AND i.status = 'QUEUED'
   AND l.locked_until > $2
-  AND (
-    CASE i.priority_tier
-      WHEN 'SAFETY_INTERLOCK' THEN 500
-      WHEN 'MANUAL_OVERRIDE' THEN 400
-      WHEN 'PROTECTION_RULE' THEN 300
-      WHEN 'AI_OPTIMIZATION' THEN 200
-      WHEN 'SCHEDULE' THEN 100
-      ELSE 0
-    END
-  ) < (
-    CASE l.locked_priority
-      WHEN 'SAFETY_INTERLOCK' THEN 500
-      WHEN 'MANUAL_OVERRIDE' THEN 400
-      WHEN 'PROTECTION_RULE' THEN 300
-      WHEN 'AI_OPTIMIZATION' THEN 200
-      WHEN 'SCHEDULE' THEN 100
-      ELSE 0
-    END
-  )
+  AND (%[1]s) < (%[2]s)
 FOR UPDATE OF i SKIP LOCKED
 LIMIT 50
-`, tenantID, now)
+`, priorityRankSQLExpr("i.priority_tier"), priorityRankSQLExpr("l.locked_priority")), tenantID, now)
 	if err != nil {
 		return fmt.Errorf("select priority-locked queued commands: %w", err)
 	}

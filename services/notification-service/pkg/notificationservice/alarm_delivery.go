@@ -311,7 +311,7 @@ WHERE tenant_id = $1::uuid AND site_id = $2::uuid AND alarm_type = $3 AND cleare
 			return facts, err
 		}
 	}
-	rows, err := tx.Query(ctx, `SELECT kind, step, channel, recipient, created_at, state NOT IN ('SUPPRESSED','FAILED')
+	rows, err := tx.Query(ctx, `SELECT kind, step, channel, recipient, created_at, COALESCE(reason, ''), state NOT IN ('SUPPRESSED','FAILED')
 FROM notification_runtime.alarm_delivery_attempt WHERE tenant_id = $1::uuid AND alarm_id = $2::uuid ORDER BY created_at, dedup_key`, alarm.TenantID, alarm.AlarmID)
 	if err != nil {
 		return facts, err
@@ -319,7 +319,7 @@ FROM notification_runtime.alarm_delivery_attempt WHERE tenant_id = $1::uuid AND 
 	facts.Queued, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (QueuedMessage, error) {
 		var message QueuedMessage
 		var kind, channel string
-		err := row.Scan(&kind, &message.Step, &channel, &message.Recipient, &message.QueuedAt, &message.Reached)
+		err := row.Scan(&kind, &message.Step, &channel, &message.Recipient, &message.QueuedAt, &message.Reason, &message.Reached)
 		message.Kind, message.Channel = DeliveryKind(kind), DeliveryChannel(channel)
 		return message, err
 	})

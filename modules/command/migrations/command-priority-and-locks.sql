@@ -1,3 +1,5 @@
+BEGIN;
+
 SET LOCAL ROLE s3_command_migrator;
 
 ALTER TABLE command_runtime.command_intents
@@ -57,3 +59,7 @@ CREATE POLICY device_priority_locks_tenant ON command_runtime.device_priority_lo
 
 REVOKE ALL ON command_runtime.device_priority_locks FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON command_runtime.device_priority_locks TO s3_command_runtime;
+
+RESET ROLE;
+
+COMMIT;

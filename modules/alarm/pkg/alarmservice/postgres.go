@@ -200,7 +200,12 @@ func (store *PostgresStore) ListAlarmEvaluations(ctx context.Context, tenantID, 
 		  AND site_id = $2
 		  AND (
 		    active_alarm_id = $3
-		    OR (fingerprint = $4 AND evaluated_at >= ($5::timestamptz - interval '10 minutes'))
+		    OR (
+		      active_alarm_id IS NULL
+		      AND fingerprint = $4
+		      AND evaluated_at >= ($5::timestamptz - interval '10 minutes')
+		      AND evaluated_at <= $5::timestamptz
+		    )
 		  )
 		ORDER BY evaluated_at DESC, state_version DESC
 		LIMIT $6`,

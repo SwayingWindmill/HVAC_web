@@ -339,12 +339,7 @@ func (s *Service) CancelPending(request commandmodel.CancelPendingRequest) ([]st
 		}
 		scoped = append(scoped, intent)
 	}
-	sort.Slice(scoped, func(i, j int) bool {
-		if scoped[i].DeviceCommandSequence != scoped[j].DeviceCommandSequence {
-			return scoped[i].DeviceCommandSequence < scoped[j].DeviceCommandSequence
-		}
-		return scoped[i].ID < scoped[j].ID
-	})
+	sortIntentsBySequenceAndID(scoped)
 
 	var cancelledIDs []string
 	for _, intent := range scoped {
@@ -916,12 +911,7 @@ func (s *Service) RejectPriorityLockedQueued(tenantID string) ([]string, error) 
 			queued = append(queued, intent)
 		}
 	}
-	sort.Slice(queued, func(i, j int) bool {
-		if queued[i].DeviceCommandSequence != queued[j].DeviceCommandSequence {
-			return queued[i].DeviceCommandSequence < queued[j].DeviceCommandSequence
-		}
-		return queued[i].ID < queued[j].ID
-	})
+	sortIntentsBySequenceAndID(queued)
 	var rejected []string
 	for _, intent := range queued {
 		lock := s.activePriorityLockLocked(intent.TenantID, intent.DeviceID, now)
@@ -943,6 +933,15 @@ func (s *Service) activePriorityLockLocked(tenantID, deviceID string, now time.T
 	return &cloned
 }
 
+func sortIntentsBySequenceAndID(intents []*commandmodel.CommandIntent) {
+	sort.Slice(intents, func(i, j int) bool {
+		if intents[i].DeviceCommandSequence != intents[j].DeviceCommandSequence {
+			return intents[i].DeviceCommandSequence < intents[j].DeviceCommandSequence
+		}
+		return intents[i].ID < intents[j].ID
+	})
+}
+
 func (s *Service) deviceIntentsLocked(tenantID, deviceID string) []*commandmodel.CommandIntent {
 	var matching []*commandmodel.CommandIntent
 	for _, intent := range s.intents {
@@ -950,12 +949,7 @@ func (s *Service) deviceIntentsLocked(tenantID, deviceID string) []*commandmodel
 			matching = append(matching, intent)
 		}
 	}
-	sort.Slice(matching, func(i, j int) bool {
-		if matching[i].DeviceCommandSequence != matching[j].DeviceCommandSequence {
-			return matching[i].DeviceCommandSequence < matching[j].DeviceCommandSequence
-		}
-		return matching[i].ID < matching[j].ID
-	})
+	sortIntentsBySequenceAndID(matching)
 	return matching
 }
 

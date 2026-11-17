@@ -586,6 +586,16 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 	if !ok {
 		return
 	}
+	if expectedMethod == http.MethodPost {
+		if h.identity == nil {
+			h.writeAlarmFailure(writer, request, alarmUnavailable("Session validation is unavailable."))
+			return
+		}
+		if failure := h.identity.validateStateChange(request, session, request.Header.Get("X-CSRF-Token")); failure != nil {
+			writeIdentityFailure(writer, request, *failure)
+			return
+		}
+	}
 	route.now = h.alarmReferenceNow()
 	limit := 0
 	if route.alarmID == "" {

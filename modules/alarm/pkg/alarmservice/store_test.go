@@ -207,6 +207,20 @@ func TestMemoryStoreListAlarmEvaluationsFiltersAndOrders(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// Unrelated post-fire snapshot under the same fingerprint with empty active_alarm_id or earlier alarm must not contaminate.
+	if err := store.RecordEvaluation(testTenantID, testSiteID, alarm.Fingerprint, "", 99, AlarmEvaluationRecord{
+		EvaluatedAt: "2026-07-31T12:05:00Z", PolicyRevisionID: policyRev, AssignmentID: assignmentID,
+		InputRevision: "later-unlinked", Status: EvaluationNotMatched, Effect: EvaluationEffectNone, Snapshot: json.RawMessage(`{"v":5}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Earlier alarm record inside 10m window must stay scoped to that alarm.
+	if err := store.RecordEvaluation(testTenantID, testSiteID, alarm.Fingerprint, "01910000-2000-7000-8000-000000000088", 1, AlarmEvaluationRecord{
+		EvaluatedAt: "2026-07-31T11:55:00Z", PolicyRevisionID: policyRev, AssignmentID: assignmentID,
+		InputRevision: "earlier-alarm", Status: EvaluationMatched, Effect: EvaluationEffectPublish, Snapshot: json.RawMessage(`{"v":6}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// Unrelated fingerprint ignored.
 	if err := store.RecordEvaluation(testTenantID, testSiteID, otherFingerprint, "", 1, AlarmEvaluationRecord{
 		EvaluatedAt: "2026-07-31T12:00:00Z", PolicyRevisionID: policyRev, AssignmentID: assignmentID,

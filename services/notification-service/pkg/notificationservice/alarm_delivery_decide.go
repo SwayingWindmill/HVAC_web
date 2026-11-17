@@ -42,6 +42,7 @@ type QueuedMessage struct {
 	Channel   DeliveryChannel
 	Recipient string
 	QueuedAt  time.Time
+	Reason    string
 	// Reached: the message counts as told (not suppressed and not failed for good).
 	Reached bool
 }
@@ -190,6 +191,18 @@ func DecideDelivery(alarm DeliveryAlarm, routing SiteRouting, facts DeliveryFact
 		counts[recipient] = count
 	}
 	cooldown := effectiveCooldownMinutes(routing, route)
+	step0CooldownSuppressed := false
+	step0HasDelivery := false
+	for _, existing := range facts.Queued {
+		if existing.Kind != DeliveryFire {
+			continue
+		}
+		if existing.Reached || existing.Reason != "COOLDOWN" {
+			step0HasDelivery = true
+		} else {
+			step0CooldownSuppressed = true
+		}
+	}
 	for index, step := range route.Steps {
 		due := start.Add(time.Duration(step.AfterMinutes) * time.Minute)
 		if due.After(now) {
@@ -211,6 +224,7 @@ func DecideDelivery(alarm DeliveryAlarm, routing SiteRouting, facts DeliveryFact
 				if lastAt, ok := facts.LastSameTypeNotifiedAt[target.recipient]; ok && !lastAt.IsZero() && now.Sub(lastAt) >= 0 && now.Sub(lastAt) < time.Duration(cooldown)*time.Minute {
 					message.Suppressed, message.Reason = true, "COOLDOWN"
 					decision.Messages = append(decision.Messages, message)
+					step0CooldownSuppressed = true
 					continue
 				}
 			}
@@ -219,7 +233,13 @@ func DecideDelivery(alarm DeliveryAlarm, routing SiteRouting, facts DeliveryFact
 			} else {
 				counts[target.recipient]++
 			}
+			if index == 0 {
+				step0HasDelivery = true
+			}
 			decision.Messages = append(decision.Messages, message)
+		}
+		if index == 0 && step0CooldownSuppressed && !step0HasDelivery && alarm.Severity != alarmmodel.SeverityCritical {
+			return decision
 		}
 	}
 	return decision
