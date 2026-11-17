@@ -1638,3 +1638,334 @@ func TestConnectorBackpressureShedClosesConnectionWithoutAck(t *testing.T) {
 		t.Fatalf("missing shed metric in:\n%s", body)
 	}
 }
+
+type crossReplicaTransportState struct {
+	routeAndReplyTransportState
+	loadCalls atomic.Int32
+	onLoad    func(ctx context.Context, call int32, tenantID, attemptID string, executionFence uint64) (commandmodel.CommandCorrelation, error)
+}
+
+func (s *crossReplicaTransportState) LoadCommandCorrelation(ctx context.Context, tenantID, attemptID string, executionFence uint64) (commandmodel.CommandCorrelation, error) {
+	call := s.loadCalls.Add(1)
+	if s.onLoad != nil {
+		return s.onLoad(ctx, call, tenantID, attemptID, executionFence)
+	}
+	return commandmodel.CommandCorrelation{}, commandmodel.ErrCommandCorrelationNotFound
+}
+
+func TestExecuteCrossReplicaPollWakesImmediatelyOnPeerReply(t *testing.T) {
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	route := commandmodel.DeviceRoute{GatewayID: "01900000-0000-7000-8000-000000000501", ExternalDeviceID: "CHILLER-01", BindingRevision: 1}
+	requested := commandmodel.NumberScalar(24)
+	edgeExec := &commandmodel.EdgeExecutionEvidence{
+		Requested: requested, Effective: &requested, Applied: &requested,
+		WinnerControllerID: "cloud-command-intent", Cycle: 1,
+	}
+
+	defaulted, err := NewOffline(Config{
+		TransportState:          &crossReplicaTransportState{routeAndReplyTransportState: routeAndReplyTransportState{fakeTransportState: fakeTransportState{correlations: map[string]commandmodel.CommandCorrelation{}}, route: route}},
+		EvidenceStore:           fakeEvidenceStore{},
+		SharedSubscriptionGroup: "command-dispatcher",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaulted.config.CrossReplicaPollInterval != 500*time.Millisecond {
+		t.Fatalf("default CrossReplicaPollInterval=%v, want 500ms", defaulted.config.CrossReplicaPollInterval)
+	}
+
+	runCase := func(name string, state commandmodel.CorrelationState, replyStatus, reasonCode string, edge *commandmodel.EdgeExecutionEvidence, wantAck bool, wantPhase commandmodel.ConnectorPhase, wantMetric string) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			metrics := observability.NewRegistry()
+			transport := &crossReplicaTransportState{
+				routeAndReplyTransportState: routeAndReplyTransportState{
+					fakeTransportState: fakeTransportState{correlations: map[string]commandmodel.CommandCorrelation{}},
+					route:              route,
+				},
+			}
+			connector, err := NewOffline(Config{
+				TransportState:           transport,
+				EvidenceStore:            fakeEvidenceStore{},
+				SharedSubscriptionGroup:  "command-dispatcher",
+				CrossReplicaPollInterval: 15 * time.Millisecond,
+				ReplyTimeout:             25 * time.Second,
+				Metrics:                  metrics,
+				Now:                      func() time.Time { return now },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			connector.publish = func(_ context.Context, _ *paho.Publish) (*paho.PublishResponse, error) {
+				return &paho.PublishResponse{}, nil
+			}
+			env := commandmodel.DispatchEnvelope{
+				CommandID: "cmd-cross-" + name, AttemptID: "att-cross-" + name, TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
+				Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
+				Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, PayloadHash: "hash-" + name,
+				ExecutionFence: 1, LeaseUntil: now.Add(time.Minute),
+			}
+			transport.onLoad = func(_ context.Context, call int32, tenantID, attemptID string, executionFence uint64) (commandmodel.CommandCorrelation, error) {
+				if tenantID != env.TenantID || attemptID != env.AttemptID || executionFence != env.ExecutionFence {
+					return commandmodel.CommandCorrelation{}, fmt.Errorf("unexpected LoadCommandCorrelation args: %s %s %d", tenantID, attemptID, executionFence)
+				}
+				if call < 3 {
+					return commandmodel.CommandCorrelation{Envelope: env, State: commandmodel.CorrelationMayCommit}, nil
+				}
+				return commandmodel.CommandCorrelation{
+					Envelope:         env,
+					GatewayID:        route.GatewayID,
+					ExternalDeviceID: route.ExternalDeviceID,
+					MappingRevision:  "mqtt-command-v1:" + env.CapabilityRevision,
+					BindingRevision:  "registry-source-key:1",
+					ProviderEndpoint: "hvac/v1/" + route.GatewayID + "/down/command",
+					ProviderMethod:   "setTemperatureSetpoint",
+					State:            state,
+					ReplyStatus:      replyStatus,
+					ReplyReasonCode:  reasonCode,
+					ReplyEventTime:   now,
+					RepliedAt:        now,
+					EdgeExecution:    edge,
+				}, nil
+			}
+
+			started := time.Now()
+			res, execErr := connector.Execute(context.Background(), env)
+			if execErr != nil {
+				t.Fatalf("Execute failed: %v", execErr)
+			}
+			if elapsed := time.Since(started); elapsed > 2*time.Second {
+				t.Fatalf("Execute took %v; cross-replica poll did not wake before timeout", elapsed)
+			}
+			if res.Acknowledged != wantAck || res.Phase != wantPhase {
+				t.Fatalf("Execute result=%+v want ack=%v phase=%s", res, wantAck, wantPhase)
+			}
+			body := scrapeMetricsText(t, metrics)
+			if !strings.Contains(body, `hvac_mqtt_command_publishes_total{outcome="success"} 1`) {
+				t.Fatalf("missing publish success metric in:\n%s", body)
+			}
+			if !strings.Contains(body, wantMetric) {
+				t.Fatalf("missing reply wait metric %q in:\n%s", wantMetric, body)
+			}
+		})
+	}
+
+	runCase("replied_ack", commandmodel.CorrelationReplied, "EXECUTED", "", edgeExec, true, commandmodel.ConnectorAcknowledged, `hvac_mqtt_command_reply_wait_seconds_count{outcome="acknowledged"} 1`)
+	runCase("resolved_rejected", commandmodel.CorrelationResolved, "REJECTED", "INTERLOCK_OPEN", nil, false, commandmodel.ConnectorExecutionRejected, `hvac_mqtt_command_reply_wait_seconds_count{outcome="rejected"} 1`)
+
+	t.Run("non_shared_does_not_poll_cross_replica", func(t *testing.T) {
+		metrics := observability.NewRegistry()
+		transport := &crossReplicaTransportState{
+			routeAndReplyTransportState: routeAndReplyTransportState{
+				fakeTransportState: fakeTransportState{correlations: map[string]commandmodel.CommandCorrelation{}},
+				route:              route,
+			},
+			onLoad: func(_ context.Context, _ int32, _, _ string, _ uint64) (commandmodel.CommandCorrelation, error) {
+				return commandmodel.CommandCorrelation{State: commandmodel.CorrelationReplied, ReplyStatus: "EXECUTED", ReplyEventTime: now, RepliedAt: now, EdgeExecution: edgeExec}, nil
+			},
+		}
+		connector, err := NewOffline(Config{
+			TransportState:           transport,
+			EvidenceStore:            fakeEvidenceStore{},
+			CrossReplicaPollInterval: 5 * time.Millisecond,
+			ReplyTimeout:             25 * time.Millisecond,
+			Metrics:                  metrics,
+			Now:                      func() time.Time { return now },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		connector.publish = func(_ context.Context, _ *paho.Publish) (*paho.PublishResponse, error) {
+			return &paho.PublishResponse{}, nil
+		}
+		res, execErr := connector.Execute(context.Background(), commandmodel.DispatchEnvelope{
+			CommandID: "cmd-no-share", AttemptID: "att-no-share", TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
+			Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
+			Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, PayloadHash: "hash-no-share",
+			ExecutionFence: 1, LeaseUntil: now.Add(time.Minute),
+		})
+		if execErr != nil || res.FailureCode != "MQTT_COMMAND_REPLY_TIMEOUT" {
+			t.Fatalf("expected reply timeout without SharedSubscriptionGroup, got res=%+v err=%v", res, execErr)
+		}
+		if calls := transport.loadCalls.Load(); calls != 0 {
+			t.Fatalf("LoadCommandCorrelation called %d times without SharedSubscriptionGroup, want 0", calls)
+		}
+		body := scrapeMetricsText(t, metrics)
+		if !strings.Contains(body, `hvac_mqtt_command_reply_wait_seconds_count{outcome="timed_out"} 1`) {
+			t.Fatalf("missing timed_out histogram in:\n%s", body)
+		}
+	})
+}
+
+func TestExecuteEmitsPublishMetricsWaitHistogramAndPacketHook(t *testing.T) {
+	const gwID = "01900000-0000-7000-8000-000000000502"
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	route := commandmodel.DeviceRoute{GatewayID: gwID, ExternalDeviceID: "CHILLER-01", BindingRevision: 1}
+	requested := commandmodel.NumberScalar(24)
+	edgeExec := &commandmodel.EdgeExecutionEvidence{
+		Requested: requested, Effective: &requested, Applied: &requested,
+		WinnerControllerID: "cloud-command-intent", Cycle: 1,
+	}
+
+	type capturedPacket struct {
+		direction string
+		channel   string
+		gatewayID string
+		topic     string
+		traceID   string
+		payload   string
+	}
+	var hookMu sync.Mutex
+	var captured []capturedPacket
+
+	metrics := observability.NewRegistry()
+	fullTransport := &crossReplicaTransportState{
+		routeAndReplyTransportState: routeAndReplyTransportState{
+			fakeTransportState: fakeTransportState{correlations: map[string]commandmodel.CommandCorrelation{}},
+			route:              route,
+		},
+	}
+
+	connector, err := NewOffline(Config{
+		TransportState: fullTransport,
+		EvidenceStore:  fakeEvidenceStore{},
+		ReplyTimeout:   30 * time.Millisecond,
+		Metrics:        metrics,
+		Now:            func() time.Time { return now },
+		PacketHook: func(direction, channel, gatewayID, topic, traceID string, payload []byte) {
+			hookMu.Lock()
+			defer hookMu.Unlock()
+			captured = append(captured, capturedPacket{
+				direction: direction,
+				channel:   channel,
+				gatewayID: gatewayID,
+				topic:     topic,
+				traceID:   traceID,
+				payload:   string(payload),
+			})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connector.rootContext = context.Background()
+
+	baseEnv := func(suffix string, fence uint64) commandmodel.DispatchEnvelope {
+		return commandmodel.DispatchEnvelope{
+			CommandID: "cmd-m-" + suffix, AttemptID: "att-m-" + suffix, TenantID: "tenant-1", SiteID: "site-1", DeviceID: "device-1",
+			TraceID:    "4bf92f3577b34da6a3ce929d0e0e4736",
+			Capability: commandmodel.CapabilitySetTemperatureSetpoint, CapabilityRevision: "capability:set-temperature-setpoint:v1",
+			Parameters: commandmodel.CommandParameters{commandmodel.ParameterSetpointC: 24}, PayloadHash: "hash-" + suffix,
+			ExecutionFence: fence, LeaseUntil: now.Add(time.Minute),
+		}
+	}
+
+	// 1. Publish failure (non-deadline error) -> publishes_total{outcome="failed"}
+	connector.publish = func(_ context.Context, _ *paho.Publish) (*paho.PublishResponse, error) {
+		return nil, errors.New("broker disconnected")
+	}
+	res, err := connector.Execute(context.Background(), baseEnv("pubfail", 1))
+	if err != nil || res.FailureCode != "MQTT_COMMAND_PUBLISH_OUTCOME_UNKNOWN" {
+		t.Fatalf("pubfail got res=%+v err=%v", res, err)
+	}
+
+	// 2. Publish timeout (context.DeadlineExceeded) -> publishes_total{outcome="timed_out"}
+	connector.publish = func(_ context.Context, _ *paho.Publish) (*paho.PublishResponse, error) {
+		return nil, fmt.Errorf("publish: %w", context.DeadlineExceeded)
+	}
+	res, err = connector.Execute(context.Background(), baseEnv("pubtimeout", 2))
+	if err != nil || res.FailureCode != "MQTT_COMMAND_PUBLISH_OUTCOME_UNKNOWN" {
+		t.Fatalf("pubtimeout got res=%+v err=%v", res, err)
+	}
+
+	// 3. Publish success + edge FAILED reply via onReply -> publishes_total{outcome="success"} + reply_wait{outcome="failed"} + PacketHook UPLINK/DOWNLINK
+	connector.publish = func(_ context.Context, _ *paho.Publish) (*paho.PublishResponse, error) {
+		env := baseEnv("edgefail", 3)
+		replyBody, _ := json.Marshal(commandReply{
+			SchemaVersion:  commandSchemaVersion,
+			MessageID:      "msg-edge-fail",
+			CommandID:      env.CommandID,
+			TraceID:        " 4bf92f3577b34da6a3ce929d0e0e4736 ",
+			EventTime:      now.UnixMilli(),
+			EdgeStatus:     "FAILED",
+			ExecutionFence: env.ExecutionFence,
+		})
+		handled, onErr := connector.onReply(paho.PublishReceived{
+			Packet: &paho.Publish{
+				Topic:   "hvac/v1/" + gwID + "/up/reply",
+				Payload: replyBody,
+			},
+		})
+		if !handled || onErr != nil {
+			t.Fatalf("onReply failed: handled=%v err=%v", handled, onErr)
+		}
+		waiterKey := replyKey(env.CommandID, env.ExecutionFence)
+		connector.mu.Lock()
+		waiter := connector.waiters[waiterKey]
+		connector.mu.Unlock()
+		waiter <- commandmodel.CommandCorrelation{
+			Envelope: env, GatewayID: gwID, ExternalDeviceID: "CHILLER-01",
+			State: commandmodel.CorrelationReplied, ReplyStatus: "FAILED",
+			ReplyReasonCode: "DEVICE_WRITE_ERROR", ReplyEventTime: now, RepliedAt: now,
+		}
+		return &paho.PublishResponse{}, nil
+	}
+	res, err = connector.Execute(context.Background(), baseEnv("edgefail", 3))
+	if err != nil || res.FailureCode != "MQTT_EDGE_DEVICE_WRITE_ERROR" {
+		t.Fatalf("edgefail got res=%+v err=%v", res, err)
+	}
+
+	// 4. Publish success + EXECUTED ack -> reply_wait{outcome="acknowledged"}
+	connector.publish = func(_ context.Context, _ *paho.Publish) (*paho.PublishResponse, error) {
+		env := baseEnv("ack", 4)
+		waiterKey := replyKey(env.CommandID, env.ExecutionFence)
+		connector.mu.Lock()
+		waiter := connector.waiters[waiterKey]
+		connector.mu.Unlock()
+		waiter <- commandmodel.CommandCorrelation{
+			Envelope: env, GatewayID: gwID, ExternalDeviceID: "CHILLER-01",
+			State: commandmodel.CorrelationReplied, ReplyStatus: "EXECUTED",
+			ReplyEventTime: now, RepliedAt: now, EdgeExecution: edgeExec,
+		}
+		return &paho.PublishResponse{}, nil
+	}
+	res, err = connector.Execute(context.Background(), baseEnv("ack", 4))
+	if err != nil || !res.Acknowledged {
+		t.Fatalf("ack got res=%+v err=%v", res, err)
+	}
+
+	// Drain reply workers initialized by onReply before inspecting captured hooks / metrics.
+	connector.drainReplyWorkers(context.Background())
+
+	body := scrapeMetricsText(t, metrics)
+	for _, want := range []string{
+		`hvac_mqtt_command_publishes_total{outcome="failed"} 1`,
+		`hvac_mqtt_command_publishes_total{outcome="timed_out"} 1`,
+		`hvac_mqtt_command_publishes_total{outcome="success"} 2`,
+		`hvac_mqtt_command_reply_wait_seconds_count{outcome="failed"} 1`,
+		`hvac_mqtt_command_reply_wait_seconds_count{outcome="acknowledged"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing metric %q in:\n%s", want, body)
+		}
+	}
+
+	hookMu.Lock()
+	defer hookMu.Unlock()
+	var sawDownlink, sawUplink bool
+	for _, pkt := range captured {
+		if pkt.direction == "DOWNLINK" && pkt.channel == "COMMAND" && pkt.gatewayID == gwID &&
+			pkt.topic == "hvac/v1/"+gwID+"/down/command" && pkt.traceID == "4bf92f3577b34da6a3ce929d0e0e4736" &&
+			strings.Contains(pkt.payload, `"commandId":"cmd-m-ack"`) {
+			sawDownlink = true
+		}
+		if pkt.direction == "UPLINK" && pkt.channel == "COMMAND_REPLY" && pkt.gatewayID == gwID &&
+			pkt.topic == "hvac/v1/"+gwID+"/up/reply" && pkt.traceID == "4bf92f3577b34da6a3ce929d0e0e4736" &&
+			strings.Contains(pkt.payload, `"commandId":"cmd-m-edgefail"`) {
+			sawUplink = true
+		}
+	}
+	if !sawDownlink || !sawUplink {
+		t.Fatalf("PacketHook missing downlink=%v uplink=%v captured=%+v", sawDownlink, sawUplink, captured)
+	}
+}
