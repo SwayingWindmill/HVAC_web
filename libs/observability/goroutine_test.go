@@ -9,7 +9,25 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 func TestRecoverCatchesDirectDeferPanicAndRedactsError(t *testing.T) {
 	buffer := &bytes.Buffer{}
@@ -39,7 +57,7 @@ func TestRecoverCatchesDirectDeferPanicAndRedactsError(t *testing.T) {
 }
 
 func TestGoSafeAndRuntimeGoRecoverPanics(t *testing.T) {
-	buffer := &bytes.Buffer{}
+	buffer := &syncBuffer{}
 	logger := NewJSONLogger(buffer, slog.LevelInfo)
 	runtime := NewRuntime(RuntimeConfig{Service: "test", QueueSize: 1})
 
@@ -55,13 +73,25 @@ func TestGoSafeAndRuntimeGoRecoverPanics(t *testing.T) {
 	})
 	wg.Wait()
 
-	prom := httptest.NewRecorder()
-	runtime.Metrics.Handler().ServeHTTP(prom, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(prom.Body.String(), "hvac_goroutine_panics_total 2") {
-		t.Fatalf("expected 2 recovered panics in metrics, got:\n%s", prom.Body.String())
+	deadline := time.Now().Add(2 * time.Second)
+	var metricsBody, logOutput string
+	for {
+		prom := httptest.NewRecorder()
+		runtime.Metrics.Handler().ServeHTTP(prom, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		metricsBody = prom.Body.String()
+		logOutput = buffer.String()
+		if strings.Contains(metricsBody, "hvac_goroutine_panics_total 2") &&
+			strings.Contains(logOutput, `"worker.safe"`) &&
+			strings.Contains(logOutput, `"worker.runtime"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected 2 recovered panics in metrics and logs, got metrics:\n%s\nlogs:\n%s", metricsBody, logOutput)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	if strings.Contains(buffer.String(), "boom-") {
-		t.Fatalf("panic payload leaked into log output: %s", buffer.String())
+	if strings.Contains(logOutput, "boom-") {
+		t.Fatalf("panic payload leaked into log output: %s", logOutput)
 	}
 }
 
