@@ -104,14 +104,6 @@ func (s *stubDeclarativeTransport) setHolding(addr uint16, vals ...uint16) {
 	}
 }
 
-func (s *stubDeclarativeTransport) setInput(addr uint16, vals ...uint16) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i, v := range vals {
-		s.input[addr+uint16(i)] = v
-	}
-}
-
 func TestCoalesceModbusReadBlocks(t *testing.T) {
 	t.Parallel()
 
@@ -461,9 +453,9 @@ func TestDeclarativeModbusCodecAndWrites(t *testing.T) {
 			{PointCode: "i16_le", FunctionCode: ModbusFunctionReadHoldingRegisters, WriteFunctionCode: ModbusFunctionWriteSingleRegister, Address: 20, RegisterCount: 1, RawType: ModbusRawInt16, ByteOrder: ModbusByteOrderLittleEndian, WordOrder: ModbusWordOrderBigEndian, Scale: 0.1, Offset: 5, PollPriority: PriorityHigh},
 			{PointCode: "u32_le", FunctionCode: ModbusFunctionReadHoldingRegisters, WriteFunctionCode: ModbusFunctionWriteMultipleRegisters, Address: 22, RegisterCount: 2, RawType: ModbusRawUint32, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderLittleEndian, Scale: 1, Offset: 0, PollPriority: PriorityHigh},
 			{PointCode: "i32_be", FunctionCode: ModbusFunctionReadHoldingRegisters, WriteFunctionCode: ModbusFunctionWriteMultipleRegisters, Address: 24, RegisterCount: 2, RawType: ModbusRawInt32, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, Scale: 1, Offset: 0, PollPriority: PriorityHigh},
-			{PointCode: "bit_2", FunctionCode: ModbusFunctionReadHoldingRegisters, WriteFunctionCode: ModbusFunctionWriteSingleRegister, Address: 26, RegisterCount: 1, RawType: ModbusRawBitBool, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, BitIndex: 2, PollPriority: PriorityHigh},
-			{PointCode: "bit_3", FunctionCode: ModbusFunctionReadHoldingRegisters, Address: 26, RegisterCount: 1, RawType: ModbusRawBitBool, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, BitIndex: 3, PollPriority: PriorityHigh},
-			{PointCode: "mode_enum", FunctionCode: ModbusFunctionReadHoldingRegisters, WriteFunctionCode: ModbusFunctionWriteSingleRegister, Address: 27, RegisterCount: 1, RawType: ModbusRawEnum16, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, PollPriority: PriorityHigh, EnumMap: map[string]string{"0": "OFF", "2": "COOLING"}},
+			{PointCode: "bit_2", FunctionCode: ModbusFunctionReadHoldingRegisters, WriteFunctionCode: ModbusFunctionWriteSingleRegister, Address: 26, RegisterCount: 1, RawType: ModbusRawBitBool, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, BitIndex: 2, Scale: 1, PollPriority: PriorityHigh},
+			{PointCode: "bit_3", FunctionCode: ModbusFunctionReadHoldingRegisters, Address: 26, RegisterCount: 1, RawType: ModbusRawBitBool, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, BitIndex: 3, Scale: 1, PollPriority: PriorityHigh},
+			{PointCode: "mode_enum", FunctionCode: ModbusFunctionReadHoldingRegisters, WriteFunctionCode: ModbusFunctionWriteSingleRegister, Address: 27, RegisterCount: 1, RawType: ModbusRawEnum16, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, Scale: 1, PollPriority: PriorityHigh, EnumMap: map[string]string{"0": "OFF", "2": "COOLING"}},
 			{PointCode: "f_nan", FunctionCode: ModbusFunctionReadHoldingRegisters, Address: 28, RegisterCount: 2, RawType: ModbusRawFloat32, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, Scale: 1, PollPriority: PriorityHigh},
 		},
 	}
@@ -607,14 +599,69 @@ func TestDeclarativeModbusProfileValidationRejectsInvalidSpecs(t *testing.T) {
 		t.Fatal("expected error for FC6 with registerCount 2")
 	}
 
-	// Zero scale rejected for numeric register
-	badScale := base
-	badScale.Registers = []ModbusRegisterSpec{{
-		PointCode: "zero_scale", FunctionCode: ModbusFunctionReadHoldingRegisters,
-		Address: 0, RegisterCount: 1, RawType: ModbusRawUint16, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, Scale: 0, PollPriority: PriorityHigh,
+	// Zero scale rejected for numeric, BIT_BOOL, and ENUM16 registers
+	for _, rawType := range []ModbusRawType{ModbusRawUint16, ModbusRawBitBool, ModbusRawEnum16} {
+		badScale := base
+		spec := ModbusRegisterSpec{
+			PointCode: "zero_scale", FunctionCode: ModbusFunctionReadHoldingRegisters,
+			Address: 0, RegisterCount: 1, RawType: rawType, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, Scale: 0, PollPriority: PriorityHigh,
+		}
+		if rawType == ModbusRawEnum16 {
+			spec.EnumMap = map[string]string{"0": "OFF"}
+		}
+		badScale.Registers = []ModbusRegisterSpec{spec}
+		if err := badScale.Validate(); err == nil {
+			t.Fatalf("expected error for zero scale on %s register", rawType)
+		}
+	}
+
+	// Address + RegisterCount exceeding 16-bit space rejected
+	badSpace := base
+	badSpace.Registers = []ModbusRegisterSpec{{
+		PointCode: "overflow_addr", FunctionCode: ModbusFunctionReadHoldingRegisters,
+		Address: 65535, RegisterCount: 2, RawType: ModbusRawFloat32, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, Scale: 1, PollPriority: PriorityHigh,
 	}}
-	if err := badScale.Validate(); err == nil {
-		t.Fatal("expected error for zero scale on numeric register")
+	if err := badSpace.Validate(); err == nil {
+		t.Fatal("expected error for address + registerCount > 65536")
+	}
+
+	// Non-uint16 or non-canonical ENUM16 keys rejected
+	for _, badKey := range []string{"01", "-1", "65536", "abc"} {
+		badEnum := base
+		badEnum.Registers = []ModbusRegisterSpec{{
+			PointCode: "bad_enum", FunctionCode: ModbusFunctionReadHoldingRegisters,
+			Address: 0, RegisterCount: 1, RawType: ModbusRawEnum16, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, Scale: 1, PollPriority: PriorityHigh,
+			EnumMap: map[string]string{badKey: "BAD"},
+		}}
+		if err := badEnum.Validate(); err == nil {
+			t.Fatalf("expected error for ENUM16 key %q", badKey)
+		}
+	}
+
+	// Invalid TCP endpoints rejected
+	for _, badEndpoint := range []string{"not-host-port", ":502", "127.0.0.1:0", "127.0.0.1:70000", "127.0.0.1:http"} {
+		badEp := base
+		badEp.Endpoint = badEndpoint
+		if err := badEp.Validate(); err == nil {
+			t.Fatalf("expected error for invalid TCP endpoint %q", badEndpoint)
+		}
+	}
+
+	// Unknown capabilityProfile rejected
+	badCap := base
+	badCap.CapabilityProfile = "chiller.york.v1"
+	if err := badCap.Validate(); err == nil {
+		t.Fatal("expected error for unknown capabilityProfile")
+	}
+
+	// Duplicate BIT_BOOL (functionCode, address, bitIndex) rejected
+	dupBit := base
+	dupBit.Registers = []ModbusRegisterSpec{
+		{PointCode: "bit_a", FunctionCode: ModbusFunctionReadHoldingRegisters, Address: 10, RegisterCount: 1, RawType: ModbusRawBitBool, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, BitIndex: 4, Scale: 1, PollPriority: PriorityHigh},
+		{PointCode: "bit_b", FunctionCode: ModbusFunctionReadHoldingRegisters, Address: 10, RegisterCount: 1, RawType: ModbusRawBitBool, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, BitIndex: 4, Scale: 1, PollPriority: PriorityHigh},
+	}
+	if err := dupBit.Validate(); err == nil {
+		t.Fatal("expected error for duplicate BIT_BOOL bit mapping")
 	}
 
 	// SemanticChannel capability mismatch rejected when CapabilityProfile set
@@ -627,6 +674,76 @@ func TestDeclarativeModbusProfileValidationRejectsInvalidSpecs(t *testing.T) {
 	}}
 	if err := badSemantic.Validate(); err == nil {
 		t.Fatal("expected error for wrong DataType on SemanticRunState")
+	}
+}
+
+func TestDeclarativeModbusBitBoolReadModifyWritePreservesSiblingBits(t *testing.T) {
+	t.Parallel()
+
+	transport := newStubDeclarativeTransport()
+	transport.setHolding(10, 0x8805) // bits 0, 2, 11, 15 set (BE)
+	transport.setHolding(11, 0x1234) // LE wire word: logical 0x3412 (bits 1, 4, 10, 12, 13 set)
+
+	profile := DeclarativeModbusProfile{
+		ComponentID: "BIT-RMW",
+		DriverType:  ModbusDriverTCP,
+		Endpoint:    "127.0.0.1:5020",
+		UnitID:      1,
+		TimeoutMS:   500,
+		Retries:     0,
+		Registers: []ModbusRegisterSpec{
+			{PointCode: "be_bit_2", FunctionCode: ModbusFunctionReadHoldingRegisters, WriteFunctionCode: ModbusFunctionWriteSingleRegister, Address: 10, RegisterCount: 1, RawType: ModbusRawBitBool, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, BitIndex: 2, Scale: 1, PollPriority: PriorityHigh},
+			{PointCode: "be_bit_11", FunctionCode: ModbusFunctionReadHoldingRegisters, Address: 10, RegisterCount: 1, RawType: ModbusRawBitBool, ByteOrder: ModbusByteOrderBigEndian, WordOrder: ModbusWordOrderBigEndian, BitIndex: 11, Scale: 1, PollPriority: PriorityHigh},
+			{PointCode: "le_bit_3", FunctionCode: ModbusFunctionReadHoldingRegisters, WriteFunctionCode: ModbusFunctionWriteMultipleRegisters, Address: 11, RegisterCount: 1, RawType: ModbusRawBitBool, ByteOrder: ModbusByteOrderLittleEndian, WordOrder: ModbusWordOrderBigEndian, BitIndex: 3, Scale: 1, PollPriority: PriorityHigh},
+			{PointCode: "le_bit_4", FunctionCode: ModbusFunctionReadHoldingRegisters, Address: 11, RegisterCount: 1, RawType: ModbusRawBitBool, ByteOrder: ModbusByteOrderLittleEndian, WordOrder: ModbusWordOrderBigEndian, BitIndex: 4, Scale: 1, PollPriority: PriorityHigh},
+		},
+	}
+	adapter, err := NewDeclarativeModbusAdapter(profile, transport)
+	if err != nil {
+		t.Fatalf("NewDeclarativeModbusAdapter() error = %v", err)
+	}
+
+	vFalse := BooleanValue(false)
+	vTrue := BooleanValue(true)
+	results, err := adapter.Apply(context.Background(), ProcessImage{}, []Decision{
+		{Address: "BIT-RMW/be_bit_2", Accepted: true, Effective: &vFalse},
+		{Address: "BIT-RMW/le_bit_3", Accepted: true, Effective: &vTrue},
+	})
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if len(results) != 2 || !results[0].Success || !results[1].Success {
+		t.Fatalf("unexpected Apply() results: %+v", results)
+	}
+
+	if got := transport.holding[10]; got != 0x8801 {
+		t.Fatalf("holding[10] after clearing bit 2 = 0x%04x, want 0x8801 (sibling bits preserved)", got)
+	}
+	// logical 0x3412 | (1<<3) = 0x341a -> LE wire word 0x1a34
+	if got := transport.holding[11]; got != 0x1a34 {
+		t.Fatalf("holding[11] after setting LE bit 3 = 0x%04x, want 0x1a34 (sibling bits preserved)", got)
+	}
+
+	// Re-set bit 2 -> 0x8805
+	if _, err := adapter.Apply(context.Background(), ProcessImage{}, []Decision{
+		{Address: "BIT-RMW/be_bit_2", Accepted: true, Effective: &vTrue},
+	}); err != nil {
+		t.Fatalf("Apply() set bit 2 error = %v", err)
+	}
+	if got := transport.holding[10]; got != 0x8805 {
+		t.Fatalf("holding[10] after setting bit 2 = 0x%04x, want 0x8805", got)
+	}
+
+	// Pre-read failure aborts RMW without issuing Modbus write.
+	writesBefore := len(transport.writes)
+	transport.setReadError(errors.New("bus timeout"))
+	if _, err := adapter.Apply(context.Background(), ProcessImage{}, []Decision{
+		{Address: "BIT-RMW/be_bit_2", Accepted: true, Effective: &vFalse},
+	}); err == nil {
+		t.Fatal("expected RMW Apply error when read fails")
+	}
+	if len(transport.writes) != writesBefore {
+		t.Fatal("RMW write must not be issued when holding register read fails")
 	}
 }
 

@@ -565,13 +565,13 @@ func sampleValidDriverConfigs() []GatewayModbusDriverConfig {
 			DriverType:        "MODBUS_RTU",
 			Endpoint:          "/dev/ttyUSB0",
 			UnitID:            3,
-			CapabilityProfile: "vfd.atv630.v1",
+			CapabilityProfile: "VARIABLE_SPEED_PUMP",
 			TimeoutMS:         1500,
 			Retries:           2,
 			Registers: []GatewayModbusRegisterMapping{
 				{
 					PointCode:         "run_status",
-					SemanticChannel:   "ch_run_status",
+					SemanticChannel:   "StartCommand",
 					FunctionCode:      3,
 					WriteFunctionCode: intPtr(6),
 					Address:           8501,
@@ -585,17 +585,18 @@ func sampleValidDriverConfigs() []GatewayModbusDriverConfig {
 					PollPriority:      "VERY_HIGH",
 				},
 				{
-					PointCode:     "drive_mode",
-					FunctionCode:  3,
-					Address:       8502,
-					RegisterCount: 1,
-					RawType:       "ENUM16",
-					ByteOrder:     "BIG_ENDIAN",
-					WordOrder:     "BIG_ENDIAN",
-					Scale:         1,
-					Offset:        0,
-					PollPriority:  "HIGH",
-					EnumMap:       map[string]string{"0": "STOP", "1": "AUTO"},
+					PointCode:       "drive_mode",
+					SemanticChannel: "RunState",
+					FunctionCode:    3,
+					Address:         8502,
+					RegisterCount:   1,
+					RawType:         "ENUM16",
+					ByteOrder:       "BIG_ENDIAN",
+					WordOrder:       "BIG_ENDIAN",
+					Scale:           1,
+					Offset:          0,
+					PollPriority:    "HIGH",
+					EnumMap:         map[string]string{"0": "STOP", "1": "AUTO"},
 				},
 			},
 		},
@@ -609,7 +610,7 @@ func sampleValidDriverConfigs() []GatewayModbusDriverConfig {
 			Registers: []GatewayModbusRegisterMapping{
 				{
 					PointCode:         "chw_supply_temp",
-					FunctionCode:      4,
+					FunctionCode:      3,
 					WriteFunctionCode: intPtr(16),
 					Address:           100,
 					RegisterCount:     2,
@@ -808,6 +809,58 @@ func TestConfigShadowDriverAndAutonomyValidationAndCanonicalization(t *testing.T
 			drivers: []GatewayModbusDriverConfig{{
 				DeviceKey: "d1", DriverType: "MODBUS_TCP", Endpoint: "10.0.0.1:502", UnitID: 1, TimeoutMS: 1000, Retries: 0,
 				Registers: []GatewayModbusRegisterMapping{{PointCode: "p1", FunctionCode: 3, Address: 1, RegisterCount: 1, RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, Offset: math.Inf(1), PollPriority: "HIGH"}},
+			}},
+		},
+		{
+			name: "FC4 with writeFunctionCode",
+			drivers: []GatewayModbusDriverConfig{{
+				DeviceKey: "d1", DriverType: "MODBUS_TCP", Endpoint: "10.0.0.1:502", UnitID: 1, TimeoutMS: 1000, Retries: 0,
+				Registers: []GatewayModbusRegisterMapping{{PointCode: "p1", FunctionCode: 4, WriteFunctionCode: intPtr(16), Address: 1, RegisterCount: 1, RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, Offset: 0, PollPriority: "HIGH"}},
+			}},
+		},
+		{
+			name: "FC6 on registerCount 2",
+			drivers: []GatewayModbusDriverConfig{{
+				DeviceKey: "d1", DriverType: "MODBUS_TCP", Endpoint: "10.0.0.1:502", UnitID: 1, TimeoutMS: 1000, Retries: 0,
+				Registers: []GatewayModbusRegisterMapping{{PointCode: "p1", FunctionCode: 3, WriteFunctionCode: intPtr(6), Address: 1, RegisterCount: 2, RawType: "FLOAT32", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, Offset: 0, PollPriority: "HIGH"}},
+			}},
+		},
+		{
+			name: "address plus registerCount exceeds 65536",
+			drivers: []GatewayModbusDriverConfig{{
+				DeviceKey: "d1", DriverType: "MODBUS_TCP", Endpoint: "10.0.0.1:502", UnitID: 1, TimeoutMS: 1000, Retries: 0,
+				Registers: []GatewayModbusRegisterMapping{{PointCode: "p1", FunctionCode: 3, Address: 65535, RegisterCount: 2, RawType: "FLOAT32", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, Offset: 0, PollPriority: "HIGH"}},
+			}},
+		},
+		{
+			name: "non-uint16 enumMap key",
+			drivers: []GatewayModbusDriverConfig{{
+				DeviceKey: "d1", DriverType: "MODBUS_TCP", Endpoint: "10.0.0.1:502", UnitID: 1, TimeoutMS: 1000, Retries: 0,
+				Registers: []GatewayModbusRegisterMapping{{PointCode: "p1", FunctionCode: 3, Address: 1, RegisterCount: 1, RawType: "ENUM16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, Offset: 0, PollPriority: "HIGH", EnumMap: map[string]string{"01": "RUN"}}},
+			}},
+		},
+		{
+			name: "invalid TCP endpoint",
+			drivers: []GatewayModbusDriverConfig{{
+				DeviceKey: "d1", DriverType: "MODBUS_TCP", Endpoint: "10.0.0.1:0", UnitID: 1, TimeoutMS: 1000, Retries: 0,
+				Registers: []GatewayModbusRegisterMapping{{PointCode: "p1", FunctionCode: 3, Address: 1, RegisterCount: 1, RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, Offset: 0, PollPriority: "HIGH"}},
+			}},
+		},
+		{
+			name: "unknown capabilityProfile",
+			drivers: []GatewayModbusDriverConfig{{
+				DeviceKey: "d1", DriverType: "MODBUS_TCP", Endpoint: "10.0.0.1:502", UnitID: 1, CapabilityProfile: "vfd.atv630.v1", TimeoutMS: 1000, Retries: 0,
+				Registers: []GatewayModbusRegisterMapping{{PointCode: "p1", FunctionCode: 3, Address: 1, RegisterCount: 1, RawType: "UINT16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, Offset: 0, PollPriority: "HIGH"}},
+			}},
+		},
+		{
+			name: "duplicate BIT_BOOL bit mapping",
+			drivers: []GatewayModbusDriverConfig{{
+				DeviceKey: "d1", DriverType: "MODBUS_TCP", Endpoint: "10.0.0.1:502", UnitID: 1, TimeoutMS: 1000, Retries: 0,
+				Registers: []GatewayModbusRegisterMapping{
+					{PointCode: "p1", FunctionCode: 3, Address: 10, RegisterCount: 1, RawType: "BIT_BOOL", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", BitIndex: intPtr(2), Scale: 1, Offset: 0, PollPriority: "HIGH"},
+					{PointCode: "p2", FunctionCode: 3, Address: 10, RegisterCount: 1, RawType: "BIT_BOOL", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", BitIndex: intPtr(2), Scale: 1, Offset: 0, PollPriority: "HIGH"},
+				},
 			}},
 		},
 	}

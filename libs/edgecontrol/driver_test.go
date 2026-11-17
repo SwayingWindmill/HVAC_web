@@ -189,3 +189,44 @@ func TestDeviceHostUnregisterRemovesDriverComponentAndChannels(t *testing.T) {
 		}
 	}
 }
+
+type lockCheckingAdapter struct {
+	*fakePumpDriver
+	onClose func()
+}
+
+func (a *lockCheckingAdapter) Close() error {
+	if a.onClose != nil {
+		a.onClose()
+	}
+	return nil
+}
+
+func TestDeviceHostUnregisterAdapterClosesOutsideLockAndHostUnregisterDevice(t *testing.T) {
+	host, err := NewHost()
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	driver := &lockCheckingAdapter{
+		fakePumpDriver: newFakePumpDriver(ComponentDeviceDriver),
+		onClose: func() {
+			closed = true
+			if _, ok := host.Adapter("chwp01"); ok {
+				t.Fatal("adapter should already be removed before Close runs")
+			}
+		},
+	}
+	if err := host.RegisterAdapter(driver); err != nil {
+		t.Fatal(err)
+	}
+	if !host.UnregisterDevice("chwp01") {
+		t.Fatal("expected UnregisterDevice to return true")
+	}
+	if !closed {
+		t.Fatal("expected Close() to be called outside host lock")
+	}
+	if host.UnregisterDevice("chwp01") {
+		t.Fatal("expected second UnregisterDevice to return false")
+	}
+}

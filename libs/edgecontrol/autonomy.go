@@ -174,31 +174,11 @@ func NewHydraulicInterlockController(cfg HydraulicInterlockConfig) (*HydraulicIn
 		id = DefaultHydraulicInterlockID
 	}
 
-	freqSet := make(map[string]struct{}, len(cfg.PumpFrequencyAddrs)+len(cfg.ChilledWaterPumps))
-	freqAddrs := make([]string, 0, len(cfg.PumpFrequencyAddrs)+len(cfg.ChilledWaterPumps))
-	addFreq := func(addr string) {
-		addr = strings.TrimSpace(addr)
-		if addr == "" {
-			return
-		}
-		if _, dup := freqSet[addr]; dup {
-			return
-		}
-		freqSet[addr] = struct{}{}
-		freqAddrs = append(freqAddrs, addr)
-	}
-	for _, addr := range cfg.PumpFrequencyAddrs {
-		addFreq(addr)
-	}
-	for _, pump := range cfg.ChilledWaterPumps {
-		addFreq(pump.FrequencyCommand)
-	}
-
 	return &HydraulicInterlockController{
 		id:                 id,
 		chillers:           slices.Clone(cfg.Chillers),
 		chwPumps:           slices.Clone(cfg.ChilledWaterPumps),
-		pumpFrequencyAddrs: freqAddrs,
+		pumpFrequencyAddrs: collectPumpFrequencyAddrs(cfg.PumpFrequencyAddrs, cfg.ChilledWaterPumps),
 		policy:             cfg.Policy,
 		trackers:           make(map[string]*compressorCycleTracker, len(cfg.Chillers)),
 		lastBlockedReasons: make(map[string]string),
@@ -224,8 +204,18 @@ func (c *HydraulicInterlockController) UpdatePolicy(policy AutonomyPolicyConfig)
 
 // UpdateBindings hot-updates equipment bindings when driver config shadow changes.
 func (c *HydraulicInterlockController) UpdateBindings(chillers []ChillerInterlockBinding, chwPumps []PumpInterlockBinding, pumpFrequencyAddrs []string) {
+	dedup := collectPumpFrequencyAddrs(pumpFrequencyAddrs, chwPumps)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.chillers = slices.Clone(chillers)
+	c.chwPumps = slices.Clone(chwPumps)
+	c.pumpFrequencyAddrs = dedup
+}
+
+func collectPumpFrequencyAddrs(pumpFrequencyAddrs []string, chwPumps []PumpInterlockBinding) []string {
 	freqSet := make(map[string]struct{}, len(pumpFrequencyAddrs)+len(chwPumps))
-	dedup := make([]string, 0, len(pumpFrequencyAddrs)+len(chwPumps))
+	out := make([]string, 0, len(pumpFrequencyAddrs)+len(chwPumps))
 	addFreq := func(addr string) {
 		addr = strings.TrimSpace(addr)
 		if addr == "" {
@@ -235,7 +225,7 @@ func (c *HydraulicInterlockController) UpdateBindings(chillers []ChillerInterloc
 			return
 		}
 		freqSet[addr] = struct{}{}
-		dedup = append(dedup, addr)
+		out = append(out, addr)
 	}
 	for _, addr := range pumpFrequencyAddrs {
 		addFreq(addr)
@@ -243,12 +233,7 @@ func (c *HydraulicInterlockController) UpdateBindings(chillers []ChillerInterloc
 	for _, pump := range chwPumps {
 		addFreq(pump.FrequencyCommand)
 	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.chillers = slices.Clone(chillers)
-	c.chwPumps = slices.Clone(chwPumps)
-	c.pumpFrequencyAddrs = dedup
+	return out
 }
 
 // Policy returns a copy of the active policy config.
@@ -713,68 +698,88 @@ func (c *AutonomousFallbackController) Run(_ context.Context, img ProcessImage, 
 
 	c.fallbackActive = true
 
-	targetSetpoint := c.policy.DefaultChilledWaterSupplySetpointC
-	for _, ch := range c.chillers {
-		if ch.SupplySetpointAddr == "" || faultChannelActive(img, ch.FaultAddr) {
-			delete(c.currentSetpoints, ch.SupplySetpointAddr)
-			continue
-		}
-		snap, ok := img.Get(ch.SupplySetpointAddr)
-		if !ok || snap.Descriptor.DataType != DataTypeDouble || snap.Descriptor.Access == AccessReadOnly {
-			continue
-		}
-		next := stepBumplessSetpoint(c.currentSetpoints, snap, ch.SupplySetpointAddr, targetSetpoint, c.setpointRampRate, dt)
-		if _, _, err := plan.Request(ch.SupplySetpointAddr, c.id, DoubleValue(next)); err != nil {
-			return err
-		}
+	chillerTargets := make([]fallbackTargetSpec, len(c.chillers))
+	for i, ch := range c.chillers {
+		chillerTargets[i] = fallbackTargetSpec{targetAddr: ch.SupplySetpointAddr, faultAddr: ch.FaultAddr}
+	}
+	if err := applyFallbackTargets(img, plan, c.id, chillerTargets, c.currentSetpoints, c.policy.DefaultChilledWaterSupplySetpointC, c.setpointRampRate, dt, nil); err != nil {
+		return err
 	}
 
 	targetFreq := clampFloat(c.policy.DefaultPumpFrequencyHz, c.policy.MinPumpFrequencyHz, c.policy.MaxPumpFrequencyHz)
-	for _, pump := range c.pumps {
-		if pump.FrequencyAddr == "" || faultChannelActive(img, pump.FaultAddr) {
-			delete(c.currentFreqs, pump.FrequencyAddr)
+	pumpTargets := make([]fallbackTargetSpec, len(c.pumps))
+	for i, pump := range c.pumps {
+		pumpTargets[i] = fallbackTargetSpec{targetAddr: pump.FrequencyAddr, faultAddr: pump.FaultAddr}
+	}
+	clampFreq := func(v float64) float64 {
+		return clampFloat(v, c.policy.MinPumpFrequencyHz, c.policy.MaxPumpFrequencyHz)
+	}
+	return applyFallbackTargets(img, plan, c.id, pumpTargets, c.currentFreqs, targetFreq, c.freqRampRate, dt, clampFreq)
+}
+
+type fallbackTargetSpec struct {
+	targetAddr string
+	faultAddr  string
+}
+
+func applyFallbackTargets(
+	img ProcessImage,
+	plan *ControlPlan,
+	controllerID string,
+	targets []fallbackTargetSpec,
+	state map[string]float64,
+	target float64,
+	ratePerSec float64,
+	dt time.Duration,
+	clampFn func(float64) float64,
+) error {
+	for _, spec := range targets {
+		if spec.targetAddr == "" || faultChannelActive(img, spec.faultAddr) {
+			delete(state, spec.targetAddr)
 			continue
 		}
-		snap, ok := img.Get(pump.FrequencyAddr)
+		snap, ok := img.Get(spec.targetAddr)
 		if !ok || snap.Descriptor.DataType != DataTypeDouble || snap.Descriptor.Access == AccessReadOnly {
 			continue
 		}
-		next := stepBumplessSetpoint(c.currentFreqs, snap, pump.FrequencyAddr, targetFreq, c.freqRampRate, dt)
-		next = clampFloat(next, c.policy.MinPumpFrequencyHz, c.policy.MaxPumpFrequencyHz)
-		c.currentFreqs[pump.FrequencyAddr] = next
-		if _, _, err := plan.Request(pump.FrequencyAddr, c.id, DoubleValue(next)); err != nil {
+		next, tracked := stepBumplessSetpoint(state, snap, spec.targetAddr, target, ratePerSec, dt)
+		if clampFn != nil {
+			next = clampFn(next)
+			if tracked {
+				state[spec.targetAddr] = next
+			}
+		}
+		if _, _, err := plan.Request(spec.targetAddr, controllerID, DoubleValue(next)); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
-func stepBumplessSetpoint(state map[string]float64, snap ChannelSnapshot, addr string, target, ratePerSec float64, dt time.Duration) float64 {
+func stepBumplessSetpoint(state map[string]float64, snap ChannelSnapshot, addr string, target, ratePerSec float64, dt time.Duration) (float64, bool) {
 	if ratePerSec <= 0 {
 		state[addr] = target
-		return target
+		return target, true
 	}
 	cur, initialized := state[addr]
 	if !initialized {
-		if snap.HasValue {
+		if snap.HasValue && snap.Sample.Quality == QualityGood {
 			if v, ok := snap.Sample.Value.NumericFloat64(); ok && isFiniteFloat(v) {
 				state[addr] = v
-				return v
+				return v, true
 			}
 		}
-		state[addr] = target
-		return target
+		return target, false
 	}
 	if dt <= 0 {
 		state[addr] = cur
-		return cur
+		return cur, true
 	}
 	maxStep := ratePerSec * dt.Seconds()
 	delta := target - cur
 	if math.Abs(delta) <= maxStep {
 		state[addr] = target
-		return target
+		return target, true
 	}
 	if delta > 0 {
 		cur += maxStep
@@ -782,7 +787,7 @@ func stepBumplessSetpoint(state map[string]float64, snap ChannelSnapshot, addr s
 		cur -= maxStep
 	}
 	state[addr] = cur
-	return cur
+	return cur, true
 }
 
 func clampFloat(v, minVal, maxVal float64) float64 {

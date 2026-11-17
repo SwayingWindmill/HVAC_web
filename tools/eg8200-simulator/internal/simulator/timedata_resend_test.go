@@ -138,7 +138,6 @@ func TestTimedataResendQueuePriorityDrainCrashRecoveryAndMetrics(t *testing.T) {
 		}
 	}
 
-	// Phase 1: Record 1 cycle online and sync online baseline cursor so it is NOT replayed.
 	t0 := time.Date(2026, 11, 17, 16, 0, 0, 0, time.UTC)
 	for _, name := range []string{"low_pt", "med_pt", "high_pt", "vh_pt"} {
 		stub.samples["DEV-REPLAY/"+name] = edgecontrol.Sample{Value: edgecontrol.DoubleValue(1), Quality: edgecontrol.QualityGood, ObservedAt: t0}
@@ -188,7 +187,6 @@ func TestTimedataResendQueuePriorityDrainCrashRecoveryAndMetrics(t *testing.T) {
 		t.Fatalf("SyncOnlineBaseline() error = %v", err)
 	}
 
-	// Phase 2: Disconnect, record 2 offline cycles per priority (notice LOW appears before VERY_HIGH in file).
 	queue.SetOnlineSynced(false)
 	for cycle := 1; cycle <= 2; cycle++ {
 		at := t0.Add(time.Duration(cycle*5) * time.Second)
@@ -201,8 +199,6 @@ func TestTimedataResendQueuePriorityDrainCrashRecoveryAndMetrics(t *testing.T) {
 		}
 	}
 
-	// Phase 3: Reconnect and simulate crash after 3 batches (2 VERY_HIGH batches + 1 HIGH batch),
-	// failing on the 4th publish (2nd HIGH batch).
 	mu.Lock()
 	failAfterCount = 3
 	mu.Unlock()
@@ -214,7 +210,6 @@ func TestTimedataResendQueuePriorityDrainCrashRecoveryAndMetrics(t *testing.T) {
 	if len(publishedEnvelopes) != 3 {
 		t.Fatalf("expected 3 published replay batches before simulated crash, got %d", len(publishedEnvelopes))
 	}
-	// Verify strict priority order of the first 3 batches: vh_pt, vh_pt, high_pt
 	gotCodesBeforeCrash := []string{
 		publishedEnvelopes[0].Payload.Devices[0].Points[0].Code,
 		publishedEnvelopes[1].Payload.Devices[0].Points[0].Code,
@@ -225,7 +220,6 @@ func TestTimedataResendQueuePriorityDrainCrashRecoveryAndMetrics(t *testing.T) {
 		t.Fatalf("unexpected priority replay order before crash: %v", gotCodesBeforeCrash)
 	}
 
-	// Phase 4: Reopen queue from disk (crash recovery), clear failure injection, drain remaining.
 	restartedQueue, err := NewTimedataResendQueue(TimedataResendConfig{
 		GatewayID:     gatewayID,
 		Timedata:      timedata,
@@ -270,19 +264,128 @@ func TestTimedataResendQueuePriorityDrainCrashRecoveryAndMetrics(t *testing.T) {
 		t.Fatalf("expected strict VERY_HIGH->HIGH->MEDIUM->LOW replay order %v without duplicates, got %v", wantOrder, allCodes)
 	}
 
-	// Verify metric hvac_edge_mqtt_replay_batches_total{priority=...} == 2 for each priority.
 	for _, prio := range ResendPriorityOrder {
 		if got := metricCounterValue(t, registry, "hvac_edge_mqtt_replay_batches_total", "priority", string(prio)); got != 2 {
 			t.Fatalf("metric %s{priority=%s} = %v, want 2", "hvac_edge_mqtt_replay_batches_total", prio, got)
 		}
 	}
 
-	// Re-draining after completion should emit 0 batches.
 	noopRes, err := restartedQueue.Drain(context.Background())
 	if err != nil {
 		t.Fatalf("idempotent Drain() error = %v", err)
 	}
 	if noopRes.BatchesReplayed != 0 || noopRes.RecordsReplayed != 0 {
 		t.Fatalf("expected 0 batches on clean re-drain, got %+v", noopRes)
+	}
+}
+
+func TestTimedataResendQueueMarkPublishedContiguousAndRestart(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	timedataDir := filepath.Join(dir, "timedata")
+	cursorPath := filepath.Join(dir, "resend-cursor.json")
+	const gatewayID = "0193f000-2000-7000-8000-000000000088"
+
+	timedata, err := edgecontrol.OpenFileTimedata(timedataDir, edgecontrol.PriorityLow)
+	if err != nil {
+		t.Fatalf("OpenFileTimedata() error = %v", err)
+	}
+	host, err := edgecontrol.NewHost()
+	if err != nil {
+		t.Fatalf("NewHost() error = %v", err)
+	}
+	makeCh := func(id string) edgecontrol.ChannelDescriptor {
+		return edgecontrol.ChannelDescriptor{
+			ComponentID:               "DEV-ACK",
+			ChannelID:                 id,
+			PointID:                   "DEV-ACK:" + id,
+			DataType:                  edgecontrol.DataTypeDouble,
+			Access:                    edgecontrol.AccessReadOnly,
+			Unit:                      "degC",
+			Category:                  edgecontrol.ChannelCategoryOpenemsType,
+			PollPriority:              edgecontrol.PriorityHigh,
+			LocalPersistencePriority:  edgecontrol.PriorityHigh,
+			RemotePersistencePriority: edgecontrol.PriorityHigh,
+			AggregationPriority:       edgecontrol.PriorityHigh,
+			ResendPriority:            edgecontrol.PriorityHigh,
+		}
+	}
+	stub := &resendStubDevice{
+		component: edgecontrol.ComponentDescriptor{
+			ID:        "DEV-ACK",
+			Enabled:   true,
+			Kind:      edgecontrol.ComponentDeviceDriver,
+			Type:      "DECLARATIVE_MODBUS_TCP",
+			FactoryID: edgecontrol.DeclarativeModbusFactoryID,
+			Version:   "1.0.0",
+		},
+		channels: []edgecontrol.ChannelDescriptor{makeCh("p1"), makeCh("p2")},
+		samples:  map[string]edgecontrol.Sample{},
+	}
+	if err := host.RegisterAdapter(stub); err != nil {
+		t.Fatalf("RegisterAdapter() error = %v", err)
+	}
+	if err := host.Start(nil); err != nil {
+		t.Fatalf("host.Start() error = %v", err)
+	}
+	if err := host.AttachTimedata(timedata); err != nil {
+		t.Fatalf("AttachTimedata() error = %v", err)
+	}
+
+	t1 := time.Date(2026, 11, 17, 20, 0, 0, 0, time.UTC)
+	stub.samples["DEV-ACK/p1"] = edgecontrol.Sample{Value: edgecontrol.DoubleValue(11), Quality: edgecontrol.QualityGood, ObservedAt: t1}
+	stub.samples["DEV-ACK/p2"] = edgecontrol.Sample{Value: edgecontrol.DoubleValue(22), Quality: edgecontrol.QualityGood, ObservedAt: t1}
+	if _, err := host.RunCycle(context.Background(), t1); err != nil {
+		t.Fatalf("RunCycle error = %v", err)
+	}
+
+	var mu sync.Mutex
+	var replayed []mqttTelemetryEnvelope
+	queueCfg := TimedataResendConfig{
+		GatewayID:  gatewayID,
+		Timedata:   timedata,
+		CursorPath: cursorPath,
+		BatchSize:  10,
+		PointMetadata: func(addr string) TimedataResendPointMeta {
+			dev, code, _ := strings.Cut(addr, "/")
+			return TimedataResendPointMeta{DeviceID: dev, PointCode: code, Priority: edgecontrol.PriorityHigh}
+		},
+		Publish: func(_ context.Context, _ string, payload []byte) error {
+			var env mqttTelemetryEnvelope
+			if err := json.Unmarshal(payload, &env); err == nil {
+				mu.Lock()
+				replayed = append(replayed, env)
+				mu.Unlock()
+			}
+			return nil
+		},
+	}
+	q1, err := NewTimedataResendQueue(queueCfg)
+	if err != nil {
+		t.Fatalf("NewTimedataResendQueue() error = %v", err)
+	}
+	if err := q1.MarkPublishedObservations([]PublishedObservation{{Address: "DEV-ACK/p2", ObservedAt: t1}}); err != nil {
+		t.Fatalf("MarkPublishedObservations() error = %v", err)
+	}
+	if got := q1.CursorSnapshot().ByPriority[edgecontrol.PriorityHigh]; got != 0 {
+		t.Fatalf("expected HIGH cursor 0 before un-acked p1, got %d", got)
+	}
+
+	q2, err := NewTimedataResendQueue(queueCfg)
+	if err != nil {
+		t.Fatalf("reopened NewTimedataResendQueue() error = %v", err)
+	}
+	res, err := q2.Drain(context.Background())
+	if err != nil {
+		t.Fatalf("Drain() error = %v", err)
+	}
+	if res.RecordsReplayed != 1 {
+		t.Fatalf("expected exactly 1 un-acked record replayed (p1), got %+v", res)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(replayed) != 1 || len(replayed[0].Payload.Devices) != 1 || len(replayed[0].Payload.Devices[0].Points) != 1 || replayed[0].Payload.Devices[0].Points[0].Code != "p1" {
+		t.Fatalf("expected only DEV-ACK/p1 replayed, got %+v", replayed)
 	}
 }

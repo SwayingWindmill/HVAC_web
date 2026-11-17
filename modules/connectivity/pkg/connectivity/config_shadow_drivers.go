@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"math"
 	"slices"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 )
 
 const (
@@ -19,7 +19,6 @@ const (
 
 	maxDriverConfigsJSONBytes  = 262144
 	maxAutonomyPolicyJSONBytes = 65536
-	maxDriverRegisters         = 256
 )
 
 type GatewayModbusRegisterMapping struct {
@@ -109,10 +108,6 @@ func (o *OptionalAutonomyPolicy) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func isFiniteShadowFloat(v float64) bool {
-	return !math.IsNaN(v) && !math.IsInf(v, 0)
-}
-
 func normalizeZeroFloat(v float64) float64 {
 	if v == 0 {
 		return 0
@@ -120,81 +115,58 @@ func normalizeZeroFloat(v float64) float64 {
 	return v
 }
 
-func validModbusEndianness(value string) bool {
-	return value == "BIG_ENDIAN" || value == "LITTLE_ENDIAN"
-}
-
 func validateDriverConfigs(input []GatewayModbusDriverConfig) ([]GatewayModbusDriverConfig, error) {
 	seenDevices := make(map[string]struct{}, len(input))
 	out := make([]GatewayModbusDriverConfig, 0, len(input))
 	for i, driver := range input {
-		deviceKey := strings.TrimSpace(driver.DeviceKey)
-		if deviceKey == "" || utf8.RuneCountInString(deviceKey) > 128 {
-			return nil, fmt.Errorf("%w: driverConfigs[%d].deviceKey must be 1..128 characters", ErrConfigShadowInvalid, i)
-		}
-		if _, dup := seenDevices[deviceKey]; dup {
-			return nil, fmt.Errorf("%w: duplicate driverConfigs deviceKey %q", ErrConfigShadowInvalid, deviceKey)
-		}
-		seenDevices[deviceKey] = struct{}{}
-
-		driverType := strings.TrimSpace(driver.DriverType)
-		switch driverType {
-		case "MODBUS_TCP", "MODBUS_RTU":
-		default:
-			return nil, fmt.Errorf("%w: driverConfigs[%d].driverType %q is invalid", ErrConfigShadowInvalid, i, driver.DriverType)
-		}
-
-		endpoint := strings.TrimSpace(driver.Endpoint)
-		if endpoint == "" || utf8.RuneCountInString(endpoint) > 256 {
-			return nil, fmt.Errorf("%w: driverConfigs[%d].endpoint must be 1..256 characters", ErrConfigShadowInvalid, i)
-		}
-		if driver.UnitID < 1 || driver.UnitID > 247 {
-			return nil, fmt.Errorf("%w: driverConfigs[%d].unitId=%d out of range [1,247]", ErrConfigShadowInvalid, i, driver.UnitID)
-		}
-		if driver.TimeoutMS < 100 || driver.TimeoutMS > 30000 {
-			return nil, fmt.Errorf("%w: driverConfigs[%d].timeoutMs=%d out of range [100,30000]", ErrConfigShadowInvalid, i, driver.TimeoutMS)
-		}
-		if driver.Retries < 0 || driver.Retries > 10 {
-			return nil, fmt.Errorf("%w: driverConfigs[%d].retries=%d out of range [0,10]", ErrConfigShadowInvalid, i, driver.Retries)
-		}
-
-		capProfile := ""
-		if driver.CapabilityProfile != "" {
-			capProfile = strings.TrimSpace(driver.CapabilityProfile)
-			if capProfile == "" || utf8.RuneCountInString(capProfile) > 64 {
-				return nil, fmt.Errorf("%w: driverConfigs[%d].capabilityProfile must be 1..64 characters", ErrConfigShadowInvalid, i)
-			}
-		}
-
-		if len(driver.Registers) < 1 || len(driver.Registers) > maxDriverRegisters {
-			return nil, fmt.Errorf("%w: driverConfigs[%d].registers must contain 1..%d items", ErrConfigShadowInvalid, i, maxDriverRegisters)
-		}
-
-		seenPoints := make(map[string]struct{}, len(driver.Registers))
-		regs := make([]GatewayModbusRegisterMapping, 0, len(driver.Registers))
+		endpoint := driver.Endpoint
+		unitID := driver.UnitID
+		timeoutMS := driver.TimeoutMS
+		retries := driver.Retries
+		regInputs := make([]edgecontrol.ModbusRegisterInput, len(driver.Registers))
 		for j, reg := range driver.Registers {
-			cleanedReg, err := validateDriverRegisterMapping(reg, i, j)
-			if err != nil {
-				return nil, err
+			regInputs[j] = edgecontrol.ModbusRegisterInput{
+				PointCode:         reg.PointCode,
+				SemanticChannel:   reg.SemanticChannel,
+				FunctionCode:      reg.FunctionCode,
+				WriteFunctionCode: cloneOptionalInt(reg.WriteFunctionCode),
+				Address:           reg.Address,
+				RegisterCount:     reg.RegisterCount,
+				RawType:           reg.RawType,
+				ByteOrder:         reg.ByteOrder,
+				WordOrder:         reg.WordOrder,
+				BitIndex:          cloneOptionalInt(reg.BitIndex),
+				Scale:             reg.Scale,
+				Offset:            reg.Offset,
+				PollPriority:      reg.PollPriority,
+				EnumMap:           reg.EnumMap,
 			}
-			if _, dup := seenPoints[cleanedReg.PointCode]; dup {
-				return nil, fmt.Errorf("%w: duplicate register pointCode %q in driverConfigs[%d]", ErrConfigShadowInvalid, cleanedReg.PointCode, i)
-			}
-			seenPoints[cleanedReg.PointCode] = struct{}{}
-			regs = append(regs, cleanedReg)
 		}
-		slices.SortFunc(regs, compareRegisterMappings)
 
-		out = append(out, GatewayModbusDriverConfig{
-			DeviceKey:         deviceKey,
-			DriverType:        driverType,
-			Endpoint:          endpoint,
-			UnitID:            driver.UnitID,
-			CapabilityProfile: capProfile,
-			TimeoutMS:         driver.TimeoutMS,
-			Retries:           driver.Retries,
-			Registers:         regs,
+		profile, err := edgecontrol.ValidateModbusDriverInput(edgecontrol.ModbusDriverInput{
+			DeviceKey:         driver.DeviceKey,
+			DriverType:        driver.DriverType,
+			Endpoint:          &endpoint,
+			UnitID:            &unitID,
+			CapabilityProfile: driver.CapabilityProfile,
+			TimeoutMS:         &timeoutMS,
+			Retries:           &retries,
+			Registers:         regInputs,
+		}, edgecontrol.ModbusDriverValidationOptions{
+			RequireDeviceKey:       true,
+			RequireGatewayBindings: true,
 		})
+		if err != nil {
+			return nil, fmt.Errorf("%w: driverConfigs[%d]: %v", ErrConfigShadowInvalid, i, err)
+		}
+		if _, dup := seenDevices[profile.ComponentID]; dup {
+			return nil, fmt.Errorf("%w: duplicate driverConfigs deviceKey %q", ErrConfigShadowInvalid, profile.ComponentID)
+		}
+		seenDevices[profile.ComponentID] = struct{}{}
+
+		cleaned := driverConfigFromEdgeProfile(profile)
+		slices.SortFunc(cleaned.Registers, compareRegisterMappings)
+		out = append(out, cleaned)
 	}
 	slices.SortFunc(out, func(a, b GatewayModbusDriverConfig) int {
 		return strings.Compare(a.DeviceKey, b.DeviceKey)
@@ -202,156 +174,58 @@ func validateDriverConfigs(input []GatewayModbusDriverConfig) ([]GatewayModbusDr
 	return out, nil
 }
 
-func validateDriverRegisterMapping(reg GatewayModbusRegisterMapping, driverIdx, regIdx int) (GatewayModbusRegisterMapping, error) {
-	pointCode := strings.TrimSpace(reg.PointCode)
-	if !shadowPointCodePattern.MatchString(pointCode) {
-		return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].pointCode %q is invalid", ErrConfigShadowInvalid, driverIdx, regIdx, reg.PointCode)
-	}
-	semanticChannel := ""
-	if reg.SemanticChannel != "" {
-		semanticChannel = strings.TrimSpace(reg.SemanticChannel)
-		if semanticChannel == "" || utf8.RuneCountInString(semanticChannel) > 64 {
-			return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].semanticChannel must be 1..64 characters", ErrConfigShadowInvalid, driverIdx, regIdx)
+func driverConfigFromEdgeProfile(profile edgecontrol.DeclarativeModbusProfile) GatewayModbusDriverConfig {
+	regs := make([]GatewayModbusRegisterMapping, len(profile.Registers))
+	for i, spec := range profile.Registers {
+		var writeFC *int
+		if spec.WriteFunctionCode != 0 {
+			w := int(spec.WriteFunctionCode)
+			writeFC = &w
+		}
+		var bitIndex *int
+		if spec.RawType == edgecontrol.ModbusRawBitBool {
+			b := spec.BitIndex
+			bitIndex = &b
+		}
+		var enumMap map[string]string
+		if len(spec.EnumMap) > 0 {
+			enumMap = maps.Clone(spec.EnumMap)
+		}
+		regs[i] = GatewayModbusRegisterMapping{
+			PointCode:         spec.PointCode,
+			SemanticChannel:   string(spec.SemanticChannel),
+			FunctionCode:      int(spec.FunctionCode),
+			WriteFunctionCode: writeFC,
+			Address:           int(spec.Address),
+			RegisterCount:     int(spec.RegisterCount),
+			RawType:           string(spec.RawType),
+			ByteOrder:         string(spec.ByteOrder),
+			WordOrder:         string(spec.WordOrder),
+			BitIndex:          bitIndex,
+			Scale:             spec.Scale,
+			Offset:            normalizeZeroFloat(spec.Offset),
+			PollPriority:      string(spec.PollPriority),
+			EnumMap:           enumMap,
 		}
 	}
-	if reg.FunctionCode != 3 && reg.FunctionCode != 4 {
-		return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].functionCode=%d must be 3 or 4", ErrConfigShadowInvalid, driverIdx, regIdx, reg.FunctionCode)
+	return GatewayModbusDriverConfig{
+		DeviceKey:         profile.ComponentID,
+		DriverType:        string(profile.DriverType),
+		Endpoint:          profile.Endpoint,
+		UnitID:            int(profile.UnitID),
+		CapabilityProfile: string(profile.CapabilityProfile),
+		TimeoutMS:         profile.TimeoutMS,
+		Retries:           profile.Retries,
+		Registers:         regs,
 	}
-	var writeFC *int
-	if reg.WriteFunctionCode != nil {
-		if *reg.WriteFunctionCode != 6 && *reg.WriteFunctionCode != 16 {
-			return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].writeFunctionCode=%d must be 6 or 16", ErrConfigShadowInvalid, driverIdx, regIdx, *reg.WriteFunctionCode)
-		}
-		v := *reg.WriteFunctionCode
-		writeFC = &v
-	}
-	if reg.Address < 0 || reg.Address > 65535 {
-		return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].address=%d out of range [0,65535]", ErrConfigShadowInvalid, driverIdx, regIdx, reg.Address)
-	}
-
-	rawType := strings.TrimSpace(reg.RawType)
-	var expectedCount int
-	switch rawType {
-	case "UINT16", "INT16", "BIT_BOOL", "ENUM16":
-		expectedCount = 1
-	case "UINT32", "INT32", "FLOAT32":
-		expectedCount = 2
-	default:
-		return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].rawType %q is invalid", ErrConfigShadowInvalid, driverIdx, regIdx, reg.RawType)
-	}
-	if reg.RegisterCount < 1 || reg.RegisterCount > 4 || reg.RegisterCount != expectedCount {
-		return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].registerCount=%d must equal %d for %s", ErrConfigShadowInvalid, driverIdx, regIdx, reg.RegisterCount, expectedCount, rawType)
-	}
-
-	byteOrder := strings.TrimSpace(reg.ByteOrder)
-	if !validModbusEndianness(byteOrder) {
-		return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].byteOrder %q is invalid", ErrConfigShadowInvalid, driverIdx, regIdx, reg.ByteOrder)
-	}
-	wordOrder := strings.TrimSpace(reg.WordOrder)
-	if !validModbusEndianness(wordOrder) {
-		return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].wordOrder %q is invalid", ErrConfigShadowInvalid, driverIdx, regIdx, reg.WordOrder)
-	}
-
-	var bitIndex *int
-	if rawType == "BIT_BOOL" {
-		if reg.BitIndex == nil || *reg.BitIndex < 0 || *reg.BitIndex > 15 {
-			return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].bitIndex must be in [0,15] for BIT_BOOL", ErrConfigShadowInvalid, driverIdx, regIdx)
-		}
-		v := *reg.BitIndex
-		bitIndex = &v
-	} else if reg.BitIndex != nil {
-		return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].bitIndex is only valid for BIT_BOOL", ErrConfigShadowInvalid, driverIdx, regIdx)
-	}
-
-	if !isFiniteShadowFloat(reg.Scale) || reg.Scale == 0 {
-		return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].scale must be finite and non-zero", ErrConfigShadowInvalid, driverIdx, regIdx)
-	}
-	if !isFiniteShadowFloat(reg.Offset) {
-		return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].offset must be finite", ErrConfigShadowInvalid, driverIdx, regIdx)
-	}
-
-	pollPriority := strings.TrimSpace(reg.PollPriority)
-	switch pollPriority {
-	case "VERY_HIGH", "HIGH", "MEDIUM", "LOW":
-	default:
-		return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].pollPriority %q is invalid", ErrConfigShadowInvalid, driverIdx, regIdx, reg.PollPriority)
-	}
-
-	var enumMap map[string]string
-	if rawType == "ENUM16" {
-		if len(reg.EnumMap) == 0 {
-			return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].enumMap must be non-empty for ENUM16", ErrConfigShadowInvalid, driverIdx, regIdx)
-		}
-		enumMap = make(map[string]string, len(reg.EnumMap))
-		for rawK, rawV := range reg.EnumMap {
-			k := strings.TrimSpace(rawK)
-			v := strings.TrimSpace(rawV)
-			if k == "" {
-				return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].enumMap key must be non-empty", ErrConfigShadowInvalid, driverIdx, regIdx)
-			}
-			if _, dup := enumMap[k]; dup {
-				return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].enumMap has duplicate key %q", ErrConfigShadowInvalid, driverIdx, regIdx, k)
-			}
-			if v == "" || utf8.RuneCountInString(v) > 64 {
-				return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].enumMap[%q] must be 1..64 characters", ErrConfigShadowInvalid, driverIdx, regIdx, k)
-			}
-			enumMap[k] = v
-		}
-	} else if len(reg.EnumMap) > 0 {
-		return GatewayModbusRegisterMapping{}, fmt.Errorf("%w: driverConfigs[%d].registers[%d].enumMap is only valid for ENUM16", ErrConfigShadowInvalid, driverIdx, regIdx)
-	}
-
-	return GatewayModbusRegisterMapping{
-		PointCode:         pointCode,
-		SemanticChannel:   semanticChannel,
-		FunctionCode:      reg.FunctionCode,
-		WriteFunctionCode: writeFC,
-		Address:           reg.Address,
-		RegisterCount:     reg.RegisterCount,
-		RawType:           rawType,
-		ByteOrder:         byteOrder,
-		WordOrder:         wordOrder,
-		BitIndex:          bitIndex,
-		Scale:             reg.Scale,
-		Offset:            normalizeZeroFloat(reg.Offset),
-		PollPriority:      pollPriority,
-		EnumMap:           enumMap,
-	}, nil
 }
 
 func validateAutonomyPolicy(input *GatewayAutonomyPolicy) (*GatewayAutonomyPolicy, error) {
 	if input == nil {
 		return nil, nil
 	}
-	if input.OfflineGraceSeconds < 10 || input.OfflineGraceSeconds > 3600 {
-		return nil, fmt.Errorf("%w: autonomyPolicy.offlineGraceSeconds=%d out of range [10,3600]", ErrConfigShadowInvalid, input.OfflineGraceSeconds)
-	}
-	if !isFiniteShadowFloat(input.DefaultChilledWaterSupplySetpointC) || input.DefaultChilledWaterSupplySetpointC < 4 || input.DefaultChilledWaterSupplySetpointC > 18 {
-		return nil, fmt.Errorf("%w: autonomyPolicy.defaultChilledWaterSupplySetpointC=%v out of range [4,18]", ErrConfigShadowInvalid, input.DefaultChilledWaterSupplySetpointC)
-	}
-	for _, freq := range []struct {
-		name string
-		val  float64
-	}{
-		{"minPumpFrequencyHz", input.MinPumpFrequencyHz},
-		{"defaultPumpFrequencyHz", input.DefaultPumpFrequencyHz},
-		{"maxPumpFrequencyHz", input.MaxPumpFrequencyHz},
-	} {
-		if !isFiniteShadowFloat(freq.val) || freq.val < 15 || freq.val > 50 {
-			return nil, fmt.Errorf("%w: autonomyPolicy.%s=%v out of range [15,50]", ErrConfigShadowInvalid, freq.name, freq.val)
-		}
-	}
-	if input.MinPumpFrequencyHz > input.DefaultPumpFrequencyHz || input.DefaultPumpFrequencyHz > input.MaxPumpFrequencyHz {
-		return nil, fmt.Errorf("%w: autonomyPolicy pump frequencies must satisfy min <= default <= max", ErrConfigShadowInvalid)
-	}
-	if input.MinRunSeconds < 0 || input.MinRunSeconds > 3600 {
-		return nil, fmt.Errorf("%w: autonomyPolicy.minRunSeconds=%d out of range [0,3600]", ErrConfigShadowInvalid, input.MinRunSeconds)
-	}
-	if input.MinStopSeconds < 0 || input.MinStopSeconds > 3600 {
-		return nil, fmt.Errorf("%w: autonomyPolicy.minStopSeconds=%d out of range [0,3600]", ErrConfigShadowInvalid, input.MinStopSeconds)
-	}
-	if input.SnapshotIntervalSeconds < 30 || input.SnapshotIntervalSeconds > 3600 {
-		return nil, fmt.Errorf("%w: autonomyPolicy.snapshotIntervalSeconds=%d out of range [30,3600]", ErrConfigShadowInvalid, input.SnapshotIntervalSeconds)
+	if err := edgecontrol.AutonomyPolicyConfig(*input).Validate(); err != nil {
+		return nil, fmt.Errorf("%w: autonomyPolicy: %v", ErrConfigShadowInvalid, err)
 	}
 	cp := *input
 	return &cp, nil

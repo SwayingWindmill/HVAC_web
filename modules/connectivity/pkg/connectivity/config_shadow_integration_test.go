@@ -343,10 +343,10 @@ func TestConfigShadowPostgresRLSConcurrencyAndDrift(t *testing.T) {
 	bitZero := 0
 	driversRev8 := []connectivity.GatewayModbusDriverConfig{
 		{
-			DeviceKey: "vfd-b", DriverType: "MODBUS_RTU", Endpoint: "/dev/ttyS1", UnitID: 4, CapabilityProfile: "vfd.atv630", TimeoutMS: 1200, Retries: 2,
+			DeviceKey: "vfd-b", DriverType: "MODBUS_RTU", Endpoint: "/dev/ttyS1", UnitID: 4, CapabilityProfile: "VARIABLE_SPEED_PUMP", TimeoutMS: 1200, Retries: 2,
 			Registers: []connectivity.GatewayModbusRegisterMapping{
-				{PointCode: "run_cmd", SemanticChannel: "run", FunctionCode: 3, WriteFunctionCode: &writeFC16, Address: 8501, RegisterCount: 1, RawType: "BIT_BOOL", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", BitIndex: &bitZero, Scale: 1, Offset: 0, PollPriority: "VERY_HIGH"},
-				{PointCode: "drive_state", FunctionCode: 3, Address: 8500, RegisterCount: 1, RawType: "ENUM16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, Offset: 0, PollPriority: "HIGH", EnumMap: map[string]string{"0": "OFF", "1": "RUN"}},
+				{PointCode: "run_cmd", SemanticChannel: "StartCommand", FunctionCode: 3, WriteFunctionCode: &writeFC16, Address: 8501, RegisterCount: 1, RawType: "BIT_BOOL", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", BitIndex: &bitZero, Scale: 1, Offset: 0, PollPriority: "VERY_HIGH"},
+				{PointCode: "drive_state", SemanticChannel: "RunState", FunctionCode: 3, Address: 8500, RegisterCount: 1, RawType: "ENUM16", ByteOrder: "BIG_ENDIAN", WordOrder: "BIG_ENDIAN", Scale: 1, Offset: 0, PollPriority: "HIGH", EnumMap: map[string]string{"0": "OFF", "1": "RUN"}},
 			},
 		},
 		{
