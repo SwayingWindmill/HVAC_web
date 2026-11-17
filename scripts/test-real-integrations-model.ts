@@ -2,20 +2,33 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   PlatformApiError,
+  gatewayQuarantineRecordSchema,
   type ConcentratorAuditItem,
   type ConcentratorChannelReading,
   type ConcentratorEidSlot,
   type ConcentratorParams,
   type EnergySeriesResponse,
+  type GatewayConfigShadow,
   type SiteAssetModel,
 } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
 import type { WorkOrder } from '../apps/hvac-web/src/api/work-orders.ts';
 import type { AssetsSnapshotResult } from '../apps/hvac-web/src/features/assets/operational-projection.ts';
 import {
+  AUTONOMY_POLICY_STATE_PRESENTATION,
+  MODBUS_DRIVER_TYPE_LABELS,
+  MODBUS_FUNCTION_CODE_LABELS,
+  MODBUS_POLL_PRIORITY_PRESENTATION,
+  MODBUS_RAW_TYPE_LABELS,
+  MODBUS_WRITE_FUNCTION_CODE_LABELS,
   buildValidatedShadowUpdateRequest,
+  countDriverRegisters,
+  createDefaultAutonomyPolicyDraft,
+  createEmptyModbusDriverDraft,
+  createEmptyModbusRegisterDraft,
   createShadowEditorDraft,
   formatPointCopyTargets,
   parsePointCopyTargets,
+  summarizeAutonomyPolicyState,
   summarizeConcentratorShadowUnits,
 } from '../apps/hvac-web/src/features/connectivity/gateway-config-shadow-model.ts';
 import {
@@ -1543,4 +1556,182 @@ test('gateway config shadow helpers validate copy targets, preserve concentrator
     retryable: false,
   });
   assert.match(describeGatewayConfigShadowError(conflictErr), /期望修订/);
+});
+
+test('gateway config shadow supports declarative driverConfigs, autonomyPolicy bounds, partial PUT clearing, and P2 drift labels', () => {
+  assert.equal(CONFIG_SHADOW_SECTION_LABELS.DRIVER_CONFIGS, '协议驱动点表');
+  assert.equal(CONFIG_SHADOW_SECTION_LABELS.AUTONOMY_POLICY, '断网自治策略');
+  assert.equal(MODBUS_DRIVER_TYPE_LABELS.MODBUS_TCP, 'Modbus TCP');
+  assert.equal(MODBUS_DRIVER_TYPE_LABELS.MODBUS_RTU, 'Modbus RTU');
+  assert.equal(MODBUS_RAW_TYPE_LABELS.BIT_BOOL, '位布尔');
+  assert.equal(MODBUS_FUNCTION_CODE_LABELS[3], '保持寄存器 FC3');
+  assert.equal(MODBUS_FUNCTION_CODE_LABELS[4], '输入寄存器 FC4');
+  assert.equal(MODBUS_WRITE_FUNCTION_CODE_LABELS['6'], '单写 FC6');
+  assert.equal(MODBUS_WRITE_FUNCTION_CODE_LABELS['16'], '多写 FC16');
+  assert.equal(MODBUS_POLL_PRIORITY_PRESENTATION.VERY_HIGH.label, '极高');
+  assert.equal(AUTONOMY_POLICY_STATE_PRESENTATION.ENABLED.label, '已启用本地自治');
+  assert.equal(AUTONOMY_POLICY_STATE_PRESENTATION.DISABLED.label, '仅云端受控');
+  assert.equal(AUTONOMY_POLICY_STATE_PRESENTATION.UNCONFIGURED.label, '未配置');
+  assert.ok(gatewayQuarantineRecordSchema.shape.reasonCode.options.includes('RATE_LIMITED'));
+
+  const initialShadow: GatewayConfigShadow = {
+    tenantId: TENANT_ID,
+    gatewayId: '01910000-0000-7000-8000-000000000902',
+    syncStatus: 'UNCONFIGURED',
+    drift: [],
+  };
+
+  const baseDriver = createEmptyModbusDriverDraft();
+  const regFloat = {
+    ...createEmptyModbusRegisterDraft(),
+    pointCode: 'chw_supply_temp',
+    functionCode: '3' as const,
+    writeFunctionCode: '6' as const,
+    address: '40001',
+    registerCount: '2',
+    rawType: 'FLOAT32' as const,
+    scale: '1',
+    offset: '0',
+    pollPriority: 'VERY_HIGH' as const,
+  };
+  const regBit = {
+    ...createEmptyModbusRegisterDraft(),
+    pointCode: 'compressor_running',
+    functionCode: '4' as const,
+    address: '100',
+    registerCount: '1',
+    rawType: 'BIT_BOOL' as const,
+    bitIndex: '3',
+    scale: '1',
+    offset: '0',
+    pollPriority: 'HIGH' as const,
+  };
+
+  const initDraft = {
+    ...createShadowEditorDraft(initialShadow),
+    driverConfigs: [
+      {
+        ...baseDriver,
+        deviceKey: 'chiller-01',
+        driverType: 'MODBUS_TCP' as const,
+        endpoint: '192.168.10.21:502',
+        unitId: '2',
+        registers: [regFloat, regBit],
+      },
+    ],
+    autonomyPolicy: {
+      ...createDefaultAutonomyPolicyDraft(),
+      enabled: true,
+      offlineGraceSeconds: '180',
+      defaultChilledWaterSupplySetpointC: '7.5',
+      minPumpFrequencyHz: '28',
+      defaultPumpFrequencyHz: '38',
+      maxPumpFrequencyHz: '48',
+    },
+    reason: '下发冷机协议驱动点表与断网自治策略',
+  };
+
+  const initReq = buildValidatedShadowUpdateRequest(initDraft, initialShadow);
+  assert.equal(initReq.ok, true);
+  if (initReq.ok) {
+    assert.equal(initReq.request.expectedDesiredRevision, 0);
+    assert.equal('pointMappings' in initReq.request, false);
+    assert.equal('samplingPolicies' in initReq.request, false);
+    assert.equal('concentratorConfigs' in initReq.request, false);
+    assert.equal(initReq.request.driverConfigs?.length, 1);
+    assert.equal(countDriverRegisters(initReq.request.driverConfigs), 2);
+    assert.equal(initReq.request.driverConfigs?.[0]?.registers[1]?.bitIndex, 3);
+    assert.equal(initReq.request.autonomyPolicy?.enabled, true);
+    assert.equal(summarizeAutonomyPolicyState(initReq.request.autonomyPolicy), 'ENABLED');
+    assert.equal(summarizeAutonomyPolicyState(null), 'UNCONFIGURED');
+    assert.equal(
+      summarizeAutonomyPolicyState({ ...initReq.request.autonomyPolicy!, enabled: false }),
+      'DISABLED',
+    );
+  }
+
+  // Validation guards: BIT_BOOL requires bitIndex 0..15; pump frequencies enforce min <= default <= max.
+  const missingBitIndex = buildValidatedShadowUpdateRequest(
+    {
+      ...initDraft,
+      driverConfigs: [
+        {
+          ...initDraft.driverConfigs[0]!,
+          registers: [{ ...regBit, bitIndex: '' }],
+        },
+      ],
+    },
+    initialShadow,
+  );
+  assert.equal(missingBitIndex.ok, false);
+
+  const badPumpOrder = buildValidatedShadowUpdateRequest(
+    {
+      ...initDraft,
+      autonomyPolicy: {
+        ...initDraft.autonomyPolicy!,
+        minPumpFrequencyHz: '42',
+        defaultPumpFrequencyHz: '35',
+        maxPumpFrequencyHz: '48',
+      },
+    },
+    initialShadow,
+  );
+  assert.equal(badPumpOrder.ok, false);
+
+  // Partial update when shadow already has driverConfigs + autonomyPolicy:
+  // modifying only autonomyPolicy omits unchanged driverConfigs; clearing sends [] / null.
+  assert.equal(initReq.ok, true);
+  if (initReq.ok) {
+    const activeShadow: GatewayConfigShadow = {
+      tenantId: TENANT_ID,
+      gatewayId: initialShadow.gatewayId,
+      syncStatus: 'SYNCED',
+      desired: {
+        desiredRevision: 5,
+        pointMappings: [],
+        samplingPolicies: [],
+        concentratorConfigs: {},
+        driverConfigs: initReq.request.driverConfigs,
+        autonomyPolicy: initReq.request.autonomyPolicy,
+        updatedBy: TENANT_ID,
+        reason: 'applied',
+        createdAt: '2026-11-16T00:00:00Z',
+        updatedAt: '2026-11-16T01:00:00Z',
+      },
+      drift: [],
+    };
+    const hydrated = createShadowEditorDraft(activeShadow);
+    assert.equal(hydrated.driverConfigs[0]?.registers[1]?.bitIndex, '3');
+    assert.equal(hydrated.autonomyPolicy?.defaultChilledWaterSupplySetpointC, '7.5');
+
+    const toggleOffOnly = buildValidatedShadowUpdateRequest(
+      {
+        ...hydrated,
+        autonomyPolicy: { ...hydrated.autonomyPolicy!, enabled: false },
+        reason: '切换为仅云端受控',
+      },
+      activeShadow,
+    );
+    assert.equal(toggleOffOnly.ok, true);
+    if (toggleOffOnly.ok) {
+      assert.equal('driverConfigs' in toggleOffOnly.request, false);
+      assert.equal(toggleOffOnly.request.autonomyPolicy?.enabled, false);
+    }
+
+    const clearBoth = buildValidatedShadowUpdateRequest(
+      {
+        ...hydrated,
+        driverConfigs: [],
+        autonomyPolicy: null,
+        reason: '清空驱动点表与断网自治策略',
+      },
+      activeShadow,
+    );
+    assert.equal(clearBoth.ok, true);
+    if (clearBoth.ok) {
+      assert.deepEqual(clearBoth.request.driverConfigs, []);
+      assert.equal(clearBoth.request.autonomyPolicy, null);
+    }
+  }
 });

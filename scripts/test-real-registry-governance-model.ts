@@ -117,6 +117,91 @@ test('structured DEVICE template builder validates points, quality rules, capabi
   assert.equal(buildReleaseReferencesFromEntries([{ key: '', value: '' }]).ok, false);
 });
 
+test('DEVICE template summary parses optional modbusDriver metadata and preserves JSON round-trip mode', () => {
+  const withTcpDriver = {
+    deviceType: 'CHILLER',
+    standardPoints: [
+      {
+        pointCode: 'chw_supply_temp',
+        displayName: '冷冻水供水温度',
+        pointType: 'TELEMETRY',
+        valueType: 'NUMBER',
+        unit: 'degC',
+        writable: false,
+        sampleIntervalMs: 5000,
+        publishIntervalMs: 5000,
+        staleAfterMs: 15000,
+      },
+    ],
+    modbusDriver: {
+      driverType: 'MODBUS_TCP',
+      endpoint: '192.168.10.21:502',
+      unitId: 1,
+      timeoutMs: 1000,
+      retries: 2,
+      registers: [
+        {
+          pointCode: 'chw_supply_temp',
+          functionCode: 3,
+          address: 40001,
+          registerCount: 2,
+          rawType: 'FLOAT32',
+          byteOrder: 'BIG_ENDIAN',
+          wordOrder: 'BIG_ENDIAN',
+          scale: 1,
+          offset: 0,
+          pollPriority: 'HIGH',
+        },
+        {
+          pointCode: 'run_state',
+          functionCode: 4,
+          address: 100,
+          registerCount: 1,
+          rawType: 'BIT_BOOL',
+          byteOrder: 'BIG_ENDIAN',
+          wordOrder: 'BIG_ENDIAN',
+          bitIndex: 0,
+          scale: 1,
+          offset: 0,
+          pollPriority: 'VERY_HIGH',
+        },
+      ],
+    },
+  };
+
+  const deviceSummary = summarizeTemplatePayload('DEVICE', withTcpDriver);
+  assert.equal(deviceSummary.standardPointCount, 1);
+  assert.deepEqual(deviceSummary.modbusDriverSummary, {
+    driverType: 'MODBUS_TCP',
+    driverTypeLabel: 'Modbus TCP',
+    registerCount: 2,
+    unitId: 1,
+    endpoint: '192.168.10.21:502',
+  });
+
+  const parsedFallback = parseStructuredDevicePayload(withTcpDriver);
+  assert.equal(parsedFallback.supported, false);
+
+  const withRtuDriver = {
+    modbusDriver: {
+      driverType: 'MODBUS_RTU',
+      registers: [{ pointCode: 'active_power' }],
+    },
+  };
+  assert.deepEqual(summarizeTemplatePayload('DEVICE', withRtuDriver).modbusDriverSummary, {
+    driverType: 'MODBUS_RTU',
+    driverTypeLabel: 'Modbus RTU',
+    registerCount: 1,
+  });
+
+  assert.equal(summarizeTemplatePayload('ASSET', withTcpDriver).modbusDriverSummary, null);
+  assert.equal(
+    summarizeTemplatePayload('DEVICE', { modbusDriver: { driverType: 'BACNET', registers: [] } })
+      .modbusDriverSummary,
+    null,
+  );
+});
+
 test('resource tags helpers enforce key format, filter syntax, and space subtree expansion', () => {
   const validTags = validateAndBuildTagMap([
     { key: 'vendor', value: 'carrier' },

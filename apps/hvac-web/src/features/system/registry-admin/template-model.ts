@@ -64,11 +64,29 @@ export interface StructuredDeviceTemplateDraft {
   readonly capabilityProfiles: readonly CapabilityProfileDraft[];
 }
 
+export type TemplateModbusDriverType = 'MODBUS_TCP' | 'MODBUS_RTU';
+
+const TEMPLATE_MODBUS_DRIVER_TYPES = ['MODBUS_TCP', 'MODBUS_RTU'] as const;
+
+const TEMPLATE_MODBUS_DRIVER_LABELS: Readonly<Record<TemplateModbusDriverType, string>> = {
+  MODBUS_TCP: 'Modbus TCP',
+  MODBUS_RTU: 'Modbus RTU',
+};
+
+export interface TemplateModbusDriverSummary {
+  readonly driverType: TemplateModbusDriverType;
+  readonly driverTypeLabel: string;
+  readonly registerCount: number;
+  readonly unitId?: number;
+  readonly endpoint?: string;
+}
+
 export interface TemplatePayloadSummary {
   readonly deviceType: string | null;
   readonly standardPointCount: number;
   readonly capabilityCount: number;
   readonly hasQualityChecks: boolean;
+  readonly modbusDriverSummary: TemplateModbusDriverSummary | null;
   readonly topKeys: readonly string[];
   readonly kind: TemplateKind;
 }
@@ -464,6 +482,41 @@ export function parseStructuredDevicePayload(payload: Record<string, unknown>): 
   };
 }
 
+export function parseDeviceTemplateModbusDriverSummary(
+  kind: TemplateKind,
+  payload: Record<string, unknown>,
+): TemplateModbusDriverSummary | null {
+  if (kind !== 'DEVICE' || !isPlainRecord(payload.modbusDriver)) {
+    return null;
+  }
+  const driver = payload.modbusDriver;
+  if (!isOneOf(TEMPLATE_MODBUS_DRIVER_TYPES, driver.driverType)) {
+    return null;
+  }
+  if (!Array.isArray(driver.registers)) {
+    return null;
+  }
+  const unitId =
+    typeof driver.unitId === 'number' &&
+    Number.isInteger(driver.unitId) &&
+    driver.unitId >= 1 &&
+    driver.unitId <= 247
+      ? driver.unitId
+      : undefined;
+  const endpoint =
+    typeof driver.endpoint === 'string' && driver.endpoint.trim().length > 0
+      ? driver.endpoint.trim()
+      : undefined;
+
+  return {
+    driverType: driver.driverType,
+    driverTypeLabel: TEMPLATE_MODBUS_DRIVER_LABELS[driver.driverType],
+    registerCount: driver.registers.length,
+    ...(unitId !== undefined ? { unitId } : {}),
+    ...(endpoint !== undefined ? { endpoint } : {}),
+  };
+}
+
 export function summarizeTemplatePayload(
   kind: TemplateKind,
   payload: Record<string, unknown>,
@@ -476,6 +529,7 @@ export function summarizeTemplatePayload(
     standardPointCount: standardPoints,
     capabilityCount: capabilityProfiles,
     hasQualityChecks: payload.qualityChecks !== undefined,
+    modbusDriverSummary: parseDeviceTemplateModbusDriverSummary(kind, payload),
     topKeys: Object.keys(payload).sort(),
   };
 }

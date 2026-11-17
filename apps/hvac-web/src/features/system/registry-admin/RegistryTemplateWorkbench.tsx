@@ -1363,6 +1363,12 @@ export function RegistryTemplateWorkbench({ site, model, capabilities, onDirtyCh
                       控制能力 {previewSummary.capabilityCount} 项
                     </span>
                   ) : null}
+                  {previewSummary.modbusDriverSummary ? (
+                    <span className="rounded border bg-background px-2 py-0.5 tabular-nums">
+                      Modbus 驱动 ({previewSummary.modbusDriverSummary.driverTypeLabel}) ·{' '}
+                      {previewSummary.modbusDriverSummary.registerCount} 寄存器
+                    </span>
+                  ) : null}
                 </div>
                 <div className="text-muted-foreground">
                   发布引用：

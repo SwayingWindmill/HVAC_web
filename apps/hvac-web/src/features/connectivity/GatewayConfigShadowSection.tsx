@@ -26,12 +26,21 @@ import {
   describeGatewayConfigShadowError,
 } from '@/features/integrations/integrations-model';
 import {
+  AUTONOMY_POLICY_STATE_PRESENTATION,
   buildValidatedShadowUpdateRequest,
+  countDriverRegisters,
   createShadowEditorDraft,
   formatPointCopyTargets,
+  summarizeAutonomyPolicyState,
   summarizeConcentratorShadowUnits,
   type GatewayConfigShadowEditorDraft,
 } from './gateway-config-shadow-model';
+import {
+  AutonomyPolicyEditorSection,
+  AutonomyPolicySummaryBlock,
+  DriverConfigsEditorSection,
+  DriverConfigsSummaryBlock,
+} from './GatewayDriverAutonomyFields';
 import { gatewayConfigShadowApi, gatewayConfigShadowKey } from './gateway-credentials';
 
 const SHADOW_TONE_CLASSES = {
@@ -67,7 +76,8 @@ export function GatewayConfigShadowSection({
   readonly stopped: boolean;
 }) {
   const queryClient = useQueryClient();
-  const reasonId = useId();
+  const baseId = useId();
+  const reasonId = `${baseId}-reason`;
   const [editorOpen, setEditorOpen] = useState(false);
   const [draft, setDraft] = useState<GatewayConfigShadowEditorDraft>(() =>
     createShadowEditorDraft(undefined),
@@ -157,7 +167,7 @@ export function GatewayConfigShadowSection({
             disabled={shadowQuery.isFetching}
             onClick={() => void shadowQuery.refetch()}
           >
-            <RefreshCw data-icon="inline-start" />
+            <RefreshCw data-icon="inline-start" aria-hidden="true" />
             刷新影子
           </Button>
           <Button
@@ -166,7 +176,7 @@ export function GatewayConfigShadowSection({
             disabled={editDisabled}
             onClick={openEditor}
           >
-            <Settings2 data-icon="inline-start" />
+            <Settings2 data-icon="inline-start" aria-hidden="true" />
             {shadow?.syncStatus === 'UNCONFIGURED' ? '初始化配置影子' : '编辑配置影子'}
           </Button>
         </div>
@@ -197,15 +207,31 @@ export function GatewayConfigShadowSection({
           if (!updateMutation.isPending) setEditorOpen(nextOpen);
         }}
       >
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[640px]">
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[780px]">
           <DialogHeader>
             <DialogTitle>编辑网关配置影子</DialogTitle>
             <DialogDescription>
-              修改点位映射与采集周期后保存为期望配置，边缘网关在线或重连后自动拉取并回传生效状态。
+              修改协议驱动点表、断网自治策略、点位映射与采集周期后保存为期望配置，边缘网关在线或重连后自动拉取并回传生效状态。
             </DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-col gap-5 py-2 text-sm">
+            <DriverConfigsEditorSection
+              driverConfigs={draft.driverConfigs}
+              disabled={updateMutation.isPending}
+              onChange={(nextDrivers) =>
+                setDraft((current) => ({ ...current, driverConfigs: nextDrivers }))
+              }
+            />
+
+            <AutonomyPolicyEditorSection
+              autonomyPolicy={draft.autonomyPolicy}
+              disabled={updateMutation.isPending}
+              onChange={(nextAutonomy) =>
+                setDraft((current) => ({ ...current, autonomyPolicy: nextAutonomy }))
+              }
+            />
+
             <section aria-label="点位映射设置" className="flex flex-col gap-2.5">
               <div className="flex items-center justify-between">
                 <h4 className="text-xs font-semibold text-foreground">
@@ -231,7 +257,7 @@ export function GatewayConfigShadowSection({
                     }))
                   }
                 >
-                  <Plus data-icon="inline-start" />
+                  <Plus data-icon="inline-start" aria-hidden="true" />
                   新增点位映射
                 </Button>
               </div>
@@ -241,109 +267,122 @@ export function GatewayConfigShadowSection({
                 </p>
               ) : (
                 <div className="flex flex-col gap-2.5">
-                  {draft.pointMappings.map((row, index) => (
-                    <div
-                      key={index}
-                      className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-muted-foreground">
-                          映射 #{index + 1}
-                        </span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label={`删除点位映射 ${index + 1}`}
-                          disabled={updateMutation.isPending}
-                          onClick={() =>
-                            setDraft((current) => ({
-                              ...current,
-                              pointMappings: current.pointMappings.filter((_, i) => i !== index),
-                            }))
-                          }
-                        >
-                          <Trash2 className="size-3.5" />
-                        </Button>
+                  {draft.pointMappings.map((row, index) => {
+                    const rowPrefix = `${baseId}-map-${index}`;
+                    return (
+                      <div
+                        key={index}
+                        className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-muted-foreground">
+                            映射 #{index + 1}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={`删除点位映射 ${index + 1}`}
+                            disabled={updateMutation.isPending}
+                            onClick={() =>
+                              setDraft((current) => ({
+                                ...current,
+                                pointMappings: current.pointMappings.filter((_, i) => i !== index),
+                              }))
+                            }
+                          >
+                            <Trash2 className="size-3.5" aria-hidden="true" />
+                          </Button>
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                          <div className="grid gap-1">
+                            <Label htmlFor={`${rowPrefix}-src`} className="text-xs text-muted-foreground">
+                              源通道
+                            </Label>
+                            <Input
+                              id={`${rowPrefix}-src`}
+                              value={row.sourceChannel}
+                              placeholder="rs485-u1:reg1"
+                              disabled={updateMutation.isPending}
+                              className="h-8 font-mono text-xs"
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setDraft((current) => ({
+                                  ...current,
+                                  pointMappings: current.pointMappings.map((item, i) =>
+                                    i === index ? { ...item, sourceChannel: value } : item,
+                                  ),
+                                }));
+                              }}
+                            />
+                          </div>
+                          <div className="grid gap-1">
+                            <Label htmlFor={`${rowPrefix}-dev`} className="text-xs text-muted-foreground">
+                              主设备标识
+                            </Label>
+                            <Input
+                              id={`${rowPrefix}-dev`}
+                              value={row.primaryDeviceKey}
+                              placeholder="chiller-01"
+                              disabled={updateMutation.isPending}
+                              className="h-8 font-mono text-xs"
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setDraft((current) => ({
+                                  ...current,
+                                  pointMappings: current.pointMappings.map((item, i) =>
+                                    i === index ? { ...item, primaryDeviceKey: value } : item,
+                                  ),
+                                }));
+                              }}
+                            />
+                          </div>
+                          <div className="grid gap-1">
+                            <Label htmlFor={`${rowPrefix}-pt`} className="text-xs text-muted-foreground">
+                              主点位编码
+                            </Label>
+                            <Input
+                              id={`${rowPrefix}-pt`}
+                              value={row.primaryPointCode}
+                              placeholder="supply_temp"
+                              disabled={updateMutation.isPending}
+                              className="h-8 font-mono text-xs"
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setDraft((current) => ({
+                                  ...current,
+                                  pointMappings: current.pointMappings.map((item, i) =>
+                                    i === index ? { ...item, primaryPointCode: value } : item,
+                                  ),
+                                }));
+                              }}
+                            />
+                          </div>
+                        </div>
+                        <div className="grid gap-1">
+                          <Label htmlFor={`${rowPrefix}-copy`} className="text-xs text-muted-foreground">
+                            复用目标（可选，逗号分隔，格式 deviceKey:pointCode）
+                          </Label>
+                          <Input
+                            id={`${rowPrefix}-copy`}
+                            value={row.copyTargetsText}
+                            placeholder="chiller-02:supply_temp"
+                            disabled={updateMutation.isPending}
+                            className="h-8 font-mono text-xs"
+                            onChange={(event) => {
+                              const value = event.currentTarget.value;
+                              setDraft((current) => ({
+                                ...current,
+                                pointMappings: current.pointMappings.map((item, i) =>
+                                  i === index ? { ...item, copyTargetsText: value } : item,
+                                ),
+                              }));
+                            }}
+                          />
+                        </div>
                       </div>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                        <label className="grid gap-1 text-xs">
-                          <span className="text-muted-foreground">源通道</span>
-                          <Input
-                            value={row.sourceChannel}
-                            placeholder="rs485-u1:reg1"
-                            disabled={updateMutation.isPending}
-                            className="h-8 font-mono text-xs"
-                            onChange={(event) => {
-                              const value = event.currentTarget.value;
-                              setDraft((current) => ({
-                                ...current,
-                                pointMappings: current.pointMappings.map((item, i) =>
-                                  i === index ? { ...item, sourceChannel: value } : item,
-                                ),
-                              }));
-                            }}
-                          />
-                        </label>
-                        <label className="grid gap-1 text-xs">
-                          <span className="text-muted-foreground">主设备标识</span>
-                          <Input
-                            value={row.primaryDeviceKey}
-                            placeholder="chiller-01"
-                            disabled={updateMutation.isPending}
-                            className="h-8 font-mono text-xs"
-                            onChange={(event) => {
-                              const value = event.currentTarget.value;
-                              setDraft((current) => ({
-                                ...current,
-                                pointMappings: current.pointMappings.map((item, i) =>
-                                  i === index ? { ...item, primaryDeviceKey: value } : item,
-                                ),
-                              }));
-                            }}
-                          />
-                        </label>
-                        <label className="grid gap-1 text-xs">
-                          <span className="text-muted-foreground">主点位编码</span>
-                          <Input
-                            value={row.primaryPointCode}
-                            placeholder="supply_temp"
-                            disabled={updateMutation.isPending}
-                            className="h-8 font-mono text-xs"
-                            onChange={(event) => {
-                              const value = event.currentTarget.value;
-                              setDraft((current) => ({
-                                ...current,
-                                pointMappings: current.pointMappings.map((item, i) =>
-                                  i === index ? { ...item, primaryPointCode: value } : item,
-                                ),
-                              }));
-                            }}
-                          />
-                        </label>
-                      </div>
-                      <label className="grid gap-1 text-xs">
-                        <span className="text-muted-foreground">
-                          复用目标（可选，逗号分隔，格式 deviceKey:pointCode）
-                        </span>
-                        <Input
-                          value={row.copyTargetsText}
-                          placeholder="chiller-02:supply_temp"
-                          disabled={updateMutation.isPending}
-                          className="h-8 font-mono text-xs"
-                          onChange={(event) => {
-                            const value = event.currentTarget.value;
-                            setDraft((current) => ({
-                              ...current,
-                              pointMappings: current.pointMappings.map((item, i) =>
-                                i === index ? { ...item, copyTargetsText: value } : item,
-                              ),
-                            }));
-                          }}
-                        />
-                      </label>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </section>
@@ -373,7 +412,7 @@ export function GatewayConfigShadowSection({
                     }))
                   }
                 >
-                  <Plus data-icon="inline-start" />
+                  <Plus data-icon="inline-start" aria-hidden="true" />
                   新增采集周期
                 </Button>
               </div>
@@ -383,111 +422,126 @@ export function GatewayConfigShadowSection({
                 </p>
               ) : (
                 <div className="flex flex-col gap-2.5">
-                  {draft.samplingPolicies.map((row, index) => (
-                    <div
-                      key={index}
-                      className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-muted-foreground">
-                          采集规则 #{index + 1}
-                        </span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          aria-label={`删除采集周期 ${index + 1}`}
-                          disabled={updateMutation.isPending}
-                          onClick={() =>
-                            setDraft((current) => ({
-                              ...current,
-                              samplingPolicies: current.samplingPolicies.filter((_, i) => i !== index),
-                            }))
-                          }
-                        >
-                          <Trash2 className="size-3.5" />
-                        </Button>
+                  {draft.samplingPolicies.map((row, index) => {
+                    const rowPrefix = `${baseId}-samp-${index}`;
+                    return (
+                      <div
+                        key={index}
+                        className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-muted-foreground">
+                            采集规则 #{index + 1}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={`删除采集周期 ${index + 1}`}
+                            disabled={updateMutation.isPending}
+                            onClick={() =>
+                              setDraft((current) => ({
+                                ...current,
+                                samplingPolicies: current.samplingPolicies.filter((_, i) => i !== index),
+                              }))
+                            }
+                          >
+                            <Trash2 className="size-3.5" aria-hidden="true" />
+                          </Button>
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+                          <div className="grid gap-1">
+                            <Label htmlFor={`${rowPrefix}-dev`} className="text-xs text-muted-foreground">
+                              设备标识
+                            </Label>
+                            <Input
+                              id={`${rowPrefix}-dev`}
+                              value={row.deviceKey}
+                              placeholder="chiller-01"
+                              disabled={updateMutation.isPending}
+                              className="h-8 font-mono text-xs"
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setDraft((current) => ({
+                                  ...current,
+                                  samplingPolicies: current.samplingPolicies.map((item, i) =>
+                                    i === index ? { ...item, deviceKey: value } : item,
+                                  ),
+                                }));
+                              }}
+                            />
+                          </div>
+                          <div className="grid gap-1">
+                            <Label htmlFor={`${rowPrefix}-pt`} className="text-xs text-muted-foreground">
+                              点位编码（可选）
+                            </Label>
+                            <Input
+                              id={`${rowPrefix}-pt`}
+                              value={row.pointCode}
+                              placeholder="全部点位"
+                              disabled={updateMutation.isPending}
+                              className="h-8 font-mono text-xs"
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setDraft((current) => ({
+                                  ...current,
+                                  samplingPolicies: current.samplingPolicies.map((item, i) =>
+                                    i === index ? { ...item, pointCode: value } : item,
+                                  ),
+                                }));
+                              }}
+                            />
+                          </div>
+                          <div className="grid gap-1">
+                            <Label htmlFor={`${rowPrefix}-sample`} className="text-xs text-muted-foreground">
+                              采样间隔 (ms)
+                            </Label>
+                            <Input
+                              id={`${rowPrefix}-sample`}
+                              type="number"
+                              min={100}
+                              max={86400000}
+                              value={row.sampleIntervalMs}
+                              disabled={updateMutation.isPending}
+                              className="h-8 font-mono text-xs tabular-nums"
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setDraft((current) => ({
+                                  ...current,
+                                  samplingPolicies: current.samplingPolicies.map((item, i) =>
+                                    i === index ? { ...item, sampleIntervalMs: value } : item,
+                                  ),
+                                }));
+                              }}
+                            />
+                          </div>
+                          <div className="grid gap-1">
+                            <Label htmlFor={`${rowPrefix}-pub`} className="text-xs text-muted-foreground">
+                              上报间隔 (ms)
+                            </Label>
+                            <Input
+                              id={`${rowPrefix}-pub`}
+                              type="number"
+                              min={100}
+                              max={86400000}
+                              value={row.publishIntervalMs}
+                              disabled={updateMutation.isPending}
+                              className="h-8 font-mono text-xs tabular-nums"
+                              onChange={(event) => {
+                                const value = event.currentTarget.value;
+                                setDraft((current) => ({
+                                  ...current,
+                                  samplingPolicies: current.samplingPolicies.map((item, i) =>
+                                    i === index ? { ...item, publishIntervalMs: value } : item,
+                                  ),
+                                }));
+                              }}
+                            />
+                          </div>
+                        </div>
                       </div>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
-                        <label className="grid gap-1 text-xs">
-                          <span className="text-muted-foreground">设备标识</span>
-                          <Input
-                            value={row.deviceKey}
-                            placeholder="chiller-01"
-                            disabled={updateMutation.isPending}
-                            className="h-8 font-mono text-xs"
-                            onChange={(event) => {
-                              const value = event.currentTarget.value;
-                              setDraft((current) => ({
-                                ...current,
-                                samplingPolicies: current.samplingPolicies.map((item, i) =>
-                                  i === index ? { ...item, deviceKey: value } : item,
-                                ),
-                              }));
-                            }}
-                          />
-                        </label>
-                        <label className="grid gap-1 text-xs">
-                          <span className="text-muted-foreground">点位编码（可选）</span>
-                          <Input
-                            value={row.pointCode}
-                            placeholder="全部点位"
-                            disabled={updateMutation.isPending}
-                            className="h-8 font-mono text-xs"
-                            onChange={(event) => {
-                              const value = event.currentTarget.value;
-                              setDraft((current) => ({
-                                ...current,
-                                samplingPolicies: current.samplingPolicies.map((item, i) =>
-                                  i === index ? { ...item, pointCode: value } : item,
-                                ),
-                              }));
-                            }}
-                          />
-                        </label>
-                        <label className="grid gap-1 text-xs">
-                          <span className="text-muted-foreground">采样间隔 (ms)</span>
-                          <Input
-                            type="number"
-                            min={100}
-                            max={86400000}
-                            value={row.sampleIntervalMs}
-                            disabled={updateMutation.isPending}
-                            className="h-8 font-mono text-xs tabular-nums"
-                            onChange={(event) => {
-                              const value = event.currentTarget.value;
-                              setDraft((current) => ({
-                                ...current,
-                                samplingPolicies: current.samplingPolicies.map((item, i) =>
-                                  i === index ? { ...item, sampleIntervalMs: value } : item,
-                                ),
-                              }));
-                            }}
-                          />
-                        </label>
-                        <label className="grid gap-1 text-xs">
-                          <span className="text-muted-foreground">上报间隔 (ms)</span>
-                          <Input
-                            type="number"
-                            min={100}
-                            max={86400000}
-                            value={row.publishIntervalMs}
-                            disabled={updateMutation.isPending}
-                            className="h-8 font-mono text-xs tabular-nums"
-                            onChange={(event) => {
-                              const value = event.currentTarget.value;
-                              setDraft((current) => ({
-                                ...current,
-                                samplingPolicies: current.samplingPolicies.map((item, i) =>
-                                  i === index ? { ...item, publishIntervalMs: value } : item,
-                                ),
-                              }));
-                            }}
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </section>
@@ -512,7 +566,7 @@ export function GatewayConfigShadowSection({
                   const value = event.currentTarget.value;
                   setDraft((current) => ({ ...current, reason: value }));
                 }}
-                placeholder="请说明本次调整点位映射或采集周期的原因（例如：新增 1 号冷机回水温度复用映射并调整采集周期为 5 秒）"
+                placeholder="请说明本次调整协议驱动点表、断网自治策略、点位映射或采集周期的原因"
               />
             </div>
 
@@ -581,11 +635,15 @@ function ShadowSummaryCard({
 }) {
   const desired = shadow.desired;
   const reported = shadow.reported;
+  const driverCount = desired?.driverConfigs?.length ?? 0;
+  const registerCount = countDriverRegisters(desired?.driverConfigs);
+  const autonomyState = summarizeAutonomyPolicyState(desired?.autonomyPolicy);
+  const autonomyLabel = AUTONOMY_POLICY_STATE_PRESENTATION[autonomyState].label;
 
   if (shadow.syncStatus === 'UNCONFIGURED' && !desired && !reported) {
     return (
       <div className="rounded-lg border border-dashed px-3.5 py-3 text-xs text-muted-foreground">
-        该网关尚未配置云边配置影子；可点击「初始化配置影子」下发点位映射与采集周期，或在「无线测温集中器」页面离线暂存参数与 EID。
+        该网关尚未配置云边配置影子；可点击「初始化配置影子」下发协议驱动点表、断网自治策略、点位映射与采集周期，或在「无线测温集中器」页面离线暂存参数与 EID。
       </div>
     );
   }
@@ -627,6 +685,12 @@ function ShadowSummaryCard({
           采集周期 {desired?.samplingPolicies.length ?? 0} 条
         </span>
         <span className="rounded border bg-background px-2 py-0.5 font-mono tabular-nums">
+          协议驱动 {driverCount} 台{driverCount > 0 ? ` · ${registerCount} 寄存器` : ''}
+        </span>
+        <span className="rounded border bg-background px-2 py-0.5">
+          断网自治 · {autonomyLabel}
+        </span>
+        <span className="rounded border bg-background px-2 py-0.5 font-mono tabular-nums">
           集中器暂存 {concentratorUnits.length} 个单元
         </span>
       </div>
@@ -649,6 +713,10 @@ function ShadowSummaryCard({
           ) : null}
         </ul>
       ) : null}
+
+      <DriverConfigsSummaryBlock driverConfigs={desired?.driverConfigs} />
+
+      <AutonomyPolicySummaryBlock autonomyPolicy={desired?.autonomyPolicy} />
 
       {concentratorUnits.length > 0 ? (
         <div className="flex flex-wrap gap-1.5 border-t border-divider pt-2 text-[11px]">
